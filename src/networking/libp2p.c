@@ -52,10 +52,6 @@ static void lantern_libp2p_log_writer(libp2p_log_level_t level, const char *msg,
     if (!msg) {
         return;
     }
-    if (level != LIBP2P_LOG_ERROR && lantern_log_get_level() != LANTERN_LOG_LEVEL_TRACE) {
-        return;
-    }
-
     enum LanternLogLevel mapped = lantern_libp2p_convert_level(level);
     switch (mapped) {
     case LANTERN_LOG_LEVEL_TRACE:
@@ -86,8 +82,23 @@ static void lantern_libp2p_configure_logging(void)
     }
 
     libp2p_log_level_t target = LIBP2P_LOG_ERROR;
-    if (lantern_log_get_level() == LANTERN_LOG_LEVEL_TRACE) {
+    switch (lantern_log_get_level()) {
+    case LANTERN_LOG_LEVEL_TRACE:
         target = LIBP2P_LOG_TRACE;
+        break;
+    case LANTERN_LOG_LEVEL_DEBUG:
+        target = LIBP2P_LOG_DEBUG;
+        break;
+    case LANTERN_LOG_LEVEL_INFO:
+        target = LIBP2P_LOG_INFO;
+        break;
+    case LANTERN_LOG_LEVEL_WARN:
+        target = LIBP2P_LOG_WARN;
+        break;
+    case LANTERN_LOG_LEVEL_ERROR:
+    default:
+        target = LIBP2P_LOG_ERROR;
+        break;
     }
     libp2p_log_set_level(target);
 }

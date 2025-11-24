@@ -47,9 +47,9 @@ libp2p_err_t libp2p_gossipsub_rpc_decode_frame(
 
 /* Accept both raw 1.0.0 and libp2p's stacked identifiers (prefix/1.1.0) */
 static const char *const k_leanspec_gossipsub_protocols[] = {
-    "/meshsub/1.0.0",
+    "/meshsub/1.1.0",
     "/meshsub/1.0.0/1.1.0",
-    "/meshsub/1.0.0/1.0.0",
+    "/meshsub/1.0.0",
 };
 
 static uint32_t lantern_leanspec_seen_ttl_ms(void) {
@@ -72,6 +72,28 @@ static void describe_peer_id(const peer_id_t *peer, char *buffer, size_t length)
     if (written < 0) {
         buffer[0] = '\0';
     }
+}
+
+static void lantern_gossipsub_score_update(
+    libp2p_gossipsub_t *gs,
+    const libp2p_gossipsub_score_update_t *update,
+    void *user_data) {
+    (void)gs;
+    struct lantern_gossipsub_service *service = (struct lantern_gossipsub_service *)user_data;
+    if (!update || !service) {
+        return;
+    }
+
+    char peer_text[128];
+    describe_peer_id(update->peer, peer_text, sizeof(peer_text));
+    const struct lantern_log_metadata meta = {.peer = peer_text[0] ? peer_text : NULL};
+    lantern_log_debug(
+        "gossip",
+        &meta,
+        "gossipsub score peer=%s score=%.3f override=%d",
+        peer_text[0] ? peer_text : "unknown",
+        update->score,
+        update->score_override ? 1 : 0);
 }
 
 static bool gossipsub_message_has_forbidden_metadata(const libp2p_gossipsub_message_t *msg) {
@@ -454,6 +476,8 @@ int lantern_gossipsub_service_start(
     cfg.protocol_ids = k_leanspec_gossipsub_protocols;
     cfg.protocol_id_count = LANTERN_ARRAY_SIZE(k_leanspec_gossipsub_protocols);
     cfg.enable_flood_publish = true;
+    cfg.on_score_update = lantern_gossipsub_score_update;
+    cfg.score_update_user_data = service;
 
     libp2p_gossipsub_t *gs = NULL;
     if (libp2p_gossipsub_new(config->host, &cfg, &gs) != LIBP2P_ERR_OK || !gs) {
