@@ -392,13 +392,9 @@ void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service) 
         if (service->vote_validator_handle) {
             (void)libp2p_gossipsub_remove_validator(service->gossipsub, service->vote_validator_handle);
         }
-        if (service->vote_legacy_validator_handle) {
-            (void)libp2p_gossipsub_remove_validator(service->gossipsub, service->vote_legacy_validator_handle);
-        }
     }
     service->block_validator_handle = NULL;
     service->vote_validator_handle = NULL;
-    service->vote_legacy_validator_handle = NULL;
     if (service->gossipsub) {
         libp2p_gossipsub_stop(service->gossipsub);
         libp2p_gossipsub_free(service->gossipsub);
@@ -406,7 +402,6 @@ void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service) 
     }
     memset(service->block_topic, 0, sizeof(service->block_topic));
     memset(service->vote_topic, 0, sizeof(service->vote_topic));
-    memset(service->legacy_vote_topic, 0, sizeof(service->legacy_vote_topic));
     service->publish_hook = NULL;
     service->publish_hook_user_data = NULL;
     service->loopback_only = 0;
@@ -449,14 +444,6 @@ int lantern_gossipsub_service_start(
             service->vote_topic,
             sizeof(service->vote_topic))
         != 0) {
-        return -1;
-    }
-    if (snprintf(
-            service->legacy_vote_topic,
-            sizeof(service->legacy_vote_topic),
-            "/leanconsensus/%s/vote/ssz_snappy",
-            config->devnet)
-        < 0) {
         return -1;
     }
 
@@ -506,17 +493,6 @@ int lantern_gossipsub_service_start(
         &(const struct lantern_log_metadata){.peer = config->devnet},
         "subscribed gossipsub topic=%s",
         service->vote_topic);
-    if (strcmp(service->legacy_vote_topic, service->vote_topic) != 0) {
-        if (subscribe_topic(service, service->legacy_vote_topic) != 0) {
-            lantern_gossipsub_service_reset(service);
-            return -1;
-        }
-        lantern_log_info(
-            "gossip",
-            &(const struct lantern_log_metadata){.peer = config->devnet},
-            "subscribed gossipsub topic=%s",
-            service->legacy_vote_topic);
-    }
 
     if (service->block_handler) {
         libp2p_gossipsub_validator_def_t def = {
@@ -551,24 +527,6 @@ int lantern_gossipsub_service_start(
                 "gossip",
                 NULL,
                 "failed to register vote gossip validator");
-            lantern_gossipsub_service_reset(service);
-            return -1;
-        }
-    }
-    if (service->vote_handler && strcmp(service->legacy_vote_topic, service->vote_topic) != 0) {
-        libp2p_gossipsub_validator_def_t def = {
-            .struct_size = sizeof(def),
-            .type = LIBP2P_GOSSIPSUB_VALIDATOR_SYNC,
-            .sync_fn = gossipsub_vote_validator,
-            .async_fn = NULL,
-            .user_data = service
-        };
-        if (libp2p_gossipsub_add_validator(service->gossipsub, service->legacy_vote_topic, &def, &service->vote_legacy_validator_handle)
-            != LIBP2P_ERR_OK) {
-            lantern_log_error(
-                "gossip",
-                NULL,
-                "failed to register legacy vote gossip validator");
             lantern_gossipsub_service_reset(service);
             return -1;
         }
@@ -669,13 +627,6 @@ int lantern_gossipsub_service_publish_vote(
        return -1;
    }
     int publish_rc = publish_payload(service, service->vote_topic, compressed, written);
-    if (publish_rc == 0 && strcmp(service->legacy_vote_topic, service->vote_topic) != 0) {
-        int legacy_rc = publish_payload(service, service->legacy_vote_topic, compressed, written);
-        if (legacy_rc != 0) {
-            /* propagate error but keep primary success */
-            publish_rc = legacy_rc;
-        }
-    }
     free(compressed);
     return publish_rc;
 }

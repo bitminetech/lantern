@@ -33,7 +33,6 @@ struct lantern_gossipsub_service {
     libp2p_gossipsub_t *gossipsub;
     char block_topic[128];
     char vote_topic[128];
-    char legacy_vote_topic[128];
     int (*publish_hook)(const char *topic, const uint8_t *payload, size_t payload_len, void *user_data);
     void *publish_hook_user_data;
     int loopback_only;
@@ -43,7 +42,6 @@ struct lantern_gossipsub_service {
     void *vote_handler_user_data;
     libp2p_gossipsub_validator_handle_t *block_validator_handle;
     libp2p_gossipsub_validator_handle_t *vote_validator_handle;
-    libp2p_gossipsub_validator_handle_t *vote_legacy_validator_handle;
 };
 
 void lantern_gossipsub_service_init(struct lantern_gossipsub_service *service);
