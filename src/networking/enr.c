@@ -1,6 +1,7 @@
 #include "lantern/networking/enr.h"
 
 #include "lantern/encoding/rlp.h"
+#include "lantern/support/log.h"
 #include "lantern/support/strings.h"
 #include "multiformats/multibase/encoding/base64_url.h"
 #include "tomcrypt.h"
@@ -344,7 +345,7 @@ int lantern_enr_record_build_v4(
     uint16_t udp_port,
     uint64_t sequence) {
     if (!record || !private_key || !ip_string) {
-        fprintf(stderr, "lantern: ENR build missing inputs\n");
+        lantern_log_error("enr", NULL, "ENR build missing inputs");
         return -1;
     }
 
@@ -438,7 +439,7 @@ int lantern_enr_record_build_v4(
     hash_state keccak_state;
     int hash_rc = keccak_desc->init(&keccak_state);
     if (hash_rc != CRYPT_OK) {
-        fprintf(stderr, "lantern: keccak init rc=%d\n", hash_rc);
+        lantern_log_error("enr", NULL, "keccak init rc=%d", hash_rc);
         error_reason = "keccak init failed";
         goto error;
     }
@@ -534,7 +535,7 @@ error:
     lantern_rlp_buffer_reset(&content);
     lantern_rlp_buffer_reset(&signed_record);
     if (error_reason) {
-        fprintf(stderr, "lantern: ENR build error: %s\n", error_reason);
+        lantern_log_error("enr", NULL, "ENR build error: %s", error_reason);
     }
     return -1;
 }

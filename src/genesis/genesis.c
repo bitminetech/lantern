@@ -1,5 +1,6 @@
 #include "lantern/genesis/genesis.h"
 
+#include "lantern/support/log.h"
 #include "lantern/support/strings.h"
 #include "lantern/support/secure_mem.h"
 #include "lantern/networking/libp2p.h"
@@ -80,7 +81,7 @@ int lantern_genesis_load(struct lantern_genesis_artifacts *artifacts, const stru
 
     if (!paths->config_path || !paths->validator_registry_path || !paths->nodes_path || !paths->state_path
         || !paths->validator_config_path) {
-        fprintf(stderr, "lantern: missing required genesis path\n");
+        lantern_log_error("genesis", NULL, "missing required genesis path");
         return -1;
     }
 
@@ -88,7 +89,7 @@ int lantern_genesis_load(struct lantern_genesis_artifacts *artifacts, const stru
     lantern_genesis_artifacts_init(artifacts);
 
     if (parse_chain_config(paths->config_path, &artifacts->chain_config) != 0) {
-        fprintf(stderr, "lantern: failed to parse chain config at %s\n", paths->config_path);
+        lantern_log_error("genesis", NULL, "failed to parse chain config at %s", paths->config_path);
         goto error;
     }
 
@@ -102,15 +103,15 @@ int lantern_genesis_load(struct lantern_genesis_artifacts *artifacts, const stru
             if (artifacts->chain_config.validator_count == 0) {
                 artifacts->chain_config.validator_count = pubkey_count;
             }
-            fprintf(stderr, "lantern: loaded %zu genesis pubkeys from %s\n", pubkey_count, paths->config_path);
+            lantern_log_info("genesis", NULL, "loaded %zu genesis pubkeys from %s", pubkey_count, paths->config_path);
         } else {
             free(pubkeys);
-            fprintf(stderr, "lantern: no genesis pubkeys found in %s\n", paths->config_path);
+            lantern_log_warn("genesis", NULL, "no genesis pubkeys found in %s", paths->config_path);
         }
     }
 
     if (parse_validator_registry(paths->validator_registry_path, &artifacts->validator_registry) != 0) {
-        fprintf(stderr, "lantern: failed to parse validator registry at %s\n", paths->validator_registry_path);
+        lantern_log_error("genesis", NULL, "failed to parse validator registry at %s", paths->validator_registry_path);
         goto error;
     }
 
@@ -118,17 +119,17 @@ int lantern_genesis_load(struct lantern_genesis_artifacts *artifacts, const stru
     merge_chain_pubkeys_into_registry(&artifacts->chain_config, &artifacts->validator_registry);
 
     if (parse_nodes_file(paths->nodes_path, &artifacts->enrs) != 0) {
-        fprintf(stderr, "lantern: failed to parse nodes at %s\n", paths->nodes_path);
+        lantern_log_error("genesis", NULL, "failed to parse nodes at %s", paths->nodes_path);
         goto error;
     }
 
     if (parse_validator_config(paths->validator_config_path, &artifacts->validator_config) != 0) {
-        fprintf(stderr, "lantern: failed to parse validator-config at %s\n", paths->validator_config_path);
+        lantern_log_error("genesis", NULL, "failed to parse validator-config at %s", paths->validator_config_path);
         goto error;
     }
 
     if (read_state_blob(paths->state_path, &artifacts->state_bytes, &artifacts->state_size) != 0) {
-        fprintf(stderr, "lantern: failed to read genesis state at %s\n", paths->state_path);
+        lantern_log_error("genesis", NULL, "failed to read genesis state at %s", paths->state_path);
         goto error;
     }
 

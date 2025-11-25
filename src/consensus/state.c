@@ -1169,7 +1169,7 @@ int lantern_state_mark_justified_slot(LanternState *state, uint64_t slot) {
     }
     const char *debug_hash = getenv("LANTERN_DEBUG_STATE_HASH");
     if (debug_hash && debug_hash[0] != '\0') {
-        fprintf(stderr, "mark justified slot %" PRIu64 "\n", slot);
+        lantern_log_debug("state", NULL, "mark justified slot %" PRIu64, slot);
     }
     int rc = lantern_state_set_justified_slot_bit(state, slot, true);
     if (rc == 0 && finalization_trace_enabled()) {
@@ -1451,7 +1451,7 @@ static int lantern_state_process_attestations_internal(
                 latest_justified = vote->target;
             }
             if (debug_hash && debug_hash[0] != '\0') {
-                fprintf(stderr, "marked slot %" PRIu64 " justified\n", vote->target.slot);
+                lantern_log_debug("state", NULL, "marked slot %" PRIu64 " justified", vote->target.slot);
             }
         }
         if (trace_finalization) {
@@ -1926,7 +1926,7 @@ void lantern_state_profile_dump(void) {
     if (!state_profile_enabled()) {
         return;
     }
-    fprintf(stderr, "[lantern_profile] state internals:\n");
+    lantern_log_info("profile", NULL, "state internals:");
     const struct {
         const char *label;
         const struct state_profile_metric *metric;
@@ -1938,18 +1938,20 @@ void lantern_state_profile_dump(void) {
     for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
         const struct state_profile_metric *metric = rows[i].metric;
         double avg_ms = metric->calls ? (metric->seconds / (double)metric->calls) * 1000.0 : 0.0;
-        fprintf(
-            stderr,
-            "    %-15s %8zu calls  %10.3f s total  %8.3f ms avg\n",
+        lantern_log_info(
+            "profile",
+            NULL,
+            "    %-15s %8zu calls  %10.3f s total  %8.3f ms avg",
             rows[i].label,
             metric->calls,
             metric->seconds,
             avg_ms);
     }
     if (g_profile_max_justification_bits > 0) {
-        fprintf(
-            stderr,
-            "    justification bits max: %zu (limit %" PRIu64 ")\n",
+        lantern_log_info(
+            "profile",
+            NULL,
+            "    justification bits max: %zu (limit %" PRIu64 ")",
             g_profile_max_justification_bits,
             (uint64_t)LANTERN_JUSTIFICATION_VALIDATORS_LIMIT);
     }

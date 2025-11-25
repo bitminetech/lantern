@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "lantern/support/log.h"
 #include "pq-bindings-c-rust.h"
 
 static bool bytes_are_zero(const uint8_t *bytes, size_t length) {
@@ -44,7 +45,7 @@ bool lantern_signature_verify(
     struct PQSignatureSchemePublicKey *pq_pubkey = NULL;
     enum PQSigningError pk_err = pq_public_key_deserialize(pubkey_bytes, pubkey_len, &pq_pubkey);
     if (pk_err != Success || !pq_pubkey) {
-        fprintf(stderr, "[sig_debug] pq_public_key_deserialize failed err=%d len=%zu\n", (int)pk_err, pubkey_len);
+        lantern_log_debug("signature", NULL, "pq_public_key_deserialize failed err=%d len=%zu", (int)pk_err, pubkey_len);
         return false;
     }
     bool ok = lantern_signature_verify_pk(pq_pubkey, epoch, signature, message, message_len);
@@ -73,7 +74,7 @@ bool lantern_signature_verify_pk(
     int verify_rc = pq_verify(pubkey, epoch, message, message_len, pq_signature);
     pq_signature_free(pq_signature);
     if (verify_rc != 1) {
-        fprintf(stderr, "[sig_debug] pq_verify rc=%d\n", verify_rc);
+        lantern_log_debug("signature", NULL, "pq_verify rc=%d", verify_rc);
     }
     return verify_rc == 1;
 }
