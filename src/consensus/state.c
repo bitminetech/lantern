@@ -1407,9 +1407,10 @@ static int lantern_state_process_attestations_internal(
             }
         }
         if (debug_hash && debug_hash[0] != '\0') {
-            fprintf(
-                stderr,
-                "process attestation validator=%" PRIu64 " source=%" PRIu64 " target=%" PRIu64 "\n",
+            lantern_log_debug(
+                "state",
+                NULL,
+                "process attestation validator=%" PRIu64 " source=%" PRIu64 " target=%" PRIu64,
                 vote->validator_id,
                 vote->source.slot,
                 vote->target.slot);
@@ -1692,9 +1693,10 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
             != 0) {
             computed_hex_dbg[0] = '\0';
         }
-        fprintf(
-            stderr,
-            "state slot %" PRIu64 " expected=%s computed=%s\n",
+        lantern_log_debug(
+            "state",
+            NULL,
+            "state slot %" PRIu64 " expected=%s computed=%s",
             block->slot,
             expected_hex_dbg[0] ? expected_hex_dbg : "0x0",
             computed_hex_dbg[0] ? computed_hex_dbg : "0x0");

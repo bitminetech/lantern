@@ -232,7 +232,7 @@ int main(int argc, char **argv) {
     }
 
     if (show_version) {
-        printf("lantern preview\n");
+        lantern_log_info("main", NULL, "lantern preview");
         goto cleanup;
     }
 
@@ -292,35 +292,31 @@ error:
 }
 
 static void print_usage(const char *prog) {
-    fprintf(
-        stderr,
-        "Usage: %s [options]\n"
-        "  --data-dir PATH              Data directory (default %s)\n"
-        "  --genesis-config PATH        Path to genesis config YAML\n"
-        "  --validator-registry-path PATH  Path to validators.yaml\n"
-        "  --nodes-path PATH            Path to nodes.yaml\n"
-        "  --genesis-state PATH         Path to genesis.ssz\n"
-        "  --validator-config PATH      Path to validator-config.yaml\n"
-        "  --node-id NAME               Node identifier (e.g., ream_0)\n"
-        "  --node-key HEX               Local node private key (32-byte hex)\n"
-        "  --node-key-path PATH         Path to file containing node private key hex\n"
-        "  --listen-address ADDR        QUIC listen multiaddr\n"
-        "  --http-port PORT             HTTP API port\n"
-        "  --metrics-port PORT          Metrics port\n"
-        "  --bootnode ENR               Add a bootnode enr\n"
-        "  --bootnodes VALUE            ENR or path to YAML/List file of ENRs\n"
-        "  --bootnodes-file PATH        File with newline-delimited ENRs\n"
-        "  --hash-sig-key-dir PATH     Directory containing hash-sig key files\n"
-        "  --hash-sig-public PATH      Path to a single hash-sig public key file\n"
-        "  --hash-sig-secret PATH      Path to a single hash-sig secret key file\n"
-        "  --hash-sig-public-template STR  printf-style template for public key paths\n"
-        "  --hash-sig-secret-template STR  printf-style template for secret key paths\n"
-        "  --devnet NAME                Devnet identifier for gossip topics\n"
-        "  --log-level LEVEL           Minimum log level (trace, debug, info, warn, error)\n"
-        "  --help                       Show this message\n"
-        "  --version                    Print version information\n",
-        prog,
-        LANTERN_DEFAULT_DATA_DIR);
+    lantern_log_info("main", NULL, "Usage: %s [options]", prog);
+    lantern_log_info("main", NULL, "  --data-dir PATH              Data directory (default %s)", LANTERN_DEFAULT_DATA_DIR);
+    lantern_log_info("main", NULL, "  --genesis-config PATH        Path to genesis config YAML");
+    lantern_log_info("main", NULL, "  --validator-registry-path PATH  Path to validators.yaml");
+    lantern_log_info("main", NULL, "  --nodes-path PATH            Path to nodes.yaml");
+    lantern_log_info("main", NULL, "  --genesis-state PATH         Path to genesis.ssz");
+    lantern_log_info("main", NULL, "  --validator-config PATH      Path to validator-config.yaml");
+    lantern_log_info("main", NULL, "  --node-id NAME               Node identifier (e.g., ream_0)");
+    lantern_log_info("main", NULL, "  --node-key HEX               Local node private key (32-byte hex)");
+    lantern_log_info("main", NULL, "  --node-key-path PATH         Path to file containing node private key hex");
+    lantern_log_info("main", NULL, "  --listen-address ADDR        QUIC listen multiaddr");
+    lantern_log_info("main", NULL, "  --http-port PORT             HTTP API port");
+    lantern_log_info("main", NULL, "  --metrics-port PORT          Metrics port");
+    lantern_log_info("main", NULL, "  --bootnode ENR               Add a bootnode enr");
+    lantern_log_info("main", NULL, "  --bootnodes VALUE            ENR or path to YAML/List file of ENRs");
+    lantern_log_info("main", NULL, "  --bootnodes-file PATH        File with newline-delimited ENRs");
+    lantern_log_info("main", NULL, "  --hash-sig-key-dir PATH     Directory containing hash-sig key files");
+    lantern_log_info("main", NULL, "  --hash-sig-public PATH      Path to a single hash-sig public key file");
+    lantern_log_info("main", NULL, "  --hash-sig-secret PATH      Path to a single hash-sig secret key file");
+    lantern_log_info("main", NULL, "  --hash-sig-public-template STR  printf-style template for public key paths");
+    lantern_log_info("main", NULL, "  --hash-sig-secret-template STR  printf-style template for secret key paths");
+    lantern_log_info("main", NULL, "  --devnet NAME                Devnet identifier for gossip topics");
+    lantern_log_info("main", NULL, "  --log-level LEVEL           Minimum log level (trace, debug, info, warn, error)");
+    lantern_log_info("main", NULL, "  --help                       Show this message");
+    lantern_log_info("main", NULL, "  --version                    Print version information");
 }
 
 static int parse_u16(const char *text, uint16_t *out_value) {

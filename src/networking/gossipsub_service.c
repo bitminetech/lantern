@@ -33,7 +33,7 @@ libp2p_err_t libp2p_gossipsub_rpc_decode_frame(
 #define LANTERN_GOSSIPSUB_TOPIC_CAP 128u
 #define LANTERN_ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 #define LANTERN_GOSSIPSUB_PROTOCOL "/meshsub/1.0.0"
-#define LANTERN_GOSSIPSUB_HEARTBEAT_INTERVAL_MS 700u
+#define LANTERN_GOSSIPSUB_HEARTBEAT_INTERVAL_MS 1000u
 #define LANTERN_GOSSIPSUB_FANOUT_TTL_MS 60000u
 #define LANTERN_GOSSIPSUB_MESH_D 8
 #define LANTERN_GOSSIPSUB_MESH_D_LOW 6
@@ -221,6 +221,20 @@ static libp2p_err_t lantern_gossipsub_message_id_cb(
     memcpy(buffer, id.bytes, LANTERN_GOSSIP_MESSAGE_ID_SIZE);
     *out_id = buffer;
     *out_len = LANTERN_GOSSIP_MESSAGE_ID_SIZE;
+
+    /* Debug: log message ID computation */
+    char id_hex[LANTERN_GOSSIP_MESSAGE_ID_SIZE * 2 + 1];
+    for (size_t i = 0; i < LANTERN_GOSSIP_MESSAGE_ID_SIZE; ++i) {
+        snprintf(id_hex + (i * 2), 3, "%02x", id.bytes[i]);
+    }
+    lantern_log_debug(
+        "gossip",
+        NULL,
+        "message_id_cb called topic=%s data_len=%zu msg_id=%s",
+        topic,
+        msg->data_len,
+        id_hex);
+
     return LIBP2P_ERR_OK;
 }
 
@@ -270,8 +284,9 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
     lantern_log_debug(
         "gossip",
         &meta,
-        "block gossip message received bytes=%zu",
-        msg->data_len);
+        "block gossip message received bytes=%zu from_peer=%s",
+        msg->data_len,
+        peer_text[0] ? peer_text : "(local)");
     if (lantern_gossip_decode_signed_block_snappy(&block, msg->data, msg->data_len) != 0) {
         lantern_log_warn(
             "gossip",

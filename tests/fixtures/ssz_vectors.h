@@ -7,7 +7,7 @@
 #include "lantern/consensus/containers.h"
 #include "ssz_signature_vectors.h"
 
-#if LANTERN_SIGNATURE_SIZE != 3100
+#if LANTERN_SIGNATURE_SIZE != 4000
 #error "Regenerate ssz_signature_vectors.h for the updated LANTERN_SIGNATURE_SIZE."
 #endif
 

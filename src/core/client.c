@@ -6868,16 +6868,16 @@ static void lantern_client_record_vote(
         lantern_vote_rejection_set(&rejection, "validator out of range id=%" PRIu64, vote_data->validator_id);
         goto cleanup;
     }
-    if (vote_data->target.slot <= vote_data->source.slot) {
+    if (vote_data->target.slot < vote_data->source.slot) {
         lantern_log_debug(
             "gossip",
             &meta,
-            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (target slot <= source)",
+            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (target slot < source)",
             vote_data->validator_id,
             vote_data->slot);
         lantern_vote_rejection_set(
             &rejection,
-            "target slot %" PRIu64 " <= source slot %" PRIu64,
+            "target slot %" PRIu64 " < source slot %" PRIu64,
             vote_data->target.slot,
             vote_data->source.slot);
         goto cleanup;
