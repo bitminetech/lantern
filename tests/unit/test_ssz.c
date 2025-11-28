@@ -27,6 +27,7 @@ static void copy_root(LanternRoot *dst, const uint8_t *bytes) {
     memcpy(dst->bytes, bytes, LANTERN_ROOT_SIZE);
 }
 
+static const char *g_current_test = "unknown";
 static void expect_bytes_equal(
     const uint8_t *expected,
     size_t expected_len,
@@ -35,7 +36,7 @@ static void expect_bytes_equal(
     size_t min_len = expected_len < actual_len ? expected_len : actual_len;
     for (size_t i = 0; i < min_len; ++i) {
         if (expected[i] != actual[i]) {
-            fprintf(stderr, "byte mismatch at %zu (expected 0x%02X got 0x%02X)\n", i, expected[i], actual[i]);
+            fprintf(stderr, "[%s] byte mismatch at %zu (expected 0x%02X got 0x%02X)\n", g_current_test, i, expected[i], actual[i]);
             abort();
         }
     }
@@ -357,7 +358,7 @@ static void build_signed_vote_vector_b(LanternSignedVote *signed_vote) {
     memset(signed_vote, 0, sizeof(*signed_vote));
     build_vote_vector_b(&signed_vote->data);
     signed_vote->data.validator_id = LANTERN_VECTOR_VOTE_B_VALIDATOR_ID;
-    fill_signature(&signed_vote->signature, 0xB6);
+    fill_signature(&signed_vote->signature, 0xB5);
 }
 
 static void build_block_header_vector(LanternBlockHeader *header) {
@@ -654,7 +655,7 @@ static void test_leanspec_vectors(void) {
                                         sizeof(LANTERN_SSZ_VECTOR_CONFIG)),
               "config decode");
     assert(cfg_decoded.genesis_time == cfg_expected.genesis_time);
-    assert(cfg_decoded.num_validators == 0);
+    assert(cfg_decoded.num_validators == cfg_expected.num_validators);
 
     /* Checkpoint */
     LanternCheckpoint checkpoint_expected = checkpoint_from_vector(
@@ -863,6 +864,7 @@ static void test_leanspec_vectors(void) {
         &signed_vote_b_expected.data);
 
     /* State */
+    g_current_test = "state_encode";
     LanternState state_expected;
     build_state_vector(&state_expected);
     uint8_t state_encoded[sizeof(LANTERN_SSZ_VECTOR_STATE)];
@@ -912,6 +914,7 @@ static void test_leanspec_vectors(void) {
                state_expected.validator_registry_root.bytes,
                LANTERN_ROOT_SIZE)
            == 0);
+    g_current_test = "state_validators";
     for (size_t i = 0; i < state_expected.validator_count; ++i) {
         expect_bytes_equal(
             state_expected.validators[i].pubkey,

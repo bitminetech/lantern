@@ -107,6 +107,9 @@ target_link_libraries(lantern_fix_genesis_state PRIVATE lantern)
 add_executable(lantern_generate_gossip_snappy tools/debug/generate_gossip_snappy.c)
 target_link_libraries(lantern_generate_gossip_snappy PRIVATE lantern)
 
+add_executable(lantern_regenerate_networking_fixtures tools/debug/regenerate_networking_fixtures.c)
+target_link_libraries(lantern_regenerate_networking_fixtures PRIVATE lantern)
+
 option(LANTERN_BUILD_TESTS "Build lantern unit tests" ON)
 if(LANTERN_BUILD_TESTS)
     enable_testing()

@@ -7407,6 +7407,36 @@ const struct lantern_local_validator *lantern_client_local_validator(
     return &client->local_validators[index];
 }
 
+int lantern_validator_refresh_cached_vote(
+    struct lantern_local_validator *validator,
+    uint64_t slot,
+    const LanternCheckpoint *head,
+    const LanternCheckpoint *target,
+    const LanternCheckpoint *source,
+    LanternSignedVote *vote) {
+    if (!validator || !head || !target || !source || !vote) {
+        return -1;
+    }
+    if (!validator->secret_key) {
+        return -1;
+    }
+    /* Check if a refresh is needed: source checkpoint changed */
+    if (vote->data.source.slot == source->slot
+        && memcmp(vote->data.source.root.bytes, source->root.bytes, LANTERN_ROOT_SIZE) == 0) {
+        /* No change needed */
+        return 0;
+    }
+    /* Update the vote data */
+    vote->data.head = *head;
+    vote->data.target = *target;
+    vote->data.source = *source;
+    /* Re-sign the vote */
+    if (validator_sign_vote(validator, slot, vote) != 0) {
+        return -1;
+    }
+    return 1;
+}
+
 int lantern_client_publish_block(struct lantern_client *client, const LanternSignedBlock *block) {
     if (!client || !block) {
         return -1;
