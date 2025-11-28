@@ -604,7 +604,8 @@ int lantern_gossipsub_service_publish_block(
         return -1;
     }
     size_t max_compressed = 0;
-    if (lantern_snappy_max_compressed_size(raw_capacity, &max_compressed) != LANTERN_SNAPPY_OK) {
+    /* Use raw snappy max size (no framing overhead) for gossip */
+    if (lantern_snappy_max_compressed_size_raw(raw_capacity, &max_compressed) != LANTERN_SNAPPY_OK) {
         return -1;
     }
     uint8_t *compressed = (uint8_t *)malloc(max_compressed);
@@ -629,7 +630,8 @@ int lantern_gossipsub_service_publish_vote(
         return -1;
     }
     size_t max_compressed = 0;
-    if (lantern_snappy_max_compressed_size(LANTERN_SIGNED_VOTE_SSZ_SIZE, &max_compressed) != LANTERN_SNAPPY_OK) {
+    /* Use raw snappy max size (no framing overhead) for gossip */
+    if (lantern_snappy_max_compressed_size_raw(LANTERN_SIGNED_VOTE_SSZ_SIZE, &max_compressed) != LANTERN_SNAPPY_OK) {
         return -1;
     }
     uint8_t *compressed = (uint8_t *)malloc(max_compressed);

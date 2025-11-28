@@ -835,6 +835,160 @@ static size_t lantern_quorum_threshold(uint64_t validator_count) {
     return (size_t)threshold;
 }
 
+/* === Justification vote tracking helpers === */
+
+/**
+ * Find the index of a root in the justification_roots list.
+ * Returns -1 if not found, otherwise returns the index.
+ */
+static int lantern_state_find_justification_root_index(
+    const LanternState *state,
+    const LanternRoot *root) {
+    if (!state || !root) {
+        return -1;
+    }
+    for (size_t i = 0; i < state->justification_roots.length; ++i) {
+        if (memcmp(state->justification_roots.items[i].bytes, root->bytes, LANTERN_ROOT_SIZE) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+/**
+ * Add a new root to track justification votes for.
+ * Initializes all validator vote bits to false.
+ * Returns the index of the new root, or -1 on error.
+ */
+static int lantern_state_add_justification_root(
+    LanternState *state,
+    const LanternRoot *root,
+    size_t validator_count) {
+    if (!state || !root || validator_count == 0) {
+        return -1;
+    }
+    
+    /* Add the root to the list */
+    if (lantern_root_list_append(&state->justification_roots, root) != 0) {
+        return -1;
+    }
+    
+    /* Expand justification_validators bitlist by validator_count bits (all false) */
+    size_t new_bit_length = state->justification_validators.bit_length + validator_count;
+    if (lantern_bitlist_ensure_length(&state->justification_validators, new_bit_length) != 0) {
+        /* Rollback root addition */
+        state->justification_roots.length--;
+        return -1;
+    }
+    
+    return (int)(state->justification_roots.length - 1);
+}
+
+/**
+ * Get whether a validator has voted for a specific justification root.
+ */
+static int lantern_state_get_justification_vote(
+    const LanternState *state,
+    int root_index,
+    size_t validator_id,
+    size_t validator_count,
+    bool *out_value) {
+    if (!state || !out_value || root_index < 0 || validator_count == 0) {
+        return -1;
+    }
+    if (validator_id >= validator_count) {
+        return -1;
+    }
+    size_t bit_index = (size_t)root_index * validator_count + validator_id;
+    return lantern_bitlist_get_bit(&state->justification_validators, bit_index, out_value);
+}
+
+/**
+ * Record a validator's vote for a justification root.
+ */
+static int lantern_state_set_justification_vote(
+    LanternState *state,
+    int root_index,
+    size_t validator_id,
+    size_t validator_count,
+    bool value) {
+    if (!state || root_index < 0 || validator_count == 0) {
+        return -1;
+    }
+    if (validator_id >= validator_count) {
+        return -1;
+    }
+    size_t bit_index = (size_t)root_index * validator_count + validator_id;
+    return lantern_bitlist_set_bit(&state->justification_validators, bit_index, value);
+}
+
+/**
+ * Count the number of validators who have voted for a justification root.
+ */
+static size_t lantern_state_count_justification_votes(
+    const LanternState *state,
+    int root_index,
+    size_t validator_count) {
+    if (!state || root_index < 0 || validator_count == 0) {
+        return 0;
+    }
+    size_t count = 0;
+    for (size_t i = 0; i < validator_count; ++i) {
+        bool voted = false;
+        if (lantern_state_get_justification_vote(state, root_index, i, validator_count, &voted) == 0 && voted) {
+            count++;
+        }
+    }
+    return count;
+}
+
+/**
+ * Remove a root from justification tracking after it has been justified.
+ * This shifts all remaining roots and their vote bits.
+ */
+static int lantern_state_remove_justification_root(
+    LanternState *state,
+    int root_index,
+    size_t validator_count) {
+    if (!state || root_index < 0 || validator_count == 0) {
+        return -1;
+    }
+    size_t idx = (size_t)root_index;
+    if (idx >= state->justification_roots.length) {
+        return -1;
+    }
+    
+    /* Remove the root from the list by shifting */
+    size_t remaining_roots = state->justification_roots.length - idx - 1;
+    if (remaining_roots > 0) {
+        memmove(
+            &state->justification_roots.items[idx],
+            &state->justification_roots.items[idx + 1],
+            remaining_roots * sizeof(LanternRoot));
+    }
+    state->justification_roots.length--;
+    
+    /* Remove the validator vote bits for this root by shifting */
+    size_t start_bit = idx * validator_count;
+    size_t bits_to_remove = validator_count;
+    size_t total_bits = state->justification_validators.bit_length;
+    
+    if (start_bit + bits_to_remove <= total_bits) {
+        /* Shift all bits after this root's section */
+        size_t remaining_bits = total_bits - start_bit - bits_to_remove;
+        for (size_t i = 0; i < remaining_bits; ++i) {
+            bool bit = false;
+            if (lantern_bitlist_get_bit(&state->justification_validators, start_bit + bits_to_remove + i, &bit) == 0) {
+                lantern_bitlist_set_bit(&state->justification_validators, start_bit + i, bit);
+            }
+        }
+        /* Resize to remove the extra bits */
+        lantern_bitlist_resize(&state->justification_validators, total_bits - bits_to_remove);
+    }
+    
+    return 0;
+}
+
 int lantern_state_prepare_validator_votes(LanternState *state, uint64_t validator_count) {
     if (!state || validator_count == 0) {
         return -1;
@@ -1432,50 +1586,143 @@ static int lantern_state_process_attestations_internal(
             continue;
         }
 
-        bool vote_has_consecutive_source =
-            !lantern_state_has_justified_between(state, vote->source.slot, vote->target.slot);
-        bool target_was_justified = target_is_justified;
-        if (!target_is_justified) {
-            if (lantern_state_mark_justified_slot(state, vote->target.slot) != 0) {
+        /* Skip if target is already justified (leanSpec line 394) */
+        if (target_is_justified) {
+            record_attestation_validation_metric(att_validation_start, true);
+            continue;
+        }
+
+        /* Target slot must be justifiable after the latest finalized slot (leanSpec line 410) */
+        if (!lantern_slot_is_justifiable(vote->target.slot, latest_finalized.slot)) {
+            if (trace_finalization) {
+                lantern_log_debug(
+                    "state",
+                    &meta,
+                    "finalization trace skip non-justifiable target_slot=%" PRIu64 " finalized=%" PRIu64,
+                    vote->target.slot,
+                    latest_finalized.slot);
+            }
+            record_attestation_validation_metric(att_validation_start, true);
+            continue;
+        }
+
+        /* Track vote for justification - find or add the target root */
+        int root_idx = lantern_state_find_justification_root_index(state, &vote->target.root);
+        if (root_idx < 0) {
+            /* New target root - add to tracking */
+            root_idx = lantern_state_add_justification_root(state, &vote->target.root, validator_count);
+            if (root_idx < 0) {
+                lantern_log_warn(
+                    "state",
+                    &meta,
+                    "failed to add justification root for slot %" PRIu64,
+                    vote->target.slot);
                 record_attestation_validation_metric(att_validation_start, false);
-                return -1;
+                continue;
             }
             if (trace_finalization) {
                 lantern_log_debug(
                     "state",
                     &meta,
-                    "finalization trace marked target slot=%" PRIu64,
-                    vote->target.slot);
-            }
-            target_is_justified = true;
-            if (vote->target.slot > latest_justified.slot) {
-                latest_justified = vote->target;
-            }
-            if (debug_hash && debug_hash[0] != '\0') {
-                lantern_log_debug("state", NULL, "marked slot %" PRIu64 " justified", vote->target.slot);
+                    "finalization trace added justification root for target_slot=%" PRIu64 " root_idx=%d",
+                    vote->target.slot,
+                    root_idx);
             }
         }
+
+        /* Check if this validator already voted for this target */
+        bool already_voted = false;
+        if (lantern_state_get_justification_vote(state, root_idx, (size_t)vote->validator_id, validator_count, &already_voted) != 0) {
+            record_attestation_validation_metric(att_validation_start, false);
+            continue;
+        }
+
+        /* Record the validator's vote if they haven't voted yet */
+        if (!already_voted) {
+            if (lantern_state_set_justification_vote(state, root_idx, (size_t)vote->validator_id, validator_count, true) != 0) {
+                record_attestation_validation_metric(att_validation_start, false);
+                continue;
+            }
+        }
+
+        /* Count total votes for this target */
+        size_t vote_count = lantern_state_count_justification_votes(state, root_idx, validator_count);
+        size_t quorum = lantern_quorum_threshold(validator_count_u64);
+
         if (trace_finalization) {
             lantern_log_debug(
                 "state",
                 &meta,
-                "finalization trace validator=%" PRIu64 " target_was_justified=%s vote_consecutive=%s "
-                "latest_finalized=%" PRIu64 " latest_justified=%" PRIu64,
+                "finalization trace validator=%" PRIu64 " target_slot=%" PRIu64 " votes=%zu quorum=%zu",
                 vote->validator_id,
-                target_was_justified ? "true" : "false",
-                vote_has_consecutive_source ? "true" : "false",
-                latest_finalized.slot,
-                latest_justified.slot);
+                vote->target.slot,
+                vote_count,
+                quorum);
         }
 
-        if (target_was_justified && vote_has_consecutive_source) {
-            if (
-                latest_finalized.slot < vote->source.slot
-                && latest_justified.slot < vote->target.slot) {
+        /* Check if 2/3 supermajority reached (leanSpec line 428: 3 * count >= 2 * validators) */
+        bool target_was_justified = false;
+        if (vote_count >= quorum) {
+            /* Supermajority reached - mark as justified */
+            if (lantern_state_mark_justified_slot(state, vote->target.slot) != 0) {
+                record_attestation_validation_metric(att_validation_start, false);
+                return -1;
+            }
+            target_is_justified = true;
+            target_was_justified = true;
+
+            if (vote->target.slot > latest_justified.slot) {
+                latest_justified = vote->target;
+            }
+
+            if (debug_hash && debug_hash[0] != '\0') {
+                lantern_log_debug(
+                    "state",
+                    NULL,
+                    "marked slot %" PRIu64 " justified (votes=%zu, quorum=%zu)",
+                    vote->target.slot,
+                    vote_count,
+                    quorum);
+            }
+            if (trace_finalization) {
+                lantern_log_debug(
+                    "state",
+                    &meta,
+                    "finalization trace marked target slot=%" PRIu64 " justified (votes=%zu quorum=%zu)",
+                    vote->target.slot,
+                    vote_count,
+                    quorum);
+            }
+
+            /* Clean up tracking for this root (leanSpec line 431) */
+            if (lantern_state_remove_justification_root(state, root_idx, validator_count) != 0) {
+                lantern_log_warn(
+                    "state",
+                    &meta,
+                    "failed to remove justification root after justifying slot %" PRIu64,
+                    vote->target.slot);
+            }
+
+            /* Finalization: if the target is the next valid justifiable slot after source (leanSpec lines 435-439) */
+            bool vote_has_consecutive_source =
+                !lantern_state_has_justified_between(state, vote->source.slot, vote->target.slot);
+
+            if (trace_finalization) {
+                lantern_log_debug(
+                    "state",
+                    &meta,
+                    "finalization trace validator=%" PRIu64 " target_was_justified=%s vote_consecutive=%s "
+                    "latest_finalized=%" PRIu64 " latest_justified=%" PRIu64,
+                    vote->validator_id,
+                    target_was_justified ? "true" : "false",
+                    vote_has_consecutive_source ? "true" : "false",
+                    latest_finalized.slot,
+                    latest_justified.slot);
+            }
+
+            if (vote_has_consecutive_source) {
+                /* Finalize the source checkpoint */
                 latest_finalized = vote->source;
-                if (vote->target.slot > latest_justified.slot) {
-                    latest_justified = vote->target;
-                }
                 if (debug_hash && debug_hash[0] != '\0') {
                     char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
                     if (
@@ -1632,7 +1879,7 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
         return -1;                                                                           \
     } while (0)
 
-    if (block->slot < state->slot) {
+    if (block->slot <= state->slot) {
         STATE_FAIL("block slot %" PRIu64 " not ahead of state %" PRIu64, block->slot, state->slot);
     }
     uint64_t slot_before = state->slot;
@@ -1788,6 +2035,9 @@ int lantern_state_collect_attestations_for_block(
     if (!state->validator_votes || state->validator_votes_len == 0) {
         return -1;
     }
+    if (block_slot <= state->slot) {
+        return -1;
+    }
     if (lantern_attestations_resize(out_attestations, 0) != 0) {
         return -1;
     }
@@ -1892,6 +2142,9 @@ int lantern_state_preview_post_state_root(
     const LanternSignedBlock *block,
     LanternRoot *out_state_root) {
     if (!state || !block || !out_state_root) {
+        return -1;
+    }
+    if (block->message.block.slot <= state->slot) {
         return -1;
     }
     LanternState scratch;

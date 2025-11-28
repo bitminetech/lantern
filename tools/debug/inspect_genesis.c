@@ -77,6 +77,15 @@ int main(int argc, char **argv) {
 
     LanternRoot computed_state_root;
     LanternRoot header_root;
+    LanternRoot config_root;
+    LanternRoot checkpoint_just_root;
+    LanternRoot checkpoint_fin_root;
+    LanternRoot hist_root;
+    LanternRoot just_slots_root;
+    LanternRoot validators_root;
+    LanternRoot just_roots_root;
+    LanternRoot just_validators_root;
+
     if (lantern_hash_tree_root_state(&state, &computed_state_root) != 0) {
         fprintf(stderr, "failed to hash state\n");
         lantern_state_reset(&state);
@@ -85,6 +94,15 @@ int main(int argc, char **argv) {
     if (lantern_hash_tree_root_block_header(&state.latest_block_header, &header_root) != 0) {
         memset(&header_root, 0, sizeof(header_root));
     }
+    if (lantern_hash_tree_root_config(&state.config, &config_root) != 0) {
+        memset(&config_root, 0, sizeof(config_root));
+    }
+    if (lantern_hash_tree_root_checkpoint(&state.latest_justified, &checkpoint_just_root) != 0) {
+        memset(&checkpoint_just_root, 0, sizeof(checkpoint_just_root));
+    }
+    if (lantern_hash_tree_root_checkpoint(&state.latest_finalized, &checkpoint_fin_root) != 0) {
+        memset(&checkpoint_fin_root, 0, sizeof(checkpoint_fin_root));
+    }
 
     char root_hex[2 * LANTERN_ROOT_SIZE + 3];
     char header_hex[sizeof(root_hex)];
@@ -92,6 +110,13 @@ int main(int argc, char **argv) {
     char parent_hex[sizeof(root_hex)];
     char justified_hex[sizeof(root_hex)];
     char finalized_hex[sizeof(root_hex)];
+    char body_root_hex[sizeof(root_hex)];
+    char anchor_root_hex[sizeof(root_hex)];
+    char empty_body_root_hex[sizeof(root_hex)];
+    char config_root_hex[sizeof(root_hex)];
+    char just_ckpt_hex[sizeof(root_hex)];
+    char fin_ckpt_hex[sizeof(root_hex)];
+    char validators_root_hex[sizeof(root_hex)];
 
     format_root(&computed_state_root, root_hex, sizeof(root_hex));
     format_root(&header_root, header_hex, sizeof(header_hex));
@@ -99,6 +124,39 @@ int main(int argc, char **argv) {
     format_root(&state.latest_block_header.parent_root, parent_hex, sizeof(parent_hex));
     format_root(&state.latest_justified.root, justified_hex, sizeof(justified_hex));
     format_root(&state.latest_finalized.root, finalized_hex, sizeof(finalized_hex));
+    format_root(&state.latest_block_header.body_root, body_root_hex, sizeof(body_root_hex));
+    format_root(&config_root, config_root_hex, sizeof(config_root_hex));
+    format_root(&checkpoint_just_root, just_ckpt_hex, sizeof(just_ckpt_hex));
+    format_root(&checkpoint_fin_root, fin_ckpt_hex, sizeof(fin_ckpt_hex));
+    format_root(&state.validator_registry_root, validators_root_hex, sizeof(validators_root_hex));
+
+    /* Compute empty body root for comparison with leanSpec */
+    LanternBlockBody empty_body;
+    lantern_block_body_init(&empty_body);
+    LanternRoot empty_body_root;
+    if (lantern_hash_tree_root_block_body(&empty_body, &empty_body_root) != 0) {
+        memset(&empty_body_root, 0, sizeof(empty_body_root));
+    }
+    lantern_block_body_reset(&empty_body);
+    format_root(&empty_body_root, empty_body_root_hex, sizeof(empty_body_root_hex));
+
+    /* Compute anchor block root (as per leanSpec Store.get_forkchoice_store):
+     * The anchor block MUST have state_root = hash_tree_root(state)
+     */
+    LanternBlock anchor_block;
+    memset(&anchor_block, 0, sizeof(anchor_block));
+    anchor_block.slot = state.latest_block_header.slot;
+    anchor_block.proposer_index = state.latest_block_header.proposer_index;
+    anchor_block.parent_root = state.latest_block_header.parent_root;
+    anchor_block.state_root = computed_state_root;  /* Use ACTUAL state root */
+    lantern_block_body_init(&anchor_block.body);    /* Empty body */
+
+    LanternRoot anchor_root;
+    if (lantern_hash_tree_root_block(&anchor_block, &anchor_root) != 0) {
+        memset(&anchor_root, 0, sizeof(anchor_root));
+    }
+    lantern_block_body_reset(&anchor_block.body);
+    format_root(&anchor_root, anchor_root_hex, sizeof(anchor_root_hex));
 
     printf("config.num_validators=%" PRIu64 "\n", state.config.num_validators);
     printf("config.genesis_time=%" PRIu64 "\n", state.config.genesis_time);
@@ -107,13 +165,22 @@ int main(int argc, char **argv) {
     printf("latest_block_header.proposer=%" PRIu64 "\n", state.latest_block_header.proposer_index);
     printf("latest_block_header.parent_root=%s\n", parent_hex);
     printf("latest_block_header.state_root=%s\n", header_state_hex);
-    printf("latest_block_header.body_root=%s\n", header_hex);
+    printf("latest_block_header.body_root=%s\n", body_root_hex);
+    printf("header_root (with zero state_root)=%s\n", header_hex);
     printf("computed_state_root=%s\n", root_hex);
+    printf("empty_body_root (Lantern computed)=%s\n", empty_body_root_hex);
+    printf("anchor_block_root (with actual state_root)=%s\n", anchor_root_hex);
     printf("latest_justified.slot=%" PRIu64 " root=%s\n", state.latest_justified.slot, justified_hex);
     printf("latest_finalized.slot=%" PRIu64 " root=%s\n", state.latest_finalized.slot, finalized_hex);
     printf("historical_block_hashes=%zu entries\n", state.historical_block_hashes.length);
     printf("justified_slots bits=%zu\n", state.justified_slots.bit_length);
     printf("justification_roots=%zu entries\n", state.justification_roots.length);
+    printf("\n=== Field roots for hash_tree_root(state) comparison with leanSpec ===\n");
+    printf("config_root=%s\n", config_root_hex);
+    printf("latest_block_header_root=%s\n", header_hex);
+    printf("latest_justified_ckpt_root=%s\n", just_ckpt_hex);
+    printf("latest_finalized_ckpt_root=%s\n", fin_ckpt_hex);
+    printf("validators_root=%s\n", validators_root_hex);
 
     lantern_state_reset(&state);
     return 0;

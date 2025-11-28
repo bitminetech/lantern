@@ -823,7 +823,8 @@ int lantern_fork_choice_advance_time(
         return -1;
     }
     if (now_seconds < store->config.genesis_time) {
-        return -1;
+        /* Before genesis - no time to advance yet, but this is not an error */
+        return 0;
     }
     if (store->seconds_per_interval == 0) {
         return -1;

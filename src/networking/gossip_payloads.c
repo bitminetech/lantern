@@ -127,7 +127,8 @@ int lantern_gossip_encode_signed_block_snappy(
         free(raw);
         return -1;
     }
-    int snappy_rc = lantern_snappy_compress(raw, raw_written, out, out_len, written);
+    /* Use raw snappy (no framing) for gossip messages per Eth2 networking spec */
+    int snappy_rc = lantern_snappy_compress_raw(raw, raw_written, out, out_len, written);
     free(raw);
     return snappy_rc == LANTERN_SNAPPY_OK ? 0 : -1;
 }
@@ -183,7 +184,8 @@ int lantern_gossip_encode_signed_vote_snappy(
     if (lantern_ssz_encode_signed_vote(vote, raw, sizeof(raw), &raw_written) != 0) {
         return -1;
     }
-    int snappy_rc = lantern_snappy_compress(raw, raw_written, out, out_len, written);
+    /* Use raw snappy (no framing) for gossip messages per Eth2 networking spec */
+    int snappy_rc = lantern_snappy_compress_raw(raw, raw_written, out, out_len, written);
     return snappy_rc == LANTERN_SNAPPY_OK ? 0 : -1;
 }
 

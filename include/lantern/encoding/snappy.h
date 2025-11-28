@@ -13,6 +13,9 @@ enum lantern_snappy_error {
 
 int lantern_snappy_max_compressed_size(size_t input_len, size_t *max_size);
 
+/* Max compressed size for raw (unframed) snappy - no framing overhead. */
+int lantern_snappy_max_compressed_size_raw(size_t input_len, size_t *max_size);
+
 int lantern_snappy_compress(
     const uint8_t *input,
     size_t input_len,

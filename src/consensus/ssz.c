@@ -717,7 +717,8 @@ int lantern_ssz_decode_block(LanternBlock *block, const uint8_t *data, size_t da
         return -1;
     }
 
-    if (lantern_ssz_decode_block_body(&block->body, data + body_offset, data_len - body_offset) != 0) {
+    size_t body_len = data_len - body_offset;
+    if (lantern_ssz_decode_block_body(&block->body, data + body_offset, body_len) != 0) {
         return -1;
     }
     return 0;

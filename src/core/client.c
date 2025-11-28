@@ -1454,27 +1454,10 @@ static void lantern_client_enqueue_pending_block(
                 strncpy(existing->peer_text, peer_text, sizeof(existing->peer_text) - 1u);
                 existing->peer_text[sizeof(existing->peer_text) - 1u] = '\0';
             }
-            if (!existing->parent_requested) {
-                existing->parent_requested = true;
-                strncpy(schedule_peer, existing->peer_text, sizeof(schedule_peer) - 1u);
-                schedule_peer[sizeof(schedule_peer) - 1u] = '\0';
-                schedule_parent = true;
-            }
+            /* Do NOT immediately request parent via req/resp - rely on gossip to deliver it.
+               req/resp should only be used for sync recovery, not for normal block propagation. */
         }
         lantern_client_unlock_pending(client, locked);
-
-        if (schedule_parent) {
-            if (lantern_client_schedule_blocks_request(client, schedule_peer, &parent_root_local, false) != 0) {
-                bool relock = lantern_client_lock_pending(client);
-                if (relock) {
-                    struct lantern_pending_block *retry = pending_block_list_find(&client->pending_blocks, &block_root_local);
-                    if (retry) {
-                        retry->parent_requested = false;
-                    }
-                    lantern_client_unlock_pending(client, relock);
-                }
-            }
-        }
         return;
     }
 
@@ -1510,37 +1493,22 @@ static void lantern_client_enqueue_pending_block(
         .peer = peer_text && *peer_text ? peer_text : NULL,
     };
 
-    if (peer_text && *peer_text) {
-        entry->parent_requested = true;
-        strncpy(schedule_peer, entry->peer_text, sizeof(schedule_peer) - 1u);
-        schedule_peer[sizeof(schedule_peer) - 1u] = '\0';
-        schedule_parent = true;
-    } else {
-        entry->parent_requested = false;
-    }
+    /* Do NOT immediately request parent via req/resp - rely on gossip to deliver it.
+       req/resp should only be used for sync recovery, not for normal block propagation.
+       The parent_requested flag is no longer used for immediate requests. */
+    entry->parent_requested = false;
+    (void)schedule_peer;
+    (void)schedule_parent;
 
     lantern_client_unlock_pending(client, locked);
 
     lantern_log_info(
         "state",
         &meta,
-        "queued block slot=%" PRIu64 " root=%s waiting for parent=%s",
+        "queued block slot=%" PRIu64 " root=%s waiting for parent=%s (via gossip)",
         block->message.block.slot,
         block_hex[0] ? block_hex : "0x0",
         parent_hex[0] ? parent_hex : "0x0");
-
-    if (schedule_parent) {
-        if (lantern_client_schedule_blocks_request(client, schedule_peer, &parent_root_local, false) != 0) {
-            bool relock = lantern_client_lock_pending(client);
-            if (relock) {
-                struct lantern_pending_block *retry = pending_block_list_find(&client->pending_blocks, &block_root_local);
-                if (retry) {
-                    retry->parent_requested = false;
-                }
-                lantern_client_unlock_pending(client, relock);
-            }
-        }
-    }
 }
 
 static void lantern_client_process_pending_children(struct lantern_client *client, const LanternRoot *parent_root) {
@@ -2653,61 +2621,16 @@ int lantern_init(struct lantern_client *client, const struct lantern_client_opti
             }
             if (lantern_hash_tree_root_state(&client->state, &state_root) == 0) {
                 format_root_hex(&state_root, state_hex, sizeof(state_hex));
-                bool header_mismatch =
-                    memcmp(original_header_state_root.bytes, state_root.bytes, LANTERN_ROOT_SIZE) != 0;
-                if (header_mismatch) {
-                    format_root_hex(
-                        &original_header_state_root,
-                        original_state_hex,
-                        sizeof(original_state_hex));
-                    client->state.latest_block_header.state_root = state_root;
-                    lantern_log_info(
-                        "client",
-                        &(const struct lantern_log_metadata){.validator = client->node_id},
-                        "updated genesis header state_root from %s to %s",
-                        original_state_hex[0] ? original_state_hex : "0x0",
-                        state_hex[0] ? state_hex : "0x0");
-                    LanternRoot updated_header_root;
-                    if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &updated_header_root)
-                        == 0) {
-                        if (memcmp(
-                                client->state.latest_justified.root.bytes,
-                                updated_header_root.bytes,
-                                LANTERN_ROOT_SIZE)
-                            != 0) {
-                            char prev_just_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                            format_root_hex(
-                                &client->state.latest_justified.root,
-                                prev_just_hex,
-                                sizeof(prev_just_hex));
-                            client->state.latest_justified.root = updated_header_root;
-                            lantern_log_info(
-                                "client",
-                                &(const struct lantern_log_metadata){.validator = client->node_id},
-                                "aligned genesis justified root from %s to %s",
-                                prev_just_hex[0] ? prev_just_hex : "0x0",
-                                state_hex[0] ? state_hex : "0x0");
-                        }
-                        if (memcmp(
-                                client->state.latest_finalized.root.bytes,
-                                updated_header_root.bytes,
-                                LANTERN_ROOT_SIZE)
-                            != 0) {
-                            char prev_final_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                            format_root_hex(
-                                &client->state.latest_finalized.root,
-                                prev_final_hex,
-                                sizeof(prev_final_hex));
-                            client->state.latest_finalized.root = updated_header_root;
-                            lantern_log_info(
-                                "client",
-                                &(const struct lantern_log_metadata){.validator = client->node_id},
-                                "aligned genesis finalized root from %s to %s",
-                                prev_final_hex[0] ? prev_final_hex : "0x0",
-                                state_hex[0] ? state_hex : "0x0");
-                        }
-                    }
-                }
+                /* NOTE: Do NOT update client->state.latest_block_header.state_root here!
+                 * 
+                 * According to leanSpec, the genesis block header MUST have state_root = ZERO.
+                 * The genesis block root is computed from this header with state_root = ZERO.
+                 * This is critical for interoperability with other leanSpec implementations.
+                 * 
+                 * The state's latest_block_header.state_root will be updated to the actual
+                 * state root later during fork choice initialization, AFTER computing the
+                 * genesis anchor root.
+                 */
             }
             LanternBlock genesis_block;
             memset(&genesis_block, 0, sizeof(genesis_block));
@@ -4875,6 +4798,11 @@ static bool lantern_client_import_block(
         memset(&latest_header_root, 0, sizeof(latest_header_root));
         if (state_locked) {
             parent_known = lantern_client_block_known_locked(client, &parent_root_local, NULL);
+            /* Ensure state_root is filled in latest_block_header before computing its hash.
+               This is required because state_root is zeroed when a block is applied and only
+               filled in lazily by lantern_state_process_slot. Without this, the computed
+               header root may differ from what other clients expect. */
+            (void)lantern_state_process_slot(&client->state);
             if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &latest_header_root) == 0) {
                 have_head_root = true;
                 parent_matches_head =
@@ -4883,25 +4811,69 @@ static bool lantern_client_import_block(
         } else if (client->has_fork_choice) {
             parent_known = (lantern_fork_choice_block_info(&client->fork_choice, &parent_root_local, NULL, NULL, NULL) == 0);
         }
-        if (!parent_known || !parent_matches_head) {
+        if (!parent_known) {
+            /* Parent unknown - queue block as pending and request parent */
             const char *peer_text = meta && meta->peer ? meta->peer : NULL;
-            bool log_mismatch = parent_known && !parent_matches_head && have_head_root;
-            LanternRoot parent_copy = parent_root_local;
-            LanternRoot head_copy = latest_header_root;
             lantern_client_unlock_state(client, state_locked);
-            if (log_mismatch) {
-                char parent_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                format_root_hex(&parent_copy, parent_hex, sizeof(parent_hex));
-                format_root_hex(&head_copy, head_hex, sizeof(head_hex));
+            lantern_client_enqueue_pending_block(client, block, &block_root_local, &parent_root_local, peer_text);
+            return false;
+        }
+        if (!parent_matches_head) {
+            /*
+             * Parent is known in fork choice but doesn't match our current head.
+             * This indicates a competing fork. Per leanSpec, we should still add
+             * the block to fork choice so attestations can reference it and fork
+             * choice can properly determine which chain has more weight.
+             *
+             * We add the block to fork choice (without post-state checkpoints since
+             * we can't compute state transition), then queue it for later processing.
+             * If fork choice later determines this is the better chain, pending block
+             * processing will handle the reorg.
+             */
+            const char *peer_text = meta && meta->peer ? meta->peer : NULL;
+            char parent_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+            char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+            if (have_head_root) {
+                format_root_hex(&parent_root_local, parent_hex, sizeof(parent_hex));
+                format_root_hex(&latest_header_root, head_hex, sizeof(head_hex));
                 lantern_log_debug(
                     "state",
                     meta,
-                    "deferring block slot=%" PRIu64 " parent=%s current_head=%s",
+                    "block on competing fork slot=%" PRIu64 " parent=%s current_head=%s",
                     block->message.block.slot,
                     parent_hex[0] ? parent_hex : "0x0",
                     head_hex[0] ? head_hex : "0x0");
             }
+
+            /* Add block to fork choice even without state transition so fork choice
+             * can track competing chains and attestations can reference this block */
+            if (client->has_fork_choice) {
+                LanternSignedVote proposer_signed;
+                memset(&proposer_signed, 0, sizeof(proposer_signed));
+                proposer_signed.data = block->message.proposer_attestation;
+                size_t proposer_index = block->message.block.body.attestations.length;
+                if (block->signatures.length > proposer_index && block->signatures.data) {
+                    proposer_signed.signature = block->signatures.data[proposer_index];
+                }
+                if (lantern_fork_choice_add_block(
+                        &client->fork_choice,
+                        &block->message.block,
+                        &proposer_signed,
+                        NULL, /* No post-justified - we can't compute state transition */
+                        NULL, /* No post-finalized */
+                        &block_root_local) == 0) {
+                    char block_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+                    format_root_hex(&block_root_local, block_hex, sizeof(block_hex));
+                    lantern_log_info(
+                        "forkchoice",
+                        meta,
+                        "added competing fork block to fork choice slot=%" PRIu64 " root=%s",
+                        block->message.block.slot,
+                        block_hex[0] ? block_hex : "0x0");
+                }
+            }
+
+            lantern_client_unlock_state(client, state_locked);
             lantern_client_enqueue_pending_block(client, block, &block_root_local, &parent_root_local, peer_text);
             return false;
         }
@@ -6882,38 +6854,96 @@ static void lantern_client_record_vote(
             vote_data->source.slot);
         goto cleanup;
     }
-    if (!lantern_state_slot_in_justified_window(&client->state, vote_data->source.slot)) {
+
+    /*
+     * Per leanSpec, attestation validation only requires that the referenced
+     * blocks (source, target, head) exist in the store. We check fork choice
+     * first, then fall back to state's justified window for backwards compat.
+     * This allows attestations from competing forks to be processed correctly.
+     */
+    bool source_block_known = false;
+    bool target_block_known = false;
+    bool head_block_known = false;
+    uint64_t source_block_slot = 0;
+    uint64_t target_block_slot = 0;
+
+    if (client->has_fork_choice) {
+        source_block_known = (lantern_fork_choice_block_info(
+            &client->fork_choice, &vote_data->source.root, &source_block_slot, NULL, NULL) == 0);
+        target_block_known = (lantern_fork_choice_block_info(
+            &client->fork_choice, &vote_data->target.root, &target_block_slot, NULL, NULL) == 0);
+        head_block_known = (lantern_fork_choice_block_info(
+            &client->fork_choice, &vote_data->head.root, NULL, NULL, NULL) == 0);
+    }
+
+    if (!source_block_known) {
+        /* Source block not in fork choice - check state's justified window as fallback */
+        if (!lantern_state_slot_in_justified_window(&client->state, vote_data->source.slot)) {
+            lantern_log_debug(
+                "gossip",
+                &meta,
+                "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (source block unknown and outside justified window)",
+                vote_data->validator_id,
+                vote_data->slot);
+            lantern_vote_rejection_set(
+                &rejection,
+                "source slot=%" PRIu64 " block unknown and outside justified window",
+                vote_data->source.slot);
+            goto cleanup;
+        }
+        bool source_is_justified = false;
+        if (lantern_state_get_justified_slot_bit(&client->state, vote_data->source.slot, &source_is_justified) != 0
+            || !source_is_justified) {
+            lantern_log_debug(
+                "gossip",
+                &meta,
+                "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (source not justified in state)",
+                vote_data->validator_id,
+                vote_data->slot);
+            lantern_vote_rejection_set(&rejection, "source slot=%" PRIu64 " not justified", vote_data->source.slot);
+            goto cleanup;
+        }
+    } else {
+        /* Source block is in fork choice - verify checkpoint slot matches block slot */
+        if (source_block_slot != vote_data->source.slot) {
+            lantern_log_debug(
+                "gossip",
+                &meta,
+                "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (source checkpoint slot mismatch)",
+                vote_data->validator_id,
+                vote_data->slot);
+            lantern_vote_rejection_set(
+                &rejection,
+                "source checkpoint slot=%" PRIu64 " != block slot=%" PRIu64,
+                vote_data->source.slot,
+                source_block_slot);
+            goto cleanup;
+        }
+    }
+
+    if (!target_block_known && !head_block_known) {
         lantern_log_debug(
             "gossip",
             &meta,
-            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (source outside justified window)",
+            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (target and head blocks unknown)",
+            vote_data->validator_id,
+            vote_data->slot);
+        lantern_vote_rejection_set(&rejection, "target and head blocks unknown");
+        goto cleanup;
+    }
+
+    if (target_block_known && target_block_slot != vote_data->target.slot) {
+        lantern_log_debug(
+            "gossip",
+            &meta,
+            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (target checkpoint slot mismatch)",
             vote_data->validator_id,
             vote_data->slot);
         lantern_vote_rejection_set(
             &rejection,
-            "source slot=%" PRIu64 " outside justified window",
-            vote_data->source.slot);
-        goto cleanup;
-    }
-    bool source_is_justified = false;
-    if (lantern_state_get_justified_slot_bit(&client->state, vote_data->source.slot, &source_is_justified) != 0) {
-        lantern_log_debug(
-            "gossip",
-            &meta,
-            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (unable to check source justification)",
-            vote_data->validator_id,
-            vote_data->slot);
-        lantern_vote_rejection_set(&rejection, "unable to check source justification slot=%" PRIu64, vote_data->source.slot);
-        goto cleanup;
-    }
-    if (!source_is_justified) {
-        lantern_log_debug(
-            "gossip",
-            &meta,
-            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (source not justified)",
-            vote_data->validator_id,
-            vote_data->slot);
-        lantern_vote_rejection_set(&rejection, "source slot=%" PRIu64 " not justified", vote_data->source.slot);
+            "target checkpoint slot=%" PRIu64 " != block slot=%" PRIu64,
+            vote_data->target.slot,
+            target_block_slot);
         goto cleanup;
     }
 
@@ -7087,25 +7117,58 @@ static int initialize_fork_choice(struct lantern_client *client) {
             "failed to hash anchor state");
         return -1;
     }
+
+    /* Create a copy of the header for computing anchor_root.
+     *
+     * According to leanSpec's Store.get_forkchoice_store, the anchor block
+     * used for fork choice MUST have state_root = hash_tree_root(state).
+     * This is different from the state's latest_block_header which starts
+     * with state_root = ZERO.
+     *
+     * We compute anchor_root from a header with the ACTUAL state_root,
+     * matching Zeam's genStateBlockHeader() behavior.
+     */
+    LanternBlockHeader anchor_header = client->state.latest_block_header;
+    anchor_header.state_root = anchor_state_root;
+
+    LanternRoot anchor_root;
+    if (lantern_hash_tree_root_block_header(&anchor_header, &anchor_root) != 0) {
+        lantern_log_error(
+            "forkchoice",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to hash anchor block header");
+        return -1;
+    }
+
+    /* Log the anchor root for debugging genesis mismatch issues */
+    {
+        char anchor_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+        char state_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+        char body_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+        format_root_hex(&anchor_root, anchor_root_hex, sizeof(anchor_root_hex));
+        format_root_hex(&anchor_state_root, state_root_hex, sizeof(state_root_hex));
+        format_root_hex(&anchor_header.body_root, body_root_hex, sizeof(body_root_hex));
+        lantern_log_info(
+            "forkchoice",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "genesis anchor_root=%s state_root=%s body_root=%s slot=%lu",
+            anchor_root_hex,
+            state_root_hex,
+            body_root_hex,
+            (unsigned long)anchor_header.slot);
+    }
+
+    /* Also update the state's header state_root for subsequent state transitions */
     if (memcmp(
             client->state.latest_block_header.state_root.bytes,
             anchor_state_root.bytes,
             LANTERN_ROOT_SIZE)
         != 0) {
-        char previous_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        char updated_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        format_root_hex(
-            &client->state.latest_block_header.state_root,
-            previous_hex,
-            sizeof(previous_hex));
-        format_root_hex(&anchor_state_root, updated_hex, sizeof(updated_hex));
         client->state.latest_block_header.state_root = anchor_state_root;
-        lantern_log_info(
+        lantern_log_debug(
             "forkchoice",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "synchronizing head state_root from %s to %s",
-            previous_hex[0] ? previous_hex : "0x0",
-            updated_hex[0] ? updated_hex : "0x0");
+            "updated genesis header state_root");
     }
 
     LanternBlock anchor;
@@ -7116,15 +7179,6 @@ static int initialize_fork_choice(struct lantern_client *client) {
     anchor.state_root = anchor_state_root;
     lantern_block_body_init(&anchor.body);
 
-    LanternRoot anchor_root;
-    if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &anchor_root) != 0) {
-        lantern_block_body_reset(&anchor.body);
-        lantern_log_error(
-            "forkchoice",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to hash anchor block header");
-        return -1;
-    }
     if (lantern_fork_choice_set_anchor(
             &client->fork_choice,
             &anchor,
@@ -7374,9 +7428,12 @@ int lantern_client_publish_block(struct lantern_client *client, const LanternSig
         return -1;
     }
 
+    /* Use lantern_hash_tree_root_block for the block root (not signed_block).
+       The block root should be the hash of the unsigned block content, consistent
+       with how other clients (Zeam) and the processing path compute it. */
     LanternRoot block_root;
     char root_hex[2 * LANTERN_ROOT_SIZE + 3];
-    if (lantern_hash_tree_root_signed_block(block, &block_root) == 0) {
+    if (lantern_hash_tree_root_block(&block->message.block, &block_root) == 0) {
         format_root_hex(&block_root, root_hex, sizeof(root_hex));
     } else {
         root_hex[0] = '\0';

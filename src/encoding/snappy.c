@@ -94,6 +94,14 @@ int lantern_snappy_max_compressed_size(size_t input_len, size_t *max_size) {
     return LANTERN_SNAPPY_OK;
 }
 
+int lantern_snappy_max_compressed_size_raw(size_t input_len, size_t *max_size) {
+    if (!max_size) {
+        return LANTERN_SNAPPY_ERROR_INVALID_INPUT;
+    }
+    *max_size = snappy_max_compressed_length(input_len);
+    return LANTERN_SNAPPY_OK;
+}
+
 int lantern_snappy_compress(
     const uint8_t *input,
     size_t input_len,

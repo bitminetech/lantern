@@ -144,10 +144,11 @@ int lantern_hash_tree_root_config(const LanternConfig *config, LanternRoot *out_
     if (!config || !out_root) {
         return -1;
     }
-    uint8_t chunks[2][SSZ_BYTES_PER_CHUNK];
-    chunk_from_uint64(config->num_validators, chunks[0]);
-    chunk_from_uint64(config->genesis_time, chunks[1]);
-    return merkleize_chunks(&chunks[0][0], 2, 0, out_root);
+    /* Config only contains genesis_time for SSZ hashing (matches Zeam's BeamStateConfig).
+     * num_validators is stored separately and not part of the SSZ-encoded config. */
+    uint8_t chunks[1][SSZ_BYTES_PER_CHUNK];
+    chunk_from_uint64(config->genesis_time, chunks[0]);
+    return merkleize_chunks(&chunks[0][0], 1, 0, out_root);
 }
 
 int lantern_hash_tree_root_checkpoint(const LanternCheckpoint *checkpoint, LanternRoot *out_root) {
