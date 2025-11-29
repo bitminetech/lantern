@@ -1,0 +1,173 @@
+Lantern + Zeam + Ream Devnet Setup (Docker)
+============================================
+
+This setup runs Lantern, Zeam, and Ream as Docker containers built from source.
+
+## Prerequisites
+- Docker installed and running
+- yq installed (`brew install yq` on macOS)
+
+## Step-by-Step Procedure
+
+1. **Remove old Docker images** (optional, for clean test):
+   ```bash
+   docker rmi -f lantern:local zeam:local ream:local
+   ```
+
+2. **Build Zeam image from source** (from lean-quickstart directory):
+   ```bash
+   cd tools/lean-quickstart/zeam
+   docker build --platform linux/arm64 -t zeam:local .
+   ```
+
+   Note: The pre-built `blockblaz/zeam:latest` image crashes with SIGILL (illegal
+   instruction) on ARM64 Macs. Building from source resolves this issue.
+
+3. **Build Ream image from source** (from lean-quickstart directory):
+   ```bash
+   cd tools/lean-quickstart/ream
+   docker build --platform linux/arm64 -t ream:local .
+   ```
+
+4. **Build Lantern image from source** (from lantern repo root):
+   ```bash
+   docker build -t lantern:local .
+   ```
+
+5. **Configure command files for docker mode**:
+
+   Ensure the following files have `node_setup="docker"`:
+   - `client-cmds/lantern-cmd.sh` - uses `lantern:local`
+   - `client-cmds/zeam-cmd.sh` - uses `zeam:local`
+   - `client-cmds/ream-cmd.sh` - uses `ream:local`
+
+6. **Clear stale data** (from lean-quickstart directory):
+   ```bash
+   cd tools/lean-quickstart
+   rm -rf local-devnet/data/*
+   ```
+
+7. **Generate fresh genesis and run all three nodes**:
+   ```bash
+   NETWORK_DIR=local-devnet DOCKER_PULL_POLICY=never ./spin-node.sh --node lantern_0,zeam_0,ream_0 --generateGenesis
+   ```
+
+8. **Monitor logs** - Look for:
+   - Lantern: `lantern ready genesis_time=...`
+   - Zeam: `Zeam Lean Node Started Successfully!`
+   - Ream: `ream lean database has been initialized`
+   - Peer connections: `Peer connected` / `Connected to peer`
+   - Chain progress: `CHAIN STATUS: Current Slot: X | Head Slot: Y`
+
+9. **Stop the devnet**: Press Ctrl+C
+
+## Docker Configuration
+| Node      | QUIC Port | Metrics Port | Validator |
+|-----------|-----------|--------------|-----------|
+| zeam_0    | 9000      | 8080         | 0         |
+| ream_0    | 9001      | 8081         | 1         |
+| lantern_0 | 9003      | 8083         | 2         |
+
+- Validator config: `local-devnet/genesis/validator-config.yaml`
+- All nodes run via Docker with `--network host`
+
+
+## Zeam + Ream Binary Setup (Native, No Docker)
+==============================================
+
+This setup runs Zeam and Ream as native binaries instead of Docker containers.
+
+### Prerequisites
+- Docker installed and running (for genesis generation)
+- yq installed (`brew install yq` on macOS)
+- Zig 0.14.1 (zeam requires this specific version)
+- Rust nightly toolchain via rustup
+
+### Step-by-Step Procedure
+
+1. **Install correct Zig version** (zeam requires 0.14.1):
+   ```bash
+   brew unlink zig  # if you have a different version
+   brew install zig@0.14
+   brew link --force zig@0.14
+   zig version  # should show 0.14.1
+   ```
+
+2. **Install Rust nightly** (required for zeam's Rust components):
+   ```bash
+   rustup install nightly
+   rustup default nightly
+   ```
+
+3. **Clone and build Zeam** (from lean-quickstart directory):
+   ```bash
+   cd tools/lean-quickstart
+   git clone --branch main https://github.com/blockblaz/zeam.git
+   cd zeam
+   export PATH="$HOME/.cargo/bin:$PATH"  # ensure rustup's cargo is used
+   zig build -Doptimize=ReleaseFast
+   cd ..
+   ```
+   Binary location: `tools/lean-quickstart/zeam/zig-out/bin/zeam`
+
+4. **Clone and build Ream** (from lean-quickstart directory):
+   ```bash
+   cd tools/lean-quickstart
+   git clone --branch master https://github.com/reamlabs/ream.git
+   cd ream
+   cargo build --release
+   cd ..
+   ```
+   Binary location: `tools/lean-quickstart/ream/target/release/ream`
+
+5. **Configure command files for binary mode**:
+
+   Edit `client-cmds/zeam-cmd.sh`:
+   - Change `node_setup="docker"` to `node_setup="binary"`
+   - Ensure path is: `node_binary="$scriptDir/zeam/zig-out/bin/zeam node \`
+
+   Edit `client-cmds/ream-cmd.sh`:
+   - Change `node_setup="docker"` to `node_setup="binary"`
+   - Ensure path is: `node_binary="$scriptDir/ream/target/release/ream --data-dir ...`
+
+6. **Clear stale data**:
+   ```bash
+   rm -rf local-devnet/data/*
+   ```
+
+7. **Generate fresh genesis and run both nodes**:
+   ```bash
+   NETWORK_DIR=local-devnet ./spin-node.sh --node zeam_0,ream_0 --generateGenesis
+   ```
+
+8. **Monitor logs** - Look for:
+   - Zeam: `Zeam Lean Node Started Successfully!`
+   - Ream: `ream lean database has been initialized`
+   - Both: `Connected to peer` / `Peer connected`
+   - Chain progress: `CHAIN STATUS: Current Slot: X | Head Slot: Y`
+   - Block proposals: `Proposing block by Validator X`
+   - Attestations: `Building attestation data finished`
+
+9. **Stop the devnet**: Press Ctrl+C
+
+### Binary Configuration
+- zeam_0: QUIC port 9000, Metrics port 8080, Validator 0
+- ream_0: QUIC port 9001, Metrics port 8081, Validator 1
+- Both connect to each other via libp2p QUIC
+
+### Troubleshooting
+
+**Zig build fails with API errors:**
+- Ensure you're using Zig 0.14.1 exactly (not 0.15.x)
+- Run `zig version` to verify
+
+**Cargo +nightly not found:**
+- Ensure rustup's cargo is in PATH: `export PATH="$HOME/.cargo/bin:$PATH"`
+- Verify with: `which cargo` (should be ~/.cargo/bin/cargo)
+
+**Ream binary not found:**
+- Check the path in ream-cmd.sh matches: `$scriptDir/ream/target/release/ream`
+
+**Peers not connecting (timeouts for qlean_0, lantern_0):**
+- These are expected warnings if you're only running zeam_0 and ream_0
+- The two running nodes should still connect to each other

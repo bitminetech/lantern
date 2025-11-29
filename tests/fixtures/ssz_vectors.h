@@ -7,7 +7,7 @@
 #include "lantern/consensus/containers.h"
 #include "ssz_signature_vectors.h"
 
-#if LANTERN_SIGNATURE_SIZE != 3116
+#if LANTERN_SIGNATURE_SIZE != 3112
 #error "Regenerate ssz_signature_vectors.h for the updated LANTERN_SIGNATURE_SIZE."
 #endif
 
@@ -18,9 +18,8 @@
 
 #define LANTERN_VECTOR_CONFIG_GENESIS_TIME UINT64_C(1700000000)
 
-/* Config SSZ: [num_validators (8 bytes)] + [genesis_time (8 bytes)] */
+/* Config SSZ: [genesis_time (8 bytes)] - matches Zeam/Ream's BeamStateConfig */
 static const uint8_t LANTERN_SSZ_VECTOR_CONFIG[] = {
-    0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  /* num_validators = 4 */
     0x00, 0xF1, 0x53, 0x65, 0x00, 0x00, 0x00, 0x00   /* genesis_time = 1700000000 */
 };
 

@@ -34,7 +34,7 @@ extern "C" {
 #define LANTERN_DEFAULT_LISTEN_ADDR "/ip4/0.0.0.0/udp/9000/quic-v1"
 #define LANTERN_DEFAULT_HTTP_PORT 5052
 #define LANTERN_DEFAULT_METRICS_PORT 8080
-#define LANTERN_DEFAULT_DEVNET "devnet"
+#define LANTERN_DEFAULT_DEVNET "devnet0"
 
 struct lantern_client_options {
     const char *data_dir;

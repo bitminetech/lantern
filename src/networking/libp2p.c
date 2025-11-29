@@ -81,6 +81,8 @@ static void lantern_libp2p_configure_logging(void)
         writer_installed = true;
     }
 
+    /* libp2p's INFO level is very verbose with internal module details,
+     * so we map lantern's INFO to libp2p's WARN to reduce noise */
     libp2p_log_level_t target = LIBP2P_LOG_ERROR;
     switch (lantern_log_get_level()) {
     case LANTERN_LOG_LEVEL_TRACE:
@@ -90,7 +92,7 @@ static void lantern_libp2p_configure_logging(void)
         target = LIBP2P_LOG_DEBUG;
         break;
     case LANTERN_LOG_LEVEL_INFO:
-        target = LIBP2P_LOG_INFO;
+        target = LIBP2P_LOG_WARN;  /* libp2p INFO is too verbose */
         break;
     case LANTERN_LOG_LEVEL_WARN:
         target = LIBP2P_LOG_WARN;

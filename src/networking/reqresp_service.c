@@ -457,7 +457,7 @@ static int read_length_prefixed_stream(
                 if (lantern_bytes_to_hex(header, consumed, header_hex, sizeof(header_hex), 0) != 0) {
                     header_hex[0] = '\0';
                 }
-                lantern_log_info(
+                lantern_log_debug(
                     "reqresp",
                     &meta,
                     "%s header decoded length=%" PRIu64 " header_len=%zu header_hex=%s",
@@ -521,7 +521,7 @@ static int read_length_prefixed_stream(
     }
     *out_data = raw;
     *out_len = raw_len;
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "%s payload read complete bytes=%zu",
@@ -619,7 +619,7 @@ static int write_stream_all(
         }
         return (int)err;
     }
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "%s write complete bytes=%zu protocol=%s",
@@ -649,7 +649,7 @@ static int send_response_chunk(
         include_code = true;
     }
 
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         meta,
         "%s framing include_code=%s code=%u payload_len=%zu",
@@ -702,7 +702,7 @@ static int send_response_chunk(
             && lantern_bytes_to_hex(frame, preview, frame_hex, sizeof(frame_hex), 0) != 0) {
             frame_hex[0] = '\0';
         }
-        lantern_log_info(
+        lantern_log_debug(
             "reqresp",
             meta,
             "%s frame summary code_byte=0x%02x header_len=%zu payload_len=%zu frame_len=%zu%s%s",
@@ -815,7 +815,7 @@ static void *status_worker(void *arg) {
     bool include_response_code = true;
 
     const struct lantern_log_metadata stream_meta = {.peer = peer_text[0] ? peer_text : NULL};
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &stream_meta,
         "status[%" PRIu64 "] stream protocol=%s include_response_code=%s",
@@ -850,7 +850,7 @@ static void *status_worker(void *arg) {
         return NULL;
     }
 
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &stream_meta,
         "status[%" PRIu64 "] request payload_len=%zu",
@@ -934,7 +934,7 @@ static void *status_worker(void *arg) {
     log_payload_preview("status response raw", peer_text, buffer, written);
 
     const struct lantern_log_metadata meta = {.peer = peer_text};
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "status response lengths raw=%zu compressed=%zu",
@@ -1058,7 +1058,7 @@ static void *status_request_worker(void *arg) {
         header_hex[0] = '\0';
     }
     const char *protocol_id = ctx->protocol_id ? ctx->protocol_id : LANTERN_STATUS_PROTOCOL_ID;
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "status[%" PRIu64 "] request header_len=%zu declared_len=%zu raw_len=%zu header_hex=%s",
@@ -1068,13 +1068,13 @@ static void *status_request_worker(void *arg) {
         payload_raw_len,
         header_hex[0] ? header_hex : "-");
 
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "status[%" PRIu64 "] expect_response_code=true",
         trace_id);
 
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "status[%" PRIu64 "] sending %s request declared_bytes=%zu raw_bytes=%zu",
@@ -1113,7 +1113,7 @@ static void *status_request_worker(void *arg) {
             && lantern_bytes_to_hex(frame, preview, frame_hex, sizeof(frame_hex), 0) != 0) {
             frame_hex[0] = '\0';
         }
-        lantern_log_info(
+        lantern_log_debug(
             "reqresp",
             &meta,
             "status[%" PRIu64 "] response frame summary code_byte=0x%02x header_len=%zu payload_len=%zu frame_len=%zu%s%s",
@@ -1170,7 +1170,7 @@ static void *status_request_worker(void *arg) {
         goto finish;
     }
 
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "status[%" PRIu64 "] response received code=%u raw_len=%zu",
@@ -1234,7 +1234,7 @@ static void *status_request_worker(void *arg) {
         remote_status.finalized.slot,
         finalized_hex[0] ? finalized_hex : "0x0");
 
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "status[%" PRIu64 "] decoded head_slot=%" PRIu64 " finalized_slot=%" PRIu64,
@@ -1262,7 +1262,7 @@ static void status_request_on_open(libp2p_stream_t *stream, void *user_data, int
     uint64_t trace_id = ctx ? ctx->debug_trace_id : 0;
     const char *protocol_id =
         (ctx && ctx->protocol_id) ? ctx->protocol_id : LANTERN_STATUS_PROTOCOL_ID;
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "status[%" PRIu64 "] request stream opened protocol=%s err=%d",
@@ -1286,7 +1286,7 @@ static void status_request_on_open(libp2p_stream_t *stream, void *user_data, int
             && strcmp(ctx->protocol_id, LANTERN_STATUS_PROTOCOL_ID) == 0
             && (err == LIBP2P_ERR_PROTO_NEGOTIATION_FAILED || err == LIBP2P_ERR_UNSUPPORTED)) {
             ctx->protocol_id = LANTERN_STATUS_PROTOCOL_ID_LEGACY;
-            lantern_log_info(
+            lantern_log_debug(
                 "reqresp",
                 &meta,
                 "status[%" PRIu64 "] retrying with legacy protocol=%s",
@@ -1364,7 +1364,7 @@ static void status_request_on_open(libp2p_stream_t *stream, void *user_data, int
         status_request_ctx_free(ctx);
         return;
     }
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "status[%" PRIu64 "] spawned request worker",
@@ -1473,7 +1473,7 @@ static void *blocks_worker(void *arg) {
     bool include_response_code = true;
 
     const struct lantern_log_metadata meta = {.peer = peer_text[0] ? peer_text : NULL};
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "blocks_by_root stream protocol=%s include_response_code=%s",
@@ -1498,7 +1498,7 @@ static void *blocks_worker(void *arg) {
         return NULL;
     }
 
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "blocks_by_root request payload_len=%zu",
@@ -1520,7 +1520,7 @@ static void *blocks_worker(void *arg) {
         return NULL;
     }
 
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "blocks_by_root decoded roots=%zu",
@@ -1538,7 +1538,7 @@ static void *blocks_worker(void *arg) {
             &response);
     }
 
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "blocks_by_root collect rc=%d blocks=%zu",
@@ -1561,7 +1561,7 @@ static void *blocks_worker(void *arg) {
     bool response_code_pending = include_response_code;
 
     if (block_count == 0) {
-        lantern_log_info(
+        lantern_log_debug(
             "reqresp",
             &meta,
             "blocks_by_root response has zero blocks for peer=%s",
@@ -1673,7 +1673,7 @@ static void *blocks_worker(void *arg) {
             i + 1,
             block_count);
         log_payload_preview(chunk_label, peer_text, snappy_buffer, compressed_len);
-        lantern_log_info(
+        lantern_log_debug(
             "reqresp",
             &meta,
             "%s slot=%" PRIu64 " raw=%zu compressed=%zu",

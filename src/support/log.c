@@ -17,7 +17,7 @@
 #endif
 
 static char g_node_id[96] = {0};
-static enum LanternLogLevel g_min_level = LANTERN_LOG_LEVEL_DEBUG;
+static enum LanternLogLevel g_min_level = LANTERN_LOG_LEVEL_INFO;
 static bool g_color_initialized = false;
 static bool g_color_stdout = false;
 static bool g_color_stderr = false;

@@ -42,15 +42,27 @@ bool lantern_signature_verify(
     if (!pubkey_bytes || pubkey_len == 0) {
         return false;
     }
-    struct PQSignatureSchemePublicKey *pq_pubkey = NULL;
-    enum PQSigningError pk_err = pq_public_key_deserialize(pubkey_bytes, pubkey_len, &pq_pubkey);
-    if (pk_err != Success || !pq_pubkey) {
-        lantern_log_debug("signature", NULL, "pq_public_key_deserialize failed err=%d len=%zu", (int)pk_err, pubkey_len);
+    if (!signature || !message) {
         return false;
     }
-    bool ok = lantern_signature_verify_pk(pq_pubkey, epoch, signature, message, message_len);
-    pq_public_key_free(pq_pubkey);
-    return ok;
+    if (message_len != LANTERN_ROOT_SIZE) {
+        return false;
+    }
+    // Use pq_verify_ssz which handles the 52-byte pubkey as SSZ format.
+    // This matches Ream's leanSig serialization using the Serializable trait.
+    // The 52-byte pubkey is serialized using leanSig's to_bytes()/from_bytes().
+    int verify_rc = pq_verify_ssz(
+        pubkey_bytes,
+        pubkey_len,
+        epoch,
+        message,
+        message_len,
+        signature->bytes,
+        sizeof(signature->bytes));
+    if (verify_rc != 1) {
+        lantern_log_debug("signature", NULL, "pq_verify_ssz rc=%d", verify_rc);
+    }
+    return verify_rc == 1;
 }
 
 bool lantern_signature_verify_pk(
@@ -66,20 +78,13 @@ bool lantern_signature_verify_pk(
         return false;
     }
     struct PQSignature *pq_signature = NULL;
-    // Use bincode format (compatible with Zeam/LeanSig)
-    // Note: SSZ/lean bytes format is not supported by LeanSig internals
+    // Use SSZ format (compatible with Ream's leanSig)
     enum PQSigningError sig_err =
-        pq_signature_deserialize_bincode(signature->bytes, sizeof(signature->bytes), &pq_signature);
+        pq_signature_deserialize(signature->bytes, sizeof(signature->bytes), &pq_signature);
     if (sig_err != Success || !pq_signature) {
-        lantern_log_debug("signature", NULL, "signature deserialize (bincode) failed");
+        lantern_log_debug("signature", NULL, "signature deserialize failed");
         return false;
     }
-    // SSZ/lean bytes format - commented out as LeanSig doesn't support SSZ
-    // enum PQSigningError sig_err =
-    //     pq_signature_deserialize(signature->bytes, sizeof(signature->bytes), &pq_signature);
-    // if (sig_err != Success || !pq_signature) {
-    //     return false;
-    // }
     int verify_rc = pq_verify(pubkey, epoch, message, message_len, pq_signature);
     pq_signature_free(pq_signature);
     if (verify_rc != 1) {
@@ -107,19 +112,12 @@ bool lantern_signature_sign(
     }
 
     uintptr_t written = 0;
-    // Use bincode format (compatible with Zeam/LeanSig)
-    // Note: SSZ/lean bytes format is not supported by LeanSig internals
-    enum PQSigningError serialize_err = pq_signature_serialize_bincode(
+    // Use SSZ format (compatible with Ream's leanSig)
+    enum PQSigningError serialize_err = pq_signature_serialize(
         pq_signature,
         out_signature->bytes,
         sizeof(out_signature->bytes),
         &written);
-    // SSZ/lean bytes format - commented out as LeanSig doesn't support SSZ
-    // enum PQSigningError serialize_err = pq_signature_serialize(
-    //     pq_signature,
-    //     out_signature->bytes,
-    //     sizeof(out_signature->bytes),
-    //     &written);
     pq_signature_free(pq_signature);
     if (serialize_err != Success || written == 0 || written > sizeof(out_signature->bytes)) {
         lantern_log_error(

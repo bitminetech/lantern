@@ -87,9 +87,6 @@ static int decode_validator_secret(const char *hex, uint8_t **out_key, size_t *o
 static int configure_hash_sig_sources(struct lantern_client *client, const struct lantern_client_options *options);
 static int load_hash_sig_keys(struct lantern_client *client);
 static void free_hash_sig_pubkeys(struct lantern_client *client);
-static const struct PQSignatureSchemePublicKey *lantern_client_pubkey_handle(
-    const struct lantern_client *client,
-    uint64_t validator_index);
 static int http_snapshot_head(void *context, struct lantern_http_head_snapshot *out_snapshot);
 static size_t http_validator_count_cb(void *context);
 static int http_validator_info_cb(void *context, size_t index, struct lantern_http_validator_info *out_info);
@@ -2020,79 +2017,8 @@ static int resolve_secret_key_path(
     return -1;
 }
 
-static int load_hash_sig_public_keys(struct lantern_client *client, const struct hash_sig_manifest *manifest) {
-    if (!client) {
-        return -1;
-    }
-    uint64_t validator_count = client->genesis.chain_config.validator_count;
-    if (validator_count == 0) {
-        return 0;
-    }
-
-    bool has_template = client->hash_sig_public_template != NULL;
-    bool has_dir = client->hash_sig_key_dir != NULL;
-    bool has_single = client->hash_sig_public_path != NULL && validator_count == 1;
-    if (!has_template && !has_dir && !has_single) {
-        lantern_log_debug(
-            "crypto",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "hash-sig public key sources unavailable; skipping PQ handle load");
-        return 0;
-    }
-
-    free_hash_sig_pubkeys(client);
-    client->validator_pubkeys = calloc((size_t)validator_count, sizeof(*client->validator_pubkeys));
-    if (!client->validator_pubkeys) {
-        return -1;
-    }
-
-    struct lantern_log_metadata meta = {.validator = client->node_id};
-    size_t resolved = 0;
-    size_t loaded = 0;
-    for (uint64_t i = 0; i < validator_count; ++i) {
-        char *path = NULL;
-        if (resolve_public_key_path(client, manifest, i, &path) != 0) {
-            lantern_log_warn(
-                "crypto",
-                &meta,
-                "unable to resolve hash-sig public key path for index=%" PRIu64 "; skipping",
-                i);
-            continue;
-        }
-        ++resolved;
-        lantern_log_debug(
-            "crypto",
-            &meta,
-            "hash-sig public key resolved index=%" PRIu64 " path=%s",
-            i,
-            path);
-        struct PQSignatureSchemePublicKey *pubkey = NULL;
-        if (lantern_hash_sig_load_public_file(path, &pubkey) != 0) {
-            lantern_log_warn(
-                "crypto",
-                &meta,
-                "failed to load hash-sig public key index=%" PRIu64 " path=%s; skipping",
-                i,
-                path);
-            free(path);
-            continue;
-        }
-        free(path);
-        client->validator_pubkeys[i] = pubkey;
-        ++loaded;
-    }
-    client->validator_pubkey_count = (size_t)validator_count;
-    lantern_log_info(
-        "crypto",
-        &meta,
-        "hash-sig public keys loaded=%zu/%" PRIu64 " resolved=%zu dir=%s template=%s",
-        loaded,
-        validator_count,
-        resolved,
-        client->hash_sig_key_dir ? client->hash_sig_key_dir : "-",
-        client->hash_sig_public_template ? client->hash_sig_public_template : "-");
-    return 0;
-}
+// Note: load_hash_sig_public_keys removed - per LeanSpec, signature verification
+// uses 52-byte serialized pubkeys from state, not full JSON public key handles.
 
 static int load_hash_sig_secret_keys(struct lantern_client *client, const struct hash_sig_manifest *manifest) {
     if (!client) {
@@ -2192,10 +2118,8 @@ static int load_hash_sig_keys(struct lantern_client *client) {
         manifest_loaded ? "loaded" : "missing",
         client->genesis.chain_config.validator_count,
         client->local_validator_count);
-    if (load_hash_sig_public_keys(client, manifest_ptr) != 0) {
-        hash_sig_manifest_reset(&manifest);
-        return -1;
-    }
+    // Note: load_hash_sig_public_keys removed - per LeanSpec, verification uses
+    // 52-byte serialized pubkeys from state, not full JSON key handles
     if (client->local_validator_count > 0) {
         if (load_hash_sig_secret_keys(client, manifest_ptr) != 0) {
             hash_sig_manifest_reset(&manifest);
@@ -2221,17 +2145,8 @@ static void free_hash_sig_pubkeys(struct lantern_client *client) {
     client->validator_pubkey_count = 0;
 }
 
-static const struct PQSignatureSchemePublicKey *lantern_client_pubkey_handle(
-    const struct lantern_client *client,
-    uint64_t validator_index) {
-    if (!client || !client->validator_pubkeys) {
-        return NULL;
-    }
-    if (validator_index >= client->validator_pubkey_count) {
-        return NULL;
-    }
-    return client->validator_pubkeys[validator_index];
-}
+// Note: lantern_client_pubkey_handle removed - per LeanSpec, verification uses
+// 52-byte serialized pubkeys from state, not pre-loaded JSON key handles.
 
 static int configure_hash_sig_sources(struct lantern_client *client, const struct lantern_client_options *options) {
     if (!client || !options) {
@@ -4467,25 +4382,15 @@ static bool lantern_client_verify_vote_signature(
         lantern_log_warn("state", meta, "failed to hash attestation for validator=%" PRIu64, vote->data.validator_id);
         return false;
     }
-    const struct PQSignatureSchemePublicKey *pubkey_handle =
-        lantern_client_pubkey_handle(client, vote->data.validator_id);
-    bool ok = false;
-    if (pubkey_handle) {
-        ok = lantern_signature_verify_pk(
-            pubkey_handle,
-            vote->data.slot,
-            signature,
-            vote_root.bytes,
-            sizeof(vote_root.bytes));
-    } else {
-        ok = lantern_signature_verify(
-            pubkey_bytes,
-            LANTERN_VALIDATOR_PUBKEY_SIZE,
-            vote->data.slot,
-            signature,
-            vote_root.bytes,
-            sizeof(vote_root.bytes));
-    }
+    // Per LeanSpec: Always use the 52-byte pubkey from state (root || parameter)
+    // This matches Zeam's verifyBincode which takes pubkey bytes directly from state.validators[].pubkey
+    bool ok = lantern_signature_verify(
+        pubkey_bytes,
+        LANTERN_VALIDATOR_PUBKEY_SIZE,
+        vote->data.slot,
+        signature,
+        vote_root.bytes,
+        sizeof(vote_root.bytes));
     if (!ok) {
         lantern_log_warn(
             "state",

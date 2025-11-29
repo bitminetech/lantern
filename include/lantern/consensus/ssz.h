@@ -7,7 +7,7 @@
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/state.h"
 
-#define LANTERN_CONFIG_SSZ_SIZE (sizeof(uint64_t) * 2u)
+#define LANTERN_CONFIG_SSZ_SIZE (sizeof(uint64_t))
 #define LANTERN_CHECKPOINT_SSZ_SIZE (LANTERN_ROOT_SIZE + sizeof(uint64_t))
 #define LANTERN_VOTE_SSZ_SIZE ((sizeof(uint64_t) * 2) + 3 * LANTERN_CHECKPOINT_SSZ_SIZE)
 #define LANTERN_SIGNED_VOTE_SSZ_SIZE (LANTERN_VOTE_SSZ_SIZE + LANTERN_SIGNATURE_SIZE)
