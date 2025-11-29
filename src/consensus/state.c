@@ -1599,7 +1599,7 @@ static int lantern_state_process_attestations_internal(
             continue;
         }
         if (vote->target.slot <= vote->source.slot) {
-            record_attestation_validation_metric(att_validation_start, false);
+            /* LeanSpec: silently skip if target <= source (state.py:406) */
             continue;
         }
         if (vote->source.slot > SIZE_MAX || vote->target.slot > SIZE_MAX) {
@@ -1613,73 +1613,38 @@ static int lantern_state_process_attestations_internal(
             continue;
         }
         if (!lantern_state_slot_in_justified_window(state, vote->source.slot)) {
-            record_attestation_validation_metric(att_validation_start, false);
+            /* LeanSpec: silently skip attestations with source outside justified window */
             continue;
         }
         bool source_is_justified = false;
         if (lantern_state_get_justified_slot_bit(state, vote->source.slot, &source_is_justified) != 0) {
-            lantern_log_warn(
-                "state",
-                &meta,
-                "attestation rejected: unable to read justified bit for slot %" PRIu64,
-                vote->source.slot);
-            record_attestation_validation_metric(att_validation_start, false);
+            /* LeanSpec: silently skip if we can't read source justified status */
             continue;
         }
         if (!source_is_justified) {
-            record_attestation_validation_metric(att_validation_start, false);
+            /* LeanSpec: silently skip attestations with unjustified source (state.py:386) */
             continue;
         }
 
         /* Source root must match the state's historical block hashes (leanSpec line 398) */
         size_t source_slot_idx = (size_t)vote->source.slot;
         if (source_slot_idx >= state->historical_block_hashes.length) {
-            if (debug_hash && debug_hash[0] != '\0') {
-                lantern_log_debug(
-                    "state",
-                    NULL,
-                    "attestation rejected: source_slot=%" PRIu64 " >= historical_hashes.len=%zu",
-                    vote->source.slot,
-                    state->historical_block_hashes.length);
-            }
-            record_attestation_validation_metric(att_validation_start, false);
+            /* LeanSpec: silently skip if source slot outside history (state.py:398) */
             continue;
         }
         if (memcmp(vote->source.root.bytes, state->historical_block_hashes.items[source_slot_idx].bytes, LANTERN_ROOT_SIZE) != 0) {
-            if (debug_hash && debug_hash[0] != '\0') {
-                lantern_log_debug(
-                    "state",
-                    NULL,
-                    "attestation rejected: source_slot=%" PRIu64 " root mismatch",
-                    vote->source.slot);
-            }
-            record_attestation_validation_metric(att_validation_start, false);
+            /* LeanSpec: silently skip if source root mismatch (state.py:398) */
             continue;
         }
 
         /* Target root must match the state's historical block hashes (leanSpec line 402) */
         size_t target_slot_idx = (size_t)vote->target.slot;
         if (target_slot_idx >= state->historical_block_hashes.length) {
-            if (debug_hash && debug_hash[0] != '\0') {
-                lantern_log_debug(
-                    "state",
-                    NULL,
-                    "attestation rejected: target_slot=%" PRIu64 " >= historical_hashes.len=%zu",
-                    vote->target.slot,
-                    state->historical_block_hashes.length);
-            }
-            record_attestation_validation_metric(att_validation_start, false);
+            /* LeanSpec: silently skip if target slot outside history (state.py:402) */
             continue;
         }
         if (memcmp(vote->target.root.bytes, state->historical_block_hashes.items[target_slot_idx].bytes, LANTERN_ROOT_SIZE) != 0) {
-            if (debug_hash && debug_hash[0] != '\0') {
-                lantern_log_debug(
-                    "state",
-                    NULL,
-                    "attestation rejected: target_slot=%" PRIu64 " root mismatch",
-                    vote->target.slot);
-            }
-            record_attestation_validation_metric(att_validation_start, false);
+            /* LeanSpec: silently skip if target root mismatch (state.py:402) */
             continue;
         }
 
@@ -1697,12 +1662,7 @@ static int lantern_state_process_attestations_internal(
         bool target_is_justified = false;
         if (lantern_state_slot_in_justified_window(state, vote->target.slot)) {
             if (lantern_state_get_justified_slot_bit(state, vote->target.slot, &target_is_justified) != 0) {
-                lantern_log_warn(
-                    "state",
-                    &meta,
-                    "attestation rejected: unable to read justified bit for slot %" PRIu64,
-                    vote->target.slot);
-                record_attestation_validation_metric(att_validation_start, false);
+                /* LeanSpec: silently skip if we can't read target justified status */
                 continue;
             }
         }
