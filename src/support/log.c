@@ -32,37 +32,57 @@ enum lantern_log_color_mode {
 
 static enum lantern_log_color_mode g_color_mode = LANTERN_LOG_COLOR_AUTO;
 
+/* ANSI color codes */
+#define ANSI_RESET "\x1b[0m"
+#define ANSI_BOLD "\x1b[1m"
+#define ANSI_DIM "\x1b[2m"
+#define ANSI_BLACK "\x1b[30m"
+#define ANSI_RED "\x1b[31m"
+#define ANSI_GREEN "\x1b[32m"
+#define ANSI_YELLOW "\x1b[33m"
+#define ANSI_BLUE "\x1b[34m"
+#define ANSI_MAGENTA "\x1b[35m"
+#define ANSI_CYAN "\x1b[36m"
+#define ANSI_WHITE "\x1b[37m"
+#define ANSI_BRIGHT_BLACK "\x1b[90m"
+#define ANSI_BRIGHT_RED "\x1b[91m"
+#define ANSI_BRIGHT_GREEN "\x1b[92m"
+#define ANSI_BRIGHT_YELLOW "\x1b[93m"
+#define ANSI_BRIGHT_BLUE "\x1b[94m"
+#define ANSI_BRIGHT_CYAN "\x1b[96m"
+
+/* Level badge colors and symbols */
 static const char *level_to_color(enum LanternLogLevel level) {
     switch (level) {
     case LANTERN_LOG_LEVEL_TRACE:
-        return "\x1b[90m"; /* bright black */
+        return ANSI_BRIGHT_BLACK;
     case LANTERN_LOG_LEVEL_DEBUG:
-        return "\x1b[36m"; /* cyan */
+        return ANSI_CYAN;
     case LANTERN_LOG_LEVEL_INFO:
-        return "\x1b[32m"; /* green */
+        return ANSI_GREEN;
     case LANTERN_LOG_LEVEL_WARN:
-        return "\x1b[33m"; /* yellow */
+        return ANSI_YELLOW;
     case LANTERN_LOG_LEVEL_ERROR:
-        return "\x1b[31m"; /* red */
+        return ANSI_BRIGHT_RED;
     default:
-        return "\x1b[0m";
+        return ANSI_RESET;
     }
 }
 
 static const char *level_to_string(enum LanternLogLevel level) {
     switch (level) {
     case LANTERN_LOG_LEVEL_TRACE:
-        return "TRACE";
+        return "TRC";
     case LANTERN_LOG_LEVEL_DEBUG:
-        return "DEBUG";
+        return "DBG";
     case LANTERN_LOG_LEVEL_INFO:
-        return "INFO";
+        return "INF";
     case LANTERN_LOG_LEVEL_WARN:
-        return "WARN";
+        return "WRN";
     case LANTERN_LOG_LEVEL_ERROR:
-        return "ERROR";
+        return "ERR";
     default:
-        return "INFO";
+        return "INF";
     }
 }
 
@@ -200,115 +220,6 @@ int lantern_log_set_level_from_string(const char *text, enum LanternLogLevel *ou
     return 0;
 }
 
-static void append_field(char **cursor, size_t *remaining, const char *key, const char *value) {
-    if (!cursor || !*cursor || !remaining || *remaining == 0) {
-        return;
-    }
-    int written = snprintf(*cursor, *remaining, " %s=%s", key, value ? value : "-");
-    if (written < 0) {
-        return;
-    }
-    size_t w = (size_t)written;
-    if (w >= *remaining) {
-        *remaining = 0;
-        return;
-    }
-    *cursor += w;
-    *remaining -= w;
-}
-
-static void append_numeric_field(
-    char **cursor,
-    size_t *remaining,
-    const char *key,
-    uint64_t value,
-    bool present) {
-    if (!present) {
-        append_field(cursor, remaining, key, "-");
-        return;
-    }
-    if (!cursor || !*cursor || !remaining || *remaining == 0) {
-        return;
-    }
-    int written = snprintf(*cursor, *remaining, " %s=%" PRIu64, key, value);
-    if (written < 0) {
-        return;
-    }
-    size_t w = (size_t)written;
-    if (w >= *remaining) {
-        *remaining = 0;
-        return;
-    }
-    *cursor += w;
-    *remaining -= w;
-}
-
-static void append_escaped_message(char **cursor, size_t *remaining, const char *message) {
-    if (!cursor || !*cursor || !remaining || *remaining == 0) {
-        return;
-    }
-    if (!message) {
-        message = "";
-    }
-    if (*remaining <= 0) {
-        return;
-    }
-    **cursor = ' ';
-    *cursor += 1;
-    *remaining -= 1;
-    if (*remaining == 0) {
-        return;
-    }
-    **cursor = 'm';
-    *cursor += 1;
-    *remaining -= 1;
-    if (*remaining == 0) {
-        return;
-    }
-    **cursor = 's';
-    *cursor += 1;
-    *remaining -= 1;
-    if (*remaining == 0) {
-        return;
-    }
-    **cursor = 'g';
-    *cursor += 1;
-    *remaining -= 1;
-    if (*remaining == 0) {
-        return;
-    }
-    **cursor = '=';
-    *cursor += 1;
-    *remaining -= 1;
-    if (*remaining == 0) {
-        return;
-    }
-    **cursor = '"';
-    *cursor += 1;
-    *remaining -= 1;
-    const char *ptr = message;
-    while (*ptr && *remaining > 1) {
-        if (*ptr == '"' || *ptr == '\\') {
-            if (*remaining <= 2) {
-                break;
-            }
-            **cursor = '\\';
-            *cursor += 1;
-            *remaining -= 1;
-        }
-        **cursor = *ptr;
-        *cursor += 1;
-        *remaining -= 1;
-        ptr += 1;
-    }
-    if (*remaining == 0) {
-        return;
-    }
-    **cursor = '"';
-    *cursor += 1;
-    *remaining -= 1;
-}
-
 static void format_timestamp(char buffer[32]) {
     struct timespec ts;
     if (timespec_get(&ts, TIME_UTC) != TIME_UTC) {
@@ -320,12 +231,13 @@ static void format_timestamp(char buffer[32]) {
         buffer[0] = '\0';
         return;
     }
-    size_t len = strftime(buffer, 32, "%Y-%m-%dT%H:%M:%S", &tm_result);
-    if (len == 0) {
-        buffer[0] = '\0';
-        return;
-    }
-    int written = snprintf(buffer + len, 32 - len, ".%03ldZ", ts.tv_nsec / 1000000L);
+    /* Clean format: HH:MM:SS.mmm */
+    int written = snprintf(
+        buffer, 32, "%02d:%02d:%02d.%03ld",
+        tm_result.tm_hour,
+        tm_result.tm_min,
+        tm_result.tm_sec,
+        ts.tv_nsec / 1000000L);
     if (written < 0) {
         buffer[0] = '\0';
         return;
@@ -342,6 +254,7 @@ void lantern_log_log(
         return;
     }
 
+    /* Format the user message */
     char formatted[1024];
     int msg_written = vsnprintf(formatted, sizeof(formatted), fmt ? fmt : "", args);
     if (msg_written < 0) {
@@ -353,56 +266,111 @@ void lantern_log_log(
     char timestamp[32];
     format_timestamp(timestamp);
 
-    char line[1400];
-    int prefix_written = snprintf(
-        line,
-        sizeof(line),
-        "lantern ts=%s level=%s component=%s",
-        timestamp[0] ? timestamp : "-",
-        level_to_string(level),
-        component ? component : "-");
-    if (prefix_written < 0) {
-        return;
-    }
-    size_t used = (size_t)prefix_written;
-    if (used >= sizeof(line)) {
-        used = sizeof(line) - 1;
-    }
-    char *cursor = line + used;
-    size_t remaining = sizeof(line) - used;
-
-    append_field(&cursor, &remaining, "node", g_node_id[0] ? g_node_id : "-");
-    const char *validator = metadata && metadata->validator ? metadata->validator : "-";
-    append_field(&cursor, &remaining, "validator", validator);
-    const char *peer = metadata && metadata->peer ? metadata->peer : "-";
-    append_field(&cursor, &remaining, "peer", peer);
-    uint64_t slot = metadata && metadata->has_slot ? metadata->slot : 0;
-    append_numeric_field(&cursor, &remaining, "slot", slot, metadata && metadata->has_slot);
-    append_escaped_message(&cursor, &remaining, formatted);
-
-    if (remaining == 0) {
-        line[sizeof(line) - 2] = '"';
-        line[sizeof(line) - 1] = '\0';
-    } else {
-        if ((size_t)(cursor - line) >= sizeof(line) - 1) {
-            line[sizeof(line) - 2] = '"';
-            line[sizeof(line) - 1] = '\0';
-        } else {
-            *cursor = '\0';
-        }
-    }
-
     ensure_color_configuration();
     FILE *target = level >= LANTERN_LOG_LEVEL_WARN ? stderr : stdout;
     const bool colorize = (target == stderr) ? g_color_stderr : g_color_stdout;
-    const char *prefix = "";
-    const char *suffix = "";
-    if (colorize) {
-        prefix = level_to_color(level);
-        suffix = "\x1b[0m";
+
+    /* Build context string with only non-empty fields */
+    char context[256];
+    char *ctx_cursor = context;
+    size_t ctx_remaining = sizeof(context);
+    context[0] = '\0';
+
+    /* Add slot if present */
+    if (metadata && metadata->has_slot) {
+        int w = snprintf(ctx_cursor, ctx_remaining, "slot=%" PRIu64, metadata->slot);
+        if (w > 0 && (size_t)w < ctx_remaining) {
+            ctx_cursor += w;
+            ctx_remaining -= (size_t)w;
+        }
     }
 
-    fprintf(target, "%s%s%s\n", prefix, line, suffix);
+    /* Add validator if present */
+    if (metadata && metadata->validator && metadata->validator[0]) {
+        if (ctx_cursor != context) {
+            int w = snprintf(ctx_cursor, ctx_remaining, " ");
+            if (w > 0 && (size_t)w < ctx_remaining) {
+                ctx_cursor += w;
+                ctx_remaining -= (size_t)w;
+            }
+        }
+        int w = snprintf(ctx_cursor, ctx_remaining, "validator=%s", metadata->validator);
+        if (w > 0 && (size_t)w < ctx_remaining) {
+            ctx_cursor += w;
+            ctx_remaining -= (size_t)w;
+        }
+    }
+
+    /* Add peer if present (truncate long peer IDs) */
+    if (metadata && metadata->peer && metadata->peer[0]) {
+        if (ctx_cursor != context) {
+            int w = snprintf(ctx_cursor, ctx_remaining, " ");
+            if (w > 0 && (size_t)w < ctx_remaining) {
+                ctx_cursor += w;
+                ctx_remaining -= (size_t)w;
+            }
+        }
+        /* Truncate peer ID if too long (show first 8 chars) */
+        size_t peer_len = strlen(metadata->peer);
+        if (peer_len > 16) {
+            int w = snprintf(ctx_cursor, ctx_remaining, "peer=%.8s..", metadata->peer);
+            if (w > 0 && (size_t)w < ctx_remaining) {
+                ctx_cursor += w;
+                ctx_remaining -= (size_t)w;
+            }
+        } else {
+            int w = snprintf(ctx_cursor, ctx_remaining, "peer=%s", metadata->peer);
+            if (w > 0 && (size_t)w < ctx_remaining) {
+                ctx_cursor += w;
+                ctx_remaining -= (size_t)w;
+            }
+        }
+    }
+
+    /*
+     * Output format:
+     * HH:MM:SS.mmm LVL [component] message  context
+     *
+     * With colors:
+     * - Timestamp: dim
+     * - Level: colored based on level
+     * - Component: cyan
+     * - Message: normal (white/default)
+     * - Context: dim
+     */
+
+    if (colorize) {
+        /* Colored output with selective coloring */
+        fprintf(
+            target,
+            "%s%s%s %s%s%s %s[%s]%s %s",
+            ANSI_DIM, timestamp[0] ? timestamp : "??:??:??.???", ANSI_RESET,
+            level_to_color(level), level_to_string(level), ANSI_RESET,
+            ANSI_CYAN, component ? component : "?", ANSI_RESET,
+            formatted);
+
+        /* Add context if present */
+        if (context[0]) {
+            fprintf(target, "  %s%s%s", ANSI_DIM, context, ANSI_RESET);
+        }
+        fprintf(target, "\n");
+    } else {
+        /* Plain output without colors */
+        fprintf(
+            target,
+            "%s %s [%s] %s",
+            timestamp[0] ? timestamp : "??:??:??.???",
+            level_to_string(level),
+            component ? component : "?",
+            formatted);
+
+        /* Add context if present */
+        if (context[0]) {
+            fprintf(target, "  %s", context);
+        }
+        fprintf(target, "\n");
+    }
+
     fflush(target);
 }
 

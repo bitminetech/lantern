@@ -52,23 +52,48 @@ static void lantern_libp2p_log_writer(libp2p_log_level_t level, const char *msg,
     if (!msg) {
         return;
     }
+
+    /*
+     * Parse libp2p's structured log format: [module=X file=Y line=Z func=W] message
+     * Extract module name for cleaner output, skip verbose file/line/func info
+     */
+    const char *module = "libp2p";
+    const char *clean_msg = msg;
+    char module_buf[64];
+
+    if (msg[0] == '[' && strncmp(msg, "[module=", 8) == 0) {
+        const char *mod_start = msg + 8;
+        const char *mod_end = strchr(mod_start, ' ');
+        if (mod_end && (size_t)(mod_end - mod_start) < sizeof(module_buf)) {
+            size_t mod_len = (size_t)(mod_end - mod_start);
+            memcpy(module_buf, mod_start, mod_len);
+            module_buf[mod_len] = '\0';
+            module = module_buf;
+        }
+        /* Skip to the actual message after "] " */
+        const char *bracket_end = strchr(msg, ']');
+        if (bracket_end && bracket_end[1] == ' ') {
+            clean_msg = bracket_end + 2;
+        }
+    }
+
     enum LanternLogLevel mapped = lantern_libp2p_convert_level(level);
     switch (mapped) {
     case LANTERN_LOG_LEVEL_TRACE:
-        lantern_log_trace("libp2p", NULL, "%s", msg);
+        lantern_log_trace(module, NULL, "%s", clean_msg);
         break;
     case LANTERN_LOG_LEVEL_DEBUG:
-        lantern_log_debug("libp2p", NULL, "%s", msg);
+        lantern_log_debug(module, NULL, "%s", clean_msg);
         break;
     case LANTERN_LOG_LEVEL_INFO:
-        lantern_log_info("libp2p", NULL, "%s", msg);
+        lantern_log_info(module, NULL, "%s", clean_msg);
         break;
     case LANTERN_LOG_LEVEL_WARN:
-        lantern_log_warn("libp2p", NULL, "%s", msg);
+        lantern_log_warn(module, NULL, "%s", clean_msg);
         break;
     case LANTERN_LOG_LEVEL_ERROR:
     default:
-        lantern_log_error("libp2p", NULL, "%s", msg);
+        lantern_log_error(module, NULL, "%s", clean_msg);
         break;
     }
 }
