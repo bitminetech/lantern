@@ -75,17 +75,20 @@ static int hash_byte_vector(const uint8_t *bytes, size_t length, LanternRoot *ou
     return result;
 }
 
-static int hash_validator(const uint8_t *pubkey, LanternRoot *out_root) {
+static int hash_validator(const uint8_t *pubkey, uint64_t index, LanternRoot *out_root) {
     if (!out_root) {
         return -1;
     }
+    /* Validator SSZ structure: pubkey (Bytes52) + index (u64)
+     * This matches Zeam's Validator struct for correct hash tree root. */
     LanternRoot pubkey_root;
     if (hash_byte_vector(pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE, &pubkey_root) != 0) {
         return -1;
     }
-    uint8_t chunk[SSZ_BYTES_PER_CHUNK];
-    memcpy(chunk, pubkey_root.bytes, SSZ_BYTES_PER_CHUNK);
-    return merkleize_chunks(chunk, 1, 0, out_root);
+    uint8_t chunks[2][SSZ_BYTES_PER_CHUNK];
+    memcpy(chunks[0], pubkey_root.bytes, SSZ_BYTES_PER_CHUNK);
+    chunk_from_uint64(index, chunks[1]);
+    return merkleize_chunks(&chunks[0][0], 2, 0, out_root);
 }
 
 static int zero_merkle_root(size_t chunk_limit, LanternRoot *out_root) {
@@ -797,7 +800,8 @@ int lantern_hash_tree_root_validators(const uint8_t *pubkeys, size_t count, Lant
         const char *debug_hash = getenv("LANTERN_DEBUG_STATE_HASH");
         for (size_t i = 0; i < count; ++i) {
             LanternRoot validator_root;
-            if (hash_validator(pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), &validator_root) != 0) {
+            /* Pass index i to match Zeam's Validator { pubkey, index } SSZ structure */
+            if (hash_validator(pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), (uint64_t)i, &validator_root) != 0) {
                 free(chunks);
                 return -1;
             }

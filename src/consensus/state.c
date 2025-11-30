@@ -1223,6 +1223,7 @@ int lantern_state_set_validator_pubkeys(LanternState *state, const uint8_t *pubk
                 items[i].pubkey,
                 pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
                 LANTERN_VALIDATOR_PUBKEY_SIZE);
+            items[i].index = (uint64_t)i;
         }
     }
     if (state->validators) {

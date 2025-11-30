@@ -30,16 +30,20 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "index": 0
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "index": 1
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "index": 2
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "index": 3
                     }
                 ]
             },
@@ -53,9 +57,9 @@
         "blocks": [
             {
                 "slot": 1,
-                "proposer_index": 1,
-                "parent_root": "0xc0d44f989da630e63b222085a226fea923e2cc5321ba4c4aa4978b528949827e",
-                "state_root": "0x57c159521023a7181e36310c0e30f3fa4b49449df06fbb40023ae6db29b9d200",
+                "proposerIndex": 1,
+                "parentRoot": "0xe3c1f53019f7fac3d402915e5171449ab0f9aa9aa89857e87dcdcc16983781b4",
+                "stateRoot": "0xfd96931fa716488eefacfc4e4dbb0d0543700084f1724a2244eccab0773639a0",
                 "body": {
                     "attestations": {
                         "data": []
@@ -64,9 +68,9 @@
             },
             {
                 "slot": 4,
-                "proposer_index": 0,
-                "parent_root": "0xad26b6bd334c3210c3776ae2cb5ca6f27c89fdd7d1f9e9e08324f4c584b87134",
-                "state_root": "0x3c217bb9e293fd4048b61ff4d6e5c65fc9424ee64c7a45d50ea1e650176b1a78",
+                "proposerIndex": 0,
+                "parentRoot": "0x969f9416fab6113291a285e265854c54f0dbfbf89d2402c3cf34342377029f1c",
+                "stateRoot": "0x3445f62fb7b96a18d7ba7a9da2308f98e061b0ad8b60879e6579322dc152dd0c",
                 "body": {
                     "attestations": {
                         "data": []
@@ -75,9 +79,9 @@
             },
             {
                 "slot": 8,
-                "proposer_index": 0,
-                "parent_root": "0xdcf290c36c05a203b356c1b9438f9d2f9a8009efdd6a3bcba6f8b0edb9d520db",
-                "state_root": "0xf3be7b4c39b469906c0db5feb15a9d378f8332909e678dd34525536be384eb05",
+                "proposerIndex": 0,
+                "parentRoot": "0x89ffcc65bd5ddc983d69b54c409b8e7aa71f044cd85f169428302abc54fa06e5",
+                "stateRoot": "0x602eae20e5e8395fca51c6be7d919d36d3b8917a9b9dcd6523356e54c7f51bae",
                 "body": {
                     "attestations": {
                         "data": []
@@ -92,7 +96,7 @@
             "historicalBlockHashesCount": 8
         },
         "_info": {
-            "hash": "0x2f95486fa9d8cfa978a25c23bf1efe35b4cae25aae1919f7da16fe84977520e3",
+            "hash": "0x9759a3021dd0fc00ddfcda5ed7300a360bd65add2b18f7e56731be41c1cf7a36",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/state_transition/test_block_processing.py::test_blocks_with_gaps[fork_Devnet]",
             "description": "Test blocks separated by empty slots.\n\n    Scenario\n    --------\n    Build chain with gaps:\n    - Slot 1: Block\n    - Slots 2-3: Empty\n    - Slot 4: Block\n    - Slots 5-7: Empty\n    - Slot 8: Block\n\n    Expected Behavior\n    -----------------\n    1. Blocks process at specified slots\n    2. Empty slots handled automatically\n    3. Parent linkage spans gaps correctly\n    4. State advances to slot 8\n\n    Why This Matters\n    ----------------\n    Missed proposals are common:\n    - Validators offline\n    - Network partitions\n    - Missed attestations\n\n    This validates resilience to gaps.",

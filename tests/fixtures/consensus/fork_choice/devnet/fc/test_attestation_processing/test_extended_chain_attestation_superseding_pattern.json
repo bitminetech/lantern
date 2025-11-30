@@ -30,16 +30,20 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x41b58a468e1e96087b9f25311983960be15be63bab205d52aafc0a6edd166a59ea46501311abd503bea6f144eda69f568b7d0753"
+                        "pubkey": "0x2817b85cd5b2964d7bfedd235d1fd61851a9a0083256c509c0891e66aadcd40c7417330d5c5fcc5469085e1f72bc4b74476a663e",
+                        "index": 0
                     },
                     {
-                        "pubkey": "0x6f5e2e45afe6d44ffcda0737f409d01370823821fe56802dcf360f150549c454211c50652c81a5217880ce760ac49c5651db6b0b"
+                        "pubkey": "0x2aa763354b7526570caa942572cc2c43e603991021352c00417d68141f8b2b2565d0cb3e22f3542d80403440ca3d0b5915636604",
+                        "index": 1
                     },
                     {
-                        "pubkey": "0xfab2b555bc7a0c4c3d6b3e7936081105c4a4c80ec66dd908e50d7e5e9f1343357d586e0f996e123dbe00665106289c586a0ab103"
+                        "pubkey": "0x944b1c5acb617b49312330640241655c9c2d7549761e5d10e808ee4ee3238d15945ba4382928a7502fe4397e0ef58d361984b266",
+                        "index": 2
                     },
                     {
-                        "pubkey": "0xb1086a625e88a26a3ef8d157ad23967d6f398676dbeade6f9110536f855c57333ad4a04b2bd0691c7b4b3b624f7f741575b2e049"
+                        "pubkey": "0x8f5441157010f737c3e6151b1d6f461c19de212bdacd95466ac82f2f0b4064761bbe4e434efe89183e89b116b4631640b124be7d",
+                        "index": 3
                     }
                 ]
             },
@@ -54,7 +58,7 @@
             "slot": 0,
             "proposerIndex": 0,
             "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
-            "stateRoot": "0xf9fa1adf5c52f1f43423411ba8ab5645013d662815c5ff63927c0838fcbd63ea",
+            "stateRoot": "0x808e17209abfbc5b064bd0312e6cc82c84abcbea78dc9c8d5ed1ecf8fc8357d0",
             "body": {
                 "attestations": {
                     "data": []
@@ -78,29 +82,29 @@
                 "block": {
                     "block": {
                         "slot": 1,
-                        "proposer_index": 1,
-                        "parent_root": "0x50276cccdce40f14d784749b2e7dbd63e284da13a7d5b962320938928d7ed572",
-                        "state_root": "0xc07f27aa19ae9942e8b3fe456e9a90e486bdd467a6ed54a0f343e6a67dc6741a",
+                        "proposerIndex": 1,
+                        "parentRoot": "0x45ba5b36c01211f23288d62b70ee2b95c33869d711c0fba8a7c2781302750a0d",
+                        "stateRoot": "0x521af1d07f8ea37a7e3f9495dbe265a809441192ce36d4eb47252ba7b342253d",
                         "body": {
                             "attestations": {
                                 "data": []
                             }
                         }
                     },
-                    "proposer_attestation": {
-                        "validator_id": 1,
+                    "proposerAttestation": {
+                        "validatorId": 1,
                         "data": {
                             "slot": 1,
                             "head": {
-                                "root": "0xf59ed71ff104e73b6850d7ffe6d4890f04d390ffd810b970cf76b06821c32d3e",
+                                "root": "0xd6b34d4b9f6f64126c1e06377ea9b1cf89cebc79250b162aed941922b5b01313",
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0xf59ed71ff104e73b6850d7ffe6d4890f04d390ffd810b970cf76b06821c32d3e",
+                                "root": "0xd6b34d4b9f6f64126c1e06377ea9b1cf89cebc79250b162aed941922b5b01313",
                                 "slot": 1
                             },
                             "source": {
-                                "root": "0x50276cccdce40f14d784749b2e7dbd63e284da13a7d5b962320938928d7ed572",
+                                "root": "0x45ba5b36c01211f23288d62b70ee2b95c33869d711c0fba8a7c2781302750a0d",
                                 "slot": 0
                             }
                         }
@@ -128,29 +132,29 @@
                 "block": {
                     "block": {
                         "slot": 2,
-                        "proposer_index": 2,
-                        "parent_root": "0xf59ed71ff104e73b6850d7ffe6d4890f04d390ffd810b970cf76b06821c32d3e",
-                        "state_root": "0x75ec31ac7da89a4d475360d7cfa172cf3594b22a9b671a910c69f182e1fcb9ed",
+                        "proposerIndex": 2,
+                        "parentRoot": "0xd6b34d4b9f6f64126c1e06377ea9b1cf89cebc79250b162aed941922b5b01313",
+                        "stateRoot": "0x2ccaabb82aa51c0d066c8c73f3de93eb3157ec326bc809807034150404a07867",
                         "body": {
                             "attestations": {
                                 "data": []
                             }
                         }
                     },
-                    "proposer_attestation": {
-                        "validator_id": 2,
+                    "proposerAttestation": {
+                        "validatorId": 2,
                         "data": {
                             "slot": 2,
                             "head": {
-                                "root": "0x886cefcf369f58f48e00127a9cc9b176841bfacffe47ed40ee9af7220701d2cf",
+                                "root": "0xade616a0441708201ca3abc31ff97202f3f3b38f140875a6f84b0415aba3a517",
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x886cefcf369f58f48e00127a9cc9b176841bfacffe47ed40ee9af7220701d2cf",
+                                "root": "0xade616a0441708201ca3abc31ff97202f3f3b38f140875a6f84b0415aba3a517",
                                 "slot": 2
                             },
                             "source": {
-                                "root": "0xf59ed71ff104e73b6850d7ffe6d4890f04d390ffd810b970cf76b06821c32d3e",
+                                "root": "0xd6b34d4b9f6f64126c1e06377ea9b1cf89cebc79250b162aed941922b5b01313",
                                 "slot": 1
                             }
                         }
@@ -183,29 +187,29 @@
                 "block": {
                     "block": {
                         "slot": 3,
-                        "proposer_index": 3,
-                        "parent_root": "0x886cefcf369f58f48e00127a9cc9b176841bfacffe47ed40ee9af7220701d2cf",
-                        "state_root": "0xccb793745660e64445d45e90af74faaed6847e8acfeaec82a6f1be1e1b32cddf",
+                        "proposerIndex": 3,
+                        "parentRoot": "0xade616a0441708201ca3abc31ff97202f3f3b38f140875a6f84b0415aba3a517",
+                        "stateRoot": "0x996437846774522f2088889dae1f31868961bb716bdfc9b6039ae57adb2f3b0e",
                         "body": {
                             "attestations": {
                                 "data": []
                             }
                         }
                     },
-                    "proposer_attestation": {
-                        "validator_id": 3,
+                    "proposerAttestation": {
+                        "validatorId": 3,
                         "data": {
                             "slot": 3,
                             "head": {
-                                "root": "0x6482ac659f87ed82bec085a1568f10ea7547a8beb6ca372ea489f65f0b0d8217",
+                                "root": "0x6c523176736e41eda85bbf39e84c32f6963013c4199fba890f492de80227fc81",
                                 "slot": 3
                             },
                             "target": {
-                                "root": "0x6482ac659f87ed82bec085a1568f10ea7547a8beb6ca372ea489f65f0b0d8217",
+                                "root": "0x6c523176736e41eda85bbf39e84c32f6963013c4199fba890f492de80227fc81",
                                 "slot": 3
                             },
                             "source": {
-                                "root": "0x886cefcf369f58f48e00127a9cc9b176841bfacffe47ed40ee9af7220701d2cf",
+                                "root": "0xade616a0441708201ca3abc31ff97202f3f3b38f140875a6f84b0415aba3a517",
                                 "slot": 2
                             }
                         }
@@ -243,29 +247,29 @@
                 "block": {
                     "block": {
                         "slot": 4,
-                        "proposer_index": 0,
-                        "parent_root": "0x6482ac659f87ed82bec085a1568f10ea7547a8beb6ca372ea489f65f0b0d8217",
-                        "state_root": "0x10a732a4659dec0b61806a92a0659dce2d083354befe9c2e9963566e6ec8736f",
+                        "proposerIndex": 0,
+                        "parentRoot": "0x6c523176736e41eda85bbf39e84c32f6963013c4199fba890f492de80227fc81",
+                        "stateRoot": "0xb77a71c7fde327bba5c6fd2c4f2bab9c5eda8e831aacbabd17eb86097a8ab0c9",
                         "body": {
                             "attestations": {
                                 "data": []
                             }
                         }
                     },
-                    "proposer_attestation": {
-                        "validator_id": 0,
+                    "proposerAttestation": {
+                        "validatorId": 0,
                         "data": {
                             "slot": 4,
                             "head": {
-                                "root": "0x149c13bdd104efdca9c12ddd2b8db2d483e585cda49d8efaea1977d58e5b755b",
+                                "root": "0x258503b87d53f164b9bb173ce81fb8eebcddb048e40b5eb94444bb33f905274f",
                                 "slot": 4
                             },
                             "target": {
-                                "root": "0x149c13bdd104efdca9c12ddd2b8db2d483e585cda49d8efaea1977d58e5b755b",
+                                "root": "0x258503b87d53f164b9bb173ce81fb8eebcddb048e40b5eb94444bb33f905274f",
                                 "slot": 4
                             },
                             "source": {
-                                "root": "0x6482ac659f87ed82bec085a1568f10ea7547a8beb6ca372ea489f65f0b0d8217",
+                                "root": "0x6c523176736e41eda85bbf39e84c32f6963013c4199fba890f492de80227fc81",
                                 "slot": 3
                             }
                         }
@@ -303,29 +307,29 @@
                 "block": {
                     "block": {
                         "slot": 5,
-                        "proposer_index": 1,
-                        "parent_root": "0x149c13bdd104efdca9c12ddd2b8db2d483e585cda49d8efaea1977d58e5b755b",
-                        "state_root": "0x4f540839272329dcf37004ace7b3c2c85374b51abc1b9fceaaa54bdc9197869e",
+                        "proposerIndex": 1,
+                        "parentRoot": "0x258503b87d53f164b9bb173ce81fb8eebcddb048e40b5eb94444bb33f905274f",
+                        "stateRoot": "0x4aab389878f6f49267c206a1c572a189b220cf11e36bd3342aa8d5eb1e08631f",
                         "body": {
                             "attestations": {
                                 "data": []
                             }
                         }
                     },
-                    "proposer_attestation": {
-                        "validator_id": 1,
+                    "proposerAttestation": {
+                        "validatorId": 1,
                         "data": {
                             "slot": 5,
                             "head": {
-                                "root": "0xd27b33fb68f00aa0082707d9825d2646ff395f2ea162acd43d8b11bdcb54aa0f",
+                                "root": "0x697b29917d528865f76c8ea12745fc183c94910816aa2926e433d376d0fd2039",
                                 "slot": 5
                             },
                             "target": {
-                                "root": "0xd27b33fb68f00aa0082707d9825d2646ff395f2ea162acd43d8b11bdcb54aa0f",
+                                "root": "0x697b29917d528865f76c8ea12745fc183c94910816aa2926e433d376d0fd2039",
                                 "slot": 5
                             },
                             "source": {
-                                "root": "0x149c13bdd104efdca9c12ddd2b8db2d483e585cda49d8efaea1977d58e5b755b",
+                                "root": "0x258503b87d53f164b9bb173ce81fb8eebcddb048e40b5eb94444bb33f905274f",
                                 "slot": 4
                             }
                         }
@@ -363,29 +367,29 @@
                 "block": {
                     "block": {
                         "slot": 6,
-                        "proposer_index": 2,
-                        "parent_root": "0xd27b33fb68f00aa0082707d9825d2646ff395f2ea162acd43d8b11bdcb54aa0f",
-                        "state_root": "0x7028d63853a98da1c48664ca38d82de8e72e79ff1b8b148d81001c2d36269ae8",
+                        "proposerIndex": 2,
+                        "parentRoot": "0x697b29917d528865f76c8ea12745fc183c94910816aa2926e433d376d0fd2039",
+                        "stateRoot": "0x336a7f31239058b3359ab514bf99fe647aa4080af326ac53905ec0a37cbe0984",
                         "body": {
                             "attestations": {
                                 "data": []
                             }
                         }
                     },
-                    "proposer_attestation": {
-                        "validator_id": 2,
+                    "proposerAttestation": {
+                        "validatorId": 2,
                         "data": {
                             "slot": 6,
                             "head": {
-                                "root": "0x19e1899cb94059d3b782dc68941d30b0eae49d8b7624d250c1346b7e04b9beab",
+                                "root": "0x2e62ba4076f302b48b3b3bac5f8aa4ef23de7bc6f4814eab60e6402d094ec8a1",
                                 "slot": 6
                             },
                             "target": {
-                                "root": "0x19e1899cb94059d3b782dc68941d30b0eae49d8b7624d250c1346b7e04b9beab",
+                                "root": "0x2e62ba4076f302b48b3b3bac5f8aa4ef23de7bc6f4814eab60e6402d094ec8a1",
                                 "slot": 6
                             },
                             "source": {
-                                "root": "0xd27b33fb68f00aa0082707d9825d2646ff395f2ea162acd43d8b11bdcb54aa0f",
+                                "root": "0x697b29917d528865f76c8ea12745fc183c94910816aa2926e433d376d0fd2039",
                                 "slot": 5
                             }
                         }
@@ -423,29 +427,29 @@
                 "block": {
                     "block": {
                         "slot": 7,
-                        "proposer_index": 3,
-                        "parent_root": "0x19e1899cb94059d3b782dc68941d30b0eae49d8b7624d250c1346b7e04b9beab",
-                        "state_root": "0xbd47ef11c58ad1148712c8a819e97377a10b557ad505b003c3502308efbf22f3",
+                        "proposerIndex": 3,
+                        "parentRoot": "0x2e62ba4076f302b48b3b3bac5f8aa4ef23de7bc6f4814eab60e6402d094ec8a1",
+                        "stateRoot": "0x3a95e21cbaa4caf326dc76f382854b8b89932c06b59199d6b0e9142e2781c71b",
                         "body": {
                             "attestations": {
                                 "data": []
                             }
                         }
                     },
-                    "proposer_attestation": {
-                        "validator_id": 3,
+                    "proposerAttestation": {
+                        "validatorId": 3,
                         "data": {
                             "slot": 7,
                             "head": {
-                                "root": "0x111d3b8fdd010744354a8117ac161b6910cfd008747d7724492059702869f931",
+                                "root": "0xbfc9bcde71042aabb179a82c26a49f2c1525e82b44a5e933133a051df513b0c9",
                                 "slot": 7
                             },
                             "target": {
-                                "root": "0x111d3b8fdd010744354a8117ac161b6910cfd008747d7724492059702869f931",
+                                "root": "0xbfc9bcde71042aabb179a82c26a49f2c1525e82b44a5e933133a051df513b0c9",
                                 "slot": 7
                             },
                             "source": {
-                                "root": "0x19e1899cb94059d3b782dc68941d30b0eae49d8b7624d250c1346b7e04b9beab",
+                                "root": "0x2e62ba4076f302b48b3b3bac5f8aa4ef23de7bc6f4814eab60e6402d094ec8a1",
                                 "slot": 6
                             }
                         }
@@ -483,29 +487,29 @@
                 "block": {
                     "block": {
                         "slot": 8,
-                        "proposer_index": 0,
-                        "parent_root": "0x111d3b8fdd010744354a8117ac161b6910cfd008747d7724492059702869f931",
-                        "state_root": "0x42cf69457d8adaa40adf914fe5466216498aadb7677104b052b515602361af24",
+                        "proposerIndex": 0,
+                        "parentRoot": "0xbfc9bcde71042aabb179a82c26a49f2c1525e82b44a5e933133a051df513b0c9",
+                        "stateRoot": "0x508edfcc30c94c3a343cf0617905db11c46033ed36df0d7a07390f132a9daa49",
                         "body": {
                             "attestations": {
                                 "data": []
                             }
                         }
                     },
-                    "proposer_attestation": {
-                        "validator_id": 0,
+                    "proposerAttestation": {
+                        "validatorId": 0,
                         "data": {
                             "slot": 8,
                             "head": {
-                                "root": "0x67e302c7bc46982814514da5e963adea70f37b4b33f57eb244f766c47db68213",
+                                "root": "0x261c51556ea6c9328b9b6f529385d35b9131b9ec8b2777ebf3b3fcdba7ffc211",
                                 "slot": 8
                             },
                             "target": {
-                                "root": "0x67e302c7bc46982814514da5e963adea70f37b4b33f57eb244f766c47db68213",
+                                "root": "0x261c51556ea6c9328b9b6f529385d35b9131b9ec8b2777ebf3b3fcdba7ffc211",
                                 "slot": 8
                             },
                             "source": {
-                                "root": "0x111d3b8fdd010744354a8117ac161b6910cfd008747d7724492059702869f931",
+                                "root": "0xbfc9bcde71042aabb179a82c26a49f2c1525e82b44a5e933133a051df513b0c9",
                                 "slot": 7
                             }
                         }
@@ -515,7 +519,7 @@
         ],
         "maxSlot": 8,
         "_info": {
-            "hash": "0x04f956d15666cf87526933b76b874032a1e2b8474e6884b3902778e6c6aedc92",
+            "hash": "0x71bf84f4a8bfe2660aacc1970858ee06cacc107c3f55947f3b82e426573b648f",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_attestation_processing.py::test_extended_chain_attestation_superseding_pattern[fork_Devnet]",
             "description": "Attestation superseding pattern over two complete validator rotations.\n\n    Scenario\n    --------\n    Process blocks at slots 1-8 (two complete validator rotations).\n\n    Phase 1 (slots 1-4): Accumulation\n        Validators each propose once, attestations accumulate to 4 total.\n\n    Phase 2 (slots 5-8): Steady State\n        Validators propose again, newer attestations supersede older ones.\n        Total stays at 4, composition changes.\n\n    Expected:\n        - After slot 4:  All 4 validators have attestations (v0 in new, v1-v3 in known)\n        - After slot 5:  Validator 1 supersedes their slot 1 attestation\n        - After slot 8:  All validators have their latest attestations from slots 5-8\n\n    Why This Matters\n    ----------------\n    The system reaches steady state: one attestation per validator.\n\n    As each validator proposes again, their new attestation supersedes their old one.\n    The count remains constant (4), but the composition updates.\n\n    This confirms superseding maintains correct state over time with no attestation\n    leaks or unbounded growth.",

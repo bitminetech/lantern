@@ -430,9 +430,13 @@ static int lantern_fixture_parse_attestation_message(
     }
     memset(vote, 0, sizeof(*vote));
 
-    int validator_idx = lantern_fixture_object_get_field(doc, attestation_idx, "validator_id");
+    int validator_idx = lantern_fixture_object_get_field(doc, attestation_idx, "validatorId");
     if (validator_idx < 0) {
-        return -1;
+        /* Try snake_case fallback for legacy fixtures */
+        validator_idx = lantern_fixture_object_get_field(doc, attestation_idx, "validator_id");
+        if (validator_idx < 0) {
+            return -1;
+        }
     }
     if (lantern_fixture_token_to_uint64(doc, validator_idx, &vote->data.validator_id) != 0) {
         return -1;
@@ -656,9 +660,13 @@ int lantern_fixture_parse_signed_block(
     }
     lantern_signed_block_with_attestation_init(signed_block);
 
-    /* Try new leanSpec format: { "block": {...}, "proposer_attestation": {...} } */
+    /* Try new leanSpec format: { "block": {...}, "proposerAttestation": {...} } */
     int block_idx = lantern_fixture_object_get_field(doc, object_index, "block");
-    int proposer_idx = lantern_fixture_object_get_field(doc, object_index, "proposer_attestation");
+    int proposer_idx = lantern_fixture_object_get_field(doc, object_index, "proposerAttestation");
+    if (proposer_idx < 0) {
+        /* Try snake_case fallback for legacy fixtures */
+        proposer_idx = lantern_fixture_object_get_field(doc, object_index, "proposer_attestation");
+    }
     if (block_idx >= 0 && proposer_idx >= 0) {
         if (lantern_fixture_parse_block(doc, block_idx, &signed_block->message.block) != 0) {
             goto error;
@@ -695,9 +703,13 @@ int lantern_fixture_parse_signed_block(
             goto error;
         }
 
-        proposer_idx = lantern_fixture_object_get_field(doc, message_idx, "proposer_attestation");
+        proposer_idx = lantern_fixture_object_get_field(doc, message_idx, "proposerAttestation");
         if (proposer_idx < 0) {
-            goto error;
+            /* Try snake_case fallback for legacy fixtures */
+            proposer_idx = lantern_fixture_object_get_field(doc, message_idx, "proposer_attestation");
+            if (proposer_idx < 0) {
+                goto error;
+            }
         }
         LanternSignedVote proposer_vote;
         if (lantern_fixture_parse_attestation_message(doc, proposer_idx, &proposer_vote) != 0) {

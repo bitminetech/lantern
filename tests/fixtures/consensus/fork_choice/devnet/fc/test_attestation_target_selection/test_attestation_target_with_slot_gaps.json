@@ -30,16 +30,20 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x70766141f283446f203c25203c607b2ab79cd27d0907e44552dbed6ed27a267ee2f2d7711e8a2934d319905db97b782da0df152e"
+                        "pubkey": "0x2817b85cd5b2964d7bfedd235d1fd61851a9a0083256c509c0891e66aadcd40c7417330d5c5fcc5469085e1f72bc4b74476a663e",
+                        "index": 0
                     },
                     {
-                        "pubkey": "0xf39cb160a5d4990d4cda091e3eb1d560180c3967f918ab6f1068f93ae9daf67cb3ba3438adbef335bff0b171288f192eee152c17"
+                        "pubkey": "0x2aa763354b7526570caa942572cc2c43e603991021352c00417d68141f8b2b2565d0cb3e22f3542d80403440ca3d0b5915636604",
+                        "index": 1
                     },
                     {
-                        "pubkey": "0x2b68d973e1d7cd1f5b01b056a669874e699f501deec9dd6130bc56636e914551c98b080b43202f389778d02c8c4bac5c111f033e"
+                        "pubkey": "0x944b1c5acb617b49312330640241655c9c2d7549761e5d10e808ee4ee3238d15945ba4382928a7502fe4397e0ef58d361984b266",
+                        "index": 2
                     },
                     {
-                        "pubkey": "0x15825d5510780c3fbcd413065b926c47435a620fd8ca2078797440307b68847286a129034a2b5623f44298664b273a4a05fa4e35"
+                        "pubkey": "0x8f5441157010f737c3e6151b1d6f461c19de212bdacd95466ac82f2f0b4064761bbe4e434efe89183e89b116b4631640b124be7d",
+                        "index": 3
                     }
                 ]
             },
@@ -54,7 +58,7 @@
             "slot": 0,
             "proposerIndex": 0,
             "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
-            "stateRoot": "0x5da0de61ea2e22f3b7188481f9389bc32092d4a1f27568fd9cf1a697f024b71b",
+            "stateRoot": "0x808e17209abfbc5b064bd0312e6cc82c84abcbea78dc9c8d5ed1ecf8fc8357d0",
             "body": {
                 "attestations": {
                     "data": []
@@ -72,29 +76,29 @@
                 "block": {
                     "block": {
                         "slot": 1,
-                        "proposer_index": 1,
-                        "parent_root": "0x4a4f8cf3651b0e8b63d5bfa15e31aaeb8673145b53e5e4bce471b24d1e15b960",
-                        "state_root": "0xbe6313e42e2b18b216b30e972108e2228e85b4be107578eea1b0f19b1722575e",
+                        "proposerIndex": 1,
+                        "parentRoot": "0x45ba5b36c01211f23288d62b70ee2b95c33869d711c0fba8a7c2781302750a0d",
+                        "stateRoot": "0x521af1d07f8ea37a7e3f9495dbe265a809441192ce36d4eb47252ba7b342253d",
                         "body": {
                             "attestations": {
                                 "data": []
                             }
                         }
                     },
-                    "proposer_attestation": {
-                        "validator_id": 1,
+                    "proposerAttestation": {
+                        "validatorId": 1,
                         "data": {
                             "slot": 1,
                             "head": {
-                                "root": "0x21a2041731422b217ce489a9be026e118950271b65e7f5c0b641052d7c58a73a",
+                                "root": "0xd6b34d4b9f6f64126c1e06377ea9b1cf89cebc79250b162aed941922b5b01313",
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x21a2041731422b217ce489a9be026e118950271b65e7f5c0b641052d7c58a73a",
+                                "root": "0xd6b34d4b9f6f64126c1e06377ea9b1cf89cebc79250b162aed941922b5b01313",
                                 "slot": 1
                             },
                             "source": {
-                                "root": "0x4a4f8cf3651b0e8b63d5bfa15e31aaeb8673145b53e5e4bce471b24d1e15b960",
+                                "root": "0x45ba5b36c01211f23288d62b70ee2b95c33869d711c0fba8a7c2781302750a0d",
                                 "slot": 0
                             }
                         }
@@ -111,29 +115,29 @@
                 "block": {
                     "block": {
                         "slot": 3,
-                        "proposer_index": 3,
-                        "parent_root": "0x21a2041731422b217ce489a9be026e118950271b65e7f5c0b641052d7c58a73a",
-                        "state_root": "0xca6ca5292329600a95ed695ccbadfd76b8a2cb1f71357568292a03cfa4a46b4a",
+                        "proposerIndex": 3,
+                        "parentRoot": "0xd6b34d4b9f6f64126c1e06377ea9b1cf89cebc79250b162aed941922b5b01313",
+                        "stateRoot": "0x0ef21a47ed287b70d5e29fecffe5d3e5ffbe92e6a175c1edce7abb4c222447e8",
                         "body": {
                             "attestations": {
                                 "data": []
                             }
                         }
                     },
-                    "proposer_attestation": {
-                        "validator_id": 3,
+                    "proposerAttestation": {
+                        "validatorId": 3,
                         "data": {
                             "slot": 3,
                             "head": {
-                                "root": "0xa3ce630b830f882a1896684bf926795fc840ba0eb6c854a45a4bafc7f65c449e",
+                                "root": "0x3519ac894c087d6773d2d4d1a6c48c83017c4d7a9a8b978b40cc46a87a7c8c4f",
                                 "slot": 3
                             },
                             "target": {
-                                "root": "0xa3ce630b830f882a1896684bf926795fc840ba0eb6c854a45a4bafc7f65c449e",
+                                "root": "0x3519ac894c087d6773d2d4d1a6c48c83017c4d7a9a8b978b40cc46a87a7c8c4f",
                                 "slot": 3
                             },
                             "source": {
-                                "root": "0x21a2041731422b217ce489a9be026e118950271b65e7f5c0b641052d7c58a73a",
+                                "root": "0xd6b34d4b9f6f64126c1e06377ea9b1cf89cebc79250b162aed941922b5b01313",
                                 "slot": 1
                             }
                         }
@@ -150,29 +154,29 @@
                 "block": {
                     "block": {
                         "slot": 5,
-                        "proposer_index": 1,
-                        "parent_root": "0xa3ce630b830f882a1896684bf926795fc840ba0eb6c854a45a4bafc7f65c449e",
-                        "state_root": "0x3188ce82fa39151fc249d79c0c39f937afd197f9da51e57eecf6ec2c36027ef9",
+                        "proposerIndex": 1,
+                        "parentRoot": "0x3519ac894c087d6773d2d4d1a6c48c83017c4d7a9a8b978b40cc46a87a7c8c4f",
+                        "stateRoot": "0x2b0b856024d35acdb7f10bed20466acd5228da177f82dc6a895524e7aae458b6",
                         "body": {
                             "attestations": {
                                 "data": []
                             }
                         }
                     },
-                    "proposer_attestation": {
-                        "validator_id": 1,
+                    "proposerAttestation": {
+                        "validatorId": 1,
                         "data": {
                             "slot": 5,
                             "head": {
-                                "root": "0x71bddb2ef4a4acfd61eb84033e8a5d1ebb8a99040adeeb25940c7cd7c9996162",
+                                "root": "0x4cdad5c9f1a2dc13793116d610492231b93b87bef1041699dfae45802cf0a430",
                                 "slot": 5
                             },
                             "target": {
-                                "root": "0x71bddb2ef4a4acfd61eb84033e8a5d1ebb8a99040adeeb25940c7cd7c9996162",
+                                "root": "0x4cdad5c9f1a2dc13793116d610492231b93b87bef1041699dfae45802cf0a430",
                                 "slot": 5
                             },
                             "source": {
-                                "root": "0xa3ce630b830f882a1896684bf926795fc840ba0eb6c854a45a4bafc7f65c449e",
+                                "root": "0x3519ac894c087d6773d2d4d1a6c48c83017c4d7a9a8b978b40cc46a87a7c8c4f",
                                 "slot": 3
                             }
                         }
@@ -182,7 +186,7 @@
         ],
         "maxSlot": 5,
         "_info": {
-            "hash": "0x86227e19040dfa508623ffbeceef4ee49206188a86497ea3ad6fe91facfe3022",
+            "hash": "0xdd10c3e91d81978d3b09f2ece36eb9ec07539469de49423e8c013686220e54c7",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_attestation_target_selection.py::test_attestation_target_with_slot_gaps[fork_Devnet]",
             "description": "Attestation target handles missed slots correctly.\n\n    Scenario\n    --------\n    Process blocks at slots 1, 3, 5 (skipping even slots).\n\n    Expected:\n        - Targets advance despite gaps\n        - Targets remain justifiable\n        - Safe target stays valid\n\n    Why This Matters\n    ----------------\n    Missed slots are common when proposers fail or network partitions occur.\n\n    The target selection must handle sparse block production gracefully,\n    ensuring validators can still make progress even with gaps in the chain.",

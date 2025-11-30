@@ -365,16 +365,12 @@ int lantern_ssz_encode_config(const LanternConfig *config, uint8_t *out, size_t 
     if (!config || !out || out_len < LANTERN_CONFIG_SSZ_SIZE) {
         return -1;
     }
-    size_t offset = 0;
-    if (write_u64(out + offset, out_len - offset, config->num_validators) != 0) {
+    /* SSZ config only contains genesis_time to match Zeam/Ream's BeamStateConfig.
+     * num_validators is derived from the validators list, not stored in config. */
+    if (write_u64(out, out_len, config->genesis_time) != 0) {
         return -1;
     }
-    offset += SSZ_BYTE_SIZE_OF_UINT64;
-    if (write_u64(out + offset, out_len - offset, config->genesis_time) != 0) {
-        return -1;
-    }
-    offset += SSZ_BYTE_SIZE_OF_UINT64;
-    set_written(written, offset);
+    set_written(written, SSZ_BYTE_SIZE_OF_UINT64);
     return 0;
 }
 
@@ -382,12 +378,9 @@ int lantern_ssz_decode_config(LanternConfig *config, const uint8_t *data, size_t
     if (!config || !data || data_len < LANTERN_CONFIG_SSZ_SIZE) {
         return -1;
     }
-    size_t offset = 0;
-    if (read_u64(data + offset, data_len - offset, &config->num_validators) != 0) {
-        return -1;
-    }
-    offset += SSZ_BYTE_SIZE_OF_UINT64;
-    if (read_u64(data + offset, data_len - offset, &config->genesis_time) != 0) {
+    /* SSZ config only contains genesis_time to match Zeam/Ream's BeamStateConfig.
+     * num_validators is derived from the validators list, not stored in config. */
+    if (read_u64(data, data_len, &config->genesis_time) != 0) {
         return -1;
     }
     return 0;

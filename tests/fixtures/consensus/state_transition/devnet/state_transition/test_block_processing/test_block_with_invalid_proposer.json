@@ -30,16 +30,20 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "index": 0
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "index": 1
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "index": 2
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "index": 3
                     }
                 ]
             },
@@ -53,9 +57,9 @@
         "blocks": [
             {
                 "slot": 1,
-                "proposer_index": 3,
-                "parent_root": "0xc0d44f989da630e63b222085a226fea923e2cc5321ba4c4aa4978b528949827e",
-                "state_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "proposerIndex": 3,
+                "parentRoot": "0xe3c1f53019f7fac3d402915e5171449ab0f9aa9aa89857e87dcdcc16983781b4",
+                "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
                 "body": {
                     "attestations": {
                         "data": []
@@ -65,7 +69,7 @@
         ],
         "expectException": "AssertionError",
         "_info": {
-            "hash": "0x90c260b60da9d87252f5375ef7c656a2d0a4ef26755a6e00947bc31e042c30bf",
+            "hash": "0x403e22a020a1f9bd9277cc6cd8b57249f012a4de202f62a380f33a146a3e1e19",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/state_transition/test_block_processing.py::test_block_with_invalid_proposer[fork_Devnet]",
             "description": "Test that blocks from wrong proposer are rejected.\n\n    Scenario\n    --------\n    Attempt to process a block where proposer index doesn't match\n    the expected proposer for that slot.\n\n    Expected Behavior\n    -----------------\n    Block processing fails with AssertionError: \"Incorrect block proposer\"\n\n    Why This Matters\n    ----------------\n    Prevents unauthorized block production:\n    - Only designated proposer can produce blocks\n    - Prevents validator impersonation\n    - Maintains protocol security\n    - Essential for consensus integrity\n\n    Without this check, any validator could produce blocks for any slot.",

@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #define LANTERN_ROOT_SIZE 32
-#define LANTERN_SIGNATURE_SIZE 3116
+#define LANTERN_SIGNATURE_SIZE 3112
 #define LANTERN_MAX_ATTESTATIONS 4096
 #define LANTERN_VALIDATOR_PUBKEY_SIZE 52
 #define LANTERN_VALIDATOR_REGISTRY_LIMIT 4096
@@ -63,6 +63,7 @@ typedef struct {
 
 typedef struct {
     uint8_t pubkey[LANTERN_VALIDATOR_PUBKEY_SIZE];
+    uint64_t index;
 } LanternValidator;
 
 typedef struct {
