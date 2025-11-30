@@ -6,9 +6,12 @@ ARG APT_FLAGS="-o Acquire::AllowInsecureRepositories=true -o Acquire::AllowDowng
 RUN printf '%s\n' \
       'Acquire::AllowInsecureRepositories "true";' \
       'Acquire::AllowDowngradeToInsecureRepositories "true";' \
+      'Acquire::Check-Valid-Until "false";' \
+      'Acquire::AllowReleaseInfoChange "true";' \
+      'APT::Get::AllowUnauthenticated "true";' \
       > /etc/apt/apt.conf.d/99insecure
 
-RUN apt-get ${APT_FLAGS} update \
+RUN apt-get ${APT_FLAGS} update --allow-insecure-repositories \
     && apt-get ${APT_FLAGS} install -y --no-install-recommends --allow-unauthenticated \
         build-essential \
         bison \
@@ -90,9 +93,12 @@ ARG APT_FLAGS="-o Acquire::AllowInsecureRepositories=true -o Acquire::AllowDowng
 RUN printf '%s\n' \
       'Acquire::AllowInsecureRepositories "true";' \
       'Acquire::AllowDowngradeToInsecureRepositories "true";' \
+      'Acquire::Check-Valid-Until "false";' \
+      'Acquire::AllowReleaseInfoChange "true";' \
+      'APT::Get::AllowUnauthenticated "true";' \
       > /etc/apt/apt.conf.d/99insecure
 
-RUN apt-get ${APT_FLAGS} update \
+RUN apt-get ${APT_FLAGS} update --allow-insecure-repositories \
     && apt-get ${APT_FLAGS} install -y --no-install-recommends --allow-unauthenticated \
         ca-certificates \
         gdb \

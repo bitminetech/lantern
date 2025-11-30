@@ -22,3 +22,6 @@
 [submodule "tools/leanMetrics"]
 	path = tools/leanMetrics
 	url = https://github.com/leanEthereum/leanMetrics.git
+[submodule "tools/hash-sig-cli"]
+	path = tools/hash-sig-cli
+	url = https://github.com/Pier-Two/hash-sig-cli.git
