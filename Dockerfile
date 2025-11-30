@@ -9,9 +9,11 @@ RUN printf '%s\n' \
       'Acquire::Check-Valid-Until "false";' \
       'Acquire::AllowReleaseInfoChange "true";' \
       'APT::Get::AllowUnauthenticated "true";' \
+      'Acquire::https::Verify-Peer "false";' \
+      'Acquire::https::Verify-Host "false";' \
       > /etc/apt/apt.conf.d/99insecure
 
-RUN apt-get ${APT_FLAGS} update --allow-insecure-repositories \
+RUN apt-get ${APT_FLAGS} update --allow-insecure-repositories || true \
     && apt-get ${APT_FLAGS} install -y --no-install-recommends --allow-unauthenticated \
         build-essential \
         bison \
