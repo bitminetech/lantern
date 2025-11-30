@@ -1,15 +1,13 @@
 FROM ubuntu:22.04 AS builder
 
+# Use bash and enable pipefail
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 ENV DEBIAN_FRONTEND=noninteractive
-ARG APT_FLAGS="-o Acquire::AllowInsecureRepositories=true -o Acquire::AllowDowngradeToInsecureRepositories=true -o Dir::Cache::archives=/tmp"
 
-RUN printf '%s\n' \
-      'Acquire::AllowInsecureRepositories "true";' \
-      'Acquire::AllowDowngradeToInsecureRepositories "true";' \
-      > /etc/apt/apt.conf.d/99insecure
-
-RUN apt-get ${APT_FLAGS} update \
-    && apt-get ${APT_FLAGS} install -y --no-install-recommends --allow-unauthenticated \
+# Install build dependencies
+# Note: Build with --network=host if you encounter GPG/network issues
+RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         bison \
         ca-certificates \
@@ -85,15 +83,9 @@ PY
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-ARG APT_FLAGS="-o Acquire::AllowInsecureRepositories=true -o Acquire::AllowDowngradeToInsecureRepositories=true -o Dir::Cache::archives=/tmp"
 
-RUN printf '%s\n' \
-      'Acquire::AllowInsecureRepositories "true";' \
-      'Acquire::AllowDowngradeToInsecureRepositories "true";' \
-      > /etc/apt/apt.conf.d/99insecure
-
-RUN apt-get ${APT_FLAGS} update \
-    && apt-get ${APT_FLAGS} install -y --no-install-recommends --allow-unauthenticated \
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         gdb \
         libssl3 \
