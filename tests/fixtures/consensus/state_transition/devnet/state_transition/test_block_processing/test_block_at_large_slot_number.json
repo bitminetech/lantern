@@ -30,16 +30,20 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "index": 0
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "index": 1
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "index": 2
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "index": 3
                     }
                 ]
             },
@@ -53,9 +57,9 @@
         "blocks": [
             {
                 "slot": 100,
-                "proposer_index": 0,
-                "parent_root": "0xc0d44f989da630e63b222085a226fea923e2cc5321ba4c4aa4978b528949827e",
-                "state_root": "0xeb0bc9abc2100717ad621e4146ba0fe9951e115d533332d2b94a067f51a39f51",
+                "proposerIndex": 0,
+                "parentRoot": "0xe3c1f53019f7fac3d402915e5171449ab0f9aa9aa89857e87dcdcc16983781b4",
+                "stateRoot": "0xdaf207f3a7508c9a7cd9c8465c96f39574f7a260eeb6d1e523d2a244b6313a77",
                 "body": {
                     "attestations": {
                         "data": []
@@ -67,7 +71,7 @@
             "slot": 100
         },
         "_info": {
-            "hash": "0xe44bfd7f4e4d8b47ae4f18f92aefbf9636b87a7ea0c8a7e4aa670b592643cc0c",
+            "hash": "0x7f660383e3aaa4604e1e2d7c392dfb766a45628ca9bcf58c88242546763d7a21",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/state_transition/test_block_processing.py::test_block_at_large_slot_number[fork_Devnet]",
             "description": "Test block processing at high slot numbers.\n\n    Scenario\n    --------\n    Jump directly from genesis to slot 100, simulating:\n    - Network bootstrap after long downtime\n    - Test environment with artificial time jump\n    - Integer overflow boundary testing\n\n    Expected Behavior\n    -----------------\n    1. Process 99 empty slots: 1\u21922\u2192...\u219299\u2192100\n    2. Block at slot 100 processes correctly\n    3. No integer overflow or wraparound\n    4. State remains consistent",

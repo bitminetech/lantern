@@ -30,16 +30,20 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x55af62025cdf1d23efb6101215c46d5948b2dc6df45be83fc0e1497486e53641960c66131c86e750de645d55e9183631e5dad633"
+                        "pubkey": "0x2817b85cd5b2964d7bfedd235d1fd61851a9a0083256c509c0891e66aadcd40c7417330d5c5fcc5469085e1f72bc4b74476a663e",
+                        "index": 0
                     },
                     {
-                        "pubkey": "0x073a5b3268bec54fe90b0a4d5185681024b0aa6fba77281170000f4106234d3340fcf425ab715c6731594f7e7c63d728f09f7c55"
+                        "pubkey": "0x2aa763354b7526570caa942572cc2c43e603991021352c00417d68141f8b2b2565d0cb3e22f3542d80403440ca3d0b5915636604",
+                        "index": 1
                     },
                     {
-                        "pubkey": "0xdb10df1c2338bb25ddb21816c3f91b2aaa4b2d689d68820ce0d999188378b437f229ee3a5502593f61005f707ac5eb2654fb1103"
+                        "pubkey": "0x944b1c5acb617b49312330640241655c9c2d7549761e5d10e808ee4ee3238d15945ba4382928a7502fe4397e0ef58d361984b266",
+                        "index": 2
                     },
                     {
-                        "pubkey": "0x37343e2dfe27e234d7bbdd5367e7d71fa744027aa299b00568868b79ee555a3f98a91e09c60fc23422f1201d36866f0381235841"
+                        "pubkey": "0x8f5441157010f737c3e6151b1d6f461c19de212bdacd95466ac82f2f0b4064761bbe4e434efe89183e89b116b4631640b124be7d",
+                        "index": 3
                     }
                 ]
             },
@@ -54,7 +58,7 @@
             "slot": 0,
             "proposerIndex": 0,
             "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
-            "stateRoot": "0x232e1f3c30c86e43c2b1e3a7fee5fbdf5f2a59979ff274d179a8a2aab7f4179f",
+            "stateRoot": "0x808e17209abfbc5b064bd0312e6cc82c84abcbea78dc9c8d5ed1ecf8fc8357d0",
             "body": {
                 "attestations": {
                     "data": []
@@ -79,29 +83,29 @@
                 "block": {
                     "block": {
                         "slot": 1,
-                        "proposer_index": 1,
-                        "parent_root": "0xdfe6aae453bb49ee2d735c76931f971366e2fbdd6e98b240f1de3c85a47567fe",
-                        "state_root": "0xaaadcdf4f95e72190087cf8c3f0619f26e1a3e790d62627dc392bf789c037bfd",
+                        "proposerIndex": 1,
+                        "parentRoot": "0x45ba5b36c01211f23288d62b70ee2b95c33869d711c0fba8a7c2781302750a0d",
+                        "stateRoot": "0x521af1d07f8ea37a7e3f9495dbe265a809441192ce36d4eb47252ba7b342253d",
                         "body": {
                             "attestations": {
                                 "data": []
                             }
                         }
                     },
-                    "proposer_attestation": {
-                        "validator_id": 1,
+                    "proposerAttestation": {
+                        "validatorId": 1,
                         "data": {
                             "slot": 1,
                             "head": {
-                                "root": "0x649852a8880dd09823fa69fe1e8d4544f715e2ac5749f99283e1bbb091e61fac",
+                                "root": "0xd6b34d4b9f6f64126c1e06377ea9b1cf89cebc79250b162aed941922b5b01313",
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x649852a8880dd09823fa69fe1e8d4544f715e2ac5749f99283e1bbb091e61fac",
+                                "root": "0xd6b34d4b9f6f64126c1e06377ea9b1cf89cebc79250b162aed941922b5b01313",
                                 "slot": 1
                             },
                             "source": {
-                                "root": "0xdfe6aae453bb49ee2d735c76931f971366e2fbdd6e98b240f1de3c85a47567fe",
+                                "root": "0x45ba5b36c01211f23288d62b70ee2b95c33869d711c0fba8a7c2781302750a0d",
                                 "slot": 0
                             }
                         }
@@ -130,29 +134,29 @@
                 "block": {
                     "block": {
                         "slot": 2,
-                        "proposer_index": 2,
-                        "parent_root": "0x649852a8880dd09823fa69fe1e8d4544f715e2ac5749f99283e1bbb091e61fac",
-                        "state_root": "0x6051b4cf03514792524ac2910af4da8f33d9b678c189f684103e2df1a30dade0",
+                        "proposerIndex": 2,
+                        "parentRoot": "0xd6b34d4b9f6f64126c1e06377ea9b1cf89cebc79250b162aed941922b5b01313",
+                        "stateRoot": "0x2ccaabb82aa51c0d066c8c73f3de93eb3157ec326bc809807034150404a07867",
                         "body": {
                             "attestations": {
                                 "data": []
                             }
                         }
                     },
-                    "proposer_attestation": {
-                        "validator_id": 2,
+                    "proposerAttestation": {
+                        "validatorId": 2,
                         "data": {
                             "slot": 2,
                             "head": {
-                                "root": "0xa5278d038f93514079066d26b060ddc5c725481349e2eea7bede12657f525ec7",
+                                "root": "0xade616a0441708201ca3abc31ff97202f3f3b38f140875a6f84b0415aba3a517",
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0xa5278d038f93514079066d26b060ddc5c725481349e2eea7bede12657f525ec7",
+                                "root": "0xade616a0441708201ca3abc31ff97202f3f3b38f140875a6f84b0415aba3a517",
                                 "slot": 2
                             },
                             "source": {
-                                "root": "0x649852a8880dd09823fa69fe1e8d4544f715e2ac5749f99283e1bbb091e61fac",
+                                "root": "0xd6b34d4b9f6f64126c1e06377ea9b1cf89cebc79250b162aed941922b5b01313",
                                 "slot": 1
                             }
                         }
@@ -186,29 +190,29 @@
                 "block": {
                     "block": {
                         "slot": 3,
-                        "proposer_index": 3,
-                        "parent_root": "0xa5278d038f93514079066d26b060ddc5c725481349e2eea7bede12657f525ec7",
-                        "state_root": "0x43fd017cdf00f8f0a1147827cd3a15cc4bdd7aa09393837aad2fed1963a9e092",
+                        "proposerIndex": 3,
+                        "parentRoot": "0xade616a0441708201ca3abc31ff97202f3f3b38f140875a6f84b0415aba3a517",
+                        "stateRoot": "0x996437846774522f2088889dae1f31868961bb716bdfc9b6039ae57adb2f3b0e",
                         "body": {
                             "attestations": {
                                 "data": []
                             }
                         }
                     },
-                    "proposer_attestation": {
-                        "validator_id": 3,
+                    "proposerAttestation": {
+                        "validatorId": 3,
                         "data": {
                             "slot": 3,
                             "head": {
-                                "root": "0x704cc43b7d523fa886430066f29e26ff525d60ebac586a38cc3d8d3a02123296",
+                                "root": "0x6c523176736e41eda85bbf39e84c32f6963013c4199fba890f492de80227fc81",
                                 "slot": 3
                             },
                             "target": {
-                                "root": "0x704cc43b7d523fa886430066f29e26ff525d60ebac586a38cc3d8d3a02123296",
+                                "root": "0x6c523176736e41eda85bbf39e84c32f6963013c4199fba890f492de80227fc81",
                                 "slot": 3
                             },
                             "source": {
-                                "root": "0xa5278d038f93514079066d26b060ddc5c725481349e2eea7bede12657f525ec7",
+                                "root": "0xade616a0441708201ca3abc31ff97202f3f3b38f140875a6f84b0415aba3a517",
                                 "slot": 2
                             }
                         }
@@ -247,29 +251,29 @@
                 "block": {
                     "block": {
                         "slot": 4,
-                        "proposer_index": 0,
-                        "parent_root": "0x704cc43b7d523fa886430066f29e26ff525d60ebac586a38cc3d8d3a02123296",
-                        "state_root": "0x714cf7fe9973309c6e3469f8ba0661db3ac6c362c47d453f48d1b7ecc161bac2",
+                        "proposerIndex": 0,
+                        "parentRoot": "0x6c523176736e41eda85bbf39e84c32f6963013c4199fba890f492de80227fc81",
+                        "stateRoot": "0xb77a71c7fde327bba5c6fd2c4f2bab9c5eda8e831aacbabd17eb86097a8ab0c9",
                         "body": {
                             "attestations": {
                                 "data": []
                             }
                         }
                     },
-                    "proposer_attestation": {
-                        "validator_id": 0,
+                    "proposerAttestation": {
+                        "validatorId": 0,
                         "data": {
                             "slot": 4,
                             "head": {
-                                "root": "0x0d892b2ce0911913e57f642fc3d01f857ab05d113eb3f7210fb19ba4a1957314",
+                                "root": "0x258503b87d53f164b9bb173ce81fb8eebcddb048e40b5eb94444bb33f905274f",
                                 "slot": 4
                             },
                             "target": {
-                                "root": "0x0d892b2ce0911913e57f642fc3d01f857ab05d113eb3f7210fb19ba4a1957314",
+                                "root": "0x258503b87d53f164b9bb173ce81fb8eebcddb048e40b5eb94444bb33f905274f",
                                 "slot": 4
                             },
                             "source": {
-                                "root": "0x704cc43b7d523fa886430066f29e26ff525d60ebac586a38cc3d8d3a02123296",
+                                "root": "0x6c523176736e41eda85bbf39e84c32f6963013c4199fba890f492de80227fc81",
                                 "slot": 3
                             }
                         }
@@ -279,7 +283,7 @@
         ],
         "maxSlot": 4,
         "_info": {
-            "hash": "0x7a07c262abf02423e4ececa8e735112d0cd60a35414d8a8789056e73c9ec1e7a",
+            "hash": "0x606cffd0bacbf605f7e5c28d6692cd9bc006e2b06a32c14bd294dec529b9af0e",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_attestation_processing.py::test_attestation_accumulation_full_validator_set[fork_Devnet]",
             "description": "All validators contribute attestations across both dictionaries.\n\n    Scenario\n    --------\n    Process blocks at slots 1, 2, 3, 4 (complete validator rotation).\n\n    Expected:\n        - After slot 1:  new attestations = 1, known attestations = 0\n        - After slot 2:  new attestations = 1, known attestations = 1\n        - After slot 3:  new attestations = 1, known attestations = 2\n        - After slot 4:  new attestations = 1, known attestations = 3  (total: 4 validators)\n\n    Why This Matters\n    ----------------\n    With 4 validators and consecutive blocks, each validator proposes once.\n\n    Attestations accumulate across both dictionaries:\n    - new: current slot's proposer\n    - known: all previous proposers\n\n    The total (new + known) equals the number of unique validators who proposed.",

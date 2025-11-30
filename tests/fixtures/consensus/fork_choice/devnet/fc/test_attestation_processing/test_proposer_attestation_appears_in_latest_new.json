@@ -30,16 +30,20 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x31dc0f581a19297693838706aacdad585143e32d08414203c2db1d3431cb2503a3ce0a230aa2c3237020d12f0dd31a5d50d34978"
+                        "pubkey": "0x2817b85cd5b2964d7bfedd235d1fd61851a9a0083256c509c0891e66aadcd40c7417330d5c5fcc5469085e1f72bc4b74476a663e",
+                        "index": 0
                     },
                     {
-                        "pubkey": "0xa205334e6629d42ba877ad7a5c7b8e4a0c547c3e5aef865e451ede2e26b2da05b881ff2f717ce31568c4b17723df07615d9ce870"
+                        "pubkey": "0x2aa763354b7526570caa942572cc2c43e603991021352c00417d68141f8b2b2565d0cb3e22f3542d80403440ca3d0b5915636604",
+                        "index": 1
                     },
                     {
-                        "pubkey": "0x5601bc6cd3f7544f212eda6aeebe42695c1ec43a9372e4196c804a52e4a2305abb8dd573e89a716317e8746a31665811a382220f"
+                        "pubkey": "0x944b1c5acb617b49312330640241655c9c2d7549761e5d10e808ee4ee3238d15945ba4382928a7502fe4397e0ef58d361984b266",
+                        "index": 2
                     },
                     {
-                        "pubkey": "0x94d5cb102466a03856858d5bcecac2646d108625f5738a651a24f00a839d09628da1bc6ba7d2026111ec8723ee992102a8254a49"
+                        "pubkey": "0x8f5441157010f737c3e6151b1d6f461c19de212bdacd95466ac82f2f0b4064761bbe4e434efe89183e89b116b4631640b124be7d",
+                        "index": 3
                     }
                 ]
             },
@@ -54,7 +58,7 @@
             "slot": 0,
             "proposerIndex": 0,
             "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
-            "stateRoot": "0x9f4d35826d2e3633bb782ecff944496474195ed528a0f1abbf9d6e511261e925",
+            "stateRoot": "0x808e17209abfbc5b064bd0312e6cc82c84abcbea78dc9c8d5ed1ecf8fc8357d0",
             "body": {
                 "attestations": {
                     "data": []
@@ -81,29 +85,29 @@
                 "block": {
                     "block": {
                         "slot": 1,
-                        "proposer_index": 1,
-                        "parent_root": "0xc45608d9c151c756d10c3f0aa2bdb96400c6c9fafe4b3aaf583b4779e22e3a7e",
-                        "state_root": "0xa23ed1c9fa142b89c4dbb1e3b869431d2f5e45bfd221d57d6de5185c5c363462",
+                        "proposerIndex": 1,
+                        "parentRoot": "0x45ba5b36c01211f23288d62b70ee2b95c33869d711c0fba8a7c2781302750a0d",
+                        "stateRoot": "0x521af1d07f8ea37a7e3f9495dbe265a809441192ce36d4eb47252ba7b342253d",
                         "body": {
                             "attestations": {
                                 "data": []
                             }
                         }
                     },
-                    "proposer_attestation": {
-                        "validator_id": 1,
+                    "proposerAttestation": {
+                        "validatorId": 1,
                         "data": {
                             "slot": 1,
                             "head": {
-                                "root": "0xf362f6568f4945df8f998a2a480b44e0fa8004f78010b9883029e6b3507dec37",
+                                "root": "0xd6b34d4b9f6f64126c1e06377ea9b1cf89cebc79250b162aed941922b5b01313",
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0xf362f6568f4945df8f998a2a480b44e0fa8004f78010b9883029e6b3507dec37",
+                                "root": "0xd6b34d4b9f6f64126c1e06377ea9b1cf89cebc79250b162aed941922b5b01313",
                                 "slot": 1
                             },
                             "source": {
-                                "root": "0xc45608d9c151c756d10c3f0aa2bdb96400c6c9fafe4b3aaf583b4779e22e3a7e",
+                                "root": "0x45ba5b36c01211f23288d62b70ee2b95c33869d711c0fba8a7c2781302750a0d",
                                 "slot": 0
                             }
                         }
@@ -113,7 +117,7 @@
         ],
         "maxSlot": 1,
         "_info": {
-            "hash": "0x88b47effa6dec7a9ad2d546230e182a236a6249bb8e9dd041b874faf7111c756",
+            "hash": "0x8e3da204c11c123e87c99c77611d257d2867f5b953081abb5c75cacda801ca9e",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_attestation_processing.py::test_proposer_attestation_appears_in_latest_new[fork_Devnet]",
             "description": "Proposer attestation appears in latest_new after block processing.\n\n    Scenario\n    --------\n    Process one block at slot 1 (proposer: validator 1).\n\n    Expected:\n        - validator 1's attestation has correct slot and checkpoint slots\n\n    Why This Matters\n    ----------------\n    New proposer attestations enter the pipeline through `latest_new_attestations`,\n    not directly into `latest_known_attestations`.\n\n    This baseline test verifies the entry point of the attestation pipeline.\n    All new attestations must enter through the \"new\" stage before graduating to \"known\".",

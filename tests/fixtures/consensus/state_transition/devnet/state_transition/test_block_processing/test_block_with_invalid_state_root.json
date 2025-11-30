@@ -30,16 +30,20 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "index": 0
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "index": 1
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "index": 2
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+                        "index": 3
                     }
                 ]
             },
@@ -53,9 +57,9 @@
         "blocks": [
             {
                 "slot": 1,
-                "proposer_index": 1,
-                "parent_root": "0xc0d44f989da630e63b222085a226fea923e2cc5321ba4c4aa4978b528949827e",
-                "state_root": "0xbaadbaadbaadbaadbaadbaadbaadbaadbaadbaadbaadbaadbaadbaadbaadbaad",
+                "proposerIndex": 1,
+                "parentRoot": "0xe3c1f53019f7fac3d402915e5171449ab0f9aa9aa89857e87dcdcc16983781b4",
+                "stateRoot": "0xbaadbaadbaadbaadbaadbaadbaadbaadbaadbaadbaadbaadbaadbaadbaadbaad",
                 "body": {
                     "attestations": {
                         "data": []
@@ -65,7 +69,7 @@
         ],
         "expectException": "AssertionError",
         "_info": {
-            "hash": "0xfc15701b94fb59631dee9f5f3fb92b55707b9daad8ab078b9d6fa5f9952f1107",
+            "hash": "0xe0a9fbbf2cdec436b44ea5987027ecb5f453f1d725287884acb592aee73da28c",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/state_transition/test_block_processing.py::test_block_with_invalid_state_root[fork_Devnet]",
             "description": "Test that blocks with wrong state root commitment are rejected.\n\n    Scenario\n    --------\n    Create a block with state root that doesn't match the actual\n    post-state hash.\n\n    Expected Behavior\n    -----------------\n    Block processing fails with AssertionError: \"Invalid block state root\"\n\n    Why This Matters\n    ----------------\n    Cryptographic state commitment is fundamental:\n    - Proves correct state execution\n    - Prevents state manipulation\n\n    This is a critical validation - without it, proposers could claim any arbitrary state.",
