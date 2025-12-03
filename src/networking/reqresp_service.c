@@ -660,19 +660,16 @@ static int send_response_chunk(
         payload_len,
         raw_len);
 
-    /* The req/resp protocol spec requires the varint prefix to indicate the
-     * UNCOMPRESSED SSZ length (raw_len), not the compressed payload size.
-     * The peer reads this varint, allocates a buffer of that size, then snappy-decodes
-     * the following compressed data into that buffer. */
+    /* The varint prefix indicates the compressed payload size (payload_len). */
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
-    if (unsigned_varint_encode(raw_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
+    if (unsigned_varint_encode(payload_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
         lantern_log_error(
             "reqresp",
             meta,
             "%s payload header encode failed bytes=%zu",
             phase ? phase : "response",
-            raw_len);
+            payload_len);
         return -1;
     }
 
@@ -1047,18 +1044,15 @@ static void *status_request_worker(void *arg) {
     snprintf(trace_stage, sizeof(trace_stage), "status[%" PRIu64 "] request snappy", trace_id);
     log_payload_preview(trace_stage, ctx->peer_text, payload, payload_len);
 
-    /* The req/resp protocol spec requires the varint prefix to indicate the
-     * UNCOMPRESSED SSZ length (payload_raw_len), not the compressed payload size.
-     * The peer reads this varint, allocates a buffer of that size, then snappy-decodes
-     * the following compressed data into that buffer. */
+    /* The varint prefix indicates the compressed payload size (payload_len). */
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
-    if (unsigned_varint_encode(payload_raw_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
+    if (unsigned_varint_encode(payload_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
         lantern_log_error(
             "reqresp",
             &meta,
             "failed to encode status request header bytes=%zu",
-            payload_raw_len);
+            payload_len);
         free(payload);
         goto finish;
     }
@@ -1072,11 +1066,11 @@ static void *status_request_worker(void *arg) {
     lantern_log_debug(
         "reqresp",
         &meta,
-        "status[%" PRIu64 "] request header_len=%zu declared_len=%zu (uncompressed) compressed_len=%zu header_hex=%s",
+        "status[%" PRIu64 "] request header_len=%zu varint_len=%zu (compressed) raw_len=%zu header_hex=%s",
         trace_id,
         header_len,
-        payload_raw_len,
         payload_len,
+        payload_raw_len,
         header_hex[0] ? header_hex : "-");
 
     lantern_log_debug(
