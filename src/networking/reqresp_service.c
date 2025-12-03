@@ -660,19 +660,19 @@ static int send_response_chunk(
         payload_len,
         raw_len);
 
-    /* The req/resp protocol spec requires the varint prefix to indicate the
-     * UNCOMPRESSED SSZ length (raw_len), not the compressed payload size.
-     * The peer reads this varint, allocates a buffer of that size, then snappy-decodes
-     * the following compressed data into that buffer. */
+    /* The varint prefix must indicate the COMPRESSED payload size (payload_len),
+     * not the uncompressed SSZ size. This allows the peer to correctly frame
+     * the message by knowing exactly how many bytes follow the varint.
+     * The peer then snappy-decodes the payload to get the original SSZ data. */
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
-    if (unsigned_varint_encode(raw_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
+    if (unsigned_varint_encode(payload_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
         lantern_log_error(
             "reqresp",
             meta,
             "%s payload header encode failed bytes=%zu",
             phase ? phase : "response",
-            raw_len);
+            payload_len);
         return -1;
     }
 
@@ -719,6 +719,15 @@ static int send_response_chunk(
             frame_len,
             frame_hex[0] ? " frame_hex=" : "",
             frame_hex[0] ? frame_hex : "");
+        /* DEBUG: Print detailed frame analysis for status debugging */
+        fprintf(stderr, "[DEBUG] Lantern send_response_chunk STATUS:\n");
+        fprintf(stderr, "[DEBUG]   raw_len (uncompressed SSZ)=%zu\n", raw_len);
+        fprintf(stderr, "[DEBUG]   payload_len (compressed snappy)=%zu\n", payload_len);
+        fprintf(stderr, "[DEBUG]   varint encodes: %zu (compressed payload size)\n", payload_len);
+        fprintf(stderr, "[DEBUG]   frame structure: [code=%u][varint=%zu bytes][payload=%zu bytes] = total %zu bytes\n",
+                (unsigned)response_code, header_len, payload_len, frame_len);
+        fprintf(stderr, "[DEBUG]   frame_hex (first %zu bytes): %s\n", preview, frame_hex[0] ? frame_hex : "(empty)");
+        fflush(stderr);
     }
 
     if (write_stream_all(
@@ -1047,18 +1056,18 @@ static void *status_request_worker(void *arg) {
     snprintf(trace_stage, sizeof(trace_stage), "status[%" PRIu64 "] request snappy", trace_id);
     log_payload_preview(trace_stage, ctx->peer_text, payload, payload_len);
 
-    /* The req/resp protocol spec requires the varint prefix to indicate the
-     * UNCOMPRESSED SSZ length (payload_raw_len), not the compressed payload size.
-     * The peer reads this varint, allocates a buffer of that size, then snappy-decodes
-     * the following compressed data into that buffer. */
+    /* The varint prefix must indicate the COMPRESSED payload size (payload_len),
+     * not the uncompressed SSZ size. This allows the peer to correctly frame
+     * the message by knowing exactly how many bytes follow the varint.
+     * The peer then snappy-decodes the payload to get the original SSZ data. */
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
-    if (unsigned_varint_encode(payload_raw_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
+    if (unsigned_varint_encode(payload_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
         lantern_log_error(
             "reqresp",
             &meta,
             "failed to encode status request header bytes=%zu",
-            payload_raw_len);
+            payload_len);
         free(payload);
         goto finish;
     }
@@ -1072,11 +1081,11 @@ static void *status_request_worker(void *arg) {
     lantern_log_debug(
         "reqresp",
         &meta,
-        "status[%" PRIu64 "] request header_len=%zu declared_len=%zu (uncompressed) compressed_len=%zu header_hex=%s",
+        "status[%" PRIu64 "] request header_len=%zu varint_len=%zu (compressed) raw_len=%zu header_hex=%s",
         trace_id,
         header_len,
-        payload_raw_len,
         payload_len,
+        payload_raw_len,
         header_hex[0] ? header_hex : "-");
 
     lantern_log_debug(
