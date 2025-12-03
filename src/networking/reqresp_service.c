@@ -660,10 +660,7 @@ static int send_response_chunk(
         payload_len,
         raw_len);
 
-    /* The varint prefix must indicate the COMPRESSED payload size (payload_len),
-     * not the uncompressed SSZ size. This allows the peer to correctly frame
-     * the message by knowing exactly how many bytes follow the varint.
-     * The peer then snappy-decodes the payload to get the original SSZ data. */
+    /* The varint prefix indicates the compressed payload size (payload_len). */
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
     if (unsigned_varint_encode(payload_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
@@ -719,15 +716,6 @@ static int send_response_chunk(
             frame_len,
             frame_hex[0] ? " frame_hex=" : "",
             frame_hex[0] ? frame_hex : "");
-        /* DEBUG: Print detailed frame analysis for status debugging */
-        fprintf(stderr, "[DEBUG] Lantern send_response_chunk STATUS:\n");
-        fprintf(stderr, "[DEBUG]   raw_len (uncompressed SSZ)=%zu\n", raw_len);
-        fprintf(stderr, "[DEBUG]   payload_len (compressed snappy)=%zu\n", payload_len);
-        fprintf(stderr, "[DEBUG]   varint encodes: %zu (compressed payload size)\n", payload_len);
-        fprintf(stderr, "[DEBUG]   frame structure: [code=%u][varint=%zu bytes][payload=%zu bytes] = total %zu bytes\n",
-                (unsigned)response_code, header_len, payload_len, frame_len);
-        fprintf(stderr, "[DEBUG]   frame_hex (first %zu bytes): %s\n", preview, frame_hex[0] ? frame_hex : "(empty)");
-        fflush(stderr);
     }
 
     if (write_stream_all(
@@ -1056,10 +1044,7 @@ static void *status_request_worker(void *arg) {
     snprintf(trace_stage, sizeof(trace_stage), "status[%" PRIu64 "] request snappy", trace_id);
     log_payload_preview(trace_stage, ctx->peer_text, payload, payload_len);
 
-    /* The varint prefix must indicate the COMPRESSED payload size (payload_len),
-     * not the uncompressed SSZ size. This allows the peer to correctly frame
-     * the message by knowing exactly how many bytes follow the varint.
-     * The peer then snappy-decodes the payload to get the original SSZ data. */
+    /* The varint prefix indicates the compressed payload size (payload_len). */
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
     if (unsigned_varint_encode(payload_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
