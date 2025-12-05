@@ -1188,9 +1188,17 @@ static void connection_events_cb(const libp2p_event_t *evt, void *user_data) {
         break;
     case LIBP2P_EVT_CONN_CLOSED:
         connection_counter_update(client, -1, evt->u.conn_closed.peer, false, evt->u.conn_closed.reason);
-        /* If disconnected due to timeout, attempt to redial the peer */
-        if (evt->u.conn_closed.reason == LIBP2P_ERR_TIMEOUT && evt->u.conn_closed.peer) {
-            redial_peer_on_timeout(client, evt->u.conn_closed.peer);
+        /* If disconnected unexpectedly, attempt to redial the peer.
+         * We redial for timeout, reset, EOF, and closed reasons since the remote
+         * peer may have closed due to their own timeout or network issues. */
+        if (evt->u.conn_closed.peer) {
+            int reason = evt->u.conn_closed.reason;
+            if (reason == LIBP2P_ERR_TIMEOUT ||
+                reason == LIBP2P_ERR_RESET ||
+                reason == LIBP2P_ERR_EOF ||
+                reason == LIBP2P_ERR_CLOSED) {
+                redial_peer_on_timeout(client, evt->u.conn_closed.peer);
+            }
         }
         break;
     case LIBP2P_EVT_DIALING: {
