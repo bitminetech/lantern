@@ -940,6 +940,67 @@ static void identify_dial_multiaddr(struct lantern_client *client, const char *m
         multiaddr);
 }
 
+/* Attempt to redial a peer that disconnected due to a timeout.
+ * This searches the genesis ENRs for a matching peer_id and redials if found. */
+static void redial_peer_on_timeout(struct lantern_client *client, const peer_id_t *peer) {
+    if (!client || !client->network.host || !peer) {
+        return;
+    }
+
+    const struct lantern_enr_record_list *enrs = &client->genesis.enrs;
+    if (!enrs || enrs->count == 0) {
+        return;
+    }
+
+    char peer_text[128];
+    peer_text[0] = '\0';
+    if (peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, peer_text, sizeof(peer_text)) < 0) {
+        peer_text[0] = '\0';
+    }
+
+    /* Search for the peer in genesis ENRs */
+    for (size_t idx = 0; idx < enrs->count; ++idx) {
+        const struct lantern_enr_record *record = &enrs->records[idx];
+        if (!record || !record->encoded) {
+            continue;
+        }
+
+        char multiaddr[256];
+        peer_id_t enr_peer_id = {0};
+        if (lantern_libp2p_enr_to_multiaddr(record, multiaddr, sizeof(multiaddr), &enr_peer_id) != 0) {
+            continue;
+        }
+
+        int eq = peer_id_equals(peer, &enr_peer_id);
+        peer_id_destroy(&enr_peer_id);
+
+        if (eq == 1) {
+            /* Found matching peer in genesis, redial */
+            lantern_log_info(
+                "network",
+                &(const struct lantern_log_metadata){
+                    .validator = client->node_id,
+                    .peer = peer_text[0] ? peer_text : NULL,
+                },
+                "redialing peer after timeout disconnect addr=%s",
+                multiaddr);
+
+            (void)lantern_libp2p_host_add_enr_peer(&client->network, record, LANTERN_LIBP2P_DEFAULT_PEER_TTL_MS);
+            identify_dial_multiaddr(client, multiaddr, peer_text[0] ? peer_text : record->encoded);
+            return;
+        }
+    }
+
+    /* Peer not found in genesis ENRs - cannot redial */
+    lantern_log_trace(
+        "network",
+        &(const struct lantern_log_metadata){
+            .validator = client->node_id,
+            .peer = peer_text[0] ? peer_text : NULL,
+        },
+        "peer not in genesis ENRs, skipping redial");
+}
+
 static void peer_dialer_attempt(struct lantern_client *client) {
     if (!client || !client->network.host) {
         return;
@@ -1127,6 +1188,10 @@ static void connection_events_cb(const libp2p_event_t *evt, void *user_data) {
         break;
     case LIBP2P_EVT_CONN_CLOSED:
         connection_counter_update(client, -1, evt->u.conn_closed.peer, false, evt->u.conn_closed.reason);
+        /* If disconnected due to timeout, attempt to redial the peer */
+        if (evt->u.conn_closed.reason == LIBP2P_ERR_TIMEOUT && evt->u.conn_closed.peer) {
+            redial_peer_on_timeout(client, evt->u.conn_closed.peer);
+        }
         break;
     case LIBP2P_EVT_DIALING: {
         char peer_text[128];
