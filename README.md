@@ -1,5 +1,7 @@
 # ![Lantern](docs/assets/lantern_logo.svg)
 
+[![CI](https://github.com/Pier-Two/lantern/actions/workflows/ci.yml/badge.svg)](https://github.com/Pier-Two/lantern/actions/workflows/ci.yml)
+
 Lantern is a C implementation of [Lean Consensus](https://github.com/leanEthereum/leanSpec.git) for Ethereum.
 
 ## Requirements
