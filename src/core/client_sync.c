@@ -1,9 +1,15 @@
 /**
  * @file client_sync.c
- * @brief Block and vote synchronization logic
+ * @brief Block and vote synchronization infrastructure
  *
- * Implements block import, vote validation, gossip handlers, and fork choice
- * initialization for the Lantern client.
+ * @spec subspecs/forkchoice/store.py in tools/leanSpec
+ *
+ * Implements gossip handlers, fork choice initialization, block restoration
+ * from storage, pending block management, and validator state refresh.
+ *
+ * Related files:
+ * - client_sync_votes.c: Vote processing and validation
+ * - client_sync_blocks.c: Block import and signature verification
  *
  * @note Thread safety: Functions that access shared state acquire appropriate
  *       locks as documented. See client_internal.h for lock ordering.
@@ -14,10 +20,7 @@
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"
-#include "lantern/consensus/signature.h"
-#include "lantern/consensus/ssz.h"
 #include "lantern/consensus/state.h"
-#include "lantern/metrics/lean_metrics.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
@@ -30,28 +33,17 @@
 
 
 /* ============================================================================
- * Forward Declarations
- * ============================================================================ */
-
-static bool lantern_client_verify_vote_signature(
-    const struct lantern_client *client,
-    const LanternSignedVote *vote,
-    const LanternSignature *signature,
-    const struct lantern_log_metadata *meta,
-    const char *context);
-
-static bool lantern_client_verify_block_signatures(
-    const struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const struct lantern_log_metadata *meta);
-
-
-/* ============================================================================
  * Validator Record Access
  * ============================================================================ */
 
 /**
  * Get validator record from genesis registry.
+ *
+ * @spec subspecs/containers/validator.py - Validator container
+ *
+ * Retrieves a validator record from the genesis registry by index.
+ * The registry is populated during genesis initialization and remains
+ * immutable after that.
  *
  * @param client        Client instance
  * @param validator_id  Validator index
@@ -59,7 +51,7 @@ static bool lantern_client_verify_block_signatures(
  *
  * @note Thread safety: Assumes registry is immutable after init
  */
-static const struct lantern_validator_record *lantern_client_get_validator_record(
+const struct lantern_validator_record *lantern_client_get_validator_record(
     const struct lantern_client *client,
     uint64_t validator_id)
 {
@@ -81,6 +73,11 @@ static const struct lantern_validator_record *lantern_client_get_validator_recor
 
 /**
  * Count enabled local validators.
+ *
+ * @spec subspecs/containers/validator.py - Validator registry
+ *
+ * Counts the number of locally-managed validators that are currently
+ * enabled for voting and block proposal.
  *
  * @param client  Client instance
  * @return Number of enabled validators
@@ -126,1075 +123,17 @@ size_t lantern_client_enabled_validator_count(struct lantern_client *client)
 
 
 /* ============================================================================
- * Vote Signature Verification
- * ============================================================================ */
-
-/**
- * Verify a vote signature using the validator's public key.
- *
- * @param client     Client instance
- * @param vote       Signed vote to verify
- * @param signature  Signature to verify
- * @param meta       Logging metadata
- * @param context    Description of signature context for logging
- * @return true if signature is valid
- *
- * @note Thread safety: Thread-safe, reads immutable validator registry
- */
-static bool lantern_client_verify_vote_signature(
-    const struct lantern_client *client,
-    const LanternSignedVote *vote,
-    const LanternSignature *signature,
-    const struct lantern_log_metadata *meta,
-    const char *context)
-{
-    if (!client || !vote || !signature)
-    {
-        return false;
-    }
-    const uint8_t *pubkey_bytes = NULL;
-    bool state_has_registry = client && client->has_state;
-    size_t state_validator_count = state_has_registry ? lantern_state_validator_count(&client->state) : 0;
-    if (state_has_registry && state_validator_count > 0)
-    {
-        if (vote->data.validator_id >= state_validator_count)
-        {
-            lantern_log_warn(
-                "state",
-                meta,
-                "validator=%" PRIu64 " exceeds parent state validator count=%zu",
-                vote->data.validator_id,
-                state_validator_count);
-            return false;
-        }
-        pubkey_bytes = lantern_state_validator_pubkey(&client->state, (size_t)vote->data.validator_id);
-        if (lantern_validator_pubkey_is_zero(pubkey_bytes))
-        {
-            pubkey_bytes = NULL;
-        }
-    }
-    if (!pubkey_bytes)
-    {
-        const struct lantern_validator_record *record =
-            lantern_client_get_validator_record(client, vote->data.validator_id);
-        if (!record || !record->has_pubkey_bytes)
-        {
-            lantern_log_warn(
-                "state",
-                meta,
-                "missing validator %s pubkey for validator=%" PRIu64,
-                context ? context : "signature",
-                vote->data.validator_id);
-            return false;
-        }
-        pubkey_bytes = record->pubkey_bytes;
-    }
-    LanternRoot vote_root;
-    if (lantern_hash_tree_root_vote(&vote->data, &vote_root) != 0)
-    {
-        lantern_log_warn("state", meta, "failed to hash attestation for validator=%" PRIu64, vote->data.validator_id);
-        return false;
-    }
-    // Per LeanSpec: Always use the 52-byte pubkey from state (root || parameter)
-    // This matches Zeam's verifyBincode which takes pubkey bytes directly from state.validators[].pubkey
-    bool ok = lantern_signature_verify(
-        pubkey_bytes,
-        LANTERN_VALIDATOR_PUBKEY_SIZE,
-        vote->data.slot,
-        signature,
-        vote_root.bytes,
-        sizeof(vote_root.bytes));
-    if (!ok)
-    {
-        lantern_log_warn(
-            "state",
-            meta,
-            "invalid XMSS signature validator=%" PRIu64 " context=%s",
-            vote->data.validator_id,
-            context ? context : "unknown");
-    }
-    return ok;
-}
-
-
-/* ============================================================================
- * Block Signature Verification
- * ============================================================================ */
-
-/**
- * Verify all signatures in a signed block.
- *
- * @param client  Client instance
- * @param block   Signed block to verify
- * @param meta    Logging metadata
- * @return true if all signatures are valid
- *
- * @note Thread safety: Thread-safe, reads immutable validator registry
- */
-static bool lantern_client_verify_block_signatures(
-    const struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const struct lantern_log_metadata *meta)
-{
-    if (!client || !block)
-    {
-        return false;
-    }
-    const LanternAttestations *attestations = &block->message.block.body.attestations;
-    size_t expected_signatures = attestations->length + 1u;
-    if (!client->genesis.validator_registry.records)
-    {
-        return true;
-    }
-    if (block->signatures.length == 0)
-    {
-        lantern_log_warn(
-            "state",
-            meta,
-            "signed block slot=%" PRIu64 " missing BlockSignatures; rejecting",
-            block->message.block.slot);
-        return false;
-    }
-    if (!block->signatures.data || block->signatures.length != expected_signatures)
-    {
-        lantern_log_warn(
-            "state",
-            meta,
-            "signed block slot=%" PRIu64 " signature count mismatch expected=%zu actual=%zu",
-            block->message.block.slot,
-            expected_signatures,
-            block->signatures.length);
-        return false;
-    }
-    for (size_t i = 0; i < attestations->length; ++i)
-    {
-        LanternSignedVote signed_vote;
-        memset(&signed_vote, 0, sizeof(signed_vote));
-        signed_vote.data = attestations->data[i];
-        signed_vote.signature = block->signatures.data[i];
-        if (!lantern_client_verify_vote_signature(
-                client,
-                &signed_vote,
-                &signed_vote.signature,
-                meta,
-                "body"))
-        {
-            return false;
-        }
-    }
-    LanternSignedVote proposer_signed;
-    memset(&proposer_signed, 0, sizeof(proposer_signed));
-    proposer_signed.data = block->message.proposer_attestation;
-    proposer_signed.signature = block->signatures.data[attestations->length];
-    return lantern_client_verify_vote_signature(
-        client,
-        &proposer_signed,
-        &proposer_signed.signature,
-        meta,
-        "proposer");
-}
-
-
-/* ============================================================================
- * Vote Constraint Validation
- * ============================================================================ */
-
-/**
- * Validate vote constraints against fork choice.
- *
- * Checks that all vote checkpoint roots are known in fork choice
- * and that slot numbers match.
- *
- * @param client         Client instance
- * @param vote           Vote to validate
- * @param facility       Log facility name
- * @param meta           Logging metadata
- * @param context        Description for logging
- * @param out_rejection  Output rejection info (may be NULL)
- * @return true if vote is valid
- *
- * @note Thread safety: Caller must hold state_lock if accessing state
- */
-bool lantern_client_validate_vote_constraints(
-    struct lantern_client *client,
-    const LanternVote *vote,
-    const char *facility,
-    const struct lantern_log_metadata *meta,
-    const char *context,
-    struct lantern_vote_rejection_info *out_rejection)
-{
-    if (!client || !vote || !client->has_fork_choice)
-    {
-        return false;
-    }
-    const char *log_facility = (facility && *facility) ? facility : "state";
-    const char *label = (context && *context) ? context : "vote";
-
-    struct checkpoint_rule
-    {
-        const LanternCheckpoint *checkpoint;
-        const char *name;
-    } rules[] = {
-        {.checkpoint = &vote->source, .name = "source"},
-        {.checkpoint = &vote->target, .name = "target"},
-        {.checkpoint = &vote->head, .name = "head"},
-    };
-
-    for (size_t i = 0; i < (sizeof(rules) / sizeof(rules[0])); ++i)
-    {
-        const struct checkpoint_rule *rule = &rules[i];
-        char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        format_root_hex(&rule->checkpoint->root, root_hex, sizeof(root_hex));
-        if (lantern_root_is_zero(&rule->checkpoint->root))
-        {
-            lantern_log_debug(
-                log_facility,
-                meta,
-                "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " %s root=%s (zero root)",
-                label,
-                vote->validator_id,
-                vote->slot,
-                rule->name,
-                root_hex[0] ? root_hex : "0x0");
-            if (out_rejection)
-            {
-                lantern_vote_rejection_set(
-                    out_rejection,
-                    "%s checkpoint root zero slot=%" PRIu64 " root=%s",
-                    rule->name,
-                    rule->checkpoint->slot,
-                    root_hex[0] ? root_hex : "0x0");
-            }
-            return false;
-        }
-        uint64_t block_slot = 0;
-        if (!lantern_client_block_known_locked(client, &rule->checkpoint->root, &block_slot))
-        {
-            lantern_log_debug(
-                log_facility,
-                meta,
-                "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " unknown %s root=%s",
-                label,
-                vote->validator_id,
-                vote->slot,
-                rule->name,
-                root_hex[0] ? root_hex : "0x0");
-            if (out_rejection)
-            {
-                lantern_vote_rejection_set(
-                    out_rejection,
-                    "unknown %s root=%s slot=%" PRIu64,
-                    rule->name,
-                    root_hex[0] ? root_hex : "0x0",
-                    rule->checkpoint->slot);
-            }
-            return false;
-        }
-        if (block_slot != rule->checkpoint->slot)
-        {
-            lantern_log_debug(
-                log_facility,
-                meta,
-                "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " %s slot mismatch vote=%" PRIu64
-                " block=%" PRIu64 " root=%s",
-                label,
-                vote->validator_id,
-                vote->slot,
-                rule->name,
-                rule->checkpoint->slot,
-                block_slot,
-                root_hex[0] ? root_hex : "0x0");
-            if (out_rejection)
-            {
-                lantern_vote_rejection_set(
-                    out_rejection,
-                    "%s checkpoint slot mismatch vote=%" PRIu64 " block=%" PRIu64,
-                    rule->name,
-                    rule->checkpoint->slot,
-                    block_slot);
-            }
-            return false;
-        }
-    }
-
-    uint64_t current_slot = 0;
-    if (!lantern_client_current_slot(client, &current_slot))
-    {
-        lantern_log_debug(
-            log_facility,
-            meta,
-            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (unable to compute current slot)",
-            label,
-            vote->validator_id,
-            vote->slot);
-        if (out_rejection)
-        {
-            lantern_vote_rejection_set(out_rejection, "unable to compute current slot");
-        }
-        return false;
-    }
-    uint64_t allowed_slot = current_slot == UINT64_MAX ? UINT64_MAX : current_slot + 1u;
-    if (vote->slot > allowed_slot)
-    {
-        lantern_log_debug(
-            log_facility,
-            meta,
-            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (current_slot=%" PRIu64 ")",
-            label,
-            vote->validator_id,
-            vote->slot,
-            current_slot);
-        if (out_rejection)
-        {
-            lantern_vote_rejection_set(
-                out_rejection,
-                "vote slot=%" PRIu64 " exceeds allowed=%" PRIu64 " current=%" PRIu64,
-                vote->slot,
-                allowed_slot,
-                current_slot);
-        }
-        return false;
-    }
-
-    return true;
-}
-
-
-/* ============================================================================
- * Block Import
- * ============================================================================ */
-
-/**
- * Import a block into the client state and fork choice.
- *
- * Validates the block, applies state transition, updates fork choice,
- * and persists state.
- *
- * @param client      Client instance
- * @param block       Signed block to import
- * @param block_root  Precomputed block root (may be NULL)
- * @param meta        Logging metadata
- * @return true if block was imported successfully
- *
- * @note Thread safety: Acquires state_lock and pending_lock
- */
-bool lantern_client_import_block(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *block_root,
-    const struct lantern_log_metadata *meta)
-{
-    if (!client || !block || !client->has_state)
-    {
-        return false;
-    }
-
-    bool state_locked = lantern_client_lock_state(client);
-    uint64_t local_slot = client->state.slot;
-
-    LanternRoot hashed_block_root;
-    const LanternRoot *effective_block_root = block_root;
-    if (!effective_block_root)
-    {
-        if (lantern_hash_tree_root_block(&block->message.block, &hashed_block_root) != 0)
-        {
-            lantern_client_unlock_state(client, state_locked);
-            lantern_log_warn(
-                "state",
-                meta,
-                "failed to hash block at slot=%" PRIu64,
-                block->message.block.slot);
-            return false;
-        }
-        effective_block_root = &hashed_block_root;
-    }
-
-    LanternRoot block_root_local = *effective_block_root;
-
-    if (block->message.block.slot < local_slot)
-    {
-        lantern_client_unlock_state(client, state_locked);
-        lantern_log_debug(
-            "state",
-            meta,
-            "ignoring block slot=%" PRIu64 " local_slot=%" PRIu64,
-            block->message.block.slot,
-            local_slot);
-        return false;
-    }
-
-    uint64_t known_slot = 0;
-    bool root_known = false;
-    if (effective_block_root)
-    {
-        if (state_locked)
-        {
-            root_known = lantern_client_block_known_locked(client, effective_block_root, &known_slot);
-        }
-        else if (client->has_fork_choice)
-        {
-            root_known = (lantern_fork_choice_block_info(&client->fork_choice, effective_block_root, &known_slot, NULL, NULL) == 0);
-        }
-    }
-
-    if (root_known && block->message.block.slot <= known_slot)
-    {
-        lantern_client_unlock_state(client, state_locked);
-        lantern_log_trace(
-            "state",
-            meta,
-            "skipping known block slot=%" PRIu64,
-            block->message.block.slot);
-        return false;
-    }
-
-    if (block->message.block.slot < local_slot && !root_known)
-    {
-        lantern_client_unlock_state(client, state_locked);
-        lantern_log_debug(
-            "state",
-            meta,
-            "ignoring block slot=%" PRIu64 " local_slot=%" PRIu64,
-            block->message.block.slot,
-            local_slot);
-        return false;
-    }
-
-    LanternRoot parent_root_local = block->message.block.parent_root;
-    if (!lantern_root_is_zero(&parent_root_local))
-    {
-        bool parent_known = false;
-        bool parent_matches_head = false;
-        bool have_head_root = false;
-        LanternRoot latest_header_root;
-        memset(&latest_header_root, 0, sizeof(latest_header_root));
-        if (state_locked)
-        {
-            parent_known = lantern_client_block_known_locked(client, &parent_root_local, NULL);
-            /* Ensure state_root is filled in latest_block_header before computing its hash.
-               This is required because state_root is zeroed when a block is applied and only
-               filled in lazily by lantern_state_process_slot. Without this, the computed
-               header root may differ from what other clients expect. */
-            (void)lantern_state_process_slot(&client->state);
-            if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &latest_header_root) == 0)
-            {
-                have_head_root = true;
-                parent_matches_head =
-                    memcmp(latest_header_root.bytes, parent_root_local.bytes, LANTERN_ROOT_SIZE) == 0;
-            }
-        }
-        else if (client->has_fork_choice)
-        {
-            parent_known = (lantern_fork_choice_block_info(&client->fork_choice, &parent_root_local, NULL, NULL, NULL) == 0);
-        }
-        if (!parent_known)
-        {
-            /* Parent unknown - queue block as pending and request parent */
-            const char *peer_text = meta && meta->peer ? meta->peer : NULL;
-            lantern_client_unlock_state(client, state_locked);
-            lantern_client_enqueue_pending_block(client, block, &block_root_local, &parent_root_local, peer_text);
-            return false;
-        }
-        if (!parent_matches_head)
-        {
-            /*
-             * Parent is known in fork choice but doesn't match our current head.
-             * This indicates a competing fork. Per leanSpec, we should still add
-             * the block to fork choice so attestations can reference it and fork
-             * choice can properly determine which chain has more weight.
-             *
-             * We add the block to fork choice (without post-state checkpoints since
-             * we can't compute state transition), then queue it for later processing.
-             * If fork choice later determines this is the better chain, pending block
-             * processing will handle the reorg.
-             */
-            const char *peer_text = meta && meta->peer ? meta->peer : NULL;
-            char parent_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-            char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-            if (have_head_root)
-            {
-                format_root_hex(&parent_root_local, parent_hex, sizeof(parent_hex));
-                format_root_hex(&latest_header_root, head_hex, sizeof(head_hex));
-                lantern_log_debug(
-                    "state",
-                    meta,
-                    "block on competing fork slot=%" PRIu64 " parent=%s current_head=%s",
-                    block->message.block.slot,
-                    parent_hex[0] ? parent_hex : "0x0",
-                    head_hex[0] ? head_hex : "0x0");
-            }
-
-            /* Add block to fork choice even without state transition so fork choice
-             * can track competing chains and attestations can reference this block */
-            if (client->has_fork_choice)
-            {
-                LanternSignedVote proposer_signed;
-                memset(&proposer_signed, 0, sizeof(proposer_signed));
-                proposer_signed.data = block->message.proposer_attestation;
-                size_t proposer_index = block->message.block.body.attestations.length;
-                if (block->signatures.length > proposer_index && block->signatures.data)
-                {
-                    proposer_signed.signature = block->signatures.data[proposer_index];
-                }
-                if (lantern_fork_choice_add_block(
-                        &client->fork_choice,
-                        &block->message.block,
-                        &proposer_signed,
-                        NULL, /* No post-justified - we can't compute state transition */
-                        NULL, /* No post-finalized */
-                        &block_root_local) == 0)
-                {
-                    char block_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                    format_root_hex(&block_root_local, block_hex, sizeof(block_hex));
-                    lantern_log_info(
-                        "forkchoice",
-                        meta,
-                        "added competing fork block to fork choice slot=%" PRIu64 " root=%s",
-                        block->message.block.slot,
-                        block_hex[0] ? block_hex : "0x0");
-                }
-            }
-
-            lantern_client_unlock_state(client, state_locked);
-            lantern_client_enqueue_pending_block(client, block, &block_root_local, &parent_root_local, peer_text);
-            return false;
-        }
-    }
-
-    if (!lantern_client_verify_block_signatures(client, block, meta))
-    {
-        lantern_client_unlock_state(client, state_locked);
-        return false;
-    }
-
-    if (client->has_fork_choice)
-    {
-        const LanternAttestations *attestations = &block->message.block.body.attestations;
-        for (size_t i = 0; i < attestations->length; ++i)
-        {
-            if (!lantern_client_validate_vote_constraints(
-                    client,
-                    &attestations->data[i],
-                    "state",
-                    meta,
-                    "block attestation",
-                    NULL))
-            {
-                lantern_client_unlock_state(client, state_locked);
-                return false;
-            }
-        }
-        /* Skip proposer attestation validation here - the proposer's head checkpoint
-         * references the block being imported, which isn't in fork choice yet.
-         * The proposer attestation will be validated during state transition. */
-    }
-
-    LanternSignedBlock import_block = *block;
-
-    if (lantern_state_transition(&client->state, &import_block) != 0)
-    {
-        lantern_client_unlock_state(client, state_locked);
-        lantern_log_warn(
-            "state",
-            meta,
-            "state transition failed for slot=%" PRIu64,
-            block->message.block.slot);
-        return false;
-    }
-
-    if (client->has_fork_choice)
-    {
-        uint64_t now_seconds = validator_wall_time_now_seconds();
-        if (lantern_fork_choice_advance_time(&client->fork_choice, now_seconds, false) != 0)
-        {
-            lantern_log_debug(
-                "forkchoice",
-                meta,
-                "advancing fork choice time failed after slot=%" PRIu64,
-                block->message.block.slot);
-        }
-    }
-
-    uint64_t head_slot = client->state.slot;
-    LanternRoot head_root;
-    memset(&head_root, 0, sizeof(head_root));
-    if (client->has_fork_choice)
-    {
-        if (lantern_fork_choice_current_head(&client->fork_choice, &head_root) == 0)
-        {
-            uint64_t fork_slot = 0;
-            if (lantern_fork_choice_block_info(&client->fork_choice, &head_root, &fork_slot, NULL, NULL) == 0)
-            {
-                head_slot = fork_slot;
-            }
-        }
-    }
-
-    if (client->data_dir)
-    {
-        if (lantern_storage_save_state(client->data_dir, &client->state) != 0)
-        {
-            lantern_log_warn(
-                "storage",
-                meta,
-                "failed to persist state after slot=%" PRIu64,
-                client->state.slot);
-        }
-        if (lantern_storage_save_votes(client->data_dir, &client->state) != 0)
-        {
-            lantern_log_warn(
-                "storage",
-                meta,
-                "failed to persist votes after slot=%" PRIu64,
-                client->state.slot);
-        }
-    }
-
-    lantern_client_unlock_state(client, state_locked);
-
-    lantern_client_pending_remove_by_root(client, &block_root_local);
-    lantern_client_process_pending_children(client, &block_root_local);
-
-    char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    format_root_hex(&head_root, head_hex, sizeof(head_hex));
-    lantern_log_info(
-        "state",
-        meta,
-        "imported block slot=%" PRIu64 " new_head_slot=%" PRIu64 " head_root=%s",
-        block->message.block.slot,
-        head_slot,
-        head_hex[0] ? head_hex : "0x0");
-
-    return true;
-}
-
-
-/* ============================================================================
- * Block Recording
- * ============================================================================ */
-
-/**
- * Record a received block and attempt import.
- *
- * @param client    Client instance
- * @param block     Signed block to record
- * @param root      Precomputed block root (may be NULL)
- * @param peer_text Peer ID string (may be NULL)
- * @param context   Description of source for logging
- *
- * @note Thread safety: Acquires state_lock via lantern_client_import_block
- */
-void lantern_client_record_block(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *root,
-    const char *peer_text,
-    const char *context)
-{
-    if (!client || !block)
-    {
-        return;
-    }
-
-    LanternRoot computed_root;
-    const LanternRoot *selected_root = root;
-    if (!selected_root)
-    {
-        if (lantern_hash_tree_root_block(&block->message.block, &computed_root) != 0)
-        {
-            return;
-        }
-        selected_root = &computed_root;
-    }
-
-    char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    format_root_hex(selected_root, root_hex, sizeof(root_hex));
-
-    struct lantern_log_metadata meta = {
-        .validator = client->node_id,
-        .peer = peer_text && *peer_text ? peer_text : NULL,
-    };
-    const char *source = NULL;
-    if (context && *context)
-    {
-        source = context;
-    }
-    else if (peer_text && *peer_text)
-    {
-        source = "peer";
-    }
-    else
-    {
-        source = "local";
-    }
-
-    lantern_log_info(
-        "gossip",
-        &meta,
-        "received block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s source=%s",
-        block->message.block.slot,
-        block->message.block.proposer_index,
-        root_hex[0] ? root_hex : "0x0",
-        source);
-
-    if (client->data_dir)
-    {
-        if (lantern_storage_store_block(client->data_dir, block) != 0)
-        {
-            lantern_log_warn(
-                "storage",
-                &meta,
-                "failed to persist block slot=%" PRIu64,
-                block->message.block.slot);
-        }
-    }
-
-    lantern_client_import_block(client, block, selected_root, &meta);
-}
-
-
-/* ============================================================================
- * Vote Recording
- * ============================================================================ */
-
-/**
- * Record and process a received vote.
- *
- * @param client    Client instance
- * @param vote      Signed vote to record
- * @param peer_text Peer ID string (may be NULL)
- *
- * @note Thread safety: Acquires state_lock
- */
-void lantern_client_record_vote(
-    struct lantern_client *client,
-    const LanternSignedVote *vote,
-    const char *peer_text)
-{
-    if (!client || !vote || !client->has_state)
-    {
-        return;
-    }
-
-    struct lantern_log_metadata meta = {
-        .validator = client->node_id,
-        .peer = (peer_text && *peer_text) ? peer_text : NULL,
-    };
-
-    bool state_locked = lantern_client_lock_state(client);
-    if (!state_locked)
-    {
-        return;
-    }
-
-    struct lantern_vote_rejection_info rejection;
-    memset(&rejection, 0, sizeof(rejection));
-    bool vote_processed = false;
-
-    char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char source_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    LanternSignedVote vote_copy = *vote;
-    format_root_hex(&vote_copy.data.head.root, head_hex, sizeof(head_hex));
-    format_root_hex(&vote_copy.data.target.root, target_hex, sizeof(target_hex));
-    format_root_hex(&vote_copy.data.source.root, source_hex, sizeof(source_hex));
-    lantern_log_debug(
-        "gossip",
-        &meta,
-        "received vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64,
-        vote_copy.data.validator_id,
-        vote_copy.data.slot,
-        head_hex[0] ? head_hex : "0x0",
-        target_hex[0] ? target_hex : "0x0",
-        vote_copy.data.target.slot);
-
-    if (!client->has_fork_choice)
-    {
-        lantern_log_debug(
-            "gossip",
-            &meta,
-            "deferring vote validator=%" PRIu64 " slot=%" PRIu64 " (fork choice unavailable)",
-            vote_copy.data.validator_id,
-            vote_copy.data.slot);
-        lantern_vote_rejection_set(&rejection, "fork choice unavailable");
-        goto cleanup;
-    }
-
-    if (!lantern_client_validate_vote_constraints(
-            client,
-            &vote_copy.data,
-            "gossip",
-            &meta,
-            "gossip",
-            &rejection))
-    {
-        goto cleanup;
-    }
-
-    if (!lantern_client_verify_vote_signature(
-            client,
-            &vote_copy,
-            &vote_copy.signature,
-            &meta,
-            "gossip"))
-    {
-        lantern_log_debug(
-            "gossip",
-            &meta,
-            "rejected vote validator=%" PRIu64 " slot=%" PRIu64 " (invalid XMSS signature)",
-            vote_copy.data.validator_id,
-            vote_copy.data.slot);
-        lantern_vote_rejection_set(&rejection, "invalid XMSS signature");
-        goto cleanup;
-    }
-
-    const LanternVote *vote_data = &vote_copy.data;
-    uint64_t validator_count = client->state.config.num_validators;
-    if (validator_count == 0 || !client->state.validator_votes || client->state.validator_votes_len == 0)
-    {
-        lantern_log_debug(
-            "gossip",
-            &meta,
-            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (state vote cache unavailable)",
-            vote_data->validator_id,
-            vote_data->slot);
-        lantern_vote_rejection_set(&rejection, "state vote cache unavailable");
-        goto cleanup;
-    }
-    if ((vote_data->validator_id >= validator_count)
-        || (vote_data->validator_id >= (uint64_t)client->state.validator_votes_len))
-    {
-        lantern_log_debug(
-            "gossip",
-            &meta,
-            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (validator out of range)",
-            vote_data->validator_id,
-            vote_data->slot);
-        lantern_vote_rejection_set(&rejection, "validator out of range id=%" PRIu64, vote_data->validator_id);
-        goto cleanup;
-    }
-    if (vote_data->target.slot < vote_data->source.slot)
-    {
-        lantern_log_debug(
-            "gossip",
-            &meta,
-            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (target slot < source)",
-            vote_data->validator_id,
-            vote_data->slot);
-        lantern_vote_rejection_set(
-            &rejection,
-            "target slot %" PRIu64 " < source slot %" PRIu64,
-            vote_data->target.slot,
-            vote_data->source.slot);
-        goto cleanup;
-    }
-
-    /*
-     * Per leanSpec, attestation validation only requires that the referenced
-     * blocks (source, target, head) exist in the store. We check fork choice
-     * first, then fall back to state's justified window for backwards compat.
-     * This allows attestations from competing forks to be processed correctly.
-     */
-    bool source_block_known = false;
-    bool target_block_known = false;
-    bool head_block_known = false;
-    uint64_t source_block_slot = 0;
-    uint64_t target_block_slot = 0;
-
-    if (client->has_fork_choice)
-    {
-        source_block_known = (lantern_fork_choice_block_info(
-            &client->fork_choice, &vote_data->source.root, &source_block_slot, NULL, NULL) == 0);
-        target_block_known = (lantern_fork_choice_block_info(
-            &client->fork_choice, &vote_data->target.root, &target_block_slot, NULL, NULL) == 0);
-        head_block_known = (lantern_fork_choice_block_info(
-            &client->fork_choice, &vote_data->head.root, NULL, NULL, NULL) == 0);
-    }
-
-    if (!source_block_known)
-    {
-        /* Source block not in fork choice - check state's justified window as fallback */
-        if (!lantern_state_slot_in_justified_window(&client->state, vote_data->source.slot))
-        {
-            lantern_log_debug(
-                "gossip",
-                &meta,
-                "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (source block unknown and outside justified window)",
-                vote_data->validator_id,
-                vote_data->slot);
-            lantern_vote_rejection_set(
-                &rejection,
-                "source slot=%" PRIu64 " block unknown and outside justified window",
-                vote_data->source.slot);
-            goto cleanup;
-        }
-        bool source_is_justified = false;
-        if (lantern_state_get_justified_slot_bit(&client->state, vote_data->source.slot, &source_is_justified) != 0
-            || !source_is_justified)
-        {
-            lantern_log_debug(
-                "gossip",
-                &meta,
-                "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (source not justified in state)",
-                vote_data->validator_id,
-                vote_data->slot);
-            lantern_vote_rejection_set(&rejection, "source slot=%" PRIu64 " not justified", vote_data->source.slot);
-            goto cleanup;
-        }
-    }
-    else
-    {
-        /* Source block is in fork choice - verify checkpoint slot matches block slot */
-        if (source_block_slot != vote_data->source.slot)
-        {
-            lantern_log_debug(
-                "gossip",
-                &meta,
-                "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (source checkpoint slot mismatch)",
-                vote_data->validator_id,
-                vote_data->slot);
-            lantern_vote_rejection_set(
-                &rejection,
-                "source checkpoint slot=%" PRIu64 " != block slot=%" PRIu64,
-                vote_data->source.slot,
-                source_block_slot);
-            goto cleanup;
-        }
-    }
-
-    if (!target_block_known && !head_block_known)
-    {
-        lantern_log_debug(
-            "gossip",
-            &meta,
-            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (target and head blocks unknown)",
-            vote_data->validator_id,
-            vote_data->slot);
-        lantern_vote_rejection_set(&rejection, "target and head blocks unknown");
-        goto cleanup;
-    }
-
-    if (target_block_known && target_block_slot != vote_data->target.slot)
-    {
-        lantern_log_debug(
-            "gossip",
-            &meta,
-            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (target checkpoint slot mismatch)",
-            vote_data->validator_id,
-            vote_data->slot);
-        lantern_vote_rejection_set(
-            &rejection,
-            "target checkpoint slot=%" PRIu64 " != block slot=%" PRIu64,
-            vote_data->target.slot,
-            target_block_slot);
-        goto cleanup;
-    }
-
-    if (lantern_state_set_signed_validator_vote(&client->state, (size_t)vote_data->validator_id, &vote_copy) != 0)
-    {
-        lantern_log_debug(
-            "state",
-            &meta,
-            "failed to cache gossip vote validator=%" PRIu64 " slot=%" PRIu64,
-            vote_data->validator_id,
-            vote_data->slot);
-        lantern_vote_rejection_set(
-            &rejection,
-            "failed to cache vote validator=%" PRIu64 " slot=%" PRIu64,
-            vote_data->validator_id,
-            vote_data->slot);
-        goto cleanup;
-    }
-
-    if (client->has_fork_choice)
-    {
-        if (lantern_fork_choice_add_vote(&client->fork_choice, &vote_copy, false) != 0)
-        {
-            lantern_log_debug(
-                "forkchoice",
-                &meta,
-                "failed to track gossip vote validator=%" PRIu64 " slot=%" PRIu64,
-                vote_copy.data.validator_id,
-                vote_copy.data.slot);
-        }
-        else
-        {
-            if (!client->debug_disable_fork_choice_time)
-            {
-                uint64_t now_seconds = 0;
-                if (!lantern_client_vote_time_seconds(client, vote_copy.data.slot, &now_seconds))
-                {
-                    now_seconds = validator_wall_time_now_seconds();
-                }
-                if (lantern_fork_choice_advance_time(&client->fork_choice, now_seconds, false) != 0)
-                {
-                    lantern_log_debug(
-                        "forkchoice",
-                        &meta,
-                        "advancing fork choice time failed after validator=%" PRIu64 " slot=%" PRIu64,
-                        vote_copy.data.validator_id,
-                        vote_copy.data.slot);
-                }
-            }
-        }
-    }
-
-    if (client->data_dir)
-    {
-        if (lantern_storage_save_votes(client->data_dir, &client->state) != 0)
-        {
-            lantern_log_warn(
-                "storage",
-                &meta,
-                "failed to persist votes after validator=%" PRIu64 " slot=%" PRIu64,
-                vote_copy.data.validator_id,
-                vote_copy.data.slot);
-        }
-    }
-
-    vote_processed = true;
-    lantern_log_info(
-        "gossip",
-        &meta,
-        "processed vote validator=%" PRIu64
-        " slot=%" PRIu64 " head=%s target=%s@%" PRIu64 " source=%s@%" PRIu64,
-        vote_copy.data.validator_id,
-        vote_copy.data.slot,
-        head_hex[0] ? head_hex : "0x0",
-        target_hex[0] ? target_hex : "0x0",
-        vote_copy.data.target.slot,
-        source_hex[0] ? source_hex : "0x0",
-        vote_copy.data.source.slot);
-
-cleanup:
-    lantern_client_unlock_state(client, state_locked);
-    lantern_client_note_vote_outcome(client, peer_text, &vote_copy, vote_processed);
-    if (!vote_processed)
-    {
-        const char *reason_text = rejection.has_reason ? rejection.message : "unknown";
-        lantern_log_info(
-            "gossip",
-            &meta,
-            "rejected vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64
-            " source=%s@%" PRIu64 " reason=%s",
-            vote_copy.data.validator_id,
-            vote_copy.data.slot,
-            head_hex[0] ? head_hex : "0x0",
-            target_hex[0] ? target_hex : "0x0",
-            vote_copy.data.target.slot,
-            source_hex[0] ? source_hex : "0x0",
-            vote_copy.data.source.slot,
-            reason_text);
-    }
-}
-
-
-/* ============================================================================
  * Gossip Handlers
  * ============================================================================ */
 
 /**
  * Handle a block received via gossip.
+ *
+ * @spec subspecs/networking/gossip - Block gossip topic
+ *
+ * Entry point for blocks received via the gossipsub protocol.
+ * Converts the peer ID to string format and delegates to the
+ * block recording function.
  *
  * @param block    Received block
  * @param from     Peer ID of sender
@@ -1226,6 +165,12 @@ int gossip_block_handler(
 
 /**
  * Handle a vote received via gossip.
+ *
+ * @spec subspecs/networking/gossip - Attestation gossip topic
+ *
+ * Entry point for votes (attestations) received via the gossipsub protocol.
+ * Converts the peer ID to string format, notes the delivery for metrics,
+ * and delegates to the vote recording function.
  *
  * @param vote     Received vote
  * @param from     Peer ID of sender
@@ -1264,6 +209,12 @@ int gossip_vote_handler(
 
 /**
  * Persist anchor block to storage.
+ *
+ * @spec subspecs/forkchoice/store.py - Store anchor block
+ *
+ * Persists the genesis anchor block to storage. This block serves
+ * as the root of the fork choice tree and the starting point for
+ * block import.
  *
  * @param client        Client instance
  * @param anchor_block  Anchor block to persist
@@ -1332,6 +283,20 @@ void persist_anchor_block(
 
 /**
  * Initialize fork choice from genesis state.
+ *
+ * @spec subspecs/forkchoice/store.py - Store.get_forkchoice_store()
+ *
+ * Initializes the fork choice store from the genesis state:
+ * 1. Configures fork choice with consensus parameters
+ * 2. Computes anchor block header with actual state_root (not zero)
+ * 3. Sets fork choice anchor with justified/finalized checkpoints
+ * 4. Updates state checkpoint roots to match anchor
+ * 5. Persists anchor block to storage
+ *
+ * According to leanSpec's Store.get_forkchoice_store, the anchor block
+ * used for fork choice MUST have state_root = hash_tree_root(state).
+ * This is different from the state's latest_block_header which starts
+ * with state_root = ZERO.
  *
  * @param client  Client instance
  * @return 0 on success, -1 on failure
@@ -1505,6 +470,12 @@ static int compare_blocks_by_slot(const void *lhs_ptr, const void *rhs_ptr)
 /**
  * Restore persisted blocks from storage into fork choice.
  *
+ * @spec subspecs/forkchoice/store.py - Block restoration
+ *
+ * Loads all persisted blocks from storage, sorts them by slot,
+ * and adds them to fork choice. This allows the client to resume
+ * from a previous state after restart.
+ *
  * @param client  Client instance
  * @return 0 on success, -1 on failure
  *
@@ -1583,6 +554,12 @@ int restore_persisted_blocks(struct lantern_client *client)
 
 /**
  * Refresh state validator pubkeys from genesis registry.
+ *
+ * @spec subspecs/containers/validator.py - Validator pubkey management
+ *
+ * Synchronizes validator public keys between the genesis registry
+ * and the state. Merges keys from both sources, preferring genesis
+ * registry when available, falling back to state pubkeys otherwise.
  *
  * @param client  Client instance
  * @return 0 on success, -1 on failure
@@ -1740,6 +717,10 @@ static void lantern_client_pending_remove_by_root_locked(
 /**
  * Remove a pending block by root.
  *
+ * @spec subspecs/forkchoice/store.py - Pending block cleanup
+ *
+ * Removes a block from the pending queue once it has been imported.
+ *
  * @param client  Client instance
  * @param root    Block root to remove
  *
@@ -1764,6 +745,13 @@ void lantern_client_pending_remove_by_root(struct lantern_client *client, const 
 
 /**
  * Enqueue a pending block for later processing.
+ *
+ * @spec subspecs/forkchoice/store.py - Orphan block handling
+ *
+ * Queues a block whose parent is not yet known. The block will be
+ * imported once its parent arrives via gossip. Does NOT immediately
+ * request the parent via reqresp - relies on gossip for normal block
+ * propagation.
  *
  * @param client       Client instance
  * @param block        Block to enqueue
@@ -1872,6 +860,12 @@ void lantern_client_enqueue_pending_block(
 
 /**
  * Process pending children of a newly imported block.
+ *
+ * @spec subspecs/forkchoice/store.py - Chain reconstruction
+ *
+ * After importing a block, checks if any pending blocks can now
+ * be imported (because their parent just became available).
+ * Recursively processes any chains of pending blocks.
  *
  * @param client       Client instance
  * @param parent_root  Root of the newly imported parent block

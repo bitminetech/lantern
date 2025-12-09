@@ -218,6 +218,56 @@ int validator_sign_vote(
 
 
 /**
+ * Refresh a cached vote with updated checkpoints and re-sign if needed.
+ *
+ * @param validator  Local validator with signing key
+ * @param slot       Slot for signing context
+ * @param head       New head checkpoint
+ * @param target     New target checkpoint
+ * @param source     New source checkpoint
+ * @param vote       Vote to update (modified in place)
+ * @return 0 if no refresh was required, 1 if refreshed, -1 on error
+ *
+ * @note Thread safety: Caller must ensure exclusive access to validator
+ */
+int lantern_validator_refresh_cached_vote(
+    struct lantern_local_validator *validator,
+    uint64_t slot,
+    const LanternCheckpoint *head,
+    const LanternCheckpoint *target,
+    const LanternCheckpoint *source,
+    LanternSignedVote *vote)
+{
+    if (!validator || !head || !target || !source || !vote)
+    {
+        return -1;
+    }
+    if (!validator->secret_key)
+    {
+        return -1;
+    }
+
+    /* If the source checkpoint is unchanged, no refresh is required. */
+    if (vote->data.source.slot == source->slot
+        && memcmp(vote->data.source.root.bytes, source->root.bytes, LANTERN_ROOT_SIZE) == 0)
+    {
+        return 0;
+    }
+
+    vote->data.head = *head;
+    vote->data.target = *target;
+    vote->data.source = *source;
+
+    if (validator_sign_vote(validator, slot, vote) != 0)
+    {
+        return -1;
+    }
+
+    return 1;
+}
+
+
+/**
  * Store a vote in the client state.
  *
  * @param client  Client instance
@@ -305,6 +355,63 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
         "published attestation validator=%" PRIu64 " slot=%" PRIu64,
         vote->data.validator_id,
         vote->data.slot);
+    return 0;
+}
+
+
+/**
+ * Publish a signed block via gossipsub.
+ *
+ * @param client  Client with active gossip service
+ * @param block   Signed block to publish
+ *
+ * @return 0 on success, -1 on error
+ *
+ * @note Thread safety: Acquires gossip lock internally
+ */
+int lantern_client_publish_block(struct lantern_client *client, const LanternSignedBlock *block)
+{
+    if (!client || !block)
+    {
+        return -1;
+    }
+    if (!client->gossip_running)
+    {
+        lantern_log_error(
+            "gossip",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "cannot publish block at slot %" PRIu64 ": gossip service inactive",
+            block->message.block.slot);
+        return -1;
+    }
+    if (lantern_gossipsub_service_publish_block(&client->gossip, block) != 0)
+    {
+        lantern_log_error(
+            "gossip",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to publish block at slot %" PRIu64,
+            block->message.block.slot);
+        return -1;
+    }
+
+    LanternRoot block_root;
+    char root_hex[2 * LANTERN_ROOT_SIZE + 3];
+    if (lantern_hash_tree_root_block(&block->message.block, &block_root) == 0)
+    {
+        format_root_hex(&block_root, root_hex, sizeof(root_hex));
+    }
+    else
+    {
+        root_hex[0] = '\0';
+    }
+
+    lantern_log_info(
+        "gossip",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "published block slot=%" PRIu64 " root=%s attestations=%zu",
+        block->message.block.slot,
+        root_hex[0] ? root_hex : "0x0",
+        block->message.block.body.attestations.length);
     return 0;
 }
 

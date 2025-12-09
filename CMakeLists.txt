@@ -36,13 +36,19 @@ add_library(lantern STATIC
     src/consensus/state.c
     src/consensus/ssz.c
     src/core/client.c
+    src/core/client_debug.c
     src/core/client_http.c
+    src/core/client_init.c
     src/core/client_keys.c
     src/core/client_network.c
     src/core/client_peers.c
     src/core/client_pending.c
     src/core/client_reqresp.c
+    src/core/client_reqresp_blocks.c
+    src/core/client_reqresp_stream.c
     src/core/client_sync.c
+    src/core/client_sync_blocks.c
+    src/core/client_sync_votes.c
     src/core/client_utils.c
     src/core/client_validator.c
     src/genesis/genesis.c

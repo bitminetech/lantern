@@ -1,0 +1,499 @@
+/**
+ * @file client_network_internal.h
+ * @brief Internal declarations for networking and peer management
+ *
+ * @spec subspecs/networking/connection.py - connection management
+ *
+ * This header contains internal types and function declarations for
+ * networking, peer status tracking, and connection management.
+ * It is NOT part of the public API.
+ *
+ * Related files:
+ * - client_network.c: Network connection management
+ * - client_peers.c: Peer status tracking
+ *
+ * @note Lock ordering (acquire in this order to prevent deadlocks):
+ *       1. state_lock
+ *       2. status_lock
+ *       3. pending_lock
+ *       4. validator_lock
+ *       5. connection_lock
+ *       6. peer_vote_lock
+ */
+
+#ifndef LANTERN_CLIENT_NETWORK_INTERNAL_H
+#define LANTERN_CLIENT_NETWORK_INTERNAL_H
+
+#include "lantern/core/client.h"
+#include "lantern/consensus/containers.h"
+
+#include <libp2p/events.h>
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
+/* ============================================================================
+ * Constants
+ * ============================================================================ */
+
+/** Peer dial interval in seconds */
+#define LANTERN_PEER_DIAL_INTERVAL_SECONDS 5u
+
+/** Base backoff for blocks request in milliseconds */
+#define LANTERN_BLOCKS_REQUEST_BACKOFF_BASE_MS 5000u
+
+/** Maximum backoff for blocks request in milliseconds */
+#define LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_MS 300000u
+
+/** Maximum consecutive failures before max backoff */
+#define LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_FAILURES 8u
+
+/** Minimum poll interval for blocks requests in milliseconds */
+#define LANTERN_BLOCKS_REQUEST_MIN_POLL_MS 2000u
+
+/** Peer dial timeout in milliseconds */
+#define LANTERN_PEER_DIAL_TIMEOUT_MS 4000
+
+
+/* ============================================================================
+ * Internal Types
+ * ============================================================================ */
+
+/**
+ * Outcome of a blocks request operation.
+ */
+enum lantern_blocks_request_outcome
+{
+    LANTERN_BLOCKS_REQUEST_SUCCESS = 0,
+    LANTERN_BLOCKS_REQUEST_FAILED,
+    LANTERN_BLOCKS_REQUEST_ABORTED
+};
+
+
+/**
+ * Peer status tracking entry.
+ *
+ * @spec subspecs/networking/status.py - peer status protocol
+ *
+ * Tracks the status of a connected peer including their latest status
+ * message and request state.
+ */
+struct lantern_peer_status_entry
+{
+    char peer_id[128];                    /**< Peer ID string */
+    LanternStatusMessage status;          /**< Latest status message from peer */
+    bool has_status;                      /**< True if status has been received */
+    bool requested_head;                  /**< True if head block was requested */
+    bool status_request_inflight;         /**< True if status request is pending */
+    uint64_t last_blocks_request_ms;      /**< Timestamp of last blocks request */
+    uint32_t consecutive_blocks_failures; /**< Count of consecutive request failures */
+    uint32_t outstanding_status_requests; /**< Number of outstanding status requests */
+};
+
+
+/**
+ * Block request context for async operations.
+ *
+ * @spec subspecs/networking/reqresp.py - blocks by root request
+ */
+struct block_request_ctx
+{
+    struct lantern_client *client;  /**< Client instance */
+    peer_id_t peer_id;              /**< Peer ID structure */
+    char peer_text[128];            /**< Peer ID as text */
+    LanternRoot root;               /**< Block root being requested */
+    const char *protocol_id;        /**< Protocol ID string */
+    bool using_legacy;              /**< True if using legacy protocol */
+};
+
+
+/**
+ * Block request worker thread arguments.
+ */
+struct block_request_worker_args
+{
+    struct block_request_ctx *ctx;  /**< Request context */
+    libp2p_stream_t *stream;        /**< libp2p stream */
+};
+
+
+/* ============================================================================
+ * Peer Status Functions
+ * ============================================================================ */
+
+/**
+ * Get the capacity for peer ID strings.
+ *
+ * @return Size of peer_id buffer in lantern_peer_status_entry
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+size_t lantern_peer_id_capacity(void);
+
+
+/**
+ * Find a peer status entry by peer ID.
+ *
+ * @param client   Client instance
+ * @param peer_id  Peer ID to find
+ * @return Pointer to entry if found, NULL otherwise
+ *
+ * @note Thread safety: Caller must hold status_lock
+ */
+struct lantern_peer_status_entry *lantern_client_find_status_entry_locked(
+    struct lantern_client *client,
+    const char *peer_id);
+
+
+/**
+ * Find or create a peer status entry.
+ *
+ * @param client   Client instance
+ * @param peer_id  Peer ID to find or create
+ * @return Pointer to entry, NULL on failure
+ *
+ * @note Thread safety: Caller must hold status_lock
+ */
+struct lantern_peer_status_entry *lantern_client_ensure_status_entry_locked(
+    struct lantern_client *client,
+    const char *peer_id);
+
+
+/**
+ * Find a peer vote metric entry by peer ID.
+ *
+ * @param client   Client instance
+ * @param peer_id  Peer ID to find
+ * @return Pointer to entry if found, NULL otherwise
+ *
+ * @note Thread safety: Caller must hold peer_vote_lock
+ */
+struct lantern_peer_vote_metric *lantern_client_find_vote_metric_locked(
+    struct lantern_client *client,
+    const char *peer_id);
+
+
+/**
+ * Find or create a peer vote metric entry.
+ *
+ * @param client   Client instance
+ * @param peer_id  Peer ID to find or create
+ * @return Pointer to entry, NULL on failure
+ *
+ * @note Thread safety: Caller must hold peer_vote_lock
+ */
+struct lantern_peer_vote_metric *lantern_client_ensure_vote_metric_locked(
+    struct lantern_client *client,
+    const char *peer_id);
+
+
+/**
+ * Register a peer for vote tracking.
+ *
+ * @param client   Client instance
+ * @param peer_id  Peer ID to register
+ *
+ * @note Thread safety: This function acquires peer_vote_lock
+ */
+void lantern_client_register_vote_peer(
+    struct lantern_client *client,
+    const char *peer_id);
+
+
+/**
+ * Record a vote delivery from a peer.
+ *
+ * @param client   Client instance
+ * @param peer_id  Peer ID that sent the vote
+ * @param vote     Vote that was received (may be NULL)
+ *
+ * @note Thread safety: This function acquires peer_vote_lock
+ */
+void lantern_client_note_vote_delivery(
+    struct lantern_client *client,
+    const char *peer_id,
+    const LanternSignedVote *vote);
+
+
+/**
+ * Record the outcome of processing a vote from a peer.
+ *
+ * @param client    Client instance
+ * @param peer_id   Peer ID that sent the vote
+ * @param vote      Vote that was processed (may be NULL)
+ * @param accepted  True if vote was accepted, false if rejected
+ *
+ * @note Thread safety: This function acquires peer_vote_lock
+ */
+void lantern_client_note_vote_outcome(
+    struct lantern_client *client,
+    const char *peer_id,
+    const LanternSignedVote *vote,
+    bool accepted);
+
+
+/**
+ * Try to begin a status request to a peer.
+ *
+ * @spec subspecs/networking/status.py - status protocol
+ *
+ * @param client   Client instance
+ * @param peer_id  Peer ID to request status from
+ * @return true if request can proceed, false if already in flight
+ *
+ * @note Thread safety: This function acquires status_lock
+ */
+bool lantern_client_try_begin_status_request(
+    struct lantern_client *client,
+    const char *peer_id);
+
+
+/**
+ * Note that a status request has started.
+ *
+ * @param client   Client instance
+ * @param peer_id  Peer ID the request is for
+ *
+ * @note Thread safety: This function acquires status_lock
+ */
+void lantern_client_note_status_request_start(
+    struct lantern_client *client,
+    const char *peer_id);
+
+
+/**
+ * Note that a status request has failed.
+ *
+ * @param client   Client instance
+ * @param peer_id  Peer ID the request was for
+ *
+ * @note Thread safety: This function acquires status_lock
+ */
+void lantern_client_status_request_failed(
+    struct lantern_client *client,
+    const char *peer_id);
+
+
+/**
+ * Update status request tracking counters.
+ *
+ * @param client   Client instance
+ * @param entry    Peer status entry to update
+ * @param peer_id  Peer ID for logging
+ * @param delta    Change to apply (+1 for start, -1 for complete)
+ * @param phase    Phase name for logging
+ *
+ * @note Thread safety: Caller must hold status_lock
+ */
+void lantern_client_status_request_update_locked(
+    struct lantern_client *client,
+    struct lantern_peer_status_entry *entry,
+    const char *peer_id,
+    int delta,
+    const char *phase);
+
+
+/* ============================================================================
+ * Network Functions
+ * ============================================================================ */
+
+/**
+ * Reset connection counter and connected peer list.
+ *
+ * @param client  Client instance
+ *
+ * @note Thread safety: This function acquires connection_lock if initialized
+ */
+void connection_counter_reset(struct lantern_client *client);
+
+
+/**
+ * Update connection counter when a peer connects or disconnects.
+ *
+ * @spec subspecs/networking/connection.py - connection management
+ *
+ * @param client   Client instance
+ * @param delta    Change in connection count (+1 for connect, -1 for disconnect)
+ * @param peer     Peer ID (may be NULL)
+ * @param inbound  True if inbound connection
+ * @param reason   Connection close reason code
+ *
+ * @note Thread safety: This function acquires connection_lock
+ */
+void connection_counter_update(
+    struct lantern_client *client,
+    int delta,
+    const peer_id_t *peer,
+    bool inbound,
+    int reason);
+
+
+/**
+ * Check if a peer is currently connected.
+ *
+ * @param client   Client instance
+ * @param peer_id  Peer ID string to check
+ * @return true if peer is connected, false otherwise
+ *
+ * @note Thread safety: This function acquires connection_lock
+ */
+bool lantern_client_is_peer_connected(struct lantern_client *client, const char *peer_id);
+
+
+/**
+ * Request status from a peer immediately.
+ *
+ * @spec subspecs/networking/status.py - status protocol
+ *
+ * @param client     Client instance
+ * @param peer       Peer ID (may be NULL)
+ * @param peer_text  Peer ID as string (may be NULL)
+ *
+ * @note Thread safety: This function acquires status_lock
+ */
+void request_status_now(struct lantern_client *client, const peer_id_t *peer, const char *peer_text);
+
+
+/**
+ * Seed reqresp service with peer legacy mode hints from genesis config.
+ *
+ * @param client  Client instance
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+void lantern_client_seed_reqresp_peer_modes(struct lantern_client *client);
+
+
+/**
+ * Check if a listen address is unspecified (0.0.0.0 or ::).
+ *
+ * @param addr  Listen address string
+ * @return true if unspecified, false otherwise
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+bool listen_address_is_unspecified(const char *addr);
+
+
+/**
+ * Adopt listen address from validator config if current address is unspecified.
+ *
+ * @param client  Client instance
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+void adopt_validator_listen_address(struct lantern_client *client);
+
+
+/**
+ * Dial a multiaddr using the identify protocol.
+ *
+ * @spec subspecs/networking/discovery.py - peer discovery
+ *
+ * @param client      Client instance
+ * @param multiaddr   Multiaddr to dial
+ * @param peer_label  Label for logging
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+void identify_dial_multiaddr(struct lantern_client *client, const char *multiaddr, const char *peer_label);
+
+
+/**
+ * Sleep for a number of seconds, checking stop flag periodically.
+ *
+ * @param client   Client instance
+ * @param seconds  Number of seconds to sleep
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+void peer_dialer_sleep(struct lantern_client *client, unsigned seconds);
+
+
+/**
+ * Attempt to redial a peer that disconnected due to timeout.
+ *
+ * @param client  Client instance
+ * @param peer    Peer ID to redial
+ *
+ * @note Thread safety: This function acquires connection_lock
+ */
+void redial_peer_on_timeout(struct lantern_client *client, const peer_id_t *peer);
+
+
+/**
+ * Attempt to dial peers from genesis ENRs.
+ *
+ * @spec subspecs/networking/discovery.py - peer discovery
+ *
+ * @param client  Client instance
+ *
+ * @note Thread safety: This function acquires connection_lock
+ */
+void peer_dialer_attempt(struct lantern_client *client);
+
+
+/**
+ * Start the peer dialer service.
+ *
+ * @param client  Client instance
+ * @return 0 on success, -1 on failure
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+int start_peer_dialer(struct lantern_client *client);
+
+
+/**
+ * Stop the peer dialer service.
+ *
+ * @param client  Client instance
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+void stop_peer_dialer(struct lantern_client *client);
+
+
+/**
+ * Start the ping service.
+ *
+ * @param client  Client instance
+ * @return 0 on success, -1 on failure
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+int start_ping_service(struct lantern_client *client);
+
+
+/**
+ * Stop the ping service.
+ *
+ * @param client  Client instance
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+void stop_ping_service(struct lantern_client *client);
+
+
+/**
+ * Connection event callback for libp2p host.
+ *
+ * @param evt        Event details
+ * @param user_data  Client instance
+ *
+ * @note Thread safety: This function is called from libp2p thread
+ */
+void connection_events_cb(const libp2p_event_t *evt, void *user_data);
+
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* LANTERN_CLIENT_NETWORK_INTERNAL_H */
