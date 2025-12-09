@@ -1,44 +1,49 @@
-# ![Lantern Logo](docs/assets/lantern_logo.svg)
+# ![Lantern](docs/assets/lantern_logo.svg)
 
-Lantern is a C implementation for [`Lean consensus`](../tools/leanSpec).
+Lantern is a C implementation of [Lean Consensus](https://github.com/leanEthereum/leanSpec.git) for Ethereum.
 
-## Prerequisites
+## Requirements
 
-The build now links against the hash-based signature bindings in
-`external/c-hash-sig`, which are produced with Rust. Make sure the following
-tools are available on your `PATH`:
+Make sure you have the following tools installed before building.
 
 - CMake 3.20+
-- A C compiler toolchain supported by your platform
-- [Rust](https://www.rust-lang.org/tools/install) (which provides `cargo`)
+- C compiler
+- [Rust](https://www.rust-lang.org/tools/install) (for hash-sig bindings)
 
-## Quick Start
+## Build
+
+Configure and compile the project with CMake.
 
 ```sh
-cd lantern
 cmake -S . -B build
 cmake --build build --parallel
+```
+
+## Test
+
+Run the test suite to verify everything works correctly.
+
+```sh
 ctest --test-dir build --output-on-failure
 ```
 
 ## Regenerating Fixtures
 
-The consensus JSON and SSZ fixtures live in `tests/fixtures`. To refresh them from LeanSpec, run:
+Test fixtures are generated from LeanSpec. Use these scripts to refresh them.
+
+Consensus fixtures:
 
 ```sh
 ./scripts/fixtures/fill_consensus_fixtures.sh
 ```
 
-Networking fixtures (Status, BlocksByRoot, gossip payloads) come from LeanSpec as well. Build the helper encoder once and regenerate the SSZ + Snappy blobs with:
+Networking fixtures:
 
 ```sh
 cmake --build build --target lantern_generate_gossip_snappy
 PYTHONPATH=tools/leanSpec/src python3 scripts/fixtures/generate_networking_ssz.py
 ```
 
-The helper ensures the Snappy frames exactly match Lantern’s `lantern_gossip_encode_*` outputs.
-
 ## License
 
-Lantern is released under the terms of the MIT license. See
-[LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE).
