@@ -36,6 +36,19 @@ extern "C" {
 #define LANTERN_DEFAULT_METRICS_PORT 8080
 #define LANTERN_DEFAULT_DEVNET "devnet0"
 
+typedef enum
+{
+    LANTERN_CLIENT_OK = 0,
+    LANTERN_CLIENT_ERR_INVALID_PARAM = -1,
+    LANTERN_CLIENT_ERR_ALLOC = -2,
+    LANTERN_CLIENT_ERR_CONFIG = -3,
+    LANTERN_CLIENT_ERR_STORAGE = -4,
+    LANTERN_CLIENT_ERR_GENESIS = -5,
+    LANTERN_CLIENT_ERR_VALIDATOR = -6,
+    LANTERN_CLIENT_ERR_RUNTIME = -7,
+    LANTERN_CLIENT_ERR_NETWORK = -8
+} lantern_client_error;
+
 struct lantern_client_options {
     const char *data_dir;
     const char *genesis_config_path;
@@ -188,9 +201,19 @@ struct lantern_client {
 
 void lantern_client_options_init(struct lantern_client_options *options);
 void lantern_client_options_free(struct lantern_client_options *options);
-int lantern_client_options_add_bootnode(struct lantern_client_options *options, const char *bootnode);
+lantern_client_error lantern_client_options_add_bootnode(
+    struct lantern_client_options *options,
+    const char *bootnode);
+lantern_client_error lantern_client_options_add_bootnodes_from_file(
+    struct lantern_client_options *options,
+    const char *path);
+lantern_client_error lantern_client_options_add_bootnodes_argument(
+    struct lantern_client_options *options,
+    const char *value);
 
-int lantern_init(struct lantern_client *client, const struct lantern_client_options *options);
+lantern_client_error lantern_init(
+    struct lantern_client *client,
+    const struct lantern_client_options *options);
 void lantern_shutdown(struct lantern_client *client);
 
 size_t lantern_client_local_validator_count(const struct lantern_client *client);

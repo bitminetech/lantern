@@ -50,11 +50,37 @@ enum {
 };
 
 /* Forward declarations */
+static lantern_client_error configure_logging_from_env(void);
+static lantern_client_error register_signal_handlers(void);
+static lantern_client_error apply_option(
+    struct lantern_client_options *options,
+    int opt,
+    const char *optarg,
+    bool *show_help,
+    bool *show_version);
+static lantern_client_error handle_port_option(
+    struct lantern_client_options *options,
+    int opt,
+    const char *optarg);
+static lantern_client_error handle_bootnode_option(
+    struct lantern_client_options *options,
+    int opt,
+    const char *optarg);
+static lantern_client_error handle_hash_sig_option(
+    struct lantern_client_options *options,
+    int opt,
+    const char *optarg);
+static lantern_client_error parse_arguments(
+    struct lantern_client_options *options,
+    int argc,
+    char **argv,
+    bool *show_help,
+    bool *show_version);
+static lantern_client_error validate_required_options(
+    const struct lantern_client_options *options);
+static lantern_client_error run_main_loop(struct lantern_client *client);
 static void print_usage(const char *prog);
-static int parse_u16(const char *text, uint16_t *out_value);
-static int add_bootnodes_from_file(struct lantern_client_options *options, const char *path);
-static int add_bootnodes_argument(struct lantern_client_options *options, const char *value);
-static char *trim_line(char *line);
+static lantern_client_error parse_u16(const char *text, uint16_t *out_value);
 
 /** Flag indicating whether the main loop should continue running. */
 static volatile sig_atomic_t g_keep_running = 1;
@@ -66,6 +92,8 @@ static volatile sig_atomic_t g_keep_running = 1;
  * Sets the global keep_running flag to false to trigger graceful shutdown.
  *
  * @param signo  Signal number (unused)
+ *
+ * @note Thread safety: Async-signal safe; only writes a sig_atomic_t flag.
  */
 static void lantern_handle_signal(int signo)
 {
@@ -74,32 +102,316 @@ static void lantern_handle_signal(int signo)
 }
 
 
-int main(int argc, char **argv)
+/**
+ * Register signal handlers for graceful shutdown.
+ *
+ * @return 0 on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if registration fails
+ *
+ * @note Thread safety: Must be called during single-threaded startup.
+ */
+static lantern_client_error register_signal_handlers(void)
 {
-    struct lantern_client_options options;
-    lantern_client_options_init(&options);
+    if (signal(SIGINT, lantern_handle_signal) == SIG_ERR
+        || signal(SIGTERM, lantern_handle_signal) == SIG_ERR)
+    {
+        lantern_log_error(
+            "cli",
+            &(const struct lantern_log_metadata){0},
+            "failed to register signal handlers");
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
 
-    struct lantern_client client;
-    memset(&client, 0, sizeof(client));
+    return LANTERN_CLIENT_OK;
+}
 
-    signal(SIGINT, lantern_handle_signal);
-    signal(SIGTERM, lantern_handle_signal);
 
-    bool show_version = false;
-    bool show_help = false;
-
+/**
+ * Configure logging from the LANTERN_LOG_LEVEL environment variable.
+ *
+ * @return LANTERN_CLIENT_OK on success or if the variable is unset
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if the value is invalid
+ *
+ * @note Thread safety: Must be called during single-threaded startup.
+ */
+static lantern_client_error configure_logging_from_env(void)
+{
     const char *env_log_level = getenv("LANTERN_LOG_LEVEL");
-    if (env_log_level && lantern_log_set_level_from_string(env_log_level, NULL) != 0)
+    if (!env_log_level)
+    {
+        return LANTERN_CLIENT_OK;
+    }
+
+    if (lantern_log_set_level_from_string(env_log_level, NULL) != 0)
     {
         lantern_log_error(
             "cli",
             &(const struct lantern_log_metadata){0},
             "invalid LANTERN_LOG_LEVEL '%s'",
             env_log_level);
-        goto error;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
 
-    static struct option long_options[] = {
+    return LANTERN_CLIENT_OK;
+}
+
+
+/**
+ * Apply a single parsed option to the client options structure.
+ *
+ * @param options       Options structure to update
+ * @param opt           Parsed option identifier
+ * @param optarg        Argument provided to the option (may be NULL)
+ * @param show_help     Output flag indicating help request
+ * @param show_version  Output flag indicating version request
+ *
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on invalid option or parse error
+ * @return LANTERN_CLIENT_ERR_ALLOC on allocation failure
+ *
+ * @note Thread safety: Not thread-safe; mutates caller-owned options.
+ */
+static lantern_client_error apply_option(
+    struct lantern_client_options *options,
+    int opt,
+    const char *optarg,
+    bool *show_help,
+    bool *show_version)
+{
+    if (!options || !show_help || !show_version)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    switch (opt)
+    {
+    case 'd':
+        options->data_dir = optarg;
+        return LANTERN_CLIENT_OK;
+    case 'h':
+        *show_help = true;
+        return LANTERN_CLIENT_OK;
+    case 'v':
+        *show_version = true;
+        return LANTERN_CLIENT_OK;
+    case OPT_GENESIS_CONFIG:
+        options->genesis_config_path = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_VALIDATOR_REGISTRY:
+        options->validator_registry_path = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_NODES_PATH:
+        options->nodes_path = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_GENESIS_STATE:
+        options->genesis_state_path = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_VALIDATOR_CONFIG:
+        options->validator_config_path = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_NODE_ID:
+        options->node_id = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_NODE_KEY:
+        options->node_key_hex = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_NODE_KEY_PATH:
+        options->node_key_path = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_LISTEN_ADDRESS:
+        options->listen_address = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_HTTP_PORT:
+    case OPT_METRICS_PORT:
+        return handle_port_option(options, opt, optarg);
+    case OPT_BOOTNODE:
+    case OPT_BOOTNODES:
+    case OPT_BOOTNODE_FILE:
+        return handle_bootnode_option(options, opt, optarg);
+    case OPT_DEVNET:
+        options->devnet = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_LOG_LEVEL:
+        if (lantern_log_set_level_from_string(optarg, NULL) != 0)
+        {
+            lantern_log_error(
+                "cli",
+                &(const struct lantern_log_metadata){.validator = options->node_id},
+                "invalid log-level '%s'",
+                optarg);
+            return LANTERN_CLIENT_ERR_INVALID_PARAM;
+        }
+        return LANTERN_CLIENT_OK;
+    case OPT_HASH_SIG_KEY_DIR:
+    case OPT_HASH_SIG_PUBLIC_PATH:
+    case OPT_HASH_SIG_SECRET_PATH:
+    case OPT_HASH_SIG_PUBLIC_TEMPLATE:
+    case OPT_HASH_SIG_SECRET_TEMPLATE:
+        return handle_hash_sig_option(options, opt, optarg);
+    default:
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+}
+
+
+/**
+ * Handle port-related CLI options.
+ *
+ * @param options  Options structure to update
+ * @param opt      Parsed option identifier
+ * @param optarg   Port value string
+ *
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on parse error or invalid option
+ *
+ * @note Thread safety: Not thread-safe; mutates caller-owned options.
+ */
+static lantern_client_error handle_port_option(
+    struct lantern_client_options *options,
+    int opt,
+    const char *optarg)
+{
+    if (!options || !optarg)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    uint16_t *target_port = (opt == OPT_HTTP_PORT) ? &options->http_port : &options->metrics_port;
+    const char *label = (opt == OPT_HTTP_PORT) ? "http-port" : "metrics-port";
+
+    if (parse_u16(optarg, target_port) != 0)
+    {
+        lantern_log_error(
+            "cli",
+            &(const struct lantern_log_metadata){.validator = options->node_id},
+            "invalid %s '%s'",
+            label,
+            optarg);
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    return LANTERN_CLIENT_OK;
+}
+
+
+/**
+ * Handle bootnode-related CLI options.
+ *
+ * @param options  Options structure to update
+ * @param opt      Parsed option identifier
+ * @param optarg   ENR value or path
+ *
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on error
+ *
+ * @note Thread safety: Not thread-safe; mutates caller-owned options.
+ */
+static lantern_client_error handle_bootnode_option(
+    struct lantern_client_options *options,
+    int opt,
+    const char *optarg)
+{
+    if (!options || !optarg)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    lantern_client_error result = LANTERN_CLIENT_ERR_INVALID_PARAM;
+    switch (opt)
+    {
+    case OPT_BOOTNODE:
+        result = lantern_client_options_add_bootnode(options, optarg);
+        break;
+    case OPT_BOOTNODES:
+        result = lantern_client_options_add_bootnodes_argument(options, optarg);
+        break;
+    case OPT_BOOTNODE_FILE:
+        result = lantern_client_options_add_bootnodes_from_file(options, optarg);
+        break;
+    default:
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    return result;
+}
+
+
+/**
+ * Handle hash signature configuration options.
+ *
+ * @param options  Options structure to update
+ * @param opt      Parsed option identifier
+ * @param optarg   Option argument string
+ *
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on invalid option
+ *
+ * @note Thread safety: Not thread-safe; mutates caller-owned options.
+ */
+static lantern_client_error handle_hash_sig_option(
+    struct lantern_client_options *options,
+    int opt,
+    const char *optarg)
+{
+    if (!options)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    switch (opt)
+    {
+    case OPT_HASH_SIG_KEY_DIR:
+        options->hash_sig_key_dir = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_HASH_SIG_PUBLIC_PATH:
+        options->hash_sig_public_path = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_HASH_SIG_SECRET_PATH:
+        options->hash_sig_secret_path = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_HASH_SIG_PUBLIC_TEMPLATE:
+        options->hash_sig_public_template = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_HASH_SIG_SECRET_TEMPLATE:
+        options->hash_sig_secret_template = optarg;
+        return LANTERN_CLIENT_OK;
+    default:
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+}
+
+
+/**
+ * Parse CLI arguments and populate client options.
+ *
+ * @param options       Options structure to populate
+ * @param argc          Argument count
+ * @param argv          Argument vector
+ * @param show_help     Output flag indicating help was requested
+ * @param show_version  Output flag indicating version was requested
+ *
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on invalid input or parse failure
+ *
+ * @note Thread safety: Not thread-safe; mutates caller-owned options and
+ *       relies on global getopt state.
+ */
+static lantern_client_error parse_arguments(
+    struct lantern_client_options *options,
+    int argc,
+    char **argv,
+    bool *show_help,
+    bool *show_version)
+{
+    if (!options || !argv || !show_help || !show_version)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    *show_help = false;
+    *show_version = false;
+
+    static const struct option long_options[] = {
         {"data-dir", required_argument, NULL, 'd'},
         {"genesis-config", required_argument, NULL, OPT_GENESIS_CONFIG},
         {"validator-registry-path", required_argument, NULL, OPT_VALIDATOR_REGISTRY},
@@ -131,140 +443,146 @@ int main(int argc, char **argv)
     int option_index = 0;
     while ((opt = getopt_long(argc, argv, "d:hv", long_options, &option_index)) != -1)
     {
-        switch (opt)
+        if (apply_option(options, opt, optarg, show_help, show_version) != LANTERN_CLIENT_OK)
         {
-        case 'd':
-            options.data_dir = optarg;
-            break;
-        case 'h':
-            show_help = true;
-            break;
-        case 'v':
-            show_version = true;
-            break;
-        case OPT_GENESIS_CONFIG:
-            options.genesis_config_path = optarg;
-            break;
-        case OPT_VALIDATOR_REGISTRY:
-            options.validator_registry_path = optarg;
-            break;
-        case OPT_NODES_PATH:
-            options.nodes_path = optarg;
-            break;
-        case OPT_GENESIS_STATE:
-            options.genesis_state_path = optarg;
-            break;
-        case OPT_VALIDATOR_CONFIG:
-            options.validator_config_path = optarg;
-            break;
-        case OPT_NODE_ID:
-            options.node_id = optarg;
-            break;
-        case OPT_NODE_KEY:
-            options.node_key_hex = optarg;
-            break;
-        case OPT_NODE_KEY_PATH:
-            options.node_key_path = optarg;
-            break;
-        case OPT_LISTEN_ADDRESS:
-            options.listen_address = optarg;
-            break;
-        case OPT_HTTP_PORT:
-            if (parse_u16(optarg, &options.http_port) != 0)
-            {
-                lantern_log_error(
-                    "cli",
-                    &(const struct lantern_log_metadata){.validator = options.node_id},
-                    "invalid http-port '%s'",
-                    optarg);
-                goto error;
-            }
-            break;
-        case OPT_METRICS_PORT:
-            if (parse_u16(optarg, &options.metrics_port) != 0)
-            {
-                lantern_log_error(
-                    "cli",
-                    &(const struct lantern_log_metadata){.validator = options.node_id},
-                    "invalid metrics-port '%s'",
-                    optarg);
-                goto error;
-            }
-            break;
-        case OPT_BOOTNODE:
-            if (lantern_client_options_add_bootnode(&options, optarg) != 0)
-            {
-                lantern_log_error(
-                    "cli",
-                    &(const struct lantern_log_metadata){.validator = options.node_id},
-                    "failed to add bootnode '%s'",
-                    optarg);
-                goto error;
-            }
-            break;
-        case OPT_DEVNET:
-            options.devnet = optarg;
-            break;
-        case OPT_LOG_LEVEL:
-            if (lantern_log_set_level_from_string(optarg, NULL) != 0)
-            {
-                lantern_log_error(
-                    "cli",
-                    &(const struct lantern_log_metadata){.validator = options.node_id},
-                    "invalid log-level '%s'",
-                    optarg);
-                goto error;
-            }
-            break;
-        case OPT_HASH_SIG_KEY_DIR:
-            options.hash_sig_key_dir = optarg;
-            break;
-        case OPT_HASH_SIG_PUBLIC_PATH:
-            options.hash_sig_public_path = optarg;
-            break;
-        case OPT_HASH_SIG_SECRET_PATH:
-            options.hash_sig_secret_path = optarg;
-            break;
-        case OPT_HASH_SIG_PUBLIC_TEMPLATE:
-            options.hash_sig_public_template = optarg;
-            break;
-        case OPT_HASH_SIG_SECRET_TEMPLATE:
-            options.hash_sig_secret_template = optarg;
-            break;
-        case OPT_BOOTNODES:
-            if (add_bootnodes_argument(&options, optarg) != 0)
-            {
-                lantern_log_error(
-                    "cli",
-                    &(const struct lantern_log_metadata){.validator = options.node_id},
-                    "failed to consume bootnodes from %s",
-                    optarg);
-                goto error;
-            }
-            break;
-        case OPT_BOOTNODE_FILE:
-            if (add_bootnodes_from_file(&options, optarg) != 0)
-            {
-                lantern_log_error(
-                    "cli",
-                    &(const struct lantern_log_metadata){.validator = options.node_id},
-                    "failed to read bootnodes file %s",
-                    optarg);
-                goto error;
-            }
-            break;
-        default:
-            goto error;
+            return LANTERN_CLIENT_ERR_INVALID_PARAM;
         }
     }
 
-    if (options.node_key_hex && options.node_key_path)
+    if (options->node_key_hex && options->node_key_path)
     {
         lantern_log_error(
             "cli",
-            &(const struct lantern_log_metadata){.validator = options.node_id},
+            &(const struct lantern_log_metadata){.validator = options->node_id},
             "specify only one of --node-key or --node-key-path");
-        goto error;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    return LANTERN_CLIENT_OK;
+}
+
+
+/**
+ * Validate required options are present.
+ *
+ * @param options  Populated options structure
+ *
+ * @return LANTERN_CLIENT_OK when required options are present
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM when validation fails
+ *
+ * @note Thread safety: Reentrant; read-only access to options.
+ */
+static lantern_client_error validate_required_options(
+    const struct lantern_client_options *options)
+{
+    if (!options)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    if (!options->node_id)
+    {
+        lantern_log_error(
+            "cli",
+            &(const struct lantern_log_metadata){0},
+            "--node-id is required");
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    return LANTERN_CLIENT_OK;
+}
+
+
+/**
+ * Run the main sleep loop until shutdown is requested.
+ *
+ * @param client  Initialized client instance (used for logging)
+ *
+ * @return LANTERN_CLIENT_OK on clean exit
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on failure
+ *
+ * @note Thread safety: Relies on the global shutdown flag; should be invoked
+ *       from the main thread.
+ */
+static lantern_client_error run_main_loop(struct lantern_client *client)
+{
+    if (!client)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    const struct timespec sleep_request = {
+        .tv_sec = 1,
+        .tv_nsec = 0,
+    };
+    struct timespec sleep_remaining = sleep_request;
+    while (g_keep_running)
+    {
+        if (nanosleep(&sleep_remaining, &sleep_remaining) != 0)
+        {
+            if (errno == EINTR)
+            {
+                sleep_remaining = sleep_request;
+                continue;
+            }
+
+            lantern_log_error(
+                "cli",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "sleep interrupted: %s",
+                strerror(errno));
+            return LANTERN_CLIENT_ERR_INVALID_PARAM;
+        }
+        sleep_remaining = sleep_request;
+    }
+
+    return LANTERN_CLIENT_OK;
+}
+
+
+/**
+ * Program entry point.
+ *
+ * Parses command-line arguments, configures logging, initializes the client,
+ * and blocks until a shutdown signal is received.
+ *
+ * @param argc  Argument count
+ * @param argv  Argument vector
+ *
+ * @return 0 on clean shutdown
+ * @return 1 on argument or initialization failure
+ *
+ * @note Thread safety: Must be invoked on the process main thread before any
+ *       additional threads are started.
+ */
+int main(int argc, char **argv)
+{
+    int exit_code = 0;
+    struct lantern_client_options options;
+    lantern_client_options_init(&options);
+
+    struct lantern_client client;
+    memset(&client, 0, sizeof(client));
+
+    bool show_version = false;
+    bool show_help = false;
+
+    if (register_signal_handlers() != 0)
+    {
+        exit_code = 1;
+        goto cleanup;
+    }
+
+    if (configure_logging_from_env() != 0)
+    {
+        exit_code = 1;
+        goto cleanup;
+    }
+
+    if (parse_arguments(&options, argc, argv, &show_help, &show_version) != 0)
+    {
+        exit_code = 1;
+        goto cleanup;
     }
 
     if (show_version)
@@ -279,13 +597,10 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    if (!options.node_id)
+    if (validate_required_options(&options) != 0)
     {
-        lantern_log_error(
-            "cli",
-            &(const struct lantern_log_metadata){0},
-            "--node-id is required");
-        goto error;
+        exit_code = 1;
+        goto cleanup;
     }
 
     if (lantern_init(&client, &options) != 0)
@@ -294,25 +609,25 @@ int main(int argc, char **argv)
             "cli",
             &(const struct lantern_log_metadata){.validator = options.node_id},
             "initialization failed");
-        goto error;
+        exit_code = 1;
+        goto cleanup;
     }
 
     lantern_log_info(
         "cli",
         &(const struct lantern_log_metadata){.validator = client.node_id},
-        "lantern ready genesis_time=%" PRIu64 " validators=%" PRIu64 " enr=%zu manual_bootnodes=%zu local_enr=%s",
+        "lantern ready genesis_time=%" PRIu64 " validators=%" PRIu64
+        " enr=%zu manual_bootnodes=%zu local_enr=%s",
         client.genesis.chain_config.genesis_time,
         client.genesis.chain_config.validator_count,
         client.genesis.enrs.count,
         client.bootnodes.len,
         client.local_enr.encoded ? client.local_enr.encoded : "-");
 
-    struct timespec sleep_duration;
-    sleep_duration.tv_sec = 1;
-    sleep_duration.tv_nsec = 0;
-    while (g_keep_running)
+    if (run_main_loop(&client) != 0)
     {
-        nanosleep(&sleep_duration, NULL);
+        exit_code = 1;
+        goto cleanup;
     }
 
     lantern_log_info(
@@ -323,13 +638,11 @@ int main(int argc, char **argv)
 cleanup:
     lantern_shutdown(&client);
     lantern_client_options_free(&options);
-    return 0;
-
-error:
-    print_usage(argv[0]);
-    lantern_shutdown(&client);
-    lantern_client_options_free(&options);
-    return 1;
+    if (exit_code != 0)
+    {
+        print_usage(argv[0]);
+    }
+    return exit_code;
 }
 
 
@@ -340,34 +653,110 @@ error:
  * to the log.
  *
  * @param prog  Program name (typically argv[0])
+ *
+ * @note Thread safety: Intended for single-threaded CLI execution before
+ *       worker threads are started.
  */
 static void print_usage(const char *prog)
 {
     lantern_log_info("main", NULL, "Usage: %s [options]", prog);
-    lantern_log_info("main", NULL, "  --data-dir PATH              Data directory (default %s)", LANTERN_DEFAULT_DATA_DIR);
-    lantern_log_info("main", NULL, "  --genesis-config PATH        Path to genesis config YAML");
-    lantern_log_info("main", NULL, "  --validator-registry-path PATH  Path to validators.yaml");
-    lantern_log_info("main", NULL, "  --nodes-path PATH            Path to nodes.yaml");
-    lantern_log_info("main", NULL, "  --genesis-state PATH         Path to genesis.ssz");
-    lantern_log_info("main", NULL, "  --validator-config PATH      Path to validator-config.yaml");
-    lantern_log_info("main", NULL, "  --node-id NAME               Node identifier (e.g., ream_0)");
-    lantern_log_info("main", NULL, "  --node-key HEX               Local node private key (32-byte hex)");
-    lantern_log_info("main", NULL, "  --node-key-path PATH         Path to file containing node private key hex");
-    lantern_log_info("main", NULL, "  --listen-address ADDR        QUIC listen multiaddr");
-    lantern_log_info("main", NULL, "  --http-port PORT             HTTP API port");
-    lantern_log_info("main", NULL, "  --metrics-port PORT          Metrics port");
-    lantern_log_info("main", NULL, "  --bootnode ENR               Add a bootnode enr");
-    lantern_log_info("main", NULL, "  --bootnodes VALUE            ENR or path to YAML/List file of ENRs");
-    lantern_log_info("main", NULL, "  --bootnodes-file PATH        File with newline-delimited ENRs");
-    lantern_log_info("main", NULL, "  --hash-sig-key-dir PATH     Directory containing hash-sig key files");
-    lantern_log_info("main", NULL, "  --hash-sig-public PATH      Path to a single hash-sig public key file");
-    lantern_log_info("main", NULL, "  --hash-sig-secret PATH      Path to a single hash-sig secret key file");
-    lantern_log_info("main", NULL, "  --hash-sig-public-template STR  printf-style template for public key paths");
-    lantern_log_info("main", NULL, "  --hash-sig-secret-template STR  printf-style template for secret key paths");
-    lantern_log_info("main", NULL, "  --devnet NAME                Devnet identifier for gossip topics");
-    lantern_log_info("main", NULL, "  --log-level LEVEL           Minimum log level (trace, debug, info, warn, error)");
-    lantern_log_info("main", NULL, "  --help                       Show this message");
-    lantern_log_info("main", NULL, "  --version                    Print version information");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --data-dir PATH              Data directory (default %s)",
+        LANTERN_DEFAULT_DATA_DIR);
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --genesis-config PATH        Path to genesis config YAML");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --validator-registry-path PATH  Path to validators.yaml");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --nodes-path PATH            Path to nodes.yaml");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --genesis-state PATH         Path to genesis.ssz");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --validator-config PATH      Path to validator-config.yaml");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --node-id NAME               Node identifier (e.g., ream_0)");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --node-key HEX               Local node private key (32-byte hex)");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --node-key-path PATH         Path to file containing node private key hex");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --listen-address ADDR        QUIC listen multiaddr");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --http-port PORT             HTTP API port");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --metrics-port PORT          Metrics port");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --bootnode ENR               Add a bootnode enr");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --bootnodes VALUE            ENR or path to YAML/List file of ENRs");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --bootnodes-file PATH        File with newline-delimited ENRs");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --hash-sig-key-dir PATH     Directory containing hash-sig key files");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --hash-sig-public PATH      Path to a single hash-sig public key file");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --hash-sig-secret PATH      Path to a single hash-sig secret key file");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --hash-sig-public-template STR  printf-style template for public key paths");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --hash-sig-secret-template STR  printf-style template for secret key paths");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --devnet NAME                Devnet identifier for gossip topics");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --log-level LEVEL           Minimum log level (trace, debug, info, warn, error)");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --help                       Show this message");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --version                    Print version information");
 }
 
 
@@ -377,201 +766,36 @@ static void print_usage(const char *prog)
  * @param text       String to parse
  * @param out_value  Output parameter for the parsed value
  *
- * @return 0 on success
- * @return -1 if text is NULL, out_value is NULL, or parsing fails
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if text is NULL, out_value is NULL, or parsing fails
+ *
+ * @note Thread safety: Reentrant; no shared state.
  */
-static int parse_u16(const char *text, uint16_t *out_value)
+static lantern_client_error parse_u16(const char *text, uint16_t *out_value)
 {
     if (!text || !out_value)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     errno = 0;
     char *end = NULL;
     long parsed = strtol(text, &end, 10);
-    if (errno != 0 || end == text || parsed < 0 || parsed > UINT16_MAX)
+    if (errno != 0 || end == text)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    while (end && *end != '\0' && isspace((unsigned char)*end))
+    {
+        ++end;
+    }
+    if (end && *end != '\0')
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    if (parsed < 0 || parsed > UINT16_MAX)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     *out_value = (uint16_t)parsed;
-    return 0;
-}
-
-
-/**
- * Load bootnode ENRs from a file.
- *
- * Reads a file containing ENR records (one per line) and adds them to the
- * client options. Supports YAML-style lists, comments (#), and quoted values.
- *
- * @param options  Client options to add bootnodes to
- * @param path     Path to the bootnodes file
- *
- * @return 0 on success (at least one ENR added)
- * @return -1 on error (file not found, parse error, or no ENRs found)
- */
-static int add_bootnodes_from_file(struct lantern_client_options *options, const char *path)
-{
-    if (!options || !path)
-    {
-        return -1;
-    }
-
-    FILE *fp = fopen(path, "r");
-    if (!fp)
-    {
-        lantern_log_error(
-            "cli",
-            &(const struct lantern_log_metadata){.validator = options->node_id},
-            "unable to open bootnodes file %s",
-            path);
-        return -1;
-    }
-
-    char line[BOOTNODE_LINE_MAX_LEN];
-    size_t added = 0;
-    while (fgets(line, sizeof(line), fp))
-    {
-        char *trimmed = trim_line(line);
-        if (!trimmed || *trimmed == '\0' || *trimmed == '#')
-        {
-            continue;
-        }
-
-        char *hash = strchr(trimmed, '#');
-        if (hash)
-        {
-            *hash = '\0';
-            trimmed = trim_line(trimmed);
-            if (!trimmed || *trimmed == '\0')
-            {
-                continue;
-            }
-        }
-
-        if (*trimmed == '-')
-        {
-            ++trimmed;
-            while (*trimmed && isspace((unsigned char)*trimmed))
-            {
-                ++trimmed;
-            }
-        }
-
-        char *value_start = strstr(trimmed, "enr:");
-        if (!value_start)
-        {
-            if (strncmp(trimmed, "enr:", 4) != 0)
-            {
-                continue;
-            }
-            value_start = trimmed;
-        }
-
-        char *end = value_start + strlen(value_start);
-        while (end > value_start && isspace((unsigned char)*(end - 1)))
-        {
-            --end;
-        }
-        *end = '\0';
-
-        if (*value_start == '"' || *value_start == '\'')
-        {
-            ++value_start;
-            size_t len = strlen(value_start);
-            if (len > 0 && (value_start[len - 1] == '"' || value_start[len - 1] == '\''))
-            {
-                value_start[len - 1] = '\0';
-            }
-        }
-
-        if (strncmp(value_start, "enr:", 4) != 0)
-        {
-            continue;
-        }
-
-        if (lantern_client_options_add_bootnode(options, value_start) != 0)
-        {
-            fclose(fp);
-            return -1;
-        }
-        added++;
-        lantern_log_info(
-            "cli",
-            &(const struct lantern_log_metadata){
-                .validator = options->node_id,
-                .peer = value_start},
-            "bootnode registered from %s",
-            path);
-    }
-
-    fclose(fp);
-
-    if (added == 0)
-    {
-        lantern_log_warn(
-            "cli",
-            &(const struct lantern_log_metadata){.validator = options->node_id},
-            "no ENRs found in %s",
-            path);
-        return -1;
-    }
-
-    return 0;
-}
-
-
-/**
- * Add bootnodes from a command-line argument.
- *
- * If the value starts with "enr:", it is treated as a single ENR record.
- * Otherwise, it is treated as a path to a file containing ENR records.
- *
- * @param options  Client options to add bootnodes to
- * @param value    Either an ENR string or a file path
- *
- * @return 0 on success
- * @return -1 on error
- */
-static int add_bootnodes_argument(struct lantern_client_options *options, const char *value)
-{
-    if (!options || !value)
-    {
-        return -1;
-    }
-    if (strncmp(value, "enr:", 4) == 0)
-    {
-        return lantern_client_options_add_bootnode(options, value);
-    }
-    return add_bootnodes_from_file(options, value);
-}
-
-
-/**
- * Trim leading and trailing whitespace from a string.
- *
- * Modifies the string in place by advancing the start pointer past leading
- * whitespace and null-terminating after the last non-whitespace character.
- *
- * @param line  String to trim (modified in place)
- *
- * @return Pointer to the trimmed string, or NULL if input is NULL
- */
-static char *trim_line(char *line)
-{
-    if (!line)
-    {
-        return NULL;
-    }
-    while (*line && isspace((unsigned char)*line))
-    {
-        ++line;
-    }
-    char *end = line + strlen(line);
-    while (end > line && isspace((unsigned char)*(end - 1)))
-    {
-        --end;
-    }
-    *end = '\0';
-    return line;
+    return LANTERN_CLIENT_OK;
 }
