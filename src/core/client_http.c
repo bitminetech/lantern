@@ -1,0 +1,325 @@
+/**
+ * @file client_http.c
+ * @brief HTTP server and metrics callbacks
+ *
+ * Implements callback functions for the HTTP server and metrics collection.
+ *
+ * @note Lock ordering (acquire in this order to prevent deadlocks):
+ *       1. state_lock
+ *       2. status_lock
+ *       3. pending_lock
+ *       4. validator_lock
+ *       5. connection_lock
+ *       6. peer_vote_lock
+ */
+
+#include "client_internal.h"
+
+#include "lantern/consensus/hash.h"
+#include "lantern/consensus/fork_choice.h"
+#include "lantern/http/server.h"
+#include "lantern/metrics/lean_metrics.h"
+#include "lantern/support/log.h"
+
+#include <inttypes.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <string.h>
+
+
+/* ============================================================================
+ * Validator Index Lookup
+ * ============================================================================ */
+
+/**
+ * Find local validator index by global index.
+ *
+ * @param client        Client instance
+ * @param global_index  Global validator index to find
+ * @param out_index     Output for local index
+ * @return 0 on success, -1 if not found
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+int find_local_validator_index(
+    const struct lantern_client *client,
+    uint64_t global_index,
+    size_t *out_index)
+{
+    if (!client)
+    {
+        return -1;
+    }
+    for (size_t i = 0; i < client->local_validator_count; ++i)
+    {
+        if (client->local_validators && client->local_validators[i].global_index == global_index)
+        {
+            if (out_index)
+            {
+                *out_index = i;
+            }
+            return 0;
+        }
+    }
+    return -1;
+}
+
+
+/* ============================================================================
+ * HTTP Snapshot Callbacks
+ * ============================================================================ */
+
+/**
+ * Get current head snapshot for HTTP API.
+ *
+ * @param context       Client instance
+ * @param out_snapshot  Output snapshot structure
+ * @return 0 on success, -1 on failure
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+int http_snapshot_head(void *context, struct lantern_http_head_snapshot *out_snapshot)
+{
+    if (!context || !out_snapshot)
+    {
+        return -1;
+    }
+    struct lantern_client *client = context;
+    if (!client->has_state)
+    {
+        return -1;
+    }
+    memset(out_snapshot, 0, sizeof(*out_snapshot));
+    out_snapshot->slot = client->state.slot;
+    if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &out_snapshot->head_root) != 0)
+    {
+        return -1;
+    }
+    out_snapshot->justified = client->state.latest_justified;
+    out_snapshot->finalized = client->state.latest_finalized;
+    return 0;
+}
+
+
+/* ============================================================================
+ * HTTP Validator Callbacks
+ * ============================================================================ */
+
+/**
+ * Get count of local validators for HTTP API.
+ *
+ * @param context  Client instance
+ * @return Number of local validators
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+size_t http_validator_count_cb(void *context)
+{
+    const struct lantern_client *client = context;
+    if (!client)
+    {
+        return 0;
+    }
+    return client->local_validator_count;
+}
+
+
+/**
+ * Get validator info for HTTP API.
+ *
+ * @param context   Client instance
+ * @param index     Local validator index
+ * @param out_info  Output info structure
+ * @return 0 on success, -1 on failure
+ *
+ * @note Thread safety: This function acquires validator_lock
+ */
+int http_validator_info_cb(void *context, size_t index, struct lantern_http_validator_info *out_info)
+{
+    if (!context || !out_info)
+    {
+        return -1;
+    }
+    struct lantern_client *client = context;
+    if (index >= client->local_validator_count || !client->local_validators)
+    {
+        return -1;
+    }
+    memset(out_info, 0, sizeof(*out_info));
+    out_info->global_index = client->local_validators[index].global_index;
+
+    bool enabled = true;
+    if (client->validator_lock_initialized)
+    {
+        if (pthread_mutex_lock(&client->validator_lock) != 0)
+        {
+            return -1;
+        }
+        if (client->validator_enabled && index < client->local_validator_count)
+        {
+            enabled = client->validator_enabled[index];
+        }
+        pthread_mutex_unlock(&client->validator_lock);
+    }
+    else if (client->validator_enabled && index < client->local_validator_count)
+    {
+        enabled = client->validator_enabled[index];
+    }
+    out_info->enabled = enabled;
+
+    const char *base = client->node_id ? client->node_id : "validator";
+    int written = snprintf(out_info->label, sizeof(out_info->label), "%s#%" PRIu64, base, out_info->global_index);
+    if (written < 0 || (size_t)written >= sizeof(out_info->label))
+    {
+        strncpy(out_info->label, base, sizeof(out_info->label));
+        out_info->label[sizeof(out_info->label) - 1] = '\0';
+    }
+    return 0;
+}
+
+
+/**
+ * Set validator enabled/disabled status for HTTP API.
+ *
+ * @param context       Client instance
+ * @param global_index  Global validator index
+ * @param enabled       New enabled status
+ * @return 0 on success, -1 on failure
+ *
+ * @note Thread safety: This function acquires validator_lock
+ */
+int http_set_validator_status_cb(void *context, uint64_t global_index, bool enabled)
+{
+    if (!context)
+    {
+        return -1;
+    }
+    struct lantern_client *client = context;
+    if (!client->validator_lock_initialized || !client->validator_enabled)
+    {
+        return -1;
+    }
+    if (pthread_mutex_lock(&client->validator_lock) != 0)
+    {
+        return -1;
+    }
+    size_t local_index = 0;
+    if (find_local_validator_index(client, global_index, &local_index) != 0
+        || local_index >= client->local_validator_count)
+    {
+        pthread_mutex_unlock(&client->validator_lock);
+        return -1;
+    }
+    client->validator_enabled[local_index] = enabled;
+    size_t enabled_count = 0;
+    size_t disabled_count = 0;
+    if (client->validator_enabled)
+    {
+        for (size_t i = 0; i < client->local_validator_count; ++i)
+        {
+            if (client->validator_enabled[i])
+            {
+                ++enabled_count;
+            }
+        }
+        if (client->local_validator_count > enabled_count)
+        {
+            disabled_count = client->local_validator_count - enabled_count;
+        }
+    }
+    else
+    {
+        enabled_count = client->local_validator_count;
+    }
+    pthread_mutex_unlock(&client->validator_lock);
+
+    lantern_log_info(
+        "validator",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "validator %" PRIu64 " %s (enabled=%zu disabled=%zu)",
+        global_index,
+        enabled ? "activated" : "deactivated",
+        enabled_count,
+        disabled_count);
+    return 0;
+}
+
+
+/* ============================================================================
+ * Metrics Callbacks
+ * ============================================================================ */
+
+/**
+ * Get metrics snapshot for HTTP API.
+ *
+ * @param context       Client instance
+ * @param out_snapshot  Output snapshot structure
+ * @return 0 on success, -1 on failure
+ *
+ * @note Thread safety: This function acquires state_lock and peer_vote_lock
+ */
+int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snapshot)
+{
+    if (!context || !out_snapshot)
+    {
+        return -1;
+    }
+    struct lantern_client *client = context;
+    memset(out_snapshot, 0, sizeof(*out_snapshot));
+
+    bool have_fork_head = false;
+    LanternRoot fork_head_root;
+    memset(&fork_head_root, 0, sizeof(fork_head_root));
+    uint64_t fork_head_slot = 0;
+    if (client->has_fork_choice)
+    {
+        if (lantern_fork_choice_current_head(&client->fork_choice, &fork_head_root) == 0)
+        {
+            uint64_t slot = 0;
+            if (lantern_fork_choice_block_info(&client->fork_choice, &fork_head_root, &slot, NULL, NULL) == 0)
+            {
+                fork_head_slot = slot;
+                have_fork_head = true;
+            }
+        }
+    }
+
+    uint64_t state_head_slot = 0;
+    LanternCheckpoint state_justified;
+    LanternCheckpoint state_finalized;
+    memset(&state_justified, 0, sizeof(state_justified));
+    memset(&state_finalized, 0, sizeof(state_finalized));
+    bool state_locked = lantern_client_lock_state(client);
+    if (client->has_state)
+    {
+        /* Use the latest_block_header slot which is the actual block slot,
+           not state.slot which may be advanced during state transition processing */
+        state_head_slot = client->state.latest_block_header.slot;
+        state_justified = client->state.latest_justified;
+        state_finalized = client->state.latest_finalized;
+    }
+    lantern_client_unlock_state(client, state_locked);
+
+    out_snapshot->lean_head_slot = have_fork_head ? fork_head_slot : state_head_slot;
+    out_snapshot->lean_latest_justified_slot = state_justified.slot;
+    out_snapshot->lean_latest_finalized_slot = state_finalized.slot;
+    out_snapshot->lean_validators_count = client->local_validator_count;
+    out_snapshot->peer_vote_metrics_count = 0;
+    if (client->peer_vote_lock_initialized)
+    {
+        if (pthread_mutex_lock(&client->peer_vote_lock) == 0)
+        {
+            size_t limit = LANTERN_METRICS_MAX_PEER_VOTE_STATS;
+            for (size_t i = 0; i < client->peer_vote_stats_len && out_snapshot->peer_vote_metrics_count < limit; ++i)
+            {
+                const struct lantern_peer_vote_metric *entry = &client->peer_vote_stats[i];
+                struct lantern_peer_vote_metric *metric =
+                    &out_snapshot->peer_vote_metrics[out_snapshot->peer_vote_metrics_count++];
+                *metric = *entry;
+            }
+            pthread_mutex_unlock(&client->peer_vote_lock);
+        }
+    }
+    lean_metrics_snapshot(&out_snapshot->lean_metrics);
+    return 0;
+}
