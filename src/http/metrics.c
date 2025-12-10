@@ -332,6 +332,18 @@ static int format_metrics_body(
                "lean_state_transition_attestations_processing_time_seconds",
                "Time taken to process attestations during state transition",
                &lean->state_attestations_time)
+            != 0
+        || append_histogram_metrics(
+               &buf,
+               "lean_pq_signature_attestation_signing_time_seconds",
+               "Time taken to sign an attestation",
+               &lean->pq_signature_signing_time)
+            != 0
+        || append_histogram_metrics(
+               &buf,
+               "lean_pq_signature_attestation_verification_time_seconds",
+               "Time taken to verify an attestation signature",
+               &lean->pq_signature_verification_time)
             != 0) {
         metrics_buffer_free(&buf);
         return -1;

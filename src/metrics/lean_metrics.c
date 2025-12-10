@@ -46,6 +46,14 @@ static struct lean_histogram g_hist_state_attestations = {
     .bounds = kDefaultShortBuckets,
     .bucket_count = ARRAY_LEN(kDefaultShortBuckets),
 };
+static struct lean_histogram g_hist_pq_signature_signing = {
+    .bounds = kDefaultShortBuckets,
+    .bucket_count = ARRAY_LEN(kDefaultShortBuckets),
+};
+static struct lean_histogram g_hist_pq_signature_verification = {
+    .bounds = kDefaultShortBuckets,
+    .bucket_count = ARRAY_LEN(kDefaultShortBuckets),
+};
 
 static double sanitize_duration(double seconds) {
     if (seconds < 0.0) {
@@ -118,6 +126,8 @@ void lean_metrics_reset(void) {
     histogram_reset(&g_hist_state_slots);
     histogram_reset(&g_hist_state_block);
     histogram_reset(&g_hist_state_attestations);
+    histogram_reset(&g_hist_pq_signature_signing);
+    histogram_reset(&g_hist_pq_signature_verification);
     pthread_mutex_unlock(&g_metrics_lock);
 }
 
@@ -164,6 +174,18 @@ void lean_metrics_record_state_transition_attestations(uint64_t count, double se
     pthread_mutex_unlock(&g_metrics_lock);
 }
 
+void lean_metrics_record_pq_signature_signing(double seconds) {
+    pthread_mutex_lock(&g_metrics_lock);
+    histogram_observe(&g_hist_pq_signature_signing, seconds);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_pq_signature_verification(double seconds) {
+    pthread_mutex_lock(&g_metrics_lock);
+    histogram_observe(&g_hist_pq_signature_verification, seconds);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
 void lean_metrics_snapshot(struct lean_metrics_snapshot *out) {
     if (!out) {
         return;
@@ -179,5 +201,7 @@ void lean_metrics_snapshot(struct lean_metrics_snapshot *out) {
     histogram_snapshot(&out->state_slots_time, &g_hist_state_slots);
     histogram_snapshot(&out->state_block_time, &g_hist_state_block);
     histogram_snapshot(&out->state_attestations_time, &g_hist_state_attestations);
+    histogram_snapshot(&out->pq_signature_signing_time, &g_hist_pq_signature_signing);
+    histogram_snapshot(&out->pq_signature_verification_time, &g_hist_pq_signature_verification);
     pthread_mutex_unlock(&g_metrics_lock);
 }

@@ -2,9 +2,19 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
+#include "lantern/metrics/lean_metrics.h"
 #include "lantern/support/log.h"
 #include "pq-bindings-c-rust.h"
+
+static double get_time_seconds(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0.0;
+    }
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
 
 static bool bytes_are_zero(const uint8_t *bytes, size_t length) {
     if (!bytes && length > 0) {
@@ -51,6 +61,7 @@ bool lantern_signature_verify(
     // Use pq_verify_ssz which handles the 52-byte pubkey as SSZ format.
     // This matches Ream's leanSig serialization using the Serializable trait.
     // The 52-byte pubkey is serialized using leanSig's to_bytes()/from_bytes().
+    double start = get_time_seconds();
     int verify_rc = pq_verify_ssz(
         pubkey_bytes,
         pubkey_len,
@@ -59,6 +70,8 @@ bool lantern_signature_verify(
         message_len,
         signature->bytes,
         sizeof(signature->bytes));
+    double elapsed = get_time_seconds() - start;
+    lean_metrics_record_pq_signature_verification(elapsed);
     if (verify_rc != 1) {
         lantern_log_debug("signature", NULL, "pq_verify_ssz rc=%d", verify_rc);
     }
@@ -85,7 +98,10 @@ bool lantern_signature_verify_pk(
         lantern_log_debug("signature", NULL, "signature deserialize failed");
         return false;
     }
+    double start = get_time_seconds();
     int verify_rc = pq_verify(pubkey, epoch, message, message_len, pq_signature);
+    double elapsed = get_time_seconds() - start;
+    lean_metrics_record_pq_signature_verification(elapsed);
     pq_signature_free(pq_signature);
     if (verify_rc != 1) {
         lantern_log_debug("signature", NULL, "pq_verify rc=%d", verify_rc);
@@ -106,7 +122,10 @@ bool lantern_signature_sign(
         return false;
     }
     struct PQSignature *pq_signature = NULL;
+    double start = get_time_seconds();
     enum PQSigningError sign_err = pq_sign(secret_key, epoch, message, message_len, &pq_signature);
+    double elapsed = get_time_seconds() - start;
+    lean_metrics_record_pq_signature_signing(elapsed);
     if (sign_err != Success || !pq_signature) {
         return false;
     }

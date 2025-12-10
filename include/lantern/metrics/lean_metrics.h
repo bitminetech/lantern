@@ -30,6 +30,8 @@ struct lean_metrics_snapshot {
     struct lean_metrics_histogram_snapshot state_slots_time;
     struct lean_metrics_histogram_snapshot state_block_time;
     struct lean_metrics_histogram_snapshot state_attestations_time;
+    struct lean_metrics_histogram_snapshot pq_signature_signing_time;
+    struct lean_metrics_histogram_snapshot pq_signature_verification_time;
 };
 
 void lean_metrics_reset(void);
@@ -39,6 +41,8 @@ void lean_metrics_record_state_transition(double seconds);
 void lean_metrics_record_state_transition_slots(uint64_t slots_processed, double seconds);
 void lean_metrics_record_state_transition_block(double seconds);
 void lean_metrics_record_state_transition_attestations(uint64_t count, double seconds);
+void lean_metrics_record_pq_signature_signing(double seconds);
+void lean_metrics_record_pq_signature_verification(double seconds);
 void lean_metrics_snapshot(struct lean_metrics_snapshot *out);
 
 #ifdef __cplusplus
