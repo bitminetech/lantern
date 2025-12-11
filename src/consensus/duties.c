@@ -66,11 +66,10 @@ int lantern_validator_assignment_from_config(
     if (!assignment) {
         return -1;
     }
-    lantern_validator_assignment_reset(assignment);
+    lantern_validator_assignment_init(assignment);
     if (!config || !entry || entry->count == 0) {
         return -1;
     }
-    lantern_validator_assignment_init(assignment);
     if (!config->entries || config->count == 0) {
         return -1;
     }
