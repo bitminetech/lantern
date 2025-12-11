@@ -124,7 +124,9 @@ uint64_t validator_global_index(const struct lantern_client *client, size_t loca
  * @param validator  Local validator
  * @param slot       Slot number
  * @param vote       Vote to sign (modified in place)
- * @return 0 on success, -1 on failure
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
+ * @return LANTERN_CLIENT_ERR_VALIDATOR on hashing or signing failure
  *
  * @note Thread safety: This function is thread-safe
  */
@@ -141,7 +143,9 @@ int validator_sign_vote(
  *
  * @param client  Client instance
  * @param vote    Vote to store
- * @return 0 on success, -1 on failure
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL input or overflow
+ * @return LANTERN_CLIENT_ERR_RUNTIME if state is unavailable or lock fails
  *
  * @note Thread safety: This function acquires state_lock
  */
@@ -155,7 +159,9 @@ int validator_store_vote(struct lantern_client *client, const LanternSignedVote 
  *
  * @param client  Client instance
  * @param vote    Vote to publish
- * @return 0 on success, -1 on failure
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
+ * @return LANTERN_CLIENT_ERR_NETWORK if publish fails
  *
  * @note Thread safety: This function is thread-safe
  */
@@ -172,7 +178,11 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
  * @param local_index       Local validator index
  * @param out_block         Output for the built block
  * @param out_proposer_vote Output for the proposer's vote
- * @return 0 on success, -1 on failure
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on bad inputs
+ * @return LANTERN_CLIENT_ERR_RUNTIME on state/runtime failures
+ * @return LANTERN_CLIENT_ERR_VALIDATOR on signing failures
+ * @return LANTERN_CLIENT_ERR_ALLOC on allocation/copy failures
  *
  * @note Thread safety: This function acquires state_lock
  */
@@ -192,7 +202,10 @@ int validator_build_block(
  * @param client       Client instance
  * @param slot         Slot number
  * @param local_index  Local validator index
- * @return 0 on success, -1 on failure
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_RUNTIME if prerequisites are not met
+ * @return Propagated errors from validator_build_block() or
+ *         lantern_client_publish_block()
  *
  * @note Thread safety: This function acquires validator_lock
  */
@@ -206,7 +219,11 @@ int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t
  *
  * @param client  Client instance
  * @param slot    Slot number
- * @return 0 on success, -1 on failure
+ * @return LANTERN_CLIENT_OK on success (best effort)
+ * @return LANTERN_CLIENT_ERR_RUNTIME when prerequisites are not satisfied or
+ *         locks fail
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM when inputs are NULL or no local
+ *         validators are configured
  *
  * @note Thread safety: This function acquires state_lock and validator_lock
  */
@@ -228,7 +245,10 @@ void *validator_thread(void *arg);
  * Start the validator service.
  *
  * @param client  Client instance
- * @return 0 on success, -1 on failure
+ * @return LANTERN_CLIENT_OK on success or when already running/missing
+ *         prerequisites
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if client is NULL
+ * @return LANTERN_CLIENT_ERR_RUNTIME if the service thread cannot be created
  *
  * @note Thread safety: This function is thread-safe
  */
@@ -298,7 +318,10 @@ size_t http_validator_count_cb(void *context);
  *
  * @note Thread safety: This function acquires validator_lock
  */
-int http_validator_info_cb(void *context, size_t index, struct lantern_http_validator_info *out_info);
+int http_validator_info_cb(
+    void *context,
+    size_t index,
+    struct lantern_http_validator_info *out_info);
 
 
 /**
@@ -356,7 +379,10 @@ int reqresp_build_status(void *context, LanternStatusMessage *out_status);
  *
  * @note Thread safety: This function acquires status_lock
  */
-int reqresp_handle_status(void *context, const LanternStatusMessage *peer_status, const char *peer_id);
+int reqresp_handle_status(
+    void *context,
+    const LanternStatusMessage *peer_status,
+    const char *peer_id);
 
 
 /**

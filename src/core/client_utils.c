@@ -13,13 +13,9 @@
 
 #include "client_internal.h"
 
-#include "lantern/consensus/fork_choice.h"
-#include "lantern/support/log.h"
-#include "lantern/support/strings.h"
-
-#include <libp2p/errors.h>
-
+#include <errno.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +27,16 @@
 #else
 #include <sys/time.h>
 #endif
+
+#if defined(__APPLE__)
+#include <mach/mach_time.h>
+#endif
+
+#include <libp2p/errors.h>
+
+#include "lantern/consensus/fork_choice.h"
+#include "lantern/support/log.h"
+#include "lantern/support/strings.h"
 
 
 /* ============================================================================
@@ -48,20 +54,35 @@ uint64_t monotonic_millis(void)
 {
 #if defined(_WIN32)
     return (uint64_t)GetTickCount64();
-#elif defined(__APPLE__)
-    struct timeval tv;
-    if (gettimeofday(&tv, NULL) != 0)
-    {
-        return 0;
-    }
-    return (uint64_t)tv.tv_sec * 1000 + (uint64_t)tv.tv_usec / 1000;
-#else
+#elif defined(CLOCK_MONOTONIC)
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
     {
         return 0;
     }
     return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+#elif defined(__APPLE__)
+    static mach_timebase_info_data_t timebase = {0};
+    if ((timebase.denom == 0) && (mach_timebase_info(&timebase) != KERN_SUCCESS))
+    {
+        return 0;
+    }
+
+    uint64_t ticks = mach_absolute_time();
+    if ((timebase.numer != 0) && (ticks > UINT64_MAX / timebase.numer))
+    {
+        return 0;
+    }
+
+    uint64_t nanos = (ticks * timebase.numer) / timebase.denom;
+    return nanos / 1000000;
+#else
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) != 0)
+    {
+        return 0;
+    }
+    return (uint64_t)tv.tv_sec * 1000 + (uint64_t)tv.tv_usec / 1000;
 #endif
 }
 
@@ -110,7 +131,13 @@ void validator_sleep_ms(uint32_t ms)
     struct timespec ts;
     ts.tv_sec = ms / 1000;
     ts.tv_nsec = (ms % 1000) * 1000000L;
-    nanosleep(&ts, NULL);
+    while (nanosleep(&ts, &ts) != 0)
+    {
+        if (errno != EINTR)
+        {
+            break;
+        }
+    }
 #endif
 }
 
@@ -137,14 +164,20 @@ uint64_t blocks_request_backoff_ms(uint32_t failures)
     {
         return LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_MS;
     }
+    const uint64_t max_backoff = LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_MS;
     uint64_t backoff = LANTERN_BLOCKS_REQUEST_BACKOFF_BASE_MS;
-    for (uint32_t i = 1; i < failures && backoff < LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_MS; ++i)
+    for (uint32_t i = 1; i < failures && backoff < max_backoff; ++i)
     {
+        if (backoff > max_backoff / 2 || backoff > UINT64_MAX / 2)
+        {
+            backoff = max_backoff;
+            break;
+        }
         backoff *= 2;
     }
-    if (backoff > LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_MS)
+    if (backoff > max_backoff)
     {
-        backoff = LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_MS;
+        backoff = max_backoff;
     }
     return backoff;
 }
@@ -373,11 +406,19 @@ void lantern_vote_rejection_set(struct lantern_vote_rejection_info *info, const 
     int written = vsnprintf(info->message, sizeof(info->message), fmt, args);
     va_end(args);
 
+    if (written < 0)
+    {
+        return;
+    }
+
+    if ((size_t)written >= sizeof(info->message))
+    {
+        info->message[sizeof(info->message) - 1] = '\0';
+    }
+
     if (written > 0)
     {
         info->has_reason = true;
-        // Ensure null termination
-        info->message[sizeof(info->message) - 1] = '\0';
     }
 }
 
@@ -407,6 +448,10 @@ bool lantern_client_current_slot(const struct lantern_client *client, uint64_t *
         return false;
     }
     uint64_t now = validator_wall_time_now_seconds();
+    if (now == 0)
+    {
+        return false;
+    }
     if (now < store->config.genesis_time)
     {
         *out_slot = 0;
@@ -513,7 +558,7 @@ int read_trimmed_file(const char *path, char **out_text)
         return -1;
     }
     long file_size = ftell(fp);
-    if (file_size < 0)
+    if (file_size < 0 || (unsigned long)file_size > SIZE_MAX - 1)
     {
         fclose(fp);
         return -1;
@@ -524,7 +569,8 @@ int read_trimmed_file(const char *path, char **out_text)
         return -1;
     }
 
-    char *buffer = malloc((size_t)file_size + 1);
+    size_t alloc_size = (size_t)file_size + 1;
+    char *buffer = malloc(alloc_size);
     if (!buffer)
     {
         fclose(fp);
@@ -533,9 +579,26 @@ int read_trimmed_file(const char *path, char **out_text)
 
     size_t read_len = fread(buffer, 1, (size_t)file_size, fp);
     fclose(fp);
+    if (read_len != (size_t)file_size)
+    {
+        lantern_log_error(
+            "client",
+            &(const struct lantern_log_metadata){0},
+            "unable to read %s: read %zu of %ld bytes",
+            path,
+            read_len,
+            file_size);
+        free(buffer);
+        return -1;
+    }
     buffer[read_len] = '\0';
 
     char *trimmed = lantern_trim_whitespace(buffer);
+    if (!trimmed)
+    {
+        free(buffer);
+        return -1;
+    }
     size_t trimmed_len = strlen(trimmed);
     memmove(buffer, trimmed, trimmed_len + 1);
     *out_text = buffer;
@@ -664,6 +727,7 @@ void string_list_remove(struct lantern_string_list *list, const char *value)
                 list->items[j] = list->items[j + 1];
             }
             list->len--;
+            list->items[list->len] = NULL;
             return;
         }
     }

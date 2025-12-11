@@ -303,14 +303,16 @@ static int test_validator_refresh_cached_vote_updates_source(void) {
     new_source.slot = 1u;
     client_test_fill_root_with_index(&new_source.root, 0x50u);
 
+    bool refreshed_flag = false;
     int refresh_rc = lantern_validator_refresh_cached_vote(
         &validator,
         stale.data.slot,
         &new_head,
         &new_target,
         &new_source,
-        &refreshed);
-    if (refresh_rc != 1) {
+        &refreshed,
+        &refreshed_flag);
+    if (refresh_rc != LANTERN_CLIENT_OK || !refreshed_flag) {
         fprintf(stderr, "expected cached vote refresh to occur\n");
         goto cleanup;
     }
@@ -325,15 +327,21 @@ static int test_validator_refresh_cached_vote_updates_source(void) {
     }
 
     LanternSignedVote second = refreshed;
+    refreshed_flag = true;
     if (lantern_validator_refresh_cached_vote(
             &validator,
             stale.data.slot,
             &new_head,
             &new_target,
             &new_source,
-            &second)
-        != 0) {
+            &second,
+            &refreshed_flag)
+        != LANTERN_CLIENT_OK) {
         fprintf(stderr, "expected cached vote refresh to be a no-op\n");
+        goto cleanup;
+    }
+    if (refreshed_flag) {
+        fprintf(stderr, "no-op refresh should not set refreshed flag\n");
         goto cleanup;
     }
     if (memcmp(second.signature.bytes, refreshed.signature.bytes, LANTERN_SIGNATURE_SIZE) != 0) {

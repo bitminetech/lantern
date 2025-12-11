@@ -220,13 +220,44 @@ size_t lantern_client_local_validator_count(const struct lantern_client *client)
 const struct lantern_local_validator *lantern_client_local_validator(
     const struct lantern_client *client,
     size_t index);
+
+/**
+ * Refresh a cached vote's checkpoints and signature if the source checkpoint
+ * has changed.
+ *
+ * @param validator     Local validator with signing key
+ * @param slot          Slot used for signing context
+ * @param head          Updated head checkpoint
+ * @param target        Updated target checkpoint
+ * @param source        Updated source checkpoint
+ * @param vote          Vote to refresh (modified in place)
+ * @param out_refreshed Optional output flag set to true when the vote was
+ *                      re-signed
+ *
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
+ * @return LANTERN_CLIENT_ERR_VALIDATOR when signing fails or the key is
+ *         missing
+ */
 int lantern_validator_refresh_cached_vote(
     struct lantern_local_validator *validator,
     uint64_t slot,
     const LanternCheckpoint *head,
     const LanternCheckpoint *target,
     const LanternCheckpoint *source,
-    LanternSignedVote *vote);
+    LanternSignedVote *vote,
+    bool *out_refreshed);
+
+/**
+ * Publish a signed block to the gossip network.
+ *
+ * @param client Client instance with gossip service running
+ * @param block  Signed block to publish
+ *
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
+ * @return LANTERN_CLIENT_ERR_NETWORK if gossip is inactive or publish fails
+ */
 int lantern_client_publish_block(struct lantern_client *client, const LanternSignedBlock *block);
 
 int lantern_client_debug_record_vote(

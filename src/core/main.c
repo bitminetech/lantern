@@ -22,8 +22,8 @@
 #include <string.h>
 #include <time.h>
 
-/** Maximum length of a single line when reading bootnode files. */
-static const size_t BOOTNODE_LINE_MAX_LEN = 2048;
+/** Lantern version string. */
+static const char *const LANTERN_VERSION = "v0.0.1";
 
 enum {
     OPT_GENESIS_CONFIG = 1000,
@@ -587,7 +587,7 @@ int main(int argc, char **argv)
 
     if (show_version)
     {
-        lantern_log_info("main", NULL, "lantern preview");
+        lantern_log_info("main", NULL, "lantern %s", LANTERN_VERSION);
         goto cleanup;
     }
 
@@ -647,19 +647,10 @@ cleanup:
 
 
 /**
- * Print command-line usage information.
- *
- * Outputs all available command-line options and their descriptions
- * to the log.
- *
- * @param prog  Program name (typically argv[0])
- *
- * @note Thread safety: Intended for single-threaded CLI execution before
- *       worker threads are started.
+ * @brief Print path-related CLI options.
  */
-static void print_usage(const char *prog)
+static void print_usage_paths(void)
 {
-    lantern_log_info("main", NULL, "Usage: %s [options]", prog);
     lantern_log_info(
         "main",
         NULL,
@@ -685,6 +676,14 @@ static void print_usage(const char *prog)
         "main",
         NULL,
         "  --validator-config PATH      Path to validator-config.yaml");
+}
+
+
+/**
+ * @brief Print node identity CLI options.
+ */
+static void print_usage_node_identity(void)
+{
     lantern_log_info(
         "main",
         NULL,
@@ -697,6 +696,14 @@ static void print_usage(const char *prog)
         "main",
         NULL,
         "  --node-key-path PATH         Path to file containing node private key hex");
+}
+
+
+/**
+ * @brief Print network-related CLI options.
+ */
+static void print_usage_network(void)
+{
     lantern_log_info(
         "main",
         NULL,
@@ -724,6 +731,18 @@ static void print_usage(const char *prog)
     lantern_log_info(
         "main",
         NULL,
+        "  --devnet NAME                Devnet identifier for gossip topics");
+}
+
+
+/**
+ * @brief Print hash signature key CLI options.
+ */
+static void print_usage_hash_sig(void)
+{
+    lantern_log_info(
+        "main",
+        NULL,
         "  --hash-sig-key-dir PATH     Directory containing hash-sig key files");
     lantern_log_info(
         "main",
@@ -741,10 +760,14 @@ static void print_usage(const char *prog)
         "main",
         NULL,
         "  --hash-sig-secret-template STR  printf-style template for secret key paths");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --devnet NAME                Devnet identifier for gossip topics");
+}
+
+
+/**
+ * @brief Print miscellaneous CLI options.
+ */
+static void print_usage_misc(void)
+{
     lantern_log_info(
         "main",
         NULL,
@@ -757,6 +780,28 @@ static void print_usage(const char *prog)
         "main",
         NULL,
         "  --version                    Print version information");
+}
+
+
+/**
+ * Print command-line usage information.
+ *
+ * Outputs all available command-line options and their descriptions
+ * to the log.
+ *
+ * @param prog  Program name (typically argv[0])
+ *
+ * @note Thread safety: Intended for single-threaded CLI execution before
+ *       worker threads are started.
+ */
+static void print_usage(const char *prog)
+{
+    lantern_log_info("main", NULL, "Usage: %s [options]", prog);
+    print_usage_paths();
+    print_usage_node_identity();
+    print_usage_network();
+    print_usage_hash_sig();
+    print_usage_misc();
 }
 
 
