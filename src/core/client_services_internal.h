@@ -475,7 +475,7 @@ int lantern_reqresp_read_response_chunk(
  *
  * @note Thread safety: Caller must ensure exclusive access to the validator
  */
-void local_validator_cleanup(struct lantern_local_validator *validator);
+void lantern_client_local_validator_cleanup(struct lantern_local_validator *validator);
 
 
 /**
@@ -485,7 +485,7 @@ void local_validator_cleanup(struct lantern_local_validator *validator);
  *
  * @note Thread safety: Caller must ensure exclusive access during shutdown
  */
-void reset_local_validators(struct lantern_client *client);
+void lantern_client_reset_local_validators(struct lantern_client *client);
 
 
 /**
@@ -500,7 +500,7 @@ void reset_local_validators(struct lantern_client *client);
  *
  * @note Thread safety: This function is thread-safe
  */
-int decode_validator_secret(const char *hex, uint8_t **out_key, size_t *out_len);
+int lantern_client_decode_validator_secret(const char *hex, uint8_t **out_key, size_t *out_len);
 
 
 /**
@@ -512,7 +512,7 @@ int decode_validator_secret(const char *hex, uint8_t **out_key, size_t *out_len)
  *
  * @note Thread safety: This function should be called during initialization
  */
-int configure_hash_sig_sources(
+int lantern_client_configure_hash_sig_sources(
     struct lantern_client *client,
     const struct lantern_client_options *options);
 
@@ -527,7 +527,7 @@ int configure_hash_sig_sources(
  *
  * @note Thread safety: This function should be called during initialization
  */
-int load_hash_sig_keys(struct lantern_client *client);
+int lantern_client_load_hash_sig_keys(struct lantern_client *client);
 
 
 /**
@@ -537,7 +537,7 @@ int load_hash_sig_keys(struct lantern_client *client);
  *
  * @note Thread safety: Caller must ensure exclusive access during shutdown
  */
-void free_hash_sig_pubkeys(struct lantern_client *client);
+void lantern_client_free_hash_sig_pubkeys(struct lantern_client *client);
 
 
 #ifdef __cplusplus
