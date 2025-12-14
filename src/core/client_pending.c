@@ -5,14 +5,141 @@
  * Implements list operations for pending blocks (waiting for parent)
  * and persisted blocks (stored for replay).
  *
- * @note Thread safety: List functions require caller to hold pending_lock
- *       unless otherwise noted.
+ * @note Thread safety:
+ *       - Pending list functions require caller to hold pending_lock.
+ *       - Persisted list helpers are thread-safe.
  */
 
 #include "client_internal.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+enum
+{
+    LANTERN_CLIENT_PENDING_OK = 0,
+    LANTERN_CLIENT_PENDING_ERR_INVALID_PARAM = -1,
+    LANTERN_CLIENT_PENDING_ERR_ALLOC = -2,
+    LANTERN_CLIENT_PENDING_ERR_OVERFLOW = -3,
+    LANTERN_CLIENT_PENDING_ERR_COPY = -4,
+};
+
+static const size_t BLOCK_LIST_INITIAL_CAPACITY = 4u;
+
+
+/* ============================================================================
+ * Helpers
+ * ============================================================================ */
+
+/**
+ * @brief Ensure the persisted block list can hold at least `required` entries.
+ */
+static int ensure_persisted_block_list_capacity(
+    struct lantern_persisted_block_list *list,
+    size_t required)
+{
+    if (!list)
+    {
+        return LANTERN_CLIENT_PENDING_ERR_INVALID_PARAM;
+    }
+
+    if (list->capacity >= required)
+    {
+        return LANTERN_CLIENT_PENDING_OK;
+    }
+
+    size_t new_capacity = BLOCK_LIST_INITIAL_CAPACITY;
+    if (list->capacity > 0)
+    {
+        size_t half = list->capacity / 2u;
+        if (list->capacity > SIZE_MAX - half)
+        {
+            return LANTERN_CLIENT_PENDING_ERR_OVERFLOW;
+        }
+        new_capacity = list->capacity + half;
+        if (new_capacity < BLOCK_LIST_INITIAL_CAPACITY)
+        {
+            new_capacity = BLOCK_LIST_INITIAL_CAPACITY;
+        }
+    }
+
+    if (new_capacity < required)
+    {
+        new_capacity = required;
+    }
+
+    if (new_capacity > SIZE_MAX / sizeof(*list->items))
+    {
+        return LANTERN_CLIENT_PENDING_ERR_OVERFLOW;
+    }
+
+    struct lantern_persisted_block *expanded = realloc(
+        list->items,
+        new_capacity * sizeof(*expanded));
+    if (!expanded)
+    {
+        return LANTERN_CLIENT_PENDING_ERR_ALLOC;
+    }
+    list->items = expanded;
+    list->capacity = new_capacity;
+    return LANTERN_CLIENT_PENDING_OK;
+}
+
+
+/**
+ * @brief Ensure the pending block list can hold at least `required` entries.
+ */
+static int ensure_pending_block_list_capacity(
+    struct lantern_pending_block_list *list,
+    size_t required)
+{
+    if (!list)
+    {
+        return LANTERN_CLIENT_PENDING_ERR_INVALID_PARAM;
+    }
+
+    if (list->capacity >= required)
+    {
+        return LANTERN_CLIENT_PENDING_OK;
+    }
+
+    size_t new_capacity = BLOCK_LIST_INITIAL_CAPACITY;
+    if (list->capacity > 0)
+    {
+        size_t half = list->capacity / 2u;
+        if (list->capacity > SIZE_MAX - half)
+        {
+            return LANTERN_CLIENT_PENDING_ERR_OVERFLOW;
+        }
+        new_capacity = list->capacity + half;
+        if (new_capacity < BLOCK_LIST_INITIAL_CAPACITY)
+        {
+            new_capacity = BLOCK_LIST_INITIAL_CAPACITY;
+        }
+    }
+
+    if (new_capacity < required)
+    {
+        new_capacity = required;
+    }
+
+    if (new_capacity > SIZE_MAX / sizeof(*list->items))
+    {
+        return LANTERN_CLIENT_PENDING_ERR_OVERFLOW;
+    }
+
+    struct lantern_pending_block *expanded = realloc(
+        list->items,
+        new_capacity * sizeof(*expanded));
+    if (!expanded)
+    {
+        return LANTERN_CLIENT_PENDING_ERR_ALLOC;
+    }
+    list->items = expanded;
+    list->capacity = new_capacity;
+    return LANTERN_CLIENT_PENDING_OK;
+}
 
 
 /* ============================================================================
@@ -24,7 +151,9 @@
  *
  * @param source  Source block to clone
  * @param dest    Destination block (will be initialized)
- * @return 0 on success, -1 on failure
+ * @return LANTERN_CLIENT_PENDING_OK on success
+ * @return LANTERN_CLIENT_PENDING_ERR_INVALID_PARAM if any parameter is NULL
+ * @return LANTERN_CLIENT_PENDING_ERR_COPY if block cloning fails
  *
  * @note Thread safety: This function is thread-safe
  */
@@ -32,7 +161,7 @@ int clone_signed_block(const LanternSignedBlock *source, LanternSignedBlock *des
 {
     if (!source || !dest)
     {
-        return -1;
+        return LANTERN_CLIENT_PENDING_ERR_INVALID_PARAM;
     }
 
     lantern_signed_block_with_attestation_init(dest);
@@ -46,7 +175,7 @@ int clone_signed_block(const LanternSignedBlock *source, LanternSignedBlock *des
             &source->message.block.body.attestations) != 0)
     {
         lantern_signed_block_with_attestation_reset(dest);
-        return -1;
+        return LANTERN_CLIENT_PENDING_ERR_COPY;
     }
 
     dest->message.proposer_attestation = source->message.proposer_attestation;
@@ -54,10 +183,10 @@ int clone_signed_block(const LanternSignedBlock *source, LanternSignedBlock *des
     if (lantern_block_signatures_copy(&dest->signatures, &source->signatures) != 0)
     {
         lantern_signed_block_with_attestation_reset(dest);
-        return -1;
+        return LANTERN_CLIENT_PENDING_ERR_COPY;
     }
 
-    return 0;
+    return LANTERN_CLIENT_PENDING_OK;
 }
 
 
@@ -117,7 +246,11 @@ void persisted_block_list_reset(struct lantern_persisted_block_list *list)
  * @param list   List to append to
  * @param block  Block to append
  * @param root   Root of the block
- * @return 0 on success, -1 on failure
+ * @return LANTERN_CLIENT_PENDING_OK on success
+ * @return LANTERN_CLIENT_PENDING_ERR_INVALID_PARAM if any parameter is NULL
+ * @return LANTERN_CLIENT_PENDING_ERR_OVERFLOW if the list size would overflow
+ * @return LANTERN_CLIENT_PENDING_ERR_ALLOC if allocation fails
+ * @return LANTERN_CLIENT_PENDING_ERR_COPY if block cloning fails
  *
  * @note Thread safety: This function is thread-safe
  */
@@ -128,32 +261,30 @@ int persisted_block_list_append(
 {
     if (!list || !block || !root)
     {
-        return -1;
+        return LANTERN_CLIENT_PENDING_ERR_INVALID_PARAM;
     }
 
-    if (list->length == list->capacity)
+    if (list->length == SIZE_MAX)
     {
-        size_t new_capacity = list->capacity == 0 ? 4u : list->capacity * 2u;
-        struct lantern_persisted_block *expanded = realloc(
-            list->items,
-            new_capacity * sizeof(*expanded));
-        if (!expanded)
-        {
-            return -1;
-        }
-        list->items = expanded;
-        list->capacity = new_capacity;
+        return LANTERN_CLIENT_PENDING_ERR_OVERFLOW;
+    }
+
+    int ensure_rc = ensure_persisted_block_list_capacity(list, list->length + 1u);
+    if (ensure_rc != LANTERN_CLIENT_PENDING_OK)
+    {
+        return ensure_rc;
     }
 
     struct lantern_persisted_block *entry = &list->items[list->length];
-    if (clone_signed_block(block, &entry->block) != 0)
+    int clone_rc = clone_signed_block(block, &entry->block);
+    if (clone_rc != LANTERN_CLIENT_PENDING_OK)
     {
-        return -1;
+        return clone_rc;
     }
     entry->root = *root;
     list->length += 1;
 
-    return 0;
+    return LANTERN_CLIENT_PENDING_OK;
 }
 
 
@@ -299,24 +430,20 @@ struct lantern_pending_block *pending_block_list_append(
         return NULL;
     }
 
-    if (list->length == list->capacity)
+    if (list->length == SIZE_MAX)
     {
-        size_t new_capacity = list->capacity == 0 ? 4u : list->capacity * 2u;
-        struct lantern_pending_block *expanded = realloc(
-            list->items,
-            new_capacity * sizeof(*expanded));
-        if (!expanded)
-        {
-            return NULL;
-        }
-        list->items = expanded;
-        list->capacity = new_capacity;
+        return NULL;
+    }
+
+    int ensure_rc = ensure_pending_block_list_capacity(list, list->length + 1u);
+    if (ensure_rc != LANTERN_CLIENT_PENDING_OK)
+    {
+        return NULL;
     }
 
     struct lantern_pending_block *entry = &list->items[list->length];
-    if (clone_signed_block(block, &entry->block) != 0)
+    if (clone_signed_block(block, &entry->block) != LANTERN_CLIENT_PENDING_OK)
     {
-        lantern_signed_block_with_attestation_reset(&entry->block);
         memset(entry, 0, sizeof(*entry));
         return NULL;
     }
