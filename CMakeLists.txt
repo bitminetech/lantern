@@ -49,10 +49,12 @@ add_library(lantern STATIC
     src/core/client_sync.c
     src/core/client_sync_blocks.c
     src/core/client_sync_votes.c
-    src/core/client_utils.c
-    src/core/client_validator.c
-    src/genesis/genesis.c
-    src/encoding/snappy.c
+	    src/core/client_utils.c
+	    src/core/client_validator.c
+	    src/genesis/genesis.c
+	    src/genesis/genesis_parse.c
+	    src/genesis/genesis_validator_config.c
+	    src/encoding/snappy.c
     src/networking/enr.c
     src/networking/gossip.c
     src/networking/gossipsub_service.c

@@ -32,6 +32,33 @@ static void fill_pattern(uint8_t *dst, size_t len, uint8_t seed) {
     }
 }
 
+static uint32_t crc32c(const uint8_t *data, size_t len) {
+    const uint32_t poly = 0x82F63B78u;
+    uint32_t crc = 0xFFFFFFFFu;
+    for (size_t i = 0; i < len; ++i) {
+        crc ^= (uint32_t)data[i];
+        for (size_t bit = 0; bit < 8u; ++bit) {
+            if (crc & 1u) {
+                crc = (crc >> 1u) ^ poly;
+            } else {
+                crc >>= 1u;
+            }
+        }
+    }
+    return ~crc;
+}
+
+static uint32_t mask_crc32c(uint32_t crc) {
+    return ((crc >> 15u) | (crc << 17u)) + 0xA282EAD8u;
+}
+
+static void write_u32_le(uint32_t value, uint8_t *dst) {
+    dst[0] = (uint8_t)(value & 0xFFu);
+    dst[1] = (uint8_t)((value >> 8u) & 0xFFu);
+    dst[2] = (uint8_t)((value >> 16u) & 0xFFu);
+    dst[3] = (uint8_t)((value >> 24u) & 0xFFu);
+}
+
 static size_t append_chunk(uint8_t type, const uint8_t *payload, size_t payload_len, uint8_t *dst) {
     dst[0] = type;
     dst[1] = (uint8_t)(payload_len & 0xffu);
@@ -112,7 +139,8 @@ static void test_invalid_payload(void) {
 static void test_framed_uncompressed_chunks(void) {
     uint8_t payload[] = {0x00, 0x11, 0x22, 0x33};
     uint8_t chunk_data[sizeof(payload) + 4u];
-    memset(chunk_data, 0, 4u);
+    uint32_t crc = mask_crc32c(crc32c(payload, sizeof(payload)));
+    write_u32_le(crc, chunk_data);
     memcpy(chunk_data + 4u, payload, sizeof(payload));
 
     uint8_t frame[64];
