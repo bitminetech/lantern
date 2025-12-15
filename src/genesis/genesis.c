@@ -10,17 +10,13 @@
 
 #include "lantern/genesis/genesis.h"
 
-#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "genesis_internal.h"
 #include "lantern/support/log.h"
-
-static int load_chain_config_and_pubkeys(
-    struct lantern_chain_config *config,
-    const char *config_path);
-
 
 /**
  * Initialize a genesis artifacts container.
@@ -69,6 +65,81 @@ void lantern_genesis_artifacts_reset(struct lantern_genesis_artifacts *artifacts
 
     free(artifacts->chain_config.validator_pubkeys);
     memset(&artifacts->chain_config, 0, sizeof(artifacts->chain_config));
+}
+
+
+/**
+ * @brief Loads chain configuration and genesis validator pubkeys.
+ *
+ * Populates `config` by parsing the chain configuration file. On success, any
+ * genesis pubkeys returned via `config->validator_pubkeys` are owned by `config`
+ * and must be freed by the caller (typically via `lantern_genesis_artifacts_reset()`).
+ *
+ * @param config      Chain config to populate.
+ * @param config_path Path to the chain config file.
+ *
+ * @return LANTERN_GENESIS_OK on success
+ * @return LANTERN_GENESIS_ERR_INVALID_PARAM on NULL inputs
+ * @return LANTERN_GENESIS_ERR_IO on file I/O failures
+ * @return LANTERN_GENESIS_ERR_OUT_OF_MEMORY on allocation failure
+ * @return LANTERN_GENESIS_ERR_INVALID_DATA on parse/validation failures
+ *
+ * @note Thread safety: Caller must ensure exclusive access to `config`.
+ */
+static int load_chain_config_and_pubkeys(
+    struct lantern_chain_config *config,
+    const char *config_path)
+{
+    if (!config || !config_path)
+    {
+        return LANTERN_GENESIS_ERR_INVALID_PARAM;
+    }
+
+    int result = genesis_parse_chain_config(config_path, config);
+    if (result != LANTERN_GENESIS_OK)
+    {
+        lantern_log_error("genesis", NULL, "failed to parse chain config at %s", config_path);
+        return result;
+    }
+
+    uint8_t *pubkeys = NULL;
+    size_t pubkey_count = 0;
+    result = genesis_parse_genesis_validator_pubkeys(config_path, &pubkeys, &pubkey_count);
+    if (result != LANTERN_GENESIS_OK)
+    {
+        lantern_log_error("genesis", NULL, "failed to parse genesis pubkeys at %s", config_path);
+        return result;
+    }
+
+    if (pubkeys && pubkey_count > 0)
+    {
+        config->validator_pubkeys = pubkeys;
+        config->validator_pubkeys_count = pubkey_count;
+        if (config->validator_count == 0)
+        {
+            config->validator_count = pubkey_count;
+        }
+
+        lantern_log_info(
+            "genesis",
+            NULL,
+            "loaded %zu genesis pubkeys from %s",
+            pubkey_count,
+            config_path);
+    }
+    else
+    {
+        free(pubkeys);
+        lantern_log_warn("genesis", NULL, "no genesis pubkeys found in %s", config_path);
+    }
+
+    if (config->validator_count == 0)
+    {
+        lantern_log_error("genesis", NULL, "validator count missing or zero in %s", config_path);
+        return LANTERN_GENESIS_ERR_INVALID_DATA;
+    }
+
+    return LANTERN_GENESIS_OK;
 }
 
 
@@ -175,61 +246,4 @@ int lantern_genesis_load(
 error:
     lantern_genesis_artifacts_reset(artifacts);
     return result;
-}
-
-
-static int load_chain_config_and_pubkeys(
-    struct lantern_chain_config *config,
-    const char *config_path)
-{
-    if (!config || !config_path)
-    {
-        return LANTERN_GENESIS_ERR_INVALID_PARAM;
-    }
-
-    int result = genesis_parse_chain_config(config_path, config);
-    if (result != LANTERN_GENESIS_OK)
-    {
-        lantern_log_error("genesis", NULL, "failed to parse chain config at %s", config_path);
-        return result;
-    }
-
-    uint8_t *pubkeys = NULL;
-    size_t pubkey_count = 0;
-    result = genesis_parse_genesis_validator_pubkeys(config_path, &pubkeys, &pubkey_count);
-    if (result != LANTERN_GENESIS_OK)
-    {
-        lantern_log_error("genesis", NULL, "failed to parse genesis pubkeys at %s", config_path);
-        return result;
-    }
-
-    if (pubkeys && pubkey_count > 0)
-    {
-        config->validator_pubkeys = pubkeys;
-        config->validator_pubkeys_count = pubkey_count;
-        if (config->validator_count == 0)
-        {
-            config->validator_count = pubkey_count;
-        }
-
-        lantern_log_info(
-            "genesis",
-            NULL,
-            "loaded %zu genesis pubkeys from %s",
-            pubkey_count,
-            config_path);
-    }
-    else
-    {
-        free(pubkeys);
-        lantern_log_warn("genesis", NULL, "no genesis pubkeys found in %s", config_path);
-    }
-
-    if (config->validator_count == 0)
-    {
-        lantern_log_error("genesis", NULL, "validator count missing or zero in %s", config_path);
-        return LANTERN_GENESIS_ERR_INVALID_DATA;
-    }
-
-    return LANTERN_GENESIS_OK;
 }
