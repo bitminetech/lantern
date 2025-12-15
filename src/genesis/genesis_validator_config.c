@@ -14,8 +14,8 @@
 
 #include <ctype.h>
 #include <errno.h>
-#include <limits.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,20 +26,21 @@
 static const size_t GENESIS_LINE_BUFFER_LEN = 2048;
 static const size_t GENESIS_INITIAL_INDEX_CAPACITY = 4;
 
-static uint64_t parse_u64(const char *value, int *ok);
+static uint64_t parse_u64(const char *value, bool *out_is_valid);
 static int compare_u64(const void *lhs, const void *rhs);
 static int append_assignment_index(struct lantern_validator_config_entry *entry, uint64_t index);
 static int parse_assignment_mapping_key(
-    char *line,
     struct lantern_validator_config *config,
+    char *line,
+    bool *out_is_mapping_key,
     struct lantern_validator_config_entry **out_entry);
 
 static int parse_assignment_file(
-    FILE *fp,
     struct lantern_validator_config *config,
+    FILE *fp,
     bool *assigned,
     uint64_t validator_count,
-    bool *out_saw_mapping,
+    bool *out_has_matching_entry,
     size_t *out_assigned_total);
 
 static int finalize_assignment_entries(
@@ -47,12 +48,25 @@ static int finalize_assignment_entries(
     uint64_t validator_count);
 
 
-/** @brief Parse a uint64_t with optional trailing comment. */
-static uint64_t parse_u64(const char *value, int *ok)
+/**
+ * Parse an unsigned 64-bit integer from a string, allowing a trailing comment.
+ *
+ * The parsed value may be followed by whitespace and an optional `#` comment.
+ * Callers must use `out_is_valid` to disambiguate a successful parse of `0`
+ * from a failure.
+ *
+ * @param value Input string to parse (not modified).
+ * @param out_is_valid Optional output flag set to true on success, false on failure.
+ *
+ * @return Parsed value on success, 0 on failure.
+ *
+ * @note Thread safety: Thread-safe.
+ */
+static uint64_t parse_u64(const char *value, bool *out_is_valid)
 {
-    if (ok)
+    if (out_is_valid)
     {
-        *ok = 0;
+        *out_is_valid = false;
     }
     if (!value)
     {
@@ -67,37 +81,48 @@ static uint64_t parse_u64(const char *value, int *ok)
         return 0;
     }
 
-    while (end && *end && isspace((unsigned char)*end))
+    while (*end != '\0' && isspace((unsigned char)*end))
     {
         ++end;
     }
-    if (end && *end != '\0' && *end != '#')
+    if (*end != '\0' && *end != '#')
     {
         return 0;
     }
-    if (parsed > UINT64_MAX)
+    if (parsed > (unsigned long long)UINT64_MAX)
     {
         return 0;
     }
 
-    if (ok)
+    if (out_is_valid)
     {
-        *ok = 1;
+        *out_is_valid = true;
     }
     return (uint64_t)parsed;
 }
 
 
-/** @brief Compare two uint64_t values for qsort. */
+/**
+ * Compare two `uint64_t` values for ascending sort order.
+ *
+ * @param lhs Pointer to a `uint64_t`.
+ * @param rhs Pointer to a `uint64_t`.
+ *
+ * @return -1 if lhs < rhs.
+ * @return  1 if lhs > rhs.
+ * @return  0 if equal.
+ *
+ * @note Thread safety: Thread-safe.
+ */
 static int compare_u64(const void *lhs, const void *rhs)
 {
-    const uint64_t *a = lhs;
-    const uint64_t *b = rhs;
-    if (*a < *b)
+    const uint64_t *left_value = lhs;
+    const uint64_t *right_value = rhs;
+    if (*left_value < *right_value)
     {
         return -1;
     }
-    if (*a > *b)
+    if (*left_value > *right_value)
     {
         return 1;
     }
@@ -105,7 +130,22 @@ static int compare_u64(const void *lhs, const void *rhs)
 }
 
 
-/** @brief Append a validator index to an entry's explicit assignment list. */
+/**
+ * Append a validator index to an entry's explicit index list.
+ *
+ * Rejects duplicate indices and grows `entry->indices` as needed.
+ *
+ * @param entry Entry to update.
+ * @param index Validator index to append.
+ *
+ * @return LANTERN_GENESIS_OK on success.
+ * @return LANTERN_GENESIS_ERR_INVALID_PARAM if entry is NULL.
+ * @return LANTERN_GENESIS_ERR_INVALID_DATA if index is already present.
+ * @return LANTERN_GENESIS_ERR_OUT_OF_MEMORY on allocation failure.
+ * @return LANTERN_GENESIS_ERR_OVERFLOW on capacity overflow.
+ *
+ * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to entry.
+ */
 static int append_assignment_index(struct lantern_validator_config_entry *entry, uint64_t index)
 {
     if (!entry)
@@ -113,9 +153,9 @@ static int append_assignment_index(struct lantern_validator_config_entry *entry,
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
 
-    for (size_t i = 0; i < entry->indices_len; ++i)
+    for (size_t index_pos = 0; index_pos < entry->indices_len; ++index_pos)
     {
-        if (entry->indices[i] == index)
+        if (entry->indices[index_pos] == index)
         {
             return LANTERN_GENESIS_ERR_INVALID_DATA;
         }
@@ -123,6 +163,11 @@ static int append_assignment_index(struct lantern_validator_config_entry *entry,
 
     if (entry->indices_len == entry->indices_cap)
     {
+        if (entry->indices_len == SIZE_MAX)
+        {
+            return LANTERN_GENESIS_ERR_OVERFLOW;
+        }
+
         if (entry->indices_cap > SIZE_MAX / 2)
         {
             return LANTERN_GENESIS_ERR_OVERFLOW;
@@ -158,31 +203,52 @@ static int append_assignment_index(struct lantern_validator_config_entry *entry,
 }
 
 
-/** @brief Parse a YAML mapping key of the form "<name>:" with no inline value. */
+/**
+ * Parse a validators.yaml mapping key line.
+ *
+ * Accepts `<name>:` lines with optional trailing whitespace and/or a `#` comment,
+ * and rejects inline values (e.g. `name: 1`). When a mapping is detected, `line`
+ * is modified in place by replacing the colon with `\0`.
+ *
+ * @param config          Validator config to search.
+ * @param line            Line buffer to parse (modified in place).
+ * @param out_is_mapping_key Set to true if the line is a mapping key, false otherwise.
+ * @param out_entry       Set to the matching entry, or NULL if not found.
+ *
+ * @return LANTERN_GENESIS_OK on success (including non-mapping lines).
+ * @return LANTERN_GENESIS_ERR_INVALID_PARAM on invalid parameters.
+ * @return LANTERN_GENESIS_ERR_INVALID_DATA if the mapping key is empty.
+ *
+ * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to config.
+ */
 static int parse_assignment_mapping_key(
-    char *line,
     struct lantern_validator_config *config,
+    char *line,
+    bool *out_is_mapping_key,
     struct lantern_validator_config_entry **out_entry)
 {
-    if (!line || !config || !out_entry)
+    if (!config || !line || !out_is_mapping_key || !out_entry)
     {
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
 
+    *out_is_mapping_key = false;
     *out_entry = NULL;
 
     char *colon = strchr(line, ':');
     if (!colon)
     {
-        return 0;
+        return LANTERN_GENESIS_OK;
     }
 
-    for (char *p = colon + 1; p && *p; ++p)
+    char *value = colon + 1;
+    while (*value != '\0' && isspace((unsigned char)*value))
     {
-        if (!isspace((unsigned char)*p))
-        {
-            return 0;
-        }
+        ++value;
+    }
+    if (*value != '\0' && *value != '#')
+    {
+        return LANTERN_GENESIS_OK;
     }
 
     *colon = '\0';
@@ -201,26 +267,53 @@ static int parse_assignment_mapping_key(
         ++name;
     }
 
+    if (*name == '\0')
+    {
+        return LANTERN_GENESIS_ERR_INVALID_DATA;
+    }
+
     *out_entry = lantern_validator_config_find(config, name);
-    return 1;
+    *out_is_mapping_key = true;
+    return LANTERN_GENESIS_OK;
 }
 
 
-/** @brief Parse validators.yaml mapping into explicit indices on config entries. */
+/**
+ * Parse a validators.yaml mapping file into explicit indices on config entries.
+ *
+ * Updates `entry->indices` for each mapping key that matches a config entry. List
+ * items under unknown mapping keys are ignored. If `assigned` is provided, it is
+ * used as a global uniqueness tracker across all entries.
+ *
+ * @param config             Validator config to update in place.
+ * @param fp                 Open file handle to read from.
+ * @param assigned           Optional bitset of length validator_count, or NULL.
+ * @param validator_count    Maximum allowed validator index is validator_count - 1.
+ * @param out_has_matching_entry Set true if at least one mapping key matched an entry.
+ * @param out_assigned_total Total number of unique indices assigned across entries.
+ *
+ * @return LANTERN_GENESIS_OK on success.
+ * @return LANTERN_GENESIS_ERR_INVALID_PARAM on invalid parameters.
+ * @return LANTERN_GENESIS_ERR_INVALID_DATA on malformed, duplicate, or out-of-range data.
+ * @return LANTERN_GENESIS_ERR_OUT_OF_MEMORY on allocation failure.
+ * @return LANTERN_GENESIS_ERR_OVERFLOW on overflow.
+ *
+ * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to config.
+ */
 static int parse_assignment_file(
-    FILE *fp,
     struct lantern_validator_config *config,
+    FILE *fp,
     bool *assigned,
     uint64_t validator_count,
-    bool *out_saw_mapping,
+    bool *out_has_matching_entry,
     size_t *out_assigned_total)
 {
-    if (!fp || !config || !out_saw_mapping || !out_assigned_total)
+    if (!fp || !config || !out_has_matching_entry || !out_assigned_total)
     {
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
 
-    *out_saw_mapping = false;
+    *out_has_matching_entry = false;
     *out_assigned_total = 0;
 
     struct lantern_validator_config_entry *current = NULL;
@@ -247,9 +340,9 @@ static int parse_assignment_file(
                 continue;
             }
 
-            int ok = 0;
-            uint64_t parsed = parse_u64(value, &ok);
-            if (!ok || parsed >= validator_count)
+            bool is_valid_index = false;
+            uint64_t parsed = parse_u64(value, &is_valid_index);
+            if (!is_valid_index || parsed >= validator_count)
             {
                 return LANTERN_GENESIS_ERR_INVALID_DATA;
             }
@@ -271,12 +364,13 @@ static int parse_assignment_file(
         }
 
         struct lantern_validator_config_entry *entry = NULL;
-        int mapping_rc = parse_assignment_mapping_key(trimmed, config, &entry);
-        if (mapping_rc < 0)
+        bool is_mapping_key = false;
+        int mapping_rc = parse_assignment_mapping_key(config, trimmed, &is_mapping_key, &entry);
+        if (mapping_rc != LANTERN_GENESIS_OK)
         {
             return mapping_rc;
         }
-        if (mapping_rc == 0)
+        if (!is_mapping_key)
         {
             current = NULL;
             continue;
@@ -285,7 +379,7 @@ static int parse_assignment_file(
         current = entry;
         if (entry)
         {
-            *out_saw_mapping = true;
+            *out_has_matching_entry = true;
             entry->indices_len = 0;
         }
     }
@@ -294,7 +388,22 @@ static int parse_assignment_file(
 }
 
 
-/** @brief Validate and finalize assignment entries after parsing. */
+/**
+ * Validate and finalize config entries after explicit assignments are parsed.
+ *
+ * Ensures each entry has exactly `entry->count` explicit indices, sorts them,
+ * and derives a `[start_index, end_index)` range from the minimum and maximum.
+ *
+ * @param config          Validator config to validate and update in place.
+ * @param validator_count Total number of validators (must be non-zero).
+ *
+ * @return LANTERN_GENESIS_OK on success.
+ * @return LANTERN_GENESIS_ERR_INVALID_PARAM on invalid parameters.
+ * @return LANTERN_GENESIS_ERR_INVALID_DATA if any entry is missing indices or has a mismatch.
+ * @return LANTERN_GENESIS_ERR_OVERFLOW if computing the end index would overflow.
+ *
+ * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to config.
+ */
 static int finalize_assignment_entries(
     struct lantern_validator_config *config,
     uint64_t validator_count)
@@ -304,9 +413,9 @@ static int finalize_assignment_entries(
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
 
-    for (size_t i = 0; i < config->count; ++i)
+    for (size_t entry_index = 0; entry_index < config->count; ++entry_index)
     {
-        struct lantern_validator_config_entry *entry = &config->entries[i];
+        struct lantern_validator_config_entry *entry = &config->entries[entry_index];
         if (entry->indices_len != entry->count || entry->indices_len == 0)
         {
             return LANTERN_GENESIS_ERR_INVALID_DATA;
@@ -330,6 +439,18 @@ static int finalize_assignment_entries(
 }
 
 
+/**
+ * Find a validator config entry by name.
+ *
+ * @spec Lantern validator-config.yaml and validators.yaml mapping formats.
+ *
+ * @param config Validator config to search.
+ * @param name   Entry name to match (exact string compare).
+ *
+ * @return Matching entry pointer, or NULL if not found.
+ *
+ * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to config.
+ */
 struct lantern_validator_config_entry *lantern_validator_config_find(
     struct lantern_validator_config *config,
     const char *name)
@@ -339,11 +460,12 @@ struct lantern_validator_config_entry *lantern_validator_config_find(
         return NULL;
     }
 
-    for (size_t i = 0; i < config->count; ++i)
+    for (size_t entry_index = 0; entry_index < config->count; ++entry_index)
     {
-        if (config->entries[i].name && strcmp(config->entries[i].name, name) == 0)
+        if (config->entries[entry_index].name
+            && strcmp(config->entries[entry_index].name, name) == 0)
         {
-            return &config->entries[i];
+            return &config->entries[entry_index];
         }
     }
 
@@ -351,6 +473,23 @@ struct lantern_validator_config_entry *lantern_validator_config_find(
 }
 
 
+/**
+ * Assign contiguous validator index ranges for each config entry.
+ *
+ * Entries are assigned sequential ranges starting at index 0, in the order they
+ * appear in `config->entries`. The assigned range is `[start_index, end_index)`.
+ *
+ * @spec Lantern validator-config.yaml and validators.yaml mapping formats.
+ *
+ * @param config          Validator config to update in place.
+ * @param validator_count Total number of validators expected across all entries.
+ *
+ * @return LANTERN_GENESIS_OK on success.
+ * @return LANTERN_GENESIS_ERR_INVALID_PARAM on invalid parameters.
+ * @return LANTERN_GENESIS_ERR_INVALID_DATA if counts do not sum to validator_count.
+ *
+ * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to config.
+ */
 int lantern_validator_config_assign_ranges(
     struct lantern_validator_config *config,
     uint64_t validator_count)
@@ -361,9 +500,9 @@ int lantern_validator_config_assign_ranges(
     }
 
     uint64_t next_index = 0;
-    for (size_t i = 0; i < config->count; ++i)
+    for (size_t entry_index = 0; entry_index < config->count; ++entry_index)
     {
-        struct lantern_validator_config_entry *entry = &config->entries[i];
+        struct lantern_validator_config_entry *entry = &config->entries[entry_index];
         if (entry->count == 0)
         {
             return LANTERN_GENESIS_ERR_INVALID_DATA;
@@ -391,12 +530,39 @@ int lantern_validator_config_assign_ranges(
 }
 
 
+/**
+ * Apply explicit validator index assignments from a validators.yaml mapping file.
+ *
+ * The file is expected to contain YAML mappings of the form:
+ *
+ *   <entry-name>:
+ *     - <validator-index>
+ *     - ...
+ *
+ * Each config entry must list exactly `entry->count` unique indices, and the union
+ * of all indices must cover `[0, validator_count)` with no duplicates.
+ *
+ * @spec Lantern validator-config.yaml and validators.yaml mapping formats.
+ *
+ * @param config          Validator config to update in place.
+ * @param path            Filesystem path to validators.yaml.
+ * @param validator_count Total number of validators expected.
+ *
+ * @return LANTERN_GENESIS_OK on success.
+ * @return LANTERN_GENESIS_ERR_INVALID_PARAM on invalid parameters.
+ * @return LANTERN_GENESIS_ERR_IO if the file cannot be opened.
+ * @return LANTERN_GENESIS_ERR_OUT_OF_MEMORY on allocation failure.
+ * @return LANTERN_GENESIS_ERR_INVALID_DATA on malformed or inconsistent assignments.
+ * @return LANTERN_GENESIS_ERR_OVERFLOW on size/count overflow.
+ *
+ * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to config.
+ */
 int lantern_validator_config_apply_assignments(
     struct lantern_validator_config *config,
     const char *path,
     uint64_t validator_count)
 {
-    if (!config || !config->entries || config->count == 0 || !path)
+    if (!config || !config->entries || config->count == 0 || !path || validator_count == 0)
     {
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
@@ -406,6 +572,7 @@ int lantern_validator_config_apply_assignments(
         return LANTERN_GENESIS_ERR_OVERFLOW;
     }
 
+    int result = LANTERN_GENESIS_OK;
     FILE *fp = fopen(path, "r");
     if (!fp)
     {
@@ -419,42 +586,40 @@ int lantern_validator_config_apply_assignments(
         assigned = calloc(assigned_len, sizeof(*assigned));
         if (!assigned)
         {
-            fclose(fp);
-            return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
+            result = LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
+            goto cleanup;
         }
     }
 
-    bool saw_mapping = false;
+    bool has_matching_entry = false;
     size_t assigned_total = 0;
-    int result = parse_assignment_file(
-        fp,
+    result = parse_assignment_file(
         config,
+        fp,
         assigned,
         validator_count,
-        &saw_mapping,
+        &has_matching_entry,
         &assigned_total);
-
-    fclose(fp);
-
-    if (!saw_mapping)
-    {
-        free(assigned);
-        return (result == LANTERN_GENESIS_OK) ? LANTERN_GENESIS_OK : result;
-    }
-
     if (result != LANTERN_GENESIS_OK)
     {
-        free(assigned);
-        return result;
+        goto cleanup;
+    }
+
+    if (!has_matching_entry)
+    {
+        goto cleanup;
     }
 
     if (assigned_total != assigned_len)
     {
-        free(assigned);
-        return LANTERN_GENESIS_ERR_INVALID_DATA;
+        result = LANTERN_GENESIS_ERR_INVALID_DATA;
+        goto cleanup;
     }
 
     result = finalize_assignment_entries(config, validator_count);
+
+cleanup:
+    fclose(fp);
     free(assigned);
     return result;
 }
