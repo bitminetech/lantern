@@ -1,475 +1,1129 @@
-#include "lantern/http/metrics.h"
+/**
+ * @file metrics.c
+ * @brief Prometheus metrics HTTP endpoint.
+ *
+ * Exposes a Prometheus-compatible metrics endpoint:
+ * - GET /metrics
+ *
+ * Metrics are generated from a caller-provided snapshot callback.
+ *
+ * @spec Prometheus exposition format 0.0.4 and POSIX sockets/pthreads.
+ */
 
-#include "lantern/http/common.h"
-#include "lantern/support/log.h"
+#include "lantern/http/metrics.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <netinet/in.h>
 #include <pthread.h>
-#include <stdio.h>
 #include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 
-#define LANTERN_METRICS_BUFFER_SIZE 4096
+#include "lantern/http/common.h"
+#include "lantern/support/log.h"
 
-struct metrics_buffer {
-    char *data;
-    size_t len;
-    size_t cap;
+static const size_t LANTERN_METRICS_READ_BUFFER_SIZE = 4096;
+static const size_t LANTERN_METRICS_BODY_DEFAULT_CAP = 1024;
+static const size_t LANTERN_METRICS_BODY_INITIAL_CAP = 2048;
+static const int LANTERN_METRICS_LISTEN_BACKLOG = 16;
+static const char LANTERN_METRICS_ENDPOINT_PATH[] = "/metrics";
+static const char LANTERN_METRICS_TEXT_CONTENT_TYPE[] = "text/plain; version=0.0.4";
+
+enum
+{
+    LANTERN_METRICS_METHOD_CAP = 8,
+    LANTERN_METRICS_PATH_CAP = 128,
 };
 
-static int metrics_buffer_init(struct metrics_buffer *buf, size_t initial_cap) {
-    if (!buf) {
-        return -1;
+/**
+ * Metrics server module-specific error codes.
+ */
+typedef enum
+{
+    LANTERN_METRICS_SERVER_OK = 0,
+    LANTERN_METRICS_SERVER_ERR_INVALID_PARAM = -1,
+    LANTERN_METRICS_SERVER_ERR_OUT_OF_MEMORY = -2,
+    LANTERN_METRICS_SERVER_ERR_OVERFLOW = -3,
+    LANTERN_METRICS_SERVER_ERR_IO = -4,
+    LANTERN_METRICS_SERVER_ERR_FORMATTING = -5,
+    LANTERN_METRICS_SERVER_ERR_MALFORMED_REQUEST = -6,
+    LANTERN_METRICS_SERVER_ERR_UNAVAILABLE = -7,
+} lantern_metrics_server_error_t;
+
+static const char METRICS_JSON_MALFORMED_REQUEST[] = "{\"error\":\"malformed request\"}";
+static const char METRICS_JSON_UNKNOWN_ENDPOINT[] = "{\"error\":\"unknown endpoint\"}";
+static const char METRICS_JSON_UNAVAILABLE[] = "{\"error\":\"metrics unavailable\"}";
+static const char METRICS_JSON_FORMATTING_FAILED[] = "{\"error\":\"metrics formatting failed\"}";
+
+struct lantern_metrics_body_buffer
+{
+    char *data;  /**< Heap buffer (NUL-terminated). */
+    size_t len;  /**< Bytes written (excluding terminator). */
+    size_t cap;  /**< Allocated capacity in bytes. */
+};
+
+/**
+ * @brief Initialize a dynamic metrics body buffer.
+ *
+ * @param buf         Buffer to initialize (modified in place).
+ * @param initial_cap Initial allocation size in bytes (0 uses default).
+ *
+ * @return 0 on success.
+ * @return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM on invalid parameters.
+ * @return LANTERN_METRICS_SERVER_ERR_OUT_OF_MEMORY on allocation failure.
+ *
+ * @note Thread safety: This function is thread-safe.
+ */
+static int metrics_buffer_init(struct lantern_metrics_body_buffer *buf, size_t initial_cap)
+{
+    if (!buf)
+    {
+        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
     }
-    size_t capacity = initial_cap ? initial_cap : 1024;
+
+    size_t capacity = initial_cap != 0 ? initial_cap : LANTERN_METRICS_BODY_DEFAULT_CAP;
     buf->data = malloc(capacity);
-    if (!buf->data) {
-        return -1;
+    if (!buf->data)
+    {
+        return LANTERN_METRICS_SERVER_ERR_OUT_OF_MEMORY;
     }
+
     buf->len = 0;
     buf->cap = capacity;
     buf->data[0] = '\0';
     return 0;
 }
 
-static void metrics_buffer_free(struct metrics_buffer *buf) {
-    if (!buf) {
+
+/**
+ * @brief Free resources owned by a metrics body buffer.
+ *
+ * @param buf Buffer to free (may be NULL).
+ *
+ * @note Thread safety: This function is thread-safe.
+ */
+static void metrics_buffer_free(struct lantern_metrics_body_buffer *buf)
+{
+    if (!buf)
+    {
         return;
     }
+
     free(buf->data);
     buf->data = NULL;
     buf->len = 0;
     buf->cap = 0;
 }
 
-static int metrics_buffer_reserve(struct metrics_buffer *buf, size_t extra) {
-    if (!buf || extra == 0) {
+
+/**
+ * @brief Ensure the buffer can append the requested number of bytes.
+ *
+ * @param buf   Buffer to grow (modified in place).
+ * @param extra Additional bytes required (excluding NUL terminator).
+ *
+ * @return 0 on success.
+ * @return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM on invalid parameters.
+ * @return LANTERN_METRICS_SERVER_ERR_OUT_OF_MEMORY on allocation failure.
+ * @return LANTERN_METRICS_SERVER_ERR_OVERFLOW on size overflow.
+ *
+ * @note Thread safety: This function is thread-safe.
+ */
+static int metrics_buffer_reserve(struct lantern_metrics_body_buffer *buf, size_t extra)
+{
+    if (!buf)
+    {
+        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
+    }
+    if (extra == 0)
+    {
         return 0;
     }
+
+    if (buf->len >= SIZE_MAX - 1)
+    {
+        return LANTERN_METRICS_SERVER_ERR_OVERFLOW;
+    }
+    if (extra > (SIZE_MAX - buf->len - 1))
+    {
+        return LANTERN_METRICS_SERVER_ERR_OVERFLOW;
+    }
+
     size_t required = buf->len + extra + 1;
-    if (required <= buf->cap) {
+    if (required <= buf->cap)
+    {
         return 0;
     }
-    size_t new_cap = buf->cap ? buf->cap : 1024;
-    while (new_cap < required) {
-        if (new_cap > (SIZE_MAX / 2)) {
-            return -1;
+
+    size_t new_cap = buf->cap != 0 ? buf->cap : LANTERN_METRICS_BODY_DEFAULT_CAP;
+    while (new_cap < required)
+    {
+        if (new_cap > SIZE_MAX / 2)
+        {
+            return LANTERN_METRICS_SERVER_ERR_OVERFLOW;
         }
         new_cap *= 2;
     }
-    char *data = realloc(buf->data, new_cap);
-    if (!data) {
-        return -1;
+
+    char *new_data = realloc(buf->data, new_cap);
+    if (!new_data)
+    {
+        return LANTERN_METRICS_SERVER_ERR_OUT_OF_MEMORY;
     }
-    buf->data = data;
+
+    buf->data = new_data;
     buf->cap = new_cap;
     return 0;
 }
 
-static int metrics_buffer_appendf(struct metrics_buffer *buf, const char *fmt, ...) {
-    if (!buf || !fmt) {
-        return -1;
+
+/**
+ * @brief Append formatted text to a metrics body buffer.
+ *
+ * @param buf Buffer to append to (modified in place).
+ * @param fmt printf-style format string.
+ *
+ * @return 0 on success.
+ * @return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM on invalid parameters.
+ * @return LANTERN_METRICS_SERVER_ERR_OUT_OF_MEMORY on allocation failure.
+ * @return LANTERN_METRICS_SERVER_ERR_OVERFLOW on size overflow.
+ * @return LANTERN_METRICS_SERVER_ERR_FORMATTING on formatting failure.
+ *
+ * @note Thread safety: This function is thread-safe.
+ */
+static int metrics_buffer_appendf(struct lantern_metrics_body_buffer *buf, const char *fmt, ...)
+{
+    if (!buf || !fmt)
+    {
+        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
     }
+
     va_list args;
     va_start(args, fmt);
+
     va_list measure;
     va_copy(measure, args);
     int needed = vsnprintf(NULL, 0, fmt, measure);
     va_end(measure);
-    if (needed < 0) {
+    if (needed < 0)
+    {
         va_end(args);
-        return -1;
+        return LANTERN_METRICS_SERVER_ERR_FORMATTING;
     }
-    if (metrics_buffer_reserve(buf, (size_t)needed) != 0) {
+
+    int reserve_rc = metrics_buffer_reserve(buf, (size_t)needed);
+    if (reserve_rc != 0)
+    {
         va_end(args);
-        return -1;
+        return reserve_rc;
     }
+
     int written = vsnprintf(buf->data + buf->len, buf->cap - buf->len, fmt, args);
     va_end(args);
-    if (written < 0 || (size_t)written != (size_t)needed) {
-        return -1;
+    if (written < 0 || written != needed)
+    {
+        return LANTERN_METRICS_SERVER_ERR_FORMATTING;
     }
+
     buf->len += (size_t)written;
     return 0;
 }
 
-static int append_histogram_metrics(
-    struct metrics_buffer *buf,
+
+/**
+ * @brief Append a single Prometheus metric with a uint64 value.
+ */
+static int append_metric_uint64(
+    struct lantern_metrics_body_buffer *buf,
     const char *name,
     const char *help,
-    const struct lean_metrics_histogram_snapshot *hist) {
-    if (!buf || !name || !help || !hist) {
-        return -1;
+    const char *type,
+    uint64_t value)
+{
+    return metrics_buffer_appendf(
+        buf,
+        "# HELP %s %s\n"
+        "# TYPE %s %s\n"
+        "%s %" PRIu64 "\n",
+        name,
+        help,
+        name,
+        type,
+        name,
+        value);
+}
+
+
+/**
+ * @brief Append a single Prometheus metric with a size_t value.
+ */
+static int append_metric_size_t(
+    struct lantern_metrics_body_buffer *buf,
+    const char *name,
+    const char *help,
+    const char *type,
+    size_t value)
+{
+    return metrics_buffer_appendf(
+        buf,
+        "# HELP %s %s\n"
+        "# TYPE %s %s\n"
+        "%s %zu\n",
+        name,
+        help,
+        name,
+        type,
+        name,
+        value);
+}
+
+
+/**
+ * @brief Append a Prometheus histogram from a lean metrics snapshot.
+ */
+static int append_histogram_metrics(
+    struct lantern_metrics_body_buffer *buf,
+    const char *name,
+    const char *help,
+    const struct lean_metrics_histogram_snapshot *hist)
+{
+    if (!buf || !name || !help || !hist)
+    {
+        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
     }
-    if (metrics_buffer_appendf(buf, "# HELP %s %s\n# TYPE %s histogram\n", name, help, name) != 0) {
-        return -1;
+
+    int rc = metrics_buffer_appendf(
+        buf,
+        "# HELP %s %s\n"
+        "# TYPE %s histogram\n",
+        name,
+        help,
+        name);
+    if (rc != 0)
+    {
+        return rc;
     }
+
     size_t bucket_count = hist->bucket_count;
-    if (bucket_count > LEAN_METRICS_MAX_BUCKETS) {
+    if (bucket_count > LEAN_METRICS_MAX_BUCKETS)
+    {
         bucket_count = LEAN_METRICS_MAX_BUCKETS;
     }
-    for (size_t i = 0; i < bucket_count; ++i) {
+
+    for (size_t i = 0; i < bucket_count; ++i)
+    {
         double bound = hist->buckets[i];
-        if (metrics_buffer_appendf(
-                buf,
-                "%s_bucket{le=\"%.9g\"} %" PRIu64 "\n",
-                name,
-                bound,
-                hist->counts[i])
-            != 0) {
-            return -1;
+        rc = metrics_buffer_appendf(
+            buf,
+            "%s_bucket{le=\"%.9g\"} %" PRIu64 "\n",
+            name,
+            bound,
+            hist->counts[i]);
+        if (rc != 0)
+        {
+            return rc;
         }
     }
-    if (metrics_buffer_appendf(
-            buf,
-            "%s_bucket{le=\"+Inf\"} %" PRIu64 "\n",
-            name,
-            hist->counts[bucket_count])
-        != 0) {
-        return -1;
+
+    rc = metrics_buffer_appendf(
+        buf,
+        "%s_bucket{le=\"+Inf\"} %" PRIu64 "\n",
+        name,
+        hist->counts[bucket_count]);
+    if (rc != 0)
+    {
+        return rc;
     }
-    if (metrics_buffer_appendf(buf, "%s_sum %.9f\n%s_count %" PRIu64 "\n", name, hist->sum, name, hist->total) != 0) {
-        return -1;
+
+    rc = metrics_buffer_appendf(
+        buf,
+        "%s_sum %.9f\n"
+        "%s_count %" PRIu64 "\n",
+        name,
+        hist->sum,
+        name,
+        hist->total);
+    if (rc != 0)
+    {
+        return rc;
     }
+
     return 0;
 }
 
-static int format_metrics_body(
-    const struct lantern_metrics_snapshot *snapshot,
-    char **out_body,
-    size_t *out_len) {
-    if (!snapshot || !out_body || !out_len) {
-        return -1;
+
+/**
+ * @brief Append chain and lean subsystem metrics.
+ */
+static int append_lean_chain_metrics(
+    struct lantern_metrics_body_buffer *buf,
+    const struct lantern_metrics_snapshot *snapshot)
+{
+    if (!buf || !snapshot)
+    {
+        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
     }
 
-    struct metrics_buffer buf;
-    if (metrics_buffer_init(&buf, 2048) != 0) {
-        return -1;
+    int rc = append_metric_uint64(
+        buf,
+        "lean_head_slot",
+        "Latest slot of the lean chain",
+        "gauge",
+        snapshot->lean_head_slot);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_latest_justified_slot",
+        "Latest justified slot observed by state transition",
+        "gauge",
+        snapshot->lean_latest_justified_slot);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_latest_finalized_slot",
+        "Latest finalized slot observed by state transition",
+        "gauge",
+        snapshot->lean_latest_finalized_slot);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_size_t(
+        buf,
+        "lean_validators_count",
+        "Number of validators connected to this client",
+        "gauge",
+        snapshot->lean_validators_count);
+    if (rc != 0)
+    {
+        return rc;
     }
 
     const struct lean_metrics_snapshot *lean = &snapshot->lean_metrics;
-    if (metrics_buffer_appendf(
-            &buf,
-            "# HELP lean_head_slot Latest slot of the lean chain\n"
-            "# TYPE lean_head_slot gauge\n"
-            "lean_head_slot %" PRIu64 "\n"
-            "# HELP lean_latest_justified_slot Latest justified slot observed by state transition\n"
-            "# TYPE lean_latest_justified_slot gauge\n"
-            "lean_latest_justified_slot %" PRIu64 "\n"
-            "# HELP lean_latest_finalized_slot Latest finalized slot observed by state transition\n"
-            "# TYPE lean_latest_finalized_slot gauge\n"
-            "lean_latest_finalized_slot %" PRIu64 "\n"
-            "# HELP lean_validators_count Number of validators connected to this client\n"
-            "# TYPE lean_validators_count gauge\n"
-            "lean_validators_count %zu\n"
-            "# HELP lean_attestations_valid_total Total number of valid attestations\n"
-            "# TYPE lean_attestations_valid_total counter\n"
-            "lean_attestations_valid_total %" PRIu64 "\n"
-            "# HELP lean_attestations_invalid_total Total number of invalid attestations\n"
-            "# TYPE lean_attestations_invalid_total counter\n"
-            "lean_attestations_invalid_total %" PRIu64 "\n"
-            "# HELP lean_state_transition_slots_processed_total Total number of processed slots during state transitions\n"
-            "# TYPE lean_state_transition_slots_processed_total counter\n"
-            "lean_state_transition_slots_processed_total %" PRIu64 "\n"
-            "# HELP lean_state_transition_attestations_processed_total Total number of attestations processed during state transitions\n"
-            "# TYPE lean_state_transition_attestations_processed_total counter\n"
-            "lean_state_transition_attestations_processed_total %" PRIu64 "\n",
-            snapshot->lean_head_slot,
-            snapshot->lean_latest_justified_slot,
-            snapshot->lean_latest_finalized_slot,
-            snapshot->lean_validators_count,
-            lean->attestations_valid_total,
-            lean->attestations_invalid_total,
-            lean->state_transition_slots_processed_total,
-            lean->state_transition_attestations_processed_total)
-        != 0) {
-        metrics_buffer_free(&buf);
-        return -1;
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_attestations_valid_total",
+        "Total number of valid attestations",
+        "counter",
+        lean->attestations_valid_total);
+    if (rc != 0)
+    {
+        return rc;
     }
 
-    if (snapshot->peer_vote_metrics_count > 0) {
-        if (metrics_buffer_appendf(
-                &buf,
-                "# HELP lean_gossip_votes_received_total Vote gossip messages received per peer\n"
-                "# TYPE lean_gossip_votes_received_total counter\n")
-            != 0) {
-            metrics_buffer_free(&buf);
-            return -1;
-        }
-        for (size_t i = 0; i < snapshot->peer_vote_metrics_count; ++i) {
-            const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
-            if (metrics_buffer_appendf(
-                    &buf,
-                    "lean_gossip_votes_received_total{peer=\"%s\"} %" PRIu64 "\n",
-                    metric->peer_id,
-                    metric->received_total)
-                != 0) {
-                metrics_buffer_free(&buf);
-                return -1;
-            }
-        }
-        if (metrics_buffer_appendf(
-                &buf,
-                "# HELP lean_gossip_votes_accepted_total Vote gossip messages accepted per peer\n"
-                "# TYPE lean_gossip_votes_accepted_total counter\n")
-            != 0) {
-            metrics_buffer_free(&buf);
-            return -1;
-        }
-        for (size_t i = 0; i < snapshot->peer_vote_metrics_count; ++i) {
-            const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
-            if (metrics_buffer_appendf(
-                    &buf,
-                    "lean_gossip_votes_accepted_total{peer=\"%s\"} %" PRIu64 "\n",
-                    metric->peer_id,
-                    metric->accepted_total)
-                != 0) {
-                metrics_buffer_free(&buf);
-                return -1;
-            }
-        }
-        if (metrics_buffer_appendf(
-                &buf,
-                "# HELP lean_gossip_votes_rejected_total Vote gossip messages rejected per peer\n"
-                "# TYPE lean_gossip_votes_rejected_total counter\n")
-            != 0) {
-            metrics_buffer_free(&buf);
-            return -1;
-        }
-        for (size_t i = 0; i < snapshot->peer_vote_metrics_count; ++i) {
-            const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
-            if (metrics_buffer_appendf(
-                    &buf,
-                    "lean_gossip_votes_rejected_total{peer=\"%s\"} %" PRIu64 "\n",
-                    metric->peer_id,
-                    metric->rejected_total)
-                != 0) {
-                metrics_buffer_free(&buf);
-                return -1;
-            }
-        }
-        if (metrics_buffer_appendf(
-                &buf,
-                "# HELP lean_gossip_votes_last_validator_id Last validator id observed per peer\n"
-                "# TYPE lean_gossip_votes_last_validator_id gauge\n")
-            != 0) {
-            metrics_buffer_free(&buf);
-            return -1;
-        }
-        for (size_t i = 0; i < snapshot->peer_vote_metrics_count; ++i) {
-            const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
-            if (metrics_buffer_appendf(
-                    &buf,
-                    "lean_gossip_votes_last_validator_id{peer=\"%s\"} %" PRIu64 "\n",
-                    metric->peer_id,
-                    metric->last_validator_id)
-                != 0) {
-                metrics_buffer_free(&buf);
-                return -1;
-            }
-        }
-        if (metrics_buffer_appendf(
-                &buf,
-                "# HELP lean_gossip_votes_last_slot Last vote slot observed per peer\n"
-                "# TYPE lean_gossip_votes_last_slot gauge\n")
-            != 0) {
-            metrics_buffer_free(&buf);
-            return -1;
-        }
-        for (size_t i = 0; i < snapshot->peer_vote_metrics_count; ++i) {
-            const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
-            if (metrics_buffer_appendf(
-                    &buf,
-                    "lean_gossip_votes_last_slot{peer=\"%s\"} %" PRIu64 "\n",
-                    metric->peer_id,
-                    metric->last_slot)
-                != 0) {
-                metrics_buffer_free(&buf);
-                return -1;
-            }
+    rc = append_metric_uint64(
+        buf,
+        "lean_attestations_invalid_total",
+        "Total number of invalid attestations",
+        "counter",
+        lean->attestations_invalid_total);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_state_transition_slots_processed_total",
+        "Total number of processed slots during state transitions",
+        "counter",
+        lean->state_transition_slots_processed_total);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_state_transition_attestations_processed_total",
+        "Total number of attestations processed during state "
+        "transitions",
+        "counter",
+        lean->state_transition_attestations_processed_total);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    return 0;
+}
+
+
+/**
+ * @brief Append per-peer vote gossip metrics.
+ */
+static int append_peer_vote_metrics(
+    struct lantern_metrics_body_buffer *buf,
+    const struct lantern_metrics_snapshot *snapshot)
+{
+    if (!buf || !snapshot)
+    {
+        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
+    }
+    if (snapshot->peer_vote_metrics_count == 0)
+    {
+        return 0;
+    }
+
+    size_t count = snapshot->peer_vote_metrics_count;
+    if (count > LANTERN_METRICS_MAX_PEER_VOTE_STATS)
+    {
+        count = LANTERN_METRICS_MAX_PEER_VOTE_STATS;
+    }
+
+    int rc = metrics_buffer_appendf(
+        buf,
+        "# HELP lean_gossip_votes_received_total Vote gossip messages received per peer\n"
+        "# TYPE lean_gossip_votes_received_total counter\n");
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
+        char peer_id[sizeof(metric->peer_id)];
+        strncpy(peer_id, metric->peer_id, sizeof(peer_id) - 1);
+        peer_id[sizeof(peer_id) - 1] = '\0';
+
+        rc = metrics_buffer_appendf(
+            buf,
+            "lean_gossip_votes_received_total{peer=\"%s\"} %" PRIu64 "\n",
+            peer_id,
+            metric->received_total);
+        if (rc != 0)
+        {
+            return rc;
         }
     }
 
-    if (append_histogram_metrics(
-            &buf,
-            "lean_fork_choice_block_processing_time_seconds",
-            "Time taken to process block in fork choice",
-            &lean->fork_choice_block_time)
-        != 0
-        || append_histogram_metrics(
-               &buf,
-               "lean_attestation_validation_time_seconds",
-               "Time taken to validate attestation",
-               &lean->attestation_validation_time)
-            != 0
-        || append_histogram_metrics(
-               &buf,
-               "lean_state_transition_time_seconds",
-               "Time to process state transition",
-               &lean->state_transition_time)
-            != 0
-        || append_histogram_metrics(
-               &buf,
-               "lean_state_transition_slots_processing_time_seconds",
-               "Time taken to process slots during state transition",
-               &lean->state_slots_time)
-            != 0
-        || append_histogram_metrics(
-               &buf,
-               "lean_state_transition_block_processing_time_seconds",
-               "Time taken to process block during state transition",
-               &lean->state_block_time)
-            != 0
-        || append_histogram_metrics(
-               &buf,
-               "lean_state_transition_attestations_processing_time_seconds",
-               "Time taken to process attestations during state transition",
-               &lean->state_attestations_time)
-            != 0
-        || append_histogram_metrics(
-               &buf,
-               "lean_pq_signature_attestation_signing_time_seconds",
-               "Time taken to sign an attestation",
-               &lean->pq_signature_signing_time)
-            != 0
-        || append_histogram_metrics(
-               &buf,
-               "lean_pq_signature_attestation_verification_time_seconds",
-               "Time taken to verify an attestation signature",
-               &lean->pq_signature_verification_time)
-            != 0) {
-        metrics_buffer_free(&buf);
-        return -1;
+    rc = metrics_buffer_appendf(
+        buf,
+        "# HELP lean_gossip_votes_accepted_total Vote gossip messages accepted per peer\n"
+        "# TYPE lean_gossip_votes_accepted_total counter\n");
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
+        char peer_id[sizeof(metric->peer_id)];
+        strncpy(peer_id, metric->peer_id, sizeof(peer_id) - 1);
+        peer_id[sizeof(peer_id) - 1] = '\0';
+
+        rc = metrics_buffer_appendf(
+            buf,
+            "lean_gossip_votes_accepted_total{peer=\"%s\"} %" PRIu64 "\n",
+            peer_id,
+            metric->accepted_total);
+        if (rc != 0)
+        {
+            return rc;
+        }
+    }
+
+    rc = metrics_buffer_appendf(
+        buf,
+        "# HELP lean_gossip_votes_rejected_total Vote gossip messages rejected per peer\n"
+        "# TYPE lean_gossip_votes_rejected_total counter\n");
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
+        char peer_id[sizeof(metric->peer_id)];
+        strncpy(peer_id, metric->peer_id, sizeof(peer_id) - 1);
+        peer_id[sizeof(peer_id) - 1] = '\0';
+
+        rc = metrics_buffer_appendf(
+            buf,
+            "lean_gossip_votes_rejected_total{peer=\"%s\"} %" PRIu64 "\n",
+            peer_id,
+            metric->rejected_total);
+        if (rc != 0)
+        {
+            return rc;
+        }
+    }
+
+    rc = metrics_buffer_appendf(
+        buf,
+        "# HELP lean_gossip_votes_last_validator_id Last validator id observed per peer\n"
+        "# TYPE lean_gossip_votes_last_validator_id gauge\n");
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
+        char peer_id[sizeof(metric->peer_id)];
+        strncpy(peer_id, metric->peer_id, sizeof(peer_id) - 1);
+        peer_id[sizeof(peer_id) - 1] = '\0';
+
+        rc = metrics_buffer_appendf(
+            buf,
+            "lean_gossip_votes_last_validator_id{peer=\"%s\"} %" PRIu64 "\n",
+            peer_id,
+            metric->last_validator_id);
+        if (rc != 0)
+        {
+            return rc;
+        }
+    }
+
+    rc = metrics_buffer_appendf(
+        buf,
+        "# HELP lean_gossip_votes_last_slot Last vote slot observed per peer\n"
+        "# TYPE lean_gossip_votes_last_slot gauge\n");
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
+        char peer_id[sizeof(metric->peer_id)];
+        strncpy(peer_id, metric->peer_id, sizeof(peer_id) - 1);
+        peer_id[sizeof(peer_id) - 1] = '\0';
+
+        rc = metrics_buffer_appendf(
+            buf,
+            "lean_gossip_votes_last_slot{peer=\"%s\"} %" PRIu64 "\n",
+            peer_id,
+            metric->last_slot);
+        if (rc != 0)
+        {
+            return rc;
+        }
+    }
+
+    return 0;
+}
+
+
+/**
+ * @brief Append histogram metrics derived from the lean metrics snapshot.
+ */
+static int append_lean_histograms(
+    struct lantern_metrics_body_buffer *buf,
+    const struct lean_metrics_snapshot *lean)
+{
+    if (!buf || !lean)
+    {
+        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
+    }
+
+    int rc = append_histogram_metrics(
+        buf,
+        "lean_fork_choice_block_processing_time_seconds",
+        "Time taken to process block in fork choice",
+        &lean->fork_choice_block_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_attestation_validation_time_seconds",
+        "Time taken to validate attestation",
+        &lean->attestation_validation_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_state_transition_time_seconds",
+        "Time to process state transition",
+        &lean->state_transition_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_state_transition_slots_processing_time_seconds",
+        "Time taken to process slots during state transition",
+        &lean->state_slots_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_state_transition_block_processing_time_seconds",
+        "Time taken to process block during state transition",
+        &lean->state_block_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_state_transition_attestations_processing_time_seconds",
+        "Time taken to process attestations during state transition",
+        &lean->state_attestations_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_pq_signature_attestation_signing_time_seconds",
+        "Time taken to sign an attestation",
+        &lean->pq_signature_signing_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_pq_signature_attestation_verification_time_seconds",
+        "Time taken to verify an attestation signature",
+        &lean->pq_signature_verification_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    return 0;
+}
+
+
+/**
+ * Format a metrics snapshot as a Prometheus text body.
+ *
+ * @param snapshot Metrics snapshot (not modified).
+ * @param out_body Output heap buffer (caller owns on success).
+ * @param out_len  Output body length in bytes (excluding terminator).
+ *
+ * @return 0 on success.
+ * @return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM on invalid parameters.
+ * @return LANTERN_METRICS_SERVER_ERR_OUT_OF_MEMORY on allocation failure.
+ * @return LANTERN_METRICS_SERVER_ERR_OVERFLOW on size overflow.
+ * @return LANTERN_METRICS_SERVER_ERR_FORMATTING on formatting failure.
+ *
+ * @note Thread safety: This function is thread-safe.
+ */
+static int format_metrics_body(
+    const struct lantern_metrics_snapshot *snapshot,
+    char **out_body,
+    size_t *out_len)
+{
+    if (!snapshot || !out_body || !out_len)
+    {
+        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
+    }
+
+    int result = 0;
+    struct lantern_metrics_body_buffer buf;
+    memset(&buf, 0, sizeof(buf));
+
+    result = metrics_buffer_init(&buf, LANTERN_METRICS_BODY_INITIAL_CAP);
+    if (result != 0)
+    {
+        return result;
+    }
+
+    result = append_lean_chain_metrics(&buf, snapshot);
+    if (result != 0)
+    {
+        goto cleanup;
+    }
+
+    result = append_peer_vote_metrics(&buf, snapshot);
+    if (result != 0)
+    {
+        goto cleanup;
+    }
+
+    result = append_lean_histograms(&buf, &snapshot->lean_metrics);
+    if (result != 0)
+    {
+        goto cleanup;
     }
 
     *out_body = buf.data;
     *out_len = buf.len;
+    buf.data = NULL;
+    result = 0;
+
+cleanup:
+    metrics_buffer_free(&buf);
+    return result;
+}
+
+
+/**
+ * Convert a peer address to a printable string.
+ *
+ * @param peer_addr Peer address (may be NULL).
+ * @param out       Output buffer (NUL-terminated on return).
+ * @param out_len   Output buffer length.
+ *
+ * @note Thread safety: This function is thread-safe.
+ */
+static void peer_to_text(const struct sockaddr_in *peer_addr, char *out, size_t out_len)
+{
+    if (!out || out_len == 0)
+    {
+        return;
+    }
+
+    const char *fallback = "unknown";
+    if (!peer_addr)
+    {
+        strncpy(out, fallback, out_len - 1);
+        out[out_len - 1] = '\0';
+        return;
+    }
+
+    if (!inet_ntop(AF_INET, &peer_addr->sin_addr, out, out_len))
+    {
+        strncpy(out, fallback, out_len - 1);
+        out[out_len - 1] = '\0';
+    }
+}
+
+
+/**
+ * Parse a minimal HTTP request line (method and path).
+ *
+ * @param request    Request bytes (NUL-terminated).
+ * @param method     Output method buffer (NUL-terminated on success).
+ * @param method_len Method buffer length.
+ * @param path       Output path buffer (NUL-terminated on success).
+ * @param path_len   Path buffer length.
+ *
+ * @return 0 on success.
+ * @return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM on invalid parameters.
+ * @return LANTERN_METRICS_SERVER_ERR_MALFORMED_REQUEST on parse failure.
+ *
+ * @note Thread safety: This function is thread-safe.
+ */
+static int parse_request_line(
+    const char *request,
+    char *method,
+    size_t method_len,
+    char *path,
+    size_t path_len)
+{
+    if (!request || !method || method_len == 0 || !path || path_len == 0)
+    {
+        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
+    }
+
+    const char *space = strchr(request, ' ');
+    if (!space)
+    {
+        return LANTERN_METRICS_SERVER_ERR_MALFORMED_REQUEST;
+    }
+
+    size_t method_written = (size_t)(space - request);
+    if (method_written == 0 || method_written >= method_len)
+    {
+        return LANTERN_METRICS_SERVER_ERR_MALFORMED_REQUEST;
+    }
+
+    memcpy(method, request, method_written);
+    method[method_written] = '\0';
+
+    const char *cursor = space;
+    while (*cursor == ' ')
+    {
+        ++cursor;
+    }
+    if (*cursor == '\0')
+    {
+        return LANTERN_METRICS_SERVER_ERR_MALFORMED_REQUEST;
+    }
+
+    const char *path_start = cursor;
+    while (*cursor != '\0'
+        && *cursor != ' '
+        && *cursor != '\r'
+        && *cursor != '\n'
+        && *cursor != '\t')
+    {
+        ++cursor;
+    }
+
+    size_t path_written = (size_t)(cursor - path_start);
+    if (path_written == 0 || path_written >= path_len)
+    {
+        return LANTERN_METRICS_SERVER_ERR_MALFORMED_REQUEST;
+    }
+
+    memcpy(path, path_start, path_written);
+    path[path_written] = '\0';
     return 0;
 }
 
-static void handle_metrics_request(
+
+/**
+ * Send an HTTP response and map common errors to metrics error codes.
+ *
+ * @param client_fd    Client socket file descriptor.
+ * @param status_code  HTTP status code.
+ * @param status_text  HTTP status text.
+ * @param content_type Content-Type header value.
+ * @param body         Response body (may be NULL when body_len is 0).
+ * @param body_len     Response body length in bytes.
+ *
+ * @return 0 on success.
+ * @return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM on invalid parameters.
+ * @return LANTERN_METRICS_SERVER_ERR_FORMATTING on header formatting failure.
+ * @return LANTERN_METRICS_SERVER_ERR_IO on send failure.
+ *
+ * @note Thread safety: Caller must ensure exclusive access to client_fd.
+ */
+static int send_http_response(
+    int client_fd,
+    int status_code,
+    const char *status_text,
+    const char *content_type,
+    const char *body,
+    size_t body_len)
+{
+    int rc = lantern_http_send_response(
+        client_fd,
+        status_code,
+        status_text,
+        content_type,
+        body,
+        body_len);
+    if (rc == 0)
+    {
+        return 0;
+    }
+
+    if (rc == -1)
+    {
+        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
+    }
+    if (rc == -3)
+    {
+        return LANTERN_METRICS_SERVER_ERR_FORMATTING;
+    }
+    return LANTERN_METRICS_SERVER_ERR_IO;
+}
+
+
+/**
+ * Send a JSON error response.
+ *
+ * @param client_fd   Client socket file descriptor.
+ * @param status_code HTTP status code.
+ * @param status_text HTTP status text.
+ * @param json_body   JSON body (may be NULL).
+ *
+ * @return 0 on success.
+ * @return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM on invalid parameters.
+ * @return LANTERN_METRICS_SERVER_ERR_FORMATTING on formatting failure.
+ * @return LANTERN_METRICS_SERVER_ERR_IO on send failure.
+ *
+ * @note Thread safety: Caller must ensure exclusive access to client_fd.
+ */
+static int send_json_error(
+    int client_fd,
+    int status_code,
+    const char *status_text,
+    const char *json_body)
+{
+    if (!json_body)
+    {
+        return send_http_response(client_fd, status_code, status_text, "application/json", NULL, 0);
+    }
+
+    return send_http_response(
+        client_fd,
+        status_code,
+        status_text,
+        "application/json",
+        json_body,
+        strlen(json_body));
+}
+
+
+/**
+ * Handle a single client connection.
+ *
+ * @param server    Metrics server instance.
+ * @param client_fd Client socket file descriptor.
+ * @param peer_addr Peer address (may be NULL).
+ *
+ * @note Thread safety: This function is thread-safe if callbacks are thread-safe.
+ */
+static void handle_client_connection(
     struct lantern_metrics_server *server,
     int client_fd,
-    const struct sockaddr_in *peer_addr) {
-    char buffer[LANTERN_METRICS_BUFFER_SIZE];
-    ssize_t received = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
-    if (received <= 0) {
+    const struct sockaddr_in *peer_addr)
+{
+    if (!server || client_fd < 0)
+    {
         return;
     }
-    buffer[received] = '\0';
 
-    char method[8];
-    char path[128];
-    if (sscanf(buffer, "%7s %127s", method, path) != 2) {
-        lantern_http_send_response(
-            client_fd,
-            400,
-            "Bad Request",
-            "application/json",
-            "{\"error\":\"malformed request\"}",
-            strlen("{\"error\":\"malformed request\"}"));
-        return;
-    }
     char peer_text[INET_ADDRSTRLEN];
-    if (peer_addr) {
-        if (!inet_ntop(AF_INET, &peer_addr->sin_addr, peer_text, sizeof(peer_text))) {
-            strncpy(peer_text, "unknown", sizeof(peer_text));
-            peer_text[sizeof(peer_text) - 1] = '\0';
-        }
-    } else {
-        strncpy(peer_text, "unknown", sizeof(peer_text));
-        peer_text[sizeof(peer_text) - 1] = '\0';
-    }
+    peer_to_text(peer_addr, peer_text, sizeof(peer_text));
 
-    if (strcmp(method, "GET") != 0 || strcmp(path, "/metrics") != 0) {
-        lantern_http_send_response(
-            client_fd,
-            404,
-            "Not Found",
-            "application/json",
-            "{\"error\":\"unknown endpoint\"}",
-            strlen("{\"error\":\"unknown endpoint\"}"));
-        lantern_log_info(
-            "metrics",
-            &(const struct lantern_log_metadata){.peer = peer_text},
-            "%s %s -> 404",
-            method,
-            path);
+    char buffer[LANTERN_METRICS_READ_BUFFER_SIZE];
+    ssize_t received = -1;
+    do
+    {
+        received = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
+    } while (received < 0 && errno == EINTR);
+
+    if (received <= 0)
+    {
+        return;
+    }
+    buffer[(size_t)received] = '\0';
+
+    char method[LANTERN_METRICS_METHOD_CAP];
+    char path[LANTERN_METRICS_PATH_CAP];
+
+    int result = parse_request_line(buffer, method, sizeof(method), path, sizeof(path));
+    if (result != 0)
+    {
+        int rc = send_json_error(client_fd, 400, "Bad Request", METRICS_JSON_MALFORMED_REQUEST);
+        if (rc == 0)
+        {
+            lantern_log_info(
+                "metrics",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "malformed request -> 400");
+        }
+        else
+        {
+            lantern_log_error(
+                "metrics",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "failed to send 400 response rc=%d",
+                rc);
+        }
         return;
     }
 
-    if (!server->callbacks.snapshot) {
-        lantern_http_send_response(
-            client_fd,
-            503,
-            "Service Unavailable",
-            "application/json",
-            "{\"error\":\"metrics unavailable\"}",
-            strlen("{\"error\":\"metrics unavailable\"}"));
+    if (strcmp(method, "GET") != 0 || strcmp(path, LANTERN_METRICS_ENDPOINT_PATH) != 0)
+    {
+        int rc = send_json_error(client_fd, 404, "Not Found", METRICS_JSON_UNKNOWN_ENDPOINT);
+        if (rc == 0)
+        {
+            lantern_log_info(
+                "metrics",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "%s %s -> 404",
+                method,
+                path);
+        }
+        else
+        {
+            lantern_log_error(
+                "metrics",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "failed to send 404 response rc=%d",
+                rc);
+        }
+        return;
+    }
+
+    if (!server->callbacks.snapshot)
+    {
+        int rc = send_json_error(client_fd, 503, "Service Unavailable", METRICS_JSON_UNAVAILABLE);
         lantern_log_error(
             "metrics",
             &(const struct lantern_log_metadata){.peer = peer_text},
-            "metrics callback missing");
+            "metrics callback missing rc=%d",
+            rc);
         return;
     }
 
     struct lantern_metrics_snapshot snapshot;
     memset(&snapshot, 0, sizeof(snapshot));
-    if (server->callbacks.snapshot(server->callbacks.context, &snapshot) != 0) {
-        lantern_http_send_response(
-            client_fd,
-            503,
-            "Service Unavailable",
-            "application/json",
-            "{\"error\":\"metrics unavailable\"}",
-            strlen("{\"error\":\"metrics unavailable\"}"));
+    if (server->callbacks.snapshot(server->callbacks.context, &snapshot) != 0)
+    {
+        int rc = send_json_error(client_fd, 503, "Service Unavailable", METRICS_JSON_UNAVAILABLE);
         lantern_log_error(
             "metrics",
             &(const struct lantern_log_metadata){.peer = peer_text},
-            "snapshot failed");
+            "snapshot failed rc=%d",
+            rc);
         return;
     }
 
     char *body = NULL;
     size_t body_len = 0;
-    if (format_metrics_body(&snapshot, &body, &body_len) != 0) {
-        lantern_http_send_response(
+    result = format_metrics_body(&snapshot, &body, &body_len);
+    if (result != 0)
+    {
+        int rc = send_json_error(
             client_fd,
             500,
             "Internal Server Error",
-            "application/json",
-            "{\"error\":\"metrics formatting failed\"}",
-            strlen("{\"error\":\"metrics formatting failed\"}"));
+            METRICS_JSON_FORMATTING_FAILED);
         lantern_log_error(
             "metrics",
             &(const struct lantern_log_metadata){.peer = peer_text},
-            "formatting failed");
+            "formatting failed result=%d send_rc=%d",
+            result,
+            rc);
         return;
     }
 
-    if (lantern_http_send_response(
-            client_fd,
-            200,
-            "OK",
-            "text/plain; version=0.0.4",
-            body,
-            body_len)
-        != 0) {
+    result = send_http_response(
+        client_fd,
+        200,
+        "OK",
+        LANTERN_METRICS_TEXT_CONTENT_TYPE,
+        body,
+        body_len);
+    free(body);
+    if (result != 0)
+    {
         lantern_log_error(
             "metrics",
             &(const struct lantern_log_metadata){.peer = peer_text},
-            "send failed");
-        free(body);
+            "send failed rc=%d",
+            result);
         return;
     }
-    free(body);
+
     lantern_log_info(
         "metrics",
         &(const struct lantern_log_metadata){.peer = peer_text},
@@ -478,36 +1132,66 @@ static void handle_metrics_request(
         path);
 }
 
-static void *lantern_metrics_thread(void *arg) {
+
+/**
+ * Thread entry point for the metrics server accept loop.
+ *
+ * @param arg Pointer to struct lantern_metrics_server.
+ * @return NULL.
+ *
+ * @note Thread safety: This function is not thread-safe; it is intended to run
+ *       as a single server thread created by lantern_metrics_server_start().
+ */
+static void *lantern_metrics_thread(void *arg)
+{
     struct lantern_metrics_server *server = arg;
-    while (server->running) {
+    if (!server)
+    {
+        return NULL;
+    }
+
+    int listen_fd = server->listen_fd;
+    for (;;)
+    {
         struct sockaddr_in peer;
         socklen_t peer_len = sizeof(peer);
-        int client_fd = accept(server->listen_fd, (struct sockaddr *)&peer, &peer_len);
-        if (client_fd < 0) {
-            if (!server->running) {
-                break;
-            }
-            if (errno == EINTR) {
+        int client_fd = accept(listen_fd, (struct sockaddr *)&peer, &peer_len);
+        if (client_fd < 0)
+        {
+            if (errno == EINTR)
+            {
                 continue;
             }
-            lantern_log_error(
-                "metrics",
-                NULL,
-                "accept failed errno=%d",
-                errno);
+            if (errno == EBADF || errno == EINVAL)
+            {
+                break;
+            }
+            lantern_log_error("metrics", NULL, "accept failed errno=%d", errno);
             continue;
         }
-        handle_metrics_request(server, client_fd, &peer);
+
+        handle_client_connection(server, client_fd, &peer);
         close(client_fd);
     }
+
     return NULL;
 }
 
-void lantern_metrics_server_init(struct lantern_metrics_server *server) {
-    if (!server) {
+
+/**
+ * Initialize a metrics server structure.
+ *
+ * @param server Server instance to initialize (modified in place).
+ *
+ * @note Thread safety: Caller must not call concurrently with start/stop.
+ */
+void lantern_metrics_server_init(struct lantern_metrics_server *server)
+{
+    if (!server)
+    {
         return;
     }
+
     memset(server, 0, sizeof(*server));
     server->listen_fd = -1;
     server->running = 0;
@@ -515,30 +1199,64 @@ void lantern_metrics_server_init(struct lantern_metrics_server *server) {
     server->port = 0;
 }
 
-void lantern_metrics_server_reset(struct lantern_metrics_server *server) {
-    if (!server) {
+
+/**
+ * Reset a metrics server structure, stopping it if running.
+ *
+ * @param server Server instance to reset (modified in place).
+ *
+ * @note Thread safety: Caller must not call concurrently with start/stop.
+ */
+void lantern_metrics_server_reset(struct lantern_metrics_server *server)
+{
+    if (!server)
+    {
         return;
     }
+
     lantern_metrics_server_stop(server);
     lantern_metrics_server_init(server);
 }
 
+
+/**
+ * Start the metrics server.
+ *
+ * Creates a listening socket and starts a background thread to accept incoming
+ * connections and serve GET /metrics.
+ *
+ * @param server    Server instance to start (modified in place).
+ * @param port      Port to bind (0 binds an ephemeral port).
+ * @param callbacks Metrics snapshot callback interface.
+ *
+ * @spec POSIX sockets and pthreads.
+ *
+ * @return 0 on success.
+ * @return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM on invalid parameters.
+ * @return LANTERN_METRICS_SERVER_ERR_IO on socket/bind/listen/thread creation failure.
+ *
+ * @note Thread safety: Caller must serialize start/stop operations.
+ */
 int lantern_metrics_server_start(
     struct lantern_metrics_server *server,
     uint16_t port,
-    const struct lantern_metrics_callbacks *callbacks) {
-    if (!server || !callbacks || !callbacks->snapshot) {
-        return -1;
+    const struct lantern_metrics_callbacks *callbacks)
+{
+    if (!server || !callbacks || !callbacks->snapshot)
+    {
+        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
     }
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
+    if (fd < 0)
+    {
         lantern_log_error("metrics", NULL, "socket creation failed errno=%d", errno);
-        return -1;
+        return LANTERN_METRICS_SERVER_ERR_IO;
     }
 
     int opt = 1;
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) != 0) {
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) != 0)
+    {
         lantern_log_warn("metrics", NULL, "setsockopt(SO_REUSEADDR) failed errno=%d", errno);
     }
 
@@ -548,15 +1266,18 @@ int lantern_metrics_server_start(
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(port);
 
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0)
+    {
         lantern_log_error("metrics", NULL, "bind failed errno=%d", errno);
         close(fd);
-        return -1;
+        return LANTERN_METRICS_SERVER_ERR_IO;
     }
-    if (listen(fd, 16) != 0) {
+
+    if (listen(fd, LANTERN_METRICS_LISTEN_BACKLOG) != 0)
+    {
         lantern_log_error("metrics", NULL, "listen failed errno=%d", errno);
         close(fd);
-        return -1;
+        return LANTERN_METRICS_SERVER_ERR_IO;
     }
 
     server->listen_fd = fd;
@@ -565,14 +1286,16 @@ int lantern_metrics_server_start(
     server->running = 1;
     server->thread_started = 0;
 
-    int rc = pthread_create(&server->thread, NULL, lantern_metrics_thread, server);
-    if (rc != 0) {
-        lantern_log_error("metrics", NULL, "pthread_create failed rc=%d", rc);
+    int create_rc = pthread_create(&server->thread, NULL, lantern_metrics_thread, server);
+    if (create_rc != 0)
+    {
+        lantern_log_error("metrics", NULL, "pthread_create failed rc=%d", create_rc);
         close(fd);
         server->listen_fd = -1;
         server->running = 0;
-        return -1;
+        return LANTERN_METRICS_SERVER_ERR_IO;
     }
+
     server->thread_started = 1;
     lantern_log_info(
         "metrics",
@@ -582,22 +1305,34 @@ int lantern_metrics_server_start(
     return 0;
 }
 
-void lantern_metrics_server_stop(struct lantern_metrics_server *server) {
-    if (!server) {
+
+/**
+ * Stop the metrics server if running.
+ *
+ * @param server Server instance to stop (modified in place).
+ *
+ * @note Thread safety: Caller must serialize start/stop operations.
+ */
+void lantern_metrics_server_stop(struct lantern_metrics_server *server)
+{
+    if (!server)
+    {
         return;
     }
-    if (server->running) {
-        server->running = 0;
-        if (server->listen_fd >= 0) {
-            shutdown(server->listen_fd, SHUT_RDWR);
-        }
+
+    server->running = 0;
+
+    int listen_fd = server->listen_fd;
+    server->listen_fd = -1;
+    if (listen_fd >= 0)
+    {
+        (void)shutdown(listen_fd, SHUT_RDWR);
+        close(listen_fd);
     }
-    if (server->thread_started) {
+
+    if (server->thread_started)
+    {
         pthread_join(server->thread, NULL);
         server->thread_started = 0;
-    }
-    if (server->listen_fd >= 0) {
-        close(server->listen_fd);
-        server->listen_fd = -1;
     }
 }

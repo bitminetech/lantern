@@ -17,40 +17,9 @@
 
 #include "client_internal.h"
 
-#include "lantern/support/log.h"
-
-#include <stdlib.h>
 #include <string.h>
 
-
-/* ============================================================================
- * External Functions (from client_sync.c, client_reqresp.c)
- * ============================================================================ */
-
-extern void lantern_client_record_vote(
-    struct lantern_client *client,
-    const LanternSignedVote *vote,
-    const char *peer_id_text);
-
-extern bool lantern_client_import_block(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *block_root,
-    const struct lantern_log_metadata *meta);
-
-extern void lantern_client_enqueue_pending_block(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *block_root,
-    const LanternRoot *parent_root,
-    const char *peer_id_text);
-
-extern void lantern_client_on_blocks_request_complete(
-    struct lantern_client *client,
-    const char *peer_id,
-    const LanternRoot *request_root,
-    enum lantern_blocks_request_outcome outcome);
-
+#include "lantern/support/log.h"
 
 /* ============================================================================
  * Debug Vote/Block Recording
@@ -62,7 +31,8 @@ extern void lantern_client_on_blocks_request_complete(
  * @param client       Client instance
  * @param vote         Vote to record
  * @param peer_id_text Peer ID text (may be NULL)
- * @return 0 on success, -1 on failure
+ * @return 0 on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
  *
  * @note Thread safety: Acquires appropriate locks internally
  */
@@ -73,10 +43,10 @@ int lantern_client_debug_record_vote(
 {
     if (!client || !vote)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     lantern_client_record_vote(client, vote, peer_id_text);
-    return 0;
+    return LANTERN_CLIENT_OK;
 }
 
 
@@ -87,7 +57,9 @@ int lantern_client_debug_record_vote(
  * @param block        Block to import
  * @param block_root   Block root hash
  * @param peer_id_text Peer ID text (may be NULL)
- * @return 1 if imported, 0 if not imported, -1 on error
+ * @return 1 if imported
+ * @return 0 if not imported
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
  *
  * @note Thread safety: Acquires appropriate locks internally
  */
@@ -97,11 +69,20 @@ int lantern_client_debug_import_block(
     const LanternRoot *block_root,
     const char *peer_id_text)
 {
-    struct lantern_log_metadata meta = {
-        .validator = client ? client->node_id : NULL,
-        .peer = peer_id_text,
-    };
-    return lantern_client_import_block(client, block, block_root, &meta) ? 1 : 0;
+    if (!client || !block || !block_root)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    return lantern_client_import_block(
+               client,
+               block,
+               block_root,
+               &(const struct lantern_log_metadata){
+                   .validator = client->node_id,
+                   .peer = peer_id_text})
+        ? 1
+        : 0;
 }
 
 
@@ -126,10 +107,7 @@ size_t lantern_client_pending_block_count(const struct lantern_client *client)
     struct lantern_client *mutable_client = (struct lantern_client *)client;
     bool locked = lantern_client_lock_pending(mutable_client);
     size_t count = client->pending_blocks.length;
-    if (locked)
-    {
-        lantern_client_unlock_pending(mutable_client, locked);
-    }
+    lantern_client_unlock_pending(mutable_client, locked);
     return count;
 }
 
@@ -142,7 +120,8 @@ size_t lantern_client_pending_block_count(const struct lantern_client *client)
  * @param block_root   Block root hash
  * @param parent_root  Parent block root hash
  * @param peer_id_text Peer ID text (may be NULL)
- * @return 0 on success, -1 on failure
+ * @return 0 on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
  *
  * @note Thread safety: Acquires pending_lock internally
  */
@@ -155,10 +134,15 @@ int lantern_client_debug_enqueue_pending_block(
 {
     if (!client || !block || !block_root || !parent_root)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
-    lantern_client_enqueue_pending_block(client, block, block_root, parent_root, peer_id_text);
-    return 0;
+    lantern_client_enqueue_pending_block(
+        client,
+        block,
+        block_root,
+        parent_root,
+        peer_id_text);
+    return LANTERN_CLIENT_OK;
 }
 
 
@@ -172,7 +156,8 @@ int lantern_client_debug_enqueue_pending_block(
  * @param out_parent_requested Output: whether parent was requested (may be NULL)
  * @param out_peer_text      Output: peer text buffer (may be NULL)
  * @param peer_text_len      Size of peer text buffer
- * @return 0 on success, -1 on failure
+ * @return 0 on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on invalid inputs
  *
  * @note Thread safety: Acquires pending_lock internally
  */
@@ -187,55 +172,37 @@ int lantern_client_debug_pending_entry(
 {
     if (!client)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
+    if (out_peer_text && peer_text_len == 0)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
     struct lantern_client *mutable_client = (struct lantern_client *)client;
     bool locked = lantern_client_lock_pending(mutable_client);
-    if (locked && index >= client->pending_blocks.length)
+    if (index >= client->pending_blocks.length)
     {
         lantern_client_unlock_pending(mutable_client, locked);
-        return -1;
-    }
-    if (!locked && index >= client->pending_blocks.length)
-    {
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
 
     LanternRoot root_copy;
     LanternRoot parent_copy;
     bool requested = false;
-    char peer_copy[128];
+    char peer_copy[sizeof(((struct lantern_pending_block){0}).peer_text)];
     peer_copy[0] = '\0';
 
-    if (locked)
+    const struct lantern_pending_block *entry = &client->pending_blocks.items[index];
+    root_copy = entry->root;
+    parent_copy = entry->parent_root;
+    requested = entry->parent_requested;
+    if (entry->peer_text[0])
     {
-        const struct lantern_pending_block *entry = &client->pending_blocks.items[index];
-        root_copy = entry->root;
-        parent_copy = entry->parent_root;
-        requested = entry->parent_requested;
-        if (entry->peer_text[0])
-        {
-            strncpy(peer_copy, entry->peer_text, sizeof(peer_copy) - 1u);
-            peer_copy[sizeof(peer_copy) - 1u] = '\0';
-        }
-        lantern_client_unlock_pending(mutable_client, locked);
+        strncpy(peer_copy, entry->peer_text, sizeof(peer_copy) - 1u);
+        peer_copy[sizeof(peer_copy) - 1u] = '\0';
     }
-    else
-    {
-        const struct lantern_pending_block *entry = &client->pending_blocks.items[index];
-        if (!entry)
-        {
-            return -1;
-        }
-        root_copy = entry->root;
-        parent_copy = entry->parent_root;
-        requested = entry->parent_requested;
-        if (entry->peer_text[0])
-        {
-            strncpy(peer_copy, entry->peer_text, sizeof(peer_copy) - 1u);
-            peer_copy[sizeof(peer_copy) - 1u] = '\0';
-        }
-    }
+    lantern_client_unlock_pending(mutable_client, locked);
 
     if (out_root)
     {
@@ -251,24 +218,14 @@ int lantern_client_debug_pending_entry(
     }
     if (out_peer_text && peer_text_len > 0)
     {
-        if (peer_text_len == 1)
+        out_peer_text[0] = '\0';
+        if (peer_text_len > 1 && peer_copy[0])
         {
-            out_peer_text[0] = '\0';
-        }
-        else
-        {
-            if (peer_copy[0])
-            {
-                strncpy(out_peer_text, peer_copy, peer_text_len - 1u);
-                out_peer_text[peer_text_len - 1u] = '\0';
-            }
-            else
-            {
-                out_peer_text[0] = '\0';
-            }
+            strncpy(out_peer_text, peer_copy, peer_text_len - 1u);
+            out_peer_text[peer_text_len - 1u] = '\0';
         }
     }
-    return 0;
+    return LANTERN_CLIENT_OK;
 }
 
 
@@ -286,15 +243,8 @@ void lantern_client_debug_pending_reset(struct lantern_client *client)
         return;
     }
     bool locked = lantern_client_lock_pending(client);
-    if (locked)
-    {
-        pending_block_list_reset(&client->pending_blocks);
-        lantern_client_unlock_pending(client, locked);
-    }
-    else
-    {
-        pending_block_list_reset(&client->pending_blocks);
-    }
+    pending_block_list_reset(&client->pending_blocks);
+    lantern_client_unlock_pending(client, locked);
 }
 
 
@@ -304,7 +254,8 @@ void lantern_client_debug_pending_reset(struct lantern_client *client)
  * @param client    Client instance
  * @param root      Block root to find
  * @param requested New value for parent_requested flag
- * @return 0 on success, -1 if not found or error
+ * @return 0 on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on invalid inputs or when root is not found
  *
  * @note Thread safety: Acquires pending_lock internally
  */
@@ -315,28 +266,16 @@ int lantern_client_debug_set_parent_requested(
 {
     if (!client || !root)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     bool locked = lantern_client_lock_pending(client);
-    struct lantern_pending_block *entry = NULL;
-    if (locked)
+    struct lantern_pending_block *entry = pending_block_list_find(&client->pending_blocks, root);
+    if (entry)
     {
-        entry = pending_block_list_find(&client->pending_blocks, root);
-        if (entry)
-        {
-            entry->parent_requested = requested;
-        }
-        lantern_client_unlock_pending(client, locked);
+        entry->parent_requested = requested;
     }
-    else
-    {
-        entry = pending_block_list_find(&client->pending_blocks, root);
-        if (entry)
-        {
-            entry->parent_requested = requested;
-        }
-    }
-    return entry ? 0 : -1;
+    lantern_client_unlock_pending(client, locked);
+    return entry ? LANTERN_CLIENT_OK : LANTERN_CLIENT_ERR_INVALID_PARAM;
 }
 
 
@@ -358,7 +297,7 @@ void lantern_client_debug_disable_block_requests(struct lantern_client *client, 
     {
         return;
     }
-    client->debug_disable_block_requests = disable ? true : false;
+    client->debug_disable_block_requests = disable;
 }
 
 
@@ -369,7 +308,8 @@ void lantern_client_debug_disable_block_requests(struct lantern_client *client, 
  * @param peer_id      Peer ID text
  * @param request_root Root that was requested
  * @param outcome_code Outcome code (LANTERN_DEBUG_BLOCKS_REQUEST_*)
- * @return 0 on success, -1 on failure
+ * @return 0 on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on invalid inputs
  *
  * @note Thread safety: Acquires appropriate locks internally
  */
@@ -379,25 +319,28 @@ int lantern_client_debug_on_blocks_request_complete(
     const LanternRoot *request_root,
     int outcome_code)
 {
-    if (!client)
+    if (!client || !peer_id || peer_id[0] == '\0' || !request_root)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     enum lantern_blocks_request_outcome outcome;
     switch (outcome_code)
     {
-    case LANTERN_DEBUG_BLOCKS_REQUEST_SUCCESS:
-        outcome = LANTERN_BLOCKS_REQUEST_SUCCESS;
-        break;
-    case LANTERN_DEBUG_BLOCKS_REQUEST_FAILED:
-        outcome = LANTERN_BLOCKS_REQUEST_FAILED;
-        break;
-    case LANTERN_DEBUG_BLOCKS_REQUEST_ABORTED:
-        outcome = LANTERN_BLOCKS_REQUEST_ABORTED;
-        break;
-    default:
-        return -1;
+        case LANTERN_DEBUG_BLOCKS_REQUEST_SUCCESS:
+            outcome = LANTERN_BLOCKS_REQUEST_SUCCESS;
+            break;
+
+        case LANTERN_DEBUG_BLOCKS_REQUEST_FAILED:
+            outcome = LANTERN_BLOCKS_REQUEST_FAILED;
+            break;
+
+        case LANTERN_DEBUG_BLOCKS_REQUEST_ABORTED:
+            outcome = LANTERN_BLOCKS_REQUEST_ABORTED;
+            break;
+
+        default:
+            return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     lantern_client_on_blocks_request_complete(client, peer_id, request_root, outcome);
-    return 0;
+    return LANTERN_CLIENT_OK;
 }

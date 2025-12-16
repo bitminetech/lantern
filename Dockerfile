@@ -84,13 +84,19 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install runtime dependencies
+# Set to "true" to include gdb and perf for debugging/profiling
+ARG INCLUDE_DEBUG_TOOLS=false
+
+# Install runtime dependencies (and optionally profiling tools)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
-        gdb \
         libssl3 \
         libstdc++6 \
         zlib1g \
+    && if [ "$INCLUDE_DEBUG_TOOLS" = "true" ]; then \
+        apt-get install -y --no-install-recommends gdb linux-tools-generic \
+        && ln -sf /usr/lib/linux-tools/*/perf /usr/local/bin/perf || true; \
+    fi \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/lantern /opt/lantern

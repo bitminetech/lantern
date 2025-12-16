@@ -1190,7 +1190,7 @@ static lantern_client_error client_setup_validators(
         return LANTERN_CLIENT_ERR_CONFIG;
     }
 
-    if (configure_hash_sig_sources(client, options) != 0)
+    if (lantern_client_configure_hash_sig_sources(client, options) != 0)
     {
         lantern_log_error(
             "client",
@@ -1241,7 +1241,7 @@ static lantern_client_error client_setup_validators(
         return LANTERN_CLIENT_ERR_VALIDATOR;
     }
 
-    if (load_hash_sig_keys(client) != 0)
+    if (lantern_client_load_hash_sig_keys(client) != 0)
     {
         return LANTERN_CLIENT_ERR_VALIDATOR;
     }
@@ -1529,7 +1529,7 @@ static void shutdown_validator_and_keys(struct lantern_client *client)
     stop_validator_service(client);
     stop_ping_service(client);
     stop_peer_dialer(client);
-    free_hash_sig_pubkeys(client);
+    lantern_client_free_hash_sig_pubkeys(client);
     free(client->hash_sig_key_dir);
     client->hash_sig_key_dir = NULL;
     free(client->hash_sig_public_template);
@@ -1842,7 +1842,7 @@ static void shutdown_state_and_runtime(struct lantern_client *client)
     }
     lantern_fork_choice_reset(&client->fork_choice);
     client->has_fork_choice = false;
-    reset_local_validators(client);
+    lantern_client_reset_local_validators(client);
     lantern_validator_assignment_reset(&client->validator_assignment);
     client->has_validator_assignment = false;
     lantern_consensus_runtime_reset(&client->runtime);

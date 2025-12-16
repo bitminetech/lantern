@@ -449,7 +449,14 @@ void lantern_client_on_blocks_request_complete(
  * @param out_err               Output error code (may be NULL)
  * @param out_response_code     Output response code (may be NULL)
  * @param response_code_pending Tracks whether response code is still expected
- * @return 0 on success, -1 on failure
+ * @return 0 on success
+ * @return LANTERN_REQRESP_ERR_INVALID_PARAM if required parameters are NULL
+ * @return LANTERN_REQRESP_ERR_SET_READ_INTEREST if enabling read interest fails
+ * @return LANTERN_REQRESP_ERR_SET_DEADLINE if setting a stream deadline fails
+ * @return LANTERN_REQRESP_ERR_STREAM_READ if reading from the stream fails
+ * @return LANTERN_REQRESP_ERR_VARINT_HEADER_TOO_LONG if the varint header exceeds limits
+ * @return LANTERN_REQRESP_ERR_PAYLOAD_TOO_LARGE if the payload length exceeds limits
+ * @return LANTERN_REQRESP_ERR_ALLOC if allocating the payload buffer fails
  *
  * @note Thread safety: This function is thread-safe
  */
@@ -463,6 +470,50 @@ int lantern_reqresp_read_response_chunk(
     uint8_t *out_response_code,
     bool *response_code_pending);
 
+/**
+ * Schedule a blocks_by_root request to a peer.
+ *
+ * @spec subspecs/networking/reqresp/message.py - BlocksByRoot protocol
+ *
+ * @param client        Client instance
+ * @param peer_id_text  Peer ID string
+ * @param root          Block root to request
+ * @param use_legacy    True to use legacy protocol
+ * @return 0 on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL, the peer ID is invalid, or the root is zero
+ * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
+ * @return LANTERN_CLIENT_ERR_NETWORK if stream dialing fails or networking is unavailable
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+int lantern_client_schedule_blocks_request(
+    struct lantern_client *client,
+    const char *peer_id_text,
+    const LanternRoot *root,
+    bool use_legacy);
+
+
+/**
+ * Write all bytes to a stream.
+ *
+ * Retries on AGAIN/TIMEOUT errors until all bytes are written.
+ *
+ * @param stream  libp2p stream
+ * @param data    Data to write
+ * @param length  Number of bytes to write
+ * @param out_err Optional output error code (may be NULL)
+ * @return 0 on success
+ * @return LANTERN_REQRESP_ERR_INVALID_PARAM if parameters are invalid
+ * @return LANTERN_REQRESP_ERR_STREAM_WRITE on stream write failure
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+int stream_write_all(
+    libp2p_stream_t *stream,
+    const uint8_t *data,
+    size_t length,
+    ssize_t *out_err);
+
 
 /* ============================================================================
  * Key Management Functions
@@ -475,7 +526,7 @@ int lantern_reqresp_read_response_chunk(
  *
  * @note Thread safety: Caller must ensure exclusive access to the validator
  */
-void local_validator_cleanup(struct lantern_local_validator *validator);
+void lantern_client_local_validator_cleanup(struct lantern_local_validator *validator);
 
 
 /**
@@ -485,7 +536,7 @@ void local_validator_cleanup(struct lantern_local_validator *validator);
  *
  * @note Thread safety: Caller must ensure exclusive access during shutdown
  */
-void reset_local_validators(struct lantern_client *client);
+void lantern_client_reset_local_validators(struct lantern_client *client);
 
 
 /**
@@ -500,7 +551,7 @@ void reset_local_validators(struct lantern_client *client);
  *
  * @note Thread safety: This function is thread-safe
  */
-int decode_validator_secret(const char *hex, uint8_t **out_key, size_t *out_len);
+int lantern_client_decode_validator_secret(const char *hex, uint8_t **out_key, size_t *out_len);
 
 
 /**
@@ -512,7 +563,7 @@ int decode_validator_secret(const char *hex, uint8_t **out_key, size_t *out_len)
  *
  * @note Thread safety: This function should be called during initialization
  */
-int configure_hash_sig_sources(
+int lantern_client_configure_hash_sig_sources(
     struct lantern_client *client,
     const struct lantern_client_options *options);
 
@@ -527,7 +578,7 @@ int configure_hash_sig_sources(
  *
  * @note Thread safety: This function should be called during initialization
  */
-int load_hash_sig_keys(struct lantern_client *client);
+int lantern_client_load_hash_sig_keys(struct lantern_client *client);
 
 
 /**
@@ -537,7 +588,7 @@ int load_hash_sig_keys(struct lantern_client *client);
  *
  * @note Thread safety: Caller must ensure exclusive access during shutdown
  */
-void free_hash_sig_pubkeys(struct lantern_client *client);
+void lantern_client_free_hash_sig_pubkeys(struct lantern_client *client);
 
 
 #ifdef __cplusplus

@@ -379,7 +379,8 @@ void lantern_client_note_vote_outcome(
  *
  * @param client   Client instance
  * @param peer_id  Peer ID to request status from
- * @return true if request can proceed, false if already in flight
+ * @return true if request can proceed
+ * @return false if request already in flight or parameters are invalid
  *
  * @note Thread safety: This function acquires status_lock
  */
@@ -387,7 +388,12 @@ bool lantern_client_try_begin_status_request(
     struct lantern_client *client,
     const char *peer_id)
 {
-    if (!client || !peer_id || !peer_id[0] || !client->status_lock_initialized)
+    if (!client || !peer_id || !peer_id[0])
+    {
+        return false;
+    }
+
+    if (!client->status_lock_initialized)
     {
         return true;
     }
@@ -516,7 +522,15 @@ void lantern_client_status_request_update_locked(
             entry->outstanding_status_requests += increase;
         }
 
-        client->status_requests_inflight_total += (size_t)increase;
+        const size_t increase_size = (size_t)increase;
+        if (client->status_requests_inflight_total > SIZE_MAX - increase_size)
+        {
+            client->status_requests_inflight_total = SIZE_MAX;
+        }
+        else
+        {
+            client->status_requests_inflight_total += increase_size;
+        }
 
         if (client->status_requests_inflight_total > client->status_requests_peak)
         {
@@ -525,7 +539,7 @@ void lantern_client_status_request_update_locked(
     }
     else
     {
-        uint32_t decrease = (uint32_t)(-delta);
+        uint32_t decrease = (uint32_t)(-(int64_t)delta);
         if (entry->outstanding_status_requests > decrease)
         {
             entry->outstanding_status_requests -= decrease;
@@ -551,7 +565,8 @@ void lantern_client_status_request_update_locked(
             .validator = client->node_id,
             .peer = (peer_id && peer_id[0]) ? peer_id : NULL,
         },
-        "status guard %s delta=%d peer_outstanding=%u total_outstanding=%zu peak=%zu guard_disabled=%s",
+        "status guard %s delta=%d peer_outstanding=%u total_outstanding=%zu "
+        "peak=%zu guard_disabled=%s",
         phase ? phase : "update",
         delta,
         entry->outstanding_status_requests,

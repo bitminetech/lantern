@@ -324,7 +324,8 @@ int populate_local_validators(struct lantern_client *client)
 
     uint8_t *decoded_secret = NULL;
     size_t decoded_len = 0;
-    if (decode_validator_secret(priv_hex, &decoded_secret, &decoded_len) != 0 || decoded_len == 0)
+    if (lantern_client_decode_validator_secret(priv_hex, &decoded_secret, &decoded_len) != 0
+        || decoded_len == 0)
     {
         lantern_log_error(
             "client",
@@ -368,7 +369,7 @@ int populate_local_validators(struct lantern_client *client)
         {
             for (size_t j = 0; j < i; ++j)
             {
-                local_validator_cleanup(&validators[j]);
+                lantern_client_local_validator_cleanup(&validators[j]);
             }
             free(validators);
             lantern_secure_zero(decoded_secret, decoded_len);
@@ -385,7 +386,7 @@ int populate_local_validators(struct lantern_client *client)
             {
                 for (size_t j = 0; j <= i; ++j)
                 {
-                    local_validator_cleanup(&validators[j]);
+                    lantern_client_local_validator_cleanup(&validators[j]);
                 }
                 free(validators);
                 lantern_secure_zero(decoded_secret, decoded_len);
@@ -407,7 +408,7 @@ int populate_local_validators(struct lantern_client *client)
     {
         for (size_t i = 0; i < count; ++i)
         {
-            local_validator_cleanup(&validators[i]);
+            lantern_client_local_validator_cleanup(&validators[i]);
         }
         free(validators);
         lantern_secure_zero(decoded_secret, decoded_len);
@@ -426,7 +427,7 @@ int populate_local_validators(struct lantern_client *client)
             free(enabled);
             for (size_t i = 0; i < count; ++i)
             {
-                local_validator_cleanup(&validators[i]);
+                lantern_client_local_validator_cleanup(&validators[i]);
             }
             free(validators);
             lantern_secure_zero(decoded_secret, decoded_len);
@@ -441,7 +442,7 @@ int populate_local_validators(struct lantern_client *client)
         free(enabled);
         for (size_t i = 0; i < count; ++i)
         {
-            local_validator_cleanup(&validators[i]);
+            lantern_client_local_validator_cleanup(&validators[i]);
         }
         free(validators);
         lantern_secure_zero(decoded_secret, decoded_len);
@@ -453,7 +454,7 @@ int populate_local_validators(struct lantern_client *client)
     client->validator_enabled = enabled;
     enabled = NULL;
 
-    reset_local_validators(client);
+    lantern_client_reset_local_validators(client);
     client->local_validators = validators;
     client->local_validator_count = count;
     validators = NULL;

@@ -15,11 +15,12 @@
  */
 
 #include "client_services_internal.h"
-#include "client_internal.h"
 
 #include <inttypes.h>
 #include <pthread.h>
 #include <string.h>
+
+#include "client_internal.h"
 
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"
@@ -39,6 +40,37 @@ static const uint32_t VALIDATOR_SERVICE_IDLE_SLEEP_MS = 200;
 
 /** Sleep interval between validator service iterations (ms). */
 static const uint32_t VALIDATOR_SERVICE_POLL_SLEEP_MS = 50;
+
+
+/* ============================================================================
+ * Mutex Utilities
+ * ============================================================================ */
+
+/**
+ * @brief Unlock a mutex and log on failure.
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+static void unlock_mutex_with_log(
+    pthread_mutex_t *mutex,
+    const char *validator_id,
+    const char *name)
+{
+    if (!mutex || !name)
+    {
+        return;
+    }
+    int unlock_rc = pthread_mutex_unlock(mutex);
+    if (unlock_rc != 0)
+    {
+        lantern_log_warn(
+            "validator",
+            &(const struct lantern_log_metadata){.validator = validator_id},
+            "failed to unlock %s: %d",
+            name,
+            unlock_rc);
+    }
+}
 
 
 /* ============================================================================
@@ -183,12 +215,13 @@ bool validator_is_enabled(const struct lantern_client *client, size_t local_inde
     {
         return client->validator_enabled[local_index];
     }
-    if (pthread_mutex_lock((pthread_mutex_t *)&client->validator_lock) != 0)
+    pthread_mutex_t *lock = (pthread_mutex_t *)&client->validator_lock;
+    if (pthread_mutex_lock(lock) != 0)
     {
         return client->validator_enabled[local_index];
     }
     bool enabled = client->validator_enabled[local_index];
-    pthread_mutex_unlock((pthread_mutex_t *)&client->validator_lock);
+    unlock_mutex_with_log(lock, client->node_id, "validator_lock");
     return enabled;
 }
 
@@ -252,6 +285,224 @@ int validator_sign_vote(
         return LANTERN_CLIENT_ERR_VALIDATOR;
     }
     return LANTERN_CLIENT_OK;
+}
+
+
+/**
+ * @brief Collect parent root, checkpoints, and attestations for a new block.
+ *
+ * Computes the parent root and vote checkpoints from state, signs the
+ * proposer's vote, and collects attestations/signatures to include in the
+ * proposed block.
+ *
+ * @param client            Client instance
+ * @param slot              Slot number
+ * @param local             Local validator
+ * @param out_parent_root   Output for selected parent root
+ * @param out_proposer_vote Output for the proposer's signed vote
+ * @param att_list          Initialized attestation list to populate
+ * @param att_signatures    Initialized signature list to populate
+ *
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_RUNTIME on lock/state errors
+ * @return Propagated error codes from validator_sign_vote()
+ *
+ * @note Thread safety: This function acquires state_lock
+ */
+static lantern_client_error validator_build_block_collect_attestations(
+    struct lantern_client *client,
+    uint64_t slot,
+    struct lantern_local_validator *local,
+    LanternRoot *out_parent_root,
+    LanternSignedVote *out_proposer_vote,
+    LanternAttestations *att_list,
+    LanternBlockSignatures *att_signatures)
+{
+    lantern_client_error result = LANTERN_CLIENT_OK;
+
+    if (!client || !local || !out_parent_root || !out_proposer_vote || !att_list || !att_signatures)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    bool state_locked = lantern_client_lock_state(client);
+    if (!state_locked)
+    {
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+
+    if (!client->has_state)
+    {
+        result = LANTERN_CLIENT_ERR_RUNTIME;
+        goto cleanup;
+    }
+
+    if (lantern_state_select_block_parent(&client->state, out_parent_root) != 0)
+    {
+        result = LANTERN_CLIENT_ERR_RUNTIME;
+        goto cleanup;
+    }
+
+    LanternCheckpoint head_cp;
+    LanternCheckpoint target_cp;
+    LanternCheckpoint source_cp;
+    if (lantern_state_compute_vote_checkpoints(
+            &client->state,
+            &head_cp,
+            &target_cp,
+            &source_cp)
+        != 0)
+    {
+        result = LANTERN_CLIENT_ERR_RUNTIME;
+        goto cleanup;
+    }
+
+    out_proposer_vote->data.validator_id = local->global_index;
+    out_proposer_vote->data.slot = slot;
+    out_proposer_vote->data.head = head_cp;
+    out_proposer_vote->data.target = target_cp;
+    out_proposer_vote->data.source = source_cp;
+
+    result = (lantern_client_error)validator_sign_vote(local, slot, out_proposer_vote);
+    if (result != LANTERN_CLIENT_OK)
+    {
+        goto cleanup;
+    }
+
+    if (lantern_state_collect_attestations_for_block(
+            &client->state,
+            slot,
+            local->global_index,
+            out_parent_root,
+            out_proposer_vote,
+            att_list,
+            att_signatures)
+        != 0)
+    {
+        result = LANTERN_CLIENT_ERR_RUNTIME;
+        goto cleanup;
+    }
+
+cleanup:
+    lantern_client_unlock_state(client, state_locked);
+    return result;
+}
+
+
+/**
+ * @brief Populate a signed block from collected attestations and signatures.
+ *
+ * Initializes the block message fields, copies attestations into the body,
+ * and fills the signatures array with attestation signatures followed by the
+ * proposer signature.
+ *
+ * @param slot           Slot number
+ * @param proposer_index Proposer's global validator index
+ * @param parent_root    Parent block root
+ * @param proposer_vote  Proposer's signed vote
+ * @param att_list       Collected attestations
+ * @param att_signatures Collected attestation signatures
+ * @param out_block      Block to populate
+ *
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
+ * @return LANTERN_CLIENT_ERR_RUNTIME on overflow or inconsistent inputs
+ * @return LANTERN_CLIENT_ERR_ALLOC on allocation/copy failures
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+static lantern_client_error validator_build_block_populate_message(
+    uint64_t slot,
+    uint64_t proposer_index,
+    const LanternRoot *parent_root,
+    const LanternSignedVote *proposer_vote,
+    const LanternAttestations *att_list,
+    const LanternBlockSignatures *att_signatures,
+    LanternSignedBlock *out_block)
+{
+    if (!parent_root || !proposer_vote || !att_list || !att_signatures || !out_block)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    LanternBlock *message_block = &out_block->message.block;
+    message_block->slot = slot;
+    message_block->proposer_index = proposer_index;
+    message_block->parent_root = *parent_root;
+    memset(&message_block->state_root, 0, sizeof(message_block->state_root));
+
+    if (lantern_attestations_copy(&message_block->body.attestations, att_list) != 0)
+    {
+        return LANTERN_CLIENT_ERR_ALLOC;
+    }
+
+    out_block->message.proposer_attestation = proposer_vote->data;
+
+    if (message_block->body.attestations.length > SIZE_MAX - 1u)
+    {
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+    size_t signature_count = message_block->body.attestations.length + 1u;
+    if (lantern_block_signatures_resize(&out_block->signatures, signature_count) != 0)
+    {
+        return LANTERN_CLIENT_ERR_ALLOC;
+    }
+    for (size_t i = 0; i + 1u < signature_count; ++i)
+    {
+        if (i < att_signatures->length && att_signatures->data)
+        {
+            out_block->signatures.data[i] = att_signatures->data[i];
+        }
+        else
+        {
+            memset(out_block->signatures.data[i].bytes, 0, LANTERN_SIGNATURE_SIZE);
+        }
+    }
+    out_block->signatures.data[signature_count - 1u] = proposer_vote->signature;
+
+    return LANTERN_CLIENT_OK;
+}
+
+
+/**
+ * @brief Preview post-state root for a built block.
+ *
+ * Computes the expected post-state root for the proposed block without
+ * mutating state.
+ *
+ * @param client         Client instance
+ * @param block          Built block to preview
+ * @param out_state_root Output for the computed post-state root
+ *
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
+ * @return LANTERN_CLIENT_ERR_RUNTIME on lock/state failures
+ *
+ * @note Thread safety: This function acquires state_lock
+ */
+static lantern_client_error validator_build_block_preview_state_root(
+    struct lantern_client *client,
+    LanternSignedBlock *block,
+    LanternRoot *out_state_root)
+{
+    if (!client || !block || !out_state_root)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    bool state_locked = lantern_client_lock_state(client);
+    if (!state_locked)
+    {
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+
+    lantern_client_error result = LANTERN_CLIENT_OK;
+    if (lantern_state_preview_post_state_root(&client->state, block, out_state_root) != 0)
+    {
+        result = LANTERN_CLIENT_ERR_RUNTIME;
+    }
+    lantern_client_unlock_state(client, state_locked);
+    return result;
 }
 
 
@@ -516,12 +767,8 @@ int validator_build_block(
 {
     lantern_client_error result = LANTERN_CLIENT_OK;
     LanternRoot parent_root;
-    LanternCheckpoint head_cp;
-    LanternCheckpoint target_cp;
-    LanternCheckpoint source_cp;
     LanternAttestations att_list;
     LanternBlockSignatures att_signatures;
-    bool state_locked = false;
     bool att_list_initialized = false;
     bool att_signatures_initialized = false;
 
@@ -537,129 +784,48 @@ int validator_build_block(
     lantern_signed_block_with_attestation_init(out_block);
     memset(out_proposer_vote, 0, sizeof(*out_proposer_vote));
 
-    state_locked = lantern_client_lock_state(client);
-    if (!state_locked)
-    {
-        result = LANTERN_CLIENT_ERR_RUNTIME;
-        goto cleanup;
-    }
-    if (!client->has_state)
-    {
-        result = LANTERN_CLIENT_ERR_RUNTIME;
-        goto cleanup;
-    }
+    lantern_attestations_init(&att_list);
+    att_list_initialized = true;
+    lantern_block_signatures_init(&att_signatures);
+    att_signatures_initialized = true;
 
-    if (lantern_state_select_block_parent(&client->state, &parent_root) != 0)
-    {
-        result = LANTERN_CLIENT_ERR_RUNTIME;
-        goto cleanup;
-    }
-
-    if (lantern_state_compute_vote_checkpoints(
-            &client->state,
-            &head_cp,
-            &target_cp,
-            &source_cp)
-        != 0)
-    {
-        result = LANTERN_CLIENT_ERR_RUNTIME;
-        goto cleanup;
-    }
-
-    out_proposer_vote->data.validator_id = local->global_index;
-    out_proposer_vote->data.slot = slot;
-    out_proposer_vote->data.head = head_cp;
-    out_proposer_vote->data.target = target_cp;
-    out_proposer_vote->data.source = source_cp;
-
-    result = (lantern_client_error)validator_sign_vote(local, slot, out_proposer_vote);
+    result = validator_build_block_collect_attestations(
+        client,
+        slot,
+        local,
+        &parent_root,
+        out_proposer_vote,
+        &att_list,
+        &att_signatures);
     if (result != LANTERN_CLIENT_OK)
     {
         goto cleanup;
     }
 
-    lantern_attestations_init(&att_list);
-    att_list_initialized = true;
-    lantern_block_signatures_init(&att_signatures);
-    att_signatures_initialized = true;
-    if (lantern_state_collect_attestations_for_block(
-            &client->state,
-            slot,
-            local->global_index,
-            &parent_root,
-            out_proposer_vote,
-            &att_list,
-            &att_signatures)
-        != 0)
+    result = validator_build_block_populate_message(
+        slot,
+        local->global_index,
+        &parent_root,
+        out_proposer_vote,
+        &att_list,
+        &att_signatures,
+        out_block);
+    if (result != LANTERN_CLIENT_OK)
     {
-        result = LANTERN_CLIENT_ERR_RUNTIME;
         goto cleanup;
     }
-
-    lantern_client_unlock_state(client, state_locked);
-    state_locked = false;
-
-    LanternBlock *message_block = &out_block->message.block;
-    message_block->slot = slot;
-    message_block->proposer_index = local->global_index;
-    message_block->parent_root = parent_root;
-    memset(&message_block->state_root, 0, sizeof(message_block->state_root));
-
-    if (lantern_attestations_copy(&message_block->body.attestations, &att_list) != 0)
-    {
-        result = LANTERN_CLIENT_ERR_ALLOC;
-        goto cleanup;
-    }
-
-    out_block->message.proposer_attestation = out_proposer_vote->data;
-
-    if (message_block->body.attestations.length > SIZE_MAX - 1u)
-    {
-        result = LANTERN_CLIENT_ERR_RUNTIME;
-        goto cleanup;
-    }
-    size_t signature_count = message_block->body.attestations.length + 1u;
-    if (lantern_block_signatures_resize(&out_block->signatures, signature_count) != 0)
-    {
-        result = LANTERN_CLIENT_ERR_ALLOC;
-        goto cleanup;
-    }
-    for (size_t i = 0; i + 1u < signature_count; ++i)
-    {
-        if (i < att_signatures.length && att_signatures.data)
-        {
-            out_block->signatures.data[i] = att_signatures.data[i];
-        }
-        else
-        {
-            memset(out_block->signatures.data[i].bytes, 0, LANTERN_SIGNATURE_SIZE);
-        }
-    }
-    out_block->signatures.data[signature_count - 1u] = out_proposer_vote->signature;
 
     LanternRoot computed_state_root;
-    state_locked = lantern_client_lock_state(client);
-    if (!state_locked)
+    result = validator_build_block_preview_state_root(client, out_block, &computed_state_root);
+    if (result != LANTERN_CLIENT_OK)
     {
-        result = LANTERN_CLIENT_ERR_RUNTIME;
         goto cleanup;
     }
-    if (lantern_state_preview_post_state_root(&client->state, out_block, &computed_state_root) != 0)
-    {
-        result = LANTERN_CLIENT_ERR_RUNTIME;
-        goto cleanup;
-    }
-    lantern_client_unlock_state(client, state_locked);
-    state_locked = false;
 
-    message_block->state_root = computed_state_root;
+    out_block->message.block.state_root = computed_state_root;
     result = LANTERN_CLIENT_OK;
 
 cleanup:
-    if (state_locked)
-    {
-        lantern_client_unlock_state(client, state_locked);
-    }
     if (att_list_initialized)
     {
         lantern_attestations_reset(&att_list);
@@ -734,7 +900,7 @@ int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t
             local->pending_attestation_slot = slot;
             local->has_pending_attestation = true;
         }
-        pthread_mutex_unlock(&client->validator_lock);
+        unlock_mutex_with_log(&client->validator_lock, client->node_id, "validator_lock");
     }
 
     lantern_signed_block_with_attestation_reset(&block);
@@ -854,7 +1020,7 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
 
     if (have_lock)
     {
-        pthread_mutex_unlock(&client->validator_lock);
+        unlock_mutex_with_log(&client->validator_lock, client->node_id, "validator_lock");
     }
     return result;
 }
@@ -918,18 +1084,18 @@ void *validator_thread(void *arg)
 
             bool is_local = false;
             uint64_t local_index = 0;
-        if (lantern_consensus_runtime_local_proposer(
-                &client->runtime,
-                tp->slot,
-                &is_local,
-                &local_index)
-            == 0
-            && is_local
-            && local_index < client->local_validator_count)
-        {
-            duty->pending_local_proposal = true;
-            duty->pending_local_index = local_index;
-        }
+            if (lantern_consensus_runtime_local_proposer(
+                    &client->runtime,
+                    tp->slot,
+                    &is_local,
+                    &local_index)
+                == 0
+                && is_local
+                && local_index < client->local_validator_count)
+            {
+                duty->pending_local_proposal = true;
+                duty->pending_local_index = local_index;
+            }
         }
         duty->last_interval = tp->interval_index;
 
@@ -941,30 +1107,32 @@ void *validator_thread(void *arg)
 
         switch (tp->phase)
         {
-        case LANTERN_DUTY_PHASE_PROPOSAL:
-            if (duty->pending_local_proposal && !duty->slot_proposed)
-            {
-                if (validator_propose_block(
-                        client,
-                        tp->slot,
-                        (size_t)duty->pending_local_index)
-                    == LANTERN_CLIENT_OK)
+            case LANTERN_DUTY_PHASE_PROPOSAL:
+                if (duty->pending_local_proposal && !duty->slot_proposed)
                 {
-                    duty->slot_proposed = true;
+                    if (validator_propose_block(
+                            client,
+                            tp->slot,
+                            (size_t)duty->pending_local_index)
+                        == LANTERN_CLIENT_OK)
+                    {
+                        duty->slot_proposed = true;
+                    }
                 }
-            }
-            break;
-        case LANTERN_DUTY_PHASE_VOTE:
-            if (!duty->slot_attested)
-            {
-                if (validator_publish_attestations(client, tp->slot) == LANTERN_CLIENT_OK)
+                break;
+
+            case LANTERN_DUTY_PHASE_VOTE:
+                if (!duty->slot_attested)
                 {
-                    duty->slot_attested = true;
+                    if (validator_publish_attestations(client, tp->slot) == LANTERN_CLIENT_OK)
+                    {
+                        duty->slot_attested = true;
+                    }
                 }
-            }
-            break;
-        default:
-            break;
+                break;
+
+            default:
+                break;
         }
 
         validator_sleep_ms(VALIDATOR_SERVICE_POLL_SLEEP_MS);
@@ -1039,7 +1207,15 @@ void stop_validator_service(struct lantern_client *client)
         return;
     }
     __atomic_store_n(&client->validator_stop_flag, 1, __ATOMIC_RELAXED);
-    (void)pthread_join(client->validator_thread, NULL);
+    int join_rc = pthread_join(client->validator_thread, NULL);
+    if (join_rc != 0)
+    {
+        lantern_log_warn(
+            "validator",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "pthread_join failed: %d",
+            join_rc);
+    }
     client->validator_thread_started = false;
     lantern_log_info(
         "validator",

@@ -17,6 +17,12 @@
 
 #include "client_internal.h"
 
+#include <inttypes.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "peer_id/peer_id.h"
+
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"
@@ -25,11 +31,16 @@
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
 
-#include "peer_id/peer_id.h"
+/* ============================================================================
+ * Constants
+ * ============================================================================ */
 
-#include <inttypes.h>
-#include <stdlib.h>
-#include <string.h>
+enum
+{
+    ROOT_HEX_BUFFER_LEN = (LANTERN_ROOT_SIZE * 2u) + 3u,
+    PEER_TEXT_BUFFER_LEN = 128,
+    VALIDATOR_PUBKEY_HEX_BUFFER_LEN = (LANTERN_VALIDATOR_PUBKEY_SIZE * 2u) + 3u,
+};
 
 
 /* ============================================================================
@@ -127,6 +138,39 @@ size_t lantern_client_enabled_validator_count(struct lantern_client *client)
  * ============================================================================ */
 
 /**
+ * @brief Convert a peer ID to text for logging.
+ *
+ * @param from     Peer ID (may be NULL)
+ * @param out      Output buffer
+ * @param out_len  Output buffer length
+ * @return Peer ID text, or NULL if unavailable
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+static const char *peer_id_to_text(const peer_id_t *from, char *out, size_t out_len)
+{
+    if (!out || out_len == 0)
+    {
+        return NULL;
+    }
+
+    out[0] = '\0';
+    if (!from)
+    {
+        return NULL;
+    }
+
+    if (peer_id_to_string(from, PEER_ID_FMT_BASE58_LEGACY, out, out_len) < 0)
+    {
+        out[0] = '\0';
+        return NULL;
+    }
+
+    return out[0] ? out : NULL;
+}
+
+
+/**
  * Handle a block received via gossip.
  *
  * @spec subspecs/networking/gossip - Block gossip topic
@@ -139,6 +183,9 @@ size_t lantern_client_enabled_validator_count(struct lantern_client *client)
  * @param from     Peer ID of sender
  * @param context  Client instance
  * @return 0 on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if block or context is NULL
+ *
+ * @note Thread safety: This function is thread-safe
  */
 int gossip_block_handler(
     const LanternSignedBlock *block,
@@ -147,19 +194,15 @@ int gossip_block_handler(
 {
     if (!block || !context)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_client *client = context;
 
-    char peer_text[128];
-    peer_text[0] = '\0';
-    if (from && peer_id_to_string(from, PEER_ID_FMT_BASE58_LEGACY, peer_text, sizeof(peer_text)) < 0)
-    {
-        peer_text[0] = '\0';
-    }
+    char peer_text[PEER_TEXT_BUFFER_LEN];
+    const char *peer_id_text = peer_id_to_text(from, peer_text, sizeof(peer_text));
 
-    lantern_client_record_block(client, block, NULL, peer_text[0] ? peer_text : NULL, "gossip");
-    return 0;
+    lantern_client_record_block(client, block, NULL, peer_id_text, "gossip");
+    return LANTERN_CLIENT_OK;
 }
 
 
@@ -176,6 +219,9 @@ int gossip_block_handler(
  * @param from     Peer ID of sender
  * @param context  Client instance
  * @return 0 on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if vote or context is NULL
+ *
+ * @note Thread safety: This function is thread-safe
  */
 int gossip_vote_handler(
     const LanternSignedVote *vote,
@@ -184,22 +230,16 @@ int gossip_vote_handler(
 {
     if (!vote || !context)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_client *client = context;
-    char peer_text[128];
-    peer_text[0] = '\0';
-    if (from)
-    {
-        if (peer_id_to_string(from, PEER_ID_FMT_BASE58_LEGACY, peer_text, sizeof(peer_text)) < 0)
-        {
-            peer_text[0] = '\0';
-        }
-    }
-    const char *peer_id_text = peer_text[0] ? peer_text : NULL;
+
+    char peer_text[PEER_TEXT_BUFFER_LEN];
+    const char *peer_id_text = peer_id_to_text(from, peer_text, sizeof(peer_text));
+
     lantern_client_note_vote_delivery(client, peer_id_text, vote);
     lantern_client_record_vote(client, vote, peer_id_text);
-    return 0;
+    return LANTERN_CLIENT_OK;
 }
 
 
@@ -249,7 +289,7 @@ void persist_anchor_block(
             root_to_log = &computed_root;
         }
     }
-    char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char root_hex[ROOT_HEX_BUFFER_LEN];
     root_hex[0] = '\0';
     if (root_to_log)
     {
@@ -282,6 +322,88 @@ void persist_anchor_block(
  * ============================================================================ */
 
 /**
+ * @brief Compute genesis anchor roots for fork choice initialization.
+ *
+ * @param client             Client instance
+ * @param meta               Logging metadata
+ * @param out_state_root     Output computed state root
+ * @param out_anchor_header  Output anchor header (state_root updated)
+ * @param out_anchor_root    Output computed anchor root
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL
+ * @return LANTERN_CLIENT_ERR_RUNTIME on hashing failure
+ *
+ * @note Thread safety: Caller must ensure exclusive access during initialization
+ */
+static int compute_fork_choice_anchor_roots(
+    struct lantern_client *client,
+    const struct lantern_log_metadata *meta,
+    LanternRoot *out_state_root,
+    LanternBlockHeader *out_anchor_header,
+    LanternRoot *out_anchor_root)
+{
+    if (!client || !meta || !out_state_root || !out_anchor_header || !out_anchor_root)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    if (lantern_hash_tree_root_state(&client->state, out_state_root) != 0)
+    {
+        lantern_log_error("forkchoice", meta, "failed to hash anchor state");
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+
+    *out_anchor_header = client->state.latest_block_header;
+    out_anchor_header->state_root = *out_state_root;
+
+    if (lantern_hash_tree_root_block_header(out_anchor_header, out_anchor_root) != 0)
+    {
+        lantern_log_error("forkchoice", meta, "failed to hash anchor block header");
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+
+    return LANTERN_CLIENT_OK;
+}
+
+
+/**
+ * @brief Log genesis anchor roots for debugging mismatches.
+ *
+ * @param meta         Logging metadata
+ * @param anchor_root  Anchor block root
+ * @param state_root   Anchor state root
+ * @param body_root    Anchor body root
+ * @param slot         Anchor slot
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+static void log_genesis_anchor_roots(
+    const struct lantern_log_metadata *meta,
+    const LanternRoot *anchor_root,
+    const LanternRoot *state_root,
+    const LanternRoot *body_root,
+    uint64_t slot)
+{
+    char anchor_root_hex[ROOT_HEX_BUFFER_LEN];
+    char state_root_hex[ROOT_HEX_BUFFER_LEN];
+    char body_root_hex[ROOT_HEX_BUFFER_LEN];
+
+    format_root_hex(anchor_root, anchor_root_hex, sizeof(anchor_root_hex));
+    format_root_hex(state_root, state_root_hex, sizeof(state_root_hex));
+    format_root_hex(body_root, body_root_hex, sizeof(body_root_hex));
+
+    lantern_log_info(
+        "forkchoice",
+        meta,
+        "genesis anchor_root=%s state_root=%s body_root=%s slot=%" PRIu64,
+        anchor_root_hex[0] ? anchor_root_hex : "0x0",
+        state_root_hex[0] ? state_root_hex : "0x0",
+        body_root_hex[0] ? body_root_hex : "0x0",
+        slot);
+}
+
+
+/**
  * Initialize fork choice from genesis state.
  *
  * @spec subspecs/forkchoice/store.py - Store.get_forkchoice_store()
@@ -299,7 +421,9 @@ void persist_anchor_block(
  * with state_root = ZERO.
  *
  * @param client  Client instance
- * @return 0 on success, -1 on failure
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if client is NULL or missing state
+ * @return LANTERN_CLIENT_ERR_RUNTIME on fork choice initialization failure
  *
  * @note Thread safety: Should be called during initialization
  */
@@ -307,27 +431,10 @@ int initialize_fork_choice(struct lantern_client *client)
 {
     if (!client || !client->has_state)
     {
-        return -1;
-    }
-    lantern_fork_choice_reset(&client->fork_choice);
-    if (lantern_fork_choice_configure(&client->fork_choice, &client->state.config) != 0)
-    {
-        lantern_log_error(
-            "forkchoice",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to configure fork choice");
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
 
-    LanternRoot anchor_state_root;
-    if (lantern_hash_tree_root_state(&client->state, &anchor_state_root) != 0)
-    {
-        lantern_log_error(
-            "forkchoice",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to hash anchor state");
-        return -1;
-    }
+    const struct lantern_log_metadata meta = {.validator = client->node_id};
 
     /* Create a copy of the header for computing anchor_root.
      *
@@ -339,36 +446,36 @@ int initialize_fork_choice(struct lantern_client *client)
      * We compute anchor_root from a header with the ACTUAL state_root,
      * matching Zeam's genStateBlockHeader() behavior.
      */
-    LanternBlockHeader anchor_header = client->state.latest_block_header;
-    anchor_header.state_root = anchor_state_root;
-
-    LanternRoot anchor_root;
-    if (lantern_hash_tree_root_block_header(&anchor_header, &anchor_root) != 0)
+    lantern_fork_choice_reset(&client->fork_choice);
+    if (lantern_fork_choice_configure(&client->fork_choice, &client->state.config) != 0)
     {
         lantern_log_error(
             "forkchoice",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to hash anchor block header");
-        return -1;
+            &meta,
+            "failed to configure fork choice");
+        return LANTERN_CLIENT_ERR_RUNTIME;
     }
 
-    /* Log the anchor root for debugging genesis mismatch issues */
+    LanternRoot anchor_state_root;
+    LanternBlockHeader anchor_header;
+    LanternRoot anchor_root;
+    int root_rc = compute_fork_choice_anchor_roots(
+        client,
+        &meta,
+        &anchor_state_root,
+        &anchor_header,
+        &anchor_root);
+    if (root_rc != LANTERN_CLIENT_OK)
     {
-        char anchor_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        char state_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        char body_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        format_root_hex(&anchor_root, anchor_root_hex, sizeof(anchor_root_hex));
-        format_root_hex(&anchor_state_root, state_root_hex, sizeof(state_root_hex));
-        format_root_hex(&anchor_header.body_root, body_root_hex, sizeof(body_root_hex));
-        lantern_log_info(
-            "forkchoice",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "genesis anchor_root=%s state_root=%s body_root=%s slot=%lu",
-            anchor_root_hex,
-            state_root_hex,
-            body_root_hex,
-            (unsigned long)anchor_header.slot);
+        return root_rc;
     }
+
+    log_genesis_anchor_roots(
+        &meta,
+        &anchor_root,
+        &anchor_state_root,
+        &anchor_header.body_root,
+        anchor_header.slot);
 
     /* Also update the state's header state_root for subsequent state transitions */
     if (memcmp(
@@ -380,7 +487,7 @@ int initialize_fork_choice(struct lantern_client *client)
         client->state.latest_block_header.state_root = anchor_state_root;
         lantern_log_debug(
             "forkchoice",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
+            &meta,
             "updated genesis header state_root");
     }
 
@@ -403,31 +510,39 @@ int initialize_fork_choice(struct lantern_client *client)
         lantern_block_body_reset(&anchor.body);
         lantern_log_error(
             "forkchoice",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
+            &meta,
             "failed to set fork choice anchor");
-        return -1;
+        return LANTERN_CLIENT_ERR_RUNTIME;
     }
-    if (memcmp(client->state.latest_justified.root.bytes, anchor_root.bytes, LANTERN_ROOT_SIZE) != 0)
+    if (memcmp(
+            client->state.latest_justified.root.bytes,
+            anchor_root.bytes,
+            LANTERN_ROOT_SIZE)
+        != 0)
     {
         client->state.latest_justified.root = anchor_root;
         lantern_log_debug(
             "forkchoice",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
+            &meta,
             "updated justified checkpoint root to anchor");
     }
-    if (memcmp(client->state.latest_finalized.root.bytes, anchor_root.bytes, LANTERN_ROOT_SIZE) != 0)
+    if (memcmp(
+            client->state.latest_finalized.root.bytes,
+            anchor_root.bytes,
+            LANTERN_ROOT_SIZE)
+        != 0)
     {
         client->state.latest_finalized.root = anchor_root;
         lantern_log_debug(
             "forkchoice",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
+            &meta,
             "updated finalized checkpoint root to anchor");
     }
     persist_anchor_block(client, &anchor, &anchor_root);
     lantern_block_body_reset(&anchor.body);
     lantern_state_attach_fork_choice(&client->state, &client->fork_choice);
     client->has_fork_choice = true;
-    return 0;
+    return LANTERN_CLIENT_OK;
 }
 
 
@@ -436,20 +551,37 @@ int initialize_fork_choice(struct lantern_client *client)
  * ============================================================================ */
 
 /**
- * Visitor callback for storage block iteration.
+ * @brief Visitor callback for storage block iteration.
+ *
+ * @param block    Persisted block
+ * @param root     Block root
+ * @param context  Persisted block list
+ * @return 0 on success, non-zero to abort iteration
+ *
+ * @note Thread safety: Should be called during initialization
  */
 static int collect_block_visitor(
     const LanternSignedBlock *block,
     const LanternRoot *root,
     void *context)
 {
+    if (!block || !root || !context)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
     struct lantern_persisted_block_list *list = context;
     return persisted_block_list_append(list, block, root);
 }
 
 
 /**
- * Compare persisted blocks by slot for sorting.
+ * @brief Compare persisted blocks by slot for sorting.
+ *
+ * @param lhs_ptr  Left block entry
+ * @param rhs_ptr  Right block entry
+ * @return <0 if lhs < rhs, >0 if lhs > rhs, 0 if equal
+ *
+ * @note Thread safety: This function is thread-safe
  */
 static int compare_blocks_by_slot(const void *lhs_ptr, const void *rhs_ptr)
 {
@@ -477,7 +609,8 @@ static int compare_blocks_by_slot(const void *lhs_ptr, const void *rhs_ptr)
  * from a previous state after restart.
  *
  * @param client  Client instance
- * @return 0 on success, -1 on failure
+ * @return LANTERN_CLIENT_OK on success (including when nothing to restore)
+ * @return LANTERN_CLIENT_ERR_STORAGE if block enumeration fails
  *
  * @note Thread safety: Should be called during initialization
  */
@@ -485,11 +618,14 @@ int restore_persisted_blocks(struct lantern_client *client)
 {
     if (!client || !client->has_state || !client->data_dir || !client->has_fork_choice)
     {
-        return 0;
+        return LANTERN_CLIENT_OK;
     }
     struct lantern_persisted_block_list list;
     persisted_block_list_init(&list);
-    int iterate_rc = lantern_storage_iterate_blocks(client->data_dir, collect_block_visitor, &list);
+    int iterate_rc = lantern_storage_iterate_blocks(
+        client->data_dir,
+        collect_block_visitor,
+        &list);
     if (iterate_rc < 0)
     {
         lantern_log_error(
@@ -497,12 +633,12 @@ int restore_persisted_blocks(struct lantern_client *client)
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to enumerate persisted blocks");
         persisted_block_list_reset(&list);
-        return -1;
+        return LANTERN_CLIENT_ERR_STORAGE;
     }
     if (list.length == 0)
     {
         persisted_block_list_reset(&list);
-        return 0;
+        return LANTERN_CLIENT_OK;
     }
     qsort(list.items, list.length, sizeof(list.items[0]), compare_blocks_by_slot);
 
@@ -544,13 +680,148 @@ int restore_persisted_blocks(struct lantern_client *client)
     }
 
     persisted_block_list_reset(&list);
-    return 0;
+    return LANTERN_CLIENT_OK;
 }
 
 
 /* ============================================================================
  * Validator State Refresh
  * ============================================================================ */
+
+/**
+ * @brief Update a registry record from a state pubkey fallback.
+ *
+ * Copies the pubkey bytes into the registry record and refreshes the
+ * cached hex string when possible.
+ *
+ * @param record  Registry record to update
+ * @param pubkey  Pubkey bytes (LANTERN_VALIDATOR_PUBKEY_SIZE bytes)
+ * @param meta    Logging metadata
+ * @param index   Validator index (for logging)
+ *
+ * @note Thread safety: Caller must ensure exclusive access during initialization
+ */
+static void update_registry_record_from_state_pubkey(
+    struct lantern_validator_record *record,
+    const uint8_t *pubkey,
+    const struct lantern_log_metadata *meta,
+    size_t index)
+{
+    if (!record || !pubkey || !meta)
+    {
+        return;
+    }
+
+    memcpy(record->pubkey_bytes, pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE);
+    record->has_pubkey_bytes = true;
+
+    char hex[VALIDATOR_PUBKEY_HEX_BUFFER_LEN];
+    if (lantern_bytes_to_hex(pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE, hex, sizeof(hex), 1) != 0)
+    {
+        return;
+    }
+
+    char *dup = lantern_string_duplicate(hex);
+    if (!dup)
+    {
+        lantern_log_warn(
+            "client",
+            meta,
+            "failed to allocate pubkey hex for validator=%zu",
+            index);
+        return;
+    }
+
+    free(record->pubkey_hex);
+    record->pubkey_hex = dup;
+}
+
+
+/**
+ * @brief Populate a packed validator pubkey buffer from registry/state sources.
+ *
+ * Writes a packed array of validator pubkeys into `packed` and opportunistically
+ * fills missing registry pubkeys from the state.
+ *
+ * @param client              Client instance
+ * @param registry            Validator registry (must have records)
+ * @param state_count         Validator count in state
+ * @param packed              Output packed buffer (count * LANTERN_VALIDATOR_PUBKEY_SIZE bytes)
+ * @param count               Number of validators to write
+ * @param meta                Logging metadata
+ * @param out_registry_used   Output count of pubkeys sourced from registry
+ * @param out_state_used      Output count of pubkeys sourced from state fallback
+ * @param out_missing_pubkeys Output count of missing pubkeys
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL
+ *
+ * @note Thread safety: Caller must ensure exclusive access during initialization
+ */
+static int populate_validator_pubkeys(
+    struct lantern_client *client,
+    struct lantern_validator_registry *registry,
+    size_t state_count,
+    uint8_t *packed,
+    size_t count,
+    const struct lantern_log_metadata *meta,
+    size_t *out_registry_used,
+    size_t *out_state_used,
+    size_t *out_missing_pubkeys)
+{
+    if (!client || !registry || !registry->records || !packed || !meta
+        || !out_registry_used || !out_state_used || !out_missing_pubkeys)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    *out_registry_used = 0;
+    *out_state_used = 0;
+    *out_missing_pubkeys = 0;
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        struct lantern_validator_record *record = &registry->records[i];
+        const uint8_t *registry_pub = NULL;
+        if (record->has_pubkey_bytes && !lantern_validator_pubkey_is_zero(record->pubkey_bytes))
+        {
+            registry_pub = record->pubkey_bytes;
+        }
+
+        const uint8_t *state_pub = NULL;
+        if (state_count > i)
+        {
+            state_pub = lantern_state_validator_pubkey(&client->state, i);
+        }
+        if (state_pub && lantern_validator_pubkey_is_zero(state_pub))
+        {
+            state_pub = NULL;
+        }
+
+        const uint8_t *chosen = registry_pub ? registry_pub : state_pub;
+        size_t offset = i * LANTERN_VALIDATOR_PUBKEY_SIZE;
+        if (chosen)
+        {
+            memcpy(packed + offset, chosen, LANTERN_VALIDATOR_PUBKEY_SIZE);
+            if (!registry_pub && state_pub)
+            {
+                update_registry_record_from_state_pubkey(record, state_pub, meta, i);
+                ++(*out_state_used);
+            }
+            else if (registry_pub)
+            {
+                ++(*out_registry_used);
+            }
+        }
+        else
+        {
+            memset(packed + offset, 0, LANTERN_VALIDATOR_PUBKEY_SIZE);
+            ++(*out_missing_pubkeys);
+        }
+    }
+
+    return LANTERN_CLIENT_OK;
+}
+
 
 /**
  * Refresh state validator pubkeys from genesis registry.
@@ -562,15 +833,18 @@ int restore_persisted_blocks(struct lantern_client *client)
  * registry when available, falling back to state pubkeys otherwise.
  *
  * @param client  Client instance
- * @return 0 on success, -1 on failure
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if client is NULL or missing state
+ * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
+ * @return LANTERN_CLIENT_ERR_RUNTIME if state update fails
  *
- * @note Thread safety: Acquires validator_lock
+ * @note Thread safety: Caller must ensure exclusive access during initialization
  */
 int lantern_client_refresh_state_validators(struct lantern_client *client)
 {
     if (!client || !client->has_state)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_log_metadata meta = {.validator = client->node_id};
     struct lantern_validator_registry *registry = &client->genesis.validator_registry;
@@ -582,14 +856,18 @@ int lantern_client_refresh_state_validators(struct lantern_client *client)
     {
         if (state_count == 0)
         {
-            return lantern_state_set_validator_pubkeys(&client->state, NULL, 0);
+            if (lantern_state_set_validator_pubkeys(&client->state, NULL, 0) != 0)
+            {
+                return LANTERN_CLIENT_ERR_RUNTIME;
+            }
+            return LANTERN_CLIENT_OK;
         }
         lantern_log_info(
             "client",
             &meta,
             "validator registry missing; retaining existing state pubkeys count=%zu",
             state_count);
-        return 0;
+        return LANTERN_CLIENT_OK;
     }
 
     if (state_count > 0 && state_count != registry_count)
@@ -603,60 +881,33 @@ int lantern_client_refresh_state_validators(struct lantern_client *client)
     }
 
     size_t count = registry_count;
+    if (count > SIZE_MAX / LANTERN_VALIDATOR_PUBKEY_SIZE)
+    {
+        return LANTERN_CLIENT_ERR_ALLOC;
+    }
     size_t total_bytes = count * LANTERN_VALIDATOR_PUBKEY_SIZE;
     uint8_t *packed = malloc(total_bytes);
     if (!packed)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_ALLOC;
     }
     size_t registry_used = 0;
     size_t state_used = 0;
     size_t missing_pubkeys = 0;
-    for (size_t i = 0; i < count; ++i)
+    int pack_rc = populate_validator_pubkeys(
+        client,
+        registry,
+        state_count,
+        packed,
+        count,
+        &meta,
+        &registry_used,
+        &state_used,
+        &missing_pubkeys);
+    if (pack_rc != LANTERN_CLIENT_OK)
     {
-        struct lantern_validator_record *record = &registry->records[i];
-        const uint8_t *registry_pub =
-            (record && record->has_pubkey_bytes && !lantern_validator_pubkey_is_zero(record->pubkey_bytes))
-                ? record->pubkey_bytes
-                : NULL;
-        const uint8_t *state_pub = (state_count > i) ? lantern_state_validator_pubkey(&client->state, i) : NULL;
-        if (state_pub && lantern_validator_pubkey_is_zero(state_pub))
-        {
-            state_pub = NULL;
-        }
-
-        const uint8_t *chosen = registry_pub ? registry_pub : state_pub;
-        if (chosen)
-        {
-            memcpy(packed + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), chosen, LANTERN_VALIDATOR_PUBKEY_SIZE);
-            if (!registry_pub && state_pub && record)
-            {
-                memcpy(record->pubkey_bytes, state_pub, LANTERN_VALIDATOR_PUBKEY_SIZE);
-                record->has_pubkey_bytes = true;
-                char hex[(LANTERN_VALIDATOR_PUBKEY_SIZE * 2u) + 3u];
-                if (lantern_bytes_to_hex(
-                        state_pub,
-                        LANTERN_VALIDATOR_PUBKEY_SIZE,
-                        hex,
-                        sizeof(hex),
-                        1)
-                    == 0)
-                {
-                    free(record->pubkey_hex);
-                    record->pubkey_hex = lantern_string_duplicate(hex);
-                }
-                ++state_used;
-            }
-            else if (registry_pub)
-            {
-                ++registry_used;
-            }
-        }
-        else
-        {
-            memset(packed + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), 0, LANTERN_VALIDATOR_PUBKEY_SIZE);
-            ++missing_pubkeys;
-        }
+        free(packed);
+        return pack_rc;
     }
     int rc = lantern_state_set_validator_pubkeys(&client->state, packed, count);
     free(packed);
@@ -666,20 +917,21 @@ int lantern_client_refresh_state_validators(struct lantern_client *client)
             "client",
             &meta,
             "failed to copy validator pubkeys into parent state");
-        return -1;
+        return LANTERN_CLIENT_ERR_RUNTIME;
     }
     size_t enabled = lantern_client_enabled_validator_count(client);
     lantern_log_info(
         "client",
         &meta,
-        "refreshed validator pubkeys count=%zu registry=%zu state_fallback=%zu missing=%zu local_validators=%zu enabled=%zu",
+        "refreshed validator pubkeys count=%zu registry=%zu state_fallback=%zu missing=%zu "
+        "local_validators=%zu enabled=%zu",
         count,
         registry_used,
         state_used,
         missing_pubkeys,
         client->local_validator_count,
         enabled);
-    return 0;
+    return LANTERN_CLIENT_OK;
 }
 
 
@@ -688,7 +940,12 @@ int lantern_client_refresh_state_validators(struct lantern_client *client)
  * ============================================================================ */
 
 /**
- * Remove a pending block by root (internal, no locking).
+ * @brief Remove a pending block by root (internal, no locking).
+ *
+ * @param client  Client instance
+ * @param root    Block root to remove
+ *
+ * @note Thread safety: Caller must hold pending_lock
  */
 static void lantern_client_pending_remove_by_root_locked(
     struct lantern_client *client,
@@ -775,9 +1032,6 @@ void lantern_client_enqueue_pending_block(
 
     LanternRoot block_root_local = *block_root;
     LanternRoot parent_root_local = *parent_root;
-    char schedule_peer[128];
-    schedule_peer[0] = '\0';
-    bool schedule_parent = false;
 
     bool locked = lantern_client_lock_pending(client);
     if (!locked)
@@ -806,7 +1060,7 @@ void lantern_client_enqueue_pending_block(
 
     if (list->length >= LANTERN_PENDING_BLOCK_LIMIT && list->length > 0)
     {
-        char dropped_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+        char dropped_hex[ROOT_HEX_BUFFER_LEN];
         format_root_hex(&list->items[0].root, dropped_hex, sizeof(dropped_hex));
         lantern_log_warn(
             "state",
@@ -829,8 +1083,8 @@ void lantern_client_enqueue_pending_block(
         return;
     }
 
-    char block_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char parent_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char block_hex[ROOT_HEX_BUFFER_LEN];
+    char parent_hex[ROOT_HEX_BUFFER_LEN];
     format_root_hex(&block_root_local, block_hex, sizeof(block_hex));
     format_root_hex(&parent_root_local, parent_hex, sizeof(parent_hex));
 
@@ -843,8 +1097,6 @@ void lantern_client_enqueue_pending_block(
        req/resp should only be used for sync recovery, not for normal block propagation.
        The parent_requested flag is no longer used for immediate requests. */
     entry->parent_requested = false;
-    (void)schedule_peer;
-    (void)schedule_parent;
 
     lantern_client_unlock_pending(client, locked);
 
@@ -872,7 +1124,9 @@ void lantern_client_enqueue_pending_block(
  *
  * @note Thread safety: Acquires pending_lock and state_lock
  */
-void lantern_client_process_pending_children(struct lantern_client *client, const LanternRoot *parent_root)
+void lantern_client_process_pending_children(
+    struct lantern_client *client,
+    const LanternRoot *parent_root)
 {
     if (!client || !parent_root)
     {
@@ -882,7 +1136,7 @@ void lantern_client_process_pending_children(struct lantern_client *client, cons
     {
         LanternSignedBlock replay;
         LanternRoot child_root;
-        char peer_copy[128];
+        char peer_copy[PEER_TEXT_BUFFER_LEN];
         bool have_replay = false;
 
         bool locked = lantern_client_lock_pending(client);

@@ -43,17 +43,6 @@
  * Constants
  * ============================================================================ */
 
-/** Maximum bytes for a reqresp header varint */
-#define LANTERN_REQRESP_HEADER_MAX_BYTES 10u
-
-
-/* ============================================================================
- * External Stream I/O Functions (from client_reqresp_stream.c)
- * ============================================================================ */
-
-extern int stream_write_all(libp2p_stream_t *stream, const uint8_t *data, size_t length);
-
-
 /* ============================================================================
  * Forward Declarations
  * ============================================================================ */
@@ -67,13 +56,6 @@ static bool lantern_client_process_stream_block_chunk(
     bool *saw_block);
 static void *block_request_worker(void *arg);
 static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int err);
-
-/* Forward declaration for recursive call - defined later in this file */
-int lantern_client_schedule_blocks_request(
-    struct lantern_client *client,
-    const char *peer_id_text,
-    const LanternRoot *root,
-    bool use_legacy);
 
 
 /* ============================================================================
@@ -419,12 +401,15 @@ static void *block_request_worker(void *arg)
         root_hex[0] ? root_hex : "0x0",
         payload_len);
 
-    if (stream_write_all(stream, header, header_len) != 0 || stream_write_all(stream, payload, payload_len) != 0)
+    ssize_t write_err = 0;
+    if (stream_write_all(stream, header, header_len, &write_err) != 0
+        || stream_write_all(stream, payload, payload_len, &write_err) != 0)
     {
         lantern_log_error(
             "reqresp",
             &meta,
-            "failed to write blocks_by_root request");
+            "failed to write blocks_by_root request err=%zd",
+            write_err);
         schedule_legacy = !ctx->using_legacy;
         goto cleanup;
     }
@@ -912,7 +897,10 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
  * @param peer_id_text  Peer ID string
  * @param root          Block root to request
  * @param use_legacy    True to use legacy protocol
- * @return 0 on success, -1 on failure
+ * @return 0 on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL, the peer ID is invalid, or the root is zero
+ * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
+ * @return LANTERN_CLIENT_ERR_NETWORK if stream dialing fails or networking is unavailable
  *
  * @note Thread safety: This function is thread-safe
  */
@@ -922,13 +910,17 @@ int lantern_client_schedule_blocks_request(
     const LanternRoot *root,
     bool use_legacy)
 {
-    if (!client || !peer_id_text || !root || !client->network.host)
+    if (!client || !peer_id_text || !root)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    if (!client->network.host)
+    {
+        return LANTERN_CLIENT_ERR_NETWORK;
     }
     if (lantern_root_is_zero(root))
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
 
     if (client->debug_disable_block_requests)
@@ -950,7 +942,7 @@ int lantern_client_schedule_blocks_request(
     struct block_request_ctx *ctx = (struct block_request_ctx *)calloc(1, sizeof(*ctx));
     if (!ctx)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_ALLOC;
     }
     ctx->client = client;
     ctx->root = *root;
@@ -981,7 +973,7 @@ int lantern_client_schedule_blocks_request(
                 .peer = peer_id_text},
             "failed to parse peer id for blocks_by_root request");
         block_request_ctx_free(ctx);
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
 
     char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
@@ -1011,7 +1003,7 @@ int lantern_client_schedule_blocks_request(
             "libp2p open stream failed rc=%d",
             rc);
         block_request_ctx_free(ctx);
-        return -1;
+        return LANTERN_CLIENT_ERR_NETWORK;
     }
     return 0;
 }

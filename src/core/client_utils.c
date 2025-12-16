@@ -36,7 +36,23 @@
 
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/support/log.h"
+#include "lantern/support/secure_mem.h"
 #include "lantern/support/strings.h"
+
+
+/* ============================================================================
+ * Constants
+ * ============================================================================ */
+
+#if !defined(_WIN32)
+static const uint64_t CLIENT_UTILS_MILLIS_PER_SECOND = 1000ULL;
+static const uint64_t CLIENT_UTILS_MICROS_PER_MILLI = 1000ULL;
+static const uint64_t CLIENT_UTILS_NANOS_PER_MILLI = 1000000ULL;
+static const uint64_t CLIENT_UTILS_NANOS_PER_SECOND = 1000000000ULL;
+#endif
+
+static const size_t CLIENT_UTILS_ROOT_HEX_MIN_LEN = 4;
+static const size_t CLIENT_UTILS_NODE_KEY_SIZE = 32;
 
 
 /* ============================================================================
@@ -60,29 +76,63 @@ uint64_t monotonic_millis(void)
     {
         return 0;
     }
-    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+    if (ts.tv_sec < 0 || ts.tv_nsec < 0 || (uint64_t)ts.tv_nsec >= CLIENT_UTILS_NANOS_PER_SECOND)
+    {
+        return 0;
+    }
+
+    uint64_t millis = (uint64_t)ts.tv_sec;
+    if (millis > UINT64_MAX / CLIENT_UTILS_MILLIS_PER_SECOND)
+    {
+        return 0;
+    }
+    millis *= CLIENT_UTILS_MILLIS_PER_SECOND;
+
+    uint64_t nanos_part = (uint64_t)ts.tv_nsec / CLIENT_UTILS_NANOS_PER_MILLI;
+    if (millis > UINT64_MAX - nanos_part)
+    {
+        return 0;
+    }
+    return millis + nanos_part;
 #elif defined(__APPLE__)
-    static mach_timebase_info_data_t timebase = {0};
-    if ((timebase.denom == 0) && (mach_timebase_info(&timebase) != KERN_SUCCESS))
+    mach_timebase_info_data_t timebase = {0};
+    if (mach_timebase_info(&timebase) != KERN_SUCCESS || timebase.denom == 0 || timebase.numer == 0)
     {
         return 0;
     }
 
     uint64_t ticks = mach_absolute_time();
-    if ((timebase.numer != 0) && (ticks > UINT64_MAX / timebase.numer))
+    if (ticks > UINT64_MAX / timebase.numer)
     {
         return 0;
     }
 
     uint64_t nanos = (ticks * timebase.numer) / timebase.denom;
-    return nanos / 1000000;
+    return nanos / CLIENT_UTILS_NANOS_PER_MILLI;
 #else
     struct timeval tv;
     if (gettimeofday(&tv, NULL) != 0)
     {
         return 0;
     }
-    return (uint64_t)tv.tv_sec * 1000 + (uint64_t)tv.tv_usec / 1000;
+    if (tv.tv_sec < 0 || tv.tv_usec < 0)
+    {
+        return 0;
+    }
+
+    uint64_t millis = (uint64_t)tv.tv_sec;
+    if (millis > UINT64_MAX / CLIENT_UTILS_MILLIS_PER_SECOND)
+    {
+        return 0;
+    }
+    millis *= CLIENT_UTILS_MILLIS_PER_SECOND;
+
+    uint64_t usec_part = (uint64_t)tv.tv_usec / CLIENT_UTILS_MICROS_PER_MILLI;
+    if (millis > UINT64_MAX - usec_part)
+    {
+        return 0;
+    }
+    return millis + usec_part;
 #endif
 }
 
@@ -97,17 +147,31 @@ uint64_t monotonic_millis(void)
 uint64_t validator_wall_time_now_seconds(void)
 {
 #if defined(_WIN32)
+    static const uint64_t WINDOWS_UNIX_EPOCH_DIFF_100NS = 116444736000000000ULL;
+    static const uint64_t WINDOWS_100NS_PER_SECOND = 10000000ULL;
+
     FILETIME ft;
     GetSystemTimeAsFileTime(&ft);
     ULARGE_INTEGER uli;
     uli.LowPart = ft.dwLowDateTime;
     uli.HighPart = ft.dwHighDateTime;
-    // FILETIME is 100-nanosecond intervals since Jan 1, 1601
-    // Convert to Unix epoch (seconds since Jan 1, 1970)
-    return (uint64_t)((uli.QuadPart - 116444736000000000ULL) / 10000000ULL);
+    uint64_t time_100ns = (uint64_t)uli.QuadPart;
+    if (time_100ns < WINDOWS_UNIX_EPOCH_DIFF_100NS)
+    {
+        return 0;
+    }
+
+    // FILETIME is 100-nanosecond intervals since Jan 1, 1601.
+    // Convert to Unix epoch (seconds since Jan 1, 1970).
+    uint64_t unix_100ns = time_100ns - WINDOWS_UNIX_EPOCH_DIFF_100NS;
+    return unix_100ns / WINDOWS_100NS_PER_SECOND;
 #else
     struct timeval tv;
     if (gettimeofday(&tv, NULL) != 0)
+    {
+        return 0;
+    }
+    if (tv.tv_sec < 0)
     {
         return 0;
     }
@@ -129,8 +193,9 @@ void validator_sleep_ms(uint32_t ms)
     Sleep(ms);
 #else
     struct timespec ts;
-    ts.tv_sec = ms / 1000;
-    ts.tv_nsec = (ms % 1000) * 1000000L;
+    ts.tv_sec = (time_t)(ms / (uint32_t)CLIENT_UTILS_MILLIS_PER_SECOND);
+    ts.tv_nsec = (long)((ms % (uint32_t)CLIENT_UTILS_MILLIS_PER_SECOND)
+        * (uint32_t)CLIENT_UTILS_NANOS_PER_MILLI);
     while (nanosleep(&ts, &ts) != 0)
     {
         if (errno != EINTR)
@@ -188,6 +253,32 @@ uint64_t blocks_request_backoff_ms(uint32_t failures)
  * ============================================================================ */
 
 /**
+ * @brief Unlock a mutex and log on failure.
+ */
+static void unlock_mutex_with_log(
+    pthread_mutex_t *mutex,
+    const char *validator_id,
+    const char *name)
+{
+    if (!mutex || !name)
+    {
+        return;
+    }
+
+    int unlock_rc = pthread_mutex_unlock(mutex);
+    if (unlock_rc != 0)
+    {
+        lantern_log_warn(
+            "client",
+            &(const struct lantern_log_metadata){.validator = validator_id},
+            "failed to unlock %s: %d",
+            name,
+            unlock_rc);
+    }
+}
+
+
+/**
  * Acquire the client state lock.
  *
  * @param client  Client instance
@@ -217,7 +308,7 @@ void lantern_client_unlock_state(struct lantern_client *client, bool locked)
 {
     if (locked && client && client->state_lock_initialized)
     {
-        pthread_mutex_unlock(&client->state_lock);
+        unlock_mutex_with_log(&client->state_lock, client->node_id, "state_lock");
     }
 }
 
@@ -252,7 +343,7 @@ void lantern_client_unlock_pending(struct lantern_client *client, bool locked)
 {
     if (locked && client && client->pending_lock_initialized)
     {
-        pthread_mutex_unlock(&client->pending_lock);
+        unlock_mutex_with_log(&client->pending_lock, client->node_id, "pending_lock");
     }
 }
 
@@ -280,28 +371,25 @@ void format_root_hex(const LanternRoot *root, char *out, size_t out_len)
     }
     out[0] = '\0';
 
-    if (!root || out_len < 5)
+    if (!root || out_len < CLIENT_UTILS_ROOT_HEX_MIN_LEN)
     {
         return;
     }
 
     // Check if root is all zeros
-    bool all_zero = true;
+    bool is_all_zero = true;
     for (size_t i = 0; i < LANTERN_ROOT_SIZE; ++i)
     {
         if (root->bytes[i] != 0)
         {
-            all_zero = false;
+            is_all_zero = false;
             break;
         }
     }
-    if (all_zero)
+    if (is_all_zero)
     {
-        if (out_len >= 4)
-        {
-            strncpy(out, "0x0", out_len - 1);
-            out[out_len - 1] = '\0';
-        }
+        strncpy(out, "0x0", out_len - 1);
+        out[out_len - 1] = '\0';
         return;
     }
 
@@ -504,7 +592,9 @@ bool lantern_client_block_known_locked(
  *
  * @param dest   Pointer to destination string pointer
  * @param value  Value to copy
- * @return 0 on success, -1 on error
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if dest or value is NULL
+ * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
  *
  * @note Thread safety: This function is thread-safe
  */
@@ -512,16 +602,16 @@ int set_owned_string(char **dest, const char *value)
 {
     if (!dest || !value)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     char *copy = lantern_string_duplicate(value);
     if (!copy)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_ALLOC;
     }
     free(*dest);
     *dest = copy;
-    return 0;
+    return LANTERN_CLIENT_OK;
 }
 
 
@@ -530,7 +620,10 @@ int set_owned_string(char **dest, const char *value)
  *
  * @param path      File path
  * @param out_text  Output buffer (caller owns)
- * @return 0 on success, -1 on error
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if path or out_text is NULL
+ * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
+ * @return LANTERN_CLIENT_ERR_CONFIG if the file cannot be read or trimmed
  *
  * @note Thread safety: This function is thread-safe
  */
@@ -538,10 +631,16 @@ int read_trimmed_file(const char *path, char **out_text)
 {
     if (!path || !out_text)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
 
-    FILE *fp = fopen(path, "rb");
+    int result = LANTERN_CLIENT_OK;
+    FILE *fp = NULL;
+    char *buffer = NULL;
+
+    *out_text = NULL;
+
+    fp = fopen(path, "rb");
     if (!fp)
     {
         lantern_log_error(
@@ -549,36 +648,35 @@ int read_trimmed_file(const char *path, char **out_text)
             &(const struct lantern_log_metadata){0},
             "unable to open %s for reading",
             path);
-        return -1;
+        return LANTERN_CLIENT_ERR_CONFIG;
     }
 
     if (fseek(fp, 0, SEEK_END) != 0)
     {
-        fclose(fp);
-        return -1;
+        result = LANTERN_CLIENT_ERR_CONFIG;
+        goto cleanup;
     }
     long file_size = ftell(fp);
-    if (file_size < 0 || (unsigned long)file_size > SIZE_MAX - 1)
+    if (file_size < 0 || (uint64_t)file_size > SIZE_MAX - 1)
     {
-        fclose(fp);
-        return -1;
+        result = LANTERN_CLIENT_ERR_CONFIG;
+        goto cleanup;
     }
     if (fseek(fp, 0, SEEK_SET) != 0)
     {
-        fclose(fp);
-        return -1;
+        result = LANTERN_CLIENT_ERR_CONFIG;
+        goto cleanup;
     }
 
     size_t alloc_size = (size_t)file_size + 1;
-    char *buffer = malloc(alloc_size);
+    buffer = malloc(alloc_size);
     if (!buffer)
     {
-        fclose(fp);
-        return -1;
+        result = LANTERN_CLIENT_ERR_ALLOC;
+        goto cleanup;
     }
 
     size_t read_len = fread(buffer, 1, (size_t)file_size, fp);
-    fclose(fp);
     if (read_len != (size_t)file_size)
     {
         lantern_log_error(
@@ -588,21 +686,38 @@ int read_trimmed_file(const char *path, char **out_text)
             path,
             read_len,
             file_size);
-        free(buffer);
-        return -1;
+        result = LANTERN_CLIENT_ERR_CONFIG;
+        goto cleanup;
     }
     buffer[read_len] = '\0';
 
     char *trimmed = lantern_trim_whitespace(buffer);
     if (!trimmed)
     {
-        free(buffer);
-        return -1;
+        result = LANTERN_CLIENT_ERR_CONFIG;
+        goto cleanup;
     }
     size_t trimmed_len = strlen(trimmed);
     memmove(buffer, trimmed, trimmed_len + 1);
     *out_text = buffer;
-    return 0;
+    buffer = NULL;
+    result = LANTERN_CLIENT_OK;
+
+cleanup:
+    if (fp)
+    {
+        if (fclose(fp) != 0)
+        {
+            lantern_log_warn(
+                "client",
+                &(const struct lantern_log_metadata){0},
+                "failed to close %s: errno=%d",
+                path,
+                errno);
+        }
+    }
+    free(buffer);
+    return result;
 }
 
 
@@ -613,7 +728,10 @@ int read_trimmed_file(const char *path, char **out_text)
  *
  * @param options  Client options
  * @param out_key  Output buffer (32 bytes)
- * @return 0 on success, -1 on error
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if options or out_key is NULL
+ * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
+ * @return LANTERN_CLIENT_ERR_CONFIG if the key is missing or invalid
  *
  * @note Thread safety: This function is thread-safe
  */
@@ -621,25 +739,28 @@ int load_node_key_bytes(const struct lantern_client_options *options, uint8_t ou
 {
     if (!options || !out_key)
     {
-        return -1;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
 
+    lantern_secure_zero(out_key, CLIENT_UTILS_NODE_KEY_SIZE);
+
+    int result = LANTERN_CLIENT_OK;
     char *owned = NULL;
-    int rc = -1;
 
     if (options->node_key_hex)
     {
         owned = lantern_string_duplicate(options->node_key_hex);
         if (!owned)
         {
-            return -1;
+            return LANTERN_CLIENT_ERR_ALLOC;
         }
     }
     else if (options->node_key_path)
     {
-        if (read_trimmed_file(options->node_key_path, &owned) != 0)
+        int rc = read_trimmed_file(options->node_key_path, &owned);
+        if (rc != LANTERN_CLIENT_OK)
         {
-            return -1;
+            return rc;
         }
     }
     else
@@ -648,32 +769,32 @@ int load_node_key_bytes(const struct lantern_client_options *options, uint8_t ou
             "client",
             &(const struct lantern_log_metadata){.validator = options->node_id},
             "--node-key or --node-key-path is required");
-        return -1;
+        return LANTERN_CLIENT_ERR_CONFIG;
     }
 
     char *trimmed = lantern_trim_whitespace(owned);
     if (!trimmed)
     {
-        free(owned);
-        return -1;
+        result = LANTERN_CLIENT_ERR_CONFIG;
+        goto cleanup;
     }
 
-    rc = lantern_hex_decode(trimmed, out_key, 32);
-    if (rc != 0)
+    if (lantern_hex_decode(trimmed, out_key, CLIENT_UTILS_NODE_KEY_SIZE) != 0)
     {
         lantern_log_error(
             "client",
             &(const struct lantern_log_metadata){.validator = options->node_id},
             "invalid node key (expected 32-byte hex string)");
+        result = LANTERN_CLIENT_ERR_CONFIG;
     }
 
+cleanup:
     if (owned)
     {
-        memset(owned, 0, strlen(owned));
+        lantern_secure_zero(owned, strlen(owned));
         free(owned);
     }
-
-    return rc;
+    return result;
 }
 
 

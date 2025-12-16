@@ -26,6 +26,27 @@
 #define LANTERN_REQRESP_RESPONSE_INVALID_REQUEST 2u
 #define LANTERN_REQRESP_RESPONSE_SERVER_ERROR 3u
 
+/**
+ * Reqresp service error codes.
+ *
+ * Functions return 0 on success and a negative value on failure.
+ *
+ * When a function also provides an `out_err` parameter, `out_err` contains the
+ * underlying libp2p error code or `-errno` value for debugging.
+ */
+typedef enum
+{
+    LANTERN_REQRESP_OK = 0,
+    LANTERN_REQRESP_ERR_INVALID_PARAM = -1000,
+    LANTERN_REQRESP_ERR_SET_DEADLINE = -1001,
+    LANTERN_REQRESP_ERR_SET_READ_INTEREST = -1002,
+    LANTERN_REQRESP_ERR_STREAM_READ = -1003,
+    LANTERN_REQRESP_ERR_STREAM_WRITE = -1004,
+    LANTERN_REQRESP_ERR_VARINT_HEADER_TOO_LONG = -1005,
+    LANTERN_REQRESP_ERR_PAYLOAD_TOO_LARGE = -1006,
+    LANTERN_REQRESP_ERR_ALLOC = -1007,
+} lantern_reqresp_error;
+
 enum lantern_reqresp_protocol_kind {
     LANTERN_REQRESP_PROTOCOL_STATUS = 0,
     LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT = 1,
