@@ -336,7 +336,6 @@ if(LANTERN_BUILD_TESTS)
         lantern_state
         lantern_slot_clock
         lantern_snappy
-        lantern_yaml_parser_cve
         lantern_networking_messages
         lantern_libp2p
         lantern_fork_choice

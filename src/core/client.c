@@ -1870,24 +1870,15 @@ static void shutdown_state_and_runtime(struct lantern_client *client)
  */
 static lantern_client_error client_start_apis(struct lantern_client *client)
 {
-    struct lantern_http_server_config http_config;
-    memset(&http_config, 0, sizeof(http_config));
-    http_config.port = client->http_port;
-    http_config.callbacks.context = client;
-    http_config.callbacks.snapshot_head = http_snapshot_head;
-    http_config.callbacks.validator_count = http_validator_count_cb;
-    http_config.callbacks.validator_info = http_validator_info_cb;
-    http_config.callbacks.set_validator_status = http_set_validator_status_cb;
-    if (lantern_http_server_start(&client->http_server, &http_config) != 0)
+    if (client->http_port != 0)
     {
-        lantern_log_error(
+        lantern_log_warn(
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to start HTTP server on port %" PRIu16,
+            "HTTP API disabled; ignoring --http-port %" PRIu16,
             client->http_port);
-        return LANTERN_CLIENT_ERR_NETWORK;
     }
-    client->http_running = true;
+    client->http_running = false;
 
     struct lantern_metrics_callbacks metrics_callbacks;
     memset(&metrics_callbacks, 0, sizeof(metrics_callbacks));
