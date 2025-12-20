@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum { LANTERN_YAML_MAX_STACK_DEPTH = 64 };
+
 static int get_indentation(const char *line) {
     int count = 0;
     while (*line == ' ' || *line == '\t') {
@@ -121,6 +123,20 @@ static void commit_current(
     current->capacity = 0;
 }
 
+static void free_yaml_object(LanternYamlObject *object) {
+    if (!object || !object->pairs) {
+        return;
+    }
+    for (size_t i = 0; i < object->num_pairs; ++i) {
+        free(object->pairs[i].key);
+        free(object->pairs[i].value);
+    }
+    free(object->pairs);
+    object->pairs = NULL;
+    object->num_pairs = 0;
+    object->capacity = 0;
+}
+
 LanternYamlObject *lantern_yaml_read_array(const char *file_path, const char *array_name, size_t *out_count) {
     if (!file_path || !array_name || !out_count) {
         return NULL;
@@ -134,10 +150,11 @@ LanternYamlObject *lantern_yaml_read_array(const char *file_path, const char *ar
     }
 
     int stack_size = 0;
-    char *keys_stack[64] = {0};
-    int indent_stack[64] = {0};
+    char *keys_stack[LANTERN_YAML_MAX_STACK_DEPTH] = {0};
+    int indent_stack[LANTERN_YAML_MAX_STACK_DEPTH] = {0};
     int in_target_array = 0;
     int array_depth = -1;
+    int parse_error = 0;
 
     LanternYamlObject current = {.pairs = NULL, .num_pairs = 0, .capacity = 0};
     LanternYamlObject *objects = NULL;
@@ -187,6 +204,13 @@ LanternYamlObject *lantern_yaml_read_array(const char *file_path, const char *ar
 
         char *key_copy = strdup(key);
         if (!key_copy) {
+            parse_error = 1;
+            break;
+        }
+
+        if (stack_size >= LANTERN_YAML_MAX_STACK_DEPTH) {
+            free(key_copy);
+            parse_error = 1;
             break;
         }
 
@@ -196,7 +220,9 @@ LanternYamlObject *lantern_yaml_read_array(const char *file_path, const char *ar
 
         char *full_path = build_path(keys_stack, stack_size);
         if (!full_path) {
-            continue;
+            pop_stack(keys_stack, &stack_size);
+            parse_error = 1;
+            break;
         }
 
         if (strcmp(full_path, array_name) == 0) {
@@ -217,6 +243,16 @@ LanternYamlObject *lantern_yaml_read_array(const char *file_path, const char *ar
     }
 
     fclose(fp);
+
+    if (parse_error) {
+        free_yaml_object(&current);
+        lantern_yaml_free_objects(objects, *out_count);
+        for (int i = 0; i < stack_size; ++i) {
+            free(keys_stack[i]);
+        }
+        *out_count = 0;
+        return NULL;
+    }
 
     if (in_target_array) {
         commit_current(&current, &objects, &capacity, out_count);
