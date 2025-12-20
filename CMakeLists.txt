@@ -187,6 +187,7 @@ if(LANTERN_BUILD_TESTS)
     target_link_libraries(lantern_rlp_test PRIVATE lantern)
     add_test(NAME lantern_rlp COMMAND lantern_rlp_test)
 
+
     add_executable(lantern_enr_test tests/unit/test_enr.c)
     target_link_libraries(lantern_enr_test PRIVATE lantern)
     add_test(NAME lantern_enr COMMAND lantern_enr_test)
