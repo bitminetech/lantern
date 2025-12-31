@@ -273,6 +273,7 @@ void lantern_log_log(
     char *ctx_cursor = context;
     size_t ctx_remaining = sizeof(context);
     context[0] = '\0';
+    const char *peer_text = (metadata && metadata->peer && metadata->peer[0]) ? metadata->peer : NULL;
 
     /* Add slot if present */
     if (metadata && metadata->has_slot) {
@@ -299,32 +300,7 @@ void lantern_log_log(
         }
     }
 
-    /* Add peer if present (truncate long peer IDs) */
-    if (metadata && metadata->peer && metadata->peer[0]) {
-        if (ctx_cursor != context) {
-            int w = snprintf(ctx_cursor, ctx_remaining, " ");
-            if (w > 0 && (size_t)w < ctx_remaining) {
-                ctx_cursor += w;
-                ctx_remaining -= (size_t)w;
-            }
-        }
-        /* Truncate peer ID if too long (show first 8 chars) */
-        size_t peer_len = strlen(metadata->peer);
-        if (peer_len > 16) {
-            int w = snprintf(ctx_cursor, ctx_remaining, "peer=%.8s..", metadata->peer);
-            if (w > 0 && (size_t)w < ctx_remaining) {
-                ctx_cursor += w;
-                ctx_remaining -= (size_t)w;
-            }
-        } else {
-            int w = snprintf(ctx_cursor, ctx_remaining, "peer=%s", metadata->peer);
-            if (w > 0 && (size_t)w < ctx_remaining) {
-                ctx_cursor += w;
-                ctx_remaining -= (size_t)w;
-            }
-        }
-    }
-
+    /* Add peer later to avoid truncating long peer IDs */
     /*
      * Output format:
      * HH:MM:SS.mmm LVL [component] message  context
@@ -348,8 +324,17 @@ void lantern_log_log(
             formatted);
 
         /* Add context if present */
-        if (context[0]) {
-            fprintf(target, "  %s%s%s", ANSI_DIM, context, ANSI_RESET);
+        if (context[0] || peer_text) {
+            fprintf(target, "  %s", ANSI_DIM);
+            if (context[0]) {
+                fprintf(target, "%s", context);
+                if (peer_text) {
+                    fprintf(target, " peer=%s", peer_text);
+                }
+            } else {
+                fprintf(target, "peer=%s", peer_text);
+            }
+            fprintf(target, "%s", ANSI_RESET);
         }
         fprintf(target, "\n");
     } else {
@@ -363,8 +348,16 @@ void lantern_log_log(
             formatted);
 
         /* Add context if present */
-        if (context[0]) {
-            fprintf(target, "  %s", context);
+        if (context[0] || peer_text) {
+            fprintf(target, "  ");
+            if (context[0]) {
+                fprintf(target, "%s", context);
+                if (peer_text) {
+                    fprintf(target, " peer=%s", peer_text);
+                }
+            } else {
+                fprintf(target, "peer=%s", peer_text);
+            }
         }
         fprintf(target, "\n");
     }

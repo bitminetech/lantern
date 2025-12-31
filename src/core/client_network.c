@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <inttypes.h>
 
 #include <libp2p/errors.h>
 #include <protocol/gossipsub/gossipsub.h>
@@ -248,6 +249,25 @@ void request_status_now(struct lantern_client *client, const peer_id_t *peer, co
     if (!client || !client->reqresp_running)
     {
         return;
+    }
+    uint64_t genesis_time = client->genesis.chain_config.genesis_time;
+    if (genesis_time > 0)
+    {
+        uint64_t now = validator_wall_time_now_seconds();
+        if (now > 0 && now < genesis_time)
+        {
+            struct lantern_log_metadata meta = {
+                .validator = client->node_id,
+                .peer = (peer_text && peer_text[0]) ? peer_text : NULL,
+            };
+            lantern_log_trace(
+                "reqresp",
+                &meta,
+                "skipping status request before genesis now=%" PRIu64 " genesis_time=%" PRIu64,
+                now,
+                genesis_time);
+            return;
+        }
     }
     char peer_buffer[128];
     peer_buffer[0] = '\0';

@@ -62,6 +62,9 @@ struct lantern_vote_rejection_info
 {
     bool has_reason;       /**< True if rejection reason is set */
     char message[256];     /**< Rejection reason message */
+    bool has_unknown_root; /**< True if rejection is due to unknown checkpoint root */
+    LanternRoot unknown_root; /**< Unknown checkpoint root */
+    uint64_t unknown_slot; /**< Slot of unknown checkpoint */
 };
 
 
@@ -303,6 +306,7 @@ bool lantern_client_validate_vote_constraints(
  * @param block       Signed block to import
  * @param block_root  Precomputed block root (may be NULL)
  * @param meta        Logging metadata
+ * @param allow_historical True to allow importing blocks older than local slot
  * @return true if block was imported successfully
  *
  * @note Thread safety: Acquires state_lock and pending_lock
@@ -311,7 +315,8 @@ bool lantern_client_import_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,
     const LanternRoot *block_root,
-    const struct lantern_log_metadata *meta);
+    const struct lantern_log_metadata *meta,
+    bool allow_historical);
 
 
 /**
@@ -324,6 +329,7 @@ bool lantern_client_import_block(
  * @param root      Precomputed block root (may be NULL)
  * @param peer_text Peer ID string (may be NULL)
  * @param context   Description of source for logging
+ * @param allow_historical True to allow importing blocks older than local slot
  *
  * @note Thread safety: Acquires state_lock via lantern_client_import_block
  */
@@ -332,7 +338,8 @@ void lantern_client_record_block(
     const LanternSignedBlock *block,
     const LanternRoot *root,
     const char *peer_text,
-    const char *context);
+    const char *context,
+    bool allow_historical);
 
 
 /**
@@ -441,7 +448,24 @@ void lantern_client_enqueue_pending_block(
     const LanternSignedBlock *block,
     const LanternRoot *block_root,
     const LanternRoot *parent_root,
-    const char *peer_text);
+    const char *peer_text,
+    bool request_parent);
+
+/**
+ * Attempt to request the parent of a pending block after a blocks_by_root success.
+ *
+ * Uses the peer that just completed a blocks_by_root request to backfill
+ * missing parents for queued blocks.
+ *
+ * @param client    Client instance
+ * @param peer_text Peer ID string (must be non-NULL/non-empty)
+ *
+ * @note Thread safety: Thread-safe; acquires pending_lock internally
+ */
+void lantern_client_request_pending_parent_after_blocks(
+    struct lantern_client *client,
+    const char *peer_text,
+    const LanternRoot *request_root);
 
 
 /**

@@ -1,6 +1,7 @@
 #include "lantern/networking/messages.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -12,12 +13,7 @@
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
 
-/* Status SNAPPY framing mode: always framed (RFC 7493 style) to match Zeam. */
-
-static bool status_payload_is_framed(const uint8_t *data, size_t len) {
-    /* Minimal framed header: chunk type + 24‑bit length + "sNaPpY" magic */
-    return len >= 10 && data[0] == 0xff && memcmp(data + 4, "sNaPpY", 6) == 0;
-}
+/* Status SNAPPY framing mode: accept framed or raw payloads. */
 
 static int write_u32_le(uint32_t value, uint8_t *out, size_t out_len) {
     if (!out || out_len < sizeof(uint32_t)) {
@@ -38,6 +34,121 @@ static int read_u32_le(const uint8_t *data, size_t data_len, uint32_t *value) {
         | ((uint32_t)data[1] << 8)
         | ((uint32_t)data[2] << 16)
         | ((uint32_t)data[3] << 24);
+    return 0;
+}
+
+static int lantern_network_blocks_by_root_response_decode_prefixed(
+    LanternBlocksByRootResponse *resp,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!resp || (!data && data_len > 0)) {
+        return -1;
+    }
+    if (lantern_blocks_by_root_response_resize(resp, 0) != 0) {
+        return -1;
+    }
+    if (data_len == 0) {
+        return 0;
+    }
+    if (data_len < sizeof(uint32_t)) {
+        return -1;
+    }
+
+    uint32_t first_offset = 0;
+    if (read_u32_le(data, data_len, &first_offset) != 0) {
+        return -1;
+    }
+    if (first_offset > data_len || (first_offset % sizeof(uint32_t)) != 0) {
+        return -1;
+    }
+
+    size_t count = first_offset / sizeof(uint32_t);
+    if (count == 0 || count > LANTERN_MAX_REQUEST_BLOCKS) {
+        return -1;
+    }
+    if (lantern_blocks_by_root_response_resize(resp, count) != 0) {
+        lantern_blocks_by_root_response_reset(resp);
+        return -1;
+    }
+
+    size_t offsets_len = count * sizeof(uint32_t);
+    if (data_len < offsets_len) {
+        lantern_blocks_by_root_response_reset(resp);
+        return -1;
+    }
+
+    const uint8_t *offsets_region = data;
+    const uint8_t *payload_region = data;
+    size_t payload_total = data_len;
+
+    uint32_t prev_offset = first_offset;
+    for (size_t i = 0; i < count; ++i) {
+        size_t offset_index = i * sizeof(uint32_t);
+        uint32_t start_offset = 0;
+        if (read_u32_le(offsets_region + offset_index, data_len - offset_index, &start_offset) != 0) {
+            lantern_blocks_by_root_response_reset(resp);
+            return -1;
+        }
+        if (start_offset < offsets_len || start_offset > payload_total) {
+            lantern_blocks_by_root_response_reset(resp);
+            return -1;
+        }
+        if (i > 0 && start_offset < prev_offset) {
+            lantern_blocks_by_root_response_reset(resp);
+            return -1;
+        }
+
+        uint32_t end_offset = (uint32_t)payload_total;
+        if (i + 1 < count) {
+            size_t next_index = (i + 1) * sizeof(uint32_t);
+            if (read_u32_le(offsets_region + next_index, data_len - next_index, &end_offset) != 0) {
+                lantern_blocks_by_root_response_reset(resp);
+                return -1;
+            }
+            if (end_offset < start_offset || end_offset > payload_total) {
+                lantern_blocks_by_root_response_reset(resp);
+                return -1;
+            }
+        }
+
+        size_t span = (size_t)end_offset - (size_t)start_offset;
+        if (span <= sizeof(uint32_t)) {
+            lantern_blocks_by_root_response_reset(resp);
+            return -1;
+        }
+
+        uint32_t sig_count = 0;
+        if (read_u32_le(payload_region + start_offset, span, &sig_count) != 0) {
+            lantern_blocks_by_root_response_reset(resp);
+            return -1;
+        }
+        if (sig_count > LANTERN_MAX_BLOCK_SIGNATURES) {
+            lantern_blocks_by_root_response_reset(resp);
+            return -1;
+        }
+
+        LanternSignedBlock *entry = &resp->blocks[i];
+        if (lantern_ssz_decode_signed_block(
+                entry,
+                payload_region + start_offset + sizeof(uint32_t),
+                span - sizeof(uint32_t))
+            != 0) {
+            lantern_blocks_by_root_response_reset(resp);
+            return -1;
+        }
+
+        if (sig_count > 0 && entry->signatures.length != (size_t)sig_count) {
+            lantern_log_debug(
+                "reqresp",
+                NULL,
+                "blocks_by_root legacy sig count mismatch prefix=%u decoded=%zu",
+                sig_count,
+                entry->signatures.length);
+        }
+
+        prev_offset = start_offset;
+    }
+
     return 0;
 }
 
@@ -257,10 +368,6 @@ int lantern_network_status_decode_snappy(
     if (!status || !data) {
         return -1;
     }
-    /* Enforce framed snappy: reject raw payloads */
-    if (!status_payload_is_framed(data, data_len)) {
-        return -1;
-    }
     uint8_t raw[2u * LANTERN_CHECKPOINT_SSZ_SIZE];
     size_t raw_written = sizeof(raw);
     int rc = lantern_snappy_decompress(data, data_len, raw, sizeof(raw), &raw_written);
@@ -399,6 +506,14 @@ int lantern_network_blocks_by_root_request_decode_snappy(
     }
     size_t raw_len = 0;
     if (lantern_snappy_uncompressed_length(data, data_len, &raw_len) != LANTERN_SNAPPY_OK) {
+        return -1;
+    }
+    if (raw_len > LANTERN_REQRESP_MAX_CHUNK_BYTES) {
+        lantern_log_warn(
+            "reqresp",
+            NULL,
+            "blocks_by_root request too large raw_len=%zu",
+            raw_len);
         return -1;
     }
     uint8_t *raw = alloc_scratch(raw_len);
@@ -643,6 +758,14 @@ int lantern_network_blocks_by_root_response_decode_snappy(
     if (lantern_snappy_uncompressed_length(data, data_len, &raw_len) != LANTERN_SNAPPY_OK) {
         return -1;
     }
+    if (raw_len > LANTERN_REQRESP_MAX_CHUNK_BYTES) {
+        lantern_log_warn(
+            "reqresp",
+            NULL,
+            "blocks_by_root response too large raw_len=%zu",
+            raw_len);
+        return -1;
+    }
     uint8_t *raw = alloc_scratch(raw_len);
     if (!raw) {
         return -1;
@@ -669,6 +792,15 @@ int lantern_network_blocks_by_root_response_decode_snappy(
     }
     int decode_rc = lantern_network_blocks_by_root_response_decode(resp, raw, written);
     if (decode_rc != 0) {
+        int legacy_rc = lantern_network_blocks_by_root_response_decode_prefixed(resp, raw, written);
+        if (legacy_rc == 0) {
+            lantern_log_info(
+                "reqresp",
+                NULL,
+                "blocks_by_root decoded with legacy prefixed format");
+            free(raw);
+            return 0;
+        }
         size_t preview = written < LANTERN_STATUS_PREVIEW_BYTES ? written : LANTERN_STATUS_PREVIEW_BYTES;
         char preview_hex[(LANTERN_STATUS_PREVIEW_BYTES * 2u) + 1u];
         if (preview > 0

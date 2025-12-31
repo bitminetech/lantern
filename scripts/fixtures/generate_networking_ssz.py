@@ -19,12 +19,8 @@ from lean_spec.subspecs.networking.config import MAX_REQUEST_BLOCKS
 from lean_spec.subspecs.containers import (
     Attestation,
     AttestationData,
-    Block,
-    BlockBody,
-    BlockWithAttestation,
     Checkpoint,
 )
-from lean_spec.subspecs.containers.block.types import Attestations
 from lean_spec.subspecs.containers.slot import Slot
 from lean_spec.types import Bytes32, Uint64
 from lean_spec.types.byte_arrays import BaseBytes
@@ -35,6 +31,7 @@ from lean_spec.types.container import Container
 # The leanSpec XMSS Signature is now a variable-length SSZ container, so we define
 # a custom fixed-size byte array type for fixture generation.
 LANTERN_SIGNATURE_SIZE = 3112
+LANTERN_MAX_ATTESTATIONS = 4096
 
 
 class LanternSignature(BaseBytes):
@@ -57,10 +54,33 @@ class LanternSignedAttestation(Container):
     signature: LanternSignature
 
 
+class LanternAttestations(SSZList):
+    """Lantern block body attestations (per-validator, not aggregated)."""
+
+    ELEMENT_TYPE = Attestation
+    LIMIT = LANTERN_MAX_ATTESTATIONS
+
+
+class LanternBlockBody(Container):
+    """Block body matching Lantern's per-validator attestation encoding."""
+
+    attestations: LanternAttestations
+
+
+class LanternBlock(Container):
+    """Block container matching Lantern's SSZ layout."""
+
+    slot: Slot
+    proposer_index: Uint64
+    parent_root: Bytes32
+    state_root: Bytes32
+    body: LanternBlockBody
+
+
 class LanternBlockWithAttestation(Container):
     """Block with proposer attestation for Lantern fixture generation."""
 
-    block: Block
+    block: LanternBlock
     proposer_attestation: Attestation
 
 
@@ -173,15 +193,15 @@ def make_signed_block(seed: int, base_slot: int, proposer_index: int, attestatio
         make_attestation(seed + (i * 5), (proposer_index + i + seed) % 16, base_slot + i + 1)
         for i in range(attestation_count)
     ]
-    block = Block(
+    block = LanternBlock(
         slot=Slot(base_slot),
         proposer_index=Uint64(proposer_index),
         parent_root=Bytes32(repeating_bytes(seed, 32)),
         state_root=Bytes32(repeating_bytes(seed + 0x50, 32)),
-        body=BlockBody(attestations=Attestations(data=attestations)),
+        body=LanternBlockBody(attestations=LanternAttestations(data=attestations)),
     )
     proposer_att = make_attestation(seed + 0x80, (proposer_index + 3) % 16, base_slot + attestation_count + 4)
-    signatures = make_signatures(seed + 0xA0, attestation_count + 1)
+    signatures = make_signatures(seed + 0xA0, len(attestations) + 1)
     return LanternSignedBlockWithAttestation(
         message=LanternBlockWithAttestation(block=block, proposer_attestation=proposer_att),
         signature=signatures,
@@ -198,12 +218,12 @@ def make_gossip_signed_block(
         make_gossip_attestation(seed + (i * 5), (proposer_index + i + seed) % 16, vote_slot)
         for i, vote_slot in enumerate(attestation_vote_slots)
     ]
-    block = Block(
+    block = LanternBlock(
         slot=Slot(block_slot),
         proposer_index=Uint64(proposer_index),
         parent_root=Bytes32(repeating_bytes(seed, 32)),
         state_root=Bytes32(repeating_bytes(seed + 0x50, 32)),
-        body=BlockBody(attestations=Attestations(data=list(attestations))),
+        body=LanternBlockBody(attestations=LanternAttestations(data=list(attestations))),
     )
     proposer_att = make_gossip_attestation(seed + 0x80, (proposer_index + 3) % 16, block_slot + 2)
     signatures = make_signatures(seed + 0xA0, len(attestations) + 1)

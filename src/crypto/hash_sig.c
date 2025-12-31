@@ -1,7 +1,14 @@
+/**
+ * @file hash_sig.c
+ * @brief Hash-signature key loading helpers
+ *
+ * Provides helpers to load post-quantum hash signature keys from JSON or SSZ
+ * data sources.
+ */
+
 #include "lantern/crypto/hash_sig.h"
 
-#include <ctype.h>
-#include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,128 +16,379 @@
 
 #include "pq-bindings-c-rust.h"
 
-static int read_file_bytes(const char *path, uint8_t **out_data, size_t *out_length) {
-    if (!path || !out_data || !out_length) {
-        return -1;
+#include "lantern/support/secure_mem.h"
+
+
+/* ============================================================================
+ * Constants
+ * ============================================================================ */
+
+static const char HASH_SIG_JSON_SUFFIX[] = ".json";
+static const size_t HASH_SIG_JSON_SUFFIX_LEN = sizeof(HASH_SIG_JSON_SUFFIX) - 1u;
+
+
+/* ============================================================================
+ * Error Codes
+ * ============================================================================ */
+
+typedef enum
+{
+    LANTERN_HASH_SIG_OK = 0,
+    LANTERN_HASH_SIG_ERR_INVALID_PARAM = -1,
+    LANTERN_HASH_SIG_ERR_IO = -2,
+    LANTERN_HASH_SIG_ERR_OUT_OF_MEMORY = -3,
+    LANTERN_HASH_SIG_ERR_OVERFLOW = -4,
+    LANTERN_HASH_SIG_ERR_TRUNCATED = -5,
+    LANTERN_HASH_SIG_ERR_DESERIALIZE = -6,
+} lantern_hash_sig_error_t;
+
+
+/* ============================================================================
+ * Local Helpers
+ * ============================================================================ */
+
+/**
+ * @brief Securely clear and free a buffer.
+ *
+ * @param data    Buffer to clear (may be NULL)
+ * @param length  Buffer length in bytes
+ *
+ * @note Thread safety: This function is thread-safe.
+ */
+static void hash_sig_secure_free(uint8_t *data, size_t length)
+{
+    if (!data)
+    {
+        return;
     }
-    FILE *fp = fopen(path, "rb");
-    if (!fp) {
-        return -1;
+
+    if (length > 0)
+    {
+        lantern_secure_zero(data, length);
     }
-    if (fseek(fp, 0, SEEK_END) != 0) {
-        fclose(fp);
-        return -1;
-    }
-    long file_size = ftell(fp);
-    if (file_size < 0) {
-        fclose(fp);
-        return -1;
-    }
-    if (fseek(fp, 0, SEEK_SET) != 0) {
-        fclose(fp);
-        return -1;
-    }
-    uint8_t *buffer = malloc((size_t)file_size);
-    if (!buffer) {
-        fclose(fp);
-        return -1;
-    }
-    size_t read_len = fread(buffer, 1, (size_t)file_size, fp);
-    fclose(fp);
-    if (read_len != (size_t)file_size) {
-        free(buffer);
-        return -1;
-    }
-    *out_data = buffer;
-    *out_length = read_len;
-    return 0;
+
+    free(data);
 }
 
+
+/**
+ * @brief Read a file into a newly allocated buffer.
+ *
+ * @param path        File path to read
+ * @param out_data    Output buffer (caller owns on success)
+ * @param out_length  Output buffer length in bytes
+ *
+ * @return LANTERN_HASH_SIG_OK on success
+ * @return LANTERN_HASH_SIG_ERR_INVALID_PARAM on invalid inputs or empty file
+ * @return LANTERN_HASH_SIG_ERR_IO on filesystem errors
+ * @return LANTERN_HASH_SIG_ERR_OUT_OF_MEMORY on allocation failure
+ * @return LANTERN_HASH_SIG_ERR_OVERFLOW on size overflow
+ * @return LANTERN_HASH_SIG_ERR_TRUNCATED on short read
+ *
+ * @note Thread safety: This function is thread-safe.
+ */
+static int read_file_bytes(const char *path, uint8_t **out_data, size_t *out_length)
+{
+    if (!path || !out_data || !out_length)
+    {
+        return LANTERN_HASH_SIG_ERR_INVALID_PARAM;
+    }
+
+    *out_data = NULL;
+    *out_length = 0;
+
+    FILE *fp = fopen(path, "rb");
+    if (!fp)
+    {
+        return LANTERN_HASH_SIG_ERR_IO;
+    }
+
+    int result = LANTERN_HASH_SIG_ERR_IO;
+    long file_size_long = 0;
+    size_t file_size = 0;
+    uint8_t *buffer = NULL;
+
+    if (fseek(fp, 0, SEEK_END) != 0)
+    {
+        result = LANTERN_HASH_SIG_ERR_IO;
+        goto cleanup;
+    }
+
+    file_size_long = ftell(fp);
+    if (file_size_long < 0)
+    {
+        result = LANTERN_HASH_SIG_ERR_IO;
+        goto cleanup;
+    }
+
+    if (file_size_long == 0)
+    {
+        result = LANTERN_HASH_SIG_ERR_INVALID_PARAM;
+        goto cleanup;
+    }
+
+    if ((unsigned long long)file_size_long > (unsigned long long)SIZE_MAX)
+    {
+        result = LANTERN_HASH_SIG_ERR_OVERFLOW;
+        goto cleanup;
+    }
+
+    file_size = (size_t)file_size_long;
+
+    if (fseek(fp, 0, SEEK_SET) != 0)
+    {
+        result = LANTERN_HASH_SIG_ERR_IO;
+        goto cleanup;
+    }
+
+    buffer = malloc(file_size * sizeof(*buffer));
+    if (!buffer)
+    {
+        result = LANTERN_HASH_SIG_ERR_OUT_OF_MEMORY;
+        goto cleanup;
+    }
+
+    size_t read_len = fread(buffer, sizeof(*buffer), file_size, fp);
+    if (read_len != file_size)
+    {
+        result = LANTERN_HASH_SIG_ERR_TRUNCATED;
+        goto cleanup;
+    }
+
+    *out_data = buffer;
+    *out_length = read_len;
+    buffer = NULL;
+    result = LANTERN_HASH_SIG_OK;
+
+cleanup:
+    if (buffer)
+    {
+        hash_sig_secure_free(buffer, file_size);
+    }
+    fclose(fp);
+    return result;
+}
+
+
+/**
+ * @brief Check whether a file path ends with ".json".
+ *
+ * @param path File path to check
+ *
+ * @return true if the path ends with ".json", false otherwise
+ *
+ * @note Thread safety: This function is thread-safe.
+ */
+static bool is_json_file(const char *path)
+{
+    if (!path)
+    {
+        return false;
+    }
+
+    size_t len = strlen(path);
+    if (len < HASH_SIG_JSON_SUFFIX_LEN)
+    {
+        return false;
+    }
+
+    return strcmp(path + len - HASH_SIG_JSON_SUFFIX_LEN, HASH_SIG_JSON_SUFFIX) == 0;
+}
+
+
+/* ============================================================================
+ * Public API
+ * ============================================================================ */
+
+/**
+ * Load a secret key from SSZ-encoded bytes.
+ *
+ * @param data     Input buffer containing SSZ-encoded secret key bytes
+ * @param length   Length of the input buffer in bytes
+ * @param out_key  Output secret key handle (allocated by the PQ library)
+ *
+ * @return LANTERN_HASH_SIG_OK on success
+ * @return LANTERN_HASH_SIG_ERR_INVALID_PARAM on invalid inputs
+ * @return LANTERN_HASH_SIG_ERR_DESERIALIZE on parse failure
+ *
+ * @note Ownership: Caller must free `*out_key` with `pq_secret_key_free`.
+ * @note Thread safety: This function is thread-safe.
+ */
 int lantern_hash_sig_load_secret_bytes(
     const uint8_t *data,
     size_t length,
-    struct PQSignatureSchemeSecretKey **out_key) {
-    if (!data || length == 0 || !out_key) {
-        return -1;
+    struct PQSignatureSchemeSecretKey **out_key)
+{
+    if (!data || length == 0 || !out_key)
+    {
+        return LANTERN_HASH_SIG_ERR_INVALID_PARAM;
     }
-    // Use SSZ format (compatible with Ream's leanSig)
+
+    *out_key = NULL;
+
     enum PQSigningError rc = pq_secret_key_deserialize(data, length, out_key);
-    return (rc == Success && out_key && *out_key) ? 0 : -1;
+    if (rc != Success || !*out_key)
+    {
+        return LANTERN_HASH_SIG_ERR_DESERIALIZE;
+    }
+
+    return LANTERN_HASH_SIG_OK;
 }
 
+
+/**
+ * Load a public key from SSZ-encoded bytes.
+ *
+ * @param data     Input buffer containing SSZ-encoded public key bytes
+ * @param length   Length of the input buffer in bytes
+ * @param out_key  Output public key handle (allocated by the PQ library)
+ *
+ * @return LANTERN_HASH_SIG_OK on success
+ * @return LANTERN_HASH_SIG_ERR_INVALID_PARAM on invalid inputs
+ * @return LANTERN_HASH_SIG_ERR_DESERIALIZE on parse failure
+ *
+ * @note Ownership: Caller must free `*out_key` with `pq_public_key_free`.
+ * @note Thread safety: This function is thread-safe.
+ */
 int lantern_hash_sig_load_public_bytes(
     const uint8_t *data,
     size_t length,
-    struct PQSignatureSchemePublicKey **out_key) {
-    if (!data || length == 0 || !out_key) {
-        return -1;
+    struct PQSignatureSchemePublicKey **out_key)
+{
+    if (!data || length == 0 || !out_key)
+    {
+        return LANTERN_HASH_SIG_ERR_INVALID_PARAM;
     }
-    // Use SSZ format (compatible with Ream's leanSig)
+
+    *out_key = NULL;
+
     enum PQSigningError rc = pq_public_key_deserialize(data, length, out_key);
-    return (rc == Success && out_key && *out_key) ? 0 : -1;
+    if (rc != Success || !*out_key)
+    {
+        return LANTERN_HASH_SIG_ERR_DESERIALIZE;
+    }
+
+    return LANTERN_HASH_SIG_OK;
 }
 
-static int is_json_file(const char *path) {
-    if (!path) return 0;
-    size_t len = strlen(path);
-    return len > 5 && strcmp(path + len - 5, ".json") == 0;
-}
 
+/**
+ * Load a secret key from a JSON or SSZ file.
+ *
+ * @param path     File path to read
+ * @param out_key  Output secret key handle (allocated by the PQ library)
+ *
+ * @return LANTERN_HASH_SIG_OK on success
+ * @return LANTERN_HASH_SIG_ERR_INVALID_PARAM on invalid inputs
+ * @return LANTERN_HASH_SIG_ERR_IO on filesystem errors
+ * @return LANTERN_HASH_SIG_ERR_OUT_OF_MEMORY on allocation failure
+ * @return LANTERN_HASH_SIG_ERR_OVERFLOW on size overflow
+ * @return LANTERN_HASH_SIG_ERR_TRUNCATED on short read
+ * @return LANTERN_HASH_SIG_ERR_DESERIALIZE on parse failure
+ *
+ * @note Ownership: Caller must free `*out_key` with `pq_secret_key_free`.
+ * @note Thread safety: This function is thread-safe.
+ */
 int lantern_hash_sig_load_secret_file(
     const char *path,
-    struct PQSignatureSchemeSecretKey **out_key) {
-    if (!path || !out_key) {
-        return -1;
+    struct PQSignatureSchemeSecretKey **out_key)
+{
+    if (!path || !out_key)
+    {
+        return LANTERN_HASH_SIG_ERR_INVALID_PARAM;
     }
+
+    *out_key = NULL;
+
     uint8_t *data = NULL;
     size_t length = 0;
-    if (read_file_bytes(path, &data, &length) != 0) {
-        return -1;
+    int result = read_file_bytes(path, &data, &length);
+    if (result != LANTERN_HASH_SIG_OK)
+    {
+        return result;
     }
 
-    int rc;
-    if (is_json_file(path)) {
-        // JSON format
+    if (is_json_file(path))
+    {
         enum PQSigningError err = pq_secret_key_from_json(data, length, out_key);
-        rc = (err == Success && out_key && *out_key) ? 0 : -1;
-        free(data);
-    } else {
-        // SSZ format
-        rc = lantern_hash_sig_load_secret_bytes(data, length, out_key);
-        free(data);
+        result = (err == Success && *out_key)
+            ? LANTERN_HASH_SIG_OK
+            : LANTERN_HASH_SIG_ERR_DESERIALIZE;
     }
-    return rc;
+    else
+    {
+        result = lantern_hash_sig_load_secret_bytes(data, length, out_key);
+    }
+
+    hash_sig_secure_free(data, length);
+    return result;
 }
 
+
+/**
+ * Load a public key from a JSON or SSZ file.
+ *
+ * @param path     File path to read
+ * @param out_key  Output public key handle (allocated by the PQ library)
+ *
+ * @return LANTERN_HASH_SIG_OK on success
+ * @return LANTERN_HASH_SIG_ERR_INVALID_PARAM on invalid inputs
+ * @return LANTERN_HASH_SIG_ERR_IO on filesystem errors
+ * @return LANTERN_HASH_SIG_ERR_OUT_OF_MEMORY on allocation failure
+ * @return LANTERN_HASH_SIG_ERR_OVERFLOW on size overflow
+ * @return LANTERN_HASH_SIG_ERR_TRUNCATED on short read
+ * @return LANTERN_HASH_SIG_ERR_DESERIALIZE on parse failure
+ *
+ * @note Ownership: Caller must free `*out_key` with `pq_public_key_free`.
+ * @note Thread safety: This function is thread-safe.
+ */
 int lantern_hash_sig_load_public_file(
     const char *path,
-    struct PQSignatureSchemePublicKey **out_key) {
-    if (!path || !out_key) {
-        return -1;
+    struct PQSignatureSchemePublicKey **out_key)
+{
+    if (!path || !out_key)
+    {
+        return LANTERN_HASH_SIG_ERR_INVALID_PARAM;
     }
+
+    *out_key = NULL;
+
     uint8_t *data = NULL;
     size_t length = 0;
-    if (read_file_bytes(path, &data, &length) != 0) {
-        return -1;
+    int result = read_file_bytes(path, &data, &length);
+    if (result != LANTERN_HASH_SIG_OK)
+    {
+        return result;
     }
 
-    int rc;
-    if (is_json_file(path)) {
-        // JSON format
+    if (is_json_file(path))
+    {
         enum PQSigningError err = pq_public_key_from_json(data, length, out_key);
-        rc = (err == Success && out_key && *out_key) ? 0 : -1;
-        free(data);
-    } else {
-        // SSZ format
-        rc = lantern_hash_sig_load_public_bytes(data, length, out_key);
-        free(data);
+        result = (err == Success && *out_key)
+            ? LANTERN_HASH_SIG_OK
+            : LANTERN_HASH_SIG_ERR_DESERIALIZE;
     }
-    return rc;
+    else
+    {
+        result = lantern_hash_sig_load_public_bytes(data, length, out_key);
+    }
+
+    free(data);
+    return result;
 }
 
-bool lantern_hash_sig_is_available(void) {
+
+/**
+ * Check whether the hash-signature backend is available.
+ *
+ * @return true when the hash signature scheme reports a positive lifetime
+ *
+ * @note Thread safety: This function is thread-safe.
+ */
+bool lantern_hash_sig_is_available(void)
+{
     /*
-     * pq_get_lifetime() is part of the public c-hash-sig API.  A non-zero
+     * pq_get_lifetime() is part of the public c-hash-sig API. A non-zero
      * lifetime means the Rust bindings initialised correctly and returned the
      * scheme configuration constants.
      */

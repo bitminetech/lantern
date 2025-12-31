@@ -28,6 +28,7 @@ typedef enum
 
 static const size_t RLP_SHORT_PAYLOAD_MAX = 55;
 static const size_t RLP_INITIAL_LIST_CAPACITY = 4;
+static const size_t LANTERN_RLP_MAX_NESTING_DEPTH = 64;
 
 static const uint8_t RLP_PREFIX_SINGLE_BYTE_MAX = 0x7Fu;
 static const uint8_t RLP_PREFIX_SHORT_STRING_BASE = 0x80u;
@@ -48,12 +49,13 @@ struct lantern_rlp_cursor
     size_t offset;       /**< Current read offset */
 };
 
-static int decode_item(struct lantern_rlp_cursor *cursor, struct lantern_rlp_view *view);
+static int decode_item(struct lantern_rlp_cursor *cursor, struct lantern_rlp_view *view, size_t depth);
 
 static int decode_list_payload(
     struct lantern_rlp_cursor *cursor,
     size_t payload_length,
-    struct lantern_rlp_view *view);
+    struct lantern_rlp_view *view,
+    size_t depth);
 
 /**
  * @brief Zero an RLP view (does not free child items).
@@ -654,7 +656,8 @@ static int decode_long_string_item(
 static int decode_short_list_item(
     struct lantern_rlp_cursor *cursor,
     struct lantern_rlp_view *view,
-    uint8_t prefix)
+    uint8_t prefix,
+    size_t depth)
 {
     size_t payload_length = (size_t)prefix - (size_t)RLP_PREFIX_SHORT_LIST_BASE;
     if (!rlp_cursor_can_read(cursor, cursor->offset, payload_length))
@@ -663,7 +666,7 @@ static int decode_short_list_item(
     }
 
     const uint8_t *payload_start = cursor->data + cursor->offset;
-    int result = decode_list_payload(cursor, payload_length, view);
+    int result = decode_list_payload(cursor, payload_length, view, depth);
     if (result != LANTERN_RLP_OK)
     {
         return result;
@@ -681,7 +684,8 @@ static int decode_short_list_item(
 static int decode_long_list_item(
     struct lantern_rlp_cursor *cursor,
     struct lantern_rlp_view *view,
-    uint8_t prefix)
+    uint8_t prefix,
+    size_t depth)
 {
     size_t len_of_len = (size_t)prefix - (size_t)RLP_PREFIX_LONG_LIST_BASE;
     size_t payload_length = 0;
@@ -702,7 +706,7 @@ static int decode_long_list_item(
     }
 
     const uint8_t *payload_start = cursor->data + cursor->offset;
-    result = decode_list_payload(cursor, payload_length, view);
+    result = decode_list_payload(cursor, payload_length, view, depth);
     if (result != LANTERN_RLP_OK)
     {
         return result;
@@ -717,11 +721,16 @@ static int decode_long_list_item(
 /**
  * @brief Decode an RLP item.
  */
-static int decode_item(struct lantern_rlp_cursor *cursor, struct lantern_rlp_view *view)
+static int decode_item(struct lantern_rlp_cursor *cursor, struct lantern_rlp_view *view, size_t depth)
 {
     if (!cursor || !view)
     {
         return LANTERN_RLP_ERR_INVALID_PARAM;
+    }
+
+    if (depth > LANTERN_RLP_MAX_NESTING_DEPTH)
+    {
+        return LANTERN_RLP_ERR_INVALID_ENCODING;
     }
 
     rlp_view_zero(view);
@@ -751,10 +760,20 @@ static int decode_item(struct lantern_rlp_cursor *cursor, struct lantern_rlp_vie
 
     if (prefix <= RLP_PREFIX_SHORT_LIST_MAX)
     {
-        return decode_short_list_item(cursor, view, prefix);
+        size_t next_depth = depth + 1;
+        if (next_depth > LANTERN_RLP_MAX_NESTING_DEPTH)
+        {
+            return LANTERN_RLP_ERR_INVALID_ENCODING;
+        }
+        return decode_short_list_item(cursor, view, prefix, next_depth);
     }
 
-    return decode_long_list_item(cursor, view, prefix);
+    size_t next_depth = depth + 1;
+    if (next_depth > LANTERN_RLP_MAX_NESTING_DEPTH)
+    {
+        return LANTERN_RLP_ERR_INVALID_ENCODING;
+    }
+    return decode_long_list_item(cursor, view, prefix, next_depth);
 }
 
 
@@ -764,7 +783,8 @@ static int decode_item(struct lantern_rlp_cursor *cursor, struct lantern_rlp_vie
 static int decode_list_payload(
     struct lantern_rlp_cursor *cursor,
     size_t payload_length,
-    struct lantern_rlp_view *view)
+    struct lantern_rlp_view *view,
+    size_t depth)
 {
     if (!cursor || !view)
     {
@@ -791,7 +811,7 @@ static int decode_list_payload(
             goto cleanup;
         }
 
-        result = decode_item(&nested, &items[count]);
+        result = decode_item(&nested, &items[count], depth);
         if (result != LANTERN_RLP_OK)
         {
             goto cleanup;
@@ -860,7 +880,7 @@ int lantern_rlp_decode(
         .offset = 0,
     };
 
-    int result = decode_item(&cursor, out_view);
+    int result = decode_item(&cursor, out_view, 0);
     if (result != LANTERN_RLP_OK)
     {
         lantern_rlp_view_reset(out_view);

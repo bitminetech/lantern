@@ -80,7 +80,8 @@ int lantern_client_debug_import_block(
                block_root,
                &(const struct lantern_log_metadata){
                    .validator = client->node_id,
-                   .peer = peer_id_text})
+                   .peer = peer_id_text},
+               true)
         ? 1
         : 0;
 }
@@ -141,7 +142,8 @@ int lantern_client_debug_enqueue_pending_block(
         block,
         block_root,
         parent_root,
-        peer_id_text);
+        peer_id_text,
+        false);
     return LANTERN_CLIENT_OK;
 }
 

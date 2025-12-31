@@ -1114,6 +1114,7 @@ void lantern_client_on_blocks_request_complete(
 
     if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS && peer_id && peer_id[0] != '\0')
     {
+        lantern_client_request_pending_parent_after_blocks(client, peer_id, request_root);
         lantern_client_request_status_after_blocks_success(client, peer_id);
     }
 }
