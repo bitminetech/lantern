@@ -114,6 +114,12 @@ static bool signed_block_signatures_are_valid(
             attestations->length);
         return false;
     }
+    if (block->message.block.slot == 0
+        && attestations->length == 0
+        && block->signatures.length == 0)
+    {
+        return true;
+    }
     if (block->signatures.length == 0)
     {
         lantern_log_warn(
@@ -221,14 +227,15 @@ static bool should_process_block(
     uint64_t local_slot,
     bool root_known,
     uint64_t known_slot,
-    const struct lantern_log_metadata *meta)
+    const struct lantern_log_metadata *meta,
+    bool allow_historical)
 {
     if (root_known && slot <= known_slot)
     {
         lantern_log_trace("state", meta, "skipping known block slot=%" PRIu64, slot);
         return false;
     }
-    if (slot < local_slot && !root_known)
+    if (slot < local_slot && !root_known && !allow_historical)
     {
         lantern_log_debug(
             "state",
@@ -259,7 +266,8 @@ static bool handle_block_parent_locked(
     const LanternSignedBlock *block,
     const LanternRoot *block_root,
     const struct lantern_log_metadata *meta,
-    bool *state_locked)
+    bool *state_locked,
+    bool allow_historical)
 {
     if (!client || !block || !block_root || !state_locked || !*state_locked)
     {
@@ -278,7 +286,13 @@ static bool handle_block_parent_locked(
         const char *peer_text = meta && meta->peer ? meta->peer : NULL;
         lantern_client_unlock_state(client, *state_locked);
         *state_locked = false;
-        lantern_client_enqueue_pending_block(client, block, block_root, &parent_root, peer_text);
+        lantern_client_enqueue_pending_block(
+            client,
+            block,
+            block_root,
+            &parent_root,
+            peer_text,
+            allow_historical);
         return false;
     }
 
@@ -372,7 +386,13 @@ static bool handle_block_parent_locked(
 
     lantern_client_unlock_state(client, *state_locked);
     *state_locked = false;
-    lantern_client_enqueue_pending_block(client, block, block_root, &parent_root, peer_text);
+    lantern_client_enqueue_pending_block(
+        client,
+        block,
+        block_root,
+        &parent_root,
+        peer_text,
+        false);
     return false;
 }
 
@@ -653,7 +673,8 @@ bool lantern_client_import_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,
     const LanternRoot *block_root,
-    const struct lantern_log_metadata *meta)
+    const struct lantern_log_metadata *meta,
+    bool allow_historical)
 {
     if (!client || !block || !client->has_state)
     {
@@ -684,12 +705,24 @@ bool lantern_client_import_block(
 
     uint64_t known_slot = 0;
     bool root_known = lantern_client_block_known_locked(client, &block_root_local, &known_slot);
-    if (!should_process_block(block->message.block.slot, local_slot, root_known, known_slot, meta))
+    if (!should_process_block(
+            block->message.block.slot,
+            local_slot,
+            root_known,
+            known_slot,
+            meta,
+            allow_historical))
     {
         goto cleanup;
     }
 
-    if (!handle_block_parent_locked(client, block, &block_root_local, meta, &state_locked))
+    if (!handle_block_parent_locked(
+            client,
+            block,
+            &block_root_local,
+            meta,
+            &state_locked,
+            allow_historical))
     {
         goto cleanup;
     }
@@ -754,7 +787,8 @@ void lantern_client_record_block(
     const LanternSignedBlock *block,
     const LanternRoot *root,
     const char *peer_text,
-    const char *context)
+    const char *context,
+    bool allow_historical)
 {
     if (!client || !block)
     {
@@ -814,5 +848,5 @@ void lantern_client_record_block(
         }
     }
 
-    lantern_client_import_block(client, block, selected_root, &meta);
+    lantern_client_import_block(client, block, selected_root, &meta, allow_historical);
 }

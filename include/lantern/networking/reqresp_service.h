@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "lantern/networking/messages.h"
+#include "lantern/support/string_list.h"
 #include "libp2p/stream.h"
 #include "peer_id/peer_id.h"
 
@@ -14,6 +15,7 @@
 #define LANTERN_REQRESP_STATUS_PROTOCOL_LEGACY "/leanconsensus/req/status/1/"
 #define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_SNAPPY "/leanconsensus/req/lean_blocks_by_root/1/ssz_snappy"
 #define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_LEGACY "/leanconsensus/req/blocks_by_root/1/ssz_snappy"
+#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_BARE "/leanconsensus/req/blocks_by_root/1/"
 #define LANTERN_REQRESP_STATUS_PROTOCOL LANTERN_REQRESP_STATUS_PROTOCOL_SNAPPY
 #define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_SNAPPY
 #define LANTERN_REQRESP_STATUS_PREVIEW_BYTES 256u
@@ -57,6 +59,7 @@ enum lantern_reqresp_protocol_kind {
 #define LANTERN_STATUS_PROTOCOL_ID_LEGACY LANTERN_REQRESP_STATUS_PROTOCOL_LEGACY
 #define LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL
 #define LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_LEGACY
+#define LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_BARE LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_BARE
 #define LANTERN_STATUS_PREVIEW_BYTES LANTERN_REQRESP_STATUS_PREVIEW_BYTES
 
 struct libp2p_host;
@@ -94,9 +97,11 @@ struct lantern_reqresp_service {
     struct libp2p_protocol_server *status_server_legacy;
     struct libp2p_protocol_server *blocks_server;
     struct libp2p_protocol_server *blocks_server_legacy;
+    struct libp2p_protocol_server *blocks_server_bare;
     struct libp2p_subscription *event_subscription;
     int lock_initialized;
     pthread_mutex_t lock;
+    struct lantern_string_list legacy_peers;
 };
 
 #ifdef __cplusplus

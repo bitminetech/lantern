@@ -168,6 +168,58 @@ static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
     return total;
 }
 
+static size_t signed_block_max_ssz_size(void) {
+    size_t offsets = SSZ_BYTE_SIZE_OF_UINT32 * 2u;
+    size_t block_fixed = (SSZ_BYTE_SIZE_OF_UINT64 * 2u)
+        + (LANTERN_ROOT_SIZE * 2u)
+        + SSZ_BYTE_SIZE_OF_UINT32;
+    size_t block_offset = SSZ_BYTE_SIZE_OF_UINT32;
+    size_t body_header = SSZ_BYTE_SIZE_OF_UINT32;
+    size_t att_bytes = (size_t)LANTERN_MAX_ATTESTATIONS * LANTERN_VOTE_SSZ_SIZE;
+    size_t proposer_bytes = LANTERN_VOTE_SSZ_SIZE;
+    size_t signatures_bytes = (size_t)LANTERN_MAX_BLOCK_SIGNATURES * LANTERN_SIGNATURE_SIZE;
+    size_t total = offsets + block_fixed;
+    if (block_offset > SIZE_MAX - total) {
+        return 0;
+    }
+    total += block_offset;
+    if (total > SIZE_MAX - proposer_bytes) {
+        return 0;
+    }
+    total += proposer_bytes;
+    if (body_header > SIZE_MAX - total) {
+        return 0;
+    }
+    total += body_header;
+    if (att_bytes > SIZE_MAX - total) {
+        return 0;
+    }
+    total += att_bytes;
+    if (signatures_bytes > SIZE_MAX - total) {
+        return 0;
+    }
+    total += signatures_bytes;
+    return total;
+}
+
+static size_t gossipsub_snappy_max_uncompressed(
+    const struct lantern_gossipsub_service *service,
+    const char *topic) {
+    size_t block_max = signed_block_max_ssz_size();
+    size_t vote_max = LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    size_t default_max = block_max > vote_max ? block_max : vote_max;
+    if (!service || !topic) {
+        return default_max;
+    }
+    if (service->block_topic[0] != '\0' && strcmp(topic, service->block_topic) == 0) {
+        return block_max;
+    }
+    if (service->vote_topic[0] != '\0' && strcmp(topic, service->vote_topic) == 0) {
+        return vote_max;
+    }
+    return default_max;
+}
+
 static libp2p_err_t lantern_gossipsub_message_id_cb(
     const libp2p_gossipsub_message_t *msg,
     uint8_t **out_id,
@@ -190,6 +242,12 @@ static libp2p_err_t lantern_gossipsub_message_id_cb(
     if (msg->data && msg->data_len > 0) {
         size_t expected = 0;
         if (lantern_snappy_uncompressed_length(msg->data, msg->data_len, &expected) == LANTERN_SNAPPY_OK && expected > 0) {
+            size_t max_expected = gossipsub_snappy_max_uncompressed(service, topic);
+            if (max_expected > 0 && expected > max_expected) {
+                expected = 0;
+            }
+        }
+        if (expected > 0) {
             scratch = (uint8_t *)malloc(expected);
             if (!scratch) {
                 return LIBP2P_ERR_INTERNAL;

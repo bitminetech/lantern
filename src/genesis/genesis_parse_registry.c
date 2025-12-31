@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "internal/yaml_parser.h"
+#include "lantern/consensus/containers.h"
 #include "lantern/support/strings.h"
 
 static const size_t GENESIS_SMALL_LINE_BUFFER_LEN = 1024;
@@ -315,6 +316,11 @@ static int collect_registry_mapping_indices(
             result = LANTERN_GENESIS_ERR_INVALID_DATA;
             break;
         }
+        if (value >= (uint64_t)LANTERN_VALIDATOR_REGISTRY_LIMIT)
+        {
+            result = LANTERN_GENESIS_ERR_INVALID_DATA;
+            break;
+        }
 
         if (count == cap)
         {
@@ -396,6 +402,10 @@ static int validate_registry_index_coverage(
     }
 
     size_t record_count = max_index + 1;
+    if (record_count > (size_t)LANTERN_VALIDATOR_REGISTRY_LIMIT)
+    {
+        return LANTERN_GENESIS_ERR_INVALID_DATA;
+    }
     bool *seen = calloc(record_count, sizeof(*seen));
     if (!seen)
     {
@@ -582,6 +592,14 @@ static int scan_registry_objects(
     if (have_explicit_indices && max_index == SIZE_MAX)
     {
         return LANTERN_GENESIS_ERR_OVERFLOW;
+    }
+    if (have_explicit_indices && max_index >= (size_t)LANTERN_VALIDATOR_REGISTRY_LIMIT)
+    {
+        return LANTERN_GENESIS_ERR_INVALID_DATA;
+    }
+    if (!have_explicit_indices && object_count > (size_t)LANTERN_VALIDATOR_REGISTRY_LIMIT)
+    {
+        return LANTERN_GENESIS_ERR_INVALID_DATA;
     }
 
     *out_has_pubkey_field = has_pubkey_field;

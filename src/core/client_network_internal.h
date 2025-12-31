@@ -96,6 +96,16 @@ struct lantern_peer_status_entry
     uint32_t outstanding_status_requests; /**< Number of outstanding status requests */
 };
 
+/**
+ * Blocks-by-root protocol variants for fallback handling.
+ */
+enum lantern_blocks_req_variant
+{
+    LANTERN_BLOCKS_REQ_VARIANT_PRIMARY = 0,
+    LANTERN_BLOCKS_REQ_VARIANT_LEGACY_SNAPPY = 1,
+    LANTERN_BLOCKS_REQ_VARIANT_BARE = 2,
+};
+
 
 /**
  * Block request context for async operations.
@@ -110,6 +120,7 @@ struct block_request_ctx
     LanternRoot root;               /**< Block root being requested */
     const char *protocol_id;        /**< Protocol ID string */
     bool using_legacy;              /**< True if using legacy protocol */
+    enum lantern_blocks_req_variant variant; /**< Protocol variant */
 };
 
 

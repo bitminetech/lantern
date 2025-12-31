@@ -20,6 +20,7 @@
 
 #include <errno.h>
 #include <inttypes.h>
+#include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -645,7 +646,7 @@ static void log_varint_header_details(
         header_hex[0] = '\0';
     }
 
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         meta,
         "%s payload_len=%" PRIu64 " header_hex=%s",
@@ -796,7 +797,7 @@ static void log_payload_read_complete(
     {
         payload_hex[0] = '\0';
     }
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         meta,
         "%s payload read complete bytes=%zu%s%s",
@@ -997,7 +998,7 @@ int lantern_reqresp_read_response_chunk(
         (unsigned)frame_code,
         (unsigned)header_first_byte);
 
-    return read_varint_payload_chunk(
+    int payload_rc = read_varint_payload_chunk(
         stream,
         header_first_byte,
         out_data,
@@ -1005,6 +1006,8 @@ int lantern_reqresp_read_response_chunk(
         out_err,
         &meta,
         "chunk");
+
+    return payload_rc;
 }
 
 

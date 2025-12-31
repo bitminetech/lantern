@@ -226,6 +226,7 @@ if(LANTERN_BUILD_TESTS)
     target_link_libraries(lantern_snappy_test PRIVATE lantern)
     add_test(NAME lantern_snappy COMMAND lantern_snappy_test)
 
+
     add_executable(lantern_networking_messages_test
         tests/unit/test_networking_messages.c
         tests/support/fixture_loader.c

@@ -56,6 +56,18 @@ static bool lantern_client_process_stream_block_chunk(
     bool *saw_block);
 static void *block_request_worker(void *arg);
 static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int err);
+static int schedule_blocks_request_variant(
+    struct lantern_client *client,
+    const char *peer_id_text,
+    const LanternRoot *root,
+    enum lantern_blocks_req_variant variant);
+
+static bool blocks_next_variant(
+    enum lantern_blocks_req_variant current,
+    enum lantern_blocks_req_variant *out_next);
+static const char *blocks_protocol_id_for_variant(enum lantern_blocks_req_variant variant);
+static bool blocks_variant_uses_raw_snappy(enum lantern_blocks_req_variant variant);
+static bool blocks_variant_is_legacy(enum lantern_blocks_req_variant variant);
 
 
 /* ============================================================================
@@ -77,6 +89,52 @@ static void block_request_ctx_free(struct block_request_ctx *ctx)
     }
     peer_id_destroy(&ctx->peer_id);
     free(ctx);
+}
+
+static bool blocks_next_variant(
+    enum lantern_blocks_req_variant current,
+    enum lantern_blocks_req_variant *out_next)
+{
+    if (!out_next)
+    {
+        return false;
+    }
+    switch (current)
+    {
+    case LANTERN_BLOCKS_REQ_VARIANT_PRIMARY:
+        *out_next = LANTERN_BLOCKS_REQ_VARIANT_LEGACY_SNAPPY;
+        return true;
+    case LANTERN_BLOCKS_REQ_VARIANT_LEGACY_SNAPPY:
+        *out_next = LANTERN_BLOCKS_REQ_VARIANT_BARE;
+        return true;
+    default:
+        break;
+    }
+    return false;
+}
+
+static const char *blocks_protocol_id_for_variant(enum lantern_blocks_req_variant variant)
+{
+    switch (variant)
+    {
+    case LANTERN_BLOCKS_REQ_VARIANT_LEGACY_SNAPPY:
+        return LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY;
+    case LANTERN_BLOCKS_REQ_VARIANT_BARE:
+        return LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_BARE;
+    case LANTERN_BLOCKS_REQ_VARIANT_PRIMARY:
+    default:
+        return LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
+    }
+}
+
+static bool blocks_variant_uses_raw_snappy(enum lantern_blocks_req_variant variant)
+{
+    return variant != LANTERN_BLOCKS_REQ_VARIANT_PRIMARY;
+}
+
+static bool blocks_variant_is_legacy(enum lantern_blocks_req_variant variant)
+{
+    return variant != LANTERN_BLOCKS_REQ_VARIANT_PRIMARY;
 }
 
 
@@ -119,8 +177,10 @@ static bool lantern_client_process_stream_block_chunk(
         free(chunk);
         return false;
     }
+
     size_t raw_len = 0;
-    if (lantern_snappy_uncompressed_length(chunk, chunk_len, &raw_len) != LANTERN_SNAPPY_OK || raw_len == 0)
+    int snappy_len_rc = lantern_snappy_uncompressed_length(chunk, chunk_len, &raw_len);
+    if (snappy_len_rc != LANTERN_SNAPPY_OK || raw_len == 0)
     {
         lantern_log_error(
             "reqresp",
@@ -142,7 +202,8 @@ static bool lantern_client_process_stream_block_chunk(
         return false;
     }
     size_t written = raw_len;
-    if (lantern_snappy_decompress(chunk, chunk_len, raw_block, raw_len, &written) != LANTERN_SNAPPY_OK)
+    int snappy_rc = lantern_snappy_decompress(chunk, chunk_len, raw_block, raw_len, &written);
+    if (snappy_rc != LANTERN_SNAPPY_OK)
     {
         lantern_log_error(
             "reqresp",
@@ -156,7 +217,8 @@ static bool lantern_client_process_stream_block_chunk(
 
     LanternSignedBlock streamed_block;
     lantern_signed_block_with_attestation_init(&streamed_block);
-    if (lantern_ssz_decode_signed_block(&streamed_block, raw_block, written) != 0)
+    int decode_rc = lantern_ssz_decode_signed_block(&streamed_block, raw_block, written);
+    if (decode_rc != 0)
     {
         lantern_log_error(
             "reqresp",
@@ -201,7 +263,8 @@ static bool lantern_client_process_stream_block_chunk(
         &streamed_block,
         &computed,
         ctx->peer_text[0] ? ctx->peer_text : NULL,
-        "reqresp");
+        "reqresp",
+        true);
     lantern_signed_block_with_attestation_reset(&streamed_block);
     if (saw_block)
     {
@@ -270,15 +333,18 @@ static void *block_request_worker(void *arg)
     LanternBlocksByRootResponse response_msg;
     lantern_blocks_by_root_response_init(&response_msg);
 
+    uint8_t *raw_request = NULL;
     uint8_t *payload = NULL;
     uint8_t *response = NULL;
     bool request_success = false;
-    bool schedule_legacy = false;
-    bool attempt_legacy = false;
-    struct lantern_client *legacy_client = NULL;
-    LanternRoot legacy_root = ctx->root;
-    char legacy_peer[sizeof(ctx->peer_text)];
-    legacy_peer[0] = '\0';
+    bool schedule_retry = false;
+    bool attempt_retry = false;
+    enum lantern_blocks_req_variant retry_variant = LANTERN_BLOCKS_REQ_VARIANT_PRIMARY;
+    bool can_retry = blocks_next_variant(ctx->variant, &retry_variant);
+    struct lantern_client *retry_client = NULL;
+    LanternRoot retry_root = ctx->root;
+    char retry_peer[sizeof(ctx->peer_text)];
+    retry_peer[0] = '\0';
 
     if (lantern_root_list_resize(&request.roots, 1) != 0)
     {
@@ -286,77 +352,99 @@ static void *block_request_worker(void *arg)
             "reqresp",
             &meta,
             "failed to size blocks_by_root request");
-        schedule_legacy = !ctx->using_legacy;
+        schedule_retry = can_retry;
         goto cleanup;
     }
     request.roots.items[0] = ctx->root;
 
+    bool use_raw_snappy = blocks_variant_uses_raw_snappy(ctx->variant);
     size_t raw_size = sizeof(uint32_t) + (request.roots.length * LANTERN_ROOT_SIZE);
+    raw_request = (uint8_t *)malloc(raw_size > 0 ? raw_size : 1u);
+    if (!raw_request)
+    {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "out of memory building blocks_by_root request");
+        schedule_retry = can_retry;
+        goto cleanup;
+    }
+
+    size_t raw_written = 0;
+    if (lantern_network_blocks_by_root_request_encode(&request, raw_request, raw_size, &raw_written) != 0
+        || raw_written == 0)
+    {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to encode blocks_by_root request");
+        schedule_retry = can_retry;
+        goto cleanup;
+    }
+
     size_t max_payload = 0;
-    if (lantern_snappy_max_compressed_size(raw_size, &max_payload) != LANTERN_SNAPPY_OK)
+    int max_rc = use_raw_snappy
+        ? lantern_snappy_max_compressed_size_raw(raw_written, &max_payload)
+        : lantern_snappy_max_compressed_size(raw_written, &max_payload);
+    if (max_rc != LANTERN_SNAPPY_OK)
     {
         lantern_log_error(
             "reqresp",
             &meta,
             "failed to compute snappy size for blocks_by_root request");
-        schedule_legacy = !ctx->using_legacy;
+        schedule_retry = can_retry;
         goto cleanup;
     }
 
-    payload = (uint8_t *)malloc(max_payload);
+    payload = (uint8_t *)malloc(max_payload > 0 ? max_payload : 1u);
     if (!payload)
     {
         lantern_log_error(
             "reqresp",
             &meta,
             "out of memory building blocks_by_root request");
-        schedule_legacy = !ctx->using_legacy;
+        schedule_retry = can_retry;
         goto cleanup;
     }
 
     size_t payload_len = 0;
-    if (lantern_network_blocks_by_root_request_encode_snappy(&request, payload, max_payload, &payload_len, NULL) != 0
-        || payload_len == 0)
+    int snappy_rc = use_raw_snappy
+        ? lantern_snappy_compress_raw(raw_request, raw_written, payload, max_payload, &payload_len)
+        : lantern_snappy_compress(raw_request, raw_written, payload, max_payload, &payload_len);
+    if (snappy_rc != LANTERN_SNAPPY_OK || payload_len == 0)
     {
         lantern_log_error(
             "reqresp",
             &meta,
             "failed to encode blocks_by_root request");
-        schedule_legacy = !ctx->using_legacy;
+        schedule_retry = can_retry;
         goto cleanup;
     }
 
-    if (raw_size > 0)
+    if (raw_written > 0)
     {
-        uint8_t *plain_bytes = (uint8_t *)malloc(raw_size);
-        size_t plain_written = raw_size;
-        if (plain_bytes
-            && lantern_network_blocks_by_root_request_encode(&request, plain_bytes, raw_size, &plain_written) == 0)
+        size_t plain_preview = raw_written < LANTERN_STATUS_PREVIEW_BYTES
+            ? raw_written
+            : LANTERN_STATUS_PREVIEW_BYTES;
+        if (plain_preview > 0)
         {
-            size_t plain_preview = plain_written < LANTERN_STATUS_PREVIEW_BYTES
-                ? plain_written
-                : LANTERN_STATUS_PREVIEW_BYTES;
-            if (plain_preview > 0)
+            char plain_hex[(LANTERN_STATUS_PREVIEW_BYTES * 2u) + 1u];
+            if (lantern_bytes_to_hex(
+                    raw_request,
+                    plain_preview,
+                    plain_hex,
+                    sizeof(plain_hex),
+                    0)
+                == 0)
             {
-                char plain_hex[(LANTERN_STATUS_PREVIEW_BYTES * 2u) + 1u];
-                if (lantern_bytes_to_hex(
-                        plain_bytes,
-                        plain_preview,
-                        plain_hex,
-                        sizeof(plain_hex),
-                        0)
-                    == 0)
-                {
-                    lantern_log_trace(
-                        "reqresp",
-                        &meta,
-                        "blocks_by_root request roots_hex=%s%s",
-                        plain_hex,
-                        (plain_written > plain_preview) ? "..." : "");
-                }
+                lantern_log_trace(
+                    "reqresp",
+                    &meta,
+                    "blocks_by_root request roots_hex=%s%s",
+                    plain_hex,
+                    (raw_written > plain_preview) ? "..." : "");
             }
         }
-        free(plain_bytes);
     }
 
     size_t payload_preview = payload_len < LANTERN_STATUS_PREVIEW_BYTES ? payload_len : LANTERN_STATUS_PREVIEW_BYTES;
@@ -389,7 +477,7 @@ static void *block_request_worker(void *arg)
             &meta,
             "failed to encode blocks_by_root header length=%zu",
             payload_len);
-        schedule_legacy = !ctx->using_legacy;
+        schedule_retry = can_retry;
         goto cleanup;
     }
 
@@ -410,7 +498,7 @@ static void *block_request_worker(void *arg)
             &meta,
             "failed to write blocks_by_root request err=%zd",
             write_err);
-        schedule_legacy = !ctx->using_legacy;
+        schedule_retry = can_retry;
         goto cleanup;
     }
 
@@ -419,7 +507,8 @@ static void *block_request_worker(void *arg)
     uint8_t *initial_chunk = NULL;
     size_t initial_chunk_len = 0;
     bool initial_chunk_pending = false;
-    bool response_code_pending = true;
+    bool expect_response_code = !blocks_variant_uses_raw_snappy(ctx->variant);
+    bool response_code_pending = expect_response_code;
     bool saw_block = false;
 
     if (ctx->using_legacy)
@@ -435,7 +524,7 @@ static void *block_request_worker(void *arg)
                 &response_len,
                 &read_err,
                 &response_code,
-                NULL)
+                expect_response_code ? NULL : &response_code_pending)
             != 0)
         {
             lantern_log_error(
@@ -443,7 +532,7 @@ static void *block_request_worker(void *arg)
                 &meta,
                 "failed to read blocks_by_root response err=%zd",
                 read_err);
-            schedule_legacy = !ctx->using_legacy;
+            schedule_retry = can_retry;
             goto cleanup;
         }
 
@@ -480,7 +569,7 @@ static void *block_request_worker(void *arg)
                 "blocks_by_root response returned code=%u payload_len=%zu",
                 (unsigned)response_code,
                 response_len);
-            schedule_legacy = !ctx->using_legacy;
+            schedule_retry = can_retry;
             goto cleanup;
         }
 
@@ -546,7 +635,7 @@ static void *block_request_worker(void *arg)
             }
             else
             {
-                schedule_legacy = !ctx->using_legacy;
+                schedule_retry = can_retry;
                 goto cleanup;
             }
         }
@@ -591,7 +680,8 @@ static void *block_request_worker(void *arg)
                     &response_msg.blocks[i],
                     &computed,
                     ctx->peer_text[0] ? ctx->peer_text : NULL,
-                    "reqresp");
+                    "reqresp",
+                    true);
             }
 
             request_success = (response_msg.length > 0);
@@ -609,7 +699,7 @@ static void *block_request_worker(void *arg)
             if (!lantern_client_process_stream_block_chunk(ctx, initial_chunk, initial_chunk_len, &meta, &saw_block))
             {
                 initial_chunk = NULL;
-                schedule_legacy = !ctx->using_legacy;
+                schedule_retry = can_retry;
                 goto cleanup;
             }
             initial_chunk = NULL;
@@ -644,7 +734,7 @@ static void *block_request_worker(void *arg)
                     "failed to read blocks_by_root chunk err=%zd",
                     read_err);
                 free(chunk);
-                schedule_legacy = !ctx->using_legacy;
+                schedule_retry = can_retry;
                 goto cleanup;
             }
             if (chunk_code != LANTERN_REQRESP_RESPONSE_SUCCESS)
@@ -656,7 +746,7 @@ static void *block_request_worker(void *arg)
                     (unsigned)chunk_code,
                     chunk_len);
                 free(chunk);
-                schedule_legacy = !ctx->using_legacy;
+                schedule_retry = can_retry;
                 goto cleanup;
             }
             if (chunk_len == 0 || !chunk)
@@ -667,7 +757,7 @@ static void *block_request_worker(void *arg)
 
             if (!lantern_client_process_stream_block_chunk(ctx, chunk, chunk_len, &meta, &saw_block))
             {
-                schedule_legacy = !ctx->using_legacy;
+                schedule_retry = can_retry;
                 goto cleanup;
             }
         }
@@ -675,19 +765,20 @@ static void *block_request_worker(void *arg)
     }
 
 cleanup:
-    if (!request_success && schedule_legacy && ctx->client && !ctx->using_legacy && ctx->peer_text[0] && !attempt_legacy)
+    if (!request_success && schedule_retry && ctx->client && ctx->peer_text[0] && !attempt_retry)
     {
-        attempt_legacy = true;
-        legacy_client = ctx->client;
-        legacy_root = ctx->root;
-        strncpy(legacy_peer, ctx->peer_text, sizeof(legacy_peer) - 1u);
-        legacy_peer[sizeof(legacy_peer) - 1u] = '\0';
+        attempt_retry = true;
+        retry_client = ctx->client;
+        retry_root = ctx->root;
+        strncpy(retry_peer, ctx->peer_text, sizeof(retry_peer) - 1u);
+        retry_peer[sizeof(retry_peer) - 1u] = '\0';
         char retry_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        format_root_hex(&legacy_root, retry_root_hex, sizeof(retry_root_hex));
+        format_root_hex(&retry_root, retry_root_hex, sizeof(retry_root_hex));
         lantern_log_info(
             "reqresp",
             &meta,
-            "retrying blocks_by_root with legacy protocol root=%s",
+            "retrying blocks_by_root with fallback protocol=%s root=%s",
+            blocks_protocol_id_for_variant(retry_variant),
             retry_root_hex[0] ? retry_root_hex : "0x0");
     }
     lantern_blocks_by_root_response_reset(&response_msg);
@@ -695,8 +786,13 @@ cleanup:
     {
         free(initial_chunk);
     }
+    if (request_success && ctx->variant != LANTERN_BLOCKS_REQ_VARIANT_PRIMARY && ctx->client && ctx->peer_text[0])
+    {
+        lantern_reqresp_service_hint_peer_legacy(&ctx->client->reqresp, ctx->peer_text, true);
+    }
     free(response);
     free(payload);
+    free(raw_request);
     lantern_blocks_by_root_request_reset(&request);
     libp2p_stream_free(stream);
     if (ctx->client)
@@ -710,14 +806,14 @@ cleanup:
 
     block_request_ctx_free(ctx);
 
-    if (attempt_legacy && legacy_client && legacy_peer[0])
+    if (attempt_retry && retry_client && retry_peer[0])
     {
-        if (lantern_client_schedule_blocks_request(legacy_client, legacy_peer, &legacy_root, true) != 0)
+        if (schedule_blocks_request_variant(retry_client, retry_peer, &retry_root, retry_variant) != 0)
         {
             lantern_client_on_blocks_request_complete(
-                legacy_client,
-                legacy_peer,
-                &legacy_root,
+                retry_client,
+                retry_peer,
+                &retry_root,
                 LANTERN_BLOCKS_REQUEST_FAILED);
         }
     }
@@ -778,7 +874,9 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
             ctx->protocol_id,
             err);
         bool attempted = false;
-        if (!ctx->using_legacy && ctx->client && ctx->peer_text[0])
+        enum lantern_blocks_req_variant next_variant = LANTERN_BLOCKS_REQ_VARIANT_PRIMARY;
+        bool can_retry = blocks_next_variant(ctx->variant, &next_variant);
+        if (can_retry && ctx->client && ctx->peer_text[0])
         {
             LanternRoot root = ctx->root;
             struct lantern_client *client = ctx->client;
@@ -788,14 +886,15 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
             lantern_log_info(
                 "reqresp",
                 &meta,
-                "retrying blocks_by_root with legacy protocol after dial failure");
+                "retrying blocks_by_root with fallback protocol=%s after dial failure",
+                blocks_protocol_id_for_variant(next_variant));
             if (stream)
             {
                 libp2p_stream_free(stream);
             }
             block_request_ctx_free(ctx);
             attempted = true;
-            if (lantern_client_schedule_blocks_request(client, peer_copy, &root, true) != 0)
+            if (schedule_blocks_request_variant(client, peer_copy, &root, next_variant) != 0)
             {
                 lantern_client_on_blocks_request_complete(
                     client,
@@ -879,36 +978,11 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
  * Public Block Request API
  * ============================================================================ */
 
-/**
- * Schedule a blocks_by_root request to a peer.
- *
- * @spec subspecs/networking/reqresp/message.py - BlocksByRoot protocol
- *
- * Initiates an async stream dial to the peer for the blocks_by_root
- * protocol. The request will be processed in block_request_on_open
- * when the dial completes.
- *
- * Protocol selection:
- * - Modern protocol preferred by default
- * - Legacy protocol used if peer prefers it or use_legacy is true
- * - Automatic fallback to legacy on modern protocol failures
- *
- * @param client        Client instance
- * @param peer_id_text  Peer ID string
- * @param root          Block root to request
- * @param use_legacy    True to use legacy protocol
- * @return 0 on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL, the peer ID is invalid, or the root is zero
- * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
- * @return LANTERN_CLIENT_ERR_NETWORK if stream dialing fails or networking is unavailable
- *
- * @note Thread safety: This function is thread-safe
- */
-int lantern_client_schedule_blocks_request(
+static int schedule_blocks_request_variant(
     struct lantern_client *client,
     const char *peer_id_text,
     const LanternRoot *root,
-    bool use_legacy)
+    enum lantern_blocks_req_variant variant)
 {
     if (!client || !peer_id_text || !root)
     {
@@ -946,23 +1020,11 @@ int lantern_client_schedule_blocks_request(
     }
     ctx->client = client;
     ctx->root = *root;
+    ctx->variant = variant;
+    ctx->using_legacy = blocks_variant_is_legacy(variant);
+    ctx->protocol_id = blocks_protocol_id_for_variant(variant);
     strncpy(ctx->peer_text, peer_id_text, sizeof(ctx->peer_text) - 1);
     ctx->peer_text[sizeof(ctx->peer_text) - 1] = '\0';
-#if defined(LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY)
-    bool prefer_legacy = false;
-    if (!use_legacy && ctx->peer_text[0] != '\0')
-    {
-        prefer_legacy = lantern_reqresp_service_peer_prefers_legacy(&client->reqresp, ctx->peer_text) != 0;
-    }
-    bool effective_legacy = use_legacy || prefer_legacy;
-    ctx->protocol_id =
-        effective_legacy ? LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY : LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
-    ctx->using_legacy = effective_legacy;
-#else
-    (void)use_legacy;
-    ctx->protocol_id = LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
-    ctx->using_legacy = false;
-#endif
 
     if (peer_id_create_from_string(peer_id_text, &ctx->peer_id) != PEER_ID_SUCCESS)
     {
@@ -1006,4 +1068,40 @@ int lantern_client_schedule_blocks_request(
         return LANTERN_CLIENT_ERR_NETWORK;
     }
     return 0;
+}
+
+/**
+ * Schedule a blocks_by_root request to a peer.
+ *
+ * @spec subspecs/networking/reqresp/message.py - BlocksByRoot protocol
+ *
+ * Initiates an async stream dial to the peer for the blocks_by_root
+ * protocol. The request will be processed in block_request_on_open
+ * when the dial completes.
+ *
+ * Protocol selection:
+ * - Modern protocol preferred by default
+ * - Legacy protocol used only when explicitly requested
+ * - Automatic fallback to legacy on modern protocol failures
+ *
+ * @param client        Client instance
+ * @param peer_id_text  Peer ID string
+ * @param root          Block root to request
+ * @param use_legacy    True to use legacy protocol
+ * @return 0 on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL, the peer ID is invalid, or the root is zero
+ * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
+ * @return LANTERN_CLIENT_ERR_NETWORK if stream dialing fails or networking is unavailable
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+int lantern_client_schedule_blocks_request(
+    struct lantern_client *client,
+    const char *peer_id_text,
+    const LanternRoot *root,
+    bool use_legacy)
+{
+    enum lantern_blocks_req_variant variant =
+        use_legacy ? LANTERN_BLOCKS_REQ_VARIANT_LEGACY_SNAPPY : LANTERN_BLOCKS_REQ_VARIANT_PRIMARY;
+    return schedule_blocks_request_variant(client, peer_id_text, root, variant);
 }

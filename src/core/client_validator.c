@@ -882,7 +882,7 @@ int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t
         slot,
         block.message.block.proposer_index);
 
-    lantern_client_record_block(client, &block, NULL, NULL, "local");
+    lantern_client_record_block(client, &block, NULL, NULL, "local", false);
     rc = lantern_client_publish_block(client, &block);
     if (rc != LANTERN_CLIENT_OK)
     {
