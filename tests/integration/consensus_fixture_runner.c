@@ -737,16 +737,17 @@ static int ensure_signature_envelope(
         return -1;
     }
     size_t attestation_count = block->message.block.body.attestations.length;
-    size_t expected = attestation_count + 1u;
-    if (block->signatures.length != expected || (expected > 0 && !block->signatures.data)) {
+    size_t expected = attestation_count;
+    if (block->signatures.attestation_signatures.length != expected
+        || (expected > 0 && !block->signatures.attestation_signatures.data)) {
         fprintf(
             stderr,
-            "%s block[%d]: expected %zu block signatures (attestations=%zu + proposer) but got %zu\\n",
+            "%s block[%d]: expected %zu attestation signature proofs (attestations=%zu) but got %zu\\n",
             fixture_path ? fixture_path : "(unknown)",
             block_index,
             expected,
             attestation_count,
-            block->signatures.length);
+            block->signatures.attestation_signatures.length);
         return -1;
     }
     return 0;
@@ -1371,10 +1372,7 @@ static int run_fork_choice_fixture(const char *path) {
         LanternSignedVote block_proposer_signed;
         memset(&block_proposer_signed, 0, sizeof(block_proposer_signed));
         block_proposer_signed.data = signed_block.message.proposer_attestation;
-        size_t proposer_sig_index = signed_block.message.block.body.attestations.length;
-        if (signed_block.signatures.length > proposer_sig_index && signed_block.signatures.data) {
-            block_proposer_signed.signature = signed_block.signatures.data[proposer_sig_index];
-        }
+        block_proposer_signed.signature = signed_block.signatures.proposer_signature;
         if (lantern_fork_choice_add_block(
                 &store,
                 &signed_block.message.block,

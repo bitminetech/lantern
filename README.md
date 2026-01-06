@@ -10,7 +10,7 @@ Make sure you have the following tools installed before building.
 
 - CMake 3.20+
 - C compiler
-- [Rust](https://www.rust-lang.org/tools/install) (for hash-sig bindings)
+- [Rust](https://www.rust-lang.org/tools/install) (for XMSS bindings)
 
 ## Build
 

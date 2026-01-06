@@ -46,7 +46,7 @@ static const char *const VALIDATOR_CONFIG_FIELD_COUNT = "count";
 static const char *const VALIDATOR_CONFIG_FIELD_IP = "ip";
 static const char *const VALIDATOR_CONFIG_FIELD_QUIC = "quic";
 static const char *const VALIDATOR_CONFIG_FIELD_SEQ = "seq";
-static const char *const VALIDATOR_CONFIG_FIELD_HASH_SIG_DIR = "hashSigDir";
+static const char *const VALIDATOR_CONFIG_FIELD_XMSS_DIR = "xmssDir";
 
 static uint64_t parse_u64(const char *value, int *ok);
 static char *dup_trimmed(const char *value);
@@ -557,8 +557,8 @@ static void free_validator_config_entry(struct lantern_validator_config_entry *e
 
     entry->count = 0;
 
-    free(entry->hash_sig_dir);
-    entry->hash_sig_dir = NULL;
+    free(entry->xmss_dir);
+    entry->xmss_dir = NULL;
 
     entry->start_index = 0;
     entry->end_index = 0;
@@ -931,7 +931,7 @@ static int parse_validator_config_entry(
     const char *ip_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_IP);
     const char *quic_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_QUIC);
     const char *seq_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_SEQ);
-    const char *hash_dir_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_HASH_SIG_DIR);
+    const char *xmss_dir_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_XMSS_DIR);
 
     entry->name = dup_trimmed(name_val);
     entry->privkey_hex = dup_trimmed(priv_val);
@@ -978,8 +978,8 @@ static int parse_validator_config_entry(
         }
     }
 
-    entry->hash_sig_dir = dup_trimmed(hash_dir_val);
-    if (hash_dir_val && !entry->hash_sig_dir)
+    entry->xmss_dir = dup_trimmed(xmss_dir_val);
+    if (xmss_dir_val && !entry->xmss_dir)
     {
         return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
     }

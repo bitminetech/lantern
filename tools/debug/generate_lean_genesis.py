@@ -6,8 +6,8 @@ Usage:
     python tools/debug/generate_lean_genesis.py <config_yaml> <output_ssz>
 
 Reads GENESIS_TIME and VALIDATOR_COUNT from the YAML config and builds
-validators using any available hash-sig public keys found under
-<config_dir>/hash-sig-keys/.
+validators using any available XMSS public keys found under
+<config_dir>/xmss-keys/.
 """
 
 from __future__ import annotations
@@ -31,11 +31,11 @@ from lean_spec.subspecs.xmss.containers import PublicKey
 from lean_spec.types import Bytes52, Uint64
 
 
-def load_hash_sig_pubkeys(count: int, hash_sig_dir: Path) -> List[Optional[bytes]]:
+def load_xmss_pubkeys(count: int, xmss_dir: Path) -> List[Optional[bytes]]:
     """Return serialized XMSS public keys for each validator index."""
     results: List[Optional[bytes]] = []
     for index in range(count):
-        pk_path = hash_sig_dir / f"validator_{index}_pk.json"
+        pk_path = xmss_dir / f"validator_{index}_pk.json"
         if not pk_path.exists():
             results.append(None)
             continue
@@ -51,8 +51,8 @@ def load_hash_sig_pubkeys(count: int, hash_sig_dir: Path) -> List[Optional[bytes
     return results
 
 
-def build_state(genesis_time: int, validator_count: int, hash_sig_dir: Path) -> bytes:
-    pubkeys = load_hash_sig_pubkeys(validator_count, hash_sig_dir)
+def build_state(genesis_time: int, validator_count: int, xmss_dir: Path) -> bytes:
+    pubkeys = load_xmss_pubkeys(validator_count, xmss_dir)
     validators = Validators(
         data=[
             Validator(
@@ -89,14 +89,14 @@ def main() -> None:
         print("validator count must be positive", file=sys.stderr)
         sys.exit(1)
 
-    hash_sig_dir = config_path.parent / "hash-sig-keys"
-    if not hash_sig_dir.is_dir():
+    xmss_dir = config_path.parent / "xmss-keys"
+    if not xmss_dir.is_dir():
         print(
-            f"warning: hash-sig key directory {hash_sig_dir} missing; using zeroed pubkeys",
+            f"warning: XMSS key directory {xmss_dir} missing; using zeroed pubkeys",
             file=sys.stderr,
         )
 
-    ssz_bytes = build_state(genesis_time, validator_count, hash_sig_dir)
+    ssz_bytes = build_state(genesis_time, validator_count, xmss_dir)
     output_path.write_bytes(ssz_bytes)
     print(
         f"Wrote genesis SSZ ({len(ssz_bytes)} bytes) to {output_path}",

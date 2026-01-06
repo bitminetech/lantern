@@ -2,9 +2,10 @@
 """Generate LeanSpec networking SSZ fixtures for Lantern tests.
 
 This script generates SSZ fixtures that are compatible with Lantern's C implementation.
-Lantern uses fixed 3112-byte signatures, while leanSpec now uses variable-length
-XMSS signatures. To maintain compatibility, this script uses custom types that
-encode signatures as raw bytes matching Lantern's expected format.
+Lantern expects 3112-byte signature payloads but encodes them as variable-length
+SSZ fields (offset + raw bytes). To maintain compatibility, this script uses
+custom byte-list types that preserve the raw signature bytes while forcing
+variable-length offsets in parent containers.
 """
 
 from __future__ import annotations
@@ -15,36 +16,89 @@ import shutil
 from pathlib import Path
 from typing import Sequence
 
-from lean_spec.subspecs.networking.config import MAX_REQUEST_BLOCKS
-from lean_spec.subspecs.containers import (
-    Attestation,
-    AttestationData,
-    Checkpoint,
-)
-from lean_spec.subspecs.containers.slot import Slot
-from lean_spec.types import Bytes32, Uint64
-from lean_spec.types.byte_arrays import BaseBytes
+from lean_spec.types import Boolean, Bytes32, Uint64
+from lean_spec.types.byte_arrays import BaseByteList, ByteListMiB
+from lean_spec.types.bitfields import BaseBitlist
 from lean_spec.types.collections import SSZList
 from lean_spec.types.container import Container
 
-# Lantern expects fixed 3112-byte signatures, matching LANTERN_SIGNATURE_SIZE in C code.
-# The leanSpec XMSS Signature is now a variable-length SSZ container, so we define
-# a custom fixed-size byte array type for fixture generation.
+# Lantern expects fixed 3112-byte signature bytes, but SSZ treats signatures as
+# variable-length containers. Use a ByteList to ensure parent containers include
+# offsets while keeping the exact byte payload.
 LANTERN_SIGNATURE_SIZE = 3112
 LANTERN_MAX_ATTESTATIONS = 4096
+LANTERN_MAX_BLOCK_SIGNATURES = 4096
+MAX_REQUEST_BLOCKS = 2**10
 
 
-class LanternSignature(BaseBytes):
-    """Fixed-size signature matching Lantern's LANTERN_SIGNATURE_SIZE (3112 bytes)."""
+class LanternSignature(BaseByteList):
+    """Variable-length signature bytes with a fixed maximum length."""
 
-    LENGTH = LANTERN_SIGNATURE_SIZE
+    LIMIT = LANTERN_SIGNATURE_SIZE
 
 
-class LanternBlockSignatures(SSZList):
-    """Aggregated signature list using Lantern's fixed-size signatures."""
+class Slot(Uint64):
+    """Slot number (uint64) matching leanSpec Slot encoding."""
 
-    ELEMENT_TYPE = LanternSignature
-    LIMIT = 2**40  # Matches VALIDATOR_REGISTRY_LIMIT
+
+class Checkpoint(Container):
+    """Checkpoint container matching leanSpec ordering."""
+
+    root: Bytes32
+    slot: Slot
+
+
+class AttestationData(Container):
+    """Attestation data container matching leanSpec ordering."""
+
+    slot: Slot
+    head: Checkpoint
+    target: Checkpoint
+    source: Checkpoint
+
+
+class Attestation(Container):
+    """Validator attestation container matching leanSpec ordering."""
+
+    validator_id: Uint64
+    data: AttestationData
+
+
+class AggregationBits(BaseBitlist):
+    """Bitlist representing validator participation in aggregation."""
+
+    LIMIT = LANTERN_MAX_ATTESTATIONS
+
+    @classmethod
+    def from_validator_indices(cls, indices: Sequence[Uint64]) -> "AggregationBits":
+        if not indices:
+            raise AssertionError("Aggregation bits require at least one validator")
+        ids = {int(i) for i in indices}
+        max_id = max(ids)
+        if max_id >= cls.LIMIT:
+            raise AssertionError("Validator index out of range for aggregation bits")
+        return cls(data=[Boolean(i in ids) for i in range(max_id + 1)])
+
+
+class AggregatedAttestation(Container):
+    """Aggregated attestation container matching leanSpec ordering."""
+
+    aggregation_bits: AggregationBits
+    data: AttestationData
+
+
+class LanternAggregatedSignatureProof(Container):
+    """Aggregated signature proof using Lantern's byte list encoding."""
+
+    participants: AggregationBits
+    proof_data: ByteListMiB
+
+
+class LanternAttestationSignatures(SSZList):
+    """Per-attestation aggregated signature proofs."""
+
+    ELEMENT_TYPE = LanternAggregatedSignatureProof
+    LIMIT = LANTERN_MAX_BLOCK_SIGNATURES
 
 
 class LanternSignedAttestation(Container):
@@ -54,17 +108,24 @@ class LanternSignedAttestation(Container):
     signature: LanternSignature
 
 
-class LanternAttestations(SSZList):
-    """Lantern block body attestations (per-validator, not aggregated)."""
+class LanternBlockSignatures(Container):
+    """Block signatures using Lantern's fixed-size proposer signature."""
 
-    ELEMENT_TYPE = Attestation
+    attestation_signatures: LanternAttestationSignatures
+    proposer_signature: LanternSignature
+
+
+class LanternAggregatedAttestations(SSZList):
+    """Lantern block body aggregated attestations."""
+
+    ELEMENT_TYPE = AggregatedAttestation
     LIMIT = LANTERN_MAX_ATTESTATIONS
 
 
 class LanternBlockBody(Container):
-    """Block body matching Lantern's per-validator attestation encoding."""
+    """Block body matching Lantern's aggregated attestation encoding."""
 
-    attestations: LanternAttestations
+    attestations: LanternAggregatedAttestations
 
 
 class LanternBlock(Container):
@@ -85,7 +146,7 @@ class LanternBlockWithAttestation(Container):
 
 
 class LanternSignedBlockWithAttestation(Container):
-    """Signed block using Lantern's fixed-size signature format."""
+    """Signed block using Lantern's aggregated signature proofs."""
 
     message: LanternBlockWithAttestation
     signature: LanternBlockSignatures
@@ -183,9 +244,41 @@ def make_gossip_attestation(seed: int, validator_id: int, vote_slot: int) -> Att
     )
 
 
-def make_signatures(seed: int, count: int) -> LanternBlockSignatures:
-    signatures = [LanternSignature(repeating_bytes(seed + (i * 3), LANTERN_SIGNATURE_SIZE)) for i in range(count)]
-    return LanternBlockSignatures(data=signatures)
+def make_aggregated_attestation(attestation: Attestation) -> AggregatedAttestation:
+    return AggregatedAttestation(
+        aggregation_bits=AggregationBits.from_validator_indices([attestation.validator_id]),
+        data=attestation.data,
+    )
+
+
+def make_attestation_signatures(
+    seed: int,
+    aggregated_attestations: Sequence[AggregatedAttestation],
+    proof_len: int = 8,
+) -> LanternAttestationSignatures:
+    proofs = []
+    for i, attestation in enumerate(aggregated_attestations):
+        proof_seed = seed + (i * 3)
+        proofs.append(
+            LanternAggregatedSignatureProof(
+                participants=attestation.aggregation_bits,
+                proof_data=ByteListMiB(data=repeating_bytes(proof_seed, proof_len)),
+            )
+        )
+    return LanternAttestationSignatures(data=proofs)
+
+
+def make_block_signatures(
+    seed: int,
+    aggregated_attestations: Sequence[AggregatedAttestation],
+) -> LanternBlockSignatures:
+    attestation_signatures = make_attestation_signatures(seed, aggregated_attestations)
+    proposer_seed = seed + (len(aggregated_attestations) * 3)
+    proposer_signature = LanternSignature(data=repeating_bytes(proposer_seed, LANTERN_SIGNATURE_SIZE))
+    return LanternBlockSignatures(
+        attestation_signatures=attestation_signatures,
+        proposer_signature=proposer_signature,
+    )
 
 
 def make_signed_block(seed: int, base_slot: int, proposer_index: int, attestation_count: int) -> LanternSignedBlockWithAttestation:
@@ -193,15 +286,16 @@ def make_signed_block(seed: int, base_slot: int, proposer_index: int, attestatio
         make_attestation(seed + (i * 5), (proposer_index + i + seed) % 16, base_slot + i + 1)
         for i in range(attestation_count)
     ]
+    aggregated_attestations = [make_aggregated_attestation(attestation) for attestation in attestations]
     block = LanternBlock(
         slot=Slot(base_slot),
         proposer_index=Uint64(proposer_index),
         parent_root=Bytes32(repeating_bytes(seed, 32)),
         state_root=Bytes32(repeating_bytes(seed + 0x50, 32)),
-        body=LanternBlockBody(attestations=LanternAttestations(data=attestations)),
+        body=LanternBlockBody(attestations=LanternAggregatedAttestations(data=aggregated_attestations)),
     )
     proposer_att = make_attestation(seed + 0x80, (proposer_index + 3) % 16, base_slot + attestation_count + 4)
-    signatures = make_signatures(seed + 0xA0, len(attestations) + 1)
+    signatures = make_block_signatures(seed + 0xA0, aggregated_attestations)
     return LanternSignedBlockWithAttestation(
         message=LanternBlockWithAttestation(block=block, proposer_attestation=proposer_att),
         signature=signatures,
@@ -218,15 +312,16 @@ def make_gossip_signed_block(
         make_gossip_attestation(seed + (i * 5), (proposer_index + i + seed) % 16, vote_slot)
         for i, vote_slot in enumerate(attestation_vote_slots)
     ]
+    aggregated_attestations = [make_aggregated_attestation(attestation) for attestation in attestations]
     block = LanternBlock(
         slot=Slot(block_slot),
         proposer_index=Uint64(proposer_index),
         parent_root=Bytes32(repeating_bytes(seed, 32)),
         state_root=Bytes32(repeating_bytes(seed + 0x50, 32)),
-        body=LanternBlockBody(attestations=LanternAttestations(data=list(attestations))),
+        body=LanternBlockBody(attestations=LanternAggregatedAttestations(data=list(aggregated_attestations))),
     )
     proposer_att = make_gossip_attestation(seed + 0x80, (proposer_index + 3) % 16, block_slot + 2)
-    signatures = make_signatures(seed + 0xA0, len(attestations) + 1)
+    signatures = make_block_signatures(seed + 0xA0, aggregated_attestations)
     return LanternSignedBlockWithAttestation(
         message=LanternBlockWithAttestation(block=block, proposer_attestation=proposer_att),
         signature=signatures,
@@ -357,7 +452,7 @@ def main() -> None:
 
     vote_fixture = LanternSignedAttestation(
         message=make_gossip_attestation(seed=0x33, validator_id=9, vote_slot=96),
-        signature=LanternSignature(repeating_bytes(0xE1, LANTERN_SIGNATURE_SIZE)),
+        signature=LanternSignature(data=repeating_bytes(0xE1, LANTERN_SIGNATURE_SIZE)),
     )
     vote_bytes = vote_fixture.encode_bytes()
     vote_path = fixture_dir / "gossip_signed_vote_leanspec.ssz"

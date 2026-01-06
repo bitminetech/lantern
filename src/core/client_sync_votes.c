@@ -661,7 +661,7 @@ bool lantern_client_verify_vote_signature(
         pubkey_bytes = record->pubkey_bytes;
     }
     LanternRoot vote_root;
-    if (lantern_hash_tree_root_vote(&vote->data, &vote_root) != 0)
+    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &vote_root) != 0)
     {
         lantern_log_warn(
             "state",

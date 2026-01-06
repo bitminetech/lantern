@@ -59,27 +59,32 @@ function(_lantern_define_snappy target_name source_dir)
     endif()
 endfunction()
 
-function(_lantern_define_c_hash_sig target_name source_dir)
-    set(c_hash_sig_output
-        "${source_dir}/target/release/${CMAKE_STATIC_LIBRARY_PREFIX}pq_bindings_c_rust${CMAKE_STATIC_LIBRARY_SUFFIX}"
+function(_lantern_define_c_leanvm_xmss target_name source_dir)
+    set(c_leanvm_xmss_output
+        "${source_dir}/target/release/${CMAKE_STATIC_LIBRARY_PREFIX}leanvm_xmss_c${CMAKE_STATIC_LIBRARY_SUFFIX}"
     )
 
     add_custom_command(
-        OUTPUT "${c_hash_sig_output}"
-        COMMAND "${CARGO_EXECUTABLE}" build --release
+        OUTPUT "${c_leanvm_xmss_output}"
+        COMMAND "${CARGO_EXECUTABLE}" build --release --locked
         WORKING_DIRECTORY "${source_dir}"
-        DEPENDS "${source_dir}/Cargo.toml" "${source_dir}/Cargo.lock" "${source_dir}/src/lib.rs"
-        COMMENT "Building c-hash-sig Rust bindings"
+        DEPENDS
+            "${source_dir}/Cargo.toml"
+            "${source_dir}/Cargo.lock"
+            "${source_dir}/build.rs"
+            "${source_dir}/cbindgen.toml"
+            "${source_dir}/src/lib.rs"
+        COMMENT "Building c-leanvm-xmss Rust bindings"
         VERBATIM
     )
 
-    add_custom_target(${target_name}_build DEPENDS "${c_hash_sig_output}")
+    add_custom_target(${target_name}_build DEPENDS "${c_leanvm_xmss_output}")
 
     add_library(${target_name} STATIC IMPORTED GLOBAL)
     set_target_properties(${target_name}
         PROPERTIES
-            IMPORTED_LOCATION "${c_hash_sig_output}"
-            INTERFACE_INCLUDE_DIRECTORIES "${source_dir}"
+            IMPORTED_LOCATION "${c_leanvm_xmss_output}"
+            INTERFACE_INCLUDE_DIRECTORIES "${source_dir}/include"
     )
 
     add_dependencies(${target_name} ${target_name}_build)
@@ -95,7 +100,7 @@ function(lantern_configure_dependencies target)
     _lantern_define_interface(lantern_libp2p ${external_root}/c-libp2p)
     _lantern_define_static(lantern_c_ssz ${external_root}/c-ssz)
     _lantern_define_snappy(lantern_snappy_c ${external_root}/snappy-c)
-    _lantern_define_c_hash_sig(lantern_c_hash_sig ${external_root}/c-hash-sig)
+    _lantern_define_c_leanvm_xmss(lantern_c_leanvm_xmss ${external_root}/c-leanvm-xmss)
 
     set(libp2p_source_dir ${external_root}/c-libp2p)
     if(EXISTS ${libp2p_source_dir}/CMakeLists.txt)
@@ -183,7 +188,7 @@ function(lantern_configure_dependencies target)
             lantern_libp2p
             lantern_c_ssz
             lantern_snappy_c
-            lantern_c_hash_sig
+            lantern_c_leanvm_xmss
             libp2p_unified
             protocol_gossipsub
             protocol_ping

@@ -74,7 +74,7 @@ add_library(lantern STATIC
     src/support/strings.c
     src/support/time.c
     src/support/secure_mem.c
-    src/crypto/hash_sig.c
+    src/crypto/xmss.c
     src/internal/yaml_parser.c
     external/c-libp2p/src/multiformats/multibase/encoding/base64_url.c
     external/c-libp2p/external/wjcryptlib/lib/WjCryptLib_Sha256.c
@@ -86,7 +86,7 @@ target_include_directories(lantern
     PRIVATE
         ${PROJECT_SOURCE_DIR}/src
         ${PROJECT_SOURCE_DIR}/external/jsmn
-        ${PROJECT_SOURCE_DIR}/external/c-hash-sig
+        ${PROJECT_SOURCE_DIR}/external/c-leanvm-xmss/include
         ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/secp256k1/include
         ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/libtomcrypt/src/headers
         ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/wjcryptlib/lib
@@ -205,7 +205,7 @@ if(LANTERN_BUILD_TESTS)
     target_include_directories(
         lantern_signature_test
         PRIVATE
-            ${PROJECT_SOURCE_DIR}/external/c-hash-sig/include
+            ${PROJECT_SOURCE_DIR}/external/c-leanvm-xmss/include
     )
     add_test(NAME lantern_signature COMMAND lantern_signature_test)
     set_tests_properties(lantern_signature PROPERTIES TIMEOUT 3600)

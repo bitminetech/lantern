@@ -33,7 +33,7 @@ libp2p_err_t libp2p_gossipsub_rpc_decode_frame(
 #define LANTERN_GOSSIPSUB_TOPIC_CAP 128u
 #define LANTERN_ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 #define LANTERN_GOSSIPSUB_PROTOCOL "/meshsub/1.0.0"
-#define LANTERN_GOSSIPSUB_HEARTBEAT_INTERVAL_MS 1000u
+#define LANTERN_GOSSIPSUB_HEARTBEAT_INTERVAL_MS 700u
 #define LANTERN_GOSSIPSUB_FANOUT_TTL_MS 60000u
 #define LANTERN_GOSSIPSUB_MESH_D 8
 #define LANTERN_GOSSIPSUB_MESH_D_LOW 6
@@ -58,6 +58,97 @@ static uint32_t lantern_leanspec_seen_ttl_ms(void) {
         * (uint64_t)LANTERN_LEANSPEC_SEEN_TTL_FACTOR;
     const uint64_t ttl_ms = ttl_seconds * 1000u;
     return ttl_ms > UINT32_MAX ? UINT32_MAX : (uint32_t)ttl_ms;
+}
+
+static size_t bitlist_encoded_size_bits(size_t bit_length) {
+    if (bit_length == 0) {
+        return 1;
+    }
+    size_t byte_len = (bit_length + 7u) / 8u;
+    if ((bit_length % 8u) == 0) {
+        return byte_len + 1u;
+    }
+    return byte_len;
+}
+
+static size_t aggregated_attestation_encoded_size(const LanternAggregatedAttestation *attestation) {
+    if (!attestation) {
+        return 0;
+    }
+    if (attestation->aggregation_bits.bit_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return 0;
+    }
+    size_t bits_size = bitlist_encoded_size_bits(attestation->aggregation_bits.bit_length);
+    size_t fixed_section = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_ATTESTATION_DATA_SSZ_SIZE;
+    if (fixed_section > SIZE_MAX - bits_size) {
+        return 0;
+    }
+    return fixed_section + bits_size;
+}
+
+static size_t aggregated_attestations_encoded_size(const LanternAggregatedAttestations *attestations) {
+    if (!attestations) {
+        return 0;
+    }
+    if (attestations->length == 0) {
+        return 0;
+    }
+    if (attestations->length > LANTERN_MAX_ATTESTATIONS || !attestations->data) {
+        return 0;
+    }
+    size_t offset_table = attestations->length * SSZ_BYTE_SIZE_OF_UINT32;
+    size_t total = offset_table;
+    for (size_t i = 0; i < attestations->length; ++i) {
+        size_t entry = aggregated_attestation_encoded_size(&attestations->data[i]);
+        if (entry == 0 || entry > SIZE_MAX - total) {
+            return 0;
+        }
+        total += entry;
+    }
+    return total;
+}
+
+static size_t aggregated_signature_proof_encoded_size(const LanternAggregatedSignatureProof *proof) {
+    if (!proof) {
+        return 0;
+    }
+    if (proof->participants.bit_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return 0;
+    }
+    if (proof->proof_data.length > LANTERN_AGG_PROOF_MAX_BYTES) {
+        return 0;
+    }
+    size_t participants_size = bitlist_encoded_size_bits(proof->participants.bit_length);
+    size_t fixed_section = SSZ_BYTE_SIZE_OF_UINT32 * 2u;
+    if (fixed_section > SIZE_MAX - participants_size) {
+        return 0;
+    }
+    if (fixed_section + participants_size > SIZE_MAX - proof->proof_data.length) {
+        return 0;
+    }
+    return fixed_section + participants_size + proof->proof_data.length;
+}
+
+static size_t attestation_signatures_encoded_size(const LanternAttestationSignatures *signatures) {
+    if (!signatures) {
+        return 0;
+    }
+    if (signatures->length == 0) {
+        return 0;
+    }
+    if (signatures->length > LANTERN_MAX_BLOCK_SIGNATURES || !signatures->data) {
+        return 0;
+    }
+    size_t offset_table = signatures->length * SSZ_BYTE_SIZE_OF_UINT32;
+    size_t total = offset_table;
+    for (size_t i = 0; i < signatures->length; ++i) {
+        size_t entry = aggregated_signature_proof_encoded_size(&signatures->data[i]);
+        if (entry == 0 || entry > SIZE_MAX - total) {
+            return 0;
+        }
+        total += entry;
+    }
+    return total;
 }
 
 static void describe_peer_id(const peer_id_t *peer, char *buffer, size_t length) {
@@ -138,12 +229,17 @@ static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
     size_t block_offset = SSZ_BYTE_SIZE_OF_UINT32;
     size_t body_header = SSZ_BYTE_SIZE_OF_UINT32;
     size_t att_count = block->message.block.body.attestations.length;
-    if (att_count > LANTERN_MAX_ATTESTATIONS) {
+    size_t att_bytes = aggregated_attestations_encoded_size(&block->message.block.body.attestations);
+    if (att_count > 0 && att_bytes == 0) {
         return 0;
     }
-    size_t att_bytes = att_count * LANTERN_VOTE_SSZ_SIZE;
     size_t proposer_bytes = LANTERN_VOTE_SSZ_SIZE;
-    size_t signatures_bytes = block->signatures.length * LANTERN_SIGNATURE_SIZE;
+    size_t sig_count = block->signatures.attestation_signatures.length;
+    size_t sig_list_bytes = attestation_signatures_encoded_size(&block->signatures.attestation_signatures);
+    if (sig_count > 0 && sig_list_bytes == 0) {
+        return 0;
+    }
+    size_t signatures_bytes = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + LANTERN_SIGNATURE_SIZE + sig_list_bytes;
     size_t total = offsets + block_fixed;
     if (block_offset > SIZE_MAX - total) {
         return 0;
@@ -175,9 +271,14 @@ static size_t signed_block_max_ssz_size(void) {
         + SSZ_BYTE_SIZE_OF_UINT32;
     size_t block_offset = SSZ_BYTE_SIZE_OF_UINT32;
     size_t body_header = SSZ_BYTE_SIZE_OF_UINT32;
-    size_t att_bytes = (size_t)LANTERN_MAX_ATTESTATIONS * LANTERN_VOTE_SSZ_SIZE;
+    size_t att_bits_max = bitlist_encoded_size_bits(LANTERN_VALIDATOR_REGISTRY_LIMIT);
+    size_t att_entry_max = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_ATTESTATION_DATA_SSZ_SIZE + att_bits_max;
+    size_t att_bytes = (size_t)LANTERN_MAX_ATTESTATIONS * (SSZ_BYTE_SIZE_OF_UINT32 + att_entry_max);
     size_t proposer_bytes = LANTERN_VOTE_SSZ_SIZE;
-    size_t signatures_bytes = (size_t)LANTERN_MAX_BLOCK_SIGNATURES * LANTERN_SIGNATURE_SIZE;
+    size_t proof_bits_max = att_bits_max;
+    size_t proof_entry_max = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + proof_bits_max + LANTERN_AGG_PROOF_MAX_BYTES;
+    size_t signatures_bytes = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + LANTERN_SIGNATURE_SIZE
+        + ((size_t)LANTERN_MAX_BLOCK_SIGNATURES * (SSZ_BYTE_SIZE_OF_UINT32 + proof_entry_max));
     size_t total = offsets + block_fixed;
     if (block_offset > SIZE_MAX - total) {
         return 0;

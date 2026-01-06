@@ -12,7 +12,7 @@ if [[ -d "${ROOT_DIR}/.git" ]]; then
         git submodule update --init --recursive \
             external/c-libp2p \
             external/c-ssz \
-            external/c-hash-sig
+            external/c-leanvm-xmss
     fi
 else
     echo "bootstrap: skipping submodule sync (git metadata unavailable)" >&2

@@ -42,11 +42,11 @@ enum {
     OPT_BOOTNODE_FILE,
     OPT_DEVNET,
     OPT_LOG_LEVEL,
-    OPT_HASH_SIG_KEY_DIR,
-    OPT_HASH_SIG_PUBLIC_PATH,
-    OPT_HASH_SIG_SECRET_PATH,
-    OPT_HASH_SIG_PUBLIC_TEMPLATE,
-    OPT_HASH_SIG_SECRET_TEMPLATE,
+    OPT_XMSS_KEY_DIR,
+    OPT_XMSS_PUBLIC_PATH,
+    OPT_XMSS_SECRET_PATH,
+    OPT_XMSS_PUBLIC_TEMPLATE,
+    OPT_XMSS_SECRET_TEMPLATE,
 };
 
 /* Forward declarations */
@@ -66,7 +66,7 @@ static lantern_client_error handle_bootnode_option(
     struct lantern_client_options *options,
     int opt,
     const char *optarg);
-static lantern_client_error handle_hash_sig_option(
+static lantern_client_error handle_xmss_option(
     struct lantern_client_options *options,
     int opt,
     const char *optarg);
@@ -242,12 +242,12 @@ static lantern_client_error apply_option(
             return LANTERN_CLIENT_ERR_INVALID_PARAM;
         }
         return LANTERN_CLIENT_OK;
-    case OPT_HASH_SIG_KEY_DIR:
-    case OPT_HASH_SIG_PUBLIC_PATH:
-    case OPT_HASH_SIG_SECRET_PATH:
-    case OPT_HASH_SIG_PUBLIC_TEMPLATE:
-    case OPT_HASH_SIG_SECRET_TEMPLATE:
-        return handle_hash_sig_option(options, opt, optarg);
+    case OPT_XMSS_KEY_DIR:
+    case OPT_XMSS_PUBLIC_PATH:
+    case OPT_XMSS_SECRET_PATH:
+    case OPT_XMSS_PUBLIC_TEMPLATE:
+    case OPT_XMSS_SECRET_TEMPLATE:
+        return handle_xmss_option(options, opt, optarg);
     default:
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
@@ -348,7 +348,7 @@ static lantern_client_error handle_bootnode_option(
  *
  * @note Thread safety: Not thread-safe; mutates caller-owned options.
  */
-static lantern_client_error handle_hash_sig_option(
+static lantern_client_error handle_xmss_option(
     struct lantern_client_options *options,
     int opt,
     const char *optarg)
@@ -360,20 +360,20 @@ static lantern_client_error handle_hash_sig_option(
 
     switch (opt)
     {
-    case OPT_HASH_SIG_KEY_DIR:
-        options->hash_sig_key_dir = optarg;
+    case OPT_XMSS_KEY_DIR:
+        options->xmss_key_dir = optarg;
         return LANTERN_CLIENT_OK;
-    case OPT_HASH_SIG_PUBLIC_PATH:
-        options->hash_sig_public_path = optarg;
+    case OPT_XMSS_PUBLIC_PATH:
+        options->xmss_public_path = optarg;
         return LANTERN_CLIENT_OK;
-    case OPT_HASH_SIG_SECRET_PATH:
-        options->hash_sig_secret_path = optarg;
+    case OPT_XMSS_SECRET_PATH:
+        options->xmss_secret_path = optarg;
         return LANTERN_CLIENT_OK;
-    case OPT_HASH_SIG_PUBLIC_TEMPLATE:
-        options->hash_sig_public_template = optarg;
+    case OPT_XMSS_PUBLIC_TEMPLATE:
+        options->xmss_public_template = optarg;
         return LANTERN_CLIENT_OK;
-    case OPT_HASH_SIG_SECRET_TEMPLATE:
-        options->hash_sig_secret_template = optarg;
+    case OPT_XMSS_SECRET_TEMPLATE:
+        options->xmss_secret_template = optarg;
         return LANTERN_CLIENT_OK;
     default:
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
@@ -429,11 +429,11 @@ static lantern_client_error parse_arguments(
         {"bootnodes-file", required_argument, NULL, OPT_BOOTNODE_FILE},
         {"devnet", required_argument, NULL, OPT_DEVNET},
         {"log-level", required_argument, NULL, OPT_LOG_LEVEL},
-        {"hash-sig-key-dir", required_argument, NULL, OPT_HASH_SIG_KEY_DIR},
-        {"hash-sig-public", required_argument, NULL, OPT_HASH_SIG_PUBLIC_PATH},
-        {"hash-sig-secret", required_argument, NULL, OPT_HASH_SIG_SECRET_PATH},
-        {"hash-sig-public-template", required_argument, NULL, OPT_HASH_SIG_PUBLIC_TEMPLATE},
-        {"hash-sig-secret-template", required_argument, NULL, OPT_HASH_SIG_SECRET_TEMPLATE},
+        {"xmss-key-dir", required_argument, NULL, OPT_XMSS_KEY_DIR},
+        {"xmss-public", required_argument, NULL, OPT_XMSS_PUBLIC_PATH},
+        {"xmss-secret", required_argument, NULL, OPT_XMSS_SECRET_PATH},
+        {"xmss-public-template", required_argument, NULL, OPT_XMSS_PUBLIC_TEMPLATE},
+        {"xmss-secret-template", required_argument, NULL, OPT_XMSS_SECRET_TEMPLATE},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'v'},
         {0, 0, 0, 0},
@@ -738,28 +738,28 @@ static void print_usage_network(void)
 /**
  * @brief Print hash signature key CLI options.
  */
-static void print_usage_hash_sig(void)
+static void print_usage_xmss(void)
 {
     lantern_log_info(
         "main",
         NULL,
-        "  --hash-sig-key-dir PATH     Directory containing hash-sig key files");
+        "  --xmss-key-dir PATH     Directory containing XMSS key files");
     lantern_log_info(
         "main",
         NULL,
-        "  --hash-sig-public PATH      Path to a single hash-sig public key file");
+        "  --xmss-public PATH      Path to a single XMSS public key file");
     lantern_log_info(
         "main",
         NULL,
-        "  --hash-sig-secret PATH      Path to a single hash-sig secret key file");
+        "  --xmss-secret PATH      Path to a single XMSS secret key file");
     lantern_log_info(
         "main",
         NULL,
-        "  --hash-sig-public-template STR  printf-style template for public key paths");
+        "  --xmss-public-template STR  printf-style template for public key paths");
     lantern_log_info(
         "main",
         NULL,
-        "  --hash-sig-secret-template STR  printf-style template for secret key paths");
+        "  --xmss-secret-template STR  printf-style template for secret key paths");
 }
 
 
@@ -800,7 +800,7 @@ static void print_usage(const char *prog)
     print_usage_paths();
     print_usage_node_identity();
     print_usage_network();
-    print_usage_hash_sig();
+    print_usage_xmss();
     print_usage_misc();
 }
 

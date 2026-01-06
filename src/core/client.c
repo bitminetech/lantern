@@ -54,7 +54,7 @@
 #include "lantern/consensus/signature.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/consensus/state.h"
-#include "lantern/crypto/hash_sig.h"
+#include "lantern/crypto/xmss.h"
 #include "lantern/encoding/snappy.h"
 #include "lantern/http/server.h"
 #include "lantern/metrics/lean_metrics.h"
@@ -113,11 +113,11 @@ void lantern_client_options_init(struct lantern_client_options *options)
     options->metrics_port = LANTERN_DEFAULT_METRICS_PORT;
     options->devnet = LANTERN_DEFAULT_DEVNET;
     lantern_string_list_init(&options->bootnodes);
-    options->hash_sig_key_dir = NULL;
-    options->hash_sig_public_path = NULL;
-    options->hash_sig_secret_path = NULL;
-    options->hash_sig_public_template = NULL;
-    options->hash_sig_secret_template = NULL;
+    options->xmss_key_dir = NULL;
+    options->xmss_public_path = NULL;
+    options->xmss_secret_path = NULL;
+    options->xmss_public_template = NULL;
+    options->xmss_secret_template = NULL;
 }
 
 
@@ -954,7 +954,9 @@ static void client_log_genesis_anchors(
     int resize_result = 0;
     lantern_signed_block_with_attestation_init(&genesis_signed);
     genesis_signed.message.block = genesis_block;
-    resize_result = lantern_block_signatures_resize(&genesis_signed.signatures, 0);
+    resize_result = lantern_attestation_signatures_resize(
+        &genesis_signed.signatures.attestation_signatures,
+        0);
     if (resize_result != 0)
     {
         lantern_log_error(
@@ -1190,12 +1192,12 @@ static lantern_client_error client_setup_validators(
         return LANTERN_CLIENT_ERR_CONFIG;
     }
 
-    if (lantern_client_configure_hash_sig_sources(client, options) != 0)
+    if (lantern_client_configure_xmss_sources(client, options) != 0)
     {
         lantern_log_error(
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to configure hash-sig key sources");
+            "failed to configure xmss key sources");
         return LANTERN_CLIENT_ERR_CONFIG;
     }
 
@@ -1241,7 +1243,7 @@ static lantern_client_error client_setup_validators(
         return LANTERN_CLIENT_ERR_VALIDATOR;
     }
 
-    if (lantern_client_load_hash_sig_keys(client) != 0)
+    if (lantern_client_load_xmss_keys(client) != 0)
     {
         return LANTERN_CLIENT_ERR_VALIDATOR;
     }
@@ -1515,7 +1517,7 @@ static void client_start_background_services(struct lantern_client *client)
 
 
 /**
- * @brief Stop validator-related services and free hash-sig key resources.
+ * @brief Stop validator-related services and free xmss key resources.
  *
  * Shuts down validator, ping, and peer dialer threads and frees hash signature
  * key material paths and buffers.
@@ -1529,17 +1531,17 @@ static void shutdown_validator_and_keys(struct lantern_client *client)
     stop_validator_service(client);
     stop_ping_service(client);
     stop_peer_dialer(client);
-    lantern_client_free_hash_sig_pubkeys(client);
-    free(client->hash_sig_key_dir);
-    client->hash_sig_key_dir = NULL;
-    free(client->hash_sig_public_template);
-    client->hash_sig_public_template = NULL;
-    free(client->hash_sig_secret_template);
-    client->hash_sig_secret_template = NULL;
-    free(client->hash_sig_public_path);
-    client->hash_sig_public_path = NULL;
-    free(client->hash_sig_secret_path);
-    client->hash_sig_secret_path = NULL;
+    lantern_client_free_xmss_pubkeys(client);
+    free(client->xmss_key_dir);
+    client->xmss_key_dir = NULL;
+    free(client->xmss_public_template);
+    client->xmss_public_template = NULL;
+    free(client->xmss_secret_template);
+    client->xmss_secret_template = NULL;
+    free(client->xmss_public_path);
+    client->xmss_public_path = NULL;
+    free(client->xmss_secret_path);
+    client->xmss_secret_path = NULL;
 }
 
 

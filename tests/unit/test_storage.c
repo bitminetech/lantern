@@ -87,7 +87,7 @@ static void build_signed_block(
         "hash parent header");
     lantern_block_body_init(&out_block->message.body);
     expect_zero(
-        lantern_hash_tree_root_block(&out_block->message, out_root),
+        lantern_hash_tree_root_block(&out_block->message.block, out_root),
         "hash block");
 }
 

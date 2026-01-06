@@ -555,7 +555,7 @@ int lantern_client_decode_validator_secret(const char *hex, uint8_t **out_key, s
 
 
 /**
- * Configure hash-sig key sources from options and environment.
+ * Configure xmss key sources from options and environment.
  *
  * @param client   Client instance
  * @param options  Client options
@@ -563,13 +563,13 @@ int lantern_client_decode_validator_secret(const char *hex, uint8_t **out_key, s
  *
  * @note Thread safety: This function should be called during initialization
  */
-int lantern_client_configure_hash_sig_sources(
+int lantern_client_configure_xmss_sources(
     struct lantern_client *client,
     const struct lantern_client_options *options);
 
 
 /**
- * Load all hash-sig keys for the client.
+ * Load all xmss keys for the client.
  *
  * @spec subspecs/xmss/keygen.py - key loading
  *
@@ -578,7 +578,7 @@ int lantern_client_configure_hash_sig_sources(
  *
  * @note Thread safety: This function should be called during initialization
  */
-int lantern_client_load_hash_sig_keys(struct lantern_client *client);
+int lantern_client_load_xmss_keys(struct lantern_client *client);
 
 
 /**
@@ -588,7 +588,7 @@ int lantern_client_load_hash_sig_keys(struct lantern_client *client);
  *
  * @note Thread safety: Caller must ensure exclusive access during shutdown
  */
-void lantern_client_free_hash_sig_pubkeys(struct lantern_client *client);
+void lantern_client_free_xmss_pubkeys(struct lantern_client *client);
 
 
 #ifdef __cplusplus

@@ -1,8 +1,8 @@
 /**
  * @file client_keys.c
- * @brief Hash-sig key management for local validators
+ * @brief XMSS key management for local validators
  *
- * Implements key loading, path resolution, and manifest parsing for hash-sig
+ * Implements key loading, path resolution, and manifest parsing for xmss
  * cryptographic keys used by local validators.
  *
  * @note Lock ordering (acquire in this order to prevent deadlocks):
@@ -25,7 +25,7 @@
 #include <string.h>
 
 #include "internal/yaml_parser.h"
-#include "lantern/crypto/hash_sig.h"
+#include "lantern/crypto/xmss.h"
 #include "lantern/support/log.h"
 #include "lantern/support/secure_mem.h"
 #include "lantern/support/strings.h"
@@ -35,22 +35,22 @@
  * Forward Declarations
  * ============================================================================ */
 
-static int hash_sig_join_path(const char *dir, const char *leaf, char **out_path);
+static int xmss_join_path(const char *dir, const char *leaf, char **out_path);
 
 
 /* ============================================================================
  * Constants
  * ============================================================================ */
 
-static const size_t HASH_SIG_HEX_PREFIX_LENGTH = 2u;
-static const size_t HASH_SIG_HEX_CHARS_PER_BYTE = 2u;
-static const size_t HASH_SIG_KEY_FILENAME_MAX_LEN = 64u;
-static const size_t HASH_SIG_WINDOWS_ABS_PATH_MIN_LEN = 3u;
-static const size_t HASH_SIG_WINDOWS_COLON_INDEX = 1u;
-static const size_t HASH_SIG_WINDOWS_SEPARATOR_INDEX = 2u;
+static const size_t XMSS_HEX_PREFIX_LENGTH = 2u;
+static const size_t XMSS_HEX_CHARS_PER_BYTE = 2u;
+static const size_t XMSS_KEY_FILENAME_MAX_LEN = 64u;
+static const size_t XMSS_WINDOWS_ABS_PATH_MIN_LEN = 3u;
+static const size_t XMSS_WINDOWS_COLON_INDEX = 1u;
+static const size_t XMSS_WINDOWS_SEPARATOR_INDEX = 2u;
 
-static const char HASH_SIG_DEFAULT_KEYS_DIR[] = "hash-sig-keys";
-static const char HASH_SIG_MANIFEST_FILENAME[] = "validator-keys-manifest.yaml";
+static const char XMSS_DEFAULT_KEYS_DIR[] = "xmss-keys";
+static const char XMSS_MANIFEST_FILENAME[] = "validator-keys-manifest.yaml";
 
 
 /* ============================================================================
@@ -183,15 +183,15 @@ int lantern_client_decode_validator_secret(
     const char *hex_start = trimmed;
     if (hex_start[0] == '0' && (hex_start[1] == 'x' || hex_start[1] == 'X'))
     {
-        hex_start += HASH_SIG_HEX_PREFIX_LENGTH;
+        hex_start += XMSS_HEX_PREFIX_LENGTH;
     }
     size_t hex_len = strlen(hex_start);
-    if (hex_len == 0 || (hex_len % HASH_SIG_HEX_CHARS_PER_BYTE) != 0)
+    if (hex_len == 0 || (hex_len % XMSS_HEX_CHARS_PER_BYTE) != 0)
     {
         goto cleanup;
     }
 
-    secret_len = hex_len / HASH_SIG_HEX_CHARS_PER_BYTE;
+    secret_len = hex_len / XMSS_HEX_CHARS_PER_BYTE;
     secret = malloc(secret_len);
     if (!secret)
     {
@@ -236,9 +236,9 @@ cleanup:
  * ============================================================================ */
 
 /**
- * Entry in a hash-sig key manifest.
+ * Entry in a xmss key manifest.
  */
-struct hash_sig_manifest_entry
+struct xmss_manifest_entry
 {
     uint64_t index;    /**< Validator global index */
     char *public_file; /**< Public key path or filename */
@@ -247,11 +247,11 @@ struct hash_sig_manifest_entry
 
 
 /**
- * Hash-sig key manifest containing validator key paths.
+ * XMSS key manifest containing validator key paths.
  */
-struct hash_sig_manifest
+struct xmss_manifest
 {
-    struct hash_sig_manifest_entry *entries; /**< Manifest entries */
+    struct xmss_manifest_entry *entries; /**< Manifest entries */
     size_t count;                            /**< Entry count */
 };
 
@@ -267,7 +267,7 @@ struct hash_sig_manifest
  *
  * @note Thread safety: This function is thread-safe
  */
-static void hash_sig_manifest_init(struct hash_sig_manifest *manifest)
+static void xmss_manifest_init(struct xmss_manifest *manifest)
 {
     if (!manifest)
     {
@@ -285,7 +285,7 @@ static void hash_sig_manifest_init(struct hash_sig_manifest *manifest)
  *
  * @note Thread safety: This function is thread-safe
  */
-static void hash_sig_manifest_reset(struct hash_sig_manifest *manifest)
+static void xmss_manifest_reset(struct xmss_manifest *manifest)
 {
     if (!manifest)
     {
@@ -317,7 +317,7 @@ static void hash_sig_manifest_reset(struct hash_sig_manifest *manifest)
  *
  * @note Thread safety: This function is thread-safe
  */
-static const char *hash_sig_yaml_value(const LanternYamlObject *object, const char *key)
+static const char *xmss_yaml_value(const LanternYamlObject *object, const char *key)
 {
     if (!object || !key || !object->pairs)
     {
@@ -345,7 +345,7 @@ static const char *hash_sig_yaml_value(const LanternYamlObject *object, const ch
  *
  * @note Thread safety: This function is thread-safe
  */
-static int hash_sig_parse_u64(const char *text, uint64_t *out_value)
+static int xmss_parse_u64(const char *text, uint64_t *out_value)
 {
     if (!text || !out_value)
     {
@@ -390,21 +390,21 @@ static int hash_sig_parse_u64(const char *text, uint64_t *out_value)
  *
  * @note Thread safety: This function is thread-safe
  */
-static int hash_sig_manifest_load(const char *dir, struct hash_sig_manifest *manifest)
+static int xmss_manifest_load(const char *dir, struct xmss_manifest *manifest)
 {
     int result = LANTERN_CLIENT_ERR_CONFIG;
     char *manifest_path = NULL;
     LanternYamlObject *objects = NULL;
     size_t count = 0;
-    struct hash_sig_manifest_entry *entries = NULL;
+    struct xmss_manifest_entry *entries = NULL;
 
     if (!dir || !manifest)
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
-    hash_sig_manifest_reset(manifest);
+    xmss_manifest_reset(manifest);
 
-    result = hash_sig_join_path(dir, HASH_SIG_MANIFEST_FILENAME, &manifest_path);
+    result = xmss_join_path(dir, XMSS_MANIFEST_FILENAME, &manifest_path);
     if (result != 0)
     {
         goto cleanup;
@@ -431,16 +431,16 @@ static int hash_sig_manifest_load(const char *dir, struct hash_sig_manifest *man
 
     for (size_t i = 0; i < count; ++i)
     {
-        const char *index_text = hash_sig_yaml_value(&objects[i], "index");
-        const char *public_file = hash_sig_yaml_value(&objects[i], "public_key_file");
-        const char *secret_file = hash_sig_yaml_value(&objects[i], "secret_key_file");
+        const char *index_text = xmss_yaml_value(&objects[i], "index");
+        const char *public_file = xmss_yaml_value(&objects[i], "public_key_file");
+        const char *secret_file = xmss_yaml_value(&objects[i], "secret_key_file");
         if (!index_text || !public_file || !secret_file)
         {
             result = LANTERN_CLIENT_ERR_CONFIG;
             goto cleanup;
         }
         uint64_t index = 0;
-        result = hash_sig_parse_u64(index_text, &index);
+        result = xmss_parse_u64(index_text, &index);
         if (result != 0)
         {
             goto cleanup;
@@ -465,8 +465,8 @@ cleanup:
     free(manifest_path);
     if (entries)
     {
-        struct hash_sig_manifest tmp = {.entries = entries, .count = count};
-        hash_sig_manifest_reset(&tmp);
+        struct xmss_manifest tmp = {.entries = entries, .count = count};
+        xmss_manifest_reset(&tmp);
     }
     return result;
 }
@@ -481,8 +481,8 @@ cleanup:
  *
  * @note Thread safety: This function is thread-safe
  */
-static const struct hash_sig_manifest_entry *hash_sig_manifest_find(
-    const struct hash_sig_manifest *manifest,
+static const struct xmss_manifest_entry *xmss_manifest_find(
+    const struct xmss_manifest *manifest,
     uint64_t index)
 {
     if (!manifest || !manifest->entries)
@@ -512,7 +512,7 @@ static const struct hash_sig_manifest_entry *hash_sig_manifest_find(
  *
  * @note Thread safety: This function is thread-safe
  */
-static const char *hash_sig_non_empty(const char *value)
+static const char *xmss_non_empty(const char *value)
 {
     return (value && value[0] != '\0') ? value : NULL;
 }
@@ -528,7 +528,7 @@ static const char *hash_sig_non_empty(const char *value)
  *
  * @note Thread safety: This function is thread-safe
  */
-static bool hash_sig_size_add_overflow(size_t a, size_t b, size_t *out_sum)
+static bool xmss_size_add_overflow(size_t a, size_t b, size_t *out_sum)
 {
     if (!out_sum)
     {
@@ -556,7 +556,7 @@ static bool hash_sig_size_add_overflow(size_t a, size_t b, size_t *out_sum)
  *
  * @note Thread safety: This function is thread-safe
  */
-static int hash_sig_join_path(const char *dir, const char *leaf, char **out_path)
+static int xmss_join_path(const char *dir, const char *leaf, char **out_path)
 {
     if (!dir || !leaf || !out_path)
     {
@@ -569,9 +569,9 @@ static int hash_sig_join_path(const char *dir, const char *leaf, char **out_path
     size_t leaf_len = strlen(leaf);
     bool need_sep = dir_len > 0 && dir[dir_len - 1] != '/' && dir[dir_len - 1] != '\\';
     size_t total = 0;
-    if (hash_sig_size_add_overflow(dir_len, need_sep ? 1u : 0u, &total)
-        || hash_sig_size_add_overflow(total, leaf_len, &total)
-        || hash_sig_size_add_overflow(total, 1u, &total))
+    if (xmss_size_add_overflow(dir_len, need_sep ? 1u : 0u, &total)
+        || xmss_size_add_overflow(total, leaf_len, &total)
+        || xmss_size_add_overflow(total, 1u, &total))
     {
         return LANTERN_CLIENT_ERR_CONFIG;
     }
@@ -606,7 +606,7 @@ static int hash_sig_join_path(const char *dir, const char *leaf, char **out_path
  *
  * @note Thread safety: This function is thread-safe
  */
-static int hash_sig_format_index_template(const char *template, uint64_t index, char **out_path)
+static int xmss_format_index_template(const char *template, uint64_t index, char **out_path)
 {
     if (!template || !out_path)
     {
@@ -645,7 +645,7 @@ static int hash_sig_format_index_template(const char *template, uint64_t index, 
  *
  * @note Thread safety: This function is thread-safe
  */
-static char *hash_sig_derive_default_dir(const struct lantern_genesis_paths *paths)
+static char *xmss_derive_default_dir(const struct lantern_genesis_paths *paths)
 {
     if (!paths || !paths->validator_config_path)
     {
@@ -668,11 +668,11 @@ static char *hash_sig_derive_default_dir(const struct lantern_genesis_paths *pat
     {
         return NULL;
     }
-    size_t suffix_len = strlen(HASH_SIG_DEFAULT_KEYS_DIR);
+    size_t suffix_len = strlen(XMSS_DEFAULT_KEYS_DIR);
     size_t total = 0;
-    if (hash_sig_size_add_overflow(dir_len, 1u, &total)
-        || hash_sig_size_add_overflow(total, suffix_len, &total)
-        || hash_sig_size_add_overflow(total, 1u, &total))
+    if (xmss_size_add_overflow(dir_len, 1u, &total)
+        || xmss_size_add_overflow(total, suffix_len, &total)
+        || xmss_size_add_overflow(total, 1u, &total))
     {
         return NULL;
     }
@@ -683,7 +683,7 @@ static char *hash_sig_derive_default_dir(const struct lantern_genesis_paths *pat
     }
     memcpy(buffer, config_path, dir_len);
     buffer[dir_len] = '/';
-    memcpy(buffer + dir_len + 1, HASH_SIG_DEFAULT_KEYS_DIR, suffix_len);
+    memcpy(buffer + dir_len + 1, XMSS_DEFAULT_KEYS_DIR, suffix_len);
     buffer[dir_len + 1 + suffix_len] = '\0';
     return buffer;
 }
@@ -723,7 +723,7 @@ static void clear_local_secret_handles(struct lantern_client *client)
  *
  * @note Thread safety: This function is thread-safe
  */
-static bool hash_sig_path_is_absolute(const char *path)
+static bool xmss_path_is_absolute(const char *path)
 {
     if (!path || path[0] == '\0')
     {
@@ -733,11 +733,11 @@ static bool hash_sig_path_is_absolute(const char *path)
     {
         return true;
     }
-    if (strlen(path) >= HASH_SIG_WINDOWS_ABS_PATH_MIN_LEN
+    if (strlen(path) >= XMSS_WINDOWS_ABS_PATH_MIN_LEN
         && isalpha((unsigned char)path[0])
-        && path[HASH_SIG_WINDOWS_COLON_INDEX] == ':'
-        && (path[HASH_SIG_WINDOWS_SEPARATOR_INDEX] == '/'
-            || path[HASH_SIG_WINDOWS_SEPARATOR_INDEX] == '\\'))
+        && path[XMSS_WINDOWS_COLON_INDEX] == ':'
+        && (path[XMSS_WINDOWS_SEPARATOR_INDEX] == '/'
+            || path[XMSS_WINDOWS_SEPARATOR_INDEX] == '\\'))
     {
         return true;
     }
@@ -761,7 +761,7 @@ static bool hash_sig_path_is_absolute(const char *path)
  */
 static int resolve_public_key_path(
     struct lantern_client *client,
-    const struct hash_sig_manifest *manifest,
+    const struct xmss_manifest *manifest,
     uint64_t index,
     char **out_path)
 {
@@ -772,16 +772,16 @@ static int resolve_public_key_path(
 
     *out_path = NULL;
 
-    if (client->hash_sig_public_template)
+    if (client->xmss_public_template)
     {
-        return hash_sig_format_index_template(client->hash_sig_public_template, index, out_path);
+        return xmss_format_index_template(client->xmss_public_template, index, out_path);
     }
     if (manifest)
     {
-        const struct hash_sig_manifest_entry *entry = hash_sig_manifest_find(manifest, index);
+        const struct xmss_manifest_entry *entry = xmss_manifest_find(manifest, index);
         if (entry && entry->public_file)
         {
-            if (hash_sig_path_is_absolute(entry->public_file))
+            if (xmss_path_is_absolute(entry->public_file))
             {
                 char *copy = lantern_string_duplicate(entry->public_file);
                 if (!copy)
@@ -791,25 +791,25 @@ static int resolve_public_key_path(
                 *out_path = copy;
                 return LANTERN_CLIENT_OK;
             }
-            if (client->hash_sig_key_dir)
+            if (client->xmss_key_dir)
             {
-                return hash_sig_join_path(client->hash_sig_key_dir, entry->public_file, out_path);
+                return xmss_join_path(client->xmss_key_dir, entry->public_file, out_path);
             }
         }
     }
-    if (client->hash_sig_key_dir)
+    if (client->xmss_key_dir)
     {
-        char filename[HASH_SIG_KEY_FILENAME_MAX_LEN];
+        char filename[XMSS_KEY_FILENAME_MAX_LEN];
         int written = snprintf(filename, sizeof(filename), "validator_%" PRIu64 "_pk.json", index);
         if (written < 0 || (size_t)written >= sizeof(filename))
         {
             return LANTERN_CLIENT_ERR_CONFIG;
         }
-        return hash_sig_join_path(client->hash_sig_key_dir, filename, out_path);
+        return xmss_join_path(client->xmss_key_dir, filename, out_path);
     }
-    if (client->hash_sig_public_path && client->genesis.chain_config.validator_count == 1)
+    if (client->xmss_public_path && client->genesis.chain_config.validator_count == 1)
     {
-        char *copy = lantern_string_duplicate(client->hash_sig_public_path);
+        char *copy = lantern_string_duplicate(client->xmss_public_path);
         if (!copy)
         {
             return LANTERN_CLIENT_ERR_ALLOC;
@@ -837,7 +837,7 @@ static int resolve_public_key_path(
  */
 static int resolve_secret_key_path(
     struct lantern_client *client,
-    const struct hash_sig_manifest *manifest,
+    const struct xmss_manifest *manifest,
     uint64_t index,
     char **out_path)
 {
@@ -848,16 +848,16 @@ static int resolve_secret_key_path(
 
     *out_path = NULL;
 
-    if (client->hash_sig_secret_template)
+    if (client->xmss_secret_template)
     {
-        return hash_sig_format_index_template(client->hash_sig_secret_template, index, out_path);
+        return xmss_format_index_template(client->xmss_secret_template, index, out_path);
     }
     if (manifest)
     {
-        const struct hash_sig_manifest_entry *entry = hash_sig_manifest_find(manifest, index);
+        const struct xmss_manifest_entry *entry = xmss_manifest_find(manifest, index);
         if (entry && entry->secret_file)
         {
-            if (hash_sig_path_is_absolute(entry->secret_file))
+            if (xmss_path_is_absolute(entry->secret_file))
             {
                 char *copy = lantern_string_duplicate(entry->secret_file);
                 if (!copy)
@@ -867,29 +867,29 @@ static int resolve_secret_key_path(
                 *out_path = copy;
                 return LANTERN_CLIENT_OK;
             }
-            if (client->hash_sig_key_dir)
+            if (client->xmss_key_dir)
             {
-                return hash_sig_join_path(client->hash_sig_key_dir, entry->secret_file, out_path);
+                return xmss_join_path(client->xmss_key_dir, entry->secret_file, out_path);
             }
         }
     }
-    if (client->hash_sig_key_dir)
+    if (client->xmss_key_dir)
     {
-        char filename[HASH_SIG_KEY_FILENAME_MAX_LEN];
+        char filename[XMSS_KEY_FILENAME_MAX_LEN];
         int written = snprintf(filename, sizeof(filename), "validator_%" PRIu64 "_sk.json", index);
         if (written < 0 || (size_t)written >= sizeof(filename))
         {
             return LANTERN_CLIENT_ERR_CONFIG;
         }
-        return hash_sig_join_path(client->hash_sig_key_dir, filename, out_path);
+        return xmss_join_path(client->xmss_key_dir, filename, out_path);
     }
-    if (client->hash_sig_secret_path)
+    if (client->xmss_secret_path)
     {
         if (client->validator_assignment.count > 1)
         {
             return LANTERN_CLIENT_ERR_CONFIG;
         }
-        char *copy = lantern_string_duplicate(client->hash_sig_secret_path);
+        char *copy = lantern_string_duplicate(client->xmss_secret_path);
         if (!copy)
         {
             return LANTERN_CLIENT_ERR_ALLOC;
@@ -906,7 +906,7 @@ static int resolve_secret_key_path(
  * ============================================================================ */
 
 /**
- * Load hash-sig secret keys for all local validators.
+ * Load xmss secret keys for all local validators.
  *
  * @param client    Client instance
  * @param manifest  Optional manifest
@@ -915,9 +915,9 @@ static int resolve_secret_key_path(
  *
  * @note Thread safety: Caller must ensure exclusive access during key operations
  */
-static int load_hash_sig_secret_keys(
+static int load_xmss_secret_keys(
     struct lantern_client *client,
-    const struct hash_sig_manifest *manifest)
+    const struct xmss_manifest *manifest)
 {
     if (!client)
     {
@@ -928,16 +928,16 @@ static int load_hash_sig_secret_keys(
         return LANTERN_CLIENT_OK;
     }
 
-    bool has_template = client->hash_sig_secret_template != NULL;
-    bool has_dir = client->hash_sig_key_dir != NULL;
-    bool has_single = (client->hash_sig_secret_path != NULL)
+    bool has_template = client->xmss_secret_template != NULL;
+    bool has_dir = client->xmss_key_dir != NULL;
+    bool has_single = (client->xmss_secret_path != NULL)
         && (client->validator_assignment.count == 1);
     if (!has_template && !has_dir && !has_single)
     {
         lantern_log_debug(
             "crypto",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "hash-sig secret key sources unavailable; skipping local key load");
+            "xmss secret key sources unavailable; skipping local key load");
         return LANTERN_CLIENT_OK;
     }
 
@@ -954,7 +954,7 @@ static int load_hash_sig_secret_keys(
             lantern_log_warn(
                 "crypto",
                 &meta,
-                "unable to resolve hash-sig secret key path for validator=%" PRIu64 "; skipping",
+                "unable to resolve xmss secret key path for validator=%" PRIu64 "; skipping",
                 validator->global_index);
             continue;
         }
@@ -962,16 +962,16 @@ static int load_hash_sig_secret_keys(
         lantern_log_debug(
             "crypto",
             &meta,
-            "hash-sig secret key resolved validator=%" PRIu64 " path=%s",
+            "xmss secret key resolved validator=%" PRIu64 " path=%s",
             validator->global_index,
             path);
         struct PQSignatureSchemeSecretKey *secret = NULL;
-        if (lantern_hash_sig_load_secret_file(path, &secret) != 0)
+        if (lantern_xmss_load_secret_file(path, &secret) != 0)
         {
             lantern_log_warn(
                 "crypto",
                 &meta,
-                "failed to load hash-sig secret key validator=%" PRIu64 " path=%s; skipping",
+                "failed to load xmss secret key validator=%" PRIu64 " path=%s; skipping",
                 validator->global_index,
                 path);
             free(path);
@@ -985,12 +985,12 @@ static int load_hash_sig_secret_keys(
     lantern_log_info(
         "crypto",
         &meta,
-        "hash-sig secret keys loaded=%zu/%zu resolved=%zu dir=%s template=%s",
+        "xmss secret keys loaded=%zu/%zu resolved=%zu dir=%s template=%s",
         loaded,
         client->local_validator_count,
         resolved,
-        client->hash_sig_key_dir ? client->hash_sig_key_dir : "-",
-        client->hash_sig_secret_template ? client->hash_sig_secret_template : "-");
+        client->xmss_key_dir ? client->xmss_key_dir : "-",
+        client->xmss_secret_template ? client->xmss_secret_template : "-");
     return LANTERN_CLIENT_OK;
 }
 
@@ -1008,7 +1008,7 @@ static int load_hash_sig_secret_keys(
  *
  * @note Thread safety: Caller must ensure exclusive access during shutdown
  */
-void lantern_client_free_hash_sig_pubkeys(struct lantern_client *client)
+void lantern_client_free_xmss_pubkeys(struct lantern_client *client)
 {
     if (!client || !client->validator_pubkeys)
     {
@@ -1033,7 +1033,7 @@ void lantern_client_free_hash_sig_pubkeys(struct lantern_client *client)
  * ============================================================================ */
 
 /**
- * Configure hash-sig key sources from options and environment.
+ * Configure xmss key sources from options and environment.
  *
  * @spec subspecs/xmss/keygen.py - key management
  *
@@ -1045,7 +1045,7 @@ void lantern_client_free_hash_sig_pubkeys(struct lantern_client *client)
  *
  * @note Thread safety: This function should be called during initialization
  */
-int lantern_client_configure_hash_sig_sources(
+int lantern_client_configure_xmss_sources(
     struct lantern_client *client,
     const struct lantern_client_options *options)
 {
@@ -1054,34 +1054,34 @@ int lantern_client_configure_hash_sig_sources(
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_log_metadata meta = {.validator = client->node_id};
-    const char *env_dir = hash_sig_non_empty(getenv("HASH_SIG_KEY_DIR"));
-    const char *env_public_path = hash_sig_non_empty(getenv("HASH_SIG_PK_PATH"));
-    const char *env_secret_path = hash_sig_non_empty(getenv("HASH_SIG_SK_PATH"));
-    const char *env_public_template = hash_sig_non_empty(getenv("HASH_SIG_PK_TEMPLATE"));
-    const char *env_secret_template = hash_sig_non_empty(getenv("HASH_SIG_SK_TEMPLATE"));
+    const char *env_dir = xmss_non_empty(getenv("XMSS_KEY_DIR"));
+    const char *env_public_path = xmss_non_empty(getenv("XMSS_PK_PATH"));
+    const char *env_secret_path = xmss_non_empty(getenv("XMSS_SK_PATH"));
+    const char *env_public_template = xmss_non_empty(getenv("XMSS_PK_TEMPLATE"));
+    const char *env_secret_template = xmss_non_empty(getenv("XMSS_SK_TEMPLATE"));
 
-    const char *resolved_dir = hash_sig_non_empty(options->hash_sig_key_dir);
+    const char *resolved_dir = xmss_non_empty(options->xmss_key_dir);
     if (!resolved_dir)
     {
         resolved_dir = env_dir;
     }
-    if (!resolved_dir && client->assigned_validators && client->assigned_validators->hash_sig_dir)
+    if (!resolved_dir && client->assigned_validators && client->assigned_validators->xmss_dir)
     {
-        resolved_dir = client->assigned_validators->hash_sig_dir;
+        resolved_dir = client->assigned_validators->xmss_dir;
     }
     if (resolved_dir)
     {
-        if (set_owned_string(&client->hash_sig_key_dir, resolved_dir) != 0)
+        if (set_owned_string(&client->xmss_key_dir, resolved_dir) != 0)
         {
             return LANTERN_CLIENT_ERR_ALLOC;
         }
     }
     else
     {
-        char *derived = hash_sig_derive_default_dir(&client->genesis_paths);
+        char *derived = xmss_derive_default_dir(&client->genesis_paths);
         if (derived)
         {
-            int rc = set_owned_string(&client->hash_sig_key_dir, derived);
+            int rc = set_owned_string(&client->xmss_key_dir, derived);
             free(derived);
             if (rc != 0)
             {
@@ -1090,53 +1090,53 @@ int lantern_client_configure_hash_sig_sources(
         }
     }
 
-    const char *resolved_public_template = hash_sig_non_empty(options->hash_sig_public_template);
+    const char *resolved_public_template = xmss_non_empty(options->xmss_public_template);
     if (!resolved_public_template)
     {
         resolved_public_template = env_public_template;
     }
     if (resolved_public_template)
     {
-        if (set_owned_string(&client->hash_sig_public_template, resolved_public_template) != 0)
+        if (set_owned_string(&client->xmss_public_template, resolved_public_template) != 0)
         {
             return LANTERN_CLIENT_ERR_ALLOC;
         }
     }
 
-    const char *resolved_secret_template = hash_sig_non_empty(options->hash_sig_secret_template);
+    const char *resolved_secret_template = xmss_non_empty(options->xmss_secret_template);
     if (!resolved_secret_template)
     {
         resolved_secret_template = env_secret_template;
     }
     if (resolved_secret_template)
     {
-        if (set_owned_string(&client->hash_sig_secret_template, resolved_secret_template) != 0)
+        if (set_owned_string(&client->xmss_secret_template, resolved_secret_template) != 0)
         {
             return LANTERN_CLIENT_ERR_ALLOC;
         }
     }
 
-    const char *resolved_public_path = hash_sig_non_empty(options->hash_sig_public_path);
+    const char *resolved_public_path = xmss_non_empty(options->xmss_public_path);
     if (!resolved_public_path)
     {
         resolved_public_path = env_public_path;
     }
     if (resolved_public_path)
     {
-        if (set_owned_string(&client->hash_sig_public_path, resolved_public_path) != 0)
+        if (set_owned_string(&client->xmss_public_path, resolved_public_path) != 0)
         {
             return LANTERN_CLIENT_ERR_ALLOC;
         }
     }
 
-    const char *resolved_secret_path = hash_sig_non_empty(options->hash_sig_secret_path);
+    const char *resolved_secret_path = xmss_non_empty(options->xmss_secret_path);
     if (!resolved_secret_path)
     {
         resolved_secret_path = env_secret_path;
     }
     if (resolved_secret_path)
     {
-        if (set_owned_string(&client->hash_sig_secret_path, resolved_secret_path) != 0)
+        if (set_owned_string(&client->xmss_secret_path, resolved_secret_path) != 0)
         {
             return LANTERN_CLIENT_ERR_ALLOC;
         }
@@ -1144,12 +1144,12 @@ int lantern_client_configure_hash_sig_sources(
     lantern_log_info(
         "crypto",
         &meta,
-        "hash-sig sources resolved dir=%s pk_path=%s sk_path=%s pk_template=%s sk_template=%s",
-        client->hash_sig_key_dir ? client->hash_sig_key_dir : "-",
-        client->hash_sig_public_path ? client->hash_sig_public_path : "-",
-        client->hash_sig_secret_path ? client->hash_sig_secret_path : "-",
-        client->hash_sig_public_template ? client->hash_sig_public_template : "-",
-        client->hash_sig_secret_template ? client->hash_sig_secret_template : "-");
+        "xmss sources resolved dir=%s pk_path=%s sk_path=%s pk_template=%s sk_template=%s",
+        client->xmss_key_dir ? client->xmss_key_dir : "-",
+        client->xmss_public_path ? client->xmss_public_path : "-",
+        client->xmss_secret_path ? client->xmss_secret_path : "-",
+        client->xmss_public_template ? client->xmss_public_template : "-",
+        client->xmss_secret_template ? client->xmss_secret_template : "-");
     return LANTERN_CLIENT_OK;
 }
 
@@ -1159,7 +1159,7 @@ int lantern_client_configure_hash_sig_sources(
  * ============================================================================ */
 
 /**
- * Load all hash-sig keys for the client.
+ * Load all xmss keys for the client.
  *
  * @spec subspecs/xmss/keygen.py - key loading
  *
@@ -1167,64 +1167,64 @@ int lantern_client_configure_hash_sig_sources(
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM if client is NULL
  * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
- * @return LANTERN_CLIENT_ERR_RUNTIME if hash-sig bindings are unavailable
+ * @return LANTERN_CLIENT_ERR_RUNTIME if xmss bindings are unavailable
  *
  * @note Thread safety: This function should be called during initialization
  */
-int lantern_client_load_hash_sig_keys(struct lantern_client *client)
+int lantern_client_load_xmss_keys(struct lantern_client *client)
 {
     if (!client)
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_log_metadata meta = {.validator = client->node_id};
-    if (!lantern_hash_sig_is_available())
+    if (!lantern_xmss_is_available())
     {
         lantern_log_error(
             "crypto",
             &meta,
-            "hash-sig bindings unavailable");
+            "xmss bindings unavailable");
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
 
-    struct hash_sig_manifest manifest;
-    hash_sig_manifest_init(&manifest);
+    struct xmss_manifest manifest;
+    xmss_manifest_init(&manifest);
     bool manifest_loaded = false;
 
-    if (client->hash_sig_key_dir)
+    if (client->xmss_key_dir)
     {
-        int manifest_result = hash_sig_manifest_load(client->hash_sig_key_dir, &manifest);
+        int manifest_result = xmss_manifest_load(client->xmss_key_dir, &manifest);
         if (manifest_result == LANTERN_CLIENT_OK)
         {
             manifest_loaded = true;
         }
         else if (manifest_result != LANTERN_CLIENT_ERR_CONFIG)
         {
-            hash_sig_manifest_reset(&manifest);
+            xmss_manifest_reset(&manifest);
             return manifest_result;
         }
     }
 
-    const struct hash_sig_manifest *manifest_ptr = manifest_loaded ? &manifest : NULL;
+    const struct xmss_manifest *manifest_ptr = manifest_loaded ? &manifest : NULL;
     lantern_log_info(
         "crypto",
         &meta,
-        "hash-sig load start key_dir=%s manifest=%s validators=%" PRIu64 " local=%zu",
-        client->hash_sig_key_dir ? client->hash_sig_key_dir : "-",
+        "xmss load start key_dir=%s manifest=%s validators=%" PRIu64 " local=%zu",
+        client->xmss_key_dir ? client->xmss_key_dir : "-",
         manifest_loaded ? "loaded" : "missing",
         client->genesis.chain_config.validator_count,
         client->local_validator_count);
-    /* Note: load_hash_sig_public_keys removed - per LeanSpec, verification uses
+    /* Note: load_xmss_public_keys removed - per LeanSpec, verification uses
      * 52-byte serialized pubkeys from state, not full JSON key handles */
     if (client->local_validator_count > 0)
     {
-        int result = load_hash_sig_secret_keys(client, manifest_ptr);
+        int result = load_xmss_secret_keys(client, manifest_ptr);
         if (result != 0)
         {
-            hash_sig_manifest_reset(&manifest);
+            xmss_manifest_reset(&manifest);
             return result;
         }
     }
-    hash_sig_manifest_reset(&manifest);
+    xmss_manifest_reset(&manifest);
     return LANTERN_CLIENT_OK;
 }

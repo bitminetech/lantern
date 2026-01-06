@@ -16,12 +16,6 @@ struct lantern_root_list {
     size_t capacity;
 };
 
-struct lantern_bitlist {
-    uint8_t *bytes;
-    size_t bit_length;
-    size_t capacity;
-};
-
 typedef struct {
     LanternConfig config;
     uint64_t slot;
@@ -47,10 +41,6 @@ void lantern_root_list_init(struct lantern_root_list *list);
 void lantern_root_list_reset(struct lantern_root_list *list);
 int lantern_root_list_resize(struct lantern_root_list *list, size_t new_length);
 
-void lantern_bitlist_init(struct lantern_bitlist *list);
-void lantern_bitlist_reset(struct lantern_bitlist *list);
-int lantern_bitlist_resize(struct lantern_bitlist *list, size_t new_bit_length);
-
 void lantern_state_init(LanternState *state);
 void lantern_state_reset(LanternState *state);
 void lantern_state_attach_fork_choice(LanternState *state, struct lantern_fork_choice *fork_choice);
@@ -61,7 +51,7 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
 int lantern_state_process_attestations(
     LanternState *state,
     const LanternAttestations *attestations,
-    const LanternBlockSignatures *signatures);
+    const LanternSignatureList *signatures);
 int lantern_state_process_block(
     LanternState *state,
     const LanternBlock *block,
@@ -96,7 +86,7 @@ int lantern_state_collect_attestations_for_block(
     const LanternRoot *parent_root,
     const LanternSignedVote *proposer_attestation,
     LanternAttestations *out_attestations,
-    LanternBlockSignatures *out_signatures);
+    LanternSignatureList *out_signatures);
 int lantern_state_compute_vote_checkpoints(
     const LanternState *state,
     LanternCheckpoint *out_head,

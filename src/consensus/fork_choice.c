@@ -514,15 +514,26 @@ int lantern_fork_choice_add_block(
         return -1;
     }
 
-    const LanternAttestations *att = &block->body.attestations;
-    for (size_t i = 0; i < att->length; ++i) {
+    LanternAttestations expanded;
+    lantern_attestations_init(&expanded);
+    if (lantern_expand_aggregated_attestations(
+            &block->body.attestations,
+            store->validator_count,
+            &expanded)
+        != 0) {
+        lantern_attestations_reset(&expanded);
+        return -1;
+    }
+    for (size_t i = 0; i < expanded.length; ++i) {
         LanternSignedVote wrapped_vote;
         memset(&wrapped_vote, 0, sizeof(wrapped_vote));
-        wrapped_vote.data = att->data[i];
+        wrapped_vote.data = expanded.data[i];
         if (lantern_fork_choice_add_vote(store, &wrapped_vote, true) != 0) {
+            lantern_attestations_reset(&expanded);
             return -1;
         }
     }
+    lantern_attestations_reset(&expanded);
     if (lantern_fork_choice_recompute_head(store) != 0) {
         return -1;
     }
@@ -543,7 +554,7 @@ int lantern_fork_choice_add_block(
             parent_hex[0] ? parent_hex : "0x0",
             parent_known ? "true" : "false",
             parent_known ? parent_slot : 0u,
-            att->length,
+            block->body.attestations.length,
             post_justified ? post_justified->slot : 0u,
             post_finalized ? post_finalized->slot : 0u);
     }

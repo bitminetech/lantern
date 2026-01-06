@@ -649,11 +649,7 @@ int restore_persisted_blocks(struct lantern_client *client)
         LanternSignedVote persisted_proposer;
         memset(&persisted_proposer, 0, sizeof(persisted_proposer));
         persisted_proposer.data = entry->block.message.proposer_attestation;
-        size_t proposer_index = entry->block.message.block.body.attestations.length;
-        if (entry->block.signatures.length > proposer_index && entry->block.signatures.data)
-        {
-            persisted_proposer.signature = entry->block.signatures.data[proposer_index];
-        }
+        persisted_proposer.signature = entry->block.signatures.proposer_signature;
         if (lantern_fork_choice_add_block(
                 &client->fork_choice,
                 &entry->block.message.block,

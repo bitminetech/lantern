@@ -118,6 +118,100 @@ static size_t bitlist_encoded_size(const struct lantern_bitlist *list) {
     return byte_len + (needs_extra ? 1u : 0u);
 }
 
+static size_t byte_list_encoded_size(const LanternByteList *list) {
+    if (!list) {
+        return 0;
+    }
+    if (list->length > LANTERN_AGG_PROOF_MAX_BYTES) {
+        return 0;
+    }
+    return list->length;
+}
+
+static size_t aggregated_attestation_encoded_size(const LanternAggregatedAttestation *attestation) {
+    if (!attestation) {
+        return 0;
+    }
+    if (attestation->aggregation_bits.bit_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return 0;
+    }
+    size_t bits_size = bitlist_encoded_size(&attestation->aggregation_bits);
+    if (bits_size == 0) {
+        return 0;
+    }
+    size_t fixed_section = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_ATTESTATION_DATA_SSZ_SIZE;
+    if (fixed_section > SIZE_MAX - bits_size) {
+        return 0;
+    }
+    return fixed_section + bits_size;
+}
+
+static size_t aggregated_attestations_encoded_size(const LanternAggregatedAttestations *attestations) {
+    if (!attestations) {
+        return 0;
+    }
+    if (attestations->length == 0) {
+        return 0;
+    }
+    if (attestations->length > LANTERN_MAX_ATTESTATIONS || !attestations->data) {
+        return 0;
+    }
+    size_t offset_table = attestations->length * SSZ_BYTE_SIZE_OF_UINT32;
+    size_t total = offset_table;
+    for (size_t i = 0; i < attestations->length; ++i) {
+        size_t entry_size = aggregated_attestation_encoded_size(&attestations->data[i]);
+        if (entry_size == 0 || entry_size > SIZE_MAX - total) {
+            return 0;
+        }
+        total += entry_size;
+    }
+    return total;
+}
+
+static size_t aggregated_signature_proof_encoded_size(const LanternAggregatedSignatureProof *proof) {
+    if (!proof) {
+        return 0;
+    }
+    if (proof->participants.bit_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return 0;
+    }
+    size_t participants_size = bitlist_encoded_size(&proof->participants);
+    size_t proof_bytes = byte_list_encoded_size(&proof->proof_data);
+    if (participants_size == 0 && proof->participants.bit_length != 0) {
+        return 0;
+    }
+    size_t fixed_section = SSZ_BYTE_SIZE_OF_UINT32 * 2u;
+    if (fixed_section > SIZE_MAX - participants_size) {
+        return 0;
+    }
+    if (fixed_section + participants_size > SIZE_MAX - proof_bytes) {
+        return 0;
+    }
+    return fixed_section + participants_size + proof_bytes;
+}
+
+static size_t attestation_signatures_encoded_size(const LanternAttestationSignatures *signatures) {
+    if (!signatures) {
+        return 0;
+    }
+    if (signatures->length == 0) {
+        return 0;
+    }
+    if (signatures->length > LANTERN_MAX_BLOCK_SIGNATURES || !signatures->data) {
+        return 0;
+    }
+    size_t offset_table = signatures->length * SSZ_BYTE_SIZE_OF_UINT32;
+    size_t total = offset_table;
+    for (size_t i = 0; i < signatures->length; ++i) {
+        size_t entry_size = aggregated_signature_proof_encoded_size(&signatures->data[i]);
+        if (entry_size == 0 || entry_size > SIZE_MAX - total) {
+            return 0;
+        }
+        total += entry_size;
+    }
+    return total;
+}
+
 static size_t root_list_encoded_size(const struct lantern_root_list *list) {
     if (!list || list->length == 0) {
         return 0;
@@ -156,7 +250,11 @@ static size_t block_body_encoded_size(const LanternBlockBody *body) {
     if (!body) {
         return SSZ_BYTE_SIZE_OF_UINT32;
     }
-    size_t attestations_bytes = body->attestations.length * LANTERN_VOTE_SSZ_SIZE;
+    size_t att_count = body->attestations.length;
+    size_t attestations_bytes = aggregated_attestations_encoded_size(&body->attestations);
+    if (att_count > 0 && attestations_bytes == 0) {
+        return 0;
+    }
     return SSZ_BYTE_SIZE_OF_UINT32 + attestations_bytes;
 }
 
@@ -167,7 +265,11 @@ static size_t block_encoded_size(const LanternBlock *block) {
     size_t fixed = (SSZ_BYTE_SIZE_OF_UINT64 * 2u)
         + (LANTERN_ROOT_SIZE * 2u)
         + SSZ_BYTE_SIZE_OF_UINT32;
-    return fixed + block_body_encoded_size(&block->body);
+    size_t body_size = block_body_encoded_size(&block->body);
+    if (body_size == 0) {
+        return 0;
+    }
+    return fixed + body_size;
 }
 
 static size_t block_with_attestation_encoded_size(const LanternBlockWithAttestation *block) {
@@ -175,14 +277,23 @@ static size_t block_with_attestation_encoded_size(const LanternBlockWithAttestat
     if (!block) {
         return fixed;
     }
-    return fixed + block_encoded_size(&block->block);
+    size_t block_size = block_encoded_size(&block->block);
+    if (block_size == 0) {
+        return 0;
+    }
+    return fixed + block_size;
 }
 
 static size_t block_signatures_encoded_size(const LanternBlockSignatures *signatures) {
     if (!signatures) {
         return 0;
     }
-    return signatures->length * LANTERN_SIGNATURE_SIZE;
+    size_t sig_count = signatures->attestation_signatures.length;
+    size_t attestations_bytes = attestation_signatures_encoded_size(&signatures->attestation_signatures);
+    if (sig_count > 0 && attestations_bytes == 0) {
+        return 0;
+    }
+    return (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + LANTERN_SIGNATURE_SIZE + attestations_bytes;
 }
 
 static size_t signed_block_encoded_size(const LanternSignedBlock *block) {
@@ -190,9 +301,15 @@ static size_t signed_block_encoded_size(const LanternSignedBlock *block) {
         return 0;
     }
     size_t offset_section = SSZ_BYTE_SIZE_OF_UINT32 * 2u;
-    return offset_section
-        + block_with_attestation_encoded_size(&block->message)
-        + block_signatures_encoded_size(&block->signatures);
+    size_t message_size = block_with_attestation_encoded_size(&block->message);
+    if (message_size == 0) {
+        return 0;
+    }
+    size_t signatures_size = block_signatures_encoded_size(&block->signatures);
+    if (signatures_size == 0) {
+        return 0;
+    }
+    return offset_section + message_size + signatures_size;
 }
 
 static int write_atomic_file(const char *path, const uint8_t *data, size_t data_len) {

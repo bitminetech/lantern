@@ -125,7 +125,8 @@ int main(int argc, char **argv) {
         return 1;
     }
     free(block_bytes);
-    (void)lantern_block_signatures_resize(&signed_block.signatures, 0);
+    (void)lantern_attestation_signatures_resize(&signed_block.signatures.attestation_signatures, 0);
+    memset(signed_block.signatures.proposer_signature.bytes, 0, LANTERN_SIGNATURE_SIZE);
 
     fprintf(
         stderr,

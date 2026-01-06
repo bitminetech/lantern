@@ -170,7 +170,7 @@ int clone_signed_block(const LanternSignedBlock *source, LanternSignedBlock *des
     dest->message.block.parent_root = source->message.block.parent_root;
     dest->message.block.state_root = source->message.block.state_root;
 
-    if (lantern_attestations_copy(
+    if (lantern_aggregated_attestations_copy(
             &dest->message.block.body.attestations,
             &source->message.block.body.attestations) != 0)
     {

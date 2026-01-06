@@ -157,7 +157,8 @@ int main(int argc, char **argv) {
         return 1;
     }
     free(data);
-    (void)lantern_block_signatures_resize(&signed_block.signatures, 0);
+    (void)lantern_attestation_signatures_resize(&signed_block.signatures.attestation_signatures, 0);
+    memset(signed_block.signatures.proposer_signature.bytes, 0, LANTERN_SIGNATURE_SIZE);
 
     LanternRoot decoded_parent = signed_block.message.block.parent_root;
     LanternRoot decoded_state_root = signed_block.message.block.state_root;

@@ -11,7 +11,7 @@
 
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
-#include "lantern/crypto/hash_sig.h"
+#include "lantern/crypto/xmss.h"
 #include "lantern/support/time.h"
 
 #ifndef LANTERN_TEST_FIXTURE_DIR
@@ -31,7 +31,7 @@ static int load_precomputed_keys(
     int pk_written = snprintf(
         pk_path,
         sizeof(pk_path),
-        "%s/genesis/hash-sig-keys/validator_0_pk.json",
+        "%s/genesis/xmss-keys/validator_0_pk.json",
         LANTERN_TEST_FIXTURE_DIR);
     if (pk_written <= 0 || (size_t)pk_written >= sizeof(pk_path)) {
         return -1;
@@ -39,17 +39,17 @@ static int load_precomputed_keys(
     int sk_written = snprintf(
         sk_path,
         sizeof(sk_path),
-        "%s/genesis/hash-sig-keys/validator_0_sk.json",
+        "%s/genesis/xmss-keys/validator_0_sk.json",
         LANTERN_TEST_FIXTURE_DIR);
     if (sk_written <= 0 || (size_t)sk_written >= sizeof(sk_path)) {
         return -1;
     }
 
-    if (lantern_hash_sig_load_public_file(pk_path, out_pub) != 0 || !*out_pub) {
+    if (lantern_xmss_load_public_file(pk_path, out_pub) != 0 || !*out_pub) {
         fprintf(stderr, "failed to load precomputed public key from %s\n", pk_path);
         return -1;
     }
-    if (lantern_hash_sig_load_secret_file(sk_path, out_secret) != 0 || !*out_secret) {
+    if (lantern_xmss_load_secret_file(sk_path, out_secret) != 0 || !*out_secret) {
         fprintf(stderr, "failed to load precomputed secret key from %s\n", sk_path);
         pq_public_key_free(*out_pub);
         *out_pub = NULL;
@@ -391,7 +391,7 @@ int client_test_sign_vote_with_secret(LanternSignedVote *vote, struct PQSignatur
         return -1;
     }
     LanternRoot vote_root;
-    if (lantern_hash_tree_root_vote(&vote->data, &vote_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &vote_root) != 0) {
         return -1;
     }
     if (!lantern_signature_sign(secret, vote->data.slot, vote_root.bytes, sizeof(vote_root.bytes), &vote->signature)) {

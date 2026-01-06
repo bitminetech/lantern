@@ -63,7 +63,7 @@ struct lantern_validator_config_entry {
     enum lantern_validator_client_kind client_kind;
     struct lantern_validator_config_enr enr;
     uint64_t count;
-    char *hash_sig_dir;
+    char *xmss_dir;
     uint64_t start_index;
     uint64_t end_index;
     bool has_range;

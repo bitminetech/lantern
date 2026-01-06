@@ -102,11 +102,11 @@ static int collect_attestations_for_checkpoint(
     const LanternState *state,
     const LanternCheckpoint *checkpoint,
     LanternAttestations *out_attestations,
-    LanternBlockSignatures *out_signatures);
+    LanternSignatureList *out_signatures);
 static int lantern_state_process_attestations_internal(
     LanternState *state,
     const LanternAttestations *attestations,
-    const LanternBlockSignatures *signatures,
+    const LanternSignatureList *signatures,
     bool apply_consensus_effects);
 
 static bool signature_is_zero(const LanternSignature *signature) {
@@ -137,7 +137,7 @@ static int collect_attestations_for_checkpoint(
     const LanternState *state,
     const LanternCheckpoint *checkpoint,
     LanternAttestations *out_attestations,
-    LanternBlockSignatures *out_signatures) {
+    LanternSignatureList *out_signatures) {
     if (!state || !checkpoint || !out_attestations || !out_signatures) {
         return -1;
     }
@@ -157,13 +157,13 @@ static int collect_attestations_for_checkpoint(
         }
         if (out_attestations->length >= LANTERN_MAX_ATTESTATIONS) {
             (void)lantern_attestations_resize(out_attestations, 0);
-            (void)lantern_block_signatures_resize(out_signatures, 0);
+            (void)lantern_signature_list_resize(out_signatures, 0);
             return -1;
         }
         LanternVote vote = record->vote;
         if (lantern_attestations_append(out_attestations, &vote) != 0) {
             (void)lantern_attestations_resize(out_attestations, 0);
-            (void)lantern_block_signatures_resize(out_signatures, 0);
+            (void)lantern_signature_list_resize(out_signatures, 0);
             return -1;
         }
         LanternSignature signature;
@@ -171,9 +171,9 @@ static int collect_attestations_for_checkpoint(
         if (record->has_signature) {
             signature = record->signature;
         }
-        if (lantern_block_signatures_append(out_signatures, &signature) != 0) {
+        if (lantern_signature_list_append(out_signatures, &signature) != 0) {
             (void)lantern_attestations_resize(out_attestations, 0);
-            (void)lantern_block_signatures_resize(out_signatures, 0);
+            (void)lantern_signature_list_resize(out_signatures, 0);
             return -1;
         }
     }
@@ -231,9 +231,13 @@ static int ensure_bit_capacity(struct lantern_bitlist *list, size_t required_byt
         }
         new_capacity *= 2;
     }
+    size_t old_capacity = list->capacity;
     uint8_t *bytes = realloc(list->bytes, new_capacity * sizeof(*bytes));
     if (!bytes) {
         return -1;
+    }
+    if (new_capacity > old_capacity) {
+        memset(bytes + old_capacity, 0, new_capacity - old_capacity);
     }
     list->bytes = bytes;
     list->capacity = new_capacity;
@@ -383,68 +387,6 @@ int lantern_root_list_resize(struct lantern_root_list *list, size_t new_length) 
         memset(&list->items[new_length], 0, removed * sizeof(*list->items));
     }
     list->length = new_length;
-    return 0;
-}
-
-void lantern_bitlist_init(struct lantern_bitlist *list) {
-    if (!list) {
-        return;
-    }
-    list->bytes = NULL;
-    list->bit_length = 0;
-    list->capacity = 0;
-}
-
-void lantern_bitlist_reset(struct lantern_bitlist *list) {
-    if (!list) {
-        return;
-    }
-    free(list->bytes);
-    list->bytes = NULL;
-    list->bit_length = 0;
-    list->capacity = 0;
-}
-
-int lantern_bitlist_resize(struct lantern_bitlist *list, size_t new_bit_length) {
-    if (!list) {
-        return -1;
-    }
-    if (new_bit_length == 0) {
-        if (list->bytes && list->bit_length > 0) {
-            size_t old_bytes = bitlist_required_bytes(list->bit_length);
-            memset(list->bytes, 0, old_bytes);
-        }
-        list->bit_length = 0;
-        return 0;
-    }
-
-    size_t required_bytes = bitlist_required_bytes(new_bit_length);
-    if (ensure_bit_capacity(list, required_bytes) != 0) {
-        return -1;
-    }
-    size_t old_bytes = bitlist_required_bytes(list->bit_length);
-    if (required_bytes > old_bytes) {
-        memset(list->bytes + old_bytes, 0, required_bytes - old_bytes);
-    }
-
-    if (new_bit_length < list->bit_length && required_bytes > 0) {
-        size_t new_bytes = required_bytes;
-        size_t start_bit = new_bit_length;
-        size_t start_byte = start_bit / 8;
-        size_t start_bit_offset = start_bit % 8;
-        if (start_byte < new_bytes) {
-            if (start_bit_offset > 0) {
-                uint8_t mask = (uint8_t)((1u << start_bit_offset) - 1u);
-                list->bytes[start_byte] &= mask;
-                ++start_byte;
-            }
-            if (start_byte < new_bytes) {
-                memset(list->bytes + start_byte, 0, new_bytes - start_byte);
-            }
-        }
-    }
-
-    list->bit_length = new_bit_length;
     return 0;
 }
 
@@ -1552,7 +1494,7 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
 static int lantern_state_process_attestations_internal(
     LanternState *state,
     const LanternAttestations *attestations,
-    const LanternBlockSignatures *signatures,
+    const LanternSignatureList *signatures,
     bool apply_consensus_effects) {
     if (!state || !attestations) {
         return -1;
@@ -1627,25 +1569,26 @@ static int lantern_state_process_attestations_internal(
             continue;
         }
 
-        /* Source root must match the state's historical block hashes (leanSpec line 398) */
+        /* LeanSpec: skip only if both source and target roots mismatch history (state.py:398-402). */
+        bool source_matches = false;
         size_t source_slot_idx = (size_t)vote->source.slot;
-        if (source_slot_idx >= state->historical_block_hashes.length) {
-            /* LeanSpec: silently skip if source slot outside history (state.py:398) */
-            continue;
-        }
-        if (memcmp(vote->source.root.bytes, state->historical_block_hashes.items[source_slot_idx].bytes, LANTERN_ROOT_SIZE) != 0) {
-            /* LeanSpec: silently skip if source root mismatch (state.py:398) */
-            continue;
+        if (source_slot_idx < state->historical_block_hashes.length) {
+            source_matches = memcmp(
+                vote->source.root.bytes,
+                state->historical_block_hashes.items[source_slot_idx].bytes,
+                LANTERN_ROOT_SIZE) == 0;
         }
 
-        /* Target root must match the state's historical block hashes (leanSpec line 402) */
+        bool target_matches = false;
         size_t target_slot_idx = (size_t)vote->target.slot;
-        if (target_slot_idx >= state->historical_block_hashes.length) {
-            /* LeanSpec: silently skip if target slot outside history (state.py:402) */
-            continue;
+        if (target_slot_idx < state->historical_block_hashes.length) {
+            target_matches = memcmp(
+                vote->target.root.bytes,
+                state->historical_block_hashes.items[target_slot_idx].bytes,
+                LANTERN_ROOT_SIZE) == 0;
         }
-        if (memcmp(vote->target.root.bytes, state->historical_block_hashes.items[target_slot_idx].bytes, LANTERN_ROOT_SIZE) != 0) {
-            /* LeanSpec: silently skip if target root mismatch (state.py:402) */
+
+        if (!source_matches && !target_matches) {
             continue;
         }
 
@@ -1918,14 +1861,14 @@ static int lantern_state_process_attestations_internal(
 int lantern_state_process_attestations(
     LanternState *state,
     const LanternAttestations *attestations,
-    const LanternBlockSignatures *signatures) {
+    const LanternSignatureList *signatures) {
     return lantern_state_process_attestations_internal(state, attestations, signatures, true);
 }
 
 static int lantern_state_stage_attestations(
     LanternState *state,
     const LanternAttestations *attestations,
-    const LanternBlockSignatures *signatures) {
+    const LanternSignatureList *signatures) {
     return lantern_state_process_attestations_internal(state, attestations, signatures, false);
 }
 
@@ -1941,16 +1884,23 @@ int lantern_state_process_block(
     if (lantern_state_process_block_header(state, block) != 0) {
         return -1;
     }
-    size_t att_count = block->body.attestations.length;
-    LanternBlockSignatures att_sigs_view = {0};
-    if (signatures && signatures->data && att_count > 0) {
-        att_sigs_view.data = signatures->data;
-        att_sigs_view.length = signatures->length < att_count ? signatures->length : att_count;
-        att_sigs_view.capacity = att_sigs_view.length;
-    }
-    if (lantern_state_process_attestations(state, &block->body.attestations, &att_sigs_view) != 0) {
+    (void)signatures;
+    size_t validator_count = 0;
+    if (state->config.num_validators > SIZE_MAX) {
         return -1;
     }
+    validator_count = (size_t)state->config.num_validators;
+    LanternAttestations expanded = {0};
+    lantern_attestations_init(&expanded);
+    if (lantern_expand_aggregated_attestations(&block->body.attestations, validator_count, &expanded) != 0) {
+        lantern_attestations_reset(&expanded);
+        return -1;
+    }
+    if (lantern_state_process_attestations(state, &expanded, NULL) != 0) {
+        lantern_attestations_reset(&expanded);
+        return -1;
+    }
+    lantern_attestations_reset(&expanded);
 
     if (proposer_attestation && state->config.num_validators > 0) {
         const LanternVote *vote = &proposer_attestation->data;
@@ -1963,12 +1913,12 @@ int lantern_state_process_block(
                 .capacity = 1,
             };
             LanternSignature proposer_sig = proposer_attestation->signature;
-            LanternBlockSignatures proposer_sig_batch = {
+            LanternSignatureList proposer_sig_batch = {
                 .data = &proposer_sig,
                 .length = 1,
                 .capacity = 1,
             };
-            const LanternBlockSignatures *sig_view = signature_is_zero(&proposer_sig) ? NULL : &proposer_sig_batch;
+            const LanternSignatureList *sig_view = signature_is_zero(&proposer_sig) ? NULL : &proposer_sig_batch;
             if (lantern_state_stage_attestations(state, &proposer_batch, sig_view) != 0) {
                 return -1;
             }
@@ -2025,10 +1975,7 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
     LanternSignedVote proposer_signed;
     memset(&proposer_signed, 0, sizeof(proposer_signed));
     proposer_signed.data = signed_block->message.proposer_attestation;
-    size_t proposer_index = block->body.attestations.length;
-    if (signed_block->signatures.length > proposer_index && signed_block->signatures.data) {
-        proposer_signed.signature = signed_block->signatures.data[proposer_index];
-    }
+    proposer_signed.signature = signed_block->signatures.proposer_signature;
 
     double block_start = profiling ? state_profile_now() : 0.0;
     if (lantern_state_process_block(state, block, &signed_block->signatures, &proposer_signed) != 0) {
@@ -2156,7 +2103,7 @@ int lantern_state_collect_attestations_for_block(
     const LanternRoot *parent_root,
     const LanternSignedVote *proposer_attestation,
     LanternAttestations *out_attestations,
-    LanternBlockSignatures *out_signatures) {
+    LanternSignatureList *out_signatures) {
     if (!state || !out_attestations || !out_signatures || !parent_root) {
         return -1;
     }
@@ -2169,7 +2116,7 @@ int lantern_state_collect_attestations_for_block(
     if (lantern_attestations_resize(out_attestations, 0) != 0) {
         return -1;
     }
-    if (lantern_block_signatures_resize(out_signatures, 0) != 0) {
+    if (lantern_signature_list_resize(out_signatures, 0) != 0) {
         (void)lantern_attestations_resize(out_attestations, 0);
         return -1;
     }
@@ -2181,6 +2128,8 @@ int lantern_state_collect_attestations_for_block(
     int rc = 0;
     bool fixed_point = false;
     const LanternSignedVote *proposer_ptr = proposer_attestation;
+    LanternAggregatedAttestations aggregated_view;
+    lantern_aggregated_attestations_init(&aggregated_view);
 
     if (lantern_state_clone_view(state, &slot_snapshot) != 0) {
         rc = -1;
@@ -2206,6 +2155,11 @@ int lantern_state_collect_attestations_for_block(
             rc = -1;
             goto cleanup;
         }
+        lantern_aggregated_attestations_reset(&aggregated_view);
+        if (lantern_wrap_attestations_as_aggregated(out_attestations, &aggregated_view) != 0) {
+            rc = -1;
+            goto cleanup;
+        }
 
         lantern_state_reset(&scratch);
         if (lantern_state_clone_view(&slot_snapshot, &scratch) != 0) {
@@ -2218,17 +2172,11 @@ int lantern_state_collect_attestations_for_block(
         candidate.slot = block_slot;
         candidate.proposer_index = proposer_index;
         candidate.parent_root = *parent_root;
-        candidate.body.attestations.data = out_attestations->data;
-        candidate.body.attestations.length = out_attestations->length;
-        candidate.body.attestations.capacity = out_attestations->length;
+        candidate.body.attestations.data = aggregated_view.data;
+        candidate.body.attestations.length = aggregated_view.length;
+        candidate.body.attestations.capacity = aggregated_view.length;
 
-        LanternBlockSignatures sig_view = {
-            .data = out_signatures->data,
-            .length = out_signatures->length,
-            .capacity = out_signatures->length,
-        };
-
-        if (lantern_state_process_block(&scratch, &candidate, &sig_view, proposer_ptr) != 0) {
+        if (lantern_state_process_block(&scratch, &candidate, NULL, proposer_ptr) != 0) {
             rc = -1;
             goto cleanup;
         }
@@ -2255,12 +2203,13 @@ int lantern_state_collect_attestations_for_block(
 cleanup:
     lantern_state_reset(&scratch);
     lantern_state_reset(&slot_snapshot);
+    lantern_aggregated_attestations_reset(&aggregated_view);
     if (!fixed_point) {
         rc = -1;
     }
     if (rc != 0) {
         (void)lantern_attestations_resize(out_attestations, 0);
-        (void)lantern_block_signatures_resize(out_signatures, 0);
+        (void)lantern_signature_list_resize(out_signatures, 0);
     }
     return rc;
 }
@@ -2288,10 +2237,7 @@ int lantern_state_preview_post_state_root(
     LanternSignedVote proposer_signed;
     memset(&proposer_signed, 0, sizeof(proposer_signed));
     proposer_signed.data = block->message.proposer_attestation;
-    size_t proposer_index = block->message.block.body.attestations.length;
-    if (block->signatures.length > proposer_index && block->signatures.data) {
-        proposer_signed.signature = block->signatures.data[proposer_index];
-    }
+    proposer_signed.signature = block->signatures.proposer_signature;
     if (lantern_state_process_block(&scratch, &block->message.block, &block->signatures, &proposer_signed) != 0) {
         rc = -1;
         goto cleanup;

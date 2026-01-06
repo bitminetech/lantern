@@ -88,76 +88,131 @@ static bool signed_block_signatures_are_valid(
     {
         return false;
     }
-    const LanternAttestations *attestations = &block->message.block.body.attestations;
-    if (attestations->length > SIZE_MAX - 1u)
-    {
-        lantern_log_warn(
-            "state",
-            meta,
-            "signed block slot=%" PRIu64 " attestation count overflow length=%zu",
-            block->message.block.slot,
-            attestations->length);
-        return false;
-    }
-    size_t expected_signatures = attestations->length + 1u;
+    const LanternAggregatedAttestations *attestations = &block->message.block.body.attestations;
+    const LanternAttestationSignatures *sig_groups = &block->signatures.attestation_signatures;
+    size_t att_count = attestations->length;
+
     if (!client->genesis.validator_registry.records)
     {
         return true;
     }
-    if (attestations->length > 0 && !attestations->data)
+    if (att_count > 0 && !attestations->data)
     {
         lantern_log_warn(
             "state",
             meta,
             "signed block slot=%" PRIu64 " attestations missing data length=%zu",
             block->message.block.slot,
-            attestations->length);
+            att_count);
         return false;
     }
-    if (block->message.block.slot == 0
-        && attestations->length == 0
-        && block->signatures.length == 0)
-    {
-        return true;
-    }
-    if (block->signatures.length == 0)
+    if (att_count != sig_groups->length)
     {
         lantern_log_warn(
             "state",
             meta,
-            "signed block slot=%" PRIu64 " missing BlockSignatures; rejecting",
-            block->message.block.slot);
-        return false;
-    }
-    if (!block->signatures.data || block->signatures.length != expected_signatures)
-    {
-        lantern_log_warn(
-            "state",
-            meta,
-            "signed block slot=%" PRIu64 " signature count mismatch expected=%zu actual=%zu",
+            "signed block slot=%" PRIu64 " aggregated signature count mismatch expected=%zu actual=%zu",
             block->message.block.slot,
-            expected_signatures,
-            block->signatures.length);
+            att_count,
+            sig_groups->length);
         return false;
     }
-    for (size_t i = 0; i < attestations->length; ++i)
+    if (att_count > 0 && !sig_groups->data)
     {
-        LanternSignedVote signed_vote = {0};
-        signed_vote.data = attestations->data[i];
-        signed_vote.signature = block->signatures.data[i];
-        if (!lantern_client_verify_vote_signature(
-                client,
-                &signed_vote,
-                &signed_vote.signature,
-                meta,
-                "body"))
+        lantern_log_warn(
+            "state",
+            meta,
+            "signed block slot=%" PRIu64 " missing aggregated signatures length=%zu",
+            block->message.block.slot,
+            sig_groups->length);
+        return false;
+    }
+
+    size_t validator_count = lantern_state_validator_count(&client->state);
+
+    for (size_t i = 0; i < att_count; ++i)
+    {
+        const LanternAggregatedAttestation *att = &attestations->data[i];
+        const LanternAggregatedSignatureProof *proof = &sig_groups->data[i];
+        size_t bit_length = att->aggregation_bits.bit_length;
+        if (bit_length == 0 || att->aggregation_bits.bytes == NULL)
+        {
+            return false;
+        }
+        if (proof->participants.bit_length != att->aggregation_bits.bit_length)
+        {
+            return false;
+        }
+        size_t bytes = (bit_length + 7u) / 8u;
+        if (bytes > 0)
+        {
+            if (!proof->participants.bytes
+                || memcmp(proof->participants.bytes, att->aggregation_bits.bytes, bytes) != 0)
+            {
+                return false;
+            }
+        }
+        size_t participant_count = 0;
+        for (size_t v = 0; v < bit_length; ++v)
+        {
+            if (lantern_bitlist_get(&att->aggregation_bits, v))
+            {
+                participant_count += 1u;
+            }
+        }
+        if (participant_count == 0)
+        {
+            return false;
+        }
+        const uint8_t **pubkeys = calloc(participant_count, sizeof(*pubkeys));
+        if (!pubkeys)
+        {
+            return false;
+        }
+        size_t idx = 0;
+        for (size_t v = 0; v < bit_length; ++v)
+        {
+            if (!lantern_bitlist_get(&att->aggregation_bits, v))
+            {
+                continue;
+            }
+            if (v >= validator_count)
+            {
+                free(pubkeys);
+                return false;
+            }
+            const uint8_t *pubkey = lantern_state_validator_pubkey(&client->state, v);
+            if (!pubkey || lantern_validator_pubkey_is_zero(pubkey))
+            {
+                free(pubkeys);
+                return false;
+            }
+            pubkeys[idx++] = pubkey;
+        }
+
+        LanternRoot data_root;
+        if (lantern_hash_tree_root_attestation_data(&att->data, &data_root) != 0)
+        {
+            free(pubkeys);
+            return false;
+        }
+        bool sig_ok = lantern_signature_verify_aggregated(
+            pubkeys,
+            participant_count,
+            data_root.bytes,
+            sizeof(data_root.bytes),
+            &proof->proof_data,
+            att->data.slot);
+        free(pubkeys);
+        if (!sig_ok)
         {
             return false;
         }
     }
+
     LanternSignedVote proposer_signed = {0};
     proposer_signed.data = block->message.proposer_attestation;
-    proposer_signed.signature = block->signatures.data[attestations->length];
+    proposer_signed.signature = block->signatures.proposer_signature;
     return lantern_client_verify_vote_signature(
         client,
         &proposer_signed,
@@ -358,12 +413,7 @@ static bool handle_block_parent_locked(
     {
         LanternSignedVote proposer_signed = {0};
         proposer_signed.data = block->message.proposer_attestation;
-
-        size_t proposer_index = block->message.block.body.attestations.length;
-        if (block->signatures.data && block->signatures.length > proposer_index)
-        {
-            proposer_signed.signature = block->signatures.data[proposer_index];
-        }
+        proposer_signed.signature = block->signatures.proposer_signature;
 
         if (lantern_fork_choice_add_block(
                 &client->fork_choice,
@@ -421,7 +471,7 @@ static bool validate_block_vote_constraints_locked(
         return true;
     }
 
-    const LanternAttestations *attestations = &block->message.block.body.attestations;
+    const LanternAggregatedAttestations *attestations = &block->message.block.body.attestations;
     if (attestations->length > 0 && !attestations->data)
     {
         lantern_log_warn(
@@ -432,20 +482,29 @@ static bool validate_block_vote_constraints_locked(
             attestations->length);
         return false;
     }
-
-    for (size_t i = 0; i < attestations->length; ++i)
+    LanternAttestations expanded;
+    lantern_attestations_init(&expanded);
+    size_t validator_count = lantern_state_validator_count(&client->state);
+    if (lantern_expand_aggregated_attestations(attestations, validator_count, &expanded) != 0)
+    {
+        lantern_attestations_reset(&expanded);
+        return false;
+    }
+    for (size_t i = 0; i < expanded.length; ++i)
     {
         if (!lantern_client_validate_vote_constraints(
                 client,
-                &attestations->data[i],
+                &expanded.data[i],
                 "state",
                 meta,
                 "block attestation",
                 NULL))
         {
+            lantern_attestations_reset(&expanded);
             return false;
         }
     }
+    lantern_attestations_reset(&expanded);
 
     /* Skip proposer attestation validation here - the proposer's head checkpoint
      * references the block being imported, which isn't in fork choice yet.

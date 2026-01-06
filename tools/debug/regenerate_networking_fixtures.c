@@ -42,6 +42,52 @@ static void build_vote(LanternVote *vote, uint64_t validator_id, uint64_t slot,
     fill_root(&vote->source.root, source_seed);
 }
 
+static int build_aggregated_attestation(
+    const LanternVote *vote,
+    LanternAggregatedAttestation *attestation) {
+    if (!vote || !attestation) {
+        return -1;
+    }
+    lantern_aggregated_attestation_init(attestation);
+    attestation->data.slot = vote->slot;
+    attestation->data.head = vote->head;
+    attestation->data.target = vote->target;
+    attestation->data.source = vote->source;
+    size_t bit_length = (size_t)vote->validator_id + 1u;
+    if (lantern_bitlist_resize(&attestation->aggregation_bits, bit_length) != 0) {
+        return -1;
+    }
+    if (lantern_bitlist_set(&attestation->aggregation_bits, (size_t)vote->validator_id, true) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int build_signature_proof(
+    const LanternAggregatedAttestation *attestation,
+    LanternAggregatedSignatureProof *proof,
+    uint8_t seed,
+    size_t proof_len) {
+    if (!attestation || !proof) {
+        return -1;
+    }
+    lantern_aggregated_signature_proof_init(proof);
+    if (lantern_bitlist_resize(&proof->participants, attestation->aggregation_bits.bit_length) != 0) {
+        return -1;
+    }
+    size_t byte_len = (attestation->aggregation_bits.bit_length + 7u) / 8u;
+    if (byte_len > 0 && attestation->aggregation_bits.bytes && proof->participants.bytes) {
+        memcpy(proof->participants.bytes, attestation->aggregation_bits.bytes, byte_len);
+    }
+    if (lantern_byte_list_resize(&proof->proof_data, proof_len) != 0) {
+        return -1;
+    }
+    if (proof_len > 0 && proof->proof_data.data) {
+        fill_bytes(proof->proof_data.data, proof_len, seed);
+    }
+    return 0;
+}
+
 static int write_file(const char *path, const uint8_t *data, size_t len) {
     FILE *fp = fopen(path, "wb");
     if (!fp) {
@@ -108,25 +154,43 @@ static int generate_signed_block_fixtures(const char *output_dir) {
     fill_root(&block.message.block.parent_root, 0x24);
     fill_root(&block.message.block.state_root, 0x74);
 
-    /* Add attestations */
-    if (lantern_attestations_resize(&block.message.block.body.attestations, 2) != 0) {
+    /* Add aggregated attestations */
+    if (lantern_aggregated_attestations_resize(&block.message.block.body.attestations, 2) != 0) {
         fprintf(stderr, "Failed to resize attestations\n");
         return -1;
     }
-    build_vote(&block.message.block.body.attestations.data[0], 9, 71, 72, 0x24, 71, 0x44, 69, 0x64);
-    build_vote(&block.message.block.body.attestations.data[1], 10, 70, 71, 0x29, 70, 0x49, 68, 0x69);
+    LanternVote vote0;
+    LanternVote vote1;
+    build_vote(&vote0, 9, 71, 72, 0x24, 71, 0x44, 69, 0x64);
+    build_vote(&vote1, 10, 70, 71, 0x29, 70, 0x49, 68, 0x69);
+    if (build_aggregated_attestation(&vote0, &block.message.block.body.attestations.data[0]) != 0
+        || build_aggregated_attestation(&vote1, &block.message.block.body.attestations.data[1]) != 0) {
+        fprintf(stderr, "Failed to build aggregated attestations\n");
+        return -1;
+    }
 
     /* Proposer attestation - must match expect_signed_block_fixture expectations */
     build_vote(&block.message.proposer_attestation, 8, 74, 75, 0xA4, 74, 0xC4, 72, 0xE4);
 
-    /* Signatures: 2 attestation sigs + 1 proposer sig - must match test expectations */
-    if (lantern_block_signatures_resize(&block.signatures, 3) != 0) {
-        fprintf(stderr, "Failed to resize signatures\n");
+    /* Signatures: aggregated proofs + proposer signature */
+    if (lantern_attestation_signatures_resize(&block.signatures.attestation_signatures, 2) != 0) {
+        fprintf(stderr, "Failed to resize attestation signatures\n");
         return -1;
     }
-    fill_signature(&block.signatures.data[0], 0xC4);
-    fill_signature(&block.signatures.data[1], 0xC7);
-    fill_signature(&block.signatures.data[2], 0xCA);
+    if (build_signature_proof(
+            &block.message.block.body.attestations.data[0],
+            &block.signatures.attestation_signatures.data[0],
+            0xC4,
+            8) != 0
+        || build_signature_proof(
+               &block.message.block.body.attestations.data[1],
+               &block.signatures.attestation_signatures.data[1],
+               0xC7,
+               8) != 0) {
+        fprintf(stderr, "Failed to build attestation signature proofs\n");
+        return -1;
+    }
+    fill_signature(&block.signatures.proposer_signature, 0xCA);
 
     /* Encode SSZ - use generous buffer */
     size_t ssz_size = 100000;
@@ -262,18 +326,30 @@ static int generate_blocks_by_root_response_fixture(const char *output_dir) {
     block0->message.block.proposer_index = 1;
     fill_root(&block0->message.block.parent_root, 0x10);
     fill_root(&block0->message.block.state_root, 0x60);
-    if (lantern_attestations_resize(&block0->message.block.body.attestations, 1) != 0) {
+    if (lantern_aggregated_attestations_resize(&block0->message.block.body.attestations, 1) != 0) {
         fprintf(stderr, "Failed to resize block0 attestations\n");
         return -1;
     }
-    build_vote(&block0->message.block.body.attestations.data[0], 1, 13, 14, 0x10, 15, 0x30, 13, 0x50);
-    build_vote(&block0->message.proposer_attestation, 4, 17, 18, 0x90, 19, 0xB0, 17, 0xD0);
-    if (lantern_block_signatures_resize(&block0->signatures, 2) != 0) {
-        fprintf(stderr, "Failed to resize block0 signatures\n");
+    LanternVote block0_vote0;
+    build_vote(&block0_vote0, 1, 13, 14, 0x10, 15, 0x30, 13, 0x50);
+    if (build_aggregated_attestation(&block0_vote0, &block0->message.block.body.attestations.data[0]) != 0) {
+        fprintf(stderr, "Failed to build block0 aggregated attestation\n");
         return -1;
     }
-    fill_signature(&block0->signatures.data[0], 0xB0);
-    fill_signature(&block0->signatures.data[1], 0xB3);
+    build_vote(&block0->message.proposer_attestation, 4, 17, 18, 0x90, 19, 0xB0, 17, 0xD0);
+    if (lantern_attestation_signatures_resize(&block0->signatures.attestation_signatures, 1) != 0) {
+        fprintf(stderr, "Failed to resize block0 signature proofs\n");
+        return -1;
+    }
+    if (build_signature_proof(
+            &block0->message.block.body.attestations.data[0],
+            &block0->signatures.attestation_signatures.data[0],
+            0xB0,
+            8) != 0) {
+        fprintf(stderr, "Failed to build block0 signature proof\n");
+        return -1;
+    }
+    fill_signature(&block0->signatures.proposer_signature, 0xB3);
 
     /* Block 1 */
     LanternSignedBlock *block1 = &resp.blocks[1];
@@ -282,20 +358,38 @@ static int generate_blocks_by_root_response_fixture(const char *output_dir) {
     block1->message.block.proposer_index = 3;
     fill_root(&block1->message.block.parent_root, 0x30);
     fill_root(&block1->message.block.state_root, 0x80);
-    if (lantern_attestations_resize(&block1->message.block.body.attestations, 2) != 0) {
+    if (lantern_aggregated_attestations_resize(&block1->message.block.body.attestations, 2) != 0) {
         fprintf(stderr, "Failed to resize block1 attestations\n");
         return -1;
     }
-    build_vote(&block1->message.block.body.attestations.data[0], 3, 19, 20, 0x30, 21, 0x50, 19, 0x70);
-    build_vote(&block1->message.block.body.attestations.data[1], 4, 20, 21, 0x35, 22, 0x55, 20, 0x75);
-    build_vote(&block1->message.proposer_attestation, 6, 24, 25, 0xB0, 26, 0xD0, 24, 0xF0);
-    if (lantern_block_signatures_resize(&block1->signatures, 3) != 0) {
-        fprintf(stderr, "Failed to resize block1 signatures\n");
+    LanternVote block1_vote0;
+    LanternVote block1_vote1;
+    build_vote(&block1_vote0, 3, 19, 20, 0x30, 21, 0x50, 19, 0x70);
+    build_vote(&block1_vote1, 4, 20, 21, 0x35, 22, 0x55, 20, 0x75);
+    if (build_aggregated_attestation(&block1_vote0, &block1->message.block.body.attestations.data[0]) != 0
+        || build_aggregated_attestation(&block1_vote1, &block1->message.block.body.attestations.data[1]) != 0) {
+        fprintf(stderr, "Failed to build block1 aggregated attestations\n");
         return -1;
     }
-    fill_signature(&block1->signatures.data[0], 0xD0);
-    fill_signature(&block1->signatures.data[1], 0xD3);
-    fill_signature(&block1->signatures.data[2], 0xD6);
+    build_vote(&block1->message.proposer_attestation, 6, 24, 25, 0xB0, 26, 0xD0, 24, 0xF0);
+    if (lantern_attestation_signatures_resize(&block1->signatures.attestation_signatures, 2) != 0) {
+        fprintf(stderr, "Failed to resize block1 signature proofs\n");
+        return -1;
+    }
+    if (build_signature_proof(
+            &block1->message.block.body.attestations.data[0],
+            &block1->signatures.attestation_signatures.data[0],
+            0xD0,
+            8) != 0
+        || build_signature_proof(
+               &block1->message.block.body.attestations.data[1],
+               &block1->signatures.attestation_signatures.data[1],
+               0xD3,
+               8) != 0) {
+        fprintf(stderr, "Failed to build block1 signature proofs\n");
+        return -1;
+    }
+    fill_signature(&block1->signatures.proposer_signature, 0xD6);
 
     /* Encode - estimate size generously */
     size_t ssz_size = 100000;

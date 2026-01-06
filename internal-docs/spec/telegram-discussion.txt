@@ -1,0 +1,105 @@
+Is devnet 2 blocked by leanSig and leanVM using different XMSS implementations? or is this not a problem?
+
+---
+
+> Is devnet 2 blocked by leanSig and leanVM using different XMSS implementations? or is this not a problem?
+
+Yes, they are currently different. For 2 reasons: a) Message Encoding and b) Tweaks. The encoding of the leanSig paper would be too much slow in the current form of leanVM, due to use of Big Integers. But alternative encodings, more zk friendly, exist. The question of which one to use, and how to prove it’s secure, should be answered in the coming months. In the meantime, for devnet 2 I think there are two possibilities: I] validate the encoding outside the snark, as suggested by Benedikt in one the previous PQ interop call. The proof size would be linear in the number of XMSS being aggregated, but still much lower than the full XMSS because size(encoding) << size(xmss). II] use a different encoding (it could be the one currently implemented in leanVM, or another one). b) Currently leanVM does not properly handle hash tweaks. But with the recent updates (in particular one merged 3 days ago) it’s much easier to create custom precompile so adding the tweaks should now be feasible in an efficient way. But I am not fully satisfied with this approach so I kept another branch “simple-lean-vm” where I intend to experiment new designs.
+
+---
+
+@gr3999 @salakhiev @uink45 So for devnet2 since LeanSig's XMSS and LeanVM's XMSS keys,signatures are incompatible with each other? (I believe). I think we should just use LeanVM's XMSS implementation for all keys/signatures in Devnet2, we can switch back to primarily using LeanSig's XMSS implementation primary again for devnet 3,  if the XMSS implementations become compatible.
+
+I think we should updatee LeanVM to use LeanSig, instead of implementing it's own version of XMSS. Of course an agreed upon configuration needs to be chosen, but I assume we can tweak it overtime.
+
+@emile17 if I misunderstood things please let me know. You can't use LeanVM with signatures generated from LeanSig's XMSS right? or would it be not an issue as in we put LeanVM::Proccess(vec![LeanSigSignatures; N]) -> LeanVMAggregatedSignature then we just use LeanVM's XMSS to verify that signature, and LeanSig's XMSS to verify non-aggregated signatures
+
+----
+
+Right. Computing the encoding described in the leanSig paper = hard to do in a snark, and particularly in a minimal zkVM. Adapting leanVM to do so is theoretically possible, but it would be very slow unfortunately. But this is not the only encoding in existence, and some researchers are working on this.
+
+----
+
+So we should use LeanVM's XMSS implementation for all keys/signatures in devnet 2, yes?
+
+---
+
+yes this came up as the blocker in our PR as well
+I am fine switching the impl the clients are using. do we have the rust lib commit to that version that leanVM uses?
+
+---
+
+This should break the test vector as well no?
+
+---
+
+test vector would be regenrated as well right?
+
+---
+
+We will have to figure out test vectors, but if we want to do devnet 2 asap, using LeanVM's XMSS is what must be done for the time being
+
+How about we just choose the latest commit for the time being
+
+---
+
+No because we don’t have this encoding in the spec
+
+---
+
+so leanVM exposes the xmss signature api?
+
+---
+
+lean-multisig = { git = "https://github.com/leanEthereum/leanMultisig.git", rev = "55ce53ef201b1baff10112792efc83278e55fcd8" }
+
+We can use this ^ version
+
+@shariqnaiyer @KaydenML it does right? (I didn't check), but seen you guys added public/private key support for LeanVM XMSS to Ream the other day
+
+---
+
+So its just the matter of switching repos for the clients? api interface remains same for leanMultisig?
+
+---
+
+I think the api is different, but both should support publickeys/privatekeys/signatures
+
+---
+
+It does have the api for keygen, signing, and aggregation. I have to confirm if it has verification.
+
+I think the API is different from leansig as leansig had some advance preparation stuff which I didn’t see in multisig.
+
+---
+
+We are going to just use an trait, to support both backends
+
+Then use compile flags to choose which backend is used
+
+---
+
+right, wouldn't be much different anyway, so I am fine switching the library for devnet2
+
+---
+
+Sounds great, looks like like we are unblocked for devnet 2 🚀
+
+---
+
+so @anshalshukla has two PRs coming:
+
+1. for changes for containers without doing the actual prof agg but which we need to aggregate (so attestations are not aggregated attestations for e.g.) while aggregated signatures still being the naive list
+2. to use leanVM to actually aggregate and verify the signatures, this is where we will also switch the xmss lib and integrate and use leanvm to agg/verify
+
+@anshalshukla pls share the PRs as soon as they become ready
+
+---
+> Is devnet 2 blocked by leanSig and leanVM using different XMSS implementations? or is this not a problem? 
+
+I will implement the tweaks in the coming days. So the only difference with the original LeanSig will be the encoding. By verifying it outside of the snark, we should have full compatibility between leanSig / leanVM for devnet 2
+
+---
+
+It’s now implemented, on branch “devnet2” (lib to import = here). Should be 100% compliant with the spec (otherwise it’s a bug that will get fixed). Current speed of aggregation is quite slow (100 XMSS / s) mainly because the zkDSL program (= XMSS “verif” algo for the snark) has not been (at all) optimized, but IIUC 100 XMSS / s should be good enough for devnet 2. 
+It currently imports a slightly modified branch of leansig (to make some additional parts public in the API) but this should be fixed (i.e. it will import the “main” branch) start of next week. Have a good weekend ;)

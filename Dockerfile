@@ -38,9 +38,9 @@ COPY . .
 
 RUN LANTERN_BOOTSTRAP_SKIP_SUBMODULE_SYNC=1 ./scripts/bootstrap.sh
 
-# Build the hash-sig bindings (cargo archive needs ranlib'd index on linux)
-RUN cd external/c-hash-sig \
-    && cargo build --release \
+# Build the XMSS bindings (cargo archive needs ranlib'd index on linux)
+RUN cd external/c-leanvm-xmss \
+    && cargo build --release --locked \
     && find target/release -name '*.a' -exec ranlib {} \;
 
 RUN cmake -S external/c-libp2p/external/libtommath -B deps/libtommath -DBUILD_SHARED_LIBS=ON \

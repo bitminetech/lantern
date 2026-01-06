@@ -528,6 +528,32 @@ static void build_vote(
     }
 }
 
+static int append_aggregated_attestation_from_vote(
+    LanternAggregatedAttestations *list,
+    const LanternVote *vote) {
+    if (!list || !vote) {
+        return -1;
+    }
+    LanternAggregatedAttestation attestation;
+    lantern_aggregated_attestation_init(&attestation);
+    attestation.data.slot = vote->slot;
+    attestation.data.head = vote->head;
+    attestation.data.target = vote->target;
+    attestation.data.source = vote->source;
+    size_t bit_length = (size_t)vote->validator_id + 1u;
+    if (lantern_bitlist_resize(&attestation.aggregation_bits, bit_length) != 0) {
+        lantern_aggregated_attestation_reset(&attestation);
+        return -1;
+    }
+    if (lantern_bitlist_set(&attestation.aggregation_bits, (size_t)vote->validator_id, true) != 0) {
+        lantern_aggregated_attestation_reset(&attestation);
+        return -1;
+    }
+    int rc = lantern_aggregated_attestations_append(list, &attestation);
+    lantern_aggregated_attestation_reset(&attestation);
+    return rc;
+}
+
 static const LanternVote *find_vote_by_validator(const LanternAttestations *attestations, uint64_t validator_id) {
     if (!attestations) {
         return NULL;
@@ -552,8 +578,8 @@ static int test_attestations_single_vote_justifies(void) {
 
     LanternAttestations attestations;
     lantern_attestations_init(&attestations);
-    LanternBlockSignatures signatures;
-    lantern_block_signatures_init(&signatures);
+    LanternSignatureList signatures;
+    lantern_signature_list_init(&signatures);
 
     LanternCheckpoint source_checkpoint = state.latest_justified;
     LanternCheckpoint target_checkpoint = source_checkpoint;
@@ -561,7 +587,7 @@ static int test_attestations_single_vote_justifies(void) {
     fill_root(&target_checkpoint.root, 0xAB);
 
     expect_zero(lantern_attestations_resize(&attestations, 1), "resize single attestation");
-    expect_zero(lantern_block_signatures_resize(&signatures, 1), "resize single signature");
+    expect_zero(lantern_signature_list_resize(&signatures, 1), "resize single signature");
     build_vote(
         &attestations.data[0],
         &signatures.data[0],
@@ -578,7 +604,7 @@ static int test_attestations_single_vote_justifies(void) {
     assert(state.latest_finalized.slot == source_checkpoint.slot);
 
     lantern_attestations_reset(&attestations);
-    lantern_block_signatures_reset(&signatures);
+    lantern_signature_list_reset(&signatures);
     lantern_state_reset(&state);
     return 0;
 }
@@ -591,8 +617,8 @@ static int test_attestations_require_justified_source(void) {
 
     LanternAttestations attestations;
     lantern_attestations_init(&attestations);
-    LanternBlockSignatures signatures;
-    lantern_block_signatures_init(&signatures);
+    LanternSignatureList signatures;
+    lantern_signature_list_init(&signatures);
 
     LanternCheckpoint source_checkpoint = state.latest_justified;
     source_checkpoint.slot = state.latest_justified.slot + 2;
@@ -606,7 +632,7 @@ static int test_attestations_require_justified_source(void) {
         lantern_attestations_resize(&attestations, quorum),
         "resize unjustified source attestations");
     expect_zero(
-        lantern_block_signatures_resize(&signatures, quorum),
+        lantern_signature_list_resize(&signatures, quorum),
         "resize unjustified source signatures");
     for (size_t i = 0; i < quorum; ++i) {
         build_vote(
@@ -626,7 +652,7 @@ static int test_attestations_require_justified_source(void) {
     assert(state.latest_finalized.slot == 0);
 
     lantern_attestations_reset(&attestations);
-    lantern_block_signatures_reset(&signatures);
+    lantern_signature_list_reset(&signatures);
     lantern_state_reset(&state);
     return 0;
 }
@@ -639,10 +665,10 @@ static int test_attestations_accept_duplicate_votes(void) {
 
     LanternAttestations attestations;
     lantern_attestations_init(&attestations);
-    LanternBlockSignatures signatures;
-    lantern_block_signatures_init(&signatures);
+    LanternSignatureList signatures;
+    lantern_signature_list_init(&signatures);
     expect_zero(lantern_attestations_resize(&attestations, 2), "double vote resize");
-    expect_zero(lantern_block_signatures_resize(&signatures, 2), "double vote signature resize");
+    expect_zero(lantern_signature_list_resize(&signatures, 2), "double vote signature resize");
 
     LanternCheckpoint target_checkpoint = state.latest_justified;
     target_checkpoint.slot = 1;
@@ -658,7 +684,7 @@ static int test_attestations_accept_duplicate_votes(void) {
     assert(state.latest_finalized.slot == 0);
 
     lantern_attestations_reset(&attestations);
-    lantern_block_signatures_reset(&signatures);
+    lantern_signature_list_reset(&signatures);
     lantern_state_reset(&state);
     return 0;
 }
@@ -711,10 +737,10 @@ static int test_attestations_nonconsecutive_followup_does_not_finalize(void) {
 
     LanternAttestations attestations;
     lantern_attestations_init(&attestations);
-    LanternBlockSignatures signatures;
-    lantern_block_signatures_init(&signatures);
+    LanternSignatureList signatures;
+    lantern_signature_list_init(&signatures);
     expect_zero(lantern_attestations_resize(&attestations, 2), "resize nonconsecutive attestations");
-    expect_zero(lantern_block_signatures_resize(&signatures, 2), "resize nonconsecutive signatures");
+    expect_zero(lantern_signature_list_resize(&signatures, 2), "resize nonconsecutive signatures");
 
     build_vote(
         &attestations.data[0],
@@ -741,7 +767,7 @@ static int test_attestations_nonconsecutive_followup_does_not_finalize(void) {
     assert(state.latest_finalized.slot == expected_finalized_slot);
 
     lantern_attestations_reset(&attestations);
-    lantern_block_signatures_reset(&signatures);
+    lantern_signature_list_reset(&signatures);
     lantern_state_reset(&state);
     return 0;
 }
@@ -765,10 +791,10 @@ static int test_attestations_finalize_after_second_consecutive_vote(void) {
 
     LanternAttestations single_vote;
     lantern_attestations_init(&single_vote);
-    LanternBlockSignatures single_sig;
-    lantern_block_signatures_init(&single_sig);
+    LanternSignatureList single_sig;
+    lantern_signature_list_init(&single_sig);
     expect_zero(lantern_attestations_resize(&single_vote, 1), "resize single vote for pre-finalization");
-    expect_zero(lantern_block_signatures_resize(&single_sig, 1), "resize single signature for pre-finalization");
+    expect_zero(lantern_signature_list_resize(&single_sig, 1), "resize single signature for pre-finalization");
     build_vote(
         &single_vote.data[0],
         &single_sig.data[0],
@@ -785,10 +811,10 @@ static int test_attestations_finalize_after_second_consecutive_vote(void) {
 
     LanternAttestations second_vote;
     lantern_attestations_init(&second_vote);
-    LanternBlockSignatures second_sig;
-    lantern_block_signatures_init(&second_sig);
+    LanternSignatureList second_sig;
+    lantern_signature_list_init(&second_sig);
     expect_zero(lantern_attestations_resize(&second_vote, 1), "resize follow-up attestation");
-    expect_zero(lantern_block_signatures_resize(&second_sig, 1), "resize follow-up signature");
+    expect_zero(lantern_signature_list_resize(&second_sig, 1), "resize follow-up signature");
     build_vote(
         &second_vote.data[0],
         &second_sig.data[0],
@@ -804,9 +830,9 @@ static int test_attestations_finalize_after_second_consecutive_vote(void) {
     assert(state.latest_finalized.slot == consecutive_source.slot);
 
     lantern_attestations_reset(&single_vote);
-    lantern_block_signatures_reset(&single_sig);
+    lantern_signature_list_reset(&single_sig);
     lantern_attestations_reset(&second_vote);
-    lantern_block_signatures_reset(&second_sig);
+    lantern_signature_list_reset(&second_sig);
     lantern_state_reset(&state);
     return 0;
 }
@@ -829,10 +855,10 @@ static int test_attestations_finalize_across_gap(void) {
 
     LanternAttestations first_vote;
     lantern_attestations_init(&first_vote);
-    LanternBlockSignatures first_sig;
-    lantern_block_signatures_init(&first_sig);
+    LanternSignatureList first_sig;
+    lantern_signature_list_init(&first_sig);
     expect_zero(lantern_attestations_resize(&first_vote, 1), "resize first gap vote");
-    expect_zero(lantern_block_signatures_resize(&first_sig, 1), "resize first gap signature");
+    expect_zero(lantern_signature_list_resize(&first_sig, 1), "resize first gap signature");
     build_vote(&first_vote.data[0], &first_sig.data[0], 0, target.slot, &source, &target, 0x71);
 
     expect_zero(lantern_state_process_attestations(&state, &first_vote, &first_sig), "process first gap vote");
@@ -841,19 +867,19 @@ static int test_attestations_finalize_across_gap(void) {
 
     LanternAttestations second_vote;
     lantern_attestations_init(&second_vote);
-    LanternBlockSignatures second_sig;
-    lantern_block_signatures_init(&second_sig);
+    LanternSignatureList second_sig;
+    lantern_signature_list_init(&second_sig);
     expect_zero(lantern_attestations_resize(&second_vote, 1), "resize second gap vote");
-    expect_zero(lantern_block_signatures_resize(&second_sig, 1), "resize second gap signature");
+    expect_zero(lantern_signature_list_resize(&second_sig, 1), "resize second gap signature");
     build_vote(&second_vote.data[0], &second_sig.data[0], 1, target.slot, &source, &target, 0x72);
 
     expect_zero(lantern_state_process_attestations(&state, &second_vote, &second_sig), "process second gap vote");
     assert(state.latest_finalized.slot == source.slot);
 
     lantern_attestations_reset(&first_vote);
-    lantern_block_signatures_reset(&first_sig);
+    lantern_signature_list_reset(&first_sig);
     lantern_attestations_reset(&second_vote);
-    lantern_block_signatures_reset(&second_sig);
+    lantern_signature_list_reset(&second_sig);
     lantern_state_reset(&state);
     return 0;
 }
@@ -868,14 +894,14 @@ static int test_attestations_ignore_out_of_range_validator(void) {
 
     LanternAttestations attestations;
     lantern_attestations_init(&attestations);
-    LanternBlockSignatures signatures;
-    lantern_block_signatures_init(&signatures);
+    LanternSignatureList signatures;
+    lantern_signature_list_init(&signatures);
 
     size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.config.num_validators);
     size_t att_count = quorum + 1u;
     expect_zero(lantern_attestations_resize(&attestations, att_count), "resize mixed attestations");
     expect_zero(
-        lantern_block_signatures_resize(&signatures, att_count),
+        lantern_signature_list_resize(&signatures, att_count),
         "resize mixed attestation signatures");
 
     LanternCheckpoint target_checkpoint = state.latest_justified;
@@ -909,7 +935,7 @@ static int test_attestations_ignore_out_of_range_validator(void) {
     assert(state.latest_justified.slot == target_checkpoint.slot);
 
     lantern_attestations_reset(&attestations);
-    lantern_block_signatures_reset(&signatures);
+    lantern_signature_list_reset(&signatures);
     lantern_state_reset(&state);
     return 0;
 }
@@ -935,15 +961,11 @@ static int test_process_block_accepts_mixed_attestations(void) {
 
     size_t quorum = (size_t)lantern_consensus_quorum_threshold(validator_count);
     size_t att_count = quorum + 1u;
+    LanternAttestations votes;
+    lantern_attestations_init(&votes);
     expect_zero(
-        lantern_attestations_resize(&block.body.attestations, att_count),
+        lantern_attestations_resize(&votes, att_count),
         "resize mixed block attestations");
-
-    LanternBlockSignatures signatures;
-    lantern_block_signatures_init(&signatures);
-    expect_zero(
-        lantern_block_signatures_resize(&signatures, att_count),
-        "resize mixed block signatures");
 
     LanternCheckpoint target_checkpoint = state.latest_justified;
     target_checkpoint.slot = state.latest_justified.slot + 1u;
@@ -951,8 +973,8 @@ static int test_process_block_accepts_mixed_attestations(void) {
 
     uint64_t invalid_validator = state.config.num_validators;
     build_vote(
-        &block.body.attestations.data[0],
-        &signatures.data[0],
+        &votes.data[0],
+        NULL,
         invalid_validator,
         target_checkpoint.slot,
         &state.latest_justified,
@@ -961,8 +983,8 @@ static int test_process_block_accepts_mixed_attestations(void) {
     for (size_t i = 1; i <= quorum; ++i) {
         uint64_t validator_id = (uint64_t)(i - 1u);
         build_vote(
-            &block.body.attestations.data[i],
-            &signatures.data[i],
+            &votes.data[i],
+            NULL,
             validator_id,
             target_checkpoint.slot,
             &state.latest_justified,
@@ -970,13 +992,23 @@ static int test_process_block_accepts_mixed_attestations(void) {
             (uint8_t)(0x41u + i));
     }
 
-    expect_zero(lantern_state_process_slots(&state, block.slot), "advance slots for mixed attestation block");
-    expect_zero(
-        lantern_state_process_block(&state, &block, &signatures, NULL),
-        "process block with mixed attestation validity");
-    assert(state.latest_justified.slot == target_checkpoint.slot);
+    for (size_t i = 0; i < att_count; ++i) {
+        expect_zero(
+            append_aggregated_attestation_from_vote(&block.body.attestations, &votes.data[i]),
+            "append aggregated attestation");
+    }
 
-    lantern_block_signatures_reset(&signatures);
+    expect_zero(lantern_state_process_slots(&state, block.slot), "advance slots for mixed attestation block");
+    int process_rc = lantern_state_process_block(&state, &block, NULL, NULL);
+    if (process_rc == 0) {
+        fprintf(stderr, "expected mixed aggregated attestations to be rejected\n");
+        lantern_attestations_reset(&votes);
+        lantern_block_body_reset(&block.body);
+        lantern_state_reset(&state);
+        return 1;
+    }
+
+    lantern_attestations_reset(&votes);
     lantern_block_body_reset(&block.body);
     lantern_state_reset(&state);
     return 0;
@@ -990,10 +1022,10 @@ static int test_collect_attestations_for_block(void) {
 
     LanternAttestations input;
     lantern_attestations_init(&input);
-    LanternBlockSignatures input_signatures;
-    lantern_block_signatures_init(&input_signatures);
+    LanternSignatureList input_signatures;
+    lantern_signature_list_init(&input_signatures);
     expect_zero(lantern_attestations_resize(&input, 3), "resize attestation input");
-    expect_zero(lantern_block_signatures_resize(&input_signatures, 3), "resize attestation signatures");
+    expect_zero(lantern_signature_list_resize(&input_signatures, 3), "resize attestation signatures");
 
     LanternCheckpoint justified = state.latest_justified;
     LanternCheckpoint target = justified;
@@ -1033,8 +1065,8 @@ static int test_collect_attestations_for_block(void) {
 
     LanternAttestations collected;
     lantern_attestations_init(&collected);
-    LanternBlockSignatures collected_signatures;
-    lantern_block_signatures_init(&collected_signatures);
+    LanternSignatureList collected_signatures;
+    lantern_signature_list_init(&collected_signatures);
     expect_zero(
         lantern_state_collect_attestations_for_block(
             &state,
@@ -1049,18 +1081,18 @@ static int test_collect_attestations_for_block(void) {
     if (collected.length != 2) {
         fprintf(stderr, "Expected two votes collected, got %zu\n", collected.length);
         lantern_attestations_reset(&collected);
-        lantern_block_signatures_reset(&collected_signatures);
+        lantern_signature_list_reset(&collected_signatures);
         lantern_attestations_reset(&input);
-        lantern_block_signatures_reset(&input_signatures);
+        lantern_signature_list_reset(&input_signatures);
         lantern_state_reset(&state);
         return 1;
     }
     if (collected_signatures.length != collected.length) {
         fprintf(stderr, "Expected signatures for each collected attestation\n");
         lantern_attestations_reset(&collected);
-        lantern_block_signatures_reset(&collected_signatures);
+        lantern_signature_list_reset(&collected_signatures);
         lantern_attestations_reset(&input);
-        lantern_block_signatures_reset(&input_signatures);
+        lantern_signature_list_reset(&input_signatures);
         lantern_state_reset(&state);
         return 1;
     }
@@ -1072,9 +1104,9 @@ static int test_collect_attestations_for_block(void) {
         if (!original) {
             fprintf(stderr, "Collected vote %zu signature mismatch\n", i);
             lantern_attestations_reset(&collected);
-            lantern_block_signatures_reset(&collected_signatures);
+            lantern_signature_list_reset(&collected_signatures);
             lantern_attestations_reset(&input);
-            lantern_block_signatures_reset(&input_signatures);
+            lantern_signature_list_reset(&input_signatures);
             lantern_state_reset(&state);
             return 1;
         }
@@ -1082,9 +1114,9 @@ static int test_collect_attestations_for_block(void) {
         if (original_index >= input_signatures.length) {
             fprintf(stderr, "Collected vote %zu signature index mismatch\n", i);
             lantern_attestations_reset(&collected);
-            lantern_block_signatures_reset(&collected_signatures);
+            lantern_signature_list_reset(&collected_signatures);
             lantern_attestations_reset(&input);
-            lantern_block_signatures_reset(&input_signatures);
+            lantern_signature_list_reset(&input_signatures);
             lantern_state_reset(&state);
             return 1;
         }
@@ -1096,18 +1128,18 @@ static int test_collect_attestations_for_block(void) {
             != 0) {
             fprintf(stderr, "Collected vote %zu signature mismatch\n", i);
             lantern_attestations_reset(&collected);
-            lantern_block_signatures_reset(&collected_signatures);
+            lantern_signature_list_reset(&collected_signatures);
             lantern_attestations_reset(&input);
-            lantern_block_signatures_reset(&input_signatures);
+            lantern_signature_list_reset(&input_signatures);
             lantern_state_reset(&state);
             return 1;
         }
         if (!checkpoints_equal(&vote->source, &state.latest_justified)) {
             fprintf(stderr, "Collected vote %zu has mismatched source checkpoint\n", i);
             lantern_attestations_reset(&collected);
-            lantern_block_signatures_reset(&collected_signatures);
+            lantern_signature_list_reset(&collected_signatures);
             lantern_attestations_reset(&input);
-            lantern_block_signatures_reset(&input_signatures);
+            lantern_signature_list_reset(&input_signatures);
             lantern_state_reset(&state);
             return 1;
         }
@@ -1118,9 +1150,9 @@ static int test_collect_attestations_for_block(void) {
         } else {
             fprintf(stderr, "Unexpected validator id %" PRIu64 " in collected vote\n", vote->validator_id);
             lantern_attestations_reset(&collected);
-            lantern_block_signatures_reset(&collected_signatures);
+            lantern_signature_list_reset(&collected_signatures);
             lantern_attestations_reset(&input);
-            lantern_block_signatures_reset(&input_signatures);
+            lantern_signature_list_reset(&input_signatures);
             lantern_state_reset(&state);
             return 1;
         }
@@ -1135,9 +1167,9 @@ static int test_collect_attestations_for_block(void) {
     }
 
     lantern_attestations_reset(&collected);
-    lantern_block_signatures_reset(&collected_signatures);
+    lantern_signature_list_reset(&collected_signatures);
     lantern_attestations_reset(&input);
-    lantern_block_signatures_reset(&input_signatures);
+    lantern_signature_list_reset(&input_signatures);
     lantern_state_reset(&state);
     return 0;
 }
@@ -1153,15 +1185,15 @@ static int test_process_attestations_preserves_signed_votes(void) {
 
     LanternAttestations attestations;
     lantern_attestations_init(&attestations);
-    LanternBlockSignatures signatures;
-    lantern_block_signatures_init(&signatures);
+    LanternSignatureList signatures;
+    lantern_signature_list_init(&signatures);
 
     size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.config.num_validators);
     expect_zero(
         lantern_attestations_resize(&attestations, quorum),
         "resize attestation input");
     expect_zero(
-        lantern_block_signatures_resize(&signatures, quorum),
+        lantern_signature_list_resize(&signatures, quorum),
         "resize attestation signatures");
 
     /* Use roots from historical_block_hashes so attestations pass validation */
@@ -1223,7 +1255,7 @@ static int test_process_attestations_preserves_signed_votes(void) {
 
 cleanup:
     lantern_attestations_reset(&attestations);
-    lantern_block_signatures_reset(&signatures);
+    lantern_signature_list_reset(&signatures);
     lantern_state_reset(&state);
     return rc;
 }
@@ -1364,8 +1396,8 @@ static int test_collect_attestations_fixed_point(void) {
 
     LanternAttestations collected;
     lantern_attestations_init(&collected);
-    LanternBlockSignatures collected_signatures;
-    lantern_block_signatures_init(&collected_signatures);
+    LanternSignatureList collected_signatures;
+    lantern_signature_list_init(&collected_signatures);
 
     int rc = 0;
     if (lantern_state_collect_attestations_for_block(
@@ -1461,7 +1493,7 @@ static int test_collect_attestations_fixed_point(void) {
 
 cleanup:
     lantern_attestations_reset(&collected);
-    lantern_block_signatures_reset(&collected_signatures);
+    lantern_signature_list_reset(&collected_signatures);
     lantern_state_reset(&state);
     return rc;
 }
@@ -1506,8 +1538,8 @@ static int test_collect_attestations_fixed_point_deep_chain(void) {
 
     LanternAttestations collected;
     lantern_attestations_init(&collected);
-    LanternBlockSignatures collected_signatures;
-    lantern_block_signatures_init(&collected_signatures);
+    LanternSignatureList collected_signatures;
+    lantern_signature_list_init(&collected_signatures);
 
     int rc = 0;
     if (lantern_state_collect_attestations_for_block(
@@ -1568,7 +1600,7 @@ static int test_collect_attestations_fixed_point_deep_chain(void) {
 
 cleanup:
     lantern_attestations_reset(&collected);
-    lantern_block_signatures_reset(&collected_signatures);
+    lantern_signature_list_reset(&collected_signatures);
     lantern_state_reset(&state);
     return rc;
 }

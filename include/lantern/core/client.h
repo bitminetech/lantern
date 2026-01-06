@@ -64,11 +64,11 @@ struct lantern_client_options {
     uint16_t metrics_port;
     const char *devnet;
     struct lantern_string_list bootnodes;
-    const char *hash_sig_key_dir;
-    const char *hash_sig_public_path;
-    const char *hash_sig_secret_path;
-    const char *hash_sig_public_template;
-    const char *hash_sig_secret_template;
+    const char *xmss_key_dir;
+    const char *xmss_public_path;
+    const char *xmss_secret_path;
+    const char *xmss_public_template;
+    const char *xmss_secret_template;
 };
 
 struct libp2p_subscription;
@@ -192,11 +192,11 @@ struct lantern_client {
     bool status_lock_initialized;
     bool debug_disable_block_requests;
     bool debug_disable_fork_choice_time;
-    char *hash_sig_key_dir;
-    char *hash_sig_public_template;
-    char *hash_sig_secret_template;
-    char *hash_sig_public_path;
-    char *hash_sig_secret_path;
+    char *xmss_key_dir;
+    char *xmss_public_template;
+    char *xmss_secret_template;
+    char *xmss_public_path;
+    char *xmss_secret_path;
 };
 
 void lantern_client_options_init(struct lantern_client_options *options);

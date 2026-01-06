@@ -30,5 +30,20 @@ bool lantern_signature_sign(
     const uint8_t *message,
     size_t message_len,
     LanternSignature *out_signature);
+bool lantern_signature_aggregate(
+    const uint8_t *const *pubkeys,
+    const LanternSignature *signatures,
+    size_t count,
+    const uint8_t *message,
+    size_t message_len,
+    uint64_t epoch,
+    LanternByteList *out_proof);
+bool lantern_signature_verify_aggregated(
+    const uint8_t *const *pubkeys,
+    size_t count,
+    const uint8_t *message,
+    size_t message_len,
+    const LanternByteList *proof,
+    uint64_t epoch);
 
 #endif /* LANTERN_CONSENSUS_SIGNATURE_H */

@@ -112,7 +112,7 @@ int main(int argc, char **argv) {
     printf("signed_block_root=%s\n", signed_hex);
     printf("attestations=%zu\n", block.message.block.body.attestations.length);
     printf("proposer_attestation.validator=%" PRIu64 "\n", block.message.proposer_attestation.validator_id);
-    printf("signature_count=%zu\n", block.signatures.length);
+    printf("attestation_signatures=%zu\n", block.signatures.attestation_signatures.length);
 
     lantern_signed_block_with_attestation_reset(&block);
     return 0;

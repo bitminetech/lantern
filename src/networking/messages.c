@@ -137,13 +137,14 @@ static int lantern_network_blocks_by_root_response_decode_prefixed(
             return -1;
         }
 
-        if (sig_count > 0 && entry->signatures.length != (size_t)sig_count) {
+        size_t expected_signatures = entry->signatures.attestation_signatures.length + 1u;
+        if (sig_count > 0 && expected_signatures != (size_t)sig_count) {
             lantern_log_debug(
                 "reqresp",
                 NULL,
                 "blocks_by_root legacy sig count mismatch prefix=%u decoded=%zu",
                 sig_count,
-                entry->signatures.length);
+                expected_signatures);
         }
 
         prev_offset = start_offset;

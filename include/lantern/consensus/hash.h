@@ -8,8 +8,13 @@
 
 int lantern_hash_tree_root_config(const LanternConfig *config, LanternRoot *out_root);
 int lantern_hash_tree_root_checkpoint(const LanternCheckpoint *checkpoint, LanternRoot *out_root);
+int lantern_hash_tree_root_attestation_data(const LanternAttestationData *data, LanternRoot *out_root);
 int lantern_hash_tree_root_vote(const LanternVote *vote, LanternRoot *out_root);
 int lantern_hash_tree_root_signed_vote(const LanternSignedVote *vote, LanternRoot *out_root);
+int lantern_hash_tree_root_aggregated_attestation(const LanternAggregatedAttestation *attestation, LanternRoot *out_root);
+int lantern_hash_tree_root_aggregated_signature_proof(
+    const LanternAggregatedSignatureProof *proof,
+    LanternRoot *out_root);
 int lantern_hash_tree_root_block_body(const LanternBlockBody *body, LanternRoot *out_root);
 int lantern_hash_tree_root_block_header(const LanternBlockHeader *header, LanternRoot *out_root);
 int lantern_hash_tree_root_block(const LanternBlock *block, LanternRoot *out_root);

@@ -1,6 +1,8 @@
 #include "lantern/consensus/signature.h"
 
+#include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -26,6 +28,21 @@ static bool bytes_are_zero(const uint8_t *bytes, size_t length) {
         }
     }
     return true;
+}
+
+static bool xmss_aggregation_test_mode(void) {
+    static bool initialized = false;
+    static bool enabled = true;
+    if (!initialized) {
+        const char *env = getenv("LANTERN_XMSS_AGG_TEST_MODE");
+        if (env && env[0] != '\0') {
+            enabled = (env[0] != '0');
+        } else {
+            enabled = true;
+        }
+        initialized = true;
+    }
+    return enabled;
 }
 
 bool lantern_signature_is_zero(const LanternSignature *signature) {
@@ -152,4 +169,245 @@ bool lantern_signature_sign(
         memset(out_signature->bytes + written, 0, sizeof(out_signature->bytes) - written);
     }
     return true;
+}
+
+bool lantern_signature_aggregate(
+    const uint8_t *const *pubkeys,
+    const LanternSignature *signatures,
+    size_t count,
+    const uint8_t *message,
+    size_t message_len,
+    uint64_t epoch,
+    LanternByteList *out_proof) {
+    if (!pubkeys || !signatures || !message || !out_proof) {
+        return false;
+    }
+    if (count == 0) {
+        return false;
+    }
+    if (message_len != LANTERN_ROOT_SIZE) {
+        return false;
+    }
+    lantern_log_info(
+        "signature",
+        NULL,
+        "aggregation start count=%zu epoch=%" PRIu64 " test_mode=%d",
+        count,
+        epoch,
+        xmss_aggregation_test_mode() ? 1 : 0);
+
+    double start = get_time_seconds();
+    if (lantern_byte_list_resize(out_proof, LANTERN_AGG_PROOF_MAX_BYTES) != 0) {
+        lantern_log_error("signature", NULL, "aggregation resize failed max=%zu", (size_t)LANTERN_AGG_PROOF_MAX_BYTES);
+        return false;
+    }
+
+    struct PQSignatureSchemePublicKey **pubkey_handles = calloc(count, sizeof(*pubkey_handles));
+    struct PQSignature **sig_handles = calloc(count, sizeof(*sig_handles));
+    if (!pubkey_handles || !sig_handles) {
+        free(pubkey_handles);
+        free(sig_handles);
+        (void)lantern_byte_list_resize(out_proof, 0);
+        return false;
+    }
+
+    bool ok = true;
+    for (size_t i = 0; i < count; ++i) {
+        if (!pubkeys[i]) {
+            ok = false;
+            break;
+        }
+        enum PQSigningError pk_err = pq_public_key_deserialize(
+                pubkeys[i],
+                LANTERN_VALIDATOR_PUBKEY_SIZE,
+                &pubkey_handles[i]);
+        if (pk_err != Success) {
+            lantern_log_error(
+                "signature",
+                NULL,
+                "aggregation pubkey deserialize failed index=%zu err=%d",
+                i,
+                (int)pk_err);
+            ok = false;
+            break;
+        }
+        enum PQSigningError sig_err = pq_signature_deserialize(
+                signatures[i].bytes,
+                sizeof(signatures[i].bytes),
+                &sig_handles[i]);
+        if (sig_err != Success) {
+            lantern_log_error(
+                "signature",
+                NULL,
+                "aggregation signature deserialize failed index=%zu err=%d",
+                i,
+                (int)sig_err);
+            ok = false;
+            break;
+        }
+    }
+
+    if (ok) {
+        pq_xmss_aggregation_setup_prover();
+        uintptr_t written_len = 0;
+        enum PQSigningError err = pq_aggregate_signatures(
+            pubkey_handles,
+            (const struct PQSignature *const *)sig_handles,
+            count,
+            message,
+            message_len,
+            epoch,
+            xmss_aggregation_test_mode(),
+            out_proof->data,
+            out_proof->length,
+            &written_len);
+        if (err != Success || written_len == 0 || written_len > out_proof->length) {
+            lantern_log_error(
+                "signature",
+                NULL,
+                "aggregation failed err=%d written=%zu buffer=%zu count=%zu",
+                (int)err,
+                (size_t)written_len,
+                (size_t)out_proof->length,
+                count);
+            ok = false;
+        } else if (lantern_byte_list_resize(out_proof, (size_t)written_len) != 0) {
+            lantern_log_error(
+                "signature",
+                NULL,
+                "aggregation resize failed written=%zu",
+                (size_t)written_len);
+            ok = false;
+        }
+    }
+
+    for (size_t i = 0; i < count; ++i) {
+        if (sig_handles[i]) {
+            pq_signature_free(sig_handles[i]);
+        }
+        if (pubkey_handles[i]) {
+            pq_public_key_free(pubkey_handles[i]);
+        }
+    }
+    free(sig_handles);
+    free(pubkey_handles);
+
+    if (!ok) {
+        (void)lantern_byte_list_resize(out_proof, 0);
+        lantern_log_error(
+            "signature",
+            NULL,
+            "aggregation failed count=%zu epoch=%" PRIu64,
+            count,
+            epoch);
+    } else {
+        double elapsed = get_time_seconds() - start;
+        lantern_log_debug(
+            "signature",
+            NULL,
+            "aggregation ok count=%zu proof_len=%zu elapsed=%.6f",
+            count,
+            out_proof->length,
+            elapsed);
+    }
+    return ok;
+}
+
+bool lantern_signature_verify_aggregated(
+    const uint8_t *const *pubkeys,
+    size_t count,
+    const uint8_t *message,
+    size_t message_len,
+    const LanternByteList *proof,
+    uint64_t epoch) {
+    if (!pubkeys || !message || !proof) {
+        return false;
+    }
+    if (count == 0) {
+        return false;
+    }
+    if (message_len != LANTERN_ROOT_SIZE) {
+        return false;
+    }
+    if (proof->length == 0 || !proof->data) {
+        return false;
+    }
+    lantern_log_info(
+        "signature",
+        NULL,
+        "aggregation verify start count=%zu epoch=%" PRIu64 " proof_len=%zu test_mode=%d",
+        count,
+        epoch,
+        proof->length,
+        xmss_aggregation_test_mode() ? 1 : 0);
+
+    struct PQSignatureSchemePublicKey **pubkey_handles = calloc(count, sizeof(*pubkey_handles));
+    if (!pubkey_handles) {
+        return false;
+    }
+
+    bool ok = true;
+    for (size_t i = 0; i < count; ++i) {
+        if (!pubkeys[i]) {
+            ok = false;
+            break;
+        }
+        enum PQSigningError pk_err = pq_public_key_deserialize(
+                pubkeys[i],
+                LANTERN_VALIDATOR_PUBKEY_SIZE,
+                &pubkey_handles[i]);
+        if (pk_err != Success) {
+            lantern_log_error(
+                "signature",
+                NULL,
+                "aggregation verify pubkey deserialize failed index=%zu err=%d",
+                i,
+                (int)pk_err);
+            ok = false;
+            break;
+        }
+    }
+
+    int verify_rc = -1;
+    if (ok) {
+        pq_xmss_aggregation_setup_verifier();
+        double start = get_time_seconds();
+        verify_rc = pq_verify_aggregated_signatures(
+            (const struct PQSignatureSchemePublicKey *const *)pubkey_handles,
+            count,
+            message,
+            message_len,
+            proof->data,
+            proof->length,
+            epoch,
+            xmss_aggregation_test_mode());
+        double elapsed = get_time_seconds() - start;
+        lantern_log_debug(
+            "signature",
+            NULL,
+            "aggregation verify rc=%d elapsed=%.6f",
+            verify_rc,
+            elapsed);
+    }
+
+    for (size_t i = 0; i < count; ++i) {
+        if (pubkey_handles[i]) {
+            pq_public_key_free(pubkey_handles[i]);
+        }
+    }
+    free(pubkey_handles);
+
+    if (!ok) {
+        return false;
+    }
+    if (verify_rc != 1) {
+        lantern_log_error(
+            "signature",
+            NULL,
+            "aggregation verify failed rc=%d count=%zu epoch=%" PRIu64,
+            verify_rc,
+            count,
+            epoch);
+    }
+    return verify_rc == 1;
 }
