@@ -359,38 +359,16 @@ void request_status_now(struct lantern_client *client, const peer_id_t *peer, co
 
 
 /**
- * Seed reqresp service with peer legacy mode hints from genesis config.
+ * Seed reqresp service with peer mode hints from genesis config.
  *
  * @param client  Client instance
  *
+ * @note Currently a no-op as only canonical protocol is supported.
  * @note Thread safety: This function is thread-safe
  */
 void lantern_client_seed_reqresp_peer_modes(struct lantern_client *client)
 {
-    if (!client)
-    {
-        return;
-    }
-#if defined(LANTERN_REQRESP_STATUS_PROTOCOL_LEGACY) \
-    || defined(LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_LEGACY)
-    const struct lantern_validator_config *config = &client->genesis.validator_config;
-    if (!config || !config->entries)
-    {
-        return;
-    }
-    for (size_t i = 0; i < config->count; ++i)
-    {
-        const struct lantern_validator_config_entry *entry = &config->entries[i];
-        if (!entry->peer_id_text || !entry->peer_id_text[0])
-        {
-            continue;
-        }
-        int legacy = (entry->client_kind == LANTERN_VALIDATOR_CLIENT_QLEAN);
-        lantern_reqresp_service_hint_peer_legacy(&client->reqresp, entry->peer_id_text, legacy);
-    }
-#else
     (void)client;
-#endif
 }
 
 

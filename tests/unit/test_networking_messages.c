@@ -762,20 +762,8 @@ static void test_blocks_by_root_request_fixture(void) {
     check_zero(
         lantern_network_blocks_by_root_request_encode(&decoded, encoded, sizeof(encoded), &written),
         "request fixture encode");
-    /* NOTE: leanSpec encodes SSZ lists as raw concatenated elements (96 bytes for 3 roots),
-     * while Lantern's encoder adds a 4-byte offset prefix (100 bytes total).
-     * Both are valid SSZ encodings. We validate round-trip correctness instead of
-     * byte-for-byte equality with the fixture. */
-    LanternBlocksByRootRequest redecoded;
-    lantern_blocks_by_root_request_init(&redecoded);
-    check_zero(
-        lantern_network_blocks_by_root_request_decode(&redecoded, encoded, written),
-        "request round-trip decode");
-    CHECK(redecoded.roots.length == decoded.roots.length);
-    expect_root_seed(&redecoded.roots.items[0], 0x21);
-    expect_root_seed(&redecoded.roots.items[1], 0x52);
-    expect_root_seed(&redecoded.roots.items[2], 0x83);
-    lantern_blocks_by_root_request_reset(&redecoded);
+    CHECK(written == fixture_len);
+    CHECK(memcmp(encoded, fixture, fixture_len) == 0);
 
     size_t max_compressed = 0;
     CHECK(lantern_snappy_max_compressed_size(fixture_len, &max_compressed) == LANTERN_SNAPPY_OK);

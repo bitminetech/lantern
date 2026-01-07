@@ -181,23 +181,16 @@ static void init_peer_log_metadata(
 
 /**
  * @brief Records peer legacy framing preference.
+ * @note Currently a no-op as only canonical protocol is supported.
  */
 static void hint_peer_legacy_framing(
     struct lantern_reqresp_service *service,
     const char *peer_text,
     bool is_legacy)
 {
-    if (!service || !peer_text || peer_text[0] == '\0')
-    {
-        return;
-    }
-
-#if defined(LANTERN_REQRESP_STATUS_PROTOCOL_LEGACY) \
-    || defined(LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_LEGACY)
-    lantern_reqresp_service_hint_peer_legacy(service, peer_text, is_legacy ? 1 : 0);
-#else
+    (void)service;
+    (void)peer_text;
     (void)is_legacy;
-#endif
 }
 
 

@@ -97,13 +97,12 @@ struct lantern_peer_status_entry
 };
 
 /**
- * Blocks-by-root protocol variants for fallback handling.
+ * Blocks-by-root protocol variant.
+ * Only the canonical protocol is supported per LeanSpec.
  */
 enum lantern_blocks_req_variant
 {
     LANTERN_BLOCKS_REQ_VARIANT_PRIMARY = 0,
-    LANTERN_BLOCKS_REQ_VARIANT_LEGACY_SNAPPY = 1,
-    LANTERN_BLOCKS_REQ_VARIANT_BARE = 2,
 };
 
 

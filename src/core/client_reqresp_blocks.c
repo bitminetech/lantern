@@ -95,46 +95,31 @@ static bool blocks_next_variant(
     enum lantern_blocks_req_variant current,
     enum lantern_blocks_req_variant *out_next)
 {
-    if (!out_next)
-    {
-        return false;
-    }
-    switch (current)
-    {
-    case LANTERN_BLOCKS_REQ_VARIANT_PRIMARY:
-        *out_next = LANTERN_BLOCKS_REQ_VARIANT_LEGACY_SNAPPY;
-        return true;
-    case LANTERN_BLOCKS_REQ_VARIANT_LEGACY_SNAPPY:
-        *out_next = LANTERN_BLOCKS_REQ_VARIANT_BARE;
-        return true;
-    default:
-        break;
-    }
+    (void)current;
+    (void)out_next;
+    /* No fallback variants - only canonical protocol supported */
     return false;
 }
 
 static const char *blocks_protocol_id_for_variant(enum lantern_blocks_req_variant variant)
 {
-    switch (variant)
-    {
-    case LANTERN_BLOCKS_REQ_VARIANT_LEGACY_SNAPPY:
-        return LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY;
-    case LANTERN_BLOCKS_REQ_VARIANT_BARE:
-        return LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_BARE;
-    case LANTERN_BLOCKS_REQ_VARIANT_PRIMARY:
-    default:
-        return LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
-    }
+    (void)variant;
+    /* Only canonical protocol ID supported */
+    return LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
 }
 
 static bool blocks_variant_uses_raw_snappy(enum lantern_blocks_req_variant variant)
 {
-    return variant != LANTERN_BLOCKS_REQ_VARIANT_PRIMARY;
+    (void)variant;
+    /* Always use framed snappy (canonical format) */
+    return false;
 }
 
 static bool blocks_variant_is_legacy(enum lantern_blocks_req_variant variant)
 {
-    return variant != LANTERN_BLOCKS_REQ_VARIANT_PRIMARY;
+    (void)variant;
+    /* No legacy variants */
+    return false;
 }
 
 
@@ -358,7 +343,7 @@ static void *block_request_worker(void *arg)
     request.roots.items[0] = ctx->root;
 
     bool use_raw_snappy = blocks_variant_uses_raw_snappy(ctx->variant);
-    size_t raw_size = sizeof(uint32_t) + (request.roots.length * LANTERN_ROOT_SIZE);
+    size_t raw_size = request.roots.length * LANTERN_ROOT_SIZE;
     raw_request = (uint8_t *)malloc(raw_size > 0 ? raw_size : 1u);
     if (!raw_request)
     {
@@ -786,10 +771,6 @@ cleanup:
     {
         free(initial_chunk);
     }
-    if (request_success && ctx->variant != LANTERN_BLOCKS_REQ_VARIANT_PRIMARY && ctx->client && ctx->peer_text[0])
-    {
-        lantern_reqresp_service_hint_peer_legacy(&ctx->client->reqresp, ctx->peer_text, true);
-    }
     free(response);
     free(payload);
     free(raw_request);
@@ -1087,7 +1068,7 @@ static int schedule_blocks_request_variant(
  * @param client        Client instance
  * @param peer_id_text  Peer ID string
  * @param root          Block root to request
- * @param use_legacy    True to use legacy protocol
+ * @param use_legacy    Unused (only canonical protocol supported)
  * @return 0 on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL, the peer ID is invalid, or the root is zero
  * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
@@ -1101,7 +1082,6 @@ int lantern_client_schedule_blocks_request(
     const LanternRoot *root,
     bool use_legacy)
 {
-    enum lantern_blocks_req_variant variant =
-        use_legacy ? LANTERN_BLOCKS_REQ_VARIANT_LEGACY_SNAPPY : LANTERN_BLOCKS_REQ_VARIANT_PRIMARY;
-    return schedule_blocks_request_variant(client, peer_id_text, root, variant);
+    (void)use_legacy; /* Only canonical protocol supported */
+    return schedule_blocks_request_variant(client, peer_id_text, root, LANTERN_BLOCKS_REQ_VARIANT_PRIMARY);
 }
