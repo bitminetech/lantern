@@ -293,7 +293,7 @@ static int generate_blocks_by_root_request_fixture(const char *output_dir) {
     fill_root(&req.roots.items[1], 0x52);
     fill_root(&req.roots.items[2], 0x83);
 
-    /* 3 roots * 32 bytes = 96 bytes, but we need extra for encoding */
+    /* 3 roots * 32 bytes = 96 bytes (raw SSZ list encoding) */
     size_t ssz_size = 1024;
     uint8_t *ssz = malloc(ssz_size);
     size_t written = 0;

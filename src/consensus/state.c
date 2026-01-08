@@ -1552,8 +1552,8 @@ static int lantern_state_process_attestations_internal(
             record_attestation_validation_metric(att_validation_start, false);
             continue;
         }
-        if (vote->target.slot < vote->source.slot) {
-            /* LeanSpec: silently skip if target < source (state.py:406) */
+        if (vote->target.slot <= vote->source.slot) {
+            /* LeanSpec: silently skip if target <= source (state.py:406) */
             continue;
         }
         if (vote->source.slot > SIZE_MAX || vote->target.slot > SIZE_MAX) {
@@ -1604,7 +1604,7 @@ static int lantern_state_process_attestations_internal(
             continue;
         }
 
-        /* LeanSpec: skip only if both source and target roots mismatch history (state.py:398-402). */
+        /* LeanSpec: skip if either source or target root mismatches history (state.py:398-402). */
         bool source_matches = false;
         size_t source_slot_idx = (size_t)vote->source.slot;
         if (source_slot_idx < state->historical_block_hashes.length) {
@@ -1623,7 +1623,7 @@ static int lantern_state_process_attestations_internal(
                 LANTERN_ROOT_SIZE) == 0;
         }
 
-        if (!source_matches && !target_matches) {
+        if (!source_matches || !target_matches) {
             if (trace_finalization) {
                 lantern_log_debug(
                     "state",
@@ -1778,9 +1778,7 @@ static int lantern_state_process_attestations_internal(
             target_is_justified = true;
             target_was_justified = true;
 
-            if (vote->target.slot > latest_justified.slot) {
-                latest_justified = vote->target;
-            }
+            latest_justified = vote->target;
 
             if (debug_hash && debug_hash[0] != '\0') {
                 lantern_log_debug(

@@ -545,10 +545,6 @@ int lantern_expand_aggregated_attestations(
     if (!aggregated->data) {
         return -1;
     }
-    bool *seen = calloc(validator_count, sizeof(*seen));
-    if (!seen) {
-        return -1;
-    }
     int rc = 0;
     for (size_t i = 0; i < aggregated->length; ++i) {
         const LanternAggregatedAttestation *att = &aggregated->data[i];
@@ -565,10 +561,6 @@ int lantern_expand_aggregated_attestations(
                 rc = -1;
                 break;
             }
-            if (seen[v]) {
-                continue;
-            }
-            seen[v] = true;
             if (out_attestations->length >= LANTERN_MAX_ATTESTATIONS) {
                 rc = -1;
                 break;
@@ -589,7 +581,6 @@ int lantern_expand_aggregated_attestations(
             break;
         }
     }
-    free(seen);
     if (rc != 0) {
         (void)lantern_attestations_resize(out_attestations, 0);
     }

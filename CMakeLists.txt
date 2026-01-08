@@ -303,7 +303,7 @@ if(LANTERN_BUILD_TESTS)
             LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
     )
     add_test(NAME lantern_verify_signatures_vectors COMMAND lantern_verify_signatures_vectors_test)
-    set_tests_properties(lantern_verify_signatures_vectors PROPERTIES TIMEOUT 120 DISABLED TRUE)
+    set_tests_properties(lantern_verify_signatures_vectors PROPERTIES TIMEOUT 120)
 
     add_executable(lantern_genesis_vectors_test
         tests/integration/test_genesis_vectors.c

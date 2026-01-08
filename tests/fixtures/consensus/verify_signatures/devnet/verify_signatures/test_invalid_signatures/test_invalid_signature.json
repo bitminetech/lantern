@@ -1,7 +1,7 @@
 {
     "tests/consensus/devnet/verify_signatures/test_invalid_signatures.py::test_invalid_signature[fork_Devnet][fork_Devnet-verify_signatures_test]": {
         "network": "Devnet",
-        "leanEnv": "test",
+        "leanEnv": "prod",
         "anchorState": {
             "config": {
                 "genesisTime": 0
@@ -31,7 +31,7 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x8fa00001b5b22a073d21cb60c9465b379f80e74fee9baf1d137eb651ed162900a6f3ec32da74ff09265ea62fc9a5055b2e9b7c7b",
+                        "pubkey": "0x2c7aa65d0b45c01e3ba7155997d3001613775f1e1b85fd1ab65dcd72c65e105f2552c43a311a290af56fa0262dfebe10745ea837",
                         "index": 0
                     }
                 ]
@@ -48,8 +48,8 @@
                 "block": {
                     "slot": 1,
                     "proposerIndex": 0,
-                    "parentRoot": "0xb6f6683bf01027dd60f095f477b8ca38fbe23c18eb02f0aed0b2f34b7a4584f0",
-                    "stateRoot": "0xdae49441b99c823a8b1a7e4c1c015649c3eb51f9a29d92027f3ab83225855773",
+                    "parentRoot": "0x438b1cbc01c3c69b14f8853c6463d28b58118798f414f3be472aae4cd77dd572",
+                    "stateRoot": "0xd702eb0c170cff195e4cebf8d0dbbb96b4efe9f574eae8168add86ccc33439c0",
                     "body": {
                         "attestations": {
                             "data": []
@@ -61,15 +61,15 @@
                     "data": {
                         "slot": 1,
                         "head": {
-                            "root": "0x9ff6644003939aa320d1ccb02f11c25ab6a377171b39c90091fdb62461df5937",
+                            "root": "0x09f9fd7a2c1045ab3bd65c9b6d717f99413cc9b9c25dc47e72e5d4d61e37860a",
                             "slot": 1
                         },
                         "target": {
-                            "root": "0x9ff6644003939aa320d1ccb02f11c25ab6a377171b39c90091fdb62461df5937",
+                            "root": "0x09f9fd7a2c1045ab3bd65c9b6d717f99413cc9b9c25dc47e72e5d4d61e37860a",
                             "slot": 1
                         },
                         "source": {
-                            "root": "0xb6f6683bf01027dd60f095f477b8ca38fbe23c18eb02f0aed0b2f34b7a4584f0",
+                            "root": "0x438b1cbc01c3c69b14f8853c6463d28b58118798f414f3be472aae4cd77dd572",
                             "slot": 0
                         }
                     }
@@ -104,7 +104,7 @@
         },
         "expectException": "AssertionError",
         "_info": {
-            "hash": "0x068143892bec5b3d52e9dc3d7dc3337ba5321026274ab8a0b68dc6e96c04ac2a",
+            "hash": "0xd8f5653c484c18995484abc2f2aa2817cfa7e0b97135d97f2e6502ba70343f36",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/verify_signatures/test_invalid_signatures.py::test_invalid_signature[fork_Devnet]",
             "description": "Test that invalid signatures are properly rejected during verification.\n\n    Scenario\n    --------\n    - Single block at slot 1\n    - Proposer attestation has an invalid signature\n    - No additional attestations (only proposer attestation)\n\n    Expected Behavior\n    -----------------\n    1. Proposer's signature in SignedBlockWithAttestation is rejected\n\n    Why This Matters\n    ----------------\n    This test verifies the negative case:\n    - Signature verification actually validates cryptographic correctness\n      not just structural correctness.\n    - Invalid signatures are caught, not silently accepted",

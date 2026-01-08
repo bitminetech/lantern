@@ -389,25 +389,17 @@ int lantern_network_blocks_by_root_request_encode(
     if (req->roots.length > LANTERN_MAX_REQUEST_BLOCKS) {
         return -1;
     }
-    /* SSZ container: one variable field (roots list) -> 4‑byte offset + payload */
-    const uint32_t offset = (uint32_t)sizeof(uint32_t);
     size_t roots_bytes = req->roots.length * LANTERN_ROOT_SIZE;
-    size_t total_bytes = sizeof(uint32_t) + roots_bytes;
-    if (out_len < total_bytes) {
+    if (out_len < roots_bytes) {
         return -1;
     }
-    /* fixed part */
-    if (write_u32_le(offset, out, out_len) != 0) {
-        return -1;
-    }
-    /* variable part */
     if (roots_bytes > 0) {
         if (!req->roots.items) {
             return -1;
         }
-        memcpy(out + sizeof(uint32_t), req->roots.items, roots_bytes);
+        memcpy(out, req->roots.items, roots_bytes);
     }
-    *written = total_bytes;
+    *written = roots_bytes;
     return 0;
 }
 
@@ -415,39 +407,17 @@ int lantern_network_blocks_by_root_request_decode(
     LanternBlocksByRootRequest *req,
     const uint8_t *data,
     size_t data_len) {
-    if (!req || (!data && data_len > 0)) {
+    if (!req) {
+        return -1;
+    }
+    if (data_len == 0) {
+        return lantern_root_list_resize(&req->roots, 0) == 0 ? 0 : -1;
+    }
+    if (!data) {
         return -1;
     }
 
-    /* New-format decode: expect 4‑byte offset to variable section */
-    if (data_len >= sizeof(uint32_t)) {
-        uint32_t offset = 0;
-        if (read_u32_le(data, data_len, &offset) != 0) {
-            return -1;
-        }
-        if (offset >= sizeof(uint32_t) && offset <= data_len && (offset % sizeof(uint32_t)) == 0) {
-            size_t roots_bytes = data_len - offset;
-            if (roots_bytes % LANTERN_ROOT_SIZE != 0) {
-                return -1;
-            }
-            size_t count = roots_bytes / LANTERN_ROOT_SIZE;
-            if (count > LANTERN_MAX_REQUEST_BLOCKS) {
-                return -1;
-            }
-            if (lantern_root_list_resize(&req->roots, (uint32_t)count) != 0) {
-                return -1;
-            }
-            if (count > 0) {
-                if (!req->roots.items) {
-                    return -1;
-                }
-                memcpy(req->roots.items, data + offset, roots_bytes);
-            }
-            return 0;
-        }
-    }
-
-    /* Legacy fallback (no offset) */
+    /* Canonical SSZ list encoding: raw concatenated roots. */
     if (data_len % LANTERN_ROOT_SIZE != 0) {
         return -1;
     }
@@ -480,7 +450,7 @@ int lantern_network_blocks_by_root_request_encode_snappy(
     if (!req || !out || !written) {
         return -1;
     }
-    size_t raw_size = sizeof(uint32_t) + (req->roots.length * LANTERN_ROOT_SIZE);
+    size_t raw_size = req->roots.length * LANTERN_ROOT_SIZE;
     uint8_t *raw = alloc_scratch(raw_size);
     if (!raw) {
         return -1;

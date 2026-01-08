@@ -358,7 +358,7 @@ static void *block_request_worker(void *arg)
     request.roots.items[0] = ctx->root;
 
     bool use_raw_snappy = blocks_variant_uses_raw_snappy(ctx->variant);
-    size_t raw_size = sizeof(uint32_t) + (request.roots.length * LANTERN_ROOT_SIZE);
+    size_t raw_size = request.roots.length * LANTERN_ROOT_SIZE;
     raw_request = (uint8_t *)malloc(raw_size > 0 ? raw_size : 1u);
     if (!raw_request)
     {

@@ -994,13 +994,8 @@ static int lantern_fixture_parse_block_signatures(
             return -1;
         }
         if (proposer_idx >= 0) {
-            const jsmntok_t *proposer_tok = lantern_fixture_token(doc, proposer_idx);
-            if (proposer_tok && proposer_tok->type == JSMN_STRING) {
-                if (lantern_fixture_token_to_signature(doc, proposer_idx, &signatures->proposer_signature) != 0) {
-                    return -1;
-                }
-            } else {
-                memset(signatures->proposer_signature.bytes, 0, sizeof(signatures->proposer_signature.bytes));
+            if (lantern_fixture_token_to_signature(doc, proposer_idx, &signatures->proposer_signature) != 0) {
+                return -1;
             }
         } else {
             memset(signatures->proposer_signature.bytes, 0, sizeof(signatures->proposer_signature.bytes));
