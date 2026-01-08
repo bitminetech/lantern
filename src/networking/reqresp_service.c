@@ -357,10 +357,7 @@ static void log_payload_preview(
 }
 
 static bool payload_is_snappy_framed(const uint8_t *data, size_t len) {
-    return data
-        && len >= 10
-        && data[0] == 0xff
-        && memcmp(data + 4, "sNaPpY", 6) == 0;
+    return lantern_snappy_is_framed(data, len);
 }
 
 static int decode_status_payload(

@@ -250,7 +250,7 @@ int lantern_gossip_decode_signed_block_snappy(
         return -1;
     }
     size_t raw_len = 0;
-    if (lantern_snappy_uncompressed_length(data, data_len, &raw_len) != LANTERN_SNAPPY_OK) {
+    if (lantern_snappy_uncompressed_length_raw(data, data_len, &raw_len) != LANTERN_SNAPPY_OK) {
         return -1;
     }
     if (raw_len == 0 || raw_len > signed_block_max_ssz_size()) {
@@ -261,7 +261,7 @@ int lantern_gossip_decode_signed_block_snappy(
         return -1;
     }
     size_t written = raw_len;
-    int snappy_rc = lantern_snappy_decompress(data, data_len, raw, raw_len, &written);
+    int snappy_rc = lantern_snappy_decompress_raw(data, data_len, raw, raw_len, &written);
     if (snappy_rc != LANTERN_SNAPPY_OK) {
         free(raw);
         return -1;
@@ -306,7 +306,7 @@ int lantern_gossip_decode_signed_vote_snappy(
         return -1;
     }
     size_t raw_len = 0;
-    if (lantern_snappy_uncompressed_length(data, data_len, &raw_len) != LANTERN_SNAPPY_OK) {
+    if (lantern_snappy_uncompressed_length_raw(data, data_len, &raw_len) != LANTERN_SNAPPY_OK) {
         return -1;
     }
     if (raw_len != LANTERN_SIGNED_VOTE_SSZ_SIZE) {
@@ -314,7 +314,7 @@ int lantern_gossip_decode_signed_vote_snappy(
     }
     uint8_t raw[LANTERN_SIGNED_VOTE_SSZ_SIZE];
     size_t written = sizeof(raw);
-    int snappy_rc = lantern_snappy_decompress(data, data_len, raw, sizeof(raw), &written);
+    int snappy_rc = lantern_snappy_decompress_raw(data, data_len, raw, sizeof(raw), &written);
     if (snappy_rc != LANTERN_SNAPPY_OK) {
         return -1;
     }

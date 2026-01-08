@@ -69,11 +69,12 @@ int lantern_gossip_compute_message_id(
 
     if (snappy_scratch && payload_len > 0) {
         size_t expected_len = 0;
-        int len_rc = lantern_snappy_uncompressed_length(payload, payload_len, &expected_len);
+        int len_rc = lantern_snappy_uncompressed_length_raw(payload, payload_len, &expected_len);
         if (len_rc == LANTERN_SNAPPY_OK) {
             if (snappy_scratch_len >= expected_len) {
                 size_t written = expected_len;
-                int dec_rc = lantern_snappy_decompress(payload, payload_len, snappy_scratch, snappy_scratch_len, &written);
+                int dec_rc =
+                    lantern_snappy_decompress_raw(payload, payload_len, snappy_scratch, snappy_scratch_len, &written);
                 if (dec_rc == LANTERN_SNAPPY_OK) {
                     domain = LANTERN_GOSSIP_DOMAIN_VALID;
                     data_for_hash = snappy_scratch;

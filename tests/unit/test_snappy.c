@@ -106,10 +106,52 @@ static void roundtrip_case(size_t len, uint8_t seed) {
     free(output);
 }
 
+static void roundtrip_raw_case(size_t len, uint8_t seed) {
+    size_t input_size = len > 0 ? len : 1;
+    uint8_t *input = malloc(input_size);
+    CHECK(input != NULL);
+    if (len > 0) {
+        fill_pattern(input, len, seed);
+    }
+
+    size_t max_compressed = 0;
+    CHECK(lantern_snappy_max_compressed_size_raw(len, &max_compressed) == LANTERN_SNAPPY_OK);
+    uint8_t *compressed = malloc(max_compressed);
+    CHECK(compressed != NULL);
+
+    size_t written = 0;
+    check_zero(
+        lantern_snappy_compress_raw(input, len, compressed, max_compressed, &written),
+        "roundtrip raw compress");
+
+    size_t output_size = len > 0 ? len : 1;
+    uint8_t *output = malloc(output_size);
+    CHECK(output != NULL);
+    size_t out_written = len;
+    check_zero(
+        lantern_snappy_decompress_raw(compressed, written, output, output_size, &out_written),
+        "roundtrip raw decompress");
+    CHECK(out_written == len);
+    if (len > 0) {
+        CHECK(memcmp(input, output, len) == 0);
+    }
+
+    free(input);
+    free(compressed);
+    free(output);
+}
+
 static void test_roundtrip_patterns(void) {
     size_t sizes[] = {0, 1, 8, 60, 61, 200, 4096, 65535};
     for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i) {
         roundtrip_case(sizes[i], (uint8_t)i * 13u);
+    }
+}
+
+static void test_raw_roundtrip_patterns(void) {
+    size_t sizes[] = {0, 1, 8, 60, 61, 200, 4096, 65535};
+    for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i) {
+        roundtrip_raw_case(sizes[i], (uint8_t)i * 17u);
     }
 }
 
@@ -200,12 +242,67 @@ static void test_framed_compressed_chunks(void) {
     free(compressed);
 }
 
+static void test_is_framed(void) {
+    uint8_t source[32];
+    fill_pattern(source, sizeof(source), 0x3c);
+
+    size_t framed_max = 0;
+    check_zero(lantern_snappy_max_compressed_size(sizeof(source), &framed_max), "framed max");
+    uint8_t *framed = malloc(framed_max);
+    CHECK(framed != NULL);
+    size_t framed_len = 0;
+    check_zero(
+        lantern_snappy_compress(source, sizeof(source), framed, framed_max, &framed_len),
+        "framed encode");
+    CHECK(lantern_snappy_is_framed(framed, framed_len));
+
+    size_t raw_max = 0;
+    check_zero(lantern_snappy_max_compressed_size_raw(sizeof(source), &raw_max), "raw max");
+    uint8_t *raw = malloc(raw_max);
+    CHECK(raw != NULL);
+    size_t raw_len = 0;
+    check_zero(
+        lantern_snappy_compress_raw(source, sizeof(source), raw, raw_max, &raw_len),
+        "raw encode");
+    CHECK(!lantern_snappy_is_framed(raw, raw_len));
+
+    uint8_t short_buf[4] = {0};
+    CHECK(!lantern_snappy_is_framed(short_buf, sizeof(short_buf)));
+
+    free(raw);
+    free(framed);
+}
+
+static void test_raw_rejects_framed(void) {
+    uint8_t source[32];
+    fill_pattern(source, sizeof(source), 0x2a);
+
+    size_t max_comp = 0;
+    check_zero(lantern_snappy_max_compressed_size(sizeof(source), &max_comp), "framed max");
+    uint8_t *framed = malloc(max_comp);
+    CHECK(framed != NULL);
+    size_t framed_len = 0;
+    check_zero(
+        lantern_snappy_compress(source, sizeof(source), framed, max_comp, &framed_len),
+        "framed encode");
+
+    uint8_t decoded[sizeof(source)];
+    size_t written = sizeof(decoded);
+    int rc = lantern_snappy_decompress_raw(framed, framed_len, decoded, sizeof(decoded), &written);
+    CHECK(rc == LANTERN_SNAPPY_ERROR_INVALID_INPUT);
+
+    free(framed);
+}
+
 int main(void) {
     test_roundtrip_patterns();
+    test_raw_roundtrip_patterns();
     test_buffer_too_small();
     test_invalid_payload();
     test_framed_uncompressed_chunks();
     test_framed_compressed_chunks();
+    test_is_framed();
+    test_raw_rejects_framed();
     puts("lantern_snappy_test OK");
     return 0;
 }

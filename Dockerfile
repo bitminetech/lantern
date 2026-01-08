@@ -108,6 +108,7 @@ COPY --from=builder /opt/lantern /opt/lantern
 RUN mkdir -p /root/.cargo/git/checkouts
 COPY --from=builder /opt/lantern/share/cargo-git-checkouts/ /root/.cargo/git/checkouts/
 COPY docker/entrypoint.sh /usr/local/bin/lantern-entrypoint.sh
+RUN chmod +x /usr/local/bin/lantern-entrypoint.sh
 
 ENV PATH="/opt/lantern/bin:${PATH}"
 ENV LD_LIBRARY_PATH="/opt/lantern/lib"

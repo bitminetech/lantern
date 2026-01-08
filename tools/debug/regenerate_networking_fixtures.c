@@ -122,7 +122,7 @@ static int generate_signed_vote_fixtures(const char *output_dir) {
     snprintf(path, sizeof(path), "%s/gossip_signed_vote_leanspec.ssz", output_dir);
     if (write_file(path, ssz, written) != 0) return -1;
 
-    /* Gossip Snappy (with framing) */
+    /* Gossip Snappy (raw, no framing) */
     size_t max_compressed = 0;
     if (lantern_snappy_max_compressed_size(written, &max_compressed) != LANTERN_SNAPPY_OK) {
         fprintf(stderr, "Failed to get max compressed size\n");
@@ -209,7 +209,7 @@ static int generate_signed_block_fixtures(const char *output_dir) {
         return -1;
     }
 
-    /* Gossip Snappy (with framing) */
+    /* Gossip Snappy (raw, no framing) */
     size_t max_compressed = 0;
     if (lantern_snappy_max_compressed_size(written, &max_compressed) != LANTERN_SNAPPY_OK) {
         fprintf(stderr, "Failed to get max compressed size\n");

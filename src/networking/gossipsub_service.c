@@ -342,7 +342,8 @@ static libp2p_err_t lantern_gossipsub_message_id_cb(
     size_t scratch_len = 0;
     if (msg->data && msg->data_len > 0) {
         size_t expected = 0;
-        if (lantern_snappy_uncompressed_length(msg->data, msg->data_len, &expected) == LANTERN_SNAPPY_OK && expected > 0) {
+        if (lantern_snappy_uncompressed_length_raw(msg->data, msg->data_len, &expected) == LANTERN_SNAPPY_OK
+            && expected > 0) {
             size_t max_expected = gossipsub_snappy_max_uncompressed(service, topic);
             if (max_expected > 0 && expected > max_expected) {
                 expected = 0;

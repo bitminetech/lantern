@@ -239,6 +239,31 @@ EOF
   mv "${tmp}" "${output}"
 }
 
+validator_config_invalid() {
+  local config_path="${GENESIS_DIR}/validator-config.yaml"
+  if [[ ! -f "${config_path}" ]]; then
+    return 0
+  fi
+  if command -v yq >/dev/null 2>&1; then
+    local validator_count total
+    validator_count="$(yq eval '.validators | length' "${config_path}" 2>/dev/null || echo 0)"
+    if [[ -z "${validator_count}" || "${validator_count}" == "null" || "${validator_count}" -eq 0 ]]; then
+      return 0
+    fi
+    total="$(yq eval '.validators[].count' "${config_path}" 2>/dev/null | awk '{sum+=$1} END {print sum+0}')"
+    if [[ -z "${total}" || "${total}" -le 0 ]]; then
+      return 0
+    fi
+    return 1
+  fi
+  if command -v rg >/dev/null 2>&1; then
+    rg -q "^\s*count:\s*[0-9]+" "${config_path}" || return 0
+  else
+    grep -Eq "^\s*count:\s*[0-9]+" "${config_path}" || return 0
+  fi
+  return 1
+}
+
 generate_genesis_artifacts() {
   if [[ ! -x "${GENESIS_GENERATOR}" ]]; then
     echo "error: genesis generator not found at ${GENESIS_GENERATOR}" >&2
@@ -280,8 +305,8 @@ if (( ${#missing[@]} > 0 )); then
     printf "  - %s\n" "${missing[@]}" >&2
     exit 1
   fi
-  if [[ ! -f "${GENESIS_DIR}/validator-config.yaml" ]]; then
-    echo "validator-config.yaml missing; generating for ${NODES} node(s)..." >&2
+  if [[ ! -f "${GENESIS_DIR}/validator-config.yaml" ]] || validator_config_invalid; then
+    echo "validator-config.yaml missing/invalid; generating for ${NODES} node(s)..." >&2
     generate_validator_config
   fi
   echo "genesis artifacts missing; generating via ${GENESIS_GENERATOR}..." >&2
@@ -299,8 +324,15 @@ if (( ${#missing[@]} > 0 )); then
   fi
 fi
 
-if [[ ! -d "${GENESIS_DIR}/xmss-keys" ]]; then
-  echo "error: missing ${GENESIS_DIR}/xmss-keys" >&2
+if validator_config_invalid; then
+  echo "error: validator-config.yaml missing validator counts; regenerate it and retry." >&2
+  exit 1
+fi
+
+HASH_SIG_KEYS_DIR="${GENESIS_DIR}/hash-sig-keys"
+HASH_SIG_KEYS_DIR_NAME="hash-sig-keys"
+if [[ ! -d "${HASH_SIG_KEYS_DIR}" ]]; then
+  echo "error: missing ${HASH_SIG_KEYS_DIR}" >&2
   exit 1
 fi
 
@@ -309,12 +341,12 @@ for i in $(seq 0 $((NODES-1))); do
     echo "error: missing ${GENESIS_DIR}/lantern_${i}.key" >&2
     exit 1
   fi
-  if [[ ! -f "${GENESIS_DIR}/xmss-keys/validator_${i}_pk.ssz" ]]; then
-    echo "error: missing ${GENESIS_DIR}/xmss-keys/validator_${i}_pk.ssz" >&2
+  if [[ ! -f "${HASH_SIG_KEYS_DIR}/validator_${i}_pk.ssz" ]]; then
+    echo "error: missing ${HASH_SIG_KEYS_DIR}/validator_${i}_pk.ssz" >&2
     exit 1
   fi
-  if [[ ! -f "${GENESIS_DIR}/xmss-keys/validator_${i}_sk.ssz" ]]; then
-    echo "error: missing ${GENESIS_DIR}/xmss-keys/validator_${i}_sk.ssz" >&2
+  if [[ ! -f "${HASH_SIG_KEYS_DIR}/validator_${i}_sk.ssz" ]]; then
+    echo "error: missing ${HASH_SIG_KEYS_DIR}/validator_${i}_sk.ssz" >&2
     exit 1
   fi
 done
@@ -350,14 +382,8 @@ if [[ "${USE_VALIDATOR_CONFIG_PORTS}" == "1" ]]; then
 fi
 
 if [[ "${REGENERATE_GENESIS}" == "1" ]]; then
-  if [[ ! -x "${LEANSPEC_PY}" ]]; then
-    echo "error: leanSpec python not found at ${LEANSPEC_PY}" >&2
-    echo "hint: create venv in tools/leanSpec or set REGENERATE_GENESIS=0" >&2
-    exit 1
-  fi
-
   NEW_TIME=$(( $(date -u +%s) + GENESIS_DELAY ))
-  python3 - <<PY
+  if ! python3 - <<PY
 import pathlib
 path = pathlib.Path("${GENESIS_DIR}/config.yaml")
 lines = path.read_text().splitlines()
@@ -369,8 +395,17 @@ for line in lines:
         out.append(line)
 path.write_text("\n".join(out) + "\n")
 PY
+  then
+    echo "warning: failed to update GENESIS_TIME in config.yaml; keeping existing value" >&2
+  fi
 
-  GENESIS_DIR="${GENESIS_DIR}" PYTHONPATH="${REPO_ROOT}/tools/leanSpec/src" "${LEANSPEC_PY}" - <<'PY'
+  if [[ ! -x "${LEANSPEC_PY}" ]]; then
+    echo "error: leanSpec python not found at ${LEANSPEC_PY}" >&2
+    echo "hint: run 'cd tools/leanSpec && uv sync' to set up leanSpec" >&2
+    exit 1
+  fi
+
+  if ! GENESIS_DIR="${GENESIS_DIR}" HASH_SIG_KEYS_DIR="${HASH_SIG_KEYS_DIR}" PYTHONPATH="${REPO_ROOT}/tools/leanSpec/src" "${LEANSPEC_PY}" - <<'PY'
 import os
 import pathlib
 import yaml
@@ -379,19 +414,23 @@ from lean_spec.subspecs.containers.validator import Validator
 from lean_spec.types import Bytes52, Uint64
 
 genesis_dir = pathlib.Path(os.environ["GENESIS_DIR"])
+keys_dir = pathlib.Path(os.environ["HASH_SIG_KEYS_DIR"])
 config = yaml.safe_load((genesis_dir / "config.yaml").read_text())
 num_validators = int(config.get("VALIDATOR_COUNT", 0))
 validators = []
 for i in range(num_validators):
-    pk = (genesis_dir / "xmss-keys" / f"validator_{i}_pk.ssz").read_bytes()
+    pk = (keys_dir / f"validator_{i}_pk.ssz").read_bytes()
     validators.append(Validator(pubkey=Bytes52(pk), index=Uint64(i)))
 state = State.generate_genesis(
     genesis_time=Uint64(int(config["GENESIS_TIME"])),
     validators=Validators(data=validators),
 )
 (genesis_dir / "genesis.ssz").write_bytes(state.encode_bytes())
-print(f"GENESIS_TIME set to {config['GENESIS_TIME']}")
 PY
+  then
+    echo "error: leanSpec genesis regeneration failed" >&2
+    exit 1
+  fi
 fi
 
 if [[ "${RUNTIME}" == "docker" && "${DOCKER_BUILD}" == "1" ]]; then
@@ -498,7 +537,7 @@ for i in $(seq 0 $((NODES-1))); do
       -e "LANTERN_GENESIS_STATE=/genesis/genesis.ssz"
       -e "LANTERN_VALIDATOR_CONFIG=/genesis/validator-config.yaml"
       -e "LANTERN_XMSS_AGG_TEST_MODE=0"
-      -e "LANTERN_EXTRA_ARGS=--xmss-public-template /genesis/xmss-keys/validator_%u_pk.ssz --xmss-secret-template /genesis/xmss-keys/validator_%u_sk.ssz --log-level ${LOG_LEVEL}"
+      -e "LANTERN_EXTRA_ARGS=--xmss-public-template /genesis/${HASH_SIG_KEYS_DIR_NAME}/validator_%u_pk.ssz --xmss-secret-template /genesis/${HASH_SIG_KEYS_DIR_NAME}/validator_%u_sk.ssz --log-level ${LOG_LEVEL}"
     )
     if [[ -n "${LANTERN_DEBUG_FINALIZATION}" ]]; then
       docker_args+=(-e "LANTERN_DEBUG_FINALIZATION=${LANTERN_DEBUG_FINALIZATION}")
@@ -539,8 +578,8 @@ for i in $(seq 0 $((NODES-1))); do
       --http-port "${HTTP}" \
       --metrics-port "${METRICS}" \
       --devnet "${DEVNET}" \
-      --xmss-public-template "${GENESIS_DIR}/xmss-keys/validator_%u_pk.ssz" \
-      --xmss-secret-template "${GENESIS_DIR}/xmss-keys/validator_%u_sk.ssz" \
+      --xmss-public-template "${HASH_SIG_KEYS_DIR}/validator_%u_pk.ssz" \
+      --xmss-secret-template "${HASH_SIG_KEYS_DIR}/validator_%u_sk.ssz" \
       --log-level "${LOG_LEVEL}" \
       >"${LOG_DIR}/${NODE_ID}.log" 2>&1 &
     echo $! >> "${PIDS_FILE}"
