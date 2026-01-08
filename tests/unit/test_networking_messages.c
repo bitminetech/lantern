@@ -1135,7 +1135,7 @@ static void test_blocks_by_root_request(void) {
     uint8_t encoded[128];
     size_t written = 0;
     check_zero(lantern_network_blocks_by_root_request_encode(&req, encoded, sizeof(encoded), &written), "request encode");
-    size_t expected_written = sizeof(uint32_t) + (req.roots.length * LANTERN_ROOT_SIZE);
+    size_t expected_written = req.roots.length * LANTERN_ROOT_SIZE;
     CHECK(written == expected_written);
 
     LanternBlocksByRootRequest decoded;
