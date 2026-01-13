@@ -34,7 +34,6 @@
 
 #include <inttypes.h>
 #include <pthread.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -56,18 +55,10 @@ static bool lantern_client_process_stream_block_chunk(
     bool *saw_block);
 static void *block_request_worker(void *arg);
 static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int err);
-static int schedule_blocks_request_variant(
+static int schedule_blocks_request(
     struct lantern_client *client,
     const char *peer_id_text,
-    const LanternRoot *root,
-    enum lantern_blocks_req_variant variant);
-
-static bool blocks_next_variant(
-    enum lantern_blocks_req_variant current,
-    enum lantern_blocks_req_variant *out_next);
-static const char *blocks_protocol_id_for_variant(enum lantern_blocks_req_variant variant);
-static bool blocks_variant_uses_raw_snappy(enum lantern_blocks_req_variant variant);
-static bool blocks_variant_is_legacy(enum lantern_blocks_req_variant variant);
+    const LanternRoot *root);
 
 
 /* ============================================================================
@@ -90,53 +81,6 @@ static void block_request_ctx_free(struct block_request_ctx *ctx)
     peer_id_destroy(&ctx->peer_id);
     free(ctx);
 }
-
-static bool blocks_next_variant(
-    enum lantern_blocks_req_variant current,
-    enum lantern_blocks_req_variant *out_next)
-{
-    if (!out_next)
-    {
-        return false;
-    }
-    switch (current)
-    {
-    case LANTERN_BLOCKS_REQ_VARIANT_PRIMARY:
-        *out_next = LANTERN_BLOCKS_REQ_VARIANT_LEGACY_SNAPPY;
-        return true;
-    case LANTERN_BLOCKS_REQ_VARIANT_LEGACY_SNAPPY:
-        *out_next = LANTERN_BLOCKS_REQ_VARIANT_BARE;
-        return true;
-    default:
-        break;
-    }
-    return false;
-}
-
-static const char *blocks_protocol_id_for_variant(enum lantern_blocks_req_variant variant)
-{
-    switch (variant)
-    {
-    case LANTERN_BLOCKS_REQ_VARIANT_LEGACY_SNAPPY:
-        return LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY;
-    case LANTERN_BLOCKS_REQ_VARIANT_BARE:
-        return LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_BARE;
-    case LANTERN_BLOCKS_REQ_VARIANT_PRIMARY:
-    default:
-        return LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
-    }
-}
-
-static bool blocks_variant_uses_raw_snappy(enum lantern_blocks_req_variant variant)
-{
-    return variant != LANTERN_BLOCKS_REQ_VARIANT_PRIMARY;
-}
-
-static bool blocks_variant_is_legacy(enum lantern_blocks_req_variant variant)
-{
-    return variant != LANTERN_BLOCKS_REQ_VARIANT_PRIMARY;
-}
-
 
 /* ============================================================================
  * Block Chunk Processing
@@ -286,13 +230,8 @@ static bool lantern_client_process_stream_block_chunk(
  *
  * Handles the complete blocks_by_root request lifecycle:
  * 1. Encodes and sends the request (SSZ + snappy + varint header)
- * 2. Reads response in legacy or streaming mode
+ * 2. Reads response chunks (response code + varint payload)
  * 3. Decodes and imports received blocks
- * 4. Falls back to legacy protocol on streaming failures
- *
- * Legacy vs Streaming modes:
- * - Legacy: Single response with all blocks in one SSZ container
- * - Streaming: Multiple response chunks, one block per chunk
  *
  * @param arg  block_request_worker_args pointer
  * @return NULL
@@ -330,21 +269,9 @@ static void *block_request_worker(void *arg)
     LanternBlocksByRootRequest request;
     lantern_blocks_by_root_request_init(&request);
 
-    LanternBlocksByRootResponse response_msg;
-    lantern_blocks_by_root_response_init(&response_msg);
-
     uint8_t *raw_request = NULL;
     uint8_t *payload = NULL;
-    uint8_t *response = NULL;
     bool request_success = false;
-    bool schedule_retry = false;
-    bool attempt_retry = false;
-    enum lantern_blocks_req_variant retry_variant = LANTERN_BLOCKS_REQ_VARIANT_PRIMARY;
-    bool can_retry = blocks_next_variant(ctx->variant, &retry_variant);
-    struct lantern_client *retry_client = NULL;
-    LanternRoot retry_root = ctx->root;
-    char retry_peer[sizeof(ctx->peer_text)];
-    retry_peer[0] = '\0';
 
     if (lantern_root_list_resize(&request.roots, 1) != 0)
     {
@@ -352,12 +279,10 @@ static void *block_request_worker(void *arg)
             "reqresp",
             &meta,
             "failed to size blocks_by_root request");
-        schedule_retry = can_retry;
         goto cleanup;
     }
     request.roots.items[0] = ctx->root;
 
-    bool use_raw_snappy = blocks_variant_uses_raw_snappy(ctx->variant);
     size_t raw_size = request.roots.length * LANTERN_ROOT_SIZE;
     raw_request = (uint8_t *)malloc(raw_size > 0 ? raw_size : 1u);
     if (!raw_request)
@@ -366,7 +291,6 @@ static void *block_request_worker(void *arg)
             "reqresp",
             &meta,
             "out of memory building blocks_by_root request");
-        schedule_retry = can_retry;
         goto cleanup;
     }
 
@@ -378,21 +302,17 @@ static void *block_request_worker(void *arg)
             "reqresp",
             &meta,
             "failed to encode blocks_by_root request");
-        schedule_retry = can_retry;
         goto cleanup;
     }
 
     size_t max_payload = 0;
-    int max_rc = use_raw_snappy
-        ? lantern_snappy_max_compressed_size_raw(raw_written, &max_payload)
-        : lantern_snappy_max_compressed_size(raw_written, &max_payload);
+    int max_rc = lantern_snappy_max_compressed_size(raw_written, &max_payload);
     if (max_rc != LANTERN_SNAPPY_OK)
     {
         lantern_log_error(
             "reqresp",
             &meta,
             "failed to compute snappy size for blocks_by_root request");
-        schedule_retry = can_retry;
         goto cleanup;
     }
 
@@ -403,21 +323,17 @@ static void *block_request_worker(void *arg)
             "reqresp",
             &meta,
             "out of memory building blocks_by_root request");
-        schedule_retry = can_retry;
         goto cleanup;
     }
 
     size_t payload_len = 0;
-    int snappy_rc = use_raw_snappy
-        ? lantern_snappy_compress_raw(raw_request, raw_written, payload, max_payload, &payload_len)
-        : lantern_snappy_compress(raw_request, raw_written, payload, max_payload, &payload_len);
+    int snappy_rc = lantern_snappy_compress(raw_request, raw_written, payload, max_payload, &payload_len);
     if (snappy_rc != LANTERN_SNAPPY_OK || payload_len == 0)
     {
         lantern_log_error(
             "reqresp",
             &meta,
             "failed to encode blocks_by_root request");
-        schedule_retry = can_retry;
         goto cleanup;
     }
 
@@ -470,14 +386,13 @@ static void *block_request_worker(void *arg)
 
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
-    if (unsigned_varint_encode(payload_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK)
+    if (unsigned_varint_encode(raw_written, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK)
     {
         lantern_log_error(
             "reqresp",
             &meta,
             "failed to encode blocks_by_root header length=%zu",
-            payload_len);
-        schedule_retry = can_retry;
+            raw_written);
         goto cleanup;
     }
 
@@ -498,299 +413,67 @@ static void *block_request_worker(void *arg)
             &meta,
             "failed to write blocks_by_root request err=%zd",
             write_err);
-        schedule_retry = can_retry;
         goto cleanup;
     }
 
     struct lantern_reqresp_service *service = ctx->client ? &ctx->client->reqresp : NULL;
-    bool streaming_mode = !ctx->using_legacy;
-    uint8_t *initial_chunk = NULL;
-    size_t initial_chunk_len = 0;
-    bool initial_chunk_pending = false;
-    bool expect_response_code = !blocks_variant_uses_raw_snappy(ctx->variant);
-    bool response_code_pending = expect_response_code;
     bool saw_block = false;
 
-    if (ctx->using_legacy)
+    while (true)
     {
-        size_t response_len = 0;
+        uint8_t *chunk = NULL;
+        size_t chunk_len = 0;
         ssize_t read_err = 0;
-        uint8_t response_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
-        if (lantern_reqresp_read_response_chunk(
-                service,
-                stream,
-                LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT,
-                &response,
-                &response_len,
-                &read_err,
-                &response_code,
-                expect_response_code ? NULL : &response_code_pending)
-            != 0)
+        uint8_t chunk_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
+        int chunk_rc = lantern_reqresp_read_response_chunk(
+            service,
+            stream,
+            LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT,
+            &chunk,
+            &chunk_len,
+            &read_err,
+            &chunk_code,
+            NULL);
+        if (chunk_rc != 0)
         {
-            lantern_log_error(
-                "reqresp",
-                &meta,
-                "failed to read blocks_by_root response err=%zd",
-                read_err);
-            schedule_retry = can_retry;
-            goto cleanup;
-        }
-
-        if (response_len > 0 && response)
-        {
-            size_t preview_len = response_len < LANTERN_STATUS_PREVIEW_BYTES ? response_len : LANTERN_STATUS_PREVIEW_BYTES;
-            char response_hex[(LANTERN_STATUS_PREVIEW_BYTES * 2u) + 1u];
-            if (lantern_bytes_to_hex(response, preview_len, response_hex, sizeof(response_hex), 0) != 0)
+            if (read_err == (ssize_t)LIBP2P_ERR_EOF)
             {
-                response_hex[0] = '\0';
-            }
-            lantern_log_trace(
-                "reqresp",
-                &meta,
-                "blocks_by_root raw payload_len=%zu%s%s",
-                response_len,
-                preview_len > 0 ? " hex=" : "",
-                preview_len > 0 ? response_hex : "");
-        }
-        else
-        {
-            lantern_log_trace(
-                "reqresp",
-                &meta,
-                "blocks_by_root raw payload_len=%zu (empty)",
-                response_len);
-        }
-
-        if (response_code != LANTERN_REQRESP_RESPONSE_SUCCESS)
-        {
-            lantern_log_error(
-                "reqresp",
-                &meta,
-                "blocks_by_root response returned code=%u payload_len=%zu",
-                (unsigned)response_code,
-                response_len);
-            schedule_retry = can_retry;
-            goto cleanup;
-        }
-
-        if (response_len == 0 || !response)
-        {
-            lantern_log_info(
-                "reqresp",
-                &meta,
-                "received 0 block(s) via %s (empty payload)",
-                ctx->protocol_id);
-            request_success = true;
-            goto cleanup;
-        }
-
-        if (lantern_network_blocks_by_root_response_decode_snappy(&response_msg, response, response_len) != 0)
-        {
-            size_t preview_len = response_len < LANTERN_STATUS_PREVIEW_BYTES ? response_len : LANTERN_STATUS_PREVIEW_BYTES;
-            char response_hex[(LANTERN_STATUS_PREVIEW_BYTES * 2u) + 1u];
-            if (preview_len > 0
-                && lantern_bytes_to_hex(response, preview_len, response_hex, sizeof(response_hex), 0) != 0)
-            {
-                response_hex[0] = '\0';
-            }
-            lantern_log_error(
-                "reqresp",
-                &meta,
-                "failed to decode blocks_by_root response bytes=%zu%s%s",
-                response_len,
-                preview_len > 0 ? " hex=" : "",
-                preview_len > 0 ? response_hex : "");
-            if (response && response_len > 0)
-            {
-                char dump_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                format_root_hex(&ctx->root, dump_root_hex, sizeof(dump_root_hex));
-                const char *suffix = dump_root_hex;
-                if (suffix[0] == '0' && (suffix[1] == 'x' || suffix[1] == 'X'))
-                {
-                    suffix += 2;
-                }
-                char dump_path[256];
-                if (snprintf(dump_path, sizeof(dump_path), "/data/lantern_blocks_by_root_failed_%s.bin", suffix) > 0)
-                {
-                    FILE *dump = fopen(dump_path, "wb");
-                    if (dump)
-                    {
-                        (void)fwrite(response, 1, response_len, dump);
-                        fclose(dump);
-                    }
-                }
-            }
-            if (!streaming_mode && response && response_len > 0)
-            {
-                lantern_log_info(
-                    "reqresp",
-                    &meta,
-                    "legacy decode failed; interpreting payload as streaming chunk");
-                streaming_mode = true;
-                response_code_pending = false;
-                initial_chunk = response;
-                initial_chunk_len = response_len;
-                response = NULL;
-                initial_chunk_pending = true;
-            }
-            else
-            {
-                schedule_retry = can_retry;
-                goto cleanup;
-            }
-        }
-        else
-        {
-            lantern_log_info(
-                "reqresp",
-                &meta,
-                "received %zu block(s) via %s",
-                response_msg.length,
-                ctx->protocol_id);
-
-            for (size_t i = 0; i < response_msg.length; ++i)
-            {
-                LanternRoot computed = {{0}};
-                if (lantern_hash_tree_root_block(&response_msg.blocks[i].message.block, &computed) != 0)
-                {
-                    lantern_log_warn(
-                        "reqresp",
-                        &meta,
-                        "failed to hash block index=%zu slot=%" PRIu64,
-                        i,
-                        response_msg.blocks[i].message.slot);
-                    continue;
-                }
-                char computed_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                format_root_hex(&computed, computed_hex, sizeof(computed_hex));
-                bool matches = memcmp(computed.bytes, ctx->root.bytes, LANTERN_ROOT_SIZE) == 0;
-                lantern_log_info(
-                    "reqresp",
-                    &meta,
-                    "block index=%zu slot=%" PRIu64 " proposer=%" PRIu64 " root=%s match=%s attestations=%zu",
-                    i,
-                    response_msg.blocks[i].message.slot,
-                    response_msg.blocks[i].message.proposer_index,
-                    computed_hex[0] ? computed_hex : "0x0",
-                    matches ? "true" : "false",
-                    response_msg.blocks[i].message.body.attestations.length);
-
-                lantern_client_record_block(
-                    ctx->client,
-                    &response_msg.blocks[i],
-                    &computed,
-                    ctx->peer_text[0] ? ctx->peer_text : NULL,
-                    "reqresp",
-                    true);
-            }
-
-            request_success = (response_msg.length > 0);
-            if (!streaming_mode)
-            {
-                goto cleanup;
-            }
-        }
-    }
-
-    if (streaming_mode)
-    {
-        if (initial_chunk_pending)
-        {
-            if (!lantern_client_process_stream_block_chunk(ctx, initial_chunk, initial_chunk_len, &meta, &saw_block))
-            {
-                initial_chunk = NULL;
-                schedule_retry = can_retry;
-                goto cleanup;
-            }
-            initial_chunk = NULL;
-            initial_chunk_pending = false;
-        }
-
-        while (true)
-        {
-            uint8_t *chunk = NULL;
-            size_t chunk_len = 0;
-            ssize_t read_err = 0;
-            uint8_t chunk_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
-            int chunk_rc = lantern_reqresp_read_response_chunk(
-                service,
-                stream,
-                LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT,
-                &chunk,
-                &chunk_len,
-                &read_err,
-                &chunk_code,
-                &response_code_pending);
-            if (chunk_rc != 0)
-            {
-                if (read_err == (ssize_t)LIBP2P_ERR_EOF)
-                {
-                    read_err = 0;
-                    break;
-                }
-                lantern_log_error(
-                    "reqresp",
-                    &meta,
-                    "failed to read blocks_by_root chunk err=%zd",
-                    read_err);
-                free(chunk);
-                schedule_retry = can_retry;
-                goto cleanup;
-            }
-            if (chunk_code != LANTERN_REQRESP_RESPONSE_SUCCESS)
-            {
-                lantern_log_error(
-                    "reqresp",
-                    &meta,
-                    "blocks_by_root chunk returned code=%u payload_len=%zu",
-                    (unsigned)chunk_code,
-                    chunk_len);
-                free(chunk);
-                schedule_retry = can_retry;
-                goto cleanup;
-            }
-            if (chunk_len == 0 || !chunk)
-            {
-                free(chunk);
+                read_err = 0;
                 break;
             }
-
-            if (!lantern_client_process_stream_block_chunk(ctx, chunk, chunk_len, &meta, &saw_block))
-            {
-                schedule_retry = can_retry;
-                goto cleanup;
-            }
+            lantern_log_error(
+                "reqresp",
+                &meta,
+                "failed to read blocks_by_root chunk err=%zd",
+                read_err);
+            free(chunk);
+            goto cleanup;
         }
-        request_success = saw_block;
+        if (chunk_code != LANTERN_REQRESP_RESPONSE_SUCCESS)
+        {
+            lantern_log_error(
+                "reqresp",
+                &meta,
+                "blocks_by_root chunk returned code=%u payload_len=%zu",
+                (unsigned)chunk_code,
+                chunk_len);
+            free(chunk);
+            goto cleanup;
+        }
+        if (chunk_len == 0 || !chunk)
+        {
+            free(chunk);
+            break;
+        }
+
+        if (!lantern_client_process_stream_block_chunk(ctx, chunk, chunk_len, &meta, &saw_block))
+        {
+            goto cleanup;
+        }
     }
+    request_success = saw_block;
 
 cleanup:
-    if (!request_success && schedule_retry && ctx->client && ctx->peer_text[0] && !attempt_retry)
-    {
-        attempt_retry = true;
-        retry_client = ctx->client;
-        retry_root = ctx->root;
-        strncpy(retry_peer, ctx->peer_text, sizeof(retry_peer) - 1u);
-        retry_peer[sizeof(retry_peer) - 1u] = '\0';
-        char retry_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        format_root_hex(&retry_root, retry_root_hex, sizeof(retry_root_hex));
-        lantern_log_info(
-            "reqresp",
-            &meta,
-            "retrying blocks_by_root with fallback protocol=%s root=%s",
-            blocks_protocol_id_for_variant(retry_variant),
-            retry_root_hex[0] ? retry_root_hex : "0x0");
-    }
-    lantern_blocks_by_root_response_reset(&response_msg);
-    if (initial_chunk)
-    {
-        free(initial_chunk);
-    }
-    if (request_success && ctx->variant != LANTERN_BLOCKS_REQ_VARIANT_PRIMARY && ctx->client && ctx->peer_text[0])
-    {
-        lantern_reqresp_service_hint_peer_legacy(&ctx->client->reqresp, ctx->peer_text, true);
-    }
-    free(response);
     free(payload);
     free(raw_request);
     lantern_blocks_by_root_request_reset(&request);
@@ -805,18 +488,6 @@ cleanup:
     }
 
     block_request_ctx_free(ctx);
-
-    if (attempt_retry && retry_client && retry_peer[0])
-    {
-        if (schedule_blocks_request_variant(retry_client, retry_peer, &retry_root, retry_variant) != 0)
-        {
-            lantern_client_on_blocks_request_complete(
-                retry_client,
-                retry_peer,
-                &retry_root,
-                LANTERN_BLOCKS_REQUEST_FAILED);
-        }
-    }
     return NULL;
 }
 
@@ -832,9 +503,6 @@ cleanup:
  *
  * Called by libp2p when the stream dial completes. Spawns a worker
  * thread to handle the request/response exchange.
- *
- * On dial failure with the modern protocol, automatically retries
- * with the legacy protocol for backwards compatibility.
  *
  * @param stream     libp2p stream
  * @param user_data  Block request context
@@ -873,52 +541,19 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
             "failed to open %s stream err=%d",
             ctx->protocol_id,
             err);
-        bool attempted = false;
-        enum lantern_blocks_req_variant next_variant = LANTERN_BLOCKS_REQ_VARIANT_PRIMARY;
-        bool can_retry = blocks_next_variant(ctx->variant, &next_variant);
-        if (can_retry && ctx->client && ctx->peer_text[0])
+        if (ctx->client)
         {
-            LanternRoot root = ctx->root;
-            struct lantern_client *client = ctx->client;
-            char peer_copy[sizeof(ctx->peer_text)];
-            strncpy(peer_copy, ctx->peer_text, sizeof(peer_copy) - 1u);
-            peer_copy[sizeof(peer_copy) - 1u] = '\0';
-            lantern_log_info(
-                "reqresp",
-                &meta,
-                "retrying blocks_by_root with fallback protocol=%s after dial failure",
-                blocks_protocol_id_for_variant(next_variant));
-            if (stream)
-            {
-                libp2p_stream_free(stream);
-            }
-            block_request_ctx_free(ctx);
-            attempted = true;
-            if (schedule_blocks_request_variant(client, peer_copy, &root, next_variant) != 0)
-            {
-                lantern_client_on_blocks_request_complete(
-                    client,
-                    peer_copy,
-                    &root,
-                    LANTERN_BLOCKS_REQUEST_FAILED);
-            }
+            lantern_client_on_blocks_request_complete(
+                ctx->client,
+                ctx->peer_text,
+                &ctx->root,
+                LANTERN_BLOCKS_REQUEST_FAILED);
         }
-        if (!attempted)
+        if (stream)
         {
-            if (ctx->client)
-            {
-                lantern_client_on_blocks_request_complete(
-                    ctx->client,
-                    ctx->peer_text,
-                    &ctx->root,
-                    LANTERN_BLOCKS_REQUEST_FAILED);
-            }
-            if (stream)
-            {
-                libp2p_stream_free(stream);
-            }
-            block_request_ctx_free(ctx);
+            libp2p_stream_free(stream);
         }
+        block_request_ctx_free(ctx);
         return;
     }
 
@@ -978,11 +613,10 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
  * Public Block Request API
  * ============================================================================ */
 
-static int schedule_blocks_request_variant(
+static int schedule_blocks_request(
     struct lantern_client *client,
     const char *peer_id_text,
-    const LanternRoot *root,
-    enum lantern_blocks_req_variant variant)
+    const LanternRoot *root)
 {
     if (!client || !peer_id_text || !root)
     {
@@ -1020,9 +654,7 @@ static int schedule_blocks_request_variant(
     }
     ctx->client = client;
     ctx->root = *root;
-    ctx->variant = variant;
-    ctx->using_legacy = blocks_variant_is_legacy(variant);
-    ctx->protocol_id = blocks_protocol_id_for_variant(variant);
+    ctx->protocol_id = LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
     strncpy(ctx->peer_text, peer_id_text, sizeof(ctx->peer_text) - 1);
     ctx->peer_text[sizeof(ctx->peer_text) - 1] = '\0';
 
@@ -1079,15 +711,9 @@ static int schedule_blocks_request_variant(
  * protocol. The request will be processed in block_request_on_open
  * when the dial completes.
  *
- * Protocol selection:
- * - Modern protocol preferred by default
- * - Legacy protocol used only when explicitly requested
- * - Automatic fallback to legacy on modern protocol failures
- *
  * @param client        Client instance
  * @param peer_id_text  Peer ID string
  * @param root          Block root to request
- * @param use_legacy    True to use legacy protocol
  * @return 0 on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL, the peer ID is invalid, or the root is zero
  * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
@@ -1098,10 +724,7 @@ static int schedule_blocks_request_variant(
 int lantern_client_schedule_blocks_request(
     struct lantern_client *client,
     const char *peer_id_text,
-    const LanternRoot *root,
-    bool use_legacy)
+    const LanternRoot *root)
 {
-    enum lantern_blocks_req_variant variant =
-        use_legacy ? LANTERN_BLOCKS_REQ_VARIANT_LEGACY_SNAPPY : LANTERN_BLOCKS_REQ_VARIANT_PRIMARY;
-    return schedule_blocks_request_variant(client, peer_id_text, root, variant);
+    return schedule_blocks_request(client, peer_id_text, root);
 }

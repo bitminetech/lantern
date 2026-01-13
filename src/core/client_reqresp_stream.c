@@ -31,9 +31,11 @@
 #include "multiformats/unsigned_varint/unsigned_varint.h"
 #include "peer_id/peer_id.h"
 
+#include "lantern/encoding/snappy.h"
 #include "lantern/networking/reqresp_service.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
+#include "lantern/support/time.h"
 
 
 /* ============================================================================
@@ -49,6 +51,21 @@ enum
     LANTERN_REQRESP_SUSPICIOUS_PAYLOAD_BYTES = 512,
 };
 
+static uint64_t reqresp_now_ms(void)
+{
+    double now_sec = lantern_time_now_seconds();
+    if (now_sec <= 0.0)
+    {
+        return 0;
+    }
+    double now_ms = now_sec * 1000.0;
+    if (now_ms >= (double)UINT64_MAX)
+    {
+        return UINT64_MAX;
+    }
+    return (uint64_t)now_ms;
+}
+
 
 /* ============================================================================
  * Forward Declarations
@@ -59,10 +76,6 @@ static void init_peer_log_metadata(
     char *peer_text,
     size_t peer_text_len,
     struct lantern_log_metadata *out_meta);
-static void hint_peer_legacy_framing(
-    struct lantern_reqresp_service *service,
-    const char *peer_text,
-    bool is_legacy);
 static bool protocol_expects_response_code(enum lantern_reqresp_protocol_kind protocol);
 static int set_stream_deadline(
     libp2p_stream_t *stream,
@@ -74,6 +87,7 @@ static int read_stream_byte_with_retry(
     libp2p_stream_t *stream,
     const struct lantern_log_metadata *meta,
     const char *label,
+    uint64_t deadline_ms,
     uint8_t *out_byte,
     ssize_t *out_err);
 static int read_response_code_prefix(
@@ -82,17 +96,16 @@ static int read_response_code_prefix(
     bool expect_code,
     const struct lantern_log_metadata *meta,
     const char *peer_text,
+    uint64_t deadline_ms,
     uint8_t *out_frame_code,
     uint8_t *out_response_code_byte,
-    bool *out_legacy_no_code,
     uint8_t *out_response_code,
     ssize_t *out_err);
 static int read_payload_header_first_byte(
     libp2p_stream_t *stream,
     bool expect_code,
-    bool legacy_no_code,
-    uint8_t response_code_byte,
     const struct lantern_log_metadata *meta,
+    uint64_t deadline_ms,
     uint8_t *out_header_first_byte,
     ssize_t *out_err);
 static int read_stream_exact(
@@ -101,7 +114,17 @@ static int read_stream_exact(
     const char *label,
     uint8_t *buffer,
     size_t buffer_len,
+    uint64_t deadline_ms,
     size_t *out_read,
+    ssize_t *out_err);
+static int read_snappy_framed_payload(
+    libp2p_stream_t *stream,
+    const struct lantern_log_metadata *meta,
+    const char *label,
+    uint64_t declared_len,
+    uint64_t deadline_ms,
+    uint8_t **out_buffer,
+    size_t *out_len,
     ssize_t *out_err);
 static int read_varint_header_from_first_byte(
     libp2p_stream_t *stream,
@@ -112,7 +135,8 @@ static int read_varint_header_from_first_byte(
     size_t *out_consumed,
     ssize_t *out_err,
     const struct lantern_log_metadata *meta,
-    const char *label);
+    const char *label,
+    uint64_t deadline_ms);
 static void log_varint_header_details(
     const uint8_t *header,
     size_t consumed,
@@ -130,7 +154,8 @@ static int read_payload_bytes(
     uint8_t **out_buffer,
     ssize_t *out_err,
     const struct lantern_log_metadata *meta,
-    const char *label);
+    const char *label,
+    uint64_t deadline_ms);
 static void log_payload_read_complete(
     const uint8_t *buffer,
     size_t payload_size,
@@ -143,7 +168,8 @@ static int read_varint_payload_chunk(
     size_t *out_len,
     ssize_t *out_err,
     const struct lantern_log_metadata *meta,
-    const char *label);
+    const char *label,
+    uint64_t deadline_ms);
 
 
 /* ============================================================================
@@ -176,28 +202,6 @@ static void init_peer_log_metadata(
     }
 
     *out_meta = (struct lantern_log_metadata){.peer = peer_text[0] ? peer_text : NULL};
-}
-
-
-/**
- * @brief Records peer legacy framing preference.
- */
-static void hint_peer_legacy_framing(
-    struct lantern_reqresp_service *service,
-    const char *peer_text,
-    bool is_legacy)
-{
-    if (!service || !peer_text || peer_text[0] == '\0')
-    {
-        return;
-    }
-
-#if defined(LANTERN_REQRESP_STATUS_PROTOCOL_LEGACY) \
-    || defined(LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_LEGACY)
-    lantern_reqresp_service_hint_peer_legacy(service, peer_text, is_legacy ? 1 : 0);
-#else
-    (void)is_legacy;
-#endif
 }
 
 
@@ -253,6 +257,237 @@ static int set_stream_deadline(
     return 0;
 }
 
+static int set_stream_deadline_remaining(
+    libp2p_stream_t *stream,
+    uint64_t deadline_ms,
+    const struct lantern_log_metadata *meta,
+    const char *label,
+    ssize_t *out_err)
+{
+    uint64_t now_ms = reqresp_now_ms();
+    if (now_ms >= deadline_ms)
+    {
+        if (out_err)
+        {
+            *out_err = LIBP2P_ERR_TIMEOUT;
+        }
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "%s timed out",
+            label ? label : "stream");
+        return LANTERN_REQRESP_ERR_STREAM_READ;
+    }
+    return set_stream_deadline(stream, deadline_ms - now_ms, meta, label, out_err);
+}
+
+/**
+ * @brief Reads a framed Snappy payload with declared uncompressed length.
+ */
+static int read_snappy_framed_payload(
+    libp2p_stream_t *stream,
+    const struct lantern_log_metadata *meta,
+    const char *label,
+    uint64_t declared_len,
+    uint64_t deadline_ms,
+    uint8_t **out_buffer,
+    size_t *out_len,
+    ssize_t *out_err)
+{
+    if (!stream || !out_buffer || !out_len)
+    {
+        if (out_err)
+        {
+            *out_err = LIBP2P_ERR_NULL_PTR;
+        }
+        return LANTERN_REQRESP_ERR_INVALID_PARAM;
+    }
+    if (declared_len > (uint64_t)LANTERN_REQRESP_MAX_CHUNK_BYTES
+        || declared_len > (uint64_t)SIZE_MAX)
+    {
+        if (out_err)
+        {
+            *out_err = LIBP2P_ERR_MSG_TOO_LARGE;
+        }
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "%s declared length invalid=%" PRIu64,
+            label ? label : "chunk",
+            declared_len);
+        return LANTERN_REQRESP_ERR_PAYLOAD_TOO_LARGE;
+    }
+
+    size_t max_payload = 0;
+    if (lantern_snappy_max_compressed_size((size_t)declared_len, &max_payload) != LANTERN_SNAPPY_OK)
+    {
+        if (out_err)
+        {
+            *out_err = LIBP2P_ERR_INTERNAL;
+        }
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "%s failed to compute max snappy size declared_len=%" PRIu64,
+            label ? label : "chunk",
+            declared_len);
+        return LANTERN_REQRESP_ERR_STREAM_READ;
+    }
+    if (max_payload == 0)
+    {
+        max_payload = 1u;
+    }
+
+    uint8_t *buffer = malloc(max_payload);
+    if (!buffer)
+    {
+        if (out_err)
+        {
+            *out_err = -ENOMEM;
+        }
+        lantern_log_error(
+            "reqresp",
+            meta,
+            "%s payload allocation failed bytes=%zu",
+            label ? label : "chunk",
+            max_payload);
+        return LANTERN_REQRESP_ERR_ALLOC;
+    }
+
+    size_t collected = 0;
+    while (true)
+    {
+        uint8_t chunk_header[4] = {0};
+        size_t header_read = 0;
+        ssize_t read_err = 0;
+        if (read_stream_exact(
+                stream,
+                meta,
+                label ? label : "chunk",
+                chunk_header,
+                sizeof(chunk_header),
+                deadline_ms,
+                &header_read,
+                &read_err)
+            != 0)
+        {
+            free(buffer);
+            if (out_err)
+            {
+                *out_err = read_err;
+            }
+            return LANTERN_REQRESP_ERR_STREAM_READ;
+        }
+        if (collected + sizeof(chunk_header) > max_payload)
+        {
+            free(buffer);
+            if (out_err)
+            {
+                *out_err = LIBP2P_ERR_MSG_TOO_LARGE;
+            }
+            lantern_log_warn(
+                "reqresp",
+                meta,
+                "%s payload exceeds max snappy size bytes=%zu",
+                label ? label : "chunk",
+                max_payload);
+            return LANTERN_REQRESP_ERR_PAYLOAD_TOO_LARGE;
+        }
+        memcpy(buffer + collected, chunk_header, sizeof(chunk_header));
+        collected += sizeof(chunk_header);
+
+        uint32_t chunk_len = (uint32_t)chunk_header[1]
+            | ((uint32_t)chunk_header[2] << 8)
+            | ((uint32_t)chunk_header[3] << 16);
+        if (chunk_len > 0)
+        {
+            if (collected + chunk_len > max_payload)
+            {
+                free(buffer);
+                if (out_err)
+                {
+                    *out_err = LIBP2P_ERR_MSG_TOO_LARGE;
+                }
+                lantern_log_warn(
+                    "reqresp",
+                    meta,
+                    "%s payload exceeds max snappy size bytes=%zu",
+                    label ? label : "chunk",
+                    max_payload);
+                return LANTERN_REQRESP_ERR_PAYLOAD_TOO_LARGE;
+            }
+            if (read_stream_exact(
+                    stream,
+                    meta,
+                    label ? label : "chunk",
+                    buffer + collected,
+                    chunk_len,
+                    deadline_ms,
+                    &header_read,
+                    &read_err)
+                != 0)
+            {
+                free(buffer);
+                if (out_err)
+                {
+                    *out_err = read_err;
+                }
+                return LANTERN_REQRESP_ERR_STREAM_READ;
+            }
+            collected += chunk_len;
+        }
+
+        size_t uncompressed_len = 0;
+        if (lantern_snappy_uncompressed_length(buffer, collected, &uncompressed_len) == LANTERN_SNAPPY_OK)
+        {
+            if (uncompressed_len == (size_t)declared_len)
+            {
+                break;
+            }
+            if (uncompressed_len > (size_t)declared_len)
+            {
+                free(buffer);
+                if (out_err)
+                {
+                    *out_err = LIBP2P_ERR_INTERNAL;
+                }
+                lantern_log_warn(
+                    "reqresp",
+                    meta,
+                    "%s payload length mismatch declared=%" PRIu64 " decoded=%zu",
+                    label ? label : "chunk",
+                    declared_len,
+                    uncompressed_len);
+                return LANTERN_REQRESP_ERR_STREAM_READ;
+            }
+        }
+
+        if (collected >= max_payload)
+        {
+            free(buffer);
+            if (out_err)
+            {
+                *out_err = LIBP2P_ERR_MSG_TOO_LARGE;
+            }
+            lantern_log_warn(
+                "reqresp",
+                meta,
+                "%s payload exceeds max snappy size bytes=%zu",
+                label ? label : "chunk",
+                max_payload);
+            return LANTERN_REQRESP_ERR_PAYLOAD_TOO_LARGE;
+        }
+    }
+
+    if (out_err)
+    {
+        *out_err = 0;
+    }
+    *out_buffer = buffer;
+    *out_len = collected;
+    return 0;
+}
+
 
 /**
  * @brief Reads a single byte from a stream, retrying on AGAIN.
@@ -261,6 +496,7 @@ static int read_stream_byte_with_retry(
     libp2p_stream_t *stream,
     const struct lantern_log_metadata *meta,
     const char *label,
+    uint64_t deadline_ms,
     uint8_t *out_byte,
     ssize_t *out_err)
 {
@@ -275,9 +511,9 @@ static int read_stream_byte_with_retry(
 
     while (true)
     {
-        int rc = set_stream_deadline(
+        int rc = set_stream_deadline_remaining(
             stream,
-            LANTERN_REQRESP_STALL_TIMEOUT_MS,
+            deadline_ms,
             meta,
             label,
             out_err);
@@ -326,13 +562,15 @@ static int read_response_code_prefix(
     bool expect_code,
     const struct lantern_log_metadata *meta,
     const char *peer_text,
+    uint64_t deadline_ms,
     uint8_t *out_frame_code,
     uint8_t *out_response_code_byte,
-    bool *out_legacy_no_code,
     uint8_t *out_response_code,
     ssize_t *out_err)
 {
-    if (!out_frame_code || !out_response_code_byte || !out_legacy_no_code)
+    (void)service;
+    (void)peer_text;
+    if (!out_frame_code || !out_response_code_byte)
     {
         if (out_err)
         {
@@ -343,7 +581,6 @@ static int read_response_code_prefix(
 
     *out_frame_code = 0;
     *out_response_code_byte = 0;
-    *out_legacy_no_code = !expect_code;
 
     if (!expect_code)
     {
@@ -364,6 +601,7 @@ static int read_response_code_prefix(
         stream,
         meta,
         "response code",
+        deadline_ms,
         &response_code_byte,
         &read_err);
     if (rc != 0)
@@ -379,36 +617,24 @@ static int read_response_code_prefix(
     *out_frame_code = response_code_byte;
     *out_response_code_byte = response_code_byte;
 
-    if (response_code_byte > LANTERN_REQRESP_RESPONSE_SERVER_ERROR)
+    uint8_t mapped_code = response_code_byte;
+    if (response_code_byte > LANTERN_REQRESP_RESPONSE_RESOURCE_UNAVAILABLE)
     {
-        *out_legacy_no_code = true;
-        if (out_response_code)
-        {
-            *out_response_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
-        }
+        mapped_code = (response_code_byte <= 127)
+            ? LANTERN_REQRESP_RESPONSE_SERVER_ERROR
+            : LANTERN_REQRESP_RESPONSE_INVALID_REQUEST;
+    }
 
-        lantern_log_trace(
-            "reqresp",
-            meta,
-            "legacy response missing code, treating first byte as header (0x%02x)",
-            (unsigned)response_code_byte);
-        lantern_log_info(
-            "reqresp",
-            meta,
-            "response legacy framing first_byte=0x%02x",
-            (unsigned)response_code_byte);
-        hint_peer_legacy_framing(service, peer_text, true);
-    }
-    else
+    if (out_response_code)
     {
-        *out_legacy_no_code = false;
-        if (out_response_code)
-        {
-            *out_response_code = response_code_byte;
-        }
-        lantern_log_info("reqresp", meta, "response code=%u", (unsigned)response_code_byte);
-        hint_peer_legacy_framing(service, peer_text, false);
+        *out_response_code = mapped_code;
     }
+    lantern_log_info(
+        "reqresp",
+        meta,
+        "response code=%u mapped=%u",
+        (unsigned)response_code_byte,
+        (unsigned)mapped_code);
 
     if (out_err)
     {
@@ -424,9 +650,8 @@ static int read_response_code_prefix(
 static int read_payload_header_first_byte(
     libp2p_stream_t *stream,
     bool expect_code,
-    bool legacy_no_code,
-    uint8_t response_code_byte,
     const struct lantern_log_metadata *meta,
+    uint64_t deadline_ms,
     uint8_t *out_header_first_byte,
     ssize_t *out_err)
 {
@@ -439,21 +664,14 @@ static int read_payload_header_first_byte(
         return LANTERN_REQRESP_ERR_INVALID_PARAM;
     }
 
-    if (legacy_no_code && expect_code)
-    {
-        *out_header_first_byte = response_code_byte;
-        if (out_err)
-        {
-            *out_err = 0;
-        }
-        return 0;
-    }
+    (void)expect_code;
 
     ssize_t read_err = 0;
     int rc = read_stream_byte_with_retry(
         stream,
         meta,
         "payload header",
+        deadline_ms,
         out_header_first_byte,
         &read_err);
     if (rc != 0)
@@ -483,6 +701,7 @@ static int read_stream_exact(
     const char *label,
     uint8_t *buffer,
     size_t buffer_len,
+    uint64_t deadline_ms,
     size_t *out_read,
     ssize_t *out_err)
 {
@@ -498,9 +717,9 @@ static int read_stream_exact(
     size_t collected = 0;
     while (collected < buffer_len)
     {
-        int rc = set_stream_deadline(
+        int rc = set_stream_deadline_remaining(
             stream,
-            LANTERN_REQRESP_STALL_TIMEOUT_MS,
+            deadline_ms,
             meta,
             label,
             out_err);
@@ -566,7 +785,8 @@ static int read_varint_header_from_first_byte(
     size_t *out_consumed,
     ssize_t *out_err,
     const struct lantern_log_metadata *meta,
-    const char *label)
+    const char *label,
+    uint64_t deadline_ms)
 {
     if (!stream || !header || !out_value || !out_consumed)
     {
@@ -600,7 +820,7 @@ static int read_varint_header_from_first_byte(
 
         uint8_t next_byte = 0;
         ssize_t read_err = 0;
-        int rc = read_stream_byte_with_retry(stream, meta, label, &next_byte, &read_err);
+        int rc = read_stream_byte_with_retry(stream, meta, label, deadline_ms, &next_byte, &read_err);
         if (rc != 0)
         {
             if (out_err)
@@ -703,7 +923,8 @@ static int read_payload_bytes(
     uint8_t **out_buffer,
     ssize_t *out_err,
     const struct lantern_log_metadata *meta,
-    const char *label)
+    const char *label,
+    uint64_t deadline_ms)
 {
     if (!stream || !out_buffer)
     {
@@ -732,7 +953,15 @@ static int read_payload_bytes(
 
     size_t collected = 0;
     ssize_t read_err = 0;
-    int rc = read_stream_exact(stream, meta, label, buffer, payload_size, &collected, &read_err);
+    int rc = read_stream_exact(
+        stream,
+        meta,
+        label,
+        buffer,
+        payload_size,
+        deadline_ms,
+        &collected,
+        &read_err);
     if (rc != 0)
     {
         if (collected > 0)
@@ -880,15 +1109,14 @@ int stream_write_all(
  *
  * @spec subspecs/networking/reqresp/message.py - Response framing
  *
- * Handles both modern (with response code) and legacy (no code) framing.
+ * Handles response framing with a required response code byte.
  * The response code byte indicates success (0), invalid request (1),
- * or server error (2). Legacy peers omit this byte entirely.
+ * server error (2), or resource unavailable (3). Unknown codes are
+ * mapped per spec.
  *
  * Protocol flow:
  * 1. Read response code byte (if expected)
- * 2. Detect legacy framing if code > 2 (treat as varint header)
- * 3. Read varint-prefixed payload
- * 4. Update peer preference tracking for future requests
+ * 2. Read varint-prefixed payload
  *
  * @param service               Reqresp service (may be NULL)
  * @param stream                libp2p stream
@@ -954,18 +1182,20 @@ int lantern_reqresp_read_response_chunk(
     bool expect_code = response_code_pending
         ? *response_code_pending
         : protocol_expects_response_code(protocol);
+    uint64_t start_ms = reqresp_now_ms();
+    uint64_t ttfb_deadline_ms = start_ms + LANTERN_REQRESP_TTFB_TIMEOUT_MS;
+    uint64_t resp_deadline_ms = start_ms + LANTERN_REQRESP_RESP_TIMEOUT_MS;
     uint8_t frame_code = 0;
     uint8_t response_code_byte = 0;
-    bool legacy_no_code = false;
     int rc = read_response_code_prefix(
         service,
         stream,
         expect_code,
         &meta,
         peer_text,
+        ttfb_deadline_ms,
         &frame_code,
         &response_code_byte,
-        &legacy_no_code,
         out_response_code,
         out_err);
     if (rc != 0)
@@ -978,12 +1208,12 @@ int lantern_reqresp_read_response_chunk(
     }
 
     uint8_t header_first_byte = 0;
+    uint64_t header_deadline_ms = expect_code ? resp_deadline_ms : ttfb_deadline_ms;
     rc = read_payload_header_first_byte(
         stream,
         expect_code,
-        legacy_no_code,
-        response_code_byte,
         &meta,
+        header_deadline_ms,
         &header_first_byte,
         out_err);
     if (rc != 0)
@@ -1005,7 +1235,8 @@ int lantern_reqresp_read_response_chunk(
         out_len,
         out_err,
         &meta,
-        "chunk");
+        "chunk",
+        resp_deadline_ms);
 
     return payload_rc;
 }
@@ -1043,7 +1274,8 @@ static int read_varint_payload_chunk(
     size_t *out_len,
     ssize_t *out_err,
     const struct lantern_log_metadata *meta,
-    const char *label)
+    const char *label,
+    uint64_t deadline_ms)
 {
     if (!stream || !out_data || !out_len)
     {
@@ -1066,7 +1298,8 @@ static int read_varint_payload_chunk(
         &consumed,
         out_err,
         meta,
-        label);
+        label,
+        deadline_ms);
     if (rc != 0)
     {
         return rc;
@@ -1080,20 +1313,17 @@ static int read_varint_payload_chunk(
         return rc;
     }
 
-    if (payload_len == 0)
-    {
-        *out_data = NULL;
-        *out_len = 0;
-        if (out_err)
-        {
-            *out_err = 0;
-        }
-        return 0;
-    }
-
-    size_t payload_size = (size_t)payload_len;
     uint8_t *buffer = NULL;
-    rc = read_payload_bytes(stream, payload_size, &buffer, out_err, meta, label);
+    size_t payload_size = 0;
+    rc = read_snappy_framed_payload(
+        stream,
+        meta,
+        label,
+        payload_len,
+        deadline_ms,
+        &buffer,
+        &payload_size,
+        out_err);
     if (rc != 0)
     {
         return rc;

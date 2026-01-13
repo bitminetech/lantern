@@ -14,6 +14,7 @@
 #include "lantern/consensus/ssz.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
+#include "lantern/support/time.h"
 
 #include "libp2p/events.h"
 #include "libp2p/host.h"
@@ -111,18 +112,11 @@ struct status_request_ctx {
     char peer_text[128];
     const char *protocol_id;
     uint64_t debug_trace_id;
-    bool legacy_framing;
 };
 
 struct status_request_worker_args {
     struct status_request_ctx *ctx;
     libp2p_stream_t *stream;
-};
-
-enum status_payload_kind {
-    STATUS_PAYLOAD_FRAMED_SNAPPY = 0,
-    STATUS_PAYLOAD_RAW_SNAPPY = 1,
-    STATUS_PAYLOAD_RAW_SSZ = 2,
 };
 
 static void log_stream_error(const char *phase, const char *protocol_id, const char *peer_id);
@@ -134,7 +128,6 @@ static int status_request_launch(
     struct lantern_reqresp_service *service,
     const peer_id_t *peer_id,
     const char *peer_id_text,
-    bool legacy_framing,
     bool notify_on_failure);
 static void lantern_reqresp_service_clear(struct lantern_reqresp_service *service) {
     if (!service) {
@@ -147,13 +140,8 @@ static void lantern_reqresp_service_clear(struct lantern_reqresp_service *servic
     service->callbacks.status_failure = NULL;
     service->callbacks.collect_blocks = NULL;
     service->status_server = NULL;
-    service->status_server_legacy = NULL;
     service->blocks_server = NULL;
-    service->blocks_server_legacy = NULL;
-    service->blocks_server_bare = NULL;
     service->event_subscription = NULL;
-    lantern_string_list_reset(&service->legacy_peers);
-    lantern_string_list_init(&service->legacy_peers);
 }
 
 void lantern_reqresp_service_init(struct lantern_reqresp_service *service) {
@@ -161,16 +149,6 @@ void lantern_reqresp_service_init(struct lantern_reqresp_service *service) {
         return;
     }
     memset(service, 0, sizeof(*service));
-    service->lock_initialized = 0;
-    lantern_string_list_init(&service->legacy_peers);
-}
-
-static void destroy_lock(struct lantern_reqresp_service *service) {
-    if (!service || !service->lock_initialized) {
-        return;
-    }
-    pthread_mutex_destroy(&service->lock);
-    service->lock_initialized = 0;
 }
 
 void lantern_reqresp_service_reset(struct lantern_reqresp_service *service) {
@@ -186,104 +164,11 @@ void lantern_reqresp_service_reset(struct lantern_reqresp_service *service) {
     if (service->status_server && host) {
         (void)libp2p_host_unlisten(host, service->status_server);
     }
-    if (service->status_server_legacy && host) {
-        (void)libp2p_host_unlisten(host, service->status_server_legacy);
-    }
 
     if (service->blocks_server && host) {
         (void)libp2p_host_unlisten(host, service->blocks_server);
     }
-    if (service->blocks_server_legacy && host) {
-        (void)libp2p_host_unlisten(host, service->blocks_server_legacy);
-    }
-    if (service->blocks_server_bare && host) {
-        (void)libp2p_host_unlisten(host, service->blocks_server_bare);
-    }
-
-    destroy_lock(service);
     lantern_reqresp_service_clear(service);
-}
-
-static void ensure_lock(struct lantern_reqresp_service *service) {
-    if (!service) {
-        return;
-    }
-    if (!service->lock_initialized) {
-        if (pthread_mutex_init(&service->lock, NULL) == 0) {
-            service->lock_initialized = 1;
-        }
-    }
-}
-
-void lantern_reqresp_service_hint_peer_legacy(
-    struct lantern_reqresp_service *service,
-    const char *peer_id_text,
-    bool legacy) {
-    if (!service || !peer_id_text || peer_id_text[0] == '\0') {
-        return;
-    }
-    ensure_lock(service);
-    if (!service->lock_initialized) {
-        return;
-    }
-
-    if (pthread_mutex_lock(&service->lock) != 0) {
-        return;
-    }
-
-    bool found = false;
-    for (size_t i = 0; i < service->legacy_peers.len; ++i) {
-        if (service->legacy_peers.items[i]
-            && strcmp(service->legacy_peers.items[i], peer_id_text) == 0) {
-            found = true;
-            break;
-        }
-    }
-
-    if (legacy) {
-        if (!found) {
-            (void)lantern_string_list_append(&service->legacy_peers, peer_id_text);
-        }
-    } else if (found) {
-        for (size_t i = 0; i < service->legacy_peers.len; ++i) {
-            if (service->legacy_peers.items[i]
-                && strcmp(service->legacy_peers.items[i], peer_id_text) == 0) {
-                free(service->legacy_peers.items[i]);
-                for (size_t j = i; j + 1 < service->legacy_peers.len; ++j) {
-                    service->legacy_peers.items[j] = service->legacy_peers.items[j + 1];
-                }
-                service->legacy_peers.len--;
-                service->legacy_peers.items[service->legacy_peers.len] = NULL;
-                break;
-            }
-        }
-    }
-
-    pthread_mutex_unlock(&service->lock);
-}
-
-int lantern_reqresp_service_peer_prefers_legacy(
-    const struct lantern_reqresp_service *service,
-    const char *peer_id_text) {
-    if (!service || !peer_id_text || peer_id_text[0] == '\0') {
-        return 0;
-    }
-    if (!service->lock_initialized) {
-        return 0;
-    }
-    if (pthread_mutex_lock((pthread_mutex_t *)&service->lock) != 0) {
-        return 0;
-    }
-    int result = 0;
-    for (size_t i = 0; i < service->legacy_peers.len; ++i) {
-        if (service->legacy_peers.items[i]
-            && strcmp(service->legacy_peers.items[i], peer_id_text) == 0) {
-            result = 1;
-            break;
-        }
-    }
-    pthread_mutex_unlock((pthread_mutex_t *)&service->lock);
-    return result;
 }
 
 static void describe_peer(const peer_id_t *peer, char *buffer, size_t length) {
@@ -356,6 +241,63 @@ static void log_payload_preview(
         ellipsis);
 }
 
+static uint64_t reqresp_now_ms(void) {
+    double now_sec = lantern_time_now_seconds();
+    if (now_sec <= 0.0) {
+        return 0;
+    }
+    double now_ms = now_sec * 1000.0;
+    if (now_ms >= (double)UINT64_MAX) {
+        return UINT64_MAX;
+    }
+    return (uint64_t)now_ms;
+}
+
+static int set_stream_deadline_remaining(
+    libp2p_stream_t *stream,
+    uint64_t deadline_ms,
+    const struct lantern_log_metadata *meta,
+    const char *label,
+    ssize_t *out_err) {
+    if (!stream) {
+        if (out_err) {
+            *out_err = LIBP2P_ERR_NULL_PTR;
+        }
+        return -1;
+    }
+    uint64_t now_ms = reqresp_now_ms();
+    if (now_ms >= deadline_ms) {
+        if (out_err) {
+            *out_err = LIBP2P_ERR_TIMEOUT;
+        }
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "%s timed out",
+            label ? label : "stream");
+        return -1;
+    }
+    uint64_t remaining_ms = deadline_ms - now_ms;
+    int rc = libp2p_stream_set_deadline(stream, remaining_ms);
+    if (rc != 0) {
+        if (out_err) {
+            *out_err = (ssize_t)rc;
+        }
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "%s failed to set deadline_ms=%" PRIu64 " err=%d",
+            label ? label : "stream",
+            remaining_ms,
+            rc);
+        return -1;
+    }
+    if (out_err) {
+        *out_err = 0;
+    }
+    return 0;
+}
+
 static bool payload_is_snappy_framed(const uint8_t *data, size_t len) {
     return lantern_snappy_is_framed(data, len);
 }
@@ -363,26 +305,17 @@ static bool payload_is_snappy_framed(const uint8_t *data, size_t len) {
 static int decode_status_payload(
     const uint8_t *data,
     size_t data_len,
-    LanternStatusMessage *out_status,
-    enum status_payload_kind *out_kind) {
+    LanternStatusMessage *out_status) {
     if (!data || !out_status) {
         return -1;
     }
-    bool framed = payload_is_snappy_framed(data, data_len);
-    if (lantern_network_status_decode_snappy(out_status, data, data_len) == 0) {
-        if (out_kind) {
-            *out_kind = framed ? STATUS_PAYLOAD_FRAMED_SNAPPY : STATUS_PAYLOAD_RAW_SNAPPY;
-        }
-        return 0;
+    if (!payload_is_snappy_framed(data, data_len)) {
+        return -1;
     }
-    const size_t expected_len = 2u * LANTERN_CHECKPOINT_SSZ_SIZE;
-    if (data_len == expected_len && lantern_network_status_decode(out_status, data, data_len) == 0) {
-        if (out_kind) {
-            *out_kind = STATUS_PAYLOAD_RAW_SSZ;
-        }
-        return 0;
+    if (lantern_network_status_decode_snappy(out_status, data, data_len) != 0) {
+        return -1;
     }
-    return -1;
+    return 0;
 }
 
 static int read_payload_bytes(
@@ -390,10 +323,10 @@ static int read_payload_bytes(
     const char *label,
     const struct lantern_log_metadata *meta,
     uint64_t declared_len,
+    uint64_t deadline_ms,
     uint8_t **out_data,
     size_t *out_len,
     ssize_t *out_err) {
-    const uint32_t stall_timeout_ms = lantern_reqresp_stall_timeout_ms();
     bool debug_bytes = lantern_reqresp_debug_bytes_enabled();
     char debug_label[96];
     if (debug_bytes) {
@@ -448,7 +381,10 @@ static int read_payload_bytes(
 
     size_t collected = 0;
     while (collected < payload_len) {
-        (void)libp2p_stream_set_deadline(stream, stall_timeout_ms);
+        if (set_stream_deadline_remaining(stream, deadline_ms, meta, label, out_err) != 0) {
+            free(buffer);
+            return -1;
+        }
         ssize_t n = libp2p_stream_read(stream, buffer + collected, payload_len - collected);
         if (n > 0) {
             if (debug_bytes) {
@@ -494,6 +430,262 @@ static int read_payload_bytes(
     return 0;
 }
 
+static int read_stream_exact(
+    libp2p_stream_t *stream,
+    const struct lantern_log_metadata *meta,
+    const char *label,
+    uint8_t *buffer,
+    size_t buffer_len,
+    uint64_t deadline_ms,
+    size_t *out_read,
+    ssize_t *out_err) {
+    bool debug_bytes = lantern_reqresp_debug_bytes_enabled();
+    char debug_label[96];
+    if (debug_bytes) {
+        const char *base = (label && label[0]) ? label : "stream";
+        if (snprintf(debug_label, sizeof(debug_label), "%s bytes", base) < 0) {
+            debug_label[0] = '\0';
+        }
+    }
+    if (!stream || !buffer) {
+        if (out_err) {
+            *out_err = LIBP2P_ERR_NULL_PTR;
+        }
+        return -1;
+    }
+    if (buffer_len == 0) {
+        if (out_read) {
+            *out_read = 0;
+        }
+        if (out_err) {
+            *out_err = 0;
+        }
+        return 0;
+    }
+
+    size_t collected = 0;
+    while (collected < buffer_len) {
+        if (set_stream_deadline_remaining(stream, deadline_ms, meta, label, out_err) != 0) {
+            if (out_read) {
+                *out_read = collected;
+            }
+            return -1;
+        }
+        ssize_t n = libp2p_stream_read(stream, buffer + collected, buffer_len - collected);
+        if (n > 0) {
+            if (debug_bytes) {
+                size_t chunk_offset = collected;
+                lantern_reqresp_debug_log_bytes(
+                    debug_label,
+                    meta,
+                    chunk_offset,
+                    buffer + chunk_offset,
+                    (size_t)n);
+            }
+            collected += (size_t)n;
+            continue;
+        }
+        if (n == (ssize_t)LIBP2P_ERR_AGAIN) {
+            continue;
+        }
+        (void)libp2p_stream_set_deadline(stream, 0);
+        if (out_read) {
+            *out_read = collected;
+        }
+        if (out_err) {
+            *out_err = (n == 0) ? (ssize_t)LIBP2P_ERR_EOF : n;
+        }
+        const char *err_name = stream_error_name(out_err ? *out_err : n);
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "%s read failed err=%s(%zd) collected=%zu/%zu",
+            label ? label : "stream",
+            err_name ? err_name : "unknown",
+            out_err ? *out_err : n,
+            collected,
+            buffer_len);
+        return -1;
+    }
+    (void)libp2p_stream_set_deadline(stream, 0);
+    if (out_read) {
+        *out_read = collected;
+    }
+    if (out_err) {
+        *out_err = 0;
+    }
+    return 0;
+}
+
+static int read_snappy_framed_payload(
+    libp2p_stream_t *stream,
+    const char *label,
+    const struct lantern_log_metadata *meta,
+    uint64_t declared_len,
+    uint64_t deadline_ms,
+    uint8_t **out_data,
+    size_t *out_len,
+    ssize_t *out_err) {
+    if (!stream || !out_data || !out_len) {
+        if (out_err) {
+            *out_err = LIBP2P_ERR_NULL_PTR;
+        }
+        return -1;
+    }
+    if (declared_len > LANTERN_REQRESP_MAX_CHUNK_BYTES || declared_len > SIZE_MAX) {
+        if (out_err) {
+            *out_err = LIBP2P_ERR_MSG_TOO_LARGE;
+        }
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "%s declared length invalid=%" PRIu64,
+            label ? label : "stream",
+            declared_len);
+        return -1;
+    }
+
+    size_t max_payload = 0;
+    if (lantern_snappy_max_compressed_size((size_t)declared_len, &max_payload) != LANTERN_SNAPPY_OK) {
+        if (out_err) {
+            *out_err = LIBP2P_ERR_INTERNAL;
+        }
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "%s failed to compute max snappy size for declared_len=%" PRIu64,
+            label ? label : "stream",
+            declared_len);
+        return -1;
+    }
+    if (max_payload == 0) {
+        max_payload = 1u;
+    }
+
+    uint8_t *buffer = (uint8_t *)malloc(max_payload);
+    if (!buffer) {
+        if (out_err) {
+            *out_err = -ENOMEM;
+        }
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "%s payload allocation failed bytes=%zu",
+            label ? label : "stream",
+            max_payload);
+        return -1;
+    }
+
+    size_t collected = 0;
+    while (true) {
+        uint8_t chunk_header[4] = {0};
+        size_t read_len = 0;
+        if (read_stream_exact(
+                stream,
+                meta,
+                label ? label : "stream",
+                chunk_header,
+                sizeof(chunk_header),
+                deadline_ms,
+                &read_len,
+                out_err)
+            != 0) {
+            free(buffer);
+            return -1;
+        }
+        if (collected + sizeof(chunk_header) > max_payload) {
+            free(buffer);
+            if (out_err) {
+                *out_err = LIBP2P_ERR_MSG_TOO_LARGE;
+            }
+            lantern_log_warn(
+                "reqresp",
+                meta,
+                "%s payload exceeds max snappy size bytes=%zu",
+                label ? label : "stream",
+                max_payload);
+            return -1;
+        }
+        memcpy(buffer + collected, chunk_header, sizeof(chunk_header));
+        collected += sizeof(chunk_header);
+
+        uint32_t chunk_len = (uint32_t)chunk_header[1]
+            | ((uint32_t)chunk_header[2] << 8)
+            | ((uint32_t)chunk_header[3] << 16);
+        if (chunk_len > 0) {
+            if (collected + chunk_len > max_payload) {
+                free(buffer);
+                if (out_err) {
+                    *out_err = LIBP2P_ERR_MSG_TOO_LARGE;
+                }
+                lantern_log_warn(
+                    "reqresp",
+                    meta,
+                    "%s payload exceeds max snappy size bytes=%zu",
+                    label ? label : "stream",
+                    max_payload);
+                return -1;
+            }
+            if (read_stream_exact(
+                    stream,
+                    meta,
+                    label ? label : "stream",
+                    buffer + collected,
+                    chunk_len,
+                    deadline_ms,
+                    &read_len,
+                    out_err)
+                != 0) {
+                free(buffer);
+                return -1;
+            }
+            collected += chunk_len;
+        }
+
+        size_t uncompressed_len = 0;
+        if (lantern_snappy_uncompressed_length(buffer, collected, &uncompressed_len) == LANTERN_SNAPPY_OK) {
+            if (uncompressed_len == (size_t)declared_len) {
+                break;
+            }
+            if (uncompressed_len > (size_t)declared_len) {
+                free(buffer);
+                if (out_err) {
+                    *out_err = LIBP2P_ERR_INTERNAL;
+                }
+                lantern_log_warn(
+                    "reqresp",
+                    meta,
+                    "%s payload length mismatch declared=%" PRIu64 " decoded=%zu",
+                    label ? label : "stream",
+                    declared_len,
+                    uncompressed_len);
+                return -1;
+            }
+        }
+
+        if (collected >= max_payload) {
+            free(buffer);
+            if (out_err) {
+                *out_err = LIBP2P_ERR_MSG_TOO_LARGE;
+            }
+            lantern_log_warn(
+                "reqresp",
+                meta,
+                "%s payload exceeds max snappy size bytes=%zu",
+                label ? label : "stream",
+                max_payload);
+            return -1;
+        }
+    }
+
+    if (out_err) {
+        *out_err = 0;
+    }
+    *out_data = buffer;
+    *out_len = collected;
+    return 0;
+}
+
 static int read_length_prefixed_stream(
     libp2p_stream_t *stream,
     const char *label,
@@ -501,7 +693,6 @@ static int read_length_prefixed_stream(
     uint8_t **out_data,
     size_t *out_len,
     ssize_t *out_err) {
-    const uint32_t stall_timeout_ms = lantern_reqresp_stall_timeout_ms();
     bool debug_bytes = lantern_reqresp_debug_bytes_enabled();
     char debug_header_label[96];
     if (debug_bytes) {
@@ -518,6 +709,9 @@ static int read_length_prefixed_stream(
     }
 
     struct lantern_log_metadata meta = {.peer = peer_text};
+    uint64_t start_ms = reqresp_now_ms();
+    uint64_t ttfb_deadline_ms = start_ms + LANTERN_REQRESP_TTFB_TIMEOUT_MS;
+    uint64_t resp_deadline_ms = start_ms + LANTERN_REQRESP_RESP_TIMEOUT_MS;
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_used = 0;
     size_t consumed = 0;
@@ -529,7 +723,11 @@ static int read_length_prefixed_stream(
     }
 
     while (header_used < sizeof(header)) {
-        (void)libp2p_stream_set_deadline(stream, stall_timeout_ms);
+        uint64_t deadline_ms = header_used == 0 ? ttfb_deadline_ms : resp_deadline_ms;
+        if (set_stream_deadline_remaining(stream, deadline_ms, &meta, label, out_err) != 0) {
+            last_err = out_err ? *out_err : (ssize_t)LIBP2P_ERR_TIMEOUT;
+            break;
+        }
         ssize_t n = libp2p_stream_read(stream, &header[header_used], 1);
         if (n == 1) {
             if (debug_bytes) {
@@ -589,7 +787,7 @@ static int read_length_prefixed_stream(
         last_err = LIBP2P_ERR_INTERNAL;
     }
 
-    if (payload_len == 0 || payload_len > LANTERN_REQRESP_MAX_CHUNK_BYTES || payload_len > SIZE_MAX) {
+    if (payload_len > LANTERN_REQRESP_MAX_CHUNK_BYTES || payload_len > SIZE_MAX) {
         if (last_err == 0) {
             last_err = LIBP2P_ERR_MSG_TOO_LARGE;
         }
@@ -617,19 +815,24 @@ static int read_length_prefixed_stream(
         return -1;
     }
 
-    uint8_t *raw = NULL;
-    size_t raw_len = 0;
-    if (read_payload_bytes(stream, label, &meta, payload_len, &raw, &raw_len, out_err) != 0) {
+    if (read_snappy_framed_payload(
+            stream,
+            label,
+            &meta,
+            payload_len,
+            resp_deadline_ms,
+            out_data,
+            out_len,
+            out_err)
+        != 0) {
         return -1;
     }
-    *out_data = raw;
-    *out_len = raw_len;
     lantern_log_debug(
         "reqresp",
         &meta,
         "%s payload read complete bytes=%zu",
         label ? label : "stream",
-        raw_len);
+        *out_len);
     return 0;
 }
 
@@ -759,16 +962,16 @@ static int send_response_chunk(
         payload_len,
         raw_len);
 
-    /* The varint prefix indicates the compressed payload size (payload_len). */
+    /* The varint prefix indicates the uncompressed payload size (raw_len). */
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
-    if (unsigned_varint_encode(payload_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
+    if (unsigned_varint_encode(raw_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
         lantern_log_error(
             "reqresp",
             meta,
             "%s payload header encode failed bytes=%zu",
             phase ? phase : "response",
-            payload_len);
+            raw_len);
         return -1;
     }
 
@@ -846,6 +1049,68 @@ static int send_response_chunk(
     return 0;
 }
 
+static int send_error_response(
+    libp2p_stream_t *stream,
+    const struct lantern_log_metadata *meta,
+    const char *protocol_id,
+    const char *peer_text,
+    uint8_t response_code,
+    const char *message) {
+    if (!stream) {
+        return -1;
+    }
+    const uint8_t *payload = (const uint8_t *)(message ? message : "");
+    size_t raw_len = message ? strlen(message) : 0;
+
+    size_t max_payload = 0;
+    if (lantern_snappy_max_compressed_size(raw_len, &max_payload) != LANTERN_SNAPPY_OK) {
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "error response snappy size failed bytes=%zu",
+            raw_len);
+        return -1;
+    }
+    if (max_payload == 0) {
+        max_payload = 1u;
+    }
+
+    uint8_t *compressed = (uint8_t *)malloc(max_payload);
+    if (!compressed) {
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "error response allocation failed bytes=%zu",
+            max_payload);
+        return -1;
+    }
+
+    size_t written = 0;
+    if (lantern_snappy_compress(payload, raw_len, compressed, max_payload, &written) != LANTERN_SNAPPY_OK) {
+        free(compressed);
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "error response compress failed bytes=%zu",
+            raw_len);
+        return -1;
+    }
+
+    int rc = send_response_chunk(
+        stream,
+        meta,
+        protocol_id,
+        "error response",
+        peer_text,
+        true,
+        response_code,
+        compressed,
+        written,
+        raw_len);
+    free(compressed);
+    return rc;
+}
+
 static void status_request_notify_failure(
     struct lantern_reqresp_service *service,
     const char *peer_text,
@@ -914,7 +1179,6 @@ static void *status_worker(void *arg) {
     char peer_text[128];
     describe_peer(libp2p_stream_remote_peer(stream), peer_text, sizeof(peer_text));
 
-    enum status_payload_kind request_kind = STATUS_PAYLOAD_FRAMED_SNAPPY;
     bool include_response_code = true;
 
     const struct lantern_log_metadata stream_meta = {.peer = peer_text[0] ? peer_text : NULL};
@@ -948,6 +1212,13 @@ static void *status_worker(void *arg) {
             err_name ? err_name : "unknown",
             read_err);
         log_stream_error("read", protocol_id, peer_text[0] ? peer_text : NULL);
+        (void)send_error_response(
+            stream,
+            &stream_meta,
+            protocol_id,
+            peer_text[0] ? peer_text : NULL,
+            LANTERN_REQRESP_RESPONSE_INVALID_REQUEST,
+            "invalid request");
         close_stream(stream);
         return NULL;
     }
@@ -965,28 +1236,29 @@ static void *status_worker(void *arg) {
     LanternStatusMessage remote_status;
     memset(&remote_status, 0, sizeof(remote_status));
     if (request_len == 0
-        || decode_status_payload(request, request_len, &remote_status, &request_kind) != 0) {
+        || decode_status_payload(request, request_len, &remote_status) != 0) {
         snprintf(trace_label, sizeof(trace_label), "status[%" PRIu64 "] request decode_failed", trace_id);
         log_payload_preview(trace_label, peer_text, request, request_len);
         free(request);
         log_stream_error("decode", protocol_id, peer_text[0] ? peer_text : NULL);
+        (void)send_error_response(
+            stream,
+            &stream_meta,
+            protocol_id,
+            peer_text[0] ? peer_text : NULL,
+            LANTERN_REQRESP_RESPONSE_INVALID_REQUEST,
+            "invalid request");
         close_stream(stream);
         return NULL;
     }
     free(request);
 
-    include_response_code = (request_kind == STATUS_PAYLOAD_FRAMED_SNAPPY);
     lantern_log_debug(
         "reqresp",
         &stream_meta,
-        "status[%" PRIu64 "] request framing=%s include_response_code=%s",
+        "status[%" PRIu64 "] request framing=framed include_response_code=%s",
         trace_id,
-        request_kind == STATUS_PAYLOAD_RAW_SSZ ? "raw_ssz"
-            : (request_kind == STATUS_PAYLOAD_RAW_SNAPPY ? "raw_snappy" : "framed"),
         include_response_code ? "true" : "false");
-    if (request_kind != STATUS_PAYLOAD_FRAMED_SNAPPY && peer_text[0] != '\0') {
-        lantern_reqresp_service_hint_peer_legacy(service, peer_text, true);
-    }
 
     char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     if (lantern_bytes_to_hex(remote_status.head.root.bytes, LANTERN_ROOT_SIZE, head_hex, sizeof(head_hex), 1) != 0) {
@@ -1019,6 +1291,13 @@ static void *status_worker(void *arg) {
     if (!service->callbacks.build_status
         || service->callbacks.build_status(service->callbacks.context, &response) != 0) {
         log_stream_error("status", protocol_id, peer_text);
+        (void)send_error_response(
+            stream,
+            &stream_meta,
+            protocol_id,
+            peer_text[0] ? peer_text : NULL,
+            LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
+            "server error");
         close_stream(stream);
         return NULL;
     }
@@ -1027,45 +1306,59 @@ static void *status_worker(void *arg) {
     size_t response_raw_len = 0;
     if (lantern_network_status_encode(&response, raw_status, sizeof(raw_status), &response_raw_len) != 0) {
         log_stream_error("encode", protocol_id, peer_text);
+        (void)send_error_response(
+            stream,
+            &stream_meta,
+            protocol_id,
+            peer_text[0] ? peer_text : NULL,
+            LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
+            "server error");
         close_stream(stream);
         return NULL;
     }
 
-    bool use_raw_ssz = (request_kind == STATUS_PAYLOAD_RAW_SSZ);
-    bool use_raw_snappy = (request_kind == STATUS_PAYLOAD_RAW_SNAPPY);
     size_t max_payload = response_raw_len;
-    if (!use_raw_ssz) {
-        int snappy_rc = use_raw_snappy
-            ? lantern_snappy_max_compressed_size_raw(response_raw_len, &max_payload)
-            : lantern_snappy_max_compressed_size(response_raw_len, &max_payload);
-        if (snappy_rc != LANTERN_SNAPPY_OK) {
-            log_stream_error("encode", protocol_id, peer_text);
-            close_stream(stream);
-            return NULL;
-        }
+    if (lantern_snappy_max_compressed_size(response_raw_len, &max_payload) != LANTERN_SNAPPY_OK) {
+        log_stream_error("encode", protocol_id, peer_text);
+        (void)send_error_response(
+            stream,
+            &stream_meta,
+            protocol_id,
+            peer_text[0] ? peer_text : NULL,
+            LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
+            "server error");
+        close_stream(stream);
+        return NULL;
     }
 
     uint8_t *buffer = (uint8_t *)malloc(max_payload > 0 ? max_payload : 1u);
     if (!buffer) {
         log_stream_error("encode", protocol_id, peer_text);
+        (void)send_error_response(
+            stream,
+            &stream_meta,
+            protocol_id,
+            peer_text[0] ? peer_text : NULL,
+            LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
+            "server error");
         close_stream(stream);
         return NULL;
     }
 
     size_t written = 0;
-    if (use_raw_ssz) {
-        memcpy(buffer, raw_status, response_raw_len);
-        written = response_raw_len;
-    } else {
-        int snappy_rc = use_raw_snappy
-            ? lantern_snappy_compress_raw(raw_status, response_raw_len, buffer, max_payload, &written)
-            : lantern_snappy_compress(raw_status, response_raw_len, buffer, max_payload, &written);
-        if (snappy_rc != LANTERN_SNAPPY_OK) {
-            free(buffer);
-            log_stream_error("encode", protocol_id, peer_text);
-            close_stream(stream);
-            return NULL;
-        }
+    if (lantern_snappy_compress(raw_status, response_raw_len, buffer, max_payload, &written)
+        != LANTERN_SNAPPY_OK) {
+        free(buffer);
+        log_stream_error("encode", protocol_id, peer_text);
+        (void)send_error_response(
+            stream,
+            &stream_meta,
+            protocol_id,
+            peer_text[0] ? peer_text : NULL,
+            LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
+            "server error");
+        close_stream(stream);
+        return NULL;
     }
 
     log_payload_preview("status response raw", peer_text, buffer, written);
@@ -1145,7 +1438,6 @@ static void *status_request_worker(void *arg) {
         goto finish;
     }
 
-    bool legacy_framing = ctx->legacy_framing;
     uint8_t raw_status[2u * LANTERN_CHECKPOINT_SSZ_SIZE];
     size_t payload_raw_len = 0;
     if (lantern_network_status_encode(&local_status, raw_status, sizeof(raw_status), &payload_raw_len) != 0) {
@@ -1157,9 +1449,7 @@ static void *status_request_worker(void *arg) {
     }
 
     size_t max_payload = 0;
-    int max_rc = legacy_framing
-        ? lantern_snappy_max_compressed_size_raw(payload_raw_len, &max_payload)
-        : lantern_snappy_max_compressed_size(payload_raw_len, &max_payload);
+    int max_rc = lantern_snappy_max_compressed_size(payload_raw_len, &max_payload);
     if (max_rc != LANTERN_SNAPPY_OK) {
         lantern_log_error(
             "reqresp",
@@ -1178,9 +1468,7 @@ static void *status_request_worker(void *arg) {
     }
 
     size_t payload_len = 0;
-    int snappy_rc = legacy_framing
-        ? lantern_snappy_compress_raw(raw_status, payload_raw_len, payload, max_payload, &payload_len)
-        : lantern_snappy_compress(raw_status, payload_raw_len, payload, max_payload, &payload_len);
+    int snappy_rc = lantern_snappy_compress(raw_status, payload_raw_len, payload, max_payload, &payload_len);
     if (snappy_rc != LANTERN_SNAPPY_OK) {
         lantern_log_error(
             "reqresp",
@@ -1194,15 +1482,15 @@ static void *status_request_worker(void *arg) {
     snprintf(trace_stage, sizeof(trace_stage), "status[%" PRIu64 "] request snappy", trace_id);
     log_payload_preview(trace_stage, ctx->peer_text, payload, payload_len);
 
-    /* The varint prefix indicates the compressed payload size (payload_len). */
+    /* The varint prefix indicates the uncompressed payload size (payload_raw_len). */
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
-    if (unsigned_varint_encode(payload_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
+    if (unsigned_varint_encode(payload_raw_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
         lantern_log_error(
             "reqresp",
             &meta,
             "failed to encode status request header bytes=%zu",
-            payload_len);
+            payload_raw_len);
         free(payload);
         goto finish;
     }
@@ -1216,19 +1504,18 @@ static void *status_request_worker(void *arg) {
     lantern_log_debug(
         "reqresp",
         &meta,
-        "status[%" PRIu64 "] request header_len=%zu varint_len=%zu (compressed) raw_len=%zu header_hex=%s",
+        "status[%" PRIu64 "] request header_len=%zu varint_len=%zu (uncompressed) raw_len=%zu header_hex=%s",
         trace_id,
         header_len,
-        payload_len,
+        payload_raw_len,
         payload_raw_len,
         header_hex[0] ? header_hex : "-");
 
     lantern_log_debug(
         "reqresp",
         &meta,
-        "status[%" PRIu64 "] expect_response_code=%s",
-        trace_id,
-        legacy_framing ? "false" : "true");
+        "status[%" PRIu64 "] expect_response_code=true",
+        trace_id);
 
     lantern_log_debug(
         "reqresp",
@@ -1236,7 +1523,7 @@ static void *status_request_worker(void *arg) {
         "status[%" PRIu64 "] sending %s request declared_bytes=%zu raw_bytes=%zu",
         trace_id,
         protocol_id,
-        payload_len,
+        payload_raw_len,
         payload_raw_len);
 
     const char *peer_label = ctx->peer_text[0] ? ctx->peer_text : NULL;
@@ -1298,7 +1585,6 @@ static void *status_request_worker(void *arg) {
     size_t response_len = 0;
     ssize_t read_err = 0;
     uint8_t response_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
-    bool response_code_pending = !legacy_framing;
     rc = lantern_reqresp_read_response_chunk(
         service,
         stream,
@@ -1307,7 +1593,7 @@ static void *status_request_worker(void *arg) {
         &response_len,
         &read_err,
         &response_code,
-        legacy_framing ? &response_code_pending : NULL);
+        NULL);
     if (rc != 0) {
         lantern_log_error(
             "reqresp",
@@ -1346,7 +1632,7 @@ static void *status_request_worker(void *arg) {
     LanternStatusMessage remote_status;
     memset(&remote_status, 0, sizeof(remote_status));
     if (response_len == 0
-        || decode_status_payload(response, response_len, &remote_status, NULL) != 0) {
+        || decode_status_payload(response, response_len, &remote_status) != 0) {
         lantern_log_error(
             "reqresp",
             &meta,
@@ -1392,26 +1678,12 @@ static void *status_request_worker(void *arg) {
         remote_status.finalized.slot);
 
     handle_remote_status(service, &remote_status, ctx->peer_text);
-    if (legacy_framing && peer_text[0] != '\0') {
-        lantern_reqresp_service_hint_peer_legacy(service, peer_text, true);
-    }
     failure_code = LIBP2P_ERR_OK;
 
 finish:
-    bool scheduled_retry = false;
-    if (failure_code != LIBP2P_ERR_OK && !legacy_framing && ctx->peer_text[0] != '\0') {
-        if (status_request_launch(service, &ctx->peer_id, ctx->peer_text, true, false) == 0) {
-            lantern_log_info(
-                "reqresp",
-                &meta,
-                "status[%" PRIu64 "] retrying with legacy framing",
-                trace_id);
-            scheduled_retry = true;
-        }
-    }
     close_stream(stream);
     status_request_ctx_free(ctx);
-    if (failure_code != LIBP2P_ERR_OK && !scheduled_retry) {
+    if (failure_code != LIBP2P_ERR_OK) {
         status_request_notify_failure(service, peer_text[0] ? peer_text : NULL, failure_code);
     }
     return NULL;
@@ -1441,36 +1713,6 @@ static void status_request_on_open(libp2p_stream_t *stream, void *user_data, int
     }
 
     if (err != 0 || !stream) {
-#if defined(LANTERN_STATUS_PROTOCOL_ID_LEGACY)
-        if (ctx
-            && ctx->service
-            && ctx->service->host
-            && ctx->protocol_id
-            && strcmp(ctx->protocol_id, LANTERN_STATUS_PROTOCOL_ID) == 0
-            && (err == LIBP2P_ERR_PROTO_NEGOTIATION_FAILED || err == LIBP2P_ERR_UNSUPPORTED)) {
-            ctx->protocol_id = LANTERN_STATUS_PROTOCOL_ID_LEGACY;
-            lantern_log_debug(
-                "reqresp",
-                &meta,
-                "status[%" PRIu64 "] retrying with legacy protocol=%s",
-                trace_id,
-                ctx->protocol_id);
-            int retry_rc = libp2p_host_open_stream_async(
-                ctx->service->host,
-                &ctx->peer_id,
-                ctx->protocol_id,
-                status_request_on_open,
-                ctx);
-            if (retained) {
-                close_stream(stream);
-                retained = false;
-            }
-            if (retry_rc == 0) {
-                return;
-            }
-            err = retry_rc;
-        }
-#endif
         lantern_log_warn(
             "reqresp",
             &meta,
@@ -1553,7 +1795,6 @@ static int status_request_launch(
     struct lantern_reqresp_service *service,
     const peer_id_t *peer_id,
     const char *peer_id_text,
-    bool legacy_framing,
     bool notify_on_failure) {
     if (!service || !service->host || !peer_id || !peer_id->bytes || peer_id->size == 0) {
         return -1;
@@ -1565,7 +1806,6 @@ static int status_request_launch(
     }
     ctx->service = service;
     ctx->debug_trace_id = lantern_reqresp_debug_sequence_next();
-    ctx->legacy_framing = legacy_framing;
 
     struct lantern_log_metadata meta = {
         .peer = NULL,
@@ -1585,9 +1825,8 @@ static int status_request_launch(
     lantern_log_trace(
         "reqresp",
         &meta,
-        "status[%" PRIu64 "] scheduling request%s",
-        ctx->debug_trace_id,
-        legacy_framing ? " (legacy framing)" : "");
+        "status[%" PRIu64 "] scheduling request",
+        ctx->debug_trace_id);
 
     if (clone_peer_id(&ctx->peer_id, peer_id) != 0) {
         lantern_log_warn(
@@ -1627,11 +1866,7 @@ int lantern_reqresp_service_request_status(
     struct lantern_reqresp_service *service,
     const peer_id_t *peer_id,
     const char *peer_id_text) {
-    bool prefer_legacy = false;
-    if (service && peer_id_text && peer_id_text[0] != '\0') {
-        prefer_legacy = lantern_reqresp_service_peer_prefers_legacy(service, peer_id_text) != 0;
-    }
-    return status_request_launch(service, peer_id, peer_id_text, prefer_legacy, true);
+    return status_request_launch(service, peer_id, peer_id_text, true);
 }
 
 static void *blocks_worker(void *arg) {
@@ -1652,8 +1887,6 @@ static void *blocks_worker(void *arg) {
 
     char peer_text[128];
     describe_peer(libp2p_stream_remote_peer(stream), peer_text, sizeof(peer_text));
-    bool include_response_code = true;
-    bool use_raw_snappy = false;
 
     const struct lantern_log_metadata meta = {.peer = peer_text[0] ? peer_text : NULL};
     lantern_log_debug(
@@ -1676,6 +1909,13 @@ static void *blocks_worker(void *arg) {
             err_name ? err_name : "unknown",
             request_err);
         log_stream_error("read", protocol_id, peer_text[0] ? peer_text : NULL);
+        (void)send_error_response(
+            stream,
+            &meta,
+            protocol_id,
+            peer_text[0] ? peer_text : NULL,
+            LANTERN_REQRESP_RESPONSE_INVALID_REQUEST,
+            "invalid request");
         close_stream(stream);
         return NULL;
     }
@@ -1689,18 +1929,29 @@ static void *blocks_worker(void *arg) {
     log_payload_preview("blocks_by_root request raw", peer_text, request, request_len);
 
     bool request_framed = payload_is_snappy_framed(request, request_len);
-    include_response_code = request_framed;
-    use_raw_snappy = !request_framed;
+    if (!request_framed) {
+        lantern_log_warn(
+            "reqresp",
+            &meta,
+            "blocks_by_root request missing snappy framing");
+        free(request);
+        log_stream_error("decode", protocol_id, peer_text[0] ? peer_text : NULL);
+        (void)send_error_response(
+            stream,
+            &meta,
+            protocol_id,
+            peer_text[0] ? peer_text : NULL,
+            LANTERN_REQRESP_RESPONSE_INVALID_REQUEST,
+            "invalid request");
+        close_stream(stream);
+        return NULL;
+    }
     lantern_log_debug(
         "reqresp",
         &meta,
         "blocks_by_root request framing=%s include_response_code=%s",
         request_framed ? "framed" : "raw",
-        include_response_code ? "true" : "false");
-    if (!request_framed && peer_text[0] != '\0') {
-        lantern_reqresp_service_hint_peer_legacy(service, peer_text, true);
-    }
-
+        "true");
     LanternBlocksByRootRequest decoded_request;
     lantern_blocks_by_root_request_init(&decoded_request);
     int decode_rc = lantern_network_blocks_by_root_request_decode_snappy(
@@ -1711,6 +1962,13 @@ static void *blocks_worker(void *arg) {
     if (decode_rc != 0) {
         lantern_blocks_by_root_request_reset(&decoded_request);
         log_stream_error("decode", protocol_id, peer_text[0] ? peer_text : NULL);
+        (void)send_error_response(
+            stream,
+            &meta,
+            protocol_id,
+            peer_text[0] ? peer_text : NULL,
+            LANTERN_REQRESP_RESPONSE_INVALID_REQUEST,
+            "invalid request");
         close_stream(stream);
         return NULL;
     }
@@ -1744,6 +2002,13 @@ static void *blocks_worker(void *arg) {
     if (collect_rc != 0) {
         lantern_blocks_by_root_response_reset(&response);
         log_stream_error("collect", protocol_id, peer_text[0] ? peer_text : NULL);
+        (void)send_error_response(
+            stream,
+            &meta,
+            protocol_id,
+            peer_text[0] ? peer_text : NULL,
+            LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
+            "server error");
         close_stream(stream);
         return NULL;
     }
@@ -1753,7 +2018,6 @@ static void *blocks_worker(void *arg) {
     size_t ssz_capacity = 4096u;
     uint8_t *snappy_buffer = NULL;
     size_t snappy_capacity = 0;
-    bool response_code_pending = include_response_code;
 
     if (block_count == 0) {
         lantern_log_debug(
@@ -1767,7 +2031,7 @@ static void *blocks_worker(void *arg) {
                 protocol_id,
                 "blocks_by_root response (empty)",
                 peer_text[0] ? peer_text : NULL,
-                response_code_pending,
+                true,
                 LANTERN_REQRESP_RESPONSE_SUCCESS,
                 NULL,
                 0,
@@ -1780,7 +2044,6 @@ static void *blocks_worker(void *arg) {
             free(snappy_buffer);
             return NULL;
         }
-        response_code_pending = false;
     }
 
     for (size_t i = 0; i < block_count; ++i) {
@@ -1801,6 +2064,13 @@ static void *blocks_worker(void *arg) {
                 free(snappy_buffer);
                 lantern_blocks_by_root_response_reset(&response);
                 log_stream_error("encode", protocol_id, peer_text[0] ? peer_text : NULL);
+                (void)send_error_response(
+                    stream,
+                    &meta,
+                    protocol_id,
+                    peer_text[0] ? peer_text : NULL,
+                    LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
+                    "server error");
                 close_stream(stream);
                 return NULL;
             }
@@ -1816,19 +2086,31 @@ static void *blocks_worker(void *arg) {
             free(snappy_buffer);
             lantern_blocks_by_root_response_reset(&response);
             log_stream_error("encode", protocol_id, peer_text[0] ? peer_text : NULL);
+            (void)send_error_response(
+                stream,
+                &meta,
+                protocol_id,
+                peer_text[0] ? peer_text : NULL,
+                LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
+                "server error");
             close_stream(stream);
             return NULL;
         }
 
         size_t max_compressed = 0;
-        int max_rc = use_raw_snappy
-            ? lantern_snappy_max_compressed_size_raw(ssz_written, &max_compressed)
-            : lantern_snappy_max_compressed_size(ssz_written, &max_compressed);
+        int max_rc = lantern_snappy_max_compressed_size(ssz_written, &max_compressed);
         if (max_rc != LANTERN_SNAPPY_OK || max_compressed == 0) {
             free(ssz_buffer);
             free(snappy_buffer);
             lantern_blocks_by_root_response_reset(&response);
             log_stream_error("compress", protocol_id, peer_text[0] ? peer_text : NULL);
+            (void)send_error_response(
+                stream,
+                &meta,
+                protocol_id,
+                peer_text[0] ? peer_text : NULL,
+                LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
+                "server error");
             close_stream(stream);
             return NULL;
         }
@@ -1840,6 +2122,13 @@ static void *blocks_worker(void *arg) {
                 free(snappy_buffer);
                 lantern_blocks_by_root_response_reset(&response);
                 log_stream_error("compress", protocol_id, peer_text[0] ? peer_text : NULL);
+                (void)send_error_response(
+                    stream,
+                    &meta,
+                    protocol_id,
+                    peer_text[0] ? peer_text : NULL,
+                    LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
+                    "server error");
                 close_stream(stream);
                 return NULL;
             }
@@ -1848,24 +2137,24 @@ static void *blocks_worker(void *arg) {
         }
 
         size_t compressed_len = 0;
-        int snappy_rc = use_raw_snappy
-            ? lantern_snappy_compress_raw(
-                  ssz_buffer,
-                  ssz_written,
-                  snappy_buffer,
-                  snappy_capacity,
-                  &compressed_len)
-            : lantern_snappy_compress(
-                  ssz_buffer,
-                  ssz_written,
-                  snappy_buffer,
-                  snappy_capacity,
-                  &compressed_len);
+        int snappy_rc = lantern_snappy_compress(
+            ssz_buffer,
+            ssz_written,
+            snappy_buffer,
+            snappy_capacity,
+            &compressed_len);
         if (snappy_rc != LANTERN_SNAPPY_OK) {
             free(ssz_buffer);
             free(snappy_buffer);
             lantern_blocks_by_root_response_reset(&response);
             log_stream_error("compress", protocol_id, peer_text[0] ? peer_text : NULL);
+            (void)send_error_response(
+                stream,
+                &meta,
+                protocol_id,
+                peer_text[0] ? peer_text : NULL,
+                LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
+                "server error");
             close_stream(stream);
             return NULL;
         }
@@ -1887,14 +2176,13 @@ static void *blocks_worker(void *arg) {
             ssz_written,
             compressed_len);
 
-        bool include_code = response_code_pending;
         if (send_response_chunk(
                 stream,
                 &meta,
                 protocol_id,
                 chunk_label,
                 peer_text[0] ? peer_text : NULL,
-                include_code,
+                true,
                 LANTERN_REQRESP_RESPONSE_SUCCESS,
                 snappy_buffer,
                 compressed_len,
@@ -1907,7 +2195,6 @@ static void *blocks_worker(void *arg) {
             close_stream(stream);
             return NULL;
         }
-        response_code_pending = false;
     }
 
     free(ssz_buffer);
@@ -1954,10 +2241,6 @@ static void status_on_open_primary(libp2p_stream_t *stream, void *user_data) {
     status_on_open_impl(stream, user_data, LANTERN_STATUS_PROTOCOL_ID);
 }
 
-static void status_on_open_legacy(libp2p_stream_t *stream, void *user_data) {
-    status_on_open_impl(stream, user_data, LANTERN_STATUS_PROTOCOL_ID_LEGACY);
-}
-
 static void blocks_on_open_impl(libp2p_stream_t *stream, void *user_data, const char *protocol_id) {
     struct lantern_reqresp_service *service = (struct lantern_reqresp_service *)user_data;
     if (!service) {
@@ -1989,14 +2272,6 @@ static void blocks_on_open_primary(libp2p_stream_t *stream, void *user_data) {
     blocks_on_open_impl(stream, user_data, LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID);
 }
 
-static void blocks_on_open_legacy(libp2p_stream_t *stream, void *user_data) {
-    blocks_on_open_impl(stream, user_data, LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY);
-}
-
-static void blocks_on_open_bare(libp2p_stream_t *stream, void *user_data) {
-    blocks_on_open_impl(stream, user_data, LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_BARE);
-}
-
 int lantern_reqresp_service_start(
     struct lantern_reqresp_service *service,
     const struct lantern_reqresp_service_config *config) {
@@ -2006,7 +2281,6 @@ int lantern_reqresp_service_start(
 
     lantern_reqresp_service_reset(service);
 
-    ensure_lock(service);
     service->host = config->host;
     if (config->callbacks) {
         service->callbacks = *config->callbacks;
@@ -2032,37 +2306,10 @@ int lantern_reqresp_service_start(
         lantern_reqresp_service_reset(service);
         return -1;
     }
-#if defined(LANTERN_STATUS_PROTOCOL_ID_LEGACY)
-    libp2p_protocol_def_t status_def_legacy = status_def;
-    status_def_legacy.protocol_id = LANTERN_STATUS_PROTOCOL_ID_LEGACY;
-    status_def_legacy.on_open = status_on_open_legacy;
-    if (libp2p_host_listen_protocol(service->host, &status_def_legacy, &service->status_server_legacy) != 0) {
-        lantern_reqresp_service_reset(service);
-        return -1;
-    }
-#endif
     if (libp2p_host_listen_protocol(service->host, &blocks_def, &service->blocks_server) != 0) {
         lantern_reqresp_service_reset(service);
         return -1;
     }
-#if defined(LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY)
-    libp2p_protocol_def_t blocks_def_legacy = blocks_def;
-    blocks_def_legacy.protocol_id = LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY;
-    blocks_def_legacy.on_open = blocks_on_open_legacy;
-    if (libp2p_host_listen_protocol(service->host, &blocks_def_legacy, &service->blocks_server_legacy) != 0) {
-        lantern_reqresp_service_reset(service);
-        return -1;
-    }
-#endif
-#if defined(LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_BARE)
-    libp2p_protocol_def_t blocks_def_bare = blocks_def;
-    blocks_def_bare.protocol_id = LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_BARE;
-    blocks_def_bare.on_open = blocks_on_open_bare;
-    if (libp2p_host_listen_protocol(service->host, &blocks_def_bare, &service->blocks_server_bare) != 0) {
-        lantern_reqresp_service_reset(service);
-        return -1;
-    }
-#endif
 
     lantern_log_info(
         "network",

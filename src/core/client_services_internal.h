@@ -478,7 +478,6 @@ int lantern_reqresp_read_response_chunk(
  * @param client        Client instance
  * @param peer_id_text  Peer ID string
  * @param root          Block root to request
- * @param use_legacy    True to use legacy protocol
  * @return 0 on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL, the peer ID is invalid, or the root is zero
  * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
@@ -489,8 +488,7 @@ int lantern_reqresp_read_response_chunk(
 int lantern_client_schedule_blocks_request(
     struct lantern_client *client,
     const char *peer_id_text,
-    const LanternRoot *root,
-    bool use_legacy);
+    const LanternRoot *root);
 
 
 /**

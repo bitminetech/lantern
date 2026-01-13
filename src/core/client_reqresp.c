@@ -972,7 +972,7 @@ static void lantern_client_on_peer_status(
         &request_root);
     if (should_request)
     {
-        if (lantern_client_schedule_blocks_request(client, peer_copy, &request_root, false) != 0)
+        if (lantern_client_schedule_blocks_request(client, peer_copy, &request_root) != 0)
         {
             lantern_client_on_blocks_request_complete(
                 client,

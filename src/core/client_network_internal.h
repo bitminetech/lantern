@@ -97,17 +97,6 @@ struct lantern_peer_status_entry
 };
 
 /**
- * Blocks-by-root protocol variants for fallback handling.
- */
-enum lantern_blocks_req_variant
-{
-    LANTERN_BLOCKS_REQ_VARIANT_PRIMARY = 0,
-    LANTERN_BLOCKS_REQ_VARIANT_LEGACY_SNAPPY = 1,
-    LANTERN_BLOCKS_REQ_VARIANT_BARE = 2,
-};
-
-
-/**
  * Block request context for async operations.
  *
  * @spec subspecs/networking/reqresp.py - blocks by root request
@@ -119,8 +108,6 @@ struct block_request_ctx
     char peer_text[128];            /**< Peer ID as text */
     LanternRoot root;               /**< Block root being requested */
     const char *protocol_id;        /**< Protocol ID string */
-    bool using_legacy;              /**< True if using legacy protocol */
-    enum lantern_blocks_req_variant variant; /**< Protocol variant */
 };
 
 
@@ -369,16 +356,6 @@ bool lantern_client_is_peer_connected(struct lantern_client *client, const char 
  * @note Thread safety: This function acquires status_lock
  */
 void request_status_now(struct lantern_client *client, const peer_id_t *peer, const char *peer_text);
-
-
-/**
- * Seed reqresp service with peer legacy mode hints from genesis config.
- *
- * @param client  Client instance
- *
- * @note Thread safety: This function is thread-safe
- */
-void lantern_client_seed_reqresp_peer_modes(struct lantern_client *client);
 
 
 /**

@@ -1083,7 +1083,7 @@ static bool try_schedule_blocks_request(
     entry->last_blocks_request_ms = now_ms;
     pthread_mutex_unlock(&client->status_lock);
 
-    if (lantern_client_schedule_blocks_request(client, peer_text, root, false) != 0)
+    if (lantern_client_schedule_blocks_request(client, peer_text, root) != 0)
     {
         lantern_client_on_blocks_request_complete(
             client,

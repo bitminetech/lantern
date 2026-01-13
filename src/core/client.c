@@ -1565,7 +1565,6 @@ static lantern_client_error client_start_protocols(
     }
     client->reqresp_running = true;
 
-    lantern_client_seed_reqresp_peer_modes(client);
     if (append_genesis_bootnodes(client) != 0)
     {
         lantern_log_error(

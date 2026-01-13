@@ -154,7 +154,7 @@ static void request_missing_checkpoint_root(
         root_hex[0] ? root_hex : "0x0",
         slot);
 
-    if (lantern_client_schedule_blocks_request(client, peer_text, root, false) != 0)
+    if (lantern_client_schedule_blocks_request(client, peer_text, root) != 0)
     {
         lantern_client_on_blocks_request_complete(
             client,

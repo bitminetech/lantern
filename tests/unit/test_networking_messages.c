@@ -1034,7 +1034,9 @@ static void test_status_reqresp_snappy_fixture(void) {
 
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
-    CHECK(unsigned_varint_encode(fixture_len, header, sizeof(header), &header_len) == UNSIGNED_VARINT_OK);
+    size_t raw_len = 0;
+    CHECK(lantern_snappy_uncompressed_length(fixture, fixture_len, &raw_len) == LANTERN_SNAPPY_OK);
+    CHECK(unsigned_varint_encode(raw_len, header, sizeof(header), &header_len) == UNSIGNED_VARINT_OK);
 
     size_t framed_len = 1u + header_len + fixture_len;
     uint8_t *framed = (uint8_t *)malloc(framed_len);

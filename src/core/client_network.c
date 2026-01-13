@@ -46,7 +46,7 @@ static const uint64_t LANTERN_PING_TIMEOUT_MS = 5000ULL;
  * ============================================================================ */
 
 /**
- * Format a peer ID as base58 legacy text.
+ * Format a peer ID as base58 text.
  *
  * @param peer     Peer ID (may be NULL)
  * @param out      Output buffer
@@ -355,42 +355,6 @@ void request_status_now(struct lantern_client *client, const peer_id_t *peer, co
             lantern_client_status_request_failed(client, status_peer);
         }
     }
-}
-
-
-/**
- * Seed reqresp service with peer legacy mode hints from genesis config.
- *
- * @param client  Client instance
- *
- * @note Thread safety: This function is thread-safe
- */
-void lantern_client_seed_reqresp_peer_modes(struct lantern_client *client)
-{
-    if (!client)
-    {
-        return;
-    }
-#if defined(LANTERN_REQRESP_STATUS_PROTOCOL_LEGACY) \
-    || defined(LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_LEGACY)
-    const struct lantern_validator_config *config = &client->genesis.validator_config;
-    if (!config || !config->entries)
-    {
-        return;
-    }
-    for (size_t i = 0; i < config->count; ++i)
-    {
-        const struct lantern_validator_config_entry *entry = &config->entries[i];
-        if (!entry->peer_id_text || !entry->peer_id_text[0])
-        {
-            continue;
-        }
-        int legacy = (entry->client_kind == LANTERN_VALIDATOR_CLIENT_QLEAN);
-        lantern_reqresp_service_hint_peer_legacy(&client->reqresp, entry->peer_id_text, legacy);
-    }
-#else
-    (void)client;
-#endif
 }
 
 
