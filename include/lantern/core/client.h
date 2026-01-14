@@ -188,6 +188,13 @@ struct lantern_client {
     struct lantern_pending_block_list pending_blocks;
     pthread_mutex_t pending_lock;
     bool pending_lock_initialized;
+    LanternRoot sync_last_requested_root;
+    uint64_t sync_last_requested_root_ms;
+    uint64_t sync_started_ms;
+    uint64_t sync_last_log_ms;
+    uint64_t sync_last_imported_blocks;
+    uint64_t sync_imported_blocks;
+    bool sync_in_progress;
     size_t status_requests_inflight_total;
     size_t status_requests_peak;
     bool status_guard_disabled;

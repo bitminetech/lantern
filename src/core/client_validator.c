@@ -41,6 +41,58 @@ static const uint32_t VALIDATOR_SERVICE_IDLE_SLEEP_MS = 200;
 
 /** Sleep interval between validator service iterations (ms). */
 static const uint32_t VALIDATOR_SERVICE_POLL_SLEEP_MS = 50;
+/** Maximum peer head lag (in slots) before pausing validator duties. */
+static const uint64_t VALIDATOR_SYNC_SLOT_LAG = 2;
+/** Pending queue size that indicates we're still catching up. */
+static const size_t VALIDATOR_SYNC_PENDING_THRESHOLD = 8;
+
+static bool validator_should_pause_for_sync(const struct lantern_client *client)
+{
+    if (!client || !client->status_lock_initialized || !client->has_state)
+    {
+        return false;
+    }
+
+    uint64_t max_peer_slot = 0;
+    bool have_status = false;
+    pthread_mutex_t *status_lock = (pthread_mutex_t *)&client->status_lock;
+    if (pthread_mutex_lock(status_lock) == 0)
+    {
+        for (size_t i = 0; i < client->peer_status_count; ++i)
+        {
+            const struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
+            if (!entry->has_status)
+            {
+                continue;
+            }
+            have_status = true;
+            if (entry->status.head.slot > max_peer_slot)
+            {
+                max_peer_slot = entry->status.head.slot;
+            }
+        }
+        pthread_mutex_unlock(status_lock);
+    }
+
+    if (!have_status)
+    {
+        return false;
+    }
+
+    uint64_t local_slot = client->state.slot;
+    if (max_peer_slot > local_slot + VALIDATOR_SYNC_SLOT_LAG)
+    {
+        return true;
+    }
+
+    size_t pending = lantern_client_pending_block_count(client);
+    if (pending >= VALIDATOR_SYNC_PENDING_THRESHOLD)
+    {
+        return true;
+    }
+
+    return false;
+}
 
 /* ============================================================================
  * Aggregation Helpers
@@ -884,6 +936,10 @@ bool validator_service_should_run(const struct lantern_client *client)
         return false;
     }
     if (!client->gossip_running || client->local_validator_count == 0)
+    {
+        return false;
+    }
+    if (validator_should_pause_for_sync(client))
     {
         return false;
     }

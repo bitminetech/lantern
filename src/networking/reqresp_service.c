@@ -2050,14 +2050,7 @@ static void *blocks_worker(void *arg) {
         const LanternSignedBlock *block = &response.blocks[i];
         size_t ssz_written = 0;
         bool encoded = false;
-        for (unsigned attempt = 0; attempt < 8; ++attempt) {
-            if (attempt > 0) {
-                if (ssz_capacity > SIZE_MAX / 2) {
-                    break;
-                }
-                ssz_capacity *= 2u;
-            }
-
+        while (ssz_capacity > 0 && ssz_capacity <= LANTERN_REQRESP_MAX_CHUNK_BYTES) {
             uint8_t *resized = (uint8_t *)realloc(ssz_buffer, ssz_capacity);
             if (!resized) {
                 free(ssz_buffer);
@@ -2080,6 +2073,17 @@ static void *blocks_worker(void *arg) {
                 encoded = true;
                 break;
             }
+            if (ssz_capacity > SIZE_MAX / 2) {
+                break;
+            }
+            size_t next_capacity = ssz_capacity * 2u;
+            if (next_capacity > LANTERN_REQRESP_MAX_CHUNK_BYTES) {
+                next_capacity = LANTERN_REQRESP_MAX_CHUNK_BYTES;
+            }
+            if (next_capacity <= ssz_capacity) {
+                break;
+            }
+            ssz_capacity = next_capacity;
         }
         if (!encoded || ssz_written == 0) {
             free(ssz_buffer);

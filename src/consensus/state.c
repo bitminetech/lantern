@@ -1515,6 +1515,13 @@ static int lantern_state_process_attestations_internal(
         return -1;
     }
     size_t validator_count = (size_t)validator_count_u64;
+    const char *debug_hash = getenv("LANTERN_DEBUG_STATE_HASH");
+    const char *debug_finalization = getenv("LANTERN_DEBUG_FINALIZATION");
+    bool trace_finalization = debug_finalization && debug_finalization[0] != '\0';
+    const struct lantern_log_metadata meta = {
+        .has_slot = true,
+        .slot = state->slot,
+    };
     if (!state->validator_votes || state->validator_votes_len != validator_count) {
         return -1;
     }
@@ -1524,13 +1531,6 @@ static int lantern_state_process_attestations_internal(
 
     LanternCheckpoint latest_justified = state->latest_justified;
     LanternCheckpoint latest_finalized = state->latest_finalized;
-    const char *debug_hash = getenv("LANTERN_DEBUG_STATE_HASH");
-    const char *debug_finalization = getenv("LANTERN_DEBUG_FINALIZATION");
-    bool trace_finalization = debug_finalization && debug_finalization[0] != '\0';
-    const struct lantern_log_metadata meta = {
-        .has_slot = true,
-        .slot = state->slot,
-    };
     double att_batch_start = lantern_time_now_seconds();
     size_t att_attempted = 0;
 

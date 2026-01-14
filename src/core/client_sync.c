@@ -1190,7 +1190,8 @@ void lantern_client_request_pending_parent_after_blocks(
         {
             continue;
         }
-        if (entry->peer_text[0] != '\0' && strcmp(entry->peer_text, peer_text) != 0)
+        if (peer_text && *peer_text && entry->peer_text[0] != '\0'
+            && strcmp(entry->peer_text, peer_text) != 0)
         {
             continue;
         }
@@ -1209,6 +1210,40 @@ void lantern_client_request_pending_parent_after_blocks(
     }
 
     lantern_client_unlock_pending(client, locked);
+
+    if (candidate_count == 0 && peer_text && *peer_text)
+    {
+        locked = lantern_client_lock_pending(client);
+        if (!locked)
+        {
+            return;
+        }
+        for (size_t i = 0; i < client->pending_blocks.length; ++i)
+        {
+            struct lantern_pending_block *entry = &client->pending_blocks.items[i];
+            if (entry->parent_requested)
+            {
+                continue;
+            }
+            if (lantern_root_is_zero(&entry->parent_root))
+            {
+                continue;
+            }
+            if (has_requested_root
+                && memcmp(entry->parent_root.bytes, requested_root.bytes, LANTERN_ROOT_SIZE) == 0)
+            {
+                continue;
+            }
+            if (candidate_count >= LANTERN_PENDING_BLOCK_LIMIT)
+            {
+                break;
+            }
+            candidates[candidate_count].child_root = entry->root;
+            candidates[candidate_count].parent_root = entry->parent_root;
+            candidate_count += 1u;
+        }
+        lantern_client_unlock_pending(client, locked);
+    }
 
     if (prefer_requested_root)
     {
@@ -1341,13 +1376,26 @@ void lantern_client_enqueue_pending_block(
 
     lantern_client_unlock_pending(client, locked);
 
-    lantern_log_info(
-        "state",
-        &meta,
-        "queued block slot=%" PRIu64 " root=%s waiting for parent=%s (via gossip)",
-        block->message.block.slot,
-        block_hex[0] ? block_hex : "0x0",
-        parent_hex[0] ? parent_hex : "0x0");
+    if (client->sync_in_progress)
+    {
+        lantern_log_debug(
+            "state",
+            &meta,
+            "queued block slot=%" PRIu64 " root=%s waiting for parent=%s (via gossip)",
+            block->message.block.slot,
+            block_hex[0] ? block_hex : "0x0",
+            parent_hex[0] ? parent_hex : "0x0");
+    }
+    else
+    {
+        lantern_log_info(
+            "state",
+            &meta,
+            "queued block slot=%" PRIu64 " root=%s waiting for parent=%s (via gossip)",
+            block->message.block.slot,
+            block_hex[0] ? block_hex : "0x0",
+            parent_hex[0] ? parent_hex : "0x0");
+    }
 
     if (request_parent && peer_text && *peer_text)
     {

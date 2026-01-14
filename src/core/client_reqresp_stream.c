@@ -629,12 +629,24 @@ static int read_response_code_prefix(
     {
         *out_response_code = mapped_code;
     }
-    lantern_log_info(
-        "reqresp",
-        meta,
-        "response code=%u mapped=%u",
-        (unsigned)response_code_byte,
-        (unsigned)mapped_code);
+    if (mapped_code == LANTERN_REQRESP_RESPONSE_SUCCESS)
+    {
+        lantern_log_debug(
+            "reqresp",
+            meta,
+            "response code=%u mapped=%u",
+            (unsigned)response_code_byte,
+            (unsigned)mapped_code);
+    }
+    else
+    {
+        lantern_log_info(
+            "reqresp",
+            meta,
+            "response code=%u mapped=%u",
+            (unsigned)response_code_byte,
+            (unsigned)mapped_code);
+    }
 
     if (out_err)
     {
@@ -873,16 +885,6 @@ static void log_varint_header_details(
         label ? label : "chunk",
         payload_len,
         header_hex[0] ? header_hex : "-");
-    if (payload_len > (uint64_t)LANTERN_REQRESP_SUSPICIOUS_PAYLOAD_BYTES)
-    {
-        lantern_log_warn(
-            "reqresp",
-            meta,
-            "%s suspicious large payload_len=%" PRIu64 " header_hex=%s",
-            label ? label : "chunk",
-            payload_len,
-            header_hex[0] ? header_hex : "-");
-    }
 }
 
 

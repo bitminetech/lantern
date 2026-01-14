@@ -701,7 +701,8 @@ static void log_imported_block(
     const LanternSignedBlock *block,
     const LanternRoot *head_root,
     uint64_t head_slot,
-    const struct lantern_log_metadata *meta)
+    const struct lantern_log_metadata *meta,
+    bool quiet)
 {
     if (!block || !head_root)
     {
@@ -710,13 +711,26 @@ static void log_imported_block(
 
     char head_hex[ROOT_HEX_BUFFER_LEN];
     format_root_hex(head_root, head_hex, sizeof(head_hex));
-    lantern_log_info(
-        "state",
-        meta,
-        "imported block slot=%" PRIu64 " new_head_slot=%" PRIu64 " head_root=%s",
-        block->message.block.slot,
-        head_slot,
-        head_hex[0] ? head_hex : "0x0");
+    if (quiet)
+    {
+        lantern_log_debug(
+            "state",
+            meta,
+            "imported block slot=%" PRIu64 " new_head_slot=%" PRIu64 " head_root=%s",
+            block->message.block.slot,
+            head_slot,
+            head_hex[0] ? head_hex : "0x0");
+    }
+    else
+    {
+        lantern_log_info(
+            "state",
+            meta,
+            "imported block slot=%" PRIu64 " new_head_slot=%" PRIu64 " head_root=%s",
+            block->message.block.slot,
+            head_slot,
+            head_hex[0] ? head_hex : "0x0");
+    }
 }
 
 
@@ -841,9 +855,17 @@ cleanup:
 
     if (imported)
     {
+        bool quiet_log = false;
+        if (client->status_lock_initialized
+            && pthread_mutex_lock(&client->status_lock) == 0)
+        {
+            client->sync_imported_blocks += 1u;
+            quiet_log = client->sync_in_progress;
+            pthread_mutex_unlock(&client->status_lock);
+        }
         lantern_client_pending_remove_by_root(client, &block_root_local);
         lantern_client_process_pending_children(client, &block_root_local);
-        log_imported_block(block, &head_root, head_slot, meta);
+        log_imported_block(block, &head_root, head_slot, meta, quiet_log);
     }
 
     return imported;
@@ -916,14 +938,28 @@ void lantern_client_record_block(
         source = "local";
     }
 
-    lantern_log_info(
-        "gossip",
-        &meta,
-        "received block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s source=%s",
-        block->message.block.slot,
-        block->message.block.proposer_index,
-        root_hex[0] ? root_hex : "0x0",
-        source);
+    if (client->sync_in_progress)
+    {
+        lantern_log_debug(
+            "gossip",
+            &meta,
+            "received block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s source=%s",
+            block->message.block.slot,
+            block->message.block.proposer_index,
+            root_hex[0] ? root_hex : "0x0",
+            source);
+    }
+    else
+    {
+        lantern_log_info(
+            "gossip",
+            &meta,
+            "received block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s source=%s",
+            block->message.block.slot,
+            block->message.block.proposer_index,
+            root_hex[0] ? root_hex : "0x0",
+            source);
+    }
 
     if (client->data_dir)
     {

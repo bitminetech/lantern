@@ -910,18 +910,37 @@ void lantern_client_record_vote(
                 rejection.unknown_slot);
         }
         const char *reason_text = rejection.has_reason ? rejection.message : "unknown";
-        lantern_log_info(
-            "gossip",
-            &meta,
-            "rejected vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64
-            " source=%s@%" PRIu64 " reason=%s",
-            vote_copy.data.validator_id,
-            vote_copy.data.slot,
-            head_hex[0] ? head_hex : "0x0",
-            target_hex[0] ? target_hex : "0x0",
-            vote_copy.data.target.slot,
-            source_hex[0] ? source_hex : "0x0",
-            vote_copy.data.source.slot,
-            reason_text);
+        if (client->sync_in_progress)
+        {
+            lantern_log_debug(
+                "gossip",
+                &meta,
+                "rejected vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64
+                " source=%s@%" PRIu64 " reason=%s",
+                vote_copy.data.validator_id,
+                vote_copy.data.slot,
+                head_hex[0] ? head_hex : "0x0",
+                target_hex[0] ? target_hex : "0x0",
+                vote_copy.data.target.slot,
+                source_hex[0] ? source_hex : "0x0",
+                vote_copy.data.source.slot,
+                reason_text);
+        }
+        else
+        {
+            lantern_log_info(
+                "gossip",
+                &meta,
+                "rejected vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64
+                " source=%s@%" PRIu64 " reason=%s",
+                vote_copy.data.validator_id,
+                vote_copy.data.slot,
+                head_hex[0] ? head_hex : "0x0",
+                target_hex[0] ? target_hex : "0x0",
+                vote_copy.data.target.slot,
+                source_hex[0] ? source_hex : "0x0",
+                vote_copy.data.source.slot,
+                reason_text);
+        }
     }
 }

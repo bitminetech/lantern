@@ -24,6 +24,7 @@
 
 #include <inttypes.h>
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -36,6 +37,16 @@
 #include "lantern/storage/storage.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
+
+
+/* ============================================================================
+ * Sync Logging
+ * ============================================================================ */
+
+static const uint64_t SYNC_PROGRESS_LOG_INTERVAL_MS = 5000u;
+static const uint64_t SYNC_PROGRESS_SLOT_LAG = 2u;
+static const size_t SYNC_PROGRESS_PENDING_THRESHOLD = 8u;
+static const uint64_t SYNC_DUPLICATE_REQUEST_MS = 500u;
 
 
 /* ============================================================================
@@ -317,6 +328,193 @@ static void peer_status_local_view(
     *out_head_known = head_known;
 }
 
+static uint64_t max_peer_head_slot_locked(
+    const struct lantern_client *client,
+    bool *out_have_status)
+{
+    uint64_t max_slot = 0;
+    bool have_status = false;
+
+    if (client)
+    {
+        for (size_t i = 0; i < client->peer_status_count; ++i)
+        {
+            const struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
+            if (!entry->has_status)
+            {
+                continue;
+            }
+            have_status = true;
+            if (entry->status.head.slot > max_slot)
+            {
+                max_slot = entry->status.head.slot;
+            }
+        }
+    }
+
+    if (out_have_status)
+    {
+        *out_have_status = have_status;
+    }
+
+    return max_slot;
+}
+
+static void format_duration_seconds(uint64_t seconds, char *out, size_t out_len)
+{
+    if (!out || out_len == 0)
+    {
+        return;
+    }
+    if (seconds == 0)
+    {
+        snprintf(out, out_len, "0s");
+        return;
+    }
+
+    uint64_t hours = seconds / 3600u;
+    uint64_t minutes = (seconds % 3600u) / 60u;
+    uint64_t secs = seconds % 60u;
+
+    if (hours > 0)
+    {
+        snprintf(out, out_len, "%" PRIu64 "h%02" PRIu64 "m%02" PRIu64 "s", hours, minutes, secs);
+        return;
+    }
+    if (minutes > 0)
+    {
+        snprintf(out, out_len, "%" PRIu64 "m%02" PRIu64 "s", minutes, secs);
+        return;
+    }
+    snprintf(out, out_len, "%" PRIu64 "s", secs);
+}
+
+static void maybe_log_sync_progress_locked(
+    struct lantern_client *client,
+    uint64_t local_slot)
+{
+    if (!client)
+    {
+        return;
+    }
+
+    bool have_status = false;
+    uint64_t max_peer_slot = max_peer_head_slot_locked(client, &have_status);
+    if (!have_status)
+    {
+        return;
+    }
+
+    size_t pending = lantern_client_pending_block_count(client);
+    bool sync_gap = max_peer_slot > local_slot + SYNC_PROGRESS_SLOT_LAG;
+    bool sync_pending = pending >= SYNC_PROGRESS_PENDING_THRESHOLD;
+    bool syncing = sync_gap || sync_pending;
+    uint64_t now_ms = monotonic_millis();
+
+    struct lantern_log_metadata meta = {.validator = client->node_id};
+
+    if (!syncing)
+    {
+        if (client->sync_in_progress)
+        {
+            uint64_t elapsed_s = 0;
+            if (client->sync_started_ms != 0 && now_ms > client->sync_started_ms)
+            {
+                elapsed_s = (now_ms - client->sync_started_ms) / 1000u;
+            }
+            char duration[32];
+            format_duration_seconds(elapsed_s, duration, sizeof(duration));
+            lantern_log_info(
+                "sync",
+                &meta,
+                "sync complete local_slot=%" PRIu64 " target_slot=%" PRIu64 " duration=%s imported=%" PRIu64,
+                local_slot,
+                max_peer_slot,
+                duration,
+                client->sync_imported_blocks);
+            client->sync_in_progress = false;
+            client->sync_started_ms = 0;
+            client->sync_last_log_ms = 0;
+            client->sync_last_imported_blocks = 0;
+        }
+        return;
+    }
+
+    if (!client->sync_in_progress)
+    {
+        client->sync_in_progress = true;
+        client->sync_started_ms = now_ms;
+        client->sync_last_log_ms = 0;
+        client->sync_last_imported_blocks = 0;
+        client->sync_imported_blocks = 0;
+        lantern_log_info(
+            "sync",
+            &meta,
+            "sync starting local_slot=%" PRIu64 " target_slot=%" PRIu64 " pending=%zu",
+            local_slot,
+            max_peer_slot,
+            pending);
+    }
+
+    if (client->sync_last_log_ms != 0
+        && now_ms < client->sync_last_log_ms + SYNC_PROGRESS_LOG_INTERVAL_MS)
+    {
+        return;
+    }
+
+    uint64_t remaining = (max_peer_slot > local_slot) ? (max_peer_slot - local_slot) : 0;
+    uint64_t base_ms =
+        (client->sync_last_log_ms != 0) ? client->sync_last_log_ms : client->sync_started_ms;
+    uint64_t base_blocks =
+        (client->sync_last_log_ms != 0) ? client->sync_last_imported_blocks : 0;
+    double rate = 0.0;
+    if (base_ms != 0 && now_ms > base_ms)
+    {
+        uint64_t delta_blocks = 0;
+        if (client->sync_imported_blocks >= base_blocks)
+        {
+            delta_blocks = client->sync_imported_blocks - base_blocks;
+        }
+        double delta_sec = (double)(now_ms - base_ms) / 1000.0;
+        if (delta_sec > 0.0)
+        {
+            rate = (double)delta_blocks / delta_sec;
+        }
+    }
+
+    double percent = 0.0;
+    if (max_peer_slot > 0)
+    {
+        uint64_t clamped_local = local_slot > max_peer_slot ? max_peer_slot : local_slot;
+        percent = ((double)clamped_local * 100.0) / (double)max_peer_slot;
+    }
+
+    uint64_t eta_seconds = 0;
+    if (rate > 0.0 && remaining > 0)
+    {
+        eta_seconds = (uint64_t)((double)remaining / rate);
+    }
+    char eta_text[32];
+    format_duration_seconds(eta_seconds, eta_text, sizeof(eta_text));
+
+    lantern_log_info(
+        "sync",
+        &meta,
+        "sync progress local_slot=%" PRIu64 " target_slot=%" PRIu64 " remaining=%" PRIu64
+        " (%.1f%%) pending=%zu imported=%" PRIu64 " rate=%.2f/s eta=%s",
+        local_slot,
+        max_peer_slot,
+        remaining,
+        percent,
+        pending,
+        client->sync_imported_blocks,
+        rate,
+        eta_text);
+
+    client->sync_last_log_ms = now_ms;
+    client->sync_last_imported_blocks = client->sync_imported_blocks;
+}
+
 
 /**
  * @brief Update stored peer status and mark status request complete.
@@ -501,20 +699,47 @@ static bool lantern_client_peer_status_maybe_request_blocks(
     };
     if (needs_block)
     {
-        lantern_log_info(
-            "reqresp",
-            &status_meta,
-            "status needs block head_slot=%" PRIu64 " local_slot=%" PRIu64 " "
-            "head_root=%s reason=%s",
-            peer_status->head.slot,
-            local_slot,
-            head_root_text,
-            needs_block_reason ? needs_block_reason : "unspecified");
-        should_request = lantern_client_apply_blocks_request_backoff_locked(
-            client,
-            entry,
-            peer_id_text,
-            head_root_text);
+        uint64_t now_ms = monotonic_millis();
+        if (client->sync_last_requested_root_ms != 0
+            && memcmp(
+                client->sync_last_requested_root.bytes,
+                request_root.bytes,
+                LANTERN_ROOT_SIZE)
+                == 0
+            && now_ms < client->sync_last_requested_root_ms + SYNC_DUPLICATE_REQUEST_MS)
+        {
+            lantern_log_debug(
+                "reqresp",
+                &status_meta,
+                "status needs block head_slot=%" PRIu64 " local_slot=%" PRIu64 " "
+                "head_root=%s reason=%s (duplicate suppressed)",
+                peer_status->head.slot,
+                local_slot,
+                head_root_text,
+                needs_block_reason ? needs_block_reason : "unspecified");
+        }
+        else
+        {
+            should_request = lantern_client_apply_blocks_request_backoff_locked(
+                client,
+                entry,
+                peer_id_text,
+                head_root_text);
+            if (should_request)
+            {
+                client->sync_last_requested_root = request_root;
+                client->sync_last_requested_root_ms = now_ms;
+                lantern_log_debug(
+                    "reqresp",
+                    &status_meta,
+                    "status needs block head_slot=%" PRIu64 " local_slot=%" PRIu64 " "
+                    "head_root=%s reason=%s",
+                    peer_status->head.slot,
+                    local_slot,
+                    head_root_text,
+                    needs_block_reason ? needs_block_reason : "unspecified");
+            }
+        }
     }
     else if (!needs_block)
     {
@@ -527,6 +752,8 @@ static bool lantern_client_peer_status_maybe_request_blocks(
             peer_status->head.slot,
             head_root_text);
     }
+
+    maybe_log_sync_progress_locked(client, local_slot);
 
     pthread_mutex_unlock(&client->status_lock);
 
@@ -793,7 +1020,7 @@ int reqresp_handle_status(
     format_root_hex(&peer_status->head.root, head_hex, sizeof(head_hex));
     format_root_hex(&peer_status->finalized.root, finalized_hex, sizeof(finalized_hex));
 
-    lantern_log_info(
+    lantern_log_debug(
         "network",
         &(const struct lantern_log_metadata){
             .validator = client->node_id,
@@ -1099,16 +1326,32 @@ void lantern_client_on_blocks_request_complete(
         format_root_hex(request_root, root_hex, sizeof(root_hex));
     }
     const char *outcome_text = lantern_blocks_request_outcome_text(outcome);
-    lantern_log_info(
-        "reqresp",
-        &(const struct lantern_log_metadata){
-            .validator = client->node_id,
-            .peer = peer_id},
-        "blocks_by_root complete outcome=%s root=%s entry_found=%s consecutive_failures=%" PRIu32,
-        outcome_text,
-        root_hex[0] ? root_hex : "0x0",
-        entry_found ? "true" : "false",
-        failure_count);
+    if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS && client->sync_in_progress)
+    {
+        lantern_log_debug(
+            "reqresp",
+            &(const struct lantern_log_metadata){
+                .validator = client->node_id,
+                .peer = peer_id},
+            "blocks_by_root complete outcome=%s root=%s entry_found=%s consecutive_failures=%" PRIu32,
+            outcome_text,
+            root_hex[0] ? root_hex : "0x0",
+            entry_found ? "true" : "false",
+            failure_count);
+    }
+    else
+    {
+        lantern_log_info(
+            "reqresp",
+            &(const struct lantern_log_metadata){
+                .validator = client->node_id,
+                .peer = peer_id},
+            "blocks_by_root complete outcome=%s root=%s entry_found=%s consecutive_failures=%" PRIu32,
+            outcome_text,
+            root_hex[0] ? root_hex : "0x0",
+            entry_found ? "true" : "false",
+            failure_count);
+    }
 
     lantern_client_clear_pending_parent_requested(client, request_root);
 

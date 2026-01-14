@@ -192,15 +192,31 @@ static bool lantern_client_process_stream_block_chunk(
     char computed_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     format_root_hex(&computed, computed_hex, sizeof(computed_hex));
     bool matches = memcmp(computed.bytes, ctx->root.bytes, LANTERN_ROOT_SIZE) == 0;
-    lantern_log_info(
-        "reqresp",
-        meta,
-        "streamed block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s match=%s attestations=%zu",
-        streamed_block.message.block.slot,
-        streamed_block.message.block.proposer_index,
-        computed_hex[0] ? computed_hex : "0x0",
-        matches ? "true" : "false",
-        streamed_block.message.block.body.attestations.length);
+    bool quiet_log = ctx->client && ctx->client->sync_in_progress;
+    if (quiet_log)
+    {
+        lantern_log_debug(
+            "reqresp",
+            meta,
+            "streamed block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s match=%s attestations=%zu",
+            streamed_block.message.block.slot,
+            streamed_block.message.block.proposer_index,
+            computed_hex[0] ? computed_hex : "0x0",
+            matches ? "true" : "false",
+            streamed_block.message.block.body.attestations.length);
+    }
+    else
+    {
+        lantern_log_info(
+            "reqresp",
+            meta,
+            "streamed block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s match=%s attestations=%zu",
+            streamed_block.message.block.slot,
+            streamed_block.message.block.proposer_index,
+            computed_hex[0] ? computed_hex : "0x0",
+            matches ? "true" : "false",
+            streamed_block.message.block.body.attestations.length);
+    }
 
     lantern_client_record_block(
         ctx->client,
@@ -396,7 +412,7 @@ static void *block_request_worker(void *arg)
         goto cleanup;
     }
 
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "sending %s request root=%s bytes=%zu",
@@ -526,7 +542,7 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
         .peer = ctx->peer_text[0] ? ctx->peer_text : NULL,
     };
 
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "block request stream opened protocol=%s err=%d",
@@ -600,7 +616,7 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
         block_request_ctx_free(ctx);
         return;
     }
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &meta,
         "spawned blocks_by_root worker protocol=%s",
@@ -672,7 +688,7 @@ static int schedule_blocks_request(
 
     char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     format_root_hex(root, root_hex, sizeof(root_hex));
-    lantern_log_info(
+    lantern_log_debug(
         "reqresp",
         &(const struct lantern_log_metadata){
             .validator = client->node_id,
