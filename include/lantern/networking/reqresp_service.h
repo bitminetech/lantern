@@ -13,7 +13,10 @@
 
 /* Canonical protocol IDs from LeanSpec (tools/leanSpec/src/lean_spec/subspecs/networking/reqresp/message.py) */
 #define LANTERN_REQRESP_STATUS_PROTOCOL "/leanconsensus/req/status/1/ssz_snappy"
-#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL "/leanconsensus/req/blocks_by_root/1/ssz_snappy"
+/* Current blocks-by-root protocol used by peer clients (lean_* prefix). */
+#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL "/leanconsensus/req/lean_blocks_by_root/1/ssz_snappy"
+/* Legacy blocks-by-root protocol (no lean_* prefix) for backwards compatibility. */
+#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_LEGACY "/leanconsensus/req/blocks_by_root/1/ssz_snappy"
 #define LANTERN_REQRESP_STATUS_PREVIEW_BYTES 256u
 #define LANTERN_REQRESP_MAX_CHUNK_BYTES (1u << 22)
 #define LANTERN_REQRESP_MAX_CONTEXT_BYTES (1u << 20)
@@ -53,6 +56,7 @@ enum lantern_reqresp_protocol_kind {
 
 #define LANTERN_STATUS_PROTOCOL_ID LANTERN_REQRESP_STATUS_PROTOCOL
 #define LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL
+#define LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_LEGACY
 #define LANTERN_STATUS_PREVIEW_BYTES LANTERN_REQRESP_STATUS_PREVIEW_BYTES
 
 struct libp2p_host;
@@ -88,6 +92,7 @@ struct lantern_reqresp_service {
     struct lantern_reqresp_service_callbacks callbacks;
     struct libp2p_protocol_server *status_server;
     struct libp2p_protocol_server *blocks_server;
+    struct libp2p_protocol_server *blocks_server_legacy;
     struct libp2p_subscription *event_subscription;
     int lock_initialized;
     pthread_mutex_t lock;

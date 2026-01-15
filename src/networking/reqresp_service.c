@@ -148,6 +148,7 @@ static void lantern_reqresp_service_clear(struct lantern_reqresp_service *servic
     service->callbacks.collect_blocks = NULL;
     service->status_server = NULL;
     service->blocks_server = NULL;
+    service->blocks_server_legacy = NULL;
     service->event_subscription = NULL;
 }
 
@@ -183,6 +184,9 @@ void lantern_reqresp_service_reset(struct lantern_reqresp_service *service) {
 
     if (service->blocks_server && host) {
         (void)libp2p_host_unlisten(host, service->blocks_server);
+    }
+    if (service->blocks_server_legacy && host) {
+        (void)libp2p_host_unlisten(host, service->blocks_server_legacy);
     }
 
     destroy_lock(service);
@@ -275,6 +279,52 @@ static bool payload_is_snappy_framed(const uint8_t *data, size_t len) {
         && len >= 10
         && data[0] == 0xff
         && memcmp(data + 4, "sNaPpY", 6) == 0;
+}
+
+static bool blocks_by_root_debug_enabled(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *env = getenv("LANTERN_DEBUG_BLOCKS_BY_ROOT");
+        cached = (env && env[0] != '\0' && !(env[0] == '0' && env[1] == '\0')) ? 1 : 0;
+    }
+    return cached == 1;
+}
+
+static void blocks_by_root_dump_bytes(
+    const char *label,
+    const uint8_t *data,
+    size_t length,
+    const struct lantern_log_metadata *meta) {
+    if (!blocks_by_root_debug_enabled() || !data || length == 0) {
+        return;
+    }
+
+    uint64_t seq = lantern_reqresp_debug_sequence_next();
+    char path[256];
+    const char *suffix = label && label[0] ? label : "payload";
+    if (snprintf(path, sizeof(path), "/data/blocks_by_root_%s_%" PRIu64 ".bin", suffix, seq) <= 0) {
+        return;
+    }
+
+    FILE *dump = fopen(path, "wb");
+    if (!dump) {
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "blocks_by_root dump open failed path=%s err=%d",
+            path,
+            errno);
+        return;
+    }
+    (void)fwrite(data, 1, length, dump);
+    fclose(dump);
+
+    lantern_log_info(
+        "reqresp",
+        meta,
+        "blocks_by_root debug dump path=%s bytes=%zu",
+        path,
+        length);
 }
 
 static int decode_status_payload(
@@ -1566,11 +1616,72 @@ static void *blocks_worker(void *arg) {
 
     LanternBlocksByRootRequest decoded_request;
     lantern_blocks_by_root_request_init(&decoded_request);
-    int decode_rc = lantern_network_blocks_by_root_request_decode_snappy(
-        &decoded_request,
-        request,
-        request_len);
+    size_t raw_len = 0;
+    size_t raw_written = 0;
+    uint8_t *raw_request = NULL;
+    int decode_rc = -1;
+
+    int snappy_len_rc = lantern_snappy_uncompressed_length(request, request_len, &raw_len);
+    if (snappy_len_rc != LANTERN_SNAPPY_OK || raw_len == 0) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "blocks_by_root request snappy length failed bytes=%zu",
+            request_len);
+        blocks_by_root_dump_bytes("request_snappy", request, request_len, &meta);
+        free(request);
+        lantern_blocks_by_root_request_reset(&decoded_request);
+        log_stream_error("decode", protocol_id, peer_text[0] ? peer_text : NULL);
+        close_stream(stream);
+        return NULL;
+    }
+
+    raw_request = (uint8_t *)malloc(raw_len > 0 ? raw_len : 1u);
+    if (!raw_request) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "blocks_by_root request allocation failed bytes=%zu",
+            raw_len);
+        blocks_by_root_dump_bytes("request_snappy", request, request_len, &meta);
+        free(request);
+        lantern_blocks_by_root_request_reset(&decoded_request);
+        log_stream_error("decode", protocol_id, peer_text[0] ? peer_text : NULL);
+        close_stream(stream);
+        return NULL;
+    }
+
+    raw_written = raw_len;
+    int snappy_rc = lantern_snappy_decompress(request, request_len, raw_request, raw_len, &raw_written);
+    if (snappy_rc != LANTERN_SNAPPY_OK || raw_written == 0) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "blocks_by_root request decompress failed compressed=%zu raw=%zu",
+            request_len,
+            raw_len);
+        blocks_by_root_dump_bytes("request_snappy", request, request_len, &meta);
+        free(request);
+        free(raw_request);
+        lantern_blocks_by_root_request_reset(&decoded_request);
+        log_stream_error("decode", protocol_id, peer_text[0] ? peer_text : NULL);
+        close_stream(stream);
+        return NULL;
+    }
     free(request);
+
+    decode_rc = lantern_network_blocks_by_root_request_decode(&decoded_request, raw_request, raw_written);
+    if (decode_rc != 0) {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "blocks_by_root request decode failed framing=%s compressed=%zu raw=%zu",
+            request_framed ? "framed" : "raw",
+            request_len,
+            raw_written);
+        blocks_by_root_dump_bytes("request_raw", raw_request, raw_written, &meta);
+    }
+    free(raw_request);
     if (decode_rc != 0) {
         lantern_blocks_by_root_request_reset(&decoded_request);
         log_stream_error("decode", protocol_id, peer_text[0] ? peer_text : NULL);
@@ -1848,6 +1959,10 @@ static void blocks_on_open_primary(libp2p_stream_t *stream, void *user_data) {
     blocks_on_open_impl(stream, user_data, LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID);
 }
 
+static void blocks_on_open_legacy(libp2p_stream_t *stream, void *user_data) {
+    blocks_on_open_impl(stream, user_data, LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY);
+}
+
 int lantern_reqresp_service_start(
     struct lantern_reqresp_service *service,
     const struct lantern_reqresp_service_config *config) {
@@ -1879,6 +1994,13 @@ int lantern_reqresp_service_start(
     blocks_def.on_open = blocks_on_open_primary;
     blocks_def.user_data = service;
 
+    libp2p_protocol_def_t blocks_legacy_def;
+    memset(&blocks_legacy_def, 0, sizeof(blocks_legacy_def));
+    blocks_legacy_def.protocol_id = LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY;
+    blocks_legacy_def.read_mode = LIBP2P_READ_PULL;
+    blocks_legacy_def.on_open = blocks_on_open_legacy;
+    blocks_legacy_def.user_data = service;
+
     if (libp2p_host_listen_protocol(service->host, &status_def, &service->status_server) != 0) {
         lantern_reqresp_service_reset(service);
         return -1;
@@ -1887,11 +2009,20 @@ int lantern_reqresp_service_start(
         lantern_reqresp_service_reset(service);
         return -1;
     }
+    if (libp2p_host_listen_protocol(service->host, &blocks_legacy_def, &service->blocks_server_legacy) != 0) {
+        lantern_log_warn(
+            "network",
+            &(const struct lantern_log_metadata){0},
+            "legacy blocks_by_root protocol registration failed");
+        service->blocks_server_legacy = NULL;
+    }
 
     lantern_log_info(
         "network",
         &(const struct lantern_log_metadata){0},
-        "request/response protocols registered");
+        "request/response protocols registered (blocks primary=%s legacy=%s)",
+        LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID,
+        LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY);
 
     return 0;
 }

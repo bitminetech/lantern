@@ -402,6 +402,35 @@ int lantern_network_blocks_by_root_request_encode(
     return 0;
 }
 
+int lantern_network_blocks_by_root_request_encode_prefixed(
+    const LanternBlocksByRootRequest *req,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written) {
+    if (!req || !out || !written) {
+        return -1;
+    }
+    if (req->roots.length > LANTERN_MAX_REQUEST_BLOCKS) {
+        return -1;
+    }
+    size_t roots_bytes = req->roots.length * LANTERN_ROOT_SIZE;
+    size_t total = roots_bytes + sizeof(uint32_t);
+    if (out_len < total) {
+        return -1;
+    }
+    if (write_u32_le((uint32_t)sizeof(uint32_t), out, out_len) != 0) {
+        return -1;
+    }
+    if (roots_bytes > 0) {
+        if (!req->roots.items) {
+            return -1;
+        }
+        memcpy(out + sizeof(uint32_t), req->roots.items, roots_bytes);
+    }
+    *written = total;
+    return 0;
+}
+
 int lantern_network_blocks_by_root_request_decode(
     LanternBlocksByRootRequest *req,
     const uint8_t *data,
@@ -417,10 +446,26 @@ int lantern_network_blocks_by_root_request_decode(
     }
 
     /* Canonical SSZ list encoding: raw concatenated roots. */
+    const uint8_t *payload = data;
+    size_t payload_len = data_len;
     if (data_len % LANTERN_ROOT_SIZE != 0) {
-        return -1;
+        if (data_len < sizeof(uint32_t)) {
+            return -1;
+        }
+        uint32_t offset = 0;
+        if (read_u32_le(data, data_len, &offset) != 0) {
+            return -1;
+        }
+        if (offset != sizeof(uint32_t) || offset > data_len) {
+            return -1;
+        }
+        payload = data + offset;
+        payload_len = data_len - offset;
+        if (payload_len % LANTERN_ROOT_SIZE != 0) {
+            return -1;
+        }
     }
-    size_t count = data_len / LANTERN_ROOT_SIZE;
+    size_t count = payload_len / LANTERN_ROOT_SIZE;
     if (count > LANTERN_MAX_REQUEST_BLOCKS) {
         return -1;
     }
@@ -431,7 +476,7 @@ int lantern_network_blocks_by_root_request_decode(
         if (!req->roots.items) {
             return -1;
         }
-        memcpy(req->roots.items, data, data_len);
+        memcpy(req->roots.items, payload, payload_len);
     }
     return 0;
 }

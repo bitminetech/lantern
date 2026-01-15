@@ -56,6 +56,11 @@ int lantern_network_blocks_by_root_request_encode(
     uint8_t *out,
     size_t out_len,
     size_t *written);
+int lantern_network_blocks_by_root_request_encode_prefixed(
+    const LanternBlocksByRootRequest *req,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written);
 int lantern_network_blocks_by_root_request_decode(
     LanternBlocksByRootRequest *req,
     const uint8_t *data,

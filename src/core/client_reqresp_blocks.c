@@ -67,6 +67,7 @@ static bool blocks_next_variant(
     enum lantern_blocks_req_variant *out_next);
 static const char *blocks_protocol_id_for_variant(enum lantern_blocks_req_variant variant);
 static bool blocks_variant_uses_raw_snappy(enum lantern_blocks_req_variant variant);
+static bool blocks_variant_uses_prefixed_request(enum lantern_blocks_req_variant variant);
 static bool blocks_variant_is_legacy(enum lantern_blocks_req_variant variant);
 
 
@@ -95,31 +96,42 @@ static bool blocks_next_variant(
     enum lantern_blocks_req_variant current,
     enum lantern_blocks_req_variant *out_next)
 {
-    (void)current;
-    (void)out_next;
-    /* No fallback variants - only canonical protocol supported */
+    if (!out_next)
+    {
+        return false;
+    }
+    if (current == LANTERN_BLOCKS_REQ_VARIANT_PRIMARY)
+    {
+        *out_next = LANTERN_BLOCKS_REQ_VARIANT_LEGACY;
+        return true;
+    }
     return false;
 }
 
 static const char *blocks_protocol_id_for_variant(enum lantern_blocks_req_variant variant)
 {
-    (void)variant;
-    /* Only canonical protocol ID supported */
+    if (variant == LANTERN_BLOCKS_REQ_VARIANT_LEGACY)
+    {
+        return LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID_LEGACY;
+    }
     return LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
 }
 
 static bool blocks_variant_uses_raw_snappy(enum lantern_blocks_req_variant variant)
 {
     (void)variant;
-    /* Always use framed snappy (canonical format) */
+    /* Req/resp uses framed snappy per LeanSpec; raw is for gossip only. */
     return false;
+}
+
+static bool blocks_variant_uses_prefixed_request(enum lantern_blocks_req_variant variant)
+{
+    return variant == LANTERN_BLOCKS_REQ_VARIANT_PRIMARY;
 }
 
 static bool blocks_variant_is_legacy(enum lantern_blocks_req_variant variant)
 {
-    (void)variant;
-    /* No legacy variants */
-    return false;
+    return variant == LANTERN_BLOCKS_REQ_VARIANT_LEGACY;
 }
 
 
@@ -343,7 +355,12 @@ static void *block_request_worker(void *arg)
     request.roots.items[0] = ctx->root;
 
     bool use_raw_snappy = blocks_variant_uses_raw_snappy(ctx->variant);
+    bool use_prefixed_request = blocks_variant_uses_prefixed_request(ctx->variant);
     size_t raw_size = request.roots.length * LANTERN_ROOT_SIZE;
+    if (use_prefixed_request)
+    {
+        raw_size += sizeof(uint32_t);
+    }
     raw_request = (uint8_t *)malloc(raw_size > 0 ? raw_size : 1u);
     if (!raw_request)
     {
@@ -356,7 +373,10 @@ static void *block_request_worker(void *arg)
     }
 
     size_t raw_written = 0;
-    if (lantern_network_blocks_by_root_request_encode(&request, raw_request, raw_size, &raw_written) != 0
+    int encode_rc = use_prefixed_request
+        ? lantern_network_blocks_by_root_request_encode_prefixed(&request, raw_request, raw_size, &raw_written)
+        : lantern_network_blocks_by_root_request_encode(&request, raw_request, raw_size, &raw_written);
+    if (encode_rc != 0
         || raw_written == 0)
     {
         lantern_log_error(
@@ -487,12 +507,24 @@ static void *block_request_worker(void *arg)
         goto cleanup;
     }
 
+    int shutdown_rc = libp2p_stream_shutdown_write(stream);
+    if (shutdown_rc != 0)
+    {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to half-close blocks_by_root stream err=%d",
+            shutdown_rc);
+        schedule_retry = can_retry;
+        goto cleanup;
+    }
+
     struct lantern_reqresp_service *service = ctx->client ? &ctx->client->reqresp : NULL;
     bool streaming_mode = !ctx->using_legacy;
     uint8_t *initial_chunk = NULL;
     size_t initial_chunk_len = 0;
     bool initial_chunk_pending = false;
-    bool expect_response_code = !blocks_variant_uses_raw_snappy(ctx->variant);
+    bool expect_response_code = true;
     bool response_code_pending = expect_response_code;
     bool saw_block = false;
 
@@ -1061,14 +1093,14 @@ static int schedule_blocks_request_variant(
  * when the dial completes.
  *
  * Protocol selection:
- * - Modern protocol preferred by default
+ * - Lean-prefixed protocol preferred by default
  * - Legacy protocol used only when explicitly requested
- * - Automatic fallback to legacy on modern protocol failures
+ * - Automatic fallback to legacy on dial failures
  *
  * @param client        Client instance
  * @param peer_id_text  Peer ID string
  * @param root          Block root to request
- * @param use_legacy    Unused (only canonical protocol supported)
+ * @param use_legacy    If true, force legacy protocol on first attempt
  * @return 0 on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL, the peer ID is invalid, or the root is zero
  * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
@@ -1082,6 +1114,7 @@ int lantern_client_schedule_blocks_request(
     const LanternRoot *root,
     bool use_legacy)
 {
-    (void)use_legacy; /* Only canonical protocol supported */
-    return schedule_blocks_request_variant(client, peer_id_text, root, LANTERN_BLOCKS_REQ_VARIANT_PRIMARY);
+    enum lantern_blocks_req_variant variant =
+        use_legacy ? LANTERN_BLOCKS_REQ_VARIANT_LEGACY : LANTERN_BLOCKS_REQ_VARIANT_PRIMARY;
+    return schedule_blocks_request_variant(client, peer_id_text, root, variant);
 }

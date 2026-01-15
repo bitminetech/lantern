@@ -132,13 +132,131 @@ static bool should_request_missing_root(
     return true;
 }
 
+static bool select_fallback_peer_for_missing_root(
+    struct lantern_client *client,
+    const LanternRoot *root,
+    const char *exclude_peer,
+    char *out_peer,
+    size_t out_peer_len)
+{
+    if (!client || !root || lantern_root_is_zero(root) || !out_peer || out_peer_len == 0)
+    {
+        return false;
+    }
+
+    out_peer[0] = '\0';
+
+    bool state_locked = lantern_client_lock_state(client);
+    bool known = false;
+    if (state_locked)
+    {
+        known = lantern_client_block_known_locked(client, root, NULL);
+    }
+    lantern_client_unlock_state(client, state_locked);
+
+    if (known)
+    {
+        return false;
+    }
+
+    if (pthread_mutex_lock(&client->status_lock) != 0)
+    {
+        return false;
+    }
+
+    if (pending_contains_root(client, root))
+    {
+        pthread_mutex_unlock(&client->status_lock);
+        return false;
+    }
+
+    uint64_t now_ms = monotonic_millis();
+    const size_t peer_cap = lantern_peer_id_capacity();
+    struct lantern_peer_status_entry *best = NULL;
+    uint32_t best_failures = UINT32_MAX;
+    bool best_has_status = false;
+
+    for (size_t i = 0; i < client->peer_status_count; ++i)
+    {
+        struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
+        if (!entry->peer_id[0])
+        {
+            continue;
+        }
+        if (exclude_peer && exclude_peer[0]
+            && strncmp(entry->peer_id, exclude_peer, peer_cap) == 0)
+        {
+            continue;
+        }
+        if (entry->requested_head)
+        {
+            continue;
+        }
+
+        uint64_t backoff_ms = blocks_request_backoff_ms(entry->consecutive_blocks_failures);
+        if (entry->consecutive_blocks_failures == 0
+            && backoff_ms < LANTERN_BLOCKS_REQUEST_MIN_POLL_MS)
+        {
+            backoff_ms = LANTERN_BLOCKS_REQUEST_MIN_POLL_MS;
+        }
+
+        if (entry->last_blocks_request_ms != 0
+            && now_ms < entry->last_blocks_request_ms + backoff_ms)
+        {
+            continue;
+        }
+
+        bool has_status = entry->has_status;
+        uint32_t failures = entry->consecutive_blocks_failures;
+        if (!best
+            || failures < best_failures
+            || (failures == best_failures && has_status && !best_has_status))
+        {
+            best = entry;
+            best_failures = failures;
+            best_has_status = has_status;
+        }
+    }
+
+    if (!best)
+    {
+        pthread_mutex_unlock(&client->status_lock);
+        return false;
+    }
+
+    best->requested_head = true;
+    best->last_blocks_request_ms = now_ms;
+    strncpy(out_peer, best->peer_id, out_peer_len - 1);
+    out_peer[out_peer_len - 1] = '\0';
+    pthread_mutex_unlock(&client->status_lock);
+
+    return out_peer[0] != '\0';
+}
+
 static void request_missing_checkpoint_root(
     struct lantern_client *client,
     const char *peer_text,
     const LanternRoot *root,
     uint64_t slot)
 {
-    if (!should_request_missing_root(client, peer_text, root))
+    const char *selected_peer = NULL;
+    char fallback_peer[sizeof(((struct lantern_peer_status_entry *)0)->peer_id)];
+    fallback_peer[0] = '\0';
+
+    if (peer_text && peer_text[0] && should_request_missing_root(client, peer_text, root))
+    {
+        selected_peer = peer_text;
+    }
+    else if (select_fallback_peer_for_missing_root(
+                 client,
+                 root,
+                 peer_text,
+                 fallback_peer,
+                 sizeof(fallback_peer)))
+    {
+        selected_peer = fallback_peer;
+    }
+    else
     {
         return;
     }
@@ -149,16 +267,16 @@ static void request_missing_checkpoint_root(
         "reqresp",
         &(const struct lantern_log_metadata){
             .validator = client ? client->node_id : NULL,
-            .peer = (peer_text && *peer_text) ? peer_text : NULL},
+            .peer = (selected_peer && *selected_peer) ? selected_peer : NULL},
         "requesting missing checkpoint root=%s slot=%" PRIu64,
         root_hex[0] ? root_hex : "0x0",
         slot);
 
-    if (lantern_client_schedule_blocks_request(client, peer_text, root, false) != 0)
+    if (lantern_client_schedule_blocks_request(client, selected_peer, root, false) != 0)
     {
         lantern_client_on_blocks_request_complete(
             client,
-            peer_text,
+            selected_peer,
             root,
             LANTERN_BLOCKS_REQUEST_ABORTED);
     }
