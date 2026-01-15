@@ -26,6 +26,7 @@
 #include "lantern/http/server.h"
 #include "lantern/metrics/lean_metrics.h"
 #include "lantern/support/log.h"
+#include "lantern/version.h"
 
 
 enum
@@ -345,6 +346,15 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
     struct lantern_client *client = context;
     memset(out_snapshot, 0, sizeof(*out_snapshot));
 
+    if (client->node_id)
+    {
+        strncpy(out_snapshot->node_name, client->node_id, sizeof(out_snapshot->node_name) - 1);
+        out_snapshot->node_name[sizeof(out_snapshot->node_name) - 1] = '\0';
+    }
+    strncpy(out_snapshot->node_version, LANTERN_VERSION, sizeof(out_snapshot->node_version) - 1);
+    out_snapshot->node_version[sizeof(out_snapshot->node_version) - 1] = '\0';
+    out_snapshot->node_start_time_seconds = client->node_start_time_seconds;
+
     const bool expect_state_lock = client->state_lock_initialized;
     bool state_locked = lantern_client_lock_state(client);
     if (expect_state_lock && !state_locked)
@@ -388,12 +398,51 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
         state_justified = client->state.latest_justified;
         state_finalized = client->state.latest_finalized;
     }
+    uint64_t safe_target_slot = 0;
+    if (client->has_fork_choice)
+    {
+        const LanternRoot *safe_target = lantern_fork_choice_safe_target(&client->fork_choice);
+        if (safe_target)
+        {
+            uint64_t slot = 0;
+            if (lantern_fork_choice_block_info(&client->fork_choice, safe_target, &slot, NULL, NULL) == 0)
+            {
+                safe_target_slot = slot;
+            }
+        }
+    }
     lantern_client_unlock_state(client, state_locked);
 
+    uint64_t current_slot = 0;
+    if (!lantern_client_current_slot(client, &current_slot))
+    {
+        current_slot = 0;
+    }
     out_snapshot->lean_head_slot = have_fork_head ? fork_head_slot : state_head_slot;
+    out_snapshot->lean_current_slot = current_slot;
+    out_snapshot->lean_safe_target_slot = safe_target_slot;
     out_snapshot->lean_latest_justified_slot = state_justified.slot;
     out_snapshot->lean_latest_finalized_slot = state_finalized.slot;
     out_snapshot->lean_validators_count = client->local_validator_count;
+    out_snapshot->lean_connected_peers = 0;
+    memset(out_snapshot->peer_connection_events, 0, sizeof(out_snapshot->peer_connection_events));
+    memset(out_snapshot->peer_disconnection_events, 0, sizeof(out_snapshot->peer_disconnection_events));
+    if (client->connection_lock_initialized)
+    {
+        if (pthread_mutex_lock(&client->connection_lock) == 0)
+        {
+            out_snapshot->lean_connected_peers = client->connected_peers;
+            memcpy(
+                out_snapshot->peer_connection_events,
+                client->peer_connection_events,
+                sizeof(out_snapshot->peer_connection_events));
+            memcpy(
+                out_snapshot->peer_disconnection_events,
+                client->peer_disconnection_events,
+                sizeof(out_snapshot->peer_disconnection_events));
+            pthread_mutex_unlock(&client->connection_lock);
+        }
+    }
     out_snapshot->peer_vote_metrics_count = 0;
     if (client->peer_vote_lock_initialized)
     {

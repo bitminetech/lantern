@@ -405,6 +405,8 @@ static void client_reset_base(struct lantern_client *client)
     lantern_string_list_init(&client->bootnodes);
     lantern_string_list_init(&client->dialer_peers);
     lantern_string_list_init(&client->connected_peer_ids);
+    lantern_string_list_init(&client->connected_peer_ids_inbound);
+    lantern_string_list_init(&client->connected_peer_ids_outbound);
     lantern_string_list_init(&client->status_failure_peer_ids);
     lantern_genesis_artifacts_init(&client->genesis);
     lantern_enr_record_init(&client->local_enr);
@@ -1611,6 +1613,8 @@ static void shutdown_network_services(struct lantern_client *client)
         client->connected_peers = 0;
     }
     lantern_string_list_reset(&client->connected_peer_ids);
+    lantern_string_list_reset(&client->connected_peer_ids_inbound);
+    lantern_string_list_reset(&client->connected_peer_ids_outbound);
 }
 
 
@@ -1941,6 +1945,7 @@ lantern_client_error lantern_init(
     lantern_client_error err = LANTERN_CLIENT_OK;
 
     client_reset_base(client);
+    client->node_start_time_seconds = validator_wall_time_now_seconds();
 
     err = client_apply_options(client, options);
     if (err != LANTERN_CLIENT_OK)

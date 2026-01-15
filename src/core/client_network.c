@@ -96,6 +96,12 @@ void connection_counter_reset(struct lantern_client *client)
         client->connected_peers = 0;
         lantern_string_list_reset(&client->connected_peer_ids);
         lantern_string_list_init(&client->connected_peer_ids);
+        lantern_string_list_reset(&client->connected_peer_ids_inbound);
+        lantern_string_list_init(&client->connected_peer_ids_inbound);
+        lantern_string_list_reset(&client->connected_peer_ids_outbound);
+        lantern_string_list_init(&client->connected_peer_ids_outbound);
+        memset(client->peer_connection_events, 0, sizeof(client->peer_connection_events));
+        memset(client->peer_disconnection_events, 0, sizeof(client->peer_disconnection_events));
         return;
     }
     if (pthread_mutex_lock(&client->connection_lock) == 0)
@@ -103,6 +109,12 @@ void connection_counter_reset(struct lantern_client *client)
         client->connected_peers = 0;
         lantern_string_list_reset(&client->connected_peer_ids);
         lantern_string_list_init(&client->connected_peer_ids);
+        lantern_string_list_reset(&client->connected_peer_ids_inbound);
+        lantern_string_list_init(&client->connected_peer_ids_inbound);
+        lantern_string_list_reset(&client->connected_peer_ids_outbound);
+        lantern_string_list_init(&client->connected_peer_ids_outbound);
+        memset(client->peer_connection_events, 0, sizeof(client->peer_connection_events));
+        memset(client->peer_disconnection_events, 0, sizeof(client->peer_disconnection_events));
         pthread_mutex_unlock(&client->connection_lock);
     }
     else
@@ -110,6 +122,12 @@ void connection_counter_reset(struct lantern_client *client)
         client->connected_peers = 0;
         lantern_string_list_reset(&client->connected_peer_ids);
         lantern_string_list_init(&client->connected_peer_ids);
+        lantern_string_list_reset(&client->connected_peer_ids_inbound);
+        lantern_string_list_init(&client->connected_peer_ids_inbound);
+        lantern_string_list_reset(&client->connected_peer_ids_outbound);
+        lantern_string_list_init(&client->connected_peer_ids_outbound);
+        memset(client->peer_connection_events, 0, sizeof(client->peer_connection_events));
+        memset(client->peer_disconnection_events, 0, sizeof(client->peer_disconnection_events));
     }
 }
 
@@ -150,10 +168,26 @@ void connection_counter_update(
                 {
                     (void)lantern_string_list_append(&client->connected_peer_ids, peer_text);
                 }
+                if (inbound)
+                {
+                    if (!string_list_contains(&client->connected_peer_ids_inbound, peer_text))
+                    {
+                        (void)lantern_string_list_append(&client->connected_peer_ids_inbound, peer_text);
+                    }
+                }
+                else
+                {
+                    if (!string_list_contains(&client->connected_peer_ids_outbound, peer_text))
+                    {
+                        (void)lantern_string_list_append(&client->connected_peer_ids_outbound, peer_text);
+                    }
+                }
             }
             else if (delta < 0)
             {
                 string_list_remove(&client->connected_peer_ids, peer_text);
+                string_list_remove(&client->connected_peer_ids_inbound, peer_text);
+                string_list_remove(&client->connected_peer_ids_outbound, peer_text);
             }
             client->connected_peers = client->connected_peer_ids.len;
         }
@@ -195,6 +229,119 @@ void connection_counter_update(
         total,
         reason,
         connection_reason_text(reason));
+}
+
+static void record_peer_connection_event(
+    struct lantern_client *client,
+    bool inbound,
+    enum lantern_metrics_peer_conn_result result)
+{
+    if (!client || !client->connection_lock_initialized)
+    {
+        return;
+    }
+    size_t direction = inbound ? LANTERN_METRICS_DIR_INBOUND : LANTERN_METRICS_DIR_OUTBOUND;
+    if (direction >= LANTERN_METRICS_PEER_DIRECTION_COUNT
+        || result >= LANTERN_METRICS_PEER_CONN_RESULT_COUNT)
+    {
+        return;
+    }
+    if (pthread_mutex_lock(&client->connection_lock) == 0)
+    {
+        if (client->peer_connection_events[direction][result] < UINT64_MAX)
+        {
+            client->peer_connection_events[direction][result] += 1u;
+        }
+        pthread_mutex_unlock(&client->connection_lock);
+    }
+}
+
+static void record_peer_disconnection_event(
+    struct lantern_client *client,
+    bool inbound,
+    enum lantern_metrics_peer_disconnect_reason reason)
+{
+    if (!client || !client->connection_lock_initialized)
+    {
+        return;
+    }
+    size_t direction = inbound ? LANTERN_METRICS_DIR_INBOUND : LANTERN_METRICS_DIR_OUTBOUND;
+    if (direction >= LANTERN_METRICS_PEER_DIRECTION_COUNT
+        || reason >= LANTERN_METRICS_PEER_DISCONNECT_REASON_COUNT)
+    {
+        return;
+    }
+    if (pthread_mutex_lock(&client->connection_lock) == 0)
+    {
+        if (client->peer_disconnection_events[direction][reason] < UINT64_MAX)
+        {
+            client->peer_disconnection_events[direction][reason] += 1u;
+        }
+        pthread_mutex_unlock(&client->connection_lock);
+    }
+}
+
+static enum lantern_metrics_peer_conn_result map_connection_result(int code)
+{
+    if (code == LIBP2P_ERR_TIMEOUT)
+    {
+        return LANTERN_METRICS_CONN_TIMEOUT;
+    }
+    return LANTERN_METRICS_CONN_ERROR;
+}
+
+static enum lantern_metrics_peer_disconnect_reason map_disconnect_reason(int reason)
+{
+    switch (reason)
+    {
+        case LIBP2P_ERR_TIMEOUT:
+            return LANTERN_METRICS_DISCONNECT_TIMEOUT;
+        case LIBP2P_ERR_EOF:
+        case LIBP2P_ERR_CLOSED:
+            return LANTERN_METRICS_DISCONNECT_REMOTE_CLOSE;
+        case LIBP2P_ERR_CANCELED:
+            return LANTERN_METRICS_DISCONNECT_LOCAL_CLOSE;
+        default:
+            return LANTERN_METRICS_DISCONNECT_ERROR;
+    }
+}
+
+static bool peer_direction_from_cache(
+    struct lantern_client *client,
+    const char *peer_text,
+    bool *out_known)
+{
+    if (out_known)
+    {
+        *out_known = false;
+    }
+    if (!client || !peer_text || !peer_text[0] || !client->connection_lock_initialized)
+    {
+        return false;
+    }
+
+    bool inbound = false;
+    bool known = false;
+    if (pthread_mutex_lock(&client->connection_lock) == 0)
+    {
+        if (string_list_contains(&client->connected_peer_ids_inbound, peer_text))
+        {
+            inbound = true;
+            known = true;
+        }
+        else if (string_list_contains(&client->connected_peer_ids_outbound, peer_text))
+        {
+            inbound = false;
+            known = true;
+        }
+        pthread_mutex_unlock(&client->connection_lock);
+    }
+
+    if (out_known)
+    {
+        *out_known = known;
+    }
+    return inbound;
 }
 
 
@@ -1218,6 +1365,7 @@ static void handle_connection_opened_event(
     }
 
     connection_counter_update(client, 1, peer, inbound, 0);
+    record_peer_connection_event(client, inbound, LANTERN_METRICS_CONN_SUCCESS);
 
     if (!peer)
     {
@@ -1249,15 +1397,18 @@ static void handle_connection_closed_event(
         return;
     }
 
-    connection_counter_update(client, -1, peer, false, reason);
+    char peer_text[128];
+    peer_text[0] = '\0';
+    format_peer_id_text(peer, peer_text, sizeof(peer_text));
+    bool inbound = peer_text[0] ? peer_direction_from_cache(client, peer_text, NULL) : false;
+
+    connection_counter_update(client, -1, peer, inbound, reason);
+    record_peer_disconnection_event(client, inbound, map_disconnect_reason(reason));
 
     if (!peer)
     {
         return;
     }
-
-    char peer_text[128];
-    format_peer_id_text(peer, peer_text, sizeof(peer_text));
 
     lantern_log_info(
         "network",
@@ -1336,6 +1487,8 @@ static void handle_outgoing_connection_error_event(
         return;
     }
 
+    record_peer_connection_event(client, false, map_connection_result(code));
+
     char peer_text[128];
     format_peer_id_text(peer, peer_text, sizeof(peer_text));
 
@@ -1372,6 +1525,8 @@ static void handle_incoming_connection_error_event(
     {
         return;
     }
+
+    record_peer_connection_event(client, true, map_connection_result(code));
 
     char peer_text[128];
     format_peer_id_text(peer, peer_text, sizeof(peer_text));

@@ -15,16 +15,24 @@ struct lean_histogram {
 
 static const double kDefaultShortBuckets[] = {0.005, 0.01, 0.025, 0.05, 0.1, 1.0};
 static const double kStateTransitionBuckets[] = {0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0};
+static const double kReorgDepthBuckets[] = {1, 2, 3, 5, 7, 10, 20, 30, 50, 100};
 
 static pthread_mutex_t g_metrics_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_attestations_valid_total = 0;
 static uint64_t g_attestations_invalid_total = 0;
 static uint64_t g_state_slots_processed_total = 0;
 static uint64_t g_state_attestations_processed_total = 0;
+static uint64_t g_fork_choice_reorgs_total = 0;
+static uint64_t g_finalizations_success_total = 0;
+static uint64_t g_finalizations_error_total = 0;
 
 static struct lean_histogram g_hist_fork_choice_block = {
     .bounds = kDefaultShortBuckets,
     .bucket_count = ARRAY_LEN(kDefaultShortBuckets),
+};
+static struct lean_histogram g_hist_fork_choice_reorg_depth = {
+    .bounds = kReorgDepthBuckets,
+    .bucket_count = ARRAY_LEN(kReorgDepthBuckets),
 };
 static struct lean_histogram g_hist_attestation_validation = {
     .bounds = kDefaultShortBuckets,
@@ -120,7 +128,11 @@ void lean_metrics_reset(void) {
     g_attestations_invalid_total = 0;
     g_state_slots_processed_total = 0;
     g_state_attestations_processed_total = 0;
+    g_fork_choice_reorgs_total = 0;
+    g_finalizations_success_total = 0;
+    g_finalizations_error_total = 0;
     histogram_reset(&g_hist_fork_choice_block);
+    histogram_reset(&g_hist_fork_choice_reorg_depth);
     histogram_reset(&g_hist_attestation_validation);
     histogram_reset(&g_hist_state_transition);
     histogram_reset(&g_hist_state_slots);
@@ -134,6 +146,13 @@ void lean_metrics_reset(void) {
 void lean_metrics_record_fork_choice_block_time(double seconds) {
     pthread_mutex_lock(&g_metrics_lock);
     histogram_observe(&g_hist_fork_choice_block, seconds);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_fork_choice_reorg(uint64_t depth) {
+    pthread_mutex_lock(&g_metrics_lock);
+    g_fork_choice_reorgs_total += 1;
+    histogram_observe(&g_hist_fork_choice_reorg_depth, (double)depth);
     pthread_mutex_unlock(&g_metrics_lock);
 }
 
@@ -186,6 +205,16 @@ void lean_metrics_record_pq_signature_verification(double seconds) {
     pthread_mutex_unlock(&g_metrics_lock);
 }
 
+void lean_metrics_record_finalization_attempt(bool success) {
+    pthread_mutex_lock(&g_metrics_lock);
+    if (success) {
+        g_finalizations_success_total += 1;
+    } else {
+        g_finalizations_error_total += 1;
+    }
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
 void lean_metrics_snapshot(struct lean_metrics_snapshot *out) {
     if (!out) {
         return;
@@ -195,7 +224,11 @@ void lean_metrics_snapshot(struct lean_metrics_snapshot *out) {
     out->attestations_invalid_total = g_attestations_invalid_total;
     out->state_transition_slots_processed_total = g_state_slots_processed_total;
     out->state_transition_attestations_processed_total = g_state_attestations_processed_total;
+    out->fork_choice_reorgs_total = g_fork_choice_reorgs_total;
+    out->finalizations_success_total = g_finalizations_success_total;
+    out->finalizations_error_total = g_finalizations_error_total;
     histogram_snapshot(&out->fork_choice_block_time, &g_hist_fork_choice_block);
+    histogram_snapshot(&out->fork_choice_reorg_depth, &g_hist_fork_choice_reorg_depth);
     histogram_snapshot(&out->attestation_validation_time, &g_hist_attestation_validation);
     histogram_snapshot(&out->state_transition_time, &g_hist_state_transition);
     histogram_snapshot(&out->state_slots_time, &g_hist_state_slots);

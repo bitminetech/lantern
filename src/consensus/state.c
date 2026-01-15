@@ -1554,19 +1554,27 @@ static int lantern_state_process_attestations_internal(
     const LanternAttestations *attestations,
     const LanternBlockSignatures *signatures,
     bool apply_consensus_effects) {
+    int rc = 0;
+    double att_batch_start = lantern_time_now_seconds();
+    size_t att_attempted = 0;
+
     if (!state || !attestations) {
-        return -1;
+        rc = -1;
+        goto done;
     }
     uint64_t validator_count_u64 = state->config.num_validators;
     if (validator_count_u64 == 0 || validator_count_u64 > SIZE_MAX) {
-        return -1;
+        rc = -1;
+        goto done;
     }
     size_t validator_count = (size_t)validator_count_u64;
     if (!state->validator_votes || state->validator_votes_len != validator_count) {
-        return -1;
+        rc = -1;
+        goto done;
     }
     if (attestations->length > LANTERN_MAX_ATTESTATIONS) {
-        return -1;
+        rc = -1;
+        goto done;
     }
 
     LanternCheckpoint latest_justified = state->latest_justified;
@@ -1578,9 +1586,6 @@ static int lantern_state_process_attestations_internal(
         .has_slot = true,
         .slot = state->slot,
     };
-    double att_batch_start = lantern_time_now_seconds();
-    size_t att_attempted = 0;
-
     for (size_t i = 0; i < attestations->length; ++i) {
         const LanternVote *vote = &attestations->data[i];
         const LanternSignature *signature = NULL;
@@ -1685,7 +1690,8 @@ static int lantern_state_process_attestations_internal(
         }
         if (lantern_state_set_signed_validator_vote(state, (size_t)vote->validator_id, &stored_vote) != 0) {
             record_attestation_validation_metric(att_validation_start, false);
-            return -1;
+            rc = -1;
+            goto done;
         }
 
         if (!apply_consensus_effects) {
@@ -1773,7 +1779,8 @@ static int lantern_state_process_attestations_internal(
             /* Supermajority reached - mark as justified */
             if (lantern_state_mark_justified_slot(state, vote->target.slot) != 0) {
                 record_attestation_validation_metric(att_validation_start, false);
-                return -1;
+                rc = -1;
+                goto done;
             }
             target_is_justified = true;
             target_was_justified = true;
@@ -1885,10 +1892,12 @@ static int lantern_state_process_attestations_internal(
 
     if (apply_consensus_effects) {
         if (lantern_state_mark_justified_slot(state, latest_justified.slot) != 0) {
-            return -1;
+            rc = -1;
+            goto done;
         }
         if (lantern_state_mark_justified_slot(state, latest_finalized.slot) != 0) {
-            return -1;
+            rc = -1;
+            goto done;
         }
 
         state->latest_justified = latest_justified;
@@ -1907,12 +1916,22 @@ static int lantern_state_process_attestations_internal(
                     &state->latest_justified,
                     &state->latest_finalized)
                 != 0) {
-                return -1;
+                rc = -1;
+                goto done;
             }
         }
     }
-    lean_metrics_record_state_transition_attestations(att_attempted, lantern_time_now_seconds() - att_batch_start);
-    return 0;
+    if (rc == 0) {
+        lean_metrics_record_state_transition_attestations(
+            att_attempted,
+            lantern_time_now_seconds() - att_batch_start);
+    }
+
+done:
+    if (apply_consensus_effects) {
+        lean_metrics_record_finalization_attempt(rc == 0);
+    }
+    return rc;
 }
 
 int lantern_state_process_attestations(

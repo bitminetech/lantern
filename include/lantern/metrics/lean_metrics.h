@@ -24,7 +24,11 @@ struct lean_metrics_snapshot {
     uint64_t attestations_invalid_total;
     uint64_t state_transition_slots_processed_total;
     uint64_t state_transition_attestations_processed_total;
+    uint64_t fork_choice_reorgs_total;
+    uint64_t finalizations_success_total;
+    uint64_t finalizations_error_total;
     struct lean_metrics_histogram_snapshot fork_choice_block_time;
+    struct lean_metrics_histogram_snapshot fork_choice_reorg_depth;
     struct lean_metrics_histogram_snapshot attestation_validation_time;
     struct lean_metrics_histogram_snapshot state_transition_time;
     struct lean_metrics_histogram_snapshot state_slots_time;
@@ -36,6 +40,7 @@ struct lean_metrics_snapshot {
 
 void lean_metrics_reset(void);
 void lean_metrics_record_fork_choice_block_time(double seconds);
+void lean_metrics_record_fork_choice_reorg(uint64_t depth);
 void lean_metrics_record_attestation_validation(double seconds, bool valid);
 void lean_metrics_record_state_transition(double seconds);
 void lean_metrics_record_state_transition_slots(uint64_t slots_processed, double seconds);
@@ -43,6 +48,7 @@ void lean_metrics_record_state_transition_block(double seconds);
 void lean_metrics_record_state_transition_attestations(uint64_t count, double seconds);
 void lean_metrics_record_pq_signature_signing(double seconds);
 void lean_metrics_record_pq_signature_verification(double seconds);
+void lean_metrics_record_finalization_attempt(bool success);
 void lean_metrics_snapshot(struct lean_metrics_snapshot *out);
 
 #ifdef __cplusplus

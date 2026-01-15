@@ -1,0 +1,6 @@
+#ifndef LANTERN_VERSION_H
+#define LANTERN_VERSION_H
+
+#define LANTERN_VERSION "v0.0.1"
+
+#endif /* LANTERN_VERSION_H */

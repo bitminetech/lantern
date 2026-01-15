@@ -166,12 +166,19 @@ struct lantern_client {
     struct lantern_http_server http_server;
     bool http_running;
     bool genesis_fallback_used;
+    uint64_t node_start_time_seconds;
     size_t connected_peers;
+    uint64_t peer_connection_events[LANTERN_METRICS_PEER_DIRECTION_COUNT]
+                                   [LANTERN_METRICS_PEER_CONN_RESULT_COUNT];
+    uint64_t peer_disconnection_events[LANTERN_METRICS_PEER_DIRECTION_COUNT]
+                                      [LANTERN_METRICS_PEER_DISCONNECT_REASON_COUNT];
     pthread_mutex_t connection_lock;
     bool connection_lock_initialized;
     struct libp2p_subscription *connection_subscription;
     struct lantern_string_list dialer_peers;
     struct lantern_string_list connected_peer_ids;
+    struct lantern_string_list connected_peer_ids_inbound;
+    struct lantern_string_list connected_peer_ids_outbound;
     struct lantern_string_list status_failure_peer_ids;
     struct lantern_pending_block_list pending_blocks;
     pthread_mutex_t pending_lock;

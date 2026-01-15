@@ -717,10 +717,69 @@ static int lmd_ghost_compute(
     }
 }
 
+static uint64_t compute_reorg_depth(
+    const LanternForkChoice *store,
+    size_t old_index,
+    size_t new_index) {
+    if (!store || !store->blocks || store->block_len == 0) {
+        return 0;
+    }
+    if (old_index >= store->block_len || new_index >= store->block_len) {
+        return 0;
+    }
+
+    uint64_t *depths = calloc(store->block_len, sizeof(*depths));
+    if (!depths) {
+        return 0;
+    }
+    for (size_t i = 0; i < store->block_len; ++i) {
+        depths[i] = UINT64_MAX;
+    }
+
+    size_t cursor = old_index;
+    uint64_t depth = 0;
+    while (cursor < store->block_len && depths[cursor] == UINT64_MAX) {
+        depths[cursor] = depth;
+        size_t parent_index = store->blocks[cursor].parent_index;
+        if (parent_index == SIZE_MAX) {
+            break;
+        }
+        cursor = parent_index;
+        depth += 1;
+    }
+
+    uint64_t reorg_depth = 0;
+    cursor = new_index;
+    while (cursor < store->block_len) {
+        if (depths[cursor] != UINT64_MAX) {
+            reorg_depth = depths[cursor];
+            break;
+        }
+        size_t parent_index = store->blocks[cursor].parent_index;
+        if (parent_index == SIZE_MAX) {
+            break;
+        }
+        cursor = parent_index;
+    }
+
+    free(depths);
+    return reorg_depth;
+}
+
 int lantern_fork_choice_recompute_head(LanternForkChoice *store) {
     if (!store || !store->initialized || !store->has_anchor) {
         return -1;
     }
+    LanternRoot previous_head;
+    bool had_head = store->has_head;
+    if (had_head) {
+        previous_head = store->head;
+    } else {
+        zero_root(&previous_head);
+    }
+    size_t previous_index = SIZE_MAX;
+    bool previous_index_valid = had_head && map_lookup(store, &previous_head, &previous_index);
+
     LanternRoot head;
     if (lmd_ghost_compute(
             store,
@@ -734,6 +793,16 @@ int lantern_fork_choice_recompute_head(LanternForkChoice *store) {
     }
     store->head = head;
     store->has_head = true;
+
+    if (had_head && root_compare(&previous_head, &head) != 0 && previous_index_valid) {
+        size_t new_index = SIZE_MAX;
+        if (map_lookup(store, &head, &new_index)) {
+            uint64_t reorg_depth = compute_reorg_depth(store, previous_index, new_index);
+            if (reorg_depth > 0) {
+                lean_metrics_record_fork_choice_reorg(reorg_depth);
+            }
+        }
+    }
 
     size_t head_index = 0;
     if (map_lookup(store, &head, &head_index)) {
