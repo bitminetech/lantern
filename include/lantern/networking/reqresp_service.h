@@ -12,8 +12,8 @@
 #include "peer_id/peer_id.h"
 
 /* Canonical protocol IDs from LeanSpec (tools/leanSpec/src/lean_spec/subspecs/networking/reqresp/message.py) */
-#define LANTERN_REQRESP_STATUS_PROTOCOL "/leanconsensus/req/status/1/"
-#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL "/leanconsensus/req/blocks_by_root/1/"
+#define LANTERN_REQRESP_STATUS_PROTOCOL "/leanconsensus/req/status/1/ssz_snappy"
+#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL "/leanconsensus/req/blocks_by_root/1/ssz_snappy"
 #define LANTERN_REQRESP_STATUS_PREVIEW_BYTES 256u
 #define LANTERN_REQRESP_MAX_CHUNK_BYTES (1u << 22)
 #define LANTERN_REQRESP_MAX_CONTEXT_BYTES (1u << 20)
