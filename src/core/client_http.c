@@ -356,6 +356,7 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
     LanternRoot fork_head_root;
     memset(&fork_head_root, 0, sizeof(fork_head_root));
     uint64_t fork_head_slot = 0;
+    uint64_t safe_target_slot = 0;
     if (client->has_fork_choice)
     {
         if (lantern_fork_choice_current_head(&client->fork_choice, &fork_head_root) == 0)
@@ -373,9 +374,26 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
                 have_fork_head = true;
             }
         }
+
+        const LanternRoot *safe_target = lantern_fork_choice_safe_target(&client->fork_choice);
+        if (safe_target)
+        {
+            uint64_t slot = 0;
+            if (lantern_fork_choice_block_info(
+                    &client->fork_choice,
+                    safe_target,
+                    &slot,
+                    NULL,
+                    NULL)
+                == 0)
+            {
+                safe_target_slot = slot;
+            }
+        }
     }
 
     uint64_t state_head_slot = 0;
+    uint64_t current_slot = 0;
     LanternCheckpoint state_justified;
     LanternCheckpoint state_finalized;
     memset(&state_justified, 0, sizeof(state_justified));
@@ -388,12 +406,29 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
         state_justified = client->state.latest_justified;
         state_finalized = client->state.latest_finalized;
     }
+    if (!lantern_client_current_slot(client, &current_slot))
+    {
+        current_slot = state_head_slot;
+    }
     lantern_client_unlock_state(client, state_locked);
 
+    out_snapshot->lean_node_start_time_seconds = client->start_time_seconds;
     out_snapshot->lean_head_slot = have_fork_head ? fork_head_slot : state_head_slot;
+    out_snapshot->lean_current_slot = current_slot;
+    out_snapshot->lean_safe_target_slot = safe_target_slot;
     out_snapshot->lean_latest_justified_slot = state_justified.slot;
     out_snapshot->lean_latest_finalized_slot = state_finalized.slot;
     out_snapshot->lean_validators_count = client->local_validator_count;
+    out_snapshot->lean_connected_peers = 0;
+    if (client->connection_lock_initialized)
+    {
+        if (pthread_mutex_lock(&client->connection_lock) != 0)
+        {
+            return LANTERN_CLIENT_HTTP_ERR_LOCK_FAILED;
+        }
+        out_snapshot->lean_connected_peers = client->connected_peers;
+        unlock_mutex_with_log(&client->connection_lock, client->node_id, "connection_lock");
+    }
     out_snapshot->peer_vote_metrics_count = 0;
     if (client->peer_vote_lock_initialized)
     {

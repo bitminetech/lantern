@@ -251,7 +251,7 @@ bool lantern_signature_aggregate(
         pq_xmss_aggregation_setup_prover();
         uintptr_t written_len = 0;
         enum PQSigningError err = pq_aggregate_signatures(
-            pubkey_handles,
+            (const struct PQSignatureSchemePublicKey *const *)pubkey_handles,
             (const struct PQSignature *const *)sig_handles,
             count,
             message,

@@ -10,6 +10,7 @@
 
 #include "lantern/core/client.h"
 #include "lantern/support/log.h"
+#include "lantern/support/version.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -21,9 +22,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
-/** Lantern version string. */
-static const char *const LANTERN_VERSION = "v0.0.1";
 
 enum {
     OPT_GENESIS_CONFIG = 1000,

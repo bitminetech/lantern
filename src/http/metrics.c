@@ -30,6 +30,7 @@
 
 #include "lantern/http/common.h"
 #include "lantern/support/log.h"
+#include "lantern/support/version.h"
 
 static const size_t LANTERN_METRICS_READ_BUFFER_SIZE = 4096;
 static const size_t LANTERN_METRICS_BODY_DEFAULT_CAP = 1024;
@@ -37,6 +38,10 @@ static const size_t LANTERN_METRICS_BODY_INITIAL_CAP = 2048;
 static const int LANTERN_METRICS_LISTEN_BACKLOG = 16;
 static const char LANTERN_METRICS_ENDPOINT_PATH[] = "/metrics";
 static const char LANTERN_METRICS_TEXT_CONTENT_TYPE[] = "text/plain; version=0.0.4";
+static const char *const kLeanDirectionLabels[LEAN_METRICS_DIR_COUNT] = {"inbound", "outbound"};
+static const char *const kLeanConnectionResultLabels[LEAN_METRICS_CONN_RESULT_COUNT] = {"success", "timeout", "error"};
+static const char *const kLeanDisconnectionReasonLabels[LEAN_METRICS_DISCONNECT_REASON_COUNT] =
+    {"timeout", "remote_close", "local_close", "error"};
 
 enum
 {
@@ -373,12 +378,57 @@ static int append_lean_chain_metrics(
         return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
     }
 
-    int rc = append_metric_uint64(
+    int rc = metrics_buffer_appendf(
+        buf,
+        "# HELP lean_node_info Node information (always 1)\n"
+        "# TYPE lean_node_info gauge\n"
+        "lean_node_info{name=\"%s\",version=\"%s\"} 1\n",
+        LANTERN_CLIENT_NAME,
+        LANTERN_VERSION);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_node_start_time_seconds",
+        "Start timestamp",
+        "gauge",
+        snapshot->lean_node_start_time_seconds);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
         buf,
         "lean_head_slot",
         "Latest slot of the lean chain",
         "gauge",
         snapshot->lean_head_slot);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_current_slot",
+        "Current slot of the lean chain",
+        "gauge",
+        snapshot->lean_current_slot);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_safe_target_slot",
+        "Safe target slot",
+        "gauge",
+        snapshot->lean_safe_target_slot);
     if (rc != 0)
     {
         return rc;
@@ -417,7 +467,30 @@ static int append_lean_chain_metrics(
         return rc;
     }
 
+    rc = metrics_buffer_appendf(
+        buf,
+        "# HELP lean_connected_peers Number of connected peers\n"
+        "# TYPE lean_connected_peers gauge\n"
+        "lean_connected_peers{client=\"%s\"} %zu\n",
+        LANTERN_CLIENT_NAME,
+        snapshot->lean_connected_peers);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
     const struct lean_metrics_snapshot *lean = &snapshot->lean_metrics;
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_fork_choice_reorgs_total",
+        "Total number of fork choice reorgs",
+        "counter",
+        lean->fork_choice_reorgs_total);
+    if (rc != 0)
+    {
+        return rc;
+    }
 
     rc = append_metric_uint64(
         buf,
@@ -436,6 +509,19 @@ static int append_lean_chain_metrics(
         "Total number of invalid attestations",
         "counter",
         lean->attestations_invalid_total);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = metrics_buffer_appendf(
+        buf,
+        "# HELP lean_finalizations_total Total number of finalization attempts\n"
+        "# TYPE lean_finalizations_total counter\n"
+        "lean_finalizations_total{result=\"success\"} %" PRIu64 "\n"
+        "lean_finalizations_total{result=\"error\"} %" PRIu64 "\n",
+        lean->finalizations_success_total,
+        lean->finalizations_error_total);
     if (rc != 0)
     {
         return rc;
@@ -628,6 +714,73 @@ static int append_peer_vote_metrics(
     return 0;
 }
 
+/**
+ * @brief Append peer connection metrics derived from the lean metrics snapshot.
+ */
+static int append_lean_peer_connection_metrics(
+    struct lantern_metrics_body_buffer *buf,
+    const struct lean_metrics_snapshot *lean)
+{
+    if (!buf || !lean)
+    {
+        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
+    }
+
+    int rc = metrics_buffer_appendf(
+        buf,
+        "# HELP lean_peer_connection_events_total Total number of peer connection events\n"
+        "# TYPE lean_peer_connection_events_total counter\n");
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    for (size_t dir = 0; dir < LEAN_METRICS_DIR_COUNT; ++dir)
+    {
+        for (size_t res = 0; res < LEAN_METRICS_CONN_RESULT_COUNT; ++res)
+        {
+            rc = metrics_buffer_appendf(
+                buf,
+                "lean_peer_connection_events_total{direction=\"%s\",result=\"%s\"} %" PRIu64 "\n",
+                kLeanDirectionLabels[dir],
+                kLeanConnectionResultLabels[res],
+                lean->peer_connection_events_total[dir][res]);
+            if (rc != 0)
+            {
+                return rc;
+            }
+        }
+    }
+
+    rc = metrics_buffer_appendf(
+        buf,
+        "# HELP lean_peer_disconnection_events_total Total number of peer disconnection events\n"
+        "# TYPE lean_peer_disconnection_events_total counter\n");
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    for (size_t dir = 0; dir < LEAN_METRICS_DIR_COUNT; ++dir)
+    {
+        for (size_t reason = 0; reason < LEAN_METRICS_DISCONNECT_REASON_COUNT; ++reason)
+        {
+            rc = metrics_buffer_appendf(
+                buf,
+                "lean_peer_disconnection_events_total{direction=\"%s\",reason=\"%s\"} %" PRIu64 "\n",
+                kLeanDirectionLabels[dir],
+                kLeanDisconnectionReasonLabels[reason],
+                lean->peer_disconnection_events_total[dir][reason]);
+            if (rc != 0)
+            {
+                return rc;
+            }
+        }
+    }
+
+    return 0;
+}
+
 
 /**
  * @brief Append histogram metrics derived from the lean metrics snapshot.
@@ -646,6 +799,16 @@ static int append_lean_histograms(
         "lean_fork_choice_block_processing_time_seconds",
         "Time taken to process block in fork choice",
         &lean->fork_choice_block_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_fork_choice_reorg_depth",
+        "Depth of fork choice reorgs (in blocks)",
+        &lean->fork_choice_reorg_depth);
     if (rc != 0)
     {
         return rc;
@@ -767,6 +930,12 @@ static int format_metrics_body(
     }
 
     result = append_peer_vote_metrics(&buf, snapshot);
+    if (result != 0)
+    {
+        goto cleanup;
+    }
+
+    result = append_lean_peer_connection_metrics(&buf, &snapshot->lean_metrics);
     if (result != 0)
     {
         goto cleanup;

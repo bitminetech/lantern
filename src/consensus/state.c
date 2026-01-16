@@ -1533,6 +1533,7 @@ static int lantern_state_process_attestations_internal(
     LanternCheckpoint latest_finalized = state->latest_finalized;
     double att_batch_start = lantern_time_now_seconds();
     size_t att_attempted = 0;
+    bool finalization_attempted = false;
 
     for (size_t i = 0; i < attestations->length; ++i) {
         const LanternVote *vote = &attestations->data[i];
@@ -1849,6 +1850,8 @@ static int lantern_state_process_attestations_internal(
             if (vote_has_consecutive_source) {
                 /* Finalize the source checkpoint */
                 latest_finalized = vote->source;
+                finalization_attempted = true;
+                lean_metrics_record_finalization_attempt(true);
                 if (debug_hash && debug_hash[0] != '\0') {
                     char source_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
                     if (
@@ -1883,9 +1886,15 @@ static int lantern_state_process_attestations_internal(
 
     if (apply_consensus_effects) {
         if (lantern_state_mark_justified_slot(state, latest_justified.slot) != 0) {
+            if (finalization_attempted) {
+                lean_metrics_record_finalization_attempt(false);
+            }
             return -1;
         }
         if (lantern_state_mark_justified_slot(state, latest_finalized.slot) != 0) {
+            if (finalization_attempted) {
+                lean_metrics_record_finalization_attempt(false);
+            }
             return -1;
         }
 
@@ -1905,6 +1914,9 @@ static int lantern_state_process_attestations_internal(
                     &state->latest_justified,
                     &state->latest_finalized)
                 != 0) {
+                if (finalization_attempted) {
+                    lean_metrics_record_finalization_attempt(false);
+                }
                 return -1;
             }
         }

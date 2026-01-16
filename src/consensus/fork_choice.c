@@ -756,10 +756,60 @@ static int lmd_ghost_compute(
     }
 }
 
+static size_t fork_choice_reorg_depth(
+    const LanternForkChoice *store,
+    size_t old_index,
+    size_t new_index) {
+    if (!store || old_index >= store->block_len || new_index >= store->block_len) {
+        return 0;
+    }
+    size_t depth = 0;
+    uint64_t old_slot = store->blocks[old_index].slot;
+    uint64_t new_slot = store->blocks[new_index].slot;
+
+    while (old_index != new_index) {
+        if (old_slot > new_slot) {
+            size_t parent = store->blocks[old_index].parent_index;
+            if (parent == SIZE_MAX || parent >= store->block_len) {
+                return 0;
+            }
+            old_index = parent;
+            old_slot = store->blocks[old_index].slot;
+            depth += 1;
+            continue;
+        }
+        if (new_slot > old_slot) {
+            size_t parent = store->blocks[new_index].parent_index;
+            if (parent == SIZE_MAX || parent >= store->block_len) {
+                return 0;
+            }
+            new_index = parent;
+            new_slot = store->blocks[new_index].slot;
+            continue;
+        }
+
+        size_t old_parent = store->blocks[old_index].parent_index;
+        size_t new_parent = store->blocks[new_index].parent_index;
+        if (old_parent == SIZE_MAX || new_parent == SIZE_MAX
+            || old_parent >= store->block_len || new_parent >= store->block_len) {
+            return 0;
+        }
+        old_index = old_parent;
+        new_index = new_parent;
+        old_slot = store->blocks[old_index].slot;
+        new_slot = store->blocks[new_index].slot;
+        depth += 1;
+    }
+
+    return depth;
+}
+
 int lantern_fork_choice_recompute_head(LanternForkChoice *store) {
     if (!store || !store->initialized || !store->has_anchor) {
         return -1;
     }
+    LanternRoot previous_head = store->head;
+    bool had_head = store->has_head;
     LanternRoot head;
     if (lmd_ghost_compute(
             store,
@@ -773,6 +823,18 @@ int lantern_fork_choice_recompute_head(LanternForkChoice *store) {
     }
     store->head = head;
     store->has_head = true;
+
+    if (had_head && root_compare(&previous_head, &head) != 0) {
+        size_t old_index = 0;
+        size_t new_index = 0;
+        if (map_lookup(store, &previous_head, &old_index)
+            && map_lookup(store, &head, &new_index)) {
+            size_t depth = fork_choice_reorg_depth(store, old_index, new_index);
+            if (depth > 0) {
+                lean_metrics_record_fork_choice_reorg(depth);
+            }
+        }
+    }
 
     size_t head_index = 0;
     if (map_lookup(store, &head, &head_index)) {

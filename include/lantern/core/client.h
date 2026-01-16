@@ -175,6 +175,7 @@ struct lantern_client {
     int validator_stop_flag;
     struct lantern_metrics_server metrics_server;
     bool metrics_running;
+    uint64_t start_time_seconds;
     struct lantern_http_server http_server;
     bool http_running;
     bool genesis_fallback_used;
@@ -184,6 +185,7 @@ struct lantern_client {
     struct libp2p_subscription *connection_subscription;
     struct lantern_string_list dialer_peers;
     struct lantern_string_list connected_peer_ids;
+    struct lantern_string_list inbound_peer_ids;
     struct lantern_string_list status_failure_peer_ids;
     struct lantern_pending_block_list pending_blocks;
     pthread_mutex_t pending_lock;

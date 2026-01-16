@@ -313,12 +313,14 @@ void lantern_log_log(
      * - Context: dim
      */
 
+    static const char kUnknownTimestamp[] = "????" "-??" "-?? ??:??:??.???";
+
     if (colorize) {
         /* Colored output with selective coloring */
         fprintf(
             target,
             "%s%s%s %s%s%s %s[%s]%s %s",
-            ANSI_DIM, timestamp[0] ? timestamp : "????-??-?? ??:??:??.???", ANSI_RESET,
+            ANSI_DIM, timestamp[0] ? timestamp : kUnknownTimestamp, ANSI_RESET,
             level_to_color(level), level_to_string(level), ANSI_RESET,
             ANSI_CYAN, component ? component : "?", ANSI_RESET,
             formatted);
@@ -342,7 +344,7 @@ void lantern_log_log(
         fprintf(
             target,
             "%s %s [%s] %s",
-            timestamp[0] ? timestamp : "????-??-?? ??:??:??.???",
+            timestamp[0] ? timestamp : kUnknownTimestamp,
             level_to_string(level),
             component ? component : "?",
             formatted);

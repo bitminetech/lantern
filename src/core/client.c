@@ -527,7 +527,10 @@ static void client_reset_base(struct lantern_client *client)
     lantern_string_list_init(&client->bootnodes);
     lantern_string_list_init(&client->dialer_peers);
     lantern_string_list_init(&client->connected_peer_ids);
+    lantern_string_list_init(&client->inbound_peer_ids);
     lantern_string_list_init(&client->status_failure_peer_ids);
+    double now_seconds = lantern_time_now_seconds();
+    client->start_time_seconds = now_seconds > 0.0 ? (uint64_t)now_seconds : 0u;
     lantern_genesis_artifacts_init(&client->genesis);
     lantern_enr_record_init(&client->local_enr);
     lantern_libp2p_host_init(&client->network);
@@ -1735,6 +1738,7 @@ static void shutdown_network_services(struct lantern_client *client)
         client->connected_peers = 0;
     }
     lantern_string_list_reset(&client->connected_peer_ids);
+    lantern_string_list_reset(&client->inbound_peer_ids);
 }
 
 
