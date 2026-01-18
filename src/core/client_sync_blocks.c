@@ -415,8 +415,10 @@ static bool handle_block_parent_locked(
     {
         char parent_hex[ROOT_HEX_BUFFER_LEN];
         char head_hex[ROOT_HEX_BUFFER_LEN];
+        char block_hex[ROOT_HEX_BUFFER_LEN];
         format_root_hex(&parent_root, parent_hex, sizeof(parent_hex));
         format_root_hex(&latest_header_root, head_hex, sizeof(head_hex));
+        format_root_hex(block_root, block_hex, sizeof(block_hex));
         lantern_log_debug(
             "state",
             meta,
@@ -433,9 +435,10 @@ static bool handle_block_parent_locked(
      * choice can properly determine which chain has more weight.
      *
      * We add the block to fork choice (without post-state checkpoints since
-     * we can't compute state transition), then queue it for later processing.
-     * If fork choice later determines this is the better chain, pending block
-     * processing will handle the reorg.
+     * we can't compute state transition). We intentionally do NOT enqueue
+     * the block as pending here; queuing would stall descendants because the
+     * parent will never be re-imported while it's off-head. Descendants can
+     * still be added to fork choice as they arrive.
      */
     if (client->has_fork_choice)
     {
@@ -461,16 +464,8 @@ static bool handle_block_parent_locked(
                 block_hex[0] ? block_hex : "0x0");
         }
     }
-
     lantern_client_unlock_state(client, *state_locked);
     *state_locked = false;
-    lantern_client_enqueue_pending_block(
-        client,
-        block,
-        block_root,
-        &parent_root,
-        peer_text,
-        false);
     return false;
 }
 

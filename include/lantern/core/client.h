@@ -196,6 +196,7 @@ struct lantern_client {
     uint64_t sync_last_log_ms;
     uint64_t sync_last_imported_blocks;
     uint64_t sync_imported_blocks;
+    uint64_t sync_target_slot;
     bool sync_in_progress;
     size_t status_requests_inflight_total;
     size_t status_requests_peak;

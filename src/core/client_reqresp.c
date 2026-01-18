@@ -326,6 +326,7 @@ static void peer_status_local_view(
 
     *out_local_slot = local_slot;
     *out_head_known = head_known;
+
 }
 
 static uint64_t max_peer_head_slot_locked(
@@ -405,7 +406,29 @@ static void maybe_log_sync_progress_locked(
         return;
     }
 
-    size_t pending = lantern_client_pending_block_count(client);
+    size_t pending = 0;
+    uint64_t pending_max_slot = 0;
+    {
+        bool locked = lantern_client_lock_pending(client);
+        if (locked)
+        {
+            pending = client->pending_blocks.length;
+            for (size_t i = 0; i < client->pending_blocks.length; ++i)
+            {
+                const struct lantern_pending_block *entry = &client->pending_blocks.items[i];
+                if (entry->block.message.block.slot > pending_max_slot)
+                {
+                    pending_max_slot = entry->block.message.block.slot;
+                }
+            }
+        }
+        lantern_client_unlock_pending(client, locked);
+    }
+    uint64_t progress_slot = local_slot;
+    if (pending_max_slot > progress_slot)
+    {
+        progress_slot = pending_max_slot;
+    }
     bool sync_gap = max_peer_slot > local_slot + SYNC_PROGRESS_SLOT_LAG;
     bool sync_pending = pending >= SYNC_PROGRESS_PENDING_THRESHOLD;
     bool syncing = sync_gap || sync_pending;
@@ -436,6 +459,7 @@ static void maybe_log_sync_progress_locked(
             client->sync_started_ms = 0;
             client->sync_last_log_ms = 0;
             client->sync_last_imported_blocks = 0;
+            client->sync_target_slot = 0;
         }
         return;
     }
@@ -447,6 +471,7 @@ static void maybe_log_sync_progress_locked(
         client->sync_last_log_ms = 0;
         client->sync_last_imported_blocks = 0;
         client->sync_imported_blocks = 0;
+        client->sync_target_slot = max_peer_slot;
         lantern_log_info(
             "sync",
             &meta,
@@ -462,7 +487,12 @@ static void maybe_log_sync_progress_locked(
         return;
     }
 
-    uint64_t remaining = (max_peer_slot > local_slot) ? (max_peer_slot - local_slot) : 0;
+    uint64_t goal_slot = client->sync_target_slot != 0 ? client->sync_target_slot : max_peer_slot;
+    if (progress_slot > goal_slot)
+    {
+        goal_slot = progress_slot;
+    }
+    uint64_t remaining = (goal_slot > local_slot) ? (goal_slot - local_slot) : 0;
     uint64_t base_ms =
         (client->sync_last_log_ms != 0) ? client->sync_last_log_ms : client->sync_started_ms;
     uint64_t base_blocks =
@@ -482,11 +512,11 @@ static void maybe_log_sync_progress_locked(
         }
     }
 
-    double percent = 0.0;
-    if (max_peer_slot > 0)
+    double applied_percent = 0.0;
+    if (goal_slot > 0)
     {
-        uint64_t clamped_local = local_slot > max_peer_slot ? max_peer_slot : local_slot;
-        percent = ((double)clamped_local * 100.0) / (double)max_peer_slot;
+        uint64_t clamped_applied = local_slot > goal_slot ? goal_slot : local_slot;
+        applied_percent = ((double)clamped_applied * 100.0) / (double)goal_slot;
     }
 
     uint64_t eta_seconds = 0;
@@ -500,12 +530,15 @@ static void maybe_log_sync_progress_locked(
     lantern_log_info(
         "sync",
         &meta,
-        "sync progress local_slot=%" PRIu64 " target_slot=%" PRIu64 " remaining=%" PRIu64
-        " (%.1f%%) pending=%zu imported=%" PRIu64 " rate=%.2f/s eta=%s",
+        "sync progress local_slot=%" PRIu64 " applied=%.1f%% downloaded_slot=%" PRIu64
+        " target_slot=%" PRIu64 " goal_slot=%" PRIu64
+        " remaining=%" PRIu64 " pending=%zu imported=%" PRIu64 " rate=%.2f/s eta=%s",
         local_slot,
+        applied_percent,
+        progress_slot,
         max_peer_slot,
+        goal_slot,
         remaining,
-        percent,
         pending,
         client->sync_imported_blocks,
         rate,
