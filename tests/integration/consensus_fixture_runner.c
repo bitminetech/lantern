@@ -268,52 +268,6 @@ static int stored_state_save(
         }
     }
 
-    const char *debug_hash = getenv("LANTERN_DEBUG_STATE_HASH");
-    if (debug_hash && debug_hash[0] != '\0') {
-        LanternRoot original_root;
-        if (lantern_hash_tree_root_state(state, &original_root) == 0) {
-            LanternState decoded;
-            lantern_state_init(&decoded);
-            if (lantern_ssz_decode_state(&decoded, encoded, encoded_len) == 0) {
-                LanternRoot decoded_root;
-                if (lantern_hash_tree_root_state(&decoded, &decoded_root) == 0) {
-                    char original_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                    char decoded_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                    char key_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                    if (lantern_bytes_to_hex(
-                            original_root.bytes,
-                            LANTERN_ROOT_SIZE,
-                            original_hex,
-                            sizeof(original_hex),
-                            1)
-                        == 0
-                        && lantern_bytes_to_hex(
-                            decoded_root.bytes,
-                            LANTERN_ROOT_SIZE,
-                            decoded_hex,
-                            sizeof(decoded_hex),
-                            1)
-                            == 0
-                        && lantern_bytes_to_hex(
-                            root->bytes,
-                            LANTERN_ROOT_SIZE,
-                            key_hex,
-                            sizeof(key_hex),
-                            1)
-                            == 0) {
-                        fprintf(
-                            stderr,
-                            "stored state key=%s original=%s decoded=%s\n",
-                            key_hex,
-                            original_hex,
-                            decoded_hex);
-                    }
-                }
-            }
-            lantern_state_reset(&decoded);
-        }
-    }
-
     int add_status = stored_state_add(entries_ptr, count_ptr, cap_ptr, root, encoded, encoded_len, votes, vote_capacity);
     if (add_status != 0) {
         free(votes);
@@ -371,26 +325,6 @@ static int stored_state_restore(
 done:
     if (profiling) {
         profile_record(&g_profile_restore_state, profile_now() - start);
-    }
-    const char *debug_hash = getenv("LANTERN_DEBUG_STATE_HASH");
-    if (rc == 0 && debug_hash && debug_hash[0] != '\0') {
-        LanternRoot restored_root;
-        if (lantern_hash_tree_root_state(state, &restored_root) == 0) {
-            char restored_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-            if (lantern_bytes_to_hex(
-                    restored_root.bytes,
-                    LANTERN_ROOT_SIZE,
-                    restored_hex,
-                    sizeof(restored_hex),
-                    1)
-                == 0) {
-                fprintf(
-                    stderr,
-                    "restored state slot %" PRIu64 " root: %s\n",
-                    (unsigned long long)state->slot,
-                    restored_hex);
-            }
-        }
     }
     return rc;
 }
@@ -829,11 +763,6 @@ static int run_state_transition_fixture(const char *path) {
         return 0;
     }
 
-    const char *debug_hash = getenv("LANTERN_DEBUG_STATE_HASH");
-    if (debug_hash && debug_hash[0] != '\0') {
-        fprintf(stderr, "fixture: %s\n", path);
-    }
-
     int pre_idx = lantern_fixture_object_get_field(&doc, case_idx, "pre");
     int blocks_idx = lantern_fixture_object_get_field(&doc, case_idx, "blocks");
     int post_idx = lantern_fixture_object_get_field(&doc, case_idx, "post");
@@ -987,11 +916,6 @@ static int run_fork_choice_fixture(const char *path) {
         lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
         return 0;
-    }
-
-    const char *debug_hash = getenv("LANTERN_DEBUG_STATE_HASH");
-    if (debug_hash && debug_hash[0] != '\0') {
-        fprintf(stderr, "fork fixture: %s\n", path);
     }
 
     int anchor_state_idx = lantern_fixture_object_get_field(&doc, case_idx, "anchorState");
@@ -1184,21 +1108,6 @@ static int run_fork_choice_fixture(const char *path) {
                 transition_performed = true;
                 block_justified = state.latest_justified;
                 block_finalized = state.latest_finalized;
-                if (debug_hash && debug_hash[0] != '\0') {
-                    LanternRoot post_transition_root;
-                    if (lantern_hash_tree_root_state(&state, &post_transition_root) == 0) {
-                        char post_transition_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                        if (lantern_bytes_to_hex(
-                                post_transition_root.bytes,
-                                LANTERN_ROOT_SIZE,
-                                post_transition_hex,
-                                sizeof(post_transition_hex),
-                                1)
-                            == 0) {
-                            fprintf(stderr, "state after transition root=%s\n", post_transition_hex);
-                        }
-                    }
-                }
             } else {
                 active_state = &state;
                 block_justified = state.latest_justified;
@@ -1278,37 +1187,7 @@ static int run_fork_choice_fixture(const char *path) {
         proposer_vote.source.root = signed_block.message.parent_root;
         proposer_vote.source.slot = has_parent_info ? parent_slot : 0;
 
-        if (debug_hash && debug_hash[0] != '\0') {
-            char block_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-            if (lantern_bytes_to_hex(block_root.bytes, LANTERN_ROOT_SIZE, block_hex, sizeof(block_hex), 1) != 0) {
-                block_hex[0] = '\0';
-            }
-            fprintf(
-                stderr,
-                "fork step %d slot %" PRIu64 " extends=%d transition=%d block=%s\n",
-                i,
-                signed_block.message.slot,
-                extends_canonical ? 1 : 0,
-                transition_performed ? 1 : 0,
-                block_hex[0] ? block_hex : "0x0");
-        }
-
         if (transition_performed) {
-            if (debug_hash && debug_hash[0] != '\0') {
-                LanternRoot pre_vote_root;
-                if (lantern_hash_tree_root_state(active_state, &pre_vote_root) == 0) {
-                    char pre_vote_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                    if (lantern_bytes_to_hex(
-                            pre_vote_root.bytes,
-                            LANTERN_ROOT_SIZE,
-                            pre_vote_hex,
-                            sizeof(pre_vote_hex),
-                            1)
-                        == 0) {
-                        fprintf(stderr, "state before vote root=%s\n", pre_vote_hex);
-                    }
-                }
-            }
             if (lantern_state_set_validator_vote(
                     active_state,
                     (size_t)signed_block.message.proposer_index,
@@ -1324,21 +1203,6 @@ static int run_fork_choice_fixture(const char *path) {
                 lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                 return -1;
-            }
-            if (debug_hash && debug_hash[0] != '\0') {
-                LanternRoot post_vote_root;
-                if (lantern_hash_tree_root_state(active_state, &post_vote_root) == 0) {
-                    char post_vote_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                    if (lantern_bytes_to_hex(
-                            post_vote_root.bytes,
-                            LANTERN_ROOT_SIZE,
-                            post_vote_hex,
-                            sizeof(post_vote_hex),
-                            1)
-                        == 0) {
-                        fprintf(stderr, "state after vote root=%s\n", post_vote_hex);
-                    }
-                }
             }
             if (stored_state_save(&stored_states, &stored_states_count, &stored_states_cap, &block_root, active_state) != 0) {
                 if (branch_state_initialized) {

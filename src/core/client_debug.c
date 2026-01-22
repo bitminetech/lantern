@@ -81,6 +81,7 @@ int lantern_client_debug_import_block(
                &(const struct lantern_log_metadata){
                    .validator = client->node_id,
                    .peer = peer_id_text},
+               0,
                true)
         ? 1
         : 0;
@@ -143,6 +144,7 @@ int lantern_client_debug_enqueue_pending_block(
         block_root,
         parent_root,
         peer_id_text,
+        0,
         false);
     return LANTERN_CLIENT_OK;
 }
@@ -309,7 +311,7 @@ void lantern_client_debug_disable_block_requests(struct lantern_client *client, 
  * @param client       Client instance
  * @param peer_id      Peer ID text
  * @param request_root Root that was requested
- * @param outcome_code Outcome code (LANTERN_DEBUG_BLOCKS_REQUEST_*)
+ * @param outcome_code Outcome code (LANTERN_TEST_BLOCKS_REQUEST_*)
  * @return 0 on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM on invalid inputs
  *
@@ -328,15 +330,15 @@ int lantern_client_debug_on_blocks_request_complete(
     enum lantern_blocks_request_outcome outcome;
     switch (outcome_code)
     {
-        case LANTERN_DEBUG_BLOCKS_REQUEST_SUCCESS:
+        case LANTERN_TEST_BLOCKS_REQUEST_SUCCESS:
             outcome = LANTERN_BLOCKS_REQUEST_SUCCESS;
             break;
 
-        case LANTERN_DEBUG_BLOCKS_REQUEST_FAILED:
+        case LANTERN_TEST_BLOCKS_REQUEST_FAILED:
             outcome = LANTERN_BLOCKS_REQUEST_FAILED;
             break;
 
-        case LANTERN_DEBUG_BLOCKS_REQUEST_ABORTED:
+        case LANTERN_TEST_BLOCKS_REQUEST_ABORTED:
             outcome = LANTERN_BLOCKS_REQUEST_ABORTED;
             break;
 

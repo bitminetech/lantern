@@ -10,6 +10,7 @@
 
 #include "lantern/core/client.h"
 #include "lantern/support/log.h"
+#include "lantern/support/version.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -21,9 +22,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
-/** Lantern version string. */
-static const char *const LANTERN_VERSION = "v0.0.1";
 
 enum {
     OPT_GENESIS_CONFIG = 1000,
@@ -43,6 +41,7 @@ enum {
     OPT_DEVNET,
     OPT_LOG_LEVEL,
     OPT_XMSS_KEY_DIR,
+    OPT_HASH_SIG_KEY_DIR,
     OPT_XMSS_PUBLIC_PATH,
     OPT_XMSS_SECRET_PATH,
     OPT_XMSS_PUBLIC_TEMPLATE,
@@ -243,6 +242,7 @@ static lantern_client_error apply_option(
         }
         return LANTERN_CLIENT_OK;
     case OPT_XMSS_KEY_DIR:
+    case OPT_HASH_SIG_KEY_DIR:
     case OPT_XMSS_PUBLIC_PATH:
     case OPT_XMSS_SECRET_PATH:
     case OPT_XMSS_PUBLIC_TEMPLATE:
@@ -361,6 +361,7 @@ static lantern_client_error handle_xmss_option(
     switch (opt)
     {
     case OPT_XMSS_KEY_DIR:
+    case OPT_HASH_SIG_KEY_DIR:
         options->xmss_key_dir = optarg;
         return LANTERN_CLIENT_OK;
     case OPT_XMSS_PUBLIC_PATH:
@@ -430,6 +431,7 @@ static lantern_client_error parse_arguments(
         {"devnet", required_argument, NULL, OPT_DEVNET},
         {"log-level", required_argument, NULL, OPT_LOG_LEVEL},
         {"xmss-key-dir", required_argument, NULL, OPT_XMSS_KEY_DIR},
+        {"hash-sig-key-dir", required_argument, NULL, OPT_HASH_SIG_KEY_DIR},
         {"xmss-public", required_argument, NULL, OPT_XMSS_PUBLIC_PATH},
         {"xmss-secret", required_argument, NULL, OPT_XMSS_SECRET_PATH},
         {"xmss-public-template", required_argument, NULL, OPT_XMSS_PUBLIC_TEMPLATE},
@@ -744,6 +746,10 @@ static void print_usage_xmss(void)
         "main",
         NULL,
         "  --xmss-key-dir PATH     Directory containing XMSS key files");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --hash-sig-key-dir PATH Alias for --xmss-key-dir");
     lantern_log_info(
         "main",
         NULL,

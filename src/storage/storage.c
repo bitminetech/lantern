@@ -29,9 +29,14 @@
 #define LANTERN_STORAGE_VOTES_MAGIC "LNVOTES\0"
 #define LANTERN_STORAGE_VOTES_VERSION 2u
 #define LANTERN_STORAGE_BLOCKS_DIR "blocks"
+#define LANTERN_STORAGE_STATES_DIR "states"
+#define LANTERN_STORAGE_INDICES_DIR "indices"
+#define LANTERN_STORAGE_SLOT_INDEX_DIR "slots"
 #define LANTERN_STORAGE_STATE_FILE "state.ssz"
 #define LANTERN_STORAGE_STATE_META_FILE "state.meta"
 #define LANTERN_STORAGE_VOTES_FILE "votes.bin"
+#define LANTERN_STORAGE_HEAD_FILE "head.bin"
+#define LANTERN_STORAGE_CHECKPOINTS_FILE "checkpoints.bin"
 #define LANTERN_STORAGE_STATE_META_VERSION 1u
 
 #if defined(_WIN32)
@@ -53,6 +58,16 @@ struct lantern_storage_state_meta {
     uint32_t reserved;
     uint64_t historical_roots_offset;
     uint64_t justified_slots_offset;
+};
+
+struct lantern_storage_head_record {
+    uint64_t slot;
+    LanternRoot root;
+};
+
+struct lantern_storage_checkpoint_record {
+    LanternCheckpoint justified;
+    LanternCheckpoint finalized;
 };
 
 static int ensure_directory(const char *path) {
@@ -432,6 +447,19 @@ static int write_state_meta(const char *data_dir, const LanternState *state) {
     return rc;
 }
 
+static int write_state_meta_path(const char *path, const LanternState *state) {
+    if (!path || !state) {
+        return -1;
+    }
+    struct lantern_storage_state_meta meta = {
+        .version = LANTERN_STORAGE_STATE_META_VERSION,
+        .reserved = 0,
+        .historical_roots_offset = state->historical_roots_offset,
+        .justified_slots_offset = state->justified_slots_offset,
+    };
+    return write_atomic_file(path, (const uint8_t *)&meta, sizeof(meta));
+}
+
 static int read_state_meta(const char *data_dir, struct lantern_storage_state_meta *meta) {
     if (!data_dir || !meta) {
         return -1;
@@ -464,6 +492,24 @@ static int build_blocks_dir(const char *data_dir, char **out_path) {
     return join_path(data_dir, LANTERN_STORAGE_BLOCKS_DIR, out_path);
 }
 
+static int build_states_dir(const char *data_dir, char **out_path) {
+    return join_path(data_dir, LANTERN_STORAGE_STATES_DIR, out_path);
+}
+
+static int build_indices_dir(const char *data_dir, char **out_path) {
+    return join_path(data_dir, LANTERN_STORAGE_INDICES_DIR, out_path);
+}
+
+static int build_slot_index_dir(const char *data_dir, char **out_path) {
+    char *indices_dir = NULL;
+    if (build_indices_dir(data_dir, &indices_dir) != 0) {
+        return -1;
+    }
+    int rc = join_path(indices_dir, LANTERN_STORAGE_SLOT_INDEX_DIR, out_path);
+    free_path(indices_dir);
+    return rc;
+}
+
 int lantern_storage_prepare(const char *data_dir) {
     if (!data_dir) {
         return -1;
@@ -477,6 +523,33 @@ int lantern_storage_prepare(const char *data_dir) {
     }
     int rc = ensure_directory(blocks_dir);
     free_path(blocks_dir);
+    if (rc != 0) {
+        return rc;
+    }
+    char *states_dir = NULL;
+    if (build_states_dir(data_dir, &states_dir) != 0) {
+        return -1;
+    }
+    rc = ensure_directory(states_dir);
+    free_path(states_dir);
+    if (rc != 0) {
+        return rc;
+    }
+    char *indices_dir = NULL;
+    if (build_indices_dir(data_dir, &indices_dir) != 0) {
+        return -1;
+    }
+    rc = ensure_directory(indices_dir);
+    free_path(indices_dir);
+    if (rc != 0) {
+        return rc;
+    }
+    char *slot_dir = NULL;
+    if (build_slot_index_dir(data_dir, &slot_dir) != 0) {
+        return -1;
+    }
+    rc = ensure_directory(slot_dir);
+    free_path(slot_dir);
     return rc;
 }
 
@@ -796,6 +869,226 @@ int lantern_storage_store_block(const char *data_dir, const LanternSignedBlock *
     int rc = write_atomic_file(block_path, buffer, written_size);
     free(buffer);
     free_path(block_path);
+    return rc;
+}
+
+int lantern_storage_store_state_for_root(
+    const char *data_dir,
+    const LanternRoot *root,
+    const LanternState *state) {
+    if (!data_dir || !root || !state || state->config.num_validators == 0) {
+        return -1;
+    }
+    size_t encoded_size = state_encoded_size(state);
+    if (encoded_size == 0) {
+        return -1;
+    }
+    uint8_t *buffer = malloc(encoded_size);
+    if (!buffer) {
+        return -1;
+    }
+    size_t written = 0;
+    if (lantern_ssz_encode_state(state, buffer, encoded_size, &written) != 0 || written != encoded_size) {
+        free(buffer);
+        return -1;
+    }
+    char *states_dir = NULL;
+    if (build_states_dir(data_dir, &states_dir) != 0) {
+        free(buffer);
+        return -1;
+    }
+    if (ensure_directory(states_dir) != 0) {
+        free_path(states_dir);
+        free(buffer);
+        return -1;
+    }
+    char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
+    if (lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, root_hex, sizeof(root_hex), 0) != 0) {
+        free_path(states_dir);
+        free(buffer);
+        return -1;
+    }
+    char filename[sizeof(root_hex) + 4];
+    int name_written = snprintf(filename, sizeof(filename), "%s.ssz", root_hex);
+    if (name_written < 0 || (size_t)name_written >= sizeof(filename)) {
+        free_path(states_dir);
+        free(buffer);
+        return -1;
+    }
+    char *state_path = NULL;
+    if (join_path(states_dir, filename, &state_path) != 0) {
+        free_path(states_dir);
+        free(buffer);
+        return -1;
+    }
+    int rc = write_atomic_file(state_path, buffer, written);
+    free(buffer);
+    if (rc != 0) {
+        free_path(state_path);
+        free_path(states_dir);
+        return rc;
+    }
+    char meta_name[sizeof(root_hex) + 6];
+    int meta_written = snprintf(meta_name, sizeof(meta_name), "%s.meta", root_hex);
+    if (meta_written < 0 || (size_t)meta_written >= sizeof(meta_name)) {
+        free_path(state_path);
+        free_path(states_dir);
+        return -1;
+    }
+    char *meta_path = NULL;
+    if (join_path(states_dir, meta_name, &meta_path) != 0) {
+        free_path(state_path);
+        free_path(states_dir);
+        return -1;
+    }
+    int meta_rc = write_state_meta_path(meta_path, state);
+    free_path(meta_path);
+    free_path(state_path);
+    free_path(states_dir);
+    return meta_rc;
+}
+
+int lantern_storage_load_state_bytes_for_root(
+    const char *data_dir,
+    const LanternRoot *root,
+    uint8_t **out_data,
+    size_t *out_len) {
+    if (!data_dir || !root || !out_data || !out_len) {
+        return -1;
+    }
+    *out_data = NULL;
+    *out_len = 0;
+
+    char *states_dir = NULL;
+    if (build_states_dir(data_dir, &states_dir) != 0) {
+        return -1;
+    }
+
+    char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
+    if (lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, root_hex, sizeof(root_hex), 0) != 0) {
+        free_path(states_dir);
+        return -1;
+    }
+    char filename[sizeof(root_hex) + 4];
+    int name_written = snprintf(filename, sizeof(filename), "%s.ssz", root_hex);
+    if (name_written < 0 || (size_t)name_written >= sizeof(filename)) {
+        free_path(states_dir);
+        return -1;
+    }
+    char *state_path = NULL;
+    if (join_path(states_dir, filename, &state_path) != 0) {
+        free_path(states_dir);
+        return -1;
+    }
+    free_path(states_dir);
+
+    uint8_t *data = NULL;
+    size_t len = 0;
+    int read_rc = read_file_buffer(state_path, &data, &len);
+    free_path(state_path);
+    if (read_rc != 0) {
+        if (data) {
+            free(data);
+        }
+        return read_rc > 0 ? 1 : -1;
+    }
+    *out_data = data;
+    *out_len = len;
+    return 0;
+}
+
+int lantern_storage_store_slot_root(
+    const char *data_dir,
+    uint64_t slot,
+    const LanternRoot *root) {
+    if (!data_dir || !root) {
+        return -1;
+    }
+    char *slot_dir = NULL;
+    if (build_slot_index_dir(data_dir, &slot_dir) != 0) {
+        return -1;
+    }
+    if (ensure_directory(slot_dir) != 0) {
+        free_path(slot_dir);
+        return -1;
+    }
+    char filename[64];
+    int written = snprintf(filename, sizeof(filename), "%" PRIu64 ".root", slot);
+    if (written < 0 || (size_t)written >= sizeof(filename)) {
+        free_path(slot_dir);
+        return -1;
+    }
+    char *slot_path = NULL;
+    if (join_path(slot_dir, filename, &slot_path) != 0) {
+        free_path(slot_dir);
+        return -1;
+    }
+    free_path(slot_dir);
+    int rc = write_atomic_file(slot_path, root->bytes, LANTERN_ROOT_SIZE);
+    free_path(slot_path);
+    return rc;
+}
+
+int lantern_storage_store_head_root(
+    const char *data_dir,
+    uint64_t slot,
+    const LanternRoot *root) {
+    if (!data_dir || !root) {
+        return -1;
+    }
+    char *indices_dir = NULL;
+    if (build_indices_dir(data_dir, &indices_dir) != 0) {
+        return -1;
+    }
+    if (ensure_directory(indices_dir) != 0) {
+        free_path(indices_dir);
+        return -1;
+    }
+    char *head_path = NULL;
+    if (join_path(indices_dir, LANTERN_STORAGE_HEAD_FILE, &head_path) != 0) {
+        free_path(indices_dir);
+        return -1;
+    }
+    free_path(indices_dir);
+    struct lantern_storage_head_record record = {
+        .slot = slot,
+        .root = *root,
+    };
+    int rc = write_atomic_file(head_path, (const uint8_t *)&record, sizeof(record));
+    free_path(head_path);
+    return rc;
+}
+
+int lantern_storage_store_checkpoints(
+    const char *data_dir,
+    const LanternCheckpoint *justified,
+    const LanternCheckpoint *finalized) {
+    if (!data_dir || !justified || !finalized) {
+        return -1;
+    }
+    char *indices_dir = NULL;
+    if (build_indices_dir(data_dir, &indices_dir) != 0) {
+        return -1;
+    }
+    if (ensure_directory(indices_dir) != 0) {
+        free_path(indices_dir);
+        return -1;
+    }
+    char *checkpoint_path = NULL;
+    if (join_path(indices_dir, LANTERN_STORAGE_CHECKPOINTS_FILE, &checkpoint_path) != 0) {
+        free_path(indices_dir);
+        return -1;
+    }
+    free_path(indices_dir);
+    struct lantern_storage_checkpoint_record record = {
+        .justified = *justified,
+        .finalized = *finalized,
+    };
+    int rc = write_atomic_file(
+        checkpoint_path,
+        (const uint8_t *)&record,
+        sizeof(record));
+    free_path(checkpoint_path);
     return rc;
 }
 

@@ -281,6 +281,9 @@ int main(void) {
     char votes_path[PATH_MAX];
     char meta_path[PATH_MAX];
     char blocks_dir[PATH_MAX];
+    char states_dir[PATH_MAX];
+    char indices_dir[PATH_MAX];
+    char slot_index_dir[PATH_MAX];
     int written = snprintf(state_path, sizeof(state_path), "%s/%s", base_dir, "state.ssz");
     assert(written > 0 && (size_t)written < sizeof(state_path));
     written = snprintf(votes_path, sizeof(votes_path), "%s/%s", base_dir, "votes.bin");
@@ -289,6 +292,12 @@ int main(void) {
     assert(written > 0 && (size_t)written < sizeof(meta_path));
     written = snprintf(blocks_dir, sizeof(blocks_dir), "%s/%s", base_dir, "blocks");
     assert(written > 0 && (size_t)written < sizeof(blocks_dir));
+    written = snprintf(states_dir, sizeof(states_dir), "%s/%s", base_dir, "states");
+    assert(written > 0 && (size_t)written < sizeof(states_dir));
+    written = snprintf(indices_dir, sizeof(indices_dir), "%s/%s", base_dir, "indices");
+    assert(written > 0 && (size_t)written < sizeof(indices_dir));
+    written = snprintf(slot_index_dir, sizeof(slot_index_dir), "%s/%s", indices_dir, "slots");
+    assert(written > 0 && (size_t)written < sizeof(slot_index_dir));
 
     char block_path[PATH_MAX];
     char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
@@ -298,6 +307,9 @@ int main(void) {
 
     cleanup_path(block_path);
     cleanup_dir(blocks_dir);
+    cleanup_dir(slot_index_dir);
+    cleanup_dir(indices_dir);
+    cleanup_dir(states_dir);
     cleanup_path(votes_path);
     cleanup_path(meta_path);
     cleanup_path(state_path);

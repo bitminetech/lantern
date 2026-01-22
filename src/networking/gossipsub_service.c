@@ -457,7 +457,8 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
         goto cleanup;
     }
 
-    if (service->block_handler(&block, msg->from, service->block_handler_user_data) != 0) {
+    if (service->block_handler(&block, msg->from, service->block_handler_user_data) != 0)
+    {
         result = LIBP2P_GOSSIPSUB_VALIDATION_IGNORE;
     }
     char block_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
@@ -470,13 +471,26 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
         != 0) {
         block_root_hex[0] = '\0';
     }
-    lantern_log_debug(
-        "gossip",
-        &meta,
-        "accepted block gossip slot=%" PRIu64 " proposer=%" PRIu64 " parent=%s",
-        block.message.block.slot,
-        block.message.block.proposer_index,
-        block_root_hex[0] ? block_root_hex : "0x0");
+    if (result == LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT)
+    {
+        lantern_log_debug(
+            "gossip",
+            &meta,
+            "accepted block gossip slot=%" PRIu64 " proposer=%" PRIu64 " parent=%s",
+            block.message.block.slot,
+            block.message.block.proposer_index,
+            block_root_hex[0] ? block_root_hex : "0x0");
+    }
+    else if (result == LIBP2P_GOSSIPSUB_VALIDATION_IGNORE)
+    {
+        lantern_log_debug(
+            "gossip",
+            &meta,
+            "ignored block gossip slot=%" PRIu64 " proposer=%" PRIu64 " parent=%s",
+            block.message.block.slot,
+            block.message.block.proposer_index,
+            block_root_hex[0] ? block_root_hex : "0x0");
+    }
 
 cleanup:
     lantern_signed_block_with_attestation_reset(&block);
@@ -524,7 +538,8 @@ static libp2p_gossipsub_validation_result_t gossipsub_vote_validator(
         goto cleanup;
     }
 
-    if (service->vote_handler(&vote, msg->from, service->vote_handler_user_data) != 0) {
+    if (service->vote_handler(&vote, msg->from, service->vote_handler_user_data) != 0)
+    {
         result = LIBP2P_GOSSIPSUB_VALIDATION_IGNORE;
     }
     char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
@@ -537,13 +552,26 @@ static libp2p_gossipsub_validation_result_t gossipsub_vote_validator(
         != 0) {
         head_hex[0] = '\0';
     }
-    lantern_log_debug(
-        "gossip",
-        &meta,
-        "accepted vote gossip validator=%" PRIu64 " slot=%" PRIu64 " head=%s",
-        vote.data.validator_id,
-        vote.data.slot,
-        head_hex[0] ? head_hex : "0x0");
+    if (result == LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT)
+    {
+        lantern_log_debug(
+            "gossip",
+            &meta,
+            "accepted vote gossip validator=%" PRIu64 " slot=%" PRIu64 " head=%s",
+            vote.data.validator_id,
+            vote.data.slot,
+            head_hex[0] ? head_hex : "0x0");
+    }
+    else if (result == LIBP2P_GOSSIPSUB_VALIDATION_IGNORE)
+    {
+        lantern_log_debug(
+            "gossip",
+            &meta,
+            "ignored vote gossip validator=%" PRIu64 " slot=%" PRIu64 " head=%s",
+            vote.data.validator_id,
+            vote.data.slot,
+            head_hex[0] ? head_hex : "0x0");
+    }
 
 cleanup:
     return result;

@@ -30,21 +30,6 @@ static bool bytes_are_zero(const uint8_t *bytes, size_t length) {
     return true;
 }
 
-static bool xmss_aggregation_test_mode(void) {
-    static bool initialized = false;
-    static bool enabled = true;
-    if (!initialized) {
-        const char *env = getenv("LANTERN_XMSS_AGG_TEST_MODE");
-        if (env && env[0] != '\0') {
-            enabled = (env[0] != '0');
-        } else {
-            enabled = true;
-        }
-        initialized = true;
-    }
-    return enabled;
-}
-
 bool lantern_signature_is_zero(const LanternSignature *signature) {
     if (!signature) {
         return false;
@@ -191,10 +176,9 @@ bool lantern_signature_aggregate(
     lantern_log_info(
         "signature",
         NULL,
-        "aggregation start count=%zu epoch=%" PRIu64 " test_mode=%d",
+        "aggregation start count=%zu epoch=%" PRIu64,
         count,
-        epoch,
-        xmss_aggregation_test_mode() ? 1 : 0);
+        epoch);
 
     double start = get_time_seconds();
     if (lantern_byte_list_resize(out_proof, LANTERN_AGG_PROOF_MAX_BYTES) != 0) {
@@ -251,13 +235,12 @@ bool lantern_signature_aggregate(
         pq_xmss_aggregation_setup_prover();
         uintptr_t written_len = 0;
         enum PQSigningError err = pq_aggregate_signatures(
-            pubkey_handles,
+            (const struct PQSignatureSchemePublicKey *const *)pubkey_handles,
             (const struct PQSignature *const *)sig_handles,
             count,
             message,
             message_len,
             epoch,
-            xmss_aggregation_test_mode(),
             out_proof->data,
             out_proof->length,
             &written_len);
@@ -335,11 +318,10 @@ bool lantern_signature_verify_aggregated(
     lantern_log_info(
         "signature",
         NULL,
-        "aggregation verify start count=%zu epoch=%" PRIu64 " proof_len=%zu test_mode=%d",
+        "aggregation verify start count=%zu epoch=%" PRIu64 " proof_len=%zu",
         count,
         epoch,
-        proof->length,
-        xmss_aggregation_test_mode() ? 1 : 0);
+        proof->length);
 
     struct PQSignatureSchemePublicKey **pubkey_handles = calloc(count, sizeof(*pubkey_handles));
     if (!pubkey_handles) {
@@ -379,8 +361,7 @@ bool lantern_signature_verify_aggregated(
             message_len,
             proof->data,
             proof->length,
-            epoch,
-            xmss_aggregation_test_mode());
+            epoch);
         double elapsed = get_time_seconds() - start;
         lantern_log_debug(
             "signature",

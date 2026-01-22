@@ -187,11 +187,125 @@ static int test_proposer_vote_signature_rejects_tampering(void) {
     return 0;
 }
 
+static int test_aggregated_signature_roundtrip(void) {
+    enum { kSignerCount = 2 };
+    struct PQSignatureSchemePublicKey *pubkeys[kSignerCount];
+    struct PQSignatureSchemeSecretKey *secrets[kSignerCount];
+    uint8_t serialized_pubkeys[kSignerCount][LANTERN_VALIDATOR_PUBKEY_SIZE];
+    const uint8_t *pubkey_ptrs[kSignerCount];
+    LanternSignature signatures[kSignerCount];
+    LanternByteList proof;
+    LanternByteList tampered;
+    LanternRoot message;
+    uint64_t epoch = 1;
+
+    memset(pubkeys, 0, sizeof(pubkeys));
+    memset(secrets, 0, sizeof(secrets));
+    memset(serialized_pubkeys, 0, sizeof(serialized_pubkeys));
+    memset(signatures, 0, sizeof(signatures));
+    lantern_byte_list_init(&proof);
+    lantern_byte_list_init(&tampered);
+    fill_root(&message, 0xA1);
+
+    for (size_t i = 0; i < kSignerCount; ++i) {
+        if (generate_test_keypair(&pubkeys[i], &secrets[i]) != 0) {
+            fprintf(stderr, "aggregate: keygen failed index=%zu\n", i);
+            goto fail;
+        }
+        uintptr_t written = 0;
+        enum PQSigningError serr = pq_public_key_serialize(
+            pubkeys[i],
+            serialized_pubkeys[i],
+            sizeof(serialized_pubkeys[i]),
+            &written);
+        if (serr != Success || written != sizeof(serialized_pubkeys[i])) {
+            fprintf(stderr, "aggregate: pubkey serialize failed index=%zu err=%d written=%zu\n", i, (int)serr, (size_t)written);
+            goto fail;
+        }
+        pubkey_ptrs[i] = serialized_pubkeys[i];
+        if (!lantern_signature_sign(
+                secrets[i],
+                epoch,
+                message.bytes,
+                sizeof(message.bytes),
+                &signatures[i])) {
+            fprintf(stderr, "aggregate: sign failed index=%zu\n", i);
+            goto fail;
+        }
+    }
+
+    if (!lantern_signature_aggregate(
+            pubkey_ptrs,
+            signatures,
+            kSignerCount,
+            message.bytes,
+            sizeof(message.bytes),
+            epoch,
+            &proof)) {
+        fprintf(stderr, "aggregate: lantern_signature_aggregate failed\n");
+        goto fail;
+    }
+    if (proof.length == 0 || !proof.data) {
+        fprintf(stderr, "aggregate: empty proof\n");
+        goto fail;
+    }
+    if (!lantern_signature_verify_aggregated(
+            pubkey_ptrs,
+            kSignerCount,
+            message.bytes,
+            sizeof(message.bytes),
+            &proof,
+            epoch)) {
+        fprintf(stderr, "aggregate: verify_aggregated failed\n");
+        goto fail;
+    }
+
+    if (lantern_byte_list_copy(&tampered, &proof) != 0 || tampered.length == 0 || !tampered.data) {
+        fprintf(stderr, "aggregate: failed to copy proof\n");
+        goto fail;
+    }
+    tampered.data[0] ^= 0xFF;
+    if (lantern_signature_verify_aggregated(
+            pubkey_ptrs,
+            kSignerCount,
+            message.bytes,
+            sizeof(message.bytes),
+            &tampered,
+            epoch)) {
+        fprintf(stderr, "aggregate: tampered proof unexpectedly verified\n");
+        goto fail;
+    }
+
+    for (size_t i = 0; i < kSignerCount; ++i) {
+        pq_secret_key_free(secrets[i]);
+        pq_public_key_free(pubkeys[i]);
+    }
+    lantern_byte_list_reset(&proof);
+    lantern_byte_list_reset(&tampered);
+    return 0;
+
+fail:
+    for (size_t i = 0; i < kSignerCount; ++i) {
+        if (secrets[i]) {
+            pq_secret_key_free(secrets[i]);
+        }
+        if (pubkeys[i]) {
+            pq_public_key_free(pubkeys[i]);
+        }
+    }
+    lantern_byte_list_reset(&proof);
+    lantern_byte_list_reset(&tampered);
+    return 1;
+}
+
 int main(void) {
     if (test_proposer_vote_signature_roundtrip() != 0) {
         return 1;
     }
     if (test_proposer_vote_signature_rejects_tampering() != 0) {
+        return 1;
+    }
+    if (test_aggregated_signature_roundtrip() != 0) {
         return 1;
     }
     puts("lantern_signature_test OK");

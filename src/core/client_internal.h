@@ -70,17 +70,6 @@ void validator_sleep_ms(uint32_t ms);
 
 
 /**
- * Calculate backoff time for blocks request based on failure count.
- *
- * @param failures  Number of consecutive failures
- * @return Backoff time in milliseconds
- *
- * @note Thread safety: This function is thread-safe
- */
-uint64_t blocks_request_backoff_ms(uint32_t failures);
-
-
-/**
  * Format a root hash as hex string.
  *
  * Produces output like "0x1234...abcd" with prefix.

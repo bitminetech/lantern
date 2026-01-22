@@ -31,10 +31,6 @@ int lantern_fixture_read_text_file(const char *path, char **out_buf) {
     }
     FILE *file = fopen(path, "rb");
     if (!file) {
-        const char *debug = getenv("LANTERN_DEBUG_FIXTURES");
-        if (debug && debug[0] != '\0') {
-            fprintf(stderr, "fixture fopen failed: %s\n", path);
-        }
         perror("fopen");
         return -1;
     }
@@ -1643,19 +1639,6 @@ int lantern_fixture_parse_anchor_state(
     if (lantern_state_set_validator_pubkeys(state, validator_pubkeys, (size_t)count) != 0) {
         free(validator_pubkeys);
         return -1;
-    }
-    const char *debug_hash = getenv("LANTERN_DEBUG_STATE_HASH");
-    if (debug_hash && debug_hash[0] != '\0') {
-        char validators_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        if (lantern_bytes_to_hex(
-                state->validator_registry_root.bytes,
-                LANTERN_ROOT_SIZE,
-                validators_hex,
-                sizeof(validators_hex),
-                1)
-            == 0) {
-            fprintf(stderr, "fixture validators root: %s\n", validators_hex);
-        }
     }
     free(validator_pubkeys);
 

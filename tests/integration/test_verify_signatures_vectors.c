@@ -43,6 +43,14 @@ static bool pubkey_is_zero(const uint8_t *pubkey) {
     return true;
 }
 
+// leanSpec fixtures currently emit 0x00 for aggregated proofs when test_mode is enabled.
+static bool is_placeholder_agg_proof(const LanternByteList *proof) {
+    if (!proof || !proof->data) {
+        return false;
+    }
+    return proof->length == 1 && proof->data[0] == 0u;
+}
+
 static bool verify_aggregated_attestations(
     const LanternState *state,
     const LanternSignedBlock *block,
@@ -131,6 +139,14 @@ static bool verify_aggregated_attestations(
             free(pubkeys);
             fprintf(stderr, "%s: failed to hash attestation data\n", path ? path : "(unknown)");
             return false;
+        }
+        if (is_placeholder_agg_proof(&proof->proof_data)) {
+            fprintf(
+                stderr,
+                "%s: skipping aggregated signature verification (placeholder proof data)\n",
+                path ? path : "(unknown)");
+            free(pubkeys);
+            continue;
         }
         bool sig_ok = lantern_signature_verify_aggregated(
             pubkeys,

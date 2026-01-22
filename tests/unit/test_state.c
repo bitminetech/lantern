@@ -575,6 +575,7 @@ static int test_attestations_single_vote_justifies(void) {
         lantern_state_generate_genesis(&state, genesis_time, validator_count),
         "genesis for single-vote justification test");
     mark_slot_justified_for_tests(&state, state.latest_justified.slot);
+    populate_historical_hashes_for_tests(&state, 1);
 
     LanternAttestations attestations;
     lantern_attestations_init(&attestations);
@@ -582,9 +583,10 @@ static int test_attestations_single_vote_justifies(void) {
     lantern_signature_list_init(&signatures);
 
     LanternCheckpoint source_checkpoint = state.latest_justified;
+    source_checkpoint.root = get_historical_root_for_tests(&state, source_checkpoint.slot);
     LanternCheckpoint target_checkpoint = source_checkpoint;
     target_checkpoint.slot = source_checkpoint.slot + 1u;
-    fill_root(&target_checkpoint.root, 0xAB);
+    target_checkpoint.root = get_historical_root_for_tests(&state, target_checkpoint.slot);
 
     expect_zero(lantern_attestations_resize(&attestations, 1), "resize single attestation");
     expect_zero(lantern_signature_list_resize(&signatures, 1), "resize single signature");
@@ -622,10 +624,11 @@ static int test_attestations_require_justified_source(void) {
 
     LanternCheckpoint source_checkpoint = state.latest_justified;
     source_checkpoint.slot = state.latest_justified.slot + 2;
-    fill_root(&source_checkpoint.root, 0xD0);
     LanternCheckpoint target_checkpoint = source_checkpoint;
     target_checkpoint.slot = source_checkpoint.slot + 1;
-    fill_root(&target_checkpoint.root, 0xDC);
+    populate_historical_hashes_for_tests(&state, target_checkpoint.slot);
+    source_checkpoint.root = get_historical_root_for_tests(&state, source_checkpoint.slot);
+    target_checkpoint.root = get_historical_root_for_tests(&state, target_checkpoint.slot);
 
     size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.config.num_validators);
     expect_zero(
@@ -670,12 +673,15 @@ static int test_attestations_accept_duplicate_votes(void) {
     expect_zero(lantern_attestations_resize(&attestations, 2), "double vote resize");
     expect_zero(lantern_signature_list_resize(&signatures, 2), "double vote signature resize");
 
-    LanternCheckpoint target_checkpoint = state.latest_justified;
+    populate_historical_hashes_for_tests(&state, 1);
+    LanternCheckpoint source_checkpoint = state.latest_justified;
+    source_checkpoint.root = get_historical_root_for_tests(&state, source_checkpoint.slot);
+    LanternCheckpoint target_checkpoint = source_checkpoint;
     target_checkpoint.slot = 1;
-    fill_root(&target_checkpoint.root, 0xCD);
+    target_checkpoint.root = get_historical_root_for_tests(&state, target_checkpoint.slot);
 
-    build_vote(&attestations.data[0], &signatures.data[0], 0, 1, &state.latest_justified, &target_checkpoint, 0x11);
-    build_vote(&attestations.data[1], &signatures.data[1], 0, 1, &state.latest_justified, &target_checkpoint, 0x22);
+    build_vote(&attestations.data[0], &signatures.data[0], 0, 1, &source_checkpoint, &target_checkpoint, 0x11);
+    build_vote(&attestations.data[1], &signatures.data[1], 0, 1, &source_checkpoint, &target_checkpoint, 0x22);
 
     expect_zero(
         lantern_state_process_attestations(&state, &attestations, &signatures),
@@ -708,9 +714,17 @@ static void setup_prejustified_consecutive_source(
     state->latest_justified.slot = slot_one;
     fill_root(&state->latest_justified.root, source_marker);
 
+    uint64_t target_slot = slot_one + 1u;
+    expect_zero(
+        lantern_root_list_resize(&state->historical_block_hashes, (size_t)(target_slot + 1u)),
+        "resize historical hashes for consecutive attestation test");
+    fill_root(&state->historical_block_hashes.items[slot_one - 1u], alt_marker);
+    fill_root(&state->historical_block_hashes.items[slot_one], source_marker);
+    fill_root(&state->historical_block_hashes.items[target_slot], target_marker);
+
     *out_source = state->latest_justified;
     *out_target = *out_source;
-    out_target->slot = out_source->slot + 1u;
+    out_target->slot = target_slot;
     fill_root(&out_target->root, target_marker);
 
     *out_alt_source = *out_source;
@@ -846,12 +860,14 @@ static int test_attestations_finalize_across_gap(void) {
     uint64_t source_slot = state.latest_justified.slot + 1u;
     mark_slot_justified_for_tests(&state, source_slot);
     state.latest_justified.slot = source_slot;
-    fill_root(&state.latest_justified.root, 0xC1);
 
     LanternCheckpoint source = state.latest_justified;
     LanternCheckpoint target = source;
     target.slot = source.slot + 3u;
-    fill_root(&target.root, 0xC2);
+    populate_historical_hashes_for_tests(&state, target.slot);
+    state.latest_justified.root = get_historical_root_for_tests(&state, source.slot);
+    source.root = state.latest_justified.root;
+    target.root = get_historical_root_for_tests(&state, target.slot);
 
     LanternAttestations first_vote;
     lantern_attestations_init(&first_vote);
@@ -884,6 +900,149 @@ static int test_attestations_finalize_across_gap(void) {
     return 0;
 }
 
+static int test_pruning_keeps_pending_justifications(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    const uint64_t validator_count = 3;
+    expect_zero(lantern_state_generate_genesis(&state, 760, validator_count), "genesis for pruning test");
+    mark_slot_justified_for_tests(&state, state.latest_justified.slot);
+    populate_historical_hashes_for_tests(&state, 5);
+
+    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.config.num_validators);
+    LanternAttestations attestations;
+    lantern_attestations_init(&attestations);
+    LanternSignatureList signatures;
+    lantern_signature_list_init(&signatures);
+    expect_zero(lantern_attestations_resize(&attestations, quorum), "resize pruning attestations");
+    expect_zero(lantern_signature_list_resize(&signatures, quorum), "resize pruning signatures");
+
+    LanternCheckpoint source_0 = state.latest_justified;
+    source_0.root = get_historical_root_for_tests(&state, source_0.slot);
+    LanternCheckpoint target_1 = source_0;
+    target_1.slot = source_0.slot + 1u;
+    target_1.root = get_historical_root_for_tests(&state, target_1.slot);
+
+    for (size_t i = 0; i < quorum; ++i) {
+        build_vote(
+            &attestations.data[i],
+            &signatures.data[i],
+            (uint64_t)i,
+            target_1.slot,
+            &source_0,
+            &target_1,
+            (uint8_t)(0x81u + i));
+    }
+
+    expect_zero(
+        lantern_state_process_attestations(&state, &attestations, &signatures),
+        "justify slot 1 for pruning test");
+    assert(state.latest_justified.slot == target_1.slot);
+    assert(state.latest_finalized.slot == source_0.slot);
+
+    expect_zero(lantern_root_list_resize(&state.justification_roots, 1), "resize pending roots");
+    state.justification_roots.items[0] = get_historical_root_for_tests(&state, 3);
+    expect_zero(
+        lantern_bitlist_resize(&state.justification_validators, validator_count),
+        "resize pending validators");
+    expect_zero(
+        lantern_bitlist_set(&state.justification_validators, 0, true),
+        "mark pending validator vote");
+
+    LanternCheckpoint source_1 = target_1;
+    LanternCheckpoint target_2 = source_1;
+    target_2.slot = source_1.slot + 1u;
+    target_2.root = get_historical_root_for_tests(&state, target_2.slot);
+
+    expect_zero(lantern_attestations_resize(&attestations, quorum), "resize finalization attestations");
+    expect_zero(lantern_signature_list_resize(&signatures, quorum), "resize finalization signatures");
+    for (size_t i = 0; i < quorum; ++i) {
+        build_vote(
+            &attestations.data[i],
+            &signatures.data[i],
+            (uint64_t)i,
+            target_2.slot,
+            &source_1,
+            &target_2,
+            (uint8_t)(0x91u + i));
+    }
+
+    expect_zero(
+        lantern_state_process_attestations(&state, &attestations, &signatures),
+        "finalize slot 1 for pruning test");
+    assert(state.latest_finalized.slot == source_1.slot);
+    assert(state.latest_justified.slot == target_2.slot);
+    assert(state.justification_roots.length == 1);
+    assert(memcmp(
+               state.justification_roots.items[0].bytes,
+               get_historical_root_for_tests(&state, 3).bytes,
+               LANTERN_ROOT_SIZE)
+           == 0);
+
+    lantern_attestations_reset(&attestations);
+    lantern_signature_list_reset(&signatures);
+    lantern_state_reset(&state);
+    return 0;
+}
+
+static int test_attestations_ignore_zero_hash_votes(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    const uint64_t validator_count = 3;
+    expect_zero(
+        lantern_state_generate_genesis(&state, 765, validator_count),
+        "genesis for zero-hash vote test");
+    mark_slot_justified_for_tests(&state, state.latest_justified.slot);
+    populate_historical_hashes_for_tests(&state, 1);
+
+    LanternAttestations attestations;
+    lantern_attestations_init(&attestations);
+    LanternSignatureList signatures;
+    lantern_signature_list_init(&signatures);
+    expect_zero(lantern_attestations_resize(&attestations, 2), "resize zero-hash attestations");
+    expect_zero(lantern_signature_list_resize(&signatures, 2), "resize zero-hash signatures");
+
+    LanternCheckpoint source_zero = state.latest_justified;
+    zero_root(&source_zero.root);
+    LanternCheckpoint target_nonzero = source_zero;
+    target_nonzero.slot = source_zero.slot + 1u;
+    target_nonzero.root = get_historical_root_for_tests(&state, target_nonzero.slot);
+
+    LanternCheckpoint source_nonzero = state.latest_justified;
+    source_nonzero.root = get_historical_root_for_tests(&state, source_nonzero.slot);
+    LanternCheckpoint target_zero = source_nonzero;
+    target_zero.slot = source_nonzero.slot + 1u;
+    zero_root(&target_zero.root);
+
+    build_vote(
+        &attestations.data[0],
+        &signatures.data[0],
+        0,
+        target_nonzero.slot,
+        &source_zero,
+        &target_nonzero,
+        0xA1);
+    build_vote(
+        &attestations.data[1],
+        &signatures.data[1],
+        1,
+        target_zero.slot,
+        &source_nonzero,
+        &target_zero,
+        0xA2);
+
+    expect_zero(
+        lantern_state_process_attestations(&state, &attestations, &signatures),
+        "process zero-hash votes");
+    assert(state.latest_justified.slot == 0);
+    assert(state.latest_finalized.slot == 0);
+    assert(state.justification_roots.length == 0);
+
+    lantern_attestations_reset(&attestations);
+    lantern_signature_list_reset(&signatures);
+    lantern_state_reset(&state);
+    return 0;
+}
+
 static int test_attestations_ignore_out_of_range_validator(void) {
     LanternState state;
     lantern_state_init(&state);
@@ -904,9 +1063,12 @@ static int test_attestations_ignore_out_of_range_validator(void) {
         lantern_signature_list_resize(&signatures, att_count),
         "resize mixed attestation signatures");
 
-    LanternCheckpoint target_checkpoint = state.latest_justified;
-    target_checkpoint.slot = state.latest_justified.slot + 1u;
-    fill_root(&target_checkpoint.root, 0x75);
+    LanternCheckpoint source_checkpoint = state.latest_justified;
+    LanternCheckpoint target_checkpoint = source_checkpoint;
+    target_checkpoint.slot = source_checkpoint.slot + 1u;
+    populate_historical_hashes_for_tests(&state, target_checkpoint.slot);
+    source_checkpoint.root = get_historical_root_for_tests(&state, source_checkpoint.slot);
+    target_checkpoint.root = get_historical_root_for_tests(&state, target_checkpoint.slot);
 
     uint64_t invalid_validator = state.config.num_validators;
     build_vote(
@@ -914,7 +1076,7 @@ static int test_attestations_ignore_out_of_range_validator(void) {
         &signatures.data[0],
         invalid_validator,
         target_checkpoint.slot,
-        &state.latest_justified,
+        &source_checkpoint,
         &target_checkpoint,
         0x31);
     for (size_t i = 1; i <= quorum; ++i) {
@@ -924,7 +1086,7 @@ static int test_attestations_ignore_out_of_range_validator(void) {
             &signatures.data[i],
             validator_id,
             target_checkpoint.slot,
-            &state.latest_justified,
+            &source_checkpoint,
             &target_checkpoint,
             (uint8_t)(0x32u + i));
     }
@@ -967,9 +1129,12 @@ static int test_process_block_accepts_mixed_attestations(void) {
         lantern_attestations_resize(&votes, att_count),
         "resize mixed block attestations");
 
-    LanternCheckpoint target_checkpoint = state.latest_justified;
-    target_checkpoint.slot = state.latest_justified.slot + 1u;
-    fill_root(&target_checkpoint.root, 0x76);
+    LanternCheckpoint source_checkpoint = state.latest_justified;
+    LanternCheckpoint target_checkpoint = source_checkpoint;
+    target_checkpoint.slot = source_checkpoint.slot + 1u;
+    populate_historical_hashes_for_tests(&state, target_checkpoint.slot);
+    source_checkpoint.root = get_historical_root_for_tests(&state, source_checkpoint.slot);
+    target_checkpoint.root = get_historical_root_for_tests(&state, target_checkpoint.slot);
 
     uint64_t invalid_validator = state.config.num_validators;
     build_vote(
@@ -977,7 +1142,7 @@ static int test_process_block_accepts_mixed_attestations(void) {
         NULL,
         invalid_validator,
         target_checkpoint.slot,
-        &state.latest_justified,
+        &source_checkpoint,
         &target_checkpoint,
         0x41);
     for (size_t i = 1; i <= quorum; ++i) {
@@ -987,7 +1152,7 @@ static int test_process_block_accepts_mixed_attestations(void) {
             NULL,
             validator_id,
             target_checkpoint.slot,
-            &state.latest_justified,
+            &source_checkpoint,
             &target_checkpoint,
             (uint8_t)(0x41u + i));
     }
@@ -1790,6 +1955,9 @@ static int test_compute_vote_checkpoints_respects_safe_target(void) {
     state.latest_finalized.slot = 0;
     state.latest_finalized.root = genesis_root;
     state.latest_justified = state.latest_finalized;
+    expect_zero(
+        lantern_fork_choice_update_checkpoints(&fork_choice, &state.latest_justified, &state.latest_finalized),
+        "sync fork choice checkpoints for safe target test");
 
     LanternCheckpoint head;
     LanternCheckpoint target;
@@ -1864,6 +2032,9 @@ static int test_compute_vote_checkpoints_justifiable(void) {
     state.latest_finalized.slot = 0;
     state.latest_finalized.root = genesis_root;
     state.latest_justified = state.latest_finalized;
+    expect_zero(
+        lantern_fork_choice_update_checkpoints(&fork_choice, &state.latest_justified, &state.latest_finalized),
+        "sync fork choice checkpoints for justifiable test");
 
     LanternCheckpoint head;
     LanternCheckpoint target;
@@ -1937,6 +2108,9 @@ static int test_compute_vote_checkpoints_consecutive_target(void) {
     state.latest_finalized.root = block_roots[3];
     state.latest_justified.slot = 4;
     state.latest_justified.root = block_roots[4];
+    expect_zero(
+        lantern_fork_choice_update_checkpoints(&fork_choice, &state.latest_justified, &state.latest_finalized),
+        "sync fork choice checkpoints for consecutive target test");
 
     LanternCheckpoint head;
     LanternCheckpoint target;
@@ -2004,6 +2178,9 @@ static int test_compute_vote_checkpoints_advances_beyond_source(void) {
     state.latest_finalized.root = block_roots[0];
     state.latest_justified.slot = 6;
     state.latest_justified.root = block_roots[6];
+    expect_zero(
+        lantern_fork_choice_update_checkpoints(&fork_choice, &state.latest_justified, &state.latest_finalized),
+        "sync fork choice checkpoints for advance target test");
 
     LanternCheckpoint head;
     LanternCheckpoint target;
@@ -2168,6 +2345,12 @@ int main(void) {
         return 1;
     }
     if (test_attestations_finalize_across_gap() != 0) {
+        return 1;
+    }
+    if (test_pruning_keeps_pending_justifications() != 0) {
+        return 1;
+    }
+    if (test_attestations_ignore_zero_hash_votes() != 0) {
         return 1;
     }
     if (test_attestations_ignore_out_of_range_validator() != 0) {

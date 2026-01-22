@@ -2,7 +2,6 @@
 
 #include <inttypes.h>
 #include <limits.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -11,7 +10,6 @@
 #include "ssz_serialize.h"
 
 #include "lantern/consensus/state.h"
-#include "lantern/support/log.h"
 
 static int write_u32(uint8_t *out, size_t remaining, uint32_t value) {
     if (!out || remaining < SSZ_BYTE_SIZE_OF_UINT32) {
@@ -1526,9 +1524,6 @@ int lantern_ssz_encode_state(const LanternState *state, uint8_t *out, size_t out
         return -1;
     }
     const size_t var_field_count = 5;
-    const char *debug_env = getenv("LANTERN_DEBUG_SSZ");
-    bool debug_ssz = debug_env && debug_env[0] != '\0';
-    int debug_stage = 0;
     size_t offset = 0;
     size_t tmp = 0;
 
@@ -1646,9 +1641,6 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
     }
 
     const size_t var_field_count = 5;
-    const char *debug_env = getenv("LANTERN_DEBUG_SSZ");
-    bool debug_ssz = debug_env && debug_env[0] != '\0';
-    int debug_stage = 0;
     size_t offset = 0;
     const size_t offsets_size = var_field_count * SSZ_BYTE_SIZE_OF_UINT32;
     const size_t min_full_size = LANTERN_CONFIG_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT64 + LANTERN_BLOCK_HEADER_SSZ_SIZE
@@ -1656,18 +1648,10 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
     if (data_len < min_full_size) {
         return -1;
     }
-    if (debug_ssz) {
-        lantern_log_debug("ssz", NULL, "ssz decode state: entry data_len=%zu", data_len);
-    }
-
     if (lantern_ssz_decode_config(&state->config, data + offset, LANTERN_CONFIG_SSZ_SIZE) != 0) {
         return -1;
     }
     offset += LANTERN_CONFIG_SSZ_SIZE;
-    if (debug_ssz) {
-        lantern_log_debug("ssz", NULL, "ssz decode state: stage %d config decoded", debug_stage++);
-    }
-
     if (read_u64(data + offset, data_len - offset, &state->slot) != 0) {
         return -1;
     }
@@ -1680,11 +1664,6 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
         return -1;
     }
     offset += LANTERN_BLOCK_HEADER_SSZ_SIZE;
-    if (debug_ssz) {
-        lantern_log_debug("ssz", NULL, "ssz decode state: stage %d slot=%" PRIu64, debug_stage++, state->slot);
-        lantern_log_debug("ssz", NULL, "ssz decode state: stage %d header slot=%" PRIu64, debug_stage++, state->latest_block_header.slot);
-    }
-
     if (data_len - offset < LANTERN_CHECKPOINT_SSZ_SIZE) {
         return -1;
     }
@@ -1692,15 +1671,6 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
         return -1;
     }
     offset += LANTERN_CHECKPOINT_SSZ_SIZE;
-    if (debug_ssz) {
-        lantern_log_debug(
-            "ssz",
-            NULL,
-            "ssz decode state: stage %d latest_justified slot=%" PRIu64,
-            debug_stage++,
-            state->latest_justified.slot);
-    }
-
     if (data_len - offset < LANTERN_CHECKPOINT_SSZ_SIZE) {
         return -1;
     }
@@ -1708,15 +1678,6 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
         return -1;
     }
     offset += LANTERN_CHECKPOINT_SSZ_SIZE;
-    if (debug_ssz) {
-        lantern_log_debug(
-            "ssz",
-            NULL,
-            "ssz decode state: stage %d latest_finalized slot=%" PRIu64,
-            debug_stage++,
-            state->latest_finalized.slot);
-    }
-
     if (data_len - offset < offsets_size) {
         return -1;
     }
@@ -1742,10 +1703,6 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
         }
     }
     offset = table_end;
-    if (debug_ssz) {
-        lantern_log_debug("ssz", NULL, "ssz decode state: stage %d offsets parsed (table_end=%zu)", debug_stage++, offset);
-    }
-
     size_t payload_start = offsets[0];
     if (payload_start < offset || payload_start > data_len) {
         return -1;
@@ -1769,53 +1726,19 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
         chunk_sizes[i] = chunk_end - offsets[i];
     }
 
-    if (debug_ssz) {
-        lantern_log_debug(
-            "ssz",
-            NULL,
-            "ssz decode state: offsets_start=%zu table_end=%zu data_len=%zu",
-            offsets_start,
-            offset,
-            data_len);
-        lantern_log_debug(
-            "ssz",
-            NULL,
-            "ssz decode state: chunks hist=%zu slots=%zu validators=%zu roots=%zu just_validators=%zu",
-            chunk_sizes[0],
-            chunk_sizes[1],
-            chunk_sizes[2],
-            chunk_sizes[3],
-            chunk_sizes[4]);
-    }
-
     if (decode_root_list(&state->historical_block_hashes, data + offsets[0], chunk_sizes[0]) != 0) {
-        if (debug_ssz) {
-            lantern_log_debug("ssz", NULL, "ssz decode state: failed historical_block_hashes len=%zu", chunk_sizes[0]);
-        }
         return -1;
     }
     if (decode_bitlist(&state->justified_slots, data + offsets[1], chunk_sizes[1]) != 0) {
-        if (debug_ssz) {
-            lantern_log_debug("ssz", NULL, "ssz decode state: failed justified_slots len=%zu", chunk_sizes[1]);
-        }
         return -1;
     }
     if (decode_validators_list(state, data + offsets[2], chunk_sizes[2]) != 0) {
-        if (debug_ssz) {
-            lantern_log_debug("ssz", NULL, "ssz decode state: failed validators len=%zu", chunk_sizes[2]);
-        }
         return -1;
     }
     if (decode_root_list(&state->justification_roots, data + offsets[3], chunk_sizes[3]) != 0) {
-        if (debug_ssz) {
-            lantern_log_debug("ssz", NULL, "ssz decode state: failed justification_roots len=%zu", chunk_sizes[3]);
-        }
         return -1;
     }
     if (decode_bitlist(&state->justification_validators, data + offsets[4], chunk_sizes[4]) != 0) {
-        if (debug_ssz) {
-            lantern_log_debug("ssz", NULL, "ssz decode state: failed justification_validators len=%zu", chunk_sizes[4]);
-        }
         return -1;
     }
 

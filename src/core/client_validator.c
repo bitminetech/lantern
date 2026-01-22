@@ -45,6 +45,8 @@ static const uint32_t VALIDATOR_SERVICE_POLL_SLEEP_MS = 50;
 static const uint64_t VALIDATOR_SYNC_SLOT_LAG = 2;
 /** Pending queue size that indicates we're still catching up. */
 static const size_t VALIDATOR_SYNC_PENDING_THRESHOLD = 8;
+/** Wall clock lag (in slots) tolerated before treating peer status as stale. */
+static const uint64_t VALIDATOR_SYNC_WALL_CLOCK_LAG = 16;
 
 static bool validator_should_pause_for_sync(const struct lantern_client *client)
 {
@@ -53,8 +55,49 @@ static bool validator_should_pause_for_sync(const struct lantern_client *client)
         return false;
     }
 
+    uint64_t local_slot = client->has_state ? client->state.latest_block_header.slot : 0;
+    LanternRoot local_head = {0};
+    bool have_local_head = false;
+    if (client->has_fork_choice
+        && lantern_fork_choice_current_head(&client->fork_choice, &local_head) == 0)
+    {
+        have_local_head = true;
+        uint64_t head_slot = 0;
+        if (lantern_fork_choice_block_info(
+                &client->fork_choice,
+                &local_head,
+                &head_slot,
+                NULL,
+                NULL)
+            == 0)
+        {
+            local_slot = head_slot;
+        }
+    }
+
     uint64_t max_peer_slot = 0;
-    bool have_status = false;
+    bool have_fresh_status = false;
+    bool have_peer_at_or_ahead = false;
+    bool head_match_at_or_ahead = false;
+    bool any_head_match = false;
+    uint64_t now_ms = monotonic_millis();
+    static LanternRoot last_head_root = {{0}};
+    static bool last_head_root_set = false;
+    static uint64_t last_head_match_ms = 0;
+    if (have_local_head)
+    {
+        if (!last_head_root_set
+            || memcmp(
+                last_head_root.bytes,
+                local_head.bytes,
+                LANTERN_ROOT_SIZE)
+                != 0)
+        {
+            last_head_root = local_head;
+            last_head_root_set = true;
+            last_head_match_ms = now_ms;
+        }
+    }
     pthread_mutex_t *status_lock = (pthread_mutex_t *)&client->status_lock;
     if (pthread_mutex_lock(status_lock) == 0)
     {
@@ -65,21 +108,92 @@ static bool validator_should_pause_for_sync(const struct lantern_client *client)
             {
                 continue;
             }
-            have_status = true;
+            if (entry->last_status_ms == 0
+                || now_ms < entry->last_status_ms
+                || now_ms - entry->last_status_ms > LANTERN_PEER_STATUS_STALE_MS)
+            {
+                continue;
+            }
+            have_fresh_status = true;
             if (entry->status.head.slot > max_peer_slot)
             {
                 max_peer_slot = entry->status.head.slot;
+            }
+            if (have_local_head && entry->status.head.slot >= local_slot)
+            {
+                have_peer_at_or_ahead = true;
+                if (memcmp(entry->status.head.root.bytes, local_head.bytes, LANTERN_ROOT_SIZE) == 0)
+                {
+                    head_match_at_or_ahead = true;
+                }
+            }
+            if (have_local_head
+                && memcmp(entry->status.head.root.bytes, local_head.bytes, LANTERN_ROOT_SIZE) == 0)
+            {
+                any_head_match = true;
             }
         }
         pthread_mutex_unlock(status_lock);
     }
 
-    if (!have_status)
+    if (!have_fresh_status)
     {
+        bool has_connections = false;
+        pthread_mutex_t *connection_lock = (pthread_mutex_t *)&client->connection_lock;
+        if (client->connection_lock_initialized
+            && pthread_mutex_lock(connection_lock) == 0)
+        {
+            has_connections = client->connected_peers > 0;
+            pthread_mutex_unlock(connection_lock);
+        }
+        if (has_connections || client->bootnodes.len > 0)
+        {
+            return true;
+        }
         return false;
     }
 
-    uint64_t local_slot = client->state.slot;
+    uint64_t current_slot = 0;
+    if (lantern_client_current_slot(client, &current_slot)
+        && current_slot > max_peer_slot + VALIDATOR_SYNC_WALL_CLOCK_LAG)
+    {
+        return true;
+    }
+
+    if (have_peer_at_or_ahead && have_local_head && !head_match_at_or_ahead)
+    {
+        return true;
+    }
+
+    if (have_fresh_status && have_local_head)
+    {
+        if (any_head_match)
+        {
+            last_head_match_ms = now_ms;
+        }
+        else
+        {
+            uint64_t grace_ms = 0;
+            if (client->has_fork_choice && client->fork_choice.seconds_per_slot > 0)
+            {
+                uint64_t slot_ms = client->fork_choice.seconds_per_slot * 1000u;
+                if (slot_ms > UINT64_MAX / 2u)
+                {
+                    slot_ms = UINT64_MAX / 2u;
+                }
+                grace_ms = slot_ms * 2u;
+            }
+            if (grace_ms == 0)
+            {
+                grace_ms = 8000u;
+            }
+            if (now_ms > last_head_match_ms + grace_ms)
+            {
+                return true;
+            }
+        }
+    }
+
     if (max_peer_slot > local_slot + VALIDATOR_SYNC_SLOT_LAG)
     {
         return true;
@@ -1653,7 +1767,7 @@ int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t
         slot,
         block.message.block.proposer_index);
 
-    lantern_client_record_block(client, &block, NULL, NULL, "local", false);
+    lantern_client_record_block(client, &block, NULL, NULL, "local", 0, false);
     rc = lantern_client_publish_block(client, &block);
     if (rc != LANTERN_CLIENT_OK)
     {

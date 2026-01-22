@@ -45,7 +45,13 @@ static int test_pending_block_queue(void) {
     client_test_fill_root_with_index(&last_root, 0);
     int rc = 0;
 
-    if (lantern_client_debug_enqueue_pending_block(&client, &child, &child_root, &parent_root, peer_a) != 0) {
+    if (lantern_client_debug_enqueue_pending_block(
+            &client,
+            &child,
+            &child_root,
+            &parent_root,
+            peer_a)
+        != 0) {
         fprintf(stderr, "failed to enqueue initial pending block\n");
         rc = 1;
         goto cleanup;
@@ -58,7 +64,13 @@ static int test_pending_block_queue(void) {
     }
 
     if (lantern_client_debug_pending_entry(
-            &client, 0, &fetched_root, &fetched_parent, &parent_requested, peer_text, sizeof(peer_text))
+            &client,
+            0,
+            &fetched_root,
+            &fetched_parent,
+            &parent_requested,
+            peer_text,
+            sizeof(peer_text))
         != 0) {
         fprintf(stderr, "failed to fetch pending entry\n");
         rc = 1;
@@ -85,7 +97,13 @@ static int test_pending_block_queue(void) {
         goto cleanup;
     }
 
-    if (lantern_client_debug_enqueue_pending_block(&client, &child, &child_root, &parent_root, peer_b) != 0) {
+    if (lantern_client_debug_enqueue_pending_block(
+            &client,
+            &child,
+            &child_root,
+            &parent_root,
+            peer_b)
+        != 0) {
         fprintf(stderr, "failed to enqueue duplicate pending block\n");
         rc = 1;
         goto cleanup;
@@ -99,7 +117,13 @@ static int test_pending_block_queue(void) {
 
     parent_requested = true;
     if (lantern_client_debug_pending_entry(
-            &client, 0, &fetched_root, &fetched_parent, &parent_requested, peer_text, sizeof(peer_text))
+            &client,
+            0,
+            &fetched_root,
+            &fetched_parent,
+            &parent_requested,
+            peer_text,
+            sizeof(peer_text))
         != 0) {
         fprintf(stderr, "failed to fetch pending entry after duplicate enqueue\n");
         rc = 1;
@@ -118,7 +142,16 @@ static int test_pending_block_queue(void) {
     }
 
     parent_requested = false;
-    if (lantern_client_debug_pending_entry(&client, 0, NULL, NULL, &parent_requested, NULL, 0) != 0 || !parent_requested) {
+    if (lantern_client_debug_pending_entry(
+            &client,
+            0,
+            NULL,
+            NULL,
+            &parent_requested,
+            NULL,
+            0)
+        != 0
+        || !parent_requested) {
         fprintf(stderr, "parent_requested flag did not persist after manual set\n");
         rc = 1;
         goto cleanup;
@@ -128,7 +161,7 @@ static int test_pending_block_queue(void) {
             &client,
             peer_b,
             &parent_root,
-            LANTERN_DEBUG_BLOCKS_REQUEST_SUCCESS)
+            LANTERN_TEST_BLOCKS_REQUEST_SUCCESS)
         != 0) {
         fprintf(stderr, "blocks_request_complete debug wrapper failed\n");
         rc = 1;
@@ -136,7 +169,15 @@ static int test_pending_block_queue(void) {
     }
 
     parent_requested = true;
-    if (lantern_client_debug_pending_entry(&client, 0, NULL, NULL, &parent_requested, NULL, 0) != 0) {
+    if (lantern_client_debug_pending_entry(
+            &client,
+            0,
+            NULL,
+            NULL,
+            &parent_requested,
+            NULL,
+            0)
+        != 0) {
         fprintf(stderr, "failed to inspect parent_requested after completion\n");
         rc = 1;
         goto cleanup;
@@ -147,7 +188,8 @@ static int test_pending_block_queue(void) {
         goto cleanup;
     }
 
-    for (size_t i = 0; i < 300; ++i) {
+    size_t extra_count = LANTERN_PENDING_BLOCK_LIMIT + 50u;
+    for (size_t i = 0; i < extra_count; ++i) {
         LanternSignedBlock extra;
         memset(&extra, 0, sizeof(extra));
         lantern_block_body_init(&extra.message.body);
@@ -159,7 +201,13 @@ static int test_pending_block_queue(void) {
         if (i == 299) {
             last_root = extra_root;
         }
-        if (lantern_client_debug_enqueue_pending_block(&client, &extra, &extra_root, &extra_parent, NULL) != 0) {
+        if (lantern_client_debug_enqueue_pending_block(
+                &client,
+                &extra,
+                &extra_root,
+                &extra_parent,
+                NULL)
+            != 0) {
             fprintf(stderr, "failed to enqueue additional pending block %zu\n", i);
             lantern_block_body_reset(&extra.message.body);
             rc = 1;
@@ -169,7 +217,7 @@ static int test_pending_block_queue(void) {
     }
 
     size_t count = lantern_client_pending_block_count(&client);
-    if (count > 256) {
+    if (count > LANTERN_PENDING_BLOCK_LIMIT) {
         fprintf(stderr, "pending queue exceeded expected limit: %zu\n", count);
         rc = 1;
         goto cleanup;
@@ -211,6 +259,7 @@ static int test_import_block_parent_mismatch(void) {
     LanternRoot block_root;
     LanternRoot parent_root;
     LanternRoot head_root;
+    LanternRoot parent_block_root;
     LanternRoot pending_root;
     LanternRoot pending_parent;
     bool parent_requested = true;
@@ -298,14 +347,24 @@ static int test_import_block_parent_mismatch(void) {
     parent_block.parent_root = head_root;
     client_test_fill_root(&parent_block.state_root, 0x44);
 
+    if (lantern_hash_tree_root_block(&parent_block, &parent_block_root) != 0)
+    {
+        fprintf(stderr, "failed to hash parent block\n");
+        lantern_block_body_reset(&parent_block.body);
+        lantern_block_body_reset(&anchor_block.body);
+        rc = 1;
+        goto cleanup;
+    }
+
     if (lantern_fork_choice_add_block(
             &client.fork_choice,
             &parent_block,
             NULL,
             &client.state.latest_justified,
             &client.state.latest_finalized,
-            &parent_root)
-        != 0) {
+            &parent_block_root)
+        != 0)
+    {
         fprintf(stderr, "failed to add parent block to fork choice\n");
         lantern_block_body_reset(&parent_block.body);
         lantern_block_body_reset(&anchor_block.body);

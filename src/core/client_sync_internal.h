@@ -45,8 +45,10 @@ typedef struct peer_id peer_id_t;
  * Constants
  * ============================================================================ */
 
-/** Maximum number of pending blocks to hold */
-#define LANTERN_PENDING_BLOCK_LIMIT 256u
+/** Maximum roots per blocks_by_root request */
+#define LANTERN_MAX_BLOCKS_PER_REQUEST 10u
+/** Maximum backfill depth when requesting parents */
+#define LANTERN_MAX_BACKFILL_DEPTH LANTERN_PENDING_BLOCK_LIMIT
 
 
 /* ============================================================================
@@ -103,6 +105,7 @@ struct lantern_persisted_block_list
  * @note Thread safety: This function is thread-safe
  */
 void lantern_vote_rejection_set(struct lantern_vote_rejection_info *info, const char *fmt, ...);
+
 
 
 /**
@@ -190,6 +193,7 @@ void pending_block_list_remove(struct lantern_pending_block_list *list, size_t i
  * @param block_root   Root of the block
  * @param parent_root  Root of the parent block
  * @param peer_text    Peer ID text (may be NULL)
+ * @param backfill_depth Backfill depth of the block
  * @return Pointer to new entry, or NULL on failure
  *
  * @note Thread safety: Caller must hold pending_lock
@@ -199,7 +203,23 @@ struct lantern_pending_block *pending_block_list_append(
     const LanternSignedBlock *block,
     const LanternRoot *block_root,
     const LanternRoot *parent_root,
-    const char *peer_text);
+    const char *peer_text,
+    uint32_t backfill_depth);
+
+/**
+ * Peek a pending child root for a given parent root.
+ *
+ * @param list          List to search
+ * @param parent_root   Parent root to match
+ * @param out_child_root Output child root
+ * @return true if a child is available, false otherwise
+ *
+ * @note Thread safety: Caller must hold pending_lock
+ */
+bool pending_block_list_peek_child_root(
+    struct lantern_pending_block_list *list,
+    const LanternRoot *parent_root,
+    LanternRoot *out_child_root);
 
 
 /**
@@ -293,6 +313,18 @@ bool lantern_client_validate_vote_constraints(
     const char *context,
     struct lantern_vote_rejection_info *out_rejection);
 
+/**
+ * Update sync progress using latest peer status and local slot snapshot.
+ *
+ * @param client     Client instance
+ * @param local_slot Local slot snapshot
+ *
+ * @note Thread safety: This function acquires status_lock.
+ */
+void lantern_client_update_sync_progress(
+    struct lantern_client *client,
+    uint64_t local_slot);
+
 
 /**
  * Import a block into the client state and fork choice.
@@ -306,6 +338,7 @@ bool lantern_client_validate_vote_constraints(
  * @param block       Signed block to import
  * @param block_root  Precomputed block root (may be NULL)
  * @param meta        Logging metadata
+ * @param backfill_depth Backfill depth of the block
  * @param allow_historical True to allow importing blocks older than local slot
  * @return true if block was imported successfully
  *
@@ -316,6 +349,7 @@ bool lantern_client_import_block(
     const LanternSignedBlock *block,
     const LanternRoot *block_root,
     const struct lantern_log_metadata *meta,
+    uint32_t backfill_depth,
     bool allow_historical);
 
 
@@ -329,6 +363,7 @@ bool lantern_client_import_block(
  * @param root      Precomputed block root (may be NULL)
  * @param peer_text Peer ID string (may be NULL)
  * @param context   Description of source for logging
+ * @param backfill_depth Backfill depth of the block
  * @param allow_historical True to allow importing blocks older than local slot
  *
  * @note Thread safety: Acquires state_lock via lantern_client_import_block
@@ -339,6 +374,7 @@ void lantern_client_record_block(
     const LanternRoot *root,
     const char *peer_text,
     const char *context,
+    uint32_t backfill_depth,
     bool allow_historical);
 
 
@@ -440,6 +476,7 @@ int lantern_client_refresh_state_validators(struct lantern_client *client);
  * @param block_root   Block root
  * @param parent_root  Parent block root
  * @param peer_text    Peer ID string (may be NULL)
+ * @param backfill_depth Backfill depth of the block
  *
  * @note Thread safety: Acquires pending_lock
  */
@@ -449,16 +486,17 @@ void lantern_client_enqueue_pending_block(
     const LanternRoot *block_root,
     const LanternRoot *parent_root,
     const char *peer_text,
+    uint32_t backfill_depth,
     bool request_parent);
 
 /**
- * Attempt to request the parent of a pending block after a blocks_by_root success.
+ * Attempt to request parents for pending blocks after a blocks_by_root success.
  *
- * Uses the peer that just completed a blocks_by_root request to backfill
- * missing parents for queued blocks.
+ * Selects an available peer for backfill requests. A provided peer ID is treated
+ * as a preference but is not required.
  *
  * @param client    Client instance
- * @param peer_text Peer ID string (must be non-NULL/non-empty)
+ * @param peer_text Peer ID string (may be NULL/empty)
  *
  * @note Thread safety: Thread-safe; acquires pending_lock internally
  */

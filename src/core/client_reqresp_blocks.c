@@ -55,10 +55,12 @@ static bool lantern_client_process_stream_block_chunk(
     bool *saw_block);
 static void *block_request_worker(void *arg);
 static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int err);
-static int schedule_blocks_request(
+static int schedule_blocks_request_batch(
     struct lantern_client *client,
     const char *peer_id_text,
-    const LanternRoot *root);
+    const LanternRoot *roots,
+    const uint32_t *depths,
+    size_t root_count);
 
 
 /* ============================================================================
@@ -79,6 +81,8 @@ static void block_request_ctx_free(struct block_request_ctx *ctx)
         return;
     }
     peer_id_destroy(&ctx->peer_id);
+    free(ctx->roots);
+    free(ctx->depths);
     free(ctx);
 }
 
@@ -191,18 +195,36 @@ static bool lantern_client_process_stream_block_chunk(
 
     char computed_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     format_root_hex(&computed, computed_hex, sizeof(computed_hex));
-    bool matches = memcmp(computed.bytes, ctx->root.bytes, LANTERN_ROOT_SIZE) == 0;
+    bool matches = false;
+    uint32_t backfill_depth = 0;
+    if (ctx->roots && ctx->root_count > 0)
+    {
+        for (size_t i = 0; i < ctx->root_count; ++i)
+        {
+            if (memcmp(computed.bytes, ctx->roots[i].bytes, LANTERN_ROOT_SIZE) == 0)
+            {
+                matches = true;
+                if (ctx->depths)
+                {
+                    backfill_depth = ctx->depths[i];
+                }
+                break;
+            }
+        }
+    }
     bool quiet_log = ctx->client && ctx->client->sync_in_progress;
     if (quiet_log)
     {
         lantern_log_debug(
             "reqresp",
             meta,
-            "streamed block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s match=%s attestations=%zu",
+            "streamed block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s match=%s depth=%" PRIu32
+            " attestations=%zu",
             streamed_block.message.block.slot,
             streamed_block.message.block.proposer_index,
             computed_hex[0] ? computed_hex : "0x0",
             matches ? "true" : "false",
+            backfill_depth,
             streamed_block.message.block.body.attestations.length);
     }
     else
@@ -210,11 +232,13 @@ static bool lantern_client_process_stream_block_chunk(
         lantern_log_info(
             "reqresp",
             meta,
-            "streamed block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s match=%s attestations=%zu",
+            "streamed block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s match=%s depth=%" PRIu32
+            " attestations=%zu",
             streamed_block.message.block.slot,
             streamed_block.message.block.proposer_index,
             computed_hex[0] ? computed_hex : "0x0",
             matches ? "true" : "false",
+            backfill_depth,
             streamed_block.message.block.body.attestations.length);
     }
 
@@ -224,6 +248,7 @@ static bool lantern_client_process_stream_block_chunk(
         &computed,
         ctx->peer_text[0] ? ctx->peer_text : NULL,
         "reqresp",
+        backfill_depth,
         true);
     lantern_signed_block_with_attestation_reset(&streamed_block);
     if (saw_block)
@@ -280,16 +305,25 @@ static void *block_request_worker(void *arg)
     };
 
     char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    format_root_hex(&ctx->root, root_hex, sizeof(root_hex));
+    if (!ctx->roots || ctx->root_count == 0)
+    {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "blocks_by_root request missing roots");
+        goto cleanup;
+    }
+    format_root_hex(&ctx->roots[0], root_hex, sizeof(root_hex));
 
     LanternBlocksByRootRequest request;
     lantern_blocks_by_root_request_init(&request);
 
     uint8_t *raw_request = NULL;
     uint8_t *payload = NULL;
-    bool request_success = false;
+    enum lantern_blocks_request_outcome outcome = LANTERN_BLOCKS_REQUEST_FAILED;
+    bool completed = false;
 
-    if (lantern_root_list_resize(&request.roots, 1) != 0)
+    if (lantern_root_list_resize(&request.roots, ctx->root_count) != 0)
     {
         lantern_log_error(
             "reqresp",
@@ -297,7 +331,10 @@ static void *block_request_worker(void *arg)
             "failed to size blocks_by_root request");
         goto cleanup;
     }
-    request.roots.items[0] = ctx->root;
+    for (size_t i = 0; i < ctx->root_count; ++i)
+    {
+        request.roots.items[i] = ctx->roots[i];
+    }
 
     size_t raw_size = request.roots.length * LANTERN_ROOT_SIZE;
     raw_request = (uint8_t *)malloc(raw_size > 0 ? raw_size : 1u);
@@ -415,8 +452,9 @@ static void *block_request_worker(void *arg)
     lantern_log_debug(
         "reqresp",
         &meta,
-        "sending %s request root=%s bytes=%zu",
+        "sending %s request roots=%zu first_root=%s bytes=%zu",
         ctx->protocol_id,
+        ctx->root_count,
         root_hex[0] ? root_hex : "0x0",
         payload_len);
 
@@ -487,7 +525,8 @@ static void *block_request_worker(void *arg)
             goto cleanup;
         }
     }
-    request_success = saw_block;
+    completed = true;
+    outcome = saw_block ? LANTERN_BLOCKS_REQUEST_SUCCESS : LANTERN_BLOCKS_REQUEST_EMPTY;
 
 cleanup:
     free(payload);
@@ -496,11 +535,12 @@ cleanup:
     libp2p_stream_free(stream);
     if (ctx->client)
     {
-        lantern_client_on_blocks_request_complete(
+        lantern_client_on_blocks_request_complete_batch(
             ctx->client,
             ctx->peer_text,
-            &ctx->root,
-            request_success ? LANTERN_BLOCKS_REQUEST_SUCCESS : LANTERN_BLOCKS_REQUEST_FAILED);
+            ctx->roots,
+            ctx->root_count,
+            completed ? outcome : LANTERN_BLOCKS_REQUEST_FAILED);
     }
 
     block_request_ctx_free(ctx);
@@ -559,10 +599,11 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
             err);
         if (ctx->client)
         {
-            lantern_client_on_blocks_request_complete(
+            lantern_client_on_blocks_request_complete_batch(
                 ctx->client,
                 ctx->peer_text,
-                &ctx->root,
+                ctx->roots,
+                ctx->root_count,
                 LANTERN_BLOCKS_REQUEST_FAILED);
         }
         if (stream)
@@ -584,10 +625,11 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
         libp2p_stream_free(stream);
         if (ctx->client)
         {
-            lantern_client_on_blocks_request_complete(
+            lantern_client_on_blocks_request_complete_batch(
                 ctx->client,
                 ctx->peer_text,
-                &ctx->root,
+                ctx->roots,
+                ctx->root_count,
                 LANTERN_BLOCKS_REQUEST_FAILED);
         }
         block_request_ctx_free(ctx);
@@ -607,10 +649,11 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
         libp2p_stream_free(stream);
         if (ctx->client)
         {
-            lantern_client_on_blocks_request_complete(
+            lantern_client_on_blocks_request_complete_batch(
                 ctx->client,
                 ctx->peer_text,
-                &ctx->root,
+                ctx->roots,
+                ctx->root_count,
                 LANTERN_BLOCKS_REQUEST_FAILED);
         }
         block_request_ctx_free(ctx);
@@ -629,12 +672,18 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
  * Public Block Request API
  * ============================================================================ */
 
-static int schedule_blocks_request(
+static int schedule_blocks_request_batch(
     struct lantern_client *client,
     const char *peer_id_text,
-    const LanternRoot *root)
+    const LanternRoot *roots,
+    const uint32_t *depths,
+    size_t root_count)
 {
-    if (!client || !peer_id_text || !root)
+    if (!client || !peer_id_text || !roots || root_count == 0)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    if (root_count > LANTERN_MAX_BLOCKS_PER_REQUEST)
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
@@ -642,9 +691,12 @@ static int schedule_blocks_request(
     {
         return LANTERN_CLIENT_ERR_NETWORK;
     }
-    if (lantern_root_is_zero(root))
+    for (size_t i = 0; i < root_count; ++i)
     {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+        if (lantern_root_is_zero(&roots[i]))
+        {
+            return LANTERN_CLIENT_ERR_INVALID_PARAM;
+        }
     }
 
     if (client->debug_disable_block_requests)
@@ -655,10 +707,11 @@ static int schedule_blocks_request(
                 .validator = client->node_id,
                 .peer = peer_id_text},
             "skipping blocks_by_root dial for test run");
-        lantern_client_on_blocks_request_complete(
+        lantern_client_on_blocks_request_complete_batch(
             client,
             peer_id_text,
-            root,
+            roots,
+            root_count,
             LANTERN_BLOCKS_REQUEST_ABORTED);
         return 0;
     }
@@ -668,11 +721,33 @@ static int schedule_blocks_request(
     {
         return LANTERN_CLIENT_ERR_ALLOC;
     }
+    ctx->roots = (LanternRoot *)calloc(root_count, sizeof(*ctx->roots));
+    if (!ctx->roots)
+    {
+        block_request_ctx_free(ctx);
+        return LANTERN_CLIENT_ERR_ALLOC;
+    }
+    ctx->depths = (uint32_t *)calloc(root_count, sizeof(*ctx->depths));
+    if (!ctx->depths)
+    {
+        block_request_ctx_free(ctx);
+        return LANTERN_CLIENT_ERR_ALLOC;
+    }
+
     ctx->client = client;
-    ctx->root = *root;
+    ctx->root_count = root_count;
     ctx->protocol_id = LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
     strncpy(ctx->peer_text, peer_id_text, sizeof(ctx->peer_text) - 1);
     ctx->peer_text[sizeof(ctx->peer_text) - 1] = '\0';
+
+    for (size_t i = 0; i < root_count; ++i)
+    {
+        ctx->roots[i] = roots[i];
+        if (depths)
+        {
+            ctx->depths[i] = depths[i];
+        }
+    }
 
     if (peer_id_create_from_string(peer_id_text, &ctx->peer_id) != PEER_ID_SUCCESS)
     {
@@ -687,14 +762,15 @@ static int schedule_blocks_request(
     }
 
     char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    format_root_hex(root, root_hex, sizeof(root_hex));
+    format_root_hex(&roots[0], root_hex, sizeof(root_hex));
     lantern_log_debug(
         "reqresp",
         &(const struct lantern_log_metadata){
             .validator = client->node_id,
             .peer = ctx->peer_text[0] ? ctx->peer_text : NULL},
-        "dialing peer for %s root=%s",
+        "dialing peer for %s roots=%zu first_root=%s",
         ctx->protocol_id,
+        root_count,
         root_hex[0] ? root_hex : "0x0");
 
     int rc = libp2p_host_open_stream_async(
@@ -729,9 +805,37 @@ static int schedule_blocks_request(
  *
  * @param client        Client instance
  * @param peer_id_text  Peer ID string
- * @param root          Block root to request
+ * @param roots         Block roots to request
+ * @param depths        Backfill depth per root (may be NULL for zeros)
+ * @param root_count    Number of roots
  * @return 0 on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL, the peer ID is invalid, or the root is zero
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if parameters are invalid, the peer ID is invalid, or any root is zero
+ * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
+ * @return LANTERN_CLIENT_ERR_NETWORK if stream dialing fails or networking is unavailable
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+int lantern_client_schedule_blocks_request_batch(
+    struct lantern_client *client,
+    const char *peer_id_text,
+    const LanternRoot *roots,
+    const uint32_t *depths,
+    size_t root_count)
+{
+    return schedule_blocks_request_batch(client, peer_id_text, roots, depths, root_count);
+}
+
+/**
+ * Schedule a single-root blocks_by_root request to a peer.
+ *
+ * @spec subspecs/networking/reqresp/message.py - BlocksByRoot protocol
+ *
+ * @param client         Client instance
+ * @param peer_id_text   Peer ID string
+ * @param root           Block root to request
+ * @param backfill_depth Backfill depth for the requested root
+ * @return 0 on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if parameters are invalid, the peer ID is invalid, or the root is zero
  * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
  * @return LANTERN_CLIENT_ERR_NETWORK if stream dialing fails or networking is unavailable
  *
@@ -740,7 +844,13 @@ static int schedule_blocks_request(
 int lantern_client_schedule_blocks_request(
     struct lantern_client *client,
     const char *peer_id_text,
-    const LanternRoot *root)
+    const LanternRoot *root,
+    uint32_t backfill_depth)
 {
-    return schedule_blocks_request(client, peer_id_text, root);
+    if (!root)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    const uint32_t depth = backfill_depth;
+    return schedule_blocks_request_batch(client, peer_id_text, root, &depth, 1u);
 }

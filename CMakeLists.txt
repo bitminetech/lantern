@@ -241,6 +241,10 @@ if(LANTERN_BUILD_TESTS)
     target_link_libraries(lantern_metrics_test PRIVATE lantern)
     add_test(NAME lantern_metrics COMMAND lantern_metrics_test)
 
+    add_executable(lantern_checkpoint_sync_test tests/unit/test_checkpoint_sync_api.c)
+    target_link_libraries(lantern_checkpoint_sync_test PRIVATE lantern)
+    add_test(NAME lantern_checkpoint_sync COMMAND lantern_checkpoint_sync_test)
+
     add_executable(lantern_validator_duties_integration_test tests/integration/test_validator_duties.c)
     target_link_libraries(lantern_validator_duties_integration_test PRIVATE lantern)
     add_test(NAME lantern_validator_duties_integration COMMAND lantern_validator_duties_integration_test)

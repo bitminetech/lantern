@@ -29,6 +29,7 @@
 #include <protocol/ping/protocol_ping.h>
 
 #include "lantern/networking/libp2p.h"
+#include "lantern/metrics/lean_metrics.h"
 #include "lantern/support/log.h"
 #include "lantern/support/string_list.h"
 
@@ -73,6 +74,32 @@ static void format_peer_id_text(const peer_id_t *peer, char *out, size_t out_len
     }
 }
 
+static lean_metrics_direction_t metrics_direction_from_inbound(bool inbound)
+{
+    return inbound ? LEAN_METRICS_DIR_INBOUND : LEAN_METRICS_DIR_OUTBOUND;
+}
+
+static lean_metrics_connection_result_t metrics_connection_result_from_code(int code)
+{
+    return (code == LIBP2P_ERR_TIMEOUT) ? LEAN_METRICS_CONN_RESULT_TIMEOUT : LEAN_METRICS_CONN_RESULT_ERROR;
+}
+
+static lean_metrics_disconnection_reason_t metrics_disconnection_reason_from_code(int reason)
+{
+    switch (reason)
+    {
+        case LIBP2P_ERR_TIMEOUT:
+            return LEAN_METRICS_DISCONNECT_TIMEOUT;
+        case LIBP2P_ERR_EOF:
+        case LIBP2P_ERR_RESET:
+            return LEAN_METRICS_DISCONNECT_REMOTE_CLOSE;
+        case 0:
+        case LIBP2P_ERR_CLOSED:
+            return LEAN_METRICS_DISCONNECT_LOCAL_CLOSE;
+        default:
+            return LEAN_METRICS_DISCONNECT_ERROR;
+    }
+}
 
 /* ============================================================================
  * Connection Counter Functions
@@ -96,6 +123,8 @@ void connection_counter_reset(struct lantern_client *client)
         client->connected_peers = 0;
         lantern_string_list_reset(&client->connected_peer_ids);
         lantern_string_list_init(&client->connected_peer_ids);
+        lantern_string_list_reset(&client->inbound_peer_ids);
+        lantern_string_list_init(&client->inbound_peer_ids);
         return;
     }
     if (pthread_mutex_lock(&client->connection_lock) == 0)
@@ -103,6 +132,8 @@ void connection_counter_reset(struct lantern_client *client)
         client->connected_peers = 0;
         lantern_string_list_reset(&client->connected_peer_ids);
         lantern_string_list_init(&client->connected_peer_ids);
+        lantern_string_list_reset(&client->inbound_peer_ids);
+        lantern_string_list_init(&client->inbound_peer_ids);
         pthread_mutex_unlock(&client->connection_lock);
     }
     else
@@ -110,6 +141,8 @@ void connection_counter_reset(struct lantern_client *client)
         client->connected_peers = 0;
         lantern_string_list_reset(&client->connected_peer_ids);
         lantern_string_list_init(&client->connected_peer_ids);
+        lantern_string_list_reset(&client->inbound_peer_ids);
+        lantern_string_list_init(&client->inbound_peer_ids);
     }
 }
 
@@ -140,6 +173,7 @@ void connection_counter_update(
     char peer_text[128];
     format_peer_id_text(peer, peer_text, sizeof(peer_text));
     size_t total = 0;
+    bool was_inbound = inbound;
     if (pthread_mutex_lock(&client->connection_lock) == 0)
     {
         if (peer_text[0])
@@ -150,10 +184,23 @@ void connection_counter_update(
                 {
                     (void)lantern_string_list_append(&client->connected_peer_ids, peer_text);
                 }
+                if (inbound)
+                {
+                    if (!string_list_contains(&client->inbound_peer_ids, peer_text))
+                    {
+                        (void)lantern_string_list_append(&client->inbound_peer_ids, peer_text);
+                    }
+                }
+                else
+                {
+                    string_list_remove(&client->inbound_peer_ids, peer_text);
+                }
             }
             else if (delta < 0)
             {
+                was_inbound = string_list_contains(&client->inbound_peer_ids, peer_text);
                 string_list_remove(&client->connected_peer_ids, peer_text);
+                string_list_remove(&client->inbound_peer_ids, peer_text);
             }
             client->connected_peers = client->connected_peer_ids.len;
         }
@@ -183,6 +230,13 @@ void connection_counter_update(
     {
         return;
     }
+
+    if (total == 0 && client->status_lock_initialized
+        && pthread_mutex_lock(&client->status_lock) == 0)
+    {
+        client->sync_state = LANTERN_SYNC_STATE_IDLE;
+        pthread_mutex_unlock(&client->status_lock);
+    }
     lantern_log_trace(
         "network",
         &(const struct lantern_log_metadata){
@@ -195,6 +249,19 @@ void connection_counter_update(
         total,
         reason,
         connection_reason_text(reason));
+
+    if (delta > 0)
+    {
+        lean_metrics_record_peer_connection(
+            metrics_direction_from_inbound(inbound),
+            LEAN_METRICS_CONN_RESULT_SUCCESS);
+    }
+    else if (delta < 0)
+    {
+        lean_metrics_record_peer_disconnection(
+            metrics_direction_from_inbound(was_inbound),
+            metrics_disconnection_reason_from_code(reason));
+    }
 }
 
 
@@ -1014,6 +1081,41 @@ static void ping_on_stream_open(libp2p_stream_t *s, void *user_data, int err)
     free(ctx);
 }
 
+static bool peer_status_needs_refresh(
+    struct lantern_client *client,
+    const char *peer_id,
+    uint64_t now_ms)
+{
+    if (!client || !peer_id || peer_id[0] == '\0')
+    {
+        return false;
+    }
+    if (!client->status_lock_initialized)
+    {
+        return true;
+    }
+    if (pthread_mutex_lock(&client->status_lock) != 0)
+    {
+        return true;
+    }
+    struct lantern_peer_status_entry *entry =
+        lantern_client_find_status_entry_locked(client, peer_id);
+    bool needs_refresh = true;
+    if (entry)
+    {
+        if (entry->status_request_inflight)
+        {
+            needs_refresh = false;
+        }
+        else if (entry->has_status && entry->last_status_ms != 0 && now_ms >= entry->last_status_ms)
+        {
+            needs_refresh = (now_ms - entry->last_status_ms) > LANTERN_PEER_STATUS_STALE_MS;
+        }
+    }
+    pthread_mutex_unlock(&client->status_lock);
+    return needs_refresh;
+}
+
 
 /**
  * Ping all connected peers.
@@ -1044,6 +1146,7 @@ static void ping_all_peers(struct lantern_client *client)
     }
     pthread_mutex_unlock(&client->connection_lock);
 
+    uint64_t now_ms = monotonic_millis();
     for (size_t i = 0; i < peers.len; i++)
     {
         const char *peer_str = peers.items[i];
@@ -1055,6 +1158,10 @@ static void ping_all_peers(struct lantern_client *client)
         if (peer_id_create_from_string(peer_str, &peer) != 0)
         {
             continue;
+        }
+        if (peer_status_needs_refresh(client, peer_str, now_ms))
+        {
+            request_status_now(client, &peer, peer_str);
         }
         struct ping_dial_ctx *ctx = (struct ping_dial_ctx *)calloc(1, sizeof(*ctx));
         if (!ctx)
@@ -1335,6 +1442,10 @@ static void handle_outgoing_connection_error_event(
         code,
         connection_reason_text(code),
         msg ? msg : "-");
+
+    lean_metrics_record_peer_connection(
+        LEAN_METRICS_DIR_OUTBOUND,
+        metrics_connection_result_from_code(code));
 }
 
 
@@ -1372,6 +1483,10 @@ static void handle_incoming_connection_error_event(
         code,
         connection_reason_text(code),
         msg ? msg : "-");
+
+    lean_metrics_record_peer_connection(
+        LEAN_METRICS_DIR_INBOUND,
+        metrics_connection_result_from_code(code));
 }
 
 

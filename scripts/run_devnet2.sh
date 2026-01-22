@@ -123,8 +123,6 @@ DOCKER_NETWORK=${DOCKER_NETWORK:-host}
 DOCKER_BUILD=${DOCKER_BUILD:-1}
 DOCKER_BUILD_ARGS=${DOCKER_BUILD_ARGS:-}
 DOCKER_LISTEN_IP=${DOCKER_LISTEN_IP:-}
-LANTERN_DEBUG_FINALIZATION=${LANTERN_DEBUG_FINALIZATION:-}
-LANTERN_DEBUG_STATE_HASH=${LANTERN_DEBUG_STATE_HASH:-}
 ENABLE_COREDUMP=${ENABLE_COREDUMP:-0}
 
 if [[ -z "${DOCKER_LISTEN_IP}" ]]; then
@@ -543,15 +541,8 @@ for i in $(seq 0 $((NODES-1))); do
       -e "LANTERN_NODES_FILE=/genesis/nodes.yaml"
       -e "LANTERN_GENESIS_STATE=/genesis/genesis.ssz"
       -e "LANTERN_VALIDATOR_CONFIG=/genesis/validator-config.yaml"
-      -e "LANTERN_XMSS_AGG_TEST_MODE=0"
-      -e "LANTERN_EXTRA_ARGS=--xmss-public-template /genesis/${HASH_SIG_KEYS_DIR_NAME}/validator_%u_pk.ssz --xmss-secret-template /genesis/${HASH_SIG_KEYS_DIR_NAME}/validator_%u_sk.ssz --log-level ${LOG_LEVEL}"
+      -e "LANTERN_EXTRA_ARGS=--hash-sig-key-dir /genesis/${HASH_SIG_KEYS_DIR_NAME} --log-level ${LOG_LEVEL}"
     )
-    if [[ -n "${LANTERN_DEBUG_FINALIZATION}" ]]; then
-      docker_args+=(-e "LANTERN_DEBUG_FINALIZATION=${LANTERN_DEBUG_FINALIZATION}")
-    fi
-    if [[ -n "${LANTERN_DEBUG_STATE_HASH}" ]]; then
-      docker_args+=(-e "LANTERN_DEBUG_STATE_HASH=${LANTERN_DEBUG_STATE_HASH}")
-    fi
     if [[ "${ENABLE_COREDUMP}" == "1" ]]; then
       docker_args+=(--ulimit core=-1)
     fi
@@ -576,12 +567,6 @@ for i in $(seq 0 $((NODES-1))); do
     docker "${docker_args[@]}" >/dev/null
     echo "${NODE_ID}" >> "${PIDS_FILE}"
   else
-    if [[ -n "${LANTERN_DEBUG_FINALIZATION}" ]]; then
-      export LANTERN_DEBUG_FINALIZATION
-    fi
-    if [[ -n "${LANTERN_DEBUG_STATE_HASH}" ]]; then
-      export LANTERN_DEBUG_STATE_HASH
-    fi
     nohup "${BIN}" \
       --data-dir "${DATA}" \
       --genesis-config "${GENESIS_DIR}/config.yaml" \
@@ -595,8 +580,7 @@ for i in $(seq 0 $((NODES-1))); do
       --http-port "${HTTP}" \
       --metrics-port "${METRICS}" \
       --devnet "${DEVNET}" \
-      --xmss-public-template "${HASH_SIG_KEYS_DIR}/validator_%u_pk.ssz" \
-      --xmss-secret-template "${HASH_SIG_KEYS_DIR}/validator_%u_sk.ssz" \
+      --hash-sig-key-dir "${HASH_SIG_KEYS_DIR}" \
       --log-level "${LOG_LEVEL}" \
       >"${LOG_DIR}/${NODE_ID}.log" 2>&1 &
     echo $! >> "${PIDS_FILE}"

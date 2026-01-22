@@ -45,17 +45,8 @@ extern "C" {
 /** Peer dial interval in seconds */
 #define LANTERN_PEER_DIAL_INTERVAL_SECONDS 5u
 
-/** Base backoff for blocks request in milliseconds */
-#define LANTERN_BLOCKS_REQUEST_BACKOFF_BASE_MS 5000u
-
-/** Maximum backoff for blocks request in milliseconds */
-#define LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_MS 300000u
-
-/** Maximum consecutive failures before max backoff */
-#define LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_FAILURES 8u
-
-/** Minimum poll interval for blocks requests in milliseconds */
-#define LANTERN_BLOCKS_REQUEST_MIN_POLL_MS 2000u
+/** Maximum concurrent blocks requests per peer */
+#define LANTERN_MAX_BLOCKS_REQUESTS_PER_PEER 2u
 
 /** Peer dial timeout in milliseconds */
 #define LANTERN_PEER_DIAL_TIMEOUT_MS 4000
@@ -71,9 +62,13 @@ extern "C" {
 enum lantern_blocks_request_outcome
 {
     LANTERN_BLOCKS_REQUEST_SUCCESS = 0,
-    LANTERN_BLOCKS_REQUEST_FAILED,
-    LANTERN_BLOCKS_REQUEST_ABORTED
+    LANTERN_BLOCKS_REQUEST_FAILED = 1,
+    LANTERN_BLOCKS_REQUEST_ABORTED = 2,
+    LANTERN_BLOCKS_REQUEST_EMPTY = 3
 };
+
+/** Peer status considered stale after this many milliseconds. */
+#define LANTERN_PEER_STATUS_STALE_MS (30000u)
 
 
 /**
@@ -89,7 +84,8 @@ struct lantern_peer_status_entry
     char peer_id[128];                    /**< Peer ID string */
     LanternStatusMessage status;          /**< Latest status message from peer */
     bool has_status;                      /**< True if status has been received */
-    bool requested_head;                  /**< True if head block was requested */
+    uint64_t last_status_ms;              /**< Timestamp of last status message */
+    uint32_t blocks_requests_inflight;    /**< Count of in-flight block requests */
     bool status_request_inflight;         /**< True if status request is pending */
     uint64_t last_blocks_request_ms;      /**< Timestamp of last blocks request */
     uint32_t consecutive_blocks_failures; /**< Count of consecutive request failures */
@@ -106,7 +102,9 @@ struct block_request_ctx
     struct lantern_client *client;  /**< Client instance */
     peer_id_t peer_id;              /**< Peer ID structure */
     char peer_text[128];            /**< Peer ID as text */
-    LanternRoot root;               /**< Block root being requested */
+    LanternRoot *roots;             /**< Roots being requested */
+    uint32_t *depths;               /**< Backfill depth per root */
+    size_t root_count;              /**< Number of roots requested */
     const char *protocol_id;        /**< Protocol ID string */
 };
 

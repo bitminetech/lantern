@@ -55,14 +55,7 @@ uint32_t lantern_reqresp_stall_timeout_ms(void) {
 }
 
 bool lantern_reqresp_debug_bytes_enabled(void) {
-    static bool initialized = false;
-    static bool enabled = false;
-    if (!initialized) {
-        const char *env = getenv("LANTERN_DEBUG_REQRESP_BYTES");
-        enabled = env && env[0] != '\0' && !(env[0] == '0' && env[1] == '\0');
-        initialized = true;
-    }
-    return enabled;
+    return false;
 }
 
 uint64_t lantern_reqresp_debug_sequence_next(void) {

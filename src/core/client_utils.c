@@ -208,47 +208,6 @@ void validator_sleep_ms(uint32_t ms)
 
 
 /* ============================================================================
- * Backoff Calculation
- * ============================================================================ */
-
-/**
- * Calculate backoff time for blocks request based on failure count.
- *
- * @param failures  Number of consecutive failures
- * @return Backoff time in milliseconds
- *
- * @note Thread safety: This function is thread-safe
- */
-uint64_t blocks_request_backoff_ms(uint32_t failures)
-{
-    if (failures == 0)
-    {
-        return 0;
-    }
-    if (failures >= LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_FAILURES)
-    {
-        return LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_MS;
-    }
-    const uint64_t max_backoff = LANTERN_BLOCKS_REQUEST_BACKOFF_MAX_MS;
-    uint64_t backoff = LANTERN_BLOCKS_REQUEST_BACKOFF_BASE_MS;
-    for (uint32_t i = 1; i < failures && backoff < max_backoff; ++i)
-    {
-        if (backoff > max_backoff / 2 || backoff > UINT64_MAX / 2)
-        {
-            backoff = max_backoff;
-            break;
-        }
-        backoff *= 2;
-    }
-    if (backoff > max_backoff)
-    {
-        backoff = max_backoff;
-    }
-    return backoff;
-}
-
-
-/* ============================================================================
  * State Locking
  * ============================================================================ */
 

@@ -26,6 +26,7 @@ enum
 };
 
 static const size_t BLOCK_LIST_INITIAL_CAPACITY = 4u;
+static const size_t PARENT_INDEX_INITIAL_CAPACITY = 4u;
 
 
 /* ============================================================================
@@ -139,6 +140,318 @@ static int ensure_pending_block_list_capacity(
     list->items = expanded;
     list->capacity = new_capacity;
     return LANTERN_CLIENT_PENDING_OK;
+}
+
+static int ensure_pending_parent_index_capacity(
+    struct lantern_pending_parent_index *index,
+    size_t required)
+{
+    if (!index)
+    {
+        return LANTERN_CLIENT_PENDING_ERR_INVALID_PARAM;
+    }
+
+    if (index->capacity >= required)
+    {
+        return LANTERN_CLIENT_PENDING_OK;
+    }
+
+    size_t new_capacity = PARENT_INDEX_INITIAL_CAPACITY;
+    if (index->capacity > 0)
+    {
+        size_t half = index->capacity / 2u;
+        if (index->capacity > SIZE_MAX - half)
+        {
+            return LANTERN_CLIENT_PENDING_ERR_OVERFLOW;
+        }
+        new_capacity = index->capacity + half;
+        if (new_capacity < PARENT_INDEX_INITIAL_CAPACITY)
+        {
+            new_capacity = PARENT_INDEX_INITIAL_CAPACITY;
+        }
+    }
+
+    if (new_capacity < required)
+    {
+        new_capacity = required;
+    }
+
+    if (new_capacity > SIZE_MAX / sizeof(*index->entries))
+    {
+        return LANTERN_CLIENT_PENDING_ERR_OVERFLOW;
+    }
+
+    struct lantern_pending_parent_index_entry *expanded = realloc(
+        index->entries,
+        new_capacity * sizeof(*expanded));
+    if (!expanded)
+    {
+        return LANTERN_CLIENT_PENDING_ERR_ALLOC;
+    }
+
+    index->entries = expanded;
+    index->capacity = new_capacity;
+    return LANTERN_CLIENT_PENDING_OK;
+}
+
+static int ensure_pending_parent_entry_capacity(
+    struct lantern_pending_parent_index_entry *entry,
+    size_t required)
+{
+    if (!entry)
+    {
+        return LANTERN_CLIENT_PENDING_ERR_INVALID_PARAM;
+    }
+
+    if (entry->capacity >= required)
+    {
+        return LANTERN_CLIENT_PENDING_OK;
+    }
+
+    size_t new_capacity = PARENT_INDEX_INITIAL_CAPACITY;
+    if (entry->capacity > 0)
+    {
+        size_t half = entry->capacity / 2u;
+        if (entry->capacity > SIZE_MAX - half)
+        {
+            return LANTERN_CLIENT_PENDING_ERR_OVERFLOW;
+        }
+        new_capacity = entry->capacity + half;
+        if (new_capacity < PARENT_INDEX_INITIAL_CAPACITY)
+        {
+            new_capacity = PARENT_INDEX_INITIAL_CAPACITY;
+        }
+    }
+
+    if (new_capacity < required)
+    {
+        new_capacity = required;
+    }
+
+    if (new_capacity > SIZE_MAX / sizeof(*entry->child_roots))
+    {
+        return LANTERN_CLIENT_PENDING_ERR_OVERFLOW;
+    }
+
+    LanternRoot *expanded = realloc(entry->child_roots, new_capacity * sizeof(*expanded));
+    if (!expanded)
+    {
+        return LANTERN_CLIENT_PENDING_ERR_ALLOC;
+    }
+
+    entry->child_roots = expanded;
+    entry->capacity = new_capacity;
+    return LANTERN_CLIENT_PENDING_OK;
+}
+
+static void pending_parent_index_init(struct lantern_pending_parent_index *index)
+{
+    if (!index)
+    {
+        return;
+    }
+    index->entries = NULL;
+    index->length = 0;
+    index->capacity = 0;
+}
+
+static void pending_parent_index_reset(struct lantern_pending_parent_index *index)
+{
+    if (!index)
+    {
+        return;
+    }
+
+    if (index->entries)
+    {
+        for (size_t i = 0; i < index->length; ++i)
+        {
+            free(index->entries[i].child_roots);
+            index->entries[i].child_roots = NULL;
+            index->entries[i].length = 0;
+            index->entries[i].capacity = 0;
+        }
+        free(index->entries);
+    }
+
+    index->entries = NULL;
+    index->length = 0;
+    index->capacity = 0;
+}
+
+static struct lantern_pending_parent_index_entry *pending_parent_index_find(
+    struct lantern_pending_parent_index *index,
+    const LanternRoot *parent_root)
+{
+    if (!index || !parent_root || !index->entries)
+    {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < index->length; ++i)
+    {
+        if (memcmp(index->entries[i].parent_root.bytes, parent_root->bytes, LANTERN_ROOT_SIZE) == 0)
+        {
+            return &index->entries[i];
+        }
+    }
+
+    return NULL;
+}
+
+static struct lantern_pending_parent_index_entry *pending_parent_index_ensure(
+    struct lantern_pending_parent_index *index,
+    const LanternRoot *parent_root)
+{
+    if (!index || !parent_root)
+    {
+        return NULL;
+    }
+
+    struct lantern_pending_parent_index_entry *entry =
+        pending_parent_index_find(index, parent_root);
+    if (entry)
+    {
+        return entry;
+    }
+
+    if (index->length == SIZE_MAX)
+    {
+        return NULL;
+    }
+
+    int ensure_rc = ensure_pending_parent_index_capacity(index, index->length + 1u);
+    if (ensure_rc != LANTERN_CLIENT_PENDING_OK)
+    {
+        return NULL;
+    }
+
+    entry = &index->entries[index->length];
+    memset(entry, 0, sizeof(*entry));
+    entry->parent_root = *parent_root;
+    index->length += 1u;
+    return entry;
+}
+
+static void pending_parent_index_add_child(
+    struct lantern_pending_parent_index *index,
+    const LanternRoot *parent_root,
+    const LanternRoot *child_root)
+{
+    if (!index || !parent_root || !child_root)
+    {
+        return;
+    }
+    if (lantern_root_is_zero(parent_root))
+    {
+        return;
+    }
+
+    struct lantern_pending_parent_index_entry *entry =
+        pending_parent_index_ensure(index, parent_root);
+    if (!entry)
+    {
+        return;
+    }
+
+    for (size_t i = 0; i < entry->length; ++i)
+    {
+        if (memcmp(entry->child_roots[i].bytes, child_root->bytes, LANTERN_ROOT_SIZE) == 0)
+        {
+            return;
+        }
+    }
+
+    if (entry->length == SIZE_MAX)
+    {
+        return;
+    }
+
+    int ensure_rc = ensure_pending_parent_entry_capacity(entry, entry->length + 1u);
+    if (ensure_rc != LANTERN_CLIENT_PENDING_OK)
+    {
+        return;
+    }
+
+    entry->child_roots[entry->length] = *child_root;
+    entry->length += 1u;
+}
+
+static void pending_parent_index_remove_child(
+    struct lantern_pending_parent_index *index,
+    const LanternRoot *parent_root,
+    const LanternRoot *child_root)
+{
+    if (!index || !parent_root || !child_root || !index->entries)
+    {
+        return;
+    }
+
+    for (size_t i = 0; i < index->length; ++i)
+    {
+        struct lantern_pending_parent_index_entry *entry = &index->entries[i];
+        if (memcmp(entry->parent_root.bytes, parent_root->bytes, LANTERN_ROOT_SIZE) != 0)
+        {
+            continue;
+        }
+
+        for (size_t j = 0; j < entry->length; ++j)
+        {
+            if (memcmp(entry->child_roots[j].bytes, child_root->bytes, LANTERN_ROOT_SIZE) != 0)
+            {
+                continue;
+            }
+
+            if (j + 1u < entry->length)
+            {
+                memmove(
+                    &entry->child_roots[j],
+                    &entry->child_roots[j + 1u],
+                    (entry->length - (j + 1u)) * sizeof(*entry->child_roots));
+            }
+            entry->length -= 1u;
+
+            if (entry->length == 0)
+            {
+                free(entry->child_roots);
+                if (i + 1u < index->length)
+                {
+                    memmove(
+                        &index->entries[i],
+                        &index->entries[i + 1u],
+                        (index->length - (i + 1u)) * sizeof(*index->entries));
+                }
+                index->length -= 1u;
+                if (index->length < index->capacity)
+                {
+                    memset(&index->entries[index->length], 0, sizeof(*index->entries));
+                }
+            }
+            return;
+        }
+        return;
+    }
+}
+
+static bool pending_parent_index_peek_child(
+    struct lantern_pending_parent_index *index,
+    const LanternRoot *parent_root,
+    LanternRoot *out_child_root)
+{
+    if (!index || !parent_root || !out_child_root || !index->entries)
+    {
+        return false;
+    }
+
+    struct lantern_pending_parent_index_entry *entry =
+        pending_parent_index_find(index, parent_root);
+    if (!entry || entry->length == 0)
+    {
+        return false;
+    }
+
+    *out_child_root = entry->child_roots[entry->length - 1u];
+    return true;
 }
 
 
@@ -308,6 +621,7 @@ void pending_block_list_init(struct lantern_pending_block_list *list)
     list->items = NULL;
     list->length = 0;
     list->capacity = 0;
+    pending_parent_index_init(&list->parent_index);
 }
 
 
@@ -324,6 +638,7 @@ void pending_block_list_reset(struct lantern_pending_block_list *list)
     {
         return;
     }
+    pending_parent_index_reset(&list->parent_index);
     if (list->items)
     {
         for (size_t i = 0; i < list->length; ++i)
@@ -384,6 +699,10 @@ void pending_block_list_remove(struct lantern_pending_block_list *list, size_t i
     }
 
     struct lantern_pending_block *entry = &list->items[index];
+    pending_parent_index_remove_child(
+        &list->parent_index,
+        &entry->parent_root,
+        &entry->root);
     lantern_signed_block_with_attestation_reset(&entry->block);
 
     if (index + 1u < list->length)
@@ -423,7 +742,8 @@ struct lantern_pending_block *pending_block_list_append(
     const LanternSignedBlock *block,
     const LanternRoot *block_root,
     const LanternRoot *parent_root,
-    const char *peer_text)
+    const char *peer_text,
+    uint32_t backfill_depth)
 {
     if (!list || !block || !block_root || !parent_root)
     {
@@ -452,6 +772,8 @@ struct lantern_pending_block *pending_block_list_append(
     entry->parent_root = *parent_root;
     entry->peer_text[0] = '\0';
     entry->parent_requested = false;
+    entry->received_ms = monotonic_millis();
+    entry->backfill_depth = backfill_depth;
 
     if (peer_text && *peer_text)
     {
@@ -459,7 +781,32 @@ struct lantern_pending_block *pending_block_list_append(
         entry->peer_text[sizeof(entry->peer_text) - 1u] = '\0';
     }
 
+    pending_parent_index_add_child(&list->parent_index, parent_root, block_root);
     list->length += 1u;
 
     return entry;
+}
+
+
+/**
+ * Peek a pending child root for a given parent root.
+ *
+ * @param list         Pending block list
+ * @param parent_root  Parent root to match
+ * @param out_child_root Output child root
+ * @return true if a child is available, false otherwise
+ *
+ * @note Thread safety: Caller must hold pending_lock
+ */
+bool pending_block_list_peek_child_root(
+    struct lantern_pending_block_list *list,
+    const LanternRoot *parent_root,
+    LanternRoot *out_child_root)
+{
+    if (!list || !parent_root || !out_child_root)
+    {
+        return false;
+    }
+
+    return pending_parent_index_peek_child(&list->parent_index, parent_root, out_child_root);
 }

@@ -11,6 +11,20 @@
 extern "C" {
 #endif
 
+struct lantern_metrics_snapshot;
+
+typedef enum
+{
+    LANTERN_HTTP_CB_OK = 0,
+    LANTERN_HTTP_CB_ERR_INVALID_PARAM = -1,
+    LANTERN_HTTP_CB_ERR_NOT_FOUND = -2,
+    LANTERN_HTTP_CB_ERR_INVALID_STATE = -3,
+    LANTERN_HTTP_CB_ERR_LOCK_FAILED = -4,
+    LANTERN_HTTP_CB_ERR_HASH_FAILED = -5,
+    LANTERN_HTTP_CB_ERR_IO = -6,
+    LANTERN_HTTP_CB_ERR_UNAVAILABLE = -7,
+} lantern_http_callback_error_t;
+
 struct lantern_http_head_snapshot {
     uint64_t slot;
     LanternRoot head_root;
@@ -30,6 +44,8 @@ struct lantern_http_server_callbacks {
     size_t (*validator_count)(void *context);
     int (*validator_info)(void *context, size_t index, struct lantern_http_validator_info *out_info);
     int (*set_validator_status)(void *context, uint64_t global_index, bool enabled);
+    int (*metrics_snapshot)(void *context, struct lantern_metrics_snapshot *out_snapshot);
+    int (*finalized_state_ssz)(void *context, uint8_t **out_bytes, size_t *out_len);
 };
 
 struct lantern_http_server_config {
