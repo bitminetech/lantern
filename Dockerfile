@@ -87,6 +87,12 @@ RUN mkdir -p /opt/lantern/share/cargo-git-checkouts \
 
 FROM ubuntu:22.04
 
+ARG GIT_COMMIT=unknown
+ARG GIT_BRANCH=unknown
+
+LABEL org.opencontainers.image.revision=$GIT_COMMIT \
+      org.opencontainers.image.ref.name=$GIT_BRANCH
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Set to "true" to include gdb, perf, and valgrind for debugging/profiling
