@@ -5,9 +5,19 @@ FROM ubuntu:22.04 AS builder
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ENV DEBIAN_FRONTEND=noninteractive
+ARG TARGETPLATFORM
+ARG APT_MIRROR_AMD64="http://archive.ubuntu.com/ubuntu"
+ARG APT_SECURITY_MIRROR_AMD64="http://security.ubuntu.com/ubuntu"
+ARG APT_MIRROR_ARM64="http://mirrors.ocf.berkeley.edu/ubuntu-ports"
 
 # Install build dependencies
 # Note: Build with --network=host if you encounter GPG/network issues
+RUN set -eux; \
+    if [ "${TARGETPLATFORM}" = "linux/arm64" ]; then \
+        sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${APT_MIRROR_ARM64}|g" /etc/apt/sources.list; \
+    else \
+        sed -i "s|http://archive.ubuntu.com/ubuntu|${APT_MIRROR_AMD64}|g; s|http://security.ubuntu.com/ubuntu|${APT_SECURITY_MIRROR_AMD64}|g" /etc/apt/sources.list; \
+    fi
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=apt-cache-${TARGETPLATFORM} \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked,id=apt-lists-${TARGETPLATFORM} \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -102,6 +112,10 @@ FROM ubuntu:22.04
 
 ARG GIT_COMMIT=unknown
 ARG GIT_BRANCH=unknown
+ARG TARGETPLATFORM
+ARG APT_MIRROR_AMD64="http://archive.ubuntu.com/ubuntu"
+ARG APT_SECURITY_MIRROR_AMD64="http://security.ubuntu.com/ubuntu"
+ARG APT_MIRROR_ARM64="http://mirrors.ocf.berkeley.edu/ubuntu-ports"
 
 LABEL org.opencontainers.image.revision=$GIT_COMMIT \
       org.opencontainers.image.ref.name=$GIT_BRANCH
@@ -112,6 +126,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG INCLUDE_DEBUG_TOOLS=false
 
 # Install runtime dependencies (and optionally profiling tools)
+RUN set -eux; \
+    if [ "${TARGETPLATFORM}" = "linux/arm64" ]; then \
+        sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${APT_MIRROR_ARM64}|g" /etc/apt/sources.list; \
+    else \
+        sed -i "s|http://archive.ubuntu.com/ubuntu|${APT_MIRROR_AMD64}|g; s|http://security.ubuntu.com/ubuntu|${APT_SECURITY_MIRROR_AMD64}|g" /etc/apt/sources.list; \
+    fi
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=apt-cache-${TARGETPLATFORM} \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked,id=apt-lists-${TARGETPLATFORM} \
     apt-get update && apt-get install -y --no-install-recommends \
