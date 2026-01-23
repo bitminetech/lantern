@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 FROM ubuntu:22.04 AS builder
 
 # Use bash and enable pipefail
@@ -7,7 +8,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Install build dependencies
 # Note: Build with --network=host if you encounter GPG/network issues
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=apt-cache-${TARGETPLATFORM} \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked,id=apt-lists-${TARGETPLATFORM} \
+    apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         bison \
         ca-certificates \
@@ -19,10 +22,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 \
         python3-pip \
         curl \
+        ccache \
         libtommath-dev \
         libssl-dev \
-        zlib1g-dev \
-    && rm -rf /var/lib/apt/lists/*
+        zlib1g-dev
 
 # Install latest Rust toolchain via rustup
 ENV CARGO_HOME=/root/.cargo
@@ -31,6 +34,8 @@ RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-too
     && . "$CARGO_HOME/env" \
     && rustup component add rustfmt clippy
 ENV PATH="${CARGO_HOME}/bin:${PATH}"
+ENV CCACHE_DIR=/root/.ccache
+ENV CCACHE_MAXSIZE=2G
 
 WORKDIR /usr/src/lantern
 
@@ -39,21 +44,28 @@ COPY . .
 RUN LANTERN_BOOTSTRAP_SKIP_SUBMODULE_SYNC=1 ./scripts/bootstrap.sh
 
 # Build the XMSS bindings (cargo archive needs ranlib'd index on linux)
-RUN cd external/c-leanvm-xmss \
+RUN --mount=type=cache,target=/root/.cargo/registry,sharing=locked,id=cargo-registry-${TARGETPLATFORM} \
+    --mount=type=cache,target=/root/.cargo/git,sharing=locked,id=cargo-git-${TARGETPLATFORM} \
+    --mount=type=cache,target=/usr/src/lantern/external/c-leanvm-xmss/target,sharing=locked,id=leanvm-xmss-target-${TARGETPLATFORM} \
+    cd external/c-leanvm-xmss \
     && cargo build --release --locked \
     && find target/release -name '*.a' -exec ranlib {} \;
 
-RUN cmake -S external/c-libp2p/external/libtommath -B deps/libtommath -DBUILD_SHARED_LIBS=ON \
+RUN --mount=type=cache,target=/root/.ccache,sharing=locked,id=ccache-${TARGETPLATFORM} \
+    cmake -S external/c-libp2p/external/libtommath -B deps/libtommath -DBUILD_SHARED_LIBS=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
     && cmake --build deps/libtommath --parallel "$(nproc)" \
     && cmake --install deps/libtommath
 
-RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+RUN --mount=type=cache,target=/root/.ccache,sharing=locked,id=ccache-${TARGETPLATFORM} \
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
 ARG LANTERN_FORCE_REBUILD=0
 RUN echo "LANTERN_FORCE_REBUILD=${LANTERN_FORCE_REBUILD}"
-RUN cmake --build build --target lantern_cli --parallel "$(nproc)"
+RUN --mount=type=cache,target=/root/.ccache,sharing=locked,id=ccache-${TARGETPLATFORM} \
+    cmake --build build --target lantern_cli --parallel "$(nproc)"
 
-RUN cmake --build build --target lantern_client_test --parallel "$(nproc)" || true
+RUN --mount=type=cache,target=/root/.ccache,sharing=locked,id=ccache-${TARGETPLATFORM} \
+    cmake --build build --target lantern_client_test --parallel "$(nproc)" || true
 
 RUN mkdir -p /opt/lantern/bin \
     && cp build/lantern_cli /opt/lantern/bin/lantern \
@@ -82,7 +94,8 @@ PY
 
 # Preserve leanMultisig sources needed at runtime for XMSS aggregation.
 # The runtime binary expects xmss_aggregate.lean_lang at the build-time cargo checkout path.
-RUN mkdir -p /opt/lantern/share/cargo-git-checkouts \
+RUN --mount=type=cache,target=/root/.cargo/git,sharing=locked,id=cargo-git-${TARGETPLATFORM} \
+    mkdir -p /opt/lantern/share/cargo-git-checkouts \
     && cp -a /root/.cargo/git/checkouts/leanmultisig-* /opt/lantern/share/cargo-git-checkouts/
 
 FROM ubuntu:22.04
@@ -99,7 +112,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG INCLUDE_DEBUG_TOOLS=false
 
 # Install runtime dependencies (and optionally profiling tools)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=apt-cache-${TARGETPLATFORM} \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked,id=apt-lists-${TARGETPLATFORM} \
+    apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         libssl3 \
         libstdc++6 \
@@ -107,8 +122,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && if [ "$INCLUDE_DEBUG_TOOLS" = "true" ]; then \
         apt-get install -y --no-install-recommends gdb linux-tools-generic valgrind \
         && ln -sf /usr/lib/linux-tools/*/perf /usr/local/bin/perf || true; \
-    fi \
-    && rm -rf /var/lib/apt/lists/*
+    fi
 
 COPY --from=builder /opt/lantern /opt/lantern
 RUN mkdir -p /root/.cargo/git/checkouts

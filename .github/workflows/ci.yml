@@ -95,5 +95,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/lantern:${{ github.event.inputs.docker_tag }}
-          cache-from: type=gha,scope=lantern-docker
-          cache-to: type=gha,mode=min,scope=lantern-docker
+          cache-from: |
+            type=gha
+            type=gha,scope=lantern-docker
+          cache-to: type=gha,mode=max,scope=lantern-docker
