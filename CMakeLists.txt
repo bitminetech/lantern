@@ -268,7 +268,9 @@ if(LANTERN_BUILD_TESTS)
     )
     add_test(NAME lantern_consensus_vectors COMMAND lantern_consensus_vectors_test)
     # Consensus fixtures iterate over dozens of LeanSpec transitions and need a longer timeout.
-    set_tests_properties(lantern_consensus_vectors PROPERTIES TIMEOUT 300)
+    set_tests_properties(lantern_consensus_vectors PROPERTIES
+        TIMEOUT 300
+    )
 
     add_executable(lantern_verify_signatures_vectors_test
         tests/integration/test_verify_signatures_vectors.c
@@ -307,7 +309,9 @@ if(LANTERN_BUILD_TESTS)
             LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
     )
     add_test(NAME lantern_genesis_vectors COMMAND lantern_genesis_vectors_test)
-    set_tests_properties(lantern_genesis_vectors PROPERTIES TIMEOUT 120)
+    set_tests_properties(lantern_genesis_vectors PROPERTIES
+        TIMEOUT 120
+    )
 
     # Mirror libp2p dependency test names into CTestCustom so top-level `ctest`
     # ignores them (they are dependency-only suites we do not build/run).

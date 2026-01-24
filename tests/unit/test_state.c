@@ -68,7 +68,12 @@ static void mark_slot_justified_for_tests(LanternState *state, uint64_t slot) {
     if (!state) {
         return;
     }
-    size_t index = (size_t)slot;
+    /* Slots before the offset are already considered finalized/justified */
+    if (slot < state->justified_slots_offset) {
+        return;
+    }
+    /* Calculate the relative index from the offset */
+    size_t index = (size_t)(slot - state->justified_slots_offset);
     expect_zero(
         lantern_bitlist_resize(&state->justified_slots, index + 1),
         "resize justified slots for test");

@@ -1590,6 +1590,7 @@ static int lantern_state_process_attestations_internal(
     size_t att_attempted = 0;
     bool finalization_attempted = false;
 
+
     for (size_t i = 0; i < attestations->length; ++i) {
         const LanternVote *vote = &attestations->data[i];
         const LanternSignature *signature = NULL;
