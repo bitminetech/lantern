@@ -7,6 +7,7 @@
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/encoding/snappy.h"
+#include "lantern/support/log.h"
 #include "ssz_constants.h"
 
 static uint8_t *alloc_buffer(size_t size) {
@@ -130,7 +131,7 @@ static size_t signed_block_max_ssz_size(void) {
     }
     size_t total = base + attestations_max;
     size_t proof_entry_max = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + att_bits_max + LANTERN_AGG_PROOF_MAX_BYTES;
-    size_t signatures_max = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + LANTERN_SIGNATURE_SIZE
+    size_t signatures_max = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE
         + ((size_t)LANTERN_MAX_BLOCK_SIGNATURES * (SSZ_BYTE_SIZE_OF_UINT32 + proof_entry_max));
     if (signatures_max > SIZE_MAX - total) {
         return SIZE_MAX;
@@ -158,7 +159,7 @@ static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
     if (sig_count > 0 && sig_list_bytes == 0) {
         return 0;
     }
-    size_t signature_bytes = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + LANTERN_SIGNATURE_SIZE + sig_list_bytes;
+    size_t signature_bytes = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE + sig_list_bytes;
     if (signature_bytes > SIZE_MAX - total) {
         return 0;
     }
@@ -250,10 +251,37 @@ int lantern_gossip_decode_signed_block_snappy(
         return -1;
     }
     size_t raw_len = 0;
-    if (lantern_snappy_uncompressed_length_raw(data, data_len, &raw_len) != LANTERN_SNAPPY_OK) {
+    int raw_len_rc = lantern_snappy_uncompressed_length_raw(data, data_len, &raw_len);
+    if (raw_len_rc != LANTERN_SNAPPY_OK) {
+        bool framed = lantern_snappy_is_framed(data, data_len);
+        size_t framed_len = 0;
+        int framed_rc = framed ? lantern_snappy_uncompressed_length(data, data_len, &framed_len) : LANTERN_SNAPPY_ERROR_INVALID_INPUT;
+        lantern_log_warn(
+            "gossip",
+            NULL,
+            "gossip block snappy length failed raw_rc=%d framed=%s framed_rc=%d framed_len=%zu data_len=%zu",
+            raw_len_rc,
+            framed ? "true" : "false",
+            framed_rc,
+            framed_len,
+            data_len);
         return -1;
     }
-    if (raw_len == 0 || raw_len > signed_block_max_ssz_size()) {
+    size_t max_ssz = signed_block_max_ssz_size();
+    if (raw_len == 0 || raw_len > max_ssz) {
+        bool framed = lantern_snappy_is_framed(data, data_len);
+        size_t framed_len = 0;
+        int framed_rc = framed ? lantern_snappy_uncompressed_length(data, data_len, &framed_len) : LANTERN_SNAPPY_ERROR_INVALID_INPUT;
+        lantern_log_warn(
+            "gossip",
+            NULL,
+            "gossip block snappy length invalid raw_len=%zu max=%zu framed=%s framed_rc=%d framed_len=%zu data_len=%zu",
+            raw_len,
+            max_ssz,
+            framed ? "true" : "false",
+            framed_rc,
+            framed_len,
+            data_len);
         return -1;
     }
     uint8_t *raw = alloc_buffer(raw_len);
@@ -306,10 +334,36 @@ int lantern_gossip_decode_signed_vote_snappy(
         return -1;
     }
     size_t raw_len = 0;
-    if (lantern_snappy_uncompressed_length_raw(data, data_len, &raw_len) != LANTERN_SNAPPY_OK) {
+    int raw_len_rc = lantern_snappy_uncompressed_length_raw(data, data_len, &raw_len);
+    if (raw_len_rc != LANTERN_SNAPPY_OK) {
+        bool framed = lantern_snappy_is_framed(data, data_len);
+        size_t framed_len = 0;
+        int framed_rc = framed ? lantern_snappy_uncompressed_length(data, data_len, &framed_len) : LANTERN_SNAPPY_ERROR_INVALID_INPUT;
+        lantern_log_warn(
+            "gossip",
+            NULL,
+            "gossip vote snappy length failed raw_rc=%d framed=%s framed_rc=%d framed_len=%zu data_len=%zu",
+            raw_len_rc,
+            framed ? "true" : "false",
+            framed_rc,
+            framed_len,
+            data_len);
         return -1;
     }
     if (raw_len != LANTERN_SIGNED_VOTE_SSZ_SIZE) {
+        bool framed = lantern_snappy_is_framed(data, data_len);
+        size_t framed_len = 0;
+        int framed_rc = framed ? lantern_snappy_uncompressed_length(data, data_len, &framed_len) : LANTERN_SNAPPY_ERROR_INVALID_INPUT;
+        lantern_log_warn(
+            "gossip",
+            NULL,
+            "gossip vote snappy length mismatch raw_len=%zu expected=%zu framed=%s framed_rc=%d framed_len=%zu data_len=%zu",
+            raw_len,
+            (size_t)LANTERN_SIGNED_VOTE_SSZ_SIZE,
+            framed ? "true" : "false",
+            framed_rc,
+            framed_len,
+            data_len);
         return -1;
     }
     uint8_t raw[LANTERN_SIGNED_VOTE_SSZ_SIZE];

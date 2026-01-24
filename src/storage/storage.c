@@ -308,7 +308,7 @@ static size_t block_signatures_encoded_size(const LanternBlockSignatures *signat
     if (sig_count > 0 && attestations_bytes == 0) {
         return 0;
     }
-    return (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + LANTERN_SIGNATURE_SIZE + attestations_bytes;
+    return SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE + attestations_bytes;
 }
 
 static size_t signed_block_encoded_size(const LanternSignedBlock *block) {

@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
 
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
@@ -24,37 +23,6 @@ struct lantern_vote_record {
     bool has_vote;
     bool has_signature;
 };
-
-struct state_profile_metric {
-    double seconds;
-    size_t calls;
-};
-
-
-static bool state_profile_enabled(void) {
-    static bool initialized = false;
-    static bool enabled = false;
-    if (!initialized) {
-        const char *env = getenv("LANTERN_PROFILE_CONSENSUS_VECTORS");
-        enabled = env && env[0] != '\0' && env[0] != '0';
-        initialized = true;
-    }
-    return enabled;
-}
-
-static double state_profile_now(void) {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (double)tv.tv_sec + (double)tv.tv_usec / 1e6;
-}
-
-static void state_profile_record(struct state_profile_metric *metric, double delta) {
-    if (!metric) {
-        return;
-    }
-    metric->seconds += delta;
-    metric->calls += 1;
-}
 
 static void record_attestation_validation_metric(double start_seconds, bool valid) {
     lean_metrics_record_attestation_validation(lantern_time_now_seconds() - start_seconds, valid);
@@ -173,10 +141,6 @@ static int collect_attestations_for_checkpoint(
     return 0;
 }
 
-static struct state_profile_metric g_profile_process_slots;
-static struct state_profile_metric g_profile_process_block;
-static struct state_profile_metric g_profile_state_root;
-static size_t g_profile_max_justification_bits;
 
 int lantern_state_mark_justified_slot(LanternState *state, uint64_t slot);
 
@@ -356,6 +320,7 @@ error:
     lantern_state_reset(dest);
     return -1;
 }
+
 
 int lantern_root_list_resize(struct lantern_root_list *list, size_t new_length) {
     if (!list) {
@@ -576,6 +541,10 @@ bool lantern_state_slot_in_justified_window(const LanternState *state, uint64_t 
         return false;
     }
     uint64_t offset = state->justified_slots_offset;
+    uint64_t implicit_finalized = offset > 0 ? (offset - 1u) : 0u;
+    if (slot <= implicit_finalized) {
+        return true;
+    }
     uint64_t bit_length = state->justified_slots.bit_length;
     uint64_t window_end = offset + bit_length;
     return slot >= offset && slot < window_end;
@@ -629,6 +598,13 @@ static bool has_justifiable_slot_between(
 int lantern_state_get_justified_slot_bit(const LanternState *state, uint64_t slot, bool *out_value) {
     if (!state || !out_value) {
         return -1;
+    }
+    uint64_t implicit_finalized = state->justified_slots_offset > 0
+        ? (state->justified_slots_offset - 1u)
+        : 0u;
+    if (slot <= implicit_finalized) {
+        *out_value = true;
+        return 0;
     }
     if (!lantern_state_slot_in_justified_window(state, slot)) {
         *out_value = false;
@@ -702,6 +678,12 @@ static int lantern_state_ensure_justified_slot_index(LanternState *state, uint64
 static int lantern_state_set_justified_slot_bit(LanternState *state, uint64_t slot, bool value) {
     if (!state) {
         return -1;
+    }
+    uint64_t implicit_finalized = state->justified_slots_offset > 0
+        ? (state->justified_slots_offset - 1u)
+        : 0u;
+    if (slot <= implicit_finalized) {
+        return 0;
     }
     if (slot > SIZE_MAX) {
         return -1;
@@ -1369,6 +1351,9 @@ int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, u
     state->latest_justified.slot = 0;
     lantern_root_zero(&state->latest_finalized.root);
     state->latest_finalized.slot = 0;
+    if (state->latest_finalized.slot != UINT64_MAX) {
+        state->justified_slots_offset = state->latest_finalized.slot + 1u;
+    }
 
     return 0;
 }
@@ -1905,6 +1890,32 @@ static int lantern_state_process_attestations_internal(
                 finalization_attempted = true;
                 lean_metrics_record_finalization_attempt(true);
                 if (latest_finalized.slot > old_finalized_slot) {
+                    uint64_t delta = latest_finalized.slot - old_finalized_slot;
+                    if (delta > SIZE_MAX) {
+                        if (finalization_attempted) {
+                            lean_metrics_record_finalization_attempt(false);
+                        }
+                        record_attestation_validation_metric(att_validation_start, false);
+                        return -1;
+                    }
+                    if (delta > 0) {
+                        if (lantern_bitlist_drop_front(&state->justified_slots, (size_t)delta) != 0) {
+                            if (finalization_attempted) {
+                                lean_metrics_record_finalization_attempt(false);
+                            }
+                            record_attestation_validation_metric(att_validation_start, false);
+                            return -1;
+                        }
+                        if (state->justified_slots_offset <= UINT64_MAX - delta) {
+                            state->justified_slots_offset += delta;
+                        } else {
+                            if (finalization_attempted) {
+                                lean_metrics_record_finalization_attempt(false);
+                            }
+                            record_attestation_validation_metric(att_validation_start, false);
+                            return -1;
+                        }
+                    }
                     if (lantern_state_prune_justification_roots(
                             state,
                             base_finalized_slot,
@@ -2061,7 +2072,6 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
         return -1;
     }
     const LanternBlock *block = &signed_block->message.block;
-    bool profiling = state_profile_enabled();
     double transition_metrics_start = lantern_time_now_seconds();
 #define STATE_FAIL(fmt, ...)                                                                 \
     do {                                                                                     \
@@ -2077,13 +2087,9 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
         STATE_FAIL("block slot %" PRIu64 " not ahead of state %" PRIu64, block->slot, state->slot);
     }
     uint64_t slot_before = state->slot;
-    double slots_start = profiling ? state_profile_now() : 0.0;
     double slots_metrics_start = lantern_time_now_seconds();
     if (lantern_state_process_slots(state, block->slot) != 0) {
         STATE_FAIL("process slots failed current=%" PRIu64, state->slot);
-    }
-    if (profiling) {
-        state_profile_record(&g_profile_process_slots, state_profile_now() - slots_start);
     }
     double slots_duration = lantern_time_now_seconds() - slots_metrics_start;
     uint64_t slots_processed = block->slot >= slot_before ? (block->slot - slot_before) : 0;
@@ -2093,22 +2099,11 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
     proposer_signed.data = signed_block->message.proposer_attestation;
     proposer_signed.signature = signed_block->signatures.proposer_signature;
 
-    double block_start = profiling ? state_profile_now() : 0.0;
     if (lantern_state_process_block(state, block, &signed_block->signatures, &proposer_signed) != 0) {
         STATE_FAIL("process block failed");
     }
-    if (profiling) {
-        state_profile_record(&g_profile_process_block, state_profile_now() - block_start);
-    }
     LanternRoot computed_state_root;
-    double hash_start = profiling ? state_profile_now() : 0.0;
     bool hashed_state = lantern_hash_tree_root_state(state, &computed_state_root) == 0;
-    if (profiling && state->justification_validators.bit_length > g_profile_max_justification_bits) {
-        g_profile_max_justification_bits = state->justification_validators.bit_length;
-    }
-    if (profiling) {
-        state_profile_record(&g_profile_state_root, state_profile_now() - hash_start);
-    }
     if (hashed_state) {
         if (memcmp(block->state_root.bytes, computed_state_root.bytes, LANTERN_ROOT_SIZE) != 0) {
             char expected_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
@@ -2384,38 +2379,7 @@ cleanup:
 }
 
 void lantern_state_profile_dump(void) {
-    if (!state_profile_enabled()) {
-        return;
-    }
-    lantern_log_info("profile", NULL, "state internals:");
-    const struct {
-        const char *label;
-        const struct state_profile_metric *metric;
-    } rows[] = {
-        {"process_slots", &g_profile_process_slots},
-        {"process_block", &g_profile_process_block},
-        {"hash_state_root", &g_profile_state_root},
-    };
-    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
-        const struct state_profile_metric *metric = rows[i].metric;
-        double avg_ms = metric->calls ? (metric->seconds / (double)metric->calls) * 1000.0 : 0.0;
-        lantern_log_info(
-            "profile",
-            NULL,
-            "    %-15s %8zu calls  %10.3f s total  %8.3f ms avg",
-            rows[i].label,
-            metric->calls,
-            metric->seconds,
-            avg_ms);
-    }
-    if (g_profile_max_justification_bits > 0) {
-        lantern_log_info(
-            "profile",
-            NULL,
-            "    justification bits max: %zu (limit %" PRIu64 ")",
-            g_profile_max_justification_bits,
-            (uint64_t)LANTERN_JUSTIFICATION_VALIDATORS_LIMIT);
-    }
+    return;
 }
 
 int lantern_state_compute_vote_checkpoints(

@@ -1,6 +1,8 @@
 # ![Lantern](docs/assets/lantern_logo.svg)
 
 [![CI](https://github.com/Pier-Two/lantern/actions/workflows/ci.yml/badge.svg)](https://github.com/Pier-Two/lantern/actions/workflows/ci.yml)
+[![Docker Image Version](https://img.shields.io/docker/v/piertwo/lantern?sort=semver)](https://hub.docker.com/r/piertwo/lantern)
+[![Docker Pulls](https://img.shields.io/docker/pulls/piertwo/lantern)](https://hub.docker.com/r/piertwo/lantern)
 
 Lantern is a C implementation of [Lean Consensus](https://github.com/leanEthereum/leanSpec.git) for Ethereum.
 

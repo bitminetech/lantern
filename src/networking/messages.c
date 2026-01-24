@@ -285,7 +285,7 @@ int lantern_network_blocks_by_root_request_encode(
     return 0;
 }
 
-int lantern_network_blocks_by_root_request_decode(
+static int decode_blocks_by_root_list(
     LanternBlocksByRootRequest *req,
     const uint8_t *data,
     size_t data_len) {
@@ -298,8 +298,6 @@ int lantern_network_blocks_by_root_request_decode(
     if (!data) {
         return -1;
     }
-
-    /* Canonical SSZ list encoding: raw concatenated roots. */
     if (data_len % LANTERN_ROOT_SIZE != 0) {
         return -1;
     }
@@ -317,6 +315,41 @@ int lantern_network_blocks_by_root_request_decode(
         memcpy(req->roots.items, data, data_len);
     }
     return 0;
+}
+
+int lantern_network_blocks_by_root_request_decode(
+    LanternBlocksByRootRequest *req,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!req) {
+        return -1;
+    }
+    if (data_len == 0) {
+        return lantern_root_list_resize(&req->roots, 0) == 0 ? 0 : -1;
+    }
+    if (!data) {
+        return -1;
+    }
+
+    /* Canonical SSZ list encoding: raw concatenated roots. */
+    if (data_len % LANTERN_ROOT_SIZE == 0) {
+        return decode_blocks_by_root_list(req, data, data_len);
+    }
+
+    /* Zeam-compatible SSZ container encoding: 4-byte offset + list payload. */
+    if (data_len >= 4) {
+        uint32_t offset = (uint32_t)data[0]
+            | ((uint32_t)data[1] << 8)
+            | ((uint32_t)data[2] << 16)
+            | ((uint32_t)data[3] << 24);
+        if (offset == 4 && offset <= data_len) {
+            size_t list_len = data_len - offset;
+            if (list_len % LANTERN_ROOT_SIZE == 0) {
+                return decode_blocks_by_root_list(req, data + offset, list_len);
+            }
+        }
+    }
+    return -1;
 }
 
 static uint8_t *alloc_scratch(size_t size) {

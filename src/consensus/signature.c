@@ -8,6 +8,7 @@
 
 #include "lantern/metrics/lean_metrics.h"
 #include "lantern/support/log.h"
+#include "lantern/support/strings.h"
 #include "pq-bindings-c-rust.h"
 
 static double get_time_seconds(void) {
@@ -28,6 +29,49 @@ static bool bytes_are_zero(const uint8_t *bytes, size_t length) {
         }
     }
     return true;
+}
+
+static void log_agg_proof_preview(const LanternByteList *proof) {
+    if (!proof || !proof->data) {
+        lantern_log_debug("signature", NULL, "aggregation proof is empty");
+        return;
+    }
+
+    const size_t preview_len = proof->length < 32u ? proof->length : 32u;
+    char hex[(32u * 2u) + 1u];
+    hex[0] = '\0';
+    if (preview_len > 0) {
+        if (lantern_bytes_to_hex(proof->data, preview_len, hex, sizeof(hex), 0) != 0) {
+            hex[0] = '\0';
+        }
+    }
+    const char *ellipsis = proof->length > preview_len ? "..." : "";
+    lantern_log_debug(
+        "signature",
+        NULL,
+        "aggregation proof preview len=%zu hex=%s%s",
+        proof->length,
+        hex[0] ? hex : "-",
+        ellipsis);
+
+    if (proof->length >= 9u) {
+        uint32_t proof_len = (uint32_t)proof->data[1]
+            | ((uint32_t)proof->data[2] << 8u)
+            | ((uint32_t)proof->data[3] << 16u)
+            | ((uint32_t)proof->data[4] << 24u);
+        uint32_t randomness_count = (uint32_t)proof->data[5]
+            | ((uint32_t)proof->data[6] << 8u)
+            | ((uint32_t)proof->data[7] << 16u)
+            | ((uint32_t)proof->data[8] << 24u);
+        lantern_log_debug(
+            "signature",
+            NULL,
+            "aggregation proof header version=0x%02x proof_len=%" PRIu32 " randomness_count=%" PRIu32 " total_len=%zu",
+            (unsigned)proof->data[0],
+            proof_len,
+            randomness_count,
+            proof->length);
+    }
 }
 
 bool lantern_signature_is_zero(const LanternSignature *signature) {
@@ -322,6 +366,7 @@ bool lantern_signature_verify_aggregated(
         count,
         epoch,
         proof->length);
+    log_agg_proof_preview(proof);
 
     struct PQSignatureSchemePublicKey **pubkey_handles = calloc(count, sizeof(*pubkey_handles));
     if (!pubkey_handles) {
