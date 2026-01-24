@@ -111,6 +111,8 @@ static int encode_block_signatures(
     if (!signatures || !out) {
         return -1;
     }
+#if 0
+    /* Spec-compliant variable-length signature encoding (offset for proposer signature). */
     const size_t fixed_section = SSZ_BYTE_SIZE_OF_UINT32 * 2u;
     if (fixed_section > UINT32_MAX || remaining < fixed_section) {
         return -1;
@@ -147,15 +149,46 @@ static int encode_block_signatures(
     }
     set_written(written, total);
     return 0;
+#endif
+
+    /* Fixed-size signature encoding for client compatibility. */
+    const size_t fixed_section = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE;
+    if (fixed_section > UINT32_MAX || remaining < fixed_section) {
+        return -1;
+    }
+
+    size_t att_written = 0;
+    if (encode_attestation_signatures(
+            &signatures->attestation_signatures,
+            out + fixed_section,
+            remaining - fixed_section,
+            &att_written)
+        != 0) {
+        return -1;
+    }
+
+    if (write_u32(out, remaining, (uint32_t)fixed_section) != 0) {
+        return -1;
+    }
+    memcpy(out + SSZ_BYTE_SIZE_OF_UINT32, signatures->proposer_signature.bytes, LANTERN_SIGNATURE_SIZE);
+
+    size_t total = fixed_section + att_written;
+    if (total > remaining) {
+        return -1;
+    }
+    set_written(written, total);
+    return 0;
 }
 
-static int decode_block_signatures(
+static int decode_block_signatures_standard(
     LanternBlockSignatures *signatures,
     const uint8_t *data,
     size_t data_len) {
     if (!signatures || !data) {
         return -1;
     }
+#if 0
+    /* Spec-compliant variable-length signature decoding (offset for proposer signature). */
     const size_t fixed_section = SSZ_BYTE_SIZE_OF_UINT32 * 2u;
     if (data_len < fixed_section) {
         return -1;
@@ -183,6 +216,36 @@ static int decode_block_signatures(
     }
     memcpy(signatures->proposer_signature.bytes, data + sig_offset, LANTERN_SIGNATURE_SIZE);
     return 0;
+#endif
+
+    /* Fixed-size signature decoding for client compatibility. */
+    const size_t fixed_section = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE;
+    if (data_len < fixed_section) {
+        return -1;
+    }
+    uint32_t att_offset = 0;
+    if (read_u32(data, data_len, &att_offset) != 0) {
+        return -1;
+    }
+    if (att_offset != fixed_section || att_offset > data_len) {
+        return -1;
+    }
+    memcpy(
+        signatures->proposer_signature.bytes,
+        data + SSZ_BYTE_SIZE_OF_UINT32,
+        LANTERN_SIGNATURE_SIZE);
+    size_t att_size = data_len - att_offset;
+    if (decode_attestation_signatures(&signatures->attestation_signatures, data + att_offset, att_size) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int decode_block_signatures(
+    LanternBlockSignatures *signatures,
+    const uint8_t *data,
+    size_t data_len) {
+    return decode_block_signatures_standard(signatures, data, data_len);
 }
 
 static int encode_root_list(const struct lantern_root_list *list, uint8_t *out, size_t remaining, size_t *written) {
@@ -578,6 +641,8 @@ int lantern_ssz_encode_signed_vote(const LanternSignedVote *vote, uint8_t *out, 
         return -1;
     }
     offset += LANTERN_VOTE_SSZ_SIZE;
+#if 0
+    /* Spec-compliant variable-length signature encoding (offset). */
     const size_t fixed_section = LANTERN_VOTE_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT32;
     if (fixed_section > UINT32_MAX) {
         return -1;
@@ -586,6 +651,13 @@ int lantern_ssz_encode_signed_vote(const LanternSignedVote *vote, uint8_t *out, 
         return -1;
     }
     offset += SSZ_BYTE_SIZE_OF_UINT32;
+    memcpy(out + offset, vote->signature.bytes, LANTERN_SIGNATURE_SIZE);
+    offset += LANTERN_SIGNATURE_SIZE;
+    set_written(written, offset);
+    return 0;
+#endif
+
+    /* Fixed-size signature encoding for client compatibility. */
     memcpy(out + offset, vote->signature.bytes, LANTERN_SIGNATURE_SIZE);
     offset += LANTERN_SIGNATURE_SIZE;
     set_written(written, offset);
@@ -601,6 +673,8 @@ int lantern_ssz_decode_signed_vote(LanternSignedVote *vote, const uint8_t *data,
         return -1;
     }
     offset += LANTERN_VOTE_SSZ_SIZE;
+#if 0
+    /* Spec-compliant variable-length signature decoding (offset). */
     uint32_t signature_offset = 0;
     if (read_u32(data + offset, data_len - offset, &signature_offset) != 0) {
         return -1;
@@ -617,6 +691,11 @@ int lantern_ssz_decode_signed_vote(LanternSignedVote *vote, const uint8_t *data,
         return -1;
     }
     memcpy(vote->signature.bytes, data + signature_offset, LANTERN_SIGNATURE_SIZE);
+    return 0;
+#endif
+
+    /* Fixed-size signature decoding for client compatibility. */
+    memcpy(vote->signature.bytes, data + offset, LANTERN_SIGNATURE_SIZE);
     return 0;
 }
 
@@ -1743,5 +1822,14 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
     }
 
     state->config.num_validators = (uint64_t)state->validator_count;
+    if (state->latest_finalized.slot != UINT64_MAX) {
+        if (state->latest_finalized.slot == UINT64_MAX) {
+            return -1;
+        }
+        if (state->latest_finalized.slot > UINT64_MAX - 1u) {
+            return -1;
+        }
+        state->justified_slots_offset = state->latest_finalized.slot + 1u;
+    }
     return 0;
 }

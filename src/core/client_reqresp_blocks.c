@@ -86,6 +86,18 @@ static void block_request_ctx_free(struct block_request_ctx *ctx)
     free(ctx);
 }
 
+static void write_u32_le(uint8_t *out, uint32_t value)
+{
+    if (!out)
+    {
+        return;
+    }
+    out[0] = (uint8_t)(value & 0xffu);
+    out[1] = (uint8_t)((value >> 8) & 0xffu);
+    out[2] = (uint8_t)((value >> 16) & 0xffu);
+    out[3] = (uint8_t)((value >> 24) & 0xffu);
+}
+
 /* ============================================================================
  * Block Chunk Processing
  * ============================================================================ */
@@ -336,7 +348,16 @@ static void *block_request_worker(void *arg)
         request.roots.items[i] = ctx->roots[i];
     }
 
-    size_t raw_size = request.roots.length * LANTERN_ROOT_SIZE;
+    size_t roots_bytes = request.roots.length * LANTERN_ROOT_SIZE;
+    bool use_container = false;
+    if (ctx->protocol_id
+        && LANTERN_BLOCKS_BY_ROOT_PROTOCOL_FALLBACK_ID
+        && strcmp(ctx->protocol_id, LANTERN_BLOCKS_BY_ROOT_PROTOCOL_FALLBACK_ID) != 0)
+    {
+        use_container = true;
+    }
+
+    size_t raw_size = roots_bytes + (use_container ? 4u : 0u);
     raw_request = (uint8_t *)malloc(raw_size > 0 ? raw_size : 1u);
     if (!raw_request)
     {
@@ -348,14 +369,44 @@ static void *block_request_worker(void *arg)
     }
 
     size_t raw_written = 0;
-    if (lantern_network_blocks_by_root_request_encode(&request, raw_request, raw_size, &raw_written) != 0
-        || raw_written == 0)
+    if (use_container)
     {
-        lantern_log_error(
-            "reqresp",
-            &meta,
-            "failed to encode blocks_by_root request");
-        goto cleanup;
+        if (raw_size < 4u)
+        {
+            lantern_log_error(
+                "reqresp",
+                &meta,
+                "failed to size blocks_by_root request");
+            goto cleanup;
+        }
+        write_u32_le(raw_request, 4u);
+        size_t roots_written = 0;
+        if (lantern_network_blocks_by_root_request_encode(
+                &request,
+                raw_request + 4u,
+                raw_size - 4u,
+                &roots_written)
+            != 0)
+        {
+            lantern_log_error(
+                "reqresp",
+                &meta,
+                "failed to encode blocks_by_root request");
+            goto cleanup;
+        }
+        raw_written = 4u + roots_written;
+    }
+    else
+    {
+        if (lantern_network_blocks_by_root_request_encode(&request, raw_request, raw_size, &raw_written) != 0
+            || raw_written == 0)
+        {
+            lantern_log_error(
+                "reqresp",
+                &meta,
+                "failed to encode blocks_by_root request");
+            goto cleanup;
+        }
     }
 
     size_t max_payload = 0;
@@ -437,25 +488,28 @@ static void *block_request_worker(void *arg)
         }
     }
 
+    size_t declared_len = payload_len;
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
-    if (unsigned_varint_encode(raw_written, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK)
+    if (unsigned_varint_encode(declared_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK)
     {
         lantern_log_error(
             "reqresp",
             &meta,
             "failed to encode blocks_by_root header length=%zu",
-            raw_written);
+            declared_len);
         goto cleanup;
     }
 
     lantern_log_debug(
         "reqresp",
         &meta,
-        "sending %s request roots=%zu first_root=%s bytes=%zu",
+        "sending %s request roots=%zu first_root=%s declared_bytes(compressed)=%zu raw_bytes=%zu compressed_bytes=%zu",
         ctx->protocol_id,
         ctx->root_count,
         root_hex[0] ? root_hex : "0x0",
+        declared_len,
+        raw_written,
         payload_len);
 
     ssize_t write_err = 0;
@@ -511,6 +565,46 @@ static void *block_request_worker(void *arg)
                 "blocks_by_root chunk returned code=%u payload_len=%zu",
                 (unsigned)chunk_code,
                 chunk_len);
+            if (chunk && chunk_len > 0)
+            {
+                char message_preview[128];
+                size_t copy_len = chunk_len < (sizeof(message_preview) - 1u)
+                    ? chunk_len
+                    : (sizeof(message_preview) - 1u);
+                memcpy(message_preview, chunk, copy_len);
+                message_preview[copy_len] = '\0';
+                for (size_t i = 0; i < copy_len; ++i)
+                {
+                    unsigned char c = (unsigned char)message_preview[i];
+                    if (c < 0x20u || c > 0x7eu)
+                    {
+                        message_preview[i] = '.';
+                    }
+                }
+                lantern_log_error(
+                    "reqresp",
+                    &meta,
+                    "blocks_by_root error payload=\"%s\" bytes=%zu",
+                    message_preview,
+                    chunk_len);
+
+                size_t hex_preview = chunk_len < LANTERN_STATUS_PREVIEW_BYTES
+                    ? chunk_len
+                    : LANTERN_STATUS_PREVIEW_BYTES;
+                if (hex_preview > 0)
+                {
+                    char hex[(LANTERN_STATUS_PREVIEW_BYTES * 2u) + 1u];
+                    if (lantern_bytes_to_hex(chunk, hex_preview, hex, sizeof(hex), 0) == 0)
+                    {
+                        lantern_log_trace(
+                            "reqresp",
+                            &meta,
+                            "blocks_by_root error payload_hex=%s%s",
+                            hex,
+                            (chunk_len > hex_preview) ? "..." : "");
+                    }
+                }
+            }
             free(chunk);
             goto cleanup;
         }
@@ -551,6 +645,56 @@ cleanup:
 /* ============================================================================
  * Stream Open Callback
  * ============================================================================ */
+
+static bool block_request_try_fallback(
+    struct block_request_ctx *ctx,
+    int err,
+    const struct lantern_log_metadata *meta)
+{
+    if (!ctx || ctx->tried_fallback)
+    {
+        return false;
+    }
+    if (err != LIBP2P_ERR_UNSUPPORTED && err != LIBP2P_ERR_PROTO_NEGOTIATION_FAILED)
+    {
+        return false;
+    }
+    if (!ctx->client || !ctx->client->network.host)
+    {
+        return false;
+    }
+    const char *fallback = LANTERN_BLOCKS_BY_ROOT_PROTOCOL_FALLBACK_ID;
+    if (!fallback || !ctx->protocol_id || strcmp(fallback, ctx->protocol_id) == 0)
+    {
+        return false;
+    }
+
+    ctx->tried_fallback = true;
+    ctx->protocol_id = fallback;
+    lantern_log_warn(
+        "reqresp",
+        meta,
+        "retrying blocks_by_root with fallback protocol=%s err=%d",
+        ctx->protocol_id,
+        err);
+
+    int rc = libp2p_host_open_stream_async(
+        ctx->client->network.host,
+        &ctx->peer_id,
+        ctx->protocol_id,
+        block_request_on_open,
+        ctx);
+    if (rc == 0)
+    {
+        return true;
+    }
+    lantern_log_warn(
+        "reqresp",
+        meta,
+        "fallback blocks_by_root open failed rc=%d",
+        rc);
+    return false;
+}
 
 /**
  * Callback when a block request stream opens.
@@ -597,6 +741,15 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
             "failed to open %s stream err=%d",
             ctx->protocol_id,
             err);
+        if (stream)
+        {
+            libp2p_stream_free(stream);
+            stream = NULL;
+        }
+        if (block_request_try_fallback(ctx, err, &meta))
+        {
+            return;
+        }
         if (ctx->client)
         {
             lantern_client_on_blocks_request_complete_batch(
@@ -605,10 +758,6 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
                 ctx->roots,
                 ctx->root_count,
                 LANTERN_BLOCKS_REQUEST_FAILED);
-        }
-        if (stream)
-        {
-            libp2p_stream_free(stream);
         }
         block_request_ctx_free(ctx);
         return;
@@ -737,6 +886,7 @@ static int schedule_blocks_request_batch(
     ctx->client = client;
     ctx->root_count = root_count;
     ctx->protocol_id = LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
+    ctx->tried_fallback = false;
     strncpy(ctx->peer_text, peer_id_text, sizeof(ctx->peer_text) - 1);
     ctx->peer_text[sizeof(ctx->peer_text) - 1] = '\0';
 

@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -32,6 +33,12 @@ struct checkpoint_callback_ctx
 {
     const uint8_t *data;
     size_t len;
+    int rc;
+};
+
+struct snapshot_callback_ctx
+{
+    struct lantern_http_head_snapshot snapshot;
     int rc;
 };
 
@@ -216,6 +223,21 @@ static int finalized_state_cb(void *context, uint8_t **out_bytes, size_t *out_le
     return LANTERN_HTTP_CB_OK;
 }
 
+static int snapshot_head_cb(void *context, struct lantern_http_head_snapshot *out_snapshot)
+{
+    if (!context || !out_snapshot)
+    {
+        return LANTERN_HTTP_CB_ERR_INVALID_PARAM;
+    }
+    struct snapshot_callback_ctx *ctx = context;
+    if (ctx->rc != 0)
+    {
+        return ctx->rc;
+    }
+    *out_snapshot = ctx->snapshot;
+    return LANTERN_HTTP_CB_OK;
+}
+
 static int send_all(int fd, const uint8_t *data, size_t length)
 {
     size_t remaining = length;
@@ -389,7 +411,7 @@ static int test_checkpoint_state_endpoint(void)
     expect_true(port != 0, "ephemeral port assigned");
 
     const char *request =
-        "GET /lean/states/finalized HTTP/1.1\r\n"
+        "GET /lean/v0/states/finalized HTTP/1.1\r\n"
         "Host: localhost\r\n"
         "Accept: application/octet-stream\r\n"
         "Connection: close\r\n"
@@ -472,6 +494,117 @@ static int test_storage_state_bytes(void)
     return 0;
 }
 
+static int test_justified_state_endpoint(void)
+{
+    struct snapshot_callback_ctx ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.rc = LANTERN_HTTP_CB_OK;
+    ctx.snapshot.justified.slot = 42u;
+    for (size_t i = 0; i < LANTERN_ROOT_SIZE; ++i)
+    {
+        ctx.snapshot.justified.root.bytes[i] = (uint8_t)(0x90u + (uint8_t)i);
+    }
+
+    struct lantern_http_server server;
+    lantern_http_server_init(&server);
+    struct lantern_http_server_config config;
+    memset(&config, 0, sizeof(config));
+    config.port = 0;
+    config.callbacks.context = &ctx;
+    config.callbacks.snapshot_head = snapshot_head_cb;
+
+    if (lantern_http_server_start(&server, &config) != 0)
+    {
+        return 1;
+    }
+
+    struct sockaddr_in addr;
+    socklen_t addr_len = sizeof(addr);
+    if (getsockname(server.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
+    {
+        lantern_http_server_stop(&server);
+        return 1;
+    }
+    uint16_t port = ntohs(addr.sin_port);
+    expect_true(port != 0, "ephemeral port assigned");
+
+    const char *request =
+        "GET /lean/v0/states/justified HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Accept: application/json\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+
+    uint8_t *response = NULL;
+    size_t response_len = 0;
+    if (read_response(port, request, &response, &response_len) != 0)
+    {
+        lantern_http_server_stop(&server);
+        return 1;
+    }
+
+    size_t header_end = 0;
+    expect_zero(find_header_end(response, response_len, &header_end), "find header end justified");
+    expect_true(header_end < response_len, "header size justified");
+
+    char *header = malloc(header_end + 1);
+    expect_true(header != NULL, "header alloc justified");
+    memcpy(header, response, header_end);
+    header[header_end] = '\0';
+
+    expect_true(strstr(header, "HTTP/1.1 200") != NULL, "status 200 justified");
+    expect_true(strstr(header, "Content-Type: application/json") != NULL, "content-type justified");
+
+    char root_hex[(LANTERN_ROOT_SIZE * 2u) + 1u];
+    expect_zero(
+        lantern_bytes_to_hex(
+            ctx.snapshot.justified.root.bytes,
+            LANTERN_ROOT_SIZE,
+            root_hex,
+            sizeof(root_hex),
+            0),
+        "justified root hex");
+
+    char expected[256];
+    int expected_written = snprintf(
+        expected,
+        sizeof(expected),
+        "{\"slot\":%" PRIu64 ",\"root\":\"%s\"}",
+        ctx.snapshot.justified.slot,
+        root_hex);
+    expect_true(expected_written > 0 && (size_t)expected_written < sizeof(expected), "expected json length");
+
+    size_t body_len = response_len - header_end;
+    expect_true(body_len == (size_t)expected_written, "justified body length");
+    expect_true(memcmp(response + header_end, expected, (size_t)expected_written) == 0, "justified body");
+
+    free(header);
+    free(response);
+
+    ctx.rc = LANTERN_HTTP_CB_ERR_INVALID_STATE;
+    response = NULL;
+    response_len = 0;
+    if (read_response(port, request, &response, &response_len) != 0)
+    {
+        lantern_http_server_stop(&server);
+        return 1;
+    }
+
+    header_end = 0;
+    expect_zero(find_header_end(response, response_len, &header_end), "find header end justified 503");
+    header = malloc(header_end + 1);
+    expect_true(header != NULL, "header alloc justified 503");
+    memcpy(header, response, header_end);
+    header[header_end] = '\0';
+    expect_true(strstr(header, "HTTP/1.1 503") != NULL, "status 503 justified");
+
+    free(header);
+    free(response);
+
+    lantern_http_server_stop(&server);
+    return 0;
+}
+
 int main(void)
 {
     if (test_storage_state_bytes() != 0)
@@ -479,6 +612,10 @@ int main(void)
         return 1;
     }
     if (test_checkpoint_state_endpoint() != 0)
+    {
+        return 1;
+    }
+    if (test_justified_state_endpoint() != 0)
     {
         return 1;
     }

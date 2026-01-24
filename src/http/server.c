@@ -3,8 +3,9 @@
  * @brief Lean API HTTP server for checkpoint sync and health/metrics endpoints.
  *
  * Exposes endpoints:
- * - GET /lean/states/finalized  (SSZ state snapshot)
- * - GET /health                (JSON health response)
+ * - GET /lean/v0/states/finalized  (SSZ state snapshot)
+ * - GET /lean/v0/states/justified  (JSON justified checkpoint)
+ * - GET /lean/v0/health            (JSON health response)
  * - GET /metrics               (Prometheus metrics)
  *
  * @spec RFC 9110/9112 (HTTP/1.1) and leanSpec subspecs/api.
@@ -30,12 +31,14 @@
 #include "lantern/http/common.h"
 #include "lantern/http/metrics.h"
 #include "lantern/support/log.h"
+#include "lantern/support/strings.h"
 
 static const size_t LANTERN_HTTP_READ_BUFFER_SIZE = 4096;
 static const int LANTERN_HTTP_LISTEN_BACKLOG = 16;
-static const char LANTERN_HTTP_PATH_HEALTH[] = "/health";
+static const char LANTERN_HTTP_PATH_HEALTH[] = "/lean/v0/health";
 static const char LANTERN_HTTP_PATH_METRICS[] = "/metrics";
-static const char LANTERN_HTTP_PATH_FINALIZED[] = "/lean/states/finalized";
+static const char LANTERN_HTTP_PATH_FINALIZED[] = "/lean/v0/states/finalized";
+static const char LANTERN_HTTP_PATH_JUSTIFIED[] = "/lean/v0/states/justified";
 static const char LANTERN_HTTP_JSON_HEALTH[] = "{\"status\":\"healthy\",\"service\":\"lean-spec-api\"}";
 static const char LANTERN_HTTP_JSON_MALFORMED[] = "{\"error\":\"malformed request\"}";
 static const char LANTERN_HTTP_JSON_UNKNOWN_ENDPOINT[] = "{\"error\":\"unknown endpoint\"}";
@@ -533,6 +536,121 @@ static void handle_client_connection(
                 "http",
                 &(const struct lantern_log_metadata){.peer = peer_text},
                 "finalized state send failed rc=%d",
+                result);
+            return;
+        }
+
+        lantern_log_info(
+            "http",
+            &(const struct lantern_log_metadata){.peer = peer_text},
+            "GET %s -> 200",
+            path);
+        return;
+    }
+
+    if (strcmp(path, LANTERN_HTTP_PATH_JUSTIFIED) == 0)
+    {
+        if (!server->callbacks.snapshot_head)
+        {
+            int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
+            lantern_log_error(
+                "http",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "justified snapshot callback missing rc=%d",
+                rc);
+            return;
+        }
+
+        struct lantern_http_head_snapshot snapshot;
+        memset(&snapshot, 0, sizeof(snapshot));
+        int snapshot_rc = server->callbacks.snapshot_head(server->callbacks.context, &snapshot);
+        if (snapshot_rc != 0)
+        {
+            const char *body = LANTERN_HTTP_JSON_INTERNAL;
+            int status_code = 500;
+            const char *status_text = "Internal Server Error";
+            if (snapshot_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
+                || snapshot_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
+                || snapshot_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
+            {
+                body = LANTERN_HTTP_JSON_UNAVAILABLE;
+                status_code = 503;
+                status_text = "Service Unavailable";
+            }
+
+            int rc = send_json_error(client_fd, status_code, status_text, body);
+            if (snapshot_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
+                || snapshot_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
+                || snapshot_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
+            {
+                lantern_log_warn(
+                    "http",
+                    &(const struct lantern_log_metadata){.peer = peer_text},
+                    "justified snapshot unavailable rc=%d send_rc=%d",
+                    snapshot_rc,
+                    rc);
+            }
+            else
+            {
+                lantern_log_error(
+                    "http",
+                    &(const struct lantern_log_metadata){.peer = peer_text},
+                    "justified snapshot failed rc=%d send_rc=%d",
+                    snapshot_rc,
+                    rc);
+            }
+            return;
+        }
+
+        char root_hex[(LANTERN_ROOT_SIZE * 2u) + 1u];
+        if (lantern_bytes_to_hex(
+                snapshot.justified.root.bytes,
+                LANTERN_ROOT_SIZE,
+                root_hex,
+                sizeof(root_hex),
+                0)
+            != 0)
+        {
+            int rc = send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
+            lantern_log_error(
+                "http",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "justified root hex failed send_rc=%d",
+                rc);
+            return;
+        }
+
+        char body[256];
+        int body_written = snprintf(
+            body,
+            sizeof(body),
+            "{\"slot\":%" PRIu64 ",\"root\":\"%s\"}",
+            snapshot.justified.slot,
+            root_hex);
+        if (body_written < 0 || (size_t)body_written >= sizeof(body))
+        {
+            int rc = send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
+            lantern_log_error(
+                "http",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "justified response format failed send_rc=%d",
+                rc);
+            return;
+        }
+
+        result = send_http_response(
+            client_fd,
+            200,
+            "OK",
+            "application/json",
+            body,
+            (size_t)body_written);
+        if (result != 0)
+        {
+            lantern_log_error(
+                "http",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "justified response send failed rc=%d",
                 result);
             return;
         }
