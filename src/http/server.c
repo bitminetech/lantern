@@ -4,7 +4,7 @@
  *
  * Exposes endpoints:
  * - GET /lean/v0/states/finalized  (SSZ state snapshot)
- * - GET /lean/v0/states/justified  (JSON justified checkpoint)
+ * - GET /lean/v0/checkpoints/justified  (JSON justified checkpoint)
  * - GET /lean/v0/health            (JSON health response)
  * - GET /metrics               (Prometheus metrics)
  *
@@ -38,7 +38,7 @@ static const int LANTERN_HTTP_LISTEN_BACKLOG = 16;
 static const char LANTERN_HTTP_PATH_HEALTH[] = "/lean/v0/health";
 static const char LANTERN_HTTP_PATH_METRICS[] = "/metrics";
 static const char LANTERN_HTTP_PATH_FINALIZED[] = "/lean/v0/states/finalized";
-static const char LANTERN_HTTP_PATH_JUSTIFIED[] = "/lean/v0/states/justified";
+static const char LANTERN_HTTP_PATH_JUSTIFIED[] = "/lean/v0/checkpoints/justified";
 static const char LANTERN_HTTP_JSON_HEALTH[] = "{\"status\":\"healthy\",\"service\":\"lean-spec-api\"}";
 static const char LANTERN_HTTP_JSON_MALFORMED[] = "{\"error\":\"malformed request\"}";
 static const char LANTERN_HTTP_JSON_UNKNOWN_ENDPOINT[] = "{\"error\":\"unknown endpoint\"}";

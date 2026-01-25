@@ -536,15 +536,107 @@ static int read_snappy_framed_payload(
         lantern_log_warn(
             "reqresp",
             meta,
-            "%s declared length invalid=%" PRIu64,
+            "%s declared uncompressed length invalid=%" PRIu64,
             label ? label : "stream",
             declared_len);
         return -1;
     }
 
-    size_t payload_len = (size_t)declared_len;
-    size_t alloc_len = payload_len > 0 ? payload_len : 1u;
-    uint8_t *buffer = (uint8_t *)malloc(alloc_len);
+    if (declared_len == 0) {
+        uint8_t header[4];
+        size_t read_len = 0;
+        if (read_stream_exact(
+                stream,
+                meta,
+                label ? label : "stream",
+                header,
+                sizeof(header),
+                deadline_ms,
+                &read_len,
+                out_err)
+            != 0) {
+            return -1;
+        }
+        uint8_t chunk_type = header[0];
+        uint32_t chunk_len = (uint32_t)header[1]
+            | ((uint32_t)header[2] << 8u)
+            | ((uint32_t)header[3] << 16u);
+        if (chunk_type != 0xffu || chunk_len != 6u) {
+            if (out_err) {
+                *out_err = LIBP2P_ERR_INTERNAL;
+            }
+            lantern_log_warn(
+                "reqresp",
+                meta,
+                "%s snappy stream identifier invalid type=0x%02x len=%u",
+                label ? label : "stream",
+                (unsigned)chunk_type,
+                chunk_len);
+            return -1;
+        }
+        uint8_t payload[6];
+        if (read_stream_exact(
+                stream,
+                meta,
+                label ? label : "stream",
+                payload,
+                sizeof(payload),
+                deadline_ms,
+                &read_len,
+                out_err)
+            != 0) {
+            return -1;
+        }
+        uint8_t *buffer = (uint8_t *)malloc(10u);
+        if (!buffer) {
+            if (out_err) {
+                *out_err = -ENOMEM;
+            }
+            lantern_log_warn(
+                "reqresp",
+                meta,
+                "%s payload allocation failed bytes=10",
+                label ? label : "stream");
+            return -1;
+        }
+        memcpy(buffer, header, sizeof(header));
+        memcpy(buffer + sizeof(header), payload, sizeof(payload));
+        if (!lantern_snappy_is_framed(buffer, 10u)) {
+            free(buffer);
+            if (out_err) {
+                *out_err = LIBP2P_ERR_INTERNAL;
+            }
+            lantern_log_warn(
+                "reqresp",
+                meta,
+                "%s payload missing snappy framing bytes=10",
+                label ? label : "stream");
+            return -1;
+        }
+        if (out_err) {
+            *out_err = 0;
+        }
+        *out_data = buffer;
+        *out_len = 10u;
+        return 0;
+    }
+
+    size_t max_compressed = 0;
+    if (lantern_snappy_max_compressed_size((size_t)declared_len, &max_compressed) != LANTERN_SNAPPY_OK
+        || max_compressed == 0) {
+        if (out_err) {
+            *out_err = LIBP2P_ERR_INTERNAL;
+        }
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "%s failed to compute snappy max size declared_uncompressed=%" PRIu64,
+            label ? label : "stream",
+            declared_len);
+        return -1;
+    }
+
+    uint8_t *buffer = (uint8_t *)malloc(max_compressed);
     if (!buffer) {
         if (out_err) {
             *out_err = -ENOMEM;
@@ -554,18 +646,25 @@ static int read_snappy_framed_payload(
             meta,
             "%s payload allocation failed bytes=%zu",
             label ? label : "stream",
-            alloc_len);
+            max_compressed);
         return -1;
     }
 
-    if (payload_len > 0) {
+    size_t offset = 0;
+    uint64_t uncompressed_total = 0;
+    bool saw_data_chunk = false;
+    size_t chunk_index = 0;
+    const uint32_t max_chunk_len = 0x00ffffffu;
+
+    while (!saw_data_chunk || uncompressed_total < declared_len) {
+        uint8_t header[4];
         size_t read_len = 0;
         if (read_stream_exact(
                 stream,
                 meta,
                 label ? label : "stream",
-                buffer,
-                payload_len,
+                header,
+                sizeof(header),
                 deadline_ms,
                 &read_len,
                 out_err)
@@ -573,27 +672,241 @@ static int read_snappy_framed_payload(
             free(buffer);
             return -1;
         }
-    }
 
-    if (payload_len > 0) {
-        size_t uncompressed_len = 0;
-        if (lantern_snappy_uncompressed_length(buffer, payload_len, &uncompressed_len) != LANTERN_SNAPPY_OK) {
+        uint8_t chunk_type = header[0];
+        uint32_t chunk_len = (uint32_t)header[1]
+            | ((uint32_t)header[2] << 8u)
+            | ((uint32_t)header[3] << 16u);
+
+        if (chunk_len > max_chunk_len) {
+            free(buffer);
+            if (out_err) {
+                *out_err = LIBP2P_ERR_MSG_TOO_LARGE;
+            }
             lantern_log_warn(
                 "reqresp",
                 meta,
-                "%s payload snappy decode failed bytes=%zu framed=%s",
+                "%s snappy chunk length invalid=%u",
                 label ? label : "stream",
-                payload_len,
-                lantern_snappy_is_framed(buffer, payload_len) ? "true" : "false");
-            log_snappy_frame_summary(label, meta, buffer, payload_len);
+                chunk_len);
+            return -1;
+        }
+
+        if (offset + sizeof(header) + (size_t)chunk_len > max_compressed) {
+            free(buffer);
+            if (out_err) {
+                *out_err = LIBP2P_ERR_MSG_TOO_LARGE;
+            }
+            lantern_log_warn(
+                "reqresp",
+                meta,
+                "%s snappy payload exceeds max_compressed bytes=%zu",
+                label ? label : "stream",
+                max_compressed);
+            return -1;
+        }
+
+        memcpy(buffer + offset, header, sizeof(header));
+        offset += sizeof(header);
+
+        if (chunk_len > 0) {
+            if (read_stream_exact(
+                    stream,
+                    meta,
+                    label ? label : "stream",
+                    buffer + offset,
+                    (size_t)chunk_len,
+                    deadline_ms,
+                    &read_len,
+                    out_err)
+                != 0) {
+                free(buffer);
+                return -1;
+            }
+        }
+
+        const uint8_t *chunk_payload = buffer + offset;
+        offset += (size_t)chunk_len;
+        chunk_index++;
+
+        uint64_t chunk_uncompressed = 0;
+        bool contributes = false;
+        switch (chunk_type) {
+        case 0xffu: /* stream identifier */
+            if (chunk_len != 6u) {
+                free(buffer);
+                if (out_err) {
+                    *out_err = LIBP2P_ERR_INTERNAL;
+                }
+                lantern_log_warn(
+                    "reqresp",
+                    meta,
+                    "%s snappy stream identifier length invalid=%u",
+                    label ? label : "stream",
+                    chunk_len);
+                return -1;
+            }
+            break;
+        case 0x00u: /* compressed */
+            if (chunk_len < 4u) {
+                free(buffer);
+                if (out_err) {
+                    *out_err = LIBP2P_ERR_INTERNAL;
+                }
+                lantern_log_warn(
+                    "reqresp",
+                    meta,
+                    "%s snappy compressed chunk too short len=%u",
+                    label ? label : "stream",
+                    chunk_len);
+                return -1;
+            }
+            {
+                size_t raw_len = 0;
+                int rc = lantern_snappy_uncompressed_length_raw(
+                    chunk_payload + 4u,
+                    (size_t)chunk_len - 4u,
+                    &raw_len);
+                if (rc != LANTERN_SNAPPY_OK) {
+                    free(buffer);
+                    if (out_err) {
+                        *out_err = LIBP2P_ERR_INTERNAL;
+                    }
+                    lantern_log_warn(
+                        "reqresp",
+                        meta,
+                        "%s snappy compressed chunk length decode failed rc=%d len=%u",
+                        label ? label : "stream",
+                        rc,
+                        chunk_len);
+                    return -1;
+                }
+                chunk_uncompressed = (uint64_t)raw_len;
+                contributes = true;
+            }
+            break;
+        case 0x01u: /* uncompressed */
+            if (chunk_len < 4u) {
+                free(buffer);
+                if (out_err) {
+                    *out_err = LIBP2P_ERR_INTERNAL;
+                }
+                lantern_log_warn(
+                    "reqresp",
+                    meta,
+                    "%s snappy uncompressed chunk too short len=%u",
+                    label ? label : "stream",
+                    chunk_len);
+                return -1;
+            }
+            chunk_uncompressed = (uint64_t)(chunk_len - 4u);
+            contributes = true;
+            break;
+        default:
+            if (chunk_type >= 0x80u && chunk_type <= 0xfeu) {
+                /* skippable chunk - ignore */
+                break;
+            }
+            free(buffer);
+            if (out_err) {
+                *out_err = LIBP2P_ERR_INTERNAL;
+            }
+            lantern_log_warn(
+                "reqresp",
+                meta,
+                "%s snappy chunk type unsupported=0x%02x",
+                label ? label : "stream",
+                (unsigned)chunk_type);
+            return -1;
+        }
+
+        if (contributes) {
+            saw_data_chunk = true;
+            if (chunk_uncompressed > UINT64_MAX - uncompressed_total) {
+                free(buffer);
+                if (out_err) {
+                    *out_err = LIBP2P_ERR_INTERNAL;
+                }
+                lantern_log_warn(
+                    "reqresp",
+                    meta,
+                    "%s snappy uncompressed length overflow",
+                    label ? label : "stream");
+                return -1;
+            }
+            uncompressed_total += chunk_uncompressed;
+        }
+
+        lantern_log_trace(
+            "reqresp",
+            meta,
+            "%s snappy chunk[%zu] type=0x%02x len=%u uncompressed=%" PRIu64 " total=%" PRIu64 "/%" PRIu64,
+            label ? label : "stream",
+            chunk_index,
+            (unsigned)chunk_type,
+            chunk_len,
+            chunk_uncompressed,
+            uncompressed_total,
+            declared_len);
+
+        if (uncompressed_total > declared_len) {
+            free(buffer);
+            if (out_err) {
+                *out_err = LIBP2P_ERR_INTERNAL;
+            }
+            lantern_log_warn(
+                "reqresp",
+                meta,
+                "%s snappy uncompressed length exceeded declared=%" PRIu64 " got=%" PRIu64,
+                label ? label : "stream",
+                declared_len,
+                uncompressed_total);
+            return -1;
+        }
+
+        if (offset >= max_compressed && uncompressed_total < declared_len) {
+            free(buffer);
+            if (out_err) {
+                *out_err = LIBP2P_ERR_MSG_TOO_LARGE;
+            }
+            lantern_log_warn(
+                "reqresp",
+                meta,
+                "%s snappy payload truncated bytes=%zu",
+                label ? label : "stream",
+                offset);
+            return -1;
         }
     }
+
+    if (!lantern_snappy_is_framed(buffer, offset)) {
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "%s payload missing snappy framing bytes=%zu",
+            label ? label : "stream",
+            offset);
+        log_snappy_frame_summary(label, meta, buffer, offset);
+        free(buffer);
+        if (out_err) {
+            *out_err = LIBP2P_ERR_INTERNAL;
+        }
+        return -1;
+    }
+
+    lantern_log_debug(
+        "reqresp",
+        meta,
+        "%s snappy payload read compressed=%zu uncompressed=%" PRIu64,
+        label ? label : "stream",
+        offset,
+        uncompressed_total);
 
     if (out_err) {
         *out_err = 0;
     }
     *out_data = buffer;
-    *out_len = payload_len;
+    *out_len = offset;
     return 0;
 }
 
@@ -645,7 +958,7 @@ static int read_length_prefixed_stream(
                 lantern_log_trace(
                     "reqresp",
                     &meta,
-                    "%s header decoded length=%" PRIu64,
+                    "%s header decoded uncompressed_len=%" PRIu64,
                     label ? label : "stream",
                     payload_len);
                 char header_hex[(LANTERN_REQRESP_HEADER_MAX_BYTES * 2u) + 1u];
@@ -656,7 +969,7 @@ static int read_length_prefixed_stream(
                 lantern_log_debug(
                     "reqresp",
                     &meta,
-                    "%s header decoded length=%" PRIu64 " header_len=%zu header_hex=%s",
+                    "%s header decoded uncompressed_len=%" PRIu64 " header_len=%zu header_hex=%s",
                     label ? label : "stream",
                     payload_len,
                     consumed,
@@ -689,7 +1002,7 @@ static int read_length_prefixed_stream(
         lantern_log_warn(
             "reqresp",
             &meta,
-            "%s header invalid length=%" PRIu64,
+            "%s header invalid uncompressed_len=%" PRIu64,
             label ? label : "stream",
             payload_len);
     }
@@ -830,7 +1143,7 @@ static int send_response_chunk(
 
     bool include_code = include_response_code;
 
-    size_t declared_len = payload_len;
+    size_t declared_len = raw_len;
 
     lantern_log_debug(
         "reqresp",
@@ -843,7 +1156,7 @@ static int send_response_chunk(
         raw_len,
         declared_len);
 
-    /* The varint prefix indicates the compressed payload size (snappy-framed). */
+    /* The varint prefix indicates the uncompressed payload size (SSZ length). */
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
     if (unsigned_varint_encode(declared_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
@@ -1363,10 +1676,10 @@ static void *status_request_worker(void *arg) {
     snprintf(trace_stage, sizeof(trace_stage), "status[%" PRIu64 "] request snappy", trace_id);
     log_payload_preview(trace_stage, ctx->peer_text, payload, payload_len);
 
-    /* The varint prefix indicates the compressed payload size (snappy-framed). */
+    /* The varint prefix indicates the uncompressed payload size (SSZ length). */
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
-    size_t declared_len = payload_len;
+    size_t declared_len = payload_raw_len;
     if (unsigned_varint_encode(declared_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
         lantern_log_error(
             "reqresp",

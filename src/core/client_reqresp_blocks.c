@@ -488,7 +488,7 @@ static void *block_request_worker(void *arg)
         }
     }
 
-    size_t declared_len = payload_len;
+    size_t declared_len = raw_written;
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
     if (unsigned_varint_encode(declared_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK)
@@ -504,7 +504,7 @@ static void *block_request_worker(void *arg)
     lantern_log_debug(
         "reqresp",
         &meta,
-        "sending %s request roots=%zu first_root=%s declared_bytes(compressed)=%zu raw_bytes=%zu compressed_bytes=%zu",
+        "sending %s request roots=%zu first_root=%s declared_bytes(uncompressed)=%zu raw_bytes=%zu compressed_bytes=%zu",
         ctx->protocol_id,
         ctx->root_count,
         root_hex[0] ? root_hex : "0x0",

@@ -529,7 +529,7 @@ static int test_justified_state_endpoint(void)
     expect_true(port != 0, "ephemeral port assigned");
 
     const char *request =
-        "GET /lean/v0/states/justified HTTP/1.1\r\n"
+        "GET /lean/v0/checkpoints/justified HTTP/1.1\r\n"
         "Host: localhost\r\n"
         "Accept: application/json\r\n"
         "Connection: close\r\n"
