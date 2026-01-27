@@ -28,6 +28,7 @@
 #include "peer_id/peer_id.h"
 
 #include "ssz_constants.h"
+#include "../core/client_network_internal.h"
 
 uint32_t lantern_reqresp_stall_timeout_ms(void) {
     static uint32_t timeout_ms = LANTERN_REQRESP_STALL_TIMEOUT_MS;
@@ -514,6 +515,32 @@ static int read_stream_exact(
     return 0;
 }
 
+static bool accept_legacy_declared_len(
+    const uint8_t *buffer,
+    size_t offset,
+    uint64_t declared_len,
+    size_t *out_uncompressed)
+{
+    if (!buffer || offset == 0 || declared_len == 0)
+    {
+        return false;
+    }
+    if (offset != (size_t)declared_len)
+    {
+        return false;
+    }
+    size_t raw_len = 0;
+    if (lantern_snappy_uncompressed_length(buffer, offset, &raw_len) != LANTERN_SNAPPY_OK)
+    {
+        return false;
+    }
+    if (out_uncompressed)
+    {
+        *out_uncompressed = raw_len;
+    }
+    return true;
+}
+
 static int read_snappy_framed_payload(
     libp2p_stream_t *stream,
     const char *label,
@@ -522,12 +549,16 @@ static int read_snappy_framed_payload(
     uint64_t deadline_ms,
     uint8_t **out_data,
     size_t *out_len,
+    bool *out_legacy_len,
     ssize_t *out_err) {
     if (!stream || !out_data || !out_len) {
         if (out_err) {
             *out_err = LIBP2P_ERR_NULL_PTR;
         }
         return -1;
+    }
+    if (out_legacy_len) {
+        *out_legacy_len = false;
     }
     if (declared_len > LANTERN_REQRESP_MAX_CHUNK_BYTES || declared_len > SIZE_MAX) {
         if (out_err) {
@@ -659,6 +690,7 @@ static int read_snappy_framed_payload(
     while (!saw_data_chunk || uncompressed_total < declared_len) {
         uint8_t header[4];
         size_t read_len = 0;
+        ssize_t read_err = 0;
         if (read_stream_exact(
                 stream,
                 meta,
@@ -667,9 +699,36 @@ static int read_snappy_framed_payload(
                 sizeof(header),
                 deadline_ms,
                 &read_len,
-                out_err)
+                &read_err)
             != 0) {
+            size_t legacy_uncompressed = 0;
+            if ((read_err == (ssize_t)LIBP2P_ERR_EOF
+                    || read_err == (ssize_t)LIBP2P_ERR_CLOSED
+                    || read_err == (ssize_t)LIBP2P_ERR_RESET)
+                && accept_legacy_declared_len(buffer, offset, declared_len, &legacy_uncompressed))
+            {
+                lantern_log_warn(
+                    "reqresp",
+                    meta,
+                    "%s legacy reqresp length declared=%" PRIu64 " compressed=%zu uncompressed=%zu",
+                    label ? label : "stream",
+                    declared_len,
+                    offset,
+                    legacy_uncompressed);
+                if (out_legacy_len) {
+                    *out_legacy_len = true;
+                }
+                if (out_err) {
+                    *out_err = 0;
+                }
+                *out_data = buffer;
+                *out_len = offset;
+                return 0;
+            }
             free(buffer);
+            if (out_err) {
+                *out_err = read_err;
+            }
             return -1;
         }
 
@@ -850,6 +909,26 @@ static int read_snappy_framed_payload(
             declared_len);
 
         if (uncompressed_total > declared_len) {
+            size_t legacy_uncompressed = 0;
+            if (accept_legacy_declared_len(buffer, offset, declared_len, &legacy_uncompressed)) {
+                lantern_log_warn(
+                    "reqresp",
+                    meta,
+                    "%s legacy reqresp length declared=%" PRIu64 " compressed=%zu uncompressed=%zu",
+                    label ? label : "stream",
+                    declared_len,
+                    offset,
+                    legacy_uncompressed);
+                if (out_legacy_len) {
+                    *out_legacy_len = true;
+                }
+                if (out_err) {
+                    *out_err = 0;
+                }
+                *out_data = buffer;
+                *out_len = offset;
+                return 0;
+            }
             free(buffer);
             if (out_err) {
                 *out_err = LIBP2P_ERR_INTERNAL;
@@ -916,12 +995,16 @@ static int read_length_prefixed_stream(
     const char *peer_text,
     uint8_t **out_data,
     size_t *out_len,
+    bool *out_legacy_len,
     ssize_t *out_err) {
     if (!stream || !out_data || !out_len) {
         if (out_err) {
             *out_err = LIBP2P_ERR_NULL_PTR;
         }
         return -1;
+    }
+    if (out_legacy_len) {
+        *out_legacy_len = false;
     }
 
     struct lantern_log_metadata meta = {.peer = peer_text};
@@ -1031,6 +1114,7 @@ static int read_length_prefixed_stream(
             resp_deadline_ms,
             out_data,
             out_len,
+            out_legacy_len,
             out_err)
         != 0) {
         return -1;
@@ -1134,6 +1218,7 @@ static int send_response_chunk(
     const char *peer_text,
     bool include_response_code,
     uint8_t response_code,
+    bool legacy_len,
     const uint8_t *payload,
     size_t payload_len,
     size_t raw_len) {
@@ -1143,18 +1228,19 @@ static int send_response_chunk(
 
     bool include_code = include_response_code;
 
-    size_t declared_len = raw_len;
+    size_t declared_len = legacy_len ? payload_len : raw_len;
 
     lantern_log_debug(
         "reqresp",
         meta,
-        "%s framing include_code=%s code=%u payload_len=%zu raw_len=%zu declared_len=%zu",
+        "%s framing include_code=%s code=%u payload_len=%zu raw_len=%zu declared_len=%zu legacy_len=%s",
         phase ? phase : "response",
         include_code ? "true" : "false",
         (unsigned)response_code,
         payload_len,
         raw_len,
-        declared_len);
+        declared_len,
+        legacy_len ? "true" : "false");
 
     /* The varint prefix indicates the uncompressed payload size (SSZ length). */
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
@@ -1248,6 +1334,7 @@ static int send_error_response(
     const struct lantern_log_metadata *meta,
     const char *protocol_id,
     const char *peer_text,
+    bool legacy_len,
     uint8_t response_code,
     const char *message) {
     if (!stream) {
@@ -1298,6 +1385,7 @@ static int send_error_response(
         peer_text,
         true,
         response_code,
+        legacy_len,
         compressed,
         written,
         raw_len);
@@ -1394,9 +1482,18 @@ static void *status_worker(void *arg) {
     uint8_t *request = NULL;
     size_t request_len = 0;
     ssize_t read_err = 0;
+    bool request_legacy_len = false;
     char trace_label[64];
     snprintf(trace_label, sizeof(trace_label), "status[%" PRIu64 "]", trace_id);
-    if (read_length_prefixed_stream(stream, trace_label, peer_text, &request, &request_len, &read_err) != 0) {
+    if (read_length_prefixed_stream(
+            stream,
+            trace_label,
+            peer_text,
+            &request,
+            &request_len,
+            &request_legacy_len,
+            &read_err)
+        != 0) {
         const char *err_name = read_err == 0 ? "empty" : stream_error_name(read_err);
         lantern_log_warn(
             "reqresp",
@@ -1411,10 +1508,22 @@ static void *status_worker(void *arg) {
             &stream_meta,
             protocol_id,
             peer_text[0] ? peer_text : NULL,
+            false,
             LANTERN_REQRESP_RESPONSE_INVALID_REQUEST,
             "invalid request");
         close_stream(stream);
         return NULL;
+    }
+    if (request_legacy_len && service && service->callbacks.context && peer_text[0]) {
+        lantern_client_mark_peer_reqresp_legacy(
+            (struct lantern_client *)service->callbacks.context,
+            peer_text);
+    }
+    bool use_legacy_len = request_legacy_len;
+    if (!use_legacy_len && service && service->callbacks.context && peer_text[0]) {
+        use_legacy_len = lantern_client_peer_reqresp_legacy(
+            (struct lantern_client *)service->callbacks.context,
+            peer_text);
     }
 
     lantern_log_debug(
@@ -1440,6 +1549,7 @@ static void *status_worker(void *arg) {
             &stream_meta,
             protocol_id,
             peer_text[0] ? peer_text : NULL,
+            use_legacy_len,
             LANTERN_REQRESP_RESPONSE_INVALID_REQUEST,
             "invalid request");
         close_stream(stream);
@@ -1490,6 +1600,7 @@ static void *status_worker(void *arg) {
             &stream_meta,
             protocol_id,
             peer_text[0] ? peer_text : NULL,
+            use_legacy_len,
             LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
             "server error");
         close_stream(stream);
@@ -1505,6 +1616,7 @@ static void *status_worker(void *arg) {
             &stream_meta,
             protocol_id,
             peer_text[0] ? peer_text : NULL,
+            use_legacy_len,
             LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
             "server error");
         close_stream(stream);
@@ -1519,6 +1631,7 @@ static void *status_worker(void *arg) {
             &stream_meta,
             protocol_id,
             peer_text[0] ? peer_text : NULL,
+            use_legacy_len,
             LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
             "server error");
         close_stream(stream);
@@ -1533,6 +1646,7 @@ static void *status_worker(void *arg) {
             &stream_meta,
             protocol_id,
             peer_text[0] ? peer_text : NULL,
+            use_legacy_len,
             LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
             "server error");
         close_stream(stream);
@@ -1549,6 +1663,7 @@ static void *status_worker(void *arg) {
             &stream_meta,
             protocol_id,
             peer_text[0] ? peer_text : NULL,
+            use_legacy_len,
             LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
             "server error");
         close_stream(stream);
@@ -1573,6 +1688,7 @@ static void *status_worker(void *arg) {
             peer_text[0] ? peer_text : NULL,
             include_response_code,
             LANTERN_REQRESP_RESPONSE_SUCCESS,
+            use_legacy_len,
             buffer,
             written,
             response_raw_len)
@@ -1676,10 +1792,17 @@ static void *status_request_worker(void *arg) {
     snprintf(trace_stage, sizeof(trace_stage), "status[%" PRIu64 "] request snappy", trace_id);
     log_payload_preview(trace_stage, ctx->peer_text, payload, payload_len);
 
+    bool use_legacy_len = false;
+    if (service && service->callbacks.context && peer_text[0]) {
+        use_legacy_len = lantern_client_peer_reqresp_legacy(
+            (struct lantern_client *)service->callbacks.context,
+            peer_text);
+    }
+
     /* The varint prefix indicates the uncompressed payload size (SSZ length). */
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
-    size_t declared_len = payload_raw_len;
+    size_t declared_len = use_legacy_len ? payload_len : payload_raw_len;
     if (unsigned_varint_encode(declared_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
         lantern_log_error(
             "reqresp",
@@ -1699,13 +1822,14 @@ static void *status_request_worker(void *arg) {
     lantern_log_debug(
         "reqresp",
         &meta,
-        "status[%" PRIu64 "] request header_len=%zu varint_len=%zu declared_len=%zu raw_len=%zu compressed_len=%zu header_hex=%s",
+        "status[%" PRIu64 "] request header_len=%zu varint_len=%zu declared_len=%zu raw_len=%zu compressed_len=%zu legacy_len=%s header_hex=%s",
         trace_id,
         header_len,
         declared_len,
         declared_len,
         payload_raw_len,
         payload_len,
+        use_legacy_len ? "true" : "false",
         header_hex[0] ? header_hex : "-");
 
     lantern_log_debug(
@@ -1717,12 +1841,13 @@ static void *status_request_worker(void *arg) {
     lantern_log_debug(
         "reqresp",
         &meta,
-        "status[%" PRIu64 "] sending %s request declared_bytes=%zu raw_bytes=%zu compressed_bytes=%zu",
+        "status[%" PRIu64 "] sending %s request declared_bytes=%zu raw_bytes=%zu compressed_bytes=%zu legacy_len=%s",
         trace_id,
         protocol_id,
         declared_len,
         payload_raw_len,
-        payload_len);
+        payload_len,
+        use_legacy_len ? "true" : "false");
 
     const char *peer_label = ctx->peer_text[0] ? ctx->peer_text : NULL;
     size_t frame_len = header_len + payload_len;
@@ -2098,7 +2223,16 @@ static void *blocks_worker(void *arg) {
     uint8_t *request = NULL;
     size_t request_len = 0;
     ssize_t request_err = 0;
-    if (read_length_prefixed_stream(stream, "blocks_by_root", peer_text, &request, &request_len, &request_err) != 0) {
+    bool request_legacy_len = false;
+    if (read_length_prefixed_stream(
+            stream,
+            "blocks_by_root",
+            peer_text,
+            &request,
+            &request_len,
+            &request_legacy_len,
+            &request_err)
+        != 0) {
         const char *err_name = request_err == 0 ? "empty" : stream_error_name(request_err);
         lantern_log_warn(
             "reqresp",
@@ -2112,10 +2246,22 @@ static void *blocks_worker(void *arg) {
             &meta,
             protocol_id,
             peer_text[0] ? peer_text : NULL,
+            false,
             LANTERN_REQRESP_RESPONSE_INVALID_REQUEST,
             "invalid request");
         close_stream(stream);
         return NULL;
+    }
+    if (request_legacy_len && service && service->callbacks.context && peer_text[0]) {
+        lantern_client_mark_peer_reqresp_legacy(
+            (struct lantern_client *)service->callbacks.context,
+            peer_text);
+    }
+    bool use_legacy_len = request_legacy_len;
+    if (!use_legacy_len && service && service->callbacks.context && peer_text[0]) {
+        use_legacy_len = lantern_client_peer_reqresp_legacy(
+            (struct lantern_client *)service->callbacks.context,
+            peer_text);
     }
 
     lantern_log_debug(
@@ -2139,6 +2285,7 @@ static void *blocks_worker(void *arg) {
             &meta,
             protocol_id,
             peer_text[0] ? peer_text : NULL,
+            use_legacy_len,
             LANTERN_REQRESP_RESPONSE_INVALID_REQUEST,
             "invalid request");
         close_stream(stream);
@@ -2165,6 +2312,7 @@ static void *blocks_worker(void *arg) {
             &meta,
             protocol_id,
             peer_text[0] ? peer_text : NULL,
+            use_legacy_len,
             LANTERN_REQRESP_RESPONSE_INVALID_REQUEST,
             "invalid request");
         close_stream(stream);
@@ -2205,6 +2353,7 @@ static void *blocks_worker(void *arg) {
             &meta,
             protocol_id,
             peer_text[0] ? peer_text : NULL,
+            use_legacy_len,
             LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
             "server error");
         close_stream(stream);
@@ -2231,6 +2380,7 @@ static void *blocks_worker(void *arg) {
                 peer_text[0] ? peer_text : NULL,
                 true,
                 LANTERN_REQRESP_RESPONSE_SUCCESS,
+                use_legacy_len,
                 NULL,
                 0,
                 0)
@@ -2260,6 +2410,7 @@ static void *blocks_worker(void *arg) {
                     &meta,
                     protocol_id,
                     peer_text[0] ? peer_text : NULL,
+                    use_legacy_len,
                     LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
                     "server error");
                 close_stream(stream);
@@ -2267,7 +2418,7 @@ static void *blocks_worker(void *arg) {
             }
             ssz_buffer = resized;
 
-            if (lantern_ssz_encode_signed_block(block, ssz_buffer, ssz_capacity, &ssz_written) == 0) {
+            if (lantern_ssz_encode_signed_block_legacy(block, ssz_buffer, ssz_capacity, &ssz_written) == 0) {
                 encoded = true;
                 break;
             }
@@ -2293,6 +2444,7 @@ static void *blocks_worker(void *arg) {
                 &meta,
                 protocol_id,
                 peer_text[0] ? peer_text : NULL,
+                use_legacy_len,
                 LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
                 "server error");
             close_stream(stream);
@@ -2311,6 +2463,7 @@ static void *blocks_worker(void *arg) {
                 &meta,
                 protocol_id,
                 peer_text[0] ? peer_text : NULL,
+                use_legacy_len,
                 LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
                 "server error");
             close_stream(stream);
@@ -2329,6 +2482,7 @@ static void *blocks_worker(void *arg) {
                     &meta,
                     protocol_id,
                     peer_text[0] ? peer_text : NULL,
+                    use_legacy_len,
                     LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
                     "server error");
                 close_stream(stream);
@@ -2355,6 +2509,7 @@ static void *blocks_worker(void *arg) {
                 &meta,
                 protocol_id,
                 peer_text[0] ? peer_text : NULL,
+                use_legacy_len,
                 LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
                 "server error");
             close_stream(stream);
@@ -2386,6 +2541,7 @@ static void *blocks_worker(void *arg) {
                 peer_text[0] ? peer_text : NULL,
                 true,
                 LANTERN_REQRESP_RESPONSE_SUCCESS,
+                use_legacy_len,
                 snappy_buffer,
                 compressed_len,
                 ssz_written)

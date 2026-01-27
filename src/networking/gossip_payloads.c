@@ -131,7 +131,7 @@ static size_t signed_block_max_ssz_size(void) {
     }
     size_t total = base + attestations_max;
     size_t proof_entry_max = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + att_bits_max + LANTERN_AGG_PROOF_MAX_BYTES;
-    size_t signatures_max = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE
+    size_t signatures_max = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + LANTERN_SIGNATURE_SIZE
         + ((size_t)LANTERN_MAX_BLOCK_SIGNATURES * (SSZ_BYTE_SIZE_OF_UINT32 + proof_entry_max));
     if (signatures_max > SIZE_MAX - total) {
         return SIZE_MAX;
@@ -159,7 +159,7 @@ static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
     if (sig_count > 0 && sig_list_bytes == 0) {
         return 0;
     }
-    size_t signature_bytes = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE + sig_list_bytes;
+    size_t signature_bytes = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + LANTERN_SIGNATURE_SIZE + sig_list_bytes;
     if (signature_bytes > SIZE_MAX - total) {
         return 0;
     }
@@ -233,7 +233,7 @@ int lantern_gossip_encode_signed_block_snappy(
         return -1;
     }
     size_t raw_written = raw_capacity;
-    if (lantern_ssz_encode_signed_block(block, raw, raw_capacity, &raw_written) != 0) {
+    if (lantern_ssz_encode_signed_block_legacy(block, raw, raw_capacity, &raw_written) != 0) {
         free(raw);
         return -1;
     }
@@ -318,7 +318,7 @@ int lantern_gossip_encode_signed_vote_snappy(
     }
     uint8_t raw[LANTERN_SIGNED_VOTE_SSZ_SIZE];
     size_t raw_written = sizeof(raw);
-    if (lantern_ssz_encode_signed_vote(vote, raw, sizeof(raw), &raw_written) != 0) {
+    if (lantern_ssz_encode_signed_vote_legacy(vote, raw, sizeof(raw), &raw_written) != 0) {
         return -1;
     }
     /* Use raw snappy (no framing) for gossip messages per Eth2 networking spec */
@@ -350,34 +350,43 @@ int lantern_gossip_decode_signed_vote_snappy(
             data_len);
         return -1;
     }
-    if (raw_len != LANTERN_SIGNED_VOTE_SSZ_SIZE) {
+    if (raw_len != LANTERN_SIGNED_VOTE_SSZ_SIZE
+        && raw_len != LANTERN_SIGNED_VOTE_SSZ_SIZE_LEGACY) {
         bool framed = lantern_snappy_is_framed(data, data_len);
         size_t framed_len = 0;
         int framed_rc = framed ? lantern_snappy_uncompressed_length(data, data_len, &framed_len) : LANTERN_SNAPPY_ERROR_INVALID_INPUT;
         lantern_log_warn(
             "gossip",
             NULL,
-            "gossip vote snappy length mismatch raw_len=%zu expected=%zu framed=%s framed_rc=%d framed_len=%zu data_len=%zu",
+            "gossip vote snappy length mismatch raw_len=%zu expected=%zu/%zu framed=%s framed_rc=%d framed_len=%zu data_len=%zu",
             raw_len,
             (size_t)LANTERN_SIGNED_VOTE_SSZ_SIZE,
+            (size_t)LANTERN_SIGNED_VOTE_SSZ_SIZE_LEGACY,
             framed ? "true" : "false",
             framed_rc,
             framed_len,
             data_len);
         return -1;
     }
-    uint8_t raw[LANTERN_SIGNED_VOTE_SSZ_SIZE];
-    size_t written = sizeof(raw);
-    int snappy_rc = lantern_snappy_decompress_raw(data, data_len, raw, sizeof(raw), &written);
+    uint8_t *raw = malloc(raw_len > 0 ? raw_len : 1u);
+    if (!raw) {
+        return -1;
+    }
+    size_t written = raw_len;
+    int snappy_rc = lantern_snappy_decompress_raw(data, data_len, raw, raw_len, &written);
     if (snappy_rc != LANTERN_SNAPPY_OK) {
+        free(raw);
         return -1;
     }
-    if (written != sizeof(raw)) {
+    if (written != raw_len) {
+        free(raw);
         return -1;
     }
-    if (lantern_ssz_decode_signed_vote(vote, raw, sizeof(raw)) != 0) {
+    if (lantern_ssz_decode_signed_vote(vote, raw, raw_len) != 0) {
+        free(raw);
         return -1;
     }
+    free(raw);
     if (basic_vote_sanity(&vote->data) != 0) {
         return -1;
     }

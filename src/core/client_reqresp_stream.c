@@ -194,6 +194,7 @@ static int read_snappy_framed_payload(
     uint64_t deadline_ms,
     uint8_t **out_buffer,
     size_t *out_len,
+    bool *out_legacy_len,
     ssize_t *out_err);
 static int read_varint_header_from_first_byte(
     libp2p_stream_t *stream,
@@ -235,6 +236,7 @@ static int read_varint_payload_chunk(
     uint8_t first_byte,
     uint8_t **out_data,
     size_t *out_len,
+    bool *out_legacy_len,
     ssize_t *out_err,
     const struct lantern_log_metadata *meta,
     const char *label,
@@ -350,6 +352,32 @@ static int set_stream_deadline_remaining(
     return set_stream_deadline(stream, deadline_ms - now_ms, meta, label, out_err);
 }
 
+static bool accept_legacy_declared_len(
+    const uint8_t *buffer,
+    size_t offset,
+    uint64_t declared_len,
+    size_t *out_uncompressed)
+{
+    if (!buffer || offset == 0 || declared_len == 0)
+    {
+        return false;
+    }
+    if (offset != (size_t)declared_len)
+    {
+        return false;
+    }
+    size_t raw_len = 0;
+    if (lantern_snappy_uncompressed_length(buffer, offset, &raw_len) != LANTERN_SNAPPY_OK)
+    {
+        return false;
+    }
+    if (out_uncompressed)
+    {
+        *out_uncompressed = raw_len;
+    }
+    return true;
+}
+
 /**
  * @brief Reads a framed Snappy payload with declared uncompressed length.
  */
@@ -361,6 +389,7 @@ static int read_snappy_framed_payload(
     uint64_t deadline_ms,
     uint8_t **out_buffer,
     size_t *out_len,
+    bool *out_legacy_len,
     ssize_t *out_err)
 {
     if (!stream || !out_buffer || !out_len)
@@ -370,6 +399,10 @@ static int read_snappy_framed_payload(
             *out_err = LIBP2P_ERR_NULL_PTR;
         }
         return LANTERN_REQRESP_ERR_INVALID_PARAM;
+    }
+    if (out_legacy_len)
+    {
+        *out_legacy_len = false;
     }
     if (declared_len > (uint64_t)LANTERN_REQRESP_MAX_CHUNK_BYTES
         || declared_len > (uint64_t)SIZE_MAX)
@@ -540,6 +573,32 @@ static int read_snappy_framed_payload(
                 &read_err)
             != 0)
         {
+            size_t legacy_uncompressed = 0;
+            if ((read_err == (ssize_t)LIBP2P_ERR_EOF
+                    || read_err == (ssize_t)LIBP2P_ERR_CLOSED
+                    || read_err == (ssize_t)LIBP2P_ERR_RESET)
+                && accept_legacy_declared_len(buffer, offset, declared_len, &legacy_uncompressed))
+            {
+                lantern_log_warn(
+                    "reqresp",
+                    meta,
+                    "%s legacy reqresp length declared=%" PRIu64 " compressed=%zu uncompressed=%zu",
+                    label ? label : "chunk",
+                    declared_len,
+                    offset,
+                    legacy_uncompressed);
+                if (out_legacy_len)
+                {
+                    *out_legacy_len = true;
+                }
+                if (out_err)
+                {
+                    *out_err = 0;
+                }
+                *out_buffer = buffer;
+                *out_len = offset;
+                return 0;
+            }
             free(buffer);
             if (out_err)
             {
@@ -750,6 +809,29 @@ static int read_snappy_framed_payload(
 
         if (uncompressed_total > declared_len)
         {
+            size_t legacy_uncompressed = 0;
+            if (accept_legacy_declared_len(buffer, offset, declared_len, &legacy_uncompressed))
+            {
+                lantern_log_warn(
+                    "reqresp",
+                    meta,
+                    "%s legacy reqresp length declared=%" PRIu64 " compressed=%zu uncompressed=%zu",
+                    label ? label : "chunk",
+                    declared_len,
+                    offset,
+                    legacy_uncompressed);
+                if (out_legacy_len)
+                {
+                    *out_legacy_len = true;
+                }
+                if (out_err)
+                {
+                    *out_err = 0;
+                }
+                *out_buffer = buffer;
+                *out_len = offset;
+                return 0;
+            }
             free(buffer);
             if (out_err)
             {
@@ -1542,15 +1624,23 @@ int lantern_reqresp_read_response_chunk(
         (unsigned)frame_code,
         (unsigned)header_first_byte);
 
+    bool legacy_len = false;
     int payload_rc = read_varint_payload_chunk(
         stream,
         header_first_byte,
         out_data,
         out_len,
+        &legacy_len,
         out_err,
         &meta,
         "chunk",
         resp_deadline_ms);
+    if (payload_rc == 0 && legacy_len && service && service->callbacks.context && peer_text[0])
+    {
+        lantern_client_mark_peer_reqresp_legacy(
+            (struct lantern_client *)service->callbacks.context,
+            peer_text);
+    }
 
     return payload_rc;
 }
@@ -1586,6 +1676,7 @@ static int read_varint_payload_chunk(
     uint8_t first_byte,
     uint8_t **out_data,
     size_t *out_len,
+    bool *out_legacy_len,
     ssize_t *out_err,
     const struct lantern_log_metadata *meta,
     const char *label,
@@ -1598,6 +1689,10 @@ static int read_varint_payload_chunk(
             *out_err = LIBP2P_ERR_NULL_PTR;
         }
         return LANTERN_REQRESP_ERR_INVALID_PARAM;
+    }
+    if (out_legacy_len)
+    {
+        *out_legacy_len = false;
     }
 
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
@@ -1637,6 +1732,7 @@ static int read_varint_payload_chunk(
         deadline_ms,
         &buffer,
         &payload_size,
+        out_legacy_len,
         out_err);
     if (rc != 0)
     {
