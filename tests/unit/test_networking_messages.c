@@ -695,12 +695,21 @@ static void test_replay_devnet_block_payloads(void) {
         size_t ssz_capacity = signed_block_min_capacity_for_test(&original);
         CHECK(ssz_capacity > 0);
         uint8_t *ssz_encoded = (uint8_t *)malloc(ssz_capacity);
+        uint8_t *ssz_encoded_legacy = (uint8_t *)malloc(ssz_capacity);
         CHECK(ssz_encoded != NULL);
+        CHECK(ssz_encoded_legacy != NULL);
         size_t ssz_written = ssz_capacity;
+        size_t ssz_written_legacy = ssz_capacity;
         CHECK(lantern_ssz_encode_signed_block(&original, ssz_encoded, ssz_capacity, &ssz_written) == 0);
+        CHECK(lantern_ssz_encode_signed_block_legacy(
+                  &original,
+                  ssz_encoded_legacy,
+                  ssz_capacity,
+                  &ssz_written_legacy)
+              == 0);
 
         size_t max_compressed = 0;
-        CHECK(lantern_snappy_max_compressed_size(ssz_written, &max_compressed) == LANTERN_SNAPPY_OK);
+        CHECK(lantern_snappy_max_compressed_size_raw(ssz_written_legacy, &max_compressed) == LANTERN_SNAPPY_OK);
         uint8_t *compressed = (uint8_t *)malloc(max_compressed);
         CHECK(compressed != NULL);
         size_t compressed_len = max_compressed;
@@ -732,22 +741,23 @@ static void test_replay_devnet_block_payloads(void) {
         CHECK(lantern_hash_tree_root_block(&decoded.message.block, &decoded_block_root) == 0);
         CHECK(memcmp(decoded_block_root.bytes, original_block_root.bytes, LANTERN_ROOT_SIZE) == 0);
 
-        uint8_t *roundtrip = (uint8_t *)malloc(ssz_written);
+        uint8_t *roundtrip = (uint8_t *)malloc(ssz_written_legacy);
         CHECK(roundtrip != NULL);
-        size_t roundtrip_written = ssz_written;
+        size_t roundtrip_written = ssz_written_legacy;
         CHECK(
-            lantern_snappy_decompress(
+            lantern_snappy_decompress_raw(
                 compressed,
                 compressed_len,
                 roundtrip,
-                ssz_written,
+                ssz_written_legacy,
                 &roundtrip_written)
             == LANTERN_SNAPPY_OK);
-        CHECK(roundtrip_written == ssz_written);
-        CHECK(memcmp(roundtrip, ssz_encoded, ssz_written) == 0);
+        CHECK(roundtrip_written == ssz_written_legacy);
+        CHECK(memcmp(roundtrip, ssz_encoded_legacy, ssz_written_legacy) == 0);
 
         free(roundtrip);
         free(compressed);
+        free(ssz_encoded_legacy);
         free(ssz_encoded);
         lantern_signed_block_with_attestation_reset(&original);
         lantern_signed_block_with_attestation_reset(&decoded);
@@ -1393,9 +1403,18 @@ static void test_gossip_signed_vote_fixture_roundtrip(void) {
 
     /* Encode to SSZ */
     uint8_t ssz_bytes[LANTERN_SIGNED_VOTE_SSZ_SIZE];
+    uint8_t ssz_bytes_legacy[LANTERN_SIGNED_VOTE_SSZ_SIZE_LEGACY];
     size_t ssz_len = 0;
+    size_t ssz_legacy_len = 0;
     CHECK(lantern_ssz_encode_signed_vote(&original, ssz_bytes, sizeof(ssz_bytes), &ssz_len) == 0);
     CHECK(ssz_len == LANTERN_SIGNED_VOTE_SSZ_SIZE);
+    CHECK(lantern_ssz_encode_signed_vote_legacy(
+              &original,
+              ssz_bytes_legacy,
+              sizeof(ssz_bytes_legacy),
+              &ssz_legacy_len)
+          == 0);
+    CHECK(ssz_legacy_len == LANTERN_SIGNED_VOTE_SSZ_SIZE_LEGACY);
 
     /* Decode from SSZ and verify */
     LanternSignedVote from_ssz;
@@ -1437,8 +1456,12 @@ static void test_gossip_signed_vote_fixture_roundtrip(void) {
             ssz_len,
             &raw_written)
         == LANTERN_SNAPPY_OK);
-    CHECK(raw_written == ssz_len);
-    CHECK(memcmp(raw, ssz_bytes, ssz_len) == 0);
+    CHECK(raw_written == ssz_len || raw_written == ssz_legacy_len);
+    if (raw_written == ssz_len) {
+        CHECK(memcmp(raw, ssz_bytes, ssz_len) == 0);
+    } else {
+        CHECK(memcmp(raw, ssz_bytes_legacy, ssz_legacy_len) == 0);
+    }
 
     free(raw);
     free(snappy_bytes);
@@ -1521,10 +1544,15 @@ static void test_gossip_signed_block_fixture_roundtrip(void) {
     /* Encode to SSZ */
     size_t max_ssz = 1u << 20;
     uint8_t *ssz_bytes = (uint8_t *)malloc(max_ssz);
+    uint8_t *ssz_bytes_legacy = (uint8_t *)malloc(max_ssz);
     CHECK(ssz_bytes != NULL);
+    CHECK(ssz_bytes_legacy != NULL);
     size_t ssz_len = 0;
+    size_t ssz_legacy_len = 0;
     CHECK(lantern_ssz_encode_signed_block(&original, ssz_bytes, max_ssz, &ssz_len) == 0);
     CHECK(ssz_len > 0);
+    CHECK(lantern_ssz_encode_signed_block_legacy(&original, ssz_bytes_legacy, max_ssz, &ssz_legacy_len) == 0);
+    CHECK(ssz_legacy_len > 0);
 
     /* Decode from SSZ and verify */
     LanternSignedBlock from_ssz;
@@ -1566,11 +1594,16 @@ static void test_gossip_signed_block_fixture_roundtrip(void) {
             ssz_len,
             &raw_written)
         == LANTERN_SNAPPY_OK);
-    CHECK(raw_written == ssz_len);
-    CHECK(memcmp(raw, ssz_bytes, ssz_len) == 0);
+    CHECK(raw_written == ssz_len || raw_written == ssz_legacy_len);
+    if (raw_written == ssz_len) {
+        CHECK(memcmp(raw, ssz_bytes, ssz_len) == 0);
+    } else {
+        CHECK(memcmp(raw, ssz_bytes_legacy, ssz_legacy_len) == 0);
+    }
 
     free(raw);
     free(snappy_bytes);
+    free(ssz_bytes_legacy);
     free(ssz_bytes);
     lantern_signed_block_with_attestation_reset(&from_snappy);
     lantern_signed_block_with_attestation_reset(&from_ssz);

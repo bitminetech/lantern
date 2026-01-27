@@ -239,7 +239,7 @@ static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
     if (sig_count > 0 && sig_list_bytes == 0) {
         return 0;
     }
-    size_t signatures_bytes = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE + sig_list_bytes;
+    size_t signatures_bytes = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + LANTERN_SIGNATURE_SIZE + sig_list_bytes;
     size_t total = offsets + block_fixed;
     if (block_offset > SIZE_MAX - total) {
         return 0;
@@ -277,7 +277,7 @@ static size_t signed_block_max_ssz_size(void) {
     size_t proposer_bytes = LANTERN_VOTE_SSZ_SIZE;
     size_t proof_bits_max = att_bits_max;
     size_t proof_entry_max = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + proof_bits_max + LANTERN_AGG_PROOF_MAX_BYTES;
-    size_t signatures_bytes = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE
+    size_t signatures_bytes = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + LANTERN_SIGNATURE_SIZE
         + ((size_t)LANTERN_MAX_BLOCK_SIGNATURES * (SSZ_BYTE_SIZE_OF_UINT32 + proof_entry_max));
     size_t total = offsets + block_fixed;
     if (block_offset > SIZE_MAX - total) {

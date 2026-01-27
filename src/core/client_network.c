@@ -40,6 +40,7 @@
 
 static const unsigned LANTERN_PING_INTERVAL_SECONDS = 15u;
 static const uint64_t LANTERN_PING_TIMEOUT_MS = 5000ULL;
+static const uint32_t LANTERN_PING_FAILURES_BEFORE_DISCONNECT = 1u;
 
 
 /* ============================================================================
@@ -174,6 +175,7 @@ void connection_counter_update(
     format_peer_id_text(peer, peer_text, sizeof(peer_text));
     size_t total = 0;
     bool was_inbound = inbound;
+    bool record_disconnect = false;
     if (pthread_mutex_lock(&client->connection_lock) == 0)
     {
         if (peer_text[0])
@@ -198,9 +200,13 @@ void connection_counter_update(
             }
             else if (delta < 0)
             {
-                was_inbound = string_list_contains(&client->inbound_peer_ids, peer_text);
-                string_list_remove(&client->connected_peer_ids, peer_text);
-                string_list_remove(&client->inbound_peer_ids, peer_text);
+                if (string_list_contains(&client->connected_peer_ids, peer_text))
+                {
+                    was_inbound = string_list_contains(&client->inbound_peer_ids, peer_text);
+                    string_list_remove(&client->connected_peer_ids, peer_text);
+                    string_list_remove(&client->inbound_peer_ids, peer_text);
+                    record_disconnect = true;
+                }
             }
             client->connected_peers = client->connected_peer_ids.len;
         }
@@ -212,6 +218,7 @@ void connection_counter_update(
             }
             else if (delta < 0)
             {
+                size_t before = client->connected_peers;
                 size_t decrease = (size_t)(-delta);
                 if (client->connected_peers > decrease)
                 {
@@ -221,12 +228,18 @@ void connection_counter_update(
                 {
                     client->connected_peers = 0;
                 }
+                record_disconnect = (client->connected_peers != before);
             }
         }
         total = client->connected_peers;
         pthread_mutex_unlock(&client->connection_lock);
     }
     else
+    {
+        return;
+    }
+
+    if (delta < 0 && !record_disconnect)
     {
         return;
     }
@@ -245,7 +258,7 @@ void connection_counter_update(
         },
         "connection %s inbound=%s total=%zu reason=%d (%s)",
         delta > 0 ? "opened" : "closed",
-        inbound ? "true" : "false",
+        (delta > 0 ? inbound : was_inbound) ? "true" : "false",
         total,
         reason,
         connection_reason_text(reason));
@@ -1005,6 +1018,73 @@ void stop_peer_dialer(struct lantern_client *client)
  * Ping Service
  * ============================================================================ */
 
+static uint32_t record_peer_ping_failure(struct lantern_client *client, const char *peer_text)
+{
+    if (!client || !peer_text || peer_text[0] == '\0')
+    {
+        return 0;
+    }
+    if (!client->status_lock_initialized)
+    {
+        return 0;
+    }
+    if (pthread_mutex_lock(&client->status_lock) != 0)
+    {
+        return 0;
+    }
+
+    uint32_t failures = 0;
+    struct lantern_peer_status_entry *entry =
+        lantern_client_ensure_status_entry_locked(client, peer_text);
+    if (entry)
+    {
+        if (entry->consecutive_ping_failures < UINT32_MAX)
+        {
+            entry->consecutive_ping_failures += 1u;
+        }
+        failures = entry->consecutive_ping_failures;
+    }
+    pthread_mutex_unlock(&client->status_lock);
+    return failures;
+}
+
+static void clear_peer_ping_failures(struct lantern_client *client, const char *peer_text)
+{
+    if (!client || !peer_text || peer_text[0] == '\0')
+    {
+        return;
+    }
+    if (!client->status_lock_initialized)
+    {
+        return;
+    }
+    if (pthread_mutex_lock(&client->status_lock) != 0)
+    {
+        return;
+    }
+    struct lantern_peer_status_entry *entry =
+        lantern_client_find_status_entry_locked(client, peer_text);
+    if (entry)
+    {
+        entry->consecutive_ping_failures = 0;
+    }
+    pthread_mutex_unlock(&client->status_lock);
+}
+
+static bool ping_error_is_disconnect(int err)
+{
+    switch (err)
+    {
+        case LIBP2P_ERR_TIMEOUT:
+        case LIBP2P_ERR_EOF:
+        case LIBP2P_ERR_CLOSED:
+        case LIBP2P_ERR_RESET:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /**
  * Callback context for async ping dial.
  */
@@ -1048,6 +1128,27 @@ static void ping_on_stream_open(libp2p_stream_t *s, void *user_data, int err)
             },
             "ping dial failed err=%d",
             err);
+        if (client && peer_text[0])
+        {
+            int reason = err != 0 ? err : LIBP2P_ERR_INTERNAL;
+            if (!ping_error_is_disconnect(reason))
+            {
+                clear_peer_ping_failures(client, peer_text);
+                free(ctx);
+                return;
+            }
+            uint32_t failures = record_peer_ping_failure(client, peer_text);
+            if (failures >= LANTERN_PING_FAILURES_BEFORE_DISCONNECT)
+            {
+                peer_id_t peer_id = {0};
+                if (peer_id_create_from_string(peer_text, &peer_id) == 0)
+                {
+                    connection_counter_update(client, -1, &peer_id, false, reason);
+                    peer_id_destroy(&peer_id);
+                }
+                clear_peer_ping_failures(client, peer_text);
+            }
+        }
         free(ctx);
         return;
     }
@@ -1064,6 +1165,7 @@ static void ping_on_stream_open(libp2p_stream_t *s, void *user_data, int err)
             },
             "ping ok rtt_ms=%llu",
             (unsigned long long)rtt_ms);
+        clear_peer_ping_failures(client, peer_text);
     }
     else
     {
@@ -1075,6 +1177,29 @@ static void ping_on_stream_open(libp2p_stream_t *s, void *user_data, int err)
             },
             "ping failed rc=%d",
             (int)rc);
+        if (client && peer_text[0])
+        {
+            int reason = (rc == LIBP2P_PING_ERR_TIMEOUT) ? LIBP2P_ERR_TIMEOUT : LIBP2P_ERR_RESET;
+            if (!ping_error_is_disconnect(reason))
+            {
+                clear_peer_ping_failures(client, peer_text);
+                libp2p_stream_close(s);
+                libp2p_stream_free(s);
+                free(ctx);
+                return;
+            }
+            uint32_t failures = record_peer_ping_failure(client, peer_text);
+            if (failures >= LANTERN_PING_FAILURES_BEFORE_DISCONNECT)
+            {
+                peer_id_t peer_id = {0};
+                if (peer_id_create_from_string(peer_text, &peer_id) == 0)
+                {
+                    connection_counter_update(client, -1, &peer_id, false, reason);
+                    peer_id_destroy(&peer_id);
+                }
+                clear_peer_ping_failures(client, peer_text);
+            }
+        }
     }
     libp2p_stream_close(s);
     libp2p_stream_free(s);

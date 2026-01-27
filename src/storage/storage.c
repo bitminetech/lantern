@@ -27,7 +27,7 @@
 #include "ssz_constants.h"
 
 #define LANTERN_STORAGE_VOTES_MAGIC "LNVOTES\0"
-#define LANTERN_STORAGE_VOTES_VERSION 2u
+#define LANTERN_STORAGE_VOTES_VERSION 3u
 #define LANTERN_STORAGE_BLOCKS_DIR "blocks"
 #define LANTERN_STORAGE_STATES_DIR "states"
 #define LANTERN_STORAGE_INDICES_DIR "indices"
@@ -308,7 +308,7 @@ static size_t block_signatures_encoded_size(const LanternBlockSignatures *signat
     if (sig_count > 0 && attestations_bytes == 0) {
         return 0;
     }
-    return SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE + attestations_bytes;
+    return (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + LANTERN_SIGNATURE_SIZE + attestations_bytes;
 }
 
 static size_t signed_block_encoded_size(const LanternSignedBlock *block) {
@@ -730,10 +730,15 @@ int lantern_storage_load_votes(const char *data_dir, LanternState *state) {
         return -1;
     }
     bool has_signatures = false;
+    size_t signed_vote_size = 0;
     if (header.version == 1u) {
         has_signatures = false;
-    } else if (header.version >= 2u) {
+    } else if (header.version == 2u) {
         has_signatures = true;
+        signed_vote_size = LANTERN_SIGNED_VOTE_SSZ_SIZE_LEGACY;
+    } else if (header.version >= 3u) {
+        has_signatures = true;
+        signed_vote_size = LANTERN_SIGNED_VOTE_SSZ_SIZE;
     } else {
         free(data);
         return -1;
@@ -761,7 +766,7 @@ int lantern_storage_load_votes(const char *data_dir, LanternState *state) {
     const uint8_t *cursor = data + sizeof(header);
     size_t remaining = data_len - sizeof(header);
     size_t records_read = 0;
-    const size_t encoded_vote_size = has_signatures ? LANTERN_SIGNED_VOTE_SSZ_SIZE : LANTERN_VOTE_SSZ_SIZE;
+    const size_t encoded_vote_size = has_signatures ? signed_vote_size : LANTERN_VOTE_SSZ_SIZE;
     while (records_read < header.record_count) {
         if (remaining < sizeof(uint64_t) + encoded_vote_size) {
             free(data);
@@ -780,12 +785,12 @@ int lantern_storage_load_votes(const char *data_dir, LanternState *state) {
         if (has_signatures) {
             LanternSignedVote signed_vote;
             memset(&signed_vote, 0, sizeof(signed_vote));
-            if (lantern_ssz_decode_signed_vote(&signed_vote, cursor, LANTERN_SIGNED_VOTE_SSZ_SIZE) != 0) {
+            if (lantern_ssz_decode_signed_vote(&signed_vote, cursor, signed_vote_size) != 0) {
                 free(data);
                 return -1;
             }
-            cursor += LANTERN_SIGNED_VOTE_SSZ_SIZE;
-            remaining -= LANTERN_SIGNED_VOTE_SSZ_SIZE;
+            cursor += signed_vote_size;
+            remaining -= signed_vote_size;
             if (lantern_state_set_signed_validator_vote(state, (size_t)validator_index, &signed_vote) != 0) {
                 free(data);
                 return -1;
