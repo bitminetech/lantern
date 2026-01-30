@@ -12,10 +12,8 @@
 
 #define LANTERN_REQRESP_STATUS_PROTOCOL_SNAPPY "/leanconsensus/req/status/1/ssz_snappy"
 #define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_SNAPPY "/leanconsensus/req/blocks_by_root/1/ssz_snappy"
-#define LANTERN_REQRESP_LEAN_BLOCKS_BY_ROOT_PROTOCOL_SNAPPY "/leanconsensus/req/lean_blocks_by_root/1/ssz_snappy"
 #define LANTERN_REQRESP_STATUS_PROTOCOL LANTERN_REQRESP_STATUS_PROTOCOL_SNAPPY
-#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL LANTERN_REQRESP_LEAN_BLOCKS_BY_ROOT_PROTOCOL_SNAPPY
-#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_FALLBACK LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_SNAPPY
+#define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_SNAPPY
 #define LANTERN_REQRESP_STATUS_PREVIEW_BYTES 256u
 #define LANTERN_REQRESP_MAX_CHUNK_BYTES (10u * 1024u * 1024u)
 #define LANTERN_REQRESP_MAX_CONTEXT_BYTES (1u << 20)
@@ -57,7 +55,6 @@ enum lantern_reqresp_protocol_kind {
 
 #define LANTERN_STATUS_PROTOCOL_ID LANTERN_REQRESP_STATUS_PROTOCOL
 #define LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL
-#define LANTERN_BLOCKS_BY_ROOT_PROTOCOL_FALLBACK_ID LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_FALLBACK
 #define LANTERN_STATUS_PREVIEW_BYTES LANTERN_REQRESP_STATUS_PREVIEW_BYTES
 
 struct libp2p_host;
@@ -93,7 +90,6 @@ struct lantern_reqresp_service {
     struct lantern_reqresp_service_callbacks callbacks;
     struct libp2p_protocol_server *status_server;
     struct libp2p_protocol_server *blocks_server;
-    struct libp2p_protocol_server *blocks_server_legacy;
     struct libp2p_subscription *event_subscription;
     int lock_initialized;
     pthread_mutex_t lock;

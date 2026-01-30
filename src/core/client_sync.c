@@ -317,13 +317,29 @@ void persist_anchor_block(
     block->state_root = anchor_block->state_root;
 
     LanternRoot computed_root;
+    const LanternRoot *root_for_vote = anchor_root;
     const LanternRoot *root_to_log = anchor_root;
-    if (!root_to_log)
+    if (!root_for_vote)
     {
         if (lantern_hash_tree_root_block(block, &computed_root) == 0)
         {
-            root_to_log = &computed_root;
+            root_for_vote = &computed_root;
+            root_to_log = root_for_vote;
         }
+    }
+
+    if (root_for_vote)
+    {
+        LanternVote *vote = &stored_anchor.message.proposer_attestation;
+        LanternCheckpoint anchor_checkpoint = {
+            .root = *root_for_vote,
+            .slot = block->slot,
+        };
+        vote->validator_id = block->proposer_index;
+        vote->slot = block->slot;
+        vote->head = anchor_checkpoint;
+        vote->target = anchor_checkpoint;
+        vote->source = anchor_checkpoint;
     }
     char root_hex[ROOT_HEX_BUFFER_LEN];
     root_hex[0] = '\0';
@@ -674,14 +690,21 @@ int restore_persisted_blocks(struct lantern_client *client)
     for (size_t i = 0; i < list.length; ++i)
     {
         const struct lantern_persisted_block *entry = &list.items[i];
+        const LanternBlock *block = &entry->block.message.block;
+        const LanternVote *vote = &entry->block.message.proposer_attestation;
         LanternSignedVote persisted_proposer;
-        memset(&persisted_proposer, 0, sizeof(persisted_proposer));
-        persisted_proposer.data = entry->block.message.proposer_attestation;
-        persisted_proposer.signature = entry->block.signatures.proposer_signature;
+        const LanternSignedVote *proposer_ptr = NULL;
+        if (vote->slot == block->slot && vote->validator_id == block->proposer_index)
+        {
+            memset(&persisted_proposer, 0, sizeof(persisted_proposer));
+            persisted_proposer.data = *vote;
+            persisted_proposer.signature = entry->block.signatures.proposer_signature;
+            proposer_ptr = &persisted_proposer;
+        }
         if (lantern_fork_choice_add_block(
                 &client->fork_choice,
-                &entry->block.message.block,
-                &persisted_proposer,
+                block,
+                proposer_ptr,
                 &client->state.latest_justified,
                 &client->state.latest_finalized,
                 &entry->root)

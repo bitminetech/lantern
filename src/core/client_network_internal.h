@@ -108,7 +108,6 @@ struct block_request_ctx
     uint32_t *depths;               /**< Backfill depth per root */
     size_t root_count;              /**< Number of roots requested */
     const char *protocol_id;        /**< Protocol ID string */
-    bool tried_fallback;            /**< True if fallback protocol already attempted */
 };
 
 

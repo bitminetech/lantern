@@ -108,7 +108,6 @@ static void lantern_reqresp_service_clear(struct lantern_reqresp_service *servic
     service->callbacks.collect_blocks = NULL;
     service->status_server = NULL;
     service->blocks_server = NULL;
-    service->blocks_server_legacy = NULL;
     service->event_subscription = NULL;
 }
 
@@ -135,9 +134,6 @@ void lantern_reqresp_service_reset(struct lantern_reqresp_service *service) {
 
     if (service->blocks_server && host) {
         (void)libp2p_host_unlisten(host, service->blocks_server);
-    }
-    if (service->blocks_server_legacy && host) {
-        (void)libp2p_host_unlisten(host, service->blocks_server_legacy);
     }
     lantern_reqresp_service_clear(service);
 }
@@ -2630,10 +2626,6 @@ static void blocks_on_open_primary(libp2p_stream_t *stream, void *user_data) {
     blocks_on_open_impl(stream, user_data, LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID);
 }
 
-static void blocks_on_open_legacy(libp2p_stream_t *stream, void *user_data) {
-    blocks_on_open_impl(stream, user_data, LANTERN_BLOCKS_BY_ROOT_PROTOCOL_FALLBACK_ID);
-}
-
 int lantern_reqresp_service_start(
     struct lantern_reqresp_service *service,
     const struct lantern_reqresp_service_config *config) {
@@ -2658,7 +2650,6 @@ int lantern_reqresp_service_start(
     status_def.user_data = service;
 
     const char *blocks_protocol_primary = LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
-    const char *blocks_protocol_fallback = LANTERN_BLOCKS_BY_ROOT_PROTOCOL_FALLBACK_ID;
 
     libp2p_protocol_def_t blocks_def;
     memset(&blocks_def, 0, sizeof(blocks_def));
@@ -2674,25 +2665,6 @@ int lantern_reqresp_service_start(
     if (libp2p_host_listen_protocol(service->host, &blocks_def, &service->blocks_server) != 0) {
         lantern_reqresp_service_reset(service);
         return -1;
-    }
-
-    if (blocks_protocol_fallback
-        && blocks_protocol_primary
-        && strcmp(blocks_protocol_fallback, blocks_protocol_primary) != 0) {
-        libp2p_protocol_def_t blocks_legacy_def;
-        memset(&blocks_legacy_def, 0, sizeof(blocks_legacy_def));
-        blocks_legacy_def.protocol_id = blocks_protocol_fallback;
-        blocks_legacy_def.read_mode = LIBP2P_READ_PULL;
-        blocks_legacy_def.on_open = blocks_on_open_legacy;
-        blocks_legacy_def.user_data = service;
-        if (libp2p_host_listen_protocol(
-                service->host,
-                &blocks_legacy_def,
-                &service->blocks_server_legacy)
-            != 0) {
-            lantern_reqresp_service_reset(service);
-            return -1;
-        }
     }
 
     lantern_log_info(
