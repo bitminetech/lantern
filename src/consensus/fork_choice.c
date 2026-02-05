@@ -193,6 +193,33 @@ static int map_insert(LanternForkChoice *store, const LanternRoot *root, size_t 
     }
 }
 
+static bool map_remove(LanternForkChoice *store, const LanternRoot *root) {
+    if (!store || !root || store->index_cap == 0 || !store->index_entries) {
+        return false;
+    }
+    uint64_t hash = root_hash(root);
+    size_t mask = store->index_cap - 1;
+    size_t pos = (size_t)(hash & mask);
+    size_t start = pos;
+    while (true) {
+        struct lantern_fork_choice_root_index_entry *entry = &store->index_entries[pos];
+        if (!entry->occupied) {
+            return false;
+        }
+        if (!entry->tombstone && root_compare(&entry->root, root) == 0) {
+            entry->tombstone = true;
+            if (store->index_len > 0) {
+                store->index_len -= 1;
+            }
+            return true;
+        }
+        pos = (pos + 1) & mask;
+        if (pos == start) {
+            return false;
+        }
+    }
+}
+
 static void votes_reset(struct lantern_fork_choice_vote_entry *entries, size_t count) {
     if (!entries) {
         return;
@@ -200,6 +227,86 @@ static void votes_reset(struct lantern_fork_choice_vote_entry *entries, size_t c
     for (size_t i = 0; i < count; ++i) {
         entries[i].has_checkpoint = false;
         memset(&entries[i].checkpoint, 0, sizeof(entries[i].checkpoint));
+    }
+}
+
+struct vote_undo_entry {
+    size_t validator_index;
+    struct lantern_fork_choice_vote_entry previous_known;
+    struct lantern_fork_choice_vote_entry previous_new;
+};
+
+struct vote_undo_list {
+    struct vote_undo_entry *entries;
+    size_t length;
+    size_t capacity;
+};
+
+static void vote_undo_reset(struct vote_undo_list *undo) {
+    if (!undo) {
+        return;
+    }
+    free(undo->entries);
+    undo->entries = NULL;
+    undo->length = 0;
+    undo->capacity = 0;
+}
+
+static int vote_undo_save(
+    struct vote_undo_list *undo,
+    uint8_t *touched,
+    size_t touched_bytes,
+    LanternForkChoice *store,
+    size_t validator_index) {
+    if (!undo || !store) {
+        return -1;
+    }
+    if (!touched || touched_bytes == 0) {
+        return 0;
+    }
+    if (validator_index >= store->validator_count) {
+        return 0;
+    }
+    size_t byte = validator_index / 8u;
+    if (byte >= touched_bytes) {
+        return -1;
+    }
+    uint8_t bit = (uint8_t)(1u << (validator_index % 8u));
+    if ((touched[byte] & bit) != 0) {
+        return 0;
+    }
+    touched[byte] |= bit;
+
+    if (undo->length == undo->capacity) {
+        size_t next = undo->capacity == 0 ? 8u : (undo->capacity + (undo->capacity / 2u));
+        if (next < undo->capacity) {
+            return -1;
+        }
+        struct vote_undo_entry *expanded = realloc(undo->entries, next * sizeof(*expanded));
+        if (!expanded) {
+            return -1;
+        }
+        undo->entries = expanded;
+        undo->capacity = next;
+    }
+    undo->entries[undo->length].validator_index = validator_index;
+    undo->entries[undo->length].previous_known = store->known_votes[validator_index];
+    undo->entries[undo->length].previous_new = store->new_votes[validator_index];
+    undo->length += 1;
+    return 0;
+}
+
+static void vote_undo_restore(const struct vote_undo_list *undo, LanternForkChoice *store) {
+    if (!undo || !store) {
+        return;
+    }
+    for (size_t i = 0; i < undo->length; ++i) {
+        size_t validator_index = undo->entries[i].validator_index;
+        if (validator_index >= store->validator_count) {
+            continue;
+        }
+        store->known_votes[validator_index] = undo->entries[i].previous_known;
+        store->new_votes[validator_index] = undo->entries[i].previous_new;
     }
 }
 
@@ -393,6 +500,7 @@ static int register_block(
     size_t new_index = store->block_len;
     store->block_len += 1;
     if (map_insert(store, root, new_index) != 0) {
+        store->block_len -= 1;
         return -1;
     }
     update_children_parent_index(store, root, new_index);
@@ -524,6 +632,37 @@ int lantern_fork_choice_add_block(
             return -1;
         }
     }
+
+    LanternCheckpoint previous_justified = store->latest_justified;
+    LanternCheckpoint previous_finalized = store->latest_finalized;
+    LanternRoot previous_head = store->head;
+    bool had_head = store->has_head;
+
+    size_t existing_index = 0;
+    bool existed = map_lookup(store, &block_root, &existing_index);
+    struct lantern_fork_choice_block_entry previous_entry;
+    memset(&previous_entry, 0, sizeof(previous_entry));
+    if (existed) {
+        if (!store->blocks || existing_index >= store->block_len) {
+            return -1;
+        }
+        previous_entry = store->blocks[existing_index];
+    }
+
+    size_t previous_block_len = store->block_len;
+
+    size_t validator_count = store->validator_count;
+    size_t touched_bytes = validator_count / 8u + (validator_count % 8u != 0 ? 1u : 0u);
+    uint8_t *touched = NULL;
+    if (touched_bytes > 0) {
+        touched = calloc(touched_bytes, 1);
+        if (!touched) {
+            return -1;
+        }
+    }
+
+    struct vote_undo_list undo = {0};
+
     if (trace_finalization) {
         format_root_hex(&block_root, block_hex, sizeof(block_hex));
         format_root_hex(&block->parent_root, parent_hex, sizeof(parent_hex));
@@ -533,10 +672,12 @@ int lantern_fork_choice_add_block(
         }
     }
     if (register_block(store, &block_root, &block->parent_root, block->slot, post_justified, post_finalized) != 0) {
+        free(touched);
+        vote_undo_reset(&undo);
         return -1;
     }
     if (update_global_checkpoints(store, post_justified, post_finalized) != 0) {
-        return -1;
+        goto rollback;
     }
 
     LanternAttestations expanded;
@@ -546,25 +687,36 @@ int lantern_fork_choice_add_block(
             store->validator_count,
             &expanded)
         != 0) {
-        lantern_attestations_reset(&expanded);
-        return -1;
+        goto rollback_attestations;
     }
     for (size_t i = 0; i < expanded.length; ++i) {
+        size_t validator_index = (size_t)expanded.data[i].validator_id;
+        if (vote_undo_save(&undo, touched, touched_bytes, store, validator_index) != 0) {
+            lantern_attestations_reset(&expanded);
+            goto rollback;
+        }
         LanternSignedVote wrapped_vote;
         memset(&wrapped_vote, 0, sizeof(wrapped_vote));
         wrapped_vote.data = expanded.data[i];
         if (lantern_fork_choice_add_vote(store, &wrapped_vote, true) != 0) {
             lantern_attestations_reset(&expanded);
-            return -1;
+            goto rollback;
         }
     }
     lantern_attestations_reset(&expanded);
     if (lantern_fork_choice_recompute_head(store) != 0) {
-        return -1;
+        goto rollback;
+    }
+
+    if (proposer_attestation) {
+        size_t proposer_index = (size_t)block->proposer_index;
+        if (vote_undo_save(&undo, touched, touched_bytes, store, proposer_index) != 0) {
+            goto rollback;
+        }
     }
     if (lantern_fork_choice_stage_proposer_vote(store, proposer_attestation, block->slot, block->proposer_index)
         != 0) {
-        return -1;
+        goto rollback;
     }
     lean_metrics_record_fork_choice_block_time(lantern_time_now_seconds() - metrics_start);
     if (trace_finalization) {
@@ -583,7 +735,38 @@ int lantern_fork_choice_add_block(
             post_justified ? post_justified->slot : 0u,
             post_finalized ? post_finalized->slot : 0u);
     }
+    free(touched);
+    vote_undo_reset(&undo);
     return 0;
+
+rollback_attestations:
+    lantern_attestations_reset(&expanded);
+
+rollback:
+    store->latest_justified = previous_justified;
+    store->latest_finalized = previous_finalized;
+    store->head = previous_head;
+    store->has_head = had_head;
+
+    vote_undo_restore(&undo, store);
+
+    if (existed) {
+        store->blocks[existing_index] = previous_entry;
+    } else {
+        size_t new_index = store->block_len > 0 ? (store->block_len - 1u) : 0u;
+        for (size_t i = 0; i + 1u < store->block_len; ++i) {
+            struct lantern_fork_choice_block_entry *entry = &store->blocks[i];
+            if (entry->parent_index == new_index && root_compare(&entry->parent_root, &block_root) == 0) {
+                entry->parent_index = SIZE_MAX;
+            }
+        }
+        map_remove(store, &block_root);
+        store->block_len = previous_block_len;
+    }
+
+    free(touched);
+    vote_undo_reset(&undo);
+    return -1;
 }
 
 int lantern_fork_choice_add_vote(

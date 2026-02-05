@@ -38,6 +38,10 @@
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
 
+enum {
+    ROOT_HEX_BUFFER_LEN = (LANTERN_ROOT_SIZE * 2u) + 3u,
+};
+
 
 /* ============================================================================
  * Sync Logging
@@ -88,9 +92,11 @@ static bool lantern_client_update_blocks_request_tracking(
     uint32_t *out_failure_count,
     bool *out_entry_found);
 static const char *lantern_blocks_request_outcome_text(enum lantern_blocks_request_outcome outcome);
-static void lantern_client_clear_pending_parent_requested(
+static void lantern_client_handle_pending_parent_request_result(
     struct lantern_client *client,
-    const LanternRoot *request_root);
+    const LanternRoot *request_roots,
+    size_t root_count,
+    enum lantern_blocks_request_outcome outcome);
 static void lantern_client_request_status_after_blocks_success(
     struct lantern_client *client,
     const char *peer_id);
@@ -904,10 +910,11 @@ static const char *lantern_blocks_request_outcome_text(enum lantern_blocks_reque
  *
  * @note Thread safety: This function acquires pending_lock
  */
-static void lantern_client_clear_pending_parent_requested_roots(
+static void lantern_client_handle_pending_parent_request_result(
     struct lantern_client *client,
     const LanternRoot *request_roots,
-    size_t root_count)
+    size_t root_count,
+    enum lantern_blocks_request_outcome outcome)
 {
     if (!client || !request_roots || root_count == 0)
     {
@@ -920,9 +927,13 @@ static void lantern_client_clear_pending_parent_requested_roots(
         return;
     }
 
-    for (size_t i = 0; i < client->pending_blocks.length; ++i)
+    bool track_empty = outcome == LANTERN_BLOCKS_REQUEST_EMPTY;
+    struct lantern_pending_block_list *list = &client->pending_blocks;
+
+    for (size_t i = list->length; i-- > 0;)
     {
-        struct lantern_pending_block *entry = &client->pending_blocks.items[i];
+        struct lantern_pending_block *entry = &list->items[i];
+        bool matches = false;
         for (size_t j = 0; j < root_count; ++j)
         {
             if (lantern_root_is_zero(&request_roots[j]))
@@ -931,32 +942,49 @@ static void lantern_client_clear_pending_parent_requested_roots(
             }
             if (memcmp(entry->parent_root.bytes, request_roots[j].bytes, LANTERN_ROOT_SIZE) == 0)
             {
-                entry->parent_requested = false;
+                matches = true;
                 break;
             }
         }
+        if (!matches)
+        {
+            continue;
+        }
+
+        entry->parent_requested = false;
+        if (!track_empty)
+        {
+            continue;
+        }
+
+        if (entry->parent_request_failures < UINT32_MAX)
+        {
+            entry->parent_request_failures += 1u;
+        }
+        if (entry->parent_request_failures < LANTERN_MAX_PENDING_PARENT_EMPTY_RESPONSES)
+        {
+            continue;
+        }
+
+        char root_hex[ROOT_HEX_BUFFER_LEN];
+        char parent_hex[ROOT_HEX_BUFFER_LEN];
+        format_root_hex(&entry->root, root_hex, sizeof(root_hex));
+        format_root_hex(&entry->parent_root, parent_hex, sizeof(parent_hex));
+        struct lantern_log_metadata meta = {
+            .validator = client->node_id,
+            .peer = entry->peer_text[0] ? entry->peer_text : NULL,
+        };
+        lantern_log_warn(
+            "sync",
+            &meta,
+            "dropping pending block after empty parent fetches root=%s parent=%s attempts=%" PRIu32,
+            root_hex[0] ? root_hex : "0x0",
+            parent_hex[0] ? parent_hex : "0x0",
+            entry->parent_request_failures);
+        pending_block_list_remove(list, i);
     }
 
     lantern_client_unlock_pending(client, locked);
-}
-
-/**
- * @brief Clear parent_requested flags for pending blocks matching request_root.
- *
- * @param client       Client instance
- * @param request_root Requested parent root
- *
- * @note Thread safety: This function acquires pending_lock
- */
-static void lantern_client_clear_pending_parent_requested(
-    struct lantern_client *client,
-    const LanternRoot *request_root)
-{
-    if (!request_root)
-    {
-        return;
-    }
-    lantern_client_clear_pending_parent_requested_roots(client, request_root, 1u);
 }
 
 
@@ -1237,6 +1265,19 @@ static void lantern_client_on_peer_status(
     bool head_known = false;
     peer_status_local_view(client, &peer_status->head.root, &local_slot, &head_known);
 
+    struct lantern_log_metadata meta = {
+        .validator = client->node_id,
+        .peer = peer_copy[0] ? peer_copy : NULL,
+    };
+    lantern_log_debug(
+        "sync",
+        &meta,
+        "peer status view head_slot=%" PRIu64 " finalized_slot=%" PRIu64 " head_known=%s local_slot=%" PRIu64,
+        peer_status->head.slot,
+        peer_status->finalized.slot,
+        head_known ? "true" : "false",
+        local_slot);
+
     /* If we bootstrapped via genesis fallback and the peer advertises the genesis head,
        adopt the peer's head root as our anchor so that subsequent block requests use
        the correct root. */
@@ -1408,7 +1449,11 @@ void lantern_client_on_blocks_request_complete_batch(
             failure_count);
     }
 
-    lantern_client_clear_pending_parent_requested_roots(client, request_roots, root_count);
+    lantern_client_handle_pending_parent_request_result(
+        client,
+        request_roots,
+        root_count,
+        outcome);
 
     if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS && peer_id && peer_id[0] != '\0')
     {

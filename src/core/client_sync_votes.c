@@ -47,6 +47,7 @@ bool lantern_client_verify_vote_signature(
     const struct lantern_client *client,
     const LanternSignedVote *vote,
     const LanternSignature *signature,
+    const LanternState *state_override,
     const struct lantern_log_metadata *meta,
     const char *context);
 
@@ -418,10 +419,37 @@ static bool process_vote_locked(
         return false;
     }
 
+    LanternState target_state;
+    lantern_state_init(&target_state);
+    const LanternState *sig_state = lantern_client_state_for_root_locked(
+        client,
+        &vote->data.target.root,
+        &target_state,
+        NULL);
+    if (!sig_state)
+    {
+        char target_hex[VOTE_ROOT_HEX_BUFFER_LEN];
+        format_root_hex(&vote->data.target.root, target_hex, sizeof(target_hex));
+        lantern_log_debug(
+            "gossip",
+            meta,
+            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " (missing target state root=%s)",
+            vote->data.validator_id,
+            vote->data.slot,
+            target_hex[0] ? target_hex : "0x0");
+        lantern_vote_rejection_set(
+            rejection,
+            "missing target state root=%s",
+            target_hex[0] ? target_hex : "0x0");
+        lantern_state_reset(&target_state);
+        return false;
+    }
+
     if (!lantern_client_verify_vote_signature(
             client,
             vote,
             &vote->signature,
+            sig_state,
             meta,
             "gossip"))
     {
@@ -432,8 +460,10 @@ static bool process_vote_locked(
             vote->data.validator_id,
             vote->data.slot);
         lantern_vote_rejection_set(rejection, "invalid XMSS signature");
+        lantern_state_reset(&target_state);
         return false;
     }
+    lantern_state_reset(&target_state);
 
     if (!validate_vote_cache_state(client, &vote->data, meta, rejection))
     {
@@ -470,6 +500,7 @@ static bool process_vote_locked(
  * @param client     Client instance
  * @param vote       Signed vote to verify
  * @param signature  Signature to verify
+ * @param state_override Optional state to use for validator pubkey lookup
  * @param meta       Logging metadata
  * @param context    Description of signature context for logging
  * @return true if signature is valid
@@ -480,6 +511,7 @@ bool lantern_client_verify_vote_signature(
     const struct lantern_client *client,
     const LanternSignedVote *vote,
     const LanternSignature *signature,
+    const LanternState *state_override,
     const struct lantern_log_metadata *meta,
     const char *context)
 {
@@ -488,47 +520,85 @@ bool lantern_client_verify_vote_signature(
         return false;
     }
     const uint8_t *pubkey_bytes = NULL;
-    bool state_has_registry = client->has_state;
-    size_t state_validator_count = 0;
-    if (state_has_registry)
+    if (state_override)
     {
-        state_validator_count = lantern_state_validator_count(&client->state);
-    }
-    if (state_has_registry && state_validator_count > 0)
-    {
+        size_t state_validator_count = lantern_state_validator_count(state_override);
+        if (state_validator_count == 0)
+        {
+            lantern_log_warn(
+                "state",
+                meta,
+                "missing validator registry for %s signature verification",
+                context ? context : "vote");
+            return false;
+        }
         if (vote->data.validator_id >= state_validator_count)
         {
             lantern_log_warn(
                 "state",
                 meta,
-                "validator=%" PRIu64 " exceeds parent state validator count=%zu",
+                "validator=%" PRIu64 " exceeds target state validator count=%zu",
                 vote->data.validator_id,
                 state_validator_count);
             return false;
         }
         pubkey_bytes = lantern_state_validator_pubkey(
-            &client->state,
+            state_override,
             (size_t)vote->data.validator_id);
-        if (lantern_validator_pubkey_is_zero(pubkey_bytes))
-        {
-            pubkey_bytes = NULL;
-        }
-    }
-    if (!pubkey_bytes)
-    {
-        const struct lantern_validator_record *record =
-            lantern_client_get_validator_record(client, vote->data.validator_id);
-        if (!record || !record->has_pubkey_bytes)
+        if (!pubkey_bytes || lantern_validator_pubkey_is_zero(pubkey_bytes))
         {
             lantern_log_warn(
                 "state",
                 meta,
-                "missing validator %s pubkey for validator=%" PRIu64,
-                context ? context : "signature",
-                vote->data.validator_id);
+                "missing validator pubkey for %s signature verification",
+                context ? context : "vote");
             return false;
         }
-        pubkey_bytes = record->pubkey_bytes;
+    }
+    else
+    {
+        bool state_has_registry = client->has_state;
+        size_t state_validator_count = 0;
+        if (state_has_registry)
+        {
+            state_validator_count = lantern_state_validator_count(&client->state);
+        }
+        if (state_has_registry && state_validator_count > 0)
+        {
+            if (vote->data.validator_id >= state_validator_count)
+            {
+                lantern_log_warn(
+                    "state",
+                    meta,
+                    "validator=%" PRIu64 " exceeds parent state validator count=%zu",
+                    vote->data.validator_id,
+                    state_validator_count);
+                return false;
+            }
+            pubkey_bytes = lantern_state_validator_pubkey(
+                &client->state,
+                (size_t)vote->data.validator_id);
+            if (lantern_validator_pubkey_is_zero(pubkey_bytes))
+            {
+                pubkey_bytes = NULL;
+            }
+        }
+        if (!pubkey_bytes)
+        {
+            const struct lantern_validator_record *record =
+                lantern_client_get_validator_record(client, vote->data.validator_id);
+            if (!record || !record->has_pubkey_bytes)
+            {
+                lantern_log_warn(
+                    "state",
+                    meta,
+                    "missing validator %s pubkey for validator=%" PRIu64,
+                    context ? context : "signature",
+                    vote->data.validator_id);
+                return false;
+            }
+            pubkey_bytes = record->pubkey_bytes;
+        }
     }
     LanternRoot vote_root;
     if (lantern_hash_tree_root_attestation_data(&vote->data.data, &vote_root) != 0)
@@ -552,8 +622,9 @@ bool lantern_client_verify_vote_signature(
         lantern_log_warn(
             "state",
             meta,
-            "invalid XMSS signature validator=%" PRIu64 " context=%s",
+            "invalid XMSS signature validator=%" PRIu64 " slot=%" PRIu64 " context=%s",
             vote->data.validator_id,
+            vote->data.slot,
             context ? context : "unknown");
     }
     return is_signature_valid;
@@ -803,6 +874,17 @@ void lantern_client_record_vote(
                 source_hex[0] ? source_hex : "0x0",
                 vote_copy.data.source.slot,
                 reason_text);
+        }
+        if (rejection.has_unknown_root && !lantern_root_is_zero(&rejection.unknown_root))
+        {
+            char root_hex[VOTE_ROOT_HEX_BUFFER_LEN];
+            format_root_hex(&rejection.unknown_root, root_hex, sizeof(root_hex));
+            lantern_log_info(
+                "reqresp",
+                &meta,
+                "dropping vote unknown root=%s slot=%" PRIu64 " (no backfill)",
+                root_hex[0] ? root_hex : "0x0",
+                rejection.unknown_slot);
         }
     }
 }

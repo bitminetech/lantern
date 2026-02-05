@@ -89,6 +89,7 @@ struct lantern_pending_block {
     LanternRoot parent_root;
     char peer_text[128];
     bool parent_requested;
+    uint32_t parent_request_failures;
     uint64_t received_ms;
     uint32_t backfill_depth;
 };

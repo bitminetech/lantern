@@ -41,6 +41,10 @@
 /* ============================================================================
  * Constants
  * ============================================================================ */
+enum
+{
+    ROOT_HEX_BUFFER_LEN = (LANTERN_ROOT_SIZE * 2u) + 3u,
+};
 
 /* ============================================================================
  * Forward Declarations
@@ -640,12 +644,22 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
         err);
     if (err != 0 || !stream)
     {
+        char root_hex[ROOT_HEX_BUFFER_LEN];
+        root_hex[0] = '\0';
+        if (ctx->root_count > 0)
+        {
+            format_root_hex(&ctx->roots[0], root_hex, sizeof(root_hex));
+        }
+        const char *reason = connection_reason_text(err);
         lantern_log_warn(
             "reqresp",
             &meta,
-            "failed to open %s stream err=%d",
+            "failed to open %s stream err=%d (%s) roots=%zu first_root=%s",
             ctx->protocol_id,
-            err);
+            err,
+            reason ? reason : "-",
+            ctx->root_count,
+            root_hex[0] ? root_hex : "0x0");
         if (stream)
         {
             libp2p_stream_free(stream);
@@ -831,13 +845,15 @@ static int schedule_blocks_request_batch(
         ctx);
     if (rc != 0)
     {
+        const char *reason = connection_reason_text(rc);
         lantern_log_warn(
             "reqresp",
             &(const struct lantern_log_metadata){
                 .validator = client->node_id,
                 .peer = ctx->peer_text[0] ? ctx->peer_text : NULL},
-            "libp2p open stream failed rc=%d",
-            rc);
+            "libp2p open stream failed rc=%d (%s)",
+            rc,
+            reason ? reason : "-");
         block_request_ctx_free(ctx);
         return LANTERN_CLIENT_ERR_NETWORK;
     }

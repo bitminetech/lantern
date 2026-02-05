@@ -27,6 +27,7 @@
 
 #include "lantern/core/client.h"
 #include "lantern/consensus/containers.h"
+#include "lantern/consensus/state.h"
 #include "lantern/support/log.h"
 
 #include <stdbool.h>
@@ -49,6 +50,8 @@ typedef struct peer_id peer_id_t;
 #define LANTERN_MAX_BLOCKS_PER_REQUEST 10u
 /** Maximum backfill depth when requesting parents */
 #define LANTERN_MAX_BACKFILL_DEPTH LANTERN_PENDING_BLOCK_LIMIT
+/** Maximum consecutive empty parent fetches before dropping pending blocks */
+#define LANTERN_MAX_PENDING_PARENT_EMPTY_RESPONSES 8u
 
 
 /* ============================================================================
@@ -134,6 +137,27 @@ bool lantern_client_block_known_locked(
     struct lantern_client *client,
     const LanternRoot *root,
     uint64_t *out_slot);
+
+/**
+ * Get a state snapshot for a specific block root.
+ *
+ * Returns a pointer to either the client's current state (if it matches the root)
+ * or a scratch state populated from storage/replay. When a scratch state is used,
+ * the caller must reset it with lantern_state_reset().
+ *
+ * @param client          Client instance
+ * @param root            Block root to resolve
+ * @param scratch         Scratch state storage (must be initialized)
+ * @param out_is_scratch  Output true if scratch is used
+ * @return Pointer to state to use, or NULL if unavailable
+ *
+ * @note Thread safety: Caller must hold state_lock
+ */
+const LanternState *lantern_client_state_for_root_locked(
+    struct lantern_client *client,
+    const LanternRoot *root,
+    LanternState *scratch,
+    bool *out_is_scratch);
 
 
 /* ============================================================================
@@ -504,6 +528,29 @@ void lantern_client_request_pending_parent_after_blocks(
     struct lantern_client *client,
     const char *peer_text,
     const LanternRoot *request_root);
+
+/**
+ * Attempt to schedule a blocks_by_root request using peer selection.
+ *
+ * Selects an eligible peer based on status tracking and schedules a request
+ * for the provided roots. Returns false if no eligible peer is available or
+ * scheduling fails.
+ *
+ * @param client      Client instance
+ * @param peer_text   Preferred peer ID string (may be NULL)
+ * @param roots       Block roots to request
+ * @param depths      Backfill depth per root (may be NULL)
+ * @param root_count  Number of roots
+ * @return true if scheduling succeeded, false otherwise
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+bool lantern_client_try_schedule_blocks_request_batch(
+    struct lantern_client *client,
+    const char *peer_text,
+    const LanternRoot *roots,
+    const uint32_t *depths,
+    size_t root_count);
 
 
 /**
