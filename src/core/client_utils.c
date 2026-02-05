@@ -494,7 +494,9 @@ bool lantern_client_current_slot(const struct lantern_client *client, uint64_t *
     {
         return false;
     }
-    if (store->has_anchor && store->intervals_per_slot > 0)
+    if (!client->debug_disable_fork_choice_time
+        && store->has_anchor
+        && store->intervals_per_slot > 0)
     {
         *out_slot = store->time_intervals / store->intervals_per_slot;
         return true;
