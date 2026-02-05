@@ -26,3 +26,6 @@ external-clients/qlean-mini/example/1-network/genesis/
 
 # Local docs/artifacts not needed in container build context
 internal-docs/
+tools/leanSpec/
+tools/lean-quickstart/
+external-clients/

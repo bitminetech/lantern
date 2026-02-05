@@ -118,9 +118,6 @@ bool lantern_signature_verify(
         sizeof(signature->bytes));
     double elapsed = get_time_seconds() - start;
     lean_metrics_record_pq_signature_verification(elapsed);
-    if (verify_rc != 1) {
-        lantern_log_debug("signature", NULL, "pq_verify_ssz rc=%d", verify_rc);
-    }
     return verify_rc == 1;
 }
 
