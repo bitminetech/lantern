@@ -49,6 +49,38 @@ enum {
 
 static const uint64_t SYNC_PROGRESS_LOG_INTERVAL_MS = 5000u;
 
+static void maybe_retry_orphan_parent_request(
+    struct lantern_client *client,
+    uint64_t now_ms,
+    bool should_request_parent,
+    const char *request_peer,
+    size_t pending,
+    size_t orphan_count,
+    const struct lantern_log_metadata *meta)
+{
+    if (!client || !meta)
+    {
+        return;
+    }
+    if (!should_request_parent || !request_peer || request_peer[0] == '\0')
+    {
+        return;
+    }
+    if (client->sync_last_log_ms != 0
+        && now_ms < client->sync_last_log_ms + SYNC_PROGRESS_LOG_INTERVAL_MS)
+    {
+        return;
+    }
+    lantern_log_info(
+        "sync",
+        meta,
+        "orphan recovery requesting parent pending=%zu orphans=%zu",
+        pending,
+        orphan_count);
+    lantern_client_request_pending_parent_after_blocks(client, request_peer, NULL);
+    client->sync_last_log_ms = now_ms;
+}
+
 
 /* ============================================================================
  * Forward Declarations
@@ -533,8 +565,14 @@ static void maybe_log_sync_progress(
         lantern_client_unlock_state(client, state_locked);
     }
     bool has_orphans = orphan_count > 0;
-    bool behind_finalized = local_slot < network_finalized;
-    bool syncing = behind_finalized || has_orphans;
+    bool behind_finalized = network_finalized > local_slot;
+    bool one_slot_skew = behind_finalized && (network_finalized - local_slot == 1u);
+    if (one_slot_skew && !has_orphans)
+    {
+        /* Treat single-slot finalized lead as transient to avoid unnecessary sync mode churn. */
+        behind_finalized = false;
+    }
+    bool syncing = behind_finalized;
 
     uint64_t now_ms = monotonic_millis();
     struct lantern_log_metadata meta = {.validator = client->node_id};
@@ -551,10 +589,26 @@ static void maybe_log_sync_progress(
         if (was_idle)
         {
             /* Hold SYNCING for one status update to honor IDLE -> SYNCING transition. */
+            maybe_retry_orphan_parent_request(
+                client,
+                now_ms,
+                should_request_parent,
+                request_peer,
+                pending,
+                orphan_count,
+                &meta);
             return;
         }
         if (!allow_complete)
         {
+            maybe_retry_orphan_parent_request(
+                client,
+                now_ms,
+                should_request_parent,
+                request_peer,
+                pending,
+                orphan_count,
+                &meta);
             return;
         }
         client->sync_state = LANTERN_SYNC_STATE_SYNCED;
@@ -583,6 +637,14 @@ static void maybe_log_sync_progress(
             client->sync_last_imported_blocks = 0;
             client->sync_target_slot = 0;
         }
+        maybe_retry_orphan_parent_request(
+            client,
+            now_ms,
+            should_request_parent,
+            request_peer,
+            pending,
+            orphan_count,
+            &meta);
         return;
     }
 
