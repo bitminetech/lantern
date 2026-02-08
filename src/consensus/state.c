@@ -1347,10 +1347,11 @@ int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, u
     lantern_root_zero(&state->latest_finalized.root);
     state->latest_finalized.slot = 0;
     if (state->latest_finalized.slot != UINT64_MAX) {
-        if (state->latest_finalized.slot > UINT64_MAX - 1u) {
-            lantern_state_reset(state);
-            return -1;
-        }
+        /*
+         * Match LeanSpec: justified_slots is indexed starting at
+         * (latest_finalized.slot + 1), so finalized slots are implicitly
+         * justified and not explicitly represented in the bitlist.
+         */
         state->justified_slots_offset = state->latest_finalized.slot + 1u;
     }
 
@@ -2051,6 +2052,12 @@ int lantern_state_process_block(
             }
         }
     }
+
+    /*
+     * LeanSpec state transition applies only block.body.attestations.
+     * The proposer's attestation is consumed by forkchoice logic, not by
+     * consensus state transition hashing.
+     */
     if (state->fork_choice) {
         if (lantern_fork_choice_add_block(
                 state->fork_choice,

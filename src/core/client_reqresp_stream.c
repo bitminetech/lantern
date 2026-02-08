@@ -169,6 +169,8 @@ static int read_response_code_prefix(
     uint8_t *out_frame_code,
     uint8_t *out_response_code_byte,
     uint8_t *out_response_code,
+    bool *out_missing_response_code,
+    uint8_t *out_header_first_byte,
     ssize_t *out_err);
 static int read_payload_header_first_byte(
     libp2p_stream_t *stream,
@@ -960,9 +962,10 @@ static int read_response_code_prefix(
     uint8_t *out_frame_code,
     uint8_t *out_response_code_byte,
     uint8_t *out_response_code,
+    bool *out_missing_response_code,
+    uint8_t *out_header_first_byte,
     ssize_t *out_err)
 {
-    (void)service;
     (void)peer_text;
     if (!out_frame_code || !out_response_code_byte)
     {
@@ -975,6 +978,14 @@ static int read_response_code_prefix(
 
     *out_frame_code = 0;
     *out_response_code_byte = 0;
+    if (out_missing_response_code)
+    {
+        *out_missing_response_code = false;
+    }
+    if (out_header_first_byte)
+    {
+        *out_header_first_byte = 0;
+    }
 
     if (!expect_code)
     {
@@ -1011,10 +1022,40 @@ static int read_response_code_prefix(
     *out_frame_code = response_code_byte;
     *out_response_code_byte = response_code_byte;
 
+    bool allow_missing_response_code =
+        service != NULL && service->callbacks.context != NULL;
+
+    if (response_code_byte > LANTERN_REQRESP_RESPONSE_RESOURCE_UNAVAILABLE
+        && allow_missing_response_code)
+    {
+        if (out_missing_response_code)
+        {
+            *out_missing_response_code = true;
+        }
+        if (out_header_first_byte)
+        {
+            *out_header_first_byte = response_code_byte;
+        }
+        if (out_response_code)
+        {
+            *out_response_code = LANTERN_REQRESP_RESPONSE_SUCCESS;
+        }
+        if (out_err)
+        {
+            *out_err = 0;
+        }
+        lantern_log_warn(
+            "reqresp",
+            meta,
+            "response code missing, using legacy no-code framing first_byte=0x%02x",
+            (unsigned)response_code_byte);
+        return 0;
+    }
+
     uint8_t mapped_code = response_code_byte;
     if (response_code_byte > LANTERN_REQRESP_RESPONSE_RESOURCE_UNAVAILABLE)
     {
-        mapped_code = (response_code_byte <= 127)
+        mapped_code = (response_code_byte <= 127u)
             ? LANTERN_REQRESP_RESPONSE_SERVER_ERROR
             : LANTERN_REQRESP_RESPONSE_INVALID_REQUEST;
     }
@@ -1583,6 +1624,8 @@ int lantern_reqresp_read_response_chunk(
     uint64_t resp_deadline_ms = start_ms + LANTERN_REQRESP_RESP_TIMEOUT_MS;
     uint8_t frame_code = 0;
     uint8_t response_code_byte = 0;
+    bool missing_response_code = false;
+    uint8_t missing_code_header_first = 0;
     int rc = read_response_code_prefix(
         service,
         stream,
@@ -1593,6 +1636,8 @@ int lantern_reqresp_read_response_chunk(
         &frame_code,
         &response_code_byte,
         out_response_code,
+        &missing_response_code,
+        &missing_code_header_first,
         out_err);
     if (rc != 0)
     {
@@ -1604,17 +1649,24 @@ int lantern_reqresp_read_response_chunk(
     }
 
     uint8_t header_first_byte = 0;
-    uint64_t header_deadline_ms = expect_code ? resp_deadline_ms : ttfb_deadline_ms;
-    rc = read_payload_header_first_byte(
-        stream,
-        expect_code,
-        &meta,
-        header_deadline_ms,
-        &header_first_byte,
-        out_err);
-    if (rc != 0)
+    if (missing_response_code)
     {
-        return rc;
+        header_first_byte = missing_code_header_first;
+    }
+    else
+    {
+        uint64_t header_deadline_ms = expect_code ? resp_deadline_ms : ttfb_deadline_ms;
+        rc = read_payload_header_first_byte(
+            stream,
+            expect_code,
+            &meta,
+            header_deadline_ms,
+            &header_first_byte,
+            out_err);
+        if (rc != 0)
+        {
+            return rc;
+        }
     }
 
     lantern_log_trace(
@@ -1625,16 +1677,76 @@ int lantern_reqresp_read_response_chunk(
         (unsigned)header_first_byte);
 
     bool legacy_len = false;
-    int payload_rc = read_varint_payload_chunk(
-        stream,
-        header_first_byte,
-        out_data,
-        out_len,
-        &legacy_len,
-        out_err,
-        &meta,
-        "chunk",
-        resp_deadline_ms);
+    int payload_rc = 0;
+    if (missing_response_code)
+    {
+        uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
+        uint64_t payload_len = 0;
+        size_t consumed = 0;
+        payload_rc = read_varint_header_from_first_byte(
+            stream,
+            header_first_byte,
+            header,
+            sizeof(header),
+            &payload_len,
+            &consumed,
+            out_err,
+            &meta,
+            "chunk",
+            resp_deadline_ms);
+        if (payload_rc == 0)
+        {
+            log_varint_header_details(header, consumed, payload_len, &meta, "chunk");
+            payload_rc = validate_payload_len(payload_len, out_err, &meta, "chunk");
+        }
+        if (payload_rc == 0)
+        {
+            if (payload_len == 0)
+            {
+                *out_data = NULL;
+                *out_len = 0;
+            }
+            else
+            {
+                uint8_t *buffer = NULL;
+                payload_rc = read_payload_bytes(
+                    stream,
+                    (size_t)payload_len,
+                    &buffer,
+                    out_err,
+                    &meta,
+                    "chunk",
+                    resp_deadline_ms);
+                if (payload_rc == 0)
+                {
+                    *out_data = buffer;
+                    *out_len = (size_t)payload_len;
+                }
+            }
+        }
+        if (payload_rc == 0)
+        {
+            if (out_err)
+            {
+                *out_err = 0;
+            }
+            log_payload_read_complete(*out_data, *out_len, &meta, "chunk");
+            legacy_len = true;
+        }
+    }
+    else
+    {
+        payload_rc = read_varint_payload_chunk(
+            stream,
+            header_first_byte,
+            out_data,
+            out_len,
+            &legacy_len,
+            out_err,
+            &meta,
+            "chunk",
+            resp_deadline_ms);
+    }
     if (payload_rc == 0 && legacy_len && service && service->callbacks.context && peer_text[0])
     {
         lantern_client_mark_peer_reqresp_legacy(

@@ -259,8 +259,8 @@ static int test_genesis_justification_bits(void) {
     block.parent_root = parent_root;
 
     expect_zero(lantern_state_process_block(&state, &block, NULL, NULL), "process first block");
-    assert(state.justified_slots.bit_length == 1);
-    assert(bitlist_test_bit(&state.justified_slots, 0));
+    /* Finalized boundary (slot 0) is implicit; bitlist starts at slot 1. */
+    assert(state.justified_slots.bit_length == 0);
 
     lantern_block_body_reset(&block.body);
     lantern_state_reset(&state);

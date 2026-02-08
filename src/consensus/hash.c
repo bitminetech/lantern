@@ -1,4 +1,5 @@
 #include "lantern/consensus/hash.h"
+#include "lantern/support/log.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -694,6 +695,90 @@ static int hash_aggregated_attestations(const LanternAggregatedAttestations *att
     return err == SSZ_SUCCESS ? 0 : -1;
 }
 
+static int single_participant_from_aggregate(
+    const LanternAggregatedAttestation *attestation,
+    uint64_t *out_validator_id) {
+    if (!attestation || !out_validator_id) {
+        return -1;
+    }
+    size_t bit_length = attestation->aggregation_bits.bit_length;
+    if (bit_length == 0 || bit_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return -1;
+    }
+    bool found = false;
+    uint64_t validator_id = 0;
+    for (size_t i = 0; i < bit_length; ++i) {
+        if (!bitlist_bit_is_set(&attestation->aggregation_bits, i)) {
+            continue;
+        }
+        if (found) {
+            return -1;
+        }
+        found = true;
+        validator_id = (uint64_t)i;
+    }
+    if (!found) {
+        return -1;
+    }
+    *out_validator_id = validator_id;
+    return 0;
+}
+
+static int hash_plain_attestations_from_aggregated(
+    const LanternAggregatedAttestations *attestations,
+    LanternRoot *out_root) {
+    if (!attestations || !out_root) {
+        return -1;
+    }
+    size_t count = attestations->length;
+    uint8_t *chunks = NULL;
+    if (count > 0) {
+        if (!attestations->data) {
+            return -1;
+        }
+        if (count > LANTERN_MAX_ATTESTATIONS) {
+            return -1;
+        }
+        if (count > SIZE_MAX / SSZ_BYTES_PER_CHUNK) {
+            return -1;
+        }
+        chunks = malloc(count * SSZ_BYTES_PER_CHUNK);
+        if (!chunks) {
+            return -1;
+        }
+        for (size_t i = 0; i < count; ++i) {
+            uint64_t validator_id = 0;
+            if (single_participant_from_aggregate(&attestations->data[i], &validator_id) != 0) {
+                free(chunks);
+                return -1;
+            }
+            LanternVote vote;
+            memset(&vote, 0, sizeof(vote));
+            vote.validator_id = validator_id;
+            vote.data = attestations->data[i].data;
+
+            LanternRoot vote_root;
+            if (lantern_hash_tree_root_vote(&vote, &vote_root) != 0) {
+                free(chunks);
+                return -1;
+            }
+            memcpy(chunks + (i * SSZ_BYTES_PER_CHUNK), vote_root.bytes, SSZ_BYTES_PER_CHUNK);
+        }
+    }
+
+    uint8_t temp_root[SSZ_BYTES_PER_CHUNK];
+    memset(temp_root, 0, sizeof(temp_root));
+    ssz_error_t err = ssz_merkleize(chunks, count, LANTERN_MAX_ATTESTATIONS, temp_root);
+    if (chunks) {
+        free(chunks);
+    }
+    if (err != SSZ_SUCCESS) {
+        return -1;
+    }
+    err = ssz_mix_in_length(temp_root, (uint64_t)count, out_root->bytes);
+    return err == SSZ_SUCCESS ? 0 : -1;
+}
+
 static int hash_attestation_signatures(const LanternAttestationSignatures *signatures, LanternRoot *out_root) {
     if (!signatures || !out_root) {
         return -1;
@@ -760,8 +845,21 @@ int lantern_hash_tree_root_block_body(const LanternBlockBody *body, LanternRoot 
         return -1;
     }
     LanternRoot att_root;
-    if (hash_aggregated_attestations(&body->attestations, &att_root) != 0) {
+    bool used_legacy_plain_hash = false;
+    if (body->legacy_plain_attestation_layout
+        && hash_plain_attestations_from_aggregated(&body->attestations, &att_root) == 0) {
+        used_legacy_plain_hash = true;
+    } else if (hash_aggregated_attestations(&body->attestations, &att_root) != 0) {
         return -1;
+    }
+    static bool logged_legacy_plain_hash = false;
+    if (used_legacy_plain_hash && !logged_legacy_plain_hash) {
+        lantern_log_warn(
+            "hash",
+            NULL,
+            "block body root using legacy plain attestation compatibility hashing count=%zu",
+            body->attestations.length);
+        logged_legacy_plain_hash = true;
     }
     uint8_t chunks[1][SSZ_BYTES_PER_CHUNK];
     memcpy(chunks[0], att_root.bytes, SSZ_BYTES_PER_CHUNK);

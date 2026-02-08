@@ -1,6 +1,7 @@
 #ifndef LANTERN_CONSENSUS_SSZ_H
 #define LANTERN_CONSENSUS_SSZ_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 

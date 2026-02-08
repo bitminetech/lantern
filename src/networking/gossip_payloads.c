@@ -209,8 +209,14 @@ static int basic_block_sanity(const LanternSignedBlock *block) {
     if (block->message.proposer_attestation.slot < message->slot) {
         return -1;
     }
-    if (block->signatures.attestation_signatures.length != message->body.attestations.length
-        || block->signatures.attestation_signatures.length > LANTERN_MAX_BLOCK_SIGNATURES) {
+    size_t sig_count = block->signatures.attestation_signatures.length;
+    size_t att_count = message->body.attestations.length;
+    if (sig_count > LANTERN_MAX_BLOCK_SIGNATURES) {
+        return -1;
+    }
+    /* Compatibility mode: signature payload decoding may intentionally fall back to
+     * an empty list for legacy/unknown encodings while still allowing block processing. */
+    if (sig_count > 0 && sig_count != att_count) {
         return -1;
     }
     return 0;

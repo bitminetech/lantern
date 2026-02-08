@@ -879,6 +879,7 @@ void lantern_block_body_init(LanternBlockBody *body) {
         return;
     }
     lantern_aggregated_attestations_init(&body->attestations);
+    body->legacy_plain_attestation_layout = false;
 }
 
 void lantern_block_body_reset(LanternBlockBody *body) {
@@ -886,6 +887,7 @@ void lantern_block_body_reset(LanternBlockBody *body) {
         return;
     }
     lantern_aggregated_attestations_reset(&body->attestations);
+    body->legacy_plain_attestation_layout = false;
 }
 
 void lantern_block_with_attestation_init(LanternBlockWithAttestation *block) {

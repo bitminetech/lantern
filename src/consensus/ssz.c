@@ -83,6 +83,15 @@ static int decode_aggregated_attestations(
     LanternAggregatedAttestations *attestations,
     const uint8_t *data,
     size_t data_len);
+static int decode_legacy_plain_attestations_as_aggregated(
+    LanternAggregatedAttestations *attestations,
+    const uint8_t *data,
+    size_t data_len);
+static int encode_legacy_plain_attestations_from_aggregated(
+    const LanternAggregatedAttestations *attestations,
+    uint8_t *out,
+    size_t remaining,
+    size_t *written);
 static int encode_attestation_signatures(
     const LanternAttestationSignatures *signatures,
     uint8_t *out,
@@ -251,11 +260,76 @@ static int decode_block_signatures_standard(
     return 0;
 }
 
+static int decode_block_signatures_attestation_only(
+    LanternBlockSignatures *signatures,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!signatures) {
+        return -1;
+    }
+
+    if (decode_attestation_signatures(&signatures->attestation_signatures, data, data_len) != 0) {
+        return -1;
+    }
+
+    memset(signatures->proposer_signature.bytes, 0, LANTERN_SIGNATURE_SIZE);
+
+    static bool logged_att_only_decode = false;
+    if (!logged_att_only_decode) {
+        lantern_log_warn(
+            "ssz",
+            NULL,
+            "block signatures decoded using attestation-only layout len=%zu count=%zu",
+            data_len,
+            signatures->attestation_signatures.length);
+        logged_att_only_decode = true;
+    }
+
+    return 0;
+}
+
+static int decode_block_signatures_opaque(
+    LanternBlockSignatures *signatures,
+    size_t data_len) {
+    if (!signatures) {
+        return -1;
+    }
+
+    if (lantern_attestation_signatures_resize(&signatures->attestation_signatures, 0) != 0) {
+        return -1;
+    }
+    memset(signatures->proposer_signature.bytes, 0, LANTERN_SIGNATURE_SIZE);
+
+    static bool logged_opaque_decode = false;
+    if (!logged_opaque_decode) {
+        lantern_log_warn(
+            "ssz",
+            NULL,
+            "block signatures decoded using opaque fallback len=%zu",
+            data_len);
+        logged_opaque_decode = true;
+    }
+
+    return 0;
+}
+
 static int decode_block_signatures(
     LanternBlockSignatures *signatures,
     const uint8_t *data,
     size_t data_len) {
-    return decode_block_signatures_standard(signatures, data, data_len);
+    if (decode_block_signatures_standard(signatures, data, data_len) == 0) {
+        return 0;
+    }
+
+    if (decode_block_signatures_attestation_only(signatures, data, data_len) == 0) {
+        return 0;
+    }
+
+    if (decode_block_signatures_opaque(signatures, data_len) == 0) {
+        return 0;
+    }
+
+    return -1;
 }
 
 static int encode_root_list(const struct lantern_root_list *list, uint8_t *out, size_t remaining, size_t *written) {
@@ -963,6 +1037,140 @@ static int decode_aggregated_attestations(
     return 0;
 }
 
+static int decode_legacy_plain_attestations_as_aggregated(
+    LanternAggregatedAttestations *attestations,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!attestations) {
+        return -1;
+    }
+    if (data_len == 0) {
+        return lantern_aggregated_attestations_resize(attestations, 0);
+    }
+    if (!data || (data_len % LANTERN_VOTE_SSZ_SIZE) != 0) {
+        return -1;
+    }
+    size_t count = data_len / LANTERN_VOTE_SSZ_SIZE;
+    if (count > LANTERN_MAX_ATTESTATIONS) {
+        return -1;
+    }
+
+    LanternAttestations legacy_attestations;
+    lantern_attestations_init(&legacy_attestations);
+    if (lantern_attestations_resize(&legacy_attestations, count) != 0) {
+        lantern_attestations_reset(&legacy_attestations);
+        return -1;
+    }
+
+    int rc = -1;
+    for (size_t i = 0; i < count; ++i) {
+        if (lantern_ssz_decode_vote(
+                &legacy_attestations.data[i],
+                data + (i * LANTERN_VOTE_SSZ_SIZE),
+                LANTERN_VOTE_SSZ_SIZE)
+            != 0) {
+            goto cleanup;
+        }
+    }
+    if (lantern_wrap_attestations_as_aggregated(&legacy_attestations, attestations) != 0) {
+        goto cleanup;
+    }
+    rc = 0;
+
+cleanup:
+    lantern_attestations_reset(&legacy_attestations);
+    return rc;
+}
+
+static int single_participant_validator_id(
+    const LanternAggregatedAttestation *attestation,
+    uint64_t *out_validator_id) {
+    if (!attestation || !out_validator_id) {
+        return -1;
+    }
+
+    size_t bit_length = attestation->aggregation_bits.bit_length;
+    if (bit_length == 0 || bit_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return -1;
+    }
+
+    bool found = false;
+    uint64_t validator_id = 0;
+    for (size_t i = 0; i < bit_length; ++i) {
+        if (!lantern_bitlist_get(&attestation->aggregation_bits, i)) {
+            continue;
+        }
+        if (found) {
+            return -1;
+        }
+        found = true;
+        validator_id = (uint64_t)i;
+    }
+
+    if (!found) {
+        return -1;
+    }
+
+    *out_validator_id = validator_id;
+    return 0;
+}
+
+static int encode_legacy_plain_attestations_from_aggregated(
+    const LanternAggregatedAttestations *attestations,
+    uint8_t *out,
+    size_t remaining,
+    size_t *written) {
+    if (!attestations || !out) {
+        return -1;
+    }
+
+    size_t count = attestations->length;
+    if (count > LANTERN_MAX_ATTESTATIONS) {
+        return -1;
+    }
+    if (count > 0 && !attestations->data) {
+        return -1;
+    }
+    if (count > SIZE_MAX / LANTERN_VOTE_SSZ_SIZE) {
+        return -1;
+    }
+
+    size_t required = count * LANTERN_VOTE_SSZ_SIZE;
+    if (required > remaining) {
+        return -1;
+    }
+
+    size_t cursor = 0;
+    for (size_t i = 0; i < count; ++i) {
+        uint64_t validator_id = 0;
+        if (single_participant_validator_id(&attestations->data[i], &validator_id) != 0) {
+            return -1;
+        }
+
+        LanternVote vote;
+        memset(&vote, 0, sizeof(vote));
+        vote.validator_id = validator_id;
+        vote.data = attestations->data[i].data;
+
+        size_t vote_written = 0;
+        if (lantern_ssz_encode_vote(
+                &vote,
+                out + cursor,
+                remaining - cursor,
+                &vote_written)
+            != 0) {
+            return -1;
+        }
+        if (vote_written != LANTERN_VOTE_SSZ_SIZE) {
+            return -1;
+        }
+        cursor += vote_written;
+    }
+
+    set_written(written, cursor);
+    return 0;
+}
+
 static int aggregated_signature_proof_encoded_size(
     const LanternAggregatedSignatureProof *proof,
     size_t *out_size) {
@@ -1284,13 +1492,23 @@ int lantern_ssz_encode_block_body(const LanternBlockBody *body, uint8_t *out, si
         return -1;
     }
     size_t att_written = 0;
-    if (encode_aggregated_attestations(
-            &body->attestations,
-            out + att_offset,
-            out_len - att_offset,
-            &att_written)
-        != 0) {
-        return -1;
+    if (body->legacy_plain_attestation_layout
+        && encode_legacy_plain_attestations_from_aggregated(
+               &body->attestations,
+               out + att_offset,
+               out_len - att_offset,
+               &att_written)
+               == 0) {
+        /* Preserve legacy plain attestation body layout when requested. */
+    } else {
+        if (encode_aggregated_attestations(
+                &body->attestations,
+                out + att_offset,
+                out_len - att_offset,
+                &att_written)
+            != 0) {
+            return -1;
+        }
     }
     size_t total = att_offset + att_written;
     if (total > out_len) {
@@ -1304,6 +1522,7 @@ int lantern_ssz_decode_block_body(LanternBlockBody *body, const uint8_t *data, s
     if (!body || !data || data_len < SSZ_BYTE_SIZE_OF_UINT32) {
         return -1;
     }
+    body->legacy_plain_attestation_layout = false;
 
     uint32_t att_offset = 0;
     if (read_u32(data, data_len, &att_offset) != 0) {
@@ -1315,7 +1534,20 @@ int lantern_ssz_decode_block_body(LanternBlockBody *body, const uint8_t *data, s
 
     size_t att_size = data_len - att_offset;
     if (decode_aggregated_attestations(&body->attestations, data + att_offset, att_size) != 0) {
-        return -1;
+        if (decode_legacy_plain_attestations_as_aggregated(&body->attestations, data + att_offset, att_size) != 0) {
+            return -1;
+        }
+        body->legacy_plain_attestation_layout = true;
+        static bool logged_legacy_decode = false;
+        if (!logged_legacy_decode) {
+            lantern_log_warn(
+                "ssz",
+                NULL,
+                "block body decoded using legacy plain attestation layout att_size=%zu count=%zu",
+                att_size,
+                body->attestations.length);
+            logged_legacy_decode = true;
+        }
     }
     return 0;
 }
@@ -1930,12 +2162,6 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
 
     state->config.num_validators = (uint64_t)state->validator_count;
     if (state->latest_finalized.slot != UINT64_MAX) {
-        if (state->latest_finalized.slot == UINT64_MAX) {
-            return -1;
-        }
-        if (state->latest_finalized.slot > UINT64_MAX - 1u) {
-            return -1;
-        }
         state->justified_slots_offset = state->latest_finalized.slot + 1u;
     }
     return 0;

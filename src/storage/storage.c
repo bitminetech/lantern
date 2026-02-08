@@ -622,7 +622,8 @@ int lantern_storage_load_state(const char *data_dir, LanternState *state) {
         decoded.justified_slots_offset = meta.justified_slots_offset;
     } else if (meta_rc == 1) {
         decoded.historical_roots_offset = 0;
-        decoded.justified_slots_offset = 0;
+        decoded.justified_slots_offset =
+            decoded.latest_finalized.slot == UINT64_MAX ? 0u : (decoded.latest_finalized.slot + 1u);
     } else {
         lantern_state_reset(&decoded);
         return -1;
@@ -856,6 +857,14 @@ int lantern_storage_store_block(const char *data_dir, const LanternSignedBlock *
     }
     size_t encoded_size = signed_block_encoded_size(block);
     if (encoded_size == 0) {
+        lantern_log_warn(
+            "storage",
+            &(const struct lantern_log_metadata){0},
+            "store_block size estimate failed slot=%" PRIu64 " attestations=%zu legacy_layout=%s sig_count=%zu",
+            block->message.block.slot,
+            block->message.block.body.attestations.length,
+            block->message.block.body.legacy_plain_attestation_layout ? "true" : "false",
+            block->signatures.attestation_signatures.length);
         free_path(block_path);
         return -1;
     }
@@ -865,8 +874,18 @@ int lantern_storage_store_block(const char *data_dir, const LanternSignedBlock *
         return -1;
     }
     size_t written_size = 0;
-    if (lantern_ssz_encode_signed_block(block, buffer, encoded_size, &written_size) != 0
-        || written_size != encoded_size) {
+    int encode_rc = lantern_ssz_encode_signed_block(block, buffer, encoded_size, &written_size);
+    if (encode_rc != 0
+        || written_size == 0
+        || written_size > encoded_size) {
+        lantern_log_warn(
+            "storage",
+            &(const struct lantern_log_metadata){0},
+            "store_block encode failed slot=%" PRIu64 " rc=%d estimated=%zu written=%zu",
+            block->message.block.slot,
+            encode_rc,
+            encoded_size,
+            written_size);
         free(buffer);
         free_path(block_path);
         return -1;

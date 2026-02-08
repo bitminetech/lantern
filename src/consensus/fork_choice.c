@@ -699,8 +699,21 @@ int lantern_fork_choice_add_block(
         memset(&wrapped_vote, 0, sizeof(wrapped_vote));
         wrapped_vote.data = expanded.data[i];
         if (lantern_fork_choice_add_vote(store, &wrapped_vote, true) != 0) {
-            lantern_attestations_reset(&expanded);
-            goto rollback;
+            /*
+             * Block attestations should not make block import fail if they
+             * conflict with already-seen votes. Consensus state transition has
+             * already validated/skipped attestation effects; here we best-effort
+             * stage fork-choice votes.
+             */
+            lantern_log_debug(
+                "forkchoice",
+                &trace_meta,
+                "skipping conflicting block vote validator=%" PRIu64
+                " vote_slot=%" PRIu64 " target_slot=%" PRIu64,
+                wrapped_vote.data.validator_id,
+                wrapped_vote.data.slot,
+                wrapped_vote.data.target.slot);
+            continue;
         }
     }
     lantern_attestations_reset(&expanded);
@@ -716,7 +729,16 @@ int lantern_fork_choice_add_block(
     }
     if (lantern_fork_choice_stage_proposer_vote(store, proposer_attestation, block->slot, block->proposer_index)
         != 0) {
-        goto rollback;
+        /*
+         * Proposer attestation is advisory for fork-choice vote tracking.
+         * Ignore conflicts to avoid dropping an otherwise valid block.
+         */
+        lantern_log_debug(
+            "forkchoice",
+            &trace_meta,
+            "ignoring conflicting proposer vote proposer=%" PRIu64 " block_slot=%" PRIu64,
+            block->proposer_index,
+            block->slot);
     }
     lean_metrics_record_fork_choice_block_time(lantern_time_now_seconds() - metrics_start);
     if (trace_finalization) {

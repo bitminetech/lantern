@@ -1674,6 +1674,8 @@ int lantern_fixture_parse_anchor_state(
     }
     state->latest_justified = *latest_justified;
     state->latest_finalized = *latest_finalized;
+    state->justified_slots_offset =
+        latest_finalized->slot == UINT64_MAX ? 0u : (latest_finalized->slot + 1u);
 
     int header_idx = lantern_fixture_object_get_field(doc, anchor_state_index, "latestBlockHeader");
     if (header_idx < 0) {

@@ -490,6 +490,8 @@ int clone_signed_block(const LanternSignedBlock *source, LanternSignedBlock *des
         lantern_signed_block_with_attestation_reset(dest);
         return LANTERN_CLIENT_PENDING_ERR_COPY;
     }
+    dest->message.block.body.legacy_plain_attestation_layout =
+        source->message.block.body.legacy_plain_attestation_layout;
 
     dest->message.proposer_attestation = source->message.proposer_attestation;
 

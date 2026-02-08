@@ -119,6 +119,8 @@ typedef struct {
 
 typedef struct {
     LanternAggregatedAttestations attestations;
+    /* Decode-time hint: true when body attestations came from legacy plain-vote layout. */
+    bool legacy_plain_attestation_layout;
 } LanternBlockBody;
 
 typedef struct {

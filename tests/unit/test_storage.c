@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "lantern/consensus/hash.h"
+#include "lantern/consensus/containers.h"
 #include "lantern/consensus/duties.h"
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/ssz.h"
@@ -275,6 +276,56 @@ int main(void) {
 
     lantern_blocks_by_root_response_reset(&response);
     lantern_block_body_reset(&block.message.body);
+
+    LanternSignedBlock legacy_block;
+    LanternRoot legacy_block_root;
+    build_signed_block(&state, 2u, &legacy_block, &legacy_block_root);
+
+    LanternAttestations legacy_plain_attestations;
+    lantern_attestations_init(&legacy_plain_attestations);
+    expect_zero(
+        lantern_attestations_resize(&legacy_plain_attestations, 2u),
+        "legacy plain attestation resize");
+    build_vote(&legacy_plain_attestations.data[0], 6u, 4u, 5u);
+    legacy_plain_attestations.data[0].validator_id = 1u;
+    build_vote(&legacy_plain_attestations.data[1], 6u, 4u, 5u);
+    legacy_plain_attestations.data[1].validator_id = 2u;
+    expect_zero(
+        lantern_wrap_attestations_as_aggregated(
+            &legacy_plain_attestations,
+            &legacy_block.message.body.attestations),
+        "wrap legacy plain attestation");
+    legacy_block.message.body.legacy_plain_attestation_layout = true;
+    expect_zero(
+        lantern_hash_tree_root_block(&legacy_block.message.block, &legacy_block_root),
+        "hash legacy block");
+    expect_zero(
+        lantern_storage_store_block(base_dir, &legacy_block),
+        "store legacy block");
+
+    LanternBlocksByRootResponse legacy_response;
+    lantern_blocks_by_root_response_init(&legacy_response);
+    expect_zero(
+        lantern_storage_collect_blocks(base_dir, &legacy_block_root, 1u, &legacy_response),
+        "collect legacy block");
+    assert(legacy_response.length == 1u);
+    LanternRoot collected_legacy_root;
+    expect_zero(
+        lantern_hash_tree_root_block(
+            &legacy_response.blocks[0].message.block,
+            &collected_legacy_root),
+        "hash collected legacy block");
+    assert(
+        memcmp(
+            collected_legacy_root.bytes,
+            legacy_block_root.bytes,
+            LANTERN_ROOT_SIZE)
+        == 0);
+    assert(legacy_response.blocks[0].message.block.body.legacy_plain_attestation_layout == true);
+    lantern_blocks_by_root_response_reset(&legacy_response);
+    lantern_block_body_reset(&legacy_block.message.body);
+    lantern_attestations_reset(&legacy_plain_attestations);
+
     lantern_state_reset(&state);
 
     char state_path[PATH_MAX];
@@ -305,6 +356,12 @@ int main(void) {
     written = snprintf(block_path, sizeof(block_path), "%s/%s.ssz", blocks_dir, root_hex);
     assert(written > 0 && (size_t)written < sizeof(block_path));
 
+    cleanup_path(block_path);
+    expect_zero(
+        lantern_bytes_to_hex(legacy_block_root.bytes, LANTERN_ROOT_SIZE, root_hex, sizeof(root_hex), 0),
+        "legacy hex root");
+    written = snprintf(block_path, sizeof(block_path), "%s/%s.ssz", blocks_dir, root_hex);
+    assert(written > 0 && (size_t)written < sizeof(block_path));
     cleanup_path(block_path);
     cleanup_dir(blocks_dir);
     cleanup_dir(slot_index_dir);

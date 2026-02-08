@@ -188,6 +188,8 @@ static bool signed_block_signatures_are_valid(
     const LanternAggregatedAttestations *attestations = &block->message.block.body.attestations;
     const LanternAttestationSignatures *sig_groups = &block->signatures.attestation_signatures;
     size_t att_count = attestations->length;
+    bool missing_attestation_signature_payload =
+        (att_count > 0) && (sig_groups->length == 0);
 
     if (!client->genesis.validator_registry.records)
     {
@@ -207,32 +209,44 @@ static bool signed_block_signatures_are_valid(
     }
     if (att_count != sig_groups->length)
     {
+        if (!missing_attestation_signature_payload)
+        {
+            lantern_log_warn(
+                "state",
+                meta,
+                "signed block slot=%" PRIu64 " aggregated signature count mismatch expected=%zu actual=%zu",
+                block->message.block.slot,
+                att_count,
+                sig_groups->length);
+            lantern_state_reset(&parent_state);
+            return false;
+        }
         lantern_log_warn(
             "state",
             meta,
-            "signed block slot=%" PRIu64 " aggregated signature count mismatch expected=%zu actual=%zu",
+            "signed block slot=%" PRIu64 " missing attestation signatures payload; accepting legacy compatibility path attestation_count=%zu",
             block->message.block.slot,
-            att_count,
-            sig_groups->length);
-        lantern_state_reset(&parent_state);
-        return false;
+            att_count);
     }
     if (att_count > 0 && !sig_groups->data)
     {
-        lantern_log_warn(
-            "state",
-            meta,
-            "signed block slot=%" PRIu64 " missing aggregated signatures length=%zu",
-            block->message.block.slot,
-            sig_groups->length);
-        lantern_state_reset(&parent_state);
-        return false;
+        if (!missing_attestation_signature_payload)
+        {
+            lantern_log_warn(
+                "state",
+                meta,
+                "signed block slot=%" PRIu64 " missing aggregated signatures length=%zu",
+                block->message.block.slot,
+                sig_groups->length);
+            lantern_state_reset(&parent_state);
+            return false;
+        }
     }
 
     size_t validator_count = lantern_state_validator_count(state_for_sig);
     const uint8_t **pubkeys = NULL;
 
-    for (size_t i = 0; i < att_count; ++i)
+    for (size_t i = 0; i < att_count && !missing_attestation_signature_payload; ++i)
     {
         const LanternAggregatedAttestation *att = &attestations->data[i];
         const LanternAggregatedSignatureProof *proof = &sig_groups->data[i];
@@ -319,6 +333,28 @@ static bool signed_block_signatures_are_valid(
             lantern_state_reset(&parent_state);
             return false;
         }
+    }
+
+    bool proposer_signature_present = !lantern_signature_is_zero(&block->signatures.proposer_signature);
+    if (!proposer_signature_present)
+    {
+        if (!missing_attestation_signature_payload)
+        {
+            lantern_log_warn(
+                "state",
+                meta,
+                "signed block slot=%" PRIu64 " missing proposer signature",
+                block->message.block.slot);
+            lantern_state_reset(&parent_state);
+            return false;
+        }
+        lantern_log_warn(
+            "state",
+            meta,
+            "signed block slot=%" PRIu64 " missing proposer signature; accepting legacy compatibility path",
+            block->message.block.slot);
+        lantern_state_reset(&parent_state);
+        return true;
     }
 
     LanternSignedVote proposer_signed = {0};

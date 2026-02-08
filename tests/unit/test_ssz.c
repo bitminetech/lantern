@@ -1,9 +1,11 @@
 #include <assert.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "lantern/consensus/containers.h"
+#include "lantern/consensus/hash.h"
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/ssz.h"
 #include "../fixtures/ssz_vectors.h"
@@ -254,6 +256,46 @@ static void build_aggregated_attestation_from_vote(
               "agg bitlist set");
 }
 
+static int encode_legacy_plain_attestation_body(
+    const LanternAttestations *attestations,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written) {
+    if (!attestations || !out || !written) {
+        return -1;
+    }
+    if (attestations->length > 0 && !attestations->data) {
+        return -1;
+    }
+
+    size_t required = sizeof(uint32_t) + (attestations->length * LANTERN_VOTE_SSZ_SIZE);
+    if (out_len < required || required > UINT32_MAX) {
+        return -1;
+    }
+
+    uint32_t att_offset = (uint32_t)sizeof(uint32_t);
+    memcpy(out, &att_offset, sizeof(att_offset));
+
+    size_t cursor = sizeof(uint32_t);
+    for (size_t i = 0; i < attestations->length; ++i) {
+        size_t vote_written = 0;
+        if (lantern_ssz_encode_vote(
+                &attestations->data[i],
+                out + cursor,
+                out_len - cursor,
+                &vote_written)
+            != 0) {
+            return -1;
+        }
+        if (vote_written != LANTERN_VOTE_SSZ_SIZE) {
+            return -1;
+        }
+        cursor += vote_written;
+    }
+    *written = cursor;
+    return 0;
+}
+
 static void fill_proof_data(LanternAggregatedSignatureProof *proof, uint8_t seed, size_t len) {
     if (!proof) {
         return;
@@ -390,6 +432,162 @@ static void test_block_body_roundtrip(void) {
 
     lantern_block_body_reset(&body);
     lantern_block_body_reset(&decoded);
+}
+
+static void test_block_body_decode_legacy_plain_attestations(void) {
+    LanternAttestations legacy_attestations;
+    lantern_attestations_init(&legacy_attestations);
+
+    expect_ok(lantern_attestations_resize(&legacy_attestations, 3), "legacy attestation resize");
+    legacy_attestations.data[0] = build_signed_vote(2, 5, 0x21).data;
+    legacy_attestations.data[1] = build_signed_vote(0, 5, 0x31).data;
+    legacy_attestations.data[2] = build_signed_vote(3, 6, 0x41).data;
+
+    uint8_t encoded[1024];
+    size_t encoded_len = 0;
+    expect_ok(
+        encode_legacy_plain_attestation_body(
+            &legacy_attestations,
+            encoded,
+            sizeof(encoded),
+            &encoded_len),
+        "encode legacy body");
+
+    LanternBlockBody decoded;
+    lantern_block_body_init(&decoded);
+    expect_ok(lantern_ssz_decode_block_body(&decoded, encoded, encoded_len), "decode legacy body");
+    if (decoded.attestations.length != legacy_attestations.length) {
+        fprintf(
+            stderr,
+            "decoded attestation length mismatch (%zu != %zu)\n",
+            decoded.attestations.length,
+            legacy_attestations.length);
+        abort();
+    }
+    if (decoded.attestations.length > 0 && decoded.attestations.data == NULL) {
+        fprintf(stderr, "decoded attestation data missing\n");
+        abort();
+    }
+
+    for (size_t i = 0; i < legacy_attestations.length; ++i) {
+        LanternAggregatedAttestation expected;
+        build_aggregated_attestation_from_vote(&legacy_attestations.data[i], &expected);
+        assert_aggregated_attestation_equal(&decoded.attestations.data[i], &expected);
+        lantern_aggregated_attestation_reset(&expected);
+    }
+
+    lantern_attestations_reset(&legacy_attestations);
+    lantern_block_body_reset(&decoded);
+}
+
+static void test_block_body_hash_mode_is_per_body_decode_layout(void) {
+    LanternBlockBody spec_body;
+    lantern_block_body_init(&spec_body);
+
+    LanternSignedVote spec_vote = build_signed_vote(1, 9, 0x51);
+    LanternAggregatedAttestation spec_agg;
+    build_aggregated_attestation_from_vote(&spec_vote.data, &spec_agg);
+    expect_ok(
+        lantern_aggregated_attestations_append(&spec_body.attestations, &spec_agg),
+        "append spec aggregated attestation");
+    lantern_aggregated_attestation_reset(&spec_agg);
+    assert(spec_body.legacy_plain_attestation_layout == false);
+
+    LanternRoot spec_root_before;
+    expect_ok(
+        lantern_hash_tree_root_block_body(&spec_body, &spec_root_before),
+        "hash spec block body before legacy decode");
+
+    LanternAttestations legacy_attestations;
+    lantern_attestations_init(&legacy_attestations);
+    expect_ok(lantern_attestations_resize(&legacy_attestations, 1), "legacy attestation resize");
+    legacy_attestations.data[0] = build_signed_vote(2, 10, 0x61).data;
+
+    uint8_t legacy_encoded[512];
+    size_t legacy_encoded_len = 0;
+    expect_ok(
+        encode_legacy_plain_attestation_body(
+            &legacy_attestations,
+            legacy_encoded,
+            sizeof(legacy_encoded),
+            &legacy_encoded_len),
+        "encode legacy body");
+
+    LanternBlockBody legacy_decoded;
+    lantern_block_body_init(&legacy_decoded);
+    expect_ok(
+        lantern_ssz_decode_block_body(&legacy_decoded, legacy_encoded, legacy_encoded_len),
+        "decode legacy body");
+    assert(legacy_decoded.legacy_plain_attestation_layout == true);
+
+    LanternRoot spec_root_after;
+    expect_ok(
+        lantern_hash_tree_root_block_body(&spec_body, &spec_root_after),
+        "hash spec block body after legacy decode");
+    assert(memcmp(spec_root_before.bytes, spec_root_after.bytes, LANTERN_ROOT_SIZE) == 0);
+
+    lantern_block_body_reset(&legacy_decoded);
+    lantern_attestations_reset(&legacy_attestations);
+    lantern_block_body_reset(&spec_body);
+}
+
+static void test_block_roundtrip_preserves_legacy_plain_body_layout(void) {
+    LanternAttestations legacy_attestations;
+    lantern_attestations_init(&legacy_attestations);
+    expect_ok(lantern_attestations_resize(&legacy_attestations, 2), "legacy attestation resize");
+    legacy_attestations.data[0] = build_signed_vote(1, 12, 0x71).data;
+    legacy_attestations.data[1] = build_signed_vote(3, 13, 0x81).data;
+
+    uint8_t legacy_body_encoded[1024];
+    size_t legacy_body_len = 0;
+    expect_ok(
+        encode_legacy_plain_attestation_body(
+            &legacy_attestations,
+            legacy_body_encoded,
+            sizeof(legacy_body_encoded),
+            &legacy_body_len),
+        "encode legacy body");
+
+    LanternBlock block;
+    memset(&block, 0, sizeof(block));
+    block.slot = 77;
+    block.proposer_index = 5;
+    fill_bytes(block.parent_root.bytes, sizeof(block.parent_root.bytes), 0x11);
+    fill_bytes(block.state_root.bytes, sizeof(block.state_root.bytes), 0x22);
+    lantern_block_body_init(&block.body);
+    expect_ok(
+        lantern_ssz_decode_block_body(&block.body, legacy_body_encoded, legacy_body_len),
+        "decode legacy body into block");
+    assert(block.body.legacy_plain_attestation_layout == true);
+
+    LanternRoot root_before;
+    expect_ok(
+        lantern_hash_tree_root_block(&block, &root_before),
+        "hash block before roundtrip");
+
+    uint8_t encoded_block[2048];
+    size_t encoded_block_len = 0;
+    expect_ok(
+        lantern_ssz_encode_block(&block, encoded_block, sizeof(encoded_block), &encoded_block_len),
+        "encode block with legacy body");
+
+    LanternBlock decoded;
+    memset(&decoded, 0, sizeof(decoded));
+    lantern_block_body_init(&decoded.body);
+    expect_ok(
+        lantern_ssz_decode_block(&decoded, encoded_block, encoded_block_len),
+        "decode block with legacy body");
+    assert(decoded.body.legacy_plain_attestation_layout == true);
+
+    LanternRoot root_after;
+    expect_ok(
+        lantern_hash_tree_root_block(&decoded, &root_after),
+        "hash block after roundtrip");
+    assert(memcmp(root_before.bytes, root_after.bytes, LANTERN_ROOT_SIZE) == 0);
+
+    lantern_block_body_reset(&decoded.body);
+    lantern_block_body_reset(&block.body);
+    lantern_attestations_reset(&legacy_attestations);
 }
 
 static void populate_block(LanternBlock *block) {
@@ -693,6 +891,131 @@ static void test_signed_block_decode_without_signature_section(void) {
     reset_signed_block(&signed_block);
     reset_signed_block(&decoded);
     free(encoded);
+}
+
+static uint32_t read_u32_le_test(const uint8_t *data) {
+    return ((uint32_t)data[0])
+        | ((uint32_t)data[1] << 8u)
+        | ((uint32_t)data[2] << 16u)
+        | ((uint32_t)data[3] << 24u);
+}
+
+static void test_signed_block_decode_attestation_signatures_only(void) {
+    LanternSignedBlock signed_block;
+    build_signed_block_vector(&signed_block);
+
+    uint8_t encoded[SIGNED_BLOCK_TEST_BUFFER_SIZE];
+    size_t encoded_len = 0;
+    expect_ok(
+        lantern_ssz_encode_signed_block(&signed_block, encoded, sizeof(encoded), &encoded_len),
+        "encode signed block");
+
+    uint32_t message_offset = read_u32_le_test(encoded);
+    uint32_t signatures_offset = read_u32_le_test(encoded + sizeof(uint32_t));
+    if (message_offset < (sizeof(uint32_t) * 2u) || signatures_offset < message_offset || signatures_offset > encoded_len) {
+        fprintf(stderr, "invalid signed block offsets in test fixture\n");
+        abort();
+    }
+
+    const uint8_t *signatures = encoded + signatures_offset;
+    size_t signatures_len = encoded_len - signatures_offset;
+    if (signatures_len < (sizeof(uint32_t) * 2u)) {
+        fprintf(stderr, "signature section too short in test fixture\n");
+        abort();
+    }
+    uint32_t att_offset = read_u32_le_test(signatures);
+    uint32_t proposer_offset = read_u32_le_test(signatures + sizeof(uint32_t));
+    if (att_offset != (sizeof(uint32_t) * 2u) || proposer_offset < att_offset || proposer_offset > signatures_len) {
+        fprintf(stderr, "invalid signature subsection offsets in test fixture\n");
+        abort();
+    }
+
+    size_t attestation_sigs_len = proposer_offset - att_offset;
+    size_t attestation_only_len = signatures_offset + attestation_sigs_len;
+    uint8_t *attestation_only = malloc(attestation_only_len);
+    if (!attestation_only) {
+        fprintf(stderr, "allocation failed in attestation-only decode test\n");
+        abort();
+    }
+    memcpy(attestation_only, encoded, signatures_offset);
+    if (attestation_sigs_len > 0) {
+        memcpy(attestation_only + signatures_offset, signatures + att_offset, attestation_sigs_len);
+    }
+
+    LanternSignedBlock decoded;
+    lantern_signed_block_with_attestation_init(&decoded);
+    expect_ok(
+        lantern_ssz_decode_signed_block(&decoded, attestation_only, attestation_only_len),
+        "decode attestation-only signed block");
+
+    if (decoded.signatures.attestation_signatures.length != signed_block.signatures.attestation_signatures.length) {
+        fprintf(
+            stderr,
+            "attestation signature count mismatch (%zu != %zu)\n",
+            decoded.signatures.attestation_signatures.length,
+            signed_block.signatures.attestation_signatures.length);
+        abort();
+    }
+    for (size_t i = 0; i < signed_block.signatures.attestation_signatures.length; ++i) {
+        assert_signature_proof_equal(
+            &decoded.signatures.attestation_signatures.data[i],
+            &signed_block.signatures.attestation_signatures.data[i]);
+    }
+
+    for (size_t i = 0; i < LANTERN_SIGNATURE_SIZE; ++i) {
+        if (decoded.signatures.proposer_signature.bytes[i] != 0) {
+            fprintf(stderr, "expected zero proposer signature byte at %zu\n", i);
+            abort();
+        }
+    }
+
+    reset_signed_block(&decoded);
+    reset_signed_block(&signed_block);
+    free(attestation_only);
+}
+
+static void test_signed_block_decode_attestation_signatures_only_empty(void) {
+    LanternSignedBlock signed_block;
+    lantern_signed_block_with_attestation_init(&signed_block);
+    signed_block.message.block.slot = 7;
+    signed_block.message.block.proposer_index = 1;
+    fill_bytes(signed_block.message.block.parent_root.bytes, LANTERN_ROOT_SIZE, 0x11);
+    fill_bytes(signed_block.message.block.state_root.bytes, LANTERN_ROOT_SIZE, 0x22);
+
+    uint8_t encoded[SIGNED_BLOCK_TEST_BUFFER_SIZE];
+    size_t encoded_len = 0;
+    expect_ok(
+        lantern_ssz_encode_signed_block(&signed_block, encoded, sizeof(encoded), &encoded_len),
+        "encode signed block empty signatures");
+
+    uint32_t signatures_offset = read_u32_le_test(encoded + sizeof(uint32_t));
+    if (signatures_offset > encoded_len) {
+        fprintf(stderr, "invalid signatures offset for empty signatures test\n");
+        abort();
+    }
+
+    /* Old layout: signatures section is an empty attestation_signatures list. */
+    size_t attestation_only_len = signatures_offset;
+
+    LanternSignedBlock decoded;
+    lantern_signed_block_with_attestation_init(&decoded);
+    expect_ok(
+        lantern_ssz_decode_signed_block(&decoded, encoded, attestation_only_len),
+        "decode attestation-only empty signature section");
+
+    if (decoded.signatures.attestation_signatures.length != 0) {
+        fprintf(stderr, "expected no attestation signatures in empty layout decode\n");
+        abort();
+    }
+    for (size_t i = 0; i < LANTERN_SIGNATURE_SIZE; ++i) {
+        if (decoded.signatures.proposer_signature.bytes[i] != 0) {
+            fprintf(stderr, "expected zero proposer signature for empty layout decode\n");
+            abort();
+        }
+    }
+
+    reset_signed_block(&decoded);
+    reset_signed_block(&signed_block);
 }
 
 static void test_state_roundtrip(void) {
@@ -1174,10 +1497,15 @@ int main(void) {
     test_signed_vote_signature_validation();
     test_block_header_roundtrip();
     test_block_body_roundtrip();
+    test_block_body_decode_legacy_plain_attestations();
+    test_block_body_hash_mode_is_per_body_decode_layout();
+    test_block_roundtrip_preserves_legacy_plain_body_layout();
     test_block_roundtrip();
     test_signed_block_roundtrip();
     test_signed_block_signature_validation();
     test_signed_block_decode_without_signature_section();
+    test_signed_block_decode_attestation_signatures_only();
+    test_signed_block_decode_attestation_signatures_only_empty();
     test_state_roundtrip();
     test_state_rejects_truncated_state_payload();
     test_leanspec_vectors();
