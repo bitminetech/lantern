@@ -249,6 +249,119 @@ cleanup:
     return rc;
 }
 
+static int test_pending_block_queue_sync_drops_incoming(void) {
+    struct lantern_client client;
+    memset(&client, 0, sizeof(client));
+    client.node_id = "test_pending_sync_queue";
+    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
+    client.sync_in_progress = true;
+    client.debug_disable_block_requests = true;
+
+    if (pthread_mutex_init(&client.pending_lock, NULL) != 0) {
+        fprintf(stderr, "failed to initialize pending mutex\n");
+        return 1;
+    }
+    client.pending_lock_initialized = true;
+    lantern_client_debug_pending_reset(&client);
+
+    LanternRoot oldest_root;
+    LanternRoot latest_root;
+    LanternRoot extra_root;
+    LanternRoot parent_root;
+    client_test_fill_root_with_index(&oldest_root, 0);
+    client_test_fill_root_with_index(&latest_root, 0);
+
+    int rc = 0;
+    for (size_t i = 0; i < LANTERN_PENDING_BLOCK_LIMIT; ++i) {
+        LanternSignedBlock block;
+        memset(&block, 0, sizeof(block));
+        lantern_block_body_init(&block.message.body);
+        block.message.slot = 100 + i;
+
+        LanternRoot block_root;
+        client_test_fill_root_with_index(&block_root, 10000u + (uint32_t)i);
+        client_test_fill_root_with_index(&parent_root, 20000u + (uint32_t)i);
+        if (i == 0) {
+            oldest_root = block_root;
+        }
+        if (i + 1u == LANTERN_PENDING_BLOCK_LIMIT) {
+            latest_root = block_root;
+        }
+
+        if (lantern_client_debug_enqueue_pending_block(
+                &client,
+                &block,
+                &block_root,
+                &parent_root,
+                NULL)
+            != 0) {
+            fprintf(stderr, "failed to enqueue pending block %zu\n", i);
+            lantern_block_body_reset(&block.message.body);
+            rc = 1;
+            goto cleanup;
+        }
+
+        lantern_block_body_reset(&block.message.body);
+    }
+
+    if (lantern_client_pending_block_count(&client) != LANTERN_PENDING_BLOCK_LIMIT) {
+        fprintf(stderr, "pending queue count mismatch after fill in sync mode\n");
+        rc = 1;
+        goto cleanup;
+    }
+
+    LanternSignedBlock extra_block;
+    memset(&extra_block, 0, sizeof(extra_block));
+    lantern_block_body_init(&extra_block.message.body);
+    extra_block.message.slot = 999999;
+    client_test_fill_root_with_index(&extra_root, 900000u);
+    client_test_fill_root_with_index(&parent_root, 910000u);
+
+    if (lantern_client_debug_enqueue_pending_block(
+            &client,
+            &extra_block,
+            &extra_root,
+            &parent_root,
+            NULL)
+        != 0) {
+        fprintf(stderr, "failed to enqueue overflow pending block in sync mode\n");
+        lantern_block_body_reset(&extra_block.message.body);
+        rc = 1;
+        goto cleanup;
+    }
+    lantern_block_body_reset(&extra_block.message.body);
+
+    if (lantern_client_pending_block_count(&client) != LANTERN_PENDING_BLOCK_LIMIT) {
+        fprintf(stderr, "pending queue count changed after overflow enqueue in sync mode\n");
+        rc = 1;
+        goto cleanup;
+    }
+
+    if (!client_test_pending_contains_root(&client, &oldest_root)) {
+        fprintf(stderr, "oldest pending block was unexpectedly evicted in sync mode\n");
+        rc = 1;
+        goto cleanup;
+    }
+    if (!client_test_pending_contains_root(&client, &latest_root)) {
+        fprintf(stderr, "latest accepted pending block missing in sync mode\n");
+        rc = 1;
+        goto cleanup;
+    }
+    if (client_test_pending_contains_root(&client, &extra_root)) {
+        fprintf(stderr, "overflow pending block should have been dropped in sync mode\n");
+        rc = 1;
+        goto cleanup;
+    }
+
+cleanup:
+    lantern_client_debug_pending_reset(&client);
+    if (client.pending_lock_initialized) {
+        pthread_mutex_destroy(&client.pending_lock);
+        client.pending_lock_initialized = false;
+    }
+    return rc;
+}
+
 static int test_import_block_parent_mismatch(void) {
     struct lantern_client client;
     memset(&client, 0, sizeof(client));
@@ -460,6 +573,9 @@ cleanup:
 
 int main(void) {
     if (test_pending_block_queue() != 0) {
+        return 1;
+    }
+    if (test_pending_block_queue_sync_drops_incoming() != 0) {
         return 1;
     }
     if (test_import_block_parent_mismatch() != 0) {

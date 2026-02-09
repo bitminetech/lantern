@@ -64,6 +64,7 @@ struct lantern_client_options {
     const char *validator_registry_path;
     const char *nodes_path;
     const char *genesis_state_path;
+    bool use_genesis_state;
     const char *validator_config_path;
     const char *node_id;
     const char *node_key_hex;
@@ -83,13 +84,14 @@ struct lantern_client_options {
 struct libp2p_subscription;
 struct libp2p_protocol_server;
 struct lantern_peer_status_entry;
+struct lantern_active_blocks_request;
 struct lantern_pending_block {
     LanternSignedBlock block;
     LanternRoot root;
     LanternRoot parent_root;
     char peer_text[128];
     bool parent_requested;
-    uint32_t parent_request_failures;
+    uint64_t parent_requested_ms;
     uint64_t received_ms;
     uint32_t backfill_depth;
 };
@@ -112,6 +114,14 @@ struct lantern_pending_block_list {
     size_t length;
     size_t capacity;
     struct lantern_pending_parent_index parent_index;
+};
+
+struct lantern_active_blocks_request {
+    uint64_t request_id;
+    char peer_id[128];
+    uint64_t started_ms;
+    uint64_t deadline_ms;
+    bool timeout_recorded;
 };
 
 struct lantern_agg_proof_cache_entry {
@@ -237,6 +247,10 @@ struct lantern_client {
     struct lantern_peer_status_entry *peer_status_entries;
     size_t peer_status_count;
     size_t peer_status_capacity;
+    struct lantern_active_blocks_request *active_blocks_requests;
+    size_t active_blocks_request_count;
+    size_t active_blocks_request_capacity;
+    uint64_t next_blocks_request_id;
     pthread_mutex_t status_lock;
     bool status_lock_initialized;
     bool debug_disable_block_requests;
@@ -313,6 +327,13 @@ int lantern_client_debug_record_vote(
     struct lantern_client *client,
     const LanternSignedVote *vote,
     const char *peer_id_text);
+
+int lantern_client_debug_gossip_block(
+    struct lantern_client *client,
+    const LanternSignedBlock *block);
+int lantern_client_debug_gossip_vote(
+    struct lantern_client *client,
+    const LanternSignedVote *vote);
 
 int lantern_client_debug_import_block(
     struct lantern_client *client,

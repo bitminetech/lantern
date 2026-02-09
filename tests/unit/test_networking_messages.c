@@ -1622,12 +1622,39 @@ static void test_blocks_by_root_request(void) {
     check_zero(lantern_network_blocks_by_root_request_encode(&req, encoded, sizeof(encoded), &written), "request encode");
     size_t expected_written = req.roots.length * LANTERN_ROOT_SIZE;
     CHECK(written == expected_written);
+    CHECK(memcmp(
+              encoded,
+              req.roots.items,
+              req.roots.length * LANTERN_ROOT_SIZE)
+          == 0);
 
     LanternBlocksByRootRequest decoded;
     lantern_blocks_by_root_request_init(&decoded);
     check_zero(lantern_network_blocks_by_root_request_decode(&decoded, encoded, written), "request decode");
     CHECK(decoded.roots.length == req.roots.length);
     CHECK(memcmp(decoded.roots.items[1].bytes, req.roots.items[1].bytes, LANTERN_ROOT_SIZE) == 0);
+
+    /* Legacy compatibility: decode old container form [offset=4][roots...]. */
+    uint8_t legacy_encoded[132];
+    legacy_encoded[0] = 4u;
+    legacy_encoded[1] = 0u;
+    legacy_encoded[2] = 0u;
+    legacy_encoded[3] = 0u;
+    memcpy(
+        legacy_encoded + sizeof(uint32_t),
+        encoded,
+        expected_written);
+
+    LanternBlocksByRootRequest legacy_decoded;
+    lantern_blocks_by_root_request_init(&legacy_decoded);
+    check_zero(
+        lantern_network_blocks_by_root_request_decode(
+            &legacy_decoded,
+            legacy_encoded,
+            sizeof(uint32_t) + expected_written),
+        "request decode legacy container");
+    CHECK(legacy_decoded.roots.length == req.roots.length);
+    CHECK(memcmp(legacy_decoded.roots.items[0].bytes, req.roots.items[0].bytes, LANTERN_ROOT_SIZE) == 0);
 
     uint8_t compressed[256];
     size_t compressed_len = 0;
@@ -1650,6 +1677,7 @@ static void test_blocks_by_root_request(void) {
 
     lantern_blocks_by_root_request_reset(&req);
     lantern_blocks_by_root_request_reset(&decoded);
+    lantern_blocks_by_root_request_reset(&legacy_decoded);
     lantern_blocks_by_root_request_reset(&snappy_decoded);
 }
 

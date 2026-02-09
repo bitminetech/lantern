@@ -48,10 +48,32 @@ typedef struct peer_id peer_id_t;
 
 /** Maximum roots per blocks_by_root request */
 #define LANTERN_MAX_BLOCKS_PER_REQUEST 10u
-/** Maximum backfill depth when requesting parents */
-#define LANTERN_MAX_BACKFILL_DEPTH LANTERN_PENDING_BLOCK_LIMIT
-/** Maximum consecutive empty parent fetches before dropping pending blocks */
-#define LANTERN_MAX_PENDING_PARENT_EMPTY_RESPONSES 8u
+/**
+ * Maximum parent depth for ancestor backfill requests.
+ *
+ * Keep this independent from the in-memory pending queue limit so a fresh
+ * node can backfill deep historical ancestors without requiring a huge
+ * pending list in RAM.
+ */
+#define LANTERN_MAX_BACKFILL_DEPTH 65535u
+/** Retry parent fetches if a scheduled request does not complete within this window. */
+#define LANTERN_PENDING_PARENT_REQUEST_STALE_MS 15000u
+/**
+ * Timeout used by outbound blocks-by-root request tracking.
+ *
+ * Requests that exceed this duration are expired from the active request registry
+ * and treated as failed for peer scoring.
+ */
+#define LANTERN_BLOCKS_REQUEST_TIMEOUT_MS 12000u
+/**
+ * Hard cap for request tracking entry lifetime after soft timeout.
+ *
+ * Requests remain marked inflight after the first timeout signal so peer-side
+ * stream parsing can still complete without opening parallel replacement
+ * streams. If a request never completes, this hard timeout eventually releases
+ * the slot.
+ */
+#define LANTERN_BLOCKS_REQUEST_HARD_TIMEOUT_MS 60000u
 
 
 /* ============================================================================

@@ -774,7 +774,7 @@ struct lantern_pending_block *pending_block_list_append(
     entry->parent_root = *parent_root;
     entry->peer_text[0] = '\0';
     entry->parent_requested = false;
-    entry->parent_request_failures = 0;
+    entry->parent_requested_ms = 0;
     entry->received_ms = monotonic_millis();
     entry->backfill_depth = backfill_depth;
 

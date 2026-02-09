@@ -49,6 +49,28 @@ int lantern_client_debug_record_vote(
     return LANTERN_CLIENT_OK;
 }
 
+int lantern_client_debug_gossip_block(
+    struct lantern_client *client,
+    const LanternSignedBlock *block)
+{
+    if (!client || !block)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    return gossip_block_handler(block, NULL, client);
+}
+
+int lantern_client_debug_gossip_vote(
+    struct lantern_client *client,
+    const LanternSignedVote *vote)
+{
+    if (!client || !vote)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    return gossip_vote_handler(vote, NULL, client);
+}
+
 
 /**
  * Debug API: Import a block for testing.

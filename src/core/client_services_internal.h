@@ -450,6 +450,20 @@ void lantern_client_on_blocks_request_complete_batch(
     enum lantern_blocks_request_outcome outcome);
 
 /**
+ * Handle completion of a tracked blocks request batch.
+ *
+ * Same as lantern_client_on_blocks_request_complete_batch(), but includes
+ * the internal request tracking ID used by the active request registry.
+ */
+void lantern_client_on_blocks_request_complete_batch_with_id(
+    struct lantern_client *client,
+    uint64_t request_id,
+    const char *peer_id,
+    const LanternRoot *request_roots,
+    size_t root_count,
+    enum lantern_blocks_request_outcome outcome);
+
+/**
  * Handle completion of a blocks request (single root).
  *
  * @spec subspecs/networking/reqresp.py - blocks by root
@@ -512,6 +526,7 @@ int lantern_reqresp_read_response_chunk(
  * @param roots          Block roots to request
  * @param depths         Backfill depth per root (may be NULL for zeros)
  * @param root_count     Number of roots
+ * @param request_id     Internal request tracking ID (0 disables tracking)
  * @return 0 on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM if parameters are invalid, the peer ID is invalid, or any root is zero
  * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
@@ -524,7 +539,8 @@ int lantern_client_schedule_blocks_request_batch(
     const char *peer_id_text,
     const LanternRoot *roots,
     const uint32_t *depths,
-    size_t root_count);
+    size_t root_count,
+    uint64_t request_id);
 
 /**
  * Schedule a single-root blocks_by_root request to a peer.
@@ -535,6 +551,7 @@ int lantern_client_schedule_blocks_request_batch(
  * @param peer_id_text   Peer ID string
  * @param root           Block root to request
  * @param backfill_depth Backfill depth for the requested root
+ * @param request_id     Internal request tracking ID (0 disables tracking)
  * @return 0 on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM if parameters are invalid, the peer ID is invalid, or the root is zero
  * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
@@ -546,13 +563,15 @@ int lantern_client_schedule_blocks_request(
     struct lantern_client *client,
     const char *peer_id_text,
     const LanternRoot *root,
-    uint32_t backfill_depth);
+    uint32_t backfill_depth,
+    uint64_t request_id);
 
 
 /**
  * Write all bytes to a stream.
  *
- * Retries on AGAIN/TIMEOUT errors until all bytes are written.
+ * Retries on AGAIN/TIMEOUT errors until all bytes are written or the
+ * reqresp stall timeout window elapses.
  *
  * @param stream  libp2p stream
  * @param data    Data to write

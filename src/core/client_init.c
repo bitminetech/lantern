@@ -78,10 +78,6 @@ int copy_genesis_paths(
     {
         return -1;
     }
-    if (set_owned_string(&paths->state_path, options->genesis_state_path) != 0)
-    {
-        return -1;
-    }
     if (set_owned_string(&paths->validator_config_path, options->validator_config_path) != 0)
     {
         return -1;

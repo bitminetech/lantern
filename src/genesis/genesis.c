@@ -175,7 +175,6 @@ int lantern_genesis_load(
     if (!paths->config_path
         || !paths->validator_registry_path
         || !paths->nodes_path
-        || !paths->state_path
         || !paths->validator_config_path)
     {
         lantern_log_error("genesis", NULL, "missing required genesis path");
@@ -227,18 +226,21 @@ int lantern_genesis_load(
         goto error;
     }
 
-    result = genesis_read_state_blob(
-        paths->state_path,
-        &artifacts->state_bytes,
-        &artifacts->state_size);
-    if (result != LANTERN_GENESIS_OK)
+    if (paths->state_path && paths->state_path[0] != '\0')
     {
-        lantern_log_error(
-            "genesis",
-            NULL,
-            "failed to read genesis state at %s",
-            paths->state_path);
-        goto error;
+        result = genesis_read_state_blob(
+            paths->state_path,
+            &artifacts->state_bytes,
+            &artifacts->state_size);
+        if (result != LANTERN_GENESIS_OK)
+        {
+            lantern_log_error(
+                "genesis",
+                NULL,
+                "failed to read genesis state at %s",
+                paths->state_path);
+            goto error;
+        }
     }
 
     return LANTERN_GENESIS_OK;

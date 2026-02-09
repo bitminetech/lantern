@@ -225,7 +225,8 @@ void lantern_client_options_init(struct lantern_client_options *options)
     options->genesis_config_path = LANTERN_DEFAULT_GENESIS_CONFIG;
     options->validator_registry_path = LANTERN_DEFAULT_VALIDATOR_REGISTRY;
     options->nodes_path = LANTERN_DEFAULT_NODES_FILE;
-    options->genesis_state_path = LANTERN_DEFAULT_GENESIS_STATE;
+    options->genesis_state_path = NULL;
+    options->use_genesis_state = false;
     options->validator_config_path = LANTERN_DEFAULT_VALIDATOR_CONFIG;
     options->node_id = LANTERN_DEFAULT_NODE_ID;
     options->node_key_hex = NULL;
@@ -789,42 +790,10 @@ static bool client_try_genesis_from_pubkeys(struct lantern_client *client)
 
 
 /**
- * @brief Attempt genesis creation from an SSZ state snapshot.
- *
- * Decodes the serialized genesis state if provided in the configuration.
- *
- * @param client  Client with loaded genesis artifacts
- *
- * @return true on success, false if snapshot is missing or decode fails
- *
- * @note Thread safety: Must run before concurrent access to the state.
- */
-static bool client_try_genesis_from_ssz(struct lantern_client *client)
-{
-    if (!client->genesis.state_bytes || client->genesis.state_size == 0)
-    {
-        return false;
-    }
-
-    if (lantern_ssz_decode_state(
-            &client->state,
-            client->genesis.state_bytes,
-            client->genesis.state_size)
-        != 0)
-    {
-        return false;
-    }
-
-    client->genesis_fallback_used = false;
-    return true;
-}
-
-
-/**
  * @brief Attempt genesis creation from the validator registry file.
  *
  * Builds the genesis state using pubkeys sourced from the registry when the
- * explicit pubkey array or SSZ snapshot is unavailable.
+ * explicit pubkey array is unavailable.
  *
  * @param client  Client with loaded genesis registry
  *
@@ -1143,8 +1112,9 @@ static lantern_client_error client_finalize_genesis_state(struct lantern_client 
 /**
  * @brief Build genesis state using the available artifact priority order.
  *
- * Tries embedded pubkeys first, then SSZ snapshot, and finally the validator
- * registry. On success, finalizes validator vote structures.
+ * Tries embedded pubkeys first and then the validator registry. Lantern no
+ * longer decodes local genesis.ssz for bootstrap so replay/state roots remain
+ * deterministic from config/registry inputs.
  *
  * @param client  Client being initialized
  *
@@ -1156,11 +1126,6 @@ static lantern_client_error client_finalize_genesis_state(struct lantern_client 
 static lantern_client_error client_generate_state_from_genesis(struct lantern_client *client)
 {
     if (client_try_genesis_from_pubkeys(client))
-    {
-        return client_finalize_genesis_state(client);
-    }
-
-    if (client_try_genesis_from_ssz(client))
     {
         return client_finalize_genesis_state(client);
     }
@@ -1746,6 +1711,11 @@ static void shutdown_peer_tracking(struct lantern_client *client)
             client->peer_status_entries = NULL;
             client->peer_status_count = 0;
             client->peer_status_capacity = 0;
+            free(client->active_blocks_requests);
+            client->active_blocks_requests = NULL;
+            client->active_blocks_request_count = 0;
+            client->active_blocks_request_capacity = 0;
+            client->next_blocks_request_id = 0;
             pthread_mutex_unlock(&client->status_lock);
         }
         else
@@ -1754,6 +1724,11 @@ static void shutdown_peer_tracking(struct lantern_client *client)
             client->peer_status_entries = NULL;
             client->peer_status_count = 0;
             client->peer_status_capacity = 0;
+            free(client->active_blocks_requests);
+            client->active_blocks_requests = NULL;
+            client->active_blocks_request_count = 0;
+            client->active_blocks_request_capacity = 0;
+            client->next_blocks_request_id = 0;
         }
         pthread_mutex_destroy(&client->status_lock);
         client->status_lock_initialized = false;
@@ -1764,6 +1739,11 @@ static void shutdown_peer_tracking(struct lantern_client *client)
         client->peer_status_entries = NULL;
         client->peer_status_count = 0;
         client->peer_status_capacity = 0;
+        free(client->active_blocks_requests);
+        client->active_blocks_requests = NULL;
+        client->active_blocks_request_count = 0;
+        client->active_blocks_request_capacity = 0;
+        client->next_blocks_request_id = 0;
     }
 
     if (client->peer_vote_lock_initialized)

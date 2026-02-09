@@ -639,33 +639,16 @@ static bool build_root_chain_locked(
     return out_chain->length > 0;
 }
 
-static bool init_replay_state(const struct lantern_client *client, LanternState *out_state)
+static bool resolve_replay_validator_pubkeys(
+    const struct lantern_client *client,
+    const struct lantern_log_metadata *meta,
+    const uint8_t **out_pubkeys,
+    size_t *out_validator_count,
+    bool *out_allocated_pubkeys)
 {
-    if (!client || !out_state)
+    if (!client || !out_pubkeys || !out_validator_count || !out_allocated_pubkeys)
     {
         return false;
-    }
-
-    struct lantern_log_metadata meta = {.validator = client->node_id};
-    lantern_state_init(out_state);
-
-    if (client->genesis.state_bytes && client->genesis.state_size > 0)
-    {
-        if (lantern_ssz_decode_state(
-                out_state,
-                client->genesis.state_bytes,
-                client->genesis.state_size)
-            == 0)
-        {
-            return true;
-        }
-        lantern_log_warn(
-            "state",
-            &meta,
-            "init_replay_state failed to decode genesis state size=%zu",
-            client->genesis.state_size);
-        lantern_state_reset(out_state);
-        lantern_state_init(out_state);
     }
 
     const struct lantern_chain_config *config = &client->genesis.chain_config;
@@ -682,10 +665,9 @@ static bool init_replay_state(const struct lantern_client *client, LanternState 
             {
                 lantern_log_warn(
                     "state",
-                    &meta,
+                    meta,
                     "init_replay_state registry pubkey size overflow count=%zu",
                     registry_count);
-                lantern_state_reset(out_state);
                 return false;
             }
 
@@ -696,10 +678,9 @@ static bool init_replay_state(const struct lantern_client *client, LanternState 
             {
                 lantern_log_warn(
                     "state",
-                    &meta,
+                    meta,
                     "init_replay_state failed to allocate registry pubkey buffer len=%zu",
                     pubkeys_len);
-                lantern_state_reset(out_state);
                 return false;
             }
             bool pubkey_ok = true;
@@ -731,10 +712,9 @@ static bool init_replay_state(const struct lantern_client *client, LanternState 
             {
                 lantern_log_warn(
                     "state",
-                    &meta,
+                    meta,
                     "init_replay_state failed to populate registry pubkeys");
                 free(buffer);
-                lantern_state_reset(out_state);
                 return false;
             }
             pubkeys = buffer;
@@ -747,10 +727,9 @@ static bool init_replay_state(const struct lantern_client *client, LanternState 
             {
                 lantern_log_warn(
                     "state",
-                    &meta,
+                    meta,
                     "init_replay_state state pubkey size overflow count=%zu",
                     state_count);
-                lantern_state_reset(out_state);
                 return false;
             }
             validator_count = state_count;
@@ -760,10 +739,9 @@ static bool init_replay_state(const struct lantern_client *client, LanternState 
             {
                 lantern_log_warn(
                     "state",
-                    &meta,
+                    meta,
                     "init_replay_state failed to allocate state pubkey buffer len=%zu",
                     pubkeys_len);
-                lantern_state_reset(out_state);
                 return false;
             }
             for (size_t i = 0; i < validator_count; ++i)
@@ -779,9 +757,8 @@ static bool init_replay_state(const struct lantern_client *client, LanternState 
         {
             lantern_log_warn(
                 "state",
-                &meta,
+                meta,
                 "init_replay_state missing validator pubkeys");
-            lantern_state_reset(out_state);
             return false;
         }
     }
@@ -794,12 +771,51 @@ static bool init_replay_state(const struct lantern_client *client, LanternState 
         }
         lantern_log_warn(
             "state",
-            &meta,
+            meta,
             "init_replay_state invalid validator_count=0");
+        return false;
+    }
+
+    *out_pubkeys = pubkeys;
+    *out_validator_count = validator_count;
+    *out_allocated_pubkeys = allocated_pubkeys;
+    return true;
+}
+
+static bool init_replay_state(const struct lantern_client *client, LanternState *out_state)
+{
+    if (!client || !out_state)
+    {
+        return false;
+    }
+
+    struct lantern_log_metadata meta = {.validator = client->node_id};
+    lantern_state_init(out_state);
+
+    if (client->genesis.state_bytes && client->genesis.state_size > 0)
+    {
+        lantern_log_debug(
+            "state",
+            &meta,
+            "init_replay_state ignoring local genesis state bytes size=%zu",
+            client->genesis.state_size);
+    }
+
+    const uint8_t *pubkeys = NULL;
+    size_t validator_count = 0;
+    bool allocated_pubkeys = false;
+    if (!resolve_replay_validator_pubkeys(
+            client,
+            &meta,
+            &pubkeys,
+            &validator_count,
+            &allocated_pubkeys))
+    {
         lantern_state_reset(out_state);
         return false;
     }
 
+    const struct lantern_chain_config *config = &client->genesis.chain_config;
     if (lantern_state_generate_genesis(
             out_state,
             config->genesis_time,

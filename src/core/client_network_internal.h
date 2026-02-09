@@ -46,7 +46,7 @@ extern "C" {
 #define LANTERN_PEER_DIAL_INTERVAL_SECONDS 5u
 
 /** Maximum concurrent blocks requests per peer */
-#define LANTERN_MAX_BLOCKS_REQUESTS_PER_PEER 2u
+#define LANTERN_MAX_BLOCKS_REQUESTS_PER_PEER 1u
 
 /** Peer dial timeout in milliseconds */
 #define LANTERN_PEER_DIAL_TIMEOUT_MS 4000
@@ -85,10 +85,8 @@ struct lantern_peer_status_entry
     LanternStatusMessage status;          /**< Latest status message from peer */
     bool has_status;                      /**< True if status has been received */
     uint64_t last_status_ms;              /**< Timestamp of last status message */
-    uint32_t blocks_requests_inflight;    /**< Count of in-flight block requests */
     bool status_request_inflight;         /**< True if status request is pending */
     bool reqresp_legacy_len;              /**< True if peer uses legacy reqresp length framing */
-    uint64_t last_blocks_request_ms;      /**< Timestamp of last blocks request */
     uint32_t consecutive_blocks_failures; /**< Count of consecutive request failures */
     uint32_t outstanding_status_requests; /**< Number of outstanding status requests */
     uint32_t consecutive_ping_failures;   /**< Count of consecutive ping failures */
@@ -102,6 +100,7 @@ struct lantern_peer_status_entry
 struct block_request_ctx
 {
     struct lantern_client *client;  /**< Client instance */
+    uint64_t request_id;            /**< Internal request tracking ID */
     peer_id_t peer_id;              /**< Peer ID structure */
     char peer_text[128];            /**< Peer ID as text */
     LanternRoot *roots;             /**< Roots being requested */

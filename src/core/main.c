@@ -28,6 +28,7 @@ enum {
     OPT_VALIDATOR_REGISTRY,
     OPT_NODES_PATH,
     OPT_GENESIS_STATE,
+    OPT_USE_GENESIS_STATE,
     OPT_VALIDATOR_CONFIG,
     OPT_NODE_ID,
     OPT_NODE_KEY,
@@ -204,6 +205,9 @@ static lantern_client_error apply_option(
         return LANTERN_CLIENT_OK;
     case OPT_GENESIS_STATE:
         options->genesis_state_path = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_USE_GENESIS_STATE:
+        options->use_genesis_state = true;
         return LANTERN_CLIENT_OK;
     case OPT_VALIDATOR_CONFIG:
         options->validator_config_path = optarg;
@@ -418,6 +422,7 @@ static lantern_client_error parse_arguments(
         {"validator-registry-path", required_argument, NULL, OPT_VALIDATOR_REGISTRY},
         {"nodes-path", required_argument, NULL, OPT_NODES_PATH},
         {"genesis-state", required_argument, NULL, OPT_GENESIS_STATE},
+        {"use-genesis-state", no_argument, NULL, OPT_USE_GENESIS_STATE},
         {"validator-config", required_argument, NULL, OPT_VALIDATOR_CONFIG},
         {"node-id", required_argument, NULL, OPT_NODE_ID},
         {"node-key", required_argument, NULL, OPT_NODE_KEY},
@@ -449,6 +454,16 @@ static lantern_client_error parse_arguments(
         {
             return LANTERN_CLIENT_ERR_INVALID_PARAM;
         }
+    }
+
+    if (options->use_genesis_state || options->genesis_state_path)
+    {
+        lantern_log_warn(
+            "cli",
+            &(const struct lantern_log_metadata){.validator = options->node_id},
+            "ignoring --genesis-state/--use-genesis-state; Lantern derives genesis from config/registry");
+        options->use_genesis_state = false;
+        options->genesis_state_path = NULL;
     }
 
     if (options->node_key_hex && options->node_key_path)
@@ -673,7 +688,11 @@ static void print_usage_paths(void)
     lantern_log_info(
         "main",
         NULL,
-        "  --genesis-state PATH         Path to genesis.ssz");
+        "  --genesis-state PATH         Deprecated; ignored");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --use-genesis-state          Deprecated; ignored");
     lantern_log_info(
         "main",
         NULL,

@@ -1510,9 +1510,63 @@ int stream_write_all(
         }
         return LANTERN_REQRESP_ERR_INVALID_PARAM;
     }
+
+    char peer_text[LANTERN_REQRESP_PEER_TEXT_BYTES];
+    struct lantern_log_metadata meta;
+    init_peer_log_metadata(stream, peer_text, sizeof(peer_text), &meta);
+
+    uint64_t deadline_ms = UINT64_MAX;
+    uint64_t now_ms = reqresp_now_ms();
+    uint64_t stall_timeout_ms = lantern_reqresp_stall_timeout_ms();
+    if (stall_timeout_ms > 0u
+        && now_ms != 0u
+        && now_ms <= UINT64_MAX - stall_timeout_ms)
+    {
+        deadline_ms = now_ms + stall_timeout_ms;
+    }
+
     size_t offset = 0;
     while (offset < length)
     {
+        if (deadline_ms != UINT64_MAX)
+        {
+            now_ms = reqresp_now_ms();
+            if (now_ms != 0u && now_ms >= deadline_ms)
+            {
+                if (out_err)
+                {
+                    *out_err = LIBP2P_ERR_TIMEOUT;
+                }
+                lantern_log_warn(
+                    "reqresp",
+                    &meta,
+                    "stream write timed out bytes_written=%zu total_bytes=%zu",
+                    offset,
+                    length);
+                return LANTERN_REQRESP_ERR_STREAM_WRITE;
+            }
+
+            uint64_t remaining_ms = (now_ms == 0u) ? stall_timeout_ms : (deadline_ms - now_ms);
+            if (remaining_ms == 0u)
+            {
+                remaining_ms = 1u;
+            }
+            int deadline_rc = libp2p_stream_set_deadline(stream, remaining_ms);
+            if (deadline_rc != 0)
+            {
+                if (out_err)
+                {
+                    *out_err = (ssize_t)deadline_rc;
+                }
+                lantern_log_warn(
+                    "reqresp",
+                    &meta,
+                    "failed to set write deadline err=%d",
+                    deadline_rc);
+                return LANTERN_REQRESP_ERR_STREAM_WRITE;
+            }
+        }
+
         ssize_t written = libp2p_stream_write(stream, data + offset, length - offset);
         if (written > 0)
         {

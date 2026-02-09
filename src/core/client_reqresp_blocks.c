@@ -57,6 +57,7 @@ static bool lantern_client_process_stream_block_chunk(
     size_t chunk_len,
     const struct lantern_log_metadata *meta,
     bool *saw_block);
+static void close_and_free_stream(libp2p_stream_t *stream);
 static void *block_request_worker(void *arg);
 static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int err);
 static int schedule_blocks_request_batch(
@@ -64,7 +65,8 @@ static int schedule_blocks_request_batch(
     const char *peer_id_text,
     const LanternRoot *roots,
     const uint32_t *depths,
-    size_t root_count);
+    size_t root_count,
+    uint64_t request_id);
 
 
 /* ============================================================================
@@ -88,6 +90,16 @@ static void block_request_ctx_free(struct block_request_ctx *ctx)
     free(ctx->roots);
     free(ctx->depths);
     free(ctx);
+}
+
+static void close_and_free_stream(libp2p_stream_t *stream)
+{
+    if (!stream)
+    {
+        return;
+    }
+    (void)libp2p_stream_close(stream);
+    libp2p_stream_free(stream);
 }
 
 /* ============================================================================
@@ -297,7 +309,7 @@ static void *block_request_worker(void *arg)
     {
         if (stream)
         {
-            libp2p_stream_free(stream);
+            close_and_free_stream(stream);
         }
         block_request_ctx_free(ctx);
         return NULL;
@@ -484,6 +496,18 @@ static void *block_request_worker(void *arg)
         goto cleanup;
     }
 
+    /* Half-close write side so responder can finalize req/resp stream lifecycle. */
+    int shutdown_rc = libp2p_stream_shutdown_write(stream);
+    if (shutdown_rc != 0)
+    {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "failed to half-close blocks_by_root stream rc=%d",
+            shutdown_rc);
+        goto cleanup;
+    }
+
     struct lantern_reqresp_service *service = ctx->client ? &ctx->client->reqresp : NULL;
     bool saw_block = false;
 
@@ -586,11 +610,12 @@ cleanup:
     free(payload);
     free(raw_request);
     lantern_blocks_by_root_request_reset(&request);
-    libp2p_stream_free(stream);
+    close_and_free_stream(stream);
     if (ctx->client)
     {
-        lantern_client_on_blocks_request_complete_batch(
+        lantern_client_on_blocks_request_complete_batch_with_id(
             ctx->client,
+            ctx->request_id,
             ctx->peer_text,
             ctx->roots,
             ctx->root_count,
@@ -627,7 +652,7 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
     {
         if (stream)
         {
-            libp2p_stream_free(stream);
+            close_and_free_stream(stream);
         }
         return;
     }
@@ -662,13 +687,14 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
             root_hex[0] ? root_hex : "0x0");
         if (stream)
         {
-            libp2p_stream_free(stream);
+            close_and_free_stream(stream);
             stream = NULL;
         }
         if (ctx->client)
         {
-            lantern_client_on_blocks_request_complete_batch(
+            lantern_client_on_blocks_request_complete_batch_with_id(
                 ctx->client,
+                ctx->request_id,
                 ctx->peer_text,
                 ctx->roots,
                 ctx->root_count,
@@ -686,11 +712,12 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
             &meta,
             "failed to allocate worker for %s stream",
             ctx->protocol_id);
-        libp2p_stream_free(stream);
+        close_and_free_stream(stream);
         if (ctx->client)
         {
-            lantern_client_on_blocks_request_complete_batch(
+            lantern_client_on_blocks_request_complete_batch_with_id(
                 ctx->client,
+                ctx->request_id,
                 ctx->peer_text,
                 ctx->roots,
                 ctx->root_count,
@@ -710,11 +737,12 @@ static void block_request_on_open(libp2p_stream_t *stream, void *user_data, int 
             &meta,
             "failed to spawn blocks_by_root worker");
         free(worker);
-        libp2p_stream_free(stream);
+        close_and_free_stream(stream);
         if (ctx->client)
         {
-            lantern_client_on_blocks_request_complete_batch(
+            lantern_client_on_blocks_request_complete_batch_with_id(
                 ctx->client,
+                ctx->request_id,
                 ctx->peer_text,
                 ctx->roots,
                 ctx->root_count,
@@ -741,7 +769,8 @@ static int schedule_blocks_request_batch(
     const char *peer_id_text,
     const LanternRoot *roots,
     const uint32_t *depths,
-    size_t root_count)
+    size_t root_count,
+    uint64_t request_id)
 {
     if (!client || !peer_id_text || !roots || root_count == 0)
     {
@@ -771,8 +800,9 @@ static int schedule_blocks_request_batch(
                 .validator = client->node_id,
                 .peer = peer_id_text},
             "skipping blocks_by_root dial for test run");
-        lantern_client_on_blocks_request_complete_batch(
+        lantern_client_on_blocks_request_complete_batch_with_id(
             client,
+            request_id,
             peer_id_text,
             roots,
             root_count,
@@ -799,6 +829,7 @@ static int schedule_blocks_request_batch(
     }
 
     ctx->client = client;
+    ctx->request_id = request_id;
     ctx->root_count = root_count;
     ctx->protocol_id = LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID;
     strncpy(ctx->peer_text, peer_id_text, sizeof(ctx->peer_text) - 1);
@@ -886,9 +917,10 @@ int lantern_client_schedule_blocks_request_batch(
     const char *peer_id_text,
     const LanternRoot *roots,
     const uint32_t *depths,
-    size_t root_count)
+    size_t root_count,
+    uint64_t request_id)
 {
-    return schedule_blocks_request_batch(client, peer_id_text, roots, depths, root_count);
+    return schedule_blocks_request_batch(client, peer_id_text, roots, depths, root_count, request_id);
 }
 
 /**
@@ -911,12 +943,13 @@ int lantern_client_schedule_blocks_request(
     struct lantern_client *client,
     const char *peer_id_text,
     const LanternRoot *root,
-    uint32_t backfill_depth)
+    uint32_t backfill_depth,
+    uint64_t request_id)
 {
     if (!root)
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     const uint32_t depth = backfill_depth;
-    return schedule_blocks_request_batch(client, peer_id_text, root, &depth, 1u);
+    return schedule_blocks_request_batch(client, peer_id_text, root, &depth, 1u, request_id);
 }

@@ -272,16 +272,18 @@ int lantern_network_blocks_by_root_request_encode(
         return -1;
     }
     size_t roots_bytes = req->roots.length * LANTERN_ROOT_SIZE;
-    if (out_len < roots_bytes) {
+    size_t total_len = roots_bytes;
+    if (out_len < total_len) {
         return -1;
     }
+    /* leanSpec: BlocksByRootRequest is SSZList[Bytes32], encoded as packed roots bytes. */
     if (roots_bytes > 0) {
         if (!req->roots.items) {
             return -1;
         }
         memcpy(out, req->roots.items, roots_bytes);
     }
-    *written = roots_bytes;
+    *written = total_len;
     return 0;
 }
 
@@ -331,12 +333,7 @@ int lantern_network_blocks_by_root_request_decode(
         return -1;
     }
 
-    /* Canonical SSZ list encoding: raw concatenated roots. */
-    if (data_len % LANTERN_ROOT_SIZE == 0) {
-        return decode_blocks_by_root_list(req, data, data_len);
-    }
-
-    /* Zeam-compatible SSZ container encoding: 4-byte offset + list payload. */
+    /* Canonical SSZ container encoding: 4-byte offset + list payload. */
     if (data_len >= 4) {
         uint32_t offset = (uint32_t)data[0]
             | ((uint32_t)data[1] << 8)
@@ -348,6 +345,11 @@ int lantern_network_blocks_by_root_request_decode(
                 return decode_blocks_by_root_list(req, data + offset, list_len);
             }
         }
+    }
+
+    /* Legacy compatibility: some older peers encoded only the raw list bytes. */
+    if (data_len % LANTERN_ROOT_SIZE == 0) {
+        return decode_blocks_by_root_list(req, data, data_len);
     }
     return -1;
 }
