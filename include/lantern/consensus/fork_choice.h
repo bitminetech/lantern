@@ -94,6 +94,20 @@ int lantern_fork_choice_update_checkpoints(
     const LanternCheckpoint *latest_justified,
     const LanternCheckpoint *latest_finalized);
 
+/**
+ * Restore fork-choice checkpoints from persisted state.
+ *
+ * Unlike lantern_fork_choice_update_checkpoints(), this API is intended for
+ * startup restoration and may move checkpoints backwards when the persisted
+ * state is behind the temporary anchor checkpoints used during init.
+ *
+ * Any provided checkpoint root must already exist in the fork-choice store.
+ */
+int lantern_fork_choice_restore_checkpoints(
+    LanternForkChoice *store,
+    const LanternCheckpoint *latest_justified,
+    const LanternCheckpoint *latest_finalized);
+
 int lantern_fork_choice_accept_new_votes(LanternForkChoice *store);
 int lantern_fork_choice_update_safe_target(LanternForkChoice *store);
 int lantern_fork_choice_recompute_head(LanternForkChoice *store);

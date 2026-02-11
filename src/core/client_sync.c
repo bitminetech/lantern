@@ -562,6 +562,14 @@ int initialize_fork_choice(struct lantern_client *client)
     anchor_checkpoint.root = anchor_root;
     anchor_checkpoint.slot = anchor.slot;
 
+    /*
+     * Seed fork-choice with anchor_checkpoint (whose root matches the anchor
+     * block that set_anchor registers in the tree).  This guarantees
+     * lmd_ghost_compute can always find its start_root during block restore.
+     *
+     * Real persisted checkpoints are synced to the store AFTER
+     * restore_persisted_blocks() via lantern_fork_choice_restore_checkpoints().
+     */
     if (lantern_fork_choice_set_anchor(
             &client->fork_choice,
             &anchor,
@@ -651,7 +659,6 @@ static int compare_blocks_by_slot(const void *lhs_ptr, const void *rhs_ptr)
     return memcmp(lhs->root.bytes, rhs->root.bytes, LANTERN_ROOT_SIZE);
 }
 
-
 /**
  * Restore persisted blocks from storage into fork choice.
  *
@@ -733,6 +740,17 @@ int restore_persisted_blocks(struct lantern_client *client)
             "forkchoice",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "advancing fork choice time after restore failed");
+    }
+    if (lantern_fork_choice_restore_checkpoints(
+            &client->fork_choice,
+            &client->state.latest_justified,
+            &client->state.latest_finalized)
+        != 0)
+    {
+        lantern_log_warn(
+            "forkchoice",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "restoring persisted checkpoints after block restore failed");
     }
 
     persisted_block_list_reset(&list);
@@ -1238,7 +1256,7 @@ static bool try_schedule_blocks_request_batch(
     {
         return false;
     }
-    if (root_count > LANTERN_MAX_BLOCKS_PER_REQUEST)
+    if (root_count > LANTERN_MAX_REQUEST_BLOCKS)
     {
         return false;
     }
@@ -1898,8 +1916,8 @@ void lantern_client_request_pending_parent_after_blocks(
             pending_parent_candidate_compare);
     }
 
-    LanternRoot request_roots[LANTERN_MAX_BLOCKS_PER_REQUEST];
-    uint32_t request_depths[LANTERN_MAX_BLOCKS_PER_REQUEST];
+    LanternRoot request_roots[LANTERN_MAX_REQUEST_BLOCKS];
+    uint32_t request_depths[LANTERN_MAX_REQUEST_BLOCKS];
     size_t request_count = 0;
 
     if (prefer_requested_root)
@@ -1916,7 +1934,7 @@ void lantern_client_request_pending_parent_after_blocks(
 
     for (size_t i = 0; i < candidate_count; ++i)
     {
-        if (request_count >= LANTERN_MAX_BLOCKS_PER_REQUEST)
+        if (request_count >= LANTERN_MAX_REQUEST_BLOCKS)
         {
             break;
         }

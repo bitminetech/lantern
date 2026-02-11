@@ -2008,6 +2008,72 @@ static int test_compute_vote_checkpoints_respects_safe_target(void) {
     return 0;
 }
 
+static int test_compute_vote_checkpoints_uses_store_source_when_store_ahead(void) {
+    LanternState state;
+    LanternForkChoice fork_choice;
+    LanternRoot genesis_root;
+    setup_state_and_fork_choice(&state, &fork_choice, 1650, 8, &genesis_root);
+
+    LanternRoot block_roots[5];
+    block_roots[0] = genesis_root;
+    LanternRoot parent_root = genesis_root;
+    for (uint64_t slot = 1; slot <= 4; ++slot) {
+        LanternBlock block;
+        LanternRoot block_root;
+        make_block(&state, slot, &parent_root, &block, &block_root);
+        expect_zero(
+            lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, NULL, &block_root),
+            "add block for source precedence test");
+        block_roots[slot] = block_root;
+        parent_root = block_root;
+        lantern_block_body_reset(&block.body);
+    }
+
+    fork_choice.head = block_roots[4];
+    fork_choice.has_head = true;
+    fork_choice.safe_target = block_roots[4];
+    fork_choice.has_safe_target = true;
+
+    state.latest_finalized.slot = 0;
+    state.latest_finalized.root = block_roots[0];
+    state.latest_justified.slot = 1;
+    state.latest_justified.root = block_roots[1];
+
+    LanternCheckpoint store_justified;
+    store_justified.slot = 3;
+    store_justified.root = block_roots[3];
+    expect_zero(
+        lantern_fork_choice_update_checkpoints(&fork_choice, &store_justified, &state.latest_finalized),
+        "advance fork-choice justified beyond state justified");
+
+    LanternCheckpoint head;
+    LanternCheckpoint target;
+    LanternCheckpoint source;
+    int rc = lantern_state_compute_vote_checkpoints(&state, &head, &target, &source);
+    if (rc != 0) {
+        fprintf(stderr, "compute vote checkpoints store source precedence failed (rc=%d)\n", rc);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (!checkpoints_equal(&source, &store_justified)) {
+        fprintf(stderr, "source checkpoint should follow fork-choice latest_justified when store is ahead\n");
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (checkpoints_equal(&source, &state.latest_justified)) {
+        fprintf(stderr, "source checkpoint incorrectly used state latest_justified while store is ahead\n");
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+
+    lantern_state_reset(&state);
+    lantern_fork_choice_reset(&fork_choice);
+    return 0;
+}
+
 static int test_compute_vote_checkpoints_justifiable(void) {
     LanternState state;
     LanternForkChoice fork_choice;
@@ -2383,6 +2449,9 @@ int main(void) {
         return 1;
     }
     if (test_compute_vote_checkpoints_basic() != 0) {
+        return 1;
+    }
+    if (test_compute_vote_checkpoints_uses_store_source_when_store_ahead() != 0) {
         return 1;
     }
     if (test_compute_vote_checkpoints_respects_safe_target() != 0) {

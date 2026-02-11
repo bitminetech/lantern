@@ -432,6 +432,85 @@ static int test_fork_choice_checkpoint_progression(void) {
     return 0;
 }
 
+static int test_fork_choice_restore_checkpoints(void) {
+    LanternForkChoice store;
+    lantern_fork_choice_init(&store);
+
+    LanternConfig config = {.num_validators = 4, .genesis_time = 1};
+    assert(lantern_fork_choice_configure(&store, &config) == 0);
+
+    LanternBlock genesis;
+    init_block(&genesis, 0, 0, NULL, 0x41);
+    LanternRoot genesis_root;
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == 0);
+    LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
+    assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
+
+    LanternBlock block_one;
+    init_block(&block_one, 1, 0, &genesis_root, 0x42);
+    LanternRoot block_one_root;
+    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == 0);
+    LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
+    assert(
+        lantern_fork_choice_add_block(
+            &store,
+            &block_one,
+            NULL,
+            NULL,
+            NULL,
+            &block_one_root)
+        == 0);
+
+    LanternBlock block_two;
+    init_block(&block_two, 2, 1, &block_one_root, 0x43);
+    LanternRoot block_two_root;
+    assert(lantern_hash_tree_root_block(&block_two, &block_two_root) == 0);
+    LanternCheckpoint block_two_cp = make_checkpoint(&block_two_root, block_two.slot);
+    assert(
+        lantern_fork_choice_add_block(
+            &store,
+            &block_two,
+            NULL,
+            NULL,
+            NULL,
+            &block_two_root)
+        == 0);
+
+    assert(lantern_fork_choice_update_checkpoints(&store, &block_two_cp, &block_one_cp) == 0);
+    const LanternCheckpoint *latest_justified = lantern_fork_choice_latest_justified(&store);
+    const LanternCheckpoint *latest_finalized = lantern_fork_choice_latest_finalized(&store);
+    assert(latest_justified && checkpoints_equal(latest_justified, &block_two_cp));
+    assert(latest_finalized && checkpoints_equal(latest_finalized, &block_one_cp));
+
+    assert(lantern_fork_choice_restore_checkpoints(&store, &block_one_cp, &genesis_cp) == 0);
+    latest_justified = lantern_fork_choice_latest_justified(&store);
+    latest_finalized = lantern_fork_choice_latest_finalized(&store);
+    assert(latest_justified && checkpoints_equal(latest_justified, &block_one_cp));
+    assert(latest_finalized && checkpoints_equal(latest_finalized, &genesis_cp));
+
+    LanternRoot head_before_failure;
+    assert(lantern_fork_choice_current_head(&store, &head_before_failure) == 0);
+
+    LanternCheckpoint unknown_cp = block_one_cp;
+    fill_root(&unknown_cp.root, 0xEE);
+    assert(lantern_fork_choice_restore_checkpoints(&store, &unknown_cp, &genesis_cp) != 0);
+
+    const LanternCheckpoint *justified_after_failure = lantern_fork_choice_latest_justified(&store);
+    const LanternCheckpoint *finalized_after_failure = lantern_fork_choice_latest_finalized(&store);
+    assert(justified_after_failure && checkpoints_equal(justified_after_failure, &block_one_cp));
+    assert(finalized_after_failure && checkpoints_equal(finalized_after_failure, &genesis_cp));
+
+    LanternRoot head_after_failure;
+    assert(lantern_fork_choice_current_head(&store, &head_after_failure) == 0);
+    assert(roots_equal(&head_after_failure, &head_before_failure));
+
+    lantern_fork_choice_reset(&store);
+    reset_block(&block_two);
+    reset_block(&block_one);
+    reset_block(&genesis);
+    return 0;
+}
+
 static int test_fork_choice_advance_time_schedules_votes(void) {
     LanternForkChoice store;
     lantern_fork_choice_init(&store);
@@ -579,6 +658,9 @@ int main(void) {
         return 1;
     }
     if (test_fork_choice_checkpoint_progression() != 0) {
+        return 1;
+    }
+    if (test_fork_choice_restore_checkpoints() != 0) {
         return 1;
     }
     if (test_fork_choice_advance_time_schedules_votes() != 0) {

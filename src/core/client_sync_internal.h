@@ -46,8 +46,6 @@ typedef struct peer_id peer_id_t;
  * Constants
  * ============================================================================ */
 
-/** Maximum roots per blocks_by_root request */
-#define LANTERN_MAX_BLOCKS_PER_REQUEST 10u
 /**
  * Maximum parent depth for ancestor backfill requests.
  *

@@ -842,6 +842,56 @@ int lantern_fork_choice_update_checkpoints(
     return update_global_checkpoints(store, latest_justified, latest_finalized);
 }
 
+int lantern_fork_choice_restore_checkpoints(
+    LanternForkChoice *store,
+    const LanternCheckpoint *latest_justified,
+    const LanternCheckpoint *latest_finalized) {
+    if (!store || !store->initialized || !store->has_anchor) {
+        return -1;
+    }
+
+    LanternCheckpoint restored_justified = store->latest_justified;
+    LanternCheckpoint restored_finalized = store->latest_finalized;
+    bool justified_changed = false;
+
+    if (latest_justified && !root_is_zero(&latest_justified->root)) {
+        size_t justified_index = 0;
+        if (!map_lookup(store, &latest_justified->root, &justified_index)) {
+            return -1;
+        }
+        restored_justified = *latest_justified;
+        justified_changed = true;
+    }
+    if (latest_finalized && !root_is_zero(&latest_finalized->root)) {
+        size_t finalized_index = 0;
+        if (!map_lookup(store, &latest_finalized->root, &finalized_index)) {
+            return -1;
+        }
+        restored_finalized = *latest_finalized;
+    }
+    if (restored_finalized.slot > restored_justified.slot) {
+        return -1;
+    }
+
+    LanternCheckpoint previous_justified = store->latest_justified;
+    LanternCheckpoint previous_finalized = store->latest_finalized;
+    LanternRoot previous_head = store->head;
+    bool previous_has_head = store->has_head;
+
+    store->latest_justified = restored_justified;
+    if (justified_changed && lantern_fork_choice_recompute_head(store) != 0) {
+        store->latest_justified = previous_justified;
+        store->latest_finalized = previous_finalized;
+        store->head = previous_head;
+        store->has_head = previous_has_head;
+        return -1;
+    }
+
+    store->latest_justified = restored_justified;
+    store->latest_finalized = restored_finalized;
+    return 0;
+}
+
 static int find_start_index(
     const LanternForkChoice *store,
     const LanternRoot *start_root,

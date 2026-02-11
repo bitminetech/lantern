@@ -987,6 +987,21 @@ static void adopt_state_locked(struct lantern_client *client, LanternState *stat
     LanternState previous = client->state;
     client->state = *state;
     lantern_state_attach_fork_choice(&client->state, &client->fork_choice);
+    if (client->has_fork_choice)
+    {
+        if (lantern_fork_choice_update_checkpoints(
+                &client->fork_choice,
+                &client->state.latest_justified,
+                &client->state.latest_finalized)
+            != 0)
+        {
+            lantern_log_warn(
+                "forkchoice",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "failed to sync fork choice checkpoints when adopting state slot=%" PRIu64,
+                client->state.slot);
+        }
+    }
     lantern_state_reset(&previous);
 }
 
@@ -1819,7 +1834,7 @@ bool lantern_client_import_block(
         bool have_replay_state = false;
         bool processed = false;
         bool deferred = false;
-        LanternRoot missing_roots[LANTERN_MAX_BLOCKS_PER_REQUEST];
+        LanternRoot missing_roots[LANTERN_MAX_REQUEST_BLOCKS];
         size_t missing_count = 0;
 
         if (rebuild_state_for_root_locked(
@@ -1827,7 +1842,7 @@ bool lantern_client_import_block(
                 &parent_root,
                 &replay_state,
                 missing_roots,
-                LANTERN_MAX_BLOCKS_PER_REQUEST,
+                LANTERN_MAX_REQUEST_BLOCKS,
                 &missing_count))
         {
             have_replay_state = true;
@@ -1869,7 +1884,7 @@ bool lantern_client_import_block(
                 true);
             if (missing_count > 0)
             {
-                uint32_t request_depths[LANTERN_MAX_BLOCKS_PER_REQUEST];
+                uint32_t request_depths[LANTERN_MAX_REQUEST_BLOCKS];
                 uint32_t request_depth = backfill_depth + 1u;
                 if (request_depth > LANTERN_MAX_BACKFILL_DEPTH)
                 {

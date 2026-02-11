@@ -776,7 +776,7 @@ static int schedule_blocks_request_batch(
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
-    if (root_count > LANTERN_MAX_BLOCKS_PER_REQUEST)
+    if (root_count > LANTERN_MAX_REQUEST_BLOCKS)
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
