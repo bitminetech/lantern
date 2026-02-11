@@ -141,6 +141,7 @@ struct lantern_validator_duty_state {
     bool have_timepoint;
     bool slot_proposed;
     bool slot_attested;
+    bool slot_aggregated;
     bool pending_local_proposal;
     uint64_t pending_local_index;
     bool proposal_signal_pending;

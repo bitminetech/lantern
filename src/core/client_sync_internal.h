@@ -470,6 +470,21 @@ int gossip_vote_handler(
     const peer_id_t *from,
     void *context);
 
+/**
+ * Handle an aggregated attestation received via gossip.
+ *
+ * @spec subspecs/networking/gossip.py - aggregation gossip protocol
+ *
+ * @param attestation Received aggregated attestation
+ * @param from        Peer ID of sender
+ * @param context     Client instance
+ * @return 0 on success
+ */
+int gossip_aggregated_attestation_handler(
+    const LanternSignedAggregatedAttestation *attestation,
+    const peer_id_t *from,
+    void *context);
+
 
 /**
  * Initialize fork choice from genesis state.

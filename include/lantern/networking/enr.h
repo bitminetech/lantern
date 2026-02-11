@@ -2,6 +2,7 @@
 #define LANTERN_ENR_H
 
 #include <stddef.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -42,7 +43,8 @@ int lantern_enr_record_build_v4(
     const uint8_t private_key[32],
     const char *ip_string,
     uint16_t udp_port,
-    uint64_t sequence);
+    uint64_t sequence,
+    bool is_aggregator);
 
 #ifdef __cplusplus
 }

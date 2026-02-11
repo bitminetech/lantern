@@ -568,15 +568,15 @@ static int test_fork_choice_advance_time_schedules_votes(void) {
     const LanternRoot *safe_initial = lantern_fork_choice_safe_target(&store);
     assert(safe_initial && roots_equal(safe_initial, &genesis_root));
 
-    uint64_t genesis_time = config.genesis_time;
-    assert(lantern_fork_choice_advance_time(&store, genesis_time + 2, false) == 0);
+    uint64_t genesis_time_ms = config.genesis_time * 1000u;
+    assert(lantern_fork_choice_advance_time(&store, genesis_time_ms + 2400u, false) == 0);
     const LanternRoot *safe_after = lantern_fork_choice_safe_target(&store);
     assert(safe_after && roots_equal(safe_after, &block_voted_root));
 
     assert(lantern_fork_choice_current_head(&store, &head) == 0);
     assert(roots_equal(&head, &block_competing_root));
 
-    assert(lantern_fork_choice_advance_time(&store, genesis_time + 3, false) == 0);
+    assert(lantern_fork_choice_advance_time(&store, genesis_time_ms + 3200u, false) == 0);
     assert(lantern_fork_choice_current_head(&store, &head) == 0);
     assert(roots_equal(&head, &block_voted_root));
 

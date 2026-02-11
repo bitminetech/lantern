@@ -18,6 +18,8 @@ extern "C" {
 struct lantern_gossipsub_config {
     struct libp2p_host *host;
     const char *devnet;
+    size_t attestation_subnet_id;
+    int subscribe_attestation_subnet;
 };
 
 typedef int (*lantern_gossipsub_block_handler)(
@@ -28,11 +30,19 @@ typedef int (*lantern_gossipsub_vote_handler)(
     const LanternSignedVote *vote,
     const peer_id_t *from,
     void *user_data);
+typedef int (*lantern_gossipsub_aggregated_attestation_handler)(
+    const LanternSignedAggregatedAttestation *attestation,
+    const peer_id_t *from,
+    void *user_data);
 
 struct lantern_gossipsub_service {
     libp2p_gossipsub_t *gossipsub;
     char block_topic[128];
     char vote_topic[128];
+    char vote_subnet_topic[128];
+    char aggregated_attestation_topic[128];
+    size_t attestation_subnet_id;
+    int subscribe_attestation_subnet;
     int (*publish_hook)(const char *topic, const uint8_t *payload, size_t payload_len, void *user_data);
     void *publish_hook_user_data;
     int loopback_only;
@@ -40,8 +50,12 @@ struct lantern_gossipsub_service {
     void *block_handler_user_data;
     lantern_gossipsub_vote_handler vote_handler;
     void *vote_handler_user_data;
+    lantern_gossipsub_aggregated_attestation_handler aggregated_attestation_handler;
+    void *aggregated_attestation_handler_user_data;
     libp2p_gossipsub_validator_handle_t *block_validator_handle;
     libp2p_gossipsub_validator_handle_t *vote_validator_handle;
+    libp2p_gossipsub_validator_handle_t *vote_subnet_validator_handle;
+    libp2p_gossipsub_validator_handle_t *aggregated_attestation_validator_handle;
 };
 
 void lantern_gossipsub_service_init(struct lantern_gossipsub_service *service);
@@ -55,6 +69,12 @@ int lantern_gossipsub_service_publish_block(
 int lantern_gossipsub_service_publish_vote(
     struct lantern_gossipsub_service *service,
     const LanternSignedVote *vote);
+int lantern_gossipsub_service_publish_vote_subnet(
+    struct lantern_gossipsub_service *service,
+    const LanternSignedVote *vote);
+int lantern_gossipsub_service_publish_aggregated_attestation(
+    struct lantern_gossipsub_service *service,
+    const LanternSignedAggregatedAttestation *attestation);
 void lantern_gossipsub_service_set_publish_hook(
     struct lantern_gossipsub_service *service,
     int (*hook)(const char *topic, const uint8_t *payload, size_t payload_len, void *user_data),
@@ -69,6 +89,10 @@ void lantern_gossipsub_service_set_block_handler(
 void lantern_gossipsub_service_set_vote_handler(
     struct lantern_gossipsub_service *service,
     lantern_gossipsub_vote_handler handler,
+    void *user_data);
+void lantern_gossipsub_service_set_aggregated_attestation_handler(
+    struct lantern_gossipsub_service *service,
+    lantern_gossipsub_aggregated_attestation_handler handler,
     void *user_data);
 
 #ifdef __cplusplus

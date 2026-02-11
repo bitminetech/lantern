@@ -324,13 +324,18 @@ static void apply_vote_to_fork_choice_locked(
         return;
     }
 
-    uint64_t now_seconds = 0;
-    if (!lantern_client_vote_time_seconds(client, vote->data.slot, &now_seconds))
+    uint64_t now_millis = 0;
+    uint64_t vote_time_seconds = 0;
+    if (lantern_client_vote_time_seconds(client, vote->data.slot, &vote_time_seconds))
     {
-        now_seconds = validator_wall_time_now_seconds();
+        now_millis = vote_time_seconds * 1000u;
+    }
+    else
+    {
+        now_millis = validator_wall_time_now_millis();
     }
 
-    result = lantern_fork_choice_advance_time(&client->fork_choice, now_seconds, false);
+    result = lantern_fork_choice_advance_time(&client->fork_choice, now_millis, false);
     if (result != 0)
     {
         lantern_log_debug(

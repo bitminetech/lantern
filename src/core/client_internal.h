@@ -60,6 +60,16 @@ uint64_t validator_wall_time_now_seconds(void);
 
 
 /**
+ * Get current wall clock time in milliseconds.
+ *
+ * @return Current time as Unix timestamp in milliseconds
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+uint64_t validator_wall_time_now_millis(void);
+
+
+/**
  * Sleep for specified milliseconds.
  *
  * @param ms  Milliseconds to sleep

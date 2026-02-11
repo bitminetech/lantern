@@ -121,7 +121,10 @@ int main(void) {
     struct lantern_validator_config_entry *lantern_entry = lantern_validator_config_find(
         &artifacts.validator_config,
         "lantern_6");
-    if (!lantern_entry || lantern_entry->enr.quic_port != 9000 || lantern_entry->count != 1) {
+    if (!lantern_entry
+        || lantern_entry->enr.quic_port != 9000
+        || lantern_entry->count != 1
+        || lantern_entry->enr.is_aggregator) {
         fprintf(stderr, "validator config entry mismatch for lantern_6\n");
         goto cleanup;
     }

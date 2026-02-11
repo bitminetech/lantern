@@ -7,13 +7,14 @@
 extern "C" {
 #endif
 
-#define LANTERN_DUTY_PHASE_COUNT 4u
+#define LANTERN_DUTY_PHASE_COUNT 5u
 
 enum lantern_duty_phase {
     LANTERN_DUTY_PHASE_PROPOSAL = 0,
     LANTERN_DUTY_PHASE_VOTE = 1,
-    LANTERN_DUTY_PHASE_SAFE_TARGET = 2,
-    LANTERN_DUTY_PHASE_VOTE_ACCEPT = 3,
+    LANTERN_DUTY_PHASE_AGGREGATE = 2,
+    LANTERN_DUTY_PHASE_SAFE_TARGET = 3,
+    LANTERN_DUTY_PHASE_VOTE_ACCEPT = 4,
     LANTERN_DUTY_PHASE_UNKNOWN = 255,
 };
 
@@ -27,7 +28,8 @@ struct lantern_slot_clock {
     uint64_t genesis_time;
     uint32_t seconds_per_slot;
     uint32_t intervals_per_slot;
-    uint32_t seconds_per_interval;
+    uint64_t milliseconds_per_slot;
+    uint64_t milliseconds_per_interval;
 };
 
 struct lantern_slot_timepoint {

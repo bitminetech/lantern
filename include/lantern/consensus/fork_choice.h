@@ -42,7 +42,7 @@ typedef struct lantern_fork_choice {
     LanternConfig config;
     uint32_t seconds_per_slot;
     uint32_t intervals_per_slot;
-    uint32_t seconds_per_interval;
+    uint64_t milliseconds_per_interval;
     uint64_t time_intervals;
     LanternCheckpoint latest_justified;
     LanternCheckpoint latest_finalized;
@@ -114,7 +114,7 @@ int lantern_fork_choice_recompute_head(LanternForkChoice *store);
 
 int lantern_fork_choice_advance_time(
     LanternForkChoice *store,
-    uint64_t now_seconds,
+    uint64_t now_milliseconds,
     bool has_proposal);
 
 int lantern_fork_choice_current_head(const LanternForkChoice *store, LanternRoot *out_head);

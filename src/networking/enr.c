@@ -343,7 +343,8 @@ int lantern_enr_record_build_v4(
     const uint8_t private_key[32],
     const char *ip_string,
     uint16_t udp_port,
-    uint64_t sequence) {
+    uint64_t sequence,
+    bool is_aggregator) {
     if (!record || !private_key || !ip_string) {
         lantern_log_error("enr", NULL, "ENR build missing inputs");
         return -1;
@@ -351,7 +352,7 @@ int lantern_enr_record_build_v4(
 
     const char *error_reason = NULL;
 
-    struct lantern_rlp_buffer items[9];
+    struct lantern_rlp_buffer items[11];
     memset(items, 0, sizeof(items));
     struct lantern_rlp_buffer signed_record = {0};
     struct lantern_rlp_buffer content = {0};
@@ -428,6 +429,18 @@ int lantern_enr_record_build_v4(
         error_reason = "rlp encode udp value failed";
         goto error;
     }
+    if (is_aggregator) {
+        static const uint8_t aggregator_key[] = "is_aggregator";
+        static const uint8_t aggregator_value[] = {0x01};
+        if (lantern_rlp_encode_bytes(&items[idx++], aggregator_key, sizeof(aggregator_key) - 1u) != 0) {
+            error_reason = "rlp encode is_aggregator key failed";
+            goto error;
+        }
+        if (lantern_rlp_encode_bytes(&items[idx++], aggregator_value, sizeof(aggregator_value)) != 0) {
+            error_reason = "rlp encode is_aggregator value failed";
+            goto error;
+        }
+    }
 
     if (lantern_rlp_encode_list(&content, items, idx) != 0) {
         error_reason = "rlp encode content failed";
@@ -477,7 +490,7 @@ int lantern_enr_record_build_v4(
         goto error;
     }
 
-    struct lantern_rlp_buffer record_items[10];
+    struct lantern_rlp_buffer record_items[12];
     record_items[0] = signature_buf;
     for (size_t i = 0; i < idx; ++i) {
         record_items[i + 1] = items[i];

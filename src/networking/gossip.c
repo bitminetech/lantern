@@ -2,7 +2,6 @@
 
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "WjCryptLib_Sha256.h"
@@ -17,6 +16,8 @@ static const char *lantern_gossip_topic_name(enum lantern_gossip_topic_kind kind
             return "block";
         case LANTERN_GOSSIP_TOPIC_VOTE:
             return "attestation";
+        case LANTERN_GOSSIP_TOPIC_AGGREGATED_ATTESTATION:
+            return "aggregation";
         default:
             return NULL;
     }
@@ -30,11 +31,38 @@ int lantern_gossip_topic_format(
     if (!devnet || !buffer || buffer_len == 0) {
         return -1;
     }
+    if (kind == LANTERN_GOSSIP_TOPIC_VOTE_SUBNET) {
+        return -1;
+    }
     const char *message = lantern_gossip_topic_name(kind);
     if (!message || devnet[0] == '\0') {
         return -1;
     }
     int written = snprintf(buffer, buffer_len, "/leanconsensus/%s/%s/ssz_snappy", devnet, message);
+    if (written < 0 || (size_t)written >= buffer_len) {
+        return -1;
+    }
+    return 0;
+}
+
+int lantern_gossip_topic_format_subnet(
+    enum lantern_gossip_topic_kind kind,
+    const char *devnet,
+    size_t subnet_id,
+    char *buffer,
+    size_t buffer_len) {
+    if (!devnet || !buffer || buffer_len == 0) {
+        return -1;
+    }
+    if (kind != LANTERN_GOSSIP_TOPIC_VOTE_SUBNET || devnet[0] == '\0') {
+        return -1;
+    }
+    int written = snprintf(
+        buffer,
+        buffer_len,
+        "/leanconsensus/%s/attestation_%zu/ssz_snappy",
+        devnet,
+        subnet_id);
     if (written < 0 || (size_t)written >= buffer_len) {
         return -1;
     }

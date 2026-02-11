@@ -47,6 +47,8 @@ static const uint64_t VALIDATOR_SYNC_SLOT_LAG = 2;
 static const size_t VALIDATOR_SYNC_PENDING_THRESHOLD = 8;
 /** Wall clock lag (in slots) tolerated before treating peer status as stale. */
 static const uint64_t VALIDATOR_SYNC_WALL_CLOCK_LAG = 16;
+/** Devnet-3 committee count for subnet assignment. */
+static const size_t VALIDATOR_ATTESTATION_COMMITTEE_COUNT = 1u;
 
 static bool validator_should_pause_for_sync(const struct lantern_client *client)
 {
@@ -1541,6 +1543,25 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
             vote->data.slot);
         return LANTERN_CLIENT_ERR_NETWORK;
     }
+    size_t subnet_id = 0;
+    if (lantern_validator_index_compute_subnet_id(
+            vote->data.validator_id,
+            VALIDATOR_ATTESTATION_COMMITTEE_COUNT,
+            &subnet_id)
+        == 0) {
+        if (subnet_id == client->gossip.attestation_subnet_id) {
+            if (lantern_gossipsub_service_publish_vote_subnet(&client->gossip, vote) != 0) {
+                lantern_log_warn(
+                    "gossip",
+                    &meta,
+                    "failed to publish subnet attestation validator=%" PRIu64 " slot=%" PRIu64 " subnet=%zu",
+                    vote->data.validator_id,
+                    vote->data.slot,
+                    subnet_id);
+                return LANTERN_CLIENT_ERR_NETWORK;
+            }
+        }
+    }
     lantern_log_info(
         "gossip",
         &meta,
@@ -1901,6 +1922,151 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
     return result;
 }
 
+static lantern_client_error collect_subnet_votes_for_slot(
+    struct lantern_client *client,
+    uint64_t slot,
+    size_t subnet_id,
+    LanternAttestations *out_attestations,
+    LanternSignatureList *out_signatures) {
+    if (!client || !out_attestations || !out_signatures) {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    if (lantern_attestations_resize(out_attestations, 0) != 0) {
+        return LANTERN_CLIENT_ERR_ALLOC;
+    }
+    if (lantern_signature_list_resize(out_signatures, 0) != 0) {
+        return LANTERN_CLIENT_ERR_ALLOC;
+    }
+
+    bool state_locked = lantern_client_lock_state(client);
+    if (!state_locked) {
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+    if (!client->has_state || !client->state.validator_votes || client->state.validator_votes_len == 0) {
+        lantern_client_unlock_state(client, state_locked);
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+
+    lantern_client_error result = LANTERN_CLIENT_OK;
+    for (size_t i = 0; i < client->state.validator_votes_len; ++i) {
+        LanternSignedVote vote;
+        memset(&vote, 0, sizeof(vote));
+        if (lantern_state_get_signed_validator_vote(&client->state, i, &vote) != 0) {
+            continue;
+        }
+        if (vote.data.slot != slot) {
+            continue;
+        }
+        size_t vote_subnet = 0;
+        if (lantern_validator_index_compute_subnet_id(
+                vote.data.validator_id,
+                VALIDATOR_ATTESTATION_COMMITTEE_COUNT,
+                &vote_subnet)
+            != 0) {
+            continue;
+        }
+        if (vote_subnet != subnet_id) {
+            continue;
+        }
+        if (lantern_attestations_append(out_attestations, &vote.data) != 0
+            || lantern_signature_list_append(out_signatures, &vote.signature) != 0) {
+            result = LANTERN_CLIENT_ERR_ALLOC;
+            break;
+        }
+    }
+    lantern_client_unlock_state(client, state_locked);
+
+    if (result != LANTERN_CLIENT_OK) {
+        (void)lantern_attestations_resize(out_attestations, 0);
+        (void)lantern_signature_list_resize(out_signatures, 0);
+    }
+    return result;
+}
+
+static int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot)
+{
+    if (!client || !client->assigned_validators || !client->assigned_validators->enr.is_aggregator) {
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+
+    LanternAttestations attestations;
+    LanternSignatureList signatures;
+    lantern_attestations_init(&attestations);
+    lantern_signature_list_init(&signatures);
+
+    LanternAggregatedAttestations aggregated_attestations;
+    LanternAttestationSignatures aggregated_signatures;
+    lantern_aggregated_attestations_init(&aggregated_attestations);
+    lantern_attestation_signatures_init(&aggregated_signatures);
+
+    lantern_client_error result = collect_subnet_votes_for_slot(
+        client,
+        slot,
+        client->gossip.attestation_subnet_id,
+        &attestations,
+        &signatures);
+    if (result != LANTERN_CLIENT_OK) {
+        goto cleanup;
+    }
+    if (attestations.length == 0) {
+        result = LANTERN_CLIENT_ERR_IGNORED;
+        goto cleanup;
+    }
+
+    result = aggregate_attestations_for_block(
+        client,
+        &attestations,
+        &signatures,
+        &aggregated_attestations,
+        &aggregated_signatures);
+    if (result != LANTERN_CLIENT_OK) {
+        goto cleanup;
+    }
+    if (aggregated_attestations.length == 0 || aggregated_signatures.length == 0) {
+        result = LANTERN_CLIENT_ERR_IGNORED;
+        goto cleanup;
+    }
+
+    size_t count = aggregated_attestations.length;
+    if (aggregated_signatures.length < count) {
+        count = aggregated_signatures.length;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        LanternSignedAggregatedAttestation signed_attestation;
+        lantern_signed_aggregated_attestation_init(&signed_attestation);
+        signed_attestation.data = aggregated_attestations.data[i].data;
+        if (lantern_aggregated_signature_proof_copy(
+                &signed_attestation.proof,
+                &aggregated_signatures.data[i])
+            != 0) {
+            lantern_signed_aggregated_attestation_reset(&signed_attestation);
+            result = LANTERN_CLIENT_ERR_ALLOC;
+            break;
+        }
+        if (lantern_gossipsub_service_publish_aggregated_attestation(&client->gossip, &signed_attestation) != 0) {
+            lantern_signed_aggregated_attestation_reset(&signed_attestation);
+            result = LANTERN_CLIENT_ERR_NETWORK;
+            break;
+        }
+        LanternRoot data_root;
+        if (lantern_hash_tree_root_attestation_data(&signed_attestation.data, &data_root) == 0) {
+            bool locked = lantern_client_lock_state(client);
+            if (locked) {
+                (void)lantern_client_agg_proof_cache_add(client, &data_root, &signed_attestation.proof);
+            }
+            lantern_client_unlock_state(client, locked);
+        }
+        lantern_signed_aggregated_attestation_reset(&signed_attestation);
+    }
+
+cleanup:
+    lantern_aggregated_attestations_reset(&aggregated_attestations);
+    lantern_attestation_signatures_reset(&aggregated_signatures);
+    lantern_attestations_reset(&attestations);
+    lantern_signature_list_reset(&signatures);
+    return result;
+}
+
 
 /* ============================================================================
  * Validator Service Thread
@@ -1930,7 +2096,7 @@ void *validator_thread(void *arg)
             continue;
         }
 
-        uint64_t now = validator_wall_time_now_seconds();
+        uint64_t now = validator_wall_time_now_millis();
         if (client->has_runtime)
         {
             if (lantern_consensus_runtime_update_time(&client->runtime, now) != 0)
@@ -1955,6 +2121,7 @@ void *validator_thread(void *arg)
             duty->last_slot = tp->slot;
             duty->slot_proposed = false;
             duty->slot_attested = false;
+            duty->slot_aggregated = false;
             duty->pending_local_proposal = false;
             duty->pending_local_index = 0;
 
@@ -2003,6 +2170,26 @@ void *validator_thread(void *arg)
                     if (validator_publish_attestations(client, tp->slot) == LANTERN_CLIENT_OK)
                     {
                         duty->slot_attested = true;
+                    }
+                }
+                break;
+
+            case LANTERN_DUTY_PHASE_AGGREGATE:
+                if (!duty->slot_aggregated && duty->slot_attested)
+                {
+                    if (validator_publish_aggregated_attestations(client, tp->slot) == LANTERN_CLIENT_OK)
+                    {
+                        duty->slot_aggregated = true;
+                    }
+                }
+                break;
+
+            case LANTERN_DUTY_PHASE_SAFE_TARGET:
+                if (!duty->slot_aggregated && duty->slot_attested)
+                {
+                    if (validator_publish_aggregated_attestations(client, tp->slot) == LANTERN_CLIENT_OK)
+                    {
+                        duty->slot_aggregated = true;
                     }
                 }
                 break;

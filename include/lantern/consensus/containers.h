@@ -115,6 +115,11 @@ typedef struct {
 } LanternAggregatedSignatureProof;
 
 typedef struct {
+    LanternAttestationData data;
+    LanternAggregatedSignatureProof proof;
+} LanternSignedAggregatedAttestation;
+
+typedef struct {
     LanternAggregatedSignatureProof *data;
     size_t length;
     size_t capacity;
@@ -243,6 +248,12 @@ void lantern_aggregated_signature_proof_reset(LanternAggregatedSignatureProof *p
 int lantern_aggregated_signature_proof_copy(
     LanternAggregatedSignatureProof *dst,
     const LanternAggregatedSignatureProof *src);
+
+void lantern_signed_aggregated_attestation_init(LanternSignedAggregatedAttestation *attestation);
+void lantern_signed_aggregated_attestation_reset(LanternSignedAggregatedAttestation *attestation);
+int lantern_signed_aggregated_attestation_copy(
+    LanternSignedAggregatedAttestation *dst,
+    const LanternSignedAggregatedAttestation *src);
 
 void lantern_attestation_signatures_init(LanternAttestationSignatures *list);
 void lantern_attestation_signatures_reset(LanternAttestationSignatures *list);

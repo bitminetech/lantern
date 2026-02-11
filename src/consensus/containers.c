@@ -858,6 +858,35 @@ int lantern_aggregated_signature_proof_copy(
     return 0;
 }
 
+void lantern_signed_aggregated_attestation_init(LanternSignedAggregatedAttestation *attestation) {
+    if (!attestation) {
+        return;
+    }
+    memset(&attestation->data, 0, sizeof(attestation->data));
+    lantern_aggregated_signature_proof_init(&attestation->proof);
+}
+
+void lantern_signed_aggregated_attestation_reset(LanternSignedAggregatedAttestation *attestation) {
+    if (!attestation) {
+        return;
+    }
+    memset(&attestation->data, 0, sizeof(attestation->data));
+    lantern_aggregated_signature_proof_reset(&attestation->proof);
+}
+
+int lantern_signed_aggregated_attestation_copy(
+    LanternSignedAggregatedAttestation *dst,
+    const LanternSignedAggregatedAttestation *src) {
+    if (!dst || !src) {
+        return -1;
+    }
+    dst->data = src->data;
+    if (lantern_aggregated_signature_proof_copy(&dst->proof, &src->proof) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 void lantern_attestation_signatures_init(LanternAttestationSignatures *list) {
     if (!list) {
         return;

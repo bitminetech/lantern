@@ -181,6 +181,60 @@ uint64_t validator_wall_time_now_seconds(void)
 
 
 /**
+ * Get current wall clock time in milliseconds.
+ *
+ * @return Current time as Unix timestamp in milliseconds
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+uint64_t validator_wall_time_now_millis(void)
+{
+#if defined(_WIN32)
+    static const uint64_t WINDOWS_UNIX_EPOCH_DIFF_100NS = 116444736000000000ULL;
+    static const uint64_t WINDOWS_100NS_PER_MILLISECOND = 10000ULL;
+
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    ULARGE_INTEGER uli;
+    uli.LowPart = ft.dwLowDateTime;
+    uli.HighPart = ft.dwHighDateTime;
+    uint64_t time_100ns = (uint64_t)uli.QuadPart;
+    if (time_100ns < WINDOWS_UNIX_EPOCH_DIFF_100NS)
+    {
+        return 0;
+    }
+
+    uint64_t unix_100ns = time_100ns - WINDOWS_UNIX_EPOCH_DIFF_100NS;
+    return unix_100ns / WINDOWS_100NS_PER_MILLISECOND;
+#else
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) != 0)
+    {
+        return 0;
+    }
+    if (tv.tv_sec < 0 || tv.tv_usec < 0)
+    {
+        return 0;
+    }
+
+    uint64_t millis = (uint64_t)tv.tv_sec;
+    if (millis > UINT64_MAX / CLIENT_UTILS_MILLIS_PER_SECOND)
+    {
+        return 0;
+    }
+    millis *= CLIENT_UTILS_MILLIS_PER_SECOND;
+
+    uint64_t micros_part = (uint64_t)tv.tv_usec / CLIENT_UTILS_MICROS_PER_MILLI;
+    if (millis > UINT64_MAX - micros_part)
+    {
+        return 0;
+    }
+    return millis + micros_part;
+#endif
+}
+
+
+/**
  * Sleep for specified milliseconds.
  *
  * @param ms  Milliseconds to sleep

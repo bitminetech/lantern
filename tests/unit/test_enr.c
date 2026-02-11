@@ -1,5 +1,6 @@
 #include "lantern/networking/enr.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -101,7 +102,7 @@ static int test_build_enr_example(void) {
     struct lantern_enr_record record;
     lantern_enr_record_init(&record);
 
-    if (lantern_enr_record_build_v4(&record, kExamplePrivateKey, "127.0.0.1", 30303, 1) != 0) {
+    if (lantern_enr_record_build_v4(&record, kExamplePrivateKey, "127.0.0.1", 30303, 1, false) != 0) {
         fprintf(stderr, "build failed\n");
         lantern_enr_record_reset(&record);
         return 1;

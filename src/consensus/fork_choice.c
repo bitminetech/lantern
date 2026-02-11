@@ -13,7 +13,8 @@
 #include "lantern/support/time.h"
 
 #define LANTERN_FORK_CHOICE_DEFAULT_SECONDS_PER_SLOT 4u
-#define LANTERN_FORK_CHOICE_DEFAULT_INTERVALS_PER_SLOT 4u
+#define LANTERN_FORK_CHOICE_DEFAULT_INTERVALS_PER_SLOT 5u
+#define LANTERN_FORK_CHOICE_MILLISECONDS_PER_SECOND 1000u
 #define LANTERN_FORK_CHOICE_MAP_MIN_CAPACITY 16u
 #define LANTERN_FORK_CHOICE_LOAD_NUMERATOR 7u
 #define LANTERN_FORK_CHOICE_LOAD_DENOMINATOR 10u
@@ -379,7 +380,8 @@ void lantern_fork_choice_init(LanternForkChoice *store) {
     memset(store, 0, sizeof(*store));
     store->seconds_per_slot = LANTERN_FORK_CHOICE_DEFAULT_SECONDS_PER_SLOT;
     store->intervals_per_slot = LANTERN_FORK_CHOICE_DEFAULT_INTERVALS_PER_SLOT;
-    store->seconds_per_interval = store->seconds_per_slot / store->intervals_per_slot;
+    store->milliseconds_per_interval =
+        ((uint64_t)store->seconds_per_slot * LANTERN_FORK_CHOICE_MILLISECONDS_PER_SECOND) / store->intervals_per_slot;
 }
 
 void lantern_fork_choice_reset(LanternForkChoice *store) {
@@ -410,7 +412,8 @@ void lantern_fork_choice_reset(LanternForkChoice *store) {
     store->time_intervals = 0;
     store->seconds_per_slot = LANTERN_FORK_CHOICE_DEFAULT_SECONDS_PER_SLOT;
     store->intervals_per_slot = LANTERN_FORK_CHOICE_DEFAULT_INTERVALS_PER_SLOT;
-    store->seconds_per_interval = store->seconds_per_slot / store->intervals_per_slot;
+    store->milliseconds_per_interval =
+        ((uint64_t)store->seconds_per_slot * LANTERN_FORK_CHOICE_MILLISECONDS_PER_SECOND) / store->intervals_per_slot;
 }
 
 int lantern_fork_choice_configure(LanternForkChoice *store, const LanternConfig *config) {
@@ -436,7 +439,8 @@ int lantern_fork_choice_configure(LanternForkChoice *store, const LanternConfig 
     }
     store->seconds_per_slot = LANTERN_FORK_CHOICE_DEFAULT_SECONDS_PER_SLOT;
     store->intervals_per_slot = LANTERN_FORK_CHOICE_DEFAULT_INTERVALS_PER_SLOT;
-    store->seconds_per_interval = store->seconds_per_slot / store->intervals_per_slot;
+    store->milliseconds_per_interval =
+        ((uint64_t)store->seconds_per_slot * LANTERN_FORK_CHOICE_MILLISECONDS_PER_SECOND) / store->intervals_per_slot;
     store->initialized = true;
     votes_reset(store->known_votes, store->validator_count);
     votes_reset(store->new_votes, store->validator_count);
@@ -1163,8 +1167,11 @@ static int tick_interval(LanternForkChoice *store, bool has_proposal) {
         /* Interval 1: collect new votes, no store mutation. */
         return 0;
     case 2:
-        return lantern_fork_choice_update_safe_target(store);
+        /* Interval 2: committee aggregation handled at validator layer. */
+        return 0;
     case 3:
+        return lantern_fork_choice_update_safe_target(store);
+    case 4:
         return lantern_fork_choice_accept_new_votes(store);
     default:
         return 0;
@@ -1173,20 +1180,22 @@ static int tick_interval(LanternForkChoice *store, bool has_proposal) {
 
 int lantern_fork_choice_advance_time(
     LanternForkChoice *store,
-    uint64_t now_seconds,
+    uint64_t now_milliseconds,
     bool has_proposal) {
     if (!store || !store->initialized || !store->has_anchor) {
         return -1;
     }
-    if (now_seconds < store->config.genesis_time) {
+    uint64_t genesis_milliseconds =
+        (uint64_t)store->config.genesis_time * LANTERN_FORK_CHOICE_MILLISECONDS_PER_SECOND;
+    if (now_milliseconds < genesis_milliseconds) {
         /* Before genesis - no time to advance yet, but this is not an error */
         return 0;
     }
-    if (store->seconds_per_interval == 0) {
+    if (store->milliseconds_per_interval == 0) {
         return -1;
     }
-    uint64_t elapsed = now_seconds - store->config.genesis_time;
-    uint64_t target_interval = elapsed / store->seconds_per_interval;
+    uint64_t elapsed = now_milliseconds - genesis_milliseconds;
+    uint64_t target_interval = elapsed / store->milliseconds_per_interval;
     while (store->time_intervals < target_interval) {
         bool will_propose = has_proposal && (store->time_intervals + 1 == target_interval);
         if (tick_interval(store, will_propose) != 0) {

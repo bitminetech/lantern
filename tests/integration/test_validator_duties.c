@@ -85,7 +85,8 @@ static int expect_timepoint(
     }
 
     uint64_t expected_slot_start = runtime->clock.genesis_time
-        + (expected_slot * runtime->clock.seconds_per_slot);
+        * 1000u
+        + (expected_slot * runtime->clock.milliseconds_per_slot);
     if (tp->slot_start_time != expected_slot_start) {
         fprintf(stderr, "slot_start mismatch at %" PRIu64 ": expected %" PRIu64 " got %" PRIu64 "\n",
             now,
@@ -94,7 +95,7 @@ static int expect_timepoint(
         return 1;
     }
 
-    uint64_t interval_duration = runtime->clock.seconds_per_interval;
+    uint64_t interval_duration = runtime->clock.milliseconds_per_interval;
     if (tp->interval_end_time != tp->interval_start_time + interval_duration) {
         fprintf(stderr, "interval duration mismatch at %" PRIu64 "\n", now);
         return 1;
@@ -140,13 +141,14 @@ static int run_schedule_assertions(const struct lantern_consensus_runtime *runti
     }
     EXPECT_EQ(schedule.slot, 1, "schedule.slot");
 
-    uint64_t slot1_start = runtime->clock.genesis_time + runtime->clock.seconds_per_slot;
-    uint64_t interval = runtime->clock.seconds_per_interval;
+    uint64_t slot1_start = (runtime->clock.genesis_time * 1000u) + runtime->clock.milliseconds_per_slot;
+    uint64_t interval = runtime->clock.milliseconds_per_interval;
     EXPECT_EQ(schedule.phase_start_times[0], slot1_start, "proposal start");
     EXPECT_EQ(schedule.phase_start_times[1], slot1_start + interval, "vote start");
-    EXPECT_EQ(schedule.phase_start_times[2], slot1_start + interval * 2u, "safe target start");
-    EXPECT_EQ(schedule.phase_start_times[3], slot1_start + interval * 3u, "vote accept start");
-    EXPECT_EQ(schedule.phase_end_times[3], slot1_start + interval * 4u, "final phase end");
+    EXPECT_EQ(schedule.phase_start_times[2], slot1_start + interval * 2u, "aggregate start");
+    EXPECT_EQ(schedule.phase_start_times[3], slot1_start + interval * 3u, "safe target start");
+    EXPECT_EQ(schedule.phase_start_times[4], slot1_start + interval * 4u, "vote accept start");
+    EXPECT_EQ(schedule.phase_end_times[4], slot1_start + interval * 5u, "final phase end");
     return 0;
 }
 
@@ -154,7 +156,7 @@ int main(void) {
     struct lantern_consensus_runtime runtime;
     struct lantern_consensus_runtime_config cfg;
     lantern_consensus_runtime_config_init(&cfg);
-    cfg.genesis_time = 1000;
+    cfg.genesis_time = 1;
     cfg.seconds_per_slot = 4;
     cfg.intervals_per_slot = LANTERN_DUTY_PHASE_COUNT;
     cfg.validator_count = 4;
@@ -182,22 +184,25 @@ int main(void) {
     if (expect_timepoint(&runtime, 1000, 0, LANTERN_DUTY_PHASE_PROPOSAL, false, 0) != 0) {
         return 1;
     }
-    if (expect_timepoint(&runtime, 1001, 0, LANTERN_DUTY_PHASE_VOTE, false, 0) != 0) {
+    if (expect_timepoint(&runtime, 1800, 0, LANTERN_DUTY_PHASE_VOTE, false, 0) != 0) {
         return 1;
     }
-    if (expect_timepoint(&runtime, 1003, 0, LANTERN_DUTY_PHASE_VOTE_ACCEPT, false, 0) != 0) {
+    if (expect_timepoint(&runtime, 2600, 0, LANTERN_DUTY_PHASE_AGGREGATE, false, 0) != 0) {
         return 1;
     }
-    if (expect_timepoint(&runtime, 1004, 1, LANTERN_DUTY_PHASE_PROPOSAL, true, 0) != 0) {
+    if (expect_timepoint(&runtime, 4200, 0, LANTERN_DUTY_PHASE_VOTE_ACCEPT, false, 0) != 0) {
         return 1;
     }
-    if (expect_timepoint(&runtime, 1005, 1, LANTERN_DUTY_PHASE_VOTE, true, 0) != 0) {
+    if (expect_timepoint(&runtime, 5000, 1, LANTERN_DUTY_PHASE_PROPOSAL, true, 0) != 0) {
         return 1;
     }
-    if (expect_timepoint(&runtime, 1008, 2, LANTERN_DUTY_PHASE_PROPOSAL, true, 1) != 0) {
+    if (expect_timepoint(&runtime, 5800, 1, LANTERN_DUTY_PHASE_VOTE, true, 0) != 0) {
         return 1;
     }
-    if (expect_timepoint(&runtime, 1012, 3, LANTERN_DUTY_PHASE_PROPOSAL, false, 0) != 0) {
+    if (expect_timepoint(&runtime, 9000, 2, LANTERN_DUTY_PHASE_PROPOSAL, true, 1) != 0) {
+        return 1;
+    }
+    if (expect_timepoint(&runtime, 13000, 3, LANTERN_DUTY_PHASE_PROPOSAL, false, 0) != 0) {
         return 1;
     }
 

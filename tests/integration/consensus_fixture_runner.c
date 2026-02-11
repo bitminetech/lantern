@@ -1141,7 +1141,7 @@ static int run_fork_choice_fixture(const char *path) {
             return -1;
         }
 
-        uint64_t now = genesis_time + (signed_block.message.slot * store.seconds_per_slot);
+        uint64_t now = (genesis_time * 1000u) + (signed_block.message.slot * store.seconds_per_slot * 1000u);
         if (lantern_fork_choice_advance_time(&store, now, true) != 0) {
             reset_block(&signed_block.message);
             reset_block(&anchor_block);

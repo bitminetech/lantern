@@ -1480,8 +1480,8 @@ static void advance_fork_choice_time_locked(
         return;
     }
 
-    uint64_t now_seconds = validator_wall_time_now_seconds();
-    if (lantern_fork_choice_advance_time(&client->fork_choice, now_seconds, false) != 0)
+    uint64_t now_milliseconds = validator_wall_time_now_millis();
+    if (lantern_fork_choice_advance_time(&client->fork_choice, now_milliseconds, false) != 0)
     {
         lantern_log_debug(
             "forkchoice",

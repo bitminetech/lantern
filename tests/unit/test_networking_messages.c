@@ -217,6 +217,15 @@ static void check_signature_proof_equal(
     CHECK(memcmp(expected->proof_data.data, actual->proof_data.data, expected->proof_data.length) == 0);
 }
 
+static void check_signed_aggregated_attestation_equal(
+    const LanternSignedAggregatedAttestation *expected,
+    const LanternSignedAggregatedAttestation *actual) {
+    CHECK(expected != NULL);
+    CHECK(actual != NULL);
+    check_attestation_data_equal(&expected->data, &actual->data);
+    check_signature_proof_equal(&expected->proof, &actual->proof);
+}
+
 static void expect_vote_view(
     const LanternVote *vote,
     uint64_t validator_id,

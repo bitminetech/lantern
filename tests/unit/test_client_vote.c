@@ -515,34 +515,53 @@ static int test_record_vote_defers_interval_pipeline(void) {
         fprintf(stderr, "failed to advance fork choice to interval 2\n");
         goto cleanup;
     }
-    if (!client.fork_choice.has_safe_target) {
-        fprintf(stderr, "safe target unavailable after interval 2\n");
-        goto cleanup;
-    }
-    if (memcmp(client.fork_choice.safe_target.bytes, child_root.bytes, LANTERN_ROOT_SIZE) != 0) {
-        fprintf(stderr, "safe target did not reflect gossip vote after interval 2\n");
-        goto cleanup;
-    }
     if (!new_entry->has_checkpoint) {
-        fprintf(stderr, "new_votes checkpoint missing after interval 2\n");
+        fprintf(stderr, "new_votes lost checkpoint before interval 3\n");
         goto cleanup;
     }
     if (known_entry->has_checkpoint) {
         fprintf(stderr, "known_votes filled before interval 3\n");
         goto cleanup;
     }
+    if (had_safe_before) {
+        if (memcmp(client.fork_choice.safe_target.bytes, safe_before.bytes, LANTERN_ROOT_SIZE) != 0) {
+            fprintf(stderr, "safe target changed during interval 2\n");
+            goto cleanup;
+        }
+    }
 
     if (client_test_advance_fork_choice_intervals(&client.fork_choice, 1, false) != 0) {
         fprintf(stderr, "failed to advance fork choice to interval 3\n");
         goto cleanup;
     }
+    if (!client.fork_choice.has_safe_target) {
+        fprintf(stderr, "safe target unavailable after interval 3\n");
+        goto cleanup;
+    }
+    if (memcmp(client.fork_choice.safe_target.bytes, child_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "safe target did not reflect gossip vote after interval 3\n");
+        goto cleanup;
+    }
+    if (!new_entry->has_checkpoint) {
+        fprintf(stderr, "new_votes checkpoint missing after interval 3\n");
+        goto cleanup;
+    }
+    if (known_entry->has_checkpoint) {
+        fprintf(stderr, "known_votes filled before interval 4\n");
+        goto cleanup;
+    }
+
+    if (client_test_advance_fork_choice_intervals(&client.fork_choice, 1, false) != 0) {
+        fprintf(stderr, "failed to advance fork choice to interval 4\n");
+        goto cleanup;
+    }
     if (!known_entry->has_checkpoint) {
-        fprintf(stderr, "known_votes missing checkpoint after interval 3\n");
+        fprintf(stderr, "known_votes missing checkpoint after interval 4\n");
         goto cleanup;
     }
     if (known_entry->checkpoint.slot != vote.data.target.slot
         || memcmp(known_entry->checkpoint.root.bytes, child_root.bytes, LANTERN_ROOT_SIZE) != 0) {
-        fprintf(stderr, "known_votes checkpoint mismatch after interval 3\n");
+        fprintf(stderr, "known_votes checkpoint mismatch after interval 4\n");
         goto cleanup;
     }
     if (new_entry->has_checkpoint) {

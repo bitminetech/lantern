@@ -303,12 +303,26 @@ static size_t signed_block_max_ssz_size(void) {
     return total;
 }
 
+static size_t signed_aggregated_attestation_max_ssz_size(void) {
+    size_t att_bits_max = bitlist_encoded_size_bits(LANTERN_VALIDATOR_REGISTRY_LIMIT);
+    size_t proof_entry_max = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + att_bits_max + LANTERN_AGG_PROOF_MAX_BYTES;
+    size_t total = LANTERN_ATTESTATION_DATA_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT32;
+    if (proof_entry_max > SIZE_MAX - total) {
+        return SIZE_MAX;
+    }
+    return total + proof_entry_max;
+}
+
 static size_t gossipsub_snappy_max_uncompressed(
     const struct lantern_gossipsub_service *service,
     const char *topic) {
     size_t block_max = signed_block_max_ssz_size();
     size_t vote_max = LANTERN_SIGNED_VOTE_SSZ_SIZE;
+    size_t aggregated_max = signed_aggregated_attestation_max_ssz_size();
     size_t default_max = block_max > vote_max ? block_max : vote_max;
+    if (aggregated_max > default_max) {
+        default_max = aggregated_max;
+    }
     if (!service || !topic) {
         return default_max;
     }
@@ -317,6 +331,13 @@ static size_t gossipsub_snappy_max_uncompressed(
     }
     if (service->vote_topic[0] != '\0' && strcmp(topic, service->vote_topic) == 0) {
         return vote_max;
+    }
+    if (service->vote_subnet_topic[0] != '\0' && strcmp(topic, service->vote_subnet_topic) == 0) {
+        return vote_max;
+    }
+    if (service->aggregated_attestation_topic[0] != '\0' && strcmp(topic, service->aggregated_attestation_topic) == 0)
+    {
+        return aggregated_max;
     }
     return default_max;
 }
@@ -577,6 +598,60 @@ cleanup:
     return result;
 }
 
+static libp2p_gossipsub_validation_result_t gossipsub_aggregated_attestation_validator(
+    const libp2p_gossipsub_message_t *msg,
+    void *user_data) {
+    struct lantern_gossipsub_service *service = (struct lantern_gossipsub_service *)user_data;
+    if (!service || !msg) {
+        return LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
+    }
+    if (!service->aggregated_attestation_handler || !msg->data || msg->data_len == 0) {
+        return LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT;
+    }
+
+    LanternSignedAggregatedAttestation attestation;
+    lantern_signed_aggregated_attestation_init(&attestation);
+
+    libp2p_gossipsub_validation_result_t result = LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT;
+    char peer_text[128];
+    describe_peer_id(msg->from, peer_text, sizeof(peer_text));
+    const struct lantern_log_metadata meta = {.peer = peer_text[0] ? peer_text : NULL};
+
+    if (gossipsub_message_has_forbidden_metadata(msg)) {
+        lantern_log_debug(
+            "gossip",
+            &meta,
+            "aggregated attestation gossip contains author/seqno/signature metadata (allowing for compatibility)");
+    }
+
+    lantern_log_debug(
+        "gossip",
+        &meta,
+        "aggregated attestation gossip message received bytes=%zu",
+        msg->data_len);
+    if (lantern_gossip_decode_signed_aggregated_attestation_snappy(&attestation, msg->data, msg->data_len) != 0) {
+        lantern_log_warn(
+            "gossip",
+            &meta,
+            "failed to decode aggregated attestation gossip payload bytes=%zu",
+            msg->data_len);
+        result = LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
+        goto cleanup;
+    }
+
+    if (service->aggregated_attestation_handler(
+            &attestation,
+            msg->from,
+            service->aggregated_attestation_handler_user_data)
+        != 0) {
+        result = LIBP2P_GOSSIPSUB_VALIDATION_IGNORE;
+    }
+
+cleanup:
+    lantern_signed_aggregated_attestation_reset(&attestation);
+    return result;
+}
+
 void lantern_gossipsub_service_init(struct lantern_gossipsub_service *service) {
     if (!service) {
         return;
@@ -595,9 +670,19 @@ void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service) 
         if (service->vote_validator_handle) {
             (void)libp2p_gossipsub_remove_validator(service->gossipsub, service->vote_validator_handle);
         }
+        if (service->vote_subnet_validator_handle) {
+            (void)libp2p_gossipsub_remove_validator(service->gossipsub, service->vote_subnet_validator_handle);
+        }
+        if (service->aggregated_attestation_validator_handle) {
+            (void)libp2p_gossipsub_remove_validator(
+                service->gossipsub,
+                service->aggregated_attestation_validator_handle);
+        }
     }
     service->block_validator_handle = NULL;
     service->vote_validator_handle = NULL;
+    service->vote_subnet_validator_handle = NULL;
+    service->aggregated_attestation_validator_handle = NULL;
     if (service->gossipsub) {
         libp2p_gossipsub_stop(service->gossipsub);
         libp2p_gossipsub_free(service->gossipsub);
@@ -605,6 +690,10 @@ void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service) 
     }
     memset(service->block_topic, 0, sizeof(service->block_topic));
     memset(service->vote_topic, 0, sizeof(service->vote_topic));
+    memset(service->vote_subnet_topic, 0, sizeof(service->vote_subnet_topic));
+    memset(service->aggregated_attestation_topic, 0, sizeof(service->aggregated_attestation_topic));
+    service->attestation_subnet_id = 0;
+    service->subscribe_attestation_subnet = 0;
     service->publish_hook = NULL;
     service->publish_hook_user_data = NULL;
     service->loopback_only = 0;
@@ -623,6 +712,9 @@ int lantern_gossipsub_service_start(
     void *previous_block_user_data = service->block_handler_user_data;
     lantern_gossipsub_vote_handler previous_vote_handler = service->vote_handler;
     void *previous_vote_user_data = service->vote_handler_user_data;
+    lantern_gossipsub_aggregated_attestation_handler previous_aggregated_handler =
+        service->aggregated_attestation_handler;
+    void *previous_aggregated_user_data = service->aggregated_attestation_handler_user_data;
 
     lantern_gossipsub_service_reset(service);
     service->loopback_only = previous_loopback;
@@ -632,6 +724,10 @@ int lantern_gossipsub_service_start(
     service->block_handler_user_data = previous_block_user_data;
     service->vote_handler = previous_vote_handler;
     service->vote_handler_user_data = previous_vote_user_data;
+    service->aggregated_attestation_handler = previous_aggregated_handler;
+    service->aggregated_attestation_handler_user_data = previous_aggregated_user_data;
+    service->attestation_subnet_id = config->attestation_subnet_id;
+    service->subscribe_attestation_subnet = config->subscribe_attestation_subnet ? 1 : 0;
 
     if (lantern_gossip_topic_format(
             LANTERN_GOSSIP_TOPIC_BLOCK,
@@ -646,6 +742,23 @@ int lantern_gossipsub_service_start(
             config->devnet,
             service->vote_topic,
             sizeof(service->vote_topic))
+        != 0) {
+        return -1;
+    }
+    if (lantern_gossip_topic_format_subnet(
+            LANTERN_GOSSIP_TOPIC_VOTE_SUBNET,
+            config->devnet,
+            config->attestation_subnet_id,
+            service->vote_subnet_topic,
+            sizeof(service->vote_subnet_topic))
+        != 0) {
+        return -1;
+    }
+    if (lantern_gossip_topic_format(
+            LANTERN_GOSSIP_TOPIC_AGGREGATED_ATTESTATION,
+            config->devnet,
+            service->aggregated_attestation_topic,
+            sizeof(service->aggregated_attestation_topic))
         != 0) {
         return -1;
     }
@@ -697,6 +810,26 @@ int lantern_gossipsub_service_start(
         &(const struct lantern_log_metadata){.peer = config->devnet},
         "subscribed gossipsub topic=%s",
         service->vote_topic);
+    if (service->subscribe_attestation_subnet) {
+        if (subscribe_topic(service, service->vote_subnet_topic) != 0) {
+            lantern_gossipsub_service_reset(service);
+            return -1;
+        }
+        lantern_log_info(
+            "gossip",
+            &(const struct lantern_log_metadata){.peer = config->devnet},
+            "subscribed gossipsub topic=%s",
+            service->vote_subnet_topic);
+    }
+    if (subscribe_topic(service, service->aggregated_attestation_topic) != 0) {
+        lantern_gossipsub_service_reset(service);
+        return -1;
+    }
+    lantern_log_info(
+        "gossip",
+        &(const struct lantern_log_metadata){.peer = config->devnet},
+        "subscribed gossipsub topic=%s",
+        service->aggregated_attestation_topic);
 
     if (service->block_handler) {
         libp2p_gossipsub_validator_def_t def = {
@@ -731,6 +864,44 @@ int lantern_gossipsub_service_start(
                 "gossip",
                 NULL,
                 "failed to register vote gossip validator");
+            lantern_gossipsub_service_reset(service);
+            return -1;
+        }
+        if (service->subscribe_attestation_subnet) {
+            if (libp2p_gossipsub_add_validator(
+                    service->gossipsub,
+                    service->vote_subnet_topic,
+                    &def,
+                    &service->vote_subnet_validator_handle)
+                != LIBP2P_ERR_OK) {
+                lantern_log_error(
+                    "gossip",
+                    NULL,
+                    "failed to register subnet vote gossip validator");
+                lantern_gossipsub_service_reset(service);
+                return -1;
+            }
+        }
+    }
+
+    if (service->aggregated_attestation_handler) {
+        libp2p_gossipsub_validator_def_t def = {
+            .struct_size = sizeof(def),
+            .type = LIBP2P_GOSSIPSUB_VALIDATOR_SYNC,
+            .sync_fn = gossipsub_aggregated_attestation_validator,
+            .async_fn = NULL,
+            .user_data = service
+        };
+        if (libp2p_gossipsub_add_validator(
+                service->gossipsub,
+                service->aggregated_attestation_topic,
+                &def,
+                &service->aggregated_attestation_validator_handle)
+            != LIBP2P_ERR_OK) {
+            lantern_log_error(
+                "gossip",
+                NULL,
+                "failed to register aggregated attestation gossip validator");
             lantern_gossipsub_service_reset(service);
             return -1;
         }
@@ -837,6 +1008,61 @@ int lantern_gossipsub_service_publish_vote(
     return publish_rc;
 }
 
+int lantern_gossipsub_service_publish_vote_subnet(
+    struct lantern_gossipsub_service *service,
+    const LanternSignedVote *vote) {
+    if (!service || !vote || service->vote_subnet_topic[0] == '\0') {
+        return -1;
+    }
+    size_t max_compressed = 0;
+    if (lantern_snappy_max_compressed_size_raw(LANTERN_SIGNED_VOTE_SSZ_SIZE, &max_compressed) != LANTERN_SNAPPY_OK) {
+        return -1;
+    }
+    uint8_t *compressed = (uint8_t *)malloc(max_compressed);
+    if (!compressed) {
+        return -1;
+    }
+    size_t written = 0;
+    if (lantern_gossip_encode_signed_vote_snappy(vote, compressed, max_compressed, &written) != 0 || written == 0) {
+        free(compressed);
+        return -1;
+    }
+    int publish_rc = publish_payload(service, service->vote_subnet_topic, compressed, written);
+    free(compressed);
+    return publish_rc;
+}
+
+int lantern_gossipsub_service_publish_aggregated_attestation(
+    struct lantern_gossipsub_service *service,
+    const LanternSignedAggregatedAttestation *attestation) {
+    if (!service || !attestation || service->aggregated_attestation_topic[0] == '\0') {
+        return -1;
+    }
+    size_t max_compressed = 0;
+    size_t max_raw = signed_aggregated_attestation_max_ssz_size();
+    if (lantern_snappy_max_compressed_size_raw(max_raw, &max_compressed) != LANTERN_SNAPPY_OK) {
+        return -1;
+    }
+    uint8_t *compressed = (uint8_t *)malloc(max_compressed);
+    if (!compressed) {
+        return -1;
+    }
+    size_t written = 0;
+    if (lantern_gossip_encode_signed_aggregated_attestation_snappy(
+            attestation,
+            compressed,
+            max_compressed,
+            &written)
+        != 0
+        || written == 0) {
+        free(compressed);
+        return -1;
+    }
+    int publish_rc = publish_payload(service, service->aggregated_attestation_topic, compressed, written);
+    free(compressed);
+    return publish_rc;
+}
+
 void lantern_gossipsub_service_set_publish_hook(
     struct lantern_gossipsub_service *service,
     int (*hook)(const char *topic, const uint8_t *payload, size_t payload_len, void *user_data),
@@ -877,4 +1103,15 @@ void lantern_gossipsub_service_set_vote_handler(
     }
     service->vote_handler = handler;
     service->vote_handler_user_data = user_data;
+}
+
+void lantern_gossipsub_service_set_aggregated_attestation_handler(
+    struct lantern_gossipsub_service *service,
+    lantern_gossipsub_aggregated_attestation_handler handler,
+    void *user_data) {
+    if (!service) {
+        return;
+    }
+    service->aggregated_attestation_handler = handler;
+    service->aggregated_attestation_handler_user_data = user_data;
 }

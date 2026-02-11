@@ -1305,6 +1305,97 @@ static int decode_aggregated_signature_proof(
     return 0;
 }
 
+int lantern_ssz_encode_signed_aggregated_attestation(
+    const LanternSignedAggregatedAttestation *attestation,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written) {
+    if (!attestation || !out) {
+        return -1;
+    }
+    size_t proof_size = 0;
+    if (aggregated_signature_proof_encoded_size(&attestation->proof, &proof_size) != 0) {
+        return -1;
+    }
+    const size_t fixed_section = LANTERN_ATTESTATION_DATA_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT32;
+    if (fixed_section > UINT32_MAX) {
+        return -1;
+    }
+    if (proof_size > SIZE_MAX - fixed_section) {
+        return -1;
+    }
+    size_t required = fixed_section + proof_size;
+    if (out_len < required) {
+        return -1;
+    }
+
+    if (encode_attestation_data(
+            &attestation->data,
+            out,
+            out_len,
+            NULL)
+        != 0) {
+        return -1;
+    }
+
+    if (write_u32(
+            out + LANTERN_ATTESTATION_DATA_SSZ_SIZE,
+            out_len - LANTERN_ATTESTATION_DATA_SSZ_SIZE,
+            (uint32_t)fixed_section)
+        != 0) {
+        return -1;
+    }
+    if (encode_aggregated_signature_proof(
+            &attestation->proof,
+            out + fixed_section,
+            out_len - fixed_section,
+            NULL)
+        != 0) {
+        return -1;
+    }
+    set_written(written, required);
+    return 0;
+}
+
+int lantern_ssz_decode_signed_aggregated_attestation(
+    LanternSignedAggregatedAttestation *attestation,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!attestation || !data) {
+        return -1;
+    }
+    const size_t fixed_section = LANTERN_ATTESTATION_DATA_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT32;
+    if (data_len < fixed_section) {
+        return -1;
+    }
+    if (decode_attestation_data(
+            &attestation->data,
+            data,
+            LANTERN_ATTESTATION_DATA_SSZ_SIZE)
+        != 0) {
+        return -1;
+    }
+    uint32_t proof_offset = 0;
+    if (read_u32(
+            data + LANTERN_ATTESTATION_DATA_SSZ_SIZE,
+            data_len - LANTERN_ATTESTATION_DATA_SSZ_SIZE,
+            &proof_offset)
+        != 0) {
+        return -1;
+    }
+    if ((size_t)proof_offset != fixed_section || proof_offset > data_len) {
+        return -1;
+    }
+    if (decode_aggregated_signature_proof(
+            &attestation->proof,
+            data + proof_offset,
+            data_len - proof_offset)
+        != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 static int encode_attestation_signatures(
     const LanternAttestationSignatures *signatures,
     uint8_t *out,

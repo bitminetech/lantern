@@ -13,6 +13,8 @@ extern const uint8_t LANTERN_GOSSIP_DOMAIN_VALID[LANTERN_GOSSIP_DOMAIN_SIZE];
 enum lantern_gossip_topic_kind {
     LANTERN_GOSSIP_TOPIC_BLOCK = 0,
     LANTERN_GOSSIP_TOPIC_VOTE = 1,
+    LANTERN_GOSSIP_TOPIC_VOTE_SUBNET = 2,
+    LANTERN_GOSSIP_TOPIC_AGGREGATED_ATTESTATION = 3,
 };
 
 typedef struct {
@@ -22,6 +24,13 @@ typedef struct {
 int lantern_gossip_topic_format(
     enum lantern_gossip_topic_kind kind,
     const char *devnet,
+    char *buffer,
+    size_t buffer_len);
+
+int lantern_gossip_topic_format_subnet(
+    enum lantern_gossip_topic_kind kind,
+    const char *devnet,
+    size_t subnet_id,
     char *buffer,
     size_t buffer_len);
 

@@ -33,6 +33,16 @@ int lantern_ssz_encode_signed_vote_legacy(
     size_t out_len,
     size_t *written);
 
+int lantern_ssz_encode_signed_aggregated_attestation(
+    const LanternSignedAggregatedAttestation *attestation,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written);
+int lantern_ssz_decode_signed_aggregated_attestation(
+    LanternSignedAggregatedAttestation *attestation,
+    const uint8_t *data,
+    size_t data_len);
+
 int lantern_ssz_encode_block_header(const LanternBlockHeader *header, uint8_t *out, size_t out_len, size_t *written);
 int lantern_ssz_decode_block_header(LanternBlockHeader *header, const uint8_t *data, size_t data_len);
 

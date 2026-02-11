@@ -46,6 +46,7 @@ struct lantern_validator_config_enr {
     char *ip;
     uint16_t quic_port;
     uint64_t sequence;
+    bool is_aggregator;
 };
 
 enum lantern_validator_client_kind {

@@ -26,6 +26,7 @@
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"
+#include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/log.h"
@@ -275,6 +276,135 @@ int gossip_vote_handler(
 
     lantern_client_note_vote_delivery(client, peer_id_text, vote);
     lantern_client_record_vote(client, vote, peer_id_text);
+    return LANTERN_CLIENT_OK;
+}
+
+static bool verify_and_cache_aggregated_attestation_locked(
+    struct lantern_client *client,
+    const LanternSignedAggregatedAttestation *attestation,
+    const struct lantern_log_metadata *meta) {
+    if (!client || !attestation || !meta || !client->has_state) {
+        return false;
+    }
+    if (attestation->proof.participants.bit_length == 0
+        || !attestation->proof.participants.bytes
+        || attestation->proof.proof_data.length == 0
+        || !attestation->proof.proof_data.data) {
+        return false;
+    }
+
+    LanternState target_state;
+    lantern_state_init(&target_state);
+    const LanternState *sig_state = lantern_client_state_for_root_locked(
+        client,
+        &attestation->data.target.root,
+        &target_state,
+        NULL);
+    if (!sig_state) {
+        lantern_state_reset(&target_state);
+        return false;
+    }
+
+    size_t validator_count = lantern_state_validator_count(sig_state);
+    size_t bit_length = attestation->proof.participants.bit_length;
+    if (bit_length > validator_count) {
+        bit_length = validator_count;
+    }
+    size_t participant_count = 0;
+    for (size_t i = 0; i < bit_length; ++i) {
+        if (lantern_bitlist_get(&attestation->proof.participants, i)) {
+            participant_count += 1u;
+        }
+    }
+    if (participant_count == 0) {
+        lantern_state_reset(&target_state);
+        return false;
+    }
+
+    const uint8_t **pubkeys = calloc(participant_count, sizeof(*pubkeys));
+    if (!pubkeys) {
+        lantern_state_reset(&target_state);
+        return false;
+    }
+    size_t idx = 0;
+    for (size_t i = 0; i < bit_length; ++i) {
+        if (!lantern_bitlist_get(&attestation->proof.participants, i)) {
+            continue;
+        }
+        const uint8_t *pubkey = lantern_state_validator_pubkey(sig_state, i);
+        if (!pubkey || lantern_validator_pubkey_is_zero(pubkey)) {
+            free(pubkeys);
+            lantern_state_reset(&target_state);
+            return false;
+        }
+        pubkeys[idx++] = pubkey;
+    }
+
+    LanternRoot data_root;
+    if (lantern_hash_tree_root_attestation_data(&attestation->data, &data_root) != 0) {
+        free(pubkeys);
+        lantern_state_reset(&target_state);
+        return false;
+    }
+
+    bool verified = lantern_signature_verify_aggregated(
+        pubkeys,
+        participant_count,
+        &data_root,
+        &attestation->proof.proof_data,
+        attestation->data.slot);
+    free(pubkeys);
+    lantern_state_reset(&target_state);
+    if (!verified) {
+        return false;
+    }
+    if (lantern_client_agg_proof_cache_add(client, &data_root, &attestation->proof) != 0) {
+        lantern_log_debug(
+            "gossip",
+            meta,
+            "failed to cache aggregated attestation proof");
+    }
+    return true;
+}
+
+int gossip_aggregated_attestation_handler(
+    const LanternSignedAggregatedAttestation *attestation,
+    const peer_id_t *from,
+    void *context)
+{
+    if (!attestation || !context) {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    struct lantern_client *client = context;
+
+    char peer_text[PEER_TEXT_BUFFER_LEN];
+    const char *peer_id_text = peer_id_to_text(from, peer_text, sizeof(peer_text));
+    struct lantern_log_metadata meta = {
+        .validator = client->node_id,
+        .peer = peer_id_text,
+        .has_slot = true,
+        .slot = attestation->data.slot,
+    };
+
+    bool locked = lantern_client_lock_state(client);
+    if (!locked) {
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+    bool verified = verify_and_cache_aggregated_attestation_locked(client, attestation, &meta);
+    lantern_client_unlock_state(client, locked);
+    if (!verified) {
+        lantern_log_debug(
+            "gossip",
+            &meta,
+            "ignoring aggregated attestation slot=%" PRIu64,
+            attestation->data.slot);
+        return LANTERN_CLIENT_ERR_IGNORED;
+    }
+    lantern_log_debug(
+        "gossip",
+        &meta,
+        "accepted aggregated attestation slot=%" PRIu64,
+        attestation->data.slot);
     return LANTERN_CLIENT_OK;
 }
 
@@ -733,8 +863,8 @@ int restore_persisted_blocks(struct lantern_client *client)
         }
     }
 
-    uint64_t now_seconds = validator_wall_time_now_seconds();
-    if (lantern_fork_choice_advance_time(&client->fork_choice, now_seconds, false) != 0)
+    uint64_t now_milliseconds = validator_wall_time_now_millis();
+    if (lantern_fork_choice_advance_time(&client->fork_choice, now_milliseconds, false) != 0)
     {
         lantern_log_warn(
             "forkchoice",

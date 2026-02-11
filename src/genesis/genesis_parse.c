@@ -46,9 +46,11 @@ static const char *const VALIDATOR_CONFIG_FIELD_COUNT = "count";
 static const char *const VALIDATOR_CONFIG_FIELD_IP = "ip";
 static const char *const VALIDATOR_CONFIG_FIELD_QUIC = "quic";
 static const char *const VALIDATOR_CONFIG_FIELD_SEQ = "seq";
+static const char *const VALIDATOR_CONFIG_FIELD_IS_AGGREGATOR = "is_aggregator";
 static const char *const VALIDATOR_CONFIG_FIELD_XMSS_DIR = "xmssDir";
 
 static uint64_t parse_u64(const char *value, int *ok);
+static int parse_bool(const char *value, int *ok);
 static char *dup_trimmed(const char *value);
 static char *strip_optional_quotes(char *value);
 static const char *yaml_object_value(const LanternYamlObject *object, const char *key);
@@ -114,6 +116,49 @@ static uint64_t parse_u64(const char *value, int *ok)
         *ok = 1;
     }
     return (uint64_t)parsed;
+}
+
+static int parse_bool(const char *value, int *ok)
+{
+    if (ok)
+    {
+        *ok = 0;
+    }
+    if (!value)
+    {
+        return 0;
+    }
+
+    char *trimmed = dup_trimmed(value);
+    if (!trimmed)
+    {
+        return 0;
+    }
+
+    for (char *p = trimmed; *p; ++p)
+    {
+        *p = (char)tolower((unsigned char)*p);
+    }
+
+    int parsed = 0;
+    if (strcmp(trimmed, "true") == 0 || strcmp(trimmed, "1") == 0)
+    {
+        parsed = 1;
+        if (ok)
+        {
+            *ok = 1;
+        }
+    }
+    else if (strcmp(trimmed, "false") == 0 || strcmp(trimmed, "0") == 0)
+    {
+        parsed = 0;
+        if (ok)
+        {
+            *ok = 1;
+        }
+    }
+    free(trimmed);
+    return parsed;
 }
 
 
@@ -554,6 +599,7 @@ static void free_validator_config_entry(struct lantern_validator_config_entry *e
     entry->enr.ip = NULL;
     entry->enr.quic_port = 0;
     entry->enr.sequence = 0;
+    entry->enr.is_aggregator = false;
 
     entry->count = 0;
 
@@ -931,6 +977,7 @@ static int parse_validator_config_entry(
     const char *ip_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_IP);
     const char *quic_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_QUIC);
     const char *seq_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_SEQ);
+    const char *is_aggregator_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_IS_AGGREGATOR);
     const char *xmss_dir_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_XMSS_DIR);
 
     entry->name = dup_trimmed(name_val);
@@ -973,6 +1020,17 @@ static int parse_validator_config_entry(
     {
         entry->enr.sequence = parse_u64(seq_val, &ok);
         if (!ok)
+        {
+            return LANTERN_GENESIS_ERR_INVALID_DATA;
+        }
+    }
+
+    entry->enr.is_aggregator = false;
+    if (is_aggregator_val && *is_aggregator_val)
+    {
+        int bool_ok = 0;
+        entry->enr.is_aggregator = parse_bool(is_aggregator_val, &bool_ok) ? true : false;
+        if (!bool_ok)
         {
             return LANTERN_GENESIS_ERR_INVALID_DATA;
         }

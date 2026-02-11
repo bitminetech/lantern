@@ -69,6 +69,7 @@
 static const size_t NODE_PRIVATE_KEY_SIZE = 32u;
 static const size_t BOOTNODE_LINE_MAX_LEN = 2048u;
 static const size_t LANTERN_AGG_PROOF_CACHE_LIMIT = 4096u;
+static const size_t LANTERN_ATTESTATION_COMMITTEE_COUNT = 1u;
 
 static void agg_proof_cache_init(struct lantern_agg_proof_cache *cache) {
     if (!cache) {
@@ -1482,12 +1483,25 @@ static lantern_client_error client_start_protocols(
     struct lantern_client *client,
     uint8_t node_key[NODE_PRIVATE_KEY_SIZE])
 {
+    size_t subnet_id = 0;
+    if (client->local_validators && client->local_validator_count > 0) {
+        (void)lantern_validator_index_compute_subnet_id(
+            client->local_validators[0].global_index,
+            LANTERN_ATTESTATION_COMMITTEE_COUNT,
+            &subnet_id);
+    }
     struct lantern_gossipsub_config gossip_cfg = {
         .host = client->network.host,
         .devnet = client->devnet,
+        .attestation_subnet_id = subnet_id,
+        .subscribe_attestation_subnet = client->assigned_validators->enr.is_aggregator ? 1 : 0,
     };
     lantern_gossipsub_service_set_block_handler(&client->gossip, gossip_block_handler, client);
     lantern_gossipsub_service_set_vote_handler(&client->gossip, gossip_vote_handler, client);
+    lantern_gossipsub_service_set_aggregated_attestation_handler(
+        &client->gossip,
+        gossip_aggregated_attestation_handler,
+        client);
     if (lantern_gossipsub_service_start(&client->gossip, &gossip_cfg) != 0)
     {
         lantern_log_error(
@@ -1534,7 +1548,8 @@ static lantern_client_error client_start_protocols(
             node_key,
             client->assigned_validators->enr.ip,
             client->assigned_validators->enr.quic_port,
-            client->assigned_validators->enr.sequence)
+            client->assigned_validators->enr.sequence,
+            client->assigned_validators->enr.is_aggregator)
         != 0)
     {
         lantern_log_error(

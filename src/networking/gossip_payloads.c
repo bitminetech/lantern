@@ -222,6 +222,33 @@ static int basic_block_sanity(const LanternSignedBlock *block) {
     return 0;
 }
 
+static int basic_signed_aggregated_attestation_sanity(
+    const LanternSignedAggregatedAttestation *attestation) {
+    if (!attestation) {
+        return -1;
+    }
+    if (basic_attestation_data_sanity(&attestation->data) != 0) {
+        return -1;
+    }
+    if (attestation->proof.participants.bit_length == 0 || !attestation->proof.participants.bytes) {
+        return -1;
+    }
+    if (attestation->proof.proof_data.length == 0 || !attestation->proof.proof_data.data) {
+        return -1;
+    }
+    return 0;
+}
+
+static size_t signed_aggregated_attestation_max_ssz_size(void) {
+    size_t bits_max = bitlist_encoded_size_bits(LANTERN_VALIDATOR_REGISTRY_LIMIT);
+    size_t proof_max = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + bits_max + LANTERN_AGG_PROOF_MAX_BYTES;
+    size_t fixed = LANTERN_ATTESTATION_DATA_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT32;
+    if (proof_max > SIZE_MAX - fixed) {
+        return SIZE_MAX;
+    }
+    return fixed + proof_max;
+}
+
 int lantern_gossip_encode_signed_block_snappy(
     const LanternSignedBlock *block,
     uint8_t *out,
@@ -394,6 +421,74 @@ int lantern_gossip_decode_signed_vote_snappy(
     }
     free(raw);
     if (basic_vote_sanity(&vote->data) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int lantern_gossip_encode_signed_aggregated_attestation_snappy(
+    const LanternSignedAggregatedAttestation *attestation,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written) {
+    if (!attestation || !out || !written) {
+        return -1;
+    }
+    if (basic_signed_aggregated_attestation_sanity(attestation) != 0) {
+        return -1;
+    }
+    size_t proof_size = aggregated_signature_proof_encoded_size(&attestation->proof);
+    if (proof_size == 0) {
+        return -1;
+    }
+    size_t raw_capacity = LANTERN_ATTESTATION_DATA_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT32 + proof_size;
+    uint8_t *raw = alloc_buffer(raw_capacity);
+    if (!raw) {
+        return -1;
+    }
+    size_t raw_written = raw_capacity;
+    if (lantern_ssz_encode_signed_aggregated_attestation(attestation, raw, raw_capacity, &raw_written) != 0) {
+        free(raw);
+        return -1;
+    }
+    int snappy_rc = lantern_snappy_compress_raw(raw, raw_written, out, out_len, written);
+    free(raw);
+    return snappy_rc == LANTERN_SNAPPY_OK ? 0 : -1;
+}
+
+int lantern_gossip_decode_signed_aggregated_attestation_snappy(
+    LanternSignedAggregatedAttestation *attestation,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!attestation || !data) {
+        return -1;
+    }
+    size_t raw_len = 0;
+    int raw_len_rc = lantern_snappy_uncompressed_length_raw(data, data_len, &raw_len);
+    if (raw_len_rc != LANTERN_SNAPPY_OK) {
+        return -1;
+    }
+    size_t max_ssz = signed_aggregated_attestation_max_ssz_size();
+    size_t min_ssz = LANTERN_ATTESTATION_DATA_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT32 + 1u;
+    if (raw_len < min_ssz || raw_len > max_ssz) {
+        return -1;
+    }
+    uint8_t *raw = alloc_buffer(raw_len);
+    if (!raw) {
+        return -1;
+    }
+    size_t written = raw_len;
+    if (lantern_snappy_decompress_raw(data, data_len, raw, raw_len, &written) != LANTERN_SNAPPY_OK
+        || written != raw_len) {
+        free(raw);
+        return -1;
+    }
+    if (lantern_ssz_decode_signed_aggregated_attestation(attestation, raw, raw_len) != 0) {
+        free(raw);
+        return -1;
+    }
+    free(raw);
+    if (basic_signed_aggregated_attestation_sanity(attestation) != 0) {
         return -1;
     }
     return 0;

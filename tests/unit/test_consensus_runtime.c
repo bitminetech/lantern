@@ -35,7 +35,7 @@ static int test_runtime_time_update(void) {
 
     struct lantern_consensus_runtime_config config;
     lantern_consensus_runtime_config_init(&config);
-    config.genesis_time = 1000;
+    config.genesis_time = 1;
     config.validator_count = 4;
 
     struct lantern_consensus_runtime runtime;
@@ -44,7 +44,7 @@ static int test_runtime_time_update(void) {
         goto cleanup;
     }
 
-    if (lantern_consensus_runtime_update_time(&runtime, 1004) != 0) {
+    if (lantern_consensus_runtime_update_time(&runtime, 5000) != 0) {
         fprintf(stderr, "runtime update time failed\n");
         goto cleanup_runtime;
     }
@@ -69,7 +69,7 @@ static int test_runtime_time_update(void) {
         fprintf(stderr, "schedule slot failed\n");
         goto cleanup_runtime;
     }
-    if (schedule.phase_start_times[0] != 1008) {
+    if (schedule.phase_start_times[0] != 9000) {
         fprintf(stderr, "unexpected proposal start time %llu\n",
             (unsigned long long)schedule.phase_start_times[0]);
         goto cleanup_runtime;
