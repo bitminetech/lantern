@@ -14,22 +14,24 @@ typedef struct {
     LanternCheckpoint head;
 } LanternStatusMessage;
 
+typedef struct lantern_root_list LanternRequestedBlockRoots;
+
 typedef struct {
-    struct lantern_root_list roots;
+    LanternRequestedBlockRoots roots;
 } LanternBlocksByRootRequest;
 
 typedef struct {
     LanternSignedBlock *blocks;
     size_t length;
     size_t capacity;
-} LanternBlocksByRootResponse;
+} LanternSignedBlockList;
 
 void lantern_blocks_by_root_request_init(LanternBlocksByRootRequest *req);
 void lantern_blocks_by_root_request_reset(LanternBlocksByRootRequest *req);
 
-void lantern_blocks_by_root_response_init(LanternBlocksByRootResponse *resp);
-void lantern_blocks_by_root_response_reset(LanternBlocksByRootResponse *resp);
-int lantern_blocks_by_root_response_resize(LanternBlocksByRootResponse *resp, size_t new_length);
+void lantern_signed_block_list_init(LanternSignedBlockList *resp);
+void lantern_signed_block_list_reset(LanternSignedBlockList *resp);
+int lantern_signed_block_list_resize(LanternSignedBlockList *resp, size_t new_length);
 
 int lantern_network_status_encode(
     const LanternStatusMessage *status,
@@ -71,23 +73,23 @@ int lantern_network_blocks_by_root_request_decode_snappy(
     const uint8_t *data,
     size_t data_len);
 
-int lantern_network_blocks_by_root_response_encode(
-    const LanternBlocksByRootResponse *resp,
+int lantern_network_signed_block_list_encode(
+    const LanternSignedBlockList *resp,
     uint8_t *out,
     size_t out_len,
     size_t *written);
-int lantern_network_blocks_by_root_response_decode(
-    LanternBlocksByRootResponse *resp,
+int lantern_network_signed_block_list_decode(
+    LanternSignedBlockList *resp,
     const uint8_t *data,
     size_t data_len);
-int lantern_network_blocks_by_root_response_encode_snappy(
-    const LanternBlocksByRootResponse *resp,
+int lantern_network_signed_block_list_encode_snappy(
+    const LanternSignedBlockList *resp,
     uint8_t *out,
     size_t out_len,
     size_t *written,
     size_t *raw_len);
-int lantern_network_blocks_by_root_response_decode_snappy(
-    LanternBlocksByRootResponse *resp,
+int lantern_network_signed_block_list_decode_snappy(
+    LanternSignedBlockList *resp,
     const uint8_t *data,
     size_t data_len);
 

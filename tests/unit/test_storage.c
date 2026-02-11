@@ -261,8 +261,8 @@ int main(void) {
     /* store again to ensure idempotent */
     expect_zero(lantern_storage_store_block(base_dir, &block), "store block duplicate");
 
-    LanternBlocksByRootResponse response;
-    lantern_blocks_by_root_response_init(&response);
+    LanternSignedBlockList response;
+    lantern_signed_block_list_init(&response);
     expect_zero(
         lantern_storage_collect_blocks(base_dir, &block_root, 1u, &response),
         "collect blocks");
@@ -274,7 +274,7 @@ int main(void) {
     expect_zero(lantern_storage_iterate_blocks(base_dir, iterate_counter, &ctx), "iterate blocks");
     assert(ctx.count == 1u);
 
-    lantern_blocks_by_root_response_reset(&response);
+    lantern_signed_block_list_reset(&response);
     lantern_block_body_reset(&block.message.body);
 
     LanternSignedBlock legacy_block;
@@ -303,8 +303,8 @@ int main(void) {
         lantern_storage_store_block(base_dir, &legacy_block),
         "store legacy block");
 
-    LanternBlocksByRootResponse legacy_response;
-    lantern_blocks_by_root_response_init(&legacy_response);
+    LanternSignedBlockList legacy_response;
+    lantern_signed_block_list_init(&legacy_response);
     expect_zero(
         lantern_storage_collect_blocks(base_dir, &legacy_block_root, 1u, &legacy_response),
         "collect legacy block");
@@ -322,7 +322,7 @@ int main(void) {
             LANTERN_ROOT_SIZE)
         == 0);
     assert(legacy_response.blocks[0].message.block.body.legacy_plain_attestation_layout == true);
-    lantern_blocks_by_root_response_reset(&legacy_response);
+    lantern_signed_block_list_reset(&legacy_response);
     lantern_block_body_reset(&legacy_block.message.body);
     lantern_attestations_reset(&legacy_plain_attestations);
 

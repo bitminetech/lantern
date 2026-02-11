@@ -352,8 +352,16 @@ static void *block_request_worker(void *arg)
         request.roots.items[i] = ctx->roots[i];
     }
 
+    if (request.roots.length > (SIZE_MAX - sizeof(uint32_t)) / LANTERN_ROOT_SIZE)
+    {
+        lantern_log_error(
+            "reqresp",
+            &meta,
+            "blocks_by_root request exceeds size limits");
+        goto cleanup;
+    }
     size_t roots_bytes = request.roots.length * LANTERN_ROOT_SIZE;
-    size_t raw_size = roots_bytes;
+    size_t raw_size = sizeof(uint32_t) + roots_bytes;
     raw_request = (uint8_t *)malloc(raw_size > 0 ? raw_size : 1u);
     if (!raw_request)
     {

@@ -77,7 +77,7 @@ struct lantern_reqresp_service_callbacks {
         void *context,
         const LanternRoot *roots,
         size_t root_count,
-        LanternBlocksByRootResponse *out_blocks);
+        LanternSignedBlockList *out_blocks);
 };
 
 struct lantern_reqresp_service_config {

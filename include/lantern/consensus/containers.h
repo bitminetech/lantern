@@ -35,6 +35,14 @@ typedef struct {
     uint8_t bytes[LANTERN_SIGNATURE_SIZE];
 } LanternSignature;
 
+typedef uint64_t LanternValidatorIndex;
+
+typedef struct {
+    LanternValidatorIndex *data;
+    size_t length;
+    size_t capacity;
+} LanternValidatorIndices;
+
 typedef struct {
     uint64_t num_validators;
     uint64_t genesis_time;
@@ -54,7 +62,7 @@ typedef struct {
 
 typedef struct {
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-    uint64_t validator_id;
+    LanternValidatorIndex validator_id;
     union {
         LanternAttestationData data;
         struct {
@@ -65,7 +73,7 @@ typedef struct {
         };
     };
 #else
-    uint64_t validator_id;
+    LanternValidatorIndex validator_id;
     uint64_t slot;
     LanternCheckpoint head;
     LanternCheckpoint target;
@@ -125,12 +133,12 @@ typedef struct {
 
 typedef struct {
     uint8_t pubkey[LANTERN_VALIDATOR_PUBKEY_SIZE];
-    uint64_t index;
+    LanternValidatorIndex index;
 } LanternValidator;
 
 typedef struct {
     uint64_t slot;
-    uint64_t proposer_index;
+    LanternValidatorIndex proposer_index;
     LanternRoot parent_root;
     LanternRoot state_root;
     LanternRoot body_root;
@@ -138,7 +146,7 @@ typedef struct {
 
 typedef struct {
     uint64_t slot;
-    uint64_t proposer_index;
+    LanternValidatorIndex proposer_index;
     LanternRoot parent_root;
     LanternRoot state_root;
     LanternBlockBody body;
@@ -150,7 +158,7 @@ typedef struct {
         LanternBlock block;
         struct {
             uint64_t slot;
-            uint64_t proposer_index;
+            LanternValidatorIndex proposer_index;
             LanternRoot parent_root;
             LanternRoot state_root;
             LanternBlockBody body;
@@ -174,6 +182,27 @@ void lantern_attestations_reset(LanternAttestations *list);
 int lantern_attestations_append(LanternAttestations *list, const LanternVote *vote);
 int lantern_attestations_copy(LanternAttestations *dst, const LanternAttestations *src);
 int lantern_attestations_resize(LanternAttestations *list, size_t new_length);
+
+void lantern_validator_indices_init(LanternValidatorIndices *indices);
+void lantern_validator_indices_reset(LanternValidatorIndices *indices);
+int lantern_validator_indices_append(LanternValidatorIndices *indices, LanternValidatorIndex index);
+int lantern_validator_indices_copy(LanternValidatorIndices *dst, const LanternValidatorIndices *src);
+int lantern_validator_indices_resize(LanternValidatorIndices *indices, size_t new_length);
+bool lantern_validator_index_is_valid(LanternValidatorIndex index, size_t num_validators);
+bool lantern_validator_index_is_proposer_for(
+    LanternValidatorIndex index,
+    uint64_t slot,
+    size_t num_validators);
+int lantern_validator_index_compute_subnet_id(
+    LanternValidatorIndex index,
+    size_t num_committees,
+    size_t *out_subnet_id);
+int lantern_aggregation_bits_from_validator_indices(
+    struct lantern_bitlist *out_bits,
+    const LanternValidatorIndices *indices);
+int lantern_aggregation_bits_to_validator_indices(
+    const struct lantern_bitlist *bits,
+    LanternValidatorIndices *out_indices);
 
 void lantern_bitlist_init(struct lantern_bitlist *list);
 void lantern_bitlist_reset(struct lantern_bitlist *list);

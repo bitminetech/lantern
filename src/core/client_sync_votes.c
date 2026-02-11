@@ -609,8 +609,7 @@ bool lantern_client_verify_vote_signature(
         LANTERN_VALIDATOR_PUBKEY_SIZE,
         vote->data.slot,
         signature,
-        vote_root.bytes,
-        sizeof(vote_root.bytes));
+        &vote_root);
     if (!is_signature_valid)
     {
         lantern_log_warn(

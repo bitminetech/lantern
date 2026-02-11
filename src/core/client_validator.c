@@ -214,11 +214,11 @@ static bool validator_should_pause_for_sync(const struct lantern_client *client)
 
 struct aggregation_group {
     LanternAttestationData data;
-    uint64_t *validator_ids;
+    LanternValidatorIndex *validator_ids;
     LanternSignature *signatures;
     size_t count;
     size_t capacity;
-    uint64_t *all_validator_ids;
+    LanternValidatorIndex *all_validator_ids;
     size_t all_count;
     size_t all_capacity;
 };
@@ -274,7 +274,7 @@ static void aggregation_group_reset(struct aggregation_group *group)
 
 static int aggregation_group_append(
     struct aggregation_group *group,
-    uint64_t validator_id,
+    LanternValidatorIndex validator_id,
     const LanternSignature *signature)
 {
     if (!group)
@@ -305,7 +305,7 @@ static int aggregation_group_append(
                 }
                 new_capacity *= 2u;
             }
-            uint64_t *ids = realloc(group->all_validator_ids, new_capacity * sizeof(*ids));
+            LanternValidatorIndex *ids = realloc(group->all_validator_ids, new_capacity * sizeof(*ids));
             if (!ids)
             {
                 return -1;
@@ -342,7 +342,7 @@ static int aggregation_group_append(
             }
             new_capacity *= 2u;
         }
-        uint64_t *ids = realloc(group->validator_ids, new_capacity * sizeof(*ids));
+        LanternValidatorIndex *ids = realloc(group->validator_ids, new_capacity * sizeof(*ids));
         if (!ids)
         {
             return -1;
@@ -415,7 +415,7 @@ static void aggregation_group_sort(struct aggregation_group *group)
     }
     for (size_t i = 1; i < group->count; ++i)
     {
-        uint64_t key_id = group->validator_ids[i];
+        LanternValidatorIndex key_id = group->validator_ids[i];
         LanternSignature key_sig = group->signatures[i];
         size_t j = i;
         while (j > 0 && group->validator_ids[j - 1] > key_id)
@@ -431,31 +431,24 @@ static void aggregation_group_sort(struct aggregation_group *group)
 
 static int fill_bitlist_from_ids(
     struct lantern_bitlist *bits,
-    const uint64_t *ids,
+    const LanternValidatorIndex *ids,
     size_t count)
 {
     if (!bits || !ids || count == 0)
     {
         return -1;
     }
-    uint64_t max_id = ids[count - 1u];
-    if (max_id >= LANTERN_VALIDATOR_REGISTRY_LIMIT)
+    LanternValidatorIndices indices;
+    lantern_validator_indices_init(&indices);
+    if (lantern_validator_indices_resize(&indices, count) != 0)
     {
+        lantern_validator_indices_reset(&indices);
         return -1;
     }
-    size_t bit_length = (size_t)max_id + 1u;
-    if (lantern_bitlist_resize(bits, bit_length) != 0)
-    {
-        return -1;
-    }
-    for (size_t i = 0; i < count; ++i)
-    {
-        if (lantern_bitlist_set(bits, (size_t)ids[i], true) != 0)
-        {
-            return -1;
-        }
-    }
-    return 0;
+    memcpy(indices.data, ids, count * sizeof(*ids));
+    int rc = lantern_aggregation_bits_from_validator_indices(bits, &indices);
+    lantern_validator_indices_reset(&indices);
+    return rc;
 }
 
 static lantern_client_error append_group_as_aggregated(
@@ -526,8 +519,7 @@ static lantern_client_error append_group_as_aggregated(
             pubkeys,
             signatures,
             group->count,
-            data_root.bytes,
-            sizeof(data_root.bytes),
+            &data_root,
             group->data.slot,
             &proof.proof_data))
     {
@@ -1147,8 +1139,7 @@ int validator_sign_vote(
     if (!lantern_signature_sign(
             validator->secret_key,
             slot,
-            vote_root.bytes,
-            sizeof(vote_root.bytes),
+            &vote_root,
             &vote->signature))
     {
         return LANTERN_CLIENT_ERR_VALIDATOR;

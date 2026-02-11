@@ -426,7 +426,7 @@ int reqresp_collect_blocks(
     void *context,
     const LanternRoot *roots,
     size_t root_count,
-    LanternBlocksByRootResponse *out_blocks);
+    LanternSignedBlockList *out_blocks);
 
 
 /**

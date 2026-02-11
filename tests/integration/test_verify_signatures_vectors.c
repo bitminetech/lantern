@@ -151,8 +151,7 @@ static bool verify_aggregated_attestations(
         bool sig_ok = lantern_signature_verify_aggregated(
             pubkeys,
             participant_count,
-            data_root.bytes,
-            sizeof(data_root.bytes),
+            &data_root,
             &proof->proof_data,
             att->data.slot);
         free(pubkeys);
@@ -190,8 +189,7 @@ static bool verify_proposer_signature(const LanternState *state, const LanternSi
             LANTERN_VALIDATOR_PUBKEY_SIZE,
             vote->data.slot,
             &block->signatures.proposer_signature,
-            vote_root.bytes,
-            sizeof(vote_root.bytes))) {
+            &vote_root)) {
         fprintf(stderr, "%s: proposer signature verification failed\n", path ? path : "(unknown)");
         return false;
     }

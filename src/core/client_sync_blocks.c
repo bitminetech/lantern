@@ -322,8 +322,7 @@ static bool signed_block_signatures_are_valid(
         bool sig_ok = lantern_signature_verify_aggregated(
             pubkeys,
             participant_count,
-            data_root.bytes,
-            sizeof(data_root.bytes),
+            &data_root,
             &proof->proof_data,
             att->data.slot);
         free(pubkeys);
@@ -1080,8 +1079,8 @@ static bool rebuild_state_for_root_locked(
         }
     }
 
-    LanternBlocksByRootResponse response;
-    lantern_blocks_by_root_response_init(&response);
+    LanternSignedBlockList response;
+    lantern_signed_block_list_init(&response);
     int collect_rc = 0;
     if (root_count > 0)
     {
@@ -1174,7 +1173,7 @@ static bool rebuild_state_for_root_locked(
     roots = NULL;
     if (collect_rc != 0 || response.length != root_count)
     {
-        lantern_blocks_by_root_response_reset(&response);
+        lantern_signed_block_list_reset(&response);
         root_chain_reset(&chain);
         return false;
     }
@@ -1187,7 +1186,7 @@ static bool rebuild_state_for_root_locked(
             &meta,
             "rebuild_state failed to initialize replay state target=%s",
             target_hex[0] ? target_hex : "0x0");
-        lantern_blocks_by_root_response_reset(&response);
+        lantern_signed_block_list_reset(&response);
         root_chain_reset(&chain);
         return false;
     }
@@ -1211,14 +1210,14 @@ static bool rebuild_state_for_root_locked(
                 response.blocks[i].message.block.slot,
                 transition_rc,
                 block_hex[0] ? block_hex : "0x0");
-            lantern_blocks_by_root_response_reset(&response);
+            lantern_signed_block_list_reset(&response);
             root_chain_reset(&chain);
             lantern_state_reset(out_state);
             return false;
         }
     }
 
-    lantern_blocks_by_root_response_reset(&response);
+    lantern_signed_block_list_reset(&response);
     root_chain_reset(&chain);
     return true;
 }

@@ -394,7 +394,7 @@ int client_test_sign_vote_with_secret(LanternSignedVote *vote, struct PQSignatur
     if (lantern_hash_tree_root_attestation_data(&vote->data.data, &vote_root) != 0) {
         return -1;
     }
-    if (!lantern_signature_sign(secret, vote->data.slot, vote_root.bytes, sizeof(vote_root.bytes), &vote->signature)) {
+    if (!lantern_signature_sign(secret, vote->data.slot, &vote_root, &vote->signature)) {
         return -1;
     }
     return 0;

@@ -48,7 +48,7 @@ int lantern_storage_collect_blocks(
     const char *data_dir,
     const LanternRoot *roots,
     size_t root_count,
-    LanternBlocksByRootResponse *out_blocks);
+    LanternSignedBlockList *out_blocks);
 int lantern_storage_iterate_blocks(
     const char *data_dir,
     lantern_storage_block_visitor_fn visitor,

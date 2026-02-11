@@ -2321,8 +2321,8 @@ static void *blocks_worker(void *arg) {
         "blocks_by_root decoded roots=%zu",
         decoded_request.roots.length);
 
-    LanternBlocksByRootResponse response;
-    lantern_blocks_by_root_response_init(&response);
+    LanternSignedBlockList response;
+    lantern_signed_block_list_init(&response);
 
     int collect_rc = 0;
     if (service->callbacks.collect_blocks) {
@@ -2342,7 +2342,7 @@ static void *blocks_worker(void *arg) {
     lantern_blocks_by_root_request_reset(&decoded_request);
 
     if (collect_rc != 0) {
-        lantern_blocks_by_root_response_reset(&response);
+        lantern_signed_block_list_reset(&response);
         log_stream_error("collect", protocol_id, peer_text[0] ? peer_text : NULL);
         (void)send_error_response(
             stream,
@@ -2381,7 +2381,7 @@ static void *blocks_worker(void *arg) {
                 0,
                 0)
             != 0) {
-            lantern_blocks_by_root_response_reset(&response);
+            lantern_signed_block_list_reset(&response);
             log_stream_error("write", protocol_id, peer_text[0] ? peer_text : NULL);
             close_stream(stream);
             free(ssz_buffer);
@@ -2399,7 +2399,7 @@ static void *blocks_worker(void *arg) {
             if (!resized) {
                 free(ssz_buffer);
                 free(snappy_buffer);
-                lantern_blocks_by_root_response_reset(&response);
+                lantern_signed_block_list_reset(&response);
                 log_stream_error("encode", protocol_id, peer_text[0] ? peer_text : NULL);
                 (void)send_error_response(
                     stream,
@@ -2433,7 +2433,7 @@ static void *blocks_worker(void *arg) {
         if (!encoded || ssz_written == 0) {
             free(ssz_buffer);
             free(snappy_buffer);
-            lantern_blocks_by_root_response_reset(&response);
+            lantern_signed_block_list_reset(&response);
             log_stream_error("encode", protocol_id, peer_text[0] ? peer_text : NULL);
             (void)send_error_response(
                 stream,
@@ -2452,7 +2452,7 @@ static void *blocks_worker(void *arg) {
         if (max_rc != LANTERN_SNAPPY_OK || max_compressed == 0) {
             free(ssz_buffer);
             free(snappy_buffer);
-            lantern_blocks_by_root_response_reset(&response);
+            lantern_signed_block_list_reset(&response);
             log_stream_error("compress", protocol_id, peer_text[0] ? peer_text : NULL);
             (void)send_error_response(
                 stream,
@@ -2471,7 +2471,7 @@ static void *blocks_worker(void *arg) {
             if (!resized) {
                 free(ssz_buffer);
                 free(snappy_buffer);
-                lantern_blocks_by_root_response_reset(&response);
+                lantern_signed_block_list_reset(&response);
                 log_stream_error("compress", protocol_id, peer_text[0] ? peer_text : NULL);
                 (void)send_error_response(
                     stream,
@@ -2498,7 +2498,7 @@ static void *blocks_worker(void *arg) {
         if (snappy_rc != LANTERN_SNAPPY_OK) {
             free(ssz_buffer);
             free(snappy_buffer);
-            lantern_blocks_by_root_response_reset(&response);
+            lantern_signed_block_list_reset(&response);
             log_stream_error("compress", protocol_id, peer_text[0] ? peer_text : NULL);
             (void)send_error_response(
                 stream,
@@ -2544,7 +2544,7 @@ static void *blocks_worker(void *arg) {
             != 0) {
             free(ssz_buffer);
             free(snappy_buffer);
-            lantern_blocks_by_root_response_reset(&response);
+            lantern_signed_block_list_reset(&response);
             log_stream_error("write", protocol_id, peer_text[0] ? peer_text : NULL);
             close_stream(stream);
             return NULL;
@@ -2553,7 +2553,7 @@ static void *blocks_worker(void *arg) {
 
     free(ssz_buffer);
     free(snappy_buffer);
-    lantern_blocks_by_root_response_reset(&response);
+    lantern_signed_block_list_reset(&response);
     close_stream(stream);
 
     lantern_log_info(

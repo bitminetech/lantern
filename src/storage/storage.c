@@ -1308,11 +1308,11 @@ int lantern_storage_collect_blocks(
     const char *data_dir,
     const LanternRoot *roots,
     size_t root_count,
-    LanternBlocksByRootResponse *out_blocks) {
+    LanternSignedBlockList *out_blocks) {
     if (!data_dir || (!roots && root_count > 0) || !out_blocks) {
         return -1;
     }
-    if (lantern_blocks_by_root_response_resize(out_blocks, 0) != 0) {
+    if (lantern_signed_block_list_resize(out_blocks, 0) != 0) {
         return -1;
     }
 
@@ -1360,7 +1360,7 @@ int lantern_storage_collect_blocks(
         }
 
         const size_t current = out_blocks->length;
-        if (lantern_blocks_by_root_response_resize(out_blocks, current + 1) != 0) {
+        if (lantern_signed_block_list_resize(out_blocks, current + 1) != 0) {
             free(data);
             goto cleanup;
         }

@@ -947,11 +947,11 @@ static void build_fixture_block(
     fill_signature(&out->signatures.proposer_signature, (uint8_t)(seed + 0xA0 + att_count * 3));
 }
 
-static void test_blocks_by_root_response_fixture(void) {
+static void test_signed_block_list_fixture(void) {
     /* Build the response using C encoding (fixed-length signatures) */
-    LanternBlocksByRootResponse resp;
-    lantern_blocks_by_root_response_init(&resp);
-    check_zero(lantern_blocks_by_root_response_resize(&resp, 2), "fixture response resize");
+    LanternSignedBlockList resp;
+    lantern_signed_block_list_init(&resp);
+    check_zero(lantern_signed_block_list_resize(&resp, 2), "fixture response resize");
     build_fixture_block(&resp.blocks[0], 0x10, 12, 1, 1);
     build_fixture_block(&resp.blocks[1], 0x30, 18, 3, 2);
 
@@ -961,14 +961,14 @@ static void test_blocks_by_root_response_fixture(void) {
     CHECK(encoded != NULL);
     size_t written = 0;
     check_zero(
-        lantern_network_blocks_by_root_response_encode(&resp, encoded, encoded_capacity, &written),
+        lantern_network_signed_block_list_encode(&resp, encoded, encoded_capacity, &written),
         "fixture response encode");
 
     /* Decode back and verify */
-    LanternBlocksByRootResponse decoded;
-    lantern_blocks_by_root_response_init(&decoded);
+    LanternSignedBlockList decoded;
+    lantern_signed_block_list_init(&decoded);
     check_zero(
-        lantern_network_blocks_by_root_response_decode(&decoded, encoded, written),
+        lantern_network_signed_block_list_decode(&decoded, encoded, written),
         "response fixture decode");
     CHECK(decoded.length == 2);
 
@@ -1015,10 +1015,10 @@ static void test_blocks_by_root_response_fixture(void) {
             max_compressed,
             &compressed_len)
         == LANTERN_SNAPPY_OK);
-    LanternBlocksByRootResponse snappy_decoded;
-    lantern_blocks_by_root_response_init(&snappy_decoded);
+    LanternSignedBlockList snappy_decoded;
+    lantern_signed_block_list_init(&snappy_decoded);
     check_zero(
-        lantern_network_blocks_by_root_response_decode_snappy(&snappy_decoded, compressed, compressed_len),
+        lantern_network_signed_block_list_decode_snappy(&snappy_decoded, compressed, compressed_len),
         "response fixture decode snappy");
     CHECK(snappy_decoded.length == decoded.length);
     CHECK(snappy_decoded.blocks[0].message.block.slot == 12);
@@ -1026,9 +1026,9 @@ static void test_blocks_by_root_response_fixture(void) {
 
     free(compressed);
     free(encoded);
-    lantern_blocks_by_root_response_reset(&resp);
-    lantern_blocks_by_root_response_reset(&decoded);
-    lantern_blocks_by_root_response_reset(&snappy_decoded);
+    lantern_signed_block_list_reset(&resp);
+    lantern_signed_block_list_reset(&decoded);
+    lantern_signed_block_list_reset(&snappy_decoded);
 }
 
 static void test_status_snappy(void) {
@@ -1620,10 +1620,14 @@ static void test_blocks_by_root_request(void) {
     uint8_t encoded[128];
     size_t written = 0;
     check_zero(lantern_network_blocks_by_root_request_encode(&req, encoded, sizeof(encoded), &written), "request encode");
-    size_t expected_written = req.roots.length * LANTERN_ROOT_SIZE;
+    size_t expected_written = sizeof(uint32_t) + (req.roots.length * LANTERN_ROOT_SIZE);
     CHECK(written == expected_written);
+    CHECK(encoded[0] == 4u);
+    CHECK(encoded[1] == 0u);
+    CHECK(encoded[2] == 0u);
+    CHECK(encoded[3] == 0u);
     CHECK(memcmp(
-              encoded,
+              encoded + sizeof(uint32_t),
               req.roots.items,
               req.roots.length * LANTERN_ROOT_SIZE)
           == 0);
@@ -1634,16 +1638,9 @@ static void test_blocks_by_root_request(void) {
     CHECK(decoded.roots.length == req.roots.length);
     CHECK(memcmp(decoded.roots.items[1].bytes, req.roots.items[1].bytes, LANTERN_ROOT_SIZE) == 0);
 
-    /* Legacy compatibility: decode old container form [offset=4][roots...]. */
-    uint8_t legacy_encoded[132];
-    legacy_encoded[0] = 4u;
-    legacy_encoded[1] = 0u;
-    legacy_encoded[2] = 0u;
-    legacy_encoded[3] = 0u;
-    memcpy(
-        legacy_encoded + sizeof(uint32_t),
-        encoded,
-        expected_written);
+    /* Legacy compatibility: decode packed roots without container header. */
+    uint8_t legacy_encoded[128];
+    memcpy(legacy_encoded, req.roots.items, req.roots.length * LANTERN_ROOT_SIZE);
 
     LanternBlocksByRootRequest legacy_decoded;
     lantern_blocks_by_root_request_init(&legacy_decoded);
@@ -1651,8 +1648,8 @@ static void test_blocks_by_root_request(void) {
         lantern_network_blocks_by_root_request_decode(
             &legacy_decoded,
             legacy_encoded,
-            sizeof(uint32_t) + expected_written),
-        "request decode legacy container");
+            req.roots.length * LANTERN_ROOT_SIZE),
+        "request decode legacy packed list");
     CHECK(legacy_decoded.roots.length == req.roots.length);
     CHECK(memcmp(legacy_decoded.roots.items[0].bytes, req.roots.items[0].bytes, LANTERN_ROOT_SIZE) == 0);
 
@@ -1681,10 +1678,10 @@ static void test_blocks_by_root_request(void) {
     lantern_blocks_by_root_request_reset(&snappy_decoded);
 }
 
-static void test_blocks_by_root_response(void) {
-    LanternBlocksByRootResponse resp;
-    lantern_blocks_by_root_response_init(&resp);
-    check_zero(lantern_blocks_by_root_response_resize(&resp, 2), "response resize");
+static void test_signed_block_list(void) {
+    LanternSignedBlockList resp;
+    lantern_signed_block_list_init(&resp);
+    check_zero(lantern_signed_block_list_resize(&resp, 2), "response resize");
     populate_block(&resp.blocks[0], 1);
     populate_block(&resp.blocks[1], 2);
 
@@ -1698,7 +1695,7 @@ static void test_blocks_by_root_response(void) {
     }
     size_t written = 0;
     check_zero(
-        lantern_network_blocks_by_root_response_encode(&resp, encoded, encoded_capacity, &written),
+        lantern_network_signed_block_list_encode(&resp, encoded, encoded_capacity, &written),
         "response encode");
     CHECK(written >= resp.length * sizeof(uint32_t));
     uint32_t first_offset = (uint32_t)encoded[0]
@@ -1724,9 +1721,9 @@ static void test_blocks_by_root_response(void) {
         }
     }
 
-    LanternBlocksByRootResponse decoded;
-    lantern_blocks_by_root_response_init(&decoded);
-    check_zero(lantern_network_blocks_by_root_response_decode(&decoded, encoded, written), "response decode");
+    LanternSignedBlockList decoded;
+    lantern_signed_block_list_init(&decoded);
+    check_zero(lantern_network_signed_block_list_decode(&decoded, encoded, written), "response decode");
     CHECK(decoded.length == resp.length);
     const LanternVote *decoded_vote0 = &decoded.blocks[0].message.proposer_attestation;
     const LanternVote *expected_vote0 = &resp.blocks[0].message.proposer_attestation;
@@ -1757,7 +1754,7 @@ static void test_blocks_by_root_response(void) {
     size_t compressed_len = 0;
     size_t response_raw_len = 0;
     check_zero(
-        lantern_network_blocks_by_root_response_encode_snappy(
+        lantern_network_signed_block_list_encode_snappy(
             &resp,
             compressed,
             max_compressed,
@@ -1766,9 +1763,9 @@ static void test_blocks_by_root_response(void) {
         "response encode snappy");
     CHECK(response_raw_len == written);
 
-    LanternBlocksByRootResponse snappy_decoded;
-    lantern_blocks_by_root_response_init(&snappy_decoded);
-    check_zero(lantern_network_blocks_by_root_response_decode_snappy(&snappy_decoded, compressed, compressed_len), "response decode snappy");
+    LanternSignedBlockList snappy_decoded;
+    lantern_signed_block_list_init(&snappy_decoded);
+    check_zero(lantern_network_signed_block_list_decode_snappy(&snappy_decoded, compressed, compressed_len), "response decode snappy");
     CHECK(snappy_decoded.length == resp.length);
     CHECK(snappy_decoded.blocks[0].message.slot == resp.blocks[0].message.slot);
     const LanternVote *snappy_vote = &snappy_decoded.blocks[0].message.proposer_attestation;
@@ -1782,9 +1779,9 @@ static void test_blocks_by_root_response(void) {
     CHECK(snappy_vote->source.slot == expected_snappy_vote->source.slot);
     CHECK(memcmp(snappy_vote->source.root.bytes, expected_snappy_vote->source.root.bytes, LANTERN_ROOT_SIZE) == 0);
 
-    lantern_blocks_by_root_response_reset(&resp);
-    lantern_blocks_by_root_response_reset(&decoded);
-    lantern_blocks_by_root_response_reset(&snappy_decoded);
+    lantern_signed_block_list_reset(&resp);
+    lantern_signed_block_list_reset(&decoded);
+    lantern_signed_block_list_reset(&snappy_decoded);
     free(encoded);
     free(compressed);
 }
@@ -2102,7 +2099,7 @@ static void test_client_publish_block_loopback(void) {
 int main(void) {
     test_status_fixture_roundtrip();
     test_blocks_by_root_request_fixture();
-    test_blocks_by_root_response_fixture();
+    test_signed_block_list_fixture();
     test_status_snappy();
     test_status_decode_rejects_truncated_payloads();
     test_status_snappy_rejects_truncated_frames();
@@ -2112,7 +2109,7 @@ int main(void) {
     test_gossip_signed_vote_fixture_roundtrip();
     test_gossip_signed_block_fixture_roundtrip();
     test_blocks_by_root_request();
-    test_blocks_by_root_response();
+    test_signed_block_list();
     test_gossip_signed_vote_payload();
     test_gossip_signed_block_payload();
     test_gossip_block_snappy_roundtrip_random();

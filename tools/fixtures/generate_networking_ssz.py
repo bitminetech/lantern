@@ -30,9 +30,10 @@ try:
     from lean_spec.subspecs.containers.slot import Slot
     from lean_spec.subspecs.networking.reqresp.message import (
         BlocksByRootRequest,
-        BlocksByRootResponse,
+        RequestedBlockRoots,
         Status,
     )
+    from lean_spec.subspecs.networking.config import MAX_REQUEST_BLOCKS
     from lean_spec.subspecs.xmss.aggregation import AggregatedSignatureProof
     from lean_spec.subspecs.xmss.constants import TARGET_CONFIG
     from lean_spec.subspecs.xmss.containers import Signature
@@ -44,7 +45,7 @@ try:
     )
     from lean_spec.snappy import compress as raw_snappy_compress, frame_compress
     from lean_spec.subspecs.koalabear import Fp, P_BYTES
-    from lean_spec.types import Bytes32, Uint64
+    from lean_spec.types import Bytes32, SSZList, Uint64
     from lean_spec.types.byte_arrays import ByteListMiB
 except ModuleNotFoundError as exc:
     raise SystemExit(
@@ -235,6 +236,10 @@ def encode_gossip_fixture(ssz_path: Path, snappy_path: Path) -> None:
     write_fixture(snappy_path, snappy)
 
 
+class BlocksByRootResponseFixture(SSZList[SignedBlockWithAttestation]):
+    LIMIT = MAX_REQUEST_BLOCKS
+
+
 def main() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     fixture_dir = repo_root / "tests/fixtures/networking"
@@ -256,18 +261,23 @@ def main() -> None:
     )
 
     request_fixture = BlocksByRootRequest(
-        data=[
-            Bytes32(repeating_bytes(0x21, 32)),
-            Bytes32(repeating_bytes(0x52, 32)),
-            Bytes32(repeating_bytes(0x83, 32)),
-        ]
+        roots=RequestedBlockRoots(
+            data=[
+                Bytes32(repeating_bytes(0x21, 32)),
+                Bytes32(repeating_bytes(0x52, 32)),
+                Bytes32(repeating_bytes(0x83, 32)),
+            ]
+        )
     )
     request_bytes = request_fixture.encode_bytes()
     request_path = fixture_dir / "blocks_by_root_request_leanspec.ssz"
     write_fixture(request_path, request_bytes)
-    describe_fixture("BlocksByRoot request", [f"roots={len(request_fixture)}", f"bytes={len(request_bytes)}"])
+    describe_fixture(
+        "BlocksByRoot request",
+        [f"roots={len(request_fixture.roots)}", f"bytes={len(request_bytes)}"],
+    )
 
-    response_fixture = BlocksByRootResponse(
+    response_fixture = BlocksByRootResponseFixture(
         data=[
             make_signed_block(seed=0x10, base_slot=12, proposer_index=1, attestation_count=1),
             make_signed_block(seed=0x30, base_slot=18, proposer_index=3, attestation_count=2),

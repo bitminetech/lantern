@@ -1211,7 +1211,7 @@ void reqresp_status_failure(void *context, const char *peer_id, int error)
 /**
  * Collect blocks for a blocks_by_root request.
  *
- * @spec subspecs/networking/reqresp/message.py - BlocksByRoot response
+ * @spec subspecs/networking/reqresp/message.py - BlocksByRoot streamed SignedBlockWithAttestation chunks
  *
  * Retrieves blocks from storage matching the requested roots.
  * Returns blocks in the same order as the requested roots.
@@ -1231,7 +1231,7 @@ int reqresp_collect_blocks(
     void *context,
     const LanternRoot *roots,
     size_t root_count,
-    LanternBlocksByRootResponse *out_blocks)
+    LanternSignedBlockList *out_blocks)
 {
     if (!context || !out_blocks)
     {
@@ -1240,7 +1240,7 @@ int reqresp_collect_blocks(
     struct lantern_client *client = context;
     if (!client->data_dir)
     {
-        if (lantern_blocks_by_root_response_resize(out_blocks, 0) != 0)
+        if (lantern_signed_block_list_resize(out_blocks, 0) != 0)
         {
             return LANTERN_CLIENT_ERR_ALLOC;
         }

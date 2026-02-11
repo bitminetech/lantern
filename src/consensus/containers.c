@@ -30,6 +30,32 @@ static int ensure_capacity(LanternAttestations *list, size_t required) {
     return 0;
 }
 
+static int ensure_validator_indices_capacity(LanternValidatorIndices *indices, size_t required) {
+    if (!indices) {
+        return -1;
+    }
+    if (indices->capacity >= required) {
+        return 0;
+    }
+
+    size_t new_capacity = indices->capacity == 0 ? 4 : indices->capacity;
+    while (new_capacity < required) {
+        if (new_capacity > (SIZE_MAX / 2)) {
+            return -1;
+        }
+        new_capacity *= 2;
+    }
+
+    LanternValidatorIndex *items = realloc(indices->data, new_capacity * sizeof(*items));
+    if (!items) {
+        return -1;
+    }
+
+    indices->data = items;
+    indices->capacity = new_capacity;
+    return 0;
+}
+
 static int ensure_signature_list_capacity(LanternSignatureList *list, size_t required) {
     if (!list) {
         return -1;
@@ -225,6 +251,171 @@ int lantern_attestations_resize(LanternAttestations *list, size_t new_length) {
         memset(&list->data[new_length], 0, removed * sizeof(*list->data));
     }
     list->length = new_length;
+    return 0;
+}
+
+void lantern_validator_indices_init(LanternValidatorIndices *indices) {
+    if (!indices) {
+        return;
+    }
+    indices->data = NULL;
+    indices->length = 0;
+    indices->capacity = 0;
+}
+
+void lantern_validator_indices_reset(LanternValidatorIndices *indices) {
+    if (!indices) {
+        return;
+    }
+    free(indices->data);
+    indices->data = NULL;
+    indices->length = 0;
+    indices->capacity = 0;
+}
+
+int lantern_validator_indices_append(LanternValidatorIndices *indices, LanternValidatorIndex index) {
+    if (!indices || index >= LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return -1;
+    }
+    if (indices->length >= LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return -1;
+    }
+    if (ensure_validator_indices_capacity(indices, indices->length + 1) != 0) {
+        return -1;
+    }
+    indices->data[indices->length++] = index;
+    return 0;
+}
+
+int lantern_validator_indices_copy(LanternValidatorIndices *dst, const LanternValidatorIndices *src) {
+    if (!dst || !src) {
+        return -1;
+    }
+    if (src->length == 0) {
+        lantern_validator_indices_reset(dst);
+        lantern_validator_indices_init(dst);
+        return 0;
+    }
+    if (src->length > LANTERN_VALIDATOR_REGISTRY_LIMIT || !src->data) {
+        return -1;
+    }
+    if (ensure_validator_indices_capacity(dst, src->length) != 0) {
+        return -1;
+    }
+    memcpy(dst->data, src->data, src->length * sizeof(*src->data));
+    dst->length = src->length;
+    return 0;
+}
+
+int lantern_validator_indices_resize(LanternValidatorIndices *indices, size_t new_length) {
+    if (!indices || new_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return -1;
+    }
+    if (new_length == 0) {
+        if (indices->data && indices->length > 0) {
+            memset(indices->data, 0, indices->length * sizeof(*indices->data));
+        }
+        indices->length = 0;
+        return 0;
+    }
+    if (ensure_validator_indices_capacity(indices, new_length) != 0) {
+        return -1;
+    }
+    if (!indices->data) {
+        return -1;
+    }
+    size_t old_length = indices->length;
+    if (new_length > old_length) {
+        memset(&indices->data[old_length], 0, (new_length - old_length) * sizeof(*indices->data));
+    } else if (new_length < old_length) {
+        memset(&indices->data[new_length], 0, (old_length - new_length) * sizeof(*indices->data));
+    }
+    indices->length = new_length;
+    return 0;
+}
+
+bool lantern_validator_index_is_valid(LanternValidatorIndex index, size_t num_validators) {
+    return (size_t)index < num_validators;
+}
+
+bool lantern_validator_index_is_proposer_for(
+    LanternValidatorIndex index,
+    uint64_t slot,
+    size_t num_validators) {
+    if (num_validators == 0 || num_validators > UINT64_MAX) {
+        return false;
+    }
+    return (slot % (uint64_t)num_validators) == index;
+}
+
+int lantern_validator_index_compute_subnet_id(
+    LanternValidatorIndex index,
+    size_t num_committees,
+    size_t *out_subnet_id) {
+    if (!out_subnet_id || num_committees == 0) {
+        return -1;
+    }
+    *out_subnet_id = (size_t)index % num_committees;
+    return 0;
+}
+
+int lantern_aggregation_bits_from_validator_indices(
+    struct lantern_bitlist *out_bits,
+    const LanternValidatorIndices *indices) {
+    if (!out_bits || !indices || indices->length == 0 || !indices->data) {
+        return -1;
+    }
+    if (indices->length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return -1;
+    }
+
+    LanternValidatorIndex max_index = 0;
+    for (size_t i = 0; i < indices->length; ++i) {
+        LanternValidatorIndex index = indices->data[i];
+        if (index >= LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+            return -1;
+        }
+        if (index > max_index) {
+            max_index = index;
+        }
+    }
+
+    if (lantern_bitlist_resize(out_bits, (size_t)max_index + 1u) != 0) {
+        return -1;
+    }
+    for (size_t i = 0; i < indices->length; ++i) {
+        if (lantern_bitlist_set(out_bits, (size_t)indices->data[i], true) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int lantern_aggregation_bits_to_validator_indices(
+    const struct lantern_bitlist *bits,
+    LanternValidatorIndices *out_indices) {
+    if (!bits || !out_indices || bits->bit_length == 0) {
+        return -1;
+    }
+    if (bits->bit_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return -1;
+    }
+    if (!bits->bytes) {
+        return -1;
+    }
+    if (lantern_validator_indices_resize(out_indices, 0) != 0) {
+        return -1;
+    }
+    for (size_t i = 0; i < bits->bit_length; ++i) {
+        if (lantern_bitlist_get(bits, i)
+            && lantern_validator_indices_append(out_indices, (LanternValidatorIndex)i) != 0) {
+            (void)lantern_validator_indices_resize(out_indices, 0);
+            return -1;
+        }
+    }
+    if (out_indices->length == 0) {
+        return -1;
+    }
     return 0;
 }
 
@@ -604,24 +795,22 @@ int lantern_wrap_attestations_as_aggregated(
     }
     for (size_t i = 0; i < attestations->length; ++i) {
         const LanternVote *vote = &attestations->data[i];
-        if (vote->validator_id >= LANTERN_VALIDATOR_REGISTRY_LIMIT) {
-            return -1;
-        }
         LanternAggregatedAttestation att;
         lantern_aggregated_attestation_init(&att);
         att.data.slot = vote->slot;
         att.data.head = vote->head;
         att.data.target = vote->target;
         att.data.source = vote->source;
-        size_t bit_length = (size_t)vote->validator_id + 1u;
-        if (lantern_bitlist_resize(&att.aggregation_bits, bit_length) != 0) {
+
+        LanternValidatorIndices indices;
+        lantern_validator_indices_init(&indices);
+        if (lantern_validator_indices_append(&indices, vote->validator_id) != 0
+            || lantern_aggregation_bits_from_validator_indices(&att.aggregation_bits, &indices) != 0) {
+            lantern_validator_indices_reset(&indices);
             lantern_aggregated_attestation_reset(&att);
             return -1;
         }
-        if (lantern_bitlist_set(&att.aggregation_bits, (size_t)vote->validator_id, true) != 0) {
-            lantern_aggregated_attestation_reset(&att);
-            return -1;
-        }
+        lantern_validator_indices_reset(&indices);
         if (lantern_aggregated_attestations_append(out_aggregated, &att) != 0) {
             lantern_aggregated_attestation_reset(&att);
             return -1;

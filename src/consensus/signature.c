@@ -93,15 +93,11 @@ bool lantern_signature_verify(
     size_t pubkey_len,
     uint64_t epoch,
     const LanternSignature *signature,
-    const uint8_t *message,
-    size_t message_len) {
+    const LanternRoot *message) {
     if (!pubkey_bytes || pubkey_len == 0) {
         return false;
     }
     if (!signature || !message) {
-        return false;
-    }
-    if (message_len != LANTERN_ROOT_SIZE) {
         return false;
     }
     // Use pq_verify_ssz which handles the 52-byte pubkey as SSZ format.
@@ -112,8 +108,8 @@ bool lantern_signature_verify(
         pubkey_bytes,
         pubkey_len,
         epoch,
-        message,
-        message_len,
+        message->bytes,
+        LANTERN_ROOT_SIZE,
         signature->bytes,
         sizeof(signature->bytes));
     double elapsed = get_time_seconds() - start;
@@ -125,12 +121,8 @@ bool lantern_signature_verify_pk(
     const struct PQSignatureSchemePublicKey *pubkey,
     uint64_t epoch,
     const LanternSignature *signature,
-    const uint8_t *message,
-    size_t message_len) {
+    const LanternRoot *message) {
     if (!pubkey || !signature || !message) {
-        return false;
-    }
-    if (message_len != LANTERN_ROOT_SIZE) {
         return false;
     }
     struct PQSignature *pq_signature = NULL;
@@ -142,7 +134,7 @@ bool lantern_signature_verify_pk(
         return false;
     }
     double start = get_time_seconds();
-    int verify_rc = pq_verify(pubkey, epoch, message, message_len, pq_signature);
+    int verify_rc = pq_verify(pubkey, epoch, message->bytes, LANTERN_ROOT_SIZE, pq_signature);
     double elapsed = get_time_seconds() - start;
     lean_metrics_record_pq_signature_verification(elapsed);
     pq_signature_free(pq_signature);
@@ -155,18 +147,15 @@ bool lantern_signature_verify_pk(
 bool lantern_signature_sign(
     const struct PQSignatureSchemeSecretKey *secret_key,
     uint64_t epoch,
-    const uint8_t *message,
-    size_t message_len,
+    const LanternRoot *message,
     LanternSignature *out_signature) {
     if (!secret_key || !message || !out_signature) {
         return false;
     }
-    if (message_len != LANTERN_ROOT_SIZE) {
-        return false;
-    }
     struct PQSignature *pq_signature = NULL;
     double start = get_time_seconds();
-    enum PQSigningError sign_err = pq_sign(secret_key, epoch, message, message_len, &pq_signature);
+    enum PQSigningError sign_err =
+        pq_sign(secret_key, epoch, message->bytes, LANTERN_ROOT_SIZE, &pq_signature);
     double elapsed = get_time_seconds() - start;
     lean_metrics_record_pq_signature_signing(elapsed);
     if (sign_err != Success || !pq_signature) {
@@ -201,17 +190,13 @@ bool lantern_signature_aggregate(
     const uint8_t *const *pubkeys,
     const LanternSignature *signatures,
     size_t count,
-    const uint8_t *message,
-    size_t message_len,
+    const LanternRoot *message,
     uint64_t epoch,
     LanternByteList *out_proof) {
     if (!pubkeys || !signatures || !message || !out_proof) {
         return false;
     }
     if (count == 0) {
-        return false;
-    }
-    if (message_len != LANTERN_ROOT_SIZE) {
         return false;
     }
     lantern_log_info(
@@ -279,8 +264,8 @@ bool lantern_signature_aggregate(
             (const struct PQSignatureSchemePublicKey *const *)pubkey_handles,
             (const struct PQSignature *const *)sig_handles,
             count,
-            message,
-            message_len,
+            message->bytes,
+            LANTERN_ROOT_SIZE,
             epoch,
             out_proof->data,
             out_proof->length,
@@ -340,17 +325,13 @@ bool lantern_signature_aggregate(
 bool lantern_signature_verify_aggregated(
     const uint8_t *const *pubkeys,
     size_t count,
-    const uint8_t *message,
-    size_t message_len,
+    const LanternRoot *message,
     const LanternByteList *proof,
     uint64_t epoch) {
     if (!pubkeys || !message || !proof) {
         return false;
     }
     if (count == 0) {
-        return false;
-    }
-    if (message_len != LANTERN_ROOT_SIZE) {
         return false;
     }
     if (proof->length == 0 || !proof->data) {
@@ -399,8 +380,8 @@ bool lantern_signature_verify_aggregated(
         verify_rc = pq_verify_aggregated_signatures(
             (const struct PQSignatureSchemePublicKey *const *)pubkey_handles,
             count,
-            message,
-            message_len,
+            message->bytes,
+            LANTERN_ROOT_SIZE,
             proof->data,
             proof->length,
             epoch);

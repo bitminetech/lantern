@@ -74,8 +74,7 @@ static bool sign_proposer_vote(
     if (!lantern_signature_sign(
             secret,
             signed_vote->data.slot,
-            out_vote_root->bytes,
-            sizeof(out_vote_root->bytes),
+            out_vote_root,
             &signed_vote->signature)) {
         fprintf(stderr, "lantern_signature_sign failed\n");
         return false;
@@ -105,8 +104,7 @@ static int test_proposer_vote_signature_roundtrip(void) {
             pubkey,
             signed_vote.data.slot,
             &signed_vote.signature,
-            vote_root.bytes,
-            sizeof(vote_root.bytes))) {
+            &vote_root)) {
         fprintf(stderr, "verify_pk rejected valid proposer vote\n");
         pq_secret_key_free(secret);
         pq_public_key_free(pubkey);
@@ -132,8 +130,7 @@ static int test_proposer_vote_signature_roundtrip(void) {
             (size_t)written,
             signed_vote.data.slot,
             &signed_vote.signature,
-            vote_root.bytes,
-            sizeof(vote_root.bytes))) {
+            &vote_root)) {
         fprintf(stderr, "verify(bytes) rejected valid proposer vote\n");
         pq_secret_key_free(secret);
         pq_public_key_free(pubkey);
@@ -177,8 +174,7 @@ static int test_proposer_vote_signature_rejects_tampering(void) {
             pubkey,
             signed_vote.data.slot,
             &signed_vote.signature,
-            tampered_root.bytes,
-            sizeof(tampered_root.bytes))) {
+            &tampered_root)) {
         fprintf(stderr, "verify_pk accepted tampered proposer vote\n");
         pq_secret_key_free(secret);
         pq_public_key_free(pubkey);
@@ -229,8 +225,7 @@ static int test_aggregated_signature_roundtrip(void) {
         if (!lantern_signature_sign(
                 secrets[i],
                 epoch,
-                message.bytes,
-                sizeof(message.bytes),
+                &message,
                 &signatures[i])) {
             fprintf(stderr, "aggregate: sign failed index=%zu\n", i);
             goto fail;
@@ -241,8 +236,7 @@ static int test_aggregated_signature_roundtrip(void) {
             pubkey_ptrs,
             signatures,
             kSignerCount,
-            message.bytes,
-            sizeof(message.bytes),
+            &message,
             epoch,
             &proof)) {
         fprintf(stderr, "aggregate: lantern_signature_aggregate failed\n");
@@ -255,8 +249,7 @@ static int test_aggregated_signature_roundtrip(void) {
     if (!lantern_signature_verify_aggregated(
             pubkey_ptrs,
             kSignerCount,
-            message.bytes,
-            sizeof(message.bytes),
+            &message,
             &proof,
             epoch)) {
         fprintf(stderr, "aggregate: verify_aggregated failed\n");
@@ -271,8 +264,7 @@ static int test_aggregated_signature_roundtrip(void) {
     if (lantern_signature_verify_aggregated(
             pubkey_ptrs,
             kSignerCount,
-            message.bytes,
-            sizeof(message.bytes),
+            &message,
             &tampered,
             epoch)) {
         fprintf(stderr, "aggregate: tampered proof unexpectedly verified\n");
@@ -301,16 +293,6 @@ fail:
     return 1;
 }
 
-static bool should_run_signature_tests(void) {
-    const char *env = getenv("LANTERN_RUN_SIGNATURE_TESTS");
-    return env != NULL && env[0] != '\0' && strcmp(env, "0") != 0;
-}
-
-static bool should_run_slow_signature_tests(void) {
-    const char *env = getenv("LANTERN_RUN_SLOW_SIGNATURE_TESTS");
-    return env != NULL && env[0] != '\0' && strcmp(env, "0") != 0;
-}
-
 static int test_signature_helpers(void) {
     LanternSignature signature;
     memset(&signature, 0xA5, sizeof(signature));
@@ -330,23 +312,14 @@ int main(void) {
     if (test_signature_helpers() != 0) {
         return 1;
     }
-    if (!should_run_signature_tests()) {
-        fprintf(stderr, "Skipping signature cryptography tests; set LANTERN_RUN_SIGNATURE_TESTS=1 to enable.\n");
-        puts("lantern_signature_test OK");
-        return 0;
-    }
     if (test_proposer_vote_signature_roundtrip() != 0) {
         return 1;
     }
     if (test_proposer_vote_signature_rejects_tampering() != 0) {
         return 1;
     }
-    if (should_run_slow_signature_tests()) {
-        if (test_aggregated_signature_roundtrip() != 0) {
-            return 1;
-        }
-    } else {
-        fprintf(stderr, "Skipping aggregated signature test; set LANTERN_RUN_SLOW_SIGNATURE_TESTS=1 to enable.\n");
+    if (test_aggregated_signature_roundtrip() != 0) {
+        return 1;
     }
     puts("lantern_signature_test OK");
     return 0;

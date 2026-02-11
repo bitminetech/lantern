@@ -16,33 +16,28 @@ bool lantern_signature_verify(
     size_t pubkey_len,
     uint64_t epoch,
     const LanternSignature *signature,
-    const uint8_t *message,
-    size_t message_len);
+    const LanternRoot *message);
 bool lantern_signature_verify_pk(
     const struct PQSignatureSchemePublicKey *pubkey,
     uint64_t epoch,
     const LanternSignature *signature,
-    const uint8_t *message,
-    size_t message_len);
+    const LanternRoot *message);
 bool lantern_signature_sign(
     const struct PQSignatureSchemeSecretKey *secret_key,
     uint64_t epoch,
-    const uint8_t *message,
-    size_t message_len,
+    const LanternRoot *message,
     LanternSignature *out_signature);
 bool lantern_signature_aggregate(
     const uint8_t *const *pubkeys,
     const LanternSignature *signatures,
     size_t count,
-    const uint8_t *message,
-    size_t message_len,
+    const LanternRoot *message,
     uint64_t epoch,
     LanternByteList *out_proof);
 bool lantern_signature_verify_aggregated(
     const uint8_t *const *pubkeys,
     size_t count,
-    const uint8_t *message,
-    size_t message_len,
+    const LanternRoot *message,
     const LanternByteList *proof,
     uint64_t epoch);
 
