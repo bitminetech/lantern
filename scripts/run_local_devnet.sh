@@ -4,10 +4,10 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/run_devnet2.sh start <node_count> [genesis_dir] [binary|docker]
-  scripts/run_devnet2.sh stop <node_count> [binary|docker]
+  scripts/run_local_devnet.sh start <node_count> [genesis_dir] [binary|docker]
+  scripts/run_local_devnet.sh stop <node_count> [binary|docker]
 
-Spins up or stops a local devnet-2 with N Lantern nodes.
+Spins up or stops a local devnet with N Lantern nodes.
 
 Args:
   mode         start | stop
@@ -29,10 +29,11 @@ Environment overrides (start):
   GENESIS_ACTIVE_EPOCH Active epoch for generated validator-config.yaml (default: 18)
   GENESIS_KEY_TYPE   Key type for generated validator-config.yaml (default: xmss)
   GENESIS_SHUFFLE    Shuffle mode for generated validator-config.yaml (default: roundrobin)
+  GENESIS_AGGREGATOR_INDEX Validator index marked with enrFields.is_aggregator=true (default: 0)
   GENESIS_GENERATOR  Path to generate-genesis.sh (default: tools/lean-quickstart/generate-genesis.sh)
   LOG_LEVEL          Lantern log level (default: info)
-  DEVNET             Devnet name (default: devnet2)
-  RUN_DIR            Run directory (default: /tmp/lantern-devnet2-run)
+  DEVNET             Devnet name (default: devnet3)
+  RUN_DIR            Run directory (default: /tmp/lantern-local-devnet-run)
   CLEAN_RUN_DIR      1 to delete RUN_DIR data/logs before start (default: 1)
   LEANSPEC_PY        Path to leanSpec python (default: tools/leanSpec/.venv/bin/python)
   LANTERN_IMAGE      Docker image to run (default: lantern:local)
@@ -43,9 +44,9 @@ Environment overrides (start):
   ENABLE_COREDUMP    1 to enable core dumps for crashes (default: 0)
 
 Example:
-  scripts/run_devnet2.sh start 4 /tmp/lantern-devnet2/genesis binary
-  scripts/run_devnet2.sh start 4 /tmp/lantern-devnet2/genesis docker
-  scripts/run_devnet2.sh stop 2
+  scripts/run_local_devnet.sh start 4 /tmp/lantern-local-devnet/genesis binary
+  scripts/run_local_devnet.sh start 4 /tmp/lantern-local-devnet/genesis docker
+  scripts/run_local_devnet.sh stop 2
 USAGE
 }
 
@@ -113,10 +114,11 @@ GENESIS_ENR_IP=${GENESIS_ENR_IP:-127.0.0.1}
 GENESIS_ACTIVE_EPOCH=${GENESIS_ACTIVE_EPOCH:-18}
 GENESIS_KEY_TYPE=${GENESIS_KEY_TYPE:-xmss}
 GENESIS_SHUFFLE=${GENESIS_SHUFFLE:-roundrobin}
+GENESIS_AGGREGATOR_INDEX=${GENESIS_AGGREGATOR_INDEX:-0}
 GENESIS_GENERATOR=${GENESIS_GENERATOR:-"${REPO_ROOT}/tools/lean-quickstart/generate-genesis.sh"}
 LOG_LEVEL=${LOG_LEVEL:-info}
-DEVNET=${DEVNET:-devnet2}
-RUN_DIR=${RUN_DIR:-/tmp/lantern-devnet2-run}
+DEVNET=${DEVNET:-devnet3}
+RUN_DIR=${RUN_DIR:-/tmp/lantern-local-devnet-run}
 CLEAN_RUN_DIR=${CLEAN_RUN_DIR:-1}
 LANTERN_IMAGE=${LANTERN_IMAGE:-lantern:local}
 DOCKER_NETWORK=${DOCKER_NETWORK:-host}
@@ -200,10 +202,15 @@ if [[ "${MODE}" == "stop" ]]; then
   exit 0
 fi
 
-GENESIS_DIR=${GENESIS_DIR_ARG:-${GENESIS_DIR:-/tmp/lantern-devnet2/genesis}}
+GENESIS_DIR=${GENESIS_DIR_ARG:-${GENESIS_DIR:-/tmp/lantern-local-devnet/genesis}}
 
 generate_validator_config() {
   local output="${GENESIS_DIR}/validator-config.yaml"
+  local aggregator_index="${GENESIS_AGGREGATOR_INDEX}"
+  if ! [[ "${aggregator_index}" =~ ^[0-9]+$ ]] || (( aggregator_index >= NODES )); then
+    echo "warning: GENESIS_AGGREGATOR_INDEX='${GENESIS_AGGREGATOR_INDEX}' is invalid for ${NODES} node(s); defaulting to 0" >&2
+    aggregator_index=0
+  fi
   mkdir -p "${GENESIS_DIR}"
   local tmp
   tmp="$(mktemp "${GENESIS_DIR}/validator-config.yaml.tmp.XXXXXX")"
@@ -232,6 +239,13 @@ PY
     enrFields:
       ip: "${GENESIS_ENR_IP}"
       quic: ${quic}
+EOF
+    if (( i == aggregator_index )); then
+      cat >> "${tmp}" <<EOF
+      is_aggregator: true
+EOF
+    fi
+    cat >> "${tmp}" <<EOF
     metricsPort: ${metrics}
     count: 1
 
