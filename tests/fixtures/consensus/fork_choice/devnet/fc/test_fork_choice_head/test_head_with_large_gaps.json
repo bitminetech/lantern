@@ -78,7 +78,7 @@
                         "slot": 1,
                         "proposerIndex": 1,
                         "parentRoot": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
-                        "stateRoot": "0x4c0f2177a7a2e2870324c8fa58d50b51d998c7b8cb58f364eacecc473e0228b0",
+                        "stateRoot": "0x976e5f2bf6a9b4c51516e650d3a7c7f0066580fa3d1b185808a5bec483292a2f",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -90,11 +90,11 @@
                         "data": {
                             "slot": 1,
                             "head": {
-                                "root": "0x616097cfb7d4d6e82e6373a70e5d5cbc93f9f003729e37d5aa371b6ee4b7a0eb",
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x616097cfb7d4d6e82e6373a70e5d5cbc93f9f003729e37d5aa371b6ee4b7a0eb",
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
                                 "slot": 1
                             },
                             "source": {
@@ -115,8 +115,8 @@
                     "block": {
                         "slot": 10,
                         "proposerIndex": 2,
-                        "parentRoot": "0x616097cfb7d4d6e82e6373a70e5d5cbc93f9f003729e37d5aa371b6ee4b7a0eb",
-                        "stateRoot": "0x0a4aae1b28ae42a03c79d7586d5b175bef11c157c71e22f2772af3e0fd7c1b5c",
+                        "parentRoot": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                        "stateRoot": "0x1b3e2d27ccd32951999bb5859116a897a055f096276d78601158e22fd2632442",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -128,15 +128,15 @@
                         "data": {
                             "slot": 10,
                             "head": {
-                                "root": "0xc4f08a34e784a74a454cfb4f51f0830c870e8789610b765971016f1446ea74de",
+                                "root": "0x908b27489ac9909404659a5e90766c65fdae31e9de67441c48361c38e1674ab3",
                                 "slot": 10
                             },
                             "target": {
-                                "root": "0xc4f08a34e784a74a454cfb4f51f0830c870e8789610b765971016f1446ea74de",
+                                "root": "0x908b27489ac9909404659a5e90766c65fdae31e9de67441c48361c38e1674ab3",
                                 "slot": 10
                             },
                             "source": {
-                                "root": "0x616097cfb7d4d6e82e6373a70e5d5cbc93f9f003729e37d5aa371b6ee4b7a0eb",
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
                                 "slot": 1
                             }
                         }
@@ -153,8 +153,8 @@
                     "block": {
                         "slot": 20,
                         "proposerIndex": 0,
-                        "parentRoot": "0xc4f08a34e784a74a454cfb4f51f0830c870e8789610b765971016f1446ea74de",
-                        "stateRoot": "0x2808438f9f3f6e88ccd3e0063d095a3eea8a1503dc7b6496f1c86189c83075c3",
+                        "parentRoot": "0x908b27489ac9909404659a5e90766c65fdae31e9de67441c48361c38e1674ab3",
+                        "stateRoot": "0x4918471d37cd4049787f147e83fc9aab2c80a492aba13460a4cde889e301954e",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -166,15 +166,15 @@
                         "data": {
                             "slot": 20,
                             "head": {
-                                "root": "0x8c2e65f54025c87c5e8ead52b789d96b6ae8b9d75c1f936aa27c901d04f17acd",
+                                "root": "0x243353f4b9e4289be816a3ef706c0689adddf2559fa5050e7e7a45dc5dabcd5e",
                                 "slot": 20
                             },
                             "target": {
-                                "root": "0x8c2e65f54025c87c5e8ead52b789d96b6ae8b9d75c1f936aa27c901d04f17acd",
+                                "root": "0x243353f4b9e4289be816a3ef706c0689adddf2559fa5050e7e7a45dc5dabcd5e",
                                 "slot": 20
                             },
                             "source": {
-                                "root": "0xc4f08a34e784a74a454cfb4f51f0830c870e8789610b765971016f1446ea74de",
+                                "root": "0x908b27489ac9909404659a5e90766c65fdae31e9de67441c48361c38e1674ab3",
                                 "slot": 10
                             }
                         }
@@ -191,8 +191,8 @@
                     "block": {
                         "slot": 30,
                         "proposerIndex": 2,
-                        "parentRoot": "0x8c2e65f54025c87c5e8ead52b789d96b6ae8b9d75c1f936aa27c901d04f17acd",
-                        "stateRoot": "0xc6a5e03793c0a70bade5ff455e693903eb534f36955caf11352558dbed36a457",
+                        "parentRoot": "0x243353f4b9e4289be816a3ef706c0689adddf2559fa5050e7e7a45dc5dabcd5e",
+                        "stateRoot": "0x2cd0120e789b59cb2e0a8ac5204249b289898918714582cc034686cb75801d22",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -204,15 +204,15 @@
                         "data": {
                             "slot": 30,
                             "head": {
-                                "root": "0x6db6e7ee5ffd7faf7070e6f3560db09244aa7cd9f8e957175f46847f253b66e9",
+                                "root": "0x1a6568b59c71bea3297711437ce946b615837efcf65443286ec3a3cbcddc83c3",
                                 "slot": 30
                             },
                             "target": {
-                                "root": "0x6db6e7ee5ffd7faf7070e6f3560db09244aa7cd9f8e957175f46847f253b66e9",
+                                "root": "0x1a6568b59c71bea3297711437ce946b615837efcf65443286ec3a3cbcddc83c3",
                                 "slot": 30
                             },
                             "source": {
-                                "root": "0x8c2e65f54025c87c5e8ead52b789d96b6ae8b9d75c1f936aa27c901d04f17acd",
+                                "root": "0x243353f4b9e4289be816a3ef706c0689adddf2559fa5050e7e7a45dc5dabcd5e",
                                 "slot": 20
                             }
                         }
@@ -222,7 +222,7 @@
         ],
         "maxSlot": 30,
         "_info": {
-            "hash": "0x6b64ed0ffed6c57c5065e7b049135c7ac4b2f70c53881617a0bad2f8961398a7",
+            "hash": "0x75234ae4514adf94fbfd2f336070fdcbd98111f59920b4ada865446b8fd6d008",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_fork_choice_head.py::test_head_with_large_gaps[fork_Devnet]",
             "description": "Fork choice head handles large gaps between blocks.\n\n    Scenario\n    --------\n    Build blocks at slots 1, 10, 20, 30 (gaps of 9-10 slots).\n\n    Expected Behavior:\n        - Head advances despite large gaps\n        - Fork choice is gap-size independent\n        - Head reaches the furthest block\n\n    Why This Matters\n    ----------------\n    Large gaps can occur during:\n    - Extended network partitions\n    - Chain reorganizations\n    - Periods of high validator downtime\n    - Initial sync after being offline\n\n    The fork choice algorithm must remain correct regardless of gap size.\n    Distance between blocks should not affect the correctness of head selection -\n    only the tree structure matters.\n\n    This test verifies that even with dramatic gaps (representing severe network\n    conditions), fork choice still identifies the correct head.",

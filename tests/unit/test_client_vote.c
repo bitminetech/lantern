@@ -7,6 +7,7 @@
 #include "client_test_helpers.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
+#include "lantern/networking/gossip_payloads.h"
 #include "lantern/support/time.h"
 
 /* Internal core APIs used for targeted cache and block-build regression tests. */
@@ -98,6 +99,72 @@ static bool proof_payload_equals(
         }
     }
     return true;
+}
+
+struct publish_capture {
+    size_t calls;
+    char topic[128];
+    uint8_t *payload;
+    size_t payload_len;
+    size_t payload_capacity;
+};
+
+static int publish_capture_hook(
+    const char *topic,
+    const uint8_t *payload,
+    size_t payload_len,
+    void *user_data) {
+    struct publish_capture *capture = user_data;
+    if (!capture || !topic || !payload || payload_len == 0) {
+        return -1;
+    }
+    if (payload_len > capture->payload_capacity) {
+        uint8_t *resized = realloc(capture->payload, payload_len);
+        if (!resized) {
+            return -1;
+        }
+        capture->payload = resized;
+        capture->payload_capacity = payload_len;
+    }
+    capture->calls += 1u;
+    snprintf(capture->topic, sizeof(capture->topic), "%s", topic);
+    memcpy(capture->payload, payload, payload_len);
+    capture->payload_len = payload_len;
+    return 0;
+}
+
+static void publish_capture_reset(struct publish_capture *capture) {
+    if (!capture) {
+        return;
+    }
+    free(capture->payload);
+    memset(capture, 0, sizeof(*capture));
+}
+
+static int make_signed_vote_for_validator(
+    struct lantern_client *client,
+    struct PQSignatureSchemeSecretKey *secret,
+    uint64_t validator_id,
+    const LanternRoot *anchor_root,
+    const LanternRoot *child_root,
+    LanternSignedVote *out_vote) {
+    if (!client || !secret || !anchor_root || !child_root || !out_vote) {
+        return -1;
+    }
+    uint64_t child_slot = 0;
+    if (client_test_slot_for_root(client, child_root, &child_slot) != 0) {
+        return -1;
+    }
+    memset(out_vote, 0, sizeof(*out_vote));
+    out_vote->data.validator_id = validator_id;
+    out_vote->data.slot = child_slot;
+    out_vote->data.head.slot = child_slot;
+    out_vote->data.head.root = *child_root;
+    out_vote->data.target.slot = child_slot;
+    out_vote->data.target.root = *child_root;
+    out_vote->data.source.slot = 0u;
+    out_vote->data.source.root = *anchor_root;
+    return client_test_sign_vote_with_secret(out_vote, secret);
 }
 
 static int test_record_vote_accepts_known_roots(void) {
@@ -877,6 +944,170 @@ cleanup:
     return rc;
 }
 
+static int test_publish_aggregated_attestations_filters_cross_subnet_votes(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    struct lantern_validator_config_entry assigned;
+    struct publish_capture capture;
+    LanternSignedVote vote0;
+    LanternSignedVote vote1;
+    LanternSignedVote vote4;
+    LanternSignedAggregatedAttestation decoded;
+    int rc = 1;
+
+    memset(&capture, 0, sizeof(capture));
+    memset(&assigned, 0, sizeof(assigned));
+    lantern_signed_aggregated_attestation_init(&decoded);
+
+    if (client_test_setup_vote_validation_client_with_validator_count(
+            &client,
+            "vote_subnet_filter",
+            8u,
+            &pub,
+            &secret,
+            &anchor_root,
+            &child_root)
+        != 0) {
+        goto cleanup;
+    }
+
+    assigned.enr.is_aggregator = true;
+    client.assigned_validators = &assigned;
+    client.debug_attestation_committee_count = 4u;
+    client.gossip.attestation_subnet_id = 0u;
+    snprintf(
+        client.gossip.aggregated_attestation_topic,
+        sizeof(client.gossip.aggregated_attestation_topic),
+        "test/aggregated_attestation");
+    lantern_gossipsub_service_set_publish_hook(&client.gossip, publish_capture_hook, &capture);
+    lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
+
+    if (make_signed_vote_for_validator(&client, secret, 0u, &anchor_root, &child_root, &vote0) != 0
+        || make_signed_vote_for_validator(&client, secret, 1u, &anchor_root, &child_root, &vote1) != 0
+        || make_signed_vote_for_validator(&client, secret, 4u, &anchor_root, &child_root, &vote4) != 0) {
+        fprintf(stderr, "failed to build signed votes for subnet filter test\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_debug_record_vote(&client, &vote0, "subnet_vote_0") != 0
+        || lantern_client_debug_record_vote(&client, &vote1, "subnet_vote_1") != 0
+        || lantern_client_debug_record_vote(&client, &vote4, "subnet_vote_4") != 0) {
+        fprintf(stderr, "failed to record votes for subnet filter test\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_debug_publish_aggregated_attestations(&client, vote0.data.slot) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "aggregated attestation publish should succeed for aggregator\n");
+        goto cleanup;
+    }
+    if (capture.calls != 1u || capture.payload_len == 0 || !capture.payload) {
+        fprintf(stderr, "expected one aggregated attestation publish in subnet filter test\n");
+        goto cleanup;
+    }
+
+    if (lantern_gossip_decode_signed_aggregated_attestation_snappy(&decoded, capture.payload, capture.payload_len) != 0) {
+        fprintf(stderr, "failed to decode published aggregated attestation payload\n");
+        goto cleanup;
+    }
+    if (!lantern_bitlist_get(&decoded.proof.participants, 0u)
+        || !lantern_bitlist_get(&decoded.proof.participants, 4u)
+        || lantern_bitlist_get(&decoded.proof.participants, 1u)) {
+        fprintf(stderr, "published aggregated proof participants did not enforce subnet filtering\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_signed_aggregated_attestation_reset(&decoded);
+    publish_capture_reset(&capture);
+    test_reset_agg_cache(&client);
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_interval_2_aggregation_trigger_respects_aggregator_role(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    struct lantern_validator_config_entry assigned;
+    struct publish_capture capture;
+    LanternSignedVote vote0;
+    int rc = 1;
+
+    memset(&assigned, 0, sizeof(assigned));
+    memset(&capture, 0, sizeof(capture));
+
+    if (client_test_setup_vote_validation_client_with_validator_count(
+            &client,
+            "vote_interval_aggregation",
+            4u,
+            &pub,
+            &secret,
+            &anchor_root,
+            &child_root)
+        != 0) {
+        goto cleanup;
+    }
+
+    assigned.enr.is_aggregator = true;
+    client.assigned_validators = &assigned;
+    client.gossip.attestation_subnet_id = 0u;
+    snprintf(
+        client.gossip.aggregated_attestation_topic,
+        sizeof(client.gossip.aggregated_attestation_topic),
+        "test/interval_aggregation");
+    lantern_gossipsub_service_set_publish_hook(&client.gossip, publish_capture_hook, &capture);
+    lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
+
+    if (make_signed_vote_for_validator(&client, secret, 0u, &anchor_root, &child_root, &vote0) != 0) {
+        fprintf(stderr, "failed to build signed vote for interval aggregation test\n");
+        goto cleanup;
+    }
+    if (lantern_client_debug_record_vote(&client, &vote0, "interval_agg_vote") != 0) {
+        fprintf(stderr, "failed to record vote for interval aggregation test\n");
+        goto cleanup;
+    }
+
+    client.validator_duty.slot_attested = true;
+    client.validator_duty.slot_aggregated = false;
+    if (lantern_client_debug_run_interval_aggregation(&client, vote0.data.slot) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "interval 2 aggregation should succeed for aggregator\n");
+        goto cleanup;
+    }
+    if (!client.validator_duty.slot_aggregated || capture.calls != 1u) {
+        fprintf(stderr, "interval 2 aggregation did not mark duty or publish for aggregator\n");
+        goto cleanup;
+    }
+
+    client.validator_duty.slot_attested = true;
+    client.validator_duty.slot_aggregated = false;
+    assigned.enr.is_aggregator = false;
+    capture.calls = 0;
+    capture.payload_len = 0;
+    if (lantern_client_debug_run_interval_aggregation(&client, vote0.data.slot) != LANTERN_CLIENT_ERR_RUNTIME) {
+        fprintf(stderr, "non-aggregator should not run interval 2 aggregation\n");
+        goto cleanup;
+    }
+    if (client.validator_duty.slot_aggregated || capture.calls != 0u) {
+        fprintf(stderr, "non-aggregator interval 2 path should not publish or mark aggregated\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    publish_capture_reset(&capture);
+    test_reset_agg_cache(&client);
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
 int main(void) {
     if (test_record_vote_accepts_known_roots() != 0) {
         return 1;
@@ -903,6 +1134,12 @@ int main(void) {
         return 1;
     }
     if (test_validator_build_reuses_cached_group_proof() != 0) {
+        return 1;
+    }
+    if (test_publish_aggregated_attestations_filters_cross_subnet_votes() != 0) {
+        return 1;
+    }
+    if (test_interval_2_aggregation_trigger_respects_aggregator_role() != 0) {
         return 1;
     }
     puts("lantern_client_vote_test OK");

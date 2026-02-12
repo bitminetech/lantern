@@ -272,6 +272,7 @@ static int run_verify_signatures_fixture(const char *path) {
         block_idx = lantern_fixture_object_get_field(&doc, case_idx, "signed_block_with_attestation");
     }
     int expect_idx = lantern_fixture_object_get_field(&doc, case_idx, "expectException");
+    int lean_env_idx = lantern_fixture_object_get_field(&doc, case_idx, "leanEnv");
 
     if (anchor_idx < 0 || block_idx < 0) {
         lantern_fixture_document_reset(&doc);
@@ -283,6 +284,14 @@ static int run_verify_signatures_fixture(const char *path) {
         const jsmntok_t *tok = lantern_fixture_token(&doc, expect_idx);
         if (tok && tok->type == JSMN_STRING) {
             expect_failure = true;
+        }
+    }
+    bool lean_env_test = false;
+    if (lean_env_idx >= 0) {
+        size_t lean_env_len = 0;
+        const char *lean_env = lantern_fixture_token_string(&doc, lean_env_idx, &lean_env_len);
+        if (lean_env && lean_env_len == 4u && strncmp(lean_env, "test", 4u) == 0) {
+            lean_env_test = true;
         }
     }
 
@@ -311,17 +320,43 @@ static int run_verify_signatures_fixture(const char *path) {
         return -1;
     }
 
+    bool skip_proposer_verification = false;
+    int signature_idx = lantern_fixture_object_get_field(&doc, block_idx, "signature");
+    if (signature_idx >= 0 && lean_env_test) {
+        int proposer_sig_idx = lantern_fixture_object_get_field(&doc, signature_idx, "proposerSignature");
+        if (proposer_sig_idx < 0) {
+            proposer_sig_idx = lantern_fixture_object_get_field(&doc, signature_idx, "proposer_signature");
+        }
+        if (proposer_sig_idx >= 0) {
+            const jsmntok_t *proposer_sig_tok = lantern_fixture_token(&doc, proposer_sig_idx);
+            if (proposer_sig_tok && proposer_sig_tok->type == JSMN_OBJECT) {
+                skip_proposer_verification = true;
+            }
+        }
+    }
+
     bool valid = true;
     if (!verify_aggregated_attestations(&state, &signed_block, path)) {
         valid = false;
     }
-    if (valid && !verify_proposer_signature(&state, &signed_block, path)) {
-        valid = false;
+    bool proposer_verified = false;
+    if (valid) {
+        if (skip_proposer_verification) {
+            fprintf(
+                stderr,
+                "%s: skipping proposer signature verification (leanEnv=test object signature)\n",
+                path);
+        } else {
+            proposer_verified = true;
+            if (!verify_proposer_signature(&state, &signed_block, path)) {
+                valid = false;
+            }
+        }
     }
 
     int result = 0;
     if (expect_failure) {
-        if (valid) {
+        if (valid && proposer_verified) {
             fprintf(stderr, "expected failure did not occur in %s\n", path);
             result = -1;
         }

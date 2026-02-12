@@ -1,5 +1,5 @@
 {
-    "tests/consensus/devnet/fc/test_fork_choice_head.py::test_head_with_two_competing_forks[fork_Devnet][fork_Devnet-fork_choice_test]": {
+    "tests/consensus/devnet/fc/test_signature_aggregation.py::test_different_targets_create_separate_aggregations[fork_Devnet][fork_Devnet-fork_choice_test]": {
         "network": "Devnet",
         "leanEnv": "test",
         "anchorState": {
@@ -70,9 +70,7 @@
             {
                 "valid": true,
                 "checks": {
-                    "headSlot": 1,
-                    "headRoot": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                    "headRootLabel": "common"
+                    "headSlot": 1
                 },
                 "stepType": "block",
                 "block": {
@@ -105,15 +103,13 @@
                             }
                         }
                     },
-                    "blockRootLabel": "common"
+                    "blockRootLabel": "block_1"
                 }
             },
             {
                 "valid": true,
                 "checks": {
-                    "headSlot": 2,
-                    "headRoot": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                    "headRootLabel": "fork_a"
+                    "headSlot": 2
                 },
                 "stepType": "block",
                 "block": {
@@ -146,57 +142,122 @@
                             }
                         }
                     },
-                    "blockRootLabel": "fork_a"
+                    "blockRootLabel": "block_2"
                 }
             },
             {
                 "valid": true,
                 "checks": {
-                    "headSlot": 2,
-                    "headRoot": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                    "headRootLabel": "fork_a"
+                    "headSlot": 3,
+                    "blockAttestationCount": 2,
+                    "blockAttestations": [
+                        {
+                            "participants": [
+                                0,
+                                1
+                            ],
+                            "attestationSlot": 1,
+                            "targetSlot": 1
+                        },
+                        {
+                            "participants": [
+                                2,
+                                3
+                            ],
+                            "attestationSlot": 2,
+                            "targetSlot": 2
+                        }
+                    ]
                 },
                 "stepType": "block",
                 "block": {
                     "block": {
-                        "slot": 2,
-                        "proposerIndex": 2,
-                        "parentRoot": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                        "stateRoot": "0xb7e6a86335a19a6d737b0b3f9f60c18f2eb175206459e84b9d3b3807702acfde",
+                        "slot": 3,
+                        "proposerIndex": 3,
+                        "parentRoot": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
+                        "stateRoot": "0x35a9da7682ffcadb5695a09b13b056680555fcc49e8686e43229dcc7e0580cda",
                         "body": {
                             "attestations": {
-                                "data": []
+                                "data": [
+                                    {
+                                        "aggregationBits": {
+                                            "data": [
+                                                true,
+                                                true
+                                            ]
+                                        },
+                                        "data": {
+                                            "slot": 1,
+                                            "head": {
+                                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                                                "slot": 1
+                                            },
+                                            "target": {
+                                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                                                "slot": 1
+                                            },
+                                            "source": {
+                                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                                "slot": 0
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "aggregationBits": {
+                                            "data": [
+                                                false,
+                                                false,
+                                                true,
+                                                true
+                                            ]
+                                        },
+                                        "data": {
+                                            "slot": 2,
+                                            "head": {
+                                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
+                                                "slot": 2
+                                            },
+                                            "target": {
+                                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
+                                                "slot": 2
+                                            },
+                                            "source": {
+                                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                                "slot": 0
+                                            }
+                                        }
+                                    }
+                                ]
                             }
                         }
                     },
                     "proposerAttestation": {
-                        "validatorId": 2,
+                        "validatorId": 3,
                         "data": {
-                            "slot": 2,
+                            "slot": 3,
                             "head": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0x7d524e11571b7f9607c8903472d080d71680826586549c48667d6de141e19274",
+                                "slot": 3
                             },
                             "target": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0x7d524e11571b7f9607c8903472d080d71680826586549c48667d6de141e19274",
+                                "slot": 3
                             },
                             "source": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
+                                "slot": 2
                             }
                         }
-                    },
-                    "blockRootLabel": "fork_b"
+                    }
                 }
             }
         ],
-        "maxSlot": 2,
+        "maxSlot": 3,
         "_info": {
-            "hash": "0x445ea1d1d46f1a51804be76a2127589d3af23623d2105b4cfbf13d94032c85b8",
+            "hash": "0x9338a82aafb7d70345255570ff002644dfc63afebca0fe0644c5e487cb2b8f8a",
             "comment": "`leanSpec` generated test",
-            "testId": "tests/consensus/devnet/fc/test_fork_choice_head.py::test_head_with_two_competing_forks[fork_Devnet]",
-            "description": "Fork choice selects head when two forks compete at the same slot.\n\n    Scenario\n    --------\n    Create two competing blocks at slot 2, both building on slot 1.\n\n    Expected Behavior:\n        - After slot 1: head = slot 1 (common ancestor)\n        - After fork A (slot 2): head = slot 2 (fork A, first seen)\n        - After fork B (slot 2): head = slot 2 (still fork A)\n        - Both forks have equal weight (1 proposer attestation each)\n        - Head breaks tie lexicographically by block root\n\n    Why This Matters\n    ----------------\n    This is an important fork choice scenario: two blocks competing for the\n    same slot. Even with equal attestation weight, fork choice must deterministically\n    select a head.\n\n    The algorithm uses lexicographic order of block roots as a tie-breaker,\n    ensuring all nodes agree on the same head even when forks have equal weight.\n\n    This prevents network splits and ensures consensus converges.",
+            "testId": "tests/consensus/devnet/fc/test_signature_aggregation.py::test_different_targets_create_separate_aggregations[fork_Devnet]",
+            "description": "Attestations with different targets stay separate.\n\n    Scenario\n    --------\n    Block at slot 3 includes:\n    - Validators 0, 1 targeting block 1\n    - Validators 2, 3 targeting block 2\n\n    Expected\n    --------\n    - 2 separate aggregated attestations\n    - Cannot merge because different AttestationData",
             "fixtureFormat": "fork_choice_test"
         }
     }

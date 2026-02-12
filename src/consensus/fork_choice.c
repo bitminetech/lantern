@@ -231,6 +231,37 @@ static void votes_reset(struct lantern_fork_choice_vote_entry *entries, size_t c
     }
 }
 
+/*
+ * Defensive copy-on-write guard for vote staging arrays.
+ *
+ * The forkchoice flow expects `known_votes` and `new_votes` to be independent
+ * tables. If they alias, a gossip vote update can accidentally mutate known
+ * votes in-place. Split the tables before mutating either one.
+ */
+static int ensure_vote_tables_disjoint(LanternForkChoice *store) {
+    if (!store || !store->known_votes || !store->new_votes) {
+        return -1;
+    }
+    if (store->known_votes != store->new_votes) {
+        return 0;
+    }
+    if (store->validator_count == 0) {
+        return -1;
+    }
+    if (store->validator_count > SIZE_MAX / sizeof(*store->new_votes)) {
+        return -1;
+    }
+
+    size_t bytes = store->validator_count * sizeof(*store->new_votes);
+    struct lantern_fork_choice_vote_entry *copied = malloc(bytes);
+    if (!copied) {
+        return -1;
+    }
+    memcpy(copied, store->new_votes, bytes);
+    store->new_votes = copied;
+    return 0;
+}
+
 struct vote_undo_entry {
     size_t validator_index;
     struct lantern_fork_choice_vote_entry previous_known;
@@ -395,10 +426,16 @@ void lantern_fork_choice_reset(LanternForkChoice *store) {
 
     map_reset(store);
 
-    free(store->known_votes);
-    store->known_votes = NULL;
-    free(store->new_votes);
-    store->new_votes = NULL;
+    if (store->known_votes == store->new_votes) {
+        free(store->known_votes);
+        store->known_votes = NULL;
+        store->new_votes = NULL;
+    } else {
+        free(store->known_votes);
+        store->known_votes = NULL;
+        free(store->new_votes);
+        store->new_votes = NULL;
+    }
     store->validator_count = 0;
 
     store->initialized = false;
@@ -814,6 +851,9 @@ int lantern_fork_choice_add_vote(
     if (target_block->slot != target->slot) {
         return -1;
     }
+    if (ensure_vote_tables_disjoint(store) != 0) {
+        return -1;
+    }
 
     size_t validator = (size_t)vote->data.validator_id;
     struct lantern_fork_choice_vote_entry *table = from_block ? store->known_votes : store->new_votes;
@@ -1104,6 +1144,9 @@ int lantern_fork_choice_recompute_head(LanternForkChoice *store) {
 
 int lantern_fork_choice_accept_new_votes(LanternForkChoice *store) {
     if (!store || !store->initialized) {
+        return -1;
+    }
+    if (ensure_vote_tables_disjoint(store) != 0) {
         return -1;
     }
     for (size_t i = 0; i < store->validator_count; ++i) {

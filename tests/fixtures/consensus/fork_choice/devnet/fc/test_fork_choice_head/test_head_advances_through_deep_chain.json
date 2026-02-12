@@ -78,7 +78,7 @@
                         "slot": 1,
                         "proposerIndex": 1,
                         "parentRoot": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
-                        "stateRoot": "0x4c0f2177a7a2e2870324c8fa58d50b51d998c7b8cb58f364eacecc473e0228b0",
+                        "stateRoot": "0x976e5f2bf6a9b4c51516e650d3a7c7f0066580fa3d1b185808a5bec483292a2f",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -90,11 +90,11 @@
                         "data": {
                             "slot": 1,
                             "head": {
-                                "root": "0x616097cfb7d4d6e82e6373a70e5d5cbc93f9f003729e37d5aa371b6ee4b7a0eb",
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x616097cfb7d4d6e82e6373a70e5d5cbc93f9f003729e37d5aa371b6ee4b7a0eb",
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
                                 "slot": 1
                             },
                             "source": {
@@ -115,8 +115,8 @@
                     "block": {
                         "slot": 2,
                         "proposerIndex": 2,
-                        "parentRoot": "0x616097cfb7d4d6e82e6373a70e5d5cbc93f9f003729e37d5aa371b6ee4b7a0eb",
-                        "stateRoot": "0x4b8232ba1126c7b5b924f687ec4cfcea309c6788be0c3ee048a742b3cc01b655",
+                        "parentRoot": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                        "stateRoot": "0xb7e6a86335a19a6d737b0b3f9f60c18f2eb175206459e84b9d3b3807702acfde",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -128,15 +128,15 @@
                         "data": {
                             "slot": 2,
                             "head": {
-                                "root": "0x55bd6cc7ce097eef81ae2c09bf8ed9eaec331bcf237f563b9961b3b20359871e",
+                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x55bd6cc7ce097eef81ae2c09bf8ed9eaec331bcf237f563b9961b3b20359871e",
+                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
                                 "slot": 2
                             },
                             "source": {
-                                "root": "0x616097cfb7d4d6e82e6373a70e5d5cbc93f9f003729e37d5aa371b6ee4b7a0eb",
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
                                 "slot": 1
                             }
                         }
@@ -153,8 +153,8 @@
                     "block": {
                         "slot": 3,
                         "proposerIndex": 3,
-                        "parentRoot": "0x55bd6cc7ce097eef81ae2c09bf8ed9eaec331bcf237f563b9961b3b20359871e",
-                        "stateRoot": "0x33f09d75eb5bc0b4d02ce5caca2eb4eefa19dc72e3eded00b17cefcd177fda58",
+                        "parentRoot": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
+                        "stateRoot": "0x106ac834106f37ca1cb2152976c703f396030741fa17e4522acda3f586287128",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -166,15 +166,15 @@
                         "data": {
                             "slot": 3,
                             "head": {
-                                "root": "0x84f9c935aecb1a2b51263fb0e74dc7b9b933dbca4e0ce675f797411dadc5feb8",
+                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
                                 "slot": 3
                             },
                             "target": {
-                                "root": "0x84f9c935aecb1a2b51263fb0e74dc7b9b933dbca4e0ce675f797411dadc5feb8",
+                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
                                 "slot": 3
                             },
                             "source": {
-                                "root": "0x55bd6cc7ce097eef81ae2c09bf8ed9eaec331bcf237f563b9961b3b20359871e",
+                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
                                 "slot": 2
                             }
                         }
@@ -191,8 +191,8 @@
                     "block": {
                         "slot": 4,
                         "proposerIndex": 0,
-                        "parentRoot": "0x84f9c935aecb1a2b51263fb0e74dc7b9b933dbca4e0ce675f797411dadc5feb8",
-                        "stateRoot": "0x2077b021fb6a34ae26deb6aab1b447914db2e1b684e9c6ddd47762c30a201231",
+                        "parentRoot": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
+                        "stateRoot": "0xf26c35d1dcc06eb67df91399e6d09294b417308ebb016a9e983cd6e41a47b211",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -204,15 +204,15 @@
                         "data": {
                             "slot": 4,
                             "head": {
-                                "root": "0x85e00f8a4bab1b320fd9130dda077b573010987c2e072b0fdd51d2b48f1d5a86",
+                                "root": "0xed871b60007be196769e0a763169d230f898d665087bcadb5815da47477dcce8",
                                 "slot": 4
                             },
                             "target": {
-                                "root": "0x85e00f8a4bab1b320fd9130dda077b573010987c2e072b0fdd51d2b48f1d5a86",
+                                "root": "0xed871b60007be196769e0a763169d230f898d665087bcadb5815da47477dcce8",
                                 "slot": 4
                             },
                             "source": {
-                                "root": "0x84f9c935aecb1a2b51263fb0e74dc7b9b933dbca4e0ce675f797411dadc5feb8",
+                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
                                 "slot": 3
                             }
                         }
@@ -229,8 +229,8 @@
                     "block": {
                         "slot": 5,
                         "proposerIndex": 1,
-                        "parentRoot": "0x85e00f8a4bab1b320fd9130dda077b573010987c2e072b0fdd51d2b48f1d5a86",
-                        "stateRoot": "0x7bfa06ff5dead26a29b2bb032e20d86da374d6f9908f1f3e9a186102c0e19fb6",
+                        "parentRoot": "0xed871b60007be196769e0a763169d230f898d665087bcadb5815da47477dcce8",
+                        "stateRoot": "0xde9a2c56034dfd16f10d63014fdef7e7a443d49a7b3c0df79ab064fbed9db2b6",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -242,15 +242,15 @@
                         "data": {
                             "slot": 5,
                             "head": {
-                                "root": "0xf349880d539df53287e1be8ac139bc5e010dc2aeb0f622fc8c59f964e576fe46",
+                                "root": "0x58e9edf92e29d841a4eba44782a3d4d1e0c993a2a8227848b244f1c1e4bc52a9",
                                 "slot": 5
                             },
                             "target": {
-                                "root": "0xf349880d539df53287e1be8ac139bc5e010dc2aeb0f622fc8c59f964e576fe46",
+                                "root": "0x58e9edf92e29d841a4eba44782a3d4d1e0c993a2a8227848b244f1c1e4bc52a9",
                                 "slot": 5
                             },
                             "source": {
-                                "root": "0x85e00f8a4bab1b320fd9130dda077b573010987c2e072b0fdd51d2b48f1d5a86",
+                                "root": "0xed871b60007be196769e0a763169d230f898d665087bcadb5815da47477dcce8",
                                 "slot": 4
                             }
                         }
@@ -267,8 +267,8 @@
                     "block": {
                         "slot": 6,
                         "proposerIndex": 2,
-                        "parentRoot": "0xf349880d539df53287e1be8ac139bc5e010dc2aeb0f622fc8c59f964e576fe46",
-                        "stateRoot": "0x56c641890f84bd23b16d4f998206c8ecf6254c2f89682bc46eabb4c58ca0cdf8",
+                        "parentRoot": "0x58e9edf92e29d841a4eba44782a3d4d1e0c993a2a8227848b244f1c1e4bc52a9",
+                        "stateRoot": "0x11f9d81d1858d36589ccd75c3c2bce69eab77aae77d6977f30116022a23cfc18",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -280,15 +280,15 @@
                         "data": {
                             "slot": 6,
                             "head": {
-                                "root": "0x029dea6845235056a374bf2ee811c97ad62a8a8b500c97c4723659201d444172",
+                                "root": "0xf4243749bd2d853df2b0956fdadf2ffd80c7503484271c29e612c6e9924155db",
                                 "slot": 6
                             },
                             "target": {
-                                "root": "0x029dea6845235056a374bf2ee811c97ad62a8a8b500c97c4723659201d444172",
+                                "root": "0xf4243749bd2d853df2b0956fdadf2ffd80c7503484271c29e612c6e9924155db",
                                 "slot": 6
                             },
                             "source": {
-                                "root": "0xf349880d539df53287e1be8ac139bc5e010dc2aeb0f622fc8c59f964e576fe46",
+                                "root": "0x58e9edf92e29d841a4eba44782a3d4d1e0c993a2a8227848b244f1c1e4bc52a9",
                                 "slot": 5
                             }
                         }
@@ -305,8 +305,8 @@
                     "block": {
                         "slot": 7,
                         "proposerIndex": 3,
-                        "parentRoot": "0x029dea6845235056a374bf2ee811c97ad62a8a8b500c97c4723659201d444172",
-                        "stateRoot": "0xc768690e736d639da685aae1b4fa9ba8358e60ef38b8b2e88f02ab5256725eac",
+                        "parentRoot": "0xf4243749bd2d853df2b0956fdadf2ffd80c7503484271c29e612c6e9924155db",
+                        "stateRoot": "0x708526b6a7f5619cc96d42ccad93c5c246e3911261d98669a5ffa9b3edeaecf7",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -318,15 +318,15 @@
                         "data": {
                             "slot": 7,
                             "head": {
-                                "root": "0x6dceed8b0e44d9394ec70e98862672b65843dc7ff2fd4bcb7e718952e5ed909f",
+                                "root": "0x8a62bad3ff9ec014fb6adbf8519e493678bbaf90fac55b47fe53d2a840d70833",
                                 "slot": 7
                             },
                             "target": {
-                                "root": "0x6dceed8b0e44d9394ec70e98862672b65843dc7ff2fd4bcb7e718952e5ed909f",
+                                "root": "0x8a62bad3ff9ec014fb6adbf8519e493678bbaf90fac55b47fe53d2a840d70833",
                                 "slot": 7
                             },
                             "source": {
-                                "root": "0x029dea6845235056a374bf2ee811c97ad62a8a8b500c97c4723659201d444172",
+                                "root": "0xf4243749bd2d853df2b0956fdadf2ffd80c7503484271c29e612c6e9924155db",
                                 "slot": 6
                             }
                         }
@@ -343,8 +343,8 @@
                     "block": {
                         "slot": 8,
                         "proposerIndex": 0,
-                        "parentRoot": "0x6dceed8b0e44d9394ec70e98862672b65843dc7ff2fd4bcb7e718952e5ed909f",
-                        "stateRoot": "0x10623b29087cc25167a3ed8be2d0e8e6375ab4f059486724d905917c0b58f97d",
+                        "parentRoot": "0x8a62bad3ff9ec014fb6adbf8519e493678bbaf90fac55b47fe53d2a840d70833",
+                        "stateRoot": "0xde084595bc25fb4c1089fbb9b498a3834ad27cd7848b1b5d38a55d15d6d86893",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -356,15 +356,15 @@
                         "data": {
                             "slot": 8,
                             "head": {
-                                "root": "0xff368680255a12e428dba6235cfb48e1dcc2b693288809dae222d80454f6e31e",
+                                "root": "0xd942b458e5c8b796edc932d23df9dda8939eb7b96f8c94d2a17bf368b807348d",
                                 "slot": 8
                             },
                             "target": {
-                                "root": "0xff368680255a12e428dba6235cfb48e1dcc2b693288809dae222d80454f6e31e",
+                                "root": "0xd942b458e5c8b796edc932d23df9dda8939eb7b96f8c94d2a17bf368b807348d",
                                 "slot": 8
                             },
                             "source": {
-                                "root": "0x6dceed8b0e44d9394ec70e98862672b65843dc7ff2fd4bcb7e718952e5ed909f",
+                                "root": "0x8a62bad3ff9ec014fb6adbf8519e493678bbaf90fac55b47fe53d2a840d70833",
                                 "slot": 7
                             }
                         }
@@ -381,8 +381,8 @@
                     "block": {
                         "slot": 9,
                         "proposerIndex": 1,
-                        "parentRoot": "0xff368680255a12e428dba6235cfb48e1dcc2b693288809dae222d80454f6e31e",
-                        "stateRoot": "0x472467915ecdf9e6207b9e398c43b20173c54abe99922666011b65b4329f4e1b",
+                        "parentRoot": "0xd942b458e5c8b796edc932d23df9dda8939eb7b96f8c94d2a17bf368b807348d",
+                        "stateRoot": "0xc8f2880bc8e3d1ba655c75f34ae5a20555503ce8296cbc3a2a266fbcdb7b078b",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -394,15 +394,15 @@
                         "data": {
                             "slot": 9,
                             "head": {
-                                "root": "0x67a13b7f212d31c35bb5230ea8b99ab34fdba523ee363ec89275e9ddebdb693a",
+                                "root": "0x3957ca3fb02f85e64ee684e2c2536bc87fb2e975a4dcdfa3081de9cc39ddcf6a",
                                 "slot": 9
                             },
                             "target": {
-                                "root": "0x67a13b7f212d31c35bb5230ea8b99ab34fdba523ee363ec89275e9ddebdb693a",
+                                "root": "0x3957ca3fb02f85e64ee684e2c2536bc87fb2e975a4dcdfa3081de9cc39ddcf6a",
                                 "slot": 9
                             },
                             "source": {
-                                "root": "0xff368680255a12e428dba6235cfb48e1dcc2b693288809dae222d80454f6e31e",
+                                "root": "0xd942b458e5c8b796edc932d23df9dda8939eb7b96f8c94d2a17bf368b807348d",
                                 "slot": 8
                             }
                         }
@@ -419,8 +419,8 @@
                     "block": {
                         "slot": 10,
                         "proposerIndex": 2,
-                        "parentRoot": "0x67a13b7f212d31c35bb5230ea8b99ab34fdba523ee363ec89275e9ddebdb693a",
-                        "stateRoot": "0x69058e5b5dea1f437fe58e80a12ab66a6263211a5481dd7e6039277d5212f31b",
+                        "parentRoot": "0x3957ca3fb02f85e64ee684e2c2536bc87fb2e975a4dcdfa3081de9cc39ddcf6a",
+                        "stateRoot": "0x054571db4eb9706f6f29a97bffaa00765b2a75b77ad5812e8619066e942d3192",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -432,15 +432,15 @@
                         "data": {
                             "slot": 10,
                             "head": {
-                                "root": "0xaf7cd80402b1a4baeafaf423d4304838bba9719a2357f0b8a8ef4514f15ef8bc",
+                                "root": "0x5ecbcf9082feefb76c1dd6f37d8159c3169c2ecd2bbb14bc497dff4a3d5641df",
                                 "slot": 10
                             },
                             "target": {
-                                "root": "0xaf7cd80402b1a4baeafaf423d4304838bba9719a2357f0b8a8ef4514f15ef8bc",
+                                "root": "0x5ecbcf9082feefb76c1dd6f37d8159c3169c2ecd2bbb14bc497dff4a3d5641df",
                                 "slot": 10
                             },
                             "source": {
-                                "root": "0x67a13b7f212d31c35bb5230ea8b99ab34fdba523ee363ec89275e9ddebdb693a",
+                                "root": "0x3957ca3fb02f85e64ee684e2c2536bc87fb2e975a4dcdfa3081de9cc39ddcf6a",
                                 "slot": 9
                             }
                         }
@@ -457,8 +457,8 @@
                     "block": {
                         "slot": 11,
                         "proposerIndex": 3,
-                        "parentRoot": "0xaf7cd80402b1a4baeafaf423d4304838bba9719a2357f0b8a8ef4514f15ef8bc",
-                        "stateRoot": "0x848bfd33d67d4bb334ab36d10c1d82bacaa70f77096cb459616492d1df2ff2aa",
+                        "parentRoot": "0x5ecbcf9082feefb76c1dd6f37d8159c3169c2ecd2bbb14bc497dff4a3d5641df",
+                        "stateRoot": "0x4a359bc7767356dd13c761cc98bd9f0a62013636c0395e9babd5d37794c9c728",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -470,15 +470,15 @@
                         "data": {
                             "slot": 11,
                             "head": {
-                                "root": "0xb9c4f7d85c0749e8805f49cae51d43b8ce5aab78fbbe1478e9a3266ca4edf65f",
+                                "root": "0x2e9715cf83119270ac92321616d630c8e787ee27f23a91aaf8207295d122b7b5",
                                 "slot": 11
                             },
                             "target": {
-                                "root": "0xb9c4f7d85c0749e8805f49cae51d43b8ce5aab78fbbe1478e9a3266ca4edf65f",
+                                "root": "0x2e9715cf83119270ac92321616d630c8e787ee27f23a91aaf8207295d122b7b5",
                                 "slot": 11
                             },
                             "source": {
-                                "root": "0xaf7cd80402b1a4baeafaf423d4304838bba9719a2357f0b8a8ef4514f15ef8bc",
+                                "root": "0x5ecbcf9082feefb76c1dd6f37d8159c3169c2ecd2bbb14bc497dff4a3d5641df",
                                 "slot": 10
                             }
                         }
@@ -495,8 +495,8 @@
                     "block": {
                         "slot": 12,
                         "proposerIndex": 0,
-                        "parentRoot": "0xb9c4f7d85c0749e8805f49cae51d43b8ce5aab78fbbe1478e9a3266ca4edf65f",
-                        "stateRoot": "0xed53c0a928ada421285bca56ef203c2ab81c48fb053b50cf8d55589d7f9676a6",
+                        "parentRoot": "0x2e9715cf83119270ac92321616d630c8e787ee27f23a91aaf8207295d122b7b5",
+                        "stateRoot": "0x584b4ae5faaeb8a0cc6b190b4f570d773fc3f40426c0eb5a1f1730b199633b0a",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -508,15 +508,15 @@
                         "data": {
                             "slot": 12,
                             "head": {
-                                "root": "0x24d2d230db8118875e68ee82c2cc0def6d1addbbf210abc9ce96494528ea041d",
+                                "root": "0x535e1e1271317cd5a83c6ec99c30d972927fee6952250a12de1572bc6d27050c",
                                 "slot": 12
                             },
                             "target": {
-                                "root": "0x24d2d230db8118875e68ee82c2cc0def6d1addbbf210abc9ce96494528ea041d",
+                                "root": "0x535e1e1271317cd5a83c6ec99c30d972927fee6952250a12de1572bc6d27050c",
                                 "slot": 12
                             },
                             "source": {
-                                "root": "0xb9c4f7d85c0749e8805f49cae51d43b8ce5aab78fbbe1478e9a3266ca4edf65f",
+                                "root": "0x2e9715cf83119270ac92321616d630c8e787ee27f23a91aaf8207295d122b7b5",
                                 "slot": 11
                             }
                         }
@@ -533,8 +533,8 @@
                     "block": {
                         "slot": 13,
                         "proposerIndex": 1,
-                        "parentRoot": "0x24d2d230db8118875e68ee82c2cc0def6d1addbbf210abc9ce96494528ea041d",
-                        "stateRoot": "0xadc494ddc678b454f2f19c5ef298d2fe0718df52b45ac8f8ba76786d57da0abd",
+                        "parentRoot": "0x535e1e1271317cd5a83c6ec99c30d972927fee6952250a12de1572bc6d27050c",
+                        "stateRoot": "0x4f3ed1bd4a625037ebbfdcf9b32a384ca5233b432df7e421f1d09af26d2bd841",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -546,15 +546,15 @@
                         "data": {
                             "slot": 13,
                             "head": {
-                                "root": "0x361a632f7a5bf215949b0cdb78fe9f2d50bb684306cae144f85fcc0bd9b294d4",
+                                "root": "0x92ac402c6efb6b43179d5a662dcd7389ccf61617c7968d3d5af611160497362e",
                                 "slot": 13
                             },
                             "target": {
-                                "root": "0x361a632f7a5bf215949b0cdb78fe9f2d50bb684306cae144f85fcc0bd9b294d4",
+                                "root": "0x92ac402c6efb6b43179d5a662dcd7389ccf61617c7968d3d5af611160497362e",
                                 "slot": 13
                             },
                             "source": {
-                                "root": "0x24d2d230db8118875e68ee82c2cc0def6d1addbbf210abc9ce96494528ea041d",
+                                "root": "0x535e1e1271317cd5a83c6ec99c30d972927fee6952250a12de1572bc6d27050c",
                                 "slot": 12
                             }
                         }
@@ -571,8 +571,8 @@
                     "block": {
                         "slot": 14,
                         "proposerIndex": 2,
-                        "parentRoot": "0x361a632f7a5bf215949b0cdb78fe9f2d50bb684306cae144f85fcc0bd9b294d4",
-                        "stateRoot": "0xd090c2ae8a77e02c32cace9775b562301c478aa438021e0f94085e6be61bcbd0",
+                        "parentRoot": "0x92ac402c6efb6b43179d5a662dcd7389ccf61617c7968d3d5af611160497362e",
+                        "stateRoot": "0x638ae62be9308adae58e1239e365a27d053727985b6323652cb66c8a84926e88",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -584,15 +584,15 @@
                         "data": {
                             "slot": 14,
                             "head": {
-                                "root": "0x4af681d00ffdb8ff49aec657eda3365faf72040f0cd59d74d7c43c3994514a38",
+                                "root": "0xfa599ebfafdd658feca9f4bb9095a4cd19e92ba23b2572a5e42f2a188ad7ab19",
                                 "slot": 14
                             },
                             "target": {
-                                "root": "0x4af681d00ffdb8ff49aec657eda3365faf72040f0cd59d74d7c43c3994514a38",
+                                "root": "0xfa599ebfafdd658feca9f4bb9095a4cd19e92ba23b2572a5e42f2a188ad7ab19",
                                 "slot": 14
                             },
                             "source": {
-                                "root": "0x361a632f7a5bf215949b0cdb78fe9f2d50bb684306cae144f85fcc0bd9b294d4",
+                                "root": "0x92ac402c6efb6b43179d5a662dcd7389ccf61617c7968d3d5af611160497362e",
                                 "slot": 13
                             }
                         }
@@ -609,8 +609,8 @@
                     "block": {
                         "slot": 15,
                         "proposerIndex": 3,
-                        "parentRoot": "0x4af681d00ffdb8ff49aec657eda3365faf72040f0cd59d74d7c43c3994514a38",
-                        "stateRoot": "0x670522138c16f2fd0d988569d3437b4a2656cf0c2c1fd9214d4d4ad930b05934",
+                        "parentRoot": "0xfa599ebfafdd658feca9f4bb9095a4cd19e92ba23b2572a5e42f2a188ad7ab19",
+                        "stateRoot": "0x0792f723312433e078a11523609eb9b90a961d0ce1346717f86dfb56a09712ca",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -622,15 +622,15 @@
                         "data": {
                             "slot": 15,
                             "head": {
-                                "root": "0x25aa2b4a03908115dea37d94558f17a95018048bc0480649e011af4312562348",
+                                "root": "0x8f3032c7b8c2e1283df2c580dbd315b17ba369b382f5c4c52f107b65d66d4b41",
                                 "slot": 15
                             },
                             "target": {
-                                "root": "0x25aa2b4a03908115dea37d94558f17a95018048bc0480649e011af4312562348",
+                                "root": "0x8f3032c7b8c2e1283df2c580dbd315b17ba369b382f5c4c52f107b65d66d4b41",
                                 "slot": 15
                             },
                             "source": {
-                                "root": "0x4af681d00ffdb8ff49aec657eda3365faf72040f0cd59d74d7c43c3994514a38",
+                                "root": "0xfa599ebfafdd658feca9f4bb9095a4cd19e92ba23b2572a5e42f2a188ad7ab19",
                                 "slot": 14
                             }
                         }
@@ -647,8 +647,8 @@
                     "block": {
                         "slot": 16,
                         "proposerIndex": 0,
-                        "parentRoot": "0x25aa2b4a03908115dea37d94558f17a95018048bc0480649e011af4312562348",
-                        "stateRoot": "0x80f78753d46a70a2228f22ded531ab29687c35a430817a1729d582bc45a9b4f5",
+                        "parentRoot": "0x8f3032c7b8c2e1283df2c580dbd315b17ba369b382f5c4c52f107b65d66d4b41",
+                        "stateRoot": "0x76f71fb8340d28f209436d7f5a46d5ab47f6200ce78e98028869edcc17306c36",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -660,15 +660,15 @@
                         "data": {
                             "slot": 16,
                             "head": {
-                                "root": "0xdc4e761242803ff1d8d645b171e5065b0e40f014487ff0e1bb5f9df3f06737be",
+                                "root": "0xa3d9765056efab51625457713ee53811602353a08a2fa7d609e1ae053b82bc81",
                                 "slot": 16
                             },
                             "target": {
-                                "root": "0xdc4e761242803ff1d8d645b171e5065b0e40f014487ff0e1bb5f9df3f06737be",
+                                "root": "0xa3d9765056efab51625457713ee53811602353a08a2fa7d609e1ae053b82bc81",
                                 "slot": 16
                             },
                             "source": {
-                                "root": "0x25aa2b4a03908115dea37d94558f17a95018048bc0480649e011af4312562348",
+                                "root": "0x8f3032c7b8c2e1283df2c580dbd315b17ba369b382f5c4c52f107b65d66d4b41",
                                 "slot": 15
                             }
                         }
@@ -685,8 +685,8 @@
                     "block": {
                         "slot": 17,
                         "proposerIndex": 1,
-                        "parentRoot": "0xdc4e761242803ff1d8d645b171e5065b0e40f014487ff0e1bb5f9df3f06737be",
-                        "stateRoot": "0x1e76cdfaf6acba977cce8b3e9465bce940e49fcd2654534f5677ec856744eab0",
+                        "parentRoot": "0xa3d9765056efab51625457713ee53811602353a08a2fa7d609e1ae053b82bc81",
+                        "stateRoot": "0x73fb22f47f7645fe9c7484b48946bdcc9feefb77c89119cac4ebfbd897efdf05",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -698,15 +698,15 @@
                         "data": {
                             "slot": 17,
                             "head": {
-                                "root": "0x693835960152dbf4f6588d9b43e7e6ddfa5a0ee5ce98b42b0337a8bd4c570922",
+                                "root": "0x32f71624e9cc375bd80c01c52b543f11400add4817497445cca0387c5e93a2da",
                                 "slot": 17
                             },
                             "target": {
-                                "root": "0x693835960152dbf4f6588d9b43e7e6ddfa5a0ee5ce98b42b0337a8bd4c570922",
+                                "root": "0x32f71624e9cc375bd80c01c52b543f11400add4817497445cca0387c5e93a2da",
                                 "slot": 17
                             },
                             "source": {
-                                "root": "0xdc4e761242803ff1d8d645b171e5065b0e40f014487ff0e1bb5f9df3f06737be",
+                                "root": "0xa3d9765056efab51625457713ee53811602353a08a2fa7d609e1ae053b82bc81",
                                 "slot": 16
                             }
                         }
@@ -723,8 +723,8 @@
                     "block": {
                         "slot": 18,
                         "proposerIndex": 2,
-                        "parentRoot": "0x693835960152dbf4f6588d9b43e7e6ddfa5a0ee5ce98b42b0337a8bd4c570922",
-                        "stateRoot": "0x0a8e2bf76d5a6144e7f790c5885a290daff833a467a1897e7de065c239cb6807",
+                        "parentRoot": "0x32f71624e9cc375bd80c01c52b543f11400add4817497445cca0387c5e93a2da",
+                        "stateRoot": "0x304172e1836eede1f7a460cd0466152ea27449ced669a4e42133579f86d32640",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -736,15 +736,15 @@
                         "data": {
                             "slot": 18,
                             "head": {
-                                "root": "0x2b7b91db85e0f7e782472ce841333ee1a2c502add0cff4b9da612e87a390d7c3",
+                                "root": "0xb815fd73d480ac5fcbd4ba6c185469c1974823c7df6bf23dfbedc9ee9b29834d",
                                 "slot": 18
                             },
                             "target": {
-                                "root": "0x2b7b91db85e0f7e782472ce841333ee1a2c502add0cff4b9da612e87a390d7c3",
+                                "root": "0xb815fd73d480ac5fcbd4ba6c185469c1974823c7df6bf23dfbedc9ee9b29834d",
                                 "slot": 18
                             },
                             "source": {
-                                "root": "0x693835960152dbf4f6588d9b43e7e6ddfa5a0ee5ce98b42b0337a8bd4c570922",
+                                "root": "0x32f71624e9cc375bd80c01c52b543f11400add4817497445cca0387c5e93a2da",
                                 "slot": 17
                             }
                         }
@@ -761,8 +761,8 @@
                     "block": {
                         "slot": 19,
                         "proposerIndex": 3,
-                        "parentRoot": "0x2b7b91db85e0f7e782472ce841333ee1a2c502add0cff4b9da612e87a390d7c3",
-                        "stateRoot": "0xe17e98d035fdb5fc8619d8101ed431b2adc5f316cb75f8a48ddccfcc8e70a085",
+                        "parentRoot": "0xb815fd73d480ac5fcbd4ba6c185469c1974823c7df6bf23dfbedc9ee9b29834d",
+                        "stateRoot": "0xb0bfc653ee2bcbe154796b6f0449d89bb63b090444b361e9a86eaccc74898327",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -774,15 +774,15 @@
                         "data": {
                             "slot": 19,
                             "head": {
-                                "root": "0x257181297dbae440b6734c3682064dbcf5361dbd835959517a6fa8eb2ae3e9d4",
+                                "root": "0x9339a784accf839ae09330f6a9cfe88154b4f7fbd6f825d2930e58000cef5d65",
                                 "slot": 19
                             },
                             "target": {
-                                "root": "0x257181297dbae440b6734c3682064dbcf5361dbd835959517a6fa8eb2ae3e9d4",
+                                "root": "0x9339a784accf839ae09330f6a9cfe88154b4f7fbd6f825d2930e58000cef5d65",
                                 "slot": 19
                             },
                             "source": {
-                                "root": "0x2b7b91db85e0f7e782472ce841333ee1a2c502add0cff4b9da612e87a390d7c3",
+                                "root": "0xb815fd73d480ac5fcbd4ba6c185469c1974823c7df6bf23dfbedc9ee9b29834d",
                                 "slot": 18
                             }
                         }
@@ -793,7 +793,7 @@
                 "valid": true,
                 "checks": {
                     "headSlot": 20,
-                    "headRoot": "0xec018eb6392f9a5512fa320eb2f461b8e364a48e4ef91a11ef4ada15d5c0002a",
+                    "headRoot": "0xc0a0053d73e322aaa3cc0b3c5124d6ea5cf6eebbebc950814fec2612efeb2b82",
                     "headRootLabel": "block_20"
                 },
                 "stepType": "block",
@@ -801,8 +801,8 @@
                     "block": {
                         "slot": 20,
                         "proposerIndex": 0,
-                        "parentRoot": "0x257181297dbae440b6734c3682064dbcf5361dbd835959517a6fa8eb2ae3e9d4",
-                        "stateRoot": "0x16b100fea0ffd2f875528d76d5f4d8fc92f693477258fd06fcfc129787e46740",
+                        "parentRoot": "0x9339a784accf839ae09330f6a9cfe88154b4f7fbd6f825d2930e58000cef5d65",
+                        "stateRoot": "0x086dd2f62898dc60b1c7a964f30ee820c2fcb855c06aab1db1df6a7bce28690b",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -814,15 +814,15 @@
                         "data": {
                             "slot": 20,
                             "head": {
-                                "root": "0xec018eb6392f9a5512fa320eb2f461b8e364a48e4ef91a11ef4ada15d5c0002a",
+                                "root": "0xc0a0053d73e322aaa3cc0b3c5124d6ea5cf6eebbebc950814fec2612efeb2b82",
                                 "slot": 20
                             },
                             "target": {
-                                "root": "0xec018eb6392f9a5512fa320eb2f461b8e364a48e4ef91a11ef4ada15d5c0002a",
+                                "root": "0xc0a0053d73e322aaa3cc0b3c5124d6ea5cf6eebbebc950814fec2612efeb2b82",
                                 "slot": 20
                             },
                             "source": {
-                                "root": "0x257181297dbae440b6734c3682064dbcf5361dbd835959517a6fa8eb2ae3e9d4",
+                                "root": "0x9339a784accf839ae09330f6a9cfe88154b4f7fbd6f825d2930e58000cef5d65",
                                 "slot": 19
                             }
                         }
@@ -833,7 +833,7 @@
         ],
         "maxSlot": 20,
         "_info": {
-            "hash": "0x38c9240cac9de60a2d032680a4bf464f4807d41612a0e155ba79ffd9c5601fc2",
+            "hash": "0x5ad4414ae62a84ccc1d0b107e7305210bfef592d54e97ea73cf07fc40d551e9e",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_fork_choice_head.py::test_head_advances_through_deep_chain[fork_Devnet]",
             "description": "Fork choice head advances through a deep chain correctly.\n\n    Scenario\n    --------\n    Build a long chain (slots 1-20) and verify head reaches the end.\n\n    Expected Behavior:\n        - Head advances through all 20 blocks\n        - Final head = slot 20\n        - Fork choice scales to longer chains\n\n    Why This Matters\n    ----------------\n    This tests that the fork choice algorithm scales to longer chains and\n    correctly handles the tree-walking logic through many blocks.\n\n    Real networks have chains thousands of blocks long. The algorithm must:\n    - Efficiently traverse deep trees\n    - Maintain correct head even with many ancestors\n    - Not degrade in performance or correctness with depth\n\n    A 20-block chain is a modest test of this scalability.",

@@ -1,5 +1,5 @@
 {
-    "tests/consensus/devnet/fc/test_attestation_processing.py::test_attestation_accumulation_full_validator_set[fork_Devnet][fork_Devnet-fork_choice_test]": {
+    "tests/consensus/devnet/fc/test_signature_aggregation.py::test_mixed_attestations_multiple_targets_and_validators[fork_Devnet][fork_Devnet-fork_choice_test]": {
         "network": "Devnet",
         "leanEnv": "test",
         "anchorState": {
@@ -70,15 +70,7 @@
             {
                 "valid": true,
                 "checks": {
-                    "headSlot": 1,
-                    "attestationChecks": [
-                        {
-                            "validator": 1,
-                            "attestationSlot": 1,
-                            "targetSlot": 1,
-                            "location": "new"
-                        }
-                    ]
+                    "headSlot": 1
                 },
                 "stepType": "block",
                 "block": {
@@ -86,7 +78,7 @@
                         "slot": 1,
                         "proposerIndex": 1,
                         "parentRoot": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
-                        "stateRoot": "0x4c0f2177a7a2e2870324c8fa58d50b51d998c7b8cb58f364eacecc473e0228b0",
+                        "stateRoot": "0x976e5f2bf6a9b4c51516e650d3a7c7f0066580fa3d1b185808a5bec483292a2f",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -98,11 +90,11 @@
                         "data": {
                             "slot": 1,
                             "head": {
-                                "root": "0x616097cfb7d4d6e82e6373a70e5d5cbc93f9f003729e37d5aa371b6ee4b7a0eb",
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x616097cfb7d4d6e82e6373a70e5d5cbc93f9f003729e37d5aa371b6ee4b7a0eb",
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
                                 "slot": 1
                             },
                             "source": {
@@ -110,34 +102,22 @@
                                 "slot": 0
                             }
                         }
-                    }
+                    },
+                    "blockRootLabel": "block_1"
                 }
             },
             {
                 "valid": true,
                 "checks": {
-                    "headSlot": 2,
-                    "attestationChecks": [
-                        {
-                            "validator": 1,
-                            "attestationSlot": 1,
-                            "location": "known"
-                        },
-                        {
-                            "validator": 2,
-                            "attestationSlot": 2,
-                            "targetSlot": 2,
-                            "location": "new"
-                        }
-                    ]
+                    "headSlot": 2
                 },
                 "stepType": "block",
                 "block": {
                     "block": {
                         "slot": 2,
                         "proposerIndex": 2,
-                        "parentRoot": "0x616097cfb7d4d6e82e6373a70e5d5cbc93f9f003729e37d5aa371b6ee4b7a0eb",
-                        "stateRoot": "0x4b8232ba1126c7b5b924f687ec4cfcea309c6788be0c3ee048a742b3cc01b655",
+                        "parentRoot": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                        "stateRoot": "0xb7e6a86335a19a6d737b0b3f9f60c18f2eb175206459e84b9d3b3807702acfde",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -149,51 +129,34 @@
                         "data": {
                             "slot": 2,
                             "head": {
-                                "root": "0x55bd6cc7ce097eef81ae2c09bf8ed9eaec331bcf237f563b9961b3b20359871e",
+                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x55bd6cc7ce097eef81ae2c09bf8ed9eaec331bcf237f563b9961b3b20359871e",
+                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
                                 "slot": 2
                             },
                             "source": {
-                                "root": "0x616097cfb7d4d6e82e6373a70e5d5cbc93f9f003729e37d5aa371b6ee4b7a0eb",
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
                                 "slot": 1
                             }
                         }
-                    }
+                    },
+                    "blockRootLabel": "block_2"
                 }
             },
             {
                 "valid": true,
                 "checks": {
-                    "headSlot": 3,
-                    "attestationChecks": [
-                        {
-                            "validator": 1,
-                            "attestationSlot": 1,
-                            "location": "known"
-                        },
-                        {
-                            "validator": 2,
-                            "attestationSlot": 2,
-                            "location": "known"
-                        },
-                        {
-                            "validator": 3,
-                            "attestationSlot": 3,
-                            "targetSlot": 3,
-                            "location": "new"
-                        }
-                    ]
+                    "headSlot": 3
                 },
                 "stepType": "block",
                 "block": {
                     "block": {
                         "slot": 3,
                         "proposerIndex": 3,
-                        "parentRoot": "0x55bd6cc7ce097eef81ae2c09bf8ed9eaec331bcf237f563b9961b3b20359871e",
-                        "stateRoot": "0x33f09d75eb5bc0b4d02ce5caca2eb4eefa19dc72e3eded00b17cefcd177fda58",
+                        "parentRoot": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
+                        "stateRoot": "0x106ac834106f37ca1cb2152976c703f396030741fa17e4522acda3f586287128",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -205,46 +168,43 @@
                         "data": {
                             "slot": 3,
                             "head": {
-                                "root": "0x84f9c935aecb1a2b51263fb0e74dc7b9b933dbca4e0ce675f797411dadc5feb8",
+                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
                                 "slot": 3
                             },
                             "target": {
-                                "root": "0x84f9c935aecb1a2b51263fb0e74dc7b9b933dbca4e0ce675f797411dadc5feb8",
+                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
                                 "slot": 3
                             },
                             "source": {
-                                "root": "0x55bd6cc7ce097eef81ae2c09bf8ed9eaec331bcf237f563b9961b3b20359871e",
+                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
                                 "slot": 2
                             }
                         }
-                    }
+                    },
+                    "blockRootLabel": "block_3"
                 }
             },
             {
                 "valid": true,
                 "checks": {
                     "headSlot": 4,
-                    "attestationChecks": [
+                    "blockAttestationCount": 2,
+                    "blockAttestations": [
                         {
-                            "validator": 1,
-                            "attestationSlot": 1,
-                            "location": "known"
-                        },
-                        {
-                            "validator": 2,
+                            "participants": [
+                                0,
+                                1
+                            ],
                             "attestationSlot": 2,
-                            "location": "known"
+                            "targetSlot": 2
                         },
                         {
-                            "validator": 3,
+                            "participants": [
+                                2,
+                                3
+                            ],
                             "attestationSlot": 3,
-                            "location": "known"
-                        },
-                        {
-                            "validator": 0,
-                            "attestationSlot": 4,
-                            "targetSlot": 4,
-                            "location": "new"
+                            "targetSlot": 3
                         }
                     ]
                 },
@@ -253,11 +213,60 @@
                     "block": {
                         "slot": 4,
                         "proposerIndex": 0,
-                        "parentRoot": "0x84f9c935aecb1a2b51263fb0e74dc7b9b933dbca4e0ce675f797411dadc5feb8",
-                        "stateRoot": "0x2077b021fb6a34ae26deb6aab1b447914db2e1b684e9c6ddd47762c30a201231",
+                        "parentRoot": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
+                        "stateRoot": "0x51e392d6a187a6d9e5f98cec1da302da0fee337947276aedb53943affb9816ed",
                         "body": {
                             "attestations": {
-                                "data": []
+                                "data": [
+                                    {
+                                        "aggregationBits": {
+                                            "data": [
+                                                true,
+                                                true
+                                            ]
+                                        },
+                                        "data": {
+                                            "slot": 2,
+                                            "head": {
+                                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
+                                                "slot": 2
+                                            },
+                                            "target": {
+                                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
+                                                "slot": 2
+                                            },
+                                            "source": {
+                                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                                "slot": 0
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "aggregationBits": {
+                                            "data": [
+                                                false,
+                                                false,
+                                                true,
+                                                true
+                                            ]
+                                        },
+                                        "data": {
+                                            "slot": 3,
+                                            "head": {
+                                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
+                                                "slot": 3
+                                            },
+                                            "target": {
+                                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
+                                                "slot": 3
+                                            },
+                                            "source": {
+                                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                                "slot": 0
+                                            }
+                                        }
+                                    }
+                                ]
                             }
                         }
                     },
@@ -266,15 +275,15 @@
                         "data": {
                             "slot": 4,
                             "head": {
-                                "root": "0x85e00f8a4bab1b320fd9130dda077b573010987c2e072b0fdd51d2b48f1d5a86",
+                                "root": "0x6ef23dd5ca61baa627486b87170b3fec79bccf1a849d3a67d38fb02a86a9d053",
                                 "slot": 4
                             },
                             "target": {
-                                "root": "0x85e00f8a4bab1b320fd9130dda077b573010987c2e072b0fdd51d2b48f1d5a86",
+                                "root": "0x6ef23dd5ca61baa627486b87170b3fec79bccf1a849d3a67d38fb02a86a9d053",
                                 "slot": 4
                             },
                             "source": {
-                                "root": "0x84f9c935aecb1a2b51263fb0e74dc7b9b933dbca4e0ce675f797411dadc5feb8",
+                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
                                 "slot": 3
                             }
                         }
@@ -284,10 +293,10 @@
         ],
         "maxSlot": 4,
         "_info": {
-            "hash": "0x40f53f25434319fca1e00dcadf58db26e2e29ba380c50459f60d239cf3d765b0",
+            "hash": "0xb0f1bb86b6bf18d37a8cd2ebad608fd422f90697ba32bf258ce0254388f095c1",
             "comment": "`leanSpec` generated test",
-            "testId": "tests/consensus/devnet/fc/test_attestation_processing.py::test_attestation_accumulation_full_validator_set[fork_Devnet]",
-            "description": "All validators contribute attestations across both dictionaries.\n\n    Scenario\n    --------\n    Process blocks at slots 1, 2, 3, 4 (complete validator rotation).\n\n    Expected:\n        - After slot 1:  new attestations = 1, known attestations = 0\n        - After slot 2:  new attestations = 1, known attestations = 1\n        - After slot 3:  new attestations = 1, known attestations = 2\n        - After slot 4:  new attestations = 1, known attestations = 3  (total: 4 validators)\n\n    Why This Matters\n    ----------------\n    With 4 validators and consecutive blocks, each validator proposes once.\n\n    Attestations accumulate across both dictionaries:\n    - new: current slot's proposer\n    - known: all previous proposers\n\n    The total (new + known) equals the number of unique validators who proposed.",
+            "testId": "tests/consensus/devnet/fc/test_signature_aggregation.py::test_mixed_attestations_multiple_targets_and_validators[fork_Devnet]",
+            "description": "Complex scenario with mixed attestations from different sources and targets.\n\n    Scenario\n    --------\n    Block at slot 4 includes attestations for both block 2 and block 3:\n    - Validators 0, 1 attest to block 2 (older)\n    - Validators 2, 3 attest to block 3 (newer)\n\n    Expected\n    --------\n    - 2 separate aggregations (different targets)\n    - Each aggregation has correct participants\n    - Demonstrates handling attestations for multiple chain positions",
             "fixtureFormat": "fork_choice_test"
         }
     }

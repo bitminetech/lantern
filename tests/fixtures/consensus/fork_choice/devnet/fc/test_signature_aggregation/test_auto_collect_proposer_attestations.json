@@ -1,5 +1,5 @@
 {
-    "tests/consensus/devnet/fc/test_attestation_processing.py::test_attestations_move_to_known_between_blocks[fork_Devnet][fork_Devnet-fork_choice_test]": {
+    "tests/consensus/devnet/fc/test_signature_aggregation.py::test_auto_collect_proposer_attestations[fork_Devnet][fork_Devnet-fork_choice_test]": {
         "network": "Devnet",
         "leanEnv": "test",
         "anchorState": {
@@ -71,16 +71,7 @@
                 "valid": true,
                 "checks": {
                     "headSlot": 1,
-                    "attestationChecks": [
-                        {
-                            "validator": 1,
-                            "attestationSlot": 1,
-                            "headSlot": 1,
-                            "sourceSlot": 0,
-                            "targetSlot": 1,
-                            "location": "new"
-                        }
-                    ]
+                    "blockAttestationCount": 0
                 },
                 "stepType": "block",
                 "block": {
@@ -88,7 +79,7 @@
                         "slot": 1,
                         "proposerIndex": 1,
                         "parentRoot": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
-                        "stateRoot": "0x4c0f2177a7a2e2870324c8fa58d50b51d998c7b8cb58f364eacecc473e0228b0",
+                        "stateRoot": "0x976e5f2bf6a9b4c51516e650d3a7c7f0066580fa3d1b185808a5bec483292a2f",
                         "body": {
                             "attestations": {
                                 "data": []
@@ -100,11 +91,11 @@
                         "data": {
                             "slot": 1,
                             "head": {
-                                "root": "0x616097cfb7d4d6e82e6373a70e5d5cbc93f9f003729e37d5aa371b6ee4b7a0eb",
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x616097cfb7d4d6e82e6373a70e5d5cbc93f9f003729e37d5aa371b6ee4b7a0eb",
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
                                 "slot": 1
                             },
                             "source": {
@@ -112,29 +103,22 @@
                                 "slot": 0
                             }
                         }
-                    }
+                    },
+                    "blockRootLabel": "block_1"
                 }
             },
             {
                 "valid": true,
                 "checks": {
                     "headSlot": 2,
-                    "attestationChecks": [
+                    "blockAttestationCount": 1,
+                    "blockAttestations": [
                         {
-                            "validator": 1,
+                            "participants": [
+                                1
+                            ],
                             "attestationSlot": 1,
-                            "headSlot": 1,
-                            "sourceSlot": 0,
-                            "targetSlot": 1,
-                            "location": "known"
-                        },
-                        {
-                            "validator": 2,
-                            "attestationSlot": 2,
-                            "headSlot": 2,
-                            "sourceSlot": 1,
-                            "targetSlot": 2,
-                            "location": "new"
+                            "targetSlot": 1
                         }
                     ]
                 },
@@ -143,11 +127,35 @@
                     "block": {
                         "slot": 2,
                         "proposerIndex": 2,
-                        "parentRoot": "0x616097cfb7d4d6e82e6373a70e5d5cbc93f9f003729e37d5aa371b6ee4b7a0eb",
-                        "stateRoot": "0x4b8232ba1126c7b5b924f687ec4cfcea309c6788be0c3ee048a742b3cc01b655",
+                        "parentRoot": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                        "stateRoot": "0x68e9b9c827706fbbeab878b27c3c11f8fd39b10e520af14ce5e343810aa688ec",
                         "body": {
                             "attestations": {
-                                "data": []
+                                "data": [
+                                    {
+                                        "aggregationBits": {
+                                            "data": [
+                                                false,
+                                                true
+                                            ]
+                                        },
+                                        "data": {
+                                            "slot": 1,
+                                            "head": {
+                                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                                                "slot": 1
+                                            },
+                                            "target": {
+                                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                                                "slot": 1
+                                            },
+                                            "source": {
+                                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                                "slot": 0
+                                            }
+                                        }
+                                    }
+                                ]
                             }
                         }
                     },
@@ -156,28 +164,29 @@
                         "data": {
                             "slot": 2,
                             "head": {
-                                "root": "0x55bd6cc7ce097eef81ae2c09bf8ed9eaec331bcf237f563b9961b3b20359871e",
+                                "root": "0x80bc99fcbe6f1e88f88bc816eb9622f3162579b1c5f444923986d73ccaa6a018",
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x55bd6cc7ce097eef81ae2c09bf8ed9eaec331bcf237f563b9961b3b20359871e",
+                                "root": "0x80bc99fcbe6f1e88f88bc816eb9622f3162579b1c5f444923986d73ccaa6a018",
                                 "slot": 2
                             },
                             "source": {
-                                "root": "0x616097cfb7d4d6e82e6373a70e5d5cbc93f9f003729e37d5aa371b6ee4b7a0eb",
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
                                 "slot": 1
                             }
                         }
-                    }
+                    },
+                    "blockRootLabel": "block_2"
                 }
             }
         ],
         "maxSlot": 2,
         "_info": {
-            "hash": "0x0cdfe4e9eb84f431b8cab6de3ba952dcbd9cd325612caa3122806122f5e7b430",
+            "hash": "0x419dabce5b69bc9891f6cc1a6740047eeaa7708929166c310e338391cd986e3b",
             "comment": "`leanSpec` generated test",
-            "testId": "tests/consensus/devnet/fc/test_attestation_processing.py::test_attestations_move_to_known_between_blocks[fork_Devnet]",
-            "description": "Attestations move from latest_new to latest_known between blocks.\n\n    Scenario\n    --------\n    Process blocks at slots 1 and 2 (different proposers: validators 1 and 2).\n\n    Expected:\n        - After slot 1: new attestations = 1, known attestations = 0\n        - After slot 2: new attestations = 1, known attestations = 1\n        - Validator 1's attestation moved to known with correct checkpoints\n        - Validator 2's attestation in new with correct checkpoints\n\n    Why This Matters\n    ----------------\n    The interval tick system drives attestation migration between slots.\n\n    Before processing the next block, interval ticks move all attestations from\n    new \u2192 known and clear the new dictionary. Then the next block's proposer\n    attestation enters the now-empty new dictionary.\n\n    This creates the attestation pipeline:\n    - Enter via new (arrivals)\n    - Graduate to known (accepted for fork choice)",
+            "testId": "tests/consensus/devnet/fc/test_signature_aggregation.py::test_auto_collect_proposer_attestations[fork_Devnet]",
+            "description": "Automatically collect previous proposers' attestations into block body.\n\n    Scenario\n    --------\n    With automatic attestation collection enabled:\n    - Block 1: proposer 1 attests (attestation goes to Store)\n    - Block 2: auto-collects proposer 1's attestation into block body\n\n    Expected\n    --------\n    Without explicit attestation specs, blocks automatically include\n    attestations from previous proposers whose signatures are available\n    and whose source matches the current justified checkpoint.\n\n    Note: Auto-collection only includes attestations whose source matches\n    the post-state's latest_justified checkpoint. Proposer attestations\n    reference their parent as source, which must match for inclusion.",
             "fixtureFormat": "fork_choice_test"
         }
     }

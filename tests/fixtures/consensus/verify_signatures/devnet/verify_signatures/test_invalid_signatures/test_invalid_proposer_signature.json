@@ -1,0 +1,260 @@
+{
+    "tests/consensus/devnet/verify_signatures/test_invalid_signatures.py::test_invalid_proposer_signature[fork_Devnet][fork_Devnet-verify_signatures_test]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "anchorState": {
+            "config": {
+                "genesisTime": 0
+            },
+            "slot": 0,
+            "latestBlockHeader": {
+                "slot": 0,
+                "proposerIndex": 0,
+                "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "bodyRoot": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136"
+            },
+            "latestJustified": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "latestFinalized": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "historicalBlockHashes": {
+                "data": []
+            },
+            "justifiedSlots": {
+                "data": []
+            },
+            "validators": {
+                "data": [
+                    {
+                        "pubkey": "0x8fa00001b5b22a073d21cb60c9465b379f80e74fee9baf1d137eb651ed162900a6f3ec32da74ff09265ea62fc9a5055b2e9b7c7b",
+                        "index": 0
+                    }
+                ]
+            },
+            "justificationsRoots": {
+                "data": []
+            },
+            "justificationsValidators": {
+                "data": []
+            }
+        },
+        "signedBlockWithAttestation": {
+            "message": {
+                "block": {
+                    "slot": 1,
+                    "proposerIndex": 0,
+                    "parentRoot": "0xb6f6683bf01027dd60f095f477b8ca38fbe23c18eb02f0aed0b2f34b7a4584f0",
+                    "stateRoot": "0x6c53c1d71203251ceb0abcb1d14a34b53c0760abc1b1ac51d509cbe16d8ceb16",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                },
+                "proposerAttestation": {
+                    "validatorId": 0,
+                    "data": {
+                        "slot": 1,
+                        "head": {
+                            "root": "0xcdc120c88d251c898fc9b9a1f091b0cb108d9ac82d2784029917c2ac3cee82ee",
+                            "slot": 1
+                        },
+                        "target": {
+                            "root": "0xcdc120c88d251c898fc9b9a1f091b0cb108d9ac82d2784029917c2ac3cee82ee",
+                            "slot": 1
+                        },
+                        "source": {
+                            "root": "0xb6f6683bf01027dd60f095f477b8ca38fbe23c18eb02f0aed0b2f34b7a4584f0",
+                            "slot": 0
+                        }
+                    }
+                }
+            },
+            "signature": {
+                "attestationSignatures": {
+                    "data": []
+                },
+                "proposerSignature": {
+                    "path": {
+                        "siblings": {
+                            "data": [
+                                {
+                                    "data": [
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0
+                                    ]
+                                },
+                                {
+                                    "data": [
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0
+                                    ]
+                                },
+                                {
+                                    "data": [
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0
+                                    ]
+                                },
+                                {
+                                    "data": [
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0
+                                    ]
+                                },
+                                {
+                                    "data": [
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0
+                                    ]
+                                },
+                                {
+                                    "data": [
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0
+                                    ]
+                                },
+                                {
+                                    "data": [
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0
+                                    ]
+                                },
+                                {
+                                    "data": [
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0
+                                    ]
+                                }
+                            ]
+                        }
+                    },
+                    "rho": {
+                        "data": [
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0
+                        ]
+                    },
+                    "hashes": {
+                        "data": [
+                            {
+                                "data": [
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0
+                                ]
+                            },
+                            {
+                                "data": [
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0
+                                ]
+                            },
+                            {
+                                "data": [
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0
+                                ]
+                            },
+                            {
+                                "data": [
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    0
+                                ]
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        "expectException": "AssertionError",
+        "_info": {
+            "hash": "0x771db5d1e0ce3a2f29fa5062250b0f486d0e404d676d07df3bf6a85f726c02c4",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/verify_signatures/test_invalid_signatures.py::test_invalid_proposer_signature[fork_Devnet]",
+            "description": "Test that invalid signatures are properly rejected during verification.\n\n    Scenario\n    --------\n    - Single block at slot 1\n    - Proposer attestation has an invalid signature\n    - No additional attestations (only proposer attestation)\n\n    Expected Behavior\n    -----------------\n    1. Proposer's signature in SignedBlockWithAttestation is rejected\n\n    Why This Matters\n    ----------------\n    This test verifies the negative case:\n    - Signature verification actually validates cryptographic correctness\n      not just structural correctness.\n    - Invalid signatures are caught, not silently accepted",
+            "fixtureFormat": "verify_signatures_test"
+        }
+    }
+}

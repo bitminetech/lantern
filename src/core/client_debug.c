@@ -71,6 +71,17 @@ int lantern_client_debug_gossip_vote(
     return gossip_vote_handler(vote, NULL, client);
 }
 
+int lantern_client_debug_gossip_aggregated_attestation(
+    struct lantern_client *client,
+    const LanternSignedAggregatedAttestation *attestation)
+{
+    if (!client || !attestation)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    return gossip_aggregated_attestation_handler(attestation, NULL, client);
+}
+
 
 /**
  * Debug API: Import a block for testing.

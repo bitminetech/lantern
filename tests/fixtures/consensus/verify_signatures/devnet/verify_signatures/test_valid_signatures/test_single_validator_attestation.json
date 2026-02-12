@@ -1,5 +1,5 @@
 {
-    "tests/consensus/devnet/verify_signatures/test_valid_signatures.py::test_proposer_signature[fork_Devnet][fork_Devnet-verify_signatures_test]": {
+    "tests/consensus/devnet/verify_signatures/test_valid_signatures.py::test_single_validator_attestation[fork_Devnet][fork_Devnet-verify_signatures_test]": {
         "network": "Devnet",
         "leanEnv": "test",
         "anchorState": {
@@ -37,6 +37,14 @@
                     {
                         "pubkey": "0xbc56037ab0485c00441e3205d908e55a016d5450a335144f50ccb034cb253c05a1cbc047b5695a5672697d584656e96a4b94f173",
                         "index": 1
+                    },
+                    {
+                        "pubkey": "0x79422d64ecdc3b0bf7c6cc31bbfb9f4eab7950107fe23c6f4f9c94465c81f80d85a1931f1003c50531147f350357805f22fdd70b",
+                        "index": 2
+                    },
+                    {
+                        "pubkey": "0x575bb17b0f673d76689c9527a21fac68eb5ebd571703a245deb2a8384baea4747be00d5b469ff30f830e234f74453f6e2c20cb26",
+                        "index": 3
                     }
                 ]
             },
@@ -52,8 +60,8 @@
                 "block": {
                     "slot": 1,
                     "proposerIndex": 1,
-                    "parentRoot": "0x67c920f466c1d4d6f9674f33d7c937bef725acdb07ff9024de863b2f32bddc68",
-                    "stateRoot": "0x767763ba4284e0fb9379e182c90d1687787e83b2f4e0c62407249ea3a104b27a",
+                    "parentRoot": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                    "stateRoot": "0x976e5f2bf6a9b4c51516e650d3a7c7f0066580fa3d1b185808a5bec483292a2f",
                     "body": {
                         "attestations": {
                             "data": []
@@ -65,15 +73,15 @@
                     "data": {
                         "slot": 1,
                         "head": {
-                            "root": "0x012023705f5384f54c111656e1d08bab57f61ff3814c83661227c4886fdbc7a1",
+                            "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
                             "slot": 1
                         },
                         "target": {
-                            "root": "0x012023705f5384f54c111656e1d08bab57f61ff3814c83661227c4886fdbc7a1",
+                            "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
                             "slot": 1
                         },
                         "source": {
-                            "root": "0x67c920f466c1d4d6f9674f33d7c937bef725acdb07ff9024de863b2f32bddc68",
+                            "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
                             "slot": 0
                         }
                     }
@@ -188,63 +196,63 @@
                     },
                     "rho": {
                         "data": [
-                            644208543,
-                            218416544,
-                            529253169,
-                            1007502172,
-                            403215989,
-                            26113621,
-                            822584767
+                            1889549606,
+                            96796536,
+                            671881690,
+                            871130341,
+                            1729489526,
+                            1833987672,
+                            1801158921
                         ]
                     },
                     "hashes": {
                         "data": [
                             {
                                 "data": [
-                                    373907450,
-                                    1905897425,
-                                    398616161,
-                                    118479090,
-                                    628416889,
-                                    558057520,
-                                    531733487,
-                                    764291998
+                                    188321474,
+                                    136620817,
+                                    683736974,
+                                    1660749340,
+                                    1828897529,
+                                    5482312,
+                                    1344568425,
+                                    1824788636
                                 ]
                             },
                             {
                                 "data": [
-                                    1055073502,
-                                    938359962,
-                                    1750550172,
-                                    392088656,
-                                    1252599961,
-                                    1636709997,
-                                    568483147,
-                                    1846461560
+                                    1509242383,
+                                    874348071,
+                                    967939041,
+                                    1893314075,
+                                    940956471,
+                                    677055797,
+                                    1815007851,
+                                    901510237
                                 ]
                             },
                             {
                                 "data": [
-                                    654587533,
-                                    2002784255,
-                                    1460976588,
-                                    1115305527,
-                                    961242847,
-                                    746080331,
-                                    1518778449,
-                                    931391832
+                                    626730936,
+                                    1933360728,
+                                    192931147,
+                                    1398346932,
+                                    2083540258,
+                                    417863419,
+                                    724053235,
+                                    833738459
                                 ]
                             },
                             {
                                 "data": [
-                                    1409671451,
-                                    1790541359,
-                                    440247838,
-                                    1460276156,
-                                    1516748941,
-                                    1343472744,
-                                    331072020,
-                                    682552546
+                                    2094660960,
+                                    751870991,
+                                    1524987780,
+                                    436778235,
+                                    1066607152,
+                                    2047885417,
+                                    142725384,
+                                    2117521627
                                 ]
                             }
                         ]
@@ -253,10 +261,10 @@
             }
         },
         "_info": {
-            "hash": "0x94f9c136e620fd57a2be24e462bbb6d02ec31d8ea3b1d8141b09fd500c881b01",
+            "hash": "0x52437b93cdbf4d3f66c8df19b21ef98c35f904b5e0021942c7189503fd53c016",
             "comment": "`leanSpec` generated test",
-            "testId": "tests/consensus/devnet/verify_signatures/test_valid_signatures.py::test_proposer_signature[fork_Devnet]",
-            "description": "Test valid proposer signature in SignedBlockWithAttestation.\n\n    Scenario\n    --------\n    - Single block at slot 1\n    - No additional attestations (only proposer attestation)\n\n    Expected Behavior\n    -----------------\n    1. Proposer's signature in SignedBlockWithAttestation can be verified against\n       the validator's pubkey in the state\n\n    Why This Matters\n    ----------------\n    This is the most basic signature generation test. It verifies:\n    - XMSS key generation works\n    - Signature aggregation includes proposer signature",
+            "testId": "tests/consensus/devnet/verify_signatures/test_valid_signatures.py::test_single_validator_attestation[fork_Devnet]",
+            "description": "Test signature generation for single validator attestation.\n\n    Scenario\n    --------\n    - Block at slot 1 with 4 validators\n    - Only one validator (0) provides an attestation\n\n    Expected Behavior\n    -----------------\n    - Single validator signature is properly generated\n    - Aggregation handles the minimal case correctly\n\n    Why This Matters\n    ----------------\n    Edge case: minimal attestation coverage.\n    Verifies aggregation works with single-validator input.",
             "fixtureFormat": "verify_signatures_test"
         }
     }

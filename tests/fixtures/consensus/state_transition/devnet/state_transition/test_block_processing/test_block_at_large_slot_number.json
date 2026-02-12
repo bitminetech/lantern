@@ -60,7 +60,7 @@
                 "slot": 100,
                 "proposerIndex": 0,
                 "parentRoot": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
-                "stateRoot": "0x823b0e32993a38db2e748b455c4ee7cc2504290fd2dce467e8254f8572cb3cab",
+                "stateRoot": "0x6f9b7a10879510ab1e1c4246d655cd08a7a1db491580a20c47eb019c08e54f50",
                 "body": {
                     "attestations": {
                         "data": []
@@ -72,7 +72,7 @@
             "slot": 100
         },
         "_info": {
-            "hash": "0x6146a42aaab1031b883c478e650a4bf7e5f7be075eb6fcc348eb8b4c3a6dd699",
+            "hash": "0x792bfdf069ad579de1f37e34db90c37bfb66082c866c7afa390626fa7b9a166f",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/state_transition/test_block_processing.py::test_block_at_large_slot_number[fork_Devnet]",
             "description": "Test block processing at high slot numbers.\n\n    Scenario\n    --------\n    Jump directly from genesis to slot 100, simulating:\n    - Network bootstrap after long downtime\n    - Test environment with artificial time jump\n    - Integer overflow boundary testing\n\n    Expected Behavior\n    -----------------\n    1. Process 99 empty slots: 1\u21922\u2192...\u219299\u2192100\n    2. Block at slot 100 processes correctly\n    3. No integer overflow or wraparound\n    4. State remains consistent",

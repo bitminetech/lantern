@@ -1,5 +1,5 @@
 {
-    "tests/consensus/devnet/fc/test_attestation_target_selection.py::test_attestation_target_at_genesis_initially[fork_Devnet][fork_Devnet-fork_choice_test]": {
+    "tests/consensus/devnet/fc/test_signature_aggregation.py::test_multiple_specs_same_target_merge_into_one[fork_Devnet][fork_Devnet-fork_choice_test]": {
         "network": "Devnet",
         "leanEnv": "test",
         "anchorState": {
@@ -70,8 +70,7 @@
             {
                 "valid": true,
                 "checks": {
-                    "headSlot": 1,
-                    "attestationTargetSlot": 0
+                    "headSlot": 1
                 },
                 "stepType": "block",
                 "block": {
@@ -103,14 +102,27 @@
                                 "slot": 0
                             }
                         }
-                    }
+                    },
+                    "blockRootLabel": "block_1"
                 }
             },
             {
                 "valid": true,
                 "checks": {
                     "headSlot": 2,
-                    "attestationTargetSlot": 0
+                    "blockAttestationCount": 1,
+                    "blockAttestations": [
+                        {
+                            "participants": [
+                                0,
+                                1,
+                                2,
+                                3
+                            ],
+                            "attestationSlot": 1,
+                            "targetSlot": 1
+                        }
+                    ]
                 },
                 "stepType": "block",
                 "block": {
@@ -118,10 +130,36 @@
                         "slot": 2,
                         "proposerIndex": 2,
                         "parentRoot": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                        "stateRoot": "0xb7e6a86335a19a6d737b0b3f9f60c18f2eb175206459e84b9d3b3807702acfde",
+                        "stateRoot": "0x46323ae4627eb22157fbe748b0210338b7243db4da24ed2fc4e30232a82874a0",
                         "body": {
                             "attestations": {
-                                "data": []
+                                "data": [
+                                    {
+                                        "aggregationBits": {
+                                            "data": [
+                                                true,
+                                                true,
+                                                true,
+                                                true
+                                            ]
+                                        },
+                                        "data": {
+                                            "slot": 1,
+                                            "head": {
+                                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                                                "slot": 1
+                                            },
+                                            "target": {
+                                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                                                "slot": 1
+                                            },
+                                            "source": {
+                                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                                "slot": 0
+                                            }
+                                        }
+                                    }
+                                ]
                             }
                         }
                     },
@@ -130,11 +168,11 @@
                         "data": {
                             "slot": 2,
                             "head": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
+                                "root": "0x5f40fd980e82e7888439cc76557d718a554d5a47f2b813b801b4cb1b64e486bd",
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
+                                "root": "0x5f40fd980e82e7888439cc76557d718a554d5a47f2b813b801b4cb1b64e486bd",
                                 "slot": 2
                             },
                             "source": {
@@ -148,10 +186,10 @@
         ],
         "maxSlot": 2,
         "_info": {
-            "hash": "0x55931a454acbfd50f0d0ef9f92395af85e7c37f0dcbb87251042c5d4c6e64f39",
+            "hash": "0x9138bdcaa7e19ed23de8cf5f552a6f39777b42678b2dcf971debfeb0e7d8df80",
             "comment": "`leanSpec` generated test",
-            "testId": "tests/consensus/devnet/fc/test_attestation_target_selection.py::test_attestation_target_at_genesis_initially[fork_Devnet]",
-            "description": "Attestation target starts at genesis before safe target updates.\n\n    Scenario\n    --------\n    Process two blocks at slots 1 and 2.\n\n    Expected:\n        - After slot 1: target = slot 0 (genesis/finalized)\n        - After slot 2: target = slot 0 (genesis/finalized)\n        - Target root automatically validated against block at slot 0\n\n    Why This Matters\n    ----------------\n    Initially, the safe target is at genesis (slot 0), so the attestation\n    target walks back from head to genesis.\n\n    This conservative behavior ensures validators don't attest too far ahead\n    before there's sufficient attestation weight to advance the safe target.",
+            "testId": "tests/consensus/devnet/fc/test_signature_aggregation.py::test_multiple_specs_same_target_merge_into_one[fork_Devnet]",
+            "description": "Multiple attestation specs with identical data merge into single aggregation.\n\n    Scenario\n    --------\n    Block at slot 2 includes:\n    - Validators 0, 1 attesting to block 1\n    - Validators 2, 3 attesting to block 1 (same target)\n\n    Expected\n    --------\n    - 1 aggregated attestation (merged)\n    - Covers all validators {0, 1, 2, 3}",
             "fixtureFormat": "fork_choice_test"
         }
     }

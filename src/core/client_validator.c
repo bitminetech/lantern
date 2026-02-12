@@ -48,7 +48,17 @@ static const size_t VALIDATOR_SYNC_PENDING_THRESHOLD = 8;
 /** Wall clock lag (in slots) tolerated before treating peer status as stale. */
 static const uint64_t VALIDATOR_SYNC_WALL_CLOCK_LAG = 16;
 /** Devnet-3 committee count for subnet assignment. */
-static const size_t VALIDATOR_ATTESTATION_COMMITTEE_COUNT = 1u;
+static const size_t DEFAULT_VALIDATOR_ATTESTATION_COMMITTEE_COUNT = 1u;
+
+static size_t validator_attestation_committee_count(const struct lantern_client *client)
+{
+    if (client && client->debug_attestation_committee_count > 0) {
+        return client->debug_attestation_committee_count;
+    }
+    return DEFAULT_VALIDATOR_ATTESTATION_COMMITTEE_COUNT;
+}
+
+static int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot);
 
 static bool validator_should_pause_for_sync(const struct lantern_client *client)
 {
@@ -1029,6 +1039,31 @@ lantern_client_error lantern_client_aggregate_attestations_for_block(
         out_signatures);
 }
 
+int lantern_client_debug_publish_aggregated_attestations(
+    struct lantern_client *client,
+    uint64_t slot)
+{
+    return validator_publish_aggregated_attestations(client, slot);
+}
+
+int lantern_client_debug_run_interval_aggregation(
+    struct lantern_client *client,
+    uint64_t slot)
+{
+    if (!client) {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    if (client->validator_duty.slot_aggregated || !client->validator_duty.slot_attested) {
+        return LANTERN_CLIENT_ERR_IGNORED;
+    }
+
+    int rc = validator_publish_aggregated_attestations(client, slot);
+    if (rc == LANTERN_CLIENT_OK) {
+        client->validator_duty.slot_aggregated = true;
+    }
+    return rc;
+}
+
 
 /* ============================================================================
  * Mutex Utilities
@@ -1675,7 +1710,7 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
     size_t subnet_id = 0;
     if (lantern_validator_index_compute_subnet_id(
             vote->data.validator_id,
-            VALIDATOR_ATTESTATION_COMMITTEE_COUNT,
+            validator_attestation_committee_count(client),
             &subnet_id)
         == 0) {
         if (subnet_id == client->gossip.attestation_subnet_id) {
@@ -2089,7 +2124,7 @@ static lantern_client_error collect_subnet_votes_for_slot(
         size_t vote_subnet = 0;
         if (lantern_validator_index_compute_subnet_id(
                 vote.data.validator_id,
-                VALIDATOR_ATTESTATION_COMMITTEE_COUNT,
+                validator_attestation_committee_count(client),
                 &vote_subnet)
             != 0) {
             continue;

@@ -145,8 +145,21 @@ if(LANTERN_BUILD_TESTS)
     )
     add_test(NAME lantern_client_pending COMMAND lantern_client_pending_test)
 
-    add_executable(lantern_client_gossip_test tests/unit/test_client_gossip.c)
+    add_executable(lantern_client_gossip_test
+        tests/unit/test_client_gossip.c
+        tests/unit/client_test_helpers.c
+    )
     target_link_libraries(lantern_client_gossip_test PRIVATE lantern)
+    target_include_directories(
+        lantern_client_gossip_test
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/tests/unit
+    )
+    target_compile_definitions(
+        lantern_client_gossip_test
+        PRIVATE
+            LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
+    )
     add_test(NAME lantern_client_gossip COMMAND lantern_client_gossip_test)
 
     add_executable(lantern_genesis_anchor_test tests/unit/test_genesis_anchor.c)

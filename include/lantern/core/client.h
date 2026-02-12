@@ -257,6 +257,7 @@ struct lantern_client {
     bool status_lock_initialized;
     bool debug_disable_block_requests;
     bool debug_disable_fork_choice_time;
+    size_t debug_attestation_committee_count;
     char *xmss_key_dir;
     char *xmss_public_template;
     char *xmss_secret_template;
@@ -336,6 +337,15 @@ int lantern_client_debug_gossip_block(
 int lantern_client_debug_gossip_vote(
     struct lantern_client *client,
     const LanternSignedVote *vote);
+int lantern_client_debug_gossip_aggregated_attestation(
+    struct lantern_client *client,
+    const LanternSignedAggregatedAttestation *attestation);
+int lantern_client_debug_publish_aggregated_attestations(
+    struct lantern_client *client,
+    uint64_t slot);
+int lantern_client_debug_run_interval_aggregation(
+    struct lantern_client *client,
+    uint64_t slot);
 
 int lantern_client_debug_import_block(
     struct lantern_client *client,

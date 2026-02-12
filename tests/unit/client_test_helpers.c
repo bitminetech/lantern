@@ -139,9 +139,10 @@ static void reset_vote_client_on_error(struct lantern_client *client) {
     }
 }
 
-int client_test_setup_vote_validation_client(
+static int client_test_setup_vote_validation_client_common(
     struct lantern_client *client,
     const char *node_id,
+    size_t validator_count,
     struct PQSignatureSchemePublicKey **out_pub,
     struct PQSignatureSchemeSecretKey **out_secret,
     LanternRoot *anchor_root,
@@ -149,9 +150,13 @@ int client_test_setup_vote_validation_client(
     if (!client || !out_pub || !out_secret) {
         return -1;
     }
+    if (validator_count == 0) {
+        validator_count = 1;
+    }
     int rc = -1;
     struct PQSignatureSchemePublicKey *pub = NULL;
     struct PQSignatureSchemeSecretKey *secret = NULL;
+    uint8_t *serialized_pubkeys = NULL;
     LanternBlock anchor;
     LanternBlock child;
     bool anchor_body_init = false;
@@ -183,7 +188,7 @@ int client_test_setup_vote_validation_client(
         genesis_time = (uint64_t)shifted;
     }
 
-    if (lantern_state_generate_genesis(&client->state, genesis_time, 1) != 0) {
+    if (lantern_state_generate_genesis(&client->state, genesis_time, (uint64_t)validator_count) != 0) {
         fprintf(stderr, "failed to generate genesis for vote test\n");
         goto finish;
     }
@@ -276,12 +281,28 @@ int client_test_setup_vote_validation_client(
             (size_t)written);
         goto finish;
     }
-    fprintf(stderr, "[pub_debug] serialized pub len=%zu buffer=%zu\n", (size_t)written, sizeof(serialized_pub));
     if (written < sizeof(serialized_pub)) {
         memset(serialized_pub + written, 0, sizeof(serialized_pub) - written);
     }
 
-    if (lantern_state_set_validator_pubkeys(&client->state, serialized_pub, 1) != 0) {
+    if (validator_count > (SIZE_MAX / LANTERN_VALIDATOR_PUBKEY_SIZE)) {
+        fprintf(stderr, "validator count too large for pubkey array\n");
+        goto finish;
+    }
+    size_t total_pubkeys_len = validator_count * LANTERN_VALIDATOR_PUBKEY_SIZE;
+    serialized_pubkeys = calloc(total_pubkeys_len, 1u);
+    if (!serialized_pubkeys) {
+        fprintf(stderr, "failed to allocate validator pubkey array for vote test\n");
+        goto finish;
+    }
+    for (size_t i = 0; i < validator_count; ++i) {
+        memcpy(
+            serialized_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+            serialized_pub,
+            LANTERN_VALIDATOR_PUBKEY_SIZE);
+    }
+
+    if (lantern_state_set_validator_pubkeys(&client->state, serialized_pubkeys, validator_count) != 0) {
         fprintf(stderr, "failed to set validator pubkeys for vote test\n");
         goto finish;
     }
@@ -323,7 +344,43 @@ finish:
         }
         reset_vote_client_on_error(client);
     }
+    free(serialized_pubkeys);
     return rc;
+}
+
+int client_test_setup_vote_validation_client(
+    struct lantern_client *client,
+    const char *node_id,
+    struct PQSignatureSchemePublicKey **out_pub,
+    struct PQSignatureSchemeSecretKey **out_secret,
+    LanternRoot *anchor_root,
+    LanternRoot *child_root) {
+    return client_test_setup_vote_validation_client_common(
+        client,
+        node_id,
+        1u,
+        out_pub,
+        out_secret,
+        anchor_root,
+        child_root);
+}
+
+int client_test_setup_vote_validation_client_with_validator_count(
+    struct lantern_client *client,
+    const char *node_id,
+    size_t validator_count,
+    struct PQSignatureSchemePublicKey **out_pub,
+    struct PQSignatureSchemeSecretKey **out_secret,
+    LanternRoot *anchor_root,
+    LanternRoot *child_root) {
+    return client_test_setup_vote_validation_client_common(
+        client,
+        node_id,
+        validator_count,
+        out_pub,
+        out_secret,
+        anchor_root,
+        child_root);
 }
 
 void client_test_teardown_vote_validation_client(

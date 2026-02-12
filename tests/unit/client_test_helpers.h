@@ -24,6 +24,14 @@ int client_test_setup_vote_validation_client(
     struct PQSignatureSchemeSecretKey **out_secret,
     LanternRoot *anchor_root,
     LanternRoot *child_root);
+int client_test_setup_vote_validation_client_with_validator_count(
+    struct lantern_client *client,
+    const char *node_id,
+    size_t validator_count,
+    struct PQSignatureSchemePublicKey **out_pub,
+    struct PQSignatureSchemeSecretKey **out_secret,
+    LanternRoot *anchor_root,
+    LanternRoot *child_root);
 void client_test_teardown_vote_validation_client(
     struct lantern_client *client,
     struct PQSignatureSchemePublicKey *pub,

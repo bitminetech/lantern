@@ -60,7 +60,7 @@
                 "slot": 1,
                 "proposerIndex": 1,
                 "parentRoot": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
-                "stateRoot": "0x4c0f2177a7a2e2870324c8fa58d50b51d998c7b8cb58f364eacecc473e0228b0",
+                "stateRoot": "0x976e5f2bf6a9b4c51516e650d3a7c7f0066580fa3d1b185808a5bec483292a2f",
                 "body": {
                     "attestations": {
                         "data": []
@@ -75,7 +75,7 @@
             "historicalBlockHashesCount": 1
         },
         "_info": {
-            "hash": "0x465bcc1f3e7d601b89c0edfde8b9f885e40931cd619af869aa6ecb166f6cb317",
+            "hash": "0xd1bdc1835e365b2a98c5c31169bc4db5357cc21d1d81a16e935eb2028e12749b",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/state_transition/test_block_processing.py::test_process_first_block_after_genesis[fork_Devnet]",
             "description": "Test processing the first block after genesis.\n\n    Scenario\n    --------\n    Process a single block at slot 1 immediately after genesis.\n\n    Expected Behavior\n    -----------------\n    1. State advances from slot 0 to slot 1\n    2. Block header is validated and processed\n    3. Latest block header updated to new block\n    4. Historical roots updated with genesis\n    5. Post-state at slot 1\n\n    This is the foundation for all subsequent blocks.",

@@ -9,6 +9,7 @@
 
 #include "lantern/consensus/hash.h"
 #include "lantern/support/strings.h"
+#include "external/c-leanvm-xmss/include/pq-bindings-c-rust.h"
 
 #define JSON_INITIAL_TOKENS 256
 #define LANTERN_XMSS_FP_BYTES 4u
@@ -1208,7 +1209,48 @@ static int lantern_fixture_parse_hash_digest_list(
     return 0;
 }
 
-static int lantern_fixture_parse_signature_object(
+static int lantern_fixture_parse_signature_object_with_bindings(
+    const struct lantern_fixture_document *doc,
+    int signature_idx,
+    LanternSignature *signature) {
+    if (!doc || !signature) {
+        return -1;
+    }
+    const jsmntok_t *signature_tok = lantern_fixture_token(doc, signature_idx);
+    if (!signature_tok || signature_tok->type != JSMN_OBJECT) {
+        return -1;
+    }
+    if (signature_tok->start < 0 || signature_tok->end < signature_tok->start) {
+        return -1;
+    }
+
+    const uint8_t *json = (const uint8_t *)(doc->text + signature_tok->start);
+    size_t json_len = (size_t)(signature_tok->end - signature_tok->start);
+    if (!json || json_len == 0) {
+        return -1;
+    }
+
+    struct PQSignature *pq_signature = NULL;
+    enum PQSigningError rc = pq_signature_from_json(json, (uintptr_t)json_len, &pq_signature);
+    if (rc != Success || !pq_signature) {
+        return -1;
+    }
+
+    memset(signature->bytes, 0, sizeof(signature->bytes));
+    uintptr_t written_len = 0;
+    rc = pq_signature_serialize(
+        pq_signature,
+        signature->bytes,
+        (uintptr_t)sizeof(signature->bytes),
+        &written_len);
+    pq_signature_free(pq_signature);
+    if (rc != Success || written_len == 0 || written_len > sizeof(signature->bytes)) {
+        return -1;
+    }
+    return 0;
+}
+
+static int lantern_fixture_parse_signature_object_legacy(
     const struct lantern_fixture_document *doc,
     int signature_idx,
     LanternSignature *signature) {
@@ -1284,7 +1326,10 @@ static int lantern_fixture_token_to_signature(
         return -1;
     }
     if (tok->type == JSMN_OBJECT) {
-        return lantern_fixture_parse_signature_object(doc, index, signature);
+        if (lantern_fixture_parse_signature_object_with_bindings(doc, index, signature) == 0) {
+            return 0;
+        }
+        return lantern_fixture_parse_signature_object_legacy(doc, index, signature);
     }
     size_t len = 0;
     const char *str = lantern_fixture_token_string(doc, index, &len);

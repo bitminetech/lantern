@@ -1,0 +1,306 @@
+{
+    "tests/consensus/devnet/verify_signatures/test_invalid_signatures.py::test_invalid_aggregated_attestation_signature[fork_Devnet][fork_Devnet-verify_signatures_test]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "anchorState": {
+            "config": {
+                "genesisTime": 0
+            },
+            "slot": 0,
+            "latestBlockHeader": {
+                "slot": 0,
+                "proposerIndex": 0,
+                "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "bodyRoot": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136"
+            },
+            "latestJustified": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "latestFinalized": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "historicalBlockHashes": {
+                "data": []
+            },
+            "justifiedSlots": {
+                "data": []
+            },
+            "validators": {
+                "data": [
+                    {
+                        "pubkey": "0x8fa00001b5b22a073d21cb60c9465b379f80e74fee9baf1d137eb651ed162900a6f3ec32da74ff09265ea62fc9a5055b2e9b7c7b",
+                        "index": 0
+                    },
+                    {
+                        "pubkey": "0xbc56037ab0485c00441e3205d908e55a016d5450a335144f50ccb034cb253c05a1cbc047b5695a5672697d584656e96a4b94f173",
+                        "index": 1
+                    },
+                    {
+                        "pubkey": "0x79422d64ecdc3b0bf7c6cc31bbfb9f4eab7950107fe23c6f4f9c94465c81f80d85a1931f1003c50531147f350357805f22fdd70b",
+                        "index": 2
+                    }
+                ]
+            },
+            "justificationsRoots": {
+                "data": []
+            },
+            "justificationsValidators": {
+                "data": []
+            }
+        },
+        "signedBlockWithAttestation": {
+            "message": {
+                "block": {
+                    "slot": 2,
+                    "proposerIndex": 2,
+                    "parentRoot": "0x2c9e1fc178a2418b1ca1f4f6b7b851dc5f0a15eeb5d0f1bd1eec6faf74a65415",
+                    "stateRoot": "0x8e9ab237d90c63d6d554e19eeab4cd06324aab9ae4841cba9709c0acc3a3062e",
+                    "body": {
+                        "attestations": {
+                            "data": [
+                                {
+                                    "aggregationBits": {
+                                        "data": [
+                                            false,
+                                            false,
+                                            true
+                                        ]
+                                    },
+                                    "data": {
+                                        "slot": 1,
+                                        "head": {
+                                            "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                                            "slot": 0
+                                        },
+                                        "target": {
+                                            "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                                            "slot": 0
+                                        },
+                                        "source": {
+                                            "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                                            "slot": 0
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                },
+                "proposerAttestation": {
+                    "validatorId": 2,
+                    "data": {
+                        "slot": 2,
+                        "head": {
+                            "root": "0x79142455af5f1301206697eb86f8395b62eadbfda625722051bb1a258fabec50",
+                            "slot": 2
+                        },
+                        "target": {
+                            "root": "0x79142455af5f1301206697eb86f8395b62eadbfda625722051bb1a258fabec50",
+                            "slot": 2
+                        },
+                        "source": {
+                            "root": "0x2c9e1fc178a2418b1ca1f4f6b7b851dc5f0a15eeb5d0f1bd1eec6faf74a65415",
+                            "slot": 0
+                        }
+                    }
+                }
+            },
+            "signature": {
+                "attestationSignatures": {
+                    "data": [
+                        {
+                            "participants": {
+                                "data": [
+                                    false,
+                                    false,
+                                    true
+                                ]
+                            },
+                            "proofData": {
+                                "data": "0x0000000000000000000000000000000000000000000000000000000000000000"
+                            }
+                        }
+                    ]
+                },
+                "proposerSignature": {
+                    "path": {
+                        "siblings": {
+                            "data": [
+                                {
+                                    "data": [
+                                        1718796953,
+                                        1241834273,
+                                        1730286996,
+                                        1921254415,
+                                        1784357357,
+                                        600038019,
+                                        888097451,
+                                        1427510097
+                                    ]
+                                },
+                                {
+                                    "data": [
+                                        924246002,
+                                        2100338922,
+                                        1891624772,
+                                        842205010,
+                                        1221397905,
+                                        1613712335,
+                                        951827935,
+                                        542729749
+                                    ]
+                                },
+                                {
+                                    "data": [
+                                        1328981325,
+                                        1906795737,
+                                        1857121344,
+                                        748332904,
+                                        1686661439,
+                                        1941033684,
+                                        786635157,
+                                        1107009626
+                                    ]
+                                },
+                                {
+                                    "data": [
+                                        1940379730,
+                                        238079536,
+                                        2073806806,
+                                        2013393517,
+                                        1042573153,
+                                        262916741,
+                                        1515167404,
+                                        1130384671
+                                    ]
+                                },
+                                {
+                                    "data": [
+                                        1785992506,
+                                        709707151,
+                                        1499181238,
+                                        996088886,
+                                        1334324010,
+                                        262860748,
+                                        718602124,
+                                        839527974
+                                    ]
+                                },
+                                {
+                                    "data": [
+                                        1797388461,
+                                        1556347230,
+                                        309057485,
+                                        340034296,
+                                        830929302,
+                                        1416106802,
+                                        948991023,
+                                        604131504
+                                    ]
+                                },
+                                {
+                                    "data": [
+                                        1577616035,
+                                        1665270041,
+                                        1563112495,
+                                        1615726038,
+                                        73753986,
+                                        1306166908,
+                                        1939033341,
+                                        7917779
+                                    ]
+                                },
+                                {
+                                    "data": [
+                                        1357749460,
+                                        1537005509,
+                                        1376146301,
+                                        1946209004,
+                                        1425672906,
+                                        339263708,
+                                        2021020101,
+                                        712025777
+                                    ]
+                                }
+                            ]
+                        }
+                    },
+                    "rho": {
+                        "data": [
+                            1358886736,
+                            1294536794,
+                            38749459,
+                            1922551033,
+                            73131752,
+                            1707090551,
+                            2012192151
+                        ]
+                    },
+                    "hashes": {
+                        "data": [
+                            {
+                                "data": [
+                                    114801010,
+                                    1245193575,
+                                    1986933842,
+                                    2005844186,
+                                    63910197,
+                                    740782215,
+                                    1562673526,
+                                    1173053054
+                                ]
+                            },
+                            {
+                                "data": [
+                                    1330612753,
+                                    634618474,
+                                    689898354,
+                                    1002154803,
+                                    1641647662,
+                                    122574787,
+                                    1103160013,
+                                    183389302
+                                ]
+                            },
+                            {
+                                "data": [
+                                    253333363,
+                                    186894244,
+                                    1922966931,
+                                    490148286,
+                                    541458968,
+                                    1740371837,
+                                    387446485,
+                                    1225984459
+                                ]
+                            },
+                            {
+                                "data": [
+                                    2069237867,
+                                    1182148913,
+                                    349086630,
+                                    1785432383,
+                                    71764988,
+                                    1638020686,
+                                    856809052,
+                                    732673219
+                                ]
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        "expectException": "AssertionError",
+        "_info": {
+            "hash": "0x561af79cecb335cad219b6987169420fcc5961b4d9cab737a3dff4b68acaf77e",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/verify_signatures/test_invalid_signatures.py::test_invalid_aggregated_attestation_signature[fork_Devnet]",
+            "description": "Test that invalid aggregated attestation signatures are properly rejected.\n\n    Scenario\n    --------\n    - Single block at slot 1\n    - Proposer attestation from validator 1 (valid)\n    - Two aggregated attestations with different data:\n      - One from validator 0 with valid signature\n      - One from validator 2 with invalid signature\n\n    Expected Behavior\n    -----------------\n    1. The SignedBlockWithAttestation is rejected due to invalid aggregated signature\n\n    Why This Matters\n    ----------------\n    This test verifies that aggregated signature verification:\n    - Properly validates leanVM aggregated proofs for each attestation group\n    - Rejects blocks containing any invalid aggregated attestation signature\n    - Works correctly even when some attestations have valid signatures",
+            "fixtureFormat": "verify_signatures_test"
+        }
+    }
+}

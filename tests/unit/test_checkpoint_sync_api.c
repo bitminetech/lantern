@@ -605,6 +605,128 @@ static int test_justified_state_endpoint(void)
     return 0;
 }
 
+static int test_health_endpoint(void)
+{
+    struct lantern_http_server server;
+    lantern_http_server_init(&server);
+    struct lantern_http_server_config config;
+    memset(&config, 0, sizeof(config));
+    config.port = 0;
+
+    if (lantern_http_server_start(&server, &config) != 0)
+    {
+        return 1;
+    }
+
+    struct sockaddr_in addr;
+    socklen_t addr_len = sizeof(addr);
+    if (getsockname(server.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
+    {
+        lantern_http_server_stop(&server);
+        return 1;
+    }
+    uint16_t port = ntohs(addr.sin_port);
+    expect_true(port != 0, "ephemeral port assigned health");
+
+    const char *request =
+        "GET /lean/v0/health HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Accept: application/json\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+
+    uint8_t *response = NULL;
+    size_t response_len = 0;
+    if (read_response(port, request, &response, &response_len) != 0)
+    {
+        lantern_http_server_stop(&server);
+        return 1;
+    }
+
+    size_t header_end = 0;
+    expect_zero(find_header_end(response, response_len, &header_end), "find header end health");
+    expect_true(header_end < response_len, "header size health");
+
+    char *header = malloc(header_end + 1);
+    expect_true(header != NULL, "header alloc health");
+    memcpy(header, response, header_end);
+    header[header_end] = '\0';
+
+    expect_true(strstr(header, "HTTP/1.1 200") != NULL, "status 200 health");
+    expect_true(strstr(header, "Content-Type: application/json") != NULL, "content-type health");
+
+    static const char expected[] = "{\"status\":\"healthy\",\"service\":\"lean-spec-api\"}";
+    size_t body_len = response_len - header_end;
+    expect_true(body_len == sizeof(expected) - 1u, "health body length");
+    expect_true(memcmp(response + header_end, expected, sizeof(expected) - 1u) == 0, "health body");
+
+    free(header);
+    free(response);
+    lantern_http_server_stop(&server);
+    return 0;
+}
+
+static int test_unknown_route_endpoint(void)
+{
+    struct lantern_http_server server;
+    lantern_http_server_init(&server);
+    struct lantern_http_server_config config;
+    memset(&config, 0, sizeof(config));
+    config.port = 0;
+
+    if (lantern_http_server_start(&server, &config) != 0)
+    {
+        return 1;
+    }
+
+    struct sockaddr_in addr;
+    socklen_t addr_len = sizeof(addr);
+    if (getsockname(server.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
+    {
+        lantern_http_server_stop(&server);
+        return 1;
+    }
+    uint16_t port = ntohs(addr.sin_port);
+    expect_true(port != 0, "ephemeral port assigned unknown route");
+
+    const char *request =
+        "GET /lean/v0/does-not-exist HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Accept: application/json\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+
+    uint8_t *response = NULL;
+    size_t response_len = 0;
+    if (read_response(port, request, &response, &response_len) != 0)
+    {
+        lantern_http_server_stop(&server);
+        return 1;
+    }
+
+    size_t header_end = 0;
+    expect_zero(find_header_end(response, response_len, &header_end), "find header end unknown route");
+    expect_true(header_end < response_len, "header size unknown route");
+
+    char *header = malloc(header_end + 1);
+    expect_true(header != NULL, "header alloc unknown route");
+    memcpy(header, response, header_end);
+    header[header_end] = '\0';
+
+    expect_true(strstr(header, "HTTP/1.1 404") != NULL, "status 404 unknown route");
+    expect_true(strstr(header, "Content-Type: application/json") != NULL, "content-type unknown route");
+
+    static const char expected[] = "{\"error\":\"unknown endpoint\"}";
+    size_t body_len = response_len - header_end;
+    expect_true(body_len == sizeof(expected) - 1u, "unknown route body length");
+    expect_true(memcmp(response + header_end, expected, sizeof(expected) - 1u) == 0, "unknown route body");
+
+    free(header);
+    free(response);
+    lantern_http_server_stop(&server);
+    return 0;
+}
+
 int main(void)
 {
     if (test_storage_state_bytes() != 0)
@@ -616,6 +738,14 @@ int main(void)
         return 1;
     }
     if (test_justified_state_endpoint() != 0)
+    {
+        return 1;
+    }
+    if (test_health_endpoint() != 0)
+    {
+        return 1;
+    }
+    if (test_unknown_route_endpoint() != 0)
     {
         return 1;
     }
