@@ -75,7 +75,7 @@ struct blocks_stream_ctx {
 
 struct status_request_ctx {
     struct lantern_reqresp_service *service;
-    peer_id_t peer_id;
+    peer_id_t *peer_id;
     char peer_text[128];
     const char *protocol_id;
     uint64_t debug_trace_id;
@@ -109,6 +109,24 @@ static void lantern_reqresp_service_clear(struct lantern_reqresp_service *servic
     service->status_server = NULL;
     service->blocks_server = NULL;
     service->event_subscription = NULL;
+}
+
+static int write_legacy_peer_id_text(const peer_id_t *peer, char *buffer, size_t length) {
+    if (!peer || !buffer || length == 0) {
+        return -1;
+    }
+    size_t written = 0;
+    peer_id_error_t rc = peer_id_text_write(
+        peer,
+        PEER_ID_TEXT_LEGACY_BASE58,
+        buffer,
+        length,
+        &written);
+    if (rc != PEER_ID_OK) {
+        buffer[0] = '\0';
+        return -1;
+    }
+    return (int)written;
 }
 
 void lantern_reqresp_service_init(struct lantern_reqresp_service *service) {
@@ -146,8 +164,7 @@ static void describe_peer(const peer_id_t *peer, char *buffer, size_t length) {
         buffer[0] = '\0';
         return;
     }
-    int written = peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, buffer, length);
-    if (written < 0) {
+    if (write_legacy_peer_id_text(peer, buffer, length) < 0) {
         buffer[0] = '\0';
     }
 }
@@ -156,7 +173,7 @@ static void status_request_ctx_free(struct status_request_ctx *ctx) {
     if (!ctx) {
         return;
     }
-    peer_id_destroy(&ctx->peer_id);
+    peer_id_free(ctx->peer_id);
     free(ctx);
 }
 
@@ -1139,7 +1156,7 @@ static int write_stream_all(
     peer_text[0] = '\0';
     if (!peer_hint || peer_hint[0] == '\0') {
         const peer_id_t *peer = libp2p_stream_remote_peer(stream);
-        if (peer && peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, peer_text, sizeof(peer_text)) < 0) {
+        if (peer && write_legacy_peer_id_text(peer, peer_text, sizeof(peer_text)) < 0) {
             peer_text[0] = '\0';
         }
     }
@@ -2096,26 +2113,12 @@ static void status_request_on_open(libp2p_stream_t *stream, void *user_data, int
     pthread_detach(thread);
 }
 
-static int clone_peer_id(peer_id_t *dest, const peer_id_t *src) {
-    if (!dest || !src || !src->bytes || src->size == 0) {
-        return -1;
-    }
-    dest->bytes = (uint8_t *)malloc(src->size);
-    if (!dest->bytes) {
-        dest->size = 0;
-        return -1;
-    }
-    memcpy(dest->bytes, src->bytes, src->size);
-    dest->size = src->size;
-    return 0;
-}
-
 static int status_request_launch(
     struct lantern_reqresp_service *service,
     const peer_id_t *peer_id,
     const char *peer_id_text,
     bool notify_on_failure) {
-    if (!service || !service->host || !peer_id || !peer_id->bytes || peer_id->size == 0) {
+    if (!service || !service->host || !peer_id) {
         return -1;
     }
 
@@ -2134,7 +2137,7 @@ static int status_request_launch(
         strncpy(ctx->peer_text, peer_id_text, sizeof(ctx->peer_text) - 1);
         ctx->peer_text[sizeof(ctx->peer_text) - 1] = '\0';
     } else {
-        if (peer_id_to_string(peer_id, PEER_ID_FMT_BASE58_LEGACY, ctx->peer_text, sizeof(ctx->peer_text)) < 0) {
+        if (write_legacy_peer_id_text(peer_id, ctx->peer_text, sizeof(ctx->peer_text)) < 0) {
             ctx->peer_text[0] = '\0';
         }
     }
@@ -2147,7 +2150,7 @@ static int status_request_launch(
         "status[%" PRIu64 "] scheduling request",
         ctx->debug_trace_id);
 
-    if (clone_peer_id(&ctx->peer_id, peer_id) != 0) {
+    if (peer_id_clone(peer_id, &ctx->peer_id) != PEER_ID_OK || !ctx->peer_id) {
         lantern_log_warn(
             "reqresp",
             &meta,
@@ -2162,7 +2165,7 @@ static int status_request_launch(
     ctx->protocol_id = LANTERN_STATUS_PROTOCOL_ID;
     int rc = libp2p_host_open_stream_async(
         service->host,
-        &ctx->peer_id,
+        ctx->peer_id,
         ctx->protocol_id,
         status_request_on_open,
         ctx);

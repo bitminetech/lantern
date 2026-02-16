@@ -159,8 +159,14 @@ static void describe_peer_id(const peer_id_t *peer, char *buffer, size_t length)
         buffer[0] = '\0';
         return;
     }
-    int written = peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, buffer, length);
-    if (written < 0) {
+    size_t written = 0;
+    peer_id_error_t rc = peer_id_text_write(
+        peer,
+        PEER_ID_TEXT_LEGACY_BASE58,
+        buffer,
+        length,
+        &written);
+    if (rc != PEER_ID_OK) {
         buffer[0] = '\0';
     }
 }

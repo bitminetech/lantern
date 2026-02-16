@@ -160,7 +160,14 @@ static const char *peer_id_to_text(const peer_id_t *from, char *out, size_t out_
         return NULL;
     }
 
-    if (peer_id_to_string(from, PEER_ID_FMT_BASE58_LEGACY, out, out_len) < 0)
+    size_t written = 0;
+    peer_id_error_t rc = peer_id_text_write(
+        from,
+        PEER_ID_TEXT_LEGACY_BASE58,
+        out,
+        out_len,
+        &written);
+    if (rc != PEER_ID_OK)
     {
         out[0] = '\0';
         return NULL;

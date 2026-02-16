@@ -267,10 +267,19 @@ static void init_peer_log_metadata(
     if (stream)
     {
         const peer_id_t *peer = libp2p_stream_remote_peer(stream);
-        if (peer
-            && peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, peer_text, peer_text_len) < 0)
+        if (peer)
         {
-            peer_text[0] = '\0';
+            size_t written = 0;
+            peer_id_error_t rc = peer_id_text_write(
+                peer,
+                PEER_ID_TEXT_LEGACY_BASE58,
+                peer_text,
+                peer_text_len,
+                &written);
+            if (rc != PEER_ID_OK)
+            {
+                peer_text[0] = '\0';
+            }
         }
     }
 

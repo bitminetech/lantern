@@ -38,7 +38,7 @@ int lantern_libp2p_enr_to_multiaddr(
     const struct lantern_enr_record *record,
     char *buffer,
     size_t buffer_len,
-    peer_id_t *peer_id);
+    peer_id_t **peer_id);
 int lantern_libp2p_encode_secp256k1_private_key_proto(
     const uint8_t *secret,
     size_t secret_len,

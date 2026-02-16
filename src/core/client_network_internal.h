@@ -101,7 +101,7 @@ struct block_request_ctx
 {
     struct lantern_client *client;  /**< Client instance */
     uint64_t request_id;            /**< Internal request tracking ID */
-    peer_id_t peer_id;              /**< Peer ID structure */
+    peer_id_t *peer_id;             /**< Peer ID structure */
     char peer_text[128];            /**< Peer ID as text */
     LanternRoot *roots;             /**< Roots being requested */
     uint32_t *depths;               /**< Backfill depth per root */

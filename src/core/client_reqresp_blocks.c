@@ -86,7 +86,7 @@ static void block_request_ctx_free(struct block_request_ctx *ctx)
     {
         return;
     }
-    peer_id_destroy(&ctx->peer_id);
+    peer_id_free(ctx->peer_id);
     free(ctx->roots);
     free(ctx->depths);
     free(ctx);
@@ -844,7 +844,7 @@ static int schedule_blocks_request_batch(
         }
     }
 
-    if (peer_id_create_from_string(peer_id_text, &ctx->peer_id) != PEER_ID_SUCCESS)
+    if (peer_id_new_from_text(peer_id_text, &ctx->peer_id) != PEER_ID_OK || !ctx->peer_id)
     {
         lantern_log_warn(
             "reqresp",
@@ -870,7 +870,7 @@ static int schedule_blocks_request_batch(
 
     int rc = libp2p_host_open_stream_async(
         client->network.host,
-        &ctx->peer_id,
+        ctx->peer_id,
         ctx->protocol_id,
         block_request_on_open,
         ctx);

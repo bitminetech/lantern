@@ -187,6 +187,24 @@ static int multiaddr_is_quic(const multiaddr_t *ma) {
     return multiaddr_has_protocol(ma, MULTICODEC_QUIC_V1) || multiaddr_has_protocol(ma, MULTICODEC_QUIC);
 }
 
+static int peer_id_write_legacy_base58(const peer_id_t *peer_id, char *buffer, size_t buffer_len) {
+    if (!peer_id || !buffer || buffer_len == 0) {
+        return -1;
+    }
+    size_t written = 0;
+    peer_id_error_t rc = peer_id_text_write(
+        peer_id,
+        PEER_ID_TEXT_LEGACY_BASE58,
+        buffer,
+        buffer_len,
+        &written);
+    if (rc != PEER_ID_OK) {
+        buffer[0] = '\0';
+        return -1;
+    }
+    return (int)written;
+}
+
 void lantern_libp2p_host_init(struct lantern_libp2p_host *state) {
     if (!state) {
         return;
@@ -446,10 +464,11 @@ int lantern_libp2p_enr_to_multiaddr(
     const struct lantern_enr_record *record,
     char *buffer,
     size_t buffer_len,
-    peer_id_t *peer_id) {
+    peer_id_t **peer_id) {
     if (!record || !buffer || !peer_id) {
         return -1;
     }
+    *peer_id = NULL;
     const struct lantern_enr_key_value *pubkey = lantern_enr_record_find(record, "secp256k1");
     if (!pubkey || !pubkey->value || pubkey->value_len == 0) {
         return -1;
@@ -463,35 +482,37 @@ int lantern_libp2p_enr_to_multiaddr(
         pubkey->value_len,
         &pubkey_pb,
         &pubkey_pb_len);
-    if (perr != PEER_ID_SUCCESS) {
+    if (perr != PEER_ID_OK) {
         return -1;
     }
-    perr = peer_id_create_from_public_key(pubkey_pb, pubkey_pb_len, peer_id);
+    peer_id_t *derived_peer_id = NULL;
+    perr = peer_id_new_from_public_key_pb(pubkey_pb, pubkey_pb_len, &derived_peer_id);
     free(pubkey_pb);
-    if (perr != PEER_ID_SUCCESS) {
+    if (perr != PEER_ID_OK || !derived_peer_id) {
         return -1;
     }
 
     char base_addr[128];
     if (extract_ipv4_multiaddr(record, base_addr, sizeof(base_addr), NULL) != 0) {
         if (extract_ipv6_multiaddr(record, base_addr, sizeof(base_addr), NULL) != 0) {
-            peer_id_destroy(peer_id);
+            peer_id_free(derived_peer_id);
             return -1;
         }
     }
 
     char peer_text[128];
-    int pid_written = peer_id_to_string(peer_id, PEER_ID_FMT_BASE58_LEGACY, peer_text, sizeof(peer_text));
+    int pid_written = peer_id_write_legacy_base58(derived_peer_id, peer_text, sizeof(peer_text));
     if (pid_written < 0) {
-        peer_id_destroy(peer_id);
+        peer_id_free(derived_peer_id);
         return -1;
     }
 
     int written = snprintf(buffer, buffer_len, "%s/p2p/%s", base_addr, peer_text);
     if (written < 0 || (size_t)written >= buffer_len) {
-        peer_id_destroy(peer_id);
+        peer_id_free(derived_peer_id);
         return -1;
     }
+    *peer_id = derived_peer_id;
     return 0;
 }
 
@@ -502,14 +523,14 @@ int lantern_libp2p_host_add_enr_peer(
     if (!state || !state->host || !record) {
         return -1;
     }
-    peer_id_t peer_id = {0};
+    peer_id_t *peer_id = NULL;
     char multiaddr[256];
     if (lantern_libp2p_enr_to_multiaddr(record, multiaddr, sizeof(multiaddr), &peer_id) != 0) {
         return -1;
     }
 
     int ttl = ttl_ms > 0 ? ttl_ms : LANTERN_LIBP2P_DEFAULT_PEER_TTL_MS;
-    int rc = libp2p_host_add_peer_addr_str(state->host, &peer_id, multiaddr, ttl);
-    peer_id_destroy(&peer_id);
+    int rc = libp2p_host_add_peer_addr_str(state->host, peer_id, multiaddr, ttl);
+    peer_id_free(peer_id);
     return rc;
 }

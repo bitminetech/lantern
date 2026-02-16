@@ -63,6 +63,27 @@ static int parse_validator_config_entry(
     struct lantern_validator_config_entry *entry);
 static void free_validator_config_entry(struct lantern_validator_config_entry *entry);
 
+static int write_legacy_peer_id_text(const peer_id_t *peer_id, char *buffer, size_t buffer_len)
+{
+    if (!peer_id || !buffer || buffer_len == 0)
+    {
+        return -1;
+    }
+    size_t written = 0;
+    peer_id_error_t rc = peer_id_text_write(
+        peer_id,
+        PEER_ID_TEXT_LEGACY_BASE58,
+        buffer,
+        buffer_len,
+        &written);
+    if (rc != PEER_ID_OK)
+    {
+        buffer[0] = '\0';
+        return -1;
+    }
+    return (int)written;
+}
+
 
 /**
  * Parse an unsigned 64-bit integer from a string, allowing a trailing comment.
@@ -365,26 +386,26 @@ static int derive_peer_id_from_privkey_hex(const char *hex, char **out_peer_id)
     }
     lantern_secure_zero(secret, sizeof(secret));
 
-    peer_id_t peer_id = {0};
-    peer_id_error_t perr = peer_id_create_from_private_key(encoded, encoded_len, &peer_id);
+    peer_id_t *peer_id = NULL;
+    peer_id_error_t perr = peer_id_new_from_private_key_pb(encoded, encoded_len, &peer_id);
     if (encoded)
     {
         lantern_secure_zero(encoded, encoded_len);
     }
     free(encoded);
 
-    if (perr != PEER_ID_SUCCESS)
+    if (perr != PEER_ID_OK || !peer_id)
     {
         return LANTERN_GENESIS_ERR_PARSE;
     }
 
     char buffer[GENESIS_PEER_ID_BUFFER_LEN];
-    if (peer_id_to_string(&peer_id, PEER_ID_FMT_BASE58_LEGACY, buffer, sizeof(buffer)) < 0)
+    if (write_legacy_peer_id_text(peer_id, buffer, sizeof(buffer)) < 0)
     {
-        peer_id_destroy(&peer_id);
+        peer_id_free(peer_id);
         return LANTERN_GENESIS_ERR_PARSE;
     }
-    peer_id_destroy(&peer_id);
+    peer_id_free(peer_id);
 
     char *dup = lantern_string_duplicate(buffer);
     if (!dup)
