@@ -25,12 +25,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #if defined(_WIN32)
 #include <windows.h>
 #else
+#include <netdb.h>
+#include <sys/socket.h>
 #include <sys/time.h>
+#include <unistd.h>
 #endif
 
 #include "internal/yaml_parser.h"
@@ -69,6 +73,14 @@
 static const size_t NODE_PRIVATE_KEY_SIZE = 32u;
 static const size_t BOOTNODE_LINE_MAX_LEN = 2048u;
 static const size_t LANTERN_AGG_PROOF_CACHE_LIMIT = 4096u;
+static const size_t CHECKPOINT_SYNC_MAX_RESPONSE_BYTES =
+    512u
+    + (LANTERN_HISTORICAL_ROOTS_LIMIT * 32u)
+    + (LANTERN_HISTORICAL_ROOTS_LIMIT / 8u)
+    + (LANTERN_VALIDATOR_REGISTRY_LIMIT * 52u)
+    + (LANTERN_HISTORICAL_ROOTS_LIMIT * 32u)
+    + (LANTERN_JUSTIFICATION_VALIDATORS_LIMIT / 8u);
+static const char CHECKPOINT_SYNC_ENDPOINT[] = "/lean/v0/states/finalized";
 
 static void agg_proof_cache_init(struct lantern_agg_proof_cache *cache) {
     if (!cache) {
@@ -232,6 +244,7 @@ void lantern_client_options_init(struct lantern_client_options *options)
     options->node_key_hex = NULL;
     options->node_key_path = NULL;
     options->listen_address = LANTERN_DEFAULT_LISTEN_ADDR;
+    options->checkpoint_sync_url = NULL;
     options->http_port = LANTERN_DEFAULT_HTTP_PORT;
     options->metrics_port = LANTERN_DEFAULT_METRICS_PORT;
     options->devnet = LANTERN_DEFAULT_DEVNET;
@@ -1109,6 +1122,1122 @@ static lantern_client_error client_finalize_genesis_state(struct lantern_client 
 }
 
 
+/* ============================================================================
+ * Checkpoint Sync Helpers
+ * ============================================================================ */
+
+static int checkpoint_sync_parse_port(
+    const char *text,
+    size_t text_len,
+    uint16_t *out_port)
+{
+    if (!text || text_len == 0 || !out_port)
+    {
+        return -1;
+    }
+
+    uint32_t port = 0;
+    for (size_t i = 0; i < text_len; ++i)
+    {
+        unsigned char ch = (unsigned char)text[i];
+        if (!isdigit(ch))
+        {
+            return -1;
+        }
+        port = (port * 10u) + (uint32_t)(ch - '0');
+        if (port > UINT16_MAX)
+        {
+            return -1;
+        }
+    }
+
+    if (port == 0)
+    {
+        return -1;
+    }
+    *out_port = (uint16_t)port;
+    return 0;
+}
+
+static int checkpoint_sync_parse_url(
+    const char *url,
+    char **out_host,
+    uint16_t *out_port,
+    char **out_base_path)
+{
+    if (!url || !out_host || !out_port || !out_base_path)
+    {
+        return -1;
+    }
+
+    *out_host = NULL;
+    *out_base_path = NULL;
+    *out_port = 0;
+
+    const char *http_prefix = "http://";
+    size_t prefix_len = strlen(http_prefix);
+    if (strncasecmp(url, http_prefix, prefix_len) != 0)
+    {
+        return -1;
+    }
+
+    const char *cursor = url + prefix_len;
+    if (*cursor == '\0')
+    {
+        return -1;
+    }
+
+    const char *authority_start = cursor;
+    while (*cursor && *cursor != '/' && *cursor != '?' && *cursor != '#')
+    {
+        ++cursor;
+    }
+    const char *authority_end = cursor;
+    if (authority_end <= authority_start)
+    {
+        return -1;
+    }
+
+    char *base_path = NULL;
+    if (*cursor == '/')
+    {
+        const char *path_start = cursor;
+        while (*cursor && *cursor != '?' && *cursor != '#')
+        {
+            ++cursor;
+        }
+        base_path = lantern_string_duplicate_len(
+            path_start,
+            (size_t)(cursor - path_start));
+    }
+    else
+    {
+        base_path = lantern_string_duplicate("");
+    }
+    if (!base_path)
+    {
+        return -1;
+    }
+
+    char *host = NULL;
+    uint16_t port = 80;
+
+    if (*authority_start == '[')
+    {
+        const char *host_start = authority_start + 1;
+        const char *host_end = host_start;
+        while (host_end < authority_end && *host_end != ']')
+        {
+            ++host_end;
+        }
+        if (host_end >= authority_end || host_end == host_start)
+        {
+            free(base_path);
+            return -1;
+        }
+
+        host = lantern_string_duplicate_len(
+            host_start,
+            (size_t)(host_end - host_start));
+        if (!host)
+        {
+            free(base_path);
+            return -1;
+        }
+
+        const char *port_start = host_end + 1;
+        if (port_start < authority_end)
+        {
+            if (*port_start != ':'
+                || checkpoint_sync_parse_port(
+                       port_start + 1,
+                       (size_t)(authority_end - (port_start + 1)),
+                       &port)
+                    != 0)
+            {
+                free(host);
+                free(base_path);
+                return -1;
+            }
+        }
+    }
+    else
+    {
+        const char *port_sep = NULL;
+        for (const char *p = authority_start; p < authority_end; ++p)
+        {
+            if (*p == ':')
+            {
+                port_sep = p;
+            }
+        }
+
+        const char *host_end = port_sep ? port_sep : authority_end;
+        if (host_end <= authority_start)
+        {
+            free(base_path);
+            return -1;
+        }
+
+        host = lantern_string_duplicate_len(
+            authority_start,
+            (size_t)(host_end - authority_start));
+        if (!host)
+        {
+            free(base_path);
+            return -1;
+        }
+
+        if (port_sep)
+        {
+            if (checkpoint_sync_parse_port(
+                    port_sep + 1,
+                    (size_t)(authority_end - (port_sep + 1)),
+                    &port)
+                != 0)
+            {
+                free(host);
+                free(base_path);
+                return -1;
+            }
+        }
+    }
+
+    if (!host[0])
+    {
+        free(host);
+        free(base_path);
+        return -1;
+    }
+
+    *out_host = host;
+    *out_port = port;
+    *out_base_path = base_path;
+    return 0;
+}
+
+static char *checkpoint_sync_build_request_target(const char *base_path)
+{
+    if (!base_path || !base_path[0])
+    {
+        return lantern_string_duplicate(CHECKPOINT_SYNC_ENDPOINT);
+    }
+
+    size_t base_len = strlen(base_path);
+    bool trailing_slash = base_len > 0 && base_path[base_len - 1] == '/';
+    const char *suffix = trailing_slash
+                             ? (CHECKPOINT_SYNC_ENDPOINT[0] == '/'
+                                    ? CHECKPOINT_SYNC_ENDPOINT + 1
+                                    : CHECKPOINT_SYNC_ENDPOINT)
+                             : CHECKPOINT_SYNC_ENDPOINT;
+    size_t suffix_len = strlen(suffix);
+    if (base_len > SIZE_MAX - suffix_len - 1u)
+    {
+        return NULL;
+    }
+
+    char *target = malloc(base_len + suffix_len + 1u);
+    if (!target)
+    {
+        return NULL;
+    }
+    memcpy(target, base_path, base_len);
+    memcpy(target + base_len, suffix, suffix_len);
+    target[base_len + suffix_len] = '\0';
+    return target;
+}
+
+static bool checkpoint_sync_header_has_token(
+    const char *value,
+    const char *token)
+{
+    if (!value || !token || !token[0])
+    {
+        return false;
+    }
+
+    size_t token_len = strlen(token);
+    const char *cursor = value;
+    while (*cursor)
+    {
+        while (*cursor == ',' || isspace((unsigned char)*cursor))
+        {
+            ++cursor;
+        }
+        const char *entry_start = cursor;
+        while (*cursor && *cursor != ',')
+        {
+            ++cursor;
+        }
+        const char *entry_end = cursor;
+        while (entry_end > entry_start
+               && isspace((unsigned char)*(entry_end - 1)))
+        {
+            --entry_end;
+        }
+        if ((size_t)(entry_end - entry_start) == token_len
+            && strncasecmp(entry_start, token, token_len) == 0)
+        {
+            return true;
+        }
+        if (*cursor == ',')
+        {
+            ++cursor;
+        }
+    }
+
+    return false;
+}
+
+#if defined(_WIN32)
+static int checkpoint_sync_connect_tcp(const char *host, uint16_t port)
+{
+    (void)host;
+    (void)port;
+    return -1;
+}
+#else
+static int checkpoint_sync_connect_tcp(const char *host, uint16_t port)
+{
+    if (!host || !host[0])
+    {
+        return -1;
+    }
+
+    char port_text[6];
+    int port_written = snprintf(port_text, sizeof(port_text), "%u", (unsigned int)port);
+    if (port_written <= 0 || (size_t)port_written >= sizeof(port_text))
+    {
+        return -1;
+    }
+
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    struct addrinfo *results = NULL;
+    if (getaddrinfo(host, port_text, &hints, &results) != 0)
+    {
+        return -1;
+    }
+
+    int fd = -1;
+    for (const struct addrinfo *candidate = results; candidate; candidate = candidate->ai_next)
+    {
+        fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
+        if (fd < 0)
+        {
+            continue;
+        }
+        if (connect(fd, candidate->ai_addr, candidate->ai_addrlen) == 0)
+        {
+            break;
+        }
+        close(fd);
+        fd = -1;
+    }
+
+    freeaddrinfo(results);
+    return fd;
+}
+#endif
+
+static int checkpoint_sync_send_all(
+    int fd,
+    const uint8_t *data,
+    size_t data_len)
+{
+    if (fd < 0 || !data)
+    {
+        return -1;
+    }
+
+    size_t sent = 0;
+    while (sent < data_len)
+    {
+#if defined(_WIN32)
+        int rc = send(fd, (const char *)(data + sent), (int)(data_len - sent), 0);
+#else
+        ssize_t rc = send(fd, data + sent, data_len - sent, 0);
+#endif
+        if (rc < 0)
+        {
+#if !defined(_WIN32)
+            if (errno == EINTR)
+            {
+                continue;
+            }
+#endif
+            return -1;
+        }
+        if (rc == 0)
+        {
+            return -1;
+        }
+        sent += (size_t)rc;
+    }
+
+    return 0;
+}
+
+static int checkpoint_sync_read_response(
+    int fd,
+    uint8_t **out_bytes,
+    size_t *out_len)
+{
+    if (fd < 0 || !out_bytes || !out_len)
+    {
+        return -1;
+    }
+
+    *out_bytes = NULL;
+    *out_len = 0;
+
+    uint8_t *buffer = NULL;
+    size_t buffer_len = 0;
+    size_t buffer_cap = 0;
+
+    for (;;)
+    {
+        uint8_t chunk[4096];
+#if defined(_WIN32)
+        int read_bytes = recv(fd, (char *)chunk, (int)sizeof(chunk), 0);
+#else
+        ssize_t read_bytes = recv(fd, chunk, sizeof(chunk), 0);
+#endif
+        if (read_bytes < 0)
+        {
+#if !defined(_WIN32)
+            if (errno == EINTR)
+            {
+                continue;
+            }
+#endif
+            free(buffer);
+            return -1;
+        }
+        if (read_bytes == 0)
+        {
+            break;
+        }
+
+        if ((size_t)read_bytes > CHECKPOINT_SYNC_MAX_RESPONSE_BYTES - buffer_len)
+        {
+            free(buffer);
+            return -1;
+        }
+        size_t needed = buffer_len + (size_t)read_bytes;
+        if (needed > buffer_cap)
+        {
+            size_t new_cap = buffer_cap == 0 ? 8192u : buffer_cap;
+            while (new_cap < needed)
+            {
+                if (new_cap > CHECKPOINT_SYNC_MAX_RESPONSE_BYTES / 2u)
+                {
+                    new_cap = CHECKPOINT_SYNC_MAX_RESPONSE_BYTES;
+                    break;
+                }
+                new_cap *= 2u;
+            }
+            if (new_cap < needed)
+            {
+                free(buffer);
+                return -1;
+            }
+            uint8_t *resized = realloc(buffer, new_cap);
+            if (!resized)
+            {
+                free(buffer);
+                return -1;
+            }
+            buffer = resized;
+            buffer_cap = new_cap;
+        }
+
+        memcpy(buffer + buffer_len, chunk, (size_t)read_bytes);
+        buffer_len += (size_t)read_bytes;
+    }
+
+    if (!buffer || buffer_len == 0)
+    {
+        free(buffer);
+        return -1;
+    }
+
+    *out_bytes = buffer;
+    *out_len = buffer_len;
+    return 0;
+}
+
+static int checkpoint_sync_find_header_end(
+    const uint8_t *data,
+    size_t data_len,
+    size_t *out_header_end)
+{
+    if (!data || data_len < 4 || !out_header_end)
+    {
+        return -1;
+    }
+
+    for (size_t i = 0; i + 3 < data_len; ++i)
+    {
+        if (data[i] == '\r'
+            && data[i + 1] == '\n'
+            && data[i + 2] == '\r'
+            && data[i + 3] == '\n')
+        {
+            *out_header_end = i + 4;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int checkpoint_sync_decode_chunked_body(
+    const uint8_t *chunked_data,
+    size_t chunked_len,
+    uint8_t **out_body,
+    size_t *out_body_len)
+{
+    if (!chunked_data || !out_body || !out_body_len)
+    {
+        return -1;
+    }
+
+    *out_body = NULL;
+    *out_body_len = 0;
+
+    uint8_t *decoded = NULL;
+    size_t decoded_len = 0;
+    size_t decoded_cap = 0;
+    size_t cursor = 0;
+
+    while (cursor < chunked_len)
+    {
+        size_t line_start = cursor;
+        while (cursor + 1 < chunked_len
+               && !(chunked_data[cursor] == '\r'
+                    && chunked_data[cursor + 1] == '\n'))
+        {
+            ++cursor;
+        }
+        if (cursor + 1 >= chunked_len)
+        {
+            free(decoded);
+            return -1;
+        }
+
+        size_t line_len = cursor - line_start;
+        if (line_len == 0 || line_len >= 64u)
+        {
+            free(decoded);
+            return -1;
+        }
+
+        char line[64];
+        memcpy(line, chunked_data + line_start, line_len);
+        line[line_len] = '\0';
+
+        char *extensions = strchr(line, ';');
+        if (extensions)
+        {
+            *extensions = '\0';
+        }
+
+        char *trimmed = line;
+        while (*trimmed && isspace((unsigned char)*trimmed))
+        {
+            ++trimmed;
+        }
+        if (!*trimmed)
+        {
+            free(decoded);
+            return -1;
+        }
+
+        errno = 0;
+        char *endptr = NULL;
+        unsigned long long chunk_size_u64 = strtoull(trimmed, &endptr, 16);
+        if (errno != 0 || endptr == trimmed)
+        {
+            free(decoded);
+            return -1;
+        }
+        while (*endptr && isspace((unsigned char)*endptr))
+        {
+            ++endptr;
+        }
+        if (*endptr != '\0')
+        {
+            free(decoded);
+            return -1;
+        }
+
+        cursor += 2;
+
+        if (chunk_size_u64 == 0)
+        {
+            if (cursor + 1 < chunked_len
+                && chunked_data[cursor] == '\r'
+                && chunked_data[cursor + 1] == '\n')
+            {
+                cursor += 2;
+                break;
+            }
+
+            bool trailers_done = false;
+            for (size_t i = cursor; i + 3 < chunked_len; ++i)
+            {
+                if (chunked_data[i] == '\r'
+                    && chunked_data[i + 1] == '\n'
+                    && chunked_data[i + 2] == '\r'
+                    && chunked_data[i + 3] == '\n')
+                {
+                    cursor = i + 4;
+                    trailers_done = true;
+                    break;
+                }
+            }
+            if (!trailers_done)
+            {
+                free(decoded);
+                return -1;
+            }
+            break;
+        }
+
+        if (chunk_size_u64 > (unsigned long long)(chunked_len - cursor))
+        {
+            free(decoded);
+            return -1;
+        }
+        if (chunk_size_u64 > CHECKPOINT_SYNC_MAX_RESPONSE_BYTES - decoded_len)
+        {
+            free(decoded);
+            return -1;
+        }
+
+        size_t chunk_size = (size_t)chunk_size_u64;
+        size_t needed = decoded_len + chunk_size;
+        if (needed > decoded_cap)
+        {
+            size_t new_cap = decoded_cap == 0 ? 4096u : decoded_cap;
+            while (new_cap < needed)
+            {
+                if (new_cap > CHECKPOINT_SYNC_MAX_RESPONSE_BYTES / 2u)
+                {
+                    new_cap = CHECKPOINT_SYNC_MAX_RESPONSE_BYTES;
+                    break;
+                }
+                new_cap *= 2u;
+            }
+            if (new_cap < needed)
+            {
+                free(decoded);
+                return -1;
+            }
+
+            uint8_t *resized = realloc(decoded, new_cap);
+            if (!resized)
+            {
+                free(decoded);
+                return -1;
+            }
+            decoded = resized;
+            decoded_cap = new_cap;
+        }
+
+        memcpy(decoded + decoded_len, chunked_data + cursor, chunk_size);
+        decoded_len += chunk_size;
+        cursor += chunk_size;
+
+        if (cursor + 1 >= chunked_len
+            || chunked_data[cursor] != '\r'
+            || chunked_data[cursor + 1] != '\n')
+        {
+            free(decoded);
+            return -1;
+        }
+        cursor += 2;
+    }
+
+    *out_body = decoded;
+    *out_body_len = decoded_len;
+    return 0;
+}
+
+static int checkpoint_sync_extract_http_body(
+    const uint8_t *response,
+    size_t response_len,
+    int *out_status_code,
+    uint8_t **out_body,
+    size_t *out_body_len)
+{
+    if (!response || !out_status_code || !out_body || !out_body_len)
+    {
+        return -1;
+    }
+
+    *out_status_code = 0;
+    *out_body = NULL;
+    *out_body_len = 0;
+
+    size_t header_end = 0;
+    if (checkpoint_sync_find_header_end(response, response_len, &header_end) != 0)
+    {
+        return -1;
+    }
+
+    char *headers = malloc(header_end + 1u);
+    if (!headers)
+    {
+        return -1;
+    }
+    memcpy(headers, response, header_end);
+    headers[header_end] = '\0';
+
+    int status_code = 0;
+    if (sscanf(headers, "HTTP/%*u.%*u %d", &status_code) != 1)
+    {
+        free(headers);
+        return -1;
+    }
+    *out_status_code = status_code;
+
+    bool is_chunked = false;
+    bool has_content_length = false;
+    size_t content_length = 0;
+
+    char *line = strstr(headers, "\r\n");
+    if (line)
+    {
+        line += 2;
+    }
+    while (line && line[0] != '\0')
+    {
+        char *line_end = strstr(line, "\r\n");
+        if (!line_end)
+        {
+            break;
+        }
+        if (line_end == line)
+        {
+            break;
+        }
+
+        *line_end = '\0';
+        size_t line_len = (size_t)(line_end - line);
+        if (line_len >= 15
+            && strncasecmp(line, "Content-Length:", 15) == 0)
+        {
+            const char *value = line + 15;
+            while (*value && isspace((unsigned char)*value))
+            {
+                ++value;
+            }
+            errno = 0;
+            char *endptr = NULL;
+            unsigned long long parsed = strtoull(value, &endptr, 10);
+            while (endptr && *endptr && isspace((unsigned char)*endptr))
+            {
+                ++endptr;
+            }
+            if (errno == 0 && endptr && *endptr == '\0')
+            {
+                if (parsed > CHECKPOINT_SYNC_MAX_RESPONSE_BYTES)
+                {
+                    free(headers);
+                    return -1;
+                }
+                content_length = (size_t)parsed;
+                has_content_length = true;
+            }
+        }
+        else if (line_len >= 18
+                 && strncasecmp(line, "Transfer-Encoding:", 18) == 0)
+        {
+            const char *value = line + 18;
+            while (*value && isspace((unsigned char)*value))
+            {
+                ++value;
+            }
+            if (checkpoint_sync_header_has_token(value, "chunked"))
+            {
+                is_chunked = true;
+            }
+        }
+
+        *line_end = '\r';
+        line = line_end + 2;
+    }
+
+    const uint8_t *body_start = response + header_end;
+    size_t body_available = response_len - header_end;
+
+    if (status_code != 200)
+    {
+        free(headers);
+        return 1;
+    }
+
+    int rc = -1;
+    if (is_chunked)
+    {
+        rc = checkpoint_sync_decode_chunked_body(
+            body_start,
+            body_available,
+            out_body,
+            out_body_len);
+    }
+    else
+    {
+        size_t body_len = body_available;
+        if (has_content_length)
+        {
+            if (body_available < content_length)
+            {
+                free(headers);
+                return -1;
+            }
+            body_len = content_length;
+        }
+
+        if (body_len > CHECKPOINT_SYNC_MAX_RESPONSE_BYTES)
+        {
+            free(headers);
+            return -1;
+        }
+
+        uint8_t *copy = malloc(body_len);
+        if (!copy)
+        {
+            free(headers);
+            return -1;
+        }
+        if (body_len > 0)
+        {
+            memcpy(copy, body_start, body_len);
+        }
+        *out_body = copy;
+        *out_body_len = body_len;
+        rc = 0;
+    }
+
+    free(headers);
+    return rc;
+}
+
+static int checkpoint_sync_fetch_state_bytes(
+    const char *checkpoint_sync_url,
+    uint8_t **out_state_bytes,
+    size_t *out_state_len,
+    int *out_status_code)
+{
+    if (!checkpoint_sync_url || !out_state_bytes || !out_state_len || !out_status_code)
+    {
+        return -1;
+    }
+
+    *out_state_bytes = NULL;
+    *out_state_len = 0;
+    *out_status_code = 0;
+
+    char *host = NULL;
+    char *base_path = NULL;
+    uint16_t port = 0;
+    if (checkpoint_sync_parse_url(checkpoint_sync_url, &host, &port, &base_path) != 0)
+    {
+        return -1;
+    }
+
+    char *request_target = checkpoint_sync_build_request_target(base_path);
+    free(base_path);
+    base_path = NULL;
+    if (!request_target)
+    {
+        free(host);
+        return -1;
+    }
+
+    bool is_ipv6 = strchr(host, ':') != NULL;
+    int host_header_len = snprintf(
+        NULL,
+        0,
+        is_ipv6 ? "[%s]:%u" : "%s:%u",
+        host,
+        (unsigned int)port);
+    if (host_header_len <= 0)
+    {
+        free(request_target);
+        free(host);
+        return -1;
+    }
+    char *host_header = malloc((size_t)host_header_len + 1u);
+    if (!host_header)
+    {
+        free(request_target);
+        free(host);
+        return -1;
+    }
+    snprintf(
+        host_header,
+        (size_t)host_header_len + 1u,
+        is_ipv6 ? "[%s]:%u" : "%s:%u",
+        host,
+        (unsigned int)port);
+
+    int request_len = snprintf(
+        NULL,
+        0,
+        "GET %s HTTP/1.1\r\n"
+        "Host: %s\r\n"
+        "Accept: application/octet-stream\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        request_target,
+        host_header);
+    if (request_len <= 0)
+    {
+        free(host_header);
+        free(request_target);
+        free(host);
+        return -1;
+    }
+
+    char *request = malloc((size_t)request_len + 1u);
+    if (!request)
+    {
+        free(host_header);
+        free(request_target);
+        free(host);
+        return -1;
+    }
+    snprintf(
+        request,
+        (size_t)request_len + 1u,
+        "GET %s HTTP/1.1\r\n"
+        "Host: %s\r\n"
+        "Accept: application/octet-stream\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        request_target,
+        host_header);
+
+    int fd = checkpoint_sync_connect_tcp(host, port);
+    if (fd < 0)
+    {
+        free(request);
+        free(host_header);
+        free(request_target);
+        free(host);
+        return -1;
+    }
+
+    int rc = -1;
+    uint8_t *response = NULL;
+    size_t response_len = 0;
+    if (checkpoint_sync_send_all(
+            fd,
+            (const uint8_t *)request,
+            (size_t)request_len)
+        != 0)
+    {
+        goto cleanup;
+    }
+    if (checkpoint_sync_read_response(fd, &response, &response_len) != 0)
+    {
+        goto cleanup;
+    }
+
+    rc = checkpoint_sync_extract_http_body(
+        response,
+        response_len,
+        out_status_code,
+        out_state_bytes,
+        out_state_len);
+
+cleanup:
+#if !defined(_WIN32)
+    close(fd);
+#endif
+    free(response);
+    free(request);
+    free(host_header);
+    free(request_target);
+    free(host);
+    return rc;
+}
+
+static lantern_client_error client_load_state_from_checkpoint(
+    struct lantern_client *client,
+    const char *checkpoint_sync_url)
+{
+    if (!client || !checkpoint_sync_url || checkpoint_sync_url[0] == '\0')
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    struct lantern_log_metadata meta = {.validator = client->node_id};
+    lantern_log_info(
+        "checkpoint_sync",
+        &meta,
+        "fetching finalized checkpoint state from %s",
+        checkpoint_sync_url);
+
+    uint8_t *state_bytes = NULL;
+    size_t state_len = 0;
+    int status_code = 0;
+    int fetch_rc = checkpoint_sync_fetch_state_bytes(
+        checkpoint_sync_url,
+        &state_bytes,
+        &state_len,
+        &status_code);
+    if (fetch_rc != 0)
+    {
+        if (fetch_rc == 1)
+        {
+            lantern_log_error(
+                "checkpoint_sync",
+                &meta,
+                "checkpoint sync endpoint returned HTTP %d",
+                status_code);
+        }
+        else
+        {
+            lantern_log_error(
+                "checkpoint_sync",
+                &meta,
+                "failed to fetch checkpoint state from %s",
+                checkpoint_sync_url);
+        }
+        free(state_bytes);
+        return LANTERN_CLIENT_ERR_NETWORK;
+    }
+
+    if (!state_bytes || state_len == 0)
+    {
+        free(state_bytes);
+        lantern_log_error(
+            "checkpoint_sync",
+            &meta,
+            "checkpoint sync endpoint returned an empty state payload");
+        return LANTERN_CLIENT_ERR_NETWORK;
+    }
+
+    LanternState decoded;
+    lantern_state_init(&decoded);
+    bool decoded_owned = true;
+    lantern_client_error result = LANTERN_CLIENT_OK;
+
+    if (lantern_ssz_decode_state(&decoded, state_bytes, state_len) != 0)
+    {
+        lantern_log_error(
+            "checkpoint_sync",
+            &meta,
+            "failed to decode checkpoint state SSZ (bytes=%zu)",
+            state_len);
+        result = LANTERN_CLIENT_ERR_GENESIS;
+        goto cleanup;
+    }
+
+    if (decoded.config.num_validators == 0
+        || decoded.validator_count == 0
+        || decoded.config.num_validators != (uint64_t)decoded.validator_count)
+    {
+        lantern_log_error(
+            "checkpoint_sync",
+            &meta,
+            "checkpoint state validator metadata invalid config=%" PRIu64 " decoded=%zu",
+            decoded.config.num_validators,
+            decoded.validator_count);
+        result = LANTERN_CLIENT_ERR_GENESIS;
+        goto cleanup;
+    }
+
+    if (decoded.config.genesis_time != client->genesis.chain_config.genesis_time)
+    {
+        lantern_log_error(
+            "checkpoint_sync",
+            &meta,
+            "checkpoint genesis time mismatch checkpoint=%" PRIu64 " local=%" PRIu64,
+            decoded.config.genesis_time,
+            client->genesis.chain_config.genesis_time);
+        result = LANTERN_CLIENT_ERR_GENESIS;
+        goto cleanup;
+    }
+
+    if (decoded.latest_block_header.slot > decoded.slot
+        || decoded.latest_justified.slot > decoded.slot
+        || decoded.latest_finalized.slot > decoded.slot
+        || decoded.latest_finalized.slot > decoded.latest_justified.slot)
+    {
+        lantern_log_error(
+            "checkpoint_sync",
+            &meta,
+            "checkpoint state has inconsistent slot metadata state=%" PRIu64
+            " head=%" PRIu64 " justified=%" PRIu64 " finalized=%" PRIu64,
+            decoded.slot,
+            decoded.latest_block_header.slot,
+            decoded.latest_justified.slot,
+            decoded.latest_finalized.slot);
+        result = LANTERN_CLIENT_ERR_GENESIS;
+        goto cleanup;
+    }
+
+    if (lantern_state_prepare_validator_votes(
+            &decoded,
+            decoded.config.num_validators)
+        != 0)
+    {
+        lantern_log_error(
+            "checkpoint_sync",
+            &meta,
+            "failed to prepare validator votes for checkpoint state");
+        result = LANTERN_CLIENT_ERR_GENESIS;
+        goto cleanup;
+    }
+
+    LanternRoot state_root;
+    if (lantern_hash_tree_root_state(&decoded, &state_root) != 0)
+    {
+        lantern_log_error(
+            "checkpoint_sync",
+            &meta,
+            "failed to compute checkpoint state root");
+        result = LANTERN_CLIENT_ERR_GENESIS;
+        goto cleanup;
+    }
+
+    char state_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    format_root_hex(&state_root, state_root_hex, sizeof(state_root_hex));
+
+    lantern_state_reset(&client->state);
+    client->state = decoded;
+    decoded_owned = false;
+    client->has_state = true;
+    client->genesis_fallback_used = false;
+
+    lantern_log_info(
+        "checkpoint_sync",
+        &meta,
+        "initialized from checkpoint state slot=%" PRIu64
+        " validators=%" PRIu64 " finalized_slot=%" PRIu64 " state_root=%s",
+        client->state.slot,
+        client->state.config.num_validators,
+        client->state.latest_finalized.slot,
+        state_root_hex[0] ? state_root_hex : "0x0");
+
+cleanup:
+    free(state_bytes);
+    if (decoded_owned)
+    {
+        lantern_state_reset(&decoded);
+    }
+    return result;
+}
+
+
 /**
  * @brief Build genesis state using the available artifact priority order.
  *
@@ -1146,16 +2275,19 @@ static lantern_client_error client_generate_state_from_genesis(struct lantern_cl
  * state from genesis artifacts and persists the initial snapshot.
  *
  * @param client               Client whose state is being initialized
+ * @param options              Client options (checkpoint sync URL, etc.)
  * @param loaded_from_storage  Optional output flag indicating storage load
  *
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_STORAGE on storage I/O failure
  * @return LANTERN_CLIENT_ERR_GENESIS on genesis construction failure
+ * @return LANTERN_CLIENT_ERR_NETWORK on checkpoint fetch failure
  *
  * @note Thread safety: Must be called before any concurrent access.
  */
 static lantern_client_error client_load_or_build_state(
     struct lantern_client *client,
+    const struct lantern_client_options *options,
     bool *loaded_from_storage)
 {
     bool from_storage = false;
@@ -1164,6 +2296,15 @@ static lantern_client_error client_load_or_build_state(
     {
         client->has_state = true;
         from_storage = true;
+        if (options
+            && options->checkpoint_sync_url
+            && options->checkpoint_sync_url[0] != '\0')
+        {
+            lantern_log_info(
+                "checkpoint_sync",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "using persisted state; skipping checkpoint fetch");
+        }
     }
     else if (storage_state_rc < 0)
     {
@@ -1175,7 +2316,19 @@ static lantern_client_error client_load_or_build_state(
     }
     else
     {
-        if (client_generate_state_from_genesis(client) != LANTERN_CLIENT_OK)
+        if (options
+            && options->checkpoint_sync_url
+            && options->checkpoint_sync_url[0] != '\0')
+        {
+            lantern_client_error checkpoint_rc = client_load_state_from_checkpoint(
+                client,
+                options->checkpoint_sync_url);
+            if (checkpoint_rc != LANTERN_CLIENT_OK)
+            {
+                return checkpoint_rc;
+            }
+        }
+        else if (client_generate_state_from_genesis(client) != LANTERN_CLIENT_OK)
         {
             return LANTERN_CLIENT_ERR_GENESIS;
         }
@@ -2072,7 +3225,7 @@ lantern_client_error lantern_init(
         goto error;
     }
 
-    err = client_load_or_build_state(client, NULL);
+    err = client_load_or_build_state(client, options, NULL);
     if (err != LANTERN_CLIENT_OK)
     {
         goto error;

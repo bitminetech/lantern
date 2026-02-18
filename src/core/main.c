@@ -34,6 +34,7 @@ enum {
     OPT_NODE_KEY,
     OPT_NODE_KEY_PATH,
     OPT_LISTEN_ADDRESS,
+    OPT_CHECKPOINT_SYNC_URL,
     OPT_HTTP_PORT,
     OPT_METRICS_PORT,
     OPT_BOOTNODE,
@@ -223,6 +224,9 @@ static lantern_client_error apply_option(
         return LANTERN_CLIENT_OK;
     case OPT_LISTEN_ADDRESS:
         options->listen_address = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_CHECKPOINT_SYNC_URL:
+        options->checkpoint_sync_url = optarg;
         return LANTERN_CLIENT_OK;
     case OPT_HTTP_PORT:
     case OPT_METRICS_PORT:
@@ -428,6 +432,7 @@ static lantern_client_error parse_arguments(
         {"node-key", required_argument, NULL, OPT_NODE_KEY},
         {"node-key-path", required_argument, NULL, OPT_NODE_KEY_PATH},
         {"listen-address", required_argument, NULL, OPT_LISTEN_ADDRESS},
+        {"checkpoint-sync-url", required_argument, NULL, OPT_CHECKPOINT_SYNC_URL},
         {"http-port", required_argument, NULL, OPT_HTTP_PORT},
         {"metrics-port", required_argument, NULL, OPT_METRICS_PORT},
         {"bootnode", required_argument, NULL, OPT_BOOTNODE},
@@ -729,6 +734,10 @@ static void print_usage_network(void)
         "main",
         NULL,
         "  --listen-address ADDR        QUIC listen multiaddr");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --checkpoint-sync-url URL    Fetch finalized state from remote beacon API");
     lantern_log_info(
         "main",
         NULL,

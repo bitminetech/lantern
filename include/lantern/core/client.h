@@ -70,6 +70,7 @@ struct lantern_client_options {
     const char *node_key_hex;
     const char *node_key_path;
     const char *listen_address;
+    const char *checkpoint_sync_url;
     uint16_t http_port;
     uint16_t metrics_port;
     const char *devnet;
