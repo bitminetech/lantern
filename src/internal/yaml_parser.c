@@ -96,20 +96,20 @@ static void add_pair(LanternYamlObject *obj, const char *key, const char *value)
     obj->num_pairs++;
 }
 
-static void commit_current(
+static int commit_current(
     LanternYamlObject *current,
     LanternYamlObject **objects,
     size_t *capacity,
     size_t *count) {
     if (!current || current->num_pairs == 0) {
-        return;
+        return 0;
     }
 
     if (*count == *capacity) {
         size_t new_capacity = (*capacity == 0) ? 4 : (*capacity * 2);
         LanternYamlObject *new_objects = realloc(*objects, new_capacity * sizeof(*new_objects));
         if (!new_objects) {
-            return;
+            return -1;
         }
         *objects = new_objects;
         *capacity = new_capacity;
@@ -121,6 +121,7 @@ static void commit_current(
     current->pairs = NULL;
     current->num_pairs = 0;
     current->capacity = 0;
+    return 0;
 }
 
 static void free_yaml_object(LanternYamlObject *object) {
@@ -172,7 +173,10 @@ LanternYamlObject *lantern_yaml_read_array(const char *file_path, const char *ar
 
         if (content[0] == '-') {
             if (in_target_array) {
-                commit_current(&current, &objects, &capacity, out_count);
+                if (commit_current(&current, &objects, &capacity, out_count) != 0) {
+                    parse_error = 1;
+                    break;
+                }
             }
             content++;
             while (isspace((unsigned char)*content)) {
@@ -185,9 +189,15 @@ LanternYamlObject *lantern_yaml_read_array(const char *file_path, const char *ar
             while (stack_size > 0 && indent_stack[stack_size - 1] >= indent) {
                 pop_stack(keys_stack, &stack_size);
                 if (in_target_array && stack_size < array_depth) {
-                    commit_current(&current, &objects, &capacity, out_count);
+                    if (commit_current(&current, &objects, &capacity, out_count) != 0) {
+                        parse_error = 1;
+                        break;
+                    }
                     in_target_array = 0;
                 }
+            }
+            if (parse_error) {
+                break;
             }
         }
 
@@ -244,6 +254,12 @@ LanternYamlObject *lantern_yaml_read_array(const char *file_path, const char *ar
 
     fclose(fp);
 
+    if (!parse_error && in_target_array) {
+        if (commit_current(&current, &objects, &capacity, out_count) != 0) {
+            parse_error = 1;
+        }
+    }
+
     if (parse_error) {
         free_yaml_object(&current);
         lantern_yaml_free_objects(objects, *out_count);
@@ -254,13 +270,10 @@ LanternYamlObject *lantern_yaml_read_array(const char *file_path, const char *ar
         return NULL;
     }
 
-    if (in_target_array) {
-        commit_current(&current, &objects, &capacity, out_count);
-    }
-
     for (int i = 0; i < stack_size; ++i) {
         free(keys_stack[i]);
     }
+    free_yaml_object(&current);
 
     if (*out_count == 0) {
         free(objects);

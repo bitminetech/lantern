@@ -232,15 +232,15 @@ int lantern_enr_record_decode(const char *enr_text, struct lantern_enr_record *r
         return -1;
     }
 
+    struct lantern_rlp_view root;
+    memset(&root, 0, sizeof(root));
+    int root_ready = 0;
     uint8_t *encoded_bytes = NULL;
     size_t encoded_len = 0;
     if (lantern_base64url_decode(payload, &encoded_bytes, &encoded_len) != 0) {
         goto error;
     }
 
-    struct lantern_rlp_view root;
-    memset(&root, 0, sizeof(root));
-    int root_ready = 0;
     if (lantern_rlp_decode(encoded_bytes, encoded_len, &root) != 0) {
         goto error;
     }
@@ -356,6 +356,7 @@ int lantern_enr_record_build_v4(
     struct lantern_rlp_buffer signed_record = {0};
     struct lantern_rlp_buffer content = {0};
     struct lantern_rlp_buffer signature_buf = {0};
+    size_t idx = 0;
 
     uint8_t ip_bytes[4];
     if (parse_ipv4_address(ip_string, ip_bytes) != 0) {
@@ -390,7 +391,6 @@ int lantern_enr_record_build_v4(
     }
     secp256k1_context_destroy(ctx);
 
-    size_t idx = 0;
     if (lantern_rlp_encode_uint64(&items[idx++], sequence) != 0) {
         error_reason = "rlp encode sequence failed";
         goto error;

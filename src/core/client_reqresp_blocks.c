@@ -320,6 +320,13 @@ static void *block_request_worker(void *arg)
         .peer = ctx->peer_text[0] ? ctx->peer_text : NULL,
     };
 
+    LanternBlocksByRootRequest request;
+    lantern_blocks_by_root_request_init(&request);
+    uint8_t *raw_request = NULL;
+    uint8_t *payload = NULL;
+    enum lantern_blocks_request_outcome outcome = LANTERN_BLOCKS_REQUEST_FAILED;
+    bool completed = false;
+
     char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     if (!ctx->roots || ctx->root_count == 0)
     {
@@ -330,14 +337,6 @@ static void *block_request_worker(void *arg)
         goto cleanup;
     }
     format_root_hex(&ctx->roots[0], root_hex, sizeof(root_hex));
-
-    LanternBlocksByRootRequest request;
-    lantern_blocks_by_root_request_init(&request);
-
-    uint8_t *raw_request = NULL;
-    uint8_t *payload = NULL;
-    enum lantern_blocks_request_outcome outcome = LANTERN_BLOCKS_REQUEST_FAILED;
-    bool completed = false;
 
     if (lantern_root_list_resize(&request.roots, ctx->root_count) != 0)
     {
