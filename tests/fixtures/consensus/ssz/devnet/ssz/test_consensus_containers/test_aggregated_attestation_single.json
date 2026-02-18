@@ -1,0 +1,37 @@
+{
+    "tests/consensus/devnet/ssz/test_consensus_containers.py::test_aggregated_attestation_single[fork_Devnet][fork_Devnet-ssz]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "typeName": "AggregatedAttestation",
+        "value": {
+            "aggregationBits": {
+                "data": [
+                    true
+                ]
+            },
+            "data": {
+                "slot": 0,
+                "head": {
+                    "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                    "slot": 0
+                },
+                "target": {
+                    "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                    "slot": 0
+                },
+                "source": {
+                    "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                    "slot": 0
+                }
+            }
+        },
+        "serialized": "0x84000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003",
+        "_info": {
+            "hash": "0xb383a117aecd3ca270dcf5309e71610fa1f070700880b33bb026ba41904edd42",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/ssz/test_consensus_containers.py::test_aggregated_attestation_single[fork_Devnet]",
+            "description": "SSZ roundtrip for AggregatedAttestation with single validator.",
+            "fixtureFormat": "ssz"
+        }
+    }
+}

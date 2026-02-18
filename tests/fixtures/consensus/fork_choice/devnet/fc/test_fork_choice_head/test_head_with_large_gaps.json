@@ -94,8 +94,8 @@
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
                                 "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
@@ -132,12 +132,12 @@
                                 "slot": 10
                             },
                             "target": {
-                                "root": "0x908b27489ac9909404659a5e90766c65fdae31e9de67441c48361c38e1674ab3",
-                                "slot": 10
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -170,12 +170,12 @@
                                 "slot": 20
                             },
                             "target": {
-                                "root": "0x243353f4b9e4289be816a3ef706c0689adddf2559fa5050e7e7a45dc5dabcd5e",
-                                "slot": 20
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x908b27489ac9909404659a5e90766c65fdae31e9de67441c48361c38e1674ab3",
-                                "slot": 10
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -208,12 +208,12 @@
                                 "slot": 30
                             },
                             "target": {
-                                "root": "0x1a6568b59c71bea3297711437ce946b615837efcf65443286ec3a3cbcddc83c3",
-                                "slot": 30
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                                "slot": 1
                             },
                             "source": {
-                                "root": "0x243353f4b9e4289be816a3ef706c0689adddf2559fa5050e7e7a45dc5dabcd5e",
-                                "slot": 20
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -222,7 +222,7 @@
         ],
         "maxSlot": 30,
         "_info": {
-            "hash": "0x75234ae4514adf94fbfd2f336070fdcbd98111f59920b4ada865446b8fd6d008",
+            "hash": "0x0ee572a75595d50c1641fff1f10216b135b3f97de1dc112f6f08a139c89eb507",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_fork_choice_head.py::test_head_with_large_gaps[fork_Devnet]",
             "description": "Fork choice head handles large gaps between blocks.\n\n    Scenario\n    --------\n    Build blocks at slots 1, 10, 20, 30 (gaps of 9-10 slots).\n\n    Expected Behavior:\n        - Head advances despite large gaps\n        - Fork choice is gap-size independent\n        - Head reaches the furthest block\n\n    Why This Matters\n    ----------------\n    Large gaps can occur during:\n    - Extended network partitions\n    - Chain reorganizations\n    - Periods of high validator downtime\n    - Initial sync after being offline\n\n    The fork choice algorithm must remain correct regardless of gap size.\n    Distance between blocks should not affect the correctness of head selection -\n    only the tree structure matters.\n\n    This test verifies that even with dramatic gaps (representing severe network\n    conditions), fork choice still identifies the correct head.",

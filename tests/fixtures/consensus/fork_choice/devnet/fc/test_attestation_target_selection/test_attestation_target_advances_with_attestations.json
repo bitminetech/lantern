@@ -95,8 +95,8 @@
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
                                 "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
@@ -134,12 +134,12 @@
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -173,12 +173,12 @@
                                 "slot": 3
                             },
                             "target": {
-                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
-                                "slot": 3
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -212,12 +212,12 @@
                                 "slot": 4
                             },
                             "target": {
-                                "root": "0xed871b60007be196769e0a763169d230f898d665087bcadb5815da47477dcce8",
-                                "slot": 4
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                                "slot": 1
                             },
                             "source": {
-                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
-                                "slot": 3
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -251,12 +251,12 @@
                                 "slot": 5
                             },
                             "target": {
-                                "root": "0x58e9edf92e29d841a4eba44782a3d4d1e0c993a2a8227848b244f1c1e4bc52a9",
-                                "slot": 5
+                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
+                                "slot": 2
                             },
                             "source": {
-                                "root": "0xed871b60007be196769e0a763169d230f898d665087bcadb5815da47477dcce8",
-                                "slot": 4
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -265,7 +265,7 @@
         ],
         "maxSlot": 5,
         "_info": {
-            "hash": "0xb3a2ac78c3dca2def6826b97621593399629f80d66c5f6ed6838d6a8399110c5",
+            "hash": "0x5d4c28b388ec489125dfe31472526a539ac024281986326b8cc9919611453538",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_attestation_target_selection.py::test_attestation_target_advances_with_attestations[fork_Devnet]",
             "description": "Attestation target advances as attestation weight accumulates.\n\n    Scenario\n    --------\n    Build a longer chain (slots 1-5) where attestations cause target advancement.\n\n    Expected:\n        - Initial blocks: target stays at genesis (slot 0)\n        - Later blocks: target advances as attestations accumulate\n        - Target remains behind head for safety\n\n    Why This Matters\n    ----------------\n    As validators attest to blocks, the safe target advances, which in turn\n    allows the attestation target to move forward.\n\n    This demonstrates the dynamic nature of target selection: conservative initially,\n    but advancing as consensus strengthens through attestation accumulation.\n\n    The target advances only when sufficient attestation weight supports it.",

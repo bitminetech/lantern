@@ -96,8 +96,8 @@
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
                                 "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
@@ -137,12 +137,12 @@
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -178,12 +178,12 @@
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -219,12 +219,12 @@
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -260,12 +260,12 @@
                                 "slot": 3
                             },
                             "target": {
-                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
-                                "slot": 3
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -301,12 +301,12 @@
                                 "slot": 3
                             },
                             "target": {
-                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
-                                "slot": 3
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -342,12 +342,12 @@
                                 "slot": 4
                             },
                             "target": {
-                                "root": "0xed871b60007be196769e0a763169d230f898d665087bcadb5815da47477dcce8",
-                                "slot": 4
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                                "slot": 1
                             },
                             "source": {
-                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
-                                "slot": 3
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -357,7 +357,7 @@
         ],
         "maxSlot": 4,
         "_info": {
-            "hash": "0x22a626a9971fbedce04e2cb93c8dc0bd769664a284741c1898da84d16a3a3bb6",
+            "hash": "0xa838ee2e85b94c2a10c564337a1c3c1490cda6c34c7be344f97593d0856a8899",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_fork_choice_reorgs.py::test_three_way_fork_competition[fork_Devnet]",
             "description": "Three competing forks with progressive elimination until one wins.\n\n    Scenario\n    --------\n    Three forks (A, B, C) compete simultaneously. Fork choice progressively\n    eliminates weaker forks as stronger ones extend.\n\n    Fork Topology:\n                  base (slot 1)\n                   /   |                       /    |                    fork_a  fork_b  fork_c  (slot 2)\n                |       |       |\n                |       |       +--- fork_c_3 (slot 3)\n                |       +--- fork_b_3 (slot 3)\n                |       +--- fork_b_4 (slot 4) \u2190 Winner\n                +--- abandoned\n\n    Expected Behavior\n    -----------------\n    1. All three forks start at slot 2 (three-way tie)\n    2. Fork C extends to slot 3 \u2192 becomes head\n    3. Fork B extends to slot 3 \u2192 ties with fork C at depth 2\n    4. Fork B extends to slot 4 \u2192 wins with depth 3\n    5. Forks A and C become non-canonical\n\n    Reorg Sequence:\n        - Initial: fork_a (tie-breaker among three)\n        - After fork_c_3: fork_c (depth advantage)\n        - After fork_b_3: fork_c (tie, maintains head)\n        - After fork_b_4: fork_b (final winner)\n\n    Why This Matters\n    ----------------\n    Multi-fork scenarios can occur during:\n    - Network partitions splitting validators 3+ ways\n    - Rapid block production creating multiple conflicting proposals\n    - Byzantine validators intentionally creating competing forks\n\n    Properties verified:\n    - Fork choice handles 3+ simultaneous competing forks\n    - Head selection remains consistent and deterministic\n    - Progressive elimination works correctly\n    - Final winner is objectively the heaviest fork",

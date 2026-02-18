@@ -94,8 +94,8 @@
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
                                 "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
@@ -132,12 +132,12 @@
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -170,12 +170,12 @@
                                 "slot": 3
                             },
                             "target": {
-                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
-                                "slot": 3
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -208,12 +208,12 @@
                                 "slot": 4
                             },
                             "target": {
-                                "root": "0xed871b60007be196769e0a763169d230f898d665087bcadb5815da47477dcce8",
-                                "slot": 4
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                                "slot": 1
                             },
                             "source": {
-                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
-                                "slot": 3
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -246,12 +246,12 @@
                                 "slot": 5
                             },
                             "target": {
-                                "root": "0x58e9edf92e29d841a4eba44782a3d4d1e0c993a2a8227848b244f1c1e4bc52a9",
-                                "slot": 5
+                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
+                                "slot": 2
                             },
                             "source": {
-                                "root": "0xed871b60007be196769e0a763169d230f898d665087bcadb5815da47477dcce8",
-                                "slot": 4
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -284,12 +284,12 @@
                                 "slot": 6
                             },
                             "target": {
-                                "root": "0xf4243749bd2d853df2b0956fdadf2ffd80c7503484271c29e612c6e9924155db",
-                                "slot": 6
+                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
+                                "slot": 3
                             },
                             "source": {
-                                "root": "0x58e9edf92e29d841a4eba44782a3d4d1e0c993a2a8227848b244f1c1e4bc52a9",
-                                "slot": 5
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -322,12 +322,12 @@
                                 "slot": 7
                             },
                             "target": {
-                                "root": "0x8a62bad3ff9ec014fb6adbf8519e493678bbaf90fac55b47fe53d2a840d70833",
-                                "slot": 7
+                                "root": "0xed871b60007be196769e0a763169d230f898d665087bcadb5815da47477dcce8",
+                                "slot": 4
                             },
                             "source": {
-                                "root": "0xf4243749bd2d853df2b0956fdadf2ffd80c7503484271c29e612c6e9924155db",
-                                "slot": 6
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -360,12 +360,12 @@
                                 "slot": 8
                             },
                             "target": {
-                                "root": "0xd942b458e5c8b796edc932d23df9dda8939eb7b96f8c94d2a17bf368b807348d",
-                                "slot": 8
+                                "root": "0x58e9edf92e29d841a4eba44782a3d4d1e0c993a2a8227848b244f1c1e4bc52a9",
+                                "slot": 5
                             },
                             "source": {
-                                "root": "0x8a62bad3ff9ec014fb6adbf8519e493678bbaf90fac55b47fe53d2a840d70833",
-                                "slot": 7
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -398,12 +398,12 @@
                                 "slot": 9
                             },
                             "target": {
-                                "root": "0x3957ca3fb02f85e64ee684e2c2536bc87fb2e975a4dcdfa3081de9cc39ddcf6a",
-                                "slot": 9
+                                "root": "0xf4243749bd2d853df2b0956fdadf2ffd80c7503484271c29e612c6e9924155db",
+                                "slot": 6
                             },
                             "source": {
-                                "root": "0xd942b458e5c8b796edc932d23df9dda8939eb7b96f8c94d2a17bf368b807348d",
-                                "slot": 8
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -436,12 +436,12 @@
                                 "slot": 10
                             },
                             "target": {
-                                "root": "0x5ecbcf9082feefb76c1dd6f37d8159c3169c2ecd2bbb14bc497dff4a3d5641df",
-                                "slot": 10
+                                "root": "0xf4243749bd2d853df2b0956fdadf2ffd80c7503484271c29e612c6e9924155db",
+                                "slot": 6
                             },
                             "source": {
-                                "root": "0x3957ca3fb02f85e64ee684e2c2536bc87fb2e975a4dcdfa3081de9cc39ddcf6a",
-                                "slot": 9
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -474,12 +474,12 @@
                                 "slot": 11
                             },
                             "target": {
-                                "root": "0x2e9715cf83119270ac92321616d630c8e787ee27f23a91aaf8207295d122b7b5",
-                                "slot": 11
+                                "root": "0xf4243749bd2d853df2b0956fdadf2ffd80c7503484271c29e612c6e9924155db",
+                                "slot": 6
                             },
                             "source": {
-                                "root": "0x5ecbcf9082feefb76c1dd6f37d8159c3169c2ecd2bbb14bc497dff4a3d5641df",
-                                "slot": 10
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -512,12 +512,12 @@
                                 "slot": 12
                             },
                             "target": {
-                                "root": "0x535e1e1271317cd5a83c6ec99c30d972927fee6952250a12de1572bc6d27050c",
-                                "slot": 12
+                                "root": "0x3957ca3fb02f85e64ee684e2c2536bc87fb2e975a4dcdfa3081de9cc39ddcf6a",
+                                "slot": 9
                             },
                             "source": {
-                                "root": "0x2e9715cf83119270ac92321616d630c8e787ee27f23a91aaf8207295d122b7b5",
-                                "slot": 11
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -550,12 +550,12 @@
                                 "slot": 13
                             },
                             "target": {
-                                "root": "0x92ac402c6efb6b43179d5a662dcd7389ccf61617c7968d3d5af611160497362e",
-                                "slot": 13
+                                "root": "0x3957ca3fb02f85e64ee684e2c2536bc87fb2e975a4dcdfa3081de9cc39ddcf6a",
+                                "slot": 9
                             },
                             "source": {
-                                "root": "0x535e1e1271317cd5a83c6ec99c30d972927fee6952250a12de1572bc6d27050c",
-                                "slot": 12
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -588,12 +588,12 @@
                                 "slot": 14
                             },
                             "target": {
-                                "root": "0xfa599ebfafdd658feca9f4bb9095a4cd19e92ba23b2572a5e42f2a188ad7ab19",
-                                "slot": 14
+                                "root": "0x3957ca3fb02f85e64ee684e2c2536bc87fb2e975a4dcdfa3081de9cc39ddcf6a",
+                                "slot": 9
                             },
                             "source": {
-                                "root": "0x92ac402c6efb6b43179d5a662dcd7389ccf61617c7968d3d5af611160497362e",
-                                "slot": 13
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -626,12 +626,12 @@
                                 "slot": 15
                             },
                             "target": {
-                                "root": "0x8f3032c7b8c2e1283df2c580dbd315b17ba369b382f5c4c52f107b65d66d4b41",
-                                "slot": 15
+                                "root": "0x535e1e1271317cd5a83c6ec99c30d972927fee6952250a12de1572bc6d27050c",
+                                "slot": 12
                             },
                             "source": {
-                                "root": "0xfa599ebfafdd658feca9f4bb9095a4cd19e92ba23b2572a5e42f2a188ad7ab19",
-                                "slot": 14
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -664,12 +664,12 @@
                                 "slot": 16
                             },
                             "target": {
-                                "root": "0xa3d9765056efab51625457713ee53811602353a08a2fa7d609e1ae053b82bc81",
-                                "slot": 16
+                                "root": "0x535e1e1271317cd5a83c6ec99c30d972927fee6952250a12de1572bc6d27050c",
+                                "slot": 12
                             },
                             "source": {
-                                "root": "0x8f3032c7b8c2e1283df2c580dbd315b17ba369b382f5c4c52f107b65d66d4b41",
-                                "slot": 15
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -702,12 +702,12 @@
                                 "slot": 17
                             },
                             "target": {
-                                "root": "0x32f71624e9cc375bd80c01c52b543f11400add4817497445cca0387c5e93a2da",
-                                "slot": 17
+                                "root": "0x535e1e1271317cd5a83c6ec99c30d972927fee6952250a12de1572bc6d27050c",
+                                "slot": 12
                             },
                             "source": {
-                                "root": "0xa3d9765056efab51625457713ee53811602353a08a2fa7d609e1ae053b82bc81",
-                                "slot": 16
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -740,12 +740,12 @@
                                 "slot": 18
                             },
                             "target": {
-                                "root": "0xb815fd73d480ac5fcbd4ba6c185469c1974823c7df6bf23dfbedc9ee9b29834d",
-                                "slot": 18
+                                "root": "0x535e1e1271317cd5a83c6ec99c30d972927fee6952250a12de1572bc6d27050c",
+                                "slot": 12
                             },
                             "source": {
-                                "root": "0x32f71624e9cc375bd80c01c52b543f11400add4817497445cca0387c5e93a2da",
-                                "slot": 17
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -778,12 +778,12 @@
                                 "slot": 19
                             },
                             "target": {
-                                "root": "0x9339a784accf839ae09330f6a9cfe88154b4f7fbd6f825d2930e58000cef5d65",
-                                "slot": 19
+                                "root": "0xa3d9765056efab51625457713ee53811602353a08a2fa7d609e1ae053b82bc81",
+                                "slot": 16
                             },
                             "source": {
-                                "root": "0xb815fd73d480ac5fcbd4ba6c185469c1974823c7df6bf23dfbedc9ee9b29834d",
-                                "slot": 18
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -818,12 +818,12 @@
                                 "slot": 20
                             },
                             "target": {
-                                "root": "0xc0a0053d73e322aaa3cc0b3c5124d6ea5cf6eebbebc950814fec2612efeb2b82",
-                                "slot": 20
+                                "root": "0xa3d9765056efab51625457713ee53811602353a08a2fa7d609e1ae053b82bc81",
+                                "slot": 16
                             },
                             "source": {
-                                "root": "0x9339a784accf839ae09330f6a9cfe88154b4f7fbd6f825d2930e58000cef5d65",
-                                "slot": 19
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -833,7 +833,7 @@
         ],
         "maxSlot": 20,
         "_info": {
-            "hash": "0x5ad4414ae62a84ccc1d0b107e7305210bfef592d54e97ea73cf07fc40d551e9e",
+            "hash": "0xcd928be3f57cfb9331fb3f1b826b63a324e87f6fe575f1f11e18335242bdcbe9",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_fork_choice_head.py::test_head_advances_through_deep_chain[fork_Devnet]",
             "description": "Fork choice head advances through a deep chain correctly.\n\n    Scenario\n    --------\n    Build a long chain (slots 1-20) and verify head reaches the end.\n\n    Expected Behavior:\n        - Head advances through all 20 blocks\n        - Final head = slot 20\n        - Fork choice scales to longer chains\n\n    Why This Matters\n    ----------------\n    This tests that the fork choice algorithm scales to longer chains and\n    correctly handles the tree-walking logic through many blocks.\n\n    Real networks have chains thousands of blocks long. The algorithm must:\n    - Efficiently traverse deep trees\n    - Maintain correct head even with many ancestors\n    - Not degrade in performance or correctness with depth\n\n    A 20-block chain is a modest test of this scalability.",

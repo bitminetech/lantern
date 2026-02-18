@@ -43,6 +43,14 @@ struct lean_metrics_histogram_snapshot {
 struct lean_metrics_snapshot {
     uint64_t attestations_valid_total;
     uint64_t attestations_invalid_total;
+    uint64_t pq_sig_individual_signatures_total;
+    uint64_t pq_sig_individual_signatures_valid_total;
+    uint64_t pq_sig_individual_signatures_invalid_total;
+    uint64_t pq_sig_aggregated_signatures_total;
+    uint64_t pq_sig_aggregated_signatures_valid_total;
+    uint64_t pq_sig_aggregated_signatures_invalid_total;
+    uint64_t pq_sig_attestations_in_aggregated_signatures_total;
+    uint64_t committee_aggregated_attestations_total;
     uint64_t fork_choice_reorgs_total;
     uint64_t finalizations_success_total;
     uint64_t finalizations_error_total;
@@ -59,6 +67,9 @@ struct lean_metrics_snapshot {
     struct lean_metrics_histogram_snapshot state_attestations_time;
     struct lean_metrics_histogram_snapshot pq_signature_signing_time;
     struct lean_metrics_histogram_snapshot pq_signature_verification_time;
+    struct lean_metrics_histogram_snapshot pq_sig_attestation_signatures_building_time;
+    struct lean_metrics_histogram_snapshot pq_sig_aggregated_signatures_verification_time;
+    struct lean_metrics_histogram_snapshot committee_signatures_aggregation_time;
 };
 
 void lean_metrics_reset(void);
@@ -72,6 +83,10 @@ void lean_metrics_record_state_transition_attestations(uint64_t count, double se
 void lean_metrics_record_finalization_attempt(bool success);
 void lean_metrics_record_pq_signature_signing(double seconds);
 void lean_metrics_record_pq_signature_verification(double seconds);
+void lean_metrics_record_pq_signature_verification_result(bool valid);
+void lean_metrics_record_pq_aggregated_signature_build(size_t attestation_count, double seconds);
+void lean_metrics_record_pq_aggregated_signature_verification(double seconds, bool valid);
+void lean_metrics_record_committee_signature_aggregation(double seconds, uint64_t aggregated_attestations);
 void lean_metrics_record_peer_connection(
     lean_metrics_direction_t direction,
     lean_metrics_connection_result_t result);

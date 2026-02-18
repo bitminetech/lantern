@@ -1,0 +1,22 @@
+{
+    "tests/consensus/devnet/ssz/test_consensus_containers.py::test_block_header_typical[fork_Devnet][fork_Devnet-ssz]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "typeName": "BlockHeader",
+        "value": {
+            "slot": 100,
+            "proposerIndex": 3,
+            "parentRoot": "0x0101010101010101010101010101010101010101010101010101010101010101",
+            "stateRoot": "0x0202020202020202020202020202020202020202020202020202020202020202",
+            "bodyRoot": "0x0303030303030303030303030303030303030303030303030303030303030303"
+        },
+        "serialized": "0x64000000000000000300000000000000010101010101010101010101010101010101010101010101010101010101010102020202020202020202020202020202020202020202020202020202020202020303030303030303030303030303030303030303030303030303030303030303",
+        "_info": {
+            "hash": "0xada4d94c5c4b6b8f8bca3b11934bcd0e424c60146b524147b22b292d600be5d1",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/ssz/test_consensus_containers.py::test_block_header_typical[fork_Devnet]",
+            "description": "SSZ roundtrip for BlockHeader with typical values.",
+            "fixtureFormat": "ssz"
+        }
+    }
+}

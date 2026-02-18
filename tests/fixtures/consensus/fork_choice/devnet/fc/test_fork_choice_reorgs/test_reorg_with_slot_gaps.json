@@ -120,8 +120,8 @@
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0xa714beef7a71b7699d59e902a61e08bffea346ab1cfcf010563bd0bc7782ce96",
-                                "slot": 1
+                                "root": "0x6a2326da9e435e296e0f05d37b574c49de52ba9c004c1d02a83418e092bda242",
+                                "slot": 0
                             },
                             "source": {
                                 "root": "0x6a2326da9e435e296e0f05d37b574c49de52ba9c004c1d02a83418e092bda242",
@@ -161,12 +161,12 @@
                                 "slot": 3
                             },
                             "target": {
-                                "root": "0x789fb2aea77969bb29a06e639e843fc098388b3426a0b0f4d5224533bb300dd9",
-                                "slot": 3
+                                "root": "0x6a2326da9e435e296e0f05d37b574c49de52ba9c004c1d02a83418e092bda242",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0xa714beef7a71b7699d59e902a61e08bffea346ab1cfcf010563bd0bc7782ce96",
-                                "slot": 1
+                                "root": "0x6a2326da9e435e296e0f05d37b574c49de52ba9c004c1d02a83418e092bda242",
+                                "slot": 0
                             }
                         }
                     },
@@ -202,12 +202,12 @@
                                 "slot": 4
                             },
                             "target": {
-                                "root": "0x2232157574ccc4bad3337afe7ede844cd9c4f3a38eb8289601558b983af0e59b",
-                                "slot": 4
+                                "root": "0x6a2326da9e435e296e0f05d37b574c49de52ba9c004c1d02a83418e092bda242",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0xa714beef7a71b7699d59e902a61e08bffea346ab1cfcf010563bd0bc7782ce96",
-                                "slot": 1
+                                "root": "0x6a2326da9e435e296e0f05d37b574c49de52ba9c004c1d02a83418e092bda242",
+                                "slot": 0
                             }
                         }
                     },
@@ -238,12 +238,12 @@
                                 "slot": 7
                             },
                             "target": {
-                                "root": "0xef4459159416712f8b0b54734eba24a452612c3fc0ef6cd405a2a3bc34c1e924",
-                                "slot": 7
+                                "root": "0x6a2326da9e435e296e0f05d37b574c49de52ba9c004c1d02a83418e092bda242",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x789fb2aea77969bb29a06e639e843fc098388b3426a0b0f4d5224533bb300dd9",
-                                "slot": 3
+                                "root": "0x6a2326da9e435e296e0f05d37b574c49de52ba9c004c1d02a83418e092bda242",
+                                "slot": 0
                             }
                         }
                     },
@@ -289,12 +289,12 @@
                                 "slot": 8
                             },
                             "target": {
-                                "root": "0xef608c442bbac06a0f3666b1c264ff6255df50e0f22f0e26715907bdd31c12b1",
-                                "slot": 8
+                                "root": "0x6a2326da9e435e296e0f05d37b574c49de52ba9c004c1d02a83418e092bda242",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x2232157574ccc4bad3337afe7ede844cd9c4f3a38eb8289601558b983af0e59b",
-                                "slot": 4
+                                "root": "0x6a2326da9e435e296e0f05d37b574c49de52ba9c004c1d02a83418e092bda242",
+                                "slot": 0
                             }
                         }
                     },
@@ -325,12 +325,12 @@
                                 "slot": 9
                             },
                             "target": {
-                                "root": "0x57a0c119d58646e11a0c8b60efb893537011abb8e026282d95f78bb08b6ee5de",
-                                "slot": 9
+                                "root": "0xa714beef7a71b7699d59e902a61e08bffea346ab1cfcf010563bd0bc7782ce96",
+                                "slot": 1
                             },
                             "source": {
-                                "root": "0xef608c442bbac06a0f3666b1c264ff6255df50e0f22f0e26715907bdd31c12b1",
-                                "slot": 8
+                                "root": "0x6a2326da9e435e296e0f05d37b574c49de52ba9c004c1d02a83418e092bda242",
+                                "slot": 0
                             }
                         }
                     },
@@ -350,7 +350,7 @@
         ],
         "maxSlot": 9,
         "_info": {
-            "hash": "0x5a3f5a110f542a9f2246ef5e02468f8fe064bdf8fa8b01df00f0fbac9614d83a",
+            "hash": "0x72db31d78830bd8fa72980bb8971574333a1d6be79936c542ba1b9ab158188ae",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_fork_choice_reorgs.py::test_reorg_with_slot_gaps[fork_Devnet]",
             "description": "Reorg occurs correctly even with missed slots in the chain.\n\n    Scenario\n    --------\n    - Slot 1: Base\n    - Slot 3: Fork A (skipping slot 2)\n    - Slot 4: Fork B (competing)\n    - Slot 7: Fork A extended (skipping slots 4-6)\n    - Slot 8: Fork B extended (skipping slots 5-7)\n    - Slot 9: Fork B extended again \u2192 triggers reorg\n\n    Missed Slots: 2, 5, 6 (no blocks produced)\n\n    Expected Behavior\n    -----------------\n    1. Sparse block production doesn't affect fork choice logic\n    2. Weight calculation only considers actual blocks\n    3. Reorg happens based on block count, not slot numbers\n    4. Fork B with 3 blocks beats fork A with 2 blocks\n\n    Reorg Details:\n        - **Depth**: 2 blocks (fork_a slots 3, 7)\n        - **Trigger**: Progressive building despite gaps\n        - **Weight**: 3 proposer attestations vs 2\n\n    Why This Matters\n    ----------------\n    Missed slots are extremely common in production:\n    - Offline validators (expected ~1% downtime)\n    - Network issues preventing timely block propagation\n    - Intentional skips during network congestion\n\n    Fork choice must remain robust with sparse block production:\n    - Gaps don't create bias toward any fork\n    - Only actual blocks contribute weight\n    - Reorg logic works identically whether slots are consecutive or sparse\n\n    This test ensures the algorithm works correctly in realistic network\n    conditions where perfect block production is impossible.",

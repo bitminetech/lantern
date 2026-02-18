@@ -1,0 +1,46 @@
+{
+    "tests/consensus/devnet/ssz/test_consensus_containers.py::test_block_with_attestation_minimal[fork_Devnet][fork_Devnet-ssz]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "typeName": "BlockWithAttestation",
+        "value": {
+            "block": {
+                "slot": 1,
+                "proposerIndex": 0,
+                "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "body": {
+                    "attestations": {
+                        "data": []
+                    }
+                }
+            },
+            "proposerAttestation": {
+                "validatorId": 0,
+                "data": {
+                    "slot": 0,
+                    "head": {
+                        "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                        "slot": 0
+                    },
+                    "target": {
+                        "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                        "slot": 0
+                    },
+                    "source": {
+                        "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                        "slot": 0
+                    }
+                }
+            }
+        },
+        "serialized": "0x8c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005400000004000000",
+        "_info": {
+            "hash": "0x5880172eada753d2037f7f5ff13bd4486351376ffc38f751a50bc8ef0caa5c8d",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/ssz/test_consensus_containers.py::test_block_with_attestation_minimal[fork_Devnet]",
+            "description": "SSZ roundtrip for BlockWithAttestation with minimal values.",
+            "fixtureFormat": "ssz"
+        }
+    }
+}

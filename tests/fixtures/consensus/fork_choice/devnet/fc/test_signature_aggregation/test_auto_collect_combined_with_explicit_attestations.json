@@ -94,8 +94,8 @@
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
                                 "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
@@ -110,12 +110,18 @@
                 "valid": true,
                 "checks": {
                     "headSlot": 2,
-                    "blockAttestationCount": 1,
+                    "blockAttestationCount": 2,
                     "blockAttestations": [
                         {
                             "participants": [
+                                1
+                            ],
+                            "attestationSlot": 1,
+                            "targetSlot": 0
+                        },
+                        {
+                            "participants": [
                                 0,
-                                1,
                                 3
                             ],
                             "attestationSlot": 1,
@@ -129,15 +135,38 @@
                         "slot": 2,
                         "proposerIndex": 2,
                         "parentRoot": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                        "stateRoot": "0x1ab7661451fdea24996cbc26883c0ff029866ad5f4b163c9a29a02e07df85390",
+                        "stateRoot": "0x819e76ac7754774fd5b8dd68601d3946873ca369e478afe4bd0f0486bf464489",
                         "body": {
                             "attestations": {
                                 "data": [
                                     {
                                         "aggregationBits": {
                                             "data": [
+                                                false,
+                                                true
+                                            ]
+                                        },
+                                        "data": {
+                                            "slot": 1,
+                                            "head": {
+                                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                                                "slot": 1
+                                            },
+                                            "target": {
+                                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                                "slot": 0
+                                            },
+                                            "source": {
+                                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                                "slot": 0
+                                            }
+                                        }
+                                    },
+                                    {
+                                        "aggregationBits": {
+                                            "data": [
                                                 true,
-                                                true,
+                                                false,
                                                 false,
                                                 true
                                             ]
@@ -167,16 +196,16 @@
                         "data": {
                             "slot": 2,
                             "head": {
-                                "root": "0x75cea7297950cb0f086fe6151266778a4094ab62756433bdd41071a4f9a9db2a",
+                                "root": "0x83de7576a603aa3e9c2cd433f6432f2bf0cc53336b6640feb93f85d144caf7ea",
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x75cea7297950cb0f086fe6151266778a4094ab62756433bdd41071a4f9a9db2a",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -185,10 +214,10 @@
         ],
         "maxSlot": 2,
         "_info": {
-            "hash": "0xffee12b9a5779acfc8436ff71603f5996fb790b07aa6a6187ca27794da6bb1e8",
+            "hash": "0x10023df6525cbad4161fc7edde514f8d5f25091407586f457c4b79efca40ae1f",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_signature_aggregation.py::test_auto_collect_combined_with_explicit_attestations[fork_Devnet]",
-            "description": "Combine auto-collection with explicit attestation specs.\n\n    Scenario\n    --------\n    Block 2 uses both mechanisms:\n    - Auto-collection gathers proposer 1's attestation from Store\n    - Explicit spec adds validators 0 and 3\n\n    Expected\n    --------\n    Block body contains merged attestation from all sources:\n    - Proposer 1's attestation (auto-collected)\n    - Validators 0 and 3 (explicitly specified)\n    - All merged into single aggregation (same target)",
+            "description": "Combine auto-collection with explicit attestation specs.\n\n    Scenario\n    --------\n    Block 2 uses both mechanisms:\n    - Auto-collection gathers proposer 1's attestation from Store\n    - Explicit spec adds validators 0 and 3\n\n    Expected\n    --------\n    Block body contains attestations from all sources.\n    Proposer 1's attestation targets genesis (slot 0) via the spec's target\n    walk-back algorithm, while explicit attestations target block_1 (slot 1).\n    Different targets produce separate aggregation groups.",
             "fixtureFormat": "fork_choice_test"
         }
     }

@@ -96,8 +96,8 @@
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
                                 "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
@@ -137,12 +137,12 @@
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -178,12 +178,12 @@
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -219,12 +219,12 @@
                                 "slot": 3
                             },
                             "target": {
-                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
-                                "slot": 3
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -260,12 +260,12 @@
                                 "slot": 3
                             },
                             "target": {
-                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
-                                "slot": 3
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -301,12 +301,12 @@
                                 "slot": 4
                             },
                             "target": {
-                                "root": "0xed871b60007be196769e0a763169d230f898d665087bcadb5815da47477dcce8",
-                                "slot": 4
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                                "slot": 1
                             },
                             "source": {
-                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
-                                "slot": 3
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -316,7 +316,7 @@
         ],
         "maxSlot": 4,
         "_info": {
-            "hash": "0x761e172b9090081b7b34254bbd54eb3e51338de2f9b80e5f8d28fd5a1b673eb8",
+            "hash": "0x884329f92c407ce8eef9b1e67b328f1d2116c5555a343c154c70c509bb974e23",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_fork_choice_reorgs.py::test_two_block_reorg_progressive_building[fork_Devnet]",
             "description": "Two-block reorg via progressive fork building.\n\n    Scenario\n    --------\n    - Slot 1: Common ancestor\n    - Slots 2-3: Fork A extends to 2 blocks ahead\n    - Slots 2-4: Fork B slowly catches up, then overtakes\n\n    Chain State Evolution:\n        Slot 1: base\n        Slot 2: base \u2190 fork_a_2 (head)\n                base \u2190 fork_b_2\n        Slot 3: base \u2190 fork_a_2 \u2190 fork_a_3 (head)\n                base \u2190 fork_b_2\n        Slot 4: base \u2190 fork_a_2 \u2190 fork_a_3 (was head)\n                base \u2190 fork_b_2 \u2190 fork_b_3 (tie at depth 2)\n        Slot 5: base \u2190 fork_a_2 \u2190 fork_a_3 (abandoned)\n                base \u2190 fork_b_2 \u2190 fork_b_3 \u2190 fork_b_4 (head - REORG!)\n\n    Expected Behavior\n    -----------------\n    1. Fork A leads for slots 2-3 (2 blocks ahead)\n    2. Fork B catches up at slot 4 (both at depth 2)\n    3. Fork B overtakes at slot 5 (3 blocks vs 2)\n    4. Two-block reorg: fork_a_2 and fork_a_3 become non-canonical\n\n    Reorg Details:\n        - **Depth**: 2 blocks\n        - **Trigger**: Progressive building on alternative fork\n        - **Weight advantage**: Fork B has 3 proposer attestations vs 2\n\n    Why This Matters\n    ----------------\n    Demonstrates that an initially leading fork can be overtaken if:\n    - Proposers switch to building on the alternative fork\n    - The alternative fork accumulates more blocks over time\n    - Network temporarily favored one fork but consensus shifted",

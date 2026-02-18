@@ -1,0 +1,49 @@
+{
+    "tests/consensus/devnet/ssz/test_consensus_containers.py::test_block_typical[fork_Devnet][fork_Devnet-ssz]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "typeName": "Block",
+        "value": {
+            "slot": 100,
+            "proposerIndex": 3,
+            "parentRoot": "0x0101010101010101010101010101010101010101010101010101010101010101",
+            "stateRoot": "0x0202020202020202020202020202020202020202020202020202020202020202",
+            "body": {
+                "attestations": {
+                    "data": [
+                        {
+                            "aggregationBits": {
+                                "data": [
+                                    true
+                                ]
+                            },
+                            "data": {
+                                "slot": 100,
+                                "head": {
+                                    "root": "0x0101010101010101010101010101010101010101010101010101010101010101",
+                                    "slot": 100
+                                },
+                                "target": {
+                                    "root": "0x0202020202020202020202020202020202020202020202020202020202020202",
+                                    "slot": 99
+                                },
+                                "source": {
+                                    "root": "0x0303030303030303030303030303030303030303030303030303030303030303",
+                                    "slot": 50
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        "serialized": "0x640000000000000003000000000000000101010101010101010101010101010101010101010101010101010101010101020202020202020202020202020202020202020202020202020202020202020254000000040000000400000084000000640000000000000001010101010101010101010101010101010101010101010101010101010101016400000000000000020202020202020202020202020202020202020202020202020202020202020263000000000000000303030303030303030303030303030303030303030303030303030303030303320000000000000003",
+        "_info": {
+            "hash": "0x7cd4e2e837a5a02b40a685f799d02b2a96ed471edcb9fcc448b9be2f04d0e641",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/ssz/test_consensus_containers.py::test_block_typical[fork_Devnet]",
+            "description": "SSZ roundtrip for Block with attestations.",
+            "fixtureFormat": "ssz"
+        }
+    }
+}

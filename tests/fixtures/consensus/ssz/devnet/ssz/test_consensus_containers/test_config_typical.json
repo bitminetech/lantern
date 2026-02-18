@@ -1,0 +1,18 @@
+{
+    "tests/consensus/devnet/ssz/test_consensus_containers.py::test_config_typical[fork_Devnet][fork_Devnet-ssz]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "typeName": "Config",
+        "value": {
+            "genesisTime": 1609459200
+        },
+        "serialized": "0x0066ee5f00000000",
+        "_info": {
+            "hash": "0x289050e2b77e79162477829a6b84e0266d7917dc5c4eb8388c0696829878ebf5",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/ssz/test_consensus_containers.py::test_config_typical[fork_Devnet]",
+            "description": "SSZ roundtrip for Config with typical genesis time.",
+            "fixtureFormat": "ssz"
+        }
+    }
+}

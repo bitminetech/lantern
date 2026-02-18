@@ -1,0 +1,38 @@
+{
+    "tests/consensus/devnet/ssz/test_xmss_containers.py::test_public_key_zero[fork_Devnet][fork_Devnet-ssz]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "typeName": "PublicKey",
+        "value": {
+            "root": {
+                "data": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                ]
+            },
+            "parameter": {
+                "data": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                ]
+            }
+        },
+        "serialized": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "_info": {
+            "hash": "0xa9c75f817fbc970b1a8918717a99f1c39e3a01b924f8d1a5f8267578277925f8",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/ssz/test_xmss_containers.py::test_public_key_zero[fork_Devnet]",
+            "description": "SSZ roundtrip for PublicKey with zero values.",
+            "fixtureFormat": "ssz"
+        }
+    }
+}

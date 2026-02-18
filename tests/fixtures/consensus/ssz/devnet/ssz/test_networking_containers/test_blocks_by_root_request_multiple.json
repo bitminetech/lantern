@@ -1,0 +1,24 @@
+{
+    "tests/consensus/devnet/ssz/test_networking_containers.py::test_blocks_by_root_request_multiple[fork_Devnet][fork_Devnet-ssz]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "typeName": "BlocksByRootRequest",
+        "value": {
+            "roots": {
+                "data": [
+                    "0x0101010101010101010101010101010101010101010101010101010101010101",
+                    "0x0202020202020202020202020202020202020202020202020202020202020202",
+                    "0x0303030303030303030303030303030303030303030303030303030303030303"
+                ]
+            }
+        },
+        "serialized": "0x04000000010101010101010101010101010101010101010101010101010101010101010102020202020202020202020202020202020202020202020202020202020202020303030303030303030303030303030303030303030303030303030303030303",
+        "_info": {
+            "hash": "0x4f3bca501fde80309dd3c4c8169f1e3e383d281501e3a2d0d744549179d616a6",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/ssz/test_networking_containers.py::test_blocks_by_root_request_multiple[fork_Devnet]",
+            "description": "SSZ roundtrip for BlocksByRootRequest with multiple roots.",
+            "fixtureFormat": "ssz"
+        }
+    }
+}

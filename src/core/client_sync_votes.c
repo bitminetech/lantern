@@ -166,7 +166,7 @@ static bool validate_vote_checkpoint(
 
 
 /**
- * @brief Validates vote cache availability and basic vote consistency.
+ * @brief Validates vote cache availability.
  *
  * @param client     Client instance
  * @param vote       Vote to validate
@@ -218,23 +218,6 @@ static bool validate_vote_cache_state(
             rejection,
             "validator out of range id=%" PRIu64,
             vote->validator_id);
-        return false;
-    }
-
-    if (vote->target.slot < vote->source.slot)
-    {
-        lantern_log_debug(
-            "gossip",
-            meta,
-            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " "
-            "(target slot < source)",
-            vote->validator_id,
-            vote->slot);
-        lantern_vote_rejection_set(
-            rejection,
-            "target slot %" PRIu64 " < source slot %" PRIu64,
-            vote->target.slot,
-            vote->source.slot);
         return false;
     }
 
@@ -643,7 +626,8 @@ bool lantern_client_verify_vote_signature(
  * 1. All checkpoint roots (source, target, head) must be non-zero
  * 2. All checkpoint roots must be known in fork choice
  * 3. Checkpoint slots must match the block slots in fork choice
- * 4. Vote slot must not exceed current_slot + 1
+ * 4. Checkpoint ordering must satisfy source <= target <= head
+ * 5. Vote slot must not exceed current_slot + 1
  *
  * Per leanSpec: checks that all referenced blocks exist in the store
  * before accepting the attestation.
@@ -709,6 +693,48 @@ bool lantern_client_validate_vote_constraints(
             label,
             out_rejection))
     {
+        return false;
+    }
+
+    if (vote->target.slot < vote->source.slot)
+    {
+        lantern_log_debug(
+            log_facility,
+            meta,
+            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " "
+            "(target slot < source)",
+            label,
+            vote->validator_id,
+            vote->slot);
+        if (out_rejection)
+        {
+            lantern_vote_rejection_set(
+                out_rejection,
+                "target slot %" PRIu64 " < source slot %" PRIu64,
+                vote->target.slot,
+                vote->source.slot);
+        }
+        return false;
+    }
+
+    if (vote->head.slot < vote->target.slot)
+    {
+        lantern_log_debug(
+            log_facility,
+            meta,
+            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " "
+            "(head slot < target)",
+            label,
+            vote->validator_id,
+            vote->slot);
+        if (out_rejection)
+        {
+            lantern_vote_rejection_set(
+                out_rejection,
+                "head slot %" PRIu64 " < target slot %" PRIu64,
+                vote->head.slot,
+                vote->target.slot);
+        }
         return false;
     }
 

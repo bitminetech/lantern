@@ -94,8 +94,8 @@
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
                                 "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
@@ -133,12 +133,12 @@
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -240,12 +240,12 @@
                                 "slot": 3
                             },
                             "target": {
-                                "root": "0x7d524e11571b7f9607c8903472d080d71680826586549c48667d6de141e19274",
-                                "slot": 3
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -254,7 +254,7 @@
         ],
         "maxSlot": 3,
         "_info": {
-            "hash": "0x9338a82aafb7d70345255570ff002644dfc63afebca0fe0644c5e487cb2b8f8a",
+            "hash": "0xa5a3850125d63678f4965dea2e8023e5f04dc7e6a130610044df29b2f9f0e4db",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_signature_aggregation.py::test_different_targets_create_separate_aggregations[fork_Devnet]",
             "description": "Attestations with different targets stay separate.\n\n    Scenario\n    --------\n    Block at slot 3 includes:\n    - Validators 0, 1 targeting block 1\n    - Validators 2, 3 targeting block 2\n\n    Expected\n    --------\n    - 2 separate aggregated attestations\n    - Cannot merge because different AttestationData",

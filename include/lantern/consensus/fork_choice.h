@@ -131,6 +131,8 @@ int lantern_fork_choice_set_block_validator_count(
 const LanternCheckpoint *lantern_fork_choice_latest_justified(const LanternForkChoice *store);
 const LanternCheckpoint *lantern_fork_choice_latest_finalized(const LanternForkChoice *store);
 const LanternRoot *lantern_fork_choice_safe_target(const LanternForkChoice *store);
+size_t lantern_fork_choice_new_votes_count(const LanternForkChoice *store);
+size_t lantern_fork_choice_known_votes_count(const LanternForkChoice *store);
 
 #ifdef __cplusplus
 }

@@ -1,0 +1,34 @@
+{
+    "tests/consensus/devnet/ssz/test_xmss_containers.py::test_hash_tree_layer_single[fork_Devnet][fork_Devnet-ssz]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "typeName": "HashTreeLayer",
+        "value": {
+            "startIndex": 0,
+            "nodes": {
+                "data": [
+                    {
+                        "data": [
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0
+                        ]
+                    }
+                ]
+            }
+        },
+        "serialized": "0x00000000000000000c0000000000000000000000000000000000000000000000000000000000000000000000",
+        "_info": {
+            "hash": "0x09595fc854f9f0afea66cc8c680f54abcde0ffb703f4f10c220906960ad9bbdc",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/ssz/test_xmss_containers.py::test_hash_tree_layer_single[fork_Devnet]",
+            "description": "SSZ roundtrip for HashTreeLayer with single node.",
+            "fixtureFormat": "ssz"
+        }
+    }
+}

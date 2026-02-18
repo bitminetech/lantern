@@ -1,0 +1,43 @@
+{
+    "tests/consensus/devnet/ssz/test_consensus_containers.py::test_block_body_with_attestation[fork_Devnet][fork_Devnet-ssz]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "typeName": "BlockBody",
+        "value": {
+            "attestations": {
+                "data": [
+                    {
+                        "aggregationBits": {
+                            "data": [
+                                true
+                            ]
+                        },
+                        "data": {
+                            "slot": 0,
+                            "head": {
+                                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                                "slot": 0
+                            },
+                            "target": {
+                                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                                "slot": 0
+                            },
+                            "source": {
+                                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                                "slot": 0
+                            }
+                        }
+                    }
+                ]
+            }
+        },
+        "serialized": "0x040000000400000084000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003",
+        "_info": {
+            "hash": "0x755a28bbec33808525bef746dd270da63951807fda87bcb4257edeecac7d00f6",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/ssz/test_consensus_containers.py::test_block_body_with_attestation[fork_Devnet]",
+            "description": "SSZ roundtrip for BlockBody with attestations.",
+            "fixtureFormat": "ssz"
+        }
+    }
+}

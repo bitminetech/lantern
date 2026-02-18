@@ -353,6 +353,69 @@ cleanup:
     return rc;
 }
 
+static int test_record_vote_rejects_head_older_than_target(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    int rc = 1;
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "vote_head_older",
+            &pub,
+            &secret,
+            &anchor_root,
+            &child_root)
+        != 0) {
+        return 1;
+    }
+
+    LanternSignedVote vote;
+    memset(&vote, 0, sizeof(vote));
+    uint64_t child_slot = 0;
+    if (client_test_slot_for_root(&client, &child_root, &child_slot) != 0) {
+        fprintf(stderr, "failed to resolve child slot for head older than target test\n");
+        goto cleanup;
+    }
+    vote.data.validator_id = 0;
+    vote.data.slot = 2;
+    vote.data.head.slot = 0;
+    vote.data.head.root = anchor_root;
+    vote.data.target.slot = child_slot;
+    vote.data.target.root = child_root;
+    vote.data.source.slot = 0;
+    vote.data.source.root = anchor_root;
+
+    if (client_test_sign_vote_with_secret(&vote, secret) != 0) {
+        fprintf(stderr, "failed to sign head older than target vote\n");
+        goto cleanup;
+    }
+
+    lantern_client_debug_record_vote(&client, &vote, "head_older_peer");
+
+    if (lantern_state_validator_has_vote(&client.state, 0)) {
+        fprintf(stderr, "head older than target vote should have been rejected\n");
+        goto cleanup;
+    }
+
+    if (client.fork_choice.new_votes && client.fork_choice.validator_count > 0) {
+        for (size_t i = 0; i < client.fork_choice.validator_count; ++i) {
+            if (client.fork_choice.new_votes[i].has_checkpoint) {
+                fprintf(stderr, "head older than target vote updated fork choice cache\n");
+                goto cleanup;
+            }
+        }
+    }
+
+    rc = 0;
+
+cleanup:
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
 static int test_record_vote_rejects_future_slot(void) {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
@@ -1116,6 +1179,9 @@ int main(void) {
         return 1;
     }
     if (test_record_vote_rejects_slot_mismatch() != 0) {
+        return 1;
+    }
+    if (test_record_vote_rejects_head_older_than_target() != 0) {
         return 1;
     }
     if (test_record_vote_rejects_future_slot() != 0) {

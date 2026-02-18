@@ -95,8 +95,8 @@
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
                                 "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
@@ -134,12 +134,12 @@
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -173,12 +173,12 @@
                                 "slot": 3
                             },
                             "target": {
-                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
-                                "slot": 3
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -212,12 +212,12 @@
                                 "slot": 4
                             },
                             "target": {
-                                "root": "0xed871b60007be196769e0a763169d230f898d665087bcadb5815da47477dcce8",
-                                "slot": 4
+                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                                "slot": 1
                             },
                             "source": {
-                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
-                                "slot": 3
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -251,12 +251,12 @@
                                 "slot": 5
                             },
                             "target": {
-                                "root": "0x58e9edf92e29d841a4eba44782a3d4d1e0c993a2a8227848b244f1c1e4bc52a9",
-                                "slot": 5
+                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
+                                "slot": 2
                             },
                             "source": {
-                                "root": "0xed871b60007be196769e0a763169d230f898d665087bcadb5815da47477dcce8",
-                                "slot": 4
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -290,12 +290,12 @@
                                 "slot": 6
                             },
                             "target": {
-                                "root": "0xf4243749bd2d853df2b0956fdadf2ffd80c7503484271c29e612c6e9924155db",
-                                "slot": 6
+                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
+                                "slot": 3
                             },
                             "source": {
-                                "root": "0x58e9edf92e29d841a4eba44782a3d4d1e0c993a2a8227848b244f1c1e4bc52a9",
-                                "slot": 5
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -329,12 +329,12 @@
                                 "slot": 7
                             },
                             "target": {
-                                "root": "0x8a62bad3ff9ec014fb6adbf8519e493678bbaf90fac55b47fe53d2a840d70833",
-                                "slot": 7
+                                "root": "0xed871b60007be196769e0a763169d230f898d665087bcadb5815da47477dcce8",
+                                "slot": 4
                             },
                             "source": {
-                                "root": "0xf4243749bd2d853df2b0956fdadf2ffd80c7503484271c29e612c6e9924155db",
-                                "slot": 6
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -368,12 +368,12 @@
                                 "slot": 8
                             },
                             "target": {
-                                "root": "0xd942b458e5c8b796edc932d23df9dda8939eb7b96f8c94d2a17bf368b807348d",
-                                "slot": 8
+                                "root": "0x58e9edf92e29d841a4eba44782a3d4d1e0c993a2a8227848b244f1c1e4bc52a9",
+                                "slot": 5
                             },
                             "source": {
-                                "root": "0x8a62bad3ff9ec014fb6adbf8519e493678bbaf90fac55b47fe53d2a840d70833",
-                                "slot": 7
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -407,12 +407,12 @@
                                 "slot": 9
                             },
                             "target": {
-                                "root": "0x3957ca3fb02f85e64ee684e2c2536bc87fb2e975a4dcdfa3081de9cc39ddcf6a",
-                                "slot": 9
+                                "root": "0xf4243749bd2d853df2b0956fdadf2ffd80c7503484271c29e612c6e9924155db",
+                                "slot": 6
                             },
                             "source": {
-                                "root": "0xd942b458e5c8b796edc932d23df9dda8939eb7b96f8c94d2a17bf368b807348d",
-                                "slot": 8
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -446,12 +446,12 @@
                                 "slot": 10
                             },
                             "target": {
-                                "root": "0x5ecbcf9082feefb76c1dd6f37d8159c3169c2ecd2bbb14bc497dff4a3d5641df",
-                                "slot": 10
+                                "root": "0xf4243749bd2d853df2b0956fdadf2ffd80c7503484271c29e612c6e9924155db",
+                                "slot": 6
                             },
                             "source": {
-                                "root": "0x3957ca3fb02f85e64ee684e2c2536bc87fb2e975a4dcdfa3081de9cc39ddcf6a",
-                                "slot": 9
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -485,12 +485,12 @@
                                 "slot": 11
                             },
                             "target": {
-                                "root": "0x2e9715cf83119270ac92321616d630c8e787ee27f23a91aaf8207295d122b7b5",
-                                "slot": 11
+                                "root": "0xf4243749bd2d853df2b0956fdadf2ffd80c7503484271c29e612c6e9924155db",
+                                "slot": 6
                             },
                             "source": {
-                                "root": "0x5ecbcf9082feefb76c1dd6f37d8159c3169c2ecd2bbb14bc497dff4a3d5641df",
-                                "slot": 10
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -524,12 +524,12 @@
                                 "slot": 12
                             },
                             "target": {
-                                "root": "0x535e1e1271317cd5a83c6ec99c30d972927fee6952250a12de1572bc6d27050c",
-                                "slot": 12
+                                "root": "0x3957ca3fb02f85e64ee684e2c2536bc87fb2e975a4dcdfa3081de9cc39ddcf6a",
+                                "slot": 9
                             },
                             "source": {
-                                "root": "0x2e9715cf83119270ac92321616d630c8e787ee27f23a91aaf8207295d122b7b5",
-                                "slot": 11
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -563,12 +563,12 @@
                                 "slot": 13
                             },
                             "target": {
-                                "root": "0x92ac402c6efb6b43179d5a662dcd7389ccf61617c7968d3d5af611160497362e",
-                                "slot": 13
+                                "root": "0x3957ca3fb02f85e64ee684e2c2536bc87fb2e975a4dcdfa3081de9cc39ddcf6a",
+                                "slot": 9
                             },
                             "source": {
-                                "root": "0x535e1e1271317cd5a83c6ec99c30d972927fee6952250a12de1572bc6d27050c",
-                                "slot": 12
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -602,12 +602,12 @@
                                 "slot": 14
                             },
                             "target": {
-                                "root": "0xfa599ebfafdd658feca9f4bb9095a4cd19e92ba23b2572a5e42f2a188ad7ab19",
-                                "slot": 14
+                                "root": "0x3957ca3fb02f85e64ee684e2c2536bc87fb2e975a4dcdfa3081de9cc39ddcf6a",
+                                "slot": 9
                             },
                             "source": {
-                                "root": "0x92ac402c6efb6b43179d5a662dcd7389ccf61617c7968d3d5af611160497362e",
-                                "slot": 13
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -641,12 +641,12 @@
                                 "slot": 15
                             },
                             "target": {
-                                "root": "0x8f3032c7b8c2e1283df2c580dbd315b17ba369b382f5c4c52f107b65d66d4b41",
-                                "slot": 15
+                                "root": "0x535e1e1271317cd5a83c6ec99c30d972927fee6952250a12de1572bc6d27050c",
+                                "slot": 12
                             },
                             "source": {
-                                "root": "0xfa599ebfafdd658feca9f4bb9095a4cd19e92ba23b2572a5e42f2a188ad7ab19",
-                                "slot": 14
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -680,12 +680,12 @@
                                 "slot": 16
                             },
                             "target": {
-                                "root": "0xa3d9765056efab51625457713ee53811602353a08a2fa7d609e1ae053b82bc81",
-                                "slot": 16
+                                "root": "0x535e1e1271317cd5a83c6ec99c30d972927fee6952250a12de1572bc6d27050c",
+                                "slot": 12
                             },
                             "source": {
-                                "root": "0x8f3032c7b8c2e1283df2c580dbd315b17ba369b382f5c4c52f107b65d66d4b41",
-                                "slot": 15
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -719,12 +719,12 @@
                                 "slot": 17
                             },
                             "target": {
-                                "root": "0x32f71624e9cc375bd80c01c52b543f11400add4817497445cca0387c5e93a2da",
-                                "slot": 17
+                                "root": "0x535e1e1271317cd5a83c6ec99c30d972927fee6952250a12de1572bc6d27050c",
+                                "slot": 12
                             },
                             "source": {
-                                "root": "0xa3d9765056efab51625457713ee53811602353a08a2fa7d609e1ae053b82bc81",
-                                "slot": 16
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -758,12 +758,12 @@
                                 "slot": 18
                             },
                             "target": {
-                                "root": "0xb815fd73d480ac5fcbd4ba6c185469c1974823c7df6bf23dfbedc9ee9b29834d",
-                                "slot": 18
+                                "root": "0x535e1e1271317cd5a83c6ec99c30d972927fee6952250a12de1572bc6d27050c",
+                                "slot": 12
                             },
                             "source": {
-                                "root": "0x32f71624e9cc375bd80c01c52b543f11400add4817497445cca0387c5e93a2da",
-                                "slot": 17
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -797,12 +797,12 @@
                                 "slot": 19
                             },
                             "target": {
-                                "root": "0x9339a784accf839ae09330f6a9cfe88154b4f7fbd6f825d2930e58000cef5d65",
-                                "slot": 19
+                                "root": "0xa3d9765056efab51625457713ee53811602353a08a2fa7d609e1ae053b82bc81",
+                                "slot": 16
                             },
                             "source": {
-                                "root": "0xb815fd73d480ac5fcbd4ba6c185469c1974823c7df6bf23dfbedc9ee9b29834d",
-                                "slot": 18
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -836,12 +836,12 @@
                                 "slot": 20
                             },
                             "target": {
-                                "root": "0xc0a0053d73e322aaa3cc0b3c5124d6ea5cf6eebbebc950814fec2612efeb2b82",
-                                "slot": 20
+                                "root": "0xa3d9765056efab51625457713ee53811602353a08a2fa7d609e1ae053b82bc81",
+                                "slot": 16
                             },
                             "source": {
-                                "root": "0x9339a784accf839ae09330f6a9cfe88154b4f7fbd6f825d2930e58000cef5d65",
-                                "slot": 19
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -875,12 +875,12 @@
                                 "slot": 21
                             },
                             "target": {
-                                "root": "0x2c726a2d8605d46d7c8be32a0e333eeb29398a3b0c87606bd8246f27bd2c99bd",
-                                "slot": 21
+                                "root": "0xa3d9765056efab51625457713ee53811602353a08a2fa7d609e1ae053b82bc81",
+                                "slot": 16
                             },
                             "source": {
-                                "root": "0xc0a0053d73e322aaa3cc0b3c5124d6ea5cf6eebbebc950814fec2612efeb2b82",
-                                "slot": 20
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -914,12 +914,12 @@
                                 "slot": 22
                             },
                             "target": {
-                                "root": "0xe983590785fd0239bc7a01bf5cad9f9bb0a92c826b2f1b3eef9e51d5b8428065",
-                                "slot": 22
+                                "root": "0xa3d9765056efab51625457713ee53811602353a08a2fa7d609e1ae053b82bc81",
+                                "slot": 16
                             },
                             "source": {
-                                "root": "0x2c726a2d8605d46d7c8be32a0e333eeb29398a3b0c87606bd8246f27bd2c99bd",
-                                "slot": 21
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -953,12 +953,12 @@
                                 "slot": 23
                             },
                             "target": {
-                                "root": "0x3ebbafb1d328280f6addc96c4a8e5f8610acf2067fabdd56a4335dd72a7754f2",
-                                "slot": 23
+                                "root": "0xc0a0053d73e322aaa3cc0b3c5124d6ea5cf6eebbebc950814fec2612efeb2b82",
+                                "slot": 20
                             },
                             "source": {
-                                "root": "0xe983590785fd0239bc7a01bf5cad9f9bb0a92c826b2f1b3eef9e51d5b8428065",
-                                "slot": 22
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -992,12 +992,12 @@
                                 "slot": 24
                             },
                             "target": {
-                                "root": "0x497db9491f1aaeee290508bc8f1feb96ba556d1cff1827b14a4381c8bbaab780",
-                                "slot": 24
+                                "root": "0xc0a0053d73e322aaa3cc0b3c5124d6ea5cf6eebbebc950814fec2612efeb2b82",
+                                "slot": 20
                             },
                             "source": {
-                                "root": "0x3ebbafb1d328280f6addc96c4a8e5f8610acf2067fabdd56a4335dd72a7754f2",
-                                "slot": 23
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -1031,12 +1031,12 @@
                                 "slot": 25
                             },
                             "target": {
-                                "root": "0xef20e458410fdda5624925fc27acfa29f35989e5b0fd24a5d6a295b1371f1dba",
-                                "slot": 25
+                                "root": "0xc0a0053d73e322aaa3cc0b3c5124d6ea5cf6eebbebc950814fec2612efeb2b82",
+                                "slot": 20
                             },
                             "source": {
-                                "root": "0x497db9491f1aaeee290508bc8f1feb96ba556d1cff1827b14a4381c8bbaab780",
-                                "slot": 24
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -1070,12 +1070,12 @@
                                 "slot": 26
                             },
                             "target": {
-                                "root": "0x859c5c71bcd6a693ceae8c1eb0bd49ceca15bc8b7a015c397dc87f370af6ddb9",
-                                "slot": 26
+                                "root": "0xc0a0053d73e322aaa3cc0b3c5124d6ea5cf6eebbebc950814fec2612efeb2b82",
+                                "slot": 20
                             },
                             "source": {
-                                "root": "0xef20e458410fdda5624925fc27acfa29f35989e5b0fd24a5d6a295b1371f1dba",
-                                "slot": 25
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -1109,12 +1109,12 @@
                                 "slot": 27
                             },
                             "target": {
-                                "root": "0x423b5cd9377d3852a409ced54c3a855284ca124158a2f003f0af47ede699a1ae",
-                                "slot": 27
+                                "root": "0xc0a0053d73e322aaa3cc0b3c5124d6ea5cf6eebbebc950814fec2612efeb2b82",
+                                "slot": 20
                             },
                             "source": {
-                                "root": "0x859c5c71bcd6a693ceae8c1eb0bd49ceca15bc8b7a015c397dc87f370af6ddb9",
-                                "slot": 26
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -1148,12 +1148,12 @@
                                 "slot": 28
                             },
                             "target": {
-                                "root": "0x51840e53d7d4d026c3d7ee2468fe117bf997abebd28c0107ceaf8fd1655fe642",
-                                "slot": 28
+                                "root": "0xef20e458410fdda5624925fc27acfa29f35989e5b0fd24a5d6a295b1371f1dba",
+                                "slot": 25
                             },
                             "source": {
-                                "root": "0x423b5cd9377d3852a409ced54c3a855284ca124158a2f003f0af47ede699a1ae",
-                                "slot": 27
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -1187,12 +1187,12 @@
                                 "slot": 29
                             },
                             "target": {
-                                "root": "0x41eb95d028cb061f28160a33c68f37bf0ed5330182254810d036b8c96940363b",
-                                "slot": 29
+                                "root": "0xef20e458410fdda5624925fc27acfa29f35989e5b0fd24a5d6a295b1371f1dba",
+                                "slot": 25
                             },
                             "source": {
-                                "root": "0x51840e53d7d4d026c3d7ee2468fe117bf997abebd28c0107ceaf8fd1655fe642",
-                                "slot": 28
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -1226,12 +1226,12 @@
                                 "slot": 30
                             },
                             "target": {
-                                "root": "0xdd596d1757fa73928246f105850f3777c7859f83ee0156ab5f53c47ea023c179",
-                                "slot": 30
+                                "root": "0xef20e458410fdda5624925fc27acfa29f35989e5b0fd24a5d6a295b1371f1dba",
+                                "slot": 25
                             },
                             "source": {
-                                "root": "0x41eb95d028cb061f28160a33c68f37bf0ed5330182254810d036b8c96940363b",
-                                "slot": 29
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     }
@@ -1240,7 +1240,7 @@
         ],
         "maxSlot": 30,
         "_info": {
-            "hash": "0x087bb9195d9b77f7b684f8dcadd9c2b2db8f156eb9c7dd4853101aff46b5a42e",
+            "hash": "0xb707dd36318e5d8e0bf96ace6fb20d8842a45b56e011a862290b83fa8a2c0b2d",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_attestation_target_selection.py::test_attestation_target_justifiable_constraint[fork_Devnet]",
             "description": "Attestation target advances while respecting justifiability rules.\n\n    Scenario\n    --------\n    Build a 10-slot chain and observe how the attestation target advances\n    over time while remaining justifiable relative to genesis (finalized at slot 0).\n\n    Justifiability Rules (see Slot.is_justifiable_after)\n    -----------------------------------------------------\n\n    The target starts from current head and looks back at most 3 slots towards safe target.\n\n    Then, a slot is deemed justifiable at distance delta from finalization if:\n    1. delta \u2264 5\n    2. delta is a perfect square (1, 4, 9, 16, 25, ...)\n    3. delta is a pronic number (2, 6, 12, 20, 30, ...)\n\n    Why This Matters\n    ----------------\n    The justifiability rules prevent long-range attacks by restricting which\n    checkpoints validators can attest to. The mathematical pattern (perfect squares\n    and pronic numbers) creates increasingly sparse justifiable slots as the chain\n    grows beyond finalization, providing security guarantees.\n\n    The test verifies that the target selection algorithm respects these rules\n    and never selects a non-justifiable target.",

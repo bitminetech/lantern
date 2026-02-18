@@ -94,8 +94,8 @@
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
                                 "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
@@ -172,8 +172,8 @@
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x5f40fd980e82e7888439cc76557d718a554d5a47f2b813b801b4cb1b64e486bd",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
                                 "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
@@ -186,7 +186,7 @@
         ],
         "maxSlot": 2,
         "_info": {
-            "hash": "0x9138bdcaa7e19ed23de8cf5f552a6f39777b42678b2dcf971debfeb0e7d8df80",
+            "hash": "0xe580682ea747650b4c31016907c4609321e476052347e127c14cdefe6a3e0f32",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_signature_aggregation.py::test_multiple_specs_same_target_merge_into_one[fork_Devnet]",
             "description": "Multiple attestation specs with identical data merge into single aggregation.\n\n    Scenario\n    --------\n    Block at slot 2 includes:\n    - Validators 0, 1 attesting to block 1\n    - Validators 2, 3 attesting to block 1 (same target)\n\n    Expected\n    --------\n    - 1 aggregated attestation (merged)\n    - Covers all validators {0, 1, 2, 3}",

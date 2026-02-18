@@ -1,0 +1,46 @@
+{
+    "tests/consensus/devnet/ssz/test_xmss_containers.py::test_hash_tree_layer_multiple[fork_Devnet][fork_Devnet-ssz]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "typeName": "HashTreeLayer",
+        "value": {
+            "startIndex": 4,
+            "nodes": {
+                "data": [
+                    {
+                        "data": [
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0
+                        ]
+                    },
+                    {
+                        "data": [
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0
+                        ]
+                    }
+                ]
+            }
+        },
+        "serialized": "0x04000000000000000c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "_info": {
+            "hash": "0x8e2f5521b9cbaf75fc288c7092d57ed598746822f2ee822d6dc47c29549a5c07",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/ssz/test_xmss_containers.py::test_hash_tree_layer_multiple[fork_Devnet]",
+            "description": "SSZ roundtrip for HashTreeLayer with multiple nodes.",
+            "fixtureFormat": "ssz"
+        }
+    }
+}

@@ -1,0 +1,42 @@
+{
+    "tests/consensus/devnet/ssz/test_xmss_containers.py::test_hash_subtree_with_layers[fork_Devnet][fork_Devnet-ssz]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "typeName": "HashSubTree",
+        "value": {
+            "depth": 4,
+            "lowestLayer": 0,
+            "layers": {
+                "data": [
+                    {
+                        "startIndex": 0,
+                        "nodes": {
+                            "data": [
+                                {
+                                    "data": [
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        0
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "serialized": "0x04000000000000000000000000000000140000000400000000000000000000000c0000000000000000000000000000000000000000000000000000000000000000000000",
+        "_info": {
+            "hash": "0xd3c0df1a02abc770314bcc8606ceb572cb42d2b140534ccb4d485c164b18176c",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/ssz/test_xmss_containers.py::test_hash_subtree_with_layers[fork_Devnet]",
+            "description": "SSZ roundtrip for HashSubTree with layers.",
+            "fixtureFormat": "ssz"
+        }
+    }
+}

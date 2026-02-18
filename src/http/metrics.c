@@ -478,6 +478,72 @@ static int append_lean_chain_metrics(
         return rc;
     }
 
+    rc = append_metric_uint64(
+        buf,
+        "lean_gossip_signatures_count",
+        "Current number of gossip signatures in fork-choice store",
+        "gauge",
+        snapshot->lean_gossip_signatures_count);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_latest_new_aggregated_payloads_count",
+        "Current number of new aggregated payloads",
+        "gauge",
+        snapshot->lean_latest_new_aggregated_payloads_count);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_latest_known_aggregated_payloads_count",
+        "Current number of known aggregated payloads",
+        "gauge",
+        snapshot->lean_latest_known_aggregated_payloads_count);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_is_aggregator",
+        "Validator is_aggregator status (1=true, 0=false)",
+        "gauge",
+        snapshot->lean_is_aggregator);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_committee_attestation_subnet",
+        "Current committee attestation subnet",
+        "gauge",
+        snapshot->lean_committee_attestation_subnet);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_committee_attestation_subnets_count",
+        "Number of committee attestation subnets",
+        "gauge",
+        snapshot->lean_committee_attestation_subnets_count);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
     const struct lean_metrics_snapshot *lean = &snapshot->lean_metrics;
 
     rc = append_metric_uint64(
@@ -508,6 +574,94 @@ static int append_lean_chain_metrics(
         "Total number of invalid attestations",
         "counter",
         lean->attestations_invalid_total);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_pq_sig_individual_signatures_total",
+        "Total number of individual attestation signatures",
+        "counter",
+        lean->pq_sig_individual_signatures_total);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_pq_sig_individual_signatures_valid_total",
+        "Total number of valid individual attestation signatures",
+        "counter",
+        lean->pq_sig_individual_signatures_valid_total);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_pq_sig_individual_signatures_invalid_total",
+        "Total number of invalid individual attestation signatures",
+        "counter",
+        lean->pq_sig_individual_signatures_invalid_total);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_pq_sig_aggregated_signatures_total",
+        "Total number of aggregated signatures",
+        "counter",
+        lean->pq_sig_aggregated_signatures_total);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_pq_sig_aggregated_signatures_valid_total",
+        "Total number of valid aggregated signatures",
+        "counter",
+        lean->pq_sig_aggregated_signatures_valid_total);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_pq_sig_aggregated_signatures_invalid_total",
+        "Total number of invalid aggregated signatures",
+        "counter",
+        lean->pq_sig_aggregated_signatures_invalid_total);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_pq_sig_attestations_in_aggregated_signatures_total",
+        "Total number of attestations included into aggregated signatures",
+        "counter",
+        lean->pq_sig_attestations_in_aggregated_signatures_total);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_committee_aggregated_attestations_total",
+        "Total number of aggregated attestations produced by committee aggregation",
+        "counter",
+        lean->committee_aggregated_attestations_total);
     if (rc != 0)
     {
         return rc;
@@ -875,9 +1029,59 @@ static int append_lean_histograms(
 
     rc = append_histogram_metrics(
         buf,
+        "lean_pq_sig_attestation_signing_time_seconds",
+        "Time taken to sign an attestation",
+        &lean->pq_signature_signing_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
         "lean_pq_signature_attestation_verification_time_seconds",
         "Time taken to verify an attestation signature",
         &lean->pq_signature_verification_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_pq_sig_attestation_verification_time_seconds",
+        "Time taken to verify an attestation signature",
+        &lean->pq_signature_verification_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_pq_sig_attestation_signatures_building_time_seconds",
+        "Time taken to build an aggregated attestation signature",
+        &lean->pq_sig_attestation_signatures_building_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_pq_sig_aggregated_signatures_verification_time_seconds",
+        "Time taken to verify an aggregated attestation signature",
+        &lean->pq_sig_aggregated_signatures_verification_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_committee_signatures_aggregation_time_seconds",
+        "Time taken to aggregate committee signatures",
+        &lean->committee_signatures_aggregation_time);
     if (rc != 0)
     {
         return rc;

@@ -95,8 +95,8 @@
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
                                 "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
@@ -118,7 +118,7 @@
                                 1
                             ],
                             "attestationSlot": 1,
-                            "targetSlot": 1
+                            "targetSlot": 0
                         }
                     ]
                 },
@@ -128,7 +128,7 @@
                         "slot": 2,
                         "proposerIndex": 2,
                         "parentRoot": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                        "stateRoot": "0x68e9b9c827706fbbeab878b27c3c11f8fd39b10e520af14ce5e343810aa688ec",
+                        "stateRoot": "0x83ea8d9d4d92bea5a1fade9dfed9f9d88c84e5ba377c02e0b4e84826461c2dba",
                         "body": {
                             "attestations": {
                                 "data": [
@@ -146,8 +146,8 @@
                                                 "slot": 1
                                             },
                                             "target": {
-                                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                                "slot": 1
+                                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                                "slot": 0
                                             },
                                             "source": {
                                                 "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
@@ -164,16 +164,16 @@
                         "data": {
                             "slot": 2,
                             "head": {
-                                "root": "0x80bc99fcbe6f1e88f88bc816eb9622f3162579b1c5f444923986d73ccaa6a018",
+                                "root": "0x693ad5b18e01892ef8747544d5ae4fce2dbeb131fe9cd174723929009d10bc40",
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x80bc99fcbe6f1e88f88bc816eb9622f3162579b1c5f444923986d73ccaa6a018",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -183,7 +183,7 @@
         ],
         "maxSlot": 2,
         "_info": {
-            "hash": "0x419dabce5b69bc9891f6cc1a6740047eeaa7708929166c310e338391cd986e3b",
+            "hash": "0x768796259522934574a1adf8bcc53267996bbd6a0399956e336c0cf4b64f3c28",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_signature_aggregation.py::test_auto_collect_proposer_attestations[fork_Devnet]",
             "description": "Automatically collect previous proposers' attestations into block body.\n\n    Scenario\n    --------\n    With automatic attestation collection enabled:\n    - Block 1: proposer 1 attests (attestation goes to Store)\n    - Block 2: auto-collects proposer 1's attestation into block body\n\n    Expected\n    --------\n    Without explicit attestation specs, blocks automatically include\n    attestations from previous proposers whose signatures are available\n    and whose source matches the current justified checkpoint.\n\n    Note: Auto-collection only includes attestations whose source matches\n    the post-state's latest_justified checkpoint. Proposer attestations\n    reference their parent as source, which must match for inclusion.",

@@ -356,6 +356,8 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
     memset(&fork_head_root, 0, sizeof(fork_head_root));
     uint64_t fork_head_slot = 0;
     uint64_t safe_target_slot = 0;
+    size_t new_vote_count = 0;
+    size_t known_vote_count = 0;
     if (client->has_fork_choice)
     {
         if (lantern_fork_choice_current_head(&client->fork_choice, &fork_head_root) == 0)
@@ -389,6 +391,9 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
                 safe_target_slot = slot;
             }
         }
+
+        new_vote_count = lantern_fork_choice_new_votes_count(&client->fork_choice);
+        known_vote_count = lantern_fork_choice_known_votes_count(&client->fork_choice);
     }
 
     uint64_t state_head_slot = 0;
@@ -418,6 +423,16 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
     out_snapshot->lean_latest_justified_slot = state_justified.slot;
     out_snapshot->lean_latest_finalized_slot = state_finalized.slot;
     out_snapshot->lean_validators_count = client->local_validator_count;
+    out_snapshot->lean_gossip_signatures_count = (uint64_t)(new_vote_count + known_vote_count);
+    out_snapshot->lean_latest_new_aggregated_payloads_count = (uint64_t)new_vote_count;
+    out_snapshot->lean_latest_known_aggregated_payloads_count = (uint64_t)known_vote_count;
+    out_snapshot->lean_is_aggregator =
+        (client->assigned_validators && client->assigned_validators->enr.is_aggregator) ? 1u : 0u;
+    out_snapshot->lean_committee_attestation_subnet = (uint64_t)client->gossip.attestation_subnet_id;
+    out_snapshot->lean_committee_attestation_subnets_count =
+        (uint64_t)(client->debug_attestation_committee_count > 0
+                ? client->debug_attestation_committee_count
+                : 1u);
     out_snapshot->lean_connected_peers = 0;
     if (client->connection_lock_initialized)
     {

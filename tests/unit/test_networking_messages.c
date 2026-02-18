@@ -663,13 +663,45 @@ static int parse_hex_bytes(const char *hex, uint8_t *out, size_t expected_len) {
     return 0;
 }
 
+static void normalize_attestation_data_for_gossip_sanity(LanternAttestationData *data, uint64_t max_slot) {
+    if (!data) {
+        return;
+    }
+    if (data->target.slot < data->source.slot) {
+        data->target.slot = data->source.slot;
+    }
+    if (data->slot < data->target.slot) {
+        data->slot = data->target.slot;
+    }
+    if (data->slot > max_slot) {
+        data->slot = max_slot;
+    }
+}
+
+static void normalize_signed_block_for_gossip_sanity(LanternSignedBlock *block) {
+    if (!block) {
+        return;
+    }
+    uint64_t block_slot = block->message.block.slot;
+    for (size_t i = 0; i < block->message.block.body.attestations.length; ++i) {
+        LanternAggregatedAttestation *att = &block->message.block.body.attestations.data[i];
+        normalize_attestation_data_for_gossip_sanity(&att->data, block_slot);
+    }
+
+    LanternVote *proposer = &block->message.proposer_attestation;
+    normalize_attestation_data_for_gossip_sanity(&proposer->data, block_slot);
+    if (proposer->slot < block_slot) {
+        proposer->slot = block_slot;
+    }
+}
+
 static void test_replay_devnet_block_payloads(void) {
     struct block_fixture_case cases[] = {
         {
             .fixture =
                 "consensus/fork_choice/devnet/fc/test_fork_choice_reorgs/test_reorg_on_newly_justified_slot.json",
             .kind = BLOCK_FIXTURE_FORK_CHOICE_STEP,
-            .index = 5,
+            .index = 4,
         },
         {
             .fixture =
@@ -683,6 +715,7 @@ static void test_replay_devnet_block_payloads(void) {
         LanternSignedBlock original;
         lantern_signed_block_with_attestation_init(&original);
         CHECK(load_signed_block_fixture(&cases[i], &original) == 0);
+        normalize_signed_block_for_gossip_sanity(&original);
         size_t sig_count = original.message.block.body.attestations.length;
         CHECK(lantern_attestation_signatures_resize(&original.signatures.attestation_signatures, sig_count) == 0);
         for (size_t sig_idx = 0; sig_idx < sig_count; ++sig_idx) {

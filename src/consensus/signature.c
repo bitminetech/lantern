@@ -114,7 +114,9 @@ bool lantern_signature_verify(
         sizeof(signature->bytes));
     double elapsed = get_time_seconds() - start;
     lean_metrics_record_pq_signature_verification(elapsed);
-    return verify_rc == 1;
+    bool valid = (verify_rc == 1);
+    lean_metrics_record_pq_signature_verification_result(valid);
+    return valid;
 }
 
 bool lantern_signature_verify_pk(
@@ -131,17 +133,20 @@ bool lantern_signature_verify_pk(
         pq_signature_deserialize(signature->bytes, sizeof(signature->bytes), &pq_signature);
     if (sig_err != Success || !pq_signature) {
         lantern_log_debug("signature", NULL, "signature deserialize failed");
+        lean_metrics_record_pq_signature_verification_result(false);
         return false;
     }
     double start = get_time_seconds();
     int verify_rc = pq_verify(pubkey, epoch, message->bytes, LANTERN_ROOT_SIZE, pq_signature);
     double elapsed = get_time_seconds() - start;
     lean_metrics_record_pq_signature_verification(elapsed);
+    bool valid = (verify_rc == 1);
+    lean_metrics_record_pq_signature_verification_result(valid);
     pq_signature_free(pq_signature);
-    if (verify_rc != 1) {
+    if (!valid) {
         lantern_log_debug("signature", NULL, "pq_verify rc=%d", verify_rc);
     }
-    return verify_rc == 1;
+    return valid;
 }
 
 bool lantern_signature_sign(
@@ -311,6 +316,7 @@ bool lantern_signature_aggregate(
             epoch);
     } else {
         double elapsed = get_time_seconds() - start;
+        lean_metrics_record_pq_aggregated_signature_build(count, elapsed);
         lantern_log_debug(
             "signature",
             NULL,
@@ -374,6 +380,7 @@ bool lantern_signature_verify_aggregated(
     }
 
     int verify_rc = -1;
+    double elapsed = 0.0;
     if (ok) {
         pq_xmss_aggregation_setup_verifier();
         double start = get_time_seconds();
@@ -385,7 +392,8 @@ bool lantern_signature_verify_aggregated(
             proof->data,
             proof->length,
             epoch);
-        double elapsed = get_time_seconds() - start;
+        elapsed = get_time_seconds() - start;
+        lean_metrics_record_pq_aggregated_signature_verification(elapsed, verify_rc == 1);
         lantern_log_debug(
             "signature",
             NULL,

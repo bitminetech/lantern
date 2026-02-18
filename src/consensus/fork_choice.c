@@ -1349,3 +1349,32 @@ const LanternRoot *lantern_fork_choice_safe_target(const LanternForkChoice *stor
     }
     return &store->safe_target;
 }
+
+static size_t count_vote_entries(
+    const struct lantern_fork_choice_vote_entry *entries,
+    size_t count) {
+    if (!entries) {
+        return 0;
+    }
+    size_t total = 0;
+    for (size_t i = 0; i < count; ++i) {
+        if (entries[i].has_checkpoint) {
+            total += 1;
+        }
+    }
+    return total;
+}
+
+size_t lantern_fork_choice_new_votes_count(const LanternForkChoice *store) {
+    if (!store || !store->initialized) {
+        return 0;
+    }
+    return count_vote_entries(store->new_votes, store->validator_count);
+}
+
+size_t lantern_fork_choice_known_votes_count(const LanternForkChoice *store) {
+    if (!store || !store->initialized) {
+        return 0;
+    }
+    return count_vote_entries(store->known_votes, store->validator_count);
+}

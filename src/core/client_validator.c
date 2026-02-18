@@ -28,6 +28,7 @@
 #include "lantern/consensus/runtime.h"
 #include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"
+#include "lantern/metrics/lean_metrics.h"
 #include "lantern/networking/gossipsub_service.h"
 #include "lantern/support/log.h"
 
@@ -2177,12 +2178,26 @@ static int validator_publish_aggregated_attestations(struct lantern_client *clie
         goto cleanup;
     }
 
+    uint64_t aggregation_started_ms = monotonic_millis();
     result = aggregate_attestations_for_block(
         client,
         &attestations,
         &signatures,
         &aggregated_attestations,
         &aggregated_signatures);
+    uint64_t aggregation_finished_ms = monotonic_millis();
+    double aggregation_seconds = 0.0;
+    if (aggregation_finished_ms >= aggregation_started_ms) {
+        aggregation_seconds =
+            (double)(aggregation_finished_ms - aggregation_started_ms) / 1000.0;
+    }
+    uint64_t aggregated_attestations_total = 0;
+    if (result == LANTERN_CLIENT_OK) {
+        aggregated_attestations_total = (uint64_t)aggregated_attestations.length;
+    }
+    lean_metrics_record_committee_signature_aggregation(
+        aggregation_seconds,
+        aggregated_attestations_total);
     if (result != LANTERN_CLIENT_OK) {
         goto cleanup;
     }

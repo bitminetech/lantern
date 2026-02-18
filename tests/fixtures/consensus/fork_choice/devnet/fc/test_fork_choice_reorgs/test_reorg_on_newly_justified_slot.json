@@ -116,8 +116,8 @@
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x3add9bf5c7359b5ca66b37a2466eeda4c175735535a4223fe151515c9bd949c9",
-                                "slot": 1
+                                "root": "0xf5f1658d4cf27f24ecb6e1eaba8e849f11bf21389c8356602f1fa1ef166bab30",
+                                "slot": 0
                             },
                             "source": {
                                 "root": "0xf5f1658d4cf27f24ecb6e1eaba8e849f11bf21389c8356602f1fa1ef166bab30",
@@ -157,12 +157,12 @@
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x5bbfb6d6e0eb47ebfc882cefa81472e1a295b77ba02871d0cb725bc12f6edf7a",
-                                "slot": 2
+                                "root": "0xf5f1658d4cf27f24ecb6e1eaba8e849f11bf21389c8356602f1fa1ef166bab30",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x3add9bf5c7359b5ca66b37a2466eeda4c175735535a4223fe151515c9bd949c9",
-                                "slot": 1
+                                "root": "0xf5f1658d4cf27f24ecb6e1eaba8e849f11bf21389c8356602f1fa1ef166bab30",
+                                "slot": 0
                             }
                         }
                     },
@@ -198,12 +198,12 @@
                                 "slot": 3
                             },
                             "target": {
-                                "root": "0xd113b068f02969c279427a90fbc4610eb4854bcec545517e4564abcbdb62d0e3",
-                                "slot": 3
+                                "root": "0xf5f1658d4cf27f24ecb6e1eaba8e849f11bf21389c8356602f1fa1ef166bab30",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x5bbfb6d6e0eb47ebfc882cefa81472e1a295b77ba02871d0cb725bc12f6edf7a",
-                                "slot": 2
+                                "root": "0xf5f1658d4cf27f24ecb6e1eaba8e849f11bf21389c8356602f1fa1ef166bab30",
+                                "slot": 0
                             }
                         }
                     },
@@ -239,12 +239,12 @@
                                 "slot": 4
                             },
                             "target": {
-                                "root": "0xd74eef9ff6d123c6a90d4d08e12572ec5b4b8dafe4a8f838c41f5a43984671f9",
-                                "slot": 4
+                                "root": "0x3add9bf5c7359b5ca66b37a2466eeda4c175735535a4223fe151515c9bd949c9",
+                                "slot": 1
                             },
                             "source": {
-                                "root": "0xd113b068f02969c279427a90fbc4610eb4854bcec545517e4564abcbdb62d0e3",
-                                "slot": 3
+                                "root": "0xf5f1658d4cf27f24ecb6e1eaba8e849f11bf21389c8356602f1fa1ef166bab30",
+                                "slot": 0
                             }
                         }
                     },
@@ -280,12 +280,12 @@
                                 "slot": 5
                             },
                             "target": {
-                                "root": "0xb478313113a443d30348b55aef74f1330ac3d7bf2f8c5ca54802659c7d8b192c",
-                                "slot": 5
+                                "root": "0xf5f1658d4cf27f24ecb6e1eaba8e849f11bf21389c8356602f1fa1ef166bab30",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x3add9bf5c7359b5ca66b37a2466eeda4c175735535a4223fe151515c9bd949c9",
-                                "slot": 1
+                                "root": "0xf5f1658d4cf27f24ecb6e1eaba8e849f11bf21389c8356602f1fa1ef166bab30",
+                                "slot": 0
                             }
                         }
                     },
@@ -355,8 +355,8 @@
                                 "slot": 6
                             },
                             "target": {
-                                "root": "0x192bc9efe1a001132499fad31956ae165c73d9b37219a7b1bc3b1f82a492412f",
-                                "slot": 6
+                                "root": "0xf5f1658d4cf27f24ecb6e1eaba8e849f11bf21389c8356602f1fa1ef166bab30",
+                                "slot": 0
                             },
                             "source": {
                                 "root": "0xb478313113a443d30348b55aef74f1330ac3d7bf2f8c5ca54802659c7d8b192c",
@@ -370,7 +370,7 @@
         ],
         "maxSlot": 6,
         "_info": {
-            "hash": "0xf9d5c81f2b9be058474fd5b825104a9ac5a0aa72884469b8005a57108a69fbfc",
+            "hash": "0x13396ed7ec4c05429943b01991733ed7ea4abf8493c02025773b955fdb8e6b14",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_fork_choice_reorgs.py::test_reorg_on_newly_justified_slot[fork_Devnet]",
             "description": "Reorg occurs correctly when forks cross justification boundaries.\n\n    Scenario\n    --------\n    Two forks compete. Fork A is heavier and longer, but Fork B manages to\n    become justified. Fork choice must switch to the justified fork regardless\n    of weight/length.\n\n    - Slot 1: Base\n    - Slots 2-4: Fork A extends (becomes head with depth 3)\n    - Slot 5: Fork B appears (descending from Base, skipping slots 2-4)\n    - Slot 6: Fork B extends. This block contains enough attestations to\n              justify Fork B at Slot 5.\n\n    Expected Behavior\n    -----------------\n    1. Fork A takes the lead initially (Slots 2-4) as the heaviest chain.\n    2. Fork B appears at Slot 5 but is initially lighter.\n    3. At Slot 6, the new block includes attestations that justify Fork B at Slot 5.\n    4. The justified checkpoint updates to Slot 5 (fork_b_1).\n    5. Fork A is immediately discarded because it does not descend from the new\n       justified checkpoint (Fork A is on a branch from Slot 1).\n    6. Fork B becomes the canonical head.\n\n    Why This Matters\n    ----------------\n    Justification is a critical safety mechanism:\n    - Limits which blocks can be attested to\n    - Ensures fork choice respects finality constraints\n\n    This test ensures:\n    - Reorgs respect justification boundaries\n    - Fork choice works correctly across justifiable slots\n    - Safety guarantees maintained during reorgs",

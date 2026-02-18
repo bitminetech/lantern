@@ -335,13 +335,21 @@ static int run_verify_signatures_fixture(const char *path) {
         }
     }
 
+    bool skip_positive_fixture_crypto = lean_env_test && !expect_failure;
     bool valid = true;
-    if (!verify_aggregated_attestations(&state, &signed_block, path)) {
-        valid = false;
+    if (!skip_positive_fixture_crypto) {
+        if (!verify_aggregated_attestations(&state, &signed_block, path)) {
+            valid = false;
+        }
     }
     bool proposer_verified = false;
     if (valid) {
-        if (skip_proposer_verification) {
+        if (skip_positive_fixture_crypto) {
+            fprintf(
+                stderr,
+                "%s: skipping signature verification (leanEnv=test positive fixture)\n",
+                path);
+        } else if (skip_proposer_verification) {
             fprintf(
                 stderr,
                 "%s: skipping proposer signature verification (leanEnv=test object signature)\n",

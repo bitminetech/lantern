@@ -700,9 +700,16 @@ static int lantern_fixture_parse_byte_list_object(
     if (container_idx < 0) {
         return lantern_byte_list_resize(list, 0);
     }
-    int data_idx = lantern_fixture_object_get_field(doc, container_idx, "data");
-    if (data_idx < 0) {
-        return lantern_byte_list_resize(list, 0);
+    int data_idx = container_idx;
+    const jsmntok_t *container_tok = lantern_fixture_token(doc, container_idx);
+    if (!container_tok) {
+        return -1;
+    }
+    if (container_tok->type == JSMN_OBJECT) {
+        data_idx = lantern_fixture_object_get_field(doc, container_idx, "data");
+        if (data_idx < 0) {
+            return lantern_byte_list_resize(list, 0);
+        }
     }
     size_t len = 0;
     const char *str = lantern_fixture_token_string(doc, data_idx, &len);
@@ -1353,6 +1360,26 @@ static int lantern_fixture_token_to_signature(
             return -1;
         }
     }
+
+    if (byte_len > 0) {
+        struct PQSignature *pq_signature = NULL;
+        enum PQSigningError sig_err = pq_signature_deserialize(buffer, byte_len, &pq_signature);
+        if (sig_err == Success && pq_signature) {
+            uintptr_t written_len = 0;
+            enum PQSigningError serialize_err = pq_signature_serialize(
+                pq_signature,
+                signature->bytes,
+                sizeof(signature->bytes),
+                &written_len);
+            pq_signature_free(pq_signature);
+            if (serialize_err == Success && written_len > 0 && written_len <= sizeof(signature->bytes)) {
+                return 0;
+            }
+        } else if (pq_signature) {
+            pq_signature_free(pq_signature);
+        }
+    }
+
     memset(signature->bytes, 0, sizeof(signature->bytes));
     if (byte_len > 0) {
         memcpy(signature->bytes, buffer, byte_len);

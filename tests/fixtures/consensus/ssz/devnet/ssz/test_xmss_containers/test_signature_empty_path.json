@@ -1,0 +1,16 @@
+{
+    "tests/consensus/devnet/ssz/test_xmss_containers.py::test_signature_empty_path[fork_Devnet][fork_Devnet-ssz]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "typeName": "Signature",
+        "value": "0x24000000000000000000000000000000000000000000000000000000000000002800000004000000",
+        "serialized": "0x24000000000000000000000000000000000000000000000000000000000000002800000004000000",
+        "_info": {
+            "hash": "0xd039bc0efd4029181c663c8ec8848bc8191a8b3bbca08e3fd8725df7f9a3079c",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/ssz/test_xmss_containers.py::test_signature_empty_path[fork_Devnet]",
+            "description": "SSZ roundtrip for Signature with empty authentication path.",
+            "fixtureFormat": "ssz"
+        }
+    }
+}

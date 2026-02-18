@@ -96,8 +96,8 @@
                                 "slot": 1
                             },
                             "target": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
                                 "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
@@ -137,12 +137,12 @@
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -178,12 +178,12 @@
                                 "slot": 2
                             },
                             "target": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -219,12 +219,12 @@
                                 "slot": 3
                             },
                             "target": {
-                                "root": "0x068babbea4aa0202a94dd95e4e3f65b32e95cefe143df7ef0c76cf83858597d4",
-                                "slot": 3
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             },
                             "source": {
-                                "root": "0x64cce9455f0122be56727da4c100f9c842d93bd55c116d36648f312071968d23",
-                                "slot": 2
+                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                                "slot": 0
                             }
                         }
                     },
@@ -234,7 +234,7 @@
         ],
         "maxSlot": 3,
         "_info": {
-            "hash": "0x9e630325338a717aedd549d4636b040fb8cb5fbd63f84024c6c77d6379b1acf0",
+            "hash": "0x00928e4909ade3254c1574a4a82d029327a3e7e638fa53eb8f2746a4a70ac56e",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_fork_choice_reorgs.py::test_simple_one_block_reorg[fork_Devnet]",
             "description": "Simplest reorg: one-block fork overtakes another via extension.\n\n    Scenario\n    --------\n    - Slot 1: Common ancestor (chain_base)\n    - Slot 2: Fork A created, becomes head\n    - Slot 2: Fork B created (competing fork at same slot)\n    - Slot 3: Fork B extended \u2192 triggers reorg from A to B\n\n    Expected Behavior\n    -----------------\n    1. After fork_a_2: head = fork_a_2 (first fork created)\n    2. After fork_b_2: head = fork_a_2 (equal weight, head remains unchanged)\n    3. After fork_b_3: head = fork_b_3 (fork B heavier due to extension)\n\n    Reorg Details:\n        - **Depth**: 1 block (fork_a_2 becomes non-canonical)\n        - **Trigger**: Fork extension (proposer attestation)\n        - **Weight advantage**: Fork B has 2 proposer attestations vs 1\n\n    Why This Matters\n    ----------------\n    This is the most common reorg scenario in practice:\n    - Two blocks proposed at nearly the same time\n    - Network temporarily splits (half see A first, half see B first)\n    - Next proposer builds on one fork, resolving the split\n    - Fork choice converges to the extended fork\n\n    Tests the fundamental property: extending a fork makes it heavier.",

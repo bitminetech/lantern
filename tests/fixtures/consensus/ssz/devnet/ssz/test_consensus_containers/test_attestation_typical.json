@@ -1,0 +1,33 @@
+{
+    "tests/consensus/devnet/ssz/test_consensus_containers.py::test_attestation_typical[fork_Devnet][fork_Devnet-ssz]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "typeName": "Attestation",
+        "value": {
+            "validatorId": 42,
+            "data": {
+                "slot": 100,
+                "head": {
+                    "root": "0x0101010101010101010101010101010101010101010101010101010101010101",
+                    "slot": 100
+                },
+                "target": {
+                    "root": "0x0202020202020202020202020202020202020202020202020202020202020202",
+                    "slot": 99
+                },
+                "source": {
+                    "root": "0x0303030303030303030303030303030303030303030303030303030303030303",
+                    "slot": 50
+                }
+            }
+        },
+        "serialized": "0x2a000000000000006400000000000000010101010101010101010101010101010101010101010101010101010101010164000000000000000202020202020202020202020202020202020202020202020202020202020202630000000000000003030303030303030303030303030303030303030303030303030303030303033200000000000000",
+        "_info": {
+            "hash": "0x21b8a7e2446bf83eff001dbfb59142901df6388d73bfd49caa83377d4e5fe449",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/ssz/test_consensus_containers.py::test_attestation_typical[fork_Devnet]",
+            "description": "SSZ roundtrip for Attestation with typical values.",
+            "fixtureFormat": "ssz"
+        }
+    }
+}

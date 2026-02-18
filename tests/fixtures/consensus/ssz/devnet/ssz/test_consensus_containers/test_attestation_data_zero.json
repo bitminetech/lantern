@@ -1,0 +1,30 @@
+{
+    "tests/consensus/devnet/ssz/test_consensus_containers.py::test_attestation_data_zero[fork_Devnet][fork_Devnet-ssz]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "typeName": "AttestationData",
+        "value": {
+            "slot": 0,
+            "head": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "target": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "source": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            }
+        },
+        "serialized": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "_info": {
+            "hash": "0x9ba6764e7fa45f660dbd164fa17d7aeed5443f2215ecd3e15f62f80c5dd7a32f",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/ssz/test_consensus_containers.py::test_attestation_data_zero[fork_Devnet]",
+            "description": "SSZ roundtrip for AttestationData with zero values.",
+            "fixtureFormat": "ssz"
+        }
+    }
+}
