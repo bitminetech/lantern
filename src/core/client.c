@@ -1527,7 +1527,7 @@ static lantern_client_error client_start_protocols(
         .host = client->network.host,
         .devnet = client->devnet,
         .attestation_subnet_id = subnet_id,
-        .subscribe_attestation_subnet = client->assigned_validators->enr.is_aggregator ? 1 : 0,
+        .subscribe_attestation_subnet = 1,
     };
     lantern_gossipsub_service_set_block_handler(&client->gossip, gossip_block_handler, client);
     lantern_gossipsub_service_set_vote_handler(&client->gossip, gossip_vote_handler, client);
