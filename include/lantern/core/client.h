@@ -80,6 +80,7 @@ struct lantern_client_options {
     const char *xmss_secret_path;
     const char *xmss_public_template;
     const char *xmss_secret_template;
+    bool is_aggregator;
 };
 
 struct libp2p_subscription;

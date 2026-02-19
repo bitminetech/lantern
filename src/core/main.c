@@ -48,6 +48,7 @@ enum {
     OPT_XMSS_SECRET_PATH,
     OPT_XMSS_PUBLIC_TEMPLATE,
     OPT_XMSS_SECRET_TEMPLATE,
+    OPT_IS_AGGREGATOR,
 };
 
 /* Forward declarations */
@@ -256,6 +257,9 @@ static lantern_client_error apply_option(
     case OPT_XMSS_PUBLIC_TEMPLATE:
     case OPT_XMSS_SECRET_TEMPLATE:
         return handle_xmss_option(options, opt, optarg);
+    case OPT_IS_AGGREGATOR:
+        options->is_aggregator = true;
+        return LANTERN_CLIENT_OK;
     default:
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
@@ -446,6 +450,7 @@ static lantern_client_error parse_arguments(
         {"xmss-secret", required_argument, NULL, OPT_XMSS_SECRET_PATH},
         {"xmss-public-template", required_argument, NULL, OPT_XMSS_PUBLIC_TEMPLATE},
         {"xmss-secret-template", required_argument, NULL, OPT_XMSS_SECRET_TEMPLATE},
+        {"is-aggregator", no_argument, NULL, OPT_IS_AGGREGATOR},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'v'},
         {0, 0, 0, 0},
@@ -762,6 +767,10 @@ static void print_usage_network(void)
         "main",
         NULL,
         "  --devnet NAME                Devnet identifier for gossip topics");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --is-aggregator              Mark this node as the subnet aggregator");
 }
 
 

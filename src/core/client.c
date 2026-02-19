@@ -288,6 +288,7 @@ void lantern_client_options_init(struct lantern_client_options *options)
     options->xmss_secret_path = NULL;
     options->xmss_public_template = NULL;
     options->xmss_secret_template = NULL;
+    options->is_aggregator = false;
 }
 
 
@@ -2471,6 +2472,12 @@ static lantern_client_error client_setup_validators(
             "node-id '%s' not found in validator-config",
             client->node_id);
         return LANTERN_CLIENT_ERR_CONFIG;
+    }
+
+    if (options->is_aggregator)
+    {
+        ((struct lantern_validator_config_entry *)client->assigned_validators)
+            ->enr.is_aggregator = true;
     }
 
     if (!client->assigned_validators->enr.ip || client->assigned_validators->enr.quic_port == 0)
