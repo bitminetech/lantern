@@ -409,6 +409,19 @@ static int test_fork_choice_checkpoint_progression(void) {
     assert(latest_finalized->slot == genesis.slot);
     assert(roots_equal(&latest_finalized->root, &genesis_root));
 
+    LanternRoot unknown_root;
+    memset(&unknown_root, 0xEE, sizeof(unknown_root));
+    LanternCheckpoint unknown_cp = make_checkpoint(&unknown_root, block_one.slot + 1u);
+    assert(lantern_fork_choice_update_checkpoints(&store, &unknown_cp, &unknown_cp) == 0);
+    latest_justified = lantern_fork_choice_latest_justified(&store);
+    latest_finalized = lantern_fork_choice_latest_finalized(&store);
+    assert(latest_justified);
+    assert(latest_finalized);
+    assert(latest_justified->slot == block_one.slot);
+    assert(roots_equal(&latest_justified->root, &block_one_root));
+    assert(latest_finalized->slot == genesis.slot);
+    assert(roots_equal(&latest_finalized->root, &genesis_root));
+
     /* Regressing to older checkpoints must not overwrite progress */
     assert(lantern_fork_choice_update_checkpoints(&store, &genesis_cp, &genesis_cp) == 0);
     latest_justified = lantern_fork_choice_latest_justified(&store);

@@ -748,10 +748,49 @@ int restore_persisted_blocks(struct lantern_client *client)
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "advancing fork choice time after restore failed");
     }
+
+    LanternCheckpoint restored_justified = client->state.latest_justified;
+    LanternCheckpoint restored_finalized = client->state.latest_finalized;
+    const LanternCheckpoint *anchor_checkpoint =
+        lantern_fork_choice_latest_justified(&client->fork_choice);
+    if (anchor_checkpoint && !lantern_root_is_zero(&anchor_checkpoint->root))
+    {
+        /*
+         * Keep checkpoint slots from state, but if the persisted checkpoint roots
+         * are not present in this local fork-choice tree (common after checkpoint
+         * sync), remap them to the local anchor root before restore.
+         *
+         * This mirrors leanSpec store bootstrap behavior where justified/finalized
+         * roots are anchored to the local store anchor.
+         */
+        if (!lantern_root_is_zero(&restored_justified.root)
+            && lantern_fork_choice_block_info(
+                   &client->fork_choice,
+                   &restored_justified.root,
+                   NULL,
+                   NULL,
+                   NULL)
+                != 0)
+        {
+            restored_justified.root = anchor_checkpoint->root;
+        }
+        if (!lantern_root_is_zero(&restored_finalized.root)
+            && lantern_fork_choice_block_info(
+                   &client->fork_choice,
+                   &restored_finalized.root,
+                   NULL,
+                   NULL,
+                   NULL)
+                != 0)
+        {
+            restored_finalized.root = anchor_checkpoint->root;
+        }
+    }
+
     if (lantern_fork_choice_restore_checkpoints(
             &client->fork_choice,
-            &client->state.latest_justified,
-            &client->state.latest_finalized)
+            &restored_justified,
+            &restored_finalized)
         != 0)
     {
         lantern_log_warn(
@@ -1864,7 +1903,7 @@ void lantern_client_request_pending_parent_after_blocks(
         requested_parent_requested ? "true" : "false",
         requested_parent_stale ? "true" : "false");
 
-    if (candidate_count == 0 && peer_text && *peer_text)
+    if (candidate_count == 0)
     {
         locked = lantern_client_lock_pending(client);
         if (!locked)

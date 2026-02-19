@@ -1026,6 +1026,49 @@ static bool rebuild_state_for_root_locked(
     char target_hex[ROOT_HEX_BUFFER_LEN];
     format_root_hex(target_root, target_hex, sizeof(target_hex));
 
+    /*
+     * Fast path: if a post-state snapshot exists for this root, use it
+     * directly. This is required for checkpoint-sync anchors whose ancestors
+     * are intentionally absent from local fork-choice/state replay history.
+     */
+    if (client->data_dir && client->data_dir[0] != '\0')
+    {
+        uint8_t *state_bytes = NULL;
+        size_t state_len = 0;
+        if (lantern_storage_load_state_bytes_for_root(
+                client->data_dir,
+                target_root,
+                &state_bytes,
+                &state_len)
+                == 0
+            && state_bytes
+            && state_len > 0)
+        {
+            LanternState snapshot;
+            lantern_state_init(&snapshot);
+            if (lantern_ssz_decode_state(&snapshot, state_bytes, state_len) == 0)
+            {
+                *out_state = snapshot;
+                free(state_bytes);
+                lantern_log_debug(
+                    "state",
+                    &meta,
+                    "rebuild_state loaded snapshot target=%s bytes=%zu",
+                    target_hex[0] ? target_hex : "0x0",
+                    state_len);
+                return true;
+            }
+            lantern_state_reset(&snapshot);
+            lantern_log_warn(
+                "state",
+                &meta,
+                "rebuild_state snapshot decode failed target=%s bytes=%zu",
+                target_hex[0] ? target_hex : "0x0",
+                state_len);
+        }
+        free(state_bytes);
+    }
+
     struct lantern_root_chain chain = {0};
     if (!build_root_chain_locked(client, target_root, &chain))
     {
@@ -1404,25 +1447,74 @@ static bool validate_block_vote_constraints_locked(
         lantern_attestations_reset(&expanded);
         return false;
     }
+    size_t skipped_constraints = 0;
     for (size_t i = 0; i < expanded.length; ++i)
     {
+        struct lantern_vote_rejection_info rejection;
+        memset(&rejection, 0, sizeof(rejection));
         if (!lantern_client_validate_vote_constraints(
                 client,
                 &expanded.data[i],
                 "state",
                 meta,
                 "block attestation",
-                NULL))
+                &rejection))
         {
-            lantern_attestations_reset(&expanded);
-            return false;
+            /*
+             * Block attestations are advisory for fork-choice vote tracking.
+             * Do not fail block import here: state transition remains the
+             * consensus validity gate, and lantern_fork_choice_add_block()
+             * already best-effort applies block votes.
+             *
+             * This avoids deadlocking checkpoint-sync catch-up when
+             * attestations reference roots not yet restored locally.
+             */
+            skipped_constraints += 1u;
+            if (rejection.has_unknown_root)
+            {
+                char unknown_hex[ROOT_HEX_BUFFER_LEN];
+                format_root_hex(
+                    &rejection.unknown_root,
+                    unknown_hex,
+                    sizeof(unknown_hex));
+                lantern_log_debug(
+                    "state",
+                    meta,
+                    "ignoring block attestation unknown root=%s slot=%" PRIu64
+                    " block_slot=%" PRIu64,
+                    unknown_hex[0] ? unknown_hex : "0x0",
+                    rejection.unknown_slot,
+                    block->message.block.slot);
+            }
+            else if (rejection.has_reason)
+            {
+                lantern_log_debug(
+                    "state",
+                    meta,
+                    "ignoring block attestation constraint failure block_slot=%" PRIu64
+                    " reason=%s",
+                    block->message.block.slot,
+                    rejection.message);
+            }
+            continue;
         }
     }
     lantern_attestations_reset(&expanded);
 
-    /* Skip proposer attestation validation here - the proposer's head checkpoint
-     * references the block being imported, which isn't in fork choice yet.
-     * The proposer attestation will be validated during state transition. */
+    if (skipped_constraints > 0)
+    {
+        lantern_log_debug(
+            "state",
+            meta,
+            "block slot=%" PRIu64 " skipped %" PRIu64 " attestation fork-choice checks",
+            block->message.block.slot,
+            (uint64_t)skipped_constraints);
+    }
+
+    /* Skip proposer attestation validation here - the proposer's head
+     * checkpoint references the block being imported, which isn't in fork
+     * choice yet. Proposer attestation validity is checked in state
+     * transition. */
     return true;
 }
 

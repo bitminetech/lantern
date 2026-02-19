@@ -1207,6 +1207,140 @@ void reqresp_status_failure(void *context, const char *peer_id, int error)
     log_status_failure(client, peer_copy, error, first_failure);
 }
 
+static bool signed_block_matches_root(
+    const LanternSignedBlock *block,
+    const LanternRoot *root)
+{
+    if (!block || !root)
+    {
+        return false;
+    }
+    LanternRoot block_root = {0};
+    if (lantern_hash_tree_root_block(&block->message.block, &block_root) != 0)
+    {
+        return false;
+    }
+    return memcmp(block_root.bytes, root->bytes, LANTERN_ROOT_SIZE) == 0;
+}
+
+static int signed_block_copy(
+    LanternSignedBlock *dst,
+    const LanternSignedBlock *src)
+{
+    if (!dst || !src)
+    {
+        return -1;
+    }
+
+    lantern_signed_block_with_attestation_reset(dst);
+    lantern_signed_block_with_attestation_init(dst);
+
+    dst->message.slot = src->message.slot;
+    dst->message.proposer_index = src->message.proposer_index;
+    dst->message.parent_root = src->message.parent_root;
+    dst->message.state_root = src->message.state_root;
+    dst->message.proposer_attestation = src->message.proposer_attestation;
+
+    if (lantern_aggregated_attestations_copy(
+            &dst->message.body.attestations,
+            &src->message.body.attestations)
+        != 0)
+    {
+        lantern_signed_block_with_attestation_reset(dst);
+        lantern_signed_block_with_attestation_init(dst);
+        return -1;
+    }
+    dst->message.body.legacy_plain_attestation_layout =
+        src->message.body.legacy_plain_attestation_layout;
+
+    if (lantern_block_signatures_copy(
+            &dst->signatures,
+            &src->signatures)
+        != 0)
+    {
+        lantern_signed_block_with_attestation_reset(dst);
+        lantern_signed_block_with_attestation_init(dst);
+        return -1;
+    }
+
+    return 0;
+}
+
+static int signed_block_list_append_copy(
+    LanternBlocksByRootResponse *list,
+    const LanternSignedBlock *block)
+{
+    if (!list || !block)
+    {
+        return -1;
+    }
+
+    size_t previous_len = list->length;
+    if (lantern_blocks_by_root_response_resize(list, previous_len + 1u) != 0)
+    {
+        return -1;
+    }
+
+    LanternSignedBlock *dst = &list->blocks[previous_len];
+    if (signed_block_copy(dst, block) != 0)
+    {
+        lantern_signed_block_with_attestation_reset(dst);
+        (void)lantern_blocks_by_root_response_resize(list, previous_len);
+        return -1;
+    }
+
+    return 0;
+}
+
+static const LanternSignedBlock *find_block_by_root(
+    const LanternBlocksByRootResponse *list,
+    const LanternRoot *root)
+{
+    if (!list || !root)
+    {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < list->length; ++i)
+    {
+        if (signed_block_matches_root(&list->blocks[i], root))
+        {
+            return &list->blocks[i];
+        }
+    }
+
+    return NULL;
+}
+
+static bool append_pending_block_for_root(
+    struct lantern_client *client,
+    const LanternRoot *root,
+    LanternBlocksByRootResponse *out_blocks)
+{
+    if (!client || !root || !out_blocks)
+    {
+        return false;
+    }
+
+    bool appended = false;
+    bool pending_locked = lantern_client_lock_pending(client);
+    if (!pending_locked)
+    {
+        return false;
+    }
+
+    struct lantern_pending_block *pending = pending_block_list_find(
+        &client->pending_blocks,
+        root);
+    if (pending)
+    {
+        appended = signed_block_list_append_copy(out_blocks, &pending->block) == 0;
+    }
+
+    lantern_client_unlock_pending(client, pending_locked);
+    return appended;
+}
+
 
 /**
  * Collect blocks for a blocks_by_root request.
@@ -1233,27 +1367,73 @@ int reqresp_collect_blocks(
     size_t root_count,
     LanternBlocksByRootResponse *out_blocks)
 {
-    if (!context || !out_blocks)
+    if (!context || !out_blocks || (!roots && root_count > 0))
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
+
     struct lantern_client *client = context;
-    if (!client->data_dir)
+    if (lantern_blocks_by_root_response_resize(out_blocks, 0) != 0)
     {
-        if (lantern_blocks_by_root_response_resize(out_blocks, 0) != 0)
-        {
-            return LANTERN_CLIENT_ERR_ALLOC;
-        }
+        return LANTERN_CLIENT_ERR_ALLOC;
+    }
+    if (root_count == 0)
+    {
         return LANTERN_CLIENT_OK;
     }
-    if (lantern_storage_collect_blocks(client->data_dir, roots, root_count, out_blocks) != 0)
+
+    LanternBlocksByRootResponse storage_blocks;
+    lantern_blocks_by_root_response_init(&storage_blocks);
+    if (client->data_dir && client->data_dir[0] != '\0')
     {
-        lantern_log_error(
-            "reqresp",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to collect blocks from storage");
-        return LANTERN_CLIENT_ERR_STORAGE;
+        if (lantern_storage_collect_blocks(
+                client->data_dir,
+                roots,
+                root_count,
+                &storage_blocks)
+            != 0)
+        {
+            lantern_blocks_by_root_response_reset(&storage_blocks);
+            lantern_log_error(
+                "reqresp",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "failed to collect blocks from storage");
+            return LANTERN_CLIENT_ERR_STORAGE;
+        }
     }
+
+    size_t storage_hits = 0;
+    size_t pending_hits = 0;
+    for (size_t i = 0; i < root_count; ++i)
+    {
+        const LanternSignedBlock *stored = find_block_by_root(&storage_blocks, &roots[i]);
+        if (stored)
+        {
+            if (signed_block_list_append_copy(out_blocks, stored) != 0)
+            {
+                lantern_blocks_by_root_response_reset(&storage_blocks);
+                return LANTERN_CLIENT_ERR_ALLOC;
+            }
+            storage_hits += 1u;
+            continue;
+        }
+
+        if (append_pending_block_for_root(client, &roots[i], out_blocks))
+        {
+            pending_hits += 1u;
+        }
+    }
+
+    lantern_blocks_by_root_response_reset(&storage_blocks);
+    lantern_log_debug(
+        "reqresp",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "blocks_by_root collect roots=%zu served=%zu storage_hits=%zu pending_hits=%zu",
+        root_count,
+        out_blocks->length,
+        storage_hits,
+        pending_hits);
+
     return LANTERN_CLIENT_OK;
 }
 

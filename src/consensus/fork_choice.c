@@ -567,6 +567,22 @@ int lantern_fork_choice_set_anchor(
     return 0;
 }
 
+static bool checkpoint_known_in_store(
+    const LanternForkChoice *store,
+    const LanternCheckpoint *checkpoint) {
+    if (!store || !checkpoint || root_is_zero(&checkpoint->root)) {
+        return false;
+    }
+    size_t checkpoint_index = 0;
+    if (!map_lookup(store, &checkpoint->root, &checkpoint_index)) {
+        return false;
+    }
+    if (!store->blocks || checkpoint_index >= store->block_len) {
+        return false;
+    }
+    return store->blocks[checkpoint_index].slot == checkpoint->slot;
+}
+
 static int update_global_checkpoints(
     LanternForkChoice *store,
     const LanternCheckpoint *post_justified,
@@ -576,12 +592,14 @@ static int update_global_checkpoints(
     }
     if (post_justified
         && !root_is_zero(&post_justified->root)
-        && post_justified->slot >= store->latest_justified.slot) {
+        && post_justified->slot >= store->latest_justified.slot
+        && checkpoint_known_in_store(store, post_justified)) {
         store->latest_justified = *post_justified;
     }
     if (post_finalized
         && !root_is_zero(&post_finalized->root)
-        && post_finalized->slot >= store->latest_finalized.slot) {
+        && post_finalized->slot >= store->latest_finalized.slot
+        && checkpoint_known_in_store(store, post_finalized)) {
         store->latest_finalized = *post_finalized;
     }
     return 0;

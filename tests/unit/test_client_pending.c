@@ -1,8 +1,11 @@
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "client_test_helpers.h"
+#include "../../src/core/client_services_internal.h"
 #include "lantern/consensus/hash.h"
 
 static int test_pending_block_queue(void) {
@@ -571,6 +574,108 @@ cleanup:
     return rc;
 }
 
+static int test_reqresp_collect_blocks_pending_fallback(void) {
+    struct lantern_client client;
+    memset(&client, 0, sizeof(client));
+    client.node_id = "test_reqresp_collect_pending";
+
+    int rc = 0;
+    char data_dir_template[] = "/tmp/lantern_reqresp_collect_XXXXXX";
+    char *data_dir = mkdtemp(data_dir_template);
+    if (!data_dir) {
+        fprintf(stderr, "failed to create temporary data dir for reqresp collect test\n");
+        return 1;
+    }
+    client.data_dir = data_dir;
+
+    if (pthread_mutex_init(&client.pending_lock, NULL) != 0) {
+        fprintf(stderr, "failed to initialize pending mutex for reqresp collect test\n");
+        (void)rmdir(data_dir);
+        return 1;
+    }
+    client.pending_lock_initialized = true;
+    lantern_client_debug_pending_reset(&client);
+
+    LanternSignedBlock pending_block;
+    memset(&pending_block, 0, sizeof(pending_block));
+    lantern_block_body_init(&pending_block.message.body);
+    pending_block.message.slot = 42;
+    pending_block.message.proposer_index = 1;
+    client_test_fill_root(&pending_block.message.parent_root, 0x44);
+    client_test_fill_root(&pending_block.message.state_root, 0x55);
+
+    LanternRoot pending_root;
+    if (lantern_hash_tree_root_block(&pending_block.message.block, &pending_root) != 0) {
+        fprintf(stderr, "failed to hash pending block root for reqresp collect test\n");
+        rc = 1;
+        goto cleanup;
+    }
+
+    LanternRoot parent_root = pending_block.message.parent_root;
+    if (lantern_client_debug_enqueue_pending_block(
+            &client,
+            &pending_block,
+            &pending_root,
+            &parent_root,
+            NULL)
+        != 0) {
+        fprintf(stderr, "failed to enqueue pending block for reqresp collect test\n");
+        rc = 1;
+        goto cleanup;
+    }
+
+    LanternBlocksByRootResponse collected;
+    lantern_blocks_by_root_response_init(&collected);
+    int collect_rc = reqresp_collect_blocks(
+        &client,
+        &pending_root,
+        1u,
+        &collected);
+    if (collect_rc != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "reqresp_collect_blocks failed for pending fallback rc=%d\n", collect_rc);
+        lantern_blocks_by_root_response_reset(&collected);
+        rc = 1;
+        goto cleanup;
+    }
+    if (collected.length != 1u) {
+        fprintf(stderr, "reqresp_collect_blocks pending fallback returned %zu blocks (expected 1)\n", collected.length);
+        lantern_blocks_by_root_response_reset(&collected);
+        rc = 1;
+        goto cleanup;
+    }
+
+    LanternRoot collected_root;
+    if (lantern_hash_tree_root_block(&collected.blocks[0].message.block, &collected_root) != 0) {
+        fprintf(stderr, "failed to hash collected block for reqresp fallback test\n");
+        lantern_blocks_by_root_response_reset(&collected);
+        rc = 1;
+        goto cleanup;
+    }
+    if (memcmp(collected_root.bytes, pending_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "reqresp fallback returned wrong root\n");
+        lantern_blocks_by_root_response_reset(&collected);
+        rc = 1;
+        goto cleanup;
+    }
+    if (collected.blocks[0].message.slot != pending_block.message.slot) {
+        fprintf(stderr, "reqresp fallback returned wrong slot\n");
+        lantern_blocks_by_root_response_reset(&collected);
+        rc = 1;
+        goto cleanup;
+    }
+    lantern_blocks_by_root_response_reset(&collected);
+
+cleanup:
+    lantern_block_body_reset(&pending_block.message.body);
+    lantern_client_debug_pending_reset(&client);
+    if (client.pending_lock_initialized) {
+        pthread_mutex_destroy(&client.pending_lock);
+        client.pending_lock_initialized = false;
+    }
+    (void)rmdir(data_dir);
+    return rc;
+}
+
 int main(void) {
     if (test_pending_block_queue() != 0) {
         return 1;
@@ -579,6 +684,9 @@ int main(void) {
         return 1;
     }
     if (test_import_block_parent_mismatch() != 0) {
+        return 1;
+    }
+    if (test_reqresp_collect_blocks_pending_fallback() != 0) {
         return 1;
     }
     puts("lantern_client_pending_test OK");

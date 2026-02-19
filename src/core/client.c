@@ -2209,8 +2209,33 @@ static lantern_client_error client_load_state_from_checkpoint(
         goto cleanup;
     }
 
+    LanternBlockHeader anchor_header = decoded.latest_block_header;
+    anchor_header.state_root = state_root;
+    LanternRoot anchor_root;
+    if (lantern_hash_tree_root_block_header(&anchor_header, &anchor_root) != 0)
+    {
+        lantern_log_error(
+            "checkpoint_sync",
+            &meta,
+            "failed to compute checkpoint anchor root");
+        result = LANTERN_CLIENT_ERR_GENESIS;
+        goto cleanup;
+    }
+
+    /*
+     * Preserve checkpoint roots exactly as provided by the remote state.
+     *
+     * Rewriting justified/finalized roots here mutates state content before
+     * fork-choice anchor initialization, which can skew state/anchor hashing
+     * relative to peers and force unnecessary slot-0 backfill requests.
+     * Any root remapping needed for local fork-choice restoration is handled
+     * later during restore_persisted_blocks().
+     */
+
     char state_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char anchor_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     format_root_hex(&state_root, state_root_hex, sizeof(state_root_hex));
+    format_root_hex(&anchor_root, anchor_root_hex, sizeof(anchor_root_hex));
 
     lantern_state_reset(&client->state);
     client->state = decoded;
@@ -2222,11 +2247,13 @@ static lantern_client_error client_load_state_from_checkpoint(
         "checkpoint_sync",
         &meta,
         "initialized from checkpoint state slot=%" PRIu64
-        " validators=%" PRIu64 " finalized_slot=%" PRIu64 " state_root=%s",
+        " validators=%" PRIu64 " finalized_slot=%" PRIu64 " state_root=%s"
+        " anchor_root=%s",
         client->state.slot,
         client->state.config.num_validators,
         client->state.latest_finalized.slot,
-        state_root_hex[0] ? state_root_hex : "0x0");
+        state_root_hex[0] ? state_root_hex : "0x0",
+        anchor_root_hex[0] ? anchor_root_hex : "0x0");
 
 cleanup:
     free(state_bytes);
