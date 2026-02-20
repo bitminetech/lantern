@@ -255,10 +255,10 @@ static size_t state_encoded_size(const LanternState *state) {
         + (5u * SSZ_BYTE_SIZE_OF_UINT32);
     size_t validator_bytes = 0;
     if (state->validator_count > 0) {
-        if (!state->validators || state->validator_count > SIZE_MAX / LANTERN_VALIDATOR_PUBKEY_SIZE) {
+        if (!state->validators || state->validator_count > SIZE_MAX / LANTERN_VALIDATOR_SSZ_SIZE) {
             return 0;
         }
-        validator_bytes = state->validator_count * LANTERN_VALIDATOR_PUBKEY_SIZE;
+        validator_bytes = state->validator_count * LANTERN_VALIDATOR_SSZ_SIZE;
     }
     size_t variable = root_list_encoded_size(&state->historical_block_hashes)
         + bitlist_encoded_size(&state->justified_slots)

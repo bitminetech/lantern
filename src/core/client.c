@@ -1175,8 +1175,18 @@ static int checkpoint_sync_parse_url(
     *out_port = 0;
 
     const char *http_prefix = "http://";
+    const char *https_prefix = "https://";
     size_t prefix_len = strlen(http_prefix);
-    if (strncasecmp(url, http_prefix, prefix_len) != 0)
+    if (strncasecmp(url, http_prefix, prefix_len) == 0)
+    {
+        /* plain http — use as-is */
+    }
+    else if (strncasecmp(url, https_prefix, strlen(https_prefix)) == 0)
+    {
+        /* TLS not supported; downgrade to plain HTTP */
+        prefix_len = strlen(https_prefix);
+    }
+    else
     {
         return -1;
     }
@@ -1324,6 +1334,23 @@ static char *checkpoint_sync_build_request_target(const char *base_path)
     }
 
     size_t base_len = strlen(base_path);
+    size_t endpoint_len = strlen(CHECKPOINT_SYNC_ENDPOINT);
+
+    /* Strip trailing slashes for the suffix check. */
+    size_t effective_len = base_len;
+    while (effective_len > 0 && base_path[effective_len - 1] == '/')
+    {
+        --effective_len;
+    }
+
+    /* If the path already ends with the endpoint, return it as-is. */
+    if (effective_len >= endpoint_len
+        && memcmp(base_path + effective_len - endpoint_len,
+                  CHECKPOINT_SYNC_ENDPOINT, endpoint_len) == 0)
+    {
+        return lantern_string_duplicate(CHECKPOINT_SYNC_ENDPOINT);
+    }
+
     bool trailing_slash = base_len > 0 && base_path[base_len - 1] == '/';
     const char *suffix = trailing_slash
                              ? (CHECKPOINT_SYNC_ENDPOINT[0] == '/'

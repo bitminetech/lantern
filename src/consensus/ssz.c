@@ -384,15 +384,21 @@ static int encode_validators_list(
     if (!validators) {
         return -1;
     }
-    if (count > SIZE_MAX / LANTERN_VALIDATOR_PUBKEY_SIZE) {
+    if (count > SIZE_MAX / LANTERN_VALIDATOR_SSZ_SIZE) {
         return -1;
     }
-    size_t total = count * LANTERN_VALIDATOR_PUBKEY_SIZE;
+    size_t total = count * LANTERN_VALIDATOR_SSZ_SIZE;
     if (total > remaining) {
         return -1;
     }
     for (size_t i = 0; i < count; ++i) {
-        memcpy(out + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), validators[i].pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE);
+        size_t base = i * LANTERN_VALIDATOR_SSZ_SIZE;
+        memcpy(out + base, validators[i].pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE);
+        if (write_u64(out + base + LANTERN_VALIDATOR_PUBKEY_SIZE,
+                      remaining - base - LANTERN_VALIDATOR_PUBKEY_SIZE,
+                      validators[i].index) != 0) {
+            return -1;
+        }
     }
     set_written(written, total);
     return 0;
@@ -408,7 +414,7 @@ static int decode_validators_list(
     size_t count = 0;
     if (state->config.num_validators != 0) {
         count = (size_t)state->config.num_validators;
-        size_t expected_size = count * LANTERN_VALIDATOR_PUBKEY_SIZE;
+        size_t expected_size = count * LANTERN_VALIDATOR_SSZ_SIZE;
         if (data_len != expected_size) {
             return -1;
         }
@@ -417,10 +423,10 @@ static int decode_validators_list(
             state->config.num_validators = 0;
             return lantern_state_set_validator_pubkeys(state, NULL, 0);
         }
-        if (data_len % LANTERN_VALIDATOR_PUBKEY_SIZE != 0) {
+        if (data_len % LANTERN_VALIDATOR_SSZ_SIZE != 0) {
             return -1;
         }
-        count = data_len / LANTERN_VALIDATOR_PUBKEY_SIZE;
+        count = data_len / LANTERN_VALIDATOR_SSZ_SIZE;
     }
     if (count == 0) {
         state->config.num_validators = 0;
@@ -429,8 +435,29 @@ static int decode_validators_list(
     if (!data) {
         return -1;
     }
-    if (lantern_state_set_validator_pubkeys(state, data, count) != 0) {
+    /* Extract pubkeys from 60-byte validator records into a flat buffer. */
+    uint8_t *pubkeys = malloc(count * LANTERN_VALIDATOR_PUBKEY_SIZE);
+    if (!pubkeys) {
         return -1;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        memcpy(pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+               data + (i * LANTERN_VALIDATOR_SSZ_SIZE),
+               LANTERN_VALIDATOR_PUBKEY_SIZE);
+    }
+    int rc = lantern_state_set_validator_pubkeys(state, pubkeys, count);
+    free(pubkeys);
+    if (rc != 0) {
+        return -1;
+    }
+    /* Restore indices from SSZ data (set_validator_pubkeys defaults to i). */
+    for (size_t i = 0; i < count; ++i) {
+        uint64_t idx = 0;
+        if (read_u64(data + (i * LANTERN_VALIDATOR_SSZ_SIZE) + LANTERN_VALIDATOR_PUBKEY_SIZE,
+                     SSZ_BYTE_SIZE_OF_UINT64, &idx) != 0) {
+            return -1;
+        }
+        state->validators[i].index = idx;
     }
     state->config.num_validators = count;
     return 0;
@@ -2010,10 +2037,10 @@ int lantern_ssz_encode_state(const LanternState *state, uint8_t *out, size_t out
         return -1;
     }
     offset += SSZ_BYTE_SIZE_OF_UINT32;
-    if (state->validator_count > 0 && state->validator_count > SIZE_MAX / LANTERN_VALIDATOR_PUBKEY_SIZE) {
+    if (state->validator_count > 0 && state->validator_count > SIZE_MAX / LANTERN_VALIDATOR_SSZ_SIZE) {
         return -1;
     }
-    size_t validator_bytes = state->validator_count * LANTERN_VALIDATOR_PUBKEY_SIZE;
+    size_t validator_bytes = state->validator_count * LANTERN_VALIDATOR_SSZ_SIZE;
     if (validator_bytes > out_len - variable_offset) {
         return -1;
     }
