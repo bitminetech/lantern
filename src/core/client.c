@@ -1333,45 +1333,8 @@ static char *checkpoint_sync_build_request_target(const char *base_path)
         return lantern_string_duplicate(CHECKPOINT_SYNC_ENDPOINT);
     }
 
-    size_t base_len = strlen(base_path);
-    size_t endpoint_len = strlen(CHECKPOINT_SYNC_ENDPOINT);
-
-    /* Strip trailing slashes for the suffix check. */
-    size_t effective_len = base_len;
-    while (effective_len > 0 && base_path[effective_len - 1] == '/')
-    {
-        --effective_len;
-    }
-
-    /* If the path already ends with the endpoint, return it as-is. */
-    if (effective_len >= endpoint_len
-        && memcmp(base_path + effective_len - endpoint_len,
-                  CHECKPOINT_SYNC_ENDPOINT, endpoint_len) == 0)
-    {
-        return lantern_string_duplicate(CHECKPOINT_SYNC_ENDPOINT);
-    }
-
-    bool trailing_slash = base_len > 0 && base_path[base_len - 1] == '/';
-    const char *suffix = trailing_slash
-                             ? (CHECKPOINT_SYNC_ENDPOINT[0] == '/'
-                                    ? CHECKPOINT_SYNC_ENDPOINT + 1
-                                    : CHECKPOINT_SYNC_ENDPOINT)
-                             : CHECKPOINT_SYNC_ENDPOINT;
-    size_t suffix_len = strlen(suffix);
-    if (base_len > SIZE_MAX - suffix_len - 1u)
-    {
-        return NULL;
-    }
-
-    char *target = malloc(base_len + suffix_len + 1u);
-    if (!target)
-    {
-        return NULL;
-    }
-    memcpy(target, base_path, base_len);
-    memcpy(target + base_len, suffix, suffix_len);
-    target[base_len + suffix_len] = '\0';
-    return target;
+    /* Use the path exactly as provided by the user. */
+    return lantern_string_duplicate(base_path);
 }
 
 static bool checkpoint_sync_header_has_token(

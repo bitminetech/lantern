@@ -737,7 +737,7 @@ static void print_usage_network(void)
     lantern_log_info(
         "main",
         NULL,
-        "  --checkpoint-sync-url URL    Fetch finalized state from remote beacon API");
+        "  --checkpoint-sync-url URL    Fetch finalized state from URL (e.g. http://host/lean/v0/states/finalized)");
     lantern_log_info(
         "main",
         NULL,

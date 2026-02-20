@@ -567,6 +567,10 @@ for i in $(seq 0 $((NODES-1))); do
     docker "${docker_args[@]}" >/dev/null
     echo "${NODE_ID}" >> "${PIDS_FILE}"
   else
+    extra_args=()
+    if [[ -n "${CHECKPOINT_SYNC_URL:-}" ]]; then
+      extra_args+=(--checkpoint-sync-url "${CHECKPOINT_SYNC_URL}")
+    fi
     nohup "${BIN}" \
       --data-dir "${DATA}" \
       --genesis-config "${GENESIS_DIR}/config.yaml" \
@@ -582,6 +586,7 @@ for i in $(seq 0 $((NODES-1))); do
       --devnet "${DEVNET}" \
       --hash-sig-key-dir "${HASH_SIG_KEYS_DIR}" \
       --log-level "${LOG_LEVEL}" \
+      "${extra_args[@]}" \
       >"${LOG_DIR}/${NODE_ID}.log" 2>&1 &
     echo $! >> "${PIDS_FILE}"
   fi
