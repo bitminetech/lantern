@@ -356,7 +356,9 @@ void persist_anchor_block(
     }
 
     struct lantern_log_metadata meta = {.validator = client->node_id};
-    if (lantern_storage_store_block(client->data_dir, &stored_anchor) != 0)
+    if (root_for_vote
+        ? lantern_storage_store_block_for_root(client->data_dir, root_for_vote, &stored_anchor) != 0
+        : lantern_storage_store_block(client->data_dir, &stored_anchor) != 0)
     {
         lantern_log_warn(
             "storage",

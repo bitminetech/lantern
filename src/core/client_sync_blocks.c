@@ -146,11 +146,16 @@ extern bool lantern_client_verify_vote_signature(
 static bool signed_block_signatures_are_valid(
     const struct lantern_client *client,
     const LanternSignedBlock *block,
-    const struct lantern_log_metadata *meta)
+    const struct lantern_log_metadata *meta,
+    bool *out_missing_parent_state)
 {
     if (!client || !block)
     {
         return false;
+    }
+    if (out_missing_parent_state)
+    {
+        *out_missing_parent_state = false;
     }
     LanternState parent_state;
     lantern_state_init(&parent_state);
@@ -174,6 +179,10 @@ static bool signed_block_signatures_are_valid(
     }
     if (!state_for_sig)
     {
+        if (out_missing_parent_state && !lantern_root_is_zero(&parent_root))
+        {
+            *out_missing_parent_state = true;
+        }
         char parent_hex[ROOT_HEX_BUFFER_LEN];
         format_root_hex(&parent_root, parent_hex, sizeof(parent_hex));
         lantern_log_warn(
@@ -1889,8 +1898,68 @@ bool lantern_client_import_block(
     }
     bool parent_off_head = parent_action == BLOCK_PARENT_ACTION_KNOWN_OFF_HEAD;
 
-    if (!signed_block_signatures_are_valid(client, block, meta))
+    bool missing_parent_state_for_signature = false;
+    if (!signed_block_signatures_are_valid(
+            client,
+            block,
+            meta,
+            &missing_parent_state_for_signature))
     {
+        if (missing_parent_state_for_signature)
+        {
+            LanternRoot parent_root = block->message.block.parent_root;
+            LanternRoot missing_roots[LANTERN_MAX_REQUEST_BLOCKS];
+            size_t missing_count = 0;
+            LanternState rebuild_scratch;
+            lantern_state_init(&rebuild_scratch);
+            (void)rebuild_state_for_root_locked(
+                client,
+                &parent_root,
+                &rebuild_scratch,
+                missing_roots,
+                LANTERN_MAX_REQUEST_BLOCKS,
+                &missing_count);
+            lantern_state_reset(&rebuild_scratch);
+
+            const char *peer_text = meta && meta->peer ? meta->peer : NULL;
+            lantern_client_enqueue_pending_block(
+                client,
+                block,
+                &block_root_local,
+                &parent_root,
+                peer_text,
+                backfill_depth,
+                allow_historical);
+
+            uint32_t request_depth = backfill_depth + 1u;
+            if (request_depth > LANTERN_MAX_BACKFILL_DEPTH)
+            {
+                request_depth = LANTERN_MAX_BACKFILL_DEPTH;
+            }
+            if (missing_count > 0)
+            {
+                uint32_t request_depths[LANTERN_MAX_REQUEST_BLOCKS];
+                for (size_t i = 0; i < missing_count; ++i)
+                {
+                    request_depths[i] = request_depth;
+                }
+                (void)lantern_client_try_schedule_blocks_request_batch(
+                    client,
+                    peer_text,
+                    missing_roots,
+                    request_depths,
+                    missing_count);
+            }
+            else
+            {
+                (void)lantern_client_try_schedule_blocks_request_batch(
+                    client,
+                    peer_text,
+                    &parent_root,
+                    &request_depth,
+                    1u);
+            }
+        }
         char root_hex[ROOT_HEX_BUFFER_LEN];
         format_root_hex(&block_root_local, root_hex, sizeof(root_hex));
         lantern_log_warn(

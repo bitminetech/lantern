@@ -23,6 +23,10 @@ int lantern_storage_load_state(const char *data_dir, LanternState *state);
 int lantern_storage_save_votes(const char *data_dir, const LanternState *state);
 int lantern_storage_load_votes(const char *data_dir, LanternState *state);
 int lantern_storage_store_block(const char *data_dir, const LanternSignedBlock *block);
+int lantern_storage_store_block_for_root(
+    const char *data_dir,
+    const LanternRoot *root,
+    const LanternSignedBlock *block);
 int lantern_storage_store_state_for_root(
     const char *data_dir,
     const LanternRoot *root,

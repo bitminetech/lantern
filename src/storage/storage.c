@@ -913,18 +913,38 @@ cleanup:
     return rc;
 }
 
-/**
- * Store a signed block under `data_dir/blocks/<root>.ssz`.
- *
- * The operation is idempotent: if the block already exists on disk, this
- * function returns success without modifying it.
- *
- * @param data_dir Base directory path.
- * @param block Block to persist.
- * @return 0 on success.
- * @return -1 on invalid parameters, encoding failure, or filesystem errors.
- */
-int lantern_storage_store_block(const char *data_dir, const LanternSignedBlock *block) {
+static bool block_root_alias_matches_expected(
+    const LanternSignedBlock *block,
+    const LanternRoot *expected_root) {
+    if (!block || !expected_root) {
+        return false;
+    }
+    const LanternBlock *message = &block->message.block;
+    const LanternVote *vote = &block->message.proposer_attestation;
+    if (vote->slot != message->slot || vote->validator_id != message->proposer_index) {
+        return false;
+    }
+    if (vote->head.slot != message->slot
+        || vote->target.slot != message->slot
+        || vote->source.slot != message->slot) {
+        return false;
+    }
+    if (memcmp(vote->head.root.bytes, expected_root->bytes, LANTERN_ROOT_SIZE) != 0) {
+        return false;
+    }
+    if (memcmp(vote->target.root.bytes, expected_root->bytes, LANTERN_ROOT_SIZE) != 0) {
+        return false;
+    }
+    if (memcmp(vote->source.root.bytes, expected_root->bytes, LANTERN_ROOT_SIZE) != 0) {
+        return false;
+    }
+    return true;
+}
+
+static int storage_store_block_internal(
+    const char *data_dir,
+    const LanternSignedBlock *block,
+    const LanternRoot *root_override) {
     if (!data_dir || !block) {
         return -1;
     }
@@ -941,8 +961,10 @@ int lantern_storage_store_block(const char *data_dir, const LanternSignedBlock *
         goto cleanup;
     }
 
-    LanternRoot root;
-    if (lantern_hash_tree_root_block(&block->message.block, &root) != 0) {
+    LanternRoot root = {0};
+    if (root_override) {
+        root = *root_override;
+    } else if (lantern_hash_tree_root_block(&block->message.block, &root) != 0) {
         goto cleanup;
     }
     char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
@@ -1004,6 +1026,31 @@ cleanup:
     free_path(block_path);
     free_path(blocks_dir);
     return rc;
+}
+
+/**
+ * Store a signed block under `data_dir/blocks/<root>.ssz`.
+ *
+ * The operation is idempotent: if the block already exists on disk, this
+ * function returns success without modifying it.
+ *
+ * @param data_dir Base directory path.
+ * @param block Block to persist.
+ * @return 0 on success.
+ * @return -1 on invalid parameters, encoding failure, or filesystem errors.
+ */
+int lantern_storage_store_block(const char *data_dir, const LanternSignedBlock *block) {
+    return storage_store_block_internal(data_dir, block, NULL);
+}
+
+int lantern_storage_store_block_for_root(
+    const char *data_dir,
+    const LanternRoot *root,
+    const LanternSignedBlock *block) {
+    if (!root) {
+        return -1;
+    }
+    return storage_store_block_internal(data_dir, block, root);
 }
 
 /**
@@ -1295,8 +1342,8 @@ cleanup:
  * Collect signed blocks from disk that match the given set of roots.
  *
  * For each root in `roots`, looks up `data_dir/blocks/<hex>.ssz`, decodes
- * the block, verifies its hash-tree-root matches the requested root, and
- * appends it to `out_blocks`.  Missing blocks are silently skipped.
+ * the block, and appends it to `out_blocks`.  Missing blocks are silently
+ * skipped.
  *
  * @param data_dir   Base storage directory.
  * @param roots      Array of block roots to look up.
@@ -1375,8 +1422,20 @@ int lantern_storage_collect_blocks(
             goto cleanup;
         }
         if (memcmp(computed.bytes, roots[i].bytes, LANTERN_ROOT_SIZE) != 0) {
-            free(data);
-            goto cleanup;
+            if (!block_root_alias_matches_expected(dest, &roots[i])) {
+                free(data);
+                goto cleanup;
+            }
+            char computed_hex[2u * LANTERN_ROOT_SIZE + 1u];
+            if (lantern_bytes_to_hex(computed.bytes, LANTERN_ROOT_SIZE, computed_hex, sizeof(computed_hex), 0) != 0) {
+                computed_hex[0] = '\0';
+            }
+            lantern_log_warn(
+                "storage",
+                &meta,
+                "collect_blocks accepted synthetic anchor alias requested=%s computed=%s",
+                root_hex,
+                computed_hex[0] ? computed_hex : "unknown");
         }
         lantern_log_trace(
             "storage",
@@ -1398,7 +1457,7 @@ cleanup:
  * Iterate over every persisted block in the blocks directory.
  *
  * Opens `data_dir/blocks/`, reads each `.ssz` file, decodes the signed
- * block, computes its hash-tree-root, and calls `visitor` with the block,
+ * block, derives its canonical root key from filename, and calls `visitor` with the block,
  * root, and caller-supplied `context`.  Iteration stops early if the
  * visitor returns non-zero (its return value is propagated).
  *
@@ -1432,6 +1491,7 @@ int lantern_storage_iterate_blocks(
     }
 
     rc = 0;
+    const struct lantern_log_metadata meta = {0};
     struct dirent *entry = NULL;
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
@@ -1465,14 +1525,62 @@ int lantern_storage_iterate_blocks(
             rc = -1;
             break;
         }
-        LanternRoot root;
-        if (lantern_hash_tree_root_block(&block.message.block, &root) != 0) {
+        LanternRoot computed_root;
+        if (lantern_hash_tree_root_block(&block.message.block, &computed_root) != 0) {
             lantern_signed_block_with_attestation_reset(&block);
             free(data);
             rc = -1;
             break;
         }
-        const int visit_rc = visitor(&block, &root, context);
+        LanternRoot root_from_filename = {0};
+        bool have_root_from_filename = false;
+        if (len == ((2u * LANTERN_ROOT_SIZE) + 4u)) {
+            char filename_hex[(2u * LANTERN_ROOT_SIZE) + 1u];
+            memcpy(filename_hex, entry->d_name, 2u * LANTERN_ROOT_SIZE);
+            filename_hex[2u * LANTERN_ROOT_SIZE] = '\0';
+            have_root_from_filename =
+                lantern_hex_decode(filename_hex, root_from_filename.bytes, LANTERN_ROOT_SIZE)
+                == 0;
+        }
+        const LanternRoot *root_for_visitor = &computed_root;
+        if (have_root_from_filename) {
+            root_for_visitor = &root_from_filename;
+            if (memcmp(computed_root.bytes, root_from_filename.bytes, LANTERN_ROOT_SIZE) != 0) {
+                if (!block_root_alias_matches_expected(&block, &root_from_filename)) {
+                    lantern_signed_block_with_attestation_reset(&block);
+                    free(data);
+                    rc = -1;
+                    break;
+                }
+                char computed_hex[2u * LANTERN_ROOT_SIZE + 1u];
+                char filename_hex[2u * LANTERN_ROOT_SIZE + 1u];
+                if (lantern_bytes_to_hex(
+                        computed_root.bytes,
+                        LANTERN_ROOT_SIZE,
+                        computed_hex,
+                        sizeof(computed_hex),
+                        0)
+                    != 0) {
+                    computed_hex[0] = '\0';
+                }
+                if (lantern_bytes_to_hex(
+                        root_from_filename.bytes,
+                        LANTERN_ROOT_SIZE,
+                        filename_hex,
+                        sizeof(filename_hex),
+                        0)
+                    != 0) {
+                    filename_hex[0] = '\0';
+                }
+                lantern_log_warn(
+                    "storage",
+                    &meta,
+                    "iterate_blocks accepted synthetic anchor alias filename_root=%s computed=%s",
+                    filename_hex[0] ? filename_hex : "unknown",
+                    computed_hex[0] ? computed_hex : "unknown");
+            }
+        }
+        const int visit_rc = visitor(&block, root_for_visitor, context);
         lantern_signed_block_with_attestation_reset(&block);
         free(data);
         if (visit_rc != 0) {

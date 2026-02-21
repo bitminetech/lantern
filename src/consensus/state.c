@@ -2053,23 +2053,6 @@ int lantern_state_process_block(
         }
     }
 
-    /*
-     * LeanSpec state transition applies only block.body.attestations.
-     * The proposer's attestation is consumed by forkchoice logic, not by
-     * consensus state transition hashing.
-     */
-    if (state->fork_choice) {
-        if (lantern_fork_choice_add_block(
-                state->fork_choice,
-                block,
-                proposer_attestation,
-                &state->latest_justified,
-                &state->latest_finalized,
-                NULL)
-            != 0) {
-            return -1;
-        }
-    }
     lean_metrics_record_state_transition_block(lantern_time_now_seconds() - block_metrics_start);
     return 0;
 }
@@ -2190,6 +2173,19 @@ int lantern_state_transition(LanternState *state, const LanternSignedBlock *sign
         }
     } else {
         STATE_FAIL("failed to hash state for slot %" PRIu64, block->slot);
+    }
+
+    if (state->fork_choice) {
+        if (lantern_fork_choice_add_block(
+                state->fork_choice,
+                block,
+                &proposer_signed,
+                &state->latest_justified,
+                &state->latest_finalized,
+                NULL)
+            != 0) {
+            STATE_FAIL("fork choice add block failed for slot %" PRIu64, block->slot);
+        }
     }
 
     state->slot = block->slot;
