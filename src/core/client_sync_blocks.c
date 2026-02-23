@@ -19,8 +19,10 @@
 
 #include "client_internal.h"
 
+#include <errno.h>
 #include <inttypes.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -42,6 +44,138 @@ enum
 {
     ROOT_HEX_BUFFER_LEN = (LANTERN_ROOT_SIZE * 2u) + 3u,
 };
+
+#define LANTERN_STORAGE_STATE_META_VERSION 1u
+
+struct lantern_state_meta_wire
+{
+    uint32_t version;
+    uint32_t reserved;
+    uint64_t historical_roots_offset;
+    uint64_t justified_slots_offset;
+};
+
+static int load_state_meta_for_root(
+    const char *data_dir,
+    const LanternRoot *root,
+    struct lantern_state_meta_wire *out_meta)
+{
+    if (!data_dir || !root || !out_meta)
+    {
+        return -1;
+    }
+
+    char root_hex[(2u * LANTERN_ROOT_SIZE) + 1u];
+    if (lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, root_hex, sizeof(root_hex), 0) != 0)
+    {
+        return -1;
+    }
+
+    const size_t base_len = strlen(data_dir);
+    const bool needs_sep =
+        base_len > 0 && data_dir[base_len - 1u] != '/' && data_dir[base_len - 1u] != '\\';
+    const size_t path_len =
+        base_len + (needs_sep ? 1u : 0u) + strlen("states/") + strlen(root_hex) + strlen(".meta") + 1u;
+    char *meta_path = malloc(path_len);
+    if (!meta_path)
+    {
+        return -1;
+    }
+    const int path_written = snprintf(
+        meta_path,
+        path_len,
+        "%s%sstates/%s.meta",
+        data_dir,
+        needs_sep ? "/" : "",
+        root_hex);
+    if (path_written < 0 || (size_t)path_written >= path_len)
+    {
+        free(meta_path);
+        return -1;
+    }
+
+    int rc = -1;
+    FILE *fp = fopen(meta_path, "rb");
+    if (!fp)
+    {
+        free(meta_path);
+        return (errno == ENOENT) ? 1 : -1;
+    }
+
+    if (fseek(fp, 0, SEEK_END) != 0)
+    {
+        goto cleanup;
+    }
+    long file_size = ftell(fp);
+    if (file_size < 0 || (size_t)file_size != sizeof(*out_meta))
+    {
+        if (file_size == 0)
+        {
+            rc = 1;
+        }
+        goto cleanup;
+    }
+    if (fseek(fp, 0, SEEK_SET) != 0)
+    {
+        goto cleanup;
+    }
+
+    if (fread(out_meta, 1u, sizeof(*out_meta), fp) != sizeof(*out_meta))
+    {
+        goto cleanup;
+    }
+    if (out_meta->version != LANTERN_STORAGE_STATE_META_VERSION)
+    {
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    fclose(fp);
+    free(meta_path);
+    return rc;
+}
+
+static int prepare_off_head_snapshot_state(
+    const char *data_dir,
+    const LanternRoot *root,
+    LanternState *state)
+{
+    if (!data_dir || !root || !state)
+    {
+        return -1;
+    }
+
+    struct lantern_state_meta_wire meta = {0};
+    const int meta_rc = load_state_meta_for_root(data_dir, root, &meta);
+    if (meta_rc == 0)
+    {
+        state->historical_roots_offset = meta.historical_roots_offset;
+        state->justified_slots_offset = meta.justified_slots_offset;
+    }
+    else if (meta_rc == 1)
+    {
+        state->historical_roots_offset = 0;
+        state->justified_slots_offset =
+            state->latest_finalized.slot == UINT64_MAX ? 0u : (state->latest_finalized.slot + 1u);
+    }
+    else
+    {
+        return -1;
+    }
+
+    if (state->config.num_validators == 0)
+    {
+        return -1;
+    }
+    if (lantern_state_prepare_validator_votes(state, state->config.num_validators) != 0)
+    {
+        return -1;
+    }
+
+    return 0;
+}
 
 /* ============================================================================
  * Sync Progress Helpers
@@ -958,12 +1092,15 @@ const LanternState *lantern_client_state_for_root_locked(
             lantern_state_init(scratch);
             if (lantern_ssz_decode_state(scratch, state_bytes, state_len) == 0)
             {
-                free(state_bytes);
-                if (out_is_scratch)
+                if (prepare_off_head_snapshot_state(client->data_dir, root, scratch) == 0)
                 {
-                    *out_is_scratch = true;
+                    free(state_bytes);
+                    if (out_is_scratch)
+                    {
+                        *out_is_scratch = true;
+                    }
+                    return scratch;
                 }
-                return scratch;
             }
             lantern_state_reset(scratch);
             free(state_bytes);
@@ -1057,23 +1194,35 @@ static bool rebuild_state_for_root_locked(
             lantern_state_init(&snapshot);
             if (lantern_ssz_decode_state(&snapshot, state_bytes, state_len) == 0)
             {
-                *out_state = snapshot;
-                free(state_bytes);
-                lantern_log_debug(
+                if (prepare_off_head_snapshot_state(client->data_dir, target_root, &snapshot) == 0)
+                {
+                    *out_state = snapshot;
+                    free(state_bytes);
+                    lantern_log_debug(
+                        "state",
+                        &meta,
+                        "rebuild_state loaded snapshot target=%s bytes=%zu",
+                        target_hex[0] ? target_hex : "0x0",
+                        state_len);
+                    return true;
+                }
+                lantern_state_reset(&snapshot);
+                lantern_log_warn(
                     "state",
                     &meta,
-                    "rebuild_state loaded snapshot target=%s bytes=%zu",
+                    "rebuild_state snapshot prepare failed target=%s bytes=%zu",
                     target_hex[0] ? target_hex : "0x0",
                     state_len);
-                return true;
             }
-            lantern_state_reset(&snapshot);
-            lantern_log_warn(
-                "state",
-                &meta,
-                "rebuild_state snapshot decode failed target=%s bytes=%zu",
-                target_hex[0] ? target_hex : "0x0",
-                state_len);
+            else
+            {
+                lantern_log_warn(
+                    "state",
+                    &meta,
+                    "rebuild_state snapshot decode failed target=%s bytes=%zu",
+                    target_hex[0] ? target_hex : "0x0",
+                    state_len);
+            }
         }
         free(state_bytes);
     }
