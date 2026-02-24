@@ -595,6 +595,39 @@ static bool has_justifiable_slot_between(
     return false;
 }
 
+static int snapshot_get_justified_slot_bit(
+    const uint8_t *snapshot_bytes,
+    size_t snapshot_bit_length,
+    uint64_t snapshot_offset,
+    uint64_t slot,
+    bool *out_value) {
+    if (!out_value) {
+        return -1;
+    }
+    if (slot < snapshot_offset) {
+        *out_value = true;
+        return 0;
+    }
+    uint64_t relative = slot - snapshot_offset;
+    if (relative >= snapshot_bit_length) {
+        *out_value = false;
+        return 0;
+    }
+    if (relative > SIZE_MAX) {
+        return -1;
+    }
+    size_t index = (size_t)relative;
+    size_t byte_index = index / 8u;
+    size_t bit_index = index % 8u;
+    size_t snapshot_bytes_len = (snapshot_bit_length + 7u) / 8u;
+    if (!snapshot_bytes || byte_index >= snapshot_bytes_len) {
+        *out_value = false;
+        return 0;
+    }
+    *out_value = ((snapshot_bytes[byte_index] >> bit_index) & 1u) != 0u;
+    return 0;
+}
+
 int lantern_state_get_justified_slot_bit(const LanternState *state, uint64_t slot, bool *out_value) {
     if (!state || !out_value) {
         return -1;
@@ -1571,6 +1604,24 @@ static int lantern_state_process_attestations_internal(
     if (!state->validator_votes || state->validator_votes_len != validator_count) {
         return -1;
     }
+
+    /* Source-justified checks are evaluated against the pre-loop snapshot so that
+     * votes justified earlier in this same batch do not unlock later votes. */
+    uint64_t source_snapshot_offset = state->justified_slots_offset;
+    size_t source_snapshot_bits = state->justified_slots.bit_length;
+    uint8_t source_snapshot_bytes[(LANTERN_HISTORICAL_ROOTS_LIMIT + 7u) / 8u];
+    memset(source_snapshot_bytes, 0, sizeof(source_snapshot_bytes));
+    size_t source_snapshot_len = (source_snapshot_bits + 7u) / 8u;
+    if (source_snapshot_len > sizeof(source_snapshot_bytes)) {
+        return -1;
+    }
+    if (source_snapshot_len > 0) {
+        if (!state->justified_slots.bytes) {
+            return -1;
+        }
+        memcpy(source_snapshot_bytes, state->justified_slots.bytes, source_snapshot_len);
+    }
+
     if (attestations->length > LANTERN_MAX_ATTESTATIONS) {
         return -1;
     }
@@ -1639,7 +1690,13 @@ static int lantern_state_process_attestations_internal(
             continue;
         }
         bool source_is_justified = false;
-        if (lantern_state_get_justified_slot_bit(state, vote->source.slot, &source_is_justified) != 0) {
+        if (snapshot_get_justified_slot_bit(
+                source_snapshot_bytes,
+                source_snapshot_bits,
+                source_snapshot_offset,
+                vote->source.slot,
+                &source_is_justified)
+            != 0) {
             /* LeanSpec: silently skip if we can't read source justified status */
             if (trace_finalization) {
                 lantern_log_debug(
