@@ -555,7 +555,7 @@ for i in $(seq 0 $((NODES-1))); do
       -e "LANTERN_NODES_FILE=/genesis/nodes.yaml"
       -e "LANTERN_GENESIS_STATE=/genesis/genesis.ssz"
       -e "LANTERN_VALIDATOR_CONFIG=/genesis/validator-config.yaml"
-      -e "LANTERN_EXTRA_ARGS=--hash-sig-key-dir /genesis/${HASH_SIG_KEYS_DIR_NAME} --log-level ${LOG_LEVEL}"
+      -e "LANTERN_EXTRA_ARGS=--hash-sig-key-dir /genesis/${HASH_SIG_KEYS_DIR_NAME} --log-level ${LOG_LEVEL}${CHECKPOINT_SYNC_URL:+ --checkpoint-sync-url ${CHECKPOINT_SYNC_URL}}"
     )
     if [[ "${ENABLE_COREDUMP}" == "1" ]]; then
       docker_args+=(--ulimit core=-1)

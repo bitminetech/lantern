@@ -1209,8 +1209,18 @@ static int checkpoint_sync_parse_url(
     *out_port = 0;
 
     const char *http_prefix = "http://";
+    const char *https_prefix = "https://";
     size_t prefix_len = strlen(http_prefix);
-    if (strncasecmp(url, http_prefix, prefix_len) != 0)
+    if (strncasecmp(url, http_prefix, prefix_len) == 0)
+    {
+        /* plain http — use as-is */
+    }
+    else if (strncasecmp(url, https_prefix, strlen(https_prefix)) == 0)
+    {
+        /* TLS not supported; downgrade to plain HTTP */
+        prefix_len = strlen(https_prefix);
+    }
+    else
     {
         return -1;
     }
