@@ -80,7 +80,6 @@ static const size_t CHECKPOINT_SYNC_MAX_RESPONSE_BYTES =
     + (LANTERN_VALIDATOR_REGISTRY_LIMIT * 52u)
     + (LANTERN_HISTORICAL_ROOTS_LIMIT * 32u)
     + (LANTERN_JUSTIFICATION_VALIDATORS_LIMIT / 8u);
-static const char CHECKPOINT_SYNC_ENDPOINT[] = "/lean/v0/states/finalized";
 static const size_t LANTERN_ATTESTATION_COMMITTEE_COUNT = 1u;
 
 static void agg_proof_cache_init(struct lantern_agg_proof_cache *cache) {
@@ -1351,37 +1350,6 @@ static int checkpoint_sync_parse_url(
     return 0;
 }
 
-static char *checkpoint_sync_build_request_target(const char *base_path)
-{
-    if (!base_path || !base_path[0])
-    {
-        return lantern_string_duplicate(CHECKPOINT_SYNC_ENDPOINT);
-    }
-
-    size_t base_len = strlen(base_path);
-    bool trailing_slash = base_len > 0 && base_path[base_len - 1] == '/';
-    const char *suffix = trailing_slash
-                             ? (CHECKPOINT_SYNC_ENDPOINT[0] == '/'
-                                    ? CHECKPOINT_SYNC_ENDPOINT + 1
-                                    : CHECKPOINT_SYNC_ENDPOINT)
-                             : CHECKPOINT_SYNC_ENDPOINT;
-    size_t suffix_len = strlen(suffix);
-    if (base_len > SIZE_MAX - suffix_len - 1u)
-    {
-        return NULL;
-    }
-
-    char *target = malloc(base_len + suffix_len + 1u);
-    if (!target)
-    {
-        return NULL;
-    }
-    memcpy(target, base_path, base_len);
-    memcpy(target + base_len, suffix, suffix_len);
-    target[base_len + suffix_len] = '\0';
-    return target;
-}
-
 static bool checkpoint_sync_header_has_token(
     const char *value,
     const char *token)
@@ -1986,14 +1954,14 @@ static int checkpoint_sync_fetch_state_bytes(
         return -1;
     }
 
-    char *request_target = checkpoint_sync_build_request_target(base_path);
-    free(base_path);
-    base_path = NULL;
-    if (!request_target)
+    if (!base_path || !base_path[0])
     {
+        free(base_path);
         free(host);
         return -1;
     }
+    char *request_target = base_path;
+    base_path = NULL;
 
     bool is_ipv6 = strchr(host, ':') != NULL;
     int host_header_len = snprintf(
