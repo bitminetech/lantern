@@ -819,13 +819,15 @@ int lantern_fork_choice_add_vote(
     if (vote->data.validator_id >= store->validator_count) {
         return -1;
     }
-    const LanternCheckpoint *target = &vote->data.target;
+    /* LMD GHOST weights by head, not target (per leanSpec store.py:703
+     * and ethereum/research 3sf-mini consensus.py get_fork_choice_head). */
+    const LanternCheckpoint *head = &vote->data.head;
     size_t block_index = 0;
-    if (!map_lookup(store, &target->root, &block_index)) {
+    if (!map_lookup(store, &head->root, &block_index)) {
         return 0;
     }
-    struct lantern_fork_choice_block_entry *target_block = &store->blocks[block_index];
-    if (target_block->slot != target->slot) {
+    struct lantern_fork_choice_block_entry *head_block = &store->blocks[block_index];
+    if (head_block->slot != head->slot) {
         return -1;
     }
 
@@ -833,10 +835,10 @@ int lantern_fork_choice_add_vote(
     struct lantern_fork_choice_vote_entry *table = from_block ? store->known_votes : store->new_votes;
     struct lantern_fork_choice_vote_entry *entry = &table[validator];
     if (!entry->has_checkpoint || vote->data.slot > entry->checkpoint.slot) {
-        entry->checkpoint = *target;
+        entry->checkpoint = *head;
         entry->has_checkpoint = true;
     } else if (vote->data.slot == entry->checkpoint.slot) {
-        if (root_compare(&entry->checkpoint.root, &target->root) != 0) {
+        if (root_compare(&entry->checkpoint.root, &head->root) != 0) {
             return -1;
         }
     }
