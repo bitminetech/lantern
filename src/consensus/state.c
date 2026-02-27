@@ -1816,15 +1816,15 @@ static int lantern_state_process_attestations_internal(
             continue;
         }
 
-        /* Target slot must be justifiable after the latest finalized slot (leanSpec line 410) */
-        if (!lantern_slot_is_justifiable(vote->target.slot, latest_finalized.slot)) {
+        /* Target slot must be justifiable after the pre-loop finalized slot snapshot (leanSpec line 410) */
+        if (!lantern_slot_is_justifiable(vote->target.slot, base_finalized_slot)) {
             if (trace_finalization) {
                 lantern_log_debug(
                     "state",
                     &meta,
                     "finalization trace skip non-justifiable target_slot=%" PRIu64 " finalized=%" PRIu64,
                     vote->target.slot,
-                    latest_finalized.slot);
+                    base_finalized_slot);
             }
             record_attestation_validation_metric(att_validation_start, true);
             continue;
@@ -1918,14 +1918,12 @@ static int lantern_state_process_attestations_internal(
 
             /* Finalization: if the target is the next valid justifiable slot after source (leanSpec lines 435-439)
              *
-             * The key is to check if there's any JUSTIFIABLE slot between source and target,
-             * relative to the current finalized slot. Both Zeam and the devnet use the progressively
-             * updated finalized slot during the loop (self.latest_finalized in Zeam, line 411).
-             *
-             * IMPORTANT: We use latest_finalized.slot (the locally updated value) to match Zeam behavior.
+             * The gap check is evaluated relative to the pre-loop finalized slot snapshot.
+             * leanSpec uses self.latest_finalized.slot from the immutable input state for this check,
+             * so use base_finalized_slot rather than the progressively updated latest_finalized.slot.
              */
             bool has_justifiable_between = has_justifiable_slot_between(
-                vote->source.slot, vote->target.slot, latest_finalized.slot);
+                vote->source.slot, vote->target.slot, base_finalized_slot);
             bool vote_has_consecutive_source = !has_justifiable_between;
 
             if (trace_finalization) {
