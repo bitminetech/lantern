@@ -1050,6 +1050,34 @@ static bool state_matches_root(const LanternState *state, const LanternRoot *roo
     return memcmp(header_root.bytes, root->bytes, LANTERN_ROOT_SIZE) == 0;
 }
 
+static void cache_rebuilt_state_for_root_locked(
+    const struct lantern_client *client,
+    const LanternRoot *root,
+    const LanternState *state,
+    const struct lantern_log_metadata *meta,
+    const char *context)
+{
+    if (!client || !root || !state || !client->data_dir || !client->data_dir[0])
+    {
+        return;
+    }
+
+    if (lantern_storage_store_state_for_root(client->data_dir, root, state) != 0)
+    {
+        char root_hex[ROOT_HEX_BUFFER_LEN];
+        struct lantern_log_metadata fallback_meta = {.validator = client->node_id};
+        const struct lantern_log_metadata *log_meta = meta ? meta : &fallback_meta;
+        format_root_hex(root, root_hex, sizeof(root_hex));
+        lantern_log_warn(
+            "storage",
+            log_meta,
+            "failed to cache rebuilt state root=%s slot=%" PRIu64 " context=%s",
+            root_hex[0] ? root_hex : "0x0",
+            state->slot,
+            context ? context : "unknown");
+    }
+}
+
 const LanternState *lantern_client_state_for_root_locked(
     struct lantern_client *client,
     const LanternRoot *root,
@@ -1112,6 +1140,12 @@ const LanternState *lantern_client_state_for_root_locked(
         lantern_state_reset(scratch);
         if (rebuild_state_for_root_locked(client, root, scratch, NULL, 0, NULL))
         {
+            cache_rebuilt_state_for_root_locked(
+                client,
+                root,
+                scratch,
+                NULL,
+                "state_for_root");
             if (out_is_scratch)
             {
                 *out_is_scratch = true;
@@ -2156,6 +2190,12 @@ bool lantern_client_import_block(
                 &missing_count))
         {
             have_replay_state = true;
+            cache_rebuilt_state_for_root_locked(
+                client,
+                &parent_root,
+                &replay_state,
+                meta,
+                "off_head_parent");
             if (lantern_state_transition(&replay_state, block) == 0)
             {
                 processed = add_competing_fork_block_locked(
