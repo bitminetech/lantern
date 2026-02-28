@@ -63,7 +63,6 @@ struct lantern_http_server {
 };
 
 void lantern_http_server_init(struct lantern_http_server *server);
-void lantern_http_server_reset(struct lantern_http_server *server);
 int lantern_http_server_start(struct lantern_http_server *server, const struct lantern_http_server_config *config);
 void lantern_http_server_stop(struct lantern_http_server *server);
 

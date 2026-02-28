@@ -43,6 +43,7 @@ int lantern_root_list_resize(struct lantern_root_list *list, size_t new_length);
 
 void lantern_state_init(LanternState *state);
 void lantern_state_reset(LanternState *state);
+int lantern_state_clone(const LanternState *source, LanternState *dest);
 void lantern_state_attach_fork_choice(LanternState *state, struct lantern_fork_choice *fork_choice);
 int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, uint64_t num_validators);
 int lantern_state_process_slot(LanternState *state);
@@ -96,6 +97,5 @@ int lantern_state_preview_post_state_root(
     const LanternState *state,
     const LanternSignedBlock *block,
     LanternRoot *out_state_root);
-void lantern_state_profile_dump(void);
 
 #endif /* LANTERN_CONSENSUS_STATE_H */

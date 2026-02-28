@@ -69,7 +69,6 @@ int lantern_slot_clock_schedule_slot(
     const struct lantern_slot_clock *clock,
     uint64_t slot,
     struct lantern_duty_schedule *schedule);
-const char *lantern_duty_phase_name(enum lantern_duty_phase phase);
 
 #ifdef __cplusplus
 }

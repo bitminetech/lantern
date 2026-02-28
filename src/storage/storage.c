@@ -33,7 +33,9 @@
 #define LANTERN_STORAGE_INDICES_DIR "indices"
 #define LANTERN_STORAGE_SLOT_INDEX_DIR "slots"
 #define LANTERN_STORAGE_STATE_FILE "state.ssz"
+#define LANTERN_STORAGE_FINALIZED_STATE_FILE "finalized_state.ssz"
 #define LANTERN_STORAGE_STATE_META_FILE "state.meta"
+#define LANTERN_STORAGE_FINALIZED_STATE_META_FILE "finalized_state.meta"
 #define LANTERN_STORAGE_VOTES_FILE "votes.bin"
 #define LANTERN_STORAGE_HEAD_FILE "head.bin"
 #define LANTERN_STORAGE_CHECKPOINTS_FILE "checkpoints.bin"
@@ -438,8 +440,8 @@ cleanup:
     return rc;
 }
 
-static int write_state_meta(const char *data_dir, const LanternState *state) {
-    if (!data_dir || !state) {
+static int write_state_meta_leaf(const char *data_dir, const char *meta_leaf, const LanternState *state) {
+    if (!data_dir || !meta_leaf || !state) {
         return -1;
     }
     int rc = -1;
@@ -451,7 +453,7 @@ static int write_state_meta(const char *data_dir, const LanternState *state) {
         .historical_roots_offset = state->historical_roots_offset,
         .justified_slots_offset = state->justified_slots_offset,
     };
-    if (join_path(data_dir, LANTERN_STORAGE_STATE_META_FILE, &meta_path) != 0) {
+    if (join_path(data_dir, meta_leaf, &meta_path) != 0) {
         goto cleanup;
     }
     rc = write_atomic_file(meta_path, (const uint8_t *)&meta, sizeof(meta));
@@ -459,6 +461,14 @@ static int write_state_meta(const char *data_dir, const LanternState *state) {
 cleanup:
     free_path(meta_path);
     return rc;
+}
+
+static int write_state_meta(const char *data_dir, const LanternState *state) {
+    return write_state_meta_leaf(data_dir, LANTERN_STORAGE_STATE_META_FILE, state);
+}
+
+static int write_finalized_state_meta(const char *data_dir, const LanternState *state) {
+    return write_state_meta_leaf(data_dir, LANTERN_STORAGE_FINALIZED_STATE_META_FILE, state);
 }
 
 static int write_state_meta_path(const char *path, const LanternState *state) {
@@ -474,8 +484,8 @@ static int write_state_meta_path(const char *path, const LanternState *state) {
     return write_atomic_file(path, (const uint8_t *)&meta, sizeof(meta));
 }
 
-static int read_state_meta(const char *data_dir, struct lantern_storage_state_meta *meta) {
-    if (!data_dir || !meta) {
+static int read_state_meta_leaf(const char *data_dir, const char *meta_leaf, struct lantern_storage_state_meta *meta) {
+    if (!data_dir || !meta_leaf || !meta) {
         return -1;
     }
     int rc = -1;
@@ -483,7 +493,7 @@ static int read_state_meta(const char *data_dir, struct lantern_storage_state_me
     uint8_t *buffer = NULL;
     size_t len = 0;
 
-    if (join_path(data_dir, LANTERN_STORAGE_STATE_META_FILE, &meta_path) != 0) {
+    if (join_path(data_dir, meta_leaf, &meta_path) != 0) {
         goto cleanup;
     }
     rc = read_file_buffer(meta_path, &buffer, &len);
@@ -506,6 +516,14 @@ cleanup:
     free_path(meta_path);
     free(buffer);
     return rc;
+}
+
+static int read_state_meta(const char *data_dir, struct lantern_storage_state_meta *meta) {
+    return read_state_meta_leaf(data_dir, LANTERN_STORAGE_STATE_META_FILE, meta);
+}
+
+static int read_finalized_state_meta(const char *data_dir, struct lantern_storage_state_meta *meta) {
+    return read_state_meta_leaf(data_dir, LANTERN_STORAGE_FINALIZED_STATE_META_FILE, meta);
 }
 
 static int build_blocks_dir(const char *data_dir, char **out_path) {
@@ -679,6 +697,125 @@ int lantern_storage_load_state(const char *data_dir, LanternState *state) {
     }
     struct lantern_storage_state_meta meta;
     const int meta_rc = read_state_meta(data_dir, &meta);
+    if (meta_rc == 0) {
+        decoded.historical_roots_offset = meta.historical_roots_offset;
+        decoded.justified_slots_offset = meta.justified_slots_offset;
+    } else if (meta_rc == 1) {
+        decoded.historical_roots_offset = 0;
+        decoded.justified_slots_offset =
+            decoded.latest_finalized.slot == UINT64_MAX ? 0u : (decoded.latest_finalized.slot + 1u);
+    } else {
+        rc = -1;
+        goto cleanup;
+    }
+
+    lantern_state_reset(state);
+    *state = decoded;
+    decoded_owned = false;
+    rc = 0;
+
+cleanup:
+    free_path(state_path);
+    free(data);
+    if (decoded_owned) {
+        lantern_state_reset(&decoded);
+    }
+    return rc;
+}
+
+/**
+ * Persist finalized replay state under `data_dir/finalized_state.ssz` plus `finalized_state.meta`.
+ *
+ * @param data_dir Base directory path.
+ * @param state State to persist.
+ * @return 0 on success.
+ * @return -1 on invalid parameters, encoding failure, or filesystem errors.
+ */
+int lantern_storage_save_finalized_state(const char *data_dir, const LanternState *state) {
+    if (!data_dir || !state || state->config.num_validators == 0) {
+        return -1;
+    }
+    int rc = -1;
+    uint8_t *buffer = NULL;
+    char *state_path = NULL;
+
+    const size_t encoded_size = state_encoded_size(state);
+    if (encoded_size == 0) {
+        goto cleanup;
+    }
+
+    buffer = malloc(encoded_size);
+    if (!buffer) {
+        goto cleanup;
+    }
+    size_t written = 0;
+    if (lantern_ssz_encode_state(state, buffer, encoded_size, &written) != 0 || written != encoded_size) {
+        goto cleanup;
+    }
+    if (join_path(data_dir, LANTERN_STORAGE_FINALIZED_STATE_FILE, &state_path) != 0) {
+        goto cleanup;
+    }
+    rc = write_atomic_file(state_path, buffer, written);
+    if (rc != 0) {
+        goto cleanup;
+    }
+
+    rc = write_finalized_state_meta(data_dir, state);
+
+cleanup:
+    free_path(state_path);
+    free(buffer);
+    return rc;
+}
+
+/**
+ * Load a persisted finalized replay state from `data_dir/finalized_state.ssz`.
+ *
+ * On success, the contents of `state` are replaced.
+ *
+ * @param data_dir Base directory path.
+ * @param state Output state (replaced on success).
+ * @return 0 on success.
+ * @return 1 if the finalized state file is missing or empty.
+ * @return -1 on invalid parameters or decode/validation errors.
+ */
+int lantern_storage_load_finalized_state(const char *data_dir, LanternState *state) {
+    if (!data_dir || !state) {
+        return -1;
+    }
+
+    int rc = -1;
+    char *state_path = NULL;
+    uint8_t *data = NULL;
+    size_t data_len = 0;
+
+    LanternState decoded;
+    lantern_state_init(&decoded);
+    bool decoded_owned = true;
+
+    if (join_path(data_dir, LANTERN_STORAGE_FINALIZED_STATE_FILE, &state_path) != 0) {
+        goto cleanup;
+    }
+    rc = read_file_buffer(state_path, &data, &data_len);
+    if (rc != 0) {
+        goto cleanup;
+    }
+    if (lantern_ssz_decode_state(&decoded, data, data_len) != 0) {
+        rc = -1;
+        goto cleanup;
+    }
+    free(data);
+    data = NULL;
+    if (decoded.config.num_validators == 0) {
+        rc = -1;
+        goto cleanup;
+    }
+    if (lantern_state_prepare_validator_votes(&decoded, decoded.config.num_validators) != 0) {
+        rc = -1;
+        goto cleanup;
+    }
+    struct lantern_storage_state_meta meta;
+    const int meta_rc = read_finalized_state_meta(data_dir, &meta);
     if (meta_rc == 0) {
         decoded.historical_roots_offset = meta.historical_roots_offset;
         decoded.justified_slots_offset = meta.justified_slots_offset;

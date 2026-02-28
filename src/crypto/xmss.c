@@ -31,7 +31,7 @@ static const size_t XMSS_JSON_SUFFIX_LEN = sizeof(XMSS_JSON_SUFFIX) - 1u;
  * Error Codes
  * ============================================================================ */
 
-typedef enum
+enum
 {
     LANTERN_XMSS_OK = 0,
     LANTERN_XMSS_ERR_INVALID_PARAM = -1,
@@ -40,7 +40,7 @@ typedef enum
     LANTERN_XMSS_ERR_OVERFLOW = -4,
     LANTERN_XMSS_ERR_TRUNCATED = -5,
     LANTERN_XMSS_ERR_DESERIALIZE = -6,
-} lantern_xmss_error_t;
+};
 
 
 /* ============================================================================

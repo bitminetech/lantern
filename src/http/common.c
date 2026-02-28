@@ -21,13 +21,13 @@ static const int HTTP_STATUS_CODE_MAX = 999;
 /**
  * HTTP module-specific error codes.
  */
-typedef enum
+enum
 {
     LANTERN_HTTP_OK = 0,
     LANTERN_HTTP_ERR_INVALID_PARAM = -1,
     LANTERN_HTTP_ERR_SEND_FAILED = -2,
     LANTERN_HTTP_ERR_HEADER_TOO_LARGE = -3,
-} lantern_http_error_t;
+};
 
 /**
  * Send the provided buffer to a socket, retrying short writes.

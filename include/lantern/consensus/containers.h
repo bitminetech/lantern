@@ -172,7 +172,6 @@ typedef LanternSignedBlockWithAttestation LanternSignedBlock;
 void lantern_attestations_init(LanternAttestations *list);
 void lantern_attestations_reset(LanternAttestations *list);
 int lantern_attestations_append(LanternAttestations *list, const LanternVote *vote);
-int lantern_attestations_copy(LanternAttestations *dst, const LanternAttestations *src);
 int lantern_attestations_resize(LanternAttestations *list, size_t new_length);
 
 void lantern_bitlist_init(struct lantern_bitlist *list);
@@ -228,7 +227,6 @@ int lantern_attestation_signatures_resize(LanternAttestationSignatures *list, si
 void lantern_signature_list_init(LanternSignatureList *list);
 void lantern_signature_list_reset(LanternSignatureList *list);
 int lantern_signature_list_append(LanternSignatureList *list, const LanternSignature *signature);
-int lantern_signature_list_copy(LanternSignatureList *dst, const LanternSignatureList *src);
 int lantern_signature_list_resize(LanternSignatureList *list, size_t new_length);
 
 void lantern_block_signatures_init(LanternBlockSignatures *signatures);

@@ -280,11 +280,6 @@ lantern_client_error lantern_init(
     const struct lantern_client_options *options);
 void lantern_shutdown(struct lantern_client *client);
 
-size_t lantern_client_local_validator_count(const struct lantern_client *client);
-const struct lantern_local_validator *lantern_client_local_validator(
-    const struct lantern_client *client,
-    size_t index);
-
 /**
  * Refresh a cached vote's checkpoints and signature if the source checkpoint
  * has changed.
@@ -366,7 +361,6 @@ int lantern_client_debug_set_parent_requested(
     struct lantern_client *client,
     const LanternRoot *root,
     bool requested);
-void lantern_client_debug_disable_block_requests(struct lantern_client *client, bool disable);
 int lantern_client_debug_on_blocks_request_complete(
     struct lantern_client *client,
     const char *peer_id,

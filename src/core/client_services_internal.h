@@ -91,32 +91,6 @@ bool validator_service_should_run(const struct lantern_client *client);
 
 
 /**
- * Check if a validator is enabled.
- *
- * @spec subspecs/duties/duties.py - validator management
- *
- * @param client       Client instance
- * @param local_index  Local validator index
- * @return true if enabled, false otherwise
- *
- * @note Thread safety: This function acquires validator_lock
- */
-bool validator_is_enabled(const struct lantern_client *client, size_t local_index);
-
-
-/**
- * Get the global index for a local validator.
- *
- * @param client       Client instance
- * @param local_index  Local validator index
- * @return Global index, or UINT64_MAX on error
- *
- * @note Thread safety: This function is thread-safe
- */
-uint64_t validator_global_index(const struct lantern_client *client, size_t local_index);
-
-
-/**
  * Sign a vote with a validator's secret key.
  *
  * @spec subspecs/xmss/sign.py - signature generation
@@ -541,31 +515,6 @@ int lantern_client_schedule_blocks_request_batch(
     const uint32_t *depths,
     size_t root_count,
     uint64_t request_id);
-
-/**
- * Schedule a single-root blocks_by_root request to a peer.
- *
- * @spec subspecs/networking/reqresp/message.py - BlocksByRoot protocol
- *
- * @param client         Client instance
- * @param peer_id_text   Peer ID string
- * @param root           Block root to request
- * @param backfill_depth Backfill depth for the requested root
- * @param request_id     Internal request tracking ID (0 disables tracking)
- * @return 0 on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM if parameters are invalid, the peer ID is invalid, or the root is zero
- * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
- * @return LANTERN_CLIENT_ERR_NETWORK if stream dialing fails or networking is unavailable
- *
- * @note Thread safety: This function is thread-safe
- */
-int lantern_client_schedule_blocks_request(
-    struct lantern_client *client,
-    const char *peer_id_text,
-    const LanternRoot *root,
-    uint32_t backfill_depth,
-    uint64_t request_id);
-
 
 /**
  * Write all bytes to a stream.

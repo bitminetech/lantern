@@ -46,7 +46,6 @@
 
 #if !defined(_WIN32)
 static const uint64_t CLIENT_UTILS_MILLIS_PER_SECOND = 1000ULL;
-static const uint64_t CLIENT_UTILS_MICROS_PER_MILLI = 1000ULL;
 static const uint64_t CLIENT_UTILS_NANOS_PER_MILLI = 1000000ULL;
 static const uint64_t CLIENT_UTILS_NANOS_PER_SECOND = 1000000000ULL;
 #endif
@@ -127,7 +126,7 @@ uint64_t monotonic_millis(void)
     }
     millis *= CLIENT_UTILS_MILLIS_PER_SECOND;
 
-    uint64_t usec_part = (uint64_t)tv.tv_usec / CLIENT_UTILS_MICROS_PER_MILLI;
+    uint64_t usec_part = (uint64_t)tv.tv_usec / 1000ULL;
     if (millis > UINT64_MAX - usec_part)
     {
         return 0;

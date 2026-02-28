@@ -82,7 +82,6 @@ static int hash_byte_vector(const uint8_t *bytes, size_t length, LanternRoot *ou
     if (chunk_count == 0) {
         chunk_count = 1;
     }
-    size_t total_bytes = chunk_count * SSZ_BYTES_PER_CHUNK;
     uint8_t *chunks = calloc(chunk_count, SSZ_BYTES_PER_CHUNK);
     if (!chunks) {
         return -1;
@@ -541,25 +540,6 @@ int lantern_hash_tree_root_aggregated_signature_proof(
     memcpy(chunks[0], participants_root.bytes, SSZ_BYTES_PER_CHUNK);
     memcpy(chunks[1], proof_root.bytes, SSZ_BYTES_PER_CHUNK);
     return merkleize_chunks(&chunks[0][0], 2, 0, out_root);
-}
-
-int lantern_hash_tree_root_signed_vote(const LanternSignedVote *vote, LanternRoot *out_root) {
-    if (!vote || !out_root) {
-        return -1;
-    }
-    LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &data_root) != 0) {
-        return -1;
-    }
-    LanternRoot signature_root;
-    if (hash_xmss_signature(&vote->signature, &signature_root) != 0) {
-        return -1;
-    }
-    uint8_t chunks[3][SSZ_BYTES_PER_CHUNK];
-    chunk_from_uint64(vote->data.validator_id, chunks[0]);
-    memcpy(chunks[1], data_root.bytes, SSZ_BYTES_PER_CHUNK);
-    memcpy(chunks[2], signature_root.bytes, SSZ_BYTES_PER_CHUNK);
-    return merkleize_chunks(&chunks[0][0], 3, 0, out_root);
 }
 
 int lantern_merkleize_root_list(

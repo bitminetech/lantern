@@ -16,7 +16,7 @@
 /**
  * RLP module-specific error codes.
  */
-typedef enum
+enum
 {
     LANTERN_RLP_OK = 0,
     LANTERN_RLP_ERR_INVALID_PARAM = -1,
@@ -24,7 +24,7 @@ typedef enum
     LANTERN_RLP_ERR_OVERFLOW = -3,
     LANTERN_RLP_ERR_INVALID_ENCODING = -4,
     LANTERN_RLP_ERR_TRAILING_DATA = -5,
-} lantern_rlp_error_t;
+};
 
 static const size_t RLP_SHORT_PAYLOAD_MAX = 55;
 static const size_t RLP_INITIAL_LIST_CAPACITY = 4;

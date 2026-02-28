@@ -265,7 +265,7 @@ static int clone_bitlist(struct lantern_bitlist *dst, const struct lantern_bitli
     return 0;
 }
 
-static int lantern_state_clone_view(const LanternState *source, LanternState *dest) {
+int lantern_state_clone(const LanternState *source, LanternState *dest) {
     if (!source || !dest) {
         return -1;
     }
@@ -496,17 +496,6 @@ static int lantern_bitlist_get_bit(const struct lantern_bitlist *list, size_t in
     return 0;
 }
 
-static int lantern_bitlist_append(struct lantern_bitlist *list, bool value) {
-    if (!list) {
-        return -1;
-    }
-    size_t new_length = list->bit_length + 1;
-    if (lantern_bitlist_resize(list, new_length) != 0) {
-        return -1;
-    }
-    return lantern_bitlist_set_bit(list, new_length - 1, value);
-}
-
 static int lantern_bitlist_drop_front(struct lantern_bitlist *list, size_t bits) {
     if (!list || bits == 0) {
         return 0;
@@ -548,25 +537,6 @@ bool lantern_state_slot_in_justified_window(const LanternState *state, uint64_t 
     uint64_t bit_length = state->justified_slots.bit_length;
     uint64_t window_end = offset + bit_length;
     return slot >= offset && slot < window_end;
-}
-
-static bool lantern_state_has_justified_between(
-    const LanternState *state,
-    uint64_t start_slot,
-    uint64_t end_slot) {
-    if (!state || end_slot <= start_slot + 1u) {
-        return false;
-    }
-    for (uint64_t slot = start_slot + 1u; slot < end_slot; ++slot) {
-        bool bit = false;
-        if (lantern_state_get_justified_slot_bit(state, slot, &bit) != 0) {
-            return true;
-        }
-        if (bit) {
-            return true;
-        }
-    }
-    return false;
 }
 
 /**
@@ -881,9 +851,8 @@ static int lantern_state_add_justification_root(
     if (bits_to_shift > 0) {
         /* Create a temporary buffer to hold the bits we need to shift */
         size_t shift_start_bit = insert_pos * validator_count;
-        size_t new_root_start_bit = old_root_count * validator_count;
 
-        /* Copy existing bits from insert_pos onward to temporary storage */
+        /* Copy existing bits from [shift_start_bit, shift_start_bit + bits_to_shift) onward to temporary storage */
         size_t temp_bytes_needed = (bits_to_shift + 7) / 8;
         uint8_t *temp_bits = (uint8_t *)calloc(temp_bytes_needed, 1);
         if (!temp_bits) {
@@ -891,7 +860,7 @@ static int lantern_state_add_justification_root(
             return (int)insert_pos;
         }
 
-        /* Extract bits from [shift_start_bit, new_root_start_bit) */
+        /* Extract bits from [shift_start_bit, shift_start_bit + bits_to_shift) */
         for (size_t i = 0; i < bits_to_shift; ++i) {
             bool bit_value = false;
             if (lantern_bitlist_get_bit(&state->justification_validators, shift_start_bit + i, &bit_value) == 0 && bit_value) {
@@ -2318,7 +2287,7 @@ int lantern_state_collect_attestations_for_block(
     LanternAggregatedAttestations aggregated_view;
     lantern_aggregated_attestations_init(&aggregated_view);
 
-    if (lantern_state_clone_view(state, &slot_snapshot) != 0) {
+    if (lantern_state_clone(state, &slot_snapshot) != 0) {
         rc = -1;
         goto cleanup;
     }
@@ -2349,7 +2318,7 @@ int lantern_state_collect_attestations_for_block(
         }
 
         lantern_state_reset(&scratch);
-        if (lantern_state_clone_view(&slot_snapshot, &scratch) != 0) {
+        if (lantern_state_clone(&slot_snapshot, &scratch) != 0) {
             rc = -1;
             goto cleanup;
         }
@@ -2412,7 +2381,7 @@ int lantern_state_preview_post_state_root(
         return -1;
     }
     LanternState scratch;
-    if (lantern_state_clone_view(state, &scratch) != 0) {
+    if (lantern_state_clone(state, &scratch) != 0) {
         return -1;
     }
     scratch.fork_choice = NULL;
@@ -2436,10 +2405,6 @@ int lantern_state_preview_post_state_root(
 cleanup:
     lantern_state_reset(&scratch);
     return rc;
-}
-
-void lantern_state_profile_dump(void) {
-    return;
 }
 
 int lantern_state_compute_vote_checkpoints(

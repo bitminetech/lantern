@@ -181,23 +181,6 @@ int lantern_attestations_append(LanternAttestations *list, const LanternVote *vo
     return 0;
 }
 
-int lantern_attestations_copy(LanternAttestations *dst, const LanternAttestations *src) {
-    if (!dst || !src) {
-        return -1;
-    }
-    if (src->length == 0) {
-        lantern_attestations_reset(dst);
-        lantern_attestations_init(dst);
-        return 0;
-    }
-    if (ensure_capacity(dst, src->length) != 0) {
-        return -1;
-    }
-    memcpy(dst->data, src->data, src->length * sizeof(*src->data));
-    dst->length = src->length;
-    return 0;
-}
-
 int lantern_attestations_resize(LanternAttestations *list, size_t new_length) {
     if (!list) {
         return -1;
@@ -797,23 +780,6 @@ int lantern_signature_list_append(LanternSignatureList *list, const LanternSigna
         return -1;
     }
     list->data[list->length++] = *signature;
-    return 0;
-}
-
-int lantern_signature_list_copy(LanternSignatureList *dst, const LanternSignatureList *src) {
-    if (!dst || !src) {
-        return -1;
-    }
-    if (src->length == 0) {
-        lantern_signature_list_reset(dst);
-        lantern_signature_list_init(dst);
-        return 0;
-    }
-    if (ensure_signature_list_capacity(dst, src->length) != 0) {
-        return -1;
-    }
-    memcpy(dst->data, src->data, src->length * sizeof(*src->data));
-    dst->length = src->length;
     return 0;
 }
 

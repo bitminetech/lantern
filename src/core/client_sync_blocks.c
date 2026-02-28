@@ -613,7 +613,6 @@ static bool get_block_root_local(
  * @brief Returns true if the block should be processed.
  *
  * @param slot        Block slot
- * @param local_slot  Client state slot
  * @param root_known  Whether the block root is known
  * @param known_slot  Slot of the known root (if root_known)
  * @param meta        Logging metadata
@@ -623,7 +622,6 @@ static bool get_block_root_local(
  */
 static bool should_process_block(
     uint64_t slot,
-    uint64_t local_slot,
     bool root_known,
     uint64_t known_slot,
     const struct lantern_log_metadata *meta)
@@ -730,6 +728,7 @@ static bool root_chain_append(
 static bool build_root_chain_locked(
     struct lantern_client *client,
     const LanternRoot *target_root,
+    const LanternRoot *stop_root,
     struct lantern_root_chain *out_chain)
 {
     if (!client || !target_root || !out_chain || !client->has_fork_choice)
@@ -739,9 +738,17 @@ static bool build_root_chain_locked(
     root_chain_reset(out_chain);
 
     LanternRoot current = *target_root;
+    const bool has_stop_root = stop_root && !lantern_root_is_zero(stop_root);
+    bool reached_stop_root = false;
     size_t steps = 0;
     while (!lantern_root_is_zero(&current))
     {
+        if (has_stop_root
+            && memcmp(current.bytes, stop_root->bytes, LANTERN_ROOT_SIZE) == 0)
+        {
+            reached_stop_root = true;
+            break;
+        }
         if (steps > LANTERN_HISTORICAL_ROOTS_LIMIT)
         {
             return false;
@@ -777,6 +784,11 @@ static bool build_root_chain_locked(
 
         current = parent;
         steps += 1u;
+    }
+
+    if (has_stop_root)
+    {
+        return reached_stop_root;
     }
 
     return out_chain->length > 0;
@@ -1050,6 +1062,143 @@ static bool state_matches_root(const LanternState *state, const LanternRoot *roo
     return memcmp(header_root.bytes, root->bytes, LANTERN_ROOT_SIZE) == 0;
 }
 
+static bool load_snapshot_state_for_root_locked(
+    const struct lantern_client *client,
+    const LanternRoot *root,
+    LanternState *out_state,
+    size_t *out_state_len)
+{
+    if (out_state_len)
+    {
+        *out_state_len = 0;
+    }
+    if (!client || !root || !out_state || !client->data_dir || client->data_dir[0] == '\0')
+    {
+        return false;
+    }
+
+    uint8_t *state_bytes = NULL;
+    size_t state_len = 0;
+    if (lantern_storage_load_state_bytes_for_root(
+            client->data_dir,
+            root,
+            &state_bytes,
+            &state_len)
+            != 0
+        || !state_bytes
+        || state_len == 0)
+    {
+        free(state_bytes);
+        return false;
+    }
+
+    LanternState decoded;
+    lantern_state_init(&decoded);
+    bool decoded_owned = true;
+    bool loaded = false;
+    if (lantern_ssz_decode_state(&decoded, state_bytes, state_len) == 0
+        && prepare_off_head_snapshot_state(client->data_dir, root, &decoded) == 0)
+    {
+        *out_state = decoded;
+        decoded_owned = false;
+        loaded = true;
+        if (out_state_len)
+        {
+            *out_state_len = state_len;
+        }
+    }
+
+    if (decoded_owned)
+    {
+        lantern_state_reset(&decoded);
+    }
+    free(state_bytes);
+    return loaded;
+}
+
+static bool load_replay_base_from_finalized_locked(
+    struct lantern_client *client,
+    const LanternRoot *finalized_root,
+    LanternState *out_state,
+    const char **out_source,
+    size_t *out_source_len)
+{
+    if (out_source)
+    {
+        *out_source = NULL;
+    }
+    if (out_source_len)
+    {
+        *out_source_len = 0;
+    }
+    if (!client || !finalized_root || !out_state || lantern_root_is_zero(finalized_root))
+    {
+        return false;
+    }
+
+    if (client->has_state && state_matches_root(&client->state, finalized_root))
+    {
+        if (lantern_state_clone(&client->state, out_state) == 0)
+        {
+            if (out_source)
+            {
+                *out_source = "head";
+            }
+            return true;
+        }
+    }
+
+    if (client->data_dir && client->data_dir[0] != '\0')
+    {
+        LanternState persisted_finalized;
+        lantern_state_init(&persisted_finalized);
+        if (lantern_storage_load_finalized_state(client->data_dir, &persisted_finalized) == 0
+            && state_matches_root(&persisted_finalized, finalized_root))
+        {
+            *out_state = persisted_finalized;
+            if (out_source)
+            {
+                *out_source = "finalized_state";
+            }
+            return true;
+        }
+        lantern_state_reset(&persisted_finalized);
+    }
+
+    size_t snapshot_len = 0;
+    if (load_snapshot_state_for_root_locked(client, finalized_root, out_state, &snapshot_len))
+    {
+        if (out_source)
+        {
+            *out_source = "state_for_root";
+        }
+        if (out_source_len)
+        {
+            *out_source_len = snapshot_len;
+        }
+        return true;
+    }
+
+    if (client->data_dir && client->data_dir[0] != '\0')
+    {
+        LanternState persisted;
+        lantern_state_init(&persisted);
+        if (lantern_storage_load_state(client->data_dir, &persisted) == 0
+            && state_matches_root(&persisted, finalized_root))
+        {
+            *out_state = persisted;
+            if (out_source)
+            {
+                *out_source = "state";
+            }
+            return true;
+        }
+        lantern_state_reset(&persisted);
+    }
+
+    return false;
+}
+
 static void cache_rebuilt_state_for_root_locked(
     const struct lantern_client *client,
     const LanternRoot *root,
@@ -1262,7 +1411,64 @@ static bool rebuild_state_for_root_locked(
     }
 
     struct lantern_root_chain chain = {0};
-    if (!build_root_chain_locked(client, target_root, &chain))
+    LanternState replay_base_state;
+    lantern_state_init(&replay_base_state);
+    bool have_replay_base_state = false;
+    bool use_finalized_shortcut = false;
+    LanternRoot replay_stop_root = {0};
+    char replay_stop_hex[ROOT_HEX_BUFFER_LEN] = {0};
+
+    if (client->has_state)
+    {
+        replay_stop_root = client->state.latest_finalized.root;
+    }
+    if (!lantern_root_is_zero(&replay_stop_root))
+    {
+        const char *replay_base_source = NULL;
+        size_t replay_base_bytes = 0;
+        format_root_hex(&replay_stop_root, replay_stop_hex, sizeof(replay_stop_hex));
+        if (!load_replay_base_from_finalized_locked(
+                client,
+                &replay_stop_root,
+                &replay_base_state,
+                &replay_base_source,
+                &replay_base_bytes))
+        {
+            lantern_log_error(
+                "state",
+                &meta,
+                "rebuild_state missing finalized replay base target=%s finalized=%s",
+                target_hex[0] ? target_hex : "0x0",
+                replay_stop_hex[0] ? replay_stop_hex : "0x0");
+            root_chain_reset(&chain);
+            return false;
+        }
+
+        have_replay_base_state = true;
+        if (!build_root_chain_locked(client, target_root, &replay_stop_root, &chain))
+        {
+            lantern_log_error(
+                "state",
+                &meta,
+                "rebuild_state failed to build finalized root chain target=%s finalized=%s",
+                target_hex[0] ? target_hex : "0x0",
+                replay_stop_hex[0] ? replay_stop_hex : "0x0");
+            root_chain_reset(&chain);
+            lantern_state_reset(&replay_base_state);
+            return false;
+        }
+
+        use_finalized_shortcut = true;
+        lantern_log_info(
+            "state",
+            &meta,
+            "rebuild_state using finalized base target=%s finalized=%s source=%s bytes=%zu",
+            target_hex[0] ? target_hex : "0x0",
+            replay_stop_hex[0] ? replay_stop_hex : "0x0",
+            replay_base_source ? replay_base_source : "unknown",
+            replay_base_bytes);
+    }
+    else if (!build_root_chain_locked(client, target_root, NULL, &chain))
     {
         lantern_log_warn(
             "state",
@@ -1270,6 +1476,10 @@ static bool rebuild_state_for_root_locked(
             "rebuild_state failed to build root chain target=%s",
             target_hex[0] ? target_hex : "0x0");
         root_chain_reset(&chain);
+        if (have_replay_base_state)
+        {
+            lantern_state_reset(&replay_base_state);
+        }
         return false;
     }
 
@@ -1285,8 +1495,9 @@ static bool rebuild_state_for_root_locked(
     lantern_log_info(
         "state",
         &meta,
-        "rebuild_state start target=%s chain_len=%zu root_count=%zu",
+        "rebuild_state start target=%s mode=%s chain_len=%zu root_count=%zu",
         target_hex[0] ? target_hex : "0x0",
+        use_finalized_shortcut ? "finalized" : "genesis",
         chain.length,
         root_count);
 
@@ -1296,12 +1507,20 @@ static bool rebuild_state_for_root_locked(
         if (!client->data_dir || !client->data_dir[0])
         {
             root_chain_reset(&chain);
+            if (have_replay_base_state)
+            {
+                lantern_state_reset(&replay_base_state);
+            }
             return false;
         }
         roots = calloc(root_count, sizeof(*roots));
         if (!roots)
         {
             root_chain_reset(&chain);
+            if (have_replay_base_state)
+            {
+                lantern_state_reset(&replay_base_state);
+            }
             return false;
         }
         size_t idx = 0;
@@ -1411,19 +1630,39 @@ static bool rebuild_state_for_root_locked(
     {
         lantern_blocks_by_root_response_reset(&response);
         root_chain_reset(&chain);
+        if (have_replay_base_state)
+        {
+            lantern_state_reset(&replay_base_state);
+        }
         return false;
     }
 
-    bool success = init_replay_state(client, out_state);
+    bool success = false;
+    if (use_finalized_shortcut)
+    {
+        *out_state = replay_base_state;
+        lantern_state_init(&replay_base_state);
+        have_replay_base_state = false;
+        success = true;
+    }
+    else
+    {
+        success = init_replay_state(client, out_state);
+    }
     if (!success)
     {
         lantern_log_warn(
             "state",
             &meta,
-            "rebuild_state failed to initialize replay state target=%s",
-            target_hex[0] ? target_hex : "0x0");
+            "rebuild_state failed to initialize replay state target=%s mode=%s",
+            target_hex[0] ? target_hex : "0x0",
+            use_finalized_shortcut ? "finalized" : "genesis");
         lantern_blocks_by_root_response_reset(&response);
         root_chain_reset(&chain);
+        if (have_replay_base_state)
+        {
+            lantern_state_reset(&replay_base_state);
+        }
         return false;
     }
 
@@ -1449,12 +1688,20 @@ static bool rebuild_state_for_root_locked(
             lantern_blocks_by_root_response_reset(&response);
             root_chain_reset(&chain);
             lantern_state_reset(out_state);
+            if (have_replay_base_state)
+            {
+                lantern_state_reset(&replay_base_state);
+            }
             return false;
         }
     }
 
     lantern_blocks_by_root_response_reset(&response);
     root_chain_reset(&chain);
+    if (have_replay_base_state)
+    {
+        lantern_state_reset(&replay_base_state);
+    }
     return true;
 }
 
@@ -1820,6 +2067,79 @@ static void get_head_info_locked(
     }
 }
 
+static bool finalized_checkpoint_advanced(
+    const LanternCheckpoint *previous_finalized,
+    const LanternCheckpoint *current_finalized)
+{
+    if (!previous_finalized || !current_finalized)
+    {
+        return false;
+    }
+    if (current_finalized->slot > previous_finalized->slot)
+    {
+        return true;
+    }
+    if (current_finalized->slot < previous_finalized->slot)
+    {
+        return false;
+    }
+    if (memcmp(
+            current_finalized->root.bytes,
+            previous_finalized->root.bytes,
+            LANTERN_ROOT_SIZE)
+        != 0
+        && !lantern_root_is_zero(&current_finalized->root))
+    {
+        return true;
+    }
+
+    return false;
+}
+
+static void persist_finalized_state_if_advanced_locked(
+    const struct lantern_client *client,
+    const LanternCheckpoint *previous_finalized,
+    const struct lantern_log_metadata *meta)
+{
+    if (!client
+        || !previous_finalized
+        || !client->data_dir
+        || client->data_dir[0] == '\0')
+    {
+        return;
+    }
+
+    struct lantern_log_metadata fallback_meta = {.validator = client->node_id};
+    const struct lantern_log_metadata *log_meta = meta ? meta : &fallback_meta;
+
+    const LanternCheckpoint *current_finalized = &client->state.latest_finalized;
+    if (!finalized_checkpoint_advanced(previous_finalized, current_finalized))
+    {
+        return;
+    }
+
+    if (lantern_storage_save_finalized_state(client->data_dir, &client->state) != 0)
+    {
+        lantern_log_warn(
+            "storage",
+            log_meta,
+            "failed to persist finalized replay state finalized_slot=%" PRIu64 " head_slot=%" PRIu64,
+            current_finalized->slot,
+            client->state.slot);
+        return;
+    }
+
+    char finalized_hex[ROOT_HEX_BUFFER_LEN];
+    format_root_hex(&current_finalized->root, finalized_hex, sizeof(finalized_hex));
+    lantern_log_info(
+        "storage",
+        log_meta,
+        "persisted finalized replay state slot=%" PRIu64 " root=%s head_slot=%" PRIu64,
+        current_finalized->slot,
+        finalized_hex[0] ? finalized_hex : "0x0",
+        client->state.slot);
+}
+
 
 /**
  * @brief Persists client state/votes if storage is enabled.
@@ -2035,7 +2355,6 @@ bool lantern_client_import_block(
         return false;
     }
 
-    uint64_t local_slot = client->state.slot;
     LanternRoot block_root_local = {0};
     LanternRoot head_root = {0};
     uint64_t head_slot = 0;
@@ -2050,7 +2369,6 @@ bool lantern_client_import_block(
     if (root_known && allow_historical && block->message.block.slot <= known_slot)
     {
         lantern_client_unlock_state(client, state_locked);
-        state_locked = false;
         persist_block_after_import(client, block, meta);
         lantern_client_process_pending_children(client, &block_root_local);
         lantern_client_pending_remove_by_root(client, &block_root_local);
@@ -2059,7 +2377,6 @@ bool lantern_client_import_block(
 
     if (!should_process_block(
             block->message.block.slot,
-            local_slot,
             root_known,
             known_slot,
             meta))
@@ -2254,6 +2571,7 @@ bool lantern_client_import_block(
         }
 
         bool adopted_state = false;
+        LanternCheckpoint pre_adopt_finalized = client->state.latest_finalized;
         if (processed && client->has_fork_choice)
         {
             LanternRoot fork_head = {0};
@@ -2296,6 +2614,10 @@ bool lantern_client_import_block(
 
         if (adopted_state)
         {
+            persist_finalized_state_if_advanced_locked(
+                client,
+                &pre_adopt_finalized,
+                meta);
             persist_state_locked(client, meta);
         }
 
@@ -2332,11 +2654,16 @@ bool lantern_client_import_block(
         return false;
     }
 
+    LanternCheckpoint pre_transition_finalized = client->state.latest_finalized;
     if (!apply_state_transition_locked(client, block, meta))
     {
         goto cleanup;
     }
 
+    persist_finalized_state_if_advanced_locked(
+        client,
+        &pre_transition_finalized,
+        meta);
     advance_fork_choice_time_locked(client, block, meta);
     get_head_info_locked(client, &head_root, &head_slot);
     persist_state_locked(client, meta);

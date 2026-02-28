@@ -310,24 +310,6 @@ int lantern_client_debug_set_parent_requested(
  * ============================================================================ */
 
 /**
- * Debug API: Enable/disable block requests for testing.
- *
- * @param client  Client instance
- * @param disable true to disable block requests
- *
- * @note Thread safety: No locking required (atomic flag)
- */
-void lantern_client_debug_disable_block_requests(struct lantern_client *client, bool disable)
-{
-    if (!client)
-    {
-        return;
-    }
-    client->debug_disable_block_requests = disable;
-}
-
-
-/**
  * Debug API: Simulate block request completion for testing.
  *
  * @param client       Client instance

@@ -17,7 +17,7 @@
 /**
  * Genesis module-specific error codes.
  */
-typedef enum
+enum
 {
     LANTERN_GENESIS_OK = 0,
     LANTERN_GENESIS_ERR_INVALID_PARAM = -1,
@@ -26,7 +26,7 @@ typedef enum
     LANTERN_GENESIS_ERR_OVERFLOW = -4,
     LANTERN_GENESIS_ERR_PARSE = -5,
     LANTERN_GENESIS_ERR_INVALID_DATA = -6,
-} lantern_genesis_error_t;
+};
 
 void genesis_free_validator_registry(struct lantern_validator_registry *registry);
 void genesis_free_validator_config(struct lantern_validator_config *config);

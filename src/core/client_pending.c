@@ -433,28 +433,6 @@ static void pending_parent_index_remove_child(
     }
 }
 
-static bool pending_parent_index_peek_child(
-    struct lantern_pending_parent_index *index,
-    const LanternRoot *parent_root,
-    LanternRoot *out_child_root)
-{
-    if (!index || !parent_root || !out_child_root || !index->entries)
-    {
-        return false;
-    }
-
-    struct lantern_pending_parent_index_entry *entry =
-        pending_parent_index_find(index, parent_root);
-    if (!entry || entry->length == 0)
-    {
-        return false;
-    }
-
-    *out_child_root = entry->child_roots[entry->length - 1u];
-    return true;
-}
-
-
 /* ============================================================================
  * Block Cloning
  * ============================================================================ */
@@ -788,28 +766,4 @@ struct lantern_pending_block *pending_block_list_append(
     list->length += 1u;
 
     return entry;
-}
-
-
-/**
- * Peek a pending child root for a given parent root.
- *
- * @param list         Pending block list
- * @param parent_root  Parent root to match
- * @param out_child_root Output child root
- * @return true if a child is available, false otherwise
- *
- * @note Thread safety: Caller must hold pending_lock
- */
-bool pending_block_list_peek_child_root(
-    struct lantern_pending_block_list *list,
-    const LanternRoot *parent_root,
-    LanternRoot *out_child_root)
-{
-    if (!list || !parent_root || !out_child_root)
-    {
-        return false;
-    }
-
-    return pending_parent_index_peek_child(&list->parent_index, parent_root, out_child_root);
 }

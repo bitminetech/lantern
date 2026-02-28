@@ -20,6 +20,8 @@ typedef int (*lantern_storage_block_visitor_fn)(
 int lantern_storage_prepare(const char *data_dir);
 int lantern_storage_save_state(const char *data_dir, const LanternState *state);
 int lantern_storage_load_state(const char *data_dir, LanternState *state);
+int lantern_storage_save_finalized_state(const char *data_dir, const LanternState *state);
+int lantern_storage_load_finalized_state(const char *data_dir, LanternState *state);
 int lantern_storage_save_votes(const char *data_dir, const LanternState *state);
 int lantern_storage_load_votes(const char *data_dir, LanternState *state);
 int lantern_storage_store_block(const char *data_dir, const LanternSignedBlock *block);

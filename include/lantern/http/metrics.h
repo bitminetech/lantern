@@ -52,7 +52,6 @@ struct lantern_metrics_server {
 };
 
 void lantern_metrics_server_init(struct lantern_metrics_server *server);
-void lantern_metrics_server_reset(struct lantern_metrics_server *server);
 int lantern_metrics_server_start(
     struct lantern_metrics_server *server,
     uint16_t port,

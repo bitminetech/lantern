@@ -55,14 +55,14 @@ enum
 /**
  * HTTP server module-specific error codes.
  */
-typedef enum
+enum
 {
     LANTERN_HTTP_SERVER_OK = 0,
     LANTERN_HTTP_SERVER_ERR_INVALID_PARAM = -1,
     LANTERN_HTTP_SERVER_ERR_IO = -2,
     LANTERN_HTTP_SERVER_ERR_FORMATTING = -3,
     LANTERN_HTTP_SERVER_ERR_MALFORMED_REQUEST = -4,
-} lantern_http_server_error_t;
+};
 
 
 /**
@@ -758,25 +758,6 @@ void lantern_http_server_init(struct lantern_http_server *server)
     server->running = 0;
     server->thread_started = 0;
     server->port = 0;
-}
-
-
-/**
- * Reset an HTTP server structure, stopping it if running.
- *
- * @param server Server instance to reset (modified in place).
- *
- * @note Thread safety: Caller must not call concurrently with start/stop.
- */
-void lantern_http_server_reset(struct lantern_http_server *server)
-{
-    if (!server)
-    {
-        return;
-    }
-
-    lantern_http_server_stop(server);
-    lantern_http_server_init(server);
 }
 
 

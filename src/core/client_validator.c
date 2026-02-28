@@ -1061,59 +1061,6 @@ bool validator_service_should_run(const struct lantern_client *client)
 }
 
 
-/**
- * Check if a validator is enabled.
- *
- * @param client       Client instance
- * @param local_index  Local validator index
- * @return true if enabled, false otherwise
- *
- * @note Thread safety: This function acquires validator_lock
- */
-bool validator_is_enabled(const struct lantern_client *client, size_t local_index)
-{
-    if (!client || local_index >= client->local_validator_count)
-    {
-        return false;
-    }
-    if (!client->validator_enabled)
-    {
-        return true;
-    }
-    if (!client->validator_lock_initialized)
-    {
-        return client->validator_enabled[local_index];
-    }
-    pthread_mutex_t *lock = (pthread_mutex_t *)&client->validator_lock;
-    if (pthread_mutex_lock(lock) != 0)
-    {
-        return client->validator_enabled[local_index];
-    }
-    bool enabled = client->validator_enabled[local_index];
-    unlock_mutex_with_log(lock, client->node_id, "validator_lock");
-    return enabled;
-}
-
-
-/**
- * Get the global index for a local validator.
- *
- * @param client       Client instance
- * @param local_index  Local validator index
- * @return Global index, or UINT64_MAX on error
- *
- * @note Thread safety: This function is thread-safe
- */
-uint64_t validator_global_index(const struct lantern_client *client, size_t local_index)
-{
-    if (!client || !client->local_validators || local_index >= client->local_validator_count)
-    {
-        return UINT64_MAX;
-    }
-    return client->local_validators[local_index].global_index;
-}
-
-
 /* ============================================================================
  * Vote Signing and Storage
  * ============================================================================ */

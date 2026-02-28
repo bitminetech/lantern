@@ -51,7 +51,7 @@ enum
 /**
  * Metrics server module-specific error codes.
  */
-typedef enum
+enum
 {
     LANTERN_METRICS_SERVER_OK = 0,
     LANTERN_METRICS_SERVER_ERR_INVALID_PARAM = -1,
@@ -61,7 +61,7 @@ typedef enum
     LANTERN_METRICS_SERVER_ERR_FORMATTING = -5,
     LANTERN_METRICS_SERVER_ERR_MALFORMED_REQUEST = -6,
     LANTERN_METRICS_SERVER_ERR_UNAVAILABLE = -7,
-} lantern_metrics_server_error_t;
+};
 
 static const char METRICS_JSON_MALFORMED_REQUEST[] = "{\"error\":\"malformed request\"}";
 static const char METRICS_JSON_UNKNOWN_ENDPOINT[] = "{\"error\":\"unknown endpoint\"}";
@@ -1382,25 +1382,6 @@ void lantern_metrics_server_init(struct lantern_metrics_server *server)
     server->running = 0;
     server->thread_started = 0;
     server->port = 0;
-}
-
-
-/**
- * Reset a metrics server structure, stopping it if running.
- *
- * @param server Server instance to reset (modified in place).
- *
- * @note Thread safety: Caller must not call concurrently with start/stop.
- */
-void lantern_metrics_server_reset(struct lantern_metrics_server *server)
-{
-    if (!server)
-    {
-        return;
-    }
-
-    lantern_metrics_server_stop(server);
-    lantern_metrics_server_init(server);
 }
 
 
