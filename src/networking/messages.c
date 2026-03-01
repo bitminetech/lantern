@@ -480,7 +480,7 @@ int lantern_network_signed_block_list_encode(
             }
 
             size_t block_written = 0;
-            if (lantern_ssz_encode_signed_block(
+            if (lantern_ssz_encode_signed_block_legacy(
                     &resp->blocks[i],
                     buffer + payload_cursor,
                     capacity - payload_cursor,

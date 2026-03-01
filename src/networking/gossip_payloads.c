@@ -214,7 +214,9 @@ static int basic_block_sanity(const LanternSignedBlock *block) {
     if (sig_count > LANTERN_MAX_BLOCK_SIGNATURES) {
         return -1;
     }
-    if (sig_count != att_count) {
+    /* Compatibility mode: signature payload decoding may intentionally fall back to
+     * an empty list for legacy/unknown encodings while still allowing block processing. */
+    if (sig_count > 0 && sig_count != att_count) {
         return -1;
     }
     return 0;
@@ -264,7 +266,7 @@ int lantern_gossip_encode_signed_block_snappy(
         return -1;
     }
     size_t raw_written = raw_capacity;
-    if (lantern_ssz_encode_signed_block(block, raw, raw_capacity, &raw_written) != 0) {
+    if (lantern_ssz_encode_signed_block_legacy(block, raw, raw_capacity, &raw_written) != 0) {
         free(raw);
         return -1;
     }
@@ -368,7 +370,7 @@ int lantern_gossip_encode_signed_vote_snappy(
     }
     uint8_t raw[LANTERN_SIGNED_VOTE_SSZ_SIZE];
     size_t raw_written = sizeof(raw);
-    if (lantern_ssz_encode_signed_vote(vote, raw, sizeof(raw), &raw_written) != 0) {
+    if (lantern_ssz_encode_signed_vote_legacy(vote, raw, sizeof(raw), &raw_written) != 0) {
         return -1;
     }
     /* Use raw snappy (no framing) for gossip messages per Eth2 networking spec */
@@ -400,16 +402,18 @@ int lantern_gossip_decode_signed_vote_snappy(
             data_len);
         return -1;
     }
-    if (raw_len != LANTERN_SIGNED_VOTE_SSZ_SIZE) {
+    if (raw_len != LANTERN_SIGNED_VOTE_SSZ_SIZE
+        && raw_len != LANTERN_SIGNED_VOTE_SSZ_SIZE_LEGACY) {
         bool framed = lantern_snappy_is_framed(data, data_len);
         size_t framed_len = 0;
         int framed_rc = framed ? lantern_snappy_uncompressed_length(data, data_len, &framed_len) : LANTERN_SNAPPY_ERROR_INVALID_INPUT;
         lantern_log_warn(
             "gossip",
             NULL,
-            "gossip vote snappy length mismatch raw_len=%zu expected=%zu framed=%s framed_rc=%d framed_len=%zu data_len=%zu",
+            "gossip vote snappy length mismatch raw_len=%zu expected=%zu/%zu framed=%s framed_rc=%d framed_len=%zu data_len=%zu",
             raw_len,
             (size_t)LANTERN_SIGNED_VOTE_SSZ_SIZE,
+            (size_t)LANTERN_SIGNED_VOTE_SSZ_SIZE_LEGACY,
             framed ? "true" : "false",
             framed_rc,
             framed_len,

@@ -2322,7 +2322,7 @@ static void *blocks_worker(void *arg) {
             }
             ssz_buffer = resized;
 
-            if (lantern_ssz_encode_signed_block(block, ssz_buffer, ssz_capacity, &ssz_written) == 0) {
+            if (lantern_ssz_encode_signed_block_legacy(block, ssz_buffer, ssz_capacity, &ssz_written) == 0) {
                 encoded = true;
                 break;
             }

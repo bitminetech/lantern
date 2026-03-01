@@ -12,6 +12,14 @@
 #include "external/c-leanvm-xmss/include/pq-bindings-c-rust.h"
 
 #define JSON_INITIAL_TOKENS 256
+#define LANTERN_XMSS_FP_BYTES 4u
+#define LANTERN_XMSS_HASH_LEN_FE 8u
+#define LANTERN_XMSS_RAND_LEN_FE 7u
+#define LANTERN_XMSS_HASH_DIGEST_BYTES (LANTERN_XMSS_HASH_LEN_FE * LANTERN_XMSS_FP_BYTES)
+#define LANTERN_XMSS_RHO_BYTES (LANTERN_XMSS_RAND_LEN_FE * LANTERN_XMSS_FP_BYTES)
+#define LANTERN_SSZ_U32_SIZE 4u
+#define LANTERN_XMSS_SIGNATURE_FIXED_SECTION \
+    (LANTERN_SSZ_U32_SIZE + LANTERN_XMSS_RHO_BYTES + LANTERN_SSZ_U32_SIZE)
 
 static int lantern_fixture_token_to_signature(
     const struct lantern_fixture_document *doc,
@@ -1118,6 +1126,96 @@ static int lantern_fixture_parse_attestations(
     return rc;
 }
 
+static void lantern_fixture_write_u32_le(uint8_t *out, uint32_t value) {
+    out[0] = (uint8_t)(value & 0xffu);
+    out[1] = (uint8_t)((value >> 8) & 0xffu);
+    out[2] = (uint8_t)((value >> 16) & 0xffu);
+    out[3] = (uint8_t)((value >> 24) & 0xffu);
+}
+
+static int lantern_fixture_parse_fp_vector(
+    const struct lantern_fixture_document *doc,
+    int vector_idx,
+    uint8_t *out,
+    size_t expected_len) {
+    if (!doc || !out) {
+        return -1;
+    }
+    int data_idx = lantern_fixture_object_get_field(doc, vector_idx, "data");
+    if (data_idx < 0) {
+        return -1;
+    }
+    int length = lantern_fixture_array_get_length(doc, data_idx);
+    if (length < 0 || (size_t)length != expected_len) {
+        return -1;
+    }
+    for (int i = 0; i < length; ++i) {
+        int entry_idx = lantern_fixture_array_get_element(doc, data_idx, i);
+        if (entry_idx < 0) {
+            return -1;
+        }
+        uint64_t value = 0;
+        if (lantern_fixture_token_to_uint64(doc, entry_idx, &value) != 0) {
+            return -1;
+        }
+        if (value > UINT32_MAX) {
+            return -1;
+        }
+        lantern_fixture_write_u32_le(out + (i * LANTERN_XMSS_FP_BYTES), (uint32_t)value);
+    }
+    return 0;
+}
+
+static int lantern_fixture_parse_hash_digest_list(
+    const struct lantern_fixture_document *doc,
+    int list_idx,
+    uint8_t **out_bytes,
+    size_t *out_count) {
+    if (!doc || !out_bytes || !out_count) {
+        return -1;
+    }
+    *out_bytes = NULL;
+    *out_count = 0;
+    int data_idx = lantern_fixture_object_get_field(doc, list_idx, "data");
+    if (data_idx < 0) {
+        return -1;
+    }
+    int length = lantern_fixture_array_get_length(doc, data_idx);
+    if (length < 0) {
+        return -1;
+    }
+    if (length == 0) {
+        return 0;
+    }
+    if ((size_t)length > SIZE_MAX / LANTERN_XMSS_HASH_DIGEST_BYTES) {
+        return -1;
+    }
+    size_t total_bytes = (size_t)length * LANTERN_XMSS_HASH_DIGEST_BYTES;
+    uint8_t *buffer = malloc(total_bytes);
+    if (!buffer) {
+        return -1;
+    }
+    for (int i = 0; i < length; ++i) {
+        int entry_idx = lantern_fixture_array_get_element(doc, data_idx, i);
+        if (entry_idx < 0) {
+            free(buffer);
+            return -1;
+        }
+        if (lantern_fixture_parse_fp_vector(
+                doc,
+                entry_idx,
+                buffer + ((size_t)i * LANTERN_XMSS_HASH_DIGEST_BYTES),
+                LANTERN_XMSS_HASH_LEN_FE)
+            != 0) {
+            free(buffer);
+            return -1;
+        }
+    }
+    *out_bytes = buffer;
+    *out_count = (size_t)length;
+    return 0;
+}
+
 static int lantern_fixture_parse_signature_object_with_bindings(
     const struct lantern_fixture_document *doc,
     int signature_idx,
@@ -1159,6 +1257,70 @@ static int lantern_fixture_parse_signature_object_with_bindings(
     return 0;
 }
 
+static int lantern_fixture_parse_signature_object_legacy(
+    const struct lantern_fixture_document *doc,
+    int signature_idx,
+    LanternSignature *signature) {
+    if (!doc || !signature) {
+        return -1;
+    }
+    int path_idx = lantern_fixture_object_get_field(doc, signature_idx, "path");
+    int rho_idx = lantern_fixture_object_get_field(doc, signature_idx, "rho");
+    int hashes_idx = lantern_fixture_object_get_field(doc, signature_idx, "hashes");
+    if (path_idx < 0 || rho_idx < 0 || hashes_idx < 0) {
+        return -1;
+    }
+    int siblings_idx = lantern_fixture_object_get_field(doc, path_idx, "siblings");
+    if (siblings_idx < 0) {
+        return -1;
+    }
+    uint8_t *siblings_bytes = NULL;
+    size_t siblings_count = 0;
+    if (lantern_fixture_parse_hash_digest_list(doc, siblings_idx, &siblings_bytes, &siblings_count) != 0) {
+        return -1;
+    }
+    uint8_t rho_bytes[LANTERN_XMSS_RHO_BYTES];
+    if (lantern_fixture_parse_fp_vector(doc, rho_idx, rho_bytes, LANTERN_XMSS_RAND_LEN_FE) != 0) {
+        free(siblings_bytes);
+        return -1;
+    }
+    uint8_t *hashes_bytes = NULL;
+    size_t hashes_count = 0;
+    if (lantern_fixture_parse_hash_digest_list(doc, hashes_idx, &hashes_bytes, &hashes_count) != 0) {
+        free(siblings_bytes);
+        return -1;
+    }
+
+    size_t siblings_len = siblings_count * LANTERN_XMSS_HASH_DIGEST_BYTES;
+    size_t hashes_len = hashes_count * LANTERN_XMSS_HASH_DIGEST_BYTES;
+    size_t path_offset = LANTERN_XMSS_SIGNATURE_FIXED_SECTION;
+    size_t hashes_offset = path_offset + LANTERN_SSZ_U32_SIZE + siblings_len;
+    size_t total_len = hashes_offset + hashes_len;
+    if (path_offset > UINT32_MAX || hashes_offset > UINT32_MAX || total_len > LANTERN_SIGNATURE_SIZE) {
+        free(siblings_bytes);
+        free(hashes_bytes);
+        return -1;
+    }
+
+    memset(signature->bytes, 0, sizeof(signature->bytes));
+    lantern_fixture_write_u32_le(signature->bytes, (uint32_t)path_offset);
+    memcpy(signature->bytes + LANTERN_SSZ_U32_SIZE, rho_bytes, sizeof(rho_bytes));
+    lantern_fixture_write_u32_le(
+        signature->bytes + LANTERN_SSZ_U32_SIZE + LANTERN_XMSS_RHO_BYTES,
+        (uint32_t)hashes_offset);
+    lantern_fixture_write_u32_le(signature->bytes + path_offset, LANTERN_SSZ_U32_SIZE);
+    if (siblings_len > 0) {
+        memcpy(signature->bytes + path_offset + LANTERN_SSZ_U32_SIZE, siblings_bytes, siblings_len);
+    }
+    if (hashes_len > 0) {
+        memcpy(signature->bytes + hashes_offset, hashes_bytes, hashes_len);
+    }
+
+    free(siblings_bytes);
+    free(hashes_bytes);
+    return 0;
+}
+
 static int lantern_fixture_token_to_signature(
     const struct lantern_fixture_document *doc,
     int index,
@@ -1171,7 +1333,10 @@ static int lantern_fixture_token_to_signature(
         return -1;
     }
     if (tok->type == JSMN_OBJECT) {
-        return lantern_fixture_parse_signature_object_with_bindings(doc, index, signature);
+        if (lantern_fixture_parse_signature_object_with_bindings(doc, index, signature) == 0) {
+            return 0;
+        }
+        return lantern_fixture_parse_signature_object_legacy(doc, index, signature);
     }
     size_t len = 0;
     const char *str = lantern_fixture_token_string(doc, index, &len);

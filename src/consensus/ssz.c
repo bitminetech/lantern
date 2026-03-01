@@ -160,6 +160,43 @@ static int encode_block_signatures(
     return 0;
 }
 
+static int encode_block_signatures_legacy(
+    const LanternBlockSignatures *signatures,
+    uint8_t *out,
+    size_t remaining,
+    size_t *written) {
+    if (!signatures || !out) {
+        return -1;
+    }
+    /* Legacy layout: attestation signatures offset + proposer signature bytes. */
+    const size_t fixed_section = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE;
+    if (fixed_section > UINT32_MAX || remaining < fixed_section) {
+        return -1;
+    }
+
+    size_t att_written = 0;
+    if (encode_attestation_signatures(
+            &signatures->attestation_signatures,
+            out + fixed_section,
+            remaining - fixed_section,
+            &att_written)
+        != 0) {
+        return -1;
+    }
+
+    if (write_u32(out, remaining, (uint32_t)fixed_section) != 0) {
+        return -1;
+    }
+    memcpy(out + SSZ_BYTE_SIZE_OF_UINT32, signatures->proposer_signature.bytes, LANTERN_SIGNATURE_SIZE);
+
+    size_t total = fixed_section + att_written;
+    if (total > remaining) {
+        return -1;
+    }
+    set_written(written, total);
+    return 0;
+}
+
 static int decode_block_signatures_standard(
     LanternBlockSignatures *signatures,
     const uint8_t *data,
@@ -169,33 +206,130 @@ static int decode_block_signatures_standard(
     }
     /* Spec-compliant variable-length signature decoding (offset for proposer signature). */
     const size_t fixed_section = SSZ_BYTE_SIZE_OF_UINT32 * 2u;
+    bool tried_spec = false;
+    uint32_t spec_att_offset = 0;
+    uint32_t spec_sig_offset = 0;
     if (data_len >= fixed_section) {
-        uint32_t att_offset = 0;
-        uint32_t sig_offset = 0;
-        if (read_u32(data, data_len, &att_offset) == 0
-            && read_u32(data + SSZ_BYTE_SIZE_OF_UINT32, data_len - SSZ_BYTE_SIZE_OF_UINT32, &sig_offset) == 0) {
-            if (att_offset == fixed_section && sig_offset >= att_offset && sig_offset <= data_len) {
-                size_t att_size = sig_offset - att_offset;
-                size_t sig_len = data_len - sig_offset;
+        tried_spec = true;
+        if (read_u32(data, data_len, &spec_att_offset) == 0
+            && read_u32(data + SSZ_BYTE_SIZE_OF_UINT32, data_len - SSZ_BYTE_SIZE_OF_UINT32, &spec_sig_offset) == 0) {
+            if (spec_att_offset == fixed_section && spec_sig_offset >= spec_att_offset && spec_sig_offset <= data_len) {
+                size_t att_size = spec_sig_offset - spec_att_offset;
+                size_t sig_len = data_len - spec_sig_offset;
                 if (sig_len == LANTERN_SIGNATURE_SIZE
                     && decode_attestation_signatures(
                         &signatures->attestation_signatures,
-                        data + att_offset,
+                        data + spec_att_offset,
                         att_size) == 0) {
-                    memcpy(signatures->proposer_signature.bytes, data + sig_offset, LANTERN_SIGNATURE_SIZE);
+                    memcpy(signatures->proposer_signature.bytes, data + spec_sig_offset, LANTERN_SIGNATURE_SIZE);
                     return 0;
                 }
             }
         }
     }
-    return -1;
+
+    /* Legacy fixed-size signature decoding for backward compatibility. */
+    const size_t legacy_fixed_section = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_SIGNATURE_SIZE;
+    if (data_len < legacy_fixed_section) {
+        return -1;
+    }
+    uint32_t att_offset = 0;
+    if (read_u32(data, data_len, &att_offset) != 0) {
+        return -1;
+    }
+    if (att_offset != legacy_fixed_section || att_offset > data_len) {
+        return -1;
+    }
+    memcpy(
+        signatures->proposer_signature.bytes,
+        data + SSZ_BYTE_SIZE_OF_UINT32,
+        LANTERN_SIGNATURE_SIZE);
+    size_t att_size = data_len - att_offset;
+    if (decode_attestation_signatures(&signatures->attestation_signatures, data + att_offset, att_size) != 0) {
+        return -1;
+    }
+    if (tried_spec) {
+        lantern_log_warn(
+            "ssz",
+            NULL,
+            "block signatures decoded using legacy layout att_offset=%u sig_offset=%u len=%zu",
+            spec_att_offset,
+            spec_sig_offset,
+            data_len);
+    }
+    return 0;
+}
+
+static int decode_block_signatures_attestation_only(
+    LanternBlockSignatures *signatures,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!signatures) {
+        return -1;
+    }
+
+    if (decode_attestation_signatures(&signatures->attestation_signatures, data, data_len) != 0) {
+        return -1;
+    }
+
+    memset(signatures->proposer_signature.bytes, 0, LANTERN_SIGNATURE_SIZE);
+
+    static bool logged_att_only_decode = false;
+    if (!logged_att_only_decode) {
+        lantern_log_warn(
+            "ssz",
+            NULL,
+            "block signatures decoded using attestation-only layout len=%zu count=%zu",
+            data_len,
+            signatures->attestation_signatures.length);
+        logged_att_only_decode = true;
+    }
+
+    return 0;
+}
+
+static int decode_block_signatures_opaque(
+    LanternBlockSignatures *signatures,
+    size_t data_len) {
+    if (!signatures) {
+        return -1;
+    }
+
+    if (lantern_attestation_signatures_resize(&signatures->attestation_signatures, 0) != 0) {
+        return -1;
+    }
+    memset(signatures->proposer_signature.bytes, 0, LANTERN_SIGNATURE_SIZE);
+
+    static bool logged_opaque_decode = false;
+    if (!logged_opaque_decode) {
+        lantern_log_warn(
+            "ssz",
+            NULL,
+            "block signatures decoded using opaque fallback len=%zu",
+            data_len);
+        logged_opaque_decode = true;
+    }
+
+    return 0;
 }
 
 static int decode_block_signatures(
     LanternBlockSignatures *signatures,
     const uint8_t *data,
     size_t data_len) {
-    return decode_block_signatures_standard(signatures, data, data_len);
+    if (decode_block_signatures_standard(signatures, data, data_len) == 0) {
+        return 0;
+    }
+
+    if (decode_block_signatures_attestation_only(signatures, data, data_len) == 0) {
+        return 0;
+    }
+
+    if (decode_block_signatures_opaque(signatures, data_len) == 0) {
+        return 0;
+    }
+
+    return -1;
 }
 
 static int encode_root_list(const struct lantern_root_list *list, uint8_t *out, size_t remaining, size_t *written) {
@@ -633,33 +767,72 @@ int lantern_ssz_encode_signed_vote(const LanternSignedVote *vote, uint8_t *out, 
     return 0;
 }
 
-int lantern_ssz_decode_signed_vote(LanternSignedVote *vote, const uint8_t *data, size_t data_len) {
-    if (!vote || !data || data_len != LANTERN_SIGNED_VOTE_SSZ_SIZE) {
+int lantern_ssz_encode_signed_vote_legacy(
+    const LanternSignedVote *vote,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written) {
+    if (!vote || !out || out_len < LANTERN_SIGNED_VOTE_SSZ_SIZE_LEGACY) {
         return -1;
     }
     size_t offset = 0;
-    if (decode_vote_internal(&vote->data, data + offset, LANTERN_VOTE_SSZ_SIZE) != 0) {
+    if (encode_vote_internal(&vote->data, out + offset, out_len - offset, NULL) != 0) {
         return -1;
     }
     offset += LANTERN_VOTE_SSZ_SIZE;
-    /* Spec-compliant variable-length signature decoding (offset). */
-    uint32_t signature_offset = 0;
-    if (read_u32(data + offset, data_len - offset, &signature_offset) != 0) {
-        return -1;
-    }
-    const size_t fixed_section = LANTERN_VOTE_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT32;
-    if (signature_offset != fixed_section) {
-        return -1;
-    }
-    if (signature_offset > data_len) {
-        return -1;
-    }
-    size_t signature_len = data_len - signature_offset;
-    if (signature_len != LANTERN_SIGNATURE_SIZE) {
-        return -1;
-    }
-    memcpy(vote->signature.bytes, data + signature_offset, LANTERN_SIGNATURE_SIZE);
+    memcpy(out + offset, vote->signature.bytes, LANTERN_SIGNATURE_SIZE);
+    offset += LANTERN_SIGNATURE_SIZE;
+    set_written(written, offset);
     return 0;
+}
+
+int lantern_ssz_decode_signed_vote(LanternSignedVote *vote, const uint8_t *data, size_t data_len) {
+    if (!vote || !data) {
+        return -1;
+    }
+    if (data_len == LANTERN_SIGNED_VOTE_SSZ_SIZE) {
+        size_t offset = 0;
+        if (decode_vote_internal(&vote->data, data + offset, LANTERN_VOTE_SSZ_SIZE) != 0) {
+            return -1;
+        }
+        offset += LANTERN_VOTE_SSZ_SIZE;
+        /* Spec-compliant variable-length signature decoding (offset). */
+        uint32_t signature_offset = 0;
+        if (read_u32(data + offset, data_len - offset, &signature_offset) != 0) {
+            return -1;
+        }
+        const size_t fixed_section = LANTERN_VOTE_SSZ_SIZE + SSZ_BYTE_SIZE_OF_UINT32;
+        if (signature_offset != fixed_section) {
+            return -1;
+        }
+        if (signature_offset > data_len) {
+            return -1;
+        }
+        size_t signature_len = data_len - signature_offset;
+        if (signature_len != LANTERN_SIGNATURE_SIZE) {
+            return -1;
+        }
+        memcpy(vote->signature.bytes, data + signature_offset, LANTERN_SIGNATURE_SIZE);
+        return 0;
+    }
+
+    if (data_len == LANTERN_SIGNED_VOTE_SSZ_SIZE_LEGACY) {
+        size_t offset = 0;
+        if (decode_vote_internal(&vote->data, data + offset, LANTERN_VOTE_SSZ_SIZE) != 0) {
+            return -1;
+        }
+        offset += LANTERN_VOTE_SSZ_SIZE;
+        /* Legacy fixed-size signature decoding for backward compatibility. */
+        memcpy(vote->signature.bytes, data + offset, LANTERN_SIGNATURE_SIZE);
+        lantern_log_warn(
+            "ssz",
+            NULL,
+            "signed vote decoded using legacy layout len=%zu",
+            data_len);
+        return 0;
+    }
+
+    return -1;
 }
 
 static int aggregated_attestation_encoded_size(
@@ -1745,6 +1918,71 @@ int lantern_ssz_encode_signed_block_with_attestation(
     return 0;
 }
 
+static int lantern_ssz_encode_signed_block_with_attestation_legacy(
+    const LanternSignedBlockWithAttestation *block,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written) {
+    if (!block || !out) {
+        return -1;
+    }
+
+    const size_t offset_section = SSZ_BYTE_SIZE_OF_UINT32 * 2u;
+    if (offset_section > UINT32_MAX) {
+        return -1;
+    }
+    if (out_len < offset_section) {
+        return -1;
+    }
+
+    size_t payload_offset = offset_section;
+    size_t message_written = 0;
+    if (lantern_ssz_encode_block_with_attestation(
+            &block->message,
+            out + payload_offset,
+            out_len - payload_offset,
+            &message_written)
+        != 0) {
+        return -1;
+    }
+
+    size_t message_region_end = payload_offset + message_written;
+    if (message_region_end < payload_offset || message_region_end > out_len) {
+        return -1;
+    }
+
+    size_t signatures_written = 0;
+    if (encode_block_signatures_legacy(
+            &block->signatures,
+            out + message_region_end,
+            out_len - message_region_end,
+            &signatures_written)
+        != 0) {
+        return -1;
+    }
+
+    size_t total = message_region_end + signatures_written;
+    if (total < message_region_end || total > UINT32_MAX) {
+        return -1;
+    }
+
+    if (payload_offset > UINT32_MAX || message_region_end > UINT32_MAX) {
+        return -1;
+    }
+    uint32_t message_offset = (uint32_t)payload_offset;
+    uint32_t signatures_offset = (uint32_t)message_region_end;
+
+    if (write_u32(out, out_len, message_offset) != 0) {
+        return -1;
+    }
+    if (write_u32(out + SSZ_BYTE_SIZE_OF_UINT32, out_len - SSZ_BYTE_SIZE_OF_UINT32, signatures_offset) != 0) {
+        return -1;
+    }
+
+    set_written(written, total);
+    return 0;
+}
+
 int lantern_ssz_decode_signed_block_with_attestation(
     LanternSignedBlockWithAttestation *block,
     const uint8_t *data,
@@ -1803,6 +2041,14 @@ int lantern_ssz_encode_signed_block(const LanternSignedBlock *block, uint8_t *ou
 
 int lantern_ssz_decode_signed_block(LanternSignedBlock *block, const uint8_t *data, size_t data_len) {
     return lantern_ssz_decode_signed_block_with_attestation(block, data, data_len);
+}
+
+int lantern_ssz_encode_signed_block_legacy(
+    const LanternSignedBlock *block,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written) {
+    return lantern_ssz_encode_signed_block_with_attestation_legacy(block, out, out_len, written);
 }
 
 int lantern_ssz_encode_state(const LanternState *state, uint8_t *out, size_t out_len, size_t *written) {

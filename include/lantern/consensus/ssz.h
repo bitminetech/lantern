@@ -12,6 +12,7 @@
 #define LANTERN_CHECKPOINT_SSZ_SIZE (LANTERN_ROOT_SIZE + sizeof(uint64_t))
 #define LANTERN_ATTESTATION_DATA_SSZ_SIZE (sizeof(uint64_t) + 3u * LANTERN_CHECKPOINT_SSZ_SIZE)
 #define LANTERN_VOTE_SSZ_SIZE (sizeof(uint64_t) + LANTERN_ATTESTATION_DATA_SSZ_SIZE)
+#define LANTERN_SIGNED_VOTE_SSZ_SIZE_LEGACY (LANTERN_VOTE_SSZ_SIZE + LANTERN_SIGNATURE_SIZE)
 #define LANTERN_SIGNED_VOTE_SSZ_SIZE (LANTERN_VOTE_SSZ_SIZE + sizeof(uint32_t) + LANTERN_SIGNATURE_SIZE)
 #define LANTERN_VALIDATOR_SSZ_SIZE (LANTERN_VALIDATOR_PUBKEY_SIZE + sizeof(uint64_t))
 #define LANTERN_BLOCK_HEADER_SSZ_SIZE (sizeof(uint64_t) * 2u + 3u * LANTERN_ROOT_SIZE)
@@ -27,6 +28,11 @@ int lantern_ssz_decode_vote(LanternVote *vote, const uint8_t *data, size_t data_
 
 int lantern_ssz_encode_signed_vote(const LanternSignedVote *vote, uint8_t *out, size_t out_len, size_t *written);
 int lantern_ssz_decode_signed_vote(LanternSignedVote *vote, const uint8_t *data, size_t data_len);
+int lantern_ssz_encode_signed_vote_legacy(
+    const LanternSignedVote *vote,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written);
 
 int lantern_ssz_encode_signed_aggregated_attestation(
     const LanternSignedAggregatedAttestation *attestation,
@@ -69,6 +75,11 @@ int lantern_ssz_decode_signed_block_with_attestation(
 
 int lantern_ssz_encode_signed_block(const LanternSignedBlock *block, uint8_t *out, size_t out_len, size_t *written);
 int lantern_ssz_decode_signed_block(LanternSignedBlock *block, const uint8_t *data, size_t data_len);
+int lantern_ssz_encode_signed_block_legacy(
+    const LanternSignedBlock *block,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written);
 
 int lantern_ssz_encode_state(const LanternState *state, uint8_t *out, size_t out_len, size_t *written);
 int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t data_len);
