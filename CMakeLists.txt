@@ -102,10 +102,40 @@ target_link_libraries(lantern PRIVATE secp256k1 libtomcrypt Threads::Threads)
 
 add_executable(lantern_cli src/core/main.c)
 target_link_libraries(lantern_cli PRIVATE lantern Threads::Threads)
+if(NOT DEFINED LANTERN_GIT_COMMIT OR LANTERN_GIT_COMMIT STREQUAL "")
+    execute_process(
+        COMMAND git rev-parse --short HEAD
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        OUTPUT_VARIABLE LANTERN_GIT_COMMIT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE _git_commit_result
+    )
+    if(NOT _git_commit_result EQUAL 0)
+        set(LANTERN_GIT_COMMIT "unknown")
+    endif()
+endif()
+
+if(NOT DEFINED LANTERN_GIT_BRANCH OR LANTERN_GIT_BRANCH STREQUAL "")
+    execute_process(
+        COMMAND git rev-parse --abbrev-ref HEAD
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        OUTPUT_VARIABLE LANTERN_GIT_BRANCH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE _git_branch_result
+    )
+    if(NOT _git_branch_result EQUAL 0)
+        set(LANTERN_GIT_BRANCH "unknown")
+    endif()
+endif()
+
 target_compile_definitions(lantern_cli
     PRIVATE
         _DEFAULT_SOURCE
         _POSIX_C_SOURCE=200809L
+        LANTERN_GIT_COMMIT="${LANTERN_GIT_COMMIT}"
+        LANTERN_GIT_BRANCH="${LANTERN_GIT_BRANCH}"
 )
 
 option(LANTERN_BUILD_TESTS "Build lantern unit tests" ON)

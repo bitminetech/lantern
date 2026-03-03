@@ -450,12 +450,16 @@ fi
 
 if [[ "${RUNTIME}" == "docker" && "${DOCKER_BUILD}" == "1" ]]; then
   echo "Building docker image ${LANTERN_IMAGE}..."
+  git_build_args=(
+    --build-arg "GIT_COMMIT=$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    --build-arg "GIT_BRANCH=$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+  )
   if [[ -n "${DOCKER_BUILD_ARGS}" ]]; then
     # shellcheck disable=SC2206
     docker_build_args=(${DOCKER_BUILD_ARGS})
-    docker build "${docker_build_args[@]}" -t "${LANTERN_IMAGE}" "${REPO_ROOT}"
+    docker build "${git_build_args[@]}" "${docker_build_args[@]}" -t "${LANTERN_IMAGE}" "${REPO_ROOT}"
   else
-    docker build -t "${LANTERN_IMAGE}" "${REPO_ROOT}"
+    docker build "${git_build_args[@]}" -t "${LANTERN_IMAGE}" "${REPO_ROOT}"
   fi
 fi
 

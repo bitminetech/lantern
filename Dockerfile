@@ -47,6 +47,9 @@ ENV PATH="${CARGO_HOME}/bin:${PATH}"
 ENV CCACHE_DIR=/root/.ccache
 ENV CCACHE_MAXSIZE=2G
 
+ARG GIT_COMMIT=unknown
+ARG GIT_BRANCH=unknown
+
 WORKDIR /usr/src/lantern
 
 COPY . .
@@ -67,7 +70,7 @@ RUN --mount=type=cache,target=/root/.ccache,sharing=locked,id=ccache-${TARGETPLA
     && cmake --install deps/libtommath
 
 RUN --mount=type=cache,target=/root/.ccache,sharing=locked,id=ccache-${TARGETPLATFORM} \
-    cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DLANTERN_GIT_COMMIT="${GIT_COMMIT}" -DLANTERN_GIT_BRANCH="${GIT_BRANCH}"
 
 ARG LANTERN_FORCE_REBUILD=0
 RUN echo "LANTERN_FORCE_REBUILD=${LANTERN_FORCE_REBUILD}"

@@ -4,4 +4,12 @@
 #define LANTERN_VERSION "v0.0.3"
 #define LANTERN_CLIENT_NAME "lantern"
 
+#ifndef LANTERN_GIT_COMMIT
+#define LANTERN_GIT_COMMIT "unknown"
+#endif
+
+#ifndef LANTERN_GIT_BRANCH
+#define LANTERN_GIT_BRANCH "unknown"
+#endif
+
 #endif /* LANTERN_SUPPORT_VERSION_H */

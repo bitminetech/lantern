@@ -16,6 +16,7 @@
 [submodule "tools/lean-quickstart"]
 	path = tools/lean-quickstart
 	url = https://github.com/Pier-Two/lean-quickstart.git
+	branch = devnet3
 [submodule "external/c-hash-sig"]
 	path = external/c-hash-sig
 	url = https://github.com/Pier-Two/c-hash-sig.git

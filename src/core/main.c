@@ -614,7 +614,9 @@ int main(int argc, char **argv)
 
     if (show_version)
     {
-        lantern_log_info("main", NULL, "lantern %s", LANTERN_VERSION);
+        lantern_log_info(
+            "main", NULL, "lantern %s (commit %s, branch %s)",
+            LANTERN_VERSION, LANTERN_GIT_COMMIT, LANTERN_GIT_BRANCH);
         goto cleanup;
     }
 
@@ -623,6 +625,10 @@ int main(int argc, char **argv)
         print_usage(argv[0]);
         goto cleanup;
     }
+
+    lantern_log_info(
+        "cli", NULL, "lantern %s (commit %s, branch %s)",
+        LANTERN_VERSION, LANTERN_GIT_COMMIT, LANTERN_GIT_BRANCH);
 
     if (validate_required_options(&options) != 0)
     {
