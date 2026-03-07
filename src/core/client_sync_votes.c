@@ -39,10 +39,6 @@ enum
  * External Functions (from client_sync.c)
  * ============================================================================ */
 
-extern const struct lantern_validator_record *lantern_client_get_validator_record(
-    const struct lantern_client *client,
-    uint64_t validator_id);
-
 bool lantern_client_verify_vote_signature(
     const struct lantern_client *client,
     const LanternSignedVote *vote,
@@ -272,66 +268,6 @@ static bool cache_state_vote_locked(
 
 
 /**
- * @brief Apply a vote to fork choice and advance time.
- *
- * @param client  Client instance
- * @param vote    Signed vote to apply
- * @param meta    Logging metadata
- *
- * @note Thread safety: Caller must hold state_lock
- */
-static void apply_vote_to_fork_choice_locked(
-    struct lantern_client *client,
-    const LanternSignedVote *vote,
-    const struct lantern_log_metadata *meta)
-{
-    if (!client || !vote || !meta || !client->has_fork_choice)
-    {
-        return;
-    }
-
-    int result = lantern_fork_choice_add_vote(&client->fork_choice, vote, false);
-    if (result != 0)
-    {
-        lantern_log_debug(
-            "forkchoice",
-            meta,
-            "failed to track gossip vote validator=%" PRIu64 " slot=%" PRIu64,
-            vote->data.validator_id,
-            vote->data.slot);
-        return;
-    }
-
-    if (client->debug_disable_fork_choice_time)
-    {
-        return;
-    }
-
-    uint64_t now_millis = 0;
-    uint64_t vote_time_seconds = 0;
-    if (lantern_client_vote_time_seconds(client, vote->data.slot, &vote_time_seconds))
-    {
-        now_millis = vote_time_seconds * 1000u;
-    }
-    else
-    {
-        now_millis = validator_wall_time_now_millis();
-    }
-
-    result = lantern_client_advance_fork_choice_time_locked(client, now_millis, false);
-    if (result != 0)
-    {
-        lantern_log_debug(
-            "forkchoice",
-            meta,
-            "advancing fork choice time failed after validator=%" PRIu64 " slot=%" PRIu64,
-            vote->data.validator_id,
-            vote->data.slot);
-    }
-}
-
-
-/**
  * @brief Persist votes to storage if configured.
  *
  * @param client  Client instance
@@ -421,10 +357,17 @@ static bool process_vote_locked(
         lantern_log_debug(
             "gossip",
             meta,
-            "missing target state root=%s for validator=%" PRIu64 " slot=%" PRIu64 " (using current state)",
+            "missing target state root=%s for validator=%" PRIu64 " slot=%" PRIu64,
             target_hex[0] ? target_hex : "0x0",
             vote->data.validator_id,
             vote->data.slot);
+        lantern_vote_rejection_set(
+            rejection,
+            "missing target state target_slot=%" PRIu64 " root=%s",
+            vote->data.target.slot,
+            target_hex[0] ? target_hex : "0x0");
+        lantern_state_reset(&target_state);
+        return false;
     }
 
     if (!lantern_client_verify_vote_signature(
@@ -481,7 +424,6 @@ static bool process_vote_locked(
         }
     }
 
-    apply_vote_to_fork_choice_locked(client, vote, meta);
     persist_votes_if_configured_locked(client, vote, meta);
     return true;
 }
@@ -496,9 +438,9 @@ static bool process_vote_locked(
  *
  * @spec subspecs/xmss/signature.py - XMSS signature verification
  *
- * Retrieves the validator's 52-byte public key from either the state's
- * validator registry or the genesis registry as fallback, then verifies
- * the XMSS signature over the vote's hash tree root.
+ * Retrieves the validator's 52-byte public key from the supplied state's
+ * validator registry, then verifies the XMSS signature over the vote's
+ * hash tree root.
  *
  * Per LeanSpec: Always use the 52-byte pubkey directly from state.validators[].pubkey.
  * This matches Zeam's verifyBincode which takes pubkey bytes directly from state.
@@ -506,7 +448,7 @@ static bool process_vote_locked(
  * @param client     Client instance
  * @param vote       Signed vote to verify
  * @param signature  Signature to verify
- * @param state_override Optional state to use for validator pubkey lookup
+ * @param state_override State to use for validator pubkey lookup
  * @param meta       Logging metadata
  * @param context    Description of signature context for logging
  * @return true if signature is valid
@@ -525,86 +467,47 @@ bool lantern_client_verify_vote_signature(
     {
         return false;
     }
-    const uint8_t *pubkey_bytes = NULL;
-    if (state_override)
+    if (!state_override)
     {
-        size_t state_validator_count = lantern_state_validator_count(state_override);
-        if (state_validator_count == 0)
-        {
-            lantern_log_warn(
-                "state",
-                meta,
-                "missing validator registry for %s signature verification",
-                context ? context : "vote");
-            return false;
-        }
-        if (vote->data.validator_id >= state_validator_count)
-        {
-            lantern_log_warn(
-                "state",
-                meta,
-                "validator=%" PRIu64 " exceeds target state validator count=%zu",
-                vote->data.validator_id,
-                state_validator_count);
-            return false;
-        }
-        pubkey_bytes = lantern_state_validator_pubkey(
-            state_override,
-            (size_t)vote->data.validator_id);
-        if (!pubkey_bytes || lantern_validator_pubkey_is_zero(pubkey_bytes))
-        {
-            lantern_log_warn(
-                "state",
-                meta,
-                "missing validator pubkey for %s signature verification",
-                context ? context : "vote");
-            return false;
-        }
+        lantern_log_warn(
+            "state",
+            meta,
+            "missing state for %s signature verification",
+            context ? context : "vote");
+        return false;
     }
-    else
+    size_t state_validator_count = lantern_state_validator_count(state_override);
+    if (state_validator_count == 0)
     {
-        bool state_has_registry = client->has_state;
-        size_t state_validator_count = 0;
-        if (state_has_registry)
-        {
-            state_validator_count = lantern_state_validator_count(&client->state);
-        }
-        if (state_has_registry && state_validator_count > 0)
-        {
-            if (vote->data.validator_id >= state_validator_count)
-            {
-                lantern_log_warn(
-                    "state",
-                    meta,
-                    "validator=%" PRIu64 " exceeds parent state validator count=%zu",
-                    vote->data.validator_id,
-                    state_validator_count);
-                return false;
-            }
-            pubkey_bytes = lantern_state_validator_pubkey(
-                &client->state,
-                (size_t)vote->data.validator_id);
-            if (lantern_validator_pubkey_is_zero(pubkey_bytes))
-            {
-                pubkey_bytes = NULL;
-            }
-        }
-        if (!pubkey_bytes)
-        {
-            const struct lantern_validator_record *record =
-                lantern_client_get_validator_record(client, vote->data.validator_id);
-            if (!record || !record->has_pubkey_bytes)
-            {
-                lantern_log_warn(
-                    "state",
-                    meta,
-                    "missing validator %s pubkey for validator=%" PRIu64,
-                    context ? context : "signature",
-                    vote->data.validator_id);
-                return false;
-            }
-            pubkey_bytes = record->pubkey_bytes;
-        }
+        lantern_log_warn(
+            "state",
+            meta,
+            "missing validator registry for %s signature verification",
+            context ? context : "vote");
+        return false;
+    }
+    if (vote->data.validator_id >= state_validator_count)
+    {
+        lantern_log_warn(
+            "state",
+            meta,
+            "validator=%" PRIu64 " exceeds %s state validator count=%zu",
+            vote->data.validator_id,
+            context ? context : "vote",
+            state_validator_count);
+        return false;
+    }
+    const uint8_t *pubkey_bytes = lantern_state_validator_pubkey(
+        state_override,
+        (size_t)vote->data.validator_id);
+    if (!pubkey_bytes || lantern_validator_pubkey_is_zero(pubkey_bytes))
+    {
+        lantern_log_warn(
+            "state",
+            meta,
+            "missing validator pubkey for %s signature verification",
+            context ? context : "vote");
+        return false;
     }
     LanternRoot vote_root;
     if (lantern_hash_tree_root_attestation_data(&vote->data.data, &vote_root) != 0)
@@ -819,8 +722,8 @@ bool lantern_client_validate_vote_constraints(
  * 1. Validates vote constraints (checkpoints, slots)
  * 2. Verifies XMSS signature
  * 3. Validates vote cache availability and validator range
- * 4. Updates fork choice with the vote
- * 5. Caches vote in state
+ * 4. Caches the signed vote in state
+ * 5. Stores gossip signature/data for the staged aggregation pipeline
  * 6. Persists votes to storage
  *
  * @param client    Client instance

@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "lantern/consensus/hash.h"
+#include "lantern/consensus/duties.h"
 #include "lantern/consensus/signature.h"
 #include "lantern/crypto/xmss.h"
 #include "lantern/support/time.h"
@@ -160,12 +161,14 @@ static int client_test_setup_vote_validation_client_common(
     uint8_t *serialized_pubkeys = NULL;
     LanternBlock anchor;
     LanternBlock child;
+    LanternSignedBlock child_signed;
     bool anchor_body_init = false;
     bool child_body_init = false;
     LanternRoot anchor_root_local;
     LanternRoot child_root_local;
     memset(&anchor_root_local, 0, sizeof(anchor_root_local));
     memset(&child_root_local, 0, sizeof(child_root_local));
+    memset(&child_signed, 0, sizeof(child_signed));
 
     memset(client, 0, sizeof(*client));
     client->node_id = (char *)node_id;
@@ -207,70 +210,6 @@ static int client_test_setup_vote_validation_client_common(
         fprintf(stderr, "failed to configure fork choice for vote test\n");
         goto finish;
     }
-
-    LanternRoot anchor_state_root;
-    if (lantern_hash_tree_root_state(&client->state, &anchor_state_root) != 0) {
-        fprintf(stderr, "failed to hash anchor state for vote test\n");
-        goto finish;
-    }
-    client->state.latest_block_header.state_root = anchor_state_root;
-
-    memset(&anchor, 0, sizeof(anchor));
-    lantern_block_body_init(&anchor.body);
-    anchor_body_init = true;
-    anchor.slot = 0;
-    anchor.proposer_index = 0;
-    anchor.parent_root = client->state.latest_block_header.parent_root;
-    anchor.state_root = anchor_state_root;
-
-    if (lantern_hash_tree_root_block(&anchor, &anchor_root_local) != 0) {
-        fprintf(stderr, "failed to hash anchor block for vote test\n");
-        goto finish;
-    }
-    client->state.latest_justified.root = anchor_root_local;
-    client->state.latest_justified.slot = anchor.slot;
-    client->state.latest_finalized = client->state.latest_justified;
-    if (lantern_state_mark_justified_slot(&client->state, anchor.slot) != 0) {
-        fprintf(stderr, "failed to seed justified slot window for vote test\n");
-        goto finish;
-    }
-
-    if (lantern_fork_choice_set_anchor(
-            &client->fork_choice,
-            &anchor,
-            &client->state.latest_justified,
-            &client->state.latest_finalized,
-            &anchor_root_local)
-        != 0) {
-        fprintf(stderr, "failed to set anchor for vote test\n");
-        goto finish;
-    }
-
-    memset(&child, 0, sizeof(child));
-    lantern_block_body_init(&child.body);
-    child_body_init = true;
-    child.slot = anchor.slot + 1u;
-    child.proposer_index = 0;
-    child.parent_root = anchor_root_local;
-    client_test_fill_root(&child.state_root, 0xA1);
-
-    if (lantern_hash_tree_root_block(&child, &child_root_local) != 0) {
-        fprintf(stderr, "failed to hash child block for vote test\n");
-        goto finish;
-    }
-
-    if (lantern_fork_choice_add_block(
-            &client->fork_choice,
-            &child,
-            NULL,
-            &client->state.latest_justified,
-            &client->state.latest_finalized,
-            &child_root_local)
-        != 0) {
-        fprintf(stderr, "failed to add child block for vote test\n");
-        goto finish;
-    }
-    client->has_fork_choice = true;
 
     if (load_precomputed_keys(&pub, &secret) != 0) {
         goto finish;
@@ -320,6 +259,96 @@ static int client_test_setup_vote_validation_client_common(
     }
     if (memcmp(stored_pub, serialized_pub, LANTERN_VALIDATOR_PUBKEY_SIZE) != 0) {
         fprintf(stderr, "stored validator pubkey mismatch after load\n");
+        goto finish;
+    }
+
+    LanternRoot anchor_state_root;
+    if (lantern_hash_tree_root_state(&client->state, &anchor_state_root) != 0) {
+        fprintf(stderr, "failed to hash anchor state for vote test\n");
+        goto finish;
+    }
+    client->state.latest_block_header.state_root = anchor_state_root;
+
+    memset(&anchor, 0, sizeof(anchor));
+    lantern_block_body_init(&anchor.body);
+    anchor_body_init = true;
+    anchor.slot = 0;
+    if (lantern_proposer_for_slot(anchor.slot, client->state.config.num_validators, &anchor.proposer_index) != 0) {
+        fprintf(stderr, "failed to compute anchor proposer for vote test\n");
+        goto finish;
+    }
+    anchor.parent_root = client->state.latest_block_header.parent_root;
+    anchor.state_root = anchor_state_root;
+
+    if (lantern_hash_tree_root_block(&anchor, &anchor_root_local) != 0) {
+        fprintf(stderr, "failed to hash anchor block for vote test\n");
+        goto finish;
+    }
+    client->state.latest_justified.root = anchor_root_local;
+    client->state.latest_justified.slot = anchor.slot;
+    client->state.latest_finalized = client->state.latest_justified;
+    if (lantern_state_mark_justified_slot(&client->state, anchor.slot) != 0) {
+        fprintf(stderr, "failed to seed justified slot window for vote test\n");
+        goto finish;
+    }
+
+    if (lantern_fork_choice_set_anchor(
+            &client->fork_choice,
+            &anchor,
+            &client->state.latest_justified,
+            &client->state.latest_finalized,
+            &anchor_root_local)
+        != 0) {
+        fprintf(stderr, "failed to set anchor for vote test\n");
+        goto finish;
+    }
+
+    memset(&child, 0, sizeof(child));
+    lantern_block_body_init(&child.body);
+    child_body_init = true;
+    child.slot = anchor.slot + 1u;
+    if (lantern_proposer_for_slot(child.slot, client->state.config.num_validators, &child.proposer_index) != 0) {
+        fprintf(stderr, "failed to compute child proposer for vote test\n");
+        goto finish;
+    }
+    child.parent_root = anchor_root_local;
+    child_signed.message.block = child;
+
+    if (lantern_state_preview_post_state_root(
+            &client->state,
+            &client->store,
+            &child_signed,
+            &child.state_root)
+        != 0) {
+        fprintf(stderr, "failed to preview child post-state root for vote test\n");
+        goto finish;
+    }
+    child_signed.message.block = child;
+
+    if (lantern_hash_tree_root_block(&child, &child_root_local) != 0) {
+        fprintf(stderr, "failed to hash child block for vote test\n");
+        goto finish;
+    }
+
+    if (lantern_fork_choice_add_block(
+            &client->fork_choice,
+            &child,
+            NULL,
+            &client->state.latest_justified,
+            &client->state.latest_finalized,
+            &child_root_local)
+        != 0) {
+        fprintf(stderr, "failed to add child block for vote test\n");
+        goto finish;
+    }
+    client->has_fork_choice = true;
+
+    if (lantern_state_process_slots(&client->state, child.slot) != 0) {
+        fprintf(stderr, "failed to advance state slot for vote test child block\n");
+        goto finish;
+    }
+    if (lantern_state_process_block(&client->state, &client->store, &child, NULL, NULL) != 0) {
+        fprintf(stderr, "failed to process child block into vote test state\n");
         goto finish;
     }
 

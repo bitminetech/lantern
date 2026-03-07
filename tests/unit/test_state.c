@@ -10,7 +10,9 @@
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/quorum.h"
+#include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"
+#include "pq-bindings-c-rust.h"
 #include "../support/state_store_adapter.h"
 
 static void expect_zero(int rc, const char *label) {
@@ -47,6 +49,87 @@ static void fill_signature(LanternSignature *signature, uint8_t value) {
     }
     memset(signature->bytes, value, LANTERN_SIGNATURE_SIZE);
 }
+
+static int generate_test_keypair(
+    struct PQSignatureSchemePublicKey **out_pub,
+    struct PQSignatureSchemeSecretKey **out_secret) {
+    if (!out_pub || !out_secret) {
+        return -1;
+    }
+    *out_pub = NULL;
+    *out_secret = NULL;
+    enum PQSigningError err = pq_key_gen(0, 4u, out_pub, out_secret);
+    if (err != Success || !*out_pub || !*out_secret) {
+        if (*out_pub) {
+            pq_public_key_free(*out_pub);
+            *out_pub = NULL;
+        }
+        if (*out_secret) {
+            pq_secret_key_free(*out_secret);
+            *out_secret = NULL;
+        }
+        return -1;
+    }
+    return 0;
+}
+
+static int set_test_validator_pubkey(
+    LanternState *state,
+    size_t validator_count,
+    size_t validator_index,
+    struct PQSignatureSchemePublicKey *pubkey) {
+    if (!state || !pubkey || validator_count == 0 || validator_index >= validator_count) {
+        return -1;
+    }
+
+    uint8_t serialized_pubkey[LANTERN_VALIDATOR_PUBKEY_SIZE];
+    uintptr_t written = 0;
+    enum PQSigningError err = pq_public_key_serialize(
+        pubkey,
+        serialized_pubkey,
+        sizeof(serialized_pubkey),
+        &written);
+    if (err != Success || written != LANTERN_VALIDATOR_PUBKEY_SIZE) {
+        return -1;
+    }
+
+    uint8_t *pubkeys = calloc(validator_count, LANTERN_VALIDATOR_PUBKEY_SIZE);
+    if (!pubkeys) {
+        return -1;
+    }
+    memcpy(
+        pubkeys + (validator_index * LANTERN_VALIDATOR_PUBKEY_SIZE),
+        serialized_pubkey,
+        LANTERN_VALIDATOR_PUBKEY_SIZE);
+    int rc = lantern_state_set_validator_pubkeys(state, pubkeys, validator_count);
+    free(pubkeys);
+    return rc;
+}
+
+static int sign_vote_with_secret(
+    LanternSignedVote *vote,
+    struct PQSignatureSchemeSecretKey *secret) {
+    if (!vote || !secret) {
+        return -1;
+    }
+    LanternRoot vote_root;
+    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &vote_root) != 0) {
+        return -1;
+    }
+    if (!lantern_signature_sign(secret, vote->data.slot, &vote_root, &vote->signature)) {
+        return -1;
+    }
+    return 0;
+}
+
+static void build_vote(
+    LanternVote *out_vote,
+    LanternSignature *out_signature,
+    uint64_t validator_id,
+    uint64_t slot,
+    const LanternCheckpoint *source,
+    const LanternCheckpoint *target_template,
+    uint8_t head_marker);
 
 static void zero_root(LanternRoot *root) {
     if (!root) {
@@ -435,7 +518,7 @@ static int test_process_slots_rejects_non_future_target(void) {
 
 static int test_state_transition_applies_block(void) {
     const uint64_t genesis_time = 500;
-    const uint64_t validator_count = 8;
+    const uint64_t validator_count = 1;
 
     LanternState state;
     lantern_state_init(&state);
@@ -444,6 +527,16 @@ static int test_state_transition_applies_block(void) {
     LanternState expected;
     lantern_state_init(&expected);
     expect_zero(lantern_state_generate_genesis(&expected, genesis_time, validator_count), "generate expected state");
+
+    struct PQSignatureSchemePublicKey *proposer_pub = NULL;
+    struct PQSignatureSchemeSecretKey *proposer_secret = NULL;
+    expect_zero(generate_test_keypair(&proposer_pub, &proposer_secret), "generate proposer keypair");
+    expect_zero(
+        set_test_validator_pubkey(&state, (size_t)validator_count, 0u, proposer_pub),
+        "set proposer pubkey on state");
+    expect_zero(
+        set_test_validator_pubkey(&expected, (size_t)validator_count, 0u, proposer_pub),
+        "set proposer pubkey on expected state");
 
     LanternBlock block;
     memset(&block, 0, sizeof(block));
@@ -463,6 +556,23 @@ static int test_state_transition_applies_block(void) {
     LanternSignedBlock signed_block;
     memset(&signed_block, 0, sizeof(signed_block));
     signed_block.message.block = block;
+    LanternCheckpoint proposer_source = {.slot = 0u};
+    LanternCheckpoint proposer_target = {.slot = block.slot};
+    fill_root(&proposer_source.root, 0x11);
+    fill_root(&proposer_target.root, 0x22);
+    LanternSignedVote proposer_vote;
+    memset(&proposer_vote, 0, sizeof(proposer_vote));
+    build_vote(
+        &proposer_vote.data,
+        NULL,
+        block.proposer_index,
+        block.slot,
+        &proposer_source,
+        &proposer_target,
+        0x33);
+    expect_zero(sign_vote_with_secret(&proposer_vote, proposer_secret), "sign proposer vote");
+    signed_block.message.proposer_attestation = proposer_vote.data;
+    signed_block.signatures.proposer_signature = proposer_vote.signature;
 
     expect_zero(lantern_state_transition(&state, &signed_block), "state transition");
     LanternRoot post_root;
@@ -473,8 +583,96 @@ static int test_state_transition_applies_block(void) {
     assert(state.historical_block_hashes.length == expected.historical_block_hashes.length);
 
     lantern_block_body_reset(&block.body);
+    pq_secret_key_free(proposer_secret);
+    pq_public_key_free(proposer_pub);
     lantern_state_reset(&state);
     lantern_state_reset(&expected);
+    return 0;
+}
+
+static int test_state_transition_rejects_missing_proposer_signature(void) {
+    const uint64_t genesis_time = 501;
+    const uint64_t validator_count = 1;
+
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, genesis_time, validator_count), "generate signed state");
+
+    struct PQSignatureSchemePublicKey *proposer_pub = NULL;
+    struct PQSignatureSchemeSecretKey *proposer_secret = NULL;
+    expect_zero(generate_test_keypair(&proposer_pub, &proposer_secret), "generate missing-signature keypair");
+    expect_zero(
+        set_test_validator_pubkey(&state, (size_t)validator_count, 0u, proposer_pub),
+        "set missing-signature pubkey");
+
+    LanternState expected;
+    lantern_state_init(&expected);
+    expect_zero(lantern_state_generate_genesis(&expected, genesis_time, validator_count), "generate expected signed state");
+    expect_zero(
+        set_test_validator_pubkey(&expected, (size_t)validator_count, 0u, proposer_pub),
+        "set expected missing-signature pubkey");
+
+    LanternBlock block;
+    memset(&block, 0, sizeof(block));
+    block.slot = 1;
+    expect_zero(lantern_proposer_for_slot(block.slot, validator_count, &block.proposer_index), "compute missing-signature proposer");
+    lantern_block_body_init(&block.body);
+
+    expect_zero(lantern_state_process_slots(&expected, block.slot), "advance expected signed slots");
+    LanternRoot parent_root;
+    expect_zero(
+        lantern_hash_tree_root_block_header(&expected.latest_block_header, &parent_root),
+        "hash missing-signature parent");
+    block.parent_root = parent_root;
+    LanternRoot expected_state_root;
+    expect_zero(lantern_state_process_block(&expected, &block, NULL, NULL), "apply expected unsigned block");
+    expect_zero(lantern_hash_tree_root_state(&expected, &expected_state_root), "hash expected unsigned post state");
+    block.state_root = expected_state_root;
+
+    LanternSignedBlock signed_block;
+    memset(&signed_block, 0, sizeof(signed_block));
+    signed_block.message.block = block;
+    LanternCheckpoint proposer_source = {.slot = 0u};
+    LanternCheckpoint proposer_target = {.slot = block.slot};
+    fill_root(&proposer_source.root, 0x41);
+    fill_root(&proposer_target.root, 0x52);
+    LanternSignedVote proposer_vote;
+    memset(&proposer_vote, 0, sizeof(proposer_vote));
+    build_vote(
+        &proposer_vote.data,
+        NULL,
+        block.proposer_index,
+        block.slot,
+        &proposer_source,
+        &proposer_target,
+        0x63);
+    expect_zero(sign_vote_with_secret(&proposer_vote, proposer_secret), "sign missing-signature proposer vote");
+    signed_block.message.proposer_attestation = proposer_vote.data;
+
+    if (lantern_state_transition(&state, &signed_block) == 0) {
+        fprintf(stderr, "state transition accepted block without proposer signature\n");
+        lantern_block_body_reset(&block.body);
+        pq_secret_key_free(proposer_secret);
+        pq_public_key_free(proposer_pub);
+        lantern_state_reset(&expected);
+        lantern_state_reset(&state);
+        return 1;
+    }
+    if (state.slot != 0u) {
+        fprintf(stderr, "state transition mutated slot on signature failure (slot=%" PRIu64 ")\n", state.slot);
+        lantern_block_body_reset(&block.body);
+        pq_secret_key_free(proposer_secret);
+        pq_public_key_free(proposer_pub);
+        lantern_state_reset(&expected);
+        lantern_state_reset(&state);
+        return 1;
+    }
+
+    lantern_block_body_reset(&block.body);
+    pq_secret_key_free(proposer_secret);
+    pq_public_key_free(proposer_pub);
+    lantern_state_reset(&expected);
+    lantern_state_reset(&state);
     return 0;
 }
 
@@ -570,6 +768,64 @@ static int append_aggregated_attestation_from_vote(
     }
     int rc = lantern_aggregated_attestations_append(list, &attestation);
     lantern_aggregated_attestation_reset(&attestation);
+    return rc;
+}
+
+static int build_cached_proof_for_vote(
+    LanternAggregatedSignatureProof *out_proof,
+    uint64_t validator_id,
+    uint8_t marker) {
+    if (!out_proof || validator_id >= LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return -1;
+    }
+    lantern_aggregated_signature_proof_init(out_proof);
+    size_t bit_length = (size_t)validator_id + 1u;
+    if (lantern_bitlist_resize(&out_proof->participants, bit_length) != 0) {
+        lantern_aggregated_signature_proof_reset(out_proof);
+        return -1;
+    }
+    if (lantern_bitlist_set(&out_proof->participants, (size_t)validator_id, true) != 0) {
+        lantern_aggregated_signature_proof_reset(out_proof);
+        return -1;
+    }
+    if (lantern_byte_list_resize(&out_proof->proof_data, 8u) != 0) {
+        lantern_aggregated_signature_proof_reset(out_proof);
+        return -1;
+    }
+    for (size_t i = 0; i < out_proof->proof_data.length; ++i) {
+        out_proof->proof_data.data[i] = (uint8_t)(marker + (uint8_t)i);
+    }
+    return 0;
+}
+
+static int seed_known_payload_for_vote(
+    LanternState *state,
+    const LanternVote *vote,
+    uint8_t marker) {
+    if (!state || !vote) {
+        return -1;
+    }
+    LanternStore *store = lantern_test_state_store_ensure(state);
+    if (!store) {
+        return -1;
+    }
+
+    LanternRoot data_root;
+    if (lantern_hash_tree_root_attestation_data(&vote->data, &data_root) != 0) {
+        return -1;
+    }
+
+    LanternAggregatedSignatureProof proof;
+    if (build_cached_proof_for_vote(&proof, vote->validator_id, marker) != 0) {
+        return -1;
+    }
+    int rc = lantern_store_add_known_aggregated_payload(
+        store,
+        &data_root,
+        &vote->data,
+        &proof,
+        vote->target.slot);
+    lantern_aggregated_signature_proof_reset(&proof);
     return rc;
 }
 
@@ -1525,14 +1781,7 @@ static int test_collect_attestations_for_block(void) {
 
     build_vote(&input.data[0], &input_signatures.data[0], 0, target.slot, &justified, &target, 0x01);
     build_vote(&input.data[1], &input_signatures.data[1], 1, target.slot, &justified, &target, 0x02);
-
-    LanternCheckpoint other_source = justified;
-    other_source.slot = justified.slot + 2;
-    fill_root(&other_source.root, 0xA0);
-    LanternCheckpoint other_target = other_source;
-    other_target.slot = other_source.slot + 1;
-    fill_root(&other_target.root, 0xB0);
-    build_vote(&input.data[2], &input_signatures.data[2], 2, other_target.slot, &other_source, &other_target, 0x03);
+    build_vote(&input.data[2], &input_signatures.data[2], 2, target.slot, &justified, &target, 0x03);
 
     LanternSignedVote signed_vote;
     memset(&signed_vote, 0, sizeof(signed_vote));
@@ -1544,7 +1793,9 @@ static int test_collect_attestations_for_block(void) {
     expect_zero(lantern_state_set_signed_validator_vote(&state, 1, &signed_vote), "store vote 1");
     signed_vote.data = input.data[2];
     signed_vote.signature = input_signatures.data[2];
-    expect_zero(lantern_state_set_signed_validator_vote(&state, 2, &signed_vote), "store other vote");
+    expect_zero(lantern_state_set_signed_validator_vote(&state, 2, &signed_vote), "store vote 2");
+    expect_zero(seed_known_payload_for_vote(&state, &input.data[0], 0x51), "seed known payload 0");
+    expect_zero(seed_known_payload_for_vote(&state, &input.data[1], 0x52), "seed known payload 1");
 
     uint64_t block_slot = state.slot + 1u;
     uint64_t proposer_index = 0;
@@ -1752,73 +2003,123 @@ cleanup:
 }
 
 static int test_process_block_defers_proposer_attestation(void) {
-    LanternState without_vote;
-    LanternState with_vote;
-    lantern_state_init(&without_vote);
-    lantern_state_init(&with_vote);
+    LanternState state;
+    LanternForkChoice fork_choice;
+    LanternRoot anchor_root;
+    lantern_state_init(&state);
+    lantern_fork_choice_init(&fork_choice);
     const uint64_t genesis_time = 777;
     const uint64_t validator_count = 1;
+    setup_state_and_fork_choice(&state, &fork_choice, genesis_time, validator_count, &anchor_root);
+
+    struct PQSignatureSchemePublicKey *proposer_pub = NULL;
+    struct PQSignatureSchemeSecretKey *proposer_secret = NULL;
+    expect_zero(generate_test_keypair(&proposer_pub, &proposer_secret), "generate proposer vote keypair");
     expect_zero(
-        lantern_state_generate_genesis(&without_vote, genesis_time, validator_count),
-        "genesis for proposer block (without vote)");
-    expect_zero(
-        lantern_state_generate_genesis(&with_vote, genesis_time, validator_count),
-        "genesis for proposer block (with vote)");
-    mark_slot_justified_for_tests(&without_vote, without_vote.latest_justified.slot);
-    mark_slot_justified_for_tests(&with_vote, with_vote.latest_justified.slot);
+        set_test_validator_pubkey(&state, (size_t)validator_count, 0u, proposer_pub),
+        "set proposer pubkey");
+    mark_slot_justified_for_tests(&state, state.latest_justified.slot);
 
     /* Populate historical hashes so proposer attestation validation passes */
-    populate_historical_hashes_for_tests(&without_vote, 1);
-    populate_historical_hashes_for_tests(&with_vote, 1);
+    populate_historical_hashes_for_tests(&state, 1);
 
-    LanternBlock block;
-    memset(&block, 0, sizeof(block));
-    block.slot = without_vote.slot + 1u;
+    LanternSignedBlock signed_block;
+    memset(&signed_block, 0, sizeof(signed_block));
+    LanternBlock *block = &signed_block.message.block;
+    block->slot = state.slot + 1u;
     expect_zero(
-        lantern_proposer_for_slot(block.slot, validator_count, &block.proposer_index),
+        lantern_proposer_for_slot(block->slot, validator_count, &block->proposer_index),
         "proposer for proposer vote test");
     expect_zero(
-        lantern_state_select_block_parent(&without_vote, &block.parent_root),
+        lantern_state_select_block_parent(&state, &block->parent_root),
         "parent root for proposer vote test");
-    lantern_block_body_init(&block.body);
-    LanternBlockSignatures block_sigs;
-    lantern_block_signatures_init(&block_sigs);
+    lantern_block_body_init(&block->body);
 
     /* Use roots from historical_block_hashes so attestations pass validation */
-    LanternCheckpoint base = without_vote.latest_justified;
-    base.root = get_historical_root_for_tests(&without_vote, base.slot);
+    LanternCheckpoint base = state.latest_justified;
+    base.root = get_historical_root_for_tests(&state, base.slot);
     LanternCheckpoint next = base;
     next.slot = base.slot + 1u;
-    next.root = get_historical_root_for_tests(&without_vote, next.slot);
+    next.root = get_historical_root_for_tests(&state, next.slot);
 
     LanternSignedVote proposer_vote;
     memset(&proposer_vote, 0, sizeof(proposer_vote));
-    build_vote(&proposer_vote.data, &proposer_vote.signature, block.proposer_index, block.slot, &base, &next, 0xB2);
+    build_vote(&proposer_vote.data, NULL, block->proposer_index, block->slot, &base, &next, 0xB2);
+    expect_zero(sign_vote_with_secret(&proposer_vote, proposer_secret), "sign proposer attestation");
+    signed_block.message.proposer_attestation = proposer_vote.data;
+    signed_block.signatures.proposer_signature = proposer_vote.signature;
 
-    expect_zero(lantern_state_process_slots(&without_vote, block.slot), "advance slots without proposer vote");
+    LanternRoot expected_state_root;
     expect_zero(
-        lantern_state_process_block(&without_vote, &block, &block_sigs, NULL),
-        "process block without proposer vote");
-    assert(without_vote.latest_justified.slot == base.slot);
+        lantern_state_preview_post_state_root(&state, &signed_block, &expected_state_root),
+        "preview proposer block state root");
+    block->state_root = expected_state_root;
 
-    expect_zero(lantern_state_process_slots(&with_vote, block.slot), "advance slots with proposer vote");
+    expect_zero(lantern_state_transition(&state, &signed_block), "import block with proposer attestation");
+    assert(state.latest_justified.slot == base.slot);
+
+    if (lantern_state_validator_has_vote(&state, (size_t)block->proposer_index)) {
+        fprintf(stderr, "proposer attestation should not be staged into validator vote cache\n");
+        lantern_block_body_reset(&block->body);
+        pq_secret_key_free(proposer_secret);
+        pq_public_key_free(proposer_pub);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+
+    LanternStore *store = lantern_test_state_store_ensure(&state);
+    if (!store) {
+        fprintf(stderr, "state store missing after proposer import\n");
+        lantern_block_body_reset(&block->body);
+        pq_secret_key_free(proposer_secret);
+        pq_public_key_free(proposer_pub);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+
+    LanternRoot data_root;
     expect_zero(
-        lantern_state_process_block(&with_vote, &block, &block_sigs, &proposer_vote),
-        "process block with proposer vote");
-    assert(with_vote.latest_justified.slot == base.slot);
-
-    LanternSignedVote stored_vote;
-    memset(&stored_vote, 0, sizeof(stored_vote));
+        lantern_hash_tree_root_attestation_data(&proposer_vote.data.data, &data_root),
+        "hash proposer attestation data root");
+    LanternSignatureKey key = {
+        .validator_index = proposer_vote.data.validator_id,
+        .data_root = data_root,
+    };
+    LanternSignature cached_signature;
+    memset(&cached_signature, 0, sizeof(cached_signature));
     expect_zero(
-        lantern_state_get_signed_validator_vote(&with_vote, (size_t)block.proposer_index, &stored_vote),
-        "retrieve staged proposer attestation");
-    assert(checkpoints_equal(&stored_vote.data.source, &base));
-    assert(checkpoints_equal(&stored_vote.data.target, &next));
+        lantern_store_get_gossip_signature(store, &key, &cached_signature),
+        "retrieve cached proposer signature");
+    assert(memcmp(
+               cached_signature.bytes,
+               signed_block.signatures.proposer_signature.bytes,
+               LANTERN_SIGNATURE_SIZE)
+           == 0);
 
-    lantern_block_body_reset(&block.body);
-    lantern_block_signatures_reset(&block_sigs);
-    lantern_state_reset(&without_vote);
-    lantern_state_reset(&with_vote);
+    LanternAttestationData cached_data;
+    memset(&cached_data, 0, sizeof(cached_data));
+    expect_zero(
+        lantern_store_get_attestation_data(store, &data_root, &cached_data),
+        "retrieve cached proposer attestation data");
+    assert(checkpoints_equal(&cached_data.source, &base));
+    assert(checkpoints_equal(&cached_data.target, &next));
+
+    assert(fork_choice.new_votes != NULL);
+    assert(fork_choice.known_votes != NULL);
+    assert(!fork_choice.new_votes[block->proposer_index].has_checkpoint);
+    assert(!fork_choice.known_votes[block->proposer_index].has_checkpoint);
+
+    LanternRoot head;
+    expect_zero(lantern_fork_choice_current_head(&fork_choice, &head), "fork choice head after proposer import");
+    assert(memcmp(head.bytes, anchor_root.bytes, LANTERN_ROOT_SIZE) == 0);
+
+    lantern_block_body_reset(&block->body);
+    pq_secret_key_free(proposer_secret);
+    pq_public_key_free(proposer_pub);
+    lantern_state_reset(&state);
+    lantern_fork_choice_reset(&fork_choice);
     return 0;
 }
 
@@ -1869,13 +2170,17 @@ static int test_collect_attestations_fixed_point(void) {
     /* Validators 0,1,2 vote for base→mid */
     build_vote(&vote.data, &vote.signature, 0, mid.slot, &base, &mid, 0x21);
     expect_zero(lantern_state_set_signed_validator_vote(&state, 0, &vote), "store fixed vote 0");
+    expect_zero(seed_known_payload_for_vote(&state, &vote.data, 0x61), "seed fixed payload 0");
     build_vote(&vote.data, &vote.signature, 1, mid.slot, &base, &mid, 0x22);
     expect_zero(lantern_state_set_signed_validator_vote(&state, 1, &vote), "store fixed vote 1");
+    expect_zero(seed_known_payload_for_vote(&state, &vote.data, 0x62), "seed fixed payload 1");
     build_vote(&vote.data, &vote.signature, 2, mid.slot, &base, &mid, 0x23);
     expect_zero(lantern_state_set_signed_validator_vote(&state, 2, &vote), "store fixed vote 2");
+    expect_zero(seed_known_payload_for_vote(&state, &vote.data, 0x63), "seed fixed payload 2");
     /* Validator 3 votes for mid→tip (this won't reach quorum alone, but tests the fixed-point logic) */
     build_vote(&vote.data, &vote.signature, 3, tip.slot, &mid, &tip, 0x24);
     expect_zero(lantern_state_set_signed_validator_vote(&state, 3, &vote), "store fixed vote 3");
+    expect_zero(seed_known_payload_for_vote(&state, &vote.data, 0x64), "seed fixed payload 3");
 
     uint64_t block_slot = state.slot + 1u;
     uint64_t proposer_index = 0;
@@ -2017,6 +2322,9 @@ static int test_collect_attestations_fixed_point_deep_chain(void) {
         memset(&vote, 0, sizeof(vote));
         build_vote(&vote.data, &vote.signature, i, target.slot, &base, &target, (uint8_t)(0x60u + i));
         expect_zero(lantern_state_set_signed_validator_vote(&state, i, &vote), "store deep fixed vote");
+        expect_zero(
+            seed_known_payload_for_vote(&state, &vote.data, (uint8_t)(0xA0u + (uint8_t)i)),
+            "seed deep fixed payload");
     }
 
     uint64_t block_slot = state.slot + 1u;
@@ -2723,6 +3031,9 @@ int main(void) {
         return 1;
     }
     if (test_state_transition_applies_block() != 0) {
+        return 1;
+    }
+    if (test_state_transition_rejects_missing_proposer_signature() != 0) {
         return 1;
     }
     if (test_state_transition_rejects_genesis_state_root_mismatch() != 0) {

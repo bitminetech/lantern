@@ -18,6 +18,11 @@
 
 #include <inttypes.h>
 #include <pthread.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <sched.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 
@@ -36,6 +41,12 @@
 /* ============================================================================
  * Constants
  * ============================================================================ */
+
+/** Sleep interval when timing service cannot run (ms). */
+static const uint32_t TIMING_SERVICE_IDLE_SLEEP_MS = 200;
+
+/** Sleep interval after timing service errors (ms). */
+static const uint32_t TIMING_SERVICE_POLL_SLEEP_MS = 50;
 
 /** Sleep interval when validator service cannot run (ms). */
 static const uint32_t VALIDATOR_SERVICE_IDLE_SLEEP_MS = 200;
@@ -60,6 +71,94 @@ static size_t validator_attestation_committee_count(const struct lantern_client 
 }
 
 static int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot);
+
+static bool timing_service_should_run(const struct lantern_client *client)
+{
+    if (!client) {
+        return false;
+    }
+    if (client->debug_disable_fork_choice_time) {
+        return false;
+    }
+    if (!client->has_state || !client->has_runtime || !client->has_fork_choice) {
+        return false;
+    }
+    if (!client->fork_choice.initialized || !client->fork_choice.has_anchor) {
+        return false;
+    }
+    return true;
+}
+
+static int timing_service_compute_target_interval(
+    const struct lantern_client *client,
+    uint64_t now_milliseconds,
+    uint64_t *out_target_interval,
+    uint64_t *out_genesis_milliseconds)
+{
+    if (!client || !client->has_runtime || !out_target_interval) {
+        return -1;
+    }
+
+    const struct lantern_slot_clock *clock = &client->runtime.clock;
+    if (clock->milliseconds_per_interval == 0 || clock->genesis_time > UINT64_MAX / 1000u) {
+        return -1;
+    }
+
+    uint64_t genesis_milliseconds = clock->genesis_time * 1000u;
+    if (out_genesis_milliseconds) {
+        *out_genesis_milliseconds = genesis_milliseconds;
+    }
+    if (now_milliseconds < genesis_milliseconds) {
+        return 1;
+    }
+
+    *out_target_interval =
+        (now_milliseconds - genesis_milliseconds) / clock->milliseconds_per_interval;
+    return 0;
+}
+
+static uint32_t timing_service_sleep_until_next_interval(
+    const struct lantern_client *client,
+    uint64_t now_milliseconds,
+    uint64_t target_interval)
+{
+    if (!client || !client->has_runtime || target_interval == UINT64_MAX) {
+        return TIMING_SERVICE_POLL_SLEEP_MS;
+    }
+
+    const struct lantern_slot_clock *clock = &client->runtime.clock;
+    if (clock->milliseconds_per_interval == 0 || clock->genesis_time > UINT64_MAX / 1000u) {
+        return TIMING_SERVICE_POLL_SLEEP_MS;
+    }
+
+    uint64_t genesis_milliseconds = clock->genesis_time * 1000u;
+    uint64_t next_interval = target_interval + 1u;
+    if (next_interval < target_interval
+        || next_interval > (UINT64_MAX - genesis_milliseconds) / clock->milliseconds_per_interval) {
+        return TIMING_SERVICE_POLL_SLEEP_MS;
+    }
+
+    uint64_t next_interval_start =
+        genesis_milliseconds + (next_interval * clock->milliseconds_per_interval);
+    if (now_milliseconds >= next_interval_start) {
+        return 0u;
+    }
+
+    uint64_t remaining = next_interval_start - now_milliseconds;
+    if (remaining > UINT32_MAX) {
+        remaining = UINT32_MAX;
+    }
+    return (uint32_t)remaining;
+}
+
+static void timing_service_yield(void)
+{
+#if defined(_WIN32)
+    Sleep(0);
+#else
+    sched_yield();
+#endif
+}
 
 static bool validator_should_pause_for_sync(const struct lantern_client *client)
 {
@@ -219,6 +318,18 @@ static bool validator_should_pause_for_sync(const struct lantern_client *client)
     }
 
     return false;
+}
+
+static void validator_clear_pending_attestation(struct lantern_local_validator *validator)
+{
+    if (!validator)
+    {
+        return;
+    }
+
+    validator->has_pending_attestation = false;
+    validator->pending_attestation_slot = UINT64_MAX;
+    memset(&validator->pending_attestation, 0, sizeof(validator->pending_attestation));
 }
 
 /* ============================================================================
@@ -843,6 +954,7 @@ static lantern_client_error aggregate_attestations_for_block(
     struct lantern_client *client,
     const LanternAttestations *att_list,
     const LanternSignatureList *att_signatures,
+    bool allow_raw_signature_aggregation,
     LanternAggregatedAttestations *out_attestations,
     LanternAttestationSignatures *out_signatures)
 {
@@ -922,7 +1034,7 @@ static lantern_client_error aggregate_attestations_for_block(
                 rc = LANTERN_CLIENT_ERR_VALIDATOR;
                 break;
             }
-            if (groups[i].count > 0)
+            if (allow_raw_signature_aggregation && groups[i].count > 0)
             {
                 bool used_cached_group_proof = false;
                 rc = append_cached_exact_group_proof(
@@ -971,7 +1083,7 @@ static lantern_client_error aggregate_attestations_for_block(
                         remaining_count += 1u;
                     }
                 }
-                if (rc == LANTERN_CLIENT_OK && groups[i].count > 0)
+                if (rc == LANTERN_CLIENT_OK && allow_raw_signature_aggregation && groups[i].count > 0)
                 {
                     for (size_t j = 0; j < groups[i].count; ++j)
                     {
@@ -1038,6 +1150,7 @@ lantern_client_error lantern_client_aggregate_attestations_for_block(
         client,
         att_list,
         att_signatures,
+        false,
         out_attestations,
         out_signatures);
 }
@@ -1413,6 +1526,7 @@ static lantern_client_error validator_build_block_populate_message(
         client,
         att_list,
         att_signatures,
+        false,
         &aggregated_attestations,
         &aggregated_signatures);
     if (agg_rc != LANTERN_CLIENT_OK)
@@ -1619,7 +1733,7 @@ int validator_store_vote(struct lantern_client *client, const LanternSignedVote 
 
 
 /**
- * Publish a vote to the network.
+ * Publish a vote to the network and cache it for staged aggregation.
  *
  * @param client  Client instance
  * @param vote    Vote to publish
@@ -1636,18 +1750,37 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_log_metadata meta = {.validator = client->node_id};
-    if (client->has_fork_choice)
+    bool state_locked = lantern_client_lock_state(client);
+    if (!state_locked)
     {
-        if (lantern_fork_choice_add_vote(&client->fork_choice, vote, false) != 0)
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+
+    LanternRoot data_root;
+    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &data_root) == 0)
+    {
+        LanternSignatureKey key = {
+            .validator_index = vote->data.validator_id,
+            .data_root = data_root,
+        };
+        if (lantern_client_set_gossip_signature(
+                client,
+                &key,
+                &vote->data.data,
+                &vote->signature,
+                vote->data.target.slot)
+            != 0)
         {
             lantern_log_debug(
                 "validator",
                 &meta,
-                "failed to enqueue vote into fork choice validator=%" PRIu64 " slot=%" PRIu64,
+                "failed to cache local vote for aggregation validator=%" PRIu64 " slot=%" PRIu64,
                 vote->data.validator_id,
                 vote->data.slot);
         }
     }
+    lantern_client_unlock_state(client, state_locked);
+
     int rc = lantern_gossipsub_service_publish_vote(&client->gossip, vote);
     if (rc != 0)
     {
@@ -1896,24 +2029,24 @@ int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t
         block.message.block.proposer_index);
 
     lantern_client_record_block(client, &block, NULL, NULL, "local", 0, false, NULL, 0);
-    rc = lantern_client_publish_block(client, &block);
-    if (rc != LANTERN_CLIENT_OK)
-    {
-        lantern_signed_block_with_attestation_reset(&block);
-        return rc;
-    }
-
     if (client->validator_lock_initialized && pthread_mutex_lock(&client->validator_lock) == 0)
     {
         if (local_index < client->local_validator_count)
         {
             struct lantern_local_validator *local = &client->local_validators[local_index];
             local->last_proposed_slot = slot;
-            local->pending_attestation = proposer_vote;
-            local->pending_attestation_slot = slot;
-            local->has_pending_attestation = true;
+            /* The proposer already attested inside the block wrapper at interval 0. */
+            local->last_attested_slot = slot;
+            validator_clear_pending_attestation(local);
         }
         unlock_mutex_with_log(&client->validator_lock, client->node_id, "validator_lock");
+    }
+
+    rc = lantern_client_publish_block(client, &block);
+    if (rc != LANTERN_CLIENT_OK)
+    {
+        lantern_signed_block_with_attestation_reset(&block);
+        return rc;
     }
 
     lantern_signed_block_with_attestation_reset(&block);
@@ -1941,6 +2074,7 @@ int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t
 int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
 {
     lantern_client_error result = LANTERN_CLIENT_OK;
+    size_t num_validators = 0;
 
     if (!validator_service_should_run(client))
     {
@@ -1959,6 +2093,7 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
     {
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
+    num_validators = client->state.config.num_validators;
     if (lantern_state_compute_vote_checkpoints(
             &client->state,
             &client->store,
@@ -1990,6 +2125,16 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
             continue;
         }
         struct lantern_local_validator *validator = &client->local_validators[i];
+        if (lantern_validator_index_is_proposer_for(
+                (LanternValidatorIndex)validator->global_index,
+                slot,
+                num_validators))
+        {
+            /* Proposers do not re-attest at interval 1. */
+            validator->last_attested_slot = slot;
+            validator_clear_pending_attestation(validator);
+            continue;
+        }
         if (validator->last_attested_slot == slot)
         {
             continue;
@@ -2018,7 +2163,7 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
             }
         }
         validator->last_attested_slot = slot;
-        validator->has_pending_attestation = false;
+        validator_clear_pending_attestation(validator);
 
         int store_rc = validator_store_vote(client, &vote);
         if (store_rc != LANTERN_CLIENT_OK && result == LANTERN_CLIENT_OK)
@@ -2141,6 +2286,7 @@ static int validator_publish_aggregated_attestations(struct lantern_client *clie
         client,
         &attestations,
         &signatures,
+        true,
         &aggregated_attestations,
         &aggregated_signatures);
     uint64_t aggregation_finished_ms = monotonic_millis();
@@ -2207,6 +2353,157 @@ cleanup:
     lantern_attestations_reset(&attestations);
     lantern_signature_list_reset(&signatures);
     return result;
+}
+
+
+int lantern_client_chain_service_tick_to(
+    struct lantern_client *client,
+    uint64_t target_interval,
+    uint64_t *out_skipped_to_interval,
+    uint64_t *out_ticked_intervals)
+{
+    if (out_skipped_to_interval) {
+        *out_skipped_to_interval = UINT64_MAX;
+    }
+    if (out_ticked_intervals) {
+        *out_ticked_intervals = 0u;
+    }
+    if (!client || !client->has_fork_choice) {
+        return -1;
+    }
+
+    bool skipped = false;
+    for (;;)
+    {
+        bool state_locked = lantern_client_lock_state(client);
+        if (!state_locked) {
+            return -1;
+        }
+        if (!client->has_fork_choice) {
+            lantern_client_unlock_state(client, state_locked);
+            return -1;
+        }
+
+        uint64_t current_interval = client->fork_choice.time_intervals;
+        if (current_interval >= target_interval) {
+            lantern_client_unlock_state(client, state_locked);
+            return 0;
+        }
+
+        if (!skipped
+            && client->fork_choice.intervals_per_slot > 0
+            && (target_interval - current_interval) > client->fork_choice.intervals_per_slot)
+        {
+            uint64_t skip_to_interval =
+                target_interval - (uint64_t)client->fork_choice.intervals_per_slot;
+            if (lantern_client_skip_fork_choice_intervals_locked(client, skip_to_interval) != 0) {
+                lantern_client_unlock_state(client, state_locked);
+                return -1;
+            }
+            if (out_skipped_to_interval) {
+                *out_skipped_to_interval = skip_to_interval;
+            }
+            skipped = true;
+            lantern_client_unlock_state(client, state_locked);
+            continue;
+        }
+
+        if (lantern_client_tick_fork_choice_interval_locked(client, false) != 0) {
+            lantern_client_unlock_state(client, state_locked);
+            return -1;
+        }
+
+        uint64_t advanced_interval = client->fork_choice.time_intervals;
+        lantern_client_unlock_state(client, state_locked);
+
+        if (out_ticked_intervals) {
+            *out_ticked_intervals += 1u;
+        }
+        if (advanced_interval >= target_interval) {
+            return 0;
+        }
+
+        timing_service_yield();
+    }
+}
+
+
+/* ============================================================================
+ * Timing Service Thread
+ * ============================================================================ */
+
+void *timing_thread(void *arg)
+{
+    struct lantern_client *client = arg;
+    if (!client) {
+        return NULL;
+    }
+
+    while (__atomic_load_n(&client->timing_stop_flag, __ATOMIC_RELAXED) == 0)
+    {
+        if (!timing_service_should_run(client))
+        {
+            validator_sleep_ms(TIMING_SERVICE_IDLE_SLEEP_MS);
+            continue;
+        }
+
+        uint64_t now_milliseconds = validator_wall_time_now_millis();
+        uint64_t target_interval = 0u;
+        uint64_t genesis_milliseconds = 0u;
+        int target_rc = timing_service_compute_target_interval(
+            client,
+            now_milliseconds,
+            &target_interval,
+            &genesis_milliseconds);
+        if (target_rc > 0)
+        {
+            uint64_t sleep_milliseconds = TIMING_SERVICE_IDLE_SLEEP_MS;
+            if (genesis_milliseconds > now_milliseconds) {
+                sleep_milliseconds = genesis_milliseconds - now_milliseconds;
+                if (sleep_milliseconds > TIMING_SERVICE_IDLE_SLEEP_MS) {
+                    sleep_milliseconds = TIMING_SERVICE_IDLE_SLEEP_MS;
+                }
+            }
+            validator_sleep_ms((uint32_t)sleep_milliseconds);
+            continue;
+        }
+        if (target_rc != 0)
+        {
+            validator_sleep_ms(TIMING_SERVICE_POLL_SLEEP_MS);
+            continue;
+        }
+
+        uint64_t current_interval = 0u;
+        bool state_locked = lantern_client_lock_state(client);
+        if (!state_locked)
+        {
+            validator_sleep_ms(TIMING_SERVICE_POLL_SLEEP_MS);
+            continue;
+        }
+        current_interval = client->has_fork_choice ? client->fork_choice.time_intervals : 0u;
+        lantern_client_unlock_state(client, state_locked);
+
+        if (current_interval >= target_interval)
+        {
+            uint32_t sleep_milliseconds = timing_service_sleep_until_next_interval(
+                client,
+                now_milliseconds,
+                target_interval);
+            if (sleep_milliseconds == 0u) {
+                timing_service_yield();
+            } else {
+                validator_sleep_ms(sleep_milliseconds);
+            }
+            continue;
+        }
+
+        if (lantern_client_chain_service_tick_to(client, target_interval, NULL, NULL) != 0)
+        {
+            validator_sleep_ms(TIMING_SERVICE_POLL_SLEEP_MS);
+        }
+    }
+
+    return NULL;
 }
 
 
@@ -2284,17 +2581,6 @@ void *validator_thread(void *arg)
         }
         duty->last_interval = tp->interval_index;
 
-        if (client->has_fork_choice)
-        {
-            bool has_proposal = duty->slot_proposed;
-            bool state_locked = lantern_client_lock_state(client);
-            if (state_locked)
-            {
-                (void)lantern_client_advance_fork_choice_time_locked(client, now, has_proposal);
-            }
-            lantern_client_unlock_state(client, state_locked);
-        }
-
         switch (tp->phase)
         {
             case LANTERN_DUTY_PHASE_PROPOSAL:
@@ -2348,6 +2634,89 @@ void *validator_thread(void *arg)
         validator_sleep_ms(VALIDATOR_SERVICE_POLL_SLEEP_MS);
     }
     return NULL;
+}
+
+
+/**
+ * Start the timing service.
+ *
+ * @param client  Client instance
+ *
+ * @return LANTERN_CLIENT_OK on success, or if service is already running or
+ *         prerequisites are missing
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if client is NULL
+ * @return LANTERN_CLIENT_ERR_RUNTIME if the thread cannot be created
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+int start_timing_service(struct lantern_client *client)
+{
+    if (!client)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    if (client->timing_thread_started)
+    {
+        return LANTERN_CLIENT_OK;
+    }
+    if (!client->has_runtime || !client->has_fork_choice)
+    {
+        return LANTERN_CLIENT_OK;
+    }
+
+    __atomic_store_n(&client->timing_stop_flag, 0, __ATOMIC_RELAXED);
+    if (pthread_create(&client->timing_thread, NULL, timing_thread, client) != 0)
+    {
+        __atomic_store_n(&client->timing_stop_flag, 1, __ATOMIC_RELAXED);
+        lantern_log_warn(
+            "forkchoice",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to start timing service thread");
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+
+    client->timing_thread_started = true;
+    lantern_log_info(
+        "forkchoice",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "fork-choice timing service started");
+    return LANTERN_CLIENT_OK;
+}
+
+
+/**
+ * Stop the timing service.
+ *
+ * Signals the timing service thread to stop and waits for it to exit.
+ * Safe to call even if the service was never started.
+ *
+ * @param client  Client instance (may be NULL)
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+void stop_timing_service(struct lantern_client *client)
+{
+    if (!client || !client->timing_thread_started)
+    {
+        return;
+    }
+
+    __atomic_store_n(&client->timing_stop_flag, 1, __ATOMIC_RELAXED);
+    int join_rc = pthread_join(client->timing_thread, NULL);
+    if (join_rc != 0)
+    {
+        lantern_log_warn(
+            "forkchoice",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "pthread_join failed: %d",
+            join_rc);
+    }
+
+    client->timing_thread_started = false;
+    lantern_log_info(
+        "forkchoice",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "fork-choice timing service stopped");
 }
 
 

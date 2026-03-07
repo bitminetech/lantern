@@ -185,6 +185,12 @@ static int test_gossip_aggregated_attestation_caches_valid_proof(void)
         fprintf(stderr, "valid aggregated attestation should remain pending until migration\n");
         goto cleanup_attestation;
     }
+    if (client.fork_choice.new_aggregated_payloads != &client.store.new_aggregated_payloads
+        || client.fork_choice.known_aggregated_payloads != &client.store.known_aggregated_payloads
+        || client.fork_choice.attestation_data_by_root != &client.store.attestation_data_by_root) {
+        fprintf(stderr, "fork choice should expose attached aggregated attestation store views\n");
+        goto cleanup_attestation;
+    }
 
     LanternRoot data_root;
     if (lantern_hash_tree_root_attestation_data(&attestation.data, &data_root) != 0) {
@@ -201,6 +207,39 @@ static int test_gossip_aggregated_attestation_caches_valid_proof(void)
     }
     if (client.store.new_aggregated_payloads.entries[0].target_slot != attestation.data.target.slot) {
         fprintf(stderr, "cached aggregated proof target slot mismatch\n");
+        goto cleanup_attestation;
+    }
+    if (!client.fork_choice.new_aggregated_payloads
+        || client.fork_choice.new_aggregated_payloads->length != 1
+        || !client.fork_choice.new_aggregated_payloads->entries) {
+        fprintf(stderr, "fork choice new aggregated payload pool missing gossip proof\n");
+        goto cleanup_attestation;
+    }
+    if (!client.fork_choice.attestation_data_by_root
+        || client.fork_choice.attestation_data_by_root->length != 1
+        || !client.fork_choice.attestation_data_by_root->entries) {
+        fprintf(stderr, "fork choice attestation data map missing gossip attestation data\n");
+        goto cleanup_attestation;
+    }
+    if (memcmp(
+            client.fork_choice.new_aggregated_payloads->entries[0].data_root.bytes,
+            data_root.bytes,
+            LANTERN_ROOT_SIZE)
+        != 0) {
+        fprintf(stderr, "fork choice aggregated payload root mismatch\n");
+        goto cleanup_attestation;
+    }
+    if (memcmp(
+            client.fork_choice.attestation_data_by_root->entries[0].data_root.bytes,
+            data_root.bytes,
+            LANTERN_ROOT_SIZE)
+        != 0) {
+        fprintf(stderr, "fork choice attestation data root mismatch\n");
+        goto cleanup_attestation;
+    }
+    if (client.fork_choice.attestation_data_by_root->entries[0].data.target.slot
+        != attestation.data.target.slot) {
+        fprintf(stderr, "fork choice attestation data target slot mismatch\n");
         goto cleanup_attestation;
     }
 

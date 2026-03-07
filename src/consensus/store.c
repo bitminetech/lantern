@@ -44,6 +44,9 @@ static void sync_attached_fork_choice(LanternStore *store) {
     store->fork_choice->known_votes = store->known_votes;
     store->fork_choice->new_votes = store->new_votes;
     store->fork_choice->validator_count = store->fork_choice_vote_count;
+    store->fork_choice->new_aggregated_payloads = &store->new_aggregated_payloads;
+    store->fork_choice->known_aggregated_payloads = &store->known_aggregated_payloads;
+    store->fork_choice->attestation_data_by_root = &store->attestation_data_by_root;
 }
 
 static void detach_attached_fork_choice(LanternStore *store) {
@@ -53,6 +56,9 @@ static void detach_attached_fork_choice(LanternStore *store) {
     store->fork_choice->known_votes = NULL;
     store->fork_choice->new_votes = NULL;
     store->fork_choice->validator_count = 0;
+    store->fork_choice->new_aggregated_payloads = NULL;
+    store->fork_choice->known_aggregated_payloads = NULL;
+    store->fork_choice->attestation_data_by_root = NULL;
 }
 
 static bool signature_key_equals(
@@ -63,6 +69,28 @@ static bool signature_key_equals(
     }
     return lhs->validator_index == rhs->validator_index
         && memcmp(lhs->data_root.bytes, rhs->data_root.bytes, LANTERN_ROOT_SIZE) == 0;
+}
+
+static bool root_equals(const LanternRoot *lhs, const LanternRoot *rhs) {
+    if (!lhs || !rhs) {
+        return false;
+    }
+    return memcmp(lhs->bytes, rhs->bytes, LANTERN_ROOT_SIZE) == 0;
+}
+
+static bool root_in_set(
+    const LanternRoot *needle,
+    const LanternRoot *roots,
+    size_t root_count) {
+    if (!needle || (!roots && root_count > 0u)) {
+        return false;
+    }
+    for (size_t i = 0; i < root_count; ++i) {
+        if (root_equals(needle, &roots[i])) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool aggregated_payload_entry_equals(
@@ -683,45 +711,73 @@ size_t lantern_store_prune_finalized_attestation_material(
     if (!store) {
         return 0u;
     }
-    size_t removed = 0u;
-    size_t proof_index = 0u;
-    while (proof_index < store->new_aggregated_payloads.length) {
-        if (store->new_aggregated_payloads.entries[proof_index].target_slot <= finalized_slot) {
-            aggregated_payload_pool_remove_index(&store->new_aggregated_payloads, proof_index);
-            removed += 1u;
-            continue;
+
+    struct lantern_attestation_data_by_root *data_cache = &store->attestation_data_by_root;
+    size_t stale_root_count = 0u;
+    for (size_t i = 0; i < data_cache->length; ++i) {
+        if (data_cache->entries[i].target_slot <= finalized_slot) {
+            stale_root_count += 1u;
         }
-        proof_index += 1u;
     }
-    proof_index = 0u;
-    while (proof_index < store->known_aggregated_payloads.length) {
-        if (store->known_aggregated_payloads.entries[proof_index].target_slot <= finalized_slot) {
-            aggregated_payload_pool_remove_index(&store->known_aggregated_payloads, proof_index);
-            removed += 1u;
+    if (stale_root_count == 0u) {
+        return 0u;
+    }
+
+    LanternRoot *stale_roots = malloc(stale_root_count * sizeof(*stale_roots));
+    if (!stale_roots) {
+        return 0u;
+    }
+
+    size_t stale_root_index = 0u;
+    size_t data_index = 0u;
+    while (data_index < data_cache->length) {
+        if (data_cache->entries[data_index].target_slot <= finalized_slot) {
+            stale_roots[stale_root_index] = data_cache->entries[data_index].data_root;
+            stale_root_index += 1u;
+            attestation_data_by_root_remove_index(data_cache, data_index);
             continue;
         }
-        proof_index += 1u;
+        data_index += 1u;
     }
 
     size_t signature_index = 0u;
     while (signature_index < store->gossip_signatures.length) {
-        if (store->gossip_signatures.entries[signature_index].target_slot <= finalized_slot) {
+        if (root_in_set(
+                &store->gossip_signatures.entries[signature_index].key.data_root,
+                stale_roots,
+                stale_root_count)) {
             gossip_signature_map_remove_index(&store->gossip_signatures, signature_index);
             continue;
         }
         signature_index += 1u;
     }
 
-    struct lantern_attestation_data_by_root *data_cache = &store->attestation_data_by_root;
-    size_t data_index = 0u;
-    while (data_index < data_cache->length) {
-        if (data_cache->entries[data_index].target_slot <= finalized_slot) {
-            attestation_data_by_root_remove_index(data_cache, data_index);
+    size_t proof_index = 0u;
+    while (proof_index < store->new_aggregated_payloads.length) {
+        if (root_in_set(
+                &store->new_aggregated_payloads.entries[proof_index].data_root,
+                stale_roots,
+                stale_root_count)) {
+            aggregated_payload_pool_remove_index(&store->new_aggregated_payloads, proof_index);
             continue;
         }
-        data_index += 1u;
+        proof_index += 1u;
     }
-    return removed;
+
+    proof_index = 0u;
+    while (proof_index < store->known_aggregated_payloads.length) {
+        if (root_in_set(
+                &store->known_aggregated_payloads.entries[proof_index].data_root,
+                stale_roots,
+                stale_root_count)) {
+            aggregated_payload_pool_remove_index(&store->known_aggregated_payloads, proof_index);
+            continue;
+        }
+        proof_index += 1u;
+    }
+
+    free(stale_roots);
+    return stale_root_count;
 }
 
 int lantern_store_get_attestation_data(

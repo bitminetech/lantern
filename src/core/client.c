@@ -103,6 +103,43 @@ static void sync_aggregated_payload_pools_after_time_advance(
     }
 }
 
+static int fork_choice_interval_boundary_milliseconds(
+    const LanternForkChoice *store,
+    uint64_t target_interval,
+    uint64_t *out_now_milliseconds) {
+    if (!store || !out_now_milliseconds || store->milliseconds_per_interval == 0) {
+        return -1;
+    }
+    if (store->config.genesis_time > UINT64_MAX / 1000u) {
+        return -1;
+    }
+    uint64_t genesis_milliseconds = store->config.genesis_time * 1000u;
+    if (target_interval > (UINT64_MAX - genesis_milliseconds) / store->milliseconds_per_interval) {
+        return -1;
+    }
+    *out_now_milliseconds =
+        genesis_milliseconds + (target_interval * store->milliseconds_per_interval);
+    return 0;
+}
+
+static int fork_choice_target_interval(
+    const LanternForkChoice *store,
+    uint64_t now_milliseconds,
+    uint64_t *out_target_interval) {
+    if (!store || !out_target_interval || store->milliseconds_per_interval == 0) {
+        return -1;
+    }
+    if (store->config.genesis_time > UINT64_MAX / 1000u) {
+        return -1;
+    }
+    uint64_t genesis_milliseconds = store->config.genesis_time * 1000u;
+    if (now_milliseconds < genesis_milliseconds) {
+        return 1;
+    }
+    *out_target_interval = (now_milliseconds - genesis_milliseconds) / store->milliseconds_per_interval;
+    return 0;
+}
+
 int lantern_client_set_gossip_signature(
     struct lantern_client *client,
     const LanternSignatureKey *key,
@@ -156,6 +193,53 @@ size_t lantern_client_prune_finalized_attestation_material(
     return lantern_store_prune_finalized_attestation_material(&client->store, finalized_slot);
 }
 
+int lantern_client_tick_fork_choice_interval_locked(
+    struct lantern_client *client,
+    bool has_proposal) {
+    if (!client || !client->has_fork_choice) {
+        return -1;
+    }
+
+    uint64_t previous_intervals = client->fork_choice.time_intervals;
+    uint64_t next_interval = previous_intervals + 1u;
+    if (next_interval < previous_intervals) {
+        return -1;
+    }
+
+    uint64_t now_milliseconds = 0;
+    if (fork_choice_interval_boundary_milliseconds(
+            &client->fork_choice,
+            next_interval,
+            &now_milliseconds)
+        != 0) {
+        return -1;
+    }
+
+    int rc = lantern_fork_choice_advance_time(&client->fork_choice, now_milliseconds, has_proposal);
+    if (rc != 0) {
+        return rc;
+    }
+    if (client->fork_choice.time_intervals != next_interval) {
+        return -1;
+    }
+
+    sync_aggregated_payload_pools_after_time_advance(client, previous_intervals, has_proposal);
+    return 0;
+}
+
+int lantern_client_skip_fork_choice_intervals_locked(
+    struct lantern_client *client,
+    uint64_t target_interval) {
+    if (!client || !client->has_fork_choice) {
+        return -1;
+    }
+    if (target_interval < client->fork_choice.time_intervals) {
+        return -1;
+    }
+    client->fork_choice.time_intervals = target_interval;
+    return 0;
+}
+
 int lantern_client_advance_fork_choice_time_locked(
     struct lantern_client *client,
     uint64_t now_milliseconds,
@@ -163,7 +247,26 @@ int lantern_client_advance_fork_choice_time_locked(
     if (!client || !client->has_fork_choice) {
         return -1;
     }
+
     uint64_t previous_intervals = client->fork_choice.time_intervals;
+    uint64_t target_interval = 0u;
+    int target_rc = fork_choice_target_interval(&client->fork_choice, now_milliseconds, &target_interval);
+    if (target_rc < 0) {
+        return -1;
+    }
+    if (target_rc == 0
+        && client->fork_choice.intervals_per_slot > 0
+        && target_interval > previous_intervals
+        && (target_interval - previous_intervals) > client->fork_choice.intervals_per_slot)
+    {
+        uint64_t skip_to_interval =
+            target_interval - (uint64_t)client->fork_choice.intervals_per_slot;
+        if (lantern_client_skip_fork_choice_intervals_locked(client, skip_to_interval) != 0) {
+            return -1;
+        }
+        previous_intervals = client->fork_choice.time_intervals;
+    }
+
     int rc = lantern_fork_choice_advance_time(&client->fork_choice, now_milliseconds, has_proposal);
     if (rc != 0) {
         return rc;
@@ -538,6 +641,8 @@ static void client_reset_base(struct lantern_client *client)
     lantern_fork_choice_init(&client->fork_choice);
     lantern_store_attach_fork_choice(&client->store, &client->fork_choice);
     client->has_fork_choice = false;
+    client->timing_thread_started = false;
+    client->timing_stop_flag = 1;
     client->dialer_thread_started = false;
     client->dialer_stop_flag = 1;
     client->ping_thread_started = false;
@@ -2740,6 +2845,14 @@ static void client_start_background_services(struct lantern_client *client)
             "failed to start ping service thread");
     }
 
+    if (start_timing_service(client) != 0)
+    {
+        lantern_log_warn(
+            "forkchoice",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "fork-choice timing inactive");
+    }
+
     if (start_validator_service(client) != 0)
     {
         lantern_log_warn(
@@ -2762,6 +2875,7 @@ static void client_start_background_services(struct lantern_client *client)
  */
 static void shutdown_validator_and_keys(struct lantern_client *client)
 {
+    stop_timing_service(client);
     stop_validator_service(client);
     stop_ping_service(client);
     stop_peer_dialer(client);

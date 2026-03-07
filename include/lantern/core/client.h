@@ -199,6 +199,9 @@ struct lantern_client {
     size_t peer_vote_stats_cap;
     pthread_mutex_t peer_vote_lock;
     bool peer_vote_lock_initialized;
+    pthread_t timing_thread;
+    bool timing_thread_started;
+    int timing_stop_flag;
     pthread_t validator_thread;
     bool validator_thread_started;
     int validator_stop_flag;

@@ -250,6 +250,38 @@ size_t lantern_client_prune_finalized_attestation_material(
     uint64_t finalized_slot);
 
 /**
+ * Advance fork choice by exactly one interval and sync crossed payload-pool transitions.
+ *
+ * Caller must hold state_lock or otherwise guarantee exclusive access to the
+ * client store and fork-choice state.
+ */
+int lantern_client_tick_fork_choice_interval_locked(
+    struct lantern_client *client,
+    bool has_proposal);
+
+/**
+ * Move fork choice time directly to a later interval without replaying skipped intervals.
+ *
+ * Caller must hold state_lock or otherwise guarantee exclusive access to the
+ * client store and fork-choice state.
+ */
+int lantern_client_skip_fork_choice_intervals_locked(
+    struct lantern_client *client,
+    uint64_t target_interval);
+
+/**
+ * Catch fork choice up to a target interval using ChainService-style skip and yield semantics.
+ *
+ * The helper may release state_lock between interval ticks so other threads can
+ * process gossip and block imports while catch-up is in progress.
+ */
+int lantern_client_chain_service_tick_to(
+    struct lantern_client *client,
+    uint64_t target_interval,
+    uint64_t *out_skipped_to_interval,
+    uint64_t *out_ticked_intervals);
+
+/**
  * Advance fork choice time and sync the aggregated payload pools for crossed intervals.
  *
  * Caller must hold state_lock or otherwise guarantee exclusive access to the
@@ -261,7 +293,7 @@ int lantern_client_advance_fork_choice_time_locked(
     bool has_proposal);
 
 /**
- * Aggregate block/subnet attestations into grouped proofs with cache reuse.
+ * Select cached aggregated proofs for block attestations.
  *
  * @note Thread safety: Acquires state_lock internally.
  */

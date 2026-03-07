@@ -52,6 +52,84 @@ static bool is_root_zero(const LanternRoot *root) {
     return true;
 }
 
+static int preview_post_state_root_without_signatures(
+    const LanternState *state,
+    const LanternSignedBlock *signed_block,
+    LanternRoot *out_state_root) {
+    if (!state || !signed_block || !out_state_root) {
+        return -1;
+    }
+    if (signed_block->message.block.slot <= state->slot) {
+        return -1;
+    }
+
+    LanternState scratch;
+    lantern_state_init(&scratch);
+    if (lantern_state_clone(state, &scratch) != 0) {
+        return -1;
+    }
+
+    int rc = 0;
+    if (lantern_state_process_slots(&scratch, signed_block->message.block.slot) != 0) {
+        rc = -1;
+        goto cleanup;
+    }
+
+    LanternSignedVote proposer_signed;
+    memset(&proposer_signed, 0, sizeof(proposer_signed));
+    proposer_signed.data = signed_block->message.proposer_attestation;
+    proposer_signed.signature = signed_block->signatures.proposer_signature;
+    if (lantern_state_process_block(
+            &scratch,
+            &signed_block->message.block,
+            NULL,
+            &proposer_signed)
+        != 0) {
+        rc = -1;
+        goto cleanup;
+    }
+    if (lantern_hash_tree_root_state(&scratch, out_state_root) != 0) {
+        rc = -1;
+    }
+
+cleanup:
+    lantern_state_reset(&scratch);
+    return rc;
+}
+
+static int state_transition_without_signatures(
+    LanternState *state,
+    const LanternSignedBlock *signed_block) {
+    if (!state || !signed_block) {
+        return -1;
+    }
+
+    const LanternBlock *block = &signed_block->message.block;
+    if (block->slot <= state->slot) {
+        return -1;
+    }
+    if (lantern_state_process_slots(state, block->slot) != 0) {
+        return -1;
+    }
+
+    LanternSignedVote proposer_signed;
+    memset(&proposer_signed, 0, sizeof(proposer_signed));
+    proposer_signed.data = signed_block->message.proposer_attestation;
+    proposer_signed.signature = signed_block->signatures.proposer_signature;
+    if (lantern_state_process_block(state, block, NULL, &proposer_signed) != 0) {
+        return -1;
+    }
+
+    LanternRoot computed_state_root;
+    if (lantern_hash_tree_root_state(state, &computed_state_root) != 0) {
+        return -1;
+    }
+    if (memcmp(block->state_root.bytes, computed_state_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 /* Patch block hashes to use C-computed values instead of LeanSpec-computed values.
  * LeanSpec uses variable-length XMSS signatures which produces different hashes.
  * This function computes the correct parent_root and state_root using C code.
@@ -81,9 +159,11 @@ static int patch_block_hashes_for_c_compat(
     }
     memcpy(signed_block->message.block.parent_root.bytes, computed_parent.bytes, LANTERN_ROOT_SIZE);
 
-    /* Now compute state_root using preview function (which internally checks parent_root) */
+    /* The state_transition fixtures do not ship signature material. Preview using
+     * the unsigned transition path that mirrors leanSpec's valid_signatures
+     * precondition instead of the strict signed-block API. */
     LanternRoot computed_state_root;
-    if (lantern_state_preview_post_state_root(state, signed_block, &computed_state_root) != 0) {
+    if (preview_post_state_root_without_signatures(state, signed_block, &computed_state_root) != 0) {
         return -1;
     }
 
@@ -870,7 +950,7 @@ static int run_state_transition_fixture(const char *path) {
             }
         }
 
-        int status = lantern_state_transition(&state, &signed_block);
+        int status = state_transition_without_signatures(&state, &signed_block);
         reset_block(&signed_block.message);
 
         if (status != 0) {
@@ -1244,7 +1324,7 @@ static int run_fork_choice_fixture(const char *path) {
                 return -1;
             }
             if (signed_block.message.slot > state.slot) {
-                if (lantern_state_transition(&state, &signed_block) != 0) {
+                if (state_transition_without_signatures(&state, &signed_block) != 0) {
                     reset_block(&signed_block.message);
                     reset_block(&anchor_block);
                     lantern_fork_choice_reset(&store);
@@ -1348,7 +1428,7 @@ static int run_fork_choice_fixture(const char *path) {
                 hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
                 return -1;
             }
-            if (lantern_state_transition(active_state, &signed_block) != 0) {
+            if (state_transition_without_signatures(active_state, &signed_block) != 0) {
                 lantern_state_reset(&branch_state);
                 reset_block(&signed_block.message);
                 reset_block(&anchor_block);

@@ -27,6 +27,7 @@
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
+#include "lantern/consensus/ssz.h"
 #include "lantern/consensus/state.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/log.h"
@@ -738,12 +739,13 @@ int initialize_fork_choice(struct lantern_client *client)
      * Real persisted checkpoints are synced to the store AFTER
      * restore_persisted_blocks() via lantern_fork_choice_restore_checkpoints().
      */
-    if (lantern_fork_choice_set_anchor(
+    if (lantern_fork_choice_set_anchor_with_state(
             &client->fork_choice,
             &anchor,
             &anchor_checkpoint,
             &anchor_checkpoint,
-            &anchor_root)
+            &anchor_root,
+            &client->state)
         != 0)
     {
         lantern_block_body_reset(&anchor.body);
@@ -826,6 +828,41 @@ static int compare_blocks_by_slot(const void *lhs_ptr, const void *rhs_ptr)
     return memcmp(lhs->root.bytes, rhs->root.bytes, LANTERN_ROOT_SIZE);
 }
 
+static bool load_restored_block_state(
+    const struct lantern_client *client,
+    const LanternRoot *root,
+    LanternState *out_state)
+{
+    if (!client || !root || !out_state || !client->data_dir || client->data_dir[0] == '\0')
+    {
+        return false;
+    }
+
+    uint8_t *state_bytes = NULL;
+    size_t state_len = 0;
+    if (lantern_storage_load_state_bytes_for_root(
+            client->data_dir,
+            root,
+            &state_bytes,
+            &state_len)
+            != 0
+        || !state_bytes
+        || state_len == 0)
+    {
+        free(state_bytes);
+        return false;
+    }
+
+    lantern_state_init(out_state);
+    bool loaded = lantern_ssz_decode_state(out_state, state_bytes, state_len) == 0;
+    free(state_bytes);
+    if (!loaded)
+    {
+        lantern_state_reset(out_state);
+    }
+    return loaded;
+}
+
 /**
  * Restore persisted blocks from storage into fork choice.
  *
@@ -874,8 +911,12 @@ int restore_persisted_blocks(struct lantern_client *client)
         const struct lantern_persisted_block *entry = &list.items[i];
         const LanternBlock *block = &entry->block.message.block;
         const LanternVote *vote = &entry->block.message.proposer_attestation;
+        LanternState cached_post_state;
+        bool have_cached_post_state = load_restored_block_state(client, &entry->root, &cached_post_state);
         LanternSignedVote persisted_proposer;
         const LanternSignedVote *proposer_ptr = NULL;
+        const LanternCheckpoint *post_justified = &client->state.latest_justified;
+        const LanternCheckpoint *post_finalized = &client->state.latest_finalized;
         if (vote->slot == block->slot && vote->validator_id == block->proposer_index)
         {
             memset(&persisted_proposer, 0, sizeof(persisted_proposer));
@@ -883,13 +924,19 @@ int restore_persisted_blocks(struct lantern_client *client)
             persisted_proposer.signature = entry->block.signatures.proposer_signature;
             proposer_ptr = &persisted_proposer;
         }
-        if (lantern_fork_choice_add_block(
+        if (have_cached_post_state)
+        {
+            post_justified = &cached_post_state.latest_justified;
+            post_finalized = &cached_post_state.latest_finalized;
+        }
+        if (lantern_fork_choice_add_block_with_state(
                 &client->fork_choice,
                 block,
                 proposer_ptr,
-                &client->state.latest_justified,
-                &client->state.latest_finalized,
-                &entry->root)
+                post_justified,
+                post_finalized,
+                &entry->root,
+                have_cached_post_state ? &cached_post_state : NULL)
             != 0)
         {
             lantern_log_warn(
@@ -897,6 +944,10 @@ int restore_persisted_blocks(struct lantern_client *client)
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "failed to restore block at slot %" PRIu64,
                 entry->block.message.block.slot);
+        }
+        if (have_cached_post_state)
+        {
+            lantern_state_reset(&cached_post_state);
         }
     }
 

@@ -6,7 +6,313 @@
 
 #include "client_test_helpers.h"
 #include "../../src/core/client_services_internal.h"
+#include "lantern/consensus/duties.h"
 #include "lantern/consensus/hash.h"
+#include "lantern/consensus/signature.h"
+#include "lantern/consensus/state.h"
+#include "lantern/genesis/genesis.h"
+#include "lantern/storage/storage.h"
+
+enum {
+    TEST_TEMP_PATH_CAPACITY = 1024
+};
+
+struct block_signature_fixture {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub;
+    struct PQSignatureSchemeSecretKey *secret;
+    struct lantern_validator_record *registry_records;
+    char data_dir_template[TEST_TEMP_PATH_CAPACITY];
+};
+
+static int enable_signature_verification_registry(
+    struct lantern_client *client,
+    struct lantern_validator_record **out_records)
+{
+    if (!client || !out_records) {
+        return -1;
+    }
+    size_t validator_count = lantern_state_validator_count(&client->state);
+    if (validator_count == 0) {
+        return -1;
+    }
+    struct lantern_validator_record *records = calloc(validator_count, sizeof(*records));
+    if (!records) {
+        return -1;
+    }
+    for (size_t i = 0; i < validator_count; ++i) {
+        records[i].index = (uint64_t)i;
+        const uint8_t *pubkey = lantern_state_validator_pubkey(&client->state, i);
+        if (!pubkey) {
+            free(records);
+            return -1;
+        }
+        memcpy(records[i].pubkey_bytes, pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE);
+        records[i].has_pubkey_bytes = true;
+    }
+    client->genesis.validator_registry.records = records;
+    client->genesis.validator_registry.count = validator_count;
+    *out_records = records;
+    return 0;
+}
+
+static void disable_signature_verification_registry(
+    struct lantern_client *client,
+    struct lantern_validator_record **records)
+{
+    if (!client || !records) {
+        return;
+    }
+    free(*records);
+    *records = NULL;
+    client->genesis.validator_registry.records = NULL;
+    client->genesis.validator_registry.count = 0;
+}
+
+static int setup_block_signature_fixture(
+    struct block_signature_fixture *fixture,
+    const char *node_id)
+{
+    if (!fixture) {
+        return -1;
+    }
+    memset(fixture, 0, sizeof(*fixture));
+    if (client_test_setup_vote_validation_client(
+            &fixture->client,
+            node_id,
+            &fixture->pub,
+            &fixture->secret,
+            NULL,
+            NULL)
+        != 0) {
+        return -1;
+    }
+    if (enable_signature_verification_registry(&fixture->client, &fixture->registry_records) != 0) {
+        client_test_teardown_vote_validation_client(&fixture->client, fixture->pub, fixture->secret);
+        fixture->pub = NULL;
+        fixture->secret = NULL;
+        return -1;
+    }
+    snprintf(
+        fixture->data_dir_template,
+        sizeof(fixture->data_dir_template),
+        "/tmp/lantern_block_sig_XXXXXX");
+    fixture->client.data_dir = mkdtemp(fixture->data_dir_template);
+    if (!fixture->client.data_dir) {
+        disable_signature_verification_registry(&fixture->client, &fixture->registry_records);
+        client_test_teardown_vote_validation_client(&fixture->client, fixture->pub, fixture->secret);
+        fixture->pub = NULL;
+        fixture->secret = NULL;
+        return -1;
+    }
+    return 0;
+}
+
+static void teardown_block_signature_fixture(struct block_signature_fixture *fixture)
+{
+    if (!fixture) {
+        return;
+    }
+    disable_signature_verification_registry(&fixture->client, &fixture->registry_records);
+    if (fixture->client.data_dir && fixture->client.data_dir[0] != '\0') {
+        char cleanup_cmd[TEST_TEMP_PATH_CAPACITY + 16];
+        int written = snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf %s", fixture->client.data_dir);
+        if (written > 0 && (size_t)written < sizeof(cleanup_cmd)) {
+            (void)system(cleanup_cmd);
+        }
+    }
+    fixture->client.data_dir = NULL;
+    client_test_teardown_vote_validation_client(&fixture->client, fixture->pub, fixture->secret);
+    fixture->pub = NULL;
+    fixture->secret = NULL;
+}
+
+static int build_signed_block_for_import(
+    struct block_signature_fixture *fixture,
+    bool include_attestation_signature,
+    bool include_proposer_signature,
+    LanternSignedBlock *out_block,
+    LanternRoot *out_root)
+{
+    if (!fixture || !fixture->secret || !out_block || !out_root) {
+        return -1;
+    }
+
+    lantern_signed_block_with_attestation_init(out_block);
+
+    uint64_t block_slot = fixture->client.state.slot + 1u;
+    out_block->message.block.slot = block_slot;
+    if (lantern_proposer_for_slot(
+            block_slot,
+            fixture->client.state.config.num_validators,
+            &out_block->message.block.proposer_index)
+        != 0) {
+        return -1;
+    }
+    if (lantern_state_select_block_parent(
+            &fixture->client.state,
+            &fixture->client.store,
+            &out_block->message.block.parent_root)
+        != 0) {
+        return -1;
+    }
+    if (lantern_storage_store_state_for_root(
+            fixture->client.data_dir,
+            &out_block->message.block.parent_root,
+            &fixture->client.state)
+        != 0) {
+        return -1;
+    }
+
+    LanternCheckpoint head = {0};
+    LanternCheckpoint target = {0};
+    LanternCheckpoint source = {0};
+    if (lantern_state_compute_vote_checkpoints(
+            &fixture->client.state,
+            &fixture->client.store,
+            &head,
+            &target,
+            &source)
+        != 0) {
+        return -1;
+    }
+
+    LanternSignedVote proposer_vote;
+    memset(&proposer_vote, 0, sizeof(proposer_vote));
+    proposer_vote.data.validator_id = out_block->message.block.proposer_index;
+    proposer_vote.data.slot = block_slot;
+    proposer_vote.data.head = head;
+    proposer_vote.data.target = target;
+    proposer_vote.data.source = source;
+    if (client_test_sign_vote_with_secret(&proposer_vote, fixture->secret) != 0) {
+        return -1;
+    }
+
+    out_block->message.proposer_attestation = proposer_vote.data;
+    if (include_proposer_signature) {
+        out_block->signatures.proposer_signature = proposer_vote.signature;
+    } else {
+        lantern_signature_zero(&out_block->signatures.proposer_signature);
+    }
+
+    if (lantern_aggregated_attestations_resize(&out_block->message.block.body.attestations, 1u) != 0) {
+        return -1;
+    }
+    LanternAggregatedAttestation *attestation = &out_block->message.block.body.attestations.data[0];
+    attestation->data = proposer_vote.data.data;
+    if (lantern_bitlist_resize(&attestation->aggregation_bits, 1u) != 0
+        || lantern_bitlist_set(&attestation->aggregation_bits, 0u, true) != 0) {
+        return -1;
+    }
+
+    if (include_attestation_signature) {
+        if (lantern_attestation_signatures_resize(&out_block->signatures.attestation_signatures, 1u) != 0) {
+            return -1;
+        }
+        LanternAggregatedSignatureProof *proof = &out_block->signatures.attestation_signatures.data[0];
+        if (lantern_bitlist_resize(&proof->participants, 1u) != 0
+            || lantern_bitlist_set(&proof->participants, 0u, true) != 0) {
+            return -1;
+        }
+        const uint8_t *pubkey = lantern_state_validator_pubkey(&fixture->client.state, 0u);
+        if (!pubkey) {
+            return -1;
+        }
+        LanternRoot attestation_root;
+        if (lantern_hash_tree_root_attestation_data(&attestation->data, &attestation_root) != 0) {
+            return -1;
+        }
+        const uint8_t *pubkeys[1] = {pubkey};
+        LanternSignature signatures[1] = {proposer_vote.signature};
+        if (!lantern_signature_aggregate(
+                pubkeys,
+                signatures,
+                1u,
+                &attestation_root,
+                attestation->data.slot,
+                &proof->proof_data)) {
+            return -1;
+        }
+    }
+
+    if (lantern_state_preview_post_state_root(
+            &fixture->client.state,
+            &fixture->client.store,
+            out_block,
+            &out_block->message.block.state_root)
+        != 0) {
+        return -1;
+    }
+
+    return lantern_hash_tree_root_block(&out_block->message.block, out_root);
+}
+
+static int resign_first_block_attestation(
+    struct block_signature_fixture *fixture,
+    LanternSignedBlock *block,
+    LanternRoot *out_root)
+{
+    if (!fixture || !fixture->secret || !block || !out_root) {
+        return -1;
+    }
+    if (block->message.block.body.attestations.length == 0
+        || !block->message.block.body.attestations.data
+        || block->signatures.attestation_signatures.length == 0
+        || !block->signatures.attestation_signatures.data) {
+        return -1;
+    }
+
+    LanternAggregatedAttestation *attestation = &block->message.block.body.attestations.data[0];
+    LanternAggregatedSignatureProof *proof = &block->signatures.attestation_signatures.data[0];
+
+    LanternSignedVote signed_vote;
+    memset(&signed_vote, 0, sizeof(signed_vote));
+    signed_vote.data.validator_id = 0u;
+    signed_vote.data.slot = attestation->data.slot;
+    signed_vote.data.data = attestation->data;
+    if (client_test_sign_vote_with_secret(&signed_vote, fixture->secret) != 0) {
+        return -1;
+    }
+
+    if (lantern_bitlist_resize(&attestation->aggregation_bits, 1u) != 0
+        || lantern_bitlist_set(&attestation->aggregation_bits, 0u, true) != 0) {
+        return -1;
+    }
+    if (lantern_bitlist_resize(&proof->participants, 1u) != 0
+        || lantern_bitlist_set(&proof->participants, 0u, true) != 0) {
+        return -1;
+    }
+
+    const uint8_t *pubkey = lantern_state_validator_pubkey(&fixture->client.state, 0u);
+    if (!pubkey) {
+        return -1;
+    }
+    LanternRoot attestation_root;
+    if (lantern_hash_tree_root_attestation_data(&attestation->data, &attestation_root) != 0) {
+        return -1;
+    }
+    const uint8_t *pubkeys[1] = {pubkey};
+    LanternSignature signatures[1] = {signed_vote.signature};
+    if (!lantern_signature_aggregate(
+            pubkeys,
+            signatures,
+            1u,
+            &attestation_root,
+            attestation->data.slot,
+            &proof->proof_data)) {
+        return -1;
+    }
+
+    if (lantern_state_preview_post_state_root(
+            &fixture->client.state,
+            &fixture->client.store,
+            block,
+            &block->message.block.state_root)
+        != 0) {
+        return -1;
+    }
+    return lantern_hash_tree_root_block(&block->message.block, out_root);
+}
 
 static int test_pending_block_queue(void) {
     struct lantern_client client;
@@ -682,6 +988,169 @@ cleanup:
     return rc;
 }
 
+static int test_import_block_accepts_complete_signatures(void)
+{
+    struct block_signature_fixture fixture;
+    LanternSignedBlock block;
+    LanternRoot block_root;
+    uint64_t initial_slot = 0;
+    int rc = 1;
+
+    memset(&block, 0, sizeof(block));
+    if (setup_block_signature_fixture(&fixture, "test_import_complete_signatures") != 0) {
+        fprintf(stderr, "failed to set up block signature fixture\n");
+        return 1;
+    }
+
+    initial_slot = fixture.client.state.slot;
+    if (build_signed_block_for_import(&fixture, true, true, &block, &block_root) != 0) {
+        fprintf(stderr, "failed to build fully signed block fixture\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_debug_import_block(&fixture.client, &block, &block_root, "12D3KooWsig") != 1) {
+        fprintf(stderr, "import rejected block with complete signatures\n");
+        goto cleanup;
+    }
+    if (fixture.client.state.slot != block.message.block.slot || fixture.client.state.slot == initial_slot) {
+        fprintf(stderr, "state slot did not advance after importing fully signed block\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_signed_block_with_attestation_reset(&block);
+    teardown_block_signature_fixture(&fixture);
+    return rc;
+}
+
+static int test_import_block_rejects_missing_attestation_signature_groups(void)
+{
+    struct block_signature_fixture fixture;
+    LanternSignedBlock block;
+    LanternRoot block_root;
+    uint64_t initial_slot = 0;
+    int rc = 1;
+
+    memset(&block, 0, sizeof(block));
+    if (setup_block_signature_fixture(&fixture, "test_import_missing_att_sigs") != 0) {
+        fprintf(stderr, "failed to set up missing attestation signature fixture\n");
+        return 1;
+    }
+
+    initial_slot = fixture.client.state.slot;
+    if (build_signed_block_for_import(&fixture, false, true, &block, &block_root) != 0) {
+        fprintf(stderr, "failed to build block fixture without attestation signatures\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_debug_import_block(&fixture.client, &block, &block_root, "12D3KooWsig") != 0) {
+        fprintf(stderr, "import unexpectedly accepted block missing attestation signatures\n");
+        goto cleanup;
+    }
+    if (fixture.client.state.slot != initial_slot) {
+        fprintf(stderr, "state slot advanced after rejecting missing attestation signatures\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_signed_block_with_attestation_reset(&block);
+    teardown_block_signature_fixture(&fixture);
+    return rc;
+}
+
+static int test_import_block_rejects_missing_proposer_signature(void)
+{
+    struct block_signature_fixture fixture;
+    LanternSignedBlock block;
+    LanternRoot block_root;
+    uint64_t initial_slot = 0;
+    int rc = 1;
+
+    memset(&block, 0, sizeof(block));
+    if (setup_block_signature_fixture(&fixture, "test_import_missing_prop_sig") != 0) {
+        fprintf(stderr, "failed to set up missing proposer signature fixture\n");
+        return 1;
+    }
+
+    initial_slot = fixture.client.state.slot;
+    if (build_signed_block_for_import(&fixture, true, false, &block, &block_root) != 0) {
+        fprintf(stderr, "failed to build block fixture without proposer signature\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_debug_import_block(&fixture.client, &block, &block_root, "12D3KooWsig") != 0) {
+        fprintf(stderr, "import unexpectedly accepted block missing proposer signature\n");
+        goto cleanup;
+    }
+    if (fixture.client.state.slot != initial_slot) {
+        fprintf(stderr, "state slot advanced after rejecting missing proposer signature\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_signed_block_with_attestation_reset(&block);
+    teardown_block_signature_fixture(&fixture);
+    return rc;
+}
+
+static int test_import_block_skips_unknown_attestation_head_root(void)
+{
+    struct block_signature_fixture fixture;
+    LanternSignedBlock block;
+    LanternRoot block_root;
+    LanternRoot unknown_root;
+    uint64_t initial_slot = 0;
+    int rc = 1;
+
+    memset(&block, 0, sizeof(block));
+    if (setup_block_signature_fixture(&fixture, "test_import_unknown_att_head") != 0) {
+        fprintf(stderr, "failed to set up unknown attestation head fixture\n");
+        return 1;
+    }
+
+    if (build_signed_block_for_import(&fixture, true, true, &block, &block_root) != 0) {
+        fprintf(stderr, "failed to build block fixture for unknown attestation head test\n");
+        goto cleanup;
+    }
+    initial_slot = fixture.client.state.slot;
+
+    client_test_fill_root(&unknown_root, 0xD4);
+    if (memcmp(
+            unknown_root.bytes,
+            block.message.block.body.attestations.data[0].data.head.root.bytes,
+            LANTERN_ROOT_SIZE)
+        == 0) {
+        unknown_root.bytes[0] ^= 0xFFu;
+    }
+    block.message.block.body.attestations.data[0].data.head.root = unknown_root;
+    if (resign_first_block_attestation(&fixture, &block, &block_root) != 0) {
+        fprintf(stderr, "failed to resign block fixture with unknown attestation head\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_debug_import_block(&fixture.client, &block, &block_root, "12D3KooWsig") != 1) {
+        fprintf(stderr, "import rejected block with unknown attestation head root\n");
+        goto cleanup;
+    }
+    if (fixture.client.state.slot != block.message.block.slot || fixture.client.state.slot == initial_slot) {
+        fprintf(stderr, "state slot did not advance after skipping unknown attestation head root\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_signed_block_with_attestation_reset(&block);
+    teardown_block_signature_fixture(&fixture);
+    return rc;
+}
+
 int main(void) {
     if (test_pending_block_queue() != 0) {
         return 1;
@@ -693,6 +1162,18 @@ int main(void) {
         return 1;
     }
     if (test_reqresp_collect_blocks_pending_fallback() != 0) {
+        return 1;
+    }
+    if (test_import_block_accepts_complete_signatures() != 0) {
+        return 1;
+    }
+    if (test_import_block_rejects_missing_attestation_signature_groups() != 0) {
+        return 1;
+    }
+    if (test_import_block_rejects_missing_proposer_signature() != 0) {
+        return 1;
+    }
+    if (test_import_block_skips_unknown_attestation_head_root() != 0) {
         return 1;
     }
     puts("lantern_client_pending_test OK");

@@ -205,6 +205,41 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
 
 
 /**
+ * Timing service thread function.
+ *
+ * @param arg  Client instance
+ * @return NULL
+ *
+ * @note Thread safety: This function runs in a separate thread
+ */
+void *timing_thread(void *arg);
+
+
+/**
+ * Start the timing service.
+ *
+ * @param client  Client instance
+ * @return LANTERN_CLIENT_OK on success or when already running/missing
+ *         prerequisites
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM if client is NULL
+ * @return LANTERN_CLIENT_ERR_RUNTIME if the service thread cannot be created
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+int start_timing_service(struct lantern_client *client);
+
+
+/**
+ * Stop the timing service.
+ *
+ * @param client  Client instance
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+void stop_timing_service(struct lantern_client *client);
+
+
+/**
  * Validator service thread function.
  *
  * @param arg  Client instance

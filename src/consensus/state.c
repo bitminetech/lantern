@@ -16,6 +16,7 @@
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/quorum.h"
+#include "lantern/consensus/signature.h"
 #include "lantern/consensus/store.h"
 
 static void record_attestation_validation_metric(double start_seconds, bool valid) {
@@ -59,9 +60,13 @@ static int lantern_state_set_justified_slot_bit(LanternState *state, uint64_t sl
 bool lantern_state_slot_in_justified_window(const LanternState *state, uint64_t slot);
 int lantern_state_get_justified_slot_bit(const LanternState *state, uint64_t slot, bool *out_value);
 static bool attestation_list_contains_validator(const LanternAttestations *list, uint64_t validator_id);
+static bool store_has_known_aggregated_payload_for_vote(
+    const LanternStore *store,
+    const LanternVote *vote);
 static int collect_attestations_for_checkpoint(
     const LanternState *state,
-    const LanternStore *store,
+    const LanternStore *vote_store,
+    const LanternStore *proof_store,
     const LanternCheckpoint *checkpoint,
     LanternAttestations *out_attestations,
     LanternSignatureList *out_signatures);
@@ -84,6 +89,262 @@ static bool signature_is_zero(const LanternSignature *signature) {
     return true;
 }
 
+static int lantern_state_cache_proposer_attestation(
+    const LanternState *state,
+    LanternStore *store,
+    const LanternSignedVote *proposer_attestation) {
+    if (!state || !store) {
+        return -1;
+    }
+    if (!proposer_attestation) {
+        return 0;
+    }
+
+    const LanternVote *vote = &proposer_attestation->data;
+    if (state->config.num_validators == 0
+        || vote->validator_id >= state->config.num_validators
+        || vote->target.slot <= vote->source.slot
+        || signature_is_zero(&proposer_attestation->signature)) {
+        return 0;
+    }
+
+    LanternRoot data_root;
+    if (lantern_hash_tree_root_attestation_data(&vote->data, &data_root) != 0) {
+        return -1;
+    }
+
+    LanternSignatureKey key = {
+        .validator_index = vote->validator_id,
+        .data_root = data_root,
+    };
+    return lantern_store_set_gossip_signature(
+        store,
+        &key,
+        &vote->data,
+        &proposer_attestation->signature,
+        vote->target.slot);
+}
+
+static bool validator_pubkey_is_zero(const uint8_t *pubkey) {
+    if (!pubkey) {
+        return true;
+    }
+    for (size_t i = 0; i < LANTERN_VALIDATOR_PUBKEY_SIZE; ++i) {
+        if (pubkey[i] != 0u) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static int lantern_state_verify_block_signatures(
+    const LanternState *state,
+    const LanternBlock *block,
+    const LanternBlockSignatures *signatures,
+    const LanternSignedVote *proposer_attestation) {
+    if (!state || !block || !signatures) {
+        return -1;
+    }
+
+    const struct lantern_log_metadata meta = {
+        .has_slot = true,
+        .slot = block->slot,
+    };
+    const LanternAggregatedAttestations *attestations = &block->body.attestations;
+    const LanternAttestationSignatures *sig_groups = &signatures->attestation_signatures;
+    size_t attestation_count = attestations->length;
+    size_t validator_count = lantern_state_validator_count(state);
+
+    if (attestation_count != sig_groups->length) {
+        lantern_log_warn(
+            "state",
+            &meta,
+            "block signature count mismatch expected=%zu actual=%zu",
+            attestation_count,
+            sig_groups->length);
+        return -1;
+    }
+    if (attestation_count > 0 && (!attestations->data || !sig_groups->data)) {
+        lantern_log_warn("state", &meta, "block attestation/signature data missing");
+        return -1;
+    }
+
+    for (size_t i = 0; i < attestation_count; ++i) {
+        const LanternAggregatedAttestation *attestation = &attestations->data[i];
+        const LanternAggregatedSignatureProof *proof = &sig_groups->data[i];
+        size_t bit_length = attestation->aggregation_bits.bit_length;
+        size_t participant_count = 0;
+
+        if (proof->participants.bit_length != bit_length) {
+            lantern_log_warn(
+                "state",
+                &meta,
+                "attestation signature participant length mismatch index=%zu expected=%zu actual=%zu",
+                i,
+                bit_length,
+                proof->participants.bit_length);
+            return -1;
+        }
+        if (bit_length > 0 && !attestation->aggregation_bits.bytes) {
+            lantern_log_warn(
+                "state",
+                &meta,
+                "attestation aggregation bits missing index=%zu bit_length=%zu",
+                i,
+                bit_length);
+            return -1;
+        }
+
+        size_t bytes = (bit_length + 7u) / 8u;
+        if (bytes > 0) {
+            if (!proof->participants.bytes
+                || memcmp(proof->participants.bytes, attestation->aggregation_bits.bytes, bytes) != 0) {
+                lantern_log_warn(
+                    "state",
+                    &meta,
+                    "attestation signature participants mismatch index=%zu",
+                    i);
+                return -1;
+            }
+        }
+
+        for (size_t v = 0; v < bit_length; ++v) {
+            if (!lantern_bitlist_get(&attestation->aggregation_bits, v)) {
+                continue;
+            }
+            if (v >= validator_count) {
+                lantern_log_warn(
+                    "state",
+                    &meta,
+                    "attestation participant out of range index=%zu validator=%zu validators=%zu",
+                    i,
+                    v,
+                    validator_count);
+                return -1;
+            }
+            participant_count += 1u;
+        }
+        if (participant_count == 0) {
+            lantern_log_warn(
+                "state",
+                &meta,
+                "attestation signature has no participants index=%zu",
+                i);
+            return -1;
+        }
+
+        const uint8_t **pubkeys = calloc(participant_count, sizeof(*pubkeys));
+        if (!pubkeys) {
+            return -1;
+        }
+
+        int rc = 0;
+        size_t pubkey_index = 0;
+        for (size_t v = 0; v < bit_length; ++v) {
+            if (!lantern_bitlist_get(&attestation->aggregation_bits, v)) {
+                continue;
+            }
+            const uint8_t *pubkey = lantern_state_validator_pubkey(state, v);
+            if (!pubkey || validator_pubkey_is_zero(pubkey)) {
+                lantern_log_warn(
+                    "state",
+                    &meta,
+                    "attestation participant pubkey missing index=%zu validator=%zu",
+                    i,
+                    v);
+                rc = -1;
+                break;
+            }
+            pubkeys[pubkey_index++] = pubkey;
+        }
+
+        LanternRoot data_root;
+        if (rc == 0
+            && lantern_hash_tree_root_attestation_data(&attestation->data, &data_root) != 0) {
+            lantern_log_warn(
+                "state",
+                &meta,
+                "failed to hash attestation for signature verification index=%zu",
+                i);
+            rc = -1;
+        }
+        if (rc == 0
+            && !lantern_signature_verify_aggregated(
+                pubkeys,
+                participant_count,
+                &data_root,
+                &proof->proof_data,
+                attestation->data.slot)) {
+            lantern_log_warn(
+                "state",
+                &meta,
+                "invalid aggregated attestation signature index=%zu",
+                i);
+            rc = -1;
+        }
+
+        free(pubkeys);
+        if (rc != 0) {
+            return -1;
+        }
+    }
+
+    if (!proposer_attestation) {
+        return 0;
+    }
+    if (proposer_attestation->data.validator_id != block->proposer_index) {
+        lantern_log_warn(
+            "state",
+            &meta,
+            "proposer attestation validator mismatch expected=%" PRIu64 " actual=%" PRIu64,
+            block->proposer_index,
+            proposer_attestation->data.validator_id);
+        return -1;
+    }
+    if (signature_is_zero(&signatures->proposer_signature)) {
+        lantern_log_warn("state", &meta, "missing proposer signature");
+        return -1;
+    }
+    if (proposer_attestation->data.validator_id >= validator_count) {
+        lantern_log_warn(
+            "state",
+            &meta,
+            "proposer index out of range validator=%" PRIu64 " validators=%zu",
+            proposer_attestation->data.validator_id,
+            validator_count);
+        return -1;
+    }
+
+    const uint8_t *proposer_pubkey =
+        lantern_state_validator_pubkey(state, (size_t)proposer_attestation->data.validator_id);
+    if (!proposer_pubkey || validator_pubkey_is_zero(proposer_pubkey)) {
+        lantern_log_warn("state", &meta, "missing proposer pubkey");
+        return -1;
+    }
+
+    LanternRoot proposer_root;
+    if (lantern_hash_tree_root_attestation_data(&proposer_attestation->data.data, &proposer_root) != 0) {
+        lantern_log_warn("state", &meta, "failed to hash proposer attestation");
+        return -1;
+    }
+    if (!lantern_signature_verify(
+            proposer_pubkey,
+            LANTERN_VALIDATOR_PUBKEY_SIZE,
+            proposer_attestation->data.slot,
+            &signatures->proposer_signature,
+            &proposer_root)) {
+        lantern_log_warn(
+            "state",
+            &meta,
+            "invalid proposer signature validator=%" PRIu64 " slot=%" PRIu64,
+            proposer_attestation->data.validator_id,
+            proposer_attestation->data.slot);
+        return -1;
+    }
+
+    return 0;
+}
+
 static bool attestation_list_contains_validator(const LanternAttestations *list, uint64_t validator_id) {
     if (!list || !list->data || list->length == 0) {
         return false;
@@ -96,20 +357,55 @@ static bool attestation_list_contains_validator(const LanternAttestations *list,
     return false;
 }
 
+static bool store_has_known_aggregated_payload_for_vote(
+    const LanternStore *store,
+    const LanternVote *vote) {
+    if (!store || !vote) {
+        return false;
+    }
+
+    const struct lantern_aggregated_payload_pool *payloads = &store->known_aggregated_payloads;
+    if (!payloads->entries || payloads->length == 0) {
+        return false;
+    }
+
+    LanternRoot data_root;
+    if (lantern_hash_tree_root_attestation_data(&vote->data, &data_root) != 0) {
+        return false;
+    }
+
+    for (size_t i = 0; i < payloads->length; ++i) {
+        const struct lantern_aggregated_payload_entry *entry = &payloads->entries[i];
+        if (memcmp(entry->data_root.bytes, data_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+            continue;
+        }
+        if (vote->validator_id >= entry->proof.participants.bit_length
+            || !entry->proof.participants.bytes) {
+            continue;
+        }
+        if (lantern_bitlist_get(&entry->proof.participants, (size_t)vote->validator_id)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static int collect_attestations_for_checkpoint(
     const LanternState *state,
-    const LanternStore *store,
+    const LanternStore *vote_store,
+    const LanternStore *proof_store,
     const LanternCheckpoint *checkpoint,
     LanternAttestations *out_attestations,
     LanternSignatureList *out_signatures) {
-    if (!state || !store || !checkpoint || !out_attestations || !out_signatures) {
+    if (!state || !vote_store || !proof_store || !checkpoint || !out_attestations || !out_signatures) {
         return -1;
     }
-    if (!store->validator_votes || store->validator_votes_len == 0) {
+    if (!vote_store->validator_votes || vote_store->validator_votes_len == 0) {
         return 0;
     }
-    for (size_t i = 0; i < store->validator_votes_len; ++i) {
-        const struct lantern_vote_record *record = &store->validator_votes[i];
+    for (size_t i = 0; i < vote_store->validator_votes_len; ++i) {
+        const struct lantern_vote_record *record = &vote_store->validator_votes[i];
         if (!record->has_vote) {
             continue;
         }
@@ -117,6 +413,9 @@ static int collect_attestations_for_checkpoint(
             continue;
         }
         if (attestation_list_contains_validator(out_attestations, record->vote.validator_id)) {
+            continue;
+        }
+        if (!store_has_known_aggregated_payload_for_vote(proof_store, &record->vote)) {
             continue;
         }
         if (out_attestations->length >= LANTERN_MAX_ATTESTATIONS) {
@@ -1725,14 +2024,6 @@ int lantern_state_process_attestations(
     return lantern_state_process_attestations_internal(state, store, attestations, signatures, true);
 }
 
-static int lantern_state_stage_attestations(
-    LanternState *state,
-    LanternStore *store,
-    const LanternAttestations *attestations,
-    const LanternSignatureList *signatures) {
-    return lantern_state_process_attestations_internal(state, store, attestations, signatures, false);
-}
-
 int lantern_state_process_block(
     LanternState *state,
     LanternStore *store,
@@ -1743,10 +2034,18 @@ int lantern_state_process_block(
         return -1;
     }
     double block_metrics_start = lantern_time_now_seconds();
+    if (signatures
+        && lantern_state_verify_block_signatures(
+            state,
+            block,
+            signatures,
+            proposer_attestation)
+            != 0) {
+        return -1;
+    }
     if (lantern_state_process_block_header(state, block) != 0) {
         return -1;
     }
-    (void)signatures;
     size_t validator_count = 0;
     if (state->config.num_validators > SIZE_MAX) {
         return -1;
@@ -1763,29 +2062,6 @@ int lantern_state_process_block(
         return -1;
     }
     lantern_attestations_reset(&expanded);
-
-    if (proposer_attestation && state->config.num_validators > 0) {
-        const LanternVote *vote = &proposer_attestation->data;
-        uint64_t validator_id = vote->validator_id;
-        if (validator_id < state->config.num_validators && vote->target.slot > vote->source.slot) {
-            LanternVote proposer_vote = *vote;
-            LanternAttestations proposer_batch = {
-                .data = &proposer_vote,
-                .length = 1,
-                .capacity = 1,
-            };
-            LanternSignature proposer_sig = proposer_attestation->signature;
-            LanternSignatureList proposer_sig_batch = {
-                .data = &proposer_sig,
-                .length = 1,
-                .capacity = 1,
-            };
-            const LanternSignatureList *sig_view = signature_is_zero(&proposer_sig) ? NULL : &proposer_sig_batch;
-            if (lantern_state_stage_attestations(state, store, &proposer_batch, sig_view) != 0) {
-                return -1;
-            }
-        }
-    }
 
     lean_metrics_record_state_transition_block(lantern_time_now_seconds() - block_metrics_start);
     return 0;
@@ -1810,6 +2086,18 @@ int lantern_state_transition(LanternState *state, LanternStore *store, const Lan
     if (block->slot <= state->slot) {
         STATE_FAIL("block slot %" PRIu64 " not ahead of state %" PRIu64, block->slot, state->slot);
     }
+    LanternSignedVote proposer_signed;
+    memset(&proposer_signed, 0, sizeof(proposer_signed));
+    proposer_signed.data = signed_block->message.proposer_attestation;
+    proposer_signed.signature = signed_block->signatures.proposer_signature;
+    if (lantern_state_verify_block_signatures(
+            state,
+            block,
+            &signed_block->signatures,
+            &proposer_signed)
+        != 0) {
+        STATE_FAIL("block signatures invalid");
+    }
     uint64_t slot_before = state->slot;
     double slots_metrics_start = lantern_time_now_seconds();
     if (lantern_state_process_slots(state, block->slot) != 0) {
@@ -1818,12 +2106,7 @@ int lantern_state_transition(LanternState *state, LanternStore *store, const Lan
     double slots_duration = lantern_time_now_seconds() - slots_metrics_start;
     uint64_t slots_processed = block->slot >= slot_before ? (block->slot - slot_before) : 0;
     lean_metrics_record_state_transition_slots(slots_processed, slots_duration);
-    LanternSignedVote proposer_signed;
-    memset(&proposer_signed, 0, sizeof(proposer_signed));
-    proposer_signed.data = signed_block->message.proposer_attestation;
-    proposer_signed.signature = signed_block->signatures.proposer_signature;
-
-    if (lantern_state_process_block(state, store, block, &signed_block->signatures, &proposer_signed) != 0) {
+    if (lantern_state_process_block(state, store, block, NULL, &proposer_signed) != 0) {
         STATE_FAIL("process block failed");
     }
     LanternRoot computed_state_root;
@@ -1909,16 +2192,20 @@ int lantern_state_transition(LanternState *state, LanternStore *store, const Lan
     }
 
     if (store->fork_choice) {
-        if (lantern_fork_choice_add_block(
+        if (lantern_fork_choice_add_block_with_state(
                 store->fork_choice,
                 block,
                 &proposer_signed,
                 &state->latest_justified,
                 &state->latest_finalized,
-                NULL)
+                NULL,
+                state)
             != 0) {
             STATE_FAIL("fork choice add block failed for slot %" PRIu64, block->slot);
         }
+    }
+    if (lantern_state_cache_proposer_attestation(state, store, &proposer_signed) != 0) {
+        STATE_FAIL("failed to cache proposer attestation for slot %" PRIu64, block->slot);
     }
 
     state->slot = block->slot;
@@ -2029,6 +2316,7 @@ int lantern_state_collect_attestations_for_block(
         if (collect_attestations_for_checkpoint(
                 &slot_snapshot,
                 &slot_store,
+                store,
                 &checkpoint,
                 out_attestations,
                 out_signatures)
@@ -2144,7 +2432,7 @@ int lantern_state_preview_post_state_root(
             &scratch,
             &scratch_store,
             &block->message.block,
-            &block->signatures,
+            NULL,
             &proposer_signed)
         != 0) {
         rc = -1;
