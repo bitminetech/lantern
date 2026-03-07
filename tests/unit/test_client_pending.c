@@ -400,6 +400,7 @@ static int test_import_block_parent_mismatch(void) {
     lantern_state_init(&client.state);
     client.has_state = true;
     client.state.slot = 0;
+    lantern_store_init(&client.store);
 
     memset(&client.state.latest_block_header, 0, sizeof(client.state.latest_block_header));
     client_test_fill_root(&client.state.latest_block_header.state_root, 0x10);
@@ -415,17 +416,22 @@ static int test_import_block_parent_mismatch(void) {
     }
 
     lantern_fork_choice_init(&client.fork_choice);
+    lantern_store_attach_fork_choice(&client.store, &client.fork_choice);
     LanternConfig fork_cfg = {
         .num_validators = 8,
         .genesis_time = 0,
     };
+    if (lantern_store_prepare_fork_choice_votes(&client.store, fork_cfg.num_validators) != 0) {
+        fprintf(stderr, "failed to prepare fork choice votes\n");
+        rc = 1;
+        goto cleanup;
+    }
     if (lantern_fork_choice_configure(&client.fork_choice, &fork_cfg) != 0) {
         fprintf(stderr, "failed to configure fork choice\n");
         rc = 1;
         goto cleanup;
     }
     client.has_fork_choice = true;
-    lantern_state_attach_fork_choice(&client.state, &client.fork_choice);
 
     LanternCheckpoint anchor_checkpoint = {
         .root = head_root,
@@ -571,6 +577,7 @@ cleanup:
         lantern_state_reset(&client.state);
         client.has_state = false;
     }
+    lantern_store_reset(&client.store);
     return rc;
 }
 

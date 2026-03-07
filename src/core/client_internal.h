@@ -187,23 +187,57 @@ void string_list_remove(struct lantern_string_list *list, const char *value);
 const char *connection_reason_text(int reason);
 
 /**
- * Cache an aggregated signature proof keyed by attestation data root.
+ * Cache an individual gossip signature keyed by validator and attestation root.
  *
  * @param client     Client instance (state_lock must be held)
- * @param data_root  Attestation data root for the proof
- * @param proof      Aggregated signature proof to cache
+ * @param key        Signature cache key
+ * @param signature  XMSS signature to cache
  * @return 0 on success, -1 on error
  *
  * @note Thread safety: Caller must hold state_lock.
  */
-int lantern_client_agg_proof_cache_add(
+int lantern_client_set_gossip_signature(
+    struct lantern_client *client,
+    const LanternSignatureKey *key,
+    const LanternAttestationData *data,
+    const LanternSignature *signature,
+    uint64_t target_slot);
+
+/**
+ * Cache a newly received aggregated signature proof keyed by attestation data root.
+ *
+ * @note Thread safety: Caller must hold state_lock.
+ */
+int lantern_client_add_new_aggregated_payload(
     struct lantern_client *client,
     const LanternRoot *data_root,
+    const LanternAttestationData *data,
     const LanternAggregatedSignatureProof *proof,
     uint64_t target_slot);
 
 /**
- * Prune cached aggregated proofs whose attestation target slot is finalized.
+ * Cache a processed aggregated signature proof in the known payload pool.
+ *
+ * @note Thread safety: Caller must hold state_lock.
+ */
+int lantern_client_add_known_aggregated_payload(
+    struct lantern_client *client,
+    const LanternRoot *data_root,
+    const LanternAttestationData *data,
+    const LanternAggregatedSignatureProof *proof,
+    uint64_t target_slot);
+
+/**
+ * Promote pending aggregated payloads into the known pool.
+ *
+ * @note Thread safety: Caller must hold state_lock.
+ */
+size_t lantern_client_promote_new_aggregated_payloads(
+    struct lantern_client *client);
+
+/**
+ * Prune cached signatures, attestation data, and aggregated payloads whose
+ * attestation target slot is finalized.
  *
  * @param client          Client instance (state_lock must be held)
  * @param finalized_slot  Latest finalized slot boundary
@@ -211,9 +245,20 @@ int lantern_client_agg_proof_cache_add(
  *
  * @note Thread safety: Caller must hold state_lock.
  */
-size_t lantern_client_agg_proof_cache_prune_finalized(
+size_t lantern_client_prune_finalized_attestation_material(
     struct lantern_client *client,
     uint64_t finalized_slot);
+
+/**
+ * Advance fork choice time and sync the aggregated payload pools for crossed intervals.
+ *
+ * Caller must hold state_lock or otherwise guarantee exclusive access to the
+ * client store and fork-choice state.
+ */
+int lantern_client_advance_fork_choice_time_locked(
+    struct lantern_client *client,
+    uint64_t now_milliseconds,
+    bool has_proposal);
 
 /**
  * Aggregate block/subnet attestations into grouped proofs with cache reuse.

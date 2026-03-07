@@ -927,7 +927,8 @@ int lantern_hash_tree_root_state(const LanternState *state, LanternRoot *out_roo
     LanternRoot justified_slots_root;
     LanternRoot justification_roots_root;
     LanternRoot justification_validators_root;
-    LanternRoot validators_root = state->validator_registry_root;
+    LanternRoot validators_root;
+    memset(&validators_root, 0, sizeof(validators_root));
 
     if (lantern_hash_tree_root_config(&state->config, &config_root) != 0) {
         return -1;
@@ -967,6 +968,41 @@ int lantern_hash_tree_root_state(const LanternState *state, LanternRoot *out_roo
             &justification_roots_root,
             &justification_validators_root) != 0) {
         return -1;
+    }
+    if (state->validator_count == 0) {
+        if (lantern_hash_tree_root_validators(NULL, 0, &validators_root) != 0) {
+            return -1;
+        }
+    } else {
+        if (!state->validators || state->validator_count > SIZE_MAX / SSZ_BYTES_PER_CHUNK) {
+            return -1;
+        }
+        uint8_t *validator_chunks = malloc(state->validator_count * SSZ_BYTES_PER_CHUNK);
+        if (!validator_chunks) {
+            return -1;
+        }
+        for (size_t i = 0; i < state->validator_count; ++i) {
+            LanternRoot validator_root;
+            if (hash_validator(state->validators[i].pubkey, state->validators[i].index, &validator_root) != 0) {
+                free(validator_chunks);
+                return -1;
+            }
+            memcpy(
+                validator_chunks + (i * SSZ_BYTES_PER_CHUNK),
+                validator_root.bytes,
+                SSZ_BYTES_PER_CHUNK);
+        }
+        uint8_t temp_root[SSZ_BYTES_PER_CHUNK];
+        ssz_error_t validator_err =
+            ssz_merkleize(validator_chunks, state->validator_count, LANTERN_VALIDATOR_REGISTRY_LIMIT, temp_root);
+        free(validator_chunks);
+        if (validator_err != SSZ_SUCCESS) {
+            return -1;
+        }
+        validator_err = ssz_mix_in_length(temp_root, (uint64_t)state->validator_count, validators_root.bytes);
+        if (validator_err != SSZ_SUCCESS) {
+            return -1;
+        }
     }
 
     uint8_t chunks[10][SSZ_BYTES_PER_CHUNK];

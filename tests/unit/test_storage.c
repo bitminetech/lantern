@@ -16,6 +16,7 @@
 #include "lantern/networking/messages.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/strings.h"
+#include "../support/state_store_adapter.h"
 
 static void expect_zero(int rc, const char *label) {
     if (rc != 0) {
@@ -191,8 +192,6 @@ int main(void) {
     LanternState state;
     lantern_state_init(&state);
     expect_zero(lantern_state_generate_genesis(&state, 123456u, 4u), "generate genesis");
-    state.historical_roots_offset = 11u;
-    state.justified_slots_offset = 22u;
 
     /* Populate validator registry with deterministic pubkeys so SSZ encoding works */
     const size_t genesis_validators = state.config.num_validators;
@@ -217,8 +216,6 @@ int main(void) {
         return EXIT_FAILURE;
     }
     assert(loaded_state.config.num_validators == state.config.num_validators);
-    assert(loaded_state.historical_roots_offset == state.historical_roots_offset);
-    assert(loaded_state.justified_slots_offset == state.justified_slots_offset);
     lantern_state_reset(&loaded_state);
 
     LanternVote vote;
@@ -228,11 +225,13 @@ int main(void) {
     signed_vote.data = vote;
     fill_signature(&signed_vote.signature, 0xAB);
     expect_zero(lantern_state_set_signed_validator_vote(&state, 1u, &signed_vote), "set validator vote");
-    expect_zero(lantern_storage_save_votes(base_dir, &state), "save votes");
+    expect_zero(
+        lantern_storage_save_votes(base_dir, &state, lantern_test_state_store_ensure(&state)),
+        "save votes");
     lantern_state_clear_validator_vote(&state, 1u);
     expect_true(!lantern_state_validator_has_vote(&state, 1u), "vote cleared");
 
-    int load_votes_rc = lantern_storage_load_votes(base_dir, &state);
+    int load_votes_rc = lantern_storage_load_votes(base_dir, &state, lantern_test_state_store_ensure(&state));
     if (load_votes_rc != 0) {
         fprintf(stderr, "expected persisted votes rc=0 got %d\n", load_votes_rc);
         return EXIT_FAILURE;

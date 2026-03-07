@@ -376,9 +376,10 @@ static bool verify_and_cache_aggregated_attestation_locked(
     if (!verified) {
         return false;
     }
-    if (lantern_client_agg_proof_cache_add(
+    if (lantern_client_add_new_aggregated_payload(
             client,
             &data_root,
+            &attestation->data,
             &attestation->proof,
             attestation->data.target.slot)
         != 0) {
@@ -674,7 +675,19 @@ int initialize_fork_choice(struct lantern_client *client)
      * We compute anchor_root from a header with the ACTUAL state_root,
      * matching Zeam's genStateBlockHeader() behavior.
      */
+    lantern_store_attach_fork_choice(&client->store, &client->fork_choice);
     lantern_fork_choice_reset(&client->fork_choice);
+    if (lantern_store_prepare_fork_choice_votes(
+            &client->store,
+            client->state.config.num_validators)
+        != 0)
+    {
+        lantern_log_error(
+            "forkchoice",
+            &meta,
+            "failed to prepare fork choice votes");
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
     if (lantern_fork_choice_configure(&client->fork_choice, &client->state.config) != 0)
     {
         lantern_log_error(
@@ -756,7 +769,6 @@ int initialize_fork_choice(struct lantern_client *client)
         }
     }
     lantern_block_body_reset(&anchor.body);
-    lantern_state_attach_fork_choice(&client->state, &client->fork_choice);
     client->has_fork_choice = true;
     return LANTERN_CLIENT_OK;
 }
@@ -889,7 +901,7 @@ int restore_persisted_blocks(struct lantern_client *client)
     }
 
     uint64_t now_milliseconds = validator_wall_time_now_millis();
-    if (lantern_fork_choice_advance_time(&client->fork_choice, now_milliseconds, false) != 0)
+    if (lantern_client_advance_fork_choice_time_locked(client, now_milliseconds, false) != 0)
     {
         lantern_log_warn(
             "forkchoice",

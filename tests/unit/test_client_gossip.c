@@ -9,16 +9,10 @@
 
 static void reset_agg_cache(struct lantern_client *client)
 {
-    if (!client || !client->agg_proof_cache.entries) {
+    if (!client) {
         return;
     }
-    for (size_t i = 0; i < client->agg_proof_cache.length; ++i) {
-        lantern_aggregated_signature_proof_reset(&client->agg_proof_cache.entries[i].proof);
-    }
-    free(client->agg_proof_cache.entries);
-    client->agg_proof_cache.entries = NULL;
-    client->agg_proof_cache.length = 0;
-    client->agg_proof_cache.capacity = 0;
+    lantern_store_reset(&client->store);
 }
 
 static int build_single_participant_aggregated_attestation(
@@ -182,8 +176,13 @@ static int test_gossip_aggregated_attestation_caches_valid_proof(void)
         fprintf(stderr, "valid aggregated attestation gossip should be accepted rc=%d\n", gossip_rc);
         goto cleanup_attestation;
     }
-    if (client.agg_proof_cache.length != 1 || !client.agg_proof_cache.entries) {
+    if (client.store.new_aggregated_payloads.length != 1
+        || !client.store.new_aggregated_payloads.entries) {
         fprintf(stderr, "valid aggregated attestation should be cached\n");
+        goto cleanup_attestation;
+    }
+    if (client.store.known_aggregated_payloads.length != 0) {
+        fprintf(stderr, "valid aggregated attestation should remain pending until migration\n");
         goto cleanup_attestation;
     }
 
@@ -193,14 +192,14 @@ static int test_gossip_aggregated_attestation_caches_valid_proof(void)
         goto cleanup_attestation;
     }
     if (memcmp(
-            client.agg_proof_cache.entries[0].data_root.bytes,
+            client.store.new_aggregated_payloads.entries[0].data_root.bytes,
             data_root.bytes,
             LANTERN_ROOT_SIZE)
         != 0) {
         fprintf(stderr, "cached aggregated proof root mismatch\n");
         goto cleanup_attestation;
     }
-    if (client.agg_proof_cache.entries[0].target_slot != attestation.data.target.slot) {
+    if (client.store.new_aggregated_payloads.entries[0].target_slot != attestation.data.target.slot) {
         fprintf(stderr, "cached aggregated proof target slot mismatch\n");
         goto cleanup_attestation;
     }
@@ -256,7 +255,8 @@ static int test_gossip_aggregated_attestation_rejects_invalid_proof(void)
         fprintf(stderr, "invalid aggregated attestation gossip should be ignored\n");
         goto cleanup_attestation;
     }
-    if (client.agg_proof_cache.length != 0) {
+    if (client.store.new_aggregated_payloads.length != 0
+        || client.store.known_aggregated_payloads.length != 0) {
         fprintf(stderr, "invalid aggregated attestation should not be cached\n");
         goto cleanup_attestation;
     }
@@ -308,7 +308,8 @@ static int test_gossip_aggregated_attestation_rejects_unknown_target(void)
         fprintf(stderr, "aggregated attestation with unknown target should be ignored\n");
         goto cleanup_attestation;
     }
-    if (client.agg_proof_cache.length != 0) {
+    if (client.store.new_aggregated_payloads.length != 0
+        || client.store.known_aggregated_payloads.length != 0) {
         fprintf(stderr, "unknown-target aggregated attestation should not be cached\n");
         goto cleanup_attestation;
     }

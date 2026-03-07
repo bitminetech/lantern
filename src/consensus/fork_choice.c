@@ -242,24 +242,7 @@ static int ensure_vote_tables_disjoint(LanternForkChoice *store) {
     if (!store || !store->known_votes || !store->new_votes) {
         return -1;
     }
-    if (store->known_votes != store->new_votes) {
-        return 0;
-    }
-    if (store->validator_count == 0) {
-        return -1;
-    }
-    if (store->validator_count > SIZE_MAX / sizeof(*store->new_votes)) {
-        return -1;
-    }
-
-    size_t bytes = store->validator_count * sizeof(*store->new_votes);
-    struct lantern_fork_choice_vote_entry *copied = malloc(bytes);
-    if (!copied) {
-        return -1;
-    }
-    memcpy(copied, store->new_votes, bytes);
-    store->new_votes = copied;
-    return 0;
+    return store->known_votes != store->new_votes ? 0 : -1;
 }
 
 struct vote_undo_entry {
@@ -419,24 +402,15 @@ void lantern_fork_choice_reset(LanternForkChoice *store) {
     if (!store) {
         return;
     }
+    struct lantern_fork_choice_vote_entry *known_votes = store->known_votes;
+    struct lantern_fork_choice_vote_entry *new_votes = store->new_votes;
+    size_t validator_count = store->validator_count;
     free(store->blocks);
     store->blocks = NULL;
     store->block_cap = 0;
     store->block_len = 0;
 
     map_reset(store);
-
-    if (store->known_votes == store->new_votes) {
-        free(store->known_votes);
-        store->known_votes = NULL;
-        store->new_votes = NULL;
-    } else {
-        free(store->known_votes);
-        store->known_votes = NULL;
-        free(store->new_votes);
-        store->new_votes = NULL;
-    }
-    store->validator_count = 0;
 
     store->initialized = false;
     store->has_anchor = false;
@@ -451,6 +425,9 @@ void lantern_fork_choice_reset(LanternForkChoice *store) {
     store->intervals_per_slot = LANTERN_FORK_CHOICE_DEFAULT_INTERVALS_PER_SLOT;
     store->milliseconds_per_interval =
         ((uint64_t)store->seconds_per_slot * LANTERN_FORK_CHOICE_MILLISECONDS_PER_SECOND) / store->intervals_per_slot;
+    store->known_votes = known_votes;
+    store->new_votes = new_votes;
+    store->validator_count = validator_count;
 }
 
 int lantern_fork_choice_configure(LanternForkChoice *store, const LanternConfig *config) {
@@ -464,14 +441,10 @@ int lantern_fork_choice_configure(LanternForkChoice *store, const LanternConfig 
 
     store->config = *config;
     store->validator_count = (size_t)config->num_validators;
-    store->known_votes = calloc(store->validator_count, sizeof(*store->known_votes));
-    if (!store->known_votes) {
-        lantern_fork_choice_reset(store);
+    if (!store->known_votes || !store->new_votes) {
         return -1;
     }
-    store->new_votes = calloc(store->validator_count, sizeof(*store->new_votes));
-    if (!store->new_votes) {
-        lantern_fork_choice_reset(store);
+    if (store->known_votes == store->new_votes) {
         return -1;
     }
     store->seconds_per_slot = LANTERN_FORK_CHOICE_DEFAULT_SECONDS_PER_SLOT;

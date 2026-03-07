@@ -7,6 +7,7 @@
 #include "lantern/support/strings.h"
 #include "fixture_runner.h"
 #include "tests/support/fixture_loader.h"
+#include "../support/state_store_adapter.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -1030,6 +1031,18 @@ static int run_fork_choice_fixture(const char *path) {
 
     LanternForkChoice store;
     lantern_fork_choice_init(&store);
+    lantern_state_attach_fork_choice(&state, &store);
+    if (lantern_store_prepare_fork_choice_votes(
+            lantern_test_state_store_ensure(&state),
+            validator_count)
+        != 0) {
+        reset_block(&anchor_block);
+        lantern_state_reset(&state);
+        lantern_fixture_document_reset(&doc);
+        stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
+        hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
+        return -1;
+    }
     LanternConfig config = {
         .num_validators = validator_count,
         .genesis_time = genesis_time,
@@ -1063,8 +1076,6 @@ static int run_fork_choice_fixture(const char *path) {
         hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
         return -1;
     }
-
-    lantern_state_attach_fork_choice(&state, &store);
 
     if (stored_state_save(&stored_states, &stored_states_count, &stored_states_cap, &anchor_root, &state) != 0) {
         reset_block(&anchor_block);

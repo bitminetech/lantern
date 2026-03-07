@@ -2075,8 +2075,5 @@ int lantern_ssz_decode_state(LanternState *state, const uint8_t *data, size_t da
     }
 
     state->config.num_validators = (uint64_t)state->validator_count;
-    if (state->latest_finalized.slot != UINT64_MAX) {
-        state->justified_slots_offset = state->latest_finalized.slot + 1u;
-    }
     return 0;
 }

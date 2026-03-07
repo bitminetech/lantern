@@ -34,6 +34,7 @@ add_library(lantern STATIC
     src/consensus/slot_clock.c
     src/consensus/signature.c
     src/consensus/state.c
+    src/consensus/store.c
     src/consensus/ssz.c
     src/core/client.c
     src/core/client_debug.c
@@ -246,10 +247,12 @@ if(LANTERN_BUILD_TESTS)
     add_test(NAME lantern_consensus_runtime COMMAND lantern_consensus_runtime_test)
 
     add_executable(lantern_state_test tests/unit/test_state.c)
+    target_sources(lantern_state_test PRIVATE tests/support/state_store_adapter.c)
     target_link_libraries(lantern_state_test PRIVATE lantern)
     add_test(NAME lantern_state COMMAND lantern_state_test)
 
     add_executable(lantern_off_head_replay_test tests/unit/test_off_head_replay.c)
+    target_sources(lantern_off_head_replay_test PRIVATE tests/support/state_store_adapter.c)
     target_link_libraries(lantern_off_head_replay_test PRIVATE lantern)
     add_test(NAME lantern_off_head_replay COMMAND lantern_off_head_replay_test)
     set_tests_properties(lantern_off_head_replay PROPERTIES TIMEOUT 120)
@@ -265,6 +268,7 @@ if(LANTERN_BUILD_TESTS)
 
     add_executable(lantern_networking_messages_test
         tests/unit/test_networking_messages.c
+        tests/support/state_store_adapter.c
         tests/support/fixture_loader.c
     )
     target_link_libraries(lantern_networking_messages_test PRIVATE lantern)
@@ -290,6 +294,7 @@ if(LANTERN_BUILD_TESTS)
     add_test(NAME lantern_fork_choice COMMAND lantern_fork_choice_test)
 
     add_executable(lantern_storage_test tests/unit/test_storage.c)
+    target_sources(lantern_storage_test PRIVATE tests/support/state_store_adapter.c)
     target_link_libraries(lantern_storage_test PRIVATE lantern)
     add_test(NAME lantern_storage COMMAND lantern_storage_test)
 
@@ -308,6 +313,7 @@ if(LANTERN_BUILD_TESTS)
     add_executable(lantern_consensus_vectors_test
         tests/integration/test_consensus_vectors.c
         tests/integration/consensus_fixture_runner.c
+        tests/support/state_store_adapter.c
         tests/support/fixture_loader.c
     )
     target_link_libraries(lantern_consensus_vectors_test PRIVATE lantern)
@@ -330,6 +336,7 @@ if(LANTERN_BUILD_TESTS)
 
     add_executable(lantern_verify_signatures_vectors_test
         tests/integration/test_verify_signatures_vectors.c
+        tests/support/state_store_adapter.c
         tests/support/fixture_loader.c
     )
     target_link_libraries(lantern_verify_signatures_vectors_test PRIVATE lantern)
@@ -350,6 +357,7 @@ if(LANTERN_BUILD_TESTS)
     add_executable(lantern_genesis_vectors_test
         tests/integration/test_genesis_vectors.c
         tests/integration/consensus_fixture_runner.c
+        tests/support/state_store_adapter.c
         tests/support/fixture_loader.c
     )
     target_link_libraries(lantern_genesis_vectors_test PRIVATE lantern)

@@ -11,6 +11,7 @@
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/quorum.h"
 #include "lantern/consensus/state.h"
+#include "../support/state_store_adapter.h"
 
 static void expect_zero(int rc, const char *label) {
     if (rc != 0) {
@@ -64,16 +65,23 @@ static bool bitlist_test_bit(const struct lantern_bitlist *bitlist, size_t index
     return (bitlist->bytes[byte_index] & (uint8_t)(1u << bit_index)) != 0;
 }
 
+static uint64_t justified_slots_anchor_for_tests(const LanternState *state) {
+    assert(state != NULL);
+    assert(state->latest_finalized.slot != UINT64_MAX);
+    return state->latest_finalized.slot + 1u;
+}
+
 static void mark_slot_justified_for_tests(LanternState *state, uint64_t slot) {
     if (!state) {
         return;
     }
-    /* Slots before the offset are already considered finalized/justified */
-    if (slot < state->justified_slots_offset) {
+    uint64_t anchor = justified_slots_anchor_for_tests(state);
+    /* Slots before the anchor are already considered finalized/justified. */
+    if (slot < anchor) {
         return;
     }
-    /* Calculate the relative index from the offset */
-    size_t index = (size_t)(slot - state->justified_slots_offset);
+    /* Calculate the relative index from the finalized-slot anchor. */
+    size_t index = (size_t)(slot - anchor);
     expect_zero(
         lantern_bitlist_resize(&state->justified_slots, index + 1),
         "resize justified slots for test");
@@ -160,6 +168,12 @@ static void setup_state_and_fork_choice(
     expect_zero(lantern_state_generate_genesis(state, genesis_time, validator_count), "generate genesis for setup");
 
     lantern_fork_choice_init(fork_choice);
+    lantern_state_attach_fork_choice(state, fork_choice);
+    expect_zero(
+        lantern_store_prepare_fork_choice_votes(
+            lantern_test_state_store_ensure(state),
+            validator_count),
+        "prepare fork choice votes for setup");
     expect_zero(lantern_fork_choice_configure(fork_choice, &state->config), "configure fork choice for setup");
 
     LanternRoot state_root;
@@ -1002,7 +1016,7 @@ static int test_pending_votes_survive_interleaved_justification_and_finalization
     const uint64_t target_justified_slot = 343u;
     const uint64_t target_pending_slot = 350u;
     const uint64_t block_slot = 354u;
-    const uint64_t offset = finalized_slot + 1u;
+    const uint64_t anchor = finalized_slot + 1u;
     const size_t validator_count_sz = (size_t)validator_count;
 
     populate_historical_hashes_for_tests(&state, target_pending_slot);
@@ -1012,9 +1026,8 @@ static int test_pending_votes_survive_interleaved_justification_and_finalization
     state.latest_justified.slot = justified_slot;
     state.latest_justified.root = get_historical_root_for_tests(&state, justified_slot);
 
-    state.justified_slots_offset = offset;
     expect_zero(
-        lantern_bitlist_resize(&state.justified_slots, (size_t)(target_pending_slot - offset + 1u)),
+        lantern_bitlist_resize(&state.justified_slots, (size_t)(target_pending_slot - anchor + 1u)),
         "resize justified slots for interleaved pending votes test");
     assert(state.justified_slots.bytes != NULL);
     memset(state.justified_slots.bytes, 0, state.justified_slots.capacity);
@@ -1155,7 +1168,7 @@ static int test_pending_votes_preserved_when_new_root_inserts_before_existing_ro
     const uint64_t justified_slot = 340u;
     const uint64_t target_justified_slot = 343u;
     const uint64_t target_pending_slot = 350u;
-    const uint64_t offset = finalized_slot + 1u;
+    const uint64_t anchor = finalized_slot + 1u;
     const size_t validator_count_sz = (size_t)validator_count;
 
     populate_historical_hashes_for_tests(&state, target_pending_slot);
@@ -1165,9 +1178,8 @@ static int test_pending_votes_preserved_when_new_root_inserts_before_existing_ro
     state.latest_justified.slot = justified_slot;
     state.latest_justified.root = get_historical_root_for_tests(&state, justified_slot);
 
-    state.justified_slots_offset = offset;
     expect_zero(
-        lantern_bitlist_resize(&state.justified_slots, (size_t)(target_pending_slot - offset + 1u)),
+        lantern_bitlist_resize(&state.justified_slots, (size_t)(target_pending_slot - anchor + 1u)),
         "resize justified slots for insertion-order pending votes test");
     assert(state.justified_slots.bytes != NULL);
     memset(state.justified_slots.bytes, 0, state.justified_slots.capacity);
@@ -2091,6 +2103,12 @@ static int test_select_block_parent_uses_fork_choice(void) {
 
     LanternForkChoice fork_choice;
     lantern_fork_choice_init(&fork_choice);
+    lantern_state_attach_fork_choice(&state, &fork_choice);
+    expect_zero(
+        lantern_store_prepare_fork_choice_votes(
+            lantern_test_state_store_ensure(&state),
+            state.config.num_validators),
+        "prepare fork choice votes");
     expect_zero(lantern_fork_choice_configure(&fork_choice, &state.config), "configure fork choice");
     LanternRoot genesis_state_root;
     expect_zero(lantern_hash_tree_root_state(&state, &genesis_state_root), "hash genesis state root");
@@ -2619,6 +2637,7 @@ static int test_history_limits_enforced(void) {
     expect_zero(
         lantern_root_list_resize(&state.historical_block_hashes, LANTERN_HISTORICAL_ROOTS_LIMIT),
         "prep historical roots");
+    fill_root(&state.historical_block_hashes.items[0], 0x5Au);
     expect_zero(
         lantern_bitlist_resize(&state.justified_slots, LANTERN_HISTORICAL_ROOTS_LIMIT),
         "prep justified slots");
@@ -2639,9 +2658,8 @@ static int test_history_limits_enforced(void) {
 
     expect_zero(lantern_state_process_block_header(&state, &block), "process history limit block");
     assert(state.historical_block_hashes.length == LANTERN_HISTORICAL_ROOTS_LIMIT);
-    assert(state.historical_roots_offset == 1u);
+    assert(state.historical_block_hashes.items[0].bytes[0] == 0x5Au);
     assert(state.justified_slots.bit_length == LANTERN_HISTORICAL_ROOTS_LIMIT);
-    assert(state.justified_slots_offset == 1u);
 
     lantern_block_body_reset(&block.body);
     lantern_state_reset(&state);
@@ -2653,25 +2671,26 @@ static int test_justified_slot_window_helpers(void) {
     lantern_state_init(&state);
     expect_zero(lantern_state_generate_genesis(&state, 111, 4), "genesis for slot window test");
 
+    state.latest_finalized.slot = 9u;
     expect_zero(lantern_bitlist_resize(&state.justified_slots, 4), "initialize bitlist window");
     state.justified_slots.bytes[0] = 0;
-    state.justified_slots.bytes[0] |= (uint8_t)(1u << 1u); /* slot offset + 1 */
-    state.justified_slots_offset = 10u;
+    state.justified_slots.bytes[0] |= (uint8_t)(1u << 1u); /* slot anchor + 1 */
 
-    assert(!lantern_state_slot_in_justified_window(&state, 9u));
+    assert(lantern_state_slot_in_justified_window(&state, 9u));
     assert(lantern_state_slot_in_justified_window(&state, 10u));
+    assert(!lantern_state_slot_in_justified_window(&state, 14u));
 
     bool bit = false;
     expect_zero(lantern_state_get_justified_slot_bit(&state, 11u, &bit), "read window bit");
     assert(bit);
 
-    expect_zero(lantern_state_mark_justified_slot(&state, 9u), "mark trimmed slot");
-    assert(state.justified_slots_offset == 10u);
+    expect_zero(lantern_state_mark_justified_slot(&state, 9u), "mark finalized slot");
+    assert(state.justified_slots.bit_length == 4u);
 
     expect_zero(lantern_state_mark_justified_slot(&state, 14u), "mark new slot past window");
-    assert(state.justified_slots_offset == 11u);
+    assert(state.justified_slots.bit_length == 5u);
     assert(lantern_state_slot_in_justified_window(&state, 14u));
-    assert(!lantern_state_slot_in_justified_window(&state, 10u));
+    assert(lantern_state_slot_in_justified_window(&state, 10u));
 
     bool latest_bit = false;
     expect_zero(lantern_state_get_justified_slot_bit(&state, 14u, &latest_bit), "read latest bit");

@@ -129,6 +129,7 @@ static void reset_vote_client_on_error(struct lantern_client *client) {
         lantern_fork_choice_reset(&client->fork_choice);
         client->has_fork_choice = false;
     }
+    lantern_store_reset(&client->store);
     if (client->has_state) {
         lantern_state_reset(&client->state);
         client->has_state = false;
@@ -169,8 +170,10 @@ static int client_test_setup_vote_validation_client_common(
     memset(client, 0, sizeof(*client));
     client->node_id = (char *)node_id;
     client->debug_disable_fork_choice_time = true;
+    lantern_store_init(&client->store);
     lantern_state_init(&client->state);
     lantern_fork_choice_init(&client->fork_choice);
+    lantern_store_attach_fork_choice(&client->store, &client->fork_choice);
 
     if (pthread_mutex_init(&client->state_lock, NULL) != 0) {
         fprintf(stderr, "failed to initialize state mutex for vote test\n");
@@ -193,6 +196,12 @@ static int client_test_setup_vote_validation_client_common(
         goto finish;
     }
     client->has_state = true;
+
+    if (lantern_store_prepare_validator_votes(&client->store, (uint64_t)validator_count) != 0
+        || lantern_store_prepare_fork_choice_votes(&client->store, (uint64_t)validator_count) != 0) {
+        fprintf(stderr, "failed to prepare store caches for vote test\n");
+        goto finish;
+    }
 
     if (lantern_fork_choice_configure(&client->fork_choice, &client->state.config) != 0) {
         fprintf(stderr, "failed to configure fork choice for vote test\n");
@@ -261,8 +270,6 @@ static int client_test_setup_vote_validation_client_common(
         fprintf(stderr, "failed to add child block for vote test\n");
         goto finish;
     }
-
-    lantern_state_attach_fork_choice(&client->state, &client->fork_choice);
     client->has_fork_choice = true;
 
     if (load_precomputed_keys(&pub, &secret) != 0) {

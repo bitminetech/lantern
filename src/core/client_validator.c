@@ -728,7 +728,8 @@ static lantern_client_error append_cached_exact_group_proof(
         return LANTERN_CLIENT_OK;
     }
 
-    const struct lantern_agg_proof_cache *cache = &client->agg_proof_cache;
+    const struct lantern_aggregated_payload_pool *cache =
+        &client->store.known_aggregated_payloads;
     if (!cache->entries || cache->length == 0)
     {
         return LANTERN_CLIENT_OK;
@@ -778,7 +779,8 @@ static lantern_client_error append_cached_proofs_for_group(
     {
         return LANTERN_CLIENT_OK;
     }
-    const struct lantern_agg_proof_cache *cache = &client->agg_proof_cache;
+    const struct lantern_aggregated_payload_pool *cache =
+        &client->store.known_aggregated_payloads;
     if (!cache->entries || cache->length == 0)
     {
         return LANTERN_CLIENT_OK;
@@ -1311,7 +1313,7 @@ static lantern_client_error validator_build_block_collect_attestations(
         goto cleanup;
     }
 
-    if (lantern_state_select_block_parent(&client->state, out_parent_root) != 0)
+    if (lantern_state_select_block_parent(&client->state, &client->store, out_parent_root) != 0)
     {
         result = LANTERN_CLIENT_ERR_RUNTIME;
         goto cleanup;
@@ -1322,6 +1324,7 @@ static lantern_client_error validator_build_block_collect_attestations(
     LanternCheckpoint source_cp;
     if (lantern_state_compute_vote_checkpoints(
             &client->state,
+            &client->store,
             &head_cp,
             &target_cp,
             &source_cp)
@@ -1345,6 +1348,7 @@ static lantern_client_error validator_build_block_collect_attestations(
 
     if (lantern_state_collect_attestations_for_block(
             &client->state,
+            &client->store,
             slot,
             local->global_index,
             out_parent_root,
@@ -1486,7 +1490,7 @@ static lantern_client_error validator_build_block_preview_state_root(
     }
 
     lantern_client_error result = LANTERN_CLIENT_OK;
-    if (lantern_state_preview_post_state_root(&client->state, block, out_state_root) != 0)
+    if (lantern_state_preview_post_state_root(&client->state, &client->store, block, out_state_root) != 0)
     {
         result = LANTERN_CLIENT_ERR_RUNTIME;
     }
@@ -1595,8 +1599,8 @@ int validator_store_vote(struct lantern_client *client, const LanternSignedVote 
     {
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
-    int rc = lantern_state_set_signed_validator_vote(
-        &client->state,
+    int rc = lantern_store_set_signed_validator_vote(
+        &client->store,
         (size_t)vote->data.validator_id,
         vote);
     lantern_client_unlock_state(client, state_locked);
@@ -1957,6 +1961,7 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
     }
     if (lantern_state_compute_vote_checkpoints(
             &client->state,
+            &client->store,
             &head_cp,
             &target_cp,
             &source_cp)
@@ -2054,24 +2059,26 @@ static lantern_client_error collect_subnet_votes_for_slot(
     if (!state_locked) {
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
-    if (!client->has_state || !client->state.validator_votes || client->state.validator_votes_len == 0) {
+    if (!client->has_state) {
         lantern_client_unlock_state(client, state_locked);
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
 
     lantern_client_error result = LANTERN_CLIENT_OK;
-    for (size_t i = 0; i < client->state.validator_votes_len; ++i) {
-        LanternSignedVote vote;
-        memset(&vote, 0, sizeof(vote));
-        if (lantern_state_get_signed_validator_vote(&client->state, i, &vote) != 0) {
+    const struct lantern_gossip_signature_map *map = &client->store.gossip_signatures;
+    for (size_t i = 0; i < map->length; ++i) {
+        const struct lantern_gossip_signature_entry *entry = &map->entries[i];
+        LanternAttestationData data;
+        memset(&data, 0, sizeof(data));
+        if (lantern_store_get_attestation_data(&client->store, &entry->key.data_root, &data) != 0) {
             continue;
         }
-        if (vote.data.slot != slot) {
+        if (data.slot != slot) {
             continue;
         }
         size_t vote_subnet = 0;
         if (lantern_validator_index_compute_subnet_id(
-                vote.data.validator_id,
+                entry->key.validator_index,
                 validator_attestation_committee_count(client),
                 &vote_subnet)
             != 0) {
@@ -2080,8 +2087,12 @@ static lantern_client_error collect_subnet_votes_for_slot(
         if (vote_subnet != subnet_id) {
             continue;
         }
-        if (lantern_attestations_append(out_attestations, &vote.data) != 0
-            || lantern_signature_list_append(out_signatures, &vote.signature) != 0) {
+        LanternVote vote;
+        memset(&vote, 0, sizeof(vote));
+        vote.validator_id = entry->key.validator_index;
+        vote.data = data;
+        if (lantern_attestations_append(out_attestations, &vote) != 0
+            || lantern_signature_list_append(out_signatures, &entry->signature) != 0) {
             result = LANTERN_CLIENT_ERR_ALLOC;
             break;
         }
@@ -2178,9 +2189,10 @@ static int validator_publish_aggregated_attestations(struct lantern_client *clie
         if (lantern_hash_tree_root_attestation_data(&signed_attestation.data, &data_root) == 0) {
             bool locked = lantern_client_lock_state(client);
             if (locked) {
-                (void)lantern_client_agg_proof_cache_add(
+                (void)lantern_client_add_new_aggregated_payload(
                     client,
                     &data_root,
+                    &signed_attestation.data,
                     &signed_attestation.proof,
                     signed_attestation.data.target.slot);
             }
@@ -2275,7 +2287,12 @@ void *validator_thread(void *arg)
         if (client->has_fork_choice)
         {
             bool has_proposal = duty->slot_proposed;
-            (void)lantern_fork_choice_advance_time(&client->fork_choice, now, has_proposal);
+            bool state_locked = lantern_client_lock_state(client);
+            if (state_locked)
+            {
+                (void)lantern_client_advance_fork_choice_time_locked(client, now, has_proposal);
+            }
+            lantern_client_unlock_state(client, state_locked);
         }
 
         switch (tp->phase)

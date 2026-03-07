@@ -188,8 +188,8 @@ static bool validate_vote_cache_state(
     }
 
     uint64_t validator_count = client->state.config.num_validators;
-    bool cache_available = (validator_count != 0) && client->state.validator_votes
-        && (client->state.validator_votes_len != 0);
+    bool cache_available = (validator_count != 0) && client->store.validator_votes
+        && (client->store.validator_votes_len != 0);
     if (!cache_available)
     {
         lantern_log_debug(
@@ -204,7 +204,7 @@ static bool validate_vote_cache_state(
     }
 
     bool validator_in_range = (vote->validator_id < validator_count)
-        && (vote->validator_id < (uint64_t)client->state.validator_votes_len);
+        && (vote->validator_id < (uint64_t)client->store.validator_votes_len);
     if (!validator_in_range)
     {
         lantern_log_debug(
@@ -247,8 +247,8 @@ static bool cache_state_vote_locked(
         return false;
     }
 
-    int result = lantern_state_set_signed_validator_vote(
-        &client->state,
+    int result = lantern_store_set_signed_validator_vote(
+        &client->store,
         (size_t)vote->data.validator_id,
         vote);
     if (result != 0)
@@ -318,7 +318,7 @@ static void apply_vote_to_fork_choice_locked(
         now_millis = validator_wall_time_now_millis();
     }
 
-    result = lantern_fork_choice_advance_time(&client->fork_choice, now_millis, false);
+    result = lantern_client_advance_fork_choice_time_locked(client, now_millis, false);
     if (result != 0)
     {
         lantern_log_debug(
@@ -350,7 +350,7 @@ static void persist_votes_if_configured_locked(
         return;
     }
 
-    if (lantern_storage_save_votes(client->data_dir, &client->state) != 0)
+    if (lantern_storage_save_votes(client->data_dir, &client->state, &client->store) != 0)
     {
         lantern_log_warn(
             "storage",
@@ -455,6 +455,30 @@ static bool process_vote_locked(
     if (!cache_state_vote_locked(client, vote, meta, rejection))
     {
         return false;
+    }
+
+    LanternRoot data_root;
+    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &data_root) == 0)
+    {
+        LanternSignatureKey key = {
+            .validator_index = vote->data.validator_id,
+            .data_root = data_root,
+        };
+        if (lantern_client_set_gossip_signature(
+                client,
+                &key,
+                &vote->data.data,
+                &vote->signature,
+                vote->data.target.slot)
+            != 0)
+        {
+            lantern_log_debug(
+                "state",
+                meta,
+                "failed to cache gossip signature validator=%" PRIu64 " slot=%" PRIu64,
+                vote->data.validator_id,
+                vote->data.slot);
+        }
     }
 
     apply_vote_to_fork_choice_locked(client, vote, meta);

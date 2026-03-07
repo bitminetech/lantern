@@ -13,16 +13,9 @@
 #include "lantern/consensus/ssz.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/strings.h"
+#include "../support/state_store_adapter.h"
 
 #define DEVNET_DATA_DIR "internal-docs/pending-issues/devnet-run-data/lantern_0"
-#define LANTERN_STORAGE_STATE_META_VERSION 1u
-
-struct state_meta_wire {
-    uint32_t version;
-    uint32_t reserved;
-    uint64_t historical_roots_offset;
-    uint64_t justified_slots_offset;
-};
 
 struct head_record_wire {
     uint64_t slot;
@@ -132,29 +125,6 @@ static int root_to_hex(const LanternRoot *root, char *out, size_t out_len, bool 
     return 0;
 }
 
-static int read_meta_file(const char *path, struct state_meta_wire *out_meta) {
-    if (!path || !out_meta) {
-        return -1;
-    }
-    uint8_t *data = NULL;
-    size_t len = 0;
-    int rc = read_file_bytes(path, &data, &len);
-    if (rc != 0) {
-        free(data);
-        return rc;
-    }
-    if (len != sizeof(*out_meta)) {
-        free(data);
-        return -1;
-    }
-    memcpy(out_meta, data, sizeof(*out_meta));
-    free(data);
-    if (out_meta->version != LANTERN_STORAGE_STATE_META_VERSION) {
-        return -1;
-    }
-    return 0;
-}
-
 static int load_block_by_root_filename(
     const char *data_dir,
     const LanternRoot *root,
@@ -195,7 +165,7 @@ static int load_block_by_root_filename(
 
 /*
  * This intentionally mirrors the buggy fast path in rebuild_state_for_root_locked:
- * decode SSZ snapshot bytes directly without state meta restoration or vote buffer prep.
+ * decode SSZ snapshot bytes directly without vote buffer prep.
  */
 static int load_snapshot_buggy(
     const char *data_dir,
@@ -223,7 +193,6 @@ static int load_snapshot_buggy(
 /*
  * Fixed reconstruction path for diagnostics:
  * - decode SSZ snapshot
- * - restore per-snapshot offsets from states/<root>.meta when present
  * - allocate validator_votes backing storage expected by attestation processing
  */
 static int load_snapshot_fixed(
@@ -231,29 +200,6 @@ static int load_snapshot_fixed(
     const LanternRoot *state_root,
     LanternState *out_state) {
     if (load_snapshot_buggy(data_dir, state_root, out_state) != 0) {
-        return -1;
-    }
-
-    char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
-    if (root_to_hex(state_root, root_hex, sizeof(root_hex), false) != 0) {
-        lantern_state_reset(out_state);
-        return -1;
-    }
-
-    char meta_path[PATH_MAX];
-    int path_written = snprintf(meta_path, sizeof(meta_path), "%s/states/%s.meta", data_dir, root_hex);
-    if (path_written < 0 || (size_t)path_written >= sizeof(meta_path)) {
-        lantern_state_reset(out_state);
-        return -1;
-    }
-
-    struct state_meta_wire meta = {0};
-    int meta_rc = read_meta_file(meta_path, &meta);
-    if (meta_rc == 0) {
-        out_state->historical_roots_offset = meta.historical_roots_offset;
-        out_state->justified_slots_offset = meta.justified_slots_offset;
-    } else if (meta_rc < 0) {
-        lantern_state_reset(out_state);
         return -1;
     }
 
@@ -273,17 +219,15 @@ static void print_state_summary(const char *prefix, const LanternState *state) {
     if (!prefix || !state) {
         return;
     }
+    const LanternStore *store = lantern_test_state_store_find(state);
     printf(
         "%s slot=%" PRIu64 " validators=%" PRIu64
-        " validator_votes_ptr=%p validator_votes_len=%zu"
-        " hist_offset=%" PRIu64 " just_offset=%" PRIu64 "\n",
+        " validator_votes_ptr=%p validator_votes_len=%zu\n",
         prefix,
         state->slot,
         state->config.num_validators,
-        (void *)state->validator_votes,
-        state->validator_votes_len,
-        state->historical_roots_offset,
-        state->justified_slots_offset);
+        store ? (void *)store->validator_votes : NULL,
+        store ? store->validator_votes_len : 0u);
 }
 
 static int diagnose_transition_failure(
@@ -346,16 +290,16 @@ static int diagnose_transition_failure(
     }
 
     int att_rc = lantern_state_process_attestations(&state, &expanded, NULL);
+    const LanternStore *store = lantern_test_state_store_find(&state);
     printf("diagnostic: lantern_state_process_attestations rc=%d\n", att_rc);
     printf(
         "diagnostic: validator_votes_ptr=%p validator_votes_len=%zu expected=%" PRIu64 "\n",
-        (void *)state.validator_votes,
-        state.validator_votes_len,
+        store ? (void *)store->validator_votes : NULL,
+        store ? store->validator_votes_len : 0u,
         state.config.num_validators);
 
     if (att_rc != 0
-        && (!state.validator_votes
-            || state.validator_votes_len != (size_t)state.config.num_validators)) {
+        && (!store || !store->validator_votes || store->validator_votes_len != (size_t)state.config.num_validators)) {
         *out_hit_expected_fail_condition = true;
         printf(
             "FAIL_POINT: state.c rejects attestation processing because "
@@ -489,26 +433,6 @@ int main(void) {
     }
     print_state_summary("persisted state", &persisted);
     lantern_state_reset(&persisted);
-
-    char state_meta_path[PATH_MAX];
-    int meta_written = snprintf(state_meta_path, sizeof(state_meta_path), "%s/state.meta", DEVNET_DATA_DIR);
-    if (meta_written < 0 || (size_t)meta_written >= sizeof(state_meta_path)) {
-        fprintf(stderr, "failed to build state.meta path\n");
-        return EXIT_FAILURE;
-    }
-
-    struct state_meta_wire state_meta = {0};
-    int state_meta_rc = read_meta_file(state_meta_path, &state_meta);
-    if (state_meta_rc == 0) {
-        printf(
-            "state.meta version=%u historical_roots_offset=%" PRIu64 " justified_slots_offset=%" PRIu64 "\n",
-            state_meta.version,
-            state_meta.historical_roots_offset,
-            state_meta.justified_slots_offset);
-    } else {
-        fprintf(stderr, "failed to read %s rc=%d\n", state_meta_path, state_meta_rc);
-        return EXIT_FAILURE;
-    }
 
     const struct expected_failure_block failing_blocks[] = {
         {
