@@ -15,6 +15,7 @@ extern "C" {
 struct lantern_fork_choice_vote_entry {
     bool has_checkpoint;
     LanternCheckpoint checkpoint;
+    uint64_t slot;
 };
 
 struct lantern_aggregated_payload_pool;

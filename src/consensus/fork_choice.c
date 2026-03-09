@@ -758,13 +758,13 @@ static int update_global_checkpoints(
     }
     if (post_justified
         && !root_is_zero(&post_justified->root)
-        && post_justified->slot >= store->latest_justified.slot
+        && post_justified->slot > store->latest_justified.slot
         && checkpoint_known_in_store(store, post_justified)) {
         store->latest_justified = *post_justified;
     }
     if (post_finalized
         && !root_is_zero(&post_finalized->root)
-        && post_finalized->slot >= store->latest_finalized.slot
+        && post_finalized->slot > store->latest_finalized.slot
         && checkpoint_known_in_store(store, post_finalized)) {
         store->latest_finalized = *post_finalized;
     }
@@ -972,10 +972,11 @@ int lantern_fork_choice_add_vote(
     size_t validator = (size_t)vote->data.validator_id;
     struct lantern_fork_choice_vote_entry *table = from_block ? store->known_votes : store->new_votes;
     struct lantern_fork_choice_vote_entry *entry = &table[validator];
-    if (!entry->has_checkpoint || vote->data.slot > entry->checkpoint.slot) {
+    if (!entry->has_checkpoint || vote->data.slot > entry->slot) {
         entry->checkpoint = *head;
+        entry->slot = vote->data.slot;
         entry->has_checkpoint = true;
-    } else if (vote->data.slot == entry->checkpoint.slot) {
+    } else if (vote->data.slot == entry->slot) {
         if (root_compare(&entry->checkpoint.root, &head->root) != 0) {
             return -1;
         }
@@ -983,7 +984,7 @@ int lantern_fork_choice_add_vote(
 
     if (from_block) {
         struct lantern_fork_choice_vote_entry *pending = &store->new_votes[validator];
-        if (pending->has_checkpoint && pending->checkpoint.slot <= entry->checkpoint.slot) {
+        if (pending->has_checkpoint && pending->slot <= entry->slot) {
             pending->has_checkpoint = false;
         }
     }
@@ -1282,7 +1283,7 @@ static int materialize_attached_payload_votes(LanternForkChoice *store) {
         if (!store->known_votes[i].has_checkpoint) {
             continue;
         }
-        latest_slots[i] = store->known_votes[i].checkpoint.slot;
+        latest_slots[i] = store->known_votes[i].slot;
     }
 
     safe_target_merge_payload_pool(
@@ -1382,13 +1383,6 @@ int lantern_fork_choice_recompute_head(LanternForkChoice *store) {
         }
     }
 
-    size_t head_index = 0;
-    if (map_lookup(store, &head, &head_index)) {
-        const struct lantern_fork_choice_block_entry *entry = &store->blocks[head_index];
-        if (entry->has_finalized) {
-            store->latest_finalized = entry->latest_finalized;
-        }
-    }
     return 0;
 }
 

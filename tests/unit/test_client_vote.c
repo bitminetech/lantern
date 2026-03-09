@@ -37,6 +37,7 @@ size_t lantern_client_prune_finalized_attestation_material(
 int lantern_client_chain_service_tick_to(
     struct lantern_client *client,
     uint64_t target_interval,
+    bool has_proposal,
     uint64_t *out_skipped_to_interval,
     uint64_t *out_ticked_intervals);
 int lantern_client_advance_fork_choice_time_locked(
@@ -1018,6 +1019,7 @@ static int test_chain_service_tick_to_skips_stale_intervals(void) {
     if (lantern_client_chain_service_tick_to(
             &client,
             target_interval,
+            false,
             &skipped_to_interval,
             &ticked_intervals)
         != 0) {

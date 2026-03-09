@@ -2359,6 +2359,7 @@ cleanup:
 int lantern_client_chain_service_tick_to(
     struct lantern_client *client,
     uint64_t target_interval,
+    bool has_proposal,
     uint64_t *out_skipped_to_interval,
     uint64_t *out_ticked_intervals)
 {
@@ -2408,7 +2409,7 @@ int lantern_client_chain_service_tick_to(
             continue;
         }
 
-        if (lantern_client_tick_fork_choice_interval_locked(client, false) != 0) {
+        if (lantern_client_tick_fork_choice_interval_locked(client, has_proposal) != 0) {
             lantern_client_unlock_state(client, state_locked);
             return -1;
         }
@@ -2497,7 +2498,9 @@ void *timing_thread(void *arg)
             continue;
         }
 
-        if (lantern_client_chain_service_tick_to(client, target_interval, NULL, NULL) != 0)
+        bool has_proposal = client->validator_duty.pending_local_proposal
+            && !client->validator_duty.slot_proposed;
+        if (lantern_client_chain_service_tick_to(client, target_interval, has_proposal, NULL, NULL) != 0)
         {
             validator_sleep_ms(TIMING_SERVICE_POLL_SLEEP_MS);
         }

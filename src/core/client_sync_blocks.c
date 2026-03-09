@@ -2634,8 +2634,6 @@ bool lantern_client_import_block(
         goto cleanup;
     }
 
-    cache_block_aggregated_proofs_locked(client, block);
-
     if (parent_off_head)
     {
         LanternRoot parent_root = block->message.block.parent_root;
@@ -2831,6 +2829,8 @@ bool lantern_client_import_block(
             meta);
         goto cleanup;
     }
+
+    cache_block_aggregated_proofs_locked(client, block);
 
     persist_finalized_state_if_advanced_locked(
         client,

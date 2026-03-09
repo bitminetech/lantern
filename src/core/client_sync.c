@@ -327,7 +327,8 @@ static bool verify_and_cache_aggregated_attestation_locked(
     size_t validator_count = lantern_state_validator_count(sig_state);
     size_t bit_length = attestation->proof.participants.bit_length;
     if (bit_length > validator_count) {
-        bit_length = validator_count;
+        lantern_state_reset(&target_state);
+        return false;
     }
     size_t participant_count = 0;
     for (size_t i = 0; i < bit_length; ++i) {

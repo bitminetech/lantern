@@ -278,6 +278,7 @@ int lantern_client_skip_fork_choice_intervals_locked(
 int lantern_client_chain_service_tick_to(
     struct lantern_client *client,
     uint64_t target_interval,
+    bool has_proposal,
     uint64_t *out_skipped_to_interval,
     uint64_t *out_ticked_intervals);
 
