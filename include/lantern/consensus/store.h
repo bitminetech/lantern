@@ -110,6 +110,9 @@ int lantern_store_get_gossip_signature(
     const LanternStore *store,
     const LanternSignatureKey *key,
     LanternSignature *out_signature);
+int lantern_store_remove_gossip_signature(
+    LanternStore *store,
+    const LanternSignatureKey *key);
 int lantern_store_add_new_aggregated_payload(
     LanternStore *store,
     const LanternRoot *data_root,

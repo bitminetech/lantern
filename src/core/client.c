@@ -236,7 +236,27 @@ int lantern_client_skip_fork_choice_intervals_locked(
     if (target_interval < client->fork_choice.time_intervals) {
         return -1;
     }
+    uint64_t previous_intervals = client->fork_choice.time_intervals;
     client->fork_choice.time_intervals = target_interval;
+    uint64_t intervals_per_slot = client->fork_choice.intervals_per_slot;
+    if (intervals_per_slot == 0u || target_interval == previous_intervals) {
+        return 0;
+    }
+    for (uint64_t step = previous_intervals + 1u;; ++step) {
+        uint64_t phase = step % intervals_per_slot;
+        if (phase == 3u) {
+            if (lantern_fork_choice_update_safe_target(&client->fork_choice) != 0) {
+                return -1;
+            }
+        } else if (phase == 4u) {
+            if (lantern_fork_choice_accept_new_votes(&client->fork_choice) != 0) {
+                return -1;
+            }
+        }
+        if (step == target_interval) {
+            break;
+        }
+    }
     return 0;
 }
 

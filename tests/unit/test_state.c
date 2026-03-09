@@ -2038,13 +2038,14 @@ static int test_process_block_defers_proposer_attestation(void) {
     /* Use roots from historical_block_hashes so attestations pass validation */
     LanternCheckpoint base = state.latest_justified;
     base.root = get_historical_root_for_tests(&state, base.slot);
-    LanternCheckpoint next = base;
-    next.slot = base.slot + 1u;
-    next.root = get_historical_root_for_tests(&state, next.slot);
+    LanternCheckpoint head_checkpoint = base;
+    head_checkpoint.slot = block->slot;
+    fill_root(&head_checkpoint.root, 0xB3);
 
     LanternSignedVote proposer_vote;
     memset(&proposer_vote, 0, sizeof(proposer_vote));
-    build_vote(&proposer_vote.data, NULL, block->proposer_index, block->slot, &base, &next, 0xB2);
+    build_vote(&proposer_vote.data, NULL, block->proposer_index, block->slot, &base, &base, 0);
+    proposer_vote.data.head = head_checkpoint;
     expect_zero(sign_vote_with_secret(&proposer_vote, proposer_secret), "sign proposer attestation");
     signed_block.message.proposer_attestation = proposer_vote.data;
     signed_block.signatures.proposer_signature = proposer_vote.signature;
@@ -2104,7 +2105,8 @@ static int test_process_block_defers_proposer_attestation(void) {
         lantern_store_get_attestation_data(store, &data_root, &cached_data),
         "retrieve cached proposer attestation data");
     assert(checkpoints_equal(&cached_data.source, &base));
-    assert(checkpoints_equal(&cached_data.target, &next));
+    assert(checkpoints_equal(&cached_data.target, &base));
+    assert(checkpoints_equal(&cached_data.head, &head_checkpoint));
 
     assert(fork_choice.new_votes != NULL);
     assert(fork_choice.known_votes != NULL);
@@ -2555,6 +2557,62 @@ static int test_compute_vote_checkpoints_basic(void) {
     }
     if (!checkpoints_equal(&source, &state.latest_justified)) {
         fprintf(stderr, "source checkpoint mismatch in basic test\n");
+        lantern_block_body_reset(&block1.body);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+
+    lantern_block_body_reset(&block1.body);
+    lantern_state_reset(&state);
+    lantern_fork_choice_reset(&fork_choice);
+    return 0;
+}
+
+static int test_compute_vote_checkpoints_can_match_source(void) {
+    LanternState state;
+    LanternForkChoice fork_choice;
+    LanternRoot genesis_root;
+    setup_state_and_fork_choice(&state, &fork_choice, 1550, 4, &genesis_root);
+
+    LanternBlock block1;
+    LanternRoot block1_root;
+    make_block(&state, 1, &genesis_root, &block1, &block1_root);
+    expect_zero(
+        lantern_fork_choice_add_block(&fork_choice, &block1, NULL, NULL, NULL, &block1_root),
+        "add block1 source-match test");
+    fork_choice.head = block1_root;
+    fork_choice.has_head = true;
+    fork_choice.safe_target = genesis_root;
+    fork_choice.has_safe_target = true;
+
+    LanternCheckpoint head;
+    LanternCheckpoint target;
+    LanternCheckpoint source;
+    int rc = lantern_state_compute_vote_checkpoints(&state, &head, &target, &source);
+    if (rc != 0) {
+        fprintf(stderr, "compute vote checkpoints source-match failed (rc=%d)\n", rc);
+        lantern_block_body_reset(&block1.body);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (head.slot != block1.slot || memcmp(head.root.bytes, block1_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "unexpected head checkpoint in source-match test\n");
+        lantern_block_body_reset(&block1.body);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (!checkpoints_equal(&target, &state.latest_justified)) {
+        fprintf(stderr, "target should match source/latest_justified when safe target lags at genesis\n");
+        lantern_block_body_reset(&block1.body);
+        lantern_state_reset(&state);
+        lantern_fork_choice_reset(&fork_choice);
+        return 1;
+    }
+    if (!checkpoints_equal(&source, &state.latest_justified)) {
+        fprintf(stderr, "source checkpoint mismatch in source-match test\n");
         lantern_block_body_reset(&block1.body);
         lantern_state_reset(&state);
         lantern_fork_choice_reset(&fork_choice);
@@ -3094,6 +3152,9 @@ int main(void) {
         return 1;
     }
     if (test_compute_vote_checkpoints_basic() != 0) {
+        return 1;
+    }
+    if (test_compute_vote_checkpoints_can_match_source() != 0) {
         return 1;
     }
     if (test_compute_vote_checkpoints_uses_store_source_when_store_ahead() != 0) {

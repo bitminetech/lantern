@@ -1874,17 +1874,21 @@ static int run_fork_choice_fixture(const char *path) {
                     return -1;
                 }
                 if (target_cp.slot != expected_slot) {
-                    /* NOTE: Lantern's attestation target selection uses candidate promotion
-                     * which differs from leanSpec's conservative walk-back approach.
-                     * This difference is intentional for Zeam interop. Log warning only. */
                     fprintf(
                         stderr,
-                        "note: attestation target differs from leanSpec in %s (step %d): expected %" PRIu64 " got %" PRIu64 "\n",
+                        "attestation target slot mismatch in %s (step %d): expected %" PRIu64 " got %" PRIu64 "\n",
                         path,
                         i,
                         expected_slot,
                         target_cp.slot);
-                    /* Continue instead of failing */
+                    reset_block(&signed_block.message);
+                    reset_block(&anchor_block);
+                    lantern_fork_choice_reset(&store);
+                    lantern_state_reset(&state);
+                    lantern_fixture_document_reset(&doc);
+                    stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
+                    hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
+                    return -1;
                 }
             }
 

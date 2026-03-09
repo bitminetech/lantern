@@ -2184,9 +2184,8 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
     return result;
 }
 
-static lantern_client_error collect_subnet_votes_for_slot(
+static lantern_client_error collect_subnet_votes(
     struct lantern_client *client,
-    uint64_t slot,
     size_t subnet_id,
     LanternAttestations *out_attestations,
     LanternSignatureList *out_signatures) {
@@ -2216,9 +2215,6 @@ static lantern_client_error collect_subnet_votes_for_slot(
         LanternAttestationData data;
         memset(&data, 0, sizeof(data));
         if (lantern_store_get_attestation_data(&client->store, &entry->key.data_root, &data) != 0) {
-            continue;
-        }
-        if (data.slot != slot) {
             continue;
         }
         size_t vote_subnet = 0;
@@ -2251,11 +2247,67 @@ static lantern_client_error collect_subnet_votes_for_slot(
     return result;
 }
 
+static lantern_client_error prune_successfully_aggregated_gossip_signatures(
+    struct lantern_client *client,
+    const LanternAggregatedAttestations *aggregated_attestations,
+    const LanternAttestationSignatures *aggregated_signatures,
+    size_t count)
+{
+    if (!client || !aggregated_attestations || !aggregated_signatures) {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    if (count == 0) {
+        return LANTERN_CLIENT_OK;
+    }
+    if (!aggregated_attestations->data || !aggregated_signatures->data) {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    bool state_locked = lantern_client_lock_state(client);
+    if (!state_locked) {
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+
+    lantern_client_error result = LANTERN_CLIENT_OK;
+    for (size_t i = 0; i < count; ++i) {
+        LanternRoot data_root;
+        if (lantern_hash_tree_root_attestation_data(&aggregated_attestations->data[i].data, &data_root) != 0) {
+            result = LANTERN_CLIENT_ERR_VALIDATOR;
+            break;
+        }
+
+        const struct lantern_bitlist *participants = &aggregated_signatures->data[i].participants;
+        if (participants->bit_length == 0 || !participants->bytes) {
+            result = LANTERN_CLIENT_ERR_RUNTIME;
+            break;
+        }
+
+        size_t limit = participants->bit_length;
+        if (limit > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+            limit = LANTERN_VALIDATOR_REGISTRY_LIMIT;
+        }
+        for (size_t validator = 0; validator < limit; ++validator) {
+            if (!lantern_bitlist_get(participants, validator)) {
+                continue;
+            }
+            LanternSignatureKey key = {
+                .validator_index = (LanternValidatorIndex)validator,
+                .data_root = data_root,
+            };
+            (void)lantern_store_remove_gossip_signature(&client->store, &key);
+        }
+    }
+
+    lantern_client_unlock_state(client, state_locked);
+    return result;
+}
+
 static int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot)
 {
     if (!client || !client->assigned_validators || !client->assigned_validators->enr.is_aggregator) {
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
+    (void)slot;
 
     LanternAttestations attestations;
     LanternSignatureList signatures;
@@ -2267,9 +2319,8 @@ static int validator_publish_aggregated_attestations(struct lantern_client *clie
     lantern_aggregated_attestations_init(&aggregated_attestations);
     lantern_attestation_signatures_init(&aggregated_signatures);
 
-    lantern_client_error result = collect_subnet_votes_for_slot(
+    lantern_client_error result = collect_subnet_votes(
         client,
-        slot,
         client->gossip.attestation_subnet_id,
         &attestations,
         &signatures);
@@ -2314,6 +2365,7 @@ static int validator_publish_aggregated_attestations(struct lantern_client *clie
     if (aggregated_signatures.length < count) {
         count = aggregated_signatures.length;
     }
+    size_t successful_aggregations = 0u;
     for (size_t i = 0; i < count; ++i) {
         LanternSignedAggregatedAttestation signed_attestation;
         lantern_signed_aggregated_attestation_init(&signed_attestation);
@@ -2344,7 +2396,18 @@ static int validator_publish_aggregated_attestations(struct lantern_client *clie
             }
             lantern_client_unlock_state(client, locked);
         }
+        successful_aggregations += 1u;
         lantern_signed_aggregated_attestation_reset(&signed_attestation);
+    }
+    if (successful_aggregations > 0u) {
+        lantern_client_error prune_rc = prune_successfully_aggregated_gossip_signatures(
+            client,
+            &aggregated_attestations,
+            &aggregated_signatures,
+            successful_aggregations);
+        if (prune_rc != LANTERN_CLIENT_OK && result == LANTERN_CLIENT_OK) {
+            result = prune_rc;
+        }
     }
 
 cleanup:

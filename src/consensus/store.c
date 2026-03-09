@@ -626,6 +626,24 @@ int lantern_store_get_gossip_signature(
     return gossip_signature_map_get(&store->gossip_signatures, key, out_signature);
 }
 
+int lantern_store_remove_gossip_signature(
+    LanternStore *store,
+    const LanternSignatureKey *key) {
+    if (!store || !key) {
+        return -1;
+    }
+
+    struct lantern_gossip_signature_map *map = &store->gossip_signatures;
+    for (size_t i = 0; i < map->length; ++i) {
+        if (!signature_key_equals(&map->entries[i].key, key)) {
+            continue;
+        }
+        gossip_signature_map_remove_index(map, i);
+        return 0;
+    }
+    return -1;
+}
+
 static int lantern_store_add_aggregated_payload(
     LanternStore *store,
     struct lantern_aggregated_payload_pool *pool,
