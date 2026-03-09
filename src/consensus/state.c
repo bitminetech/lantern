@@ -47,6 +47,10 @@ static uint64_t lantern_state_justified_slots_anchor(const LanternState *state) 
     return state->latest_finalized.slot + 1u;
 }
 
+static const LanternState *lantern_state_cached_fork_choice_state_for_root(
+    const LanternStore *store,
+    const LanternRoot *root);
+
 static bool lantern_checkpoint_equal(const LanternCheckpoint *a, const LanternCheckpoint *b);
 
 static int lantern_root_list_append(struct lantern_root_list *list, const LanternRoot *root);
@@ -55,6 +59,7 @@ static int lantern_bitlist_get_bit(const struct lantern_bitlist *list, size_t in
 static int lantern_bitlist_ensure_length(struct lantern_bitlist *list, size_t bit_length);
 static int lantern_bitlist_drop_front(struct lantern_bitlist *list, size_t bits);
 static void lantern_root_zero(LanternRoot *root);
+static bool lantern_root_is_zero(const LanternRoot *root);
 static int lantern_state_append_historical_root(LanternState *state, const LanternRoot *root);
 static int lantern_state_set_justified_slot_bit(LanternState *state, uint64_t slot, bool value);
 bool lantern_state_slot_in_justified_window(const LanternState *state, uint64_t slot);
@@ -87,6 +92,15 @@ static int lantern_state_process_attestations_internal(
     const LanternAttestations *attestations,
     const LanternSignatureList *signatures,
     bool apply_consensus_effects);
+
+static const LanternState *lantern_state_cached_fork_choice_state_for_root(
+    const LanternStore *store,
+    const LanternRoot *root) {
+    if (!store || !store->fork_choice || !root || lantern_root_is_zero(root)) {
+        return NULL;
+    }
+    return lantern_fork_choice_block_state(store->fork_choice, root);
+}
 
 static bool signature_is_zero(const LanternSignature *signature) {
     if (!signature) {
@@ -2303,6 +2317,17 @@ int lantern_state_select_block_parent(
         return -1;
     }
 
+    if (store->fork_choice) {
+        LanternRoot head_root;
+        if (lantern_fork_choice_current_head(store->fork_choice, &head_root) != 0) {
+            return -1;
+        }
+        if (lantern_state_cached_fork_choice_state_for_root(store, &head_root)) {
+            *out_parent_root = head_root;
+            return 0;
+        }
+    }
+
     if (lantern_state_process_slot(state) != 0) {
         return -1;
     }
@@ -2321,9 +2346,10 @@ int lantern_state_select_block_parent(
             return -1;
         }
         *out_parent_root = head_root;
-    } else {
-        *out_parent_root = header_root;
+        return 0;
     }
+
+    *out_parent_root = header_root;
     return 0;
 }
 
@@ -2342,7 +2368,11 @@ int lantern_state_collect_attestations_for_block(
     if (!store->validator_votes || store->validator_votes_len == 0) {
         return -1;
     }
-    if (block_slot <= state->slot) {
+    const LanternState *base_state = lantern_state_cached_fork_choice_state_for_root(store, parent_root);
+    if (!base_state) {
+        base_state = state;
+    }
+    if (block_slot <= base_state->slot) {
         return -1;
     }
     if (lantern_attestations_resize(out_attestations, 0) != 0) {
@@ -2367,7 +2397,7 @@ int lantern_state_collect_attestations_for_block(
     LanternAggregatedAttestations aggregated_view;
     lantern_aggregated_attestations_init(&aggregated_view);
 
-    if (lantern_state_clone(state, &slot_snapshot) != 0) {
+    if (lantern_state_clone(base_state, &slot_snapshot) != 0) {
         rc = -1;
         goto cleanup;
     }
@@ -2483,14 +2513,20 @@ int lantern_state_preview_post_state_root(
     if (!state || !store || !block || !out_state_root) {
         return -1;
     }
-    if (block->message.block.slot <= state->slot) {
+    const LanternState *base_state = lantern_state_cached_fork_choice_state_for_root(
+        store,
+        &block->message.block.parent_root);
+    if (!base_state) {
+        base_state = state;
+    }
+    if (block->message.block.slot <= base_state->slot) {
         return -1;
     }
     LanternState scratch;
     lantern_state_init(&scratch);
     LanternStore scratch_store;
     lantern_store_init(&scratch_store);
-    if (lantern_state_clone(state, &scratch) != 0) {
+    if (lantern_state_clone(base_state, &scratch) != 0) {
         return -1;
     }
     if (lantern_store_clone_validator_votes(store, &scratch_store) != 0) {
@@ -2541,23 +2577,27 @@ int lantern_state_compute_vote_checkpoints(
 
     const LanternForkChoice *fork_choice = store->fork_choice;
     bool trace_finalization = finalization_trace_enabled();
-    struct lantern_log_metadata trace_meta = {.has_slot = true, .slot = state->slot};
-    char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char parent_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char safe_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     LanternRoot head_root;
     if (lantern_fork_choice_current_head(fork_choice, &head_root) != 0) {
         return -1;
     }
+    const LanternState *base_state = lantern_state_cached_fork_choice_state_for_root(store, &head_root);
+    if (!base_state) {
+        base_state = state;
+    }
+    struct lantern_log_metadata trace_meta = {.has_slot = true, .slot = base_state->slot};
+    char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char parent_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char safe_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     uint64_t head_slot = 0;
     if (lantern_fork_choice_block_info(fork_choice, &head_root, &head_slot, NULL, NULL) != 0) {
         return -1;
     }
     const LanternCheckpoint *store_justified = lantern_fork_choice_latest_justified(fork_choice);
     const LanternCheckpoint *store_finalized = lantern_fork_choice_latest_finalized(fork_choice);
-    LanternCheckpoint source_checkpoint = state->latest_justified;
-    LanternCheckpoint finalized_checkpoint = state->latest_finalized;
+    LanternCheckpoint source_checkpoint = base_state->latest_justified;
+    LanternCheckpoint finalized_checkpoint = base_state->latest_finalized;
     if (store_justified && !lantern_root_is_zero(&store_justified->root)) {
         source_checkpoint = *store_justified;
     }

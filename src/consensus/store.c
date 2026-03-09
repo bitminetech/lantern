@@ -600,10 +600,7 @@ int lantern_store_set_gossip_signature(
     const LanternAttestationData *data,
     const LanternSignature *signature,
     uint64_t target_slot) {
-    if (!store || !key || !signature) {
-        return -1;
-    }
-    if (gossip_signature_map_set(&store->gossip_signatures, key, signature, target_slot) != 0) {
+    if (!store || !key) {
         return -1;
     }
     if (data) {
@@ -612,6 +609,12 @@ int lantern_store_set_gossip_signature(
             &key->data_root,
             data,
             target_slot);
+    }
+    if (!signature || signature_is_zero(signature)) {
+        return 0;
+    }
+    if (gossip_signature_map_set(&store->gossip_signatures, key, signature, target_slot) != 0) {
+        return -1;
     }
     return 0;
 }

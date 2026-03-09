@@ -34,6 +34,8 @@ enum
     VOTE_ROOT_HEX_BUFFER_LEN = (LANTERN_ROOT_SIZE * 2u) + 3u,
 };
 
+static const size_t DEFAULT_GOSSIP_ATTESTATION_COMMITTEE_COUNT = 1u;
+
 
 /* ============================================================================
  * External Functions (from client_sync.c)
@@ -220,6 +222,39 @@ static bool validate_vote_cache_state(
     return true;
 }
 
+static size_t gossip_attestation_committee_count(const struct lantern_client *client)
+{
+    if (client && client->debug_attestation_committee_count > 0) {
+        return client->debug_attestation_committee_count;
+    }
+    return DEFAULT_GOSSIP_ATTESTATION_COMMITTEE_COUNT;
+}
+
+static bool should_cache_gossip_signature_locked(
+    const struct lantern_client *client,
+    const LanternVote *vote)
+{
+    if (!client || !vote || !client->assigned_validators || !client->assigned_validators->enr.is_aggregator) {
+        return false;
+    }
+
+    size_t committee_count = gossip_attestation_committee_count(client);
+    if (committee_count == 0) {
+        return false;
+    }
+
+    size_t vote_subnet = 0;
+    if (lantern_validator_index_compute_subnet_id(
+            vote->validator_id,
+            committee_count,
+            &vote_subnet)
+        != 0) {
+        return false;
+    }
+
+    return vote_subnet == client->gossip.attestation_subnet_id;
+}
+
 
 /**
  * @brief Cache a signed validator vote in state.
@@ -403,6 +438,8 @@ static bool process_vote_locked(
     LanternRoot data_root;
     if (lantern_hash_tree_root_attestation_data(&vote->data.data, &data_root) == 0)
     {
+        const LanternSignature *signature_to_cache =
+            should_cache_gossip_signature_locked(client, &vote->data) ? &vote->signature : NULL;
         LanternSignatureKey key = {
             .validator_index = vote->data.validator_id,
             .data_root = data_root,
@@ -411,7 +448,7 @@ static bool process_vote_locked(
                 client,
                 &key,
                 &vote->data.data,
-                &vote->signature,
+                signature_to_cache,
                 vote->data.target.slot)
             != 0)
         {

@@ -2513,6 +2513,128 @@ static int test_select_block_parent_uses_fork_choice(void) {
     return 0;
 }
 
+static int test_validator_helpers_use_cached_fork_choice_head_state(void) {
+    LanternState state;
+    LanternState block_one_state;
+    LanternState expected_state;
+    LanternForkChoice fork_choice;
+    LanternRoot genesis_root;
+    LanternRoot parent_root;
+    LanternRoot preview_state_root;
+    LanternRoot expected_state_root;
+    LanternAttestations collected;
+    LanternSignatureList collected_signatures;
+    LanternSignedBlock signed_block;
+    LanternBlock block_one;
+    LanternRoot block_one_root;
+    LanternRoot block_one_state_root;
+    uint64_t proposer_index = 0;
+    int result = 1;
+
+    lantern_attestations_init(&collected);
+    lantern_signature_list_init(&collected_signatures);
+    lantern_signed_block_with_attestation_init(&signed_block);
+    lantern_state_init(&block_one_state);
+    lantern_state_init(&expected_state);
+
+    setup_state_and_fork_choice(&state, &fork_choice, 1525, 4, &genesis_root);
+    expect_zero(
+        lantern_state_prepare_validator_votes(&state, state.config.num_validators),
+        "prepare validator votes for cached head helper test");
+
+    make_block(&state, 1, &genesis_root, &block_one, &block_one_root);
+    expect_zero(lantern_state_clone(&state, &block_one_state), "clone block one state");
+    expect_zero(
+        lantern_state_prepare_validator_votes(&block_one_state, block_one_state.config.num_validators),
+        "prepare block one validator votes");
+    expect_zero(lantern_state_process_slots(&block_one_state, block_one.slot), "advance block one state");
+    expect_zero(
+        lantern_state_process_block(&block_one_state, &block_one, NULL, NULL),
+        "process block one state");
+    expect_zero(lantern_hash_tree_root_state(&block_one_state, &block_one_state_root), "hash block one state");
+    block_one.state_root = block_one_state_root;
+    expect_zero(lantern_hash_tree_root_block(&block_one, &block_one_root), "rehash block one with state root");
+    expect_zero(
+        lantern_fork_choice_add_block_with_state(
+            &fork_choice,
+            &block_one,
+            NULL,
+            &block_one_state.latest_justified,
+            &block_one_state.latest_finalized,
+            &block_one_root,
+            &block_one_state),
+        "add block one with cached state");
+
+    if (lantern_state_select_block_parent(&state, &parent_root) != 0) {
+        fprintf(stderr, "failed to select cached fork-choice parent root\n");
+        goto cleanup;
+    }
+    if (memcmp(parent_root.bytes, block_one_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "selected parent root did not follow cached fork-choice head\n");
+        goto cleanup;
+    }
+
+    expect_zero(
+        lantern_proposer_for_slot(2u, state.config.num_validators, &proposer_index),
+        "compute proposer for preview block");
+    if (lantern_state_collect_attestations_for_block(
+            &state,
+            2u,
+            proposer_index,
+            &parent_root,
+            NULL,
+            &collected,
+            &collected_signatures)
+        != 0) {
+        fprintf(stderr, "failed to collect attestations from cached fork-choice head state\n");
+        goto cleanup;
+    }
+    if (collected.length != 0u || collected_signatures.length != 0u) {
+        fprintf(stderr, "expected no collected attestations for empty cached-head test\n");
+        goto cleanup;
+    }
+
+    signed_block.message.block.slot = 2u;
+    signed_block.message.block.proposer_index = proposer_index;
+    signed_block.message.block.parent_root = parent_root;
+    if (lantern_state_preview_post_state_root(
+            &state,
+            &signed_block,
+            &preview_state_root)
+        != 0) {
+        fprintf(stderr, "failed to preview post-state root from cached fork-choice head state\n");
+        goto cleanup;
+    }
+
+    expect_zero(lantern_state_clone(&block_one_state, &expected_state), "clone expected state");
+    expect_zero(
+        lantern_state_prepare_validator_votes(&expected_state, expected_state.config.num_validators),
+        "prepare expected-state validator votes");
+    expect_zero(lantern_state_process_slots(&expected_state, signed_block.message.block.slot), "advance expected state");
+    expect_zero(
+        lantern_state_process_block(&expected_state, &signed_block.message.block, NULL, NULL),
+        "process preview block on cached head state");
+    expect_zero(lantern_hash_tree_root_state(&expected_state, &expected_state_root), "hash expected preview state");
+
+    if (memcmp(preview_state_root.bytes, expected_state_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "preview post-state root did not use cached fork-choice head state\n");
+        goto cleanup;
+    }
+
+    result = 0;
+
+cleanup:
+    lantern_state_reset(&expected_state);
+    lantern_state_reset(&block_one_state);
+    lantern_signed_block_with_attestation_reset(&signed_block);
+    lantern_signature_list_reset(&collected_signatures);
+    lantern_attestations_reset(&collected);
+    lantern_block_body_reset(&block_one.body);
+    lantern_state_reset(&state);
+    lantern_fork_choice_reset(&fork_choice);
+    return result;
+}
+
 static int test_compute_vote_checkpoints_basic(void) {
     LanternState state;
     LanternForkChoice fork_choice;
@@ -3149,6 +3271,9 @@ int main(void) {
         return 1;
     }
     if (test_select_block_parent_uses_fork_choice() != 0) {
+        return 1;
+    }
+    if (test_validator_helpers_use_cached_fork_choice_head_state() != 0) {
         return 1;
     }
     if (test_compute_vote_checkpoints_basic() != 0) {

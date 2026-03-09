@@ -288,14 +288,20 @@ static int test_record_vote_accepts_known_roots(void) {
         .validator_index = vote.data.validator_id,
         .data_root = data_root,
     };
+    LanternAttestationData cached_data;
     LanternSignature cached_signature;
+    memset(&cached_data, 0, sizeof(cached_data));
     memset(&cached_signature, 0, sizeof(cached_signature));
-    if (lantern_store_get_gossip_signature(&client.store, &key, &cached_signature) != 0) {
-        fprintf(stderr, "gossip signature cache missing accepted vote\n");
+    if (lantern_store_get_attestation_data(&client.store, &data_root, &cached_data) != 0) {
+        fprintf(stderr, "attestation data cache missing accepted vote\n");
         goto cleanup;
     }
-    if (memcmp(&cached_signature, &vote.signature, sizeof(vote.signature)) != 0) {
-        fprintf(stderr, "cached gossip signature mismatch\n");
+    if (memcmp(&cached_data, &vote.data.data, sizeof(vote.data.data)) != 0) {
+        fprintf(stderr, "cached attestation data mismatch\n");
+        goto cleanup;
+    }
+    if (lantern_store_get_gossip_signature(&client.store, &key, &cached_signature) == 0) {
+        fprintf(stderr, "non-aggregator vote should not populate gossip signature cache\n");
         goto cleanup;
     }
 
@@ -2070,8 +2076,8 @@ static int test_publish_aggregated_attestations_collects_any_slot_and_prunes_gos
         fprintf(stderr, "failed to record votes for subnet filter test\n");
         goto cleanup;
     }
-    if (client.store.gossip_signatures.length != 3u) {
-        fprintf(stderr, "expected three gossip signatures before aggregation\n");
+    if (client.store.gossip_signatures.length != 2u) {
+        fprintf(stderr, "expected only matching-subnet gossip signatures before aggregation\n");
         goto cleanup;
     }
     if (lantern_hash_tree_root_attestation_data(&vote0.data.data, &data_root) != 0) {
@@ -2104,8 +2110,8 @@ static int test_publish_aggregated_attestations_collects_any_slot_and_prunes_gos
         fprintf(stderr, "published aggregated proof participants did not enforce subnet filtering\n");
         goto cleanup;
     }
-    if (client.store.gossip_signatures.length != 1u) {
-        fprintf(stderr, "expected aggregated gossip signatures to be pruned after publish\n");
+    if (client.store.gossip_signatures.length != 0u) {
+        fprintf(stderr, "expected aggregated gossip signatures to be fully pruned after publish\n");
         goto cleanup;
     }
     if (lantern_store_get_gossip_signature(&client.store, &vote0_key, &cached_signature) == 0
@@ -2113,12 +2119,19 @@ static int test_publish_aggregated_attestations_collects_any_slot_and_prunes_gos
         fprintf(stderr, "aggregated subnet votes should have been removed from gossip cache\n");
         goto cleanup;
     }
-    if (lantern_store_get_gossip_signature(&client.store, &vote1_key, &cached_signature) != 0) {
-        fprintf(stderr, "cross-subnet gossip vote should remain cached after publish\n");
+    if (lantern_store_get_gossip_signature(&client.store, &vote1_key, &cached_signature) == 0) {
+        fprintf(stderr, "cross-subnet gossip vote should never enter the gossip signature cache\n");
         goto cleanup;
     }
-    if (memcmp(&cached_signature, &vote1.signature, sizeof(cached_signature)) != 0) {
-        fprintf(stderr, "remaining cross-subnet gossip vote signature mismatch after prune\n");
+
+    LanternAttestationData cached_vote1_data;
+    memset(&cached_vote1_data, 0, sizeof(cached_vote1_data));
+    if (lantern_store_get_attestation_data(&client.store, &data_root, &cached_vote1_data) != 0) {
+        fprintf(stderr, "cross-subnet gossip vote should still retain attestation data\n");
+        goto cleanup;
+    }
+    if (memcmp(&cached_vote1_data, &vote1.data.data, sizeof(cached_vote1_data)) != 0) {
+        fprintf(stderr, "cross-subnet attestation data mismatch after publish\n");
         goto cleanup;
     }
 

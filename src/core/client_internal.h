@@ -191,7 +191,7 @@ const char *connection_reason_text(int reason);
  *
  * @param client     Client instance (state_lock must be held)
  * @param key        Signature cache key
- * @param signature  XMSS signature to cache
+ * @param signature  XMSS signature to cache, or NULL to record attestation data only
  * @return 0 on success, -1 on error
  *
  * @note Thread safety: Caller must hold state_lock.
