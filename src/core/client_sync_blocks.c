@@ -371,7 +371,7 @@ static bool signed_block_signatures_are_valid(
     return proposer_ok;
 }
 
-static void cache_block_aggregated_proofs_locked(
+void lantern_client_cache_block_aggregated_proofs_locked(
     struct lantern_client *client,
     const LanternSignedBlock *block)
 {
@@ -395,13 +395,49 @@ static void cache_block_aggregated_proofs_locked(
         if (lantern_hash_tree_root_attestation_data(&attestations->data[i].data, &data_root) != 0) {
             continue;
         }
-        (void)lantern_client_add_new_aggregated_payload(
+        (void)lantern_client_add_known_aggregated_payload(
             client,
             &data_root,
             &attestations->data[i].data,
             &proofs->data[i],
             attestations->data[i].data.target.slot);
     }
+}
+
+void lantern_client_cache_proposer_attestation_locked(
+    struct lantern_client *client,
+    const LanternSignedVote *proposer_attestation)
+{
+    if (!client || !proposer_attestation) {
+        return;
+    }
+
+    const LanternVote *vote = &proposer_attestation->data;
+    if (client->has_state
+        && (client->state.config.num_validators == 0
+            || vote->validator_id >= client->state.config.num_validators)) {
+        return;
+    }
+
+    LanternRoot data_root;
+    if (lantern_hash_tree_root_attestation_data(&vote->data, &data_root) != 0) {
+        return;
+    }
+
+    const LanternSignature *signature_to_cache =
+        lantern_client_should_cache_attestation_signature_locked(client, vote)
+            ? &proposer_attestation->signature
+            : NULL;
+    LanternSignatureKey key = {
+        .validator_index = vote->validator_id,
+        .data_root = data_root,
+    };
+    (void)lantern_client_set_gossip_signature(
+        client,
+        &key,
+        &vote->data,
+        signature_to_cache,
+        vote->target.slot);
 }
 
 static void persist_block_after_import(
@@ -1947,6 +1983,9 @@ static bool add_competing_fork_block_locked(
         return false;
     }
 
+    lantern_client_cache_block_aggregated_proofs_locked(client, block);
+    lantern_client_cache_proposer_attestation_locked(client, &proposer_signed);
+
     char block_hex[ROOT_HEX_BUFFER_LEN];
     format_root_hex(block_root, block_hex, sizeof(block_hex));
     lantern_log_info(
@@ -2830,7 +2869,7 @@ bool lantern_client_import_block(
         goto cleanup;
     }
 
-    cache_block_aggregated_proofs_locked(client, block);
+    lantern_client_cache_block_aggregated_proofs_locked(client, block);
 
     persist_finalized_state_if_advanced_locked(
         client,

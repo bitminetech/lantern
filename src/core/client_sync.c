@@ -946,6 +946,13 @@ int restore_persisted_blocks(struct lantern_client *client)
                 "failed to restore block at slot %" PRIu64,
                 entry->block.message.block.slot);
         }
+        else
+        {
+            lantern_client_cache_block_aggregated_proofs_locked(client, &entry->block);
+            if (proposer_ptr) {
+                lantern_client_cache_proposer_attestation_locked(client, proposer_ptr);
+            }
+        }
         if (have_cached_post_state)
         {
             lantern_state_reset(&cached_post_state);

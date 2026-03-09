@@ -2684,13 +2684,6 @@ void *validator_thread(void *arg)
                 break;
 
             case LANTERN_DUTY_PHASE_SAFE_TARGET:
-                if (!duty->slot_aggregated && duty->slot_attested)
-                {
-                    if (validator_publish_aggregated_attestations(client, tp->slot) == LANTERN_CLIENT_OK)
-                    {
-                        duty->slot_aggregated = true;
-                    }
-                }
                 break;
 
             default:

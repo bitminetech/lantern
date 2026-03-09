@@ -179,6 +179,45 @@ const LanternState *lantern_client_state_for_root_locked(
     LanternState *scratch,
     bool *out_is_scratch);
 
+/**
+ * Return the active attestation committee count for sync/validator cache logic.
+ *
+ * Respects debug overrides used by tests and falls back to the protocol default.
+ */
+size_t lantern_client_attestation_committee_count(const struct lantern_client *client);
+
+/**
+ * Determine whether this node should retain an attestation signature locally.
+ *
+ * The signature is retained only when the node is configured as an aggregator
+ * and the attester is on the local attestation subnet/committee.
+ *
+ * @note Caller must hold state_lock.
+ */
+bool lantern_client_should_cache_attestation_signature_locked(
+    const struct lantern_client *client,
+    const LanternVote *vote);
+
+/**
+ * Cache block-body aggregated proofs as known attestation material.
+ *
+ * Mirrors the block-body proof caching step from the spec's Store.on_block().
+ * Caller must hold state_lock.
+ */
+void lantern_client_cache_block_aggregated_proofs_locked(
+    struct lantern_client *client,
+    const LanternSignedBlock *block);
+
+/**
+ * Cache proposer attestation data and, when eligible, its signature.
+ *
+ * Mirrors the proposer-attestation caching step from the spec's Store.on_block().
+ * Caller must hold state_lock.
+ */
+void lantern_client_cache_proposer_attestation_locked(
+    struct lantern_client *client,
+    const LanternSignedVote *proposer_attestation);
+
 
 /* ============================================================================
  * Pending Block Functions

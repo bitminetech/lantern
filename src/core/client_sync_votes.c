@@ -34,7 +34,7 @@ enum
     VOTE_ROOT_HEX_BUFFER_LEN = (LANTERN_ROOT_SIZE * 2u) + 3u,
 };
 
-static const size_t DEFAULT_GOSSIP_ATTESTATION_COMMITTEE_COUNT = 1u;
+static const size_t DEFAULT_SYNC_ATTESTATION_COMMITTEE_COUNT = 1u;
 
 
 /* ============================================================================
@@ -222,15 +222,15 @@ static bool validate_vote_cache_state(
     return true;
 }
 
-static size_t gossip_attestation_committee_count(const struct lantern_client *client)
+size_t lantern_client_attestation_committee_count(const struct lantern_client *client)
 {
     if (client && client->debug_attestation_committee_count > 0) {
         return client->debug_attestation_committee_count;
     }
-    return DEFAULT_GOSSIP_ATTESTATION_COMMITTEE_COUNT;
+    return DEFAULT_SYNC_ATTESTATION_COMMITTEE_COUNT;
 }
 
-static bool should_cache_gossip_signature_locked(
+bool lantern_client_should_cache_attestation_signature_locked(
     const struct lantern_client *client,
     const LanternVote *vote)
 {
@@ -238,7 +238,7 @@ static bool should_cache_gossip_signature_locked(
         return false;
     }
 
-    size_t committee_count = gossip_attestation_committee_count(client);
+    size_t committee_count = lantern_client_attestation_committee_count(client);
     if (committee_count == 0) {
         return false;
     }
@@ -439,7 +439,9 @@ static bool process_vote_locked(
     if (lantern_hash_tree_root_attestation_data(&vote->data.data, &data_root) == 0)
     {
         const LanternSignature *signature_to_cache =
-            should_cache_gossip_signature_locked(client, &vote->data) ? &vote->signature : NULL;
+            lantern_client_should_cache_attestation_signature_locked(client, &vote->data)
+                ? &vote->signature
+                : NULL;
         LanternSignatureKey key = {
             .validator_index = vote->data.validator_id,
             .data_root = data_root,
