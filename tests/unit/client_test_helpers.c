@@ -126,6 +126,10 @@ bool client_test_pending_contains_root(const struct lantern_client *client, cons
 }
 
 static void reset_vote_client_on_error(struct lantern_client *client) {
+    free(client->pending_gossip_votes.items);
+    client->pending_gossip_votes.items = NULL;
+    client->pending_gossip_votes.length = 0;
+    client->pending_gossip_votes.capacity = 0;
     if (client->has_fork_choice) {
         lantern_fork_choice_reset(&client->fork_choice);
         client->has_fork_choice = false;

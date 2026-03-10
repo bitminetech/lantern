@@ -90,6 +90,9 @@ struct lantern_vote_rejection_info
     bool has_unknown_root; /**< True if rejection is due to unknown checkpoint root */
     LanternRoot unknown_root; /**< Unknown checkpoint root */
     uint64_t unknown_slot; /**< Slot of unknown checkpoint */
+    bool should_retry_after_block_import; /**< True if block import may unblock the vote */
+    LanternRoot retry_root; /**< Root whose eventual import may unblock validation */
+    uint64_t retry_slot; /**< Slot associated with retry_root */
 };
 
 
@@ -217,6 +220,46 @@ void lantern_client_cache_block_aggregated_proofs_locked(
 void lantern_client_cache_proposer_attestation_locked(
     struct lantern_client *client,
     const LanternSignedVote *proposer_attestation);
+
+
+/* ============================================================================
+ * Pending Vote Functions
+ * ============================================================================ */
+
+/**
+ * Initialize a pending vote list.
+ *
+ * @param list  List to initialize
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+void pending_vote_list_init(struct lantern_pending_vote_list *list);
+
+
+/**
+ * Reset and free a pending vote list.
+ *
+ * @param list  List to reset
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+void pending_vote_list_reset(struct lantern_pending_vote_list *list);
+
+
+/**
+ * Append a pending gossip vote to the list.
+ *
+ * @param list      List to append to
+ * @param vote      Vote to append
+ * @param peer_text Peer ID text (may be NULL)
+ * @return Pointer to new entry, or NULL on failure
+ *
+ * @note Thread safety: Caller must hold state_lock when mutating client-owned lists
+ */
+struct lantern_pending_vote *pending_vote_list_append(
+    struct lantern_pending_vote_list *list,
+    const LanternSignedVote *vote,
+    const char *peer_text);
 
 
 /* ============================================================================
@@ -468,6 +511,14 @@ void lantern_client_record_vote(
     struct lantern_client *client,
     const LanternSignedVote *vote,
     const char *peer_text);
+
+/**
+ * Replay pending gossip votes after a successful block import.
+ *
+ * Drains the pending vote queue, retrying each buffered vote once against the
+ * updated store. Votes that still fail are discarded.
+ */
+void lantern_client_replay_pending_gossip_votes(struct lantern_client *client);
 
 
 /**

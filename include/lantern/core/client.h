@@ -37,6 +37,7 @@ extern "C" {
 #define LANTERN_DEFAULT_METRICS_PORT 8080
 #define LANTERN_DEFAULT_DEVNET "devnet0"
 #define LANTERN_PENDING_BLOCK_LIMIT 1024u
+#define LANTERN_PENDING_GOSSIP_VOTE_LIMIT 1024u
 
 typedef enum
 {
@@ -117,6 +118,17 @@ struct lantern_pending_block_list {
     size_t length;
     size_t capacity;
     struct lantern_pending_parent_index parent_index;
+};
+
+struct lantern_pending_vote {
+    LanternSignedVote vote;
+    char peer_text[128];
+};
+
+struct lantern_pending_vote_list {
+    struct lantern_pending_vote *items;
+    size_t length;
+    size_t capacity;
 };
 
 struct lantern_active_blocks_request {
@@ -220,6 +232,7 @@ struct lantern_client {
     struct lantern_string_list inbound_peer_ids;
     struct lantern_string_list status_failure_peer_ids;
     struct lantern_pending_block_list pending_blocks;
+    struct lantern_pending_vote_list pending_gossip_votes;
     pthread_mutex_t pending_lock;
     bool pending_lock_initialized;
     LanternRoot sync_last_requested_root;
@@ -342,6 +355,7 @@ int lantern_client_debug_import_block(
     const LanternRoot *block_root,
     const char *peer_id_text);
 size_t lantern_client_pending_block_count(const struct lantern_client *client);
+size_t lantern_client_pending_vote_count(const struct lantern_client *client);
 
 #define LANTERN_TEST_BLOCKS_REQUEST_SUCCESS 0
 #define LANTERN_TEST_BLOCKS_REQUEST_FAILED 1

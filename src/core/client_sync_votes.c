@@ -36,6 +36,13 @@ enum
 
 static const size_t DEFAULT_SYNC_ATTESTATION_COMMITTEE_COUNT = 1u;
 
+enum lantern_vote_record_status
+{
+    LANTERN_VOTE_RECORD_REJECTED = 0,
+    LANTERN_VOTE_RECORD_ACCEPTED = 1,
+    LANTERN_VOTE_RECORD_BUFFERED = 2,
+};
+
 
 /* ============================================================================
  * External Functions (from client_sync.c)
@@ -129,6 +136,9 @@ static bool validate_vote_checkpoint(
             out_rejection->has_unknown_root = true;
             out_rejection->unknown_root = checkpoint->root;
             out_rejection->unknown_slot = checkpoint->slot;
+            out_rejection->should_retry_after_block_import = true;
+            out_rejection->retry_root = checkpoint->root;
+            out_rejection->retry_slot = checkpoint->slot;
         }
         return false;
     }
@@ -159,6 +169,46 @@ static bool validate_vote_checkpoint(
         return false;
     }
 
+    return true;
+}
+
+
+static bool buffer_pending_vote_locked(
+    struct lantern_client *client,
+    const LanternSignedVote *vote,
+    const char *peer_text,
+    const struct lantern_vote_rejection_info *rejection,
+    const struct lantern_log_metadata *meta)
+{
+    if (!client || !vote || !rejection || !meta)
+    {
+        return false;
+    }
+
+    if (pending_vote_list_append(&client->pending_gossip_votes, vote, peer_text) == NULL)
+    {
+        lantern_log_warn(
+            "gossip",
+            meta,
+            "failed to buffer vote validator=%" PRIu64 " slot=%" PRIu64 " pending=%zu",
+            vote->data.validator_id,
+            vote->data.slot,
+            client->pending_gossip_votes.length);
+        return false;
+    }
+
+    char retry_hex[VOTE_ROOT_HEX_BUFFER_LEN];
+    format_root_hex(&rejection->retry_root, retry_hex, sizeof(retry_hex));
+    lantern_log_debug(
+        "gossip",
+        meta,
+        "buffered vote validator=%" PRIu64 " slot=%" PRIu64 " waiting_root=%s waiting_slot=%" PRIu64
+        " pending=%zu",
+        vote->data.validator_id,
+        vote->data.slot,
+        retry_hex[0] ? retry_hex : "0x0",
+        rejection->retry_slot,
+        client->pending_gossip_votes.length);
     return true;
 }
 
@@ -401,6 +451,9 @@ static bool process_vote_locked(
             "missing target state target_slot=%" PRIu64 " root=%s",
             vote->data.target.slot,
             target_hex[0] ? target_hex : "0x0");
+        rejection->should_retry_after_block_import = true;
+        rejection->retry_root = vote->data.target.root;
+        rejection->retry_slot = vote->data.target.slot;
         lantern_state_reset(&target_state);
         return false;
     }
@@ -465,6 +518,146 @@ static bool process_vote_locked(
 
     persist_votes_if_configured_locked(client, vote, meta);
     return true;
+}
+
+
+static enum lantern_vote_record_status lantern_client_record_vote_internal(
+    struct lantern_client *client,
+    const LanternSignedVote *vote,
+    const char *peer_text,
+    bool allow_buffering,
+    bool is_replay)
+{
+    if (!client || !vote || !client->has_state)
+    {
+        return LANTERN_VOTE_RECORD_REJECTED;
+    }
+
+    struct lantern_log_metadata meta = {
+        .validator = client->node_id,
+        .peer = (peer_text && *peer_text) ? peer_text : NULL,
+    };
+
+    bool state_locked = lantern_client_lock_state(client);
+    if (!state_locked)
+    {
+        return LANTERN_VOTE_RECORD_REJECTED;
+    }
+
+    struct lantern_vote_rejection_info rejection;
+    memset(&rejection, 0, sizeof(rejection));
+
+    LanternSignedVote vote_copy = *vote;
+    char head_hex[VOTE_ROOT_HEX_BUFFER_LEN];
+    char target_hex[VOTE_ROOT_HEX_BUFFER_LEN];
+    char source_hex[VOTE_ROOT_HEX_BUFFER_LEN];
+    format_root_hex(&vote_copy.data.head.root, head_hex, sizeof(head_hex));
+    format_root_hex(&vote_copy.data.target.root, target_hex, sizeof(target_hex));
+    format_root_hex(&vote_copy.data.source.root, source_hex, sizeof(source_hex));
+    lantern_log_debug(
+        "gossip",
+        &meta,
+        "%s vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64,
+        is_replay ? "replaying buffered" : "received",
+        vote_copy.data.validator_id,
+        vote_copy.data.slot,
+        head_hex[0] ? head_hex : "0x0",
+        target_hex[0] ? target_hex : "0x0",
+        vote_copy.data.target.slot);
+
+    bool vote_processed = process_vote_locked(client, &vote_copy, &meta, &rejection);
+    bool vote_buffered = false;
+    if (!vote_processed
+        && allow_buffering
+        && rejection.should_retry_after_block_import)
+    {
+        vote_buffered = buffer_pending_vote_locked(
+            client,
+            &vote_copy,
+            peer_text,
+            &rejection,
+            &meta);
+    }
+
+    if (vote_processed)
+    {
+        lantern_log_info(
+            "gossip",
+            &meta,
+            "%s vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64
+            " source=%s@%" PRIu64,
+            is_replay ? "replayed" : "processed",
+            vote_copy.data.validator_id,
+            vote_copy.data.slot,
+            head_hex[0] ? head_hex : "0x0",
+            target_hex[0] ? target_hex : "0x0",
+            vote_copy.data.target.slot,
+            source_hex[0] ? source_hex : "0x0",
+            vote_copy.data.source.slot);
+    }
+    lantern_client_unlock_state(client, state_locked);
+
+    if (vote_processed)
+    {
+        lantern_client_note_vote_outcome(client, peer_text, &vote_copy, true);
+        return LANTERN_VOTE_RECORD_ACCEPTED;
+    }
+
+    if (vote_buffered)
+    {
+        return LANTERN_VOTE_RECORD_BUFFERED;
+    }
+
+    lantern_client_note_vote_outcome(client, peer_text, &vote_copy, false);
+
+    const char *reason_text = rejection.has_reason ? rejection.message : "unknown";
+    if (client->sync_in_progress)
+    {
+        lantern_log_debug(
+            "gossip",
+            &meta,
+            "%s vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64
+            " source=%s@%" PRIu64 " reason=%s",
+            is_replay ? "dropped replayed" : "rejected",
+            vote_copy.data.validator_id,
+            vote_copy.data.slot,
+            head_hex[0] ? head_hex : "0x0",
+            target_hex[0] ? target_hex : "0x0",
+            vote_copy.data.target.slot,
+            source_hex[0] ? source_hex : "0x0",
+            vote_copy.data.source.slot,
+            reason_text);
+    }
+    else
+    {
+        lantern_log_info(
+            "gossip",
+            &meta,
+            "%s vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64
+            " source=%s@%" PRIu64 " reason=%s",
+            is_replay ? "dropped replayed" : "rejected",
+            vote_copy.data.validator_id,
+            vote_copy.data.slot,
+            head_hex[0] ? head_hex : "0x0",
+            target_hex[0] ? target_hex : "0x0",
+            vote_copy.data.target.slot,
+            source_hex[0] ? source_hex : "0x0",
+            vote_copy.data.source.slot,
+            reason_text);
+    }
+    if (!is_replay && rejection.has_unknown_root && !lantern_root_is_zero(&rejection.unknown_root))
+    {
+        char root_hex[VOTE_ROOT_HEX_BUFFER_LEN];
+        format_root_hex(&rejection.unknown_root, root_hex, sizeof(root_hex));
+        lantern_log_info(
+            "reqresp",
+            &meta,
+            "dropping vote unknown root=%s slot=%" PRIu64 " (buffer unavailable)",
+            root_hex[0] ? root_hex : "0x0",
+            rejection.unknown_slot);
+    }
+
+    return LANTERN_VOTE_RECORD_REJECTED;
 }
 
 
@@ -776,105 +969,46 @@ void lantern_client_record_vote(
     const LanternSignedVote *vote,
     const char *peer_text)
 {
-    if (!client || !vote || !client->has_state)
+    (void)lantern_client_record_vote_internal(client, vote, peer_text, true, false);
+}
+
+
+void lantern_client_replay_pending_gossip_votes(struct lantern_client *client)
+{
+    if (!client || !client->has_state)
     {
         return;
     }
 
-    struct lantern_log_metadata meta = {
-        .validator = client->node_id,
-        .peer = (peer_text && *peer_text) ? peer_text : NULL,
-    };
+    struct lantern_pending_vote_list pending;
+    pending_vote_list_init(&pending);
 
     bool state_locked = lantern_client_lock_state(client);
     if (!state_locked)
     {
         return;
     }
-
-    struct lantern_vote_rejection_info rejection;
-    memset(&rejection, 0, sizeof(rejection));
-
-    LanternSignedVote vote_copy = *vote;
-    char head_hex[VOTE_ROOT_HEX_BUFFER_LEN];
-    char target_hex[VOTE_ROOT_HEX_BUFFER_LEN];
-    char source_hex[VOTE_ROOT_HEX_BUFFER_LEN];
-    format_root_hex(&vote_copy.data.head.root, head_hex, sizeof(head_hex));
-    format_root_hex(&vote_copy.data.target.root, target_hex, sizeof(target_hex));
-    format_root_hex(&vote_copy.data.source.root, source_hex, sizeof(source_hex));
-    lantern_log_debug(
-        "gossip",
-        &meta,
-        "received vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64,
-        vote_copy.data.validator_id,
-        vote_copy.data.slot,
-        head_hex[0] ? head_hex : "0x0",
-        target_hex[0] ? target_hex : "0x0",
-        vote_copy.data.target.slot);
-
-    bool vote_processed = process_vote_locked(client, &vote_copy, &meta, &rejection);
-    if (vote_processed)
+    if (client->pending_gossip_votes.length == 0)
     {
-        lantern_log_info(
-            "gossip",
-            &meta,
-            "processed vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64
-            " source=%s@%" PRIu64,
-            vote_copy.data.validator_id,
-            vote_copy.data.slot,
-            head_hex[0] ? head_hex : "0x0",
-            target_hex[0] ? target_hex : "0x0",
-            vote_copy.data.target.slot,
-            source_hex[0] ? source_hex : "0x0",
-            vote_copy.data.source.slot);
+        lantern_client_unlock_state(client, state_locked);
+        return;
     }
+
+    pending = client->pending_gossip_votes;
+    pending_vote_list_init(&client->pending_gossip_votes);
     lantern_client_unlock_state(client, state_locked);
-    lantern_client_note_vote_outcome(client, peer_text, &vote_copy, vote_processed);
-    if (!vote_processed)
+
+    for (size_t i = 0; i < pending.length; ++i)
     {
-        const char *reason_text = rejection.has_reason ? rejection.message : "unknown";
-        if (client->sync_in_progress)
-        {
-            lantern_log_debug(
-                "gossip",
-                &meta,
-                "rejected vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64
-                " source=%s@%" PRIu64 " reason=%s",
-                vote_copy.data.validator_id,
-                vote_copy.data.slot,
-                head_hex[0] ? head_hex : "0x0",
-                target_hex[0] ? target_hex : "0x0",
-                vote_copy.data.target.slot,
-                source_hex[0] ? source_hex : "0x0",
-                vote_copy.data.source.slot,
-                reason_text);
-        }
-        else
-        {
-            lantern_log_info(
-                "gossip",
-                &meta,
-                "rejected vote validator=%" PRIu64 " slot=%" PRIu64 " head=%s target=%s@%" PRIu64
-                " source=%s@%" PRIu64 " reason=%s",
-                vote_copy.data.validator_id,
-                vote_copy.data.slot,
-                head_hex[0] ? head_hex : "0x0",
-                target_hex[0] ? target_hex : "0x0",
-                vote_copy.data.target.slot,
-                source_hex[0] ? source_hex : "0x0",
-                vote_copy.data.source.slot,
-                reason_text);
-        }
-        if (rejection.has_unknown_root && !lantern_root_is_zero(&rejection.unknown_root))
-        {
-            char root_hex[VOTE_ROOT_HEX_BUFFER_LEN];
-            format_root_hex(&rejection.unknown_root, root_hex, sizeof(root_hex));
-            lantern_log_info(
-                "reqresp",
-                &meta,
-                "dropping vote unknown root=%s slot=%" PRIu64 " (no backfill)",
-                root_hex[0] ? root_hex : "0x0",
-                rejection.unknown_slot);
-        }
+        const char *peer_text =
+            pending.items[i].peer_text[0] ? pending.items[i].peer_text : NULL;
+        (void)lantern_client_record_vote_internal(
+            client,
+            &pending.items[i].vote,
+            peer_text,
+            false,
+            true);
     }
+
+    pending_vote_list_reset(&pending);
 }

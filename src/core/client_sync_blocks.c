@@ -2852,6 +2852,7 @@ bool lantern_client_import_block(
             persist_block_after_import(client, block, meta);
             lantern_client_process_pending_children(client, &block_root_local);
             update_sync_progress_after_block(client);
+            lantern_client_replay_pending_gossip_votes(client);
         }
         return false;
     }
@@ -2909,6 +2910,7 @@ cleanup:
         lantern_client_process_pending_children(client, &block_root_local);
         log_imported_block(block, &head_root, head_slot, meta, quiet_log);
         update_sync_progress_after_block(client);
+        lantern_client_replay_pending_gossip_votes(client);
     }
 
     return imported;

@@ -3,12 +3,15 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "lantern/consensus/duties.h"
 #include "client_test_helpers.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
 #include "lantern/networking/gossip_payloads.h"
+#include "lantern/storage/storage.h"
 #include "lantern/support/time.h"
 
 /* Internal core APIs used for targeted cache and block-build regression tests. */
@@ -221,6 +224,81 @@ static int make_signed_vote_for_validator(
     return client_test_sign_vote_with_secret(out_vote, secret);
 }
 
+static int build_signed_head_block(
+    struct lantern_client *client,
+    struct PQSignatureSchemeSecretKey *secret,
+    LanternSignedBlock *out_block,
+    LanternRoot *out_root) {
+    if (!client || !secret || !out_block || !out_root) {
+        return -1;
+    }
+
+    int rc = -1;
+    LanternCheckpoint head = {0};
+    LanternCheckpoint target = {0};
+    LanternCheckpoint source = {0};
+    LanternSignedVote proposer_vote;
+    memset(&proposer_vote, 0, sizeof(proposer_vote));
+
+    lantern_signed_block_with_attestation_init(out_block);
+    out_block->message.block.slot = client->state.slot + 1u;
+    if (lantern_proposer_for_slot(
+            out_block->message.block.slot,
+            client->state.config.num_validators,
+            &out_block->message.block.proposer_index)
+        != 0) {
+        goto cleanup;
+    }
+    if (lantern_state_select_block_parent(
+            &client->state,
+            &client->store,
+            &out_block->message.block.parent_root)
+        != 0) {
+        goto cleanup;
+    }
+    if (lantern_state_compute_vote_checkpoints(
+            &client->state,
+            &client->store,
+            &head,
+            &target,
+            &source)
+        != 0) {
+        goto cleanup;
+    }
+
+    proposer_vote.data.validator_id = out_block->message.block.proposer_index;
+    proposer_vote.data.slot = out_block->message.block.slot;
+    proposer_vote.data.head = head;
+    proposer_vote.data.target = target;
+    proposer_vote.data.source = source;
+    if (client_test_sign_vote_with_secret(&proposer_vote, secret) != 0) {
+        goto cleanup;
+    }
+
+    out_block->message.proposer_attestation = proposer_vote.data;
+    out_block->signatures.proposer_signature = proposer_vote.signature;
+
+    if (lantern_state_preview_post_state_root(
+            &client->state,
+            &client->store,
+            out_block,
+            &out_block->message.block.state_root)
+        != 0) {
+        goto cleanup;
+    }
+    if (lantern_hash_tree_root_block(&out_block->message.block, out_root) != 0) {
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    if (rc != 0) {
+        lantern_signed_block_with_attestation_reset(out_block);
+    }
+    return rc;
+}
+
 static int test_record_vote_accepts_known_roots(void) {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
@@ -312,7 +390,7 @@ cleanup:
     return rc;
 }
 
-static int test_record_vote_rejects_missing_target_state(void) {
+static int test_record_vote_buffers_missing_target_state(void) {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
     struct PQSignatureSchemeSecretKey *secret = NULL;
@@ -376,6 +454,10 @@ static int test_record_vote_rejects_missing_target_state(void) {
         fprintf(stderr, "vote with missing target state should not be stored\n");
         goto cleanup;
     }
+    if (lantern_client_pending_vote_count(&client) != 1u) {
+        fprintf(stderr, "vote with missing target state should be buffered\n");
+        goto cleanup;
+    }
 
     rc = 0;
 
@@ -385,7 +467,7 @@ cleanup:
     return rc;
 }
 
-static int test_record_vote_rejects_unknown_head(void) {
+static int test_record_vote_buffers_unknown_head(void) {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
     struct PQSignatureSchemeSecretKey *secret = NULL;
@@ -432,6 +514,10 @@ static int test_record_vote_rejects_unknown_head(void) {
         fprintf(stderr, "unknown head vote should not be stored\n");
         goto cleanup;
     }
+    if (lantern_client_pending_vote_count(&client) != 1u) {
+        fprintf(stderr, "unknown head vote should be buffered\n");
+        goto cleanup;
+    }
 
     if (client.fork_choice.new_votes && client.fork_choice.validator_count > 0) {
         for (size_t i = 0; i < client.fork_choice.validator_count; ++i) {
@@ -445,6 +531,146 @@ static int test_record_vote_rejects_unknown_head(void) {
     rc = 0;
 
 cleanup:
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_record_vote_replays_buffered_vote_after_block_import(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    LanternSignedBlock grandchild_block;
+    LanternRoot grandchild_root;
+    LanternSignedVote vote;
+    char data_dir_template[256];
+    int rc = 1;
+
+    memset(&grandchild_block, 0, sizeof(grandchild_block));
+    memset(&grandchild_root, 0, sizeof(grandchild_root));
+    memset(&vote, 0, sizeof(vote));
+    memset(data_dir_template, 0, sizeof(data_dir_template));
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "vote_replay_after_import",
+            &pub,
+            &secret,
+            &anchor_root,
+            &child_root)
+        != 0) {
+        return 1;
+    }
+
+    if (build_signed_head_block(&client, secret, &grandchild_block, &grandchild_root) != 0) {
+        fprintf(stderr, "failed to build grandchild block for buffered vote replay test\n");
+        goto cleanup;
+    }
+    if (lantern_fork_choice_set_block_state(
+            &client.fork_choice,
+            &grandchild_block.message.block.parent_root,
+            &client.state)
+        != 0) {
+        fprintf(stderr, "failed to cache parent state for buffered vote replay test\n");
+        goto cleanup;
+    }
+    if (snprintf(
+            data_dir_template,
+            sizeof(data_dir_template),
+            "/tmp/lantern_vote_replay_%02x%02x%02x%02x_%d",
+            child_root.bytes[0],
+            child_root.bytes[1],
+            child_root.bytes[2],
+            child_root.bytes[3],
+            (int)getpid())
+        <= 0) {
+        fprintf(stderr, "failed to format temp dir for buffered vote replay test\n");
+        goto cleanup;
+    }
+    client.data_dir = data_dir_template;
+    if (mkdir(client.data_dir, 0700) != 0) {
+        fprintf(stderr, "failed to create temp dir for buffered vote replay test\n");
+        goto cleanup;
+    }
+    if (lantern_storage_store_state_for_root(
+            client.data_dir,
+            &grandchild_block.message.block.parent_root,
+            &client.state)
+        != 0) {
+        fprintf(stderr, "failed to persist parent state for buffered vote replay test\n");
+        goto cleanup;
+    }
+
+    vote.data.validator_id = 0u;
+    vote.data.slot = grandchild_block.message.block.slot;
+    vote.data.head.slot = grandchild_block.message.block.slot;
+    vote.data.head.root = grandchild_root;
+    vote.data.target.slot = grandchild_block.message.block.slot;
+    vote.data.target.root = grandchild_root;
+    vote.data.source.slot = 0u;
+    vote.data.source.root = anchor_root;
+    if (client_test_sign_vote_with_secret(&vote, secret) != 0) {
+        fprintf(stderr, "failed to sign buffered vote replay test fixture\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_debug_record_vote(&client, &vote, "vote_replay_peer") != 0) {
+        fprintf(stderr, "failed to stage buffered vote for replay test\n");
+        goto cleanup;
+    }
+    if (lantern_client_pending_vote_count(&client) != 1u) {
+        fprintf(stderr, "buffered replay test vote should be queued before import\n");
+        goto cleanup;
+    }
+    if (lantern_store_validator_has_vote(&client.store, 0u)) {
+        fprintf(stderr, "buffered replay test vote should not be stored before import\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_debug_import_block(
+            &client,
+            &grandchild_block,
+            &grandchild_root,
+            "vote_replay_peer")
+        != 1) {
+        fprintf(stderr, "failed to import grandchild block for buffered vote replay test\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_pending_vote_count(&client) != 0u) {
+        fprintf(stderr, "buffered vote replay queue should be empty after import\n");
+        goto cleanup;
+    }
+    if (!lantern_store_validator_has_vote(&client.store, 0u)) {
+        fprintf(stderr, "buffered vote should replay into store after import\n");
+        goto cleanup;
+    }
+
+    LanternSignedVote stored;
+    memset(&stored, 0, sizeof(stored));
+    if (lantern_store_get_signed_validator_vote(&client.store, 0u, &stored) != 0) {
+        fprintf(stderr, "failed to fetch replayed buffered vote from store\n");
+        goto cleanup;
+    }
+    if (memcmp(&stored.data, &vote.data, sizeof(vote.data)) != 0
+        || memcmp(&stored.signature, &vote.signature, sizeof(vote.signature)) != 0) {
+        fprintf(stderr, "replayed buffered vote mismatch\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    if (client.data_dir && client.data_dir[0] != '\0') {
+        char cleanup_cmd[320];
+        int written = snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf %s", client.data_dir);
+        if (written > 0 && (size_t)written < sizeof(cleanup_cmd)) {
+            (void)system(cleanup_cmd);
+        }
+        client.data_dir = NULL;
+    }
+    lantern_signed_block_with_attestation_reset(&grandchild_block);
     client_test_teardown_vote_validation_client(&client, pub, secret);
     return rc;
 }
@@ -2316,10 +2542,13 @@ int main(void) {
     if (test_record_vote_accepts_known_roots() != 0) {
         return 1;
     }
-    if (test_record_vote_rejects_missing_target_state() != 0) {
+    if (test_record_vote_buffers_missing_target_state() != 0) {
         return 1;
     }
-    if (test_record_vote_rejects_unknown_head() != 0) {
+    if (test_record_vote_buffers_unknown_head() != 0) {
+        return 1;
+    }
+    if (test_record_vote_replays_buffered_vote_after_block_import() != 0) {
         return 1;
     }
     if (test_record_vote_rejects_slot_mismatch() != 0) {

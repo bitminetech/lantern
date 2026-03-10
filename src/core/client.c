@@ -668,6 +668,7 @@ static void client_reset_base(struct lantern_client *client)
     client->ping_thread_started = false;
     client->ping_stop_flag = 1;
     pending_block_list_init(&client->pending_blocks);
+    pending_vote_list_init(&client->pending_gossip_votes);
     client->pending_lock_initialized = false;
     client->sync_state = LANTERN_SYNC_STATE_IDLE;
 }
@@ -3212,6 +3213,7 @@ static void shutdown_genesis_and_network(struct lantern_client *client)
  */
 static void shutdown_state_and_runtime(struct lantern_client *client)
 {
+    pending_vote_list_reset(&client->pending_gossip_votes);
     if (client->has_state)
     {
         lantern_state_reset(&client->state);

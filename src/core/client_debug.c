@@ -149,6 +149,20 @@ size_t lantern_client_pending_block_count(const struct lantern_client *client)
 }
 
 
+size_t lantern_client_pending_vote_count(const struct lantern_client *client)
+{
+    if (!client)
+    {
+        return 0;
+    }
+    struct lantern_client *mutable_client = (struct lantern_client *)client;
+    bool locked = lantern_client_lock_state(mutable_client);
+    size_t count = client->pending_gossip_votes.length;
+    lantern_client_unlock_state(mutable_client, locked);
+    return count;
+}
+
+
 /**
  * Debug API: Enqueue a pending block for testing.
  *

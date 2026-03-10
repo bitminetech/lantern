@@ -142,6 +142,61 @@ static int ensure_pending_block_list_capacity(
     return LANTERN_CLIENT_PENDING_OK;
 }
 
+
+/**
+ * @brief Ensure the pending vote list can hold at least `required` entries.
+ */
+static int ensure_pending_vote_list_capacity(
+    struct lantern_pending_vote_list *list,
+    size_t required)
+{
+    if (!list)
+    {
+        return LANTERN_CLIENT_PENDING_ERR_INVALID_PARAM;
+    }
+
+    if (list->capacity >= required)
+    {
+        return LANTERN_CLIENT_PENDING_OK;
+    }
+
+    size_t new_capacity = BLOCK_LIST_INITIAL_CAPACITY;
+    if (list->capacity > 0)
+    {
+        size_t half = list->capacity / 2u;
+        if (list->capacity > SIZE_MAX - half)
+        {
+            return LANTERN_CLIENT_PENDING_ERR_OVERFLOW;
+        }
+        new_capacity = list->capacity + half;
+        if (new_capacity < BLOCK_LIST_INITIAL_CAPACITY)
+        {
+            new_capacity = BLOCK_LIST_INITIAL_CAPACITY;
+        }
+    }
+
+    if (new_capacity < required)
+    {
+        new_capacity = required;
+    }
+
+    if (new_capacity > SIZE_MAX / sizeof(*list->items))
+    {
+        return LANTERN_CLIENT_PENDING_ERR_OVERFLOW;
+    }
+
+    struct lantern_pending_vote *expanded = realloc(
+        list->items,
+        new_capacity * sizeof(*expanded));
+    if (!expanded)
+    {
+        return LANTERN_CLIENT_PENDING_ERR_ALLOC;
+    }
+    list->items = expanded;
+    list->capacity = new_capacity;
+    return LANTERN_CLIENT_PENDING_OK;
+}
+
 static int ensure_pending_parent_index_capacity(
     struct lantern_pending_parent_index *index,
     size_t required)
@@ -432,6 +487,95 @@ static void pending_parent_index_remove_child(
         return;
     }
 }
+
+/* ============================================================================
+ * Pending Vote List
+ * ============================================================================ */
+
+/**
+ * Initialize a pending vote list.
+ *
+ * @param list  List to initialize
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+void pending_vote_list_init(struct lantern_pending_vote_list *list)
+{
+    if (!list)
+    {
+        return;
+    }
+    list->items = NULL;
+    list->length = 0;
+    list->capacity = 0;
+}
+
+
+/**
+ * Reset and free a pending vote list.
+ *
+ * @param list  List to reset
+ *
+ * @note Thread safety: This function is thread-safe
+ */
+void pending_vote_list_reset(struct lantern_pending_vote_list *list)
+{
+    if (!list)
+    {
+        return;
+    }
+    free(list->items);
+    list->items = NULL;
+    list->length = 0;
+    list->capacity = 0;
+}
+
+
+/**
+ * Append a pending gossip vote to the list.
+ *
+ * @param list      List to append to
+ * @param vote      Vote to append
+ * @param peer_text Peer ID text (may be NULL)
+ * @return Pointer to new entry, or NULL on failure
+ *
+ * @note Thread safety: Caller must synchronize access
+ */
+struct lantern_pending_vote *pending_vote_list_append(
+    struct lantern_pending_vote_list *list,
+    const LanternSignedVote *vote,
+    const char *peer_text)
+{
+    if (!list || !vote)
+    {
+        return NULL;
+    }
+
+    if (list->length >= LANTERN_PENDING_GOSSIP_VOTE_LIMIT
+        || list->length == SIZE_MAX)
+    {
+        return NULL;
+    }
+
+    int ensure_rc = ensure_pending_vote_list_capacity(list, list->length + 1u);
+    if (ensure_rc != LANTERN_CLIENT_PENDING_OK)
+    {
+        return NULL;
+    }
+
+    struct lantern_pending_vote *entry = &list->items[list->length];
+    memset(entry, 0, sizeof(*entry));
+    entry->vote = *vote;
+    if (peer_text && *peer_text)
+    {
+        strncpy(entry->peer_text, peer_text, sizeof(entry->peer_text) - 1u);
+        entry->peer_text[sizeof(entry->peer_text) - 1u] = '\0';
+    }
+    list->length += 1u;
+
+    return entry;
+}
+
 
 /* ============================================================================
  * Block Cloning
