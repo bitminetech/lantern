@@ -1716,7 +1716,7 @@ static int lantern_state_process_attestations_internal(
 
     LanternCheckpoint latest_justified = state->latest_justified;
     LanternCheckpoint latest_finalized = state->latest_finalized;
-    uint64_t base_finalized_slot = latest_finalized.slot;
+    uint64_t finalized_slot = latest_finalized.slot;
     double att_batch_start = lantern_time_now_seconds();
     size_t att_attempted = 0;
     bool finalization_attempted = false;
@@ -1891,15 +1891,15 @@ static int lantern_state_process_attestations_internal(
             continue;
         }
 
-        /* Target slot must be justifiable after the pre-loop finalized slot snapshot (leanSpec line 410) */
-        if (!lantern_slot_is_justifiable(vote->target.slot, base_finalized_slot)) {
+        /* Target slot must remain justifiable after the current finalized slot. */
+        if (!lantern_slot_is_justifiable(vote->target.slot, finalized_slot)) {
             if (trace_finalization) {
                 lantern_log_debug(
                     "state",
                     &meta,
                     "finalization trace skip non-justifiable target_slot=%" PRIu64 " finalized=%" PRIu64,
                     vote->target.slot,
-                    base_finalized_slot);
+                    finalized_slot);
             }
             record_attestation_validation_metric(att_validation_start, true);
             continue;
@@ -1991,14 +1991,11 @@ static int lantern_state_process_attestations_internal(
                     vote->target.slot);
             }
 
-            /* Finalization: if the target is the next valid justifiable slot after source (leanSpec lines 435-439)
-             *
-             * The gap check is evaluated relative to the pre-loop finalized slot snapshot.
-             * leanSpec uses self.latest_finalized.slot from the immutable input state for this check,
-             * so use base_finalized_slot rather than the progressively updated latest_finalized.slot.
+            /* Finalization: if the target is the next valid justifiable slot after source
+             * relative to the current finalized boundary, finalize the source checkpoint.
              */
             bool has_justifiable_between = has_justifiable_slot_between(
-                vote->source.slot, vote->target.slot, base_finalized_slot);
+                vote->source.slot, vote->target.slot, finalized_slot);
             bool vote_has_consecutive_source = !has_justifiable_between;
 
             if (trace_finalization) {
@@ -2016,12 +2013,13 @@ static int lantern_state_process_attestations_internal(
 
             if (vote_has_consecutive_source) {
                 /* Finalize the source checkpoint */
-                uint64_t old_finalized_slot = latest_finalized.slot;
+                uint64_t old_finalized_slot = finalized_slot;
                 latest_finalized = vote->source;
+                finalized_slot = latest_finalized.slot;
                 finalization_attempted = true;
                 lean_metrics_record_finalization_attempt(true);
-                if (latest_finalized.slot > old_finalized_slot) {
-                    uint64_t delta = latest_finalized.slot - old_finalized_slot;
+                if (finalized_slot > old_finalized_slot) {
+                    uint64_t delta = finalized_slot - old_finalized_slot;
                     if (delta > SIZE_MAX) {
                         if (finalization_attempted) {
                             lean_metrics_record_finalization_attempt(false);
@@ -2041,8 +2039,8 @@ static int lantern_state_process_attestations_internal(
                     state->latest_finalized = latest_finalized;
                     if (lantern_state_prune_justification_roots(
                             state,
-                            base_finalized_slot,
-                            latest_finalized.slot,
+                            old_finalized_slot,
+                            finalized_slot,
                             validator_count,
                             &meta)
                         != 0) {
