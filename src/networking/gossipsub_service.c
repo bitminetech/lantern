@@ -10,6 +10,7 @@
 #include "lantern/encoding/snappy.h"
 #include "lantern/networking/gossip.h"
 #include "lantern/networking/gossip_payloads.h"
+#include "lantern/storage/storage.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
 #include "ssz_constants.h"
@@ -168,6 +169,31 @@ static void describe_peer_id(const peer_id_t *peer, char *buffer, size_t length)
         &written);
     if (rc != PEER_ID_OK) {
         buffer[0] = '\0';
+    }
+}
+
+static void maybe_dump_invalid_gossip_payload(
+    struct lantern_gossipsub_service *service,
+    const char *payload_type,
+    const uint8_t *payload,
+    size_t payload_len,
+    const struct lantern_log_metadata *meta) {
+    if (!service || !service->data_dir || service->data_dir[0] == '\0' || !payload_type || !payload || payload_len == 0) {
+        return;
+    }
+
+    if (lantern_storage_store_invalid_gossip_payload(
+            service->data_dir,
+            payload_type,
+            payload,
+            payload_len)
+        != 0) {
+        lantern_log_warn(
+            "storage",
+            meta,
+            "failed to persist invalid gossip payload type=%s bytes=%zu",
+            payload_type,
+            payload_len);
     }
 }
 
@@ -488,6 +514,7 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
             &meta,
             "failed to decode gossip block payload bytes=%zu",
             msg->data_len);
+        maybe_dump_invalid_gossip_payload(service, "block", msg->data, msg->data_len, &meta);
         result = LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
         goto cleanup;
     }
@@ -576,6 +603,7 @@ static libp2p_gossipsub_validation_result_t gossipsub_vote_validator(
             &meta,
             "failed to decode gossip vote payload bytes=%zu",
             msg->data_len);
+        maybe_dump_invalid_gossip_payload(service, "vote", msg->data, msg->data_len, &meta);
         result = LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
         goto cleanup;
     }
@@ -656,6 +684,12 @@ static libp2p_gossipsub_validation_result_t gossipsub_aggregated_attestation_val
             &meta,
             "failed to decode aggregated attestation gossip payload bytes=%zu",
             msg->data_len);
+        maybe_dump_invalid_gossip_payload(
+            service,
+            "aggregated_attestation",
+            msg->data,
+            msg->data_len,
+            &meta);
         result = LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
         goto cleanup;
     }
@@ -713,6 +747,7 @@ void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service) 
     memset(service->vote_topic, 0, sizeof(service->vote_topic));
     memset(service->vote_subnet_topic, 0, sizeof(service->vote_subnet_topic));
     memset(service->aggregated_attestation_topic, 0, sizeof(service->aggregated_attestation_topic));
+    service->data_dir = NULL;
     service->attestation_subnet_id = 0;
     service->subscribe_attestation_subnet = 0;
     service->publish_hook = NULL;
@@ -747,6 +782,7 @@ int lantern_gossipsub_service_start(
     service->vote_handler_user_data = previous_vote_user_data;
     service->aggregated_attestation_handler = previous_aggregated_handler;
     service->aggregated_attestation_handler_user_data = previous_aggregated_user_data;
+    service->data_dir = config->data_dir;
     service->attestation_subnet_id = config->attestation_subnet_id;
     service->subscribe_attestation_subnet = config->subscribe_attestation_subnet ? 1 : 0;
 

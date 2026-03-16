@@ -2761,6 +2761,7 @@ static lantern_client_error client_start_protocols(
     struct lantern_gossipsub_config gossip_cfg = {
         .host = client->network.host,
         .devnet = client->devnet,
+        .data_dir = client->data_dir,
         .attestation_subnet_id = subnet_id,
         .subscribe_attestation_subnet = 1,
     };
@@ -3288,6 +3289,7 @@ static lantern_client_error client_start_apis(struct lantern_client *client)
     http_config.port = client->http_port;
     http_config.callbacks.context = client;
     http_config.callbacks.snapshot_head = http_snapshot_head;
+    http_config.callbacks.snapshot_fork_choice = http_snapshot_fork_choice;
     http_config.callbacks.validator_count = http_validator_count_cb;
     http_config.callbacks.validator_info = http_validator_info_cb;
     http_config.callbacks.set_validator_status = http_set_validator_status_cb;

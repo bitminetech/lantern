@@ -196,9 +196,6 @@ static int basic_block_sanity(const LanternSignedBlock *block) {
     const LanternBlock *message = &block->message.block;
     for (size_t i = 0; i < message->body.attestations.length; ++i) {
         const LanternAggregatedAttestation *att = &message->body.attestations.data[i];
-        if (att->data.slot > message->slot) {
-            return -1;
-        }
         if (basic_attestation_data_sanity(&att->data) != 0) {
             return -1;
         }

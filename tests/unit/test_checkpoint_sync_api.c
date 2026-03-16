@@ -42,6 +42,12 @@ struct snapshot_callback_ctx
     int rc;
 };
 
+struct fork_choice_snapshot_callback_ctx
+{
+    struct lantern_http_fork_choice_snapshot snapshot;
+    int rc;
+};
+
 static void expect_zero(int rc, const char *label)
 {
     if (rc != 0)
@@ -235,6 +241,36 @@ static int snapshot_head_cb(void *context, struct lantern_http_head_snapshot *ou
         return ctx->rc;
     }
     *out_snapshot = ctx->snapshot;
+    return LANTERN_HTTP_CB_OK;
+}
+
+static int snapshot_fork_choice_cb(
+    void *context,
+    struct lantern_http_fork_choice_snapshot *out_snapshot)
+{
+    if (!context || !out_snapshot)
+    {
+        return LANTERN_HTTP_CB_ERR_INVALID_PARAM;
+    }
+    struct fork_choice_snapshot_callback_ctx *ctx = context;
+    if (ctx->rc != 0)
+    {
+        return ctx->rc;
+    }
+    memset(out_snapshot, 0, sizeof(*out_snapshot));
+    *out_snapshot = ctx->snapshot;
+    if (ctx->snapshot.node_count > 0)
+    {
+        out_snapshot->nodes = calloc(ctx->snapshot.node_count, sizeof(*out_snapshot->nodes));
+        if (!out_snapshot->nodes)
+        {
+            return LANTERN_HTTP_CB_ERR_IO;
+        }
+        memcpy(
+            out_snapshot->nodes,
+            ctx->snapshot.nodes,
+            ctx->snapshot.node_count * sizeof(*out_snapshot->nodes));
+    }
     return LANTERN_HTTP_CB_OK;
 }
 
@@ -605,6 +641,222 @@ static int test_justified_state_endpoint(void)
     return 0;
 }
 
+static int test_fork_choice_endpoint(void)
+{
+    struct fork_choice_snapshot_callback_ctx ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.rc = LANTERN_HTTP_CB_OK;
+
+    struct lantern_http_fork_choice_node nodes[3];
+    memset(nodes, 0, sizeof(nodes));
+
+    for (size_t i = 0; i < LANTERN_ROOT_SIZE; ++i)
+    {
+        nodes[0].root.bytes[i] = (uint8_t)(0x10u + (uint8_t)i);
+        nodes[0].parent_root.bytes[i] = (uint8_t)(0x01u + (uint8_t)i);
+        nodes[1].root.bytes[i] = (uint8_t)(0x20u + (uint8_t)i);
+        nodes[1].parent_root.bytes[i] = nodes[0].root.bytes[i];
+        nodes[2].root.bytes[i] = (uint8_t)(0x30u + (uint8_t)i);
+        nodes[2].parent_root.bytes[i] = nodes[1].root.bytes[i];
+        ctx.snapshot.head.bytes[i] = nodes[2].root.bytes[i];
+        ctx.snapshot.justified.root.bytes[i] = nodes[1].root.bytes[i];
+        ctx.snapshot.finalized.root.bytes[i] = nodes[0].root.bytes[i];
+        ctx.snapshot.safe_target.bytes[i] = nodes[1].root.bytes[i];
+    }
+
+    nodes[0].slot = 5u;
+    nodes[0].proposer_index = 1u;
+    nodes[0].weight = 0u;
+    nodes[1].slot = 6u;
+    nodes[1].proposer_index = 2u;
+    nodes[1].weight = 3u;
+    nodes[2].slot = 7u;
+    nodes[2].proposer_index = 3u;
+    nodes[2].weight = 2u;
+
+    ctx.snapshot.nodes = nodes;
+    ctx.snapshot.node_count = 3u;
+    ctx.snapshot.justified.slot = 6u;
+    ctx.snapshot.finalized.slot = 5u;
+    ctx.snapshot.validator_count = 4u;
+
+    struct lantern_http_server server;
+    lantern_http_server_init(&server);
+    struct lantern_http_server_config config;
+    memset(&config, 0, sizeof(config));
+    config.port = 0;
+    config.callbacks.context = &ctx;
+    config.callbacks.snapshot_fork_choice = snapshot_fork_choice_cb;
+
+    if (lantern_http_server_start(&server, &config) != 0)
+    {
+        return 1;
+    }
+
+    struct sockaddr_in addr;
+    socklen_t addr_len = sizeof(addr);
+    if (getsockname(server.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
+    {
+        lantern_http_server_stop(&server);
+        return 1;
+    }
+    uint16_t port = ntohs(addr.sin_port);
+    expect_true(port != 0, "ephemeral port assigned fork choice");
+
+    const char *request =
+        "GET /lean/v0/fork_choice HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Accept: application/json\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+
+    uint8_t *response = NULL;
+    size_t response_len = 0;
+    if (read_response(port, request, &response, &response_len) != 0)
+    {
+        lantern_http_server_stop(&server);
+        return 1;
+    }
+
+    size_t header_end = 0;
+    expect_zero(find_header_end(response, response_len, &header_end), "find header end fork choice");
+    expect_true(header_end < response_len, "header size fork choice");
+
+    char *header = malloc(header_end + 1);
+    expect_true(header != NULL, "header alloc fork choice");
+    memcpy(header, response, header_end);
+    header[header_end] = '\0';
+
+    expect_true(strstr(header, "HTTP/1.1 200") != NULL, "status 200 fork choice");
+    expect_true(strstr(header, "Content-Type: application/json") != NULL, "content-type fork choice");
+
+    char node_root_hex[3][(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char node_parent_hex[3][(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char justified_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char finalized_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char safe_target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    for (size_t i = 0; i < 3u; ++i)
+    {
+        expect_zero(
+            lantern_bytes_to_hex(
+                nodes[i].root.bytes,
+                LANTERN_ROOT_SIZE,
+                node_root_hex[i],
+                sizeof(node_root_hex[i]),
+                1),
+            "fork choice node root hex");
+        expect_zero(
+            lantern_bytes_to_hex(
+                nodes[i].parent_root.bytes,
+                LANTERN_ROOT_SIZE,
+                node_parent_hex[i],
+                sizeof(node_parent_hex[i]),
+                1),
+            "fork choice node parent hex");
+    }
+    expect_zero(
+        lantern_bytes_to_hex(
+            ctx.snapshot.head.bytes,
+            LANTERN_ROOT_SIZE,
+            head_hex,
+            sizeof(head_hex),
+            1),
+        "fork choice head hex");
+    expect_zero(
+        lantern_bytes_to_hex(
+            ctx.snapshot.justified.root.bytes,
+            LANTERN_ROOT_SIZE,
+            justified_hex,
+            sizeof(justified_hex),
+            1),
+        "fork choice justified hex");
+    expect_zero(
+        lantern_bytes_to_hex(
+            ctx.snapshot.finalized.root.bytes,
+            LANTERN_ROOT_SIZE,
+            finalized_hex,
+            sizeof(finalized_hex),
+            1),
+        "fork choice finalized hex");
+    expect_zero(
+        lantern_bytes_to_hex(
+            ctx.snapshot.safe_target.bytes,
+            LANTERN_ROOT_SIZE,
+            safe_target_hex,
+            sizeof(safe_target_hex),
+            1),
+        "fork choice safe target hex");
+
+    char expected[2048];
+    int expected_written = snprintf(
+        expected,
+        sizeof(expected),
+        "{\"nodes\":["
+        "{\"root\":\"%s\",\"slot\":%" PRIu64 ",\"parent_root\":\"%s\",\"proposer_index\":%" PRIu64
+        ",\"weight\":%" PRIu64 "},"
+        "{\"root\":\"%s\",\"slot\":%" PRIu64 ",\"parent_root\":\"%s\",\"proposer_index\":%" PRIu64
+        ",\"weight\":%" PRIu64 "},"
+        "{\"root\":\"%s\",\"slot\":%" PRIu64 ",\"parent_root\":\"%s\",\"proposer_index\":%" PRIu64
+        ",\"weight\":%" PRIu64 "}"
+        "],\"head\":\"%s\",\"justified\":{\"slot\":%" PRIu64 ",\"root\":\"%s\"},"
+        "\"finalized\":{\"slot\":%" PRIu64 ",\"root\":\"%s\"},"
+        "\"safe_target\":\"%s\",\"validator_count\":%" PRIu64 "}",
+        node_root_hex[0],
+        nodes[0].slot,
+        node_parent_hex[0],
+        nodes[0].proposer_index,
+        nodes[0].weight,
+        node_root_hex[1],
+        nodes[1].slot,
+        node_parent_hex[1],
+        nodes[1].proposer_index,
+        nodes[1].weight,
+        node_root_hex[2],
+        nodes[2].slot,
+        node_parent_hex[2],
+        nodes[2].proposer_index,
+        nodes[2].weight,
+        head_hex,
+        ctx.snapshot.justified.slot,
+        justified_hex,
+        ctx.snapshot.finalized.slot,
+        finalized_hex,
+        safe_target_hex,
+        ctx.snapshot.validator_count);
+    expect_true(expected_written > 0 && (size_t)expected_written < sizeof(expected), "expected fork choice json length");
+
+    size_t body_len = response_len - header_end;
+    expect_true(body_len == (size_t)expected_written, "fork choice body length");
+    expect_true(memcmp(response + header_end, expected, (size_t)expected_written) == 0, "fork choice body");
+
+    free(header);
+    free(response);
+
+    ctx.rc = LANTERN_HTTP_CB_ERR_INVALID_STATE;
+    response = NULL;
+    response_len = 0;
+    if (read_response(port, request, &response, &response_len) != 0)
+    {
+        lantern_http_server_stop(&server);
+        return 1;
+    }
+
+    header_end = 0;
+    expect_zero(find_header_end(response, response_len, &header_end), "find header end fork choice 503");
+    header = malloc(header_end + 1);
+    expect_true(header != NULL, "header alloc fork choice 503");
+    memcpy(header, response, header_end);
+    header[header_end] = '\0';
+    expect_true(strstr(header, "HTTP/1.1 503") != NULL, "status 503 fork choice");
+
+    free(header);
+    free(response);
+
+    lantern_http_server_stop(&server);
+    return 0;
+}
+
 static int test_health_endpoint(void)
 {
     struct lantern_http_server server;
@@ -738,6 +990,10 @@ int main(void)
         return 1;
     }
     if (test_justified_state_endpoint() != 0)
+    {
+        return 1;
+    }
+    if (test_fork_choice_endpoint() != 0)
     {
         return 1;
     }

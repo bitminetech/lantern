@@ -663,7 +663,7 @@ static int parse_hex_bytes(const char *hex, uint8_t *out, size_t expected_len) {
     return 0;
 }
 
-static void normalize_attestation_data_for_gossip_sanity(LanternAttestationData *data, uint64_t max_slot) {
+static void normalize_attestation_data_for_gossip_sanity(LanternAttestationData *data) {
     if (!data) {
         return;
     }
@@ -672,9 +672,6 @@ static void normalize_attestation_data_for_gossip_sanity(LanternAttestationData 
     }
     if (data->slot < data->target.slot) {
         data->slot = data->target.slot;
-    }
-    if (data->slot > max_slot) {
-        data->slot = max_slot;
     }
 }
 
@@ -685,11 +682,11 @@ static void normalize_signed_block_for_gossip_sanity(LanternSignedBlock *block) 
     uint64_t block_slot = block->message.block.slot;
     for (size_t i = 0; i < block->message.block.body.attestations.length; ++i) {
         LanternAggregatedAttestation *att = &block->message.block.body.attestations.data[i];
-        normalize_attestation_data_for_gossip_sanity(&att->data, block_slot);
+        normalize_attestation_data_for_gossip_sanity(&att->data);
     }
 
     LanternVote *proposer = &block->message.proposer_attestation;
-    normalize_attestation_data_for_gossip_sanity(&proposer->data, block_slot);
+    normalize_attestation_data_for_gossip_sanity(&proposer->data);
     if (proposer->slot < block_slot) {
         proposer->slot = block_slot;
     }
@@ -1945,6 +1942,46 @@ static void test_gossip_signed_block_payload(void) {
     free(compressed);
 }
 
+static void test_gossip_signed_block_accepts_future_attestation_slot(void) {
+    LanternSignedBlock block;
+    lantern_signed_block_with_attestation_init(&block);
+    populate_block(&block, 7);
+
+    CHECK(block.message.block.body.attestations.length > 0);
+    LanternAggregatedAttestation *attestation = &block.message.block.body.attestations.data[0];
+    attestation->data.slot = block.message.block.slot + 1u;
+    attestation->data.head.slot = attestation->data.slot;
+    attestation->data.target.slot = attestation->data.slot;
+    attestation->data.source.slot = block.message.block.slot;
+
+    size_t raw_upper = signed_block_min_capacity_for_test(&block);
+    size_t max_compressed = 0;
+    CHECK(lantern_snappy_max_compressed_size(raw_upper, &max_compressed) == LANTERN_SNAPPY_OK);
+    uint8_t *compressed = malloc(max_compressed);
+    CHECK(compressed);
+
+    size_t compressed_len = 0;
+    check_zero(
+        lantern_gossip_encode_signed_block_snappy(&block, compressed, max_compressed, &compressed_len),
+        "encode future-slot attestation block gossip");
+    CHECK(compressed_len > 0);
+
+    LanternSignedBlock decoded;
+    lantern_signed_block_with_attestation_init(&decoded);
+    check_zero(
+        lantern_gossip_decode_signed_block_snappy(&decoded, compressed, compressed_len, NULL, NULL),
+        "decode future-slot attestation block gossip");
+    CHECK(decoded.message.block.slot == block.message.block.slot);
+    CHECK(decoded.message.block.body.attestations.length == block.message.block.body.attestations.length);
+    CHECK(decoded.message.block.body.attestations.data[0].data.slot == block.message.block.slot + 1u);
+    CHECK(decoded.message.block.body.attestations.data[0].data.target.slot == block.message.block.slot + 1u);
+    CHECK(decoded.message.block.body.attestations.data[0].data.source.slot == block.message.block.slot);
+
+    lantern_signed_block_with_attestation_reset(&decoded);
+    lantern_signed_block_with_attestation_reset(&block);
+    free(compressed);
+}
+
 static void test_gossip_block_snappy_roundtrip_random(void) {
     const size_t iterations = 64;
     for (size_t i = 0; i < iterations; ++i) {
@@ -2121,6 +2158,7 @@ int main(void) {
     test_signed_block_list();
     test_gossip_signed_vote_payload();
     test_gossip_signed_block_payload();
+    test_gossip_signed_block_accepts_future_attestation_slot();
     test_gossip_block_snappy_roundtrip_random();
     test_replay_devnet_block_payloads();
     test_gossipsub_service_loopback();

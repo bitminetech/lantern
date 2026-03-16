@@ -26,6 +26,7 @@ struct lantern_fork_choice_block_entry {
     LanternRoot parent_root;
     size_t parent_index;
     uint64_t slot;
+    LanternValidatorIndex proposer_index;
     bool has_validator_count;
     uint64_t validator_count;
     bool has_justified;
@@ -87,6 +88,23 @@ typedef struct lantern_fork_choice {
     const struct lantern_aggregated_payload_pool *known_aggregated_payloads;
     const struct lantern_attestation_data_by_root *attestation_data_by_root;
 } LanternForkChoice;
+
+struct lantern_fork_choice_tree_node {
+    LanternRoot root;
+    LanternRoot parent_root;
+    uint64_t slot;
+    uint64_t proposer_index;
+    uint64_t weight;
+};
+
+struct lantern_fork_choice_tree_snapshot {
+    struct lantern_fork_choice_tree_node *nodes;
+    size_t node_count;
+    LanternRoot head;
+    LanternCheckpoint justified;
+    LanternCheckpoint finalized;
+    LanternRoot safe_target;
+};
 
 void lantern_fork_choice_init(LanternForkChoice *store);
 void lantern_fork_choice_reset(LanternForkChoice *store);
@@ -179,6 +197,10 @@ const LanternCheckpoint *lantern_fork_choice_latest_finalized(const LanternForkC
 const LanternRoot *lantern_fork_choice_safe_target(const LanternForkChoice *store);
 size_t lantern_fork_choice_new_votes_count(const LanternForkChoice *store);
 size_t lantern_fork_choice_known_votes_count(const LanternForkChoice *store);
+void lantern_fork_choice_tree_snapshot_reset(struct lantern_fork_choice_tree_snapshot *snapshot);
+int lantern_fork_choice_snapshot_tree(
+    const LanternForkChoice *store,
+    struct lantern_fork_choice_tree_snapshot *out_snapshot);
 
 #ifdef __cplusplus
 }

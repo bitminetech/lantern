@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stdbool.h>
+#include <dirent.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdint.h>
@@ -103,6 +104,61 @@ static int iterate_counter(const LanternSignedBlock *block, const LanternRoot *r
     struct iterate_ctx *ctx = context;
     ctx->count += 1;
     return 0;
+}
+
+static void assert_invalid_gossip_dump(
+    const char *base_dir,
+    const uint8_t *expected_payload,
+    size_t expected_payload_len) {
+    char invalid_gossip_dir[PATH_MAX];
+    int written = snprintf(
+        invalid_gossip_dir,
+        sizeof(invalid_gossip_dir),
+        "%s/%s",
+        base_dir,
+        "invalid_gossip");
+    assert(written > 0 && (size_t)written < sizeof(invalid_gossip_dir));
+
+    DIR *dir = opendir(invalid_gossip_dir);
+    assert(dir != NULL);
+
+    struct dirent *entry = NULL;
+    char dump_name[NAME_MAX + 1u];
+    dump_name[0] = '\0';
+    size_t dump_count = 0u;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        ++dump_count;
+        assert(dump_count == 1u);
+        written = snprintf(dump_name, sizeof(dump_name), "%s", entry->d_name);
+        assert(written > 0 && (size_t)written < sizeof(dump_name));
+    }
+    closedir(dir);
+
+    assert(dump_count == 1u);
+    assert(strstr(dump_name, "_aggregated_attestation_") != NULL);
+    char expected_suffix[32];
+    written = snprintf(expected_suffix, sizeof(expected_suffix), "_%zub.ssz", expected_payload_len);
+    assert(written > 0 && (size_t)written < sizeof(expected_suffix));
+    assert(strstr(dump_name, expected_suffix) != NULL);
+
+    char dump_path[PATH_MAX];
+    written = snprintf(dump_path, sizeof(dump_path), "%s/%s", invalid_gossip_dir, dump_name);
+    assert(written > 0 && (size_t)written < sizeof(dump_path));
+
+    FILE *dump_fp = fopen(dump_path, "rb");
+    assert(dump_fp != NULL);
+    uint8_t readback[16];
+    size_t read_len = fread(readback, 1u, sizeof(readback), dump_fp);
+    assert(read_len == expected_payload_len);
+    assert(memcmp(readback, expected_payload, expected_payload_len) == 0);
+    assert(fgetc(dump_fp) == EOF);
+    fclose(dump_fp);
+
+    cleanup_path(dump_path);
+    cleanup_dir(invalid_gossip_dir);
 }
 
 static int test_storage_rejects_excess_validators(void) {
@@ -267,6 +323,14 @@ int main(void) {
             invalid_payload,
             sizeof(invalid_payload)),
         "store invalid block bytes");
+    const uint8_t invalid_gossip_payload[] = {0x01, 0x02, 0x03, 0x04, 0x05};
+    expect_zero(
+        lantern_storage_store_invalid_gossip_payload(
+            base_dir,
+            "aggregated_attestation",
+            invalid_gossip_payload,
+            sizeof(invalid_gossip_payload)),
+        "store invalid gossip payload");
 
     LanternSignedBlockList response;
     lantern_signed_block_list_init(&response);
@@ -377,6 +441,8 @@ int main(void) {
     assert(memcmp(invalid_readback, invalid_payload, sizeof(invalid_readback)) == 0);
     assert(fgetc(invalid_fp) == EOF);
     fclose(invalid_fp);
+
+    assert_invalid_gossip_dump(base_dir, invalid_gossip_payload, sizeof(invalid_gossip_payload));
 
     cleanup_path(block_path);
     cleanup_path(invalid_block_path);

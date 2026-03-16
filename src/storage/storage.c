@@ -7,8 +7,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -30,6 +32,7 @@
 #define LANTERN_STORAGE_VOTES_VERSION 3u
 #define LANTERN_STORAGE_BLOCKS_DIR "blocks"
 #define LANTERN_STORAGE_INVALID_BLOCKS_DIR "invalid_blocks"
+#define LANTERN_STORAGE_INVALID_GOSSIP_DIR "invalid_gossip"
 #define LANTERN_STORAGE_STATES_DIR "states"
 #define LANTERN_STORAGE_INDICES_DIR "indices"
 #define LANTERN_STORAGE_SLOT_INDEX_DIR "slots"
@@ -439,6 +442,10 @@ static int build_invalid_blocks_dir(const char *data_dir, char **out_path) {
     return join_path(data_dir, LANTERN_STORAGE_INVALID_BLOCKS_DIR, out_path);
 }
 
+static int build_invalid_gossip_dir(const char *data_dir, char **out_path) {
+    return join_path(data_dir, LANTERN_STORAGE_INVALID_GOSSIP_DIR, out_path);
+}
+
 static int build_states_dir(const char *data_dir, char **out_path) {
     return join_path(data_dir, LANTERN_STORAGE_STATES_DIR, out_path);
 }
@@ -457,6 +464,75 @@ static int build_slot_index_dir(const char *data_dir, char **out_path) {
     return rc;
 }
 
+static int format_utc_timestamp(char *buffer, size_t buffer_len) {
+    if (!buffer || buffer_len == 0) {
+        return -1;
+    }
+
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) != 0) {
+        return -1;
+    }
+
+    const time_t seconds = (time_t)tv.tv_sec;
+    struct tm utc_tm;
+#if defined(_WIN32)
+    if (gmtime_s(&utc_tm, &seconds) != 0) {
+        return -1;
+    }
+#else
+    if (gmtime_r(&seconds, &utc_tm) == NULL) {
+        return -1;
+    }
+#endif
+
+    const int wrote = snprintf(
+        buffer,
+        buffer_len,
+        "%04d%02d%02dT%02d%02d%02d.%06ldZ",
+        utc_tm.tm_year + 1900,
+        utc_tm.tm_mon + 1,
+        utc_tm.tm_mday,
+        utc_tm.tm_hour,
+        utc_tm.tm_min,
+        utc_tm.tm_sec,
+        (long)tv.tv_usec);
+    if (wrote < 0 || (size_t)wrote >= buffer_len) {
+        return -1;
+    }
+    return 0;
+}
+
+static int sanitize_filename_component(const char *input, char *output, size_t output_len) {
+    if (!input || !output || output_len == 0) {
+        return -1;
+    }
+
+    size_t out_index = 0;
+    for (size_t i = 0; input[i] != '\0'; ++i) {
+        if (out_index + 1u >= output_len) {
+            return -1;
+        }
+        const unsigned char ch = (unsigned char)input[i];
+        if ((ch >= 'a' && ch <= 'z')
+            || (ch >= 'A' && ch <= 'Z')
+            || (ch >= '0' && ch <= '9')
+            || ch == '-'
+            || ch == '_') {
+            output[out_index++] = (char)ch;
+        } else {
+            output[out_index++] = '_';
+        }
+    }
+
+    if (out_index == 0) {
+        return -1;
+    }
+
+    output[out_index] = '\0';
+    return 0;
+}
+
 /**
  * Ensure all storage directories exist under `data_dir`.
  *
@@ -472,6 +548,7 @@ int lantern_storage_prepare(const char *data_dir) {
     int rc = -1;
     char *blocks_dir = NULL;
     char *invalid_blocks_dir = NULL;
+    char *invalid_gossip_dir = NULL;
     char *states_dir = NULL;
     char *indices_dir = NULL;
     char *slot_dir = NULL;
@@ -489,6 +566,12 @@ int lantern_storage_prepare(const char *data_dir) {
         goto cleanup;
     }
     if (ensure_directory(invalid_blocks_dir) != 0) {
+        goto cleanup;
+    }
+    if (build_invalid_gossip_dir(data_dir, &invalid_gossip_dir) != 0) {
+        goto cleanup;
+    }
+    if (ensure_directory(invalid_gossip_dir) != 0) {
         goto cleanup;
     }
     if (build_states_dir(data_dir, &states_dir) != 0) {
@@ -515,6 +598,7 @@ int lantern_storage_prepare(const char *data_dir) {
 cleanup:
     free_path(blocks_dir);
     free_path(invalid_blocks_dir);
+    free_path(invalid_gossip_dir);
     free_path(states_dir);
     free_path(indices_dir);
     free_path(slot_dir);
@@ -1113,6 +1197,57 @@ int lantern_storage_store_invalid_block_bytes_for_root(
 cleanup:
     free_path(block_path);
     free_path(invalid_blocks_dir);
+    return rc;
+}
+
+int lantern_storage_store_invalid_gossip_payload(
+    const char *data_dir,
+    const char *payload_type,
+    const uint8_t *payload,
+    size_t payload_len) {
+    if (!data_dir || !payload_type || !payload || payload_len == 0) {
+        return -1;
+    }
+
+    int rc = -1;
+    char *invalid_gossip_dir = NULL;
+    char *payload_path = NULL;
+    char timestamp[32];
+    char safe_payload_type[64];
+    char filename[128];
+
+    if (build_invalid_gossip_dir(data_dir, &invalid_gossip_dir) != 0) {
+        goto cleanup;
+    }
+    if (ensure_directory(invalid_gossip_dir) != 0) {
+        goto cleanup;
+    }
+    if (format_utc_timestamp(timestamp, sizeof(timestamp)) != 0) {
+        goto cleanup;
+    }
+    if (sanitize_filename_component(payload_type, safe_payload_type, sizeof(safe_payload_type)) != 0) {
+        goto cleanup;
+    }
+
+    const int wrote = snprintf(
+        filename,
+        sizeof(filename),
+        "%s_%s_%zub.ssz",
+        timestamp,
+        safe_payload_type,
+        payload_len);
+    if (wrote < 0 || (size_t)wrote >= sizeof(filename)) {
+        goto cleanup;
+    }
+    if (join_path(invalid_gossip_dir, filename, &payload_path) != 0) {
+        goto cleanup;
+    }
+
+    rc = write_atomic_file(payload_path, payload, payload_len);
+
+cleanup:
+    free_path(payload_path);
+    free_path(invalid_gossip_dir);
     return rc;
 }
 

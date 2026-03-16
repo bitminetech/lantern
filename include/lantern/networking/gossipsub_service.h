@@ -18,6 +18,7 @@ extern "C" {
 struct lantern_gossipsub_config {
     struct libp2p_host *host;
     const char *devnet;
+    const char *data_dir;
     size_t attestation_subnet_id;
     int subscribe_attestation_subnet;
 };
@@ -43,6 +44,7 @@ struct lantern_gossipsub_service {
     char vote_topic[128];
     char vote_subnet_topic[128];
     char aggregated_attestation_topic[128];
+    const char *data_dir;
     size_t attestation_subnet_id;
     int subscribe_attestation_subnet;
     int (*publish_hook)(const char *topic, const uint8_t *payload, size_t payload_len, void *user_data);

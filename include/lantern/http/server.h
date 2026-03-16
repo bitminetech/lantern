@@ -1,6 +1,7 @@
 #ifndef LANTERN_HTTP_SERVER_H
 #define LANTERN_HTTP_SERVER_H
 
+#include <stddef.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -32,6 +33,24 @@ struct lantern_http_head_snapshot {
     LanternCheckpoint finalized;
 };
 
+struct lantern_http_fork_choice_node {
+    LanternRoot root;
+    uint64_t slot;
+    LanternRoot parent_root;
+    uint64_t proposer_index;
+    uint64_t weight;
+};
+
+struct lantern_http_fork_choice_snapshot {
+    struct lantern_http_fork_choice_node *nodes;
+    size_t node_count;
+    LanternRoot head;
+    LanternCheckpoint justified;
+    LanternCheckpoint finalized;
+    LanternRoot safe_target;
+    uint64_t validator_count;
+};
+
 struct lantern_http_validator_info {
     uint64_t global_index;
     bool enabled;
@@ -41,6 +60,7 @@ struct lantern_http_validator_info {
 struct lantern_http_server_callbacks {
     void *context;
     int (*snapshot_head)(void *context, struct lantern_http_head_snapshot *out_snapshot);
+    int (*snapshot_fork_choice)(void *context, struct lantern_http_fork_choice_snapshot *out_snapshot);
     size_t (*validator_count)(void *context);
     int (*validator_info)(void *context, size_t index, struct lantern_http_validator_info *out_info);
     int (*set_validator_status)(void *context, uint64_t global_index, bool enabled);

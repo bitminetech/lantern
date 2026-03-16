@@ -5,6 +5,7 @@
  * Exposes endpoints:
  * - GET /lean/v0/states/finalized  (SSZ state snapshot)
  * - GET /lean/v0/checkpoints/justified  (JSON justified checkpoint)
+ * - GET /lean/v0/fork_choice       (JSON fork choice tree snapshot)
  * - GET /lean/v0/health            (JSON health response)
  * - GET /metrics               (Prometheus metrics)
  *
@@ -19,6 +20,7 @@
 #include <netinet/in.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -39,6 +41,7 @@ static const char LANTERN_HTTP_PATH_HEALTH[] = "/lean/v0/health";
 static const char LANTERN_HTTP_PATH_METRICS[] = "/metrics";
 static const char LANTERN_HTTP_PATH_FINALIZED[] = "/lean/v0/states/finalized";
 static const char LANTERN_HTTP_PATH_JUSTIFIED[] = "/lean/v0/checkpoints/justified";
+static const char LANTERN_HTTP_PATH_FORK_CHOICE[] = "/lean/v0/fork_choice";
 static const char LANTERN_HTTP_JSON_HEALTH[] = "{\"status\":\"healthy\",\"service\":\"lean-spec-api\"}";
 static const char LANTERN_HTTP_JSON_MALFORMED[] = "{\"error\":\"malformed request\"}";
 static const char LANTERN_HTTP_JSON_UNKNOWN_ENDPOINT[] = "{\"error\":\"unknown endpoint\"}";
@@ -50,6 +53,13 @@ enum
 {
     LANTERN_HTTP_METHOD_CAP = 8,
     LANTERN_HTTP_PATH_CAP = 256,
+};
+
+struct lantern_http_json_buffer
+{
+    char *data;
+    size_t len;
+    size_t cap;
 };
 
 /**
@@ -251,6 +261,204 @@ static int send_json_error(
         "application/json",
         json_body,
         strlen(json_body));
+}
+
+static void json_buffer_reset(struct lantern_http_json_buffer *buf)
+{
+    if (!buf)
+    {
+        return;
+    }
+    free(buf->data);
+    buf->data = NULL;
+    buf->len = 0;
+    buf->cap = 0;
+}
+
+static int json_buffer_reserve(struct lantern_http_json_buffer *buf, size_t additional)
+{
+    if (!buf)
+    {
+        return -1;
+    }
+    size_t required = buf->len + additional + 1u;
+    if (required <= buf->cap)
+    {
+        return 0;
+    }
+    size_t new_cap = buf->cap == 0 ? 256u : buf->cap;
+    while (new_cap < required)
+    {
+        if (new_cap > (SIZE_MAX / 2u))
+        {
+            return -1;
+        }
+        new_cap *= 2u;
+    }
+    char *new_data = realloc(buf->data, new_cap);
+    if (!new_data)
+    {
+        return -1;
+    }
+    buf->data = new_data;
+    buf->cap = new_cap;
+    return 0;
+}
+
+static int json_buffer_appendf(struct lantern_http_json_buffer *buf, const char *fmt, ...)
+{
+    if (!buf || !fmt)
+    {
+        return -1;
+    }
+
+    va_list measure;
+    va_start(measure, fmt);
+    int needed = vsnprintf(NULL, 0, fmt, measure);
+    va_end(measure);
+    if (needed < 0)
+    {
+        return -1;
+    }
+
+    if (json_buffer_reserve(buf, (size_t)needed) != 0)
+    {
+        return -1;
+    }
+
+    va_list args;
+    va_start(args, fmt);
+    int written = vsnprintf(buf->data + buf->len, buf->cap - buf->len, fmt, args);
+    va_end(args);
+    if (written < 0 || written != needed)
+    {
+        return -1;
+    }
+
+    buf->len += (size_t)written;
+    return 0;
+}
+
+static int format_fork_choice_response(
+    const struct lantern_http_fork_choice_snapshot *snapshot,
+    char **out_body,
+    size_t *out_len)
+{
+    if (!snapshot || !out_body || !out_len)
+    {
+        return -1;
+    }
+
+    *out_body = NULL;
+    *out_len = 0;
+
+    char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char justified_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char finalized_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char safe_target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    if (lantern_bytes_to_hex(
+            snapshot->head.bytes,
+            LANTERN_ROOT_SIZE,
+            head_hex,
+            sizeof(head_hex),
+            1)
+        != 0
+        || lantern_bytes_to_hex(
+               snapshot->justified.root.bytes,
+               LANTERN_ROOT_SIZE,
+               justified_hex,
+               sizeof(justified_hex),
+               1)
+               != 0
+        || lantern_bytes_to_hex(
+               snapshot->finalized.root.bytes,
+               LANTERN_ROOT_SIZE,
+               finalized_hex,
+               sizeof(finalized_hex),
+               1)
+               != 0
+        || lantern_bytes_to_hex(
+               snapshot->safe_target.bytes,
+               LANTERN_ROOT_SIZE,
+               safe_target_hex,
+               sizeof(safe_target_hex),
+               1)
+               != 0)
+    {
+        return -1;
+    }
+
+    struct lantern_http_json_buffer buf;
+    memset(&buf, 0, sizeof(buf));
+    if (json_buffer_appendf(&buf, "{\"nodes\":[") != 0)
+    {
+        json_buffer_reset(&buf);
+        return -1;
+    }
+
+    for (size_t i = 0; i < snapshot->node_count; ++i)
+    {
+        const struct lantern_http_fork_choice_node *node = &snapshot->nodes[i];
+        char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+        char parent_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+        if (lantern_bytes_to_hex(
+                node->root.bytes,
+                LANTERN_ROOT_SIZE,
+                root_hex,
+                sizeof(root_hex),
+                1)
+            != 0
+            || lantern_bytes_to_hex(
+                   node->parent_root.bytes,
+                   LANTERN_ROOT_SIZE,
+                   parent_hex,
+                   sizeof(parent_hex),
+                   1)
+                   != 0)
+        {
+            json_buffer_reset(&buf);
+            return -1;
+        }
+
+        if (json_buffer_appendf(
+                &buf,
+                "%s{\"root\":\"%s\",\"slot\":%" PRIu64
+                ",\"parent_root\":\"%s\",\"proposer_index\":%" PRIu64
+                ",\"weight\":%" PRIu64 "}",
+                i == 0 ? "" : ",",
+                root_hex,
+                node->slot,
+                parent_hex,
+                node->proposer_index,
+                node->weight)
+            != 0)
+        {
+            json_buffer_reset(&buf);
+            return -1;
+        }
+    }
+
+    if (json_buffer_appendf(
+            &buf,
+            "],\"head\":\"%s\",\"justified\":{\"slot\":%" PRIu64 ",\"root\":\"%s\"},"
+            "\"finalized\":{\"slot\":%" PRIu64 ",\"root\":\"%s\"},"
+            "\"safe_target\":\"%s\",\"validator_count\":%" PRIu64 "}",
+            head_hex,
+            snapshot->justified.slot,
+            justified_hex,
+            snapshot->finalized.slot,
+            finalized_hex,
+            safe_target_hex,
+            snapshot->validator_count)
+        != 0)
+    {
+        json_buffer_reset(&buf);
+        return -1;
+    }
+
+    *out_body = buf.data;
+    *out_len = buf.len;
+    return 0;
 }
 
 
@@ -651,6 +859,101 @@ static void handle_client_connection(
                 "http",
                 &(const struct lantern_log_metadata){.peer = peer_text},
                 "justified response send failed rc=%d",
+                result);
+            return;
+        }
+
+        lantern_log_info(
+            "http",
+            &(const struct lantern_log_metadata){.peer = peer_text},
+            "GET %s -> 200",
+            path);
+        return;
+    }
+
+    if (strcmp(path, LANTERN_HTTP_PATH_FORK_CHOICE) == 0)
+    {
+        if (!server->callbacks.snapshot_fork_choice)
+        {
+            int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
+            lantern_log_error(
+                "http",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "fork choice snapshot callback missing rc=%d",
+                rc);
+            return;
+        }
+
+        struct lantern_http_fork_choice_snapshot snapshot;
+        memset(&snapshot, 0, sizeof(snapshot));
+        int snapshot_rc = server->callbacks.snapshot_fork_choice(server->callbacks.context, &snapshot);
+        if (snapshot_rc != 0)
+        {
+            const char *body = LANTERN_HTTP_JSON_INTERNAL;
+            int status_code = 500;
+            const char *status_text = "Internal Server Error";
+            if (snapshot_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
+                || snapshot_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
+                || snapshot_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
+            {
+                body = LANTERN_HTTP_JSON_UNAVAILABLE;
+                status_code = 503;
+                status_text = "Service Unavailable";
+            }
+
+            int rc = send_json_error(client_fd, status_code, status_text, body);
+            if (snapshot_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
+                || snapshot_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
+                || snapshot_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
+            {
+                lantern_log_warn(
+                    "http",
+                    &(const struct lantern_log_metadata){.peer = peer_text},
+                    "fork choice snapshot unavailable rc=%d send_rc=%d",
+                    snapshot_rc,
+                    rc);
+            }
+            else
+            {
+                lantern_log_error(
+                    "http",
+                    &(const struct lantern_log_metadata){.peer = peer_text},
+                    "fork choice snapshot failed rc=%d send_rc=%d",
+                    snapshot_rc,
+                    rc);
+            }
+            return;
+        }
+
+        char *body = NULL;
+        size_t body_len = 0;
+        result = format_fork_choice_response(&snapshot, &body, &body_len);
+        free(snapshot.nodes);
+        if (result != 0)
+        {
+            int rc = send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
+            lantern_log_error(
+                "http",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "fork choice response format failed send_rc=%d",
+                rc);
+            return;
+        }
+
+        result = send_http_response(
+            client_fd,
+            200,
+            "OK",
+            "application/json",
+            body,
+            body_len);
+        free(body);
+        if (result != 0)
+        {
+            lantern_log_error(
+                "http",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "fork choice response send failed rc=%d",
                 result);
             return;
         }

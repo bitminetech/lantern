@@ -18,6 +18,7 @@
 #include <inttypes.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -156,6 +157,97 @@ int http_snapshot_head(void *context, struct lantern_http_head_snapshot *out_sna
         return LANTERN_HTTP_CB_ERR_HASH_FAILED;
     }
 
+    return LANTERN_HTTP_CB_OK;
+}
+
+int http_snapshot_fork_choice(
+    void *context,
+    struct lantern_http_fork_choice_snapshot *out_snapshot)
+{
+    if (!context || !out_snapshot)
+    {
+        return LANTERN_HTTP_CB_ERR_INVALID_PARAM;
+    }
+    struct lantern_client *client = context;
+    memset(out_snapshot, 0, sizeof(*out_snapshot));
+
+    const bool expect_state_lock = client->state_lock_initialized;
+    bool state_locked = lantern_client_lock_state(client);
+    if (expect_state_lock && !state_locked)
+    {
+        return LANTERN_HTTP_CB_ERR_LOCK_FAILED;
+    }
+
+    if (!client->has_fork_choice
+        || !client->fork_choice.initialized
+        || !client->fork_choice.has_anchor)
+    {
+        lantern_client_unlock_state(client, state_locked);
+        return LANTERN_HTTP_CB_ERR_INVALID_STATE;
+    }
+
+    struct lantern_fork_choice_tree_snapshot snapshot;
+    memset(&snapshot, 0, sizeof(snapshot));
+    if (lantern_fork_choice_snapshot_tree(&client->fork_choice, &snapshot) != 0)
+    {
+        lantern_client_unlock_state(client, state_locked);
+        return LANTERN_HTTP_CB_ERR_IO;
+    }
+
+    uint64_t validator_count = 0;
+    const LanternState *head_state =
+        lantern_fork_choice_block_state(&client->fork_choice, &snapshot.head);
+    if (head_state)
+    {
+        validator_count = (uint64_t)lantern_state_validator_count(head_state);
+    }
+    else if (client->has_state)
+    {
+        LanternRoot state_head_root;
+        if (lantern_hash_tree_root_block_header(
+                &client->state.latest_block_header,
+                &state_head_root)
+            != 0)
+        {
+            lantern_fork_choice_tree_snapshot_reset(&snapshot);
+            lantern_client_unlock_state(client, state_locked);
+            return LANTERN_HTTP_CB_ERR_HASH_FAILED;
+        }
+        if (memcmp(state_head_root.bytes, snapshot.head.bytes, LANTERN_ROOT_SIZE) == 0)
+        {
+            validator_count = (uint64_t)lantern_state_validator_count(&client->state);
+        }
+    }
+
+    if (snapshot.node_count > 0)
+    {
+        out_snapshot->nodes = calloc(snapshot.node_count, sizeof(*out_snapshot->nodes));
+        if (!out_snapshot->nodes)
+        {
+            lantern_fork_choice_tree_snapshot_reset(&snapshot);
+            lantern_client_unlock_state(client, state_locked);
+            return LANTERN_HTTP_CB_ERR_IO;
+        }
+    }
+
+    for (size_t i = 0; i < snapshot.node_count; ++i)
+    {
+        out_snapshot->nodes[i].root = snapshot.nodes[i].root;
+        out_snapshot->nodes[i].slot = snapshot.nodes[i].slot;
+        out_snapshot->nodes[i].parent_root = snapshot.nodes[i].parent_root;
+        out_snapshot->nodes[i].proposer_index = snapshot.nodes[i].proposer_index;
+        out_snapshot->nodes[i].weight = snapshot.nodes[i].weight;
+    }
+
+    out_snapshot->node_count = snapshot.node_count;
+    out_snapshot->head = snapshot.head;
+    out_snapshot->justified = snapshot.justified;
+    out_snapshot->finalized = snapshot.finalized;
+    out_snapshot->safe_target = snapshot.safe_target;
+    out_snapshot->validator_count = validator_count;
+
+    lantern_fork_choice_tree_snapshot_reset(&snapshot);
+    lantern_client_unlock_state(client, state_locked);
     return LANTERN_HTTP_CB_OK;
 }
 

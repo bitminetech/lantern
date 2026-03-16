@@ -285,6 +285,16 @@ if(LANTERN_BUILD_TESTS)
     )
     add_test(NAME lantern_networking_messages COMMAND lantern_networking_messages_test)
 
+    add_executable(lantern_gossip_block_dump_decode
+        tests/unit/test_gossip_block_dump_decode.c
+    )
+    target_link_libraries(lantern_gossip_block_dump_decode PRIVATE lantern)
+    target_compile_definitions(
+        lantern_gossip_block_dump_decode
+        PRIVATE
+            LANTERN_PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+    )
+
     add_executable(lantern_libp2p_test tests/unit/test_libp2p.c)
     target_link_libraries(lantern_libp2p_test PRIVATE lantern)
     add_test(NAME lantern_libp2p COMMAND lantern_libp2p_test)

@@ -305,6 +305,19 @@ int find_local_validator_index(
  */
 int http_snapshot_head(void *context, struct lantern_http_head_snapshot *out_snapshot);
 
+/**
+ * Get current fork-choice tree snapshot for HTTP API.
+ *
+ * @param context       Client instance
+ * @param out_snapshot  Output snapshot structure
+ * @return 0 on success, -1 on failure
+ *
+ * @note Thread safety: This function may acquire state_lock
+ */
+int http_snapshot_fork_choice(
+    void *context,
+    struct lantern_http_fork_choice_snapshot *out_snapshot);
+
 
 /**
  * Get count of local validators for HTTP API.
