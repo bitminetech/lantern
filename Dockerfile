@@ -8,7 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG TARGETPLATFORM
 ARG APT_MIRROR_AMD64="http://archive.ubuntu.com/ubuntu"
 ARG APT_SECURITY_MIRROR_AMD64="http://security.ubuntu.com/ubuntu"
-ARG APT_MIRROR_ARM64="http://mirrors.ocf.berkeley.edu/ubuntu-ports"
+ARG APT_MIRROR_ARM64="http://ports.ubuntu.com/ubuntu-ports"
 
 # Install build dependencies
 # Note: Build with --network=host if you encounter GPG/network issues
@@ -118,7 +118,7 @@ ARG GIT_BRANCH=unknown
 ARG TARGETPLATFORM
 ARG APT_MIRROR_AMD64="http://archive.ubuntu.com/ubuntu"
 ARG APT_SECURITY_MIRROR_AMD64="http://security.ubuntu.com/ubuntu"
-ARG APT_MIRROR_ARM64="http://mirrors.ocf.berkeley.edu/ubuntu-ports"
+ARG APT_MIRROR_ARM64="http://ports.ubuntu.com/ubuntu-ports"
 
 LABEL org.opencontainers.image.revision=$GIT_COMMIT \
       org.opencontainers.image.ref.name=$GIT_BRANCH
