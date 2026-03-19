@@ -177,8 +177,7 @@ static inline void lantern_test_state_attach_fork_choice(
         (state), \
         lantern_test_state_store_ensure((state)), \
         (block), \
-        (signatures), \
-        (proposer_attestation))
+        (signatures))
 #define lantern_state_transition(state, signed_block) \
     lantern_state_transition_explicit( \
         (state), \

@@ -308,28 +308,27 @@ static void check_signed_block_equal(
     const LanternSignedBlock *actual) {
     CHECK(expected != NULL);
     CHECK(actual != NULL);
-    CHECK(actual->message.block.slot == expected->message.block.slot);
-    CHECK(actual->message.block.proposer_index == expected->message.block.proposer_index);
+    CHECK(actual->message.slot == expected->message.slot);
+    CHECK(actual->message.proposer_index == expected->message.proposer_index);
     CHECK(memcmp(
-        actual->message.block.parent_root.bytes,
-        expected->message.block.parent_root.bytes,
+        actual->message.parent_root.bytes,
+        expected->message.parent_root.bytes,
         LANTERN_ROOT_SIZE)
         == 0);
     CHECK(memcmp(
-        actual->message.block.state_root.bytes,
-        expected->message.block.state_root.bytes,
+        actual->message.state_root.bytes,
+        expected->message.state_root.bytes,
         LANTERN_ROOT_SIZE)
         == 0);
-    CHECK(actual->message.block.body.attestations.length == expected->message.block.body.attestations.length);
+    CHECK(actual->message.body.attestations.length == expected->message.body.attestations.length);
     CHECK(
-        (actual->message.block.body.attestations.length == 0)
-        || (actual->message.block.body.attestations.data != NULL && expected->message.block.body.attestations.data != NULL));
-    for (size_t i = 0; i < actual->message.block.body.attestations.length; ++i) {
+        (actual->message.body.attestations.length == 0)
+        || (actual->message.body.attestations.data != NULL && expected->message.body.attestations.data != NULL));
+    for (size_t i = 0; i < actual->message.body.attestations.length; ++i) {
         check_aggregated_attestation_equal(
-            &expected->message.block.body.attestations.data[i],
-            &actual->message.block.body.attestations.data[i]);
+            &expected->message.body.attestations.data[i],
+            &actual->message.body.attestations.data[i]);
     }
-    check_vote_equal(&expected->message.proposer_attestation, &actual->message.proposer_attestation);
     check_block_signatures_equal(&expected->signatures, &actual->signatures);
 }
 
@@ -349,14 +348,14 @@ static void expect_signed_vote_fixture(const LanternSignedVote *vote) {
 
 static void expect_signed_block_fixture(const LanternSignedBlock *block) {
     CHECK(block != NULL);
-    CHECK(block->message.block.slot == 72);
-    CHECK(block->message.block.proposer_index == 5);
-    expect_root_seed(&block->message.block.parent_root, 0x24);
-    expect_root_seed(&block->message.block.state_root, 0x74);
-    CHECK(block->message.block.body.attestations.length == 2);
-    CHECK(block->message.block.body.attestations.data != NULL);
+    CHECK(block->message.slot == 72);
+    CHECK(block->message.proposer_index == 5);
+    expect_root_seed(&block->message.parent_root, 0x24);
+    expect_root_seed(&block->message.state_root, 0x74);
+    CHECK(block->message.body.attestations.length == 2);
+    CHECK(block->message.body.attestations.data != NULL);
     expect_aggregated_attestation_view(
-        &block->message.block.body.attestations.data[0],
+        &block->message.body.attestations.data[0],
         9,
         71,
         72,
@@ -366,7 +365,7 @@ static void expect_signed_block_fixture(const LanternSignedBlock *block) {
         69,
         0x64);
     expect_aggregated_attestation_view(
-        &block->message.block.body.attestations.data[1],
+        &block->message.body.attestations.data[1],
         10,
         70,
         71,
@@ -375,16 +374,6 @@ static void expect_signed_block_fixture(const LanternSignedBlock *block) {
         0x49,
         68,
         0x69);
-    expect_vote_view(
-        &block->message.proposer_attestation,
-        8,
-        74,
-        75,
-        0xA4,
-        74,
-        0xC4,
-        72,
-        0xE4);
     CHECK(block->signatures.attestation_signatures.length == 2);
     CHECK(block->signatures.attestation_signatures.data != NULL);
     expect_signature_proof_seed(&block->signatures.attestation_signatures.data[0], 9, 0xC4, 8);
@@ -495,27 +484,24 @@ static void fill_proof_data(LanternAggregatedSignatureProof *proof, uint8_t seed
 
 static void populate_block(LanternSignedBlock *signed_block, uint8_t seed) {
     lantern_signed_block_with_attestation_init(signed_block);
-    signed_block->message.block.slot = 100 + seed;
-    signed_block->message.block.proposer_index = 3 + seed;
-    fill_bytes(signed_block->message.block.parent_root.bytes, LANTERN_ROOT_SIZE, (uint8_t)(0x10 + seed));
-    fill_bytes(signed_block->message.block.state_root.bytes, LANTERN_ROOT_SIZE, (uint8_t)(0x20 + seed));
+    signed_block->message.slot = 100 + seed;
+    signed_block->message.proposer_index = 3 + seed;
+    fill_bytes(signed_block->message.parent_root.bytes, LANTERN_ROOT_SIZE, (uint8_t)(0x10 + seed));
+    fill_bytes(signed_block->message.state_root.bytes, LANTERN_ROOT_SIZE, (uint8_t)(0x20 + seed));
     LanternSignedVote vote = build_signed_vote(1 + seed, 50 + seed, (uint8_t)(0x30 + seed));
     LanternAggregatedAttestation agg;
     build_aggregated_attestation_from_vote(&vote.data, &agg);
     check_zero(
-        lantern_aggregated_attestations_append(&signed_block->message.block.body.attestations, &agg),
+        lantern_aggregated_attestations_append(&signed_block->message.body.attestations, &agg),
         "attestation append");
     lantern_aggregated_attestation_reset(&agg);
-    LanternSignedVote proposer_vote =
-        build_signed_vote(2 + seed, signed_block->message.block.slot, (uint8_t)(0x35 + seed));
-    signed_block->message.proposer_attestation = proposer_vote.data;
-    size_t att_count = signed_block->message.block.body.attestations.length;
+    size_t att_count = signed_block->message.body.attestations.length;
     check_zero(
         lantern_attestation_signatures_resize(&signed_block->signatures.attestation_signatures, att_count),
         "signature resize");
     for (size_t i = 0; i < att_count; ++i) {
         LanternAggregatedSignatureProof *proof = &signed_block->signatures.attestation_signatures.data[i];
-        const LanternAggregatedAttestation *attestation = &signed_block->message.block.body.attestations.data[i];
+        const LanternAggregatedAttestation *attestation = &signed_block->message.body.attestations.data[i];
         check_zero(
             lantern_bitlist_resize(&proof->participants, attestation->aggregation_bits.bit_length),
             "participants resize");
@@ -525,7 +511,7 @@ static void populate_block(LanternSignedBlock *signed_block, uint8_t seed) {
         }
         fill_proof_data(proof, (uint8_t)(0xC0 + seed), 8);
     }
-    signed_block->signatures.proposer_signature = proposer_vote.signature;
+    fill_signature(&signed_block->signatures.proposer_signature, (uint8_t)(0xD0 + seed));
 }
 
 struct block_hook_ctx {
@@ -558,9 +544,9 @@ static int block_publish_hook(
 
     const LanternSignedBlock *expected = ctx->expected;
     CHECK(expected != NULL);
-    CHECK(decoded.message.block.slot == expected->message.block.slot);
-    CHECK(decoded.message.block.proposer_index == expected->message.block.proposer_index);
-    CHECK(decoded.message.block.body.attestations.length == expected->message.block.body.attestations.length);
+    CHECK(decoded.message.slot == expected->message.slot);
+    CHECK(decoded.message.proposer_index == expected->message.proposer_index);
+    CHECK(decoded.message.body.attestations.length == expected->message.body.attestations.length);
     check_block_signatures_equal(&decoded.signatures, &expected->signatures);
     lantern_signed_block_with_attestation_reset(&decoded);
     ctx->called += 1;
@@ -679,16 +665,9 @@ static void normalize_signed_block_for_gossip_sanity(LanternSignedBlock *block) 
     if (!block) {
         return;
     }
-    uint64_t block_slot = block->message.block.slot;
-    for (size_t i = 0; i < block->message.block.body.attestations.length; ++i) {
-        LanternAggregatedAttestation *att = &block->message.block.body.attestations.data[i];
+    for (size_t i = 0; i < block->message.body.attestations.length; ++i) {
+        LanternAggregatedAttestation *att = &block->message.body.attestations.data[i];
         normalize_attestation_data_for_gossip_sanity(&att->data);
-    }
-
-    LanternVote *proposer = &block->message.proposer_attestation;
-    normalize_attestation_data_for_gossip_sanity(&proposer->data);
-    if (proposer->slot < block_slot) {
-        proposer->slot = block_slot;
     }
 }
 
@@ -713,11 +692,11 @@ static void test_replay_devnet_block_payloads(void) {
         lantern_signed_block_with_attestation_init(&original);
         CHECK(load_signed_block_fixture(&cases[i], &original) == 0);
         normalize_signed_block_for_gossip_sanity(&original);
-        size_t sig_count = original.message.block.body.attestations.length;
+        size_t sig_count = original.message.body.attestations.length;
         CHECK(lantern_attestation_signatures_resize(&original.signatures.attestation_signatures, sig_count) == 0);
         for (size_t sig_idx = 0; sig_idx < sig_count; ++sig_idx) {
             LanternAggregatedSignatureProof *proof = &original.signatures.attestation_signatures.data[sig_idx];
-            const LanternAggregatedAttestation *att = &original.message.block.body.attestations.data[sig_idx];
+            const LanternAggregatedAttestation *att = &original.message.body.attestations.data[sig_idx];
             CHECK(lantern_bitlist_resize(&proof->participants, att->aggregation_bits.bit_length) == 0);
             size_t byte_len = (att->aggregation_bits.bit_length + 7u) / 8u;
             if (byte_len > 0) {
@@ -729,7 +708,7 @@ static void test_replay_devnet_block_payloads(void) {
 
         LanternRoot original_block_root;
         memset(&original_block_root, 0, sizeof(original_block_root));
-        CHECK(lantern_hash_tree_root_block(&original.message.block, &original_block_root) == 0);
+        CHECK(lantern_hash_tree_root_block(&original.message, &original_block_root) == 0);
 
         size_t ssz_capacity = signed_block_min_capacity_for_test(&original);
         CHECK(ssz_capacity > 0);
@@ -749,26 +728,26 @@ static void test_replay_devnet_block_payloads(void) {
         lantern_signed_block_with_attestation_init(&decoded);
         CHECK(lantern_gossip_decode_signed_block_snappy(&decoded, compressed, compressed_len, NULL, NULL) == 0);
 
-        CHECK(decoded.message.block.slot == original.message.block.slot);
-        CHECK(decoded.message.block.proposer_index == original.message.block.proposer_index);
-        CHECK(memcmp(decoded.message.block.parent_root.bytes, original.message.block.parent_root.bytes, LANTERN_ROOT_SIZE) == 0);
-        CHECK(memcmp(decoded.message.block.state_root.bytes, original.message.block.state_root.bytes, LANTERN_ROOT_SIZE) == 0);
+        CHECK(decoded.message.slot == original.message.slot);
+        CHECK(decoded.message.proposer_index == original.message.proposer_index);
+        CHECK(memcmp(decoded.message.parent_root.bytes, original.message.parent_root.bytes, LANTERN_ROOT_SIZE) == 0);
+        CHECK(memcmp(decoded.message.state_root.bytes, original.message.state_root.bytes, LANTERN_ROOT_SIZE) == 0);
 
         check_block_signatures_equal(&decoded.signatures, &original.signatures);
-        CHECK(decoded.message.block.body.attestations.length == original.message.block.body.attestations.length);
-        if (decoded.message.block.body.attestations.length > 0) {
-            CHECK(decoded.message.block.body.attestations.data != NULL);
-            CHECK(original.message.block.body.attestations.data != NULL);
+        CHECK(decoded.message.body.attestations.length == original.message.body.attestations.length);
+        if (decoded.message.body.attestations.length > 0) {
+            CHECK(decoded.message.body.attestations.data != NULL);
+            CHECK(original.message.body.attestations.data != NULL);
         }
-        for (size_t att_idx = 0; att_idx < decoded.message.block.body.attestations.length; ++att_idx) {
-            const LanternAggregatedAttestation *expected_att = &original.message.block.body.attestations.data[att_idx];
-            const LanternAggregatedAttestation *decoded_att = &decoded.message.block.body.attestations.data[att_idx];
+        for (size_t att_idx = 0; att_idx < decoded.message.body.attestations.length; ++att_idx) {
+            const LanternAggregatedAttestation *expected_att = &original.message.body.attestations.data[att_idx];
+            const LanternAggregatedAttestation *decoded_att = &decoded.message.body.attestations.data[att_idx];
             check_aggregated_attestation_equal(expected_att, decoded_att);
         }
 
         LanternRoot decoded_block_root;
         memset(&decoded_block_root, 0, sizeof(decoded_block_root));
-        CHECK(lantern_hash_tree_root_block(&decoded.message.block, &decoded_block_root) == 0);
+        CHECK(lantern_hash_tree_root_block(&decoded.message, &decoded_block_root) == 0);
         CHECK(memcmp(decoded_block_root.bytes, original_block_root.bytes, LANTERN_ROOT_SIZE) == 0);
 
         uint8_t *roundtrip = (uint8_t *)malloc(ssz_written);
@@ -920,10 +899,10 @@ static void build_fixture_block(
     uint64_t proposer_index,
     size_t attestation_count) {
     lantern_signed_block_with_attestation_init(out);
-    out->message.block.slot = base_slot;
-    out->message.block.proposer_index = proposer_index;
-    fill_bytes(out->message.block.parent_root.bytes, LANTERN_ROOT_SIZE, seed);
-    fill_bytes(out->message.block.state_root.bytes, LANTERN_ROOT_SIZE, (uint8_t)(seed + 0x50));
+    out->message.slot = base_slot;
+    out->message.proposer_index = proposer_index;
+    fill_bytes(out->message.parent_root.bytes, LANTERN_ROOT_SIZE, seed);
+    fill_bytes(out->message.state_root.bytes, LANTERN_ROOT_SIZE, (uint8_t)(seed + 0x50));
 
     /* Build attestations matching the Python fixture format */
     for (size_t i = 0; i < attestation_count; ++i) {
@@ -941,29 +920,16 @@ static void build_fixture_block(
         fill_bytes(agg.data.source.root.bytes, LANTERN_ROOT_SIZE, (uint8_t)(att_seed + 0x40));
         check_zero(lantern_bitlist_resize(&agg.aggregation_bits, (size_t)(validator_id + 1)), "agg bits resize");
         check_zero(lantern_bitlist_set(&agg.aggregation_bits, (size_t)validator_id, true), "agg bits set");
-        check_zero(lantern_aggregated_attestations_append(&out->message.block.body.attestations, &agg), "agg append");
+        check_zero(lantern_aggregated_attestations_append(&out->message.body.attestations, &agg), "agg append");
         lantern_aggregated_attestation_reset(&agg);
     }
 
-    /* Proposer attestation */
-    uint8_t prop_seed = (uint8_t)(seed + 0x80);
-    uint64_t prop_validator = (proposer_index + 3) % 16;
-    uint64_t prop_slot = base_slot + attestation_count + 4;
-    out->message.proposer_attestation.validator_id = prop_validator;
-    out->message.proposer_attestation.slot = prop_slot;
-    out->message.proposer_attestation.head.slot = prop_slot + 1;
-    fill_bytes(out->message.proposer_attestation.head.root.bytes, LANTERN_ROOT_SIZE, prop_seed);
-    out->message.proposer_attestation.target.slot = prop_slot + 2;
-    fill_bytes(out->message.proposer_attestation.target.root.bytes, LANTERN_ROOT_SIZE, (uint8_t)(prop_seed + 0x20));
-    out->message.proposer_attestation.source.slot = prop_slot;
-    fill_bytes(out->message.proposer_attestation.source.root.bytes, LANTERN_ROOT_SIZE, (uint8_t)(prop_seed + 0x40));
-
     /* Signatures */
-    size_t att_count = out->message.block.body.attestations.length;
+    size_t att_count = out->message.body.attestations.length;
     check_zero(lantern_attestation_signatures_resize(&out->signatures.attestation_signatures, att_count), "sig resize");
     for (size_t i = 0; i < att_count; ++i) {
         LanternAggregatedSignatureProof *proof = &out->signatures.attestation_signatures.data[i];
-        const LanternAggregatedAttestation *att = &out->message.block.body.attestations.data[i];
+        const LanternAggregatedAttestation *att = &out->message.body.attestations.data[i];
         check_zero(lantern_bitlist_resize(&proof->participants, att->aggregation_bits.bit_length), "part resize");
         size_t byte_len = (att->aggregation_bits.bit_length + 7u) / 8u;
         if (byte_len > 0) {
@@ -1002,32 +968,23 @@ static void test_signed_block_list_fixture(void) {
     CHECK(decoded.length == 2);
 
     const LanternSignedBlock *block0 = &decoded.blocks[0];
-    CHECK(block0->message.block.slot == 12);
-    CHECK(block0->message.block.proposer_index == 1);
-    expect_root_seed(&block0->message.block.parent_root, 0x10);
-    expect_root_seed(&block0->message.block.state_root, 0x60);
-    CHECK(block0->message.block.body.attestations.length == 1);
-    const LanternAggregatedAttestation *block0_att0 = &block0->message.block.body.attestations.data[0];
+    CHECK(block0->message.slot == 12);
+    CHECK(block0->message.proposer_index == 1);
+    expect_root_seed(&block0->message.parent_root, 0x10);
+    expect_root_seed(&block0->message.state_root, 0x60);
+    CHECK(block0->message.body.attestations.length == 1);
+    const LanternAggregatedAttestation *block0_att0 = &block0->message.body.attestations.data[0];
     expect_aggregated_attestation_view(block0_att0, 1, 13, 14, 0x10, 15, 0x30, 13, 0x50);
-    const LanternVote *block0_prop = &block0->message.proposer_attestation;
-    CHECK(block0_prop->validator_id == 4);
-    CHECK(block0_prop->slot == 17);
-    expect_checkpoint_seed(&block0_prop->head, 18, 0x90);
-    expect_checkpoint_seed(&block0_prop->target, 19, 0xB0);
-    expect_checkpoint_seed(&block0_prop->source, 17, 0xD0);
     CHECK(block0->signatures.attestation_signatures.length == 1);
     CHECK(block0->signatures.attestation_signatures.length == 1);
     expect_signature_proof_seed(&block0->signatures.attestation_signatures.data[0], 1, 0xB0, 8);
 
     const LanternSignedBlock *block1 = &decoded.blocks[1];
-    CHECK(block1->message.block.slot == 18);
-    CHECK(block1->message.block.proposer_index == 3);
-    expect_root_seed(&block1->message.block.parent_root, 0x30);
-    expect_root_seed(&block1->message.block.state_root, 0x80);
-    CHECK(block1->message.block.body.attestations.length == 2);
-    const LanternVote *block1_prop = &block1->message.proposer_attestation;
-    CHECK(block1_prop->validator_id == 6);
-    CHECK(block1_prop->slot == 24);
+    CHECK(block1->message.slot == 18);
+    CHECK(block1->message.proposer_index == 3);
+    expect_root_seed(&block1->message.parent_root, 0x30);
+    expect_root_seed(&block1->message.state_root, 0x80);
+    CHECK(block1->message.body.attestations.length == 2);
     CHECK(block1->signatures.attestation_signatures.length == 2);
 
     /* Test snappy roundtrip */
@@ -1050,8 +1007,8 @@ static void test_signed_block_list_fixture(void) {
         lantern_network_signed_block_list_decode_snappy(&snappy_decoded, compressed, compressed_len),
         "response fixture decode snappy");
     CHECK(snappy_decoded.length == decoded.length);
-    CHECK(snappy_decoded.blocks[0].message.block.slot == 12);
-    CHECK(snappy_decoded.blocks[1].message.block.slot == 18);
+    CHECK(snappy_decoded.blocks[0].message.slot == 12);
+    CHECK(snappy_decoded.blocks[1].message.slot == 18);
 
     free(compressed);
     free(encoded);
@@ -1521,26 +1478,19 @@ static void build_fixture_signed_block(LanternSignedBlock *block) {
     lantern_signed_block_with_attestation_init(block);
 
     /* Block header */
-    block->message.block.slot = 72;
-    block->message.block.proposer_index = 5;
-    fill_bytes(block->message.block.parent_root.bytes, LANTERN_ROOT_SIZE, 0x24);
-    fill_bytes(block->message.block.state_root.bytes, LANTERN_ROOT_SIZE, 0x74);
+    block->message.slot = 72;
+    block->message.proposer_index = 5;
+    fill_bytes(block->message.parent_root.bytes, LANTERN_ROOT_SIZE, 0x24);
+    fill_bytes(block->message.state_root.bytes, LANTERN_ROOT_SIZE, 0x74);
 
     /* Attestations */
     check_zero(
-        lantern_aggregated_attestations_resize(&block->message.block.body.attestations, 2),
+        lantern_aggregated_attestations_resize(&block->message.body.attestations, 2),
         "attestations resize");
     build_fixture_aggregated_attestation(
-        &block->message.block.body.attestations.data[0], 9, 71, 72, 0x24, 71, 0x44, 69, 0x64);
+        &block->message.body.attestations.data[0], 9, 71, 72, 0x24, 71, 0x44, 69, 0x64);
     build_fixture_aggregated_attestation(
-        &block->message.block.body.attestations.data[1], 10, 70, 71, 0x29, 70, 0x49, 68, 0x69);
-
-    /* Proposer attestation */
-    block->message.proposer_attestation.validator_id = 8;
-    block->message.proposer_attestation.slot = 74;
-    block->message.proposer_attestation.head = build_checkpoint(0xA4, 75);
-    block->message.proposer_attestation.target = build_checkpoint(0xC4, 74);
-    block->message.proposer_attestation.source = build_checkpoint(0xE4, 72);
+        &block->message.body.attestations.data[1], 10, 70, 71, 0x29, 70, 0x49, 68, 0x69);
 
     /* Signatures */
     check_zero(
@@ -1731,26 +1681,6 @@ static void test_signed_block_list(void) {
     lantern_signed_block_list_init(&decoded);
     check_zero(lantern_network_signed_block_list_decode(&decoded, encoded, written), "response decode");
     CHECK(decoded.length == resp.length);
-    const LanternVote *decoded_vote0 = &decoded.blocks[0].message.proposer_attestation;
-    const LanternVote *expected_vote0 = &resp.blocks[0].message.proposer_attestation;
-    CHECK(decoded_vote0->validator_id == expected_vote0->validator_id);
-    CHECK(decoded_vote0->slot == expected_vote0->slot);
-    CHECK(decoded_vote0->head.slot == expected_vote0->head.slot);
-    CHECK(memcmp(decoded_vote0->head.root.bytes, expected_vote0->head.root.bytes, LANTERN_ROOT_SIZE) == 0);
-    CHECK(decoded_vote0->target.slot == expected_vote0->target.slot);
-    CHECK(memcmp(decoded_vote0->target.root.bytes, expected_vote0->target.root.bytes, LANTERN_ROOT_SIZE) == 0);
-    CHECK(decoded_vote0->source.slot == expected_vote0->source.slot);
-    CHECK(memcmp(decoded_vote0->source.root.bytes, expected_vote0->source.root.bytes, LANTERN_ROOT_SIZE) == 0);
-    const LanternVote *decoded_vote1 = &decoded.blocks[1].message.proposer_attestation;
-    const LanternVote *expected_vote1 = &resp.blocks[1].message.proposer_attestation;
-    CHECK(decoded_vote1->validator_id == expected_vote1->validator_id);
-    CHECK(decoded_vote1->slot == expected_vote1->slot);
-    CHECK(decoded_vote1->head.slot == expected_vote1->head.slot);
-    CHECK(memcmp(decoded_vote1->head.root.bytes, expected_vote1->head.root.bytes, LANTERN_ROOT_SIZE) == 0);
-    CHECK(decoded_vote1->target.slot == expected_vote1->target.slot);
-    CHECK(memcmp(decoded_vote1->target.root.bytes, expected_vote1->target.root.bytes, LANTERN_ROOT_SIZE) == 0);
-    CHECK(decoded_vote1->source.slot == expected_vote1->source.slot);
-    CHECK(memcmp(decoded_vote1->source.root.bytes, expected_vote1->source.root.bytes, LANTERN_ROOT_SIZE) == 0);
     check_block_signatures_equal(&decoded.blocks[1].signatures, &resp.blocks[1].signatures);
 
     size_t max_compressed = 0;
@@ -1774,16 +1704,6 @@ static void test_signed_block_list(void) {
     check_zero(lantern_network_signed_block_list_decode_snappy(&snappy_decoded, compressed, compressed_len), "response decode snappy");
     CHECK(snappy_decoded.length == resp.length);
     CHECK(snappy_decoded.blocks[0].message.slot == resp.blocks[0].message.slot);
-    const LanternVote *snappy_vote = &snappy_decoded.blocks[0].message.proposer_attestation;
-    const LanternVote *expected_snappy_vote = &resp.blocks[0].message.proposer_attestation;
-    CHECK(snappy_vote->validator_id == expected_snappy_vote->validator_id);
-    CHECK(snappy_vote->slot == expected_snappy_vote->slot);
-    CHECK(snappy_vote->head.slot == expected_snappy_vote->head.slot);
-    CHECK(memcmp(snappy_vote->head.root.bytes, expected_snappy_vote->head.root.bytes, LANTERN_ROOT_SIZE) == 0);
-    CHECK(snappy_vote->target.slot == expected_snappy_vote->target.slot);
-    CHECK(memcmp(snappy_vote->target.root.bytes, expected_snappy_vote->target.root.bytes, LANTERN_ROOT_SIZE) == 0);
-    CHECK(snappy_vote->source.slot == expected_snappy_vote->source.slot);
-    CHECK(memcmp(snappy_vote->source.root.bytes, expected_snappy_vote->source.root.bytes, LANTERN_ROOT_SIZE) == 0);
 
     lantern_signed_block_list_reset(&resp);
     lantern_signed_block_list_reset(&decoded);
@@ -1910,28 +1830,8 @@ static void test_gossip_signed_block_payload(void) {
     check_zero(
         lantern_gossip_decode_signed_block_snappy(&decoded, compressed, compressed_len, NULL, NULL),
         "decode signed block gossip");
-    CHECK(decoded.message.block.slot == block.message.block.slot);
-    CHECK(decoded.message.block.body.attestations.length == block.message.block.body.attestations.length);
-    CHECK(decoded.message.proposer_attestation.validator_id == block.message.proposer_attestation.validator_id);
-    CHECK(decoded.message.proposer_attestation.slot == block.message.proposer_attestation.slot);
-    CHECK(decoded.message.proposer_attestation.head.slot == block.message.proposer_attestation.head.slot);
-    CHECK(memcmp(
-              decoded.message.proposer_attestation.head.root.bytes,
-              block.message.proposer_attestation.head.root.bytes,
-              LANTERN_ROOT_SIZE)
-          == 0);
-    CHECK(decoded.message.proposer_attestation.target.slot == block.message.proposer_attestation.target.slot);
-    CHECK(memcmp(
-              decoded.message.proposer_attestation.target.root.bytes,
-              block.message.proposer_attestation.target.root.bytes,
-              LANTERN_ROOT_SIZE)
-          == 0);
-    CHECK(decoded.message.proposer_attestation.source.slot == block.message.proposer_attestation.source.slot);
-    CHECK(memcmp(
-              decoded.message.proposer_attestation.source.root.bytes,
-              block.message.proposer_attestation.source.root.bytes,
-              LANTERN_ROOT_SIZE)
-          == 0);
+    CHECK(decoded.message.slot == block.message.slot);
+    CHECK(decoded.message.body.attestations.length == block.message.body.attestations.length);
     check_block_signatures_equal(&decoded.signatures, &block.signatures);
 
     uint8_t invalid_payload[] = {0xFF};
@@ -1947,12 +1847,12 @@ static void test_gossip_signed_block_accepts_future_attestation_slot(void) {
     lantern_signed_block_with_attestation_init(&block);
     populate_block(&block, 7);
 
-    CHECK(block.message.block.body.attestations.length > 0);
-    LanternAggregatedAttestation *attestation = &block.message.block.body.attestations.data[0];
-    attestation->data.slot = block.message.block.slot + 1u;
+    CHECK(block.message.body.attestations.length > 0);
+    LanternAggregatedAttestation *attestation = &block.message.body.attestations.data[0];
+    attestation->data.slot = block.message.slot + 1u;
     attestation->data.head.slot = attestation->data.slot;
     attestation->data.target.slot = attestation->data.slot;
-    attestation->data.source.slot = block.message.block.slot;
+    attestation->data.source.slot = block.message.slot;
 
     size_t raw_upper = signed_block_min_capacity_for_test(&block);
     size_t max_compressed = 0;
@@ -1971,11 +1871,11 @@ static void test_gossip_signed_block_accepts_future_attestation_slot(void) {
     check_zero(
         lantern_gossip_decode_signed_block_snappy(&decoded, compressed, compressed_len, NULL, NULL),
         "decode future-slot attestation block gossip");
-    CHECK(decoded.message.block.slot == block.message.block.slot);
-    CHECK(decoded.message.block.body.attestations.length == block.message.block.body.attestations.length);
-    CHECK(decoded.message.block.body.attestations.data[0].data.slot == block.message.block.slot + 1u);
-    CHECK(decoded.message.block.body.attestations.data[0].data.target.slot == block.message.block.slot + 1u);
-    CHECK(decoded.message.block.body.attestations.data[0].data.source.slot == block.message.block.slot);
+    CHECK(decoded.message.slot == block.message.slot);
+    CHECK(decoded.message.body.attestations.length == block.message.body.attestations.length);
+    CHECK(decoded.message.body.attestations.data[0].data.slot == block.message.slot + 1u);
+    CHECK(decoded.message.body.attestations.data[0].data.target.slot == block.message.slot + 1u);
+    CHECK(decoded.message.body.attestations.data[0].data.source.slot == block.message.slot);
 
     lantern_signed_block_with_attestation_reset(&decoded);
     lantern_signed_block_with_attestation_reset(&block);
@@ -1987,17 +1887,17 @@ static void test_gossip_block_snappy_roundtrip_random(void) {
     for (size_t i = 0; i < iterations; ++i) {
         LanternSignedBlock original;
         lantern_signed_block_with_attestation_init(&original);
-        original.message.block.slot = 1 + rng_uniform(2047);
-        original.message.block.proposer_index = rng_uniform(63);
-        rng_fill_bytes(original.message.block.parent_root.bytes, LANTERN_ROOT_SIZE);
-        rng_fill_bytes(original.message.block.state_root.bytes, LANTERN_ROOT_SIZE);
+        original.message.slot = 1 + rng_uniform(2047);
+        original.message.proposer_index = rng_uniform(63);
+        rng_fill_bytes(original.message.parent_root.bytes, LANTERN_ROOT_SIZE);
+        rng_fill_bytes(original.message.state_root.bytes, LANTERN_ROOT_SIZE);
 
         size_t att_count = rng_uniform(4);
         for (size_t j = 0; j < att_count; ++j) {
             LanternSignedVote vote;
             memset(&vote, 0, sizeof(vote));
             vote.data.validator_id = rng_uniform(255);
-            vote.data.slot = rng_uniform(original.message.block.slot);
+            vote.data.slot = rng_uniform(original.message.slot);
             vote.data.source.slot = vote.data.slot > 0 ? rng_uniform(vote.data.slot) : 0;
             if (vote.data.source.slot > vote.data.slot) {
                 vote.data.source.slot = vote.data.slot;
@@ -2010,16 +1910,14 @@ static void test_gossip_block_snappy_roundtrip_random(void) {
             rng_fill_bytes(vote.signature.bytes, LANTERN_SIGNATURE_SIZE);
             LanternAggregatedAttestation agg;
             build_aggregated_attestation_from_vote(&vote.data, &agg);
-            CHECK(lantern_aggregated_attestations_append(&original.message.block.body.attestations, &agg) == 0);
+            CHECK(lantern_aggregated_attestations_append(&original.message.body.attestations, &agg) == 0);
             lantern_aggregated_attestation_reset(&agg);
         }
 
-        LanternSignedVote proposer_vote = build_signed_vote(700 + i, original.message.block.slot, 0x50);
-        original.message.proposer_attestation = proposer_vote.data;
         CHECK(lantern_attestation_signatures_resize(&original.signatures.attestation_signatures, att_count) == 0);
         for (size_t sig_idx = 0; sig_idx < att_count; ++sig_idx) {
             LanternAggregatedSignatureProof *proof = &original.signatures.attestation_signatures.data[sig_idx];
-            const LanternAggregatedAttestation *att = &original.message.block.body.attestations.data[sig_idx];
+            const LanternAggregatedAttestation *att = &original.message.body.attestations.data[sig_idx];
             CHECK(lantern_bitlist_resize(&proof->participants, att->aggregation_bits.bit_length) == 0);
             size_t byte_len = (att->aggregation_bits.bit_length + 7u) / 8u;
             if (byte_len > 0) {
@@ -2052,34 +1950,14 @@ static void test_gossip_block_snappy_roundtrip_random(void) {
             lantern_gossip_decode_signed_block_snappy(&decoded, compressed, written, NULL, NULL),
             "random block decode");
 
-        CHECK(decoded.message.block.slot == original.message.block.slot);
-        CHECK(decoded.message.block.proposer_index == original.message.block.proposer_index);
-        CHECK(memcmp(decoded.message.block.parent_root.bytes, original.message.block.parent_root.bytes, LANTERN_ROOT_SIZE) == 0);
-        CHECK(memcmp(decoded.message.block.state_root.bytes, original.message.block.state_root.bytes, LANTERN_ROOT_SIZE) == 0);
-        CHECK(decoded.message.block.body.attestations.length == original.message.block.body.attestations.length);
-        CHECK(decoded.message.proposer_attestation.validator_id == original.message.proposer_attestation.validator_id);
-        CHECK(decoded.message.proposer_attestation.slot == original.message.proposer_attestation.slot);
-        CHECK(decoded.message.proposer_attestation.head.slot == original.message.proposer_attestation.head.slot);
-        CHECK(memcmp(
-                  decoded.message.proposer_attestation.head.root.bytes,
-                  original.message.proposer_attestation.head.root.bytes,
-                  LANTERN_ROOT_SIZE)
-              == 0);
-        CHECK(decoded.message.proposer_attestation.target.slot == original.message.proposer_attestation.target.slot);
-        CHECK(memcmp(
-                  decoded.message.proposer_attestation.target.root.bytes,
-                  original.message.proposer_attestation.target.root.bytes,
-                  LANTERN_ROOT_SIZE)
-              == 0);
-        CHECK(decoded.message.proposer_attestation.source.slot == original.message.proposer_attestation.source.slot);
-        CHECK(memcmp(
-                  decoded.message.proposer_attestation.source.root.bytes,
-                  original.message.proposer_attestation.source.root.bytes,
-                  LANTERN_ROOT_SIZE)
-              == 0);
-        for (size_t j = 0; j < decoded.message.block.body.attestations.length; ++j) {
-            const LanternAggregatedAttestation *expected = &original.message.block.body.attestations.data[j];
-            const LanternAggregatedAttestation *actual = &decoded.message.block.body.attestations.data[j];
+        CHECK(decoded.message.slot == original.message.slot);
+        CHECK(decoded.message.proposer_index == original.message.proposer_index);
+        CHECK(memcmp(decoded.message.parent_root.bytes, original.message.parent_root.bytes, LANTERN_ROOT_SIZE) == 0);
+        CHECK(memcmp(decoded.message.state_root.bytes, original.message.state_root.bytes, LANTERN_ROOT_SIZE) == 0);
+        CHECK(decoded.message.body.attestations.length == original.message.body.attestations.length);
+        for (size_t j = 0; j < decoded.message.body.attestations.length; ++j) {
+            const LanternAggregatedAttestation *expected = &original.message.body.attestations.data[j];
+            const LanternAggregatedAttestation *actual = &decoded.message.body.attestations.data[j];
             check_aggregated_attestation_equal(expected, actual);
         }
         check_block_signatures_equal(&decoded.signatures, &original.signatures);

@@ -58,7 +58,7 @@ static bool verify_aggregated_attestations(
     if (!state || !block) {
         return false;
     }
-    const LanternAggregatedAttestations *attestations = &block->message.block.body.attestations;
+    const LanternAggregatedAttestations *attestations = &block->message.body.attestations;
     const LanternAttestationSignatures *sig_groups = &block->signatures.attestation_signatures;
     size_t att_count = attestations->length;
 
@@ -125,7 +125,7 @@ static bool verify_aggregated_attestations(
                 fprintf(stderr, "%s: validator index out of range\n", path ? path : "(unknown)");
                 return false;
             }
-            const uint8_t *pubkey = lantern_state_validator_pubkey(state, v);
+            const uint8_t *pubkey = lantern_state_validator_attestation_pubkey(state, v);
             if (!pubkey || pubkey_is_zero(pubkey)) {
                 free(pubkeys);
                 fprintf(stderr, "%s: missing pubkey for validator %zu\n", path ? path : "(unknown)", v);
@@ -168,28 +168,27 @@ static bool verify_proposer_signature(const LanternState *state, const LanternSi
     if (!state || !block) {
         return false;
     }
-    const LanternVote *vote = &block->message.proposer_attestation;
-    uint64_t validator_id = vote->validator_id;
+    uint64_t validator_id = block->message.proposer_index;
     if (validator_id >= state->config.num_validators) {
         fprintf(stderr, "%s: proposer validator out of range\n", path ? path : "(unknown)");
         return false;
     }
-    const uint8_t *pubkey = lantern_state_validator_pubkey(state, (size_t)validator_id);
+    const uint8_t *pubkey = lantern_state_validator_proposal_pubkey(state, (size_t)validator_id);
     if (!pubkey || pubkey_is_zero(pubkey)) {
         fprintf(stderr, "%s: proposer pubkey missing\n", path ? path : "(unknown)");
         return false;
     }
-    LanternRoot vote_root;
-    if (lantern_hash_tree_root_attestation_data(&vote->data, &vote_root) != 0) {
-        fprintf(stderr, "%s: proposer attestation hash failed\n", path ? path : "(unknown)");
+    LanternRoot block_root;
+    if (lantern_hash_tree_root_block(&block->message, &block_root) != 0) {
+        fprintf(stderr, "%s: block hash failed for proposer signature\n", path ? path : "(unknown)");
         return false;
     }
     if (!lantern_signature_verify(
             pubkey,
             LANTERN_VALIDATOR_PUBKEY_SIZE,
-            vote->data.slot,
+            block->message.slot,
             &block->signatures.proposer_signature,
-            &vote_root)) {
+            &block_root)) {
         fprintf(stderr, "%s: proposer signature verification failed\n", path ? path : "(unknown)");
         return false;
     }
@@ -267,7 +266,13 @@ static int run_verify_signatures_fixture(const char *path) {
     if (anchor_idx < 0) {
         anchor_idx = lantern_fixture_object_get_field(&doc, case_idx, "anchor_state");
     }
-    int block_idx = lantern_fixture_object_get_field(&doc, case_idx, "signedBlockWithAttestation");
+    int block_idx = lantern_fixture_object_get_field(&doc, case_idx, "signedBlock");
+    if (block_idx < 0) {
+        block_idx = lantern_fixture_object_get_field(&doc, case_idx, "signed_block");
+    }
+    if (block_idx < 0) {
+        block_idx = lantern_fixture_object_get_field(&doc, case_idx, "signedBlockWithAttestation");
+    }
     if (block_idx < 0) {
         block_idx = lantern_fixture_object_get_field(&doc, case_idx, "signed_block_with_attestation");
     }
@@ -373,7 +378,7 @@ static int run_verify_signatures_fixture(const char *path) {
         result = -1;
     }
 
-    lantern_block_body_reset(&signed_block.message.block.body);
+    lantern_block_body_reset(&signed_block.message.body);
     lantern_block_signatures_reset(&signed_block.signatures);
     lantern_state_reset(&state);
     lantern_fixture_document_reset(&doc);

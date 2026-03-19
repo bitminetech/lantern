@@ -31,15 +31,18 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x8fa00001b5b22a073d21cb60c9465b379f80e74fee9baf1d137eb651ed162900a6f3ec32da74ff09265ea62fc9a5055b2e9b7c7b",
+                        "attestationPubkey": "0xcd64341d83f28533f239153535b45209592342325ed31a5792b2e61935648748d41c384850baf6386c43bf19bfb63f53eb2c8c0b",
+                        "proposalPubkey": "0x5eba321a84f55461e2c0e94036d24e5107720876752d5c4f6e03183a7e7f1856e372c60dbc6fbc0450c26e58ba402f1da6952a73",
                         "index": 0
                     },
                     {
-                        "pubkey": "0xbc56037ab0485c00441e3205d908e55a016d5450a335144f50ccb034cb253c05a1cbc047b5695a5672697d584656e96a4b94f173",
+                        "attestationPubkey": "0x0c8f12450a0f4375d8f387643a66bd4084a76a522062790d8e961b38dfe3497444af494376e3c76f3007681a4016221434cdf51d",
+                        "proposalPubkey": "0x8b31ba434a9e116dcd99a11535d8fb480fe67517c20eb1117157ca1b1b6b0c5c9d9a632e3268986f35856c337fc18d7b6d4f926a",
                         "index": 1
                     },
                     {
-                        "pubkey": "0x79422d64ecdc3b0bf7c6cc31bbfb9f4eab7950107fe23c6f4f9c94465c81f80d85a1931f1003c50531147f350357805f22fdd70b",
+                        "attestationPubkey": "0x454d107dc0156e61baee057497d5667adb027d68f6fffb2bc61c6a38e45eed3531c9bd77e64f610044b26b1ec4047929bcfed946",
+                        "proposalPubkey": "0xac91d91a23744669bb2a5356605a161a5ae28c1e872fcf1d1e8cc63cb278447d8b889c77ea21884bbd8ecf2ad4824c66ae098a12",
                         "index": 2
                     }
                 ]
@@ -51,35 +54,15 @@
                 "data": []
             }
         },
-        "signedBlockWithAttestation": {
+        "signedBlock": {
             "message": {
-                "block": {
-                    "slot": 1,
-                    "proposerIndex": 1,
-                    "parentRoot": "0x2c9e1fc178a2418b1ca1f4f6b7b851dc5f0a15eeb5d0f1bd1eec6faf74a65415",
-                    "stateRoot": "0xd8005d4481273a3e8f3c2ef6066ad6f4217a772ba629eb41f8a8e4c9bc6ae7e6",
-                    "body": {
-                        "attestations": {
-                            "data": []
-                        }
-                    }
-                },
-                "proposerAttestation": {
-                    "validatorId": 1,
-                    "data": {
-                        "slot": 1,
-                        "head": {
-                            "root": "0xb8a89a7389b27e5ae829ea4176cfa67d2949415fe3ca321627b6fe8c20da71f1",
-                            "slot": 1
-                        },
-                        "target": {
-                            "root": "0xb8a89a7389b27e5ae829ea4176cfa67d2949415fe3ca321627b6fe8c20da71f1",
-                            "slot": 1
-                        },
-                        "source": {
-                            "root": "0x2c9e1fc178a2418b1ca1f4f6b7b851dc5f0a15eeb5d0f1bd1eec6faf74a65415",
-                            "slot": 0
-                        }
+                "slot": 1,
+                "proposerIndex": 1,
+                "parentRoot": "0xe8aa857bde7571d50ed47ccf17f8e804a151729038762d4ba1a2412e1b4923e9",
+                "stateRoot": "0xb07c6946b376cf1bafd7c4f927c3de2fd310f9f1acd8c8f3aa43df745f9e733c",
+                "body": {
+                    "attestations": {
+                        "data": []
                     }
                 }
             },
@@ -87,14 +70,14 @@
                 "attestationSignatures": {
                     "data": []
                 },
-                "proposerSignature": "0x24000000b9e093417d11316e66cc4939159705480b51841d84af743612b8fd70280100000400000014b70943cd86aa15a53d574d2f8bd91d88b351762d52cc63b253ea301e2aba49ee46c42a2a94e3486ba8bc0ecbb156730e9aad50f311c65523d0064352345c21c1aaf750b2cac76f45bb496b315bf96c2dc3b7652a97e34149c980205634f671ca95a2380654713e9ab2d2607f688a654409973b02062164b8ee6c4e885623713b64bc67ce5afe3f64c56b248f30a8240cbfa74950ee2f0553ed2d05b5bae734dd43270816a33e0d3181970c0d2e4627e8a962536d23f674aca0233c6132fd56b6afb27af66d155bf75ff52250015a044bd51b0766206167f2a47d2dc0a8ab001805333e8eed12701c5a27008597e80f57e91b2716e248727595927a9012122af66d5818fd72097daefa825d512509660eb08f37c8be1b54e3fe172169ed9a700f36f559277e1d34e193b1391baed97037db1538350d5b286bd22e6c5df4bb35b8275b2558be3c734be57f0bb4145953224d307cfb16e818f32c282bdbd6b13121153d02f27a7f0f8bee1b240551e556a61c9a1ffefb6c58114e6e7b88bd4603"
+                "proposerSignature": "0x2400000044840475461269220d4ac30cdd058f6ac69f7a69c39d7d13ffd49236280100000400000049b2b64f27982463438e7e7d86168a20ac5e5e4af7ae2870be90076941fe6d60825ae942f1b85b39be2865267dbdb0171e4e5c3d6497ef217ea7de00ee316c5733d6a92889892c38bfee6525572fab015eb72f0757921030a0ec2507b482383d848985677d644e52d97cbe34d78ad22a84009958121da45a4d9eb37e71bef802dab5fd2b7c87bd79f5da7d5f6ce8396299375b6d695ada4bba33ac19e2511c05d9c2cf6b0ecaa33a07b0f406a82f6048b858ec33282ed90bbd6a122778cecf79af53ed1ab51cf9722357a863b574691fb2633d155e53815db72ee8198f0e1c44a65eb24b13d14a7aac436d69dfd89874e246757ea919601492fea17600163e7df994f178c473d3179d351b60acdd7f68199805021ba9d85fc98cc6467af1565fe118df7d63cd833975b350196805e27ea8bbe4477a1a903474e3345273d953284599fa629808a92adbde551da45edc3ea0bf1b31dffc4b099578a214d4009504b4c5541e51aaba6fc5e4b827f285a34d253c1a1335572e2b143bc8698eedfd72"
             }
         },
         "_info": {
-            "hash": "0xfd1f27d236a2fbf7c3fb020d88a5053e93290bebb5e7da382558f06d6338b114",
+            "hash": "0xb28e895d056e53361f8cd162a5d136076b2e40b6b86630d381a04bde5ceef51b",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/verify_signatures/test_valid_signatures.py::test_proposer_and_attester_signatures[fork_Devnet]",
-            "description": "Test valid proposer and attester signatures in SignedBlockWithAttestation.\n\n    Scenario\n    --------\n    - Single block at slot 1\n    - 3 validators in the genesis state\n    - Aggregated attestation from validators 0 and 2 (in addition to proposer)\n    - Verifies that all signatures are generated and aggregated correctly\n\n    Expected Behavior\n    -----------------\n    1. Proposer's signature in SignedBlockWithAttestation can be verified against\n       the validator's pubkey in the state\n    2. Aggregated attestation signatures can be verified against the validators'\n       pubkeys in the state\n\n    Why This Matters\n    ----------------\n    This test verifies multi-validator signature aggregation:\n    - Multiple XMSS keys are generated for different validators\n    - Attestations with same data are properly aggregated\n    - leanVM signature aggregation works with multiple validators",
+            "description": "Test valid proposer and attester signatures in SignedBlock.\n\n    Scenario\n    --------\n    - Single block at slot 1\n    - 3 validators in the genesis state\n    - Aggregated attestation from validators 0 and 2 (in addition to proposer)\n    - Verifies that all signatures are generated and aggregated correctly\n\n    Expected Behavior\n    -----------------\n    1. Proposer's signature in SignedBlock can be verified against\n       the validator's pubkey in the state\n    2. Aggregated attestation signatures can be verified against the validators'\n       pubkeys in the state\n\n    Why This Matters\n    ----------------\n    This test verifies multi-validator signature aggregation:\n    - Multiple XMSS keys are generated for different validators\n    - Attestations with same data are properly aggregated\n    - leanVM signature aggregation works with multiple validators",
             "fixtureFormat": "verify_signatures_test"
         }
     }

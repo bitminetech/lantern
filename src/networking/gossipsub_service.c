@@ -258,14 +258,12 @@ static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
     size_t block_fixed = (SSZ_BYTE_SIZE_OF_UINT64 * 2u)
         + (LANTERN_ROOT_SIZE * 2u)
         + SSZ_BYTE_SIZE_OF_UINT32;
-    size_t block_offset = SSZ_BYTE_SIZE_OF_UINT32;
     size_t body_header = SSZ_BYTE_SIZE_OF_UINT32;
-    size_t att_count = block->message.block.body.attestations.length;
-    size_t att_bytes = aggregated_attestations_encoded_size(&block->message.block.body.attestations);
+    size_t att_count = block->message.body.attestations.length;
+    size_t att_bytes = aggregated_attestations_encoded_size(&block->message.body.attestations);
     if (att_count > 0 && att_bytes == 0) {
         return 0;
     }
-    size_t proposer_bytes = LANTERN_VOTE_SSZ_SIZE;
     size_t sig_count = block->signatures.attestation_signatures.length;
     size_t sig_list_bytes = attestation_signatures_encoded_size(&block->signatures.attestation_signatures);
     if (sig_count > 0 && sig_list_bytes == 0) {
@@ -273,14 +271,6 @@ static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
     }
     size_t signatures_bytes = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + LANTERN_SIGNATURE_SIZE + sig_list_bytes;
     size_t total = offsets + block_fixed;
-    if (block_offset > SIZE_MAX - total) {
-        return 0;
-    }
-    total += block_offset;
-    if (total > SIZE_MAX - proposer_bytes) {
-        return 0;
-    }
-    total += proposer_bytes;
     if (body_header > SIZE_MAX - total) {
         return 0;
     }
@@ -301,25 +291,15 @@ static size_t signed_block_max_ssz_size(void) {
     size_t block_fixed = (SSZ_BYTE_SIZE_OF_UINT64 * 2u)
         + (LANTERN_ROOT_SIZE * 2u)
         + SSZ_BYTE_SIZE_OF_UINT32;
-    size_t block_offset = SSZ_BYTE_SIZE_OF_UINT32;
     size_t body_header = SSZ_BYTE_SIZE_OF_UINT32;
     size_t att_bits_max = bitlist_encoded_size_bits(LANTERN_VALIDATOR_REGISTRY_LIMIT);
     size_t att_entry_max = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_ATTESTATION_DATA_SSZ_SIZE + att_bits_max;
     size_t att_bytes = (size_t)LANTERN_MAX_ATTESTATIONS * (SSZ_BYTE_SIZE_OF_UINT32 + att_entry_max);
-    size_t proposer_bytes = LANTERN_VOTE_SSZ_SIZE;
     size_t proof_bits_max = att_bits_max;
     size_t proof_entry_max = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + proof_bits_max + LANTERN_AGG_PROOF_MAX_BYTES;
     size_t signatures_bytes = (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + LANTERN_SIGNATURE_SIZE
         + ((size_t)LANTERN_MAX_BLOCK_SIGNATURES * (SSZ_BYTE_SIZE_OF_UINT32 + proof_entry_max));
     size_t total = offsets + block_fixed;
-    if (block_offset > SIZE_MAX - total) {
-        return 0;
-    }
-    total += block_offset;
-    if (total > SIZE_MAX - proposer_bytes) {
-        return 0;
-    }
-    total += proposer_bytes;
     if (body_header > SIZE_MAX - total) {
         return 0;
     }
@@ -531,7 +511,7 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
     }
     char block_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     if (lantern_bytes_to_hex(
-            block.message.block.parent_root.bytes,
+            block.message.parent_root.bytes,
             LANTERN_ROOT_SIZE,
             block_root_hex,
             sizeof(block_root_hex),
@@ -545,8 +525,8 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
             "gossip",
             &meta,
             "accepted block gossip slot=%" PRIu64 " proposer=%" PRIu64 " parent=%s",
-            block.message.block.slot,
-            block.message.block.proposer_index,
+            block.message.slot,
+            block.message.proposer_index,
             block_root_hex[0] ? block_root_hex : "0x0");
     }
     else if (result == LIBP2P_GOSSIPSUB_VALIDATION_IGNORE)
@@ -555,8 +535,8 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
             "gossip",
             &meta,
             "ignored block gossip slot=%" PRIu64 " proposer=%" PRIu64 " parent=%s",
-            block.message.block.slot,
-            block.message.block.proposer_index,
+            block.message.slot,
+            block.message.proposer_index,
             block_root_hex[0] ? block_root_hex : "0x0");
     }
 

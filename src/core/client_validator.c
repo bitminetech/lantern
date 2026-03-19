@@ -1340,7 +1340,89 @@ bool validator_service_should_run(const struct lantern_client *client)
  * ============================================================================ */
 
 /**
- * Sign a vote with a validator's secret key.
+ * Check whether a slot is within a prepared XMSS interval.
+ *
+ * @param prepared Prepared interval returned by pq_get_prepared_interval()
+ * @param slot     Slot/epoch to test
+ * @return true when slot is signable by the currently prepared key state
+ */
+static bool validator_slot_in_prepared_interval(struct PQRange prepared, uint64_t slot)
+{
+    return prepared.start <= slot && slot < prepared.end;
+}
+
+
+/**
+ * Sign a message root with one of a validator's XMSS keys.
+ *
+ * Advances the selected key until it can sign for `slot`, mutating the key in
+ * place so the updated prepared window remains stored on the validator entry.
+ *
+ * @param validator         Local validator
+ * @param slot              Slot number
+ * @param message           Message root to sign
+ * @param use_proposal_key  When true, sign with proposal_secret_key; otherwise
+ *                          sign with attestation_secret_key
+ * @param out_signature     Output signature
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
+ * @return LANTERN_CLIENT_ERR_VALIDATOR on missing keys or signing failure
+ *
+ * @note Thread safety: Caller must ensure exclusive access to validator
+ */
+int validator_sign_with_key(
+    struct lantern_local_validator *validator,
+    uint64_t slot,
+    const LanternRoot *message,
+    bool use_proposal_key,
+    LanternSignature *out_signature)
+{
+    if (!validator || !message || !out_signature)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    struct PQSignatureSchemeSecretKey **selected_key =
+        use_proposal_key ? &validator->proposal_secret_key : &validator->attestation_secret_key;
+    if (!selected_key || !*selected_key)
+    {
+        return LANTERN_CLIENT_ERR_VALIDATOR;
+    }
+
+    struct PQRange prepared = pq_get_prepared_interval(*selected_key);
+    if (prepared.end <= prepared.start)
+    {
+        return LANTERN_CLIENT_ERR_VALIDATOR;
+    }
+    if (slot < prepared.start)
+    {
+        return LANTERN_CLIENT_ERR_VALIDATOR;
+    }
+
+    while (!validator_slot_in_prepared_interval(prepared, slot))
+    {
+        uint64_t previous_start = prepared.start;
+        uint64_t previous_end = prepared.end;
+        pq_advance_preparation(*selected_key);
+        prepared = pq_get_prepared_interval(*selected_key);
+        if (prepared.end <= prepared.start
+            || (prepared.start == previous_start && prepared.end == previous_end)
+            || slot < prepared.start)
+        {
+            return LANTERN_CLIENT_ERR_VALIDATOR;
+        }
+    }
+
+    if (!lantern_signature_sign(*selected_key, slot, message, out_signature))
+    {
+        return LANTERN_CLIENT_ERR_VALIDATOR;
+    }
+    return LANTERN_CLIENT_OK;
+}
+
+
+/**
+ * Sign a vote with a validator's attestation secret key.
  *
  * @param validator  Local validator
  * @param slot       Slot number
@@ -1356,7 +1438,7 @@ int validator_sign_vote(
     uint64_t slot,
     LanternSignedVote *vote)
 {
-    if (!validator || !vote || !validator->secret_key)
+    if (!validator || !vote)
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
@@ -1365,15 +1447,12 @@ int validator_sign_vote(
     {
         return LANTERN_CLIENT_ERR_VALIDATOR;
     }
-    if (!lantern_signature_sign(
-            validator->secret_key,
-            slot,
-            &vote_root,
-            &vote->signature))
-    {
-        return LANTERN_CLIENT_ERR_VALIDATOR;
-    }
-    return LANTERN_CLIENT_OK;
+    return validator_sign_with_key(
+        validator,
+        slot,
+        &vote_root,
+        false,
+        &vote->signature);
 }
 
 
@@ -1507,12 +1586,11 @@ static lantern_client_error validator_build_block_populate_message(
     uint64_t slot,
     uint64_t proposer_index,
     const LanternRoot *parent_root,
-    const LanternSignedVote *proposer_vote,
     const LanternAttestations *att_list,
     const LanternSignatureList *att_signatures,
     LanternSignedBlock *out_block)
 {
-    if (!client || !parent_root || !proposer_vote || !att_list || !att_signatures || !out_block)
+    if (!client || !parent_root || !att_list || !att_signatures || !out_block)
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
@@ -1536,7 +1614,7 @@ static lantern_client_error validator_build_block_populate_message(
         return agg_rc;
     }
 
-    LanternBlock *message_block = &out_block->message.block;
+    LanternBlock *message_block = &out_block->message;
     message_block->slot = slot;
     message_block->proposer_index = proposer_index;
     message_block->parent_root = *parent_root;
@@ -1552,8 +1630,7 @@ static lantern_client_error validator_build_block_populate_message(
         return LANTERN_CLIENT_ERR_ALLOC;
     }
 
-    out_block->message.proposer_attestation = proposer_vote->data;
-    out_block->signatures.proposer_signature = proposer_vote->signature;
+    lantern_signature_zero(&out_block->signatures.proposer_signature);
 
     if (lantern_attestation_signatures_copy(
             &out_block->signatures.attestation_signatures,
@@ -1618,9 +1695,9 @@ static lantern_client_error validator_build_block_preview_state_root(
  *
  * Compares the vote's source checkpoint with the provided source. If they
  * differ, updates all checkpoints (head, target, source) and re-signs the
- * vote using the validator's secret key.
+ * vote using the validator's attestation secret key.
  *
- * @param validator  Local validator with signing key (must have secret_key set)
+ * @param validator  Local validator with an attestation signing key
  * @param slot       Slot for signing context
  * @param head       New head checkpoint
  * @param target     New target checkpoint
@@ -1655,11 +1732,6 @@ int lantern_validator_refresh_cached_vote(
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
-    if (!validator->secret_key)
-    {
-        return LANTERN_CLIENT_ERR_VALIDATOR;
-    }
-
     /* If the source checkpoint is unchanged, no refresh is required. */
     if (vote->data.source.slot != source->slot
         || memcmp(vote->data.source.root.bytes, source->root.bytes, LANTERN_ROOT_SIZE) != 0)
@@ -1848,7 +1920,7 @@ int lantern_client_publish_block(struct lantern_client *client, const LanternSig
             "gossip",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "cannot publish block at slot %" PRIu64 ": gossip service inactive",
-            block->message.block.slot);
+            block->message.slot);
         return LANTERN_CLIENT_ERR_NETWORK;
     }
     if (lantern_gossipsub_service_publish_block(&client->gossip, block) != 0)
@@ -1857,13 +1929,13 @@ int lantern_client_publish_block(struct lantern_client *client, const LanternSig
             "gossip",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to publish block at slot %" PRIu64,
-            block->message.block.slot);
+            block->message.slot);
         return LANTERN_CLIENT_ERR_NETWORK;
     }
 
     LanternRoot block_root;
     char root_hex[2 * LANTERN_ROOT_SIZE + 3];
-    if (lantern_hash_tree_root_block(&block->message.block, &block_root) == 0)
+    if (lantern_hash_tree_root_block(&block->message, &block_root) == 0)
     {
         format_root_hex(&block_root, root_hex, sizeof(root_hex));
     }
@@ -1876,9 +1948,9 @@ int lantern_client_publish_block(struct lantern_client *client, const LanternSig
         "gossip",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "published block slot=%" PRIu64 " root=%s attestations=%zu",
-        block->message.block.slot,
+        block->message.slot,
         root_hex[0] ? root_hex : "0x0",
-        block->message.block.body.attestations.length);
+        block->message.body.attestations.length);
     return LANTERN_CLIENT_OK;
 }
 
@@ -1952,7 +2024,6 @@ int validator_build_block(
         slot,
         local->global_index,
         &parent_root,
-        out_proposer_vote,
         &att_list,
         &att_signatures,
         out_block);
@@ -1968,7 +2039,22 @@ int validator_build_block(
         goto cleanup;
     }
 
-    out_block->message.block.state_root = computed_state_root;
+    out_block->message.state_root = computed_state_root;
+    LanternRoot block_root;
+    if (lantern_hash_tree_root_block(&out_block->message, &block_root) != 0) {
+        result = LANTERN_CLIENT_ERR_RUNTIME;
+        goto cleanup;
+    }
+    if (validator_sign_with_key(
+            local,
+            slot,
+            &block_root,
+            true,
+            &out_block->signatures.proposer_signature)
+        != LANTERN_CLIENT_OK) {
+        result = LANTERN_CLIENT_ERR_VALIDATOR;
+        goto cleanup;
+    }
     result = LANTERN_CLIENT_OK;
 
 cleanup:
@@ -2026,7 +2112,7 @@ int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t
         &meta,
         "proposing block slot=%" PRIu64 " proposer=%" PRIu64,
         slot,
-        block.message.block.proposer_index);
+        block.message.proposer_index);
 
     lantern_client_record_block(client, &block, NULL, NULL, "local", 0, false, NULL, 0);
     if (client->validator_lock_initialized && pthread_mutex_lock(&client->validator_lock) == 0)

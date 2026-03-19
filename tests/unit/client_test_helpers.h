@@ -17,6 +17,10 @@ int client_test_slot_for_root(struct lantern_client *client, const LanternRoot *
 int client_test_advance_fork_choice_intervals(LanternForkChoice *store, size_t count, bool has_proposal);
 bool client_test_pending_contains_root(const struct lantern_client *client, const LanternRoot *root);
 
+int client_test_load_precomputed_keypair(
+    size_t validator_index,
+    struct PQSignatureSchemePublicKey **out_pub,
+    struct PQSignatureSchemeSecretKey **out_secret);
 int client_test_setup_vote_validation_client(
     struct lantern_client *client,
     const char *node_id,

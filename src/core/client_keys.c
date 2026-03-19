@@ -54,6 +54,41 @@ static const char XMSS_MANIFEST_FILENAME[] = "validator-keys-manifest.yaml";
 
 
 /* ============================================================================
+ * Local Helpers
+ * ============================================================================ */
+
+static void free_local_secret_key_handles(struct lantern_local_validator *validator)
+{
+    if (!validator)
+    {
+        return;
+    }
+
+    if (validator->attestation_secret_key
+        && validator->attestation_secret_key == validator->proposal_secret_key)
+    {
+        pq_secret_key_free(validator->attestation_secret_key);
+    }
+    else
+    {
+        if (validator->attestation_secret_key)
+        {
+            pq_secret_key_free(validator->attestation_secret_key);
+        }
+        if (validator->proposal_secret_key)
+        {
+            pq_secret_key_free(validator->proposal_secret_key);
+        }
+    }
+
+    validator->attestation_secret_key = NULL;
+    validator->proposal_secret_key = NULL;
+    validator->has_attestation_secret_handle = false;
+    validator->has_proposal_secret_handle = false;
+}
+
+
+/* ============================================================================
  * Local Validator Lifecycle
  * ============================================================================ */
 
@@ -85,12 +120,7 @@ void lantern_client_local_validator_cleanup(struct lantern_local_validator *vali
     validator->secret_len = 0;
     validator->has_secret = false;
 
-    if (validator->secret_key)
-    {
-        pq_secret_key_free(validator->secret_key);
-        validator->secret_key = NULL;
-    }
-    validator->has_secret_handle = false;
+    free_local_secret_key_handles(validator);
 
     validator->last_proposed_slot = UINT64_MAX;
     validator->last_attested_slot = UINT64_MAX;
@@ -240,9 +270,11 @@ cleanup:
  */
 struct xmss_manifest_entry
 {
-    uint64_t index;    /**< Validator global index */
-    char *public_file; /**< Public key path or filename */
-    char *secret_file; /**< Secret key path or filename */
+    uint64_t index;                /**< Validator global index */
+    char *attestation_pubkey_hex;  /**< Attestation public key hex */
+    char *proposal_pubkey_hex;     /**< Proposal public key hex */
+    char *attestation_secret_file; /**< Attestation secret key path or filename */
+    char *proposal_secret_file;    /**< Proposal secret key path or filename */
 };
 
 
@@ -299,8 +331,10 @@ static void xmss_manifest_reset(struct xmss_manifest *manifest)
     }
     for (size_t i = 0; i < manifest->count; ++i)
     {
-        free(manifest->entries[i].public_file);
-        free(manifest->entries[i].secret_file);
+        free(manifest->entries[i].attestation_pubkey_hex);
+        free(manifest->entries[i].proposal_pubkey_hex);
+        free(manifest->entries[i].attestation_secret_file);
+        free(manifest->entries[i].proposal_secret_file);
     }
     free(manifest->entries);
     manifest->entries = NULL;
@@ -432,9 +466,46 @@ static int xmss_manifest_load(const char *dir, struct xmss_manifest *manifest)
     for (size_t i = 0; i < count; ++i)
     {
         const char *index_text = xmss_yaml_value(&objects[i], "index");
-        const char *public_file = xmss_yaml_value(&objects[i], "public_key_file");
-        const char *secret_file = xmss_yaml_value(&objects[i], "secret_key_file");
-        if (!index_text || !public_file || !secret_file)
+        const char *attestation_pubkey_hex =
+            xmss_yaml_value(&objects[i], "attestation_pubkey_hex");
+        const char *proposal_pubkey_hex =
+            xmss_yaml_value(&objects[i], "proposal_pubkey_hex");
+        const char *attestation_secret_file =
+            xmss_yaml_value(&objects[i], "attestation_privkey_file");
+        const char *proposal_secret_file =
+            xmss_yaml_value(&objects[i], "proposal_privkey_file");
+
+        /* Backward-compatible fallbacks for older single-key manifests. */
+        if (!attestation_pubkey_hex)
+        {
+            attestation_pubkey_hex = xmss_yaml_value(&objects[i], "pubkey_hex");
+        }
+        if (!proposal_pubkey_hex)
+        {
+            proposal_pubkey_hex = attestation_pubkey_hex;
+        }
+        if (!attestation_secret_file)
+        {
+            attestation_secret_file = xmss_yaml_value(&objects[i], "privkey_file");
+        }
+        if (!attestation_secret_file)
+        {
+            attestation_secret_file = xmss_yaml_value(&objects[i], "secret_key_file");
+        }
+        if (!proposal_secret_file)
+        {
+            proposal_secret_file = xmss_yaml_value(&objects[i], "privkey_file");
+        }
+        if (!proposal_secret_file)
+        {
+            proposal_secret_file = xmss_yaml_value(&objects[i], "secret_key_file");
+        }
+
+        if (!index_text
+            || !attestation_pubkey_hex
+            || !proposal_pubkey_hex
+            || !attestation_secret_file
+            || !proposal_secret_file)
         {
             result = LANTERN_CLIENT_ERR_CONFIG;
             goto cleanup;
@@ -446,9 +517,14 @@ static int xmss_manifest_load(const char *dir, struct xmss_manifest *manifest)
             goto cleanup;
         }
         entries[i].index = index;
-        entries[i].public_file = lantern_string_duplicate(public_file);
-        entries[i].secret_file = lantern_string_duplicate(secret_file);
-        if (!entries[i].public_file || !entries[i].secret_file)
+        entries[i].attestation_pubkey_hex = lantern_string_duplicate(attestation_pubkey_hex);
+        entries[i].proposal_pubkey_hex = lantern_string_duplicate(proposal_pubkey_hex);
+        entries[i].attestation_secret_file = lantern_string_duplicate(attestation_secret_file);
+        entries[i].proposal_secret_file = lantern_string_duplicate(proposal_secret_file);
+        if (!entries[i].attestation_pubkey_hex
+            || !entries[i].proposal_pubkey_hex
+            || !entries[i].attestation_secret_file
+            || !entries[i].proposal_secret_file)
         {
             result = LANTERN_CLIENT_ERR_ALLOC;
             goto cleanup;
@@ -704,13 +780,7 @@ static void clear_local_secret_handles(struct lantern_client *client)
     }
     for (size_t i = 0; i < client->local_validator_count; ++i)
     {
-        struct lantern_local_validator *validator = &client->local_validators[i];
-        if (validator->secret_key)
-        {
-            pq_secret_key_free(validator->secret_key);
-            validator->secret_key = NULL;
-        }
-        validator->has_secret_handle = false;
+        free_local_secret_key_handles(&client->local_validators[i]);
     }
 }
 
@@ -751,6 +821,8 @@ static bool xmss_path_is_absolute(const char *path)
  * @param client    Client instance
  * @param manifest  Optional manifest
  * @param index     Validator global index
+ * @param use_proposal_key Select the proposal secret key path when true,
+ *                         attestation secret key path otherwise
  * @param out_path  Output path (caller must free)
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL
@@ -763,6 +835,7 @@ static int resolve_secret_key_path(
     struct lantern_client *client,
     const struct xmss_manifest *manifest,
     uint64_t index,
+    bool use_proposal_key,
     char **out_path)
 {
     if (!client || !out_path)
@@ -779,11 +852,15 @@ static int resolve_secret_key_path(
     if (manifest)
     {
         const struct xmss_manifest_entry *entry = xmss_manifest_find(manifest, index);
-        if (entry && entry->secret_file)
+        const char *secret_file =
+            entry
+                ? (use_proposal_key ? entry->proposal_secret_file : entry->attestation_secret_file)
+                : NULL;
+        if (secret_file)
         {
-            if (xmss_path_is_absolute(entry->secret_file))
+            if (xmss_path_is_absolute(secret_file))
             {
-                char *copy = lantern_string_duplicate(entry->secret_file);
+                char *copy = lantern_string_duplicate(secret_file);
                 if (!copy)
                 {
                     return LANTERN_CLIENT_ERR_ALLOC;
@@ -793,7 +870,7 @@ static int resolve_secret_key_path(
             }
             if (client->xmss_key_dir)
             {
-                return xmss_join_path(client->xmss_key_dir, entry->secret_file, out_path);
+                return xmss_join_path(client->xmss_key_dir, secret_file, out_path);
             }
         }
     }
@@ -872,44 +949,89 @@ static int load_xmss_secret_keys(
     for (size_t i = 0; i < client->local_validator_count; ++i)
     {
         struct lantern_local_validator *validator = &client->local_validators[i];
-        char *path = NULL;
-        if (resolve_secret_key_path(client, manifest, validator->global_index, &path) != 0)
+        char *attestation_path = NULL;
+        char *proposal_path = NULL;
+        if (resolve_secret_key_path(
+                client,
+                manifest,
+                validator->global_index,
+                false,
+                &attestation_path)
+            != 0)
         {
             lantern_log_warn(
                 "crypto",
                 &meta,
-                "unable to resolve xmss secret key path for validator=%" PRIu64 "; skipping",
+                "unable to resolve attestation xmss secret key path for validator=%" PRIu64 "; skipping",
                 validator->global_index);
+            continue;
+        }
+        if (resolve_secret_key_path(
+                client,
+                manifest,
+                validator->global_index,
+                true,
+                &proposal_path)
+            != 0)
+        {
+            lantern_log_warn(
+                "crypto",
+                &meta,
+                "unable to resolve proposal xmss secret key path for validator=%" PRIu64 "; skipping",
+                validator->global_index);
+            free(attestation_path);
+            free(proposal_path);
             continue;
         }
         ++resolved;
         lantern_log_debug(
             "crypto",
             &meta,
-            "xmss secret key resolved validator=%" PRIu64 " path=%s",
+            "xmss secret key paths resolved validator=%" PRIu64 " attestation=%s proposal=%s",
             validator->global_index,
-            path);
-        struct PQSignatureSchemeSecretKey *secret = NULL;
-        if (lantern_xmss_load_secret_file(path, &secret) != 0)
+            attestation_path,
+            proposal_path);
+
+        struct PQSignatureSchemeSecretKey *attestation_secret = NULL;
+        struct PQSignatureSchemeSecretKey *proposal_secret = NULL;
+        if (lantern_xmss_load_secret_file(attestation_path, &attestation_secret) != 0)
         {
             lantern_log_warn(
                 "crypto",
                 &meta,
-                "failed to load xmss secret key validator=%" PRIu64 " path=%s; skipping",
+                "failed to load attestation xmss secret key validator=%" PRIu64 " path=%s; skipping",
                 validator->global_index,
-                path);
-            free(path);
+                attestation_path);
+            free(attestation_path);
+            free(proposal_path);
             continue;
         }
-        free(path);
-        validator->secret_key = secret;
-        validator->has_secret_handle = true;
+        if (lantern_xmss_load_secret_file(proposal_path, &proposal_secret) != 0)
+        {
+            lantern_log_warn(
+                "crypto",
+                &meta,
+                "failed to load proposal xmss secret key validator=%" PRIu64 " path=%s; skipping",
+                validator->global_index,
+                proposal_path);
+            pq_secret_key_free(attestation_secret);
+            free(attestation_path);
+            free(proposal_path);
+            continue;
+        }
+        free(attestation_path);
+        free(proposal_path);
+
+        validator->attestation_secret_key = attestation_secret;
+        validator->proposal_secret_key = proposal_secret;
+        validator->has_attestation_secret_handle = true;
+        validator->has_proposal_secret_handle = true;
         ++loaded;
     }
     lantern_log_info(
         "crypto",
         &meta,
-        "xmss secret keys loaded=%zu/%zu resolved=%zu dir=%s template=%s",
+        "xmss secret key pairs loaded=%zu/%zu resolved=%zu dir=%s template=%s",
         loaded,
         client->local_validator_count,
         resolved,

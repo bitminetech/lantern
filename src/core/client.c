@@ -859,9 +859,10 @@ static lantern_client_error client_prepare_storage_and_genesis(
 
 
 /**
- * @brief Attempt genesis creation using embedded validator pubkeys.
+ * @brief Attempt genesis creation using embedded validator pubkey pairs.
  *
- * Builds the initial state from pubkeys included in the chain configuration.
+ * Builds the initial state from attestation/proposal pubkeys included in the
+ * chain configuration.
  *
  * @param client  Client with loaded chain configuration
  *
@@ -871,7 +872,8 @@ static lantern_client_error client_prepare_storage_and_genesis(
  */
 static bool client_try_genesis_from_pubkeys(struct lantern_client *client)
 {
-    if (!client->genesis.chain_config.validator_pubkeys
+    if (!client->genesis.chain_config.validator_attestation_pubkeys
+        || !client->genesis.chain_config.validator_proposal_pubkeys
         || client->genesis.chain_config.validator_pubkeys_count == 0)
     {
         return false;
@@ -885,9 +887,10 @@ static bool client_try_genesis_from_pubkeys(struct lantern_client *client)
         return false;
     }
 
-    if (lantern_state_set_validator_pubkeys(
+    if (lantern_state_set_validator_pubkeys_dual(
             &client->state,
-            client->genesis.chain_config.validator_pubkeys,
+            client->genesis.chain_config.validator_attestation_pubkeys,
+            client->genesis.chain_config.validator_proposal_pubkeys,
             vcount)
         != 0)
     {
@@ -1145,7 +1148,7 @@ static void client_log_genesis_anchors(
     LanternSignedBlock genesis_signed;
     int resize_result = 0;
     lantern_signed_block_with_attestation_init(&genesis_signed);
-    genesis_signed.message.block = genesis_block;
+    genesis_signed.message = genesis_block;
     resize_result = lantern_attestation_signatures_resize(
         &genesis_signed.signatures.attestation_signatures,
         0);

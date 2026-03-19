@@ -1485,35 +1485,32 @@ int lantern_fixture_parse_signed_block(
     if (!doc || !signed_block) {
         return -1;
     }
-    lantern_signed_block_with_attestation_init(signed_block);
+    lantern_signed_block_init(signed_block);
 
-    /* Try new leanSpec format: { "block": {...}, "proposerAttestation": {...}, "signature": {...} } */
-    int block_idx = lantern_fixture_object_get_field(doc, object_index, "block");
-    int proposer_idx = lantern_fixture_object_get_field(doc, object_index, "proposerAttestation");
     int signatures_idx = lantern_fixture_object_get_field(doc, object_index, "signature");
-    if (proposer_idx < 0) {
-        /* Try snake_case fallback for legacy fixtures */
-        proposer_idx = lantern_fixture_object_get_field(doc, object_index, "proposer_attestation");
-    }
-    if (block_idx >= 0 && proposer_idx >= 0) {
-        if (lantern_fixture_parse_block(doc, block_idx, &signed_block->message.block) != 0) {
-            goto error;
-        }
-        LanternSignedVote proposer_vote;
-        if (lantern_fixture_parse_attestation_message(doc, proposer_idx, &proposer_vote) != 0) {
-            goto error;
-        }
-        signed_block->message.proposer_attestation = proposer_vote.data;
+    int message_idx = lantern_fixture_object_get_field(doc, object_index, "message");
+    int block_idx = lantern_fixture_object_get_field(doc, object_index, "block");
 
+    /* Canonical devnet-4 layout: { "message": <Block>, "signature": <BlockSignatures> } */
+    if (message_idx >= 0) {
+        int legacy_block_idx = lantern_fixture_object_get_field(doc, message_idx, "block");
+        if (legacy_block_idx >= 0) {
+            block_idx = legacy_block_idx;
+        } else {
+            block_idx = message_idx;
+        }
+        if (lantern_fixture_parse_block(doc, block_idx, &signed_block->message) != 0) {
+            goto error;
+        }
         if (signatures_idx >= 0) {
             if (lantern_fixture_parse_block_signatures(
                     doc,
                     signatures_idx,
-                    &signed_block->message.block.body.attestations,
+                    &signed_block->message.body.attestations,
                     &signed_block->signatures)
                 != 0) {
                 if (lantern_fixture_synthesize_block_signatures(
-                        &signed_block->message.block.body.attestations,
+                        &signed_block->message.body.attestations,
                         &signed_block->signatures)
                     != 0) {
                     goto error;
@@ -1521,7 +1518,7 @@ int lantern_fixture_parse_signed_block(
             }
         } else {
             if (lantern_fixture_synthesize_block_signatures(
-                    &signed_block->message.block.body.attestations,
+                    &signed_block->message.body.attestations,
                     &signed_block->signatures)
                 != 0) {
                 goto error;
@@ -1530,42 +1527,21 @@ int lantern_fixture_parse_signed_block(
         return 0;
     }
 
-    /* Try legacy format: { "message": { "block": {...}, "proposer_attestation": {...} }, "signature": ... } */
-    int message_idx = lantern_fixture_object_get_field(doc, object_index, "message");
-    if (message_idx >= 0) {
-        block_idx = lantern_fixture_object_get_field(doc, message_idx, "block");
-        if (block_idx < 0) {
+    /* Transitional/legacy fixture layout: { "block": {...}, "proposerAttestation": {...}, "signature": ... } */
+    if (block_idx >= 0) {
+        if (lantern_fixture_parse_block(doc, block_idx, &signed_block->message) != 0) {
             goto error;
         }
-        if (lantern_fixture_parse_block(doc, block_idx, &signed_block->message.block) != 0) {
-            goto error;
-        }
-
-        proposer_idx = lantern_fixture_object_get_field(doc, message_idx, "proposerAttestation");
-        if (proposer_idx < 0) {
-            /* Try snake_case fallback for legacy fixtures */
-            proposer_idx = lantern_fixture_object_get_field(doc, message_idx, "proposer_attestation");
-            if (proposer_idx < 0) {
-                goto error;
-            }
-        }
-        LanternSignedVote proposer_vote;
-        if (lantern_fixture_parse_attestation_message(doc, proposer_idx, &proposer_vote) != 0) {
-            goto error;
-        }
-        signed_block->message.proposer_attestation = proposer_vote.data;
-
-        signatures_idx = lantern_fixture_object_get_field(doc, object_index, "signature");
         if (signatures_idx >= 0) {
             if (lantern_fixture_parse_block_signatures(
                     doc,
                     signatures_idx,
-                    &signed_block->message.block.body.attestations,
+                    &signed_block->message.body.attestations,
                     &signed_block->signatures)
                 != 0) {
                 LanternSignatureList legacy_list;
                 lantern_signature_list_init(&legacy_list);
-                size_t expected_signatures = signed_block->message.block.body.attestations.length + 1u;
+                size_t expected_signatures = signed_block->message.body.attestations.length + 1u;
                 if (expected_signatures == 0) {
                     lantern_signature_list_reset(&legacy_list);
                     goto error;
@@ -1573,7 +1549,7 @@ int lantern_fixture_parse_signed_block(
                 if (lantern_fixture_parse_signature_list(doc, signatures_idx, &legacy_list, expected_signatures) == 0) {
                     if (lantern_fixture_apply_signature_list_to_block_signatures(
                             &legacy_list,
-                            &signed_block->message.block.body.attestations,
+                            &signed_block->message.body.attestations,
                             &signed_block->signatures)
                         != 0) {
                         lantern_signature_list_reset(&legacy_list);
@@ -1581,7 +1557,7 @@ int lantern_fixture_parse_signed_block(
                     }
                 } else {
                     if (lantern_fixture_synthesize_block_signatures(
-                            &signed_block->message.block.body.attestations,
+                            &signed_block->message.body.attestations,
                             &signed_block->signatures)
                         != 0) {
                         lantern_signature_list_reset(&legacy_list);
@@ -1592,7 +1568,7 @@ int lantern_fixture_parse_signed_block(
             }
         } else {
             if (lantern_fixture_synthesize_block_signatures(
-                    &signed_block->message.block.body.attestations,
+                    &signed_block->message.body.attestations,
                     &signed_block->signatures)
                 != 0) {
                 goto error;
@@ -1602,19 +1578,12 @@ int lantern_fixture_parse_signed_block(
     }
 
     /* Handle leanSpec fixtures that emit bare Block containers without signatures */
-    if (lantern_fixture_parse_block(doc, object_index, &signed_block->message.block) != 0) {
+    if (lantern_fixture_parse_block(doc, object_index, &signed_block->message) != 0) {
         goto error;
     }
-    LanternVote *proposer = &signed_block->message.proposer_attestation;
-    memset(proposer, 0, sizeof(*proposer));
-    proposer->validator_id = signed_block->message.block.proposer_index;
-    proposer->slot = signed_block->message.block.slot;
-    proposer->head.slot = signed_block->message.block.slot;
-    proposer->target.slot = signed_block->message.block.slot;
-    proposer->source.slot = signed_block->message.block.slot;
 
     if (lantern_fixture_synthesize_block_signatures(
-            &signed_block->message.block.body.attestations,
+            &signed_block->message.body.attestations,
             &signed_block->signatures)
         != 0) {
         goto error;
@@ -1622,7 +1591,7 @@ int lantern_fixture_parse_signed_block(
     return 0;
 
 error:
-    lantern_signed_block_with_attestation_reset(signed_block);
+    lantern_signed_block_reset(signed_block);
     return -1;
 }
 
@@ -1662,38 +1631,65 @@ int lantern_fixture_parse_anchor_state(
     if (count < 0) {
         return -1;
     }
-    uint8_t *validator_pubkeys = NULL;
+    uint8_t *attestation_pubkeys = NULL;
+    uint8_t *proposal_pubkeys = NULL;
     if (count > 0) {
         size_t total_bytes = (size_t)count * LANTERN_VALIDATOR_PUBKEY_SIZE;
-        validator_pubkeys = (uint8_t *)malloc(total_bytes);
-        if (!validator_pubkeys) {
+        attestation_pubkeys = (uint8_t *)malloc(total_bytes);
+        proposal_pubkeys = (uint8_t *)malloc(total_bytes);
+        if (!attestation_pubkeys || !proposal_pubkeys) {
+            free(attestation_pubkeys);
+            free(proposal_pubkeys);
             return -1;
         }
-        memset(validator_pubkeys, 0, total_bytes);
+        memset(attestation_pubkeys, 0, total_bytes);
+        memset(proposal_pubkeys, 0, total_bytes);
         for (int i = 0; i < count; ++i) {
             int entry_idx = lantern_fixture_array_get_element(doc, data_idx, i);
             if (entry_idx < 0) {
-                free(validator_pubkeys);
+                free(attestation_pubkeys);
+                free(proposal_pubkeys);
                 return -1;
             }
-            int pubkey_idx = lantern_fixture_object_get_field(doc, entry_idx, "pubkey");
-            if (pubkey_idx < 0) {
-                free(validator_pubkeys);
-                return -1;
+            int attestation_pubkey_idx = lantern_fixture_object_get_field(doc, entry_idx, "attestationPubkey");
+            if (attestation_pubkey_idx < 0) {
+                attestation_pubkey_idx = lantern_fixture_object_get_field(doc, entry_idx, "attestation_pubkey");
             }
-            size_t pk_len = 0;
-            const char *pk_str = lantern_fixture_token_string(doc, pubkey_idx, &pk_len);
-            if (!pk_str) {
-                free(validator_pubkeys);
+            int proposal_pubkey_idx = lantern_fixture_object_get_field(doc, entry_idx, "proposalPubkey");
+            if (proposal_pubkey_idx < 0) {
+                proposal_pubkey_idx = lantern_fixture_object_get_field(doc, entry_idx, "proposal_pubkey");
+            }
+            if (attestation_pubkey_idx < 0) {
+                attestation_pubkey_idx = lantern_fixture_object_get_field(doc, entry_idx, "pubkey");
+            }
+            if (proposal_pubkey_idx < 0) {
+                proposal_pubkey_idx = attestation_pubkey_idx;
+            }
+            size_t attestation_pk_len = 0;
+            const char *attestation_pk_str =
+                lantern_fixture_token_string(doc, attestation_pubkey_idx, &attestation_pk_len);
+            size_t proposal_pk_len = 0;
+            const char *proposal_pk_str =
+                lantern_fixture_token_string(doc, proposal_pubkey_idx, &proposal_pk_len);
+            if (!attestation_pk_str || !proposal_pk_str) {
+                free(attestation_pubkeys);
+                free(proposal_pubkeys);
                 return -1;
             }
             if (lantern_fixture_parse_hex_bytes(
-                    pk_str,
-                    pk_len,
-                    validator_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+                    attestation_pk_str,
+                    attestation_pk_len,
+                    attestation_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
                     LANTERN_VALIDATOR_PUBKEY_SIZE)
-                != 0) {
-                free(validator_pubkeys);
+                != 0
+                || lantern_fixture_parse_hex_bytes(
+                    proposal_pk_str,
+                    proposal_pk_len,
+                    proposal_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+                    LANTERN_VALIDATOR_PUBKEY_SIZE)
+                    != 0) {
+                free(attestation_pubkeys);
+                free(proposal_pubkeys);
                 return -1;
             }
         }
@@ -1702,18 +1698,27 @@ int lantern_fixture_parse_anchor_state(
 
     lantern_state_init(state);
     if (lantern_state_generate_genesis(state, *genesis_time, *validator_count) != 0) {
-        free(validator_pubkeys);
+        free(attestation_pubkeys);
+        free(proposal_pubkeys);
         return -1;
     }
     if (lantern_state_prepare_validator_votes(state, *validator_count) != 0) {
-        free(validator_pubkeys);
+        free(attestation_pubkeys);
+        free(proposal_pubkeys);
         return -1;
     }
-    if (lantern_state_set_validator_pubkeys(state, validator_pubkeys, (size_t)count) != 0) {
-        free(validator_pubkeys);
+    if (lantern_state_set_validator_pubkeys_dual(
+            state,
+            attestation_pubkeys,
+            proposal_pubkeys,
+            (size_t)count)
+        != 0) {
+        free(attestation_pubkeys);
+        free(proposal_pubkeys);
         return -1;
     }
-    free(validator_pubkeys);
+    free(attestation_pubkeys);
+    free(proposal_pubkeys);
 
     int slot_idx = lantern_fixture_object_get_field(doc, anchor_state_index, "slot");
     if (slot_idx >= 0) {

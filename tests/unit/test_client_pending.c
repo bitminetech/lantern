@@ -142,24 +142,24 @@ static int build_signed_block_for_import(
     lantern_signed_block_with_attestation_init(out_block);
 
     uint64_t block_slot = fixture->client.state.slot + 1u;
-    out_block->message.block.slot = block_slot;
+    out_block->message.slot = block_slot;
     if (lantern_proposer_for_slot(
             block_slot,
             fixture->client.state.config.num_validators,
-            &out_block->message.block.proposer_index)
+            &out_block->message.proposer_index)
         != 0) {
         return -1;
     }
     if (lantern_state_select_block_parent(
             &fixture->client.state,
             &fixture->client.store,
-            &out_block->message.block.parent_root)
+            &out_block->message.parent_root)
         != 0) {
         return -1;
     }
     if (lantern_storage_store_state_for_root(
             fixture->client.data_dir,
-            &out_block->message.block.parent_root,
+            &out_block->message.parent_root,
             &fixture->client.state)
         != 0) {
         return -1;
@@ -180,7 +180,7 @@ static int build_signed_block_for_import(
 
     LanternSignedVote proposer_vote;
     memset(&proposer_vote, 0, sizeof(proposer_vote));
-    proposer_vote.data.validator_id = out_block->message.block.proposer_index;
+    proposer_vote.data.validator_id = out_block->message.proposer_index;
     proposer_vote.data.slot = block_slot;
     proposer_vote.data.head = head;
     proposer_vote.data.target = target;
@@ -189,17 +189,10 @@ static int build_signed_block_for_import(
         return -1;
     }
 
-    out_block->message.proposer_attestation = proposer_vote.data;
-    if (include_proposer_signature) {
-        out_block->signatures.proposer_signature = proposer_vote.signature;
-    } else {
-        lantern_signature_zero(&out_block->signatures.proposer_signature);
-    }
-
-    if (lantern_aggregated_attestations_resize(&out_block->message.block.body.attestations, 1u) != 0) {
+    if (lantern_aggregated_attestations_resize(&out_block->message.body.attestations, 1u) != 0) {
         return -1;
     }
-    LanternAggregatedAttestation *attestation = &out_block->message.block.body.attestations.data[0];
+    LanternAggregatedAttestation *attestation = &out_block->message.body.attestations.data[0];
     attestation->data = proposer_vote.data.data;
     if (lantern_bitlist_resize(&attestation->aggregation_bits, 1u) != 0
         || lantern_bitlist_set(&attestation->aggregation_bits, 0u, true) != 0) {
@@ -240,12 +233,28 @@ static int build_signed_block_for_import(
             &fixture->client.state,
             &fixture->client.store,
             out_block,
-            &out_block->message.block.state_root)
+            &out_block->message.state_root)
         != 0) {
         return -1;
     }
 
-    return lantern_hash_tree_root_block(&out_block->message.block, out_root);
+    if (include_proposer_signature) {
+        LanternRoot block_signature_root;
+        if (lantern_hash_tree_root_block(&out_block->message, &block_signature_root) != 0) {
+            return -1;
+        }
+        if (!lantern_signature_sign(
+                fixture->secret,
+                out_block->message.slot,
+                &block_signature_root,
+                &out_block->signatures.proposer_signature)) {
+            return -1;
+        }
+    } else {
+        lantern_signature_zero(&out_block->signatures.proposer_signature);
+    }
+
+    return lantern_hash_tree_root_block(&out_block->message, out_root);
 }
 
 static int resign_first_block_attestation(
@@ -256,14 +265,14 @@ static int resign_first_block_attestation(
     if (!fixture || !fixture->secret || !block || !out_root) {
         return -1;
     }
-    if (block->message.block.body.attestations.length == 0
-        || !block->message.block.body.attestations.data
+    if (block->message.body.attestations.length == 0
+        || !block->message.body.attestations.data
         || block->signatures.attestation_signatures.length == 0
         || !block->signatures.attestation_signatures.data) {
         return -1;
     }
 
-    LanternAggregatedAttestation *attestation = &block->message.block.body.attestations.data[0];
+    LanternAggregatedAttestation *attestation = &block->message.body.attestations.data[0];
     LanternAggregatedSignatureProof *proof = &block->signatures.attestation_signatures.data[0];
 
     LanternSignedVote signed_vote;
@@ -308,11 +317,11 @@ static int resign_first_block_attestation(
             &fixture->client.state,
             &fixture->client.store,
             block,
-            &block->message.block.state_root)
+            &block->message.state_root)
         != 0) {
         return -1;
     }
-    return lantern_hash_tree_root_block(&block->message.block, out_root);
+    return lantern_hash_tree_root_block(&block->message, out_root);
 }
 
 static int test_pending_block_queue(void) {
@@ -918,7 +927,7 @@ static int test_reqresp_collect_blocks_pending_fallback(void) {
     client_test_fill_root(&pending_block.message.state_root, 0x55);
 
     LanternRoot pending_root;
-    if (lantern_hash_tree_root_block(&pending_block.message.block, &pending_root) != 0) {
+    if (lantern_hash_tree_root_block(&pending_block.message, &pending_root) != 0) {
         fprintf(stderr, "failed to hash pending block root for reqresp collect test\n");
         rc = 1;
         goto cleanup;
@@ -958,7 +967,7 @@ static int test_reqresp_collect_blocks_pending_fallback(void) {
     }
 
     LanternRoot collected_root;
-    if (lantern_hash_tree_root_block(&collected.blocks[0].message.block, &collected_root) != 0) {
+    if (lantern_hash_tree_root_block(&collected.blocks[0].message, &collected_root) != 0) {
         fprintf(stderr, "failed to hash collected block for reqresp fallback test\n");
         lantern_signed_block_list_reset(&collected);
         rc = 1;
@@ -1013,7 +1022,7 @@ static int test_import_block_accepts_complete_signatures(void)
         fprintf(stderr, "import rejected block with complete signatures\n");
         goto cleanup;
     }
-    if (fixture.client.state.slot != block.message.block.slot || fixture.client.state.slot == initial_slot) {
+    if (fixture.client.state.slot != block.message.slot || fixture.client.state.slot == initial_slot) {
         fprintf(stderr, "state slot did not advance after importing fully signed block\n");
         goto cleanup;
     }
@@ -1136,12 +1145,12 @@ static int test_import_block_skips_unknown_attestation_head_root(void)
     client_test_fill_root(&unknown_root, 0xD4);
     if (memcmp(
             unknown_root.bytes,
-            block.message.block.body.attestations.data[0].data.head.root.bytes,
+            block.message.body.attestations.data[0].data.head.root.bytes,
             LANTERN_ROOT_SIZE)
         == 0) {
         unknown_root.bytes[0] ^= 0xFFu;
     }
-    block.message.block.body.attestations.data[0].data.head.root = unknown_root;
+    block.message.body.attestations.data[0].data.head.root = unknown_root;
     if (resign_first_block_attestation(&fixture, &block, &block_root) != 0) {
         fprintf(stderr, "failed to resign block fixture with unknown attestation head\n");
         goto cleanup;
@@ -1151,7 +1160,7 @@ static int test_import_block_skips_unknown_attestation_head_root(void)
         fprintf(stderr, "import rejected block with unknown attestation head root\n");
         goto cleanup;
     }
-    if (fixture.client.state.slot != block.message.block.slot || fixture.client.state.slot == initial_slot) {
+    if (fixture.client.state.slot != block.message.slot || fixture.client.state.slot == initial_slot) {
         fprintf(stderr, "state slot did not advance after skipping unknown attestation head root\n");
         goto cleanup;
     }
@@ -1211,24 +1220,16 @@ cleanup:
     return rc;
 }
 
-static int test_restore_persisted_blocks_caches_proposer_attestation(void)
+static int test_restore_persisted_blocks_skips_proposer_attestation_cache(void)
 {
     struct block_signature_fixture fixture;
     struct lantern_validator_config_entry assigned;
     LanternSignedBlock block;
     LanternRoot block_root;
-    LanternRoot proposer_data_root;
-    LanternSignatureKey proposer_key;
-    LanternSignature cached_signature;
-    LanternAttestationData cached_data;
     int rc = 1;
 
     memset(&assigned, 0, sizeof(assigned));
     memset(&block, 0, sizeof(block));
-    memset(&proposer_data_root, 0, sizeof(proposer_data_root));
-    memset(&proposer_key, 0, sizeof(proposer_key));
-    memset(&cached_signature, 0, sizeof(cached_signature));
-    memset(&cached_data, 0, sizeof(cached_data));
 
     if (setup_block_signature_fixture(&fixture, "test_restore_proposer_cache") != 0) {
         fprintf(stderr, "failed to set up restore proposer cache fixture\n");
@@ -1243,7 +1244,7 @@ static int test_restore_persisted_blocks_caches_proposer_attestation(void)
         fprintf(stderr, "failed to build block fixture for restore proposer cache test\n");
         goto cleanup;
     }
-    if (lantern_aggregated_attestations_resize(&block.message.block.body.attestations, 0u) != 0
+    if (lantern_aggregated_attestations_resize(&block.message.body.attestations, 0u) != 0
         || lantern_attestation_signatures_resize(&block.signatures.attestation_signatures, 0u) != 0) {
         fprintf(stderr, "failed to clear block-body attestations for restore proposer cache test\n");
         goto cleanup;
@@ -1252,24 +1253,17 @@ static int test_restore_persisted_blocks_caches_proposer_attestation(void)
             &fixture.client.state,
             &fixture.client.store,
             &block,
-            &block.message.block.state_root)
+            &block.message.state_root)
         != 0) {
         fprintf(stderr, "failed to preview state root for proposer-only restore test\n");
         goto cleanup;
     }
-    if (lantern_hash_tree_root_block(&block.message.block, &block_root) != 0) {
+    if (lantern_hash_tree_root_block(&block.message, &block_root) != 0) {
         fprintf(stderr, "failed to hash proposer-only restore block\n");
         goto cleanup;
     }
     if (lantern_storage_store_block(fixture.client.data_dir, &block) != 0) {
         fprintf(stderr, "failed to persist proposer-only block fixture for restore test\n");
-        goto cleanup;
-    }
-    if (lantern_hash_tree_root_attestation_data(
-            &block.message.proposer_attestation.data,
-            &proposer_data_root)
-        != 0) {
-        fprintf(stderr, "failed to hash proposer attestation data for restore test\n");
         goto cleanup;
     }
 
@@ -1281,27 +1275,12 @@ static int test_restore_persisted_blocks_caches_proposer_attestation(void)
         fprintf(stderr, "proposer-only restored block should not create known block-body proofs\n");
         goto cleanup;
     }
-    if (fixture.client.store.attestation_data_by_root.length != 1u) {
-        fprintf(stderr, "proposer-only restored block should cache proposer attestation data\n");
+    if (fixture.client.store.attestation_data_by_root.length != 0u) {
+        fprintf(stderr, "proposer-only restored block should not cache proposer attestation data\n");
         goto cleanup;
     }
-
-    proposer_key.validator_index = block.message.proposer_attestation.validator_id;
-    proposer_key.data_root = proposer_data_root;
-    if (lantern_store_get_attestation_data(&fixture.client.store, &proposer_data_root, &cached_data) != 0) {
-        fprintf(stderr, "missing proposer attestation data after restore\n");
-        goto cleanup;
-    }
-    if (memcmp(&cached_data, &block.message.proposer_attestation.data, sizeof(cached_data)) != 0) {
-        fprintf(stderr, "restored proposer attestation data mismatch\n");
-        goto cleanup;
-    }
-    if (lantern_store_get_gossip_signature(&fixture.client.store, &proposer_key, &cached_signature) != 0) {
-        fprintf(stderr, "missing proposer attestation signature after restore\n");
-        goto cleanup;
-    }
-    if (memcmp(&cached_signature, &block.signatures.proposer_signature, sizeof(cached_signature)) != 0) {
-        fprintf(stderr, "restored proposer attestation signature mismatch\n");
+    if (fixture.client.store.gossip_signatures.length != 0u) {
+        fprintf(stderr, "proposer-only restored block should not cache proposer gossip signatures\n");
         goto cleanup;
     }
 
@@ -1341,7 +1320,7 @@ int main(void) {
     if (test_restore_persisted_blocks_caches_known_attestation_proofs() != 0) {
         return 1;
     }
-    if (test_restore_persisted_blocks_caches_proposer_attestation() != 0) {
+    if (test_restore_persisted_blocks_skips_proposer_attestation_cache() != 0) {
         return 1;
     }
     puts("lantern_client_pending_test OK");

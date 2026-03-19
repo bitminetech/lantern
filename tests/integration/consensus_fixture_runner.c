@@ -59,7 +59,7 @@ static int preview_post_state_root_without_signatures(
     if (!state || !signed_block || !out_state_root) {
         return -1;
     }
-    if (signed_block->message.block.slot <= state->slot) {
+    if (signed_block->message.slot <= state->slot) {
         return -1;
     }
 
@@ -70,21 +70,12 @@ static int preview_post_state_root_without_signatures(
     }
 
     int rc = 0;
-    if (lantern_state_process_slots(&scratch, signed_block->message.block.slot) != 0) {
+    if (lantern_state_process_slots(&scratch, signed_block->message.slot) != 0) {
         rc = -1;
         goto cleanup;
     }
 
-    LanternSignedVote proposer_signed;
-    memset(&proposer_signed, 0, sizeof(proposer_signed));
-    proposer_signed.data = signed_block->message.proposer_attestation;
-    proposer_signed.signature = signed_block->signatures.proposer_signature;
-    if (lantern_state_process_block(
-            &scratch,
-            &signed_block->message.block,
-            NULL,
-            &proposer_signed)
-        != 0) {
+    if (lantern_state_process_block(&scratch, &signed_block->message, NULL, NULL) != 0) {
         rc = -1;
         goto cleanup;
     }
@@ -104,7 +95,7 @@ static int state_transition_without_signatures(
         return -1;
     }
 
-    const LanternBlock *block = &signed_block->message.block;
+    const LanternBlock *block = &signed_block->message;
     if (block->slot <= state->slot) {
         return -1;
     }
@@ -112,11 +103,7 @@ static int state_transition_without_signatures(
         return -1;
     }
 
-    LanternSignedVote proposer_signed;
-    memset(&proposer_signed, 0, sizeof(proposer_signed));
-    proposer_signed.data = signed_block->message.proposer_attestation;
-    proposer_signed.signature = signed_block->signatures.proposer_signature;
-    if (lantern_state_process_block(state, block, NULL, &proposer_signed) != 0) {
+    if (lantern_state_process_block(state, block, NULL, NULL) != 0) {
         return -1;
     }
 
@@ -157,7 +144,7 @@ static int patch_block_hashes_for_c_compat(
     if (lantern_hash_tree_root_block_header(&header_after_slots, &computed_parent) != 0) {
         return -1;
     }
-    memcpy(signed_block->message.block.parent_root.bytes, computed_parent.bytes, LANTERN_ROOT_SIZE);
+    memcpy(signed_block->message.parent_root.bytes, computed_parent.bytes, LANTERN_ROOT_SIZE);
 
     /* The state_transition fixtures do not ship signature material. Preview using
      * the unsigned transition path that mirrors leanSpec's valid_signatures
@@ -167,7 +154,7 @@ static int patch_block_hashes_for_c_compat(
         return -1;
     }
 
-    memcpy(signed_block->message.block.state_root.bytes, computed_state_root.bytes, LANTERN_ROOT_SIZE);
+    memcpy(signed_block->message.state_root.bytes, computed_state_root.bytes, LANTERN_ROOT_SIZE);
 
     return 0;
 }
@@ -754,23 +741,11 @@ static void reset_plain_block(LanternBlock *block) {
     lantern_block_body_reset(&block->body);
 }
 
-static void reset_block_message(LanternBlockWithAttestation *message) {
-    if (!message) {
-        return;
-    }
-    lantern_block_body_reset(&message->block.body);
-    LanternSignedBlock *owner =
-        (LanternSignedBlock *)((uint8_t *)message - offsetof(LanternSignedBlock, message));
-    if (owner) {
-        lantern_block_signatures_reset(&owner->signatures);
-    }
-}
-
 static void reset_signed_block_impl(LanternSignedBlock *block) {
     if (!block) {
         return;
     }
-    reset_plain_block(&block->message.block);
+    reset_plain_block(&block->message);
     lantern_block_signatures_reset(&block->signatures);
 }
 
@@ -778,7 +753,6 @@ static void reset_signed_block_impl(LanternSignedBlock *block) {
     _Generic(                                                                                      \
         (ptr),                                                                                     \
         LanternBlock *: reset_plain_block,                                                         \
-        LanternBlockWithAttestation *: reset_block_message,                                        \
         LanternSignedBlock *: reset_signed_block_impl)(ptr)
 
 static int ensure_signature_envelope(
@@ -788,7 +762,7 @@ static int ensure_signature_envelope(
     if (!block) {
         return -1;
     }
-    size_t attestation_count = block->message.block.body.attestations.length;
+    size_t attestation_count = block->message.body.attestations.length;
     size_t expected = attestation_count;
     if (block->signatures.attestation_signatures.length != expected
         || (expected > 0 && !block->signatures.attestation_signatures.data)) {
@@ -954,6 +928,12 @@ static int run_state_transition_fixture(const char *path) {
         reset_block(&signed_block.message);
 
         if (status != 0) {
+            fprintf(
+                stderr,
+                "state transition failed in %s block %d slot=%" PRIu64 "\n",
+                path,
+                i,
+                signed_block.message.slot);
             observed_failure = true;
             break;
         }
@@ -1246,7 +1226,7 @@ static int run_fork_choice_fixture(const char *path) {
 
         /* Save the LeanSpec block_root before any patching */
         LanternRoot leanspec_block_root;
-        if (lantern_hash_tree_root_block(&signed_block.message.block, &leanspec_block_root) != 0) {
+        if (lantern_hash_tree_root_block(&signed_block.message, &leanspec_block_root) != 0) {
             reset_block(&signed_block.message);
             reset_block(&anchor_block);
             lantern_fork_choice_reset(&store);
@@ -1265,7 +1245,7 @@ static int run_fork_choice_fixture(const char *path) {
         /* Determine if this block extends the canonical chain by looking up
          * the C hash of the block's parent (from LeanSpec parent_root) and
          * comparing with canonical_head_block_root. */
-        LanternRoot leanspec_parent_root = signed_block.message.block.parent_root;
+        LanternRoot leanspec_parent_root = signed_block.message.parent_root;
         const LanternRoot *c_parent_root = hash_mapping_leanspec_to_c(
             hash_mapping, hash_mapping_count, &leanspec_parent_root);
 
@@ -1282,8 +1262,8 @@ static int run_fork_choice_fixture(const char *path) {
 
         if (extends_canonical) {
             /* Patch block body attestation roots FIRST (before state_root preview) */
-            for (size_t att_idx = 0; att_idx < signed_block.message.block.body.attestations.length; ++att_idx) {
-                LanternAggregatedAttestation *agg = &signed_block.message.block.body.attestations.data[att_idx];
+            for (size_t att_idx = 0; att_idx < signed_block.message.body.attestations.length; ++att_idx) {
+                LanternAggregatedAttestation *agg = &signed_block.message.body.attestations.data[att_idx];
                 const LanternRoot *c_head = hash_mapping_leanspec_to_c(
                     hash_mapping, hash_mapping_count, &agg->data.head.root);
                 if (c_head) {
@@ -1313,7 +1293,7 @@ static int run_fork_choice_fixture(const char *path) {
                 return -1;
             }
             /* Recompute block_root after patching to get C hash */
-            if (lantern_hash_tree_root_block(&signed_block.message.block, &block_root) != 0) {
+            if (lantern_hash_tree_root_block(&signed_block.message, &block_root) != 0) {
                 reset_block(&signed_block.message);
                 reset_block(&anchor_block);
                 lantern_fork_choice_reset(&store);
@@ -1385,8 +1365,8 @@ static int run_fork_choice_fixture(const char *path) {
             }
             active_state = &branch_state;
             /* Patch block body attestation roots FIRST (before state_root preview) */
-            for (size_t att_idx = 0; att_idx < signed_block.message.block.body.attestations.length; ++att_idx) {
-                LanternAggregatedAttestation *agg = &signed_block.message.block.body.attestations.data[att_idx];
+            for (size_t att_idx = 0; att_idx < signed_block.message.body.attestations.length; ++att_idx) {
+                LanternAggregatedAttestation *agg = &signed_block.message.body.attestations.data[att_idx];
                 const LanternRoot *c_head = hash_mapping_leanspec_to_c(
                     hash_mapping, hash_mapping_count, &agg->data.head.root);
                 if (c_head) {
@@ -1417,7 +1397,7 @@ static int run_fork_choice_fixture(const char *path) {
                 return -1;
             }
             /* Recompute block_root after patching to get C hash */
-            if (lantern_hash_tree_root_block(&signed_block.message.block, &block_root) != 0) {
+            if (lantern_hash_tree_root_block(&signed_block.message, &block_root) != 0) {
                 lantern_state_reset(&branch_state);
                 reset_block(&signed_block.message);
                 reset_block(&anchor_block);
@@ -1530,11 +1510,11 @@ static int run_fork_choice_fixture(const char *path) {
         LanternCheckpoint post_finalized = block_finalized;
         LanternSignedVote block_proposer_signed;
         memset(&block_proposer_signed, 0, sizeof(block_proposer_signed));
-        block_proposer_signed.data = signed_block.message.proposer_attestation;
+        block_proposer_signed.data = proposer_vote;
         block_proposer_signed.signature = signed_block.signatures.proposer_signature;
         if (lantern_fork_choice_add_block(
                 &store,
-                &signed_block.message.block,
+                &signed_block.message,
                 &block_proposer_signed,
                 &post_justified,
                 &post_finalized,
@@ -1571,9 +1551,9 @@ static int run_fork_choice_fixture(const char *path) {
 
         /* Process aggregated attestations from block body.
          * Convert LeanSpec block roots to C hashes before adding to fork_choice. */
-        size_t attestation_count = signed_block.message.block.body.attestations.length;
+        size_t attestation_count = signed_block.message.body.attestations.length;
         for (size_t att_idx = 0; att_idx < attestation_count; ++att_idx) {
-            LanternAggregatedAttestation *agg = &signed_block.message.block.body.attestations.data[att_idx];
+            LanternAggregatedAttestation *agg = &signed_block.message.body.attestations.data[att_idx];
 
             /* Convert vote's block roots from LeanSpec to C hashes */
             LanternVote converted_vote;

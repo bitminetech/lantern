@@ -157,8 +157,10 @@ struct lantern_local_validator {
     uint8_t *secret;
     size_t secret_len;
     bool has_secret;
-    struct PQSignatureSchemeSecretKey *secret_key;
-    bool has_secret_handle;
+    struct PQSignatureSchemeSecretKey *attestation_secret_key;
+    struct PQSignatureSchemeSecretKey *proposal_secret_key;
+    bool has_attestation_secret_handle;
+    bool has_proposal_secret_handle;
     uint64_t last_proposed_slot;
     uint64_t last_attested_slot;
     LanternSignedVote pending_attestation;

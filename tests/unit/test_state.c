@@ -555,24 +555,24 @@ static int test_state_transition_applies_block(void) {
 
     LanternSignedBlock signed_block;
     memset(&signed_block, 0, sizeof(signed_block));
-    signed_block.message.block = block;
-    LanternCheckpoint proposer_source = {.slot = 0u};
-    LanternCheckpoint proposer_target = {.slot = block.slot};
-    fill_root(&proposer_source.root, 0x11);
-    fill_root(&proposer_target.root, 0x22);
-    LanternSignedVote proposer_vote;
-    memset(&proposer_vote, 0, sizeof(proposer_vote));
-    build_vote(
-        &proposer_vote.data,
-        NULL,
-        block.proposer_index,
-        block.slot,
-        &proposer_source,
-        &proposer_target,
-        0x33);
-    expect_zero(sign_vote_with_secret(&proposer_vote, proposer_secret), "sign proposer vote");
-    signed_block.message.proposer_attestation = proposer_vote.data;
-    signed_block.signatures.proposer_signature = proposer_vote.signature;
+    signed_block.message = block;
+    LanternRoot proposer_block_root;
+    expect_zero(
+        lantern_hash_tree_root_block(&signed_block.message, &proposer_block_root),
+        "hash proposer block");
+    if (!lantern_signature_sign(
+            proposer_secret,
+            signed_block.message.slot,
+            &proposer_block_root,
+            &signed_block.signatures.proposer_signature)) {
+        fprintf(stderr, "sign proposer block failed\n");
+        lantern_block_body_reset(&block.body);
+        pq_secret_key_free(proposer_secret);
+        pq_public_key_free(proposer_pub);
+        lantern_state_reset(&state);
+        lantern_state_reset(&expected);
+        return 1;
+    }
 
     expect_zero(lantern_state_transition(&state, &signed_block), "state transition");
     LanternRoot post_root;
@@ -631,23 +631,7 @@ static int test_state_transition_rejects_missing_proposer_signature(void) {
 
     LanternSignedBlock signed_block;
     memset(&signed_block, 0, sizeof(signed_block));
-    signed_block.message.block = block;
-    LanternCheckpoint proposer_source = {.slot = 0u};
-    LanternCheckpoint proposer_target = {.slot = block.slot};
-    fill_root(&proposer_source.root, 0x41);
-    fill_root(&proposer_target.root, 0x52);
-    LanternSignedVote proposer_vote;
-    memset(&proposer_vote, 0, sizeof(proposer_vote));
-    build_vote(
-        &proposer_vote.data,
-        NULL,
-        block.proposer_index,
-        block.slot,
-        &proposer_source,
-        &proposer_target,
-        0x63);
-    expect_zero(sign_vote_with_secret(&proposer_vote, proposer_secret), "sign missing-signature proposer vote");
-    signed_block.message.proposer_attestation = proposer_vote.data;
+    signed_block.message = block;
 
     if (lantern_state_transition(&state, &signed_block) == 0) {
         fprintf(stderr, "state transition accepted block without proposer signature\n");
@@ -705,7 +689,7 @@ static int test_state_transition_rejects_genesis_state_root_mismatch(void) {
 
     LanternSignedBlock signed_block;
     memset(&signed_block, 0, sizeof(signed_block));
-    signed_block.message.block = block;
+    signed_block.message = block;
 
     if (lantern_state_transition(&state, &signed_block) == 0) {
         fprintf(stderr, "genesis state mismatch block was incorrectly accepted\n");
@@ -2206,7 +2190,7 @@ static int test_process_block_defers_proposer_attestation(void) {
 
     LanternSignedBlock signed_block;
     memset(&signed_block, 0, sizeof(signed_block));
-    LanternBlock *block = &signed_block.message.block;
+    LanternBlock *block = &signed_block.message;
     block->slot = state.slot + 1u;
     expect_zero(
         lantern_proposer_for_slot(block->slot, validator_count, &block->proposer_index),
@@ -2216,32 +2200,36 @@ static int test_process_block_defers_proposer_attestation(void) {
         "parent root for proposer vote test");
     lantern_block_body_init(&block->body);
 
-    /* Use roots from historical_block_hashes so attestations pass validation */
     LanternCheckpoint base = state.latest_justified;
     base.root = get_historical_root_for_tests(&state, base.slot);
-    LanternCheckpoint head_checkpoint = base;
-    head_checkpoint.slot = block->slot;
-    fill_root(&head_checkpoint.root, 0xB3);
-
-    LanternSignedVote proposer_vote;
-    memset(&proposer_vote, 0, sizeof(proposer_vote));
-    build_vote(&proposer_vote.data, NULL, block->proposer_index, block->slot, &base, &base, 0);
-    proposer_vote.data.head = head_checkpoint;
-    expect_zero(sign_vote_with_secret(&proposer_vote, proposer_secret), "sign proposer attestation");
-    signed_block.message.proposer_attestation = proposer_vote.data;
-    signed_block.signatures.proposer_signature = proposer_vote.signature;
 
     LanternRoot expected_state_root;
     expect_zero(
         lantern_state_preview_post_state_root(&state, &signed_block, &expected_state_root),
         "preview proposer block state root");
     block->state_root = expected_state_root;
+    LanternRoot proposer_block_root;
+    expect_zero(
+        lantern_hash_tree_root_block(block, &proposer_block_root),
+        "hash proposer block root");
+    if (!lantern_signature_sign(
+            proposer_secret,
+            block->slot,
+            &proposer_block_root,
+            &signed_block.signatures.proposer_signature)) {
+        fprintf(stderr, "sign proposer block failed\n");
+        lantern_block_body_reset(&block->body);
+        pq_secret_key_free(proposer_secret);
+        pq_public_key_free(proposer_pub);
+        lantern_state_reset(&state);
+        return 1;
+    }
 
-    expect_zero(lantern_state_transition(&state, &signed_block), "import block with proposer attestation");
+    expect_zero(lantern_state_transition(&state, &signed_block), "import block with proposer signature");
     assert(state.latest_justified.slot == base.slot);
 
     if (lantern_state_validator_has_vote(&state, (size_t)block->proposer_index)) {
-        fprintf(stderr, "proposer attestation should not be staged into validator vote cache\n");
+        fprintf(stderr, "proposer signature should not stage a validator vote\n");
         lantern_block_body_reset(&block->body);
         pq_secret_key_free(proposer_secret);
         pq_public_key_free(proposer_pub);
@@ -2261,33 +2249,8 @@ static int test_process_block_defers_proposer_attestation(void) {
         return 1;
     }
 
-    LanternRoot data_root;
-    expect_zero(
-        lantern_hash_tree_root_attestation_data(&proposer_vote.data.data, &data_root),
-        "hash proposer attestation data root");
-    LanternSignatureKey key = {
-        .validator_index = proposer_vote.data.validator_id,
-        .data_root = data_root,
-    };
-    LanternSignature cached_signature;
-    memset(&cached_signature, 0, sizeof(cached_signature));
-    expect_zero(
-        lantern_store_get_gossip_signature(store, &key, &cached_signature),
-        "retrieve cached proposer signature");
-    assert(memcmp(
-               cached_signature.bytes,
-               signed_block.signatures.proposer_signature.bytes,
-               LANTERN_SIGNATURE_SIZE)
-           == 0);
-
-    LanternAttestationData cached_data;
-    memset(&cached_data, 0, sizeof(cached_data));
-    expect_zero(
-        lantern_store_get_attestation_data(store, &data_root, &cached_data),
-        "retrieve cached proposer attestation data");
-    assert(checkpoints_equal(&cached_data.source, &base));
-    assert(checkpoints_equal(&cached_data.target, &base));
-    assert(checkpoints_equal(&cached_data.head, &head_checkpoint));
+    assert(store->gossip_signatures.length == 0u);
+    assert(store->attestation_data_by_root.length == 0u);
 
     assert(fork_choice.new_votes != NULL);
     assert(fork_choice.known_votes != NULL);
@@ -2775,9 +2738,9 @@ static int test_validator_helpers_use_cached_fork_choice_head_state(void) {
         goto cleanup;
     }
 
-    signed_block.message.block.slot = 2u;
-    signed_block.message.block.proposer_index = proposer_index;
-    signed_block.message.block.parent_root = parent_root;
+    signed_block.message.slot = 2u;
+    signed_block.message.proposer_index = proposer_index;
+    signed_block.message.parent_root = parent_root;
     if (lantern_state_preview_post_state_root(
             &state,
             &signed_block,
@@ -2791,9 +2754,9 @@ static int test_validator_helpers_use_cached_fork_choice_head_state(void) {
     expect_zero(
         lantern_state_prepare_validator_votes(&expected_state, expected_state.config.num_validators),
         "prepare expected-state validator votes");
-    expect_zero(lantern_state_process_slots(&expected_state, signed_block.message.block.slot), "advance expected state");
+    expect_zero(lantern_state_process_slots(&expected_state, signed_block.message.slot), "advance expected state");
     expect_zero(
-        lantern_state_process_block(&expected_state, &signed_block.message.block, NULL, NULL),
+        lantern_state_process_block(&expected_state, &signed_block.message, NULL, NULL),
         "process preview block on cached head state");
     expect_zero(lantern_hash_tree_root_state(&expected_state, &expected_state_root), "hash expected preview state");
 

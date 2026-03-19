@@ -242,21 +242,13 @@ static const char *check_block_sanity(const LanternSignedBlock *block) {
         return "missing_block";
     }
 
-    const LanternBlock *message = &block->message.block;
+    const LanternBlock *message = &block->message;
     for (size_t i = 0; i < message->body.attestations.length; ++i) {
         const LanternAggregatedAttestation *att = &message->body.attestations.data[i];
         const char *att_reason = check_attestation_data_sanity(&att->data);
         if (att_reason) {
             return att_reason;
         }
-    }
-
-    const char *proposer_reason = check_attestation_data_sanity(&block->message.proposer_attestation.data);
-    if (proposer_reason) {
-        return proposer_reason;
-    }
-    if (block->message.proposer_attestation.slot < message->slot) {
-        return "proposer_vote_slot_before_block_slot";
     }
 
     size_t sig_count = block->signatures.attestation_signatures.length;
@@ -274,7 +266,7 @@ static void print_attestation_slots(const LanternSignedBlock *block) {
     if (!block) {
         return;
     }
-    const LanternBlock *message = &block->message.block;
+    const LanternBlock *message = &block->message;
     for (size_t i = 0; i < message->body.attestations.length; ++i) {
         const LanternAggregatedAttestation *att = &message->body.attestations.data[i];
         printf(
@@ -493,13 +485,12 @@ static void analyze_payload(const char *path) {
     printf("  lantern_ssz_decode_signed_block_rc=%d\n", ssz_rc);
     if (ssz_rc == 0) {
         printf(
-            "  decoded_block slot=%" PRIu64 " proposer=%" PRIu64 " attestations=%zu sigs=%zu layout=%s proposer_vote_slot=%" PRIu64 "\n",
-            block.message.block.slot,
-            block.message.block.proposer_index,
-            block.message.block.body.attestations.length,
+            "  decoded_block slot=%" PRIu64 " proposer=%" PRIu64 " attestations=%zu sigs=%zu layout=%s\n",
+            block.message.slot,
+            block.message.proposer_index,
+            block.message.body.attestations.length,
             block.signatures.attestation_signatures.length,
-            block.message.block.body.legacy_plain_attestation_layout ? "legacy_plain_votes" : "aggregated",
-            block.message.proposer_attestation.slot);
+            block.message.body.legacy_plain_attestation_layout ? "legacy_plain_votes" : "aggregated");
         print_attestation_slots(&block);
         const char *sanity_reason = check_block_sanity(&block);
         printf(

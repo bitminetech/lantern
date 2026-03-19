@@ -90,7 +90,7 @@ static void build_signed_block(
         "hash parent header");
     lantern_block_body_init(&out_block->message.body);
     expect_zero(
-        lantern_hash_tree_root_block(&out_block->message.block, out_root),
+        lantern_hash_tree_root_block(&out_block->message, out_root),
         "hash block");
 }
 
@@ -187,7 +187,14 @@ static int test_storage_rejects_excess_validators(void) {
         goto cleanup;
     }
     for (size_t i = 0; i < too_many; ++i) {
-        memset(invalid.validators[i].pubkey, (int)(0x30 + (i & 0x3Fu)), LANTERN_VALIDATOR_PUBKEY_SIZE);
+        memset(
+            invalid.validators[i].attestation_pubkey,
+            (int)(0x30 + (i & 0x3Fu)),
+            LANTERN_VALIDATOR_PUBKEY_SIZE);
+        memset(
+            invalid.validators[i].proposal_pubkey,
+            (int)(0x50 + (i & 0x3Fu)),
+            LANTERN_VALIDATOR_PUBKEY_SIZE);
     }
 
     size_t buffer_size = 1024u * 1024u;
@@ -368,7 +375,7 @@ int main(void) {
         "wrap legacy plain attestation");
     legacy_block.message.body.legacy_plain_attestation_layout = true;
     expect_zero(
-        lantern_hash_tree_root_block(&legacy_block.message.block, &legacy_block_root),
+        lantern_hash_tree_root_block(&legacy_block.message, &legacy_block_root),
         "hash legacy block");
     expect_zero(
         lantern_storage_store_block(base_dir, &legacy_block),
@@ -383,7 +390,7 @@ int main(void) {
     LanternRoot collected_legacy_root;
     expect_zero(
         lantern_hash_tree_root_block(
-            &legacy_response.blocks[0].message.block,
+            &legacy_response.blocks[0].message,
             &collected_legacy_root),
         "hash collected legacy block");
     assert(
@@ -392,7 +399,7 @@ int main(void) {
             legacy_block_root.bytes,
             LANTERN_ROOT_SIZE)
         == 0);
-    assert(legacy_response.blocks[0].message.block.body.legacy_plain_attestation_layout == true);
+    assert(legacy_response.blocks[0].message.body.legacy_plain_attestation_layout == true);
     lantern_signed_block_list_reset(&legacy_response);
     lantern_block_body_reset(&legacy_block.message.body);
     lantern_attestations_reset(&legacy_plain_attestations);

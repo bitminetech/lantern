@@ -78,7 +78,7 @@ tests/fixtures/**/*.json
 ci-build*
 
 # Internal docs
-internal-docs*
+# internal-docs*
 
 # External clients
 external-clients*

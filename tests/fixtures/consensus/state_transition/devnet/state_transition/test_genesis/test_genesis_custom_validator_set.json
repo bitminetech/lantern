@@ -31,35 +31,43 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x8fa00001b5b22a073d21cb60c9465b379f80e74fee9baf1d137eb651ed162900a6f3ec32da74ff09265ea62fc9a5055b2e9b7c7b",
+                        "attestationPubkey": "0xcd64341d83f28533f239153535b45209592342325ed31a5792b2e61935648748d41c384850baf6386c43bf19bfb63f53eb2c8c0b",
+                        "proposalPubkey": "0x5eba321a84f55461e2c0e94036d24e5107720876752d5c4f6e03183a7e7f1856e372c60dbc6fbc0450c26e58ba402f1da6952a73",
                         "index": 0
                     },
                     {
-                        "pubkey": "0xbc56037ab0485c00441e3205d908e55a016d5450a335144f50ccb034cb253c05a1cbc047b5695a5672697d584656e96a4b94f173",
+                        "attestationPubkey": "0x0c8f12450a0f4375d8f387643a66bd4084a76a522062790d8e961b38dfe3497444af494376e3c76f3007681a4016221434cdf51d",
+                        "proposalPubkey": "0x8b31ba434a9e116dcd99a11535d8fb480fe67517c20eb1117157ca1b1b6b0c5c9d9a632e3268986f35856c337fc18d7b6d4f926a",
                         "index": 1
                     },
                     {
-                        "pubkey": "0x79422d64ecdc3b0bf7c6cc31bbfb9f4eab7950107fe23c6f4f9c94465c81f80d85a1931f1003c50531147f350357805f22fdd70b",
+                        "attestationPubkey": "0x454d107dc0156e61baee057497d5667adb027d68f6fffb2bc61c6a38e45eed3531c9bd77e64f610044b26b1ec4047929bcfed946",
+                        "proposalPubkey": "0xac91d91a23744669bb2a5356605a161a5ae28c1e872fcf1d1e8cc63cb278447d8b889c77ea21884bbd8ecf2ad4824c66ae098a12",
                         "index": 2
                     },
                     {
-                        "pubkey": "0x575bb17b0f673d76689c9527a21fac68eb5ebd571703a245deb2a8384baea4747be00d5b469ff30f830e234f74453f6e2c20cb26",
+                        "attestationPubkey": "0xf19bf07520b1e97b131a55666bfe3e74cca720785f414d6b3e5d6f1616f35f7ab0e82123e74c2c766f970a233d0d19725a7d4d36",
+                        "proposalPubkey": "0x2327c12fc91cac0dc3593a5edb9c4a3c35ee9b5abc12883d28354b6965811c15ea1b926e86b8e16470d3586985293a5944d19b77",
                         "index": 3
                     },
                     {
-                        "pubkey": "0xd84fbd1ad59fc5331284b7230d73cf63aee8e65322eae85ce6b06d408087fb192ad07648e42ee229cda8ed266a86905252eed57b",
+                        "attestationPubkey": "0x4f4474010e829808734d51051d4a4656568e10247e1fc004b13c836f4f4d954f81cf9d193c40d3513ad9436e10a9354ca07adc24",
+                        "proposalPubkey": "0x92cf4f08c7cc302da1ef19446f4942503267246bb3ad8e4ca162f466d86d604f71cfe419f6726223282bb171a6670178e87ebb73",
                         "index": 4
                     },
                     {
-                        "pubkey": "0x0fb6092458097055b7b5695aee9a3306a70db27dee357637555504587cc3b70979a27e476d06f656db47a868aca9b01e1efb1978",
+                        "attestationPubkey": "0x8211d250c8c5e55178edd51b6657a50a21b1257898aeaf2b2c48524cc796d259056b0769dd8c434944b1934ddcaec2462f3d5839",
+                        "proposalPubkey": "0xb1a04c55e41c6c7347f37979b2cac65941619336e9ca7d210bb2916e8049867e3e66997e9ed5db6d875a10718ddb980d812bb164",
                         "index": 5
                     },
                     {
-                        "pubkey": "0xb5cd3b4395f76558823a0f16eeab034d31e5024576d8f5529e5e3e666aa5c764d80c035ed260fa6be73ca72517e05135f264f819",
+                        "attestationPubkey": "0x9629d25415dd57261bd9a041e9afe7089aa7f548b9023b580d466f7239ae5b53a24d5e0a307db6420fc2cc67d1435c0547dabe30",
+                        "proposalPubkey": "0x14f0a56560a11e20276ea3375789f44e8c2b8100d7d7466a879a9b2f5ef419273cd770265faa826e82c32260b72f5c44e09e8c70",
                         "index": 6
                     },
                     {
-                        "pubkey": "0x522b0815c617a3545d5b53361a454251369d923ffc4b174a5712ce01a20fd60572579c3e03bf093b1015ef0fe6063e22ddef214d",
+                        "attestationPubkey": "0x7675f751a6c1821f92daa3513134d055f75b155011f44058b1376919bd623318a5ae8541557404301f3c8d14c15109654f2eab44",
+                        "proposalPubkey": "0x3a0c56152f245f3c68162e5f21e42752a85c7545b8f6f133216d467a96ad276c2046f80d6e13a14704e50c1e7947c82651407b0d",
                         "index": 7
                     }
                 ]
@@ -99,7 +107,7 @@
             }
         },
         "_info": {
-            "hash": "0xeb9c32040335d481228d18e590c01445d4e545d953d55cd14121013bd438430d",
+            "hash": "0x62897e18811fff385a1c5612383d6b60803b39b019e343806245ff305ea7a016",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/state_transition/test_genesis.py::test_genesis_custom_validator_set[fork_Devnet]",
             "description": "Test genesis state with custom validator set.\n\n    Scenario\n    --------\n    Generate a genesis state with:\n    - 8 validators instead of default 4\n    - Custom validator pubkeys\n\n    Expected Behavior\n    -----------------\n    Genesis state should contain exactly 8 validators while\n    maintaining all other genesis properties.",

@@ -1,4 +1,5 @@
 #include <inttypes.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -10,6 +11,7 @@
 #include "client_test_helpers.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
+#include "lantern/crypto/xmss.h"
 #include "lantern/networking/gossip_payloads.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/time.h"
@@ -51,6 +53,14 @@ int lantern_client_advance_fork_choice_time_locked(
     struct lantern_client *client,
     uint64_t now_milliseconds,
     bool has_proposal);
+void lantern_client_reset_local_validators(struct lantern_client *client);
+int lantern_client_load_xmss_keys(struct lantern_client *client);
+int validator_sign_with_key(
+    struct lantern_local_validator *validator,
+    uint64_t slot,
+    const LanternRoot *message,
+    bool use_proposal_key,
+    LanternSignature *out_signature);
 lantern_client_error lantern_client_aggregate_attestations_for_block(
     struct lantern_client *client,
     const LanternAttestations *att_list,
@@ -104,6 +114,29 @@ static LanternAttestationData test_make_attestation_data(uint64_t slot, uint8_t 
     memset(data.target.root.bytes, (int)(marker + 1u), LANTERN_ROOT_SIZE);
     memset(data.source.root.bytes, (int)(marker + 2u), LANTERN_ROOT_SIZE);
     return data;
+}
+
+static bool pq_range_contains_slot(struct PQRange range, uint64_t slot) {
+    return range.start <= slot && slot < range.end;
+}
+
+static int test_fixture_secret_key_path(
+    size_t validator_index,
+    char *out_path,
+    size_t out_path_len) {
+    if (!out_path || out_path_len == 0) {
+        return -1;
+    }
+    int written = snprintf(
+        out_path,
+        out_path_len,
+        "%s/genesis/xmss-keys/validator_%zu_sk.json",
+        LANTERN_TEST_FIXTURE_DIR,
+        validator_index);
+    if (written <= 0 || (size_t)written >= out_path_len) {
+        return -1;
+    }
+    return 0;
 }
 
 static bool proof_payload_equals(
@@ -234,59 +267,44 @@ static int build_signed_head_block(
     }
 
     int rc = -1;
-    LanternCheckpoint head = {0};
-    LanternCheckpoint target = {0};
-    LanternCheckpoint source = {0};
-    LanternSignedVote proposer_vote;
-    memset(&proposer_vote, 0, sizeof(proposer_vote));
 
     lantern_signed_block_with_attestation_init(out_block);
-    out_block->message.block.slot = client->state.slot + 1u;
+    out_block->message.slot = client->state.slot + 1u;
     if (lantern_proposer_for_slot(
-            out_block->message.block.slot,
+            out_block->message.slot,
             client->state.config.num_validators,
-            &out_block->message.block.proposer_index)
+            &out_block->message.proposer_index)
         != 0) {
         goto cleanup;
     }
     if (lantern_state_select_block_parent(
             &client->state,
             &client->store,
-            &out_block->message.block.parent_root)
+            &out_block->message.parent_root)
         != 0) {
         goto cleanup;
     }
-    if (lantern_state_compute_vote_checkpoints(
-            &client->state,
-            &client->store,
-            &head,
-            &target,
-            &source)
-        != 0) {
-        goto cleanup;
-    }
-
-    proposer_vote.data.validator_id = out_block->message.block.proposer_index;
-    proposer_vote.data.slot = out_block->message.block.slot;
-    proposer_vote.data.head = head;
-    proposer_vote.data.target = target;
-    proposer_vote.data.source = source;
-    if (client_test_sign_vote_with_secret(&proposer_vote, secret) != 0) {
-        goto cleanup;
-    }
-
-    out_block->message.proposer_attestation = proposer_vote.data;
-    out_block->signatures.proposer_signature = proposer_vote.signature;
 
     if (lantern_state_preview_post_state_root(
             &client->state,
             &client->store,
             out_block,
-            &out_block->message.block.state_root)
+            &out_block->message.state_root)
         != 0) {
         goto cleanup;
     }
-    if (lantern_hash_tree_root_block(&out_block->message.block, out_root) != 0) {
+    LanternRoot block_signature_root;
+    if (lantern_hash_tree_root_block(&out_block->message, &block_signature_root) != 0) {
+        goto cleanup;
+    }
+    if (!lantern_signature_sign(
+            secret,
+            out_block->message.slot,
+            &block_signature_root,
+            &out_block->signatures.proposer_signature)) {
+        goto cleanup;
+    }
+    if (lantern_hash_tree_root_block(&out_block->message, out_root) != 0) {
         goto cleanup;
     }
 
@@ -569,7 +587,7 @@ static int test_record_vote_replays_buffered_vote_after_block_import(void) {
     }
     if (lantern_fork_choice_set_block_state(
             &client.fork_choice,
-            &grandchild_block.message.block.parent_root,
+            &grandchild_block.message.parent_root,
             &client.state)
         != 0) {
         fprintf(stderr, "failed to cache parent state for buffered vote replay test\n");
@@ -595,7 +613,7 @@ static int test_record_vote_replays_buffered_vote_after_block_import(void) {
     }
     if (lantern_storage_store_state_for_root(
             client.data_dir,
-            &grandchild_block.message.block.parent_root,
+            &grandchild_block.message.parent_root,
             &client.state)
         != 0) {
         fprintf(stderr, "failed to persist parent state for buffered vote replay test\n");
@@ -603,10 +621,10 @@ static int test_record_vote_replays_buffered_vote_after_block_import(void) {
     }
 
     vote.data.validator_id = 0u;
-    vote.data.slot = grandchild_block.message.block.slot;
-    vote.data.head.slot = grandchild_block.message.block.slot;
+    vote.data.slot = grandchild_block.message.slot;
+    vote.data.head.slot = grandchild_block.message.slot;
     vote.data.head.root = grandchild_root;
-    vote.data.target.slot = grandchild_block.message.block.slot;
+    vote.data.target.slot = grandchild_block.message.slot;
     vote.data.target.root = grandchild_root;
     vote.data.source.slot = 0u;
     vote.data.source.root = anchor_root;
@@ -875,8 +893,8 @@ static int test_validator_refresh_cached_vote_updates_source(void) {
     struct lantern_local_validator validator;
     memset(&validator, 0, sizeof(validator));
     validator.global_index = 0;
-    validator.secret_key = secret;
-    validator.has_secret_handle = true;
+    validator.attestation_secret_key = secret;
+    validator.has_attestation_secret_handle = true;
 
     LanternSignedVote stale;
     memset(&stale, 0, sizeof(stale));
@@ -955,6 +973,204 @@ static int test_validator_refresh_cached_vote_updates_source(void) {
 
 cleanup:
     client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_validator_sign_with_key_advances_only_selected_secret(void) {
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemePublicKey *unused_pub = NULL;
+    struct PQSignatureSchemeSecretKey *attestation_secret = NULL;
+    struct PQSignatureSchemeSecretKey *proposal_secret = NULL;
+    struct lantern_local_validator validator;
+    LanternRoot message;
+    LanternSignature signature;
+    int rc = 1;
+
+    memset(&validator, 0, sizeof(validator));
+    memset(&message, 0, sizeof(message));
+    memset(&signature, 0, sizeof(signature));
+
+    if (client_test_load_precomputed_keypair(0u, &pub, &attestation_secret) != 0) {
+        fprintf(stderr, "failed to load attestation keypair for key-advance test\n");
+        goto cleanup;
+    }
+    if (client_test_load_precomputed_keypair(0u, &unused_pub, &proposal_secret) != 0) {
+        fprintf(stderr, "failed to load proposal keypair for key-advance test\n");
+        goto cleanup;
+    }
+
+    validator.global_index = 0u;
+    validator.attestation_secret_key = attestation_secret;
+    validator.proposal_secret_key = proposal_secret;
+    validator.has_attestation_secret_handle = true;
+    validator.has_proposal_secret_handle = true;
+
+    struct PQRange initial_attestation = pq_get_prepared_interval(validator.attestation_secret_key);
+    struct PQRange initial_proposal = pq_get_prepared_interval(validator.proposal_secret_key);
+    if (initial_attestation.end <= initial_attestation.start
+        || initial_proposal.end <= initial_proposal.start) {
+        fprintf(stderr, "prepared interval unavailable for key-advance test\n");
+        goto cleanup;
+    }
+
+    uint64_t slot = initial_proposal.end;
+    if (slot == 0u) {
+        fprintf(stderr, "invalid proposal slot selection in key-advance test\n");
+        goto cleanup;
+    }
+
+    client_test_fill_root_with_index(&message, 0xAA55u);
+    if (validator_sign_with_key(&validator, slot, &message, true, &signature) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "validator_sign_with_key failed for proposal key advance test\n");
+        goto cleanup;
+    }
+
+    struct PQRange updated_attestation = pq_get_prepared_interval(validator.attestation_secret_key);
+    struct PQRange updated_proposal = pq_get_prepared_interval(validator.proposal_secret_key);
+    if (updated_attestation.start != initial_attestation.start
+        || updated_attestation.end != initial_attestation.end) {
+        fprintf(stderr, "attestation key should not advance during proposal signing\n");
+        goto cleanup;
+    }
+    if (!pq_range_contains_slot(updated_proposal, slot)) {
+        fprintf(stderr, "proposal key was not advanced to cover slot %" PRIu64 "\n", slot);
+        goto cleanup;
+    }
+    if (updated_proposal.start == initial_proposal.start
+        && updated_proposal.end == initial_proposal.end) {
+        fprintf(stderr, "proposal key interval did not change after signing future slot\n");
+        goto cleanup;
+    }
+    if (!lantern_signature_verify_pk(pub, slot, &signature, &message)) {
+        fprintf(stderr, "proposal signature failed verification after key advance\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    if (unused_pub) {
+        pq_public_key_free(unused_pub);
+    }
+    if (proposal_secret) {
+        pq_secret_key_free(proposal_secret);
+    }
+    if (attestation_secret) {
+        pq_secret_key_free(attestation_secret);
+    }
+    if (pub) {
+        pq_public_key_free(pub);
+    }
+    return rc;
+}
+
+static int test_client_load_xmss_keys_reads_dual_manifest_fields(void) {
+    struct lantern_client client;
+    char temp_dir_template[] = "/tmp/lantern-xmss-XXXXXX";
+    char *temp_dir = NULL;
+    char manifest_path[PATH_MAX];
+    char attestation_path[PATH_MAX];
+    char proposal_path[PATH_MAX];
+    int rc = 1;
+
+    memset(&client, 0, sizeof(client));
+    memset(manifest_path, 0, sizeof(manifest_path));
+    memset(attestation_path, 0, sizeof(attestation_path));
+    memset(proposal_path, 0, sizeof(proposal_path));
+
+    temp_dir = mkdtemp(temp_dir_template);
+    if (!temp_dir) {
+        perror("mkdtemp");
+        return 1;
+    }
+    if (test_fixture_secret_key_path(0u, attestation_path, sizeof(attestation_path)) != 0
+        || test_fixture_secret_key_path(1u, proposal_path, sizeof(proposal_path)) != 0) {
+        fprintf(stderr, "failed to resolve fixture secret key paths for manifest test\n");
+        goto cleanup;
+    }
+    if (snprintf(
+            manifest_path,
+            sizeof(manifest_path),
+            "%s/validator-keys-manifest.yaml",
+            temp_dir)
+        <= 0) {
+        fprintf(stderr, "failed to build manifest path for manifest test\n");
+        goto cleanup;
+    }
+
+    FILE *manifest = fopen(manifest_path, "w");
+    if (!manifest) {
+        perror("fopen manifest");
+        goto cleanup;
+    }
+    fputs(
+        "key_scheme: SIGTopLevelTargetSumLifetime32Dim64Base8\n"
+        "hash_function: Poseidon2\n"
+        "encoding: TargetSum\n"
+        "lifetime: 4294967296\n"
+        "log_num_active_epochs: 18\n"
+        "num_active_epochs: 262144\n"
+        "num_validators: 1\n"
+        "validators:\n"
+        "  - index: 0\n"
+        "    attestation_pubkey_hex: \"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"\n"
+        "    proposal_pubkey_hex: \"0x11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\"\n",
+        manifest);
+    fprintf(
+        manifest,
+        "    attestation_privkey_file: %s\n"
+        "    proposal_privkey_file: %s\n",
+        attestation_path,
+        proposal_path);
+    fclose(manifest);
+
+    client.node_id = (char *)"manifest_loader";
+    client.genesis.chain_config.validator_count = 1u;
+    client.local_validators = calloc(1u, sizeof(*client.local_validators));
+    if (!client.local_validators) {
+        fprintf(stderr, "failed to allocate local validator for manifest test\n");
+        goto cleanup;
+    }
+    client.local_validator_count = 1u;
+    client.local_validators[0].global_index = 0u;
+    client.xmss_key_dir = strdup(temp_dir);
+    if (!client.xmss_key_dir) {
+        fprintf(stderr, "failed to copy xmss key dir for manifest test\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_load_xmss_keys(&client) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "lantern_client_load_xmss_keys failed for dual-manifest test\n");
+        goto cleanup;
+    }
+    if (!client.local_validators[0].attestation_secret_key
+        || !client.local_validators[0].proposal_secret_key) {
+        fprintf(stderr, "dual manifest did not populate both secret key handles\n");
+        goto cleanup;
+    }
+    if (!client.local_validators[0].has_attestation_secret_handle
+        || !client.local_validators[0].has_proposal_secret_handle) {
+        fprintf(stderr, "dual manifest did not set secret-handle ownership flags\n");
+        goto cleanup;
+    }
+    if (client.local_validators[0].attestation_secret_key
+        == client.local_validators[0].proposal_secret_key) {
+        fprintf(stderr, "dual manifest should load independent secret key handles\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    free(client.xmss_key_dir);
+    client.xmss_key_dir = NULL;
+    lantern_client_reset_local_validators(&client);
+    if (manifest_path[0] != '\0') {
+        unlink(manifest_path);
+    }
+    if (temp_dir) {
+        rmdir(temp_dir);
+    }
     return rc;
 }
 
@@ -2561,6 +2777,12 @@ int main(void) {
         return 1;
     }
     if (test_validator_refresh_cached_vote_updates_source() != 0) {
+        return 1;
+    }
+    if (test_validator_sign_with_key_advances_only_selected_secret() != 0) {
+        return 1;
+    }
+    if (test_client_load_xmss_keys_reads_dual_manifest_fields() != 0) {
         return 1;
     }
     if (test_record_vote_preserves_state_root() != 0) {

@@ -31,19 +31,23 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x8fa00001b5b22a073d21cb60c9465b379f80e74fee9baf1d137eb651ed162900a6f3ec32da74ff09265ea62fc9a5055b2e9b7c7b",
+                        "attestationPubkey": "0xcd64341d83f28533f239153535b45209592342325ed31a5792b2e61935648748d41c384850baf6386c43bf19bfb63f53eb2c8c0b",
+                        "proposalPubkey": "0x5eba321a84f55461e2c0e94036d24e5107720876752d5c4f6e03183a7e7f1856e372c60dbc6fbc0450c26e58ba402f1da6952a73",
                         "index": 0
                     },
                     {
-                        "pubkey": "0xbc56037ab0485c00441e3205d908e55a016d5450a335144f50ccb034cb253c05a1cbc047b5695a5672697d584656e96a4b94f173",
+                        "attestationPubkey": "0x0c8f12450a0f4375d8f387643a66bd4084a76a522062790d8e961b38dfe3497444af494376e3c76f3007681a4016221434cdf51d",
+                        "proposalPubkey": "0x8b31ba434a9e116dcd99a11535d8fb480fe67517c20eb1117157ca1b1b6b0c5c9d9a632e3268986f35856c337fc18d7b6d4f926a",
                         "index": 1
                     },
                     {
-                        "pubkey": "0x79422d64ecdc3b0bf7c6cc31bbfb9f4eab7950107fe23c6f4f9c94465c81f80d85a1931f1003c50531147f350357805f22fdd70b",
+                        "attestationPubkey": "0x454d107dc0156e61baee057497d5667adb027d68f6fffb2bc61c6a38e45eed3531c9bd77e64f610044b26b1ec4047929bcfed946",
+                        "proposalPubkey": "0xac91d91a23744669bb2a5356605a161a5ae28c1e872fcf1d1e8cc63cb278447d8b889c77ea21884bbd8ecf2ad4824c66ae098a12",
                         "index": 2
                     },
                     {
-                        "pubkey": "0x575bb17b0f673d76689c9527a21fac68eb5ebd571703a245deb2a8384baea4747be00d5b469ff30f830e234f74453f6e2c20cb26",
+                        "attestationPubkey": "0xf19bf07520b1e97b131a55666bfe3e74cca720785f414d6b3e5d6f1616f35f7ab0e82123e74c2c766f970a233d0d19725a7d4d36",
+                        "proposalPubkey": "0x2327c12fc91cac0dc3593a5edb9c4a3c35ee9b5abc12883d28354b6965811c15ea1b926e86b8e16470d3586985293a5944d19b77",
                         "index": 3
                     }
                 ]
@@ -55,35 +59,15 @@
                 "data": []
             }
         },
-        "signedBlockWithAttestation": {
+        "signedBlock": {
             "message": {
-                "block": {
-                    "slot": 1,
-                    "proposerIndex": 1,
-                    "parentRoot": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
-                    "stateRoot": "0x976e5f2bf6a9b4c51516e650d3a7c7f0066580fa3d1b185808a5bec483292a2f",
-                    "body": {
-                        "attestations": {
-                            "data": []
-                        }
-                    }
-                },
-                "proposerAttestation": {
-                    "validatorId": 1,
-                    "data": {
-                        "slot": 1,
-                        "head": {
-                            "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                            "slot": 1
-                        },
-                        "target": {
-                            "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                            "slot": 1
-                        },
-                        "source": {
-                            "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
-                            "slot": 0
-                        }
+                "slot": 1,
+                "proposerIndex": 1,
+                "parentRoot": "0xd4377d11ee6650828facb55264530977b7f50f2ba233076b4b16a0d653a1dd99",
+                "stateRoot": "0x81e1da9d62dc8d8ed3df5b0e3f2ce85835418ab1a642da3cab2c78d3b08f70fb",
+                "body": {
+                    "attestations": {
+                        "data": []
                     }
                 }
             },
@@ -91,11 +75,11 @@
                 "attestationSignatures": {
                     "data": []
                 },
-                "proposerSignature": "0x24000000263da07078ffc405da190c28e564ec3376ea1567586e506d09815b6b280100000400000014b70943cd86aa15a53d574d2f8bd91d88b351762d52cc63b253ea301e2aba49ee46c42a2a94e3486ba8bc0ecbb156730e9aad50f311c65523d0064352345c21c1aaf750b2cac76f45bb496b315bf96c2dc3b7652a97e34149c980205634f671ca95a2380654713e9ab2d2607f688a654409973b02062164b8ee6c4e885623713b64bc67ce5afe3f64c56b248f30a8240cbfa74950ee2f0553ed2d05b5bae734dd43270816a33e0d3181970c0d2e4627e8a962536d23f674aca0233c6132fd56b6afb27af66d155bf75ff52250015a044bd51b0766206167f2a47d2dc0a8ab001805333e8eed12701c5a27008597e80f57e91b2716e248727595927a9012122ac28e390b11ab24088effc0281c06fd62f9c2026d48a75300697c24509c10c46c0f36f559277e1d34e193b1391baed97037db1538350d5b286bd22e6c5df4bb35b8275b2558be3c734be57f0bb4145953224d307cfb16e818f32c282bdbd6b13160fdd97c0fa4d02c8477e55afbb4081a3022933f6940107a08d18108dbd0367e"
+                "proposerSignature": "0x240000002c55b41882644e1a5cb3997e40c64a0ee78fc27a4bef5374fc0c2567280100000400000049b2b64f27982463438e7e7d86168a20ac5e5e4af7ae2870be90076941fe6d60825ae942f1b85b39be2865267dbdb0171e4e5c3d6497ef217ea7de00ee316c5733d6a92889892c38bfee6525572fab015eb72f0757921030a0ec2507b482383d848985677d644e52d97cbe34d78ad22a84009958121da45a4d9eb37e71bef802dab5fd2b7c87bd79f5da7d5f6ce8396299375b6d695ada4bba33ac19e2511c05d9c2cf6b0ecaa33a07b0f406a82f6048b858ec33282ed90bbd6a122778cecf79af53ed1ab51cf9722357a863b574691fb2633d155e53815db72ee8198f0e1c44a65eb24b13d14a7aac436d69dfd89874e246757ea919601492fea17600163e7dfb87960361c09248be6aed2b7b6ce0721873df692ebe3e780648190b2d7b5974613e095e780ebb3ff9bfd15d20d7fb1d8fde963aaf75b00c05280306b0cc0e22f5ea930d4872dc2e91df8f106bfbf149e17b6649dfdb8e63551c6e64c7381e58d3bd5c3af077586e3de9bd27ceaa154519e9be3f5e8c7870dcef0011e7db3919"
             }
         },
         "_info": {
-            "hash": "0x86f6a4dbd00dcba7417ba9e1576bfa74f92de8eb8c346e79fb9516f239464403",
+            "hash": "0xbb847951381b8a7b1a38130bb439ef6ce8f14b58e9a4dbab9a8ae2322271a203",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/verify_signatures/test_valid_signatures.py::test_multiple_attestation_groups_same_data[fork_Devnet]",
             "description": "Test that separate attestation specs with same data get aggregated.\n\n    Scenario\n    --------\n    - Block at slot 1 with 4 validators\n    - Two separate attestation specs, both targeting genesis\n        - Group 1: validators 0, 2\n        - Group 2: validator 3\n\n    Expected Behavior\n    -----------------\n    - Attestations with identical data should be merged\n    - All signatures verified correctly\n\n    Why This Matters\n    ----------------\n    Tests the aggregation logic when multiple specs target the same data.\n    Real-world scenario: validators attest independently to the same target.",

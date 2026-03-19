@@ -23,8 +23,7 @@ try:
         Block,
         BlockBody,
         BlockSignatures,
-        BlockWithAttestation,
-        SignedBlockWithAttestation,
+        SignedBlock,
     )
     from lean_spec.subspecs.containers.checkpoint import Checkpoint
     from lean_spec.subspecs.containers.slot import Slot
@@ -174,7 +173,7 @@ def make_signed_block(
     base_slot: int,
     proposer_index: int,
     attestation_count: int,
-) -> SignedBlockWithAttestation:
+) -> SignedBlock:
     attestations: list[Attestation] = [
         make_attestation(seed + (i * 5), (proposer_index + i + seed) % 16, base_slot + i + 1)
         for i in range(attestation_count)
@@ -187,10 +186,9 @@ def make_signed_block(
         state_root=Bytes32(repeating_bytes(seed + 0x50, 32)),
         body=BlockBody(attestations=AggregatedAttestations(data=aggregated_attestations)),
     )
-    proposer_att = make_attestation(seed + 0x80, (proposer_index + 3) % 16, base_slot + attestation_count + 4)
     signatures = make_block_signatures(seed + 0xA0, aggregated_attestations)
-    return SignedBlockWithAttestation(
-        message=BlockWithAttestation(block=block, proposer_attestation=proposer_att),
+    return SignedBlock(
+        message=block,
         signature=signatures,
     )
 
@@ -200,7 +198,7 @@ def make_gossip_signed_block(
     block_slot: int,
     proposer_index: int,
     attestation_vote_slots: Sequence[int],
-) -> SignedBlockWithAttestation:
+) -> SignedBlock:
     attestations = [
         make_gossip_attestation(seed + (i * 5), (proposer_index + i + seed) % 16, vote_slot)
         for i, vote_slot in enumerate(attestation_vote_slots)
@@ -213,10 +211,9 @@ def make_gossip_signed_block(
         state_root=Bytes32(repeating_bytes(seed + 0x50, 32)),
         body=BlockBody(attestations=AggregatedAttestations(data=aggregated_attestations)),
     )
-    proposer_att = make_gossip_attestation(seed + 0x80, (proposer_index + 3) % 16, block_slot + 2)
     signatures = make_block_signatures(seed + 0xA0, aggregated_attestations)
-    return SignedBlockWithAttestation(
-        message=BlockWithAttestation(block=block, proposer_attestation=proposer_att),
+    return SignedBlock(
+        message=block,
         signature=signatures,
     )
 
@@ -236,7 +233,7 @@ def encode_gossip_fixture(ssz_path: Path, snappy_path: Path) -> None:
     write_fixture(snappy_path, snappy)
 
 
-class BlocksByRootResponseFixture(SSZList[SignedBlockWithAttestation]):
+class BlocksByRootResponseFixture(SSZList[SignedBlock]):
     LIMIT = MAX_REQUEST_BLOCKS
 
 
@@ -294,7 +291,7 @@ def main() -> None:
     vote_attestation = make_gossip_attestation(seed=0x33, validator_id=9, vote_slot=96)
     vote_fixture = SignedAttestation(
         validator_id=vote_attestation.validator_id,
-        message=vote_attestation.data,
+        data=vote_attestation.data,
         signature=make_signature(0xE1),
     )
     vote_bytes = vote_fixture.encode_bytes()
@@ -304,7 +301,7 @@ def main() -> None:
         "Gossip signed vote",
         [
             f"validator={int(vote_fixture.validator_id)}",
-            f"slot={int(vote_fixture.message.slot)}",
+            f"slot={int(vote_fixture.data.slot)}",
             f"bytes={len(vote_bytes)}",
         ],
     )
@@ -327,8 +324,8 @@ def main() -> None:
     describe_fixture(
         "Gossip signed block",
         [
-            f"slot={int(block_fixture.message.block.slot)}",
-            f"attestations={len(block_fixture.message.block.body.attestations)}",
+            f"slot={int(block_fixture.message.slot)}",
+            f"attestations={len(block_fixture.message.body.attestations)}",
             f"bytes={len(block_bytes)}",
         ],
     )

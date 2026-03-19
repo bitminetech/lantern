@@ -328,6 +328,114 @@ bool lantern_signature_aggregate(
     return ok;
 }
 
+bool lantern_aggregated_signature_proof_aggregate(
+    const struct lantern_bitlist *xmss_participants,
+    const LanternAggregatedSignatureProof *children,
+    size_t child_count,
+    const LanternRawXmssSignature *raw_xmss,
+    size_t raw_xmss_count,
+    const LanternRoot *message,
+    uint64_t epoch,
+    LanternAggregatedSignatureProof *out_proof) {
+    if (!message || !out_proof) {
+        return false;
+    }
+    if (raw_xmss_count == 0 && child_count == 0) {
+        return false;
+    }
+    if (raw_xmss_count > 0 && !xmss_participants) {
+        return false;
+    }
+    if (raw_xmss_count == 0 && child_count < LANTERN_INVERSE_PROOF_SIZE) {
+        return false;
+    }
+
+    size_t aggregated_bit_length = 0;
+    if (xmss_participants && xmss_participants->bit_length > aggregated_bit_length) {
+        aggregated_bit_length = xmss_participants->bit_length;
+    }
+    for (size_t i = 0; i < child_count; ++i) {
+        if (children[i].participants.bit_length > aggregated_bit_length) {
+            aggregated_bit_length = children[i].participants.bit_length;
+        }
+    }
+    if (aggregated_bit_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return false;
+    }
+    if (lantern_bitlist_resize(&out_proof->participants, aggregated_bit_length) != 0) {
+        return false;
+    }
+    size_t aggregated_byte_len = (aggregated_bit_length + 7u) / 8u;
+    if (aggregated_byte_len > 0 && out_proof->participants.bytes) {
+        memset(out_proof->participants.bytes, 0, aggregated_byte_len);
+    }
+
+    size_t raw_participant_count = 0;
+    if (xmss_participants) {
+        size_t bytes = (xmss_participants->bit_length + 7u) / 8u;
+        if (bytes > 0 && xmss_participants->bytes && out_proof->participants.bytes) {
+            memcpy(out_proof->participants.bytes, xmss_participants->bytes, bytes);
+        }
+        for (size_t i = 0; i < xmss_participants->bit_length; ++i) {
+            if (lantern_bitlist_get(xmss_participants, i)) {
+                raw_participant_count += 1u;
+            }
+        }
+    }
+    if (raw_participant_count != raw_xmss_count) {
+        return false;
+    }
+
+    for (size_t child_idx = 0; child_idx < child_count; ++child_idx) {
+        const struct lantern_bitlist *child_participants = &children[child_idx].participants;
+        for (size_t bit = 0; bit < child_participants->bit_length; ++bit) {
+            if (lantern_bitlist_get(child_participants, bit)
+                && lantern_bitlist_set(&out_proof->participants, bit, true) != 0) {
+                return false;
+            }
+        }
+    }
+
+    if (child_count > 0) {
+        lantern_log_warn(
+            "signature",
+            NULL,
+            "recursive aggregated signature inputs require leanMultisig bindings; child_count=%zu raw_xmss=%zu",
+            child_count,
+            raw_xmss_count);
+        (void)lantern_byte_list_resize(&out_proof->proof_data, 0);
+        return false;
+    }
+
+    const uint8_t **pubkeys = calloc(raw_xmss_count, sizeof(*pubkeys));
+    LanternSignature *signatures = calloc(raw_xmss_count, sizeof(*signatures));
+    if ((raw_xmss_count > 0 && (!pubkeys || !signatures))) {
+        free(pubkeys);
+        free(signatures);
+        return false;
+    }
+    for (size_t i = 0; i < raw_xmss_count; ++i) {
+        if (!raw_xmss[i].pubkey || !raw_xmss[i].signature) {
+            free(pubkeys);
+            free(signatures);
+            return false;
+        }
+        pubkeys[i] = raw_xmss[i].pubkey;
+        signatures[i] = *raw_xmss[i].signature;
+    }
+
+    bool ok = lantern_signature_aggregate(
+        pubkeys,
+        signatures,
+        raw_xmss_count,
+        message,
+        epoch,
+        &out_proof->proof_data);
+    free(signatures);
+    free(pubkeys);
+    return ok;
+}
+
 bool lantern_signature_verify_aggregated(
     const uint8_t *const *pubkeys,
     size_t count,

@@ -50,15 +50,21 @@ int lantern_state_process_block(
     LanternState *state,
     LanternStore *store,
     const LanternBlock *block,
-    const LanternBlockSignatures *signatures,
-    const LanternSignedVote *proposer_attestation);
+    const LanternBlockSignatures *signatures);
 bool lantern_state_slot_in_justified_window(const LanternState *state, uint64_t slot);
 int lantern_state_get_justified_slot_bit(const LanternState *state, uint64_t slot, bool *out_value);
 int lantern_state_mark_justified_slot(LanternState *state, uint64_t slot);
 int lantern_state_transition(LanternState *state, LanternStore *store, const LanternSignedBlock *signed_block);
 int lantern_state_set_validator_pubkeys(LanternState *state, const uint8_t *pubkeys, size_t count);
+int lantern_state_set_validator_pubkeys_dual(
+    LanternState *state,
+    const uint8_t *attestation_pubkeys,
+    const uint8_t *proposal_pubkeys,
+    size_t count);
 size_t lantern_state_validator_count(const LanternState *state);
 const uint8_t *lantern_state_validator_pubkey(const LanternState *state, size_t index);
+const uint8_t *lantern_state_validator_attestation_pubkey(const LanternState *state, size_t index);
+const uint8_t *lantern_state_validator_proposal_pubkey(const LanternState *state, size_t index);
 int lantern_state_select_block_parent(
     LanternState *state,
     const LanternStore *store,

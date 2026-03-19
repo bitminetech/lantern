@@ -14,6 +14,8 @@
 #define LANTERN_HISTORICAL_ROOTS_LIMIT 262144
 #define LANTERN_JUSTIFICATION_VALIDATORS_LIMIT ((size_t)LANTERN_HISTORICAL_ROOTS_LIMIT * (size_t)LANTERN_VALIDATOR_REGISTRY_LIMIT)
 #define LANTERN_AGG_PROOF_MAX_BYTES (1024u * 1024u)
+#define LANTERN_AGGREGATED_SIGNATURE_PROOF_INVERSE_PROOF_SIZE 2u
+#define LANTERN_INVERSE_PROOF_SIZE 2u
 
 struct lantern_bitlist {
     uint8_t *bytes;
@@ -137,7 +139,8 @@ typedef struct {
 } LanternBlockBody;
 
 typedef struct {
-    uint8_t pubkey[LANTERN_VALIDATOR_PUBKEY_SIZE];
+    uint8_t attestation_pubkey[LANTERN_VALIDATOR_PUBKEY_SIZE];
+    uint8_t proposal_pubkey[LANTERN_VALIDATOR_PUBKEY_SIZE];
     LanternValidatorIndex index;
 } LanternValidator;
 
@@ -158,29 +161,9 @@ typedef struct {
 } LanternBlock;
 
 typedef struct {
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-    union {
-        LanternBlock block;
-        struct {
-            uint64_t slot;
-            LanternValidatorIndex proposer_index;
-            LanternRoot parent_root;
-            LanternRoot state_root;
-            LanternBlockBody body;
-        };
-    };
-#else
-    LanternBlock block;
-#endif
-    LanternVote proposer_attestation;
-} LanternBlockWithAttestation;
-
-typedef struct {
-    LanternBlockWithAttestation message;
+    LanternBlock message;
     LanternBlockSignatures signatures;
-} LanternSignedBlockWithAttestation;
-
-typedef LanternSignedBlockWithAttestation LanternSignedBlock;
+} LanternSignedBlock;
 
 void lantern_attestations_init(LanternAttestations *list);
 void lantern_attestations_reset(LanternAttestations *list);
@@ -242,6 +225,9 @@ int lantern_wrap_attestations_as_aggregated(
     const LanternAttestations *attestations,
     LanternAggregatedAttestations *out_aggregated);
 
+const uint8_t *lantern_validator_get_attestation_pubkey(const LanternValidator *validator);
+const uint8_t *lantern_validator_get_proposal_pubkey(const LanternValidator *validator);
+
 void lantern_aggregated_signature_proof_init(LanternAggregatedSignatureProof *proof);
 void lantern_aggregated_signature_proof_reset(LanternAggregatedSignatureProof *proof);
 int lantern_aggregated_signature_proof_copy(
@@ -273,12 +259,15 @@ void lantern_block_signatures_init(LanternBlockSignatures *signatures);
 void lantern_block_signatures_reset(LanternBlockSignatures *signatures);
 int lantern_block_signatures_copy(LanternBlockSignatures *dst, const LanternBlockSignatures *src);
 
+void lantern_block_init(LanternBlock *block);
+void lantern_block_reset(LanternBlock *block);
 void lantern_block_body_init(LanternBlockBody *body);
 void lantern_block_body_reset(LanternBlockBody *body);
 
-void lantern_block_with_attestation_init(LanternBlockWithAttestation *block);
-void lantern_block_with_attestation_reset(LanternBlockWithAttestation *block);
-void lantern_signed_block_with_attestation_init(LanternSignedBlockWithAttestation *block);
-void lantern_signed_block_with_attestation_reset(LanternSignedBlockWithAttestation *block);
+void lantern_signed_block_init(LanternSignedBlock *block);
+void lantern_signed_block_reset(LanternSignedBlock *block);
+
+#define lantern_signed_block_with_attestation_init lantern_signed_block_init
+#define lantern_signed_block_with_attestation_reset lantern_signed_block_reset
 
 #endif /* LANTERN_CONSENSUS_CONTAINERS_H */

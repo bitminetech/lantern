@@ -114,41 +114,6 @@ static bool signature_is_zero(const LanternSignature *signature) {
     return true;
 }
 
-static int lantern_state_cache_proposer_attestation(
-    const LanternState *state,
-    LanternStore *store,
-    const LanternSignedVote *proposer_attestation) {
-    if (!state || !store) {
-        return -1;
-    }
-    if (!proposer_attestation) {
-        return 0;
-    }
-
-    const LanternVote *vote = &proposer_attestation->data;
-    if (state->config.num_validators == 0
-        || vote->validator_id >= state->config.num_validators
-        || signature_is_zero(&proposer_attestation->signature)) {
-        return 0;
-    }
-
-    LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&vote->data, &data_root) != 0) {
-        return -1;
-    }
-
-    LanternSignatureKey key = {
-        .validator_index = vote->validator_id,
-        .data_root = data_root,
-    };
-    return lantern_store_set_gossip_signature(
-        store,
-        &key,
-        &vote->data,
-        &proposer_attestation->signature,
-        vote->target.slot);
-}
-
 static bool validator_pubkey_is_zero(const uint8_t *pubkey) {
     if (!pubkey) {
         return true;
@@ -164,8 +129,7 @@ static bool validator_pubkey_is_zero(const uint8_t *pubkey) {
 static int lantern_state_verify_block_signatures(
     const LanternState *state,
     const LanternBlock *block,
-    const LanternBlockSignatures *signatures,
-    const LanternSignedVote *proposer_attestation) {
+    const LanternBlockSignatures *signatures) {
     if (!state || !block || !signatures) {
         return -1;
     }
@@ -268,7 +232,7 @@ static int lantern_state_verify_block_signatures(
             if (!lantern_bitlist_get(&attestation->aggregation_bits, v)) {
                 continue;
             }
-            const uint8_t *pubkey = lantern_state_validator_pubkey(state, v);
+            const uint8_t *pubkey = lantern_state_validator_attestation_pubkey(state, v);
             if (!pubkey || validator_pubkey_is_zero(pubkey)) {
                 lantern_log_warn(
                     "state",
@@ -313,56 +277,44 @@ static int lantern_state_verify_block_signatures(
         }
     }
 
-    if (!proposer_attestation) {
-        return 0;
-    }
-    if (proposer_attestation->data.validator_id != block->proposer_index) {
-        lantern_log_warn(
-            "state",
-            &meta,
-            "proposer attestation validator mismatch expected=%" PRIu64 " actual=%" PRIu64,
-            block->proposer_index,
-            proposer_attestation->data.validator_id);
-        return -1;
-    }
     if (signature_is_zero(&signatures->proposer_signature)) {
         lantern_log_warn("state", &meta, "missing proposer signature");
         return -1;
     }
-    if (proposer_attestation->data.validator_id >= validator_count) {
+    if (block->proposer_index >= validator_count) {
         lantern_log_warn(
             "state",
             &meta,
             "proposer index out of range validator=%" PRIu64 " validators=%zu",
-            proposer_attestation->data.validator_id,
+            block->proposer_index,
             validator_count);
         return -1;
     }
 
     const uint8_t *proposer_pubkey =
-        lantern_state_validator_pubkey(state, (size_t)proposer_attestation->data.validator_id);
+        lantern_state_validator_proposal_pubkey(state, (size_t)block->proposer_index);
     if (!proposer_pubkey || validator_pubkey_is_zero(proposer_pubkey)) {
         lantern_log_warn("state", &meta, "missing proposer pubkey");
         return -1;
     }
 
     LanternRoot proposer_root;
-    if (lantern_hash_tree_root_attestation_data(&proposer_attestation->data.data, &proposer_root) != 0) {
-        lantern_log_warn("state", &meta, "failed to hash proposer attestation");
+    if (lantern_hash_tree_root_block(block, &proposer_root) != 0) {
+        lantern_log_warn("state", &meta, "failed to hash block for proposer signature");
         return -1;
     }
     if (!lantern_signature_verify(
             proposer_pubkey,
             LANTERN_VALIDATOR_PUBKEY_SIZE,
-            proposer_attestation->data.slot,
+            block->slot,
             &signatures->proposer_signature,
             &proposer_root)) {
         lantern_log_warn(
             "state",
             &meta,
             "invalid proposer signature validator=%" PRIu64 " slot=%" PRIu64,
-            proposer_attestation->data.validator_id,
-            proposer_attestation->data.slot);
+            block->proposer_index,
+            block->slot);
         return -1;
     }
 
@@ -1362,14 +1314,18 @@ static int lantern_state_prune_justification_roots(
     return 0;
 }
 
-int lantern_state_set_validator_pubkeys(LanternState *state, const uint8_t *pubkeys, size_t count) {
+int lantern_state_set_validator_pubkeys_dual(
+    LanternState *state,
+    const uint8_t *attestation_pubkeys,
+    const uint8_t *proposal_pubkeys,
+    size_t count) {
     if (!state) {
         return -1;
     }
     if (count > (size_t)LANTERN_VALIDATOR_REGISTRY_LIMIT) {
         return -1;
     }
-    if (count > 0 && !pubkeys) {
+    if (count > 0 && (!attestation_pubkeys || !proposal_pubkeys)) {
         return -1;
     }
     if (count > 0 && count > SIZE_MAX / sizeof(*state->validators)) {
@@ -1383,8 +1339,12 @@ int lantern_state_set_validator_pubkeys(LanternState *state, const uint8_t *pubk
         }
         for (size_t i = 0; i < count; ++i) {
             memcpy(
-                items[i].pubkey,
-                pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+                items[i].attestation_pubkey,
+                attestation_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+                LANTERN_VALIDATOR_PUBKEY_SIZE);
+            memcpy(
+                items[i].proposal_pubkey,
+                proposal_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
                 LANTERN_VALIDATOR_PUBKEY_SIZE);
             items[i].index = (uint64_t)i;
         }
@@ -1398,6 +1358,10 @@ int lantern_state_set_validator_pubkeys(LanternState *state, const uint8_t *pubk
     return 0;
 }
 
+int lantern_state_set_validator_pubkeys(LanternState *state, const uint8_t *pubkeys, size_t count) {
+    return lantern_state_set_validator_pubkeys_dual(state, pubkeys, pubkeys, count);
+}
+
 size_t lantern_state_validator_count(const LanternState *state) {
     if (!state || !state->validators) {
         return 0;
@@ -1406,10 +1370,21 @@ size_t lantern_state_validator_count(const LanternState *state) {
 }
 
 const uint8_t *lantern_state_validator_pubkey(const LanternState *state, size_t index) {
+    return lantern_state_validator_attestation_pubkey(state, index);
+}
+
+const uint8_t *lantern_state_validator_attestation_pubkey(const LanternState *state, size_t index) {
     if (!state || !state->validators || index >= state->validator_count) {
         return NULL;
     }
-    return state->validators[index].pubkey;
+    return state->validators[index].attestation_pubkey;
+}
+
+const uint8_t *lantern_state_validator_proposal_pubkey(const LanternState *state, size_t index) {
+    if (!state || !state->validators || index >= state->validator_count) {
+        return NULL;
+    }
+    return state->validators[index].proposal_pubkey;
 }
 
 static void lantern_root_zero(LanternRoot *root) {
@@ -2118,19 +2093,12 @@ int lantern_state_process_block(
     LanternState *state,
     LanternStore *store,
     const LanternBlock *block,
-    const LanternBlockSignatures *signatures,
-    const LanternSignedVote *proposer_attestation) {
+    const LanternBlockSignatures *signatures) {
     if (!state || !store || !block) {
         return -1;
     }
     double block_metrics_start = lantern_time_now_seconds();
-    if (signatures
-        && lantern_state_verify_block_signatures(
-            state,
-            block,
-            signatures,
-            proposer_attestation)
-            != 0) {
+    if (signatures && lantern_state_verify_block_signatures(state, block, signatures) != 0) {
         return -1;
     }
     if (lantern_state_process_block_header(state, block) != 0) {
@@ -2161,7 +2129,7 @@ int lantern_state_transition(LanternState *state, LanternStore *store, const Lan
     if (!state || !store || !signed_block) {
         return -1;
     }
-    const LanternBlock *block = &signed_block->message.block;
+    const LanternBlock *block = &signed_block->message;
     double transition_metrics_start = lantern_time_now_seconds();
 #define STATE_FAIL(fmt, ...)                                                                 \
     do {                                                                                     \
@@ -2176,16 +2144,7 @@ int lantern_state_transition(LanternState *state, LanternStore *store, const Lan
     if (block->slot <= state->slot) {
         STATE_FAIL("block slot %" PRIu64 " not ahead of state %" PRIu64, block->slot, state->slot);
     }
-    LanternSignedVote proposer_signed;
-    memset(&proposer_signed, 0, sizeof(proposer_signed));
-    proposer_signed.data = signed_block->message.proposer_attestation;
-    proposer_signed.signature = signed_block->signatures.proposer_signature;
-    if (lantern_state_verify_block_signatures(
-            state,
-            block,
-            &signed_block->signatures,
-            &proposer_signed)
-        != 0) {
+    if (lantern_state_verify_block_signatures(state, block, &signed_block->signatures) != 0) {
         STATE_FAIL("block signatures invalid");
     }
     uint64_t slot_before = state->slot;
@@ -2196,7 +2155,7 @@ int lantern_state_transition(LanternState *state, LanternStore *store, const Lan
     double slots_duration = lantern_time_now_seconds() - slots_metrics_start;
     uint64_t slots_processed = block->slot >= slot_before ? (block->slot - slot_before) : 0;
     lean_metrics_record_state_transition_slots(slots_processed, slots_duration);
-    if (lantern_state_process_block(state, store, block, NULL, &proposer_signed) != 0) {
+    if (lantern_state_process_block(state, store, block, NULL) != 0) {
         STATE_FAIL("process block failed");
     }
     LanternRoot computed_state_root;
@@ -2285,7 +2244,7 @@ int lantern_state_transition(LanternState *state, LanternStore *store, const Lan
         if (lantern_fork_choice_add_block_with_state(
                 store->fork_choice,
                 block,
-                &proposer_signed,
+                NULL,
                 &state->latest_justified,
                 &state->latest_finalized,
                 NULL,
@@ -2293,9 +2252,6 @@ int lantern_state_transition(LanternState *state, LanternStore *store, const Lan
             != 0) {
             STATE_FAIL("fork choice add block failed for slot %" PRIu64, block->slot);
         }
-    }
-    if (lantern_state_cache_proposer_attestation(state, store, &proposer_signed) != 0) {
-        STATE_FAIL("failed to cache proposer attestation for slot %" PRIu64, block->slot);
     }
 
     state->slot = block->slot;
@@ -2363,6 +2319,7 @@ int lantern_state_collect_attestations_for_block(
     if (!state || !store || !out_attestations || !out_signatures || !parent_root) {
         return -1;
     }
+    (void)proposer_attestation;
     if (!store->validator_votes || store->validator_votes_len == 0) {
         return -1;
     }
@@ -2391,7 +2348,6 @@ int lantern_state_collect_attestations_for_block(
     lantern_store_init(&scratch_store);
     int rc = 0;
     bool fixed_point = false;
-    const LanternSignedVote *proposer_ptr = proposer_attestation;
     LanternAggregatedAttestations aggregated_view;
     lantern_aggregated_attestations_init(&aggregated_view);
 
@@ -2457,7 +2413,7 @@ int lantern_state_collect_attestations_for_block(
         candidate.body.attestations.length = aggregated_view.length;
         candidate.body.attestations.capacity = aggregated_view.length;
 
-        if (lantern_state_process_block(&scratch, &scratch_store, &candidate, NULL, proposer_ptr) != 0) {
+        if (lantern_state_process_block(&scratch, &scratch_store, &candidate, NULL) != 0) {
             rc = -1;
             goto cleanup;
         }
@@ -2513,11 +2469,11 @@ int lantern_state_preview_post_state_root(
     }
     const LanternState *base_state = lantern_state_cached_fork_choice_state_for_root(
         store,
-        &block->message.block.parent_root);
+        &block->message.parent_root);
     if (!base_state) {
         base_state = state;
     }
-    if (block->message.block.slot <= base_state->slot) {
+    if (block->message.slot <= base_state->slot) {
         return -1;
     }
     LanternState scratch;
@@ -2532,21 +2488,11 @@ int lantern_state_preview_post_state_root(
         return -1;
     }
     int rc = 0;
-    if (lantern_state_process_slots(&scratch, block->message.block.slot) != 0) {
+    if (lantern_state_process_slots(&scratch, block->message.slot) != 0) {
         rc = -1;
         goto cleanup;
     }
-    LanternSignedVote proposer_signed;
-    memset(&proposer_signed, 0, sizeof(proposer_signed));
-    proposer_signed.data = block->message.proposer_attestation;
-    proposer_signed.signature = block->signatures.proposer_signature;
-    if (lantern_state_process_block(
-            &scratch,
-            &scratch_store,
-            &block->message.block,
-            NULL,
-            &proposer_signed)
-        != 0) {
+    if (lantern_state_process_block(&scratch, &scratch_store, &block->message, NULL) != 0) {
         rc = -1;
         goto cleanup;
     }

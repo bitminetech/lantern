@@ -196,13 +196,13 @@ static bool lantern_client_process_stream_block_chunk(
     }
 
     LanternRoot computed = {{0}};
-    if (lantern_hash_tree_root_block(&streamed_block.message.block, &computed) != 0)
+    if (lantern_hash_tree_root_block(&streamed_block.message, &computed) != 0)
     {
         lantern_log_warn(
             "reqresp",
             meta,
             "failed to hash streamed block slot=%" PRIu64,
-            streamed_block.message.block.slot);
+            streamed_block.message.slot);
         lantern_signed_block_with_attestation_reset(&streamed_block);
         free(raw_block);
         free(chunk);
@@ -236,12 +236,12 @@ static bool lantern_client_process_stream_block_chunk(
             meta,
             "streamed block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s match=%s depth=%" PRIu32
             " attestations=%zu",
-            streamed_block.message.block.slot,
-            streamed_block.message.block.proposer_index,
+            streamed_block.message.slot,
+            streamed_block.message.proposer_index,
             computed_hex[0] ? computed_hex : "0x0",
             matches ? "true" : "false",
             backfill_depth,
-            streamed_block.message.block.body.attestations.length);
+            streamed_block.message.body.attestations.length);
     }
     else
     {
@@ -250,12 +250,12 @@ static bool lantern_client_process_stream_block_chunk(
             meta,
             "streamed block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s match=%s depth=%" PRIu32
             " attestations=%zu",
-            streamed_block.message.block.slot,
-            streamed_block.message.block.proposer_index,
+            streamed_block.message.slot,
+            streamed_block.message.proposer_index,
             computed_hex[0] ? computed_hex : "0x0",
             matches ? "true" : "false",
             backfill_depth,
-            streamed_block.message.block.body.attestations.length);
+            streamed_block.message.body.attestations.length);
     }
 
     lantern_client_record_block(

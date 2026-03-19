@@ -1217,7 +1217,7 @@ static bool signed_block_matches_root(
         return false;
     }
     LanternRoot block_root = {0};
-    if (lantern_hash_tree_root_block(&block->message.block, &block_root) != 0)
+    if (lantern_hash_tree_root_block(&block->message, &block_root) != 0)
     {
         return false;
     }
@@ -1240,8 +1240,6 @@ static int signed_block_copy(
     dst->message.proposer_index = src->message.proposer_index;
     dst->message.parent_root = src->message.parent_root;
     dst->message.state_root = src->message.state_root;
-    dst->message.proposer_attestation = src->message.proposer_attestation;
-
     if (lantern_aggregated_attestations_copy(
             &dst->message.body.attestations,
             &src->message.body.attestations)
