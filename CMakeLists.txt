@@ -193,6 +193,10 @@ if(LANTERN_BUILD_TESTS)
     )
     add_test(NAME lantern_client_gossip COMMAND lantern_client_gossip_test)
 
+    add_executable(lantern_client_state_staleness_test tests/unit/test_client_state_staleness.c)
+    target_link_libraries(lantern_client_state_staleness_test PRIVATE lantern)
+    add_test(NAME lantern_client_state_staleness COMMAND lantern_client_state_staleness_test)
+
     add_executable(lantern_genesis_anchor_test tests/unit/test_genesis_anchor.c)
     target_link_libraries(lantern_genesis_anchor_test PRIVATE lantern)
     add_test(NAME lantern_genesis_anchor COMMAND lantern_genesis_anchor_test)
@@ -409,6 +413,7 @@ if(LANTERN_BUILD_TESTS)
     set(_lantern_ctest_targets
         lantern_client_vote
         lantern_client_pending
+        lantern_client_state_staleness
         lantern_genesis_anchor
         lantern_genesis_bootstrap
         lantern_validator_selection
