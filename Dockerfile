@@ -127,6 +127,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Set to "true" to include gdb, perf, and valgrind for debugging/profiling
 ARG INCLUDE_DEBUG_TOOLS=false
+# Set to "true" to include heaptrack for heap profiling
+ARG INCLUDE_HEAPTRACK=false
 
 # Install runtime dependencies (and optionally profiling tools)
 RUN set -eux; \
@@ -145,6 +147,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=apt-cache-${TARGE
     && if [ "$INCLUDE_DEBUG_TOOLS" = "true" ]; then \
         apt-get install -y --no-install-recommends gdb linux-tools-generic valgrind \
         && ln -sf /usr/lib/linux-tools/*/perf /usr/local/bin/perf || true; \
+    fi \
+    && if [ "$INCLUDE_HEAPTRACK" = "true" ]; then \
+        apt-get install -y --no-install-recommends heaptrack; \
     fi
 
 COPY --from=builder /opt/lantern /opt/lantern

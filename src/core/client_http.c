@@ -517,13 +517,13 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
     out_snapshot->lean_latest_justified_slot = state_justified.slot;
     out_snapshot->lean_latest_finalized_slot = state_finalized.slot;
     out_snapshot->lean_validators_count = client->local_validator_count;
-    out_snapshot->lean_gossip_signatures_count = (uint64_t)gossip_signature_count;
-    out_snapshot->lean_latest_new_aggregated_payloads_count = (uint64_t)new_aggregated_payload_count;
-    out_snapshot->lean_latest_known_aggregated_payloads_count = (uint64_t)known_aggregated_payload_count;
+    out_snapshot->lean_gossip_signatures = (uint64_t)gossip_signature_count;
+    out_snapshot->lean_latest_new_aggregated_payloads = (uint64_t)new_aggregated_payload_count;
+    out_snapshot->lean_latest_known_aggregated_payloads = (uint64_t)known_aggregated_payload_count;
     out_snapshot->lean_is_aggregator =
         (client->assigned_validators && client->assigned_validators->enr.is_aggregator) ? 1u : 0u;
-    out_snapshot->lean_committee_attestation_subnet = (uint64_t)client->gossip.attestation_subnet_id;
-    out_snapshot->lean_committee_attestation_subnets_count =
+    out_snapshot->lean_attestation_committee_subnet = (uint64_t)client->gossip.attestation_subnet_id;
+    out_snapshot->lean_attestation_committee_count =
         (uint64_t)(client->debug_attestation_committee_count > 0
                 ? client->debug_attestation_committee_count
                 : 1u);

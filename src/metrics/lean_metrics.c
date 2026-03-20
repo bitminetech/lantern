@@ -14,16 +14,18 @@ struct lean_histogram {
 };
 
 static const double kDefaultShortBuckets[] = {0.005, 0.01, 0.025, 0.05, 0.1, 1.0};
+static const double kForkChoiceBlockBuckets[] = {0.005, 0.01, 0.025, 0.05, 0.1, 1.0, 1.25, 1.5, 2.0, 4.0};
 static const double kStateTransitionBuckets[] = {0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0};
 static const double kReorgDepthBuckets[] = {1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 20.0, 30.0, 50.0, 100.0};
+static const double kPqSigAggregatedSignatureBuckets[] = {0.1, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 4.0};
 static const double kCommitteeAggregationBuckets[] = {0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0};
 
 static pthread_mutex_t g_metrics_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_attestations_valid_total = 0;
 static uint64_t g_attestations_invalid_total = 0;
-static uint64_t g_pq_sig_individual_signatures_total = 0;
-static uint64_t g_pq_sig_individual_signatures_valid_total = 0;
-static uint64_t g_pq_sig_individual_signatures_invalid_total = 0;
+static uint64_t g_pq_sig_attestation_signatures_total = 0;
+static uint64_t g_pq_sig_attestation_signatures_valid_total = 0;
+static uint64_t g_pq_sig_attestation_signatures_invalid_total = 0;
 static uint64_t g_pq_sig_aggregated_signatures_total = 0;
 static uint64_t g_pq_sig_aggregated_signatures_valid_total = 0;
 static uint64_t g_pq_sig_aggregated_signatures_invalid_total = 0;
@@ -38,8 +40,8 @@ static uint64_t g_state_slots_processed_total = 0;
 static uint64_t g_state_attestations_processed_total = 0;
 
 static struct lean_histogram g_hist_fork_choice_block = {
-    .bounds = kDefaultShortBuckets,
-    .bucket_count = ARRAY_LEN(kDefaultShortBuckets),
+    .bounds = kForkChoiceBlockBuckets,
+    .bucket_count = ARRAY_LEN(kForkChoiceBlockBuckets),
 };
 static struct lean_histogram g_hist_fork_choice_reorg_depth = {
     .bounds = kReorgDepthBuckets,
@@ -65,21 +67,21 @@ static struct lean_histogram g_hist_state_attestations = {
     .bounds = kDefaultShortBuckets,
     .bucket_count = ARRAY_LEN(kDefaultShortBuckets),
 };
-static struct lean_histogram g_hist_pq_signature_signing = {
+static struct lean_histogram g_hist_pq_sig_attestation_signing = {
     .bounds = kDefaultShortBuckets,
     .bucket_count = ARRAY_LEN(kDefaultShortBuckets),
 };
-static struct lean_histogram g_hist_pq_signature_verification = {
+static struct lean_histogram g_hist_pq_sig_attestation_verification = {
     .bounds = kDefaultShortBuckets,
     .bucket_count = ARRAY_LEN(kDefaultShortBuckets),
 };
-static struct lean_histogram g_hist_pq_sig_attestation_signatures_building = {
-    .bounds = kDefaultShortBuckets,
-    .bucket_count = ARRAY_LEN(kDefaultShortBuckets),
+static struct lean_histogram g_hist_pq_sig_aggregated_signatures_building = {
+    .bounds = kPqSigAggregatedSignatureBuckets,
+    .bucket_count = ARRAY_LEN(kPqSigAggregatedSignatureBuckets),
 };
 static struct lean_histogram g_hist_pq_sig_aggregated_signatures_verification = {
-    .bounds = kDefaultShortBuckets,
-    .bucket_count = ARRAY_LEN(kDefaultShortBuckets),
+    .bounds = kPqSigAggregatedSignatureBuckets,
+    .bucket_count = ARRAY_LEN(kPqSigAggregatedSignatureBuckets),
 };
 static struct lean_histogram g_hist_committee_signatures_aggregation = {
     .bounds = kCommitteeAggregationBuckets,
@@ -149,9 +151,9 @@ void lean_metrics_reset(void) {
     pthread_mutex_lock(&g_metrics_lock);
     g_attestations_valid_total = 0;
     g_attestations_invalid_total = 0;
-    g_pq_sig_individual_signatures_total = 0;
-    g_pq_sig_individual_signatures_valid_total = 0;
-    g_pq_sig_individual_signatures_invalid_total = 0;
+    g_pq_sig_attestation_signatures_total = 0;
+    g_pq_sig_attestation_signatures_valid_total = 0;
+    g_pq_sig_attestation_signatures_invalid_total = 0;
     g_pq_sig_aggregated_signatures_total = 0;
     g_pq_sig_aggregated_signatures_valid_total = 0;
     g_pq_sig_aggregated_signatures_invalid_total = 0;
@@ -171,9 +173,9 @@ void lean_metrics_reset(void) {
     histogram_reset(&g_hist_state_slots);
     histogram_reset(&g_hist_state_block);
     histogram_reset(&g_hist_state_attestations);
-    histogram_reset(&g_hist_pq_signature_signing);
-    histogram_reset(&g_hist_pq_signature_verification);
-    histogram_reset(&g_hist_pq_sig_attestation_signatures_building);
+    histogram_reset(&g_hist_pq_sig_attestation_signing);
+    histogram_reset(&g_hist_pq_sig_attestation_verification);
+    histogram_reset(&g_hist_pq_sig_aggregated_signatures_building);
     histogram_reset(&g_hist_pq_sig_aggregated_signatures_verification);
     histogram_reset(&g_hist_committee_signatures_aggregation);
     pthread_mutex_unlock(&g_metrics_lock);
@@ -244,23 +246,23 @@ void lean_metrics_record_finalization_attempt(bool success) {
 
 void lean_metrics_record_pq_signature_signing(double seconds) {
     pthread_mutex_lock(&g_metrics_lock);
-    histogram_observe(&g_hist_pq_signature_signing, seconds);
+    g_pq_sig_attestation_signatures_total += 1;
+    histogram_observe(&g_hist_pq_sig_attestation_signing, seconds);
     pthread_mutex_unlock(&g_metrics_lock);
 }
 
 void lean_metrics_record_pq_signature_verification(double seconds) {
     pthread_mutex_lock(&g_metrics_lock);
-    histogram_observe(&g_hist_pq_signature_verification, seconds);
+    histogram_observe(&g_hist_pq_sig_attestation_verification, seconds);
     pthread_mutex_unlock(&g_metrics_lock);
 }
 
 void lean_metrics_record_pq_signature_verification_result(bool valid) {
     pthread_mutex_lock(&g_metrics_lock);
-    g_pq_sig_individual_signatures_total += 1;
     if (valid) {
-        g_pq_sig_individual_signatures_valid_total += 1;
+        g_pq_sig_attestation_signatures_valid_total += 1;
     } else {
-        g_pq_sig_individual_signatures_invalid_total += 1;
+        g_pq_sig_attestation_signatures_invalid_total += 1;
     }
     pthread_mutex_unlock(&g_metrics_lock);
 }
@@ -269,7 +271,7 @@ void lean_metrics_record_pq_aggregated_signature_build(size_t attestation_count,
     pthread_mutex_lock(&g_metrics_lock);
     g_pq_sig_aggregated_signatures_total += 1;
     g_pq_sig_attestations_in_aggregated_signatures_total += (uint64_t)attestation_count;
-    histogram_observe(&g_hist_pq_sig_attestation_signatures_building, seconds);
+    histogram_observe(&g_hist_pq_sig_aggregated_signatures_building, seconds);
     pthread_mutex_unlock(&g_metrics_lock);
 }
 
@@ -320,9 +322,9 @@ void lean_metrics_snapshot(struct lean_metrics_snapshot *out) {
     pthread_mutex_lock(&g_metrics_lock);
     out->attestations_valid_total = g_attestations_valid_total;
     out->attestations_invalid_total = g_attestations_invalid_total;
-    out->pq_sig_individual_signatures_total = g_pq_sig_individual_signatures_total;
-    out->pq_sig_individual_signatures_valid_total = g_pq_sig_individual_signatures_valid_total;
-    out->pq_sig_individual_signatures_invalid_total = g_pq_sig_individual_signatures_invalid_total;
+    out->pq_sig_attestation_signatures_total = g_pq_sig_attestation_signatures_total;
+    out->pq_sig_attestation_signatures_valid_total = g_pq_sig_attestation_signatures_valid_total;
+    out->pq_sig_attestation_signatures_invalid_total = g_pq_sig_attestation_signatures_invalid_total;
     out->pq_sig_aggregated_signatures_total = g_pq_sig_aggregated_signatures_total;
     out->pq_sig_aggregated_signatures_valid_total = g_pq_sig_aggregated_signatures_valid_total;
     out->pq_sig_aggregated_signatures_invalid_total = g_pq_sig_aggregated_signatures_invalid_total;
@@ -350,11 +352,11 @@ void lean_metrics_snapshot(struct lean_metrics_snapshot *out) {
     histogram_snapshot(&out->state_slots_time, &g_hist_state_slots);
     histogram_snapshot(&out->state_block_time, &g_hist_state_block);
     histogram_snapshot(&out->state_attestations_time, &g_hist_state_attestations);
-    histogram_snapshot(&out->pq_signature_signing_time, &g_hist_pq_signature_signing);
-    histogram_snapshot(&out->pq_signature_verification_time, &g_hist_pq_signature_verification);
+    histogram_snapshot(&out->pq_sig_attestation_signing_time, &g_hist_pq_sig_attestation_signing);
+    histogram_snapshot(&out->pq_sig_attestation_verification_time, &g_hist_pq_sig_attestation_verification);
     histogram_snapshot(
-        &out->pq_sig_attestation_signatures_building_time,
-        &g_hist_pq_sig_attestation_signatures_building);
+        &out->pq_sig_aggregated_signatures_building_time,
+        &g_hist_pq_sig_aggregated_signatures_building);
     histogram_snapshot(
         &out->pq_sig_aggregated_signatures_verification_time,
         &g_hist_pq_sig_aggregated_signatures_verification);

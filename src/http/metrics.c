@@ -480,10 +480,10 @@ static int append_lean_chain_metrics(
 
     rc = append_metric_uint64(
         buf,
-        "lean_gossip_signatures_count",
+        "lean_gossip_signatures",
         "Current number of gossip signatures in fork-choice store",
         "gauge",
-        snapshot->lean_gossip_signatures_count);
+        snapshot->lean_gossip_signatures);
     if (rc != 0)
     {
         return rc;
@@ -491,10 +491,10 @@ static int append_lean_chain_metrics(
 
     rc = append_metric_uint64(
         buf,
-        "lean_latest_new_aggregated_payloads_count",
+        "lean_latest_new_aggregated_payloads",
         "Current number of new aggregated payloads",
         "gauge",
-        snapshot->lean_latest_new_aggregated_payloads_count);
+        snapshot->lean_latest_new_aggregated_payloads);
     if (rc != 0)
     {
         return rc;
@@ -502,10 +502,10 @@ static int append_lean_chain_metrics(
 
     rc = append_metric_uint64(
         buf,
-        "lean_latest_known_aggregated_payloads_count",
+        "lean_latest_known_aggregated_payloads",
         "Current number of known aggregated payloads",
         "gauge",
-        snapshot->lean_latest_known_aggregated_payloads_count);
+        snapshot->lean_latest_known_aggregated_payloads);
     if (rc != 0)
     {
         return rc;
@@ -524,10 +524,10 @@ static int append_lean_chain_metrics(
 
     rc = append_metric_uint64(
         buf,
-        "lean_committee_attestation_subnet",
+        "lean_attestation_committee_subnet",
         "Current committee attestation subnet",
         "gauge",
-        snapshot->lean_committee_attestation_subnet);
+        snapshot->lean_attestation_committee_subnet);
     if (rc != 0)
     {
         return rc;
@@ -535,10 +535,10 @@ static int append_lean_chain_metrics(
 
     rc = append_metric_uint64(
         buf,
-        "lean_committee_attestation_subnets_count",
-        "Number of committee attestation subnets",
+        "lean_attestation_committee_count",
+        "Number of attestation committees",
         "gauge",
-        snapshot->lean_committee_attestation_subnets_count);
+        snapshot->lean_attestation_committee_count);
     if (rc != 0)
     {
         return rc;
@@ -581,10 +581,10 @@ static int append_lean_chain_metrics(
 
     rc = append_metric_uint64(
         buf,
-        "lean_pq_sig_individual_signatures_total",
+        "lean_pq_sig_attestation_signatures_total",
         "Total number of individual attestation signatures",
         "counter",
-        lean->pq_sig_individual_signatures_total);
+        lean->pq_sig_attestation_signatures_total);
     if (rc != 0)
     {
         return rc;
@@ -592,10 +592,10 @@ static int append_lean_chain_metrics(
 
     rc = append_metric_uint64(
         buf,
-        "lean_pq_sig_individual_signatures_valid_total",
+        "lean_pq_sig_attestation_signatures_valid_total",
         "Total number of valid individual attestation signatures",
         "counter",
-        lean->pq_sig_individual_signatures_valid_total);
+        lean->pq_sig_attestation_signatures_valid_total);
     if (rc != 0)
     {
         return rc;
@@ -603,10 +603,10 @@ static int append_lean_chain_metrics(
 
     rc = append_metric_uint64(
         buf,
-        "lean_pq_sig_individual_signatures_invalid_total",
+        "lean_pq_sig_attestation_signatures_invalid_total",
         "Total number of invalid individual attestation signatures",
         "counter",
-        lean->pq_sig_individual_signatures_invalid_total);
+        lean->pq_sig_attestation_signatures_invalid_total);
     if (rc != 0)
     {
         return rc;
@@ -651,17 +651,6 @@ static int append_lean_chain_metrics(
         "Total number of attestations included into aggregated signatures",
         "counter",
         lean->pq_sig_attestations_in_aggregated_signatures_total);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_committee_aggregated_attestations_total",
-        "Total number of aggregated attestations produced by committee aggregation",
-        "counter",
-        lean->committee_aggregated_attestations_total);
     if (rc != 0)
     {
         return rc;
@@ -1019,29 +1008,9 @@ static int append_lean_histograms(
 
     rc = append_histogram_metrics(
         buf,
-        "lean_pq_signature_attestation_signing_time_seconds",
-        "Time taken to sign an attestation",
-        &lean->pq_signature_signing_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
         "lean_pq_sig_attestation_signing_time_seconds",
         "Time taken to sign an attestation",
-        &lean->pq_signature_signing_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_pq_signature_attestation_verification_time_seconds",
-        "Time taken to verify an attestation signature",
-        &lean->pq_signature_verification_time);
+        &lean->pq_sig_attestation_signing_time);
     if (rc != 0)
     {
         return rc;
@@ -1051,7 +1020,7 @@ static int append_lean_histograms(
         buf,
         "lean_pq_sig_attestation_verification_time_seconds",
         "Time taken to verify an attestation signature",
-        &lean->pq_signature_verification_time);
+        &lean->pq_sig_attestation_verification_time);
     if (rc != 0)
     {
         return rc;
@@ -1059,9 +1028,9 @@ static int append_lean_histograms(
 
     rc = append_histogram_metrics(
         buf,
-        "lean_pq_sig_attestation_signatures_building_time_seconds",
+        "lean_pq_sig_aggregated_signatures_building_time_seconds",
         "Time taken to build an aggregated attestation signature",
-        &lean->pq_sig_attestation_signatures_building_time);
+        &lean->pq_sig_aggregated_signatures_building_time);
     if (rc != 0)
     {
         return rc;

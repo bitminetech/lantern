@@ -43,9 +43,9 @@ struct lean_metrics_histogram_snapshot {
 struct lean_metrics_snapshot {
     uint64_t attestations_valid_total;
     uint64_t attestations_invalid_total;
-    uint64_t pq_sig_individual_signatures_total;
-    uint64_t pq_sig_individual_signatures_valid_total;
-    uint64_t pq_sig_individual_signatures_invalid_total;
+    uint64_t pq_sig_attestation_signatures_total;
+    uint64_t pq_sig_attestation_signatures_valid_total;
+    uint64_t pq_sig_attestation_signatures_invalid_total;
     uint64_t pq_sig_aggregated_signatures_total;
     uint64_t pq_sig_aggregated_signatures_valid_total;
     uint64_t pq_sig_aggregated_signatures_invalid_total;
@@ -65,9 +65,9 @@ struct lean_metrics_snapshot {
     struct lean_metrics_histogram_snapshot state_slots_time;
     struct lean_metrics_histogram_snapshot state_block_time;
     struct lean_metrics_histogram_snapshot state_attestations_time;
-    struct lean_metrics_histogram_snapshot pq_signature_signing_time;
-    struct lean_metrics_histogram_snapshot pq_signature_verification_time;
-    struct lean_metrics_histogram_snapshot pq_sig_attestation_signatures_building_time;
+    struct lean_metrics_histogram_snapshot pq_sig_attestation_signing_time;
+    struct lean_metrics_histogram_snapshot pq_sig_attestation_verification_time;
+    struct lean_metrics_histogram_snapshot pq_sig_aggregated_signatures_building_time;
     struct lean_metrics_histogram_snapshot pq_sig_aggregated_signatures_verification_time;
     struct lean_metrics_histogram_snapshot committee_signatures_aggregation_time;
 };
