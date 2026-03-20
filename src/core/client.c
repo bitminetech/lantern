@@ -80,6 +80,44 @@ static const size_t CHECKPOINT_SYNC_MAX_RESPONSE_BYTES =
     + (LANTERN_HISTORICAL_ROOTS_LIMIT * 32u)
     + (LANTERN_JUSTIFICATION_VALIDATORS_LIMIT / 8u);
 static const size_t LANTERN_ATTESTATION_COMMITTEE_COUNT = 1u;
+static const uint64_t LANTERN_CHECKPOINT_SYNC_STALE_PERSISTED_STATE_SLOT_THRESHOLD = 2u * 32u;
+
+bool lantern_client_persisted_state_is_stale_for_checkpoint_sync(
+    const LanternState *persisted_state,
+    uint64_t genesis_time,
+    uint32_t slot_duration_seconds,
+    uint64_t now_seconds,
+    uint64_t *out_expected_current_slot,
+    uint64_t *out_gap) {
+    uint64_t expected_current_slot = 0u;
+    uint64_t gap = 0u;
+
+    if (out_expected_current_slot) {
+        *out_expected_current_slot = 0u;
+    }
+    if (out_gap) {
+        *out_gap = 0u;
+    }
+    if (!persisted_state || slot_duration_seconds == 0u) {
+        return false;
+    }
+
+    if (now_seconds > genesis_time) {
+        expected_current_slot = (now_seconds - genesis_time) / (uint64_t)slot_duration_seconds;
+    }
+    if (expected_current_slot > persisted_state->slot) {
+        gap = expected_current_slot - persisted_state->slot;
+    }
+
+    if (out_expected_current_slot) {
+        *out_expected_current_slot = expected_current_slot;
+    }
+    if (out_gap) {
+        *out_gap = gap;
+    }
+
+    return gap > LANTERN_CHECKPOINT_SYNC_STALE_PERSISTED_STATE_SLOT_THRESHOLD;
+}
 
 static void sync_aggregated_payload_pools_after_time_advance(
     struct lantern_client *client,
@@ -2400,35 +2438,77 @@ static lantern_client_error client_load_or_build_state(
     const struct lantern_client_options *options,
     bool *loaded_from_storage)
 {
+    const bool checkpoint_sync_configured =
+        options
+        && options->checkpoint_sync_url
+        && options->checkpoint_sync_url[0] != '\0';
+    const struct lantern_log_metadata meta = {.validator = client ? client->node_id : NULL};
     bool from_storage = false;
+    bool should_attempt_checkpoint_sync = false;
     int storage_state_rc = lantern_storage_load_state(client->data_dir, &client->state);
     if (storage_state_rc == 0)
     {
         client->has_state = true;
         from_storage = true;
-        if (options
-            && options->checkpoint_sync_url
-            && options->checkpoint_sync_url[0] != '\0')
+        if (checkpoint_sync_configured)
         {
-            lantern_log_info(
-                "checkpoint_sync",
-                &(const struct lantern_log_metadata){.validator = client->node_id},
-                "using persisted state; skipping checkpoint fetch");
+            struct lantern_consensus_runtime_config runtime_config;
+            lantern_consensus_runtime_config_init(&runtime_config);
+
+            uint64_t expected_current_slot = 0u;
+            uint64_t gap = 0u;
+            time_t now_time = time(NULL);
+            if (now_time != (time_t)-1
+                && lantern_client_persisted_state_is_stale_for_checkpoint_sync(
+                    &client->state,
+                    client->genesis.chain_config.genesis_time,
+                    runtime_config.seconds_per_slot,
+                    (uint64_t)now_time,
+                    &expected_current_slot,
+                    &gap))
+            {
+                lantern_log_info(
+                    "checkpoint_sync",
+                    &meta,
+                    "persisted state stale slot=%" PRIu64
+                    " expected_current_slot=%" PRIu64
+                    " gap=%" PRIu64
+                    " threshold=%" PRIu64
+                    "; discarding state and using checkpoint sync",
+                    client->state.slot,
+                    expected_current_slot,
+                    gap,
+                    LANTERN_CHECKPOINT_SYNC_STALE_PERSISTED_STATE_SLOT_THRESHOLD);
+                lantern_state_reset(&client->state);
+                client->has_state = false;
+                from_storage = false;
+                should_attempt_checkpoint_sync = true;
+            }
+            else
+            {
+                lantern_log_info(
+                    "checkpoint_sync",
+                    &meta,
+                    "using persisted state; skipping checkpoint fetch");
+            }
         }
     }
     else if (storage_state_rc < 0)
     {
         lantern_log_error(
             "storage",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
+            &meta,
             "failed to load persisted state");
         return LANTERN_CLIENT_ERR_STORAGE;
     }
     else
     {
-        if (options
-            && options->checkpoint_sync_url
-            && options->checkpoint_sync_url[0] != '\0')
+        should_attempt_checkpoint_sync = checkpoint_sync_configured;
+    }
+
+    if (!client->has_state)
+    {
+        if (should_attempt_checkpoint_sync)
         {
             lantern_client_error checkpoint_rc = client_load_state_from_checkpoint(
                 client,
@@ -2451,7 +2531,7 @@ static lantern_client_error client_load_or_build_state(
         {
             lantern_log_error(
                 "storage",
-                &(const struct lantern_log_metadata){.validator = client->node_id},
+                &meta,
                 "failed to load persisted votes");
             return LANTERN_CLIENT_ERR_STORAGE;
         }
