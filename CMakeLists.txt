@@ -197,8 +197,21 @@ if(LANTERN_BUILD_TESTS)
     target_link_libraries(lantern_client_state_staleness_test PRIVATE lantern)
     add_test(NAME lantern_client_state_staleness COMMAND lantern_client_state_staleness_test)
 
-    add_executable(lantern_genesis_anchor_test tests/unit/test_genesis_anchor.c)
+    add_executable(lantern_genesis_anchor_test
+        tests/unit/test_genesis_anchor.c
+        tests/unit/client_test_helpers.c
+    )
     target_link_libraries(lantern_genesis_anchor_test PRIVATE lantern)
+    target_include_directories(
+        lantern_genesis_anchor_test
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/tests/unit
+    )
+    target_compile_definitions(
+        lantern_genesis_anchor_test
+        PRIVATE
+            LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
+    )
     add_test(NAME lantern_genesis_anchor COMMAND lantern_genesis_anchor_test)
 
     add_executable(lantern_genesis_bootstrap_test tests/unit/test_genesis_bootstrap.c)
