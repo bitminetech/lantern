@@ -1544,7 +1544,16 @@ static bool rebuild_state_for_root_locked(
     LanternRoot replay_stop_root = {0};
     char replay_stop_hex[ROOT_HEX_BUFFER_LEN] = {0};
 
-    if (client->has_state)
+    if (client->has_fork_choice)
+    {
+        const LanternCheckpoint *fork_finalized =
+            lantern_fork_choice_latest_finalized(&client->fork_choice);
+        if (fork_finalized)
+        {
+            replay_stop_root = fork_finalized->root;
+        }
+    }
+    else if (client->has_state)
     {
         replay_stop_root = client->state.latest_finalized.root;
     }
