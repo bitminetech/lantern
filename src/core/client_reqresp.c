@@ -1083,6 +1083,15 @@ int reqresp_build_status(void *context, LanternStatusMessage *out_status)
     }
 
     out_status->finalized = client->state.latest_finalized;
+    if (client->has_fork_choice)
+    {
+        const LanternCheckpoint *fork_finalized =
+            lantern_fork_choice_latest_finalized(&client->fork_choice);
+        if (fork_finalized && !lantern_root_is_zero(&fork_finalized->root))
+        {
+            out_status->finalized = *fork_finalized;
+        }
+    }
 
     bool head_set = false;
     if (client->has_fork_choice)

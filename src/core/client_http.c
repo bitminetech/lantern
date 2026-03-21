@@ -615,6 +615,15 @@ int http_finalized_state_ssz_cb(void *context, uint8_t **out_bytes, size_t *out_
     }
 
     LanternCheckpoint finalized = client->state.latest_finalized;
+    if (client->has_fork_choice)
+    {
+        const LanternCheckpoint *fork_finalized =
+            lantern_fork_choice_latest_finalized(&client->fork_choice);
+        if (fork_finalized && !lantern_root_is_zero(&fork_finalized->root))
+        {
+            finalized = *fork_finalized;
+        }
+    }
     lantern_client_unlock_state(client, state_locked);
 
     if (lantern_root_is_zero(&finalized.root))
