@@ -211,16 +211,6 @@ void lantern_client_cache_block_aggregated_proofs_locked(
     struct lantern_client *client,
     const LanternSignedBlock *block);
 
-/**
- * Cache proposer attestation data and, when eligible, its signature.
- *
- * Mirrors the proposer-attestation caching step from the spec's Store.on_block().
- * Caller must hold state_lock.
- */
-void lantern_client_cache_proposer_attestation_locked(
-    struct lantern_client *client,
-    const LanternSignedVote *proposer_attestation);
-
 
 /* ============================================================================
  * Pending Vote Functions

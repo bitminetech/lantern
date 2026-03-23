@@ -212,7 +212,7 @@ bool lantern_client_persisted_state_is_stale_for_checkpoint_sync(
     uint64_t *out_gap);
 
 /**
- * Cache an individual gossip signature keyed by validator and attestation root.
+ * Cache an individual attestation signature keyed by validator and attestation root.
  *
  * @param client     Client instance (state_lock must be held)
  * @param key        Signature cache key
@@ -221,12 +221,21 @@ bool lantern_client_persisted_state_is_stale_for_checkpoint_sync(
  *
  * @note Thread safety: Caller must hold state_lock.
  */
-int lantern_client_set_gossip_signature(
+int lantern_client_set_attestation_signature(
     struct lantern_client *client,
     const LanternSignatureKey *key,
     const LanternAttestationData *data,
     const LanternSignature *signature,
     uint64_t target_slot);
+
+static inline int lantern_client_set_gossip_signature(
+    struct lantern_client *client,
+    const LanternSignatureKey *key,
+    const LanternAttestationData *data,
+    const LanternSignature *signature,
+    uint64_t target_slot) {
+    return lantern_client_set_attestation_signature(client, key, data, signature, target_slot);
+}
 
 /**
  * Cache a newly received aggregated signature proof keyed by attestation data root.

@@ -129,7 +129,7 @@ int validator_sign_with_key(
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
  * @return LANTERN_CLIENT_ERR_VALIDATOR on hashing or signing failure
  *
- * @note Thread safety: This function is thread-safe
+ * @note Thread safety: Caller must ensure exclusive access to the validator
  */
 int validator_sign_vote(
     struct lantern_local_validator *validator,
@@ -178,7 +178,6 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
  * @param slot              Slot number
  * @param local_index       Local validator index
  * @param out_block         Output for the built block
- * @param out_proposer_vote Output for the proposer's vote
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM on bad inputs
  * @return LANTERN_CLIENT_ERR_RUNTIME on state/runtime failures
@@ -191,8 +190,7 @@ int validator_build_block(
     struct lantern_client *client,
     uint64_t slot,
     size_t local_index,
-    LanternSignedBlock *out_block,
-    LanternSignedVote *out_proposer_vote);
+    LanternSignedBlock *out_block);
 
 
 /**

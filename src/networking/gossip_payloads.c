@@ -141,8 +141,8 @@ static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
         return 0;
     }
     size_t base = signed_block_base_ssz_size();
-    size_t att_count = block->message.body.attestations.length;
-    size_t att_bytes = aggregated_attestations_encoded_size(&block->message.body.attestations);
+    size_t att_count = block->block.body.attestations.length;
+    size_t att_bytes = aggregated_attestations_encoded_size(&block->block.body.attestations);
     if (att_count > 0 && att_bytes == 0) {
         return 0;
     }
@@ -190,7 +190,7 @@ static int basic_block_sanity(const LanternSignedBlock *block) {
     if (!block) {
         return -1;
     }
-    const LanternBlock *message = &block->message;
+    const LanternBlock *message = &block->block;
     for (size_t i = 0; i < message->body.attestations.length; ++i) {
         const LanternAggregatedAttestation *att = &message->body.attestations.data[i];
         if (basic_attestation_data_sanity(&att->data) != 0) {
@@ -202,9 +202,7 @@ static int basic_block_sanity(const LanternSignedBlock *block) {
     if (sig_count > LANTERN_MAX_BLOCK_SIGNATURES) {
         return -1;
     }
-    /* Compatibility mode: signature payload decoding may intentionally fall back to
-     * an empty list for legacy/unknown encodings while still allowing block processing. */
-    if (sig_count > 0 && sig_count != att_count) {
+    if (sig_count != att_count) {
         return -1;
     }
     return 0;
@@ -254,7 +252,7 @@ int lantern_gossip_encode_signed_block_snappy(
         return -1;
     }
     size_t raw_written = raw_capacity;
-    if (lantern_ssz_encode_signed_block(block, raw, raw_capacity, &raw_written) != 0) {
+    if (lantern_ssz_encode_signed_block_canonical(block, raw, raw_capacity, &raw_written) != 0) {
         free(raw);
         return -1;
     }
@@ -327,7 +325,7 @@ int lantern_gossip_decode_signed_block_snappy(
         free(raw);
         return -1;
     }
-    int decode_rc = lantern_ssz_decode_signed_block(block, raw, written);
+    int decode_rc = lantern_ssz_decode_signed_block_strict(block, raw, written);
     if (decode_rc != 0) {
         free(raw);
         return -1;

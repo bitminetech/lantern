@@ -58,7 +58,7 @@ static bool verify_aggregated_attestations(
     if (!state || !block) {
         return false;
     }
-    const LanternAggregatedAttestations *attestations = &block->message.body.attestations;
+    const LanternAggregatedAttestations *attestations = &block->block.body.attestations;
     const LanternAttestationSignatures *sig_groups = &block->signatures.attestation_signatures;
     size_t att_count = attestations->length;
 
@@ -168,7 +168,7 @@ static bool verify_proposer_signature(const LanternState *state, const LanternSi
     if (!state || !block) {
         return false;
     }
-    uint64_t validator_id = block->message.proposer_index;
+    uint64_t validator_id = block->block.proposer_index;
     if (validator_id >= state->config.num_validators) {
         fprintf(stderr, "%s: proposer validator out of range\n", path ? path : "(unknown)");
         return false;
@@ -179,14 +179,14 @@ static bool verify_proposer_signature(const LanternState *state, const LanternSi
         return false;
     }
     LanternRoot block_root;
-    if (lantern_hash_tree_root_block(&block->message, &block_root) != 0) {
+    if (lantern_hash_tree_root_block(&block->block, &block_root) != 0) {
         fprintf(stderr, "%s: block hash failed for proposer signature\n", path ? path : "(unknown)");
         return false;
     }
     if (!lantern_signature_verify(
             pubkey,
             LANTERN_VALIDATOR_PUBKEY_SIZE,
-            block->message.slot,
+            block->block.slot,
             &block->signatures.proposer_signature,
             &block_root)) {
         fprintf(stderr, "%s: proposer signature verification failed\n", path ? path : "(unknown)");
@@ -378,7 +378,7 @@ static int run_verify_signatures_fixture(const char *path) {
         result = -1;
     }
 
-    lantern_block_body_reset(&signed_block.message.body);
+    lantern_block_body_reset(&signed_block.block.body);
     lantern_block_signatures_reset(&signed_block.signatures);
     lantern_state_reset(&state);
     lantern_fixture_document_reset(&doc);

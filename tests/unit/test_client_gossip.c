@@ -67,7 +67,7 @@ static int build_single_participant_aggregated_attestation(
         return -1;
     }
 
-    const uint8_t *validator_pubkey = lantern_state_validator_pubkey(&client->state, 0u);
+    const uint8_t *validator_pubkey = lantern_state_validator_attestation_pubkey(&client->state, 0u);
     if (!validator_pubkey) {
         lantern_signed_aggregated_attestation_reset(out_attestation);
         return -1;
@@ -113,11 +113,11 @@ static int test_idle_gossip_not_ignored(void)
 
     LanternSignedBlock block;
     memset(&block, 0, sizeof(block));
-    lantern_block_body_init(&block.message.body);
-    block.message.slot = 1;
+    lantern_block_body_init(&block.block.body);
+    block.block.slot = 1;
 
     int block_rc = lantern_client_debug_gossip_block(&client, &block);
-    lantern_block_body_reset(&block.message.body);
+    lantern_block_body_reset(&block.block.body);
     if (block_rc != LANTERN_CLIENT_OK)
     {
         fprintf(stderr, "idle block gossip was not accepted rc=%d\n", block_rc);

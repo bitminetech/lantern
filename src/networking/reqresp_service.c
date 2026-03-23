@@ -2302,7 +2302,7 @@ static void *blocks_worker(void *arg) {
             }
             ssz_buffer = resized;
 
-            if (lantern_ssz_encode_signed_block(block, ssz_buffer, ssz_capacity, &ssz_written) == 0) {
+            if (lantern_ssz_encode_signed_block_canonical(block, ssz_buffer, ssz_capacity, &ssz_written) == 0) {
                 encoded = true;
                 break;
             }
@@ -2413,7 +2413,7 @@ static void *blocks_worker(void *arg) {
             &meta,
             "%s slot=%" PRIu64 " raw=%zu compressed=%zu",
             chunk_label,
-            block->message.slot,
+            block->block.slot,
             ssz_written,
             compressed_len);
 

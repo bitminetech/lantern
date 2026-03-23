@@ -750,18 +750,18 @@ static void build_block_vector(LanternBlock *block) {
 
 static void build_signed_block_vector(LanternSignedBlock *signed_block) {
     lantern_signed_block_init(signed_block);
-    build_block_vector(&signed_block->message);
+    build_block_vector(&signed_block->block);
 
     LanternSignedVote proposer;
     build_signed_vote_vector_a(&proposer);
 
-    size_t attestation_count = signed_block->message.body.attestations.length;
+    size_t attestation_count = signed_block->block.body.attestations.length;
     expect_ok(
         lantern_attestation_signatures_resize(&signed_block->signatures.attestation_signatures, attestation_count),
         "resize block signatures");
     for (size_t i = 0; i < attestation_count; ++i) {
         LanternAggregatedSignatureProof *proof = &signed_block->signatures.attestation_signatures.data[i];
-        const LanternAggregatedAttestation *attestation = &signed_block->message.body.attestations.data[i];
+        const LanternAggregatedAttestation *attestation = &signed_block->block.body.attestations.data[i];
         expect_ok(
             lantern_bitlist_resize(&proof->participants, attestation->aggregation_bits.bit_length),
             "resize proof participants");
@@ -867,7 +867,7 @@ static void test_block_roundtrip(void) {
 static void test_signed_block_roundtrip(void) {
     LanternSignedBlock signed_block;
     lantern_signed_block_with_attestation_init(&signed_block);
-    populate_block(&signed_block.message);
+    populate_block(&signed_block.block);
 
     uint8_t buffer[SIGNED_BLOCK_TEST_BUFFER_SIZE];
     size_t written = 0;
@@ -877,10 +877,10 @@ static void test_signed_block_roundtrip(void) {
     lantern_signed_block_with_attestation_init(&decoded);
     assert(lantern_ssz_decode_signed_block(&decoded, buffer, written) == 0);
 
-    assert(decoded.message.slot == signed_block.message.slot);
+    assert(decoded.block.slot == signed_block.block.slot);
     expect_block_signatures_equal(&signed_block.signatures, &decoded.signatures);
-    assert(decoded.message.body.attestations.length
-           == signed_block.message.body.attestations.length);
+    assert(decoded.block.body.attestations.length
+           == signed_block.block.body.attestations.length);
 
     reset_signed_block(&signed_block);
     reset_signed_block(&decoded);
@@ -889,7 +889,7 @@ static void test_signed_block_roundtrip(void) {
 static void test_signed_block_signature_validation(void) {
     LanternSignedBlock signed_block;
     lantern_signed_block_with_attestation_init(&signed_block);
-    populate_block(&signed_block.message);
+    populate_block(&signed_block.block);
 
     uint8_t buffer[SIGNED_BLOCK_TEST_BUFFER_SIZE];
     size_t written = 0;
@@ -911,12 +911,12 @@ static void test_signed_block_signature_validation(void) {
 static void test_signed_block_decode_without_signature_section(void) {
     LanternSignedBlock signed_block;
     lantern_signed_block_with_attestation_init(&signed_block);
-    populate_block(&signed_block.message);
+    populate_block(&signed_block.block);
 
     uint8_t message_buf[SIGNED_BLOCK_TEST_BUFFER_SIZE];
     size_t message_written = 0;
     assert(lantern_ssz_encode_block(
-               &signed_block.message,
+               &signed_block.block,
                message_buf,
                sizeof(message_buf),
                &message_written)
@@ -1024,10 +1024,10 @@ static void test_signed_block_decode_attestation_signatures_only(void) {
 static void test_signed_block_decode_attestation_signatures_only_empty(void) {
     LanternSignedBlock signed_block;
     lantern_signed_block_with_attestation_init(&signed_block);
-    signed_block.message.slot = 7;
-    signed_block.message.proposer_index = 1;
-    fill_bytes(signed_block.message.parent_root.bytes, LANTERN_ROOT_SIZE, 0x11);
-    fill_bytes(signed_block.message.state_root.bytes, LANTERN_ROOT_SIZE, 0x22);
+    signed_block.block.slot = 7;
+    signed_block.block.proposer_index = 1;
+    fill_bytes(signed_block.block.parent_root.bytes, LANTERN_ROOT_SIZE, 0x11);
+    fill_bytes(signed_block.block.state_root.bytes, LANTERN_ROOT_SIZE, 0x22);
 
     uint8_t encoded[SIGNED_BLOCK_TEST_BUFFER_SIZE];
     size_t encoded_len = 0;
@@ -1371,13 +1371,13 @@ static void test_leanspec_vectors(void) {
             sizeof(LANTERN_SSZ_VECTOR_SIGNED_BLOCK)),
         "signed block decode");
     expect_block_signatures_equal(&signed_block_expected.signatures, &signed_block_decoded.signatures);
-    assert(signed_block_decoded.message.body.attestations.length
-           == signed_block_expected.message.body.attestations.length);
+    assert(signed_block_decoded.block.body.attestations.length
+           == signed_block_expected.block.body.attestations.length);
     assert_aggregated_attestation_equal(
-        &signed_block_decoded.message.body.attestations.data[0],
+        &signed_block_decoded.block.body.attestations.data[0],
         &agg_a_expected);
     assert_aggregated_attestation_equal(
-        &signed_block_decoded.message.body.attestations.data[1],
+        &signed_block_decoded.block.body.attestations.data[1],
         &agg_b_expected);
 
     /* State */

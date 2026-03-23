@@ -43,7 +43,7 @@ static int enable_signature_verification_registry(
     }
     for (size_t i = 0; i < validator_count; ++i) {
         records[i].index = (uint64_t)i;
-        const uint8_t *pubkey = lantern_state_validator_pubkey(&client->state, i);
+        const uint8_t *pubkey = lantern_state_validator_attestation_pubkey(&client->state, i);
         if (!pubkey) {
             free(records);
             return -1;
@@ -142,24 +142,24 @@ static int build_signed_block_for_import(
     lantern_signed_block_with_attestation_init(out_block);
 
     uint64_t block_slot = fixture->client.state.slot + 1u;
-    out_block->message.slot = block_slot;
+    out_block->block.slot = block_slot;
     if (lantern_proposer_for_slot(
             block_slot,
             fixture->client.state.config.num_validators,
-            &out_block->message.proposer_index)
+            &out_block->block.proposer_index)
         != 0) {
         return -1;
     }
     if (lantern_state_select_block_parent(
             &fixture->client.state,
             &fixture->client.store,
-            &out_block->message.parent_root)
+            &out_block->block.parent_root)
         != 0) {
         return -1;
     }
     if (lantern_storage_store_state_for_root(
             fixture->client.data_dir,
-            &out_block->message.parent_root,
+            &out_block->block.parent_root,
             &fixture->client.state)
         != 0) {
         return -1;
@@ -180,7 +180,7 @@ static int build_signed_block_for_import(
 
     LanternSignedVote proposer_vote;
     memset(&proposer_vote, 0, sizeof(proposer_vote));
-    proposer_vote.data.validator_id = out_block->message.proposer_index;
+    proposer_vote.data.validator_id = out_block->block.proposer_index;
     proposer_vote.data.slot = block_slot;
     proposer_vote.data.head = head;
     proposer_vote.data.target = target;
@@ -189,10 +189,10 @@ static int build_signed_block_for_import(
         return -1;
     }
 
-    if (lantern_aggregated_attestations_resize(&out_block->message.body.attestations, 1u) != 0) {
+    if (lantern_aggregated_attestations_resize(&out_block->block.body.attestations, 1u) != 0) {
         return -1;
     }
-    LanternAggregatedAttestation *attestation = &out_block->message.body.attestations.data[0];
+    LanternAggregatedAttestation *attestation = &out_block->block.body.attestations.data[0];
     attestation->data = proposer_vote.data.data;
     if (lantern_bitlist_resize(&attestation->aggregation_bits, 1u) != 0
         || lantern_bitlist_set(&attestation->aggregation_bits, 0u, true) != 0) {
@@ -208,7 +208,7 @@ static int build_signed_block_for_import(
             || lantern_bitlist_set(&proof->participants, 0u, true) != 0) {
             return -1;
         }
-        const uint8_t *pubkey = lantern_state_validator_pubkey(&fixture->client.state, 0u);
+        const uint8_t *pubkey = lantern_state_validator_attestation_pubkey(&fixture->client.state, 0u);
         if (!pubkey) {
             return -1;
         }
@@ -233,19 +233,19 @@ static int build_signed_block_for_import(
             &fixture->client.state,
             &fixture->client.store,
             out_block,
-            &out_block->message.state_root)
+            &out_block->block.state_root)
         != 0) {
         return -1;
     }
 
     if (include_proposer_signature) {
         LanternRoot block_signature_root;
-        if (lantern_hash_tree_root_block(&out_block->message, &block_signature_root) != 0) {
+        if (lantern_hash_tree_root_block(&out_block->block, &block_signature_root) != 0) {
             return -1;
         }
         if (!lantern_signature_sign(
                 fixture->secret,
-                out_block->message.slot,
+                out_block->block.slot,
                 &block_signature_root,
                 &out_block->signatures.proposer_signature)) {
             return -1;
@@ -254,7 +254,7 @@ static int build_signed_block_for_import(
         lantern_signature_zero(&out_block->signatures.proposer_signature);
     }
 
-    return lantern_hash_tree_root_block(&out_block->message, out_root);
+    return lantern_hash_tree_root_block(&out_block->block, out_root);
 }
 
 static int resign_first_block_attestation(
@@ -265,14 +265,14 @@ static int resign_first_block_attestation(
     if (!fixture || !fixture->secret || !block || !out_root) {
         return -1;
     }
-    if (block->message.body.attestations.length == 0
-        || !block->message.body.attestations.data
+    if (block->block.body.attestations.length == 0
+        || !block->block.body.attestations.data
         || block->signatures.attestation_signatures.length == 0
         || !block->signatures.attestation_signatures.data) {
         return -1;
     }
 
-    LanternAggregatedAttestation *attestation = &block->message.body.attestations.data[0];
+    LanternAggregatedAttestation *attestation = &block->block.body.attestations.data[0];
     LanternAggregatedSignatureProof *proof = &block->signatures.attestation_signatures.data[0];
 
     LanternSignedVote signed_vote;
@@ -293,7 +293,7 @@ static int resign_first_block_attestation(
         return -1;
     }
 
-    const uint8_t *pubkey = lantern_state_validator_pubkey(&fixture->client.state, 0u);
+    const uint8_t *pubkey = lantern_state_validator_attestation_pubkey(&fixture->client.state, 0u);
     if (!pubkey) {
         return -1;
     }
@@ -317,11 +317,21 @@ static int resign_first_block_attestation(
             &fixture->client.state,
             &fixture->client.store,
             block,
-            &block->message.state_root)
+            &block->block.state_root)
         != 0) {
         return -1;
     }
-    return lantern_hash_tree_root_block(&block->message, out_root);
+    if (lantern_hash_tree_root_block(&block->block, out_root) != 0) {
+        return -1;
+    }
+    if (!lantern_signature_sign(
+            fixture->secret,
+            block->block.slot,
+            out_root,
+            &block->signatures.proposer_signature)) {
+        return -1;
+    }
+    return 0;
 }
 
 static int test_pending_block_queue(void) {
@@ -346,8 +356,8 @@ static int test_pending_block_queue(void) {
 
     LanternSignedBlock child;
     memset(&child, 0, sizeof(child));
-    lantern_block_body_init(&child.message.body);
-    child.message.slot = 10;
+    lantern_block_body_init(&child.block.body);
+    child.block.slot = 10;
 
     LanternRoot child_root;
     LanternRoot parent_root;
@@ -511,8 +521,8 @@ static int test_pending_block_queue(void) {
     for (size_t i = 0; i < extra_count; ++i) {
         LanternSignedBlock extra;
         memset(&extra, 0, sizeof(extra));
-        lantern_block_body_init(&extra.message.body);
-        extra.message.slot = 20 + i;
+        lantern_block_body_init(&extra.block.body);
+        extra.block.slot = 20 + i;
         LanternRoot extra_root;
         LanternRoot extra_parent;
         client_test_fill_root_with_index(&extra_root, 1000u + (uint32_t)i);
@@ -528,11 +538,11 @@ static int test_pending_block_queue(void) {
                 NULL)
             != 0) {
             fprintf(stderr, "failed to enqueue additional pending block %zu\n", i);
-            lantern_block_body_reset(&extra.message.body);
+            lantern_block_body_reset(&extra.block.body);
             rc = 1;
             goto cleanup;
         }
-        lantern_block_body_reset(&extra.message.body);
+        lantern_block_body_reset(&extra.block.body);
     }
 
     size_t count = lantern_client_pending_block_count(&client);
@@ -556,7 +566,7 @@ static int test_pending_block_queue(void) {
 
 cleanup:
     lantern_client_debug_pending_reset(&client);
-    lantern_block_body_reset(&child.message.body);
+    lantern_block_body_reset(&child.block.body);
     if (client.status_lock_initialized) {
         pthread_mutex_destroy(&client.status_lock);
         client.status_lock_initialized = false;
@@ -594,8 +604,8 @@ static int test_pending_block_queue_sync_drops_incoming(void) {
     for (size_t i = 0; i < LANTERN_PENDING_BLOCK_LIMIT; ++i) {
         LanternSignedBlock block;
         memset(&block, 0, sizeof(block));
-        lantern_block_body_init(&block.message.body);
-        block.message.slot = 100 + i;
+        lantern_block_body_init(&block.block.body);
+        block.block.slot = 100 + i;
 
         LanternRoot block_root;
         client_test_fill_root_with_index(&block_root, 10000u + (uint32_t)i);
@@ -615,12 +625,12 @@ static int test_pending_block_queue_sync_drops_incoming(void) {
                 NULL)
             != 0) {
             fprintf(stderr, "failed to enqueue pending block %zu\n", i);
-            lantern_block_body_reset(&block.message.body);
+            lantern_block_body_reset(&block.block.body);
             rc = 1;
             goto cleanup;
         }
 
-        lantern_block_body_reset(&block.message.body);
+        lantern_block_body_reset(&block.block.body);
     }
 
     if (lantern_client_pending_block_count(&client) != LANTERN_PENDING_BLOCK_LIMIT) {
@@ -631,8 +641,8 @@ static int test_pending_block_queue_sync_drops_incoming(void) {
 
     LanternSignedBlock extra_block;
     memset(&extra_block, 0, sizeof(extra_block));
-    lantern_block_body_init(&extra_block.message.body);
-    extra_block.message.slot = 999999;
+    lantern_block_body_init(&extra_block.block.body);
+    extra_block.block.slot = 999999;
     client_test_fill_root_with_index(&extra_root, 900000u);
     client_test_fill_root_with_index(&parent_root, 910000u);
 
@@ -644,11 +654,11 @@ static int test_pending_block_queue_sync_drops_incoming(void) {
             NULL)
         != 0) {
         fprintf(stderr, "failed to enqueue overflow pending block in sync mode\n");
-        lantern_block_body_reset(&extra_block.message.body);
+        lantern_block_body_reset(&extra_block.block.body);
         rc = 1;
         goto cleanup;
     }
-    lantern_block_body_reset(&extra_block.message.body);
+    lantern_block_body_reset(&extra_block.block.body);
 
     if (lantern_client_pending_block_count(&client) != LANTERN_PENDING_BLOCK_LIMIT) {
         fprintf(stderr, "pending queue count changed after overflow enqueue in sync mode\n");
@@ -813,16 +823,16 @@ static int test_import_block_parent_mismatch(void) {
     lantern_block_body_reset(&anchor_block.body);
 
     memset(&block, 0, sizeof(block));
-    lantern_block_body_init(&block.message.body);
-    block.message.slot = 5;
-    block.message.proposer_index = 0;
+    lantern_block_body_init(&block.block.body);
+    block.block.slot = 5;
+    block.block.proposer_index = 0;
     client_test_fill_root(&block_root, 0x90);
     client_test_fill_root(&parent_root, 0x20);
     if (memcmp(parent_root.bytes, head_root.bytes, LANTERN_ROOT_SIZE) == 0) {
         parent_root.bytes[0] ^= 0xFFu;
     }
-    block.message.parent_root = parent_root;
-    client_test_fill_root(&block.message.state_root, 0x30);
+    block.block.parent_root = parent_root;
+    client_test_fill_root(&block.block.state_root, 0x30);
 
     if (lantern_client_pending_block_count(&client) != 0) {
         rc = 1;
@@ -876,7 +886,7 @@ static int test_import_block_parent_mismatch(void) {
 
 cleanup:
     lantern_client_debug_pending_reset(&client);
-    lantern_block_body_reset(&block.message.body);
+    lantern_block_body_reset(&block.block.body);
     if (client.has_fork_choice) {
         lantern_fork_choice_reset(&client.fork_choice);
         client.has_fork_choice = false;
@@ -920,20 +930,20 @@ static int test_reqresp_collect_blocks_pending_fallback(void) {
 
     LanternSignedBlock pending_block;
     memset(&pending_block, 0, sizeof(pending_block));
-    lantern_block_body_init(&pending_block.message.body);
-    pending_block.message.slot = 42;
-    pending_block.message.proposer_index = 1;
-    client_test_fill_root(&pending_block.message.parent_root, 0x44);
-    client_test_fill_root(&pending_block.message.state_root, 0x55);
+    lantern_block_body_init(&pending_block.block.body);
+    pending_block.block.slot = 42;
+    pending_block.block.proposer_index = 1;
+    client_test_fill_root(&pending_block.block.parent_root, 0x44);
+    client_test_fill_root(&pending_block.block.state_root, 0x55);
 
     LanternRoot pending_root;
-    if (lantern_hash_tree_root_block(&pending_block.message, &pending_root) != 0) {
+    if (lantern_hash_tree_root_block(&pending_block.block, &pending_root) != 0) {
         fprintf(stderr, "failed to hash pending block root for reqresp collect test\n");
         rc = 1;
         goto cleanup;
     }
 
-    LanternRoot parent_root = pending_block.message.parent_root;
+    LanternRoot parent_root = pending_block.block.parent_root;
     if (lantern_client_debug_enqueue_pending_block(
             &client,
             &pending_block,
@@ -967,7 +977,7 @@ static int test_reqresp_collect_blocks_pending_fallback(void) {
     }
 
     LanternRoot collected_root;
-    if (lantern_hash_tree_root_block(&collected.blocks[0].message, &collected_root) != 0) {
+    if (lantern_hash_tree_root_block(&collected.blocks[0].block, &collected_root) != 0) {
         fprintf(stderr, "failed to hash collected block for reqresp fallback test\n");
         lantern_signed_block_list_reset(&collected);
         rc = 1;
@@ -979,7 +989,7 @@ static int test_reqresp_collect_blocks_pending_fallback(void) {
         rc = 1;
         goto cleanup;
     }
-    if (collected.blocks[0].message.slot != pending_block.message.slot) {
+    if (collected.blocks[0].block.slot != pending_block.block.slot) {
         fprintf(stderr, "reqresp fallback returned wrong slot\n");
         lantern_signed_block_list_reset(&collected);
         rc = 1;
@@ -988,7 +998,7 @@ static int test_reqresp_collect_blocks_pending_fallback(void) {
     lantern_signed_block_list_reset(&collected);
 
 cleanup:
-    lantern_block_body_reset(&pending_block.message.body);
+    lantern_block_body_reset(&pending_block.block.body);
     lantern_client_debug_pending_reset(&client);
     if (client.pending_lock_initialized) {
         pthread_mutex_destroy(&client.pending_lock);
@@ -1022,7 +1032,7 @@ static int test_import_block_accepts_complete_signatures(void)
         fprintf(stderr, "import rejected block with complete signatures\n");
         goto cleanup;
     }
-    if (fixture.client.state.slot != block.message.slot || fixture.client.state.slot == initial_slot) {
+    if (fixture.client.state.slot != block.block.slot || fixture.client.state.slot == initial_slot) {
         fprintf(stderr, "state slot did not advance after importing fully signed block\n");
         goto cleanup;
     }
@@ -1145,12 +1155,12 @@ static int test_import_block_skips_unknown_attestation_head_root(void)
     client_test_fill_root(&unknown_root, 0xD4);
     if (memcmp(
             unknown_root.bytes,
-            block.message.body.attestations.data[0].data.head.root.bytes,
+            block.block.body.attestations.data[0].data.head.root.bytes,
             LANTERN_ROOT_SIZE)
         == 0) {
         unknown_root.bytes[0] ^= 0xFFu;
     }
-    block.message.body.attestations.data[0].data.head.root = unknown_root;
+    block.block.body.attestations.data[0].data.head.root = unknown_root;
     if (resign_first_block_attestation(&fixture, &block, &block_root) != 0) {
         fprintf(stderr, "failed to resign block fixture with unknown attestation head\n");
         goto cleanup;
@@ -1160,7 +1170,7 @@ static int test_import_block_skips_unknown_attestation_head_root(void)
         fprintf(stderr, "import rejected block with unknown attestation head root\n");
         goto cleanup;
     }
-    if (fixture.client.state.slot != block.message.slot || fixture.client.state.slot == initial_slot) {
+    if (fixture.client.state.slot != block.block.slot || fixture.client.state.slot == initial_slot) {
         fprintf(stderr, "state slot did not advance after skipping unknown attestation head root\n");
         goto cleanup;
     }
@@ -1244,7 +1254,7 @@ static int test_restore_persisted_blocks_skips_proposer_attestation_cache(void)
         fprintf(stderr, "failed to build block fixture for restore proposer cache test\n");
         goto cleanup;
     }
-    if (lantern_aggregated_attestations_resize(&block.message.body.attestations, 0u) != 0
+    if (lantern_aggregated_attestations_resize(&block.block.body.attestations, 0u) != 0
         || lantern_attestation_signatures_resize(&block.signatures.attestation_signatures, 0u) != 0) {
         fprintf(stderr, "failed to clear block-body attestations for restore proposer cache test\n");
         goto cleanup;
@@ -1253,12 +1263,12 @@ static int test_restore_persisted_blocks_skips_proposer_attestation_cache(void)
             &fixture.client.state,
             &fixture.client.store,
             &block,
-            &block.message.state_root)
+            &block.block.state_root)
         != 0) {
         fprintf(stderr, "failed to preview state root for proposer-only restore test\n");
         goto cleanup;
     }
-    if (lantern_hash_tree_root_block(&block.message, &block_root) != 0) {
+    if (lantern_hash_tree_root_block(&block.block, &block_root) != 0) {
         fprintf(stderr, "failed to hash proposer-only restore block\n");
         goto cleanup;
     }
@@ -1279,7 +1289,7 @@ static int test_restore_persisted_blocks_skips_proposer_attestation_cache(void)
         fprintf(stderr, "proposer-only restored block should not cache proposer attestation data\n");
         goto cleanup;
     }
-    if (fixture.client.store.gossip_signatures.length != 0u) {
+    if (fixture.client.store.attestation_signatures.length != 0u) {
         fprintf(stderr, "proposer-only restored block should not cache proposer gossip signatures\n");
         goto cleanup;
     }

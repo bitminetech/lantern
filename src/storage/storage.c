@@ -307,7 +307,7 @@ static size_t signed_block_encoded_size(const LanternSignedBlock *block) {
         return 0;
     }
     size_t offset_section = SSZ_BYTE_SIZE_OF_UINT32 * 2u;
-    size_t message_size = block_encoded_size(&block->message);
+    size_t message_size = block_encoded_size(&block->block);
     if (message_size == 0) {
         return 0;
     }
@@ -1038,7 +1038,7 @@ static int storage_store_block_internal(
     LanternRoot root = {0};
     if (root_override) {
         root = *root_override;
-    } else if (lantern_hash_tree_root_block(&block->message, &root) != 0) {
+    } else if (lantern_hash_tree_root_block(&block->block, &root) != 0) {
         goto cleanup;
     }
     char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
@@ -1067,9 +1067,9 @@ static int storage_store_block_internal(
             "storage",
             &(const struct lantern_log_metadata){0},
             "store_block size estimate failed slot=%" PRIu64 " attestations=%zu legacy_layout=%s sig_count=%zu",
-            block->message.slot,
-            block->message.body.attestations.length,
-            block->message.body.legacy_plain_attestation_layout ? "true" : "false",
+            block->block.slot,
+            block->block.body.attestations.length,
+            block->block.body.legacy_plain_attestation_layout ? "true" : "false",
             block->signatures.attestation_signatures.length);
         goto cleanup;
     }
@@ -1086,7 +1086,7 @@ static int storage_store_block_internal(
             "storage",
             &(const struct lantern_log_metadata){0},
             "store_block encode failed slot=%" PRIu64 " rc=%d estimated=%zu written=%zu",
-            block->message.slot,
+            block->block.slot,
             encode_rc,
             encoded_size,
             written_size);
@@ -1570,7 +1570,7 @@ int lantern_storage_collect_blocks(
             goto cleanup;
         }
         LanternRoot computed;
-        if (lantern_hash_tree_root_block(&dest->message, &computed) != 0) {
+        if (lantern_hash_tree_root_block(&dest->block, &computed) != 0) {
             free(data);
             goto cleanup;
         }
@@ -1595,8 +1595,8 @@ int lantern_storage_collect_blocks(
             &meta,
             "collect_blocks loaded root=%s slot=%" PRIu64 " attestations=%zu",
             root_hex,
-            dest->message.slot,
-            dest->message.body.attestations.length);
+            dest->block.slot,
+            dest->block.body.attestations.length);
         free(data);
     }
     rc = 0;
@@ -1679,7 +1679,7 @@ int lantern_storage_iterate_blocks(
             break;
         }
         LanternRoot computed_root;
-        if (lantern_hash_tree_root_block(&block.message, &computed_root) != 0) {
+        if (lantern_hash_tree_root_block(&block.block, &computed_root) != 0) {
             lantern_signed_block_with_attestation_reset(&block);
             free(data);
             rc = -1;

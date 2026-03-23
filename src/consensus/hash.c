@@ -902,7 +902,7 @@ int lantern_hash_tree_root_signed_block(const LanternSignedBlock *block, Lantern
         return -1;
     }
     LanternRoot message_root;
-    if (lantern_hash_tree_root_block(&block->message, &message_root) != 0) {
+    if (lantern_hash_tree_root_block(&block->block, &message_root) != 0) {
         return -1;
     }
     LanternRoot signatures_root;

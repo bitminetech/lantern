@@ -53,9 +53,19 @@ int lantern_ssz_decode_block_body(LanternBlockBody *body, const uint8_t *data, s
 
 int lantern_ssz_encode_block(const LanternBlock *block, uint8_t *out, size_t out_len, size_t *written);
 int lantern_ssz_decode_block(LanternBlock *block, const uint8_t *data, size_t data_len);
+int lantern_ssz_decode_block_strict(LanternBlock *block, const uint8_t *data, size_t data_len);
 
 int lantern_ssz_encode_signed_block(const LanternSignedBlock *block, uint8_t *out, size_t out_len, size_t *written);
+int lantern_ssz_encode_signed_block_canonical(
+    const LanternSignedBlock *block,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written);
 int lantern_ssz_decode_signed_block(LanternSignedBlock *block, const uint8_t *data, size_t data_len);
+int lantern_ssz_decode_signed_block_strict(
+    LanternSignedBlock *block,
+    const uint8_t *data,
+    size_t data_len);
 int lantern_ssz_encode_signed_block_legacy(
     const LanternSignedBlock *block,
     uint8_t *out,

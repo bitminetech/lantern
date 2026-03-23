@@ -161,7 +161,7 @@ typedef struct {
 } LanternBlock;
 
 typedef struct {
-    LanternBlock message;
+    LanternBlock block;
     LanternBlockSignatures signatures;
 } LanternSignedBlock;
 

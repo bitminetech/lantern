@@ -124,9 +124,6 @@ void lantern_client_local_validator_cleanup(struct lantern_local_validator *vali
 
     validator->last_proposed_slot = UINT64_MAX;
     validator->last_attested_slot = UINT64_MAX;
-    validator->has_pending_attestation = false;
-    validator->pending_attestation_slot = UINT64_MAX;
-    memset(&validator->pending_attestation, 0, sizeof(validator->pending_attestation));
 }
 
 

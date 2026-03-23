@@ -178,7 +178,7 @@ static int fork_choice_target_interval(
     return 0;
 }
 
-int lantern_client_set_gossip_signature(
+int lantern_client_set_attestation_signature(
     struct lantern_client *client,
     const LanternSignatureKey *key,
     const LanternAttestationData *data,
@@ -187,7 +187,7 @@ int lantern_client_set_gossip_signature(
     if (!client) {
         return -1;
     }
-    return lantern_store_set_gossip_signature(&client->store, key, data, signature, target_slot);
+    return lantern_store_set_attestation_signature(&client->store, key, data, signature, target_slot);
 }
 
 int lantern_client_add_new_aggregated_payload(
@@ -1186,7 +1186,7 @@ static void client_log_genesis_anchors(
     LanternSignedBlock genesis_signed;
     int resize_result = 0;
     lantern_signed_block_with_attestation_init(&genesis_signed);
-    genesis_signed.message = genesis_block;
+    genesis_signed.block = genesis_block;
     resize_result = lantern_attestation_signatures_resize(
         &genesis_signed.signatures.attestation_signatures,
         0);

@@ -8,6 +8,21 @@
 #include "lantern/consensus/containers.h"
 
 typedef struct lantern_store LanternStore;
+struct lantern_attestation_signature_map;
+struct lantern_aggregated_payload_pool;
+
+typedef struct {
+    const LanternAttestations *attestations;
+    const LanternSignatureList *signatures;
+} LanternAttestationSignatureInputs;
+
+typedef enum {
+    LANTERN_STATE_AGGREGATE_OK = 0,
+    LANTERN_STATE_AGGREGATE_INVALID_PARAM = -1,
+    LANTERN_STATE_AGGREGATE_ALLOC = -2,
+    LANTERN_STATE_AGGREGATE_VALIDATOR = -3,
+    LANTERN_STATE_AGGREGATE_RUNTIME = -4
+} lantern_state_aggregate_result;
 
 struct lantern_root_list {
     LanternRoot *items;
@@ -75,7 +90,6 @@ int lantern_state_collect_attestations_for_block(
     uint64_t block_slot,
     uint64_t proposer_index,
     const LanternRoot *parent_root,
-    const LanternSignedVote *proposer_attestation,
     LanternAttestations *out_attestations,
     LanternSignatureList *out_signatures);
 int lantern_state_compute_vote_checkpoints(
@@ -89,5 +103,14 @@ int lantern_state_preview_post_state_root(
     const LanternStore *store,
     const LanternSignedBlock *block,
     LanternRoot *out_state_root);
+lantern_state_aggregate_result lantern_state_aggregate(
+    const LanternState *state,
+    const LanternStore *store,
+    const LanternAttestationSignatureInputs *attestation_signatures,
+    const struct lantern_aggregated_payload_pool *new_payloads,
+    const struct lantern_aggregated_payload_pool *known_payloads,
+    bool recursive,
+    LanternAggregatedAttestations *out_attestations,
+    LanternAttestationSignatures *out_signatures);
 
 #endif /* LANTERN_CONSENSUS_STATE_H */

@@ -1499,18 +1499,18 @@ int lantern_fixture_parse_signed_block(
         } else {
             block_idx = message_idx;
         }
-        if (lantern_fixture_parse_block(doc, block_idx, &signed_block->message) != 0) {
+        if (lantern_fixture_parse_block(doc, block_idx, &signed_block->block) != 0) {
             goto error;
         }
         if (signatures_idx >= 0) {
             if (lantern_fixture_parse_block_signatures(
                     doc,
                     signatures_idx,
-                    &signed_block->message.body.attestations,
+                    &signed_block->block.body.attestations,
                     &signed_block->signatures)
                 != 0) {
                 if (lantern_fixture_synthesize_block_signatures(
-                        &signed_block->message.body.attestations,
+                        &signed_block->block.body.attestations,
                         &signed_block->signatures)
                     != 0) {
                     goto error;
@@ -1518,7 +1518,7 @@ int lantern_fixture_parse_signed_block(
             }
         } else {
             if (lantern_fixture_synthesize_block_signatures(
-                    &signed_block->message.body.attestations,
+                    &signed_block->block.body.attestations,
                     &signed_block->signatures)
                 != 0) {
                 goto error;
@@ -1529,19 +1529,19 @@ int lantern_fixture_parse_signed_block(
 
     /* Transitional/legacy fixture layout: { "block": {...}, "proposerAttestation": {...}, "signature": ... } */
     if (block_idx >= 0) {
-        if (lantern_fixture_parse_block(doc, block_idx, &signed_block->message) != 0) {
+        if (lantern_fixture_parse_block(doc, block_idx, &signed_block->block) != 0) {
             goto error;
         }
         if (signatures_idx >= 0) {
             if (lantern_fixture_parse_block_signatures(
                     doc,
                     signatures_idx,
-                    &signed_block->message.body.attestations,
+                    &signed_block->block.body.attestations,
                     &signed_block->signatures)
                 != 0) {
                 LanternSignatureList legacy_list;
                 lantern_signature_list_init(&legacy_list);
-                size_t expected_signatures = signed_block->message.body.attestations.length + 1u;
+                size_t expected_signatures = signed_block->block.body.attestations.length + 1u;
                 if (expected_signatures == 0) {
                     lantern_signature_list_reset(&legacy_list);
                     goto error;
@@ -1549,7 +1549,7 @@ int lantern_fixture_parse_signed_block(
                 if (lantern_fixture_parse_signature_list(doc, signatures_idx, &legacy_list, expected_signatures) == 0) {
                     if (lantern_fixture_apply_signature_list_to_block_signatures(
                             &legacy_list,
-                            &signed_block->message.body.attestations,
+                            &signed_block->block.body.attestations,
                             &signed_block->signatures)
                         != 0) {
                         lantern_signature_list_reset(&legacy_list);
@@ -1557,7 +1557,7 @@ int lantern_fixture_parse_signed_block(
                     }
                 } else {
                     if (lantern_fixture_synthesize_block_signatures(
-                            &signed_block->message.body.attestations,
+                            &signed_block->block.body.attestations,
                             &signed_block->signatures)
                         != 0) {
                         lantern_signature_list_reset(&legacy_list);
@@ -1568,7 +1568,7 @@ int lantern_fixture_parse_signed_block(
             }
         } else {
             if (lantern_fixture_synthesize_block_signatures(
-                    &signed_block->message.body.attestations,
+                    &signed_block->block.body.attestations,
                     &signed_block->signatures)
                 != 0) {
                 goto error;
@@ -1578,12 +1578,12 @@ int lantern_fixture_parse_signed_block(
     }
 
     /* Handle leanSpec fixtures that emit bare Block containers without signatures */
-    if (lantern_fixture_parse_block(doc, object_index, &signed_block->message) != 0) {
+    if (lantern_fixture_parse_block(doc, object_index, &signed_block->block) != 0) {
         goto error;
     }
 
     if (lantern_fixture_synthesize_block_signatures(
-            &signed_block->message.body.attestations,
+            &signed_block->block.body.attestations,
             &signed_block->signatures)
         != 0) {
         goto error;

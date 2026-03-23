@@ -255,17 +255,22 @@ static int client_test_setup_vote_validation_client_common(
             LANTERN_VALIDATOR_PUBKEY_SIZE);
     }
 
-    if (lantern_state_set_validator_pubkeys(&client->state, serialized_pubkeys, validator_count) != 0) {
-        fprintf(stderr, "failed to set validator pubkeys for vote test\n");
+    if (lantern_state_set_validator_pubkeys_dual(
+            &client->state,
+            serialized_pubkeys,
+            serialized_pubkeys,
+            validator_count)
+        != 0) {
+        fprintf(stderr, "failed to set dual validator pubkeys for vote test\n");
         goto finish;
     }
-    const uint8_t *stored_pub = lantern_state_validator_pubkey(&client->state, 0);
+    const uint8_t *stored_pub = lantern_state_validator_attestation_pubkey(&client->state, 0);
     if (!stored_pub) {
-        fprintf(stderr, "stored validator pubkey missing after load\n");
+        fprintf(stderr, "stored validator attestation pubkey missing after load\n");
         goto finish;
     }
     if (memcmp(stored_pub, serialized_pub, LANTERN_VALIDATOR_PUBKEY_SIZE) != 0) {
-        fprintf(stderr, "stored validator pubkey mismatch after load\n");
+        fprintf(stderr, "stored validator attestation pubkey mismatch after load\n");
         goto finish;
     }
 
@@ -319,7 +324,7 @@ static int client_test_setup_vote_validation_client_common(
         goto finish;
     }
     child.parent_root = anchor_root_local;
-    child_signed.message = child;
+    child_signed.block = child;
 
     if (lantern_state_preview_post_state_root(
             &client->state,
@@ -330,7 +335,7 @@ static int client_test_setup_vote_validation_client_common(
         fprintf(stderr, "failed to preview child post-state root for vote test\n");
         goto finish;
     }
-    child_signed.message = child;
+    child_signed.block = child;
 
     if (lantern_hash_tree_root_block(&child, &child_root_local) != 0) {
         fprintf(stderr, "failed to hash child block for vote test\n");

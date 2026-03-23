@@ -163,9 +163,6 @@ struct lantern_local_validator {
     bool has_proposal_secret_handle;
     uint64_t last_proposed_slot;
     uint64_t last_attested_slot;
-    LanternSignedVote pending_attestation;
-    uint64_t pending_attestation_slot;
-    bool has_pending_attestation;
 };
 
 struct lantern_client {
@@ -347,6 +344,11 @@ int lantern_client_debug_gossip_aggregated_attestation(
 int lantern_client_debug_publish_aggregated_attestations(
     struct lantern_client *client,
     uint64_t slot);
+lantern_client_error lantern_client_debug_aggregate_attestation_signatures(
+    struct lantern_client *client,
+    bool recursive,
+    LanternAggregatedAttestations *out_attestations,
+    LanternAttestationSignatures *out_signatures);
 int lantern_client_debug_run_interval_aggregation(
     struct lantern_client *client,
     uint64_t slot);

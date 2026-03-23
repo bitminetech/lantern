@@ -106,6 +106,69 @@ static int set_test_validator_pubkey(
     return rc;
 }
 
+static int serialize_test_pubkey(
+    struct PQSignatureSchemePublicKey *pubkey,
+    uint8_t out_bytes[LANTERN_VALIDATOR_PUBKEY_SIZE]) {
+    if (!pubkey || !out_bytes) {
+        return -1;
+    }
+
+    uintptr_t written = 0;
+    enum PQSigningError err = pq_public_key_serialize(
+        pubkey,
+        out_bytes,
+        LANTERN_VALIDATOR_PUBKEY_SIZE,
+        &written);
+    if (err != Success || written != LANTERN_VALIDATOR_PUBKEY_SIZE) {
+        return -1;
+    }
+    return 0;
+}
+
+static int set_test_validator_pubkeys(
+    LanternState *state,
+    struct PQSignatureSchemePublicKey **pubkeys,
+    size_t validator_count) {
+    if (!state || !pubkeys || validator_count == 0u) {
+        return -1;
+    }
+
+    uint8_t *attestation_pubkeys =
+        calloc(validator_count, LANTERN_VALIDATOR_PUBKEY_SIZE);
+    uint8_t *proposal_pubkeys =
+        calloc(validator_count, LANTERN_VALIDATOR_PUBKEY_SIZE);
+    if (!attestation_pubkeys || !proposal_pubkeys) {
+        free(attestation_pubkeys);
+        free(proposal_pubkeys);
+        return -1;
+    }
+
+    for (size_t i = 0; i < validator_count; ++i) {
+        if (!pubkeys[i]
+            || serialize_test_pubkey(
+                   pubkeys[i],
+                   attestation_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE))
+                != 0) {
+            free(attestation_pubkeys);
+            free(proposal_pubkeys);
+            return -1;
+        }
+        memcpy(
+            proposal_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+            attestation_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+            LANTERN_VALIDATOR_PUBKEY_SIZE);
+    }
+
+    int rc = lantern_state_set_validator_pubkeys_dual(
+        state,
+        attestation_pubkeys,
+        proposal_pubkeys,
+        validator_count);
+    free(attestation_pubkeys);
+    free(proposal_pubkeys);
+    return rc;
+}
+
 static int sign_vote_with_secret(
     LanternSignedVote *vote,
     struct PQSignatureSchemeSecretKey *secret) {
@@ -555,14 +618,14 @@ static int test_state_transition_applies_block(void) {
 
     LanternSignedBlock signed_block;
     memset(&signed_block, 0, sizeof(signed_block));
-    signed_block.message = block;
+    signed_block.block = block;
     LanternRoot proposer_block_root;
     expect_zero(
-        lantern_hash_tree_root_block(&signed_block.message, &proposer_block_root),
+        lantern_hash_tree_root_block(&signed_block.block, &proposer_block_root),
         "hash proposer block");
     if (!lantern_signature_sign(
             proposer_secret,
-            signed_block.message.slot,
+            signed_block.block.slot,
             &proposer_block_root,
             &signed_block.signatures.proposer_signature)) {
         fprintf(stderr, "sign proposer block failed\n");
@@ -631,7 +694,7 @@ static int test_state_transition_rejects_missing_proposer_signature(void) {
 
     LanternSignedBlock signed_block;
     memset(&signed_block, 0, sizeof(signed_block));
-    signed_block.message = block;
+    signed_block.block = block;
 
     if (lantern_state_transition(&state, &signed_block) == 0) {
         fprintf(stderr, "state transition accepted block without proposer signature\n");
@@ -689,7 +752,7 @@ static int test_state_transition_rejects_genesis_state_root_mismatch(void) {
 
     LanternSignedBlock signed_block;
     memset(&signed_block, 0, sizeof(signed_block));
-    signed_block.message = block;
+    signed_block.block = block;
 
     if (lantern_state_transition(&state, &signed_block) == 0) {
         fprintf(stderr, "genesis state mismatch block was incorrectly accepted\n");
@@ -1980,7 +2043,6 @@ static int test_collect_attestations_for_block(void) {
             block_slot,
             proposer_index,
             &parent_root,
-            NULL,
             &collected,
             &collected_signatures),
         "collect attestations");
@@ -2190,7 +2252,7 @@ static int test_process_block_defers_proposer_attestation(void) {
 
     LanternSignedBlock signed_block;
     memset(&signed_block, 0, sizeof(signed_block));
-    LanternBlock *block = &signed_block.message;
+    LanternBlock *block = &signed_block.block;
     block->slot = state.slot + 1u;
     expect_zero(
         lantern_proposer_for_slot(block->slot, validator_count, &block->proposer_index),
@@ -2249,7 +2311,7 @@ static int test_process_block_defers_proposer_attestation(void) {
         return 1;
     }
 
-    assert(store->gossip_signatures.length == 0u);
+    assert(store->attestation_signatures.length == 0u);
     assert(store->attestation_data_by_root.length == 0u);
 
     assert(fork_choice.new_votes != NULL);
@@ -2347,7 +2409,6 @@ static int test_collect_attestations_fixed_point(void) {
             block_slot,
             proposer_index,
             &parent_root,
-            NULL,
             &collected,
             &collected_signatures)
         != 0) {
@@ -2492,7 +2553,6 @@ static int test_collect_attestations_fixed_point_deep_chain(void) {
             block_slot,
             proposer_index,
             &parent_root,
-            NULL,
             &collected,
             &collected_signatures)
         != 0) {
@@ -2726,7 +2786,6 @@ static int test_validator_helpers_use_cached_fork_choice_head_state(void) {
             2u,
             proposer_index,
             &parent_root,
-            NULL,
             &collected,
             &collected_signatures)
         != 0) {
@@ -2738,9 +2797,9 @@ static int test_validator_helpers_use_cached_fork_choice_head_state(void) {
         goto cleanup;
     }
 
-    signed_block.message.slot = 2u;
-    signed_block.message.proposer_index = proposer_index;
-    signed_block.message.parent_root = parent_root;
+    signed_block.block.slot = 2u;
+    signed_block.block.proposer_index = proposer_index;
+    signed_block.block.parent_root = parent_root;
     if (lantern_state_preview_post_state_root(
             &state,
             &signed_block,
@@ -2754,9 +2813,9 @@ static int test_validator_helpers_use_cached_fork_choice_head_state(void) {
     expect_zero(
         lantern_state_prepare_validator_votes(&expected_state, expected_state.config.num_validators),
         "prepare expected-state validator votes");
-    expect_zero(lantern_state_process_slots(&expected_state, signed_block.message.slot), "advance expected state");
+    expect_zero(lantern_state_process_slots(&expected_state, signed_block.block.slot), "advance expected state");
     expect_zero(
-        lantern_state_process_block(&expected_state, &signed_block.message, NULL, NULL),
+        lantern_state_process_block(&expected_state, &signed_block.block, NULL, NULL),
         "process preview block on cached head state");
     expect_zero(lantern_hash_tree_root_state(&expected_state, &expected_state_root), "hash expected preview state");
 
@@ -3332,6 +3391,236 @@ static int test_justified_slot_window_helpers(void) {
     return 0;
 }
 
+static int test_state_aggregate_non_recursive_ignores_payload_children(void) {
+    LanternState state;
+    LanternAttestations raw_attestations;
+    LanternSignatureList raw_signatures;
+    LanternAggregatedAttestations aggregated_attestations;
+    LanternAttestationSignatures aggregated_signatures;
+    LanternAggregatedSignatureProof child_proof;
+    LanternStore *store = NULL;
+    struct PQSignatureSchemePublicKey *pubkeys[2] = {NULL, NULL};
+    struct PQSignatureSchemeSecretKey *secrets[2] = {NULL, NULL};
+    uint8_t serialized_pubkeys[2][LANTERN_VALIDATOR_PUBKEY_SIZE];
+    int rc = 1;
+
+    lantern_state_init(&state);
+    lantern_attestations_init(&raw_attestations);
+    lantern_signature_list_init(&raw_signatures);
+    lantern_aggregated_attestations_init(&aggregated_attestations);
+    lantern_attestation_signatures_init(&aggregated_signatures);
+    lantern_aggregated_signature_proof_init(&child_proof);
+    memset(serialized_pubkeys, 0, sizeof(serialized_pubkeys));
+
+    expect_zero(
+        lantern_state_generate_genesis(&state, 2000u, 2u),
+        "genesis for non-recursive state aggregate test");
+    store = lantern_test_state_store_ensure(&state);
+    if (!store) {
+        fprintf(stderr, "state store missing for non-recursive state aggregate test\n");
+        goto cleanup;
+    }
+
+    for (size_t i = 0; i < 2u; ++i) {
+        if (generate_test_keypair(&pubkeys[i], &secrets[i]) != 0) {
+            fprintf(stderr, "generate keypair failed for non-recursive state aggregate test\n");
+            goto cleanup;
+        }
+        if (serialize_test_pubkey(pubkeys[i], serialized_pubkeys[i]) != 0) {
+            fprintf(stderr, "serialize pubkey failed for non-recursive state aggregate test\n");
+            goto cleanup;
+        }
+    }
+    expect_zero(
+        set_test_validator_pubkeys(&state, pubkeys, 2u),
+        "set validator pubkeys for non-recursive state aggregate test");
+
+    LanternCheckpoint source = state.latest_justified;
+    LanternCheckpoint target = source;
+    target.slot = source.slot + 1u;
+    fill_root(&target.root, 0x5Au);
+
+    expect_zero(lantern_attestations_resize(&raw_attestations, 2u), "resize raw attestations");
+    expect_zero(lantern_signature_list_resize(&raw_signatures, 2u), "resize raw signatures");
+
+    LanternSignedVote signed_votes[2];
+    memset(signed_votes, 0, sizeof(signed_votes));
+    build_vote(&signed_votes[0].data, &signed_votes[0].signature, 0u, target.slot, &source, &target, 0x31u);
+    build_vote(&signed_votes[1].data, &signed_votes[1].signature, 1u, target.slot, &source, &target, 0x31u);
+    if (sign_vote_with_secret(&signed_votes[0], secrets[0]) != 0
+        || sign_vote_with_secret(&signed_votes[1], secrets[1]) != 0) {
+        fprintf(stderr, "sign vote failed for non-recursive state aggregate test\n");
+        goto cleanup;
+    }
+    raw_attestations.data[0] = signed_votes[0].data;
+    raw_attestations.data[1] = signed_votes[1].data;
+    raw_signatures.data[0] = signed_votes[0].signature;
+    raw_signatures.data[1] = signed_votes[1].signature;
+
+    LanternRoot data_root;
+    expect_zero(
+        lantern_hash_tree_root_attestation_data(&signed_votes[0].data.data, &data_root),
+        "hash attestation data for non-recursive state aggregate test");
+    if (build_cached_proof_for_vote(&child_proof, 0u, 0xA1u) != 0) {
+        fprintf(stderr, "build child proof failed for non-recursive state aggregate test\n");
+        goto cleanup;
+    }
+    expect_zero(
+        lantern_store_add_new_aggregated_payload(
+            store,
+            &data_root,
+            &signed_votes[0].data.data,
+            &child_proof,
+            signed_votes[0].data.target.slot),
+        "seed new payload for non-recursive state aggregate test");
+
+    LanternAttestationSignatureInputs inputs = {
+        .attestations = &raw_attestations,
+        .signatures = &raw_signatures,
+    };
+    if (lantern_state_aggregate(
+            &state,
+            store,
+            &inputs,
+            &store->new_aggregated_payloads,
+            &store->known_aggregated_payloads,
+            false,
+            &aggregated_attestations,
+            &aggregated_signatures)
+        != LANTERN_STATE_AGGREGATE_OK) {
+        fprintf(stderr, "non-recursive state aggregate failed\n");
+        goto cleanup;
+    }
+    if (aggregated_attestations.length != 1u || aggregated_signatures.length != 1u) {
+        fprintf(stderr, "non-recursive state aggregate should emit one raw aggregate\n");
+        goto cleanup;
+    }
+
+    const LanternAggregatedSignatureProof *proof = &aggregated_signatures.data[0];
+    if (proof->participants.bit_length < 2u
+        || !bitlist_test_bit(&proof->participants, 0u)
+        || !bitlist_test_bit(&proof->participants, 1u)) {
+        fprintf(stderr, "non-recursive state aggregate participants mismatch\n");
+        goto cleanup;
+    }
+    if (aggregated_attestations.data[0].aggregation_bits.bit_length < 2u
+        || !bitlist_test_bit(&aggregated_attestations.data[0].aggregation_bits, 0u)
+        || !bitlist_test_bit(&aggregated_attestations.data[0].aggregation_bits, 1u)) {
+        fprintf(stderr, "non-recursive state aggregate attestation bits mismatch\n");
+        goto cleanup;
+    }
+
+    const uint8_t *pubkey_refs[2] = {
+        serialized_pubkeys[0],
+        serialized_pubkeys[1],
+    };
+    if (!lantern_signature_verify_aggregated(
+            pubkey_refs,
+            2u,
+            &data_root,
+            &proof->proof_data,
+            aggregated_attestations.data[0].data.slot)) {
+        fprintf(stderr, "non-recursive state aggregate proof verification failed\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_aggregated_signature_proof_reset(&child_proof);
+    lantern_attestation_signatures_reset(&aggregated_signatures);
+    lantern_aggregated_attestations_reset(&aggregated_attestations);
+    lantern_signature_list_reset(&raw_signatures);
+    lantern_attestations_reset(&raw_attestations);
+    for (size_t i = 0; i < 2u; ++i) {
+        if (secrets[i]) {
+            pq_secret_key_free(secrets[i]);
+        }
+        if (pubkeys[i]) {
+            pq_public_key_free(pubkeys[i]);
+        }
+    }
+    lantern_state_reset(&state);
+    return rc;
+}
+
+static int test_state_aggregate_recursive_skips_single_child_group(void) {
+    LanternState state;
+    LanternAggregatedAttestations aggregated_attestations;
+    LanternAttestationSignatures aggregated_signatures;
+    LanternAggregatedSignatureProof child_proof;
+    LanternStore *store = NULL;
+    LanternVote vote;
+    LanternSignature signature;
+    int rc = 1;
+
+    lantern_state_init(&state);
+    lantern_aggregated_attestations_init(&aggregated_attestations);
+    lantern_attestation_signatures_init(&aggregated_signatures);
+    lantern_aggregated_signature_proof_init(&child_proof);
+    memset(&vote, 0, sizeof(vote));
+    memset(&signature, 0, sizeof(signature));
+
+    expect_zero(
+        lantern_state_generate_genesis(&state, 3000u, 1u),
+        "genesis for recursive single-child state aggregate test");
+    store = lantern_test_state_store_ensure(&state);
+    if (!store) {
+        fprintf(stderr, "state store missing for recursive single-child state aggregate test\n");
+        goto cleanup;
+    }
+
+    LanternCheckpoint source = state.latest_justified;
+    LanternCheckpoint target = source;
+    target.slot = source.slot + 1u;
+    fill_root(&target.root, 0x71u);
+    build_vote(&vote, &signature, 0u, target.slot, &source, &target, 0x72u);
+
+    LanternRoot data_root;
+    expect_zero(
+        lantern_hash_tree_root_attestation_data(&vote.data, &data_root),
+        "hash attestation data for recursive single-child state aggregate test");
+    if (build_cached_proof_for_vote(&child_proof, 0u, 0xC3u) != 0) {
+        fprintf(stderr, "build child proof failed for recursive single-child state aggregate test\n");
+        goto cleanup;
+    }
+    expect_zero(
+        lantern_store_add_new_aggregated_payload(
+            store,
+            &data_root,
+            &vote.data,
+            &child_proof,
+            vote.target.slot),
+        "seed new payload for recursive single-child state aggregate test");
+
+    if (lantern_state_aggregate(
+            &state,
+            store,
+            NULL,
+            &store->new_aggregated_payloads,
+            &store->known_aggregated_payloads,
+            true,
+            &aggregated_attestations,
+            &aggregated_signatures)
+        != LANTERN_STATE_AGGREGATE_OK) {
+        fprintf(stderr, "recursive single-child state aggregate failed\n");
+        goto cleanup;
+    }
+    if (aggregated_attestations.length != 0u || aggregated_signatures.length != 0u) {
+        fprintf(stderr, "recursive state aggregate should skip single-child-only groups\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_aggregated_signature_proof_reset(&child_proof);
+    lantern_attestation_signatures_reset(&aggregated_signatures);
+    lantern_aggregated_attestations_reset(&aggregated_attestations);
+    lantern_state_reset(&state);
+    return rc;
+}
+
 int main(void) {
     if (test_genesis_state() != 0) {
         return 1;
@@ -3451,6 +3740,12 @@ int main(void) {
         return 1;
     }
     if (test_justified_slot_window_helpers() != 0) {
+        return 1;
+    }
+    if (test_state_aggregate_non_recursive_ignores_payload_children() != 0) {
+        return 1;
+    }
+    if (test_state_aggregate_recursive_skips_single_child_group() != 0) {
         return 1;
     }
     puts("lantern_state_test OK");

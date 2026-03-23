@@ -189,14 +189,13 @@ static inline void lantern_test_state_attach_fork_choice(
         lantern_test_state_store_ensure((state)), \
         (out_parent_root))
 #define lantern_state_collect_attestations_for_block( \
-    state, block_slot, proposer_index, parent_root, proposer_attestation, out_attestations, out_signatures) \
+    state, block_slot, proposer_index, parent_root, out_attestations, out_signatures) \
     lantern_state_collect_attestations_for_block_explicit( \
         (state), \
         lantern_test_state_store_ensure((LanternState *)(state)), \
         (block_slot), \
         (proposer_index), \
         (parent_root), \
-        (proposer_attestation), \
         (out_attestations), \
         (out_signatures))
 #define lantern_state_compute_vote_checkpoints(state, out_head, out_target, out_source) \

@@ -1108,7 +1108,7 @@ void lantern_signed_block_init(LanternSignedBlock *block) {
     if (!block) {
         return;
     }
-    lantern_block_init(&block->message);
+    lantern_block_init(&block->block);
     lantern_block_signatures_init(&block->signatures);
 }
 
@@ -1116,6 +1116,6 @@ void lantern_signed_block_reset(LanternSignedBlock *block) {
     if (!block) {
         return;
     }
-    lantern_block_reset(&block->message);
+    lantern_block_reset(&block->block);
     lantern_block_signatures_reset(&block->signatures);
 }

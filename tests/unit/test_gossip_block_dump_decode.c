@@ -107,7 +107,7 @@ static size_t bitlist_encoded_size_bits(size_t bit_length) {
 static size_t signed_block_max_ssz_size(void) {
     const size_t block_fixed = (sizeof(uint64_t) * 2u) + (LANTERN_ROOT_SIZE * 2u) + sizeof(uint32_t);
     const size_t body_header = sizeof(uint32_t);
-    const size_t message_base = sizeof(uint32_t) + LANTERN_VOTE_SSZ_SIZE + block_fixed + body_header;
+    const size_t message_base = block_fixed + body_header;
     const size_t offsets = sizeof(uint32_t) * 2u;
     size_t total = offsets + message_base;
 
@@ -242,7 +242,7 @@ static const char *check_block_sanity(const LanternSignedBlock *block) {
         return "missing_block";
     }
 
-    const LanternBlock *message = &block->message;
+    const LanternBlock *message = &block->block;
     for (size_t i = 0; i < message->body.attestations.length; ++i) {
         const LanternAggregatedAttestation *att = &message->body.attestations.data[i];
         const char *att_reason = check_attestation_data_sanity(&att->data);
@@ -266,7 +266,7 @@ static void print_attestation_slots(const LanternSignedBlock *block) {
     if (!block) {
         return;
     }
-    const LanternBlock *message = &block->message;
+    const LanternBlock *message = &block->block;
     for (size_t i = 0; i < message->body.attestations.length; ++i) {
         const LanternAggregatedAttestation *att = &message->body.attestations.data[i];
         printf(
@@ -281,53 +281,17 @@ static void print_attestation_slots(const LanternSignedBlock *block) {
 
 static void inspect_message_section(const uint8_t *data, size_t data_len) {
     printf("    message_region_len=%zu\n", data_len);
-    if (!data || data_len < 4u + LANTERN_VOTE_SSZ_SIZE) {
-        printf("      message region too short for block-with-attestation\n");
-        return;
-    }
-
-    uint32_t block_offset = 0;
-    if (read_le_u32(data, data_len, &block_offset) != 0) {
-        printf("      failed to read message.block_offset\n");
-        return;
-    }
-    printf("      message.block_offset=%u\n", block_offset);
-
-    LanternVote proposer_vote;
-    memset(&proposer_vote, 0, sizeof(proposer_vote));
-    int proposer_rc = lantern_ssz_decode_vote(&proposer_vote, data + 4u, LANTERN_VOTE_SSZ_SIZE);
-    printf(
-        "      proposer_vote_decode=%s validator=%" PRIu64 " slot=%" PRIu64 " target=%" PRIu64 " source=%" PRIu64 "\n",
-        proposer_rc == 0 ? "ok" : "fail",
-        (uint64_t)proposer_vote.validator_id,
-        proposer_vote.slot,
-        proposer_vote.target.slot,
-        proposer_vote.source.slot);
-
-    size_t min_size = 4u + LANTERN_VOTE_SSZ_SIZE;
-    if (block_offset < min_size || block_offset > data_len) {
-        printf(
-            "      message.block_offset invalid: expected [%zu, %zu], got %u\n",
-            min_size,
-            data_len,
-            block_offset);
-        return;
-    }
-
-    const uint8_t *block_data = data + block_offset;
-    size_t block_len = data_len - block_offset;
-    printf("      block_region_len=%zu\n", block_len);
-    if (block_len < 84u) {
-        printf("      block region too short for Lantern block fixed section\n");
+    if (!data || data_len < 84u) {
+        printf("      message region too short for block\n");
         return;
     }
 
     uint64_t slot = 0;
     uint64_t proposer_index = 0;
     uint32_t body_offset = 0;
-    read_le_u64(block_data, block_len, &slot);
-    read_le_u64(block_data + 8u, block_len - 8u, &proposer_index);
-    read_le_u32(block_data + 80u, block_len - 80u, &body_offset);
+    read_le_u64(data, data_len, &slot);
+    read_le_u64(data + 8u, data_len - 8u, &proposer_index);
+    read_le_u32(data + 80u, data_len - 80u, &body_offset);
     printf(
         "      block.slot=%" PRIu64 " proposer=%" PRIu64 " body_offset=%u\n",
         slot,
@@ -336,7 +300,7 @@ static void inspect_message_section(const uint8_t *data, size_t data_len) {
 
     LanternBlock parsed_block;
     memset(&parsed_block, 0, sizeof(parsed_block));
-    int block_rc = lantern_ssz_decode_block(&parsed_block, block_data, block_len);
+    int block_rc = lantern_ssz_decode_block(&parsed_block, data, data_len);
     printf("      block_decode=%s\n", block_rc == 0 ? "ok" : "fail");
     if (block_rc == 0) {
         printf(
@@ -347,17 +311,17 @@ static void inspect_message_section(const uint8_t *data, size_t data_len) {
         return;
     }
 
-    if (body_offset < 84u || body_offset > block_len) {
+    if (body_offset < 84u || body_offset > data_len) {
         printf(
             "      block.body_offset invalid: expected [%u, %zu], got %u\n",
             84u,
-            block_len,
+            data_len,
             body_offset);
         return;
     }
 
-    const uint8_t *body_data = block_data + body_offset;
-    size_t body_len = block_len - body_offset;
+    const uint8_t *body_data = data + body_offset;
+    size_t body_len = data_len - body_offset;
     printf("      block_body_region_len=%zu\n", body_len);
 
     LanternBlockBody body;
@@ -425,10 +389,10 @@ static void analyze_payload(const char *path) {
 
     if (raw_len_rc != LANTERN_SNAPPY_OK) {
         LanternSignedBlock block;
-        lantern_signed_block_with_attestation_init(&block);
+        lantern_signed_block_init(&block);
         int pipeline_rc = lantern_gossip_decode_signed_block_snappy(&block, compressed, compressed_len, NULL, NULL);
         printf("  gossip_pipeline_rc=%d\n", pipeline_rc);
-        lantern_signed_block_with_attestation_reset(&block);
+        lantern_signed_block_reset(&block);
         printf("\n");
         free(compressed);
         return;
@@ -480,17 +444,17 @@ static void analyze_payload(const char *path) {
     }
 
     LanternSignedBlock block;
-    lantern_signed_block_with_attestation_init(&block);
+    lantern_signed_block_init(&block);
     int ssz_rc = lantern_ssz_decode_signed_block(&block, raw, raw_written);
     printf("  lantern_ssz_decode_signed_block_rc=%d\n", ssz_rc);
     if (ssz_rc == 0) {
         printf(
             "  decoded_block slot=%" PRIu64 " proposer=%" PRIu64 " attestations=%zu sigs=%zu layout=%s\n",
-            block.message.slot,
-            block.message.proposer_index,
-            block.message.body.attestations.length,
+            block.block.slot,
+            block.block.proposer_index,
+            block.block.body.attestations.length,
             block.signatures.attestation_signatures.length,
-            block.message.body.legacy_plain_attestation_layout ? "legacy_plain_votes" : "aggregated");
+            block.block.body.legacy_plain_attestation_layout ? "legacy_plain_votes" : "aggregated");
         print_attestation_slots(&block);
         const char *sanity_reason = check_block_sanity(&block);
         printf(
@@ -503,13 +467,13 @@ static void analyze_payload(const char *path) {
     }
 
     LanternSignedBlock pipeline_block;
-    lantern_signed_block_with_attestation_init(&pipeline_block);
+    lantern_signed_block_init(&pipeline_block);
     int pipeline_rc = lantern_gossip_decode_signed_block_snappy(
         &pipeline_block, compressed, compressed_len, NULL, NULL);
     printf("  lantern_gossip_decode_signed_block_snappy_rc=%d\n", pipeline_rc);
 
-    lantern_signed_block_with_attestation_reset(&pipeline_block);
-    lantern_signed_block_with_attestation_reset(&block);
+    lantern_signed_block_reset(&pipeline_block);
+    lantern_signed_block_reset(&block);
     free(raw);
     free(compressed);
     printf("\n");

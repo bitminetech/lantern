@@ -81,16 +81,16 @@ static void build_signed_block(
     LanternSignedBlock *out_block,
     LanternRoot *out_root) {
     memset(out_block, 0, sizeof(*out_block));
-    out_block->message.slot = slot;
+    out_block->block.slot = slot;
     expect_zero(
-        lantern_proposer_for_slot(slot, state->config.num_validators, &out_block->message.proposer_index),
+        lantern_proposer_for_slot(slot, state->config.num_validators, &out_block->block.proposer_index),
         "compute proposer");
     expect_zero(
-        lantern_hash_tree_root_block_header(&state->latest_block_header, &out_block->message.parent_root),
+        lantern_hash_tree_root_block_header(&state->latest_block_header, &out_block->block.parent_root),
         "hash parent header");
-    lantern_block_body_init(&out_block->message.body);
+    lantern_block_body_init(&out_block->block.body);
     expect_zero(
-        lantern_hash_tree_root_block(&out_block->message, out_root),
+        lantern_hash_tree_root_block(&out_block->block, out_root),
         "hash block");
 }
 
@@ -345,15 +345,15 @@ int main(void) {
         lantern_storage_collect_blocks(base_dir, &block_root, 1u, &response),
         "collect blocks");
     assert(response.length == 1u);
-    assert(response.blocks[0].message.slot == block.message.slot);
-    assert(response.blocks[0].message.proposer_index == block.message.proposer_index);
+    assert(response.blocks[0].block.slot == block.block.slot);
+    assert(response.blocks[0].block.proposer_index == block.block.proposer_index);
 
     struct iterate_ctx ctx = {.count = 0};
     expect_zero(lantern_storage_iterate_blocks(base_dir, iterate_counter, &ctx), "iterate blocks");
     assert(ctx.count == 1u);
 
     lantern_signed_block_list_reset(&response);
-    lantern_block_body_reset(&block.message.body);
+    lantern_block_body_reset(&block.block.body);
 
     LanternSignedBlock legacy_block;
     LanternRoot legacy_block_root;
@@ -371,11 +371,11 @@ int main(void) {
     expect_zero(
         lantern_wrap_attestations_as_aggregated(
             &legacy_plain_attestations,
-            &legacy_block.message.body.attestations),
+            &legacy_block.block.body.attestations),
         "wrap legacy plain attestation");
-    legacy_block.message.body.legacy_plain_attestation_layout = true;
+    legacy_block.block.body.legacy_plain_attestation_layout = true;
     expect_zero(
-        lantern_hash_tree_root_block(&legacy_block.message, &legacy_block_root),
+        lantern_hash_tree_root_block(&legacy_block.block, &legacy_block_root),
         "hash legacy block");
     expect_zero(
         lantern_storage_store_block(base_dir, &legacy_block),
@@ -390,7 +390,7 @@ int main(void) {
     LanternRoot collected_legacy_root;
     expect_zero(
         lantern_hash_tree_root_block(
-            &legacy_response.blocks[0].message,
+            &legacy_response.blocks[0].block,
             &collected_legacy_root),
         "hash collected legacy block");
     assert(
@@ -399,9 +399,9 @@ int main(void) {
             legacy_block_root.bytes,
             LANTERN_ROOT_SIZE)
         == 0);
-    assert(legacy_response.blocks[0].message.body.legacy_plain_attestation_layout == true);
+    assert(legacy_response.blocks[0].block.body.legacy_plain_attestation_layout == true);
     lantern_signed_block_list_reset(&legacy_response);
-    lantern_block_body_reset(&legacy_block.message.body);
+    lantern_block_body_reset(&legacy_block.block.body);
     lantern_attestations_reset(&legacy_plain_attestations);
 
     lantern_state_reset(&state);

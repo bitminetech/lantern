@@ -351,7 +351,7 @@ static bool verify_and_cache_aggregated_attestation_locked(
         if (!lantern_bitlist_get(&attestation->proof.participants, i)) {
             continue;
         }
-        const uint8_t *pubkey = lantern_state_validator_pubkey(sig_state, i);
+        const uint8_t *pubkey = lantern_state_validator_attestation_pubkey(sig_state, i);
         if (!pubkey || lantern_validator_pubkey_is_zero(pubkey)) {
             free(pubkeys);
             lantern_state_reset(&target_state);
@@ -466,7 +466,7 @@ void persist_anchor_block(
 
     LanternSignedBlock stored_anchor;
     lantern_signed_block_with_attestation_init(&stored_anchor);
-    LanternBlock *block = &stored_anchor.message;
+    LanternBlock *block = &stored_anchor.block;
     block->slot = anchor_block->slot;
     block->proposer_index = anchor_block->proposer_index;
     block->parent_root = anchor_block->parent_root;
@@ -802,11 +802,11 @@ static int compare_blocks_by_slot(const void *lhs_ptr, const void *rhs_ptr)
 {
     const struct lantern_persisted_block *lhs = lhs_ptr;
     const struct lantern_persisted_block *rhs = rhs_ptr;
-    if (lhs->block.message.slot < rhs->block.message.slot)
+    if (lhs->block.block.slot < rhs->block.block.slot)
     {
         return -1;
     }
-    if (lhs->block.message.slot > rhs->block.message.slot)
+    if (lhs->block.block.slot > rhs->block.block.slot)
     {
         return 1;
     }
@@ -894,7 +894,7 @@ int restore_persisted_blocks(struct lantern_client *client)
     for (size_t i = 0; i < list.length; ++i)
     {
         const struct lantern_persisted_block *entry = &list.items[i];
-        const LanternBlock *block = &entry->block.message;
+        const LanternBlock *block = &entry->block.block;
         LanternState cached_post_state;
         bool have_cached_post_state = load_restored_block_state(client, &entry->root, &cached_post_state);
         const LanternCheckpoint *post_justified = &client->state.latest_justified;
@@ -918,7 +918,7 @@ int restore_persisted_blocks(struct lantern_client *client)
                 "forkchoice",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "failed to restore block at slot %" PRIu64,
-                entry->block.message.slot);
+                entry->block.block.slot);
         }
         else
         {
@@ -2424,7 +2424,7 @@ void lantern_client_enqueue_pending_block(
             "state",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to queue pending block slot=%" PRIu64,
-            block->message.slot);
+            block->block.slot);
         return;
     }
 
@@ -2450,7 +2450,7 @@ void lantern_client_enqueue_pending_block(
             "state",
             &meta,
             "queued block slot=%" PRIu64 " root=%s waiting for parent=%s (via gossip)",
-            block->message.slot,
+            block->block.slot,
             block_hex[0] ? block_hex : "0x0",
             parent_hex[0] ? parent_hex : "0x0");
     }
@@ -2460,7 +2460,7 @@ void lantern_client_enqueue_pending_block(
             "state",
             &meta,
             "queued block slot=%" PRIu64 " root=%s waiting for parent=%s (via gossip)",
-            block->message.slot,
+            block->block.slot,
             block_hex[0] ? block_hex : "0x0",
             parent_hex[0] ? parent_hex : "0x0");
     }
@@ -2572,7 +2572,7 @@ void lantern_client_process_pending_children(
             else
             {
                 replays[replay_count].root = entry->root;
-                replays[replay_count].slot = entry->block.message.slot;
+                replays[replay_count].slot = entry->block.block.slot;
                 replays[replay_count].backfill_depth = entry->backfill_depth;
                 replays[replay_count].peer_text[0] = '\0';
                 if (entry->peer_text[0])

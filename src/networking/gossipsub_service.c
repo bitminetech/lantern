@@ -259,8 +259,8 @@ static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
         + (LANTERN_ROOT_SIZE * 2u)
         + SSZ_BYTE_SIZE_OF_UINT32;
     size_t body_header = SSZ_BYTE_SIZE_OF_UINT32;
-    size_t att_count = block->message.body.attestations.length;
-    size_t att_bytes = aggregated_attestations_encoded_size(&block->message.body.attestations);
+    size_t att_count = block->block.body.attestations.length;
+    size_t att_bytes = aggregated_attestations_encoded_size(&block->block.body.attestations);
     if (att_count > 0 && att_bytes == 0) {
         return 0;
     }
@@ -460,7 +460,7 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
     }
 
     LanternSignedBlock block;
-    lantern_signed_block_with_attestation_init(&block);
+    lantern_signed_block_init(&block);
     uint8_t *raw_block_ssz = NULL;
     size_t raw_block_ssz_len = 0;
 
@@ -511,7 +511,7 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
     }
     char block_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     if (lantern_bytes_to_hex(
-            block.message.parent_root.bytes,
+            block.block.parent_root.bytes,
             LANTERN_ROOT_SIZE,
             block_root_hex,
             sizeof(block_root_hex),
@@ -525,8 +525,8 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
             "gossip",
             &meta,
             "accepted block gossip slot=%" PRIu64 " proposer=%" PRIu64 " parent=%s",
-            block.message.slot,
-            block.message.proposer_index,
+            block.block.slot,
+            block.block.proposer_index,
             block_root_hex[0] ? block_root_hex : "0x0");
     }
     else if (result == LIBP2P_GOSSIPSUB_VALIDATION_IGNORE)
@@ -535,14 +535,14 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
             "gossip",
             &meta,
             "ignored block gossip slot=%" PRIu64 " proposer=%" PRIu64 " parent=%s",
-            block.message.slot,
-            block.message.proposer_index,
+            block.block.slot,
+            block.block.proposer_index,
             block_root_hex[0] ? block_root_hex : "0x0");
     }
 
 cleanup:
     free(raw_block_ssz);
-    lantern_signed_block_with_attestation_reset(&block);
+    lantern_signed_block_reset(&block);
     return result;
 }
 
