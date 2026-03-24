@@ -466,6 +466,27 @@ bool lantern_client_import_block(
     const uint8_t *raw_block_ssz,
     size_t raw_block_ssz_len);
 
+/**
+ * Import a block without recursively draining its pending descendants.
+ *
+ * Used by the iterative pending-child replay path to avoid deep mutual
+ * recursion between block import and pending-child processing.
+ *
+ * @param out_children_ready Optional output set when the block became known
+ *                           locally and its pending children should be queued
+ *                           for iterative replay.
+ */
+bool lantern_client_import_block_without_pending_children(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    const struct lantern_log_metadata *meta,
+    uint32_t backfill_depth,
+    bool allow_historical,
+    const uint8_t *raw_block_ssz,
+    size_t raw_block_ssz_len,
+    bool *out_children_ready);
+
 
 /**
  * Record a received block and attempt import.

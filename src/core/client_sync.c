@@ -1996,6 +1996,78 @@ static int pending_child_replay_compare(const void *left, const void *right)
     return memcmp(left_entry->root.bytes, right_entry->root.bytes, LANTERN_ROOT_SIZE);
 }
 
+struct pending_child_root_queue
+{
+    LanternRoot *items;
+    size_t length;
+    size_t capacity;
+    size_t next_index;
+};
+
+static void pending_child_root_queue_init(struct pending_child_root_queue *queue)
+{
+    if (!queue)
+    {
+        return;
+    }
+    memset(queue, 0, sizeof(*queue));
+}
+
+static void pending_child_root_queue_reset(struct pending_child_root_queue *queue)
+{
+    if (!queue)
+    {
+        return;
+    }
+    free(queue->items);
+    memset(queue, 0, sizeof(*queue));
+}
+
+static bool pending_child_root_queue_append(
+    struct pending_child_root_queue *queue,
+    const LanternRoot *root)
+{
+    if (!queue || !root)
+    {
+        return false;
+    }
+    if (queue->length == queue->capacity)
+    {
+        size_t next_capacity = queue->capacity == 0 ? 8u : (queue->capacity + (queue->capacity / 2u));
+        if (next_capacity < queue->capacity)
+        {
+            return false;
+        }
+        if (next_capacity > SIZE_MAX / sizeof(*queue->items))
+        {
+            return false;
+        }
+        LanternRoot *expanded = realloc(queue->items, next_capacity * sizeof(*expanded));
+        if (!expanded)
+        {
+            return false;
+        }
+        queue->items = expanded;
+        queue->capacity = next_capacity;
+    }
+    queue->items[queue->length] = *root;
+    queue->length += 1u;
+    return true;
+}
+
+static bool pending_child_root_queue_next(
+    struct pending_child_root_queue *queue,
+    LanternRoot *out_root)
+{
+    if (!queue || !out_root || queue->next_index >= queue->length)
+    {
+        return false;
+    }
+    *out_root = queue->items[queue->next_index];
+    queue->next_index += 1u;
+    return true;
+}
+
 void lantern_client_request_pending_parent_after_blocks(
     struct lantern_client *client,
     const char *peer_text,
@@ -2320,6 +2392,7 @@ void lantern_client_enqueue_pending_block(
         existing->received_ms = monotonic_millis();
         size_t pending_len = list->length;
         bool parent_requested = existing->parent_requested;
+        uint32_t existing_backfill_depth = existing->backfill_depth;
         lantern_client_unlock_pending(client, locked);
         char root_hex[ROOT_HEX_BUFFER_LEN];
         char parent_hex[ROOT_HEX_BUFFER_LEN];
@@ -2334,15 +2407,15 @@ void lantern_client_enqueue_pending_block(
             "parent_requested=%s should_request=%s",
             root_hex[0] ? root_hex : "0x0",
             parent_hex[0] ? parent_hex : "0x0",
-            existing->backfill_depth,
+            existing_backfill_depth,
             pending_len,
             parent_cached ? "true" : "false",
             parent_requested ? "true" : "false",
             should_request ? "true" : "false");
         if (should_request && !parent_cached
-            && existing->backfill_depth < LANTERN_MAX_BACKFILL_DEPTH)
+            && existing_backfill_depth < LANTERN_MAX_BACKFILL_DEPTH)
         {
-            uint32_t request_depth = existing->backfill_depth + 1u;
+            uint32_t request_depth = existing_backfill_depth + 1u;
         if (try_schedule_blocks_request(
                 client,
                 peer_copy[0] ? peer_copy : NULL,
@@ -2442,6 +2515,7 @@ void lantern_client_enqueue_pending_block(
     entry->parent_requested = false;
     bool parent_cached = pending_block_list_find(list, &parent_root_local) != NULL;
     size_t pending_len = list->length;
+    uint32_t entry_backfill_depth = entry->backfill_depth;
 
     lantern_client_unlock_pending(client, locked);
 
@@ -2467,7 +2541,7 @@ void lantern_client_enqueue_pending_block(
     }
 
     if (allow_parent_requests && request_parent_now && !parent_cached
-        && entry->backfill_depth < LANTERN_MAX_BACKFILL_DEPTH)
+        && entry_backfill_depth < LANTERN_MAX_BACKFILL_DEPTH)
     {
         char peer_copy[PEER_TEXT_BUFFER_LEN];
         peer_copy[0] = '\0';
@@ -2476,7 +2550,7 @@ void lantern_client_enqueue_pending_block(
             strncpy(peer_copy, peer_text, sizeof(peer_copy) - 1u);
             peer_copy[sizeof(peer_copy) - 1u] = '\0';
         }
-        uint32_t request_depth = entry->backfill_depth + 1u;
+        uint32_t request_depth = entry_backfill_depth + 1u;
         if (try_schedule_blocks_request(
                 client,
                 peer_copy[0] ? peer_copy : NULL,
@@ -2494,7 +2568,7 @@ void lantern_client_enqueue_pending_block(
         "request_parent=%s",
         block_hex[0] ? block_hex : "0x0",
         parent_hex[0] ? parent_hex : "0x0",
-        entry->backfill_depth,
+        entry_backfill_depth,
         pending_len,
         parent_cached ? "true" : "false",
         (allow_parent_requests && request_parent_now) ? "true" : "false");
@@ -2508,7 +2582,7 @@ void lantern_client_enqueue_pending_block(
  *
  * After importing a block, checks if any pending blocks can now
  * be imported (because their parent just became available).
- * Recursively processes any chains of pending blocks.
+ * Iteratively processes any chains of pending blocks.
  *
  * @param client       Client instance
  * @param parent_root  Root of the newly imported parent block
@@ -2523,19 +2597,28 @@ void lantern_client_process_pending_children(
     {
         return;
     }
-    while (true)
+    struct pending_child_root_queue parent_queue;
+    pending_child_root_queue_init(&parent_queue);
+    if (!pending_child_root_queue_append(&parent_queue, parent_root))
+    {
+        pending_child_root_queue_reset(&parent_queue);
+        return;
+    }
+
+    LanternRoot current_parent = {0};
+    while (pending_child_root_queue_next(&parent_queue, &current_parent))
     {
         bool locked = lantern_client_lock_pending(client);
         if (!locked)
         {
-            return;
+            break;
         }
 
         size_t pending_count = 0;
         for (size_t i = 0; i < client->pending_blocks.length; ++i)
         {
             struct lantern_pending_block *entry = &client->pending_blocks.items[i];
-            if (memcmp(entry->parent_root.bytes, parent_root->bytes, LANTERN_ROOT_SIZE) == 0)
+            if (memcmp(entry->parent_root.bytes, current_parent.bytes, LANTERN_ROOT_SIZE) == 0)
             {
                 pending_count += 1u;
             }
@@ -2544,7 +2627,7 @@ void lantern_client_process_pending_children(
         if (pending_count == 0)
         {
             lantern_client_unlock_pending(client, locked);
-            break;
+            continue;
         }
 
         struct pending_child_replay *replays =
@@ -2552,14 +2635,14 @@ void lantern_client_process_pending_children(
         if (!replays)
         {
             lantern_client_unlock_pending(client, locked);
-            return;
+            break;
         }
 
         size_t replay_count = 0;
         for (size_t i = client->pending_blocks.length; i-- > 0;)
         {
             struct lantern_pending_block *entry = &client->pending_blocks.items[i];
-            if (memcmp(entry->parent_root.bytes, parent_root->bytes, LANTERN_ROOT_SIZE) != 0)
+            if (memcmp(entry->parent_root.bytes, current_parent.bytes, LANTERN_ROOT_SIZE) != 0)
             {
                 continue;
             }
@@ -2600,13 +2683,15 @@ void lantern_client_process_pending_children(
         qsort(replays, replay_count, sizeof(*replays), pending_child_replay_compare);
 
         size_t imported_count = 0;
+        size_t queued_children = 0;
         for (size_t i = 0; i < replay_count; ++i)
         {
             struct lantern_log_metadata meta = {
                 .validator = client->node_id,
                 .peer = replays[i].peer_text[0] ? replays[i].peer_text : NULL,
             };
-            bool imported = lantern_client_import_block(
+            bool children_ready = false;
+            bool imported = lantern_client_import_block_without_pending_children(
                 client,
                 &replays[i].block,
                 &replays[i].root,
@@ -2614,29 +2699,45 @@ void lantern_client_process_pending_children(
                 replays[i].backfill_depth,
                 true,
                 NULL,
-                0);
+                0,
+                &children_ready);
             if (imported)
             {
                 imported_count += 1u;
+            }
+            if (children_ready)
+            {
+                if (pending_child_root_queue_append(&parent_queue, &replays[i].root))
+                {
+                    queued_children += 1u;
+                }
+                else
+                {
+                    char root_hex[ROOT_HEX_BUFFER_LEN];
+                    format_root_hex(&replays[i].root, root_hex, sizeof(root_hex));
+                    lantern_log_warn(
+                        "sync",
+                        &(const struct lantern_log_metadata){.validator = client->node_id},
+                        "failed to queue pending child root=%s for iterative replay",
+                        root_hex[0] ? root_hex : "0x0");
+                }
             }
             lantern_signed_block_with_attestation_reset(&replays[i].block);
         }
         free(replays);
 
         char parent_hex[ROOT_HEX_BUFFER_LEN];
-        format_root_hex(parent_root, parent_hex, sizeof(parent_hex));
+        format_root_hex(&current_parent, parent_hex, sizeof(parent_hex));
         lantern_log_debug(
             "sync",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "pending children processed parent=%s pending=%zu replayed=%zu imported=%zu",
+            "pending children processed parent=%s pending=%zu replayed=%zu imported=%zu queued=%zu",
             parent_hex[0] ? parent_hex : "0x0",
             pending_count,
             replay_count,
-            imported_count);
-
-        if (imported_count == 0)
-        {
-            break;
-        }
+            imported_count,
+            queued_children);
     }
+
+    pending_child_root_queue_reset(&parent_queue);
 }

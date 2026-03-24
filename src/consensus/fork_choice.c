@@ -455,6 +455,8 @@ void lantern_fork_choice_reset(LanternForkChoice *store) {
 
     store->initialized = false;
     store->has_anchor = false;
+    zero_root(&store->anchor_root);
+    store->anchor_slot = 0;
     store->has_head = false;
     store->has_safe_target = false;
     zero_root(&store->head);
@@ -636,6 +638,21 @@ const LanternState *lantern_fork_choice_block_state(
     return entry->has_state ? &entry->state : NULL;
 }
 
+const LanternRoot *lantern_fork_choice_anchor_root(const LanternForkChoice *store) {
+    if (!store || !store->has_anchor) {
+        return NULL;
+    }
+    return &store->anchor_root;
+}
+
+int lantern_fork_choice_anchor_slot(const LanternForkChoice *store, uint64_t *out_slot) {
+    if (!store || !store->has_anchor || !out_slot) {
+        return -1;
+    }
+    *out_slot = store->anchor_slot;
+    return 0;
+}
+
 int lantern_fork_choice_set_anchor(
     LanternForkChoice *store,
     const LanternBlock *anchor_block,
@@ -682,6 +699,8 @@ int lantern_fork_choice_set_anchor_with_state(
     size_t previous_block_len = store->block_len;
     LanternCheckpoint previous_justified = store->latest_justified;
     LanternCheckpoint previous_finalized = store->latest_finalized;
+    LanternRoot previous_anchor_root = store->anchor_root;
+    uint64_t previous_anchor_slot = store->anchor_slot;
     LanternRoot previous_head = store->head;
     bool previous_has_head = store->has_head;
     LanternRoot previous_safe_target = store->safe_target;
@@ -715,11 +734,15 @@ int lantern_fork_choice_set_anchor_with_state(
     store->safe_target = root;
     store->has_safe_target = true;
     store->has_anchor = true;
+    store->anchor_root = root;
+    store->anchor_slot = anchor_block->slot;
     uint64_t anchor_intervals = anchor_block->slot * store->intervals_per_slot;
     store->time_intervals = anchor_intervals;
     if (anchor_state && lantern_fork_choice_set_block_state(store, &root, anchor_state) != 0) {
         store->latest_justified = previous_justified;
         store->latest_finalized = previous_finalized;
+        store->anchor_root = previous_anchor_root;
+        store->anchor_slot = previous_anchor_slot;
         store->head = previous_head;
         store->has_head = previous_has_head;
         store->safe_target = previous_safe_target;
@@ -1067,6 +1090,68 @@ int lantern_fork_choice_restore_checkpoints(
 
     store->latest_justified = restored_justified;
     store->latest_finalized = restored_finalized;
+    return 0;
+}
+
+int lantern_fork_choice_prune_states(LanternForkChoice *store) {
+    if (!store || !store->initialized || !store->has_anchor || !store->has_head) {
+        return -1;
+    }
+    if (store->block_len == 0 || !store->states) {
+        return 0;
+    }
+    if (store->state_cap < store->block_len) {
+        return -1;
+    }
+    if (root_is_zero(&store->latest_finalized.root)) {
+        return 0;
+    }
+
+    size_t head_index = 0;
+    size_t finalized_index = 0;
+    if (!map_lookup(store, &store->head, &head_index)
+        || !map_lookup(store, &store->latest_finalized.root, &finalized_index)) {
+        return -1;
+    }
+    if (head_index >= store->block_len || finalized_index >= store->block_len) {
+        return -1;
+    }
+
+    uint8_t *canonical = calloc(store->block_len, sizeof(*canonical));
+    if (!canonical) {
+        return -1;
+    }
+
+    bool found_finalized = false;
+    size_t current = head_index;
+    while (current < store->block_len) {
+        canonical[current] = 1u;
+        if (current == finalized_index) {
+            found_finalized = true;
+            break;
+        }
+        size_t parent_index = store->blocks[current].parent_index;
+        if (parent_index == SIZE_MAX || parent_index >= store->block_len) {
+            break;
+        }
+        current = parent_index;
+    }
+
+    if (!found_finalized) {
+        free(canonical);
+        return -1;
+    }
+
+    for (size_t i = 0; i < store->block_len; ++i) {
+        struct lantern_fork_choice_state_entry *entry = &store->states[i];
+        if (!entry->has_state || canonical[i] != 0u) {
+            continue;
+        }
+        lantern_state_reset(&entry->state);
+        entry->has_state = false;
+    }
+
+    free(canonical);
     return 0;
 }
 
