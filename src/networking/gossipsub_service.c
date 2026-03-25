@@ -714,7 +714,7 @@ void lantern_gossipsub_service_init(struct lantern_gossipsub_service *service) {
     memset(service, 0, sizeof(*service));
 }
 
-void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service) {
+static void lantern_gossipsub_service_remove_validators(struct lantern_gossipsub_service *service) {
     if (!service) {
         return;
     }
@@ -738,8 +738,24 @@ void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service) 
     service->vote_validator_handle = NULL;
     service->vote_subnet_validator_handle = NULL;
     service->aggregated_attestation_validator_handle = NULL;
+}
+
+void lantern_gossipsub_service_stop(struct lantern_gossipsub_service *service) {
+    if (!service) {
+        return;
+    }
+    lantern_gossipsub_service_remove_validators(service);
     if (service->gossipsub) {
         libp2p_gossipsub_stop(service->gossipsub);
+    }
+}
+
+void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service) {
+    if (!service) {
+        return;
+    }
+    lantern_gossipsub_service_stop(service);
+    if (service->gossipsub) {
         libp2p_gossipsub_free(service->gossipsub);
         service->gossipsub = NULL;
     }
