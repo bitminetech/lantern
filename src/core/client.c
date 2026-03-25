@@ -3264,7 +3264,7 @@ static void shutdown_genesis_and_network(struct lantern_client *client)
         "client",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "shutdown: stopping gossipsub");
-    lantern_gossipsub_service_reset(&client->gossip);
+    lantern_gossipsub_service_stop(&client->gossip);
     client->gossip_running = false;
     lantern_log_info(
         "client",
@@ -3275,6 +3275,7 @@ static void shutdown_genesis_and_network(struct lantern_client *client)
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "shutdown: resetting libp2p host");
     lantern_libp2p_host_reset(&client->network);
+    lantern_gossipsub_service_reset(&client->gossip);
     lantern_log_info(
         "client",
         &(const struct lantern_log_metadata){.validator = client->node_id},

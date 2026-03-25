@@ -63,6 +63,7 @@ struct lantern_gossipsub_service {
 };
 
 void lantern_gossipsub_service_init(struct lantern_gossipsub_service *service);
+void lantern_gossipsub_service_stop(struct lantern_gossipsub_service *service);
 void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service);
 int lantern_gossipsub_service_start(
     struct lantern_gossipsub_service *service,
