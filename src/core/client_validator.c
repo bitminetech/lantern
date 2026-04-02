@@ -464,12 +464,12 @@ static int aggregation_group_append(
         {
             return -1;
         }
+        group->validator_ids = ids;
         LanternSignature *sigs = realloc(group->signatures, new_capacity * sizeof(*sigs));
         if (!sigs)
         {
             return -1;
         }
-        group->validator_ids = ids;
         group->signatures = sigs;
         group->capacity = new_capacity;
     }
