@@ -767,30 +767,6 @@ static int lantern_fixture_parse_aggregated_attestation(
     return 0;
 }
 
-static int lantern_fixture_wrap_vote_as_aggregated(
-    const LanternSignedVote *vote,
-    LanternAggregatedAttestation *out_attestation) {
-    if (!vote || !out_attestation) {
-        return -1;
-    }
-    uint64_t validator_id = vote->data.validator_id;
-    if (validator_id >= LANTERN_VALIDATOR_REGISTRY_LIMIT) {
-        return -1;
-    }
-    if (lantern_bitlist_resize(&out_attestation->aggregation_bits, (size_t)validator_id + 1u) != 0) {
-        return -1;
-    }
-    size_t byte_len = ((size_t)validator_id + 1u + 7u) / 8u;
-    if (byte_len > 0 && out_attestation->aggregation_bits.bytes) {
-        memset(out_attestation->aggregation_bits.bytes, 0, byte_len);
-        size_t byte_index = (size_t)validator_id / 8u;
-        size_t bit_index = (size_t)validator_id % 8u;
-        out_attestation->aggregation_bits.bytes[byte_index] |= (uint8_t)(1u << bit_index);
-    }
-    out_attestation->data = vote->data.data;
-    return 0;
-}
-
 static int lantern_fixture_parse_signature_proof(
     const struct lantern_fixture_document *doc,
     int proof_idx,

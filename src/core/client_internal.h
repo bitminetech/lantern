@@ -393,25 +393,6 @@ bool lantern_client_lock_pending(struct lantern_client *client);
  */
 void lantern_client_unlock_pending(struct lantern_client *client, bool locked);
 
-
-/* ============================================================================
- * Validator Record Functions
- * ============================================================================ */
-
-/**
- * Get a validator record from the genesis registry.
- *
- * @param client         Client instance
- * @param global_index   Validator global index
- * @return Pointer to validator record, or NULL if not found
- *
- * @note Thread safety: This function is thread-safe (read-only access)
- */
-const struct lantern_validator_record *lantern_client_get_validator_record(
-    const struct lantern_client *client,
-    uint64_t global_index);
-
-
 #ifdef __cplusplus
 }
 #endif

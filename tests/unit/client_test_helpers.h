@@ -14,7 +14,6 @@ void client_test_fill_root(LanternRoot *root, uint8_t seed);
 void client_test_fill_root_with_index(LanternRoot *root, uint32_t index);
 
 int client_test_slot_for_root(struct lantern_client *client, const LanternRoot *root, uint64_t *out_slot);
-int client_test_advance_fork_choice_intervals(LanternForkChoice *store, size_t count, bool has_proposal);
 bool client_test_pending_contains_root(const struct lantern_client *client, const LanternRoot *root);
 
 int client_test_setup_vote_validation_client(

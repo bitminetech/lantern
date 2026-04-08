@@ -22,20 +22,6 @@ static void expect_zero(int rc, const char *label) {
     }
 }
 
-static void expect_nonzero_root(const LanternRoot *root, const char *label) {
-    bool all_zero = true;
-    for (size_t i = 0; i < LANTERN_ROOT_SIZE; ++i) {
-        if (root->bytes[i] != 0) {
-            all_zero = false;
-            break;
-        }
-    }
-    if (all_zero) {
-        fprintf(stderr, "%s still zero\n", label);
-        exit(EXIT_FAILURE);
-    }
-}
-
 static void fill_root(LanternRoot *root, uint8_t value) {
     if (!root) {
         return;

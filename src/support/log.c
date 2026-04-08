@@ -6,15 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#if defined(_WIN32)
-#include <io.h>
-#define lantern_isatty _isatty
-#define lantern_fileno _fileno
-#else
-#include <unistd.h>
-#define lantern_isatty isatty
-#define lantern_fileno fileno
-#endif
 
 static char g_node_id[96] = {0};
 static enum LanternLogLevel g_min_level = LANTERN_LOG_LEVEL_INFO;
@@ -34,22 +25,12 @@ static enum lantern_log_color_mode g_color_mode = LANTERN_LOG_COLOR_AUTO;
 
 /* ANSI color codes */
 #define ANSI_RESET "\x1b[0m"
-#define ANSI_BOLD "\x1b[1m"
 #define ANSI_DIM "\x1b[2m"
-#define ANSI_BLACK "\x1b[30m"
-#define ANSI_RED "\x1b[31m"
 #define ANSI_GREEN "\x1b[32m"
 #define ANSI_YELLOW "\x1b[33m"
-#define ANSI_BLUE "\x1b[34m"
-#define ANSI_MAGENTA "\x1b[35m"
 #define ANSI_CYAN "\x1b[36m"
-#define ANSI_WHITE "\x1b[37m"
 #define ANSI_BRIGHT_BLACK "\x1b[90m"
 #define ANSI_BRIGHT_RED "\x1b[91m"
-#define ANSI_BRIGHT_GREEN "\x1b[92m"
-#define ANSI_BRIGHT_YELLOW "\x1b[93m"
-#define ANSI_BRIGHT_BLUE "\x1b[94m"
-#define ANSI_BRIGHT_CYAN "\x1b[96m"
 
 /* Level badge colors and symbols */
 static const char *level_to_color(enum LanternLogLevel level) {

@@ -12,10 +12,6 @@
 #include "lantern/encoding/snappy.h"
 #include "lantern/networking/gossip_payloads.h"
 
-#ifndef LANTERN_PROJECT_SOURCE_DIR
-#define LANTERN_PROJECT_SOURCE_DIR "."
-#endif
-
 static const char *k_default_glob =
     LANTERN_PROJECT_SOURCE_DIR "/internal-docs/pending-issues/devnet-3-issue-3/*.ssz";
 

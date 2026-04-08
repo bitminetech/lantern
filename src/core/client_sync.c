@@ -44,42 +44,6 @@ enum
     VALIDATOR_PUBKEY_HEX_BUFFER_LEN = (LANTERN_VALIDATOR_PUBKEY_SIZE * 2u) + 3u,
 };
 
-
-/* ============================================================================
- * Validator Record Access
- * ============================================================================ */
-
-/**
- * Get validator record from genesis registry.
- *
- * @spec subspecs/containers/validator.py - Validator container
- *
- * Retrieves a validator record from the genesis registry by index.
- * The registry is populated during genesis initialization and remains
- * immutable after that.
- *
- * @param client        Client instance
- * @param validator_id  Validator index
- * @return Validator record or NULL if not found
- *
- * @note Thread safety: Assumes registry is immutable after init
- */
-const struct lantern_validator_record *lantern_client_get_validator_record(
-    const struct lantern_client *client,
-    uint64_t validator_id)
-{
-    if (!client || !client->genesis.validator_registry.records)
-    {
-        return NULL;
-    }
-    if (validator_id >= client->genesis.validator_registry.count)
-    {
-        return NULL;
-    }
-    return &client->genesis.validator_registry.records[validator_id];
-}
-
-
 /* ============================================================================
  * Enabled Validator Count
  * ============================================================================ */

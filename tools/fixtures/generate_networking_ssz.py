@@ -294,7 +294,7 @@ def main() -> None:
     vote_attestation = make_gossip_attestation(seed=0x33, validator_id=9, vote_slot=96)
     vote_fixture = SignedAttestation(
         validator_id=vote_attestation.validator_id,
-        message=vote_attestation.data,
+        data=vote_attestation.data,
         signature=make_signature(0xE1),
     )
     vote_bytes = vote_fixture.encode_bytes()
@@ -304,7 +304,7 @@ def main() -> None:
         "Gossip signed vote",
         [
             f"validator={int(vote_fixture.validator_id)}",
-            f"slot={int(vote_fixture.message.slot)}",
+            f"slot={int(vote_fixture.data.slot)}",
             f"bytes={len(vote_bytes)}",
         ],
     )

@@ -21,10 +21,6 @@
 #include "tests/support/fixture_loader.h"
 #include "ssz_constants.h"
 
-#ifndef LANTERN_TEST_FIXTURE_DIR
-#error "LANTERN_TEST_FIXTURE_DIR must be defined"
-#endif
-
 #define CHECK(cond)                                                                 \
     do {                                                                            \
         if (!(cond)) {                                                              \
@@ -217,15 +213,6 @@ static void check_signature_proof_equal(
     CHECK(memcmp(expected->proof_data.data, actual->proof_data.data, expected->proof_data.length) == 0);
 }
 
-static void check_signed_aggregated_attestation_equal(
-    const LanternSignedAggregatedAttestation *expected,
-    const LanternSignedAggregatedAttestation *actual) {
-    CHECK(expected != NULL);
-    CHECK(actual != NULL);
-    check_attestation_data_equal(&expected->data, &actual->data);
-    check_signature_proof_equal(&expected->proof, &actual->proof);
-}
-
 static void expect_vote_view(
     const LanternVote *vote,
     uint64_t validator_id,
@@ -389,20 +376,6 @@ static void expect_signed_block_fixture(const LanternSignedBlock *block) {
     CHECK(block->signatures.attestation_signatures.data != NULL);
     expect_signature_proof_seed(&block->signatures.attestation_signatures.data[0], 9, 0xC4, 8);
     expect_signature_proof_seed(&block->signatures.attestation_signatures.data[1], 10, 0xC7, 8);
-}
-
-static uint64_t le_bytes_to_u64(const uint8_t *src, size_t len) {
-    if (!src) {
-        return 0;
-    }
-    if (len > sizeof(uint64_t)) {
-        len = sizeof(uint64_t);
-    }
-    uint64_t value = 0;
-    for (size_t i = 0; i < len; ++i) {
-        value |= ((uint64_t)src[i]) << (8u * i);
-    }
-    return value;
 }
 
 static uint32_t rng_state = UINT32_C(0x6ac1e39d);
@@ -635,32 +608,6 @@ static int load_signed_block_fixture(const struct block_fixture_case *spec, Lant
 cleanup:
     lantern_fixture_document_reset(&doc);
     return status;
-}
-
-static int parse_hex_bytes(const char *hex, uint8_t *out, size_t expected_len) {
-    if (!hex || !out) {
-        return -1;
-    }
-    if (hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X')) {
-        hex += 2;
-    }
-    size_t hex_len = strlen(hex);
-    if (hex_len != expected_len * 2u) {
-        return -1;
-    }
-    for (size_t i = 0; i < expected_len; ++i) {
-        char buf[3];
-        buf[0] = hex[(i * 2u)];
-        buf[1] = hex[(i * 2u) + 1u];
-        buf[2] = '\0';
-        char *end = NULL;
-        unsigned long value = strtoul(buf, &end, 16);
-        if (!end || *end != '\0') {
-            return -1;
-        }
-        out[i] = (uint8_t)value;
-    }
-    return 0;
 }
 
 static void normalize_attestation_data_for_gossip_sanity(LanternAttestationData *data) {

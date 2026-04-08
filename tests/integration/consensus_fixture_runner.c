@@ -21,10 +21,6 @@
 
 #include <limits.h>
 
-#ifndef LANTERN_TEST_FIXTURE_DIR
-#error "LANTERN_TEST_FIXTURE_DIR must be defined"
-#endif
-
 #define LABEL_MAX_LENGTH 64
 #define MAX_LABELS 128
 

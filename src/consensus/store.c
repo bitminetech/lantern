@@ -346,6 +346,30 @@ static void attestation_data_by_root_remove_index(
     cache->length -= 1u;
 }
 
+static void attestation_data_by_root_shrink_to_fit(
+    struct lantern_attestation_data_by_root *cache) {
+    if (!cache) {
+        return;
+    }
+    if (cache->length == cache->capacity) {
+        return;
+    }
+    if (cache->length == 0u) {
+        free(cache->entries);
+        cache->entries = NULL;
+        cache->capacity = 0u;
+        return;
+    }
+
+    struct lantern_attestation_data_by_root_entry *entries =
+        realloc(cache->entries, cache->length * sizeof(*entries));
+    if (!entries) {
+        return;
+    }
+    cache->entries = entries;
+    cache->capacity = cache->length;
+}
+
 static int attestation_data_by_root_add(
     struct lantern_attestation_data_by_root *cache,
     const LanternRoot *data_root,
@@ -760,6 +784,7 @@ size_t lantern_store_prune_finalized_attestation_material(
         }
         data_index += 1u;
     }
+    attestation_data_by_root_shrink_to_fit(data_cache);
 
     size_t signature_index = 0u;
     while (signature_index < store->gossip_signatures.length) {

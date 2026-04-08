@@ -215,13 +215,6 @@ bool lantern_client_find_missing_state_root_locked(
     LanternRoot *out_missing_root);
 
 /**
- * Return the active attestation committee count for sync/validator cache logic.
- *
- * Respects debug overrides used by tests and falls back to the protocol default.
- */
-size_t lantern_client_attestation_committee_count(const struct lantern_client *client);
-
-/**
  * Determine whether this node should retain an attestation signature locally.
  *
  * The signature is retained when the node is configured as an aggregator.

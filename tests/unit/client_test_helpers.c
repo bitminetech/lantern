@@ -15,10 +15,6 @@
 #include "lantern/crypto/xmss.h"
 #include "lantern/support/time.h"
 
-#ifndef LANTERN_TEST_FIXTURE_DIR
-#error "LANTERN_TEST_FIXTURE_DIR must be defined for client test helpers"
-#endif
-
 static int client_test_load_fixture_genesis_time(uint64_t *out_time);
 
 static int load_precomputed_keys(
@@ -87,23 +83,6 @@ int client_test_slot_for_root(struct lantern_client *client, const LanternRoot *
     }
     if (lantern_fork_choice_block_info(&client->fork_choice, root, out_slot, NULL, NULL) != 0) {
         return -1;
-    }
-    return 0;
-}
-
-int client_test_advance_fork_choice_intervals(LanternForkChoice *store, size_t count, bool has_proposal) {
-    if (!store || store->milliseconds_per_interval == 0) {
-        return -1;
-    }
-    for (size_t i = 0; i < count; ++i) {
-        uint64_t next_interval = store->time_intervals + 1u;
-        uint64_t now = (store->config.genesis_time * 1000u) + (next_interval * store->milliseconds_per_interval);
-        if (now < (store->config.genesis_time * 1000u)) {
-            return -1;
-        }
-        if (lantern_fork_choice_advance_time(store, now, has_proposal) != 0) {
-            return -1;
-        }
     }
     return 0;
 }

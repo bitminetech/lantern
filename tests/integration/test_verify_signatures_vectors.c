@@ -16,10 +16,6 @@
 #include "lantern/consensus/state.h"
 #include "lantern/support/log.h"
 
-#ifndef LANTERN_TEST_FIXTURE_DIR
-#error "LANTERN_TEST_FIXTURE_DIR must be defined"
-#endif
-
 static void configure_logging(void) {
     const char *env_level = getenv("LANTERN_LOG_LEVEL");
     if (env_level && env_level[0] != '\0') {

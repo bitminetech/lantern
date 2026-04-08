@@ -29,14 +29,6 @@ static int init_range_assignment(
     return 0;
 }
 
-#define EXPECT_ZERO(expr, label)                                                                                        \
-    do {                                                                                                                \
-        if ((expr) != 0) {                                                                                               \
-            fprintf(stderr, "%s failed\n", label);                                                                       \
-            return 1;                                                                                                    \
-        }                                                                                                                \
-    } while (0)
-
 #define EXPECT_EQ(actual, expected, label)                                                                              \
     do {                                                                                                                \
         if ((actual) != (expected)) {                                                                                    \

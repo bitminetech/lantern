@@ -471,12 +471,12 @@ static int aggregation_group_append(
         {
             return -1;
         }
+        group->validator_ids = ids;
         LanternSignature *sigs = realloc(group->signatures, new_capacity * sizeof(*sigs));
         if (!sigs)
         {
             return -1;
         }
-        group->validator_ids = ids;
         group->signatures = sigs;
         group->capacity = new_capacity;
     }
@@ -1231,75 +1231,6 @@ void validator_duty_state_reset(struct lantern_validator_duty_state *state)
     }
     memset(state, 0, sizeof(*state));
 }
-
-
-/* ============================================================================
- * Vote Time Utilities
- * ============================================================================ */
-
-/**
- * Compute wall-clock time for a vote slot.
- *
- * Calculates the Unix timestamp (in seconds) at which the given vote slot
- * begins, based on genesis time and seconds per slot configuration.
- *
- * @param client       Client instance (must have fork_choice initialized)
- * @param vote_slot    Slot number to compute time for
- * @param out_seconds  Output for computed time in seconds (Unix timestamp)
- *
- * @return true on success
- * @return false if client is NULL, fork_choice not initialized, out_seconds
- *         is NULL, or computed time overflows uint64_t
- *
- * @note Thread safety: This function is thread-safe
- */
-bool lantern_client_vote_time_seconds(
-    const struct lantern_client *client,
-    uint64_t vote_slot,
-    uint64_t *out_seconds)
-{
-    if (!client || !client->has_fork_choice || !out_seconds)
-    {
-        return false;
-    }
-    uint32_t seconds_per_slot = client->fork_choice.seconds_per_slot;
-    if (seconds_per_slot == 0)
-    {
-        seconds_per_slot = 1;
-    }
-    uint64_t slot_for_time = vote_slot;
-    if (slot_for_time != UINT64_MAX)
-    {
-        slot_for_time += 1u;
-    }
-
-#if defined(__SIZEOF_INT128__)
-    __uint128_t slot_offset = (__uint128_t)slot_for_time * (uint64_t)seconds_per_slot;
-    __uint128_t result = slot_offset + (__uint128_t)client->fork_choice.config.genesis_time;
-    if (result > UINT64_MAX)
-    {
-        return false;
-    }
-    *out_seconds = (uint64_t)result;
-#else
-    /* Fallback for platforms without 128-bit integers */
-    uint64_t genesis_time = client->fork_choice.config.genesis_time;
-    /* Check for overflow in multiplication */
-    if (seconds_per_slot != 0 && slot_for_time > UINT64_MAX / seconds_per_slot)
-    {
-        return false;
-    }
-    uint64_t slot_offset = slot_for_time * (uint64_t)seconds_per_slot;
-    /* Check for overflow in addition */
-    if (slot_offset > UINT64_MAX - genesis_time)
-    {
-        return false;
-    }
-    *out_seconds = slot_offset + genesis_time;
-#endif
-    return true;
-}
-
 
 /* ============================================================================
  * Validator Service Checks

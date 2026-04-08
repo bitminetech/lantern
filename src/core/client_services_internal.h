@@ -62,24 +62,6 @@ void validator_duty_state_reset(struct lantern_validator_duty_state *state);
 
 
 /**
- * Compute wall-clock time for a vote slot.
- *
- * @spec subspecs/slot/slot_clock.py - slot timing
- *
- * @param client       Client instance
- * @param vote_slot    Slot number
- * @param out_seconds  Output for computed time in seconds
- * @return true on success, false on failure
- *
- * @note Thread safety: This function is thread-safe
- */
-bool lantern_client_vote_time_seconds(
-    const struct lantern_client *client,
-    uint64_t vote_slot,
-    uint64_t *out_seconds);
-
-
-/**
  * Check if the validator service should run.
  *
  * @param client  Client instance

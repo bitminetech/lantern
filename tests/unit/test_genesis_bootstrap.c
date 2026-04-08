@@ -7,10 +7,6 @@
 
 #include "lantern/genesis/genesis.h"
 
-#ifndef LANTERN_TEST_FIXTURE_DIR
-#error "LANTERN_TEST_FIXTURE_DIR must be defined"
-#endif
-
 static int write_temp_nodes_file(char *buffer, size_t length) {
     if (!buffer || length == 0) {
         return -1;

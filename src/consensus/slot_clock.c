@@ -290,20 +290,3 @@ int lantern_slot_clock_compute(
     out_timepoint->phase = interval_to_phase(interval_index);
     return 0;
 }
-
-const char *lantern_duty_phase_name(enum lantern_duty_phase phase) {
-    switch (phase) {
-    case LANTERN_DUTY_PHASE_PROPOSAL:
-        return "proposal";
-    case LANTERN_DUTY_PHASE_VOTE:
-        return "vote";
-    case LANTERN_DUTY_PHASE_AGGREGATE:
-        return "aggregate";
-    case LANTERN_DUTY_PHASE_SAFE_TARGET:
-        return "safe-target";
-    case LANTERN_DUTY_PHASE_VOTE_ACCEPT:
-        return "vote-accept";
-    default:
-        return "unknown";
-    }
-}

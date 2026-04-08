@@ -272,14 +272,6 @@ static bool validate_vote_cache_state(
     return true;
 }
 
-size_t lantern_client_attestation_committee_count(const struct lantern_client *client)
-{
-    if (client && client->debug_attestation_committee_count > 0) {
-        return client->debug_attestation_committee_count;
-    }
-    return DEFAULT_SYNC_ATTESTATION_COMMITTEE_COUNT;
-}
-
 bool lantern_client_should_cache_attestation_signature_locked(
     const struct lantern_client *client,
     const LanternVote *vote)
