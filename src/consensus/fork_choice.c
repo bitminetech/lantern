@@ -1402,14 +1402,38 @@ int lantern_fork_choice_prune_states(LanternForkChoice *store) {
         return -1;
     }
 
+    uint64_t finalized_slot = store->blocks[finalized_index].slot;
+    size_t kept = 0;
+    size_t evicted = 0;
+    size_t total_with_state = 0;
     for (size_t i = 0; i < store->block_len; ++i) {
         struct lantern_fork_choice_state_entry *entry = &store->states[i];
-        if (!entry->has_state || canonical[i] != 0u) {
+        if (!entry->has_state) {
+            continue;
+        }
+        total_with_state++;
+        if (i == finalized_index) {
+            kept++;
+            continue;
+        }
+        if (canonical[i] && store->blocks[i].slot >= finalized_slot) {
+            kept++;
             continue;
         }
         lantern_state_reset(&entry->state);
         entry->has_state = false;
+        evicted++;
     }
+
+    lantern_log_info(
+        "forkchoice",
+        NULL,
+        "prune_states finalized_slot=%" PRIu64 " blocks=%zu states_before=%zu evicted=%zu kept=%zu",
+        finalized_slot,
+        store->block_len,
+        total_with_state,
+        evicted,
+        kept);
 
     free(canonical);
     return 0;

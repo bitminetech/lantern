@@ -2,6 +2,7 @@
 
 #include <limits.h>
 #include <inttypes.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -18,12 +19,6 @@
 #include "libp2p/errors.h"
 #include "libp2p/host.h"
 #include "protocol/gossipsub/gossipsub.h"
-#include "../../external/c-libp2p/src/protocol/gossipsub/proto/gen/gossipsub_rpc.pb.h"
-
-libp2p_err_t libp2p_gossipsub_rpc_decode_frame(
-    const uint8_t *frame,
-    size_t frame_len,
-    libp2p_gossipsub_RPC **out_rpc);
 
 #define LANTERN_GOSSIPSUB_TOPIC_CAP 128u
 #define LANTERN_ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
@@ -38,11 +33,88 @@ libp2p_err_t libp2p_gossipsub_rpc_decode_frame(
 #define LANTERN_LEANSPEC_SECONDS_PER_SLOT 4u
 #define LANTERN_LEANSPEC_JUSTIFICATION_LOOKBACK 3u
 #define LANTERN_LEANSPEC_SEEN_TTL_FACTOR 2u
+#define LANTERN_GOSSIPSUB_VALIDATION_WORKER_COUNT 4u
+#define LANTERN_GOSSIPSUB_VALIDATION_QUEUE_CAPACITY 128u
 
 static const char *const k_leanspec_gossipsub_protocols[] = {
     "/meshsub/1.1.0",
     "/meshsub/1.0.0",
 };
+
+enum lantern_gossipsub_validation_job_kind {
+    LANTERN_GOSSIPSUB_JOB_BLOCK = 0,
+    LANTERN_GOSSIPSUB_JOB_VOTE,
+    LANTERN_GOSSIPSUB_JOB_AGGREGATED_ATTESTATION,
+    LANTERN_GOSSIPSUB_JOB_UNKNOWN,
+};
+
+struct lantern_gossipsub_validation_job {
+    enum lantern_gossipsub_validation_job_kind kind;
+    char *topic;
+    uint8_t *payload;
+    size_t payload_len;
+    peer_id_t *propagation_source;
+    uint8_t *message_id;
+    size_t message_id_len;
+};
+
+struct lantern_gossipsub_validation_pool {
+    pthread_mutex_t mutex;
+    pthread_cond_t not_empty;
+    pthread_t *threads;
+    struct lantern_gossipsub_validation_job **queue;
+    size_t worker_count;
+    size_t queue_capacity;
+    size_t queue_head;
+    size_t queue_len;
+    int stopping;
+    int started;
+    struct lantern_gossipsub_service *service;
+};
+
+static void lantern_gossipsub_validation_job_free(struct lantern_gossipsub_validation_job *job) {
+    if (!job) {
+        return;
+    }
+    free(job->topic);
+    free(job->payload);
+    if (job->propagation_source) {
+        peer_id_free(job->propagation_source);
+    }
+    free(job->message_id);
+    free(job);
+}
+
+static enum lantern_gossipsub_validation_job_kind lantern_gossipsub_classify_topic(
+    const struct lantern_gossipsub_service *service,
+    const char *topic);
+static libp2p_gossipsub_validation_result_t lantern_validate_block_payload(
+    struct lantern_gossipsub_service *service,
+    const uint8_t *payload,
+    size_t payload_len,
+    const peer_id_t *propagation_source);
+static libp2p_gossipsub_validation_result_t lantern_validate_vote_payload(
+    struct lantern_gossipsub_service *service,
+    const uint8_t *payload,
+    size_t payload_len,
+    const peer_id_t *propagation_source);
+static libp2p_gossipsub_validation_result_t lantern_validate_aggregated_attestation_payload(
+    struct lantern_gossipsub_service *service,
+    const uint8_t *payload,
+    size_t payload_len,
+    const peer_id_t *propagation_source);
+static int lantern_gossipsub_validation_pool_start(struct lantern_gossipsub_service *service);
+static void lantern_gossipsub_validation_pool_stop(struct lantern_gossipsub_service *service);
+static int lantern_gossipsub_validation_pool_try_enqueue(
+    struct lantern_gossipsub_service *service,
+    struct lantern_gossipsub_validation_job *job);
+static void lantern_gossipsub_message_delivery_cb(
+    libp2p_gossipsub_t *gs,
+    const libp2p_gossipsub_message_t *msg,
+    const uint8_t *message_id,
+    size_t message_id_len,
+    const peer_id_t *propagation_source,
+    void *user_data);
 
 static uint32_t lantern_leanspec_seen_ttl_ms(void) {
     const uint64_t ttl_seconds = (uint64_t)LANTERN_LEANSPEC_SECONDS_PER_SLOT
@@ -208,37 +280,6 @@ static void lantern_gossipsub_score_update(
         peer_text[0] ? peer_text : "unknown",
         update->score,
         update->score_override ? 1 : 0);
-}
-
-static bool gossipsub_message_has_forbidden_metadata(const libp2p_gossipsub_message_t *msg) {
-    if (!msg || !msg->raw_message || msg->raw_message_len == 0) {
-        return false;
-    }
-    libp2p_gossipsub_RPC *rpc = NULL;
-    libp2p_err_t rc = libp2p_gossipsub_rpc_decode_frame(msg->raw_message, msg->raw_message_len, &rpc);
-    if (rc != LIBP2P_ERR_OK || !rpc) {
-        if (rpc) {
-            libp2p_gossipsub_RPC_free(rpc);
-        }
-        return true;
-    }
-    bool forbidden = false;
-    if (libp2p_gossipsub_RPC_has_publish(rpc)) {
-        size_t publish_count = libp2p_gossipsub_RPC_count_publish(rpc);
-        for (size_t i = 0; i < publish_count && !forbidden; ++i) {
-            libp2p_gossipsub_Message *proto_msg = libp2p_gossipsub_RPC_get_at_publish(rpc, i);
-            if (!proto_msg) {
-                continue;
-            }
-            if (libp2p_gossipsub_Message_has_from(proto_msg)
-                || libp2p_gossipsub_Message_has_seqno(proto_msg)
-                || libp2p_gossipsub_Message_has_signature(proto_msg)) {
-                forbidden = true;
-            }
-        }
-    }
-    libp2p_gossipsub_RPC_free(rpc);
-    return forbidden;
 }
 
 static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
@@ -466,49 +507,42 @@ static int subscribe_topic(
     return err == LIBP2P_ERR_OK ? 0 : -1;
 }
 
-static libp2p_gossipsub_validation_result_t gossipsub_vote_validator(
-    const libp2p_gossipsub_message_t *msg,
-    void *user_data);
-
-static int register_vote_validator_for_topic(
-    struct lantern_gossipsub_service *service,
-    const char *topic,
-    const char *error_message,
-    libp2p_gossipsub_validator_handle_t **out_handle) {
-    if (!service || !service->gossipsub || !topic || !out_handle) {
-        return -1;
+static enum lantern_gossipsub_validation_job_kind lantern_gossipsub_classify_topic(
+    const struct lantern_gossipsub_service *service,
+    const char *topic) {
+    if (!service || !topic) {
+        return LANTERN_GOSSIPSUB_JOB_UNKNOWN;
     }
-    *out_handle = NULL;
-    if (!service->vote_handler) {
-        return 0;
+    if (service->block_topic[0] != '\0' && strcmp(topic, service->block_topic) == 0) {
+        return LANTERN_GOSSIPSUB_JOB_BLOCK;
     }
-
-    libp2p_gossipsub_validator_def_t def = {
-        .struct_size = sizeof(def),
-        .type = LIBP2P_GOSSIPSUB_VALIDATOR_SYNC,
-        .sync_fn = gossipsub_vote_validator,
-        .async_fn = NULL,
-        .user_data = service
-    };
-    if (libp2p_gossipsub_add_validator(service->gossipsub, topic, &def, out_handle) != LIBP2P_ERR_OK) {
-        lantern_log_error(
-            "gossip",
-            NULL,
-            "%s",
-            error_message ? error_message : "failed to register vote gossip validator");
-        return -1;
+    if (service->aggregated_attestation_topic[0] != '\0'
+        && strcmp(topic, service->aggregated_attestation_topic) == 0) {
+        return LANTERN_GOSSIPSUB_JOB_AGGREGATED_ATTESTATION;
     }
-    return 0;
+    if (service->vote_topic[0] != '\0' && strcmp(topic, service->vote_topic) == 0) {
+        return LANTERN_GOSSIPSUB_JOB_VOTE;
+    }
+    if (service->vote_subnet_topic[0] != '\0' && strcmp(topic, service->vote_subnet_topic) == 0) {
+        return LANTERN_GOSSIPSUB_JOB_VOTE;
+    }
+    for (size_t i = 0; i < service->extra_vote_subnet_topic_count; ++i) {
+        if (strcmp(topic, service->extra_vote_subnet_topics[i]) == 0) {
+            return LANTERN_GOSSIPSUB_JOB_VOTE;
+        }
+    }
+    return LANTERN_GOSSIPSUB_JOB_UNKNOWN;
 }
 
-static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
-    const libp2p_gossipsub_message_t *msg,
-    void *user_data) {
-    struct lantern_gossipsub_service *service = (struct lantern_gossipsub_service *)user_data;
-    if (!service || !msg) {
+static libp2p_gossipsub_validation_result_t lantern_validate_block_payload(
+    struct lantern_gossipsub_service *service,
+    const uint8_t *payload,
+    size_t payload_len,
+    const peer_id_t *propagation_source) {
+    if (!service) {
         return LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
     }
-    if (!service->block_handler || !msg->data || msg->data_len == 0) {
+    if (!service->block_handler || !payload || payload_len == 0) {
         return LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT;
     }
 
@@ -519,26 +553,19 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
 
     libp2p_gossipsub_validation_result_t result = LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT;
     char peer_text[128];
-    describe_peer_id(msg->from, peer_text, sizeof(peer_text));
+    describe_peer_id(propagation_source, peer_text, sizeof(peer_text));
     const struct lantern_log_metadata meta = {.peer = peer_text[0] ? peer_text : NULL};
-
-    if (gossipsub_message_has_forbidden_metadata(msg)) {
-        lantern_log_debug(
-            "gossip",
-            &meta,
-            "block gossip contains author/seqno/signature metadata (allowing for compatibility)");
-    }
 
     lantern_log_debug(
         "gossip",
         &meta,
         "block gossip message received bytes=%zu from_peer=%s",
-        msg->data_len,
+        payload_len,
         peer_text[0] ? peer_text : "(local)");
     if (lantern_gossip_decode_signed_block_snappy(
             &block,
-            msg->data,
-            msg->data_len,
+            payload,
+            payload_len,
             &raw_block_ssz,
             &raw_block_ssz_len)
         != 0) {
@@ -546,20 +573,19 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
             "gossip",
             &meta,
             "failed to decode gossip block payload bytes=%zu",
-            msg->data_len);
-        maybe_dump_invalid_gossip_payload(service, "block", msg->data, msg->data_len, &meta);
+            payload_len);
+        maybe_dump_invalid_gossip_payload(service, "block", payload, payload_len, &meta);
         result = LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
         goto cleanup;
     }
 
     if (service->block_handler(
             &block,
-            msg->from,
+            propagation_source,
             raw_block_ssz,
             raw_block_ssz_len,
             service->block_handler_user_data)
-        != 0)
-    {
+        != 0) {
         result = LIBP2P_GOSSIPSUB_VALIDATION_IGNORE;
     }
     char block_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
@@ -572,8 +598,7 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
         != 0) {
         block_root_hex[0] = '\0';
     }
-    if (result == LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT)
-    {
+    if (result == LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT) {
         lantern_log_debug(
             "gossip",
             &meta,
@@ -581,9 +606,7 @@ static libp2p_gossipsub_validation_result_t gossipsub_block_validator(
             block.message.block.slot,
             block.message.block.proposer_index,
             block_root_hex[0] ? block_root_hex : "0x0");
-    }
-    else if (result == LIBP2P_GOSSIPSUB_VALIDATION_IGNORE)
-    {
+    } else if (result == LIBP2P_GOSSIPSUB_VALIDATION_IGNORE) {
         lantern_log_debug(
             "gossip",
             &meta,
@@ -599,14 +622,15 @@ cleanup:
     return result;
 }
 
-static libp2p_gossipsub_validation_result_t gossipsub_vote_validator(
-    const libp2p_gossipsub_message_t *msg,
-    void *user_data) {
-    struct lantern_gossipsub_service *service = (struct lantern_gossipsub_service *)user_data;
-    if (!service || !msg) {
+static libp2p_gossipsub_validation_result_t lantern_validate_vote_payload(
+    struct lantern_gossipsub_service *service,
+    const uint8_t *payload,
+    size_t payload_len,
+    const peer_id_t *propagation_source) {
+    if (!service) {
         return LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
     }
-    if (!service->vote_handler || !msg->data || msg->data_len == 0) {
+    if (!service->vote_handler || !payload || payload_len == 0) {
         return LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT;
     }
 
@@ -615,34 +639,26 @@ static libp2p_gossipsub_validation_result_t gossipsub_vote_validator(
 
     libp2p_gossipsub_validation_result_t result = LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT;
     char peer_text[128];
-    describe_peer_id(msg->from, peer_text, sizeof(peer_text));
+    describe_peer_id(propagation_source, peer_text, sizeof(peer_text));
     const struct lantern_log_metadata meta = {.peer = peer_text[0] ? peer_text : NULL};
-
-    if (gossipsub_message_has_forbidden_metadata(msg)) {
-        lantern_log_debug(
-            "gossip",
-            &meta,
-            "vote gossip contains author/seqno/signature metadata (allowing for compatibility)");
-    }
 
     lantern_log_debug(
         "gossip",
         &meta,
         "vote gossip message received bytes=%zu",
-        msg->data_len);
-    if (lantern_gossip_decode_signed_vote_snappy(&vote, msg->data, msg->data_len) != 0) {
+        payload_len);
+    if (lantern_gossip_decode_signed_vote_snappy(&vote, payload, payload_len) != 0) {
         lantern_log_warn(
             "gossip",
             &meta,
             "failed to decode gossip vote payload bytes=%zu",
-            msg->data_len);
-        maybe_dump_invalid_gossip_payload(service, "vote", msg->data, msg->data_len, &meta);
+            payload_len);
+        maybe_dump_invalid_gossip_payload(service, "vote", payload, payload_len, &meta);
         result = LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
         goto cleanup;
     }
 
-    if (service->vote_handler(&vote, msg->from, service->vote_handler_user_data) != 0)
-    {
+    if (service->vote_handler(&vote, propagation_source, service->vote_handler_user_data) != 0) {
         result = LIBP2P_GOSSIPSUB_VALIDATION_IGNORE;
     }
     char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
@@ -655,8 +671,7 @@ static libp2p_gossipsub_validation_result_t gossipsub_vote_validator(
         != 0) {
         head_hex[0] = '\0';
     }
-    if (result == LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT)
-    {
+    if (result == LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT) {
         lantern_log_debug(
             "gossip",
             &meta,
@@ -664,9 +679,7 @@ static libp2p_gossipsub_validation_result_t gossipsub_vote_validator(
             vote.data.validator_id,
             vote.data.slot,
             head_hex[0] ? head_hex : "0x0");
-    }
-    else if (result == LIBP2P_GOSSIPSUB_VALIDATION_IGNORE)
-    {
+    } else if (result == LIBP2P_GOSSIPSUB_VALIDATION_IGNORE) {
         lantern_log_debug(
             "gossip",
             &meta,
@@ -680,14 +693,15 @@ cleanup:
     return result;
 }
 
-static libp2p_gossipsub_validation_result_t gossipsub_aggregated_attestation_validator(
-    const libp2p_gossipsub_message_t *msg,
-    void *user_data) {
-    struct lantern_gossipsub_service *service = (struct lantern_gossipsub_service *)user_data;
-    if (!service || !msg) {
+static libp2p_gossipsub_validation_result_t lantern_validate_aggregated_attestation_payload(
+    struct lantern_gossipsub_service *service,
+    const uint8_t *payload,
+    size_t payload_len,
+    const peer_id_t *propagation_source) {
+    if (!service) {
         return LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
     }
-    if (!service->aggregated_attestation_handler || !msg->data || msg->data_len == 0) {
+    if (!service->aggregated_attestation_handler || !payload || payload_len == 0) {
         return LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT;
     }
 
@@ -696,32 +710,25 @@ static libp2p_gossipsub_validation_result_t gossipsub_aggregated_attestation_val
 
     libp2p_gossipsub_validation_result_t result = LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT;
     char peer_text[128];
-    describe_peer_id(msg->from, peer_text, sizeof(peer_text));
+    describe_peer_id(propagation_source, peer_text, sizeof(peer_text));
     const struct lantern_log_metadata meta = {.peer = peer_text[0] ? peer_text : NULL};
-
-    if (gossipsub_message_has_forbidden_metadata(msg)) {
-        lantern_log_debug(
-            "gossip",
-            &meta,
-            "aggregated attestation gossip contains author/seqno/signature metadata (allowing for compatibility)");
-    }
 
     lantern_log_debug(
         "gossip",
         &meta,
         "aggregated attestation gossip message received bytes=%zu",
-        msg->data_len);
-    if (lantern_gossip_decode_signed_aggregated_attestation_snappy(&attestation, msg->data, msg->data_len) != 0) {
+        payload_len);
+    if (lantern_gossip_decode_signed_aggregated_attestation_snappy(&attestation, payload, payload_len) != 0) {
         lantern_log_warn(
             "gossip",
             &meta,
             "failed to decode aggregated attestation gossip payload bytes=%zu",
-            msg->data_len);
+            payload_len);
         maybe_dump_invalid_gossip_payload(
             service,
             "aggregated_attestation",
-            msg->data,
-            msg->data_len,
+            payload,
+            payload_len,
             &meta);
         result = LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
         goto cleanup;
@@ -729,7 +736,7 @@ static libp2p_gossipsub_validation_result_t gossipsub_aggregated_attestation_val
 
     if (service->aggregated_attestation_handler(
             &attestation,
-            msg->from,
+            propagation_source,
             service->aggregated_attestation_handler_user_data)
         != 0) {
         result = LIBP2P_GOSSIPSUB_VALIDATION_IGNORE;
@@ -738,6 +745,320 @@ static libp2p_gossipsub_validation_result_t gossipsub_aggregated_attestation_val
 cleanup:
     lantern_signed_aggregated_attestation_reset(&attestation);
     return result;
+}
+
+static libp2p_gossipsub_validation_result_t lantern_gossipsub_validation_job_run(
+    struct lantern_gossipsub_service *service,
+    const struct lantern_gossipsub_validation_job *job) {
+    if (!service || !job) {
+        return LIBP2P_GOSSIPSUB_VALIDATION_IGNORE;
+    }
+
+    switch (job->kind) {
+    case LANTERN_GOSSIPSUB_JOB_BLOCK:
+        return lantern_validate_block_payload(service, job->payload, job->payload_len, job->propagation_source);
+    case LANTERN_GOSSIPSUB_JOB_VOTE:
+        return lantern_validate_vote_payload(service, job->payload, job->payload_len, job->propagation_source);
+    case LANTERN_GOSSIPSUB_JOB_AGGREGATED_ATTESTATION:
+        return lantern_validate_aggregated_attestation_payload(
+            service,
+            job->payload,
+            job->payload_len,
+            job->propagation_source);
+    default:
+        return LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT;
+    }
+}
+
+static struct lantern_gossipsub_validation_job *lantern_gossipsub_validation_job_new(
+    enum lantern_gossipsub_validation_job_kind kind,
+    const char *topic,
+    const uint8_t *payload,
+    size_t payload_len,
+    const peer_id_t *propagation_source,
+    const uint8_t *message_id,
+    size_t message_id_len) {
+    if (!topic || !message_id || message_id_len == 0) {
+        return NULL;
+    }
+
+    struct lantern_gossipsub_validation_job *job = calloc(1, sizeof(*job));
+    if (!job) {
+        return NULL;
+    }
+    job->kind = kind;
+    job->topic = strdup(topic);
+    if (!job->topic) {
+        lantern_gossipsub_validation_job_free(job);
+        return NULL;
+    }
+    if (payload && payload_len > 0) {
+        job->payload = malloc(payload_len);
+        if (!job->payload) {
+            lantern_gossipsub_validation_job_free(job);
+            return NULL;
+        }
+        memcpy(job->payload, payload, payload_len);
+        job->payload_len = payload_len;
+    }
+    if (propagation_source) {
+        if (peer_id_clone(propagation_source, &job->propagation_source) != PEER_ID_OK || !job->propagation_source) {
+            lantern_gossipsub_validation_job_free(job);
+            return NULL;
+        }
+    }
+    job->message_id = malloc(message_id_len);
+    if (!job->message_id) {
+        lantern_gossipsub_validation_job_free(job);
+        return NULL;
+    }
+    memcpy(job->message_id, message_id, message_id_len);
+    job->message_id_len = message_id_len;
+    return job;
+}
+
+static void *lantern_gossipsub_validation_worker_main(void *user_data) {
+    struct lantern_gossipsub_validation_pool *pool = (struct lantern_gossipsub_validation_pool *)user_data;
+    if (!pool) {
+        return NULL;
+    }
+
+    for (;;) {
+        pthread_mutex_lock(&pool->mutex);
+        while (!pool->stopping && pool->queue_len == 0) {
+            pthread_cond_wait(&pool->not_empty, &pool->mutex);
+        }
+        if (pool->stopping && pool->queue_len == 0) {
+            pthread_mutex_unlock(&pool->mutex);
+            break;
+        }
+
+        struct lantern_gossipsub_validation_job *job = pool->queue[pool->queue_head];
+        pool->queue[pool->queue_head] = NULL;
+        pool->queue_head = (pool->queue_head + 1u) % pool->queue_capacity;
+        pool->queue_len--;
+        pthread_mutex_unlock(&pool->mutex);
+
+        if (!job) {
+            continue;
+        }
+
+        libp2p_gossipsub_validation_result_t result = lantern_gossipsub_validation_job_run(pool->service, job);
+        if (pool->service && pool->service->gossipsub) {
+            (void)libp2p_gossipsub_report_message_validation_result(
+                pool->service->gossipsub,
+                job->message_id,
+                job->message_id_len,
+                result);
+        }
+        lantern_gossipsub_validation_job_free(job);
+    }
+
+    return NULL;
+}
+
+static int lantern_gossipsub_validation_pool_start(struct lantern_gossipsub_service *service) {
+    if (!service) {
+        return -1;
+    }
+    if (service->validation_pool) {
+        return 0;
+    }
+
+    struct lantern_gossipsub_validation_pool *pool = calloc(1, sizeof(*pool));
+    if (!pool) {
+        return -1;
+    }
+    pool->service = service;
+    pool->worker_count = LANTERN_GOSSIPSUB_VALIDATION_WORKER_COUNT;
+    pool->queue_capacity = LANTERN_GOSSIPSUB_VALIDATION_QUEUE_CAPACITY;
+    pool->threads = calloc(pool->worker_count, sizeof(*pool->threads));
+    pool->queue = calloc(pool->queue_capacity, sizeof(*pool->queue));
+    if (!pool->threads || !pool->queue) {
+        free(pool->threads);
+        free(pool->queue);
+        free(pool);
+        return -1;
+    }
+    if (pthread_mutex_init(&pool->mutex, NULL) != 0) {
+        free(pool->threads);
+        free(pool->queue);
+        free(pool);
+        return -1;
+    }
+    if (pthread_cond_init(&pool->not_empty, NULL) != 0) {
+        pthread_mutex_destroy(&pool->mutex);
+        free(pool->threads);
+        free(pool->queue);
+        free(pool);
+        return -1;
+    }
+
+    size_t started = 0;
+    for (; started < pool->worker_count; ++started) {
+        if (pthread_create(&pool->threads[started], NULL, lantern_gossipsub_validation_worker_main, pool) != 0) {
+            pool->stopping = 1;
+            pthread_cond_broadcast(&pool->not_empty);
+            for (size_t i = 0; i < started; ++i) {
+                pthread_join(pool->threads[i], NULL);
+            }
+            pthread_cond_destroy(&pool->not_empty);
+            pthread_mutex_destroy(&pool->mutex);
+            free(pool->threads);
+            free(pool->queue);
+            free(pool);
+            return -1;
+        }
+    }
+
+    pool->started = 1;
+    service->validation_pool = pool;
+    return 0;
+}
+
+static void lantern_gossipsub_validation_pool_stop(struct lantern_gossipsub_service *service) {
+    if (!service || !service->validation_pool) {
+        return;
+    }
+
+    struct lantern_gossipsub_validation_pool *pool = service->validation_pool;
+    service->validation_pool = NULL;
+
+    pthread_mutex_lock(&pool->mutex);
+    pool->stopping = 1;
+    pthread_cond_broadcast(&pool->not_empty);
+    while (pool->queue_len > 0) {
+        struct lantern_gossipsub_validation_job *job = pool->queue[pool->queue_head];
+        pool->queue[pool->queue_head] = NULL;
+        pool->queue_head = (pool->queue_head + 1u) % pool->queue_capacity;
+        pool->queue_len--;
+        pthread_mutex_unlock(&pool->mutex);
+
+        if (job) {
+            if (service->gossipsub) {
+                (void)libp2p_gossipsub_report_message_validation_result(
+                    service->gossipsub,
+                    job->message_id,
+                    job->message_id_len,
+                    LIBP2P_GOSSIPSUB_VALIDATION_IGNORE);
+            }
+            lantern_gossipsub_validation_job_free(job);
+        }
+
+        pthread_mutex_lock(&pool->mutex);
+    }
+    pthread_mutex_unlock(&pool->mutex);
+
+    if (pool->started) {
+        for (size_t i = 0; i < pool->worker_count; ++i) {
+            pthread_join(pool->threads[i], NULL);
+        }
+    }
+
+    pthread_cond_destroy(&pool->not_empty);
+    pthread_mutex_destroy(&pool->mutex);
+    free(pool->threads);
+    free(pool->queue);
+    free(pool);
+}
+
+static int lantern_gossipsub_validation_pool_try_enqueue(
+    struct lantern_gossipsub_service *service,
+    struct lantern_gossipsub_validation_job *job) {
+    if (!service || !service->validation_pool || !job) {
+        return -1;
+    }
+
+    struct lantern_gossipsub_validation_pool *pool = service->validation_pool;
+    pthread_mutex_lock(&pool->mutex);
+    if (pool->stopping || pool->queue_len >= pool->queue_capacity) {
+        pthread_mutex_unlock(&pool->mutex);
+        return -1;
+    }
+
+    size_t idx = (pool->queue_head + pool->queue_len) % pool->queue_capacity;
+    pool->queue[idx] = job;
+    pool->queue_len++;
+    pthread_cond_signal(&pool->not_empty);
+    pthread_mutex_unlock(&pool->mutex);
+    return 0;
+}
+
+static void lantern_gossipsub_message_delivery_cb(
+    libp2p_gossipsub_t *gs,
+    const libp2p_gossipsub_message_t *msg,
+    const uint8_t *message_id,
+    size_t message_id_len,
+    const peer_id_t *propagation_source,
+    void *user_data) {
+    struct lantern_gossipsub_service *service = (struct lantern_gossipsub_service *)user_data;
+    if (!service || !gs || !msg || !msg->topic.topic || !message_id || message_id_len == 0) {
+        return;
+    }
+
+    enum lantern_gossipsub_validation_job_kind kind = lantern_gossipsub_classify_topic(service, msg->topic.topic);
+    int handler_missing = 0;
+    switch (kind) {
+    case LANTERN_GOSSIPSUB_JOB_BLOCK:
+        handler_missing = service->block_handler == NULL;
+        break;
+    case LANTERN_GOSSIPSUB_JOB_VOTE:
+        handler_missing = service->vote_handler == NULL;
+        break;
+    case LANTERN_GOSSIPSUB_JOB_AGGREGATED_ATTESTATION:
+        handler_missing = service->aggregated_attestation_handler == NULL;
+        break;
+    default:
+        handler_missing = 1;
+        break;
+    }
+
+    if (handler_missing || !msg->data || msg->data_len == 0) {
+        (void)libp2p_gossipsub_report_message_validation_result(
+            gs,
+            message_id,
+            message_id_len,
+            LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT);
+        return;
+    }
+
+    struct lantern_gossipsub_validation_job *job = lantern_gossipsub_validation_job_new(
+        kind,
+        msg->topic.topic,
+        msg->data,
+        msg->data_len,
+        propagation_source,
+        message_id,
+        message_id_len);
+    if (!job) {
+        lantern_log_warn(
+            "gossip",
+            NULL,
+            "failed to allocate gossip validation job topic=%s bytes=%zu; ignoring message",
+            msg->topic.topic,
+            msg->data_len);
+        (void)libp2p_gossipsub_report_message_validation_result(
+            gs,
+            message_id,
+            message_id_len,
+            LIBP2P_GOSSIPSUB_VALIDATION_IGNORE);
+        return;
+    }
+
+    if (lantern_gossipsub_validation_pool_try_enqueue(service, job) != 0) {
+        lantern_log_warn(
+            "gossip",
+            NULL,
+            "gossip validation queue full or stopping topic=%s bytes=%zu; ignoring message",
+            msg->topic.topic,
+            msg->data_len);
+        lantern_gossipsub_validation_job_free(job);
+        (void)libp2p_gossipsub_report_message_validation_result(
+            gs,
+            message_id,
+            message_id_len,
+            LIBP2P_GOSSIPSUB_VALIDATION_IGNORE);
+    }
 }
 
 void lantern_gossipsub_service_init(struct lantern_gossipsub_service *service) {
@@ -791,6 +1112,10 @@ void lantern_gossipsub_service_stop(struct lantern_gossipsub_service *service) {
     if (!service) {
         return;
     }
+    if (service->gossipsub) {
+        (void)libp2p_gossipsub_set_message_delivery_callback(service->gossipsub, NULL, NULL);
+    }
+    lantern_gossipsub_validation_pool_stop(service);
     lantern_gossipsub_service_remove_validators(service);
     if (service->gossipsub) {
         libp2p_gossipsub_stop(service->gossipsub);
@@ -822,6 +1147,7 @@ void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service) 
     free(service->extra_vote_subnet_validator_handles);
     service->extra_vote_subnet_validator_handles = NULL;
     service->extra_vote_subnet_topic_count = 0;
+    service->validation_pool = NULL;
 }
 
 int lantern_gossipsub_service_start(
@@ -919,6 +1245,18 @@ int lantern_gossipsub_service_start(
         return -1;
     }
     service->gossipsub = gs;
+    if (lantern_gossipsub_validation_pool_start(service) != 0) {
+        lantern_gossipsub_service_reset(service);
+        return -1;
+    }
+    if (libp2p_gossipsub_set_message_delivery_callback(
+            service->gossipsub,
+            lantern_gossipsub_message_delivery_cb,
+            service)
+        != LIBP2P_ERR_OK) {
+        lantern_gossipsub_service_reset(service);
+        return -1;
+    }
     if (subscribe_topic(service, service->block_topic) != 0) {
         lantern_gossipsub_service_reset(service);
         return -1;
@@ -959,71 +1297,6 @@ int lantern_gossipsub_service_start(
         &(const struct lantern_log_metadata){.peer = config->devnet},
         "subscribed gossipsub topic=%s",
         service->aggregated_attestation_topic);
-
-    if (service->block_handler) {
-        libp2p_gossipsub_validator_def_t def = {
-            .struct_size = sizeof(def),
-            .type = LIBP2P_GOSSIPSUB_VALIDATOR_SYNC,
-            .sync_fn = gossipsub_block_validator,
-            .async_fn = NULL,
-            .user_data = service
-        };
-        if (libp2p_gossipsub_add_validator(service->gossipsub, service->block_topic, &def, &service->block_validator_handle)
-            != LIBP2P_ERR_OK) {
-            lantern_log_error(
-                "gossip",
-                NULL,
-                "failed to register block gossip validator");
-            lantern_gossipsub_service_reset(service);
-            return -1;
-        }
-    }
-
-    if (!service->subscribe_attestation_subnet) {
-        if (register_vote_validator_for_topic(
-                service,
-                service->vote_topic,
-                "failed to register vote gossip validator",
-                &service->vote_validator_handle)
-            != 0) {
-            lantern_gossipsub_service_reset(service);
-            return -1;
-        }
-    }
-    if (service->subscribe_attestation_subnet) {
-        if (register_vote_validator_for_topic(
-                service,
-                service->vote_subnet_topic,
-                "failed to register subnet vote gossip validator",
-                &service->vote_subnet_validator_handle)
-            != 0) {
-            lantern_gossipsub_service_reset(service);
-            return -1;
-        }
-    }
-
-    if (service->aggregated_attestation_handler) {
-        libp2p_gossipsub_validator_def_t def = {
-            .struct_size = sizeof(def),
-            .type = LIBP2P_GOSSIPSUB_VALIDATOR_SYNC,
-            .sync_fn = gossipsub_aggregated_attestation_validator,
-            .async_fn = NULL,
-            .user_data = service
-        };
-        if (libp2p_gossipsub_add_validator(
-                service->gossipsub,
-                service->aggregated_attestation_topic,
-                &def,
-                &service->aggregated_attestation_validator_handle)
-            != LIBP2P_ERR_OK) {
-            lantern_log_error(
-                "gossip",
-                NULL,
-                "failed to register aggregated attestation gossip validator");
-            lantern_gossipsub_service_reset(service);
-            return -1;
-        }
-    }
 
     lantern_log_info(
         "network",
@@ -1204,17 +1477,6 @@ int lantern_gossipsub_service_subscribe_attestation_subnet(
         "subscribed gossipsub topic=%s",
         topic);
 
-    libp2p_gossipsub_validator_handle_t *handle = NULL;
-    if (register_vote_validator_for_topic(
-            service,
-            topic,
-            "failed to register subnet vote gossip validator",
-            &handle)
-        != 0) {
-        (void)libp2p_gossipsub_unsubscribe(service->gossipsub, topic);
-        return -1;
-    }
-
     size_t new_count = service->extra_vote_subnet_topic_count + 1u;
     char (*new_topics)[LANTERN_GOSSIPSUB_TOPIC_CAP] =
         calloc(new_count, sizeof(*new_topics));
@@ -1223,9 +1485,6 @@ int lantern_gossipsub_service_subscribe_attestation_subnet(
     if (!new_topics || !new_handles) {
         free(new_topics);
         free(new_handles);
-        if (handle) {
-            (void)libp2p_gossipsub_remove_validator(service->gossipsub, handle);
-        }
         (void)libp2p_gossipsub_unsubscribe(service->gossipsub, topic);
         return -1;
     }
@@ -1240,7 +1499,7 @@ int lantern_gossipsub_service_subscribe_attestation_subnet(
             service->extra_vote_subnet_topic_count * sizeof(*new_handles));
     }
     memcpy(new_topics[service->extra_vote_subnet_topic_count], topic, sizeof(topic));
-    new_handles[service->extra_vote_subnet_topic_count] = handle;
+    new_handles[service->extra_vote_subnet_topic_count] = NULL;
 
     free(service->extra_vote_subnet_topics);
     free(service->extra_vote_subnet_validator_handles);

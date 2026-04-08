@@ -10,6 +10,7 @@
 struct libp2p_host;
 typedef struct libp2p_gossipsub libp2p_gossipsub_t;
 typedef struct libp2p_gossipsub_validator_handle libp2p_gossipsub_validator_handle_t;
+struct lantern_gossipsub_validation_pool;
 
 #ifdef __cplusplus
 extern "C" {
@@ -64,6 +65,7 @@ struct lantern_gossipsub_service {
     char (*extra_vote_subnet_topics)[128];
     libp2p_gossipsub_validator_handle_t **extra_vote_subnet_validator_handles;
     size_t extra_vote_subnet_topic_count;
+    struct lantern_gossipsub_validation_pool *validation_pool;
 };
 
 void lantern_gossipsub_service_init(struct lantern_gossipsub_service *service);
