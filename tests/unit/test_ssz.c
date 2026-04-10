@@ -1356,18 +1356,19 @@ static void test_leanspec_vectors(void) {
         "LANTERN_SSZ_VECTOR_SIGNED_BLOCK",
         signed_block_encoded,
         written);
+    g_current_test = "leanspec_signed_block";
+    expect_bytes_equal(
+        LANTERN_SSZ_VECTOR_SIGNED_BLOCK,
+        sizeof(LANTERN_SSZ_VECTOR_SIGNED_BLOCK),
+        signed_block_encoded,
+        written);
     LanternSignedBlock signed_block_decoded;
     lantern_signed_block_with_attestation_init(&signed_block_decoded);
-    /*
-     * TODO(devnet4): refresh the checked-in signed block byte vector.
-     * The old fixture was generated before the XMSS signature size change,
-     * so we keep round-trip coverage here instead of pinning stale bytes.
-     */
     expect_ok(
         lantern_ssz_decode_signed_block(
             &signed_block_decoded,
-            signed_block_encoded,
-            written),
+            LANTERN_SSZ_VECTOR_SIGNED_BLOCK,
+            sizeof(LANTERN_SSZ_VECTOR_SIGNED_BLOCK)),
         "signed block decode");
     expect_block_signatures_equal(&signed_block_expected.signatures, &signed_block_decoded.signatures);
     assert(signed_block_decoded.block.body.attestations.length

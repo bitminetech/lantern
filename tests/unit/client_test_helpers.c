@@ -17,177 +17,6 @@
 
 static int client_test_load_fixture_genesis_time(uint64_t *out_time);
 
-#define CLIENT_TEST_KEY_CACHE_SIZE 16u
-
-struct client_test_cached_keypair
-{
-    uint8_t *public_key_bytes;
-    size_t public_key_len;
-    uint8_t *secret_key_bytes;
-    size_t secret_key_len;
-};
-
-static struct client_test_cached_keypair g_client_test_cached_keypairs[CLIENT_TEST_KEY_CACHE_SIZE];
-
-static int client_test_keypair_self_check(
-    struct PQSignatureSchemePublicKey *pub,
-    struct PQSignatureSchemeSecretKey *secret)
-{
-    LanternRoot message;
-    LanternSignature signature;
-
-    if (!pub || !secret)
-    {
-        return -1;
-    }
-
-    memset(&message, 0, sizeof(message));
-    memset(&signature, 0, sizeof(signature));
-
-    if (!lantern_signature_sign(secret, 2u, &message, &signature))
-    {
-        return -1;
-    }
-    if (!lantern_signature_verify_pk(pub, 2u, &signature, &message))
-    {
-        return -1;
-    }
-    return 0;
-}
-
-static int client_test_cache_generated_keypair(size_t validator_index)
-{
-    struct client_test_cached_keypair *cache = NULL;
-    struct PQSignatureSchemePublicKey *pub = NULL;
-    struct PQSignatureSchemeSecretKey *secret = NULL;
-    uint8_t dummy = 0u;
-    uintptr_t public_written = 0;
-    uintptr_t secret_needed = 0;
-    uintptr_t secret_written = 0;
-
-    if (validator_index >= CLIENT_TEST_KEY_CACHE_SIZE)
-    {
-        return -1;
-    }
-
-    cache = &g_client_test_cached_keypairs[validator_index];
-    if (cache->public_key_bytes && cache->secret_key_bytes)
-    {
-        return 0;
-    }
-
-    if (pq_key_gen(0u, 1u << 18, &pub, &secret) != Success || !pub || !secret)
-    {
-        goto fail;
-    }
-    if (client_test_keypair_self_check(pub, secret) != 0)
-    {
-        goto fail;
-    }
-
-    cache->public_key_len = LANTERN_VALIDATOR_PUBKEY_SIZE;
-    cache->public_key_bytes = malloc(cache->public_key_len);
-    if (!cache->public_key_bytes)
-    {
-        goto fail;
-    }
-    if (pq_public_key_serialize(
-            pub,
-            cache->public_key_bytes,
-            cache->public_key_len,
-            &public_written)
-        != Success
-        || public_written != cache->public_key_len)
-    {
-        goto fail;
-    }
-
-    if (pq_secret_key_serialize(secret, &dummy, 1u, &secret_needed) != UnknownError || secret_needed == 0u)
-    {
-        goto fail;
-    }
-    cache->secret_key_len = (size_t)secret_needed;
-    cache->secret_key_bytes = malloc(cache->secret_key_len);
-    if (!cache->secret_key_bytes)
-    {
-        goto fail;
-    }
-    if (pq_secret_key_serialize(
-            secret,
-            cache->secret_key_bytes,
-            cache->secret_key_len,
-            &secret_written)
-        != Success
-        || secret_written != cache->secret_key_len)
-    {
-        goto fail;
-    }
-
-    pq_public_key_free(pub);
-    pq_secret_key_free(secret);
-    return 0;
-
-fail:
-    if (pub)
-    {
-        pq_public_key_free(pub);
-    }
-    if (secret)
-    {
-        pq_secret_key_free(secret);
-    }
-    free(cache ? cache->public_key_bytes : NULL);
-    free(cache ? cache->secret_key_bytes : NULL);
-    if (cache)
-    {
-        cache->public_key_bytes = NULL;
-        cache->public_key_len = 0u;
-        cache->secret_key_bytes = NULL;
-        cache->secret_key_len = 0u;
-    }
-    return -1;
-}
-
-static int client_test_load_cached_generated_keypair(
-    size_t validator_index,
-    struct PQSignatureSchemePublicKey **out_pub,
-    struct PQSignatureSchemeSecretKey **out_secret)
-{
-    struct client_test_cached_keypair *cache = NULL;
-
-    if (!out_pub || !out_secret)
-    {
-        return -1;
-    }
-    if (client_test_cache_generated_keypair(validator_index) != 0)
-    {
-        return -1;
-    }
-
-    cache = &g_client_test_cached_keypairs[validator_index];
-    if (pq_public_key_deserialize(
-            cache->public_key_bytes,
-            cache->public_key_len,
-            out_pub)
-        != Success
-        || !*out_pub)
-    {
-        return -1;
-    }
-    if (pq_secret_key_deserialize(
-            cache->secret_key_bytes,
-            cache->secret_key_len,
-            out_secret)
-        != Success
-        || !*out_secret)
-    {
-        pq_public_key_free(*out_pub);
-        *out_pub = NULL;
-        return -1;
-    }
-    return 0;
-}
-
 int client_test_load_precomputed_keypair(
     size_t validator_index,
     struct PQSignatureSchemePublicKey **out_pub,
@@ -217,19 +46,14 @@ int client_test_load_precomputed_keypair(
     }
 
     if (lantern_xmss_load_public_file(pk_path, out_pub) != 0 || !*out_pub) {
-        return client_test_load_cached_generated_keypair(validator_index, out_pub, out_secret);
+        fprintf(stderr, "failed to load precomputed public key from %s\n", pk_path);
+        return -1;
     }
     if (lantern_xmss_load_secret_file(sk_path, out_secret) != 0 || !*out_secret) {
+        fprintf(stderr, "failed to load precomputed secret key from %s\n", sk_path);
         pq_public_key_free(*out_pub);
         *out_pub = NULL;
-        return client_test_load_cached_generated_keypair(validator_index, out_pub, out_secret);
-    }
-    if (client_test_keypair_self_check(*out_pub, *out_secret) != 0) {
-        pq_public_key_free(*out_pub);
-        pq_secret_key_free(*out_secret);
-        *out_pub = NULL;
-        *out_secret = NULL;
-        return client_test_load_cached_generated_keypair(validator_index, out_pub, out_secret);
+        return -1;
     }
     return 0;
 }
