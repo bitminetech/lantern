@@ -854,10 +854,96 @@ static int build_cached_proof_for_vote(
     return 0;
 }
 
+static int build_single_participant_cached_proof(
+    LanternAggregatedSignatureProof *out_proof,
+    uint64_t validator_id,
+    const uint8_t *pubkey,
+    const LanternSignature *signature,
+    const LanternRoot *data_root,
+    uint64_t epoch) {
+    if (!out_proof || !pubkey || !signature || !data_root || validator_id >= LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return -1;
+    }
+
+    lantern_aggregated_signature_proof_init(out_proof);
+    size_t bit_length = (size_t)validator_id + 1u;
+    if (lantern_bitlist_resize(&out_proof->participants, bit_length) != 0) {
+        lantern_aggregated_signature_proof_reset(out_proof);
+        return -1;
+    }
+    if (lantern_bitlist_set(&out_proof->participants, (size_t)validator_id, true) != 0) {
+        lantern_aggregated_signature_proof_reset(out_proof);
+        return -1;
+    }
+
+    const uint8_t *pubkey_refs[1] = {pubkey};
+    if (!lantern_signature_aggregate(
+            pubkey_refs,
+            signature,
+            1u,
+            data_root,
+            epoch,
+            &out_proof->proof_data)) {
+        lantern_aggregated_signature_proof_reset(out_proof);
+        return -1;
+    }
+    return 0;
+}
+
+static int build_multi_participant_cached_proof(
+    LanternAggregatedSignatureProof *out_proof,
+    const uint64_t *validator_ids,
+    const uint8_t *const *pubkeys,
+    const LanternSignature *signatures,
+    size_t count,
+    const LanternRoot *data_root,
+    uint64_t epoch) {
+    if (!out_proof || !validator_ids || !pubkeys || !signatures || count == 0u || !data_root) {
+        return -1;
+    }
+
+    lantern_aggregated_signature_proof_init(out_proof);
+
+    size_t bit_length = 0u;
+    for (size_t i = 0; i < count; ++i) {
+        if (!pubkeys[i] || validator_ids[i] >= LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+            lantern_aggregated_signature_proof_reset(out_proof);
+            return -1;
+        }
+        size_t candidate_length = (size_t)validator_ids[i] + 1u;
+        if (candidate_length > bit_length) {
+            bit_length = candidate_length;
+        }
+    }
+    if (lantern_bitlist_resize(&out_proof->participants, bit_length) != 0) {
+        lantern_aggregated_signature_proof_reset(out_proof);
+        return -1;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (lantern_bitlist_set(&out_proof->participants, (size_t)validator_ids[i], true) != 0) {
+            lantern_aggregated_signature_proof_reset(out_proof);
+            return -1;
+        }
+    }
+
+    if (!lantern_signature_aggregate(
+            pubkeys,
+            signatures,
+            count,
+            data_root,
+            epoch,
+            &out_proof->proof_data)) {
+        lantern_aggregated_signature_proof_reset(out_proof);
+        return -1;
+    }
+    return 0;
+}
+
 static int seed_known_payload_for_vote(
     LanternState *state,
     const LanternVote *vote,
     uint8_t marker) {
+    (void)marker;
     if (!state || !vote) {
         return -1;
     }
@@ -871,8 +957,94 @@ static int seed_known_payload_for_vote(
         return -1;
     }
 
+    struct PQSignatureSchemePublicKey *pubkey = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    uint8_t serialized_pubkey[LANTERN_VALIDATOR_PUBKEY_SIZE];
+    LanternSignature signature;
+    memset(&signature, 0, sizeof(signature));
+    if (generate_test_keypair(&pubkey, &secret) != 0) {
+        return -1;
+    }
+    if (serialize_test_pubkey(pubkey, serialized_pubkey) != 0) {
+        pq_secret_key_free(secret);
+        pq_public_key_free(pubkey);
+        return -1;
+    }
+    size_t validator_count = (size_t)state->config.num_validators;
+    size_t validator_index = (size_t)vote->validator_id;
+    if (validator_count == 0u || validator_index >= validator_count) {
+        pq_secret_key_free(secret);
+        pq_public_key_free(pubkey);
+        return -1;
+    }
+    if (!state->validators || state->validator_count != validator_count) {
+        uint8_t *attestation_pubkeys =
+            calloc(validator_count, LANTERN_VALIDATOR_PUBKEY_SIZE);
+        uint8_t *proposal_pubkeys =
+            calloc(validator_count, LANTERN_VALIDATOR_PUBKEY_SIZE);
+        if (!attestation_pubkeys || !proposal_pubkeys) {
+            free(attestation_pubkeys);
+            free(proposal_pubkeys);
+            pq_secret_key_free(secret);
+            pq_public_key_free(pubkey);
+            return -1;
+        }
+        if (state->validators) {
+            size_t copy_count = state->validator_count;
+            if (copy_count > validator_count) {
+                copy_count = validator_count;
+            }
+            for (size_t i = 0; i < copy_count; ++i) {
+                memcpy(
+                    attestation_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+                    state->validators[i].attestation_pubkey,
+                    LANTERN_VALIDATOR_PUBKEY_SIZE);
+                memcpy(
+                    proposal_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+                    state->validators[i].proposal_pubkey,
+                    LANTERN_VALIDATOR_PUBKEY_SIZE);
+            }
+        }
+        if (lantern_state_set_validator_pubkeys_dual(
+                state,
+                attestation_pubkeys,
+                proposal_pubkeys,
+                validator_count)
+            != 0) {
+            free(attestation_pubkeys);
+            free(proposal_pubkeys);
+            pq_secret_key_free(secret);
+            pq_public_key_free(pubkey);
+            return -1;
+        }
+        free(attestation_pubkeys);
+        free(proposal_pubkeys);
+    }
+    memcpy(
+        state->validators[validator_index].attestation_pubkey,
+        serialized_pubkey,
+        LANTERN_VALIDATOR_PUBKEY_SIZE);
+    memcpy(
+        state->validators[validator_index].proposal_pubkey,
+        serialized_pubkey,
+        LANTERN_VALIDATOR_PUBKEY_SIZE);
+    if (!lantern_signature_sign(secret, vote->slot, &data_root, &signature)) {
+        pq_secret_key_free(secret);
+        pq_public_key_free(pubkey);
+        return -1;
+    }
+
     LanternAggregatedSignatureProof proof;
-    if (build_cached_proof_for_vote(&proof, vote->validator_id, marker) != 0) {
+    if (build_single_participant_cached_proof(
+            &proof,
+            vote->validator_id,
+            serialized_pubkey,
+            &signature,
+            &data_root,
+            vote->slot)
+        != 0) {
+        pq_secret_key_free(secret);
+        pq_public_key_free(pubkey);
         return -1;
     }
     int rc = lantern_store_add_known_aggregated_payload(
@@ -882,19 +1054,9 @@ static int seed_known_payload_for_vote(
         &proof,
         vote->target.slot);
     lantern_aggregated_signature_proof_reset(&proof);
+    pq_secret_key_free(secret);
+    pq_public_key_free(pubkey);
     return rc;
-}
-
-static const LanternVote *find_vote_by_validator(const LanternAttestations *attestations, uint64_t validator_id) {
-    if (!attestations) {
-        return NULL;
-    }
-    for (size_t i = 0; i < attestations->length; ++i) {
-        if (attestations->data[i].validator_id == validator_id) {
-            return &attestations->data[i];
-        }
-    }
-    return NULL;
 }
 
 static int test_attestations_single_vote_justifies(void) {
@@ -2001,19 +2163,30 @@ static int test_process_block_accepts_mixed_attestations(void) {
 static int test_collect_attestations_for_block(void) {
     LanternState state;
     LanternRoot parent_root;
+    struct PQSignatureSchemePublicKey *pubkeys[3] = {NULL, NULL, NULL};
+    struct PQSignatureSchemeSecretKey *secrets[3] = {NULL, NULL, NULL};
+    uint8_t serialized_pubkeys[3][LANTERN_VALIDATOR_PUBKEY_SIZE];
     lantern_state_init(&state);
-    expect_zero(lantern_state_generate_genesis(&state, 900, 4), "genesis for collection test");
+    expect_zero(lantern_state_generate_genesis(&state, 900, 3), "genesis for collection test");
     mark_slot_justified_for_tests(&state, state.latest_justified.slot);
     expect_zero(lantern_state_select_block_parent(&state, &parent_root), "collection parent root");
     populate_historical_hashes_for_tests(&state, 1u);
     state.historical_block_hashes.items[0] = parent_root;
+    memset(serialized_pubkeys, 0, sizeof(serialized_pubkeys));
 
-    LanternAttestations input;
-    lantern_attestations_init(&input);
-    LanternSignatureList input_signatures;
-    lantern_signature_list_init(&input_signatures);
-    expect_zero(lantern_attestations_resize(&input, 3), "resize attestation input");
-    expect_zero(lantern_signature_list_resize(&input_signatures, 3), "resize attestation signatures");
+    for (size_t i = 0; i < 3u; ++i) {
+        if (generate_test_keypair(&pubkeys[i], &secrets[i]) != 0) {
+            fprintf(stderr, "failed to generate keypair for collection test index=%zu\n", i);
+            goto fail;
+        }
+        if (serialize_test_pubkey(pubkeys[i], serialized_pubkeys[i]) != 0) {
+            fprintf(stderr, "failed to serialize pubkey for collection test index=%zu\n", i);
+            goto fail;
+        }
+    }
+    expect_zero(
+        set_test_validator_pubkeys(&state, pubkeys, 3u),
+        "set validator pubkeys for collection test");
 
     LanternCheckpoint justified = state.latest_justified;
     justified.root = parent_root;
@@ -2021,23 +2194,53 @@ static int test_collect_attestations_for_block(void) {
     target.slot = justified.slot + 1;
     target.root = state.historical_block_hashes.items[target.slot];
 
-    build_vote(&input.data[0], &input_signatures.data[0], 0, target.slot, &justified, &target, 0);
-    build_vote(&input.data[1], &input_signatures.data[1], 1, target.slot, &justified, &target, 0);
-    build_vote(&input.data[2], &input_signatures.data[2], 2, target.slot, &justified, &target, 0);
+    LanternSignedVote signed_votes[3];
+    memset(signed_votes, 0, sizeof(signed_votes));
+    for (size_t i = 0; i < 3u; ++i) {
+        build_vote(
+            &signed_votes[i].data,
+            &signed_votes[i].signature,
+            (uint64_t)i,
+            target.slot,
+            &justified,
+            &target,
+            0u);
+        if (sign_vote_with_secret(&signed_votes[i], secrets[i]) != 0) {
+            fprintf(stderr, "failed to sign vote for collection test index=%zu\n", i);
+            goto fail;
+        }
+    }
 
-    LanternSignedVote signed_vote;
-    memset(&signed_vote, 0, sizeof(signed_vote));
-    signed_vote.data = input.data[0];
-    signed_vote.signature = input_signatures.data[0];
-    expect_zero(lantern_state_set_signed_validator_vote(&state, 0, &signed_vote), "store vote 0");
-    signed_vote.data = input.data[1];
-    signed_vote.signature = input_signatures.data[1];
-    expect_zero(lantern_state_set_signed_validator_vote(&state, 1, &signed_vote), "store vote 1");
-    signed_vote.data = input.data[2];
-    signed_vote.signature = input_signatures.data[2];
-    expect_zero(lantern_state_set_signed_validator_vote(&state, 2, &signed_vote), "store vote 2");
-    expect_zero(seed_known_payload_for_vote(&state, &input.data[0], 0x51), "seed known payload 0");
-    expect_zero(seed_known_payload_for_vote(&state, &input.data[1], 0x52), "seed known payload 1");
+    LanternRoot data_root;
+    expect_zero(
+        lantern_hash_tree_root_attestation_data(&signed_votes[0].data.data, &data_root),
+        "hash collection attestation data");
+
+    for (size_t i = 0; i < 2u; ++i) {
+        LanternAggregatedSignatureProof proof;
+        if (build_single_participant_cached_proof(
+                &proof,
+                signed_votes[i].data.validator_id,
+                serialized_pubkeys[i],
+                &signed_votes[i].signature,
+                &data_root,
+                signed_votes[i].data.slot)
+            != 0) {
+            fprintf(stderr, "failed to build cached proof for collection test index=%zu\n", i);
+            goto fail;
+        }
+        int add_rc = lantern_store_add_known_aggregated_payload(
+            lantern_test_state_store_ensure(&state),
+            &data_root,
+            &signed_votes[i].data.data,
+            &proof,
+            signed_votes[i].data.target.slot);
+        lantern_aggregated_signature_proof_reset(&proof);
+        if (add_rc != 0) {
+            fprintf(stderr, "failed to seed known payload for collection test index=%zu\n", i);
+            goto fail;
+        }
+    }
 
     uint64_t block_slot = state.slot + 1u;
     uint64_t proposer_index = 0;
@@ -2059,113 +2262,135 @@ static int test_collect_attestations_for_block(void) {
             &collected_signatures),
         "collect attestations");
 
-    if (collected.length != 2) {
-        fprintf(stderr, "Expected two aggregated attestations collected, got %zu\n", collected.length);
-        lantern_aggregated_attestations_reset(&collected);
-        lantern_attestation_signatures_reset(&collected_signatures);
-        lantern_attestations_reset(&input);
-        lantern_signature_list_reset(&input_signatures);
-        lantern_state_reset(&state);
-        return 1;
+    if (collected.length != 1u) {
+        fprintf(stderr, "Expected one merged aggregated attestation, got %zu\n", collected.length);
+        goto fail_after_collect;
     }
     if (collected_signatures.length != collected.length) {
         fprintf(stderr, "Expected signatures for each collected attestation\n");
-        lantern_aggregated_attestations_reset(&collected);
-        lantern_attestation_signatures_reset(&collected_signatures);
-        lantern_attestations_reset(&input);
-        lantern_signature_list_reset(&input_signatures);
-        lantern_state_reset(&state);
-        return 1;
+        goto fail_after_collect;
     }
 
-    bool seen_validator[2] = {false, false};
-    for (size_t i = 0; i < collected.length; ++i) {
-        const LanternAggregatedAttestation *attestation = &collected.data[i];
-        uint64_t validator_id = 0u;
-        if (single_participant_from_bits(&attestation->aggregation_bits, &validator_id) != 0) {
-            fprintf(stderr, "Collected attestation %zu should have exactly one participant\n", i);
-            lantern_aggregated_attestations_reset(&collected);
-            lantern_attestation_signatures_reset(&collected_signatures);
-            lantern_attestations_reset(&input);
-            lantern_signature_list_reset(&input_signatures);
-            lantern_state_reset(&state);
-            return 1;
-        }
-        const LanternVote *original = find_vote_by_validator(&input, validator_id);
-        if (!original) {
-            fprintf(stderr, "Collected vote %zu signature mismatch\n", i);
-            lantern_aggregated_attestations_reset(&collected);
-            lantern_attestation_signatures_reset(&collected_signatures);
-            lantern_attestations_reset(&input);
-            lantern_signature_list_reset(&input_signatures);
-            lantern_state_reset(&state);
-            return 1;
-        }
-        size_t original_index = (size_t)(original - input.data);
-        if (original_index >= input_signatures.length) {
-            fprintf(stderr, "Collected vote %zu signature index mismatch\n", i);
-            lantern_aggregated_attestations_reset(&collected);
-            lantern_attestation_signatures_reset(&collected_signatures);
-            lantern_attestations_reset(&input);
-            lantern_signature_list_reset(&input_signatures);
-            lantern_state_reset(&state);
-            return 1;
-        }
-        if (memcmp(&attestation->data, &original->data, sizeof(attestation->data)) != 0) {
-            fprintf(stderr, "Collected attestation %zu data mismatch\n", i);
-            lantern_aggregated_attestations_reset(&collected);
-            lantern_attestation_signatures_reset(&collected_signatures);
-            lantern_attestations_reset(&input);
-            lantern_signature_list_reset(&input_signatures);
-            lantern_state_reset(&state);
-            return 1;
-        }
-        if (!checkpoints_equal(&attestation->data.source, &justified)) {
-            fprintf(stderr, "Collected attestation %zu has mismatched source checkpoint\n", i);
-            lantern_aggregated_attestations_reset(&collected);
-            lantern_attestation_signatures_reset(&collected_signatures);
-            lantern_attestations_reset(&input);
-            lantern_signature_list_reset(&input_signatures);
-            lantern_state_reset(&state);
-            return 1;
-        }
-        if (!bitlist_test_bit(&collected_signatures.data[i].participants, (size_t)validator_id)) {
-            fprintf(stderr, "Collected proof %zu participant mismatch\n", i);
-            lantern_aggregated_attestations_reset(&collected);
-            lantern_attestation_signatures_reset(&collected_signatures);
-            lantern_attestations_reset(&input);
-            lantern_signature_list_reset(&input_signatures);
-            lantern_state_reset(&state);
-            return 1;
-        }
-        if (validator_id == 0) {
-            seen_validator[0] = true;
-        } else if (validator_id == 1) {
-            seen_validator[1] = true;
-        } else {
-            fprintf(stderr, "Unexpected validator id %" PRIu64 " in collected vote\n", validator_id);
-            lantern_aggregated_attestations_reset(&collected);
-            lantern_attestation_signatures_reset(&collected_signatures);
-            lantern_attestations_reset(&input);
-            lantern_signature_list_reset(&input_signatures);
-            lantern_state_reset(&state);
-            return 1;
-        }
+    const LanternAggregatedAttestation *attestation = &collected.data[0];
+    const LanternAggregatedSignatureProof *proof = &collected_signatures.data[0];
+    if (attestation->data.slot != signed_votes[0].data.slot
+        || !checkpoints_equal(&attestation->data.source, &justified)
+        || !checkpoints_equal(&attestation->data.target, &target)
+        || !checkpoints_equal(&attestation->data.head, &target)) {
+        fprintf(stderr, "Collected attestation data did not match expected vote data\n");
+        goto fail_after_collect;
+    }
+    if (attestation->aggregation_bits.bit_length < 2u
+        || !bitlist_test_bit(&attestation->aggregation_bits, 0u)
+        || !bitlist_test_bit(&attestation->aggregation_bits, 1u)
+        || (attestation->aggregation_bits.bit_length > 2u
+            && bitlist_test_bit(&attestation->aggregation_bits, 2u))) {
+        fprintf(stderr, "Collected attestation aggregation bits did not merge validators 0 and 1\n");
+        goto fail_after_collect;
+    }
+    if (proof->participants.bit_length < 2u
+        || !bitlist_test_bit(&proof->participants, 0u)
+        || !bitlist_test_bit(&proof->participants, 1u)
+        || (proof->participants.bit_length > 2u
+            && bitlist_test_bit(&proof->participants, 2u))) {
+        fprintf(stderr, "Collected proof participants did not merge validators 0 and 1\n");
+        goto fail_after_collect;
     }
 
-    if (!seen_validator[0] || !seen_validator[1]) {
-        fprintf(stderr, "Missing expected validators in collected votes\n");
-        lantern_aggregated_attestations_reset(&collected);
-        lantern_attestation_signatures_reset(&collected_signatures);
-        lantern_attestations_reset(&input);
-        lantern_state_reset(&state);
-        return 1;
+    const uint8_t *pubkey_refs[2] = {
+        serialized_pubkeys[0],
+        serialized_pubkeys[1],
+    };
+    if (!lantern_signature_verify_aggregated(
+            pubkey_refs,
+            2u,
+            &data_root,
+            &proof->proof_data,
+            attestation->data.slot)) {
+        fprintf(stderr, "Merged collection proof verification failed\n");
+        goto fail_after_collect;
     }
 
     lantern_aggregated_attestations_reset(&collected);
     lantern_attestation_signatures_reset(&collected_signatures);
-    lantern_attestations_reset(&input);
-    lantern_signature_list_reset(&input_signatures);
+    for (size_t i = 0; i < 3u; ++i) {
+        pq_secret_key_free(secrets[i]);
+        pq_public_key_free(pubkeys[i]);
+    }
+    lantern_state_reset(&state);
+    return 0;
+
+fail_after_collect:
+    lantern_aggregated_attestations_reset(&collected);
+    lantern_attestation_signatures_reset(&collected_signatures);
+
+fail:
+    for (size_t i = 0; i < 3u; ++i) {
+        if (secrets[i]) {
+            pq_secret_key_free(secrets[i]);
+        }
+        if (pubkeys[i]) {
+            pq_public_key_free(pubkeys[i]);
+        }
+    }
+    lantern_state_reset(&state);
+    return 1;
+}
+
+static int test_process_block_rejects_duplicate_attestation_data(void) {
+    LanternState state;
+    LanternRoot parent_root;
+    LanternBlock block;
+    LanternRoot block_root;
+    LanternVote vote0;
+    LanternVote vote1;
+
+    lantern_state_init(&state);
+    memset(&block, 0, sizeof(block));
+    memset(&vote0, 0, sizeof(vote0));
+    memset(&vote1, 0, sizeof(vote1));
+
+    expect_zero(
+        lantern_state_generate_genesis(&state, 905u, 4u),
+        "genesis for duplicate attestation-data block test");
+    expect_zero(
+        lantern_state_process_slots(&state, 2u),
+        "advance slots for duplicate attestation-data block test");
+    mark_slot_justified_for_tests(&state, 1u);
+    expect_zero(
+        lantern_state_select_block_parent(&state, &parent_root),
+        "select block parent for duplicate attestation-data block test");
+
+    populate_historical_hashes_for_tests(&state, 2u);
+    state.historical_block_hashes.items[0] = parent_root;
+
+    LanternCheckpoint source;
+    source.slot = 1u;
+    source.root = state.historical_block_hashes.items[source.slot];
+    LanternCheckpoint target = source;
+    target.slot = 2u;
+    target.root = state.historical_block_hashes.items[target.slot];
+
+    build_vote(&vote0, NULL, 0u, target.slot, &source, &target, 0u);
+    build_vote(&vote1, NULL, 1u, target.slot, &source, &target, 0u);
+
+    make_block(&state, 2u, &parent_root, &block, &block_root);
+    if (append_aggregated_attestation_from_vote(&block.body.attestations, &vote0) != 0
+        || append_aggregated_attestation_from_vote(&block.body.attestations, &vote1) != 0) {
+        fprintf(stderr, "failed to build duplicate attestation-data block body\n");
+        lantern_block_body_reset(&block.body);
+        lantern_state_reset(&state);
+        return 1;
+    }
+
+    if (lantern_state_process_block(&state, &block, NULL, NULL) == 0) {
+        fprintf(stderr, "duplicate attestation data block was incorrectly accepted\n");
+        lantern_block_body_reset(&block.body);
+        lantern_state_reset(&state);
+        return 1;
+    }
+
+    lantern_block_body_reset(&block.body);
     lantern_state_reset(&state);
     return 0;
 }
@@ -2445,76 +2670,67 @@ static int test_collect_attestations_fixed_point(void) {
         goto cleanup;
     }
 
-    /* With 4 validators, quorum is 3. We have 3 votes for base→mid and 1 vote for mid→tip.
-     * After base→mid reaches quorum, mid becomes justified. Then we try to collect mid→tip
-     * votes. But mid→tip has only 1 vote, which doesn't reach quorum.
-     * The fixed-point iteration should collect all 4 attestations across both iterations:
-     * - First iteration: 3 attestations (validators 0,1,2) for base→mid
-     * - Second iteration: 1 attestation (validator 3) for mid→tip (appended)
-     * Total: 4 attestations.
-     * However, if only 3 are collected, it means the second iteration didn't add validator 3's vote.
-     * Let's first check if at least 3 are collected correctly. */
-    if (collected.length < 3u || collected_signatures.length < 3u) {
-        fprintf(stderr, "expected at least 3 aggregated attestations after fixed-point collection, got %zu\n", collected.length);
-        for (size_t i = 0; i < collected.length; ++i) {
-            uint64_t validator_id = UINT64_MAX;
-            if (single_participant_from_bits(&collected.data[i].aggregation_bits, &validator_id) == 0) {
-                fprintf(
-                    stderr,
-                    "  attestation %zu: validator=%" PRIu64 " source_slot=%" PRIu64 " target_slot=%" PRIu64 "\n",
-                    i,
-                    validator_id,
-                    collected.data[i].data.source.slot,
-                    collected.data[i].data.target.slot);
-            }
-        }
+    /* With the single-AttestationData-per-block rule, the 3 base→mid proofs are merged
+     * into one attestation. A second attestation for mid→tip may or may not be added,
+     * depending on whether the fixed-point iteration reaches that checkpoint. */
+    if (collected.length == 0u || collected.length > 2u || collected_signatures.length != collected.length) {
+        fprintf(stderr, "expected 1 or 2 aggregated attestations after fixed-point collection, got %zu\n", collected.length);
         rc = 1;
         goto cleanup;
     }
 
-    bool seen_validators[4] = {false, false, false, false};
-    bool saw_mid_source = false;
+    bool saw_base_group = false;
+    bool saw_mid_group = false;
     for (size_t i = 0; i < collected.length; ++i) {
-        uint64_t validator_id = UINT64_MAX;
         const LanternAggregatedAttestation *attestation = &collected.data[i];
-        if (single_participant_from_bits(&attestation->aggregation_bits, &validator_id) != 0) {
-            fprintf(stderr, "expected single-participant fixed-point attestation\n");
-            rc = 1;
-            goto cleanup;
-        }
-        if (validator_id >= 4) {
-            fprintf(stderr, "unexpected validator id %" PRIu64 "\n", validator_id);
-            rc = 1;
-            goto cleanup;
-        }
-        if (!bitlist_test_bit(&collected_signatures.data[i].participants, (size_t)validator_id)) {
-            fprintf(stderr, "fixed-point proof participants mismatch for validator %" PRIu64 "\n", validator_id);
-            rc = 1;
-            goto cleanup;
-        }
-        seen_validators[validator_id] = true;
-        if (checkpoints_equal(&attestation->data.source, &mid)) {
-            saw_mid_source = true;
-        } else if (!checkpoints_equal(&attestation->data.source, &base)) {
-            fprintf(stderr, "unexpected checkpoint source for validator %" PRIu64 "\n", validator_id);
+        const LanternAggregatedSignatureProof *proof = &collected_signatures.data[i];
+        if (checkpoints_equal(&attestation->data.source, &base)) {
+            saw_base_group = true;
+            for (size_t validator_index = 0; validator_index < 3u; ++validator_index) {
+                if (attestation->aggregation_bits.bit_length <= validator_index
+                    || !bitlist_test_bit(&attestation->aggregation_bits, validator_index)
+                    || proof->participants.bit_length <= validator_index
+                    || !bitlist_test_bit(&proof->participants, validator_index)) {
+                    fprintf(stderr, "missing base-group validator %zu after fixed-point collection\n", validator_index);
+                    rc = 1;
+                    goto cleanup;
+                }
+            }
+            if ((attestation->aggregation_bits.bit_length > 3u
+                    && bitlist_test_bit(&attestation->aggregation_bits, 3u))
+                || (proof->participants.bit_length > 3u
+                    && bitlist_test_bit(&proof->participants, 3u))) {
+                fprintf(stderr, "base-group collection incorrectly included validator 3\n");
+                rc = 1;
+                goto cleanup;
+            }
+        } else if (checkpoints_equal(&attestation->data.source, &mid)) {
+            uint64_t validator_id = UINT64_MAX;
+            saw_mid_group = true;
+            if (single_participant_from_bits(&attestation->aggregation_bits, &validator_id) != 0
+                || validator_id != 3u
+                || proof->participants.bit_length <= 3u
+                || !bitlist_test_bit(&proof->participants, 3u)) {
+                fprintf(stderr, "mid-group collection did not preserve validator 3\n");
+                rc = 1;
+                goto cleanup;
+            }
+        } else {
+            fprintf(stderr, "unexpected checkpoint source in fixed-point collection\n");
             rc = 1;
             goto cleanup;
         }
     }
 
-    if (collected.length == 4u && !saw_mid_source) {
-        fprintf(stderr, "expected mid-source attestation after fixed-point collection\n");
+    if (!saw_base_group) {
+        fprintf(stderr, "expected merged base-group attestation after fixed-point collection\n");
         rc = 1;
         goto cleanup;
     }
-
-    size_t expected_validators = collected.length == 4u ? 4u : 3u;
-    for (size_t i = 0; i < expected_validators; ++i) {
-        if (!seen_validators[i]) {
-            fprintf(stderr, "missing validator %zu in fixed-point collection\n", i);
-            rc = 1;
-            goto cleanup;
-        }
+    if (collected.length == 2u && !saw_mid_group) {
+        fprintf(stderr, "expected mid-group attestation when two groups were collected\n");
+        rc = 1;
+        goto cleanup;
     }
 
 cleanup:
@@ -2527,12 +2743,32 @@ cleanup:
 static int test_collect_attestations_fixed_point_deep_chain(void) {
     LanternState state;
     LanternRoot parent_root;
+    enum {
+        validator_count = 64,
+        cached_group_size = 16,
+        cached_group_count = validator_count / cached_group_size,
+    };
+    struct PQSignatureSchemePublicKey *pubkeys[validator_count];
+    struct PQSignatureSchemeSecretKey *secrets[validator_count];
+    uint8_t serialized_pubkeys[validator_count][LANTERN_VALIDATOR_PUBKEY_SIZE];
+    LanternSignedVote signed_votes[validator_count];
+    LanternAggregatedAttestations collected;
+    LanternAttestationSignatures collected_signatures;
+    int rc = 0;
     lantern_state_init(&state);
+    lantern_aggregated_attestations_init(&collected);
+    lantern_attestation_signatures_init(&collected_signatures);
+    memset(pubkeys, 0, sizeof(pubkeys));
+    memset(secrets, 0, sizeof(secrets));
+    memset(serialized_pubkeys, 0, sizeof(serialized_pubkeys));
+    memset(signed_votes, 0, sizeof(signed_votes));
+
     /* Use 64 validators. To reach quorum (2/3), we need 43 votes per transition.
-     * For a deep chain test, let's have all 64 validators vote for the same base→target
-     * transition. This ensures quorum is reached. */
-    const uint64_t validator_count = 64;
-    expect_zero(lantern_state_generate_genesis(&state, 975, validator_count), "genesis for deep fixed-point test");
+     * This keeps the deep-chain test at full quorum while still checking that one
+     * AttestationData is deduplicated into one merged aggregate. */
+    expect_zero(
+        lantern_state_generate_genesis(&state, 975, validator_count),
+        "genesis for deep fixed-point test");
     mark_slot_justified_for_tests(&state, state.latest_justified.slot);
 
     /* Populate historical hashes for the slots we'll use (0 and 1). */
@@ -2549,15 +2785,84 @@ static int test_collect_attestations_fixed_point_deep_chain(void) {
     target.slot = base.slot + 1u;
     target.root = state.historical_block_hashes.items[target.slot];
 
-    /* All validators vote for base→target */
+    for (size_t validator_index = 0; validator_index < validator_count; ++validator_index) {
+        if (generate_test_keypair(&pubkeys[validator_index], &secrets[validator_index]) != 0) {
+            fprintf(stderr, "failed to generate keypair for deep fixed-point test index=%zu\n", validator_index);
+            rc = 1;
+            goto cleanup;
+        }
+        if (serialize_test_pubkey(pubkeys[validator_index], serialized_pubkeys[validator_index]) != 0) {
+            fprintf(stderr, "failed to serialize pubkey for deep fixed-point test index=%zu\n", validator_index);
+            rc = 1;
+            goto cleanup;
+        }
+    }
+    expect_zero(
+        set_test_validator_pubkeys(&state, pubkeys, validator_count),
+        "set validator pubkeys for deep fixed-point test");
+
+    /* All validators vote for base→target. */
     for (size_t i = 0; i < validator_count; ++i) {
-        LanternSignedVote vote;
-        memset(&vote, 0, sizeof(vote));
-        build_vote(&vote.data, &vote.signature, i, target.slot, &base, &target, 0);
-        expect_zero(lantern_state_set_signed_validator_vote(&state, i, &vote), "store deep fixed vote");
+        build_vote(&signed_votes[i].data, &signed_votes[i].signature, i, target.slot, &base, &target, 0u);
+        if (sign_vote_with_secret(&signed_votes[i], secrets[i]) != 0) {
+            fprintf(stderr, "failed to sign deep fixed-point vote index=%zu\n", i);
+            rc = 1;
+            goto cleanup;
+        }
         expect_zero(
-            seed_known_payload_for_vote(&state, &vote.data, (uint8_t)(0xA0u + (uint8_t)i)),
-            "seed deep fixed payload");
+            lantern_state_set_signed_validator_vote(&state, i, &signed_votes[i]),
+            "store deep fixed vote");
+    }
+
+    LanternRoot data_root;
+    expect_zero(
+        lantern_hash_tree_root_attestation_data(&signed_votes[0].data.data, &data_root),
+        "hash deep fixed attestation data");
+
+    /* Devnet-4 interval-2 aggregation means the block-builder cache should already
+     * hold a small number of multi-validator proofs per AttestationData. Seed four
+     * cached children of 16 validators each so the merge still exercises the deep
+     * fixed-point path without exceeding leanMultisig rec_aggregation
+     * MAX_RECURSIONS=16 child proofs for one AttestationData. */
+    for (size_t group_index = 0; group_index < cached_group_count; ++group_index) {
+        const size_t group_start = group_index * cached_group_size;
+        const uint8_t *group_pubkeys[cached_group_size];
+        LanternSignature group_signatures[cached_group_size];
+        uint64_t group_validator_ids[cached_group_size];
+        LanternAggregatedSignatureProof proof;
+
+        for (size_t offset = 0; offset < cached_group_size; ++offset) {
+            const size_t validator_index = group_start + offset;
+            group_pubkeys[offset] = serialized_pubkeys[validator_index];
+            group_signatures[offset] = signed_votes[validator_index].signature;
+            group_validator_ids[offset] = (uint64_t)validator_index;
+        }
+
+        if (build_multi_participant_cached_proof(
+                &proof,
+                group_validator_ids,
+                group_pubkeys,
+                group_signatures,
+                cached_group_size,
+                &data_root,
+                signed_votes[group_start].data.slot)
+            != 0) {
+            fprintf(stderr, "failed to build cached group proof for deep fixed-point test group=%zu\n", group_index);
+            rc = 1;
+            goto cleanup;
+        }
+        int add_rc = lantern_store_add_known_aggregated_payload(
+            lantern_test_state_store_ensure(&state),
+            &data_root,
+            &signed_votes[group_start].data.data,
+            &proof,
+            signed_votes[group_start].data.target.slot);
+        lantern_aggregated_signature_proof_reset(&proof);
+        if (add_rc != 0) {
+            fprintf(stderr, "failed to seed cached group proof for deep fixed-point test group=%zu\n", group_index);
+            rc = 1;
+            goto cleanup;
+        }
     }
 
     uint64_t block_slot = state.slot + 1u;
@@ -2567,12 +2872,6 @@ static int test_collect_attestations_fixed_point_deep_chain(void) {
         "deep fixed proposer lookup");
     expect_zero(lantern_state_select_block_parent(&state, &parent_root), "deep fixed parent root");
 
-    LanternAggregatedAttestations collected;
-    lantern_aggregated_attestations_init(&collected);
-    LanternAttestationSignatures collected_signatures;
-    lantern_attestation_signatures_init(&collected_signatures);
-
-    int rc = 0;
     if (lantern_state_collect_attestations_for_block(
             &state,
             block_slot,
@@ -2586,54 +2885,52 @@ static int test_collect_attestations_fixed_point_deep_chain(void) {
         goto cleanup;
     }
 
-    /* All 64 validators should have their attestations collected */
-    if (collected.length != validator_count || collected_signatures.length != validator_count) {
-        fprintf(stderr, "expected %" PRIu64 " attestations, got %zu\n", validator_count, collected.length);
+    /* All 64 validators share the same AttestationData, so collection should emit one
+     * merged aggregate covering the full validator set. */
+    if (collected.length != 1u || collected_signatures.length != 1u) {
+        fprintf(stderr, "expected one merged attestation, got %zu\n", collected.length);
         rc = 1;
         goto cleanup;
     }
 
-    bool seen[64] = {false};
-    for (size_t i = 0; i < collected.length; ++i) {
-        const LanternAggregatedAttestation *attestation = &collected.data[i];
-        uint64_t validator_id = UINT64_MAX;
-        if (single_participant_from_bits(&attestation->aggregation_bits, &validator_id) != 0) {
-            fprintf(stderr, "expected single-participant deep-chain attestation\n");
+    const LanternAggregatedAttestation *attestation = &collected.data[0];
+    const LanternAggregatedSignatureProof *proof = &collected_signatures.data[0];
+    if (!checkpoints_equal(&attestation->data.source, &base)) {
+        fprintf(stderr, "deep-chain source mismatch\n");
+        rc = 1;
+        goto cleanup;
+    }
+    if (!checkpoints_equal(&attestation->data.target, &target)) {
+        fprintf(stderr, "deep-chain target mismatch\n");
+        rc = 1;
+        goto cleanup;
+    }
+    for (size_t validator_index = 0; validator_index < validator_count; ++validator_index) {
+        if (attestation->aggregation_bits.bit_length <= validator_index
+            || !bitlist_test_bit(&attestation->aggregation_bits, validator_index)) {
+            fprintf(stderr, "missing validator %zu in deep fixed-point attestation bits\n", validator_index);
             rc = 1;
             goto cleanup;
         }
-        if (validator_id >= validator_count) {
-            fprintf(stderr, "unexpected validator id %" PRIu64 "\n", validator_id);
-            rc = 1;
-            goto cleanup;
-        }
-        if (!bitlist_test_bit(&collected_signatures.data[i].participants, (size_t)validator_id)) {
-            fprintf(stderr, "deep-chain proof participants mismatch for validator %" PRIu64 "\n", validator_id);
-            rc = 1;
-            goto cleanup;
-        }
-        size_t validator_index = (size_t)validator_id;
-        if (seen[validator_index]) {
-            fprintf(stderr, "duplicate validator %zu\n", validator_index);
-            rc = 1;
-            goto cleanup;
-        }
-        seen[validator_index] = true;
-        if (!checkpoints_equal(&attestation->data.source, &base)) {
-            fprintf(stderr, "validator %zu source mismatch\n", validator_index);
-            rc = 1;
-            goto cleanup;
-        }
-        if (!checkpoints_equal(&attestation->data.target, &target)) {
-            fprintf(stderr, "validator %zu target mismatch\n", validator_index);
+        if (proof->participants.bit_length <= validator_index
+            || !bitlist_test_bit(&proof->participants, validator_index)) {
+            fprintf(stderr, "missing validator %zu in deep fixed-point proof bits\n", validator_index);
             rc = 1;
             goto cleanup;
         }
     }
-
-    for (size_t i = 0; i < validator_count; ++i) {
-        if (!seen[i]) {
-            fprintf(stderr, "missing validator %zu in deep fixed-point collection\n", i);
+    {
+        const uint8_t *pubkey_refs[validator_count];
+        for (size_t validator_index = 0; validator_index < validator_count; ++validator_index) {
+            pubkey_refs[validator_index] = serialized_pubkeys[validator_index];
+        }
+        if (!lantern_signature_verify_aggregated(
+                pubkey_refs,
+                validator_count,
+                &data_root,
+                &proof->proof_data,
+                attestation->data.slot)) {
+            fprintf(stderr, "deep fixed-point merged proof verification failed\n");
             rc = 1;
             goto cleanup;
         }
@@ -2642,6 +2939,14 @@ static int test_collect_attestations_fixed_point_deep_chain(void) {
 cleanup:
     lantern_aggregated_attestations_reset(&collected);
     lantern_attestation_signatures_reset(&collected_signatures);
+    for (size_t validator_index = 0; validator_index < validator_count; ++validator_index) {
+        if (secrets[validator_index]) {
+            pq_secret_key_free(secrets[validator_index]);
+        }
+        if (pubkeys[validator_index]) {
+            pq_public_key_free(pubkeys[validator_index]);
+        }
+    }
     lantern_state_reset(&state);
     return rc;
 }
@@ -3718,6 +4023,9 @@ int main(void) {
         return 1;
     }
     if (test_block_header_rejects_zero_parent_root() != 0) {
+        return 1;
+    }
+    if (test_process_block_rejects_duplicate_attestation_data() != 0) {
         return 1;
     }
     if (test_process_slots_sets_state_root() != 0) {

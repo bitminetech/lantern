@@ -18,6 +18,7 @@
 #include "lantern/consensus/quorum.h"
 #include "lantern/consensus/signature.h"
 #include "lantern/consensus/store.h"
+#include "pq-bindings-c-rust.h"
 
 static void record_attestation_validation_metric(double start_seconds, bool valid) {
     lean_metrics_record_attestation_validation(lantern_time_now_seconds() - start_seconds, valid);
@@ -93,6 +94,13 @@ static lantern_state_aggregate_result state_select_child_proofs_from_pool(
     LanternAggregatedSignatureProof **out_children,
     size_t *out_child_count,
     size_t *out_child_capacity);
+static lantern_state_aggregate_result state_merge_cached_child_proofs(
+    const LanternState *state,
+    const LanternRoot *message,
+    uint64_t epoch,
+    const LanternAggregatedSignatureProof *children,
+    size_t child_count,
+    LanternAggregatedSignatureProof *out_proof);
 static lantern_state_aggregate_result state_append_cached_proof(
     const LanternAttestationData *data,
     const LanternAggregatedSignatureProof *proof,
@@ -130,6 +138,62 @@ static bool validator_pubkey_is_zero(const uint8_t *pubkey) {
         }
     }
     return true;
+}
+
+static int lantern_state_validate_block_attestation_data_uniqueness(const LanternBlock *block) {
+    if (!block) {
+        return -1;
+    }
+
+    const LanternAggregatedAttestations *attestations = &block->body.attestations;
+    if (attestations->length == 0u) {
+        return 0;
+    }
+
+    const struct lantern_log_metadata meta = {
+        .has_slot = true,
+        .slot = block->slot,
+    };
+    if (!attestations->data) {
+        lantern_log_warn("state", &meta, "block attestation data missing");
+        return -1;
+    }
+
+    struct lantern_root_list seen_data_roots;
+    lantern_root_list_init(&seen_data_roots);
+    int rc = 0;
+
+    for (size_t i = 0; i < attestations->length; ++i) {
+        LanternRoot data_root;
+        if (lantern_hash_tree_root_attestation_data(&attestations->data[i].data, &data_root) != 0) {
+            lantern_log_warn(
+                "state",
+                &meta,
+                "failed to hash block attestation data index=%zu",
+                i);
+            rc = -1;
+            break;
+        }
+        if (lantern_root_list_contains(&seen_data_roots, &data_root)) {
+            char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+            format_root_hex(&data_root, root_hex, sizeof(root_hex));
+            lantern_log_warn(
+                "state",
+                &meta,
+                "block rejected: duplicate attestation data index=%zu data_root=%s",
+                i,
+                root_hex[0] ? root_hex : "-");
+            rc = -1;
+            break;
+        }
+        if (lantern_root_list_append(&seen_data_roots, &data_root) != 0) {
+            rc = -1;
+            break;
+        }
+    }
+
+    lantern_root_list_reset(&seen_data_roots);
+    return rc;
 }
 
 static int lantern_state_verify_block_signatures(
@@ -465,16 +529,49 @@ static int collect_attestations_for_checkpoint(
             rc = -1;
             break;
         }
-        for (size_t proof_index = 0; proof_index < selected_count; ++proof_index) {
+        if (selected_count == 1u) {
             if (state_append_cached_proof(
                     &groups[group_index].data,
-                    &selected[proof_index],
+                    &selected[0],
                     out_attestations,
                     out_signatures)
                 != LANTERN_STATE_AGGREGATE_OK) {
                 rc = -1;
-                break;
             }
+        } else {
+            LanternAggregatedSignatureProof merged;
+            lantern_aggregated_signature_proof_init(&merged);
+
+            lantern_state_aggregate_result merge_rc = state_merge_cached_child_proofs(
+                state,
+                &groups[group_index].data_root,
+                groups[group_index].data.slot,
+                selected,
+                selected_count,
+                &merged);
+            lantern_state_aggregate_result append_rc = LANTERN_STATE_AGGREGATE_OK;
+            if (merge_rc == LANTERN_STATE_AGGREGATE_OK) {
+                append_rc = state_append_cached_proof(
+                    &groups[group_index].data,
+                    &merged,
+                    out_attestations,
+                    out_signatures);
+            }
+            if (merge_rc != LANTERN_STATE_AGGREGATE_OK
+                || append_rc != LANTERN_STATE_AGGREGATE_OK) {
+                char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+                format_root_hex(&groups[group_index].data_root, root_hex, sizeof(root_hex));
+                lantern_log_warn(
+                    "state",
+                    NULL,
+                    "failed to merge cached attestation proofs data_root=%s children=%zu merge_rc=%d append_rc=%d",
+                    root_hex[0] ? root_hex : "-",
+                    selected_count,
+                    (int)merge_rc,
+                    (int)append_rc);
+                rc = -1;
+            }
+            lantern_aggregated_signature_proof_reset(&merged);
         }
         free(selected);
         if (rc != 0) {
@@ -677,6 +774,174 @@ static void state_mark_proof_participants_covered(
     }
 }
 
+struct state_recursive_child_input {
+    struct PQSignatureSchemePublicKey **pubkey_handles;
+    uint8_t *canonical_bytes;
+    size_t canonical_length;
+};
+
+static void state_recursive_child_input_reset(struct state_recursive_child_input *child) {
+    if (!child) {
+        return;
+    }
+
+    if (child->pubkey_handles) {
+        for (size_t i = 0; child->pubkey_handles[i] != NULL; ++i) {
+            pq_public_key_free(child->pubkey_handles[i]);
+        }
+    }
+    free(child->pubkey_handles);
+    free(child->canonical_bytes);
+    memset(child, 0, sizeof(*child));
+}
+
+static size_t state_proof_participant_count(const LanternAggregatedSignatureProof *proof) {
+    if (!proof || proof->participants.bit_length == 0u || !proof->participants.bytes) {
+        return 0u;
+    }
+
+    size_t count = 0u;
+    size_t limit = proof->participants.bit_length;
+    if (limit > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return 0u;
+    }
+    for (size_t i = 0; i < limit; ++i) {
+        if (lantern_bitlist_get(&proof->participants, i)) {
+            count += 1u;
+        }
+    }
+    return count;
+}
+
+static lantern_state_aggregate_result state_prepare_recursive_child(
+    const LanternState *state,
+    const LanternAggregatedSignatureProof *proof,
+    const LanternRoot *message,
+    uint64_t epoch,
+    struct state_recursive_child_input *out_child,
+    struct PQAggregatedSignatureChild *out_input) {
+    if (!state || !proof || !message || !out_child || !out_input) {
+        return LANTERN_STATE_AGGREGATE_INVALID_PARAM;
+    }
+    if (proof->participants.bit_length == 0u
+        || !proof->participants.bytes
+        || proof->proof_data.length == 0u
+        || !proof->proof_data.data) {
+        return LANTERN_STATE_AGGREGATE_INVALID_PARAM;
+    }
+
+    size_t participant_count = state_proof_participant_count(proof);
+    if (participant_count == 0u) {
+        return LANTERN_STATE_AGGREGATE_RUNTIME;
+    }
+
+    out_child->pubkey_handles = calloc(participant_count + 1u, sizeof(*out_child->pubkey_handles));
+    if (!out_child->pubkey_handles) {
+        return LANTERN_STATE_AGGREGATE_ALLOC;
+    }
+
+    size_t validator_count = lantern_state_validator_count(state);
+    size_t pubkey_index = 0u;
+    for (size_t validator_index = 0; validator_index < proof->participants.bit_length; ++validator_index) {
+        if (!lantern_bitlist_get(&proof->participants, validator_index)) {
+            continue;
+        }
+        if (validator_index >= validator_count) {
+            return LANTERN_STATE_AGGREGATE_RUNTIME;
+        }
+
+        const uint8_t *pubkey =
+            lantern_state_validator_attestation_pubkey(state, validator_index);
+        if (!pubkey || validator_pubkey_is_zero(pubkey)) {
+            return LANTERN_STATE_AGGREGATE_RUNTIME;
+        }
+
+        enum PQSigningError pk_err = pq_public_key_deserialize(
+            pubkey,
+            LANTERN_VALIDATOR_PUBKEY_SIZE,
+            &out_child->pubkey_handles[pubkey_index]);
+        if (pk_err != Success || !out_child->pubkey_handles[pubkey_index]) {
+            return LANTERN_STATE_AGGREGATE_RUNTIME;
+        }
+        pubkey_index += 1u;
+    }
+
+    int verify_rc = pq_verify_aggregated_signatures(
+        (const struct PQSignatureSchemePublicKey *const *)out_child->pubkey_handles,
+        participant_count,
+        message->bytes,
+        LANTERN_ROOT_SIZE,
+        proof->proof_data.data,
+        proof->proof_data.length,
+        epoch);
+    if (verify_rc == 1) {
+        out_input->pubkeys = (const struct PQSignatureSchemePublicKey *const *)out_child->pubkey_handles;
+        out_input->pubkey_count = participant_count;
+        out_input->agg_bytes = proof->proof_data.data;
+        out_input->agg_len = proof->proof_data.length;
+        return LANTERN_STATE_AGGREGATE_OK;
+    }
+
+    /* Legacy single-participant proofs in Lantern may still be stored as raw signature bytes.
+     * Canonicalize them to AggregatedXMSS bytes before passing them to recursive aggregation.
+     */
+    if (participant_count != 1u || proof->proof_data.length != LANTERN_SIGNATURE_SIZE) {
+        return LANTERN_STATE_AGGREGATE_VALIDATOR;
+    }
+
+    struct PQSignature *signature_handle = NULL;
+    enum PQSigningError sig_err = pq_signature_deserialize(
+        proof->proof_data.data,
+        proof->proof_data.length,
+        &signature_handle);
+    if (sig_err != Success || !signature_handle) {
+        if (signature_handle) {
+            pq_signature_free(signature_handle);
+        }
+        return LANTERN_STATE_AGGREGATE_VALIDATOR;
+    }
+
+    uint8_t *buffer = malloc(LANTERN_AGG_PROOF_MAX_BYTES);
+    if (!buffer) {
+        pq_signature_free(signature_handle);
+        return LANTERN_STATE_AGGREGATE_ALLOC;
+    }
+
+    const struct PQSignature *signature_refs[1] = {signature_handle};
+    uintptr_t written_len = 0u;
+    pq_xmss_aggregation_setup_prover();
+    enum PQSigningError agg_err = pq_aggregate_signatures(
+        (const struct PQSignatureSchemePublicKey *const *)out_child->pubkey_handles,
+        signature_refs,
+        1u,
+        message->bytes,
+        LANTERN_ROOT_SIZE,
+        epoch,
+        buffer,
+        LANTERN_AGG_PROOF_MAX_BYTES,
+        &written_len);
+    pq_signature_free(signature_handle);
+    if (agg_err != Success || written_len == 0u || written_len > LANTERN_AGG_PROOF_MAX_BYTES) {
+        free(buffer);
+        return LANTERN_STATE_AGGREGATE_VALIDATOR;
+    }
+
+    out_child->canonical_bytes = malloc((size_t)written_len);
+    if (!out_child->canonical_bytes) {
+        free(buffer);
+        return LANTERN_STATE_AGGREGATE_ALLOC;
+    }
+    memcpy(out_child->canonical_bytes, buffer, (size_t)written_len);
+    out_child->canonical_length = (size_t)written_len;
+    free(buffer);
+
+    out_input->pubkeys = (const struct PQSignatureSchemePublicKey *const *)out_child->pubkey_handles;
+    out_input->pubkey_count = participant_count;
+    out_input->agg_bytes = out_child->canonical_bytes;
+    out_input->agg_len = out_child->canonical_length;
+    return LANTERN_STATE_AGGREGATE_OK;
+}
+
 static lantern_state_aggregate_result state_select_child_proofs_from_pool(
     const struct lantern_aggregated_payload_pool *pool,
     const LanternRoot *data_root,
@@ -736,6 +1001,103 @@ static lantern_state_aggregate_result state_select_child_proofs_from_pool(
     }
 
     free(used);
+    return rc;
+}
+
+static lantern_state_aggregate_result state_merge_cached_child_proofs(
+    const LanternState *state,
+    const LanternRoot *message,
+    uint64_t epoch,
+    const LanternAggregatedSignatureProof *children,
+    size_t child_count,
+    LanternAggregatedSignatureProof *out_proof) {
+    if (!state
+        || !message
+        || !children
+        || child_count < 2u
+        || !out_proof) {
+        return LANTERN_STATE_AGGREGATE_INVALID_PARAM;
+    }
+
+    size_t aggregated_bit_length = 0u;
+    for (size_t i = 0; i < child_count; ++i) {
+        if (children[i].participants.bit_length > aggregated_bit_length) {
+            aggregated_bit_length = children[i].participants.bit_length;
+        }
+    }
+    if (aggregated_bit_length == 0u || aggregated_bit_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return LANTERN_STATE_AGGREGATE_RUNTIME;
+    }
+
+    if (lantern_bitlist_resize(&out_proof->participants, aggregated_bit_length) != 0) {
+        return LANTERN_STATE_AGGREGATE_ALLOC;
+    }
+    for (size_t child_index = 0; child_index < child_count; ++child_index) {
+        for (size_t bit = 0; bit < children[child_index].participants.bit_length; ++bit) {
+            if (lantern_bitlist_get(&children[child_index].participants, bit)
+                && lantern_bitlist_set(&out_proof->participants, bit, true) != 0) {
+                return LANTERN_STATE_AGGREGATE_ALLOC;
+            }
+        }
+    }
+
+    if (lantern_byte_list_resize(&out_proof->proof_data, LANTERN_AGG_PROOF_MAX_BYTES) != 0) {
+        return LANTERN_STATE_AGGREGATE_ALLOC;
+    }
+
+    struct state_recursive_child_input *prepared_children =
+        calloc(child_count, sizeof(*prepared_children));
+    struct PQAggregatedSignatureChild *child_inputs =
+        calloc(child_count, sizeof(*child_inputs));
+    if (!prepared_children || !child_inputs) {
+        free(prepared_children);
+        free(child_inputs);
+        return LANTERN_STATE_AGGREGATE_ALLOC;
+    }
+
+    lantern_state_aggregate_result rc = LANTERN_STATE_AGGREGATE_OK;
+    for (size_t i = 0; i < child_count; ++i) {
+        rc = state_prepare_recursive_child(
+            state,
+            &children[i],
+            message,
+            epoch,
+            &prepared_children[i],
+            &child_inputs[i]);
+        if (rc != LANTERN_STATE_AGGREGATE_OK) {
+            goto cleanup;
+        }
+    }
+
+    pq_xmss_aggregation_setup_prover();
+    uintptr_t written_len = 0u;
+    enum PQSigningError agg_err = pq_aggregate_signatures_recursive(
+        child_inputs,
+        child_count,
+        NULL,
+        0u,
+        message->bytes,
+        LANTERN_ROOT_SIZE,
+        epoch,
+        LANTERN_AGGREGATED_SIGNATURE_PROOF_INVERSE_PROOF_SIZE,
+        out_proof->proof_data.data,
+        out_proof->proof_data.length,
+        &written_len);
+    if (agg_err != Success || written_len == 0u || written_len > out_proof->proof_data.length) {
+        rc = LANTERN_STATE_AGGREGATE_VALIDATOR;
+        goto cleanup;
+    }
+    if (lantern_byte_list_resize(&out_proof->proof_data, (size_t)written_len) != 0) {
+        rc = LANTERN_STATE_AGGREGATE_ALLOC;
+        goto cleanup;
+    }
+
+cleanup:
+    for (size_t i = 0; i < child_count; ++i) {
+        state_recursive_child_input_reset(&prepared_children[i]);
+    }
+    free(prepared_children);
+    free(child_inputs);
     return rc;
 }
 
@@ -2638,6 +3000,9 @@ int lantern_state_process_block(
     const LanternBlock *block,
     const LanternBlockSignatures *signatures) {
     if (!state || !store || !block) {
+        return -1;
+    }
+    if (lantern_state_validate_block_attestation_data_uniqueness(block) != 0) {
         return -1;
     }
     double block_metrics_start = lantern_time_now_seconds();
