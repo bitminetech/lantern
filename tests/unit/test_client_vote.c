@@ -250,6 +250,47 @@ static int test_fixture_secret_key_path(
     return 0;
 }
 
+static int test_copy_file(const char *src_path, const char *dst_path) {
+    if (!src_path || !dst_path) {
+        return -1;
+    }
+
+    FILE *src = fopen(src_path, "rb");
+    if (!src) {
+        perror("fopen copy src");
+        return -1;
+    }
+
+    FILE *dst = fopen(dst_path, "wb");
+    if (!dst) {
+        perror("fopen copy dst");
+        fclose(src);
+        return -1;
+    }
+
+    int rc = 0;
+    unsigned char buffer[4096];
+    while (1) {
+        size_t read_len = fread(buffer, 1u, sizeof(buffer), src);
+        if (read_len > 0 && fwrite(buffer, 1u, read_len, dst) != read_len) {
+            perror("fwrite copy");
+            rc = -1;
+            break;
+        }
+        if (read_len < sizeof(buffer)) {
+            if (ferror(src)) {
+                perror("fread copy");
+                rc = -1;
+            }
+            break;
+        }
+    }
+
+    fclose(dst);
+    fclose(src);
+    return rc;
+}
+
 static bool proof_payload_equals(
     const LanternAggregatedSignatureProof *lhs,
     const LanternAggregatedSignatureProof *rhs) {
@@ -1360,109 +1401,218 @@ cleanup:
     return rc;
 }
 
-static int test_client_load_xmss_keys_reads_dual_manifest_fields(void) {
+static int test_client_load_xmss_keys_reads_annotated_validators(void) {
     struct lantern_client client;
-    char temp_dir_template[] = "/tmp/lantern-xmss-XXXXXX";
+    char temp_dir_template[] = "/tmp/lantern-annotated-xmss-XXXXXX";
     char *temp_dir = NULL;
-    char manifest_path[PATH_MAX];
-    char attestation_path[PATH_MAX];
-    char proposal_path[PATH_MAX];
+    char annotated_path[PATH_MAX];
+    char attester_src[PATH_MAX];
+    char proposer_src[PATH_MAX];
+    char attester_dst[PATH_MAX];
+    char proposer_dst[PATH_MAX];
     int rc = 1;
 
     memset(&client, 0, sizeof(client));
-    memset(manifest_path, 0, sizeof(manifest_path));
-    memset(attestation_path, 0, sizeof(attestation_path));
-    memset(proposal_path, 0, sizeof(proposal_path));
+    memset(annotated_path, 0, sizeof(annotated_path));
+    memset(attester_src, 0, sizeof(attester_src));
+    memset(proposer_src, 0, sizeof(proposer_src));
+    memset(attester_dst, 0, sizeof(attester_dst));
+    memset(proposer_dst, 0, sizeof(proposer_dst));
 
     temp_dir = mkdtemp(temp_dir_template);
     if (!temp_dir) {
-        perror("mkdtemp");
+        perror("mkdtemp annotated");
         return 1;
     }
-    if (test_fixture_secret_key_path(0u, attestation_path, sizeof(attestation_path)) != 0
-        || test_fixture_secret_key_path(1u, proposal_path, sizeof(proposal_path)) != 0) {
-        fprintf(stderr, "failed to resolve fixture secret key paths for manifest test\n");
+    if (test_fixture_secret_key_path(0u, attester_src, sizeof(attester_src)) != 0
+        || test_fixture_secret_key_path(1u, proposer_src, sizeof(proposer_src)) != 0) {
+        fprintf(stderr, "failed to resolve fixture secret key paths for annotated test\n");
         goto cleanup;
     }
-    if (snprintf(
-            manifest_path,
-            sizeof(manifest_path),
-            "%s/validator-keys-manifest.yaml",
-            temp_dir)
-        <= 0) {
-        fprintf(stderr, "failed to build manifest path for manifest test\n");
+    if (snprintf(annotated_path, sizeof(annotated_path), "%s/annotated_validators.yaml", temp_dir) <= 0
+        || snprintf(
+               attester_dst,
+               sizeof(attester_dst),
+               "%s/validator_0_attester_key_sk.json",
+               temp_dir)
+               <= 0
+        || snprintf(
+               proposer_dst,
+               sizeof(proposer_dst),
+               "%s/validator_0_proposer_key_sk.json",
+               temp_dir)
+               <= 0) {
+        fprintf(stderr, "failed to build annotated fixture paths\n");
+        goto cleanup;
+    }
+    if (test_copy_file(attester_src, attester_dst) != 0
+        || test_copy_file(proposer_src, proposer_dst) != 0) {
+        fprintf(stderr, "failed to copy annotated fixture secret keys\n");
         goto cleanup;
     }
 
-    FILE *manifest = fopen(manifest_path, "w");
-    if (!manifest) {
-        perror("fopen manifest");
+    FILE *annotated = fopen(annotated_path, "w");
+    if (!annotated) {
+        perror("fopen annotated");
         goto cleanup;
     }
     fputs(
-        "key_scheme: SIGTopLevelTargetSumLifetime32Dim64Base8\n"
-        "hash_function: Poseidon2\n"
-        "encoding: TargetSum\n"
-        "lifetime: 4294967296\n"
-        "log_num_active_epochs: 18\n"
-        "num_active_epochs: 262144\n"
-        "num_validators: 1\n"
-        "validators:\n"
+        "manifest_loader:\n"
         "  - index: 0\n"
-        "    attestation_pubkey_hex: \"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"\n"
-        "    proposal_pubkey_hex: \"0x11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\"\n",
-        manifest);
-    fprintf(
-        manifest,
-        "    attestation_privkey_file: %s\n"
-        "    proposal_privkey_file: %s\n",
-        attestation_path,
-        proposal_path);
-    fclose(manifest);
+        "    pubkey_hex: 00\n"
+        "    privkey_file: validator_0_attester_key_sk.json\n"
+        "  - index: 0\n"
+        "    pubkey_hex: 11\n"
+        "    privkey_file: validator_0_proposer_key_sk.json\n"
+        "other_node:\n"
+        "  - index: 1\n"
+        "    pubkey_hex: 22\n"
+        "    privkey_file: validator_1_attester_key_sk.json\n"
+        "  - index: 1\n"
+        "    pubkey_hex: 33\n"
+        "    privkey_file: validator_1_proposer_key_sk.json\n",
+        annotated);
+    fclose(annotated);
 
     client.node_id = (char *)"manifest_loader";
     client.genesis.chain_config.validator_count = 1u;
     client.local_validators = calloc(1u, sizeof(*client.local_validators));
     if (!client.local_validators) {
-        fprintf(stderr, "failed to allocate local validator for manifest test\n");
+        fprintf(stderr, "failed to allocate local validator for annotated test\n");
         goto cleanup;
     }
     client.local_validator_count = 1u;
     client.local_validators[0].global_index = 0u;
     client.xmss_key_dir = strdup(temp_dir);
-    if (!client.xmss_key_dir) {
-        fprintf(stderr, "failed to copy xmss key dir for manifest test\n");
+    client.validator_keys_path = strdup(annotated_path);
+    if (!client.xmss_key_dir || !client.validator_keys_path) {
+        fprintf(stderr, "failed to copy annotated fixture paths\n");
         goto cleanup;
     }
 
     if (lantern_client_load_xmss_keys(&client) != LANTERN_CLIENT_OK) {
-        fprintf(stderr, "lantern_client_load_xmss_keys failed for dual-manifest test\n");
+        fprintf(stderr, "lantern_client_load_xmss_keys failed for annotated validators test\n");
         goto cleanup;
     }
     if (!client.local_validators[0].attestation_secret_key
         || !client.local_validators[0].proposal_secret_key) {
-        fprintf(stderr, "dual manifest did not populate both secret key handles\n");
-        goto cleanup;
-    }
-    if (!client.local_validators[0].has_attestation_secret_handle
-        || !client.local_validators[0].has_proposal_secret_handle) {
-        fprintf(stderr, "dual manifest did not set secret-handle ownership flags\n");
+        fprintf(stderr, "annotated validators did not populate both secret key handles\n");
         goto cleanup;
     }
     if (client.local_validators[0].attestation_secret_key
         == client.local_validators[0].proposal_secret_key) {
-        fprintf(stderr, "dual manifest should load independent secret key handles\n");
+        fprintf(stderr, "annotated validators should load distinct secret key handles\n");
         goto cleanup;
     }
 
     rc = 0;
 
 cleanup:
+    free(client.validator_keys_path);
+    client.validator_keys_path = NULL;
     free(client.xmss_key_dir);
     client.xmss_key_dir = NULL;
     lantern_client_reset_local_validators(&client);
-    if (manifest_path[0] != '\0') {
-        unlink(manifest_path);
+    if (annotated_path[0] != '\0') {
+        unlink(annotated_path);
+    }
+    if (attester_dst[0] != '\0') {
+        unlink(attester_dst);
+    }
+    if (proposer_dst[0] != '\0') {
+        unlink(proposer_dst);
+    }
+    if (temp_dir) {
+        rmdir(temp_dir);
+    }
+    return rc;
+}
+
+static int test_client_load_xmss_keys_rejects_incomplete_annotated_validator(void) {
+    struct lantern_client client;
+    char temp_dir_template[] = "/tmp/lantern-annotated-xmss-XXXXXX";
+    char *temp_dir = NULL;
+    char annotated_path[PATH_MAX];
+    char attester_src[PATH_MAX];
+    char attester_dst[PATH_MAX];
+    int rc = 1;
+
+    memset(&client, 0, sizeof(client));
+    memset(annotated_path, 0, sizeof(annotated_path));
+    memset(attester_src, 0, sizeof(attester_src));
+    memset(attester_dst, 0, sizeof(attester_dst));
+
+    temp_dir = mkdtemp(temp_dir_template);
+    if (!temp_dir) {
+        perror("mkdtemp incomplete annotated");
+        return 1;
+    }
+    if (test_fixture_secret_key_path(0u, attester_src, sizeof(attester_src)) != 0) {
+        fprintf(stderr, "failed to resolve fixture secret key path for incomplete annotated test\n");
+        goto cleanup;
+    }
+    if (snprintf(annotated_path, sizeof(annotated_path), "%s/annotated_validators.yaml", temp_dir) <= 0
+        || snprintf(
+               attester_dst,
+               sizeof(attester_dst),
+               "%s/validator_0_attester_key_sk.json",
+               temp_dir)
+               <= 0) {
+        fprintf(stderr, "failed to build incomplete annotated fixture paths\n");
+        goto cleanup;
+    }
+    if (test_copy_file(attester_src, attester_dst) != 0) {
+        fprintf(stderr, "failed to copy incomplete annotated fixture secret key\n");
+        goto cleanup;
+    }
+
+    FILE *annotated = fopen(annotated_path, "w");
+    if (!annotated) {
+        perror("fopen incomplete annotated");
+        goto cleanup;
+    }
+    fputs(
+        "manifest_loader:\n"
+        "  - index: 0\n"
+        "    pubkey_hex: 00\n"
+        "    privkey_file: validator_0_attester_key_sk.json\n",
+        annotated);
+    fclose(annotated);
+
+    client.node_id = (char *)"manifest_loader";
+    client.genesis.chain_config.validator_count = 1u;
+    client.local_validators = calloc(1u, sizeof(*client.local_validators));
+    if (!client.local_validators) {
+        fprintf(stderr, "failed to allocate local validator for incomplete annotated test\n");
+        goto cleanup;
+    }
+    client.local_validator_count = 1u;
+    client.local_validators[0].global_index = 0u;
+    client.xmss_key_dir = strdup(temp_dir);
+    client.validator_keys_path = strdup(annotated_path);
+    if (!client.xmss_key_dir || !client.validator_keys_path) {
+        fprintf(stderr, "failed to copy incomplete annotated fixture paths\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_load_xmss_keys(&client) == LANTERN_CLIENT_OK) {
+        fprintf(stderr, "incomplete annotated validators should be rejected\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    free(client.validator_keys_path);
+    client.validator_keys_path = NULL;
+    free(client.xmss_key_dir);
+    client.xmss_key_dir = NULL;
+    lantern_client_reset_local_validators(&client);
+    if (annotated_path[0] != '\0') {
+        unlink(annotated_path);
+    }
+    if (attester_dst[0] != '\0') {
+        unlink(attester_dst);
     }
     if (temp_dir) {
         rmdir(temp_dir);
@@ -3169,7 +3319,10 @@ int main(void) {
     if (test_validator_build_block_leaves_attestation_key_untouched() != 0) {
         return 1;
     }
-    if (test_client_load_xmss_keys_reads_dual_manifest_fields() != 0) {
+    if (test_client_load_xmss_keys_reads_annotated_validators() != 0) {
+        return 1;
+    }
+    if (test_client_load_xmss_keys_rejects_incomplete_annotated_validator() != 0) {
         return 1;
     }
     if (test_record_vote_preserves_state_root() != 0) {

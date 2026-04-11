@@ -26,6 +26,7 @@
 enum {
     OPT_GENESIS_CONFIG = 1000,
     OPT_VALIDATOR_REGISTRY,
+    OPT_VALIDATOR_KEYS,
     OPT_NODES_PATH,
     OPT_GENESIS_STATE,
     OPT_USE_GENESIS_STATE,
@@ -201,6 +202,9 @@ static lantern_client_error apply_option(
         return LANTERN_CLIENT_OK;
     case OPT_VALIDATOR_REGISTRY:
         options->validator_registry_path = optarg;
+        return LANTERN_CLIENT_OK;
+    case OPT_VALIDATOR_KEYS:
+        options->validator_keys_path = optarg;
         return LANTERN_CLIENT_OK;
     case OPT_NODES_PATH:
         options->nodes_path = optarg;
@@ -428,6 +432,7 @@ static lantern_client_error parse_arguments(
         {"data-dir", required_argument, NULL, 'd'},
         {"genesis-config", required_argument, NULL, OPT_GENESIS_CONFIG},
         {"validator-registry-path", required_argument, NULL, OPT_VALIDATOR_REGISTRY},
+        {"validator-keys-path", required_argument, NULL, OPT_VALIDATOR_KEYS},
         {"nodes-path", required_argument, NULL, OPT_NODES_PATH},
         {"genesis-state", required_argument, NULL, OPT_GENESIS_STATE},
         {"use-genesis-state", no_argument, NULL, OPT_USE_GENESIS_STATE},
@@ -700,6 +705,10 @@ static void print_usage_paths(void)
     lantern_log_info(
         "main",
         NULL,
+        "  --validator-keys-path PATH   Path to annotated_validators.yaml");
+    lantern_log_info(
+        "main",
+        NULL,
         "  --nodes-path PATH            Path to nodes.yaml");
     lantern_log_info(
         "main",
@@ -793,6 +802,10 @@ static void print_usage_xmss(void)
         "main",
         NULL,
         "  --hash-sig-key-dir PATH Alias for --xmss-key-dir");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --validator-keys-path PATH  Dual-key validator mapping file");
     lantern_log_info(
         "main",
         NULL,

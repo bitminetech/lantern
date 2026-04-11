@@ -64,6 +64,7 @@ struct lantern_client_options {
     const char *data_dir;
     const char *genesis_config_path;
     const char *validator_registry_path;
+    const char *validator_keys_path;
     const char *nodes_path;
     const char *genesis_state_path;
     bool use_genesis_state;
@@ -265,6 +266,7 @@ struct lantern_client {
     bool debug_disable_fork_choice_time;
     size_t debug_attestation_committee_count;
     char *xmss_key_dir;
+    char *validator_keys_path;
     char *xmss_public_template;
     char *xmss_secret_template;
     char *xmss_public_path;

@@ -22,7 +22,7 @@
 	url = https://github.com/leanEthereum/leanMetrics.git
 [submodule "tools/hash-sig-cli"]
 	path = tools/hash-sig-cli
-	url = https://github.com/Pier-Two/hash-sig-cli.git
+	url = https://github.com/blockblaz/hash-sig-cli.git
 [submodule "external/c-leanvm-xmss"]
 	path = external/c-leanvm-xmss
 	url = https://github.com/Pier-Two/c-leanvm-xmss.git

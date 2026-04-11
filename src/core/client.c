@@ -366,6 +366,7 @@ void lantern_client_options_init(struct lantern_client_options *options)
     options->data_dir = LANTERN_DEFAULT_DATA_DIR;
     options->genesis_config_path = LANTERN_DEFAULT_GENESIS_CONFIG;
     options->validator_registry_path = LANTERN_DEFAULT_VALIDATOR_REGISTRY;
+    options->validator_keys_path = NULL;
     options->nodes_path = LANTERN_DEFAULT_NODES_FILE;
     options->genesis_state_path = NULL;
     options->use_genesis_state = false;
@@ -3161,6 +3162,8 @@ static void shutdown_validator_and_keys(struct lantern_client *client)
     lantern_client_free_xmss_pubkeys(client);
     free(client->xmss_key_dir);
     client->xmss_key_dir = NULL;
+    free(client->validator_keys_path);
+    client->validator_keys_path = NULL;
     free(client->xmss_public_template);
     client->xmss_public_template = NULL;
     free(client->xmss_secret_template);
