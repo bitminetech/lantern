@@ -288,7 +288,7 @@ if(LANTERN_BUILD_TESTS)
         tests/support/state_store_adapter.c
         tests/support/fixture_loader.c
     )
-    target_link_libraries(lantern_networking_messages_test PRIVATE ${LANTERN_TEST_LINK_LIB})
+    target_link_libraries(lantern_networking_messages_test PRIVATE lantern)
     target_include_directories(
         lantern_networking_messages_test
         PRIVATE
