@@ -32,7 +32,7 @@ Environment overrides (start):
   GENESIS_AGGREGATOR_INDEX Validator index marked with enrFields.is_aggregator=true (default: 0)
   GENESIS_GENERATOR  Path to generate-genesis.sh (default: tools/lean-quickstart/generate-genesis.sh)
   LOG_LEVEL          Lantern log level (default: info)
-  DEVNET             Devnet name (default: devnet3)
+  DEVNET             Devnet name (default: devnet4)
   RUN_DIR            Run directory (default: /tmp/lantern-local-devnet-run)
   CLEAN_RUN_DIR      1 to delete RUN_DIR data/logs before start (default: 1)
   LEANSPEC_PY        Path to leanSpec python (default: tools/leanSpec/.venv/bin/python)
@@ -117,7 +117,7 @@ GENESIS_SHUFFLE=${GENESIS_SHUFFLE:-roundrobin}
 GENESIS_AGGREGATOR_INDEX=${GENESIS_AGGREGATOR_INDEX:-0}
 GENESIS_GENERATOR=${GENESIS_GENERATOR:-"${REPO_ROOT}/tools/lean-quickstart/generate-genesis.sh"}
 LOG_LEVEL=${LOG_LEVEL:-info}
-DEVNET=${DEVNET:-devnet3}
+DEVNET=${DEVNET:-devnet4}
 RUN_DIR=${RUN_DIR:-/tmp/lantern-local-devnet-run}
 CLEAN_RUN_DIR=${CLEAN_RUN_DIR:-1}
 LANTERN_IMAGE=${LANTERN_IMAGE:-lantern:local}
@@ -304,6 +304,7 @@ fi
 required_files=(
   "config.yaml"
   "validators.yaml"
+  "annotated_validators.yaml"
   "nodes.yaml"
   "validator-config.yaml"
   "genesis.ssz"
@@ -356,12 +357,20 @@ for i in $(seq 0 $((NODES-1))); do
     echo "error: missing ${GENESIS_DIR}/lantern_${i}.key" >&2
     exit 1
   fi
-  if [[ ! -f "${HASH_SIG_KEYS_DIR}/validator_${i}_pk.ssz" ]]; then
-    echo "error: missing ${HASH_SIG_KEYS_DIR}/validator_${i}_pk.ssz" >&2
+  if [[ ! -f "${HASH_SIG_KEYS_DIR}/validator_${i}_attester_key_pk.ssz" ]]; then
+    echo "error: missing ${HASH_SIG_KEYS_DIR}/validator_${i}_attester_key_pk.ssz" >&2
     exit 1
   fi
-  if [[ ! -f "${HASH_SIG_KEYS_DIR}/validator_${i}_sk.ssz" ]]; then
-    echo "error: missing ${HASH_SIG_KEYS_DIR}/validator_${i}_sk.ssz" >&2
+  if [[ ! -f "${HASH_SIG_KEYS_DIR}/validator_${i}_attester_key_sk.ssz" ]]; then
+    echo "error: missing ${HASH_SIG_KEYS_DIR}/validator_${i}_attester_key_sk.ssz" >&2
+    exit 1
+  fi
+  if [[ ! -f "${HASH_SIG_KEYS_DIR}/validator_${i}_proposer_key_pk.ssz" ]]; then
+    echo "error: missing ${HASH_SIG_KEYS_DIR}/validator_${i}_proposer_key_pk.ssz" >&2
+    exit 1
+  fi
+  if [[ ! -f "${HASH_SIG_KEYS_DIR}/validator_${i}_proposer_key_sk.ssz" ]]; then
+    echo "error: missing ${HASH_SIG_KEYS_DIR}/validator_${i}_proposer_key_sk.ssz" >&2
     exit 1
   fi
 done
@@ -434,8 +443,15 @@ config = yaml.safe_load((genesis_dir / "config.yaml").read_text())
 num_validators = int(config.get("VALIDATOR_COUNT", 0))
 validators = []
 for i in range(num_validators):
-    pk = (keys_dir / f"validator_{i}_pk.ssz").read_bytes()
-    validators.append(Validator(pubkey=Bytes52(pk), index=Uint64(i)))
+    attester_pk = (keys_dir / f"validator_{i}_attester_key_pk.ssz").read_bytes()
+    proposer_pk = (keys_dir / f"validator_{i}_proposer_key_pk.ssz").read_bytes()
+    validators.append(
+        Validator(
+            attestation_pubkey=Bytes52(attester_pk),
+            proposal_pubkey=Bytes52(proposer_pk),
+            index=Uint64(i),
+        )
+    )
 state = State.generate_genesis(
     genesis_time=Uint64(int(config["GENESIS_TIME"])),
     validators=Validators(data=validators),
@@ -556,6 +572,7 @@ for i in $(seq 0 $((NODES-1))); do
       -e "LANTERN_NODE_KEY_PATH=/genesis/lantern_${i}.key"
       -e "LANTERN_GENESIS_CONFIG=/genesis/config.yaml"
       -e "LANTERN_VALIDATOR_REGISTRY=/genesis/validators.yaml"
+      -e "LANTERN_VALIDATOR_KEYS=/genesis/annotated_validators.yaml"
       -e "LANTERN_NODES_FILE=/genesis/nodes.yaml"
       -e "LANTERN_GENESIS_STATE=/genesis/genesis.ssz"
       -e "LANTERN_VALIDATOR_CONFIG=/genesis/validator-config.yaml"
@@ -589,6 +606,7 @@ for i in $(seq 0 $((NODES-1))); do
       --data-dir "${DATA}" \
       --genesis-config "${GENESIS_DIR}/config.yaml" \
       --validator-registry-path "${GENESIS_DIR}/validators.yaml" \
+      --validator-keys-path "${GENESIS_DIR}/annotated_validators.yaml" \
       --nodes-path "${GENESIS_DIR}/nodes.yaml" \
       --genesis-state "${GENESIS_DIR}/genesis.ssz" \
       --validator-config "${GENESIS_DIR}/validator-config.yaml" \

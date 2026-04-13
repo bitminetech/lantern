@@ -5,7 +5,9 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "lantern/consensus/state.h"
 #include "lantern/genesis/genesis.h"
+#include "lantern/support/strings.h"
 
 static int write_temp_nodes_file(char *buffer, size_t length) {
     if (!buffer || length == 0) {
@@ -56,10 +58,23 @@ static void build_fixture_path(char *buffer, size_t length, const char *relative
     }
 }
 
+static int expect_pubkey_hex(const uint8_t *actual, const char *expected_hex) {
+    uint8_t expected[LANTERN_VALIDATOR_PUBKEY_SIZE];
+    if (!actual || !expected_hex) {
+        return -1;
+    }
+    if (lantern_hex_decode(expected_hex, expected, sizeof(expected)) != 0) {
+        return -1;
+    }
+    return memcmp(actual, expected, sizeof(expected));
+}
+
 int main(void) {
     struct lantern_genesis_artifacts artifacts;
     lantern_genesis_artifacts_init(&artifacts);
     int rc = 1;
+    LanternState generated_state;
+    lantern_state_init(&generated_state);
 
     char config_path[PATH_MAX];
     char registry_path[PATH_MAX];
@@ -98,6 +113,42 @@ int main(void) {
         fprintf(stderr, "unexpected validator count: %llu\n", (unsigned long long)artifacts.chain_config.validator_count);
         goto cleanup;
     }
+    if (!artifacts.chain_config.validator_attestation_pubkeys
+        || !artifacts.chain_config.validator_proposal_pubkeys
+        || artifacts.chain_config.validator_pubkeys_count != 7) {
+        fprintf(stderr, "genesis validator pubkey pairs missing from chain config\n");
+        goto cleanup;
+    }
+    if (expect_pubkey_hex(
+            artifacts.chain_config.validator_attestation_pubkeys,
+            "0x11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111")
+        != 0) {
+        fprintf(stderr, "unexpected first attestation pubkey\n");
+        goto cleanup;
+    }
+    if (expect_pubkey_hex(
+            artifacts.chain_config.validator_proposal_pubkeys,
+            "0x81818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181")
+        != 0) {
+        fprintf(stderr, "unexpected first proposal pubkey\n");
+        goto cleanup;
+    }
+    if (expect_pubkey_hex(
+            artifacts.chain_config.validator_attestation_pubkeys
+                + (6u * LANTERN_VALIDATOR_PUBKEY_SIZE),
+            "0x17171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717")
+        != 0) {
+        fprintf(stderr, "unexpected last attestation pubkey\n");
+        goto cleanup;
+    }
+    if (expect_pubkey_hex(
+            artifacts.chain_config.validator_proposal_pubkeys
+                + (6u * LANTERN_VALIDATOR_PUBKEY_SIZE),
+            "0x87878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787")
+        != 0) {
+        fprintf(stderr, "unexpected last proposal pubkey\n");
+        goto cleanup;
+    }
     if (artifacts.validator_registry.count != 7) {
         fprintf(stderr, "registry count mismatch: %zu\n", artifacts.validator_registry.count);
         goto cleanup;
@@ -124,11 +175,43 @@ int main(void) {
         fprintf(stderr, "validator config entry mismatch for lantern_6\n");
         goto cleanup;
     }
+    if (lantern_state_generate_genesis(
+            &generated_state,
+            artifacts.chain_config.genesis_time,
+            artifacts.chain_config.validator_pubkeys_count)
+        != 0) {
+        fprintf(stderr, "failed to generate state from chain config\n");
+        goto cleanup;
+    }
+    if (lantern_state_set_validator_pubkeys_dual(
+            &generated_state,
+            artifacts.chain_config.validator_attestation_pubkeys,
+            artifacts.chain_config.validator_proposal_pubkeys,
+            artifacts.chain_config.validator_pubkeys_count)
+        != 0) {
+        fprintf(stderr, "failed to populate dual validator pubkeys in generated state\n");
+        goto cleanup;
+    }
+    if (expect_pubkey_hex(
+            lantern_state_validator_attestation_pubkey(&generated_state, 0u),
+            "0x11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111")
+        != 0) {
+        fprintf(stderr, "generated state attestation pubkey mismatch\n");
+        goto cleanup;
+    }
+    if (expect_pubkey_hex(
+            lantern_state_validator_proposal_pubkey(&generated_state, 0u),
+            "0x81818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181")
+        != 0) {
+        fprintf(stderr, "generated state proposal pubkey mismatch\n");
+        goto cleanup;
+    }
 
     rc = 0;
     puts("lantern_genesis_bootstrap_test OK");
 
 cleanup:
+    lantern_state_reset(&generated_state);
     lantern_genesis_artifacts_reset(&artifacts);
     if (nodes_path[0]) {
         unlink(nodes_path);

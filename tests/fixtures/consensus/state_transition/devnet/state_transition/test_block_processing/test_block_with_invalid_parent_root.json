@@ -31,19 +31,23 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x8fa00001b5b22a073d21cb60c9465b379f80e74fee9baf1d137eb651ed162900a6f3ec32da74ff09265ea62fc9a5055b2e9b7c7b",
+                        "attestationPubkey": "0xcd64341d83f28533f239153535b45209592342325ed31a5792b2e61935648748d41c384850baf6386c43bf19bfb63f53eb2c8c0b",
+                        "proposalPubkey": "0x5eba321a84f55461e2c0e94036d24e5107720876752d5c4f6e03183a7e7f1856e372c60dbc6fbc0450c26e58ba402f1da6952a73",
                         "index": 0
                     },
                     {
-                        "pubkey": "0xbc56037ab0485c00441e3205d908e55a016d5450a335144f50ccb034cb253c05a1cbc047b5695a5672697d584656e96a4b94f173",
+                        "attestationPubkey": "0x0c8f12450a0f4375d8f387643a66bd4084a76a522062790d8e961b38dfe3497444af494376e3c76f3007681a4016221434cdf51d",
+                        "proposalPubkey": "0x8b31ba434a9e116dcd99a11535d8fb480fe67517c20eb1117157ca1b1b6b0c5c9d9a632e3268986f35856c337fc18d7b6d4f926a",
                         "index": 1
                     },
                     {
-                        "pubkey": "0x79422d64ecdc3b0bf7c6cc31bbfb9f4eab7950107fe23c6f4f9c94465c81f80d85a1931f1003c50531147f350357805f22fdd70b",
+                        "attestationPubkey": "0x454d107dc0156e61baee057497d5667adb027d68f6fffb2bc61c6a38e45eed3531c9bd77e64f610044b26b1ec4047929bcfed946",
+                        "proposalPubkey": "0xac91d91a23744669bb2a5356605a161a5ae28c1e872fcf1d1e8cc63cb278447d8b889c77ea21884bbd8ecf2ad4824c66ae098a12",
                         "index": 2
                     },
                     {
-                        "pubkey": "0x575bb17b0f673d76689c9527a21fac68eb5ebd571703a245deb2a8384baea4747be00d5b469ff30f830e234f74453f6e2c20cb26",
+                        "attestationPubkey": "0xf19bf07520b1e97b131a55666bfe3e74cca720785f414d6b3e5d6f1616f35f7ab0e82123e74c2c766f970a233d0d19725a7d4d36",
+                        "proposalPubkey": "0x2327c12fc91cac0dc3593a5edb9c4a3c35ee9b5abc12883d28354b6965811c15ea1b926e86b8e16470d3586985293a5944d19b77",
                         "index": 3
                     }
                 ]
@@ -70,7 +74,7 @@
         ],
         "expectException": "AssertionError",
         "_info": {
-            "hash": "0xa69cd326fd14a060fb9e770eff2407fa1d418245b188c6ef976df87acee884a5",
+            "hash": "0x1771339d80477407305609656802dffa9f5e09f15b82371a9148d635a58d3699",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/state_transition/test_block_processing.py::test_block_with_invalid_parent_root[fork_Devnet]",
             "description": "Test that blocks with wrong parent root are rejected.\n\n    Scenario\n    --------\n    Attempt to process a block where parent root doesn't match\n    hash_tree_root(state.latest block header).\n\n    Expected Behavior\n    -----------------\n    Block processing fails with AssertionError: \"Block parent root mismatch\"\n\n    Why This Matters\n    ----------------\n    Maintains chain integrity:\n    - Blocks must reference correct parent\n    - Prevents chain history forgery\n    - Ensures linear chain continuity\n    - Critical for fork resolution\n\n    Without this check, attackers could create invalid chain branches.",

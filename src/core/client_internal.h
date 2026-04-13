@@ -227,7 +227,7 @@ int lantern_client_checkpoint_sync_parse_url(
     char **out_base_path);
 
 /**
- * Cache an individual gossip signature keyed by validator and attestation root.
+ * Cache an individual attestation signature keyed by validator and attestation root.
  *
  * @param client     Client instance (state_lock must be held)
  * @param key        Signature cache key
@@ -236,12 +236,21 @@ int lantern_client_checkpoint_sync_parse_url(
  *
  * @note Thread safety: Caller must hold state_lock.
  */
-int lantern_client_set_gossip_signature(
+int lantern_client_set_attestation_signature(
     struct lantern_client *client,
     const LanternSignatureKey *key,
     const LanternAttestationData *data,
     const LanternSignature *signature,
     uint64_t target_slot);
+
+static inline int lantern_client_set_gossip_signature(
+    struct lantern_client *client,
+    const LanternSignatureKey *key,
+    const LanternAttestationData *data,
+    const LanternSignature *signature,
+    uint64_t target_slot) {
+    return lantern_client_set_attestation_signature(client, key, data, signature, target_slot);
+}
 
 /**
  * Cache a newly received aggregated signature proof keyed by attestation data root.

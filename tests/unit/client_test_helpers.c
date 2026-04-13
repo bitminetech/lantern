@@ -17,7 +17,8 @@
 
 static int client_test_load_fixture_genesis_time(uint64_t *out_time);
 
-static int load_precomputed_keys(
+int client_test_load_precomputed_keypair(
+    size_t validator_index,
     struct PQSignatureSchemePublicKey **out_pub,
     struct PQSignatureSchemeSecretKey **out_secret) {
     if (!out_pub || !out_secret) {
@@ -28,16 +29,18 @@ static int load_precomputed_keys(
     int pk_written = snprintf(
         pk_path,
         sizeof(pk_path),
-        "%s/genesis/xmss-keys/validator_0_pk.json",
-        LANTERN_TEST_FIXTURE_DIR);
+        "%s/genesis/xmss-keys/validator_%zu_pk.json",
+        LANTERN_TEST_FIXTURE_DIR,
+        validator_index);
     if (pk_written <= 0 || (size_t)pk_written >= sizeof(pk_path)) {
         return -1;
     }
     int sk_written = snprintf(
         sk_path,
         sizeof(sk_path),
-        "%s/genesis/xmss-keys/validator_0_sk.json",
-        LANTERN_TEST_FIXTURE_DIR);
+        "%s/genesis/xmss-keys/validator_%zu_sk.json",
+        LANTERN_TEST_FIXTURE_DIR,
+        validator_index);
     if (sk_written <= 0 || (size_t)sk_written >= sizeof(sk_path)) {
         return -1;
     }
@@ -194,7 +197,7 @@ static int client_test_setup_vote_validation_client_common(
         goto finish;
     }
 
-    if (load_precomputed_keys(&pub, &secret) != 0) {
+    if (client_test_load_precomputed_keypair(0u, &pub, &secret) != 0) {
         goto finish;
     }
 
@@ -231,17 +234,22 @@ static int client_test_setup_vote_validation_client_common(
             LANTERN_VALIDATOR_PUBKEY_SIZE);
     }
 
-    if (lantern_state_set_validator_pubkeys(&client->state, serialized_pubkeys, validator_count) != 0) {
-        fprintf(stderr, "failed to set validator pubkeys for vote test\n");
+    if (lantern_state_set_validator_pubkeys_dual(
+            &client->state,
+            serialized_pubkeys,
+            serialized_pubkeys,
+            validator_count)
+        != 0) {
+        fprintf(stderr, "failed to set dual validator pubkeys for vote test\n");
         goto finish;
     }
-    const uint8_t *stored_pub = lantern_state_validator_pubkey(&client->state, 0);
+    const uint8_t *stored_pub = lantern_state_validator_attestation_pubkey(&client->state, 0);
     if (!stored_pub) {
-        fprintf(stderr, "stored validator pubkey missing after load\n");
+        fprintf(stderr, "stored validator attestation pubkey missing after load\n");
         goto finish;
     }
     if (memcmp(stored_pub, serialized_pub, LANTERN_VALIDATOR_PUBKEY_SIZE) != 0) {
-        fprintf(stderr, "stored validator pubkey mismatch after load\n");
+        fprintf(stderr, "stored validator attestation pubkey mismatch after load\n");
         goto finish;
     }
 
@@ -295,7 +303,7 @@ static int client_test_setup_vote_validation_client_common(
         goto finish;
     }
     child.parent_root = anchor_root_local;
-    child_signed.message.block = child;
+    child_signed.block = child;
 
     if (lantern_state_preview_post_state_root(
             &client->state,
@@ -306,7 +314,7 @@ static int client_test_setup_vote_validation_client_common(
         fprintf(stderr, "failed to preview child post-state root for vote test\n");
         goto finish;
     }
-    child_signed.message.block = child;
+    child_signed.block = child;
 
     if (lantern_hash_tree_root_block(&child, &child_root_local) != 0) {
         fprintf(stderr, "failed to hash child block for vote test\n");
@@ -330,7 +338,7 @@ static int client_test_setup_vote_validation_client_common(
         fprintf(stderr, "failed to advance state slot for vote test child block\n");
         goto finish;
     }
-    if (lantern_state_process_block(&client->state, &client->store, &child, NULL, NULL) != 0) {
+    if (lantern_state_process_block(&client->state, &client->store, &child, NULL) != 0) {
         fprintf(stderr, "failed to process child block into vote test state\n");
         goto finish;
     }

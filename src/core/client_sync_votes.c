@@ -496,7 +496,7 @@ static bool process_vote_locked(
             .validator_index = vote->data.validator_id,
             .data_root = data_root,
         };
-        if (lantern_client_set_gossip_signature(
+        if (lantern_client_set_attestation_signature(
                 client,
                 &key,
                 &vote->data.data,
@@ -726,7 +726,7 @@ bool lantern_client_verify_vote_signature(
             state_validator_count);
         return false;
     }
-    const uint8_t *pubkey_bytes = lantern_state_validator_pubkey(
+    const uint8_t *pubkey_bytes = lantern_state_validator_attestation_pubkey(
         state_override,
         (size_t)vote->data.validator_id);
     if (!pubkey_bytes || lantern_validator_pubkey_is_zero(pubkey_bytes))

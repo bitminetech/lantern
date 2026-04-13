@@ -178,6 +178,63 @@ static bool state_has_genesis_shape(const LanternState *state)
     return true;
 }
 
+static bool validate_gossip_aggregated_attestation_data_locked(
+    struct lantern_client *client,
+    const LanternAttestationData *data,
+    LanternRoot *out_missing_root)
+{
+    if (!client || !data || !client->has_fork_choice) {
+        return false;
+    }
+    if (out_missing_root) {
+        memset(out_missing_root, 0, sizeof(*out_missing_root));
+    }
+
+    uint64_t source_block_slot = 0u;
+    if (!lantern_client_block_known_locked(client, &data->source.root, &source_block_slot)) {
+        if (out_missing_root) {
+            *out_missing_root = data->source.root;
+        }
+        return false;
+    }
+
+    uint64_t target_block_slot = 0u;
+    if (!lantern_client_block_known_locked(client, &data->target.root, &target_block_slot)) {
+        if (out_missing_root) {
+            *out_missing_root = data->target.root;
+        }
+        return false;
+    }
+
+    uint64_t head_block_slot = 0u;
+    if (!lantern_client_block_known_locked(client, &data->head.root, &head_block_slot)) {
+        if (out_missing_root) {
+            *out_missing_root = data->head.root;
+        }
+        return false;
+    }
+
+    if (data->source.slot > data->target.slot || data->head.slot < data->target.slot) {
+        return false;
+    }
+    if (source_block_slot != data->source.slot
+        || target_block_slot != data->target.slot
+        || head_block_slot != data->head.slot) {
+        return false;
+    }
+
+    uint64_t current_slot = 0u;
+    if (!lantern_client_current_slot(client, &current_slot)) {
+        return false;
+    }
+    uint64_t allowed_slot = current_slot == UINT64_MAX ? UINT64_MAX : current_slot + 1u;
+    if (data->slot > allowed_slot) {
+        return false;
+    }
+
+    return true;
+}
+
 
 /**
  * Handle a block received via gossip.
@@ -279,6 +336,12 @@ static bool verify_and_cache_aggregated_attestation_locked(
         || !attestation->proof.proof_data.data) {
         return false;
     }
+    if (!validate_gossip_aggregated_attestation_data_locked(
+            client,
+            &attestation->data,
+            out_missing_root)) {
+        return false;
+    }
 
     LanternState target_state;
     lantern_state_init(&target_state);
@@ -335,7 +398,7 @@ static bool verify_and_cache_aggregated_attestation_locked(
         if (!lantern_bitlist_get(&attestation->proof.participants, i)) {
             continue;
         }
-        const uint8_t *pubkey = lantern_state_validator_pubkey(sig_state, i);
+        const uint8_t *pubkey = lantern_state_validator_attestation_pubkey(sig_state, i);
         if (!pubkey || lantern_validator_pubkey_is_zero(pubkey)) {
             free(pubkeys);
             lantern_state_reset(&target_state);
@@ -458,36 +521,20 @@ void persist_anchor_block(
 
     LanternSignedBlock stored_anchor;
     lantern_signed_block_with_attestation_init(&stored_anchor);
-    LanternBlock *block = &stored_anchor.message.block;
+    LanternBlock *block = &stored_anchor.block;
     block->slot = anchor_block->slot;
     block->proposer_index = anchor_block->proposer_index;
     block->parent_root = anchor_block->parent_root;
     block->state_root = anchor_block->state_root;
 
     LanternRoot computed_root;
-    const LanternRoot *root_for_vote = anchor_root;
     const LanternRoot *root_to_log = anchor_root;
-    if (!root_for_vote)
+    if (!root_to_log)
     {
         if (lantern_hash_tree_root_block(block, &computed_root) == 0)
         {
-            root_for_vote = &computed_root;
-            root_to_log = root_for_vote;
+            root_to_log = &computed_root;
         }
-    }
-
-    if (root_for_vote)
-    {
-        LanternVote *vote = &stored_anchor.message.proposer_attestation;
-        LanternCheckpoint anchor_checkpoint = {
-            .root = *root_for_vote,
-            .slot = block->slot,
-        };
-        vote->validator_id = block->proposer_index;
-        vote->slot = block->slot;
-        vote->head = anchor_checkpoint;
-        vote->target = anchor_checkpoint;
-        vote->source = anchor_checkpoint;
     }
     char root_hex[ROOT_HEX_BUFFER_LEN];
     root_hex[0] = '\0';
@@ -497,8 +544,8 @@ void persist_anchor_block(
     }
 
     struct lantern_log_metadata meta = {.validator = client->node_id};
-    if (root_for_vote
-        ? lantern_storage_store_block_for_root(client->data_dir, root_for_vote, &stored_anchor) != 0
+    if (root_to_log
+        ? lantern_storage_store_block_for_root(client->data_dir, root_to_log, &stored_anchor) != 0
         : lantern_storage_store_block(client->data_dir, &stored_anchor) != 0)
     {
         lantern_log_warn(
@@ -965,11 +1012,11 @@ static int compare_blocks_by_slot(const void *lhs_ptr, const void *rhs_ptr)
 {
     const struct lantern_persisted_block *lhs = lhs_ptr;
     const struct lantern_persisted_block *rhs = rhs_ptr;
-    if (lhs->block.message.block.slot < rhs->block.message.block.slot)
+    if (lhs->block.block.slot < rhs->block.block.slot)
     {
         return -1;
     }
-    if (lhs->block.message.block.slot > rhs->block.message.block.slot)
+    if (lhs->block.block.slot > rhs->block.block.slot)
     {
         return 1;
     }
@@ -1114,21 +1161,11 @@ int restore_persisted_blocks(struct lantern_client *client)
     for (size_t i = 0; i < list.length; ++i)
     {
         const struct lantern_persisted_block *entry = &list.items[i];
-        const LanternBlock *block = &entry->block.message.block;
-        const LanternVote *vote = &entry->block.message.proposer_attestation;
+        const LanternBlock *block = &entry->block.block;
         LanternState cached_post_state;
         bool have_cached_post_state = load_restored_block_state(client, &entry->root, &cached_post_state);
-        LanternSignedVote persisted_proposer;
-        const LanternSignedVote *proposer_ptr = NULL;
         const LanternCheckpoint *post_justified = &client->state.latest_justified;
         const LanternCheckpoint *post_finalized = &client->state.latest_finalized;
-        if (vote->slot == block->slot && vote->validator_id == block->proposer_index)
-        {
-            memset(&persisted_proposer, 0, sizeof(persisted_proposer));
-            persisted_proposer.data = *vote;
-            persisted_proposer.signature = entry->block.signatures.proposer_signature;
-            proposer_ptr = &persisted_proposer;
-        }
         if (have_cached_post_state)
         {
             post_justified = &cached_post_state.latest_justified;
@@ -1220,7 +1257,7 @@ int restore_persisted_blocks(struct lantern_client *client)
         if (lantern_fork_choice_add_block_with_state(
                 &client->fork_choice,
                 block,
-                proposer_ptr,
+                NULL,
                 post_justified,
                 post_finalized,
                 &entry->root,
@@ -1235,7 +1272,7 @@ int restore_persisted_blocks(struct lantern_client *client)
                 " post_justified_root=%s post_justified_known=%s"
                 " post_finalized_slot=%" PRIu64 " post_finalized_root=%s"
                 " post_finalized_known=%s canonical_anchor_state=%s",
-                entry->block.message.block.slot,
+                entry->block.block.slot,
                 block_root_hex[0] ? block_root_hex : "0x0",
                 parent_root_hex[0] ? parent_root_hex : "0x0",
                 have_cached_post_state ? "true" : "false",
@@ -1250,9 +1287,6 @@ int restore_persisted_blocks(struct lantern_client *client)
         else
         {
             lantern_client_cache_block_aggregated_proofs_locked(client, &entry->block);
-            if (proposer_ptr) {
-                lantern_client_cache_proposer_attestation_locked(client, proposer_ptr);
-            }
         }
         if (have_cached_post_state)
         {
@@ -1415,15 +1449,16 @@ static void update_registry_record_from_state_pubkey(
 
 
 /**
- * @brief Populate a packed validator pubkey buffer from registry/state sources.
+ * @brief Populate packed attestation/proposal pubkey buffers from registry/state sources.
  *
- * Writes a packed array of validator pubkeys into `packed` and opportunistically
- * fills missing registry pubkeys from the state.
+ * Writes packed arrays of validator pubkeys into the provided output buffers
+ * and opportunistically fills missing registry pubkeys from the state.
  *
  * @param client              Client instance
  * @param registry            Validator registry (must have records)
  * @param state_count         Validator count in state
- * @param packed              Output packed buffer (count * LANTERN_VALIDATOR_PUBKEY_SIZE bytes)
+ * @param attestation_packed  Output packed attestation buffer
+ * @param proposal_packed     Output packed proposal buffer
  * @param count               Number of validators to write
  * @param meta                Logging metadata
  * @param out_registry_used   Output count of pubkeys sourced from registry
@@ -1438,14 +1473,16 @@ static int populate_validator_pubkeys(
     struct lantern_client *client,
     struct lantern_validator_registry *registry,
     size_t state_count,
-    uint8_t *packed,
+    uint8_t *attestation_packed,
+    uint8_t *proposal_packed,
     size_t count,
     const struct lantern_log_metadata *meta,
     size_t *out_registry_used,
     size_t *out_state_used,
     size_t *out_missing_pubkeys)
 {
-    if (!client || !registry || !registry->records || !packed || !meta
+    if (!client || !registry || !registry->records || !attestation_packed
+        || !proposal_packed || !meta
         || !out_registry_used || !out_state_used || !out_missing_pubkeys)
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
@@ -1464,24 +1501,38 @@ static int populate_validator_pubkeys(
             registry_pub = record->pubkey_bytes;
         }
 
-        const uint8_t *state_pub = NULL;
+        const uint8_t *state_attestation_pub = NULL;
+        const uint8_t *state_proposal_pub = NULL;
         if (state_count > i)
         {
-            state_pub = lantern_state_validator_pubkey(&client->state, i);
+            state_attestation_pub = lantern_state_validator_attestation_pubkey(&client->state, i);
+            state_proposal_pub = lantern_state_validator_proposal_pubkey(&client->state, i);
         }
-        if (state_pub && lantern_validator_pubkey_is_zero(state_pub))
+        if (state_attestation_pub && lantern_validator_pubkey_is_zero(state_attestation_pub))
         {
-            state_pub = NULL;
+            state_attestation_pub = NULL;
+        }
+        if (state_proposal_pub && lantern_validator_pubkey_is_zero(state_proposal_pub))
+        {
+            state_proposal_pub = NULL;
         }
 
-        const uint8_t *chosen = registry_pub ? registry_pub : state_pub;
+        const uint8_t *chosen_attestation = registry_pub ? registry_pub : state_attestation_pub;
+        const uint8_t *chosen_proposal = state_proposal_pub ? state_proposal_pub : chosen_attestation;
         size_t offset = i * LANTERN_VALIDATOR_PUBKEY_SIZE;
-        if (chosen)
+        if (chosen_attestation)
         {
-            memcpy(packed + offset, chosen, LANTERN_VALIDATOR_PUBKEY_SIZE);
-            if (!registry_pub && state_pub)
+            memcpy(
+                attestation_packed + offset,
+                chosen_attestation,
+                LANTERN_VALIDATOR_PUBKEY_SIZE);
+            memcpy(
+                proposal_packed + offset,
+                chosen_proposal,
+                LANTERN_VALIDATOR_PUBKEY_SIZE);
+            if (!registry_pub && state_attestation_pub)
             {
-                update_registry_record_from_state_pubkey(record, state_pub, meta, i);
+                update_registry_record_from_state_pubkey(record, state_attestation_pub, meta, i);
                 ++(*out_state_used);
             }
             else if (registry_pub)
@@ -1491,7 +1542,8 @@ static int populate_validator_pubkeys(
         }
         else
         {
-            memset(packed + offset, 0, LANTERN_VALIDATOR_PUBKEY_SIZE);
+            memset(attestation_packed + offset, 0, LANTERN_VALIDATOR_PUBKEY_SIZE);
+            memset(proposal_packed + offset, 0, LANTERN_VALIDATOR_PUBKEY_SIZE);
             ++(*out_missing_pubkeys);
         }
     }
@@ -1533,7 +1585,7 @@ int lantern_client_refresh_state_validators(struct lantern_client *client)
     {
         if (state_count == 0)
         {
-            if (lantern_state_set_validator_pubkeys(&client->state, NULL, 0) != 0)
+            if (lantern_state_set_validator_pubkeys_dual(&client->state, NULL, NULL, 0) != 0)
             {
                 return LANTERN_CLIENT_ERR_RUNTIME;
             }
@@ -1563,9 +1615,12 @@ int lantern_client_refresh_state_validators(struct lantern_client *client)
         return LANTERN_CLIENT_ERR_ALLOC;
     }
     size_t total_bytes = count * LANTERN_VALIDATOR_PUBKEY_SIZE;
-    uint8_t *packed = malloc(total_bytes);
-    if (!packed)
+    uint8_t *attestation_packed = malloc(total_bytes);
+    uint8_t *proposal_packed = malloc(total_bytes);
+    if (!attestation_packed || !proposal_packed)
     {
+        free(attestation_packed);
+        free(proposal_packed);
         return LANTERN_CLIENT_ERR_ALLOC;
     }
     size_t registry_used = 0;
@@ -1575,7 +1630,8 @@ int lantern_client_refresh_state_validators(struct lantern_client *client)
         client,
         registry,
         state_count,
-        packed,
+        attestation_packed,
+        proposal_packed,
         count,
         &meta,
         &registry_used,
@@ -1583,17 +1639,23 @@ int lantern_client_refresh_state_validators(struct lantern_client *client)
         &missing_pubkeys);
     if (pack_rc != LANTERN_CLIENT_OK)
     {
-        free(packed);
+        free(attestation_packed);
+        free(proposal_packed);
         return pack_rc;
     }
-    int rc = lantern_state_set_validator_pubkeys(&client->state, packed, count);
-    free(packed);
+    int rc = lantern_state_set_validator_pubkeys_dual(
+        &client->state,
+        attestation_packed,
+        proposal_packed,
+        count);
+    free(attestation_packed);
+    free(proposal_packed);
     if (rc != 0)
     {
         lantern_log_warn(
             "client",
             &meta,
-            "failed to copy validator pubkeys into parent state");
+            "failed to copy validator keypairs into parent state");
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
     size_t enabled = lantern_client_enabled_validator_count(client);
@@ -2903,7 +2965,7 @@ void lantern_client_enqueue_pending_block(
             "state",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to queue pending block slot=%" PRIu64,
-            block->message.block.slot);
+            block->block.slot);
         return;
     }
 
@@ -2930,7 +2992,7 @@ void lantern_client_enqueue_pending_block(
             "state",
             &meta,
             "queued block slot=%" PRIu64 " root=%s waiting for parent=%s (via gossip)",
-            block->message.block.slot,
+            block->block.slot,
             block_hex[0] ? block_hex : "0x0",
             parent_hex[0] ? parent_hex : "0x0");
     }
@@ -2940,7 +3002,7 @@ void lantern_client_enqueue_pending_block(
             "state",
             &meta,
             "queued block slot=%" PRIu64 " root=%s waiting for parent=%s (via gossip)",
-            block->message.block.slot,
+            block->block.slot,
             block_hex[0] ? block_hex : "0x0",
             parent_hex[0] ? parent_hex : "0x0");
     }
@@ -3071,7 +3133,7 @@ void lantern_client_process_pending_children(
             else
             {
                 replays[replay_count].root = entry->root;
-                replays[replay_count].slot = entry->block.message.block.slot;
+                replays[replay_count].slot = entry->block.block.slot;
                 replays[replay_count].backfill_depth = entry->backfill_depth;
                 replays[replay_count].peer_text[0] = '\0';
                 if (entry->peer_text[0])

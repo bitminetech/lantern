@@ -36,7 +36,10 @@ static const size_t GENESIS_PUBKEY_HEX_BUFFER_LEN = (LANTERN_VALIDATOR_PUBKEY_SI
 
 static const char *const CHAIN_CONFIG_KEY_GENESIS_TIME = "GENESIS_TIME";
 static const char *const CHAIN_CONFIG_KEY_VALIDATOR_COUNT = "VALIDATOR_COUNT";
+static const char *const CHAIN_CONFIG_KEY_NUM_VALIDATORS = "NUM_VALIDATORS";
 static const char *const CHAIN_CONFIG_KEY_GENESIS_VALIDATORS = "GENESIS_VALIDATORS";
+static const char *const CHAIN_CONFIG_FIELD_ATTESTATION_PUBKEY = "attestation_pubkey";
+static const char *const CHAIN_CONFIG_FIELD_PROPOSAL_PUBKEY = "proposal_pubkey";
 
 static const char *const VALIDATOR_CONFIG_SCALAR_SHUFFLE = "shuffle";
 static const char *const VALIDATOR_CONFIG_ARRAY_VALIDATORS = "validators";
@@ -59,7 +62,11 @@ static enum lantern_validator_client_kind classify_validator_client(const char *
 static int derive_peer_id_from_privkey_hex(const char *hex, char **out_peer_id);
 static int decode_validator_pubkey_hex(const char *hex, uint8_t out[LANTERN_VALIDATOR_PUBKEY_SIZE]);
 
-static int ensure_pubkey_capacity(uint8_t **pubkeys, size_t *cap, size_t required);
+static int ensure_pubkey_pair_capacity(
+    uint8_t **attestation_pubkeys,
+    uint8_t **proposal_pubkeys,
+    size_t *cap,
+    size_t required);
 static int parse_validator_config_entry(
     const LanternYamlObject *object,
     struct lantern_validator_config_entry *entry);
@@ -492,25 +499,30 @@ static int decode_validator_pubkey_hex(const char *hex, uint8_t out[LANTERN_VALI
 
 
 /**
- * Ensure capacity for a packed pubkey buffer (count elements).
+ * Ensure capacity for packed attestation/proposal pubkey buffers.
  *
- * Grows the allocation for `*pubkeys` to hold at least `required` pubkeys,
- * returning `LANTERN_VALIDATOR_PUBKEY_SIZE` bytes per element.
+ * Grows both allocations together so callers can treat index `i` in each array
+ * as one validator entry.
  *
- * @param pubkeys Pointer to the packed pubkey buffer pointer.
- * @param cap     Pointer to the current capacity in pubkey elements.
- * @param required Minimum required capacity in pubkey elements.
+ * @param attestation_pubkeys Pointer to the attestation pubkey buffer pointer.
+ * @param proposal_pubkeys    Pointer to the proposal pubkey buffer pointer.
+ * @param cap                 Pointer to the current capacity in validator entries.
+ * @param required            Minimum required capacity in validator entries.
  *
  * @return LANTERN_GENESIS_OK on success.
  * @return LANTERN_GENESIS_ERR_INVALID_PARAM on invalid parameters.
  * @return LANTERN_GENESIS_ERR_OUT_OF_MEMORY on allocation failure.
  * @return LANTERN_GENESIS_ERR_OVERFLOW on capacity overflow.
  *
- * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to `pubkeys` and `cap`.
+ * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to the buffers.
  */
-static int ensure_pubkey_capacity(uint8_t **pubkeys, size_t *cap, size_t required)
+static int ensure_pubkey_pair_capacity(
+    uint8_t **attestation_pubkeys,
+    uint8_t **proposal_pubkeys,
+    size_t *cap,
+    size_t required)
 {
-    if (!pubkeys || !cap)
+    if (!attestation_pubkeys || !proposal_pubkeys || !cap)
     {
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
@@ -535,13 +547,33 @@ static int ensure_pubkey_capacity(uint8_t **pubkeys, size_t *cap, size_t require
         return LANTERN_GENESIS_ERR_OVERFLOW;
     }
 
-    void *grown = realloc(*pubkeys, new_cap * LANTERN_VALIDATOR_PUBKEY_SIZE);
-    if (!grown)
+    size_t bytes_len = new_cap * LANTERN_VALIDATOR_PUBKEY_SIZE;
+    uint8_t *grown_attestation = malloc(bytes_len);
+    uint8_t *grown_proposal = malloc(bytes_len);
+    if (!grown_attestation || !grown_proposal)
     {
+        free(grown_attestation);
+        free(grown_proposal);
         return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
     }
 
-    *pubkeys = grown;
+    if (*cap > 0)
+    {
+        size_t copy_len = (*cap) * LANTERN_VALIDATOR_PUBKEY_SIZE;
+        if (*attestation_pubkeys)
+        {
+            memcpy(grown_attestation, *attestation_pubkeys, copy_len);
+        }
+        if (*proposal_pubkeys)
+        {
+            memcpy(grown_proposal, *proposal_pubkeys, copy_len);
+        }
+    }
+
+    free(*attestation_pubkeys);
+    free(*proposal_pubkeys);
+    *attestation_pubkeys = grown_attestation;
+    *proposal_pubkeys = grown_proposal;
     *cap = new_cap;
     return LANTERN_GENESIS_OK;
 }
@@ -678,11 +710,11 @@ void genesis_free_validator_config(struct lantern_validator_config *config)
  * Merge chain config pubkeys into an existing validator registry.
  *
  * Populates missing `pubkey_bytes` and (best-effort) `pubkey_hex` for records
- * in `registry` using the packed pubkey buffer in `config`.
+ * in `registry` using the attestation pubkeys from `config`.
  *
  * @spec Lantern devnet genesis artifact files (lean quickstart).
  *
- * @param config   Chain config containing packed pubkeys.
+ * @param config   Chain config containing packed validator keypairs.
  * @param registry Registry to update in place.
  *
  * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to registry.
@@ -695,7 +727,7 @@ void genesis_merge_chain_pubkeys_into_registry(
     {
         return;
     }
-    if (!config->validator_pubkeys || config->validator_pubkeys_count == 0)
+    if (!config->validator_attestation_pubkeys || config->validator_pubkeys_count == 0)
     {
         return;
     }
@@ -718,7 +750,8 @@ void genesis_merge_chain_pubkeys_into_registry(
         {
             memcpy(
                 rec->pubkey_bytes,
-                config->validator_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+                config->validator_attestation_pubkeys
+                    + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
                 LANTERN_VALIDATOR_PUBKEY_SIZE);
             rec->has_pubkey_bytes = true;
         }
@@ -744,9 +777,9 @@ void genesis_merge_chain_pubkeys_into_registry(
 /**
  * Parse chain configuration scalars from a chain config file.
  *
- * Parses the top-level `GENESIS_TIME` and `VALIDATOR_COUNT` scalars. Any prior
- * packed pubkeys in `config->validator_pubkeys` are freed and the pubkey fields
- * are reset.
+ * Parses the top-level `GENESIS_TIME` and validator-count scalar
+ * (`VALIDATOR_COUNT` or `NUM_VALIDATORS`). Any prior packed pubkeys in
+ * `config` are freed and the pubkey fields are reset.
  *
  * @spec Lantern devnet genesis artifact files (lean quickstart).
  *
@@ -770,8 +803,10 @@ int genesis_parse_chain_config(const char *path, struct lantern_chain_config *co
     config->genesis_time = 0;
     config->validator_count = 0;
 
-    free(config->validator_pubkeys);
-    config->validator_pubkeys = NULL;
+    free(config->validator_attestation_pubkeys);
+    config->validator_attestation_pubkeys = NULL;
+    free(config->validator_proposal_pubkeys);
+    config->validator_proposal_pubkeys = NULL;
     config->validator_pubkeys_count = 0;
 
     FILE *fp = fopen(path, "r");
@@ -811,7 +846,8 @@ int genesis_parse_chain_config(const char *path, struct lantern_chain_config *co
                 break;
             }
         }
-        else if (strcmp(key, CHAIN_CONFIG_KEY_VALIDATOR_COUNT) == 0)
+        else if (strcmp(key, CHAIN_CONFIG_KEY_VALIDATOR_COUNT) == 0
+                 || strcmp(key, CHAIN_CONFIG_KEY_NUM_VALIDATORS) == 0)
         {
             int ok = 0;
             config->validator_count = parse_u64(value, &ok);
@@ -842,14 +878,27 @@ int genesis_parse_chain_config(const char *path, struct lantern_chain_config *co
 /**
  * Parse genesis validator pubkeys from a chain config file.
  *
- * Reads the `GENESIS_VALIDATORS` list and returns a packed pubkey buffer. On
- * success, `*out_pubkeys` is caller-owned and must be freed with `free()`.
+ * Supports the devnet-4 dual-key object format:
+ *
+ *   GENESIS_VALIDATORS:
+ *     - attestation_pubkey: 0x...
+ *       proposal_pubkey: 0x...
+ *
+ * and, as a backward-compatible fallback, the legacy scalar-list format:
+ *
+ *   GENESIS_VALIDATORS:
+ *     - 0x...
+ *
+ * In the legacy case, the single pubkey is copied into both output arrays.
+ * On success, any non-NULL output arrays are caller-owned and must be freed
+ * with `free()`.
  *
  * @spec Lantern devnet genesis artifact files (lean quickstart).
  *
- * @param path        Path to the chain config YAML file.
- * @param out_pubkeys Output pointer for the packed pubkeys buffer.
- * @param out_count   Output pointer for the pubkey count.
+ * @param path                     Path to the chain config YAML file.
+ * @param out_attestation_pubkeys  Output pointer for packed attestation pubkeys.
+ * @param out_proposal_pubkeys     Output pointer for packed proposal pubkeys.
+ * @param out_count                Output pointer for the validator count.
  *
  * @return LANTERN_GENESIS_OK on success.
  * @return LANTERN_GENESIS_ERR_INVALID_PARAM on invalid parameters.
@@ -862,16 +911,111 @@ int genesis_parse_chain_config(const char *path, struct lantern_chain_config *co
  */
 int genesis_parse_genesis_validator_pubkeys(
     const char *path,
-    uint8_t **out_pubkeys,
+    uint8_t **out_attestation_pubkeys,
+    uint8_t **out_proposal_pubkeys,
     size_t *out_count)
 {
-    if (!path || !out_pubkeys || !out_count)
+    if (!path || !out_attestation_pubkeys || !out_proposal_pubkeys || !out_count)
     {
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
 
-    *out_pubkeys = NULL;
+    *out_attestation_pubkeys = NULL;
+    *out_proposal_pubkeys = NULL;
     *out_count = 0;
+
+    size_t object_count = 0;
+    LanternYamlObject *objects = lantern_yaml_read_array(
+        path,
+        CHAIN_CONFIG_KEY_GENESIS_VALIDATORS,
+        &object_count);
+    if (objects && object_count > 0)
+    {
+        size_t count = 0;
+        size_t cap = 0;
+        uint8_t *attestation_pubkeys = NULL;
+        uint8_t *proposal_pubkeys = NULL;
+        int result = LANTERN_GENESIS_OK;
+
+        for (size_t i = 0; i < object_count; ++i)
+        {
+            const char *attestation_value = yaml_object_value(
+                &objects[i],
+                CHAIN_CONFIG_FIELD_ATTESTATION_PUBKEY);
+            const char *proposal_value = yaml_object_value(
+                &objects[i],
+                CHAIN_CONFIG_FIELD_PROPOSAL_PUBKEY);
+            if (!attestation_value || !proposal_value)
+            {
+                result = LANTERN_GENESIS_ERR_INVALID_DATA;
+                break;
+            }
+
+            char *attestation_hex = dup_trimmed(attestation_value);
+            char *proposal_hex = dup_trimmed(proposal_value);
+            if (!attestation_hex || !proposal_hex)
+            {
+                free(attestation_hex);
+                free(proposal_hex);
+                result = LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
+                break;
+            }
+
+            result = ensure_pubkey_pair_capacity(
+                &attestation_pubkeys,
+                &proposal_pubkeys,
+                &cap,
+                count + 1);
+            if (result == LANTERN_GENESIS_OK)
+            {
+                result = decode_validator_pubkey_hex(
+                    attestation_hex,
+                    attestation_pubkeys + (count * LANTERN_VALIDATOR_PUBKEY_SIZE));
+            }
+            if (result == LANTERN_GENESIS_OK)
+            {
+                result = decode_validator_pubkey_hex(
+                    proposal_hex,
+                    proposal_pubkeys + (count * LANTERN_VALIDATOR_PUBKEY_SIZE));
+            }
+
+            free(attestation_hex);
+            free(proposal_hex);
+
+            if (result != LANTERN_GENESIS_OK)
+            {
+                result = (result == LANTERN_GENESIS_ERR_OUT_OF_MEMORY)
+                    ? result
+                    : LANTERN_GENESIS_ERR_INVALID_DATA;
+                break;
+            }
+
+            ++count;
+        }
+
+        lantern_yaml_free_objects(objects, object_count);
+
+        if (result != LANTERN_GENESIS_OK)
+        {
+            free(attestation_pubkeys);
+            free(proposal_pubkeys);
+            return result;
+        }
+
+        if (count == 0)
+        {
+            free(attestation_pubkeys);
+            free(proposal_pubkeys);
+            return LANTERN_GENESIS_OK;
+        }
+
+        *out_attestation_pubkeys = attestation_pubkeys;
+        *out_proposal_pubkeys = proposal_pubkeys;
+        *out_count = count;
+        return LANTERN_GENESIS_OK;
+    }
+
+    lantern_yaml_free_objects(objects, object_count);
 
     FILE *fp = fopen(path, "r");
     if (!fp)
@@ -882,7 +1026,8 @@ int genesis_parse_genesis_validator_pubkeys(
     bool in_array = false;
     size_t count = 0;
     size_t cap = 0;
-    uint8_t *pubkeys = NULL;
+    uint8_t *attestation_pubkeys = NULL;
+    uint8_t *proposal_pubkeys = NULL;
     int result = LANTERN_GENESIS_OK;
 
     char line[GENESIS_SMALL_LINE_BUFFER_LEN];
@@ -924,23 +1069,28 @@ int genesis_parse_genesis_validator_pubkeys(
 
         val = strip_optional_quotes(val);
 
-        uint8_t decoded[LANTERN_VALIDATOR_PUBKEY_SIZE];
-        result = decode_validator_pubkey_hex(val, decoded);
+        result = ensure_pubkey_pair_capacity(
+            &attestation_pubkeys,
+            &proposal_pubkeys,
+            &cap,
+            count + 1);
+        if (result != LANTERN_GENESIS_OK)
+        {
+            break;
+        }
+
+        uint8_t *attestation_dest =
+            attestation_pubkeys + (count * LANTERN_VALIDATOR_PUBKEY_SIZE);
+        result = decode_validator_pubkey_hex(val, attestation_dest);
         if (result != LANTERN_GENESIS_OK)
         {
             result = LANTERN_GENESIS_ERR_INVALID_DATA;
             break;
         }
 
-        result = ensure_pubkey_capacity(&pubkeys, &cap, count + 1);
-        if (result != LANTERN_GENESIS_OK)
-        {
-            break;
-        }
-
         memcpy(
-            pubkeys + (count * LANTERN_VALIDATOR_PUBKEY_SIZE),
-            decoded,
+            proposal_pubkeys + (count * LANTERN_VALIDATOR_PUBKEY_SIZE),
+            attestation_dest,
             LANTERN_VALIDATOR_PUBKEY_SIZE);
         ++count;
     }
@@ -949,17 +1099,20 @@ int genesis_parse_genesis_validator_pubkeys(
 
     if (result != LANTERN_GENESIS_OK)
     {
-        free(pubkeys);
+        free(attestation_pubkeys);
+        free(proposal_pubkeys);
         return result;
     }
 
     if (count == 0)
     {
-        free(pubkeys);
+        free(attestation_pubkeys);
+        free(proposal_pubkeys);
         return LANTERN_GENESIS_OK;
     }
 
-    *out_pubkeys = pubkeys;
+    *out_attestation_pubkeys = attestation_pubkeys;
+    *out_proposal_pubkeys = proposal_pubkeys;
     *out_count = count;
     return LANTERN_GENESIS_OK;
 }

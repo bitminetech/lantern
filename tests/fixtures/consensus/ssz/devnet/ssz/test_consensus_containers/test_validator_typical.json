@@ -4,12 +4,13 @@
         "leanEnv": "test",
         "typeName": "Validator",
         "value": {
-            "pubkey": "0xabababababababababababababababababababababababababababababababababababababababababababababababababababab",
+            "attestationPubkey": "0xabababababababababababababababababababababababababababababababababababababababababababababababababababab",
+            "proposalPubkey": "0xabababababababababababababababababababababababababababababababababababababababababababababababababababab",
             "index": 42
         },
-        "serialized": "0xabababababababababababababababababababababababababababababababababababababababababababababababababababab2a00000000000000",
+        "serialized": "0xabababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab2a00000000000000",
         "_info": {
-            "hash": "0xfecc27e7645427cb0cb5a7b9007dee085bc73c75bb536806bc0a7004faf68465",
+            "hash": "0x3cae5cb162b2b9e05b84edca77b006c028dbb65873887c050cd977c06dc4b4bc",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/ssz/test_consensus_containers.py::test_validator_typical[fork_Devnet]",
             "description": "SSZ roundtrip for Validator with typical values.",

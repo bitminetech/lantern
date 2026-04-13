@@ -24,6 +24,7 @@ METRICS_PORT="${LANTERN_METRICS_PORT:-8080}"
 
 GENESIS_CONFIG="${LANTERN_GENESIS_CONFIG:-${GENESIS_DIR}/config.yaml}"
 VALIDATOR_REGISTRY="${LANTERN_VALIDATOR_REGISTRY:-${GENESIS_DIR}/validators.yaml}"
+VALIDATOR_KEYS="${LANTERN_VALIDATOR_KEYS:-}"
 NODES_FILE="${LANTERN_NODES_FILE:-${GENESIS_DIR}/nodes.yaml}"
 GENESIS_STATE="${LANTERN_GENESIS_STATE:-${GENESIS_DIR}/genesis.ssz}"
 VALIDATOR_CONFIG="${LANTERN_VALIDATOR_CONFIG:-${GENESIS_DIR}/validator-config.yaml}"
@@ -44,6 +45,10 @@ if [[ -z "${NODE_KEY_HEX}" && ! -f "${NODE_KEY_PATH}" ]]; then
     echo "Node key missing; set LANTERN_NODE_KEY_HEX or provide ${NODE_KEY_PATH}" >&2
     exit 1
 fi
+if [[ -n "${VALIDATOR_KEYS}" && ! -f "${VALIDATOR_KEYS}" ]]; then
+    echo "Dual-key validator mapping not found: ${VALIDATOR_KEYS}" >&2
+    exit 1
+fi
 
 declare -a args
 args=(
@@ -59,6 +64,9 @@ args=(
     "--metrics-port" "${METRICS_PORT}"
     "--devnet" "${DEVNET}"
 )
+if [[ -n "${VALIDATOR_KEYS}" ]]; then
+    args+=("--validator-keys-path" "${VALIDATOR_KEYS}")
+fi
 
 if [[ -n "${NODE_KEY_HEX}" ]]; then
     args+=("--node-key" "${NODE_KEY_HEX}")

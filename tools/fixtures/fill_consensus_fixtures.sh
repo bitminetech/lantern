@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LANTERN_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-LEAN_SPEC_DIR="${LANTERN_ROOT}/tools/leanSpec"
+LEAN_SPEC_DIR="${LEAN_SPEC_DIR:-${LANTERN_ROOT}/tools/leanSpec}"
 FIXTURE_ROOT="${LANTERN_ROOT}/tests/fixtures"
 CONSENSUS_DIR="${FIXTURE_ROOT}/consensus"
 

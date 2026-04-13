@@ -1342,7 +1342,7 @@ static bool signed_block_matches_root(
         return false;
     }
     LanternRoot block_root = {0};
-    if (lantern_hash_tree_root_block(&block->message.block, &block_root) != 0)
+    if (lantern_hash_tree_root_block(&block->block, &block_root) != 0)
     {
         return false;
     }
@@ -1358,34 +1358,32 @@ static int signed_block_copy(
         return -1;
     }
 
-    lantern_signed_block_with_attestation_reset(dst);
-    lantern_signed_block_with_attestation_init(dst);
+    lantern_signed_block_reset(dst);
+    lantern_signed_block_init(dst);
 
-    dst->message.slot = src->message.slot;
-    dst->message.proposer_index = src->message.proposer_index;
-    dst->message.parent_root = src->message.parent_root;
-    dst->message.state_root = src->message.state_root;
-    dst->message.proposer_attestation = src->message.proposer_attestation;
-
+    dst->block.slot = src->block.slot;
+    dst->block.proposer_index = src->block.proposer_index;
+    dst->block.parent_root = src->block.parent_root;
+    dst->block.state_root = src->block.state_root;
     if (lantern_aggregated_attestations_copy(
-            &dst->message.body.attestations,
-            &src->message.body.attestations)
+            &dst->block.body.attestations,
+            &src->block.body.attestations)
         != 0)
     {
-        lantern_signed_block_with_attestation_reset(dst);
-        lantern_signed_block_with_attestation_init(dst);
+        lantern_signed_block_reset(dst);
+        lantern_signed_block_init(dst);
         return -1;
     }
-    dst->message.body.legacy_plain_attestation_layout =
-        src->message.body.legacy_plain_attestation_layout;
+    dst->block.body.legacy_plain_attestation_layout =
+        src->block.body.legacy_plain_attestation_layout;
 
     if (lantern_block_signatures_copy(
             &dst->signatures,
             &src->signatures)
         != 0)
     {
-        lantern_signed_block_with_attestation_reset(dst);
-        lantern_signed_block_with_attestation_init(dst);
+        lantern_signed_block_reset(dst);
+        lantern_signed_block_init(dst);
         return -1;
     }
 
@@ -1410,7 +1408,7 @@ static int signed_block_list_append_copy(
     LanternSignedBlock *dst = &list->blocks[previous_len];
     if (signed_block_copy(dst, block) != 0)
     {
-        lantern_signed_block_with_attestation_reset(dst);
+        lantern_signed_block_reset(dst);
         (void)lantern_signed_block_list_resize(list, previous_len);
         return -1;
     }
@@ -1470,7 +1468,7 @@ static bool append_pending_block_for_root(
 /**
  * Collect blocks for a blocks_by_root request.
  *
- * @spec subspecs/networking/reqresp/message.py - BlocksByRoot streamed SignedBlockWithAttestation chunks
+ * @spec subspecs/networking/reqresp/message.py - BlocksByRoot streamed SignedBlock chunks
  *
  * Retrieves blocks from storage matching the requested roots.
  * Returns blocks in the same order as the requested roots.

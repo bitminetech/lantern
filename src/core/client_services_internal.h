@@ -73,7 +73,34 @@ bool validator_service_should_run(const struct lantern_client *client);
 
 
 /**
- * Sign a vote with a validator's secret key.
+ * Sign an arbitrary message root with one of a validator's XMSS keys.
+ *
+ * Advances the selected key's prepared interval until it can sign `slot`,
+ * mutates the key in place, and writes the resulting signature to
+ * `out_signature`.
+ *
+ * @param validator         Local validator
+ * @param slot              Slot number
+ * @param message           Message root to sign
+ * @param use_proposal_key  When true, use proposal_secret_key; otherwise use
+ *                          attestation_secret_key
+ * @param out_signature     Output signature
+ * @return LANTERN_CLIENT_OK on success
+ * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
+ * @return LANTERN_CLIENT_ERR_VALIDATOR on missing keys or signing failure
+ *
+ * @note Thread safety: Caller must ensure exclusive access to validator
+ */
+int validator_sign_with_key(
+    struct lantern_local_validator *validator,
+    uint64_t slot,
+    const LanternRoot *message,
+    bool use_proposal_key,
+    LanternSignature *out_signature);
+
+
+/**
+ * Sign a vote with a validator's attestation secret key.
  *
  * @spec subspecs/xmss/sign.py - signature generation
  *
@@ -84,7 +111,7 @@ bool validator_service_should_run(const struct lantern_client *client);
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
  * @return LANTERN_CLIENT_ERR_VALIDATOR on hashing or signing failure
  *
- * @note Thread safety: This function is thread-safe
+ * @note Thread safety: Caller must ensure exclusive access to the validator
  */
 int validator_sign_vote(
     struct lantern_local_validator *validator,
@@ -133,7 +160,6 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
  * @param slot              Slot number
  * @param local_index       Local validator index
  * @param out_block         Output for the built block
- * @param out_proposer_vote Output for the proposer's vote
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM on bad inputs
  * @return LANTERN_CLIENT_ERR_RUNTIME on state/runtime failures
@@ -146,8 +172,7 @@ int validator_build_block(
     struct lantern_client *client,
     uint64_t slot,
     size_t local_index,
-    LanternSignedBlock *out_block,
-    LanternSignedVote *out_proposer_vote);
+    LanternSignedBlock *out_block);
 
 
 /**

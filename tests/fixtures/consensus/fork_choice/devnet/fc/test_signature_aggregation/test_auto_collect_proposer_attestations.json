@@ -31,19 +31,23 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x8fa00001b5b22a073d21cb60c9465b379f80e74fee9baf1d137eb651ed162900a6f3ec32da74ff09265ea62fc9a5055b2e9b7c7b",
+                        "attestationPubkey": "0xcd64341d83f28533f239153535b45209592342325ed31a5792b2e61935648748d41c384850baf6386c43bf19bfb63f53eb2c8c0b",
+                        "proposalPubkey": "0x5eba321a84f55461e2c0e94036d24e5107720876752d5c4f6e03183a7e7f1856e372c60dbc6fbc0450c26e58ba402f1da6952a73",
                         "index": 0
                     },
                     {
-                        "pubkey": "0xbc56037ab0485c00441e3205d908e55a016d5450a335144f50ccb034cb253c05a1cbc047b5695a5672697d584656e96a4b94f173",
+                        "attestationPubkey": "0x0c8f12450a0f4375d8f387643a66bd4084a76a522062790d8e961b38dfe3497444af494376e3c76f3007681a4016221434cdf51d",
+                        "proposalPubkey": "0x8b31ba434a9e116dcd99a11535d8fb480fe67517c20eb1117157ca1b1b6b0c5c9d9a632e3268986f35856c337fc18d7b6d4f926a",
                         "index": 1
                     },
                     {
-                        "pubkey": "0x79422d64ecdc3b0bf7c6cc31bbfb9f4eab7950107fe23c6f4f9c94465c81f80d85a1931f1003c50531147f350357805f22fdd70b",
+                        "attestationPubkey": "0x454d107dc0156e61baee057497d5667adb027d68f6fffb2bc61c6a38e45eed3531c9bd77e64f610044b26b1ec4047929bcfed946",
+                        "proposalPubkey": "0xac91d91a23744669bb2a5356605a161a5ae28c1e872fcf1d1e8cc63cb278447d8b889c77ea21884bbd8ecf2ad4824c66ae098a12",
                         "index": 2
                     },
                     {
-                        "pubkey": "0x575bb17b0f673d76689c9527a21fac68eb5ebd571703a245deb2a8384baea4747be00d5b469ff30f830e234f74453f6e2c20cb26",
+                        "attestationPubkey": "0xf19bf07520b1e97b131a55666bfe3e74cca720785f414d6b3e5d6f1616f35f7ab0e82123e74c2c766f970a233d0d19725a7d4d36",
+                        "proposalPubkey": "0x2327c12fc91cac0dc3593a5edb9c4a3c35ee9b5abc12883d28354b6965811c15ea1b926e86b8e16470d3586985293a5944d19b77",
                         "index": 3
                     }
                 ]
@@ -59,7 +63,7 @@
             "slot": 0,
             "proposerIndex": 0,
             "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
-            "stateRoot": "0xe964061dcf66d2772fea43f77cdbf563b6642b7d13130b42890618b16e67c1f2",
+            "stateRoot": "0xdacde812f2c3cda814112c3fd59c4e235f2587dddeb5f0c89ff9934cd640459d",
             "body": {
                 "attestations": {
                     "data": []
@@ -75,33 +79,13 @@
                 },
                 "stepType": "block",
                 "block": {
-                    "block": {
-                        "slot": 1,
-                        "proposerIndex": 1,
-                        "parentRoot": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
-                        "stateRoot": "0x976e5f2bf6a9b4c51516e650d3a7c7f0066580fa3d1b185808a5bec483292a2f",
-                        "body": {
-                            "attestations": {
-                                "data": []
-                            }
-                        }
-                    },
-                    "proposerAttestation": {
-                        "validatorId": 1,
-                        "data": {
-                            "slot": 1,
-                            "head": {
-                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                "slot": 1
-                            },
-                            "target": {
-                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
-                                "slot": 0
-                            },
-                            "source": {
-                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
-                                "slot": 0
-                            }
+                    "slot": 1,
+                    "proposerIndex": 1,
+                    "parentRoot": "0xd4377d11ee6650828facb55264530977b7f50f2ba233076b4b16a0d653a1dd99",
+                    "stateRoot": "0x81e1da9d62dc8d8ed3df5b0e3f2ce85835418ab1a642da3cab2c78d3b08f70fb",
+                    "body": {
+                        "attestations": {
+                            "data": []
                         }
                     },
                     "blockRootLabel": "block_1"
@@ -124,57 +108,37 @@
                 },
                 "stepType": "block",
                 "block": {
-                    "block": {
-                        "slot": 2,
-                        "proposerIndex": 2,
-                        "parentRoot": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                        "stateRoot": "0x83ea8d9d4d92bea5a1fade9dfed9f9d88c84e5ba377c02e0b4e84826461c2dba",
-                        "body": {
-                            "attestations": {
-                                "data": [
-                                    {
-                                        "aggregationBits": {
-                                            "data": [
-                                                false,
-                                                true
-                                            ]
+                    "slot": 2,
+                    "proposerIndex": 2,
+                    "parentRoot": "0x6c6f7159b2fa43910ed56de0b286e71a47ac5f0499128fbbfeb13a69c2c2f7d3",
+                    "stateRoot": "0x41e33a8ce35c34415e6b3c5ce4e2fb50dfe3db77face0180eb711297462d1ea4",
+                    "body": {
+                        "attestations": {
+                            "data": [
+                                {
+                                    "aggregationBits": {
+                                        "data": [
+                                            false,
+                                            true
+                                        ]
+                                    },
+                                    "data": {
+                                        "slot": 1,
+                                        "head": {
+                                            "root": "0x6c6f7159b2fa43910ed56de0b286e71a47ac5f0499128fbbfeb13a69c2c2f7d3",
+                                            "slot": 1
                                         },
-                                        "data": {
-                                            "slot": 1,
-                                            "head": {
-                                                "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
-                                                "slot": 1
-                                            },
-                                            "target": {
-                                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
-                                                "slot": 0
-                                            },
-                                            "source": {
-                                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
-                                                "slot": 0
-                                            }
+                                        "target": {
+                                            "root": "0xd4377d11ee6650828facb55264530977b7f50f2ba233076b4b16a0d653a1dd99",
+                                            "slot": 0
+                                        },
+                                        "source": {
+                                            "root": "0xd4377d11ee6650828facb55264530977b7f50f2ba233076b4b16a0d653a1dd99",
+                                            "slot": 0
                                         }
                                     }
-                                ]
-                            }
-                        }
-                    },
-                    "proposerAttestation": {
-                        "validatorId": 2,
-                        "data": {
-                            "slot": 2,
-                            "head": {
-                                "root": "0x693ad5b18e01892ef8747544d5ae4fce2dbeb131fe9cd174723929009d10bc40",
-                                "slot": 2
-                            },
-                            "target": {
-                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
-                                "slot": 0
-                            },
-                            "source": {
-                                "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
-                                "slot": 0
-                            }
+                                }
+                            ]
                         }
                     },
                     "blockRootLabel": "block_2"
@@ -183,10 +147,10 @@
         ],
         "maxSlot": 2,
         "_info": {
-            "hash": "0x768796259522934574a1adf8bcc53267996bbd6a0399956e336c0cf4b64f3c28",
+            "hash": "0x5a7bad98e7e2175f8c37894d3aa2101ddf3b4733369ec8d394578e237a5eb13b",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_signature_aggregation.py::test_auto_collect_proposer_attestations[fork_Devnet]",
-            "description": "Automatically collect previous proposers' attestations into block body.\n\n    Scenario\n    --------\n    With automatic attestation collection enabled:\n    - Block 1: proposer 1 attests (attestation goes to Store)\n    - Block 2: auto-collects proposer 1's attestation into block body\n\n    Expected\n    --------\n    Without explicit attestation specs, blocks automatically include\n    attestations from previous proposers whose signatures are available\n    and whose source matches the current justified checkpoint.\n\n    Note: Auto-collection only includes attestations whose source matches\n    the post-state's latest_justified checkpoint. Proposer attestations\n    reference their parent as source, which must match for inclusion.",
+            "description": "Proposer gossip attestations ARE auto-collected into future block bodies.\n\n    Scenario\n    --------\n    With automatic attestation collection enabled:\n    - Block 1: proposer (validator 1) gossips attestation using attestation key\n    - Block 2: auto-collection picks up the proposer's gossip attestation\n\n    Expected\n    --------\n    With dual keys, proposers gossip a separate attestation using their\n    attestation key (in addition to the proposal-key signature in the block\n    envelope). This gossip attestation enters the normal aggregation pipeline\n    and gets auto-collected into the next block body.",
             "fixtureFormat": "fork_choice_test"
         }
     }

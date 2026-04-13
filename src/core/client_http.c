@@ -492,7 +492,7 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
         }
 
     }
-    gossip_signature_count = client->store.gossip_signatures.length;
+    gossip_signature_count = client->store.attestation_signatures.length;
     new_aggregated_payload_count = client->store.new_aggregated_payloads.length;
     known_aggregated_payload_count = client->store.known_aggregated_payloads.length;
 

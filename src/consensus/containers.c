@@ -803,6 +803,20 @@ int lantern_wrap_attestations_as_aggregated(
     return 0;
 }
 
+const uint8_t *lantern_validator_get_attestation_pubkey(const LanternValidator *validator) {
+    if (!validator) {
+        return NULL;
+    }
+    return validator->attestation_pubkey;
+}
+
+const uint8_t *lantern_validator_get_proposal_pubkey(const LanternValidator *validator) {
+    if (!validator) {
+        return NULL;
+    }
+    return validator->proposal_pubkey;
+}
+
 void lantern_aggregated_signature_proof_init(LanternAggregatedSignatureProof *proof) {
     if (!proof) {
         return;
@@ -1074,34 +1088,34 @@ void lantern_block_body_reset(LanternBlockBody *body) {
     body->legacy_plain_attestation_layout = false;
 }
 
-void lantern_block_with_attestation_init(LanternBlockWithAttestation *block) {
+void lantern_block_init(LanternBlock *block) {
     if (!block) {
         return;
     }
     memset(block, 0, sizeof(*block));
-    lantern_block_body_init(&block->block.body);
+    lantern_block_body_init(&block->body);
 }
 
-void lantern_block_with_attestation_reset(LanternBlockWithAttestation *block) {
+void lantern_block_reset(LanternBlock *block) {
     if (!block) {
         return;
     }
-    lantern_block_body_reset(&block->block.body);
+    lantern_block_body_reset(&block->body);
     memset(block, 0, sizeof(*block));
 }
 
-void lantern_signed_block_with_attestation_init(LanternSignedBlockWithAttestation *block) {
+void lantern_signed_block_init(LanternSignedBlock *block) {
     if (!block) {
         return;
     }
-    lantern_block_with_attestation_init(&block->message);
+    lantern_block_init(&block->block);
     lantern_block_signatures_init(&block->signatures);
 }
 
-void lantern_signed_block_with_attestation_reset(LanternSignedBlockWithAttestation *block) {
+void lantern_signed_block_reset(LanternSignedBlock *block) {
     if (!block) {
         return;
     }
-    lantern_block_with_attestation_reset(&block->message);
+    lantern_block_reset(&block->block);
     lantern_block_signatures_reset(&block->signatures);
 }

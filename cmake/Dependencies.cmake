@@ -59,14 +59,37 @@ function(_lantern_define_snappy target_name source_dir)
     endif()
 endfunction()
 
-function(_lantern_define_c_leanvm_xmss target_name source_dir)
+function(_lantern_define_c_leanvm_xmss_variant target_name source_dir cargo_target_dir header_dir)
+    set(options TEST_CONFIG)
+    cmake_parse_arguments(C_XMSS "${options}" "" "" ${ARGN})
+
+    if(TARGET ${target_name})
+        return()
+    endif()
+
     set(c_leanvm_xmss_output
-        "${source_dir}/target/release/${CMAKE_STATIC_LIBRARY_PREFIX}leanvm_xmss_c${CMAKE_STATIC_LIBRARY_SUFFIX}"
+        "${cargo_target_dir}/release/${CMAKE_STATIC_LIBRARY_PREFIX}leanvm_xmss_c${CMAKE_STATIC_LIBRARY_SUFFIX}"
     )
+    set(c_leanvm_xmss_header "${header_dir}/leanvm-xmss.h")
+    set(c_leanvm_xmss_compat_header "${header_dir}/pq-bindings-c-rust.h")
+    set(c_leanvm_xmss_args build --release --locked)
+    file(MAKE_DIRECTORY "${header_dir}")
+    if(C_XMSS_TEST_CONFIG)
+        list(APPEND c_leanvm_xmss_args --features test-config)
+    endif()
 
     add_custom_command(
-        OUTPUT "${c_leanvm_xmss_output}"
-        COMMAND "${CARGO_EXECUTABLE}" build --release --locked
+        OUTPUT "${c_leanvm_xmss_output}" "${c_leanvm_xmss_header}" "${c_leanvm_xmss_compat_header}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${header_dir}"
+        COMMAND
+            "${CMAKE_COMMAND}" -E env
+            "CARGO_TARGET_DIR=${cargo_target_dir}"
+            "LEANVM_XMSS_HEADER_DIR=${header_dir}"
+            "${CARGO_EXECUTABLE}" ${c_leanvm_xmss_args}
+        COMMAND
+            "${CMAKE_COMMAND}" -E copy_if_different
+            "${source_dir}/include/pq-bindings-c-rust.h"
+            "${c_leanvm_xmss_compat_header}"
         WORKING_DIRECTORY "${source_dir}"
         DEPENDS
             "${source_dir}/Cargo.toml"
@@ -74,23 +97,34 @@ function(_lantern_define_c_leanvm_xmss target_name source_dir)
             "${source_dir}/build.rs"
             "${source_dir}/cbindgen.toml"
             "${source_dir}/src/lib.rs"
-        COMMENT "Building c-leanvm-xmss Rust bindings"
+        COMMENT "Building c-leanvm-xmss Rust bindings${C_XMSS_TEST_CONFIG}"
         VERBATIM
     )
 
-    add_custom_target(${target_name}_build DEPENDS "${c_leanvm_xmss_output}")
+    add_custom_target(${target_name}_build DEPENDS "${c_leanvm_xmss_output}" "${c_leanvm_xmss_header}" "${c_leanvm_xmss_compat_header}")
 
     add_library(${target_name} STATIC IMPORTED GLOBAL)
     set_target_properties(${target_name}
         PROPERTIES
             IMPORTED_LOCATION "${c_leanvm_xmss_output}"
-            INTERFACE_INCLUDE_DIRECTORIES "${source_dir}/include"
+            INTERFACE_INCLUDE_DIRECTORIES "${header_dir}"
     )
+    if(C_XMSS_TEST_CONFIG)
+        set_target_properties(${target_name}
+            PROPERTIES
+                INTERFACE_COMPILE_DEFINITIONS "LANTERN_SIGNATURE_SIZE=424"
+        )
+    endif()
 
     add_dependencies(${target_name} ${target_name}_build)
 endfunction()
 
 function(lantern_configure_dependencies target)
+    set(wrapper_target "lantern_c_leanvm_xmss")
+    if(ARGC GREATER 1)
+        set(wrapper_target "${ARGV1}")
+    endif()
+
     if(NOT TARGET ${target})
         message(FATAL_ERROR "lantern_configure_dependencies expects an existing CMake target")
     endif()
@@ -100,7 +134,19 @@ function(lantern_configure_dependencies target)
     _lantern_define_interface(lantern_libp2p ${external_root}/c-libp2p)
     _lantern_define_static(lantern_c_ssz ${external_root}/c-ssz)
     _lantern_define_snappy(lantern_snappy_c ${external_root}/snappy-c)
-    _lantern_define_c_leanvm_xmss(lantern_c_leanvm_xmss ${external_root}/c-leanvm-xmss)
+    _lantern_define_c_leanvm_xmss_variant(
+        lantern_c_leanvm_xmss
+        ${external_root}/c-leanvm-xmss
+        ${CMAKE_BINARY_DIR}/c-leanvm-xmss/prod
+        ${CMAKE_BINARY_DIR}/c-leanvm-xmss/prod/include
+    )
+    _lantern_define_c_leanvm_xmss_variant(
+        lantern_c_leanvm_xmss_test
+        ${external_root}/c-leanvm-xmss
+        ${CMAKE_BINARY_DIR}/c-leanvm-xmss/test
+        ${CMAKE_BINARY_DIR}/c-leanvm-xmss/test/include
+        TEST_CONFIG
+    )
 
     set(libp2p_source_dir ${external_root}/c-libp2p)
     if(EXISTS ${libp2p_source_dir}/CMakeLists.txt)
@@ -188,7 +234,7 @@ function(lantern_configure_dependencies target)
             lantern_libp2p
             lantern_c_ssz
             lantern_snappy_c
-            lantern_c_leanvm_xmss
+            ${wrapper_target}
             libp2p_unified
             protocol_gossipsub
             protocol_ping

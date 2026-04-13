@@ -178,7 +178,7 @@ static int fork_choice_target_interval(
     return 0;
 }
 
-int lantern_client_set_gossip_signature(
+int lantern_client_set_attestation_signature(
     struct lantern_client *client,
     const LanternSignatureKey *key,
     const LanternAttestationData *data,
@@ -187,7 +187,7 @@ int lantern_client_set_gossip_signature(
     if (!client) {
         return -1;
     }
-    return lantern_store_set_gossip_signature(&client->store, key, data, signature, target_slot);
+    return lantern_store_set_attestation_signature(&client->store, key, data, signature, target_slot);
 }
 
 int lantern_client_add_new_aggregated_payload(
@@ -366,6 +366,7 @@ void lantern_client_options_init(struct lantern_client_options *options)
     options->data_dir = LANTERN_DEFAULT_DATA_DIR;
     options->genesis_config_path = LANTERN_DEFAULT_GENESIS_CONFIG;
     options->validator_registry_path = LANTERN_DEFAULT_VALIDATOR_REGISTRY;
+    options->validator_keys_path = NULL;
     options->nodes_path = LANTERN_DEFAULT_NODES_FILE;
     options->genesis_state_path = NULL;
     options->use_genesis_state = false;
@@ -897,9 +898,10 @@ static lantern_client_error client_prepare_storage_and_genesis(
 
 
 /**
- * @brief Attempt genesis creation using embedded validator pubkeys.
+ * @brief Attempt genesis creation using embedded validator pubkey pairs.
  *
- * Builds the initial state from pubkeys included in the chain configuration.
+ * Builds the initial state from attestation/proposal pubkeys included in the
+ * chain configuration.
  *
  * @param client  Client with loaded chain configuration
  *
@@ -909,7 +911,8 @@ static lantern_client_error client_prepare_storage_and_genesis(
  */
 static bool client_try_genesis_from_pubkeys(struct lantern_client *client)
 {
-    if (!client->genesis.chain_config.validator_pubkeys
+    if (!client->genesis.chain_config.validator_attestation_pubkeys
+        || !client->genesis.chain_config.validator_proposal_pubkeys
         || client->genesis.chain_config.validator_pubkeys_count == 0)
     {
         return false;
@@ -923,9 +926,10 @@ static bool client_try_genesis_from_pubkeys(struct lantern_client *client)
         return false;
     }
 
-    if (lantern_state_set_validator_pubkeys(
+    if (lantern_state_set_validator_pubkeys_dual(
             &client->state,
-            client->genesis.chain_config.validator_pubkeys,
+            client->genesis.chain_config.validator_attestation_pubkeys,
+            client->genesis.chain_config.validator_proposal_pubkeys,
             vcount)
         != 0)
     {
@@ -1183,7 +1187,7 @@ static void client_log_genesis_anchors(
     LanternSignedBlock genesis_signed;
     int resize_result = 0;
     lantern_signed_block_with_attestation_init(&genesis_signed);
-    genesis_signed.message.block = genesis_block;
+    genesis_signed.block = genesis_block;
     resize_result = lantern_attestation_signatures_resize(
         &genesis_signed.signatures.attestation_signatures,
         0);
@@ -3158,6 +3162,8 @@ static void shutdown_validator_and_keys(struct lantern_client *client)
     lantern_client_free_xmss_pubkeys(client);
     free(client->xmss_key_dir);
     client->xmss_key_dir = NULL;
+    free(client->validator_keys_path);
+    client->validator_keys_path = NULL;
     free(client->xmss_public_template);
     client->xmss_public_template = NULL;
     free(client->xmss_secret_template);

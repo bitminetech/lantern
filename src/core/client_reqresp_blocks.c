@@ -180,8 +180,8 @@ static bool lantern_client_process_stream_block_chunk(
     }
 
     LanternSignedBlock streamed_block;
-    lantern_signed_block_with_attestation_init(&streamed_block);
-    int decode_rc = lantern_ssz_decode_signed_block(&streamed_block, raw_block, written);
+    lantern_signed_block_init(&streamed_block);
+    int decode_rc = lantern_ssz_decode_signed_block_strict(&streamed_block, raw_block, written);
     if (decode_rc != 0)
     {
         lantern_log_error(
@@ -189,21 +189,21 @@ static bool lantern_client_process_stream_block_chunk(
             meta,
             "blocks_by_root chunk decode failed bytes=%zu",
             written);
-        lantern_signed_block_with_attestation_reset(&streamed_block);
+        lantern_signed_block_reset(&streamed_block);
         free(raw_block);
         free(chunk);
         return false;
     }
 
     LanternRoot computed = {{0}};
-    if (lantern_hash_tree_root_block(&streamed_block.message.block, &computed) != 0)
+    if (lantern_hash_tree_root_block(&streamed_block.block, &computed) != 0)
     {
         lantern_log_warn(
             "reqresp",
             meta,
             "failed to hash streamed block slot=%" PRIu64,
-            streamed_block.message.block.slot);
-        lantern_signed_block_with_attestation_reset(&streamed_block);
+            streamed_block.block.slot);
+        lantern_signed_block_reset(&streamed_block);
         free(raw_block);
         free(chunk);
         return true;
@@ -236,12 +236,12 @@ static bool lantern_client_process_stream_block_chunk(
             meta,
             "streamed block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s match=%s depth=%" PRIu32
             " attestations=%zu",
-            streamed_block.message.block.slot,
-            streamed_block.message.block.proposer_index,
+            streamed_block.block.slot,
+            streamed_block.block.proposer_index,
             computed_hex[0] ? computed_hex : "0x0",
             matches ? "true" : "false",
             backfill_depth,
-            streamed_block.message.block.body.attestations.length);
+            streamed_block.block.body.attestations.length);
     }
     else
     {
@@ -250,12 +250,12 @@ static bool lantern_client_process_stream_block_chunk(
             meta,
             "streamed block slot=%" PRIu64 " proposer=%" PRIu64 " root=%s match=%s depth=%" PRIu32
             " attestations=%zu",
-            streamed_block.message.block.slot,
-            streamed_block.message.block.proposer_index,
+            streamed_block.block.slot,
+            streamed_block.block.proposer_index,
             computed_hex[0] ? computed_hex : "0x0",
             matches ? "true" : "false",
             backfill_depth,
-            streamed_block.message.block.body.attestations.length);
+            streamed_block.block.body.attestations.length);
     }
 
     lantern_client_record_block(
@@ -268,7 +268,7 @@ static bool lantern_client_process_stream_block_chunk(
         true,
         raw_block,
         written);
-    lantern_signed_block_with_attestation_reset(&streamed_block);
+    lantern_signed_block_reset(&streamed_block);
     free(raw_block);
     if (saw_block)
     {

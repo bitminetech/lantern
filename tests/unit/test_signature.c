@@ -1,6 +1,7 @@
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
+#include "lantern/consensus/state.h"
 
 #include "pq-bindings-c-rust.h"
 
@@ -78,6 +79,82 @@ static bool sign_proposer_vote(
             &signed_vote->signature)) {
         fprintf(stderr, "lantern_signature_sign failed\n");
         return false;
+    }
+    return true;
+}
+
+static bool aggregated_proof_tamper_is_rejected(
+    const uint8_t *const *pubkeys,
+    size_t count,
+    const LanternRoot *message,
+    const LanternByteList *proof,
+    uint64_t epoch) {
+    LanternByteList tampered;
+    size_t candidate_count = 0;
+    size_t candidates[4];
+
+    if (!pubkeys || !message || !proof || proof->length == 0 || !proof->data) {
+        return false;
+    }
+
+    lantern_byte_list_init(&tampered);
+    if (lantern_byte_list_copy(&tampered, proof) != 0 || tampered.length == 0 || !tampered.data) {
+        lantern_byte_list_reset(&tampered);
+        return false;
+    }
+
+    candidates[candidate_count++] = 0u;
+    candidates[candidate_count++] = tampered.length / 4u;
+    candidates[candidate_count++] = tampered.length / 2u;
+    candidates[candidate_count++] = tampered.length - 1u;
+
+    for (size_t i = 0; i < candidate_count; ++i) {
+        size_t offset = candidates[i];
+        bool seen = false;
+        for (size_t j = 0; j < i; ++j) {
+            if (candidates[j] == offset) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen) {
+            continue;
+        }
+
+        tampered.data[offset] ^= 0xFFu;
+        if (!lantern_signature_verify_aggregated(pubkeys, count, message, &tampered, epoch)) {
+            lantern_byte_list_reset(&tampered);
+            return true;
+        }
+        tampered.data[offset] ^= 0xFFu;
+    }
+
+    if (tampered.length > 1u
+        && lantern_byte_list_resize(&tampered, tampered.length - 1u) == 0
+        && !lantern_signature_verify_aggregated(pubkeys, count, message, &tampered, epoch)) {
+        lantern_byte_list_reset(&tampered);
+        return true;
+    }
+
+    lantern_byte_list_reset(&tampered);
+    return false;
+}
+
+static bool set_participants(
+    struct lantern_bitlist *participants,
+    size_t bit_length,
+    const size_t *indices,
+    size_t count) {
+    if (!participants || !indices) {
+        return false;
+    }
+    if (lantern_bitlist_resize(participants, bit_length) != 0) {
+        return false;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (lantern_bitlist_set(participants, indices[i], true) != 0) {
+            return false;
+        }
     }
     return true;
 }
@@ -194,7 +271,6 @@ static int test_aggregated_signature_roundtrip(void) {
     const uint8_t *pubkey_ptrs[kSignerCount];
     LanternSignature signatures[kSignerCount];
     LanternByteList proof;
-    LanternByteList tampered;
     LanternRoot message;
     uint64_t epoch = 1;
 
@@ -203,7 +279,6 @@ static int test_aggregated_signature_roundtrip(void) {
     memset(serialized_pubkeys, 0, sizeof(serialized_pubkeys));
     memset(signatures, 0, sizeof(signatures));
     lantern_byte_list_init(&proof);
-    lantern_byte_list_init(&tampered);
     fill_root(&message, 0xA1);
 
     for (size_t i = 0; i < kSignerCount; ++i) {
@@ -256,16 +331,11 @@ static int test_aggregated_signature_roundtrip(void) {
         goto fail;
     }
 
-    if (lantern_byte_list_copy(&tampered, &proof) != 0 || tampered.length == 0 || !tampered.data) {
-        fprintf(stderr, "aggregate: failed to copy proof\n");
-        goto fail;
-    }
-    tampered.data[0] ^= 0xFF;
-    if (lantern_signature_verify_aggregated(
+    if (!aggregated_proof_tamper_is_rejected(
             pubkey_ptrs,
             kSignerCount,
             &message,
-            &tampered,
+            &proof,
             epoch)) {
         fprintf(stderr, "aggregate: tampered proof unexpectedly verified\n");
         goto fail;
@@ -276,7 +346,6 @@ static int test_aggregated_signature_roundtrip(void) {
         pq_public_key_free(pubkeys[i]);
     }
     lantern_byte_list_reset(&proof);
-    lantern_byte_list_reset(&tampered);
     return 0;
 
 fail:
@@ -289,7 +358,304 @@ fail:
         }
     }
     lantern_byte_list_reset(&proof);
-    lantern_byte_list_reset(&tampered);
+    return 1;
+}
+
+static int test_recursive_aggregated_signature_roundtrip(void) {
+    enum { kSignerCount = 3 };
+    struct PQSignatureSchemePublicKey *pubkeys[kSignerCount];
+    struct PQSignatureSchemeSecretKey *secrets[kSignerCount];
+    uint8_t serialized_pubkeys[kSignerCount][LANTERN_VALIDATOR_PUBKEY_SIZE];
+    uint8_t flattened_pubkeys[kSignerCount * LANTERN_VALIDATOR_PUBKEY_SIZE];
+    const uint8_t *pubkey_ptrs[kSignerCount];
+    const uint8_t *child_pubkey_ptrs[2];
+    const uint8_t *leaf_pubkey_ptrs[1];
+    LanternSignature signatures[kSignerCount];
+    LanternRoot message;
+    LanternState state;
+    struct lantern_bitlist child_participants;
+    struct lantern_bitlist raw_participants;
+    LanternAggregatedSignatureProof child_proof;
+    LanternAggregatedSignatureProof child_leaf_proof;
+    LanternAggregatedSignatureProof children_only_proof;
+    LanternAggregatedSignatureProof single_child_rollup;
+    LanternAggregatedSignatureProof mixed_proof;
+    uint64_t epoch = 2;
+
+    memset(pubkeys, 0, sizeof(pubkeys));
+    memset(secrets, 0, sizeof(secrets));
+    memset(serialized_pubkeys, 0, sizeof(serialized_pubkeys));
+    memset(flattened_pubkeys, 0, sizeof(flattened_pubkeys));
+    memset(signatures, 0, sizeof(signatures));
+    fill_root(&message, 0xC4);
+
+    lantern_state_init(&state);
+    lantern_bitlist_init(&child_participants);
+    lantern_bitlist_init(&raw_participants);
+    lantern_aggregated_signature_proof_init(&child_proof);
+    lantern_aggregated_signature_proof_init(&child_leaf_proof);
+    lantern_aggregated_signature_proof_init(&children_only_proof);
+    lantern_aggregated_signature_proof_init(&single_child_rollup);
+    lantern_aggregated_signature_proof_init(&mixed_proof);
+
+    for (size_t i = 0; i < kSignerCount; ++i) {
+        if (generate_test_keypair(&pubkeys[i], &secrets[i]) != 0) {
+            fprintf(stderr, "recursive aggregate: keygen failed index=%zu\n", i);
+            goto fail;
+        }
+
+        uintptr_t written = 0;
+        enum PQSigningError serr = pq_public_key_serialize(
+            pubkeys[i],
+            serialized_pubkeys[i],
+            sizeof(serialized_pubkeys[i]),
+            &written);
+        if (serr != Success || written != sizeof(serialized_pubkeys[i])) {
+            fprintf(
+                stderr,
+                "recursive aggregate: pubkey serialize failed index=%zu err=%d written=%zu\n",
+                i,
+                (int)serr,
+                (size_t)written);
+            goto fail;
+        }
+
+        memcpy(
+            flattened_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+            serialized_pubkeys[i],
+            LANTERN_VALIDATOR_PUBKEY_SIZE);
+        pubkey_ptrs[i] = serialized_pubkeys[i];
+
+        if (!lantern_signature_sign(
+                secrets[i],
+                epoch,
+                &message,
+                &signatures[i])) {
+            fprintf(stderr, "recursive aggregate: sign failed index=%zu\n", i);
+            goto fail;
+        }
+    }
+
+    if (lantern_state_set_validator_pubkeys(&state, flattened_pubkeys, kSignerCount) != 0) {
+        fprintf(stderr, "recursive aggregate: state pubkey setup failed\n");
+        goto fail;
+    }
+
+    {
+        const size_t child_indices[2] = {0u, 1u};
+        LanternRawXmssSignature child_inputs[2] = {
+            {.pubkey = serialized_pubkeys[0], .signature = &signatures[0]},
+            {.pubkey = serialized_pubkeys[1], .signature = &signatures[1]},
+        };
+
+        if (!set_participants(&child_participants, 2u, child_indices, 2u)) {
+            fprintf(stderr, "recursive aggregate: child participants setup failed\n");
+            goto fail;
+        }
+        if (!lantern_aggregated_signature_proof_aggregate(
+                NULL,
+                &child_participants,
+                NULL,
+                0u,
+                child_inputs,
+                2u,
+                &message,
+                epoch,
+                &child_proof)) {
+            fprintf(stderr, "recursive aggregate: child proof build failed\n");
+            goto fail;
+        }
+    }
+
+    child_pubkey_ptrs[0] = pubkey_ptrs[0];
+    child_pubkey_ptrs[1] = pubkey_ptrs[1];
+    if (!lantern_signature_verify_aggregated(
+            child_pubkey_ptrs,
+            2u,
+            &message,
+            &child_proof.proof_data,
+            epoch)) {
+        fprintf(stderr, "recursive aggregate: child proof verification failed\n");
+        goto fail;
+    }
+
+    {
+        const size_t raw_indices[1] = {2u};
+        LanternRawXmssSignature leaf_inputs[1] = {
+            {.pubkey = serialized_pubkeys[2], .signature = &signatures[2]},
+        };
+
+        if (!set_participants(&raw_participants, 3u, raw_indices, 1u)) {
+            fprintf(stderr, "recursive aggregate: raw participants setup failed\n");
+            goto fail;
+        }
+        if (!lantern_aggregated_signature_proof_aggregate(
+                NULL,
+                &raw_participants,
+                NULL,
+                0u,
+                leaf_inputs,
+                1u,
+                &message,
+                epoch,
+                &child_leaf_proof)) {
+            fprintf(stderr, "recursive aggregate: leaf child proof build failed\n");
+            goto fail;
+        }
+    }
+    leaf_pubkey_ptrs[0] = pubkey_ptrs[2];
+    if (!lantern_signature_verify_aggregated(
+            leaf_pubkey_ptrs,
+            1u,
+            &message,
+            &child_leaf_proof.proof_data,
+            epoch)) {
+        fprintf(stderr, "recursive aggregate: leaf child proof verification failed\n");
+        goto fail;
+    }
+    if (child_leaf_proof.proof_data.length == LANTERN_SIGNATURE_SIZE) {
+        fprintf(stderr, "recursive aggregate: leaf child proof was not canonicalized\n");
+        goto fail;
+    }
+
+    {
+        LanternAggregatedSignatureProof children_only_inputs[2] = {
+            child_proof,
+            child_leaf_proof,
+        };
+
+        if (!lantern_aggregated_signature_proof_aggregate(
+                &state,
+                NULL,
+                children_only_inputs,
+                2u,
+                NULL,
+                0u,
+                &message,
+                epoch,
+                &children_only_proof)) {
+            fprintf(stderr, "recursive aggregate: children-only proof build failed\n");
+            goto fail;
+        }
+    }
+    if (children_only_proof.participants.bit_length < 3u
+        || !lantern_bitlist_get(&children_only_proof.participants, 0u)
+        || !lantern_bitlist_get(&children_only_proof.participants, 1u)
+        || !lantern_bitlist_get(&children_only_proof.participants, 2u)) {
+        fprintf(stderr, "recursive aggregate: children-only proof participants missing contributors\n");
+        goto fail;
+    }
+    if (!lantern_signature_verify_aggregated(
+            pubkey_ptrs,
+            kSignerCount,
+            &message,
+            &children_only_proof.proof_data,
+            epoch)) {
+        fprintf(stderr, "recursive aggregate: children-only proof verification failed\n");
+        goto fail;
+    }
+
+    if (!lantern_aggregated_signature_proof_aggregate(
+            &state,
+            NULL,
+            &child_proof,
+            1u,
+            NULL,
+            0u,
+            &message,
+            epoch,
+            &single_child_rollup)) {
+        fprintf(stderr, "recursive aggregate: single-child rollup failed\n");
+        goto fail;
+    }
+    if (single_child_rollup.proof_data.length != child_proof.proof_data.length
+        || !single_child_rollup.proof_data.data
+        || memcmp(
+               single_child_rollup.proof_data.data,
+               child_proof.proof_data.data,
+               child_proof.proof_data.length)
+            != 0) {
+        fprintf(stderr, "recursive aggregate: single-child rollup did not preserve proof bytes\n");
+        goto fail;
+    }
+    if (!lantern_signature_verify_aggregated(
+            child_pubkey_ptrs,
+            2u,
+            &message,
+            &single_child_rollup.proof_data,
+            epoch)) {
+        fprintf(stderr, "recursive aggregate: single-child rollup verification failed\n");
+        goto fail;
+    }
+
+    {
+        LanternRawXmssSignature mixed_inputs[1] = {
+            {.pubkey = serialized_pubkeys[2], .signature = &signatures[2]},
+        };
+
+        if (!lantern_aggregated_signature_proof_aggregate(
+                &state,
+                &raw_participants,
+                &child_proof,
+                1u,
+                mixed_inputs,
+                1u,
+                &message,
+                epoch,
+                &mixed_proof)) {
+            fprintf(stderr, "recursive aggregate: mixed proof build failed\n");
+            goto fail;
+        }
+    }
+
+    if (mixed_proof.participants.bit_length < 3u
+        || !lantern_bitlist_get(&mixed_proof.participants, 0u)
+        || !lantern_bitlist_get(&mixed_proof.participants, 1u)
+        || !lantern_bitlist_get(&mixed_proof.participants, 2u)) {
+        fprintf(stderr, "recursive aggregate: mixed proof participants missing contributors\n");
+        goto fail;
+    }
+    if (!lantern_signature_verify_aggregated(
+            pubkey_ptrs,
+            kSignerCount,
+            &message,
+            &mixed_proof.proof_data,
+            epoch)) {
+        fprintf(stderr, "recursive aggregate: mixed proof verification failed\n");
+        goto fail;
+    }
+
+    for (size_t i = 0; i < kSignerCount; ++i) {
+        pq_secret_key_free(secrets[i]);
+        pq_public_key_free(pubkeys[i]);
+    }
+    lantern_aggregated_signature_proof_reset(&mixed_proof);
+    lantern_aggregated_signature_proof_reset(&single_child_rollup);
+    lantern_aggregated_signature_proof_reset(&children_only_proof);
+    lantern_aggregated_signature_proof_reset(&child_leaf_proof);
+    lantern_aggregated_signature_proof_reset(&child_proof);
+    lantern_bitlist_reset(&raw_participants);
+    lantern_bitlist_reset(&child_participants);
+    lantern_state_reset(&state);
+    return 0;
+
+fail:
+    for (size_t i = 0; i < kSignerCount; ++i) {
+        if (secrets[i]) {
+            pq_secret_key_free(secrets[i]);
+        }
+        if (pubkeys[i]) {
+            pq_public_key_free(pubkeys[i]);
+        }
+    }
+    lantern_aggregated_signature_proof_reset(&mixed_proof);
+    lantern_aggregated_signature_proof_reset(&single_child_rollup);
+    lantern_aggregated_signature_proof_reset(&children_only_proof);
+    lantern_aggregated_signature_proof_reset(&child_leaf_proof);
+    lantern_aggregated_signature_proof_reset(&child_proof);
+    lantern_bitlist_reset(&raw_participants);
+    lantern_bitlist_reset(&child_participants);
+    lantern_state_reset(&state);
     return 1;
 }
 
@@ -319,6 +685,9 @@ int main(void) {
         return 1;
     }
     if (test_aggregated_signature_roundtrip() != 0) {
+        return 1;
+    }
+    if (test_recursive_aggregated_signature_roundtrip() != 0) {
         return 1;
     }
     puts("lantern_signature_test OK");

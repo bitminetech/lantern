@@ -31,7 +31,8 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x8fa00001b5b22a073d21cb60c9465b379f80e74fee9baf1d137eb651ed162900a6f3ec32da74ff09265ea62fc9a5055b2e9b7c7b",
+                        "attestationPubkey": "0xcd64341d83f28533f239153535b45209592342325ed31a5792b2e61935648748d41c384850baf6386c43bf19bfb63f53eb2c8c0b",
+                        "proposalPubkey": "0x5eba321a84f55461e2c0e94036d24e5107720876752d5c4f6e03183a7e7f1856e372c60dbc6fbc0450c26e58ba402f1da6952a73",
                         "index": 0
                     }
                 ]
@@ -43,35 +44,15 @@
                 "data": []
             }
         },
-        "signedBlockWithAttestation": {
+        "signedBlock": {
             "message": {
-                "block": {
-                    "slot": 1,
-                    "proposerIndex": 0,
-                    "parentRoot": "0xb6f6683bf01027dd60f095f477b8ca38fbe23c18eb02f0aed0b2f34b7a4584f0",
-                    "stateRoot": "0x6c53c1d71203251ceb0abcb1d14a34b53c0760abc1b1ac51d509cbe16d8ceb16",
-                    "body": {
-                        "attestations": {
-                            "data": []
-                        }
-                    }
-                },
-                "proposerAttestation": {
-                    "validatorId": 0,
-                    "data": {
-                        "slot": 1,
-                        "head": {
-                            "root": "0xcdc120c88d251c898fc9b9a1f091b0cb108d9ac82d2784029917c2ac3cee82ee",
-                            "slot": 1
-                        },
-                        "target": {
-                            "root": "0xcdc120c88d251c898fc9b9a1f091b0cb108d9ac82d2784029917c2ac3cee82ee",
-                            "slot": 1
-                        },
-                        "source": {
-                            "root": "0xb6f6683bf01027dd60f095f477b8ca38fbe23c18eb02f0aed0b2f34b7a4584f0",
-                            "slot": 0
-                        }
+                "slot": 1,
+                "proposerIndex": 0,
+                "parentRoot": "0x2f89e5664c18aba3cf00f0b1e445489564f461222d2ccf746cc78eb680ca802d",
+                "stateRoot": "0x8290e3d5a55dc36d3c06eefd4a7acf2f06994e1a72349fdbb449e4b2e5bcc0cb",
+                "body": {
+                    "attestations": {
+                        "data": []
                     }
                 }
             },
@@ -84,10 +65,10 @@
         },
         "expectException": "AssertionError",
         "_info": {
-            "hash": "0x6451126ab98bfde618c4164377c82aab3c01320ab40cce818096743d8fc2f0db",
+            "hash": "0x5a02d4ee4e2e0757f07f73e1dafe7158cc5d2bdc7b7465407228a598653ccadf",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/verify_signatures/test_invalid_signatures.py::test_invalid_proposer_signature[fork_Devnet]",
-            "description": "Test that invalid signatures are properly rejected during verification.\n\n    Scenario\n    --------\n    - Single block at slot 1\n    - Proposer attestation has an invalid signature\n    - No additional attestations (only proposer attestation)\n\n    Expected Behavior\n    -----------------\n    1. Proposer's signature in SignedBlockWithAttestation is rejected\n\n    Why This Matters\n    ----------------\n    This test verifies the negative case:\n    - Signature verification actually validates cryptographic correctness\n      not just structural correctness.\n    - Invalid signatures are caught, not silently accepted",
+            "description": "Test that invalid signatures are properly rejected during verification.\n\n    Scenario\n    --------\n    - Single block at slot 1\n    - Proposer attestation has an invalid signature\n    - No additional attestations (only proposer attestation)\n\n    Expected Behavior\n    -----------------\n    1. Proposer's signature in SignedBlock is rejected\n\n    Why This Matters\n    ----------------\n    This test verifies the negative case:\n    - Signature verification actually validates cryptographic correctness\n      not just structural correctness.\n    - Invalid signatures are caught, not silently accepted",
             "fixtureFormat": "verify_signatures_test"
         }
     }

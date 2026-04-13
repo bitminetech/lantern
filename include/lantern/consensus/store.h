@@ -26,14 +26,14 @@ typedef struct {
     LanternRoot data_root;
 } LanternSignatureKey;
 
-struct lantern_gossip_signature_entry {
+struct lantern_attestation_signature_entry {
     LanternSignatureKey key;
     LanternSignature signature;
     uint64_t target_slot;
 };
 
-struct lantern_gossip_signature_map {
-    struct lantern_gossip_signature_entry *entries;
+struct lantern_attestation_signature_map {
+    struct lantern_attestation_signature_entry *entries;
     size_t length;
     size_t capacity;
 };
@@ -70,7 +70,7 @@ typedef struct lantern_store {
     struct lantern_fork_choice_vote_entry *new_votes;
     size_t fork_choice_vote_count;
 
-    struct lantern_gossip_signature_map gossip_signatures;
+    struct lantern_attestation_signature_map attestation_signatures;
     struct lantern_aggregated_payload_pool new_aggregated_payloads;
     struct lantern_aggregated_payload_pool known_aggregated_payloads;
     struct lantern_attestation_data_by_root attestation_data_by_root;
@@ -100,19 +100,22 @@ void lantern_store_clear_validator_vote(LanternStore *store, size_t index);
 
 int lantern_store_prepare_fork_choice_votes(LanternStore *store, uint64_t validator_count);
 
-int lantern_store_set_gossip_signature(
+int lantern_store_set_attestation_signature(
     LanternStore *store,
     const LanternSignatureKey *key,
     const LanternAttestationData *data,
     const LanternSignature *signature,
     uint64_t target_slot);
-int lantern_store_get_gossip_signature(
+int lantern_store_get_attestation_signature(
     const LanternStore *store,
     const LanternSignatureKey *key,
     LanternSignature *out_signature);
-int lantern_store_remove_gossip_signature(
+int lantern_store_remove_attestation_signature(
     LanternStore *store,
     const LanternSignatureKey *key);
+size_t lantern_store_remove_attestation_signatures_for_data_root(
+    LanternStore *store,
+    const LanternRoot *data_root);
 int lantern_store_add_new_aggregated_payload(
     LanternStore *store,
     const LanternRoot *data_root,
@@ -125,6 +128,7 @@ int lantern_store_add_known_aggregated_payload(
     const LanternAttestationData *data,
     const LanternAggregatedSignatureProof *proof,
     uint64_t target_slot);
+void lantern_store_clear_new_aggregated_payloads(LanternStore *store);
 size_t lantern_store_promote_new_aggregated_payloads(LanternStore *store);
 size_t lantern_store_prune_finalized_attestation_material(
     LanternStore *store,
@@ -133,6 +137,28 @@ int lantern_store_get_attestation_data(
     const LanternStore *store,
     const LanternRoot *data_root,
     LanternAttestationData *out_data);
+
+static inline int lantern_store_set_gossip_signature(
+    LanternStore *store,
+    const LanternSignatureKey *key,
+    const LanternAttestationData *data,
+    const LanternSignature *signature,
+    uint64_t target_slot) {
+    return lantern_store_set_attestation_signature(store, key, data, signature, target_slot);
+}
+
+static inline int lantern_store_get_gossip_signature(
+    const LanternStore *store,
+    const LanternSignatureKey *key,
+    LanternSignature *out_signature) {
+    return lantern_store_get_attestation_signature(store, key, out_signature);
+}
+
+static inline int lantern_store_remove_gossip_signature(
+    LanternStore *store,
+    const LanternSignatureKey *key) {
+    return lantern_store_remove_attestation_signature(store, key);
+}
 
 #ifdef __cplusplus
 }

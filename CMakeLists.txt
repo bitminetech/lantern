@@ -24,8 +24,7 @@ set(SECP256K1_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
 find_package(Threads REQUIRED)
 
-
-add_library(lantern STATIC
+set(LANTERN_LIBRARY_SOURCES
     src/consensus/containers.c
     src/consensus/duties.c
     src/consensus/fork_choice.c
@@ -81,25 +80,28 @@ add_library(lantern STATIC
     external/c-libp2p/external/wjcryptlib/lib/WjCryptLib_Sha256.c
 )
 
-target_include_directories(lantern
-    PUBLIC
-        ${PROJECT_SOURCE_DIR}/include
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/src
-        ${PROJECT_SOURCE_DIR}/external/jsmn
-        ${PROJECT_SOURCE_DIR}/external/c-leanvm-xmss/include
-        ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/secp256k1/include
-        ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/libtomcrypt/src/headers
-        ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/wjcryptlib/lib
-)
-target_compile_definitions(lantern
-    PRIVATE
-        _DEFAULT_SOURCE
-        _POSIX_C_SOURCE=200809L
-)
+function(lantern_define_library target_name wrapper_target)
+    add_library(${target_name} STATIC ${LANTERN_LIBRARY_SOURCES})
+    target_include_directories(${target_name}
+        PUBLIC
+            ${PROJECT_SOURCE_DIR}/include
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/src
+            ${PROJECT_SOURCE_DIR}/external/jsmn
+            ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/secp256k1/include
+            ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/libtomcrypt/src/headers
+            ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/wjcryptlib/lib
+    )
+    target_compile_definitions(${target_name}
+        PRIVATE
+            _DEFAULT_SOURCE
+            _POSIX_C_SOURCE=200809L
+    )
+    lantern_configure_dependencies(${target_name} ${wrapper_target})
+    target_link_libraries(${target_name} PRIVATE secp256k1 libtomcrypt Threads::Threads)
+endfunction()
 
-lantern_configure_dependencies(lantern)
-target_link_libraries(lantern PRIVATE secp256k1 libtomcrypt Threads::Threads)
+lantern_define_library(lantern lantern_c_leanvm_xmss)
 
 add_executable(lantern_cli src/core/main.c)
 target_link_libraries(lantern_cli PRIVATE lantern Threads::Threads)
@@ -142,11 +144,14 @@ target_compile_definitions(lantern_cli
 option(LANTERN_BUILD_TESTS "Build lantern unit tests" ON)
 if(LANTERN_BUILD_TESTS)
     enable_testing()
+    lantern_define_library(lantern_test lantern_c_leanvm_xmss_test)
+    set(LANTERN_TEST_LINK_LIB lantern_test)
+
     add_executable(lantern_client_vote_test
         tests/unit/test_client_vote.c
         tests/unit/client_test_helpers.c
     )
-    target_link_libraries(lantern_client_vote_test PRIVATE lantern)
+    target_link_libraries(lantern_client_vote_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     target_include_directories(
         lantern_client_vote_test
         PRIVATE
@@ -163,7 +168,7 @@ if(LANTERN_BUILD_TESTS)
         tests/unit/test_client_pending.c
         tests/unit/client_test_helpers.c
     )
-    target_link_libraries(lantern_client_pending_test PRIVATE lantern)
+    target_link_libraries(lantern_client_pending_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     target_include_directories(
         lantern_client_pending_test
         PRIVATE
@@ -180,7 +185,7 @@ if(LANTERN_BUILD_TESTS)
         tests/unit/test_client_gossip.c
         tests/unit/client_test_helpers.c
     )
-    target_link_libraries(lantern_client_gossip_test PRIVATE lantern)
+    target_link_libraries(lantern_client_gossip_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     target_include_directories(
         lantern_client_gossip_test
         PRIVATE
@@ -194,14 +199,14 @@ if(LANTERN_BUILD_TESTS)
     add_test(NAME lantern_client_gossip COMMAND lantern_client_gossip_test)
 
     add_executable(lantern_client_state_staleness_test tests/unit/test_client_state_staleness.c)
-    target_link_libraries(lantern_client_state_staleness_test PRIVATE lantern)
+    target_link_libraries(lantern_client_state_staleness_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_client_state_staleness COMMAND lantern_client_state_staleness_test)
 
     add_executable(lantern_genesis_anchor_test
         tests/unit/test_genesis_anchor.c
         tests/unit/client_test_helpers.c
     )
-    target_link_libraries(lantern_genesis_anchor_test PRIVATE lantern)
+    target_link_libraries(lantern_genesis_anchor_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     target_include_directories(
         lantern_genesis_anchor_test
         PRIVATE
@@ -215,7 +220,7 @@ if(LANTERN_BUILD_TESTS)
     add_test(NAME lantern_genesis_anchor COMMAND lantern_genesis_anchor_test)
 
     add_executable(lantern_genesis_bootstrap_test tests/unit/test_genesis_bootstrap.c)
-    target_link_libraries(lantern_genesis_bootstrap_test PRIVATE lantern)
+    target_link_libraries(lantern_genesis_bootstrap_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     target_compile_definitions(
         lantern_genesis_bootstrap_test
         PRIVATE
@@ -224,7 +229,7 @@ if(LANTERN_BUILD_TESTS)
     add_test(NAME lantern_genesis_bootstrap COMMAND lantern_genesis_bootstrap_test)
 
     add_executable(lantern_validator_selection_test tests/unit/test_validator_selection.c)
-    target_link_libraries(lantern_validator_selection_test PRIVATE lantern)
+    target_link_libraries(lantern_validator_selection_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     target_compile_definitions(
         lantern_validator_selection_test
         PRIVATE
@@ -233,53 +238,48 @@ if(LANTERN_BUILD_TESTS)
     add_test(NAME lantern_validator_selection COMMAND lantern_validator_selection_test)
 
     add_executable(lantern_rlp_test tests/unit/test_rlp.c)
-    target_link_libraries(lantern_rlp_test PRIVATE lantern)
+    target_link_libraries(lantern_rlp_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_rlp COMMAND lantern_rlp_test)
 
 
     add_executable(lantern_enr_test tests/unit/test_enr.c)
-    target_link_libraries(lantern_enr_test PRIVATE lantern)
+    target_link_libraries(lantern_enr_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_enr COMMAND lantern_enr_test)
 
     add_executable(lantern_ssz_test tests/unit/test_ssz.c)
-    target_link_libraries(lantern_ssz_test PRIVATE lantern)
+    target_link_libraries(lantern_ssz_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_ssz COMMAND lantern_ssz_test)
 
     add_executable(lantern_duties_test tests/unit/test_duties.c)
-    target_link_libraries(lantern_duties_test PRIVATE lantern)
+    target_link_libraries(lantern_duties_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_duties COMMAND lantern_duties_test)
 
     add_executable(lantern_signature_test tests/unit/test_signature.c)
-    target_link_libraries(lantern_signature_test PRIVATE lantern)
-    target_include_directories(
-        lantern_signature_test
-        PRIVATE
-            ${PROJECT_SOURCE_DIR}/external/c-leanvm-xmss/include
-    )
+    target_link_libraries(lantern_signature_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_signature COMMAND lantern_signature_test)
     set_tests_properties(lantern_signature PROPERTIES TIMEOUT 3600)
 
     add_executable(lantern_consensus_runtime_test tests/unit/test_consensus_runtime.c)
-    target_link_libraries(lantern_consensus_runtime_test PRIVATE lantern)
+    target_link_libraries(lantern_consensus_runtime_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_consensus_runtime COMMAND lantern_consensus_runtime_test)
 
     add_executable(lantern_state_test tests/unit/test_state.c)
     target_sources(lantern_state_test PRIVATE tests/support/state_store_adapter.c)
-    target_link_libraries(lantern_state_test PRIVATE lantern)
+    target_link_libraries(lantern_state_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_state COMMAND lantern_state_test)
 
     add_executable(lantern_off_head_replay_test tests/unit/test_off_head_replay.c)
     target_sources(lantern_off_head_replay_test PRIVATE tests/support/state_store_adapter.c)
-    target_link_libraries(lantern_off_head_replay_test PRIVATE lantern)
+    target_link_libraries(lantern_off_head_replay_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_off_head_replay COMMAND lantern_off_head_replay_test)
     set_tests_properties(lantern_off_head_replay PROPERTIES TIMEOUT 120)
 
     add_executable(lantern_slot_clock_test tests/unit/test_slot_clock.c)
-    target_link_libraries(lantern_slot_clock_test PRIVATE lantern)
+    target_link_libraries(lantern_slot_clock_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_slot_clock COMMAND lantern_slot_clock_test)
 
     add_executable(lantern_snappy_test tests/unit/test_snappy.c)
-    target_link_libraries(lantern_snappy_test PRIVATE lantern)
+    target_link_libraries(lantern_snappy_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_snappy COMMAND lantern_snappy_test)
 
 
@@ -305,7 +305,7 @@ if(LANTERN_BUILD_TESTS)
     add_executable(lantern_gossip_block_dump_decode
         tests/unit/test_gossip_block_dump_decode.c
     )
-    target_link_libraries(lantern_gossip_block_dump_decode PRIVATE lantern)
+    target_link_libraries(lantern_gossip_block_dump_decode PRIVATE ${LANTERN_TEST_LINK_LIB})
     target_compile_definitions(
         lantern_gossip_block_dump_decode
         PRIVATE
@@ -313,28 +313,28 @@ if(LANTERN_BUILD_TESTS)
     )
 
     add_executable(lantern_libp2p_test tests/unit/test_libp2p.c)
-    target_link_libraries(lantern_libp2p_test PRIVATE lantern)
+    target_link_libraries(lantern_libp2p_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_libp2p COMMAND lantern_libp2p_test)
 
     add_executable(lantern_fork_choice_test tests/unit/test_fork_choice.c)
-    target_link_libraries(lantern_fork_choice_test PRIVATE lantern)
+    target_link_libraries(lantern_fork_choice_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_fork_choice COMMAND lantern_fork_choice_test)
 
     add_executable(lantern_storage_test tests/unit/test_storage.c)
     target_sources(lantern_storage_test PRIVATE tests/support/state_store_adapter.c)
-    target_link_libraries(lantern_storage_test PRIVATE lantern)
+    target_link_libraries(lantern_storage_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_storage COMMAND lantern_storage_test)
 
     add_executable(lantern_metrics_test tests/unit/test_metrics.c)
-    target_link_libraries(lantern_metrics_test PRIVATE lantern)
+    target_link_libraries(lantern_metrics_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_metrics COMMAND lantern_metrics_test)
 
     add_executable(lantern_checkpoint_sync_test tests/unit/test_checkpoint_sync_api.c)
-    target_link_libraries(lantern_checkpoint_sync_test PRIVATE lantern)
+    target_link_libraries(lantern_checkpoint_sync_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_checkpoint_sync COMMAND lantern_checkpoint_sync_test)
 
     add_executable(lantern_validator_duties_integration_test tests/integration/test_validator_duties.c)
-    target_link_libraries(lantern_validator_duties_integration_test PRIVATE lantern)
+    target_link_libraries(lantern_validator_duties_integration_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_validator_duties_integration COMMAND lantern_validator_duties_integration_test)
 
     add_executable(lantern_consensus_vectors_test
@@ -343,7 +343,7 @@ if(LANTERN_BUILD_TESTS)
         tests/support/state_store_adapter.c
         tests/support/fixture_loader.c
     )
-    target_link_libraries(lantern_consensus_vectors_test PRIVATE lantern)
+    target_link_libraries(lantern_consensus_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     target_include_directories(
         lantern_consensus_vectors_test
         PRIVATE
@@ -366,7 +366,7 @@ if(LANTERN_BUILD_TESTS)
         tests/support/state_store_adapter.c
         tests/support/fixture_loader.c
     )
-    target_link_libraries(lantern_verify_signatures_vectors_test PRIVATE lantern)
+    target_link_libraries(lantern_verify_signatures_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     target_include_directories(
         lantern_verify_signatures_vectors_test
         PRIVATE
@@ -387,7 +387,7 @@ if(LANTERN_BUILD_TESTS)
         tests/support/state_store_adapter.c
         tests/support/fixture_loader.c
     )
-    target_link_libraries(lantern_genesis_vectors_test PRIVATE lantern)
+    target_link_libraries(lantern_genesis_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     target_include_directories(
         lantern_genesis_vectors_test
         PRIVATE
@@ -447,7 +447,8 @@ if(LANTERN_BUILD_TESTS)
         lantern_validator_duties_integration
     )
     set_property(TEST ${_lantern_ctest_targets} PROPERTY TIMEOUT 30)
+    set_tests_properties(lantern_client_pending PROPERTIES TIMEOUT 90)
     set_tests_properties(lantern_client_vote PROPERTIES TIMEOUT 300)
-    set_tests_properties(lantern_state PROPERTIES TIMEOUT 120)
+    set_tests_properties(lantern_state PROPERTIES TIMEOUT 300)
 
 endif()

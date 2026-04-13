@@ -124,7 +124,7 @@ void lantern_signed_block_list_reset(LanternSignedBlockList *resp) {
     }
     if (resp->blocks) {
         for (size_t i = 0; i < resp->length; ++i) {
-            lantern_signed_block_with_attestation_reset(&resp->blocks[i]);
+            lantern_signed_block_reset(&resp->blocks[i]);
         }
     }
     free(resp->blocks);
@@ -140,7 +140,7 @@ int lantern_signed_block_list_resize(LanternSignedBlockList *resp, size_t new_le
     if (new_length == 0) {
         if (resp->blocks) {
             for (size_t i = 0; i < resp->length; ++i) {
-                lantern_signed_block_with_attestation_reset(&resp->blocks[i]);
+                lantern_signed_block_reset(&resp->blocks[i]);
             }
         }
         resp->length = 0;
@@ -155,11 +155,11 @@ int lantern_signed_block_list_resize(LanternSignedBlockList *resp, size_t new_le
     size_t old_length = resp->length;
     if (new_length > old_length) {
         for (size_t i = old_length; i < new_length; ++i) {
-            lantern_signed_block_with_attestation_init(&resp->blocks[i]);
+            lantern_signed_block_init(&resp->blocks[i]);
         }
     } else if (new_length < old_length) {
         for (size_t i = new_length; i < old_length; ++i) {
-            lantern_signed_block_with_attestation_reset(&resp->blocks[i]);
+            lantern_signed_block_reset(&resp->blocks[i]);
         }
     }
     resp->length = new_length;
@@ -480,7 +480,7 @@ int lantern_network_signed_block_list_encode(
             }
 
             size_t block_written = 0;
-            if (lantern_ssz_encode_signed_block(
+            if (lantern_ssz_encode_signed_block_canonical(
                     &resp->blocks[i],
                     buffer + payload_cursor,
                     capacity - payload_cursor,
@@ -597,7 +597,7 @@ int lantern_network_signed_block_list_decode(
             return -1;
         }
         LanternSignedBlock *entry = &resp->blocks[i];
-        if (lantern_ssz_decode_signed_block(entry, payload_region + start_offset, span) != 0) {
+        if (lantern_ssz_decode_signed_block_strict(entry, payload_region + start_offset, span) != 0) {
             lantern_signed_block_list_reset(resp);
             return -1;
         }

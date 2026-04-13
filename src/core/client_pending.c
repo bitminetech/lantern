@@ -600,22 +600,20 @@ int clone_signed_block(const LanternSignedBlock *source, LanternSignedBlock *des
     }
 
     lantern_signed_block_with_attestation_init(dest);
-    dest->message.block.slot = source->message.block.slot;
-    dest->message.block.proposer_index = source->message.block.proposer_index;
-    dest->message.block.parent_root = source->message.block.parent_root;
-    dest->message.block.state_root = source->message.block.state_root;
+    dest->block.slot = source->block.slot;
+    dest->block.proposer_index = source->block.proposer_index;
+    dest->block.parent_root = source->block.parent_root;
+    dest->block.state_root = source->block.state_root;
 
     if (lantern_aggregated_attestations_copy(
-            &dest->message.block.body.attestations,
-            &source->message.block.body.attestations) != 0)
+            &dest->block.body.attestations,
+            &source->block.body.attestations) != 0)
     {
         lantern_signed_block_with_attestation_reset(dest);
         return LANTERN_CLIENT_PENDING_ERR_COPY;
     }
-    dest->message.block.body.legacy_plain_attestation_layout =
-        source->message.block.body.legacy_plain_attestation_layout;
-
-    dest->message.proposer_attestation = source->message.proposer_attestation;
+    dest->block.body.legacy_plain_attestation_layout =
+        source->block.body.legacy_plain_attestation_layout;
 
     if (lantern_block_signatures_copy(&dest->signatures, &source->signatures) != 0)
     {

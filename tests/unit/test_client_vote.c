@@ -1,4 +1,5 @@
 #include <inttypes.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -12,13 +13,14 @@
 #include "client_test_helpers.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
+#include "lantern/crypto/xmss.h"
 #include "lantern/networking/gossip_payloads.h"
 #include "lantern/support/string_list.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/time.h"
 
 /* Internal core APIs used for targeted cache and block-build regression tests. */
-int lantern_client_set_gossip_signature(
+int lantern_client_set_attestation_signature(
     struct lantern_client *client,
     const LanternSignatureKey *key,
     const LanternAttestationData *data,
@@ -54,10 +56,27 @@ int lantern_client_advance_fork_choice_time_locked(
     struct lantern_client *client,
     uint64_t now_milliseconds,
     bool has_proposal);
+void lantern_client_reset_local_validators(struct lantern_client *client);
+int lantern_client_load_xmss_keys(struct lantern_client *client);
+int validator_sign_with_key(
+    struct lantern_local_validator *validator,
+    uint64_t slot,
+    const LanternRoot *message,
+    bool use_proposal_key,
+    LanternSignature *out_signature);
+int validator_build_block(
+    struct lantern_client *client,
+    uint64_t slot,
+    size_t local_index,
+    LanternSignedBlock *out_block);
 lantern_client_error lantern_client_aggregate_attestations_for_block(
     struct lantern_client *client,
     const LanternAttestations *att_list,
     const LanternSignatureList *att_signatures,
+    LanternAggregatedAttestations *out_attestations,
+    LanternAttestationSignatures *out_signatures);
+lantern_client_error lantern_client_debug_aggregate_attestation_signatures(
+    struct lantern_client *client,
     LanternAggregatedAttestations *out_attestations,
     LanternAttestationSignatures *out_signatures);
 int validator_publish_attestations(struct lantern_client *client, uint64_t slot);
@@ -194,6 +213,84 @@ static LanternAttestationData test_make_attestation_data(uint64_t slot, uint8_t 
     return data;
 }
 
+static bool aggregated_pool_contains_root(
+    const struct lantern_aggregated_payload_pool *pool,
+    const LanternRoot *data_root) {
+    if (!pool || !data_root || !pool->entries) {
+        return false;
+    }
+    for (size_t i = 0; i < pool->length; ++i) {
+        if (memcmp(pool->entries[i].data_root.bytes, data_root->bytes, LANTERN_ROOT_SIZE) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool pq_range_contains_slot(struct PQRange range, uint64_t slot) {
+    return range.start <= slot && slot < range.end;
+}
+
+static int test_fixture_secret_key_path(
+    size_t validator_index,
+    char *out_path,
+    size_t out_path_len) {
+    if (!out_path || out_path_len == 0) {
+        return -1;
+    }
+    int written = snprintf(
+        out_path,
+        out_path_len,
+        "%s/genesis/xmss-keys/validator_%zu_sk.json",
+        LANTERN_TEST_FIXTURE_DIR,
+        validator_index);
+    if (written <= 0 || (size_t)written >= out_path_len) {
+        return -1;
+    }
+    return 0;
+}
+
+static int test_copy_file(const char *src_path, const char *dst_path) {
+    if (!src_path || !dst_path) {
+        return -1;
+    }
+
+    FILE *src = fopen(src_path, "rb");
+    if (!src) {
+        perror("fopen copy src");
+        return -1;
+    }
+
+    FILE *dst = fopen(dst_path, "wb");
+    if (!dst) {
+        perror("fopen copy dst");
+        fclose(src);
+        return -1;
+    }
+
+    int rc = 0;
+    unsigned char buffer[4096];
+    while (1) {
+        size_t read_len = fread(buffer, 1u, sizeof(buffer), src);
+        if (read_len > 0 && fwrite(buffer, 1u, read_len, dst) != read_len) {
+            perror("fwrite copy");
+            rc = -1;
+            break;
+        }
+        if (read_len < sizeof(buffer)) {
+            if (ferror(src)) {
+                perror("fread copy");
+                rc = -1;
+            }
+            break;
+        }
+    }
+
+    fclose(dst);
+    fclose(src);
+    return rc;
+}
+
 static bool proof_payload_equals(
     const LanternAggregatedSignatureProof *lhs,
     const LanternAggregatedSignatureProof *rhs) {
@@ -322,59 +419,44 @@ static int build_signed_head_block(
     }
 
     int rc = -1;
-    LanternCheckpoint head = {0};
-    LanternCheckpoint target = {0};
-    LanternCheckpoint source = {0};
-    LanternSignedVote proposer_vote;
-    memset(&proposer_vote, 0, sizeof(proposer_vote));
 
     lantern_signed_block_with_attestation_init(out_block);
-    out_block->message.block.slot = client->state.slot + 1u;
+    out_block->block.slot = client->state.slot + 1u;
     if (lantern_proposer_for_slot(
-            out_block->message.block.slot,
+            out_block->block.slot,
             client->state.config.num_validators,
-            &out_block->message.block.proposer_index)
+            &out_block->block.proposer_index)
         != 0) {
         goto cleanup;
     }
     if (lantern_state_select_block_parent(
             &client->state,
             &client->store,
-            &out_block->message.block.parent_root)
+            &out_block->block.parent_root)
         != 0) {
         goto cleanup;
     }
-    if (lantern_state_compute_vote_checkpoints(
-            &client->state,
-            &client->store,
-            &head,
-            &target,
-            &source)
-        != 0) {
-        goto cleanup;
-    }
-
-    proposer_vote.data.validator_id = out_block->message.block.proposer_index;
-    proposer_vote.data.slot = out_block->message.block.slot;
-    proposer_vote.data.head = head;
-    proposer_vote.data.target = target;
-    proposer_vote.data.source = source;
-    if (client_test_sign_vote_with_secret(&proposer_vote, secret) != 0) {
-        goto cleanup;
-    }
-
-    out_block->message.proposer_attestation = proposer_vote.data;
-    out_block->signatures.proposer_signature = proposer_vote.signature;
 
     if (lantern_state_preview_post_state_root(
             &client->state,
             &client->store,
             out_block,
-            &out_block->message.block.state_root)
+            &out_block->block.state_root)
         != 0) {
         goto cleanup;
     }
-    if (lantern_hash_tree_root_block(&out_block->message.block, out_root) != 0) {
+    LanternRoot block_signature_root;
+    if (lantern_hash_tree_root_block(&out_block->block, &block_signature_root) != 0) {
+        goto cleanup;
+    }
+    if (!lantern_signature_sign(
+            secret,
+            out_block->block.slot,
+            &block_signature_root,
+            &out_block->signatures.proposer_signature)) {
+        goto cleanup;
+    }
+    if (lantern_hash_tree_root_block(&out_block->block, out_root) != 0) {
         goto cleanup;
     }
 
@@ -466,7 +548,7 @@ static int test_record_vote_accepts_known_roots(void) {
         fprintf(stderr, "cached attestation data mismatch\n");
         goto cleanup;
     }
-    if (lantern_store_get_gossip_signature(&client.store, &key, &cached_signature) == 0) {
+    if (lantern_store_get_attestation_signature(&client.store, &key, &cached_signature) == 0) {
         fprintf(stderr, "non-aggregator vote should not populate gossip signature cache\n");
         goto cleanup;
     }
@@ -753,7 +835,7 @@ static int test_record_vote_replays_buffered_vote_after_block_import(void) {
     }
     if (lantern_fork_choice_set_block_state(
             &client.fork_choice,
-            &grandchild_block.message.block.parent_root,
+            &grandchild_block.block.parent_root,
             &client.state)
         != 0) {
         fprintf(stderr, "failed to cache parent state for buffered vote replay test\n");
@@ -779,7 +861,7 @@ static int test_record_vote_replays_buffered_vote_after_block_import(void) {
     }
     if (lantern_storage_store_state_for_root(
             client.data_dir,
-            &grandchild_block.message.block.parent_root,
+            &grandchild_block.block.parent_root,
             &client.state)
         != 0) {
         fprintf(stderr, "failed to persist parent state for buffered vote replay test\n");
@@ -787,10 +869,10 @@ static int test_record_vote_replays_buffered_vote_after_block_import(void) {
     }
 
     vote.data.validator_id = 0u;
-    vote.data.slot = grandchild_block.message.block.slot;
-    vote.data.head.slot = grandchild_block.message.block.slot;
+    vote.data.slot = grandchild_block.block.slot;
+    vote.data.head.slot = grandchild_block.block.slot;
     vote.data.head.root = grandchild_root;
-    vote.data.target.slot = grandchild_block.message.block.slot;
+    vote.data.target.slot = grandchild_block.block.slot;
     vote.data.target.root = grandchild_root;
     vote.data.source.slot = 0u;
     vote.data.source.root = anchor_root;
@@ -1059,8 +1141,8 @@ static int test_validator_refresh_cached_vote_updates_source(void) {
     struct lantern_local_validator validator;
     memset(&validator, 0, sizeof(validator));
     validator.global_index = 0;
-    validator.secret_key = secret;
-    validator.has_secret_handle = true;
+    validator.attestation_secret_key = secret;
+    validator.has_attestation_secret_handle = true;
 
     LanternSignedVote stale;
     memset(&stale, 0, sizeof(stale));
@@ -1139,6 +1221,402 @@ static int test_validator_refresh_cached_vote_updates_source(void) {
 
 cleanup:
     client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_validator_sign_with_key_advances_only_selected_secret(void) {
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemePublicKey *unused_pub = NULL;
+    struct PQSignatureSchemeSecretKey *attestation_secret = NULL;
+    struct PQSignatureSchemeSecretKey *proposal_secret = NULL;
+    struct lantern_local_validator validator;
+    LanternRoot message;
+    LanternSignature signature;
+    int rc = 1;
+
+    memset(&validator, 0, sizeof(validator));
+    memset(&message, 0, sizeof(message));
+    memset(&signature, 0, sizeof(signature));
+
+    if (client_test_load_precomputed_keypair(0u, &pub, &attestation_secret) != 0) {
+        fprintf(stderr, "failed to load attestation keypair for key-advance test\n");
+        goto cleanup;
+    }
+    if (client_test_load_precomputed_keypair(0u, &unused_pub, &proposal_secret) != 0) {
+        fprintf(stderr, "failed to load proposal keypair for key-advance test\n");
+        goto cleanup;
+    }
+
+    validator.global_index = 0u;
+    validator.attestation_secret_key = attestation_secret;
+    validator.proposal_secret_key = proposal_secret;
+    validator.has_attestation_secret_handle = true;
+    validator.has_proposal_secret_handle = true;
+
+    struct PQRange initial_attestation = pq_get_prepared_interval(validator.attestation_secret_key);
+    struct PQRange initial_proposal = pq_get_prepared_interval(validator.proposal_secret_key);
+    if (initial_attestation.end <= initial_attestation.start
+        || initial_proposal.end <= initial_proposal.start) {
+        fprintf(stderr, "prepared interval unavailable for key-advance test\n");
+        goto cleanup;
+    }
+
+    uint64_t slot = initial_proposal.end;
+    if (slot == 0u) {
+        fprintf(stderr, "invalid proposal slot selection in key-advance test\n");
+        goto cleanup;
+    }
+
+    client_test_fill_root_with_index(&message, 0xAA55u);
+    if (validator_sign_with_key(&validator, slot, &message, true, &signature) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "validator_sign_with_key failed for proposal key advance test\n");
+        goto cleanup;
+    }
+
+    struct PQRange updated_attestation = pq_get_prepared_interval(validator.attestation_secret_key);
+    struct PQRange updated_proposal = pq_get_prepared_interval(validator.proposal_secret_key);
+    if (updated_attestation.start != initial_attestation.start
+        || updated_attestation.end != initial_attestation.end) {
+        fprintf(stderr, "attestation key should not advance during proposal signing\n");
+        goto cleanup;
+    }
+    if (!pq_range_contains_slot(updated_proposal, slot)) {
+        fprintf(stderr, "proposal key was not advanced to cover slot %" PRIu64 "\n", slot);
+        goto cleanup;
+    }
+    if (updated_proposal.start == initial_proposal.start
+        && updated_proposal.end == initial_proposal.end) {
+        fprintf(stderr, "proposal key interval did not change after signing future slot\n");
+        goto cleanup;
+    }
+    if (!lantern_signature_verify_pk(pub, slot, &signature, &message)) {
+        fprintf(stderr, "proposal signature failed verification after key advance\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    if (unused_pub) {
+        pq_public_key_free(unused_pub);
+    }
+    if (proposal_secret) {
+        pq_secret_key_free(proposal_secret);
+    }
+    if (attestation_secret) {
+        pq_secret_key_free(attestation_secret);
+    }
+    if (pub) {
+        pq_public_key_free(pub);
+    }
+    return rc;
+}
+
+static int test_validator_build_block_leaves_attestation_key_untouched(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *attestation_pub = NULL;
+    struct PQSignatureSchemeSecretKey *attestation_secret = NULL;
+    struct PQSignatureSchemePublicKey *proposal_pub = NULL;
+    struct PQSignatureSchemeSecretKey *proposal_secret = NULL;
+    struct lantern_local_validator validator;
+    LanternSignedBlock block;
+    LanternRoot block_root;
+    int rc = 1;
+
+    memset(&validator, 0, sizeof(validator));
+    memset(&block_root, 0, sizeof(block_root));
+    lantern_signed_block_init(&block);
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "build_block_dual_key",
+            &attestation_pub,
+            &attestation_secret,
+            NULL,
+            NULL)
+        != 0) {
+        goto cleanup;
+    }
+    if (client_test_load_precomputed_keypair(0u, &proposal_pub, &proposal_secret) != 0) {
+        fprintf(stderr, "failed to load proposal keypair for block build key-isolation test\n");
+        goto cleanup;
+    }
+
+    validator.global_index = 0u;
+    validator.attestation_secret_key = attestation_secret;
+    validator.proposal_secret_key = proposal_secret;
+    client.local_validators = &validator;
+    client.local_validator_count = 1u;
+
+    struct PQRange initial_attestation = pq_get_prepared_interval(validator.attestation_secret_key);
+    struct PQRange initial_proposal = pq_get_prepared_interval(validator.proposal_secret_key);
+    if (initial_attestation.end <= initial_attestation.start
+        || initial_proposal.end <= initial_proposal.start) {
+        fprintf(stderr, "prepared interval unavailable for block build key-isolation test\n");
+        goto cleanup;
+    }
+
+    uint64_t slot = client.state.slot + 1u;
+
+    if (validator_build_block(&client, slot, 0u, &block) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "validator_build_block failed for key-isolation test\n");
+        goto cleanup;
+    }
+    if (lantern_hash_tree_root_block(&block.block, &block_root) != 0) {
+        fprintf(stderr, "failed to hash built block for key-isolation test\n");
+        goto cleanup;
+    }
+
+    struct PQRange updated_attestation = pq_get_prepared_interval(validator.attestation_secret_key);
+    struct PQRange updated_proposal = pq_get_prepared_interval(validator.proposal_secret_key);
+    if (updated_attestation.start != initial_attestation.start
+        || updated_attestation.end != initial_attestation.end) {
+        fprintf(stderr, "attestation key should remain unchanged during block production\n");
+        goto cleanup;
+    }
+    if (!pq_range_contains_slot(updated_proposal, slot)) {
+        fprintf(stderr, "proposal key was not prepared for block slot %" PRIu64 "\n", slot);
+        goto cleanup;
+    }
+    if (!lantern_signature_verify_pk(
+            proposal_pub,
+            slot,
+            &block.signatures.proposer_signature,
+            &block_root)) {
+        fprintf(stderr, "block proposer signature did not verify with the proposal key\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_signed_block_reset(&block);
+    if (proposal_secret) {
+        pq_secret_key_free(proposal_secret);
+    }
+    if (proposal_pub) {
+        pq_public_key_free(proposal_pub);
+    }
+    client_test_teardown_vote_validation_client(&client, attestation_pub, attestation_secret);
+    return rc;
+}
+
+static int test_client_load_xmss_keys_reads_annotated_validators(void) {
+    struct lantern_client client;
+    char temp_dir_template[] = "/tmp/lantern-annotated-xmss-XXXXXX";
+    char *temp_dir = NULL;
+    char annotated_path[PATH_MAX];
+    char attester_src[PATH_MAX];
+    char proposer_src[PATH_MAX];
+    char attester_dst[PATH_MAX];
+    char proposer_dst[PATH_MAX];
+    int rc = 1;
+
+    memset(&client, 0, sizeof(client));
+    memset(annotated_path, 0, sizeof(annotated_path));
+    memset(attester_src, 0, sizeof(attester_src));
+    memset(proposer_src, 0, sizeof(proposer_src));
+    memset(attester_dst, 0, sizeof(attester_dst));
+    memset(proposer_dst, 0, sizeof(proposer_dst));
+
+    temp_dir = mkdtemp(temp_dir_template);
+    if (!temp_dir) {
+        perror("mkdtemp annotated");
+        return 1;
+    }
+    if (test_fixture_secret_key_path(0u, attester_src, sizeof(attester_src)) != 0
+        || test_fixture_secret_key_path(1u, proposer_src, sizeof(proposer_src)) != 0) {
+        fprintf(stderr, "failed to resolve fixture secret key paths for annotated test\n");
+        goto cleanup;
+    }
+    if (snprintf(annotated_path, sizeof(annotated_path), "%s/annotated_validators.yaml", temp_dir) <= 0
+        || snprintf(
+               attester_dst,
+               sizeof(attester_dst),
+               "%s/validator_0_attester_key_sk.json",
+               temp_dir)
+               <= 0
+        || snprintf(
+               proposer_dst,
+               sizeof(proposer_dst),
+               "%s/validator_0_proposer_key_sk.json",
+               temp_dir)
+               <= 0) {
+        fprintf(stderr, "failed to build annotated fixture paths\n");
+        goto cleanup;
+    }
+    if (test_copy_file(attester_src, attester_dst) != 0
+        || test_copy_file(proposer_src, proposer_dst) != 0) {
+        fprintf(stderr, "failed to copy annotated fixture secret keys\n");
+        goto cleanup;
+    }
+
+    FILE *annotated = fopen(annotated_path, "w");
+    if (!annotated) {
+        perror("fopen annotated");
+        goto cleanup;
+    }
+    fputs(
+        "manifest_loader:\n"
+        "  - index: 0\n"
+        "    pubkey_hex: 00\n"
+        "    privkey_file: validator_0_attester_key_sk.json\n"
+        "  - index: 0\n"
+        "    pubkey_hex: 11\n"
+        "    privkey_file: validator_0_proposer_key_sk.json\n"
+        "other_node:\n"
+        "  - index: 1\n"
+        "    pubkey_hex: 22\n"
+        "    privkey_file: validator_1_attester_key_sk.json\n"
+        "  - index: 1\n"
+        "    pubkey_hex: 33\n"
+        "    privkey_file: validator_1_proposer_key_sk.json\n",
+        annotated);
+    fclose(annotated);
+
+    client.node_id = (char *)"manifest_loader";
+    client.genesis.chain_config.validator_count = 1u;
+    client.local_validators = calloc(1u, sizeof(*client.local_validators));
+    if (!client.local_validators) {
+        fprintf(stderr, "failed to allocate local validator for annotated test\n");
+        goto cleanup;
+    }
+    client.local_validator_count = 1u;
+    client.local_validators[0].global_index = 0u;
+    client.xmss_key_dir = strdup(temp_dir);
+    client.validator_keys_path = strdup(annotated_path);
+    if (!client.xmss_key_dir || !client.validator_keys_path) {
+        fprintf(stderr, "failed to copy annotated fixture paths\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_load_xmss_keys(&client) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "lantern_client_load_xmss_keys failed for annotated validators test\n");
+        goto cleanup;
+    }
+    if (!client.local_validators[0].attestation_secret_key
+        || !client.local_validators[0].proposal_secret_key) {
+        fprintf(stderr, "annotated validators did not populate both secret key handles\n");
+        goto cleanup;
+    }
+    if (client.local_validators[0].attestation_secret_key
+        == client.local_validators[0].proposal_secret_key) {
+        fprintf(stderr, "annotated validators should load distinct secret key handles\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    free(client.validator_keys_path);
+    client.validator_keys_path = NULL;
+    free(client.xmss_key_dir);
+    client.xmss_key_dir = NULL;
+    lantern_client_reset_local_validators(&client);
+    if (annotated_path[0] != '\0') {
+        unlink(annotated_path);
+    }
+    if (attester_dst[0] != '\0') {
+        unlink(attester_dst);
+    }
+    if (proposer_dst[0] != '\0') {
+        unlink(proposer_dst);
+    }
+    if (temp_dir) {
+        rmdir(temp_dir);
+    }
+    return rc;
+}
+
+static int test_client_load_xmss_keys_rejects_incomplete_annotated_validator(void) {
+    struct lantern_client client;
+    char temp_dir_template[] = "/tmp/lantern-annotated-xmss-XXXXXX";
+    char *temp_dir = NULL;
+    char annotated_path[PATH_MAX];
+    char attester_src[PATH_MAX];
+    char attester_dst[PATH_MAX];
+    int rc = 1;
+
+    memset(&client, 0, sizeof(client));
+    memset(annotated_path, 0, sizeof(annotated_path));
+    memset(attester_src, 0, sizeof(attester_src));
+    memset(attester_dst, 0, sizeof(attester_dst));
+
+    temp_dir = mkdtemp(temp_dir_template);
+    if (!temp_dir) {
+        perror("mkdtemp incomplete annotated");
+        return 1;
+    }
+    if (test_fixture_secret_key_path(0u, attester_src, sizeof(attester_src)) != 0) {
+        fprintf(stderr, "failed to resolve fixture secret key path for incomplete annotated test\n");
+        goto cleanup;
+    }
+    if (snprintf(annotated_path, sizeof(annotated_path), "%s/annotated_validators.yaml", temp_dir) <= 0
+        || snprintf(
+               attester_dst,
+               sizeof(attester_dst),
+               "%s/validator_0_attester_key_sk.json",
+               temp_dir)
+               <= 0) {
+        fprintf(stderr, "failed to build incomplete annotated fixture paths\n");
+        goto cleanup;
+    }
+    if (test_copy_file(attester_src, attester_dst) != 0) {
+        fprintf(stderr, "failed to copy incomplete annotated fixture secret key\n");
+        goto cleanup;
+    }
+
+    FILE *annotated = fopen(annotated_path, "w");
+    if (!annotated) {
+        perror("fopen incomplete annotated");
+        goto cleanup;
+    }
+    fputs(
+        "manifest_loader:\n"
+        "  - index: 0\n"
+        "    pubkey_hex: 00\n"
+        "    privkey_file: validator_0_attester_key_sk.json\n",
+        annotated);
+    fclose(annotated);
+
+    client.node_id = (char *)"manifest_loader";
+    client.genesis.chain_config.validator_count = 1u;
+    client.local_validators = calloc(1u, sizeof(*client.local_validators));
+    if (!client.local_validators) {
+        fprintf(stderr, "failed to allocate local validator for incomplete annotated test\n");
+        goto cleanup;
+    }
+    client.local_validator_count = 1u;
+    client.local_validators[0].global_index = 0u;
+    client.xmss_key_dir = strdup(temp_dir);
+    client.validator_keys_path = strdup(annotated_path);
+    if (!client.xmss_key_dir || !client.validator_keys_path) {
+        fprintf(stderr, "failed to copy incomplete annotated fixture paths\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_load_xmss_keys(&client) == LANTERN_CLIENT_OK) {
+        fprintf(stderr, "incomplete annotated validators should be rejected\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    free(client.validator_keys_path);
+    client.validator_keys_path = NULL;
+    free(client.xmss_key_dir);
+    client.xmss_key_dir = NULL;
+    lantern_client_reset_local_validators(&client);
+    if (annotated_path[0] != '\0') {
+        unlink(annotated_path);
+    }
+    if (attester_dst[0] != '\0') {
+        unlink(attester_dst);
+    }
+    if (temp_dir) {
+        rmdir(temp_dir);
+    }
     return rc;
 }
 
@@ -1280,7 +1758,7 @@ static int test_record_vote_defers_interval_pipeline(void) {
     };
     LanternSignature cached_signature;
     memset(&cached_signature, 0, sizeof(cached_signature));
-    if (lantern_store_get_gossip_signature(&client.store, &key, &cached_signature) != 0) {
+    if (lantern_store_get_attestation_signature(&client.store, &key, &cached_signature) != 0) {
         fprintf(stderr, "gossip signature cache missing vote before aggregation\n");
         goto cleanup;
     }
@@ -1354,7 +1832,7 @@ static int test_record_vote_defers_interval_pipeline(void) {
     }
     if (client.store.new_aggregated_payloads.length != 1
         || client.store.known_aggregated_payloads.length != 0) {
-        fprintf(stderr, "interval 2 aggregation did not stage proof into new payload pool\n");
+        fprintf(stderr, "interval 2 aggregation did not publish the local proof into the new payload pool\n");
         goto cleanup;
     }
     if (had_safe_before) {
@@ -1404,7 +1882,7 @@ static int test_record_vote_defers_interval_pipeline(void) {
     }
     if (client.store.new_aggregated_payloads.length != 0
         || client.store.known_aggregated_payloads.length != 1) {
-        fprintf(stderr, "aggregated payload pools did not migrate after interval 4\n");
+        fprintf(stderr, "aggregated payload pools diverged after interval 4\n");
         goto cleanup;
     }
 
@@ -1709,6 +2187,117 @@ cleanup:
     return rc;
 }
 
+static int test_debug_aggregate_attestation_signatures_rebuilds_new_payloads(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    struct lantern_validator_config_entry assigned;
+    LanternSignedVote vote;
+    LanternRoot stale_root;
+    LanternRoot fresh_root;
+    LanternAggregatedSignatureProof stale_proof;
+    LanternAggregatedAttestations aggregated_attestations;
+    LanternAttestationSignatures aggregated_signatures;
+    int rc = 1;
+
+    memset(&assigned, 0, sizeof(assigned));
+    memset(&vote, 0, sizeof(vote));
+    memset(&stale_root, 0, sizeof(stale_root));
+    memset(&fresh_root, 0, sizeof(fresh_root));
+    lantern_aggregated_signature_proof_init(&stale_proof);
+    lantern_aggregated_attestations_init(&aggregated_attestations);
+    lantern_attestation_signatures_init(&aggregated_signatures);
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "aggregate_recursive_rebuild",
+            &pub,
+            &secret,
+            &anchor_root,
+            &child_root)
+        != 0) {
+        return 1;
+    }
+
+    assigned.enr.is_aggregator = true;
+    client.assigned_validators = &assigned;
+    client.debug_attestation_committee_count = 1u;
+    client.gossip.attestation_subnet_id = 0u;
+
+    LanternAttestationData stale_data = test_make_attestation_data(9u, 0x77u);
+    client_test_fill_root_with_index(&stale_root, 0x909u);
+    if (test_make_dummy_proof(&stale_proof, 1u, 0x66u) != 0) {
+        fprintf(stderr, "failed to build stale proof for recursive aggregation test\n");
+        goto cleanup;
+    }
+    if (lantern_client_add_new_aggregated_payload(
+            &client,
+            &stale_root,
+            &stale_data,
+            &stale_proof,
+            stale_data.target.slot)
+        != 0) {
+        fprintf(stderr, "failed to seed stale new payload for recursive aggregation test\n");
+        goto cleanup;
+    }
+
+    if (make_signed_vote_for_validator(&client, secret, 0u, &anchor_root, &child_root, &vote) != 0) {
+        fprintf(stderr, "failed to build signed vote for recursive aggregation test\n");
+        goto cleanup;
+    }
+    if (lantern_client_debug_record_vote(&client, &vote, "aggregate_recursive") != 0) {
+        fprintf(stderr, "failed to record vote for recursive aggregation test\n");
+        goto cleanup;
+    }
+    if (client.store.attestation_signatures.length != 1u) {
+        fprintf(stderr, "expected one cached attestation signature before recursive aggregation\n");
+        goto cleanup;
+    }
+
+    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &fresh_root) != 0) {
+        fprintf(stderr, "failed to hash fresh attestation data for recursive aggregation test\n");
+        goto cleanup;
+    }
+
+    lantern_client_error agg_rc = lantern_client_debug_aggregate_attestation_signatures(
+        &client,
+        &aggregated_attestations,
+        &aggregated_signatures);
+    if (agg_rc != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "aggregation failed rc=%d\n", (int)agg_rc);
+        goto cleanup;
+    }
+    if (aggregated_attestations.length != 1u || aggregated_signatures.length != 1u) {
+        fprintf(stderr, "expected one fresh aggregate from aggregation\n");
+        goto cleanup;
+    }
+    if (client.store.new_aggregated_payloads.length != 1u) {
+        fprintf(stderr, "aggregation should rebuild the new payload pool from fresh results only\n");
+        goto cleanup;
+    }
+    if (!aggregated_pool_contains_root(&client.store.new_aggregated_payloads, &fresh_root)
+        || aggregated_pool_contains_root(&client.store.new_aggregated_payloads, &stale_root)) {
+        fprintf(stderr, "aggregation did not rebuild the new payload pool correctly\n");
+        goto cleanup;
+    }
+    if (client.store.attestation_signatures.length != 0u) {
+        fprintf(stderr, "aggregation should prune raw attestation signatures for aggregated data\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_attestation_signatures_reset(&aggregated_signatures);
+    lantern_aggregated_attestations_reset(&aggregated_attestations);
+    lantern_aggregated_signature_proof_reset(&stale_proof);
+    test_reset_agg_cache(&client);
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
 static int test_attestation_material_prunes_finalized_entries(void) {
     struct lantern_client client;
     memset(&client, 0, sizeof(client));
@@ -1798,14 +2387,14 @@ static int test_attestation_material_prunes_finalized_entries(void) {
         .validator_index = 1u,
         .data_root = fresh_known_root,
     };
-    if (lantern_client_set_gossip_signature(
+    if (lantern_client_set_attestation_signature(
             &client,
             &stale_key,
             &stale_new_data,
             &stale_signature,
             stale_new_data.target.slot)
         != 0
-        || lantern_client_set_gossip_signature(
+        || lantern_client_set_attestation_signature(
                &client,
                &fresh_key,
                &fresh_known_data,
@@ -1818,7 +2407,7 @@ static int test_attestation_material_prunes_finalized_entries(void) {
 
     if (client.store.new_aggregated_payloads.length != 2
         || client.store.known_aggregated_payloads.length != 2
-        || client.store.gossip_signatures.length != 2) {
+        || client.store.attestation_signatures.length != 2) {
         fprintf(stderr, "unexpected attestation material lengths before prune\n");
         goto cleanup;
     }
@@ -1830,7 +2419,7 @@ static int test_attestation_material_prunes_finalized_entries(void) {
     }
     if (client.store.new_aggregated_payloads.length != 1
         || client.store.known_aggregated_payloads.length != 1
-        || client.store.gossip_signatures.length != 1) {
+        || client.store.attestation_signatures.length != 1) {
         fprintf(stderr, "unexpected attestation material lengths after prune\n");
         goto cleanup;
     }
@@ -1855,9 +2444,9 @@ static int test_attestation_material_prunes_finalized_entries(void) {
         fprintf(stderr, "fresh payload target slot mismatch after prune\n");
         goto cleanup;
     }
-    if (client.store.gossip_signatures.entries[0].key.validator_index != fresh_key.validator_index
+    if (client.store.attestation_signatures.entries[0].key.validator_index != fresh_key.validator_index
         || memcmp(
-               client.store.gossip_signatures.entries[0].key.data_root.bytes,
+               client.store.attestation_signatures.entries[0].key.data_root.bytes,
                fresh_key.data_root.bytes,
                LANTERN_ROOT_SIZE)
             != 0) {
@@ -1941,14 +2530,14 @@ static int test_attestation_material_prune_tracks_stale_data_roots(void) {
         fprintf(stderr, "failed to add orphan payload for root-tracking prune test\n");
         goto cleanup;
     }
-    if (lantern_client_set_gossip_signature(
+    if (lantern_client_set_attestation_signature(
             &client,
             &stale_key,
             &stale_data,
             &stale_signature,
             stale_data.target.slot)
         != 0
-        || lantern_client_set_gossip_signature(
+        || lantern_client_set_attestation_signature(
                &client,
                &orphan_key,
                NULL,
@@ -1962,7 +2551,7 @@ static int test_attestation_material_prune_tracks_stale_data_roots(void) {
     if (client.store.attestation_data_by_root.length != 1
         || client.store.new_aggregated_payloads.length != 1
         || client.store.known_aggregated_payloads.length != 1
-        || client.store.gossip_signatures.length != 2) {
+        || client.store.attestation_signatures.length != 2) {
         fprintf(stderr, "unexpected cache lengths before root-tracking prune test\n");
         goto cleanup;
     }
@@ -1975,7 +2564,7 @@ static int test_attestation_material_prune_tracks_stale_data_roots(void) {
     if (client.store.attestation_data_by_root.length != 0
         || client.store.new_aggregated_payloads.length != 0
         || client.store.known_aggregated_payloads.length != 1
-        || client.store.gossip_signatures.length != 1) {
+        || client.store.attestation_signatures.length != 1) {
         fprintf(stderr, "unexpected cache lengths after root-tracking prune test\n");
         goto cleanup;
     }
@@ -1990,7 +2579,7 @@ static int test_attestation_material_prune_tracks_stale_data_roots(void) {
 
     LanternSignature cached_signature;
     memset(&cached_signature, 0, sizeof(cached_signature));
-    if (lantern_store_get_gossip_signature(&client.store, &orphan_key, &cached_signature) != 0) {
+    if (lantern_store_get_attestation_signature(&client.store, &orphan_key, &cached_signature) != 0) {
         fprintf(stderr, "orphan gossip signature should remain after root-tracking prune test\n");
         goto cleanup;
     }
@@ -1998,7 +2587,7 @@ static int test_attestation_material_prune_tracks_stale_data_roots(void) {
         fprintf(stderr, "orphan gossip signature mismatch after root-tracking prune test\n");
         goto cleanup;
     }
-    if (lantern_store_get_gossip_signature(&client.store, &stale_key, &cached_signature) == 0) {
+    if (lantern_store_get_attestation_signature(&client.store, &stale_key, &cached_signature) == 0) {
         fprintf(stderr, "stale gossip signature should have been pruned by root-tracking test\n");
         goto cleanup;
     }
@@ -2078,7 +2667,7 @@ static int test_validator_build_reuses_cached_group_proof(void) {
         fprintf(stderr, "failed to hash vote data for cached proof reuse test\n");
         goto cleanup;
     }
-    const uint8_t *validator_pubkey = lantern_state_validator_pubkey(&client.state, 0u);
+    const uint8_t *validator_pubkey = lantern_state_validator_attestation_pubkey(&client.state, 0u);
     if (!validator_pubkey) {
         fprintf(stderr, "missing validator pubkey for cached proof reuse test\n");
         goto cleanup;
@@ -2248,10 +2837,8 @@ static int test_block_build_keeps_known_payload_after_newer_raw_vote(void) {
     LanternSignedVote proof_vote;
     LanternSignedVote raw_vote;
     LanternAggregatedSignatureProof cached_proof;
-    LanternAttestations collected;
-    LanternSignatureList collected_signatures;
-    LanternAggregatedAttestations aggregated_attestations;
-    LanternAttestationSignatures aggregated_signatures;
+    LanternAggregatedAttestations collected;
+    LanternAttestationSignatures collected_signatures;
     int rc = 1;
 
     memset(&parent_root, 0, sizeof(parent_root));
@@ -2261,10 +2848,8 @@ static int test_block_build_keeps_known_payload_after_newer_raw_vote(void) {
     memset(&proof_vote, 0, sizeof(proof_vote));
     memset(&raw_vote, 0, sizeof(raw_vote));
     lantern_aggregated_signature_proof_init(&cached_proof);
-    lantern_attestations_init(&collected);
-    lantern_signature_list_init(&collected_signatures);
-    lantern_aggregated_attestations_init(&aggregated_attestations);
-    lantern_attestation_signatures_init(&aggregated_signatures);
+    lantern_aggregated_attestations_init(&collected);
+    lantern_attestation_signatures_init(&collected_signatures);
 
     if (client_test_setup_vote_validation_client_with_validator_count(
             &client,
@@ -2304,7 +2889,7 @@ static int test_block_build_keeps_known_payload_after_newer_raw_vote(void) {
 
     proof_key.validator_index = validator_id;
     proof_key.data_root = proof_root;
-    if (lantern_client_set_gossip_signature(
+    if (lantern_client_set_attestation_signature(
             &client,
             &proof_key,
             &proof_vote.data.data,
@@ -2366,7 +2951,6 @@ static int test_block_build_keeps_known_payload_after_newer_raw_vote(void) {
             block_slot,
             proposer_index,
             &parent_root,
-            NULL,
             &collected,
             &collected_signatures)
         != 0) {
@@ -2381,41 +2965,24 @@ static int test_block_build_keeps_known_payload_after_newer_raw_vote(void) {
             collected_signatures.length);
         goto cleanup;
     }
-    if (memcmp(&collected.data[0], &proof_vote.data, sizeof(proof_vote.data)) != 0) {
+    if (memcmp(&collected.data[0].data, &proof_vote.data.data, sizeof(proof_vote.data.data)) != 0) {
         fprintf(stderr, "block collection did not keep the proof-backed attestation\n");
         goto cleanup;
     }
-    if (memcmp(&collected_signatures.data[0], &proof_vote.signature, sizeof(proof_vote.signature)) != 0) {
-        fprintf(stderr, "block collection did not recover the proof-backed attestation signature\n");
+    if (!proof_payload_equals(&collected_signatures.data[0], &cached_proof)) {
+        fprintf(stderr, "block collection did not reuse the known cached proof\n");
         goto cleanup;
     }
-
-    lantern_client_error agg_rc = lantern_client_aggregate_attestations_for_block(
-        &client,
-        &collected,
-        &collected_signatures,
-        &aggregated_attestations,
-        &aggregated_signatures);
-    if (agg_rc != LANTERN_CLIENT_OK) {
-        fprintf(stderr, "failed to aggregate collected proof-backed attestation rc=%d\n", (int)agg_rc);
-        goto cleanup;
-    }
-    if (aggregated_attestations.length != 1u || aggregated_signatures.length != 1u) {
-        fprintf(stderr, "expected cached proof reuse for collected proof-backed attestation\n");
-        goto cleanup;
-    }
-    if (!proof_payload_equals(&aggregated_signatures.data[0], &cached_proof)) {
-        fprintf(stderr, "aggregated block attestations did not reuse the known cached proof\n");
+    if (!lantern_bitlist_get(&collected.data[0].aggregation_bits, (size_t)validator_id)) {
+        fprintf(stderr, "block collection did not preserve cached proof participants\n");
         goto cleanup;
     }
 
     rc = 0;
 
 cleanup:
-    lantern_attestation_signatures_reset(&aggregated_signatures);
-    lantern_aggregated_attestations_reset(&aggregated_attestations);
-    lantern_signature_list_reset(&collected_signatures);
-    lantern_attestations_reset(&collected);
+    lantern_attestation_signatures_reset(&collected_signatures);
+    lantern_aggregated_attestations_reset(&collected);
     lantern_aggregated_signature_proof_reset(&cached_proof);
     test_reset_agg_cache(&client);
     client_test_teardown_vote_validation_client(&client, pub, secret);
@@ -2486,8 +3053,8 @@ static int test_publish_aggregated_attestations_collects_any_slot_and_prunes_gos
         fprintf(stderr, "failed to record votes for subnet filter test\n");
         goto cleanup;
     }
-    if (client.store.gossip_signatures.length != 3u) {
-        fprintf(stderr, "expected every gossip signature to be cached before aggregation\n");
+    if (client.store.attestation_signatures.length != 3u) {
+        fprintf(stderr, "expected all gossip signatures to be cached before subnet filtering\n");
         goto cleanup;
     }
     if (lantern_hash_tree_root_attestation_data(&vote0.data.data, &data_root) != 0) {
@@ -2520,17 +3087,17 @@ static int test_publish_aggregated_attestations_collects_any_slot_and_prunes_gos
         fprintf(stderr, "published aggregated proof participants should still match the local subnet\n");
         goto cleanup;
     }
-    if (client.store.gossip_signatures.length != 1u) {
-        fprintf(stderr, "expected only the aggregated subnet signatures to be pruned after publish\n");
+    if (client.store.attestation_signatures.length != 0u) {
+        fprintf(stderr, "expected aggregated gossip signatures to be fully pruned after publish\n");
         goto cleanup;
     }
-    if (lantern_store_get_gossip_signature(&client.store, &vote0_key, &cached_signature) == 0
-        || lantern_store_get_gossip_signature(&client.store, &vote4_key, &cached_signature) == 0) {
+    if (lantern_store_get_attestation_signature(&client.store, &vote0_key, &cached_signature) == 0
+        || lantern_store_get_attestation_signature(&client.store, &vote4_key, &cached_signature) == 0) {
         fprintf(stderr, "aggregated subnet votes should have been removed from gossip cache\n");
         goto cleanup;
     }
-    if (lantern_store_get_gossip_signature(&client.store, &vote1_key, &cached_signature) != 0) {
-        fprintf(stderr, "cross-subnet gossip vote should remain cached after local subnet aggregation\n");
+    if (lantern_store_get_attestation_signature(&client.store, &vote1_key, &cached_signature) == 0) {
+        fprintf(stderr, "cross-subnet gossip vote should never enter the gossip signature cache\n");
         goto cleanup;
     }
 
@@ -2555,44 +3122,35 @@ cleanup:
     return rc;
 }
 
-static int test_publish_attestations_skips_proposer_pending_vote(void) {
+static int test_publish_attestations_includes_proposer(void) {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
     struct PQSignatureSchemeSecretKey *secret = NULL;
-    LanternRoot anchor_root;
-    LanternRoot child_root;
     struct publish_capture capture;
     struct lantern_local_validator validator;
     bool validator_enabled = true;
-    LanternSignedVote proposer_vote;
+    LanternSignedVote published_vote;
     int rc = 1;
 
     memset(&capture, 0, sizeof(capture));
     memset(&validator, 0, sizeof(validator));
-    memset(&proposer_vote, 0, sizeof(proposer_vote));
+    memset(&published_vote, 0, sizeof(published_vote));
 
     if (client_test_setup_vote_validation_client(
             &client,
-            "vote_skip_proposer_pending",
+            "vote_publish_proposer",
             &pub,
             &secret,
-            &anchor_root,
-            &child_root)
+            NULL,
+            NULL)
         != 0) {
         goto cleanup;
     }
 
-    if (make_signed_vote_for_validator(&client, secret, 0u, &anchor_root, &child_root, &proposer_vote) != 0) {
-        fprintf(stderr, "failed to build proposer pending vote for skip test\n");
-        goto cleanup;
-    }
-
-    validator.global_index = proposer_vote.data.validator_id;
-    validator.last_proposed_slot = proposer_vote.data.slot;
+    validator.global_index = 0u;
     validator.last_attested_slot = UINT64_MAX;
-    validator.pending_attestation = proposer_vote;
-    validator.pending_attestation_slot = proposer_vote.data.slot;
-    validator.has_pending_attestation = true;
+    validator.attestation_secret_key = secret;
+    validator.proposal_secret_key = secret;
 
     client.local_validators = &validator;
     client.local_validator_count = 1u;
@@ -2600,37 +3158,42 @@ static int test_publish_attestations_skips_proposer_pending_vote(void) {
     client.has_runtime = true;
     client.gossip_running = true;
     client.gossip.attestation_subnet_id = 0u;
-    snprintf(client.gossip.vote_topic, sizeof(client.gossip.vote_topic), "test/skip_proposer_vote");
+    snprintf(client.gossip.vote_topic, sizeof(client.gossip.vote_topic), "test/proposer_vote");
     snprintf(
         client.gossip.vote_subnet_topic,
         sizeof(client.gossip.vote_subnet_topic),
-        "test/skip_proposer_vote_subnet");
+        "test/proposer_vote_subnet");
     lantern_gossipsub_service_set_publish_hook(&client.gossip, publish_capture_hook, &capture);
     lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
 
-    if (lantern_store_validator_has_vote(&client.store, proposer_vote.data.validator_id)) {
-        fprintf(stderr, "validator vote cache unexpectedly populated before proposer skip test\n");
+    uint64_t slot = client.state.slot + 1u;
+    if (lantern_store_validator_has_vote(&client.store, validator.global_index)) {
+        fprintf(stderr, "validator vote cache unexpectedly populated before proposer publish test\n");
         goto cleanup;
     }
 
-    if (validator_publish_attestations(&client, proposer_vote.data.slot) != LANTERN_CLIENT_OK) {
-        fprintf(stderr, "validator_publish_attestations failed for proposer skip test\n");
+    if (validator_publish_attestations(&client, slot) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "validator_publish_attestations failed for proposer publish test\n");
         goto cleanup;
     }
-    if (capture.calls != 0u) {
-        fprintf(stderr, "proposer should not republish a pending attestation at interval 1\n");
+    if (capture.calls != 1u || capture.payload_len == 0u || !capture.payload) {
+        fprintf(stderr, "expected proposer attestation to publish on the attestation subnet topic\n");
         goto cleanup;
     }
-    if (lantern_store_validator_has_vote(&client.store, proposer_vote.data.validator_id)) {
-        fprintf(stderr, "proposer pending vote should not be staged into the validator vote cache\n");
+    if (lantern_gossip_decode_signed_vote_snappy(&published_vote, capture.payload, capture.payload_len) != 0) {
+        fprintf(stderr, "failed to decode proposer attestation publish payload\n");
         goto cleanup;
     }
-    if (validator.last_attested_slot != proposer_vote.data.slot) {
-        fprintf(stderr, "proposer skip path did not mark slot %" PRIu64 " as attested\n", proposer_vote.data.slot);
+    if (published_vote.data.validator_id != validator.global_index || published_vote.data.slot != slot) {
+        fprintf(stderr, "published proposer attestation had unexpected validator or slot\n");
         goto cleanup;
     }
-    if (validator.has_pending_attestation || validator.pending_attestation_slot != UINT64_MAX) {
-        fprintf(stderr, "proposer pending attestation was not cleared after interval-1 skip\n");
+    if (!lantern_store_validator_has_vote(&client.store, validator.global_index)) {
+        fprintf(stderr, "proposer attestation should be staged into the validator vote cache\n");
+        goto cleanup;
+    }
+    if (validator.last_attested_slot != slot) {
+        fprintf(stderr, "proposer attestation path did not mark slot %" PRIu64 " as attested\n", slot);
         goto cleanup;
     }
 
@@ -2750,6 +3313,18 @@ int main(void) {
     if (test_validator_refresh_cached_vote_updates_source() != 0) {
         return 1;
     }
+    if (test_validator_sign_with_key_advances_only_selected_secret() != 0) {
+        return 1;
+    }
+    if (test_validator_build_block_leaves_attestation_key_untouched() != 0) {
+        return 1;
+    }
+    if (test_client_load_xmss_keys_reads_annotated_validators() != 0) {
+        return 1;
+    }
+    if (test_client_load_xmss_keys_rejects_incomplete_annotated_validator() != 0) {
+        return 1;
+    }
     if (test_record_vote_preserves_state_root() != 0) {
         return 1;
     }
@@ -2768,6 +3343,9 @@ int main(void) {
     if (test_new_aggregated_payloads_promote_to_known() != 0) {
         return 1;
     }
+    if (test_debug_aggregate_attestation_signatures_rebuilds_new_payloads() != 0) {
+        return 1;
+    }
     if (test_attestation_material_prunes_finalized_entries() != 0) {
         return 1;
     }
@@ -2783,7 +3361,7 @@ int main(void) {
     if (test_validator_build_reuses_cached_group_proof() != 0) {
         return 1;
     }
-    if (test_publish_attestations_skips_proposer_pending_vote() != 0) {
+    if (test_publish_attestations_includes_proposer() != 0) {
         return 1;
     }
     if (test_publish_aggregated_attestations_collects_any_slot_and_prunes_gossip() != 0) {

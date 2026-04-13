@@ -45,6 +45,12 @@ static uint32_t read_u32_le(const uint8_t *data) {
         | ((uint32_t)data[3] << 24);
 }
 
+int lantern_hash_tree_root_validators_dual(
+    const uint8_t *attestation_pubkeys,
+    const uint8_t *proposal_pubkeys,
+    size_t count,
+    LanternRoot *out_root);
+
 static int merkleize_chunks(
     const uint8_t *chunks,
     size_t chunk_count,
@@ -224,20 +230,35 @@ static int hash_xmss_signature(const LanternSignature *signature, LanternRoot *o
     return merkleize_chunks(&chunks[0][0], 3, 0, out_root);
 }
 
-static int hash_validator(const uint8_t *pubkey, uint64_t index, LanternRoot *out_root) {
+static int hash_validator(
+    const uint8_t *attestation_pubkey,
+    const uint8_t *proposal_pubkey,
+    uint64_t index,
+    LanternRoot *out_root) {
     if (!out_root) {
         return -1;
     }
-    /* Validator SSZ structure: pubkey (Bytes52) + index (u64)
-     * This matches Zeam's Validator struct for correct hash tree root. */
-    LanternRoot pubkey_root;
-    if (hash_byte_vector(pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE, &pubkey_root) != 0) {
+    LanternRoot attestation_pubkey_root;
+    if (hash_byte_vector(
+            attestation_pubkey,
+            LANTERN_VALIDATOR_PUBKEY_SIZE,
+            &attestation_pubkey_root)
+        != 0) {
         return -1;
     }
-    uint8_t chunks[2][SSZ_BYTES_PER_CHUNK];
-    memcpy(chunks[0], pubkey_root.bytes, SSZ_BYTES_PER_CHUNK);
-    chunk_from_uint64(index, chunks[1]);
-    return merkleize_chunks(&chunks[0][0], 2, 0, out_root);
+    LanternRoot proposal_pubkey_root;
+    if (hash_byte_vector(
+            proposal_pubkey,
+            LANTERN_VALIDATOR_PUBKEY_SIZE,
+            &proposal_pubkey_root)
+        != 0) {
+        return -1;
+    }
+    uint8_t chunks[3][SSZ_BYTES_PER_CHUNK];
+    memcpy(chunks[0], attestation_pubkey_root.bytes, SSZ_BYTES_PER_CHUNK);
+    memcpy(chunks[1], proposal_pubkey_root.bytes, SSZ_BYTES_PER_CHUNK);
+    chunk_from_uint64(index, chunks[2]);
+    return merkleize_chunks(&chunks[0][0], 3, 0, out_root);
 }
 
 static int zero_merkle_root(size_t chunk_limit, LanternRoot *out_root) {
@@ -876,32 +897,12 @@ int lantern_hash_tree_root_block(const LanternBlock *block, LanternRoot *out_roo
     return merkleize_chunks(&chunks[0][0], 5, 0, out_root);
 }
 
-int lantern_hash_tree_root_block_with_attestation(
-    const LanternBlockWithAttestation *block,
-    LanternRoot *out_root) {
-    if (!block || !out_root) {
-        return -1;
-    }
-    LanternRoot block_root;
-    LanternRoot proposer_root;
-    if (lantern_hash_tree_root_block(&block->block, &block_root) != 0) {
-        return -1;
-    }
-    if (lantern_hash_tree_root_vote(&block->proposer_attestation, &proposer_root) != 0) {
-        return -1;
-    }
-    uint8_t chunks[2][SSZ_BYTES_PER_CHUNK];
-    memcpy(chunks[0], block_root.bytes, SSZ_BYTES_PER_CHUNK);
-    memcpy(chunks[1], proposer_root.bytes, SSZ_BYTES_PER_CHUNK);
-    return merkleize_chunks(&chunks[0][0], 2, 0, out_root);
-}
-
 int lantern_hash_tree_root_signed_block(const LanternSignedBlock *block, LanternRoot *out_root) {
     if (!block || !out_root) {
         return -1;
     }
     LanternRoot message_root;
-    if (lantern_hash_tree_root_block_with_attestation(&block->message, &message_root) != 0) {
+    if (lantern_hash_tree_root_block(&block->block, &message_root) != 0) {
         return -1;
     }
     LanternRoot signatures_root;
@@ -983,7 +984,12 @@ int lantern_hash_tree_root_state(const LanternState *state, LanternRoot *out_roo
         }
         for (size_t i = 0; i < state->validator_count; ++i) {
             LanternRoot validator_root;
-            if (hash_validator(state->validators[i].pubkey, state->validators[i].index, &validator_root) != 0) {
+            if (hash_validator(
+                    state->validators[i].attestation_pubkey,
+                    state->validators[i].proposal_pubkey,
+                    state->validators[i].index,
+                    &validator_root)
+                != 0) {
                 free(validator_chunks);
                 return -1;
             }
@@ -1020,12 +1026,20 @@ int lantern_hash_tree_root_state(const LanternState *state, LanternRoot *out_roo
 }
 
 int lantern_hash_tree_root_validators(const uint8_t *pubkeys, size_t count, LanternRoot *out_root) {
+    return lantern_hash_tree_root_validators_dual(pubkeys, pubkeys, count, out_root);
+}
+
+int lantern_hash_tree_root_validators_dual(
+    const uint8_t *attestation_pubkeys,
+    const uint8_t *proposal_pubkeys,
+    size_t count,
+    LanternRoot *out_root) {
     if (!out_root) {
         return -1;
     }
     uint8_t *chunks = NULL;
     if (count > 0) {
-        if (!pubkeys) {
+        if (!attestation_pubkeys || !proposal_pubkeys) {
             return -1;
         }
         if (count > SIZE_MAX / SSZ_BYTES_PER_CHUNK) {
@@ -1037,8 +1051,12 @@ int lantern_hash_tree_root_validators(const uint8_t *pubkeys, size_t count, Lant
         }
         for (size_t i = 0; i < count; ++i) {
             LanternRoot validator_root;
-            /* Pass index i to match Zeam's Validator { pubkey, index } SSZ structure */
-            if (hash_validator(pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), (uint64_t)i, &validator_root) != 0) {
+            if (hash_validator(
+                    attestation_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+                    proposal_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+                    (uint64_t)i,
+                    &validator_root)
+                != 0) {
                 free(chunks);
                 return -1;
             }

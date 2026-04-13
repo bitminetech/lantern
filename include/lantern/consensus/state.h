@@ -8,6 +8,21 @@
 #include "lantern/consensus/containers.h"
 
 typedef struct lantern_store LanternStore;
+struct lantern_attestation_signature_map;
+struct lantern_aggregated_payload_pool;
+
+typedef struct {
+    const LanternAttestations *attestations;
+    const LanternSignatureList *signatures;
+} LanternAttestationSignatureInputs;
+
+typedef enum {
+    LANTERN_STATE_AGGREGATE_OK = 0,
+    LANTERN_STATE_AGGREGATE_INVALID_PARAM = -1,
+    LANTERN_STATE_AGGREGATE_ALLOC = -2,
+    LANTERN_STATE_AGGREGATE_VALIDATOR = -3,
+    LANTERN_STATE_AGGREGATE_RUNTIME = -4
+} lantern_state_aggregate_result;
 
 struct lantern_root_list {
     LanternRoot *items;
@@ -50,15 +65,21 @@ int lantern_state_process_block(
     LanternState *state,
     LanternStore *store,
     const LanternBlock *block,
-    const LanternBlockSignatures *signatures,
-    const LanternSignedVote *proposer_attestation);
+    const LanternBlockSignatures *signatures);
 bool lantern_state_slot_in_justified_window(const LanternState *state, uint64_t slot);
 int lantern_state_get_justified_slot_bit(const LanternState *state, uint64_t slot, bool *out_value);
 int lantern_state_mark_justified_slot(LanternState *state, uint64_t slot);
 int lantern_state_transition(LanternState *state, LanternStore *store, const LanternSignedBlock *signed_block);
 int lantern_state_set_validator_pubkeys(LanternState *state, const uint8_t *pubkeys, size_t count);
+int lantern_state_set_validator_pubkeys_dual(
+    LanternState *state,
+    const uint8_t *attestation_pubkeys,
+    const uint8_t *proposal_pubkeys,
+    size_t count);
 size_t lantern_state_validator_count(const LanternState *state);
 const uint8_t *lantern_state_validator_pubkey(const LanternState *state, size_t index);
+const uint8_t *lantern_state_validator_attestation_pubkey(const LanternState *state, size_t index);
+const uint8_t *lantern_state_validator_proposal_pubkey(const LanternState *state, size_t index);
 int lantern_state_select_block_parent(
     LanternState *state,
     const LanternStore *store,
@@ -69,9 +90,8 @@ int lantern_state_collect_attestations_for_block(
     uint64_t block_slot,
     uint64_t proposer_index,
     const LanternRoot *parent_root,
-    const LanternSignedVote *proposer_attestation,
-    LanternAttestations *out_attestations,
-    LanternSignatureList *out_signatures);
+    LanternAggregatedAttestations *out_attestations,
+    LanternAttestationSignatures *out_signatures);
 int lantern_state_compute_vote_checkpoints(
     const LanternState *state,
     const LanternStore *store,
@@ -83,5 +103,13 @@ int lantern_state_preview_post_state_root(
     const LanternStore *store,
     const LanternSignedBlock *block,
     LanternRoot *out_state_root);
+lantern_state_aggregate_result lantern_state_aggregate(
+    const LanternState *state,
+    const LanternStore *store,
+    const LanternAttestationSignatureInputs *attestation_signatures,
+    const struct lantern_aggregated_payload_pool *new_payloads,
+    const struct lantern_aggregated_payload_pool *known_payloads,
+    LanternAggregatedAttestations *out_attestations,
+    LanternAttestationSignatures *out_signatures);
 
 #endif /* LANTERN_CONSENSUS_STATE_H */

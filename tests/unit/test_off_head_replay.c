@@ -241,28 +241,28 @@ static int diagnose_transition_failure(
 
     LanternState state;
     lantern_state_init(&state);
-    if (load_snapshot_buggy(data_dir, &block->message.block.parent_root, &state) != 0) {
+    if (load_snapshot_buggy(data_dir, &block->block.parent_root, &state) != 0) {
         lantern_state_reset(&state);
         return -1;
     }
 
-    if (block->message.block.slot <= state.slot) {
+    if (block->block.slot <= state.slot) {
         printf(
             "diagnostic: block slot %" PRIu64 " is not ahead of parent state slot %" PRIu64 "\n",
-            block->message.block.slot,
+            block->block.slot,
             state.slot);
         lantern_state_reset(&state);
         return 0;
     }
 
-    int slots_rc = lantern_state_process_slots(&state, block->message.block.slot);
+    int slots_rc = lantern_state_process_slots(&state, block->block.slot);
     printf("diagnostic: lantern_state_process_slots rc=%d\n", slots_rc);
     if (slots_rc != 0) {
         lantern_state_reset(&state);
         return 0;
     }
 
-    int header_rc = lantern_state_process_block_header(&state, &block->message.block);
+    int header_rc = lantern_state_process_block_header(&state, &block->block);
     printf("diagnostic: lantern_state_process_block_header rc=%d\n", header_rc);
     if (header_rc != 0) {
         lantern_state_reset(&state);
@@ -276,7 +276,7 @@ static int diagnose_transition_failure(
     LanternAttestations expanded = {0};
     lantern_attestations_init(&expanded);
     int expand_rc = lantern_expand_aggregated_attestations(
-        &block->message.block.body.attestations,
+        &block->block.body.attestations,
         validator_count,
         &expanded);
     printf(
@@ -331,20 +331,20 @@ static int replay_target_block(
     if (root_to_hex(block_root, block_hex, sizeof(block_hex), true) != 0) {
         strcpy(block_hex, "0x?");
     }
-    if (root_to_hex(&block.message.block.parent_root, parent_hex, sizeof(parent_hex), true) != 0) {
+    if (root_to_hex(&block.block.parent_root, parent_hex, sizeof(parent_hex), true) != 0) {
         strcpy(parent_hex, "0x?");
     }
     printf(
         "\nReplaying %s slot=%" PRIu64 " root=%s parent=%s proposer=%" PRIu64 "\n",
         label,
-        block.message.block.slot,
+        block.block.slot,
         block_hex,
         parent_hex,
-        block.message.block.proposer_index);
+        block.block.proposer_index);
 
     LanternState buggy_state;
     lantern_state_init(&buggy_state);
-    if (load_snapshot_buggy(data_dir, &block.message.block.parent_root, &buggy_state) != 0) {
+    if (load_snapshot_buggy(data_dir, &block.block.parent_root, &buggy_state) != 0) {
         printf("%s: failed to load buggy parent snapshot\n", label);
         lantern_state_reset(&buggy_state);
         lantern_signed_block_with_attestation_reset(&block);
@@ -364,7 +364,7 @@ static int replay_target_block(
 
     LanternState fixed_state;
     lantern_state_init(&fixed_state);
-    if (load_snapshot_fixed(data_dir, &block.message.block.parent_root, &fixed_state) != 0) {
+    if (load_snapshot_fixed(data_dir, &block.block.parent_root, &fixed_state) != 0) {
         printf("%s: failed to load fixed parent snapshot\n", label);
         lantern_state_reset(&fixed_state);
         lantern_signed_block_with_attestation_reset(&block);

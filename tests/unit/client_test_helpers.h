@@ -16,6 +16,10 @@ void client_test_fill_root_with_index(LanternRoot *root, uint32_t index);
 int client_test_slot_for_root(struct lantern_client *client, const LanternRoot *root, uint64_t *out_slot);
 bool client_test_pending_contains_root(const struct lantern_client *client, const LanternRoot *root);
 
+int client_test_load_precomputed_keypair(
+    size_t validator_index,
+    struct PQSignatureSchemePublicKey **out_pub,
+    struct PQSignatureSchemeSecretKey **out_secret);
 int client_test_setup_vote_validation_client(
     struct lantern_client *client,
     const char *node_id,

@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "lantern/consensus/hash.h"
+#include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"
 #include "lantern/core/client.h"
 #include "lantern/storage/storage.h"
@@ -115,18 +116,12 @@ static int build_signed_head_block(
     }
 
     int rc = -1;
-    LanternCheckpoint head = {0};
-    LanternCheckpoint target = {0};
-    LanternCheckpoint source = {0};
-    LanternSignedVote proposer_vote;
-    memset(&proposer_vote, 0, sizeof(proposer_vote));
-
-    lantern_signed_block_with_attestation_init(out_block);
-    out_block->message.block.slot = client->state.slot + 1u;
+    lantern_signed_block_init(out_block);
+    out_block->block.slot = client->state.slot + 1u;
     if (lantern_proposer_for_slot(
-            out_block->message.block.slot,
+            out_block->block.slot,
             client->state.config.num_validators,
-            &out_block->message.block.proposer_index)
+            &out_block->block.proposer_index)
         != 0)
     {
         goto cleanup;
@@ -134,45 +129,30 @@ static int build_signed_head_block(
     if (lantern_state_select_block_parent(
             &client->state,
             &client->store,
-            &out_block->message.block.parent_root)
+            &out_block->block.parent_root)
         != 0)
     {
         goto cleanup;
     }
-    if (lantern_state_compute_vote_checkpoints(
-            &client->state,
-            &client->store,
-            &head,
-            &target,
-            &source)
-        != 0)
-    {
-        goto cleanup;
-    }
-
-    proposer_vote.data.validator_id = out_block->message.block.proposer_index;
-    proposer_vote.data.slot = out_block->message.block.slot;
-    proposer_vote.data.head = head;
-    proposer_vote.data.target = target;
-    proposer_vote.data.source = source;
-    if (client_test_sign_vote_with_secret(&proposer_vote, secret) != 0)
-    {
-        goto cleanup;
-    }
-
-    out_block->message.proposer_attestation = proposer_vote.data;
-    out_block->signatures.proposer_signature = proposer_vote.signature;
 
     if (lantern_state_preview_post_state_root(
             &client->state,
             &client->store,
             out_block,
-            &out_block->message.block.state_root)
+            &out_block->block.state_root)
         != 0)
     {
         goto cleanup;
     }
-    if (lantern_hash_tree_root_block(&out_block->message.block, out_root) != 0)
+    if (lantern_hash_tree_root_block(&out_block->block, out_root) != 0)
+    {
+        goto cleanup;
+    }
+    if (!lantern_signature_sign(
+            secret,
+            out_block->block.slot,
+            out_root,
+            &out_block->signatures.proposer_signature))
     {
         goto cleanup;
     }
@@ -182,7 +162,7 @@ static int build_signed_head_block(
 cleanup:
     if (rc != 0)
     {
-        lantern_signed_block_with_attestation_reset(out_block);
+        lantern_signed_block_reset(out_block);
     }
     return rc;
 }
@@ -260,7 +240,7 @@ static int test_checkpoint_consumers_use_fork_choice_store(void)
 
     if (lantern_fork_choice_add_block(
             &client.fork_choice,
-            &grandchild_block.message.block,
+            &grandchild_block.block,
             NULL,
             &client.state.latest_justified,
             &client.state.latest_finalized,
@@ -350,7 +330,7 @@ static int test_checkpoint_consumers_use_fork_choice_store(void)
         fprintf(stderr, "grandchild state rebuild did not use finalized shortcut from fork choice\n");
         goto cleanup;
     }
-    if (rebuilt->slot != grandchild_block.message.block.slot)
+    if (rebuilt->slot != grandchild_block.block.slot)
     {
         fprintf(stderr, "grandchild state rebuild returned wrong slot\n");
         goto cleanup;
@@ -373,7 +353,7 @@ cleanup:
     lantern_state_reset(&scratch);
     if (grandchild_block_ready)
     {
-        lantern_signed_block_with_attestation_reset(&grandchild_block);
+        lantern_signed_block_reset(&grandchild_block);
     }
     if (data_dir)
     {
@@ -533,17 +513,17 @@ static int test_pre_anchor_historical_block_is_dropped(void)
     }
 
     LanternSignedBlock historical;
-    lantern_signed_block_with_attestation_init(&historical);
-    historical.message.block.slot = 440u;
-    historical.message.block.proposer_index = 0u;
-    fill_root(&historical.message.block.parent_root, 0x91u);
-    fill_root(&historical.message.block.state_root, 0x92u);
+    lantern_signed_block_init(&historical);
+    historical.block.slot = 440u;
+    historical.block.proposer_index = 0u;
+    fill_root(&historical.block.parent_root, 0x91u);
+    fill_root(&historical.block.state_root, 0x92u);
 
     LanternRoot historical_root;
-    if (lantern_hash_tree_root_block(&historical.message.block, &historical_root) != 0)
+    if (lantern_hash_tree_root_block(&historical.block, &historical_root) != 0)
     {
         fprintf(stderr, "failed to hash historical block for pre-anchor regression\n");
-        lantern_signed_block_with_attestation_reset(&historical);
+        lantern_signed_block_reset(&historical);
         goto cleanup;
     }
 
@@ -556,7 +536,7 @@ static int test_pre_anchor_historical_block_is_dropped(void)
         true,
         NULL,
         0);
-    lantern_signed_block_with_attestation_reset(&historical);
+    lantern_signed_block_reset(&historical);
 
     if (imported)
     {
@@ -1048,6 +1028,13 @@ int main(void)
         return 1;
     }
     if (test_checkpoint_sync_anchor_alias_restores() != 0)
+    {
+        lantern_state_reset(&client.state);
+        lantern_fork_choice_reset(&client.fork_choice);
+        return 1;
+    }
+
+    if (test_checkpoint_consumers_use_fork_choice_store() != 0)
     {
         lantern_state_reset(&client.state);
         lantern_fork_choice_reset(&client.fork_choice);

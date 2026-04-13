@@ -36,6 +36,7 @@
  * ============================================================================ */
 
 static int xmss_join_path(const char *dir, const char *leaf, char **out_path);
+static bool xmss_size_add_overflow(size_t a, size_t b, size_t *out_sum);
 
 
 /* ============================================================================
@@ -50,7 +51,42 @@ static const size_t XMSS_WINDOWS_COLON_INDEX = 1u;
 static const size_t XMSS_WINDOWS_SEPARATOR_INDEX = 2u;
 
 static const char XMSS_DEFAULT_KEYS_DIR[] = "xmss-keys";
-static const char XMSS_MANIFEST_FILENAME[] = "validator-keys-manifest.yaml";
+static const char XMSS_ANNOTATED_VALIDATORS_FILENAME[] = "annotated_validators.yaml";
+
+
+/* ============================================================================
+ * Local Helpers
+ * ============================================================================ */
+
+static void free_local_secret_key_handles(struct lantern_local_validator *validator)
+{
+    if (!validator)
+    {
+        return;
+    }
+
+    if (validator->attestation_secret_key
+        && validator->attestation_secret_key == validator->proposal_secret_key)
+    {
+        pq_secret_key_free(validator->attestation_secret_key);
+    }
+    else
+    {
+        if (validator->attestation_secret_key)
+        {
+            pq_secret_key_free(validator->attestation_secret_key);
+        }
+        if (validator->proposal_secret_key)
+        {
+            pq_secret_key_free(validator->proposal_secret_key);
+        }
+    }
+
+    validator->attestation_secret_key = NULL;
+    validator->proposal_secret_key = NULL;
+    validator->has_attestation_secret_handle = false;
+    validator->has_proposal_secret_handle = false;
+}
 
 
 /* ============================================================================
@@ -85,18 +121,10 @@ void lantern_client_local_validator_cleanup(struct lantern_local_validator *vali
     validator->secret_len = 0;
     validator->has_secret = false;
 
-    if (validator->secret_key)
-    {
-        pq_secret_key_free(validator->secret_key);
-        validator->secret_key = NULL;
-    }
-    validator->has_secret_handle = false;
+    free_local_secret_key_handles(validator);
 
     validator->last_proposed_slot = UINT64_MAX;
     validator->last_attested_slot = UINT64_MAX;
-    validator->has_pending_attestation = false;
-    validator->pending_attestation_slot = UINT64_MAX;
-    memset(&validator->pending_attestation, 0, sizeof(validator->pending_attestation));
 }
 
 
@@ -240,9 +268,11 @@ cleanup:
  */
 struct xmss_manifest_entry
 {
-    uint64_t index;    /**< Validator global index */
-    char *public_file; /**< Public key path or filename */
-    char *secret_file; /**< Secret key path or filename */
+    uint64_t index;                /**< Validator global index */
+    char *attestation_pubkey_hex;  /**< Attestation public key hex */
+    char *proposal_pubkey_hex;     /**< Proposal public key hex */
+    char *attestation_secret_file; /**< Attestation secret key path or filename */
+    char *proposal_secret_file;    /**< Proposal secret key path or filename */
 };
 
 
@@ -299,8 +329,10 @@ static void xmss_manifest_reset(struct xmss_manifest *manifest)
     }
     for (size_t i = 0; i < manifest->count; ++i)
     {
-        free(manifest->entries[i].public_file);
-        free(manifest->entries[i].secret_file);
+        free(manifest->entries[i].attestation_pubkey_hex);
+        free(manifest->entries[i].proposal_pubkey_hex);
+        free(manifest->entries[i].attestation_secret_file);
+        free(manifest->entries[i].proposal_secret_file);
     }
     free(manifest->entries);
     manifest->entries = NULL;
@@ -378,39 +410,147 @@ static int xmss_parse_u64(const char *text, uint64_t *out_value)
 }
 
 
-/**
- * Load a manifest from a directory.
- *
- * @param dir       Directory containing the manifest file
- * @param manifest  Output manifest structure
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL
- * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
- * @return LANTERN_CLIENT_ERR_CONFIG if the manifest is missing or invalid
- *
- * @note Thread safety: This function is thread-safe
- */
-static int xmss_manifest_load(const char *dir, struct xmss_manifest *manifest)
+enum xmss_secret_key_role
+{
+    XMSS_SECRET_KEY_ROLE_UNKNOWN = 0,
+    XMSS_SECRET_KEY_ROLE_ATTESTATION,
+    XMSS_SECRET_KEY_ROLE_PROPOSAL,
+};
+
+
+static const char *xmss_path_basename(const char *path)
+{
+    if (!path)
+    {
+        return NULL;
+    }
+
+    const char *slash = strrchr(path, '/');
+    const char *backslash = strrchr(path, '\\');
+    const char *sep = slash;
+    if (backslash && (!sep || backslash > sep))
+    {
+        sep = backslash;
+    }
+    return sep ? (sep + 1) : path;
+}
+
+
+static bool xmss_string_ends_with(const char *value, const char *suffix)
+{
+    if (!value || !suffix)
+    {
+        return false;
+    }
+
+    size_t value_len = strlen(value);
+    size_t suffix_len = strlen(suffix);
+    if (value_len < suffix_len)
+    {
+        return false;
+    }
+
+    return strcmp(value + (value_len - suffix_len), suffix) == 0;
+}
+
+
+static enum xmss_secret_key_role xmss_classify_secret_key_file(const char *path)
+{
+    const char *basename = xmss_path_basename(path);
+    if (!basename || basename[0] == '\0')
+    {
+        return XMSS_SECRET_KEY_ROLE_UNKNOWN;
+    }
+
+    if (xmss_string_ends_with(basename, "_attester_key_sk.ssz")
+        || xmss_string_ends_with(basename, "_attester_key_sk.json"))
+    {
+        return XMSS_SECRET_KEY_ROLE_ATTESTATION;
+    }
+    if (xmss_string_ends_with(basename, "_proposer_key_sk.ssz")
+        || xmss_string_ends_with(basename, "_proposer_key_sk.json"))
+    {
+        return XMSS_SECRET_KEY_ROLE_PROPOSAL;
+    }
+
+    return XMSS_SECRET_KEY_ROLE_UNKNOWN;
+}
+
+
+static int xmss_build_array_path(
+    const char *prefix,
+    const char *leaf,
+    char **out_path)
+{
+    if (!leaf || !out_path)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    *out_path = NULL;
+    if (!prefix || prefix[0] == '\0')
+    {
+        *out_path = lantern_string_duplicate(leaf);
+        return *out_path ? LANTERN_CLIENT_OK : LANTERN_CLIENT_ERR_ALLOC;
+    }
+
+    size_t prefix_len = strlen(prefix);
+    size_t leaf_len = strlen(leaf);
+    size_t total = 0;
+    if (xmss_size_add_overflow(prefix_len, 1u, &total)
+        || xmss_size_add_overflow(total, leaf_len, &total)
+        || xmss_size_add_overflow(total, 1u, &total))
+    {
+        return LANTERN_CLIENT_ERR_CONFIG;
+    }
+
+    char *buffer = malloc(total);
+    if (!buffer)
+    {
+        return LANTERN_CLIENT_ERR_ALLOC;
+    }
+
+    memcpy(buffer, prefix, prefix_len);
+    buffer[prefix_len] = '.';
+    memcpy(buffer + prefix_len + 1u, leaf, leaf_len);
+    buffer[prefix_len + 1u + leaf_len] = '\0';
+    *out_path = buffer;
+    return LANTERN_CLIENT_OK;
+}
+
+
+static int xmss_manifest_load_annotated(
+    const char *path,
+    const char *node_id,
+    struct xmss_manifest *manifest)
 {
     int result = LANTERN_CLIENT_ERR_CONFIG;
-    char *manifest_path = NULL;
     LanternYamlObject *objects = NULL;
     size_t count = 0;
+    char *wrapped_array_path = NULL;
     struct xmss_manifest_entry *entries = NULL;
+    size_t entry_count = 0;
 
-    if (!dir || !manifest)
+    if (!path || !node_id || !manifest)
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     xmss_manifest_reset(manifest);
 
-    result = xmss_join_path(dir, XMSS_MANIFEST_FILENAME, &manifest_path);
-    if (result != 0)
+    objects = lantern_yaml_read_array(path, node_id, &count);
+    if (!objects || count == 0)
     {
-        goto cleanup;
-    }
+        lantern_yaml_free_objects(objects, count);
+        objects = NULL;
+        count = 0;
 
-    objects = lantern_yaml_read_array(manifest_path, "validators", &count);
+        result = xmss_build_array_path("validators", node_id, &wrapped_array_path);
+        if (result != 0)
+        {
+            goto cleanup;
+        }
+        objects = lantern_yaml_read_array(path, wrapped_array_path, &count);
+    }
     if (!objects || count == 0)
     {
         result = LANTERN_CLIENT_ERR_CONFIG;
@@ -432,40 +572,90 @@ static int xmss_manifest_load(const char *dir, struct xmss_manifest *manifest)
     for (size_t i = 0; i < count; ++i)
     {
         const char *index_text = xmss_yaml_value(&objects[i], "index");
-        const char *public_file = xmss_yaml_value(&objects[i], "public_key_file");
-        const char *secret_file = xmss_yaml_value(&objects[i], "secret_key_file");
-        if (!index_text || !public_file || !secret_file)
+        const char *pubkey_hex = xmss_yaml_value(&objects[i], "pubkey_hex");
+        const char *secret_file = xmss_yaml_value(&objects[i], "privkey_file");
+        if (!index_text || !pubkey_hex || !secret_file)
         {
             result = LANTERN_CLIENT_ERR_CONFIG;
             goto cleanup;
         }
+
         uint64_t index = 0;
         result = xmss_parse_u64(index_text, &index);
         if (result != 0)
         {
             goto cleanup;
         }
-        entries[i].index = index;
-        entries[i].public_file = lantern_string_duplicate(public_file);
-        entries[i].secret_file = lantern_string_duplicate(secret_file);
-        if (!entries[i].public_file || !entries[i].secret_file)
+
+        size_t slot = entry_count;
+        for (size_t j = 0; j < entry_count; ++j)
+        {
+            if (entries[j].index == index)
+            {
+                slot = j;
+                break;
+            }
+        }
+        if (slot == entry_count)
+        {
+            entries[slot].index = index;
+            ++entry_count;
+        }
+
+        struct xmss_manifest_entry *entry = &entries[slot];
+        enum xmss_secret_key_role role = xmss_classify_secret_key_file(secret_file);
+        if (role == XMSS_SECRET_KEY_ROLE_UNKNOWN)
+        {
+            result = LANTERN_CLIENT_ERR_CONFIG;
+            goto cleanup;
+        }
+
+        char **pubkey_dst =
+            (role == XMSS_SECRET_KEY_ROLE_ATTESTATION)
+                ? &entry->attestation_pubkey_hex
+                : &entry->proposal_pubkey_hex;
+        char **secret_dst =
+            (role == XMSS_SECRET_KEY_ROLE_ATTESTATION)
+                ? &entry->attestation_secret_file
+                : &entry->proposal_secret_file;
+        if (*pubkey_dst || *secret_dst)
+        {
+            result = LANTERN_CLIENT_ERR_CONFIG;
+            goto cleanup;
+        }
+
+        *pubkey_dst = lantern_string_duplicate(pubkey_hex);
+        *secret_dst = lantern_string_duplicate(secret_file);
+        if (!*pubkey_dst || !*secret_dst)
         {
             result = LANTERN_CLIENT_ERR_ALLOC;
             goto cleanup;
         }
     }
 
+    for (size_t i = 0; i < entry_count; ++i)
+    {
+        if (!entries[i].attestation_pubkey_hex
+            || !entries[i].proposal_pubkey_hex
+            || !entries[i].attestation_secret_file
+            || !entries[i].proposal_secret_file)
+        {
+            result = LANTERN_CLIENT_ERR_CONFIG;
+            goto cleanup;
+        }
+    }
+
     manifest->entries = entries;
-    manifest->count = count;
+    manifest->count = entry_count;
     entries = NULL;
     result = LANTERN_CLIENT_OK;
 
 cleanup:
     lantern_yaml_free_objects(objects, count);
-    free(manifest_path);
+    free(wrapped_array_path);
     if (entries)
     {
-        struct xmss_manifest tmp = {.entries = entries, .count = count};
+        struct xmss_manifest tmp = {.entries = entries, .count = entry_count};
         xmss_manifest_reset(&tmp);
     }
     return result;
@@ -593,6 +783,115 @@ static int xmss_join_path(const char *dir, const char *leaf, char **out_path)
 }
 
 
+static int xmss_join_parent_path(const char *path, const char *leaf, char **out_path)
+{
+    if (!path || !leaf || !out_path)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    *out_path = NULL;
+
+    const char *slash = strrchr(path, '/');
+    const char *backslash = strrchr(path, '\\');
+    const char *sep = slash;
+    if (backslash && (!sep || backslash > sep))
+    {
+        sep = backslash;
+    }
+    if (!sep)
+    {
+        return LANTERN_CLIENT_ERR_CONFIG;
+    }
+
+    size_t dir_len = (size_t)(sep - path);
+    if (dir_len == 0)
+    {
+        return LANTERN_CLIENT_ERR_CONFIG;
+    }
+
+    char *dir = malloc(dir_len + 1u);
+    if (!dir)
+    {
+        return LANTERN_CLIENT_ERR_ALLOC;
+    }
+    memcpy(dir, path, dir_len);
+    dir[dir_len] = '\0';
+
+    int result = xmss_join_path(dir, leaf, out_path);
+    free(dir);
+    return result;
+}
+
+
+static bool xmss_file_exists(const char *path)
+{
+    if (!path || path[0] == '\0')
+    {
+        return false;
+    }
+
+    FILE *fp = fopen(path, "rb");
+    if (!fp)
+    {
+        return false;
+    }
+
+    fclose(fp);
+    return true;
+}
+
+
+static int xmss_resolve_validator_keys_path(
+    const struct lantern_client *client,
+    char **out_path,
+    bool *out_is_explicit)
+{
+    if (!client || !out_path || !out_is_explicit)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    *out_path = NULL;
+    *out_is_explicit = false;
+
+    if (client->validator_keys_path && client->validator_keys_path[0] != '\0')
+    {
+        *out_path = lantern_string_duplicate(client->validator_keys_path);
+        if (!*out_path)
+        {
+            return LANTERN_CLIENT_ERR_ALLOC;
+        }
+        *out_is_explicit = true;
+        return LANTERN_CLIENT_OK;
+    }
+
+    if (client->genesis_paths.validator_registry_path
+        && client->genesis_paths.validator_registry_path[0] != '\0')
+    {
+        int rc = xmss_join_parent_path(
+            client->genesis_paths.validator_registry_path,
+            XMSS_ANNOTATED_VALIDATORS_FILENAME,
+            out_path);
+        if (rc == LANTERN_CLIENT_OK)
+        {
+            return rc;
+        }
+    }
+
+    if (client->genesis_paths.validator_config_path
+        && client->genesis_paths.validator_config_path[0] != '\0')
+    {
+        return xmss_join_parent_path(
+            client->genesis_paths.validator_config_path,
+            XMSS_ANNOTATED_VALIDATORS_FILENAME,
+            out_path);
+    }
+
+    return LANTERN_CLIENT_ERR_CONFIG;
+}
+
+
 /**
  * Format a template path with a validator index.
  *
@@ -704,13 +1003,7 @@ static void clear_local_secret_handles(struct lantern_client *client)
     }
     for (size_t i = 0; i < client->local_validator_count; ++i)
     {
-        struct lantern_local_validator *validator = &client->local_validators[i];
-        if (validator->secret_key)
-        {
-            pq_secret_key_free(validator->secret_key);
-            validator->secret_key = NULL;
-        }
-        validator->has_secret_handle = false;
+        free_local_secret_key_handles(&client->local_validators[i]);
     }
 }
 
@@ -751,6 +1044,8 @@ static bool xmss_path_is_absolute(const char *path)
  * @param client    Client instance
  * @param manifest  Optional manifest
  * @param index     Validator global index
+ * @param use_proposal_key Select the proposal secret key path when true,
+ *                         attestation secret key path otherwise
  * @param out_path  Output path (caller must free)
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL
@@ -763,6 +1058,7 @@ static int resolve_secret_key_path(
     struct lantern_client *client,
     const struct xmss_manifest *manifest,
     uint64_t index,
+    bool use_proposal_key,
     char **out_path)
 {
     if (!client || !out_path)
@@ -779,11 +1075,15 @@ static int resolve_secret_key_path(
     if (manifest)
     {
         const struct xmss_manifest_entry *entry = xmss_manifest_find(manifest, index);
-        if (entry && entry->secret_file)
+        const char *secret_file =
+            entry
+                ? (use_proposal_key ? entry->proposal_secret_file : entry->attestation_secret_file)
+                : NULL;
+        if (secret_file)
         {
-            if (xmss_path_is_absolute(entry->secret_file))
+            if (xmss_path_is_absolute(secret_file))
             {
-                char *copy = lantern_string_duplicate(entry->secret_file);
+                char *copy = lantern_string_duplicate(secret_file);
                 if (!copy)
                 {
                     return LANTERN_CLIENT_ERR_ALLOC;
@@ -793,7 +1093,7 @@ static int resolve_secret_key_path(
             }
             if (client->xmss_key_dir)
             {
-                return xmss_join_path(client->xmss_key_dir, entry->secret_file, out_path);
+                return xmss_join_path(client->xmss_key_dir, secret_file, out_path);
             }
         }
     }
@@ -872,44 +1172,89 @@ static int load_xmss_secret_keys(
     for (size_t i = 0; i < client->local_validator_count; ++i)
     {
         struct lantern_local_validator *validator = &client->local_validators[i];
-        char *path = NULL;
-        if (resolve_secret_key_path(client, manifest, validator->global_index, &path) != 0)
+        char *attestation_path = NULL;
+        char *proposal_path = NULL;
+        if (resolve_secret_key_path(
+                client,
+                manifest,
+                validator->global_index,
+                false,
+                &attestation_path)
+            != 0)
         {
             lantern_log_warn(
                 "crypto",
                 &meta,
-                "unable to resolve xmss secret key path for validator=%" PRIu64 "; skipping",
+                "unable to resolve attestation xmss secret key path for validator=%" PRIu64 "; skipping",
                 validator->global_index);
+            continue;
+        }
+        if (resolve_secret_key_path(
+                client,
+                manifest,
+                validator->global_index,
+                true,
+                &proposal_path)
+            != 0)
+        {
+            lantern_log_warn(
+                "crypto",
+                &meta,
+                "unable to resolve proposal xmss secret key path for validator=%" PRIu64 "; skipping",
+                validator->global_index);
+            free(attestation_path);
+            free(proposal_path);
             continue;
         }
         ++resolved;
         lantern_log_debug(
             "crypto",
             &meta,
-            "xmss secret key resolved validator=%" PRIu64 " path=%s",
+            "xmss secret key paths resolved validator=%" PRIu64 " attestation=%s proposal=%s",
             validator->global_index,
-            path);
-        struct PQSignatureSchemeSecretKey *secret = NULL;
-        if (lantern_xmss_load_secret_file(path, &secret) != 0)
+            attestation_path,
+            proposal_path);
+
+        struct PQSignatureSchemeSecretKey *attestation_secret = NULL;
+        struct PQSignatureSchemeSecretKey *proposal_secret = NULL;
+        if (lantern_xmss_load_secret_file(attestation_path, &attestation_secret) != 0)
         {
             lantern_log_warn(
                 "crypto",
                 &meta,
-                "failed to load xmss secret key validator=%" PRIu64 " path=%s; skipping",
+                "failed to load attestation xmss secret key validator=%" PRIu64 " path=%s; skipping",
                 validator->global_index,
-                path);
-            free(path);
+                attestation_path);
+            free(attestation_path);
+            free(proposal_path);
             continue;
         }
-        free(path);
-        validator->secret_key = secret;
-        validator->has_secret_handle = true;
+        if (lantern_xmss_load_secret_file(proposal_path, &proposal_secret) != 0)
+        {
+            lantern_log_warn(
+                "crypto",
+                &meta,
+                "failed to load proposal xmss secret key validator=%" PRIu64 " path=%s; skipping",
+                validator->global_index,
+                proposal_path);
+            pq_secret_key_free(attestation_secret);
+            free(attestation_path);
+            free(proposal_path);
+            continue;
+        }
+        free(attestation_path);
+        free(proposal_path);
+
+        validator->attestation_secret_key = attestation_secret;
+        validator->proposal_secret_key = proposal_secret;
+        validator->has_attestation_secret_handle = true;
+        validator->has_proposal_secret_handle = true;
         ++loaded;
     }
     lantern_log_info(
         "crypto",
         &meta,
-        "xmss secret keys loaded=%zu/%zu resolved=%zu dir=%s template=%s",
+        "xmss secret key pairs loaded=%zu/%zu resolved=%zu dir=%s template=%s",
         loaded,
         client->local_validator_count,
         resolved,
@@ -1053,6 +1398,15 @@ int lantern_client_configure_xmss_sources(
         }
     }
 
+    const char *resolved_validator_keys_path = xmss_non_empty(options->validator_keys_path);
+    if (resolved_validator_keys_path)
+    {
+        if (set_owned_string(&client->validator_keys_path, resolved_validator_keys_path) != 0)
+        {
+            return LANTERN_CLIENT_ERR_ALLOC;
+        }
+    }
+
     const char *resolved_secret_path = xmss_non_empty(options->xmss_secret_path);
     if (!resolved_secret_path)
     {
@@ -1068,8 +1422,9 @@ int lantern_client_configure_xmss_sources(
     lantern_log_info(
         "crypto",
         &meta,
-        "xmss sources resolved dir=%s pk_path=%s sk_path=%s pk_template=%s sk_template=%s",
+        "xmss sources resolved dir=%s validator_keys=%s pk_path=%s sk_path=%s pk_template=%s sk_template=%s",
         client->xmss_key_dir ? client->xmss_key_dir : "-",
+        client->validator_keys_path ? client->validator_keys_path : "-",
         client->xmss_public_path ? client->xmss_public_path : "-",
         client->xmss_secret_path ? client->xmss_secret_path : "-",
         client->xmss_public_template ? client->xmss_public_template : "-",
@@ -1114,27 +1469,47 @@ int lantern_client_load_xmss_keys(struct lantern_client *client)
     struct xmss_manifest manifest;
     xmss_manifest_init(&manifest);
     bool manifest_loaded = false;
+    char *annotated_path = NULL;
+    bool annotated_path_is_explicit = false;
 
-    if (client->xmss_key_dir)
+    int annotated_path_result = xmss_resolve_validator_keys_path(
+        client,
+        &annotated_path,
+        &annotated_path_is_explicit);
+    if (annotated_path_result == LANTERN_CLIENT_OK && annotated_path)
     {
-        int manifest_result = xmss_manifest_load(client->xmss_key_dir, &manifest);
-        if (manifest_result == LANTERN_CLIENT_OK)
+        bool have_annotated_file = xmss_file_exists(annotated_path);
+        if (have_annotated_file || annotated_path_is_explicit)
         {
-            manifest_loaded = true;
+            int manifest_result = xmss_manifest_load_annotated(
+                annotated_path,
+                client->node_id,
+                &manifest);
+            if (manifest_result == LANTERN_CLIENT_OK)
+            {
+                manifest_loaded = true;
+            }
+            else
+            {
+                free(annotated_path);
+                xmss_manifest_reset(&manifest);
+                return manifest_result;
+            }
         }
-        else if (manifest_result != LANTERN_CLIENT_ERR_CONFIG)
-        {
-            xmss_manifest_reset(&manifest);
-            return manifest_result;
-        }
+    }
+    else if (annotated_path_result != LANTERN_CLIENT_ERR_CONFIG)
+    {
+        xmss_manifest_reset(&manifest);
+        return annotated_path_result;
     }
 
     const struct xmss_manifest *manifest_ptr = manifest_loaded ? &manifest : NULL;
     lantern_log_info(
         "crypto",
         &meta,
-        "xmss load start key_dir=%s manifest=%s validators=%" PRIu64 " local=%zu",
+        "xmss load start key_dir=%s validator_keys=%s manifest=%s validators=%" PRIu64 " local=%zu",
         client->xmss_key_dir ? client->xmss_key_dir : "-",
+        annotated_path ? annotated_path : "-",
         manifest_loaded ? "loaded" : "missing",
         client->genesis.chain_config.validator_count,
         client->local_validator_count);
@@ -1145,10 +1520,12 @@ int lantern_client_load_xmss_keys(struct lantern_client *client)
         int result = load_xmss_secret_keys(client, manifest_ptr);
         if (result != 0)
         {
+            free(annotated_path);
             xmss_manifest_reset(&manifest);
             return result;
         }
     }
+    free(annotated_path);
     xmss_manifest_reset(&manifest);
     return LANTERN_CLIENT_OK;
 }

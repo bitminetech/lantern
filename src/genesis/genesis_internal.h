@@ -34,7 +34,8 @@ void genesis_free_validator_config(struct lantern_validator_config *config);
 int genesis_parse_chain_config(const char *path, struct lantern_chain_config *config);
 int genesis_parse_genesis_validator_pubkeys(
     const char *path,
-    uint8_t **out_pubkeys,
+    uint8_t **out_attestation_pubkeys,
+    uint8_t **out_proposal_pubkeys,
     size_t *out_count);
 int genesis_parse_validator_registry(const char *path, struct lantern_validator_registry *registry);
 int genesis_parse_validator_config(const char *path, struct lantern_validator_config *config);

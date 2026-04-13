@@ -394,9 +394,6 @@ int populate_local_validators(struct lantern_client *client)
         }
         validators[i].last_proposed_slot = UINT64_MAX;
         validators[i].last_attested_slot = UINT64_MAX;
-        validators[i].has_pending_attestation = false;
-        validators[i].pending_attestation_slot = UINT64_MAX;
-        memset(&validators[i].pending_attestation, 0, sizeof(validators[i].pending_attestation));
     }
 
     bool *enabled = calloc(count, sizeof(*enabled));

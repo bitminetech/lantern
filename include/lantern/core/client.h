@@ -64,6 +64,7 @@ struct lantern_client_options {
     const char *data_dir;
     const char *genesis_config_path;
     const char *validator_registry_path;
+    const char *validator_keys_path;
     const char *nodes_path;
     const char *genesis_state_path;
     bool use_genesis_state;
@@ -157,13 +158,12 @@ struct lantern_local_validator {
     uint8_t *secret;
     size_t secret_len;
     bool has_secret;
-    struct PQSignatureSchemeSecretKey *secret_key;
-    bool has_secret_handle;
+    struct PQSignatureSchemeSecretKey *attestation_secret_key;
+    struct PQSignatureSchemeSecretKey *proposal_secret_key;
+    bool has_attestation_secret_handle;
+    bool has_proposal_secret_handle;
     uint64_t last_proposed_slot;
     uint64_t last_attested_slot;
-    LanternSignedVote pending_attestation;
-    uint64_t pending_attestation_slot;
-    bool has_pending_attestation;
 };
 
 struct lantern_client {
@@ -266,6 +266,7 @@ struct lantern_client {
     bool debug_disable_fork_choice_time;
     size_t debug_attestation_committee_count;
     char *xmss_key_dir;
+    char *validator_keys_path;
     char *xmss_public_template;
     char *xmss_secret_template;
     char *xmss_public_path;
@@ -345,6 +346,10 @@ int lantern_client_debug_gossip_aggregated_attestation(
 int lantern_client_debug_publish_aggregated_attestations(
     struct lantern_client *client,
     uint64_t slot);
+lantern_client_error lantern_client_debug_aggregate_attestation_signatures(
+    struct lantern_client *client,
+    LanternAggregatedAttestations *out_attestations,
+    LanternAttestationSignatures *out_signatures);
 int lantern_client_debug_run_interval_aggregation(
     struct lantern_client *client,
     uint64_t slot);
