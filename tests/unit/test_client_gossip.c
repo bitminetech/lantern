@@ -209,6 +209,66 @@ static int build_single_participant_aggregated_attestation(
     return sign_single_participant_aggregated_attestation(client, secret, &data, out_attestation);
 }
 
+static bool make_aggregated_proof_invalid(
+    const uint8_t *const *pubkeys,
+    size_t count,
+    const LanternRoot *message,
+    LanternByteList *proof,
+    uint64_t epoch)
+{
+    LanternByteList tampered;
+    size_t candidate_count = 0u;
+    size_t candidates[4];
+
+    if (!pubkeys || !message || !proof || proof->length == 0u || !proof->data) {
+        return false;
+    }
+
+    lantern_byte_list_init(&tampered);
+    if (lantern_byte_list_copy(&tampered, proof) != 0 || tampered.length == 0u || !tampered.data) {
+        lantern_byte_list_reset(&tampered);
+        return false;
+    }
+
+    candidates[candidate_count++] = 0u;
+    candidates[candidate_count++] = tampered.length / 4u;
+    candidates[candidate_count++] = tampered.length / 2u;
+    candidates[candidate_count++] = tampered.length - 1u;
+
+    for (size_t i = 0; i < candidate_count; ++i) {
+        size_t offset = candidates[i];
+        bool seen = false;
+        for (size_t j = 0; j < i; ++j) {
+            if (candidates[j] == offset) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen) {
+            continue;
+        }
+
+        tampered.data[offset] ^= 0xFFu;
+        if (!lantern_signature_verify_aggregated(pubkeys, count, message, &tampered, epoch)) {
+            lantern_byte_list_reset(proof);
+            *proof = tampered;
+            return true;
+        }
+        tampered.data[offset] ^= 0xFFu;
+    }
+
+    if (tampered.length > 1u
+        && lantern_byte_list_resize(&tampered, tampered.length - 1u) == 0
+        && !lantern_signature_verify_aggregated(pubkeys, count, message, &tampered, epoch)) {
+        lantern_byte_list_reset(proof);
+        *proof = tampered;
+        return true;
+    }
+
+    lantern_byte_list_reset(&tampered);
+    return false;
+}
+
 static int test_idle_gossip_not_ignored(void)
 {
     struct lantern_client client;
@@ -366,6 +426,9 @@ static int test_gossip_aggregated_attestation_rejects_invalid_proof(void)
     LanternRoot anchor_root;
     LanternRoot child_root;
     LanternSignedAggregatedAttestation attestation;
+    LanternRoot data_root;
+    const uint8_t *validator_pubkey = NULL;
+    const uint8_t *pubkeys[1] = {0};
     int rc = 1;
 
     if (client_test_setup_vote_validation_client(
@@ -394,7 +457,25 @@ static int test_gossip_aggregated_attestation_rejects_invalid_proof(void)
         fprintf(stderr, "aggregated attestation proof unexpectedly empty\n");
         goto cleanup_attestation;
     }
-    attestation.proof.proof_data.data[0] ^= 0xA5u;
+    validator_pubkey = lantern_state_validator_attestation_pubkey(&client.state, 0u);
+    if (!validator_pubkey) {
+        fprintf(stderr, "aggregated attestation validator pubkey missing\n");
+        goto cleanup_attestation;
+    }
+    if (lantern_hash_tree_root_attestation_data(&attestation.data, &data_root) != 0) {
+        fprintf(stderr, "failed to hash aggregated attestation data root\n");
+        goto cleanup_attestation;
+    }
+    pubkeys[0] = validator_pubkey;
+    if (!make_aggregated_proof_invalid(
+            pubkeys,
+            1u,
+            &data_root,
+            &attestation.proof.proof_data,
+            attestation.data.slot)) {
+        fprintf(stderr, "failed to invalidate aggregated attestation proof fixture\n");
+        goto cleanup_attestation;
+    }
     if (lantern_client_debug_gossip_aggregated_attestation(&client, &attestation) != LANTERN_CLIENT_ERR_IGNORED) {
         fprintf(stderr, "invalid aggregated attestation gossip should be ignored\n");
         goto cleanup_attestation;

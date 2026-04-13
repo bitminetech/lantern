@@ -447,6 +447,7 @@ if(LANTERN_BUILD_TESTS)
         lantern_validator_duties_integration
     )
     set_property(TEST ${_lantern_ctest_targets} PROPERTY TIMEOUT 30)
+    set_tests_properties(lantern_client_pending PROPERTIES TIMEOUT 90)
     set_tests_properties(lantern_client_vote PROPERTIES TIMEOUT 300)
     set_tests_properties(lantern_state PROPERTIES TIMEOUT 300)
 
