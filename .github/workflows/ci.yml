@@ -23,19 +23,14 @@ on:
         default: 'v0.0.1'
 
 jobs:
-  build-and-test:
-    name: Build and Test
+  generate-consensus-fixtures:
+    name: Generate Consensus Fixtures
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build pkg-config
 
       - name: Install uv
         run: |
@@ -48,14 +43,43 @@ jobs:
       - name: Bootstrap submodules
         run: ./scripts/bootstrap.sh
 
-      - name: Sync LeanSpec environment
-        working-directory: tools/leanSpec
-        run: |
-          uv python install 3.12
-          uv sync
+      - name: Generate consensus fixtures
+        run: ./scripts/bootstrap.sh --fixtures
 
-      - name: Generate networking fixtures
-        run: uv run --directory tools/leanSpec python ../../tools/fixtures/generate_networking_ssz.py
+      - name: Upload consensus fixtures artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lantern-consensus-fixtures
+          path: tools/leanSpec/fixtures/consensus/
+          if-no-files-found: error
+
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    needs:
+      - generate-consensus-fixtures
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Bootstrap submodules
+        run: ./scripts/bootstrap.sh
+
+      - name: Download consensus fixtures
+        uses: actions/download-artifact@v4
+        with:
+          name: lantern-consensus-fixtures
+          path: tools/leanSpec/fixtures/consensus/
 
       - name: Configure (CMake)
         run: cmake -S . -B build -GNinja -DLANTERN_BUILD_TESTS=ON

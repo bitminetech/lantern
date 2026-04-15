@@ -2,6 +2,7 @@
     "tests/consensus/devnet/verify_signatures/test_invalid_signatures.py::test_invalid_aggregated_attestation_signature[fork_Devnet][fork_Devnet-verify_signatures_test]": {
         "network": "Devnet",
         "leanEnv": "test",
+        "expectException": "AssertionError",
         "anchorState": {
             "config": {
                 "genesisTime": 0
@@ -31,18 +32,18 @@
             "validators": {
                 "data": [
                     {
-                        "attestationPubkey": "0xcd64341d83f28533f239153535b45209592342325ed31a5792b2e61935648748d41c384850baf6386c43bf19bfb63f53eb2c8c0b",
-                        "proposalPubkey": "0x5eba321a84f55461e2c0e94036d24e5107720876752d5c4f6e03183a7e7f1856e372c60dbc6fbc0450c26e58ba402f1da6952a73",
+                        "attestationPubkey": "0x80a6f13b39b9c26cd91edb542bdb9e051b61223a15f5de18e53e6a361720cd65c06a114e87531241cc535f39156f0f2cf0877647",
+                        "proposalPubkey": "0xdedd8e5a890a2c339ffbca1ce85b710384670508df73ce33116bcd60befbef5a560e6304e3635a58e12b6b542c1bc6583a16455a",
                         "index": 0
                     },
                     {
-                        "attestationPubkey": "0x0c8f12450a0f4375d8f387643a66bd4084a76a522062790d8e961b38dfe3497444af494376e3c76f3007681a4016221434cdf51d",
-                        "proposalPubkey": "0x8b31ba434a9e116dcd99a11535d8fb480fe67517c20eb1117157ca1b1b6b0c5c9d9a632e3268986f35856c337fc18d7b6d4f926a",
+                        "attestationPubkey": "0x7612d36fb7667d1c2f19a821d6a63b3cc17f214baedecb57e6eed4600dabf055185de12c6418db6b79f71004303bfe3a753c9727",
+                        "proposalPubkey": "0x1dcca64f8f9956470c2a427ca669d9359f22f202387ba24440e77200ec57983515451279124ee834a62f77560b1c166b0eb2885b",
                         "index": 1
                     },
                     {
-                        "attestationPubkey": "0x454d107dc0156e61baee057497d5667adb027d68f6fffb2bc61c6a38e45eed3531c9bd77e64f610044b26b1ec4047929bcfed946",
-                        "proposalPubkey": "0xac91d91a23744669bb2a5356605a161a5ae28c1e872fcf1d1e8cc63cb278447d8b889c77ea21884bbd8ecf2ad4824c66ae098a12",
+                        "attestationPubkey": "0xd703e67ce93c9b61b2ae88063ce60f13822efe03d8f089582615032e2b44346fa0199c2320dca35012ec1d414dc3b835da11cd73",
+                        "proposalPubkey": "0x9ee9237afcc3d75c0a8271412f2ac10f03c0da760e545a21cc7eb8331381f62bec027d1dac093b7a09057c187dd46e6231c0c007",
                         "index": 2
                     }
                 ]
@@ -55,11 +56,11 @@
             }
         },
         "signedBlock": {
-            "message": {
+            "block": {
                 "slot": 2,
                 "proposerIndex": 2,
-                "parentRoot": "0xe8aa857bde7571d50ed47ccf17f8e804a151729038762d4ba1a2412e1b4923e9",
-                "stateRoot": "0xb50c587fa20fdcbec9975b30251f4a680988c069163bb30762c338d82f761a10",
+                "parentRoot": "0xf1976282098b111ce7e5a53569fbc9dc2821e2ea4ccce166b5ae500af824a01a",
+                "stateRoot": "0x4d9ee81c04e95769cb10822a699909d097266ee7600d22e48129c58e528ad25e",
                 "body": {
                     "attestations": {
                         "data": [
@@ -74,11 +75,11 @@
                                 "data": {
                                     "slot": 1,
                                     "head": {
-                                        "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                                        "root": "0xf1976282098b111ce7e5a53569fbc9dc2821e2ea4ccce166b5ae500af824a01a",
                                         "slot": 0
                                     },
                                     "target": {
-                                        "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                                        "root": "0xf1976282098b111ce7e5a53569fbc9dc2821e2ea4ccce166b5ae500af824a01a",
                                         "slot": 0
                                     },
                                     "source": {
@@ -108,12 +109,11 @@
                         }
                     ]
                 },
-                "proposerSignature": "0x24000000a920ff2552773d796d32a469b91ab465a2f5b328e7104d74b7a25f312801000004000000e9512d4ee66a101264cc823c3241fe48f995b923685b0c18d398591fd8619f6d31bc755d2e621b20fe5e7f2b6fd1f466be3b7f6b2ae146497c8e432a0f04203106a2fe348254f17b62611b4a18edde5c8b1ae56b9b2fb5012a7388648dfe850ee8754416d4dfed7a4f46304c36b02e4a93328129a59cdc00d2485d333a9ea73d85338a088b5dfa618459693669ade71999bf0d08caa84d779be1ea57684a6d0577c506104f41fa3bdcf5a27262baf52ac67d4d2cbe113323fa27ac6d0c57c01d77e7ba0c5d480d7884dae10f19b59d5bd0bfa12494a87f2ce0013a35d4b1cb5f6a74013f7f11cd019a277d0a8faf95265ef9df367caf4744897398043efd3c3aae758e78ae4fab23dd38a9152f24b8050be18d2ccde64b3d541bfd0ec22bda1ef9fe7033ca396d79f9d6cc3e427ca6799d511e629f29910ea20b14799aac3f6581802f1377764260976e5632aa46ea082bb5d00789735f45b52447576804c26dcda0f26e8a69b766de0b743a0a826839b894d14503b8520918ce4d5572518721"
+                "proposerSignature": "0x240000002af4b41b75b0d5629bc1572b171634790159367484e65e779b614a50280100000400000033372a0bb449d13f059003321b565f37a8960f6c1eb6851c85cbc4548c85d51bc469d12c812c4b5d3a5ebf203925922ff6e5291f42f40260f852174fc2060f23a810a341b58f956ca00386168867470ba1ef7f74fbfff974e7cd720b85ff67784a9fbb6c9f46271e30ef1a67560de604978a9234879734178c2efc0f0effab2b67d07423c0cbbf69c6258f4b8766e4488eb7885f9ae1a4669caa0b2af02ec256a11f6571a6e72e6067552f59c9a97d26c2bd9f104487ad48b5f7281c0ea5c26090755e1af7e92814ebf62e0791da5331a68718513f616c160d2e102819389d0c6818ca747dbfb93fe20031646d152f660f13b92424e62175bd4a0053b2e339565aabb53cb06a51475574434f62d96c111a1c184a980ed62052758116801d506cce540f60ce1cf9352561461972dd07495985c30dcdf235115017f01af33c2067d7269c44cbd59d1d6d9c33451c81480cbc51fd47f35f4028d3e1c523a7c0312159863d1cf151f36e872c5f66cfc14872c33b614174355723e09d2037e045c958"
             }
         },
-        "expectException": "AssertionError",
         "_info": {
-            "hash": "0x14ca8fcacd0fd4b2a42a59d649e2573971044823d611e9b9a038d2099c52586b",
+            "hash": "0x82762809f667b931c573f6d1e116cfb7dfa25658cd939f956f44ad0a369c7470",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/verify_signatures/test_invalid_signatures.py::test_invalid_aggregated_attestation_signature[fork_Devnet]",
             "description": "Test that invalid aggregated attestation signatures are properly rejected.\n\n    Scenario\n    --------\n    - Single block at slot 1\n    - Proposer attestation from validator 1 (valid)\n    - Two aggregated attestations with different data:\n      - One from validator 0 with valid signature\n      - One from validator 2 with invalid signature\n\n    Expected Behavior\n    -----------------\n    1. The SignedBlock is rejected due to invalid aggregated signature\n\n    Why This Matters\n    ----------------\n    This test verifies that aggregated signature verification:\n    - Properly validates leanVM aggregated proofs for each attestation group\n    - Rejects blocks containing any invalid aggregated attestation signature\n    - Works correctly even when some attestations have valid signatures",

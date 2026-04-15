@@ -14,8 +14,9 @@
             }
         },
         "serialized": "0x0101010101010101010101010101010101010101010101010101010101010101640000000000000002020202020202020202020202020202020202020202020202020202020202029600000000000000",
+        "root": "0xa5615ef7cb0df35181bf5094289657fe4e8df2a2175f2c93cca2bf12fc5f8b88",
         "_info": {
-            "hash": "0xb10734184e2dfaaa499085d076e7132b26a19e0eceaf5379e1547f5aa4941ea8",
+            "hash": "0x12f295f87ec3fd2f9b4dbc4522f110675b76d9bb60a61b4ca314a64d5cd7ffbc",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/ssz/test_networking_containers.py::test_status_typical[fork_Devnet]",
             "description": "SSZ roundtrip for Status with typical values.",

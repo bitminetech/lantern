@@ -27,8 +27,9 @@
             }
         },
         "serialized": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "root": "0xf5a5fd42d16a20302798ef6ed309979b43003d2320d9f0e8ea9831a92759fb4b",
         "_info": {
-            "hash": "0xa9c75f817fbc970b1a8918717a99f1c39e3a01b924f8d1a5f8267578277925f8",
+            "hash": "0x4ff1a167d51dad53e68a454c906fa484af39fc8da6949d22a78f3d74c1cf46c9",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/ssz/test_xmss_containers.py::test_public_key_zero[fork_Devnet]",
             "description": "SSZ roundtrip for PublicKey with zero values.",

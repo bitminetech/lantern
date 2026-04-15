@@ -10,6 +10,7 @@
 #include "ssz_merkle.h"
 #include "ssz_utils.h"
 #include "mincrypt/sha256.h"
+#include "pq-bindings-c-rust.h"
 
 /* XMSS signature layout constants (LeanSpec prod config). */
 static const size_t LANTERN_XMSS_FP_BYTES = 4u;
@@ -21,7 +22,24 @@ static const size_t LANTERN_XMSS_RHO_BYTES =
     (LANTERN_XMSS_RAND_LEN_FE * LANTERN_XMSS_FP_BYTES);
 static const size_t LANTERN_XMSS_SIGNATURE_FIXED_SECTION =
     (SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_XMSS_RHO_BYTES + SSZ_BYTE_SIZE_OF_UINT32);
-static const size_t LANTERN_XMSS_NODE_LIST_LIMIT = 1u << 17;
+static size_t xmss_node_list_limit(void) {
+    uint64_t lifetime = pq_get_lifetime();
+    if (lifetime == 0u || (lifetime & (lifetime - 1u)) != 0u) {
+        return (size_t)1u << 17;
+    }
+
+    unsigned int log_lifetime = 0u;
+    while (log_lifetime < 63u && (UINT64_C(1) << log_lifetime) < lifetime) {
+        ++log_lifetime;
+    }
+
+    unsigned int exponent = (log_lifetime / 2u) + 1u;
+    if (exponent >= (sizeof(size_t) * 8u)) {
+        return 0u;
+    }
+
+    return (size_t)1u << exponent;
+}
 
 static void chunk_from_uint64(uint64_t value, uint8_t out[SSZ_BYTES_PER_CHUNK]) {
     memset(out, 0, SSZ_BYTES_PER_CHUNK);
@@ -50,6 +68,7 @@ int lantern_hash_tree_root_validators_dual(
     const uint8_t *proposal_pubkeys,
     size_t count,
     LanternRoot *out_root);
+static int hash_block_signatures(const LanternBlockSignatures *signatures, LanternRoot *out_root);
 
 static int merkleize_chunks(
     const uint8_t *chunks,
@@ -147,8 +166,12 @@ static int hash_digest_list_root(
     if (count > 0 && !chunks) {
         return -1;
     }
+    size_t limit = xmss_node_list_limit();
+    if (limit == 0u) {
+        return -1;
+    }
     uint8_t temp_root[SSZ_BYTES_PER_CHUNK];
-    ssz_error_t err = ssz_merkleize(chunks, count, LANTERN_XMSS_NODE_LIST_LIMIT, temp_root);
+    ssz_error_t err = ssz_merkleize(chunks, count, limit, temp_root);
     if (err != SSZ_SUCCESS) {
         return -1;
     }
@@ -194,7 +217,11 @@ static int hash_xmss_signature(const LanternSignature *signature, LanternRoot *o
         return -1;
     }
     size_t siblings_count = siblings_len / LANTERN_XMSS_HASH_DIGEST_BYTES;
-    if (siblings_count > LANTERN_XMSS_NODE_LIST_LIMIT) {
+    size_t node_limit = xmss_node_list_limit();
+    if (node_limit == 0u) {
+        return -1;
+    }
+    if (siblings_count > node_limit) {
         return -1;
     }
 
@@ -203,7 +230,7 @@ static int hash_xmss_signature(const LanternSignature *signature, LanternRoot *o
         return -1;
     }
     size_t hashes_count = hashes_len / LANTERN_XMSS_HASH_DIGEST_BYTES;
-    if (hashes_count > LANTERN_XMSS_NODE_LIST_LIMIT) {
+    if (hashes_count > node_limit) {
         return -1;
     }
 
@@ -288,6 +315,13 @@ static int zero_merkle_root(size_t chunk_limit, LanternRoot *out_root) {
     return 0;
 }
 
+static void hash_root_pair(const LanternRoot *left, const LanternRoot *right, LanternRoot *out_root) {
+    uint8_t buffer[SSZ_BYTES_PER_CHUNK * 2u];
+    memcpy(buffer, left->bytes, SSZ_BYTES_PER_CHUNK);
+    memcpy(buffer + SSZ_BYTES_PER_CHUNK, right->bytes, SSZ_BYTES_PER_CHUNK);
+    SHA256_hash(buffer, sizeof(buffer), out_root->bytes);
+}
+
 static int hash_empty_list_root(size_t element_limit, LanternRoot *out_root) {
     if (!out_root) {
         return -1;
@@ -313,131 +347,37 @@ static int hash_empty_bitlist_root(size_t bit_limit, LanternRoot *out_root) {
     return ssz_mix_in_length(zero_root.bytes, 0, out_root->bytes) == SSZ_SUCCESS ? 0 : -1;
 }
 
-/**
- * Compare two LanternRoot values lexicographically.
- * Returns negative if a < b, positive if a > b, zero if equal.
- */
-static int compare_roots(const void *a, const void *b) {
-    return memcmp(((const LanternRoot *)a)->bytes, ((const LanternRoot *)b)->bytes, LANTERN_ROOT_SIZE);
-}
-
-/**
- * Merkleize justification roots and validators with sorted root ordering.
- * LeanSpec sorts justification roots before storing, so we must do the same
- * during hashing to ensure consistent state roots across implementations.
- */
+/* Justification roots and votes are already canonicalized before entering state. */
 static int merkleize_sorted_justifications(
     const struct lantern_root_list *roots,
     const struct lantern_bitlist *validators,
     size_t validator_count,
     LanternRoot *out_roots_root,
     LanternRoot *out_validators_root) {
-
+    (void)validator_count;
     if (!roots || !validators || !out_roots_root || !out_validators_root) {
         return -1;
     }
 
-    size_t root_count = roots->length;
     size_t bits_per_chunk = SSZ_BYTES_PER_CHUNK * 8u;
 
-    /* Handle empty case */
-    if (root_count == 0) {
+    if (roots->length == 0) {
         if (hash_empty_list_root(LANTERN_HISTORICAL_ROOTS_LIMIT, out_roots_root) != 0) {
             return -1;
         }
-        if (hash_empty_bitlist_root(LANTERN_JUSTIFICATION_VALIDATORS_LIMIT, out_validators_root) != 0) {
-            return -1;
-        }
-        return 0;
-    }
-
-    /* Allocate arrays for sorting */
-    size_t *sort_indices = malloc(root_count * sizeof(size_t));
-    LanternRoot *sorted_roots = malloc(root_count * sizeof(LanternRoot));
-    if (!sort_indices || !sorted_roots) {
-        free(sort_indices);
-        free(sorted_roots);
+    } else if (lantern_merkleize_root_list(roots, LANTERN_HISTORICAL_ROOTS_LIMIT, out_roots_root) != 0) {
         return -1;
     }
 
-    /* Initialize indices and copy roots */
-    for (size_t i = 0; i < root_count; ++i) {
-        sort_indices[i] = i;
-        memcpy(&sorted_roots[i], &roots->items[i], sizeof(LanternRoot));
-    }
-
-    /* Sort roots and track original indices using insertion sort (stable, simple) */
-    for (size_t i = 1; i < root_count; ++i) {
-        LanternRoot key_root = sorted_roots[i];
-        size_t key_index = sort_indices[i];
-        size_t j = i;
-        while (j > 0 && compare_roots(&sorted_roots[j - 1], &key_root) > 0) {
-            sorted_roots[j] = sorted_roots[j - 1];
-            sort_indices[j] = sort_indices[j - 1];
-            --j;
-        }
-        sorted_roots[j] = key_root;
-        sort_indices[j] = key_index;
-    }
-
-    /* Create sorted root list for merkleization */
-    struct lantern_root_list sorted_root_list;
-    sorted_root_list.items = sorted_roots;
-    sorted_root_list.length = root_count;
-    sorted_root_list.capacity = root_count;
-
-    if (lantern_merkleize_root_list(&sorted_root_list, LANTERN_HISTORICAL_ROOTS_LIMIT, out_roots_root) != 0) {
-        free(sort_indices);
-        free(sorted_roots);
-        return -1;
-    }
-
-    /* Reorder validator bits according to sorted root order */
-    size_t total_bits = validators->bit_length;
-    if (total_bits == 0) {
-        free(sort_indices);
-        free(sorted_roots);
-        if (hash_empty_bitlist_root(LANTERN_JUSTIFICATION_VALIDATORS_LIMIT, out_validators_root) != 0) {
-            return -1;
-        }
-        return 0;
-    }
-
-    /* Create reordered bitlist */
-    struct lantern_bitlist sorted_validators;
-    lantern_bitlist_init(&sorted_validators);
-    if (lantern_bitlist_resize(&sorted_validators, total_bits) != 0) {
-        free(sort_indices);
-        free(sorted_roots);
-        return -1;
-    }
-
-    /* Copy bits in sorted order: for each sorted root position, copy bits from original position */
-    for (size_t sorted_idx = 0; sorted_idx < root_count; ++sorted_idx) {
-        size_t original_idx = sort_indices[sorted_idx];
-        for (size_t v = 0; v < validator_count; ++v) {
-            size_t src_bit = original_idx * validator_count + v;
-            size_t dst_bit = sorted_idx * validator_count + v;
-            if (src_bit < validators->bit_length && bitlist_bit_is_set(validators, src_bit)) {
-                /* Set the bit in sorted_validators */
-                size_t byte_index = dst_bit / 8u;
-                uint8_t mask = (uint8_t)(1u << (dst_bit % 8u));
-                if (byte_index < sorted_validators.capacity) {
-                    sorted_validators.bytes[byte_index] |= mask;
-                }
-            }
-        }
-    }
-
-    size_t justification_validators_chunk_limit =
+    size_t chunk_limit =
         (LANTERN_JUSTIFICATION_VALIDATORS_LIMIT + bits_per_chunk - 1u) / bits_per_chunk;
-    int result = lantern_merkleize_bitlist(&sorted_validators, justification_validators_chunk_limit, out_validators_root);
-
-    lantern_bitlist_reset(&sorted_validators);
-    free(sort_indices);
-    free(sorted_roots);
-
-    return result;
+    if (validators->bit_length == 0) {
+        if (hash_empty_bitlist_root(LANTERN_JUSTIFICATION_VALIDATORS_LIMIT, out_validators_root) != 0) {
+            return -1;
+        }
+        return 0;
+    }
+    return lantern_merkleize_bitlist(validators, chunk_limit, out_validators_root);
 }
 
 int lantern_hash_tree_root_config(const LanternConfig *config, LanternRoot *out_root) {
@@ -497,6 +437,40 @@ int lantern_hash_tree_root_vote(const LanternVote *vote, LanternRoot *out_root) 
     chunk_from_uint64(vote->validator_id, chunks[0]);
     memcpy(chunks[1], data_root.bytes, SSZ_BYTES_PER_CHUNK);
     return merkleize_chunks(&chunks[0][0], 2, 0, out_root);
+}
+
+int lantern_hash_tree_root_signed_vote(const LanternSignedVote *vote, LanternRoot *out_root) {
+    if (!vote || !out_root) {
+        return -1;
+    }
+    LanternRoot data_root;
+    LanternRoot signature_root;
+    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &data_root) != 0) {
+        return -1;
+    }
+    if (hash_xmss_signature(&vote->signature, &signature_root) != 0) {
+        return -1;
+    }
+    uint8_t chunks[3][SSZ_BYTES_PER_CHUNK];
+    chunk_from_uint64(vote->data.validator_id, chunks[0]);
+    memcpy(chunks[1], data_root.bytes, SSZ_BYTES_PER_CHUNK);
+    memcpy(chunks[2], signature_root.bytes, SSZ_BYTES_PER_CHUNK);
+    return merkleize_chunks(&chunks[0][0], 3, 0, out_root);
+}
+
+int lantern_hash_tree_root_signature(const LanternSignature *signature, LanternRoot *out_root) {
+    return hash_xmss_signature(signature, out_root);
+}
+
+int lantern_hash_tree_root_validator(const LanternValidator *validator, LanternRoot *out_root) {
+    if (!validator || !out_root) {
+        return -1;
+    }
+    return hash_validator(
+        validator->attestation_pubkey,
+        validator->proposal_pubkey,
+        validator->index,
+        out_root);
 }
 
 int lantern_hash_tree_root_aggregated_attestation(const LanternAggregatedAttestation *attestation, LanternRoot *out_root) {
@@ -563,6 +537,32 @@ int lantern_hash_tree_root_aggregated_signature_proof(
     return merkleize_chunks(&chunks[0][0], 2, 0, out_root);
 }
 
+int lantern_hash_tree_root_signed_aggregated_attestation(
+    const LanternSignedAggregatedAttestation *attestation,
+    LanternRoot *out_root) {
+    if (!attestation || !out_root) {
+        return -1;
+    }
+    LanternRoot data_root;
+    LanternRoot proof_root;
+    if (lantern_hash_tree_root_attestation_data(&attestation->data, &data_root) != 0) {
+        return -1;
+    }
+    if (lantern_hash_tree_root_aggregated_signature_proof(&attestation->proof, &proof_root) != 0) {
+        return -1;
+    }
+    uint8_t chunks[2][SSZ_BYTES_PER_CHUNK];
+    memcpy(chunks[0], data_root.bytes, SSZ_BYTES_PER_CHUNK);
+    memcpy(chunks[1], proof_root.bytes, SSZ_BYTES_PER_CHUNK);
+    return merkleize_chunks(&chunks[0][0], 2, 0, out_root);
+}
+
+int lantern_hash_tree_root_block_signatures(
+    const LanternBlockSignatures *signatures,
+    LanternRoot *out_root) {
+    return hash_block_signatures(signatures, out_root);
+}
+
 int lantern_merkleize_root_list(
     const struct lantern_root_list *list,
     size_t limit,
@@ -608,49 +608,96 @@ int lantern_merkleize_bitlist(
         return -1;
     }
     size_t bit_count = bitlist->bit_length;
-    bool *bits = NULL;
-    if (bit_count > 0) {
-        if (!bitlist->bytes) {
-            return -1;
-        }
-        bits = calloc(bit_count, sizeof(*bits));
-        if (!bits) {
-            return -1;
-        }
-        for (size_t i = 0; i < bit_count; ++i) {
-            size_t byte_index = i / 8u;
-            size_t bit_index = i % 8u;
-            if (byte_index < bitlist->capacity) {
-                bits[i] = (bitlist->bytes[byte_index] >> bit_index) & 1u;
-            }
-        }
+    if (bit_count > 0 && !bitlist->bytes) {
+        return -1;
     }
 
-    size_t bitfield_len = bit_count ? ((bit_count + 7u) / 8u) : 1u;
-    size_t max_chunks = (bitfield_len + SSZ_BYTES_PER_CHUNK - 1u) / SSZ_BYTES_PER_CHUNK;
-    if (max_chunks == 0) {
-        max_chunks = 1;
-    }
-    uint8_t *packed = calloc(max_chunks, SSZ_BYTES_PER_CHUNK);
-    if (!packed) {
-        free(bits);
+    size_t bitfield_len = bit_count ? ((bit_count + 7u) / 8u) : 0u;
+    size_t chunk_count = bitfield_len ? ((bitfield_len + SSZ_BYTES_PER_CHUNK - 1u) / SSZ_BYTES_PER_CHUNK) : 0u;
+    size_t effective_limit = limit ? limit : (chunk_count > 0u ? chunk_count : 1u);
+    if (chunk_count > effective_limit) {
         return -1;
     }
-    size_t chunk_count = 0;
-    ssz_error_t err = ssz_pack_bits(bits, bit_count, packed, &chunk_count);
-    free(bits);
+
+    uint64_t padded = next_pow_of_two((uint64_t)effective_limit);
+    if (padded == 0u) {
+        return -1;
+    }
+
+    unsigned int depth = 0u;
+    while (((uint64_t)1u << depth) < padded) {
+        ++depth;
+    }
+
+    LanternRoot zero_roots[64];
+    memset(zero_roots[0].bytes, 0, LANTERN_ROOT_SIZE);
+    for (unsigned int i = 1u; i <= depth; ++i) {
+        hash_root_pair(&zero_roots[i - 1u], &zero_roots[i - 1u], &zero_roots[i]);
+    }
+
+    LanternRoot stack[64];
+    bool has_stack[64];
+    memset(has_stack, 0, sizeof(has_stack));
+
+    for (size_t chunk_index = 0u; chunk_index < chunk_count; ++chunk_index) {
+        LanternRoot node;
+        memset(node.bytes, 0, LANTERN_ROOT_SIZE);
+        size_t chunk_offset = chunk_index * SSZ_BYTES_PER_CHUNK;
+        size_t remaining_bytes = bitfield_len - chunk_offset;
+        size_t copy_len = remaining_bytes < SSZ_BYTES_PER_CHUNK ? remaining_bytes : SSZ_BYTES_PER_CHUNK;
+        memcpy(node.bytes, bitlist->bytes + chunk_offset, copy_len);
+        if ((bit_count % 8u) != 0u && chunk_index == chunk_count - 1u) {
+            size_t last_byte = (bitfield_len - 1u) - chunk_offset;
+            uint8_t mask = (uint8_t)((1u << (bit_count % 8u)) - 1u);
+            node.bytes[last_byte] &= mask;
+        }
+
+        size_t merge_index = chunk_index;
+        unsigned int level = 0u;
+        while ((merge_index & 1u) != 0u) {
+            hash_root_pair(&stack[level], &node, &node);
+            has_stack[level] = false;
+            merge_index >>= 1u;
+            ++level;
+        }
+        stack[level] = node;
+        has_stack[level] = true;
+    }
+
+    if (chunk_count == 0u) {
+        return ssz_mix_in_length(zero_roots[depth].bytes, (uint64_t)bit_count, out_root->bytes) == SSZ_SUCCESS
+            ? 0
+            : -1;
+    }
+
+    for (unsigned int level = 0u; level < depth; ++level) {
+        if (!has_stack[level]) {
+            continue;
+        }
+
+        LanternRoot node = stack[level];
+        has_stack[level] = false;
+        hash_root_pair(&node, &zero_roots[level], &node);
+
+        unsigned int carry_level = level + 1u;
+        while (carry_level < 64u && has_stack[carry_level]) {
+            hash_root_pair(&stack[carry_level], &node, &node);
+            has_stack[carry_level] = false;
+            ++carry_level;
+        }
+        if (carry_level >= 64u) {
+            return -1;
+        }
+        stack[carry_level] = node;
+        has_stack[carry_level] = true;
+    }
+
+    LanternRoot root = depth < 64u && has_stack[depth] ? stack[depth] : zero_roots[depth];
+    ssz_error_t err = ssz_mix_in_length(root.bytes, (uint64_t)bit_count, out_root->bytes);
     if (err != SSZ_SUCCESS) {
-        free(packed);
         return -1;
     }
-    uint8_t temp_root[SSZ_BYTES_PER_CHUNK];
-    err = ssz_merkleize(packed, chunk_count, limit, temp_root);
-    free(packed);
-    if (err != SSZ_SUCCESS) {
-        return -1;
-    }
-    err = ssz_mix_in_length(temp_root, (uint64_t)bit_count, out_root->bytes);
-    return err == SSZ_SUCCESS ? 0 : -1;
+    return 0;
 }
 
 static int hash_aggregated_attestations(const LanternAggregatedAttestations *attestations, LanternRoot *out_root) {
@@ -959,15 +1006,25 @@ int lantern_hash_tree_root_state(const LanternState *state, LanternRoot *out_roo
     } else if (lantern_merkleize_bitlist(&state->justified_slots, justified_chunk_limit, &justified_slots_root) != 0) {
         return -1;
     }
-    /* Merkleize justification roots and validators with sorted ordering.
-     * LeanSpec sorts justification roots lexicographically before hashing,
-     * so we must do the same to produce matching state roots. */
-    if (merkleize_sorted_justifications(
-            &state->justification_roots,
-            &state->justification_validators,
-            state->validator_count,
-            &justification_roots_root,
-            &justification_validators_root) != 0) {
+    if (state->justification_roots.length == 0) {
+        if (hash_empty_list_root(LANTERN_HISTORICAL_ROOTS_LIMIT, &justification_roots_root) != 0) {
+            return -1;
+        }
+    } else if (lantern_merkleize_root_list(&state->justification_roots, LANTERN_HISTORICAL_ROOTS_LIMIT, &justification_roots_root)
+               != 0) {
+        return -1;
+    }
+    size_t justification_validators_chunk_limit =
+        (LANTERN_JUSTIFICATION_VALIDATORS_LIMIT + bits_per_chunk - 1u) / bits_per_chunk;
+    if (state->justification_validators.bit_length == 0) {
+        if (hash_empty_bitlist_root(LANTERN_JUSTIFICATION_VALIDATORS_LIMIT, &justification_validators_root) != 0) {
+            return -1;
+        }
+    } else if (lantern_merkleize_bitlist(
+                   &state->justification_validators,
+                   justification_validators_chunk_limit,
+                   &justification_validators_root)
+               != 0) {
         return -1;
     }
     if (state->validator_count == 0) {

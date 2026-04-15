@@ -84,7 +84,7 @@ int lantern_gossip_compute_message_id(
     uint8_t *snappy_scratch,
     size_t snappy_scratch_len,
     size_t *required_scratch) {
-    if (!message_id || !topic || topic_len == 0 || (!payload && payload_len > 0)) {
+    if (!message_id || (!topic && topic_len > 0u) || (!payload && payload_len > 0u)) {
         return -1;
     }
     if (required_scratch) {

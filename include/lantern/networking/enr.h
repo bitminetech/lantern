@@ -17,6 +17,8 @@ struct lantern_enr_key_value {
 
 struct lantern_enr_record {
     char *encoded;
+    uint8_t *rlp_bytes;
+    size_t rlp_len;
     uint8_t *signature;
     size_t signature_len;
     uint64_t sequence;
@@ -30,10 +32,25 @@ struct lantern_enr_record_list {
     size_t capacity;
 };
 
+struct lantern_enr_eth2_data {
+    uint8_t fork_digest[4];
+    uint8_t next_fork_version[4];
+    uint64_t next_fork_epoch;
+};
+
 void lantern_enr_record_init(struct lantern_enr_record *record);
 void lantern_enr_record_reset(struct lantern_enr_record *record);
 int lantern_enr_record_decode(const char *enr_text, struct lantern_enr_record *record);
 const struct lantern_enr_key_value *lantern_enr_record_find(const struct lantern_enr_record *record, const char *key);
+bool lantern_enr_record_is_valid(const struct lantern_enr_record *record);
+int lantern_enr_record_signature_valid(const struct lantern_enr_record *record, bool *out_valid);
+int lantern_enr_record_verify_signature(const struct lantern_enr_record *record, bool *out_valid);
+int lantern_enr_record_node_id(const struct lantern_enr_record *record, uint8_t out_node_id[32]);
+int lantern_enr_record_ip4(const struct lantern_enr_record *record, char *buffer, size_t buffer_len);
+int lantern_enr_record_ip6(const struct lantern_enr_record *record, char *buffer, size_t buffer_len);
+int lantern_enr_record_multiaddr(const struct lantern_enr_record *record, char *buffer, size_t buffer_len);
+int lantern_enr_record_eth2(const struct lantern_enr_record *record, struct lantern_enr_eth2_data *out_eth2);
+bool lantern_enr_record_is_aggregator(const struct lantern_enr_record *record);
 
 void lantern_enr_record_list_init(struct lantern_enr_record_list *list);
 void lantern_enr_record_list_reset(struct lantern_enr_record_list *list);

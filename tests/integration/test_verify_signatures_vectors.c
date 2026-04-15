@@ -388,8 +388,8 @@ int main(void) {
     int written = snprintf(
         fixture_root,
         sizeof(fixture_root),
-        "%s/consensus/verify_signatures",
-        LANTERN_TEST_FIXTURE_DIR);
+        "%s/verify_signatures",
+        LANTERN_CONSENSUS_FIXTURE_DIR);
     if (written <= 0 || written >= (int)sizeof(fixture_root)) {
         fprintf(stderr, "fixture path too long\n");
         return 1;

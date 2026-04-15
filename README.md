@@ -13,6 +13,21 @@ Make sure you have the following tools installed before building.
 - CMake 3.20+
 - C compiler
 - [Rust](https://www.rust-lang.org/tools/install) (for XMSS bindings)
+- [uv](https://docs.astral.sh/uv/) (to generate leanSpec fixtures)
+
+## Bootstrap
+
+Initialize Lantern's submodules before generating fixtures or building from a fresh checkout.
+
+```sh
+./scripts/bootstrap.sh
+```
+
+To bootstrap and generate the leanSpec consensus fixtures in one step:
+
+```sh
+./scripts/bootstrap.sh --fixtures
+```
 
 ## Build
 
@@ -31,21 +46,33 @@ Run the test suite to verify everything works correctly.
 ctest --test-dir build --output-on-failure
 ```
 
+Fixture-driven consensus executables are only registered when generated leanSpec fixtures are present under
+`tools/leanSpec/fixtures/consensus`. A fresh checkout without generated consensus fixtures will still build and run the
+unit-test suite.
+
 ## Regenerating Fixtures
 
-Test fixtures are generated from LeanSpec. Use these scripts to refresh them.
+Lantern generates consensus fixtures on demand from the `tools/leanSpec` submodule instead of committing the JSON
+snapshots into this repository.
 
 Consensus fixtures:
 
 ```sh
-./tools/fixtures/fill_consensus_fixtures.sh
+cmake -S . -B build
+cmake --build build --target fixtures
 ```
 
-Networking fixtures:
+That command runs `uv run fill --fork=Devnet --clean -n auto` inside `tools/leanSpec` and leaves the generated JSONs
+under `tools/leanSpec/fixtures/consensus`.
+
+For a one-shot bootstrap that also generates the consensus fixtures, run:
 
 ```sh
-uv run --directory tools/leanSpec python ../../tools/fixtures/generate_networking_ssz.py
+./scripts/bootstrap.sh --fixtures
 ```
+
+If you need to point CMake at a different downloaded fixture tree, configure with
+`-DLANTERN_CONSENSUS_FIXTURE_DIR=/path/to/consensus`.
 
 ## License
 

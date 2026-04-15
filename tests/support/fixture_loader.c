@@ -523,7 +523,7 @@ static int lantern_fixture_parse_bitlist_object(
     return 0;
 }
 
-static int lantern_fixture_parse_attestation_data(
+int lantern_fixture_parse_attestation_data(
     const struct lantern_fixture_document *doc,
     int data_obj_idx,
     LanternAttestationData *out_data) {
@@ -578,7 +578,7 @@ static int lantern_fixture_parse_attestation_data(
     return 0;
 }
 
-static int lantern_fixture_parse_attestation_message(
+int lantern_fixture_parse_attestation_message(
     const struct lantern_fixture_document *doc,
     int attestation_idx,
     LanternSignedVote *vote) {
@@ -607,8 +607,11 @@ static int lantern_fixture_parse_attestation_message(
         return -1;
     }
 
-    memset(vote->signature.bytes, 0, sizeof(vote->signature.bytes));
-    return 0;
+    int signature_idx = lantern_fixture_object_get_field(doc, attestation_idx, "signature");
+    if (signature_idx < 0) {
+        return -1;
+    }
+    return lantern_fixture_token_to_signature(doc, signature_idx, &vote->signature);
 }
 
 static bool lantern_fixture_attestation_data_equal(
@@ -740,7 +743,7 @@ static int lantern_fixture_parse_byte_list_object(
     return 0;
 }
 
-static int lantern_fixture_parse_aggregated_attestation(
+int lantern_fixture_parse_aggregated_attestation(
     const struct lantern_fixture_document *doc,
     int entry_idx,
     LanternAggregatedAttestation *out_attestation) {
@@ -767,7 +770,7 @@ static int lantern_fixture_parse_aggregated_attestation(
     return 0;
 }
 
-static int lantern_fixture_parse_signature_proof(
+int lantern_fixture_parse_signature_proof(
     const struct lantern_fixture_document *doc,
     int proof_idx,
     LanternAggregatedSignatureProof *out_proof) {

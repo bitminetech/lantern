@@ -31,24 +31,44 @@
             "validators": {
                 "data": [
                     {
-                        "attestationPubkey": "0xcd64341d83f28533f239153535b45209592342325ed31a5792b2e61935648748d41c384850baf6386c43bf19bfb63f53eb2c8c0b",
-                        "proposalPubkey": "0x5eba321a84f55461e2c0e94036d24e5107720876752d5c4f6e03183a7e7f1856e372c60dbc6fbc0450c26e58ba402f1da6952a73",
+                        "attestationPubkey": "0x80a6f13b39b9c26cd91edb542bdb9e051b61223a15f5de18e53e6a361720cd65c06a114e87531241cc535f39156f0f2cf0877647",
+                        "proposalPubkey": "0xdedd8e5a890a2c339ffbca1ce85b710384670508df73ce33116bcd60befbef5a560e6304e3635a58e12b6b542c1bc6583a16455a",
                         "index": 0
                     },
                     {
-                        "attestationPubkey": "0x0c8f12450a0f4375d8f387643a66bd4084a76a522062790d8e961b38dfe3497444af494376e3c76f3007681a4016221434cdf51d",
-                        "proposalPubkey": "0x8b31ba434a9e116dcd99a11535d8fb480fe67517c20eb1117157ca1b1b6b0c5c9d9a632e3268986f35856c337fc18d7b6d4f926a",
+                        "attestationPubkey": "0x7612d36fb7667d1c2f19a821d6a63b3cc17f214baedecb57e6eed4600dabf055185de12c6418db6b79f71004303bfe3a753c9727",
+                        "proposalPubkey": "0x1dcca64f8f9956470c2a427ca669d9359f22f202387ba24440e77200ec57983515451279124ee834a62f77560b1c166b0eb2885b",
                         "index": 1
                     },
                     {
-                        "attestationPubkey": "0x454d107dc0156e61baee057497d5667adb027d68f6fffb2bc61c6a38e45eed3531c9bd77e64f610044b26b1ec4047929bcfed946",
-                        "proposalPubkey": "0xac91d91a23744669bb2a5356605a161a5ae28c1e872fcf1d1e8cc63cb278447d8b889c77ea21884bbd8ecf2ad4824c66ae098a12",
+                        "attestationPubkey": "0xd703e67ce93c9b61b2ae88063ce60f13822efe03d8f089582615032e2b44346fa0199c2320dca35012ec1d414dc3b835da11cd73",
+                        "proposalPubkey": "0x9ee9237afcc3d75c0a8271412f2ac10f03c0da760e545a21cc7eb8331381f62bec027d1dac093b7a09057c187dd46e6231c0c007",
                         "index": 2
                     },
                     {
-                        "attestationPubkey": "0xf19bf07520b1e97b131a55666bfe3e74cca720785f414d6b3e5d6f1616f35f7ab0e82123e74c2c766f970a233d0d19725a7d4d36",
-                        "proposalPubkey": "0x2327c12fc91cac0dc3593a5edb9c4a3c35ee9b5abc12883d28354b6965811c15ea1b926e86b8e16470d3586985293a5944d19b77",
+                        "attestationPubkey": "0xe41f343f892528158dccae5404bd7262106386597fd4a35ae2c682374c6f15706dd8062ddac61b1851020e0918e7970917e30b06",
+                        "proposalPubkey": "0x57ffb567b826fb60dd07da58f6939b05aa93cd4bb2d9794308d3232878caa5076e9628292e96406c2d8faa3f8108922cdcf37e56",
                         "index": 3
+                    },
+                    {
+                        "attestationPubkey": "0x8276347211a4c768a823454b927ee07a8895a24ccf0a7d2f08b298122476c746d4df7c63754e521d62343044ff48e30bb090e472",
+                        "proposalPubkey": "0x3a527d4a67783d7ae9077b250565370cf6c5f34e5f038362a9308f414cb68657fa888a161182dd0b4456771885a2b82861fe170c",
+                        "index": 4
+                    },
+                    {
+                        "attestationPubkey": "0x3e956459bc3031258823bc4cf7e24f3c00cc7341a633d138997149635cf7096f5bf13468a9c5be7c67ab357b62724446819b1513",
+                        "proposalPubkey": "0x92614a0d3a3c1801cce44829ba31ad3738c748509278b32b384561072216840f218791726fc46a56ca2fff3802e4852ad975e730",
+                        "index": 5
+                    },
+                    {
+                        "attestationPubkey": "0xeb3a4219238a832b42395107025de92b78534b615f717b2e657b1615d53eef16e00ff86909c67d60a1b57f3c938fb27369973a09",
+                        "proposalPubkey": "0xb9dacc060827fa328d44b65461fc74305f6586664e83f8436f435754df6bd5060c570e5985ca6b779213f717bb57742757a9cb75",
+                        "index": 6
+                    },
+                    {
+                        "attestationPubkey": "0xb943ea3a05d88c48bb793031dd29a90b922ea654b2a7ed55ea5956396cb951321a24987c07bee00ff4c56823809bac214472884e",
+                        "proposalPubkey": "0xcf02f74f4e96a556ad3c90422cb7e874c88e5d365dedf754178f74110247ec7d39f0df2b9385cb0b0d837278fb64572b1419b05d",
+                        "index": 7
                     }
                 ]
             },
@@ -63,7 +83,7 @@
             "slot": 0,
             "proposerIndex": 0,
             "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
-            "stateRoot": "0xdacde812f2c3cda814112c3fd59c4e235f2587dddeb5f0c89ff9934cd640459d",
+            "stateRoot": "0xc32b558cace8a84fc5e7289f22c70ff47c6f875dced8afd9b620616ca0a2425c",
             "body": {
                 "attestations": {
                     "data": []
@@ -75,15 +95,14 @@
                 "valid": true,
                 "checks": {
                     "headSlot": 1,
-                    "headRoot": "0x6c6f7159b2fa43910ed56de0b286e71a47ac5f0499128fbbfeb13a69c2c2f7d3",
                     "headRootLabel": "base"
                 },
                 "stepType": "block",
                 "block": {
                     "slot": 1,
                     "proposerIndex": 1,
-                    "parentRoot": "0xd4377d11ee6650828facb55264530977b7f50f2ba233076b4b16a0d653a1dd99",
-                    "stateRoot": "0x81e1da9d62dc8d8ed3df5b0e3f2ce85835418ab1a642da3cab2c78d3b08f70fb",
+                    "parentRoot": "0xf0842b4c0bdd1150e152945f9f5425d9bce43c1e63fb9d84212100bd7b6efa53",
+                    "stateRoot": "0xf2342977f514384dbdc09b994916774ffb1aa2a4ce7d7dd2045827acbf4ee565",
                     "body": {
                         "attestations": {
                             "data": []
@@ -96,15 +115,14 @@
                 "valid": true,
                 "checks": {
                     "headSlot": 2,
-                    "headRoot": "0xf52d7bb409c379b84ad321bbc63dc4bdf2c330cdfd9b9eb48e39bbe116857052",
                     "headRootLabel": "fork_a_2"
                 },
                 "stepType": "block",
                 "block": {
                     "slot": 2,
                     "proposerIndex": 2,
-                    "parentRoot": "0x6c6f7159b2fa43910ed56de0b286e71a47ac5f0499128fbbfeb13a69c2c2f7d3",
-                    "stateRoot": "0xa64c92736778459426543df50263a60c0ed0f1b0f0f92308b7a8eb799281b796",
+                    "parentRoot": "0xf46d4a15b8a3d7f14ea6f60dfa50d2dd7d3ff70b3b850e4df3d2f262637a3974",
+                    "stateRoot": "0xaef0b9fd0d7788b0312224984dc7d57761389c279f5899c0dd4592bcb311848e",
                     "body": {
                         "attestations": {
                             "data": []
@@ -116,79 +134,17 @@
             {
                 "valid": true,
                 "checks": {
-                    "headSlot": 2,
-                    "headRoot": "0xf52d7bb409c379b84ad321bbc63dc4bdf2c330cdfd9b9eb48e39bbe116857052",
-                    "headRootLabel": "fork_a_2"
-                },
-                "stepType": "block",
-                "block": {
-                    "slot": 2,
-                    "proposerIndex": 2,
-                    "parentRoot": "0x6c6f7159b2fa43910ed56de0b286e71a47ac5f0499128fbbfeb13a69c2c2f7d3",
-                    "stateRoot": "0xa64c92736778459426543df50263a60c0ed0f1b0f0f92308b7a8eb799281b796",
-                    "body": {
-                        "attestations": {
-                            "data": []
-                        }
-                    },
-                    "blockRootLabel": "fork_b_2"
-                }
-            },
-            {
-                "valid": true,
-                "checks": {
-                    "headSlot": 2,
-                    "headRoot": "0xf52d7bb409c379b84ad321bbc63dc4bdf2c330cdfd9b9eb48e39bbe116857052",
-                    "headRootLabel": "fork_a_2"
-                },
-                "stepType": "block",
-                "block": {
-                    "slot": 2,
-                    "proposerIndex": 2,
-                    "parentRoot": "0x6c6f7159b2fa43910ed56de0b286e71a47ac5f0499128fbbfeb13a69c2c2f7d3",
-                    "stateRoot": "0xa64c92736778459426543df50263a60c0ed0f1b0f0f92308b7a8eb799281b796",
-                    "body": {
-                        "attestations": {
-                            "data": []
-                        }
-                    },
-                    "blockRootLabel": "fork_c_2"
-                }
-            },
-            {
-                "valid": true,
-                "checks": {
-                    "headSlot": 3,
-                    "headRoot": "0xeaae0588a80712eed290e4289de57e24d082a4ac153d08c4e9fac6f02f76b234",
-                    "headRootLabel": "fork_c_3"
+                    "lexicographicHeadAmong": [
+                        "fork_a_2",
+                        "fork_b_3"
+                    ]
                 },
                 "stepType": "block",
                 "block": {
                     "slot": 3,
                     "proposerIndex": 3,
-                    "parentRoot": "0xf52d7bb409c379b84ad321bbc63dc4bdf2c330cdfd9b9eb48e39bbe116857052",
-                    "stateRoot": "0xf6b0d29f96d1ea9359a1149baf2dc5728c2dd9fb742c86528e20f8999f7abb47",
-                    "body": {
-                        "attestations": {
-                            "data": []
-                        }
-                    },
-                    "blockRootLabel": "fork_c_3"
-                }
-            },
-            {
-                "valid": true,
-                "checks": {
-                    "headSlot": 3,
-                    "headRoot": "0xeaae0588a80712eed290e4289de57e24d082a4ac153d08c4e9fac6f02f76b234",
-                    "headRootLabel": "fork_c_3"
-                },
-                "stepType": "block",
-                "block": {
-                    "slot": 3,
-                    "proposerIndex": 3,
-                    "parentRoot": "0xf52d7bb409c379b84ad321bbc63dc4bdf2c330cdfd9b9eb48e39bbe116857052",
-                    "stateRoot": "0xf6b0d29f96d1ea9359a1149baf2dc5728c2dd9fb742c86528e20f8999f7abb47",
+                    "parentRoot": "0xf46d4a15b8a3d7f14ea6f60dfa50d2dd7d3ff70b3b850e4df3d2f262637a3974",
+                    "stateRoot": "0xe2e8ebd6b8f1b68a38fe1d95f79167c90c1e9ecdd163b341bc18dfe6e3cef587",
                     "body": {
                         "attestations": {
                             "data": []
@@ -200,31 +156,186 @@
             {
                 "valid": true,
                 "checks": {
-                    "headSlot": 4,
-                    "headRoot": "0xba99bb0393fa501cbbfeabb370da7d24222c991ec1a69976ae85aaeb4cb1391b",
-                    "headRootLabel": "fork_b_4"
+                    "lexicographicHeadAmong": [
+                        "fork_a_2",
+                        "fork_b_3",
+                        "fork_c_4"
+                    ]
                 },
                 "stepType": "block",
                 "block": {
                     "slot": 4,
-                    "proposerIndex": 0,
-                    "parentRoot": "0xeaae0588a80712eed290e4289de57e24d082a4ac153d08c4e9fac6f02f76b234",
-                    "stateRoot": "0x6409b7f681db10f10b8ed8e43ab7652cfa5f2132970371c87970edb2582d38ac",
+                    "proposerIndex": 4,
+                    "parentRoot": "0xf46d4a15b8a3d7f14ea6f60dfa50d2dd7d3ff70b3b850e4df3d2f262637a3974",
+                    "stateRoot": "0x8e4ed2c83a8825010f4af4be4fa7239047b27983af7fabdef6664fdb2afa3bec",
                     "body": {
                         "attestations": {
                             "data": []
                         }
                     },
-                    "blockRootLabel": "fork_b_4"
+                    "blockRootLabel": "fork_c_4"
+                }
+            },
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 5,
+                    "headRootLabel": "fork_c_5"
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 5,
+                    "proposerIndex": 5,
+                    "parentRoot": "0xd3570832221c63bc561e5c95586231b9375c494272732fe0984ff3dce834a260",
+                    "stateRoot": "0x2735a89429c75babba0f4a9845bb502621e29422d576ff431ecd178a8c9c84f4",
+                    "body": {
+                        "attestations": {
+                            "data": [
+                                {
+                                    "aggregationBits": {
+                                        "data": [
+                                            true
+                                        ]
+                                    },
+                                    "data": {
+                                        "slot": 4,
+                                        "head": {
+                                            "root": "0xd3570832221c63bc561e5c95586231b9375c494272732fe0984ff3dce834a260",
+                                            "slot": 4
+                                        },
+                                        "target": {
+                                            "root": "0xd3570832221c63bc561e5c95586231b9375c494272732fe0984ff3dce834a260",
+                                            "slot": 4
+                                        },
+                                        "source": {
+                                            "root": "0xf0842b4c0bdd1150e152945f9f5425d9bce43c1e63fb9d84212100bd7b6efa53",
+                                            "slot": 0
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "blockRootLabel": "fork_c_5"
+                }
+            },
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 5,
+                    "headRootLabel": "fork_c_5"
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 6,
+                    "proposerIndex": 6,
+                    "parentRoot": "0x2e0fd807e29cee184c4db61ef57d0dc2f1861e07cf172bedc37ef81c6ce71d3a",
+                    "stateRoot": "0xd74d93fc8035f68cac7c0fba1dc39a0879e614943c620a22a06b95d1d22d7abf",
+                    "body": {
+                        "attestations": {
+                            "data": [
+                                {
+                                    "aggregationBits": {
+                                        "data": [
+                                            true
+                                        ]
+                                    },
+                                    "data": {
+                                        "slot": 4,
+                                        "head": {
+                                            "root": "0xd3570832221c63bc561e5c95586231b9375c494272732fe0984ff3dce834a260",
+                                            "slot": 4
+                                        },
+                                        "target": {
+                                            "root": "0xd3570832221c63bc561e5c95586231b9375c494272732fe0984ff3dce834a260",
+                                            "slot": 4
+                                        },
+                                        "source": {
+                                            "root": "0xf0842b4c0bdd1150e152945f9f5425d9bce43c1e63fb9d84212100bd7b6efa53",
+                                            "slot": 0
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "blockRootLabel": "fork_b_6"
+                }
+            },
+            {
+                "valid": true,
+                "checks": {
+                    "headSlot": 7,
+                    "headRootLabel": "fork_b_7"
+                },
+                "stepType": "block",
+                "block": {
+                    "slot": 7,
+                    "proposerIndex": 7,
+                    "parentRoot": "0x9132a52232b7ce57f79a139c617902f505244273575f8d633df17c9b41e48c5b",
+                    "stateRoot": "0x44f4abc168d6028ae304c672b99164c090afaa6541240291446ac2aa3c812c43",
+                    "body": {
+                        "attestations": {
+                            "data": [
+                                {
+                                    "aggregationBits": {
+                                        "data": [
+                                            true
+                                        ]
+                                    },
+                                    "data": {
+                                        "slot": 4,
+                                        "head": {
+                                            "root": "0xd3570832221c63bc561e5c95586231b9375c494272732fe0984ff3dce834a260",
+                                            "slot": 4
+                                        },
+                                        "target": {
+                                            "root": "0xd3570832221c63bc561e5c95586231b9375c494272732fe0984ff3dce834a260",
+                                            "slot": 4
+                                        },
+                                        "source": {
+                                            "root": "0xf0842b4c0bdd1150e152945f9f5425d9bce43c1e63fb9d84212100bd7b6efa53",
+                                            "slot": 0
+                                        }
+                                    }
+                                },
+                                {
+                                    "aggregationBits": {
+                                        "data": [
+                                            false,
+                                            true,
+                                            true
+                                        ]
+                                    },
+                                    "data": {
+                                        "slot": 6,
+                                        "head": {
+                                            "root": "0x9132a52232b7ce57f79a139c617902f505244273575f8d633df17c9b41e48c5b",
+                                            "slot": 6
+                                        },
+                                        "target": {
+                                            "root": "0x9132a52232b7ce57f79a139c617902f505244273575f8d633df17c9b41e48c5b",
+                                            "slot": 6
+                                        },
+                                        "source": {
+                                            "root": "0xf0842b4c0bdd1150e152945f9f5425d9bce43c1e63fb9d84212100bd7b6efa53",
+                                            "slot": 0
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "blockRootLabel": "fork_b_7"
                 }
             }
         ],
-        "maxSlot": 4,
+        "maxSlot": 7,
         "_info": {
-            "hash": "0xcab5c037a75dafe2d4f9131e5120c881f7b0be8abd8a58b6e82487ee615fb1bf",
+            "hash": "0x96deef50fc9b7211f3cbc68c09abd07afa46ee1210521bdd44ddff2d37179491",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_fork_choice_reorgs.py::test_three_way_fork_competition[fork_Devnet]",
-            "description": "Three competing forks with progressive elimination until one wins.\n\n    Scenario\n    --------\n    Three forks (A, B, C) compete simultaneously. Fork choice progressively\n    eliminates weaker forks as stronger ones extend.\n\n    Fork Topology:\n                  base (slot 1)\n                   /   |                       /    |                    fork_a  fork_b  fork_c  (slot 2)\n                |       |       |\n                |       |       +--- fork_c_3 (slot 3)\n                |       +--- fork_b_3 (slot 3)\n                |       +--- fork_b_4 (slot 4) \u2190 Winner\n                +--- abandoned\n\n    Expected Behavior\n    -----------------\n    1. All three forks start at slot 2 (three-way tie)\n    2. Fork C extends to slot 3 \u2192 becomes head\n    3. Fork B extends to slot 3 \u2192 ties with fork C at depth 2\n    4. Fork B extends to slot 4 \u2192 wins with depth 3\n    5. Forks A and C become non-canonical\n\n    Reorg Sequence:\n        - Initial: fork_a (tie-breaker among three)\n        - After fork_c_3: fork_c (depth advantage)\n        - After fork_b_3: fork_c (tie, maintains head)\n        - After fork_b_4: fork_b (final winner)\n\n    Why This Matters\n    ----------------\n    Multi-fork scenarios can occur during:\n    - Network partitions splitting validators 3+ ways\n    - Rapid block production creating multiple conflicting proposals\n    - Byzantine validators intentionally creating competing forks\n\n    Properties verified:\n    - Fork choice handles 3+ simultaneous competing forks\n    - Head selection remains consistent and deterministic\n    - Progressive elimination works correctly\n    - Final winner is objectively the heaviest fork",
+            "description": "Three competing forks with progressive elimination until one wins.\n\n    Scenario\n    --------\n    Three forks (A, B, C) compete from a common ancestor, each at a distinct\n    slot. Fork choice progressively eliminates weaker forks as stronger ones\n    extend.\n\n    Fork Topology:\n                       base (slot 1)\n                      /    |                            /     |                      fork_a_2  fork_b_3  fork_c_4\n              (slot 2)  (slot 3)  (slot 4)\n                |          |         |\n                |          |         +--- fork_c_5 (slot 5)\n                |          +--- fork_b_6 (slot 6)\n                |          +--- fork_b_7 (slot 7) \u2190 Winner\n                +--- abandoned\n\n    Expected Behavior\n    -----------------\n    1. Three forks created at slots 2, 3, 4 (equal weight, three-way tie)\n    2. Fork C extends to slot 5 with attestation \u2192 becomes head\n    3. Fork B extends to slot 6 (no attestation) \u2192 fork C still leads\n    4. Fork B extends to slot 7 with 2 attestations \u2192 wins\n    5. Forks A and C become non-canonical\n\n    Why This Matters\n    ----------------\n    Multi-fork scenarios can occur during:\n    - Network partitions splitting validators 3+ ways\n    - Rapid block production creating multiple conflicting proposals\n    - Byzantine validators intentionally creating competing forks\n\n    Properties verified:\n    - Fork choice handles 3+ simultaneous competing forks\n    - Head selection remains consistent and deterministic\n    - Progressive elimination works correctly\n    - Final winner is objectively the heaviest fork",
             "fixtureFormat": "fork_choice_test"
         }
     }

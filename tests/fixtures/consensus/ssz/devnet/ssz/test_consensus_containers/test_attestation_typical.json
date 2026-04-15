@@ -22,8 +22,9 @@
             }
         },
         "serialized": "0x2a000000000000006400000000000000010101010101010101010101010101010101010101010101010101010101010164000000000000000202020202020202020202020202020202020202020202020202020202020202630000000000000003030303030303030303030303030303030303030303030303030303030303033200000000000000",
+        "root": "0xff39fb2ef16bbd80a3f47b387cf74573219efbeecc84d56ca15262f6541d3a57",
         "_info": {
-            "hash": "0x21b8a7e2446bf83eff001dbfb59142901df6388d73bfd49caa83377d4e5fe449",
+            "hash": "0xfed1d279774025013fd6ea748d5d30ec72831247b184cb85f692901bb21aadbb",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/ssz/test_consensus_containers.py::test_attestation_typical[fork_Devnet]",
             "description": "SSZ roundtrip for Attestation with typical values.",

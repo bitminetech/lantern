@@ -14,8 +14,9 @@
             }
         },
         "serialized": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "root": "0xdb56114e00fdd4c1f85c892bf35ac9a89289aaecb1ebd0a96cde606a748b5d71",
         "_info": {
-            "hash": "0xdbac8df235fdfb049d2351e0374434160f559b39019e96eeefe86c57395c0ca8",
+            "hash": "0x0794f1e6a210366690837d1b3bcecc2cb642693069c98dd9ad6f12cc2cd9c60d",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/ssz/test_networking_containers.py::test_status_zero[fork_Devnet]",
             "description": "SSZ roundtrip for Status with zero values.",

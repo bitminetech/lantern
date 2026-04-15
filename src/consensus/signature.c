@@ -130,6 +130,7 @@ static bool prepare_recursive_child(
         pubkey_index += 1u;
     }
 
+    pq_xmss_aggregation_setup_verifier();
     int verify_rc = pq_verify_aggregated_signatures(
         (const struct PQSignatureSchemePublicKey *const *)out_child->pubkey_handles,
         participant_count,

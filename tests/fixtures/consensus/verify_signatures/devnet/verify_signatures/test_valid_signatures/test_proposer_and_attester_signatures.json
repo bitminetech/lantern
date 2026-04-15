@@ -31,18 +31,18 @@
             "validators": {
                 "data": [
                     {
-                        "attestationPubkey": "0xcd64341d83f28533f239153535b45209592342325ed31a5792b2e61935648748d41c384850baf6386c43bf19bfb63f53eb2c8c0b",
-                        "proposalPubkey": "0x5eba321a84f55461e2c0e94036d24e5107720876752d5c4f6e03183a7e7f1856e372c60dbc6fbc0450c26e58ba402f1da6952a73",
+                        "attestationPubkey": "0x80a6f13b39b9c26cd91edb542bdb9e051b61223a15f5de18e53e6a361720cd65c06a114e87531241cc535f39156f0f2cf0877647",
+                        "proposalPubkey": "0xdedd8e5a890a2c339ffbca1ce85b710384670508df73ce33116bcd60befbef5a560e6304e3635a58e12b6b542c1bc6583a16455a",
                         "index": 0
                     },
                     {
-                        "attestationPubkey": "0x0c8f12450a0f4375d8f387643a66bd4084a76a522062790d8e961b38dfe3497444af494376e3c76f3007681a4016221434cdf51d",
-                        "proposalPubkey": "0x8b31ba434a9e116dcd99a11535d8fb480fe67517c20eb1117157ca1b1b6b0c5c9d9a632e3268986f35856c337fc18d7b6d4f926a",
+                        "attestationPubkey": "0x7612d36fb7667d1c2f19a821d6a63b3cc17f214baedecb57e6eed4600dabf055185de12c6418db6b79f71004303bfe3a753c9727",
+                        "proposalPubkey": "0x1dcca64f8f9956470c2a427ca669d9359f22f202387ba24440e77200ec57983515451279124ee834a62f77560b1c166b0eb2885b",
                         "index": 1
                     },
                     {
-                        "attestationPubkey": "0x454d107dc0156e61baee057497d5667adb027d68f6fffb2bc61c6a38e45eed3531c9bd77e64f610044b26b1ec4047929bcfed946",
-                        "proposalPubkey": "0xac91d91a23744669bb2a5356605a161a5ae28c1e872fcf1d1e8cc63cb278447d8b889c77ea21884bbd8ecf2ad4824c66ae098a12",
+                        "attestationPubkey": "0xd703e67ce93c9b61b2ae88063ce60f13822efe03d8f089582615032e2b44346fa0199c2320dca35012ec1d414dc3b835da11cd73",
+                        "proposalPubkey": "0x9ee9237afcc3d75c0a8271412f2ac10f03c0da760e545a21cc7eb8331381f62bec027d1dac093b7a09057c187dd46e6231c0c007",
                         "index": 2
                     }
                 ]
@@ -55,11 +55,11 @@
             }
         },
         "signedBlock": {
-            "message": {
+            "block": {
                 "slot": 1,
                 "proposerIndex": 1,
-                "parentRoot": "0xe8aa857bde7571d50ed47ccf17f8e804a151729038762d4ba1a2412e1b4923e9",
-                "stateRoot": "0xb07c6946b376cf1bafd7c4f927c3de2fd310f9f1acd8c8f3aa43df745f9e733c",
+                "parentRoot": "0xf1976282098b111ce7e5a53569fbc9dc2821e2ea4ccce166b5ae500af824a01a",
+                "stateRoot": "0x5ebd31117d810547c07d409cd19048b7c3c50056ec6dc227efc45e29bb25e91b",
                 "body": {
                     "attestations": {
                         "data": []
@@ -70,11 +70,11 @@
                 "attestationSignatures": {
                     "data": []
                 },
-                "proposerSignature": "0x2400000044840475461269220d4ac30cdd058f6ac69f7a69c39d7d13ffd49236280100000400000049b2b64f27982463438e7e7d86168a20ac5e5e4af7ae2870be90076941fe6d60825ae942f1b85b39be2865267dbdb0171e4e5c3d6497ef217ea7de00ee316c5733d6a92889892c38bfee6525572fab015eb72f0757921030a0ec2507b482383d848985677d644e52d97cbe34d78ad22a84009958121da45a4d9eb37e71bef802dab5fd2b7c87bd79f5da7d5f6ce8396299375b6d695ada4bba33ac19e2511c05d9c2cf6b0ecaa33a07b0f406a82f6048b858ec33282ed90bbd6a122778cecf79af53ed1ab51cf9722357a863b574691fb2633d155e53815db72ee8198f0e1c44a65eb24b13d14a7aac436d69dfd89874e246757ea919601492fea17600163e7df994f178c473d3179d351b60acdd7f68199805021ba9d85fc98cc6467af1565fe118df7d63cd833975b350196805e27ea8bbe4477a1a903474e3345273d953284599fa629808a92adbde551da45edc3ea0bf1b31dffc4b099578a214d4009504b4c5541e51aaba6fc5e4b827f285a34d253c1a1335572e2b143bc8698eedfd72"
+                "proposerSignature": "0x240000004c085b5d23edb4134ea892616d1f1557d99ef712fcb78b205440c4502801000004000000f7f7c36af533fe74340142391949350faa20581a5c87d64c53ee6720102b6e30ac25be52c7f2cd41fecd2756aef78b04bba0d34f4318ae79c9e6e413243bd1179f041f05011f6602e4ca627225214046aac8a9160acacb2700e2c4069ea84c55f5ed2d332f0dcf04e6b08c39f7bfbf2f7b5d9a466c63fa0f12585848b431972a4fa077732f21a2261d242f350d1f7107807c9a27ce6a0e30fc78b97820e69a13b875b1445eb9910bf29b44558ad8ce112ea47e3caa9823122b2ebe0a0bb6f758fd66357203c6a904d5355c2e6185180ce09de26e5fbfd376dea48108d6163f75506c033c12ddf06d82b3243ae34a840226f8a232fb8d4829da88316a3283921c0ef910563b22a83d5ff922275fc92759b1271c4fe74a7e1d936fd062a3f4da71236a514a8d8e9a4bf22ed044fa657843cf2fa163c2a51376285f3d680d1426680a6bd77947a06f15919a413bf7f521726195f450ab62f41cb8ac850728e0d817425543584d078e03e50738781ae6c86dda923f4074c1f2698a95b61ef3b7ad1f"
             }
         },
         "_info": {
-            "hash": "0xb28e895d056e53361f8cd162a5d136076b2e40b6b86630d381a04bde5ceef51b",
+            "hash": "0x87ffe73b5441816cddc12984824467ed1907a8cd304fb8bb73015cea2ec7d866",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/verify_signatures/test_valid_signatures.py::test_proposer_and_attester_signatures[fork_Devnet]",
             "description": "Test valid proposer and attester signatures in SignedBlock.\n\n    Scenario\n    --------\n    - Single block at slot 1\n    - 3 validators in the genesis state\n    - Aggregated attestation from validators 0 and 2 (in addition to proposer)\n    - Verifies that all signatures are generated and aggregated correctly\n\n    Expected Behavior\n    -----------------\n    1. Proposer's signature in SignedBlock can be verified against\n       the validator's pubkey in the state\n    2. Aggregated attestation signatures can be verified against the validators'\n       pubkeys in the state\n\n    Why This Matters\n    ----------------\n    This test verifies multi-validator signature aggregation:\n    - Multiple XMSS keys are generated for different validators\n    - Attestations with same data are properly aggregated\n    - leanVM signature aggregation works with multiple validators",

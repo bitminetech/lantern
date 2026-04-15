@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -113,59 +114,31 @@ static void expect_checkpoint_seed(const LanternCheckpoint *checkpoint, uint64_t
     expect_root_seed(&checkpoint->root, seed);
 }
 
-static uint8_t *read_fixture_bytes(const char *relative_path, size_t *out_len) {
-    CHECK(relative_path != NULL);
-    char path[PATH_MAX];
-    int written = snprintf(path, sizeof(path), "%s/%s", LANTERN_TEST_FIXTURE_DIR, relative_path);
-    CHECK(written > 0);
-    CHECK((size_t)written < sizeof(path));
-
-    FILE *fp = fopen(path, "rb");
-    CHECK(fp != NULL);
-    CHECK(fseek(fp, 0, SEEK_END) == 0);
-    long length = ftell(fp);
-    CHECK(length >= 0);
-    CHECK(fseek(fp, 0, SEEK_SET) == 0);
-
-    uint8_t *buffer = (uint8_t *)malloc((size_t)length);
-    CHECK(buffer != NULL);
-    size_t read = fread(buffer, 1, (size_t)length, fp);
-    CHECK(read == (size_t)length);
-    fclose(fp);
-
-    if (out_len) {
-        *out_len = (size_t)length;
+static bool build_consensus_fixture_path(const char *relative_path, char *path, size_t path_len) {
+    if (!relative_path || !path || path_len == 0) {
+        return false;
     }
-    return buffer;
+    const char *trimmed = relative_path;
+    static const char consensus_prefix[] = "consensus/";
+    if (strncmp(relative_path, consensus_prefix, sizeof(consensus_prefix) - 1u) == 0) {
+        trimmed = relative_path + (sizeof(consensus_prefix) - 1u);
+    }
+    int written = snprintf(path, path_len, "%s/%s", LANTERN_CONSENSUS_FIXTURE_DIR, trimmed);
+    return written > 0 && (size_t)written < path_len;
 }
 
-static void maybe_write_fixture_bytes(
-    const char *env_var,
-    const char *relative_path,
-    const uint8_t *data,
-    size_t len) {
-    const char *enabled = getenv(env_var);
-    if (!enabled || enabled[0] == '\0') {
-        return;
-    }
-    CHECK(relative_path != NULL);
-    CHECK(data != NULL || len == 0);
-
+static bool consensus_fixture_exists(const char *relative_path) {
     char path[PATH_MAX];
-    int written = snprintf(path, sizeof(path), "%s/%s", LANTERN_TEST_FIXTURE_DIR, relative_path);
-    CHECK(written > 0);
-    CHECK((size_t)written < sizeof(path));
+    if (!build_consensus_fixture_path(relative_path, path, sizeof(path))) {
+        return false;
+    }
 
-    FILE *fp = fopen(path, "wb");
-    CHECK(fp != NULL);
-    if (len > 0) {
-        CHECK(fwrite(data, 1, len, fp) == len);
+    FILE *fp = fopen(path, "rb");
+    if (!fp) {
+        return false;
     }
     fclose(fp);
-
-    printf("wrote fixture %s (%zu bytes)\n", relative_path, len);
-    fflush(stdout);
-    exit(0);
+    return true;
 }
 
 struct mock_stream_ctx {
@@ -311,43 +284,6 @@ static void expect_vote_view(
     expect_checkpoint_seed(&vote->source, source_slot, source_seed);
 }
 
-static void expect_aggregated_attestation_view(
-    const LanternAggregatedAttestation *attestation,
-    uint64_t validator_id,
-    uint64_t slot,
-    uint64_t head_slot,
-    uint8_t head_seed,
-    uint64_t target_slot,
-    uint8_t target_seed,
-    uint64_t source_slot,
-    uint8_t source_seed) {
-    CHECK(attestation != NULL);
-    CHECK(attestation->data.slot == slot);
-    expect_checkpoint_seed(&attestation->data.head, head_slot, head_seed);
-    expect_checkpoint_seed(&attestation->data.target, target_slot, target_seed);
-    expect_checkpoint_seed(&attestation->data.source, source_slot, source_seed);
-    CHECK(attestation->aggregation_bits.bit_length == validator_id + 1u);
-    CHECK(lantern_bitlist_get(&attestation->aggregation_bits, (size_t)validator_id));
-}
-
-static void expect_signature_proof_seed(
-    const LanternAggregatedSignatureProof *proof,
-    uint64_t validator_id,
-    uint8_t seed,
-    size_t length) {
-    CHECK(proof != NULL);
-    CHECK(proof->participants.bit_length == validator_id + 1u);
-    CHECK(lantern_bitlist_get(&proof->participants, (size_t)validator_id));
-    CHECK(proof->proof_data.length == length);
-    if (length == 0) {
-        return;
-    }
-    CHECK(proof->proof_data.data != NULL);
-    for (size_t i = 0; i < length; ++i) {
-        CHECK(proof->proof_data.data[i] == (uint8_t)(seed + i));
-    }
-}
-
 static void check_block_signatures_equal(
     const LanternBlockSignatures *expected,
     const LanternBlockSignatures *actual) {
@@ -397,54 +333,6 @@ static void check_signed_block_equal(
             &actual->block.body.attestations.data[i]);
     }
     check_block_signatures_equal(&expected->signatures, &actual->signatures);
-}
-
-static void expect_signed_vote_fixture(const LanternSignedVote *vote) {
-    CHECK(vote != NULL);
-    expect_vote_view(
-        &vote->data,
-        9,
-        96,
-        97,
-        0x33,
-        96,
-        0x53,
-        94,
-        0x73);
-}
-
-static void expect_signed_block_fixture(const LanternSignedBlock *block) {
-    CHECK(block != NULL);
-    CHECK(block->block.slot == 72);
-    CHECK(block->block.proposer_index == 5);
-    expect_root_seed(&block->block.parent_root, 0x24);
-    expect_root_seed(&block->block.state_root, 0x74);
-    CHECK(block->block.body.attestations.length == 2);
-    CHECK(block->block.body.attestations.data != NULL);
-    expect_aggregated_attestation_view(
-        &block->block.body.attestations.data[0],
-        9,
-        71,
-        72,
-        0x24,
-        71,
-        0x44,
-        69,
-        0x64);
-    expect_aggregated_attestation_view(
-        &block->block.body.attestations.data[1],
-        10,
-        70,
-        71,
-        0x29,
-        70,
-        0x49,
-        68,
-        0x69);
-    CHECK(block->signatures.attestation_signatures.length == 2);
-    CHECK(block->signatures.attestation_signatures.data != NULL);
-    expect_signature_proof_seed(&block->signatures.attestation_signatures.data[0], 9, 0xC4, 8);
-    expect_signature_proof_seed(&block->signatures.attestation_signatures.data[1], 10, 0xC7, 8);
 }
 
 static uint32_t rng_state = UINT32_C(0x6ac1e39d);
@@ -622,8 +510,7 @@ static int load_signed_block_fixture(const struct block_fixture_case *spec, Lant
         return -1;
     }
     char path[PATH_MAX];
-    int written = snprintf(path, sizeof(path), "%s/%s", LANTERN_TEST_FIXTURE_DIR, spec->fixture);
-    if (written <= 0 || (size_t)written >= sizeof(path)) {
+    if (!build_consensus_fixture_path(spec->fixture, path, sizeof(path))) {
         return -1;
     }
 
@@ -799,309 +686,6 @@ static void test_replay_devnet_block_payloads(void) {
     }
 }
 
-static void test_status_fixture_roundtrip(void) {
-    size_t fixture_len = 0;
-    uint8_t *fixture = read_fixture_bytes("networking/status_leanspec.ssz", &fixture_len);
-    size_t snappy_fixture_len = 0;
-    uint8_t *snappy_fixture = read_fixture_bytes("networking/status_leanspec.snappy", &snappy_fixture_len);
-
-    LanternStatusMessage decoded = {0};
-    check_zero(lantern_network_status_decode(&decoded, fixture, fixture_len), "status fixture decode");
-    expect_checkpoint_seed(&decoded.finalized, 42, 0x11);
-    expect_checkpoint_seed(&decoded.head, 96, 0x41);
-
-    uint8_t encoded[128];
-    size_t written = 0;
-    check_zero(
-        lantern_network_status_encode(&decoded, encoded, sizeof(encoded), &written),
-        "status fixture encode");
-    CHECK(written == fixture_len);
-    CHECK(memcmp(encoded, fixture, fixture_len) == 0);
-
-    size_t max_compressed = 0;
-    CHECK(lantern_snappy_max_compressed_size(fixture_len, &max_compressed) == LANTERN_SNAPPY_OK);
-    uint8_t *compressed = (uint8_t *)malloc(max_compressed);
-    CHECK(compressed != NULL);
-    size_t compressed_len = 0;
-    CHECK(
-        lantern_snappy_compress(
-            fixture,
-            fixture_len,
-            compressed,
-            max_compressed,
-            &compressed_len)
-        == LANTERN_SNAPPY_OK);
-
-    LanternStatusMessage snappy_decoded = {0};
-    check_zero(
-        lantern_network_status_decode_snappy(&snappy_decoded, compressed, compressed_len),
-        "status fixture decode snappy");
-    expect_checkpoint_seed(&snappy_decoded.finalized, 42, 0x11);
-    expect_checkpoint_seed(&snappy_decoded.head, 96, 0x41);
-
-    LanternStatusMessage leanspec_snappy = {0};
-    check_zero(
-        lantern_network_status_decode_snappy(&leanspec_snappy, snappy_fixture, snappy_fixture_len),
-        "status fixture decode snappy fixture");
-    expect_checkpoint_seed(&leanspec_snappy.finalized, 42, 0x11);
-    expect_checkpoint_seed(&leanspec_snappy.head, 96, 0x41);
-
-    uint8_t *snappy_roundtrip = (uint8_t *)malloc(fixture_len);
-    CHECK(snappy_roundtrip != NULL);
-    size_t snappy_roundtrip_written = fixture_len;
-    CHECK(
-        lantern_snappy_decompress(
-            snappy_fixture,
-            snappy_fixture_len,
-            snappy_roundtrip,
-            fixture_len,
-            &snappy_roundtrip_written)
-        == LANTERN_SNAPPY_OK);
-    CHECK(snappy_roundtrip_written == fixture_len);
-    CHECK(memcmp(snappy_roundtrip, fixture, fixture_len) == 0);
-
-    free(snappy_roundtrip);
-    free(compressed);
-    free(snappy_fixture);
-    free(fixture);
-}
-
-static void test_blocks_by_root_request_fixture(void) {
-    size_t fixture_len = 0;
-    uint8_t *fixture = read_fixture_bytes("networking/blocks_by_root_request_leanspec.ssz", &fixture_len);
-
-    LanternBlocksByRootRequest decoded;
-    lantern_blocks_by_root_request_init(&decoded);
-    check_zero(
-        lantern_network_blocks_by_root_request_decode(&decoded, fixture, fixture_len),
-        "request fixture decode");
-    CHECK(decoded.roots.length == 3);
-    expect_root_seed(&decoded.roots.items[0], 0x21);
-    expect_root_seed(&decoded.roots.items[1], 0x52);
-    expect_root_seed(&decoded.roots.items[2], 0x83);
-
-    uint8_t encoded[128];
-    size_t written = 0;
-    check_zero(
-        lantern_network_blocks_by_root_request_encode(&decoded, encoded, sizeof(encoded), &written),
-        "request fixture encode");
-    CHECK(written == fixture_len);
-    CHECK(memcmp(encoded, fixture, fixture_len) == 0);
-
-    size_t max_compressed = 0;
-    CHECK(lantern_snappy_max_compressed_size(fixture_len, &max_compressed) == LANTERN_SNAPPY_OK);
-    uint8_t *compressed = (uint8_t *)malloc(max_compressed);
-    CHECK(compressed != NULL);
-    size_t compressed_len = 0;
-    CHECK(
-        lantern_snappy_compress(
-            fixture,
-            fixture_len,
-            compressed,
-            max_compressed,
-            &compressed_len)
-        == LANTERN_SNAPPY_OK);
-
-    LanternBlocksByRootRequest snappy_decoded;
-    lantern_blocks_by_root_request_init(&snappy_decoded);
-    check_zero(
-        lantern_network_blocks_by_root_request_decode_snappy(&snappy_decoded, compressed, compressed_len),
-        "request fixture decode snappy");
-    CHECK(snappy_decoded.roots.length == decoded.roots.length);
-    expect_root_seed(&snappy_decoded.roots.items[0], 0x21);
-    expect_root_seed(&snappy_decoded.roots.items[1], 0x52);
-    expect_root_seed(&snappy_decoded.roots.items[2], 0x83);
-
-    free(compressed);
-    free(fixture);
-    lantern_blocks_by_root_request_reset(&decoded);
-    lantern_blocks_by_root_request_reset(&snappy_decoded);
-}
-
-/* Helper to build a block matching the fixture values from Python leanSpec. */
-static void build_fixture_block(
-    LanternSignedBlock *out,
-    uint8_t seed,
-    uint64_t base_slot,
-    uint64_t proposer_index,
-    size_t attestation_count) {
-    lantern_signed_block_init(out);
-    out->block.slot = base_slot;
-    out->block.proposer_index = proposer_index;
-    fill_bytes(out->block.parent_root.bytes, LANTERN_ROOT_SIZE, seed);
-    fill_bytes(out->block.state_root.bytes, LANTERN_ROOT_SIZE, (uint8_t)(seed + 0x50));
-
-    /* Build attestations matching the Python fixture format */
-    for (size_t i = 0; i < attestation_count; ++i) {
-        LanternAggregatedAttestation agg;
-        lantern_aggregated_attestation_init(&agg);
-        uint8_t att_seed = (uint8_t)(seed + i * 5);
-        uint64_t validator_id = (proposer_index + i + seed) % 16;
-        uint64_t att_slot = base_slot + i + 1;
-        agg.data.slot = att_slot;
-        agg.data.head.slot = att_slot + 1;
-        fill_bytes(agg.data.head.root.bytes, LANTERN_ROOT_SIZE, att_seed);
-        agg.data.target.slot = att_slot + 2;
-        fill_bytes(agg.data.target.root.bytes, LANTERN_ROOT_SIZE, (uint8_t)(att_seed + 0x20));
-        agg.data.source.slot = att_slot;
-        fill_bytes(agg.data.source.root.bytes, LANTERN_ROOT_SIZE, (uint8_t)(att_seed + 0x40));
-        check_zero(lantern_bitlist_resize(&agg.aggregation_bits, (size_t)(validator_id + 1)), "agg bits resize");
-        check_zero(lantern_bitlist_set(&agg.aggregation_bits, (size_t)validator_id, true), "agg bits set");
-        check_zero(lantern_aggregated_attestations_append(&out->block.body.attestations, &agg), "agg append");
-        lantern_aggregated_attestation_reset(&agg);
-    }
-
-    /* Signatures */
-    size_t att_count = out->block.body.attestations.length;
-    check_zero(lantern_attestation_signatures_resize(&out->signatures.attestation_signatures, att_count), "sig resize");
-    for (size_t i = 0; i < att_count; ++i) {
-        LanternAggregatedSignatureProof *proof = &out->signatures.attestation_signatures.data[i];
-        const LanternAggregatedAttestation *att = &out->block.body.attestations.data[i];
-        check_zero(lantern_bitlist_resize(&proof->participants, att->aggregation_bits.bit_length), "part resize");
-        size_t byte_len = (att->aggregation_bits.bit_length + 7u) / 8u;
-        if (byte_len > 0) {
-            memcpy(proof->participants.bytes, att->aggregation_bits.bytes, byte_len);
-        }
-        uint8_t proof_seed = (uint8_t)(seed + 0xA0 + i * 3);
-        check_zero(lantern_byte_list_resize(&proof->proof_data, 8), "proof resize");
-        fill_bytes(proof->proof_data.data, 8, proof_seed);
-    }
-    fill_signature(&out->signatures.proposer_signature, (uint8_t)(seed + 0xA0 + att_count * 3));
-}
-
-static void test_signed_block_list_fixture(void) {
-    /* Build the response using C encoding (fixed-length signatures) */
-    LanternSignedBlockList resp;
-    lantern_signed_block_list_init(&resp);
-    check_zero(lantern_signed_block_list_resize(&resp, 2), "fixture response resize");
-    build_fixture_block(&resp.blocks[0], 0x10, 12, 1, 1);
-    build_fixture_block(&resp.blocks[1], 0x30, 18, 3, 2);
-
-    /* Encode using C encoder */
-    size_t encoded_capacity = 1u << 20;
-    uint8_t *encoded = (uint8_t *)malloc(encoded_capacity);
-    CHECK(encoded != NULL);
-    size_t written = 0;
-    check_zero(
-        lantern_network_signed_block_list_encode(&resp, encoded, encoded_capacity, &written),
-        "fixture response encode");
-    maybe_write_fixture_bytes(
-        "LANTERN_WRITE_BLOCKS_BY_ROOT_RESPONSE_FIXTURE",
-        "networking/blocks_by_root_response_leanspec.ssz",
-        encoded,
-        written);
-
-    /* Decode back and verify */
-    LanternSignedBlockList decoded;
-    lantern_signed_block_list_init(&decoded);
-    check_zero(
-        lantern_network_signed_block_list_decode(&decoded, encoded, written),
-        "response fixture decode");
-    CHECK(decoded.length == 2);
-
-    const LanternSignedBlock *block0 = &decoded.blocks[0];
-    CHECK(block0->block.slot == 12);
-    CHECK(block0->block.proposer_index == 1);
-    expect_root_seed(&block0->block.parent_root, 0x10);
-    expect_root_seed(&block0->block.state_root, 0x60);
-    CHECK(block0->block.body.attestations.length == 1);
-    const LanternAggregatedAttestation *block0_att0 = &block0->block.body.attestations.data[0];
-    expect_aggregated_attestation_view(block0_att0, 1, 13, 14, 0x10, 15, 0x30, 13, 0x50);
-    CHECK(block0->signatures.attestation_signatures.length == 1);
-    CHECK(block0->signatures.attestation_signatures.length == 1);
-    expect_signature_proof_seed(&block0->signatures.attestation_signatures.data[0], 1, 0xB0, 8);
-
-    const LanternSignedBlock *block1 = &decoded.blocks[1];
-    CHECK(block1->block.slot == 18);
-    CHECK(block1->block.proposer_index == 3);
-    expect_root_seed(&block1->block.parent_root, 0x30);
-    expect_root_seed(&block1->block.state_root, 0x80);
-    CHECK(block1->block.body.attestations.length == 2);
-    CHECK(block1->signatures.attestation_signatures.length == 2);
-
-    /* Test snappy roundtrip */
-    size_t max_compressed = 0;
-    CHECK(lantern_snappy_max_compressed_size(written, &max_compressed) == LANTERN_SNAPPY_OK);
-    uint8_t *compressed = (uint8_t *)malloc(max_compressed);
-    CHECK(compressed != NULL);
-    size_t compressed_len = 0;
-    CHECK(
-        lantern_snappy_compress(
-            encoded,
-            written,
-            compressed,
-            max_compressed,
-            &compressed_len)
-        == LANTERN_SNAPPY_OK);
-    LanternSignedBlockList snappy_decoded;
-    lantern_signed_block_list_init(&snappy_decoded);
-    check_zero(
-        lantern_network_signed_block_list_decode_snappy(&snappy_decoded, compressed, compressed_len),
-        "response fixture decode snappy");
-    CHECK(snappy_decoded.length == decoded.length);
-    CHECK(snappy_decoded.blocks[0].block.slot == 12);
-    CHECK(snappy_decoded.blocks[1].block.slot == 18);
-
-    free(compressed);
-    free(encoded);
-    lantern_signed_block_list_reset(&resp);
-    lantern_signed_block_list_reset(&decoded);
-    lantern_signed_block_list_reset(&snappy_decoded);
-}
-
-static void test_signed_block_list_fixture_matches_leanspec(void) {
-    size_t fixture_len = 0;
-    uint8_t *fixture = read_fixture_bytes("networking/blocks_by_root_response_leanspec.ssz", &fixture_len);
-    CHECK(fixture != NULL);
-
-    LanternSignedBlockList decoded;
-    lantern_signed_block_list_init(&decoded);
-    check_zero(
-        lantern_network_signed_block_list_decode(&decoded, fixture, fixture_len),
-        "response fixture decode leanspec");
-    CHECK(decoded.length == 2);
-
-    const LanternSignedBlock *block0 = &decoded.blocks[0];
-    CHECK(block0->block.slot == 12);
-    CHECK(block0->block.proposer_index == 1);
-    expect_root_seed(&block0->block.parent_root, 0x10);
-    expect_root_seed(&block0->block.state_root, 0x60);
-    CHECK(block0->block.body.attestations.length == 1);
-    expect_aggregated_attestation_view(
-        &block0->block.body.attestations.data[0],
-        1,
-        13,
-        14,
-        0x10,
-        15,
-        0x30,
-        13,
-        0x50);
-    CHECK(block0->signatures.attestation_signatures.length == 1);
-    expect_signature_proof_seed(&block0->signatures.attestation_signatures.data[0], 1, 0xB0, 8);
-
-    const LanternSignedBlock *block1 = &decoded.blocks[1];
-    CHECK(block1->block.slot == 18);
-    CHECK(block1->block.proposer_index == 3);
-    expect_root_seed(&block1->block.parent_root, 0x30);
-    expect_root_seed(&block1->block.state_root, 0x80);
-    CHECK(block1->block.body.attestations.length == 2);
-    CHECK(block1->signatures.attestation_signatures.length == 2);
-
-    uint8_t *encoded = (uint8_t *)malloc(fixture_len);
-    CHECK(encoded != NULL);
-    size_t written = 0;
-    check_zero(
-        lantern_network_signed_block_list_encode(&decoded, encoded, fixture_len, &written),
-        "response fixture encode leanspec");
-    CHECK(written == fixture_len);
-    CHECK(memcmp(encoded, fixture, fixture_len) == 0);
-
-    free(encoded);
-    free(fixture);
-    lantern_signed_block_list_reset(&decoded);
-}
-
 static void test_status_snappy(void) {
     LanternStatusMessage status = {
         .finalized = build_checkpoint(0xAA, 42),
@@ -1150,12 +734,19 @@ static void test_status_decode_rejects_truncated_payloads(void) {
 }
 
 static void test_status_snappy_rejects_truncated_frames(void) {
+    LanternStatusMessage status = {
+        .finalized = build_checkpoint(0x11, 42),
+        .head = build_checkpoint(0x41, 96),
+    };
+    uint8_t fixture[256];
     size_t fixture_len = 0;
-    uint8_t *fixture = read_fixture_bytes("networking/status_leanspec.snappy", &fixture_len);
+    size_t raw_len = 0;
+    check_zero(
+        lantern_network_status_encode_snappy(&status, fixture, sizeof(fixture), &fixture_len, &raw_len),
+        "status encode snappy fixture");
     CHECK(fixture_len > 1);
     LanternStatusMessage decoded = {0};
     CHECK(lantern_network_status_decode_snappy(&decoded, fixture, fixture_len - 1) != 0);
-    free(fixture);
 }
 
 static void test_status_reqresp_snappy_fixture(void) {
@@ -1268,12 +859,22 @@ static uint8_t *build_reqresp_frame(
 }
 
 static void test_reqresp_response_code_mapping(void) {
+    const uint8_t status_payload[] = {0x01, 0x02, 0x03, 0x04};
+    size_t raw_len = sizeof(status_payload);
+    size_t max_compressed = 0;
+    CHECK(lantern_snappy_max_compressed_size(raw_len, &max_compressed) == LANTERN_SNAPPY_OK);
+    uint8_t *fixture = (uint8_t *)malloc(max_compressed);
+    CHECK(fixture != NULL);
     size_t fixture_len = 0;
-    uint8_t *fixture = read_fixture_bytes("networking/status_leanspec.snappy", &fixture_len);
+    CHECK(
+        lantern_snappy_compress(
+            status_payload,
+            raw_len,
+            fixture,
+            max_compressed,
+            &fixture_len)
+        == LANTERN_SNAPPY_OK);
     CHECK(fixture_len > 0);
-
-    size_t raw_len = 0;
-    CHECK(lantern_snappy_uncompressed_length(fixture, fixture_len, &raw_len) == LANTERN_SNAPPY_OK);
 
     struct {
         uint8_t wire_code;
@@ -1452,280 +1053,6 @@ static void test_blocks_by_root_per_chunk_framing(void) {
     libp2p_stream_free(stream);
     free(snappy_one);
     free(snappy_two);
-}
-
-static LanternSignedVote build_fixture_signed_vote(void) {
-    /* Build signed vote matching the expected fixture values */
-    LanternSignedVote vote;
-    memset(&vote, 0, sizeof(vote));
-    vote.data.validator_id = 9;
-    vote.data.slot = 96;
-    vote.data.head = build_checkpoint(0x33, 97);
-    vote.data.target = build_checkpoint(0x53, 96);
-    vote.data.source = build_checkpoint(0x73, 94);
-    fill_signature(&vote.signature, 0xE1);
-    return vote;
-}
-
-static void test_gossip_signed_vote_fixture_roundtrip(void) {
-    /* Build the signed vote using C code instead of loading fixtures */
-    LanternSignedVote original = build_fixture_signed_vote();
-    expect_signed_vote_fixture(&original);
-
-    /* Encode to SSZ */
-    uint8_t ssz_bytes[LANTERN_SIGNED_VOTE_SSZ_SIZE];
-    size_t ssz_len = 0;
-    CHECK(lantern_ssz_encode_signed_vote(&original, ssz_bytes, sizeof(ssz_bytes), &ssz_len) == 0);
-    CHECK(ssz_len == LANTERN_SIGNED_VOTE_SSZ_SIZE);
-    maybe_write_fixture_bytes(
-        "LANTERN_WRITE_GOSSIP_SIGNED_VOTE_FIXTURE",
-        "networking/gossip_signed_vote_leanspec.ssz",
-        ssz_bytes,
-        ssz_len);
-
-    /* Decode from SSZ and verify */
-    LanternSignedVote from_ssz;
-    memset(&from_ssz, 0, sizeof(from_ssz));
-    CHECK(lantern_ssz_decode_signed_vote(&from_ssz, ssz_bytes, ssz_len) == 0);
-    expect_signed_vote_fixture(&from_ssz);
-    check_signed_vote_equal(&original, &from_ssz);
-
-    /* Encode to snappy and decode */
-    size_t max_compressed = 0;
-    CHECK(lantern_snappy_max_compressed_size_raw(ssz_len, &max_compressed) == LANTERN_SNAPPY_OK);
-    uint8_t *snappy_bytes = (uint8_t *)malloc(max_compressed);
-    CHECK(snappy_bytes != NULL);
-    size_t snappy_len = 0;
-    CHECK(
-        lantern_gossip_encode_signed_vote_snappy(
-            &original,
-            snappy_bytes,
-            max_compressed,
-            &snappy_len)
-        == 0);
-    CHECK(snappy_len > 0);
-    maybe_write_fixture_bytes(
-        "LANTERN_WRITE_GOSSIP_SIGNED_VOTE_SNAPPY_FIXTURE",
-        "networking/gossip_signed_vote_leanspec.snappy",
-        snappy_bytes,
-        snappy_len);
-
-    LanternSignedVote from_snappy;
-    memset(&from_snappy, 0, sizeof(from_snappy));
-    CHECK(lantern_gossip_decode_signed_vote_snappy(&from_snappy, snappy_bytes, snappy_len) == 0);
-    expect_signed_vote_fixture(&from_snappy);
-    check_signed_vote_equal(&original, &from_snappy);
-
-    /* Decompress and verify matches SSZ */
-    uint8_t *raw = (uint8_t *)malloc(ssz_len);
-    CHECK(raw != NULL);
-    size_t raw_written = ssz_len;
-    CHECK(
-        lantern_snappy_decompress_raw(
-            snappy_bytes,
-            snappy_len,
-            raw,
-            ssz_len,
-            &raw_written)
-        == LANTERN_SNAPPY_OK);
-    CHECK(raw_written == ssz_len);
-    CHECK(memcmp(raw, ssz_bytes, ssz_len) == 0);
-
-    free(raw);
-    free(snappy_bytes);
-}
-
-static void build_fixture_aggregated_attestation(
-    LanternAggregatedAttestation *agg,
-    uint64_t validator_id,
-    uint64_t slot,
-    uint64_t head_slot,
-    uint8_t head_seed,
-    uint64_t target_slot,
-    uint8_t target_seed,
-    uint64_t source_slot,
-    uint8_t source_seed) {
-    lantern_aggregated_attestation_init(agg);
-    agg->data.slot = slot;
-    agg->data.head = build_checkpoint(head_seed, head_slot);
-    agg->data.target = build_checkpoint(target_seed, target_slot);
-    agg->data.source = build_checkpoint(source_seed, source_slot);
-    size_t bit_length = (size_t)validator_id + 1u;
-    check_zero(lantern_bitlist_resize(&agg->aggregation_bits, bit_length), "agg bits resize");
-    check_zero(lantern_bitlist_set(&agg->aggregation_bits, (size_t)validator_id, true), "agg bits set");
-}
-
-static void build_fixture_signature_proof(
-    LanternAggregatedSignatureProof *proof,
-    uint64_t validator_id,
-    uint8_t seed,
-    size_t length) {
-    size_t bit_length = (size_t)validator_id + 1u;
-    check_zero(lantern_bitlist_resize(&proof->participants, bit_length), "proof bits resize");
-    check_zero(lantern_bitlist_set(&proof->participants, (size_t)validator_id, true), "proof bits set");
-    check_zero(lantern_byte_list_resize(&proof->proof_data, length), "proof data resize");
-    if (length > 0 && proof->proof_data.data) {
-        fill_bytes(proof->proof_data.data, length, seed);
-    }
-}
-
-static void build_fixture_signed_block(LanternSignedBlock *block) {
-    lantern_signed_block_init(block);
-
-    /* Block header */
-    block->block.slot = 72;
-    block->block.proposer_index = 5;
-    fill_bytes(block->block.parent_root.bytes, LANTERN_ROOT_SIZE, 0x24);
-    fill_bytes(block->block.state_root.bytes, LANTERN_ROOT_SIZE, 0x74);
-
-    /* Attestations */
-    check_zero(
-        lantern_aggregated_attestations_resize(&block->block.body.attestations, 2),
-        "attestations resize");
-    build_fixture_aggregated_attestation(
-        &block->block.body.attestations.data[0], 9, 71, 72, 0x24, 71, 0x44, 69, 0x64);
-    build_fixture_aggregated_attestation(
-        &block->block.body.attestations.data[1], 10, 70, 71, 0x29, 70, 0x49, 68, 0x69);
-
-    /* Signatures */
-    check_zero(
-        lantern_attestation_signatures_resize(&block->signatures.attestation_signatures, 2),
-        "signatures resize");
-    build_fixture_signature_proof(&block->signatures.attestation_signatures.data[0], 9, 0xC4, 8);
-    build_fixture_signature_proof(&block->signatures.attestation_signatures.data[1], 10, 0xC7, 8);
-    fill_signature(&block->signatures.proposer_signature, 0xF0);
-}
-
-static void test_gossip_signed_block_fixture_roundtrip(void) {
-    /* Build the signed block using C code instead of loading fixtures */
-    LanternSignedBlock original;
-    build_fixture_signed_block(&original);
-    expect_signed_block_fixture(&original);
-
-    /* Encode to SSZ */
-    size_t max_ssz = 1u << 20;
-    uint8_t *ssz_bytes = (uint8_t *)malloc(max_ssz);
-    CHECK(ssz_bytes != NULL);
-    size_t ssz_len = 0;
-    CHECK(lantern_ssz_encode_signed_block(&original, ssz_bytes, max_ssz, &ssz_len) == 0);
-    CHECK(ssz_len > 0);
-    maybe_write_fixture_bytes(
-        "LANTERN_WRITE_GOSSIP_SIGNED_BLOCK_FIXTURES",
-        "networking/gossip_signed_block_leanspec.ssz",
-        ssz_bytes,
-        ssz_len);
-
-    /* Decode from SSZ and verify */
-    LanternSignedBlock from_ssz;
-    lantern_signed_block_init(&from_ssz);
-    CHECK(lantern_ssz_decode_signed_block(&from_ssz, ssz_bytes, ssz_len) == 0);
-    expect_signed_block_fixture(&from_ssz);
-    check_signed_block_equal(&original, &from_ssz);
-
-    /* Encode to snappy and decode */
-    size_t max_compressed = 0;
-    CHECK(lantern_snappy_max_compressed_size_raw(ssz_len, &max_compressed) == LANTERN_SNAPPY_OK);
-    uint8_t *snappy_bytes = (uint8_t *)malloc(max_compressed);
-    CHECK(snappy_bytes != NULL);
-    size_t snappy_len = 0;
-    CHECK(
-        lantern_gossip_encode_signed_block_snappy(
-            &original,
-            snappy_bytes,
-            max_compressed,
-            &snappy_len)
-        == 0);
-    CHECK(snappy_len > 0);
-    maybe_write_fixture_bytes(
-        "LANTERN_WRITE_GOSSIP_SIGNED_BLOCK_SNAPPY_FIXTURE",
-        "networking/gossip_signed_block_leanspec.snappy",
-        snappy_bytes,
-        snappy_len);
-
-    LanternSignedBlock from_snappy;
-    lantern_signed_block_init(&from_snappy);
-    CHECK(lantern_gossip_decode_signed_block_snappy(&from_snappy, snappy_bytes, snappy_len, NULL, NULL) == 0);
-    expect_signed_block_fixture(&from_snappy);
-    check_signed_block_equal(&original, &from_snappy);
-
-    /* Decompress and verify matches SSZ */
-    uint8_t *raw = (uint8_t *)malloc(ssz_len);
-    CHECK(raw != NULL);
-    size_t raw_written = ssz_len;
-    CHECK(
-        lantern_snappy_decompress_raw(
-            snappy_bytes,
-            snappy_len,
-            raw,
-            ssz_len,
-            &raw_written)
-        == LANTERN_SNAPPY_OK);
-    CHECK(raw_written == ssz_len);
-    CHECK(memcmp(raw, ssz_bytes, ssz_len) == 0);
-
-    free(raw);
-    free(snappy_bytes);
-    free(ssz_bytes);
-    lantern_signed_block_reset(&from_snappy);
-    lantern_signed_block_reset(&from_ssz);
-    lantern_signed_block_reset(&original);
-}
-
-static void test_gossip_signed_block_fixture_matches_leanspec(void) {
-    size_t fixture_len = 0;
-    uint8_t *fixture = read_fixture_bytes("networking/gossip_signed_block_leanspec.ssz", &fixture_len);
-    CHECK(fixture != NULL);
-
-    size_t snappy_fixture_len = 0;
-    uint8_t *snappy_fixture = read_fixture_bytes("networking/gossip_signed_block_leanspec.snappy", &snappy_fixture_len);
-    CHECK(snappy_fixture != NULL);
-
-    LanternSignedBlock decoded;
-    lantern_signed_block_init(&decoded);
-    CHECK(lantern_ssz_decode_signed_block(&decoded, fixture, fixture_len) == 0);
-    expect_signed_block_fixture(&decoded);
-
-    uint8_t *encoded = (uint8_t *)malloc(fixture_len);
-    CHECK(encoded != NULL);
-    size_t written = 0;
-    CHECK(lantern_ssz_encode_signed_block(&decoded, encoded, fixture_len, &written) == 0);
-    CHECK(written == fixture_len);
-    CHECK(memcmp(encoded, fixture, fixture_len) == 0);
-
-    LanternSignedBlock snappy_decoded;
-    lantern_signed_block_init(&snappy_decoded);
-    CHECK(lantern_gossip_decode_signed_block_snappy(
-              &snappy_decoded,
-              snappy_fixture,
-              snappy_fixture_len,
-              NULL,
-              NULL)
-          == 0);
-    expect_signed_block_fixture(&snappy_decoded);
-
-    size_t raw_len = 0;
-    CHECK(lantern_snappy_uncompressed_length_raw(snappy_fixture, snappy_fixture_len, &raw_len) == LANTERN_SNAPPY_OK);
-    CHECK(raw_len == fixture_len);
-    uint8_t *raw = (uint8_t *)malloc(raw_len);
-    CHECK(raw != NULL);
-    size_t raw_written = raw_len;
-    CHECK(
-        lantern_snappy_decompress_raw(
-            snappy_fixture,
-            snappy_fixture_len,
-            raw,
-            raw_len,
-            &raw_written)
-        == LANTERN_SNAPPY_OK);
-    CHECK(raw_written == fixture_len);
-    CHECK(memcmp(raw, fixture, fixture_len) == 0);
-
-    free(raw);
-    free(encoded);
-    free(snappy_fixture);
-    free(fixture);
-    lantern_signed_block_reset(&snappy_decoded);
-    lantern_signed_block_reset(&decoded);
 }
 
 static void test_blocks_by_root_request(void) {
@@ -2312,19 +1639,12 @@ static void test_client_publish_block_loopback(void) {
 }
 
 int main(void) {
-    test_status_fixture_roundtrip();
-    test_blocks_by_root_request_fixture();
-    test_signed_block_list_fixture();
-    test_signed_block_list_fixture_matches_leanspec();
     test_status_snappy();
     test_status_decode_rejects_truncated_payloads();
     test_status_snappy_rejects_truncated_frames();
     test_status_reqresp_snappy_fixture();
     test_reqresp_response_code_mapping();
     test_blocks_by_root_per_chunk_framing();
-    test_gossip_signed_vote_fixture_roundtrip();
-    test_gossip_signed_block_fixture_roundtrip();
-    test_gossip_signed_block_fixture_matches_leanspec();
     test_blocks_by_root_request();
     test_signed_block_list();
     test_gossip_signed_vote_payload();
@@ -2335,7 +1655,14 @@ int main(void) {
     test_signed_block_list_canonicalizes_legacy_body_layout();
     test_signed_block_list_decode_rejects_attestation_only_signatures();
     test_gossip_block_snappy_roundtrip_random();
-    test_replay_devnet_block_payloads();
+    if (consensus_fixture_exists(
+            "fork_choice/devnet/fc/test_fork_choice_reorgs/test_reorg_on_newly_justified_slot.json")
+        && consensus_fixture_exists(
+            "state_transition/devnet/state_transition/test_block_processing/test_linear_chain_multiple_blocks.json")) {
+        test_replay_devnet_block_payloads();
+    } else {
+        puts("skipping test_replay_devnet_block_payloads (consensus fixtures not present)");
+    }
     test_gossipsub_service_loopback();
     test_client_publish_block_loopback();
     test_gossip_helpers();

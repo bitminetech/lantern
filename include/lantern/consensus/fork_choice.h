@@ -197,8 +197,6 @@ int lantern_fork_choice_anchor_slot(const LanternForkChoice *store, uint64_t *ou
 const LanternCheckpoint *lantern_fork_choice_latest_justified(const LanternForkChoice *store);
 const LanternCheckpoint *lantern_fork_choice_latest_finalized(const LanternForkChoice *store);
 const LanternRoot *lantern_fork_choice_safe_target(const LanternForkChoice *store);
-size_t lantern_fork_choice_new_votes_count(const LanternForkChoice *store);
-size_t lantern_fork_choice_known_votes_count(const LanternForkChoice *store);
 void lantern_fork_choice_tree_snapshot_reset(struct lantern_fork_choice_tree_snapshot *snapshot);
 int lantern_fork_choice_snapshot_tree(
     const LanternForkChoice *store,
