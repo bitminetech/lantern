@@ -77,9 +77,6 @@ int lantern_gossipsub_service_start(
 int lantern_gossipsub_service_publish_block(
     struct lantern_gossipsub_service *service,
     const LanternSignedBlock *block);
-int lantern_gossipsub_service_publish_vote(
-    struct lantern_gossipsub_service *service,
-    const LanternSignedVote *vote);
 int lantern_gossipsub_service_publish_vote_subnet(
     struct lantern_gossipsub_service *service,
     const LanternSignedVote *vote,

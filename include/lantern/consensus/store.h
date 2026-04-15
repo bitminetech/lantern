@@ -110,9 +110,6 @@ int lantern_store_get_attestation_signature(
     const LanternStore *store,
     const LanternSignatureKey *key,
     LanternSignature *out_signature);
-int lantern_store_remove_attestation_signature(
-    LanternStore *store,
-    const LanternSignatureKey *key);
 size_t lantern_store_remove_attestation_signatures_for_data_root(
     LanternStore *store,
     const LanternRoot *data_root);
@@ -152,12 +149,6 @@ static inline int lantern_store_get_gossip_signature(
     const LanternSignatureKey *key,
     LanternSignature *out_signature) {
     return lantern_store_get_attestation_signature(store, key, out_signature);
-}
-
-static inline int lantern_store_remove_gossip_signature(
-    LanternStore *store,
-    const LanternSignatureKey *key) {
-    return lantern_store_remove_attestation_signature(store, key);
 }
 
 #ifdef __cplusplus

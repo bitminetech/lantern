@@ -1353,32 +1353,6 @@ int lantern_gossipsub_service_publish_block(
     return publish_rc;
 }
 
-int lantern_gossipsub_service_publish_vote(
-    struct lantern_gossipsub_service *service,
-    const LanternSignedVote *vote) {
-    if (!service || !vote) {
-        return -1;
-    }
-    size_t max_compressed = 0;
-    /* Use raw snappy max size (no framing overhead) for gossip */
-    if (lantern_snappy_max_compressed_size_raw(LANTERN_SIGNED_VOTE_SSZ_SIZE, &max_compressed) != LANTERN_SNAPPY_OK) {
-        return -1;
-    }
-    uint8_t *compressed = (uint8_t *)malloc(max_compressed);
-    if (!compressed) {
-        return -1;
-    }
-    size_t written = 0;
-    int encode_rc = lantern_gossip_encode_signed_vote_snappy(vote, compressed, max_compressed, &written);
-   if (encode_rc != 0 || written == 0) {
-       free(compressed);
-       return -1;
-   }
-    int publish_rc = publish_payload(service, service->vote_topic, compressed, written);
-    free(compressed);
-    return publish_rc;
-}
-
 int lantern_gossipsub_service_publish_vote_subnet(
     struct lantern_gossipsub_service *service,
     const LanternSignedVote *vote,

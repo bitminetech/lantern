@@ -653,24 +653,6 @@ int lantern_store_get_attestation_signature(
     return attestation_signature_map_get(&store->attestation_signatures, key, out_signature);
 }
 
-int lantern_store_remove_attestation_signature(
-    LanternStore *store,
-    const LanternSignatureKey *key) {
-    if (!store || !key) {
-        return -1;
-    }
-
-    struct lantern_attestation_signature_map *map = &store->attestation_signatures;
-    for (size_t i = 0; i < map->length; ++i) {
-        if (!signature_key_equals(&map->entries[i].key, key)) {
-            continue;
-        }
-        attestation_signature_map_remove_index(map, i);
-        return 0;
-    }
-    return -1;
-}
-
 size_t lantern_store_remove_attestation_signatures_for_data_root(
     LanternStore *store,
     const LanternRoot *data_root) {
