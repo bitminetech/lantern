@@ -9,8 +9,9 @@
             }
         },
         "serialized": "0x04000000",
+        "root": "0xceb3266bf0938bc72f8256356ddc13bccc20dd767f25448b2658135780b7da51",
         "_info": {
-            "hash": "0x02bbff0d966589a78a0638a0c31acaf8c5f4bc244b8af0ac4af3bb0365de6ed1",
+            "hash": "0xa919fff9405adfc9e6dc308fcc495b6fea8383ce4e2848ae79ed45456348d132",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/ssz/test_networking_containers.py::test_blocks_by_root_request_empty[fork_Devnet]",
             "description": "SSZ roundtrip for BlocksByRootRequest with no roots.",

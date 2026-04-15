@@ -21,6 +21,9 @@
 
 #include "secp256k1.h"
 
+#define LANTERN_ENR_SIGNATURE_SIZE 64u
+#define LANTERN_ENR_MAX_SIZE 300u
+
 static void lantern_enr_key_value_reset(struct lantern_enr_key_value *pair) {
     if (!pair) {
         return;
@@ -32,11 +35,15 @@ static void lantern_enr_key_value_reset(struct lantern_enr_key_value *pair) {
     pair->value_len = 0;
 }
 
+static void reset_rlp_buffers(struct lantern_rlp_buffer *buffers, size_t count);
+
 void lantern_enr_record_init(struct lantern_enr_record *record) {
     if (!record) {
         return;
     }
     record->encoded = NULL;
+    record->rlp_bytes = NULL;
+    record->rlp_len = 0u;
     record->signature = NULL;
     record->signature_len = 0;
     record->sequence = 0;
@@ -50,6 +57,9 @@ void lantern_enr_record_reset(struct lantern_enr_record *record) {
     }
     free(record->encoded);
     record->encoded = NULL;
+    free(record->rlp_bytes);
+    record->rlp_bytes = NULL;
+    record->rlp_len = 0u;
     free(record->signature);
     record->signature = NULL;
     record->signature_len = 0;
@@ -138,7 +148,8 @@ static int lantern_base64url_decode(const char *input, uint8_t **out_bytes, size
 }
 
 static int copy_signature(struct lantern_enr_record *record, const struct lantern_rlp_view *signature) {
-    if (!record || !signature || signature->kind != LANTERN_RLP_KIND_BYTES || signature->length == 0) {
+    if (!record || !signature || signature->kind != LANTERN_RLP_KIND_BYTES
+        || signature->length != LANTERN_ENR_SIGNATURE_SIZE) {
         return -1;
     }
     uint8_t *copy = malloc(signature->length);
@@ -172,11 +183,16 @@ static int copy_pairs(struct lantern_enr_record *record, const struct lantern_rl
     for (size_t i = 2; i < item_count; i += 2) {
         const struct lantern_rlp_view *key_view = &items[i];
         const struct lantern_rlp_view *value_view = &items[i + 1];
-        if (key_view->kind != LANTERN_RLP_KIND_BYTES || key_view->length == 0) {
+        if (key_view->kind != LANTERN_RLP_KIND_BYTES || key_view->length == 0
+            || value_view->kind != LANTERN_RLP_KIND_BYTES) {
             goto error;
         }
         char *key = lantern_string_duplicate_len((const char *)key_view->data, key_view->length);
         if (!key) {
+            goto error;
+        }
+        if (pair_index > 0 && strcmp(pairs[pair_index - 1].key, key) >= 0) {
+            free(key);
             goto error;
         }
         uint8_t *value = NULL;
@@ -205,6 +221,39 @@ error:
     }
     free(pairs);
     return -1;
+}
+
+static int copy_rlp_bytes(struct lantern_enr_record *record, const uint8_t *encoded_bytes, size_t encoded_len) {
+    if (!record) {
+        return -1;
+    }
+    record->rlp_bytes = NULL;
+    record->rlp_len = 0u;
+    if (encoded_len == 0u) {
+        return 0;
+    }
+    uint8_t *copy = malloc(encoded_len);
+    if (!copy) {
+        return -1;
+    }
+    memcpy(copy, encoded_bytes, encoded_len);
+    record->rlp_bytes = copy;
+    record->rlp_len = encoded_len;
+    return 0;
+}
+
+static bool key_pairs_are_sorted(const struct lantern_enr_record *record) {
+    if (!record) {
+        return false;
+    }
+    for (size_t i = 1; i < record->pair_count; ++i) {
+        const char *prev = record->pairs[i - 1u].key;
+        const char *curr = record->pairs[i].key;
+        if (!prev || !curr || strcmp(prev, curr) >= 0) {
+            return false;
+        }
+    }
+    return true;
 }
 
 int lantern_enr_record_decode(const char *enr_text, struct lantern_enr_record *record) {
@@ -238,6 +287,12 @@ int lantern_enr_record_decode(const char *enr_text, struct lantern_enr_record *r
     uint8_t *encoded_bytes = NULL;
     size_t encoded_len = 0;
     if (lantern_base64url_decode(payload, &encoded_bytes, &encoded_len) != 0) {
+        goto error;
+    }
+    if (encoded_len > LANTERN_ENR_MAX_SIZE) {
+        goto error;
+    }
+    if (copy_rlp_bytes(&temp, encoded_bytes, encoded_len) != 0) {
         goto error;
     }
 
@@ -289,6 +344,285 @@ const struct lantern_enr_key_value *lantern_enr_record_find(const struct lantern
         }
     }
     return NULL;
+}
+
+static int parse_port_value(const struct lantern_enr_key_value *pair, uint16_t *out_port) {
+    if (!pair || !out_port || !pair->value || pair->value_len != 2u) {
+        return -1;
+    }
+    *out_port = (uint16_t)(((uint16_t)pair->value[0] << 8u) | (uint16_t)pair->value[1]);
+    return 0;
+}
+
+static int keccak256_bytes(const uint8_t *data, size_t data_len, uint8_t out_hash[32]) {
+    if ((!data && data_len > 0u) || !out_hash) {
+        return -1;
+    }
+
+    const struct ltc_hash_descriptor *keccak_desc = &keccak_256_desc;
+    hash_state keccak_state;
+    if (keccak_desc->init(&keccak_state) != CRYPT_OK) {
+        return -1;
+    }
+    if (data_len > 0u && keccak_desc->process(&keccak_state, data, (unsigned long)data_len) != CRYPT_OK) {
+        return -1;
+    }
+    return keccak_desc->done(&keccak_state, out_hash) == CRYPT_OK ? 0 : -1;
+}
+
+static int encode_record_content(
+    const struct lantern_enr_record *record,
+    struct lantern_rlp_buffer *out_content) {
+    if (!record || !out_content) {
+        return -1;
+    }
+    memset(out_content, 0, sizeof(*out_content));
+
+    size_t item_count = 1u + (record->pair_count * 2u);
+    struct lantern_rlp_buffer *items = calloc(item_count, sizeof(*items));
+    if (!items) {
+        return -1;
+    }
+
+    int rc = -1;
+    size_t idx = 0u;
+    if (lantern_rlp_encode_uint64(&items[idx++], record->sequence) != 0) {
+        goto cleanup;
+    }
+    for (size_t i = 0; i < record->pair_count; ++i) {
+        const struct lantern_enr_key_value *pair = &record->pairs[i];
+        static const uint8_t kEmptyValue = 0u;
+        const uint8_t *value = pair->value_len > 0u ? pair->value : &kEmptyValue;
+        if (!pair->key
+            || lantern_rlp_encode_bytes(&items[idx++], (const uint8_t *)pair->key, strlen(pair->key)) != 0
+            || lantern_rlp_encode_bytes(&items[idx++], value, pair->value_len) != 0) {
+            goto cleanup;
+        }
+    }
+
+    rc = lantern_rlp_encode_list(out_content, items, idx);
+
+cleanup:
+    reset_rlp_buffers(items, item_count);
+    free(items);
+    return rc;
+}
+
+static int parse_record_pubkey(
+    const struct lantern_enr_record *record,
+    secp256k1_context *ctx,
+    secp256k1_pubkey *out_pubkey) {
+    const struct lantern_enr_key_value *pubkey = lantern_enr_record_find(record, "secp256k1");
+    if (!record || !ctx || !out_pubkey || !pubkey || !pubkey->value || pubkey->value_len != 33u) {
+        return -1;
+    }
+    return secp256k1_ec_pubkey_parse(ctx, out_pubkey, pubkey->value, pubkey->value_len) ? 0 : -1;
+}
+
+int lantern_enr_record_verify_signature(const struct lantern_enr_record *record, bool *out_valid) {
+    if (!record || !out_valid) {
+        return -1;
+    }
+    *out_valid = false;
+    if (!record->signature || record->signature_len != LANTERN_ENR_SIGNATURE_SIZE) {
+        return 0;
+    }
+
+    struct lantern_rlp_buffer content = {0};
+    if (encode_record_content(record, &content) != 0) {
+        lantern_rlp_buffer_reset(&content);
+        return -1;
+    }
+
+    uint8_t message_hash[32];
+    if (keccak256_bytes(content.data, content.length, message_hash) != 0) {
+        lantern_rlp_buffer_reset(&content);
+        return -1;
+    }
+    lantern_rlp_buffer_reset(&content);
+
+    secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_VERIFY);
+    if (!ctx) {
+        return -1;
+    }
+
+    secp256k1_pubkey pubkey;
+    secp256k1_ecdsa_signature signature;
+    int rc = -1;
+    if (parse_record_pubkey(record, ctx, &pubkey) == 0
+        && secp256k1_ecdsa_signature_parse_compact(ctx, &signature, record->signature)) {
+        secp256k1_ecdsa_signature normalized;
+        secp256k1_ecdsa_signature_normalize(ctx, &normalized, &signature);
+        *out_valid = secp256k1_ecdsa_verify(ctx, &normalized, message_hash, &pubkey) == 1;
+        rc = 0;
+    }
+
+    secp256k1_context_destroy(ctx);
+    return rc;
+}
+
+bool lantern_enr_record_is_valid(const struct lantern_enr_record *record) {
+    const struct lantern_enr_key_value *id = lantern_enr_record_find(record, "id");
+    const struct lantern_enr_key_value *pubkey = lantern_enr_record_find(record, "secp256k1");
+    return record
+        && record->rlp_bytes
+        && record->rlp_len > 0u
+        && record->rlp_len <= LANTERN_ENR_MAX_SIZE
+        && record->signature
+        && record->signature_len == LANTERN_ENR_SIGNATURE_SIZE
+        && id
+        && id->value
+        && id->value_len == 2u
+        && memcmp(id->value, "v4", 2u) == 0
+        && pubkey
+        && pubkey->value
+        && pubkey->value_len == 33u
+        && key_pairs_are_sorted(record);
+}
+
+int lantern_enr_record_signature_valid(const struct lantern_enr_record *record, bool *out_valid) {
+    return lantern_enr_record_verify_signature(record, out_valid);
+}
+
+int lantern_enr_record_node_id(const struct lantern_enr_record *record, uint8_t out_node_id[32]) {
+    if (!record || !out_node_id) {
+        return -1;
+    }
+
+    secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_VERIFY);
+    if (!ctx) {
+        return -1;
+    }
+
+    secp256k1_pubkey pubkey;
+    unsigned char uncompressed[65];
+    size_t uncompressed_len = sizeof(uncompressed);
+    int rc = -1;
+    if (parse_record_pubkey(record, ctx, &pubkey) == 0
+        && secp256k1_ec_pubkey_serialize(
+               ctx,
+               uncompressed,
+               &uncompressed_len,
+               &pubkey,
+               SECP256K1_EC_UNCOMPRESSED)
+               && uncompressed_len == sizeof(uncompressed)
+        && keccak256_bytes(uncompressed + 1u, sizeof(uncompressed) - 1u, out_node_id) == 0) {
+        rc = 0;
+    }
+
+    secp256k1_context_destroy(ctx);
+    return rc;
+}
+
+int lantern_enr_record_ip4(const struct lantern_enr_record *record, char *buffer, size_t buffer_len) {
+    const struct lantern_enr_key_value *ip = lantern_enr_record_find(record, "ip");
+    if (!record || !buffer || buffer_len == 0u || !ip || !ip->value || ip->value_len != 4u) {
+        return -1;
+    }
+
+    return inet_ntop(AF_INET, ip->value, buffer, buffer_len) ? 0 : -1;
+}
+
+int lantern_enr_record_ip6(const struct lantern_enr_record *record, char *buffer, size_t buffer_len) {
+    const struct lantern_enr_key_value *ip = lantern_enr_record_find(record, "ip6");
+    if (!record || !buffer || buffer_len == 0u || !ip || !ip->value || ip->value_len != 16u) {
+        return -1;
+    }
+
+    int written = snprintf(
+        buffer,
+        buffer_len,
+        "%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x",
+        ip->value[0],
+        ip->value[1],
+        ip->value[2],
+        ip->value[3],
+        ip->value[4],
+        ip->value[5],
+        ip->value[6],
+        ip->value[7],
+        ip->value[8],
+        ip->value[9],
+        ip->value[10],
+        ip->value[11],
+        ip->value[12],
+        ip->value[13],
+        ip->value[14],
+        ip->value[15]);
+    return written > 0 && (size_t)written < buffer_len ? 0 : -1;
+}
+
+int lantern_enr_record_multiaddr(const struct lantern_enr_record *record, char *buffer, size_t buffer_len) {
+    if (!record || !buffer || buffer_len == 0u) {
+        return -1;
+    }
+
+    const struct lantern_enr_key_value *ip4 = lantern_enr_record_find(record, "ip");
+    const struct lantern_enr_key_value *ip6 = lantern_enr_record_find(record, "ip6");
+    const struct lantern_enr_key_value *port = NULL;
+    char ip_text[64];
+    const char *prefix = NULL;
+
+    if (ip4 && ip4->value && ip4->value_len == 4u) {
+        port = lantern_enr_record_find(record, "quic");
+        if (!port) {
+            port = lantern_enr_record_find(record, "udp");
+        }
+        if (!port || lantern_enr_record_ip4(record, ip_text, sizeof(ip_text)) != 0) {
+            return -1;
+        }
+        prefix = "/ip4";
+    } else if (ip6 && ip6->value && ip6->value_len == 16u) {
+        port = lantern_enr_record_find(record, "quic6");
+        if (!port) {
+            port = lantern_enr_record_find(record, "udp6");
+        }
+        if (!port) {
+            port = lantern_enr_record_find(record, "quic");
+        }
+        if (!port) {
+            port = lantern_enr_record_find(record, "udp");
+        }
+        if (!port || lantern_enr_record_ip6(record, ip_text, sizeof(ip_text)) != 0) {
+            return -1;
+        }
+        prefix = "/ip6";
+    } else {
+        return -1;
+    }
+
+    uint16_t parsed_port = 0u;
+    if (parse_port_value(port, &parsed_port) != 0) {
+        return -1;
+    }
+
+    int written = snprintf(buffer, buffer_len, "%s/%s/udp/%u/quic-v1", prefix, ip_text, (unsigned)parsed_port);
+    return written > 0 && (size_t)written < buffer_len ? 0 : -1;
+}
+
+int lantern_enr_record_eth2(const struct lantern_enr_record *record, struct lantern_enr_eth2_data *out_eth2) {
+    const struct lantern_enr_key_value *eth2 = lantern_enr_record_find(record, "eth2");
+    if (!record || !out_eth2 || !eth2 || !eth2->value || eth2->value_len < 16u) {
+        return -1;
+    }
+
+    memcpy(out_eth2->fork_digest, eth2->value, 4u);
+    memcpy(out_eth2->next_fork_version, eth2->value + 4u, 4u);
+    out_eth2->next_fork_epoch =
+        (uint64_t)eth2->value[8]
+        | ((uint64_t)eth2->value[9] << 8u)
+        | ((uint64_t)eth2->value[10] << 16u)
+        | ((uint64_t)eth2->value[11] << 24u)
+        | ((uint64_t)eth2->value[12] << 32u)
+        | ((uint64_t)eth2->value[13] << 40u)
+        | ((uint64_t)eth2->value[14] << 48u)
+        | ((uint64_t)eth2->value[15] << 56u);
+    return 0;
+}
+
+bool lantern_enr_record_is_aggregator(const struct lantern_enr_record *record) {
+    const struct lantern_enr_key_value *pair = lantern_enr_record_find(record, "is_aggregator");
+    return pair && pair->value && pair->value_len == 1u && pair->value[0] == 0x01u;
 }
 
 int lantern_enr_record_list_append(struct lantern_enr_record_list *list, const char *enr_text) {
@@ -412,6 +746,18 @@ int lantern_enr_record_build_v4(
         error_reason = "rlp encode ip value failed";
         goto error;
     }
+    if (is_aggregator) {
+        static const uint8_t aggregator_key[] = "is_aggregator";
+        static const uint8_t aggregator_value[] = {0x01};
+        if (lantern_rlp_encode_bytes(&items[idx++], aggregator_key, sizeof(aggregator_key) - 1u) != 0) {
+            error_reason = "rlp encode is_aggregator key failed";
+            goto error;
+        }
+        if (lantern_rlp_encode_bytes(&items[idx++], aggregator_value, sizeof(aggregator_value)) != 0) {
+            error_reason = "rlp encode is_aggregator value failed";
+            goto error;
+        }
+    }
     if (lantern_rlp_encode_bytes(&items[idx++], (const uint8_t *)"secp256k1", 9) != 0) {
         error_reason = "rlp encode key type failed";
         goto error;
@@ -429,19 +775,6 @@ int lantern_enr_record_build_v4(
         error_reason = "rlp encode udp value failed";
         goto error;
     }
-    if (is_aggregator) {
-        static const uint8_t aggregator_key[] = "is_aggregator";
-        static const uint8_t aggregator_value[] = {0x01};
-        if (lantern_rlp_encode_bytes(&items[idx++], aggregator_key, sizeof(aggregator_key) - 1u) != 0) {
-            error_reason = "rlp encode is_aggregator key failed";
-            goto error;
-        }
-        if (lantern_rlp_encode_bytes(&items[idx++], aggregator_value, sizeof(aggregator_value)) != 0) {
-            error_reason = "rlp encode is_aggregator value failed";
-            goto error;
-        }
-    }
-
     if (lantern_rlp_encode_list(&content, items, idx) != 0) {
         error_reason = "rlp encode content failed";
         goto error;

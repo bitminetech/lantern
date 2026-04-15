@@ -1838,16 +1838,23 @@ int lantern_fork_choice_recompute_head(LanternForkChoice *store) {
     LanternRoot previous_head = store->head;
     bool had_head = store->has_head;
     LanternRoot head;
+    struct lantern_fork_choice_vote_entry *votes = NULL;
+    size_t vote_count = 0;
+    if (collect_known_weight_votes(store, &votes, &vote_count) != 0) {
+        return -1;
+    }
     if (lmd_ghost_compute(
             store,
             &store->latest_justified.root,
-            store->known_votes,
-            store->validator_count,
+            votes ? votes : store->known_votes,
+            votes ? vote_count : store->validator_count,
             0,
             &head)
         != 0) {
+        free(votes);
         return -1;
     }
+    free(votes);
     store->head = head;
     store->has_head = true;
 

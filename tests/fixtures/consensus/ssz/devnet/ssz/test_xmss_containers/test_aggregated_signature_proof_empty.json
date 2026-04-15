@@ -14,8 +14,9 @@
             }
         },
         "serialized": "0x080000000900000003",
+        "root": "0xe374b93c2ec9a157db01bb26088915945830b86650533bd12f6ee77b280f0f8e",
         "_info": {
-            "hash": "0x9342be66ee380a6e3326a3f3d49bef0c3df7fdc8d707ea6dc43a16eb5b3dbfef",
+            "hash": "0x672eb491e02f2fa59114d18aeaea6be2c24518b1900f380cfd604a2e95292923",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/ssz/test_xmss_containers.py::test_aggregated_signature_proof_empty[fork_Devnet]",
             "description": "SSZ roundtrip for AggregatedSignatureProof with empty proof data.",

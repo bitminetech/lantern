@@ -24,6 +24,16 @@ int lantern_ssz_decode_config(LanternConfig *config, const uint8_t *data, size_t
 int lantern_ssz_encode_checkpoint(const LanternCheckpoint *checkpoint, uint8_t *out, size_t out_len, size_t *written);
 int lantern_ssz_decode_checkpoint(LanternCheckpoint *checkpoint, const uint8_t *data, size_t data_len);
 
+int lantern_ssz_encode_attestation_data(
+    const LanternAttestationData *data,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written);
+int lantern_ssz_decode_attestation_data(
+    LanternAttestationData *data,
+    const uint8_t *raw,
+    size_t raw_len);
+
 int lantern_ssz_encode_vote(const LanternVote *vote, uint8_t *out, size_t out_len, size_t *written);
 int lantern_ssz_decode_vote(LanternVote *vote, const uint8_t *data, size_t data_len);
 
@@ -42,6 +52,42 @@ int lantern_ssz_encode_signed_aggregated_attestation(
     size_t *written);
 int lantern_ssz_decode_signed_aggregated_attestation(
     LanternSignedAggregatedAttestation *attestation,
+    const uint8_t *data,
+    size_t data_len);
+int lantern_ssz_encode_aggregated_attestation(
+    const LanternAggregatedAttestation *attestation,
+    uint8_t *out,
+    size_t remaining,
+    size_t *written);
+int lantern_ssz_decode_aggregated_attestation(
+    LanternAggregatedAttestation *attestation,
+    const uint8_t *data,
+    size_t data_len);
+int lantern_ssz_encode_aggregated_signature_proof(
+    const LanternAggregatedSignatureProof *proof,
+    uint8_t *out,
+    size_t remaining,
+    size_t *written);
+int lantern_ssz_decode_aggregated_signature_proof(
+    LanternAggregatedSignatureProof *proof,
+    const uint8_t *data,
+    size_t data_len);
+int lantern_ssz_encode_block_signatures(
+    const LanternBlockSignatures *signatures,
+    uint8_t *out,
+    size_t remaining,
+    size_t *written);
+int lantern_ssz_decode_block_signatures(
+    LanternBlockSignatures *signatures,
+    const uint8_t *data,
+    size_t data_len);
+int lantern_ssz_encode_validator(
+    const LanternValidator *validator,
+    uint8_t *out,
+    size_t remaining,
+    size_t *written);
+int lantern_ssz_decode_validator(
+    LanternValidator *validator,
     const uint8_t *data,
     size_t data_len);
 

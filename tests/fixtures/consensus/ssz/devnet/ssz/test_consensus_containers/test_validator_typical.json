@@ -9,8 +9,9 @@
             "index": 42
         },
         "serialized": "0xabababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab2a00000000000000",
+        "root": "0x09124ab1d57979c8c1f6ac5d297276759f411d501eeba33946f373fc8f74b4e4",
         "_info": {
-            "hash": "0x3cae5cb162b2b9e05b84edca77b006c028dbb65873887c050cd977c06dc4b4bc",
+            "hash": "0xc64f90f76f1038201bbed721ac2a1843851010dab61cfd54e01371928dfb9b75",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/ssz/test_consensus_containers.py::test_validator_typical[fork_Devnet]",
             "description": "SSZ roundtrip for Validator with typical values.",

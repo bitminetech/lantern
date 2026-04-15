@@ -13,8 +13,9 @@
             }
         },
         "serialized": "0x04000000010101010101010101010101010101010101010101010101010101010101010102020202020202020202020202020202020202020202020202020202020202020303030303030303030303030303030303030303030303030303030303030303",
+        "root": "0x663d3f495d86ac4c014638554c24deaf8ae4e87f5b4cc469f1eba323ba3560ac",
         "_info": {
-            "hash": "0x4f3bca501fde80309dd3c4c8169f1e3e383d281501e3a2d0d744549179d616a6",
+            "hash": "0x34c7723af20b9dc8c2e084d777723ddaece0a2bbef532c879d6af85510b7fa14",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/ssz/test_networking_containers.py::test_blocks_by_root_request_multiple[fork_Devnet]",
             "description": "SSZ roundtrip for BlocksByRootRequest with multiple roots.",

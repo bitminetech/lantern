@@ -103,6 +103,22 @@ endfunction()
 
 lantern_define_library(lantern lantern_c_leanvm_xmss)
 
+set(LANTERN_FIXTURE_GENERATOR_DIR
+    "${PROJECT_SOURCE_DIR}/tools/leanSpec")
+find_program(LANTERN_UV_EXECUTABLE uv)
+if(NOT LANTERN_UV_EXECUTABLE)
+    set(LANTERN_UV_EXECUTABLE uv)
+endif()
+
+add_custom_target(fixtures
+    COMMAND "${CMAKE_COMMAND}" -E chdir "${LANTERN_FIXTURE_GENERATOR_DIR}" "${LANTERN_UV_EXECUTABLE}" python install 3.12
+    COMMAND "${CMAKE_COMMAND}" -E chdir "${LANTERN_FIXTURE_GENERATOR_DIR}" "${LANTERN_UV_EXECUTABLE}" sync
+    COMMAND "${CMAKE_COMMAND}" -E chdir "${LANTERN_FIXTURE_GENERATOR_DIR}" "${LANTERN_UV_EXECUTABLE}" run fill --fork=Devnet --clean -n auto
+    USES_TERMINAL
+    COMMENT "Generating leanSpec consensus fixtures"
+    VERBATIM
+)
+
 add_executable(lantern_cli src/core/main.c)
 target_link_libraries(lantern_cli PRIVATE lantern Threads::Threads)
 if(NOT DEFINED LANTERN_GIT_COMMIT OR LANTERN_GIT_COMMIT STREQUAL "")
@@ -141,11 +157,31 @@ target_compile_definitions(lantern_cli
         LANTERN_GIT_BRANCH="${LANTERN_GIT_BRANCH}"
 )
 
+set(LANTERN_CONSENSUS_FIXTURE_DIR
+    "${PROJECT_SOURCE_DIR}/tools/leanSpec/fixtures/consensus"
+    CACHE PATH
+    "Path to generated leanSpec consensus fixtures root")
+
 option(LANTERN_BUILD_TESTS "Build lantern unit tests" ON)
 if(LANTERN_BUILD_TESTS)
     enable_testing()
     lantern_define_library(lantern_test lantern_c_leanvm_xmss_test)
     set(LANTERN_TEST_LINK_LIB lantern_test)
+
+    set(_lantern_state_transition_fixture_dir
+        "${LANTERN_CONSENSUS_FIXTURE_DIR}/state_transition/devnet/state_transition")
+    set(_lantern_fork_choice_fixture_dir
+        "${LANTERN_CONSENSUS_FIXTURE_DIR}/fork_choice/devnet/fc")
+    set(_lantern_verify_signatures_fixture_dir
+        "${LANTERN_CONSENSUS_FIXTURE_DIR}/verify_signatures/devnet/verify_signatures")
+    set(_lantern_ssz_fixture_dir
+        "${LANTERN_CONSENSUS_FIXTURE_DIR}/ssz/devnet/ssz")
+    set(_lantern_networking_codec_fixture_dir
+        "${LANTERN_CONSENSUS_FIXTURE_DIR}/networking_codec/devnet/networking")
+    set(_lantern_ssz_fixture_dir
+        "${LANTERN_CONSENSUS_FIXTURE_DIR}/ssz/devnet/ssz")
+    set(_lantern_networking_codec_fixture_dir
+        "${LANTERN_CONSENSUS_FIXTURE_DIR}/networking_codec/devnet/networking")
 
     add_executable(lantern_client_vote_test
         tests/unit/test_client_vote.c
@@ -299,6 +335,7 @@ if(LANTERN_BUILD_TESTS)
         lantern_networking_messages_test
         PRIVATE
             LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
+            LANTERN_CONSENSUS_FIXTURE_DIR="${LANTERN_CONSENSUS_FIXTURE_DIR}"
     )
     add_test(NAME lantern_networking_messages COMMAND lantern_networking_messages_test)
 
@@ -337,72 +374,156 @@ if(LANTERN_BUILD_TESTS)
     target_link_libraries(lantern_validator_duties_integration_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_validator_duties_integration COMMAND lantern_validator_duties_integration_test)
 
-    add_executable(lantern_consensus_vectors_test
-        tests/integration/test_consensus_vectors.c
-        tests/integration/consensus_fixture_runner.c
-        tests/support/state_store_adapter.c
-        tests/support/fixture_loader.c
-    )
-    target_link_libraries(lantern_consensus_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
-    target_include_directories(
-        lantern_consensus_vectors_test
-        PRIVATE
-            ${PROJECT_SOURCE_DIR}
-            ${PROJECT_SOURCE_DIR}/external/jsmn
-    )
-    target_compile_definitions(
-        lantern_consensus_vectors_test
-        PRIVATE
-            LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
-    )
-    add_test(NAME lantern_consensus_vectors COMMAND lantern_consensus_vectors_test)
-    # Consensus fixtures iterate over dozens of LeanSpec transitions and need a longer timeout.
-    set_tests_properties(lantern_consensus_vectors PROPERTIES
-        TIMEOUT 300
-    )
+    if(EXISTS "${_lantern_state_transition_fixture_dir}" AND EXISTS "${_lantern_fork_choice_fixture_dir}")
+        message(STATUS
+            "Consensus fixtures found at ${LANTERN_CONSENSUS_FIXTURE_DIR} "
+            "— registering lantern_consensus_vectors")
+        add_executable(lantern_consensus_vectors_test
+            tests/integration/test_consensus_vectors.c
+            tests/integration/consensus_fixture_runner.c
+            tests/support/state_store_adapter.c
+            tests/support/fixture_loader.c
+        )
+        target_link_libraries(lantern_consensus_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
+        target_include_directories(
+            lantern_consensus_vectors_test
+            PRIVATE
+                ${PROJECT_SOURCE_DIR}
+                ${PROJECT_SOURCE_DIR}/external/jsmn
+        )
+        target_compile_definitions(
+            lantern_consensus_vectors_test
+            PRIVATE
+                LANTERN_CONSENSUS_FIXTURE_DIR="${LANTERN_CONSENSUS_FIXTURE_DIR}"
+        )
+        add_test(NAME lantern_consensus_vectors COMMAND lantern_consensus_vectors_test)
+        # Consensus fixtures iterate over dozens of LeanSpec transitions and need a longer timeout.
+        set_tests_properties(lantern_consensus_vectors PROPERTIES TIMEOUT 300)
+    else()
+        message(STATUS
+            "Consensus state-transition/fork-choice fixtures not found at ${LANTERN_CONSENSUS_FIXTURE_DIR} "
+            "— skipping lantern_consensus_vectors")
+    endif()
 
-    add_executable(lantern_verify_signatures_vectors_test
-        tests/integration/test_verify_signatures_vectors.c
-        tests/support/state_store_adapter.c
-        tests/support/fixture_loader.c
-    )
-    target_link_libraries(lantern_verify_signatures_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
-    target_include_directories(
-        lantern_verify_signatures_vectors_test
-        PRIVATE
-            ${PROJECT_SOURCE_DIR}
-            ${PROJECT_SOURCE_DIR}/external/jsmn
-    )
-    target_compile_definitions(
-        lantern_verify_signatures_vectors_test
-        PRIVATE
-            LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
-    )
-    add_test(NAME lantern_verify_signatures_vectors COMMAND lantern_verify_signatures_vectors_test)
-    set_tests_properties(lantern_verify_signatures_vectors PROPERTIES TIMEOUT 120)
+    if(EXISTS "${_lantern_verify_signatures_fixture_dir}")
+        message(STATUS
+            "Verify-signatures fixtures found at ${LANTERN_CONSENSUS_FIXTURE_DIR} "
+            "— registering lantern_verify_signatures_vectors")
+        add_executable(lantern_verify_signatures_vectors_test
+            tests/integration/test_verify_signatures_vectors.c
+            tests/support/state_store_adapter.c
+            tests/support/fixture_loader.c
+        )
+        target_link_libraries(lantern_verify_signatures_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
+        target_include_directories(
+            lantern_verify_signatures_vectors_test
+            PRIVATE
+                ${PROJECT_SOURCE_DIR}
+                ${PROJECT_SOURCE_DIR}/external/jsmn
+        )
+        target_compile_definitions(
+            lantern_verify_signatures_vectors_test
+            PRIVATE
+                LANTERN_CONSENSUS_FIXTURE_DIR="${LANTERN_CONSENSUS_FIXTURE_DIR}"
+        )
+        add_test(NAME lantern_verify_signatures_vectors COMMAND lantern_verify_signatures_vectors_test)
+        set_tests_properties(lantern_verify_signatures_vectors PROPERTIES TIMEOUT 120)
+    else()
+        message(STATUS
+            "Verify-signatures fixtures not found at ${LANTERN_CONSENSUS_FIXTURE_DIR} "
+            "— skipping lantern_verify_signatures_vectors")
+    endif()
 
-    add_executable(lantern_genesis_vectors_test
-        tests/integration/test_genesis_vectors.c
-        tests/integration/consensus_fixture_runner.c
-        tests/support/state_store_adapter.c
-        tests/support/fixture_loader.c
-    )
-    target_link_libraries(lantern_genesis_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
-    target_include_directories(
-        lantern_genesis_vectors_test
-        PRIVATE
-            ${PROJECT_SOURCE_DIR}
-            ${PROJECT_SOURCE_DIR}/external/jsmn
-    )
-    target_compile_definitions(
-        lantern_genesis_vectors_test
-        PRIVATE
-            LANTERN_TEST_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tests/fixtures"
-    )
-    add_test(NAME lantern_genesis_vectors COMMAND lantern_genesis_vectors_test)
-    set_tests_properties(lantern_genesis_vectors PROPERTIES
-        TIMEOUT 120
-    )
+    if(EXISTS "${_lantern_state_transition_fixture_dir}")
+        message(STATUS
+            "State-transition fixtures found at ${LANTERN_CONSENSUS_FIXTURE_DIR} "
+            "— registering lantern_genesis_vectors")
+        add_executable(lantern_genesis_vectors_test
+            tests/integration/test_genesis_vectors.c
+            tests/integration/consensus_fixture_runner.c
+            tests/support/state_store_adapter.c
+            tests/support/fixture_loader.c
+        )
+        target_link_libraries(lantern_genesis_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
+        target_include_directories(
+            lantern_genesis_vectors_test
+            PRIVATE
+                ${PROJECT_SOURCE_DIR}
+                ${PROJECT_SOURCE_DIR}/external/jsmn
+        )
+        target_compile_definitions(
+            lantern_genesis_vectors_test
+            PRIVATE
+                LANTERN_CONSENSUS_FIXTURE_DIR="${LANTERN_CONSENSUS_FIXTURE_DIR}"
+        )
+        add_test(NAME lantern_genesis_vectors COMMAND lantern_genesis_vectors_test)
+        set_tests_properties(lantern_genesis_vectors PROPERTIES TIMEOUT 120)
+    else()
+        message(STATUS
+            "State-transition fixtures not found at ${LANTERN_CONSENSUS_FIXTURE_DIR} "
+            "— skipping lantern_genesis_vectors")
+    endif()
+
+    if(EXISTS "${_lantern_ssz_fixture_dir}")
+        message(STATUS
+            "SSZ fixtures found at ${LANTERN_CONSENSUS_FIXTURE_DIR} "
+            "— registering lantern_ssz_vectors")
+        add_executable(lantern_ssz_vectors_test
+            tests/integration/test_ssz_vectors.c
+            tests/support/state_store_adapter.c
+            tests/support/fixture_loader.c
+        )
+        target_link_libraries(lantern_ssz_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
+        target_include_directories(
+            lantern_ssz_vectors_test
+            PRIVATE
+                ${PROJECT_SOURCE_DIR}
+                ${PROJECT_SOURCE_DIR}/external/jsmn
+        )
+        target_compile_definitions(
+            lantern_ssz_vectors_test
+            PRIVATE
+                LANTERN_CONSENSUS_FIXTURE_DIR="${LANTERN_CONSENSUS_FIXTURE_DIR}"
+        )
+        add_test(NAME lantern_ssz_vectors COMMAND lantern_ssz_vectors_test)
+        set_tests_properties(lantern_ssz_vectors PROPERTIES TIMEOUT 180)
+    else()
+        message(STATUS
+            "SSZ fixtures not found at ${LANTERN_CONSENSUS_FIXTURE_DIR} "
+            "— skipping lantern_ssz_vectors")
+    endif()
+
+    if(EXISTS "${_lantern_networking_codec_fixture_dir}")
+        message(STATUS
+            "Networking-codec fixtures found at ${LANTERN_CONSENSUS_FIXTURE_DIR} "
+            "— registering lantern_networking_codec_vectors")
+        add_executable(lantern_networking_codec_vectors_test
+            tests/integration/test_networking_codec_vectors.c
+            tests/support/state_store_adapter.c
+            tests/support/fixture_loader.c
+        )
+        target_link_libraries(lantern_networking_codec_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
+        target_include_directories(
+            lantern_networking_codec_vectors_test
+            PRIVATE
+                ${PROJECT_SOURCE_DIR}
+                ${PROJECT_SOURCE_DIR}/external/jsmn
+                ${PROJECT_SOURCE_DIR}/external/c-libp2p/src/protocol/gossipsub/proto
+                ${PROJECT_SOURCE_DIR}/external/c-libp2p/src/protocol/gossipsub/proto/gen
+                ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/noise-c/include
+        )
+        target_compile_definitions(
+            lantern_networking_codec_vectors_test
+            PRIVATE
+                LANTERN_CONSENSUS_FIXTURE_DIR="${LANTERN_CONSENSUS_FIXTURE_DIR}"
+        )
+        add_test(NAME lantern_networking_codec_vectors COMMAND lantern_networking_codec_vectors_test)
+        set_tests_properties(lantern_networking_codec_vectors PROPERTIES TIMEOUT 180)
+    else()
+        message(STATUS
+            "Networking-codec fixtures not found at ${LANTERN_CONSENSUS_FIXTURE_DIR} "
+            "— skipping lantern_networking_codec_vectors")
+    endif()
 
     # Mirror libp2p dependency test names into CTestCustom so top-level `ctest`
     # ignores them (they are dependency-only suites we do not build/run).

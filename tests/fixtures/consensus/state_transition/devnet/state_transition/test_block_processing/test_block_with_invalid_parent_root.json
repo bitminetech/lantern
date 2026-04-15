@@ -2,6 +2,7 @@
     "tests/consensus/devnet/state_transition/test_block_processing.py::test_block_with_invalid_parent_root[fork_Devnet][fork_Devnet-state_transition_test]": {
         "network": "Devnet",
         "leanEnv": "test",
+        "expectException": "AssertionError",
         "pre": {
             "config": {
                 "genesisTime": 0
@@ -31,23 +32,23 @@
             "validators": {
                 "data": [
                     {
-                        "attestationPubkey": "0xcd64341d83f28533f239153535b45209592342325ed31a5792b2e61935648748d41c384850baf6386c43bf19bfb63f53eb2c8c0b",
-                        "proposalPubkey": "0x5eba321a84f55461e2c0e94036d24e5107720876752d5c4f6e03183a7e7f1856e372c60dbc6fbc0450c26e58ba402f1da6952a73",
+                        "attestationPubkey": "0x80a6f13b39b9c26cd91edb542bdb9e051b61223a15f5de18e53e6a361720cd65c06a114e87531241cc535f39156f0f2cf0877647",
+                        "proposalPubkey": "0xdedd8e5a890a2c339ffbca1ce85b710384670508df73ce33116bcd60befbef5a560e6304e3635a58e12b6b542c1bc6583a16455a",
                         "index": 0
                     },
                     {
-                        "attestationPubkey": "0x0c8f12450a0f4375d8f387643a66bd4084a76a522062790d8e961b38dfe3497444af494376e3c76f3007681a4016221434cdf51d",
-                        "proposalPubkey": "0x8b31ba434a9e116dcd99a11535d8fb480fe67517c20eb1117157ca1b1b6b0c5c9d9a632e3268986f35856c337fc18d7b6d4f926a",
+                        "attestationPubkey": "0x7612d36fb7667d1c2f19a821d6a63b3cc17f214baedecb57e6eed4600dabf055185de12c6418db6b79f71004303bfe3a753c9727",
+                        "proposalPubkey": "0x1dcca64f8f9956470c2a427ca669d9359f22f202387ba24440e77200ec57983515451279124ee834a62f77560b1c166b0eb2885b",
                         "index": 1
                     },
                     {
-                        "attestationPubkey": "0x454d107dc0156e61baee057497d5667adb027d68f6fffb2bc61c6a38e45eed3531c9bd77e64f610044b26b1ec4047929bcfed946",
-                        "proposalPubkey": "0xac91d91a23744669bb2a5356605a161a5ae28c1e872fcf1d1e8cc63cb278447d8b889c77ea21884bbd8ecf2ad4824c66ae098a12",
+                        "attestationPubkey": "0xd703e67ce93c9b61b2ae88063ce60f13822efe03d8f089582615032e2b44346fa0199c2320dca35012ec1d414dc3b835da11cd73",
+                        "proposalPubkey": "0x9ee9237afcc3d75c0a8271412f2ac10f03c0da760e545a21cc7eb8331381f62bec027d1dac093b7a09057c187dd46e6231c0c007",
                         "index": 2
                     },
                     {
-                        "attestationPubkey": "0xf19bf07520b1e97b131a55666bfe3e74cca720785f414d6b3e5d6f1616f35f7ab0e82123e74c2c766f970a233d0d19725a7d4d36",
-                        "proposalPubkey": "0x2327c12fc91cac0dc3593a5edb9c4a3c35ee9b5abc12883d28354b6965811c15ea1b926e86b8e16470d3586985293a5944d19b77",
+                        "attestationPubkey": "0xe41f343f892528158dccae5404bd7262106386597fd4a35ae2c682374c6f15706dd8062ddac61b1851020e0918e7970917e30b06",
+                        "proposalPubkey": "0x57ffb567b826fb60dd07da58f6939b05aa93cd4bb2d9794308d3232878caa5076e9628292e96406c2d8faa3f8108922cdcf37e56",
                         "index": 3
                     }
                 ]
@@ -72,9 +73,8 @@
                 }
             }
         ],
-        "expectException": "AssertionError",
         "_info": {
-            "hash": "0x1771339d80477407305609656802dffa9f5e09f15b82371a9148d635a58d3699",
+            "hash": "0xebbe90e5e7eab5e95d802fdfca6761856a9eea51209a339539cbcbd1a9bb063a",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/state_transition/test_block_processing.py::test_block_with_invalid_parent_root[fork_Devnet]",
             "description": "Test that blocks with wrong parent root are rejected.\n\n    Scenario\n    --------\n    Attempt to process a block where parent root doesn't match\n    hash_tree_root(state.latest block header).\n\n    Expected Behavior\n    -----------------\n    Block processing fails with AssertionError: \"Block parent root mismatch\"\n\n    Why This Matters\n    ----------------\n    Maintains chain integrity:\n    - Blocks must reference correct parent\n    - Prevents chain history forgery\n    - Ensures linear chain continuity\n    - Critical for fork resolution\n\n    Without this check, attackers could create invalid chain branches.",

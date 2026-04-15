@@ -101,6 +101,15 @@ static int decode_attestation_signatures(
     LanternAttestationSignatures *signatures,
     const uint8_t *data,
     size_t data_len);
+static int encode_attestation_data(
+    const LanternAttestationData *data,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written);
+static int decode_attestation_data(
+    LanternAttestationData *data,
+    const uint8_t *raw,
+    size_t raw_len);
 
 static size_t bitlist_encoded_size(size_t bit_length) {
     if (bit_length == 0) {
@@ -420,6 +429,45 @@ static int decode_validators_list(
     return 0;
 }
 
+int lantern_ssz_encode_validator(
+    const LanternValidator *validator,
+    uint8_t *out,
+    size_t remaining,
+    size_t *written) {
+    if (!validator || !out) {
+        return -1;
+    }
+    return encode_validators_list(validator, 1u, out, remaining, written);
+}
+
+int lantern_ssz_decode_validator(
+    LanternValidator *validator,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!validator || !data || data_len != LANTERN_VALIDATOR_SSZ_SIZE) {
+        return -1;
+    }
+
+    LanternState scratch;
+    lantern_state_init(&scratch);
+    scratch.config.num_validators = 1u;
+
+    int rc = decode_validators_list(&scratch, data, data_len);
+    if (rc == 0) {
+        if (scratch.validator_count != 1u || !scratch.validators) {
+            rc = -1;
+        } else {
+            *validator = scratch.validators[0];
+            scratch.validators = NULL;
+            scratch.validator_count = 0u;
+            scratch.config.num_validators = 0u;
+        }
+    }
+
+    lantern_state_reset(&scratch);
+    return rc;
+}
+
 static int encode_bitlist(const struct lantern_bitlist *list, uint8_t *out, size_t remaining, size_t *written) {
     if (!list || !out) {
         return -1;
@@ -603,6 +651,21 @@ int lantern_ssz_decode_checkpoint(LanternCheckpoint *checkpoint, const uint8_t *
         return -1;
     }
     return 0;
+}
+
+int lantern_ssz_encode_attestation_data(
+    const LanternAttestationData *data,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written) {
+    return encode_attestation_data(data, out, out_len, written);
+}
+
+int lantern_ssz_decode_attestation_data(
+    LanternAttestationData *data,
+    const uint8_t *raw,
+    size_t raw_len) {
+    return decode_attestation_data(data, raw, raw_len);
 }
 
 static int encode_attestation_data(
@@ -1322,6 +1385,51 @@ int lantern_ssz_decode_signed_aggregated_attestation(
         return -1;
     }
     return 0;
+}
+
+int lantern_ssz_encode_aggregated_attestation(
+    const LanternAggregatedAttestation *attestation,
+    uint8_t *out,
+    size_t remaining,
+    size_t *written) {
+    return encode_aggregated_attestation(attestation, out, remaining, written);
+}
+
+int lantern_ssz_decode_aggregated_attestation(
+    LanternAggregatedAttestation *attestation,
+    const uint8_t *data,
+    size_t data_len) {
+    return decode_aggregated_attestation(attestation, data, data_len);
+}
+
+int lantern_ssz_encode_aggregated_signature_proof(
+    const LanternAggregatedSignatureProof *proof,
+    uint8_t *out,
+    size_t remaining,
+    size_t *written) {
+    return encode_aggregated_signature_proof(proof, out, remaining, written);
+}
+
+int lantern_ssz_decode_aggregated_signature_proof(
+    LanternAggregatedSignatureProof *proof,
+    const uint8_t *data,
+    size_t data_len) {
+    return decode_aggregated_signature_proof(proof, data, data_len);
+}
+
+int lantern_ssz_encode_block_signatures(
+    const LanternBlockSignatures *signatures,
+    uint8_t *out,
+    size_t remaining,
+    size_t *written) {
+    return encode_block_signatures(signatures, out, remaining, written);
+}
+
+int lantern_ssz_decode_block_signatures(
+    LanternBlockSignatures *signatures,
+    const uint8_t *data,
+    size_t data_len) {
+    return decode_block_signatures(signatures, data, data_len);
 }
 
 static int encode_attestation_signatures(

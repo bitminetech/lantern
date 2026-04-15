@@ -71,9 +71,8 @@ tests/fixtures/**/*.json
 # XMSS key fixtures are part of the repository so CI can run vote tests.
 !tests/fixtures/genesis/xmss-keys/*.json
 
-# Commit consensus and genesis fixtures to avoid regenerating them in CI.
+# Genesis fixtures remain committed; consensus fixtures are generated on demand.
 !tests/fixtures/genesis/**/*.json
-!tests/fixtures/consensus/**/*.json
 
 # CI Build
 ci-build*

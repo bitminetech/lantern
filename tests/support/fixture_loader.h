@@ -58,10 +58,30 @@ int lantern_fixture_parse_anchor_state(
     uint64_t *genesis_time,
     uint64_t *validator_count);
 
+int lantern_fixture_parse_attestation_data(
+    const struct lantern_fixture_document *doc,
+    int data_obj_idx,
+    LanternAttestationData *out_data);
+
 int lantern_fixture_parse_block(
     const struct lantern_fixture_document *doc,
     int object_index,
     LanternBlock *block);
+
+int lantern_fixture_parse_attestation_message(
+    const struct lantern_fixture_document *doc,
+    int attestation_idx,
+    LanternSignedVote *vote);
+
+int lantern_fixture_parse_aggregated_attestation(
+    const struct lantern_fixture_document *doc,
+    int entry_idx,
+    LanternAggregatedAttestation *out_attestation);
+
+int lantern_fixture_parse_signature_proof(
+    const struct lantern_fixture_document *doc,
+    int proof_idx,
+    LanternAggregatedSignatureProof *out_proof);
 
 int lantern_fixture_parse_signed_block(
     const struct lantern_fixture_document *doc,

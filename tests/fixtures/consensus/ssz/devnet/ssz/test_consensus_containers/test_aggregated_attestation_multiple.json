@@ -29,8 +29,9 @@
             }
         },
         "serialized": "0x8400000064000000000000000101010101010101010101010101010101010101010101010101010101010101640000000000000002020202020202020202020202020202020202020202020202020202020202026300000000000000030303030303030303030303030303030303030303030303030303030303030332000000000000001d",
+        "root": "0xa4024b8ab98c429723aa5e383be39a7db91c141599fbb4ff482eb956a95213d8",
         "_info": {
-            "hash": "0x59ef4a45964b09143fd58a96531fd03adba818feb12a8d76f48af82f953837ab",
+            "hash": "0x409a9b1fe413b09ed089f8b0ac92faa6439ef0a071eb5f43ab96e57894f432a7",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/ssz/test_consensus_containers.py::test_aggregated_attestation_multiple[fork_Devnet]",
             "description": "SSZ roundtrip for AggregatedAttestation with multiple validators.",

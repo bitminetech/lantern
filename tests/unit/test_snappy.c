@@ -203,7 +203,7 @@ static void test_framed_uncompressed_chunks(void) {
 
 static void test_framed_compressed_chunks(void) {
     uint8_t source[64];
-    fill_pattern(source, sizeof(source), 0x5a);
+    memset(source, 0x5a, sizeof(source));
 
     size_t max_comp = 0;
     check_zero(lantern_snappy_max_compressed_size(sizeof(source), &max_comp), "framed compressed max");

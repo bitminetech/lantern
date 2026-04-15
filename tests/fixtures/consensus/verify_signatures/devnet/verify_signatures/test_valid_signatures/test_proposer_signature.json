@@ -31,13 +31,13 @@
             "validators": {
                 "data": [
                     {
-                        "attestationPubkey": "0xcd64341d83f28533f239153535b45209592342325ed31a5792b2e61935648748d41c384850baf6386c43bf19bfb63f53eb2c8c0b",
-                        "proposalPubkey": "0x5eba321a84f55461e2c0e94036d24e5107720876752d5c4f6e03183a7e7f1856e372c60dbc6fbc0450c26e58ba402f1da6952a73",
+                        "attestationPubkey": "0x80a6f13b39b9c26cd91edb542bdb9e051b61223a15f5de18e53e6a361720cd65c06a114e87531241cc535f39156f0f2cf0877647",
+                        "proposalPubkey": "0xdedd8e5a890a2c339ffbca1ce85b710384670508df73ce33116bcd60befbef5a560e6304e3635a58e12b6b542c1bc6583a16455a",
                         "index": 0
                     },
                     {
-                        "attestationPubkey": "0x0c8f12450a0f4375d8f387643a66bd4084a76a522062790d8e961b38dfe3497444af494376e3c76f3007681a4016221434cdf51d",
-                        "proposalPubkey": "0x8b31ba434a9e116dcd99a11535d8fb480fe67517c20eb1117157ca1b1b6b0c5c9d9a632e3268986f35856c337fc18d7b6d4f926a",
+                        "attestationPubkey": "0x7612d36fb7667d1c2f19a821d6a63b3cc17f214baedecb57e6eed4600dabf055185de12c6418db6b79f71004303bfe3a753c9727",
+                        "proposalPubkey": "0x1dcca64f8f9956470c2a427ca669d9359f22f202387ba24440e77200ec57983515451279124ee834a62f77560b1c166b0eb2885b",
                         "index": 1
                     }
                 ]
@@ -50,11 +50,11 @@
             }
         },
         "signedBlock": {
-            "message": {
+            "block": {
                 "slot": 1,
                 "proposerIndex": 1,
-                "parentRoot": "0x61fed1d3dbdc35ef2a324851b71ebc11d18a1c8f9d31db579c9b1d0058338e89",
-                "stateRoot": "0xca84c98fd15272edfd7c80fcef32fb9817999decb77df1a6eeadc02e68afc395",
+                "parentRoot": "0x65e480b3cdbb957c898a9268a6659cae6b023dce423b524137a50a40255ca59b",
+                "stateRoot": "0x1ef1984423729f82492bce28316c387d8acb8da296be4ee46e8e848438d8930f",
                 "body": {
                     "attestations": {
                         "data": []
@@ -65,11 +65,11 @@
                 "attestationSignatures": {
                     "data": []
                 },
-                "proposerSignature": "0x240000002515e3156dcb9765abdfbb329e859b4b10117d6a13377f5be68ced26280100000400000049b2b64f27982463438e7e7d86168a20ac5e5e4af7ae2870be90076941fe6d60825ae942f1b85b39be2865267dbdb0171e4e5c3d6497ef217ea7de00ee316c5733d6a92889892c38bfee6525572fab015eb72f0757921030a0ec2507b482383d848985677d644e52d97cbe34d78ad22a84009958121da45a4d9eb37e71bef802dab5fd2b7c87bd79f5da7d5f6ce8396299375b6d695ada4bba33ac19e2511c05d9c2cf6b0ecaa33a07b0f406a82f6048b858ec33282ed90bbd6a122778cecf79af53ed1ab51cf9722357a863b574691fb2633d155e53815db72ee8198f0e1c44a65eb24b13d14a7aac436d69dfd89874e246757ea919601492fea17600163e7d74f842763f995e5d1adf9e4be240805e2d448f26bfcb017d4f5cff127101a35d9022ea21eeb48a0341764e2daf9eb10c7e32674e68ea921cdf47750ab313237af5ea930d4872dc2e91df8f106bfbf149e17b6649dfdb8e63551c6e64c7381e58f5747534ab7eef2f2a22552acd377a1f843121494760f86d5709150e99436a56"
+                "proposerSignature": "0x240000006886be0946bb901553ab3351174ef85aef9ce278979ce35e1272014f2801000004000000f7f7c36af533fe74340142391949350faa20581a5c87d64c53ee6720102b6e30ac25be52c7f2cd41fecd2756aef78b04bba0d34f4318ae79c9e6e413243bd1179f041f05011f6602e4ca627225214046aac8a9160acacb2700e2c4069ea84c55f5ed2d332f0dcf04e6b08c39f7bfbf2f7b5d9a466c63fa0f12585848b431972a4fa077732f21a2261d242f350d1f7107807c9a27ce6a0e30fc78b97820e69a13b875b1445eb9910bf29b44558ad8ce112ea47e3caa9823122b2ebe0a0bb6f758fd66357203c6a904d5355c2e6185180ce09de26e5fbfd376dea48108d6163f75506c033c12ddf06d82b3243ae34a840226f8a232fb8d4829da88316a3283921c0ef910563b22a83d5ff922275fc92759b1271c4fe74a7e1d936fd062a3f4da71236a514a8d8e9a4bf22ed044fa657843cf2fa163c2a51376285f3d680d1426682ae4077e8d80b42b2d0d0a305c9ed37ca48fe23adee1ae3c5589d9716426701d92ef57585d3106316668aa6239b97e5815fcc333d36f693d4fbea868598c051d"
             }
         },
         "_info": {
-            "hash": "0x7eb9f901cb6c263adaf25fa92f82cc05deb2969f892ae3a8991af5ef79a3c56f",
+            "hash": "0x271fc0c7a004be940cf919d341101f0446aa7c8a50ede2d762d34fdc5618fddc",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/verify_signatures/test_valid_signatures.py::test_proposer_signature[fork_Devnet]",
             "description": "Test valid proposer signature in SignedBlock.\n\n    Scenario\n    --------\n    - Single block at slot 1\n    - No additional attestations (only proposer attestation)\n\n    Expected Behavior\n    -----------------\n    1. Proposer's signature in SignedBlock can be verified against\n       the validator's pubkey in the state\n\n    Why This Matters\n    ----------------\n    This is the most basic signature generation test. It verifies:\n    - XMSS key generation works\n    - Signature aggregation includes proposer signature",
