@@ -221,7 +221,7 @@ int lantern_genesis_load(
         lantern_log_error(
             "genesis",
             NULL,
-            "failed to parse validator registry at %s",
+            "failed to parse annotated_validators at %s",
             paths->validator_registry_path);
         goto error;
     }

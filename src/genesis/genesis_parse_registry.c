@@ -22,7 +22,6 @@
 #include "lantern/support/strings.h"
 
 static const size_t GENESIS_SMALL_LINE_BUFFER_LEN = 1024;
-static const size_t GENESIS_INITIAL_MAPPING_INDEX_CAPACITY = 8;
 
 static const char *const VALIDATOR_REGISTRY_ARRAY_KEY = "validators";
 static const char *const VALIDATOR_REGISTRY_FIELD_INDEX = "index";
@@ -34,16 +33,14 @@ static char *dup_trimmed(const char *value);
 static const char *yaml_object_value(const LanternYamlObject *object, const char *key);
 static int decode_validator_pubkey_hex(const char *hex, uint8_t out[LANTERN_VALIDATOR_PUBKEY_SIZE]);
 static int set_record_pubkey(struct lantern_validator_record *record);
+static int parse_registry_mapping_item_index(
+    const char *trimmed,
+    bool *out_has_index,
+    size_t *out_index);
 
 static int collect_registry_mapping_indices(
     const char *path,
-    size_t **out_indices,
-    size_t *out_count,
-    size_t *out_max_index);
-static int validate_registry_index_coverage(
-    const size_t *indices,
-    size_t count,
-    size_t max_index,
+    bool **out_seen_indices,
     size_t *out_record_count);
 static int build_index_only_registry(
     size_t record_count,
@@ -251,12 +248,71 @@ static int set_record_pubkey(struct lantern_validator_record *record)
 
 
 /**
- * Collect all validator indices from a mapping/scalar-list validators.yaml.
+ * Parse a registry mapping list item into a validator index.
  *
- * @param path          Filesystem path to validators.yaml.
- * @param out_indices   Output pointer for the allocated indices array (caller-owned).
- * @param out_count     Output pointer for the number of indices.
- * @param out_max_index Output pointer for the maximum index encountered.
+ * Supports both legacy scalar-list items (`- 3`) and annotated items
+ * (`- index: 3`).
+ *
+ * @param trimmed        Trimmed input line.
+ * @param out_has_index  Output flag set when a validator index was found.
+ * @param out_index      Output validator index.
+ *
+ * @return LANTERN_GENESIS_OK on success.
+ * @return LANTERN_GENESIS_ERR_INVALID_PARAM on invalid parameters.
+ * @return LANTERN_GENESIS_ERR_INVALID_DATA on malformed indices.
+ */
+static int parse_registry_mapping_item_index(
+    const char *trimmed,
+    bool *out_has_index,
+    size_t *out_index)
+{
+    if (!trimmed || !out_has_index || !out_index)
+    {
+        return LANTERN_GENESIS_ERR_INVALID_PARAM;
+    }
+
+    *out_has_index = false;
+    *out_index = 0;
+
+    if (*trimmed != '-')
+    {
+        return LANTERN_GENESIS_OK;
+    }
+
+    const char *value = lantern_trim_whitespace((char *)(trimmed + 1));
+    if (!value || *value == '\0')
+    {
+        return LANTERN_GENESIS_OK;
+    }
+
+    size_t prefix_len = strlen(VALIDATOR_REGISTRY_FIELD_INDEX);
+    if (strncmp(value, VALIDATOR_REGISTRY_FIELD_INDEX, prefix_len) == 0 && value[prefix_len] == ':')
+    {
+        value = lantern_trim_whitespace((char *)(value + prefix_len + 1u));
+    }
+
+    int ok = 0;
+    uint64_t parsed = parse_u64(value, &ok);
+    if (!ok || parsed > SIZE_MAX || parsed >= (uint64_t)LANTERN_VALIDATOR_REGISTRY_LIMIT)
+    {
+        return LANTERN_GENESIS_ERR_INVALID_DATA;
+    }
+
+    *out_has_index = true;
+    *out_index = (size_t)parsed;
+    return LANTERN_GENESIS_OK;
+}
+
+
+/**
+ * Collect all validator indices from an annotated_validators.yaml mapping.
+ *
+ * Duplicate indices are collapsed because annotated manifests carry both
+ * attester and proposer entries for each validator index.
+ *
+ * @param path             Filesystem path to annotated_validators.yaml.
+ * @param out_seen_indices Output pointer for the allocated coverage bitmap.
+ * @param out_record_count Output pointer for the validator count.
  *
  * @return LANTERN_GENESIS_OK on success.
  * @return LANTERN_GENESIS_ERR_INVALID_PARAM on invalid parameters.
@@ -269,18 +325,16 @@ static int set_record_pubkey(struct lantern_validator_record *record)
  */
 static int collect_registry_mapping_indices(
     const char *path,
-    size_t **out_indices,
-    size_t *out_count,
-    size_t *out_max_index)
+    bool **out_seen_indices,
+    size_t *out_record_count)
 {
-    if (!path || !out_indices || !out_count || !out_max_index)
+    if (!path || !out_seen_indices || !out_record_count)
     {
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
 
-    *out_indices = NULL;
-    *out_count = 0;
-    *out_max_index = 0;
+    *out_seen_indices = NULL;
+    *out_record_count = 0;
 
     FILE *fp = fopen(path, "r");
     if (!fp)
@@ -288,63 +342,45 @@ static int collect_registry_mapping_indices(
         return LANTERN_GENESIS_ERR_IO;
     }
 
-    size_t *indices = NULL;
-    size_t count = 0;
-    size_t cap = 0;
+    bool *seen = calloc((size_t)LANTERN_VALIDATOR_REGISTRY_LIMIT, sizeof(*seen));
+    size_t unique_count = 0;
     size_t max_index = 0;
     int result = LANTERN_GENESIS_OK;
+    if (!seen)
+    {
+        fclose(fp);
+        return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
+    }
 
     char line[GENESIS_SMALL_LINE_BUFFER_LEN];
     while (fgets(line, sizeof(line), fp))
     {
         char *trimmed = lantern_trim_whitespace(line);
-        if (!trimmed || *trimmed != '-')
-        {
-            continue;
-        }
-
-        trimmed = lantern_trim_whitespace(trimmed + 1);
         if (!trimmed || *trimmed == '\0')
         {
             continue;
         }
 
-        int ok = 0;
-        uint64_t value = parse_u64(trimmed, &ok);
-        if (!ok || value > SIZE_MAX)
+        bool has_index = false;
+        size_t index = 0;
+        result = parse_registry_mapping_item_index(trimmed, &has_index, &index);
+        if (result != LANTERN_GENESIS_OK)
         {
-            result = LANTERN_GENESIS_ERR_INVALID_DATA;
             break;
         }
-        if (value >= (uint64_t)LANTERN_VALIDATOR_REGISTRY_LIMIT)
+        if (!has_index)
         {
-            result = LANTERN_GENESIS_ERR_INVALID_DATA;
-            break;
+            continue;
         }
 
-        if (count == cap)
+        if (!seen[index])
         {
-            if (cap > SIZE_MAX / 2)
+            seen[index] = true;
+            ++unique_count;
+            if (index > max_index)
             {
-                result = LANTERN_GENESIS_ERR_OVERFLOW;
-                break;
+                max_index = index;
             }
-
-            size_t new_cap = (cap == 0) ? GENESIS_INITIAL_MAPPING_INDEX_CAPACITY : (cap * 2);
-            void *grown = realloc(indices, new_cap * sizeof(*indices));
-            if (!grown)
-            {
-                result = LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
-                break;
-            }
-            indices = grown;
-            cap = new_cap;
-        }
-
-        indices[count++] = (size_t)value;
-        if ((size_t)value > max_index)
-        {
-            max_index = (size_t)value;
         }
     }
 
@@ -352,78 +388,17 @@ static int collect_registry_mapping_indices(
 
     if (result != LANTERN_GENESIS_OK)
     {
-        free(indices);
+        free(seen);
         return result;
     }
 
-    if (count == 0)
+    if (unique_count == 0)
     {
-        free(indices);
+        free(seen);
         return LANTERN_GENESIS_ERR_INVALID_DATA;
     }
 
-    *out_indices = indices;
-    *out_count = count;
-    *out_max_index = max_index;
-    return LANTERN_GENESIS_OK;
-}
-
-
-/**
- * Validate that indices are unique and cover [0, max_index].
- *
- * @param indices         Input indices array.
- * @param count           Number of indices in the array.
- * @param max_index       Maximum index observed.
- * @param out_record_count Output pointer for the derived record count (max_index + 1).
- *
- * @return LANTERN_GENESIS_OK on success.
- * @return LANTERN_GENESIS_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_GENESIS_ERR_OUT_OF_MEMORY on allocation failure.
- * @return LANTERN_GENESIS_ERR_OVERFLOW on size/count overflow.
- * @return LANTERN_GENESIS_ERR_INVALID_DATA on validation failures.
- *
- * @note Thread safety: Thread-safe if callers provide exclusive access to outputs.
- */
-static int validate_registry_index_coverage(
-    const size_t *indices,
-    size_t count,
-    size_t max_index,
-    size_t *out_record_count)
-{
-    if (!indices || count == 0 || !out_record_count)
-    {
-        return LANTERN_GENESIS_ERR_INVALID_PARAM;
-    }
-
-    if (max_index == SIZE_MAX)
-    {
-        return LANTERN_GENESIS_ERR_OVERFLOW;
-    }
-
-    size_t record_count = max_index + 1;
-    if (record_count > (size_t)LANTERN_VALIDATOR_REGISTRY_LIMIT)
-    {
-        return LANTERN_GENESIS_ERR_INVALID_DATA;
-    }
-    bool *seen = calloc(record_count, sizeof(*seen));
-    if (!seen)
-    {
-        return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
-    }
-
-    for (size_t i = 0; i < count; ++i)
-    {
-        size_t idx = indices[i];
-        if (idx >= record_count || seen[idx])
-        {
-            free(seen);
-            return LANTERN_GENESIS_ERR_INVALID_DATA;
-        }
-        seen[idx] = true;
-    }
-
-    for (size_t i = 0; i < record_count; ++i)
+    for (size_t i = 0; i <= max_index; ++i)
     {
         if (!seen[i])
         {
@@ -432,8 +407,8 @@ static int validate_registry_index_coverage(
         }
     }
 
-    free(seen);
-    *out_record_count = record_count;
+    *out_seen_indices = seen;
+    *out_record_count = max_index + 1u;
     return LANTERN_GENESIS_OK;
 }
 
@@ -477,9 +452,9 @@ static int build_index_only_registry(
 
 
 /**
- * Populate an index-only registry from mapping/scalar list indices.
+ * Populate an index-only registry from an annotated_validators.yaml mapping.
  *
- * @param path     Filesystem path to validators.yaml.
+ * @param path     Filesystem path to annotated_validators.yaml.
  * @param registry Registry to populate (modified in place).
  *
  * @return LANTERN_GENESIS_OK on success.
@@ -500,22 +475,15 @@ static int parse_validator_registry_mapping(
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
 
-    size_t *indices = NULL;
-    size_t count = 0;
-    size_t max_index = 0;
-    int result = collect_registry_mapping_indices(path, &indices, &count, &max_index);
+    bool *seen_indices = NULL;
+    size_t record_count = 0;
+    int result = collect_registry_mapping_indices(path, &seen_indices, &record_count);
     if (result != LANTERN_GENESIS_OK)
     {
         return result;
     }
 
-    size_t record_count = 0;
-    result = validate_registry_index_coverage(indices, count, max_index, &record_count);
-    free(indices);
-    if (result != LANTERN_GENESIS_OK)
-    {
-        return result;
-    }
+    free(seen_indices);
 
     return build_index_only_registry(record_count, registry);
 }
@@ -812,12 +780,12 @@ static int parse_validator_registry_objects(
  * Parse a validator registry file.
  *
  * Supports an annotated YAML array under the `validators` key, or a fallback
- * scalar list of indices in mapping form. On success, `registry` owns the
+ * annotated_validators.yaml-style node mapping. On success, `registry` owns the
  * returned record array and must be released with `genesis_free_validator_registry()`.
  *
  * @spec Lantern devnet genesis artifact files (lean quickstart).
  *
- * @param path     Path to validators.yaml.
+ * @param path     Path to annotated_validators.yaml.
  * @param registry Registry to populate.
  *
  * @return LANTERN_GENESIS_OK on success.

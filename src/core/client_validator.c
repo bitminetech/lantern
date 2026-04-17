@@ -59,15 +59,9 @@ static const uint64_t VALIDATOR_SYNC_SLOT_LAG = 2;
 static const size_t VALIDATOR_SYNC_PENDING_THRESHOLD = 8;
 /** Wall clock lag (in slots) tolerated before treating peer status as stale. */
 static const uint64_t VALIDATOR_SYNC_WALL_CLOCK_LAG = 16;
-/** Devnet-3 committee count for subnet assignment. */
-static const size_t DEFAULT_VALIDATOR_ATTESTATION_COMMITTEE_COUNT = 1u;
-
 static size_t validator_attestation_committee_count(const struct lantern_client *client)
 {
-    if (client && client->debug_attestation_committee_count > 0) {
-        return client->debug_attestation_committee_count;
-    }
-    return DEFAULT_VALIDATOR_ATTESTATION_COMMITTEE_COUNT;
+    return lantern_client_attestation_committee_count(client);
 }
 
 static int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot);

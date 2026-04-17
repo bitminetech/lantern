@@ -79,7 +79,7 @@ static const size_t CHECKPOINT_SYNC_MAX_RESPONSE_BYTES =
     + (LANTERN_VALIDATOR_REGISTRY_LIMIT * 52u)
     + (LANTERN_HISTORICAL_ROOTS_LIMIT * 32u)
     + (LANTERN_JUSTIFICATION_VALIDATORS_LIMIT / 8u);
-static const size_t LANTERN_ATTESTATION_COMMITTEE_COUNT = 1u;
+static const size_t LANTERN_DEFAULT_ATTESTATION_COMMITTEE_COUNT = 1u;
 static const uint64_t LANTERN_CHECKPOINT_SYNC_STALE_PERSISTED_STATE_SLOT_THRESHOLD = 2u * 32u;
 
 bool lantern_client_persisted_state_is_stale_for_checkpoint_sync(
@@ -365,12 +365,10 @@ void lantern_client_options_init(struct lantern_client_options *options)
 
     options->data_dir = LANTERN_DEFAULT_DATA_DIR;
     options->genesis_config_path = LANTERN_DEFAULT_GENESIS_CONFIG;
-    options->validator_registry_path = LANTERN_DEFAULT_VALIDATOR_REGISTRY;
-    options->validator_keys_path = NULL;
+    options->validator_config_dir = LANTERN_DEFAULT_VALIDATOR_CONFIG_DIR;
     options->nodes_path = LANTERN_DEFAULT_NODES_FILE;
     options->genesis_state_path = NULL;
     options->use_genesis_state = false;
-    options->validator_config_path = LANTERN_DEFAULT_VALIDATOR_CONFIG;
     options->node_id = LANTERN_DEFAULT_NODE_ID;
     options->node_key_hex = NULL;
     options->node_key_path = NULL;
@@ -385,6 +383,8 @@ void lantern_client_options_init(struct lantern_client_options *options)
     options->xmss_secret_path = NULL;
     options->xmss_public_template = NULL;
     options->xmss_secret_template = NULL;
+    options->attestation_committee_count_override = 0;
+    options->has_attestation_committee_count_override = false;
     options->is_aggregator = false;
 }
 
@@ -750,7 +750,29 @@ static lantern_client_error client_apply_options(
 
     client->http_port = options->http_port;
     client->metrics_port = options->metrics_port;
+    if (options->has_attestation_committee_count_override)
+    {
+        client->debug_attestation_committee_count =
+            (size_t)options->attestation_committee_count_override;
+    }
     return LANTERN_CLIENT_OK;
+}
+
+size_t lantern_client_attestation_committee_count(const struct lantern_client *client)
+{
+    if (!client)
+    {
+        return LANTERN_DEFAULT_ATTESTATION_COMMITTEE_COUNT;
+    }
+    if (client->debug_attestation_committee_count > 0)
+    {
+        return client->debug_attestation_committee_count;
+    }
+    if (client->genesis.chain_config.attestation_committee_count > 0)
+    {
+        return (size_t)client->genesis.chain_config.attestation_committee_count;
+    }
+    return LANTERN_DEFAULT_ATTESTATION_COMMITTEE_COUNT;
 }
 
 
@@ -889,7 +911,7 @@ static lantern_client_error client_prepare_storage_and_genesis(
         lantern_log_error(
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "validator assignment mapping invalid or incomplete");
+            "annotated_validators.yaml assignment mapping invalid or incomplete");
         return LANTERN_CLIENT_ERR_GENESIS;
     }
 
@@ -2964,10 +2986,7 @@ static lantern_client_error client_start_protocols(
     struct lantern_client *client,
     uint8_t node_key[NODE_PRIVATE_KEY_SIZE])
 {
-    size_t attestation_committee_count =
-        client->debug_attestation_committee_count > 0
-            ? client->debug_attestation_committee_count
-            : LANTERN_ATTESTATION_COMMITTEE_COUNT;
+    size_t attestation_committee_count = lantern_client_attestation_committee_count(client);
     size_t subnet_id = 0;
     if (client->local_validators && client->local_validator_count > 0) {
         if (lantern_validator_index_compute_subnet_id(
@@ -3162,8 +3181,6 @@ static void shutdown_validator_and_keys(struct lantern_client *client)
     lantern_client_free_xmss_pubkeys(client);
     free(client->xmss_key_dir);
     client->xmss_key_dir = NULL;
-    free(client->validator_keys_path);
-    client->validator_keys_path = NULL;
     free(client->xmss_public_template);
     client->xmss_public_template = NULL;
     free(client->xmss_secret_template);

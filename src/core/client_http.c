@@ -530,9 +530,7 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
         (client->assigned_validators && client->assigned_validators->enr.is_aggregator) ? 1u : 0u;
     out_snapshot->lean_attestation_committee_subnet = (uint64_t)client->gossip.attestation_subnet_id;
     out_snapshot->lean_attestation_committee_count =
-        (uint64_t)(client->debug_attestation_committee_count > 0
-                ? client->debug_attestation_committee_count
-                : 1u);
+        (uint64_t)lantern_client_attestation_committee_count(client);
     out_snapshot->lean_connected_peers = 0;
     if (client->connection_lock_initialized)
     {

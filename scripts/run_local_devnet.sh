@@ -571,11 +571,9 @@ for i in $(seq 0 $((NODES-1))); do
       -e "LANTERN_METRICS_PORT=${METRICS}"
       -e "LANTERN_NODE_KEY_PATH=/genesis/lantern_${i}.key"
       -e "LANTERN_GENESIS_CONFIG=/genesis/config.yaml"
-      -e "LANTERN_VALIDATOR_REGISTRY=/genesis/validators.yaml"
-      -e "LANTERN_VALIDATOR_KEYS=/genesis/annotated_validators.yaml"
       -e "LANTERN_NODES_FILE=/genesis/nodes.yaml"
       -e "LANTERN_GENESIS_STATE=/genesis/genesis.ssz"
-      -e "LANTERN_VALIDATOR_CONFIG=/genesis/validator-config.yaml"
+      -e "LANTERN_VALIDATOR_CONFIG_DIR=/genesis"
       -e "LANTERN_EXTRA_ARGS=--hash-sig-key-dir /genesis/${HASH_SIG_KEYS_DIR_NAME} --log-level ${LOG_LEVEL}${CHECKPOINT_SYNC_URL:+ --checkpoint-sync-url ${CHECKPOINT_SYNC_URL}}"
     )
     if [[ "${ENABLE_COREDUMP}" == "1" ]]; then
@@ -605,11 +603,9 @@ for i in $(seq 0 $((NODES-1))); do
     nohup "${BIN}" \
       --data-dir "${DATA}" \
       --genesis-config "${GENESIS_DIR}/config.yaml" \
-      --validator-registry-path "${GENESIS_DIR}/validators.yaml" \
-      --validator-keys-path "${GENESIS_DIR}/annotated_validators.yaml" \
       --nodes-path "${GENESIS_DIR}/nodes.yaml" \
       --genesis-state "${GENESIS_DIR}/genesis.ssz" \
-      --validator-config "${GENESIS_DIR}/validator-config.yaml" \
+      --validator_config "${GENESIS_DIR}" \
       --node-id "${NODE_ID}" \
       --node-key-path "${GENESIS_DIR}/lantern_${i}.key" \
       --listen-address "/ip4/127.0.0.1/udp/${PORT}/quic-v1" \

@@ -28,7 +28,14 @@ static const size_t GENESIS_INITIAL_INDEX_CAPACITY = 4;
 
 static uint64_t parse_u64(const char *value, bool *out_is_valid);
 static int compare_u64(const void *lhs, const void *rhs);
+static bool entry_has_assignment_index(
+    const struct lantern_validator_config_entry *entry,
+    uint64_t index);
 static int append_assignment_index(struct lantern_validator_config_entry *entry, uint64_t index);
+static int parse_assignment_item_index(
+    const char *trimmed,
+    bool *out_has_index,
+    uint64_t *out_index);
 static int parse_assignment_mapping_key(
     struct lantern_validator_config *config,
     char *line,
@@ -129,6 +136,26 @@ static int compare_u64(const void *lhs, const void *rhs)
     return 0;
 }
 
+static bool entry_has_assignment_index(
+    const struct lantern_validator_config_entry *entry,
+    uint64_t index)
+{
+    if (!entry)
+    {
+        return false;
+    }
+
+    for (size_t index_pos = 0; index_pos < entry->indices_len; ++index_pos)
+    {
+        if (entry->indices[index_pos] == index)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 
 /**
  * Append a validator index to an entry's explicit index list.
@@ -199,6 +226,47 @@ static int append_assignment_index(struct lantern_validator_config_entry *entry,
 
     entry->indices[entry->indices_len] = index;
     entry->indices_len++;
+    return LANTERN_GENESIS_OK;
+}
+
+static int parse_assignment_item_index(
+    const char *trimmed,
+    bool *out_has_index,
+    uint64_t *out_index)
+{
+    if (!trimmed || !out_has_index || !out_index)
+    {
+        return LANTERN_GENESIS_ERR_INVALID_PARAM;
+    }
+
+    *out_has_index = false;
+    *out_index = 0;
+
+    if (*trimmed != '-')
+    {
+        return LANTERN_GENESIS_OK;
+    }
+
+    const char *value = lantern_trim_whitespace((char *)(trimmed + 1));
+    if (!value || *value == '\0')
+    {
+        return LANTERN_GENESIS_OK;
+    }
+
+    if (strncmp(value, "index", 5) == 0 && value[5] == ':')
+    {
+        value = lantern_trim_whitespace((char *)(value + 6));
+    }
+
+    bool is_valid_index = false;
+    uint64_t parsed = parse_u64(value, &is_valid_index);
+    if (!is_valid_index)
+    {
+        return LANTERN_GENESIS_ERR_INVALID_DATA;
+    }
+
+    *out_has_index = true;
+    *out_index = parsed;
     return LANTERN_GENESIS_OK;
 }
 
@@ -321,32 +389,31 @@ static int parse_assignment_file(
     char line[GENESIS_LINE_BUFFER_LEN];
     while (fgets(line, sizeof(line), fp))
     {
+        bool is_indented = isspace((unsigned char)line[0]) != 0;
         char *trimmed = lantern_trim_whitespace(line);
         if (!trimmed || *trimmed == '\0' || *trimmed == '#')
         {
             continue;
         }
 
-        if (*trimmed == '-')
+        bool has_index = false;
+        uint64_t parsed = 0;
+        int item_rc = parse_assignment_item_index(trimmed, &has_index, &parsed);
+        if (item_rc != LANTERN_GENESIS_OK)
         {
-            if (!current || !assigned)
+            return item_rc;
+        }
+        if (has_index)
+        {
+            if (!current || !assigned || parsed >= validator_count)
             {
                 continue;
             }
 
-            char *value = lantern_trim_whitespace(trimmed + 1);
-            if (!value || *value == '\0')
+            if (entry_has_assignment_index(current, parsed))
             {
                 continue;
             }
-
-            bool is_valid_index = false;
-            uint64_t parsed = parse_u64(value, &is_valid_index);
-            if (!is_valid_index || parsed >= validator_count)
-            {
-                return LANTERN_GENESIS_ERR_INVALID_DATA;
-            }
-
             if (assigned[(size_t)parsed])
             {
                 return LANTERN_GENESIS_ERR_INVALID_DATA;
@@ -372,6 +439,10 @@ static int parse_assignment_file(
         }
         if (!is_mapping_key)
         {
+            if (is_indented && current)
+            {
+                continue;
+            }
             current = NULL;
             continue;
         }

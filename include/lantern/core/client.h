@@ -27,10 +27,9 @@ extern "C" {
 
 #define LANTERN_DEFAULT_DATA_DIR "./data"
 #define LANTERN_DEFAULT_GENESIS_CONFIG "./genesis/config.yaml"
-#define LANTERN_DEFAULT_VALIDATOR_REGISTRY "./genesis/validators.yaml"
+#define LANTERN_DEFAULT_VALIDATOR_CONFIG_DIR "./genesis"
 #define LANTERN_DEFAULT_NODES_FILE "./genesis/nodes.yaml"
 #define LANTERN_DEFAULT_GENESIS_STATE "./genesis/genesis.ssz"
-#define LANTERN_DEFAULT_VALIDATOR_CONFIG "./genesis/validator-config.yaml"
 #define LANTERN_DEFAULT_NODE_ID "lantern_0"
 #define LANTERN_DEFAULT_LISTEN_ADDR "/ip4/0.0.0.0/udp/9000/quic-v1"
 #define LANTERN_DEFAULT_HTTP_PORT 5052
@@ -63,12 +62,10 @@ typedef enum
 struct lantern_client_options {
     const char *data_dir;
     const char *genesis_config_path;
-    const char *validator_registry_path;
-    const char *validator_keys_path;
+    const char *validator_config_dir;
     const char *nodes_path;
     const char *genesis_state_path;
     bool use_genesis_state;
-    const char *validator_config_path;
     const char *node_id;
     const char *node_key_hex;
     const char *node_key_path;
@@ -83,6 +80,8 @@ struct lantern_client_options {
     const char *xmss_secret_path;
     const char *xmss_public_template;
     const char *xmss_secret_template;
+    uint64_t attestation_committee_count_override;
+    bool has_attestation_committee_count_override;
     bool is_aggregator;
 };
 
@@ -266,7 +265,6 @@ struct lantern_client {
     bool debug_disable_fork_choice_time;
     size_t debug_attestation_committee_count;
     char *xmss_key_dir;
-    char *validator_keys_path;
     char *xmss_public_template;
     char *xmss_secret_template;
     char *xmss_public_path;

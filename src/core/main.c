@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -25,8 +26,6 @@
 
 enum {
     OPT_GENESIS_CONFIG = 1000,
-    OPT_VALIDATOR_REGISTRY,
-    OPT_VALIDATOR_KEYS,
     OPT_NODES_PATH,
     OPT_GENESIS_STATE,
     OPT_USE_GENESIS_STATE,
@@ -50,6 +49,7 @@ enum {
     OPT_XMSS_PUBLIC_TEMPLATE,
     OPT_XMSS_SECRET_TEMPLATE,
     OPT_IS_AGGREGATOR,
+    OPT_ATTESTATION_COMMITTEE_COUNT,
 };
 
 /* Forward declarations */
@@ -84,6 +84,7 @@ static lantern_client_error validate_required_options(
 static lantern_client_error run_main_loop(struct lantern_client *client);
 static void print_usage(const char *prog);
 static lantern_client_error parse_u16(const char *text, uint16_t *out_value);
+static lantern_client_error parse_size_t_positive(const char *text, size_t *out_value);
 
 /** Flag indicating whether the main loop should continue running. */
 static volatile sig_atomic_t g_keep_running = 1;
@@ -200,12 +201,6 @@ static lantern_client_error apply_option(
     case OPT_GENESIS_CONFIG:
         options->genesis_config_path = optarg;
         return LANTERN_CLIENT_OK;
-    case OPT_VALIDATOR_REGISTRY:
-        options->validator_registry_path = optarg;
-        return LANTERN_CLIENT_OK;
-    case OPT_VALIDATOR_KEYS:
-        options->validator_keys_path = optarg;
-        return LANTERN_CLIENT_OK;
     case OPT_NODES_PATH:
         options->nodes_path = optarg;
         return LANTERN_CLIENT_OK;
@@ -216,7 +211,7 @@ static lantern_client_error apply_option(
         options->use_genesis_state = true;
         return LANTERN_CLIENT_OK;
     case OPT_VALIDATOR_CONFIG:
-        options->validator_config_path = optarg;
+        options->validator_config_dir = optarg;
         return LANTERN_CLIENT_OK;
     case OPT_NODE_ID:
         options->node_id = optarg;
@@ -264,6 +259,21 @@ static lantern_client_error apply_option(
     case OPT_IS_AGGREGATOR:
         options->is_aggregator = true;
         return LANTERN_CLIENT_OK;
+    case OPT_ATTESTATION_COMMITTEE_COUNT: {
+        size_t parsed_value = 0;
+        if (parse_size_t_positive(optarg, &parsed_value) != LANTERN_CLIENT_OK)
+        {
+            lantern_log_error(
+                "cli",
+                &(const struct lantern_log_metadata){.validator = options->node_id},
+                "invalid attestation-committee-count '%s'",
+                optarg ? optarg : "");
+            return LANTERN_CLIENT_ERR_INVALID_PARAM;
+        }
+        options->attestation_committee_count_override = (uint64_t)parsed_value;
+        options->has_attestation_committee_count_override = true;
+        return LANTERN_CLIENT_OK;
+    }
     default:
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
@@ -431,12 +441,10 @@ static lantern_client_error parse_arguments(
     static const struct option long_options[] = {
         {"data-dir", required_argument, NULL, 'd'},
         {"genesis-config", required_argument, NULL, OPT_GENESIS_CONFIG},
-        {"validator-registry-path", required_argument, NULL, OPT_VALIDATOR_REGISTRY},
-        {"validator-keys-path", required_argument, NULL, OPT_VALIDATOR_KEYS},
         {"nodes-path", required_argument, NULL, OPT_NODES_PATH},
         {"genesis-state", required_argument, NULL, OPT_GENESIS_STATE},
         {"use-genesis-state", no_argument, NULL, OPT_USE_GENESIS_STATE},
-        {"validator-config", required_argument, NULL, OPT_VALIDATOR_CONFIG},
+        {"validator_config", required_argument, NULL, OPT_VALIDATOR_CONFIG},
         {"node-id", required_argument, NULL, OPT_NODE_ID},
         {"node-key", required_argument, NULL, OPT_NODE_KEY},
         {"node-key-path", required_argument, NULL, OPT_NODE_KEY_PATH},
@@ -456,6 +464,7 @@ static lantern_client_error parse_arguments(
         {"xmss-public-template", required_argument, NULL, OPT_XMSS_PUBLIC_TEMPLATE},
         {"xmss-secret-template", required_argument, NULL, OPT_XMSS_SECRET_TEMPLATE},
         {"is-aggregator", no_argument, NULL, OPT_IS_AGGREGATOR},
+        {"attestation-committee-count", required_argument, NULL, OPT_ATTESTATION_COMMITTEE_COUNT},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'v'},
         {0, 0, 0, 0},
@@ -476,7 +485,7 @@ static lantern_client_error parse_arguments(
         lantern_log_warn(
             "cli",
             &(const struct lantern_log_metadata){.validator = options->node_id},
-            "ignoring --genesis-state/--use-genesis-state; Lantern derives genesis from config/registry");
+            "ignoring --genesis-state/--use-genesis-state; Lantern derives genesis from config/annotated_validators");
         options->use_genesis_state = false;
         options->genesis_state_path = NULL;
     }
@@ -701,14 +710,6 @@ static void print_usage_paths(void)
     lantern_log_info(
         "main",
         NULL,
-        "  --validator-registry-path PATH  Path to validators.yaml");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --validator-keys-path PATH   Path to annotated_validators.yaml");
-    lantern_log_info(
-        "main",
-        NULL,
         "  --nodes-path PATH            Path to nodes.yaml");
     lantern_log_info(
         "main",
@@ -721,7 +722,7 @@ static void print_usage_paths(void)
     lantern_log_info(
         "main",
         NULL,
-        "  --validator-config PATH      Path to validator-config.yaml");
+        "  --validator_config DIR       Directory with annotated_validators.yaml and validator-config.yaml");
 }
 
 
@@ -785,6 +786,10 @@ static void print_usage_network(void)
     lantern_log_info(
         "main",
         NULL,
+        "  --attestation-committee-count N  Number of attestation committees (subnets); overrides config.yaml ATTESTATION_COMMITTEE_COUNT");
+    lantern_log_info(
+        "main",
+        NULL,
         "  --is-aggregator              Mark this node as the subnet aggregator");
 }
 
@@ -802,10 +807,6 @@ static void print_usage_xmss(void)
         "main",
         NULL,
         "  --hash-sig-key-dir PATH Alias for --xmss-key-dir");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --validator-keys-path PATH  Dual-key validator mapping file");
     lantern_log_info(
         "main",
         NULL,
@@ -904,5 +905,32 @@ static lantern_client_error parse_u16(const char *text, uint16_t *out_value)
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     *out_value = (uint16_t)parsed;
+    return LANTERN_CLIENT_OK;
+}
+
+static lantern_client_error parse_size_t_positive(const char *text, size_t *out_value)
+{
+    if (!text || !out_value)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    errno = 0;
+    char *end = NULL;
+    unsigned long long parsed = strtoull(text, &end, 10);
+    if (errno != 0 || end == text)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    while (end && *end != '\0' && isspace((unsigned char)*end))
+    {
+        ++end;
+    }
+    if ((end && *end != '\0') || parsed == 0 || parsed > (unsigned long long)SIZE_MAX)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    *out_value = (size_t)parsed;
     return LANTERN_CLIENT_OK;
 }
