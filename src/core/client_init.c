@@ -31,6 +31,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+static const char LANTERN_ANNOTATED_VALIDATORS_FILENAME[] = "annotated_validators.yaml";
+static const char LANTERN_VALIDATOR_CONFIG_FILENAME[] = "validator-config.yaml";
+
 
 /* ============================================================================
  * Forward Declarations
@@ -38,6 +41,7 @@
 
 void reset_genesis_paths(struct lantern_genesis_paths *paths);
 int append_unique_bootnode(struct lantern_string_list *list, const char *value);
+static int join_path_component(const char *dir, const char *leaf, char **out_path);
 
 
 /* ============================================================================
@@ -70,7 +74,11 @@ int copy_genesis_paths(
     {
         return -1;
     }
-    if (set_owned_string(&paths->validator_registry_path, options->validator_registry_path) != 0)
+    if (join_path_component(
+            options->validator_config_dir,
+            LANTERN_ANNOTATED_VALIDATORS_FILENAME,
+            &paths->validator_registry_path)
+        != 0)
     {
         return -1;
     }
@@ -78,11 +86,50 @@ int copy_genesis_paths(
     {
         return -1;
     }
-    if (set_owned_string(&paths->validator_config_path, options->validator_config_path) != 0)
+    if (join_path_component(
+            options->validator_config_dir,
+            LANTERN_VALIDATOR_CONFIG_FILENAME,
+            &paths->validator_config_path)
+        != 0)
     {
         return -1;
     }
 
+    return 0;
+}
+
+static int join_path_component(const char *dir, const char *leaf, char **out_path)
+{
+    if (!dir || !leaf || !out_path || dir[0] == '\0')
+    {
+        return -1;
+    }
+
+    *out_path = NULL;
+
+    size_t dir_len = strlen(dir);
+    size_t leaf_len = strlen(leaf);
+    bool needs_sep = dir_len > 0 && dir[dir_len - 1] != '/' && dir[dir_len - 1] != '\\';
+    size_t total = dir_len + (needs_sep ? 1u : 0u) + leaf_len + 1u;
+    char *buffer = malloc(total);
+    if (!buffer)
+    {
+        return -1;
+    }
+
+    int written = snprintf(
+        buffer,
+        total,
+        needs_sep ? "%s/%s" : "%s%s",
+        dir,
+        leaf);
+    if (written <= 0 || (size_t)written >= total)
+    {
+        free(buffer);
+        return -1;
+    }
+
+    *out_path = buffer;
     return 0;
 }
 

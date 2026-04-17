@@ -590,6 +590,8 @@ int gossip_block_handler(
 int gossip_vote_handler(
     const LanternSignedVote *vote,
     const peer_id_t *from,
+    const uint8_t *raw_vote_payload,
+    size_t raw_vote_payload_len,
     void *context);
 
 /**
@@ -605,6 +607,8 @@ int gossip_vote_handler(
 int gossip_aggregated_attestation_handler(
     const LanternSignedAggregatedAttestation *attestation,
     const peer_id_t *from,
+    const uint8_t *raw_attestation_payload,
+    size_t raw_attestation_payload_len,
     void *context);
 
 

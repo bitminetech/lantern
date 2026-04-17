@@ -54,10 +54,15 @@ struct lean_metrics_snapshot {
     uint64_t fork_choice_reorgs_total;
     uint64_t finalizations_success_total;
     uint64_t finalizations_error_total;
+    uint64_t block_building_success_total;
+    uint64_t block_building_failures_total;
     uint64_t peer_connection_events_total[LEAN_METRICS_DIR_COUNT][LEAN_METRICS_CONN_RESULT_COUNT];
     uint64_t peer_disconnection_events_total[LEAN_METRICS_DIR_COUNT][LEAN_METRICS_DISCONNECT_REASON_COUNT];
     uint64_t state_transition_slots_processed_total;
     uint64_t state_transition_attestations_processed_total;
+    struct lean_metrics_histogram_snapshot block_aggregated_payloads;
+    struct lean_metrics_histogram_snapshot block_building_payload_aggregation_time;
+    struct lean_metrics_histogram_snapshot block_building_time;
     struct lean_metrics_histogram_snapshot fork_choice_block_time;
     struct lean_metrics_histogram_snapshot fork_choice_reorg_depth;
     struct lean_metrics_histogram_snapshot attestation_validation_time;
@@ -70,9 +75,17 @@ struct lean_metrics_snapshot {
     struct lean_metrics_histogram_snapshot pq_sig_aggregated_signatures_building_time;
     struct lean_metrics_histogram_snapshot pq_sig_aggregated_signatures_verification_time;
     struct lean_metrics_histogram_snapshot committee_signatures_aggregation_time;
+    struct lean_metrics_histogram_snapshot gossip_block_size_bytes;
+    struct lean_metrics_histogram_snapshot gossip_attestation_size_bytes;
+    struct lean_metrics_histogram_snapshot gossip_aggregation_size_bytes;
 };
 
 void lean_metrics_reset(void);
+void lean_metrics_record_block_aggregated_payloads(size_t count);
+void lean_metrics_record_block_building_payload_aggregation_time(double seconds);
+void lean_metrics_record_block_building_time(double seconds);
+void lean_metrics_record_block_building_success(void);
+void lean_metrics_record_block_building_failure(void);
 void lean_metrics_record_fork_choice_block_time(double seconds);
 void lean_metrics_record_fork_choice_reorg(size_t depth);
 void lean_metrics_record_attestation_validation(double seconds, bool valid);
@@ -93,6 +106,9 @@ void lean_metrics_record_peer_connection(
 void lean_metrics_record_peer_disconnection(
     lean_metrics_direction_t direction,
     lean_metrics_disconnection_reason_t reason);
+void lean_metrics_record_gossip_block_size(size_t bytes_len);
+void lean_metrics_record_gossip_attestation_size(size_t bytes_len);
+void lean_metrics_record_gossip_aggregation_size(size_t bytes_len);
 void lean_metrics_snapshot(struct lean_metrics_snapshot *out);
 
 #ifdef __cplusplus

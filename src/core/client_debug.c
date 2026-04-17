@@ -68,7 +68,7 @@ int lantern_client_debug_gossip_vote(
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
-    return gossip_vote_handler(vote, NULL, client);
+    return gossip_vote_handler(vote, NULL, NULL, 0, client);
 }
 
 int lantern_client_debug_gossip_aggregated_attestation(
@@ -79,7 +79,7 @@ int lantern_client_debug_gossip_aggregated_attestation(
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
-    return gossip_aggregated_attestation_handler(attestation, NULL, client);
+    return gossip_aggregated_attestation_handler(attestation, NULL, NULL, 0, client);
 }
 
 

@@ -25,6 +25,7 @@ struct lantern_genesis_paths {
 struct lantern_chain_config {
     uint64_t genesis_time;
     uint64_t validator_count;
+    uint64_t attestation_committee_count;
     uint8_t *validator_attestation_pubkeys; /* flattened array: count * LANTERN_VALIDATOR_PUBKEY_SIZE */
     uint8_t *validator_proposal_pubkeys;    /* flattened array: count * LANTERN_VALIDATOR_PUBKEY_SIZE */
     size_t validator_pubkeys_count;         /* entry count shared by both packed arrays */

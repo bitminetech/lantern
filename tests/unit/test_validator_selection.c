@@ -61,17 +61,15 @@ int main(void) {
     int rc = 1;
 
     char config_path[PATH_MAX];
-    char registry_path[PATH_MAX];
+    char annotated_path[PATH_MAX];
     char state_path[PATH_MAX];
     char validator_config_path[PATH_MAX];
-    char validators_map_path[PATH_MAX];
     char nodes_path[PATH_MAX];
 
     build_fixture_path(config_path, sizeof(config_path), "genesis/config.yaml");
-    build_fixture_path(registry_path, sizeof(registry_path), "genesis/validators.yaml");
+    build_fixture_path(annotated_path, sizeof(annotated_path), "genesis/annotated_validators.yaml");
     build_fixture_path(state_path, sizeof(state_path), "genesis/genesis.ssz");
     build_fixture_path(validator_config_path, sizeof(validator_config_path), "genesis/validator-config.yaml");
-    build_fixture_path(validators_map_path, sizeof(validators_map_path), "genesis/validators.yaml");
 
     if (write_temp_nodes_file(nodes_path, sizeof(nodes_path)) != 0) {
         fprintf(stderr, "failed to create nodes file for validator selection test\n");
@@ -80,7 +78,7 @@ int main(void) {
 
     struct lantern_genesis_paths paths = {
         .config_path = config_path,
-        .validator_registry_path = registry_path,
+        .validator_registry_path = annotated_path,
         .nodes_path = nodes_path,
         .state_path = state_path,
         .validator_config_path = validator_config_path,
@@ -116,7 +114,7 @@ int main(void) {
 
     if (lantern_validator_config_apply_assignments(
             &artifacts.validator_config,
-            validators_map_path,
+            annotated_path,
             artifacts.chain_config.validator_count)
         != 0) {
         fprintf(stderr, "apply_assignments failed\n");

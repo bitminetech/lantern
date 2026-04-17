@@ -59,15 +59,9 @@ static const uint64_t VALIDATOR_SYNC_SLOT_LAG = 2;
 static const size_t VALIDATOR_SYNC_PENDING_THRESHOLD = 8;
 /** Wall clock lag (in slots) tolerated before treating peer status as stale. */
 static const uint64_t VALIDATOR_SYNC_WALL_CLOCK_LAG = 16;
-/** Devnet-3 committee count for subnet assignment. */
-static const size_t DEFAULT_VALIDATOR_ATTESTATION_COMMITTEE_COUNT = 1u;
-
 static size_t validator_attestation_committee_count(const struct lantern_client *client)
 {
-    if (client && client->debug_attestation_committee_count > 0) {
-        return client->debug_attestation_committee_count;
-    }
-    return DEFAULT_VALIDATOR_ATTESTATION_COMMITTEE_COUNT;
+    return lantern_client_attestation_committee_count(client);
 }
 
 static int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot);
@@ -1970,6 +1964,9 @@ int validator_build_block(
     LanternSignedBlock *out_block)
 {
     lantern_client_error result = LANTERN_CLIENT_OK;
+    uint64_t build_started_ms = 0;
+    uint64_t collect_started_ms = 0;
+    uint64_t collect_finished_ms = 0;
     LanternRoot parent_root;
     LanternAggregatedAttestations attestations;
     LanternAttestationSignatures signatures;
@@ -1986,12 +1983,14 @@ int validator_build_block(
     }
     struct lantern_local_validator *local = &client->local_validators[local_index];
     lantern_signed_block_init(out_block);
+    build_started_ms = monotonic_millis();
 
     lantern_aggregated_attestations_init(&attestations);
     attestations_initialized = true;
     lantern_attestation_signatures_init(&signatures);
     signatures_initialized = true;
 
+    collect_started_ms = monotonic_millis();
     result = validator_build_block_collect_attestations(
         client,
         slot,
@@ -1999,9 +1998,19 @@ int validator_build_block(
         &parent_root,
         &attestations,
         &signatures);
+    collect_finished_ms = monotonic_millis();
     if (result != LANTERN_CLIENT_OK)
     {
         goto cleanup;
+    }
+
+    /* TODO: verify that block attestations remain the correct proxy for
+     * "aggregated_payloads" in the leanMetrics spec. */
+    lean_metrics_record_block_aggregated_payloads(attestations.length);
+    if (collect_finished_ms >= collect_started_ms)
+    {
+        lean_metrics_record_block_building_payload_aggregation_time(
+            (double)(collect_finished_ms - collect_started_ms) / 1000.0);
     }
 
     result = validator_build_block_populate_message(
@@ -2042,6 +2051,22 @@ int validator_build_block(
     result = LANTERN_CLIENT_OK;
 
 cleanup:
+    {
+        uint64_t build_finished_ms = monotonic_millis();
+        if (build_finished_ms >= build_started_ms)
+        {
+            lean_metrics_record_block_building_time(
+                (double)(build_finished_ms - build_started_ms) / 1000.0);
+        }
+    }
+    if (result == LANTERN_CLIENT_OK)
+    {
+        lean_metrics_record_block_building_success();
+    }
+    else
+    {
+        lean_metrics_record_block_building_failure();
+    }
     if (attestations_initialized)
     {
         lantern_aggregated_attestations_reset(&attestations);

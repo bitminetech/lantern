@@ -265,6 +265,10 @@ int gossip_block_handler(
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_client *client = context;
+    if (raw_block_ssz && raw_block_ssz_len > 0)
+    {
+        lean_metrics_record_gossip_block_size(raw_block_ssz_len);
+    }
 
     char peer_text[PEER_TEXT_BUFFER_LEN];
     const char *peer_id_text = peer_id_to_text(from, peer_text, sizeof(peer_text));
@@ -303,6 +307,8 @@ int gossip_block_handler(
 int gossip_vote_handler(
     const LanternSignedVote *vote,
     const peer_id_t *from,
+    const uint8_t *raw_vote_payload,
+    size_t raw_vote_payload_len,
     void *context)
 {
     if (!vote || !context)
@@ -310,6 +316,10 @@ int gossip_vote_handler(
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_client *client = context;
+    if (raw_vote_payload && raw_vote_payload_len > 0)
+    {
+        lean_metrics_record_gossip_attestation_size(raw_vote_payload_len);
+    }
 
     char peer_text[PEER_TEXT_BUFFER_LEN];
     const char *peer_id_text = peer_id_to_text(from, peer_text, sizeof(peer_text));
@@ -443,12 +453,17 @@ static bool verify_and_cache_aggregated_attestation_locked(
 int gossip_aggregated_attestation_handler(
     const LanternSignedAggregatedAttestation *attestation,
     const peer_id_t *from,
+    const uint8_t *raw_attestation_payload,
+    size_t raw_attestation_payload_len,
     void *context)
 {
     if (!attestation || !context) {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_client *client = context;
+    if (raw_attestation_payload && raw_attestation_payload_len > 0) {
+        lean_metrics_record_gossip_aggregation_size(raw_attestation_payload_len);
+    }
 
     char peer_text[PEER_TEXT_BUFFER_LEN];
     const char *peer_id_text = peer_id_to_text(from, peer_text, sizeof(peer_text));

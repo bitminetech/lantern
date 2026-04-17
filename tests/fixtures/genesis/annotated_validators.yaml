@@ -1,0 +1,49 @@
+ream_0:
+  - index: 0
+    pubkey_hex: 00
+    privkey_file: validator_0_attester_key_sk.ssz
+  - index: 0
+    pubkey_hex: 01
+    privkey_file: validator_0_proposer_key_sk.ssz
+ream_1:
+  - index: 1
+    pubkey_hex: 10
+    privkey_file: validator_1_attester_key_sk.ssz
+  - index: 1
+    pubkey_hex: 11
+    privkey_file: validator_1_proposer_key_sk.ssz
+zeam_2:
+  - index: 2
+    pubkey_hex: 20
+    privkey_file: validator_2_attester_key_sk.ssz
+  - index: 2
+    pubkey_hex: 21
+    privkey_file: validator_2_proposer_key_sk.ssz
+zeam_3:
+  - index: 3
+    pubkey_hex: 30
+    privkey_file: validator_3_attester_key_sk.ssz
+  - index: 3
+    pubkey_hex: 31
+    privkey_file: validator_3_proposer_key_sk.ssz
+qlean_4:
+  - index: 4
+    pubkey_hex: 40
+    privkey_file: validator_4_attester_key_sk.ssz
+  - index: 4
+    pubkey_hex: 41
+    privkey_file: validator_4_proposer_key_sk.ssz
+qlean_5:
+  - index: 5
+    pubkey_hex: 50
+    privkey_file: validator_5_attester_key_sk.ssz
+  - index: 5
+    pubkey_hex: 51
+    privkey_file: validator_5_proposer_key_sk.ssz
+lantern_6:
+  - index: 6
+    pubkey_hex: 60
+    privkey_file: validator_6_attester_key_sk.ssz
+  - index: 6
+    pubkey_hex: 61
+    privkey_file: validator_6_proposer_key_sk.ssz

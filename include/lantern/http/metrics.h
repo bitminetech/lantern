@@ -30,6 +30,8 @@ struct lantern_metrics_snapshot {
     uint64_t lean_safe_target_slot;
     uint64_t lean_latest_justified_slot;
     uint64_t lean_latest_finalized_slot;
+    uint64_t lean_justified_slot;
+    uint64_t lean_finalized_slot;
     size_t lean_validators_count;
     size_t lean_connected_peers;
     uint64_t lean_gossip_signatures;
@@ -38,6 +40,7 @@ struct lantern_metrics_snapshot {
     uint64_t lean_is_aggregator;
     uint64_t lean_attestation_committee_subnet;
     uint64_t lean_attestation_committee_count;
+    uint64_t lean_node_sync_status;
     struct lean_metrics_snapshot lean_metrics;
     size_t peer_vote_metrics_count;
     struct lantern_peer_vote_metric peer_vote_metrics[LANTERN_METRICS_MAX_PEER_VOTE_STATS];

@@ -37,6 +37,7 @@ static const size_t GENESIS_PUBKEY_HEX_BUFFER_LEN = (LANTERN_VALIDATOR_PUBKEY_SI
 static const char *const CHAIN_CONFIG_KEY_GENESIS_TIME = "GENESIS_TIME";
 static const char *const CHAIN_CONFIG_KEY_VALIDATOR_COUNT = "VALIDATOR_COUNT";
 static const char *const CHAIN_CONFIG_KEY_NUM_VALIDATORS = "NUM_VALIDATORS";
+static const char *const CHAIN_CONFIG_KEY_ATTESTATION_COMMITTEE_COUNT = "ATTESTATION_COMMITTEE_COUNT";
 static const char *const CHAIN_CONFIG_KEY_GENESIS_VALIDATORS = "GENESIS_VALIDATORS";
 static const char *const CHAIN_CONFIG_FIELD_ATTESTATION_PUBKEY = "attestation_pubkey";
 static const char *const CHAIN_CONFIG_FIELD_PROPOSAL_PUBKEY = "proposal_pubkey";
@@ -802,6 +803,7 @@ int genesis_parse_chain_config(const char *path, struct lantern_chain_config *co
 
     config->genesis_time = 0;
     config->validator_count = 0;
+    config->attestation_committee_count = 0;
 
     free(config->validator_attestation_pubkeys);
     config->validator_attestation_pubkeys = NULL;
@@ -852,6 +854,16 @@ int genesis_parse_chain_config(const char *path, struct lantern_chain_config *co
             int ok = 0;
             config->validator_count = parse_u64(value, &ok);
             if (!ok)
+            {
+                result = LANTERN_GENESIS_ERR_INVALID_DATA;
+                break;
+            }
+        }
+        else if (strcmp(key, CHAIN_CONFIG_KEY_ATTESTATION_COMMITTEE_COUNT) == 0)
+        {
+            int ok = 0;
+            config->attestation_committee_count = parse_u64(value, &ok);
+            if (!ok || config->attestation_committee_count == 0)
             {
                 result = LANTERN_GENESIS_ERR_INVALID_DATA;
                 break;

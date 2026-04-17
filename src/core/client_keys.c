@@ -783,47 +783,6 @@ static int xmss_join_path(const char *dir, const char *leaf, char **out_path)
 }
 
 
-static int xmss_join_parent_path(const char *path, const char *leaf, char **out_path)
-{
-    if (!path || !leaf || !out_path)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    *out_path = NULL;
-
-    const char *slash = strrchr(path, '/');
-    const char *backslash = strrchr(path, '\\');
-    const char *sep = slash;
-    if (backslash && (!sep || backslash > sep))
-    {
-        sep = backslash;
-    }
-    if (!sep)
-    {
-        return LANTERN_CLIENT_ERR_CONFIG;
-    }
-
-    size_t dir_len = (size_t)(sep - path);
-    if (dir_len == 0)
-    {
-        return LANTERN_CLIENT_ERR_CONFIG;
-    }
-
-    char *dir = malloc(dir_len + 1u);
-    if (!dir)
-    {
-        return LANTERN_CLIENT_ERR_ALLOC;
-    }
-    memcpy(dir, path, dir_len);
-    dir[dir_len] = '\0';
-
-    int result = xmss_join_path(dir, leaf, out_path);
-    free(dir);
-    return result;
-}
-
-
 static bool xmss_file_exists(const char *path)
 {
     if (!path || path[0] == '\0')
@@ -844,48 +803,24 @@ static bool xmss_file_exists(const char *path)
 
 static int xmss_resolve_validator_keys_path(
     const struct lantern_client *client,
-    char **out_path,
-    bool *out_is_explicit)
+    char **out_path)
 {
-    if (!client || !out_path || !out_is_explicit)
+    if (!client || !out_path)
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
 
     *out_path = NULL;
-    *out_is_explicit = false;
-
-    if (client->validator_keys_path && client->validator_keys_path[0] != '\0')
-    {
-        *out_path = lantern_string_duplicate(client->validator_keys_path);
-        if (!*out_path)
-        {
-            return LANTERN_CLIENT_ERR_ALLOC;
-        }
-        *out_is_explicit = true;
-        return LANTERN_CLIENT_OK;
-    }
 
     if (client->genesis_paths.validator_registry_path
         && client->genesis_paths.validator_registry_path[0] != '\0')
     {
-        int rc = xmss_join_parent_path(
-            client->genesis_paths.validator_registry_path,
-            XMSS_ANNOTATED_VALIDATORS_FILENAME,
-            out_path);
-        if (rc == LANTERN_CLIENT_OK)
+        *out_path = lantern_string_duplicate(client->genesis_paths.validator_registry_path);
+        if (!*out_path)
         {
-            return rc;
+            return LANTERN_CLIENT_ERR_ALLOC;
         }
-    }
-
-    if (client->genesis_paths.validator_config_path
-        && client->genesis_paths.validator_config_path[0] != '\0')
-    {
-        return xmss_join_parent_path(
-            client->genesis_paths.validator_config_path,
-            XMSS_ANNOTATED_VALIDATORS_FILENAME,
-            out_path);
+        return LANTERN_CLIENT_OK;
     }
 
     return LANTERN_CLIENT_ERR_CONFIG;
@@ -1398,15 +1333,6 @@ int lantern_client_configure_xmss_sources(
         }
     }
 
-    const char *resolved_validator_keys_path = xmss_non_empty(options->validator_keys_path);
-    if (resolved_validator_keys_path)
-    {
-        if (set_owned_string(&client->validator_keys_path, resolved_validator_keys_path) != 0)
-        {
-            return LANTERN_CLIENT_ERR_ALLOC;
-        }
-    }
-
     const char *resolved_secret_path = xmss_non_empty(options->xmss_secret_path);
     if (!resolved_secret_path)
     {
@@ -1422,9 +1348,9 @@ int lantern_client_configure_xmss_sources(
     lantern_log_info(
         "crypto",
         &meta,
-        "xmss sources resolved dir=%s validator_keys=%s pk_path=%s sk_path=%s pk_template=%s sk_template=%s",
+        "xmss sources resolved dir=%s annotated_validators=%s pk_path=%s sk_path=%s pk_template=%s sk_template=%s",
         client->xmss_key_dir ? client->xmss_key_dir : "-",
-        client->validator_keys_path ? client->validator_keys_path : "-",
+        client->genesis_paths.validator_registry_path ? client->genesis_paths.validator_registry_path : "-",
         client->xmss_public_path ? client->xmss_public_path : "-",
         client->xmss_secret_path ? client->xmss_secret_path : "-",
         client->xmss_public_template ? client->xmss_public_template : "-",
@@ -1470,16 +1396,14 @@ int lantern_client_load_xmss_keys(struct lantern_client *client)
     xmss_manifest_init(&manifest);
     bool manifest_loaded = false;
     char *annotated_path = NULL;
-    bool annotated_path_is_explicit = false;
 
     int annotated_path_result = xmss_resolve_validator_keys_path(
         client,
-        &annotated_path,
-        &annotated_path_is_explicit);
+        &annotated_path);
     if (annotated_path_result == LANTERN_CLIENT_OK && annotated_path)
     {
         bool have_annotated_file = xmss_file_exists(annotated_path);
-        if (have_annotated_file || annotated_path_is_explicit)
+        if (have_annotated_file)
         {
             int manifest_result = xmss_manifest_load_annotated(
                 annotated_path,
@@ -1507,7 +1431,7 @@ int lantern_client_load_xmss_keys(struct lantern_client *client)
     lantern_log_info(
         "crypto",
         &meta,
-        "xmss load start key_dir=%s validator_keys=%s manifest=%s validators=%" PRIu64 " local=%zu",
+        "xmss load start key_dir=%s annotated_validators=%s manifest=%s validators=%" PRIu64 " local=%zu",
         client->xmss_key_dir ? client->xmss_key_dir : "-",
         annotated_path ? annotated_path : "-",
         manifest_loaded ? "loaded" : "missing",

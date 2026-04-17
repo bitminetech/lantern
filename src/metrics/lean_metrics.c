@@ -18,7 +18,13 @@ static const double kForkChoiceBlockBuckets[] = {0.005, 0.01, 0.025, 0.05, 0.1, 
 static const double kStateTransitionBuckets[] = {0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0};
 static const double kReorgDepthBuckets[] = {1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 20.0, 30.0, 50.0, 100.0};
 static const double kPqSigAggregatedSignatureBuckets[] = {0.1, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 4.0};
-static const double kCommitteeAggregationBuckets[] = {0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0};
+static const double kCommitteeAggregationBuckets[] = {0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0};
+static const double kBlockAggregatedPayloadBuckets[] = {1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0};
+static const double kBlockPayloadAggregationBuckets[] = {0.1, 0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0};
+static const double kBlockBuildingBuckets[] = {0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0};
+static const double kGossipBlockSizeBuckets[] = {10000.0, 50000.0, 100000.0, 250000.0, 500000.0, 1000000.0, 2000000.0, 5000000.0};
+static const double kGossipAttestationSizeBuckets[] = {512.0, 1024.0, 2048.0, 4096.0, 8192.0, 16384.0};
+static const double kGossipAggregationSizeBuckets[] = {1024.0, 4096.0, 16384.0, 65536.0, 131072.0, 262144.0, 524288.0, 1048576.0};
 
 static pthread_mutex_t g_metrics_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_attestations_valid_total = 0;
@@ -34,11 +40,25 @@ static uint64_t g_committee_aggregated_attestations_total = 0;
 static uint64_t g_fork_choice_reorgs_total = 0;
 static uint64_t g_finalizations_success_total = 0;
 static uint64_t g_finalizations_error_total = 0;
+static uint64_t g_block_building_success_total = 0;
+static uint64_t g_block_building_failures_total = 0;
 static uint64_t g_peer_connection_events_total[LEAN_METRICS_DIR_COUNT][LEAN_METRICS_CONN_RESULT_COUNT];
 static uint64_t g_peer_disconnection_events_total[LEAN_METRICS_DIR_COUNT][LEAN_METRICS_DISCONNECT_REASON_COUNT];
 static uint64_t g_state_slots_processed_total = 0;
 static uint64_t g_state_attestations_processed_total = 0;
 
+static struct lean_histogram g_hist_block_aggregated_payloads = {
+    .bounds = kBlockAggregatedPayloadBuckets,
+    .bucket_count = ARRAY_LEN(kBlockAggregatedPayloadBuckets),
+};
+static struct lean_histogram g_hist_block_building_payload_aggregation = {
+    .bounds = kBlockPayloadAggregationBuckets,
+    .bucket_count = ARRAY_LEN(kBlockPayloadAggregationBuckets),
+};
+static struct lean_histogram g_hist_block_building = {
+    .bounds = kBlockBuildingBuckets,
+    .bucket_count = ARRAY_LEN(kBlockBuildingBuckets),
+};
 static struct lean_histogram g_hist_fork_choice_block = {
     .bounds = kForkChoiceBlockBuckets,
     .bucket_count = ARRAY_LEN(kForkChoiceBlockBuckets),
@@ -86,6 +106,18 @@ static struct lean_histogram g_hist_pq_sig_aggregated_signatures_verification = 
 static struct lean_histogram g_hist_committee_signatures_aggregation = {
     .bounds = kCommitteeAggregationBuckets,
     .bucket_count = ARRAY_LEN(kCommitteeAggregationBuckets),
+};
+static struct lean_histogram g_hist_gossip_block_size = {
+    .bounds = kGossipBlockSizeBuckets,
+    .bucket_count = ARRAY_LEN(kGossipBlockSizeBuckets),
+};
+static struct lean_histogram g_hist_gossip_attestation_size = {
+    .bounds = kGossipAttestationSizeBuckets,
+    .bucket_count = ARRAY_LEN(kGossipAttestationSizeBuckets),
+};
+static struct lean_histogram g_hist_gossip_aggregation_size = {
+    .bounds = kGossipAggregationSizeBuckets,
+    .bucket_count = ARRAY_LEN(kGossipAggregationSizeBuckets),
 };
 
 static double sanitize_duration(double seconds) {
@@ -162,10 +194,15 @@ void lean_metrics_reset(void) {
     g_fork_choice_reorgs_total = 0;
     g_finalizations_success_total = 0;
     g_finalizations_error_total = 0;
+    g_block_building_success_total = 0;
+    g_block_building_failures_total = 0;
     memset(g_peer_connection_events_total, 0, sizeof(g_peer_connection_events_total));
     memset(g_peer_disconnection_events_total, 0, sizeof(g_peer_disconnection_events_total));
     g_state_slots_processed_total = 0;
     g_state_attestations_processed_total = 0;
+    histogram_reset(&g_hist_block_aggregated_payloads);
+    histogram_reset(&g_hist_block_building_payload_aggregation);
+    histogram_reset(&g_hist_block_building);
     histogram_reset(&g_hist_fork_choice_block);
     histogram_reset(&g_hist_fork_choice_reorg_depth);
     histogram_reset(&g_hist_attestation_validation);
@@ -178,6 +215,39 @@ void lean_metrics_reset(void) {
     histogram_reset(&g_hist_pq_sig_aggregated_signatures_building);
     histogram_reset(&g_hist_pq_sig_aggregated_signatures_verification);
     histogram_reset(&g_hist_committee_signatures_aggregation);
+    histogram_reset(&g_hist_gossip_block_size);
+    histogram_reset(&g_hist_gossip_attestation_size);
+    histogram_reset(&g_hist_gossip_aggregation_size);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_block_aggregated_payloads(size_t count) {
+    pthread_mutex_lock(&g_metrics_lock);
+    histogram_observe(&g_hist_block_aggregated_payloads, (double)count);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_block_building_payload_aggregation_time(double seconds) {
+    pthread_mutex_lock(&g_metrics_lock);
+    histogram_observe(&g_hist_block_building_payload_aggregation, seconds);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_block_building_time(double seconds) {
+    pthread_mutex_lock(&g_metrics_lock);
+    histogram_observe(&g_hist_block_building, seconds);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_block_building_success(void) {
+    pthread_mutex_lock(&g_metrics_lock);
+    g_block_building_success_total += 1;
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_block_building_failure(void) {
+    pthread_mutex_lock(&g_metrics_lock);
+    g_block_building_failures_total += 1;
     pthread_mutex_unlock(&g_metrics_lock);
 }
 
@@ -315,6 +385,24 @@ void lean_metrics_record_peer_disconnection(
     pthread_mutex_unlock(&g_metrics_lock);
 }
 
+void lean_metrics_record_gossip_block_size(size_t bytes_len) {
+    pthread_mutex_lock(&g_metrics_lock);
+    histogram_observe(&g_hist_gossip_block_size, (double)bytes_len);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_gossip_attestation_size(size_t bytes_len) {
+    pthread_mutex_lock(&g_metrics_lock);
+    histogram_observe(&g_hist_gossip_attestation_size, (double)bytes_len);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_gossip_aggregation_size(size_t bytes_len) {
+    pthread_mutex_lock(&g_metrics_lock);
+    histogram_observe(&g_hist_gossip_aggregation_size, (double)bytes_len);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
 void lean_metrics_snapshot(struct lean_metrics_snapshot *out) {
     if (!out) {
         return;
@@ -333,6 +421,8 @@ void lean_metrics_snapshot(struct lean_metrics_snapshot *out) {
     out->fork_choice_reorgs_total = g_fork_choice_reorgs_total;
     out->finalizations_success_total = g_finalizations_success_total;
     out->finalizations_error_total = g_finalizations_error_total;
+    out->block_building_success_total = g_block_building_success_total;
+    out->block_building_failures_total = g_block_building_failures_total;
     for (size_t dir = 0; dir < LEAN_METRICS_DIR_COUNT; ++dir) {
         for (size_t res = 0; res < LEAN_METRICS_CONN_RESULT_COUNT; ++res) {
             out->peer_connection_events_total[dir][res] = g_peer_connection_events_total[dir][res];
@@ -345,6 +435,11 @@ void lean_metrics_snapshot(struct lean_metrics_snapshot *out) {
     }
     out->state_transition_slots_processed_total = g_state_slots_processed_total;
     out->state_transition_attestations_processed_total = g_state_attestations_processed_total;
+    histogram_snapshot(&out->block_aggregated_payloads, &g_hist_block_aggregated_payloads);
+    histogram_snapshot(
+        &out->block_building_payload_aggregation_time,
+        &g_hist_block_building_payload_aggregation);
+    histogram_snapshot(&out->block_building_time, &g_hist_block_building);
     histogram_snapshot(&out->fork_choice_block_time, &g_hist_fork_choice_block);
     histogram_snapshot(&out->fork_choice_reorg_depth, &g_hist_fork_choice_reorg_depth);
     histogram_snapshot(&out->attestation_validation_time, &g_hist_attestation_validation);
@@ -363,5 +458,8 @@ void lean_metrics_snapshot(struct lean_metrics_snapshot *out) {
     histogram_snapshot(
         &out->committee_signatures_aggregation_time,
         &g_hist_committee_signatures_aggregation);
+    histogram_snapshot(&out->gossip_block_size_bytes, &g_hist_gossip_block_size);
+    histogram_snapshot(&out->gossip_attestation_size_bytes, &g_hist_gossip_attestation_size);
+    histogram_snapshot(&out->gossip_aggregation_size_bytes, &g_hist_gossip_aggregation_size);
     pthread_mutex_unlock(&g_metrics_lock);
 }

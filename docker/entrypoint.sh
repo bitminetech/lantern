@@ -23,18 +23,18 @@ HTTP_PORT="${LANTERN_HTTP_PORT:-5052}"
 METRICS_PORT="${LANTERN_METRICS_PORT:-8080}"
 
 GENESIS_CONFIG="${LANTERN_GENESIS_CONFIG:-${GENESIS_DIR}/config.yaml}"
-VALIDATOR_REGISTRY="${LANTERN_VALIDATOR_REGISTRY:-${GENESIS_DIR}/validators.yaml}"
-VALIDATOR_KEYS="${LANTERN_VALIDATOR_KEYS:-}"
 NODES_FILE="${LANTERN_NODES_FILE:-${GENESIS_DIR}/nodes.yaml}"
 GENESIS_STATE="${LANTERN_GENESIS_STATE:-${GENESIS_DIR}/genesis.ssz}"
-VALIDATOR_CONFIG="${LANTERN_VALIDATOR_CONFIG:-${GENESIS_DIR}/validator-config.yaml}"
+VALIDATOR_CONFIG_DIR="${LANTERN_VALIDATOR_CONFIG_DIR:-${GENESIS_DIR}}"
+ANNOTATED_VALIDATORS="${VALIDATOR_CONFIG_DIR}/annotated_validators.yaml"
+VALIDATOR_CONFIG="${VALIDATOR_CONFIG_DIR}/validator-config.yaml"
 
 NODE_KEY_HEX="${LANTERN_NODE_KEY_HEX:-}"
 NODE_KEY_PATH="${LANTERN_NODE_KEY_PATH:-${CONFIG_DIR}/keys/${NODE_ID}.key}"
 
 BOOTNODES="${LANTERN_BOOTNODES:-${NODES_FILE}}"
 
-for required in "${GENESIS_CONFIG}" "${VALIDATOR_REGISTRY}" "${NODES_FILE}" "${GENESIS_STATE}" "${VALIDATOR_CONFIG}"; do
+for required in "${GENESIS_CONFIG}" "${ANNOTATED_VALIDATORS}" "${NODES_FILE}" "${GENESIS_STATE}" "${VALIDATOR_CONFIG}"; do
     if [[ ! -f "${required}" ]]; then
         echo "Required genesis artifact not found: ${required}" >&2
         exit 1
@@ -45,28 +45,19 @@ if [[ -z "${NODE_KEY_HEX}" && ! -f "${NODE_KEY_PATH}" ]]; then
     echo "Node key missing; set LANTERN_NODE_KEY_HEX or provide ${NODE_KEY_PATH}" >&2
     exit 1
 fi
-if [[ -n "${VALIDATOR_KEYS}" && ! -f "${VALIDATOR_KEYS}" ]]; then
-    echo "Dual-key validator mapping not found: ${VALIDATOR_KEYS}" >&2
-    exit 1
-fi
-
 declare -a args
 args=(
     "--data-dir" "${DATA_DIR}"
     "--genesis-config" "${GENESIS_CONFIG}"
-    "--validator-registry-path" "${VALIDATOR_REGISTRY}"
     "--nodes-path" "${NODES_FILE}"
     "--genesis-state" "${GENESIS_STATE}"
-    "--validator-config" "${VALIDATOR_CONFIG}"
+    "--validator_config" "${VALIDATOR_CONFIG_DIR}"
     "--node-id" "${NODE_ID}"
     "--listen-address" "${LISTEN_ADDRESS}"
     "--http-port" "${HTTP_PORT}"
     "--metrics-port" "${METRICS_PORT}"
     "--devnet" "${DEVNET}"
 )
-if [[ -n "${VALIDATOR_KEYS}" ]]; then
-    args+=("--validator-keys-path" "${VALIDATOR_KEYS}")
-fi
 
 if [[ -n "${NODE_KEY_HEX}" ]]; then
     args+=("--node-key" "${NODE_KEY_HEX}")

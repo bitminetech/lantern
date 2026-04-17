@@ -1484,8 +1484,8 @@ static int test_client_load_xmss_keys_reads_annotated_validators(void) {
     client.local_validator_count = 1u;
     client.local_validators[0].global_index = 0u;
     client.xmss_key_dir = strdup(temp_dir);
-    client.validator_keys_path = strdup(annotated_path);
-    if (!client.xmss_key_dir || !client.validator_keys_path) {
+    client.genesis_paths.validator_registry_path = strdup(annotated_path);
+    if (!client.xmss_key_dir || !client.genesis_paths.validator_registry_path) {
         fprintf(stderr, "failed to copy annotated fixture paths\n");
         goto cleanup;
     }
@@ -1508,8 +1508,8 @@ static int test_client_load_xmss_keys_reads_annotated_validators(void) {
     rc = 0;
 
 cleanup:
-    free(client.validator_keys_path);
-    client.validator_keys_path = NULL;
+    free(client.genesis_paths.validator_registry_path);
+    client.genesis_paths.validator_registry_path = NULL;
     free(client.xmss_key_dir);
     client.xmss_key_dir = NULL;
     lantern_client_reset_local_validators(&client);
@@ -1589,8 +1589,8 @@ static int test_client_load_xmss_keys_rejects_incomplete_annotated_validator(voi
     client.local_validator_count = 1u;
     client.local_validators[0].global_index = 0u;
     client.xmss_key_dir = strdup(temp_dir);
-    client.validator_keys_path = strdup(annotated_path);
-    if (!client.xmss_key_dir || !client.validator_keys_path) {
+    client.genesis_paths.validator_registry_path = strdup(annotated_path);
+    if (!client.xmss_key_dir || !client.genesis_paths.validator_registry_path) {
         fprintf(stderr, "failed to copy incomplete annotated fixture paths\n");
         goto cleanup;
     }
@@ -1603,8 +1603,8 @@ static int test_client_load_xmss_keys_rejects_incomplete_annotated_validator(voi
     rc = 0;
 
 cleanup:
-    free(client.validator_keys_path);
-    client.validator_keys_path = NULL;
+    free(client.genesis_paths.validator_registry_path);
+    client.genesis_paths.validator_registry_path = NULL;
     free(client.xmss_key_dir);
     client.xmss_key_dir = NULL;
     lantern_client_reset_local_validators(&client);

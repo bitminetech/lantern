@@ -77,13 +77,13 @@ int main(void) {
     lantern_state_init(&generated_state);
 
     char config_path[PATH_MAX];
-    char registry_path[PATH_MAX];
+    char annotated_path[PATH_MAX];
     char state_path[PATH_MAX];
     char validator_config_path[PATH_MAX];
     char nodes_path[PATH_MAX];
 
     build_fixture_path(config_path, sizeof(config_path), "genesis/config.yaml");
-    build_fixture_path(registry_path, sizeof(registry_path), "genesis/validators.yaml");
+    build_fixture_path(annotated_path, sizeof(annotated_path), "genesis/annotated_validators.yaml");
     build_fixture_path(state_path, sizeof(state_path), "genesis/genesis.ssz");
     build_fixture_path(validator_config_path, sizeof(validator_config_path), "genesis/validator-config.yaml");
 
@@ -94,7 +94,7 @@ int main(void) {
 
     struct lantern_genesis_paths paths = {
         .config_path = config_path,
-        .validator_registry_path = registry_path,
+        .validator_registry_path = annotated_path,
         .nodes_path = nodes_path,
         .state_path = state_path,
         .validator_config_path = validator_config_path,
@@ -111,6 +111,10 @@ int main(void) {
     }
     if (artifacts.chain_config.validator_count != 7) {
         fprintf(stderr, "unexpected validator count: %llu\n", (unsigned long long)artifacts.chain_config.validator_count);
+        goto cleanup;
+    }
+    if (artifacts.chain_config.attestation_committee_count != 1) {
+        fprintf(stderr, "unexpected attestation committee count: %llu\n", (unsigned long long)artifacts.chain_config.attestation_committee_count);
         goto cleanup;
     }
     if (!artifacts.chain_config.validator_attestation_pubkeys

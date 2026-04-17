@@ -17,9 +17,6 @@
 	path = tools/lean-quickstart
 	url = https://github.com/blockblaz/lean-quickstart.git
 	branch = main
-[submodule "tools/leanMetrics"]
-	path = tools/leanMetrics
-	url = https://github.com/leanEthereum/leanMetrics.git
 [submodule "tools/hash-sig-cli"]
 	path = tools/hash-sig-cli
 	url = https://github.com/blockblaz/hash-sig-cli.git

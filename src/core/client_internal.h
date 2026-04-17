@@ -211,6 +211,8 @@ bool lantern_client_persisted_state_is_stale_for_checkpoint_sync(
     uint64_t *out_expected_current_slot,
     uint64_t *out_gap);
 
+size_t lantern_client_attestation_committee_count(const struct lantern_client *client);
+
 /**
  * Parse a checkpoint sync base URL.
  *

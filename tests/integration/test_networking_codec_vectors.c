@@ -1437,7 +1437,11 @@ static int run_gossip_topic_fixture(
     }
 
     if (strcmp(kind, "block") == 0) {
-        rc = lantern_gossip_topic_format(LANTERN_GOSSIP_TOPIC_BLOCK, fork_digest, actual_topic, sizeof(actual_topic));
+        rc = lantern_gossip_topic_format(
+            LANTERN_GOSSIP_TOPIC_BLOCK,
+            fork_digest,
+            actual_topic,
+            sizeof(actual_topic));
     } else if (strcmp(kind, "aggregation") == 0) {
         rc = lantern_gossip_topic_format(
             LANTERN_GOSSIP_TOPIC_AGGREGATED_ATTESTATION,

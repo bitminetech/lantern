@@ -41,6 +41,7 @@ static const char *const kLeanDirectionLabels[LEAN_METRICS_DIR_COUNT] = {"inboun
 static const char *const kLeanConnectionResultLabels[LEAN_METRICS_CONN_RESULT_COUNT] = {"success", "timeout", "error"};
 static const char *const kLeanDisconnectionReasonLabels[LEAN_METRICS_DISCONNECT_REASON_COUNT] =
     {"timeout", "remote_close", "local_close", "error"};
+static const char *const kLeanSyncStatusLabels[] = {"idle", "syncing", "synced"};
 
 enum
 {
@@ -323,15 +324,17 @@ static int append_histogram_metrics(
         bucket_count = LEAN_METRICS_MAX_BUCKETS;
     }
 
+    uint64_t cumulative_count = 0;
     for (size_t i = 0; i < bucket_count; ++i)
     {
         double bound = hist->buckets[i];
+        cumulative_count += hist->counts[i];
         rc = metrics_buffer_appendf(
             buf,
             "%s_bucket{le=\"%.9g\"} %" PRIu64 "\n",
             name,
             bound,
-            hist->counts[i]);
+            cumulative_count);
         if (rc != 0)
         {
             return rc;
@@ -342,7 +345,7 @@ static int append_histogram_metrics(
         buf,
         "%s_bucket{le=\"+Inf\"} %" PRIu64 "\n",
         name,
-        hist->counts[bucket_count]);
+        hist->total);
     if (rc != 0)
     {
         return rc;
@@ -455,6 +458,28 @@ static int append_lean_chain_metrics(
         return rc;
     }
 
+    rc = append_metric_uint64(
+        buf,
+        "lean_justified_slot",
+        "Current justified slot",
+        "gauge",
+        snapshot->lean_justified_slot);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_finalized_slot",
+        "Current finalized slot",
+        "gauge",
+        snapshot->lean_finalized_slot);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
     rc = append_metric_size_t(
         buf,
         "lean_validators_count",
@@ -544,7 +569,50 @@ static int append_lean_chain_metrics(
         return rc;
     }
 
+    rc = metrics_buffer_appendf(
+        buf,
+        "# HELP lean_node_sync_status Node sync status\n"
+        "# TYPE lean_node_sync_status gauge\n");
+    if (rc != 0)
+    {
+        return rc;
+    }
+    for (size_t i = 0; i < (sizeof(kLeanSyncStatusLabels) / sizeof(kLeanSyncStatusLabels[0])); ++i)
+    {
+        rc = metrics_buffer_appendf(
+            buf,
+            "lean_node_sync_status{status=\"%s\"} %" PRIu64 "\n",
+            kLeanSyncStatusLabels[i],
+            snapshot->lean_node_sync_status == i ? UINT64_C(1) : UINT64_C(0));
+        if (rc != 0)
+        {
+            return rc;
+        }
+    }
+
     const struct lean_metrics_snapshot *lean = &snapshot->lean_metrics;
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_block_building_success_total",
+        "Successful block builds",
+        "counter",
+        lean->block_building_success_total);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_metric_uint64(
+        buf,
+        "lean_block_building_failures_total",
+        "Failed block builds (exception in build_block)",
+        "counter",
+        lean->block_building_failures_total);
+    if (rc != 0)
+    {
+        return rc;
+    }
 
     rc = append_metric_uint64(
         buf,
@@ -938,6 +1006,36 @@ static int append_lean_histograms(
 
     int rc = append_histogram_metrics(
         buf,
+        "lean_block_aggregated_payloads",
+        "Number of aggregated_payloads in a block",
+        &lean->block_aggregated_payloads);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_block_building_payload_aggregation_time_seconds",
+        "Time taken to build aggregated_payloads during block building",
+        &lean->block_building_payload_aggregation_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_block_building_time_seconds",
+        "Time taken to build a block",
+        &lean->block_building_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
         "lean_fork_choice_block_processing_time_seconds",
         "Time taken to process block in fork choice",
         &lean->fork_choice_block_time);
@@ -1051,6 +1149,36 @@ static int append_lean_histograms(
         "lean_committee_signatures_aggregation_time_seconds",
         "Time taken to aggregate committee signatures",
         &lean->committee_signatures_aggregation_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_gossip_block_size_bytes",
+        "Bytes size of a gossip block message",
+        &lean->gossip_block_size_bytes);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_gossip_attestation_size_bytes",
+        "Bytes size of a gossip attestation message",
+        &lean->gossip_attestation_size_bytes);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_gossip_aggregation_size_bytes",
+        "Bytes size of a gossip aggregated attestation message",
+        &lean->gossip_aggregation_size_bytes);
     if (rc != 0)
     {
         return rc;

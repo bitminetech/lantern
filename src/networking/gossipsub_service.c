@@ -88,6 +88,10 @@ static void lantern_gossipsub_validation_job_free(struct lantern_gossipsub_valid
 static enum lantern_gossipsub_validation_job_kind lantern_gossipsub_classify_topic(
     const struct lantern_gossipsub_service *service,
     const char *topic);
+static void lantern_log_invalid_gossip_topic(
+    const struct lantern_gossipsub_service *service,
+    const char *topic,
+    const char *reason);
 static libp2p_gossipsub_validation_result_t lantern_validate_block_payload(
     struct lantern_gossipsub_service *service,
     const uint8_t *payload,
@@ -493,25 +497,40 @@ static enum lantern_gossipsub_validation_job_kind lantern_gossipsub_classify_top
     if (!service || !topic) {
         return LANTERN_GOSSIPSUB_JOB_UNKNOWN;
     }
-    if (service->block_topic[0] != '\0' && strcmp(topic, service->block_topic) == 0) {
-        return LANTERN_GOSSIPSUB_JOB_BLOCK;
+    struct lantern_gossip_parsed_topic parsed;
+    if (lantern_gossip_topic_parse(topic, &parsed) != 0) {
+        const char *reason = "topic is not a valid lean consensus gossip topic";
+        lantern_log_invalid_gossip_topic(service, topic, reason);
+        return LANTERN_GOSSIPSUB_JOB_UNKNOWN;
     }
-    if (service->aggregated_attestation_topic[0] != '\0'
-        && strcmp(topic, service->aggregated_attestation_topic) == 0) {
-        return LANTERN_GOSSIPSUB_JOB_AGGREGATED_ATTESTATION;
+    if (strcmp(parsed.network_name, service->topic_network_name) != 0) {
+        lantern_log_invalid_gossip_topic(service, topic, "topic network slot does not match local configuration");
+        return LANTERN_GOSSIPSUB_JOB_UNKNOWN;
     }
-    if (service->vote_topic[0] != '\0' && strcmp(topic, service->vote_topic) == 0) {
-        return LANTERN_GOSSIPSUB_JOB_VOTE;
-    }
-    if (service->vote_subnet_topic[0] != '\0' && strcmp(topic, service->vote_subnet_topic) == 0) {
-        return LANTERN_GOSSIPSUB_JOB_VOTE;
-    }
-    for (size_t i = 0; i < service->extra_vote_subnet_topic_count; ++i) {
-        if (strcmp(topic, service->extra_vote_subnet_topics[i]) == 0) {
+    switch (parsed.kind) {
+        case LANTERN_GOSSIP_TOPIC_BLOCK:
+            return LANTERN_GOSSIPSUB_JOB_BLOCK;
+        case LANTERN_GOSSIP_TOPIC_AGGREGATED_ATTESTATION:
+            return LANTERN_GOSSIPSUB_JOB_AGGREGATED_ATTESTATION;
+        case LANTERN_GOSSIP_TOPIC_VOTE_SUBNET:
             return LANTERN_GOSSIPSUB_JOB_VOTE;
-        }
+        default:
+            break;
     }
     return LANTERN_GOSSIPSUB_JOB_UNKNOWN;
+}
+
+static void lantern_log_invalid_gossip_topic(
+    const struct lantern_gossipsub_service *service,
+    const char *topic,
+    const char *reason)
+{
+    lantern_log_warn(
+        "gossip",
+        &(const struct lantern_log_metadata){.peer = service ? service->devnet : NULL},
+        "rejecting gossip topic=%s reason=%s",
+        topic ? topic : "(null)",
+        reason ? reason : "invalid topic");
 }
 
 static libp2p_gossipsub_validation_result_t lantern_validate_block_payload(
@@ -638,7 +657,13 @@ static libp2p_gossipsub_validation_result_t lantern_validate_vote_payload(
         goto cleanup;
     }
 
-    if (service->vote_handler(&vote, propagation_source, service->vote_handler_user_data) != 0) {
+    if (service->vote_handler(
+            &vote,
+            propagation_source,
+            payload,
+            payload_len,
+            service->vote_handler_user_data)
+        != 0) {
         result = LIBP2P_GOSSIPSUB_VALIDATION_IGNORE;
     }
     char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
@@ -717,6 +742,8 @@ static libp2p_gossipsub_validation_result_t lantern_validate_aggregated_attestat
     if (service->aggregated_attestation_handler(
             &attestation,
             propagation_source,
+            payload,
+            payload_len,
             service->aggregated_attestation_handler_user_data)
         != 0) {
         result = LIBP2P_GOSSIPSUB_VALIDATION_IGNORE;
@@ -1117,6 +1144,8 @@ void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service) 
     memset(service->aggregated_attestation_topic, 0, sizeof(service->aggregated_attestation_topic));
     service->data_dir = NULL;
     service->devnet = NULL;
+    memset(service->topic_network_name, 0, sizeof(service->topic_network_name));
+    memset(service->fork_digest, 0, sizeof(service->fork_digest));
     service->attestation_subnet_id = 0;
     service->subscribe_attestation_subnet = 0;
     service->publish_hook = NULL;
@@ -1133,7 +1162,7 @@ void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service) 
 int lantern_gossipsub_service_start(
     struct lantern_gossipsub_service *service,
     const struct lantern_gossipsub_config *config) {
-    if (!service || !config || !config->host || !config->devnet) {
+    if (!service || !config || !config->host || !config->topic_network_name) {
         return -1;
     }
     int previous_loopback = service->loopback_only;
@@ -1159,12 +1188,18 @@ int lantern_gossipsub_service_start(
     service->aggregated_attestation_handler_user_data = previous_aggregated_user_data;
     service->data_dir = config->data_dir;
     service->devnet = config->devnet;
+    snprintf(
+        service->topic_network_name,
+        sizeof(service->topic_network_name),
+        "%s",
+        config->topic_network_name);
+    memcpy(service->fork_digest, config->fork_digest, sizeof(service->fork_digest));
     service->attestation_subnet_id = config->attestation_subnet_id;
     service->subscribe_attestation_subnet = config->subscribe_attestation_subnet ? 1 : 0;
 
     if (lantern_gossip_topic_format(
             LANTERN_GOSSIP_TOPIC_BLOCK,
-            config->devnet,
+            service->topic_network_name,
             service->block_topic,
             sizeof(service->block_topic))
         != 0) {
@@ -1172,7 +1207,7 @@ int lantern_gossipsub_service_start(
     }
     if (lantern_gossip_topic_format(
             LANTERN_GOSSIP_TOPIC_VOTE,
-            config->devnet,
+            service->topic_network_name,
             service->vote_topic,
             sizeof(service->vote_topic))
         != 0) {
@@ -1180,7 +1215,7 @@ int lantern_gossipsub_service_start(
     }
     if (lantern_gossip_topic_format_subnet(
             LANTERN_GOSSIP_TOPIC_VOTE_SUBNET,
-            config->devnet,
+            service->topic_network_name,
             config->attestation_subnet_id,
             service->vote_subnet_topic,
             sizeof(service->vote_subnet_topic))
@@ -1189,7 +1224,7 @@ int lantern_gossipsub_service_start(
     }
     if (lantern_gossip_topic_format(
             LANTERN_GOSSIP_TOPIC_AGGREGATED_ATTESTATION,
-            config->devnet,
+            service->topic_network_name,
             service->aggregated_attestation_topic,
             sizeof(service->aggregated_attestation_topic))
         != 0) {
@@ -1362,10 +1397,9 @@ int lantern_gossipsub_service_publish_vote_subnet(
     }
     char topic[LANTERN_GOSSIPSUB_TOPIC_CAP];
     const char *publish_topic = NULL;
-    if (service->devnet
-        && lantern_gossip_topic_format_subnet(
+    if (lantern_gossip_topic_format_subnet(
             LANTERN_GOSSIP_TOPIC_VOTE_SUBNET,
-            service->devnet,
+            service->topic_network_name,
             subnet_id,
             topic,
             sizeof(topic))
@@ -1398,14 +1432,14 @@ int lantern_gossipsub_service_publish_vote_subnet(
 int lantern_gossipsub_service_subscribe_attestation_subnet(
     struct lantern_gossipsub_service *service,
     size_t subnet_id) {
-    if (!service || !service->gossipsub || !service->devnet) {
+    if (!service || !service->gossipsub) {
         return -1;
     }
 
     char topic[LANTERN_GOSSIPSUB_TOPIC_CAP];
     if (lantern_gossip_topic_format_subnet(
             LANTERN_GOSSIP_TOPIC_VOTE_SUBNET,
-            service->devnet,
+            service->topic_network_name,
             subnet_id,
             topic,
             sizeof(topic))

@@ -1203,8 +1203,48 @@ static void test_signed_block_list(void) {
 
 static void test_gossip_helpers(void) {
     char topic[128];
-    check_zero(lantern_gossip_topic_format(LANTERN_GOSSIP_TOPIC_BLOCK, "devnet", topic, sizeof(topic)), "topic format");
-    CHECK(strcmp(topic, "/leanconsensus/devnet/block/ssz_snappy") == 0);
+    uint8_t parsed_digest[4];
+    char digest_hex[LANTERN_GOSSIP_FORK_DIGEST_HEX_LEN + 1u];
+    static const uint8_t fork_digest[4] = {0x12, 0x34, 0x56, 0x78};
+    check_zero(lantern_gossip_fork_digest_to_hex(fork_digest, digest_hex), "fork digest hex");
+    CHECK(strcmp(digest_hex, "12345678") == 0);
+    check_zero(lantern_gossip_fork_digest_from_hex("12345678", parsed_digest), "fork digest parse");
+    CHECK(memcmp(parsed_digest, fork_digest, sizeof(parsed_digest)) == 0);
+    CHECK(lantern_gossip_fork_digest_from_hex("0x12345678", parsed_digest) != 0);
+    CHECK(lantern_gossip_fork_digest_from_hex("1234567", parsed_digest) != 0);
+    CHECK(lantern_gossip_fork_digest_from_hex("1234567G", parsed_digest) != 0);
+
+    check_zero(lantern_gossip_topic_format(LANTERN_GOSSIP_TOPIC_BLOCK, "devnet0", topic, sizeof(topic)), "topic format");
+    CHECK(strcmp(topic, "/leanconsensus/devnet0/block/ssz_snappy") == 0);
+
+    struct lantern_gossip_parsed_topic parsed_topic;
+    check_zero(lantern_gossip_topic_parse(topic, &parsed_topic), "topic parse block");
+    CHECK(parsed_topic.kind == LANTERN_GOSSIP_TOPIC_BLOCK);
+    CHECK(strcmp(parsed_topic.network_name, "devnet0") == 0);
+
+    check_zero(
+        lantern_gossip_topic_format_subnet(
+            LANTERN_GOSSIP_TOPIC_VOTE_SUBNET,
+            "devnet0",
+            7u,
+            topic,
+            sizeof(topic)),
+        "topic format subnet");
+    CHECK(strcmp(topic, "/leanconsensus/devnet0/attestation_7/ssz_snappy") == 0);
+    check_zero(lantern_gossip_topic_parse(topic, &parsed_topic), "topic parse subnet");
+    CHECK(parsed_topic.kind == LANTERN_GOSSIP_TOPIC_VOTE_SUBNET);
+    CHECK(strcmp(parsed_topic.network_name, "devnet0") == 0);
+    CHECK(parsed_topic.subnet_id == 7u);
+
+    check_zero(lantern_gossip_topic_parse("/leanconsensus/0x12345678/block/ssz_snappy", &parsed_topic), "topic parse 0x");
+    CHECK(strcmp(parsed_topic.network_name, "0x12345678") == 0);
+    check_zero(lantern_gossip_topic_parse("/leanconsensus/12345678/block/ssz_snappy", &parsed_topic), "topic parse hex");
+    CHECK(strcmp(parsed_topic.network_name, "12345678") == 0);
+    check_zero(lantern_gossip_topic_parse("/leanconsensus/1234567/block/ssz_snappy", &parsed_topic), "topic parse short");
+    CHECK(strcmp(parsed_topic.network_name, "1234567") == 0);
+    check_zero(lantern_gossip_topic_parse("/leanconsensus/not-hex/block/ssz_snappy", &parsed_topic), "topic parse opaque");
+    CHECK(strcmp(parsed_topic.network_name, "not-hex") == 0);
+    CHECK(lantern_gossip_topic_parse("/leanconsensus//block/ssz_snappy", &parsed_topic) != 0);
 
     uint8_t payload[64];
     fill_bytes(payload, sizeof(payload), 0x5A);
@@ -1614,7 +1654,7 @@ static void test_client_publish_block_loopback(void) {
     struct lantern_client client;
     memset(&client, 0, sizeof(client));
     lantern_gossipsub_service_init(&client.gossip);
-    snprintf(client.gossip.block_topic, sizeof(client.gossip.block_topic), "/leanconsensus/devnet/block/ssz_snappy");
+    snprintf(client.gossip.block_topic, sizeof(client.gossip.block_topic), "/leanconsensus/devnet0/block/ssz_snappy");
     lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
 
     LanternSignedBlock block;

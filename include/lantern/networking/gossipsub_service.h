@@ -20,6 +20,8 @@ struct lantern_gossipsub_config {
     struct libp2p_host *host;
     const char *devnet;
     const char *data_dir;
+    const char *topic_network_name;
+    uint8_t fork_digest[4];
     size_t attestation_subnet_id;
     int subscribe_attestation_subnet;
 };
@@ -33,10 +35,14 @@ typedef int (*lantern_gossipsub_block_handler)(
 typedef int (*lantern_gossipsub_vote_handler)(
     const LanternSignedVote *vote,
     const peer_id_t *from,
+    const uint8_t *raw_vote_payload,
+    size_t raw_vote_payload_len,
     void *user_data);
 typedef int (*lantern_gossipsub_aggregated_attestation_handler)(
     const LanternSignedAggregatedAttestation *attestation,
     const peer_id_t *from,
+    const uint8_t *raw_attestation_payload,
+    size_t raw_attestation_payload_len,
     void *user_data);
 
 struct lantern_gossipsub_service {
@@ -47,6 +53,8 @@ struct lantern_gossipsub_service {
     char aggregated_attestation_topic[128];
     const char *data_dir;
     const char *devnet;
+    char topic_network_name[64];
+    uint8_t fork_digest[4];
     size_t attestation_subnet_id;
     int subscribe_attestation_subnet;
     int (*publish_hook)(const char *topic, const uint8_t *payload, size_t payload_len, void *user_data);
