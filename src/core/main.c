@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <libgen.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -50,7 +51,31 @@ enum {
     OPT_XMSS_SECRET_TEMPLATE,
     OPT_IS_AGGREGATOR,
     OPT_ATTESTATION_COMMITTEE_COUNT,
+    /* Deprecated: legacy file-path flags retained so pre-migration
+     * lean-quickstart wrappers keep working. Each resolves to the parent
+     * directory of the given file and feeds validator_config_dir. */
+    OPT_LEGACY_VALIDATOR_REGISTRY_PATH,
+    OPT_LEGACY_VALIDATOR_KEYS_PATH,
+    OPT_LEGACY_VALIDATOR_CONFIG_PATH,
 };
+
+/* Return a heap-allocated copy of dirname(path). Program-lifetime allocation. */
+static const char *derive_parent_dir(const char *path)
+{
+    if (!path || !*path)
+    {
+        return NULL;
+    }
+    char *copy = strdup(path);
+    if (!copy)
+    {
+        return NULL;
+    }
+    char *dir = dirname(copy);
+    char *result = dir ? strdup(dir) : NULL;
+    free(copy);
+    return result;
+}
 
 /* Forward declarations */
 static lantern_client_error configure_logging_from_env(void);
@@ -213,6 +238,18 @@ static lantern_client_error apply_option(
     case OPT_VALIDATOR_CONFIG:
         options->validator_config_dir = optarg;
         return LANTERN_CLIENT_OK;
+    case OPT_LEGACY_VALIDATOR_REGISTRY_PATH:
+    case OPT_LEGACY_VALIDATOR_KEYS_PATH:
+    case OPT_LEGACY_VALIDATOR_CONFIG_PATH:
+    {
+        const char *parent = derive_parent_dir(optarg);
+        if (!parent)
+        {
+            return LANTERN_CLIENT_ERR_INVALID_PARAM;
+        }
+        options->validator_config_dir = parent;
+        return LANTERN_CLIENT_OK;
+    }
     case OPT_NODE_ID:
         options->node_id = optarg;
         return LANTERN_CLIENT_OK;
@@ -445,6 +482,11 @@ static lantern_client_error parse_arguments(
         {"genesis-state", required_argument, NULL, OPT_GENESIS_STATE},
         {"use-genesis-state", no_argument, NULL, OPT_USE_GENESIS_STATE},
         {"validator_config", required_argument, NULL, OPT_VALIDATOR_CONFIG},
+        /* Deprecated: pre-migration lean-quickstart wrappers pass these three as
+         * file paths; we accept them and derive the parent directory. */
+        {"validator-registry-path", required_argument, NULL, OPT_LEGACY_VALIDATOR_REGISTRY_PATH},
+        {"validator-keys-path", required_argument, NULL, OPT_LEGACY_VALIDATOR_KEYS_PATH},
+        {"validator-config", required_argument, NULL, OPT_LEGACY_VALIDATOR_CONFIG_PATH},
         {"node-id", required_argument, NULL, OPT_NODE_ID},
         {"node-key", required_argument, NULL, OPT_NODE_KEY},
         {"node-key-path", required_argument, NULL, OPT_NODE_KEY_PATH},
