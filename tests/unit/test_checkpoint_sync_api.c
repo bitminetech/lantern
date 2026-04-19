@@ -591,14 +591,14 @@ static int test_justified_state_endpoint(void)
     expect_true(strstr(header, "HTTP/1.1 200") != NULL, "status 200 justified");
     expect_true(strstr(header, "Content-Type: application/json") != NULL, "content-type justified");
 
-    char root_hex[(LANTERN_ROOT_SIZE * 2u) + 1u];
+    char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     expect_zero(
         lantern_bytes_to_hex(
             ctx.snapshot.justified.root.bytes,
             LANTERN_ROOT_SIZE,
             root_hex,
             sizeof(root_hex),
-            0),
+            1),
         "justified root hex");
 
     char expected[256];

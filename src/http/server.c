@@ -810,13 +810,13 @@ static void handle_client_connection(
             return;
         }
 
-        char root_hex[(LANTERN_ROOT_SIZE * 2u) + 1u];
+        char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
         if (lantern_bytes_to_hex(
                 snapshot.justified.root.bytes,
                 LANTERN_ROOT_SIZE,
                 root_hex,
                 sizeof(root_hex),
-                0)
+                1)
             != 0)
         {
             int rc = send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
