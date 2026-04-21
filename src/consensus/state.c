@@ -2789,6 +2789,11 @@ int lantern_state_transition(LanternState *state, LanternStore *store, const Lan
         return -1;
     }
     const LanternBlock *block = &signed_block->block;
+    fprintf(stderr,
+            "[DBG state_transition] ENTER state=%p state.slot=%" PRIu64 " block.slot=%" PRIu64 "\n",
+            (void*)state,
+            state->slot,
+            block->slot);
     double transition_metrics_start = lantern_time_now_seconds();
 #define STATE_FAIL(fmt, ...)                                                                 \
     do {                                                                                     \
@@ -2797,6 +2802,8 @@ int lantern_state_transition(LanternState *state, LanternStore *store, const Lan
             &(const struct lantern_log_metadata){.has_slot = true, .slot = block->slot},     \
             fmt,                                                                             \
             ##__VA_ARGS__);                                                                  \
+        fprintf(stderr, "[DBG state_transition] FAIL state=%p state.slot=%" PRIu64 " block.slot=%" PRIu64 "\n", \
+                (void*)state, state->slot, block->slot);                                     \
         return -1;                                                                           \
     } while (0)
 
@@ -2915,6 +2922,11 @@ int lantern_state_transition(LanternState *state, LanternStore *store, const Lan
 
     state->slot = block->slot;
     lean_metrics_record_state_transition(lantern_time_now_seconds() - transition_metrics_start);
+    fprintf(stderr,
+            "[DBG state_transition] OK state=%p state.slot=%" PRIu64 " block.slot=%" PRIu64 "\n",
+            (void*)state,
+            state->slot,
+            block->slot);
 #undef STATE_FAIL
     return 0;
 }
