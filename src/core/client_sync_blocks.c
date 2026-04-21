@@ -469,7 +469,7 @@ static void persist_block_after_import(
     const struct lantern_log_metadata *log_meta = meta ? meta : &fallback;
     if (lantern_storage_store_block(client->data_dir, block) != 0)
     {
-        lantern_log_warn(
+        lantern_log_debug(
             "storage",
             log_meta,
             "failed to persist block slot=%" PRIu64,
