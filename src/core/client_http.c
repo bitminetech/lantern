@@ -417,6 +417,62 @@ int http_set_validator_status_cb(void *context, uint64_t global_index, bool enab
 }
 
 
+int http_get_is_aggregator_cb(void *context, bool *out_enabled)
+{
+    if (!context || !out_enabled)
+    {
+        return LANTERN_HTTP_CB_ERR_INVALID_PARAM;
+    }
+    struct lantern_client *client = context;
+    if (!client->assigned_validators)
+    {
+        return LANTERN_HTTP_CB_ERR_INVALID_STATE;
+    }
+    *out_enabled = client->assigned_validators->enr.is_aggregator;
+    return LANTERN_HTTP_CB_OK;
+}
+
+
+int http_set_is_aggregator_cb(void *context, bool enabled, bool *out_previous)
+{
+    if (!context || !out_previous)
+    {
+        return LANTERN_HTTP_CB_ERR_INVALID_PARAM;
+    }
+    struct lantern_client *client = context;
+    if (!client->assigned_validators)
+    {
+        return LANTERN_HTTP_CB_ERR_INVALID_STATE;
+    }
+    if (!client->validator_lock_initialized)
+    {
+        return LANTERN_HTTP_CB_ERR_INVALID_STATE;
+    }
+    if (pthread_mutex_lock(&client->validator_lock) != 0)
+    {
+        return LANTERN_HTTP_CB_ERR_LOCK_FAILED;
+    }
+    struct lantern_validator_config_entry *mutable_entry =
+        (struct lantern_validator_config_entry *)client->assigned_validators;
+    bool previous = mutable_entry->enr.is_aggregator;
+    mutable_entry->enr.is_aggregator = enabled;
+    unlock_mutex_with_log(&client->validator_lock, client->node_id, "validator_lock");
+
+    *out_previous = previous;
+
+    if (previous != enabled)
+    {
+        lantern_log_info(
+            "validator",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "aggregator role %s via admin API",
+            enabled ? "activated" : "deactivated");
+    }
+
+    return LANTERN_HTTP_CB_OK;
+}
+
+
 /* ============================================================================
  * Metrics Callbacks
  * ============================================================================ */

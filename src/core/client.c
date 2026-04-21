@@ -3634,6 +3634,8 @@ static lantern_client_error client_start_apis(struct lantern_client *client)
     http_config.callbacks.set_validator_status = http_set_validator_status_cb;
     http_config.callbacks.metrics_snapshot = metrics_snapshot_cb;
     http_config.callbacks.finalized_state_ssz = http_finalized_state_ssz_cb;
+    http_config.callbacks.get_is_aggregator = http_get_is_aggregator_cb;
+    http_config.callbacks.set_is_aggregator = http_set_is_aggregator_cb;
     if (client->http_port != 0)
     {
         if (lantern_http_server_start(&client->http_server, &http_config) != 0)

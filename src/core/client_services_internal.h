@@ -367,6 +367,32 @@ int http_set_validator_status_cb(void *context, uint64_t global_index, bool enab
 
 
 /**
+ * Read the node's current aggregator role flag.
+ *
+ * @param context       Client instance
+ * @param out_enabled   Output: true if the node is currently acting as aggregator
+ * @return 0 on success
+ * @return LANTERN_HTTP_CB_ERR_INVALID_STATE if the node has no assigned validator entry
+ */
+int http_get_is_aggregator_cb(void *context, bool *out_enabled);
+
+
+/**
+ * Toggle the node's aggregator role at runtime.
+ *
+ * @param context       Client instance
+ * @param enabled       Desired aggregator state
+ * @param out_previous  Output: aggregator state before the update
+ * @return 0 on success
+ * @return LANTERN_HTTP_CB_ERR_INVALID_STATE if the node has no assigned validator entry
+ * @return LANTERN_HTTP_CB_ERR_LOCK_FAILED if the lock cannot be acquired
+ *
+ * @note Thread safety: Serializes concurrent toggles under validator_lock.
+ */
+int http_set_is_aggregator_cb(void *context, bool enabled, bool *out_previous);
+
+
+/**
  * Get metrics snapshot for HTTP API.
  *
  * @param context       Client instance

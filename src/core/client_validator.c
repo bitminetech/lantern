@@ -36,6 +36,7 @@
 #include "lantern/metrics/lean_metrics.h"
 #include "lantern/networking/gossipsub_service.h"
 #include "lantern/support/log.h"
+#include "lantern/support/time.h"
 
 
 /* ============================================================================
@@ -2217,6 +2218,7 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
         {
             continue;
         }
+        double production_start = lantern_time_now_seconds();
         LanternSignedVote vote;
         memset(&vote, 0, sizeof(vote));
         vote.data.validator_id = validator->global_index;
@@ -2245,6 +2247,8 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
         {
             result = (lantern_client_error)publish_rc;
         }
+        lean_metrics_record_attestations_production_time(
+            lantern_time_now_seconds() - production_start);
     }
 
     if (have_lock)

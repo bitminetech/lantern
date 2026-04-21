@@ -1036,6 +1036,16 @@ static int append_lean_histograms(
 
     rc = append_histogram_metrics(
         buf,
+        "lean_attestations_production_time_seconds",
+        "Time taken to produce attestation",
+        &lean->attestations_production_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
         "lean_fork_choice_block_processing_time_seconds",
         "Time taken to process block in fork choice",
         &lean->fork_choice_block_time);

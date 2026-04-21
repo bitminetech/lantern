@@ -42,12 +42,15 @@ static const char LANTERN_HTTP_PATH_METRICS[] = "/metrics";
 static const char LANTERN_HTTP_PATH_FINALIZED[] = "/lean/v0/states/finalized";
 static const char LANTERN_HTTP_PATH_JUSTIFIED[] = "/lean/v0/checkpoints/justified";
 static const char LANTERN_HTTP_PATH_FORK_CHOICE[] = "/lean/v0/fork_choice";
+static const char LANTERN_HTTP_PATH_ADMIN_AGGREGATOR[] = "/lean/v0/admin/aggregator";
 static const char LANTERN_HTTP_JSON_HEALTH[] = "{\"status\":\"healthy\",\"service\":\"lean-rpc-api\"}";
 static const char LANTERN_HTTP_JSON_MALFORMED[] = "{\"error\":\"malformed request\"}";
 static const char LANTERN_HTTP_JSON_UNKNOWN_ENDPOINT[] = "{\"error\":\"unknown endpoint\"}";
 static const char LANTERN_HTTP_JSON_UNAVAILABLE[] = "{\"error\":\"service unavailable\"}";
 static const char LANTERN_HTTP_JSON_STATE_MISSING[] = "{\"error\":\"finalized state not available\"}";
 static const char LANTERN_HTTP_JSON_INTERNAL[] = "{\"error\":\"internal error\"}";
+static const char LANTERN_HTTP_JSON_BAD_REQUEST[] = "{\"error\":\"bad request\"}";
+static const char LANTERN_HTTP_JSON_METHOD_NOT_ALLOWED[] = "{\"error\":\"method not allowed\"}";
 
 enum
 {
@@ -463,6 +466,285 @@ static int format_fork_choice_response(
 
 
 /**
+ * Locate the request body inside a raw HTTP request buffer.
+ *
+ * @param buffer      Request buffer (may be NUL-terminated; NUL terminators are honored).
+ * @param buffer_len  Bytes received into the buffer.
+ * @param out_body    Output: pointer to the body start inside the buffer (or NULL if absent).
+ * @param out_body_len Output: body length available in the buffer.
+ * @return true if a body separator was found.
+ */
+static bool http_locate_body(
+    const char *buffer,
+    size_t buffer_len,
+    const char **out_body,
+    size_t *out_body_len)
+{
+    if (!buffer || buffer_len == 0 || !out_body || !out_body_len)
+    {
+        return false;
+    }
+    static const char SEPARATOR[] = "\r\n\r\n";
+    const size_t sep_len = sizeof(SEPARATOR) - 1u;
+    if (buffer_len < sep_len)
+    {
+        return false;
+    }
+    for (size_t i = 0; i + sep_len <= buffer_len; ++i)
+    {
+        if (memcmp(buffer + i, SEPARATOR, sep_len) == 0)
+        {
+            *out_body = buffer + i + sep_len;
+            *out_body_len = buffer_len - i - sep_len;
+            return true;
+        }
+    }
+    return false;
+}
+
+
+/**
+ * Strictly parse `{"enabled": <bool>}` from a JSON body.
+ *
+ * Accepts optional whitespace around tokens and surrounding braces. Any other
+ * field, missing "enabled", non-boolean value, or trailing garbage is rejected.
+ *
+ * @return 0 on success (value written to `*out_enabled`).
+ * @return non-zero if the body is missing, malformed, or has a wrong field type.
+ */
+static int parse_enabled_bool_body(const char *body, size_t body_len, bool *out_enabled)
+{
+    if (!body || body_len == 0 || !out_enabled)
+    {
+        return -1;
+    }
+    size_t i = 0;
+    while (i < body_len && (body[i] == ' ' || body[i] == '\t' || body[i] == '\r' || body[i] == '\n'))
+    {
+        ++i;
+    }
+    if (i >= body_len || body[i] != '{')
+    {
+        return -1;
+    }
+    ++i;
+    while (i < body_len && (body[i] == ' ' || body[i] == '\t' || body[i] == '\r' || body[i] == '\n'))
+    {
+        ++i;
+    }
+    static const char KEY[] = "\"enabled\"";
+    const size_t key_len = sizeof(KEY) - 1u;
+    if (i + key_len > body_len || memcmp(body + i, KEY, key_len) != 0)
+    {
+        return -1;
+    }
+    i += key_len;
+    while (i < body_len && (body[i] == ' ' || body[i] == '\t' || body[i] == '\r' || body[i] == '\n'))
+    {
+        ++i;
+    }
+    if (i >= body_len || body[i] != ':')
+    {
+        return -1;
+    }
+    ++i;
+    while (i < body_len && (body[i] == ' ' || body[i] == '\t' || body[i] == '\r' || body[i] == '\n'))
+    {
+        ++i;
+    }
+    bool value = false;
+    static const char TRUE_LIT[] = "true";
+    static const char FALSE_LIT[] = "false";
+    if (i + (sizeof(TRUE_LIT) - 1u) <= body_len
+        && memcmp(body + i, TRUE_LIT, sizeof(TRUE_LIT) - 1u) == 0)
+    {
+        value = true;
+        i += sizeof(TRUE_LIT) - 1u;
+    }
+    else if (i + (sizeof(FALSE_LIT) - 1u) <= body_len
+        && memcmp(body + i, FALSE_LIT, sizeof(FALSE_LIT) - 1u) == 0)
+    {
+        value = false;
+        i += sizeof(FALSE_LIT) - 1u;
+    }
+    else
+    {
+        return -1;
+    }
+    while (i < body_len && (body[i] == ' ' || body[i] == '\t' || body[i] == '\r' || body[i] == '\n'))
+    {
+        ++i;
+    }
+    if (i >= body_len || body[i] != '}')
+    {
+        return -1;
+    }
+    ++i;
+    while (i < body_len && (body[i] == ' ' || body[i] == '\t' || body[i] == '\r' || body[i] == '\n'))
+    {
+        ++i;
+    }
+    if (i != body_len)
+    {
+        return -1;
+    }
+    *out_enabled = value;
+    return 0;
+}
+
+
+/**
+ * Handle GET/POST /lean/v0/admin/aggregator.
+ *
+ * @spec https://github.com/leanEthereum/leanSpec/pull/636
+ */
+static void handle_admin_aggregator(
+    struct lantern_http_server *server,
+    int client_fd,
+    const char *method,
+    const char *raw_buffer,
+    size_t raw_buffer_len,
+    const char *peer_text)
+{
+    const bool is_get = (strcmp(method, "GET") == 0);
+    const bool is_post = (strcmp(method, "POST") == 0);
+    if (!is_get && !is_post)
+    {
+        int rc = send_json_error(client_fd, 405, "Method Not Allowed", LANTERN_HTTP_JSON_METHOD_NOT_ALLOWED);
+        lantern_log_info(
+            "http",
+            &(const struct lantern_log_metadata){.peer = peer_text},
+            "%s %s -> 405 (rc=%d)",
+            method,
+            LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
+            rc);
+        return;
+    }
+
+    if (is_get)
+    {
+        if (!server->callbacks.get_is_aggregator)
+        {
+            int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
+            lantern_log_info(
+                "http",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "GET %s -> 503 (rc=%d)",
+                LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
+                rc);
+            return;
+        }
+        bool enabled = false;
+        int cb_rc = server->callbacks.get_is_aggregator(server->callbacks.context, &enabled);
+        if (cb_rc != LANTERN_HTTP_CB_OK)
+        {
+            int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
+            lantern_log_info(
+                "http",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "GET %s -> 503 (cb_rc=%d rc=%d)",
+                LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
+                cb_rc,
+                rc);
+            return;
+        }
+        char body[64];
+        int body_len = snprintf(
+            body,
+            sizeof(body),
+            "{\"is_aggregator\":%s}",
+            enabled ? "true" : "false");
+        if (body_len <= 0 || (size_t)body_len >= sizeof(body))
+        {
+            send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
+            return;
+        }
+        int rc = send_http_response(client_fd, 200, "OK", "application/json", body, (size_t)body_len);
+        lantern_log_info(
+            "http",
+            &(const struct lantern_log_metadata){.peer = peer_text},
+            "GET %s -> 200 (rc=%d)",
+            LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
+            rc);
+        return;
+    }
+
+    /* POST */
+    if (!server->callbacks.set_is_aggregator)
+    {
+        int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
+        lantern_log_info(
+            "http",
+            &(const struct lantern_log_metadata){.peer = peer_text},
+            "POST %s -> 503 (rc=%d)",
+            LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
+            rc);
+        return;
+    }
+    const char *body_ptr = NULL;
+    size_t body_len = 0;
+    if (!http_locate_body(raw_buffer, raw_buffer_len, &body_ptr, &body_len) || body_len == 0)
+    {
+        int rc = send_json_error(client_fd, 400, "Bad Request", LANTERN_HTTP_JSON_BAD_REQUEST);
+        lantern_log_info(
+            "http",
+            &(const struct lantern_log_metadata){.peer = peer_text},
+            "POST %s -> 400 (empty body, rc=%d)",
+            LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
+            rc);
+        return;
+    }
+    bool enabled = false;
+    if (parse_enabled_bool_body(body_ptr, body_len, &enabled) != 0)
+    {
+        int rc = send_json_error(client_fd, 400, "Bad Request", LANTERN_HTTP_JSON_BAD_REQUEST);
+        lantern_log_info(
+            "http",
+            &(const struct lantern_log_metadata){.peer = peer_text},
+            "POST %s -> 400 (bad body, rc=%d)",
+            LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
+            rc);
+        return;
+    }
+    bool previous = false;
+    int cb_rc = server->callbacks.set_is_aggregator(server->callbacks.context, enabled, &previous);
+    if (cb_rc != LANTERN_HTTP_CB_OK)
+    {
+        int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
+        lantern_log_info(
+            "http",
+            &(const struct lantern_log_metadata){.peer = peer_text},
+            "POST %s -> 503 (cb_rc=%d rc=%d)",
+            LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
+            cb_rc,
+            rc);
+        return;
+    }
+    char resp[96];
+    int resp_len = snprintf(
+        resp,
+        sizeof(resp),
+        "{\"is_aggregator\":%s,\"previous\":%s}",
+        enabled ? "true" : "false",
+        previous ? "true" : "false");
+    if (resp_len <= 0 || (size_t)resp_len >= sizeof(resp))
+    {
+        send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
+        return;
+    }
+    int rc = send_http_response(client_fd, 200, "OK", "application/json", resp, (size_t)resp_len);
+    lantern_log_info(
+        "http",
+        &(const struct lantern_log_metadata){.peer = peer_text},
+        "POST %s -> 200 enabled=%s previous=%s (rc=%d)",
+        LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
+        enabled ? "true" : "false",
+        previous ? "true" : "false",
+        rc);
+}
+
+
+/**
  * Handle a single client connection.
  *
  * @param server    HTTP server instance.
@@ -519,6 +801,18 @@ static void handle_client_connection(
                 "failed to send 400 response rc=%d",
                 rc);
         }
+        return;
+    }
+
+    if (strcmp(path, LANTERN_HTTP_PATH_ADMIN_AGGREGATOR) == 0)
+    {
+        handle_admin_aggregator(
+            server,
+            client_fd,
+            method,
+            buffer,
+            (size_t)received,
+            peer_text);
         return;
     }
 
@@ -810,13 +1104,13 @@ static void handle_client_connection(
             return;
         }
 
-        char root_hex[(LANTERN_ROOT_SIZE * 2u) + 1u];
+        char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
         if (lantern_bytes_to_hex(
                 snapshot.justified.root.bytes,
                 LANTERN_ROOT_SIZE,
                 root_hex,
                 sizeof(root_hex),
-                0)
+                1)
             != 0)
         {
             int rc = send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);

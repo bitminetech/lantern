@@ -66,6 +66,8 @@ struct lantern_http_server_callbacks {
     int (*set_validator_status)(void *context, uint64_t global_index, bool enabled);
     int (*metrics_snapshot)(void *context, struct lantern_metrics_snapshot *out_snapshot);
     int (*finalized_state_ssz)(void *context, uint8_t **out_bytes, size_t *out_len);
+    int (*get_is_aggregator)(void *context, bool *out_enabled);
+    int (*set_is_aggregator)(void *context, bool enabled, bool *out_previous);
 };
 
 struct lantern_http_server_config {

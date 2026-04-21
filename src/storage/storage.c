@@ -22,6 +22,7 @@
 #endif
 
 #include "lantern/consensus/hash.h"
+#include "lantern/consensus/signature.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/networking/messages.h"
 #include "lantern/support/log.h"
@@ -1010,9 +1011,33 @@ cleanup:
 static bool block_root_alias_matches_expected(
     const LanternSignedBlock *block,
     const LanternRoot *expected_root) {
-    (void)block;
-    (void)expected_root;
-    return false;
+    if (!block || !expected_root) {
+        return false;
+    }
+
+    /*
+     * Checkpoint sync persists the materialized synthetic anchor block under
+     * the hinted checkpoint root, even when that root differs from the
+     * block's computed hash_tree_root because the header's historical
+     * body_root is not reconstructible from the empty synthetic body.
+     *
+     * The persisted alias is only expected for the anchor-shaped block we
+     * synthesize locally: no attestations, no attestation proofs, and no
+     * proposer signature.
+     */
+    const LanternBlockBody *body = &block->block.body;
+    const LanternBlockSignatures *signatures = &block->signatures;
+    if (body->attestations.length != 0 || signatures->attestation_signatures.length != 0) {
+        return false;
+    }
+    if (body->attestations.data != NULL || signatures->attestation_signatures.data != NULL) {
+        return false;
+    }
+    if (!lantern_signature_is_zero(&signatures->proposer_signature)) {
+        return false;
+    }
+
+    return true;
 }
 
 static int storage_store_block_internal(

@@ -1791,6 +1791,216 @@ cleanup:
     return rc;
 }
 
+static int run_snappy_block_fixture(
+    const char *path,
+    const struct lantern_fixture_document *doc,
+    int input_idx,
+    int output_idx,
+    const char *codec_name) {
+    int data_idx = lantern_fixture_object_get_field(doc, input_idx, "data");
+    int compressed_idx = lantern_fixture_object_get_field(doc, output_idx, "compressed");
+    int compressed_length_idx = lantern_fixture_object_get_field(doc, output_idx, "compressedLength");
+    int uncompressed_length_idx = lantern_fixture_object_get_field(doc, output_idx, "uncompressedLength");
+
+    struct byte_buffer data = {0};
+    struct byte_buffer expected_compressed = {0};
+    struct byte_buffer actual_compressed = {0};
+    struct byte_buffer roundtrip = {0};
+    uint64_t expected_compressed_length = 0u;
+    uint64_t expected_uncompressed_length = 0u;
+    int rc = -1;
+
+    if (data_idx < 0 || compressed_idx < 0
+        || compressed_length_idx < 0 || uncompressed_length_idx < 0
+        || fixture_token_to_bytes(doc, data_idx, &data) != 0
+        || fixture_token_to_bytes(doc, compressed_idx, &expected_compressed) != 0
+        || lantern_fixture_token_to_uint64(doc, compressed_length_idx, &expected_compressed_length) != 0
+        || lantern_fixture_token_to_uint64(doc, uncompressed_length_idx, &expected_uncompressed_length) != 0) {
+        (void)record_failure(path, codec_name, "invalid snappy_block fixture payload");
+        goto cleanup;
+    }
+
+    if (expect_uint64_equal(path, codec_name, "uncompressedLength",
+            expected_uncompressed_length, (uint64_t)data.len) != 0) {
+        goto cleanup;
+    }
+    if (expect_uint64_equal(path, codec_name, "compressedLength",
+            expected_compressed_length, (uint64_t)expected_compressed.len) != 0) {
+        goto cleanup;
+    }
+
+    size_t max_compressed = 0u;
+    if (lantern_snappy_max_compressed_size_raw(data.len, &max_compressed) != LANTERN_SNAPPY_OK) {
+        (void)record_failure(path, codec_name, "lantern_snappy_max_compressed_size_raw failed");
+        goto cleanup;
+    }
+    actual_compressed.data = (uint8_t *)malloc(max_compressed > 0u ? max_compressed : 1u);
+    if (!actual_compressed.data) {
+        (void)record_failure(path, codec_name, "out of memory");
+        goto cleanup;
+    }
+    size_t written = 0u;
+    if (lantern_snappy_compress_raw(
+            data.data, data.len, actual_compressed.data, max_compressed, &written)
+        != LANTERN_SNAPPY_OK) {
+        (void)record_failure(path, codec_name, "lantern_snappy_compress_raw failed");
+        goto cleanup;
+    }
+    actual_compressed.len = written;
+
+    if (expect_bytes_equal(path, codec_name, "compressed",
+            expected_compressed.data, expected_compressed.len,
+            actual_compressed.data, actual_compressed.len) != 0) {
+        goto cleanup;
+    }
+
+    size_t decoded_length = 0u;
+    if (lantern_snappy_uncompressed_length_raw(
+            expected_compressed.data, expected_compressed.len, &decoded_length)
+        != LANTERN_SNAPPY_OK) {
+        (void)record_failure(path, codec_name, "lantern_snappy_uncompressed_length_raw failed");
+        goto cleanup;
+    }
+    if (expect_uint64_equal(path, codec_name, "decoded uncompressedLength",
+            (uint64_t)data.len, (uint64_t)decoded_length) != 0) {
+        goto cleanup;
+    }
+
+    roundtrip.data = (uint8_t *)malloc(decoded_length > 0u ? decoded_length : 1u);
+    if (!roundtrip.data) {
+        (void)record_failure(path, codec_name, "out of memory");
+        goto cleanup;
+    }
+    size_t decoded_written = 0u;
+    if (lantern_snappy_decompress_raw(
+            expected_compressed.data, expected_compressed.len,
+            roundtrip.data, decoded_length, &decoded_written)
+        != LANTERN_SNAPPY_OK) {
+        (void)record_failure(path, codec_name, "lantern_snappy_decompress_raw failed");
+        goto cleanup;
+    }
+    roundtrip.len = decoded_written;
+
+    if (expect_bytes_equal(path, codec_name, "decoded payload",
+            data.data, data.len, roundtrip.data, roundtrip.len) != 0) {
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    byte_buffer_reset(&data);
+    byte_buffer_reset(&expected_compressed);
+    byte_buffer_reset(&actual_compressed);
+    byte_buffer_reset(&roundtrip);
+    return rc;
+}
+
+static int run_snappy_frame_fixture(
+    const char *path,
+    const struct lantern_fixture_document *doc,
+    int input_idx,
+    int output_idx,
+    const char *codec_name) {
+    int data_idx = lantern_fixture_object_get_field(doc, input_idx, "data");
+    int framed_idx = lantern_fixture_object_get_field(doc, output_idx, "framed");
+    int framed_length_idx = lantern_fixture_object_get_field(doc, output_idx, "framedLength");
+    int uncompressed_length_idx = lantern_fixture_object_get_field(doc, output_idx, "uncompressedLength");
+
+    struct byte_buffer data = {0};
+    struct byte_buffer expected_framed = {0};
+    struct byte_buffer actual_framed = {0};
+    struct byte_buffer roundtrip = {0};
+    uint64_t expected_framed_length = 0u;
+    uint64_t expected_uncompressed_length = 0u;
+    int rc = -1;
+
+    if (data_idx < 0 || framed_idx < 0
+        || framed_length_idx < 0 || uncompressed_length_idx < 0
+        || fixture_token_to_bytes(doc, data_idx, &data) != 0
+        || fixture_token_to_bytes(doc, framed_idx, &expected_framed) != 0
+        || lantern_fixture_token_to_uint64(doc, framed_length_idx, &expected_framed_length) != 0
+        || lantern_fixture_token_to_uint64(doc, uncompressed_length_idx, &expected_uncompressed_length) != 0) {
+        (void)record_failure(path, codec_name, "invalid snappy_frame fixture payload");
+        goto cleanup;
+    }
+
+    if (expect_uint64_equal(path, codec_name, "uncompressedLength",
+            expected_uncompressed_length, (uint64_t)data.len) != 0) {
+        goto cleanup;
+    }
+    if (expect_uint64_equal(path, codec_name, "framedLength",
+            expected_framed_length, (uint64_t)expected_framed.len) != 0) {
+        goto cleanup;
+    }
+
+    size_t max_framed = 0u;
+    if (lantern_snappy_max_compressed_size(data.len, &max_framed) != LANTERN_SNAPPY_OK) {
+        (void)record_failure(path, codec_name, "lantern_snappy_max_compressed_size failed");
+        goto cleanup;
+    }
+    actual_framed.data = (uint8_t *)malloc(max_framed > 0u ? max_framed : 1u);
+    if (!actual_framed.data) {
+        (void)record_failure(path, codec_name, "out of memory");
+        goto cleanup;
+    }
+    size_t written = 0u;
+    if (lantern_snappy_compress(
+            data.data, data.len, actual_framed.data, max_framed, &written)
+        != LANTERN_SNAPPY_OK) {
+        (void)record_failure(path, codec_name, "lantern_snappy_compress failed");
+        goto cleanup;
+    }
+    actual_framed.len = written;
+
+    if (expect_bytes_equal(path, codec_name, "framed",
+            expected_framed.data, expected_framed.len,
+            actual_framed.data, actual_framed.len) != 0) {
+        goto cleanup;
+    }
+
+    size_t decoded_length = 0u;
+    if (lantern_snappy_uncompressed_length(
+            expected_framed.data, expected_framed.len, &decoded_length)
+        != LANTERN_SNAPPY_OK) {
+        (void)record_failure(path, codec_name, "lantern_snappy_uncompressed_length failed");
+        goto cleanup;
+    }
+    if (expect_uint64_equal(path, codec_name, "decoded uncompressedLength",
+            (uint64_t)data.len, (uint64_t)decoded_length) != 0) {
+        goto cleanup;
+    }
+
+    roundtrip.data = (uint8_t *)malloc(decoded_length > 0u ? decoded_length : 1u);
+    if (!roundtrip.data) {
+        (void)record_failure(path, codec_name, "out of memory");
+        goto cleanup;
+    }
+    size_t decoded_written = 0u;
+    if (lantern_snappy_decompress(
+            expected_framed.data, expected_framed.len,
+            roundtrip.data, decoded_length, &decoded_written)
+        != LANTERN_SNAPPY_OK) {
+        (void)record_failure(path, codec_name, "lantern_snappy_decompress failed");
+        goto cleanup;
+    }
+    roundtrip.len = decoded_written;
+
+    if (expect_bytes_equal(path, codec_name, "decoded payload",
+            data.data, data.len, roundtrip.data, roundtrip.len) != 0) {
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    byte_buffer_reset(&data);
+    byte_buffer_reset(&expected_framed);
+    byte_buffer_reset(&actual_framed);
+    byte_buffer_reset(&roundtrip);
+    return rc;
+}
+
 static int run_unsupported_fixture(
     const char *path,
     const char *codec_name,
@@ -1877,6 +2087,10 @@ static int run_fixture_file(const char *path, void *user_data) {
         rc = run_peer_id_fixture(path, &doc, input_idx, output_idx, codec_name);
     } else if (strcmp(codec_name, "enr") == 0) {
         rc = run_enr_fixture(path, &doc, input_idx, output_idx, codec_name);
+    } else if (strcmp(codec_name, "snappy_block") == 0) {
+        rc = run_snappy_block_fixture(path, &doc, input_idx, output_idx, codec_name);
+    } else if (strcmp(codec_name, "snappy_frame") == 0) {
+        rc = run_snappy_frame_fixture(path, &doc, input_idx, output_idx, codec_name);
     } else if (strcmp(codec_name, "discv5_message") == 0) {
         rc = run_skipped_fixture(
             path,

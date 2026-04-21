@@ -63,6 +63,7 @@ struct lean_metrics_snapshot {
     struct lean_metrics_histogram_snapshot block_aggregated_payloads;
     struct lean_metrics_histogram_snapshot block_building_payload_aggregation_time;
     struct lean_metrics_histogram_snapshot block_building_time;
+    struct lean_metrics_histogram_snapshot attestations_production_time;
     struct lean_metrics_histogram_snapshot fork_choice_block_time;
     struct lean_metrics_histogram_snapshot fork_choice_reorg_depth;
     struct lean_metrics_histogram_snapshot attestation_validation_time;
@@ -84,6 +85,7 @@ void lean_metrics_reset(void);
 void lean_metrics_record_block_aggregated_payloads(size_t count);
 void lean_metrics_record_block_building_payload_aggregation_time(double seconds);
 void lean_metrics_record_block_building_time(double seconds);
+void lean_metrics_record_attestations_production_time(double seconds);
 void lean_metrics_record_block_building_success(void);
 void lean_metrics_record_block_building_failure(void);
 void lean_metrics_record_fork_choice_block_time(double seconds);

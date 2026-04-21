@@ -59,6 +59,10 @@ static struct lean_histogram g_hist_block_building = {
     .bounds = kBlockBuildingBuckets,
     .bucket_count = ARRAY_LEN(kBlockBuildingBuckets),
 };
+static struct lean_histogram g_hist_attestations_production = {
+    .bounds = kBlockBuildingBuckets,
+    .bucket_count = ARRAY_LEN(kBlockBuildingBuckets),
+};
 static struct lean_histogram g_hist_fork_choice_block = {
     .bounds = kForkChoiceBlockBuckets,
     .bucket_count = ARRAY_LEN(kForkChoiceBlockBuckets),
@@ -203,6 +207,7 @@ void lean_metrics_reset(void) {
     histogram_reset(&g_hist_block_aggregated_payloads);
     histogram_reset(&g_hist_block_building_payload_aggregation);
     histogram_reset(&g_hist_block_building);
+    histogram_reset(&g_hist_attestations_production);
     histogram_reset(&g_hist_fork_choice_block);
     histogram_reset(&g_hist_fork_choice_reorg_depth);
     histogram_reset(&g_hist_attestation_validation);
@@ -236,6 +241,12 @@ void lean_metrics_record_block_building_payload_aggregation_time(double seconds)
 void lean_metrics_record_block_building_time(double seconds) {
     pthread_mutex_lock(&g_metrics_lock);
     histogram_observe(&g_hist_block_building, seconds);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_attestations_production_time(double seconds) {
+    pthread_mutex_lock(&g_metrics_lock);
+    histogram_observe(&g_hist_attestations_production, seconds);
     pthread_mutex_unlock(&g_metrics_lock);
 }
 
@@ -440,6 +451,7 @@ void lean_metrics_snapshot(struct lean_metrics_snapshot *out) {
         &out->block_building_payload_aggregation_time,
         &g_hist_block_building_payload_aggregation);
     histogram_snapshot(&out->block_building_time, &g_hist_block_building);
+    histogram_snapshot(&out->attestations_production_time, &g_hist_attestations_production);
     histogram_snapshot(&out->fork_choice_block_time, &g_hist_fork_choice_block);
     histogram_snapshot(&out->fork_choice_reorg_depth, &g_hist_fork_choice_reorg_depth);
     histogram_snapshot(&out->attestation_validation_time, &g_hist_attestation_validation);

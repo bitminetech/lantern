@@ -2223,6 +2223,24 @@ static enum block_parent_action handle_block_parent_locked(
         return BLOCK_PARENT_ACTION_UNKNOWN;
     }
 
+    /*
+     * client->state may be adopted from replay when fork choice switches heads.
+     * Late-arriving blocks from slots already covered by that adopted state
+     * must be replayed from their parent state instead of transitioning the
+     * adopted head state directly, or state_transition() will reject them as
+     * stale and the ancestor never gets imported into fork choice.
+     */
+    if (block->block.slot <= client->state.slot)
+    {
+        lantern_log_debug(
+            "state",
+            meta,
+            "routing late block to off-head replay slot=%" PRIu64 " state_slot=%" PRIu64,
+            block->block.slot,
+            client->state.slot);
+        return BLOCK_PARENT_ACTION_KNOWN_OFF_HEAD;
+    }
+
     bool have_head_root = false;
     bool parent_matches_head = false;
     LanternRoot latest_header_root = {0};
