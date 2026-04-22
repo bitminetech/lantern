@@ -1669,6 +1669,7 @@ static int collect_known_weight_votes(
 
     size_t vote_count = store->validator_count;
     struct lantern_fork_choice_vote_entry *votes = NULL;
+    uint64_t *latest_slots = NULL;
     if (vote_count > 0) {
         votes = calloc(vote_count, sizeof(*votes));
         if (!votes) {
@@ -1676,26 +1677,34 @@ static int collect_known_weight_votes(
         }
     }
 
-    if (fork_choice_has_attached_payload_views(store)) {
-        uint64_t *latest_slots = NULL;
-        if (vote_count > 0) {
-            latest_slots = calloc(vote_count, sizeof(*latest_slots));
-            if (!latest_slots) {
-                free(votes);
-                return -1;
+    if (vote_count > 0) {
+        latest_slots = calloc(vote_count, sizeof(*latest_slots));
+        if (!latest_slots) {
+            free(votes);
+            return -1;
+        }
+    }
+
+    if (votes && store->known_votes) {
+        memcpy(votes, store->known_votes, vote_count * sizeof(*votes));
+        if (latest_slots) {
+            for (size_t i = 0; i < vote_count; ++i) {
+                if (store->known_votes[i].has_checkpoint) {
+                    latest_slots[i] = store->known_votes[i].slot;
+                }
             }
         }
+    }
 
+    if (fork_choice_has_attached_payload_views(store)) {
         safe_target_merge_payload_pool(
             store,
             store->known_aggregated_payloads,
             votes,
             latest_slots,
             vote_count);
-        free(latest_slots);
-    } else if (votes && store->known_votes) {
-        memcpy(votes, store->known_votes, vote_count * sizeof(*votes));
     }
+    free(latest_slots);
 
     *out_votes = votes;
     *out_vote_count = vote_count;

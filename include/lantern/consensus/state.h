@@ -98,6 +98,13 @@ int lantern_state_compute_vote_checkpoints(
     LanternCheckpoint *out_head,
     LanternCheckpoint *out_target,
     LanternCheckpoint *out_source);
+int lantern_state_compute_post_state(
+    const LanternState *state,
+    const LanternStore *store,
+    const LanternSignedBlock *block,
+    LanternState *out_post_state,
+    LanternStore *out_post_store,
+    LanternRoot *out_state_root);
 int lantern_state_preview_post_state_root(
     const LanternState *state,
     const LanternStore *store,

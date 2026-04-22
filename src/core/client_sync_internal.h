@@ -502,6 +502,19 @@ bool lantern_client_import_block_without_pending_children(
     size_t raw_block_ssz_len,
     bool *out_children_ready);
 
+/**
+ * Commit a locally built block using a precomputed post-state, then publish it.
+ *
+ * Used by the validator proposer fast path to avoid re-running the full local
+ * state transition before gossip publish.
+ */
+int lantern_client_commit_and_publish_local_block(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    LanternState *post_state,
+    LanternStore *post_store);
+
 
 /**
  * Record a received block and attempt import.
