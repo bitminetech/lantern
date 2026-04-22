@@ -19,6 +19,7 @@
 #define lantern_state_select_block_parent_explicit lantern_state_select_block_parent
 #define lantern_state_collect_attestations_for_block_explicit lantern_state_collect_attestations_for_block
 #define lantern_state_compute_vote_checkpoints_explicit lantern_state_compute_vote_checkpoints
+#define lantern_state_compute_post_state_explicit lantern_state_compute_post_state
 #define lantern_state_preview_post_state_root_explicit lantern_state_preview_post_state_root
 
 enum { LANTERN_TEST_STATE_STORE_SLOT_CAP = 64 };
@@ -205,6 +206,15 @@ static inline void lantern_test_state_attach_fork_choice(
         (out_head), \
         (out_target), \
         (out_source))
+#define lantern_state_compute_post_state( \
+    state, block, out_post_state, out_post_store, out_state_root) \
+    lantern_state_compute_post_state_explicit( \
+        (state), \
+        lantern_test_state_store_ensure((LanternState *)(state)), \
+        (block), \
+        (out_post_state), \
+        (out_post_store), \
+        (out_state_root))
 #define lantern_state_preview_post_state_root(state, block, out_state_root) \
     lantern_state_preview_post_state_root_explicit( \
         (state), \

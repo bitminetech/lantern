@@ -38,6 +38,12 @@ int lantern_client_add_known_aggregated_payload(
     const LanternAttestationData *data,
     const LanternAggregatedSignatureProof *proof,
     uint64_t target_slot);
+int lantern_client_commit_and_publish_local_block(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    LanternState *post_state,
+    LanternStore *post_store);
 size_t lantern_client_promote_new_aggregated_payloads(
     struct lantern_client *client);
 size_t lantern_client_prune_finalized_attestation_material(
@@ -362,6 +368,41 @@ static void publish_capture_reset(struct publish_capture *capture) {
     }
     free(capture->payload);
     memset(capture, 0, sizeof(*capture));
+}
+
+struct local_block_publish_observer {
+    struct lantern_client *client;
+    uint64_t expected_slot;
+    LanternRoot expected_root;
+    size_t calls;
+    bool saw_state_slot;
+    bool saw_head_root;
+};
+
+static int local_block_publish_observer_hook(
+    const char *topic,
+    const uint8_t *payload,
+    size_t payload_len,
+    void *user_data) {
+    struct local_block_publish_observer *observer = user_data;
+    if (!observer || !topic || !payload || payload_len == 0u) {
+        return -1;
+    }
+    observer->calls += 1u;
+    if (!observer->client) {
+        return 0;
+    }
+    if (observer->client->state.slot == observer->expected_slot) {
+        observer->saw_state_slot = true;
+    }
+    LanternRoot head_root;
+    memset(&head_root, 0, sizeof(head_root));
+    if (observer->client->has_fork_choice
+        && lantern_fork_choice_current_head(&observer->client->fork_choice, &head_root) == 0
+        && memcmp(head_root.bytes, observer->expected_root.bytes, LANTERN_ROOT_SIZE) == 0) {
+        observer->saw_head_root = true;
+    }
+    return 0;
 }
 
 static int advance_client_fork_choice_intervals(
@@ -3206,6 +3247,112 @@ cleanup:
     return rc;
 }
 
+static int test_local_block_commit_updates_state_before_publish(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    struct lantern_local_validator validator;
+    bool validator_enabled = true;
+    struct local_block_publish_observer observer;
+    LanternSignedBlock block;
+    LanternState post_state;
+    LanternStore post_store;
+    LanternRoot block_root;
+    int rc = 1;
+
+    memset(&validator, 0, sizeof(validator));
+    memset(&observer, 0, sizeof(observer));
+    memset(&block_root, 0, sizeof(block_root));
+    lantern_signed_block_init(&block);
+    lantern_state_init(&post_state);
+    lantern_store_init(&post_store);
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "local_block_publish_fast_path",
+            &pub,
+            &secret,
+            NULL,
+            NULL)
+        != 0) {
+        goto cleanup;
+    }
+
+    validator.global_index = 0u;
+    validator.attestation_secret_key = secret;
+    validator.proposal_secret_key = secret;
+    client.local_validators = &validator;
+    client.local_validator_count = 1u;
+    client.validator_enabled = &validator_enabled;
+    client.gossip_running = true;
+    snprintf(client.gossip.block_topic, sizeof(client.gossip.block_topic), "test/local_block");
+    lantern_gossipsub_service_set_publish_hook(
+        &client.gossip,
+        local_block_publish_observer_hook,
+        &observer);
+    lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
+
+    uint64_t slot = client.state.slot + 1u;
+    if (validator_build_block(&client, slot, 0u, &block) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "validator_build_block failed for local block publish test\n");
+        goto cleanup;
+    }
+    if (lantern_hash_tree_root_block(&block.block, &block_root) != 0) {
+        fprintf(stderr, "failed to hash built block for local block publish test\n");
+        goto cleanup;
+    }
+    if (lantern_state_compute_post_state(
+            &client.state,
+            &client.store,
+            &block,
+            &post_state,
+            &post_store,
+            NULL)
+        != 0) {
+        fprintf(stderr, "failed to compute post-state for local block publish test\n");
+        goto cleanup;
+    }
+
+    observer.client = &client;
+    observer.expected_slot = slot;
+    observer.expected_root = block_root;
+
+    if (lantern_client_commit_and_publish_local_block(
+            &client,
+            &block,
+            &block_root,
+            &post_state,
+            &post_store)
+        != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "local block fast-path commit/publish failed\n");
+        goto cleanup;
+    }
+    if (observer.calls != 1u || !observer.saw_state_slot || !observer.saw_head_root) {
+        fprintf(stderr, "local block state/head were not committed before publish\n");
+        goto cleanup;
+    }
+    if (client.state.slot != slot) {
+        fprintf(stderr, "client state did not advance during local block fast-path publish\n");
+        goto cleanup;
+    }
+    LanternRoot head_root;
+    memset(&head_root, 0, sizeof(head_root));
+    if (lantern_fork_choice_current_head(&client.fork_choice, &head_root) != 0
+        || memcmp(head_root.bytes, block_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "fork choice head did not advance to the published local block\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_store_reset(&post_store);
+    lantern_state_reset(&post_state);
+    lantern_signed_block_reset(&block);
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
 static int test_interval_2_aggregation_trigger_respects_aggregator_role(void) {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
@@ -3317,6 +3464,9 @@ int main(void) {
         return 1;
     }
     if (test_validator_build_block_leaves_attestation_key_untouched() != 0) {
+        return 1;
+    }
+    if (test_local_block_commit_updates_state_before_publish() != 0) {
         return 1;
     }
     if (test_client_load_xmss_keys_reads_annotated_validators() != 0) {

@@ -3100,12 +3100,14 @@ cleanup:
     return rc;
 }
 
-int lantern_state_preview_post_state_root(
+int lantern_state_compute_post_state(
     const LanternState *state,
     const LanternStore *store,
     const LanternSignedBlock *block,
+    LanternState *out_post_state,
+    LanternStore *out_post_store,
     LanternRoot *out_state_root) {
-    if (!state || !store || !block || !out_state_root) {
+    if (!state || !store || !block) {
         return -1;
     }
     const LanternState *base_state = lantern_state_cached_fork_choice_state_for_root(
@@ -3137,14 +3139,40 @@ int lantern_state_preview_post_state_root(
         rc = -1;
         goto cleanup;
     }
-    if (lantern_hash_tree_root_state(&scratch, out_state_root) != 0) {
+    if (out_state_root && lantern_hash_tree_root_state(&scratch, out_state_root) != 0) {
         rc = -1;
+        goto cleanup;
+    }
+    if (out_post_state) {
+        *out_post_state = scratch;
+        lantern_state_init(&scratch);
+    }
+    if (out_post_store) {
+        *out_post_store = scratch_store;
+        lantern_store_init(&scratch_store);
     }
 
 cleanup:
     lantern_store_reset(&scratch_store);
     lantern_state_reset(&scratch);
     return rc;
+}
+
+int lantern_state_preview_post_state_root(
+    const LanternState *state,
+    const LanternStore *store,
+    const LanternSignedBlock *block,
+    LanternRoot *out_state_root) {
+    if (!out_state_root) {
+        return -1;
+    }
+    return lantern_state_compute_post_state(
+        state,
+        store,
+        block,
+        NULL,
+        NULL,
+        out_state_root);
 }
 
 int lantern_state_compute_vote_checkpoints(

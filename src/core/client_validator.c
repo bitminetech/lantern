@@ -1638,14 +1638,16 @@ static lantern_client_error validator_build_block_populate_message(
 
 
 /**
- * @brief Preview post-state root for a built block.
+ * @brief Compute the post-state for a built block without mutating client state.
  *
- * Computes the expected post-state root for the proposed block without
- * mutating state.
+ * Computes the expected post-state root for the proposed block and optionally
+ * returns the post-state plus the updated validator-vote cache.
  *
  * @param client         Client instance
  * @param block          Built block to preview
  * @param out_state_root Output for the computed post-state root
+ * @param out_post_state Optional output for the computed post-state
+ * @param out_post_store Optional output for the computed post-store
  *
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
@@ -1653,10 +1655,12 @@ static lantern_client_error validator_build_block_populate_message(
  *
  * @note Thread safety: This function acquires state_lock
  */
-static lantern_client_error validator_build_block_preview_state_root(
+static lantern_client_error validator_build_block_compute_post_state(
     struct lantern_client *client,
     LanternSignedBlock *block,
-    LanternRoot *out_state_root)
+    LanternRoot *out_state_root,
+    LanternState *out_post_state,
+    LanternStore *out_post_store)
 {
     if (!client || !block || !out_state_root)
     {
@@ -1670,11 +1674,164 @@ static lantern_client_error validator_build_block_preview_state_root(
     }
 
     lantern_client_error result = LANTERN_CLIENT_OK;
-    if (lantern_state_preview_post_state_root(&client->state, &client->store, block, out_state_root) != 0)
+    if (lantern_state_compute_post_state(
+            &client->state,
+            &client->store,
+            block,
+            out_post_state,
+            out_post_store,
+            out_state_root)
+        != 0)
     {
         result = LANTERN_CLIENT_ERR_RUNTIME;
     }
     lantern_client_unlock_state(client, state_locked);
+    return result;
+}
+
+static int validator_build_block_internal(
+    struct lantern_client *client,
+    uint64_t slot,
+    size_t local_index,
+    LanternSignedBlock *out_block,
+    LanternState *out_post_state,
+    LanternStore *out_post_store,
+    LanternRoot *out_block_root)
+{
+    lantern_client_error result = LANTERN_CLIENT_OK;
+    uint64_t build_started_ms = 0;
+    uint64_t collect_started_ms = 0;
+    uint64_t collect_finished_ms = 0;
+    LanternRoot parent_root;
+    LanternAggregatedAttestations attestations;
+    LanternAttestationSignatures signatures;
+    bool attestations_initialized = false;
+    bool signatures_initialized = false;
+
+    if (!client || !out_block)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    if (local_index >= client->local_validator_count || !client->local_validators)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    struct lantern_local_validator *local = &client->local_validators[local_index];
+    lantern_signed_block_init(out_block);
+    build_started_ms = monotonic_millis();
+
+    lantern_aggregated_attestations_init(&attestations);
+    attestations_initialized = true;
+    lantern_attestation_signatures_init(&signatures);
+    signatures_initialized = true;
+
+    collect_started_ms = monotonic_millis();
+    result = validator_build_block_collect_attestations(
+        client,
+        slot,
+        local,
+        &parent_root,
+        &attestations,
+        &signatures);
+    collect_finished_ms = monotonic_millis();
+    if (result != LANTERN_CLIENT_OK)
+    {
+        goto cleanup;
+    }
+
+    /* TODO: verify that block attestations remain the correct proxy for
+     * "aggregated_payloads" in the leanMetrics spec. */
+    lean_metrics_record_block_aggregated_payloads(attestations.length);
+    if (collect_finished_ms >= collect_started_ms)
+    {
+        lean_metrics_record_block_building_payload_aggregation_time(
+            (double)(collect_finished_ms - collect_started_ms) / 1000.0);
+    }
+
+    result = validator_build_block_populate_message(
+        slot,
+        local->global_index,
+        &parent_root,
+        &attestations,
+        &signatures,
+        out_block);
+    if (result != LANTERN_CLIENT_OK)
+    {
+        goto cleanup;
+    }
+
+    LanternRoot computed_state_root;
+    result = validator_build_block_compute_post_state(
+        client,
+        out_block,
+        &computed_state_root,
+        out_post_state,
+        out_post_store);
+    if (result != LANTERN_CLIENT_OK)
+    {
+        goto cleanup;
+    }
+
+    out_block->block.state_root = computed_state_root;
+    LanternRoot block_root;
+    if (lantern_hash_tree_root_block(&out_block->block, &block_root) != 0) {
+        result = LANTERN_CLIENT_ERR_RUNTIME;
+        goto cleanup;
+    }
+    if (out_block_root) {
+        *out_block_root = block_root;
+    }
+    if (validator_sign_with_key(
+            local,
+            slot,
+            &block_root,
+            true,
+            &out_block->signatures.proposer_signature)
+        != LANTERN_CLIENT_OK) {
+        result = LANTERN_CLIENT_ERR_VALIDATOR;
+        goto cleanup;
+    }
+    result = LANTERN_CLIENT_OK;
+
+cleanup:
+    {
+        uint64_t build_finished_ms = monotonic_millis();
+        if (build_finished_ms >= build_started_ms)
+        {
+            lean_metrics_record_block_building_time(
+                (double)(build_finished_ms - build_started_ms) / 1000.0);
+        }
+    }
+    if (result == LANTERN_CLIENT_OK)
+    {
+        lean_metrics_record_block_building_success();
+    }
+    else
+    {
+        lean_metrics_record_block_building_failure();
+    }
+    if (attestations_initialized)
+    {
+        lantern_aggregated_attestations_reset(&attestations);
+    }
+    if (signatures_initialized)
+    {
+        lantern_attestation_signatures_reset(&signatures);
+    }
+    if (result != LANTERN_CLIENT_OK)
+    {
+        lantern_signed_block_reset(out_block);
+        if (out_post_state)
+        {
+            lantern_state_reset(out_post_state);
+            lantern_state_init(out_post_state);
+        }
+        if (out_post_store)
+        {
+            lantern_store_reset(out_post_store);
+            lantern_store_init(out_post_store);
+        }
+    }
     return result;
 }
 
@@ -1964,123 +2121,14 @@ int validator_build_block(
     size_t local_index,
     LanternSignedBlock *out_block)
 {
-    lantern_client_error result = LANTERN_CLIENT_OK;
-    uint64_t build_started_ms = 0;
-    uint64_t collect_started_ms = 0;
-    uint64_t collect_finished_ms = 0;
-    LanternRoot parent_root;
-    LanternAggregatedAttestations attestations;
-    LanternAttestationSignatures signatures;
-    bool attestations_initialized = false;
-    bool signatures_initialized = false;
-
-    if (!client || !out_block)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    if (local_index >= client->local_validator_count || !client->local_validators)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    struct lantern_local_validator *local = &client->local_validators[local_index];
-    lantern_signed_block_init(out_block);
-    build_started_ms = monotonic_millis();
-
-    lantern_aggregated_attestations_init(&attestations);
-    attestations_initialized = true;
-    lantern_attestation_signatures_init(&signatures);
-    signatures_initialized = true;
-
-    collect_started_ms = monotonic_millis();
-    result = validator_build_block_collect_attestations(
+    return validator_build_block_internal(
         client,
         slot,
-        local,
-        &parent_root,
-        &attestations,
-        &signatures);
-    collect_finished_ms = monotonic_millis();
-    if (result != LANTERN_CLIENT_OK)
-    {
-        goto cleanup;
-    }
-
-    /* TODO: verify that block attestations remain the correct proxy for
-     * "aggregated_payloads" in the leanMetrics spec. */
-    lean_metrics_record_block_aggregated_payloads(attestations.length);
-    if (collect_finished_ms >= collect_started_ms)
-    {
-        lean_metrics_record_block_building_payload_aggregation_time(
-            (double)(collect_finished_ms - collect_started_ms) / 1000.0);
-    }
-
-    result = validator_build_block_populate_message(
-        slot,
-        local->global_index,
-        &parent_root,
-        &attestations,
-        &signatures,
-        out_block);
-    if (result != LANTERN_CLIENT_OK)
-    {
-        goto cleanup;
-    }
-
-    LanternRoot computed_state_root;
-    result = validator_build_block_preview_state_root(client, out_block, &computed_state_root);
-    if (result != LANTERN_CLIENT_OK)
-    {
-        goto cleanup;
-    }
-
-    out_block->block.state_root = computed_state_root;
-    LanternRoot block_root;
-    if (lantern_hash_tree_root_block(&out_block->block, &block_root) != 0) {
-        result = LANTERN_CLIENT_ERR_RUNTIME;
-        goto cleanup;
-    }
-    if (validator_sign_with_key(
-            local,
-            slot,
-            &block_root,
-            true,
-            &out_block->signatures.proposer_signature)
-        != LANTERN_CLIENT_OK) {
-        result = LANTERN_CLIENT_ERR_VALIDATOR;
-        goto cleanup;
-    }
-    result = LANTERN_CLIENT_OK;
-
-cleanup:
-    {
-        uint64_t build_finished_ms = monotonic_millis();
-        if (build_finished_ms >= build_started_ms)
-        {
-            lean_metrics_record_block_building_time(
-                (double)(build_finished_ms - build_started_ms) / 1000.0);
-        }
-    }
-    if (result == LANTERN_CLIENT_OK)
-    {
-        lean_metrics_record_block_building_success();
-    }
-    else
-    {
-        lean_metrics_record_block_building_failure();
-    }
-    if (attestations_initialized)
-    {
-        lantern_aggregated_attestations_reset(&attestations);
-    }
-    if (signatures_initialized)
-    {
-        lantern_attestation_signatures_reset(&signatures);
-    }
-    if (result != LANTERN_CLIENT_OK)
-    {
-        lantern_signed_block_reset(out_block);
-    }
-    return result;
+        local_index,
+        out_block,
+        NULL,
+        NULL,
+        NULL);
 }
 
 
@@ -2106,10 +2154,25 @@ int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t
     }
     LanternSignedBlock block;
     lantern_signed_block_init(&block);
+    LanternState post_state;
+    lantern_state_init(&post_state);
+    LanternStore post_store;
+    lantern_store_init(&post_store);
+    LanternRoot block_root;
+    memset(&block_root, 0, sizeof(block_root));
 
-    int rc = validator_build_block(client, slot, local_index, &block);
+    int rc = validator_build_block_internal(
+        client,
+        slot,
+        local_index,
+        &block,
+        &post_state,
+        &post_store,
+        &block_root);
     if (rc != LANTERN_CLIENT_OK)
     {
+        lantern_store_reset(&post_store);
+        lantern_state_reset(&post_state);
         lantern_signed_block_reset(&block);
         return rc;
     }
@@ -2122,7 +2185,14 @@ int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t
         slot,
         block.block.proposer_index);
 
-    lantern_client_record_block(client, &block, NULL, NULL, "local", 0, false, NULL, 0);
+    rc = lantern_client_commit_and_publish_local_block(
+        client,
+        &block,
+        &block_root,
+        &post_state,
+        &post_store);
+    lantern_store_reset(&post_store);
+    lantern_state_reset(&post_state);
     if (client->validator_lock_initialized && pthread_mutex_lock(&client->validator_lock) == 0)
     {
         if (local_index < client->local_validator_count)
@@ -2132,16 +2202,8 @@ int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t
         }
         unlock_mutex_with_log(&client->validator_lock, client->node_id, "validator_lock");
     }
-
-    rc = lantern_client_publish_block(client, &block);
-    if (rc != LANTERN_CLIENT_OK)
-    {
-        lantern_signed_block_reset(&block);
-        return rc;
-    }
-
     lantern_signed_block_reset(&block);
-    return LANTERN_CLIENT_OK;
+    return rc;
 }
 
 

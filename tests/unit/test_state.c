@@ -3316,6 +3316,93 @@ cleanup:
     return result;
 }
 
+static int test_compute_post_state_matches_process_block_and_votes(void) {
+    LanternState state;
+    LanternState expected_state;
+    LanternState preview_state;
+    LanternBlock block;
+    LanternSignedBlock signed_block;
+    LanternRoot parent_root;
+    LanternRoot preview_state_root;
+    LanternRoot expected_state_root;
+    LanternStore preview_store;
+    LanternCheckpoint checkpoint;
+    LanternSignedVote seeded_vote;
+    int result = 1;
+
+    lantern_state_init(&state);
+    lantern_state_init(&expected_state);
+    lantern_state_init(&preview_state);
+    lantern_store_init(&preview_store);
+    memset(&block, 0, sizeof(block));
+    memset(&signed_block, 0, sizeof(signed_block));
+    memset(&seeded_vote, 0, sizeof(seeded_vote));
+
+    expect_zero(lantern_state_generate_genesis(&state, 975u, 4u), "genesis for compute-post-state test");
+    expect_zero(
+        lantern_state_select_block_parent(&state, &parent_root),
+        "select parent for compute-post-state test");
+    checkpoint.slot = 0u;
+    checkpoint.root = parent_root;
+    build_vote(&seeded_vote.data, &seeded_vote.signature, 1u, 0u, &checkpoint, &checkpoint, 0x44u);
+    expect_zero(
+        lantern_state_set_signed_validator_vote(&state, 1u, &seeded_vote),
+        "seed validator vote before compute-post-state test");
+
+    make_block(&state, 1u, &parent_root, &block, &expected_state_root);
+    signed_block.block = block;
+
+    expect_zero(
+        lantern_state_compute_post_state(
+            &state,
+            &signed_block,
+            &preview_state,
+            &preview_store,
+            &preview_state_root),
+        "compute post-state for proposal fast path");
+
+    expect_zero(lantern_state_clone(&state, &expected_state), "clone expected state");
+    expect_zero(lantern_state_process_slots(&expected_state, signed_block.block.slot), "advance expected state");
+    expect_zero(
+        lantern_state_process_block(&expected_state, &signed_block.block, NULL, NULL),
+        "process block for expected post-state");
+    expect_zero(lantern_hash_tree_root_state(&expected_state, &expected_state_root), "hash expected post-state");
+
+    if (memcmp(preview_state_root.bytes, expected_state_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "compute_post_state root mismatch\n");
+        goto cleanup;
+    }
+    LanternStore *expected_store = lantern_test_state_store_ensure(&expected_state);
+    if (!expected_store) {
+        fprintf(stderr, "expected-state store missing after compute_post_state\n");
+        goto cleanup;
+    }
+    if (preview_store.validator_votes_len != expected_store->validator_votes_len
+        || !preview_store.validator_votes
+        || !expected_store->validator_votes) {
+        fprintf(stderr, "compute_post_state validator vote capacity mismatch\n");
+        goto cleanup;
+    }
+    if (memcmp(
+            &preview_store.validator_votes[1u],
+            &expected_store->validator_votes[1u],
+            sizeof(preview_store.validator_votes[1u]))
+        != 0) {
+        fprintf(stderr, "compute_post_state vote cache mismatch\n");
+        goto cleanup;
+    }
+
+    result = 0;
+
+cleanup:
+    lantern_store_reset(&preview_store);
+    lantern_state_reset(&preview_state);
+    lantern_state_reset(&expected_state);
+    lantern_block_body_reset(&block.body);
+    lantern_state_reset(&state);
+    return result;
+}
+
 static int test_compute_vote_checkpoints_basic(void) {
     LanternState state;
     LanternForkChoice fork_choice;
@@ -4024,6 +4111,9 @@ int main(void) {
         return 1;
     }
     if (test_state_transition_rejects_genesis_state_root_mismatch() != 0) {
+        return 1;
+    }
+    if (test_compute_post_state_matches_process_block_and_votes() != 0) {
         return 1;
     }
     if (test_attestations_single_vote_justifies() != 0) {
