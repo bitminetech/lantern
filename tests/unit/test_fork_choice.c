@@ -829,12 +829,15 @@ static int test_fork_choice_vote_flow(void) {
     return 0;
 }
 
-static int test_fork_choice_safe_target_merges_known_and_new_votes(void) {
+static int test_fork_choice_safe_target_ignores_known_vote_table(void) {
     LanternForkChoice store;
     LanternStore backing_store;
 
     LanternConfig config = {.num_validators = 3, .genesis_time = 25};
     configure_fork_choice_with_backing_store(&store, &backing_store, &config);
+    store.new_aggregated_payloads = NULL;
+    store.known_aggregated_payloads = NULL;
+    store.attestation_data_by_root = NULL;
 
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0x41);
@@ -859,8 +862,7 @@ static int test_fork_choice_safe_target_merges_known_and_new_votes(void) {
 
     LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
     LanternSignedVote known_vote = make_vote(0, &genesis_cp, &block_one_cp);
-    assert(lantern_fork_choice_add_vote(&store, &known_vote, false) == 0);
-    assert(lantern_fork_choice_accept_new_votes(&store) == 0);
+    assert(lantern_fork_choice_add_vote(&store, &known_vote, true) == 0);
     assert(store.known_votes[0].has_checkpoint);
 
     LanternSignedVote new_vote = make_vote(1, &genesis_cp, &block_one_cp);
@@ -870,6 +872,14 @@ static int test_fork_choice_safe_target_merges_known_and_new_votes(void) {
     assert(lantern_fork_choice_update_safe_target(&store) == 0);
     const LanternRoot *safe_target = lantern_fork_choice_safe_target(&store);
     assert(safe_target && roots_equal(safe_target, &genesis_root));
+
+    LanternSignedVote live_vote = make_vote(2, &genesis_cp, &block_one_cp);
+    assert(lantern_fork_choice_add_vote(&store, &live_vote, false) == 0);
+    assert(store.new_votes[2].has_checkpoint);
+
+    assert(lantern_fork_choice_update_safe_target(&store) == 0);
+    safe_target = lantern_fork_choice_safe_target(&store);
+    assert(safe_target && roots_equal(safe_target, &block_one_root));
 
     lantern_store_reset(&backing_store);
     lantern_fork_choice_reset(&store);
@@ -1772,7 +1782,7 @@ int main(void) {
     if (test_fork_choice_vote_flow() != 0) {
         return 1;
     }
-    if (test_fork_choice_safe_target_merges_known_and_new_votes() != 0) {
+    if (test_fork_choice_safe_target_ignores_known_vote_table() != 0) {
         return 1;
     }
     if (test_fork_choice_gossip_vote_dealiases_tables() != 0) {
