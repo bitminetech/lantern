@@ -1921,45 +1921,42 @@ int lantern_fork_choice_update_safe_target(LanternForkChoice *store) {
         }
     }
     uint64_t threshold = lantern_consensus_quorum_threshold(validator_count);
-    struct lantern_fork_choice_vote_entry *merged_votes =
-        calloc(store->validator_count, sizeof(*merged_votes));
+    struct lantern_fork_choice_vote_entry *safe_votes =
+        calloc(store->validator_count, sizeof(*safe_votes));
     uint64_t *latest_slots = calloc(store->validator_count, sizeof(*latest_slots));
-    if (!merged_votes || !latest_slots) {
-        free(merged_votes);
+    if (!safe_votes || !latest_slots) {
+        free(safe_votes);
         free(latest_slots);
         return -1;
     }
     if (fork_choice_has_attached_payload_views(store)) {
         safe_target_merge_payload_pool(
             store,
-            store->known_aggregated_payloads,
-            merged_votes,
-            latest_slots,
-            store->validator_count);
-        safe_target_merge_payload_pool(
-            store,
             store->new_aggregated_payloads,
-            merged_votes,
+            safe_votes,
             latest_slots,
             store->validator_count);
     } else {
-        safe_target_merge_vote_table(store->known_votes, store->validator_count, merged_votes, latest_slots);
-        safe_target_merge_vote_table(store->new_votes, store->validator_count, merged_votes, latest_slots);
+        safe_target_merge_vote_table(
+            store->new_votes,
+            store->validator_count,
+            safe_votes,
+            latest_slots);
     }
     LanternRoot safe;
     if (lmd_ghost_compute(
             store,
             &store->latest_justified.root,
-            merged_votes,
+            safe_votes,
             store->validator_count,
             threshold,
             &safe)
         != 0) {
-        free(merged_votes);
+        free(safe_votes);
         free(latest_slots);
         return -1;
     }
-    free(merged_votes);
+    free(safe_votes);
     free(latest_slots);
     store->safe_target = safe;
     store->has_safe_target = true;

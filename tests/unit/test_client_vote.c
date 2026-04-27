@@ -2076,7 +2076,7 @@ cleanup:
     return rc;
 }
 
-static int test_safe_target_uses_attached_aggregated_payloads(void) {
+static int test_safe_target_uses_only_new_attached_aggregated_payloads(void) {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
     struct PQSignatureSchemeSecretKey *secret = NULL;
@@ -2153,8 +2153,35 @@ static int test_safe_target_uses_attached_aggregated_payloads(void) {
         fprintf(stderr, "safe target missing after aggregated payload update\n");
         goto cleanup;
     }
+    if (memcmp(client.fork_choice.safe_target.bytes, anchor_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "safe target counted known attached aggregated payload support\n");
+        goto cleanup;
+    }
+
+    LanternAggregatedSignatureProof second_new_proof;
+    if (test_make_dummy_proof(&second_new_proof, 2u, 0x71) != 0) {
+        fprintf(stderr, "failed to build second new aggregated proof for safe-target test\n");
+        goto cleanup;
+    }
+    if (lantern_client_add_new_aggregated_payload(
+            &client,
+            &data_root,
+            &data,
+            &second_new_proof,
+            data.target.slot)
+        != 0) {
+        fprintf(stderr, "failed to add second new aggregated payload for safe-target test\n");
+        lantern_aggregated_signature_proof_reset(&second_new_proof);
+        goto cleanup;
+    }
+    lantern_aggregated_signature_proof_reset(&second_new_proof);
+
+    if (lantern_fork_choice_update_safe_target(&client.fork_choice) != 0) {
+        fprintf(stderr, "failed to update safe target from new attached aggregated payloads\n");
+        goto cleanup;
+    }
     if (memcmp(client.fork_choice.safe_target.bytes, child_root.bytes, LANTERN_ROOT_SIZE) != 0) {
-        fprintf(stderr, "safe target did not count attached aggregated payload support\n");
+        fprintf(stderr, "safe target did not count new attached aggregated payload support\n");
         goto cleanup;
     }
 
@@ -3487,7 +3514,7 @@ int main(void) {
     if (test_chain_service_tick_to_skips_stale_intervals() != 0) {
         return 1;
     }
-    if (test_safe_target_uses_attached_aggregated_payloads() != 0) {
+    if (test_safe_target_uses_only_new_attached_aggregated_payloads() != 0) {
         return 1;
     }
     if (test_new_aggregated_payloads_promote_to_known() != 0) {
