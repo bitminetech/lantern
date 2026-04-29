@@ -108,6 +108,10 @@ static struct lean_histogram g_hist_pq_sig_aggregated_signatures_verification = 
     .bounds = kPqSigAggregatedSignatureBuckets,
     .bucket_count = ARRAY_LEN(kPqSigAggregatedSignatureBuckets),
 };
+static struct lean_histogram g_hist_pq_sig_block_aggregated_signatures_verification = {
+    .bounds = kPqSigAggregatedSignatureBuckets,
+    .bucket_count = ARRAY_LEN(kPqSigAggregatedSignatureBuckets),
+};
 static struct lean_histogram g_hist_committee_signatures_aggregation = {
     .bounds = kCommitteeAggregationBuckets,
     .bucket_count = ARRAY_LEN(kCommitteeAggregationBuckets),
@@ -221,6 +225,7 @@ void lean_metrics_reset(void) {
     histogram_reset(&g_hist_pq_sig_attestation_verification);
     histogram_reset(&g_hist_pq_sig_aggregated_signatures_building);
     histogram_reset(&g_hist_pq_sig_aggregated_signatures_verification);
+    histogram_reset(&g_hist_pq_sig_block_aggregated_signatures_verification);
     histogram_reset(&g_hist_committee_signatures_aggregation);
     histogram_reset(&g_hist_gossip_block_size);
     histogram_reset(&g_hist_gossip_attestation_size);
@@ -375,6 +380,12 @@ void lean_metrics_record_pq_aggregated_signature_verification(double seconds, bo
     pthread_mutex_unlock(&g_metrics_lock);
 }
 
+void lean_metrics_record_pq_block_aggregated_signatures_verification(double seconds) {
+    pthread_mutex_lock(&g_metrics_lock);
+    histogram_observe(&g_hist_pq_sig_block_aggregated_signatures_verification, seconds);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
 void lean_metrics_record_committee_signature_aggregation(double seconds, uint64_t aggregated_attestations) {
     pthread_mutex_lock(&g_metrics_lock);
     g_committee_aggregated_attestations_total += aggregated_attestations;
@@ -476,6 +487,9 @@ void lean_metrics_snapshot(struct lean_metrics_snapshot *out) {
     histogram_snapshot(
         &out->pq_sig_aggregated_signatures_verification_time,
         &g_hist_pq_sig_aggregated_signatures_verification);
+    histogram_snapshot(
+        &out->pq_sig_block_aggregated_signatures_verification_time,
+        &g_hist_pq_sig_block_aggregated_signatures_verification);
     histogram_snapshot(
         &out->committee_signatures_aggregation_time,
         &g_hist_committee_signatures_aggregation);

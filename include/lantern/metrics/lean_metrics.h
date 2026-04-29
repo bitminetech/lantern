@@ -76,6 +76,7 @@ struct lean_metrics_snapshot {
     struct lean_metrics_histogram_snapshot pq_sig_attestation_verification_time;
     struct lean_metrics_histogram_snapshot pq_sig_aggregated_signatures_building_time;
     struct lean_metrics_histogram_snapshot pq_sig_aggregated_signatures_verification_time;
+    struct lean_metrics_histogram_snapshot pq_sig_block_aggregated_signatures_verification_time;
     struct lean_metrics_histogram_snapshot committee_signatures_aggregation_time;
     struct lean_metrics_histogram_snapshot gossip_block_size_bytes;
     struct lean_metrics_histogram_snapshot gossip_attestation_size_bytes;
@@ -103,6 +104,7 @@ void lean_metrics_record_pq_signature_verification(double seconds);
 void lean_metrics_record_pq_signature_verification_result(bool valid);
 void lean_metrics_record_pq_aggregated_signature_build(size_t attestation_count, double seconds);
 void lean_metrics_record_pq_aggregated_signature_verification(double seconds, bool valid);
+void lean_metrics_record_pq_block_aggregated_signatures_verification(double seconds);
 void lean_metrics_record_committee_signature_aggregation(double seconds, uint64_t aggregated_attestations);
 void lean_metrics_record_peer_connection(
     lean_metrics_direction_t direction,

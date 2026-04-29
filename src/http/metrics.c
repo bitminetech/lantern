@@ -1167,6 +1167,16 @@ static int append_lean_histograms(
 
     rc = append_histogram_metrics(
         buf,
+        "lean_pq_sig_block_aggregated_signatures_verification_time_seconds",
+        "Wall-clock time spent verifying aggregated attestation signatures in a block",
+        &lean->pq_sig_block_aggregated_signatures_verification_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
         "lean_committee_signatures_aggregation_time_seconds",
         "Time taken to aggregate committee signatures",
         &lean->committee_signatures_aggregation_time);

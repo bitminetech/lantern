@@ -1,6 +1,7 @@
 #include "lantern/consensus/signature.h"
 
 #include <inttypes.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,6 +37,16 @@ struct lantern_recursive_child_input {
     uint8_t *canonical_bytes;
     size_t canonical_length;
 };
+
+static pthread_once_t g_xmss_verifier_setup_once = PTHREAD_ONCE_INIT;
+
+static void xmss_verifier_setup_once(void) {
+    pq_xmss_aggregation_setup_verifier();
+}
+
+static void ensure_xmss_verifier_setup(void) {
+    (void)pthread_once(&g_xmss_verifier_setup_once, xmss_verifier_setup_once);
+}
 
 static bool validator_pubkey_bytes_are_zero(const uint8_t *pubkey) {
     if (!pubkey) {
@@ -130,7 +141,7 @@ static bool prepare_recursive_child(
         pubkey_index += 1u;
     }
 
-    pq_xmss_aggregation_setup_verifier();
+    ensure_xmss_verifier_setup();
     int verify_rc = pq_verify_aggregated_signatures(
         (const struct PQSignatureSchemePublicKey *const *)out_child->pubkey_handles,
         participant_count,
@@ -797,7 +808,7 @@ bool lantern_signature_verify_aggregated(
     int verify_rc = -1;
     double elapsed = 0.0;
     if (ok) {
-        pq_xmss_aggregation_setup_verifier();
+        ensure_xmss_verifier_setup();
         double start = get_time_seconds();
         verify_rc = pq_verify_aggregated_signatures(
             (const struct PQSignatureSchemePublicKey *const *)pubkey_handles,
