@@ -83,6 +83,33 @@ static const size_t CHECKPOINT_SYNC_MAX_RESPONSE_BYTES =
 static const size_t LANTERN_DEFAULT_ATTESTATION_COMMITTEE_COUNT = 1u;
 static const uint64_t LANTERN_CHECKPOINT_SYNC_STALE_PERSISTED_STATE_SLOT_THRESHOLD = 2u * 32u;
 
+static void log_aggregated_payload_interval_transition(
+    const struct lantern_client *client,
+    const char *context,
+    uint64_t interval,
+    uint64_t phase,
+    size_t new_before,
+    size_t known_before,
+    size_t promoted) {
+    if (!client || !context) {
+        return;
+    }
+    struct lantern_log_metadata meta = {.validator = client->node_id};
+    lantern_log_info(
+        "forkchoice",
+        &meta,
+        "aggregated payload transition context=%s interval=%" PRIu64 " phase=%" PRIu64
+        " new_before=%zu known_before=%zu promoted=%zu new_after=%zu known_after=%zu",
+        context,
+        interval,
+        phase,
+        new_before,
+        known_before,
+        promoted,
+        client->store.new_aggregated_payloads.length,
+        client->store.known_aggregated_payloads.length);
+}
+
 static int client_resolve_gossip_fork_digest(
     const struct lantern_client *client,
     uint8_t out_fork_digest[4])
@@ -168,8 +195,27 @@ static void sync_aggregated_payload_pools_after_time_advance(
          ++step) {
         uint64_t interval_index = step % client->fork_choice.intervals_per_slot;
         bool step_has_proposal = has_proposal && (step == client->fork_choice.time_intervals);
-        if (interval_index == 4u || (interval_index == 0u && step_has_proposal)) {
-            (void)lantern_store_promote_new_aggregated_payloads(&client->store);
+        if (interval_index == 3u) {
+            log_aggregated_payload_interval_transition(
+                client,
+                "safe_target",
+                step,
+                interval_index,
+                client->store.new_aggregated_payloads.length,
+                client->store.known_aggregated_payloads.length,
+                0u);
+        } else if (interval_index == 4u || (interval_index == 0u && step_has_proposal)) {
+            size_t new_before = client->store.new_aggregated_payloads.length;
+            size_t known_before = client->store.known_aggregated_payloads.length;
+            size_t promoted = lantern_store_promote_new_aggregated_payloads(&client->store);
+            log_aggregated_payload_interval_transition(
+                client,
+                interval_index == 4u ? "accept_new" : "proposal_accept_new",
+                step,
+                interval_index,
+                new_before,
+                known_before,
+                promoted);
         }
     }
 }
@@ -316,13 +362,34 @@ int lantern_client_skip_fork_choice_intervals_locked(
     for (uint64_t step = previous_intervals + 1u;; ++step) {
         uint64_t phase = step % intervals_per_slot;
         if (phase == 3u) {
+            size_t new_before = client->store.new_aggregated_payloads.length;
+            size_t known_before = client->store.known_aggregated_payloads.length;
             if (lantern_fork_choice_update_safe_target(&client->fork_choice) != 0) {
                 return -1;
             }
+            log_aggregated_payload_interval_transition(
+                client,
+                "skip_safe_target",
+                step,
+                phase,
+                new_before,
+                known_before,
+                0u);
         } else if (phase == 4u) {
+            size_t new_before = client->store.new_aggregated_payloads.length;
+            size_t known_before = client->store.known_aggregated_payloads.length;
             if (lantern_fork_choice_accept_new_votes(&client->fork_choice) != 0) {
                 return -1;
             }
+            size_t promoted = lantern_store_promote_new_aggregated_payloads(&client->store);
+            log_aggregated_payload_interval_transition(
+                client,
+                "skip_accept_new",
+                step,
+                phase,
+                new_before,
+                known_before,
+                promoted);
         }
         if (step == target_interval) {
             break;

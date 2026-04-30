@@ -902,14 +902,32 @@ static bool should_replace_checkpoint(
     if (!current || !candidate || root_is_zero(&candidate->root)) {
         return false;
     }
-    if (candidate->slot > current->slot) {
-        return true;
+    return candidate->slot > current->slot;
+}
+
+static void log_checkpoint_decision(
+    const char *label,
+    const char *decision,
+    const LanternCheckpoint *current,
+    const LanternCheckpoint *candidate) {
+    if (!label || !decision || !current || !candidate) {
+        return;
     }
-    if (candidate->slot == current->slot
-        && root_compare(&candidate->root, &current->root) != 0) {
-        return true;
-    }
-    return false;
+    char current_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char candidate_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    format_root_hex(&current->root, current_hex, sizeof(current_hex));
+    format_root_hex(&candidate->root, candidate_hex, sizeof(candidate_hex));
+    lantern_log_info(
+        "forkchoice",
+        &(const struct lantern_log_metadata){0},
+        "checkpoint %s label=%s current_slot=%" PRIu64 " current_root=%s"
+        " candidate_slot=%" PRIu64 " candidate_root=%s",
+        decision,
+        label,
+        current->slot,
+        current_hex[0] ? current_hex : "0x0",
+        candidate->slot,
+        candidate_hex[0] ? candidate_hex : "0x0");
 }
 
 static int update_latest_checkpoints(
@@ -949,7 +967,20 @@ static int update_latest_checkpoints(
             return -1;
         }
         if (should_replace_checkpoint(&latest_justified, effective_post_justified)) {
+            log_checkpoint_decision(
+                "justified",
+                "advance",
+                &latest_justified,
+                effective_post_justified);
             latest_justified = *effective_post_justified;
+        } else if (
+            effective_post_justified->slot == latest_justified.slot
+            && root_compare(&effective_post_justified->root, &latest_justified.root) != 0) {
+            log_checkpoint_decision(
+                "justified",
+                "tie_keep_current",
+                &latest_justified,
+                effective_post_justified);
         }
     }
     if (effective_post_finalized && !root_is_zero(&effective_post_finalized->root)) {
@@ -957,7 +988,20 @@ static int update_latest_checkpoints(
             return -1;
         }
         if (should_replace_checkpoint(&latest_finalized, effective_post_finalized)) {
+            log_checkpoint_decision(
+                "finalized",
+                "advance",
+                &latest_finalized,
+                effective_post_finalized);
             latest_finalized = *effective_post_finalized;
+        } else if (
+            effective_post_finalized->slot == latest_finalized.slot
+            && root_compare(&effective_post_finalized->root, &latest_finalized.root) != 0) {
+            log_checkpoint_decision(
+                "finalized",
+                "tie_keep_current",
+                &latest_finalized,
+                effective_post_finalized);
         }
     }
 
