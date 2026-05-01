@@ -56,11 +56,6 @@ WORKDIR /usr/src/lantern
 COPY . .
 
 RUN LANTERN_BOOTSTRAP_SKIP_SUBMODULE_SYNC=1 ./scripts/bootstrap.sh
-
-# Build the XMSS bindings (cargo archive needs ranlib'd index on linux).
-# When LANTERN_RUST_PROFILE=1, build with frame pointers + full debuginfo so
-# heap profilers can attribute Rust frames. Uses a separate cache namespace
-# so toggling profile/non-profile doesn't invalidate the other's cache.
 RUN --mount=type=cache,target=/root/.cargo/registry,sharing=locked,id=cargo-registry-${TARGETPLATFORM} \
     --mount=type=cache,target=/root/.cargo/git,sharing=locked,id=cargo-git-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/src/lantern/external/c-leanvm-xmss/target,sharing=locked,id=leanvm-xmss-target-${TARGETPLATFORM}-${LANTERN_RUST_PROFILE} \
