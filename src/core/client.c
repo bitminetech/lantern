@@ -2685,7 +2685,7 @@ static lantern_client_error client_generate_state_from_genesis(struct lantern_cl
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_STORAGE on storage I/O failure
  * @return LANTERN_CLIENT_ERR_GENESIS on genesis construction failure
- * @return LANTERN_CLIENT_ERR_NETWORK on checkpoint fetch failure
+ * @return LANTERN_CLIENT_ERR_GENESIS when checkpoint sync and genesis fallback both fail
  *
  * @note Thread safety: Must be called before any concurrent access.
  */
@@ -2771,7 +2771,14 @@ static lantern_client_error client_load_or_build_state(
                 options->checkpoint_sync_url);
             if (checkpoint_rc != LANTERN_CLIENT_OK)
             {
-                return checkpoint_rc;
+                lantern_log_warn(
+                    "checkpoint_sync",
+                    &meta,
+                    "checkpoint sync failed; falling back to genesis bootstrap");
+                if (client_generate_state_from_genesis(client) != LANTERN_CLIENT_OK)
+                {
+                    return LANTERN_CLIENT_ERR_GENESIS;
+                }
             }
         }
         else if (client_generate_state_from_genesis(client) != LANTERN_CLIENT_OK)

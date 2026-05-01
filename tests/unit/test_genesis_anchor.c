@@ -541,6 +541,22 @@ static int test_checkpoint_sync_parse_url_scheme_handling(void)
     port = 0;
 
     if (lantern_client_checkpoint_sync_parse_url(
+            "http://127.0.0.1:/lean/v0/states/finalized",
+            &host,
+            &port,
+            &base_path)
+        == 0)
+    {
+        fprintf(stderr, "checkpoint sync URL with empty port should be rejected\n");
+        goto fail;
+    }
+    if (host || base_path || port != 0)
+    {
+        fprintf(stderr, "empty-port checkpoint sync parse should not return partial output\n");
+        goto fail;
+    }
+
+    if (lantern_client_checkpoint_sync_parse_url(
             "https://checkpoint.example/lean/v0/states/finalized",
             &host,
             &port,
