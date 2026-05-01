@@ -56,6 +56,9 @@ WORKDIR /usr/src/lantern
 COPY . .
 
 RUN LANTERN_BOOTSTRAP_SKIP_SUBMODULE_SYNC=1 ./scripts/bootstrap.sh
+
+RUN echo "LANTERN_RUST_PROFILE=${LANTERN_RUST_PROFILE}"
+
 RUN --mount=type=cache,target=/root/.cargo/registry,sharing=locked,id=cargo-registry-${TARGETPLATFORM} \
     --mount=type=cache,target=/root/.cargo/git,sharing=locked,id=cargo-git-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/src/lantern/external/c-leanvm-xmss/target,sharing=locked,id=leanvm-xmss-target-${TARGETPLATFORM}-${LANTERN_RUST_PROFILE} \
