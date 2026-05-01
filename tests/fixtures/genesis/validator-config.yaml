@@ -54,4 +54,5 @@ validators:
       ip: "172.20.0.16"
       quic: 9000
       seq: 1
+    subnet: 1
     count: 1

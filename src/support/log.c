@@ -2,12 +2,14 @@
 
 #include <ctype.h>
 #include <inttypes.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 static char g_node_id[96] = {0};
+static pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
 static enum LanternLogLevel g_min_level = LANTERN_LOG_LEVEL_INFO;
 static bool g_color_initialized = false;
 static bool g_color_stdout = false;
@@ -296,6 +298,7 @@ void lantern_log_log(
 
     static const char kUnknownTimestamp[] = "????" "-??" "-?? ??:??:??.???";
 
+    pthread_mutex_lock(&g_log_mutex);
     if (colorize) {
         /* Colored output with selective coloring */
         fprintf(
@@ -346,6 +349,7 @@ void lantern_log_log(
     }
 
     fflush(target);
+    pthread_mutex_unlock(&g_log_mutex);
 }
 
 static void log_variadic(
