@@ -873,15 +873,80 @@ size_t lantern_client_attestation_committee_count(const struct lantern_client *c
     {
         return LANTERN_DEFAULT_ATTESTATION_COMMITTEE_COUNT;
     }
+    size_t count = LANTERN_DEFAULT_ATTESTATION_COMMITTEE_COUNT;
     if (client->debug_attestation_committee_count > 0)
     {
-        return client->debug_attestation_committee_count;
+        count = client->debug_attestation_committee_count;
     }
-    if (client->genesis.chain_config.attestation_committee_count > 0)
+    else if (client->genesis.chain_config.attestation_committee_count > 0)
     {
-        return (size_t)client->genesis.chain_config.attestation_committee_count;
+        count = (size_t)client->genesis.chain_config.attestation_committee_count;
     }
-    return LANTERN_DEFAULT_ATTESTATION_COMMITTEE_COUNT;
+    const struct lantern_validator_config *config = &client->genesis.validator_config;
+    for (size_t i = 0; i < config->count; ++i)
+    {
+        const struct lantern_validator_config_entry *entry = &config->entries[i];
+        if (entry->has_subnet && entry->subnet < SIZE_MAX)
+        {
+            size_t required_count = (size_t)entry->subnet + 1u;
+            if (required_count > count)
+            {
+                count = required_count;
+            }
+        }
+    }
+    return count;
+}
+
+static const struct lantern_validator_config_entry *client_validator_entry_for_index(
+    const struct lantern_client *client,
+    uint64_t validator_index)
+{
+    if (!client || !client->genesis.validator_config.entries)
+    {
+        return NULL;
+    }
+    const struct lantern_validator_config *config = &client->genesis.validator_config;
+    for (size_t i = 0; i < config->count; ++i)
+    {
+        const struct lantern_validator_config_entry *entry = &config->entries[i];
+        for (size_t j = 0; j < entry->indices_len; ++j)
+        {
+            if (entry->indices[j] == validator_index)
+            {
+                return entry;
+            }
+        }
+        if (entry->has_range
+            && validator_index >= entry->start_index
+            && validator_index < entry->end_index)
+        {
+            return entry;
+        }
+    }
+    return NULL;
+}
+
+int lantern_client_attestation_subnet_for_validator(
+    const struct lantern_client *client,
+    uint64_t validator_index,
+    size_t *out_subnet_id)
+{
+    if (!out_subnet_id)
+    {
+        return -1;
+    }
+    const struct lantern_validator_config_entry *entry =
+        client_validator_entry_for_index(client, validator_index);
+    if (entry && entry->has_subnet)
+    {
+        *out_subnet_id = (size_t)entry->subnet;
+        return 0;
+    }
+    return lantern_validator_index_compute_subnet_id(
+        (LanternValidatorIndex)validator_index,
+        lantern_client_attestation_committee_count(client),
+        out_subnet_id);
 }
 
 
@@ -3094,7 +3159,6 @@ static lantern_client_error client_start_protocols(
     struct lantern_client *client,
     uint8_t node_key[NODE_PRIVATE_KEY_SIZE])
 {
-    size_t attestation_committee_count = lantern_client_attestation_committee_count(client);
     uint8_t fork_digest[4] = {0};
     char topic_network_name[32];
     size_t subnet_id = 0;
@@ -3123,9 +3187,9 @@ static lantern_client_error client_start_protocols(
         snprintf(topic_network_name, sizeof(topic_network_name), "%s", client->devnet);
     }
     if (client->local_validators && client->local_validator_count > 0) {
-        if (lantern_validator_index_compute_subnet_id(
+        if (lantern_client_attestation_subnet_for_validator(
+                client,
                 client->local_validators[0].global_index,
-                attestation_committee_count,
                 &subnet_id)
             != 0) {
             lantern_log_error(
@@ -3163,9 +3227,9 @@ static lantern_client_error client_start_protocols(
     if (client->local_validators && client->local_validator_count > 0) {
         for (size_t i = 0; i < client->local_validator_count; ++i) {
             size_t validator_subnet_id = 0;
-            if (lantern_validator_index_compute_subnet_id(
+            if (lantern_client_attestation_subnet_for_validator(
+                    client,
                     client->local_validators[i].global_index,
-                    attestation_committee_count,
                     &validator_subnet_id)
                 != 0) {
                 lantern_log_error(
@@ -3191,6 +3255,13 @@ static lantern_client_error client_start_protocols(
                 client->gossip_running = false;
                 return LANTERN_CLIENT_ERR_NETWORK;
             }
+            lantern_log_info(
+                "gossip",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "attestation subnet subscribed validator=%" PRIu64 " subnet=%zu committee_count=%zu",
+                client->local_validators[i].global_index,
+                validator_subnet_id,
+                lantern_client_attestation_committee_count(client));
         }
     }
 

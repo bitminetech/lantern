@@ -61,11 +61,6 @@ static const uint64_t VALIDATOR_SYNC_SLOT_LAG = 2;
 static const size_t VALIDATOR_SYNC_PENDING_THRESHOLD = 8;
 /** Wall clock lag (in slots) tolerated before treating peer status as stale. */
 static const uint64_t VALIDATOR_SYNC_WALL_CLOCK_LAG = 16;
-static size_t validator_attestation_committee_count(const struct lantern_client *client)
-{
-    return lantern_client_attestation_committee_count(client);
-}
-
 static int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot);
 static lantern_client_error collect_subnet_votes(
     struct lantern_client *client,
@@ -2023,9 +2018,9 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
     lantern_client_unlock_state(client, state_locked);
 
     size_t subnet_id = 0;
-    if (lantern_validator_index_compute_subnet_id(
+    if (lantern_client_attestation_subnet_for_validator(
+            client,
             vote->data.validator_id,
-            validator_attestation_committee_count(client),
             &subnet_id)
         == 0) {
         if (lantern_gossipsub_service_publish_vote_subnet(&client->gossip, vote, subnet_id) != 0) {
@@ -2377,9 +2372,9 @@ static lantern_client_error collect_subnet_votes(
             continue;
         }
         size_t vote_subnet = 0;
-        if (lantern_validator_index_compute_subnet_id(
+        if (lantern_client_attestation_subnet_for_validator(
+                client,
                 entry->key.validator_index,
-                validator_attestation_committee_count(client),
                 &vote_subnet)
             != 0) {
             continue;

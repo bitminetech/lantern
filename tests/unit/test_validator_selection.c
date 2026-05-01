@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "lantern/core/client.h"
 #include "lantern/genesis/genesis.h"
 
 static void build_fixture_path(char *buffer, size_t length, const char *relative) {
@@ -109,6 +110,31 @@ int main(void) {
         "lantern_6");
     if (!lantern6 || !lantern6->has_range || lantern6->start_index != 6 || lantern6->end_index != 7) {
         fprintf(stderr, "unexpected range for lantern_6\n");
+        goto cleanup;
+    }
+    if (!lantern6->has_subnet || lantern6->subnet != 1) {
+        fprintf(stderr, "lantern_6 subnet was not parsed\n");
+        goto cleanup;
+    }
+
+    struct lantern_client client;
+    memset(&client, 0, sizeof(client));
+    client.genesis.validator_config = artifacts.validator_config;
+    client.genesis.chain_config = artifacts.chain_config;
+    size_t subnet_id = 0;
+    if (lantern_client_attestation_subnet_for_validator(&client, 6, &subnet_id) != 0
+        || subnet_id != 1) {
+        fprintf(stderr, "explicit subnet was not used for lantern_6\n");
+        goto cleanup;
+    }
+    if (lantern_client_attestation_subnet_for_validator(&client, 0, &subnet_id) != 0
+        || subnet_id != 0) {
+        fprintf(stderr, "fallback subnet mismatch for ream_0\n");
+        goto cleanup;
+    }
+    if (lantern_client_attestation_subnet_for_validator(&client, 1, &subnet_id) != 0
+        || subnet_id != 1) {
+        fprintf(stderr, "explicit subnets did not expand fallback committee count\n");
         goto cleanup;
     }
 

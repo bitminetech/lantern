@@ -52,6 +52,7 @@ static const char *const VALIDATOR_CONFIG_FIELD_QUIC = "quic";
 static const char *const VALIDATOR_CONFIG_FIELD_SEQ = "seq";
 static const char *const VALIDATOR_CONFIG_FIELD_IS_AGGREGATOR = "is_aggregator";
 static const char *const VALIDATOR_CONFIG_FIELD_XMSS_DIR = "xmssDir";
+static const char *const VALIDATOR_CONFIG_FIELD_SUBNET = "subnet";
 
 static uint64_t parse_u64(const char *value, int *ok);
 static int parse_bool(const char *value, int *ok);
@@ -1165,6 +1166,7 @@ static int parse_validator_config_entry(
     const char *seq_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_SEQ);
     const char *is_aggregator_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_IS_AGGREGATOR);
     const char *xmss_dir_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_XMSS_DIR);
+    const char *subnet_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_SUBNET);
 
     entry->name = dup_trimmed(name_val);
     entry->privkey_hex = dup_trimmed(priv_val);
@@ -1220,6 +1222,18 @@ static int parse_validator_config_entry(
         {
             return LANTERN_GENESIS_ERR_INVALID_DATA;
         }
+    }
+
+    entry->has_subnet = false;
+    entry->subnet = 0;
+    if (subnet_val && *subnet_val)
+    {
+        entry->subnet = parse_u64(subnet_val, &ok);
+        if (!ok)
+        {
+            return LANTERN_GENESIS_ERR_INVALID_DATA;
+        }
+        entry->has_subnet = true;
     }
 
     entry->xmss_dir = dup_trimmed(xmss_dir_val);
