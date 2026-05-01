@@ -33,6 +33,7 @@
 #include "lantern/consensus/runtime.h"
 #include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"
+#include "lantern/crypto/xmss.h"
 #include "lantern/metrics/lean_metrics.h"
 #include "lantern/networking/gossipsub_service.h"
 #include "lantern/support/log.h"
@@ -1403,8 +1404,9 @@ static bool validator_slot_in_prepared_interval(struct PQRange prepared, uint64_
 /**
  * Sign a message root with one of a validator's XMSS keys.
  *
- * Advances the selected key until it can sign for `slot`, mutating the key in
- * place so the updated prepared window remains stored on the validator entry.
+ * Advances the selected key until it can sign for `slot`, mutating resident
+ * keys in place. Proposal keys may be loaded for one signature from
+ * `proposal_secret_path` so their Merkle trees are not kept resident.
  *
  * @param validator         Local validator
  * @param slot              Slot number
@@ -1430,42 +1432,63 @@ int validator_sign_with_key(
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
 
-    struct PQSignatureSchemeSecretKey **selected_key =
-        use_proposal_key ? &validator->proposal_secret_key : &validator->attestation_secret_key;
-    if (!selected_key || !*selected_key)
+    struct PQSignatureSchemeSecretKey *temporary_proposal_key = NULL;
+    struct PQSignatureSchemeSecretKey *selected_key =
+        use_proposal_key ? validator->proposal_secret_key : validator->attestation_secret_key;
+    bool free_selected_key = false;
+    if (use_proposal_key && !selected_key && validator->proposal_secret_path)
+    {
+        if (lantern_xmss_load_secret_file(validator->proposal_secret_path, &temporary_proposal_key) != 0)
+        {
+            return LANTERN_CLIENT_ERR_VALIDATOR;
+        }
+        selected_key = temporary_proposal_key;
+        free_selected_key = true;
+    }
+    if (!selected_key)
     {
         return LANTERN_CLIENT_ERR_VALIDATOR;
     }
 
-    struct PQRange prepared = pq_get_prepared_interval(*selected_key);
+    int result = LANTERN_CLIENT_OK;
+    struct PQRange prepared = pq_get_prepared_interval(selected_key);
     if (prepared.end <= prepared.start)
     {
-        return LANTERN_CLIENT_ERR_VALIDATOR;
+        result = LANTERN_CLIENT_ERR_VALIDATOR;
+        goto cleanup;
     }
     if (slot < prepared.start)
     {
-        return LANTERN_CLIENT_ERR_VALIDATOR;
+        result = LANTERN_CLIENT_ERR_VALIDATOR;
+        goto cleanup;
     }
 
     while (!validator_slot_in_prepared_interval(prepared, slot))
     {
         uint64_t previous_start = prepared.start;
         uint64_t previous_end = prepared.end;
-        pq_advance_preparation(*selected_key);
-        prepared = pq_get_prepared_interval(*selected_key);
+        pq_advance_preparation(selected_key);
+        prepared = pq_get_prepared_interval(selected_key);
         if (prepared.end <= prepared.start
             || (prepared.start == previous_start && prepared.end == previous_end)
             || slot < prepared.start)
         {
-            return LANTERN_CLIENT_ERR_VALIDATOR;
+            result = LANTERN_CLIENT_ERR_VALIDATOR;
+            goto cleanup;
         }
     }
 
-    if (!lantern_signature_sign(*selected_key, slot, message, out_signature))
+    if (!lantern_signature_sign(selected_key, slot, message, out_signature))
     {
-        return LANTERN_CLIENT_ERR_VALIDATOR;
+        result = LANTERN_CLIENT_ERR_VALIDATOR;
     }
-    return LANTERN_CLIENT_OK;
+
+cleanup:
+    if (free_selected_key && temporary_proposal_key)
+    {
+        pq_secret_key_free(temporary_proposal_key);
+    }
+    return result;
 }
 
 

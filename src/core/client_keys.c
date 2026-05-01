@@ -84,6 +84,8 @@ static void free_local_secret_key_handles(struct lantern_local_validator *valida
 
     validator->attestation_secret_key = NULL;
     validator->proposal_secret_key = NULL;
+    free(validator->proposal_secret_path);
+    validator->proposal_secret_path = NULL;
     validator->has_attestation_secret_handle = false;
     validator->has_proposal_secret_handle = false;
 }
@@ -1151,7 +1153,6 @@ static int load_xmss_secret_keys(
             proposal_path);
 
         struct PQSignatureSchemeSecretKey *attestation_secret = NULL;
-        struct PQSignatureSchemeSecretKey *proposal_secret = NULL;
         if (lantern_xmss_load_secret_file(attestation_path, &attestation_secret) != 0)
         {
             lantern_log_warn(
@@ -1164,12 +1165,13 @@ static int load_xmss_secret_keys(
             free(proposal_path);
             continue;
         }
-        if (lantern_xmss_load_secret_file(proposal_path, &proposal_secret) != 0)
+        char *owned_proposal_path = lantern_string_duplicate(proposal_path);
+        if (!owned_proposal_path)
         {
             lantern_log_warn(
                 "crypto",
                 &meta,
-                "failed to load proposal xmss secret key validator=%" PRIu64 " path=%s; skipping",
+                "failed to retain proposal xmss secret key path validator=%" PRIu64 " path=%s; skipping",
                 validator->global_index,
                 proposal_path);
             pq_secret_key_free(attestation_secret);
@@ -1181,9 +1183,10 @@ static int load_xmss_secret_keys(
         free(proposal_path);
 
         validator->attestation_secret_key = attestation_secret;
-        validator->proposal_secret_key = proposal_secret;
+        validator->proposal_secret_key = NULL;
+        validator->proposal_secret_path = owned_proposal_path;
         validator->has_attestation_secret_handle = true;
-        validator->has_proposal_secret_handle = true;
+        validator->has_proposal_secret_handle = false;
         ++loaded;
     }
     lantern_log_info(

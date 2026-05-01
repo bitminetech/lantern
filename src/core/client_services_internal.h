@@ -536,6 +536,16 @@ void lantern_client_on_blocks_request_complete(
     const LanternRoot *request_root,
     enum lantern_blocks_request_outcome outcome);
 
+bool lantern_client_import_block(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    const struct lantern_log_metadata *meta,
+    uint32_t backfill_depth,
+    bool allow_historical,
+    const uint8_t *raw_block_ssz,
+    size_t raw_block_ssz_len);
+
 
 /**
  * Read a response chunk from a reqresp stream.

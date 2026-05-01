@@ -161,6 +161,29 @@ bool lantern_client_block_known_locked(
     const LanternRoot *root,
     uint64_t *out_slot);
 
+bool lantern_client_maybe_start_historical_backfill(
+    struct lantern_client *client,
+    const char *peer_text,
+    const LanternRoot *head_root,
+    uint64_t head_slot,
+    uint64_t local_head_slot);
+
+bool lantern_client_backfill_process_block(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *root,
+    const char *peer_text,
+    uint32_t depth);
+
+bool lantern_client_backfill_should_drop_gossip(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *root,
+    const char *peer_text,
+    const char *context);
+
+void lantern_client_backfill_reset(struct lantern_client *client);
+
 /**
  * Get a state snapshot for a specific block root without attempting replay.
  *

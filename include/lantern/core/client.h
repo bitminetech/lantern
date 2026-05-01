@@ -89,6 +89,31 @@ struct libp2p_subscription;
 struct libp2p_protocol_server;
 struct lantern_peer_status_entry;
 struct lantern_active_blocks_request;
+struct lantern_backfill_entry {
+    LanternRoot root;
+    LanternRoot parent_root;
+    uint64_t slot;
+    uint32_t depth;
+    char peer_text[128];
+    bool imported;
+};
+
+struct lantern_backfill_session {
+    bool active;
+    LanternRoot head_root;
+    LanternRoot frontier_root;
+    uint64_t head_slot;
+    uint64_t anchor_slot;
+    uint32_t frontier_depth;
+    char peer_text[128];
+    struct lantern_backfill_entry *entries;
+    size_t length;
+    size_t capacity;
+    uint64_t persisted_count;
+    uint64_t imported_count;
+    uint64_t dropped_gossip_hints;
+};
+
 struct lantern_pending_block {
     LanternSignedBlock block;
     LanternRoot root;
@@ -159,6 +184,7 @@ struct lantern_local_validator {
     bool has_secret;
     struct PQSignatureSchemeSecretKey *attestation_secret_key;
     struct PQSignatureSchemeSecretKey *proposal_secret_key;
+    char *proposal_secret_path;
     bool has_attestation_secret_handle;
     bool has_proposal_secret_handle;
     uint64_t last_proposed_slot;
@@ -232,6 +258,7 @@ struct lantern_client {
     struct lantern_string_list status_failure_peer_ids;
     struct lantern_pending_block_list pending_blocks;
     struct lantern_pending_vote_list pending_gossip_votes;
+    struct lantern_backfill_session backfill;
     pthread_mutex_t pending_lock;
     bool pending_lock_initialized;
     LanternRoot sync_last_requested_root;

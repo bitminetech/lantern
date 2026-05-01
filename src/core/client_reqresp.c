@@ -434,6 +434,17 @@ static void maybe_seed_head_request_from_status(
         return;
     }
 
+    bool historical_backfill_started = false;
+    if (peer_head_ahead)
+    {
+        historical_backfill_started = lantern_client_maybe_start_historical_backfill(
+            client,
+            peer_id_text,
+            &peer_status->head.root,
+            peer_status->head.slot,
+            local_head_slot);
+    }
+
     bool has_pending_blocks = false;
     bool pending_locked = lantern_client_lock_pending(client);
     if (pending_locked)
@@ -441,7 +452,7 @@ static void maybe_seed_head_request_from_status(
         has_pending_blocks = client->pending_blocks.length > 0;
     }
     lantern_client_unlock_pending(client, pending_locked);
-    if (has_pending_blocks)
+    if (has_pending_blocks && !historical_backfill_started)
     {
         return;
     }

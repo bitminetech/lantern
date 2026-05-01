@@ -258,16 +258,27 @@ static bool lantern_client_process_stream_block_chunk(
             streamed_block.block.body.attestations.length);
     }
 
-    lantern_client_record_block(
-        ctx->client,
-        &streamed_block,
-        &computed,
-        ctx->peer_text[0] ? ctx->peer_text : NULL,
-        "reqresp",
-        backfill_depth,
-        true,
-        raw_block,
-        written);
+    bool handled_by_backfill =
+        matches
+        && lantern_client_backfill_process_block(
+               ctx->client,
+               &streamed_block,
+               &computed,
+               ctx->peer_text[0] ? ctx->peer_text : NULL,
+               backfill_depth);
+    if (!handled_by_backfill)
+    {
+        lantern_client_record_block(
+            ctx->client,
+            &streamed_block,
+            &computed,
+            ctx->peer_text[0] ? ctx->peer_text : NULL,
+            "reqresp",
+            backfill_depth,
+            true,
+            raw_block,
+            written);
+    }
     lantern_signed_block_reset(&streamed_block);
     free(raw_block);
     if (saw_block)

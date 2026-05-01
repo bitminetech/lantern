@@ -44,6 +44,527 @@ enum
     VALIDATOR_PUBKEY_HEX_BUFFER_LEN = (LANTERN_VALIDATOR_PUBKEY_SIZE * 2u) + 3u,
 };
 
+static void backfill_session_clear_locked(struct lantern_backfill_session *session)
+{
+    if (!session)
+    {
+        return;
+    }
+    free(session->entries);
+    memset(session, 0, sizeof(*session));
+}
+
+void lantern_client_backfill_reset(struct lantern_client *client)
+{
+    if (!client)
+    {
+        return;
+    }
+    bool locked = lantern_client_lock_pending(client);
+    if (locked)
+    {
+        backfill_session_clear_locked(&client->backfill);
+        lantern_client_unlock_pending(client, locked);
+    }
+    else
+    {
+        backfill_session_clear_locked(&client->backfill);
+    }
+}
+
+static bool backfill_entry_append_locked(
+    struct lantern_backfill_session *session,
+    const LanternRoot *root,
+    const LanternRoot *parent_root,
+    uint64_t slot,
+    uint32_t depth,
+    const char *peer_text)
+{
+    if (!session || !root || !parent_root)
+    {
+        return false;
+    }
+    for (size_t i = 0; i < session->length; ++i)
+    {
+        struct lantern_backfill_entry *entry = &session->entries[i];
+        if (memcmp(entry->root.bytes, root->bytes, LANTERN_ROOT_SIZE) == 0)
+        {
+            if (depth > entry->depth)
+            {
+                entry->depth = depth;
+            }
+            if (peer_text && peer_text[0])
+            {
+                strncpy(entry->peer_text, peer_text, sizeof(entry->peer_text) - 1u);
+                entry->peer_text[sizeof(entry->peer_text) - 1u] = '\0';
+            }
+            return true;
+        }
+    }
+    if (session->length == session->capacity)
+    {
+        size_t next_capacity = session->capacity == 0 ? 1024u : session->capacity * 2u;
+        if (next_capacity <= session->capacity
+            || next_capacity > SIZE_MAX / sizeof(*session->entries))
+        {
+            return false;
+        }
+        struct lantern_backfill_entry *grown =
+            realloc(session->entries, next_capacity * sizeof(*grown));
+        if (!grown)
+        {
+            return false;
+        }
+        session->entries = grown;
+        session->capacity = next_capacity;
+    }
+    struct lantern_backfill_entry *entry = &session->entries[session->length++];
+    memset(entry, 0, sizeof(*entry));
+    entry->root = *root;
+    entry->parent_root = *parent_root;
+    entry->slot = slot;
+    entry->depth = depth;
+    if (peer_text && peer_text[0])
+    {
+        strncpy(entry->peer_text, peer_text, sizeof(entry->peer_text) - 1u);
+        entry->peer_text[sizeof(entry->peer_text) - 1u] = '\0';
+    }
+    return true;
+}
+
+static const struct lantern_backfill_entry *backfill_find_child_locked(
+    const struct lantern_backfill_session *session,
+    const LanternRoot *parent_root)
+{
+    const struct lantern_backfill_entry *best = NULL;
+    if (!session || !parent_root)
+    {
+        return NULL;
+    }
+    for (size_t i = 0; i < session->length; ++i)
+    {
+        const struct lantern_backfill_entry *entry = &session->entries[i];
+        if (entry->imported)
+        {
+            continue;
+        }
+        if (memcmp(entry->parent_root.bytes, parent_root->bytes, LANTERN_ROOT_SIZE) != 0)
+        {
+            continue;
+        }
+        if (!best || entry->slot < best->slot)
+        {
+            best = entry;
+        }
+    }
+    return best;
+}
+
+static void backfill_mark_imported_locked(
+    struct lantern_backfill_session *session,
+    const LanternRoot *root)
+{
+    if (!session || !root)
+    {
+        return;
+    }
+    for (size_t i = 0; i < session->length; ++i)
+    {
+        if (memcmp(session->entries[i].root.bytes, root->bytes, LANTERN_ROOT_SIZE) == 0)
+        {
+            session->entries[i].imported = true;
+            return;
+        }
+    }
+}
+
+static bool backfill_parent_known(struct lantern_client *client, const LanternRoot *root)
+{
+    if (!client || !root)
+    {
+        return false;
+    }
+    bool locked = lantern_client_lock_state(client);
+    if (!locked)
+    {
+        return false;
+    }
+    bool known = lantern_client_block_known_locked(client, root, NULL);
+    lantern_client_unlock_state(client, locked);
+    return known;
+}
+
+static bool backfill_import_connected_chain(struct lantern_client *client, const LanternRoot *connector_root)
+{
+    if (!client || !connector_root || lantern_root_is_zero(connector_root))
+    {
+        return false;
+    }
+
+    LanternRoot *roots = NULL;
+    size_t root_count = 0;
+    size_t root_capacity = 0;
+    LanternRoot current = *connector_root;
+    uint64_t connected_count = 0;
+
+    bool locked = lantern_client_lock_pending(client);
+    if (!locked)
+    {
+        return false;
+    }
+    if (!client->backfill.active)
+    {
+        lantern_client_unlock_pending(client, locked);
+        return false;
+    }
+    for (;;)
+    {
+        const struct lantern_backfill_entry *child =
+            backfill_find_child_locked(&client->backfill, &current);
+        if (!child)
+        {
+            break;
+        }
+        if (root_count == root_capacity)
+        {
+            size_t next_capacity = root_capacity == 0 ? 64u : root_capacity * 2u;
+            if (next_capacity <= root_capacity || next_capacity > SIZE_MAX / sizeof(*roots))
+            {
+                lantern_client_unlock_pending(client, locked);
+                free(roots);
+                return false;
+            }
+            LanternRoot *grown = realloc(roots, next_capacity * sizeof(*grown));
+            if (!grown)
+            {
+                lantern_client_unlock_pending(client, locked);
+                free(roots);
+                return false;
+            }
+            roots = grown;
+            root_capacity = next_capacity;
+        }
+        roots[root_count++] = child->root;
+        current = child->root;
+        connected_count += 1u;
+        if (memcmp(current.bytes, client->backfill.head_root.bytes, LANTERN_ROOT_SIZE) == 0)
+        {
+            break;
+        }
+    }
+    lantern_client_unlock_pending(client, locked);
+
+    if (root_count == 0)
+    {
+        free(roots);
+        return false;
+    }
+
+    uint64_t imported = 0;
+    struct lantern_log_metadata meta = {.validator = client->node_id};
+    for (size_t i = 0; i < root_count; ++i)
+    {
+        LanternSignedBlockList blocks;
+        lantern_signed_block_list_init(&blocks);
+        if (lantern_storage_collect_blocks(client->data_dir, &roots[i], 1u, &blocks) != 0
+            || blocks.length == 0)
+        {
+            lantern_signed_block_list_reset(&blocks);
+            break;
+        }
+        bool ok = lantern_client_import_block(
+            client,
+            &blocks.blocks[0],
+            &roots[i],
+            &meta,
+            0u,
+            true,
+            NULL,
+            0u);
+        lantern_signed_block_list_reset(&blocks);
+        if (!ok)
+        {
+            break;
+        }
+        imported += 1u;
+        locked = lantern_client_lock_pending(client);
+        if (locked)
+        {
+            backfill_mark_imported_locked(&client->backfill, &roots[i]);
+            client->backfill.imported_count += 1u;
+            lantern_client_unlock_pending(client, locked);
+        }
+    }
+
+    locked = lantern_client_lock_pending(client);
+    if (locked)
+    {
+        char head_hex[ROOT_HEX_BUFFER_LEN];
+        format_root_hex(&client->backfill.head_root, head_hex, sizeof(head_hex));
+        lantern_log_info(
+            "sync",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "historical backfill connected head=%s connected=%" PRIu64 " imported=%" PRIu64
+            " persisted=%" PRIu64 " dropped_gossip=%" PRIu64,
+            head_hex[0] ? head_hex : "0x0",
+            connected_count,
+            imported,
+            client->backfill.persisted_count,
+            client->backfill.dropped_gossip_hints);
+        if (imported == root_count
+            && memcmp(roots[root_count - 1u].bytes, client->backfill.head_root.bytes, LANTERN_ROOT_SIZE) == 0)
+        {
+            backfill_session_clear_locked(&client->backfill);
+        }
+        lantern_client_unlock_pending(client, locked);
+    }
+    free(roots);
+    return imported > 0;
+}
+
+static uint64_t backfill_anchor_slot(struct lantern_client *client, uint64_t fallback_slot)
+{
+    uint64_t anchor_slot = fallback_slot;
+    if (client && client->has_fork_choice)
+    {
+        uint64_t fork_anchor_slot = 0;
+        if (lantern_fork_choice_anchor_slot(&client->fork_choice, &fork_anchor_slot) == 0)
+        {
+            anchor_slot = fork_anchor_slot;
+        }
+    }
+    return anchor_slot;
+}
+
+bool lantern_client_maybe_start_historical_backfill(
+    struct lantern_client *client,
+    const char *peer_text,
+    const LanternRoot *head_root,
+    uint64_t head_slot,
+    uint64_t local_head_slot)
+{
+    if (!client || !head_root || lantern_root_is_zero(head_root))
+    {
+        return false;
+    }
+    uint64_t anchor_slot = backfill_anchor_slot(client, local_head_slot);
+    if (head_slot <= anchor_slot)
+    {
+        return false;
+    }
+    uint64_t gap = head_slot - anchor_slot;
+    if (gap <= LANTERN_PENDING_BLOCK_LIMIT)
+    {
+        return false;
+    }
+
+    bool locked = lantern_client_lock_pending(client);
+    if (!locked)
+    {
+        return false;
+    }
+    if (client->backfill.active)
+    {
+        if (memcmp(client->backfill.head_root.bytes, head_root->bytes, LANTERN_ROOT_SIZE) == 0)
+        {
+            lantern_client_unlock_pending(client, locked);
+            return true;
+        }
+        if (head_slot <= client->backfill.head_slot)
+        {
+            lantern_client_unlock_pending(client, locked);
+            return true;
+        }
+        backfill_session_clear_locked(&client->backfill);
+    }
+
+    client->backfill.active = true;
+    client->backfill.head_root = *head_root;
+    client->backfill.frontier_root = *head_root;
+    client->backfill.head_slot = head_slot;
+    client->backfill.anchor_slot = anchor_slot;
+    client->backfill.frontier_depth = 0;
+    if (peer_text && peer_text[0])
+    {
+        strncpy(client->backfill.peer_text, peer_text, sizeof(client->backfill.peer_text) - 1u);
+        client->backfill.peer_text[sizeof(client->backfill.peer_text) - 1u] = '\0';
+    }
+    lantern_client_unlock_pending(client, locked);
+
+    char head_hex[ROOT_HEX_BUFFER_LEN];
+    format_root_hex(head_root, head_hex, sizeof(head_hex));
+    lantern_log_info(
+        "sync",
+        &(const struct lantern_log_metadata){
+            .validator = client->node_id,
+            .peer = peer_text && peer_text[0] ? peer_text : NULL},
+        "historical backfill started head=%s head_slot=%" PRIu64 " anchor_slot=%" PRIu64
+        " gap=%" PRIu64 " pending_limit=%u",
+        head_hex[0] ? head_hex : "0x0",
+        head_slot,
+        anchor_slot,
+        gap,
+        (unsigned)LANTERN_PENDING_BLOCK_LIMIT);
+    return true;
+}
+
+bool lantern_client_backfill_process_block(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *root,
+    const char *peer_text,
+    uint32_t depth)
+{
+    if (!client || !block || !root || lantern_root_is_zero(root))
+    {
+        return false;
+    }
+
+    bool locked = lantern_client_lock_pending(client);
+    if (!locked)
+    {
+        return false;
+    }
+    bool matches_frontier =
+        client->backfill.active
+        && memcmp(client->backfill.frontier_root.bytes, root->bytes, LANTERN_ROOT_SIZE) == 0;
+    uint64_t anchor_slot = client->backfill.anchor_slot;
+    lantern_client_unlock_pending(client, locked);
+    if (!matches_frontier)
+    {
+        return false;
+    }
+
+    if (lantern_storage_store_block_for_root(client->data_dir, root, block) != 0)
+    {
+        char root_hex[ROOT_HEX_BUFFER_LEN];
+        format_root_hex(root, root_hex, sizeof(root_hex));
+        lantern_log_warn(
+            "sync",
+            &(const struct lantern_log_metadata){
+                .validator = client->node_id,
+                .peer = peer_text && peer_text[0] ? peer_text : NULL},
+            "historical backfill failed to persist root=%s slot=%" PRIu64 " depth=%" PRIu32,
+            root_hex[0] ? root_hex : "0x0",
+            block->block.slot,
+            depth);
+        return false;
+    }
+
+    LanternRoot parent_root = block->block.parent_root;
+    uint64_t persisted = 0;
+    uint64_t dropped = 0;
+    locked = lantern_client_lock_pending(client);
+    if (locked)
+    {
+        if (client->backfill.active
+            && memcmp(client->backfill.frontier_root.bytes, root->bytes, LANTERN_ROOT_SIZE) == 0
+            && backfill_entry_append_locked(
+                   &client->backfill,
+                   root,
+                   &parent_root,
+                   block->block.slot,
+                   depth,
+                   peer_text))
+        {
+            client->backfill.frontier_root = parent_root;
+            client->backfill.frontier_depth =
+                depth < LANTERN_MAX_BACKFILL_DEPTH ? depth + 1u : LANTERN_MAX_BACKFILL_DEPTH;
+            client->backfill.persisted_count += 1u;
+            persisted = client->backfill.persisted_count;
+            dropped = client->backfill.dropped_gossip_hints;
+        }
+        lantern_client_unlock_pending(client, locked);
+    }
+
+    char root_hex[ROOT_HEX_BUFFER_LEN];
+    char parent_hex[ROOT_HEX_BUFFER_LEN];
+    format_root_hex(root, root_hex, sizeof(root_hex));
+    format_root_hex(&parent_root, parent_hex, sizeof(parent_hex));
+    lantern_log_info(
+        "sync",
+        &(const struct lantern_log_metadata){
+            .validator = client->node_id,
+            .peer = peer_text && peer_text[0] ? peer_text : NULL},
+        "historical backfill persisted root=%s parent=%s slot=%" PRIu64 " depth=%" PRIu32
+        " anchor_slot=%" PRIu64 " persisted=%" PRIu64 " dropped_gossip=%" PRIu64,
+        root_hex[0] ? root_hex : "0x0",
+        parent_hex[0] ? parent_hex : "0x0",
+        block->block.slot,
+        depth,
+        anchor_slot,
+        persisted,
+        dropped);
+
+    if (backfill_parent_known(client, &parent_root))
+    {
+        (void)backfill_import_connected_chain(client, &parent_root);
+        return true;
+    }
+    if (!lantern_root_is_zero(&parent_root))
+    {
+        uint32_t next_depth =
+            depth < LANTERN_MAX_BACKFILL_DEPTH ? depth + 1u : LANTERN_MAX_BACKFILL_DEPTH;
+        (void)lantern_client_try_schedule_blocks_request_batch(
+            client,
+            peer_text,
+            &parent_root,
+            &next_depth,
+            1u);
+    }
+    return true;
+}
+
+bool lantern_client_backfill_should_drop_gossip(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *root,
+    const char *peer_text,
+    const char *context)
+{
+    if (!client || !block || !root || !context || strcmp(context, "gossip") != 0)
+    {
+        return false;
+    }
+    bool drop = false;
+    uint64_t dropped = 0;
+    uint64_t persisted = 0;
+    uint64_t anchor_slot = 0;
+    bool locked = lantern_client_lock_pending(client);
+    if (locked)
+    {
+        if (client->backfill.active
+            && block->block.slot > client->backfill.anchor_slot + LANTERN_PENDING_BLOCK_LIMIT)
+        {
+            client->backfill.dropped_gossip_hints += 1u;
+            drop = true;
+            dropped = client->backfill.dropped_gossip_hints;
+            persisted = client->backfill.persisted_count;
+            anchor_slot = client->backfill.anchor_slot;
+        }
+        lantern_client_unlock_pending(client, locked);
+    }
+    if (!drop)
+    {
+        return false;
+    }
+    char root_hex[ROOT_HEX_BUFFER_LEN];
+    format_root_hex(root, root_hex, sizeof(root_hex));
+    lantern_log_info(
+        "sync",
+        &(const struct lantern_log_metadata){
+            .validator = client->node_id,
+            .peer = peer_text && peer_text[0] ? peer_text : NULL},
+        "historical backfill dropped gossip hint root=%s slot=%" PRIu64
+        " anchor_slot=%" PRIu64 " persisted=%" PRIu64 " dropped_gossip=%" PRIu64,
+        root_hex[0] ? root_hex : "0x0",
+        block->block.slot,
+        anchor_slot,
+        persisted,
+        dropped);
+    return true;
+}
+
 /* ============================================================================
  * Enabled Validator Count
  * ============================================================================ */

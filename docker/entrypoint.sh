@@ -1,18 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Allow users to pass explicit arguments to lantern_cli. If arguments begin
-# with a flag (e.g. `--data-dir`), treat them as Lantern CLI options;
-# otherwise execute the provided command verbatim (needed for gdb/lldb).
+DATA_DIR="${LANTERN_DATA_DIR:-/data}"
+
+run_lantern() {
+    if [[ "${LANTERN_PROFILE_HEAPTRACK:-}" == "true" ]]; then
+        if ! command -v heaptrack >/dev/null 2>&1; then
+            echo "LANTERN_PROFILE_HEAPTRACK=true but heaptrack is not installed; rebuild image with INCLUDE_HEAPTRACK=true" >&2
+            exit 1
+        fi
+        local node_id="${LANTERN_NODE_ID:-lantern}"
+        local out_dir="${LANTERN_HEAPTRACK_DIR:-${DATA_DIR}/heaptrack}"
+        mkdir -p "${out_dir}"
+        local out_prefix="${out_dir}/heaptrack.${node_id}.$(date -u +%Y%m%dT%H%M%SZ)"
+        echo "Launching lantern under heaptrack: trace prefix ${out_prefix}" >&2
+        exec heaptrack -o "${out_prefix}" /opt/lantern/bin/lantern "$@"
+    fi
+    exec /opt/lantern/bin/lantern "$@"
+}
+
 if [[ "$#" -gt 0 ]]; then
     if [[ "$1" == --* ]]; then
-        exec /opt/lantern/bin/lantern "$@"
+        run_lantern "$@"
     else
         exec "$@"
     fi
 fi
-
-DATA_DIR="${LANTERN_DATA_DIR:-/data}"
 GENESIS_DIR="${LANTERN_GENESIS_DIR:-/genesis}"
 CONFIG_DIR="${LANTERN_CONFIG_DIR:-/config}"
 
@@ -81,4 +94,4 @@ if [[ -n "${LANTERN_EXTRA_ARGS:-}" ]]; then
 fi
 
 
-exec /opt/lantern/bin/lantern "${args[@]}"
+run_lantern "${args[@]}"

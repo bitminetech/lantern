@@ -2685,7 +2685,7 @@ static lantern_client_error client_generate_state_from_genesis(struct lantern_cl
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_STORAGE on storage I/O failure
  * @return LANTERN_CLIENT_ERR_GENESIS on genesis construction failure
- * @return LANTERN_CLIENT_ERR_NETWORK on checkpoint fetch failure
+ * @return LANTERN_CLIENT_ERR_GENESIS when checkpoint sync and genesis fallback both fail
  *
  * @note Thread safety: Must be called before any concurrent access.
  */
@@ -2771,7 +2771,14 @@ static lantern_client_error client_load_or_build_state(
                 options->checkpoint_sync_url);
             if (checkpoint_rc != LANTERN_CLIENT_OK)
             {
-                return checkpoint_rc;
+                lantern_log_warn(
+                    "checkpoint_sync",
+                    &meta,
+                    "checkpoint sync failed; falling back to genesis bootstrap");
+                if (client_generate_state_from_genesis(client) != LANTERN_CLIENT_OK)
+                {
+                    return LANTERN_CLIENT_ERR_GENESIS;
+                }
             }
         }
         else if (client_generate_state_from_genesis(client) != LANTERN_CLIENT_OK)
@@ -3522,11 +3529,15 @@ static void shutdown_pending_blocks(struct lantern_client *client)
         if (pthread_mutex_lock(&client->pending_lock) == 0)
         {
             pending_block_list_reset(&client->pending_blocks);
+            free(client->backfill.entries);
+            memset(&client->backfill, 0, sizeof(client->backfill));
             pthread_mutex_unlock(&client->pending_lock);
         }
         else
         {
             pending_block_list_reset(&client->pending_blocks);
+            free(client->backfill.entries);
+            memset(&client->backfill, 0, sizeof(client->backfill));
         }
         pthread_mutex_destroy(&client->pending_lock);
         client->pending_lock_initialized = false;
@@ -3534,6 +3545,8 @@ static void shutdown_pending_blocks(struct lantern_client *client)
     else
     {
         pending_block_list_reset(&client->pending_blocks);
+        free(client->backfill.entries);
+        memset(&client->backfill, 0, sizeof(client->backfill));
     }
 }
 

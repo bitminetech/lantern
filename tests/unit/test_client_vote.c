@@ -1509,13 +1509,30 @@ static int test_client_load_xmss_keys_reads_annotated_validators(void) {
         goto cleanup;
     }
     if (!client.local_validators[0].attestation_secret_key
-        || !client.local_validators[0].proposal_secret_key) {
-        fprintf(stderr, "annotated validators did not populate both secret key handles\n");
+        || !client.local_validators[0].proposal_secret_path) {
+        fprintf(stderr, "annotated validators did not populate attestation handle and proposal path\n");
         goto cleanup;
     }
-    if (client.local_validators[0].attestation_secret_key
-        == client.local_validators[0].proposal_secret_key) {
-        fprintf(stderr, "annotated validators should load distinct secret key handles\n");
+    if (client.local_validators[0].proposal_secret_key) {
+        fprintf(stderr, "annotated validators should defer loading proposal secret handles\n");
+        goto cleanup;
+    }
+    LanternRoot message;
+    LanternSignature signature;
+    memset(&message, 0, sizeof(message));
+    memset(&signature, 0, sizeof(signature));
+    if (validator_sign_with_key(
+            &client.local_validators[0],
+            0u,
+            &message,
+            true,
+            &signature)
+        != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "deferred proposal secret path failed to sign\n");
+        goto cleanup;
+    }
+    if (client.local_validators[0].proposal_secret_key) {
+        fprintf(stderr, "deferred proposal signing should not retain the proposal handle\n");
         goto cleanup;
     }
 

@@ -1,4 +1,5 @@
 #include <pthread.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1052,6 +1053,90 @@ cleanup:
     return rc;
 }
 
+static int test_historical_backfill_imports_after_large_gap_connects(void)
+{
+    struct block_signature_fixture target;
+    LanternSignedBlock block;
+    LanternRoot root;
+    bool target_ready = false;
+    int rc = 1;
+
+    memset(&block, 0, sizeof(block));
+    if (setup_block_signature_fixture(&target, "test_backfill_target") != 0) {
+        fprintf(stderr, "failed to set up target fixture\n");
+        goto cleanup;
+    }
+    target_ready = true;
+    target.client.debug_disable_block_requests = true;
+    if (pthread_mutex_init(&target.client.pending_lock, NULL) != 0) {
+        fprintf(stderr, "failed to initialize target pending mutex\n");
+        goto cleanup;
+    }
+    target.client.pending_lock_initialized = true;
+
+    if (build_signed_block_for_import(&target, true, true, &block, &root) != 0) {
+        fprintf(stderr, "failed to build backfill block\n");
+        goto cleanup;
+    }
+
+    uint64_t local_head_slot = target.client.state.slot;
+    uint64_t anchor_slot = local_head_slot;
+    if (target.client.has_fork_choice) {
+        (void)lantern_fork_choice_anchor_slot(&target.client.fork_choice, &anchor_slot);
+    }
+    uint64_t peer_reported_head_slot = anchor_slot + LANTERN_PENDING_BLOCK_LIMIT + 1u;
+    if (!lantern_client_maybe_start_historical_backfill(
+            &target.client,
+            "12D3KooWbackfill",
+            &root,
+            peer_reported_head_slot,
+            local_head_slot)) {
+        fprintf(stderr, "large-gap backfill session did not start\n");
+        goto cleanup;
+    }
+
+    if (!lantern_client_backfill_process_block(
+            &target.client,
+            &block,
+            &root,
+            "12D3KooWbackfill",
+            0u)) {
+        fprintf(stderr, "backfill did not accept fetched head block\n");
+        goto cleanup;
+    }
+
+    if (target.client.state.slot != block.block.slot) {
+        fprintf(
+            stderr,
+            "backfill did not import connected chain: got slot %" PRIu64 " want %" PRIu64 "\n",
+            target.client.state.slot,
+            block.block.slot);
+        goto cleanup;
+    }
+    if (target.client.backfill.active) {
+        fprintf(stderr, "backfill session remained active after importing head\n");
+        goto cleanup;
+    }
+    if (lantern_client_pending_block_count(&target.client) != 0) {
+        fprintf(stderr, "backfill should not populate pending block queue\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_signed_block_with_attestation_reset(&block);
+    if (target_ready) {
+        lantern_client_backfill_reset(&target.client);
+        if (target.client.pending_lock_initialized) {
+            pthread_mutex_destroy(&target.client.pending_lock);
+            target.client.pending_lock_initialized = false;
+        }
+        teardown_block_signature_fixture(&target);
+    }
+    return rc;
+}
+
 static int test_import_block_rejects_missing_attestation_signature_groups(void)
 {
     struct block_signature_fixture fixture;
@@ -1311,6 +1396,9 @@ int main(void) {
         return 1;
     }
     if (test_import_block_accepts_complete_signatures() != 0) {
+        return 1;
+    }
+    if (test_historical_backfill_imports_after_large_gap_connects() != 0) {
         return 1;
     }
     if (test_import_block_rejects_missing_attestation_signature_groups() != 0) {

@@ -3722,6 +3722,16 @@ void lantern_client_record_block(
             source);
     }
 
+    if (lantern_client_backfill_should_drop_gossip(
+            client,
+            block,
+            selected_root,
+            peer_text,
+            source))
+    {
+        return;
+    }
+
     lantern_client_import_block(
         client,
         block,
