@@ -414,6 +414,9 @@ int lantern_client_advance_fork_choice_time_locked(
     if (!client || !client->has_fork_choice) {
         return -1;
     }
+    if (client->debug_disable_fork_choice_time) {
+        return 0;
+    }
 
     uint64_t previous_intervals = client->fork_choice.time_intervals;
     uint64_t target_interval = 0u;
