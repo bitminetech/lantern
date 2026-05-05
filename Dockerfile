@@ -6,9 +6,9 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ENV DEBIAN_FRONTEND=noninteractive
 ARG TARGETPLATFORM
-ARG APT_MIRROR_AMD64="http://archive.ubuntu.com/ubuntu"
-ARG APT_SECURITY_MIRROR_AMD64="http://security.ubuntu.com/ubuntu"
-ARG APT_MIRROR_ARM64="http://ports.ubuntu.com/ubuntu-ports"
+ARG APT_MIRROR_AMD64="https://archive.ubuntu.com/ubuntu"
+ARG APT_SECURITY_MIRROR_AMD64="https://security.ubuntu.com/ubuntu"
+ARG APT_MIRROR_ARM64="https://ports.ubuntu.com/ubuntu-ports"
 
 # Install build dependencies
 # Note: Build with --network=host if you encounter GPG/network issues
@@ -121,9 +121,9 @@ FROM ubuntu:22.04
 ARG GIT_COMMIT=unknown
 ARG GIT_BRANCH=unknown
 ARG TARGETPLATFORM
-ARG APT_MIRROR_AMD64="http://archive.ubuntu.com/ubuntu"
-ARG APT_SECURITY_MIRROR_AMD64="http://security.ubuntu.com/ubuntu"
-ARG APT_MIRROR_ARM64="http://ports.ubuntu.com/ubuntu-ports"
+ARG APT_MIRROR_AMD64="https://archive.ubuntu.com/ubuntu"
+ARG APT_SECURITY_MIRROR_AMD64="https://security.ubuntu.com/ubuntu"
+ARG APT_MIRROR_ARM64="https://ports.ubuntu.com/ubuntu-ports"
 
 LABEL org.opencontainers.image.revision=$GIT_COMMIT \
       org.opencontainers.image.ref.name=$GIT_BRANCH
