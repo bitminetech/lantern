@@ -26,6 +26,7 @@
 #include "libp2p/host.h"
 #include "protocol/gossipsub/gossipsub.h"
 #include "src/protocol/gossipsub/core/gossipsub_internal.h"
+#include "src/protocol/gossipsub/core/gossipsub_peer.h"
 
 #define LANTERN_GOSSIPSUB_TOPIC_CAP 128u
 #define LANTERN_ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
@@ -143,6 +144,33 @@ static bool lantern_gossipsub_mesh_peer_seen(
     return false;
 }
 
+static int lantern_gossipsub_mesh_peer_track(
+    const peer_id_t ***peers,
+    size_t *peer_count,
+    size_t *peer_cap,
+    const peer_id_t *candidate) {
+    if (!peers || !peer_count || !peer_cap || !candidate) {
+        return 0;
+    }
+    if (lantern_gossipsub_mesh_peer_seen(*peers, *peer_count, candidate)) {
+        return 0;
+    }
+    if (*peer_count == *peer_cap) {
+        size_t next_cap = *peer_cap == 0u ? 8u : *peer_cap * 2u;
+        if (next_cap < *peer_cap || next_cap > SIZE_MAX / sizeof(**peers)) {
+            return -1;
+        }
+        const peer_id_t **grown = realloc(*peers, next_cap * sizeof(**peers));
+        if (!grown) {
+            return -1;
+        }
+        *peers = grown;
+        *peer_cap = next_cap;
+    }
+    (*peers)[(*peer_count)++] = candidate;
+    return 0;
+}
+
 size_t lantern_gossipsub_service_mesh_peer_count(const struct lantern_gossipsub_service *service) {
     if (!service || !service->gossipsub) {
         return 0u;
@@ -157,27 +185,45 @@ size_t lantern_gossipsub_service_mesh_peer_count(const struct lantern_gossipsub_
     size_t peer_cap = 0u;
     const peer_id_t **peers = NULL;
     for (gossipsub_topic_state_t *topic = gs->topics; topic; topic = topic->next) {
+        if (!topic->subscribed || !topic->name) {
+            continue;
+        }
+        /*
+         * c-libp2p keeps explicit/flood-publish peers outside topic->mesh, even
+         * though they are the active gossip dissemination peers in the devnet.
+         */
         for (gossipsub_mesh_member_t *member = topic->mesh; member; member = member->next) {
-            if (lantern_gossipsub_mesh_peer_seen(peers, peer_count, member->peer)) {
+            if (member->peer_entry && !member->peer_entry->connected) {
                 continue;
             }
-            if (peer_count == peer_cap) {
-                size_t next_cap = peer_cap == 0u ? 8u : peer_cap * 2u;
-                if (next_cap < peer_cap || next_cap > SIZE_MAX / sizeof(*peers)) {
-                    free(peers);
-                    pthread_mutex_unlock(&gs->lock);
-                    return 0u;
-                }
-                const peer_id_t **grown = realloc(peers, next_cap * sizeof(*peers));
-                if (!grown) {
-                    free(peers);
-                    pthread_mutex_unlock(&gs->lock);
-                    return 0u;
-                }
-                peers = grown;
-                peer_cap = next_cap;
+            if (lantern_gossipsub_mesh_peer_track(&peers, &peer_count, &peer_cap, member->peer) != 0) {
+                free(peers);
+                pthread_mutex_unlock(&gs->lock);
+                return 0u;
             }
-            peers[peer_count++] = member->peer;
+        }
+        for (gossipsub_fanout_peer_t *fanout = topic->fanout; fanout; fanout = fanout->next) {
+            if (fanout->peer_entry && !fanout->peer_entry->connected) {
+                continue;
+            }
+            if (lantern_gossipsub_mesh_peer_track(&peers, &peer_count, &peer_cap, fanout->peer) != 0) {
+                free(peers);
+                pthread_mutex_unlock(&gs->lock);
+                return 0u;
+            }
+        }
+        for (gossipsub_peer_entry_t *entry = gs->peers; entry; entry = entry->next) {
+            if (!entry->connected || !entry->peer) {
+                continue;
+            }
+            if (!entry->explicit_peering && !gossipsub_peer_topic_find(entry->topics, topic->name)) {
+                continue;
+            }
+            if (lantern_gossipsub_mesh_peer_track(&peers, &peer_count, &peer_cap, entry->peer) != 0) {
+                free(peers);
+                pthread_mutex_unlock(&gs->lock);
+                return 0u;
+            }
         }
     }
 

@@ -228,6 +228,9 @@ if(LANTERN_BUILD_TESTS)
         lantern_client_gossip_test
         PRIVATE
             ${PROJECT_SOURCE_DIR}/tests/unit
+            ${PROJECT_SOURCE_DIR}/external/c-libp2p
+            ${PROJECT_SOURCE_DIR}/external/c-libp2p/src/protocol/gossipsub/proto
+            ${PROJECT_SOURCE_DIR}/external/c-libp2p/src/protocol/gossipsub/proto/gen
     )
     target_compile_definitions(
         lantern_client_gossip_test
