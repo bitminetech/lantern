@@ -380,12 +380,23 @@ int lantern_client_tick_fork_choice_interval_locked(
         return -1;
     }
 
+    double tick_start_seconds = lantern_time_now_seconds();
     int rc = lantern_fork_choice_advance_time(&client->fork_choice, now_milliseconds, has_proposal);
     if (rc != 0) {
         return rc;
     }
     if (client->fork_choice.time_intervals != next_interval) {
         return -1;
+    }
+
+    if (tick_start_seconds > 0.0) {
+        if (client->has_last_tick_interval_started_seconds
+            && tick_start_seconds >= client->last_tick_interval_started_seconds) {
+            lean_metrics_record_tick_interval_duration(
+                tick_start_seconds - client->last_tick_interval_started_seconds);
+        }
+        client->last_tick_interval_started_seconds = tick_start_seconds;
+        client->has_last_tick_interval_started_seconds = true;
     }
 
     sync_aggregated_payload_pools_after_time_advance(client, previous_intervals, has_proposal);

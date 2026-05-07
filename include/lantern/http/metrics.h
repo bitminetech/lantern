@@ -12,6 +12,7 @@ extern "C" {
 #endif
 
 #define LANTERN_METRICS_MAX_PEER_VOTE_STATS 64u
+#define LANTERN_METRICS_CLIENT_LABEL_CAP 128u
 #define LANTERN_METRICS_CONTENT_TYPE "text/plain; version=0.0.4; charset=utf-8"
 
 struct lantern_peer_vote_metric {
@@ -32,8 +33,10 @@ struct lantern_metrics_snapshot {
     uint64_t lean_latest_finalized_slot;
     uint64_t lean_justified_slot;
     uint64_t lean_finalized_slot;
+    char lean_client_label[LANTERN_METRICS_CLIENT_LABEL_CAP];
     size_t lean_validators_count;
     size_t lean_connected_peers;
+    size_t lean_gossip_mesh_peers;
     uint64_t lean_gossip_signatures;
     uint64_t lean_latest_new_aggregated_payloads;
     uint64_t lean_latest_known_aggregated_payloads;

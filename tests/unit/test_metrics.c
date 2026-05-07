@@ -110,6 +110,22 @@ static int test_fork_choice_histogram(void) {
     return 0;
 }
 
+static int test_tick_interval_duration_metrics(void) {
+    lean_metrics_reset();
+    lean_metrics_record_tick_interval_duration(0.79);
+    lean_metrics_record_tick_interval_duration(1.7);
+
+    struct lean_metrics_snapshot snapshot;
+    memset(&snapshot, 0, sizeof(snapshot));
+    lean_metrics_snapshot(&snapshot);
+
+    assert(snapshot.tick_interval_duration.total == 2);
+    assert(snapshot.tick_interval_duration.bucket_count == 14);
+    assert(snapshot.tick_interval_duration.counts[3] == 1);
+    assert(snapshot.tick_interval_duration.counts[14] == 1);
+    return 0;
+}
+
 static int test_pq_signature_metrics(void) {
     lean_metrics_reset();
     lean_metrics_record_pq_signature_signing(0.02);
@@ -166,6 +182,7 @@ static int test_prometheus_metric_names(void) {
     lean_metrics_record_block_aggregated_payloads(3);
     lean_metrics_record_block_building_payload_aggregation_time(0.2);
     lean_metrics_record_block_building_time(0.3);
+    lean_metrics_record_attestations_production_time(0.04);
     lean_metrics_record_block_building_success();
     lean_metrics_record_block_building_failure();
     lean_metrics_record_fork_choice_reorg(2);
@@ -184,6 +201,7 @@ static int test_prometheus_metric_names(void) {
     lean_metrics_record_peer_disconnection(
         LEAN_METRICS_DIR_OUTBOUND,
         LEAN_METRICS_DISCONNECT_REMOTE_CLOSE);
+    lean_metrics_record_tick_interval_duration(0.82);
     lean_metrics_set_gossip_validation_worker_count(8);
     lean_metrics_record_gossip_block_size(12000);
     lean_metrics_record_gossip_attestation_size(1024);
@@ -199,8 +217,10 @@ static int test_prometheus_metric_names(void) {
     snapshot.lean_latest_finalized_slot = 7;
     snapshot.lean_justified_slot = 8;
     snapshot.lean_finalized_slot = 7;
+    snprintf(snapshot.lean_client_label, sizeof(snapshot.lean_client_label), "%s", "lantern_0");
     snapshot.lean_validators_count = 2;
     snapshot.lean_connected_peers = 3;
+    snapshot.lean_gossip_mesh_peers = 2;
     snapshot.lean_gossip_signatures = 4;
     snapshot.lean_latest_new_aggregated_payloads = 5;
     snapshot.lean_latest_known_aggregated_payloads = 6;
@@ -238,6 +258,7 @@ static int test_prometheus_metric_names(void) {
         "lean_block_aggregated_payloads",
         "lean_block_building_payload_aggregation_time_seconds",
         "lean_block_building_time_seconds",
+        "lean_attestations_production_time_seconds",
         "lean_block_building_success_total",
         "lean_block_building_failures_total",
         "lean_gossip_validation_worker_count",
@@ -269,8 +290,10 @@ static int test_prometheus_metric_names(void) {
         "lean_validators_count",
         "lean_is_aggregator",
         "lean_connected_peers",
+        "lean_gossip_mesh_peers",
         "lean_peer_connection_events_total",
         "lean_peer_disconnection_events_total",
+        "lean_tick_interval_duration_seconds",
         "lean_attestation_committee_subnet",
         "lean_attestation_committee_count",
         "lean_gossip_block_size_bytes",
@@ -282,7 +305,8 @@ static int test_prometheus_metric_names(void) {
     }
 
     assert(strstr(body, "lean_node_info{name=\"lantern\"") != NULL);
-    assert(strstr(body, "lean_connected_peers{client=\"lantern\"}") != NULL);
+    assert(strstr(body, "lean_connected_peers{client=\"lantern_0\"} 3") != NULL);
+    assert(strstr(body, "lean_gossip_mesh_peers{client=\"lantern_0\"} 2") != NULL);
     assert(strstr(body, "lean_gossip_validation_worker_count 8") != NULL);
     assert(strstr(body, "lean_finalizations_total{result=\"success\"}") != NULL);
     assert(strstr(body, "lean_finalizations_total{result=\"error\"}") != NULL);
@@ -292,6 +316,7 @@ static int test_prometheus_metric_names(void) {
     assert(strstr(body, "lean_node_sync_status{status=\"synced\"}") != NULL);
     assert(strstr(body, "lean_peer_connection_events_total{direction=\"inbound\",result=\"success\"}") != NULL);
     assert(strstr(body, "lean_peer_disconnection_events_total{direction=\"outbound\",reason=\"remote_close\"}") != NULL);
+    assert(strstr(body, "lean_tick_interval_duration_seconds_bucket{le=\"0.82\"}") != NULL);
 
     assert(strstr(body, "lean_gossip_signatures_count") == NULL);
     assert(strstr(body, "lean_latest_new_aggregated_payloads_count") == NULL);
@@ -326,6 +351,9 @@ int main(void) {
         return 1;
     }
     if (test_fork_choice_histogram() != 0) {
+        return 1;
+    }
+    if (test_tick_interval_duration_metrics() != 0) {
         return 1;
     }
     if (test_pq_signature_metrics() != 0) {

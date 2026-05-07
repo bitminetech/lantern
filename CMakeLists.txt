@@ -88,6 +88,8 @@ function(lantern_define_library target_name wrapper_target)
         PRIVATE
             ${PROJECT_SOURCE_DIR}/src
             ${PROJECT_SOURCE_DIR}/external/jsmn
+            ${PROJECT_SOURCE_DIR}/external/c-libp2p/src/protocol/gossipsub/proto
+            ${PROJECT_SOURCE_DIR}/external/c-libp2p/src/protocol/gossipsub/proto/gen
             ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/secp256k1/include
             ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/libtomcrypt/src/headers
             ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/wjcryptlib/lib

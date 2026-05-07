@@ -95,6 +95,7 @@ int lantern_gossipsub_service_publish_aggregated_attestation(
 int lantern_gossipsub_service_subscribe_attestation_subnet(
     struct lantern_gossipsub_service *service,
     size_t subnet_id);
+size_t lantern_gossipsub_service_mesh_peer_count(const struct lantern_gossipsub_service *service);
 void lantern_gossipsub_service_set_publish_hook(
     struct lantern_gossipsub_service *service,
     int (*hook)(const char *topic, const uint8_t *payload, size_t payload_len, void *user_data),

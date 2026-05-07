@@ -22,6 +22,8 @@ static const double kCommitteeAggregationBuckets[] = {0.05, 0.1, 0.25, 0.5, 0.75
 static const double kBlockAggregatedPayloadBuckets[] = {1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0};
 static const double kBlockPayloadAggregationBuckets[] = {0.1, 0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0};
 static const double kBlockBuildingBuckets[] = {0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0};
+static const double kTickIntervalDurationBuckets[] =
+    {0.4, 0.6, 0.75, 0.8, 0.805, 0.81, 0.815, 0.82, 0.825, 0.85, 0.9, 1.0, 1.2, 1.6};
 static const double kGossipBlockSizeBuckets[] = {10000.0, 50000.0, 100000.0, 250000.0, 500000.0, 1000000.0, 2000000.0, 5000000.0};
 static const double kGossipAttestationSizeBuckets[] = {512.0, 1024.0, 2048.0, 4096.0, 8192.0, 16384.0};
 static const double kGossipAggregationSizeBuckets[] = {1024.0, 4096.0, 16384.0, 65536.0, 131072.0, 262144.0, 524288.0, 1048576.0};
@@ -71,6 +73,10 @@ static struct lean_histogram g_hist_fork_choice_block = {
 static struct lean_histogram g_hist_fork_choice_reorg_depth = {
     .bounds = kReorgDepthBuckets,
     .bucket_count = ARRAY_LEN(kReorgDepthBuckets),
+};
+static struct lean_histogram g_hist_tick_interval_duration = {
+    .bounds = kTickIntervalDurationBuckets,
+    .bucket_count = ARRAY_LEN(kTickIntervalDurationBuckets),
 };
 static struct lean_histogram g_hist_attestation_validation = {
     .bounds = kDefaultShortBuckets,
@@ -216,6 +222,7 @@ void lean_metrics_reset(void) {
     histogram_reset(&g_hist_attestations_production);
     histogram_reset(&g_hist_fork_choice_block);
     histogram_reset(&g_hist_fork_choice_reorg_depth);
+    histogram_reset(&g_hist_tick_interval_duration);
     histogram_reset(&g_hist_attestation_validation);
     histogram_reset(&g_hist_state_transition);
     histogram_reset(&g_hist_state_slots);
@@ -288,6 +295,12 @@ void lean_metrics_record_fork_choice_reorg(size_t depth) {
     pthread_mutex_lock(&g_metrics_lock);
     g_fork_choice_reorgs_total += 1;
     histogram_observe(&g_hist_fork_choice_reorg_depth, (double)depth);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
+void lean_metrics_record_tick_interval_duration(double seconds) {
+    pthread_mutex_lock(&g_metrics_lock);
+    histogram_observe(&g_hist_tick_interval_duration, seconds);
     pthread_mutex_unlock(&g_metrics_lock);
 }
 
@@ -474,6 +487,7 @@ void lean_metrics_snapshot(struct lean_metrics_snapshot *out) {
     histogram_snapshot(&out->attestations_production_time, &g_hist_attestations_production);
     histogram_snapshot(&out->fork_choice_block_time, &g_hist_fork_choice_block);
     histogram_snapshot(&out->fork_choice_reorg_depth, &g_hist_fork_choice_reorg_depth);
+    histogram_snapshot(&out->tick_interval_duration, &g_hist_tick_interval_duration);
     histogram_snapshot(&out->attestation_validation_time, &g_hist_attestation_validation);
     histogram_snapshot(&out->state_transition_time, &g_hist_state_transition);
     histogram_snapshot(&out->state_slots_time, &g_hist_state_slots);

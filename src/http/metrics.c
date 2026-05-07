@@ -69,6 +69,15 @@ static const char METRICS_JSON_UNKNOWN_ENDPOINT[] = "{\"error\":\"unknown endpoi
 static const char METRICS_JSON_UNAVAILABLE[] = "{\"error\":\"metrics unavailable\"}";
 static const char METRICS_JSON_FORMATTING_FAILED[] = "{\"error\":\"metrics formatting failed\"}";
 
+static const char *metrics_client_label(const struct lantern_metrics_snapshot *snapshot)
+{
+    if (!snapshot || snapshot->lean_client_label[0] == '\0')
+    {
+        return "unknown";
+    }
+    return snapshot->lean_client_label;
+}
+
 struct lantern_metrics_body_buffer
 {
     char *data;  /**< Heap buffer (NUL-terminated). */
@@ -496,8 +505,20 @@ static int append_lean_chain_metrics(
         "# HELP lean_connected_peers Number of connected peers\n"
         "# TYPE lean_connected_peers gauge\n"
         "lean_connected_peers{client=\"%s\"} %zu\n",
-        LANTERN_CLIENT_NAME,
+        metrics_client_label(snapshot),
         snapshot->lean_connected_peers);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = metrics_buffer_appendf(
+        buf,
+        "# HELP lean_gossip_mesh_peers Number of peers in the gossipsub mesh\n"
+        "# TYPE lean_gossip_mesh_peers gauge\n"
+        "lean_gossip_mesh_peers{client=\"%s\"} %zu\n",
+        metrics_client_label(snapshot),
+        snapshot->lean_gossip_mesh_peers);
     if (rc != 0)
     {
         return rc;
@@ -1070,6 +1091,16 @@ static int append_lean_histograms(
         "lean_fork_choice_reorg_depth",
         "Depth of fork choice reorgs (in blocks)",
         &lean->fork_choice_reorg_depth);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lean_tick_interval_duration_seconds",
+        "Elapsed time between clock ticks in seconds",
+        &lean->tick_interval_duration);
     if (rc != 0)
     {
         return rc;
