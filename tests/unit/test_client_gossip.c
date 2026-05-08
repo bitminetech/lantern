@@ -9,6 +9,7 @@
 #include "lantern/consensus/signature.h"
 #include "lantern/core/client.h"
 #include "lantern/support/string_list.h"
+#include "src/protocol/gossipsub/core/gossipsub_internal.h"
 
 static void reset_agg_cache(struct lantern_client *client)
 {
@@ -16,6 +17,84 @@ static void reset_agg_cache(struct lantern_client *client)
         return;
     }
     lantern_store_reset(&client->store);
+}
+
+static peer_id_t *test_peer_id_from_text(const char *text)
+{
+    peer_id_t *peer = NULL;
+    if (peer_id_new_from_text(text, &peer) != PEER_ID_OK) {
+        return NULL;
+    }
+    return peer;
+}
+
+static int test_gossipsub_mesh_peer_count_includes_effective_peers(void)
+{
+    static const char topic_name[] = "/lean/test/beacon_block/ssz_snappy";
+    peer_id_t *explicit_peer = test_peer_id_from_text(
+        "12D3KooWL9qw9QdCsiPUQXGWxZhwivKar35CFYuU9B9kavHuV2XZ");
+    peer_id_t *subscribed_peer = test_peer_id_from_text(
+        "12D3KooWQ7W3zfBDSSY5YTbSsfXCMVvjJAnYXhYzu3PV6PvJkU8E");
+    if (!explicit_peer || !subscribed_peer) {
+        fprintf(stderr, "failed to build peer ids for mesh metric test\n");
+        peer_id_free(explicit_peer);
+        peer_id_free(subscribed_peer);
+        return 1;
+    }
+
+    libp2p_gossipsub_t gs;
+    memset(&gs, 0, sizeof(gs));
+    if (pthread_mutex_init(&gs.lock, NULL) != 0) {
+        peer_id_free(explicit_peer);
+        peer_id_free(subscribed_peer);
+        return 1;
+    }
+
+    gossipsub_topic_state_t topic;
+    memset(&topic, 0, sizeof(topic));
+    topic.name = (char *)topic_name;
+    topic.subscribed = 1;
+    gs.topics = &topic;
+
+    gossipsub_peer_topic_t peer_topic;
+    memset(&peer_topic, 0, sizeof(peer_topic));
+    peer_topic.name = (char *)topic_name;
+
+    gossipsub_peer_entry_t explicit_entry;
+    memset(&explicit_entry, 0, sizeof(explicit_entry));
+    explicit_entry.peer = explicit_peer;
+    explicit_entry.connected = 1;
+    explicit_entry.explicit_peering = 1;
+
+    gossipsub_peer_entry_t subscribed_entry;
+    memset(&subscribed_entry, 0, sizeof(subscribed_entry));
+    subscribed_entry.peer = subscribed_peer;
+    subscribed_entry.connected = 1;
+    subscribed_entry.topics = &peer_topic;
+    explicit_entry.next = &subscribed_entry;
+    gs.peers = &explicit_entry;
+
+    gossipsub_mesh_member_t duplicate_mesh_member;
+    memset(&duplicate_mesh_member, 0, sizeof(duplicate_mesh_member));
+    duplicate_mesh_member.peer = subscribed_peer;
+    duplicate_mesh_member.peer_entry = &subscribed_entry;
+    topic.mesh = &duplicate_mesh_member;
+    topic.mesh_size = 1u;
+
+    struct lantern_gossipsub_service service;
+    memset(&service, 0, sizeof(service));
+    service.gossipsub = &gs;
+
+    size_t count = lantern_gossipsub_service_mesh_peer_count(&service);
+    pthread_mutex_destroy(&gs.lock);
+    peer_id_free(explicit_peer);
+    peer_id_free(subscribed_peer);
+
+    if (count != 2u) {
+        fprintf(stderr, "expected effective mesh peer count 2, got %zu\n", count);
+        return 1;
+    }
+    return 0;
 }
 
 static int test_enable_blocks_request_peer(
@@ -631,6 +710,10 @@ cleanup:
 
 int main(void)
 {
+    if (test_gossipsub_mesh_peer_count_includes_effective_peers() != 0)
+    {
+        return 1;
+    }
     if (test_idle_gossip_not_ignored() != 0)
     {
         return 1;

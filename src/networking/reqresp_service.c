@@ -1070,6 +1070,15 @@ static int write_stream_all(
         .peer = peer_label,
     };
 
+    uint64_t deadline_ms = UINT64_MAX;
+    uint64_t now_ms = reqresp_now_ms();
+    uint64_t stall_timeout_ms = lantern_reqresp_stall_timeout_ms();
+    if (stall_timeout_ms > 0u
+        && now_ms != 0u
+        && now_ms <= UINT64_MAX - stall_timeout_ms) {
+        deadline_ms = now_ms + stall_timeout_ms;
+    }
+
     lantern_log_trace(
         "reqresp",
         &meta,
@@ -1080,6 +1089,36 @@ static int write_stream_all(
 
     size_t offset = 0;
     while (offset < length) {
+        if (deadline_ms != UINT64_MAX) {
+            now_ms = reqresp_now_ms();
+            if (now_ms != 0u && now_ms >= deadline_ms) {
+                lantern_log_warn(
+                    "reqresp",
+                    &meta,
+                    "%s write timed out bytes_written=%zu total_bytes=%zu protocol=%s",
+                    phase ? phase : "stream",
+                    offset,
+                    length,
+                    protocol_id ? protocol_id : "-");
+                return LIBP2P_ERR_TIMEOUT;
+            }
+
+            uint64_t remaining_ms = (now_ms == 0u) ? stall_timeout_ms : (deadline_ms - now_ms);
+            if (remaining_ms == 0u) {
+                remaining_ms = 1u;
+            }
+            int deadline_rc = libp2p_stream_set_deadline(stream, remaining_ms);
+            if (deadline_rc != 0) {
+                lantern_log_warn(
+                    "reqresp",
+                    &meta,
+                    "%s failed to set write deadline err=%d",
+                    phase ? phase : "stream",
+                    deadline_rc);
+                return deadline_rc;
+            }
+        }
+
         ssize_t written = libp2p_stream_write(stream, data + offset, length - offset);
         if (written > 0) {
             offset += (size_t)written;
@@ -1125,6 +1164,9 @@ static int write_stream_all(
         phase ? phase : "stream",
         length,
         protocol_id ? protocol_id : "-");
+    if (deadline_ms != UINT64_MAX) {
+        (void)libp2p_stream_set_deadline(stream, 0);
+    }
     return 0;
 }
 

@@ -239,6 +239,8 @@ struct lantern_client {
     pthread_t timing_thread;
     bool timing_thread_started;
     int timing_stop_flag;
+    double last_tick_interval_started_seconds;
+    bool has_last_tick_interval_started_seconds;
     pthread_t validator_thread;
     bool validator_thread_started;
     int validator_stop_flag;

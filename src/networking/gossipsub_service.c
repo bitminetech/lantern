@@ -25,6 +25,8 @@
 #include "libp2p/errors.h"
 #include "libp2p/host.h"
 #include "protocol/gossipsub/gossipsub.h"
+#include "src/protocol/gossipsub/core/gossipsub_internal.h"
+#include "src/protocol/gossipsub/core/gossipsub_peer.h"
 
 #define LANTERN_GOSSIPSUB_TOPIC_CAP 128u
 #define LANTERN_ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
@@ -126,6 +128,109 @@ static void lantern_gossipsub_message_delivery_cb(
     size_t message_id_len,
     const peer_id_t *propagation_source,
     void *user_data);
+
+static bool lantern_gossipsub_mesh_peer_seen(
+    const peer_id_t *const *peers,
+    size_t peer_count,
+    const peer_id_t *candidate) {
+    if (!candidate) {
+        return true;
+    }
+    for (size_t i = 0; i < peer_count; ++i) {
+        if (gossipsub_peer_equals(peers[i], candidate)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int lantern_gossipsub_mesh_peer_track(
+    const peer_id_t ***peers,
+    size_t *peer_count,
+    size_t *peer_cap,
+    const peer_id_t *candidate) {
+    if (!peers || !peer_count || !peer_cap || !candidate) {
+        return 0;
+    }
+    if (lantern_gossipsub_mesh_peer_seen(*peers, *peer_count, candidate)) {
+        return 0;
+    }
+    if (*peer_count == *peer_cap) {
+        size_t next_cap = *peer_cap == 0u ? 8u : *peer_cap * 2u;
+        if (next_cap < *peer_cap || next_cap > SIZE_MAX / sizeof(**peers)) {
+            return -1;
+        }
+        const peer_id_t **grown = realloc(*peers, next_cap * sizeof(**peers));
+        if (!grown) {
+            return -1;
+        }
+        *peers = grown;
+        *peer_cap = next_cap;
+    }
+    (*peers)[(*peer_count)++] = candidate;
+    return 0;
+}
+
+size_t lantern_gossipsub_service_mesh_peer_count(const struct lantern_gossipsub_service *service) {
+    if (!service || !service->gossipsub) {
+        return 0u;
+    }
+
+    libp2p_gossipsub_t *gs = service->gossipsub;
+    if (pthread_mutex_lock(&gs->lock) != 0) {
+        return 0u;
+    }
+
+    size_t peer_count = 0u;
+    size_t peer_cap = 0u;
+    const peer_id_t **peers = NULL;
+    for (gossipsub_topic_state_t *topic = gs->topics; topic; topic = topic->next) {
+        if (!topic->subscribed || !topic->name) {
+            continue;
+        }
+        /*
+         * c-libp2p keeps explicit/flood-publish peers outside topic->mesh, even
+         * though they are the active gossip dissemination peers in the devnet.
+         */
+        for (gossipsub_mesh_member_t *member = topic->mesh; member; member = member->next) {
+            if (member->peer_entry && !member->peer_entry->connected) {
+                continue;
+            }
+            if (lantern_gossipsub_mesh_peer_track(&peers, &peer_count, &peer_cap, member->peer) != 0) {
+                free(peers);
+                pthread_mutex_unlock(&gs->lock);
+                return 0u;
+            }
+        }
+        for (gossipsub_fanout_peer_t *fanout = topic->fanout; fanout; fanout = fanout->next) {
+            if (fanout->peer_entry && !fanout->peer_entry->connected) {
+                continue;
+            }
+            if (lantern_gossipsub_mesh_peer_track(&peers, &peer_count, &peer_cap, fanout->peer) != 0) {
+                free(peers);
+                pthread_mutex_unlock(&gs->lock);
+                return 0u;
+            }
+        }
+        for (gossipsub_peer_entry_t *entry = gs->peers; entry; entry = entry->next) {
+            if (!entry->connected || !entry->peer) {
+                continue;
+            }
+            if (!entry->explicit_peering && !gossipsub_peer_topic_find(entry->topics, topic->name)) {
+                continue;
+            }
+            if (lantern_gossipsub_mesh_peer_track(&peers, &peer_count, &peer_cap, entry->peer) != 0) {
+                free(peers);
+                pthread_mutex_unlock(&gs->lock);
+                return 0u;
+            }
+        }
+    }
+
+    free(peers);
+    pthread_mutex_unlock(&gs->lock);
+    return peer_count;
+}
 
 static uint32_t lantern_leanspec_seen_ttl_ms(void) {
     const uint64_t ttl_seconds = (uint64_t)LANTERN_LEANSPEC_SECONDS_PER_SLOT

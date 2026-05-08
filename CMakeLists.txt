@@ -88,6 +88,8 @@ function(lantern_define_library target_name wrapper_target)
         PRIVATE
             ${PROJECT_SOURCE_DIR}/src
             ${PROJECT_SOURCE_DIR}/external/jsmn
+            ${PROJECT_SOURCE_DIR}/external/c-libp2p/src/protocol/gossipsub/proto
+            ${PROJECT_SOURCE_DIR}/external/c-libp2p/src/protocol/gossipsub/proto/gen
             ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/secp256k1/include
             ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/libtomcrypt/src/headers
             ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/wjcryptlib/lib
@@ -226,6 +228,9 @@ if(LANTERN_BUILD_TESTS)
         lantern_client_gossip_test
         PRIVATE
             ${PROJECT_SOURCE_DIR}/tests/unit
+            ${PROJECT_SOURCE_DIR}/external/c-libp2p
+            ${PROJECT_SOURCE_DIR}/external/c-libp2p/src/protocol/gossipsub/proto
+            ${PROJECT_SOURCE_DIR}/external/c-libp2p/src/protocol/gossipsub/proto/gen
     )
     target_compile_definitions(
         lantern_client_gossip_test

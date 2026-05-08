@@ -25,6 +25,10 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
+
 enum {
     OPT_GENESIS_CONFIG = 1000,
     OPT_NODES_PATH,
@@ -113,6 +117,17 @@ static lantern_client_error parse_size_t_positive(const char *text, size_t *out_
 
 /** Flag indicating whether the main loop should continue running. */
 static volatile sig_atomic_t g_keep_running = 1;
+
+static void configure_allocator_from_env(void)
+{
+#if defined(__GLIBC__) && defined(M_ARENA_MAX)
+    const char *arena_env = getenv("MALLOC_ARENA_MAX");
+    if (!arena_env || arena_env[0] == '\0')
+    {
+        (void)mallopt(M_ARENA_MAX, 2);
+    }
+#endif
+}
 
 
 /**
@@ -640,6 +655,8 @@ static lantern_client_error run_main_loop(struct lantern_client *client)
  */
 int main(int argc, char **argv)
 {
+    configure_allocator_from_env();
+
     int exit_code = 0;
     struct lantern_client_options options;
     lantern_client_options_init(&options);

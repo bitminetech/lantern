@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define LEAN_METRICS_MAX_BUCKETS 10u
+#define LEAN_METRICS_MAX_BUCKETS 14u
 
 typedef enum {
     LEAN_METRICS_DIR_INBOUND = 0,
@@ -67,6 +67,7 @@ struct lean_metrics_snapshot {
     struct lean_metrics_histogram_snapshot attestations_production_time;
     struct lean_metrics_histogram_snapshot fork_choice_block_time;
     struct lean_metrics_histogram_snapshot fork_choice_reorg_depth;
+    struct lean_metrics_histogram_snapshot tick_interval_duration;
     struct lean_metrics_histogram_snapshot attestation_validation_time;
     struct lean_metrics_histogram_snapshot state_transition_time;
     struct lean_metrics_histogram_snapshot state_slots_time;
@@ -93,6 +94,7 @@ void lean_metrics_record_block_building_failure(void);
 void lean_metrics_set_gossip_validation_worker_count(size_t count);
 void lean_metrics_record_fork_choice_block_time(double seconds);
 void lean_metrics_record_fork_choice_reorg(size_t depth);
+void lean_metrics_record_tick_interval_duration(double seconds);
 void lean_metrics_record_attestation_validation(double seconds, bool valid);
 void lean_metrics_record_state_transition(double seconds);
 void lean_metrics_record_state_transition_slots(uint64_t slots_processed, double seconds);

@@ -2926,6 +2926,33 @@ static void persist_finalized_state_if_advanced_locked(
         current_finalized->slot,
         finalized_hex[0] ? finalized_hex : "0x0",
         client->state.slot);
+
+    int pruned = lantern_storage_prune_before_slot(
+        client->data_dir,
+        current_finalized->slot,
+        &current_finalized->root,
+        1u);
+    if (pruned < 0)
+    {
+        lantern_log_warn(
+            "storage",
+            log_meta,
+            "failed to prune persisted pre-finalized data finalized_slot=%" PRIu64
+            " root=%s",
+            current_finalized->slot,
+            finalized_hex[0] ? finalized_hex : "0x0");
+    }
+    else if (pruned > 0)
+    {
+        lantern_log_info(
+            "storage",
+            log_meta,
+            "pruned persisted pre-finalized data finalized_slot=%" PRIu64
+            " root=%s entries=%d",
+            current_finalized->slot,
+            finalized_hex[0] ? finalized_hex : "0x0",
+            pruned);
+    }
 }
 
 

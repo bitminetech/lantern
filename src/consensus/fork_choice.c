@@ -343,6 +343,27 @@ static size_t parent_index_for_block(const LanternForkChoice *store, const Lante
     return parent_index;
 }
 
+static bool block_descends_from(
+    const LanternForkChoice *store,
+    size_t block_index,
+    size_t ancestor_index) {
+    if (!store || !store->blocks || block_index >= store->block_len || ancestor_index >= store->block_len) {
+        return false;
+    }
+    size_t current = block_index;
+    for (size_t depth = 0; depth < store->block_len && current < store->block_len; ++depth) {
+        if (current == ancestor_index) {
+            return true;
+        }
+        size_t parent = store->blocks[current].parent_index;
+        if (parent == SIZE_MAX || parent >= store->block_len) {
+            return false;
+        }
+        current = parent;
+    }
+    return false;
+}
+
 static void update_children_parent_index(
     LanternForkChoice *store,
     const LanternRoot *parent_root,
@@ -1292,6 +1313,27 @@ int lantern_fork_choice_prune_states(LanternForkChoice *store) {
     }
 
     uint64_t finalized_slot = store->blocks[finalized_index].slot;
+    uint8_t *keep_block = calloc(store->block_len, sizeof(*keep_block));
+    size_t *old_to_new = malloc(store->block_len * sizeof(*old_to_new));
+    if (!keep_block || !old_to_new) {
+        free(canonical);
+        free(keep_block);
+        free(old_to_new);
+        return -1;
+    }
+    for (size_t i = 0; i < store->block_len; ++i) {
+        old_to_new[i] = SIZE_MAX;
+        if (block_descends_from(store, i, finalized_index)) {
+            keep_block[i] = 1u;
+        }
+    }
+    if (!keep_block[head_index]) {
+        free(canonical);
+        free(keep_block);
+        free(old_to_new);
+        return -1;
+    }
+
     size_t kept = 0;
     size_t evicted = 0;
     size_t total_with_state = 0;
@@ -1314,16 +1356,109 @@ int lantern_fork_choice_prune_states(LanternForkChoice *store) {
         evicted++;
     }
 
+    size_t blocks_before = store->block_len;
+    size_t blocks_kept = 0;
+    for (size_t i = 0; i < store->block_len; ++i) {
+        if (keep_block[i]) {
+            old_to_new[i] = blocks_kept++;
+        }
+    }
+
+    if (blocks_kept < store->block_len) {
+        struct lantern_fork_choice_block_entry *new_blocks = NULL;
+        struct lantern_fork_choice_state_entry *new_states = NULL;
+        if (blocks_kept > 0) {
+            new_blocks = calloc(blocks_kept, sizeof(*new_blocks));
+            new_states = calloc(blocks_kept, sizeof(*new_states));
+            if (!new_blocks || !new_states) {
+                free(new_blocks);
+                free(new_states);
+                free(canonical);
+                free(keep_block);
+                free(old_to_new);
+                return -1;
+            }
+        }
+
+        LanternForkChoice new_index_store;
+        memset(&new_index_store, 0, sizeof(new_index_store));
+        for (size_t old_index = 0; old_index < store->block_len; ++old_index) {
+            size_t new_index = old_to_new[old_index];
+            if (new_index == SIZE_MAX) {
+                continue;
+            }
+            new_blocks[new_index] = store->blocks[old_index];
+            new_states[new_index] = store->states[old_index];
+            size_t old_parent = store->blocks[old_index].parent_index;
+            if (old_parent < store->block_len) {
+                new_blocks[new_index].parent_index = old_to_new[old_parent];
+            } else {
+                new_blocks[new_index].parent_index = SIZE_MAX;
+            }
+            if (map_insert(&new_index_store, &new_blocks[new_index].root, new_index) != 0) {
+                map_reset(&new_index_store);
+                free(new_blocks);
+                free(new_states);
+                free(canonical);
+                free(keep_block);
+                free(old_to_new);
+                return -1;
+            }
+        }
+
+        for (size_t i = 0; i < store->block_len; ++i) {
+            if (keep_block[i]) {
+                continue;
+            }
+            if (store->states[i].has_state) {
+                lantern_state_reset(&store->states[i].state);
+                store->states[i].has_state = false;
+            }
+        }
+
+        free(store->blocks);
+        free(store->states);
+        map_reset(store);
+        store->blocks = new_blocks;
+        store->states = new_states;
+        store->block_len = blocks_kept;
+        store->block_cap = blocks_kept;
+        store->state_cap = blocks_kept;
+        store->index_entries = new_index_store.index_entries;
+        store->index_cap = new_index_store.index_cap;
+        store->index_len = new_index_store.index_len;
+        store->anchor_root = store->latest_finalized.root;
+        store->anchor_slot = finalized_slot;
+        store->has_anchor = true;
+
+        if (store->has_safe_target) {
+            size_t safe_index = 0;
+            if (!map_lookup(store, &store->safe_target, &safe_index)) {
+                store->safe_target = store->latest_finalized.root;
+            }
+        }
+        size_t justified_index = 0;
+        if (!root_is_zero(&store->latest_justified.root)
+            && !map_lookup(store, &store->latest_justified.root, &justified_index)) {
+            store->latest_justified = store->latest_finalized;
+        }
+    }
+
     lantern_log_info(
         "forkchoice",
         NULL,
-        "prune_states finalized_slot=%" PRIu64 " blocks=%zu states_before=%zu evicted=%zu kept=%zu",
+        "prune_states finalized_slot=%" PRIu64
+        " blocks_before=%zu blocks_after=%zu states_before=%zu evicted=%zu kept=%zu",
         finalized_slot,
+        blocks_before,
         store->block_len,
         total_with_state,
         evicted,
         kept);
 
+    fork_choice_publish_current_checkpoints(store);
+    free(old_to_new);
+    free(keep_block);
     free(canonical);
     return 0;
 }

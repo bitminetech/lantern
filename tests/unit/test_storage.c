@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <dirent.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -51,6 +52,34 @@ static void cleanup_dir(const char *path) {
         fprintf(stderr, "failed to remove dir %s: %s\n", path, strerror(errno));
         exit(EXIT_FAILURE);
     }
+}
+
+static void build_root_file_path(
+    char *path,
+    size_t path_len,
+    const char *base_dir,
+    const char *subdir,
+    const LanternRoot *root,
+    const char *ext) {
+    char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
+    expect_zero(
+        lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, root_hex, sizeof(root_hex), 0),
+        "hex root path");
+    int written = snprintf(path, path_len, "%s/%s/%s.%s", base_dir, subdir, root_hex, ext);
+    assert(written > 0 && (size_t)written < path_len);
+}
+
+static void build_slot_index_path(
+    char *path,
+    size_t path_len,
+    const char *base_dir,
+    uint64_t slot) {
+    int written = snprintf(path, path_len, "%s/indices/slots/%" PRIu64 ".root", base_dir, slot);
+    assert(written > 0 && (size_t)written < path_len);
+}
+
+static bool path_exists(const char *path) {
+    return access(path, F_OK) == 0;
 }
 
 static void build_vote(
@@ -240,6 +269,141 @@ cleanup:
     }
     cleanup_dir(limit_dir);
     return result;
+}
+
+static int test_storage_prunes_before_slot(void) {
+    char dir_template[] = "/tmp/lantern_storage_pruneXXXXXX";
+    char *base_dir = mkdtemp(dir_template);
+    if (!base_dir) {
+        perror("mkdtemp prune");
+        return 1;
+    }
+
+    int rc = 1;
+    LanternState state;
+    lantern_state_init(&state);
+    LanternState snapshots[3];
+    LanternSignedBlock blocks[3];
+    LanternRoot roots[3];
+    bool blocks_ready[3] = {false, false, false};
+    bool states_ready[3] = {false, false, false};
+    LanternSignedBlockList collected;
+    lantern_signed_block_list_init(&collected);
+
+    expect_zero(lantern_storage_prepare(base_dir), "prepare prune storage");
+    expect_zero(lantern_state_generate_genesis(&state, 123456u, 4u), "generate prune genesis");
+
+    uint8_t pubkeys[4u * LANTERN_VALIDATOR_PUBKEY_SIZE];
+    for (size_t i = 0; i < 4u; ++i) {
+        memset(
+            pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+            (int)(0xB0u + i),
+            LANTERN_VALIDATOR_PUBKEY_SIZE);
+    }
+    expect_zero(lantern_state_set_validator_pubkeys(&state, pubkeys, 4u), "set prune pubkeys");
+
+    for (size_t i = 0; i < 3u; ++i) {
+        const uint64_t slot = (uint64_t)i + 1u;
+        build_signed_block(&state, slot, &blocks[i], &roots[i]);
+        blocks_ready[i] = true;
+        expect_zero(lantern_storage_store_block_for_root(base_dir, &roots[i], &blocks[i]), "store prune block");
+
+        lantern_state_init(&snapshots[i]);
+        states_ready[i] = true;
+        expect_zero(lantern_state_clone(&state, &snapshots[i]), "clone prune state");
+        snapshots[i].slot = slot;
+        snapshots[i].latest_block_header.slot = slot;
+        snapshots[i].latest_block_header.proposer_index = blocks[i].block.proposer_index;
+        snapshots[i].latest_block_header.parent_root = blocks[i].block.parent_root;
+        snapshots[i].latest_block_header.state_root = blocks[i].block.state_root;
+        expect_zero(lantern_storage_store_state_for_root(base_dir, &roots[i], &snapshots[i]), "store prune state");
+        expect_zero(lantern_storage_store_slot_root(base_dir, slot, &roots[i]), "store prune slot root");
+    }
+
+    int pruned = lantern_storage_prune_before_slot(base_dir, 3u, &roots[1], 1u);
+    if (pruned != 3) {
+        fprintf(stderr, "expected prune count 3 got %d\n", pruned);
+        goto cleanup;
+    }
+
+    expect_zero(lantern_storage_collect_blocks(base_dir, roots, 3u, &collected), "collect pruned blocks");
+    if (collected.length != 2u) {
+        fprintf(stderr, "expected two blocks after prune got %zu\n", collected.length);
+        goto cleanup;
+    }
+
+    char path[PATH_MAX];
+    build_root_file_path(path, sizeof(path), base_dir, "blocks", &roots[0], "ssz");
+    expect_true(!path_exists(path), "old block pruned");
+    build_root_file_path(path, sizeof(path), base_dir, "blocks", &roots[1], "ssz");
+    expect_true(path_exists(path), "kept root block preserved");
+    build_root_file_path(path, sizeof(path), base_dir, "blocks", &roots[2], "ssz");
+    expect_true(path_exists(path), "new block preserved");
+
+    build_root_file_path(path, sizeof(path), base_dir, "states", &roots[0], "ssz");
+    expect_true(!path_exists(path), "old state pruned");
+    build_root_file_path(path, sizeof(path), base_dir, "states", &roots[1], "ssz");
+    expect_true(path_exists(path), "kept root state preserved");
+    build_root_file_path(path, sizeof(path), base_dir, "states", &roots[2], "ssz");
+    expect_true(path_exists(path), "new state preserved");
+
+    build_slot_index_path(path, sizeof(path), base_dir, 1u);
+    expect_true(!path_exists(path), "old slot index pruned");
+    build_slot_index_path(path, sizeof(path), base_dir, 2u);
+    expect_true(path_exists(path), "kept root slot index preserved");
+    build_slot_index_path(path, sizeof(path), base_dir, 3u);
+    expect_true(path_exists(path), "new slot index preserved");
+
+    rc = 0;
+
+cleanup:
+    lantern_signed_block_list_reset(&collected);
+    for (size_t i = 0; i < 3u; ++i) {
+        if (blocks_ready[i]) {
+            lantern_block_body_reset(&blocks[i].block.body);
+        }
+        if (states_ready[i]) {
+            lantern_state_reset(&snapshots[i]);
+        }
+    }
+    lantern_state_reset(&state);
+
+    char cleanup_file[PATH_MAX];
+    for (size_t i = 0; i < 3u; ++i) {
+        build_root_file_path(cleanup_file, sizeof(cleanup_file), base_dir, "blocks", &roots[i], "ssz");
+        cleanup_path(cleanup_file);
+        build_root_file_path(cleanup_file, sizeof(cleanup_file), base_dir, "states", &roots[i], "ssz");
+        cleanup_path(cleanup_file);
+        build_slot_index_path(cleanup_file, sizeof(cleanup_file), base_dir, (uint64_t)i + 1u);
+        cleanup_path(cleanup_file);
+    }
+
+    char blocks_dir[PATH_MAX];
+    char invalid_blocks_dir[PATH_MAX];
+    char invalid_gossip_dir[PATH_MAX];
+    char states_dir[PATH_MAX];
+    char indices_dir[PATH_MAX];
+    char slot_index_dir[PATH_MAX];
+    int written = snprintf(blocks_dir, sizeof(blocks_dir), "%s/blocks", base_dir);
+    assert(written > 0 && (size_t)written < sizeof(blocks_dir));
+    written = snprintf(invalid_blocks_dir, sizeof(invalid_blocks_dir), "%s/invalid_blocks", base_dir);
+    assert(written > 0 && (size_t)written < sizeof(invalid_blocks_dir));
+    written = snprintf(invalid_gossip_dir, sizeof(invalid_gossip_dir), "%s/invalid_gossip", base_dir);
+    assert(written > 0 && (size_t)written < sizeof(invalid_gossip_dir));
+    written = snprintf(states_dir, sizeof(states_dir), "%s/states", base_dir);
+    assert(written > 0 && (size_t)written < sizeof(states_dir));
+    written = snprintf(indices_dir, sizeof(indices_dir), "%s/indices", base_dir);
+    assert(written > 0 && (size_t)written < sizeof(indices_dir));
+    written = snprintf(slot_index_dir, sizeof(slot_index_dir), "%s/slots", indices_dir);
+    assert(written > 0 && (size_t)written < sizeof(slot_index_dir));
+    cleanup_dir(blocks_dir);
+    cleanup_dir(invalid_blocks_dir);
+    cleanup_dir(invalid_gossip_dir);
+    cleanup_dir(states_dir);
+    cleanup_dir(slot_index_dir);
+    cleanup_dir(indices_dir);
+    cleanup_dir(base_dir);
+    return rc;
 }
 
 int main(void) {
@@ -470,6 +634,9 @@ int main(void) {
     cleanup_dir(base_dir);
 
     if (test_storage_rejects_excess_validators() != 0) {
+        return EXIT_FAILURE;
+    }
+    if (test_storage_prunes_before_slot() != 0) {
         return EXIT_FAILURE;
     }
 

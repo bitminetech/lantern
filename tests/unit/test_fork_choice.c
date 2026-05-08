@@ -677,27 +677,24 @@ static int test_fork_choice_prune_states_keeps_finalized_to_head_chain(void) {
     size_t block_two_index = find_block_index(&store, &block_two_root);
     size_t block_three_index = find_block_index(&store, &block_three_root);
     size_t fork_two_index = find_block_index(&store, &fork_two_root);
-    assert(genesis_index != SIZE_MAX);
-    assert(block_one_index != SIZE_MAX);
+    assert(genesis_index == SIZE_MAX);
+    assert(block_one_index == SIZE_MAX);
     assert(block_two_index != SIZE_MAX);
     assert(block_three_index != SIZE_MAX);
-    assert(fork_two_index != SIZE_MAX);
+    assert(fork_two_index == SIZE_MAX);
+    assert(store.block_len == 2u);
+    assert(store.blocks[block_two_index].parent_index == SIZE_MAX);
+    assert(store.blocks[block_three_index].parent_index == block_two_index);
+    assert(roots_equal(lantern_fork_choice_anchor_root(&store), &block_two_root));
+    uint64_t anchor_slot = 0;
+    assert(lantern_fork_choice_anchor_slot(&store, &anchor_slot) == 0);
+    assert(anchor_slot == block_two.slot);
 
     assert(lantern_fork_choice_block_state(&store, &genesis_root) == NULL);
     assert(lantern_fork_choice_block_state(&store, &block_one_root) == NULL);
     assert(lantern_fork_choice_block_state(&store, &fork_two_root) == NULL);
     assert(lantern_fork_choice_block_state(&store, &block_two_root) != NULL);
     assert(lantern_fork_choice_block_state(&store, &block_three_root) != NULL);
-
-    assert(!store.states[genesis_index].has_state);
-    assert(store.states[genesis_index].state.validators == NULL);
-    assert(store.states[genesis_index].state.historical_block_hashes.items == NULL);
-    assert(!store.states[block_one_index].has_state);
-    assert(store.states[block_one_index].state.validators == NULL);
-    assert(store.states[block_one_index].state.historical_block_hashes.items == NULL);
-    assert(!store.states[fork_two_index].has_state);
-    assert(store.states[fork_two_index].state.validators == NULL);
-    assert(store.states[fork_two_index].state.historical_block_hashes.items == NULL);
 
     assert(store.states[block_two_index].has_state);
     assert(store.states[block_two_index].state.validators != NULL);

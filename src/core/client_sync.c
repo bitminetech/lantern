@@ -1430,8 +1430,9 @@ int initialize_fork_choice(struct lantern_client *client)
 
     /*
      * Seed fork-choice with the anchor block/root while preserving the state's
-     * justified/finalized slots. This matches LeanSpec checkpoint bootstrap:
-     * both checkpoints refer to the materialized anchor root from the start.
+     * justified/finalized slots. On restart, LeanSpec reloads persisted
+     * checkpoints; Lantern aliases their roots to this compact anchor because
+     * historical checkpoint blocks may already have been pruned from storage.
      */
     if (lantern_fork_choice_set_anchor_with_state(
             &client->fork_choice,
@@ -1583,14 +1584,51 @@ static bool load_restored_block_state(
     return loaded;
 }
 
+static bool restore_keep_roots_contains(
+    const LanternRoot *roots,
+    size_t root_count,
+    const LanternRoot *root)
+{
+    if (!roots || !root)
+    {
+        return false;
+    }
+    for (size_t i = 0; i < root_count; ++i)
+    {
+        if (memcmp(roots[i].bytes, root->bytes, LANTERN_ROOT_SIZE) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void restore_keep_roots_append(
+    LanternRoot *roots,
+    size_t capacity,
+    size_t *root_count,
+    const LanternRoot *root)
+{
+    if (!roots || !root_count || !root || lantern_root_is_zero(root))
+    {
+        return;
+    }
+    if (*root_count >= capacity
+        || restore_keep_roots_contains(roots, *root_count, root))
+    {
+        return;
+    }
+    roots[(*root_count)++] = *root;
+}
+
 /**
  * Restore persisted blocks from storage into fork choice.
  *
- * @spec subspecs/forkchoice/store.py - Block restoration
+ * @spec subspecs/storage/sqlite.py - Database.prune_before_slot()
  *
- * Loads all persisted blocks from storage, sorts them by slot,
- * and adds them to fork choice. This allows the client to resume
- * from a previous state after restart.
+ * Prunes persisted blocks/states strictly before the finalized slot, then
+ * restores only the remaining finalized-or-newer block window into fork
+ * choice. This keeps restart behavior aligned with LeanSpec storage pruning.
  *
  * @param client  Client instance
  * @return LANTERN_CLIENT_OK on success (including when nothing to restore)
@@ -1604,6 +1642,48 @@ int restore_persisted_blocks(struct lantern_client *client)
     {
         return LANTERN_CLIENT_OK;
     }
+
+    LanternRoot restore_keep_roots[2];
+    size_t restore_keep_root_count = 0;
+    restore_keep_roots_append(
+        restore_keep_roots,
+        2u,
+        &restore_keep_root_count,
+        &client->state.latest_finalized.root);
+    restore_keep_roots_append(
+        restore_keep_roots,
+        2u,
+        &restore_keep_root_count,
+        lantern_fork_choice_anchor_root(&client->fork_choice));
+
+    const uint64_t restore_min_slot = client->state.latest_finalized.slot;
+    if (restore_min_slot > 0)
+    {
+        int pruned = lantern_storage_prune_before_slot(
+            client->data_dir,
+            restore_min_slot,
+            restore_keep_roots,
+            restore_keep_root_count);
+        if (pruned < 0)
+        {
+            lantern_log_warn(
+                "storage",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "failed to prune persisted pre-finalized data before restore finalized_slot=%" PRIu64,
+                restore_min_slot);
+        }
+        else if (pruned > 0)
+        {
+            lantern_log_info(
+                "storage",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "pruned persisted pre-finalized data before restore finalized_slot=%" PRIu64
+                " entries=%d",
+                restore_min_slot,
+                pruned);
+        }
+    }
+
     struct lantern_persisted_block_list list;
     persisted_block_list_init(&list);
     int iterate_rc = lantern_storage_iterate_blocks(
@@ -1687,6 +1767,15 @@ int restore_persisted_blocks(struct lantern_client *client)
     {
         const struct lantern_persisted_block *entry = &list.items[i];
         const LanternBlock *block = &entry->block.block;
+        if (restore_min_slot > 0
+            && block->slot < restore_min_slot
+            && !restore_keep_roots_contains(
+                   restore_keep_roots,
+                   restore_keep_root_count,
+                   &entry->root))
+        {
+            continue;
+        }
         LanternState cached_post_state;
         bool have_cached_post_state = load_restored_block_state(client, &entry->root, &cached_post_state);
         const LanternCheckpoint *post_justified = &client->state.latest_justified;
@@ -1743,42 +1832,6 @@ int restore_persisted_blocks(struct lantern_client *client)
                    NULL,
                    NULL)
                 == 0;
-        bool trace_restore_entry =
-            block->slot <= client->state.slot + 4u
-            || (store_anchor_root
-                && (memcmp(
-                        post_justified->root.bytes,
-                        store_anchor_root->bytes,
-                        LANTERN_ROOT_SIZE)
-                        != 0
-                    || memcmp(
-                           post_finalized->root.bytes,
-                           store_anchor_root->bytes,
-                           LANTERN_ROOT_SIZE)
-                           != 0));
-        if (trace_restore_entry)
-        {
-            lantern_log_info(
-                "forkchoice",
-                &(const struct lantern_log_metadata){.validator = client->node_id},
-                "restore candidate slot=%" PRIu64 " root=%s parent=%s"
-                " cached_post_state=%s post_justified_slot=%" PRIu64
-                " post_justified_root=%s post_justified_known=%s"
-                " post_finalized_slot=%" PRIu64 " post_finalized_root=%s"
-                " post_finalized_known=%s canonical_anchor_state=%s",
-                block->slot,
-                block_root_hex[0] ? block_root_hex : "0x0",
-                parent_root_hex[0] ? parent_root_hex : "0x0",
-                have_cached_post_state ? "true" : "false",
-                post_justified->slot,
-                post_justified_root_hex[0] ? post_justified_root_hex : "0x0",
-                justified_known ? "true" : "false",
-                post_finalized->slot,
-                post_finalized_root_hex[0] ? post_finalized_root_hex : "0x0",
-                finalized_known ? "true" : "false",
-                using_canonical_anchor_state ? "true" : "false");
-        }
-
         if (lantern_fork_choice_add_block_with_state(
                 &client->fork_choice,
                 block,

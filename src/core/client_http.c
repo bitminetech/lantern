@@ -555,6 +555,11 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
     out_snapshot->lean_latest_finalized_slot = state_finalized.slot;
     out_snapshot->lean_justified_slot = client->state.latest_justified.slot;
     out_snapshot->lean_finalized_slot = client->state.latest_finalized.slot;
+    (void)snprintf(
+        out_snapshot->lean_client_label,
+        sizeof(out_snapshot->lean_client_label),
+        "%s",
+        client->node_id && client->node_id[0] != '\0' ? client->node_id : "unknown");
     out_snapshot->lean_validators_count = client->local_validator_count;
     out_snapshot->lean_gossip_signatures = (uint64_t)gossip_signature_count;
     out_snapshot->lean_latest_new_aggregated_payloads = (uint64_t)new_aggregated_payload_count;
@@ -565,6 +570,7 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
     out_snapshot->lean_attestation_committee_count =
         (uint64_t)lantern_client_attestation_committee_count(client);
     out_snapshot->lean_node_sync_status = (uint64_t)client->sync_state;
+    out_snapshot->lean_gossip_mesh_peers = lantern_gossipsub_service_mesh_peer_count(&client->gossip);
     out_snapshot->lean_connected_peers = 0;
     if (client->connection_lock_initialized)
     {

@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -451,6 +452,74 @@ static int build_slot_index_dir(const char *data_dir, char **out_path) {
     int rc = join_path(indices_dir, LANTERN_STORAGE_SLOT_INDEX_DIR, out_path);
     free_path(indices_dir);
     return rc;
+}
+
+static bool storage_root_is_kept(
+    const LanternRoot *root,
+    const LanternRoot *keep_roots,
+    size_t keep_root_count) {
+    if (!root || !keep_roots || keep_root_count == 0) {
+        return false;
+    }
+    for (size_t i = 0; i < keep_root_count; ++i) {
+        if (memcmp(root->bytes, keep_roots[i].bytes, LANTERN_ROOT_SIZE) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool parse_root_ssz_filename(const char *filename, LanternRoot *out_root) {
+    if (!filename || !out_root) {
+        return false;
+    }
+    const size_t hex_len = 2u * LANTERN_ROOT_SIZE;
+    const size_t len = strlen(filename);
+    if (len != hex_len + 4u || strcmp(filename + hex_len, ".ssz") != 0) {
+        return false;
+    }
+    char root_hex[(2u * LANTERN_ROOT_SIZE) + 1u];
+    memcpy(root_hex, filename, hex_len);
+    root_hex[hex_len] = '\0';
+    return lantern_hex_decode(root_hex, out_root->bytes, LANTERN_ROOT_SIZE) == 0;
+}
+
+static bool parse_slot_root_filename(const char *filename, uint64_t *out_slot) {
+    if (!filename || !out_slot) {
+        return false;
+    }
+    const size_t len = strlen(filename);
+    if (len <= 5u || strcmp(filename + len - 5u, ".root") != 0) {
+        return false;
+    }
+    if (len - 5u >= 64u) {
+        return false;
+    }
+    char slot_text[64];
+    memcpy(slot_text, filename, len - 5u);
+    slot_text[len - 5u] = '\0';
+
+    errno = 0;
+    char *end = NULL;
+    unsigned long long parsed = strtoull(slot_text, &end, 10);
+    if (errno != 0 || !end || *end != '\0' || parsed > UINT64_MAX) {
+        return false;
+    }
+    *out_slot = (uint64_t)parsed;
+    return true;
+}
+
+static int remove_storage_path(const char *path, int *pruned) {
+    if (!path || !pruned) {
+        return -1;
+    }
+    if (remove(path) != 0) {
+        return (errno == ENOENT) ? 0 : -1;
+    }
+    if (*pruned < INT_MAX) {
+        *pruned += 1;
+    }
+    return 0;
 }
 
 static int format_utc_timestamp(char *buffer, size_t buffer_len) {
@@ -1374,6 +1443,309 @@ cleanup:
     free_path(states_dir);
     free(data);
     return rc;
+}
+
+static int prune_block_files_before_slot(
+    const char *data_dir,
+    uint64_t slot,
+    const LanternRoot *keep_roots,
+    size_t keep_root_count,
+    int *out_pruned) {
+    if (!data_dir || !out_pruned) {
+        return -1;
+    }
+
+    int rc = -1;
+    char *blocks_dir = NULL;
+    DIR *dir = NULL;
+
+    if (build_blocks_dir(data_dir, &blocks_dir) != 0) {
+        goto cleanup;
+    }
+    dir = opendir(blocks_dir);
+    if (!dir) {
+        rc = (errno == ENOENT) ? 0 : -1;
+        goto cleanup;
+    }
+
+    rc = 0;
+    struct dirent *entry = NULL;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        const size_t len = strlen(entry->d_name);
+        if (len < 5u || strcmp(entry->d_name + len - 4u, ".ssz") != 0) {
+            continue;
+        }
+
+        char *block_path = NULL;
+        if (join_path(blocks_dir, entry->d_name, &block_path) != 0) {
+            rc = -1;
+            break;
+        }
+
+        uint8_t *data = NULL;
+        size_t data_len = 0;
+        const int read_rc = read_file_buffer(block_path, &data, &data_len);
+        if (read_rc != 0) {
+            free_path(block_path);
+            if (read_rc == 1) {
+                continue;
+            }
+            rc = -1;
+            break;
+        }
+
+        LanternSignedBlock block;
+        lantern_signed_block_with_attestation_init(&block);
+        if (lantern_ssz_decode_signed_block(&block, data, data_len) != 0) {
+            lantern_signed_block_with_attestation_reset(&block);
+            free(data);
+            free_path(block_path);
+            rc = -1;
+            break;
+        }
+
+        LanternRoot root = {0};
+        bool have_root = parse_root_ssz_filename(entry->d_name, &root);
+        if (!have_root && lantern_hash_tree_root_block(&block.block, &root) == 0) {
+            have_root = true;
+        }
+
+        if (have_root
+            && block.block.slot < slot
+            && !storage_root_is_kept(&root, keep_roots, keep_root_count)
+            && remove_storage_path(block_path, out_pruned) != 0) {
+            rc = -1;
+        }
+
+        lantern_signed_block_with_attestation_reset(&block);
+        free(data);
+        free_path(block_path);
+        if (rc != 0) {
+            break;
+        }
+    }
+
+cleanup:
+    if (dir) {
+        closedir(dir);
+    }
+    free_path(blocks_dir);
+    return rc;
+}
+
+static uint64_t state_snapshot_prune_slot(const LanternState *state) {
+    if (!state) {
+        return 0;
+    }
+    if (state->latest_block_header.slot != 0 || state->slot == 0) {
+        return state->latest_block_header.slot;
+    }
+    return state->slot;
+}
+
+static int prune_state_files_before_slot(
+    const char *data_dir,
+    uint64_t slot,
+    const LanternRoot *keep_roots,
+    size_t keep_root_count,
+    int *out_pruned) {
+    if (!data_dir || !out_pruned) {
+        return -1;
+    }
+
+    int rc = -1;
+    char *states_dir = NULL;
+    DIR *dir = NULL;
+
+    if (build_states_dir(data_dir, &states_dir) != 0) {
+        goto cleanup;
+    }
+    dir = opendir(states_dir);
+    if (!dir) {
+        rc = (errno == ENOENT) ? 0 : -1;
+        goto cleanup;
+    }
+
+    rc = 0;
+    struct dirent *entry = NULL;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        LanternRoot root = {0};
+        if (!parse_root_ssz_filename(entry->d_name, &root)) {
+            continue;
+        }
+        if (storage_root_is_kept(&root, keep_roots, keep_root_count)) {
+            continue;
+        }
+
+        char *state_path = NULL;
+        if (join_path(states_dir, entry->d_name, &state_path) != 0) {
+            rc = -1;
+            break;
+        }
+
+        uint8_t *data = NULL;
+        size_t data_len = 0;
+        const int read_rc = read_file_buffer(state_path, &data, &data_len);
+        if (read_rc != 0) {
+            free_path(state_path);
+            if (read_rc == 1) {
+                continue;
+            }
+            rc = -1;
+            break;
+        }
+
+        LanternState state;
+        lantern_state_init(&state);
+        if (lantern_ssz_decode_state(&state, data, data_len) != 0) {
+            lantern_state_reset(&state);
+            free(data);
+            free_path(state_path);
+            rc = -1;
+            break;
+        }
+
+        if (state_snapshot_prune_slot(&state) < slot
+            && remove_storage_path(state_path, out_pruned) != 0) {
+            rc = -1;
+        }
+
+        lantern_state_reset(&state);
+        free(data);
+        free_path(state_path);
+        if (rc != 0) {
+            break;
+        }
+    }
+
+cleanup:
+    if (dir) {
+        closedir(dir);
+    }
+    free_path(states_dir);
+    return rc;
+}
+
+static int prune_slot_indices_before_slot(
+    const char *data_dir,
+    uint64_t slot,
+    const LanternRoot *keep_roots,
+    size_t keep_root_count,
+    int *out_pruned) {
+    if (!data_dir || !out_pruned) {
+        return -1;
+    }
+
+    int rc = -1;
+    char *slot_dir = NULL;
+    DIR *dir = NULL;
+
+    if (build_slot_index_dir(data_dir, &slot_dir) != 0) {
+        goto cleanup;
+    }
+    dir = opendir(slot_dir);
+    if (!dir) {
+        rc = (errno == ENOENT) ? 0 : -1;
+        goto cleanup;
+    }
+
+    rc = 0;
+    struct dirent *entry = NULL;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        uint64_t indexed_slot = 0;
+        if (!parse_slot_root_filename(entry->d_name, &indexed_slot)
+            || indexed_slot >= slot) {
+            continue;
+        }
+
+        char *slot_path = NULL;
+        if (join_path(slot_dir, entry->d_name, &slot_path) != 0) {
+            rc = -1;
+            break;
+        }
+
+        uint8_t *data = NULL;
+        size_t data_len = 0;
+        const int read_rc = read_file_buffer(slot_path, &data, &data_len);
+        if (read_rc != 0) {
+            free_path(slot_path);
+            if (read_rc == 1) {
+                continue;
+            }
+            rc = -1;
+            break;
+        }
+
+        bool keep = false;
+        if (data_len == LANTERN_ROOT_SIZE) {
+            LanternRoot root = {0};
+            memcpy(root.bytes, data, LANTERN_ROOT_SIZE);
+            keep = storage_root_is_kept(&root, keep_roots, keep_root_count);
+        }
+        free(data);
+
+        if (!keep && remove_storage_path(slot_path, out_pruned) != 0) {
+            rc = -1;
+        }
+
+        free_path(slot_path);
+        if (rc != 0) {
+            break;
+        }
+    }
+
+cleanup:
+    if (dir) {
+        closedir(dir);
+    }
+    free_path(slot_dir);
+    return rc;
+}
+
+/**
+ * Remove persisted blocks/states strictly before `slot`, preserving keep_roots.
+ *
+ * Mirrors leanSpec's Database.prune_before_slot(): finalized advancement makes
+ * earlier block/state entries unnecessary, except for roots the caller names
+ * explicitly, such as the finalized block root itself.
+ *
+ * @param data_dir Base storage directory.
+ * @param slot Prune entries with slot < this value.
+ * @param keep_roots Roots to preserve regardless of slot.
+ * @param keep_root_count Number of entries in keep_roots.
+ * @return Non-negative count of removed files on success, -1 on error.
+ */
+int lantern_storage_prune_before_slot(
+    const char *data_dir,
+    uint64_t slot,
+    const LanternRoot *keep_roots,
+    size_t keep_root_count) {
+    if (!data_dir || (!keep_roots && keep_root_count > 0)) {
+        return -1;
+    }
+
+    int pruned = 0;
+    if (prune_block_files_before_slot(data_dir, slot, keep_roots, keep_root_count, &pruned) != 0) {
+        return -1;
+    }
+    if (prune_state_files_before_slot(data_dir, slot, keep_roots, keep_root_count, &pruned) != 0) {
+        return -1;
+    }
+    if (prune_slot_indices_before_slot(data_dir, slot, keep_roots, keep_root_count, &pruned) != 0) {
+        return -1;
+    }
+    return pruned;
 }
 
 /**
