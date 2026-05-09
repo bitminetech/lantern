@@ -179,22 +179,34 @@ static void test_disable_blocks_request_peer(struct lantern_client *client)
     client->connected_peers = 0u;
 }
 
-static int test_make_dummy_proof(
+static int test_make_dummy_proof_for_validators(
     LanternAggregatedSignatureProof *out_proof,
-    uint64_t validator_id,
+    const uint64_t *validator_ids,
+    size_t validator_count,
     uint8_t seed) {
-    if (!out_proof || validator_id >= LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+    if (!out_proof || !validator_ids || validator_count == 0u) {
         return -1;
     }
+    uint64_t max_validator_id = 0u;
+    for (size_t i = 0; i < validator_count; ++i) {
+        if (validator_ids[i] >= LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+            return -1;
+        }
+        if (validator_ids[i] > max_validator_id) {
+            max_validator_id = validator_ids[i];
+        }
+    }
     lantern_aggregated_signature_proof_init(out_proof);
-    size_t bit_length = (size_t)validator_id + 1u;
+    size_t bit_length = (size_t)max_validator_id + 1u;
     if (lantern_bitlist_resize(&out_proof->participants, bit_length) != 0) {
         lantern_aggregated_signature_proof_reset(out_proof);
         return -1;
     }
-    if (lantern_bitlist_set(&out_proof->participants, (size_t)validator_id, true) != 0) {
-        lantern_aggregated_signature_proof_reset(out_proof);
-        return -1;
+    for (size_t i = 0; i < validator_count; ++i) {
+        if (lantern_bitlist_set(&out_proof->participants, (size_t)validator_ids[i], true) != 0) {
+            lantern_aggregated_signature_proof_reset(out_proof);
+            return -1;
+        }
     }
     if (lantern_byte_list_resize(&out_proof->proof_data, 8u) != 0) {
         lantern_aggregated_signature_proof_reset(out_proof);
@@ -204,6 +216,14 @@ static int test_make_dummy_proof(
         out_proof->proof_data.data[i] = (uint8_t)(seed + (uint8_t)i);
     }
     return 0;
+}
+
+static int test_make_dummy_proof(
+    LanternAggregatedSignatureProof *out_proof,
+    uint64_t validator_id,
+    uint8_t seed) {
+    uint64_t validator_ids[1] = {validator_id};
+    return test_make_dummy_proof_for_validators(out_proof, validator_ids, 1u, seed);
 }
 
 static LanternAttestationData test_make_attestation_data(uint64_t slot, uint8_t marker) {
@@ -231,6 +251,20 @@ static bool aggregated_pool_contains_root(
         }
     }
     return false;
+}
+
+static const struct lantern_aggregated_payload_entry *aggregated_pool_find_root(
+    const struct lantern_aggregated_payload_pool *pool,
+    const LanternRoot *data_root) {
+    if (!pool || !data_root || !pool->entries) {
+        return NULL;
+    }
+    for (size_t i = 0; i < pool->length; ++i) {
+        if (memcmp(pool->entries[i].data_root.bytes, data_root->bytes, LANTERN_ROOT_SIZE) == 0) {
+            return &pool->entries[i];
+        }
+    }
+    return NULL;
 }
 
 static bool pq_range_contains_slot(struct PQRange range, uint64_t slot) {
@@ -2229,6 +2263,179 @@ cleanup:
     return rc;
 }
 
+static int test_aggregated_payload_cache_keeps_only_useful_coverage(void) {
+    struct lantern_client client;
+    memset(&client, 0, sizeof(client));
+    lantern_store_init(&client.store);
+
+    LanternRoot data_root;
+    LanternRoot other_root;
+    client_test_fill_root_with_index(&data_root, 0x404u);
+    client_test_fill_root_with_index(&other_root, 0x405u);
+
+    uint64_t validator0[1] = {0u};
+    uint64_t validators01[2] = {0u, 1u};
+
+    LanternAggregatedSignatureProof first;
+    LanternAggregatedSignatureProof duplicate_coverage;
+    LanternAggregatedSignatureProof broader;
+    LanternAggregatedSignatureProof subset;
+    LanternAggregatedSignatureProof other_root_proof;
+    memset(&first, 0, sizeof(first));
+    memset(&duplicate_coverage, 0, sizeof(duplicate_coverage));
+    memset(&broader, 0, sizeof(broader));
+    memset(&subset, 0, sizeof(subset));
+    memset(&other_root_proof, 0, sizeof(other_root_proof));
+
+    int rc = 1;
+    if (test_make_dummy_proof_for_validators(&first, validator0, 1u, 0x11u) != 0
+        || test_make_dummy_proof_for_validators(&duplicate_coverage, validator0, 1u, 0x21u) != 0
+        || test_make_dummy_proof_for_validators(&broader, validators01, 2u, 0x31u) != 0
+        || test_make_dummy_proof_for_validators(&subset, validator0, 1u, 0x41u) != 0
+        || test_make_dummy_proof_for_validators(&other_root_proof, validator0, 1u, 0x51u) != 0) {
+        fprintf(stderr, "failed to build coverage cache proofs\n");
+        goto cleanup;
+    }
+
+    LanternAttestationData data = test_make_attestation_data(10u, 0x61u);
+    LanternAttestationData other_data = test_make_attestation_data(11u, 0x71u);
+
+    if (lantern_client_add_known_aggregated_payload(&client, &data_root, &data, &first, data.target.slot) != 0) {
+        fprintf(stderr, "failed to add first cached proof\n");
+        goto cleanup;
+    }
+    if (client.store.known_aggregated_payloads.length != 1u) {
+        fprintf(stderr, "expected first cached proof to be retained\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_add_known_aggregated_payload(
+            &client,
+            &data_root,
+            &data,
+            &duplicate_coverage,
+            data.target.slot)
+        != 0) {
+        fprintf(stderr, "failed to process duplicate-coverage proof\n");
+        goto cleanup;
+    }
+    if (client.store.known_aggregated_payloads.length != 1u) {
+        fprintf(stderr, "duplicate coverage should not grow known payload cache\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_add_known_aggregated_payload(&client, &data_root, &data, &broader, data.target.slot) != 0) {
+        fprintf(stderr, "failed to add broader cached proof\n");
+        goto cleanup;
+    }
+    if (client.store.known_aggregated_payloads.length != 1u) {
+        fprintf(stderr, "broader proof should replace covered subset proof\n");
+        goto cleanup;
+    }
+
+    const struct lantern_aggregated_payload_entry *entry =
+        aggregated_pool_find_root(&client.store.known_aggregated_payloads, &data_root);
+    if (!entry
+        || !lantern_bitlist_get(&entry->proof.participants, 0u)
+        || !lantern_bitlist_get(&entry->proof.participants, 1u)) {
+        fprintf(stderr, "broader proof coverage was not retained\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_add_known_aggregated_payload(&client, &data_root, &data, &subset, data.target.slot) != 0) {
+        fprintf(stderr, "failed to process subset cached proof\n");
+        goto cleanup;
+    }
+    if (client.store.known_aggregated_payloads.length != 1u) {
+        fprintf(stderr, "covered subset should not grow known payload cache\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_add_known_aggregated_payload(
+            &client,
+            &other_root,
+            &other_data,
+            &other_root_proof,
+            other_data.target.slot)
+        != 0) {
+        fprintf(stderr, "failed to add proof for a distinct attestation root\n");
+        goto cleanup;
+    }
+    if (client.store.known_aggregated_payloads.length != 2u) {
+        fprintf(stderr, "distinct attestation roots should retain independent coverage\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_aggregated_signature_proof_reset(&first);
+    lantern_aggregated_signature_proof_reset(&duplicate_coverage);
+    lantern_aggregated_signature_proof_reset(&broader);
+    lantern_aggregated_signature_proof_reset(&subset);
+    lantern_aggregated_signature_proof_reset(&other_root_proof);
+    test_reset_agg_cache(&client);
+    return rc;
+}
+
+static int test_promoting_redundant_aggregated_payload_drops_known_duplicate(void) {
+    struct lantern_client client;
+    memset(&client, 0, sizeof(client));
+    lantern_store_init(&client.store);
+
+    LanternRoot data_root;
+    client_test_fill_root_with_index(&data_root, 0x505u);
+    LanternAttestationData data = test_make_attestation_data(12u, 0x81u);
+
+    LanternAggregatedSignatureProof known;
+    LanternAggregatedSignatureProof redundant_new;
+    memset(&known, 0, sizeof(known));
+    memset(&redundant_new, 0, sizeof(redundant_new));
+
+    int rc = 1;
+    if (test_make_dummy_proof(&known, 0u, 0x12u) != 0
+        || test_make_dummy_proof(&redundant_new, 0u, 0x22u) != 0) {
+        fprintf(stderr, "failed to build promotion dedupe proofs\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_add_known_aggregated_payload(&client, &data_root, &data, &known, data.target.slot) != 0
+        || lantern_client_add_new_aggregated_payload(
+               &client,
+               &data_root,
+               &data,
+               &redundant_new,
+               data.target.slot)
+            != 0) {
+        fprintf(stderr, "failed to seed promotion dedupe pools\n");
+        goto cleanup;
+    }
+    if (client.store.known_aggregated_payloads.length != 1u
+        || client.store.new_aggregated_payloads.length != 1u) {
+        fprintf(stderr, "unexpected payload lengths before promotion dedupe\n");
+        goto cleanup;
+    }
+
+    size_t moved = lantern_client_promote_new_aggregated_payloads(&client);
+    if (moved != 1u) {
+        fprintf(stderr, "expected redundant new payload to be processed, got=%zu\n", moved);
+        goto cleanup;
+    }
+    if (client.store.new_aggregated_payloads.length != 0u
+        || client.store.known_aggregated_payloads.length != 1u) {
+        fprintf(stderr, "redundant promoted payload should not grow known cache\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_aggregated_signature_proof_reset(&known);
+    lantern_aggregated_signature_proof_reset(&redundant_new);
+    test_reset_agg_cache(&client);
+    return rc;
+}
+
 static int test_debug_aggregate_attestation_signatures_rebuilds_new_payloads(void) {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
@@ -3495,6 +3702,12 @@ int main(void) {
         return 1;
     }
     if (test_new_aggregated_payloads_promote_to_known() != 0) {
+        return 1;
+    }
+    if (test_aggregated_payload_cache_keeps_only_useful_coverage() != 0) {
+        return 1;
+    }
+    if (test_promoting_redundant_aggregated_payload_drops_known_duplicate() != 0) {
         return 1;
     }
     if (test_debug_aggregate_attestation_signatures_rebuilds_new_payloads() != 0) {
