@@ -46,6 +46,7 @@
 #define LANTERN_GOSSIPSUB_VALIDATION_QUEUE_CAPACITY 128u
 
 static const char *const k_leanspec_gossipsub_protocols[] = {
+    "/meshsub/1.2.0",
     "/meshsub/1.1.0",
     "/meshsub/1.0.0",
 };
