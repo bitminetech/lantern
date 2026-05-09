@@ -1322,7 +1322,7 @@ static void client_log_generated_anchor_block(struct lantern_client *client)
         goto cleanup;
     }
 
-    if (lantern_hash_tree_root_state(&generated_state, &generated_state_root) != 0)
+    if (lantern_hash_tree_root_state(&generated_state, &generated_state_root) != SSZ_SUCCESS)
     {
         goto cleanup;
     }
@@ -1335,7 +1335,7 @@ static void client_log_generated_anchor_block(struct lantern_client *client)
     lantern_block_body_init(&generated_block.body);
     body_initialized = true;
 
-    if (lantern_hash_tree_root_block(&generated_block, &generated_block_root) == 0)
+    if (lantern_hash_tree_root_block(&generated_block, &generated_block_root) == SSZ_SUCCESS)
     {
         char generated_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
         format_root_hex(&generated_block_root, generated_hex, sizeof(generated_hex));
@@ -1391,7 +1391,7 @@ static void client_log_genesis_anchors(
     canonical_hex[0] = '\0';
     body_hex[0] = '\0';
     spec_header_hex[0] = '\0';
-    if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &header_root) == 0)
+    if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &header_root) == SSZ_SUCCESS)
     {
         format_root_hex(&header_root, header_hex, sizeof(header_hex));
     }
@@ -1408,7 +1408,7 @@ static void client_log_genesis_anchors(
                                  ? *state_root
                                  : client->state.latest_block_header.state_root;
     lantern_block_body_init(&genesis_block.body);
-    if (lantern_hash_tree_root_block(&genesis_block, &genesis_block_root) == 0)
+    if (lantern_hash_tree_root_block(&genesis_block, &genesis_block_root) == SSZ_SUCCESS)
     {
         format_root_hex(&genesis_block_root, block_hex, sizeof(block_hex));
     }
@@ -1419,14 +1419,14 @@ static void client_log_genesis_anchors(
         sizeof(parent_hex));
     LanternBlockHeader canonical_header = client->state.latest_block_header;
     canonical_header.state_root = state_root ? *state_root : canonical_header.state_root;
-    if (lantern_hash_tree_root_block_header(&canonical_header, &canonical_header_root) == 0)
+    if (lantern_hash_tree_root_block_header(&canonical_header, &canonical_header_root) == SSZ_SUCCESS)
     {
         format_root_hex(&canonical_header_root, canonical_hex, sizeof(canonical_hex));
     }
     LanternBlockBody empty_body_snapshot;
     lantern_block_body_init(&empty_body_snapshot);
     LanternRoot default_body_root;
-    if (lantern_hash_tree_root_block_body(&empty_body_snapshot, &default_body_root) != 0)
+    if (lantern_hash_tree_root_block_body(&empty_body_snapshot, &default_body_root) != SSZ_SUCCESS)
     {
         memset(&default_body_root, 0, sizeof(default_body_root));
     }
@@ -1434,7 +1434,7 @@ static void client_log_genesis_anchors(
     LanternBlockHeader spec_header = client->state.latest_block_header;
     spec_header.state_root = state_root ? *state_root : spec_header.state_root;
     spec_header.body_root = default_body_root;
-    if (lantern_hash_tree_root_block_header(&spec_header, &spec_header_root) == 0)
+    if (lantern_hash_tree_root_block_header(&spec_header, &spec_header_root) == SSZ_SUCCESS)
     {
         format_root_hex(&spec_header_root, spec_header_hex, sizeof(spec_header_hex));
     }
@@ -1456,7 +1456,7 @@ static void client_log_genesis_anchors(
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to size genesis signatures list");
     }
-    else if (lantern_hash_tree_root_signed_block(&genesis_signed, &genesis_signed_block_root) == 0)
+    else if (lantern_hash_tree_root_signed_block(&genesis_signed, &genesis_signed_block_root) == SSZ_SUCCESS)
     {
         format_root_hex(&genesis_signed_block_root, signed_block_hex, sizeof(signed_block_hex));
     }
@@ -1508,7 +1508,7 @@ static lantern_client_error client_finalize_genesis_state(struct lantern_client 
         return LANTERN_CLIENT_ERR_GENESIS;
     }
     LanternRoot state_root;
-    if (lantern_hash_tree_root_state(&client->state, &state_root) != 0)
+    if (lantern_hash_tree_root_state(&client->state, &state_root) != SSZ_SUCCESS)
     {
         return LANTERN_CLIENT_ERR_GENESIS;
     }
@@ -2511,7 +2511,7 @@ static lantern_client_error client_load_state_from_checkpoint(
     bool decoded_owned = true;
     lantern_client_error result = LANTERN_CLIENT_OK;
 
-    if (lantern_ssz_decode_state(&decoded, state_bytes, state_len) != 0)
+    if (lantern_ssz_decode_state(&decoded, state_bytes, state_len) != SSZ_SUCCESS)
     {
         lantern_log_error(
             "checkpoint_sync",
@@ -2580,7 +2580,7 @@ static lantern_client_error client_load_state_from_checkpoint(
     }
 
     LanternRoot state_root;
-    if (lantern_hash_tree_root_state(&decoded, &state_root) != 0)
+    if (lantern_hash_tree_root_state(&decoded, &state_root) != SSZ_SUCCESS)
     {
         lantern_log_error(
             "checkpoint_sync",
@@ -2595,7 +2595,7 @@ static lantern_client_error client_load_state_from_checkpoint(
     LanternBlockHeader anchor_header = decoded.latest_block_header;
     anchor_header.state_root = state_root;
     LanternRoot anchor_root;
-    if (lantern_hash_tree_root_block_header(&anchor_header, &anchor_root) != 0)
+    if (lantern_hash_tree_root_block_header(&anchor_header, &anchor_root) != SSZ_SUCCESS)
     {
         lantern_log_error(
             "checkpoint_sync",
@@ -2663,7 +2663,7 @@ static lantern_client_error client_load_state_from_checkpoint(
     LanternRoot adjusted_anchor_root = {0};
     bool have_adjusted_state_root = false;
     bool have_adjusted_anchor_root = false;
-    if (lantern_hash_tree_root_state(&anchor_checkpoint_alias, &adjusted_state_root) == 0)
+    if (lantern_hash_tree_root_state(&anchor_checkpoint_alias, &adjusted_state_root) == SSZ_SUCCESS)
     {
         have_adjusted_state_root = true;
         LanternBlockHeader adjusted_anchor_header = anchor_checkpoint_alias.latest_block_header;
@@ -2671,7 +2671,7 @@ static lantern_client_error client_load_state_from_checkpoint(
         if (lantern_hash_tree_root_block_header(
                 &adjusted_anchor_header,
                 &adjusted_anchor_root)
-            == 0)
+            == SSZ_SUCCESS)
         {
             have_adjusted_anchor_root = true;
         }

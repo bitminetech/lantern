@@ -214,7 +214,7 @@ static int build_signed_block_for_import(
             return -1;
         }
         LanternRoot attestation_root;
-        if (lantern_hash_tree_root_attestation_data(&attestation->data, &attestation_root) != 0) {
+        if (lantern_hash_tree_root_attestation_data(&attestation->data, &attestation_root) != SSZ_SUCCESS) {
             return -1;
         }
         const uint8_t *pubkeys[1] = {pubkey};
@@ -241,7 +241,7 @@ static int build_signed_block_for_import(
 
     if (include_proposer_signature) {
         LanternRoot block_signature_root;
-        if (lantern_hash_tree_root_block(&out_block->block, &block_signature_root) != 0) {
+        if (lantern_hash_tree_root_block(&out_block->block, &block_signature_root) != SSZ_SUCCESS) {
             return -1;
         }
         if (!lantern_signature_sign(
@@ -255,7 +255,7 @@ static int build_signed_block_for_import(
         lantern_signature_zero(&out_block->signatures.proposer_signature);
     }
 
-    return lantern_hash_tree_root_block(&out_block->block, out_root);
+    return lantern_hash_tree_root_block(&out_block->block, out_root) == SSZ_SUCCESS ? 0 : -1;
 }
 
 static int resign_first_block_attestation(
@@ -299,7 +299,7 @@ static int resign_first_block_attestation(
         return -1;
     }
     LanternRoot attestation_root;
-    if (lantern_hash_tree_root_attestation_data(&attestation->data, &attestation_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&attestation->data, &attestation_root) != SSZ_SUCCESS) {
         return -1;
     }
     const uint8_t *pubkeys[1] = {pubkey};
@@ -322,7 +322,7 @@ static int resign_first_block_attestation(
         != 0) {
         return -1;
     }
-    if (lantern_hash_tree_root_block(&block->block, out_root) != 0) {
+    if (lantern_hash_tree_root_block(&block->block, out_root) != SSZ_SUCCESS) {
         return -1;
     }
     if (!lantern_signature_sign(
@@ -736,7 +736,7 @@ static int test_import_block_parent_mismatch(void) {
     client.state.latest_block_header.slot = 0;
     client.state.latest_block_header.proposer_index = 0;
 
-    if (lantern_hash_tree_root_block_header(&client.state.latest_block_header, &head_root) != 0) {
+    if (lantern_hash_tree_root_block_header(&client.state.latest_block_header, &head_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash latest block header\n");
         rc = 1;
         goto cleanup;
@@ -791,7 +791,7 @@ static int test_import_block_parent_mismatch(void) {
     parent_block.parent_root = head_root;
     client_test_fill_root(&parent_block.state_root, 0x44);
 
-    if (lantern_hash_tree_root_block(&parent_block, &parent_block_root) != 0)
+    if (lantern_hash_tree_root_block(&parent_block, &parent_block_root) != SSZ_SUCCESS)
     {
         fprintf(stderr, "failed to hash parent block\n");
         lantern_block_body_reset(&parent_block.body);
@@ -933,7 +933,7 @@ static int test_reqresp_collect_blocks_pending_fallback(void) {
     client_test_fill_root(&pending_block.block.state_root, 0x55);
 
     LanternRoot pending_root;
-    if (lantern_hash_tree_root_block(&pending_block.block, &pending_root) != 0) {
+    if (lantern_hash_tree_root_block(&pending_block.block, &pending_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash pending block root for reqresp collect test\n");
         rc = 1;
         goto cleanup;
@@ -973,7 +973,7 @@ static int test_reqresp_collect_blocks_pending_fallback(void) {
     }
 
     LanternRoot collected_root;
-    if (lantern_hash_tree_root_block(&collected.blocks[0].block, &collected_root) != 0) {
+    if (lantern_hash_tree_root_block(&collected.blocks[0].block, &collected_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash collected block for reqresp fallback test\n");
         lantern_signed_block_list_reset(&collected);
         rc = 1;
@@ -1348,7 +1348,7 @@ static int test_restore_persisted_blocks_skips_proposer_attestation_cache(void)
         fprintf(stderr, "failed to preview state root for proposer-only restore test\n");
         goto cleanup;
     }
-    if (lantern_hash_tree_root_block(&block.block, &block_root) != 0) {
+    if (lantern_hash_tree_root_block(&block.block, &block_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash proposer-only restore block\n");
         goto cleanup;
     }

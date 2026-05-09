@@ -621,7 +621,7 @@ int lantern_fork_choice_set_anchor_with_state(
     if (block_root_hint) {
         root = *block_root_hint;
     } else {
-        if (lantern_hash_tree_root_block(anchor_block, &root) != 0) {
+        if (lantern_hash_tree_root_block(anchor_block, &root) != SSZ_SUCCESS) {
             return -1;
         }
     }
@@ -970,12 +970,12 @@ int lantern_fork_choice_add_block_with_state(
     if (block_root_hint) {
         block_root = *block_root_hint;
     } else {
-        if (lantern_hash_tree_root_block(block, &block_root) != 0) {
+        if (lantern_hash_tree_root_block(block, &block_root) != SSZ_SUCCESS) {
             return -1;
         }
     }
     LanternRoot hashed_block_root = {0};
-    bool have_hashed_block_root = lantern_hash_tree_root_block(block, &hashed_block_root) == 0;
+    bool have_hashed_block_root = lantern_hash_tree_root_block(block, &hashed_block_root) == SSZ_SUCCESS;
     char hinted_block_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     char hashed_block_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     if (block_root_hint && have_hashed_block_root

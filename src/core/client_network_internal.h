@@ -86,7 +86,6 @@ struct lantern_peer_status_entry
     bool has_status;                      /**< True if status has been received */
     uint64_t last_status_ms;              /**< Timestamp of last status message */
     bool status_request_inflight;         /**< True if status request is pending */
-    bool reqresp_legacy_len;              /**< True if peer uses legacy reqresp length framing */
     uint32_t consecutive_blocks_failures; /**< Count of consecutive request failures */
     uint32_t outstanding_status_requests; /**< Number of outstanding status requests */
     uint32_t consecutive_ping_failures;   /**< Count of consecutive ping failures */
@@ -275,34 +274,6 @@ void lantern_client_note_status_request_start(
 void lantern_client_status_request_failed(
     struct lantern_client *client,
     const char *peer_id);
-
-/**
- * Mark a peer as using legacy reqresp length framing.
- *
- * Legacy peers encode the varint length as the compressed payload size.
- *
- * @param client   Client instance
- * @param peer_id  Peer ID to mark
- *
- * @note Thread safety: This function acquires status_lock
- */
-void lantern_client_mark_peer_reqresp_legacy(
-    struct lantern_client *client,
-    const char *peer_id);
-
-/**
- * Check whether a peer uses legacy reqresp length framing.
- *
- * @param client   Client instance
- * @param peer_id  Peer ID to check
- * @return true if peer is marked legacy, false otherwise
- *
- * @note Thread safety: This function acquires status_lock
- */
-bool lantern_client_peer_reqresp_legacy(
-    struct lantern_client *client,
-    const char *peer_id);
-
 
 /**
  * Update status request tracking counters.

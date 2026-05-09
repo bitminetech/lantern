@@ -1014,8 +1014,8 @@ static int compute_status_root(const LanternStatusMessage *status, LanternRoot *
     }
     LanternRoot finalized_root;
     LanternRoot head_root;
-    if (lantern_hash_tree_root_checkpoint(&status->finalized, &finalized_root) != 0
-        || lantern_hash_tree_root_checkpoint(&status->head, &head_root) != 0) {
+    if (lantern_hash_tree_root_checkpoint(&status->finalized, &finalized_root) != SSZ_SUCCESS
+        || lantern_hash_tree_root_checkpoint(&status->head, &head_root) != SSZ_SUCCESS) {
         return -1;
     }
     ssz_chunk_t chunks[2];
@@ -1035,7 +1035,7 @@ static int compute_blocks_by_root_request_root(
     if (!request || !out_root) {
         return -1;
     }
-    return lantern_merkleize_root_list(&request->roots, LANTERN_MAX_REQUEST_BLOCKS, out_root);
+    return lantern_merkleize_root_list(&request->roots, LANTERN_MAX_REQUEST_BLOCKS, out_root) == SSZ_SUCCESS ? 0 : -1;
 }
 
 static int compute_hash_tree_opening_root_from_serialized(
@@ -1479,7 +1479,7 @@ static int run_bitlist_fixture(
 
     LanternRoot root;
     size_t chunk_limit = (max_bits + (SSZ_BYTES_PER_CHUNK * 8u) - 1u) / (SSZ_BYTES_PER_CHUNK * 8u);
-    if (lantern_merkleize_bitlist(&bitlist, chunk_limit == 0u ? 1u : chunk_limit, &root) != 0) {
+    if (lantern_merkleize_bitlist(&bitlist, chunk_limit == 0u ? 1u : chunk_limit, &root) != SSZ_SUCCESS) {
         free(bits);
         free(decoded);
         free(encoded);
@@ -1944,7 +1944,7 @@ static int run_signature_fixture(
     }
     memcpy(signature.bytes, expected_serialized->data, LANTERN_SIGNATURE_SIZE);
     LanternRoot root;
-    if (lantern_hash_tree_root_signature(&signature, &root) != 0) {
+    if (lantern_hash_tree_root_signature(&signature, &root) != SSZ_SUCCESS) {
         byte_buffer_reset(&parsed);
         return record_failure(path, type_name, "failed to compute signature root");
     }
@@ -2016,18 +2016,18 @@ static int run_config_fixture(
     }
     uint8_t encoded[LANTERN_CONFIG_SSZ_SIZE];
     size_t encoded_len = sizeof(encoded);
-    if (lantern_ssz_encode_config(&config, encoded, sizeof(encoded), &encoded_len) != 0
+    if (lantern_ssz_encode_config(&config, encoded, sizeof(encoded), &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         return record_failure(path, type_name, "config encode failed");
     }
     LanternConfig decoded = {0};
-    if (lantern_ssz_decode_config(&decoded, expected_serialized->data, expected_serialized->len) != 0
-        || lantern_ssz_encode_config(&decoded, encoded, sizeof(encoded), &encoded_len) != 0
+    if (lantern_ssz_decode_config(&decoded, expected_serialized->data, expected_serialized->len) != SSZ_SUCCESS
+        || lantern_ssz_encode_config(&decoded, encoded, sizeof(encoded), &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         return record_failure(path, type_name, "config decode failed");
     }
     LanternRoot root;
-    if (lantern_hash_tree_root_config(&config, &root) != 0) {
+    if (lantern_hash_tree_root_config(&config, &root) != SSZ_SUCCESS) {
         return record_failure(path, type_name, "config root failed");
     }
     return expect_root_equal(path, type_name, "hash_tree_root", expected_root, &root);
@@ -2046,18 +2046,18 @@ static int run_checkpoint_fixture(
     }
     uint8_t encoded[LANTERN_CHECKPOINT_SSZ_SIZE];
     size_t encoded_len = sizeof(encoded);
-    if (lantern_ssz_encode_checkpoint(&checkpoint, encoded, sizeof(encoded), &encoded_len) != 0
+    if (lantern_ssz_encode_checkpoint(&checkpoint, encoded, sizeof(encoded), &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         return record_failure(path, type_name, "checkpoint encode failed");
     }
     LanternCheckpoint decoded;
-    if (lantern_ssz_decode_checkpoint(&decoded, expected_serialized->data, expected_serialized->len) != 0
-        || lantern_ssz_encode_checkpoint(&decoded, encoded, sizeof(encoded), &encoded_len) != 0
+    if (lantern_ssz_decode_checkpoint(&decoded, expected_serialized->data, expected_serialized->len) != SSZ_SUCCESS
+        || lantern_ssz_encode_checkpoint(&decoded, encoded, sizeof(encoded), &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         return record_failure(path, type_name, "checkpoint decode failed");
     }
     LanternRoot root;
-    if (lantern_hash_tree_root_checkpoint(&checkpoint, &root) != 0) {
+    if (lantern_hash_tree_root_checkpoint(&checkpoint, &root) != SSZ_SUCCESS) {
         return record_failure(path, type_name, "checkpoint root failed");
     }
     return expect_root_equal(path, type_name, "hash_tree_root", expected_root, &root);
@@ -2076,18 +2076,18 @@ static int run_attestation_data_fixture(
     }
     uint8_t encoded[LANTERN_ATTESTATION_DATA_SSZ_SIZE];
     size_t encoded_len = sizeof(encoded);
-    if (lantern_ssz_encode_attestation_data(&data, encoded, sizeof(encoded), &encoded_len) != 0
+    if (lantern_ssz_encode_attestation_data(&data, encoded, sizeof(encoded), &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         return record_failure(path, type_name, "attestation-data encode failed");
     }
     LanternAttestationData decoded;
-    if (lantern_ssz_decode_attestation_data(&decoded, expected_serialized->data, expected_serialized->len) != 0
-        || lantern_ssz_encode_attestation_data(&decoded, encoded, sizeof(encoded), &encoded_len) != 0
+    if (lantern_ssz_decode_attestation_data(&decoded, expected_serialized->data, expected_serialized->len) != SSZ_SUCCESS
+        || lantern_ssz_encode_attestation_data(&decoded, encoded, sizeof(encoded), &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         return record_failure(path, type_name, "attestation-data decode failed");
     }
     LanternRoot root;
-    if (lantern_hash_tree_root_attestation_data(&data, &root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&data, &root) != SSZ_SUCCESS) {
         return record_failure(path, type_name, "attestation-data root failed");
     }
     return expect_root_equal(path, type_name, "hash_tree_root", expected_root, &root);
@@ -2106,18 +2106,18 @@ static int run_attestation_fixture(
     }
     uint8_t encoded[LANTERN_VOTE_SSZ_SIZE];
     size_t encoded_len = sizeof(encoded);
-    if (lantern_ssz_encode_vote(&vote, encoded, sizeof(encoded), &encoded_len) != 0
+    if (lantern_ssz_encode_vote(&vote, encoded, sizeof(encoded), &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         return record_failure(path, type_name, "attestation encode failed");
     }
     LanternVote decoded;
-    if (lantern_ssz_decode_vote(&decoded, expected_serialized->data, expected_serialized->len) != 0
-        || lantern_ssz_encode_vote(&decoded, encoded, sizeof(encoded), &encoded_len) != 0
+    if (lantern_ssz_decode_vote(&decoded, expected_serialized->data, expected_serialized->len) != SSZ_SUCCESS
+        || lantern_ssz_encode_vote(&decoded, encoded, sizeof(encoded), &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         return record_failure(path, type_name, "attestation decode failed");
     }
     LanternRoot root;
-    if (lantern_hash_tree_root_vote(&vote, &root) != 0) {
+    if (lantern_hash_tree_root_vote(&vote, &root) != SSZ_SUCCESS) {
         return record_failure(path, type_name, "attestation root failed");
     }
     return expect_root_equal(path, type_name, "hash_tree_root", expected_root, &root);
@@ -2137,19 +2137,19 @@ static int run_signed_attestation_fixture(
     }
     uint8_t encoded[LANTERN_SIGNED_VOTE_SSZ_SIZE];
     size_t encoded_len = sizeof(encoded);
-    if (lantern_ssz_encode_signed_vote(&vote, encoded, sizeof(encoded), &encoded_len) != 0
+    if (lantern_ssz_encode_signed_vote(&vote, encoded, sizeof(encoded), &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         return record_failure(path, type_name, "signed-attestation encode failed");
     }
     LanternSignedVote decoded;
     memset(&decoded, 0, sizeof(decoded));
-    if (lantern_ssz_decode_signed_vote(&decoded, expected_serialized->data, expected_serialized->len) != 0
-        || lantern_ssz_encode_signed_vote(&decoded, encoded, sizeof(encoded), &encoded_len) != 0
+    if (lantern_ssz_decode_signed_vote(&decoded, expected_serialized->data, expected_serialized->len) != SSZ_SUCCESS
+        || lantern_ssz_encode_signed_vote(&decoded, encoded, sizeof(encoded), &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         return record_failure(path, type_name, "signed-attestation decode failed");
     }
     LanternRoot root;
-    if (lantern_hash_tree_root_signed_vote(&vote, &root) != 0) {
+    if (lantern_hash_tree_root_signed_vote(&vote, &root) != SSZ_SUCCESS) {
         return record_failure(path, type_name, "signed-attestation root failed");
     }
     return expect_root_equal(path, type_name, "hash_tree_root", expected_root, &root);
@@ -2172,7 +2172,7 @@ static int run_aggregated_attestation_fixture(
     uint8_t *encoded = (uint8_t *)malloc(encoded_capacity);
     size_t encoded_len = 0u;
     if (!encoded
-        || lantern_ssz_encode_aggregated_attestation(&attestation, encoded, encoded_capacity, &encoded_len) != 0
+        || lantern_ssz_encode_aggregated_attestation(&attestation, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         free(encoded);
         lantern_aggregated_attestation_reset(&attestation);
@@ -2180,8 +2180,8 @@ static int run_aggregated_attestation_fixture(
     }
     LanternAggregatedAttestation decoded;
     lantern_aggregated_attestation_init(&decoded);
-    if (lantern_ssz_decode_aggregated_attestation(&decoded, expected_serialized->data, expected_serialized->len) != 0
-        || lantern_ssz_encode_aggregated_attestation(&decoded, encoded, encoded_capacity, &encoded_len) != 0
+    if (lantern_ssz_decode_aggregated_attestation(&decoded, expected_serialized->data, expected_serialized->len) != SSZ_SUCCESS
+        || lantern_ssz_encode_aggregated_attestation(&decoded, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         free(encoded);
         lantern_aggregated_attestation_reset(&attestation);
@@ -2189,7 +2189,7 @@ static int run_aggregated_attestation_fixture(
         return record_failure(path, type_name, "aggregated-attestation decode failed");
     }
     LanternRoot root;
-    if (lantern_hash_tree_root_aggregated_attestation(&attestation, &root) != 0) {
+    if (lantern_hash_tree_root_aggregated_attestation(&attestation, &root) != SSZ_SUCCESS) {
         free(encoded);
         lantern_aggregated_attestation_reset(&attestation);
         lantern_aggregated_attestation_reset(&decoded);
@@ -2218,7 +2218,7 @@ static int run_aggregated_signature_proof_fixture(
     uint8_t *encoded = (uint8_t *)malloc(encoded_capacity);
     size_t encoded_len = 0u;
     if (!encoded
-        || lantern_ssz_encode_aggregated_signature_proof(&proof, encoded, encoded_capacity, &encoded_len) != 0
+        || lantern_ssz_encode_aggregated_signature_proof(&proof, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         free(encoded);
         lantern_aggregated_signature_proof_reset(&proof);
@@ -2226,8 +2226,8 @@ static int run_aggregated_signature_proof_fixture(
     }
     LanternAggregatedSignatureProof decoded;
     lantern_aggregated_signature_proof_init(&decoded);
-    if (lantern_ssz_decode_aggregated_signature_proof(&decoded, expected_serialized->data, expected_serialized->len) != 0
-        || lantern_ssz_encode_aggregated_signature_proof(&decoded, encoded, encoded_capacity, &encoded_len) != 0
+    if (lantern_ssz_decode_aggregated_signature_proof(&decoded, expected_serialized->data, expected_serialized->len) != SSZ_SUCCESS
+        || lantern_ssz_encode_aggregated_signature_proof(&decoded, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         free(encoded);
         lantern_aggregated_signature_proof_reset(&proof);
@@ -2235,7 +2235,7 @@ static int run_aggregated_signature_proof_fixture(
         return record_failure(path, type_name, "aggregated-signature-proof decode failed");
     }
     LanternRoot root;
-    if (lantern_hash_tree_root_aggregated_signature_proof(&proof, &root) != 0) {
+    if (lantern_hash_tree_root_aggregated_signature_proof(&proof, &root) != SSZ_SUCCESS) {
         free(encoded);
         lantern_aggregated_signature_proof_reset(&proof);
         lantern_aggregated_signature_proof_reset(&decoded);
@@ -2261,7 +2261,7 @@ static int run_signed_aggregated_attestation_fixture(
     lantern_signed_aggregated_attestation_init(&attestation);
     if (!encoded
         || parse_signed_aggregated_attestation_object(doc, value_idx, &attestation) != 0
-        || lantern_ssz_encode_signed_aggregated_attestation(&attestation, encoded, encoded_capacity, &encoded_len) != 0
+        || lantern_ssz_encode_signed_aggregated_attestation(&attestation, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         free(encoded);
         lantern_signed_aggregated_attestation_reset(&attestation);
@@ -2269,8 +2269,8 @@ static int run_signed_aggregated_attestation_fixture(
     }
     LanternSignedAggregatedAttestation decoded;
     lantern_signed_aggregated_attestation_init(&decoded);
-    if (lantern_ssz_decode_signed_aggregated_attestation(&decoded, expected_serialized->data, expected_serialized->len) != 0
-        || lantern_ssz_encode_signed_aggregated_attestation(&decoded, encoded, encoded_capacity, &encoded_len) != 0
+    if (lantern_ssz_decode_signed_aggregated_attestation(&decoded, expected_serialized->data, expected_serialized->len) != SSZ_SUCCESS
+        || lantern_ssz_encode_signed_aggregated_attestation(&decoded, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         free(encoded);
         lantern_signed_aggregated_attestation_reset(&attestation);
@@ -2278,7 +2278,7 @@ static int run_signed_aggregated_attestation_fixture(
         return record_failure(path, type_name, "signed-aggregated-attestation decode failed");
     }
     LanternRoot root;
-    if (lantern_hash_tree_root_signed_aggregated_attestation(&attestation, &root) != 0) {
+    if (lantern_hash_tree_root_signed_aggregated_attestation(&attestation, &root) != SSZ_SUCCESS) {
         free(encoded);
         lantern_signed_aggregated_attestation_reset(&attestation);
         lantern_signed_aggregated_attestation_reset(&decoded);
@@ -2304,7 +2304,7 @@ static int run_block_signatures_fixture(
     lantern_block_signatures_init(&signatures);
     if (!encoded
         || parse_block_signatures_object(doc, value_idx, &signatures) != 0
-        || lantern_ssz_encode_block_signatures(&signatures, encoded, encoded_capacity, &encoded_len) != 0
+        || lantern_ssz_encode_block_signatures(&signatures, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         free(encoded);
         lantern_block_signatures_reset(&signatures);
@@ -2312,8 +2312,8 @@ static int run_block_signatures_fixture(
     }
     LanternBlockSignatures decoded;
     lantern_block_signatures_init(&decoded);
-    if (lantern_ssz_decode_block_signatures(&decoded, expected_serialized->data, expected_serialized->len) != 0
-        || lantern_ssz_encode_block_signatures(&decoded, encoded, encoded_capacity, &encoded_len) != 0
+    if (lantern_ssz_decode_block_signatures(&decoded, expected_serialized->data, expected_serialized->len) != SSZ_SUCCESS
+        || lantern_ssz_encode_block_signatures(&decoded, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         free(encoded);
         lantern_block_signatures_reset(&signatures);
@@ -2321,7 +2321,7 @@ static int run_block_signatures_fixture(
         return record_failure(path, type_name, "block-signatures decode failed");
     }
     LanternRoot root;
-    if (lantern_hash_tree_root_block_signatures(&signatures, &root) != 0) {
+    if (lantern_hash_tree_root_block_signatures(&signatures, &root) != SSZ_SUCCESS) {
         free(encoded);
         lantern_block_signatures_reset(&signatures);
         lantern_block_signatures_reset(&decoded);
@@ -2348,7 +2348,7 @@ static int run_block_body_fixture(
         free(encoded);
         return record_failure(path, type_name, "invalid block-body fixture");
     }
-    if (lantern_ssz_encode_block_body(&body, encoded, encoded_capacity, &encoded_len) != 0
+    if (lantern_ssz_encode_block_body(&body, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         free(encoded);
         lantern_block_body_reset(&body);
@@ -2356,8 +2356,8 @@ static int run_block_body_fixture(
     }
     LanternBlockBody decoded;
     lantern_block_body_init(&decoded);
-    if (lantern_ssz_decode_block_body(&decoded, expected_serialized->data, expected_serialized->len) != 0
-        || lantern_ssz_encode_block_body(&decoded, encoded, encoded_capacity, &encoded_len) != 0
+    if (lantern_ssz_decode_block_body(&decoded, expected_serialized->data, expected_serialized->len) != SSZ_SUCCESS
+        || lantern_ssz_encode_block_body(&decoded, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         free(encoded);
         lantern_block_body_reset(&body);
@@ -2365,7 +2365,7 @@ static int run_block_body_fixture(
         return record_failure(path, type_name, "block-body decode failed");
     }
     LanternRoot root;
-    if (lantern_hash_tree_root_block_body(&body, &root) != 0) {
+    if (lantern_hash_tree_root_block_body(&body, &root) != SSZ_SUCCESS) {
         free(encoded);
         lantern_block_body_reset(&body);
         lantern_block_body_reset(&decoded);
@@ -2400,18 +2400,18 @@ static int run_block_header_fixture(
     }
     uint8_t encoded[LANTERN_BLOCK_HEADER_SSZ_SIZE];
     size_t encoded_len = sizeof(encoded);
-    if (lantern_ssz_encode_block_header(&header, encoded, sizeof(encoded), &encoded_len) != 0
+    if (lantern_ssz_encode_block_header(&header, encoded, sizeof(encoded), &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         return record_failure(path, type_name, "block-header encode failed");
     }
     LanternBlockHeader decoded;
-    if (lantern_ssz_decode_block_header(&decoded, expected_serialized->data, expected_serialized->len) != 0
-        || lantern_ssz_encode_block_header(&decoded, encoded, sizeof(encoded), &encoded_len) != 0
+    if (lantern_ssz_decode_block_header(&decoded, expected_serialized->data, expected_serialized->len) != SSZ_SUCCESS
+        || lantern_ssz_encode_block_header(&decoded, encoded, sizeof(encoded), &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         return record_failure(path, type_name, "block-header decode failed");
     }
     LanternRoot root;
-    if (lantern_hash_tree_root_block_header(&header, &root) != 0) {
+    if (lantern_hash_tree_root_block_header(&header, &root) != SSZ_SUCCESS) {
         return record_failure(path, type_name, "block-header root failed");
     }
     return expect_root_equal(path, type_name, "hash_tree_root", expected_root, &root);
@@ -2430,18 +2430,18 @@ static int run_validator_fixture(
     }
     uint8_t encoded[LANTERN_VALIDATOR_SSZ_SIZE];
     size_t encoded_len = sizeof(encoded);
-    if (lantern_ssz_encode_validator(&validator, encoded, sizeof(encoded), &encoded_len) != 0
+    if (lantern_ssz_encode_validator(&validator, encoded, sizeof(encoded), &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         return record_failure(path, type_name, "validator encode failed");
     }
     LanternValidator decoded;
-    if (lantern_ssz_decode_validator(&decoded, expected_serialized->data, expected_serialized->len) != 0
-        || lantern_ssz_encode_validator(&decoded, encoded, sizeof(encoded), &encoded_len) != 0
+    if (lantern_ssz_decode_validator(&decoded, expected_serialized->data, expected_serialized->len) != SSZ_SUCCESS
+        || lantern_ssz_encode_validator(&decoded, encoded, sizeof(encoded), &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         return record_failure(path, type_name, "validator decode failed");
     }
     LanternRoot root;
-    if (lantern_hash_tree_root_validator(&validator, &root) != 0) {
+    if (lantern_hash_tree_root_validator(&validator, &root) != SSZ_SUCCESS) {
         return record_failure(path, type_name, "validator root failed");
     }
     return expect_root_equal(path, type_name, "hash_tree_root", expected_root, &root);
@@ -2464,7 +2464,7 @@ static int run_block_fixture(
     uint8_t *encoded = (uint8_t *)malloc(encoded_capacity);
     size_t encoded_len = 0u;
     if (!encoded
-        || lantern_ssz_encode_block(&block, encoded, encoded_capacity, &encoded_len) != 0
+        || lantern_ssz_encode_block(&block, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         free(encoded);
         reset_block(&block);
@@ -2472,8 +2472,8 @@ static int run_block_fixture(
     }
     LanternBlock decoded;
     memset(&decoded, 0, sizeof(decoded));
-    if (lantern_ssz_decode_block(&decoded, expected_serialized->data, expected_serialized->len) != 0
-        || lantern_ssz_encode_block(&decoded, encoded, encoded_capacity, &encoded_len) != 0
+    if (lantern_ssz_decode_block(&decoded, expected_serialized->data, expected_serialized->len) != SSZ_SUCCESS
+        || lantern_ssz_encode_block(&decoded, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         free(encoded);
         reset_block(&block);
@@ -2481,7 +2481,7 @@ static int run_block_fixture(
         return record_failure(path, type_name, "block decode failed");
     }
     LanternRoot root;
-    if (lantern_hash_tree_root_block(&block, &root) != 0) {
+    if (lantern_hash_tree_root_block(&block, &root) != SSZ_SUCCESS) {
         free(encoded);
         reset_block(&block);
         reset_block(&decoded);
@@ -2510,7 +2510,7 @@ static int run_signed_block_fixture(
     uint8_t *encoded = (uint8_t *)malloc(encoded_capacity);
     size_t encoded_len = 0u;
     if (!encoded
-        || lantern_ssz_encode_signed_block_canonical(&block, encoded, encoded_capacity, &encoded_len) != 0
+        || lantern_ssz_encode_signed_block(&block, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         free(encoded);
         lantern_signed_block_reset(&block);
@@ -2518,8 +2518,8 @@ static int run_signed_block_fixture(
     }
     LanternSignedBlock decoded;
     lantern_signed_block_init(&decoded);
-    if (lantern_ssz_decode_signed_block_strict(&decoded, expected_serialized->data, expected_serialized->len) != 0
-        || lantern_ssz_encode_signed_block_canonical(&decoded, encoded, encoded_capacity, &encoded_len) != 0
+    if (lantern_ssz_decode_signed_block(&decoded, expected_serialized->data, expected_serialized->len) != SSZ_SUCCESS
+        || lantern_ssz_encode_signed_block(&decoded, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         free(encoded);
         lantern_signed_block_reset(&block);
@@ -2527,7 +2527,7 @@ static int run_signed_block_fixture(
         return record_failure(path, type_name, "signed-block decode failed");
     }
     LanternRoot root;
-    if (lantern_hash_tree_root_signed_block(&block, &root) != 0) {
+    if (lantern_hash_tree_root_signed_block(&block, &root) != SSZ_SUCCESS) {
         free(encoded);
         lantern_signed_block_reset(&block);
         lantern_signed_block_reset(&decoded);
@@ -2568,7 +2568,7 @@ static int run_state_fixture(
     uint8_t *encoded = (uint8_t *)malloc(encoded_capacity);
     size_t encoded_len = 0u;
     if (!encoded
-        || lantern_ssz_encode_state(&state, encoded, encoded_capacity, &encoded_len) != 0
+        || lantern_ssz_encode_state(&state, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         free(encoded);
         lantern_state_reset(&state);
@@ -2576,8 +2576,8 @@ static int run_state_fixture(
     }
     LanternState decoded;
     lantern_state_init(&decoded);
-    if (lantern_ssz_decode_state(&decoded, expected_serialized->data, expected_serialized->len) != 0
-        || lantern_ssz_encode_state(&decoded, encoded, encoded_capacity, &encoded_len) != 0
+    if (lantern_ssz_decode_state(&decoded, expected_serialized->data, expected_serialized->len) != SSZ_SUCCESS
+        || lantern_ssz_encode_state(&decoded, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
         || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
         free(encoded);
         lantern_state_reset(&state);
@@ -2585,7 +2585,7 @@ static int run_state_fixture(
         return record_failure(path, type_name, "state decode failed");
     }
     LanternRoot root;
-    if (lantern_hash_tree_root_state(&state, &root) != 0) {
+    if (lantern_hash_tree_root_state(&state, &root) != SSZ_SUCCESS) {
         free(encoded);
         lantern_state_reset(&state);
         lantern_state_reset(&decoded);

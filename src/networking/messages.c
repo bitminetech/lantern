@@ -176,11 +176,11 @@ static int encode_status_raw(
     }
     size_t offset = 0;
     size_t checkpoint_written = 0;
-    if (lantern_ssz_encode_checkpoint(&status->finalized, out + offset, out_len - offset, &checkpoint_written) != 0) {
+    if (lantern_ssz_encode_checkpoint(&status->finalized, out + offset, out_len - offset, &checkpoint_written) != SSZ_SUCCESS) {
         return -1;
     }
     offset += checkpoint_written;
-    if (lantern_ssz_encode_checkpoint(&status->head, out + offset, out_len - offset, &checkpoint_written) != 0) {
+    if (lantern_ssz_encode_checkpoint(&status->head, out + offset, out_len - offset, &checkpoint_written) != SSZ_SUCCESS) {
         return -1;
     }
     offset += checkpoint_written;
@@ -208,7 +208,7 @@ int lantern_network_status_decode(
         log_status_payload_debug("status decode invalid_len", data, data_len);
         return -1;
     }
-    if (lantern_ssz_decode_checkpoint(&status->finalized, data, LANTERN_CHECKPOINT_SSZ_SIZE) != 0) {
+    if (lantern_ssz_decode_checkpoint(&status->finalized, data, LANTERN_CHECKPOINT_SSZ_SIZE) != SSZ_SUCCESS) {
         log_status_payload_debug("status decode finalized_failed", data, data_len);
         return -1;
     }
@@ -349,10 +349,6 @@ int lantern_network_blocks_by_root_request_decode(
         }
     }
 
-    /* Legacy compatibility: some older peers encoded only packed roots bytes. */
-    if (data_len % LANTERN_ROOT_SIZE == 0) {
-        return decode_blocks_by_root_list(req, data, data_len);
-    }
     return -1;
 }
 
@@ -480,7 +476,7 @@ int lantern_network_signed_block_list_encode(
             }
 
             size_t block_written = 0;
-            if (lantern_ssz_encode_signed_block_canonical(
+            if (lantern_ssz_encode_signed_block(
                     &resp->blocks[i],
                     buffer + payload_cursor,
                     capacity - payload_cursor,
@@ -597,7 +593,7 @@ int lantern_network_signed_block_list_decode(
             return -1;
         }
         LanternSignedBlock *entry = &resp->blocks[i];
-        if (lantern_ssz_decode_signed_block_strict(entry, payload_region + start_offset, span) != 0) {
+        if (lantern_ssz_decode_signed_block(entry, payload_region + start_offset, span) != SSZ_SUCCESS) {
             lantern_signed_block_list_reset(resp);
             return -1;
         }

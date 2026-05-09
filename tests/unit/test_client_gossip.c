@@ -215,7 +215,7 @@ static int sign_single_participant_aggregated_attestation(
     }
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&out_attestation->data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&out_attestation->data, &data_root) != SSZ_SUCCESS) {
         lantern_signed_aggregated_attestation_reset(out_attestation);
         return -1;
     }
@@ -267,13 +267,13 @@ static int build_single_participant_aggregated_attestation(
     data.head.slot = child_slot;
     data.head.root = *child_root;
     LanternRoot state_root;
-    if (lantern_hash_tree_root_state(&client->state, &state_root) != 0) {
+    if (lantern_hash_tree_root_state(&client->state, &state_root) != SSZ_SUCCESS) {
         return -1;
     }
     LanternBlockHeader checkpoint_header = client->state.latest_block_header;
     checkpoint_header.state_root = state_root;
     LanternRoot checkpoint_root;
-    if (lantern_hash_tree_root_block_header(&checkpoint_header, &checkpoint_root) != 0) {
+    if (lantern_hash_tree_root_block_header(&checkpoint_header, &checkpoint_root) != SSZ_SUCCESS) {
         return -1;
     }
     /*
@@ -437,7 +437,7 @@ static int test_gossip_aggregated_attestation_caches_valid_proof(void)
     }
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&attestation.data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&attestation.data, &data_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash attestation data root\n");
         goto cleanup_attestation;
     }
@@ -541,7 +541,7 @@ static int test_gossip_aggregated_attestation_rejects_invalid_proof(void)
         fprintf(stderr, "aggregated attestation validator pubkey missing\n");
         goto cleanup_attestation;
     }
-    if (lantern_hash_tree_root_attestation_data(&attestation.data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&attestation.data, &data_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash aggregated attestation data root\n");
         goto cleanup_attestation;
     }

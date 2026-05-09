@@ -252,7 +252,7 @@ int lantern_gossip_encode_signed_block_snappy(
         return -1;
     }
     size_t raw_written = raw_capacity;
-    if (lantern_ssz_encode_signed_block_canonical(block, raw, raw_capacity, &raw_written) != 0) {
+    if (lantern_ssz_encode_signed_block(block, raw, raw_capacity, &raw_written) != SSZ_SUCCESS) {
         free(raw);
         return -1;
     }
@@ -325,7 +325,7 @@ int lantern_gossip_decode_signed_block_snappy(
         free(raw);
         return -1;
     }
-    int decode_rc = lantern_ssz_decode_signed_block_strict(block, raw, written);
+    ssz_error_t decode_rc = lantern_ssz_decode_signed_block(block, raw, written);
     if (decode_rc != 0) {
         free(raw);
         return -1;
@@ -356,7 +356,7 @@ int lantern_gossip_encode_signed_vote_snappy(
     }
     uint8_t raw[LANTERN_SIGNED_VOTE_SSZ_SIZE];
     size_t raw_written = sizeof(raw);
-    if (lantern_ssz_encode_signed_vote(vote, raw, sizeof(raw), &raw_written) != 0) {
+    if (lantern_ssz_encode_signed_vote(vote, raw, sizeof(raw), &raw_written) != SSZ_SUCCESS) {
         return -1;
     }
     /* Use raw snappy (no framing) for gossip messages per Eth2 networking spec */
@@ -418,7 +418,7 @@ int lantern_gossip_decode_signed_vote_snappy(
         free(raw);
         return -1;
     }
-    if (lantern_ssz_decode_signed_vote(vote, raw, raw_len) != 0) {
+    if (lantern_ssz_decode_signed_vote(vote, raw, raw_len) != SSZ_SUCCESS) {
         free(raw);
         return -1;
     }
@@ -450,7 +450,7 @@ int lantern_gossip_encode_signed_aggregated_attestation_snappy(
         return -1;
     }
     size_t raw_written = raw_capacity;
-    if (lantern_ssz_encode_signed_aggregated_attestation(attestation, raw, raw_capacity, &raw_written) != 0) {
+    if (lantern_ssz_encode_signed_aggregated_attestation(attestation, raw, raw_capacity, &raw_written) != SSZ_SUCCESS) {
         free(raw);
         return -1;
     }
@@ -486,7 +486,7 @@ int lantern_gossip_decode_signed_aggregated_attestation_snappy(
         free(raw);
         return -1;
     }
-    if (lantern_ssz_decode_signed_aggregated_attestation(attestation, raw, raw_len) != 0) {
+    if (lantern_ssz_decode_signed_aggregated_attestation(attestation, raw, raw_len) != SSZ_SUCCESS) {
         free(raw);
         return -1;
     }

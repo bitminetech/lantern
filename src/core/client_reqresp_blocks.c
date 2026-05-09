@@ -181,7 +181,7 @@ static bool lantern_client_process_stream_block_chunk(
 
     LanternSignedBlock streamed_block;
     lantern_signed_block_init(&streamed_block);
-    int decode_rc = lantern_ssz_decode_signed_block_strict(&streamed_block, raw_block, written);
+    ssz_error_t decode_rc = lantern_ssz_decode_signed_block(&streamed_block, raw_block, written);
     if (decode_rc != 0)
     {
         lantern_log_error(
@@ -196,7 +196,7 @@ static bool lantern_client_process_stream_block_chunk(
     }
 
     LanternRoot computed = {{0}};
-    if (lantern_hash_tree_root_block(&streamed_block.block, &computed) != 0)
+    if (lantern_hash_tree_root_block(&streamed_block.block, &computed) != SSZ_SUCCESS)
     {
         lantern_log_warn(
             "reqresp",
@@ -475,12 +475,7 @@ static void *block_request_worker(void *arg)
         }
     }
 
-    bool use_legacy_len = false;
-    if (ctx->client && ctx->peer_text[0])
-    {
-        use_legacy_len = lantern_client_peer_reqresp_legacy(ctx->client, ctx->peer_text);
-    }
-    size_t declared_len = use_legacy_len ? payload_len : raw_written;
+    size_t declared_len = raw_written;
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
     if (unsigned_varint_encode(declared_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK)
@@ -496,14 +491,13 @@ static void *block_request_worker(void *arg)
     lantern_log_debug(
         "reqresp",
         &meta,
-        "sending %s request roots=%zu first_root=%s declared_bytes=%zu raw_bytes=%zu compressed_bytes=%zu legacy_len=%s",
+        "sending %s request roots=%zu first_root=%s declared_bytes=%zu raw_bytes=%zu compressed_bytes=%zu",
         ctx->protocol_id,
         ctx->root_count,
         root_hex[0] ? root_hex : "0x0",
         declared_len,
         raw_written,
-        payload_len,
-        use_legacy_len ? "true" : "false");
+        payload_len);
 
     ssize_t write_err = 0;
     if (stream_write_all(stream, header, header_len, &write_err) != 0

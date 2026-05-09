@@ -22,6 +22,13 @@ static void expect_zero(int rc, const char *label) {
     }
 }
 
+static void expect_ssz_success(ssz_error_t err, const char *label) {
+    if (err != SSZ_SUCCESS) {
+        fprintf(stderr, "%s failed (ssz_error=%d)\n", label, (int)err);
+        exit(EXIT_FAILURE);
+    }
+}
+
 static void fill_root(LanternRoot *root, uint8_t value) {
     if (!root) {
         return;
@@ -162,7 +169,7 @@ static int sign_vote_with_secret(
         return -1;
     }
     LanternRoot vote_root;
-    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &vote_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &vote_root) != SSZ_SUCCESS) {
         return -1;
     }
     if (!lantern_signature_sign(secret, vote->data.slot, &vote_root, &vote->signature)) {
@@ -327,10 +334,10 @@ static void setup_state_and_fork_choice(
     expect_zero(lantern_fork_choice_configure(fork_choice, &state->config), "configure fork choice for setup");
 
     LanternRoot state_root;
-    expect_zero(lantern_hash_tree_root_state(state, &state_root), "hash state for anchor setup");
+    expect_ssz_success(lantern_hash_tree_root_state(state, &state_root), "hash state for anchor setup");
     state->latest_block_header.state_root = state_root;
     LanternRoot header_root;
-    expect_zero(
+    expect_ssz_success(
         lantern_hash_tree_root_block_header(&state->latest_block_header, &header_root),
         "hash header for anchor setup");
     state->latest_justified.root = header_root;
@@ -344,7 +351,7 @@ static void setup_state_and_fork_choice(
     anchor.state_root = state_root;
     lantern_block_body_init(&anchor.body);
 
-    expect_zero(lantern_hash_tree_root_block(&anchor, out_anchor_root), "hash anchor block");
+    expect_ssz_success(lantern_hash_tree_root_block(&anchor, out_anchor_root), "hash anchor block");
 
     expect_zero(
         lantern_fork_choice_set_anchor(
@@ -373,7 +380,7 @@ static void make_block(
     out_block->parent_root = *parent_root;
     memset(out_block->state_root.bytes, 0, sizeof(out_block->state_root.bytes));
     lantern_block_body_init(&out_block->body);
-    expect_zero(lantern_hash_tree_root_block(out_block, out_root), "hash block");
+    expect_ssz_success(lantern_hash_tree_root_block(out_block, out_root), "hash block");
 }
 
 static int test_genesis_state(void) {
@@ -390,7 +397,7 @@ static int test_genesis_state(void) {
     LanternBlockBody empty_body;
     lantern_block_body_init(&empty_body);
     LanternRoot expected_body_root;
-    expect_zero(lantern_hash_tree_root_block_body(&empty_body, &expected_body_root), "hash empty body");
+    expect_ssz_success(lantern_hash_tree_root_block_body(&empty_body, &expected_body_root), "hash empty body");
     lantern_block_body_reset(&empty_body);
     assert(memcmp(state.latest_block_header.body_root.bytes, expected_body_root.bytes, LANTERN_ROOT_SIZE) == 0);
     for (size_t i = 0; i < LANTERN_ROOT_SIZE; ++i) {
@@ -419,7 +426,7 @@ static int test_genesis_justification_bits(void) {
 
     expect_zero(lantern_state_process_slots(&state, block.slot), "advance slots for first block");
     LanternRoot parent_root;
-    expect_zero(lantern_hash_tree_root_block_header(&state.latest_block_header, &parent_root), "hash genesis header");
+    expect_ssz_success(lantern_hash_tree_root_block_header(&state.latest_block_header, &parent_root), "hash genesis header");
     block.parent_root = parent_root;
 
     expect_zero(lantern_state_process_block(&state, &block, NULL, NULL), "process first block");
@@ -478,7 +485,7 @@ static int test_block_header_rejects_duplicate_slot(void) {
 
     expect_zero(lantern_state_process_slots(&state, 1), "advance slots for duplicate slot test");
     LanternRoot genesis_header_root;
-    expect_zero(
+    expect_ssz_success(
         lantern_hash_tree_root_block_header(&state.latest_block_header, &genesis_header_root),
         "hash genesis header for duplicate slot test");
 
@@ -495,7 +502,7 @@ static int test_block_header_rejects_duplicate_slot(void) {
     }
 
     LanternRoot latest_header_root;
-    expect_zero(
+    expect_ssz_success(
         lantern_hash_tree_root_block_header(&state.latest_block_header, &latest_header_root),
         "hash latest header for duplicate slot test");
 
@@ -551,7 +558,7 @@ static int test_process_slots_sets_state_root(void) {
     expect_zero(lantern_state_generate_genesis(&state, 50, 4), "generate genesis");
 
     LanternRoot pre_root;
-    expect_zero(lantern_hash_tree_root_state(&state, &pre_root), "hash state pre-slot");
+    expect_ssz_success(lantern_hash_tree_root_state(&state, &pre_root), "hash state pre-slot");
 
     expect_zero(lantern_state_process_slots(&state, 1), "process slot 1");
     assert(state.slot == 1);
@@ -613,18 +620,18 @@ static int test_state_transition_applies_block(void) {
 
     expect_zero(lantern_state_process_slots(&expected, block.slot), "expected process slots");
     LanternRoot parent_root;
-    expect_zero(lantern_hash_tree_root_block_header(&expected.latest_block_header, &parent_root), "hash parent header");
+    expect_ssz_success(lantern_hash_tree_root_block_header(&expected.latest_block_header, &parent_root), "hash parent header");
     block.parent_root = parent_root;
     expect_zero(lantern_state_process_block(&expected, &block, NULL, NULL), "expected process block");
     LanternRoot expected_state_root;
-    expect_zero(lantern_hash_tree_root_state(&expected, &expected_state_root), "hash expected state");
+    expect_ssz_success(lantern_hash_tree_root_state(&expected, &expected_state_root), "hash expected state");
     block.state_root = expected_state_root;
 
     LanternSignedBlock signed_block;
     memset(&signed_block, 0, sizeof(signed_block));
     signed_block.block = block;
     LanternRoot proposer_block_root;
-    expect_zero(
+    expect_ssz_success(
         lantern_hash_tree_root_block(&signed_block.block, &proposer_block_root),
         "hash proposer block");
     if (!lantern_signature_sign(
@@ -643,7 +650,7 @@ static int test_state_transition_applies_block(void) {
 
     expect_zero(lantern_state_transition(&state, &signed_block), "state transition");
     LanternRoot post_root;
-    expect_zero(lantern_hash_tree_root_state(&state, &post_root), "hash post state");
+    expect_ssz_success(lantern_hash_tree_root_state(&state, &post_root), "hash post state");
     assert(memcmp(post_root.bytes, expected_state_root.bytes, LANTERN_ROOT_SIZE) == 0);
     assert(memcmp(state.latest_block_header.state_root.bytes, expected_state_root.bytes, LANTERN_ROOT_SIZE) == 0);
     assert(state.slot == expected.slot);
@@ -687,13 +694,13 @@ static int test_state_transition_rejects_missing_proposer_signature(void) {
 
     expect_zero(lantern_state_process_slots(&expected, block.slot), "advance expected signed slots");
     LanternRoot parent_root;
-    expect_zero(
+    expect_ssz_success(
         lantern_hash_tree_root_block_header(&expected.latest_block_header, &parent_root),
         "hash missing-signature parent");
     block.parent_root = parent_root;
     LanternRoot expected_state_root;
     expect_zero(lantern_state_process_block(&expected, &block, NULL, NULL), "apply expected unsigned block");
-    expect_zero(lantern_hash_tree_root_state(&expected, &expected_state_root), "hash expected unsigned post state");
+    expect_ssz_success(lantern_hash_tree_root_state(&expected, &expected_state_root), "hash expected unsigned post state");
     block.state_root = expected_state_root;
 
     LanternSignedBlock signed_block;
@@ -738,7 +745,7 @@ static int test_state_transition_rejects_genesis_state_root_mismatch(void) {
         "generate genesis state for mismatch test");
 
     LanternRoot parent_root;
-    expect_zero(
+    expect_ssz_success(
         lantern_hash_tree_root_block_header(&state.latest_block_header, &parent_root),
         "hash genesis header for mismatch test");
 
@@ -750,7 +757,7 @@ static int test_state_transition_rejects_genesis_state_root_mismatch(void) {
     lantern_block_body_init(&block.body);
 
     LanternRoot expected_state_root;
-    expect_zero(lantern_hash_tree_root_state(&state, &expected_state_root), "hash expected state root");
+    expect_ssz_success(lantern_hash_tree_root_state(&state, &expected_state_root), "hash expected state root");
     block.state_root = expected_state_root;
     block.state_root.bytes[0] ^= 0xFF;
 
@@ -948,7 +955,7 @@ static int seed_known_payload_for_vote(
     }
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&vote->data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&vote->data, &data_root) != SSZ_SUCCESS) {
         return -1;
     }
 
@@ -2207,7 +2214,7 @@ static int test_collect_attestations_for_block(void) {
     }
 
     LanternRoot data_root;
-    expect_zero(
+    expect_ssz_success(
         lantern_hash_tree_root_attestation_data(&signed_votes[0].data.data, &data_root),
         "hash collection attestation data");
 
@@ -2568,7 +2575,7 @@ static int test_process_block_defers_proposer_attestation(void) {
         "preview proposer block state root");
     block->state_root = expected_state_root;
     LanternRoot proposer_block_root;
-    expect_zero(
+    expect_ssz_success(
         lantern_hash_tree_root_block(block, &proposer_block_root),
         "hash proposer block root");
     if (!lantern_signature_sign(
@@ -2942,7 +2949,7 @@ static int test_collect_attestations_fixed_point_deep_chain(void) {
     }
 
     LanternRoot data_root;
-    expect_zero(
+    expect_ssz_success(
         lantern_hash_tree_root_attestation_data(&signed_votes[0].data.data, &data_root),
         "hash deep fixed attestation data");
 
@@ -3088,7 +3095,7 @@ static int test_select_block_parent_uses_fork_choice(void) {
     lantern_state_attach_fork_choice(&state, &fork_choice);
     expect_zero(lantern_fork_choice_configure(&fork_choice, &state.config), "configure fork choice");
     LanternRoot genesis_state_root;
-    expect_zero(lantern_hash_tree_root_state(&state, &genesis_state_root), "hash genesis state root");
+    expect_ssz_success(lantern_hash_tree_root_state(&state, &genesis_state_root), "hash genesis state root");
     state.latest_block_header.state_root = genesis_state_root;
 
     LanternBlock genesis_block;
@@ -3100,7 +3107,7 @@ static int test_select_block_parent_uses_fork_choice(void) {
     genesis_block.state_root = state.latest_block_header.state_root;
 
     LanternRoot genesis_root;
-    expect_zero(lantern_hash_tree_root_block(&genesis_block, &genesis_root), "genesis block root");
+    expect_ssz_success(lantern_hash_tree_root_block(&genesis_block, &genesis_root), "genesis block root");
     LanternCheckpoint genesis_cp = {.root = genesis_root, .slot = genesis_block.slot};
     expect_zero(
         lantern_fork_choice_set_anchor(&fork_choice, &genesis_block, &genesis_cp, &genesis_cp, &genesis_root),
@@ -3125,7 +3132,7 @@ static int test_select_block_parent_uses_fork_choice(void) {
     block_one.state_root = block_one_state_root;
 
     LanternRoot body_root_one;
-    expect_zero(lantern_hash_tree_root_block_body(&block_one.body, &body_root_one), "block one body root");
+    expect_ssz_success(lantern_hash_tree_root_block_body(&block_one.body, &body_root_one), "block one body root");
     state.slot = block_one.slot;
     state.latest_block_header.slot = block_one.slot;
     state.latest_block_header.proposer_index = block_one.proposer_index;
@@ -3133,7 +3140,7 @@ static int test_select_block_parent_uses_fork_choice(void) {
     state.latest_block_header.body_root = body_root_one;
     state.latest_block_header.state_root = block_one_state_root;
     LanternRoot block_one_root;
-    expect_zero(lantern_hash_tree_root_block(&block_one, &block_one_root), "block one root");
+    expect_ssz_success(lantern_hash_tree_root_block(&block_one, &block_one_root), "block one root");
     expect_zero(
         lantern_fork_choice_add_block(
             &fork_choice,
@@ -3157,7 +3164,7 @@ static int test_select_block_parent_uses_fork_choice(void) {
     lantern_block_body_init(&block_two.body);
     memset(block_two.state_root.bytes, 0x7Au, sizeof(block_two.state_root.bytes));
     LanternRoot block_two_root;
-    expect_zero(lantern_hash_tree_root_block(&block_two, &block_two_root), "block two root");
+    expect_ssz_success(lantern_hash_tree_root_block(&block_two, &block_two_root), "block two root");
     expect_zero(
         lantern_fork_choice_add_block(&fork_choice, &block_two, NULL, NULL, NULL, &block_two_root),
         "add block two");
@@ -3218,9 +3225,9 @@ static int test_validator_helpers_use_cached_fork_choice_head_state(void) {
     expect_zero(
         lantern_state_process_block(&block_one_state, &block_one, NULL, NULL),
         "process block one state");
-    expect_zero(lantern_hash_tree_root_state(&block_one_state, &block_one_state_root), "hash block one state");
+    expect_ssz_success(lantern_hash_tree_root_state(&block_one_state, &block_one_state_root), "hash block one state");
     block_one.state_root = block_one_state_root;
-    expect_zero(lantern_hash_tree_root_block(&block_one, &block_one_root), "rehash block one with state root");
+    expect_ssz_success(lantern_hash_tree_root_block(&block_one, &block_one_root), "rehash block one with state root");
     expect_zero(
         lantern_fork_choice_add_block_with_state(
             &fork_choice,
@@ -3280,7 +3287,7 @@ static int test_validator_helpers_use_cached_fork_choice_head_state(void) {
     expect_zero(
         lantern_state_process_block(&expected_state, &signed_block.block, NULL, NULL),
         "process preview block on cached head state");
-    expect_zero(lantern_hash_tree_root_state(&expected_state, &expected_state_root), "hash expected preview state");
+    expect_ssz_success(lantern_hash_tree_root_state(&expected_state, &expected_state_root), "hash expected preview state");
 
     if (memcmp(preview_state_root.bytes, expected_state_root.bytes, LANTERN_ROOT_SIZE) != 0) {
         fprintf(stderr, "preview post-state root did not use cached fork-choice head state\n");
@@ -3351,7 +3358,7 @@ static int test_compute_post_state_matches_process_block_and_votes(void) {
     expect_zero(
         lantern_state_process_block(&expected_state, &signed_block.block, NULL, NULL),
         "process block for expected post-state");
-    expect_zero(lantern_hash_tree_root_state(&expected_state, &expected_state_root), "hash expected post-state");
+    expect_ssz_success(lantern_hash_tree_root_state(&expected_state, &expected_state_root), "hash expected post-state");
 
     if (memcmp(preview_state_root.bytes, expected_state_root.bytes, LANTERN_ROOT_SIZE) != 0) {
         fprintf(stderr, "compute_post_state root mismatch\n");
@@ -3939,7 +3946,7 @@ static int test_history_limits_enforced(void) {
     expect_zero(
         lantern_proposer_for_slot(block.slot, validator_count, &block.proposer_index),
         "proposer for history limit block");
-    expect_zero(
+    expect_ssz_success(
         lantern_hash_tree_root_block_header(&state.latest_block_header, &block.parent_root),
         "hash parent header for history limit block");
     lantern_block_body_init(&block.body);
@@ -4021,7 +4028,7 @@ static int test_state_aggregate_skips_single_child_group(void) {
     build_vote(&vote, &signature, 0u, target.slot, &source, &target, 0x72u);
 
     LanternRoot data_root;
-    expect_zero(
+    expect_ssz_success(
         lantern_hash_tree_root_attestation_data(&vote.data, &data_root),
         "hash attestation data for recursive single-child state aggregate test");
     if (build_cached_proof_for_vote(&child_proof, 0u, 0xC3u) != 0) {

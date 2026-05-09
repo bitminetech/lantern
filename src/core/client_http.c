@@ -188,7 +188,7 @@ int http_snapshot_fork_choice(
         if (lantern_hash_tree_root_block_header(
                 &client->state.latest_block_header,
                 &state_head_root)
-            != 0)
+            != SSZ_SUCCESS)
         {
             lantern_fork_choice_tree_snapshot_reset(&snapshot);
             lantern_client_unlock_state(client, state_locked);

@@ -68,7 +68,7 @@ static bool sign_proposer_vote(
     if (!secret || !signed_vote || !out_vote_root) {
         return false;
     }
-    if (lantern_hash_tree_root_vote(&signed_vote->data, out_vote_root) != 0) {
+    if (lantern_hash_tree_root_vote(&signed_vote->data, out_vote_root) != SSZ_SUCCESS) {
         fprintf(stderr, "hash_tree_root_vote failed\n");
         return false;
     }
@@ -240,7 +240,7 @@ static int test_proposer_vote_signature_rejects_tampering(void) {
     LanternVote tampered_vote = signed_vote.data;
     tampered_vote.head.root.bytes[0] ^= 0xFF;
     LanternRoot tampered_root;
-    if (lantern_hash_tree_root_vote(&tampered_vote, &tampered_root) != 0) {
+    if (lantern_hash_tree_root_vote(&tampered_vote, &tampered_root) != SSZ_SUCCESS) {
         fprintf(stderr, "tampered root calculation failed\n");
         pq_secret_key_free(secret);
         pq_public_key_free(pubkey);

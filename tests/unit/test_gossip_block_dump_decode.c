@@ -162,18 +162,6 @@ static void inspect_attestation_region(const uint8_t *data, size_t data_len) {
         printf("      body.attestations_region is empty\n");
         return;
     }
-    if ((data_len % LANTERN_VOTE_SSZ_SIZE) == 0u) {
-        printf(
-            "      legacy_plain_vote_layout is possible: %zu votes of %zu bytes\n",
-            data_len / LANTERN_VOTE_SSZ_SIZE,
-            (size_t)LANTERN_VOTE_SSZ_SIZE);
-    } else {
-        printf(
-            "      legacy_plain_vote_layout impossible: len %% %zu = %zu\n",
-            (size_t)LANTERN_VOTE_SSZ_SIZE,
-            data_len % LANTERN_VOTE_SSZ_SIZE);
-    }
-
     if (data_len >= 4u) {
         uint32_t first_offset = 0;
         if (read_le_u32(data, data_len, &first_offset) == 0) {
@@ -209,15 +197,7 @@ static void inspect_signature_region(const uint8_t *data, size_t data_len) {
         return;
     }
 
-    if (first_u32 >= 4u && first_u32 <= data_len && (first_u32 % 4u) == 0u) {
-        printf(
-            "      signature layout looks like attestation-signatures-only list with %zu entries\n",
-            (size_t)first_u32 / 4u);
-        print_first_offsets(data, data_len, 6u);
-        return;
-    }
-
-    printf("      signature layout does not match standard or attestation-only fallback\n");
+    printf("      signature layout does not match standard Lantern block-signatures envelope\n");
 }
 
 static const char *check_attestation_data_sanity(const LanternAttestationData *data) {
@@ -296,13 +276,12 @@ static void inspect_message_section(const uint8_t *data, size_t data_len) {
 
     LanternBlock parsed_block;
     memset(&parsed_block, 0, sizeof(parsed_block));
-    int block_rc = lantern_ssz_decode_block(&parsed_block, data, data_len);
+    ssz_error_t block_rc = lantern_ssz_decode_block(&parsed_block, data, data_len);
     printf("      block_decode=%s\n", block_rc == 0 ? "ok" : "fail");
     if (block_rc == 0) {
         printf(
-            "      body.attestations=%zu layout=%s\n",
-            parsed_block.body.attestations.length,
-            parsed_block.body.legacy_plain_attestation_layout ? "legacy_plain_votes" : "aggregated");
+            "      body.attestations=%zu\n",
+            parsed_block.body.attestations.length);
         lantern_block_body_reset(&parsed_block.body);
         return;
     }
@@ -322,13 +301,12 @@ static void inspect_message_section(const uint8_t *data, size_t data_len) {
 
     LanternBlockBody body;
     memset(&body, 0, sizeof(body));
-    int body_rc = lantern_ssz_decode_block_body(&body, body_data, body_len);
+    ssz_error_t body_rc = lantern_ssz_decode_block_body(&body, body_data, body_len);
     printf("      block_body_decode=%s\n", body_rc == 0 ? "ok" : "fail");
     if (body_rc == 0) {
         printf(
-            "      body.attestations=%zu layout=%s\n",
-            body.attestations.length,
-            body.legacy_plain_attestation_layout ? "legacy_plain_votes" : "aggregated");
+            "      body.attestations=%zu\n",
+            body.attestations.length);
         lantern_block_body_reset(&body);
         return;
     }
@@ -441,16 +419,15 @@ static void analyze_payload(const char *path) {
 
     LanternSignedBlock block;
     lantern_signed_block_init(&block);
-    int ssz_rc = lantern_ssz_decode_signed_block(&block, raw, raw_written);
-    printf("  lantern_ssz_decode_signed_block_rc=%d\n", ssz_rc);
+    ssz_error_t ssz_rc = lantern_ssz_decode_signed_block(&block, raw, raw_written);
+    printf("  lantern_ssz_decode_signed_block_rc=%d\n", (int)ssz_rc);
     if (ssz_rc == 0) {
         printf(
-            "  decoded_block slot=%" PRIu64 " proposer=%" PRIu64 " attestations=%zu sigs=%zu layout=%s\n",
+            "  decoded_block slot=%" PRIu64 " proposer=%" PRIu64 " attestations=%zu sigs=%zu\n",
             block.block.slot,
             block.block.proposer_index,
             block.block.body.attestations.length,
-            block.signatures.attestation_signatures.length,
-            block.block.body.legacy_plain_attestation_layout ? "legacy_plain_votes" : "aggregated");
+            block.signatures.attestation_signatures.length);
         print_attestation_slots(&block);
         const char *sanity_reason = check_block_sanity(&block);
         printf(

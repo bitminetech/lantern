@@ -939,7 +939,7 @@ static bool verify_and_cache_aggregated_attestation_locked(
     }
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&attestation->data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&attestation->data, &data_root) != SSZ_SUCCESS) {
         free(pubkeys);
         lantern_state_reset(&target_state);
         return false;
@@ -1067,7 +1067,7 @@ void persist_anchor_block(
     const LanternRoot *root_to_log = anchor_root;
     if (!root_to_log)
     {
-        if (lantern_hash_tree_root_block(block, &computed_root) == 0)
+        if (lantern_hash_tree_root_block(block, &computed_root) == SSZ_SUCCESS)
         {
             root_to_log = &computed_root;
         }
@@ -1146,7 +1146,7 @@ static int compute_fork_choice_anchor_roots(
         normalized_genesis_snapshot = true;
     }
 
-    if (lantern_hash_tree_root_state(state_for_hash, out_state_root) != 0)
+    if (lantern_hash_tree_root_state(state_for_hash, out_state_root) != SSZ_SUCCESS)
     {
         lantern_log_error("forkchoice", meta, "failed to hash anchor state");
         return LANTERN_CLIENT_ERR_RUNTIME;
@@ -1163,7 +1163,7 @@ static int compute_fork_choice_anchor_roots(
     *out_anchor_header = client->state.latest_block_header;
     out_anchor_header->state_root = *out_state_root;
 
-    if (lantern_hash_tree_root_block_header(out_anchor_header, out_anchor_root) != 0)
+    if (lantern_hash_tree_root_block_header(out_anchor_header, out_anchor_root) != SSZ_SUCCESS)
     {
         lantern_log_error("forkchoice", meta, "failed to hash anchor block header");
         return LANTERN_CLIENT_ERR_RUNTIME;
@@ -1396,7 +1396,7 @@ int initialize_fork_choice(struct lantern_client *client)
 
     LanternRoot synthetic_anchor_block_root = {0};
     bool have_synthetic_anchor_block_root =
-        lantern_hash_tree_root_block(&anchor, &synthetic_anchor_block_root) == 0;
+        lantern_hash_tree_root_block(&anchor, &synthetic_anchor_block_root) == SSZ_SUCCESS;
     char synthetic_anchor_block_root_hex[ROOT_HEX_BUFFER_LEN];
     format_root_hex(
         &synthetic_anchor_block_root,
@@ -1575,7 +1575,7 @@ static bool load_restored_block_state(
     }
 
     lantern_state_init(out_state);
-    bool loaded = lantern_ssz_decode_state(out_state, state_bytes, state_len) == 0;
+    bool loaded = lantern_ssz_decode_state(out_state, state_bytes, state_len) == SSZ_SUCCESS;
     free(state_bytes);
     if (!loaded)
     {

@@ -146,7 +146,7 @@ static int seed_known_payload(
     }
     const LanternAttestationData *data = &vote->data.data;
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(data, &data_root) != SSZ_SUCCESS) {
         return -1;
     }
     LanternAggregatedSignatureProof proof;
@@ -172,7 +172,7 @@ static int seed_new_payload(
     }
     const LanternAttestationData *data = &vote->data.data;
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(data, &data_root) != SSZ_SUCCESS) {
         return -1;
     }
     LanternAggregatedSignatureProof proof;
@@ -302,14 +302,14 @@ static int test_fork_choice_proposer_attestation_sequence(void) {
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0xAA);
     LanternRoot genesis_root;
-    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == 0);
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
     assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
 
     LanternBlock block_one;
     init_block(&block_one, 1, 0, &genesis_root, 0xBB);
     LanternRoot block_one_root;
-    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == SSZ_SUCCESS);
     LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
     LanternSignedVote proposer_vote_one = make_vote(0, &genesis_cp, &block_one_cp);
     assert(
@@ -333,7 +333,7 @@ static int test_fork_choice_proposer_attestation_sequence(void) {
     LanternBlock block_two;
     init_block(&block_two, 2, 0, &block_one_root, 0xCC);
     LanternRoot block_two_root;
-    assert(lantern_hash_tree_root_block(&block_two, &block_two_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_two, &block_two_root) == SSZ_SUCCESS);
     LanternCheckpoint block_two_cp = make_checkpoint(&block_two_root, block_two.slot);
     LanternSignedVote proposer_vote_two = make_vote(0, &block_one_cp, &block_two_cp);
     assert(
@@ -371,14 +371,14 @@ static int test_fork_choice_block_updates_checkpoints(void) {
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0x10);
     LanternRoot genesis_root;
-    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == 0);
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
     assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
 
     LanternBlock block_one;
     init_block(&block_one, 1, 0, &genesis_root, 0x11);
     LanternRoot block_one_root;
-    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == SSZ_SUCCESS);
     LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
     assert(
         lantern_fork_choice_add_block(
@@ -398,7 +398,7 @@ static int test_fork_choice_block_updates_checkpoints(void) {
     LanternBlock block_two;
     init_block(&block_two, 2, 1, &block_one_root, 0x22);
     LanternRoot block_two_root;
-    assert(lantern_hash_tree_root_block(&block_two, &block_two_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_two, &block_two_root) == SSZ_SUCCESS);
     LanternCheckpoint block_two_cp = make_checkpoint(&block_two_root, block_two.slot);
     assert(
         lantern_fork_choice_add_block(
@@ -418,7 +418,7 @@ static int test_fork_choice_block_updates_checkpoints(void) {
     LanternBlock block_three;
     init_block(&block_three, 3, 2, &block_two_root, 0x33);
     LanternRoot block_three_root;
-    assert(lantern_hash_tree_root_block(&block_three, &block_three_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_three, &block_three_root) == SSZ_SUCCESS);
     LanternCheckpoint block_three_cp = make_checkpoint(&block_three_root, block_three.slot);
     assert(
         lantern_fork_choice_add_block(
@@ -457,7 +457,7 @@ static int test_fork_choice_caches_block_states(void) {
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0x51);
     LanternRoot genesis_root;
-    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == 0);
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
 
     LanternState genesis_state;
@@ -486,7 +486,7 @@ static int test_fork_choice_caches_block_states(void) {
     LanternBlock child;
     init_block(&child, 1, 1, &genesis_root, 0x52);
     LanternRoot child_root;
-    assert(lantern_hash_tree_root_block(&child, &child_root) == 0);
+    assert(lantern_hash_tree_root_block(&child, &child_root) == SSZ_SUCCESS);
     LanternCheckpoint child_cp = make_checkpoint(&child_root, child.slot);
 
     LanternState child_state;
@@ -538,7 +538,7 @@ static int test_fork_choice_prune_states_keeps_finalized_to_head_chain(void) {
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0x61);
     LanternRoot genesis_root;
-    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == 0);
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
 
     LanternState genesis_state;
@@ -561,7 +561,7 @@ static int test_fork_choice_prune_states_keeps_finalized_to_head_chain(void) {
     LanternBlock block_one;
     init_block(&block_one, 1, 1, &genesis_root, 0x62);
     LanternRoot block_one_root;
-    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == SSZ_SUCCESS);
     LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
 
     LanternState block_one_state;
@@ -586,7 +586,7 @@ static int test_fork_choice_prune_states_keeps_finalized_to_head_chain(void) {
     LanternBlock block_two;
     init_block(&block_two, 2, 2, &block_one_root, 0x63);
     LanternRoot block_two_root;
-    assert(lantern_hash_tree_root_block(&block_two, &block_two_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_two, &block_two_root) == SSZ_SUCCESS);
     LanternCheckpoint block_two_cp = make_checkpoint(&block_two_root, block_two.slot);
 
     LanternState block_two_state;
@@ -611,7 +611,7 @@ static int test_fork_choice_prune_states_keeps_finalized_to_head_chain(void) {
     LanternBlock block_three;
     init_block(&block_three, 3, 0, &block_two_root, 0x64);
     LanternRoot block_three_root;
-    assert(lantern_hash_tree_root_block(&block_three, &block_three_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_three, &block_three_root) == SSZ_SUCCESS);
     LanternCheckpoint block_three_cp = make_checkpoint(&block_three_root, block_three.slot);
 
     LanternState block_three_state;
@@ -636,7 +636,7 @@ static int test_fork_choice_prune_states_keeps_finalized_to_head_chain(void) {
     LanternBlock fork_two;
     init_block(&fork_two, 2, 0, &block_one_root, 0x65);
     LanternRoot fork_two_root;
-    assert(lantern_hash_tree_root_block(&fork_two, &fork_two_root) == 0);
+    assert(lantern_hash_tree_root_block(&fork_two, &fork_two_root) == SSZ_SUCCESS);
 
     LanternState fork_two_state;
     build_cached_state(
@@ -728,7 +728,7 @@ static int test_fork_choice_vote_flow(void) {
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0x10);
     LanternRoot genesis_root;
-    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == 0);
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
     assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
 
@@ -739,7 +739,7 @@ static int test_fork_choice_vote_flow(void) {
     LanternBlock block_one;
     init_block(&block_one, 1, 0, &genesis_root, 0x21);
     LanternRoot block_one_root;
-    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == SSZ_SUCCESS);
     assert(
         lantern_fork_choice_add_block(
             &store,
@@ -753,7 +753,7 @@ static int test_fork_choice_vote_flow(void) {
     LanternBlock block_two;
     init_block(&block_two, 2, 1, &block_one_root, 0x32);
     LanternRoot block_two_root;
-    assert(lantern_hash_tree_root_block(&block_two, &block_two_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_two, &block_two_root) == SSZ_SUCCESS);
     assert(
         lantern_fork_choice_add_block(
             &store,
@@ -821,14 +821,14 @@ static int test_fork_choice_safe_target_uses_new_aggregated_payloads(void) {
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0x41);
     LanternRoot genesis_root;
-    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == 0);
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
     assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
 
     LanternBlock block_one;
     init_block(&block_one, 1, 0, &genesis_root, 0x42);
     LanternRoot block_one_root;
-    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == SSZ_SUCCESS);
     assert(
         lantern_fork_choice_add_block(
             &store,
@@ -874,7 +874,7 @@ static int test_fork_choice_checkpoint_progression(void) {
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0x10);
     LanternRoot genesis_root;
-    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == 0);
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
     assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
 
@@ -886,7 +886,7 @@ static int test_fork_choice_checkpoint_progression(void) {
     LanternBlock block_one;
     init_block(&block_one, 1, 0, &genesis_root, 0x21);
     LanternRoot block_one_root;
-    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == SSZ_SUCCESS);
     LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
     assert(
         lantern_fork_choice_add_block(
@@ -956,14 +956,14 @@ static int test_fork_choice_restore_checkpoints(void) {
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0x41);
     LanternRoot genesis_root;
-    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == 0);
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
     assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
 
     LanternBlock block_one;
     init_block(&block_one, 1, 0, &genesis_root, 0x42);
     LanternRoot block_one_root;
-    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == SSZ_SUCCESS);
     LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
     assert(
         lantern_fork_choice_add_block(
@@ -978,7 +978,7 @@ static int test_fork_choice_restore_checkpoints(void) {
     LanternBlock block_two;
     init_block(&block_two, 2, 1, &block_one_root, 0x43);
     LanternRoot block_two_root;
-    assert(lantern_hash_tree_root_block(&block_two, &block_two_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_two, &block_two_root) == SSZ_SUCCESS);
     LanternCheckpoint block_two_cp = make_checkpoint(&block_two_root, block_two.slot);
     assert(
         lantern_fork_choice_add_block(
@@ -1038,7 +1038,7 @@ static int test_fork_choice_anchor_metadata_survives_checkpoint_restore(void) {
     LanternBlock anchor;
     init_block(&anchor, 8, 0, NULL, 0x51);
     LanternRoot anchor_root;
-    assert(lantern_hash_tree_root_block(&anchor, &anchor_root) == 0);
+    assert(lantern_hash_tree_root_block(&anchor, &anchor_root) == SSZ_SUCCESS);
     LanternCheckpoint anchor_cp = make_checkpoint(&anchor_root, anchor.slot);
     assert(lantern_fork_choice_set_anchor(&store, &anchor, &anchor_cp, &anchor_cp, &anchor_root) == 0);
 
@@ -1071,7 +1071,7 @@ static int test_fork_choice_anchor_metadata_survives_checkpoint_restore(void) {
     LanternBlock block_one;
     init_block(&block_one, anchor.slot + 1u, 1, &anchor_root, 0x52);
     LanternRoot block_one_root;
-    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == SSZ_SUCCESS);
     LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
     assert(
         lantern_fork_choice_add_block(
@@ -1112,7 +1112,7 @@ static int test_fork_choice_restore_checkpoints_rejects_unknown_roots(void) {
     LanternBlock anchor;
     init_block(&anchor, 8, 0, NULL, 0x61);
     LanternRoot anchor_root;
-    assert(lantern_hash_tree_root_block(&anchor, &anchor_root) == 0);
+    assert(lantern_hash_tree_root_block(&anchor, &anchor_root) == SSZ_SUCCESS);
     LanternCheckpoint anchor_cp = make_checkpoint(&anchor_root, anchor.slot);
     assert(lantern_fork_choice_set_anchor(&store, &anchor, &anchor_cp, &anchor_cp, &anchor_root) == 0);
 
@@ -1168,14 +1168,14 @@ static int test_fork_choice_advance_time_schedules_votes(void) {
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0x01);
     LanternRoot genesis_root;
-    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == 0);
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
     assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
 
     LanternBlock block_voted;
     init_block(&block_voted, 1, 0, &genesis_root, 0x11);
     LanternRoot block_voted_root;
-    assert(lantern_hash_tree_root_block(&block_voted, &block_voted_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_voted, &block_voted_root) == SSZ_SUCCESS);
     LanternCheckpoint block_voted_cp = make_checkpoint(&block_voted_root, block_voted.slot);
     assert(
         lantern_fork_choice_add_block(
@@ -1190,7 +1190,7 @@ static int test_fork_choice_advance_time_schedules_votes(void) {
     LanternBlock block_competing;
     init_block(&block_competing, 2, 1, &genesis_root, 0x22);
     LanternRoot block_competing_root;
-    assert(lantern_hash_tree_root_block(&block_competing, &block_competing_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_competing, &block_competing_root) == SSZ_SUCCESS);
     assert(
         lantern_fork_choice_add_block(
             &store,
@@ -1251,19 +1251,19 @@ static int test_fork_choice_add_block_ignores_invalid_proposer_vote(void) {
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0x01);
     LanternRoot genesis_root;
-    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == 0);
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
     assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
 
     LanternBlock parent;
     init_block(&parent, 1, 0, &genesis_root, 0x02);
     LanternRoot parent_root;
-    assert(lantern_hash_tree_root_block(&parent, &parent_root) == 0);
+    assert(lantern_hash_tree_root_block(&parent, &parent_root) == SSZ_SUCCESS);
 
     LanternBlock child;
     init_block(&child, 2, 1, &parent_root, 0x03);
     LanternRoot child_root;
-    assert(lantern_hash_tree_root_block(&child, &child_root) == 0);
+    assert(lantern_hash_tree_root_block(&child, &child_root) == SSZ_SUCCESS);
     assert(lantern_fork_choice_add_block(&store, &child, NULL, NULL, NULL, &child_root) == 0);
 
     uint64_t child_slot = 0;
@@ -1347,7 +1347,7 @@ static int test_fork_choice_add_block_skips_conflicting_block_attestation(void) 
     }
 
     init_block(&genesis, 0, 0, NULL, 0x10);
-    if (lantern_hash_tree_root_block(&genesis, &genesis_root) != 0) {
+    if (lantern_hash_tree_root_block(&genesis, &genesis_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash genesis block in conflict test\n");
         goto cleanup;
     }
@@ -1358,7 +1358,7 @@ static int test_fork_choice_add_block_skips_conflicting_block_attestation(void) 
     }
 
     init_block(&block_one, 1, 0, &genesis_root, 0x11);
-    if (lantern_hash_tree_root_block(&block_one, &block_one_root) != 0) {
+    if (lantern_hash_tree_root_block(&block_one, &block_one_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash block one in conflict test\n");
         goto cleanup;
     }
@@ -1369,7 +1369,7 @@ static int test_fork_choice_add_block_skips_conflicting_block_attestation(void) 
     }
 
     init_block(&block_two_a, 2, 0, &block_one_root, 0x12);
-    if (lantern_hash_tree_root_block(&block_two_a, &block_two_a_root) != 0) {
+    if (lantern_hash_tree_root_block(&block_two_a, &block_two_a_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash block two A in conflict test\n");
         goto cleanup;
     }
@@ -1380,7 +1380,7 @@ static int test_fork_choice_add_block_skips_conflicting_block_attestation(void) 
     }
 
     init_block(&block_two_b, 2, 0, &block_one_root, 0x13);
-    if (lantern_hash_tree_root_block(&block_two_b, &block_two_b_root) != 0) {
+    if (lantern_hash_tree_root_block(&block_two_b, &block_two_b_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash block two B in conflict test\n");
         goto cleanup;
     }
@@ -1401,7 +1401,7 @@ static int test_fork_choice_add_block_skips_conflicting_block_attestation(void) 
     }
 
     init_block(&block_three, 3, 0, &block_two_a_root, 0x14);
-    if (lantern_hash_tree_root_block(&block_three, &block_three_root) != 0) {
+    if (lantern_hash_tree_root_block(&block_three, &block_three_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash block three in conflict test\n");
         goto cleanup;
     }
@@ -1456,28 +1456,28 @@ static int test_fork_choice_tree_snapshot_reports_weights(void) {
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0x21);
     LanternRoot genesis_root;
-    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == 0);
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
     assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
 
     LanternBlock block_one;
     init_block(&block_one, 1, 1, &genesis_root, 0x22);
     LanternRoot block_one_root;
-    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == SSZ_SUCCESS);
     LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
     assert(lantern_fork_choice_add_block(&store, &block_one, NULL, NULL, NULL, &block_one_root) == 0);
 
     LanternBlock block_two_a;
     init_block(&block_two_a, 2, 2, &block_one_root, 0x23);
     LanternRoot block_two_a_root;
-    assert(lantern_hash_tree_root_block(&block_two_a, &block_two_a_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_two_a, &block_two_a_root) == SSZ_SUCCESS);
     LanternCheckpoint block_two_a_cp = make_checkpoint(&block_two_a_root, block_two_a.slot);
     assert(lantern_fork_choice_add_block(&store, &block_two_a, NULL, NULL, NULL, &block_two_a_root) == 0);
 
     LanternBlock block_two_b;
     init_block(&block_two_b, 2, 3, &block_one_root, 0x24);
     LanternRoot block_two_b_root;
-    assert(lantern_hash_tree_root_block(&block_two_b, &block_two_b_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_two_b, &block_two_b_root) == SSZ_SUCCESS);
     LanternCheckpoint block_two_b_cp = make_checkpoint(&block_two_b_root, block_two_b.slot);
     assert(lantern_fork_choice_add_block(&store, &block_two_b, NULL, NULL, NULL, &block_two_b_root) == 0);
 
@@ -1543,27 +1543,27 @@ static int test_fork_choice_block_attestation_votes_do_not_bypass_attached_paylo
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0x91);
     LanternRoot genesis_root;
-    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == 0);
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
     assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
 
     LanternBlock block_one;
     init_block(&block_one, 1, 0, &genesis_root, 0x92);
     LanternRoot block_one_root;
-    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == SSZ_SUCCESS);
     LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
     assert(lantern_fork_choice_add_block(&store, &block_one, NULL, NULL, NULL, &block_one_root) == 0);
 
     LanternBlock branch_a;
     init_block(&branch_a, 2, 0, &block_one_root, 0x93);
     LanternRoot branch_a_root;
-    assert(lantern_hash_tree_root_block(&branch_a, &branch_a_root) == 0);
+    assert(lantern_hash_tree_root_block(&branch_a, &branch_a_root) == SSZ_SUCCESS);
     LanternCheckpoint branch_a_cp = make_checkpoint(&branch_a_root, branch_a.slot);
 
     LanternBlock branch_b;
     init_block(&branch_b, 2, 0, &block_one_root, 0x94);
     LanternRoot branch_b_root;
-    assert(lantern_hash_tree_root_block(&branch_b, &branch_b_root) == 0);
+    assert(lantern_hash_tree_root_block(&branch_b, &branch_b_root) == SSZ_SUCCESS);
     LanternCheckpoint branch_b_cp = make_checkpoint(&branch_b_root, branch_b.slot);
 
     LanternBlock *favored_branch = &branch_a;
@@ -1631,28 +1631,28 @@ static int test_fork_choice_accept_new_aggregated_payloads_updates_head(void) {
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0xA1);
     LanternRoot genesis_root;
-    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == 0);
+    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
     assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
 
     LanternBlock block_one;
     init_block(&block_one, 1, 0, &genesis_root, 0xA2);
     LanternRoot block_one_root;
-    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == SSZ_SUCCESS);
     LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
     assert(lantern_fork_choice_add_block(&store, &block_one, NULL, NULL, NULL, &block_one_root) == 0);
 
     LanternBlock block_two_a;
     init_block(&block_two_a, 2, 1, &block_one_root, 0xA3);
     LanternRoot block_two_a_root;
-    assert(lantern_hash_tree_root_block(&block_two_a, &block_two_a_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_two_a, &block_two_a_root) == SSZ_SUCCESS);
     LanternCheckpoint block_two_a_cp = make_checkpoint(&block_two_a_root, block_two_a.slot);
     assert(lantern_fork_choice_add_block(&store, &block_two_a, NULL, NULL, NULL, &block_two_a_root) == 0);
 
     LanternBlock block_two_b;
     init_block(&block_two_b, 2, 2, &block_one_root, 0xA4);
     LanternRoot block_two_b_root;
-    assert(lantern_hash_tree_root_block(&block_two_b, &block_two_b_root) == 0);
+    assert(lantern_hash_tree_root_block(&block_two_b, &block_two_b_root) == SSZ_SUCCESS);
     LanternCheckpoint block_two_b_cp = make_checkpoint(&block_two_b_root, block_two_b.slot);
     assert(lantern_fork_choice_add_block(&store, &block_two_b, NULL, NULL, NULL, &block_two_b_root) == 0);
 

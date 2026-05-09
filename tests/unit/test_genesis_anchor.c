@@ -144,7 +144,7 @@ static int build_signed_head_block(
     {
         goto cleanup;
     }
-    if (lantern_hash_tree_root_block(&out_block->block, out_root) != 0)
+    if (lantern_hash_tree_root_block(&out_block->block, out_root) != SSZ_SUCCESS)
     {
         goto cleanup;
     }
@@ -656,7 +656,7 @@ static int test_pre_anchor_historical_block_is_dropped(void)
     fill_root(&historical.block.state_root, 0x92u);
 
     LanternRoot historical_root;
-    if (lantern_hash_tree_root_block(&historical.block, &historical_root) != 0)
+    if (lantern_hash_tree_root_block(&historical.block, &historical_root) != SSZ_SUCCESS)
     {
         fprintf(stderr, "failed to hash historical block for pre-anchor regression\n");
         lantern_signed_block_reset(&historical);
@@ -771,7 +771,7 @@ static int test_checkpoint_sync_anchor_alias_restores(void)
     }
     client.data_dir = data_dir;
 
-    if (lantern_hash_tree_root_state(&client.state, &canonical_state_root) != 0)
+    if (lantern_hash_tree_root_state(&client.state, &canonical_state_root) != SSZ_SUCCESS)
     {
         fprintf(stderr, "failed to hash checkpoint anchor restore regression state\n");
         goto cleanup;
@@ -779,7 +779,7 @@ static int test_checkpoint_sync_anchor_alias_restores(void)
 
     LanternBlockHeader expected_anchor_header = client.state.latest_block_header;
     expected_anchor_header.state_root = canonical_state_root;
-    if (lantern_hash_tree_root_block_header(&expected_anchor_header, &expected_anchor_root) != 0)
+    if (lantern_hash_tree_root_block_header(&expected_anchor_header, &expected_anchor_root) != SSZ_SUCCESS)
     {
         fprintf(stderr, "failed to hash checkpoint anchor restore regression anchor header\n");
         goto cleanup;
@@ -852,7 +852,7 @@ static int test_checkpoint_sync_anchor_alias_restores(void)
     child_block.parent_root = expected_anchor_root;
     lantern_block_body_init(&child_block.body);
     LanternRoot child_root = {0};
-    if (lantern_hash_tree_root_block(&child_block, &child_root) != 0)
+    if (lantern_hash_tree_root_block(&child_block, &child_root) != SSZ_SUCCESS)
     {
         fprintf(stderr, "failed to hash child block for checkpoint anchor restore regression\n");
         lantern_block_body_reset(&child_block.body);
@@ -900,7 +900,7 @@ static int test_checkpoint_sync_anchor_alias_restores(void)
     if (lantern_hash_tree_root_block_header(
             &cached_anchor_clone.latest_block_header,
             &cached_anchor_header_root)
-        != 0)
+        != SSZ_SUCCESS)
     {
         fprintf(stderr, "failed to hash cached anchor header for checkpoint anchor restore regression\n");
         lantern_state_reset(&cached_anchor_clone);
@@ -967,7 +967,7 @@ int main(void)
     }
 
     LanternRoot canonical_state_root;
-    if (lantern_hash_tree_root_state(&client.state, &canonical_state_root) != 0)
+    if (lantern_hash_tree_root_state(&client.state, &canonical_state_root) != SSZ_SUCCESS)
     {
         fprintf(stderr, "failed to hash canonical genesis state\n");
         lantern_state_reset(&client.state);
@@ -978,7 +978,7 @@ int main(void)
     expected_anchor_header.state_root = canonical_state_root;
 
     LanternRoot expected_anchor_root;
-    if (lantern_hash_tree_root_block_header(&expected_anchor_header, &expected_anchor_root) != 0)
+    if (lantern_hash_tree_root_block_header(&expected_anchor_header, &expected_anchor_root) != SSZ_SUCCESS)
     {
         fprintf(stderr, "failed to hash expected anchor header\n");
         lantern_state_reset(&client.state);
@@ -1066,7 +1066,7 @@ int main(void)
     client.state.latest_finalized = expected_finalized;
 
     LanternRoot restart_state_root;
-    if (lantern_hash_tree_root_state(&client.state, &restart_state_root) != 0)
+    if (lantern_hash_tree_root_state(&client.state, &restart_state_root) != SSZ_SUCCESS)
     {
         fprintf(stderr, "failed to hash restart regression state\n");
         lantern_state_reset(&client.state);
@@ -1075,7 +1075,7 @@ int main(void)
     LanternBlockHeader restart_anchor_header = client.state.latest_block_header;
     restart_anchor_header.state_root = restart_state_root;
     LanternRoot expected_restart_anchor_root;
-    if (lantern_hash_tree_root_block_header(&restart_anchor_header, &expected_restart_anchor_root) != 0)
+    if (lantern_hash_tree_root_block_header(&restart_anchor_header, &expected_restart_anchor_root) != SSZ_SUCCESS)
     {
         fprintf(stderr, "failed to hash restart regression anchor header\n");
         lantern_state_reset(&client.state);

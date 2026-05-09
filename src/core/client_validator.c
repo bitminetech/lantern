@@ -589,7 +589,7 @@ static lantern_client_error append_group_as_aggregated(
     }
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&group->data, &data_root) != 0)
+    if (lantern_hash_tree_root_attestation_data(&group->data, &data_root) != SSZ_SUCCESS)
     {
         lantern_aggregated_attestation_reset(&attestation);
         return LANTERN_CLIENT_ERR_VALIDATOR;
@@ -1019,7 +1019,7 @@ static lantern_client_error aggregate_attestations_for_block(
         {
             aggregation_group_sort(&groups[i]);
             LanternRoot data_root;
-            if (lantern_hash_tree_root_attestation_data(&groups[i].data, &data_root) != 0)
+            if (lantern_hash_tree_root_attestation_data(&groups[i].data, &data_root) != SSZ_SUCCESS)
             {
                 rc = LANTERN_CLIENT_ERR_VALIDATOR;
                 break;
@@ -1208,7 +1208,7 @@ static lantern_client_error aggregate_attestation_signatures(
         for (size_t i = 0; i < out_attestations->length; ++i)
         {
             LanternRoot data_root;
-            if (lantern_hash_tree_root_attestation_data(&out_attestations->data[i].data, &data_root) != 0)
+            if (lantern_hash_tree_root_attestation_data(&out_attestations->data[i].data, &data_root) != SSZ_SUCCESS)
             {
                 rc = LANTERN_CLIENT_ERR_VALIDATOR;
                 break;
@@ -1523,7 +1523,7 @@ int validator_sign_vote(
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     LanternRoot vote_root;
-    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &vote_root) != 0)
+    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &vote_root) != SSZ_SUCCESS)
     {
         return LANTERN_CLIENT_ERR_VALIDATOR;
     }
@@ -1806,7 +1806,7 @@ static int validator_build_block_internal(
 
     out_block->block.state_root = computed_state_root;
     LanternRoot block_root;
-    if (lantern_hash_tree_root_block(&out_block->block, &block_root) != 0) {
+    if (lantern_hash_tree_root_block(&out_block->block, &block_root) != SSZ_SUCCESS) {
         result = LANTERN_CLIENT_ERR_RUNTIME;
         goto cleanup;
     }
@@ -2007,7 +2007,7 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
     }
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &data_root) == 0)
+    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &data_root) == SSZ_SUCCESS)
     {
         LanternSignatureKey key = {
             .validator_index = vote->data.validator_id,
@@ -2108,7 +2108,7 @@ int lantern_client_publish_block(struct lantern_client *client, const LanternSig
 
     LanternRoot block_root;
     char root_hex[2 * LANTERN_ROOT_SIZE + 3];
-    if (lantern_hash_tree_root_block(&block->block, &block_root) == 0)
+    if (lantern_hash_tree_root_block(&block->block, &block_root) == SSZ_SUCCESS)
     {
         format_root_hex(&block_root, root_hex, sizeof(root_hex));
     }

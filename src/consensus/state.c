@@ -409,7 +409,7 @@ static int lantern_state_validate_block_attestation_data_uniqueness(const Lanter
 
     for (size_t i = 0; i < attestations->length; ++i) {
         LanternRoot data_root;
-        if (lantern_hash_tree_root_attestation_data(&attestations->data[i].data, &data_root) != 0) {
+        if (lantern_hash_tree_root_attestation_data(&attestations->data[i].data, &data_root) != SSZ_SUCCESS) {
             lantern_log_warn(
                 "state",
                 &meta,
@@ -590,7 +590,7 @@ static int lantern_state_verify_block_signatures(
         }
 
         if (rc == 0
-            && lantern_hash_tree_root_attestation_data(&attestation->data, &jobs[i].message) != 0) {
+            && lantern_hash_tree_root_attestation_data(&attestation->data, &jobs[i].message) != SSZ_SUCCESS) {
             lantern_log_warn(
                 "state",
                 &meta,
@@ -632,7 +632,7 @@ static int lantern_state_verify_block_signatures(
     }
 
     LanternRoot proposer_root;
-    if (lantern_hash_tree_root_block(block, &proposer_root) != 0) {
+    if (lantern_hash_tree_root_block(block, &proposer_root) != SSZ_SUCCESS) {
         lantern_log_warn("state", &meta, "failed to hash block for proposer signature");
         return -1;
     }
@@ -1305,7 +1305,7 @@ lantern_state_aggregate_result lantern_state_aggregate(
             }
 
             LanternRoot data_root;
-            if (lantern_hash_tree_root_attestation_data(&raw_attestations->data[i].data, &data_root) != 0) {
+            if (lantern_hash_tree_root_attestation_data(&raw_attestations->data[i].data, &data_root) != SSZ_SUCCESS) {
                 rc = LANTERN_STATE_AGGREGATE_VALIDATOR;
                 break;
             }
@@ -2362,7 +2362,7 @@ int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, u
     LanternBlockBody empty_body;
     lantern_block_body_init(&empty_body);
     LanternRoot body_root;
-    if (lantern_hash_tree_root_block_body(&empty_body, &body_root) != 0) {
+    if (lantern_hash_tree_root_block_body(&empty_body, &body_root) != SSZ_SUCCESS) {
         lantern_block_body_reset(&empty_body);
         lantern_state_reset(state);
         return -1;
@@ -2384,7 +2384,7 @@ int lantern_state_process_slot(LanternState *state) {
     }
     if (lantern_root_is_zero(&state->latest_block_header.state_root)) {
         LanternRoot computed;
-        if (lantern_hash_tree_root_state_cached(state, &computed) != 0) {
+        if (lantern_hash_tree_root_state_cached(state, &computed) != SSZ_SUCCESS) {
             return -1;
         }
         state->latest_block_header.state_root = computed;
@@ -2496,7 +2496,7 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
     }
 
     LanternRoot latest_header_root;
-    if (lantern_hash_tree_root_block_header(&state->latest_block_header, &latest_header_root) != 0) {
+    if (lantern_hash_tree_root_block_header(&state->latest_block_header, &latest_header_root) != SSZ_SUCCESS) {
         return -1;
     }
     if (memcmp(block->parent_root.bytes, latest_header_root.bytes, LANTERN_ROOT_SIZE) != 0) {
@@ -2558,7 +2558,7 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
     }
 
     LanternRoot body_root;
-    if (lantern_hash_tree_root_block_body(&block->body, &body_root) != 0) {
+    if (lantern_hash_tree_root_block_body(&block->body, &body_root) != SSZ_SUCCESS) {
         return -1;
     }
     state->latest_block_header.slot = block->slot;
@@ -3079,7 +3079,7 @@ int lantern_state_transition(LanternState *state, LanternStore *store, const Lan
         STATE_FAIL("process block failed");
     }
     LanternRoot computed_state_root;
-    bool hashed_state = lantern_hash_tree_root_state_cached(state, &computed_state_root) == 0;
+    bool hashed_state = lantern_hash_tree_root_state_cached(state, &computed_state_root) == SSZ_SUCCESS;
     if (hashed_state) {
         if (memcmp(block->state_root.bytes, computed_state_root.bytes, LANTERN_ROOT_SIZE) != 0) {
             char expected_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
@@ -3207,7 +3207,7 @@ int lantern_state_select_block_parent(
     }
 
     LanternRoot header_root;
-    if (lantern_hash_tree_root_block_header(&state->latest_block_header, &header_root) != 0) {
+    if (lantern_hash_tree_root_block_header(&state->latest_block_header, &header_root) != SSZ_SUCCESS) {
         return -1;
     }
 
@@ -3400,7 +3400,7 @@ int lantern_state_compute_post_state(
         rc = -1;
         goto cleanup;
     }
-    if (out_state_root && lantern_hash_tree_root_state_cached(&scratch, out_state_root) != 0) {
+    if (out_state_root && lantern_hash_tree_root_state_cached(&scratch, out_state_root) != SSZ_SUCCESS) {
         rc = -1;
         goto cleanup;
     }

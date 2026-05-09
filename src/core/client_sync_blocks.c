@@ -405,7 +405,7 @@ static bool signed_block_signatures_are_valid(
         }
 
         LanternRoot data_root;
-        if (lantern_hash_tree_root_attestation_data(&att->data, &data_root) != 0)
+        if (lantern_hash_tree_root_attestation_data(&att->data, &data_root) != SSZ_SUCCESS)
         {
             free(pubkeys);
             lantern_state_reset(&parent_state);
@@ -451,7 +451,7 @@ static bool signed_block_signatures_are_valid(
         return false;
     }
     LanternRoot block_root;
-    if (lantern_hash_tree_root_block(&block->block, &block_root) != 0)
+    if (lantern_hash_tree_root_block(&block->block, &block_root) != SSZ_SUCCESS)
     {
         lantern_state_reset(&parent_state);
         return false;
@@ -487,7 +487,7 @@ void lantern_client_cache_block_aggregated_proofs_locked(
     }
     for (size_t i = 0; i < count; ++i) {
         LanternRoot data_root;
-        if (lantern_hash_tree_root_attestation_data(&attestations->data[i].data, &data_root) != 0) {
+        if (lantern_hash_tree_root_attestation_data(&attestations->data[i].data, &data_root) != SSZ_SUCCESS) {
             continue;
         }
         (void)lantern_client_add_known_aggregated_payload(
@@ -773,7 +773,7 @@ static int encode_block_ssz(
     }
 
     size_t written = 0;
-    const int encode_rc = lantern_ssz_encode_signed_block(
+    const ssz_error_t encode_rc = lantern_ssz_encode_signed_block(
         block,
         buffer,
         encoded_capacity,
@@ -871,7 +871,7 @@ static bool get_block_root_local(
         *out_root = *provided;
         return true;
     }
-    if (lantern_hash_tree_root_block(&block->block, out_root) != 0)
+    if (lantern_hash_tree_root_block(&block->block, out_root) != SSZ_SUCCESS)
     {
         lantern_log_warn(
             "state",
@@ -1341,7 +1341,7 @@ static bool compute_state_head_root_locked(
     {
         return false;
     }
-    if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, out_root) != 0)
+    if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, out_root) != SSZ_SUCCESS)
     {
         return false;
     }
@@ -1369,14 +1369,14 @@ static bool state_matches_root(const LanternState *state, const LanternRoot *roo
         return false;
     }
     LanternRoot state_root;
-    if (lantern_hash_tree_root_state(state, &state_root) != 0)
+    if (lantern_hash_tree_root_state(state, &state_root) != SSZ_SUCCESS)
     {
         return false;
     }
     LanternBlockHeader header = state->latest_block_header;
     header.state_root = state_root;
     LanternRoot header_root;
-    if (lantern_hash_tree_root_block_header(&header, &header_root) != 0)
+    if (lantern_hash_tree_root_block_header(&header, &header_root) != SSZ_SUCCESS)
     {
         return false;
     }
@@ -1417,7 +1417,7 @@ static bool load_snapshot_state_for_root_locked(
     lantern_state_init(&decoded);
     bool decoded_owned = true;
     bool loaded = false;
-    if (lantern_ssz_decode_state(&decoded, state_bytes, state_len) == 0
+    if (lantern_ssz_decode_state(&decoded, state_bytes, state_len) == SSZ_SUCCESS
         && prepare_off_head_snapshot_state(client->data_dir, root, &decoded) == 0)
     {
         lantern_state_reset(out_state);
@@ -1640,7 +1640,7 @@ const LanternState *lantern_client_state_for_root_local_locked(
         {
             lantern_state_reset(scratch);
             lantern_state_init(scratch);
-            if (lantern_ssz_decode_state(scratch, state_bytes, state_len) == 0)
+            if (lantern_ssz_decode_state(scratch, state_bytes, state_len) == SSZ_SUCCESS)
             {
                 if (prepare_off_head_snapshot_state(client->data_dir, root, scratch) == 0)
                 {
@@ -1918,7 +1918,7 @@ static bool rebuild_state_for_root_locked(
         {
             LanternState snapshot;
             lantern_state_init(&snapshot);
-            if (lantern_ssz_decode_state(&snapshot, state_bytes, state_len) == 0)
+            if (lantern_ssz_decode_state(&snapshot, state_bytes, state_len) == SSZ_SUCCESS)
             {
                 if (prepare_off_head_snapshot_state(client->data_dir, target_root, &snapshot) == 0)
                 {
@@ -2157,7 +2157,7 @@ static bool rebuild_state_for_root_locked(
                 {
                     for (size_t i = 0; i < response.length; ++i)
                     {
-                        if (lantern_hash_tree_root_block(&response.blocks[i].block, &found_roots[i]) == 0)
+                        if (lantern_hash_tree_root_block(&response.blocks[i].block, &found_roots[i]) == SSZ_SUCCESS)
                         {
                             found_count += 1u;
                         }
@@ -2280,7 +2280,7 @@ static bool rebuild_state_for_root_locked(
         {
             LanternRoot block_root = {0};
             char block_hex[ROOT_HEX_BUFFER_LEN] = {0};
-            if (lantern_hash_tree_root_block(&response.blocks[i].block, &block_root) == 0)
+            if (lantern_hash_tree_root_block(&response.blocks[i].block, &block_root) == SSZ_SUCCESS)
             {
                 format_root_hex(&block_root, block_hex, sizeof(block_hex));
             }
@@ -2484,7 +2484,7 @@ static enum block_parent_action handle_block_parent_locked(
     }
     else if (lantern_hash_tree_root_block_header(
                  &client->state.latest_block_header,
-                 &latest_header_root) == 0)
+                 &latest_header_root) == SSZ_SUCCESS)
     {
         have_head_root = true;
         parent_matches_head =
@@ -3699,7 +3699,7 @@ void lantern_client_record_block(
     const LanternRoot *selected_root = root;
     if (!selected_root)
     {
-        if (lantern_hash_tree_root_block(&block->block, &computed_root) != 0)
+        if (lantern_hash_tree_root_block(&block->block, &computed_root) != SSZ_SUCCESS)
         {
             return;
         }

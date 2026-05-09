@@ -521,7 +521,7 @@ static int build_signed_head_block(
         goto cleanup;
     }
     LanternRoot block_signature_root;
-    if (lantern_hash_tree_root_block(&out_block->block, &block_signature_root) != 0) {
+    if (lantern_hash_tree_root_block(&out_block->block, &block_signature_root) != SSZ_SUCCESS) {
         goto cleanup;
     }
     if (!lantern_signature_sign(
@@ -531,7 +531,7 @@ static int build_signed_head_block(
             &out_block->signatures.proposer_signature)) {
         goto cleanup;
     }
-    if (lantern_hash_tree_root_block(&out_block->block, out_root) != 0) {
+    if (lantern_hash_tree_root_block(&out_block->block, out_root) != SSZ_SUCCESS) {
         goto cleanup;
     }
 
@@ -603,7 +603,7 @@ static int test_record_vote_accepts_known_roots(void) {
     }
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &data_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash vote data for gossip signature cache\n");
         goto cleanup;
     }
@@ -676,7 +676,7 @@ static int test_record_vote_buffers_missing_target_state(void) {
     grandchild.proposer_index = 0u;
     grandchild.parent_root = child_root;
     client_test_fill_root(&grandchild.state_root, 0xC3u);
-    if (lantern_hash_tree_root_block(&grandchild, &grandchild_root) != 0) {
+    if (lantern_hash_tree_root_block(&grandchild, &grandchild_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash grandchild block for missing target state test\n");
         goto cleanup;
     }
@@ -1410,7 +1410,7 @@ static int test_validator_build_block_leaves_attestation_key_untouched(void) {
         fprintf(stderr, "validator_build_block failed for key-isolation test\n");
         goto cleanup;
     }
-    if (lantern_hash_tree_root_block(&block.block, &block_root) != 0) {
+    if (lantern_hash_tree_root_block(&block.block, &block_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash built block for key-isolation test\n");
         goto cleanup;
     }
@@ -1700,7 +1700,7 @@ static int test_record_vote_preserves_state_root(void) {
     LanternCheckpoint pre_justified = client.state.latest_justified;
     LanternCheckpoint pre_finalized = client.state.latest_finalized;
     LanternRoot pre_state_root;
-    if (lantern_hash_tree_root_state(&client.state, &pre_state_root) != 0) {
+    if (lantern_hash_tree_root_state(&client.state, &pre_state_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash pre-vote state\n");
         goto cleanup;
     }
@@ -1732,7 +1732,7 @@ static int test_record_vote_preserves_state_root(void) {
     }
 
     LanternRoot post_state_root;
-    if (lantern_hash_tree_root_state(&client.state, &post_state_root) != 0) {
+    if (lantern_hash_tree_root_state(&client.state, &post_state_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash post-vote state\n");
         goto cleanup;
     }
@@ -1813,7 +1813,7 @@ static int test_record_vote_defers_interval_pipeline(void) {
     }
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &data_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash vote data for interval pipeline test\n");
         goto cleanup;
     }
@@ -1996,7 +1996,7 @@ static int test_skip_fork_choice_intervals_replays_interval_side_effects(void) {
         goto cleanup;
     }
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &data_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash skip replay vote data\n");
         goto cleanup;
     }
@@ -2121,7 +2121,7 @@ static int test_safe_target_uses_only_new_attached_aggregated_payloads(void) {
     data.source.root = anchor_root;
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&data, &data_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash attestation data for aggregated safe-target test\n");
         goto cleanup;
     }
@@ -2505,7 +2505,7 @@ static int test_debug_aggregate_attestation_signatures_rebuilds_new_payloads(voi
         goto cleanup;
     }
 
-    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &fresh_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &fresh_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash fresh attestation data for recursive aggregation test\n");
         goto cleanup;
     }
@@ -2912,7 +2912,7 @@ static int test_validator_build_reuses_cached_group_proof(void) {
     }
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&valid_vote.data.data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&valid_vote.data.data, &data_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash vote data for cached proof reuse test\n");
         goto cleanup;
     }
@@ -3131,7 +3131,7 @@ static int test_block_build_keeps_known_payload_after_newer_raw_vote(void) {
         fprintf(stderr, "failed to build proof-backed vote for block-build shadow test\n");
         goto cleanup;
     }
-    if (lantern_hash_tree_root_attestation_data(&proof_vote.data.data, &proof_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&proof_vote.data.data, &proof_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash proof-backed vote for block-build shadow test\n");
         goto cleanup;
     }
@@ -3177,7 +3177,7 @@ static int test_block_build_keeps_known_payload_after_newer_raw_vote(void) {
         fprintf(stderr, "failed to sign newer raw vote for block-build shadow test\n");
         goto cleanup;
     }
-    if (lantern_hash_tree_root_attestation_data(&raw_vote.data.data, &raw_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&raw_vote.data.data, &raw_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash newer raw vote for block-build shadow test\n");
         goto cleanup;
     }
@@ -3306,7 +3306,7 @@ static int test_publish_aggregated_attestations_collects_any_slot_and_prunes_gos
         fprintf(stderr, "expected all gossip signatures to be cached before subnet filtering\n");
         goto cleanup;
     }
-    if (lantern_hash_tree_root_attestation_data(&vote0.data.data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&vote0.data.data, &data_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash attestation data for prune test\n");
         goto cleanup;
     }
@@ -3505,7 +3505,7 @@ static int test_local_block_commit_updates_state_before_publish(void) {
         fprintf(stderr, "validator_build_block failed for local block publish test\n");
         goto cleanup;
     }
-    if (lantern_hash_tree_root_block(&block.block, &block_root) != 0) {
+    if (lantern_hash_tree_root_block(&block.block, &block_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash built block for local block publish test\n");
         goto cleanup;
     }

@@ -1246,7 +1246,7 @@ int reqresp_build_status(void *context, LanternStatusMessage *out_status)
         if (lantern_hash_tree_root_block_header(
                 &client->state.latest_block_header,
                 &out_status->head.root)
-            != 0)
+            != SSZ_SUCCESS)
         {
             memset(&out_status->head.root, 0, sizeof(out_status->head.root));
         }
@@ -1353,7 +1353,7 @@ static bool signed_block_matches_root(
         return false;
     }
     LanternRoot block_root = {0};
-    if (lantern_hash_tree_root_block(&block->block, &block_root) != 0)
+    if (lantern_hash_tree_root_block(&block->block, &block_root) != SSZ_SUCCESS)
     {
         return false;
     }
@@ -1385,8 +1385,6 @@ static int signed_block_copy(
         lantern_signed_block_init(dst);
         return -1;
     }
-    dst->block.body.legacy_plain_attestation_layout =
-        src->block.body.legacy_plain_attestation_layout;
 
     if (lantern_block_signatures_copy(
             &dst->signatures,

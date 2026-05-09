@@ -253,7 +253,7 @@ static int client_test_setup_vote_validation_client_common(
     }
 
     LanternRoot anchor_state_root;
-    if (lantern_hash_tree_root_state(&client->state, &anchor_state_root) != 0) {
+    if (lantern_hash_tree_root_state(&client->state, &anchor_state_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash anchor state for vote test\n");
         goto finish;
     }
@@ -270,7 +270,7 @@ static int client_test_setup_vote_validation_client_common(
     anchor.parent_root = client->state.latest_block_header.parent_root;
     anchor.state_root = anchor_state_root;
 
-    if (lantern_hash_tree_root_block(&anchor, &anchor_root_local) != 0) {
+    if (lantern_hash_tree_root_block(&anchor, &anchor_root_local) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash anchor block for vote test\n");
         goto finish;
     }
@@ -315,7 +315,7 @@ static int client_test_setup_vote_validation_client_common(
     }
     child_signed.block = child;
 
-    if (lantern_hash_tree_root_block(&child, &child_root_local) != 0) {
+    if (lantern_hash_tree_root_block(&child, &child_root_local) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash child block for vote test\n");
         goto finish;
     }
@@ -474,7 +474,7 @@ int client_test_sign_vote_with_secret(LanternSignedVote *vote, struct PQSignatur
         return -1;
     }
     LanternRoot vote_root;
-    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &vote_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &vote_root) != SSZ_SUCCESS) {
         return -1;
     }
     if (!lantern_signature_sign(secret, vote->data.slot, &vote_root, &vote->signature)) {

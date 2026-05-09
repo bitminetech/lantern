@@ -131,7 +131,7 @@ static bool verify_aggregated_attestations(
         }
 
         LanternRoot data_root;
-        if (lantern_hash_tree_root_attestation_data(&att->data, &data_root) != 0) {
+        if (lantern_hash_tree_root_attestation_data(&att->data, &data_root) != SSZ_SUCCESS) {
             free(pubkeys);
             fprintf(stderr, "%s: failed to hash attestation data\n", path ? path : "(unknown)");
             return false;
@@ -175,7 +175,7 @@ static bool verify_proposer_signature(const LanternState *state, const LanternSi
         return false;
     }
     LanternRoot block_root;
-    if (lantern_hash_tree_root_block(&block->block, &block_root) != 0) {
+    if (lantern_hash_tree_root_block(&block->block, &block_root) != SSZ_SUCCESS) {
         fprintf(stderr, "%s: block hash failed for proposer signature\n", path ? path : "(unknown)");
         return false;
     }
