@@ -5,11 +5,9 @@
 #include <stdint.h>
 
 #include "lantern/consensus/containers.h"
-#include "peer_id/peer_id.h"
+#include "lantern/networking/libp2p.h"
 
-struct libp2p_host;
 typedef struct libp2p_gossipsub libp2p_gossipsub_t;
-typedef struct libp2p_gossipsub_validator_handle libp2p_gossipsub_validator_handle_t;
 struct lantern_gossipsub_validation_pool;
 
 #ifdef __cplusplus
@@ -17,7 +15,7 @@ extern "C" {
 #endif
 
 struct lantern_gossipsub_config {
-    struct libp2p_host *host;
+    struct lantern_libp2p_host *network;
     const char *devnet;
     const char *data_dir;
     const char *topic_network_name;
@@ -28,25 +26,30 @@ struct lantern_gossipsub_config {
 
 typedef int (*lantern_gossipsub_block_handler)(
     const LanternSignedBlock *block,
-    const peer_id_t *from,
+    const struct lantern_peer_id *from,
     const uint8_t *raw_block_ssz,
     size_t raw_block_ssz_len,
     void *user_data);
 typedef int (*lantern_gossipsub_vote_handler)(
     const LanternSignedVote *vote,
-    const peer_id_t *from,
+    const struct lantern_peer_id *from,
     const uint8_t *raw_vote_payload,
     size_t raw_vote_payload_len,
     void *user_data);
 typedef int (*lantern_gossipsub_aggregated_attestation_handler)(
     const LanternSignedAggregatedAttestation *attestation,
-    const peer_id_t *from,
+    const struct lantern_peer_id *from,
     const uint8_t *raw_attestation_payload,
     size_t raw_attestation_payload_len,
     void *user_data);
 
 struct lantern_gossipsub_service {
+    struct lantern_libp2p_host *network;
     libp2p_gossipsub_t *gossipsub;
+    void *gossipsub_storage;
+    size_t gossipsub_storage_len;
+    libp2p_host_protocol_t gossipsub_protocols[LIBP2P_GOSSIPSUB_PROTOCOL_COUNT];
+    size_t gossipsub_protocol_count;
     char block_topic[128];
     char vote_topic[128];
     char vote_subnet_topic[128];
@@ -66,12 +69,7 @@ struct lantern_gossipsub_service {
     void *vote_handler_user_data;
     lantern_gossipsub_aggregated_attestation_handler aggregated_attestation_handler;
     void *aggregated_attestation_handler_user_data;
-    libp2p_gossipsub_validator_handle_t *block_validator_handle;
-    libp2p_gossipsub_validator_handle_t *vote_validator_handle;
-    libp2p_gossipsub_validator_handle_t *vote_subnet_validator_handle;
-    libp2p_gossipsub_validator_handle_t *aggregated_attestation_validator_handle;
     char (*extra_vote_subnet_topics)[128];
-    libp2p_gossipsub_validator_handle_t **extra_vote_subnet_validator_handles;
     size_t extra_vote_subnet_topic_count;
     struct lantern_gossipsub_validation_pool *validation_pool;
 };

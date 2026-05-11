@@ -62,24 +62,6 @@ static void assert_checkpoint_equal(const LanternCheckpoint *lhs, const LanternC
     }
 }
 
-static void assert_vote_equal(const LanternVote *lhs, const LanternVote *rhs) {
-    if (lhs->validator_id != rhs->validator_id || lhs->slot != rhs->slot) {
-        fprintf(stderr, "vote slot mismatch\n");
-        abort();
-    }
-    assert_checkpoint_equal(&lhs->head, &rhs->head);
-    assert_checkpoint_equal(&lhs->target, &rhs->target);
-    assert_checkpoint_equal(&lhs->source, &rhs->source);
-}
-
-static void assert_signed_vote_equal(const LanternSignedVote *lhs, const LanternSignedVote *rhs) {
-    assert_vote_equal(&lhs->data, &rhs->data);
-    if (memcmp(lhs->signature.bytes, rhs->signature.bytes, LANTERN_SIGNATURE_SIZE) != 0) {
-        fprintf(stderr, "vote signature mismatch\n");
-        abort();
-    }
-}
-
 static void assert_attestation_data_equal(const LanternAttestationData *lhs, const LanternAttestationData *rhs) {
     if (lhs->slot != rhs->slot) {
         fprintf(stderr, "attestation data slot mismatch\n");
@@ -193,16 +175,6 @@ static void build_aggregated_attestation_from_vote(
     expect_ok(lantern_bitlist_resize(&out_attestation->aggregation_bits, bit_length), "agg bitlist resize");
     expect_ok(lantern_bitlist_set(&out_attestation->aggregation_bits, (size_t)vote->validator_id, true),
               "agg bitlist set");
-}
-
-static void fill_proof_data(LanternAggregatedSignatureProof *proof, uint8_t seed, size_t len) {
-    if (!proof) {
-        return;
-    }
-    expect_ok(lantern_byte_list_resize(&proof->proof_data, len), "proof data resize");
-    if (len > 0 && proof->proof_data.data) {
-        fill_bytes(proof->proof_data.data, len, seed);
-    }
 }
 
 static void bitlist_set(struct lantern_bitlist *bitlist, size_t index, bool value) {
@@ -328,8 +300,7 @@ static void test_signed_vote_signature_validation(void) {
     assert(decoded.signature.bytes[0] == (uint8_t)(signed_vote.signature.bytes[0] ^ 0xAA));
 
     assert(lantern_ssz_encode_signed_vote(&signed_vote, buffer, sizeof(buffer), &written) == SSZ_SUCCESS);
-    buffer[0] ^= 0xFF;
-    assert(lantern_ssz_decode_signed_vote(&decoded, buffer, sizeof(buffer)) != SSZ_SUCCESS);
+    assert(lantern_ssz_decode_signed_vote(&decoded, buffer, sizeof(buffer) - 1u) != SSZ_SUCCESS);
 }
 
 static void test_block_header_roundtrip(void) {
@@ -417,31 +388,6 @@ static void reset_signed_block(LanternSignedBlock *block) {
         return;
     }
     lantern_signed_block_with_attestation_reset(block);
-}
-
-static void populate_signed_block_with_signatures(LanternSignedBlock *signed_block) {
-    lantern_signed_block_with_attestation_init(signed_block);
-    populate_block(&signed_block->block);
-
-    size_t attestation_count = signed_block->block.body.attestations.length;
-    expect_ok(
-        lantern_attestation_signatures_resize(
-            &signed_block->signatures.attestation_signatures,
-            attestation_count),
-        "resize block signatures");
-    for (size_t i = 0; i < attestation_count; ++i) {
-        LanternAggregatedSignatureProof *proof = &signed_block->signatures.attestation_signatures.data[i];
-        const LanternAggregatedAttestation *attestation = &signed_block->block.body.attestations.data[i];
-        expect_ok(
-            lantern_bitlist_resize(&proof->participants, attestation->aggregation_bits.bit_length),
-            "resize proof participants");
-        size_t byte_len = (attestation->aggregation_bits.bit_length + 7u) / 8u;
-        if (byte_len > 0) {
-            memcpy(proof->participants.bytes, attestation->aggregation_bits.bytes, byte_len);
-        }
-        fill_proof_data(proof, (uint8_t)(0xC0u + (i * 0x10u)), 4u + i);
-    }
-    fill_signature(&signed_block->signatures.proposer_signature, 0xA5);
 }
 
 static void expect_block_signatures_equal(
@@ -574,6 +520,9 @@ static void test_state_roundtrip(void) {
     lantern_state_init(&state);
     state.config.num_validators = 64;
     state.config.genesis_time = 123456789;
+    uint8_t validator_pubkeys[64u * LANTERN_VALIDATOR_PUBKEY_SIZE];
+    fill_bytes(validator_pubkeys, sizeof(validator_pubkeys), 0x71);
+    expect_ok(lantern_state_set_validator_pubkeys(&state, validator_pubkeys, 64u), "state validators");
     state.slot = 42;
     state.latest_block_header.slot = 41;
     state.latest_block_header.proposer_index = 3;
@@ -607,6 +556,7 @@ static void test_state_roundtrip(void) {
     assert(lantern_ssz_decode_state(&decoded, buffer, written) == SSZ_SUCCESS);
 
     assert(decoded.config.num_validators == state.config.num_validators);
+    assert(decoded.validator_count == state.validator_count);
     assert(decoded.config.genesis_time == state.config.genesis_time);
     assert(decoded.slot == state.slot);
     assert(decoded.latest_block_header.proposer_index == state.latest_block_header.proposer_index);

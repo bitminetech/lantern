@@ -265,27 +265,6 @@ static ssz_error_t hash_validator(
     return merkleize_chunks(chunks, 3, 0, out_root);
 }
 
-/* Justification roots and votes are already canonicalized before entering state. */
-static ssz_error_t merkleize_sorted_justifications(
-    const struct lantern_root_list *roots,
-    const struct lantern_bitlist *validators,
-    size_t validator_count,
-    LanternRoot *out_roots_root,
-    LanternRoot *out_validators_root) {
-    (void)validator_count;
-    if (!roots || !validators || !out_roots_root || !out_validators_root) {
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-
-    size_t bits_per_chunk = SSZ_BYTES_PER_CHUNK * 8u;
-
-    LANTERN_RETURN_IF_SSZ_ERROR(lantern_merkleize_root_list(roots, LANTERN_HISTORICAL_ROOTS_LIMIT, out_roots_root));
-
-    size_t chunk_limit =
-        (LANTERN_JUSTIFICATION_VALIDATORS_LIMIT + bits_per_chunk - 1u) / bits_per_chunk;
-    return lantern_merkleize_bitlist(validators, chunk_limit, out_validators_root);
-}
-
 ssz_error_t lantern_hash_tree_root_config(const LanternConfig *config, LanternRoot *out_root) {
     if (!config || !out_root) {
         return SSZ_ERR_INVALID_ARGUMENT;

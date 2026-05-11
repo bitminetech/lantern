@@ -30,6 +30,7 @@
 
 #include "lantern/http/common.h"
 #include "lantern/support/log.h"
+#include "lantern/support/strings.h"
 #include "lantern/support/version.h"
 
 static const size_t LANTERN_METRICS_READ_BUFFER_SIZE = 4096;
@@ -831,8 +832,7 @@ static int append_peer_vote_metrics(
     {
         const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
         char peer_id[sizeof(metric->peer_id)];
-        strncpy(peer_id, metric->peer_id, sizeof(peer_id) - 1);
-        peer_id[sizeof(peer_id) - 1] = '\0';
+        (void)lantern_string_copy(peer_id, sizeof(peer_id), metric->peer_id);
 
         rc = metrics_buffer_appendf(
             buf,
@@ -858,8 +858,7 @@ static int append_peer_vote_metrics(
     {
         const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
         char peer_id[sizeof(metric->peer_id)];
-        strncpy(peer_id, metric->peer_id, sizeof(peer_id) - 1);
-        peer_id[sizeof(peer_id) - 1] = '\0';
+        (void)lantern_string_copy(peer_id, sizeof(peer_id), metric->peer_id);
 
         rc = metrics_buffer_appendf(
             buf,
@@ -885,8 +884,7 @@ static int append_peer_vote_metrics(
     {
         const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
         char peer_id[sizeof(metric->peer_id)];
-        strncpy(peer_id, metric->peer_id, sizeof(peer_id) - 1);
-        peer_id[sizeof(peer_id) - 1] = '\0';
+        (void)lantern_string_copy(peer_id, sizeof(peer_id), metric->peer_id);
 
         rc = metrics_buffer_appendf(
             buf,
@@ -912,8 +910,7 @@ static int append_peer_vote_metrics(
     {
         const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
         char peer_id[sizeof(metric->peer_id)];
-        strncpy(peer_id, metric->peer_id, sizeof(peer_id) - 1);
-        peer_id[sizeof(peer_id) - 1] = '\0';
+        (void)lantern_string_copy(peer_id, sizeof(peer_id), metric->peer_id);
 
         rc = metrics_buffer_appendf(
             buf,
@@ -939,8 +936,7 @@ static int append_peer_vote_metrics(
     {
         const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
         char peer_id[sizeof(metric->peer_id)];
-        strncpy(peer_id, metric->peer_id, sizeof(peer_id) - 1);
-        peer_id[sizeof(peer_id) - 1] = '\0';
+        (void)lantern_string_copy(peer_id, sizeof(peer_id), metric->peer_id);
 
         rc = metrics_buffer_appendf(
             buf,
@@ -1356,15 +1352,13 @@ static void peer_to_text(const struct sockaddr_in *peer_addr, char *out, size_t 
     const char *fallback = "unknown";
     if (!peer_addr)
     {
-        strncpy(out, fallback, out_len - 1);
-        out[out_len - 1] = '\0';
+        (void)lantern_string_copy(out, out_len, fallback);
         return;
     }
 
     if (!inet_ntop(AF_INET, &peer_addr->sin_addr, out, out_len))
     {
-        strncpy(out, fallback, out_len - 1);
-        out[out_len - 1] = '\0';
+        (void)lantern_string_copy(out, out_len, fallback);
     }
 }
 

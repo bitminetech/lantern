@@ -25,6 +25,27 @@ char *lantern_string_duplicate_len(const char *source, size_t length) {
     return copy;
 }
 
+size_t lantern_string_copy(char *dst, size_t dst_len, const char *src) {
+    if (!dst || dst_len == 0) {
+        return 0;
+    }
+    if (!src) {
+        dst[0] = '\0';
+        return 0;
+    }
+
+    const size_t src_len = strlen(src);
+    size_t copy_len = src_len;
+    if (copy_len >= dst_len) {
+        copy_len = dst_len - 1;
+    }
+    if (copy_len > 0) {
+        memcpy(dst, src, copy_len);
+    }
+    dst[copy_len] = '\0';
+    return src_len;
+}
+
 char *lantern_trim_whitespace(char *value) {
     if (!value) {
         return NULL;

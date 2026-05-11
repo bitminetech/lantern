@@ -97,15 +97,13 @@ static void peer_to_text(const struct sockaddr_in *peer_addr, char *out, size_t 
     const char *fallback = "unknown";
     if (!peer_addr)
     {
-        strncpy(out, fallback, out_len - 1);
-        out[out_len - 1] = '\0';
+        (void)lantern_string_copy(out, out_len, fallback);
         return;
     }
 
     if (!inet_ntop(AF_INET, &peer_addr->sin_addr, out, out_len))
     {
-        strncpy(out, fallback, out_len - 1);
-        out[out_len - 1] = '\0';
+        (void)lantern_string_copy(out, out_len, fallback);
     }
 }
 

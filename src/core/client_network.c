@@ -23,24 +23,10 @@
 #include <time.h>
 #include <inttypes.h>
 
-#include <libp2p/errors.h>
-#include <protocol/gossipsub/gossipsub.h>
-#include <protocol/identify/protocol_identify.h>
-#include <protocol/ping/protocol_ping.h>
-
 #include "lantern/networking/libp2p.h"
 #include "lantern/metrics/lean_metrics.h"
 #include "lantern/support/log.h"
 #include "lantern/support/string_list.h"
-
-
-/* ============================================================================
- * Constants
- * ============================================================================ */
-
-static const unsigned LANTERN_PING_INTERVAL_SECONDS = 15u;
-static const uint64_t LANTERN_PING_TIMEOUT_MS = 5000ULL;
-static const uint32_t LANTERN_PING_FAILURES_BEFORE_DISCONNECT = 1u;
 
 
 /* ============================================================================
@@ -56,28 +42,7 @@ static const uint32_t LANTERN_PING_FAILURES_BEFORE_DISCONNECT = 1u;
  *
  * @note Thread safety: This function is thread-safe
  */
-static int write_legacy_peer_id_text(const peer_id_t *peer, char *out, size_t out_len)
-{
-    if (!peer || !out || out_len == 0)
-    {
-        return -1;
-    }
-    size_t written = 0;
-    peer_id_error_t rc = peer_id_text_write(
-        peer,
-        PEER_ID_TEXT_LEGACY_BASE58,
-        out,
-        out_len,
-        &written);
-    if (rc != PEER_ID_OK)
-    {
-        out[0] = '\0';
-        return -1;
-    }
-    return (int)written;
-}
-
-static void format_peer_id_text(const peer_id_t *peer, char *out, size_t out_len)
+static void format_peer_id_text(const struct lantern_peer_id *peer, char *out, size_t out_len)
 {
     if (!out || out_len == 0)
     {
@@ -90,7 +55,7 @@ static void format_peer_id_text(const peer_id_t *peer, char *out, size_t out_len
         return;
     }
 
-    if (write_legacy_peer_id_text(peer, out, out_len) < 0)
+    if (lantern_peer_id_to_text(peer, out, out_len) < 0)
     {
         out[0] = '\0';
     }
@@ -103,24 +68,21 @@ static lean_metrics_direction_t metrics_direction_from_inbound(bool inbound)
 
 static lean_metrics_connection_result_t metrics_connection_result_from_code(int code)
 {
-    return (code == LIBP2P_ERR_TIMEOUT) ? LEAN_METRICS_CONN_RESULT_TIMEOUT : LEAN_METRICS_CONN_RESULT_ERROR;
+    (void)code;
+    return LEAN_METRICS_CONN_RESULT_ERROR;
 }
 
 static lean_metrics_disconnection_reason_t metrics_disconnection_reason_from_code(int reason)
 {
-    switch (reason)
+    if (reason == LIBP2P_HOST_OK)
     {
-        case LIBP2P_ERR_TIMEOUT:
-            return LEAN_METRICS_DISCONNECT_TIMEOUT;
-        case LIBP2P_ERR_EOF:
-        case LIBP2P_ERR_RESET:
-            return LEAN_METRICS_DISCONNECT_REMOTE_CLOSE;
-        case 0:
-        case LIBP2P_ERR_CLOSED:
-            return LEAN_METRICS_DISCONNECT_LOCAL_CLOSE;
-        default:
-            return LEAN_METRICS_DISCONNECT_ERROR;
+        return LEAN_METRICS_DISCONNECT_LOCAL_CLOSE;
     }
+    if (reason == LIBP2P_HOST_ERR_CLOSED)
+    {
+        return LEAN_METRICS_DISCONNECT_REMOTE_CLOSE;
+    }
+    return LEAN_METRICS_DISCONNECT_ERROR;
 }
 
 /* ============================================================================
@@ -145,6 +107,8 @@ void connection_counter_reset(struct lantern_client *client)
         client->connected_peers = 0;
         lantern_string_list_reset(&client->connected_peer_ids);
         lantern_string_list_init(&client->connected_peer_ids);
+        lantern_string_list_reset(&client->connected_peer_refs);
+        lantern_string_list_init(&client->connected_peer_refs);
         lantern_string_list_reset(&client->inbound_peer_ids);
         lantern_string_list_init(&client->inbound_peer_ids);
         return;
@@ -154,6 +118,8 @@ void connection_counter_reset(struct lantern_client *client)
         client->connected_peers = 0;
         lantern_string_list_reset(&client->connected_peer_ids);
         lantern_string_list_init(&client->connected_peer_ids);
+        lantern_string_list_reset(&client->connected_peer_refs);
+        lantern_string_list_init(&client->connected_peer_refs);
         lantern_string_list_reset(&client->inbound_peer_ids);
         lantern_string_list_init(&client->inbound_peer_ids);
         pthread_mutex_unlock(&client->connection_lock);
@@ -163,6 +129,8 @@ void connection_counter_reset(struct lantern_client *client)
         client->connected_peers = 0;
         lantern_string_list_reset(&client->connected_peer_ids);
         lantern_string_list_init(&client->connected_peer_ids);
+        lantern_string_list_reset(&client->connected_peer_refs);
+        lantern_string_list_init(&client->connected_peer_refs);
         lantern_string_list_reset(&client->inbound_peer_ids);
         lantern_string_list_init(&client->inbound_peer_ids);
     }
@@ -183,7 +151,7 @@ void connection_counter_reset(struct lantern_client *client)
 void connection_counter_update(
     struct lantern_client *client,
     int delta,
-    const peer_id_t *peer,
+    const struct lantern_peer_id *peer,
     bool inbound,
     int reason)
 {
@@ -203,6 +171,7 @@ void connection_counter_update(
         {
             if (delta > 0)
             {
+                (void)lantern_string_list_append(&client->connected_peer_refs, peer_text);
                 if (!string_list_contains(&client->connected_peer_ids, peer_text))
                 {
                     (void)lantern_string_list_append(&client->connected_peer_ids, peer_text);
@@ -216,7 +185,9 @@ void connection_counter_update(
                 }
                 else
                 {
-                    string_list_remove(&client->inbound_peer_ids, peer_text);
+                    /* Keep an existing inbound mark while any connection for
+                     * the peer remains; c-lean-libp2p close events do not
+                     * expose the original connection direction. */
                 }
             }
             else if (delta < 0)
@@ -224,9 +195,13 @@ void connection_counter_update(
                 if (string_list_contains(&client->connected_peer_ids, peer_text))
                 {
                     was_inbound = string_list_contains(&client->inbound_peer_ids, peer_text);
-                    string_list_remove(&client->connected_peer_ids, peer_text);
-                    string_list_remove(&client->inbound_peer_ids, peer_text);
-                    record_disconnect = true;
+                    string_list_remove(&client->connected_peer_refs, peer_text);
+                    if (!string_list_contains(&client->connected_peer_refs, peer_text))
+                    {
+                        string_list_remove(&client->connected_peer_ids, peer_text);
+                        string_list_remove(&client->inbound_peer_ids, peer_text);
+                        record_disconnect = true;
+                    }
                 }
             }
             client->connected_peers = client->connected_peer_ids.len;
@@ -345,7 +320,7 @@ bool lantern_client_is_peer_connected(struct lantern_client *client, const char 
  *
  * @note Thread safety: This function acquires status_lock
  */
-void request_status_now(struct lantern_client *client, const peer_id_t *peer, const char *peer_text)
+void request_status_now(struct lantern_client *client, const struct lantern_peer_id *peer, const char *peer_text)
 {
     if (!client || !client->reqresp_running)
     {
@@ -561,36 +536,13 @@ void identify_dial_multiaddr(
         return;
     }
 
-    libp2p_stream_t *stream = NULL;
-    int rc = libp2p_host_dial_protocol_blocking(
-        client->network.host,
-        multiaddr,
-        LIBP2P_IDENTIFY_PROTO_ID,
-        LANTERN_PEER_DIAL_TIMEOUT_MS,
-        &stream);
-
-    if (rc == 0 && stream)
-    {
-        libp2p_stream_free(stream);
-        lantern_log_debug(
-            "network",
-            &(const struct lantern_log_metadata){
-                .validator = client->node_id,
-                .peer = peer_label,
-            },
-            "identify dial succeeded addr=%s",
-            multiaddr);
-        return;
-    }
-
     lantern_log_trace(
         "network",
         &(const struct lantern_log_metadata){
             .validator = client->node_id,
             .peer = peer_label,
         },
-        "identify dial failed rc=%d addr=%s",
-        rc,
+        "identify query will run after connection opens addr=%s",
         multiaddr);
 }
 
@@ -633,7 +585,7 @@ void peer_dialer_sleep(struct lantern_client *client, unsigned seconds)
  *
  * @note Thread safety: This function acquires connection_lock
  */
-void redial_peer_on_timeout(struct lantern_client *client, const peer_id_t *peer)
+void redial_peer_on_timeout(struct lantern_client *client, const struct lantern_peer_id *peer)
 {
     if (!client || !client->network.host || !peer)
     {
@@ -673,7 +625,7 @@ void redial_peer_on_timeout(struct lantern_client *client, const peer_id_t *peer
         }
 
         char multiaddr[256];
-        peer_id_t *enr_peer_id = NULL;
+        struct lantern_peer_id enr_peer_id;
         if (lantern_libp2p_enr_to_multiaddr(
                 record,
                 multiaddr,
@@ -683,10 +635,7 @@ void redial_peer_on_timeout(struct lantern_client *client, const peer_id_t *peer
             continue;
         }
 
-        int eq = peer_id_equal(peer, enr_peer_id);
-        peer_id_free(enr_peer_id);
-
-        if (eq == 1)
+        if (lantern_peer_id_equal(peer, &enr_peer_id))
         {
             /* Found matching peer in genesis, redial */
             lantern_log_info(
@@ -698,10 +647,7 @@ void redial_peer_on_timeout(struct lantern_client *client, const peer_id_t *peer
                 "redialing peer after disconnect addr=%s",
                 multiaddr);
 
-            (void)lantern_libp2p_host_add_enr_peer(
-                &client->network,
-                record,
-                LANTERN_LIBP2P_DEFAULT_PEER_TTL_MS);
+            (void)lantern_libp2p_host_dial_multiaddr(&client->network, multiaddr);
             identify_dial_multiaddr(client, multiaddr, peer_text[0] ? peer_text : record->encoded);
             return;
         }
@@ -769,20 +715,17 @@ static size_t snapshot_connected_peers(
  *
  * @note Thread safety: This function is thread-safe
  */
-static peer_id_t *get_local_peer_id(struct lantern_client *client)
+static bool get_local_peer_id(struct lantern_client *client, struct lantern_peer_id *out_peer)
 {
-    if (!client || !client->network.host)
+    if (!client || !out_peer || client->network.local_peer_id_len == 0
+        || client->network.local_peer_id_len > sizeof(out_peer->bytes))
     {
-        return NULL;
+        return false;
     }
 
-    peer_id_t *local_peer = NULL;
-    if (libp2p_host_get_peer_id(client->network.host, &local_peer) != 0)
-    {
-        return NULL;
-    }
-
-    return local_peer;
+    memcpy(out_peer->bytes, client->network.local_peer_id, client->network.local_peer_id_len);
+    out_peer->len = client->network.local_peer_id_len;
+    return true;
 }
 
 
@@ -797,7 +740,7 @@ static peer_id_t *get_local_peer_id(struct lantern_client *client)
  */
 static size_t compute_peer_dial_target(
     const struct lantern_enr_record_list *enrs,
-    const peer_id_t *local_peer)
+    const struct lantern_peer_id *local_peer)
 {
     if (!enrs || enrs->count == 0)
     {
@@ -827,7 +770,7 @@ static size_t compute_peer_dial_target(
 static void peer_dialer_handle_record(
     struct lantern_client *client,
     const struct lantern_enr_record *record,
-    const peer_id_t *local_peer,
+    const struct lantern_peer_id *local_peer,
     const struct lantern_string_list *connected_snapshot)
 {
     if (!client || !record || !record->encoded)
@@ -836,66 +779,34 @@ static void peer_dialer_handle_record(
     }
 
     char multiaddr[256];
-    peer_id_t *peer_id = NULL;
+    struct lantern_peer_id peer_id;
     if (lantern_libp2p_enr_to_multiaddr(record, multiaddr, sizeof(multiaddr), &peer_id) != 0)
     {
         return;
     }
 
-    if (local_peer && peer_id_equal(local_peer, peer_id) == 1)
+    if (local_peer && lantern_peer_id_equal(local_peer, &peer_id))
     {
-        peer_id_free(peer_id);
         return;
     }
 
     char peer_text[128];
-    format_peer_id_text(peer_id, peer_text, sizeof(peer_text));
+    format_peer_id_text(&peer_id, peer_text, sizeof(peer_text));
 
     if (peer_text[0] && connected_snapshot && string_list_contains(connected_snapshot, peer_text))
     {
-        peer_id_free(peer_id);
         return;
     }
 
-    (void)lantern_libp2p_host_add_enr_peer(
-        &client->network,
-        record,
-        LANTERN_LIBP2P_DEFAULT_PEER_TTL_MS);
+    (void)lantern_libp2p_host_dial_multiaddr(&client->network, multiaddr);
 
     const char *peer_label = peer_text[0] ? peer_text : record->encoded;
     identify_dial_multiaddr(client, multiaddr, peer_label);
 
-    if (client->gossip_running && client->gossip.gossipsub)
+    if (peer_text[0] && !string_list_contains(&client->dialer_peers, peer_text))
     {
-        bool already_added = false;
-        if (peer_text[0])
-        {
-            already_added = string_list_contains(&client->dialer_peers, peer_text);
-        }
-
-        if (!already_added)
-        {
-            libp2p_err_t perr = libp2p_gossipsub_peering_add(
-                client->gossip.gossipsub,
-                peer_id);
-            if (perr == LIBP2P_ERR_OK)
-            {
-                if (peer_text[0])
-                {
-                    (void)lantern_string_list_append(&client->dialer_peers, peer_text);
-                }
-                lantern_log_trace(
-                    "network",
-                    &(const struct lantern_log_metadata){
-                        .validator = client->node_id,
-                        .peer = peer_label,
-                    },
-                    "dialer added peer to gossipsub peering");
-            }
-        }
+        (void)lantern_string_list_append(&client->dialer_peers, peer_text);
     }
-
-    peer_id_free(peer_id);
 }
 
 
@@ -922,7 +833,8 @@ void peer_dialer_attempt(struct lantern_client *client)
     struct lantern_string_list connected_snapshot;
     lantern_string_list_init(&connected_snapshot);
     size_t connected_unique = snapshot_connected_peers(client, &connected_snapshot);
-    peer_id_t *local_peer = get_local_peer_id(client);
+    struct lantern_peer_id local_peer_value;
+    struct lantern_peer_id *local_peer = get_local_peer_id(client, &local_peer_value) ? &local_peer_value : NULL;
 
     size_t target = compute_peer_dial_target(enrs, local_peer);
     if (target > 0 && connected_unique >= target)
@@ -945,11 +857,6 @@ void peer_dialer_attempt(struct lantern_client *client)
     }
 
 cleanup:
-    if (local_peer)
-    {
-        peer_id_free(local_peer);
-    }
-
     lantern_string_list_reset(&connected_snapshot);
 }
 
@@ -1034,404 +941,6 @@ void stop_peer_dialer(struct lantern_client *client)
 
 
 /* ============================================================================
- * Ping Service
- * ============================================================================ */
-
-static uint32_t record_peer_ping_failure(struct lantern_client *client, const char *peer_text)
-{
-    if (!client || !peer_text || peer_text[0] == '\0')
-    {
-        return 0;
-    }
-    if (!client->status_lock_initialized)
-    {
-        return 0;
-    }
-    if (pthread_mutex_lock(&client->status_lock) != 0)
-    {
-        return 0;
-    }
-
-    uint32_t failures = 0;
-    struct lantern_peer_status_entry *entry =
-        lantern_client_ensure_status_entry_locked(client, peer_text);
-    if (entry)
-    {
-        if (entry->consecutive_ping_failures < UINT32_MAX)
-        {
-            entry->consecutive_ping_failures += 1u;
-        }
-        failures = entry->consecutive_ping_failures;
-    }
-    pthread_mutex_unlock(&client->status_lock);
-    return failures;
-}
-
-static void clear_peer_ping_failures(struct lantern_client *client, const char *peer_text)
-{
-    if (!client || !peer_text || peer_text[0] == '\0')
-    {
-        return;
-    }
-    if (!client->status_lock_initialized)
-    {
-        return;
-    }
-    if (pthread_mutex_lock(&client->status_lock) != 0)
-    {
-        return;
-    }
-    struct lantern_peer_status_entry *entry =
-        lantern_client_find_status_entry_locked(client, peer_text);
-    if (entry)
-    {
-        entry->consecutive_ping_failures = 0;
-    }
-    pthread_mutex_unlock(&client->status_lock);
-}
-
-static bool ping_error_is_disconnect(int err)
-{
-    switch (err)
-    {
-        case LIBP2P_ERR_TIMEOUT:
-        case LIBP2P_ERR_EOF:
-        case LIBP2P_ERR_CLOSED:
-        case LIBP2P_ERR_RESET:
-            return true;
-        default:
-            return false;
-    }
-}
-
-/**
- * Callback context for async ping dial.
- */
-struct ping_dial_ctx
-{
-    struct lantern_client *client; /**< Client instance */
-    char peer_text[128];           /**< Peer ID as text */
-};
-
-
-/**
- * Callback when ping stream is opened.
- *
- * @param s          Opened stream
- * @param user_data  Ping dial context
- * @param err        Error code
- *
- * @note Thread safety: This function is called from libp2p thread
- */
-static void ping_on_stream_open(libp2p_stream_t *s, void *user_data, int err)
-{
-    struct ping_dial_ctx *ctx = (struct ping_dial_ctx *)user_data;
-    if (!ctx)
-    {
-        if (s)
-        {
-            libp2p_stream_close(s);
-            libp2p_stream_free(s);
-        }
-        return;
-    }
-    struct lantern_client *client = ctx->client;
-    const char *peer_text = ctx->peer_text;
-    if (err || !s)
-    {
-        lantern_log_trace(
-            "network",
-            &(const struct lantern_log_metadata){
-                .validator = client ? client->node_id : NULL,
-                .peer = peer_text[0] ? peer_text : NULL,
-            },
-            "ping dial failed err=%d",
-            err);
-        if (client && peer_text[0])
-        {
-            int reason = err != 0 ? err : LIBP2P_ERR_INTERNAL;
-            if (!ping_error_is_disconnect(reason))
-            {
-                clear_peer_ping_failures(client, peer_text);
-                free(ctx);
-                return;
-            }
-            uint32_t failures = record_peer_ping_failure(client, peer_text);
-            if (failures >= LANTERN_PING_FAILURES_BEFORE_DISCONNECT)
-            {
-                peer_id_t *peer_id = NULL;
-                if (peer_id_new_from_text(peer_text, &peer_id) == PEER_ID_OK && peer_id)
-                {
-                    connection_counter_update(client, -1, peer_id, false, reason);
-                    peer_id_free(peer_id);
-                }
-                clear_peer_ping_failures(client, peer_text);
-            }
-        }
-        free(ctx);
-        return;
-    }
-    /* Perform the ping roundtrip. */
-    uint64_t rtt_ms = 0;
-    libp2p_ping_err_t rc = libp2p_ping_roundtrip_stream(s, LANTERN_PING_TIMEOUT_MS, &rtt_ms);
-    if (rc == LIBP2P_PING_OK)
-    {
-        lantern_log_trace(
-            "network",
-            &(const struct lantern_log_metadata){
-                .validator = client ? client->node_id : NULL,
-                .peer = peer_text[0] ? peer_text : NULL,
-            },
-            "ping ok rtt_ms=%llu",
-            (unsigned long long)rtt_ms);
-        clear_peer_ping_failures(client, peer_text);
-    }
-    else
-    {
-        lantern_log_trace(
-            "network",
-            &(const struct lantern_log_metadata){
-                .validator = client ? client->node_id : NULL,
-                .peer = peer_text[0] ? peer_text : NULL,
-            },
-            "ping failed rc=%d",
-            (int)rc);
-        if (client && peer_text[0])
-        {
-            int reason = (rc == LIBP2P_PING_ERR_TIMEOUT) ? LIBP2P_ERR_TIMEOUT : LIBP2P_ERR_RESET;
-            if (!ping_error_is_disconnect(reason))
-            {
-                clear_peer_ping_failures(client, peer_text);
-                libp2p_stream_close(s);
-                libp2p_stream_free(s);
-                free(ctx);
-                return;
-            }
-            uint32_t failures = record_peer_ping_failure(client, peer_text);
-            if (failures >= LANTERN_PING_FAILURES_BEFORE_DISCONNECT)
-            {
-                peer_id_t *peer_id = NULL;
-                if (peer_id_new_from_text(peer_text, &peer_id) == PEER_ID_OK && peer_id)
-                {
-                    connection_counter_update(client, -1, peer_id, false, reason);
-                    peer_id_free(peer_id);
-                }
-                clear_peer_ping_failures(client, peer_text);
-            }
-        }
-    }
-    libp2p_stream_close(s);
-    libp2p_stream_free(s);
-    free(ctx);
-}
-
-static bool peer_status_needs_refresh(
-    struct lantern_client *client,
-    const char *peer_id,
-    uint64_t now_ms)
-{
-    if (!client || !peer_id || peer_id[0] == '\0')
-    {
-        return false;
-    }
-    if (!client->status_lock_initialized)
-    {
-        return true;
-    }
-    if (pthread_mutex_lock(&client->status_lock) != 0)
-    {
-        return true;
-    }
-    struct lantern_peer_status_entry *entry =
-        lantern_client_find_status_entry_locked(client, peer_id);
-    bool needs_refresh = true;
-    if (entry)
-    {
-        if (entry->status_request_inflight)
-        {
-            needs_refresh = false;
-        }
-        else if (entry->has_status && entry->last_status_ms != 0 && now_ms >= entry->last_status_ms)
-        {
-            needs_refresh = (now_ms - entry->last_status_ms) > LANTERN_PEER_STATUS_STALE_MS;
-        }
-    }
-    pthread_mutex_unlock(&client->status_lock);
-    return needs_refresh;
-}
-
-
-/**
- * Ping all connected peers.
- *
- * @param client  Client instance
- *
- * @note Thread safety: This function acquires connection_lock
- */
-static void ping_all_peers(struct lantern_client *client)
-{
-    if (!client || !client->network.host || !client->connection_lock_initialized)
-    {
-        return;
-    }
-    /* Take a snapshot of connected peer IDs. */
-    struct lantern_string_list peers = {0};
-    lantern_string_list_init(&peers);
-    if (pthread_mutex_lock(&client->connection_lock) != 0)
-    {
-        lantern_string_list_reset(&peers);
-        return;
-    }
-    if (lantern_string_list_copy(&peers, &client->connected_peer_ids) != 0)
-    {
-        pthread_mutex_unlock(&client->connection_lock);
-        lantern_string_list_reset(&peers);
-        return;
-    }
-    pthread_mutex_unlock(&client->connection_lock);
-
-    uint64_t now_ms = monotonic_millis();
-    for (size_t i = 0; i < peers.len; i++)
-    {
-        const char *peer_str = peers.items[i];
-        if (!peer_str || peer_str[0] == '\0')
-        {
-            continue;
-        }
-        peer_id_t *peer = NULL;
-        if (peer_id_new_from_text(peer_str, &peer) != PEER_ID_OK || !peer)
-        {
-            continue;
-        }
-        if (peer_status_needs_refresh(client, peer_str, now_ms))
-        {
-            request_status_now(client, peer, peer_str);
-        }
-        struct ping_dial_ctx *ctx = (struct ping_dial_ctx *)calloc(1, sizeof(*ctx));
-        if (!ctx)
-        {
-            peer_id_free(peer);
-            continue;
-        }
-        ctx->client = client;
-        strncpy(ctx->peer_text, peer_str, sizeof(ctx->peer_text) - 1);
-        ctx->peer_text[sizeof(ctx->peer_text) - 1] = '\0';
-        int rc = libp2p_host_open_stream_async(
-            client->network.host,
-            peer,
-            LIBP2P_PING_PROTO_ID,
-            ping_on_stream_open,
-            ctx);
-        if (rc != 0)
-        {
-            lantern_log_trace(
-                "network",
-                &(const struct lantern_log_metadata){
-                    .validator = client->node_id,
-                    .peer = peer_str,
-                },
-                "ping dial request failed rc=%d",
-                rc);
-            free(ctx);
-        }
-        peer_id_free(peer);
-    }
-    lantern_string_list_reset(&peers);
-}
-
-
-/**
- * Ping service thread function.
- *
- * @param arg  Client instance as void pointer
- * @return NULL
- *
- * @note Thread safety: This function runs in its own thread
- */
-static void *ping_thread(void *arg)
-{
-    struct lantern_client *client = (struct lantern_client *)arg;
-    if (!client)
-    {
-        return NULL;
-    }
-    lantern_log_info(
-        "network",
-        &(const struct lantern_log_metadata){.validator = client->node_id},
-        "ping service started interval=%us",
-        LANTERN_PING_INTERVAL_SECONDS);
-    while (__atomic_load_n(&client->ping_stop_flag, __ATOMIC_RELAXED) == 0)
-    {
-        ping_all_peers(client);
-        /* Sleep in small increments to allow quick shutdown. */
-        for (unsigned i = 0;
-             i < LANTERN_PING_INTERVAL_SECONDS
-                 && __atomic_load_n(&client->ping_stop_flag, __ATOMIC_RELAXED) == 0;
-             i++)
-        {
-            struct timespec ts = {.tv_sec = 1, .tv_nsec = 0};
-            nanosleep(&ts, NULL);
-        }
-    }
-    return NULL;
-}
-
-
-/**
- * Start the ping service.
- *
- * @param client  Client instance
- * @return 0 on success, -1 on failure
- *
- * @note Thread safety: This function is thread-safe
- */
-int start_ping_service(struct lantern_client *client)
-{
-    if (!client)
-    {
-        return -1;
-    }
-    if (client->ping_thread_started)
-    {
-        return 0;
-    }
-    __atomic_store_n(&client->ping_stop_flag, 0, __ATOMIC_RELAXED);
-    int rc = pthread_create(&client->ping_thread, NULL, ping_thread, client);
-    if (rc != 0)
-    {
-        __atomic_store_n(&client->ping_stop_flag, 1, __ATOMIC_RELAXED);
-        return -1;
-    }
-    client->ping_thread_started = true;
-    return 0;
-}
-
-
-/**
- * Stop the ping service.
- *
- * @param client  Client instance
- *
- * @note Thread safety: This function is thread-safe
- */
-void stop_ping_service(struct lantern_client *client)
-{
-    if (!client)
-    {
-        return;
-    }
-    if (!client->ping_thread_started)
-    {
-        __atomic_store_n(&client->ping_stop_flag, 1, __ATOMIC_RELAXED);
-        return;
-    }
-    __atomic_store_n(&client->ping_stop_flag, 1, __ATOMIC_RELAXED);
-    (void)pthread_join(client->ping_thread, NULL);
-    client->ping_thread_started = false;
-}
-
-
-/* ============================================================================
  * Connection Events
  * ============================================================================ */
 
@@ -1446,7 +955,7 @@ void stop_ping_service(struct lantern_client *client)
  */
 static void handle_connection_opened_event(
     struct lantern_client *client,
-    const peer_id_t *peer,
+    const struct lantern_peer_id *peer,
     bool inbound)
 {
     if (!client)
@@ -1478,8 +987,10 @@ static void handle_connection_opened_event(
  */
 static void handle_connection_closed_event(
     struct lantern_client *client,
-    const peer_id_t *peer,
-    int reason)
+    const struct lantern_peer_id *peer,
+    int reason,
+    uint64_t app_error_code,
+    uint64_t transport_error_code)
 {
     if (!client)
     {
@@ -1495,59 +1006,38 @@ static void handle_connection_closed_event(
 
     char peer_text[128];
     format_peer_id_text(peer, peer_text, sizeof(peer_text));
-    lantern_log_info(
-        "network",
-        &(const struct lantern_log_metadata){
-            .validator = client->node_id,
-            .peer = peer_text[0] ? peer_text : NULL,
-        },
-        "connection closed reason=%d (%s)",
-        reason,
-        connection_reason_text(reason));
+    bool peer_still_connected = peer_text[0] && lantern_client_is_peer_connected(client, peer_text);
+    const struct lantern_log_metadata meta = {
+        .validator = client->node_id,
+        .peer = peer_text[0] ? peer_text : NULL,
+    };
+    if (reason == LIBP2P_HOST_OK && peer_still_connected)
+    {
+        lantern_log_debug(
+            "network",
+            &meta,
+            "duplicate connection closed reason=%d (%s) app_error=%" PRIu64 " transport_error=%" PRIu64,
+            reason,
+            connection_reason_text(reason),
+            app_error_code,
+            transport_error_code);
+    }
+    else
+    {
+        lantern_log_info(
+            "network",
+            &meta,
+            "connection closed reason=%d (%s) app_error=%" PRIu64 " transport_error=%" PRIu64,
+            reason,
+            connection_reason_text(reason),
+            app_error_code,
+            transport_error_code);
+    }
 
-    /* If disconnected unexpectedly, attempt to redial the peer.
-     * We redial for timeout, reset, EOF, and closed reasons since the remote
-     * peer may have closed due to their own timeout or network issues. */
-    if (reason == LIBP2P_ERR_TIMEOUT ||
-        reason == LIBP2P_ERR_RESET ||
-        reason == LIBP2P_ERR_EOF ||
-        reason == LIBP2P_ERR_CLOSED)
+    if (reason != LIBP2P_HOST_OK)
     {
         redial_peer_on_timeout(client, peer);
     }
-}
-
-
-/**
- * Handle dialing events.
- *
- * @param client  Client instance
- * @param peer    Peer ID (may be NULL)
- * @param addr    Multiaddr being dialed (may be NULL)
- *
- * @note Thread safety: This function is called from libp2p thread
- */
-static void handle_dialing_event(
-    struct lantern_client *client,
-    const peer_id_t *peer,
-    const char *addr)
-{
-    if (!client)
-    {
-        return;
-    }
-
-    char peer_text[128];
-    format_peer_id_text(peer, peer_text, sizeof(peer_text));
-
-    lantern_log_debug(
-        "network",
-        &(const struct lantern_log_metadata){
-            .validator = client->node_id,
-            .peer = peer_text[0] ? peer_text : NULL,
-        },
-        "dialing peer addr=%s",
-        addr ? addr : "-");
 }
 
 
@@ -1563,9 +1053,11 @@ static void handle_dialing_event(
  */
 static void handle_outgoing_connection_error_event(
     struct lantern_client *client,
-    const peer_id_t *peer,
+    const struct lantern_peer_id *peer,
     int code,
-    const char *msg)
+    const char *msg,
+    uint64_t app_error_code,
+    uint64_t transport_error_code)
 {
     if (!client)
     {
@@ -1581,10 +1073,12 @@ static void handle_outgoing_connection_error_event(
             .validator = client->node_id,
             .peer = peer_text[0] ? peer_text : NULL,
         },
-        "outgoing connection error code=%d (%s) msg=%s",
+        "outgoing connection error code=%d (%s) msg=%s app_error=%" PRIu64 " transport_error=%" PRIu64,
         code,
         connection_reason_text(code),
-        msg ? msg : "-");
+        msg ? msg : "-",
+        app_error_code,
+        transport_error_code);
 
     lean_metrics_record_peer_connection(
         LEAN_METRICS_DIR_OUTBOUND,
@@ -1592,95 +1086,74 @@ static void handle_outgoing_connection_error_event(
 }
 
 
-/**
- * Handle incoming connection error events.
- *
- * @param client  Client instance
- * @param peer    Peer ID (may be NULL)
- * @param code    Error code
- * @param msg     Error message (may be NULL)
- *
- * @note Thread safety: This function is called from libp2p thread
- */
-static void handle_incoming_connection_error_event(
-    struct lantern_client *client,
-    const peer_id_t *peer,
-    int code,
-    const char *msg)
+static bool connection_event_peer_id(
+    const libp2p_host_conn_t *conn,
+    struct lantern_peer_id *out_peer)
 {
-    if (!client)
+    if (!conn || !out_peer)
     {
-        return;
+        return false;
     }
-
-    char peer_text[128];
-    format_peer_id_text(peer, peer_text, sizeof(peer_text));
-
-    lantern_log_warn(
-        "network",
-        &(const struct lantern_log_metadata){
-            .validator = client->node_id,
-            .peer = peer_text[0] ? peer_text : NULL,
-        },
-        "incoming connection error code=%d (%s) msg=%s",
-        code,
-        connection_reason_text(code),
-        msg ? msg : "-");
-
-    lean_metrics_record_peer_connection(
-        LEAN_METRICS_DIR_INBOUND,
-        metrics_connection_result_from_code(code));
+    size_t written = 0;
+    if (libp2p_host_conn_peer_id(conn, out_peer->bytes, sizeof(out_peer->bytes), &written) != LIBP2P_HOST_OK ||
+        written == 0 || written > sizeof(out_peer->bytes))
+    {
+        memset(out_peer, 0, sizeof(*out_peer));
+        return false;
+    }
+    out_peer->len = written;
+    return true;
 }
 
 
 /**
- * Connection event callback for libp2p host.
+ * Connection event callback for c-lean-libp2p host.
  *
+ * @param network    Lantern host wrapper
  * @param evt        Event details
  * @param user_data  Client instance
  *
  * @note Thread safety: This function is called from libp2p thread
  */
-void connection_events_cb(const libp2p_event_t *evt, void *user_data)
+void connection_events_cb(
+    struct lantern_libp2p_host *network,
+    const libp2p_host_event_t *evt,
+    void *user_data)
 {
-    if (!evt || !user_data)
+    if (!network || !evt || !user_data)
     {
         return;
     }
     struct lantern_client *client = (struct lantern_client *)user_data;
-    switch (evt->kind)
+    struct lantern_peer_id peer;
+    const bool has_peer = connection_event_peer_id(evt->conn, &peer);
+    const struct lantern_peer_id *peer_ptr = has_peer ? &peer : NULL;
+
+    switch (evt->type)
     {
-        case LIBP2P_EVT_CONN_OPENED:
-            handle_connection_opened_event(
-                client,
-                evt->u.conn_opened.peer,
-                evt->u.conn_opened.inbound);
+        case LIBP2P_HOST_EVENT_CONN_ESTABLISHED:
+            handle_connection_opened_event(client, peer_ptr, evt->dial == NULL);
+            if (network->host && evt->conn)
+            {
+                (void)libp2p_identify_query(&network->identify, network->host, evt->conn, NULL, NULL);
+            }
             break;
-        case LIBP2P_EVT_CONN_CLOSED:
+        case LIBP2P_HOST_EVENT_CONN_CLOSED:
             handle_connection_closed_event(
                 client,
-                evt->u.conn_closed.peer,
-                evt->u.conn_closed.reason);
+                peer_ptr,
+                (int)evt->reason,
+                evt->app_error_code,
+                evt->transport_error_code);
             break;
-        case LIBP2P_EVT_DIALING:
-            handle_dialing_event(
-                client,
-                evt->u.dialing.peer,
-                evt->u.dialing.addr);
-            break;
-        case LIBP2P_EVT_OUTGOING_CONNECTION_ERROR:
+        case LIBP2P_HOST_EVENT_DIAL_FAILED:
             handle_outgoing_connection_error_event(
                 client,
-                evt->u.outgoing_conn_error.peer,
-                evt->u.outgoing_conn_error.code,
-                evt->u.outgoing_conn_error.msg);
-            break;
-        case LIBP2P_EVT_INCOMING_CONNECTION_ERROR:
-            handle_incoming_connection_error_event(
-                client,
-                evt->u.incoming_conn_error.peer,
-                evt->u.incoming_conn_error.code,
-                evt->u.incoming_conn_error.msg);
+                peer_ptr,
+                (int)evt->reason,
+                "dial failed",
+                evt->app_error_code,
+                evt->transport_error_code);
             break;
         default:
             break;

@@ -198,21 +198,6 @@ static ssz_error_t read_signature(const uint8_t *data, size_t data_len, LanternS
     return read_bytes(signature ? signature->bytes : NULL, LANTERN_SIGNATURE_SIZE, data, data_len);
 }
 
-static ssz_error_t bitlist_encoded_size(const struct lantern_bitlist *list, size_t *out_size) {
-    if (!list || !out_size) {
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-    size_t byte_len = (list->bit_length + 7u) / 8u;
-    return ssz_serialize_bitlist(
-        list->bytes,
-        byte_len,
-        list->bit_length,
-        SSZ_NO_LIMIT,
-        NULL,
-        0u,
-        out_size);
-}
-
 static ssz_error_t encode_bitlist(
     const struct lantern_bitlist *list,
     uint8_t *out,

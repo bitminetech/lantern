@@ -16,6 +16,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "lantern/support/strings.h"
+
 enum
 {
     LANTERN_CLIENT_PENDING_OK = 0,
@@ -568,8 +570,7 @@ struct lantern_pending_vote *pending_vote_list_append(
     entry->vote = *vote;
     if (peer_text && *peer_text)
     {
-        strncpy(entry->peer_text, peer_text, sizeof(entry->peer_text) - 1u);
-        entry->peer_text[sizeof(entry->peer_text) - 1u] = '\0';
+        (void)lantern_string_copy(entry->peer_text, sizeof(entry->peer_text), peer_text);
     }
     list->length += 1u;
 
@@ -898,8 +899,7 @@ struct lantern_pending_block *pending_block_list_append(
 
     if (peer_text && *peer_text)
     {
-        strncpy(entry->peer_text, peer_text, sizeof(entry->peer_text) - 1u);
-        entry->peer_text[sizeof(entry->peer_text) - 1u] = '\0';
+        (void)lantern_string_copy(entry->peer_text, sizeof(entry->peer_text), peer_text);
     }
 
     pending_parent_index_add_child(&list->parent_index, parent_root, block_root);

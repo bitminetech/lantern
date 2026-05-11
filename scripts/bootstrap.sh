@@ -48,7 +48,7 @@ if [[ -d "${ROOT_DIR}/.git" ]]; then
         echo "bootstrap: skipping submodule sync (requested)" >&2
     else
         git submodule update --init --recursive \
-            external/c-libp2p \
+            external/c-lean-libp2p \
             external/c-ssz \
             external/c-leanvm-xmss \
             tools/leanSpec

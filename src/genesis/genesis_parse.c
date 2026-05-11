@@ -21,8 +21,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "peer_id/peer_id.h"
-
 #include "internal/yaml_parser.h"
 #include "lantern/networking/libp2p.h"
 #include "lantern/support/secure_mem.h"
@@ -73,28 +71,6 @@ static int parse_validator_config_entry(
     const LanternYamlObject *object,
     struct lantern_validator_config_entry *entry);
 static void free_validator_config_entry(struct lantern_validator_config_entry *entry);
-
-static int write_legacy_peer_id_text(const peer_id_t *peer_id, char *buffer, size_t buffer_len)
-{
-    if (!peer_id || !buffer || buffer_len == 0)
-    {
-        return -1;
-    }
-    size_t written = 0;
-    peer_id_error_t rc = peer_id_text_write(
-        peer_id,
-        PEER_ID_TEXT_LEGACY_BASE58,
-        buffer,
-        buffer_len,
-        &written);
-    if (rc != PEER_ID_OK)
-    {
-        buffer[0] = '\0';
-        return -1;
-    }
-    return (int)written;
-}
-
 
 /**
  * Parse an unsigned 64-bit integer from a string, allowing a trailing comment.
@@ -426,40 +402,41 @@ static int derive_peer_id_from_privkey_hex(const char *hex, char **out_peer_id)
         return LANTERN_GENESIS_ERR_PARSE;
     }
 
-    uint8_t *encoded = NULL;
-    size_t encoded_len = 0;
-    if (lantern_libp2p_encode_secp256k1_private_key_proto(
+    uint8_t public_key[LIBP2P_PEER_ID_SECP256K1_COMPRESSED_PUBLIC_KEY_BYTES];
+    size_t public_key_len = 0;
+    if (libp2p_peer_id_public_key_from_private_key(
             secret,
             sizeof(secret),
-            &encoded,
-            &encoded_len)
-        != 0)
+            1,
+            public_key,
+            sizeof(public_key),
+            &public_key_len)
+        != LIBP2P_PEER_ID_OK)
     {
         lantern_secure_zero(secret, sizeof(secret));
         return LANTERN_GENESIS_ERR_PARSE;
     }
     lantern_secure_zero(secret, sizeof(secret));
 
-    peer_id_t *peer_id = NULL;
-    peer_id_error_t perr = peer_id_new_from_private_key_pb(encoded, encoded_len, &peer_id);
-    if (encoded)
-    {
-        lantern_secure_zero(encoded, encoded_len);
-    }
-    free(encoded);
-
-    if (perr != PEER_ID_OK || !peer_id)
+    struct lantern_peer_id peer_id;
+    size_t peer_id_len = 0;
+    if (libp2p_peer_id_from_secp256k1_public_key(
+            public_key,
+            public_key_len,
+            peer_id.bytes,
+            sizeof(peer_id.bytes),
+            &peer_id_len)
+        != LIBP2P_PEER_ID_OK)
     {
         return LANTERN_GENESIS_ERR_PARSE;
     }
+    peer_id.len = peer_id_len;
 
     char buffer[GENESIS_PEER_ID_BUFFER_LEN];
-    if (write_legacy_peer_id_text(peer_id, buffer, sizeof(buffer)) < 0)
+    if (lantern_peer_id_to_text(&peer_id, buffer, sizeof(buffer)) < 0)
     {
-        peer_id_free(peer_id);
         return LANTERN_GENESIS_ERR_PARSE;
     }
-    peer_id_free(peer_id);
 
     char *dup = lantern_string_duplicate(buffer);
     if (!dup)

@@ -192,8 +192,9 @@ int append_unique_bootnode(struct lantern_string_list *list, const char *value)
  *
  * @spec subspecs/networking/discovery.py - peer discovery
  *
- * Iterates through ENR records from genesis and adds them as bootnodes
- * to the client's bootnode list and peer store.
+ * Iterates through ENR records from genesis, stores them in the client's
+ * bootnode list, and verifies that they can be converted to c-lean-libp2p
+ * dial addresses. Actual dialing starts after the libp2p host is launched.
  *
  * @param client Client instance
  * @return 0 on success, -1 on failure
@@ -218,26 +219,23 @@ int append_genesis_bootnodes(struct lantern_client *client)
         {
             return -1;
         }
-        if (client->network.host)
+        if (lantern_libp2p_validate_enr_peer(record) != 0)
         {
-            if (lantern_libp2p_host_add_enr_peer(&client->network, record, LANTERN_LIBP2P_DEFAULT_PEER_TTL_MS) != 0)
-            {
-                lantern_log_warn(
-                    "network",
-                    &(const struct lantern_log_metadata){
-                        .validator = client->node_id,
-                        .peer = record->encoded},
-                    "failed to add ENR peer from genesis");
-                continue;
-            }
-            lantern_log_info(
+            lantern_log_warn(
                 "network",
                 &(const struct lantern_log_metadata){
                     .validator = client->node_id,
                     .peer = record->encoded},
-                "bootnode registered sequence=%" PRIu64,
-                record->sequence);
+                "invalid ENR bootnode from genesis");
+            continue;
         }
+        lantern_log_info(
+            "network",
+            &(const struct lantern_log_metadata){
+                .validator = client->node_id,
+                .peer = record->encoded},
+            "bootnode registered sequence=%" PRIu64,
+            record->sequence);
     }
     return 0;
 }
@@ -340,7 +338,7 @@ int populate_local_validators(struct lantern_client *client)
             client->validator_assignment.indices[i]);
         if (n < 0 || (size_t)n >= sizeof(indices_buf) - written)
         {
-            strncpy(indices_buf + (sizeof(indices_buf) > 4 ? sizeof(indices_buf) - 4 : 0), "...", 3);
+            memcpy(indices_buf + (sizeof(indices_buf) > 4 ? sizeof(indices_buf) - 4 : 0), "...", 3);
             indices_buf[sizeof(indices_buf) - 1] = '\0';
             break;
         }

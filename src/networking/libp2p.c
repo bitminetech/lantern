@@ -1,227 +1,211 @@
 #include "lantern/networking/libp2p.h"
 
+#include "lantern/networking/enr.h"
 #include "lantern/support/log.h"
+#include "lantern/support/time.h"
 
+#include "multiformats/multiaddr/multiaddr.h"
+
+#include <openssl/rand.h>
+
+#include <arpa/inet.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
-#if defined(_WIN32)
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <arpa/inet.h>
-#endif
-
-#include "lantern/networking/enr.h"
-
-#include "libp2p/host.h"
-#include "libp2p/log.h"
-#include "libp2p/host_builder.h"
-#include "libp2p/peerstore.h"
-#include "multiformats/multiaddr/multiaddr.h"
-#include "multiformats/multicodec/multicodec_codes.h"
-#include "multiformats/unsigned_varint/unsigned_varint.h"
-#include "peer_id/peer_id.h"
-#include "peer_id/peer_id_proto.h"
-
-#define LANTERN_LIBP2P_KEY_TYPE_SECP256K1 2u
-
-static void lantern_libp2p_configure_logging(void);
-
-static enum LanternLogLevel lantern_libp2p_convert_level(libp2p_log_level_t level)
-{
-    switch (level) {
-    case LIBP2P_LOG_TRACE:
-        return LANTERN_LOG_LEVEL_TRACE;
-    case LIBP2P_LOG_DEBUG:
-        return LANTERN_LOG_LEVEL_DEBUG;
-    case LIBP2P_LOG_INFO:
-        return LANTERN_LOG_LEVEL_INFO;
-    case LIBP2P_LOG_WARN:
-        return LANTERN_LOG_LEVEL_WARN;
-    case LIBP2P_LOG_ERROR:
-    default:
-        return LANTERN_LOG_LEVEL_ERROR;
-    }
+static void *lantern_quic_malloc(size_t size, void *user_data) {
+    (void)user_data;
+    return malloc(size);
 }
 
-static void lantern_libp2p_log_writer(libp2p_log_level_t level, const char *msg, void *ud)
-{
-    (void)ud;
-    if (!msg) {
-        return;
-    }
-
-    /*
-     * Parse libp2p's structured log format: [module=X file=Y line=Z func=W] message
-     * Extract module name for cleaner output, skip verbose file/line/func info
-     */
-    const char *module = "libp2p";
-    const char *clean_msg = msg;
-    char module_buf[64];
-
-    if (msg[0] == '[' && strncmp(msg, "[module=", 8) == 0) {
-        const char *mod_start = msg + 8;
-        const char *mod_end = strchr(mod_start, ' ');
-        if (mod_end && (size_t)(mod_end - mod_start) < sizeof(module_buf)) {
-            size_t mod_len = (size_t)(mod_end - mod_start);
-            memcpy(module_buf, mod_start, mod_len);
-            module_buf[mod_len] = '\0';
-            module = module_buf;
-        }
-        /* Skip to the actual message after "] " */
-        const char *bracket_end = strchr(msg, ']');
-        if (bracket_end && bracket_end[1] == ' ') {
-            clean_msg = bracket_end + 2;
-        }
-    }
-
-    enum LanternLogLevel mapped = lantern_libp2p_convert_level(level);
-    switch (mapped) {
-    case LANTERN_LOG_LEVEL_TRACE:
-        lantern_log_trace(module, NULL, "%s", clean_msg);
-        break;
-    case LANTERN_LOG_LEVEL_DEBUG:
-        lantern_log_debug(module, NULL, "%s", clean_msg);
-        break;
-    case LANTERN_LOG_LEVEL_INFO:
-        lantern_log_info(module, NULL, "%s", clean_msg);
-        break;
-    case LANTERN_LOG_LEVEL_WARN:
-        lantern_log_warn(module, NULL, "%s", clean_msg);
-        break;
-    case LANTERN_LOG_LEVEL_ERROR:
-    default:
-        lantern_log_error(module, NULL, "%s", clean_msg);
-        break;
-    }
+static void *lantern_quic_calloc(size_t nmemb, size_t size, void *user_data) {
+    (void)user_data;
+    return calloc(nmemb, size);
 }
 
-static void lantern_libp2p_configure_logging(void)
-{
-    static bool writer_installed = false;
-    if (!writer_installed) {
-        libp2p_log_set_writer(lantern_libp2p_log_writer, NULL);
-        writer_installed = true;
-    }
-
-    /* libp2p's INFO level is very verbose with internal module details,
-     * so we map lantern's INFO to libp2p's WARN to reduce noise */
-    libp2p_log_level_t target = LIBP2P_LOG_ERROR;
-    switch (lantern_log_get_level()) {
-    case LANTERN_LOG_LEVEL_TRACE:
-        target = LIBP2P_LOG_TRACE;
-        break;
-    case LANTERN_LOG_LEVEL_DEBUG:
-        target = LIBP2P_LOG_DEBUG;
-        break;
-    case LANTERN_LOG_LEVEL_INFO:
-        target = LIBP2P_LOG_WARN;  /* libp2p INFO is too verbose */
-        break;
-    case LANTERN_LOG_LEVEL_WARN:
-        target = LIBP2P_LOG_WARN;
-        break;
-    case LANTERN_LOG_LEVEL_ERROR:
-    default:
-        target = LIBP2P_LOG_ERROR;
-        break;
-    }
-    libp2p_log_set_level(target);
+static void *lantern_quic_realloc(void *ptr, size_t size, void *user_data) {
+    (void)user_data;
+    return realloc(ptr, size);
 }
 
-int lantern_libp2p_encode_secp256k1_private_key_proto(
-    const uint8_t *secret,
-    size_t secret_len,
-    uint8_t **out,
-    size_t *out_len) {
-    if (!secret || secret_len != 32 || !out || !out_len) {
-        return -1;
-    }
-    uint8_t type_buf[10];
-    uint8_t len_buf[10];
-    size_t type_written = 0;
-    size_t len_written = 0;
-    if (unsigned_varint_encode(LANTERN_LIBP2P_KEY_TYPE_SECP256K1, type_buf, sizeof(type_buf), &type_written) != UNSIGNED_VARINT_OK) {
-        return -1;
-    }
-    if (unsigned_varint_encode((uint64_t)secret_len, len_buf, sizeof(len_buf), &len_written) != UNSIGNED_VARINT_OK) {
-        return -1;
-    }
-    size_t total = 1 + type_written + 1 + len_written + secret_len;
-    uint8_t *buffer = (uint8_t *)malloc(total);
-    if (!buffer) {
-        return -1;
-    }
-    size_t offset = 0;
-    buffer[offset++] = 0x08;
-    memcpy(buffer + offset, type_buf, type_written);
-    offset += type_written;
-    buffer[offset++] = 0x12;
-    memcpy(buffer + offset, len_buf, len_written);
-    offset += len_written;
-    memcpy(buffer + offset, secret, secret_len);
-    *out = buffer;
-    *out_len = total;
-    return 0;
+static void lantern_quic_free(void *ptr, void *user_data) {
+    (void)user_data;
+    free(ptr);
 }
 
-static int multiaddr_has_protocol(const multiaddr_t *ma, uint64_t code) {
-    if (!ma) {
+static libp2p_quic_err_t lantern_quic_unix_time(uint64_t *out_unix_seconds, void *user_data) {
+    (void)user_data;
+    if (!out_unix_seconds) {
+        return LIBP2P_QUIC_ERR_INVALID_ARG;
+    }
+    time_t now = time(NULL);
+    if (now < 0) {
+        return LIBP2P_QUIC_ERR_INTERNAL;
+    }
+    *out_unix_seconds = (uint64_t)now;
+    return LIBP2P_QUIC_OK;
+}
+
+static libp2p_ping_err_t lantern_ping_random(uint8_t *out, size_t out_len, void *user_data) {
+    return lantern_libp2p_quic_random(out, out_len, user_data) == LIBP2P_QUIC_OK
+        ? LIBP2P_PING_OK
+        : LIBP2P_PING_ERR_RANDOM;
+}
+
+static libp2p_ping_err_t lantern_ping_time(libp2p_host_time_us_t *out_now_us, void *user_data) {
+    (void)user_data;
+    if (!out_now_us) {
+        return LIBP2P_PING_ERR_INVALID_ARG;
+    }
+    *out_now_us = lantern_libp2p_now_us();
+    return LIBP2P_PING_OK;
+}
+
+libp2p_host_time_us_t lantern_libp2p_now_us(void) {
+    double seconds = lantern_time_now_seconds();
+    if (seconds <= 0.0) {
         return 0;
     }
-    size_t protocols = multiaddr_nprotocols(ma);
-    for (size_t idx = 0; idx < protocols; idx++) {
-        uint64_t current = 0;
-        if (multiaddr_get_protocol_code(ma, idx, &current) == 0 && current == code) {
-            return 1;
+    return (libp2p_host_time_us_t)(seconds * 1000000.0);
+}
+
+libp2p_quic_err_t lantern_libp2p_quic_random(uint8_t *out, size_t out_len, void *user_data) {
+    (void)user_data;
+    if (!out && out_len != 0) {
+        return LIBP2P_QUIC_ERR_INVALID_ARG;
+    }
+    if (out_len == 0) {
+        return LIBP2P_QUIC_OK;
+    }
+    return RAND_bytes(out, out_len) == 1 ? LIBP2P_QUIC_OK : LIBP2P_QUIC_ERR_INTERNAL;
+}
+
+libp2p_gossipsub_err_t lantern_libp2p_gossipsub_random(
+    uint8_t *out,
+    size_t out_len,
+    void *user_data) {
+    return lantern_libp2p_quic_random(out, out_len, user_data) == LIBP2P_QUIC_OK
+        ? LIBP2P_GOSSIPSUB_OK
+        : LIBP2P_GOSSIPSUB_ERR_RANDOM;
+}
+
+static int register_default_protocols(struct lantern_libp2p_host *state) {
+    libp2p_ping_config_t ping_config;
+    libp2p_identify_config_t identify_config;
+    static const uint8_t protocol_version[] = "ipfs/0.1.0";
+    static const uint8_t agent_version[] = "lantern";
+
+    if (libp2p_ping_config_default(&ping_config) != LIBP2P_PING_OK) {
+        return -1;
+    }
+    ping_config.random_fn = lantern_ping_random;
+    ping_config.time_fn = lantern_ping_time;
+    if (libp2p_ping_init(&state->ping, &ping_config) != LIBP2P_PING_OK) {
+        return -1;
+    }
+    if (libp2p_ping_protocol(&state->ping, &state->default_protocols[state->default_protocol_count]) !=
+        LIBP2P_PING_OK) {
+        return -1;
+    }
+    state->default_protocol_count++;
+
+    if (libp2p_identify_config_default(&identify_config) != LIBP2P_IDENTIFY_OK) {
+        return -1;
+    }
+    identify_config.local_message.protocol_version.data = protocol_version;
+    identify_config.local_message.protocol_version.len = sizeof(protocol_version) - 1u;
+    identify_config.local_message.agent_version.data = agent_version;
+    identify_config.local_message.agent_version.len = sizeof(agent_version) - 1u;
+    identify_config.local_message.public_key.data = state->host_identity_storage.public_key_message;
+    identify_config.local_message.public_key.len = state->host_identity_storage.public_key_message_len;
+    if (libp2p_identify_init(&state->identify, &identify_config) != LIBP2P_IDENTIFY_OK) {
+        return -1;
+    }
+    if (libp2p_identify_protocol(
+            &state->identify,
+            &state->default_protocols[state->default_protocol_count])
+        != LIBP2P_IDENTIFY_OK) {
+        return -1;
+    }
+    state->default_protocol_count++;
+    if (libp2p_identify_push_protocol(
+            &state->identify,
+            &state->default_protocols[state->default_protocol_count])
+        != LIBP2P_IDENTIFY_OK) {
+        return -1;
+    }
+    state->default_protocol_count++;
+
+    for (size_t i = 0; i < state->default_protocol_count; i++) {
+        if (lantern_libp2p_host_register_protocol(state, &state->default_protocols[i]) != 0) {
+            return -1;
         }
     }
     return 0;
 }
 
-static int multiaddr_is_quic(const multiaddr_t *ma) {
-    if (!ma) {
-        return 0;
+static void drain_protocol_events(struct lantern_libp2p_host *state) {
+    libp2p_ping_event_t ping_event;
+    while (libp2p_ping_next_event(&state->ping, &ping_event) == LIBP2P_PING_OK) {
+        if (ping_event.type == LIBP2P_PING_EVENT_ERROR) {
+            lantern_log_debug("network", NULL, "libp2p ping event error (%d)", (int)ping_event.reason);
+        }
     }
-    return multiaddr_has_protocol(ma, MULTICODEC_QUIC_V1) || multiaddr_has_protocol(ma, MULTICODEC_QUIC);
+
+    libp2p_identify_event_t identify_event;
+    while (libp2p_identify_next_event(&state->identify, &identify_event) == LIBP2P_IDENTIFY_OK) {
+        if (identify_event.type == LIBP2P_IDENTIFY_EVENT_ERROR) {
+            lantern_log_debug("network", NULL, "libp2p identify event error (%d)", (int)identify_event.reason);
+        }
+    }
 }
 
-static int peer_id_write_legacy_base58(const peer_id_t *peer_id, char *buffer, size_t buffer_len) {
-    if (!peer_id || !buffer || buffer_len == 0) {
-        return -1;
+static void drain_host_events(struct lantern_libp2p_host *state) {
+    libp2p_host_event_t event;
+    while (libp2p_host_next_event(state->host, &event) == LIBP2P_HOST_OK) {
+        for (size_t i = 0; i < state->event_handler_count; i++) {
+            state->event_handlers[i](state, &event, state->event_handler_user_data[i]);
+        }
     }
-    size_t written = 0;
-    peer_id_error_t rc = peer_id_text_write(
-        peer_id,
-        PEER_ID_TEXT_LEGACY_BASE58,
-        buffer,
-        buffer_len,
-        &written);
-    if (rc != PEER_ID_OK) {
-        buffer[0] = '\0';
-        return -1;
+}
+
+static void *lantern_libp2p_drive_thread(void *arg) {
+    struct lantern_libp2p_host *state = (struct lantern_libp2p_host *)arg;
+    const struct timespec pause = {.tv_sec = 0, .tv_nsec = 5000000};
+
+    while (__atomic_load_n(&state->stop_flag, __ATOMIC_RELAXED) == 0) {
+        libp2p_host_time_us_t now = lantern_libp2p_now_us();
+        (void)libp2p_host_drive(state->host, now, LIBP2P_HOST_READY_ALL, NULL);
+        drain_host_events(state);
+        for (size_t i = 0; i < state->drive_handler_count; i++) {
+            state->drive_handlers[i](state, now, state->drive_handler_user_data[i]);
+        }
+        drain_protocol_events(state);
+        (void)nanosleep(&pause, NULL);
     }
-    return (int)written;
+    return NULL;
 }
 
 void lantern_libp2p_host_init(struct lantern_libp2p_host *state) {
     if (!state) {
         return;
     }
-    state->host = NULL;
-    state->started = 0;
+    memset(state, 0, sizeof(*state));
 }
 
 void lantern_libp2p_host_stop(struct lantern_libp2p_host *state) {
-    if (!state || !state->host || !state->started) {
+    if (!state || !state->host) {
         return;
     }
-    if (libp2p_host_stop(state->host) != 0) {
-        lantern_log_warn(
-            "network",
-            &(const struct lantern_log_metadata){.peer = "local"},
-            "libp2p_host_stop failed");
+    if (state->started) {
+        (void)libp2p_host_close(state->host, 0);
+    }
+    __atomic_store_n(&state->stop_flag, 1, __ATOMIC_RELAXED);
+    if (state->drive_thread_started) {
+        (void)pthread_join(state->drive_thread, NULL);
+        state->drive_thread_started = 0;
     }
     state->started = 0;
 }
@@ -230,179 +214,239 @@ void lantern_libp2p_host_reset(struct lantern_libp2p_host *state) {
     if (!state) {
         return;
     }
+    lantern_libp2p_host_stop(state);
     if (state->host) {
-        lantern_libp2p_host_stop(state);
-        libp2p_host_free(state->host);
+        libp2p_host_deinit(state->host);
         state->host = NULL;
     }
-    state->started = 0;
+    free(state->host_storage);
+    lantern_libp2p_host_init(state);
 }
 
-int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct lantern_libp2p_config *config) {
+int lantern_libp2p_host_prepare(struct lantern_libp2p_host *state, const struct lantern_libp2p_config *config) {
     if (!state || !config || !config->listen_multiaddr || !config->secp256k1_secret) {
         return -1;
     }
-    if (config->secret_len != 32) {
-        lantern_log_error(
-            "network",
-            &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
-            "libp2p expects 32-byte secp256k1 secrets");
+    if (config->secret_len != LIBP2P_PEER_ID_SECP256K1_PRIVATE_KEY_BYTES) {
+        lantern_log_error("network", NULL, "libp2p expects 32-byte secp256k1 secrets");
         return -1;
     }
 
     lantern_libp2p_host_reset(state);
 
-    lantern_libp2p_configure_logging();
-
-    libp2p_host_builder_t *builder = libp2p_host_builder_new();
-    if (!builder) {
-        return -1;
-    }
-
-    int rc = 0;
-    int addr_err = 0;
-    multiaddr_t *ma = multiaddr_new_from_str(config->listen_multiaddr, &addr_err);
-    if (!ma || addr_err != 0) {
-        lantern_log_error(
-            "network",
-            &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
-            "invalid listen multiaddr '%s' (err=%d)",
+    if (libp2p_multiaddr_from_string(
             config->listen_multiaddr,
-            addr_err);
-        multiaddr_free(ma);
-        libp2p_host_builder_free(builder);
-        return -1;
-    }
-    if (!multiaddr_is_quic(ma)) {
+            strlen(config->listen_multiaddr),
+            state->listen_multiaddr,
+            sizeof(state->listen_multiaddr),
+            &state->listen_multiaddr_len)
+        != LIBP2P_MULTIADDR_OK) {
         lantern_log_error(
             "network",
             &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
-            "listen multiaddr '%s' must include /quic(_v1)",
-            config->listen_multiaddr);
-        multiaddr_free(ma);
-        libp2p_host_builder_free(builder);
-        return -1;
-    }
-    multiaddr_free(ma);
-
-    int b_rc = libp2p_host_builder_listen_addr(builder, config->listen_multiaddr);
-    if (b_rc != 0) {
-        lantern_log_error(
-            "network",
-            &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
-            "libp2p listen addr %s failed (%d)",
-            config->listen_multiaddr,
-            b_rc);
-        rc = -1;
-    }
-    if (rc == 0) {
-        b_rc = libp2p_host_builder_transport(builder, "quic");
-        if (b_rc != 0) {
-            lantern_log_error(
-                "network",
-                &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
-                "libp2p transport 'quic' setup failed (%d)",
-                b_rc);
-            rc = -1;
-        }
-    }
-    if (rc == 0) {
-        b_rc = libp2p_host_builder_multistream(builder, 15000, true);
-        if (b_rc != 0) {
-            lantern_log_error(
-                "network",
-                &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
-                "libp2p multistream setup failed (%d)",
-                b_rc);
-            rc = -1;
-        }
-    }
-    if (rc == 0) {
-        uint32_t flags = LIBP2P_HOST_F_AUTO_IDENTIFY_INBOUND;
-        if (config->allow_outbound_identify) {
-            flags |= LIBP2P_HOST_F_AUTO_IDENTIFY_OUTBOUND;
-        }
-        if (flags != 0u) {
-            b_rc = libp2p_host_builder_flags(builder, flags);
-            if (b_rc != 0) {
-                lantern_log_warn(
-                    "network",
-                    &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
-                    "libp2p host flags setup failed (%d)",
-                    b_rc);
-            }
-        }
-    }
-
-    libp2p_host_t *host = NULL;
-    int build_rc = 0;
-    if (rc == 0) {
-        build_rc = libp2p_host_builder_build(builder, &host);
-        if (build_rc != 0 || !host) {
-            lantern_log_error(
-                "network",
-                &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
-                "libp2p host builder failed (%d)",
-                build_rc);
-            rc = -1;
-        }
-    }
-    if (rc != 0) {
-        rc = -1;
-    }
-    libp2p_host_builder_free(builder);
-    builder = NULL;
-    if (rc != 0) {
+            "invalid listen multiaddr");
         return -1;
     }
 
-    uint8_t *identity_pb = NULL;
-    size_t identity_len = 0;
-    if (lantern_libp2p_encode_secp256k1_private_key_proto(
+    if (libp2p_host_secp256k1_identity_init(
+            &state->host_identity_storage,
             config->secp256k1_secret,
             config->secret_len,
-            &identity_pb,
-            &identity_len)
-        != 0) {
-        libp2p_host_free(host);
+            &state->host_identity)
+        != LIBP2P_HOST_OK) {
         return -1;
     }
+    memcpy(state->local_peer_id, state->host_identity_storage.peer_id, state->host_identity_storage.peer_id_len);
+    state->local_peer_id_len = state->host_identity_storage.peer_id_len;
 
-    if (libp2p_host_set_private_key(host, identity_pb, identity_len) != 0) {
-        free(identity_pb);
-        lantern_log_error(
-            "network",
-            &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
-            "libp2p failed to set private key");
-        libp2p_host_free(host);
+    uint64_t unix_now = 0;
+    if (lantern_quic_unix_time(&unix_now, NULL) != LIBP2P_QUIC_OK) {
         return -1;
     }
-    free(identity_pb);
-
-    if (libp2p_host_start(host) != 0) {
-        lantern_log_error(
-            "network",
-            &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
-            "libp2p host start failed");
-        libp2p_host_free(host);
+    libp2p_quic_host_key_t host_key = {
+        .type = LIBP2P_QUIC_HOST_KEY_SECP256K1,
+        .private_key = config->secp256k1_secret,
+        .private_key_len = config->secret_len,
+        .public_key_message = state->host_identity_storage.public_key_message,
+        .public_key_message_len = state->host_identity_storage.public_key_message_len,
+    };
+    libp2p_quic_certificate_config_t certificate_config = {
+        .certificate_key_type = LIBP2P_QUIC_CERT_KEY_ECDSA_P256,
+        .not_before_unix_seconds = unix_now > 3600u ? unix_now - 3600u : 0u,
+        .not_after_unix_seconds = unix_now + (uint64_t)(365u * 24u * 60u * 60u),
+        .random_fn = lantern_libp2p_quic_random,
+        .random_user_data = NULL,
+    };
+    size_t cert_len = 0;
+    size_t key_len = 0;
+    if (libp2p_quic_identity_write_certificate_der(
+            &host_key,
+            &certificate_config,
+            state->certificate_der,
+            sizeof(state->certificate_der),
+            &cert_len,
+            state->certificate_key_der,
+            sizeof(state->certificate_key_der),
+            &key_len)
+        != LIBP2P_QUIC_OK) {
         return -1;
     }
+    state->quic_identity.certificate_der = state->certificate_der;
+    state->quic_identity.certificate_der_len = cert_len;
+    state->quic_identity.certificate_private_key_der = state->certificate_key_der;
+    state->quic_identity.certificate_private_key_der_len = key_len;
+    state->quic_identity.peer_id = state->local_peer_id;
+    state->quic_identity.peer_id_len = state->local_peer_id_len;
 
-    lantern_log_info(
-        "network",
-        &(const struct lantern_log_metadata){.peer = config->listen_multiaddr},
-        "libp2p host started");
+    state->allocator.malloc_fn = lantern_quic_malloc;
+    state->allocator.calloc_fn = lantern_quic_calloc;
+    state->allocator.realloc_fn = lantern_quic_realloc;
+    state->allocator.free_fn = lantern_quic_free;
+    state->allocator.user_data = NULL;
 
-    state->host = host;
-    state->started = 1;
+    if (libp2p_quic_service_config_default(&state->quic_config) != LIBP2P_QUIC_OK) {
+        return -1;
+    }
+    state->quic_config.endpoint.role = LIBP2P_QUIC_ROLE_CLIENT_SERVER;
+    state->quic_config.endpoint.identity = state->quic_identity;
+    state->quic_config.endpoint.allocator = state->allocator;
+    state->quic_config.endpoint.random_fn = lantern_libp2p_quic_random;
+    state->quic_config.endpoint.unix_time_fn = lantern_quic_unix_time;
+    state->quic_config.endpoint.max_connections = 64u;
+    state->quic_config.endpoint.max_incoming_connections = 64u;
+    state->quic_config.endpoint.max_outgoing_connections = 64u;
+    state->quic_config.endpoint.max_bidi_streams = 128u;
+    state->quic_config.max_rx_datagrams_per_drive = 64u;
+    state->quic_config.max_tx_datagrams_per_drive = 64u;
+
+    libp2p_host_config_t host_config;
+    if (libp2p_host_config_default(&host_config) != LIBP2P_HOST_OK) {
+        return -1;
+    }
+    host_config.identity = state->host_identity;
+    host_config.listen_multiaddr = state->listen_multiaddr;
+    host_config.listen_multiaddr_len = state->listen_multiaddr_len;
+    host_config.transport = libp2p_host_quic_transport();
+    host_config.transport_config = &state->quic_config;
+    host_config.max_protocols = LANTERN_LIBP2P_MAX_PROTOCOLS;
+    host_config.max_connections = 64u;
+    host_config.max_streams_per_conn = 128u;
+    host_config.max_pending_dials = 64u;
+    host_config.max_pending_stream_opens = 128u;
+    host_config.event_capacity = 256u;
+    host_config.max_negotiation_steps = 128u;
+
+    if (libp2p_host_storage_size(&host_config, &state->host_storage_len) != LIBP2P_HOST_OK) {
+        return -1;
+    }
+    state->host_storage = calloc(1u, state->host_storage_len);
+    if (!state->host_storage) {
+        return -1;
+    }
+    if (libp2p_host_init(state->host_storage, state->host_storage_len, &host_config, &state->host) !=
+        LIBP2P_HOST_OK) {
+        return -1;
+    }
+    return register_default_protocols(state);
+}
+
+int lantern_libp2p_host_register_protocol(
+    struct lantern_libp2p_host *state,
+    const libp2p_host_protocol_t *protocol) {
+    if (!state || !state->host || !protocol || state->started) {
+        return -1;
+    }
+    return libp2p_host_handle(state->host, protocol) == LIBP2P_HOST_OK ? 0 : -1;
+}
+
+int lantern_libp2p_host_register_event_handler(
+    struct lantern_libp2p_host *state,
+    lantern_libp2p_host_event_handler handler,
+    void *user_data) {
+    if (!state || !handler || state->event_handler_count >= LANTERN_LIBP2P_MAX_EVENT_HANDLERS) {
+        return -1;
+    }
+    size_t index = state->event_handler_count++;
+    state->event_handlers[index] = handler;
+    state->event_handler_user_data[index] = user_data;
     return 0;
+}
+
+int lantern_libp2p_host_register_drive_handler(
+    struct lantern_libp2p_host *state,
+    lantern_libp2p_drive_handler handler,
+    void *user_data) {
+    if (!state || !handler || state->drive_handler_count >= LANTERN_LIBP2P_MAX_DRIVE_HANDLERS) {
+        return -1;
+    }
+    size_t index = state->drive_handler_count++;
+    state->drive_handlers[index] = handler;
+    state->drive_handler_user_data[index] = user_data;
+    return 0;
+}
+
+int lantern_libp2p_host_launch(struct lantern_libp2p_host *state) {
+    if (!state || !state->host || state->started) {
+        return -1;
+    }
+    if (libp2p_host_start(state->host) != LIBP2P_HOST_OK) {
+        lantern_log_error("network", NULL, "libp2p host start failed");
+        return -1;
+    }
+    __atomic_store_n(&state->stop_flag, 0, __ATOMIC_RELAXED);
+    if (pthread_create(&state->drive_thread, NULL, lantern_libp2p_drive_thread, state) != 0) {
+        (void)libp2p_host_close(state->host, 0);
+        return -1;
+    }
+    state->drive_thread_started = 1;
+    state->started = 1;
+    lantern_log_info("network", NULL, "libp2p host started");
+    return 0;
+}
+
+int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct lantern_libp2p_config *config) {
+    if (lantern_libp2p_host_prepare(state, config) != 0) {
+        return -1;
+    }
+    return lantern_libp2p_host_launch(state);
+}
+
+int lantern_peer_id_from_text(const char *text, struct lantern_peer_id *out_peer) {
+    if (!text || !out_peer) {
+        return -1;
+    }
+    size_t written = 0;
+    if (libp2p_peer_id_from_string(text, strlen(text), out_peer->bytes, sizeof(out_peer->bytes), &written) !=
+        LIBP2P_PEER_ID_OK) {
+        return -1;
+    }
+    out_peer->len = written;
+    return 0;
+}
+
+int lantern_peer_id_to_text(const struct lantern_peer_id *peer, char *buffer, size_t buffer_len) {
+    if (!peer || !buffer || buffer_len == 0) {
+        return -1;
+    }
+    size_t written = 0;
+    if (libp2p_peer_id_to_string(peer->bytes, peer->len, buffer, buffer_len, &written) !=
+        LIBP2P_PEER_ID_OK ||
+        written >= buffer_len) {
+        buffer[0] = '\0';
+        return -1;
+    }
+    buffer[written] = '\0';
+    return (int)written;
+}
+
+int lantern_peer_id_equal(const struct lantern_peer_id *left, const struct lantern_peer_id *right) {
+    return left && right && left->len == right->len && memcmp(left->bytes, right->bytes, left->len) == 0;
 }
 
 static int extract_ipv4_multiaddr(
     const struct lantern_enr_record *record,
     char *buffer,
-    size_t buffer_len,
-    uint16_t *port) {
+    size_t buffer_len) {
     const struct lantern_enr_key_value *ip = lantern_enr_record_find(record, "ip");
     const struct lantern_enr_key_value *port_field = lantern_enr_record_find(record, "quic");
     if (!port_field) {
@@ -417,20 +461,13 @@ static int extract_ipv4_multiaddr(
         return -1;
     }
     int written = snprintf(buffer, buffer_len, "/ip4/%s/udp/%u/quic-v1", ip_text, (unsigned)parsed_port);
-    if (written < 0 || (size_t)written >= buffer_len) {
-        return -1;
-    }
-    if (port) {
-        *port = parsed_port;
-    }
-    return 0;
+    return written >= 0 && (size_t)written < buffer_len ? 0 : -1;
 }
 
 static int extract_ipv6_multiaddr(
     const struct lantern_enr_record *record,
     char *buffer,
-    size_t buffer_len,
-    uint16_t *port) {
+    size_t buffer_len) {
     const struct lantern_enr_key_value *ip = lantern_enr_record_find(record, "ip6");
     const struct lantern_enr_key_value *port_field = lantern_enr_record_find(record, "quic6");
     if (!port_field) {
@@ -451,86 +488,89 @@ static int extract_ipv6_multiaddr(
         return -1;
     }
     int written = snprintf(buffer, buffer_len, "/ip6/%s/udp/%u/quic-v1", ip_text, (unsigned)parsed_port);
-    if (written < 0 || (size_t)written >= buffer_len) {
-        return -1;
-    }
-    if (port) {
-        *port = parsed_port;
-    }
-    return 0;
+    return written >= 0 && (size_t)written < buffer_len ? 0 : -1;
 }
 
 int lantern_libp2p_enr_to_multiaddr(
     const struct lantern_enr_record *record,
     char *buffer,
     size_t buffer_len,
-    peer_id_t **peer_id) {
-    if (!record || !buffer || !peer_id) {
+    struct lantern_peer_id *peer_id) {
+    if (!record || !buffer || buffer_len == 0 || !peer_id) {
         return -1;
     }
-    *peer_id = NULL;
+
     const struct lantern_enr_key_value *pubkey = lantern_enr_record_find(record, "secp256k1");
     if (!pubkey || !pubkey->value || pubkey->value_len == 0) {
         return -1;
     }
-
-    uint8_t *pubkey_pb = NULL;
-    size_t pubkey_pb_len = 0;
-    peer_id_error_t perr = peer_id_build_public_key_protobuf(
-        LANTERN_LIBP2P_KEY_TYPE_SECP256K1,
-        pubkey->value,
-        pubkey->value_len,
-        &pubkey_pb,
-        &pubkey_pb_len);
-    if (perr != PEER_ID_OK) {
+    size_t peer_len = 0;
+    if (libp2p_peer_id_from_secp256k1_public_key(
+            pubkey->value,
+            pubkey->value_len,
+            peer_id->bytes,
+            sizeof(peer_id->bytes),
+            &peer_len)
+        != LIBP2P_PEER_ID_OK) {
         return -1;
     }
-    peer_id_t *derived_peer_id = NULL;
-    perr = peer_id_new_from_public_key_pb(pubkey_pb, pubkey_pb_len, &derived_peer_id);
-    free(pubkey_pb);
-    if (perr != PEER_ID_OK || !derived_peer_id) {
-        return -1;
-    }
+    peer_id->len = peer_len;
 
     char base_addr[128];
-    if (extract_ipv4_multiaddr(record, base_addr, sizeof(base_addr), NULL) != 0) {
-        if (extract_ipv6_multiaddr(record, base_addr, sizeof(base_addr), NULL) != 0) {
-            peer_id_free(derived_peer_id);
-            return -1;
-        }
-    }
-
-    char peer_text[128];
-    int pid_written = peer_id_write_legacy_base58(derived_peer_id, peer_text, sizeof(peer_text));
-    if (pid_written < 0) {
-        peer_id_free(derived_peer_id);
+    if (extract_ipv4_multiaddr(record, base_addr, sizeof(base_addr)) != 0 &&
+        extract_ipv6_multiaddr(record, base_addr, sizeof(base_addr)) != 0) {
         return -1;
     }
 
+    char peer_text[LANTERN_LIBP2P_PEER_TEXT_MAX_BYTES];
+    if (lantern_peer_id_to_text(peer_id, peer_text, sizeof(peer_text)) < 0) {
+        return -1;
+    }
     int written = snprintf(buffer, buffer_len, "%s/p2p/%s", base_addr, peer_text);
-    if (written < 0 || (size_t)written >= buffer_len) {
-        peer_id_free(derived_peer_id);
+    return written >= 0 && (size_t)written < buffer_len ? 0 : -1;
+}
+
+int lantern_libp2p_validate_enr_peer(const struct lantern_enr_record *record) {
+    if (!record) {
         return -1;
     }
-    *peer_id = derived_peer_id;
+    struct lantern_peer_id peer_id;
+    char multiaddr_text[LANTERN_LIBP2P_MULTIADDR_MAX_BYTES];
+    uint8_t multiaddr[LANTERN_LIBP2P_MULTIADDR_MAX_BYTES];
+    size_t multiaddr_len = 0;
+    if (lantern_libp2p_enr_to_multiaddr(record, multiaddr_text, sizeof(multiaddr_text), &peer_id) != 0) {
+        return -1;
+    }
+    if (libp2p_multiaddr_from_string(
+            multiaddr_text,
+            strlen(multiaddr_text),
+            multiaddr,
+            sizeof(multiaddr),
+            &multiaddr_len)
+        != LIBP2P_MULTIADDR_OK) {
+        return -1;
+    }
     return 0;
 }
 
-int lantern_libp2p_host_add_enr_peer(
+int lantern_libp2p_host_dial_multiaddr(
     struct lantern_libp2p_host *state,
-    const struct lantern_enr_record *record,
-    int ttl_ms) {
-    if (!state || !state->host || !record) {
+    const char *multiaddr_text) {
+    if (!state || !state->host || !multiaddr_text || multiaddr_text[0] == '\0') {
         return -1;
     }
-    peer_id_t *peer_id = NULL;
-    char multiaddr[256];
-    if (lantern_libp2p_enr_to_multiaddr(record, multiaddr, sizeof(multiaddr), &peer_id) != 0) {
+    uint8_t multiaddr[LANTERN_LIBP2P_MULTIADDR_MAX_BYTES];
+    size_t multiaddr_len = 0;
+    if (libp2p_multiaddr_from_string(
+            multiaddr_text,
+            strlen(multiaddr_text),
+            multiaddr,
+            sizeof(multiaddr),
+            &multiaddr_len)
+        != LIBP2P_MULTIADDR_OK) {
         return -1;
     }
-
-    int ttl = ttl_ms > 0 ? ttl_ms : LANTERN_LIBP2P_DEFAULT_PEER_TTL_MS;
-    int rc = libp2p_host_add_peer_addr_str(state->host, peer_id, multiaddr, ttl);
-    peer_id_free(peer_id);
-    return rc;
+    libp2p_host_dial_t *dial = NULL;
+    libp2p_host_err_t err = libp2p_host_dial(state->host, multiaddr, multiaddr_len, NULL, &dial);
+    return err == LIBP2P_HOST_OK || err == LIBP2P_HOST_ERR_LIMIT ? 0 : -1;
 }

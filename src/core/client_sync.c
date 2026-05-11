@@ -21,8 +21,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "peer_id/peer_id.h"
-
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"
@@ -95,8 +93,7 @@ static bool backfill_entry_append_locked(
             }
             if (peer_text && peer_text[0])
             {
-                strncpy(entry->peer_text, peer_text, sizeof(entry->peer_text) - 1u);
-                entry->peer_text[sizeof(entry->peer_text) - 1u] = '\0';
+                (void)lantern_string_copy(entry->peer_text, sizeof(entry->peer_text), peer_text);
             }
             return true;
         }
@@ -126,8 +123,7 @@ static bool backfill_entry_append_locked(
     entry->depth = depth;
     if (peer_text && peer_text[0])
     {
-        strncpy(entry->peer_text, peer_text, sizeof(entry->peer_text) - 1u);
-        entry->peer_text[sizeof(entry->peer_text) - 1u] = '\0';
+        (void)lantern_string_copy(entry->peer_text, sizeof(entry->peer_text), peer_text);
     }
     return true;
 }
@@ -386,8 +382,10 @@ bool lantern_client_maybe_start_historical_backfill(
     client->backfill.frontier_depth = 0;
     if (peer_text && peer_text[0])
     {
-        strncpy(client->backfill.peer_text, peer_text, sizeof(client->backfill.peer_text) - 1u);
-        client->backfill.peer_text[sizeof(client->backfill.peer_text) - 1u] = '\0';
+        (void)lantern_string_copy(
+            client->backfill.peer_text,
+            sizeof(client->backfill.peer_text),
+            peer_text);
     }
     lantern_client_unlock_pending(client, locked);
 
@@ -634,7 +632,7 @@ size_t lantern_client_enabled_validator_count(struct lantern_client *client)
  *
  * @note Thread safety: This function is thread-safe
  */
-static const char *peer_id_to_text(const peer_id_t *from, char *out, size_t out_len)
+static const char *peer_id_to_text(const struct lantern_peer_id *from, char *out, size_t out_len)
 {
     if (!out || out_len == 0)
     {
@@ -647,14 +645,7 @@ static const char *peer_id_to_text(const peer_id_t *from, char *out, size_t out_
         return NULL;
     }
 
-    size_t written = 0;
-    peer_id_error_t rc = peer_id_text_write(
-        from,
-        PEER_ID_TEXT_LEGACY_BASE58,
-        out,
-        out_len,
-        &written);
-    if (rc != PEER_ID_OK)
+    if (lantern_peer_id_to_text(from, out, out_len) != 0)
     {
         out[0] = '\0';
         return NULL;
@@ -776,7 +767,7 @@ static bool validate_gossip_aggregated_attestation_data_locked(
  */
 int gossip_block_handler(
     const LanternSignedBlock *block,
-    const peer_id_t *from,
+    const struct lantern_peer_id *from,
     const uint8_t *raw_block_ssz,
     size_t raw_block_ssz_len,
     void *context)
@@ -827,7 +818,7 @@ int gossip_block_handler(
  */
 int gossip_vote_handler(
     const LanternSignedVote *vote,
-    const peer_id_t *from,
+    const struct lantern_peer_id *from,
     const uint8_t *raw_vote_payload,
     size_t raw_vote_payload_len,
     void *context)
@@ -973,7 +964,7 @@ static bool verify_and_cache_aggregated_attestation_locked(
 
 int gossip_aggregated_attestation_handler(
     const LanternSignedAggregatedAttestation *attestation,
-    const peer_id_t *from,
+    const struct lantern_peer_id *from,
     const uint8_t *raw_attestation_payload,
     size_t raw_attestation_payload_len,
     void *context)
@@ -2400,8 +2391,7 @@ static bool reserve_active_blocks_request_locked(
     entry->request_id = request_id;
     entry->started_ms = now_ms;
     entry->deadline_ms = deadline_ms;
-    strncpy(entry->peer_id, peer_id, sizeof(entry->peer_id) - 1u);
-    entry->peer_id[sizeof(entry->peer_id) - 1u] = '\0';
+    (void)lantern_string_copy(entry->peer_id, sizeof(entry->peer_id), peer_id);
     client->active_blocks_request_count += 1u;
     *out_request_id = request_id;
     return true;
@@ -2777,8 +2767,7 @@ static bool try_schedule_blocks_request_batch(
     {
         copy_cap = peer_cap;
     }
-    strncpy(selected_peer, entry->peer_id, copy_cap - 1u);
-    selected_peer[copy_cap - 1u] = '\0';
+    (void)lantern_string_copy(selected_peer, copy_cap, entry->peer_id);
     uint64_t request_id = 0u;
     if (!reserve_active_blocks_request_locked(
             client,
@@ -3419,8 +3408,7 @@ void lantern_client_enqueue_pending_block(
         peer_copy[0] = '\0';
         if (peer_text && *peer_text)
         {
-            strncpy(peer_copy, peer_text, sizeof(peer_copy) - 1u);
-            peer_copy[sizeof(peer_copy) - 1u] = '\0';
+            (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_text);
         }
         if (backfill_depth < existing->backfill_depth)
         {
@@ -3430,8 +3418,10 @@ void lantern_client_enqueue_pending_block(
         {
             if (existing->peer_text[0] == '\0' || strcmp(existing->peer_text, peer_text) != 0)
             {
-                strncpy(existing->peer_text, peer_text, sizeof(existing->peer_text) - 1u);
-                existing->peer_text[sizeof(existing->peer_text) - 1u] = '\0';
+                (void)lantern_string_copy(
+                    existing->peer_text,
+                    sizeof(existing->peer_text),
+                    peer_text);
             }
         }
         existing->received_ms = monotonic_millis();
@@ -3592,8 +3582,7 @@ void lantern_client_enqueue_pending_block(
         peer_copy[0] = '\0';
         if (peer_text && *peer_text)
         {
-            strncpy(peer_copy, peer_text, sizeof(peer_copy) - 1u);
-            peer_copy[sizeof(peer_copy) - 1u] = '\0';
+            (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_text);
         }
         uint32_t request_depth = entry_backfill_depth + 1u;
         if (try_schedule_blocks_request(
@@ -3716,12 +3705,10 @@ void lantern_client_process_pending_children(
                 replays[replay_count].peer_text[0] = '\0';
                 if (entry->peer_text[0])
                 {
-                    strncpy(
+                    (void)lantern_string_copy(
                         replays[replay_count].peer_text,
-                        entry->peer_text,
-                        sizeof(replays[replay_count].peer_text) - 1u);
-                    replays[replay_count]
-                        .peer_text[sizeof(replays[replay_count].peer_text) - 1u] = '\0';
+                        sizeof(replays[replay_count].peer_text),
+                        entry->peer_text);
                 }
                 replay_count += 1u;
             }

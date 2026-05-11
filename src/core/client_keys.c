@@ -51,7 +51,6 @@ static const size_t XMSS_WINDOWS_COLON_INDEX = 1u;
 static const size_t XMSS_WINDOWS_SEPARATOR_INDEX = 2u;
 
 static const char XMSS_DEFAULT_KEYS_DIR[] = "xmss-keys";
-static const char XMSS_ANNOTATED_VALIDATORS_FILENAME[] = "annotated_validators.yaml";
 
 
 /* ============================================================================

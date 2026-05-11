@@ -1838,7 +1838,6 @@ static int run_union_fixture(
         }
     } else if (selector == 0u) {
         uint64_t value = 0u;
-        uint8_t one = 0u;
         size_t one_len = 1u;
         if (lantern_fixture_token_to_uint64(doc, inner_value_idx, &value) != 0 || value > UINT8_MAX
             || ssz_serialize_uint8((uint8_t)value, encoded + 1u) != SSZ_SUCCESS) {

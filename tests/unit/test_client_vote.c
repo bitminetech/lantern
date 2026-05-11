@@ -16,6 +16,7 @@
 #include "lantern/crypto/xmss.h"
 #include "lantern/networking/gossip_payloads.h"
 #include "lantern/support/string_list.h"
+#include "lantern/support/strings.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/time.h"
 
@@ -138,12 +139,10 @@ static int test_enable_blocks_request_peer(
     }
     client->peer_status_count = 1u;
     client->peer_status_capacity = 1u;
-    strncpy(
+    (void)lantern_string_copy(
         client->peer_status_entries[0].peer_id,
-        peer_id,
-        sizeof(client->peer_status_entries[0].peer_id) - 1u);
-    client->peer_status_entries[0].peer_id[sizeof(client->peer_status_entries[0].peer_id) - 1u] =
-        '\0';
+        sizeof(client->peer_status_entries[0].peer_id),
+        peer_id);
 
     return 0;
 }

@@ -38,17 +38,6 @@
 #endif
 
 #include "internal/yaml_parser.h"
-#include "libp2p/errors.h"
-#include "libp2p/events.h"
-#include "libp2p/host.h"
-#include "libp2p/protocol_dial.h"
-#include "libp2p/stream.h"
-#include "multiformats/unsigned_varint/unsigned_varint.h"
-#include "peer_id/peer_id.h"
-#include "protocol/gossipsub/gossipsub.h"
-#include "protocol/identify/protocol_identify.h"
-#include "protocol/ping/protocol_ping.h"
-
 #include "client_internal.h"
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/duties.h"
@@ -864,6 +853,7 @@ static void client_reset_base(struct lantern_client *client)
     lantern_string_list_init(&client->bootnodes);
     lantern_string_list_init(&client->dialer_peers);
     lantern_string_list_init(&client->connected_peer_ids);
+    lantern_string_list_init(&client->connected_peer_refs);
     lantern_string_list_init(&client->inbound_peer_ids);
     lantern_string_list_init(&client->status_failure_peer_ids);
     double now_seconds = lantern_time_now_seconds();
@@ -871,8 +861,6 @@ static void client_reset_base(struct lantern_client *client)
     lantern_genesis_artifacts_init(&client->genesis);
     lantern_enr_record_init(&client->local_enr);
     lantern_libp2p_host_init(&client->network);
-    client->ping_server = NULL;
-    client->ping_running = false;
     lantern_gossipsub_service_init(&client->gossip);
     lantern_reqresp_service_init(&client->reqresp);
     client->reqresp_running = false;
@@ -895,8 +883,6 @@ static void client_reset_base(struct lantern_client *client)
     client->timing_stop_flag = 1;
     client->dialer_thread_started = false;
     client->dialer_stop_flag = 1;
-    client->ping_thread_started = false;
-    client->ping_stop_flag = 1;
     pending_block_list_init(&client->pending_blocks);
     pending_vote_list_init(&client->pending_gossip_votes);
     client->pending_lock_initialized = false;
@@ -3145,7 +3131,7 @@ static lantern_client_error client_start_network(
         .allow_outbound_identify = 1,
     };
 
-    if (lantern_libp2p_host_start(&client->network, &net_cfg) != 0)
+    if (lantern_libp2p_host_prepare(&client->network, &net_cfg) != 0)
     {
         lantern_log_error(
             "client",
@@ -3168,12 +3154,7 @@ static lantern_client_error client_start_network(
     }
     connection_counter_reset(client);
 
-    if (libp2p_event_subscribe(
-            client->network.host,
-            connection_events_cb,
-            client,
-            &client->connection_subscription)
-        != 0)
+    if (lantern_libp2p_host_register_event_handler(&client->network, connection_events_cb, client) != 0)
     {
         lantern_log_error(
             "network",
@@ -3181,23 +3162,6 @@ static lantern_client_error client_start_network(
             "failed to subscribe to libp2p connection events");
         return LANTERN_CLIENT_ERR_NETWORK;
     }
-
-    libp2p_protocol_server_t *ping_server = NULL;
-    if (libp2p_ping_service_start(client->network.host, &ping_server) != 0)
-    {
-        lantern_log_error(
-            "network",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to start libp2p ping service");
-        return LANTERN_CLIENT_ERR_NETWORK;
-    }
-
-    client->ping_server = ping_server;
-    client->ping_running = true;
-    lantern_log_info(
-        "network",
-        &(const struct lantern_log_metadata){.validator = client->node_id},
-        "libp2p ping service started");
 
     return LANTERN_CLIENT_OK;
 }
@@ -3281,7 +3245,7 @@ static lantern_client_error client_start_protocols(
             attestation_committee_count);
     }
     struct lantern_gossipsub_config gossip_cfg = {
-        .host = client->network.host,
+        .network = &client->network,
         .devnet = client->devnet,
         .data_dir = client->data_dir,
         .topic_network_name = topic_network_name,
@@ -3352,10 +3316,12 @@ static lantern_client_error client_start_protocols(
     req_callbacks.handle_status = reqresp_handle_status;
     req_callbacks.status_failure = reqresp_status_failure;
     req_callbacks.collect_blocks = reqresp_collect_blocks;
+    req_callbacks.handle_block_response = reqresp_handle_block_response;
+    req_callbacks.blocks_request_complete = reqresp_blocks_request_complete;
 
     struct lantern_reqresp_service_config req_config;
     memset(&req_config, 0, sizeof(req_config));
-    req_config.host = client->network.host;
+    req_config.network = &client->network;
     req_config.callbacks = &req_callbacks;
     if (lantern_reqresp_service_start(&client->reqresp, &req_config) != 0)
     {
@@ -3398,6 +3364,15 @@ static lantern_client_error client_start_protocols(
         "local ENR prepared sequence=%" PRIu64,
         client->assigned_validators->enr.sequence);
 
+    if (lantern_libp2p_host_launch(&client->network) != 0)
+    {
+        lantern_log_error(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to launch libp2p host");
+        return LANTERN_CLIENT_ERR_NETWORK;
+    }
+
     memset(node_key, 0, NODE_PRIVATE_KEY_SIZE);
     return LANTERN_CLIENT_OK;
 }
@@ -3421,14 +3396,6 @@ static void client_start_background_services(struct lantern_client *client)
             "network",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to start peer dialer thread");
-    }
-
-    if (start_ping_service(client) != 0)
-    {
-        lantern_log_warn(
-            "network",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to start ping service thread");
     }
 
     if (start_timing_service(client) != 0)
@@ -3463,7 +3430,6 @@ static void shutdown_validator_and_keys(struct lantern_client *client)
 {
     stop_timing_service(client);
     stop_validator_service(client);
-    stop_ping_service(client);
     stop_peer_dialer(client);
     lantern_client_free_xmss_pubkeys(client);
     free(client->xmss_key_dir);
@@ -3501,8 +3467,8 @@ static void shutdown_http_and_metrics(struct lantern_client *client)
 /**
  * @brief Tear down networking services and related synchronization primitives.
  *
- * Unsubscribes from libp2p events, stops ping service, destroys connection
- * lock, and clears peer tracking lists.
+ * Stops networking services, destroys connection lock, and clears peer tracking
+ * lists.
  *
  * @param client  Client whose networking stack is being shut down
  *
@@ -3510,32 +3476,6 @@ static void shutdown_http_and_metrics(struct lantern_client *client)
  */
 static void shutdown_network_services(struct lantern_client *client)
 {
-    if (client->network.host && client->connection_subscription)
-    {
-        libp2p_event_unsubscribe(client->network.host, client->connection_subscription);
-    }
-    client->connection_subscription = NULL;
-
-    if (client->network.host && client->ping_running && client->ping_server)
-    {
-        if (libp2p_ping_service_stop(client->network.host, client->ping_server) != 0)
-        {
-            lantern_log_warn(
-                "network",
-                &(const struct lantern_log_metadata){.validator = client->node_id},
-                "failed to stop libp2p ping service cleanly");
-        }
-        else
-        {
-            lantern_log_info(
-                "network",
-                &(const struct lantern_log_metadata){.validator = client->node_id},
-                "shutdown: libp2p ping service stopped");
-        }
-    }
-    client->ping_server = NULL;
-    client->ping_running = false;
-
     if (client->connection_lock_initialized)
     {
         connection_counter_reset(client);
@@ -3547,6 +3487,7 @@ static void shutdown_network_services(struct lantern_client *client)
         client->connected_peers = 0;
     }
     lantern_string_list_reset(&client->connected_peer_ids);
+    lantern_string_list_reset(&client->connected_peer_refs);
     lantern_string_list_reset(&client->inbound_peer_ids);
 }
 

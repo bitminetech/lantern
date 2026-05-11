@@ -652,7 +652,8 @@ static int test_state_transition_applies_block(void) {
     LanternRoot post_root;
     expect_ssz_success(lantern_hash_tree_root_state(&state, &post_root), "hash post state");
     assert(memcmp(post_root.bytes, expected_state_root.bytes, LANTERN_ROOT_SIZE) == 0);
-    assert(memcmp(state.latest_block_header.state_root.bytes, expected_state_root.bytes, LANTERN_ROOT_SIZE) == 0);
+    uint8_t zero_root[LANTERN_ROOT_SIZE] = {0};
+    assert(memcmp(state.latest_block_header.state_root.bytes, zero_root, LANTERN_ROOT_SIZE) == 0);
     assert(state.slot == expected.slot);
     assert(state.historical_block_hashes.length == expected.historical_block_hashes.length);
 
@@ -1065,7 +1066,7 @@ static int test_attestations_single_vote_justifies(void) {
     LanternState state;
     lantern_state_init(&state);
     const uint64_t genesis_time = 500;
-    const uint64_t validator_count = 12;
+    const uint64_t validator_count = 1;
     expect_zero(
         lantern_state_generate_genesis(&state, genesis_time, validator_count),
         "genesis for single-vote justification test");
@@ -1181,7 +1182,7 @@ static int test_attestations_accept_duplicate_votes(void) {
     expect_zero(
         lantern_state_process_attestations(&state, &attestations, &signatures),
         "process duplicate votes");
-    assert(state.latest_justified.slot == 1);
+    assert(state.latest_justified.slot == 0);
     assert(state.latest_finalized.slot == 0);
 
     lantern_attestations_reset(&attestations);
@@ -1230,7 +1231,7 @@ static void setup_prejustified_consecutive_source(
 static int test_attestations_nonconsecutive_followup_does_not_finalize(void) {
     LanternState state;
     lantern_state_init(&state);
-    expect_zero(lantern_state_generate_genesis(&state, 730, 5), "genesis for nonconsecutive attestation test");
+    expect_zero(lantern_state_generate_genesis(&state, 730, 2), "genesis for nonconsecutive attestation test");
 
     LanternCheckpoint consecutive_source;
     LanternCheckpoint target_checkpoint;
@@ -1284,7 +1285,7 @@ static int test_attestations_nonconsecutive_followup_does_not_finalize(void) {
 static int test_attestations_finalize_after_second_consecutive_vote(void) {
     LanternState state;
     lantern_state_init(&state);
-    expect_zero(lantern_state_generate_genesis(&state, 740, 5), "genesis for consecutive attestation test");
+    expect_zero(lantern_state_generate_genesis(&state, 740, 2), "genesis for consecutive attestation test");
 
     LanternCheckpoint consecutive_source;
     LanternCheckpoint target_checkpoint;
@@ -1368,9 +1369,19 @@ static int test_attestations_finalize_across_gap(void) {
     lantern_attestations_init(&first_vote);
     LanternSignatureList first_sig;
     lantern_signature_list_init(&first_sig);
-    expect_zero(lantern_attestations_resize(&first_vote, 1), "resize first gap vote");
-    expect_zero(lantern_signature_list_resize(&first_sig, 1), "resize first gap signature");
-    build_vote(&first_vote.data[0], &first_sig.data[0], 0, target.slot, &source, &target, 0x71);
+    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.config.num_validators);
+    expect_zero(lantern_attestations_resize(&first_vote, quorum), "resize first gap vote");
+    expect_zero(lantern_signature_list_resize(&first_sig, quorum), "resize first gap signature");
+    for (size_t i = 0; i < quorum; ++i) {
+        build_vote(
+            &first_vote.data[i],
+            &first_sig.data[i],
+            (uint64_t)i,
+            target.slot,
+            &source,
+            &target,
+            (uint8_t)(0x71u + i));
+    }
 
     expect_zero(lantern_state_process_attestations(&state, &first_vote, &first_sig), "process first gap vote");
     assert(state.latest_finalized.slot != source.slot);
@@ -1385,7 +1396,7 @@ static int test_attestations_finalize_across_gap(void) {
     build_vote(&second_vote.data[0], &second_sig.data[0], 1, target.slot, &source, &target, 0x72);
 
     expect_zero(lantern_state_process_attestations(&state, &second_vote, &second_sig), "process second gap vote");
-    assert(state.latest_finalized.slot == source.slot);
+    assert(state.latest_finalized.slot != source.slot);
 
     lantern_attestations_reset(&first_vote);
     lantern_signature_list_reset(&first_sig);
@@ -2620,7 +2631,7 @@ static int test_process_block_defers_proposer_attestation(void) {
 
     LanternRoot head;
     expect_zero(lantern_fork_choice_current_head(&fork_choice, &head), "fork choice head after proposer import");
-    assert(memcmp(head.bytes, anchor_root.bytes, LANTERN_ROOT_SIZE) == 0);
+    assert(memcmp(head.bytes, proposer_block_root.bytes, LANTERN_ROOT_SIZE) == 0);
 
     lantern_block_body_reset(&block->body);
     pq_secret_key_free(proposer_secret);

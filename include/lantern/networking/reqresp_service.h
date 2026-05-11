@@ -5,10 +5,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
+#include "lantern/networking/libp2p.h"
 #include "lantern/networking/messages.h"
-#include "libp2p/stream.h"
-#include "peer_id/peer_id.h"
 
 #define LANTERN_REQRESP_STATUS_PROTOCOL_SNAPPY "/leanconsensus/req/status/1/ssz_snappy"
 #define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_SNAPPY "/leanconsensus/req/blocks_by_root/1/ssz_snappy"
@@ -25,6 +25,7 @@
 #define LANTERN_REQRESP_RESPONSE_INVALID_REQUEST 1u
 #define LANTERN_REQRESP_RESPONSE_SERVER_ERROR 2u
 #define LANTERN_REQRESP_RESPONSE_RESOURCE_UNAVAILABLE 3u
+#define LANTERN_REQRESP_MAX_TRACKED_CONNECTIONS 64u
 
 /**
  * Reqresp service error codes.
@@ -45,6 +46,7 @@ typedef enum
     LANTERN_REQRESP_ERR_VARINT_HEADER_TOO_LONG = -1005,
     LANTERN_REQRESP_ERR_PAYLOAD_TOO_LARGE = -1006,
     LANTERN_REQRESP_ERR_ALLOC = -1007,
+    LANTERN_REQRESP_ERR_INVALID_PAYLOAD = -1008,
 } lantern_reqresp_error;
 
 enum lantern_reqresp_protocol_kind {
@@ -57,10 +59,29 @@ enum lantern_reqresp_protocol_kind {
 #define LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL
 #define LANTERN_STATUS_PREVIEW_BYTES LANTERN_REQRESP_STATUS_PREVIEW_BYTES
 
-struct libp2p_host;
-struct libp2p_protocol_server;
-struct libp2p_subscription;
 struct lantern_log_metadata;
+
+struct lantern_reqresp_stream;
+struct lantern_reqresp_exchange;
+
+struct lantern_reqresp_stream_ops {
+    ssize_t (*read)(void *io_ctx, void *buf, size_t len);
+    ssize_t (*write)(void *io_ctx, const void *buf, size_t len);
+    int (*close)(void *io_ctx);
+    int (*reset)(void *io_ctx);
+    int (*set_deadline)(void *io_ctx, uint64_t ms);
+    int (*shutdown_write)(void *io_ctx);
+    void (*free_ctx)(void *io_ctx);
+};
+
+struct lantern_reqresp_stream {
+    libp2p_host_t *host;
+    libp2p_host_stream_t *stream;
+    void *io_ctx;
+    struct lantern_reqresp_stream_ops ops;
+    struct lantern_peer_id remote_peer;
+    bool has_remote_peer;
+};
 
 struct lantern_reqresp_service_callbacks {
     void *context;
@@ -78,19 +99,46 @@ struct lantern_reqresp_service_callbacks {
         const LanternRoot *roots,
         size_t root_count,
         LanternSignedBlockList *out_blocks);
+    int (*handle_block_response)(
+        void *context,
+        const LanternSignedBlock *block,
+        const uint8_t *raw_block_ssz,
+        size_t raw_block_ssz_len,
+        const char *peer_id);
+    void (*blocks_request_complete)(
+        void *context,
+        const char *peer_id,
+        const LanternRoot *roots,
+        size_t root_count,
+        uint64_t request_id,
+        int success);
 };
 
 struct lantern_reqresp_service_config {
-    struct libp2p_host *host;
+    struct lantern_libp2p_host *network;
     const struct lantern_reqresp_service_callbacks *callbacks;
 };
 
+struct lantern_reqresp_protocol_context {
+    struct lantern_reqresp_service *service;
+    enum lantern_reqresp_protocol_kind kind;
+};
+
+struct lantern_reqresp_conn_entry {
+    struct lantern_peer_id peer;
+    libp2p_host_conn_t *conn;
+};
+
 struct lantern_reqresp_service {
-    struct libp2p_host *host;
+    struct lantern_libp2p_host *network;
     struct lantern_reqresp_service_callbacks callbacks;
-    struct libp2p_protocol_server *status_server;
-    struct libp2p_protocol_server *blocks_server;
-    struct libp2p_subscription *event_subscription;
+    libp2p_host_protocol_t status_protocol;
+    libp2p_host_protocol_t blocks_protocol;
+    struct lantern_reqresp_protocol_context status_context;
+    struct lantern_reqresp_protocol_context blocks_context;
+    struct lantern_reqresp_conn_entry conns[LANTERN_REQRESP_MAX_TRACKED_CONNECTIONS];
+    size_t conn_count;
+    struct lantern_reqresp_exchange *exchanges;
     int lock_initialized;
     pthread_mutex_t lock;
 };
@@ -103,15 +151,27 @@ void lantern_reqresp_service_init(struct lantern_reqresp_service *service);
 void lantern_reqresp_service_reset(struct lantern_reqresp_service *service);
 int lantern_reqresp_service_request_status(
     struct lantern_reqresp_service *service,
-    const peer_id_t *peer_id,
+    const struct lantern_peer_id *peer_id,
     const char *peer_id_text);
+int lantern_reqresp_service_request_blocks(
+    struct lantern_reqresp_service *service,
+    const struct lantern_peer_id *peer_id,
+    const char *peer_id_text,
+    const LanternRoot *roots,
+    size_t root_count,
+    uint64_t request_id);
 int lantern_reqresp_service_start(
     struct lantern_reqresp_service *service,
     const struct lantern_reqresp_service_config *config);
+struct lantern_reqresp_stream *lantern_reqresp_stream_from_ops(
+    void *io_ctx,
+    const struct lantern_reqresp_stream_ops *ops,
+    const struct lantern_peer_id *remote_peer);
+void lantern_reqresp_stream_free(struct lantern_reqresp_stream *stream);
 
 int lantern_reqresp_read_response_chunk(
     struct lantern_reqresp_service *service,
-    libp2p_stream_t *stream,
+    struct lantern_reqresp_stream *stream,
     enum lantern_reqresp_protocol_kind protocol,
     uint8_t **out_data,
     size_t *out_len,

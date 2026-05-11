@@ -28,9 +28,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "libp2p/errors.h"
-#include "peer_id/peer_id.h"
-
 #include "lantern/consensus/hash.h"
 #include "lantern/networking/messages.h"
 #include "lantern/networking/reqresp_service.h"
@@ -158,8 +155,7 @@ static void copy_peer_id_text(const char *peer_id, char *out, size_t out_len)
         return;
     }
 
-    strncpy(out, peer_id, out_len - 1);
-    out[out_len - 1] = '\0';
+    (void)lantern_string_copy(out, out_len, peer_id);
 }
 
 
@@ -224,7 +220,9 @@ static void log_status_failure(
         .peer = peer_id_text && peer_id_text[0] ? peer_id_text : NULL,
     };
 
-    if (error == LIBP2P_ERR_PROTO_NEGOTIATION_FAILED || error == LIBP2P_ERR_UNSUPPORTED)
+    if (error == LIBP2P_HOST_ERR_NEGOTIATION ||
+        error == LIBP2P_HOST_ERR_UNSUPPORTED ||
+        error == LIBP2P_HOST_ERR_NOT_FOUND)
     {
         if (first_failure)
         {
@@ -249,7 +247,7 @@ static void log_status_failure(
         return;
     }
 
-    if (error == LIBP2P_ERR_TIMEOUT)
+    if (error == LIBP2P_HOST_ERR_WOULD_BLOCK)
     {
         if (first_failure)
         {
@@ -657,8 +655,7 @@ static void maybe_log_sync_progress(
                 const struct lantern_pending_block *entry = &client->pending_blocks.items[i];
                 if (pending_peer[0] == '\0' && entry->peer_text[0] != '\0')
                 {
-                    strncpy(pending_peer, entry->peer_text, sizeof(pending_peer) - 1u);
-                    pending_peer[sizeof(pending_peer) - 1u] = '\0';
+                    (void)lantern_string_copy(pending_peer, sizeof(pending_peer), entry->peer_text);
                 }
                 if (lantern_root_is_zero(&entry->parent_root))
                 {
@@ -681,8 +678,7 @@ static void maybe_log_sync_progress(
                     orphan_count += 1u;
                     if (orphan_peer[0] == '\0' && entry->peer_text[0] != '\0')
                     {
-                        strncpy(orphan_peer, entry->peer_text, sizeof(orphan_peer) - 1u);
-                        orphan_peer[sizeof(orphan_peer) - 1u] = '\0';
+                        (void)lantern_string_copy(orphan_peer, sizeof(orphan_peer), entry->peer_text);
                     }
                 }
             }
@@ -1331,7 +1327,7 @@ void reqresp_status_failure(void *context, const char *peer_id, int error)
     copy_peer_id_text(peer_id, peer_copy, sizeof(peer_copy));
     if (error == 0)
     {
-        error = LIBP2P_ERR_INTERNAL;
+        error = LIBP2P_HOST_ERR_INTERNAL;
     }
 
     if (peer_copy[0] != '\0')
@@ -1567,6 +1563,64 @@ int reqresp_collect_blocks(
         pending_hits);
 
     return LANTERN_CLIENT_OK;
+}
+
+int reqresp_handle_block_response(
+    void *context,
+    const LanternSignedBlock *block,
+    const uint8_t *raw_block_ssz,
+    size_t raw_block_ssz_len,
+    const char *peer_id)
+{
+    if (!context || !block)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    struct lantern_client *client = context;
+    LanternRoot block_root;
+    if (lantern_hash_tree_root_block(&block->block, &block_root) != SSZ_SUCCESS)
+    {
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+    struct lantern_log_metadata meta = {
+        .validator = client->node_id,
+        .peer = peer_id && peer_id[0] ? peer_id : NULL,
+        .has_slot = true,
+        .slot = block->block.slot,
+    };
+    return lantern_client_import_block(
+               client,
+               block,
+               &block_root,
+               &meta,
+               0u,
+               true,
+        raw_block_ssz,
+        raw_block_ssz_len)
+        ? LANTERN_CLIENT_OK
+        : LANTERN_CLIENT_ERR_RUNTIME;
+}
+
+void reqresp_blocks_request_complete(
+    void *context,
+    const char *peer_id,
+    const LanternRoot *roots,
+    size_t root_count,
+    uint64_t request_id,
+    int success)
+{
+    if (!context)
+    {
+        return;
+    }
+    lantern_client_on_blocks_request_complete_batch_with_id(
+        (struct lantern_client *)context,
+        request_id,
+        peer_id,
+        roots,
+        root_count,
+        success ? LANTERN_BLOCKS_REQUEST_SUCCESS : LANTERN_BLOCKS_REQUEST_FAILED);
 }
 
 

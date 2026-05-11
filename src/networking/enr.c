@@ -3,8 +3,6 @@
 #include "lantern/encoding/rlp.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
-#include "multiformats/multibase/encoding/base64_url.h"
-#include "tomcrypt.h"
 
 #include <ctype.h>
 #include <stdint.h>
@@ -23,6 +21,181 @@
 
 #define LANTERN_ENR_SIGNATURE_SIZE 64u
 #define LANTERN_ENR_MAX_SIZE 300u
+
+static const char LANTERN_BASE64URL_ALPHABET[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+static uint64_t load_u64_le(const uint8_t in[8]) {
+    uint64_t value = 0;
+    for (size_t i = 0; i < 8; i++) {
+        value |= ((uint64_t)in[i]) << (8u * i);
+    }
+    return value;
+}
+
+static void store_u64_le(uint64_t value, uint8_t out[8]) {
+    for (size_t i = 0; i < 8; i++) {
+        out[i] = (uint8_t)((value >> (8u * i)) & 0xffu);
+    }
+}
+
+static uint64_t rotl64(uint64_t value, unsigned shift) {
+    return (value << shift) | (value >> (64u - shift));
+}
+
+static void keccakf1600(uint64_t state[25]) {
+    static const uint64_t round_constants[24] = {
+        UINT64_C(0x0000000000000001), UINT64_C(0x0000000000008082),
+        UINT64_C(0x800000000000808a), UINT64_C(0x8000000080008000),
+        UINT64_C(0x000000000000808b), UINT64_C(0x0000000080000001),
+        UINT64_C(0x8000000080008081), UINT64_C(0x8000000000008009),
+        UINT64_C(0x000000000000008a), UINT64_C(0x0000000000000088),
+        UINT64_C(0x0000000080008009), UINT64_C(0x000000008000000a),
+        UINT64_C(0x000000008000808b), UINT64_C(0x800000000000008b),
+        UINT64_C(0x8000000000008089), UINT64_C(0x8000000000008003),
+        UINT64_C(0x8000000000008002), UINT64_C(0x8000000000000080),
+        UINT64_C(0x000000000000800a), UINT64_C(0x800000008000000a),
+        UINT64_C(0x8000000080008081), UINT64_C(0x8000000000008080),
+        UINT64_C(0x0000000080000001), UINT64_C(0x8000000080008008),
+    };
+    static const unsigned rotation_constants[24] = {
+        1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14,
+        27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44,
+    };
+    static const unsigned pi_lanes[24] = {
+        10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4,
+        15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1,
+    };
+
+    for (size_t round = 0; round < 24; round++) {
+        uint64_t column[5];
+        for (size_t x = 0; x < 5; x++) {
+            column[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20];
+        }
+        for (size_t x = 0; x < 5; x++) {
+            uint64_t t = column[(x + 4) % 5] ^ rotl64(column[(x + 1) % 5], 1);
+            for (size_t y = 0; y < 25; y += 5) {
+                state[y + x] ^= t;
+            }
+        }
+
+        uint64_t t = state[1];
+        for (size_t i = 0; i < 24; i++) {
+            unsigned lane = pi_lanes[i];
+            uint64_t saved = state[lane];
+            state[lane] = rotl64(t, rotation_constants[i]);
+            t = saved;
+        }
+
+        for (size_t y = 0; y < 25; y += 5) {
+            for (size_t x = 0; x < 5; x++) {
+                column[x] = state[y + x];
+            }
+            for (size_t x = 0; x < 5; x++) {
+                state[y + x] ^= (~column[(x + 1) % 5]) & column[(x + 2) % 5];
+            }
+        }
+
+        state[0] ^= round_constants[round];
+    }
+}
+
+static int keccak256_bytes(const uint8_t *data, size_t data_len, uint8_t out_hash[32]) {
+    enum { KECCAK256_RATE = 136 };
+    if ((!data && data_len > 0u) || !out_hash) {
+        return -1;
+    }
+
+    uint64_t state[25] = {0};
+    while (data_len >= KECCAK256_RATE) {
+        for (size_t i = 0; i < KECCAK256_RATE / 8u; i++) {
+            state[i] ^= load_u64_le(data + (i * 8u));
+        }
+        keccakf1600(state);
+        data += KECCAK256_RATE;
+        data_len -= KECCAK256_RATE;
+    }
+
+    uint8_t block[KECCAK256_RATE];
+    memset(block, 0, sizeof(block));
+    if (data_len > 0u) {
+        memcpy(block, data, data_len);
+    }
+    block[data_len] ^= 0x01u;
+    block[KECCAK256_RATE - 1u] ^= 0x80u;
+    for (size_t i = 0; i < KECCAK256_RATE / 8u; i++) {
+        state[i] ^= load_u64_le(block + (i * 8u));
+    }
+    keccakf1600(state);
+
+    for (size_t i = 0; i < 4; i++) {
+        store_u64_le(state[i], out_hash + (i * 8u));
+    }
+    return 0;
+}
+
+static int base64url_value(char ch) {
+    if (ch >= 'A' && ch <= 'Z') {
+        return ch - 'A';
+    }
+    if (ch >= 'a' && ch <= 'z') {
+        return 26 + (ch - 'a');
+    }
+    if (ch >= '0' && ch <= '9') {
+        return 52 + (ch - '0');
+    }
+    if (ch == '-') {
+        return 62;
+    }
+    if (ch == '_') {
+        return 63;
+    }
+    return -1;
+}
+
+static int base64url_encode(
+    const uint8_t *input,
+    size_t input_len,
+    char *out,
+    size_t out_len,
+    size_t *written) {
+    if ((!input && input_len > 0u) || !out || !written) {
+        return -1;
+    }
+    size_t full_groups = input_len / 3u;
+    size_t remainder = input_len % 3u;
+    size_t required = (full_groups * 4u) + (remainder == 0u ? 0u : remainder + 1u);
+    if (out_len <= required) {
+        return -1;
+    }
+
+    size_t in_pos = 0;
+    size_t out_pos = 0;
+    for (size_t i = 0; i < full_groups; i++) {
+        uint32_t value =
+            ((uint32_t)input[in_pos] << 16u) |
+            ((uint32_t)input[in_pos + 1u] << 8u) |
+            (uint32_t)input[in_pos + 2u];
+        in_pos += 3u;
+        out[out_pos++] = LANTERN_BASE64URL_ALPHABET[(value >> 18u) & 0x3fu];
+        out[out_pos++] = LANTERN_BASE64URL_ALPHABET[(value >> 12u) & 0x3fu];
+        out[out_pos++] = LANTERN_BASE64URL_ALPHABET[(value >> 6u) & 0x3fu];
+        out[out_pos++] = LANTERN_BASE64URL_ALPHABET[value & 0x3fu];
+    }
+    if (remainder == 1u) {
+        uint32_t value = (uint32_t)input[in_pos] << 16u;
+        out[out_pos++] = LANTERN_BASE64URL_ALPHABET[(value >> 18u) & 0x3fu];
+        out[out_pos++] = LANTERN_BASE64URL_ALPHABET[(value >> 12u) & 0x3fu];
+    } else if (remainder == 2u) {
+        uint32_t value = ((uint32_t)input[in_pos] << 16u) | ((uint32_t)input[in_pos + 1u] << 8u);
+        out[out_pos++] = LANTERN_BASE64URL_ALPHABET[(value >> 18u) & 0x3fu];
+        out[out_pos++] = LANTERN_BASE64URL_ALPHABET[(value >> 12u) & 0x3fu];
+        out[out_pos++] = LANTERN_BASE64URL_ALPHABET[(value >> 6u) & 0x3fu];
+    }
+    out[out_pos] = '\0';
+    *written = out_pos;
+    return 0;
+}
 
 static void lantern_enr_key_value_reset(struct lantern_enr_key_value *pair) {
     if (!pair) {
@@ -131,19 +304,58 @@ static int lantern_base64url_decode(const char *input, uint8_t **out_bytes, size
         return -1;
     }
 
+    if ((input_len % 4u) == 1u) {
+        return -1;
+    }
+
     uint8_t *decoded = malloc(input_len);
     if (!decoded) {
         return -1;
     }
 
-    int written = multibase_base64_url_decode(input, input_len, decoded, input_len);
-    if (written < 0) {
-        free(decoded);
-        return -1;
+    size_t out_pos = 0;
+    size_t in_pos = 0;
+    while (input_len - in_pos >= 4u) {
+        int a = base64url_value(input[in_pos++]);
+        int b = base64url_value(input[in_pos++]);
+        int c = base64url_value(input[in_pos++]);
+        int d = base64url_value(input[in_pos++]);
+        if (a < 0 || b < 0 || c < 0 || d < 0) {
+            free(decoded);
+            return -1;
+        }
+        uint32_t value =
+            ((uint32_t)a << 18u) | ((uint32_t)b << 12u) | ((uint32_t)c << 6u) | (uint32_t)d;
+        decoded[out_pos++] = (uint8_t)((value >> 16u) & 0xffu);
+        decoded[out_pos++] = (uint8_t)((value >> 8u) & 0xffu);
+        decoded[out_pos++] = (uint8_t)(value & 0xffu);
+    }
+
+    size_t rem = input_len - in_pos;
+    if (rem == 2u) {
+        int a = base64url_value(input[in_pos]);
+        int b = base64url_value(input[in_pos + 1u]);
+        if (a < 0 || b < 0) {
+            free(decoded);
+            return -1;
+        }
+        uint32_t value = ((uint32_t)a << 18u) | ((uint32_t)b << 12u);
+        decoded[out_pos++] = (uint8_t)((value >> 16u) & 0xffu);
+    } else if (rem == 3u) {
+        int a = base64url_value(input[in_pos]);
+        int b = base64url_value(input[in_pos + 1u]);
+        int c = base64url_value(input[in_pos + 2u]);
+        if (a < 0 || b < 0 || c < 0) {
+            free(decoded);
+            return -1;
+        }
+        uint32_t value = ((uint32_t)a << 18u) | ((uint32_t)b << 12u) | ((uint32_t)c << 6u);
+        decoded[out_pos++] = (uint8_t)((value >> 16u) & 0xffu);
+        decoded[out_pos++] = (uint8_t)((value >> 8u) & 0xffu);
     }
 
     *out_bytes = decoded;
-    *out_len = (size_t)written;
+    *out_len = out_pos;
     return 0;
 }
 
@@ -352,22 +564,6 @@ static int parse_port_value(const struct lantern_enr_key_value *pair, uint16_t *
     }
     *out_port = (uint16_t)(((uint16_t)pair->value[0] << 8u) | (uint16_t)pair->value[1]);
     return 0;
-}
-
-static int keccak256_bytes(const uint8_t *data, size_t data_len, uint8_t out_hash[32]) {
-    if ((!data && data_len > 0u) || !out_hash) {
-        return -1;
-    }
-
-    const struct ltc_hash_descriptor *keccak_desc = &keccak_256_desc;
-    hash_state keccak_state;
-    if (keccak_desc->init(&keccak_state) != CRYPT_OK) {
-        return -1;
-    }
-    if (data_len > 0u && keccak_desc->process(&keccak_state, data, (unsigned long)data_len) != CRYPT_OK) {
-        return -1;
-    }
-    return keccak_desc->done(&keccak_state, out_hash) == CRYPT_OK ? 0 : -1;
 }
 
 static int encode_record_content(
@@ -781,21 +977,8 @@ int lantern_enr_record_build_v4(
     }
 
     uint8_t message_hash[32];
-    const struct ltc_hash_descriptor *keccak_desc = &keccak_256_desc;
-    hash_state keccak_state;
-    int hash_rc = keccak_desc->init(&keccak_state);
-    if (hash_rc != CRYPT_OK) {
-        lantern_log_error("enr", NULL, "keccak init rc=%d", hash_rc);
-        error_reason = "keccak init failed";
-        goto error;
-    }
-    if (content.length > 0
-        && keccak_desc->process(&keccak_state, content.data, (unsigned long)content.length) != CRYPT_OK) {
-        error_reason = "keccak absorb failed";
-        goto error;
-    }
-    if (keccak_desc->done(&keccak_state, message_hash) != CRYPT_OK) {
-        error_reason = "keccak finalize failed";
+    if (keccak256_bytes(content.data, content.length, message_hash) != 0) {
+        error_reason = "keccak failed";
         goto error;
     }
 
@@ -839,19 +1022,19 @@ int lantern_enr_record_build_v4(
         error_reason = "payload alloc failed";
         goto error;
     }
-    int written = multibase_base64_url_encode(
+    size_t written = 0;
+    if (base64url_encode(
         signed_record.data,
         signed_record.length,
         payload,
-        encoded_capacity);
-    if (written < 0) {
+        encoded_capacity,
+        &written) != 0) {
         free(payload);
         error_reason = "base64url encode failed";
         goto error;
     }
-    payload[written] = '\0';
 
-    size_t enr_len = (size_t)written + 5;
+    size_t enr_len = written + 5;
     char *enr_text = malloc(enr_len);
     if (!enr_text) {
         free(payload);
@@ -859,7 +1042,7 @@ int lantern_enr_record_build_v4(
         goto error;
     }
     memcpy(enr_text, "enr:", 4);
-    memcpy(enr_text + 4, payload, (size_t)written + 1);
+    memcpy(enr_text + 4, payload, written + 1u);
     free(payload);
 
     if (lantern_enr_record_decode(enr_text, record) != 0) {

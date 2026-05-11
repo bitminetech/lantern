@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <errno.h>
 
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/hash.h"
@@ -16,8 +17,6 @@
 #include "lantern/networking/reqresp_service.h"
 #include "lantern/encoding/snappy.h"
 #include "lantern/support/strings.h"
-#include "libp2p/errors.h"
-#include "libp2p/stream_internal.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
 #include "tests/support/fixture_loader.h"
 #include "ssz.h"
@@ -48,24 +47,6 @@ static void fill_signature(LanternSignature *signature, uint8_t seed) {
         return;
     }
     fill_bytes(signature->bytes, LANTERN_SIGNATURE_SIZE, seed);
-}
-
-static size_t build_single_block_list_payload(
-    const uint8_t *block_ssz,
-    size_t block_ssz_len,
-    uint8_t *out,
-    size_t out_len) {
-    size_t total_len = sizeof(uint32_t) + block_ssz_len;
-    CHECK(block_ssz != NULL);
-    CHECK(out != NULL);
-    CHECK(out_len >= total_len);
-
-    out[0] = (uint8_t)(sizeof(uint32_t) & 0xFFu);
-    out[1] = 0u;
-    out[2] = 0u;
-    out[3] = 0u;
-    memcpy(out + sizeof(uint32_t), block_ssz, block_ssz_len);
-    return total_len;
 }
 
 static void expect_root_seed(const LanternRoot *root, uint8_t seed) {
@@ -117,7 +98,7 @@ struct mock_stream_ctx {
 static ssize_t mock_stream_read(void *io_ctx, void *buf, size_t len) {
     struct mock_stream_ctx *ctx = (struct mock_stream_ctx *)io_ctx;
     if (!ctx || !buf || len == 0) {
-        return LIBP2P_ERR_NULL_PTR;
+        return -EINVAL;
     }
     if (ctx->position >= ctx->length) {
         return 0;
@@ -133,7 +114,7 @@ static ssize_t mock_stream_write(void *io_ctx, const void *buf, size_t len) {
     (void)io_ctx;
     (void)buf;
     (void)len;
-    return LIBP2P_ERR_UNSUPPORTED;
+    return -ENOTSUP;
 }
 
 static int mock_stream_close(void *io_ctx) {
@@ -166,23 +147,6 @@ static void check_checkpoint_equal(const LanternCheckpoint *expected, const Lant
     CHECK(actual != NULL);
     CHECK(expected->slot == actual->slot);
     CHECK(memcmp(expected->root.bytes, actual->root.bytes, LANTERN_ROOT_SIZE) == 0);
-}
-
-static void check_vote_equal(const LanternVote *expected, const LanternVote *actual) {
-    CHECK(expected != NULL);
-    CHECK(actual != NULL);
-    CHECK(expected->validator_id == actual->validator_id);
-    CHECK(expected->slot == actual->slot);
-    check_checkpoint_equal(&expected->head, &actual->head);
-    check_checkpoint_equal(&expected->target, &actual->target);
-    check_checkpoint_equal(&expected->source, &actual->source);
-}
-
-static void check_signed_vote_equal(const LanternSignedVote *expected, const LanternSignedVote *actual) {
-    CHECK(expected != NULL);
-    CHECK(actual != NULL);
-    check_vote_equal(&expected->data, &actual->data);
-    CHECK(memcmp(expected->signature.bytes, actual->signature.bytes, LANTERN_SIGNATURE_SIZE) == 0);
 }
 
 static void check_attestation_data_equal(
@@ -233,24 +197,6 @@ static void check_signature_proof_equal(
     CHECK(memcmp(expected->proof_data.data, actual->proof_data.data, expected->proof_data.length) == 0);
 }
 
-static void expect_vote_view(
-    const LanternVote *vote,
-    uint64_t validator_id,
-    uint64_t slot,
-    uint64_t head_slot,
-    uint8_t head_seed,
-    uint64_t target_slot,
-    uint8_t target_seed,
-    uint64_t source_slot,
-    uint8_t source_seed) {
-    CHECK(vote != NULL);
-    CHECK(vote->validator_id == validator_id);
-    CHECK(vote->slot == slot);
-    expect_checkpoint_seed(&vote->head, head_slot, head_seed);
-    expect_checkpoint_seed(&vote->target, target_slot, target_seed);
-    expect_checkpoint_seed(&vote->source, source_slot, source_seed);
-}
-
 static void check_block_signatures_equal(
     const LanternBlockSignatures *expected,
     const LanternBlockSignatures *actual) {
@@ -271,35 +217,6 @@ static void check_block_signatures_equal(
               actual->proposer_signature.bytes,
               LANTERN_SIGNATURE_SIZE)
           == 0);
-}
-
-static void check_signed_block_equal(
-    const LanternSignedBlock *expected,
-    const LanternSignedBlock *actual) {
-    CHECK(expected != NULL);
-    CHECK(actual != NULL);
-    CHECK(actual->block.slot == expected->block.slot);
-    CHECK(actual->block.proposer_index == expected->block.proposer_index);
-    CHECK(memcmp(
-        actual->block.parent_root.bytes,
-        expected->block.parent_root.bytes,
-        LANTERN_ROOT_SIZE)
-        == 0);
-    CHECK(memcmp(
-        actual->block.state_root.bytes,
-        expected->block.state_root.bytes,
-        LANTERN_ROOT_SIZE)
-        == 0);
-    CHECK(actual->block.body.attestations.length == expected->block.body.attestations.length);
-    CHECK(
-        (actual->block.body.attestations.length == 0)
-        || (actual->block.body.attestations.data != NULL && expected->block.body.attestations.data != NULL));
-    for (size_t i = 0; i < actual->block.body.attestations.length; ++i) {
-        check_aggregated_attestation_equal(
-            &expected->block.body.attestations.data[i],
-            &actual->block.body.attestations.data[i]);
-    }
-    check_block_signatures_equal(&expected->signatures, &actual->signatures);
 }
 
 static uint32_t rng_state = UINT32_C(0x6ac1e39d);
@@ -743,7 +660,7 @@ static void test_status_reqresp_snappy_fixture(void) {
     /* Build reqresp frame - varint encodes the uncompressed SSZ payload size */
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
-    CHECK(unsigned_varint_encode(raw_ssz_len, header, sizeof(header), &header_len) == UNSIGNED_VARINT_OK);
+    CHECK(libp2p_uvarint_encode(raw_ssz_len, header, sizeof(header), &header_len) == LIBP2P_UVARINT_OK);
 
     size_t framed_len = 1u + header_len + snappy_len;
     uint8_t *framed = (uint8_t *)malloc(framed_len);
@@ -758,7 +675,7 @@ static void test_status_reqresp_snappy_fixture(void) {
     ctx->length = framed_len;
     ctx->position = 0;
 
-    libp2p_stream_backend_ops_t ops = {
+    struct lantern_reqresp_stream_ops ops = {
         .read = mock_stream_read,
         .write = mock_stream_write,
         .close = mock_stream_close,
@@ -766,7 +683,7 @@ static void test_status_reqresp_snappy_fixture(void) {
         .set_deadline = mock_stream_set_deadline,
         .free_ctx = mock_stream_free_ctx,
     };
-    libp2p_stream_t *stream = libp2p_stream_from_ops(NULL, ctx, &ops, LANTERN_STATUS_PROTOCOL_ID, 0, NULL);
+    struct lantern_reqresp_stream *stream = lantern_reqresp_stream_from_ops(ctx, &ops, NULL);
     CHECK(stream != NULL);
 
     uint8_t *response = NULL;
@@ -796,7 +713,7 @@ static void test_status_reqresp_snappy_fixture(void) {
     expect_checkpoint_seed(&decoded.head, 96, 0x41);
 
     free(response);
-    libp2p_stream_free(stream);
+    lantern_reqresp_stream_free(stream);
     free(snappy_payload);
 }
 
@@ -809,7 +726,7 @@ static uint8_t *build_reqresp_frame(
     /* Varint encodes the uncompressed payload size (SSZ length). */
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
-    CHECK(unsigned_varint_encode(raw_len, header, sizeof(header), &header_len) == UNSIGNED_VARINT_OK);
+    CHECK(libp2p_uvarint_encode(raw_len, header, sizeof(header), &header_len) == LIBP2P_UVARINT_OK);
 
     size_t frame_len = 1u + header_len + payload_len;
     uint8_t *frame = (uint8_t *)malloc(frame_len);
@@ -869,7 +786,7 @@ static void test_reqresp_response_code_mapping(void) {
         ctx->length = frame_len;
         ctx->position = 0;
 
-        libp2p_stream_backend_ops_t ops = {
+        struct lantern_reqresp_stream_ops ops = {
             .read = mock_stream_read,
             .write = mock_stream_write,
             .close = mock_stream_close,
@@ -877,7 +794,7 @@ static void test_reqresp_response_code_mapping(void) {
             .set_deadline = mock_stream_set_deadline,
             .free_ctx = mock_stream_free_ctx,
         };
-        libp2p_stream_t *stream = libp2p_stream_from_ops(NULL, ctx, &ops, LANTERN_STATUS_PROTOCOL_ID, 0, NULL);
+        struct lantern_reqresp_stream *stream = lantern_reqresp_stream_from_ops(ctx, &ops, NULL);
         CHECK(stream != NULL);
 
         uint8_t *response = NULL;
@@ -900,7 +817,7 @@ static void test_reqresp_response_code_mapping(void) {
         CHECK(memcmp(response, fixture, fixture_len) == 0);
 
         free(response);
-        libp2p_stream_free(stream);
+        lantern_reqresp_stream_free(stream);
     }
 
     free(fixture);
@@ -967,7 +884,7 @@ static void test_blocks_by_root_per_chunk_framing(void) {
     ctx->length = stream_len;
     ctx->position = 0;
 
-    libp2p_stream_backend_ops_t ops = {
+    struct lantern_reqresp_stream_ops ops = {
         .read = mock_stream_read,
         .write = mock_stream_write,
         .close = mock_stream_close,
@@ -975,7 +892,7 @@ static void test_blocks_by_root_per_chunk_framing(void) {
         .set_deadline = mock_stream_set_deadline,
         .free_ctx = mock_stream_free_ctx,
     };
-    libp2p_stream_t *stream = libp2p_stream_from_ops(NULL, ctx, &ops, LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID, 0, NULL);
+    struct lantern_reqresp_stream *stream = lantern_reqresp_stream_from_ops(ctx, &ops, NULL);
     CHECK(stream != NULL);
 
     uint8_t *response = NULL;
@@ -1017,7 +934,7 @@ static void test_blocks_by_root_per_chunk_framing(void) {
     CHECK(memcmp(response, snappy_two, snappy_two_len) == 0);
     free(response);
 
-    libp2p_stream_free(stream);
+    lantern_reqresp_stream_free(stream);
     free(snappy_one);
     free(snappy_two);
 }

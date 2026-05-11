@@ -17,17 +17,10 @@ function(_lantern_define_static target_name source_dir)
         if(NOT EXISTS ${source_dir}/CMakeLists.txt)
             message(FATAL_ERROR "Missing c-ssz sources at ${source_dir}. Run scripts/bootstrap.sh to fetch git submodules.")
         endif()
-        if(NOT EXISTS ${source_dir}/external/aws-lc/CMakeLists.txt)
-            message(FATAL_ERROR "Missing AWS-LC sources at ${source_dir}/external/aws-lc. Run git submodule update --init --recursive external/c-ssz.")
-        endif()
 
-        set(SSZ_USE_SYSTEM_CRYPTO OFF CACHE BOOL "Build c-ssz against vendored AWS-LC" FORCE)
+        set(SSZ_USE_SYSTEM_CRYPTO ON CACHE BOOL "Build c-ssz against the vendored AWS-LC OpenSSL target" FORCE)
         set(SSZ_BUILD_TESTS OFF CACHE BOOL "Do not build c-ssz tests from Lantern" FORCE)
         set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-        set(BUILD_LIBSSL OFF CACHE BOOL "" FORCE)
-        set(BUILD_TOOL OFF CACHE BOOL "" FORCE)
-        set(DISABLE_GO ON CACHE BOOL "" FORCE)
-        set(DISABLE_PERL ON CACHE BOOL "" FORCE)
 
         if(NOT TARGET ssz)
             add_subdirectory(${source_dir} ${CMAKE_BINARY_DIR}/c-ssz EXCLUDE_FROM_ALL)
@@ -46,17 +39,8 @@ function(_lantern_configure_awslc_openssl_package source_dir)
 
     set(_awslc_include_dir "${source_dir}/external/aws-lc/include")
     set(_openssl_config_dir "${CMAKE_BINARY_DIR}/aws-lc-openssl")
-    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/c-ssz/external/aws-lc/symbol_prefix_include")
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/c-lean-libp2p/external/aws-lc/symbol_prefix_include")
     file(MAKE_DIRECTORY "${_openssl_config_dir}")
-    file(WRITE "${_openssl_config_dir}/picotls_awslc_compat.h"
-"#ifndef LANTERN_PICOTLS_AWSLC_COMPAT_H
-#define LANTERN_PICOTLS_AWSLC_COMPAT_H
-#include <picotls/openssl.h>
-#if defined(OPENSSL_IS_AWSLC) && defined(PTLS_OPENSSL_HAVE_CHACHA20_POLY1305) && !PTLS_OPENSSL_HAVE_CHACHA20_POLY1305
-#undef PTLS_OPENSSL_HAVE_CHACHA20_POLY1305
-#endif
-#endif
-")
     file(WRITE "${_openssl_config_dir}/OpenSSLConfig.cmake"
 "set(OpenSSL_FOUND TRUE)
 set(OPENSSL_FOUND TRUE)
@@ -69,26 +53,60 @@ set(OpenSSL_SSL_FOUND TRUE)
 if(NOT TARGET OpenSSL::Crypto)
     add_library(OpenSSL::Crypto INTERFACE IMPORTED)
     set_target_properties(OpenSSL::Crypto PROPERTIES
-        INTERFACE_INCLUDE_DIRECTORIES \"${_awslc_include_dir}\"
-        INTERFACE_COMPILE_DEFINITIONS \"OPENSSL_NO_CHACHA;OPENSSL_NO_POLY1305\")
+        INTERFACE_INCLUDE_DIRECTORIES \"${_awslc_include_dir}\")
     target_link_libraries(OpenSSL::Crypto INTERFACE crypto)
 endif()
 if(NOT TARGET OpenSSL::SSL)
     add_library(OpenSSL::SSL INTERFACE IMPORTED)
     set_target_properties(OpenSSL::SSL PROPERTIES
-        INTERFACE_INCLUDE_DIRECTORIES \"${_awslc_include_dir}\"
-        INTERFACE_COMPILE_DEFINITIONS \"OPENSSL_NO_CHACHA;OPENSSL_NO_POLY1305\")
-    target_link_libraries(OpenSSL::SSL INTERFACE OpenSSL::Crypto)
+        INTERFACE_INCLUDE_DIRECTORIES \"${_awslc_include_dir}\")
+    target_link_libraries(OpenSSL::SSL INTERFACE ssl OpenSSL::Crypto)
 endif()
 set(OPENSSL_CRYPTO_LIBRARY OpenSSL::Crypto)
 set(OPENSSL_CRYPTO_LIBRARIES OpenSSL::Crypto)
 set(OPENSSL_SSL_LIBRARY OpenSSL::SSL)
 set(OPENSSL_SSL_LIBRARIES OpenSSL::SSL)
-set(OPENSSL_LIBRARIES OpenSSL::Crypto)
+set(OPENSSL_LIBRARIES OpenSSL::SSL OpenSSL::Crypto)
 ")
     set(OpenSSL_DIR "${_openssl_config_dir}" CACHE PATH "Resolve OpenSSL-compatible consumers to vendored AWS-LC" FORCE)
     set(OPENSSL_ROOT_DIR "${source_dir}/external/aws-lc" CACHE PATH "Vendored AWS-LC root" FORCE)
     set(OPENSSL_INCLUDE_DIR "${_awslc_include_dir}" CACHE PATH "Vendored AWS-LC OpenSSL-compatible headers" FORCE)
+    set(CMAKE_FIND_PACKAGE_PREFER_CONFIG TRUE CACHE BOOL "Prefer vendored dependency package configs" FORCE)
+endfunction()
+
+function(_lantern_define_c_lean_libp2p target_name source_dir)
+    if(TARGET ${target_name})
+        return()
+    endif()
+
+    if(NOT EXISTS ${source_dir}/CMakeLists.txt)
+        message(FATAL_ERROR "Missing c-lean-libp2p sources at ${source_dir}. Run scripts/bootstrap.sh to fetch git submodules.")
+    endif()
+    if(NOT EXISTS ${source_dir}/external/aws-lc/CMakeLists.txt)
+        message(FATAL_ERROR "Missing AWS-LC sources at ${source_dir}/external/aws-lc. Run git submodule update --init --recursive external/c-lean-libp2p.")
+    endif()
+    if(NOT EXISTS ${source_dir}/external/ngtcp2/CMakeLists.txt)
+        message(FATAL_ERROR "Missing ngtcp2 sources at ${source_dir}/external/ngtcp2. Run git submodule update --init --recursive external/c-lean-libp2p.")
+    endif()
+    if(NOT EXISTS ${source_dir}/external/secp256k1/CMakeLists.txt)
+        message(FATAL_ERROR "Missing secp256k1 sources at ${source_dir}/external/secp256k1. Run git submodule update --init --recursive external/c-lean-libp2p.")
+    endif()
+
+    set(BUILD_TESTING OFF CACHE BOOL "Do not build dependency tests from Lantern" FORCE)
+    set(LIBP2P_BUILD_INTEROP_BINARY OFF CACHE BOOL "Do not build c-lean-libp2p interop binaries from Lantern" FORCE)
+    set(LIBP2P_BUILD_GOSSIPSUB_INTEROP_BINARY OFF CACHE BOOL "Do not build c-lean-libp2p gossipsub interop binaries from Lantern" FORCE)
+    set(BUILD_LIBSSL ON CACHE BOOL "Build AWS-LC libssl for c-lean-libp2p" FORCE)
+    set(BUILD_TOOL OFF CACHE BOOL "Do not build AWS-LC tools from Lantern" FORCE)
+    set(DISABLE_GO ON CACHE BOOL "Do not require Go when building AWS-LC" FORCE)
+    set(DISABLE_PERL ON CACHE BOOL "Use generated AWS-LC assembly sources" FORCE)
+
+    if(NOT TARGET c_lean_libp2p)
+        add_subdirectory(${source_dir} ${CMAKE_BINARY_DIR}/c-lean-libp2p EXCLUDE_FROM_ALL)
+        set_property(DIRECTORY ${CMAKE_BINARY_DIR}/c-lean-libp2p PROPERTY EXCLUDE_FROM_TESTING TRUE)
+    endif()
+
+    add_library(${target_name} INTERFACE)
+    target_link_libraries(${target_name} INTERFACE c_lean_libp2p)
 endfunction()
 
 find_program(CARGO_EXECUTABLE cargo)
@@ -107,9 +125,9 @@ function(_lantern_define_snappy target_name source_dir)
         )
         target_compile_definitions(${target_name}
             PUBLIC
-                NDEBUG=1
                 _DEFAULT_SOURCE
             PRIVATE
+                NDEBUG=1
                 typeof=__typeof__
         )
     endif()
@@ -187,9 +205,9 @@ function(lantern_configure_dependencies target)
 
     set(external_root ${PROJECT_SOURCE_DIR}/external)
 
-    _lantern_define_interface(lantern_libp2p ${external_root}/c-libp2p)
+    _lantern_define_c_lean_libp2p(lantern_c_lean_libp2p ${external_root}/c-lean-libp2p)
+    _lantern_configure_awslc_openssl_package(${external_root}/c-lean-libp2p)
     _lantern_define_static(lantern_c_ssz ${external_root}/c-ssz)
-    _lantern_configure_awslc_openssl_package(${external_root}/c-ssz)
     _lantern_define_snappy(lantern_snappy_c ${external_root}/snappy-c)
     _lantern_define_c_leanvm_xmss_variant(
         lantern_c_leanvm_xmss
@@ -205,105 +223,12 @@ function(lantern_configure_dependencies target)
         TEST_CONFIG
     )
 
-    set(libp2p_source_dir ${external_root}/c-libp2p)
-    if(EXISTS ${libp2p_source_dir}/CMakeLists.txt)
-        if(NOT TARGET libp2p_unified)
-            # c-libp2p builds numerous component libraries (sha3, libtomcrypt, etc.)
-            # that expose identically named symbols.  When these components are
-            # forced to build as static archives (BUILD_SHARED_LIBS=OFF) the final
-            # link step for lantern_cli pulls both archives into a single binary
-            # and the duplicate SHA3/Keccak symbols collide, causing cmake to hang
-            # inside the linker until it times out.  Let the subproject build
-            # shared objects so each archive keeps its own namespace.
-            if(DEFINED BUILD_SHARED_LIBS)
-                set(_lantern_prev_build_shared_libs "${BUILD_SHARED_LIBS}")
-                set(_lantern_had_build_shared_libs TRUE)
-            else()
-                set(_lantern_prev_build_shared_libs "")
-                set(_lantern_had_build_shared_libs FALSE)
-            endif()
-            set(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries" FORCE)
-            set(ENABLE_COVERAGE OFF CACHE BOOL "Disable coverage when building c-libp2p as a dependency" FORCE)
-            if(DEFINED CMAKE_POSITION_INDEPENDENT_CODE)
-                set(_lantern_had_pic TRUE)
-                set(_lantern_prev_pic "${CMAKE_POSITION_INDEPENDENT_CODE}")
-            else()
-                set(_lantern_had_pic FALSE)
-                set(_lantern_prev_pic "")
-            endif()
-            set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-            set(_saved_fetchcontent_basedir "${FETCHCONTENT_BASE_DIR}")
-            set(_saved_find_package_prefer_config "${CMAKE_FIND_PACKAGE_PREFER_CONFIG}")
-            set(CMAKE_FIND_PACKAGE_PREFER_CONFIG TRUE)
-            set(FETCHCONTENT_BASE_DIR ${CMAKE_BINARY_DIR}/c-libp2p/_deps)
-            add_subdirectory(${libp2p_source_dir} ${CMAKE_BINARY_DIR}/c-libp2p EXCLUDE_FROM_ALL)
-            set_property(DIRECTORY ${CMAKE_BINARY_DIR}/c-libp2p PROPERTY EXCLUDE_FROM_TESTING TRUE)
-            set(FETCHCONTENT_BASE_DIR "${_saved_fetchcontent_basedir}")
-            set(CMAKE_FIND_PACKAGE_PREFER_CONFIG "${_saved_find_package_prefer_config}")
-            if(_lantern_had_build_shared_libs)
-                set(BUILD_SHARED_LIBS "${_lantern_prev_build_shared_libs}" CACHE BOOL "Build shared libraries" FORCE)
-            else()
-                unset(BUILD_SHARED_LIBS CACHE)
-            endif()
-            if(_lantern_had_pic)
-                set(CMAKE_POSITION_INDEPENDENT_CODE "${_lantern_prev_pic}")
-            else()
-                unset(CMAKE_POSITION_INDEPENDENT_CODE)
-            endif()
-            if(TARGET libtomcrypt)
-                target_include_directories(libtomcrypt PRIVATE ${libp2p_source_dir}/external/libtommath)
-                target_include_directories(libtomcrypt PRIVATE ${libp2p_source_dir}/external/libtomcrypt/src/headers)
-            endif()
-            if(TARGET secp256k1)
-                # The shared libp2p peer-id target links against secp256k1; force PIC to avoid linker failures on Linux.
-                set_target_properties(secp256k1 PROPERTIES POSITION_INDEPENDENT_CODE ON)
-            endif()
-            if(TARGET picoquic-core)
-                target_compile_options(picoquic-core PRIVATE -include "${CMAKE_BINARY_DIR}/aws-lc-openssl/picotls_awslc_compat.h")
-                if(APPLE)
-                    target_compile_definitions(picoquic-core PRIVATE __APPLE_USE_RFC_3542)
-                endif()
-            endif()
-            if(TARGET libp2p_unified)
-                target_include_directories(libp2p_unified PUBLIC ${libp2p_source_dir})
-            endif()
-            set(libp2p_binary_dir ${CMAKE_BINARY_DIR}/c-libp2p)
-            if(TARGET protocol_quic)
-                target_include_directories(protocol_quic PRIVATE ${libp2p_binary_dir}/_deps/picotls-src/include)
-                target_include_directories(protocol_quic PRIVATE ${libp2p_source_dir})
-                target_include_directories(protocol_quic PRIVATE ${libp2p_source_dir}/include/libp2p)
-                target_include_directories(
-                    protocol_quic PRIVATE ${libp2p_source_dir}/external/libtomcrypt/src/headers)
-                if(EXISTS ${CMAKE_BINARY_DIR}/_deps/picotls-src/include)
-                    target_include_directories(
-                        protocol_quic PRIVATE ${CMAKE_BINARY_DIR}/_deps/picotls-src/include)
-                endif()
-            endif()
-            if(TARGET protocol_noise)
-                target_include_directories(protocol_noise PRIVATE ${libp2p_binary_dir}/_deps/picotls-src/include)
-                target_include_directories(protocol_noise PRIVATE ${libp2p_source_dir})
-                target_include_directories(protocol_noise PRIVATE ${libp2p_source_dir}/include/libp2p)
-                target_include_directories(
-                    protocol_noise PRIVATE ${libp2p_source_dir}/external/libtomcrypt/src/headers)
-                if(EXISTS ${CMAKE_BINARY_DIR}/_deps/picotls-src/include)
-                    target_include_directories(
-                        protocol_noise PRIVATE ${CMAKE_BINARY_DIR}/_deps/picotls-src/include)
-                endif()
-            endif()
-        endif()
-    else()
-        message(FATAL_ERROR "Missing c-libp2p sources at ${libp2p_source_dir}. Run scripts/bootstrap.sh to fetch git submodules.")
-    endif()
-
     target_link_libraries(${target}
         PUBLIC
-            lantern_libp2p
+            lantern_c_lean_libp2p
             lantern_c_ssz
             lantern_snappy_c
             ${wrapper_target}
-            libp2p_unified
-            protocol_gossipsub
-            protocol_ping
     )
 
     if(CMAKE_DL_LIBS)

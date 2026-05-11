@@ -28,6 +28,7 @@
 #include "lantern/metrics/lean_metrics.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/log.h"
+#include "lantern/support/strings.h"
 
 
 /**
@@ -317,8 +318,7 @@ int http_validator_info_cb(
         out_info->global_index);
     if (written < 0 || (size_t)written >= sizeof(out_info->label))
     {
-        strncpy(out_info->label, base, sizeof(out_info->label));
-        out_info->label[sizeof(out_info->label) - 1] = '\0';
+        (void)lantern_string_copy(out_info->label, sizeof(out_info->label), base);
     }
     return LANTERN_HTTP_CB_OK;
 }

@@ -1,3 +1,6 @@
+#define JSMN_STATIC
+#include "jsmn.h"
+
 #include "tests/support/fixture_loader.h"
 
 #include <errno.h>

@@ -34,8 +34,6 @@ enum
     VOTE_ROOT_HEX_BUFFER_LEN = (LANTERN_ROOT_SIZE * 2u) + 3u,
 };
 
-static const size_t DEFAULT_SYNC_ATTESTATION_COMMITTEE_COUNT = 1u;
-
 enum lantern_vote_record_status
 {
     LANTERN_VOTE_RECORD_REJECTED = 0,

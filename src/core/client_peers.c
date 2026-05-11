@@ -20,6 +20,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "lantern/support/strings.h"
+
 
 /* ============================================================================
  * Peer ID Utilities
@@ -131,8 +133,7 @@ struct lantern_peer_status_entry *lantern_client_ensure_status_entry_locked(
     memset(entry, 0, sizeof(*entry));
 
     const size_t peer_cap = lantern_peer_id_capacity();
-    strncpy(entry->peer_id, peer_id, peer_cap - 1);
-    entry->peer_id[peer_cap - 1] = '\0';
+    (void)lantern_string_copy(entry->peer_id, peer_cap, peer_id);
 
     lantern_client_register_vote_peer(client, peer_id);
 
@@ -234,8 +235,7 @@ struct lantern_peer_vote_metric *lantern_client_ensure_vote_metric_locked(
     memset(entry, 0, sizeof(*entry));
 
     const size_t peer_cap = sizeof(entry->peer_id);
-    strncpy(entry->peer_id, peer_id, peer_cap - 1u);
-    entry->peer_id[peer_cap - 1u] = '\0';
+    (void)lantern_string_copy(entry->peer_id, peer_cap, peer_id);
 
     return entry;
 }
