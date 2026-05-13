@@ -151,10 +151,11 @@ static void service_add_exchange(struct lantern_reqresp_service *service, struct
     }
 }
 
-static void service_remove_exchange(struct lantern_reqresp_service *service, struct lantern_reqresp_exchange *exchange) {
+static int service_remove_exchange(struct lantern_reqresp_service *service, struct lantern_reqresp_exchange *exchange) {
     if (!service || !exchange) {
-        return;
+        return 0;
     }
+    int removed = 0;
     if (service->lock_initialized) {
         pthread_mutex_lock(&service->lock);
     }
@@ -163,6 +164,7 @@ static void service_remove_exchange(struct lantern_reqresp_service *service, str
         if (*cursor == exchange) {
             *cursor = exchange->next;
             exchange->next = NULL;
+            removed = 1;
             break;
         }
         cursor = &(*cursor)->next;
@@ -170,6 +172,7 @@ static void service_remove_exchange(struct lantern_reqresp_service *service, str
     if (service->lock_initialized) {
         pthread_mutex_unlock(&service->lock);
     }
+    return removed;
 }
 
 static void service_clear_exchanges(struct lantern_reqresp_service *service) {
@@ -1324,8 +1327,10 @@ static void reqresp_host_event(
         service_remove_conn(service, event->conn);
     } else if (event->type == LIBP2P_HOST_EVENT_STREAM_OPEN_FAILED && event->user_data) {
         struct lantern_reqresp_exchange *exchange = (struct lantern_reqresp_exchange *)event->user_data;
+        if (!service_remove_exchange(service, exchange)) {
+            return;
+        }
         exchange_fail(exchange, (int)event->reason);
-        service_remove_exchange(service, exchange);
         exchange_free(exchange);
     }
 }

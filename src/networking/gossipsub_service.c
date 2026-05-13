@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 
 #include "lantern/encoding/snappy.h"
 #include "lantern/networking/gossip.h"
@@ -17,6 +18,345 @@
 
 static int topic_eq(const libp2p_gossipsub_bytes_t topic, const char *expected) {
     return expected && strlen(expected) == topic.len && memcmp(topic.data, expected, topic.len) == 0;
+}
+
+static void peer_id_to_text_safe(const struct lantern_peer_id *peer, char *out, size_t out_len) {
+    if (!out || out_len == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (!peer || peer->len == 0) {
+        return;
+    }
+    if (lantern_peer_id_to_text(peer, out, out_len) != 0) {
+        out[0] = '\0';
+    }
+}
+
+static int peer_from_conn(libp2p_host_conn_t *conn, struct lantern_peer_id *out_peer) {
+    if (!conn || !out_peer) {
+        return -1;
+    }
+    memset(out_peer, 0, sizeof(*out_peer));
+    size_t written = 0;
+    if (libp2p_host_conn_peer_id(conn, out_peer->bytes, sizeof(out_peer->bytes), &written) != LIBP2P_HOST_OK ||
+        written == 0 || written > sizeof(out_peer->bytes)) {
+        memset(out_peer, 0, sizeof(*out_peer));
+        return -1;
+    }
+    out_peer->len = written;
+    return 0;
+}
+
+static int peer_from_gossipsub_event(const libp2p_gossipsub_event_t *event, struct lantern_peer_id *out_peer) {
+    if (!event || !out_peer || event->peer.len == 0 || event->peer.len > sizeof(out_peer->bytes)) {
+        return -1;
+    }
+    memset(out_peer, 0, sizeof(*out_peer));
+    memcpy(out_peer->bytes, event->peer.data, event->peer.len);
+    out_peer->len = event->peer.len;
+    return 0;
+}
+
+static int peer_id_cmp_bytes(const uint8_t *left, size_t left_len, const uint8_t *right, size_t right_len) {
+    size_t min_len = left_len < right_len ? left_len : right_len;
+    int cmp = min_len > 0 ? memcmp(left, right, min_len) : 0;
+    if (cmp != 0) {
+        return cmp;
+    }
+    if (left_len < right_len) {
+        return -1;
+    }
+    if (left_len > right_len) {
+        return 1;
+    }
+    return 0;
+}
+
+static int service_prefers_inbound_conn(
+    const struct lantern_gossipsub_service *service,
+    const struct lantern_peer_id *peer) {
+    if (!service || !service->network || !peer || service->network->local_peer_id_len == 0) {
+        return 0;
+    }
+    return peer_id_cmp_bytes(
+               service->network->local_peer_id,
+               service->network->local_peer_id_len,
+               peer->bytes,
+               peer->len) > 0;
+}
+
+static struct lantern_gossipsub_peer_connection_state *find_peer_state(
+    struct lantern_gossipsub_service *service,
+    const struct lantern_peer_id *peer,
+    int create) {
+    if (!service || !peer || peer->len == 0) {
+        return NULL;
+    }
+    for (size_t i = 0; i < LANTERN_GOSSIPSUB_MAX_TRACKED_PEERS; i++) {
+        struct lantern_gossipsub_peer_connection_state *state = &service->peer_connections[i];
+        if (state->used && lantern_peer_id_equal(&state->peer, peer)) {
+            return state;
+        }
+    }
+    if (!create) {
+        return NULL;
+    }
+    for (size_t i = 0; i < LANTERN_GOSSIPSUB_MAX_TRACKED_PEERS; i++) {
+        struct lantern_gossipsub_peer_connection_state *state = &service->peer_connections[i];
+        if (!state->used) {
+            memset(state, 0, sizeof(*state));
+            state->used = 1;
+            state->peer = *peer;
+            state->retry_backoff_us = LANTERN_GOSSIPSUB_RETRY_INITIAL_US;
+            return state;
+        }
+    }
+    return NULL;
+}
+
+static struct lantern_gossipsub_peer_connection_state *find_peer_state_by_conn(
+    struct lantern_gossipsub_service *service,
+    libp2p_host_conn_t *conn) {
+    if (!service || !conn) {
+        return NULL;
+    }
+    for (size_t i = 0; i < LANTERN_GOSSIPSUB_MAX_TRACKED_PEERS; i++) {
+        struct lantern_gossipsub_peer_connection_state *state = &service->peer_connections[i];
+        if (!state->used) {
+            continue;
+        }
+        for (size_t j = 0; j < state->conn_count; j++) {
+            if (state->conns[j] == conn) {
+                return state;
+            }
+        }
+        if (state->writer_conn == conn || state->opening_conn == conn) {
+            return state;
+        }
+    }
+    return NULL;
+}
+
+static ssize_t peer_state_conn_index(
+    const struct lantern_gossipsub_peer_connection_state *state,
+    libp2p_host_conn_t *conn) {
+    if (!state || !conn) {
+        return -1;
+    }
+    for (size_t i = 0; i < state->conn_count; i++) {
+        if (state->conns[i] == conn) {
+            return (ssize_t)i;
+        }
+    }
+    return -1;
+}
+
+static void peer_state_select_primary(
+    struct lantern_gossipsub_service *service,
+    struct lantern_gossipsub_peer_connection_state *state) {
+    if (!service || !state || state->conn_count == 0) {
+        if (state) {
+            state->primary_conn = NULL;
+            state->primary_inbound = 0;
+        }
+        return;
+    }
+    const int prefer_inbound = service_prefers_inbound_conn(service, &state->peer);
+    size_t selected = LANTERN_GOSSIPSUB_MAX_CONNS_PER_PEER;
+    for (size_t i = 0; i < state->conn_count; i++) {
+        if (!state->conn_closing[i] && (state->conn_inbound[i] ? 1 : 0) == prefer_inbound) {
+            selected = i;
+            break;
+        }
+    }
+    if (selected == LANTERN_GOSSIPSUB_MAX_CONNS_PER_PEER) {
+        for (size_t i = 0; i < state->conn_count; i++) {
+            if (!state->conn_closing[i]) {
+                selected = i;
+                break;
+            }
+        }
+    }
+    if (selected == LANTERN_GOSSIPSUB_MAX_CONNS_PER_PEER) {
+        state->primary_conn = NULL;
+        state->primary_inbound = 0;
+        return;
+    }
+    state->primary_conn = state->conns[selected];
+    state->primary_inbound = state->conn_inbound[selected] ? 1 : 0;
+}
+
+static void schedule_writer_retry(
+    struct lantern_gossipsub_peer_connection_state *state,
+    libp2p_host_time_us_t now_us) {
+    if (!state) {
+        return;
+    }
+    uint64_t delay = state->retry_backoff_us;
+    if (delay == 0) {
+        delay = LANTERN_GOSSIPSUB_RETRY_INITIAL_US;
+    }
+    state->next_retry_us = now_us + delay;
+    delay *= 2;
+    if (delay > LANTERN_GOSSIPSUB_RETRY_MAX_US) {
+        delay = LANTERN_GOSSIPSUB_RETRY_MAX_US;
+    }
+    state->retry_backoff_us = delay;
+}
+
+static void reset_writer_retry(struct lantern_gossipsub_peer_connection_state *state) {
+    if (!state) {
+        return;
+    }
+    state->next_retry_us = 0;
+    state->retry_backoff_us = LANTERN_GOSSIPSUB_RETRY_INITIAL_US;
+}
+
+static int open_primary_writer(
+    struct lantern_gossipsub_service *service,
+    struct lantern_gossipsub_peer_connection_state *state,
+    libp2p_host_time_us_t now_us) {
+    if (!service || !service->gossipsub || !service->network || !service->network->host ||
+        !state || !state->primary_conn || state->writer_stream || state->opening_conn) {
+        return 0;
+    }
+    if (state->next_retry_us != 0 && now_us < state->next_retry_us) {
+        return 0;
+    }
+
+    libp2p_host_stream_open_t *open = NULL;
+    libp2p_gossipsub_err_t err = libp2p_gossipsub_open_peer(
+        service->gossipsub,
+        service->network->host,
+        state->primary_conn,
+        LIBP2P_GOSSIPSUB_VERSION_NONE,
+        NULL,
+        &open);
+    if (err == LIBP2P_GOSSIPSUB_OK && open) {
+        char peer_text[128];
+        peer_id_to_text_safe(&state->peer, peer_text, sizeof(peer_text));
+        state->opening_conn = state->primary_conn;
+        lantern_log_debug(
+            "gossip",
+            &(const struct lantern_log_metadata){.peer = peer_text[0] ? peer_text : NULL},
+            "opening gossipsub writer on primary connection inbound=%u",
+            (unsigned)state->primary_inbound);
+        return 0;
+    }
+
+    schedule_writer_retry(state, now_us);
+    return -1;
+}
+
+static void maybe_repair_writer(
+    struct lantern_gossipsub_service *service,
+    struct lantern_gossipsub_peer_connection_state *state,
+    libp2p_host_time_us_t now_us) {
+    if (!service || !state || !state->used || state->conn_count == 0) {
+        return;
+    }
+    peer_state_select_primary(service, state);
+    (void)open_primary_writer(service, state, now_us);
+}
+
+static void add_peer_connection(
+    struct lantern_gossipsub_service *service,
+    libp2p_host_conn_t *conn,
+    int inbound,
+    libp2p_host_time_us_t now_us) {
+    struct lantern_peer_id peer;
+    if (peer_from_conn(conn, &peer) != 0) {
+        return;
+    }
+    struct lantern_gossipsub_peer_connection_state *state = find_peer_state(service, &peer, 1);
+    if (!state) {
+        (void)libp2p_host_conn_close(service->network->host, conn, 0);
+        return;
+    }
+
+    ssize_t existing = peer_state_conn_index(state, conn);
+    if (existing >= 0) {
+        state->conn_inbound[(size_t)existing] = inbound ? 1 : 0;
+        state->conn_closing[(size_t)existing] = 0;
+    } else if (state->conn_count < LANTERN_GOSSIPSUB_MAX_CONNS_PER_PEER) {
+        state->conns[state->conn_count] = conn;
+        state->conn_inbound[state->conn_count] = inbound ? 1 : 0;
+        state->conn_closing[state->conn_count] = 0;
+        state->conn_count++;
+    } else {
+        (void)libp2p_host_conn_close(service->network->host, conn, 0);
+        return;
+    }
+
+    maybe_repair_writer(service, state, now_us);
+}
+
+static void remove_peer_connection(
+    struct lantern_gossipsub_service *service,
+    libp2p_host_conn_t *conn,
+    libp2p_host_time_us_t now_us) {
+    struct lantern_gossipsub_peer_connection_state *state = find_peer_state_by_conn(service, conn);
+    if (!state) {
+        return;
+    }
+    ssize_t found = peer_state_conn_index(state, conn);
+    if (found >= 0) {
+        size_t index = (size_t)found;
+        for (size_t i = index + 1; i < state->conn_count; i++) {
+            state->conns[i - 1] = state->conns[i];
+            state->conn_inbound[i - 1] = state->conn_inbound[i];
+            state->conn_closing[i - 1] = state->conn_closing[i];
+        }
+        state->conn_count--;
+        if (state->conn_count < LANTERN_GOSSIPSUB_MAX_CONNS_PER_PEER) {
+            state->conns[state->conn_count] = NULL;
+            state->conn_inbound[state->conn_count] = 0;
+            state->conn_closing[state->conn_count] = 0;
+        }
+    }
+    if (state->primary_conn == conn) {
+        state->primary_conn = NULL;
+        state->primary_inbound = 0;
+    }
+    if (state->writer_conn == conn) {
+        state->writer_conn = NULL;
+        state->writer_stream = NULL;
+    }
+    if (state->opening_conn == conn) {
+        state->opening_conn = NULL;
+        schedule_writer_retry(state, now_us);
+    }
+    if (state->conn_count == 0) {
+        memset(state, 0, sizeof(*state));
+        return;
+    }
+    maybe_repair_writer(service, state, now_us);
+}
+
+static void handle_writer_open_failed(
+    struct lantern_gossipsub_service *service,
+    libp2p_host_conn_t *conn,
+    libp2p_host_time_us_t now_us) {
+    struct lantern_gossipsub_peer_connection_state *state = find_peer_state_by_conn(service, conn);
+    if (!state) {
+        return;
+    }
+    if (state->opening_conn == conn) {
+        state->opening_conn = NULL;
+        schedule_writer_retry(state, now_us);
+    }
+}
+
+static void repair_all_writers(struct lantern_gossipsub_service *service, libp2p_host_time_us_t now_us) {
+    if (!service) {
+        return;
+    }
+    for (size_t i = 0; i < LANTERN_GOSSIPSUB_MAX_TRACKED_PEERS; i++) {
+        if (service->peer_connections[i].used) {
+            maybe_repair_writer(service, &service->peer_connections[i], now_us);
+        }
+    }
 }
 
 static libp2p_gossipsub_err_t lantern_gossipsub_message_id(
@@ -211,7 +551,72 @@ static int deliver_message(
     return -1;
 }
 
-static void drain_gossipsub_events(struct lantern_gossipsub_service *service) {
+static void handle_gossipsub_peer_opened(
+    struct lantern_gossipsub_service *service,
+    const libp2p_gossipsub_event_t *event,
+    libp2p_host_time_us_t now_us) {
+    struct lantern_peer_id peer;
+    if (peer_from_gossipsub_event(event, &peer) != 0) {
+        return;
+    }
+    struct lantern_gossipsub_peer_connection_state *state = find_peer_state(service, &peer, 1);
+    if (!state) {
+        return;
+    }
+
+    if (event->direction == LIBP2P_HOST_STREAM_OUTBOUND) {
+        if (!state->writer_stream && (!state->opening_conn || event->conn == state->opening_conn)) {
+            state->writer_conn = event->conn;
+            state->writer_stream = event->stream;
+            state->opening_conn = NULL;
+            reset_writer_retry(state);
+        } else {
+            if (event->stream && service->network && service->network->host) {
+                (void)libp2p_host_stream_reset(service->network->host, event->stream, 0);
+            }
+            if (event->conn && event->conn == state->opening_conn) {
+                state->opening_conn = NULL;
+                schedule_writer_retry(state, now_us);
+            }
+        }
+    }
+}
+
+static void handle_gossipsub_peer_closed(
+    struct lantern_gossipsub_service *service,
+    const libp2p_gossipsub_event_t *event,
+    libp2p_host_time_us_t now_us) {
+    struct lantern_gossipsub_peer_connection_state *state = NULL;
+    struct lantern_peer_id peer;
+    if (peer_from_gossipsub_event(event, &peer) == 0) {
+        state = find_peer_state(service, &peer, 0);
+    }
+    if (!state && event->conn) {
+        state = find_peer_state_by_conn(service, event->conn);
+    }
+    if (!state) {
+        return;
+    }
+
+    int writer_closed =
+        (event->stream && event->stream == state->writer_stream) ||
+        (event->conn && event->conn == state->writer_conn);
+    if (writer_closed) {
+        if (event->stream && event->conn && event->conn != state->writer_conn &&
+            service->network && service->network->host) {
+            (void)libp2p_host_stream_reset(service->network->host, event->stream, 0);
+        }
+        state->writer_conn = NULL;
+        state->writer_stream = NULL;
+    }
+    if (event->conn && event->conn == state->opening_conn) {
+        state->opening_conn = NULL;
+        schedule_writer_retry(state, now_us);
+    }
+    maybe_repair_writer(service, state, now_us);
+}
+
+static void drain_gossipsub_events(struct lantern_gossipsub_service *service, libp2p_host_time_us_t now_us) {
     libp2p_gossipsub_event_t event;
     while (libp2p_gossipsub_next_event(service->gossipsub, &event) == LIBP2P_GOSSIPSUB_OK) {
         if (event.type == LIBP2P_GOSSIPSUB_EVENT_MESSAGE) {
@@ -221,6 +626,14 @@ static void drain_gossipsub_events(struct lantern_gossipsub_service *service) {
                     service->gossipsub,
                     event.validation,
                     ok ? LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT : LIBP2P_GOSSIPSUB_VALIDATION_REJECT);
+            }
+        } else if (event.type == LIBP2P_GOSSIPSUB_EVENT_PEER_OPENED) {
+            handle_gossipsub_peer_opened(service, &event, now_us);
+        } else if (event.type == LIBP2P_GOSSIPSUB_EVENT_PEER_CLOSED) {
+            handle_gossipsub_peer_closed(service, &event, now_us);
+        } else if (event.type == LIBP2P_GOSSIPSUB_EVENT_PEER_FAILED) {
+            if (event.conn) {
+                handle_writer_open_failed(service, event.conn, now_us);
             }
         } else if (event.type == LIBP2P_GOSSIPSUB_EVENT_DROPPED || event.type == LIBP2P_GOSSIPSUB_EVENT_ERROR) {
             lantern_log_debug("gossip", NULL, "gossipsub event type=%d reason=%d", (int)event.type, (int)event.reason);
@@ -236,17 +649,16 @@ static void gossipsub_host_event(
     if (!service || !service->gossipsub || !network || !network->host || !event) {
         return;
     }
+    libp2p_host_time_us_t now_us = lantern_libp2p_now_us();
     if (event->type == LIBP2P_HOST_EVENT_CONN_ESTABLISHED && event->conn) {
-        libp2p_host_stream_open_t *open = NULL;
-        (void)libp2p_gossipsub_open_peer(
-            service->gossipsub,
-            network->host,
-            event->conn,
-            LIBP2P_GOSSIPSUB_VERSION_NONE,
-            NULL,
-            &open);
+        add_peer_connection(service, event->conn, event->dial == NULL, now_us);
     }
     (void)libp2p_gossipsub_handle_host_event(service->gossipsub, network->host, event);
+    if (event->type == LIBP2P_HOST_EVENT_CONN_CLOSED && event->conn) {
+        remove_peer_connection(service, event->conn, now_us);
+    } else if (event->type == LIBP2P_HOST_EVENT_STREAM_OPEN_FAILED && event->conn) {
+        handle_writer_open_failed(service, event->conn, now_us);
+    }
 }
 
 static void gossipsub_drive(
@@ -258,7 +670,8 @@ static void gossipsub_drive(
         return;
     }
     (void)libp2p_gossipsub_drive(service->gossipsub, network->host, now_us, NULL);
-    drain_gossipsub_events(service);
+    drain_gossipsub_events(service, now_us);
+    repair_all_writers(service, now_us);
 }
 
 static int subscribe_topic(struct lantern_gossipsub_service *service, const char *topic) {

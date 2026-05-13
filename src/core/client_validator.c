@@ -23,6 +23,7 @@
 #else
 #include <sched.h>
 #endif
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -161,6 +162,45 @@ static void timing_service_yield(void)
 #endif
 }
 
+static void validator_diag_pause(
+    const struct lantern_client *client,
+    const char *reason,
+    uint64_t local_slot,
+    uint64_t max_peer_slot,
+    bool have_fresh_status,
+    bool have_peer_at_or_ahead,
+    bool head_match_at_or_ahead,
+    bool any_head_match,
+    const LanternRoot *local_head)
+{
+    char local_head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    uint64_t current_slot = 0;
+    size_t connected_peers = client ? client->connected_peers : 0u;
+    local_head_hex[0] = '\0';
+    format_root_hex(local_head, local_head_hex, sizeof(local_head_hex));
+    if (client) {
+        (void)lantern_client_current_slot(client, &current_slot);
+    }
+    fprintf(
+        stderr,
+        "[LANTERN_DIAG] validator_pause node=%s reason=%s local_slot=%" PRIu64
+        " max_peer_slot=%" PRIu64 " current_slot=%" PRIu64
+        " connected_peers=%zu fresh_status=%d peer_at_or_ahead=%d"
+        " head_match_at_or_ahead=%d any_head_match=%d local_head=%s\n",
+        client && client->node_id ? client->node_id : "-",
+        reason ? reason : "-",
+        local_slot,
+        max_peer_slot,
+        current_slot,
+        connected_peers,
+        have_fresh_status ? 1 : 0,
+        have_peer_at_or_ahead ? 1 : 0,
+        head_match_at_or_ahead ? 1 : 0,
+        any_head_match ? 1 : 0,
+        local_head_hex[0] ? local_head_hex : "0x0");
+    fflush(stderr);
+}
+
 static bool validator_should_pause_for_sync(const struct lantern_client *client)
 {
     if (!client || !client->status_lock_initialized || !client->has_state)
@@ -261,6 +301,16 @@ static bool validator_should_pause_for_sync(const struct lantern_client *client)
         }
         if (has_connections || client->bootnodes.len > 0)
         {
+            validator_diag_pause(
+                client,
+                "no_fresh_status",
+                local_slot,
+                max_peer_slot,
+                have_fresh_status,
+                have_peer_at_or_ahead,
+                head_match_at_or_ahead,
+                any_head_match,
+                have_local_head ? &local_head : NULL);
             return true;
         }
         return false;
@@ -270,11 +320,31 @@ static bool validator_should_pause_for_sync(const struct lantern_client *client)
     if (lantern_client_current_slot(client, &current_slot)
         && current_slot > max_peer_slot + VALIDATOR_SYNC_WALL_CLOCK_LAG)
     {
+        validator_diag_pause(
+            client,
+            "wall_clock_ahead_of_peers",
+            local_slot,
+            max_peer_slot,
+            have_fresh_status,
+            have_peer_at_or_ahead,
+            head_match_at_or_ahead,
+            any_head_match,
+            have_local_head ? &local_head : NULL);
         return true;
     }
 
     if (have_peer_at_or_ahead && have_local_head && !head_match_at_or_ahead)
     {
+        validator_diag_pause(
+            client,
+            "peer_head_mismatch_at_or_ahead",
+            local_slot,
+            max_peer_slot,
+            have_fresh_status,
+            have_peer_at_or_ahead,
+            head_match_at_or_ahead,
+            any_head_match,
+            &local_head);
         return true;
     }
 
@@ -302,6 +372,16 @@ static bool validator_should_pause_for_sync(const struct lantern_client *client)
             }
             if (now_ms > last_head_match_ms + grace_ms)
             {
+                validator_diag_pause(
+                    client,
+                    "no_peer_on_local_head_after_grace",
+                    local_slot,
+                    max_peer_slot,
+                    have_fresh_status,
+                    have_peer_at_or_ahead,
+                    head_match_at_or_ahead,
+                    any_head_match,
+                    &local_head);
                 return true;
             }
         }
@@ -309,12 +389,32 @@ static bool validator_should_pause_for_sync(const struct lantern_client *client)
 
     if (max_peer_slot > local_slot + VALIDATOR_SYNC_SLOT_LAG)
     {
+        validator_diag_pause(
+            client,
+            "peer_slot_ahead",
+            local_slot,
+            max_peer_slot,
+            have_fresh_status,
+            have_peer_at_or_ahead,
+            head_match_at_or_ahead,
+            any_head_match,
+            have_local_head ? &local_head : NULL);
         return true;
     }
 
     size_t pending = lantern_client_pending_block_count(client);
     if (pending >= VALIDATOR_SYNC_PENDING_THRESHOLD)
     {
+        validator_diag_pause(
+            client,
+            "pending_block_backlog",
+            local_slot,
+            max_peer_slot,
+            have_fresh_status,
+            have_peer_at_or_ahead,
+            head_match_at_or_ahead,
+            any_head_match,
+            have_local_head ? &local_head : NULL);
         return true;
     }
 
@@ -2037,7 +2137,40 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
             validator_attestation_committee_count(client),
             &subnet_id)
         == 0) {
-        if (lantern_gossipsub_service_publish_vote_subnet(&client->gossip, vote, subnet_id) != 0) {
+        char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+        char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+        char source_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+        format_root_hex(&vote->data.head.root, head_hex, sizeof(head_hex));
+        format_root_hex(&vote->data.target.root, target_hex, sizeof(target_hex));
+        format_root_hex(&vote->data.source.root, source_hex, sizeof(source_hex));
+        fprintf(
+            stderr,
+            "[LANTERN_DIAG] publish_vote_start node=%s validator=%" PRIu64
+            " slot=%" PRIu64 " subnet=%zu head=%s@%" PRIu64
+            " target=%s@%" PRIu64 " source=%s@%" PRIu64 "\n",
+            client->node_id ? client->node_id : "-",
+            vote->data.validator_id,
+            vote->data.slot,
+            subnet_id,
+            head_hex[0] ? head_hex : "0x0",
+            vote->data.head.slot,
+            target_hex[0] ? target_hex : "0x0",
+            vote->data.target.slot,
+            source_hex[0] ? source_hex : "0x0",
+            vote->data.source.slot);
+        fflush(stderr);
+        int publish_rc = lantern_gossipsub_service_publish_vote_subnet(&client->gossip, vote, subnet_id);
+        fprintf(
+            stderr,
+            "[LANTERN_DIAG] publish_vote_done node=%s validator=%" PRIu64
+            " slot=%" PRIu64 " subnet=%zu rc=%d\n",
+            client->node_id ? client->node_id : "-",
+            vote->data.validator_id,
+            vote->data.slot,
+            subnet_id,
+            publish_rc);
+        fflush(stderr);
+        if (publish_rc != 0) {
             lantern_log_warn(
                 "gossip",
                 &meta,
@@ -2290,6 +2423,28 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
     }
     lantern_client_unlock_state(client, state_locked);
 
+    char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char target_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    char source_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    format_root_hex(&head_cp.root, head_hex, sizeof(head_hex));
+    format_root_hex(&target_cp.root, target_hex, sizeof(target_hex));
+    format_root_hex(&source_cp.root, source_hex, sizeof(source_hex));
+    fprintf(
+        stderr,
+        "[LANTERN_DIAG] attestation_duty node=%s slot=%" PRIu64
+        " local_validators=%zu head=%s@%" PRIu64 " target=%s@%" PRIu64
+        " source=%s@%" PRIu64 "\n",
+        client->node_id ? client->node_id : "-",
+        slot,
+        client->local_validator_count,
+        head_hex[0] ? head_hex : "0x0",
+        head_cp.slot,
+        target_hex[0] ? target_hex : "0x0",
+        target_cp.slot,
+        source_hex[0] ? source_hex : "0x0",
+        source_cp.slot);
+    fflush(stderr);
+
     bool have_lock = false;
     if (client->validator_lock_initialized)
     {
@@ -2323,6 +2478,15 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
         int sign_rc = validator_sign_vote(validator, slot, &vote);
         if (sign_rc != LANTERN_CLIENT_OK)
         {
+            fprintf(
+                stderr,
+                "[LANTERN_DIAG] attestation_sign_failed node=%s validator=%" PRIu64
+                " slot=%" PRIu64 " rc=%d\n",
+                client->node_id ? client->node_id : "-",
+                validator->global_index,
+                slot,
+                sign_rc);
+            fflush(stderr);
             if (result == LANTERN_CLIENT_OK)
             {
                 result = (lantern_client_error)sign_rc;
