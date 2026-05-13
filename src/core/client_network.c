@@ -795,25 +795,10 @@ static void peer_dialer_handle_record(
 
     if (peer_text[0] && connected_snapshot && string_list_contains(connected_snapshot, peer_text))
     {
-        fprintf(
-            stderr,
-            "[LANTERN_DIAG] dialer_skip_connected node=%s peer=%s addr=%s\n",
-            client->node_id ? client->node_id : "-",
-            peer_text,
-            multiaddr);
-        fflush(stderr);
         return;
     }
 
-    int dial_rc = lantern_libp2p_host_dial_multiaddr(&client->network, multiaddr);
-    fprintf(
-        stderr,
-        "[LANTERN_DIAG] dialer_dial node=%s peer=%s addr=%s rc=%d\n",
-        client->node_id ? client->node_id : "-",
-        peer_text[0] ? peer_text : "-",
-        multiaddr,
-        dial_rc);
-    fflush(stderr);
+    (void)lantern_libp2p_host_dial_multiaddr(&client->network, multiaddr);
 
     const char *peer_label = peer_text[0] ? peer_text : record->encoded;
     identify_dial_multiaddr(client, multiaddr, peer_label);
@@ -852,14 +837,6 @@ void peer_dialer_attempt(struct lantern_client *client)
     struct lantern_peer_id *local_peer = get_local_peer_id(client, &local_peer_value) ? &local_peer_value : NULL;
 
     size_t target = compute_peer_dial_target(enrs, local_peer);
-    fprintf(
-        stderr,
-        "[LANTERN_DIAG] dialer_attempt node=%s connected=%zu target=%zu enrs=%zu\n",
-        client->node_id ? client->node_id : "-",
-        connected_unique,
-        target,
-        enrs->count);
-    fflush(stderr);
     if (target > 0 && connected_unique >= target)
     {
         goto cleanup;
@@ -990,24 +967,11 @@ static void handle_connection_opened_event(
 
     if (!peer)
     {
-        fprintf(
-            stderr,
-            "[LANTERN_DIAG] conn_open node=%s inbound=%d peer=-\n",
-            client->node_id ? client->node_id : "-",
-            inbound ? 1 : 0);
-        fflush(stderr);
         return;
     }
 
     char peer_text[128];
     format_peer_id_text(peer, peer_text, sizeof(peer_text));
-    fprintf(
-        stderr,
-        "[LANTERN_DIAG] conn_open node=%s inbound=%d peer=%s\n",
-        client->node_id ? client->node_id : "-",
-        inbound ? 1 : 0,
-        peer_text[0] ? peer_text : "-");
-    fflush(stderr);
     request_status_now(client, peer, peer_text[0] ? peer_text : NULL);
 }
 
@@ -1037,30 +1001,11 @@ static void handle_connection_closed_event(
 
     if (!peer)
     {
-        fprintf(
-            stderr,
-            "[LANTERN_DIAG] conn_closed node=%s peer=- reason=%d app_error=%" PRIu64
-            " transport_error=%" PRIu64 "\n",
-            client->node_id ? client->node_id : "-",
-            reason,
-            app_error_code,
-            transport_error_code);
-        fflush(stderr);
         return;
     }
 
     char peer_text[128];
     format_peer_id_text(peer, peer_text, sizeof(peer_text));
-    fprintf(
-        stderr,
-        "[LANTERN_DIAG] conn_closed node=%s peer=%s reason=%d app_error=%" PRIu64
-        " transport_error=%" PRIu64 "\n",
-        client->node_id ? client->node_id : "-",
-        peer_text[0] ? peer_text : "-",
-        reason,
-        app_error_code,
-        transport_error_code);
-    fflush(stderr);
     bool peer_still_connected = peer_text[0] && lantern_client_is_peer_connected(client, peer_text);
     const struct lantern_log_metadata meta = {
         .validator = client->node_id,
@@ -1121,17 +1066,6 @@ static void handle_outgoing_connection_error_event(
 
     char peer_text[128];
     format_peer_id_text(peer, peer_text, sizeof(peer_text));
-    fprintf(
-        stderr,
-        "[LANTERN_DIAG] dial_failed node=%s peer=%s code=%d msg=%s app_error=%" PRIu64
-        " transport_error=%" PRIu64 "\n",
-        client->node_id ? client->node_id : "-",
-        peer_text[0] ? peer_text : "-",
-        code,
-        msg ? msg : "-",
-        app_error_code,
-        transport_error_code);
-    fflush(stderr);
 
     lantern_log_warn(
         "network",
