@@ -943,8 +943,100 @@ cleanup:
     return rc;
 }
 
+static int test_reqresp_status_uses_genesis_anchor_before_genesis(void)
+{
+    struct lantern_client client;
+    memset(&client, 0, sizeof(client));
+    client.node_id = "status_genesis_anchor_regression";
+    client.has_state = true;
+    lantern_state_init(&client.state);
+    lantern_store_init(&client.store);
+    lantern_fork_choice_init(&client.fork_choice);
+    lantern_store_attach_fork_choice(&client.store, &client.fork_choice);
+
+    int rc = 1;
+    if (lantern_state_generate_genesis(&client.state, UINT64_C(4102444800), 4u) != 0)
+    {
+        fprintf(stderr, "failed to generate future-genesis state for status regression\n");
+        goto cleanup;
+    }
+
+    uint8_t pubkeys[4u * LANTERN_VALIDATOR_PUBKEY_SIZE];
+    fill_pubkeys(pubkeys, 4u);
+    if (lantern_state_set_validator_pubkeys(&client.state, pubkeys, 4u) != 0)
+    {
+        fprintf(stderr, "failed to set validator pubkeys for status regression\n");
+        goto cleanup;
+    }
+
+    if (lantern_store_prepare_validator_votes(&client.store, client.state.config.num_validators) != 0)
+    {
+        fprintf(stderr, "failed to prepare validator votes for status regression\n");
+        goto cleanup;
+    }
+
+    if (initialize_fork_choice(&client) != LANTERN_CLIENT_OK)
+    {
+        fprintf(stderr, "initialize_fork_choice failed for status regression\n");
+        goto cleanup;
+    }
+
+    const LanternRoot *anchor_root = lantern_fork_choice_anchor_root(&client.fork_choice);
+    const LanternCheckpoint *store_finalized =
+        lantern_fork_choice_latest_finalized(&client.fork_choice);
+    if (!anchor_root || !store_finalized)
+    {
+        fprintf(stderr, "missing fork-choice anchor checkpoints for status regression\n");
+        goto cleanup;
+    }
+
+    LanternStatusMessage status;
+    memset(&status, 0, sizeof(status));
+    if (reqresp_build_status(&client, &status) != LANTERN_CLIENT_OK)
+    {
+        fprintf(stderr, "reqresp_build_status failed for status regression\n");
+        goto cleanup;
+    }
+
+    if (status.head.slot != 0u || status.finalized.slot != 0u)
+    {
+        fprintf(stderr, "genesis status should advertise slot zero checkpoints\n");
+        goto cleanup;
+    }
+    if (lantern_root_is_zero(&status.head.root)
+        || lantern_root_is_zero(&status.finalized.root))
+    {
+        fprintf(stderr, "genesis status should advertise the anchor root, not zero roots\n");
+        goto cleanup;
+    }
+    if (!roots_equal(&status.head.root, anchor_root)
+        || !roots_equal(&status.finalized.root, anchor_root))
+    {
+        fprintf(stderr, "genesis status roots did not follow fork-choice anchor\n");
+        goto cleanup;
+    }
+    if (roots_equal(&status.finalized.root, &client.state.latest_finalized.root))
+    {
+        fprintf(stderr, "status finalized checkpoint incorrectly used zero state root\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_fork_choice_reset(&client.fork_choice);
+    lantern_store_reset(&client.store);
+    lantern_state_reset(&client.state);
+    return rc;
+}
+
 int main(void)
 {
+    if (test_reqresp_status_uses_genesis_anchor_before_genesis() != 0)
+    {
+        return 1;
+    }
+
     struct lantern_client client;
     memset(&client, 0, sizeof(client));
     client.node_id = "genesis_anchor_regression";

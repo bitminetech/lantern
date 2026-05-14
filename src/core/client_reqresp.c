@@ -130,6 +130,9 @@ static void lantern_client_handle_pending_parent_request_result(
     const LanternRoot *request_roots,
     size_t root_count,
     enum lantern_blocks_request_outcome outcome);
+static void reqresp_alias_anchor_checkpoint_if_unset(
+    struct lantern_client *client,
+    LanternStatusMessage *status);
 
 
 /* ============================================================================
@@ -1215,7 +1218,7 @@ int reqresp_build_status(void *context, LanternStatusMessage *out_status)
     memset(out_status, 0, sizeof(*out_status));
     if (!client->has_state)
     {
-        return LANTERN_CLIENT_OK;
+        return LANTERN_CLIENT_ERR_GENESIS;
     }
 
     out_status->finalized = client->state.latest_finalized;
@@ -1260,7 +1263,37 @@ int reqresp_build_status(void *context, LanternStatusMessage *out_status)
             memset(&out_status->head.root, 0, sizeof(out_status->head.root));
         }
     }
+    reqresp_alias_anchor_checkpoint_if_unset(client, out_status);
     return LANTERN_CLIENT_OK;
+}
+
+
+static void reqresp_alias_anchor_checkpoint_if_unset(
+    struct lantern_client *client,
+    LanternStatusMessage *status)
+{
+    if (!client || !status || !client->has_fork_choice)
+    {
+        return;
+    }
+
+    const LanternRoot *anchor_root = lantern_fork_choice_anchor_root(&client->fork_choice);
+    uint64_t anchor_slot = 0;
+    if (!anchor_root
+        || lantern_fork_choice_anchor_slot(&client->fork_choice, &anchor_slot) != 0)
+    {
+        return;
+    }
+
+    if (status->head.slot == anchor_slot && lantern_root_is_zero(&status->head.root))
+    {
+        status->head.root = *anchor_root;
+    }
+    if (status->finalized.slot == anchor_slot
+        && lantern_root_is_zero(&status->finalized.root))
+    {
+        status->finalized.root = *anchor_root;
+    }
 }
 
 

@@ -326,25 +326,6 @@ void request_status_now(struct lantern_client *client, const struct lantern_peer
     {
         return;
     }
-    uint64_t genesis_time = client->genesis.chain_config.genesis_time;
-    if (genesis_time > 0)
-    {
-        uint64_t now = validator_wall_time_now_seconds();
-        if (now > 0 && now < genesis_time)
-        {
-            struct lantern_log_metadata meta = {
-                .validator = client->node_id,
-                .peer = (peer_text && peer_text[0]) ? peer_text : NULL,
-            };
-            lantern_log_trace(
-                "reqresp",
-                &meta,
-                "skipping status request before genesis now=%" PRIu64 " genesis_time=%" PRIu64,
-                now,
-                genesis_time);
-            return;
-        }
-    }
     char peer_buffer[128];
     peer_buffer[0] = '\0';
     const char *status_peer = (peer_text && peer_text[0]) ? peer_text : NULL;
@@ -967,6 +948,19 @@ static void handle_connection_opened_event(
 
     if (!peer)
     {
+        return;
+    }
+    if (inbound)
+    {
+        char peer_text[128];
+        format_peer_id_text(peer, peer_text, sizeof(peer_text));
+        lantern_log_trace(
+            "reqresp",
+            &(const struct lantern_log_metadata){
+                .validator = client->node_id,
+                .peer = peer_text[0] ? peer_text : NULL,
+            },
+            "inbound connection opened; waiting for peer status request");
         return;
     }
 
