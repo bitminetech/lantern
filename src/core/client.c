@@ -884,6 +884,7 @@ static void client_reset_base(struct lantern_client *client)
     client->dialer_thread_started = false;
     client->dialer_stop_flag = 1;
     pending_block_list_init(&client->pending_blocks);
+    client->block_import_stop = true;
     pending_vote_list_init(&client->pending_gossip_votes);
     client->pending_lock_initialized = false;
     client->sync_state = LANTERN_SYNC_STATE_IDLE;
@@ -3878,6 +3879,12 @@ lantern_client_error lantern_init(
         goto error;
     }
 
+    err = lantern_client_block_importer_start(client);
+    if (err != LANTERN_CLIENT_OK)
+    {
+        goto error;
+    }
+
     err = client_prepare_storage_and_genesis(client, options);
     if (err != LANTERN_CLIENT_OK)
     {
@@ -3960,6 +3967,7 @@ void lantern_shutdown(struct lantern_client *client)
 
     shutdown_validator_and_keys(client);
     shutdown_http_and_metrics(client);
+    lantern_client_block_importer_stop(client);
     shutdown_network_services(client);
     shutdown_peer_tracking(client);
     shutdown_validator_lock(client);

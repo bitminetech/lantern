@@ -498,6 +498,9 @@ void reqresp_blocks_request_complete(
     uint64_t request_id,
     int success);
 
+lantern_client_error lantern_client_block_importer_start(struct lantern_client *client);
+void lantern_client_block_importer_stop(struct lantern_client *client);
+
 
 /**
  * Handle completion of a blocks request.

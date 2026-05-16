@@ -87,6 +87,7 @@ struct lantern_client_options {
 
 struct lantern_peer_status_entry;
 struct lantern_active_blocks_request;
+struct lantern_async_block_import_job;
 struct lantern_backfill_entry {
     LanternRoot root;
     LanternRoot parent_root;
@@ -259,6 +260,16 @@ struct lantern_client {
     struct lantern_backfill_session backfill;
     pthread_mutex_t pending_lock;
     bool pending_lock_initialized;
+    struct lantern_async_block_import_job *block_import_head;
+    struct lantern_async_block_import_job *block_import_tail;
+    size_t block_import_queue_len;
+    pthread_mutex_t block_import_lock;
+    pthread_cond_t block_import_cond;
+    pthread_t block_import_thread;
+    bool block_import_lock_initialized;
+    bool block_import_cond_initialized;
+    bool block_import_thread_started;
+    bool block_import_stop;
     LanternRoot sync_last_requested_root;
     uint64_t sync_last_requested_root_ms;
     uint64_t sync_started_ms;

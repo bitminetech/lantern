@@ -37,6 +37,18 @@
 
 enum {
     ROOT_HEX_BUFFER_LEN = (LANTERN_ROOT_SIZE * 2u) + 3u,
+    ASYNC_BLOCK_IMPORT_QUEUE_LIMIT = 128u,
+};
+
+struct lantern_async_block_import_job
+{
+    struct lantern_client *client;
+    LanternSignedBlock block;
+    LanternRoot block_root;
+    char peer_id[128];
+    uint8_t *raw_block_ssz;
+    size_t raw_block_ssz_len;
+    struct lantern_async_block_import_job *next;
 };
 
 
@@ -1546,6 +1558,270 @@ static bool block_response_was_accepted(
     return known;
 }
 
+
+static int import_block_response_now(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    const uint8_t *raw_block_ssz,
+    size_t raw_block_ssz_len,
+    const char *peer_id)
+{
+    struct lantern_log_metadata meta = {
+        .validator = client ? client->node_id : NULL,
+        .peer = peer_id && peer_id[0] ? peer_id : NULL,
+        .has_slot = block != NULL,
+        .slot = block ? block->block.slot : 0u,
+    };
+    if (!client || !block || !block_root)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    if (lantern_client_import_block(
+            client,
+            block,
+            block_root,
+            &meta,
+            0u,
+            true,
+            raw_block_ssz,
+            raw_block_ssz_len)
+        || block_response_was_accepted(client, block_root))
+    {
+        return LANTERN_CLIENT_OK;
+    }
+
+    return LANTERN_CLIENT_ERR_RUNTIME;
+}
+
+static void block_import_job_free(struct lantern_async_block_import_job *job)
+{
+    if (!job)
+    {
+        return;
+    }
+    lantern_signed_block_reset(&job->block);
+    free(job->raw_block_ssz);
+    free(job);
+}
+
+static struct lantern_async_block_import_job *block_import_job_new(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    const uint8_t *raw_block_ssz,
+    size_t raw_block_ssz_len,
+    const char *peer_id)
+{
+    if (!client || !block || !block_root || (!raw_block_ssz && raw_block_ssz_len > 0u))
+    {
+        return NULL;
+    }
+
+    struct lantern_async_block_import_job *job = calloc(1u, sizeof(*job));
+    if (!job)
+    {
+        return NULL;
+    }
+    job->client = client;
+    job->block_root = *block_root;
+    snprintf(job->peer_id, sizeof(job->peer_id), "%s", peer_id ? peer_id : "");
+    if (signed_block_copy(&job->block, block) != 0)
+    {
+        block_import_job_free(job);
+        return NULL;
+    }
+    if (raw_block_ssz_len > 0u)
+    {
+        job->raw_block_ssz = malloc(raw_block_ssz_len);
+        if (!job->raw_block_ssz)
+        {
+            block_import_job_free(job);
+            return NULL;
+        }
+        memcpy(job->raw_block_ssz, raw_block_ssz, raw_block_ssz_len);
+        job->raw_block_ssz_len = raw_block_ssz_len;
+    }
+    return job;
+}
+
+static void *block_import_worker_main(void *arg)
+{
+    struct lantern_client *client = (struct lantern_client *)arg;
+    if (!client)
+    {
+        return NULL;
+    }
+
+    for (;;)
+    {
+        if (pthread_mutex_lock(&client->block_import_lock) != 0)
+        {
+            break;
+        }
+        while (!client->block_import_stop && !client->block_import_head)
+        {
+            (void)pthread_cond_wait(&client->block_import_cond, &client->block_import_lock);
+        }
+        struct lantern_async_block_import_job *job = client->block_import_head;
+        if (!job)
+        {
+            pthread_mutex_unlock(&client->block_import_lock);
+            break;
+        }
+        client->block_import_head = job->next;
+        if (!client->block_import_head)
+        {
+            client->block_import_tail = NULL;
+        }
+        if (client->block_import_queue_len > 0u)
+        {
+            client->block_import_queue_len -= 1u;
+        }
+        pthread_mutex_unlock(&client->block_import_lock);
+
+        int rc = import_block_response_now(
+            job->client,
+            &job->block,
+            &job->block_root,
+            job->raw_block_ssz,
+            job->raw_block_ssz_len,
+            job->peer_id);
+        if (rc != LANTERN_CLIENT_OK)
+        {
+            lantern_log_warn(
+                "reqresp",
+                &(const struct lantern_log_metadata){
+                    .validator = job->client ? job->client->node_id : NULL,
+                    .peer = job->peer_id[0] ? job->peer_id : NULL,
+                    .has_slot = true,
+                    .slot = job->block.block.slot,
+                },
+                "async blocks_by_root import rejected");
+        }
+        block_import_job_free(job);
+    }
+
+    return NULL;
+}
+
+lantern_client_error lantern_client_block_importer_start(struct lantern_client *client)
+{
+    if (!client)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    if (client->block_import_thread_started)
+    {
+        return LANTERN_CLIENT_OK;
+    }
+    if (pthread_mutex_init(&client->block_import_lock, NULL) != 0)
+    {
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+    client->block_import_lock_initialized = true;
+    if (pthread_cond_init(&client->block_import_cond, NULL) != 0)
+    {
+        pthread_mutex_destroy(&client->block_import_lock);
+        client->block_import_lock_initialized = false;
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+    client->block_import_cond_initialized = true;
+    client->block_import_stop = false;
+    if (pthread_create(&client->block_import_thread, NULL, block_import_worker_main, client) != 0)
+    {
+        client->block_import_stop = true;
+        pthread_cond_destroy(&client->block_import_cond);
+        pthread_mutex_destroy(&client->block_import_lock);
+        client->block_import_cond_initialized = false;
+        client->block_import_lock_initialized = false;
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+    client->block_import_thread_started = true;
+    return LANTERN_CLIENT_OK;
+}
+
+void lantern_client_block_importer_stop(struct lantern_client *client)
+{
+    if (!client)
+    {
+        return;
+    }
+    if (client->block_import_lock_initialized
+        && pthread_mutex_lock(&client->block_import_lock) == 0)
+    {
+        client->block_import_stop = true;
+        if (client->block_import_cond_initialized)
+        {
+            pthread_cond_broadcast(&client->block_import_cond);
+        }
+        pthread_mutex_unlock(&client->block_import_lock);
+    }
+    if (client->block_import_thread_started)
+    {
+        pthread_join(client->block_import_thread, NULL);
+        client->block_import_thread_started = false;
+    }
+
+    struct lantern_async_block_import_job *job = client->block_import_head;
+    while (job)
+    {
+        struct lantern_async_block_import_job *next = job->next;
+        block_import_job_free(job);
+        job = next;
+    }
+    client->block_import_head = NULL;
+    client->block_import_tail = NULL;
+    client->block_import_queue_len = 0u;
+
+    if (client->block_import_cond_initialized)
+    {
+        pthread_cond_destroy(&client->block_import_cond);
+        client->block_import_cond_initialized = false;
+    }
+    if (client->block_import_lock_initialized)
+    {
+        pthread_mutex_destroy(&client->block_import_lock);
+        client->block_import_lock_initialized = false;
+    }
+    client->block_import_stop = true;
+}
+
+static int enqueue_block_import_job(
+    struct lantern_client *client,
+    struct lantern_async_block_import_job *job)
+{
+    if (!client || !job || !client->block_import_thread_started)
+    {
+        return -1;
+    }
+    if (pthread_mutex_lock(&client->block_import_lock) != 0)
+    {
+        return -1;
+    }
+    if (client->block_import_stop
+        || client->block_import_queue_len >= ASYNC_BLOCK_IMPORT_QUEUE_LIMIT)
+    {
+        pthread_mutex_unlock(&client->block_import_lock);
+        return -1;
+    }
+    job->next = NULL;
+    if (client->block_import_tail)
+    {
+        client->block_import_tail->next = job;
+    }
+    else
+    {
+        client->block_import_head = job;
+    }
+    client->block_import_tail = job;
+    client->block_import_queue_len += 1u;
+    pthread_cond_signal(&client->block_import_cond);
+    pthread_mutex_unlock(&client->block_import_lock);
+    return 0;
+}
+
 /**
  * Collect blocks for a blocks_by_root request.
  *
@@ -1659,26 +1935,37 @@ int reqresp_handle_block_response(
     {
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
-    struct lantern_log_metadata meta = {
-        .validator = client->node_id,
-        .peer = peer_id && peer_id[0] ? peer_id : NULL,
-        .has_slot = true,
-        .slot = block->block.slot,
-    };
-    if (lantern_client_import_block(
+    if (!client->block_import_thread_started)
+    {
+        if (client->block_import_stop)
+        {
+            return LANTERN_CLIENT_ERR_RUNTIME;
+        }
+        return import_block_response_now(
             client,
             block,
             &block_root,
-            &meta,
-            0u,
-            true,
             raw_block_ssz,
-            raw_block_ssz_len)
-        || block_response_was_accepted(client, &block_root))
+            raw_block_ssz_len,
+            peer_id);
+    }
+
+    struct lantern_async_block_import_job *job = block_import_job_new(
+        client,
+        block,
+        &block_root,
+        raw_block_ssz,
+        raw_block_ssz_len,
+        peer_id);
+    if (!job)
+    {
+        return LANTERN_CLIENT_ERR_ALLOC;
+    }
+    if (enqueue_block_import_job(client, job) == 0)
     {
         return LANTERN_CLIENT_OK;
     }
-
+    block_import_job_free(job);
     return LANTERN_CLIENT_ERR_RUNTIME;
 }
 
