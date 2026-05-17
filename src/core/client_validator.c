@@ -1219,6 +1219,10 @@ bool validator_service_should_run(const struct lantern_client *client)
     {
         return false;
     }
+    if (client->sync_state != LANTERN_SYNC_STATE_SYNCED)
+    {
+        return false;
+    }
     return true;
 }
 

@@ -3406,6 +3406,7 @@ static int test_publish_attestations_includes_proposer(void) {
     client.validator_enabled = &validator_enabled;
     client.has_runtime = true;
     client.gossip_running = true;
+    client.sync_state = LANTERN_SYNC_STATE_SYNCED;
     client.gossip.attestation_subnet_id = 0u;
     snprintf(client.gossip.vote_topic, sizeof(client.gossip.vote_topic), "test/proposer_vote");
     snprintf(
@@ -3489,6 +3490,7 @@ static int test_publish_attestations_ignores_peer_status_gate_inputs(void) {
     client.validator_enabled = &validator_enabled;
     client.has_runtime = true;
     client.gossip_running = true;
+    client.sync_state = LANTERN_SYNC_STATE_SYNCED;
     client.gossip.attestation_subnet_id = 0u;
     snprintf(client.gossip.vote_topic, sizeof(client.gossip.vote_topic), "test/status_gate_vote");
     snprintf(
@@ -3545,6 +3547,68 @@ cleanup:
     }
     publish_capture_reset(&capture);
     test_reset_agg_cache(&client);
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_validator_duties_follow_sync_state(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    struct lantern_local_validator validator;
+    bool validator_enabled = true;
+    int rc = 1;
+
+    memset(&validator, 0, sizeof(validator));
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "validator_sync_state_gate",
+            &pub,
+            &secret,
+            NULL,
+            NULL)
+        != 0) {
+        return 1;
+    }
+
+    validator.global_index = 0u;
+    validator.attestation_secret_key = secret;
+    validator.proposal_secret_key = secret;
+
+    client.local_validators = &validator;
+    client.local_validator_count = 1u;
+    client.validator_enabled = &validator_enabled;
+    client.has_runtime = true;
+    client.gossip_running = true;
+
+    client.sync_state = LANTERN_SYNC_STATE_IDLE;
+    if (validator_service_should_run(&client)) {
+        fprintf(stderr, "validator duties should be suppressed while sync state is IDLE\n");
+        goto cleanup;
+    }
+
+    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
+    if (validator_service_should_run(&client)) {
+        fprintf(stderr, "validator duties should be suppressed while sync state is SYNCING\n");
+        goto cleanup;
+    }
+
+    client.sync_state = LANTERN_SYNC_STATE_SYNCED;
+    if (!validator_service_should_run(&client)) {
+        fprintf(stderr, "validator duties should run while sync state is SYNCED\n");
+        goto cleanup;
+    }
+
+    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
+    if (validator_service_should_run(&client)) {
+        fprintf(stderr, "validator duties should be re-suppressed after returning to SYNCING\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
     client_test_teardown_vote_validation_client(&client, pub, secret);
     return rc;
 }
@@ -3826,6 +3890,9 @@ int main(void) {
         return 1;
     }
     if (test_publish_attestations_ignores_peer_status_gate_inputs() != 0) {
+        return 1;
+    }
+    if (test_validator_duties_follow_sync_state() != 0) {
         return 1;
     }
     if (test_publish_aggregated_attestations_collects_any_slot_and_prunes_gossip() != 0) {

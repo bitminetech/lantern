@@ -3379,6 +3379,19 @@ void lantern_client_enqueue_pending_block(
     LanternRoot block_root_local = *block_root;
     LanternRoot parent_root_local = *parent_root;
 
+    if (client->status_lock_initialized && pthread_mutex_lock(&client->status_lock) == 0)
+    {
+        if (client->sync_state == LANTERN_SYNC_STATE_SYNCED)
+        {
+            client->sync_state = LANTERN_SYNC_STATE_SYNCING;
+        }
+        pthread_mutex_unlock(&client->status_lock);
+    }
+    else if (client->sync_state == LANTERN_SYNC_STATE_SYNCED)
+    {
+        client->sync_state = LANTERN_SYNC_STATE_SYNCING;
+    }
+
     bool locked = lantern_client_lock_pending(client);
     if (!locked)
     {
