@@ -686,16 +686,12 @@ int lantern_fork_choice_set_anchor_with_state(
         block_root_hint ? "true" : "false",
         anchor_state ? "true" : "false",
         existed ? "true" : "false");
-    if (latest_justified) {
-        store->latest_justified = *latest_justified;
-    } else {
-        memset(&store->latest_justified, 0, sizeof(store->latest_justified));
-    }
-    if (latest_finalized) {
-        store->latest_finalized = *latest_finalized;
-    } else {
-        memset(&store->latest_finalized, 0, sizeof(store->latest_finalized));
-    }
+    LanternCheckpoint anchor_checkpoint = {
+        .root = root,
+        .slot = anchor_block->slot,
+    };
+    store->latest_justified = anchor_checkpoint;
+    store->latest_finalized = anchor_checkpoint;
     store->head = root;
     store->has_head = true;
     store->safe_target = root;
@@ -748,63 +744,7 @@ static bool checkpoint_known_in_store(
     if (!store->blocks || checkpoint_index >= store->block_len) {
         return false;
     }
-    if (store->has_anchor && root_compare(&checkpoint->root, &store->anchor_root) == 0) {
-        return true;
-    }
     return store->blocks[checkpoint_index].slot == checkpoint->slot;
-}
-
-static bool checkpoint_root_present_in_store(
-    const LanternForkChoice *store,
-    const LanternCheckpoint *checkpoint) {
-    if (!store || !checkpoint || root_is_zero(&checkpoint->root)) {
-        return false;
-    }
-    size_t checkpoint_index = 0;
-    if (!map_lookup(store, &checkpoint->root, &checkpoint_index)) {
-        return false;
-    }
-    return store->blocks && checkpoint_index < store->block_len;
-}
-
-static void normalize_checkpoint_for_anchor_alias(
-    const LanternForkChoice *store,
-    const LanternCheckpoint *checkpoint,
-    LanternCheckpoint *out_checkpoint,
-    const char *label) {
-    if (!out_checkpoint) {
-        return;
-    }
-    memset(out_checkpoint, 0, sizeof(*out_checkpoint));
-    if (!checkpoint) {
-        return;
-    }
-    *out_checkpoint = *checkpoint;
-    if (!store || !store->has_anchor || root_is_zero(&checkpoint->root)) {
-        return;
-    }
-    if (checkpoint_root_present_in_store(store, checkpoint)) {
-        return;
-    }
-    if (checkpoint->slot > store->anchor_slot) {
-        return;
-    }
-
-    char original_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char anchor_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    format_root_hex(&checkpoint->root, original_hex, sizeof(original_hex));
-    format_root_hex(&store->anchor_root, anchor_hex, sizeof(anchor_hex));
-    lantern_log_info(
-        "forkchoice",
-        &(const struct lantern_log_metadata){0},
-        "aliasing %s checkpoint slot=%" PRIu64 " original_root=%s"
-        " anchor_slot=%" PRIu64 " anchor_root=%s",
-        label ? label : "post-state",
-        checkpoint->slot,
-        original_hex[0] ? original_hex : "0x0",
-        store->anchor_slot,
-        anchor_hex[0] ? anchor_hex : "0x0");
-    out_checkpoint->root = store->anchor_root;
 }
 
 static bool should_replace_checkpoint(
@@ -851,68 +791,47 @@ static int update_latest_checkpoints(
     }
     LanternCheckpoint latest_justified = store->latest_justified;
     LanternCheckpoint latest_finalized = store->latest_finalized;
-    LanternCheckpoint normalized_post_justified;
-    LanternCheckpoint normalized_post_finalized;
-    const LanternCheckpoint *effective_post_justified = post_justified;
-    const LanternCheckpoint *effective_post_finalized = post_finalized;
 
-    if (post_justified) {
-        normalize_checkpoint_for_anchor_alias(
-            store,
-            post_justified,
-            &normalized_post_justified,
-            "justified");
-        effective_post_justified = &normalized_post_justified;
-    }
-    if (post_finalized) {
-        normalize_checkpoint_for_anchor_alias(
-            store,
-            post_finalized,
-            &normalized_post_finalized,
-            "finalized");
-        effective_post_finalized = &normalized_post_finalized;
-    }
-
-    if (effective_post_justified && !root_is_zero(&effective_post_justified->root)) {
-        if (!checkpoint_known_in_store(store, effective_post_justified)) {
-            return -1;
-        }
-        if (should_replace_checkpoint(&latest_justified, effective_post_justified)) {
+    if (post_justified && !root_is_zero(&post_justified->root)) {
+        if (should_replace_checkpoint(&latest_justified, post_justified)) {
+            if (!checkpoint_known_in_store(store, post_justified)) {
+                return -1;
+            }
             log_checkpoint_decision(
                 "justified",
                 "advance",
                 &latest_justified,
-                effective_post_justified);
-            latest_justified = *effective_post_justified;
+                post_justified);
+            latest_justified = *post_justified;
         } else if (
-            effective_post_justified->slot == latest_justified.slot
-            && root_compare(&effective_post_justified->root, &latest_justified.root) != 0) {
+            post_justified->slot == latest_justified.slot
+            && root_compare(&post_justified->root, &latest_justified.root) != 0) {
             log_checkpoint_decision(
                 "justified",
                 "tie_keep_current",
                 &latest_justified,
-                effective_post_justified);
+                post_justified);
         }
     }
-    if (effective_post_finalized && !root_is_zero(&effective_post_finalized->root)) {
-        if (!checkpoint_known_in_store(store, effective_post_finalized)) {
-            return -1;
-        }
-        if (should_replace_checkpoint(&latest_finalized, effective_post_finalized)) {
+    if (post_finalized && !root_is_zero(&post_finalized->root)) {
+        if (should_replace_checkpoint(&latest_finalized, post_finalized)) {
+            if (!checkpoint_known_in_store(store, post_finalized)) {
+                return -1;
+            }
             log_checkpoint_decision(
                 "finalized",
                 "advance",
                 &latest_finalized,
-                effective_post_finalized);
-            latest_finalized = *effective_post_finalized;
+                post_finalized);
+            latest_finalized = *post_finalized;
         } else if (
-            effective_post_finalized->slot == latest_finalized.slot
-            && root_compare(&effective_post_finalized->root, &latest_finalized.root) != 0) {
+            post_finalized->slot == latest_finalized.slot
+            && root_compare(&post_finalized->root, &latest_finalized.root) != 0) {
             log_checkpoint_decision(
                 "finalized",
                 "tie_keep_current",
                 &latest_finalized,
-                effective_post_finalized);
+                post_finalized);
         }
     }
 

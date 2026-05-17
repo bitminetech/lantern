@@ -1040,7 +1040,18 @@ static int test_fork_choice_anchor_metadata_survives_checkpoint_restore(void) {
     LanternRoot anchor_root;
     assert(lantern_hash_tree_root_block(&anchor, &anchor_root) == SSZ_SUCCESS);
     LanternCheckpoint anchor_cp = make_checkpoint(&anchor_root, anchor.slot);
-    assert(lantern_fork_choice_set_anchor(&store, &anchor, &anchor_cp, &anchor_cp, &anchor_root) == 0);
+    LanternRoot embedded_root;
+    fill_root(&embedded_root, 0x55);
+    LanternCheckpoint embedded_justified = make_checkpoint(&embedded_root, anchor.slot - 1u);
+    LanternCheckpoint embedded_finalized = make_checkpoint(&embedded_root, anchor.slot - 2u);
+    assert(
+        lantern_fork_choice_set_anchor(
+            &store,
+            &anchor,
+            &embedded_justified,
+            &embedded_finalized,
+            &anchor_root)
+        == 0);
 
     const LanternRoot *stored_anchor_root = lantern_fork_choice_anchor_root(&store);
     uint64_t stored_anchor_slot = 0;
@@ -1048,6 +1059,10 @@ static int test_fork_choice_anchor_metadata_survives_checkpoint_restore(void) {
     assert(roots_equal(stored_anchor_root, &anchor_root));
     assert(lantern_fork_choice_anchor_slot(&store, &stored_anchor_slot) == 0);
     assert(stored_anchor_slot == anchor.slot);
+    const LanternCheckpoint *latest_justified = lantern_fork_choice_latest_justified(&store);
+    const LanternCheckpoint *latest_finalized = lantern_fork_choice_latest_finalized(&store);
+    assert(latest_justified && checkpoints_equal(latest_justified, &anchor_cp));
+    assert(latest_finalized && checkpoints_equal(latest_finalized, &anchor_cp));
 
     LanternCheckpoint anchor_bootstrap_justified = anchor_cp;
     LanternCheckpoint anchor_bootstrap_finalized = anchor_cp;
@@ -1058,15 +1073,11 @@ static int test_fork_choice_anchor_metadata_survives_checkpoint_restore(void) {
             &store,
             &anchor_bootstrap_justified,
             &anchor_bootstrap_finalized)
-        == 0);
-    const LanternCheckpoint *latest_justified = lantern_fork_choice_latest_justified(&store);
-    const LanternCheckpoint *latest_finalized = lantern_fork_choice_latest_finalized(&store);
-    assert(latest_justified);
-    assert(latest_finalized);
-    assert(latest_justified->slot == anchor_bootstrap_justified.slot);
-    assert(latest_finalized->slot == anchor_bootstrap_finalized.slot);
-    assert(roots_equal(&latest_justified->root, &anchor_root));
-    assert(roots_equal(&latest_finalized->root, &anchor_root));
+        != 0);
+    latest_justified = lantern_fork_choice_latest_justified(&store);
+    latest_finalized = lantern_fork_choice_latest_finalized(&store);
+    assert(latest_justified && checkpoints_equal(latest_justified, &anchor_cp));
+    assert(latest_finalized && checkpoints_equal(latest_finalized, &anchor_cp));
 
     LanternBlock block_one;
     init_block(&block_one, anchor.slot + 1u, 1, &anchor_root, 0x52);

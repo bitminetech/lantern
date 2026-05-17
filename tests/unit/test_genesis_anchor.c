@@ -709,7 +709,7 @@ cleanup:
     return 1;
 }
 
-static int test_checkpoint_sync_anchor_alias_restores(void)
+static int test_checkpoint_sync_anchor_checkpoint_restores(void)
 {
     struct lantern_client client;
     char dir_template[] = "/tmp/lantern_checkpoint_anchor_restoreXXXXXX";
@@ -824,13 +824,13 @@ static int test_checkpoint_sync_anchor_alias_restores(void)
         fprintf(stderr, "missing fork-choice checkpoints for checkpoint anchor restore regression\n");
         goto cleanup;
     }
-    if (store_justified->slot != remote_justified.slot
+    if (store_justified->slot != expected_anchor_header.slot
         || !roots_equal(&store_justified->root, &expected_anchor_root))
     {
         fprintf(stderr, "checkpoint anchor restore regression justified checkpoint mismatch\n");
         goto cleanup;
     }
-    if (store_finalized->slot != remote_finalized.slot
+    if (store_finalized->slot != expected_anchor_header.slot
         || !roots_equal(&store_finalized->root, &expected_anchor_root))
     {
         fprintf(stderr, "checkpoint anchor restore regression finalized checkpoint mismatch\n");
@@ -1198,11 +1198,6 @@ int main(void)
         return 1;
     }
 
-    /*
-     * After initialize_fork_choice the store checkpoints keep the state's
-     * justified/finalized slots but point both roots at the materialized
-     * anchor block.
-     */
     const LanternCheckpoint *store_justified =
         lantern_fork_choice_latest_justified(&client.fork_choice);
     const LanternCheckpoint *store_finalized =
@@ -1214,24 +1209,24 @@ int main(void)
         lantern_fork_choice_reset(&client.fork_choice);
         return 1;
     }
-    if (store_justified->slot != client.state.latest_justified.slot
+    if (store_justified->slot != client.state.latest_block_header.slot
         || !roots_equal(&store_justified->root, &expected_restart_anchor_root))
     {
         fprintf(stderr,
-            "justified checkpoint should keep its slot and use the anchor root "
+            "justified checkpoint should use the anchor root and slot "
             "(got slot=%" PRIu64 " expected slot=%" PRIu64 ")\n",
-            store_justified->slot, client.state.latest_justified.slot);
+            store_justified->slot, client.state.latest_block_header.slot);
         lantern_state_reset(&client.state);
         lantern_fork_choice_reset(&client.fork_choice);
         return 1;
     }
-    if (store_finalized->slot != client.state.latest_finalized.slot
+    if (store_finalized->slot != client.state.latest_block_header.slot
         || !roots_equal(&store_finalized->root, &expected_restart_anchor_root))
     {
         fprintf(stderr,
-            "finalized checkpoint should keep its slot and use the anchor root "
+            "finalized checkpoint should use the anchor root and slot "
             "(got slot=%" PRIu64 " expected slot=%" PRIu64 ")\n",
-            store_finalized->slot, client.state.latest_finalized.slot);
+            store_finalized->slot, client.state.latest_block_header.slot);
         lantern_state_reset(&client.state);
         lantern_fork_choice_reset(&client.fork_choice);
         return 1;
@@ -1261,7 +1256,7 @@ int main(void)
         lantern_fork_choice_reset(&client.fork_choice);
         return 1;
     }
-    if (test_checkpoint_sync_anchor_alias_restores() != 0)
+    if (test_checkpoint_sync_anchor_checkpoint_restores() != 0)
     {
         lantern_state_reset(&client.state);
         lantern_fork_choice_reset(&client.fork_choice);
