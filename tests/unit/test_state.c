@@ -3641,7 +3641,7 @@ static int test_compute_vote_checkpoints_respects_safe_target(void) {
     return 0;
 }
 
-static int test_compute_vote_checkpoints_keeps_state_source_when_store_ahead(void) {
+static int test_compute_vote_checkpoints_uses_store_source_when_cached_head_state_lags(void) {
     LanternState state;
     LanternForkChoice fork_choice;
     LanternRoot genesis_root;
@@ -3650,7 +3650,7 @@ static int test_compute_vote_checkpoints_keeps_state_source_when_store_ahead(voi
     LanternRoot block_roots[5];
     block_roots[0] = genesis_root;
     LanternRoot parent_root = genesis_root;
-    for (uint64_t slot = 1; slot <= 4; ++slot) {
+    for (uint64_t slot = 1; slot <= 3; ++slot) {
         LanternBlock block;
         LanternRoot block_root;
         make_block(&state, slot, &parent_root, &block, &block_root);
@@ -3662,15 +3662,33 @@ static int test_compute_vote_checkpoints_keeps_state_source_when_store_ahead(voi
         lantern_block_body_reset(&block.body);
     }
 
+    state.latest_finalized.slot = 0;
+    state.latest_finalized.root = block_roots[0];
+    state.latest_justified.slot = 2;
+    state.latest_justified.root = block_roots[2];
+
+    LanternState cached_head_state;
+    lantern_state_init(&cached_head_state);
+    expect_zero(lantern_state_clone(&state, &cached_head_state), "clone stale cached head state");
+
+    LanternBlock head_block;
+    make_block(&state, 4, &parent_root, &head_block, &block_roots[4]);
+    expect_zero(
+        lantern_fork_choice_add_block_with_state(
+            &fork_choice,
+            &head_block,
+            NULL,
+            NULL,
+            NULL,
+            &block_roots[4],
+            &cached_head_state),
+        "add head block with lagging cached state");
+    lantern_block_body_reset(&head_block.body);
+
     fork_choice.head = block_roots[4];
     fork_choice.has_head = true;
     fork_choice.safe_target = block_roots[4];
     fork_choice.has_safe_target = true;
-
-    state.latest_finalized.slot = 0;
-    state.latest_finalized.root = block_roots[0];
-    state.latest_justified.slot = 1;
-    state.latest_justified.root = block_roots[1];
 
     LanternCheckpoint store_justified;
     store_justified.slot = 3;
@@ -3684,24 +3702,28 @@ static int test_compute_vote_checkpoints_keeps_state_source_when_store_ahead(voi
     LanternCheckpoint source;
     int rc = lantern_state_compute_vote_checkpoints(&state, &head, &target, &source);
     if (rc != 0) {
-        fprintf(stderr, "compute vote checkpoints state source precedence failed (rc=%d)\n", rc);
+        fprintf(stderr, "compute vote checkpoints store source precedence failed (rc=%d)\n", rc);
+        lantern_state_reset(&cached_head_state);
         lantern_state_reset(&state);
         lantern_fork_choice_reset(&fork_choice);
         return 1;
     }
-    if (!checkpoints_equal(&source, &state.latest_justified)) {
-        fprintf(stderr, "source checkpoint should stay on state latest_justified when store is ahead\n");
+    if (!checkpoints_equal(&source, &store_justified)) {
+        fprintf(stderr, "source checkpoint should use store latest_justified when cached head state lags\n");
+        lantern_state_reset(&cached_head_state);
         lantern_state_reset(&state);
         lantern_fork_choice_reset(&fork_choice);
         return 1;
     }
-    if (checkpoints_equal(&source, &store_justified)) {
-        fprintf(stderr, "source checkpoint incorrectly used store latest_justified while store is ahead\n");
+    if (checkpoints_equal(&source, &cached_head_state.latest_justified)) {
+        fprintf(stderr, "source checkpoint incorrectly used cached head state latest_justified\n");
+        lantern_state_reset(&cached_head_state);
         lantern_state_reset(&state);
         lantern_fork_choice_reset(&fork_choice);
         return 1;
     }
 
+    lantern_state_reset(&cached_head_state);
     lantern_state_reset(&state);
     lantern_fork_choice_reset(&fork_choice);
     return 0;
@@ -4197,7 +4219,7 @@ int main(void) {
     if (test_compute_vote_checkpoints_can_match_source() != 0) {
         return 1;
     }
-    if (test_compute_vote_checkpoints_keeps_state_source_when_store_ahead() != 0) {
+    if (test_compute_vote_checkpoints_uses_store_source_when_cached_head_state_lags() != 0) {
         return 1;
     }
     if (test_compute_vote_checkpoints_respects_safe_target() != 0) {
