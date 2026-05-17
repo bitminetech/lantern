@@ -953,9 +953,19 @@ static void lantern_client_peer_status_update(
         return;
     }
 
+    uint64_t network_head_slot = peer_status->head.slot;
+    uint64_t network_finalized_slot = peer_status->finalized.slot;
+
     pthread_mutex_unlock(&client->status_lock);
 
-    lantern_client_update_sync_progress(client, local_slot);
+    maybe_log_sync_progress(
+        client,
+        local_slot,
+        network_head_slot,
+        true,
+        network_finalized_slot,
+        true,
+        false);
 }
 
 
