@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -34,8 +35,10 @@
 #include "lantern/http/metrics.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
+#include "test_driver/driver.h"
 
 static const size_t LANTERN_HTTP_READ_BUFFER_SIZE = 4096;
+static const size_t LANTERN_HTTP_MAX_TEST_DRIVER_BODY_SIZE = 64u * 1024u * 1024u;
 static const int LANTERN_HTTP_LISTEN_BACKLOG = 16;
 static const char LANTERN_HTTP_PATH_HEALTH[] = "/lean/v0/health";
 static const char LANTERN_HTTP_PATH_METRICS[] = "/metrics";
@@ -43,6 +46,12 @@ static const char LANTERN_HTTP_PATH_FINALIZED[] = "/lean/v0/states/finalized";
 static const char LANTERN_HTTP_PATH_JUSTIFIED[] = "/lean/v0/checkpoints/justified";
 static const char LANTERN_HTTP_PATH_FORK_CHOICE[] = "/lean/v0/fork_choice";
 static const char LANTERN_HTTP_PATH_ADMIN_AGGREGATOR[] = "/lean/v0/admin/aggregator";
+static const char LANTERN_HTTP_PATH_TEST_FC_INIT[] = "/lean/v0/test_driver/fork_choice/init";
+static const char LANTERN_HTTP_PATH_TEST_FC_STEP[] = "/lean/v0/test_driver/fork_choice/step";
+static const char LANTERN_HTTP_PATH_TEST_STATE_RUN[] =
+    "/lean/v0/test_driver/state_transition/run";
+static const char LANTERN_HTTP_PATH_TEST_VERIFY_RUN[] =
+    "/lean/v0/test_driver/verify_signatures/run";
 static const char LANTERN_HTTP_JSON_HEALTH[] = "{\"status\":\"healthy\",\"service\":\"lean-rpc-api\"}";
 static const char LANTERN_HTTP_JSON_MALFORMED[] = "{\"error\":\"malformed request\"}";
 static const char LANTERN_HTTP_JSON_UNKNOWN_ENDPOINT[] = "{\"error\":\"unknown endpoint\"}";
@@ -500,6 +509,151 @@ static bool http_locate_body(
     return false;
 }
 
+static int http_parse_content_length(
+    const char *buffer,
+    size_t buffer_len,
+    size_t *out_content_length)
+{
+    if (!buffer || !out_content_length)
+    {
+        return -1;
+    }
+    *out_content_length = 0;
+    const char *headers_end = NULL;
+    static const char SEPARATOR[] = "\r\n\r\n";
+    const size_t sep_len = sizeof(SEPARATOR) - 1u;
+    for (size_t i = 0; i + sep_len <= buffer_len; ++i)
+    {
+        if (memcmp(buffer + i, SEPARATOR, sep_len) == 0)
+        {
+            headers_end = buffer + i;
+            break;
+        }
+    }
+    if (!headers_end)
+    {
+        return -1;
+    }
+
+    const char *cursor = buffer;
+    static const char HEADER[] = "content-length:";
+    const size_t header_len = sizeof(HEADER) - 1u;
+    while (cursor < headers_end)
+    {
+        const char *line_end = memchr(cursor, '\n', (size_t)(headers_end - cursor));
+        if (!line_end)
+        {
+            line_end = headers_end;
+        }
+        const char *line = cursor;
+        if (line_end > line && *(line_end - 1) == '\r')
+        {
+            line_end -= 1;
+        }
+        size_t line_len = (size_t)(line_end - line);
+        if (line_len >= header_len && strncasecmp(line, HEADER, header_len) == 0)
+        {
+            const char *value = line + header_len;
+            while (value < line_end && (*value == ' ' || *value == '\t'))
+            {
+                ++value;
+            }
+            size_t content_length = 0;
+            if (value == line_end)
+            {
+                return -1;
+            }
+            while (value < line_end)
+            {
+                if (*value < '0' || *value > '9')
+                {
+                    return -1;
+                }
+                size_t digit = (size_t)(*value - '0');
+                if (content_length > (SIZE_MAX - digit) / 10u)
+                {
+                    return -1;
+                }
+                content_length = (content_length * 10u) + digit;
+                ++value;
+            }
+            *out_content_length = content_length;
+            return 0;
+        }
+        cursor = line_end;
+        if (cursor < headers_end && *cursor == '\r')
+        {
+            ++cursor;
+        }
+        if (cursor < headers_end && *cursor == '\n')
+        {
+            ++cursor;
+        }
+    }
+    return -1;
+}
+
+static int http_read_request_body(
+    int client_fd,
+    const char *raw_buffer,
+    size_t raw_buffer_len,
+    char **out_body,
+    size_t *out_body_len)
+{
+    if (client_fd < 0 || !raw_buffer || !out_body || !out_body_len)
+    {
+        return -1;
+    }
+    *out_body = NULL;
+    *out_body_len = 0;
+
+    const char *body_ptr = NULL;
+    size_t available_len = 0;
+    if (!http_locate_body(raw_buffer, raw_buffer_len, &body_ptr, &available_len))
+    {
+        return -1;
+    }
+
+    size_t content_length = 0;
+    if (http_parse_content_length(raw_buffer, raw_buffer_len, &content_length) != 0)
+    {
+        content_length = available_len;
+    }
+    if (content_length > LANTERN_HTTP_MAX_TEST_DRIVER_BODY_SIZE)
+    {
+        return -1;
+    }
+
+    char *body = malloc(content_length + 1u);
+    if (!body)
+    {
+        return -1;
+    }
+    size_t copied = available_len < content_length ? available_len : content_length;
+    if (copied > 0)
+    {
+        memcpy(body, body_ptr, copied);
+    }
+    while (copied < content_length)
+    {
+        ssize_t received = recv(client_fd, body + copied, content_length - copied, 0);
+        if (received < 0 && errno == EINTR)
+        {
+            continue;
+        }
+        if (received <= 0)
+        {
+            free(body);
+            return -1;
+        }
+        copied += (size_t)received;
+    }
+    body[content_length] = '\0';
+    *out_body = body;
+    *out_body_len = content_length;
+    return 0;
+}
+
 
 /**
  * Strictly parse `{"enabled": <bool>}` from a JSON body.
@@ -741,6 +895,149 @@ static void handle_admin_aggregator(
         rc);
 }
 
+static bool is_test_driver_path(const char *path)
+{
+    return path
+        && (strcmp(path, LANTERN_HTTP_PATH_TEST_FC_INIT) == 0
+            || strcmp(path, LANTERN_HTTP_PATH_TEST_FC_STEP) == 0
+            || strcmp(path, LANTERN_HTTP_PATH_TEST_STATE_RUN) == 0
+            || strcmp(path, LANTERN_HTTP_PATH_TEST_VERIFY_RUN) == 0);
+}
+
+static void handle_test_driver(
+    int client_fd,
+    const char *method,
+    const char *path,
+    const char *raw_buffer,
+    size_t raw_buffer_len,
+    const char *peer_text)
+{
+    if (strcmp(method, "POST") != 0)
+    {
+        int rc = send_json_error(client_fd, 405, "Method Not Allowed", LANTERN_HTTP_JSON_METHOD_NOT_ALLOWED);
+        lantern_log_info(
+            "http",
+            &(const struct lantern_log_metadata){.peer = peer_text},
+            "%s %s -> 405 (rc=%d)",
+            method,
+            path,
+            rc);
+        return;
+    }
+
+    char *request_body = NULL;
+    size_t request_body_len = 0;
+    if (http_read_request_body(
+            client_fd,
+            raw_buffer,
+            raw_buffer_len,
+            &request_body,
+            &request_body_len)
+        != 0)
+    {
+        int rc = send_json_error(client_fd, 400, "Bad Request", LANTERN_HTTP_JSON_BAD_REQUEST);
+        lantern_log_info(
+            "http",
+            &(const struct lantern_log_metadata){.peer = peer_text},
+            "POST %s -> 400 (body read failed, rc=%d)",
+            path,
+            rc);
+        return;
+    }
+
+    if (strcmp(path, LANTERN_HTTP_PATH_TEST_FC_INIT) == 0)
+    {
+        char *error = NULL;
+        int driver_rc =
+            lantern_test_driver_fork_choice_init(request_body, request_body_len, &error);
+        free(request_body);
+        if (driver_rc != 0)
+        {
+            int rc = send_json_error(
+                client_fd,
+                400,
+                "Bad Request",
+                LANTERN_HTTP_JSON_BAD_REQUEST);
+            lantern_log_info(
+                "http",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "POST %s -> 400 (driver_rc=%d error=%s rc=%d)",
+                path,
+                driver_rc,
+                error ? error : "-",
+                rc);
+            free(error);
+            return;
+        }
+        int rc = send_http_response(client_fd, 204, "No Content", "application/json", NULL, 0);
+        lantern_log_info(
+            "http",
+            &(const struct lantern_log_metadata){.peer = peer_text},
+            "POST %s -> 204 (rc=%d)",
+            path,
+            rc);
+        return;
+    }
+
+    char *response_body = NULL;
+    size_t response_body_len = 0;
+    int driver_rc = -1;
+    if (strcmp(path, LANTERN_HTTP_PATH_TEST_FC_STEP) == 0)
+    {
+        driver_rc = lantern_test_driver_fork_choice_step(
+            request_body,
+            request_body_len,
+            &response_body,
+            &response_body_len);
+    }
+    else if (strcmp(path, LANTERN_HTTP_PATH_TEST_STATE_RUN) == 0)
+    {
+        driver_rc = lantern_test_driver_state_transition_run(
+            request_body,
+            request_body_len,
+            &response_body,
+            &response_body_len);
+    }
+    else if (strcmp(path, LANTERN_HTTP_PATH_TEST_VERIFY_RUN) == 0)
+    {
+        driver_rc = lantern_test_driver_verify_signatures_run(
+            request_body,
+            request_body_len,
+            &response_body,
+            &response_body_len);
+    }
+    free(request_body);
+
+    if (driver_rc != 0 || !response_body)
+    {
+        free(response_body);
+        int rc = send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
+        lantern_log_error(
+            "http",
+            &(const struct lantern_log_metadata){.peer = peer_text},
+            "POST %s -> 500 (driver_rc=%d rc=%d)",
+            path,
+            driver_rc,
+            rc);
+        return;
+    }
+
+    int rc = send_http_response(
+        client_fd,
+        200,
+        "OK",
+        "application/json",
+        response_body,
+        response_body_len);
+    free(response_body);
+    lantern_log_info(
+        "http",
+        &(const struct lantern_log_metadata){.peer = peer_text},
+        "POST %s -> 200 (rc=%d)",
+        path,
+        rc);
+}
+
 
 /**
  * Handle a single client connection.
@@ -808,6 +1105,18 @@ static void handle_client_connection(
             server,
             client_fd,
             method,
+            buffer,
+            (size_t)received,
+            peer_text);
+        return;
+    }
+
+    if (is_test_driver_path(path))
+    {
+        handle_test_driver(
+            client_fd,
+            method,
+            path,
             buffer,
             (size_t)received,
             peer_text);

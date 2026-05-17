@@ -268,7 +268,7 @@ static bool make_aggregated_proof_invalid(
     return false;
 }
 
-static int test_idle_gossip_not_ignored(void)
+static int test_idle_gossip_ignored(void)
 {
     struct lantern_client client;
     memset(&client, 0, sizeof(client));
@@ -282,9 +282,9 @@ static int test_idle_gossip_not_ignored(void)
 
     int block_rc = lantern_client_debug_gossip_block(&client, &block);
     lantern_block_body_reset(&block.block.body);
-    if (block_rc != LANTERN_CLIENT_OK)
+    if (block_rc != LANTERN_CLIENT_ERR_IGNORED)
     {
-        fprintf(stderr, "idle block gossip was not accepted rc=%d\n", block_rc);
+        fprintf(stderr, "idle block gossip was not ignored rc=%d\n", block_rc);
         return 1;
     }
 
@@ -294,9 +294,44 @@ static int test_idle_gossip_not_ignored(void)
     vote.data.slot = 1;
 
     int vote_rc = lantern_client_debug_gossip_vote(&client, &vote);
-    if (vote_rc != LANTERN_CLIENT_OK)
+    if (vote_rc != LANTERN_CLIENT_ERR_IGNORED)
     {
-        fprintf(stderr, "idle vote gossip was not accepted rc=%d\n", vote_rc);
+        fprintf(stderr, "idle vote gossip was not ignored rc=%d\n", vote_rc);
+        return 1;
+    }
+
+    LanternSignedAggregatedAttestation attestation;
+    memset(&attestation, 0, sizeof(attestation));
+    int agg_rc = lantern_client_debug_gossip_aggregated_attestation(&client, &attestation);
+    if (agg_rc != LANTERN_CLIENT_ERR_IGNORED)
+    {
+        fprintf(stderr, "idle aggregated attestation gossip was not ignored rc=%d\n", agg_rc);
+        return 1;
+    }
+
+    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
+    if (lantern_client_debug_gossip_vote(&client, &vote) != LANTERN_CLIENT_OK)
+    {
+        fprintf(stderr, "syncing vote gossip should be accepted by handler\n");
+        return 1;
+    }
+    if (lantern_client_debug_gossip_aggregated_attestation(&client, &attestation)
+        == LANTERN_CLIENT_ERR_IGNORED)
+    {
+        fprintf(stderr, "syncing aggregated attestation gossip should reach validation\n");
+        return 1;
+    }
+
+    client.sync_state = LANTERN_SYNC_STATE_SYNCED;
+    if (lantern_client_debug_gossip_vote(&client, &vote) != LANTERN_CLIENT_OK)
+    {
+        fprintf(stderr, "synced vote gossip should be accepted by handler\n");
+        return 1;
+    }
+    if (lantern_client_debug_gossip_aggregated_attestation(&client, &attestation)
+        == LANTERN_CLIENT_ERR_IGNORED)
+    {
+        fprintf(stderr, "synced aggregated attestation gossip should reach validation\n");
         return 1;
     }
 
@@ -323,6 +358,7 @@ static int test_gossip_aggregated_attestation_caches_valid_proof(void)
         != 0) {
         return 1;
     }
+    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
 
     if (build_single_participant_aggregated_attestation(
             &client,
@@ -440,6 +476,7 @@ static int test_gossip_aggregated_attestation_rejects_invalid_proof(void)
         != 0) {
         return 1;
     }
+    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
 
     if (build_single_participant_aggregated_attestation(
             &client,
@@ -515,6 +552,7 @@ static int test_gossip_aggregated_attestation_rejects_unknown_target(void)
         != 0) {
         return 1;
     }
+    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
     if (test_enable_blocks_request_peer(
             &client,
             "12D3KooWQH2VQK1kF2L8a7T4AtestAggUnknownTarget111111111111")
@@ -580,6 +618,7 @@ static int test_gossip_aggregated_attestation_rejects_invalid_topology(void)
         != 0) {
         return 1;
     }
+    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
 
     if (build_single_participant_aggregated_attestation(
             &client,
@@ -630,7 +669,7 @@ cleanup:
 
 int main(void)
 {
-    if (test_idle_gossip_not_ignored() != 0)
+    if (test_idle_gossip_ignored() != 0)
     {
         return 1;
     }

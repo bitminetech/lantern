@@ -71,6 +71,7 @@ set(LANTERN_LIBRARY_SOURCES
     src/http/common.c
     src/http/metrics.c
     src/http/server.c
+    src/test_driver/driver.c
     src/storage/storage.c
     src/support/log.c
     src/support/string_list.c
@@ -79,6 +80,8 @@ set(LANTERN_LIBRARY_SOURCES
     src/support/secure_mem.c
     src/crypto/xmss.c
     src/internal/yaml_parser.c
+    tests/support/fixture_loader.c
+    tests/support/state_store_adapter.c
 )
 
 function(lantern_define_library target_name wrapper_target)
@@ -87,6 +90,7 @@ function(lantern_define_library target_name wrapper_target)
         PUBLIC
             ${PROJECT_SOURCE_DIR}/include
         PRIVATE
+            ${PROJECT_SOURCE_DIR}
             ${PROJECT_SOURCE_DIR}/src
             ${PROJECT_SOURCE_DIR}/external/jsmn
     )
@@ -298,12 +302,10 @@ if(LANTERN_BUILD_TESTS)
     add_test(NAME lantern_consensus_runtime COMMAND lantern_consensus_runtime_test)
 
     add_executable(lantern_state_test tests/unit/test_state.c)
-    target_sources(lantern_state_test PRIVATE tests/support/state_store_adapter.c)
     target_link_libraries(lantern_state_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_state COMMAND lantern_state_test)
 
     add_executable(lantern_off_head_replay_test tests/unit/test_off_head_replay.c)
-    target_sources(lantern_off_head_replay_test PRIVATE tests/support/state_store_adapter.c)
     target_link_libraries(lantern_off_head_replay_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_off_head_replay COMMAND lantern_off_head_replay_test)
     set_tests_properties(lantern_off_head_replay PROPERTIES TIMEOUT 120)
@@ -319,8 +321,6 @@ if(LANTERN_BUILD_TESTS)
 
     add_executable(lantern_networking_messages_test
         tests/unit/test_networking_messages.c
-        tests/support/state_store_adapter.c
-        tests/support/fixture_loader.c
     )
     target_link_libraries(lantern_networking_messages_test PRIVATE lantern)
     target_include_directories(
@@ -356,7 +356,6 @@ if(LANTERN_BUILD_TESTS)
     add_test(NAME lantern_fork_choice COMMAND lantern_fork_choice_test)
 
     add_executable(lantern_storage_test tests/unit/test_storage.c)
-    target_sources(lantern_storage_test PRIVATE tests/support/state_store_adapter.c)
     target_link_libraries(lantern_storage_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_storage COMMAND lantern_storage_test)
 
@@ -379,8 +378,6 @@ if(LANTERN_BUILD_TESTS)
         add_executable(lantern_consensus_vectors_test
             tests/integration/test_consensus_vectors.c
             tests/integration/consensus_fixture_runner.c
-            tests/support/state_store_adapter.c
-            tests/support/fixture_loader.c
         )
         target_link_libraries(lantern_consensus_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
         target_include_directories(
@@ -409,8 +406,6 @@ if(LANTERN_BUILD_TESTS)
             "— registering lantern_verify_signatures_vectors")
         add_executable(lantern_verify_signatures_vectors_test
             tests/integration/test_verify_signatures_vectors.c
-            tests/support/state_store_adapter.c
-            tests/support/fixture_loader.c
         )
         target_link_libraries(lantern_verify_signatures_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
         target_include_directories(
@@ -439,8 +434,6 @@ if(LANTERN_BUILD_TESTS)
         add_executable(lantern_genesis_vectors_test
             tests/integration/test_genesis_vectors.c
             tests/integration/consensus_fixture_runner.c
-            tests/support/state_store_adapter.c
-            tests/support/fixture_loader.c
         )
         target_link_libraries(lantern_genesis_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
         target_include_directories(
@@ -468,8 +461,6 @@ if(LANTERN_BUILD_TESTS)
             "— registering lantern_ssz_vectors")
         add_executable(lantern_ssz_vectors_test
             tests/integration/test_ssz_vectors.c
-            tests/support/state_store_adapter.c
-            tests/support/fixture_loader.c
         )
         target_link_libraries(lantern_ssz_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
         target_include_directories(
@@ -497,8 +488,6 @@ if(LANTERN_BUILD_TESTS)
             "— registering lantern_networking_codec_vectors")
         add_executable(lantern_networking_codec_vectors_test
             tests/integration/test_networking_codec_vectors.c
-            tests/support/state_store_adapter.c
-            tests/support/fixture_loader.c
         )
         target_link_libraries(lantern_networking_codec_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
         target_include_directories(

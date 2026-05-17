@@ -14,6 +14,7 @@
 #include "lantern/consensus/state.h"
 #include "lantern/genesis/genesis.h"
 #include "lantern/storage/storage.h"
+#include "lantern/support/string_list.h"
 
 enum {
     TEST_TEMP_PATH_CAPACITY = 1024
@@ -127,6 +128,77 @@ static void teardown_block_signature_fixture(struct block_signature_fixture *fix
     client_test_teardown_vote_validation_client(&fixture->client, fixture->pub, fixture->secret);
     fixture->pub = NULL;
     fixture->secret = NULL;
+}
+
+static int enable_sync_test_peer(struct lantern_client *client, const char *peer_id)
+{
+    if (!client || !peer_id) {
+        return -1;
+    }
+    if (pthread_mutex_init(&client->pending_lock, NULL) != 0) {
+        return -1;
+    }
+    client->pending_lock_initialized = true;
+    lantern_client_debug_pending_reset(client);
+    if (pthread_mutex_init(&client->status_lock, NULL) != 0) {
+        pthread_mutex_destroy(&client->pending_lock);
+        client->pending_lock_initialized = false;
+        return -1;
+    }
+    client->status_lock_initialized = true;
+    lantern_string_list_init(&client->connected_peer_ids);
+    if (pthread_mutex_init(&client->connection_lock, NULL) != 0) {
+        pthread_mutex_destroy(&client->status_lock);
+        client->status_lock_initialized = false;
+        pthread_mutex_destroy(&client->pending_lock);
+        client->pending_lock_initialized = false;
+        lantern_string_list_reset(&client->connected_peer_ids);
+        return -1;
+    }
+    client->connection_lock_initialized = true;
+    if (lantern_string_list_append(&client->connected_peer_ids, peer_id) != 0) {
+        pthread_mutex_destroy(&client->connection_lock);
+        client->connection_lock_initialized = false;
+        pthread_mutex_destroy(&client->status_lock);
+        client->status_lock_initialized = false;
+        pthread_mutex_destroy(&client->pending_lock);
+        client->pending_lock_initialized = false;
+        lantern_string_list_reset(&client->connected_peer_ids);
+        return -1;
+    }
+    client->connected_peers = 1u;
+    return 0;
+}
+
+static void disable_sync_test_peer(struct lantern_client *client)
+{
+    if (!client) {
+        return;
+    }
+    free(client->peer_status_entries);
+    client->peer_status_entries = NULL;
+    client->peer_status_count = 0u;
+    client->peer_status_capacity = 0u;
+    free(client->active_blocks_requests);
+    client->active_blocks_requests = NULL;
+    client->active_blocks_request_count = 0u;
+    client->active_blocks_request_capacity = 0u;
+    client->next_blocks_request_id = 0u;
+    lantern_client_debug_pending_reset(client);
+    if (client->connection_lock_initialized) {
+        pthread_mutex_destroy(&client->connection_lock);
+        client->connection_lock_initialized = false;
+    }
+    lantern_string_list_reset(&client->connected_peer_ids);
+    client->connected_peers = 0u;
+    if (client->status_lock_initialized) {
+        pthread_mutex_destroy(&client->status_lock);
+        client->status_lock_initialized = false;
+    }
+    if (client->pending_lock_initialized) {
+        pthread_mutex_destroy(&client->pending_lock);
+        client->pending_lock_initialized = false;
+    }
 }
 
 static int build_signed_block_for_import(
@@ -831,6 +903,89 @@ cleanup:
         pthread_mutex_destroy(&client.status_lock);
         client.status_lock_initialized = false;
     }
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_idle_status_triggers_syncing_before_gossip_backfill(void)
+{
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot child_root;
+    LanternSignedBlock orphan_block;
+    const char *peer_id = "16Uiu2HAmPV5jU62WtmDkCEmfq1jzbBDkGbHNsDN78gJyvmv2TuC5";
+    int rc = 1;
+
+    memset(&orphan_block, 0, sizeof(orphan_block));
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "sync_idle_gossip_backfill",
+            &pub,
+            &secret,
+            NULL,
+            &child_root)
+        != 0) {
+        return 1;
+    }
+    if (enable_sync_test_peer(&client, peer_id) != 0) {
+        fprintf(stderr, "failed to enable sync test peer\n");
+        goto cleanup;
+    }
+
+    lantern_block_body_init(&orphan_block.block.body);
+    orphan_block.block.slot = client.state.slot + 8u;
+    orphan_block.block.proposer_index = 0u;
+    client_test_fill_root(&orphan_block.block.parent_root, 0x91u);
+    client_test_fill_root(&orphan_block.block.state_root, 0x92u);
+
+    client.sync_state = LANTERN_SYNC_STATE_IDLE;
+    if (lantern_client_debug_gossip_block(&client, &orphan_block) != LANTERN_CLIENT_ERR_IGNORED) {
+        fprintf(stderr, "IDLE gossip block should be ignored\n");
+        goto cleanup;
+    }
+    if (lantern_client_pending_block_count(&client) != 0u) {
+        fprintf(stderr, "IDLE gossip block should not enter pending queue\n");
+        goto cleanup;
+    }
+    if (client.next_blocks_request_id != 0u) {
+        fprintf(stderr, "IDLE gossip block should not schedule parent requests\n");
+        goto cleanup;
+    }
+
+    LanternStatusMessage status;
+    memset(&status, 0, sizeof(status));
+    status.head.root = child_root;
+    status.head.slot = client.state.slot;
+    status.finalized = client.state.latest_finalized;
+    if (reqresp_handle_status(&client, &status, peer_id) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "peer status update failed\n");
+        goto cleanup;
+    }
+    if (client.sync_state != LANTERN_SYNC_STATE_SYNCING) {
+        fprintf(stderr, "first peer status should move IDLE to SYNCING\n");
+        goto cleanup;
+    }
+
+    uint64_t request_id_before = client.next_blocks_request_id;
+    if (lantern_client_debug_gossip_block(&client, &orphan_block) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "SYNCING gossip block should be accepted into pending flow\n");
+        goto cleanup;
+    }
+    if (lantern_client_pending_block_count(&client) != 1u) {
+        fprintf(stderr, "SYNCING unknown-parent gossip block should be pending\n");
+        goto cleanup;
+    }
+    if (client.next_blocks_request_id == request_id_before) {
+        fprintf(stderr, "SYNCING unknown-parent gossip block should trigger blocks_by_root\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_block_body_reset(&orphan_block.block.body);
+    disable_sync_test_peer(&client);
     client_test_teardown_vote_validation_client(&client, pub, secret);
     return rc;
 }
@@ -1666,6 +1821,9 @@ int main(void) {
         return 1;
     }
     if (test_sync_completion_uses_network_finalized_threshold() != 0) {
+        return 1;
+    }
+    if (test_idle_status_triggers_syncing_before_gossip_backfill() != 0) {
         return 1;
     }
     if (test_reqresp_block_response_accepts_missing_parent() != 0) {

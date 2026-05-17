@@ -777,6 +777,21 @@ int gossip_block_handler(
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_client *client = context;
+    bool sync_idle = false;
+    if (client->status_lock_initialized && pthread_mutex_lock(&client->status_lock) == 0)
+    {
+        sync_idle = client->sync_state == LANTERN_SYNC_STATE_IDLE;
+        pthread_mutex_unlock(&client->status_lock);
+    }
+    else
+    {
+        sync_idle = client->sync_state == LANTERN_SYNC_STATE_IDLE;
+    }
+    if (sync_idle)
+    {
+        return LANTERN_CLIENT_ERR_IGNORED;
+    }
+
     if (raw_block_ssz && raw_block_ssz_len > 0)
     {
         lean_metrics_record_gossip_block_size(raw_block_ssz_len);
@@ -828,6 +843,21 @@ int gossip_vote_handler(
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_client *client = context;
+    bool sync_idle = false;
+    if (client->status_lock_initialized && pthread_mutex_lock(&client->status_lock) == 0)
+    {
+        sync_idle = client->sync_state == LANTERN_SYNC_STATE_IDLE;
+        pthread_mutex_unlock(&client->status_lock);
+    }
+    else
+    {
+        sync_idle = client->sync_state == LANTERN_SYNC_STATE_IDLE;
+    }
+    if (sync_idle)
+    {
+        return LANTERN_CLIENT_ERR_IGNORED;
+    }
+
     if (raw_vote_payload && raw_vote_payload_len > 0)
     {
         lean_metrics_record_gossip_attestation_size(raw_vote_payload_len);
@@ -973,6 +1003,21 @@ int gossip_aggregated_attestation_handler(
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_client *client = context;
+    bool sync_idle = false;
+    if (client->status_lock_initialized && pthread_mutex_lock(&client->status_lock) == 0)
+    {
+        sync_idle = client->sync_state == LANTERN_SYNC_STATE_IDLE;
+        pthread_mutex_unlock(&client->status_lock);
+    }
+    else
+    {
+        sync_idle = client->sync_state == LANTERN_SYNC_STATE_IDLE;
+    }
+    if (sync_idle)
+    {
+        return LANTERN_CLIENT_ERR_IGNORED;
+    }
+
     if (raw_attestation_payload && raw_attestation_payload_len > 0) {
         lean_metrics_record_gossip_aggregation_size(raw_attestation_payload_len);
     }
@@ -2467,8 +2512,7 @@ static void sweep_expired_active_blocks_requests_locked(
  *
  * Queues a block whose parent is not yet known. The block will be
  * imported once its parent arrives. When the client is syncing or
- * synced, it requests the missing parent via reqresp. In IDLE, it
- * relies on gossip for normal block propagation.
+ * synced, it requests the missing parent via reqresp.
  *
  * @param client       Client instance
  * @param block        Block to enqueue
@@ -2490,6 +2534,10 @@ static bool try_schedule_blocks_request_batch(
         return false;
     }
     if (root_count > LANTERN_MAX_REQUEST_BLOCKS)
+    {
+        return false;
+    }
+    if (!client->status_lock_initialized)
     {
         return false;
     }
@@ -3401,7 +3449,6 @@ void lantern_client_enqueue_pending_block(
     struct lantern_pending_block_list *list = &client->pending_blocks;
     bool request_parent_now =
         request_parent || client->sync_state != LANTERN_SYNC_STATE_IDLE;
-    bool allow_parent_requests = client->sync_state != LANTERN_SYNC_STATE_IDLE;
     if (backfill_depth > LANTERN_MAX_BACKFILL_DEPTH)
     {
         backfill_depth = LANTERN_MAX_BACKFILL_DEPTH;
@@ -3411,7 +3458,7 @@ void lantern_client_enqueue_pending_block(
     if (existing)
     {
         bool should_request =
-            allow_parent_requests && request_parent_now && !existing->parent_requested;
+            request_parent_now && !existing->parent_requested;
         LanternRoot request_root = existing->parent_root;
         bool parent_cached = pending_block_list_find(list, &request_root) != NULL;
         char peer_copy[PEER_TEXT_BUFFER_LEN];
@@ -3585,7 +3632,7 @@ void lantern_client_enqueue_pending_block(
             parent_hex[0] ? parent_hex : "0x0");
     }
 
-    if (allow_parent_requests && request_parent_now && !parent_cached
+    if (request_parent_now && !parent_cached
         && entry_backfill_depth < LANTERN_MAX_BACKFILL_DEPTH)
     {
         char peer_copy[PEER_TEXT_BUFFER_LEN];
@@ -3615,7 +3662,7 @@ void lantern_client_enqueue_pending_block(
         entry_backfill_depth,
         pending_len,
         parent_cached ? "true" : "false",
-        (allow_parent_requests && request_parent_now) ? "true" : "false");
+        request_parent_now ? "true" : "false");
 }
 
 
