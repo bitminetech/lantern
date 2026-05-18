@@ -3423,11 +3423,11 @@ int lantern_state_compute_post_state(
         return -1;
     }
     int rc = 0;
-    if (lantern_state_apply_store_latest_justified(&scratch, store) != 0) {
+    if (lantern_state_process_slots(&scratch, block->block.slot) != 0) {
         rc = -1;
         goto cleanup;
     }
-    if (lantern_state_process_slots(&scratch, block->block.slot) != 0) {
+    if (lantern_state_apply_store_latest_justified(&scratch, store) != 0) {
         rc = -1;
         goto cleanup;
     }

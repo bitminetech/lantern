@@ -3543,6 +3543,96 @@ cleanup:
     return result;
 }
 
+static int test_compute_post_state_seals_cached_parent_before_store_justified(void) {
+    LanternState state;
+    LanternState block_one_state;
+    LanternState post_state;
+    LanternStore post_store;
+    LanternForkChoice fork_choice;
+    LanternRoot genesis_root;
+    LanternRoot block_one_root;
+    LanternRoot block_one_state_root;
+    LanternRoot post_state_root;
+    LanternBlock block_one;
+    LanternSignedBlock signed_block;
+    LanternCheckpoint store_justified;
+    int result = 1;
+
+    lantern_state_init(&state);
+    lantern_state_init(&block_one_state);
+    lantern_state_init(&post_state);
+    lantern_store_init(&post_store);
+    lantern_signed_block_init(&signed_block);
+    memset(&block_one, 0, sizeof(block_one));
+
+    setup_state_and_fork_choice(&state, &fork_choice, 1625, 4, &genesis_root);
+    expect_zero(
+        lantern_state_prepare_validator_votes(&state, state.config.num_validators),
+        "prepare validator votes for cached parent seal test");
+
+    make_block(&state, 1u, &genesis_root, &block_one, &block_one_root);
+    expect_zero(lantern_state_clone(&state, &block_one_state), "clone cached parent seal state");
+    expect_zero(lantern_state_process_slots(&block_one_state, block_one.slot), "advance cached parent seal state");
+    expect_zero(
+        lantern_state_process_block(&block_one_state, &block_one, NULL, NULL),
+        "process cached parent seal block");
+    expect_ssz_success(
+        lantern_hash_tree_root_state(&block_one_state, &block_one_state_root),
+        "hash cached parent seal state");
+    block_one.state_root = block_one_state_root;
+    expect_ssz_success(lantern_hash_tree_root_block(&block_one, &block_one_root), "rehash cached parent seal block");
+    expect_zero(
+        lantern_fork_choice_add_block_with_state(
+            &fork_choice,
+            &block_one,
+            NULL,
+            &block_one_state.latest_justified,
+            &block_one_state.latest_finalized,
+            &block_one_root,
+            &block_one_state),
+        "add cached parent seal block");
+
+    store_justified.slot = 1u;
+    store_justified.root = block_one_root;
+    const LanternCheckpoint *store_finalized = lantern_fork_choice_latest_finalized(&fork_choice);
+    expect_zero(
+        lantern_fork_choice_update_checkpoints(&fork_choice, &store_justified, store_finalized),
+        "advance cached parent seal justified");
+
+    signed_block.block.slot = 2u;
+    expect_zero(
+        lantern_proposer_for_slot(2u, state.config.num_validators, &signed_block.block.proposer_index),
+        "compute cached parent seal proposer");
+    signed_block.block.parent_root = block_one_root;
+
+    if (lantern_state_compute_post_state(
+            &state,
+            &signed_block,
+            &post_state,
+            &post_store,
+            &post_state_root)
+        != 0) {
+        fprintf(stderr, "compute_post_state rejected cached parent after store justified advanced\n");
+        goto cleanup;
+    }
+    if (!checkpoints_equal(&post_state.latest_justified, &store_justified)) {
+        fprintf(stderr, "compute_post_state did not retain advanced store justified checkpoint\n");
+        goto cleanup;
+    }
+
+    result = 0;
+
+cleanup:
+    lantern_signed_block_reset(&signed_block);
+    lantern_store_reset(&post_store);
+    lantern_state_reset(&post_state);
+    lantern_block_body_reset(&block_one.body);
+    lantern_state_reset(&block_one_state);
+    lantern_state_reset(&state);
+    lantern_fork_choice_reset(&fork_choice);
+    return result;
+}
+
 static int test_compute_vote_checkpoints_basic(void) {
     LanternState state;
     LanternForkChoice fork_choice;
@@ -4276,6 +4366,9 @@ int main(void) {
         return 1;
     }
     if (test_compute_post_state_matches_process_block_and_votes() != 0) {
+        return 1;
+    }
+    if (test_compute_post_state_seals_cached_parent_before_store_justified() != 0) {
         return 1;
     }
     if (test_attestations_single_vote_justifies() != 0) {
