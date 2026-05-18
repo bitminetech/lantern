@@ -1074,11 +1074,14 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
     LanternRoot block_root;
     LanternRoot parent_root;
     LanternRoot head_root;
-    LanternRoot parent_block_root;
+    LanternRoot finalized_root;
     LanternRoot pending_root;
     LanternRoot pending_parent;
     bool parent_requested = true;
     char peer_text[128];
+    const uint64_t anchor_slot = 8u;
+    const uint64_t finalized_slot = 4u;
+    memset(&block, 0, sizeof(block));
 
     if (pthread_mutex_init(&client.state_lock, NULL) != 0) {
         fprintf(stderr, "failed to initialize state mutex\n");
@@ -1098,14 +1101,14 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
 
     lantern_state_init(&client.state);
     client.has_state = true;
-    client.state.slot = 0;
+    client.state.slot = anchor_slot;
     lantern_store_init(&client.store);
 
     memset(&client.state.latest_block_header, 0, sizeof(client.state.latest_block_header));
     client_test_fill_root(&client.state.latest_block_header.state_root, 0x10);
     client_test_fill_root(&client.state.latest_block_header.body_root, 0x11);
     client_test_fill_root(&client.state.latest_block_header.parent_root, 0x12);
-    client.state.latest_block_header.slot = 0;
+    client.state.latest_block_header.slot = anchor_slot;
     client.state.latest_block_header.proposer_index = 0;
 
     if (lantern_hash_tree_root_block_header(&client.state.latest_block_header, &head_root) != SSZ_SUCCESS) {
@@ -1129,7 +1132,7 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
 
     LanternCheckpoint anchor_checkpoint = {
         .root = head_root,
-        .slot = 0,
+        .slot = anchor_slot,
     };
     client.state.latest_justified = anchor_checkpoint;
     client.state.latest_finalized = anchor_checkpoint;
@@ -1137,7 +1140,7 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
     LanternBlock anchor_block;
     memset(&anchor_block, 0, sizeof(anchor_block));
     lantern_block_body_init(&anchor_block.body);
-    anchor_block.slot = 0;
+    anchor_block.slot = anchor_slot;
     anchor_block.proposer_index = 0;
     anchor_block.parent_root = client.state.latest_block_header.parent_root;
     anchor_block.state_root = client.state.latest_block_header.state_root;
@@ -1155,18 +1158,18 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
         goto cleanup;
     }
 
-    LanternBlock parent_block;
-    memset(&parent_block, 0, sizeof(parent_block));
-    lantern_block_body_init(&parent_block.body);
-    parent_block.slot = 1;
-    parent_block.proposer_index = 0;
-    parent_block.parent_root = head_root;
-    client_test_fill_root(&parent_block.state_root, 0x44);
+    LanternBlock finalized_block;
+    memset(&finalized_block, 0, sizeof(finalized_block));
+    lantern_block_body_init(&finalized_block.body);
+    finalized_block.slot = finalized_slot;
+    finalized_block.proposer_index = 0;
+    client_test_fill_root(&finalized_block.parent_root, 0x43);
+    client_test_fill_root(&finalized_block.state_root, 0x44);
 
-    if (lantern_hash_tree_root_block(&parent_block, &parent_block_root) != SSZ_SUCCESS)
+    if (lantern_hash_tree_root_block(&finalized_block, &finalized_root) != SSZ_SUCCESS)
     {
-        fprintf(stderr, "failed to hash parent block\n");
-        lantern_block_body_reset(&parent_block.body);
+        fprintf(stderr, "failed to hash finalized floor block\n");
+        lantern_block_body_reset(&finalized_block.body);
         lantern_block_body_reset(&anchor_block.body);
         rc = 1;
         goto cleanup;
@@ -1174,25 +1177,43 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
 
     if (lantern_fork_choice_add_block(
             &client.fork_choice,
-            &parent_block,
+            &finalized_block,
             NULL,
-            &client.state.latest_justified,
-            &client.state.latest_finalized,
-            &parent_block_root)
+            NULL,
+            NULL,
+            &finalized_root)
         != 0)
     {
-        fprintf(stderr, "failed to add parent block to fork choice\n");
-        lantern_block_body_reset(&parent_block.body);
+        fprintf(stderr, "failed to add finalized floor block to fork choice\n");
+        lantern_block_body_reset(&finalized_block.body);
         lantern_block_body_reset(&anchor_block.body);
         rc = 1;
         goto cleanup;
     }
-    lantern_block_body_reset(&parent_block.body);
+
+    LanternCheckpoint finalized_checkpoint = {
+        .root = finalized_root,
+        .slot = finalized_slot,
+    };
+    if (lantern_fork_choice_restore_checkpoints(
+            &client.fork_choice,
+            &anchor_checkpoint,
+            &finalized_checkpoint)
+        != 0)
+    {
+        fprintf(stderr, "failed to restore finalized floor checkpoint\n");
+        lantern_block_body_reset(&finalized_block.body);
+        lantern_block_body_reset(&anchor_block.body);
+        rc = 1;
+        goto cleanup;
+    }
+    client.state.latest_justified = anchor_checkpoint;
+    client.state.latest_finalized = finalized_checkpoint;
+    lantern_block_body_reset(&finalized_block.body);
     lantern_block_body_reset(&anchor_block.body);
 
-    memset(&block, 0, sizeof(block));
     lantern_block_body_init(&block.block.body);
-    block.block.slot = 5;
+    block.block.slot = finalized_slot + 1u;
     block.block.proposer_index = 0;
     client_test_fill_root(&parent_root, 0x20);
     if (memcmp(parent_root.bytes, head_root.bytes, LANTERN_ROOT_SIZE) == 0) {
@@ -1258,6 +1279,33 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
     }
     if (parent_requested) {
         fprintf(stderr, "parent_requested flag unexpectedly set after scheduling failure\n");
+        rc = 1;
+        goto cleanup;
+    }
+
+    lantern_client_debug_pending_reset(&client);
+    block.block.slot = finalized_slot;
+    client_test_fill_root(&parent_root, 0x21);
+    block.block.parent_root = parent_root;
+    client_test_fill_root(&block.block.state_root, 0x31);
+    if (lantern_hash_tree_root_block(&block.block, &block_root) != SSZ_SUCCESS) {
+        fprintf(stderr, "failed to hash finalized floor block response\n");
+        rc = 1;
+        goto cleanup;
+    }
+    if (reqresp_handle_block_response(
+            &client,
+            &block,
+            NULL,
+            0u,
+            "12D3KooWparent")
+        == LANTERN_CLIENT_OK) {
+        fprintf(stderr, "reqresp accepted block at finalized floor\n");
+        rc = 1;
+        goto cleanup;
+    }
+    if (lantern_client_pending_block_count(&client) != 0) {
+        fprintf(stderr, "finalized floor block should not enter pending queue\n");
         rc = 1;
         goto cleanup;
     }

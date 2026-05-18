@@ -3358,12 +3358,20 @@ int lantern_state_collect_attestations_for_block(
         checkpoint = post_checkpoint;
         iteration += 1u;
         if (iteration > iteration_guard) {
+            uint64_t store_justified_slot = 0u;
+            if (store->fork_choice) {
+                const LanternCheckpoint *store_justified =
+                    lantern_fork_choice_latest_justified(store->fork_choice);
+                store_justified_slot = store_justified ? store_justified->slot : 0u;
+            }
             lantern_log_warn(
-                "state",
+                "propose",
                 &meta,
-                "attestation collection failed to converge after %zu iterations (payloads=%zu)",
-                iteration,
-                store->known_aggregated_payloads.length);
+                "slot %" PRIu64 ", skipped, reason: fixed_point_not_converged"
+                ", block_justified_slot %" PRIu64 ", store_justified_slot %" PRIu64,
+                block_slot,
+                checkpoint.slot,
+                store_justified_slot);
             rc = -1;
             break;
         }

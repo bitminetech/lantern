@@ -287,6 +287,11 @@ struct lantern_client {
     LanternSyncState sync_state;
     bool sync_in_progress;
     struct lantern_network_view network_view;
+    uint64_t last_status_log_slot;
+    bool has_last_status_log_slot;
+    uint64_t last_duty_skip_slot;
+    bool has_last_duty_skip_slot;
+    const char *last_duty_skip_reason;
     size_t status_requests_inflight_total;
     size_t status_requests_peak;
     bool status_guard_disabled;

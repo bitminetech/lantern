@@ -113,6 +113,7 @@ bool lantern_root_is_zero(const LanternRoot *root);
  * @note Thread safety: This function is thread-safe
  */
 bool lantern_validator_pubkey_is_zero(const uint8_t *pubkey);
+const char *lantern_sync_state_name(LanternSyncState state);
 
 
 /**

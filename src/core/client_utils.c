@@ -599,6 +599,21 @@ bool lantern_client_block_known_locked(
     return true;
 }
 
+const char *lantern_sync_state_name(LanternSyncState state)
+{
+    switch (state)
+    {
+        case LANTERN_SYNC_STATE_IDLE:
+            return "idle";
+        case LANTERN_SYNC_STATE_SYNCING:
+            return "syncing";
+        case LANTERN_SYNC_STATE_SYNCED:
+            return "synced";
+        default:
+            return "unknown";
+    }
+}
+
 
 /* ============================================================================
  * String Utilities

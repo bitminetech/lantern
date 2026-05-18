@@ -11,46 +11,8 @@
 static char g_node_id[96] = {0};
 static pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
 static enum LanternLogLevel g_min_level = LANTERN_LOG_LEVEL_INFO;
-static bool g_color_initialized = false;
-static bool g_color_stdout = false;
-static bool g_color_stderr = false;
 
 static int equals_ignore_case(const char *lhs, const char *rhs);
-
-enum lantern_log_color_mode {
-    LANTERN_LOG_COLOR_AUTO = 0,
-    LANTERN_LOG_COLOR_NEVER,
-    LANTERN_LOG_COLOR_ALWAYS,
-};
-
-static enum lantern_log_color_mode g_color_mode = LANTERN_LOG_COLOR_AUTO;
-
-/* ANSI color codes */
-#define ANSI_RESET "\x1b[0m"
-#define ANSI_DIM "\x1b[2m"
-#define ANSI_GREEN "\x1b[32m"
-#define ANSI_YELLOW "\x1b[33m"
-#define ANSI_CYAN "\x1b[36m"
-#define ANSI_BRIGHT_BLACK "\x1b[90m"
-#define ANSI_BRIGHT_RED "\x1b[91m"
-
-/* Level badge colors and symbols */
-static const char *level_to_color(enum LanternLogLevel level) {
-    switch (level) {
-    case LANTERN_LOG_LEVEL_TRACE:
-        return ANSI_BRIGHT_BLACK;
-    case LANTERN_LOG_LEVEL_DEBUG:
-        return ANSI_CYAN;
-    case LANTERN_LOG_LEVEL_INFO:
-        return ANSI_GREEN;
-    case LANTERN_LOG_LEVEL_WARN:
-        return ANSI_YELLOW;
-    case LANTERN_LOG_LEVEL_ERROR:
-        return ANSI_BRIGHT_RED;
-    default:
-        return ANSI_RESET;
-    }
-}
 
 static const char *level_to_string(enum LanternLogLevel level) {
     switch (level) {
@@ -67,55 +29,6 @@ static const char *level_to_string(enum LanternLogLevel level) {
     default:
         return "INFO";
     }
-}
-
-static enum lantern_log_color_mode parse_color_mode(const char *text)
-{
-    if (!text) {
-        return LANTERN_LOG_COLOR_AUTO;
-    }
-    if (equals_ignore_case(text, "always")) {
-        return LANTERN_LOG_COLOR_ALWAYS;
-    }
-    if (equals_ignore_case(text, "never")) {
-        return LANTERN_LOG_COLOR_NEVER;
-    }
-    if (equals_ignore_case(text, "auto")) {
-        return LANTERN_LOG_COLOR_AUTO;
-    }
-    return LANTERN_LOG_COLOR_AUTO;
-}
-
-static bool detect_terminal(FILE *stream)
-{
-    (void)stream;
-    /* Always enable colors by default - modern terminals and log viewers support ANSI colors */
-    return true;
-}
-
-static void ensure_color_configuration(void)
-{
-    if (g_color_initialized) {
-        return;
-    }
-    const char *env_color = getenv("LANTERN_LOG_COLOR");
-    g_color_mode = parse_color_mode(env_color);
-    switch (g_color_mode) {
-    case LANTERN_LOG_COLOR_ALWAYS:
-        g_color_stdout = true;
-        g_color_stderr = true;
-        break;
-    case LANTERN_LOG_COLOR_NEVER:
-        g_color_stdout = false;
-        g_color_stderr = false;
-        break;
-    case LANTERN_LOG_COLOR_AUTO:
-    default:
-        g_color_stdout = detect_terminal(stdout);
-        g_color_stderr = detect_terminal(stderr);
-        break;
-    }
-    g_color_initialized = true;
 }
 
 void lantern_log_set_node_id(const char *node_id) {
@@ -209,9 +122,8 @@ static void format_timestamp(char buffer[32]) {
         buffer[0] = '\0';
         return;
     }
-    /* Clean format: YYYY-MM-DD HH:MM:SS.mmm */
     int written = snprintf(
-        buffer, 32, "%04d-%02d-%02d %02d:%02d:%02d.%03ld",
+        buffer, 32, "%04d-%02d-%02dT%02d:%02d:%02d.%03ldZ",
         tm_result.tm_year + 1900,
         tm_result.tm_mon + 1,
         tm_result.tm_mday,
@@ -225,6 +137,17 @@ static void format_timestamp(char buffer[32]) {
     }
 }
 
+static void format_component_tag(const char *component, char out[16]) {
+    char lowered[11];
+    const char *text = component && component[0] ? component : "?";
+    size_t i = 0;
+    for (; text[i] && i < sizeof(lowered) - 1u; ++i) {
+        lowered[i] = (char)tolower((unsigned char)text[i]);
+    }
+    lowered[i] = '\0';
+    snprintf(out, 16, "[%s]", lowered);
+}
+
 void lantern_log_log(
     enum LanternLogLevel level,
     const char *component,
@@ -234,6 +157,7 @@ void lantern_log_log(
     if (level < g_min_level) {
         return;
     }
+    (void)metadata;
 
     /* Format the user message */
     char formatted[1024];
@@ -247,106 +171,19 @@ void lantern_log_log(
     char timestamp[32];
     format_timestamp(timestamp);
 
-    ensure_color_configuration();
     FILE *target = level >= LANTERN_LOG_LEVEL_WARN ? stderr : stdout;
-    const bool colorize = (target == stderr) ? g_color_stderr : g_color_stdout;
-
-    /* Build context string with only non-empty fields */
-    char context[256];
-    char *ctx_cursor = context;
-    size_t ctx_remaining = sizeof(context);
-    context[0] = '\0';
-    const char *peer_text = (metadata && metadata->peer && metadata->peer[0]) ? metadata->peer : NULL;
-
-    /* Add slot if present */
-    if (metadata && metadata->has_slot) {
-        int w = snprintf(ctx_cursor, ctx_remaining, "slot=%" PRIu64, metadata->slot);
-        if (w > 0 && (size_t)w < ctx_remaining) {
-            ctx_cursor += w;
-            ctx_remaining -= (size_t)w;
-        }
-    }
-
-    /* Add validator if present */
-    if (metadata && metadata->validator && metadata->validator[0]) {
-        if (ctx_cursor != context) {
-            int w = snprintf(ctx_cursor, ctx_remaining, " ");
-            if (w > 0 && (size_t)w < ctx_remaining) {
-                ctx_cursor += w;
-                ctx_remaining -= (size_t)w;
-            }
-        }
-        int w = snprintf(ctx_cursor, ctx_remaining, "validator=%s", metadata->validator);
-        if (w > 0 && (size_t)w < ctx_remaining) {
-            ctx_cursor += w;
-            ctx_remaining -= (size_t)w;
-        }
-    }
-
-    /* Add peer later to avoid truncating long peer IDs */
-    /*
-     * Output format:
-     * HH:MM:SS.mmm LVL [component] message  context
-     *
-     * With colors:
-     * - Timestamp: dim
-     * - Level: colored based on level
-     * - Component: cyan
-     * - Message: normal (white/default)
-     * - Context: dim
-     */
-
-    static const char kUnknownTimestamp[] = "????" "-??" "-?? ??:??:??.???";
+    char tag[16];
+    format_component_tag(component, tag);
+    static const char kUnknownTimestamp[] = "????" "-??" "-??T??:??:??.???Z";
 
     pthread_mutex_lock(&g_log_mutex);
-    if (colorize) {
-        /* Colored output with selective coloring */
-        fprintf(
-            target,
-            "%s%s%s %s%s%s %s[%s]%s %s",
-            ANSI_DIM, timestamp[0] ? timestamp : kUnknownTimestamp, ANSI_RESET,
-            level_to_color(level), level_to_string(level), ANSI_RESET,
-            ANSI_CYAN, component ? component : "?", ANSI_RESET,
-            formatted);
-
-        /* Add context if present */
-        if (context[0] || peer_text) {
-            fprintf(target, "  %s", ANSI_DIM);
-            if (context[0]) {
-                fprintf(target, "%s", context);
-                if (peer_text) {
-                    fprintf(target, " peer=%s", peer_text);
-                }
-            } else {
-                fprintf(target, "peer=%s", peer_text);
-            }
-            fprintf(target, "%s", ANSI_RESET);
-        }
-        fprintf(target, "\n");
-    } else {
-        /* Plain output without colors */
-        fprintf(
-            target,
-            "%s %s [%s] %s",
-            timestamp[0] ? timestamp : kUnknownTimestamp,
-            level_to_string(level),
-            component ? component : "?",
-            formatted);
-
-        /* Add context if present */
-        if (context[0] || peer_text) {
-            fprintf(target, "  ");
-            if (context[0]) {
-                fprintf(target, "%s", context);
-                if (peer_text) {
-                    fprintf(target, " peer=%s", peer_text);
-                }
-            } else {
-                fprintf(target, "peer=%s", peer_text);
-            }
-        }
-        fprintf(target, "\n");
-    }
+    fprintf(
+        target,
+        "%s  %-5s  %-12s %s\n",
+        timestamp[0] ? timestamp : kUnknownTimestamp,
+        level_to_string(level),
+        tag,
+        formatted);
 
     fflush(target);
     pthread_mutex_unlock(&g_log_mutex);

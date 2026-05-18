@@ -81,10 +81,19 @@ static void persist_post_state_and_indices_locked(
     const struct lantern_log_metadata *meta);
 static void log_imported_block(
     const LanternSignedBlock *block,
+    const LanternRoot *block_root,
     const LanternRoot *head_root,
     uint64_t head_slot,
+    const char *source,
+    uint64_t took_ms,
     const struct lantern_log_metadata *meta,
     bool quiet);
+static void log_import_rejected(
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    const char *source,
+    const char *reason,
+    const struct lantern_log_metadata *meta);
 static bool compute_state_head_root_locked(
     struct lantern_client *client,
     LanternRoot *out_root);
@@ -184,17 +193,35 @@ static void update_network_view_after_import(
         locked = true;
     }
 
+    bool changed = false;
     if (!client->network_view.has_latest_observed_head_slot
         || block_slot > client->network_view.latest_observed_head_slot)
     {
         client->network_view.latest_observed_head_slot = block_slot;
         client->network_view.has_latest_observed_head_slot = true;
+        changed = true;
     }
     if (!client->network_view.has_network_finalized_slot
         || finalized_slot > client->network_view.network_finalized_slot)
     {
         client->network_view.network_finalized_slot = finalized_slot;
         client->network_view.has_network_finalized_slot = true;
+        changed = true;
+    }
+    uint64_t head = client->network_view.latest_observed_head_slot;
+    uint64_t finalized = client->network_view.network_finalized_slot;
+    bool has_head = client->network_view.has_latest_observed_head_slot;
+    bool has_finalized = client->network_view.has_network_finalized_slot;
+    if (changed)
+    {
+        lantern_log_info(
+            "status",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "network_view head %s%" PRIu64 ", finalized %s%" PRIu64,
+            has_head ? "" : "-",
+            has_head ? head : 0u,
+            has_finalized ? "" : "-",
+            has_finalized ? finalized : 0u);
     }
 
     if (locked)
@@ -385,7 +412,7 @@ int lantern_client_commit_and_publish_local_block(
     lantern_state_init(post_state);
     get_head_info_locked(client, &head_root, &head_slot);
     committed = true;
-    log_imported_block(block, &head_root, head_slot, &meta, false);
+    log_imported_block(block, block_root, &head_root, head_slot, "local", 0u, &meta, false);
     lantern_client_unlock_state(client, state_locked);
     state_locked = false;
 
@@ -2284,13 +2311,16 @@ static bool add_competing_fork_block_locked(
     lantern_client_cache_block_aggregated_proofs_locked(client, block);
 
     char block_hex[ROOT_HEX_BUFFER_LEN];
+    char parent_hex[ROOT_HEX_BUFFER_LEN];
     format_root_hex(block_root, block_hex, sizeof(block_hex));
+    format_root_hex(&block->block.parent_root, parent_hex, sizeof(parent_hex));
     lantern_log_info(
-        "forkchoice",
+        "import",
         meta,
-        "added competing fork block to fork choice slot=%" PRIu64 " root=%s",
+        "slot %" PRIu64 ", %s, accepted off-head, parent %s, reason: known_off_current_head",
         block->block.slot,
-        block_hex[0] ? block_hex : "0x0");
+        block_hex[0] ? block_hex : "0x0",
+        parent_hex[0] ? parent_hex : "0x0");
     return true;
 }
 
@@ -2518,25 +2548,25 @@ static void get_head_info_locked(
 
 static bool historical_import_floor_slot_locked(
     struct lantern_client *client,
-    uint64_t *out_anchor_slot)
+    uint64_t *out_finalized_slot)
 {
-    if (out_anchor_slot)
+    if (out_finalized_slot)
     {
-        *out_anchor_slot = 0;
+        *out_finalized_slot = 0;
     }
-    if (!client || !out_anchor_slot || !client->has_fork_choice)
-    {
-        return false;
-    }
-
-    uint64_t anchor_slot = 0;
-    if (lantern_fork_choice_anchor_slot(&client->fork_choice, &anchor_slot) != 0
-        || anchor_slot == 0)
+    if (!client || !out_finalized_slot || !client->has_fork_choice)
     {
         return false;
     }
 
-    *out_anchor_slot = anchor_slot;
+    const LanternCheckpoint *latest_finalized =
+        lantern_fork_choice_latest_finalized(&client->fork_choice);
+    if (!latest_finalized)
+    {
+        return false;
+    }
+
+    *out_finalized_slot = latest_finalized->slot;
     return true;
 }
 
@@ -2815,38 +2845,63 @@ static void persist_post_state_and_indices_locked(
  */
 static void log_imported_block(
     const LanternSignedBlock *block,
+    const LanternRoot *block_root,
     const LanternRoot *head_root,
     uint64_t head_slot,
+    const char *source,
+    uint64_t took_ms,
     const struct lantern_log_metadata *meta,
     bool quiet)
 {
-    if (!block || !head_root)
+    (void)quiet;
+    if (!block || !block_root || !head_root)
     {
         return;
     }
 
+    char block_hex[ROOT_HEX_BUFFER_LEN];
+    char parent_hex[ROOT_HEX_BUFFER_LEN];
     char head_hex[ROOT_HEX_BUFFER_LEN];
+    format_root_hex(block_root, block_hex, sizeof(block_hex));
+    format_root_hex(&block->block.parent_root, parent_hex, sizeof(parent_hex));
     format_root_hex(head_root, head_hex, sizeof(head_hex));
-    if (quiet)
+    lantern_log_info(
+        "import",
+        meta,
+        "slot %" PRIu64 ", %s, via %s, parent %s, head %" PRIu64 " %s, took_ms %" PRIu64,
+        block->block.slot,
+        block_hex[0] ? block_hex : "0x0",
+        source && source[0] ? source : "unknown",
+        parent_hex[0] ? parent_hex : "0x0",
+        head_slot,
+        head_hex[0] ? head_hex : "0x0",
+        took_ms);
+}
+
+static void log_import_rejected(
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    const char *source,
+    const char *reason,
+    const struct lantern_log_metadata *meta)
+{
+    if (!block)
     {
-        lantern_log_debug(
-            "state",
-            meta,
-            "imported block slot=%" PRIu64 " new_head_slot=%" PRIu64 " head_root=%s",
-            block->block.slot,
-            head_slot,
-            head_hex[0] ? head_hex : "0x0");
+        return;
     }
-    else
-    {
-        lantern_log_info(
-            "state",
-            meta,
-            "imported block slot=%" PRIu64 " new_head_slot=%" PRIu64 " head_root=%s",
-            block->block.slot,
-            head_slot,
-            head_hex[0] ? head_hex : "0x0");
-    }
+    char block_hex[ROOT_HEX_BUFFER_LEN];
+    char parent_hex[ROOT_HEX_BUFFER_LEN];
+    format_root_hex(block_root, block_hex, sizeof(block_hex));
+    format_root_hex(&block->block.parent_root, parent_hex, sizeof(parent_hex));
+    lantern_log_warn(
+        "import",
+        meta,
+        "slot %" PRIu64 ", %s, rejected, reason: %s, via %s, parent %s",
+        block->block.slot,
+        block_hex[0] ? block_hex : "0x0",
+        reason && reason[0] ? reason : "unknown",
+        source && source[0] ? source : "unknown",
+        parent_hex[0] ? parent_hex : "0x0");
 }
 
 
@@ -2912,6 +2967,9 @@ static bool lantern_client_import_block_internal(
 
     bool imported = false;
     bool children_ready = false;
+    uint64_t import_started_ms = monotonic_millis();
+    const char *import_source =
+        allow_historical ? "backfill" : ((meta && meta->peer) ? "gossip" : "local");
     bool state_locked = lantern_client_lock_state(client);
     if (!state_locked)
     {
@@ -2946,16 +3004,18 @@ static bool lantern_client_import_block_internal(
         lantern_log_debug(
             "state",
             meta,
-            "dropping pre-anchor historical block slot=%" PRIu64 " root=%s anchor_slot=%" PRIu64,
+            "dropping finalized historical block slot=%" PRIu64 " root=%s finalized_slot=%" PRIu64,
             block->block.slot,
             block_hex[0] ? block_hex : "0x0",
             historical_floor_slot);
+        log_import_rejected(block, &block_root_local, import_source, "pre_finalized", meta);
         lantern_client_unlock_state(client, state_locked);
         lantern_client_pending_remove_branch_by_root(client, &block_root_local);
         return false;
     }
     if (root_known && allow_historical && block->block.slot <= known_slot)
     {
+        log_import_rejected(block, &block_root_local, import_source, "duplicate", meta);
         lantern_client_unlock_state(client, state_locked);
         persist_block_after_import(client, block, meta);
         if (drain_pending_children)
@@ -2980,6 +3040,7 @@ static bool lantern_client_import_block_internal(
             known_slot,
             meta))
     {
+        log_import_rejected(block, &block_root_local, import_source, "duplicate", meta);
         goto cleanup;
     }
 
@@ -3008,6 +3069,7 @@ static bool lantern_client_import_block_internal(
             block->block.slot,
             root_hex[0] ? root_hex : "0x0",
             backfill_depth);
+        log_import_rejected(block, &block_root_local, import_source, "vote_constraints_failed", meta);
         goto cleanup;
     }
 
@@ -3066,6 +3128,7 @@ static bool lantern_client_import_block_internal(
                     meta,
                     "off-head state transition failed for slot=%" PRIu64,
                     block->block.slot);
+                log_import_rejected(block, &block_root_local, import_source, "state_transition_failed", meta);
             }
             lantern_store_reset(&replay_store);
         }
@@ -3220,6 +3283,7 @@ static bool lantern_client_import_block_internal(
     uint64_t imported_finalized_slot = 0u;
     if (!apply_state_transition_locked(client, block, meta))
     {
+        log_import_rejected(block, &block_root_local, import_source, "state_transition_failed", meta);
         persist_invalid_block_on_state_transition_failure(
             client,
             block,
@@ -3281,7 +3345,18 @@ cleanup:
         {
             children_ready = true;
         }
-        log_imported_block(block, &head_root, head_slot, meta, quiet_log);
+        uint64_t import_finished_ms = monotonic_millis();
+        uint64_t took_ms =
+            import_finished_ms >= import_started_ms ? import_finished_ms - import_started_ms : 0u;
+        log_imported_block(
+            block,
+            &block_root_local,
+            &head_root,
+            head_slot,
+            import_source,
+            took_ms,
+            meta,
+            quiet_log);
         update_sync_progress_after_block(client);
         lantern_client_replay_pending_gossip_votes(client);
     }

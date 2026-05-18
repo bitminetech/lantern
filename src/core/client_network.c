@@ -243,7 +243,7 @@ void connection_counter_update(
     if (total == 0 && client->status_lock_initialized
         && pthread_mutex_lock(&client->status_lock) == 0)
     {
-        client->sync_state = LANTERN_SYNC_STATE_IDLE;
+        lantern_client_set_sync_state_logged(client, LANTERN_SYNC_STATE_IDLE, "no peers");
         pthread_mutex_unlock(&client->status_lock);
     }
     lantern_log_trace(
