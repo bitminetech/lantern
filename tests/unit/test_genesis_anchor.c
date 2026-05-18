@@ -590,7 +590,7 @@ fail:
     return 1;
 }
 
-static int test_pre_anchor_historical_block_is_dropped(void)
+static int test_pre_anchor_post_finalized_block_is_queued(void)
 {
     struct lantern_client client;
     memset(&client, 0, sizeof(client));
@@ -679,12 +679,13 @@ static int test_pre_anchor_historical_block_is_dropped(void)
         fprintf(stderr, "pre-anchor historical block should not import\n");
         goto cleanup;
     }
-    if (client.pending_blocks.length != 0)
+    if (client.pending_blocks.length != 1u)
     {
-        fprintf(stderr, "pre-anchor historical block should not be queued pending\n");
+        fprintf(stderr, "pre-anchor post-finalized block should be queued pending\n");
         goto cleanup;
     }
 
+    pending_block_list_reset(&client.pending_blocks);
     lantern_fork_choice_reset(&client.fork_choice);
     lantern_store_reset(&client.store);
     lantern_state_reset(&client.state);
@@ -693,6 +694,7 @@ static int test_pre_anchor_historical_block_is_dropped(void)
     return 0;
 
 cleanup:
+    pending_block_list_reset(&client.pending_blocks);
     lantern_fork_choice_reset(&client.fork_choice);
     lantern_store_reset(&client.store);
     lantern_state_reset(&client.state);
@@ -824,13 +826,13 @@ static int test_checkpoint_sync_anchor_checkpoint_restores(void)
         fprintf(stderr, "missing fork-choice checkpoints for checkpoint anchor restore regression\n");
         goto cleanup;
     }
-    if (store_justified->slot != expected_anchor_header.slot
+    if (store_justified->slot != remote_justified.slot
         || !roots_equal(&store_justified->root, &expected_anchor_root))
     {
         fprintf(stderr, "checkpoint anchor restore regression justified checkpoint mismatch\n");
         goto cleanup;
     }
-    if (store_finalized->slot != expected_anchor_header.slot
+    if (store_finalized->slot != remote_finalized.slot
         || !roots_equal(&store_finalized->root, &expected_anchor_root))
     {
         fprintf(stderr, "checkpoint anchor restore regression finalized checkpoint mismatch\n");
@@ -1209,24 +1211,24 @@ int main(void)
         lantern_fork_choice_reset(&client.fork_choice);
         return 1;
     }
-    if (store_justified->slot != client.state.latest_block_header.slot
+    if (store_justified->slot != expected_justified.slot
         || !roots_equal(&store_justified->root, &expected_restart_anchor_root))
     {
         fprintf(stderr,
-            "justified checkpoint should use the anchor root and slot "
+            "justified checkpoint should use the anchor root and persisted slot "
             "(got slot=%" PRIu64 " expected slot=%" PRIu64 ")\n",
-            store_justified->slot, client.state.latest_block_header.slot);
+            store_justified->slot, expected_justified.slot);
         lantern_state_reset(&client.state);
         lantern_fork_choice_reset(&client.fork_choice);
         return 1;
     }
-    if (store_finalized->slot != client.state.latest_block_header.slot
+    if (store_finalized->slot != expected_finalized.slot
         || !roots_equal(&store_finalized->root, &expected_restart_anchor_root))
     {
         fprintf(stderr,
-            "finalized checkpoint should use the anchor root and slot "
+            "finalized checkpoint should use the anchor root and persisted slot "
             "(got slot=%" PRIu64 " expected slot=%" PRIu64 ")\n",
-            store_finalized->slot, client.state.latest_block_header.slot);
+            store_finalized->slot, expected_finalized.slot);
         lantern_state_reset(&client.state);
         lantern_fork_choice_reset(&client.fork_choice);
         return 1;
@@ -1250,7 +1252,7 @@ int main(void)
         lantern_fork_choice_reset(&client.fork_choice);
         return 1;
     }
-    if (test_pre_anchor_historical_block_is_dropped() != 0)
+    if (test_pre_anchor_post_finalized_block_is_queued() != 0)
     {
         lantern_state_reset(&client.state);
         lantern_fork_choice_reset(&client.fork_choice);

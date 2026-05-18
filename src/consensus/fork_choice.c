@@ -690,8 +690,8 @@ int lantern_fork_choice_set_anchor_with_state(
         .root = root,
         .slot = anchor_block->slot,
     };
-    store->latest_justified = anchor_checkpoint;
-    store->latest_finalized = anchor_checkpoint;
+    store->latest_justified = latest_justified ? *latest_justified : anchor_checkpoint;
+    store->latest_finalized = latest_finalized ? *latest_finalized : anchor_checkpoint;
     store->head = root;
     store->has_head = true;
     store->safe_target = root;
