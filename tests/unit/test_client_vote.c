@@ -998,7 +998,9 @@ cleanup:
         char cleanup_cmd[320];
         int written = snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf %s", client.data_dir);
         if (written > 0 && (size_t)written < sizeof(cleanup_cmd)) {
-            (void)system(cleanup_cmd);
+            if (system(cleanup_cmd) == -1) {
+                fprintf(stderr, "failed to remove temp data dir %s\n", client.data_dir);
+            }
         }
         client.data_dir = NULL;
     }

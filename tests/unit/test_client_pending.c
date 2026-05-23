@@ -122,7 +122,9 @@ static void teardown_block_signature_fixture(struct block_signature_fixture *fix
         char cleanup_cmd[TEST_TEMP_PATH_CAPACITY + 16];
         int written = snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf %s", fixture->client.data_dir);
         if (written > 0 && (size_t)written < sizeof(cleanup_cmd)) {
-            (void)system(cleanup_cmd);
+            if (system(cleanup_cmd) == -1) {
+                fprintf(stderr, "failed to remove temp data dir %s\n", fixture->client.data_dir);
+            }
         }
     }
     fixture->client.data_dir = NULL;
