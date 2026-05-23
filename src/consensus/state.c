@@ -409,7 +409,7 @@ static int lantern_state_validate_block_attestation_data_uniqueness(const Lanter
 
     for (size_t i = 0; i < attestations->length; ++i) {
         LanternRoot data_root;
-        if (lantern_hash_tree_root_attestation_data(&attestations->data[i].data, &data_root) != 0) {
+        if (lantern_hash_tree_root_attestation_data(&attestations->data[i].data, &data_root) != SSZ_SUCCESS) {
             lantern_log_warn(
                 "state",
                 &meta,
@@ -590,7 +590,7 @@ static int lantern_state_verify_block_signatures(
         }
 
         if (rc == 0
-            && lantern_hash_tree_root_attestation_data(&attestation->data, &jobs[i].message) != 0) {
+            && lantern_hash_tree_root_attestation_data(&attestation->data, &jobs[i].message) != SSZ_SUCCESS) {
             lantern_log_warn(
                 "state",
                 &meta,
@@ -632,7 +632,7 @@ static int lantern_state_verify_block_signatures(
     }
 
     LanternRoot proposer_root;
-    if (lantern_hash_tree_root_block(block, &proposer_root) != 0) {
+    if (lantern_hash_tree_root_block(block, &proposer_root) != SSZ_SUCCESS) {
         lantern_log_warn("state", &meta, "failed to hash block for proposer signature");
         return -1;
     }
@@ -746,6 +746,9 @@ static int collect_attestations_for_checkpoint(
             continue;
         }
         if (!lantern_checkpoint_equal(&data.source, checkpoint)) {
+            continue;
+        }
+        if (data.target.slot <= data.source.slot) {
             continue;
         }
         if (lantern_root_list_contains(processed_data_roots, &entry->data_root)) {
@@ -1305,7 +1308,7 @@ lantern_state_aggregate_result lantern_state_aggregate(
             }
 
             LanternRoot data_root;
-            if (lantern_hash_tree_root_attestation_data(&raw_attestations->data[i].data, &data_root) != 0) {
+            if (lantern_hash_tree_root_attestation_data(&raw_attestations->data[i].data, &data_root) != SSZ_SUCCESS) {
                 rc = LANTERN_STATE_AGGREGATE_VALIDATOR;
                 break;
             }
@@ -2324,6 +2327,7 @@ void lantern_state_reset(LanternState *state) {
     if (!state) {
         return;
     }
+    lantern_state_hash_cache_reset(state);
     lantern_root_list_reset(&state->historical_block_hashes);
     lantern_bitlist_reset(&state->justified_slots);
     lantern_root_list_reset(&state->justification_roots);
@@ -2361,7 +2365,7 @@ int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, u
     LanternBlockBody empty_body;
     lantern_block_body_init(&empty_body);
     LanternRoot body_root;
-    if (lantern_hash_tree_root_block_body(&empty_body, &body_root) != 0) {
+    if (lantern_hash_tree_root_block_body(&empty_body, &body_root) != SSZ_SUCCESS) {
         lantern_block_body_reset(&empty_body);
         lantern_state_reset(state);
         return -1;
@@ -2383,7 +2387,7 @@ int lantern_state_process_slot(LanternState *state) {
     }
     if (lantern_root_is_zero(&state->latest_block_header.state_root)) {
         LanternRoot computed;
-        if (lantern_hash_tree_root_state(state, &computed) != 0) {
+        if (lantern_hash_tree_root_state_cached(state, &computed) != SSZ_SUCCESS) {
             return -1;
         }
         state->latest_block_header.state_root = computed;
@@ -2495,7 +2499,7 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
     }
 
     LanternRoot latest_header_root;
-    if (lantern_hash_tree_root_block_header(&state->latest_block_header, &latest_header_root) != 0) {
+    if (lantern_hash_tree_root_block_header(&state->latest_block_header, &latest_header_root) != SSZ_SUCCESS) {
         return -1;
     }
     if (memcmp(block->parent_root.bytes, latest_header_root.bytes, LANTERN_ROOT_SIZE) != 0) {
@@ -2557,7 +2561,7 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
     }
 
     LanternRoot body_root;
-    if (lantern_hash_tree_root_block_body(&block->body, &body_root) != 0) {
+    if (lantern_hash_tree_root_block_body(&block->body, &body_root) != SSZ_SUCCESS) {
         return -1;
     }
     state->latest_block_header.slot = block->slot;
@@ -3078,7 +3082,7 @@ int lantern_state_transition(LanternState *state, LanternStore *store, const Lan
         STATE_FAIL("process block failed");
     }
     LanternRoot computed_state_root;
-    bool hashed_state = lantern_hash_tree_root_state(state, &computed_state_root) == 0;
+    bool hashed_state = lantern_hash_tree_root_state_cached(state, &computed_state_root) == SSZ_SUCCESS;
     if (hashed_state) {
         if (memcmp(block->state_root.bytes, computed_state_root.bytes, LANTERN_ROOT_SIZE) != 0) {
             char expected_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
@@ -3206,7 +3210,7 @@ int lantern_state_select_block_parent(
     }
 
     LanternRoot header_root;
-    if (lantern_hash_tree_root_block_header(&state->latest_block_header, &header_root) != 0) {
+    if (lantern_hash_tree_root_block_header(&state->latest_block_header, &header_root) != SSZ_SUCCESS) {
         return -1;
     }
 
@@ -3337,12 +3341,20 @@ int lantern_state_collect_attestations_for_block(
         checkpoint = post_checkpoint;
         iteration += 1u;
         if (iteration > iteration_guard) {
+            uint64_t store_justified_slot = 0u;
+            if (store->fork_choice) {
+                const LanternCheckpoint *store_justified =
+                    lantern_fork_choice_latest_justified(store->fork_choice);
+                store_justified_slot = store_justified ? store_justified->slot : 0u;
+            }
             lantern_log_warn(
-                "state",
+                "propose",
                 &meta,
-                "attestation collection failed to converge after %zu iterations (payloads=%zu)",
-                iteration,
-                store->known_aggregated_payloads.length);
+                "slot %" PRIu64 ", skipped, reason: fixed_point_not_converged"
+                ", block_justified_slot %" PRIu64 ", store_justified_slot %" PRIu64,
+                block_slot,
+                checkpoint.slot,
+                store_justified_slot);
             rc = -1;
             break;
         }
@@ -3399,7 +3411,7 @@ int lantern_state_compute_post_state(
         rc = -1;
         goto cleanup;
     }
-    if (out_state_root && lantern_hash_tree_root_state(&scratch, out_state_root) != 0) {
+    if (out_state_root && lantern_hash_tree_root_state_cached(&scratch, out_state_root) != SSZ_SUCCESS) {
         rc = -1;
         goto cleanup;
     }
@@ -3467,9 +3479,12 @@ int lantern_state_compute_vote_checkpoints(
     if (lantern_fork_choice_block_info(fork_choice, &head_root, &head_slot, NULL, NULL) != 0) {
         return -1;
     }
+    const LanternCheckpoint *store_latest_justified =
+        lantern_fork_choice_latest_justified(fork_choice);
     const LanternCheckpoint *store_latest_finalized =
         lantern_fork_choice_latest_finalized(fork_choice);
-    LanternCheckpoint source_checkpoint = base_state->latest_justified;
+    LanternCheckpoint source_checkpoint =
+        store_latest_justified ? *store_latest_justified : base_state->latest_justified;
     LanternCheckpoint finalized_checkpoint = base_state->latest_finalized;
     /* At genesis latest_justified.root is a placeholder zero root. */
     if (head_slot == 0u && base_state->latest_block_header.slot == 0u) {
@@ -3542,11 +3557,11 @@ int lantern_state_compute_vote_checkpoints(
                     parent_slot,
                     target_hex[0] ? target_hex : "0x0",
                     parent_hex[0] ? parent_hex : "0x0");
+            }
+            target_root = parent_root;
+            target_slot = parent_slot;
         }
-        target_root = parent_root;
-        target_slot = parent_slot;
     }
-}
 
     bool justifiable_slot_found = true;
     while (!lantern_slot_is_justifiable(target_slot, finalized_checkpoint.slot)) {

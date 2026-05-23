@@ -483,6 +483,24 @@ int reqresp_collect_blocks(
     size_t root_count,
     LanternSignedBlockList *out_blocks);
 
+int reqresp_handle_block_response(
+    void *context,
+    const LanternSignedBlock *block,
+    const uint8_t *raw_block_ssz,
+    size_t raw_block_ssz_len,
+    const char *peer_id);
+
+void reqresp_blocks_request_complete(
+    void *context,
+    const char *peer_id,
+    const LanternRoot *roots,
+    size_t root_count,
+    uint64_t request_id,
+    int success);
+
+lantern_client_error lantern_client_block_importer_start(struct lantern_client *client);
+void lantern_client_block_importer_stop(struct lantern_client *client);
+
 
 /**
  * Handle completion of a blocks request.
@@ -573,7 +591,7 @@ bool lantern_client_import_block(
  */
 int lantern_reqresp_read_response_chunk(
     struct lantern_reqresp_service *service,
-    libp2p_stream_t *stream,
+    struct lantern_reqresp_stream *stream,
     enum lantern_reqresp_protocol_kind protocol,
     uint8_t **out_data,
     size_t *out_len,
@@ -624,7 +642,7 @@ int lantern_client_schedule_blocks_request_batch(
  * @note Thread safety: This function is thread-safe
  */
 int stream_write_all(
-    libp2p_stream_t *stream,
+    struct lantern_reqresp_stream *stream,
     const uint8_t *data,
     size_t length,
     ssize_t *out_err);

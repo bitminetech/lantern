@@ -10,6 +10,7 @@
 typedef struct lantern_store LanternStore;
 struct lantern_attestation_signature_map;
 struct lantern_aggregated_payload_pool;
+struct lantern_state_hash_cache;
 
 typedef struct {
     const LanternAttestations *attestations;
@@ -43,6 +44,7 @@ typedef struct {
     LanternValidator *validators;
     size_t validator_count;
     size_t validator_capacity;
+    struct lantern_state_hash_cache *hash_cache;
 } LanternState;
 
 void lantern_root_list_init(struct lantern_root_list *list);

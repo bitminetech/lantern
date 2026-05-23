@@ -5,7 +5,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "WjCryptLib_Sha256.h"
+#include <openssl/sha.h>
+
 #include "lantern/encoding/snappy.h"
 
 const uint8_t LANTERN_GOSSIP_DOMAIN_INVALID[LANTERN_GOSSIP_DOMAIN_SIZE] = {0x00, 0x00, 0x00, 0x00};
@@ -264,19 +265,29 @@ int lantern_gossip_compute_message_id(
         }
     }
 
-    Sha256Context ctx;
-    Sha256Initialise(&ctx);
-    Sha256Update(&ctx, domain, LANTERN_GOSSIP_DOMAIN_SIZE);
+    SHA256_CTX ctx;
+    if (SHA256_Init(&ctx) != 1) {
+        return -1;
+    }
+    if (SHA256_Update(&ctx, domain, LANTERN_GOSSIP_DOMAIN_SIZE) != 1) {
+        return -1;
+    }
 
     uint8_t topic_len_encoded[8];
     write_u64_le((uint64_t)topic_len, topic_len_encoded);
-    Sha256Update(&ctx, topic_len_encoded, sizeof(topic_len_encoded));
-    Sha256Update(&ctx, topic, topic_len);
-    if (data_len > 0 && data_for_hash) {
-        Sha256Update(&ctx, data_for_hash, data_len);
+    if (SHA256_Update(&ctx, topic_len_encoded, sizeof(topic_len_encoded)) != 1) {
+        return -1;
     }
-    SHA256_HASH digest;
-    Sha256Finalise(&ctx, &digest);
-    memcpy(message_id->bytes, digest.bytes, LANTERN_GOSSIP_MESSAGE_ID_SIZE);
+    if (topic_len > 0 && SHA256_Update(&ctx, topic, topic_len) != 1) {
+        return -1;
+    }
+    if (data_len > 0 && data_for_hash && SHA256_Update(&ctx, data_for_hash, data_len) != 1) {
+        return -1;
+    }
+    uint8_t digest[SHA256_DIGEST_LENGTH];
+    if (SHA256_Final(digest, &ctx) != 1) {
+        return -1;
+    }
+    memcpy(message_id->bytes, digest, LANTERN_GOSSIP_MESSAGE_ID_SIZE);
     return 0;
 }

@@ -33,8 +33,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=apt-cache-${TARGE
         python3-pip \
         curl \
         ccache \
-        libtommath-dev \
-        libssl-dev \
         zlib1g-dev
 
 # Install latest Rust toolchain via rustup
@@ -69,23 +67,14 @@ RUN --mount=type=cache,target=/root/.cargo/registry,sharing=locked,id=cargo-regi
     && cargo build --release --locked \
     && find target/release -name '*.a' -exec ranlib {} \;
 
-RUN --mount=type=cache,target=/root/.ccache,sharing=locked,id=ccache-${TARGETPLATFORM} \
-    cmake -S external/c-libp2p/external/libtommath -B deps/libtommath -DBUILD_SHARED_LIBS=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-    && cmake --build deps/libtommath --parallel "$(nproc)" \
-    && cmake --install deps/libtommath
-
-RUN --mount=type=cache,target=/root/.ccache,sharing=locked,id=ccache-${TARGETPLATFORM} \
-    cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DLANTERN_GIT_COMMIT="${GIT_COMMIT}" -DLANTERN_GIT_BRANCH="${GIT_BRANCH}"
-
 ARG LANTERN_FORCE_REBUILD=0
-RUN echo "LANTERN_FORCE_REBUILD=${LANTERN_FORCE_REBUILD}"
 RUN --mount=type=cache,target=/root/.ccache,sharing=locked,id=ccache-${TARGETPLATFORM} \
-    cmake --build build --target lantern_cli --parallel "$(nproc)"
-
-RUN --mount=type=cache,target=/root/.ccache,sharing=locked,id=ccache-${TARGETPLATFORM} \
-    cmake --build build --target lantern_client_test --parallel "$(nproc)" || true
-
-RUN mkdir -p /opt/lantern/bin \
+    --mount=type=cache,target=/usr/src/lantern/build,sharing=locked,id=lantern-build-${TARGETPLATFORM} \
+    echo "LANTERN_FORCE_REBUILD=${LANTERN_FORCE_REBUILD}" \
+    && cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DLANTERN_GIT_COMMIT="${GIT_COMMIT}" -DLANTERN_GIT_BRANCH="${GIT_BRANCH}" \
+    && cmake --build build --target lantern_cli --parallel "$(nproc)" \
+    && (cmake --build build --target lantern_client_test --parallel "$(nproc)" || true) \
+    && mkdir -p /opt/lantern/bin \
     && cp build/lantern_cli /opt/lantern/bin/lantern \
     && mkdir -p /opt/lantern/lib \
     && find build -maxdepth 2 -type f -name "*.so*" -exec cp {} /opt/lantern/lib/ \; \

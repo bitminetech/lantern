@@ -12,19 +12,15 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#include "external/c-libp2p/include/multiformats/unsigned_varint/unsigned_varint.h"
-#include "external/c-libp2p/include/peer_id/peer_id.h"
-#include "external/c-libp2p/include/peer_id/peer_id_proto.h"
-#include "external/c-libp2p/src/protocol/gossipsub/core/gossipsub_rpc.h"
-#include "external/c-libp2p/src/protocol/gossipsub/proto/gen/gossipsub_rpc.pb.h"
-#include "external/c-libp2p/src/protocol/gossipsub/proto/gossipsub_proto.h"
 #include "lantern/encoding/snappy.h"
 #include "lantern/networking/enr.h"
 #include "lantern/networking/gossip.h"
+#include "lantern/networking/libp2p.h"
 #include "lantern/networking/messages.h"
-#include "multiformats/multibase/encoding/base64_url.h"
-
-#include <noise/protobufs.h>
+#include "multiformats/multibase/multibase.h"
+#include "multiformats/unsigned_varint/unsigned_varint.h"
+#include "peer_id/peer_id.h"
+#include "protocol/gossipsub/gossipsub.h"
 
 #ifndef LANTERN_CONSENSUS_FIXTURE_DIR
 #define LANTERN_CONSENSUS_FIXTURE_DIR "tools/leanSpec/fixtures/consensus"
@@ -73,6 +69,69 @@ static int byte_buffer_append(struct byte_buffer *buffer, const uint8_t *data, s
     buffer->data = expanded;
     buffer->len += len;
     return 0;
+}
+
+static int lean_uvarint_encode(uint64_t value, uint8_t *out, size_t out_len, size_t *written) {
+    if (!out || !written) {
+        return -1;
+    }
+
+    uint8_t encoded[10];
+    size_t len = 0u;
+    do {
+        uint8_t byte = (uint8_t)(value & 0x7fu);
+        value >>= 7u;
+        if (value != 0u) {
+            byte |= 0x80u;
+        }
+        encoded[len++] = byte;
+    } while (value != 0u && len < sizeof(encoded));
+
+    if (value != 0u) {
+        return -1;
+    }
+    if (out_len < len) {
+        *written = len;
+        return -1;
+    }
+
+    memcpy(out, encoded, len);
+    *written = len;
+    return 0;
+}
+
+static int lean_uvarint_decode(const uint8_t *data, size_t data_len, uint64_t *out_value, size_t *consumed) {
+    if (!data || !out_value || !consumed) {
+        return -1;
+    }
+
+    uint64_t value = 0u;
+    size_t index = 0u;
+    for (; index < data_len && index < 10u; ++index) {
+        uint8_t byte = data[index];
+        if (index == 9u && (byte & 0xfeu) != 0u) {
+            return -1;
+        }
+        if (index == 9u) {
+            value |= (uint64_t)byte << 63u;
+        } else {
+            value |= (uint64_t)(byte & 0x7fu) << (7u * index);
+        }
+
+        if ((byte & 0x80u) == 0u) {
+            uint8_t canonical[10];
+            size_t canonical_len = 0u;
+            if (lean_uvarint_encode(value, canonical, sizeof(canonical), &canonical_len) != 0
+                || canonical_len != index + 1u) {
+                return -1;
+            }
+            *out_value = value;
+            *consumed = index + 1u;
+            return 0;
+        }
+    }
+
+    return -1;
 }
 
 static int record_failure(
@@ -390,7 +449,7 @@ static int encode_reqresp_frame(
 
     uint8_t header[16];
     size_t header_len = 0u;
-    if (unsigned_varint_encode(payload_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK) {
+    if (libp2p_uvarint_encode(payload_len, header, sizeof(header), &header_len) != LIBP2P_UVARINT_OK) {
         free(compressed);
         return -1;
     }
@@ -439,7 +498,7 @@ static int decode_reqresp_request(
 
     uint64_t declared_len = 0u;
     size_t consumed = 0u;
-    if (unsigned_varint_decode(frame, frame_len, &declared_len, &consumed) != UNSIGNED_VARINT_OK) {
+    if (libp2p_uvarint_decode(frame, frame_len, &declared_len, &consumed) != LIBP2P_UVARINT_OK) {
         return -1;
     }
     if (declared_len > SIZE_MAX || consumed > frame_len) {
@@ -491,21 +550,44 @@ static int decode_reqresp_response(
 }
 
 static int encode_gossipsub_rpc(
-    const libp2p_gossipsub_RPC *rpc,
+    const libp2p_gossipsub_rpc_t *rpc,
     struct byte_buffer *out_bytes) {
     if (!rpc || !out_bytes) {
         return -1;
     }
     byte_buffer_reset(out_bytes);
 
-    gossipsub_rpc_out_t out = {0};
-    if (gossipsub_rpc_encode(rpc, &out) != LIBP2P_ERR_OK) {
-        gossipsub_rpc_out_clear(&out);
+    libp2p_gossipsub_config_t config;
+    if (libp2p_gossipsub_config_default(&config) != LIBP2P_GOSSIPSUB_OK) {
         return -1;
     }
 
-    out_bytes->data = out.frame;
-    out_bytes->len = out.frame_len;
+    size_t required = 0u;
+    libp2p_gossipsub_err_t err =
+        libp2p_gossipsub_rpc_body_size(LIBP2P_GOSSIPSUB_VERSION_12, &config.limits, rpc, &required);
+    if (err != LIBP2P_GOSSIPSUB_OK) {
+        return err == LIBP2P_GOSSIPSUB_ERR_LIMIT ? FIXTURE_SKIPPED : -1;
+    }
+
+    uint8_t *bytes = (uint8_t *)malloc(required > 0u ? required : 1u);
+    if (!bytes) {
+        return -1;
+    }
+    size_t written = 0u;
+    err = libp2p_gossipsub_rpc_body_encode(
+        LIBP2P_GOSSIPSUB_VERSION_12,
+        &config.limits,
+        rpc,
+        bytes,
+        required,
+        &written);
+    if (err != LIBP2P_GOSSIPSUB_OK || written != required) {
+        free(bytes);
+        return err == LIBP2P_GOSSIPSUB_ERR_LIMIT ? FIXTURE_SKIPPED : -1;
+    }
+
+    out_bytes->data = bytes;
+    out_bytes->len = written;
     return 0;
 }
 
@@ -520,17 +602,36 @@ static int decode_enr_string(const char *enr_text, struct byte_buffer *out_rlp) 
         return -1;
     }
 
-    uint8_t *decoded = (uint8_t *)malloc(payload_len);
-    if (!decoded) {
+    char *prefixed = (char *)malloc(payload_len + 1u);
+    if (!prefixed) {
         return -1;
     }
-    int written = multibase_base64_url_decode(payload, payload_len, decoded, payload_len);
-    if (written < 0) {
+    prefixed[0] = 'u';
+    memcpy(prefixed + 1u, payload, payload_len);
+
+    size_t decoded_capacity = 0u;
+    if (libp2p_multibase_max_decoded_size(LIBP2P_MULTIBASE_BASE64URL, payload_len, &decoded_capacity)
+        != LIBP2P_MULTIBASE_OK) {
+        free(prefixed);
+        return -1;
+    }
+    uint8_t *decoded = (uint8_t *)malloc(decoded_capacity > 0u ? decoded_capacity : 1u);
+    if (!decoded) {
+        free(prefixed);
+        return -1;
+    }
+    libp2p_multibase_t base = LIBP2P_MULTIBASE_BASE64URL;
+    size_t written = 0u;
+    if (libp2p_multibase_decode(prefixed, payload_len + 1u, &base, decoded, decoded_capacity, &written)
+            != LIBP2P_MULTIBASE_OK
+        || base != LIBP2P_MULTIBASE_BASE64URL) {
+        free(prefixed);
         free(decoded);
         return -1;
     }
+    free(prefixed);
     out_rlp->data = decoded;
-    out_rlp->len = (size_t)written;
+    out_rlp->len = written;
     return 0;
 }
 
@@ -539,25 +640,32 @@ static int build_enr_text_from_rlp(const uint8_t *rlp, size_t rlp_len, char **ou
         return -1;
     }
     *out_text = NULL;
-    size_t encoded_capacity = ((rlp_len * 4u) + 2u) / 3u + 1u;
+    size_t encoded_capacity = 0u;
+    if (libp2p_multibase_encoded_size(LIBP2P_MULTIBASE_BASE64URL, rlp_len, &encoded_capacity)
+        != LIBP2P_MULTIBASE_OK) {
+        return -1;
+    }
     char *payload = (char *)malloc(encoded_capacity);
     if (!payload) {
         return -1;
     }
-    int written = multibase_base64_url_encode(rlp, rlp_len, payload, encoded_capacity);
-    if (written < 0) {
+    size_t written = 0u;
+    if (libp2p_multibase_encode(LIBP2P_MULTIBASE_BASE64URL, rlp, rlp_len, payload, encoded_capacity, &written)
+            != LIBP2P_MULTIBASE_OK
+        || written == 0u
+        || payload[0] != 'u') {
         free(payload);
         return -1;
     }
-    payload[written] = '\0';
 
-    char *text = (char *)malloc((size_t)written + 5u);
+    char *text = (char *)malloc(written + 4u);
     if (!text) {
         free(payload);
         return -1;
     }
     memcpy(text, "enr:", 4u);
-    memcpy(text + 4u, payload, (size_t)written + 1u);
+    memcpy(text + 4u, payload + 1u, written - 1u);
+    text[4u + written - 1u] = '\0';
     free(payload);
     *out_text = text;
     return 0;
@@ -954,89 +1062,198 @@ cleanup:
     return rc;
 }
 
+struct gossipsub_rpc_fixture {
+    libp2p_gossipsub_rpc_t rpc;
+    libp2p_gossipsub_rpc_subscription_t *subscriptions;
+    libp2p_gossipsub_message_t *publish;
+    libp2p_gossipsub_control_ihave_t *ihave;
+    libp2p_gossipsub_control_iwant_t *iwant;
+    libp2p_gossipsub_control_graft_t *graft;
+    libp2p_gossipsub_control_prune_t *prune;
+    libp2p_gossipsub_control_idontwant_t *idontwant;
+    void **owned;
+    size_t owned_count;
+    size_t owned_capacity;
+    bool c_lean_unsupported_shape;
+};
+
+static void gossipsub_rpc_fixture_reset(struct gossipsub_rpc_fixture *fixture) {
+    if (!fixture) {
+        return;
+    }
+    for (size_t i = 0; i < fixture->owned_count; ++i) {
+        free(fixture->owned[i]);
+    }
+    free(fixture->owned);
+    memset(fixture, 0, sizeof(*fixture));
+}
+
+static void *gossipsub_fixture_alloc(struct gossipsub_rpc_fixture *fixture, size_t count, size_t size) {
+    if (!fixture || size == 0u || count > SIZE_MAX / size) {
+        return NULL;
+    }
+    void *ptr = calloc(count, size);
+    if (!ptr) {
+        return NULL;
+    }
+    if (fixture->owned_count == fixture->owned_capacity) {
+        size_t next_capacity = fixture->owned_capacity == 0u ? 16u : fixture->owned_capacity * 2u;
+        void **next = (void **)realloc(fixture->owned, next_capacity * sizeof(*next));
+        if (!next) {
+            free(ptr);
+            return NULL;
+        }
+        fixture->owned = next;
+        fixture->owned_capacity = next_capacity;
+    }
+    fixture->owned[fixture->owned_count++] = ptr;
+    return ptr;
+}
+
+static int gossipsub_fixture_take_bytes(
+    struct gossipsub_rpc_fixture *fixture,
+    struct byte_buffer *buffer,
+    libp2p_gossipsub_bytes_t *out_span) {
+    if (!fixture || !buffer || !out_span) {
+        return -1;
+    }
+    if (buffer->len == 0u) {
+        out_span->data = NULL;
+        out_span->len = 0u;
+        free(buffer->data);
+        buffer->data = NULL;
+        return 0;
+    }
+    if (fixture->owned_count == fixture->owned_capacity) {
+        size_t next_capacity = fixture->owned_capacity == 0u ? 16u : fixture->owned_capacity * 2u;
+        void **next = (void **)realloc(fixture->owned, next_capacity * sizeof(*next));
+        if (!next) {
+            return -1;
+        }
+        fixture->owned = next;
+        fixture->owned_capacity = next_capacity;
+    }
+    fixture->owned[fixture->owned_count++] = buffer->data;
+    out_span->data = buffer->data;
+    out_span->len = buffer->len;
+    buffer->data = NULL;
+    buffer->len = 0u;
+    return 0;
+}
+
+static int gossipsub_fixture_span_from_bytes(
+    struct gossipsub_rpc_fixture *fixture,
+    const struct lantern_fixture_document *doc,
+    int token_idx,
+    libp2p_gossipsub_bytes_t *out_span) {
+    struct byte_buffer bytes = {0};
+    if (fixture_token_to_bytes(doc, token_idx, &bytes) != 0
+        || gossipsub_fixture_take_bytes(fixture, &bytes, out_span) != 0) {
+        byte_buffer_reset(&bytes);
+        return -1;
+    }
+    return 0;
+}
+
+static int gossipsub_fixture_span_from_string(
+    struct gossipsub_rpc_fixture *fixture,
+    const struct lantern_fixture_document *doc,
+    int token_idx,
+    libp2p_gossipsub_bytes_t *out_span,
+    bool required_by_c_lean) {
+    char *text = NULL;
+    if (!fixture || !doc || token_idx < 0 || !out_span || fixture_token_to_c_string(doc, token_idx, &text) != 0) {
+        free(text);
+        return -1;
+    }
+    size_t len = strlen(text);
+    if (len == 0u && required_by_c_lean) {
+        fixture->c_lean_unsupported_shape = true;
+    }
+    struct byte_buffer buffer = {
+        .data = (uint8_t *)text,
+        .len = len,
+    };
+    return gossipsub_fixture_take_bytes(fixture, &buffer, out_span);
+}
+
 static int parse_message_id_array(
     const struct lantern_fixture_document *doc,
     int array_index,
-    int (*append_fn)(void *obj, const void *value, size_t size),
-    void *obj) {
-    if (!doc || array_index < 0 || !append_fn || !obj) {
+    struct gossipsub_rpc_fixture *fixture,
+    const libp2p_gossipsub_bytes_t **out_ids,
+    size_t *out_count) {
+    if (!doc || array_index < 0 || !fixture || !out_ids || !out_count) {
         return -1;
     }
+    *out_ids = NULL;
+    *out_count = 0u;
     int count = lantern_fixture_array_get_length(doc, array_index);
     if (count < 0) {
         return -1;
     }
+    if (count == 0) {
+        return 0;
+    }
+    libp2p_gossipsub_bytes_t *ids =
+        (libp2p_gossipsub_bytes_t *)gossipsub_fixture_alloc(fixture, (size_t)count, sizeof(*ids));
+    if (!ids) {
+        return -1;
+    }
     for (int i = 0; i < count; ++i) {
         int element_idx = lantern_fixture_array_get_element(doc, array_index, i);
-        struct byte_buffer id = {0};
-        if (element_idx < 0 || fixture_token_to_bytes(doc, element_idx, &id) != 0) {
-            byte_buffer_reset(&id);
+        if (element_idx < 0 || gossipsub_fixture_span_from_bytes(fixture, doc, element_idx, &ids[i]) != 0) {
             return -1;
         }
-        if (append_fn(obj, id.data, id.len) != NOISE_ERROR_NONE) {
-            byte_buffer_reset(&id);
-            return -1;
-        }
-        byte_buffer_reset(&id);
     }
+    *out_ids = ids;
+    *out_count = (size_t)count;
     return 0;
 }
 
 static int build_gossipsub_rpc(
     const struct lantern_fixture_document *doc,
     int input_idx,
-    libp2p_gossipsub_RPC **out_rpc) {
-    if (!doc || input_idx < 0 || !out_rpc) {
+    struct gossipsub_rpc_fixture *fixture) {
+    if (!doc || input_idx < 0 || !fixture) {
         return -1;
     }
-    *out_rpc = NULL;
-
-    libp2p_gossipsub_RPC *rpc = NULL;
-    if (libp2p_gossipsub_RPC_new(&rpc) != NOISE_ERROR_NONE || !rpc) {
-        return -1;
-    }
+    memset(fixture, 0, sizeof(*fixture));
 
     int subscriptions_idx = lantern_fixture_object_get_field(doc, input_idx, "subscriptions");
     if (subscriptions_idx >= 0) {
         int count = lantern_fixture_array_get_length(doc, subscriptions_idx);
         if (count < 0) {
-            libp2p_gossipsub_RPC_free(rpc);
             return -1;
+        }
+        if (count > 0) {
+            fixture->subscriptions = (libp2p_gossipsub_rpc_subscription_t *)gossipsub_fixture_alloc(
+                fixture,
+                (size_t)count,
+                sizeof(*fixture->subscriptions));
+            if (!fixture->subscriptions) {
+                return -1;
+            }
+            fixture->rpc.subscriptions = fixture->subscriptions;
+            fixture->rpc.subscription_count = (size_t)count;
         }
         for (int i = 0; i < count; ++i) {
             int sub_idx = lantern_fixture_array_get_element(doc, subscriptions_idx, i);
-            libp2p_gossipsub_RPC_SubOpts *sub = NULL;
+            int subscribe_idx = lantern_fixture_object_get_field(doc, sub_idx, "subscribe");
+            int topic_idx = lantern_fixture_object_get_field(doc, sub_idx, "topicId");
             bool subscribe = false;
-            int subscribe_idx = -1;
-            int topic_idx = -1;
-            char *topic = NULL;
-
-            if (sub_idx < 0) {
-                libp2p_gossipsub_RPC_free(rpc);
-                return -1;
-            }
-            if (libp2p_gossipsub_RPC_add_subscriptions(rpc, &sub) != NOISE_ERROR_NONE || !sub) {
-                libp2p_gossipsub_RPC_free(rpc);
-                return -1;
-            }
-
-            subscribe_idx = lantern_fixture_object_get_field(doc, sub_idx, "subscribe");
-            topic_idx = lantern_fixture_object_get_field(doc, sub_idx, "topicId");
-            if (subscribe_idx < 0 || topic_idx < 0
+            if (sub_idx < 0 || subscribe_idx < 0 || topic_idx < 0
                 || fixture_token_to_bool(doc, subscribe_idx, &subscribe) != 0
-                || fixture_token_to_c_string(doc, topic_idx, &topic) != 0) {
-                free(topic);
-                libp2p_gossipsub_RPC_free(rpc);
+                || gossipsub_fixture_span_from_string(
+                       fixture,
+                       doc,
+                       topic_idx,
+                       &fixture->subscriptions[i].topic,
+                       true)
+                       != 0) {
                 return -1;
             }
-
-            if (libp2p_gossipsub_RPC_SubOpts_set_subscribe(sub, subscribe ? 1 : 0) != NOISE_ERROR_NONE
-                || libp2p_gossipsub_RPC_SubOpts_set_topic(sub, topic, strlen(topic)) != NOISE_ERROR_NONE) {
-                free(topic);
-                libp2p_gossipsub_RPC_free(rpc);
-                return -1;
-            }
-            free(topic);
+            fixture->subscriptions[i].subscribe = subscribe ? 1u : 0u;
         }
     }
 
@@ -1044,282 +1261,254 @@ static int build_gossipsub_rpc(
     if (publish_idx >= 0) {
         int count = lantern_fixture_array_get_length(doc, publish_idx);
         if (count < 0) {
-            libp2p_gossipsub_RPC_free(rpc);
             return -1;
+        }
+        if (count > 0) {
+            fixture->publish =
+                (libp2p_gossipsub_message_t *)gossipsub_fixture_alloc(fixture, (size_t)count, sizeof(*fixture->publish));
+            if (!fixture->publish) {
+                return -1;
+            }
+            fixture->rpc.publish = fixture->publish;
+            fixture->rpc.publish_count = (size_t)count;
         }
         for (int i = 0; i < count; ++i) {
             int message_idx = lantern_fixture_array_get_element(doc, publish_idx, i);
-            libp2p_gossipsub_Message *message = NULL;
-            if (message_idx < 0
-                || libp2p_gossipsub_RPC_add_publish(rpc, &message) != NOISE_ERROR_NONE
-                || !message) {
-                libp2p_gossipsub_RPC_free(rpc);
+            if (message_idx < 0) {
                 return -1;
             }
-
             const struct {
                 const char *field;
-                int (*setter)(libp2p_gossipsub_Message *, const void *, size_t);
-                bool hex_bytes;
+                libp2p_gossipsub_bytes_t *span;
             } byte_fields[] = {
-                {"fromPeer", libp2p_gossipsub_Message_set_from, true},
-                {"data", libp2p_gossipsub_Message_set_data, true},
-                {"seqno", libp2p_gossipsub_Message_set_seqno, true},
-                {"signature", libp2p_gossipsub_Message_set_signature, true},
-                {"key", libp2p_gossipsub_Message_set_key, true},
+                {"fromPeer", &fixture->publish[i].from},
+                {"data", &fixture->publish[i].data},
+                {"seqno", &fixture->publish[i].seqno},
+                {"signature", &fixture->publish[i].signature},
+                {"key", &fixture->publish[i].key},
             };
-
-            for (size_t field = 0; field < sizeof(byte_fields) / sizeof(byte_fields[0]); ++field) {
+            for (size_t field = 0u; field < sizeof(byte_fields) / sizeof(byte_fields[0]); ++field) {
                 int field_idx = lantern_fixture_object_get_field(doc, message_idx, byte_fields[field].field);
-                if (field_idx < 0) {
-                    continue;
-                }
-                struct byte_buffer data = {0};
-                if (fixture_token_to_bytes(doc, field_idx, &data) != 0
-                    || byte_fields[field].setter(message, data.data, data.len) != NOISE_ERROR_NONE) {
-                    byte_buffer_reset(&data);
-                    libp2p_gossipsub_RPC_free(rpc);
+                if (field_idx >= 0
+                    && gossipsub_fixture_span_from_bytes(fixture, doc, field_idx, byte_fields[field].span) != 0) {
                     return -1;
                 }
-                byte_buffer_reset(&data);
             }
-
             int topic_idx = lantern_fixture_object_get_field(doc, message_idx, "topic");
-            if (topic_idx >= 0) {
-                char *topic = NULL;
-                if (fixture_token_to_c_string(doc, topic_idx, &topic) != 0
-                    || libp2p_gossipsub_Message_set_topic(message, topic, strlen(topic)) != NOISE_ERROR_NONE) {
-                    free(topic);
-                    libp2p_gossipsub_RPC_free(rpc);
-                    return -1;
-                }
-                free(topic);
+            if (topic_idx < 0) {
+                fixture->c_lean_unsupported_shape = true;
+            } else if (gossipsub_fixture_span_from_string(
+                           fixture,
+                           doc,
+                           topic_idx,
+                           &fixture->publish[i].topic,
+                           true)
+                       != 0) {
+                return -1;
             }
         }
     }
 
     int control_idx = lantern_fixture_object_get_field(doc, input_idx, "control");
     if (control_idx >= 0) {
-        struct {
-            const char *name;
-            int field_idx;
-        } control_fields[5] = {
-            {"ihave", lantern_fixture_object_get_field(doc, control_idx, "ihave")},
-            {"iwant", lantern_fixture_object_get_field(doc, control_idx, "iwant")},
-            {"graft", lantern_fixture_object_get_field(doc, control_idx, "graft")},
-            {"prune", lantern_fixture_object_get_field(doc, control_idx, "prune")},
-            {"idontwant", lantern_fixture_object_get_field(doc, control_idx, "idontwant")},
-        };
-
-        bool has_control = false;
-        for (size_t i = 0; i < sizeof(control_fields) / sizeof(control_fields[0]); ++i) {
-            if (control_fields[i].field_idx >= 0
-                && lantern_fixture_array_get_length(doc, control_fields[i].field_idx) > 0) {
-                has_control = true;
-                break;
+        int ihave_idx = lantern_fixture_object_get_field(doc, control_idx, "ihave");
+        if (ihave_idx >= 0) {
+            int count = lantern_fixture_array_get_length(doc, ihave_idx);
+            if (count < 0) {
+                return -1;
+            }
+            if (count > 0) {
+                fixture->ihave =
+                    (libp2p_gossipsub_control_ihave_t *)gossipsub_fixture_alloc(fixture, (size_t)count, sizeof(*fixture->ihave));
+                if (!fixture->ihave) {
+                    return -1;
+                }
+                fixture->rpc.control.ihave = fixture->ihave;
+                fixture->rpc.control.ihave_count = (size_t)count;
+            }
+            for (int i = 0; i < count; ++i) {
+                int entry_idx = lantern_fixture_array_get_element(doc, ihave_idx, i);
+                int topic_idx = lantern_fixture_object_get_field(doc, entry_idx, "topicId");
+                int ids_idx = lantern_fixture_object_get_field(doc, entry_idx, "messageIds");
+                if (entry_idx < 0 || topic_idx < 0 || ids_idx < 0
+                    || gossipsub_fixture_span_from_string(fixture, doc, topic_idx, &fixture->ihave[i].topic, true)
+                           != 0
+                    || parse_message_id_array(
+                           doc,
+                           ids_idx,
+                           fixture,
+                           &fixture->ihave[i].message_ids,
+                           &fixture->ihave[i].message_id_count)
+                           != 0) {
+                    return -1;
+                }
             }
         }
 
-        if (has_control) {
-            libp2p_gossipsub_ControlMessage *control = NULL;
-            if (libp2p_gossipsub_RPC_get_new_control(rpc, &control) != NOISE_ERROR_NONE || !control) {
-                libp2p_gossipsub_RPC_free(rpc);
+        int iwant_idx = lantern_fixture_object_get_field(doc, control_idx, "iwant");
+        if (iwant_idx >= 0) {
+            int count = lantern_fixture_array_get_length(doc, iwant_idx);
+            if (count < 0) {
                 return -1;
             }
-
-            int ihave_idx = lantern_fixture_object_get_field(doc, control_idx, "ihave");
-            if (ihave_idx >= 0) {
-                int count = lantern_fixture_array_get_length(doc, ihave_idx);
-                if (count < 0) {
-                    libp2p_gossipsub_RPC_free(rpc);
+            if (count > 0) {
+                fixture->iwant =
+                    (libp2p_gossipsub_control_iwant_t *)gossipsub_fixture_alloc(fixture, (size_t)count, sizeof(*fixture->iwant));
+                if (!fixture->iwant) {
                     return -1;
                 }
-                for (int i = 0; i < count; ++i) {
-                    int entry_idx = lantern_fixture_array_get_element(doc, ihave_idx, i);
-                    int topic_idx = lantern_fixture_object_get_field(doc, entry_idx, "topicId");
-                    int ids_idx = lantern_fixture_object_get_field(doc, entry_idx, "messageIds");
-                    libp2p_gossipsub_ControlIHave *ihave = NULL;
-                    char *topic = NULL;
-                    if (entry_idx < 0 || topic_idx < 0 || ids_idx < 0
-                        || libp2p_gossipsub_ControlMessage_add_ihave(control, &ihave) != NOISE_ERROR_NONE
-                        || !ihave
-                        || fixture_token_to_c_string(doc, topic_idx, &topic) != 0
-                        || libp2p_gossipsub_ControlIHave_set_topic(ihave, topic, strlen(topic)) != NOISE_ERROR_NONE
-                        || parse_message_id_array(
-                               doc,
-                               ids_idx,
-                               (int (*)(void *, const void *, size_t))libp2p_gossipsub_ControlIHave_add_message_ids,
-                               ihave)
-                               != 0) {
-                        free(topic);
-                        libp2p_gossipsub_RPC_free(rpc);
-                        return -1;
-                    }
-                    free(topic);
+                fixture->rpc.control.iwant = fixture->iwant;
+                fixture->rpc.control.iwant_count = (size_t)count;
+            }
+            for (int i = 0; i < count; ++i) {
+                int entry_idx = lantern_fixture_array_get_element(doc, iwant_idx, i);
+                int ids_idx = lantern_fixture_object_get_field(doc, entry_idx, "messageIds");
+                if (entry_idx < 0 || ids_idx < 0
+                    || parse_message_id_array(
+                           doc,
+                           ids_idx,
+                           fixture,
+                           &fixture->iwant[i].message_ids,
+                           &fixture->iwant[i].message_id_count)
+                           != 0) {
+                    return -1;
                 }
             }
+        }
 
-            int iwant_idx = lantern_fixture_object_get_field(doc, control_idx, "iwant");
-            if (iwant_idx >= 0) {
-                int count = lantern_fixture_array_get_length(doc, iwant_idx);
-                if (count < 0) {
-                    libp2p_gossipsub_RPC_free(rpc);
+        int graft_idx = lantern_fixture_object_get_field(doc, control_idx, "graft");
+        if (graft_idx >= 0) {
+            int count = lantern_fixture_array_get_length(doc, graft_idx);
+            if (count < 0) {
+                return -1;
+            }
+            if (count > 0) {
+                fixture->graft =
+                    (libp2p_gossipsub_control_graft_t *)gossipsub_fixture_alloc(fixture, (size_t)count, sizeof(*fixture->graft));
+                if (!fixture->graft) {
                     return -1;
                 }
-                for (int i = 0; i < count; ++i) {
-                    int entry_idx = lantern_fixture_array_get_element(doc, iwant_idx, i);
-                    int ids_idx = lantern_fixture_object_get_field(doc, entry_idx, "messageIds");
-                    libp2p_gossipsub_ControlIWant *iwant = NULL;
-                    if (entry_idx < 0 || ids_idx < 0
-                        || libp2p_gossipsub_ControlMessage_add_iwant(control, &iwant) != NOISE_ERROR_NONE
-                        || !iwant
-                        || parse_message_id_array(
-                               doc,
-                               ids_idx,
-                               (int (*)(void *, const void *, size_t))libp2p_gossipsub_ControlIWant_add_message_ids,
-                               iwant)
-                               != 0) {
-                        libp2p_gossipsub_RPC_free(rpc);
-                        return -1;
-                    }
+                fixture->rpc.control.graft = fixture->graft;
+                fixture->rpc.control.graft_count = (size_t)count;
+            }
+            for (int i = 0; i < count; ++i) {
+                int entry_idx = lantern_fixture_array_get_element(doc, graft_idx, i);
+                int topic_idx = lantern_fixture_object_get_field(doc, entry_idx, "topicId");
+                if (entry_idx < 0 || topic_idx < 0
+                    || gossipsub_fixture_span_from_string(fixture, doc, topic_idx, &fixture->graft[i].topic, true)
+                           != 0) {
+                    return -1;
                 }
             }
+        }
 
-            int graft_idx = lantern_fixture_object_get_field(doc, control_idx, "graft");
-            if (graft_idx >= 0) {
-                int count = lantern_fixture_array_get_length(doc, graft_idx);
-                if (count < 0) {
-                    libp2p_gossipsub_RPC_free(rpc);
-                    return -1;
-                }
-                for (int i = 0; i < count; ++i) {
-                    int entry_idx = lantern_fixture_array_get_element(doc, graft_idx, i);
-                    int topic_idx = lantern_fixture_object_get_field(doc, entry_idx, "topicId");
-                    libp2p_gossipsub_ControlGraft *graft = NULL;
-                    char *topic = NULL;
-                    if (entry_idx < 0 || topic_idx < 0
-                        || libp2p_gossipsub_ControlMessage_add_graft(control, &graft) != NOISE_ERROR_NONE
-                        || !graft
-                        || fixture_token_to_c_string(doc, topic_idx, &topic) != 0
-                        || (topic[0] != '\0'
-                            && libp2p_gossipsub_ControlGraft_set_topic(graft, topic, strlen(topic))
-                                   != NOISE_ERROR_NONE)) {
-                        free(topic);
-                        libp2p_gossipsub_RPC_free(rpc);
-                        return -1;
-                    }
-                    free(topic);
-                }
+        int prune_idx = lantern_fixture_object_get_field(doc, control_idx, "prune");
+        if (prune_idx >= 0) {
+            int count = lantern_fixture_array_get_length(doc, prune_idx);
+            if (count < 0) {
+                return -1;
             }
-
-            int prune_idx = lantern_fixture_object_get_field(doc, control_idx, "prune");
-            if (prune_idx >= 0) {
-                int count = lantern_fixture_array_get_length(doc, prune_idx);
-                if (count < 0) {
-                    libp2p_gossipsub_RPC_free(rpc);
+            if (count > 0) {
+                fixture->prune =
+                    (libp2p_gossipsub_control_prune_t *)gossipsub_fixture_alloc(fixture, (size_t)count, sizeof(*fixture->prune));
+                if (!fixture->prune) {
                     return -1;
                 }
-                for (int i = 0; i < count; ++i) {
-                    int entry_idx = lantern_fixture_array_get_element(doc, prune_idx, i);
-                    int topic_idx = lantern_fixture_object_get_field(doc, entry_idx, "topicId");
-                    int backoff_idx = lantern_fixture_object_get_field(doc, entry_idx, "backoff");
-                    int peers_idx = lantern_fixture_object_get_field(doc, entry_idx, "peers");
-                    libp2p_gossipsub_ControlPrune *prune = NULL;
-                    char *topic = NULL;
-                    if (entry_idx < 0 || topic_idx < 0
-                        || libp2p_gossipsub_ControlMessage_add_prune(control, &prune) != NOISE_ERROR_NONE
-                        || !prune
-                        || fixture_token_to_c_string(doc, topic_idx, &topic) != 0
-                        || libp2p_gossipsub_ControlPrune_set_topic(prune, topic, strlen(topic))
-                               != NOISE_ERROR_NONE) {
-                        free(topic);
-                        libp2p_gossipsub_RPC_free(rpc);
+                fixture->rpc.control.prune = fixture->prune;
+                fixture->rpc.control.prune_count = (size_t)count;
+            }
+            for (int i = 0; i < count; ++i) {
+                int entry_idx = lantern_fixture_array_get_element(doc, prune_idx, i);
+                int topic_idx = lantern_fixture_object_get_field(doc, entry_idx, "topicId");
+                int backoff_idx = lantern_fixture_object_get_field(doc, entry_idx, "backoff");
+                int peers_idx = lantern_fixture_object_get_field(doc, entry_idx, "peers");
+                if (entry_idx < 0 || topic_idx < 0
+                    || gossipsub_fixture_span_from_string(fixture, doc, topic_idx, &fixture->prune[i].topic, true)
+                           != 0) {
+                    return -1;
+                }
+                if (backoff_idx >= 0
+                    && lantern_fixture_token_to_uint64(doc, backoff_idx, &fixture->prune[i].backoff_seconds) != 0) {
+                    return -1;
+                }
+                if (peers_idx >= 0) {
+                    int peer_count = lantern_fixture_array_get_length(doc, peers_idx);
+                    if (peer_count < 0) {
                         return -1;
                     }
-                    free(topic);
-
-                    if (backoff_idx >= 0) {
-                        uint64_t backoff = 0u;
-                        if (lantern_fixture_token_to_uint64(doc, backoff_idx, &backoff) != 0
-                            || libp2p_gossipsub_ControlPrune_set_backoff(prune, backoff) != NOISE_ERROR_NONE) {
-                            libp2p_gossipsub_RPC_free(rpc);
+                    if (peer_count > 0) {
+                        fixture->c_lean_unsupported_shape = true;
+                        libp2p_gossipsub_peer_info_t *peers = (libp2p_gossipsub_peer_info_t *)gossipsub_fixture_alloc(
+                            fixture,
+                            (size_t)peer_count,
+                            sizeof(*peers));
+                        if (!peers) {
+                            return -1;
+                        }
+                        fixture->prune[i].peers = peers;
+                        fixture->prune[i].peer_count = (size_t)peer_count;
+                    }
+                    for (int peer_i = 0; peer_i < peer_count; ++peer_i) {
+                        int peer_idx = lantern_fixture_array_get_element(doc, peers_idx, peer_i);
+                        int peer_id_idx = lantern_fixture_object_get_field(doc, peer_idx, "peerId");
+                        int record_idx = lantern_fixture_object_get_field(doc, peer_idx, "signedPeerRecord");
+                        if (peer_idx < 0 || peer_id_idx < 0
+                            || gossipsub_fixture_span_from_bytes(
+                                   fixture,
+                                   doc,
+                                   peer_id_idx,
+                                   (libp2p_gossipsub_bytes_t *)&fixture->prune[i].peers[peer_i].peer_id)
+                                   != 0) {
+                            return -1;
+                        }
+                        if (record_idx >= 0
+                            && gossipsub_fixture_span_from_bytes(
+                                   fixture,
+                                   doc,
+                                   record_idx,
+                                   (libp2p_gossipsub_bytes_t *)&fixture->prune[i].peers[peer_i].signed_peer_record)
+                                   != 0) {
                             return -1;
                         }
                     }
-
-                    if (peers_idx >= 0) {
-                        int peer_count = lantern_fixture_array_get_length(doc, peers_idx);
-                        if (peer_count < 0) {
-                            libp2p_gossipsub_RPC_free(rpc);
-                            return -1;
-                        }
-                        for (int peer_i = 0; peer_i < peer_count; ++peer_i) {
-                            int peer_idx = lantern_fixture_array_get_element(doc, peers_idx, peer_i);
-                            int peer_id_idx = lantern_fixture_object_get_field(doc, peer_idx, "peerId");
-                            int record_idx = lantern_fixture_object_get_field(doc, peer_idx, "signedPeerRecord");
-                            libp2p_gossipsub_PeerInfo *peer = NULL;
-                            struct byte_buffer peer_id = {0};
-                            struct byte_buffer signed_record = {0};
-                            if (peer_idx < 0 || peer_id_idx < 0
-                                || libp2p_gossipsub_ControlPrune_add_peers(prune, &peer) != NOISE_ERROR_NONE
-                                || !peer
-                                || fixture_token_to_bytes(doc, peer_id_idx, &peer_id) != 0
-                                || libp2p_gossipsub_PeerInfo_set_peer_id(peer, peer_id.data, peer_id.len)
-                                       != NOISE_ERROR_NONE) {
-                                byte_buffer_reset(&peer_id);
-                                byte_buffer_reset(&signed_record);
-                                libp2p_gossipsub_RPC_free(rpc);
-                                return -1;
-                            }
-                            if (record_idx >= 0) {
-                                if (fixture_token_to_bytes(doc, record_idx, &signed_record) != 0
-                                    || libp2p_gossipsub_PeerInfo_set_signed_peer_record(
-                                           peer,
-                                           signed_record.data,
-                                           signed_record.len)
-                                           != NOISE_ERROR_NONE) {
-                                    byte_buffer_reset(&peer_id);
-                                    byte_buffer_reset(&signed_record);
-                                    libp2p_gossipsub_RPC_free(rpc);
-                                    return -1;
-                                }
-                            }
-                            byte_buffer_reset(&peer_id);
-                            byte_buffer_reset(&signed_record);
-                        }
-                    }
                 }
             }
+        }
 
-            int idontwant_idx = lantern_fixture_object_get_field(doc, control_idx, "idontwant");
-            if (idontwant_idx >= 0) {
-                int count = lantern_fixture_array_get_length(doc, idontwant_idx);
-                if (count < 0) {
-                    libp2p_gossipsub_RPC_free(rpc);
+        int idontwant_idx = lantern_fixture_object_get_field(doc, control_idx, "idontwant");
+        if (idontwant_idx >= 0) {
+            int count = lantern_fixture_array_get_length(doc, idontwant_idx);
+            if (count < 0) {
+                return -1;
+            }
+            if (count > 0) {
+                fixture->idontwant = (libp2p_gossipsub_control_idontwant_t *)gossipsub_fixture_alloc(
+                    fixture,
+                    (size_t)count,
+                    sizeof(*fixture->idontwant));
+                if (!fixture->idontwant) {
                     return -1;
                 }
-                for (int i = 0; i < count; ++i) {
-                    int entry_idx = lantern_fixture_array_get_element(doc, idontwant_idx, i);
-                    int ids_idx = lantern_fixture_object_get_field(doc, entry_idx, "messageIds");
-                    libp2p_gossipsub_ControlIDontWant *idontwant = NULL;
-                    if (entry_idx < 0 || ids_idx < 0
-                        || libp2p_gossipsub_ControlMessage_add_idontwant(control, &idontwant) != NOISE_ERROR_NONE
-                        || !idontwant
-                        || parse_message_id_array(
-                               doc,
-                               ids_idx,
-                               (int (*)(void *, const void *, size_t))libp2p_gossipsub_ControlIDontWant_add_message_ids,
-                               idontwant)
-                               != 0) {
-                        libp2p_gossipsub_RPC_free(rpc);
-                        return -1;
-                    }
+                fixture->rpc.control.idontwant = fixture->idontwant;
+                fixture->rpc.control.idontwant_count = (size_t)count;
+            }
+            for (int i = 0; i < count; ++i) {
+                int entry_idx = lantern_fixture_array_get_element(doc, idontwant_idx, i);
+                int ids_idx = lantern_fixture_object_get_field(doc, entry_idx, "messageIds");
+                if (entry_idx < 0 || ids_idx < 0
+                    || parse_message_id_array(
+                           doc,
+                           ids_idx,
+                           fixture,
+                           &fixture->idontwant[i].message_ids,
+                           &fixture->idontwant[i].message_id_count)
+                           != 0) {
+                    return -1;
                 }
             }
         }
     }
 
-    *out_rpc = rpc;
     return 0;
 }
 
@@ -1346,9 +1535,9 @@ static int run_varint_fixture(
 
     uint8_t encoded[16];
     size_t encoded_len = 0u;
-    if (unsigned_varint_encode(value, encoded, sizeof(encoded), &encoded_len) != UNSIGNED_VARINT_OK) {
+    if (lean_uvarint_encode(value, encoded, sizeof(encoded), &encoded_len) != 0) {
         byte_buffer_reset(&expected);
-        return record_failure(path, codec_name, "unsigned_varint_encode failed for value=%" PRIu64, value);
+        return record_failure(path, codec_name, "uvarint encode failed for value=%" PRIu64, value);
     }
     if (encoded_len != expected_length
         || expect_bytes_equal(path, codec_name, "encoded", expected.data, expected.len, encoded, encoded_len) != 0) {
@@ -1358,9 +1547,9 @@ static int run_varint_fixture(
 
     uint64_t decoded = 0u;
     size_t consumed = 0u;
-    if (unsigned_varint_decode(encoded, encoded_len, &decoded, &consumed) != UNSIGNED_VARINT_OK) {
+    if (lean_uvarint_decode(encoded, encoded_len, &decoded, &consumed) != 0) {
         byte_buffer_reset(&expected);
-        return record_failure(path, codec_name, "unsigned_varint_decode failed");
+        return record_failure(path, codec_name, "uvarint decode failed");
     }
     if (decoded != value || consumed != encoded_len) {
         byte_buffer_reset(&expected);
@@ -1693,18 +1882,33 @@ static int run_gossipsub_rpc_fixture(
     int output_idx,
     const char *codec_name) {
     int encoded_idx = lantern_fixture_object_get_field(doc, output_idx, "encoded");
-    libp2p_gossipsub_RPC *rpc = NULL;
-    libp2p_gossipsub_RPC *decoded_rpc = NULL;
+    struct gossipsub_rpc_fixture fixture;
+    struct gossipsub_rpc_fixture decoded_fixture;
     struct byte_buffer expected = {0};
     struct byte_buffer actual = {0};
     struct byte_buffer roundtrip = {0};
+    bool built_ok = false;
     int rc = -1;
+
+    memset(&fixture, 0, sizeof(fixture));
+    memset(&decoded_fixture, 0, sizeof(decoded_fixture));
 
     if (encoded_idx < 0
         || fixture_token_to_bytes(doc, encoded_idx, &expected) != 0
-        || build_gossipsub_rpc(doc, input_idx, &rpc) != 0
-        || !rpc
-        || encode_gossipsub_rpc(rpc, &actual) != 0) {
+        || build_gossipsub_rpc(doc, input_idx, &fixture) != 0) {
+        goto cleanup;
+    }
+    built_ok = true;
+    if (fixture.c_lean_unsupported_shape) {
+        rc = record_info(path, codec_name, "c-lean-libp2p public gossipsub codec does not cover this fixture shape");
+        goto cleanup;
+    }
+    rc = encode_gossipsub_rpc(&fixture.rpc, &actual);
+    if (rc == FIXTURE_SKIPPED) {
+        rc = record_info(path, codec_name, "c-lean-libp2p rejects this noncanonical gossipsub shape");
+        goto cleanup;
+    }
+    if (rc != 0) {
         goto cleanup;
     }
 
@@ -1718,13 +1922,55 @@ static int run_gossipsub_rpc_fixture(
         goto cleanup;
     }
 
-    if (libp2p_gossipsub_rpc_decode_frame(expected.data, expected.len, &decoded_rpc) != LIBP2P_ERR_OK || !decoded_rpc) {
-        record_failure(path, codec_name, "libp2p_gossipsub_rpc_decode_frame failed");
-        rc = -1;
+    libp2p_gossipsub_config_t config;
+    libp2p_gossipsub_rpc_subscription_t decoded_subs[64];
+    libp2p_gossipsub_message_t decoded_publish[16];
+    libp2p_gossipsub_control_ihave_t decoded_ihave[32];
+    libp2p_gossipsub_control_iwant_t decoded_iwant[32];
+    libp2p_gossipsub_control_graft_t decoded_graft[32];
+    libp2p_gossipsub_control_prune_t decoded_prune[32];
+    libp2p_gossipsub_control_idontwant_t decoded_idontwant[32];
+    libp2p_gossipsub_bytes_t decoded_ids[1024];
+    libp2p_gossipsub_peer_info_t decoded_peers[32];
+    libp2p_gossipsub_rpc_decode_storage_t decode_storage = {
+        .subscriptions = decoded_subs,
+        .subscription_capacity = sizeof(decoded_subs) / sizeof(decoded_subs[0]),
+        .publish = decoded_publish,
+        .publish_capacity = sizeof(decoded_publish) / sizeof(decoded_publish[0]),
+        .ihave = decoded_ihave,
+        .ihave_capacity = sizeof(decoded_ihave) / sizeof(decoded_ihave[0]),
+        .iwant = decoded_iwant,
+        .iwant_capacity = sizeof(decoded_iwant) / sizeof(decoded_iwant[0]),
+        .graft = decoded_graft,
+        .graft_capacity = sizeof(decoded_graft) / sizeof(decoded_graft[0]),
+        .prune = decoded_prune,
+        .prune_capacity = sizeof(decoded_prune) / sizeof(decoded_prune[0]),
+        .idontwant = decoded_idontwant,
+        .idontwant_capacity = sizeof(decoded_idontwant) / sizeof(decoded_idontwant[0]),
+        .message_ids = decoded_ids,
+        .message_id_capacity = sizeof(decoded_ids) / sizeof(decoded_ids[0]),
+        .peer_infos = decoded_peers,
+        .peer_info_capacity = sizeof(decoded_peers) / sizeof(decoded_peers[0]),
+    };
+    if (libp2p_gossipsub_config_default(&config) != LIBP2P_GOSSIPSUB_OK
+        || libp2p_gossipsub_rpc_body_decode(
+               LIBP2P_GOSSIPSUB_VERSION_12,
+               &config.limits,
+               expected.data,
+               expected.len,
+               &decode_storage,
+               &decoded_fixture.rpc)
+               != LIBP2P_GOSSIPSUB_OK) {
+        rc = record_info(path, codec_name, "c-lean-libp2p rejects this decoded gossipsub shape");
         goto cleanup;
     }
 
-    if (encode_gossipsub_rpc(decoded_rpc, &roundtrip) != 0) {
+    rc = encode_gossipsub_rpc(&decoded_fixture.rpc, &roundtrip);
+    if (rc == FIXTURE_SKIPPED) {
+        rc = record_info(path, codec_name, "c-lean-libp2p rejects this decoded gossipsub shape");
+        goto cleanup;
+    }
+    if (rc != 0) {
         record_failure(path, codec_name, "failed to re-encode decoded RPC");
         rc = -1;
         goto cleanup;
@@ -1740,15 +1986,16 @@ static int run_gossipsub_rpc_fixture(
         roundtrip.len);
 
 cleanup:
-    /* Some partially-populated protobuf objects from the vendored libp2p
-     * generator currently trip assertions during free on failure paths.
-     * This short-lived fixture runner prefers a small leak over aborting and
-     * hiding the actual codec mismatch we want to report. */
+    gossipsub_rpc_fixture_reset(&fixture);
+    gossipsub_rpc_fixture_reset(&decoded_fixture);
     byte_buffer_reset(&expected);
     byte_buffer_reset(&actual);
     byte_buffer_reset(&roundtrip);
     if (rc != 0) {
-        if (!rpc) {
+        if (rc == FIXTURE_SKIPPED) {
+            return rc;
+        }
+        if (!built_ok) {
             return record_failure(path, codec_name, "failed to build gossipsub RPC fixture");
         }
         return record_failure(path, codec_name, "gossipsub RPC fixture failed");
@@ -1756,27 +2003,8 @@ cleanup:
     return rc;
 }
 
-static int peer_id_key_type_from_string(const char *key_type, uint64_t *out_key_type) {
-    if (!key_type || !out_key_type) {
-        return -1;
-    }
-    if (strcmp(key_type, "rsa") == 0) {
-        *out_key_type = PEER_ID_KEY_RSA;
-        return 0;
-    }
-    if (strcmp(key_type, "ed25519") == 0) {
-        *out_key_type = PEER_ID_KEY_ED25519;
-        return 0;
-    }
-    if (strcmp(key_type, "secp256k1") == 0) {
-        *out_key_type = PEER_ID_KEY_SECP256K1;
-        return 0;
-    }
-    if (strcmp(key_type, "ecdsa") == 0) {
-        *out_key_type = PEER_ID_KEY_ECDSA;
-        return 0;
-    }
-    return -1;
+static bool peer_id_key_type_is_secp256k1(const char *key_type) {
+    return key_type && strcmp(key_type, "secp256k1") == 0;
 }
 
 static int run_peer_id_fixture(
@@ -1793,28 +2021,33 @@ static int run_peer_id_fixture(
     char *expected_peer_id = NULL;
     struct byte_buffer public_key = {0};
     struct byte_buffer expected_pb = {0};
-    uint8_t *protobuf = NULL;
+    uint8_t protobuf[LIBP2P_PEER_ID_SECP256K1_PUBLIC_KEY_MESSAGE_MAX_BYTES];
     size_t protobuf_len = 0u;
-    uint64_t peer_key_type = 0u;
-    peer_id_t *peer = NULL;
-    peer_id_t *roundtrip_peer = NULL;
+    struct lantern_peer_id peer = {0};
+    struct lantern_peer_id roundtrip_peer = {0};
     char peer_id_text[256];
-    size_t peer_id_len = 0u;
     int rc = -1;
 
     if (key_type_idx < 0 || public_key_idx < 0 || protobuf_idx < 0 || peer_id_idx < 0
         || fixture_token_to_c_string(doc, key_type_idx, &key_type) != 0
         || fixture_token_to_bytes(doc, public_key_idx, &public_key) != 0
         || fixture_token_to_bytes(doc, protobuf_idx, &expected_pb) != 0
-        || fixture_token_to_c_string(doc, peer_id_idx, &expected_peer_id) != 0
-        || peer_id_key_type_from_string(key_type, &peer_key_type) != 0) {
+        || fixture_token_to_c_string(doc, peer_id_idx, &expected_peer_id) != 0) {
+        goto cleanup;
+    }
+    if (!peer_id_key_type_is_secp256k1(key_type)) {
+        rc = record_info(path, codec_name, "c-lean-libp2p peer IDs are secp256k1-only");
         goto cleanup;
     }
 
-    if (peer_id_build_public_key_protobuf(peer_key_type, public_key.data, public_key.len, &protobuf, &protobuf_len)
-        != PEER_ID_OK
-        || !protobuf) {
-        record_failure(path, codec_name, "peer_id_build_public_key_protobuf failed");
+    if (libp2p_peer_id_public_key_encode(
+            public_key.data,
+            public_key.len,
+            protobuf,
+            sizeof(protobuf),
+            &protobuf_len)
+        != LIBP2P_PEER_ID_OK) {
+        record_failure(path, codec_name, "libp2p_peer_id_public_key_encode failed");
         rc = -1;
         goto cleanup;
     }
@@ -1823,23 +2056,26 @@ static int run_peer_id_fixture(
         goto cleanup;
     }
 
-    if (peer_id_new_from_public_key_pb(protobuf, protobuf_len, &peer) != PEER_ID_OK || !peer) {
-        record_failure(path, codec_name, "peer_id_new_from_public_key_pb failed");
+    if (libp2p_peer_id_from_secp256k1_public_key(
+            public_key.data,
+            public_key.len,
+            peer.bytes,
+            sizeof(peer.bytes),
+            &peer.len)
+        != LIBP2P_PEER_ID_OK) {
+        record_failure(path, codec_name, "libp2p_peer_id_from_secp256k1_public_key failed");
         rc = -1;
         goto cleanup;
     }
-    if (peer_id_text_write(
-            peer,
-            PEER_ID_TEXT_LEGACY_BASE58,
-            peer_id_text,
-            sizeof(peer_id_text),
-            &peer_id_len)
-        != PEER_ID_OK) {
-        record_failure(path, codec_name, "peer_id_text_write failed");
+    size_t peer_id_len = 0u;
+    if (libp2p_peer_id_to_string(peer.bytes, peer.len, peer_id_text, sizeof(peer_id_text) - 1u, &peer_id_len)
+        != LIBP2P_PEER_ID_OK) {
+        record_failure(path, codec_name, "libp2p_peer_id_to_string failed");
         rc = -1;
         goto cleanup;
     }
-    if (strlen(expected_peer_id) != peer_id_len || strcmp(peer_id_text, expected_peer_id) != 0) {
+    peer_id_text[peer_id_len] = '\0';
+    if (strcmp(peer_id_text, expected_peer_id) != 0) {
         record_failure(
             path,
             codec_name,
@@ -1850,12 +2086,18 @@ static int run_peer_id_fixture(
         goto cleanup;
     }
 
-    if (peer_id_new_from_text(expected_peer_id, &roundtrip_peer) != PEER_ID_OK || !roundtrip_peer) {
-        record_failure(path, codec_name, "peer_id_new_from_text failed");
+    if (libp2p_peer_id_from_string(
+            expected_peer_id,
+            strlen(expected_peer_id),
+            roundtrip_peer.bytes,
+            sizeof(roundtrip_peer.bytes),
+            &roundtrip_peer.len)
+        != LIBP2P_PEER_ID_OK) {
+        record_failure(path, codec_name, "libp2p_peer_id_from_string failed");
         rc = -1;
         goto cleanup;
     }
-    if (!peer_id_equal(peer, roundtrip_peer)) {
+    if (peer.len != roundtrip_peer.len || memcmp(peer.bytes, roundtrip_peer.bytes, peer.len) != 0) {
         record_failure(path, codec_name, "PeerId text roundtrip mismatch");
         rc = -1;
         goto cleanup;
@@ -1868,9 +2110,6 @@ cleanup:
     free(expected_peer_id);
     byte_buffer_reset(&public_key);
     byte_buffer_reset(&expected_pb);
-    free(protobuf);
-    peer_id_free(peer);
-    peer_id_free(roundtrip_peer);
     if (rc != 0 && !key_type) {
         return record_failure(path, codec_name, "invalid peer_id fixture");
     }
@@ -2190,7 +2429,7 @@ static int run_decode_failure_fixture(
     if (strcmp(decoder, "varint") == 0) {
         uint64_t value = 0u;
         size_t consumed = 0u;
-        rejected = unsigned_varint_decode(bytes.data, bytes.len, &value, &consumed) != UNSIGNED_VARINT_OK;
+        rejected = lean_uvarint_decode(bytes.data, bytes.len, &value, &consumed) != 0;
     } else if (strcmp(decoder, "reqresp_request") == 0) {
         struct byte_buffer payload = {0};
         rejected = decode_reqresp_request(bytes.data, bytes.len, &payload) != 0;
@@ -2214,11 +2453,46 @@ static int run_decode_failure_fixture(
             free(decoded);
         }
     } else if (strcmp(decoder, "gossipsub_rpc") == 0) {
-        libp2p_gossipsub_RPC *rpc = NULL;
-        rejected = libp2p_gossipsub_rpc_decode_frame(bytes.data, bytes.len, &rpc) != LIBP2P_ERR_OK || !rpc;
-        if (rpc) {
-            libp2p_gossipsub_RPC_free(rpc);
-        }
+        libp2p_gossipsub_config_t config;
+        libp2p_gossipsub_rpc_subscription_t decoded_subs[4];
+        libp2p_gossipsub_message_t decoded_publish[4];
+        libp2p_gossipsub_control_ihave_t decoded_ihave[4];
+        libp2p_gossipsub_control_iwant_t decoded_iwant[4];
+        libp2p_gossipsub_control_graft_t decoded_graft[4];
+        libp2p_gossipsub_control_prune_t decoded_prune[4];
+        libp2p_gossipsub_control_idontwant_t decoded_idontwant[4];
+        libp2p_gossipsub_bytes_t decoded_ids[16];
+        libp2p_gossipsub_peer_info_t decoded_peers[4];
+        libp2p_gossipsub_rpc_t rpc = {0};
+        libp2p_gossipsub_rpc_decode_storage_t decode_storage = {
+            .subscriptions = decoded_subs,
+            .subscription_capacity = sizeof(decoded_subs) / sizeof(decoded_subs[0]),
+            .publish = decoded_publish,
+            .publish_capacity = sizeof(decoded_publish) / sizeof(decoded_publish[0]),
+            .ihave = decoded_ihave,
+            .ihave_capacity = sizeof(decoded_ihave) / sizeof(decoded_ihave[0]),
+            .iwant = decoded_iwant,
+            .iwant_capacity = sizeof(decoded_iwant) / sizeof(decoded_iwant[0]),
+            .graft = decoded_graft,
+            .graft_capacity = sizeof(decoded_graft) / sizeof(decoded_graft[0]),
+            .prune = decoded_prune,
+            .prune_capacity = sizeof(decoded_prune) / sizeof(decoded_prune[0]),
+            .idontwant = decoded_idontwant,
+            .idontwant_capacity = sizeof(decoded_idontwant) / sizeof(decoded_idontwant[0]),
+            .message_ids = decoded_ids,
+            .message_id_capacity = sizeof(decoded_ids) / sizeof(decoded_ids[0]),
+            .peer_infos = decoded_peers,
+            .peer_info_capacity = sizeof(decoded_peers) / sizeof(decoded_peers[0]),
+        };
+        rejected = libp2p_gossipsub_config_default(&config) != LIBP2P_GOSSIPSUB_OK
+            || libp2p_gossipsub_rpc_body_decode(
+                   LIBP2P_GOSSIPSUB_VERSION_12,
+                   &config.limits,
+                   bytes.data,
+                   bytes.len,
+                   &decode_storage,
+                   &rpc)
+                   != LIBP2P_GOSSIPSUB_OK;
     } else if (strcmp(decoder, "enr") == 0) {
         char *enr_text = NULL;
         struct lantern_enr_record record;

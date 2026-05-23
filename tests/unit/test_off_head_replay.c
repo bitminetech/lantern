@@ -153,7 +153,7 @@ static int load_block_by_root_filename(
     }
 
     lantern_signed_block_with_attestation_init(out_block);
-    if (lantern_ssz_decode_signed_block(out_block, data, len) != 0) {
+    if (lantern_ssz_decode_signed_block(out_block, data, len) != SSZ_SUCCESS) {
         free(data);
         lantern_signed_block_with_attestation_reset(out_block);
         return -1;
@@ -181,7 +181,7 @@ static int load_snapshot_buggy(
         return -1;
     }
     lantern_state_init(out_state);
-    if (lantern_ssz_decode_state(out_state, state_bytes, state_len) != 0) {
+    if (lantern_ssz_decode_state(out_state, state_bytes, state_len) != SSZ_SUCCESS) {
         free(state_bytes);
         lantern_state_reset(out_state);
         return -1;

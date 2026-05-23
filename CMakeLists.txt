@@ -6,6 +6,9 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
 if(APPLE)
     set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "Target architecture for macOS builds" FORCE)
+    add_compile_definitions(_DARWIN_C_SOURCE)
+    add_compile_definitions(PATH_MAX=4096)
+    add_compile_definitions(NAME_MAX=255)
 endif()
 
 set(CMAKE_C_STANDARD 17)
@@ -68,6 +71,7 @@ set(LANTERN_LIBRARY_SOURCES
     src/http/common.c
     src/http/metrics.c
     src/http/server.c
+    src/test_driver/driver.c
     src/storage/storage.c
     src/support/log.c
     src/support/string_list.c
@@ -76,8 +80,8 @@ set(LANTERN_LIBRARY_SOURCES
     src/support/secure_mem.c
     src/crypto/xmss.c
     src/internal/yaml_parser.c
-    external/c-libp2p/src/multiformats/multibase/encoding/base64_url.c
-    external/c-libp2p/external/wjcryptlib/lib/WjCryptLib_Sha256.c
+    tests/support/fixture_loader.c
+    tests/support/state_store_adapter.c
 )
 
 function(lantern_define_library target_name wrapper_target)
@@ -86,13 +90,9 @@ function(lantern_define_library target_name wrapper_target)
         PUBLIC
             ${PROJECT_SOURCE_DIR}/include
         PRIVATE
+            ${PROJECT_SOURCE_DIR}
             ${PROJECT_SOURCE_DIR}/src
             ${PROJECT_SOURCE_DIR}/external/jsmn
-            ${PROJECT_SOURCE_DIR}/external/c-libp2p/src/protocol/gossipsub/proto
-            ${PROJECT_SOURCE_DIR}/external/c-libp2p/src/protocol/gossipsub/proto/gen
-            ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/secp256k1/include
-            ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/libtomcrypt/src/headers
-            ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/wjcryptlib/lib
     )
     target_compile_definitions(${target_name}
         PRIVATE
@@ -100,7 +100,7 @@ function(lantern_define_library target_name wrapper_target)
             _POSIX_C_SOURCE=200809L
     )
     lantern_configure_dependencies(${target_name} ${wrapper_target})
-    target_link_libraries(${target_name} PRIVATE secp256k1 libtomcrypt Threads::Threads)
+    target_link_libraries(${target_name} PRIVATE Threads::Threads)
 endfunction()
 
 lantern_define_library(lantern lantern_c_leanvm_xmss)
@@ -228,9 +228,6 @@ if(LANTERN_BUILD_TESTS)
         lantern_client_gossip_test
         PRIVATE
             ${PROJECT_SOURCE_DIR}/tests/unit
-            ${PROJECT_SOURCE_DIR}/external/c-libp2p
-            ${PROJECT_SOURCE_DIR}/external/c-libp2p/src/protocol/gossipsub/proto
-            ${PROJECT_SOURCE_DIR}/external/c-libp2p/src/protocol/gossipsub/proto/gen
     )
     target_compile_definitions(
         lantern_client_gossip_test
@@ -305,12 +302,10 @@ if(LANTERN_BUILD_TESTS)
     add_test(NAME lantern_consensus_runtime COMMAND lantern_consensus_runtime_test)
 
     add_executable(lantern_state_test tests/unit/test_state.c)
-    target_sources(lantern_state_test PRIVATE tests/support/state_store_adapter.c)
     target_link_libraries(lantern_state_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_state COMMAND lantern_state_test)
 
     add_executable(lantern_off_head_replay_test tests/unit/test_off_head_replay.c)
-    target_sources(lantern_off_head_replay_test PRIVATE tests/support/state_store_adapter.c)
     target_link_libraries(lantern_off_head_replay_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_off_head_replay COMMAND lantern_off_head_replay_test)
     set_tests_properties(lantern_off_head_replay PROPERTIES TIMEOUT 120)
@@ -326,8 +321,6 @@ if(LANTERN_BUILD_TESTS)
 
     add_executable(lantern_networking_messages_test
         tests/unit/test_networking_messages.c
-        tests/support/state_store_adapter.c
-        tests/support/fixture_loader.c
     )
     target_link_libraries(lantern_networking_messages_test PRIVATE lantern)
     target_include_directories(
@@ -363,7 +356,6 @@ if(LANTERN_BUILD_TESTS)
     add_test(NAME lantern_fork_choice COMMAND lantern_fork_choice_test)
 
     add_executable(lantern_storage_test tests/unit/test_storage.c)
-    target_sources(lantern_storage_test PRIVATE tests/support/state_store_adapter.c)
     target_link_libraries(lantern_storage_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_storage COMMAND lantern_storage_test)
 
@@ -386,8 +378,6 @@ if(LANTERN_BUILD_TESTS)
         add_executable(lantern_consensus_vectors_test
             tests/integration/test_consensus_vectors.c
             tests/integration/consensus_fixture_runner.c
-            tests/support/state_store_adapter.c
-            tests/support/fixture_loader.c
         )
         target_link_libraries(lantern_consensus_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
         target_include_directories(
@@ -416,8 +406,6 @@ if(LANTERN_BUILD_TESTS)
             "— registering lantern_verify_signatures_vectors")
         add_executable(lantern_verify_signatures_vectors_test
             tests/integration/test_verify_signatures_vectors.c
-            tests/support/state_store_adapter.c
-            tests/support/fixture_loader.c
         )
         target_link_libraries(lantern_verify_signatures_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
         target_include_directories(
@@ -446,8 +434,6 @@ if(LANTERN_BUILD_TESTS)
         add_executable(lantern_genesis_vectors_test
             tests/integration/test_genesis_vectors.c
             tests/integration/consensus_fixture_runner.c
-            tests/support/state_store_adapter.c
-            tests/support/fixture_loader.c
         )
         target_link_libraries(lantern_genesis_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
         target_include_directories(
@@ -475,8 +461,6 @@ if(LANTERN_BUILD_TESTS)
             "— registering lantern_ssz_vectors")
         add_executable(lantern_ssz_vectors_test
             tests/integration/test_ssz_vectors.c
-            tests/support/state_store_adapter.c
-            tests/support/fixture_loader.c
         )
         target_link_libraries(lantern_ssz_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
         target_include_directories(
@@ -504,8 +488,6 @@ if(LANTERN_BUILD_TESTS)
             "— registering lantern_networking_codec_vectors")
         add_executable(lantern_networking_codec_vectors_test
             tests/integration/test_networking_codec_vectors.c
-            tests/support/state_store_adapter.c
-            tests/support/fixture_loader.c
         )
         target_link_libraries(lantern_networking_codec_vectors_test PRIVATE ${LANTERN_TEST_LINK_LIB})
         target_include_directories(
@@ -513,9 +495,6 @@ if(LANTERN_BUILD_TESTS)
             PRIVATE
                 ${PROJECT_SOURCE_DIR}
                 ${PROJECT_SOURCE_DIR}/external/jsmn
-                ${PROJECT_SOURCE_DIR}/external/c-libp2p/src/protocol/gossipsub/proto
-                ${PROJECT_SOURCE_DIR}/external/c-libp2p/src/protocol/gossipsub/proto/gen
-                ${PROJECT_SOURCE_DIR}/external/c-libp2p/external/noise-c/include
         )
         target_compile_definitions(
             lantern_networking_codec_vectors_test
@@ -528,25 +507,6 @@ if(LANTERN_BUILD_TESTS)
         message(STATUS
             "Networking-codec fixtures not found at ${LANTERN_CONSENSUS_FIXTURE_DIR} "
             "— skipping lantern_networking_codec_vectors")
-    endif()
-
-    # Mirror libp2p dependency test names into CTestCustom so top-level `ctest`
-    # ignores them (they are dependency-only suites we do not build/run).
-    set(_lantern_libp2p_binary_dir ${CMAKE_BINARY_DIR}/c-libp2p)
-    if(EXISTS "${_lantern_libp2p_binary_dir}")
-        get_property(_lantern_libp2p_tests
-            DIRECTORY "${_lantern_libp2p_binary_dir}"
-            PROPERTY TESTS)
-        if(_lantern_libp2p_tests)
-            set(_lantern_ctest_custom "${CMAKE_BINARY_DIR}/CTestCustom.cmake")
-            file(WRITE "${_lantern_ctest_custom}"
-"# Auto-generated by lantern/CMakeLists.txt – skip c-libp2p dependency tests.\n"
-"set(CTEST_CUSTOM_TESTS_IGNORE\n")
-            foreach(_lantern_test_name IN LISTS _lantern_libp2p_tests)
-                file(APPEND "${_lantern_ctest_custom}" "    ${_lantern_test_name}\n")
-            endforeach()
-            file(APPEND "${_lantern_ctest_custom}" ")\n")
-        endif()
     endif()
 
     set(_lantern_ctest_targets
@@ -576,5 +536,16 @@ if(LANTERN_BUILD_TESTS)
     set_tests_properties(lantern_client_pending PROPERTIES TIMEOUT 90)
     set_tests_properties(lantern_client_vote PROPERTIES TIMEOUT 300)
     set_tests_properties(lantern_state PROPERTIES TIMEOUT 300)
+
+    get_property(_lantern_build_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(_lantern_target IN LISTS _lantern_build_targets)
+        if(_lantern_target MATCHES "^lantern_.*_test$")
+            target_compile_options(
+                ${_lantern_target}
+                PRIVATE
+                    $<$<COMPILE_LANG_AND_ID:C,AppleClang,Clang,GNU>:-UNDEBUG>
+            )
+        endif()
+    endforeach()
 
 endif()

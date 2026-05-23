@@ -1,7 +1,14 @@
+#include "../../src/core/client_network_internal.h"
+
+#include "lantern/core/client.h"
 #include "lantern/networking/enr.h"
 #include "lantern/networking/libp2p.h"
+#include "lantern/support/string_list.h"
 
+#include <pthread.h>
+#include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 static const uint8_t kHostSecret[32] = {
     0xb7, 0x1c, 0x71, 0xa6, 0x7e, 0x11, 0x77, 0xad,
@@ -14,7 +21,34 @@ static const char *kQuicOnlyEnr =
     "enr:-IW4QKbT-CoCAKBpbYNfzfFcPfYjkqHyH-5sFlVkaKlNEPN1M5M34vIYb8HyCg56m7-V13pKWZqH9ThdYtXjjavDrP4BgmlkgnY0"
     "gmlwhKwUAAqEcXVpY4IjKIlzZWNwMjU2azGhAuIbyETf2xNYGNJfCPhn95r0lyyoRpB5PCWwh53RSSgS";
 
-int main(void) {
+static const char *kQuickstartGenesisEnrs[] = {
+    "enr:-IW4QGGifTt9ypyMtChDISUNX3z4z5iPdiEPOmBoILvnDuWIKbWVmKXxZERPnw0piQyaBNCENFEPoIi-vxsnsrBig9MBgmlkgnY0"
+    "gmlwhH8AAAGEcXVpY4IjKYlzZWNwMjU2azGhAhMMnGF1rmIPQ9tWgqfkNmvsG-aIyc9EJU5JFo3Tegys",
+    "enr:-IW4QNQN_PFdTfuYLGmdAWNivEJLT2tSZtn5jdBOImvh0QlLAJ1p8wHvvfD7aOa1lH88oJ8ddGK_a_FWqAQT_QY4qdMBgmlkgnY0"
+    "gmlwhH8AAAGEcXVpY4IjK4lzZWNwMjU2azGhA7NTxgfOmGE2EQa4HhsXxFOeHdTLYIc2MEBczymm9IUN",
+    "enr:-IW4QJQOjnBJm0chbYlA2noeqKam0wtrysHXKQ09l8hDRaJVNNB28Uek24_Z61NSqG4oZwG-jWwijgl-KELuyhMRkVcBgmlkgnY0"
+    "gmlwhH8AAAGEcXVpY4IjLIlzZWNwMjU2azGhArLG8gGy7-rMEg7OqV-r5BkWiIEk0fro2dSr5Idt1V5V",
+    "enr:-IW4QI9EXVDvUIxTrCV51Gs2RtpmZu71S7ZP7RRg1OoSBVvGFeXkc5WleBffXwTcWX1Qa9F_N6MhH28TsGFhXkMCGvUBgmlkgnY0"
+    "gmlwhH8AAAGEcXVpY4IjL4lzZWNwMjU2azGhA6Dm1X9PyyCNAm3RUGcZtG5U3imbj_MDPU5CtPnpeaKS",
+};
+
+static int validation_accepts_quickstart_enr(const char *encoded) {
+    struct lantern_enr_record record;
+    lantern_enr_record_init(&record);
+
+    if (lantern_enr_record_decode(encoded, &record) != 0) {
+        lantern_enr_record_reset(&record);
+        return 1;
+    }
+
+    int rc = lantern_libp2p_validate_enr_peer(&record);
+
+    lantern_enr_record_reset(&record);
+
+    return rc == 0 ? 0 : 1;
+}
+
+static int dial_starts_after_launch(void) {
     struct lantern_enr_record record;
     lantern_enr_record_init(&record);
 
@@ -39,10 +73,82 @@ int main(void) {
         return 1;
     }
 
-    int rc = lantern_libp2p_host_add_enr_peer(&host, &record, 1000);
+    char multiaddr[256];
+    struct lantern_peer_id peer_id;
+    if (lantern_libp2p_enr_to_multiaddr(&record, multiaddr, sizeof(multiaddr), &peer_id) != 0) {
+        lantern_enr_record_reset(&record);
+        lantern_libp2p_host_reset(&host);
+        return 1;
+    }
+
+    int rc = lantern_libp2p_host_dial_multiaddr(&host, multiaddr);
 
     lantern_enr_record_reset(&record);
     lantern_libp2p_host_reset(&host);
 
     return rc == 0 ? 0 : 1;
+}
+
+static int connection_counter_keeps_peer_until_last_connection_closes(void) {
+    static const char *peer_text = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
+
+    struct lantern_client client;
+    memset(&client, 0, sizeof(client));
+    lantern_string_list_init(&client.connected_peer_ids);
+    lantern_string_list_init(&client.connected_peer_refs);
+    lantern_string_list_init(&client.inbound_peer_ids);
+
+    if (pthread_mutex_init(&client.connection_lock, NULL) != 0) {
+        return 1;
+    }
+    client.connection_lock_initialized = true;
+
+    struct lantern_peer_id peer;
+    if (lantern_peer_id_from_text(peer_text, &peer) != 0) {
+        pthread_mutex_destroy(&client.connection_lock);
+        lantern_string_list_reset(&client.connected_peer_ids);
+        lantern_string_list_reset(&client.connected_peer_refs);
+        lantern_string_list_reset(&client.inbound_peer_ids);
+        return 1;
+    }
+
+    connection_counter_update(&client, 1, &peer, true, LIBP2P_HOST_OK);
+    connection_counter_update(&client, 1, &peer, false, LIBP2P_HOST_OK);
+    int failed = !lantern_client_is_peer_connected(&client, peer_text)
+        || client.connected_peers != 1u
+        || client.connected_peer_ids.len != 1u
+        || client.connected_peer_refs.len != 2u;
+
+    connection_counter_update(&client, -1, &peer, false, LIBP2P_HOST_OK);
+    failed = failed || !lantern_client_is_peer_connected(&client, peer_text)
+        || client.connected_peers != 1u
+        || client.connected_peer_ids.len != 1u
+        || client.connected_peer_refs.len != 1u;
+
+    connection_counter_update(&client, -1, &peer, false, LIBP2P_HOST_OK);
+    failed = failed || lantern_client_is_peer_connected(&client, peer_text)
+        || client.connected_peers != 0u
+        || client.connected_peer_ids.len != 0u
+        || client.connected_peer_refs.len != 0u;
+
+    pthread_mutex_destroy(&client.connection_lock);
+    lantern_string_list_reset(&client.connected_peer_ids);
+    lantern_string_list_reset(&client.connected_peer_refs);
+    lantern_string_list_reset(&client.inbound_peer_ids);
+
+    return failed;
+}
+
+int main(void) {
+    for (size_t i = 0; i < sizeof(kQuickstartGenesisEnrs) / sizeof(kQuickstartGenesisEnrs[0]); ++i) {
+        if (validation_accepts_quickstart_enr(kQuickstartGenesisEnrs[i]) != 0) {
+            return 1;
+        }
+    }
+
+    if (connection_counter_keeps_peer_until_last_connection_closes() != 0) {
+        return 1;
+    }
+
+    return dial_starts_after_launch();
 }

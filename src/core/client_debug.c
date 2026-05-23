@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "lantern/support/log.h"
+#include "lantern/support/strings.h"
 
 /* ============================================================================
  * Debug Vote/Block Recording
@@ -252,8 +253,7 @@ int lantern_client_debug_pending_entry(
     requested = entry->parent_requested;
     if (entry->peer_text[0])
     {
-        strncpy(peer_copy, entry->peer_text, sizeof(peer_copy) - 1u);
-        peer_copy[sizeof(peer_copy) - 1u] = '\0';
+        (void)lantern_string_copy(peer_copy, sizeof(peer_copy), entry->peer_text);
     }
     lantern_client_unlock_pending(mutable_client, locked);
 
@@ -274,8 +274,7 @@ int lantern_client_debug_pending_entry(
         out_peer_text[0] = '\0';
         if (peer_text_len > 1 && peer_copy[0])
         {
-            strncpy(out_peer_text, peer_copy, peer_text_len - 1u);
-            out_peer_text[peer_text_len - 1u] = '\0';
+            (void)lantern_string_copy(out_peer_text, peer_text_len, peer_copy);
         }
     }
     return LANTERN_CLIENT_OK;

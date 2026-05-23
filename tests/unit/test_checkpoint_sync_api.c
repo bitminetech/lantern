@@ -518,7 +518,7 @@ static int test_storage_state_bytes(void)
 
     LanternState decoded;
     lantern_state_init(&decoded);
-    int decode_rc = lantern_ssz_decode_state(&decoded, fixture.ssz_bytes, fixture.ssz_len);
+    ssz_error_t decode_rc = lantern_ssz_decode_state(&decoded, fixture.ssz_bytes, fixture.ssz_len);
     expect_zero(decode_rc, "decode state bytes");
     expect_true(decoded.validator_count == 4u, "validator count");
     expect_true(

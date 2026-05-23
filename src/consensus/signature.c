@@ -34,8 +34,6 @@ static bool bytes_are_zero(const uint8_t *bytes, size_t length) {
 
 struct lantern_recursive_child_input {
     struct PQSignatureSchemePublicKey **pubkey_handles;
-    uint8_t *canonical_bytes;
-    size_t canonical_length;
 };
 
 static pthread_once_t g_xmss_verifier_setup_once = PTHREAD_ONCE_INIT;
@@ -66,7 +64,6 @@ static void lantern_recursive_child_input_reset(struct lantern_recursive_child_i
         }
     }
     free(child->pubkey_handles);
-    free(child->canonical_bytes);
     memset(child, 0, sizeof(*child));
 }
 
@@ -158,64 +155,7 @@ static bool prepare_recursive_child(
         return true;
     }
 
-    /* Legacy single-participant proofs in Lantern may still be stored as raw signature bytes.
-     * Canonicalize them to AggregatedXMSS bytes before passing them to recursive aggregation.
-     */
-    if (participant_count != 1u || proof->proof_data.length != LANTERN_SIGNATURE_SIZE) {
-        return false;
-    }
-
-    struct PQSignature *signature_handle = NULL;
-    enum PQSigningError sig_err = pq_signature_deserialize(
-        proof->proof_data.data,
-        proof->proof_data.length,
-        &signature_handle);
-    if (sig_err != Success || !signature_handle) {
-        if (signature_handle) {
-            pq_signature_free(signature_handle);
-        }
-        return false;
-    }
-
-    uint8_t *buffer = malloc(LANTERN_AGG_PROOF_MAX_BYTES);
-    if (!buffer) {
-        pq_signature_free(signature_handle);
-        return false;
-    }
-
-    const struct PQSignature *signature_refs[1] = {signature_handle};
-    uintptr_t written_len = 0u;
-    pq_xmss_aggregation_setup_prover();
-    enum PQSigningError agg_err = pq_aggregate_signatures(
-        (const struct PQSignatureSchemePublicKey *const *)out_child->pubkey_handles,
-        signature_refs,
-        1u,
-        message->bytes,
-        LANTERN_ROOT_SIZE,
-        epoch,
-        buffer,
-        LANTERN_AGG_PROOF_MAX_BYTES,
-        &written_len);
-    pq_signature_free(signature_handle);
-    if (agg_err != Success || written_len == 0u || written_len > LANTERN_AGG_PROOF_MAX_BYTES) {
-        free(buffer);
-        return false;
-    }
-
-    out_child->canonical_bytes = malloc((size_t)written_len);
-    if (!out_child->canonical_bytes) {
-        free(buffer);
-        return false;
-    }
-    memcpy(out_child->canonical_bytes, buffer, (size_t)written_len);
-    out_child->canonical_length = (size_t)written_len;
-    free(buffer);
-
-    out_input->pubkeys = (const struct PQSignatureSchemePublicKey *const *)out_child->pubkey_handles;
-    out_input->pubkey_count = participant_count;
-    out_input->agg_bytes = out_child->canonical_bytes;
-    out_input->agg_len = out_child->canonical_length;
-    return true;
+    return false;
 }
 
 static void log_agg_proof_preview(const LanternByteList *proof) {

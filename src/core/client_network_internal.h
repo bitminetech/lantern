@@ -27,8 +27,6 @@
 #include "lantern/core/client.h"
 #include "lantern/consensus/containers.h"
 
-#include <libp2p/events.h>
-
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -86,7 +84,6 @@ struct lantern_peer_status_entry
     bool has_status;                      /**< True if status has been received */
     uint64_t last_status_ms;              /**< Timestamp of last status message */
     bool status_request_inflight;         /**< True if status request is pending */
-    bool reqresp_legacy_len;              /**< True if peer uses legacy reqresp length framing */
     uint32_t consecutive_blocks_failures; /**< Count of consecutive request failures */
     uint32_t outstanding_status_requests; /**< Number of outstanding status requests */
     uint32_t consecutive_ping_failures;   /**< Count of consecutive ping failures */
@@ -101,7 +98,7 @@ struct block_request_ctx
 {
     struct lantern_client *client;  /**< Client instance */
     uint64_t request_id;            /**< Internal request tracking ID */
-    peer_id_t *peer_id;             /**< Peer ID structure */
+    struct lantern_peer_id *peer_id;             /**< Peer ID structure */
     char peer_text[128];            /**< Peer ID as text */
     LanternRoot *roots;             /**< Roots being requested */
     uint32_t *depths;               /**< Backfill depth per root */
@@ -116,7 +113,7 @@ struct block_request_ctx
 struct block_request_worker_args
 {
     struct block_request_ctx *ctx;  /**< Request context */
-    libp2p_stream_t *stream;        /**< libp2p stream */
+    struct lantern_reqresp_stream *stream;        /**< libp2p stream */
 };
 
 
@@ -277,34 +274,6 @@ void lantern_client_status_request_failed(
     const char *peer_id);
 
 /**
- * Mark a peer as using legacy reqresp length framing.
- *
- * Legacy peers encode the varint length as the compressed payload size.
- *
- * @param client   Client instance
- * @param peer_id  Peer ID to mark
- *
- * @note Thread safety: This function acquires status_lock
- */
-void lantern_client_mark_peer_reqresp_legacy(
-    struct lantern_client *client,
-    const char *peer_id);
-
-/**
- * Check whether a peer uses legacy reqresp length framing.
- *
- * @param client   Client instance
- * @param peer_id  Peer ID to check
- * @return true if peer is marked legacy, false otherwise
- *
- * @note Thread safety: This function acquires status_lock
- */
-bool lantern_client_peer_reqresp_legacy(
-    struct lantern_client *client,
-    const char *peer_id);
-
-
-/**
  * Update status request tracking counters.
  *
  * @param client   Client instance
@@ -353,7 +322,7 @@ void connection_counter_reset(struct lantern_client *client);
 void connection_counter_update(
     struct lantern_client *client,
     int delta,
-    const peer_id_t *peer,
+    const struct lantern_peer_id *peer,
     bool inbound,
     int reason);
 
@@ -381,7 +350,7 @@ bool lantern_client_is_peer_connected(struct lantern_client *client, const char 
  *
  * @note Thread safety: This function acquires status_lock
  */
-void request_status_now(struct lantern_client *client, const peer_id_t *peer, const char *peer_text);
+void request_status_now(struct lantern_client *client, const struct lantern_peer_id *peer, const char *peer_text);
 
 
 /**
@@ -438,7 +407,7 @@ void peer_dialer_sleep(struct lantern_client *client, unsigned seconds);
  *
  * @note Thread safety: This function acquires connection_lock
  */
-void redial_peer_on_timeout(struct lantern_client *client, const peer_id_t *peer);
+void redial_peer_on_timeout(struct lantern_client *client, const struct lantern_peer_id *peer);
 
 
 /**
@@ -475,35 +444,18 @@ void stop_peer_dialer(struct lantern_client *client);
 
 
 /**
- * Start the ping service.
+ * Connection event callback for the c-lean-libp2p host.
  *
- * @param client  Client instance
- * @return 0 on success, -1 on failure
- *
- * @note Thread safety: This function is thread-safe
- */
-int start_ping_service(struct lantern_client *client);
-
-
-/**
- * Stop the ping service.
- *
- * @param client  Client instance
- *
- * @note Thread safety: This function is thread-safe
- */
-void stop_ping_service(struct lantern_client *client);
-
-
-/**
- * Connection event callback for libp2p host.
- *
+ * @param network    Lantern host wrapper
  * @param evt        Event details
  * @param user_data  Client instance
  *
  * @note Thread safety: This function is called from libp2p thread
  */
-void connection_events_cb(const libp2p_event_t *evt, void *user_data);
+void connection_events_cb(
+    struct lantern_libp2p_host *network,
+    const libp2p_host_event_t *evt,
+    void *user_data);
 
 
 #ifdef __cplusplus

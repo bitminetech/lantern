@@ -21,8 +21,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "peer_id/peer_id.h"
-
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"
@@ -43,6 +41,30 @@ enum
     PEER_TEXT_BUFFER_LEN = 128,
     VALIDATOR_PUBKEY_HEX_BUFFER_LEN = (LANTERN_VALIDATOR_PUBKEY_SIZE * 2u) + 3u,
 };
+
+void lantern_client_set_sync_state_logged(
+    struct lantern_client *client,
+    LanternSyncState new_state,
+    const char *reason)
+{
+    if (!client)
+    {
+        return;
+    }
+    LanternSyncState prev_state = client->sync_state;
+    if (prev_state == new_state)
+    {
+        return;
+    }
+    client->sync_state = new_state;
+    lantern_log_info(
+        "sync",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "%s → %s, %s",
+        lantern_sync_state_name(prev_state),
+        lantern_sync_state_name(new_state),
+        reason && reason[0] ? reason : "state change");
+}
 
 static void backfill_session_clear_locked(struct lantern_backfill_session *session)
 {
@@ -95,8 +117,7 @@ static bool backfill_entry_append_locked(
             }
             if (peer_text && peer_text[0])
             {
-                strncpy(entry->peer_text, peer_text, sizeof(entry->peer_text) - 1u);
-                entry->peer_text[sizeof(entry->peer_text) - 1u] = '\0';
+                (void)lantern_string_copy(entry->peer_text, sizeof(entry->peer_text), peer_text);
             }
             return true;
         }
@@ -126,8 +147,7 @@ static bool backfill_entry_append_locked(
     entry->depth = depth;
     if (peer_text && peer_text[0])
     {
-        strncpy(entry->peer_text, peer_text, sizeof(entry->peer_text) - 1u);
-        entry->peer_text[sizeof(entry->peer_text) - 1u] = '\0';
+        (void)lantern_string_copy(entry->peer_text, sizeof(entry->peer_text), peer_text);
     }
     return true;
 }
@@ -386,8 +406,10 @@ bool lantern_client_maybe_start_historical_backfill(
     client->backfill.frontier_depth = 0;
     if (peer_text && peer_text[0])
     {
-        strncpy(client->backfill.peer_text, peer_text, sizeof(client->backfill.peer_text) - 1u);
-        client->backfill.peer_text[sizeof(client->backfill.peer_text) - 1u] = '\0';
+        (void)lantern_string_copy(
+            client->backfill.peer_text,
+            sizeof(client->backfill.peer_text),
+            peer_text);
     }
     lantern_client_unlock_pending(client, locked);
 
@@ -551,14 +573,14 @@ bool lantern_client_backfill_should_drop_gossip(
     char root_hex[ROOT_HEX_BUFFER_LEN];
     format_root_hex(root, root_hex, sizeof(root_hex));
     lantern_log_info(
-        "sync",
+        "import",
         &(const struct lantern_log_metadata){
             .validator = client->node_id,
             .peer = peer_text && peer_text[0] ? peer_text : NULL},
-        "historical backfill dropped gossip hint root=%s slot=%" PRIu64
-        " anchor_slot=%" PRIu64 " persisted=%" PRIu64 " dropped_gossip=%" PRIu64,
-        root_hex[0] ? root_hex : "0x0",
+        "slot %" PRIu64 ", %s, rejected, reason: backfill_window"
+        ", anchor_slot %" PRIu64 ", persisted %" PRIu64 ", dropped_gossip %" PRIu64,
         block->block.slot,
+        root_hex[0] ? root_hex : "0x0",
         anchor_slot,
         persisted,
         dropped);
@@ -634,7 +656,7 @@ size_t lantern_client_enabled_validator_count(struct lantern_client *client)
  *
  * @note Thread safety: This function is thread-safe
  */
-static const char *peer_id_to_text(const peer_id_t *from, char *out, size_t out_len)
+static const char *peer_id_to_text(const struct lantern_peer_id *from, char *out, size_t out_len)
 {
     if (!out || out_len == 0)
     {
@@ -647,14 +669,7 @@ static const char *peer_id_to_text(const peer_id_t *from, char *out, size_t out_
         return NULL;
     }
 
-    size_t written = 0;
-    peer_id_error_t rc = peer_id_text_write(
-        from,
-        PEER_ID_TEXT_LEGACY_BASE58,
-        out,
-        out_len,
-        &written);
-    if (rc != PEER_ID_OK)
+    if (lantern_peer_id_to_text(from, out, out_len) != 0)
     {
         out[0] = '\0';
         return NULL;
@@ -776,7 +791,7 @@ static bool validate_gossip_aggregated_attestation_data_locked(
  */
 int gossip_block_handler(
     const LanternSignedBlock *block,
-    const peer_id_t *from,
+    const struct lantern_peer_id *from,
     const uint8_t *raw_block_ssz,
     size_t raw_block_ssz_len,
     void *context)
@@ -786,13 +801,45 @@ int gossip_block_handler(
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_client *client = context;
+    char peer_text[PEER_TEXT_BUFFER_LEN];
+    const char *peer_id_text = peer_id_to_text(from, peer_text, sizeof(peer_text));
+    bool sync_idle = false;
+    if (client->status_lock_initialized && pthread_mutex_lock(&client->status_lock) == 0)
+    {
+        sync_idle = client->sync_state == LANTERN_SYNC_STATE_IDLE;
+        pthread_mutex_unlock(&client->status_lock);
+    }
+    else
+    {
+        sync_idle = client->sync_state == LANTERN_SYNC_STATE_IDLE;
+    }
+    if (sync_idle)
+    {
+        LanternRoot block_root = {0};
+        char root_hex[ROOT_HEX_BUFFER_LEN];
+        char parent_hex[ROOT_HEX_BUFFER_LEN];
+        root_hex[0] = '\0';
+        if (lantern_hash_tree_root_block(&block->block, &block_root) == SSZ_SUCCESS)
+        {
+            format_root_hex(&block_root, root_hex, sizeof(root_hex));
+        }
+        format_root_hex(&block->block.parent_root, parent_hex, sizeof(parent_hex));
+        lantern_log_info(
+            "import",
+            &(const struct lantern_log_metadata){
+                .validator = client->node_id,
+                .peer = peer_id_text},
+            "slot %" PRIu64 ", %s, rejected, reason: sync_state=idle, via gossip, parent %s",
+            block->block.slot,
+            root_hex[0] ? root_hex : "0x0",
+            parent_hex[0] ? parent_hex : "0x0");
+        return LANTERN_CLIENT_ERR_IGNORED;
+    }
+
     if (raw_block_ssz && raw_block_ssz_len > 0)
     {
         lean_metrics_record_gossip_block_size(raw_block_ssz_len);
     }
-
-    char peer_text[PEER_TEXT_BUFFER_LEN];
-    const char *peer_id_text = peer_id_to_text(from, peer_text, sizeof(peer_text));
 
     lantern_client_record_block(
         client,
@@ -827,7 +874,7 @@ int gossip_block_handler(
  */
 int gossip_vote_handler(
     const LanternSignedVote *vote,
-    const peer_id_t *from,
+    const struct lantern_peer_id *from,
     const uint8_t *raw_vote_payload,
     size_t raw_vote_payload_len,
     void *context)
@@ -837,6 +884,21 @@ int gossip_vote_handler(
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_client *client = context;
+    bool sync_idle = false;
+    if (client->status_lock_initialized && pthread_mutex_lock(&client->status_lock) == 0)
+    {
+        sync_idle = client->sync_state == LANTERN_SYNC_STATE_IDLE;
+        pthread_mutex_unlock(&client->status_lock);
+    }
+    else
+    {
+        sync_idle = client->sync_state == LANTERN_SYNC_STATE_IDLE;
+    }
+    if (sync_idle)
+    {
+        return LANTERN_CLIENT_ERR_IGNORED;
+    }
+
     if (raw_vote_payload && raw_vote_payload_len > 0)
     {
         lean_metrics_record_gossip_attestation_size(raw_vote_payload_len);
@@ -939,7 +1001,7 @@ static bool verify_and_cache_aggregated_attestation_locked(
     }
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&attestation->data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&attestation->data, &data_root) != SSZ_SUCCESS) {
         free(pubkeys);
         lantern_state_reset(&target_state);
         return false;
@@ -973,7 +1035,7 @@ static bool verify_and_cache_aggregated_attestation_locked(
 
 int gossip_aggregated_attestation_handler(
     const LanternSignedAggregatedAttestation *attestation,
-    const peer_id_t *from,
+    const struct lantern_peer_id *from,
     const uint8_t *raw_attestation_payload,
     size_t raw_attestation_payload_len,
     void *context)
@@ -982,6 +1044,21 @@ int gossip_aggregated_attestation_handler(
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_client *client = context;
+    bool sync_idle = false;
+    if (client->status_lock_initialized && pthread_mutex_lock(&client->status_lock) == 0)
+    {
+        sync_idle = client->sync_state == LANTERN_SYNC_STATE_IDLE;
+        pthread_mutex_unlock(&client->status_lock);
+    }
+    else
+    {
+        sync_idle = client->sync_state == LANTERN_SYNC_STATE_IDLE;
+    }
+    if (sync_idle)
+    {
+        return LANTERN_CLIENT_ERR_IGNORED;
+    }
+
     if (raw_attestation_payload && raw_attestation_payload_len > 0) {
         lean_metrics_record_gossip_aggregation_size(raw_attestation_payload_len);
     }
@@ -1067,7 +1144,7 @@ void persist_anchor_block(
     const LanternRoot *root_to_log = anchor_root;
     if (!root_to_log)
     {
-        if (lantern_hash_tree_root_block(block, &computed_root) == 0)
+        if (lantern_hash_tree_root_block(block, &computed_root) == SSZ_SUCCESS)
         {
             root_to_log = &computed_root;
         }
@@ -1146,7 +1223,7 @@ static int compute_fork_choice_anchor_roots(
         normalized_genesis_snapshot = true;
     }
 
-    if (lantern_hash_tree_root_state(state_for_hash, out_state_root) != 0)
+    if (lantern_hash_tree_root_state(state_for_hash, out_state_root) != SSZ_SUCCESS)
     {
         lantern_log_error("forkchoice", meta, "failed to hash anchor state");
         return LANTERN_CLIENT_ERR_RUNTIME;
@@ -1163,7 +1240,7 @@ static int compute_fork_choice_anchor_roots(
     *out_anchor_header = client->state.latest_block_header;
     out_anchor_header->state_root = *out_state_root;
 
-    if (lantern_hash_tree_root_block_header(out_anchor_header, out_anchor_root) != 0)
+    if (lantern_hash_tree_root_block_header(out_anchor_header, out_anchor_root) != SSZ_SUCCESS)
     {
         lantern_log_error("forkchoice", meta, "failed to hash anchor block header");
         return LANTERN_CLIENT_ERR_RUNTIME;
@@ -1396,7 +1473,7 @@ int initialize_fork_choice(struct lantern_client *client)
 
     LanternRoot synthetic_anchor_block_root = {0};
     bool have_synthetic_anchor_block_root =
-        lantern_hash_tree_root_block(&anchor, &synthetic_anchor_block_root) == 0;
+        lantern_hash_tree_root_block(&anchor, &synthetic_anchor_block_root) == SSZ_SUCCESS;
     char synthetic_anchor_block_root_hex[ROOT_HEX_BUFFER_LEN];
     format_root_hex(
         &synthetic_anchor_block_root,
@@ -1575,7 +1652,7 @@ static bool load_restored_block_state(
     }
 
     lantern_state_init(out_state);
-    bool loaded = lantern_ssz_decode_state(out_state, state_bytes, state_len) == 0;
+    bool loaded = lantern_ssz_decode_state(out_state, state_bytes, state_len) == SSZ_SUCCESS;
     free(state_bytes);
     if (!loaded)
     {
@@ -2400,8 +2477,7 @@ static bool reserve_active_blocks_request_locked(
     entry->request_id = request_id;
     entry->started_ms = now_ms;
     entry->deadline_ms = deadline_ms;
-    strncpy(entry->peer_id, peer_id, sizeof(entry->peer_id) - 1u);
-    entry->peer_id[sizeof(entry->peer_id) - 1u] = '\0';
+    (void)lantern_string_copy(entry->peer_id, sizeof(entry->peer_id), peer_id);
     client->active_blocks_request_count += 1u;
     *out_request_id = request_id;
     return true;
@@ -2435,12 +2511,13 @@ static void sweep_expired_active_blocks_requests_locked(
                 }
 
                 lantern_log_warn(
-                    "reqresp",
+                    "backfill",
                     &(const struct lantern_log_metadata){
                         .validator = client->node_id,
                         .peer = request->peer_id[0] ? request->peer_id : NULL},
-                    "blocks_by_root request timed out request_id=%" PRIu64
-                    " age_ms=%" PRIu64 " keeping inflight slot until completion",
+                    "request failed, peer %s, reason: timeout, request_id %" PRIu64
+                    ", age_ms %" PRIu64,
+                    request->peer_id[0] ? request->peer_id : "-",
                     request->request_id,
                     age_ms);
                 i += 1u;
@@ -2448,12 +2525,13 @@ static void sweep_expired_active_blocks_requests_locked(
             }
 
             lantern_log_warn(
-                "reqresp",
+                "backfill",
                 &(const struct lantern_log_metadata){
                     .validator = client->node_id,
                     .peer = request->peer_id[0] ? request->peer_id : NULL},
-                "blocks_by_root request hard timeout request_id=%" PRIu64
-                " age_ms=%" PRIu64 " releasing inflight slot",
+                "request failed, peer %s, reason: hard_timeout, request_id %" PRIu64
+                ", age_ms %" PRIu64,
+                request->peer_id[0] ? request->peer_id : "-",
                 request->request_id,
                 age_ms);
 
@@ -2477,8 +2555,7 @@ static void sweep_expired_active_blocks_requests_locked(
  *
  * Queues a block whose parent is not yet known. The block will be
  * imported once its parent arrives. When the client is syncing or
- * synced, it requests the missing parent via reqresp. In IDLE, it
- * relies on gossip for normal block propagation.
+ * synced, it requests the missing parent via reqresp.
  *
  * @param client       Client instance
  * @param block        Block to enqueue
@@ -2497,14 +2574,41 @@ static bool try_schedule_blocks_request_batch(
 {
     if (!client || !roots || root_count == 0)
     {
+        if (client)
+        {
+            lantern_log_warn(
+                "backfill",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "not scheduled, reason: invalid_request, roots %zu",
+                root_count);
+        }
         return false;
     }
     if (root_count > LANTERN_MAX_REQUEST_BLOCKS)
     {
+        lantern_log_warn(
+            "backfill",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "not scheduled, reason: too_many_roots, roots %zu",
+            root_count);
+        return false;
+    }
+    if (!client->status_lock_initialized)
+    {
+        lantern_log_warn(
+            "backfill",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "not scheduled, reason: status_lock_not_initialized, roots %zu",
+            root_count);
         return false;
     }
     if (client->debug_disable_block_requests)
     {
+        lantern_log_info(
+            "backfill",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "not scheduled, reason: block_requests_disabled, roots %zu",
+            root_count);
         return false;
     }
 
@@ -2529,10 +2633,21 @@ static bool try_schedule_blocks_request_batch(
     {
         if (lantern_root_is_zero(&roots[i]))
         {
+            lantern_log_warn(
+                "backfill",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "not scheduled, reason: zero_root, roots %zu",
+                root_count);
             return false;
         }
         if (depths && depths[i] > LANTERN_MAX_BACKFILL_DEPTH)
         {
+            lantern_log_warn(
+                "backfill",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "not scheduled, reason: depth_limit, roots %zu, depth %" PRIu32,
+                root_count,
+                depths[i]);
             return false;
         }
     }
@@ -2546,6 +2661,11 @@ static bool try_schedule_blocks_request_batch(
 
     if (pthread_mutex_lock(&client->status_lock) != 0)
     {
+        lantern_log_warn(
+            "backfill",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "not scheduled, reason: status_lock_failed, roots %zu",
+            root_count);
         return false;
     }
 
@@ -2573,12 +2693,14 @@ static bool try_schedule_blocks_request_batch(
                     age_ms = now_ms - entry->last_status_ms;
                 }
                 lantern_log_info(
-                    "reqresp",
+                    "backfill",
                     &(const struct lantern_log_metadata){
                         .validator = client->node_id,
                         .peer = peer_text},
-                    "blocks_by_root requested peer not eligible connected=%s inflight=%" PRIu32
-                    " failures=%" PRIu32 " has_status=%s status_age_ms=%" PRIu64,
+                    "not scheduled, peer %s, reason: peer_not_connected, roots %zu, connected %s, inflight %" PRIu32
+                    ", failures %" PRIu32 ", has_status %s, status_age_ms %" PRIu64,
+                    peer_text,
+                    root_count,
                     connected ? "true" : "false",
                     inflight,
                     entry->consecutive_blocks_failures,
@@ -2592,12 +2714,13 @@ static bool try_schedule_blocks_request_batch(
                  * different peer while the preferred one is still streaming tends to
                  * produce alternating success/empty responses and slows convergence. */
                 lantern_log_debug(
-                    "reqresp",
+                    "backfill",
                     &(const struct lantern_log_metadata){
                         .validator = client->node_id,
                         .peer = peer_text},
-                    "blocks_by_root preferred peer busy inflight=%" PRIu32
-                    " max=%" PRIu32 " roots=%zu; deferring request",
+                    "not scheduled, peer %s, reason: request_limit_hit, inflight %" PRIu32
+                    ", max %" PRIu32 ", roots %zu",
+                    peer_text,
                     inflight,
                     LANTERN_MAX_BLOCKS_REQUESTS_PER_PEER,
                     root_count);
@@ -2756,10 +2879,10 @@ static bool try_schedule_blocks_request_batch(
             }
         }
         lantern_log_info(
-            "reqresp",
+            "backfill",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "blocks_by_root request skipped: no eligible peers roots=%zu connected=%zu status_entries=%zu "
-            "connected_entries=%zu has_status=%zu fresh=%zu stale=%zu inflight_full=%zu",
+            "not scheduled, reason: no_eligible_peer, roots %zu, peers %zu, status_entries %zu, "
+            "connected_entries %zu, has_status %zu, fresh %zu, stale %zu, request_limit_hit %zu",
             root_count,
             client->connected_peers,
             client->peer_status_count,
@@ -2777,8 +2900,7 @@ static bool try_schedule_blocks_request_batch(
     {
         copy_cap = peer_cap;
     }
-    strncpy(selected_peer, entry->peer_id, copy_cap - 1u);
-    selected_peer[copy_cap - 1u] = '\0';
+    (void)lantern_string_copy(selected_peer, copy_cap, entry->peer_id);
     uint64_t request_id = 0u;
     if (!reserve_active_blocks_request_locked(
             client,
@@ -2788,11 +2910,13 @@ static bool try_schedule_blocks_request_batch(
             &request_id))
     {
         lantern_log_warn(
-            "reqresp",
+            "backfill",
             &(const struct lantern_log_metadata){
                 .validator = client->node_id,
                 .peer = selected_peer[0] ? selected_peer : NULL},
-            "blocks_by_root request skipped: unable to reserve request tracking entry");
+            "not scheduled, peer %s, reason: request_tracking_full, roots %zu",
+            selected_peer[0] ? selected_peer : "-",
+            root_count);
         pthread_mutex_unlock(&client->status_lock);
         return false;
     }
@@ -2820,22 +2944,30 @@ static bool try_schedule_blocks_request_batch(
         != 0)
     {
         lantern_log_warn(
-            "reqresp",
+            "backfill",
             &(const struct lantern_log_metadata){
                 .validator = client->node_id,
                 .peer = selected_peer},
-            "blocks_by_root request scheduling failed roots=%zu",
+            "not scheduled, peer %s, reason: scheduler_failed, roots %zu",
+            selected_peer[0] ? selected_peer : "-",
             root_count);
-        lantern_client_on_blocks_request_complete_batch_with_id(
-            client,
-            request_id,
-            selected_peer,
-            roots,
-            root_count,
-            LANTERN_BLOCKS_REQUEST_ABORTED);
+        /*
+         * The reqresp scheduler completes parse/open-stream failures itself so
+         * the reserved request id is released exactly once.
+         */
         return false;
     }
 
+    lantern_log_info(
+        "backfill",
+        &(const struct lantern_log_metadata){
+            .validator = client->node_id,
+            .peer = selected_peer[0] ? selected_peer : NULL},
+        "request sent, parent %s, peer %s, roots %zu, request_id %" PRIu64,
+        first_root_hex[0] ? first_root_hex : "0x0",
+        selected_peer[0] ? selected_peer : "-",
+        root_count,
+        request_id);
     return true;
 }
 
@@ -3393,6 +3525,19 @@ void lantern_client_enqueue_pending_block(
     LanternRoot block_root_local = *block_root;
     LanternRoot parent_root_local = *parent_root;
 
+    if (client->status_lock_initialized && pthread_mutex_lock(&client->status_lock) == 0)
+    {
+        if (client->sync_state == LANTERN_SYNC_STATE_SYNCED)
+        {
+            lantern_client_set_sync_state_logged(client, LANTERN_SYNC_STATE_SYNCING, "parent missing enqueued");
+        }
+        pthread_mutex_unlock(&client->status_lock);
+    }
+    else if (client->sync_state == LANTERN_SYNC_STATE_SYNCED)
+    {
+        lantern_client_set_sync_state_logged(client, LANTERN_SYNC_STATE_SYNCING, "parent missing enqueued");
+    }
+
     bool locked = lantern_client_lock_pending(client);
     if (!locked)
     {
@@ -3402,7 +3547,6 @@ void lantern_client_enqueue_pending_block(
     struct lantern_pending_block_list *list = &client->pending_blocks;
     bool request_parent_now =
         request_parent || client->sync_state != LANTERN_SYNC_STATE_IDLE;
-    bool allow_parent_requests = client->sync_state != LANTERN_SYNC_STATE_IDLE;
     if (backfill_depth > LANTERN_MAX_BACKFILL_DEPTH)
     {
         backfill_depth = LANTERN_MAX_BACKFILL_DEPTH;
@@ -3412,15 +3556,14 @@ void lantern_client_enqueue_pending_block(
     if (existing)
     {
         bool should_request =
-            allow_parent_requests && request_parent_now && !existing->parent_requested;
+            request_parent_now && !existing->parent_requested;
         LanternRoot request_root = existing->parent_root;
         bool parent_cached = pending_block_list_find(list, &request_root) != NULL;
         char peer_copy[PEER_TEXT_BUFFER_LEN];
         peer_copy[0] = '\0';
         if (peer_text && *peer_text)
         {
-            strncpy(peer_copy, peer_text, sizeof(peer_copy) - 1u);
-            peer_copy[sizeof(peer_copy) - 1u] = '\0';
+            (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_text);
         }
         if (backfill_depth < existing->backfill_depth)
         {
@@ -3430,8 +3573,10 @@ void lantern_client_enqueue_pending_block(
         {
             if (existing->peer_text[0] == '\0' || strcmp(existing->peer_text, peer_text) != 0)
             {
-                strncpy(existing->peer_text, peer_text, sizeof(existing->peer_text) - 1u);
-                existing->peer_text[sizeof(existing->peer_text) - 1u] = '\0';
+                (void)lantern_string_copy(
+                    existing->peer_text,
+                    sizeof(existing->peer_text),
+                    peer_text);
             }
         }
         existing->received_ms = monotonic_millis();
@@ -3461,13 +3606,22 @@ void lantern_client_enqueue_pending_block(
             && existing_backfill_depth < LANTERN_MAX_BACKFILL_DEPTH)
         {
             uint32_t request_depth = existing_backfill_depth + 1u;
-        if (try_schedule_blocks_request(
-                client,
-                peer_copy[0] ? peer_copy : NULL,
-                &request_root,
-                request_depth))
+            if (try_schedule_blocks_request(
+                    client,
+                    peer_copy[0] ? peer_copy : NULL,
+                    &request_root,
+                    request_depth))
             {
                 mark_pending_parent_requested(client, &request_root, true);
+                lantern_log_info(
+                    "backfill",
+                    &(const struct lantern_log_metadata){
+                        .validator = client->node_id,
+                        .peer = peer_copy[0] ? peer_copy : NULL},
+                    "slot %" PRIu64 ", request sent, parent %s, peer %s",
+                    block->block.slot,
+                    parent_hex[0] ? parent_hex : "0x0",
+                    peer_copy[0] ? peer_copy : "-");
             }
         }
         return;
@@ -3564,36 +3718,16 @@ void lantern_client_enqueue_pending_block(
 
     lantern_client_unlock_pending(client, locked);
 
-    if (client->sync_in_progress)
-    {
-        lantern_log_debug(
-            "state",
-            &meta,
-            "queued block slot=%" PRIu64 " root=%s waiting for parent=%s (via gossip)",
-            block->block.slot,
-            block_hex[0] ? block_hex : "0x0",
-            parent_hex[0] ? parent_hex : "0x0");
-    }
-    else
-    {
-        lantern_log_info(
-            "state",
-            &meta,
-            "queued block slot=%" PRIu64 " root=%s waiting for parent=%s (via gossip)",
-            block->block.slot,
-            block_hex[0] ? block_hex : "0x0",
-            parent_hex[0] ? parent_hex : "0x0");
-    }
+    bool request_scheduled = false;
 
-    if (allow_parent_requests && request_parent_now && !parent_cached
+    if (request_parent_now && !parent_cached
         && entry_backfill_depth < LANTERN_MAX_BACKFILL_DEPTH)
     {
         char peer_copy[PEER_TEXT_BUFFER_LEN];
         peer_copy[0] = '\0';
         if (peer_text && *peer_text)
         {
-            strncpy(peer_copy, peer_text, sizeof(peer_copy) - 1u);
-            peer_copy[sizeof(peer_copy) - 1u] = '\0';
+            (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_text);
         }
         uint32_t request_depth = entry_backfill_depth + 1u;
         if (try_schedule_blocks_request(
@@ -3603,8 +3737,27 @@ void lantern_client_enqueue_pending_block(
                 request_depth))
         {
             mark_pending_parent_requested(client, &parent_root_local, true);
+            request_scheduled = true;
+            lantern_log_info(
+                "backfill",
+                &(const struct lantern_log_metadata){
+                    .validator = client->node_id,
+                    .peer = peer_copy[0] ? peer_copy : NULL},
+                "slot %" PRIu64 ", request sent, parent %s, peer %s",
+                block->block.slot,
+                parent_hex[0] ? parent_hex : "0x0",
+                peer_copy[0] ? peer_copy : "-");
         }
     }
+
+    lantern_log_info(
+        "import",
+        &meta,
+        "slot %" PRIu64 ", %s, queued, reason: parent_missing, parent %s, requested %s",
+        block->block.slot,
+        block_hex[0] ? block_hex : "0x0",
+        parent_hex[0] ? parent_hex : "0x0",
+        request_scheduled ? "true" : "false");
 
     lantern_log_debug(
         "sync",
@@ -3616,7 +3769,7 @@ void lantern_client_enqueue_pending_block(
         entry_backfill_depth,
         pending_len,
         parent_cached ? "true" : "false",
-        (allow_parent_requests && request_parent_now) ? "true" : "false");
+        request_parent_now ? "true" : "false");
 }
 
 
@@ -3716,12 +3869,10 @@ void lantern_client_process_pending_children(
                 replays[replay_count].peer_text[0] = '\0';
                 if (entry->peer_text[0])
                 {
-                    strncpy(
+                    (void)lantern_string_copy(
                         replays[replay_count].peer_text,
-                        entry->peer_text,
-                        sizeof(replays[replay_count].peer_text) - 1u);
-                    replays[replay_count]
-                        .peer_text[sizeof(replays[replay_count].peer_text) - 1u] = '\0';
+                        sizeof(replays[replay_count].peer_text),
+                        entry->peer_text);
                 }
                 replay_count += 1u;
             }

@@ -76,7 +76,7 @@ static int preview_post_state_root_without_signatures(
         rc = -1;
         goto cleanup;
     }
-    if (lantern_hash_tree_root_state(&scratch, out_state_root) != 0) {
+    if (lantern_hash_tree_root_state(&scratch, out_state_root) != SSZ_SUCCESS) {
         rc = -1;
     }
 
@@ -105,7 +105,7 @@ static int state_transition_without_signatures(
     }
 
     LanternRoot computed_state_root;
-    if (lantern_hash_tree_root_state(state, &computed_state_root) != 0) {
+    if (lantern_hash_tree_root_state(state, &computed_state_root) != SSZ_SUCCESS) {
         return -1;
     }
     if (memcmp(block->state_root.bytes, computed_state_root.bytes, LANTERN_ROOT_SIZE) != 0) {
@@ -131,14 +131,14 @@ static int patch_block_hashes_for_c_compat(
      * If state_root is zero, process_slot fills it with hash(state). */
     LanternBlockHeader header_after_slots = state->latest_block_header;
     if (is_root_zero(&header_after_slots.state_root)) {
-        if (lantern_hash_tree_root_state(state, &header_after_slots.state_root) != 0) {
+        if (lantern_hash_tree_root_state(state, &header_after_slots.state_root) != SSZ_SUCCESS) {
             return -1;
         }
     }
 
     /* Compute parent_root = hash(header_after_slots) */
     LanternRoot computed_parent;
-    if (lantern_hash_tree_root_block_header(&header_after_slots, &computed_parent) != 0) {
+    if (lantern_hash_tree_root_block_header(&header_after_slots, &computed_parent) != SSZ_SUCCESS) {
         return -1;
     }
     memcpy(signed_block->block.parent_root.bytes, computed_parent.bytes, LANTERN_ROOT_SIZE);
@@ -316,7 +316,7 @@ static int aggregate_pending_gossip_attestations(
     lantern_store_clear_new_aggregated_payloads(store);
     for (size_t i = 0; i < aggregated_attestations.length; ++i) {
         LanternRoot data_root;
-        if (lantern_hash_tree_root_attestation_data(&aggregated_attestations.data[i].data, &data_root) != 0) {
+        if (lantern_hash_tree_root_attestation_data(&aggregated_attestations.data[i].data, &data_root) != SSZ_SUCCESS) {
             goto cleanup;
         }
         if (lantern_store_add_new_aggregated_payload(
@@ -405,7 +405,7 @@ static int record_block_body_known_payloads(
             proof = &synthesized;
         }
         LanternRoot data_root;
-        if (lantern_hash_tree_root_attestation_data(&attestations->data[i].data, &data_root) != 0) {
+        if (lantern_hash_tree_root_attestation_data(&attestations->data[i].data, &data_root) != SSZ_SUCCESS) {
             lantern_aggregated_signature_proof_reset(&synthesized);
             return -1;
         }
@@ -442,7 +442,7 @@ static int process_gossip_attestation_step(
     }
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &data_root) != SSZ_SUCCESS) {
         return -1;
     }
 
@@ -489,7 +489,7 @@ static int process_gossip_aggregated_attestation_step(
     }
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&data, &data_root) != SSZ_SUCCESS) {
         goto cleanup;
     }
     rc = lantern_store_add_new_aggregated_payload(
@@ -1382,7 +1382,7 @@ static int run_fork_choice_fixture(const char *path) {
         return -1;
     }
     LanternRoot anchor_body_root;
-    if (lantern_hash_tree_root_block_body(&anchor_block.body, &anchor_body_root) != 0) {
+    if (lantern_hash_tree_root_block_body(&anchor_block.body, &anchor_body_root) != SSZ_SUCCESS) {
         reset_block(&anchor_block);
         lantern_state_reset(&state);
         lantern_fixture_document_reset(&doc);
@@ -1416,7 +1416,7 @@ static int run_fork_choice_fixture(const char *path) {
     }
 
     LanternRoot anchor_root;
-    if (lantern_hash_tree_root_block(&anchor_block, &anchor_root) != 0) {
+    if (lantern_hash_tree_root_block(&anchor_block, &anchor_root) != SSZ_SUCCESS) {
         reset_block(&anchor_block);
         lantern_fork_choice_reset(&store);
         lantern_state_reset(&state);
@@ -1772,7 +1772,7 @@ static int run_fork_choice_fixture(const char *path) {
         }
         /* Save the LeanSpec block_root before any patching */
         LanternRoot leanspec_block_root;
-        if (lantern_hash_tree_root_block(&signed_block.block, &leanspec_block_root) != 0) {
+        if (lantern_hash_tree_root_block(&signed_block.block, &leanspec_block_root) != SSZ_SUCCESS) {
             reset_block(&signed_block.block);
             reset_block(&anchor_block);
             lantern_fork_choice_reset(&store);
@@ -1843,7 +1843,7 @@ static int run_fork_choice_fixture(const char *path) {
                 return -1;
             }
             /* Recompute block_root after patching to get C hash */
-            if (lantern_hash_tree_root_block(&signed_block.block, &block_root) != 0) {
+            if (lantern_hash_tree_root_block(&signed_block.block, &block_root) != SSZ_SUCCESS) {
                 if (!step_valid) {
                     reset_block(&signed_block.block);
                     continue;
@@ -1961,7 +1961,7 @@ static int run_fork_choice_fixture(const char *path) {
                 return -1;
             }
             /* Recompute block_root after patching to get C hash */
-            if (lantern_hash_tree_root_block(&signed_block.block, &block_root) != 0) {
+            if (lantern_hash_tree_root_block(&signed_block.block, &block_root) != SSZ_SUCCESS) {
                 if (!step_valid) {
                     lantern_state_reset(&branch_state);
                     reset_block(&signed_block.block);

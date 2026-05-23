@@ -85,10 +85,9 @@ struct lantern_client_options {
     bool is_aggregator;
 };
 
-struct libp2p_subscription;
-struct libp2p_protocol_server;
 struct lantern_peer_status_entry;
 struct lantern_active_blocks_request;
+struct lantern_async_block_import_job;
 struct lantern_backfill_entry {
     LanternRoot root;
     LanternRoot parent_root;
@@ -191,6 +190,13 @@ struct lantern_local_validator {
     uint64_t last_attested_slot;
 };
 
+struct lantern_network_view {
+    uint64_t latest_observed_head_slot;
+    uint64_t network_finalized_slot;
+    bool has_latest_observed_head_slot;
+    bool has_network_finalized_slot;
+};
+
 struct lantern_client {
     char *data_dir;
     char *node_id;
@@ -203,8 +209,6 @@ struct lantern_client {
     struct lantern_genesis_artifacts genesis;
     struct lantern_enr_record local_enr;
     struct lantern_libp2p_host network;
-    struct libp2p_protocol_server *ping_server;
-    bool ping_running;
     struct lantern_gossipsub_service gossip;
     bool gossip_running;
     struct lantern_reqresp_service reqresp;
@@ -253,9 +257,9 @@ struct lantern_client {
     size_t connected_peers;
     pthread_mutex_t connection_lock;
     bool connection_lock_initialized;
-    struct libp2p_subscription *connection_subscription;
     struct lantern_string_list dialer_peers;
     struct lantern_string_list connected_peer_ids;
+    struct lantern_string_list connected_peer_refs;
     struct lantern_string_list inbound_peer_ids;
     struct lantern_string_list status_failure_peer_ids;
     struct lantern_pending_block_list pending_blocks;
@@ -263,6 +267,16 @@ struct lantern_client {
     struct lantern_backfill_session backfill;
     pthread_mutex_t pending_lock;
     bool pending_lock_initialized;
+    struct lantern_async_block_import_job *block_import_head;
+    struct lantern_async_block_import_job *block_import_tail;
+    size_t block_import_queue_len;
+    pthread_mutex_t block_import_lock;
+    pthread_cond_t block_import_cond;
+    pthread_t block_import_thread;
+    bool block_import_lock_initialized;
+    bool block_import_cond_initialized;
+    bool block_import_thread_started;
+    bool block_import_stop;
     LanternRoot sync_last_requested_root;
     uint64_t sync_last_requested_root_ms;
     uint64_t sync_started_ms;
@@ -272,15 +286,18 @@ struct lantern_client {
     uint64_t sync_target_slot;
     LanternSyncState sync_state;
     bool sync_in_progress;
+    struct lantern_network_view network_view;
+    uint64_t last_status_log_slot;
+    bool has_last_status_log_slot;
+    uint64_t last_duty_skip_slot;
+    bool has_last_duty_skip_slot;
+    const char *last_duty_skip_reason;
     size_t status_requests_inflight_total;
     size_t status_requests_peak;
     bool status_guard_disabled;
     pthread_t dialer_thread;
     bool dialer_thread_started;
     int dialer_stop_flag;
-    pthread_t ping_thread;
-    bool ping_thread_started;
-    int ping_stop_flag;
     struct lantern_peer_status_entry *peer_status_entries;
     size_t peer_status_count;
     size_t peer_status_capacity;

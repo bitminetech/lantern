@@ -34,8 +34,6 @@ enum
     VOTE_ROOT_HEX_BUFFER_LEN = (LANTERN_ROOT_SIZE * 2u) + 3u,
 };
 
-static const size_t DEFAULT_SYNC_ATTESTATION_COMMITTEE_COUNT = 1u;
-
 enum lantern_vote_record_status
 {
     LANTERN_VOTE_RECORD_REJECTED = 0,
@@ -486,7 +484,7 @@ static bool process_vote_locked(
     }
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &data_root) == 0)
+    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &data_root) == SSZ_SUCCESS)
     {
         const LanternSignature *signature_to_cache =
             lantern_client_should_cache_attestation_signature_locked(client, &vote->data)
@@ -739,7 +737,7 @@ bool lantern_client_verify_vote_signature(
         return false;
     }
     LanternRoot vote_root;
-    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &vote_root) != 0)
+    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &vote_root) != SSZ_SUCCESS)
     {
         lantern_log_warn(
             "state",

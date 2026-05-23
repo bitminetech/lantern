@@ -32,8 +32,6 @@
 #include <mach/mach_time.h>
 #endif
 
-#include <libp2p/errors.h>
-
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/support/log.h"
 #include "lantern/support/secure_mem.h"
@@ -401,8 +399,7 @@ void format_root_hex(const LanternRoot *root, char *out, size_t out_len)
     }
     if (is_all_zero)
     {
-        strncpy(out, "0x0", out_len - 1);
-        out[out_len - 1] = '\0';
+        (void)lantern_string_copy(out, out_len, "0x0");
         return;
     }
 
@@ -600,6 +597,21 @@ bool lantern_client_block_known_locked(
         *out_slot = slot;
     }
     return true;
+}
+
+const char *lantern_sync_state_name(LanternSyncState state)
+{
+    switch (state)
+    {
+        case LANTERN_SYNC_STATE_IDLE:
+            return "idle";
+        case LANTERN_SYNC_STATE_SYNCING:
+            return "syncing";
+        case LANTERN_SYNC_STATE_SYNCED:
+            return "synced";
+        default:
+            return "unknown";
+    }
 }
 
 
@@ -878,7 +890,7 @@ void string_list_remove(struct lantern_string_list *list, const char *value)
 /**
  * Get text description for connection reason code.
  *
- * @param reason  Reason code from libp2p
+ * @param reason  Reason code from c-lean-libp2p
  * @return Static string description
  *
  * @note Thread safety: This function is thread-safe
@@ -887,30 +899,36 @@ const char *connection_reason_text(int reason)
 {
     switch (reason)
     {
-        case 0:
+        case LIBP2P_HOST_OK:
             return "ok";
-        case LIBP2P_ERR_NULL_PTR:
-            return "null_ptr";
-        case LIBP2P_ERR_AGAIN:
-            return "again";
-        case LIBP2P_ERR_EOF:
-            return "eof";
-        case LIBP2P_ERR_TIMEOUT:
-            return "timeout";
-        case LIBP2P_ERR_CLOSED:
-            return "closed";
-        case LIBP2P_ERR_RESET:
-            return "reset";
-        case LIBP2P_ERR_INTERNAL:
-            return "internal";
-        case LIBP2P_ERR_PROTO_NEGOTIATION_FAILED:
-            return "protocol_negotiation_failed";
-        case LIBP2P_ERR_MSG_TOO_LARGE:
-            return "msg_too_large";
-        case LIBP2P_ERR_UNSUPPORTED:
+        case LIBP2P_HOST_ERR_INVALID_ARG:
+            return "invalid_arg";
+        case LIBP2P_HOST_ERR_BUF_TOO_SMALL:
+            return "buf_too_small";
+        case LIBP2P_HOST_ERR_UNSUPPORTED:
             return "unsupported";
-        case LIBP2P_ERR_CANCELED:
-            return "canceled";
+        case LIBP2P_HOST_ERR_STATE:
+            return "state";
+        case LIBP2P_HOST_ERR_WOULD_BLOCK:
+            return "would_block";
+        case LIBP2P_HOST_ERR_LIMIT:
+            return "limit";
+        case LIBP2P_HOST_ERR_NOT_FOUND:
+            return "not_found";
+        case LIBP2P_HOST_ERR_CLOSED:
+            return "closed";
+        case LIBP2P_HOST_ERR_ADDR:
+            return "addr";
+        case LIBP2P_HOST_ERR_IDENTITY:
+            return "identity";
+        case LIBP2P_HOST_ERR_TRANSPORT:
+            return "transport";
+        case LIBP2P_HOST_ERR_NEGOTIATION:
+            return "negotiation";
+        case LIBP2P_HOST_ERR_PROTOCOL:
+            return "protocol";
+        case LIBP2P_HOST_ERR_INTERNAL:
+            return "internal";
         default:
             return "unknown";
     }

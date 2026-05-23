@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "ssz_types.h"
+
 #define LANTERN_ROOT_SIZE 32
 #ifndef LANTERN_SIGNATURE_SIZE
 #define LANTERN_SIGNATURE_SIZE 2536
@@ -32,9 +34,7 @@ typedef struct {
     size_t capacity;
 } LanternByteList;
 
-typedef struct {
-    uint8_t bytes[LANTERN_ROOT_SIZE];
-} LanternRoot;
+typedef ssz_chunk_t LanternRoot;
 
 typedef struct {
     uint8_t bytes[LANTERN_SIGNATURE_SIZE];
@@ -137,8 +137,6 @@ typedef struct {
 
 typedef struct {
     LanternAggregatedAttestations attestations;
-    /* Decode-time hint: true when body attestations came from legacy plain-vote layout. */
-    bool legacy_plain_attestation_layout;
 } LanternBlockBody;
 
 typedef struct {

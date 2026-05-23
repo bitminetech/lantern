@@ -114,6 +114,50 @@ static bool aggregated_payload_entry_equals(
     return true;
 }
 
+static size_t proof_participant_limit(const LanternAggregatedSignatureProof *proof) {
+    if (!proof) {
+        return 0u;
+    }
+    size_t limit = proof->participants.bit_length;
+    if (limit > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        limit = LANTERN_VALIDATOR_REGISTRY_LIMIT;
+    }
+    return limit;
+}
+
+static bool proof_has_participant(const LanternAggregatedSignatureProof *proof) {
+    if (!proof || !proof->participants.bytes) {
+        return false;
+    }
+    size_t limit = proof_participant_limit(proof);
+    for (size_t validator = 0; validator < limit; ++validator) {
+        if (lantern_bitlist_get(&proof->participants, validator)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool proof_participants_subset_of(
+    const LanternAggregatedSignatureProof *candidate,
+    const LanternAggregatedSignatureProof *cover) {
+    if (!candidate || !candidate->participants.bytes || !cover || !cover->participants.bytes) {
+        return false;
+    }
+    size_t limit = proof_participant_limit(candidate);
+    bool has_participant = false;
+    for (size_t validator = 0; validator < limit; ++validator) {
+        if (!lantern_bitlist_get(&candidate->participants, validator)) {
+            continue;
+        }
+        has_participant = true;
+        if (!lantern_bitlist_get(&cover->participants, validator)) {
+            return false;
+        }
+    }
+    return has_participant;
+}
+
 static void attestation_signature_map_init(struct lantern_attestation_signature_map *map) {
     if (!map) {
         return;
@@ -247,6 +291,65 @@ static void aggregated_payload_pool_remove_index(
     cache->length -= 1u;
 }
 
+static bool aggregated_payload_pool_covers_proof_participants(
+    const struct lantern_aggregated_payload_pool *cache,
+    const LanternRoot *data_root,
+    const LanternAggregatedSignatureProof *proof) {
+    if (!cache || !data_root || !proof || !proof->participants.bytes) {
+        return false;
+    }
+    size_t limit = proof_participant_limit(proof);
+    bool has_participant = false;
+    for (size_t validator = 0; validator < limit; ++validator) {
+        if (!lantern_bitlist_get(&proof->participants, validator)) {
+            continue;
+        }
+        has_participant = true;
+        bool covered = false;
+        for (size_t i = 0; i < cache->length; ++i) {
+            if (!root_equals(&cache->entries[i].data_root, data_root)) {
+                continue;
+            }
+            if (lantern_bitlist_get(&cache->entries[i].proof.participants, validator)) {
+                covered = true;
+                break;
+            }
+        }
+        if (!covered) {
+            return false;
+        }
+    }
+    return has_participant;
+}
+
+static void aggregated_payload_pool_prune_subsets_of_entry(
+    struct lantern_aggregated_payload_pool *cache,
+    size_t cover_index) {
+    if (!cache || !cache->entries || cover_index >= cache->length) {
+        return;
+    }
+
+    LanternRoot data_root = cache->entries[cover_index].data_root;
+    size_t index = 0u;
+    while (index < cache->length) {
+        if (index == cover_index) {
+            index += 1u;
+            continue;
+        }
+        if (root_equals(&cache->entries[index].data_root, &data_root)
+            && proof_participants_subset_of(
+                &cache->entries[index].proof,
+                &cache->entries[cover_index].proof)) {
+            aggregated_payload_pool_remove_index(cache, index);
+            if (index < cover_index) {
+                cover_index -= 1u;
+            }
+            continue;
+        }
+        index += 1u;
+    }
+}
+
 static int aggregated_payload_pool_add(
     struct lantern_aggregated_payload_pool *cache,
     const LanternRoot *data_root,
@@ -255,7 +358,7 @@ static int aggregated_payload_pool_add(
     if (!cache || !data_root || !proof) {
         return -1;
     }
-    if (proof->participants.bit_length == 0 || proof->proof_data.length == 0) {
+    if (!proof_has_participant(proof) || proof->proof_data.length == 0) {
         return -1;
     }
     for (size_t i = 0; i < cache->length; ++i) {
@@ -263,6 +366,9 @@ static int aggregated_payload_pool_add(
             continue;
         }
         cache->entries[i].target_slot = target_slot;
+        return 0;
+    }
+    if (aggregated_payload_pool_covers_proof_participants(cache, data_root, proof)) {
         return 0;
     }
     if (cache->length >= LANTERN_AGG_PROOF_CACHE_LIMIT) {
@@ -293,6 +399,7 @@ static int aggregated_payload_pool_add(
     }
     entry->target_slot = target_slot;
     cache->length += 1u;
+    aggregated_payload_pool_prune_subsets_of_entry(cache, cache->length - 1u);
     return 0;
 }
 

@@ -28,7 +28,7 @@
 #include "lantern/networking/messages.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
-#include "ssz_constants.h"
+#include "ssz.h"
 
 #define LANTERN_STORAGE_VOTES_MAGIC "LNVOTES\0"
 #define LANTERN_STORAGE_VOTES_VERSION 3u
@@ -159,7 +159,7 @@ static size_t aggregated_attestation_encoded_size(const LanternAggregatedAttesta
     if (bits_size == 0) {
         return 0;
     }
-    size_t fixed_section = SSZ_BYTE_SIZE_OF_UINT32 + LANTERN_ATTESTATION_DATA_SSZ_SIZE;
+    size_t fixed_section = SSZ_BYTES_PER_LENGTH_OFFSET + LANTERN_ATTESTATION_DATA_SSZ_SIZE;
     if (fixed_section > SIZE_MAX - bits_size) {
         return 0;
     }
@@ -176,7 +176,7 @@ static size_t aggregated_attestations_encoded_size(const LanternAggregatedAttest
     if (attestations->length > LANTERN_MAX_ATTESTATIONS || !attestations->data) {
         return 0;
     }
-    size_t offset_table = attestations->length * SSZ_BYTE_SIZE_OF_UINT32;
+    size_t offset_table = attestations->length * SSZ_BYTES_PER_LENGTH_OFFSET;
     size_t total = offset_table;
     for (size_t i = 0; i < attestations->length; ++i) {
         size_t entry_size = aggregated_attestation_encoded_size(&attestations->data[i]);
@@ -200,7 +200,7 @@ static size_t aggregated_signature_proof_encoded_size(const LanternAggregatedSig
     if (participants_size == 0 && proof->participants.bit_length != 0) {
         return 0;
     }
-    size_t fixed_section = SSZ_BYTE_SIZE_OF_UINT32 * 2u;
+    size_t fixed_section = SSZ_BYTES_PER_LENGTH_OFFSET * 2u;
     if (fixed_section > SIZE_MAX - participants_size) {
         return 0;
     }
@@ -220,7 +220,7 @@ static size_t attestation_signatures_encoded_size(const LanternAttestationSignat
     if (signatures->length > LANTERN_MAX_BLOCK_SIGNATURES || !signatures->data) {
         return 0;
     }
-    size_t offset_table = signatures->length * SSZ_BYTE_SIZE_OF_UINT32;
+    size_t offset_table = signatures->length * SSZ_BYTES_PER_LENGTH_OFFSET;
     size_t total = offset_table;
     for (size_t i = 0; i < signatures->length; ++i) {
         size_t entry_size = aggregated_signature_proof_encoded_size(&signatures->data[i]);
@@ -247,10 +247,10 @@ static size_t state_encoded_size(const LanternState *state) {
         return 0;
     }
     size_t fixed = LANTERN_CONFIG_SSZ_SIZE
-        + SSZ_BYTE_SIZE_OF_UINT64
+        + sizeof(uint64_t)
         + LANTERN_BLOCK_HEADER_SSZ_SIZE
         + (2u * LANTERN_CHECKPOINT_SSZ_SIZE)
-        + (5u * SSZ_BYTE_SIZE_OF_UINT32);
+        + (5u * SSZ_BYTES_PER_LENGTH_OFFSET);
     size_t validator_bytes = 0;
     if (state->validator_count > 0) {
         if (!state->validators || state->validator_count > SIZE_MAX / LANTERN_VALIDATOR_SSZ_SIZE) {
@@ -268,23 +268,23 @@ static size_t state_encoded_size(const LanternState *state) {
 
 static size_t block_body_encoded_size(const LanternBlockBody *body) {
     if (!body) {
-        return SSZ_BYTE_SIZE_OF_UINT32;
+        return SSZ_BYTES_PER_LENGTH_OFFSET;
     }
     size_t att_count = body->attestations.length;
     size_t attestations_bytes = aggregated_attestations_encoded_size(&body->attestations);
     if (att_count > 0 && attestations_bytes == 0) {
         return 0;
     }
-    return SSZ_BYTE_SIZE_OF_UINT32 + attestations_bytes;
+    return SSZ_BYTES_PER_LENGTH_OFFSET + attestations_bytes;
 }
 
 static size_t block_encoded_size(const LanternBlock *block) {
     if (!block) {
         return 0;
     }
-    size_t fixed = (SSZ_BYTE_SIZE_OF_UINT64 * 2u)
+    size_t fixed = (sizeof(uint64_t) * 2u)
         + (LANTERN_ROOT_SIZE * 2u)
-        + SSZ_BYTE_SIZE_OF_UINT32;
+        + SSZ_BYTES_PER_LENGTH_OFFSET;
     size_t body_size = block_body_encoded_size(&block->body);
     if (body_size == 0) {
         return 0;
@@ -301,14 +301,14 @@ static size_t block_signatures_encoded_size(const LanternBlockSignatures *signat
     if (sig_count > 0 && attestations_bytes == 0) {
         return 0;
     }
-    return (SSZ_BYTE_SIZE_OF_UINT32 * 2u) + LANTERN_SIGNATURE_SIZE + attestations_bytes;
+    return (SSZ_BYTES_PER_LENGTH_OFFSET * 2u) + LANTERN_SIGNATURE_SIZE + attestations_bytes;
 }
 
 static size_t signed_block_encoded_size(const LanternSignedBlock *block) {
     if (!block) {
         return 0;
     }
-    size_t offset_section = SSZ_BYTE_SIZE_OF_UINT32 * 2u;
+    size_t offset_section = SSZ_BYTES_PER_LENGTH_OFFSET * 2u;
     size_t message_size = block_encoded_size(&block->block);
     if (message_size == 0) {
         return 0;
@@ -689,7 +689,7 @@ int lantern_storage_save_state(const char *data_dir, const LanternState *state) 
         goto cleanup;
     }
     size_t written = 0;
-    if (lantern_ssz_encode_state(state, buffer, encoded_size, &written) != 0 || written != encoded_size) {
+    if (lantern_ssz_encode_state(state, buffer, encoded_size, &written) != SSZ_SUCCESS || written != encoded_size) {
         goto cleanup;
     }
     if (join_path(data_dir, LANTERN_STORAGE_STATE_FILE, &state_path) != 0) {
@@ -740,7 +740,7 @@ int lantern_storage_load_state(const char *data_dir, LanternState *state) {
     if (rc != 0) {
         goto cleanup;
     }
-    if (lantern_ssz_decode_state(&decoded, data, data_len) != 0) {
+    if (lantern_ssz_decode_state(&decoded, data, data_len) != SSZ_SUCCESS) {
         rc = -1;
         goto cleanup;
     }
@@ -790,7 +790,7 @@ int lantern_storage_save_finalized_state(const char *data_dir, const LanternStat
         goto cleanup;
     }
     size_t written = 0;
-    if (lantern_ssz_encode_state(state, buffer, encoded_size, &written) != 0 || written != encoded_size) {
+    if (lantern_ssz_encode_state(state, buffer, encoded_size, &written) != SSZ_SUCCESS || written != encoded_size) {
         goto cleanup;
     }
     if (join_path(data_dir, LANTERN_STORAGE_FINALIZED_STATE_FILE, &state_path) != 0) {
@@ -841,7 +841,7 @@ int lantern_storage_load_finalized_state(const char *data_dir, LanternState *sta
     if (rc != 0) {
         goto cleanup;
     }
-    if (lantern_ssz_decode_state(&decoded, data, data_len) != 0) {
+    if (lantern_ssz_decode_state(&decoded, data, data_len) != SSZ_SUCCESS) {
         rc = -1;
         goto cleanup;
     }
@@ -1038,7 +1038,7 @@ int lantern_storage_load_votes(const char *data_dir, LanternState *state, Lanter
         if (has_signatures) {
             LanternSignedVote signed_vote;
             memset(&signed_vote, 0, sizeof(signed_vote));
-            if (lantern_ssz_decode_signed_vote(&signed_vote, cursor, signed_vote_size) != 0) {
+            if (lantern_ssz_decode_signed_vote(&signed_vote, cursor, signed_vote_size) != SSZ_SUCCESS) {
                 rc = -1;
                 goto cleanup;
             }
@@ -1051,7 +1051,7 @@ int lantern_storage_load_votes(const char *data_dir, LanternState *state, Lanter
         } else {
             LanternVote vote;
             memset(&vote, 0, sizeof(vote));
-            if (lantern_ssz_decode_vote(&vote, cursor, LANTERN_VOTE_SSZ_SIZE) != 0) {
+            if (lantern_ssz_decode_vote(&vote, cursor, LANTERN_VOTE_SSZ_SIZE) != SSZ_SUCCESS) {
                 rc = -1;
                 goto cleanup;
             }
@@ -1132,7 +1132,7 @@ static int storage_store_block_internal(
     LanternRoot root = {0};
     if (root_override) {
         root = *root_override;
-    } else if (lantern_hash_tree_root_block(&block->block, &root) != 0) {
+    } else if (lantern_hash_tree_root_block(&block->block, &root) != SSZ_SUCCESS) {
         goto cleanup;
     }
     char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
@@ -1160,10 +1160,9 @@ static int storage_store_block_internal(
         lantern_log_warn(
             "storage",
             &(const struct lantern_log_metadata){0},
-            "store_block size estimate failed slot=%" PRIu64 " attestations=%zu legacy_layout=%s sig_count=%zu",
+            "store_block size estimate failed slot=%" PRIu64 " attestations=%zu sig_count=%zu",
             block->block.slot,
             block->block.body.attestations.length,
-            block->block.body.legacy_plain_attestation_layout ? "true" : "false",
             block->signatures.attestation_signatures.length);
         goto cleanup;
     }
@@ -1172,7 +1171,7 @@ static int storage_store_block_internal(
         goto cleanup;
     }
     size_t written_size = 0;
-    const int encode_rc = lantern_ssz_encode_signed_block(block, buffer, encoded_size, &written_size);
+    const ssz_error_t encode_rc = lantern_ssz_encode_signed_block(block, buffer, encoded_size, &written_size);
     if (encode_rc != 0
         || written_size == 0
         || written_size > encoded_size) {
@@ -1344,7 +1343,7 @@ int lantern_storage_store_state_for_root(
         goto cleanup;
     }
     size_t written = 0;
-    if (lantern_ssz_encode_state(state, buffer, encoded_size, &written) != 0 || written != encoded_size) {
+    if (lantern_ssz_encode_state(state, buffer, encoded_size, &written) != SSZ_SUCCESS || written != encoded_size) {
         goto cleanup;
     }
     if (build_states_dir(data_dir, &states_dir) != 0) {
@@ -1499,7 +1498,7 @@ static int prune_block_files_before_slot(
 
         LanternSignedBlock block;
         lantern_signed_block_with_attestation_init(&block);
-        if (lantern_ssz_decode_signed_block(&block, data, data_len) != 0) {
+        if (lantern_ssz_decode_signed_block(&block, data, data_len) != SSZ_SUCCESS) {
             lantern_signed_block_with_attestation_reset(&block);
             free(data);
             free_path(block_path);
@@ -1509,7 +1508,7 @@ static int prune_block_files_before_slot(
 
         LanternRoot root = {0};
         bool have_root = parse_root_ssz_filename(entry->d_name, &root);
-        if (!have_root && lantern_hash_tree_root_block(&block.block, &root) == 0) {
+        if (!have_root && lantern_hash_tree_root_block(&block.block, &root) == SSZ_SUCCESS) {
             have_root = true;
         }
 
@@ -1604,7 +1603,7 @@ static int prune_state_files_before_slot(
 
         LanternState state;
         lantern_state_init(&state);
-        if (lantern_ssz_decode_state(&state, data, data_len) != 0) {
+        if (lantern_ssz_decode_state(&state, data, data_len) != SSZ_SUCCESS) {
             lantern_state_reset(&state);
             free(data);
             free_path(state_path);
@@ -1962,12 +1961,12 @@ int lantern_storage_collect_blocks(
             goto cleanup;
         }
         LanternSignedBlock *dest = &out_blocks->blocks[current];
-        if (lantern_ssz_decode_signed_block(dest, data, data_len) != 0) {
+        if (lantern_ssz_decode_signed_block(dest, data, data_len) != SSZ_SUCCESS) {
             free(data);
             goto cleanup;
         }
         LanternRoot computed;
-        if (lantern_hash_tree_root_block(&dest->block, &computed) != 0) {
+        if (lantern_hash_tree_root_block(&dest->block, &computed) != SSZ_SUCCESS) {
             free(data);
             goto cleanup;
         }
@@ -2069,14 +2068,14 @@ int lantern_storage_iterate_blocks(
         }
         LanternSignedBlock block;
         lantern_signed_block_with_attestation_init(&block);
-        if (lantern_ssz_decode_signed_block(&block, data, data_len) != 0) {
+        if (lantern_ssz_decode_signed_block(&block, data, data_len) != SSZ_SUCCESS) {
             lantern_signed_block_with_attestation_reset(&block);
             free(data);
             rc = -1;
             break;
         }
         LanternRoot computed_root;
-        if (lantern_hash_tree_root_block(&block.block, &computed_root) != 0) {
+        if (lantern_hash_tree_root_block(&block.block, &computed_root) != SSZ_SUCCESS) {
             lantern_signed_block_with_attestation_reset(&block);
             free(data);
             rc = -1;

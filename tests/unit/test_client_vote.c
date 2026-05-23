@@ -16,6 +16,7 @@
 #include "lantern/crypto/xmss.h"
 #include "lantern/networking/gossip_payloads.h"
 #include "lantern/support/string_list.h"
+#include "lantern/support/strings.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/time.h"
 
@@ -62,6 +63,7 @@ int lantern_client_advance_fork_choice_time_locked(
     struct lantern_client *client,
     uint64_t now_milliseconds,
     bool has_proposal);
+uint64_t monotonic_millis(void);
 void lantern_client_reset_local_validators(struct lantern_client *client);
 int lantern_client_load_xmss_keys(struct lantern_client *client);
 int validator_sign_with_key(
@@ -138,12 +140,10 @@ static int test_enable_blocks_request_peer(
     }
     client->peer_status_count = 1u;
     client->peer_status_capacity = 1u;
-    strncpy(
+    (void)lantern_string_copy(
         client->peer_status_entries[0].peer_id,
-        peer_id,
-        sizeof(client->peer_status_entries[0].peer_id) - 1u);
-    client->peer_status_entries[0].peer_id[sizeof(client->peer_status_entries[0].peer_id) - 1u] =
-        '\0';
+        sizeof(client->peer_status_entries[0].peer_id),
+        peer_id);
 
     return 0;
 }
@@ -179,22 +179,34 @@ static void test_disable_blocks_request_peer(struct lantern_client *client)
     client->connected_peers = 0u;
 }
 
-static int test_make_dummy_proof(
+static int test_make_dummy_proof_for_validators(
     LanternAggregatedSignatureProof *out_proof,
-    uint64_t validator_id,
+    const uint64_t *validator_ids,
+    size_t validator_count,
     uint8_t seed) {
-    if (!out_proof || validator_id >= LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+    if (!out_proof || !validator_ids || validator_count == 0u) {
         return -1;
     }
+    uint64_t max_validator_id = 0u;
+    for (size_t i = 0; i < validator_count; ++i) {
+        if (validator_ids[i] >= LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+            return -1;
+        }
+        if (validator_ids[i] > max_validator_id) {
+            max_validator_id = validator_ids[i];
+        }
+    }
     lantern_aggregated_signature_proof_init(out_proof);
-    size_t bit_length = (size_t)validator_id + 1u;
+    size_t bit_length = (size_t)max_validator_id + 1u;
     if (lantern_bitlist_resize(&out_proof->participants, bit_length) != 0) {
         lantern_aggregated_signature_proof_reset(out_proof);
         return -1;
     }
-    if (lantern_bitlist_set(&out_proof->participants, (size_t)validator_id, true) != 0) {
-        lantern_aggregated_signature_proof_reset(out_proof);
-        return -1;
+    for (size_t i = 0; i < validator_count; ++i) {
+        if (lantern_bitlist_set(&out_proof->participants, (size_t)validator_ids[i], true) != 0) {
+            lantern_aggregated_signature_proof_reset(out_proof);
+            return -1;
+        }
     }
     if (lantern_byte_list_resize(&out_proof->proof_data, 8u) != 0) {
         lantern_aggregated_signature_proof_reset(out_proof);
@@ -204,6 +216,14 @@ static int test_make_dummy_proof(
         out_proof->proof_data.data[i] = (uint8_t)(seed + (uint8_t)i);
     }
     return 0;
+}
+
+static int test_make_dummy_proof(
+    LanternAggregatedSignatureProof *out_proof,
+    uint64_t validator_id,
+    uint8_t seed) {
+    uint64_t validator_ids[1] = {validator_id};
+    return test_make_dummy_proof_for_validators(out_proof, validator_ids, 1u, seed);
 }
 
 static LanternAttestationData test_make_attestation_data(uint64_t slot, uint8_t marker) {
@@ -231,6 +251,20 @@ static bool aggregated_pool_contains_root(
         }
     }
     return false;
+}
+
+static const struct lantern_aggregated_payload_entry *aggregated_pool_find_root(
+    const struct lantern_aggregated_payload_pool *pool,
+    const LanternRoot *data_root) {
+    if (!pool || !data_root || !pool->entries) {
+        return NULL;
+    }
+    for (size_t i = 0; i < pool->length; ++i) {
+        if (memcmp(pool->entries[i].data_root.bytes, data_root->bytes, LANTERN_ROOT_SIZE) == 0) {
+            return &pool->entries[i];
+        }
+    }
+    return NULL;
 }
 
 static bool pq_range_contains_slot(struct PQRange range, uint64_t slot) {
@@ -487,7 +521,7 @@ static int build_signed_head_block(
         goto cleanup;
     }
     LanternRoot block_signature_root;
-    if (lantern_hash_tree_root_block(&out_block->block, &block_signature_root) != 0) {
+    if (lantern_hash_tree_root_block(&out_block->block, &block_signature_root) != SSZ_SUCCESS) {
         goto cleanup;
     }
     if (!lantern_signature_sign(
@@ -497,7 +531,7 @@ static int build_signed_head_block(
             &out_block->signatures.proposer_signature)) {
         goto cleanup;
     }
-    if (lantern_hash_tree_root_block(&out_block->block, out_root) != 0) {
+    if (lantern_hash_tree_root_block(&out_block->block, out_root) != SSZ_SUCCESS) {
         goto cleanup;
     }
 
@@ -569,7 +603,7 @@ static int test_record_vote_accepts_known_roots(void) {
     }
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &data_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash vote data for gossip signature cache\n");
         goto cleanup;
     }
@@ -642,7 +676,7 @@ static int test_record_vote_buffers_missing_target_state(void) {
     grandchild.proposer_index = 0u;
     grandchild.parent_root = child_root;
     client_test_fill_root(&grandchild.state_root, 0xC3u);
-    if (lantern_hash_tree_root_block(&grandchild, &grandchild_root) != 0) {
+    if (lantern_hash_tree_root_block(&grandchild, &grandchild_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash grandchild block for missing target state test\n");
         goto cleanup;
     }
@@ -964,7 +998,9 @@ cleanup:
         char cleanup_cmd[320];
         int written = snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf %s", client.data_dir);
         if (written > 0 && (size_t)written < sizeof(cleanup_cmd)) {
-            (void)system(cleanup_cmd);
+            if (system(cleanup_cmd) == -1) {
+                fprintf(stderr, "failed to remove temp data dir %s\n", client.data_dir);
+            }
         }
         client.data_dir = NULL;
     }
@@ -1376,7 +1412,7 @@ static int test_validator_build_block_leaves_attestation_key_untouched(void) {
         fprintf(stderr, "validator_build_block failed for key-isolation test\n");
         goto cleanup;
     }
-    if (lantern_hash_tree_root_block(&block.block, &block_root) != 0) {
+    if (lantern_hash_tree_root_block(&block.block, &block_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash built block for key-isolation test\n");
         goto cleanup;
     }
@@ -1666,7 +1702,7 @@ static int test_record_vote_preserves_state_root(void) {
     LanternCheckpoint pre_justified = client.state.latest_justified;
     LanternCheckpoint pre_finalized = client.state.latest_finalized;
     LanternRoot pre_state_root;
-    if (lantern_hash_tree_root_state(&client.state, &pre_state_root) != 0) {
+    if (lantern_hash_tree_root_state(&client.state, &pre_state_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash pre-vote state\n");
         goto cleanup;
     }
@@ -1698,7 +1734,7 @@ static int test_record_vote_preserves_state_root(void) {
     }
 
     LanternRoot post_state_root;
-    if (lantern_hash_tree_root_state(&client.state, &post_state_root) != 0) {
+    if (lantern_hash_tree_root_state(&client.state, &post_state_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash post-vote state\n");
         goto cleanup;
     }
@@ -1779,7 +1815,7 @@ static int test_record_vote_defers_interval_pipeline(void) {
     }
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &data_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash vote data for interval pipeline test\n");
         goto cleanup;
     }
@@ -1962,7 +1998,7 @@ static int test_skip_fork_choice_intervals_replays_interval_side_effects(void) {
         goto cleanup;
     }
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &data_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash skip replay vote data\n");
         goto cleanup;
     }
@@ -2087,7 +2123,7 @@ static int test_safe_target_uses_only_new_attached_aggregated_payloads(void) {
     data.source.root = anchor_root;
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&data, &data_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash attestation data for aggregated safe-target test\n");
         goto cleanup;
     }
@@ -2229,6 +2265,179 @@ cleanup:
     return rc;
 }
 
+static int test_aggregated_payload_cache_keeps_only_useful_coverage(void) {
+    struct lantern_client client;
+    memset(&client, 0, sizeof(client));
+    lantern_store_init(&client.store);
+
+    LanternRoot data_root;
+    LanternRoot other_root;
+    client_test_fill_root_with_index(&data_root, 0x404u);
+    client_test_fill_root_with_index(&other_root, 0x405u);
+
+    uint64_t validator0[1] = {0u};
+    uint64_t validators01[2] = {0u, 1u};
+
+    LanternAggregatedSignatureProof first;
+    LanternAggregatedSignatureProof duplicate_coverage;
+    LanternAggregatedSignatureProof broader;
+    LanternAggregatedSignatureProof subset;
+    LanternAggregatedSignatureProof other_root_proof;
+    memset(&first, 0, sizeof(first));
+    memset(&duplicate_coverage, 0, sizeof(duplicate_coverage));
+    memset(&broader, 0, sizeof(broader));
+    memset(&subset, 0, sizeof(subset));
+    memset(&other_root_proof, 0, sizeof(other_root_proof));
+
+    int rc = 1;
+    if (test_make_dummy_proof_for_validators(&first, validator0, 1u, 0x11u) != 0
+        || test_make_dummy_proof_for_validators(&duplicate_coverage, validator0, 1u, 0x21u) != 0
+        || test_make_dummy_proof_for_validators(&broader, validators01, 2u, 0x31u) != 0
+        || test_make_dummy_proof_for_validators(&subset, validator0, 1u, 0x41u) != 0
+        || test_make_dummy_proof_for_validators(&other_root_proof, validator0, 1u, 0x51u) != 0) {
+        fprintf(stderr, "failed to build coverage cache proofs\n");
+        goto cleanup;
+    }
+
+    LanternAttestationData data = test_make_attestation_data(10u, 0x61u);
+    LanternAttestationData other_data = test_make_attestation_data(11u, 0x71u);
+
+    if (lantern_client_add_known_aggregated_payload(&client, &data_root, &data, &first, data.target.slot) != 0) {
+        fprintf(stderr, "failed to add first cached proof\n");
+        goto cleanup;
+    }
+    if (client.store.known_aggregated_payloads.length != 1u) {
+        fprintf(stderr, "expected first cached proof to be retained\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_add_known_aggregated_payload(
+            &client,
+            &data_root,
+            &data,
+            &duplicate_coverage,
+            data.target.slot)
+        != 0) {
+        fprintf(stderr, "failed to process duplicate-coverage proof\n");
+        goto cleanup;
+    }
+    if (client.store.known_aggregated_payloads.length != 1u) {
+        fprintf(stderr, "duplicate coverage should not grow known payload cache\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_add_known_aggregated_payload(&client, &data_root, &data, &broader, data.target.slot) != 0) {
+        fprintf(stderr, "failed to add broader cached proof\n");
+        goto cleanup;
+    }
+    if (client.store.known_aggregated_payloads.length != 1u) {
+        fprintf(stderr, "broader proof should replace covered subset proof\n");
+        goto cleanup;
+    }
+
+    const struct lantern_aggregated_payload_entry *entry =
+        aggregated_pool_find_root(&client.store.known_aggregated_payloads, &data_root);
+    if (!entry
+        || !lantern_bitlist_get(&entry->proof.participants, 0u)
+        || !lantern_bitlist_get(&entry->proof.participants, 1u)) {
+        fprintf(stderr, "broader proof coverage was not retained\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_add_known_aggregated_payload(&client, &data_root, &data, &subset, data.target.slot) != 0) {
+        fprintf(stderr, "failed to process subset cached proof\n");
+        goto cleanup;
+    }
+    if (client.store.known_aggregated_payloads.length != 1u) {
+        fprintf(stderr, "covered subset should not grow known payload cache\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_add_known_aggregated_payload(
+            &client,
+            &other_root,
+            &other_data,
+            &other_root_proof,
+            other_data.target.slot)
+        != 0) {
+        fprintf(stderr, "failed to add proof for a distinct attestation root\n");
+        goto cleanup;
+    }
+    if (client.store.known_aggregated_payloads.length != 2u) {
+        fprintf(stderr, "distinct attestation roots should retain independent coverage\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_aggregated_signature_proof_reset(&first);
+    lantern_aggregated_signature_proof_reset(&duplicate_coverage);
+    lantern_aggregated_signature_proof_reset(&broader);
+    lantern_aggregated_signature_proof_reset(&subset);
+    lantern_aggregated_signature_proof_reset(&other_root_proof);
+    test_reset_agg_cache(&client);
+    return rc;
+}
+
+static int test_promoting_redundant_aggregated_payload_drops_known_duplicate(void) {
+    struct lantern_client client;
+    memset(&client, 0, sizeof(client));
+    lantern_store_init(&client.store);
+
+    LanternRoot data_root;
+    client_test_fill_root_with_index(&data_root, 0x505u);
+    LanternAttestationData data = test_make_attestation_data(12u, 0x81u);
+
+    LanternAggregatedSignatureProof known;
+    LanternAggregatedSignatureProof redundant_new;
+    memset(&known, 0, sizeof(known));
+    memset(&redundant_new, 0, sizeof(redundant_new));
+
+    int rc = 1;
+    if (test_make_dummy_proof(&known, 0u, 0x12u) != 0
+        || test_make_dummy_proof(&redundant_new, 0u, 0x22u) != 0) {
+        fprintf(stderr, "failed to build promotion dedupe proofs\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_add_known_aggregated_payload(&client, &data_root, &data, &known, data.target.slot) != 0
+        || lantern_client_add_new_aggregated_payload(
+               &client,
+               &data_root,
+               &data,
+               &redundant_new,
+               data.target.slot)
+            != 0) {
+        fprintf(stderr, "failed to seed promotion dedupe pools\n");
+        goto cleanup;
+    }
+    if (client.store.known_aggregated_payloads.length != 1u
+        || client.store.new_aggregated_payloads.length != 1u) {
+        fprintf(stderr, "unexpected payload lengths before promotion dedupe\n");
+        goto cleanup;
+    }
+
+    size_t moved = lantern_client_promote_new_aggregated_payloads(&client);
+    if (moved != 1u) {
+        fprintf(stderr, "expected redundant new payload to be processed, got=%zu\n", moved);
+        goto cleanup;
+    }
+    if (client.store.new_aggregated_payloads.length != 0u
+        || client.store.known_aggregated_payloads.length != 1u) {
+        fprintf(stderr, "redundant promoted payload should not grow known cache\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_aggregated_signature_proof_reset(&known);
+    lantern_aggregated_signature_proof_reset(&redundant_new);
+    test_reset_agg_cache(&client);
+    return rc;
+}
+
 static int test_debug_aggregate_attestation_signatures_rebuilds_new_payloads(void) {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
@@ -2298,7 +2507,7 @@ static int test_debug_aggregate_attestation_signatures_rebuilds_new_payloads(voi
         goto cleanup;
     }
 
-    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &fresh_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&vote.data.data, &fresh_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash fresh attestation data for recursive aggregation test\n");
         goto cleanup;
     }
@@ -2705,7 +2914,7 @@ static int test_validator_build_reuses_cached_group_proof(void) {
     }
 
     LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&valid_vote.data.data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&valid_vote.data.data, &data_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash vote data for cached proof reuse test\n");
         goto cleanup;
     }
@@ -2924,7 +3133,7 @@ static int test_block_build_keeps_known_payload_after_newer_raw_vote(void) {
         fprintf(stderr, "failed to build proof-backed vote for block-build shadow test\n");
         goto cleanup;
     }
-    if (lantern_hash_tree_root_attestation_data(&proof_vote.data.data, &proof_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&proof_vote.data.data, &proof_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash proof-backed vote for block-build shadow test\n");
         goto cleanup;
     }
@@ -2970,7 +3179,7 @@ static int test_block_build_keeps_known_payload_after_newer_raw_vote(void) {
         fprintf(stderr, "failed to sign newer raw vote for block-build shadow test\n");
         goto cleanup;
     }
-    if (lantern_hash_tree_root_attestation_data(&raw_vote.data.data, &raw_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&raw_vote.data.data, &raw_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash newer raw vote for block-build shadow test\n");
         goto cleanup;
     }
@@ -3026,6 +3235,147 @@ cleanup:
     lantern_attestation_signatures_reset(&collected_signatures);
     lantern_aggregated_attestations_reset(&collected);
     lantern_aggregated_signature_proof_reset(&cached_proof);
+    test_reset_agg_cache(&client);
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_block_build_drops_target_not_after_source_payload(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    LanternRoot parent_root;
+    LanternRoot invalid_root;
+    LanternRoot valid_root;
+    LanternSignedVote invalid_vote;
+    LanternSignedVote valid_vote;
+    LanternAggregatedSignatureProof invalid_proof;
+    LanternAggregatedSignatureProof valid_proof;
+    LanternAggregatedAttestations collected;
+    LanternAttestationSignatures collected_signatures;
+    int rc = 1;
+
+    memset(&parent_root, 0, sizeof(parent_root));
+    memset(&invalid_root, 0, sizeof(invalid_root));
+    memset(&valid_root, 0, sizeof(valid_root));
+    memset(&invalid_vote, 0, sizeof(invalid_vote));
+    memset(&valid_vote, 0, sizeof(valid_vote));
+    lantern_aggregated_signature_proof_init(&invalid_proof);
+    lantern_aggregated_signature_proof_init(&valid_proof);
+    lantern_aggregated_attestations_init(&collected);
+    lantern_attestation_signatures_init(&collected_signatures);
+
+    if (client_test_setup_vote_validation_client_with_validator_count(
+            &client,
+            "vote_target_not_after_source",
+            2u,
+            &pub,
+            &secret,
+            &anchor_root,
+            &child_root)
+        != 0) {
+        return 1;
+    }
+
+    uint64_t block_slot = client.state.slot + 1u;
+    uint64_t proposer_index = 0u;
+    if (lantern_proposer_for_slot(block_slot, client.state.config.num_validators, &proposer_index) != 0) {
+        fprintf(stderr, "failed to resolve proposer for target<=source block-build test\n");
+        goto cleanup;
+    }
+
+    uint64_t validator_id = proposer_index == 0u ? 1u : 0u;
+    if (make_signed_vote_for_validator(
+            &client,
+            secret,
+            validator_id,
+            &anchor_root,
+            &child_root,
+            &valid_vote)
+        != 0) {
+        fprintf(stderr, "failed to build valid vote for target<=source block-build test\n");
+        goto cleanup;
+    }
+    invalid_vote = valid_vote;
+    invalid_vote.data.head.slot = 0u;
+    invalid_vote.data.head.root = anchor_root;
+    invalid_vote.data.target.slot = invalid_vote.data.source.slot;
+    invalid_vote.data.target.root = invalid_vote.data.source.root;
+
+    if (lantern_hash_tree_root_attestation_data(&invalid_vote.data.data, &invalid_root) != SSZ_SUCCESS
+        || lantern_hash_tree_root_attestation_data(&valid_vote.data.data, &valid_root) != SSZ_SUCCESS) {
+        fprintf(stderr, "failed to hash votes for target<=source block-build test\n");
+        goto cleanup;
+    }
+    if (memcmp(invalid_root.bytes, valid_root.bytes, LANTERN_ROOT_SIZE) == 0) {
+        fprintf(stderr, "target<=source vote should have a distinct data root\n");
+        goto cleanup;
+    }
+    if (test_make_dummy_proof(&invalid_proof, validator_id, 0x44u) != 0
+        || test_make_dummy_proof(&valid_proof, validator_id, 0x55u) != 0) {
+        fprintf(stderr, "failed to build proofs for target<=source block-build test\n");
+        goto cleanup;
+    }
+    if (lantern_client_add_known_aggregated_payload(
+            &client,
+            &invalid_root,
+            &invalid_vote.data.data,
+            &invalid_proof,
+            invalid_vote.data.target.slot)
+        != 0
+        || lantern_client_add_known_aggregated_payload(
+               &client,
+               &valid_root,
+               &valid_vote.data.data,
+               &valid_proof,
+               valid_vote.data.target.slot)
+            != 0) {
+        fprintf(stderr, "failed to seed payloads for target<=source block-build test\n");
+        goto cleanup;
+    }
+
+    if (lantern_state_select_block_parent(&client.state, &client.store, &parent_root) != 0) {
+        fprintf(stderr, "failed to select block parent for target<=source block-build test\n");
+        goto cleanup;
+    }
+    if (lantern_state_collect_attestations_for_block(
+            &client.state,
+            &client.store,
+            block_slot,
+            proposer_index,
+            &parent_root,
+            &collected,
+            &collected_signatures)
+        != 0) {
+        fprintf(stderr, "failed to collect attestations for target<=source block-build test\n");
+        goto cleanup;
+    }
+    if (collected.length != 1u || collected_signatures.length != 1u) {
+        fprintf(
+            stderr,
+            "expected exactly one collected attestation after target<=source filter, got votes=%zu sigs=%zu\n",
+            collected.length,
+            collected_signatures.length);
+        goto cleanup;
+    }
+    if (memcmp(&collected.data[0].data, &valid_vote.data.data, sizeof(valid_vote.data.data)) != 0) {
+        fprintf(stderr, "block collection kept the target<=source attestation\n");
+        goto cleanup;
+    }
+    if (!proof_payload_equals(&collected_signatures.data[0], &valid_proof)) {
+        fprintf(stderr, "block collection did not keep the valid cached proof\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_attestation_signatures_reset(&collected_signatures);
+    lantern_aggregated_attestations_reset(&collected);
+    lantern_aggregated_signature_proof_reset(&valid_proof);
+    lantern_aggregated_signature_proof_reset(&invalid_proof);
     test_reset_agg_cache(&client);
     client_test_teardown_vote_validation_client(&client, pub, secret);
     return rc;
@@ -3099,7 +3449,7 @@ static int test_publish_aggregated_attestations_collects_any_slot_and_prunes_gos
         fprintf(stderr, "expected all gossip signatures to be cached before subnet filtering\n");
         goto cleanup;
     }
-    if (lantern_hash_tree_root_attestation_data(&vote0.data.data, &data_root) != 0) {
+    if (lantern_hash_tree_root_attestation_data(&vote0.data.data, &data_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash attestation data for prune test\n");
         goto cleanup;
     }
@@ -3199,6 +3549,7 @@ static int test_publish_attestations_includes_proposer(void) {
     client.validator_enabled = &validator_enabled;
     client.has_runtime = true;
     client.gossip_running = true;
+    client.sync_state = LANTERN_SYNC_STATE_SYNCED;
     client.gossip.attestation_subnet_id = 0u;
     snprintf(client.gossip.vote_topic, sizeof(client.gossip.vote_topic), "test/proposer_vote");
     snprintf(
@@ -3244,6 +3595,163 @@ static int test_publish_attestations_includes_proposer(void) {
 cleanup:
     publish_capture_reset(&capture);
     test_reset_agg_cache(&client);
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_publish_attestations_ignores_peer_status_gate_inputs(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    struct publish_capture capture;
+    struct lantern_local_validator validator;
+    bool validator_enabled = true;
+    bool peer_enabled = false;
+    int rc = 1;
+
+    memset(&capture, 0, sizeof(capture));
+    memset(&validator, 0, sizeof(validator));
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "vote_publish_peer_status_ignored",
+            &pub,
+            &secret,
+            NULL,
+            NULL)
+        != 0) {
+        goto cleanup;
+    }
+
+    validator.global_index = 0u;
+    validator.last_attested_slot = UINT64_MAX;
+    validator.attestation_secret_key = secret;
+    validator.proposal_secret_key = secret;
+
+    client.local_validators = &validator;
+    client.local_validator_count = 1u;
+    client.validator_enabled = &validator_enabled;
+    client.has_runtime = true;
+    client.gossip_running = true;
+    client.sync_state = LANTERN_SYNC_STATE_SYNCED;
+    client.gossip.attestation_subnet_id = 0u;
+    snprintf(client.gossip.vote_topic, sizeof(client.gossip.vote_topic), "test/status_gate_vote");
+    snprintf(
+        client.gossip.vote_subnet_topic,
+        sizeof(client.gossip.vote_subnet_topic),
+        "test/status_gate_vote_subnet");
+    lantern_gossipsub_service_set_publish_hook(&client.gossip, publish_capture_hook, &capture);
+    lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
+
+    if (test_enable_blocks_request_peer(&client, "peer_status_gate") != 0) {
+        fprintf(stderr, "failed to initialize peer status gate test peer\n");
+        goto cleanup;
+    }
+    peer_enabled = true;
+
+    struct lantern_peer_status_entry *entry = &client.peer_status_entries[0];
+    entry->has_status = true;
+    entry->last_status_ms = 1u;
+    entry->status.head.slot = client.state.slot + 64u;
+    client_test_fill_root(&entry->status.head.root, 0xacu);
+    entry->status.finalized = client.state.latest_finalized;
+
+    uint64_t stale_slot = client.state.slot + 1u;
+    if (validator_publish_attestations(&client, stale_slot) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "stale peer status should not block validator attestation\n");
+        goto cleanup;
+    }
+    if (capture.calls != 1u || validator.last_attested_slot != stale_slot) {
+        fprintf(stderr, "stale peer status did not produce exactly one attestation\n");
+        goto cleanup;
+    }
+
+    capture.calls = 0u;
+    capture.payload_len = 0u;
+    entry->last_status_ms = monotonic_millis();
+    entry->status.head.slot = client.state.slot + 128u;
+    client_test_fill_root(&entry->status.head.root, 0xbcu);
+
+    uint64_t mismatched_slot = stale_slot + 1u;
+    if (validator_publish_attestations(&client, mismatched_slot) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "fresh mismatched peer head should not block validator attestation\n");
+        goto cleanup;
+    }
+    if (capture.calls != 1u || validator.last_attested_slot != mismatched_slot) {
+        fprintf(stderr, "fresh mismatched peer head did not produce exactly one attestation\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    if (peer_enabled) {
+        test_disable_blocks_request_peer(&client);
+    }
+    publish_capture_reset(&capture);
+    test_reset_agg_cache(&client);
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_validator_duties_follow_sync_state(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    struct lantern_local_validator validator;
+    bool validator_enabled = true;
+    int rc = 1;
+
+    memset(&validator, 0, sizeof(validator));
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "validator_sync_state_gate",
+            &pub,
+            &secret,
+            NULL,
+            NULL)
+        != 0) {
+        return 1;
+    }
+
+    validator.global_index = 0u;
+    validator.attestation_secret_key = secret;
+    validator.proposal_secret_key = secret;
+
+    client.local_validators = &validator;
+    client.local_validator_count = 1u;
+    client.validator_enabled = &validator_enabled;
+    client.has_runtime = true;
+    client.gossip_running = true;
+
+    client.sync_state = LANTERN_SYNC_STATE_IDLE;
+    if (validator_service_should_run(&client)) {
+        fprintf(stderr, "validator duties should be suppressed while sync state is IDLE\n");
+        goto cleanup;
+    }
+
+    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
+    if (validator_service_should_run(&client)) {
+        fprintf(stderr, "validator duties should be suppressed while sync state is SYNCING\n");
+        goto cleanup;
+    }
+
+    client.sync_state = LANTERN_SYNC_STATE_SYNCED;
+    if (!validator_service_should_run(&client)) {
+        fprintf(stderr, "validator duties should run while sync state is SYNCED\n");
+        goto cleanup;
+    }
+
+    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
+    if (validator_service_should_run(&client)) {
+        fprintf(stderr, "validator duties should be re-suppressed after returning to SYNCING\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
     client_test_teardown_vote_validation_client(&client, pub, secret);
     return rc;
 }
@@ -3298,7 +3806,7 @@ static int test_local_block_commit_updates_state_before_publish(void) {
         fprintf(stderr, "validator_build_block failed for local block publish test\n");
         goto cleanup;
     }
-    if (lantern_hash_tree_root_block(&block.block, &block_root) != 0) {
+    if (lantern_hash_tree_root_block(&block.block, &block_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash built block for local block publish test\n");
         goto cleanup;
     }
@@ -3497,6 +4005,12 @@ int main(void) {
     if (test_new_aggregated_payloads_promote_to_known() != 0) {
         return 1;
     }
+    if (test_aggregated_payload_cache_keeps_only_useful_coverage() != 0) {
+        return 1;
+    }
+    if (test_promoting_redundant_aggregated_payload_drops_known_duplicate() != 0) {
+        return 1;
+    }
     if (test_debug_aggregate_attestation_signatures_rebuilds_new_payloads() != 0) {
         return 1;
     }
@@ -3512,10 +4026,19 @@ int main(void) {
     if (test_block_build_keeps_known_payload_after_newer_raw_vote() != 0) {
         return 1;
     }
+    if (test_block_build_drops_target_not_after_source_payload() != 0) {
+        return 1;
+    }
     if (test_validator_build_reuses_cached_group_proof() != 0) {
         return 1;
     }
     if (test_publish_attestations_includes_proposer() != 0) {
+        return 1;
+    }
+    if (test_publish_attestations_ignores_peer_status_gate_inputs() != 0) {
+        return 1;
+    }
+    if (test_validator_duties_follow_sync_state() != 0) {
         return 1;
     }
     if (test_publish_aggregated_attestations_collects_any_slot_and_prunes_gossip() != 0) {

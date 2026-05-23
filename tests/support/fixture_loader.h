@@ -4,8 +4,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define JSMN_STATIC
+#define JSMN_HEADER
 #include "jsmn.h"
+#undef JSMN_HEADER
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/state.h"
 

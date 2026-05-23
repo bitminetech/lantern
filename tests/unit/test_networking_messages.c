@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <errno.h>
 
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/hash.h"
@@ -16,11 +17,9 @@
 #include "lantern/networking/reqresp_service.h"
 #include "lantern/encoding/snappy.h"
 #include "lantern/support/strings.h"
-#include "libp2p/errors.h"
-#include "libp2p/stream_internal.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
 #include "tests/support/fixture_loader.h"
-#include "ssz_constants.h"
+#include "ssz.h"
 
 #define CHECK(cond)                                                                 \
     do {                                                                            \
@@ -48,57 +47,6 @@ static void fill_signature(LanternSignature *signature, uint8_t seed) {
         return;
     }
     fill_bytes(signature->bytes, LANTERN_SIGNATURE_SIZE, seed);
-}
-
-static uint32_t read_u32_le_test(const uint8_t *data) {
-    return ((uint32_t)data[0])
-        | ((uint32_t)data[1] << 8u)
-        | ((uint32_t)data[2] << 16u)
-        | ((uint32_t)data[3] << 24u);
-}
-
-static size_t build_attestation_only_signed_block_ssz(
-    const LanternSignedBlock *block,
-    uint8_t *out,
-    size_t out_len) {
-    size_t encoded_len = 0;
-    CHECK(lantern_ssz_encode_signed_block(block, out, out_len, &encoded_len) == 0);
-    CHECK(encoded_len >= (sizeof(uint32_t) * 2u));
-
-    uint32_t signatures_offset = read_u32_le_test(out + sizeof(uint32_t));
-    CHECK(signatures_offset <= encoded_len);
-
-    size_t signatures_len = encoded_len - signatures_offset;
-    CHECK(signatures_len >= (sizeof(uint32_t) + LANTERN_SIGNATURE_SIZE));
-
-    uint32_t att_offset = read_u32_le_test(out + signatures_offset);
-    CHECK(att_offset == (sizeof(uint32_t) + LANTERN_SIGNATURE_SIZE));
-    CHECK(att_offset <= signatures_len);
-
-    size_t attestation_sigs_len = signatures_len - att_offset;
-    memmove(
-        out + signatures_offset,
-        out + signatures_offset + att_offset,
-        attestation_sigs_len);
-    return signatures_offset + attestation_sigs_len;
-}
-
-static size_t build_single_block_list_payload(
-    const uint8_t *block_ssz,
-    size_t block_ssz_len,
-    uint8_t *out,
-    size_t out_len) {
-    size_t total_len = sizeof(uint32_t) + block_ssz_len;
-    CHECK(block_ssz != NULL);
-    CHECK(out != NULL);
-    CHECK(out_len >= total_len);
-
-    out[0] = (uint8_t)(sizeof(uint32_t) & 0xFFu);
-    out[1] = 0u;
-    out[2] = 0u;
-    out[3] = 0u;
-    memcpy(out + sizeof(uint32_t), block_ssz, block_ssz_len);
-    return total_len;
 }
 
 static void expect_root_seed(const LanternRoot *root, uint8_t seed) {
@@ -150,7 +98,7 @@ struct mock_stream_ctx {
 static ssize_t mock_stream_read(void *io_ctx, void *buf, size_t len) {
     struct mock_stream_ctx *ctx = (struct mock_stream_ctx *)io_ctx;
     if (!ctx || !buf || len == 0) {
-        return LIBP2P_ERR_NULL_PTR;
+        return -EINVAL;
     }
     if (ctx->position >= ctx->length) {
         return 0;
@@ -166,7 +114,7 @@ static ssize_t mock_stream_write(void *io_ctx, const void *buf, size_t len) {
     (void)io_ctx;
     (void)buf;
     (void)len;
-    return LIBP2P_ERR_UNSUPPORTED;
+    return -ENOTSUP;
 }
 
 static int mock_stream_close(void *io_ctx) {
@@ -199,23 +147,6 @@ static void check_checkpoint_equal(const LanternCheckpoint *expected, const Lant
     CHECK(actual != NULL);
     CHECK(expected->slot == actual->slot);
     CHECK(memcmp(expected->root.bytes, actual->root.bytes, LANTERN_ROOT_SIZE) == 0);
-}
-
-static void check_vote_equal(const LanternVote *expected, const LanternVote *actual) {
-    CHECK(expected != NULL);
-    CHECK(actual != NULL);
-    CHECK(expected->validator_id == actual->validator_id);
-    CHECK(expected->slot == actual->slot);
-    check_checkpoint_equal(&expected->head, &actual->head);
-    check_checkpoint_equal(&expected->target, &actual->target);
-    check_checkpoint_equal(&expected->source, &actual->source);
-}
-
-static void check_signed_vote_equal(const LanternSignedVote *expected, const LanternSignedVote *actual) {
-    CHECK(expected != NULL);
-    CHECK(actual != NULL);
-    check_vote_equal(&expected->data, &actual->data);
-    CHECK(memcmp(expected->signature.bytes, actual->signature.bytes, LANTERN_SIGNATURE_SIZE) == 0);
 }
 
 static void check_attestation_data_equal(
@@ -266,24 +197,6 @@ static void check_signature_proof_equal(
     CHECK(memcmp(expected->proof_data.data, actual->proof_data.data, expected->proof_data.length) == 0);
 }
 
-static void expect_vote_view(
-    const LanternVote *vote,
-    uint64_t validator_id,
-    uint64_t slot,
-    uint64_t head_slot,
-    uint8_t head_seed,
-    uint64_t target_slot,
-    uint8_t target_seed,
-    uint64_t source_slot,
-    uint8_t source_seed) {
-    CHECK(vote != NULL);
-    CHECK(vote->validator_id == validator_id);
-    CHECK(vote->slot == slot);
-    expect_checkpoint_seed(&vote->head, head_slot, head_seed);
-    expect_checkpoint_seed(&vote->target, target_slot, target_seed);
-    expect_checkpoint_seed(&vote->source, source_slot, source_seed);
-}
-
 static void check_block_signatures_equal(
     const LanternBlockSignatures *expected,
     const LanternBlockSignatures *actual) {
@@ -304,35 +217,6 @@ static void check_block_signatures_equal(
               actual->proposer_signature.bytes,
               LANTERN_SIGNATURE_SIZE)
           == 0);
-}
-
-static void check_signed_block_equal(
-    const LanternSignedBlock *expected,
-    const LanternSignedBlock *actual) {
-    CHECK(expected != NULL);
-    CHECK(actual != NULL);
-    CHECK(actual->block.slot == expected->block.slot);
-    CHECK(actual->block.proposer_index == expected->block.proposer_index);
-    CHECK(memcmp(
-        actual->block.parent_root.bytes,
-        expected->block.parent_root.bytes,
-        LANTERN_ROOT_SIZE)
-        == 0);
-    CHECK(memcmp(
-        actual->block.state_root.bytes,
-        expected->block.state_root.bytes,
-        LANTERN_ROOT_SIZE)
-        == 0);
-    CHECK(actual->block.body.attestations.length == expected->block.body.attestations.length);
-    CHECK(
-        (actual->block.body.attestations.length == 0)
-        || (actual->block.body.attestations.data != NULL && expected->block.body.attestations.data != NULL));
-    for (size_t i = 0; i < actual->block.body.attestations.length; ++i) {
-        check_aggregated_attestation_equal(
-            &expected->block.body.attestations.data[i],
-            &actual->block.body.attestations.data[i]);
-    }
-    check_block_signatures_equal(&expected->signatures, &actual->signatures);
 }
 
 static uint32_t rng_state = UINT32_C(0x6ac1e39d);
@@ -622,14 +506,14 @@ static void test_replay_devnet_block_payloads(void) {
 
         LanternRoot original_block_root;
         memset(&original_block_root, 0, sizeof(original_block_root));
-        CHECK(lantern_hash_tree_root_block(&original.block, &original_block_root) == 0);
+        CHECK(lantern_hash_tree_root_block(&original.block, &original_block_root) == SSZ_SUCCESS);
 
         size_t ssz_capacity = signed_block_min_capacity_for_test(&original);
         CHECK(ssz_capacity > 0);
         uint8_t *ssz_encoded = (uint8_t *)malloc(ssz_capacity);
         CHECK(ssz_encoded != NULL);
         size_t ssz_written = ssz_capacity;
-        CHECK(lantern_ssz_encode_signed_block(&original, ssz_encoded, ssz_capacity, &ssz_written) == 0);
+        CHECK(lantern_ssz_encode_signed_block(&original, ssz_encoded, ssz_capacity, &ssz_written) == SSZ_SUCCESS);
 
         size_t max_compressed = 0;
         CHECK(lantern_snappy_max_compressed_size_raw(ssz_written, &max_compressed) == LANTERN_SNAPPY_OK);
@@ -661,7 +545,7 @@ static void test_replay_devnet_block_payloads(void) {
 
         LanternRoot decoded_block_root;
         memset(&decoded_block_root, 0, sizeof(decoded_block_root));
-        CHECK(lantern_hash_tree_root_block(&decoded.block, &decoded_block_root) == 0);
+        CHECK(lantern_hash_tree_root_block(&decoded.block, &decoded_block_root) == SSZ_SUCCESS);
         CHECK(memcmp(decoded_block_root.bytes, original_block_root.bytes, LANTERN_ROOT_SIZE) == 0);
 
         uint8_t *roundtrip = (uint8_t *)malloc(ssz_written);
@@ -776,7 +660,7 @@ static void test_status_reqresp_snappy_fixture(void) {
     /* Build reqresp frame - varint encodes the uncompressed SSZ payload size */
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
-    CHECK(unsigned_varint_encode(raw_ssz_len, header, sizeof(header), &header_len) == UNSIGNED_VARINT_OK);
+    CHECK(libp2p_uvarint_encode(raw_ssz_len, header, sizeof(header), &header_len) == LIBP2P_UVARINT_OK);
 
     size_t framed_len = 1u + header_len + snappy_len;
     uint8_t *framed = (uint8_t *)malloc(framed_len);
@@ -791,7 +675,7 @@ static void test_status_reqresp_snappy_fixture(void) {
     ctx->length = framed_len;
     ctx->position = 0;
 
-    libp2p_stream_backend_ops_t ops = {
+    struct lantern_reqresp_stream_ops ops = {
         .read = mock_stream_read,
         .write = mock_stream_write,
         .close = mock_stream_close,
@@ -799,7 +683,7 @@ static void test_status_reqresp_snappy_fixture(void) {
         .set_deadline = mock_stream_set_deadline,
         .free_ctx = mock_stream_free_ctx,
     };
-    libp2p_stream_t *stream = libp2p_stream_from_ops(NULL, ctx, &ops, LANTERN_STATUS_PROTOCOL_ID, 0, NULL);
+    struct lantern_reqresp_stream *stream = lantern_reqresp_stream_from_ops(ctx, &ops, NULL);
     CHECK(stream != NULL);
 
     uint8_t *response = NULL;
@@ -829,7 +713,7 @@ static void test_status_reqresp_snappy_fixture(void) {
     expect_checkpoint_seed(&decoded.head, 96, 0x41);
 
     free(response);
-    libp2p_stream_free(stream);
+    lantern_reqresp_stream_free(stream);
     free(snappy_payload);
 }
 
@@ -842,7 +726,7 @@ static uint8_t *build_reqresp_frame(
     /* Varint encodes the uncompressed payload size (SSZ length). */
     uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
     size_t header_len = 0;
-    CHECK(unsigned_varint_encode(raw_len, header, sizeof(header), &header_len) == UNSIGNED_VARINT_OK);
+    CHECK(libp2p_uvarint_encode(raw_len, header, sizeof(header), &header_len) == LIBP2P_UVARINT_OK);
 
     size_t frame_len = 1u + header_len + payload_len;
     uint8_t *frame = (uint8_t *)malloc(frame_len);
@@ -902,7 +786,7 @@ static void test_reqresp_response_code_mapping(void) {
         ctx->length = frame_len;
         ctx->position = 0;
 
-        libp2p_stream_backend_ops_t ops = {
+        struct lantern_reqresp_stream_ops ops = {
             .read = mock_stream_read,
             .write = mock_stream_write,
             .close = mock_stream_close,
@@ -910,7 +794,7 @@ static void test_reqresp_response_code_mapping(void) {
             .set_deadline = mock_stream_set_deadline,
             .free_ctx = mock_stream_free_ctx,
         };
-        libp2p_stream_t *stream = libp2p_stream_from_ops(NULL, ctx, &ops, LANTERN_STATUS_PROTOCOL_ID, 0, NULL);
+        struct lantern_reqresp_stream *stream = lantern_reqresp_stream_from_ops(ctx, &ops, NULL);
         CHECK(stream != NULL);
 
         uint8_t *response = NULL;
@@ -933,7 +817,7 @@ static void test_reqresp_response_code_mapping(void) {
         CHECK(memcmp(response, fixture, fixture_len) == 0);
 
         free(response);
-        libp2p_stream_free(stream);
+        lantern_reqresp_stream_free(stream);
     }
 
     free(fixture);
@@ -1000,7 +884,7 @@ static void test_blocks_by_root_per_chunk_framing(void) {
     ctx->length = stream_len;
     ctx->position = 0;
 
-    libp2p_stream_backend_ops_t ops = {
+    struct lantern_reqresp_stream_ops ops = {
         .read = mock_stream_read,
         .write = mock_stream_write,
         .close = mock_stream_close,
@@ -1008,7 +892,7 @@ static void test_blocks_by_root_per_chunk_framing(void) {
         .set_deadline = mock_stream_set_deadline,
         .free_ctx = mock_stream_free_ctx,
     };
-    libp2p_stream_t *stream = libp2p_stream_from_ops(NULL, ctx, &ops, LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID, 0, NULL);
+    struct lantern_reqresp_stream *stream = lantern_reqresp_stream_from_ops(ctx, &ops, NULL);
     CHECK(stream != NULL);
 
     uint8_t *response = NULL;
@@ -1050,7 +934,7 @@ static void test_blocks_by_root_per_chunk_framing(void) {
     CHECK(memcmp(response, snappy_two, snappy_two_len) == 0);
     free(response);
 
-    libp2p_stream_free(stream);
+    lantern_reqresp_stream_free(stream);
     free(snappy_one);
     free(snappy_two);
 }
@@ -1083,21 +967,6 @@ static void test_blocks_by_root_request(void) {
     CHECK(decoded.roots.length == req.roots.length);
     CHECK(memcmp(decoded.roots.items[1].bytes, req.roots.items[1].bytes, LANTERN_ROOT_SIZE) == 0);
 
-    /* Legacy compatibility: decode packed roots without container header. */
-    uint8_t legacy_encoded[128];
-    memcpy(legacy_encoded, req.roots.items, req.roots.length * LANTERN_ROOT_SIZE);
-
-    LanternBlocksByRootRequest legacy_decoded;
-    lantern_blocks_by_root_request_init(&legacy_decoded);
-    check_zero(
-        lantern_network_blocks_by_root_request_decode(
-            &legacy_decoded,
-            legacy_encoded,
-            req.roots.length * LANTERN_ROOT_SIZE),
-        "request decode legacy packed list");
-    CHECK(legacy_decoded.roots.length == req.roots.length);
-    CHECK(memcmp(legacy_decoded.roots.items[0].bytes, req.roots.items[0].bytes, LANTERN_ROOT_SIZE) == 0);
-
     uint8_t compressed[256];
     size_t compressed_len = 0;
     size_t request_raw_len = 0;
@@ -1119,7 +988,6 @@ static void test_blocks_by_root_request(void) {
 
     lantern_blocks_by_root_request_reset(&req);
     lantern_blocks_by_root_request_reset(&decoded);
-    lantern_blocks_by_root_request_reset(&legacy_decoded);
     lantern_blocks_by_root_request_reset(&snappy_decoded);
 }
 
@@ -1135,7 +1003,7 @@ static void test_signed_block_list(void) {
     CHECK(encoded != NULL);
     for (size_t i = 0; i < resp.length; ++i) {
         size_t tmp_written = 0;
-        CHECK(lantern_ssz_encode_signed_block(&resp.blocks[i], encoded, encoded_capacity, &tmp_written) == 0);
+        CHECK(lantern_ssz_encode_signed_block(&resp.blocks[i], encoded, encoded_capacity, &tmp_written) == SSZ_SUCCESS);
         CHECK(tmp_written > 0);
     }
     size_t written = 0;
@@ -1311,7 +1179,7 @@ static void test_gossip_signed_vote_payload(void) {
 
     uint8_t raw_buf[8192];
     size_t raw_written = 0;
-    CHECK(lantern_ssz_encode_signed_vote(&vote, raw_buf, sizeof(raw_buf), &raw_written) == 0);
+    CHECK(lantern_ssz_encode_signed_vote(&vote, raw_buf, sizeof(raw_buf), &raw_written) == SSZ_SUCCESS);
 
     size_t max_compressed = 0;
     CHECK(lantern_snappy_max_compressed_size(raw_written, &max_compressed) == LANTERN_SNAPPY_OK);
@@ -1409,135 +1277,6 @@ static void test_gossip_signed_block_accepts_future_attestation_slot(void) {
     lantern_signed_block_reset(&decoded);
     lantern_signed_block_reset(&block);
     free(compressed);
-}
-
-static void test_gossip_signed_block_canonicalizes_legacy_body_layout(void) {
-    LanternSignedBlock block;
-    lantern_signed_block_init(&block);
-    populate_block(&block, 11);
-    block.block.body.legacy_plain_attestation_layout = true;
-
-    size_t raw_upper = signed_block_min_capacity_for_test(&block);
-    size_t max_compressed = 0;
-    CHECK(lantern_snappy_max_compressed_size_raw(raw_upper, &max_compressed) == LANTERN_SNAPPY_OK);
-    uint8_t *compressed = malloc(max_compressed);
-    CHECK(compressed);
-
-    size_t compressed_len = 0;
-    check_zero(
-        lantern_gossip_encode_signed_block_snappy(&block, compressed, max_compressed, &compressed_len),
-        "encode legacy-layout block gossip canonically");
-    CHECK(compressed_len > 0);
-
-    LanternSignedBlock decoded;
-    lantern_signed_block_init(&decoded);
-    check_zero(
-        lantern_gossip_decode_signed_block_snappy(&decoded, compressed, compressed_len, NULL, NULL),
-        "decode canonicalized legacy-layout block gossip");
-    CHECK(decoded.block.body.legacy_plain_attestation_layout == false);
-    check_block_signatures_equal(&decoded.signatures, &block.signatures);
-
-    lantern_signed_block_reset(&decoded);
-    lantern_signed_block_reset(&block);
-    free(compressed);
-}
-
-static void test_gossip_signed_block_rejects_legacy_body_layout(void) {
-    LanternSignedBlock block;
-    lantern_signed_block_init(&block);
-    populate_block(&block, 12);
-    block.block.body.legacy_plain_attestation_layout = true;
-
-    size_t raw_capacity = signed_block_min_capacity_for_test(&block);
-    uint8_t *raw = malloc(raw_capacity);
-    CHECK(raw != NULL);
-    size_t raw_len = 0;
-    CHECK(lantern_ssz_encode_signed_block(&block, raw, raw_capacity, &raw_len) == 0);
-    CHECK(raw_len > 0);
-
-    size_t max_compressed = 0;
-    CHECK(lantern_snappy_max_compressed_size_raw(raw_len, &max_compressed) == LANTERN_SNAPPY_OK);
-    uint8_t *compressed = malloc(max_compressed);
-    CHECK(compressed != NULL);
-
-    size_t compressed_len = 0;
-    CHECK(
-        lantern_snappy_compress_raw(raw, raw_len, compressed, max_compressed, &compressed_len)
-        == LANTERN_SNAPPY_OK);
-
-    LanternSignedBlock decoded;
-    lantern_signed_block_init(&decoded);
-    CHECK(lantern_gossip_decode_signed_block_snappy(&decoded, compressed, compressed_len, NULL, NULL) != 0);
-
-    lantern_signed_block_reset(&decoded);
-    lantern_signed_block_reset(&block);
-    free(compressed);
-    free(raw);
-}
-
-static void test_signed_block_list_canonicalizes_legacy_body_layout(void) {
-    LanternSignedBlockList resp;
-    lantern_signed_block_list_init(&resp);
-    check_zero(lantern_signed_block_list_resize(&resp, 1), "response resize");
-    populate_block(&resp.blocks[0], 13);
-    resp.blocks[0].block.body.legacy_plain_attestation_layout = true;
-
-    size_t encoded_capacity = 1u << 20;
-    uint8_t *encoded = malloc(encoded_capacity);
-    CHECK(encoded != NULL);
-    size_t written = 0;
-    check_zero(
-        lantern_network_signed_block_list_encode(&resp, encoded, encoded_capacity, &written),
-        "response encode canonicalizes legacy layout");
-
-    LanternSignedBlockList decoded;
-    lantern_signed_block_list_init(&decoded);
-    check_zero(
-        lantern_network_signed_block_list_decode(&decoded, encoded, written),
-        "response decode canonicalized legacy layout");
-    CHECK(decoded.length == 1u);
-    CHECK(decoded.blocks[0].block.body.legacy_plain_attestation_layout == false);
-    check_block_signatures_equal(&decoded.blocks[0].signatures, &resp.blocks[0].signatures);
-
-    lantern_signed_block_list_reset(&decoded);
-    lantern_signed_block_list_reset(&resp);
-    free(encoded);
-}
-
-static void test_signed_block_list_decode_rejects_attestation_only_signatures(void) {
-    LanternSignedBlock block;
-    lantern_signed_block_init(&block);
-    populate_block(&block, 14);
-
-    size_t block_capacity = signed_block_min_capacity_for_test(&block);
-    uint8_t *block_ssz = malloc(block_capacity);
-    CHECK(block_ssz != NULL);
-    size_t block_len = build_attestation_only_signed_block_ssz(&block, block_ssz, block_capacity);
-    CHECK(block_len > 0);
-
-    size_t list_capacity = sizeof(uint32_t) + block_len;
-    uint8_t *list_raw = malloc(list_capacity);
-    CHECK(list_raw != NULL);
-    size_t list_len = build_single_block_list_payload(block_ssz, block_len, list_raw, list_capacity);
-
-    size_t compressed_capacity = 0;
-    CHECK(lantern_snappy_max_compressed_size(list_len, &compressed_capacity) == LANTERN_SNAPPY_OK);
-    uint8_t *compressed = malloc(compressed_capacity);
-    CHECK(compressed != NULL);
-    size_t compressed_len = 0;
-    CHECK(
-        lantern_snappy_compress(list_raw, list_len, compressed, compressed_capacity, &compressed_len)
-        == LANTERN_SNAPPY_OK);
-
-    LanternSignedBlockList decoded;
-    lantern_signed_block_list_init(&decoded);
-    CHECK(lantern_network_signed_block_list_decode_snappy(&decoded, compressed, compressed_len) != 0);
-
-    lantern_signed_block_list_reset(&decoded);
-    lantern_signed_block_reset(&block);
-    free(compressed);
-    free(list_raw);
-    free(block_ssz);
 }
 
 static void test_gossip_block_snappy_roundtrip_random(void) {
@@ -1690,10 +1429,6 @@ int main(void) {
     test_gossip_signed_vote_payload();
     test_gossip_signed_block_payload();
     test_gossip_signed_block_accepts_future_attestation_slot();
-    test_gossip_signed_block_canonicalizes_legacy_body_layout();
-    test_gossip_signed_block_rejects_legacy_body_layout();
-    test_signed_block_list_canonicalizes_legacy_body_layout();
-    test_signed_block_list_decode_rejects_attestation_only_signatures();
     test_gossip_block_snappy_roundtrip_random();
     if (consensus_fixture_exists(
             "fork_choice/devnet/fc/test_fork_choice_reorgs/test_reorg_on_newly_justified_slot.json")

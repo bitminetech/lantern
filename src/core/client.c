@@ -38,17 +38,6 @@
 #endif
 
 #include "internal/yaml_parser.h"
-#include "libp2p/errors.h"
-#include "libp2p/events.h"
-#include "libp2p/host.h"
-#include "libp2p/protocol_dial.h"
-#include "libp2p/stream.h"
-#include "multiformats/unsigned_varint/unsigned_varint.h"
-#include "peer_id/peer_id.h"
-#include "protocol/gossipsub/gossipsub.h"
-#include "protocol/identify/protocol_identify.h"
-#include "protocol/ping/protocol_ping.h"
-
 #include "client_internal.h"
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/duties.h"
@@ -864,6 +853,7 @@ static void client_reset_base(struct lantern_client *client)
     lantern_string_list_init(&client->bootnodes);
     lantern_string_list_init(&client->dialer_peers);
     lantern_string_list_init(&client->connected_peer_ids);
+    lantern_string_list_init(&client->connected_peer_refs);
     lantern_string_list_init(&client->inbound_peer_ids);
     lantern_string_list_init(&client->status_failure_peer_ids);
     double now_seconds = lantern_time_now_seconds();
@@ -871,8 +861,6 @@ static void client_reset_base(struct lantern_client *client)
     lantern_genesis_artifacts_init(&client->genesis);
     lantern_enr_record_init(&client->local_enr);
     lantern_libp2p_host_init(&client->network);
-    client->ping_server = NULL;
-    client->ping_running = false;
     lantern_gossipsub_service_init(&client->gossip);
     lantern_reqresp_service_init(&client->reqresp);
     client->reqresp_running = false;
@@ -895,9 +883,8 @@ static void client_reset_base(struct lantern_client *client)
     client->timing_stop_flag = 1;
     client->dialer_thread_started = false;
     client->dialer_stop_flag = 1;
-    client->ping_thread_started = false;
-    client->ping_stop_flag = 1;
     pending_block_list_init(&client->pending_blocks);
+    client->block_import_stop = true;
     pending_vote_list_init(&client->pending_gossip_votes);
     client->pending_lock_initialized = false;
     client->sync_state = LANTERN_SYNC_STATE_IDLE;
@@ -1322,7 +1309,7 @@ static void client_log_generated_anchor_block(struct lantern_client *client)
         goto cleanup;
     }
 
-    if (lantern_hash_tree_root_state(&generated_state, &generated_state_root) != 0)
+    if (lantern_hash_tree_root_state(&generated_state, &generated_state_root) != SSZ_SUCCESS)
     {
         goto cleanup;
     }
@@ -1335,7 +1322,7 @@ static void client_log_generated_anchor_block(struct lantern_client *client)
     lantern_block_body_init(&generated_block.body);
     body_initialized = true;
 
-    if (lantern_hash_tree_root_block(&generated_block, &generated_block_root) == 0)
+    if (lantern_hash_tree_root_block(&generated_block, &generated_block_root) == SSZ_SUCCESS)
     {
         char generated_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
         format_root_hex(&generated_block_root, generated_hex, sizeof(generated_hex));
@@ -1391,7 +1378,7 @@ static void client_log_genesis_anchors(
     canonical_hex[0] = '\0';
     body_hex[0] = '\0';
     spec_header_hex[0] = '\0';
-    if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &header_root) == 0)
+    if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &header_root) == SSZ_SUCCESS)
     {
         format_root_hex(&header_root, header_hex, sizeof(header_hex));
     }
@@ -1408,7 +1395,7 @@ static void client_log_genesis_anchors(
                                  ? *state_root
                                  : client->state.latest_block_header.state_root;
     lantern_block_body_init(&genesis_block.body);
-    if (lantern_hash_tree_root_block(&genesis_block, &genesis_block_root) == 0)
+    if (lantern_hash_tree_root_block(&genesis_block, &genesis_block_root) == SSZ_SUCCESS)
     {
         format_root_hex(&genesis_block_root, block_hex, sizeof(block_hex));
     }
@@ -1419,14 +1406,14 @@ static void client_log_genesis_anchors(
         sizeof(parent_hex));
     LanternBlockHeader canonical_header = client->state.latest_block_header;
     canonical_header.state_root = state_root ? *state_root : canonical_header.state_root;
-    if (lantern_hash_tree_root_block_header(&canonical_header, &canonical_header_root) == 0)
+    if (lantern_hash_tree_root_block_header(&canonical_header, &canonical_header_root) == SSZ_SUCCESS)
     {
         format_root_hex(&canonical_header_root, canonical_hex, sizeof(canonical_hex));
     }
     LanternBlockBody empty_body_snapshot;
     lantern_block_body_init(&empty_body_snapshot);
     LanternRoot default_body_root;
-    if (lantern_hash_tree_root_block_body(&empty_body_snapshot, &default_body_root) != 0)
+    if (lantern_hash_tree_root_block_body(&empty_body_snapshot, &default_body_root) != SSZ_SUCCESS)
     {
         memset(&default_body_root, 0, sizeof(default_body_root));
     }
@@ -1434,7 +1421,7 @@ static void client_log_genesis_anchors(
     LanternBlockHeader spec_header = client->state.latest_block_header;
     spec_header.state_root = state_root ? *state_root : spec_header.state_root;
     spec_header.body_root = default_body_root;
-    if (lantern_hash_tree_root_block_header(&spec_header, &spec_header_root) == 0)
+    if (lantern_hash_tree_root_block_header(&spec_header, &spec_header_root) == SSZ_SUCCESS)
     {
         format_root_hex(&spec_header_root, spec_header_hex, sizeof(spec_header_hex));
     }
@@ -1456,7 +1443,7 @@ static void client_log_genesis_anchors(
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to size genesis signatures list");
     }
-    else if (lantern_hash_tree_root_signed_block(&genesis_signed, &genesis_signed_block_root) == 0)
+    else if (lantern_hash_tree_root_signed_block(&genesis_signed, &genesis_signed_block_root) == SSZ_SUCCESS)
     {
         format_root_hex(&genesis_signed_block_root, signed_block_hex, sizeof(signed_block_hex));
     }
@@ -1508,7 +1495,7 @@ static lantern_client_error client_finalize_genesis_state(struct lantern_client 
         return LANTERN_CLIENT_ERR_GENESIS;
     }
     LanternRoot state_root;
-    if (lantern_hash_tree_root_state(&client->state, &state_root) != 0)
+    if (lantern_hash_tree_root_state(&client->state, &state_root) != SSZ_SUCCESS)
     {
         return LANTERN_CLIENT_ERR_GENESIS;
     }
@@ -2511,7 +2498,7 @@ static lantern_client_error client_load_state_from_checkpoint(
     bool decoded_owned = true;
     lantern_client_error result = LANTERN_CLIENT_OK;
 
-    if (lantern_ssz_decode_state(&decoded, state_bytes, state_len) != 0)
+    if (lantern_ssz_decode_state(&decoded, state_bytes, state_len) != SSZ_SUCCESS)
     {
         lantern_log_error(
             "checkpoint_sync",
@@ -2580,7 +2567,7 @@ static lantern_client_error client_load_state_from_checkpoint(
     }
 
     LanternRoot state_root;
-    if (lantern_hash_tree_root_state(&decoded, &state_root) != 0)
+    if (lantern_hash_tree_root_state(&decoded, &state_root) != SSZ_SUCCESS)
     {
         lantern_log_error(
             "checkpoint_sync",
@@ -2595,7 +2582,7 @@ static lantern_client_error client_load_state_from_checkpoint(
     LanternBlockHeader anchor_header = decoded.latest_block_header;
     anchor_header.state_root = state_root;
     LanternRoot anchor_root;
-    if (lantern_hash_tree_root_block_header(&anchor_header, &anchor_root) != 0)
+    if (lantern_hash_tree_root_block_header(&anchor_header, &anchor_root) != SSZ_SUCCESS)
     {
         lantern_log_error(
             "checkpoint_sync",
@@ -2663,7 +2650,7 @@ static lantern_client_error client_load_state_from_checkpoint(
     LanternRoot adjusted_anchor_root = {0};
     bool have_adjusted_state_root = false;
     bool have_adjusted_anchor_root = false;
-    if (lantern_hash_tree_root_state(&anchor_checkpoint_alias, &adjusted_state_root) == 0)
+    if (lantern_hash_tree_root_state(&anchor_checkpoint_alias, &adjusted_state_root) == SSZ_SUCCESS)
     {
         have_adjusted_state_root = true;
         LanternBlockHeader adjusted_anchor_header = anchor_checkpoint_alias.latest_block_header;
@@ -2671,7 +2658,7 @@ static lantern_client_error client_load_state_from_checkpoint(
         if (lantern_hash_tree_root_block_header(
                 &adjusted_anchor_header,
                 &adjusted_anchor_root)
-            == 0)
+            == SSZ_SUCCESS)
         {
             have_adjusted_anchor_root = true;
         }
@@ -3113,8 +3100,7 @@ static lantern_client_error client_start_runtime(struct lantern_client *client)
 /**
  * @brief Start libp2p host and connection-level services.
  *
- * Loads the node key, starts the libp2p host, subscribes to connection events,
- * and launches the ping service.
+ * Loads the node key and prepares the libp2p host.
  *
  * @param client   Client to start networking for
  * @param options  User options containing key paths
@@ -3145,7 +3131,7 @@ static lantern_client_error client_start_network(
         .allow_outbound_identify = 1,
     };
 
-    if (lantern_libp2p_host_start(&client->network, &net_cfg) != 0)
+    if (lantern_libp2p_host_prepare(&client->network, &net_cfg) != 0)
     {
         lantern_log_error(
             "client",
@@ -3167,37 +3153,6 @@ static lantern_client_error client_start_network(
         client->connection_lock_initialized = true;
     }
     connection_counter_reset(client);
-
-    if (libp2p_event_subscribe(
-            client->network.host,
-            connection_events_cb,
-            client,
-            &client->connection_subscription)
-        != 0)
-    {
-        lantern_log_error(
-            "network",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to subscribe to libp2p connection events");
-        return LANTERN_CLIENT_ERR_NETWORK;
-    }
-
-    libp2p_protocol_server_t *ping_server = NULL;
-    if (libp2p_ping_service_start(client->network.host, &ping_server) != 0)
-    {
-        lantern_log_error(
-            "network",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to start libp2p ping service");
-        return LANTERN_CLIENT_ERR_NETWORK;
-    }
-
-    client->ping_server = ping_server;
-    client->ping_running = true;
-    lantern_log_info(
-        "network",
-        &(const struct lantern_log_metadata){.validator = client->node_id},
-        "libp2p ping service started");
 
     return LANTERN_CLIENT_OK;
 }
@@ -3281,7 +3236,7 @@ static lantern_client_error client_start_protocols(
             attestation_committee_count);
     }
     struct lantern_gossipsub_config gossip_cfg = {
-        .host = client->network.host,
+        .network = &client->network,
         .devnet = client->devnet,
         .data_dir = client->data_dir,
         .topic_network_name = topic_network_name,
@@ -3352,10 +3307,12 @@ static lantern_client_error client_start_protocols(
     req_callbacks.handle_status = reqresp_handle_status;
     req_callbacks.status_failure = reqresp_status_failure;
     req_callbacks.collect_blocks = reqresp_collect_blocks;
+    req_callbacks.handle_block_response = reqresp_handle_block_response;
+    req_callbacks.blocks_request_complete = reqresp_blocks_request_complete;
 
     struct lantern_reqresp_service_config req_config;
     memset(&req_config, 0, sizeof(req_config));
-    req_config.host = client->network.host;
+    req_config.network = &client->network;
     req_config.callbacks = &req_callbacks;
     if (lantern_reqresp_service_start(&client->reqresp, &req_config) != 0)
     {
@@ -3366,6 +3323,19 @@ static lantern_client_error client_start_protocols(
         return LANTERN_CLIENT_ERR_NETWORK;
     }
     client->reqresp_running = true;
+
+    /*
+     * This handler may immediately send Status on CONN_ESTABLISHED. Register
+     * it after reqresp so reqresp has already cached the connection.
+     */
+    if (lantern_libp2p_host_register_event_handler(&client->network, connection_events_cb, client) != 0)
+    {
+        lantern_log_error(
+            "network",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to subscribe to libp2p connection events");
+        return LANTERN_CLIENT_ERR_NETWORK;
+    }
 
     if (append_genesis_bootnodes(client) != 0)
     {
@@ -3398,6 +3368,15 @@ static lantern_client_error client_start_protocols(
         "local ENR prepared sequence=%" PRIu64,
         client->assigned_validators->enr.sequence);
 
+    if (lantern_libp2p_host_launch(&client->network) != 0)
+    {
+        lantern_log_error(
+            "client",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "failed to launch libp2p host");
+        return LANTERN_CLIENT_ERR_NETWORK;
+    }
+
     memset(node_key, 0, NODE_PRIVATE_KEY_SIZE);
     return LANTERN_CLIENT_OK;
 }
@@ -3421,14 +3400,6 @@ static void client_start_background_services(struct lantern_client *client)
             "network",
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to start peer dialer thread");
-    }
-
-    if (start_ping_service(client) != 0)
-    {
-        lantern_log_warn(
-            "network",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to start ping service thread");
     }
 
     if (start_timing_service(client) != 0)
@@ -3463,7 +3434,6 @@ static void shutdown_validator_and_keys(struct lantern_client *client)
 {
     stop_timing_service(client);
     stop_validator_service(client);
-    stop_ping_service(client);
     stop_peer_dialer(client);
     lantern_client_free_xmss_pubkeys(client);
     free(client->xmss_key_dir);
@@ -3501,8 +3471,8 @@ static void shutdown_http_and_metrics(struct lantern_client *client)
 /**
  * @brief Tear down networking services and related synchronization primitives.
  *
- * Unsubscribes from libp2p events, stops ping service, destroys connection
- * lock, and clears peer tracking lists.
+ * Stops networking services, destroys connection lock, and clears peer tracking
+ * lists.
  *
  * @param client  Client whose networking stack is being shut down
  *
@@ -3510,32 +3480,6 @@ static void shutdown_http_and_metrics(struct lantern_client *client)
  */
 static void shutdown_network_services(struct lantern_client *client)
 {
-    if (client->network.host && client->connection_subscription)
-    {
-        libp2p_event_unsubscribe(client->network.host, client->connection_subscription);
-    }
-    client->connection_subscription = NULL;
-
-    if (client->network.host && client->ping_running && client->ping_server)
-    {
-        if (libp2p_ping_service_stop(client->network.host, client->ping_server) != 0)
-        {
-            lantern_log_warn(
-                "network",
-                &(const struct lantern_log_metadata){.validator = client->node_id},
-                "failed to stop libp2p ping service cleanly");
-        }
-        else
-        {
-            lantern_log_info(
-                "network",
-                &(const struct lantern_log_metadata){.validator = client->node_id},
-                "shutdown: libp2p ping service stopped");
-        }
-    }
-    client->ping_server = NULL;
-    client->ping_running = false;
-
     if (client->connection_lock_initialized)
     {
         connection_counter_reset(client);
@@ -3547,6 +3491,7 @@ static void shutdown_network_services(struct lantern_client *client)
         client->connected_peers = 0;
     }
     lantern_string_list_reset(&client->connected_peer_ids);
+    lantern_string_list_reset(&client->connected_peer_refs);
     lantern_string_list_reset(&client->inbound_peer_ids);
 }
 
@@ -3934,6 +3879,12 @@ lantern_client_error lantern_init(
         goto error;
     }
 
+    err = lantern_client_block_importer_start(client);
+    if (err != LANTERN_CLIENT_OK)
+    {
+        goto error;
+    }
+
     err = client_prepare_storage_and_genesis(client, options);
     if (err != LANTERN_CLIENT_OK)
     {
@@ -4016,6 +3967,7 @@ void lantern_shutdown(struct lantern_client *client)
 
     shutdown_validator_and_keys(client);
     shutdown_http_and_metrics(client);
+    lantern_client_block_importer_stop(client);
     shutdown_network_services(client);
     shutdown_peer_tracking(client);
     shutdown_validator_lock(client);

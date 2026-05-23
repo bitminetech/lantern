@@ -20,6 +20,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "lantern/support/strings.h"
+
 
 /* ============================================================================
  * Peer ID Utilities
@@ -131,8 +133,7 @@ struct lantern_peer_status_entry *lantern_client_ensure_status_entry_locked(
     memset(entry, 0, sizeof(*entry));
 
     const size_t peer_cap = lantern_peer_id_capacity();
-    strncpy(entry->peer_id, peer_id, peer_cap - 1);
-    entry->peer_id[peer_cap - 1] = '\0';
+    (void)lantern_string_copy(entry->peer_id, peer_cap, peer_id);
 
     lantern_client_register_vote_peer(client, peer_id);
 
@@ -234,8 +235,7 @@ struct lantern_peer_vote_metric *lantern_client_ensure_vote_metric_locked(
     memset(entry, 0, sizeof(*entry));
 
     const size_t peer_cap = sizeof(entry->peer_id);
-    strncpy(entry->peer_id, peer_id, peer_cap - 1u);
-    entry->peer_id[peer_cap - 1u] = '\0';
+    (void)lantern_string_copy(entry->peer_id, peer_cap, peer_id);
 
     return entry;
 }
@@ -485,70 +485,6 @@ void lantern_client_status_request_failed(
 
     pthread_mutex_unlock(&client->status_lock);
 }
-
-/**
- * Mark a peer as using legacy reqresp length framing.
- *
- * @param client   Client instance
- * @param peer_id  Peer ID to mark
- *
- * @note Thread safety: This function acquires status_lock
- */
-void lantern_client_mark_peer_reqresp_legacy(
-    struct lantern_client *client,
-    const char *peer_id)
-{
-    if (!client || !peer_id || !peer_id[0] || !client->status_lock_initialized)
-    {
-        return;
-    }
-
-    if (pthread_mutex_lock(&client->status_lock) != 0)
-    {
-        return;
-    }
-
-    struct lantern_peer_status_entry *entry =
-        lantern_client_ensure_status_entry_locked(client, peer_id);
-    if (entry)
-    {
-        entry->reqresp_legacy_len = true;
-    }
-
-    pthread_mutex_unlock(&client->status_lock);
-}
-
-/**
- * Check whether a peer uses legacy reqresp length framing.
- *
- * @param client   Client instance
- * @param peer_id  Peer ID to check
- * @return true if peer is marked legacy, false otherwise
- *
- * @note Thread safety: This function acquires status_lock
- */
-bool lantern_client_peer_reqresp_legacy(
-    struct lantern_client *client,
-    const char *peer_id)
-{
-    if (!client || !peer_id || !peer_id[0] || !client->status_lock_initialized)
-    {
-        return false;
-    }
-
-    if (pthread_mutex_lock(&client->status_lock) != 0)
-    {
-        return false;
-    }
-
-    struct lantern_peer_status_entry *entry =
-        lantern_client_find_status_entry_locked(client, peer_id);
-    bool legacy = entry ? entry->reqresp_legacy_len : false;
-
-    pthread_mutex_unlock(&client->status_lock);
-    return legacy;
-}
-
 
 /**
  * Update status request tracking counters.
