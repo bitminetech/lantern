@@ -181,7 +181,7 @@ function(_lantern_define_c_leanvm_xmss_variant target_name source_dir cargo_targ
     set_target_properties(${target_name}
         PROPERTIES
             IMPORTED_LOCATION "${c_leanvm_xmss_output}"
-            INTERFACE_INCLUDE_DIRECTORIES "${header_dir}"
+            INTERFACE_INCLUDE_DIRECTORIES "${header_dir};${source_dir}/include"
     )
     if(C_XMSS_TEST_CONFIG)
         set_target_properties(${target_name}

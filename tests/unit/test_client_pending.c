@@ -987,12 +987,14 @@ static int test_idle_status_triggers_syncing_before_gossip_backfill(void)
     status.head.root = child_root;
     status.head.slot = client.state.slot;
     status.finalized = client.state.latest_finalized;
+    status.finalized.slot = client.state.slot + 1u;
+    client_test_fill_root(&status.finalized.root, 0x55u);
     if (reqresp_handle_status(&client, &status, peer_id) != LANTERN_CLIENT_OK) {
         fprintf(stderr, "peer status update failed\n");
         goto cleanup;
     }
     if (client.sync_state != LANTERN_SYNC_STATE_SYNCING) {
-        fprintf(stderr, "first peer status should move IDLE to SYNCING\n");
+        fprintf(stderr, "peer status finalized ahead should keep sync incomplete\n");
         goto cleanup;
     }
 
@@ -1014,6 +1016,54 @@ static int test_idle_status_triggers_syncing_before_gossip_backfill(void)
 
 cleanup:
     lantern_block_body_reset(&orphan_block.block.body);
+    disable_sync_test_peer(&client);
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_idle_status_at_known_head_completes_sync(void)
+{
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot child_root;
+    const char *peer_id = "16Uiu2HAmPV5jU62WtmDkCEmfq1jzbBDkGbHNsDN78gJyvmv2TuC6";
+    int rc = 1;
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "sync_idle_status_caught_up",
+            &pub,
+            &secret,
+            NULL,
+            &child_root)
+        != 0) {
+        return 1;
+    }
+    if (enable_sync_test_peer(&client, peer_id) != 0) {
+        fprintf(stderr, "failed to enable sync test peer\n");
+        goto cleanup;
+    }
+
+    client.sync_state = LANTERN_SYNC_STATE_IDLE;
+
+    LanternStatusMessage status;
+    memset(&status, 0, sizeof(status));
+    status.head.root = child_root;
+    status.head.slot = client.state.slot;
+    status.finalized = client.state.latest_finalized;
+    if (reqresp_handle_status(&client, &status, peer_id) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "caught-up peer status update failed\n");
+        goto cleanup;
+    }
+    if (client.sync_state != LANTERN_SYNC_STATE_SYNCED) {
+        fprintf(stderr, "caught-up peer status should complete sync from IDLE\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
     disable_sync_test_peer(&client);
     client_test_teardown_vote_validation_client(&client, pub, secret);
     return rc;
@@ -2014,6 +2064,9 @@ int main(void) {
         return 1;
     }
     if (test_idle_status_triggers_syncing_before_gossip_backfill() != 0) {
+        return 1;
+    }
+    if (test_idle_status_at_known_head_completes_sync() != 0) {
         return 1;
     }
     if (test_reqresp_block_response_accepts_missing_parent() != 0) {

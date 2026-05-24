@@ -965,7 +965,7 @@ static void lantern_client_peer_status_update(
         true,
         network_finalized_slot,
         true,
-        false);
+        true);
 }
 
 
