@@ -173,6 +173,9 @@ LanternYamlObject *lantern_yaml_read_array(const char *file_path, const char *ar
 
         if (content[0] == '-') {
             while (stack_size > 0 && indent_stack[stack_size - 1] >= indent) {
+                if (in_target_array && stack_size == array_depth && indent_stack[stack_size - 1] == indent) {
+                    break;
+                }
                 pop_stack(keys_stack, &stack_size);
                 if (in_target_array && stack_size < array_depth) {
                     if (commit_current(&current, &objects, &capacity, out_count) != 0) {
