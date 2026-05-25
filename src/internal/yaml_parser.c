@@ -172,6 +172,19 @@ LanternYamlObject *lantern_yaml_read_array(const char *file_path, const char *ar
         int indent = get_indentation(line);
 
         if (content[0] == '-') {
+            while (stack_size > 0 && indent_stack[stack_size - 1] >= indent) {
+                pop_stack(keys_stack, &stack_size);
+                if (in_target_array && stack_size < array_depth) {
+                    if (commit_current(&current, &objects, &capacity, out_count) != 0) {
+                        parse_error = 1;
+                        break;
+                    }
+                    in_target_array = 0;
+                }
+            }
+            if (parse_error) {
+                break;
+            }
             if (in_target_array) {
                 if (commit_current(&current, &objects, &capacity, out_count) != 0) {
                     parse_error = 1;
