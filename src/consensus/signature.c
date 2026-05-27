@@ -37,9 +37,18 @@ struct lantern_recursive_child_input {
 };
 
 static pthread_once_t g_xmss_verifier_setup_once = PTHREAD_ONCE_INIT;
+static pthread_once_t g_xmss_prover_setup_once = PTHREAD_ONCE_INIT;
+
+static void xmss_prover_setup_once(void) {
+    pq_xmss_aggregation_setup_prover();
+}
 
 static void xmss_verifier_setup_once(void) {
     pq_xmss_aggregation_setup_verifier();
+}
+
+static void ensure_xmss_prover_setup(void) {
+    (void)pthread_once(&g_xmss_prover_setup_once, xmss_prover_setup_once);
 }
 
 static void ensure_xmss_verifier_setup(void) {
@@ -319,7 +328,6 @@ bool lantern_signature_aggregate(
         count,
         epoch);
 
-    double start = get_time_seconds();
     if (lantern_byte_list_resize(out_proof, LANTERN_AGG_PROOF_MAX_BYTES) != 0) {
         lantern_log_error("signature", NULL, "aggregation resize failed max=%zu", (size_t)LANTERN_AGG_PROOF_MAX_BYTES);
         return false;
@@ -370,9 +378,11 @@ bool lantern_signature_aggregate(
         }
     }
 
+    double elapsed = 0.0;
     if (ok) {
-        pq_xmss_aggregation_setup_prover();
+        ensure_xmss_prover_setup();
         uintptr_t written_len = 0;
+        double start = get_time_seconds();
         enum PQSigningError err = pq_aggregate_signatures(
             (const struct PQSignatureSchemePublicKey *const *)pubkey_handles,
             (const struct PQSignature *const *)sig_handles,
@@ -400,6 +410,8 @@ bool lantern_signature_aggregate(
                 "aggregation resize failed written=%zu",
                 (size_t)written_len);
             ok = false;
+        } else {
+            elapsed = get_time_seconds() - start;
         }
     }
 
@@ -423,7 +435,6 @@ bool lantern_signature_aggregate(
             count,
             epoch);
     } else {
-        double elapsed = get_time_seconds() - start;
         lean_metrics_record_pq_aggregated_signature_build(count, elapsed);
         lantern_log_debug(
             "signature",
@@ -546,6 +557,7 @@ bool lantern_aggregated_signature_proof_aggregate(
         }
 
         bool ok = true;
+        double elapsed = 0.0;
         for (size_t i = 0; i < child_count; ++i) {
             if (!prepare_recursive_child(
                     state,
@@ -588,8 +600,9 @@ bool lantern_aggregated_signature_proof_aggregate(
         }
 
         if (ok) {
-            pq_xmss_aggregation_setup_prover();
+            ensure_xmss_prover_setup();
             uintptr_t written_len = 0u;
+            double start = get_time_seconds();
             enum PQSigningError agg_err = pq_aggregate_signatures_recursive(
                 child_inputs,
                 child_count,
@@ -615,6 +628,8 @@ bool lantern_aggregated_signature_proof_aggregate(
                 ok = false;
             } else if (lantern_byte_list_resize(&out_proof->proof_data, (size_t)written_len) != 0) {
                 ok = false;
+            } else {
+                elapsed = get_time_seconds() - start;
             }
         }
 
@@ -637,6 +652,9 @@ bool lantern_aggregated_signature_proof_aggregate(
 
         if (!ok) {
             (void)lantern_byte_list_resize(&out_proof->proof_data, 0u);
+        } else {
+            size_t participant_count = aggregated_signature_proof_participant_count(out_proof);
+            lean_metrics_record_pq_aggregated_signature_build(participant_count, elapsed);
         }
         return ok;
     }

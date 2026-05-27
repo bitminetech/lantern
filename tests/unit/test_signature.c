@@ -2,6 +2,7 @@
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"
+#include "lantern/metrics/lean_metrics.h"
 
 #include "pq-bindings-c-rust.h"
 
@@ -155,6 +156,22 @@ static bool set_participants(
         if (lantern_bitlist_set(participants, indices[i], true) != 0) {
             return false;
         }
+    }
+    return true;
+}
+
+static bool expect_aggregated_build_metrics(
+    uint64_t total,
+    uint64_t attestations,
+    const char *context) {
+    struct lean_metrics_snapshot metrics_snapshot;
+    memset(&metrics_snapshot, 0, sizeof(metrics_snapshot));
+    lean_metrics_snapshot(&metrics_snapshot);
+    if (metrics_snapshot.pq_sig_aggregated_signatures_total != total
+        || metrics_snapshot.pq_sig_attestations_in_aggregated_signatures_total != attestations
+        || metrics_snapshot.pq_sig_aggregated_signatures_building_time.total != total) {
+        fprintf(stderr, "recursive aggregate: %s metrics mismatch\n", context);
+        return false;
     }
     return true;
 }
@@ -518,6 +535,8 @@ static int test_recursive_aggregated_signature_roundtrip(void) {
         goto fail;
     }
 
+    lean_metrics_reset();
+
     {
         LanternAggregatedSignatureProof children_only_inputs[2] = {
             child_proof,
@@ -537,6 +556,9 @@ static int test_recursive_aggregated_signature_roundtrip(void) {
             fprintf(stderr, "recursive aggregate: children-only proof build failed\n");
             goto fail;
         }
+    }
+    if (!expect_aggregated_build_metrics(1u, 3u, "children-only")) {
+        goto fail;
     }
     if (children_only_proof.participants.bit_length < 3u
         || !lantern_bitlist_get(&children_only_proof.participants, 0u)
@@ -566,6 +588,9 @@ static int test_recursive_aggregated_signature_roundtrip(void) {
             epoch,
             &single_child_rollup)) {
         fprintf(stderr, "recursive aggregate: single-child rollup failed\n");
+        goto fail;
+    }
+    if (!expect_aggregated_build_metrics(1u, 3u, "single-child rollup")) {
         goto fail;
     }
     if (single_child_rollup.proof_data.length != child_proof.proof_data.length
@@ -606,6 +631,9 @@ static int test_recursive_aggregated_signature_roundtrip(void) {
             fprintf(stderr, "recursive aggregate: mixed proof build failed\n");
             goto fail;
         }
+    }
+    if (!expect_aggregated_build_metrics(2u, 6u, "mixed")) {
+        goto fail;
     }
 
     if (mixed_proof.participants.bit_length < 3u
