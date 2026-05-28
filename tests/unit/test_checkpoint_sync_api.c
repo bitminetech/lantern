@@ -14,6 +14,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
+#include "lantern/consensus/hash.h"
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/http/server.h"
@@ -27,6 +28,9 @@ struct checkpoint_fixture
     LanternRoot root;
     uint8_t *ssz_bytes;
     size_t ssz_len;
+    LanternRoot block_root;
+    uint8_t *block_ssz_bytes;
+    size_t block_ssz_len;
 };
 
 struct checkpoint_callback_ctx
@@ -153,6 +157,50 @@ static int build_checkpoint_fixture(struct checkpoint_fixture *fixture)
         return 1;
     }
 
+    LanternSignedBlock block;
+    lantern_signed_block_init(&block);
+    block.block.slot = fixture->state.slot;
+    block.block.proposer_index = 1u;
+    memset(&block.block.parent_root, 0x24, sizeof(block.block.parent_root));
+    if (lantern_hash_tree_root_state(&fixture->state, &block.block.state_root) != SSZ_SUCCESS)
+    {
+        lantern_signed_block_reset(&block);
+        fprintf(stderr, "failed to compute fixture state root\n");
+        return 1;
+    }
+    if (lantern_hash_tree_root_block(&block.block, &fixture->block_root) != SSZ_SUCCESS)
+    {
+        lantern_signed_block_reset(&block);
+        fprintf(stderr, "failed to compute fixture block root\n");
+        return 1;
+    }
+
+    uint8_t block_buffer[4096];
+    size_t block_written = 0;
+    if (lantern_ssz_encode_signed_block(
+            &block,
+            block_buffer,
+            sizeof(block_buffer),
+            &block_written)
+        != SSZ_SUCCESS
+        || block_written == 0)
+    {
+        lantern_signed_block_reset(&block);
+        fprintf(stderr, "failed to encode fixture block\n");
+        return 1;
+    }
+
+    fixture->block_ssz_bytes = malloc(block_written);
+    if (!fixture->block_ssz_bytes)
+    {
+        lantern_signed_block_reset(&block);
+        perror("malloc block fixture");
+        return 1;
+    }
+    memcpy(fixture->block_ssz_bytes, block_buffer, block_written);
+    fixture->block_ssz_len = block_written;
+    lantern_signed_block_reset(&block);
+
     return 0;
 }
 
@@ -168,6 +216,12 @@ static void cleanup_checkpoint_fixture(struct checkpoint_fixture *fixture)
         free(fixture->ssz_bytes);
         fixture->ssz_bytes = NULL;
         fixture->ssz_len = 0;
+    }
+    if (fixture->block_ssz_bytes)
+    {
+        free(fixture->block_ssz_bytes);
+        fixture->block_ssz_bytes = NULL;
+        fixture->block_ssz_len = 0;
     }
     lantern_state_reset(&fixture->state);
 
@@ -199,6 +253,29 @@ static void cleanup_checkpoint_fixture(struct checkpoint_fixture *fixture)
                     cleanup_path(meta_path);
                 }
                 cleanup_dir(states_dir);
+            }
+
+            char block_root_hex[2u * LANTERN_ROOT_SIZE + 1u];
+            if (lantern_bytes_to_hex(
+                    fixture->block_root.bytes,
+                    LANTERN_ROOT_SIZE,
+                    block_root_hex,
+                    sizeof(block_root_hex),
+                    0)
+                == 0)
+            {
+                char blocks_dir[PATH_MAX];
+                int dir_written = snprintf(blocks_dir, sizeof(blocks_dir), "%s/blocks", fixture->data_dir);
+                if (dir_written > 0 && (size_t)dir_written < sizeof(blocks_dir))
+                {
+                    char block_path[PATH_MAX];
+                    int block_written = snprintf(block_path, sizeof(block_path), "%s/%s.ssz", blocks_dir, block_root_hex);
+                    if (block_written > 0 && (size_t)block_written < sizeof(block_path))
+                    {
+                        cleanup_path(block_path);
+                    }
+                    cleanup_dir(blocks_dir);
+                }
             }
         }
         cleanup_dir(fixture->data_dir);
@@ -507,6 +584,107 @@ static int test_checkpoint_state_endpoint(void)
     return 0;
 }
 
+static int test_checkpoint_block_endpoint(void)
+{
+    struct checkpoint_fixture fixture;
+    if (build_checkpoint_fixture(&fixture) != 0)
+    {
+        cleanup_checkpoint_fixture(&fixture);
+        return 1;
+    }
+
+    struct checkpoint_callback_ctx ctx = {
+        .data = fixture.block_ssz_bytes,
+        .len = fixture.block_ssz_len,
+        .rc = LANTERN_HTTP_CB_OK,
+    };
+
+    struct lantern_http_server server;
+    lantern_http_server_init(&server);
+    struct lantern_http_server_config config;
+    memset(&config, 0, sizeof(config));
+    config.port = 0;
+    config.callbacks.context = &ctx;
+    config.callbacks.finalized_block_ssz = finalized_state_cb;
+
+    if (lantern_http_server_start(&server, &config) != 0)
+    {
+        cleanup_checkpoint_fixture(&fixture);
+        return 1;
+    }
+
+    struct sockaddr_in addr;
+    socklen_t addr_len = sizeof(addr);
+    if (getsockname(server.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
+    {
+        lantern_http_server_stop(&server);
+        cleanup_checkpoint_fixture(&fixture);
+        return 1;
+    }
+    uint16_t port = ntohs(addr.sin_port);
+    expect_true(port != 0, "ephemeral port assigned block");
+
+    const char *request =
+        "GET /lean/v0/blocks/finalized HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Accept: application/octet-stream\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+
+    uint8_t *response = NULL;
+    size_t response_len = 0;
+    if (read_response(port, request, &response, &response_len) != 0)
+    {
+        lantern_http_server_stop(&server);
+        cleanup_checkpoint_fixture(&fixture);
+        return 1;
+    }
+
+    size_t header_end = 0;
+    expect_zero(find_header_end(response, response_len, &header_end), "find header end block");
+    expect_true(header_end < response_len, "header size block");
+
+    char *header = malloc(header_end + 1);
+    expect_true(header != NULL, "header alloc block");
+    memcpy(header, response, header_end);
+    header[header_end] = '\0';
+
+    expect_true(strstr(header, "HTTP/1.1 200") != NULL, "status 200 block");
+    expect_true(strstr(header, "Content-Type: application/octet-stream") != NULL, "content-type block");
+
+    size_t body_len = response_len - header_end;
+    expect_true(body_len == fixture.block_ssz_len, "block body length");
+    expect_true(memcmp(response + header_end, fixture.block_ssz_bytes, fixture.block_ssz_len) == 0, "block body bytes");
+
+    free(header);
+    free(response);
+
+    ctx.rc = LANTERN_HTTP_CB_ERR_NOT_FOUND;
+    response = NULL;
+    response_len = 0;
+    if (read_response(port, request, &response, &response_len) != 0)
+    {
+        lantern_http_server_stop(&server);
+        cleanup_checkpoint_fixture(&fixture);
+        return 1;
+    }
+
+    header_end = 0;
+    expect_zero(find_header_end(response, response_len, &header_end), "find header end block 404");
+    header = malloc(header_end + 1);
+    expect_true(header != NULL, "header alloc block 404");
+    memcpy(header, response, header_end);
+    header[header_end] = '\0';
+    expect_true(strstr(header, "HTTP/1.1 404") != NULL, "status 404 block");
+
+    free(header);
+    free(response);
+
+    lantern_http_server_stop(&server);
+    cleanup_checkpoint_fixture(&fixture);
+    return 0;
+}
+
 static int test_storage_state_bytes(void)
 {
     struct checkpoint_fixture fixture;
@@ -526,6 +704,51 @@ static int test_storage_state_bytes(void)
         "finalized root");
 
     lantern_state_reset(&decoded);
+    cleanup_checkpoint_fixture(&fixture);
+    return 0;
+}
+
+static int test_storage_block_bytes(void)
+{
+    struct checkpoint_fixture fixture;
+    if (build_checkpoint_fixture(&fixture) != 0)
+    {
+        cleanup_checkpoint_fixture(&fixture);
+        return 1;
+    }
+
+    LanternSignedBlock block;
+    lantern_signed_block_init(&block);
+    expect_zero(
+        lantern_ssz_decode_signed_block(
+            &block,
+            fixture.block_ssz_bytes,
+            fixture.block_ssz_len)
+            == SSZ_SUCCESS
+            ? 0
+            : -1,
+        "decode block fixture");
+    expect_zero(
+        lantern_storage_store_block_for_root(
+            fixture.data_dir,
+            &fixture.block_root,
+            &block),
+        "store block");
+    lantern_signed_block_reset(&block);
+
+    uint8_t *loaded = NULL;
+    size_t loaded_len = 0;
+    expect_zero(
+        lantern_storage_load_block_bytes_for_root(
+            fixture.data_dir,
+            &fixture.block_root,
+            &loaded,
+            &loaded_len),
+        "load block bytes");
+    expect_true(loaded_len == fixture.block_ssz_len, "loaded block byte length");
+    expect_true(memcmp(loaded, fixture.block_ssz_bytes, fixture.block_ssz_len) == 0, "loaded block bytes");
+    free(loaded);
+
     cleanup_checkpoint_fixture(&fixture);
     return 0;
 }
@@ -985,7 +1208,15 @@ int main(void)
     {
         return 1;
     }
+    if (test_storage_block_bytes() != 0)
+    {
+        return 1;
+    }
     if (test_checkpoint_state_endpoint() != 0)
+    {
+        return 1;
+    }
+    if (test_checkpoint_block_endpoint() != 0)
     {
         return 1;
     }

@@ -590,7 +590,7 @@ fail:
     return 1;
 }
 
-static int test_pre_anchor_post_finalized_block_is_queued(void)
+static int test_pre_anchor_block_is_rejected_below_anchor_finalization(void)
 {
     struct lantern_client client;
     memset(&client, 0, sizeof(client));
@@ -679,9 +679,9 @@ static int test_pre_anchor_post_finalized_block_is_queued(void)
         fprintf(stderr, "pre-anchor historical block should not import\n");
         goto cleanup;
     }
-    if (client.pending_blocks.length != 1u)
+    if (client.pending_blocks.length != 0u)
     {
-        fprintf(stderr, "pre-anchor post-finalized block should be queued pending\n");
+        fprintf(stderr, "pre-anchor block below the anchor finalized slot should not be queued\n");
         goto cleanup;
     }
 
@@ -779,13 +779,20 @@ static int test_checkpoint_sync_anchor_checkpoint_restores(void)
         goto cleanup;
     }
 
-    LanternBlockHeader expected_anchor_header = client.state.latest_block_header;
-    expected_anchor_header.state_root = canonical_state_root;
-    if (lantern_hash_tree_root_block_header(&expected_anchor_header, &expected_anchor_root) != SSZ_SUCCESS)
+    LanternBlock expected_anchor_block;
+    memset(&expected_anchor_block, 0, sizeof(expected_anchor_block));
+    expected_anchor_block.slot = client.state.latest_block_header.slot;
+    expected_anchor_block.proposer_index = client.state.latest_block_header.proposer_index;
+    expected_anchor_block.parent_root = client.state.latest_block_header.parent_root;
+    expected_anchor_block.state_root = canonical_state_root;
+    lantern_block_body_init(&expected_anchor_block.body);
+    if (lantern_hash_tree_root_block(&expected_anchor_block, &expected_anchor_root) != SSZ_SUCCESS)
     {
-        fprintf(stderr, "failed to hash checkpoint anchor restore regression anchor header\n");
+        lantern_block_body_reset(&expected_anchor_block.body);
+        fprintf(stderr, "failed to hash checkpoint anchor restore regression anchor block\n");
         goto cleanup;
     }
+    lantern_block_body_reset(&expected_anchor_block.body);
 
     if (initialize_fork_choice(&client) != LANTERN_CLIENT_OK)
     {
@@ -826,13 +833,13 @@ static int test_checkpoint_sync_anchor_checkpoint_restores(void)
         fprintf(stderr, "missing fork-choice checkpoints for checkpoint anchor restore regression\n");
         goto cleanup;
     }
-    if (store_justified->slot != remote_justified.slot
+    if (store_justified->slot != client.state.latest_block_header.slot
         || !roots_equal(&store_justified->root, &expected_anchor_root))
     {
         fprintf(stderr, "checkpoint anchor restore regression justified checkpoint mismatch\n");
         goto cleanup;
     }
-    if (store_finalized->slot != remote_finalized.slot
+    if (store_finalized->slot != client.state.latest_block_header.slot
         || !roots_equal(&store_finalized->root, &expected_anchor_root))
     {
         fprintf(stderr, "checkpoint anchor restore regression finalized checkpoint mismatch\n");
@@ -1122,8 +1129,8 @@ int main(void)
     lantern_fork_choice_reset(&client.fork_choice);
 
     /*
-     * Restart regression: initialize_fork_choice must preserve persisted
-     * justified/finalized checkpoints for non-genesis snapshots.
+     * Restart regression: initialize_fork_choice must seed checkpoint-synced
+     * snapshots from the anchor block, not from embedded state checkpoints.
      */
     memset(&client, 0, sizeof(client));
     client.node_id = "fork_choice_checkpoint_restore";
@@ -1211,24 +1218,24 @@ int main(void)
         lantern_fork_choice_reset(&client.fork_choice);
         return 1;
     }
-    if (store_justified->slot != expected_justified.slot
+    if (store_justified->slot != client.state.latest_block_header.slot
         || !roots_equal(&store_justified->root, &expected_restart_anchor_root))
     {
         fprintf(stderr,
-            "justified checkpoint should use the anchor root and persisted slot "
+            "justified checkpoint should use the anchor root and anchor slot "
             "(got slot=%" PRIu64 " expected slot=%" PRIu64 ")\n",
-            store_justified->slot, expected_justified.slot);
+            store_justified->slot, client.state.latest_block_header.slot);
         lantern_state_reset(&client.state);
         lantern_fork_choice_reset(&client.fork_choice);
         return 1;
     }
-    if (store_finalized->slot != expected_finalized.slot
+    if (store_finalized->slot != client.state.latest_block_header.slot
         || !roots_equal(&store_finalized->root, &expected_restart_anchor_root))
     {
         fprintf(stderr,
-            "finalized checkpoint should use the anchor root and persisted slot "
+            "finalized checkpoint should use the anchor root and anchor slot "
             "(got slot=%" PRIu64 " expected slot=%" PRIu64 ")\n",
-            store_finalized->slot, expected_finalized.slot);
+            store_finalized->slot, client.state.latest_block_header.slot);
         lantern_state_reset(&client.state);
         lantern_fork_choice_reset(&client.fork_choice);
         return 1;
@@ -1252,7 +1259,7 @@ int main(void)
         lantern_fork_choice_reset(&client.fork_choice);
         return 1;
     }
-    if (test_pre_anchor_post_finalized_block_is_queued() != 0)
+    if (test_pre_anchor_block_is_rejected_below_anchor_finalization() != 0)
     {
         lantern_state_reset(&client.state);
         lantern_fork_choice_reset(&client.fork_choice);

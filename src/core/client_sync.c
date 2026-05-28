@@ -1189,7 +1189,7 @@ void persist_anchor_block(
  * @param client             Client instance
  * @param meta               Logging metadata
  * @param out_state_root     Output computed state root
- * @param out_anchor_header  Output anchor header (state_root updated)
+ * @param out_anchor_block   Output anchor block (state_root updated, empty body)
  * @param out_anchor_root    Output computed anchor root
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL
@@ -1201,10 +1201,10 @@ static int compute_fork_choice_anchor_roots(
     struct lantern_client *client,
     const struct lantern_log_metadata *meta,
     LanternRoot *out_state_root,
-    LanternBlockHeader *out_anchor_header,
+    LanternBlock *out_anchor_block,
     LanternRoot *out_anchor_root)
 {
-    if (!client || !meta || !out_state_root || !out_anchor_header || !out_anchor_root)
+    if (!client || !meta || !out_state_root || !out_anchor_block || !out_anchor_root)
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
@@ -1237,12 +1237,17 @@ static int compute_fork_choice_anchor_roots(
             "normalizing persisted genesis header state_root to compute canonical anchor");
     }
 
-    *out_anchor_header = client->state.latest_block_header;
-    out_anchor_header->state_root = *out_state_root;
+    memset(out_anchor_block, 0, sizeof(*out_anchor_block));
+    out_anchor_block->slot = client->state.latest_block_header.slot;
+    out_anchor_block->proposer_index = client->state.latest_block_header.proposer_index;
+    out_anchor_block->parent_root = client->state.latest_block_header.parent_root;
+    out_anchor_block->state_root = *out_state_root;
+    lantern_block_body_init(&out_anchor_block->body);
 
-    if (lantern_hash_tree_root_block_header(out_anchor_header, out_anchor_root) != SSZ_SUCCESS)
+    if (lantern_hash_tree_root_block(out_anchor_block, out_anchor_root) != SSZ_SUCCESS)
     {
-        lantern_log_error("forkchoice", meta, "failed to hash anchor block header");
+        lantern_block_body_reset(&out_anchor_block->body);
+        lantern_log_error("forkchoice", meta, "failed to hash anchor block");
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
 
@@ -1286,56 +1291,6 @@ static void log_genesis_anchor_roots(
         slot);
 }
 
-static void log_fork_choice_state_snapshot(
-    const struct lantern_log_metadata *meta,
-    const LanternState *state,
-    const char *label)
-{
-    if (!meta || !state || !label)
-    {
-        return;
-    }
-
-    char header_parent_hex[ROOT_HEX_BUFFER_LEN];
-    char header_state_root_hex[ROOT_HEX_BUFFER_LEN];
-    char justified_root_hex[ROOT_HEX_BUFFER_LEN];
-    char finalized_root_hex[ROOT_HEX_BUFFER_LEN];
-    format_root_hex(
-        &state->latest_block_header.parent_root,
-        header_parent_hex,
-        sizeof(header_parent_hex));
-    format_root_hex(
-        &state->latest_block_header.state_root,
-        header_state_root_hex,
-        sizeof(header_state_root_hex));
-    format_root_hex(
-        &state->latest_justified.root,
-        justified_root_hex,
-        sizeof(justified_root_hex));
-    format_root_hex(
-        &state->latest_finalized.root,
-        finalized_root_hex,
-        sizeof(finalized_root_hex));
-
-    lantern_log_info(
-        "forkchoice",
-        meta,
-        "%s slot=%" PRIu64 " header_slot=%" PRIu64 " proposer=%" PRIu64
-        " header_parent=%s header_state_root=%s justified_slot=%" PRIu64
-        " justified_root=%s finalized_slot=%" PRIu64 " finalized_root=%s",
-        label,
-        state->slot,
-        state->latest_block_header.slot,
-        state->latest_block_header.proposer_index,
-        header_parent_hex[0] ? header_parent_hex : "0x0",
-        header_state_root_hex[0] ? header_state_root_hex : "0x0",
-        state->latest_justified.slot,
-        justified_root_hex[0] ? justified_root_hex : "0x0",
-        state->latest_finalized.slot,
-        finalized_root_hex[0] ? finalized_root_hex : "0x0");
-}
-
-
 /**
  * Initialize fork choice from genesis state.
  *
@@ -1343,14 +1298,14 @@ static void log_fork_choice_state_snapshot(
  *
  * Initializes the fork choice store from the genesis state:
  * 1. Configures fork choice with consensus parameters
- * 2. Computes anchor block header with actual state_root (not zero)
+ * 2. Computes anchor block with actual state_root (not zero)
  * 3. Sets fork choice anchor with anchor checkpoints
  * 4. Persists anchor block to storage
  *
- * According to leanSpec's Store.get_forkchoice_store, the anchor block
- * used for fork choice MUST have state_root = hash_tree_root(state).
- * This is different from the state's latest_block_header which starts
- * with state_root = ZERO.
+ * According to leanSpec's checkpoint-sync path, the anchor block used for
+ * fork choice MUST have state_root = hash_tree_root(state) and an empty body.
+ * Store.from_anchor then seeds the head, justified checkpoint, and finalized
+ * checkpoint from hash_tree_root(anchor_block).
  *
  * @param client  Client instance
  * @return LANTERN_CLIENT_OK on success
@@ -1368,15 +1323,11 @@ int initialize_fork_choice(struct lantern_client *client)
 
     const struct lantern_log_metadata meta = {.validator = client->node_id};
 
-    /* Create a copy of the header for computing anchor_root.
+    /* Create a reconstructed anchor block for computing anchor_root.
      *
-     * According to leanSpec's Store.get_forkchoice_store, the anchor block
-     * used for fork choice MUST have state_root = hash_tree_root(state).
-     * This is different from the state's latest_block_header which starts
-     * with state_root = ZERO.
-     *
-     * We compute anchor_root from a header with the ACTUAL state_root,
-     * matching Zeam's genStateBlockHeader() behavior.
+     * leanSpec create_anchor_block() uses latest_block_header slot,
+     * proposer_index, and parent_root, fills state_root with the state hash,
+     * and supplies an empty body before Store.from_anchor() hashes it.
      */
     lantern_store_attach_fork_choice(&client->store, &client->fork_choice);
     lantern_fork_choice_reset(&client->fork_choice);
@@ -1389,133 +1340,59 @@ int initialize_fork_choice(struct lantern_client *client)
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
 
-    log_fork_choice_state_snapshot(
-        &meta,
-        &client->state,
-        "fork choice init state snapshot");
-
     LanternRoot anchor_state_root;
-    LanternBlockHeader anchor_header;
+    LanternBlock anchor;
+    memset(&anchor, 0, sizeof(anchor));
     LanternRoot anchor_root;
     int root_rc = compute_fork_choice_anchor_roots(
         client,
         &meta,
         &anchor_state_root,
-        &anchor_header,
+        &anchor,
         &anchor_root);
     if (root_rc != LANTERN_CLIENT_OK)
     {
         return root_rc;
     }
 
-    char justified_root_hex[ROOT_HEX_BUFFER_LEN];
-    char finalized_root_hex[ROOT_HEX_BUFFER_LEN];
-    char anchor_state_root_hex[ROOT_HEX_BUFFER_LEN];
+    LanternRoot anchor_body_root = {0};
+    if (lantern_hash_tree_root_block_body(&anchor.body, &anchor_body_root) != SSZ_SUCCESS)
+    {
+        lantern_block_body_reset(&anchor.body);
+        lantern_log_error(
+            "forkchoice",
+            &meta,
+            "failed to hash anchor block body");
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+
     char anchor_root_hex[ROOT_HEX_BUFFER_LEN];
-    format_root_hex(
-        &client->state.latest_justified.root,
-        justified_root_hex,
-        sizeof(justified_root_hex));
-    format_root_hex(
-        &client->state.latest_finalized.root,
-        finalized_root_hex,
-        sizeof(finalized_root_hex));
-    format_root_hex(
-        &anchor_state_root,
-        anchor_state_root_hex,
-        sizeof(anchor_state_root_hex));
     format_root_hex(
         &anchor_root,
         anchor_root_hex,
         sizeof(anchor_root_hex));
 
-    lantern_log_info(
-        "forkchoice",
-        &meta,
-        "fork choice computed anchor state_root=%s anchor_root=%s"
-        " justified_slot=%" PRIu64 " justified_root=%s finalized_slot=%" PRIu64
-        " finalized_root=%s justified_matches_anchor=%s finalized_matches_anchor=%s",
-        anchor_state_root_hex[0] ? anchor_state_root_hex : "0x0",
-        anchor_root_hex[0] ? anchor_root_hex : "0x0",
-        client->state.latest_justified.slot,
-        justified_root_hex[0] ? justified_root_hex : "0x0",
-        client->state.latest_finalized.slot,
-        finalized_root_hex[0] ? finalized_root_hex : "0x0",
-        memcmp(
-            client->state.latest_justified.root.bytes,
-            anchor_root.bytes,
-            LANTERN_ROOT_SIZE)
-            == 0
-            ? "true"
-            : "false",
-        memcmp(
-            client->state.latest_finalized.root.bytes,
-            anchor_root.bytes,
-            LANTERN_ROOT_SIZE)
-            == 0
-            ? "true"
-            : "false");
-
     log_genesis_anchor_roots(
         &meta,
         &anchor_root,
         &anchor_state_root,
-        &anchor_header.body_root,
-        anchor_header.slot);
+        &anchor_body_root,
+        anchor.slot);
 
-    LanternBlock anchor;
-    memset(&anchor, 0, sizeof(anchor));
-    anchor.slot = client->state.latest_block_header.slot;
-    anchor.proposer_index = client->state.latest_block_header.proposer_index;
-    anchor.parent_root = client->state.latest_block_header.parent_root;
-    anchor.state_root = anchor_state_root;
-    lantern_block_body_init(&anchor.body);
-
-    LanternRoot synthetic_anchor_block_root = {0};
-    bool have_synthetic_anchor_block_root =
-        lantern_hash_tree_root_block(&anchor, &synthetic_anchor_block_root) == SSZ_SUCCESS;
-    char synthetic_anchor_block_root_hex[ROOT_HEX_BUFFER_LEN];
-    format_root_hex(
-        &synthetic_anchor_block_root,
-        synthetic_anchor_block_root_hex,
-        sizeof(synthetic_anchor_block_root_hex));
-    lantern_log_info(
-        "forkchoice",
-        &meta,
-        "materialized synthetic anchor block slot=%" PRIu64 " hinted_root=%s"
-        " hashed_block_root=%s hinted_root_matches_block=%s",
-        anchor.slot,
-        anchor_root_hex[0] ? anchor_root_hex : "0x0",
-        have_synthetic_anchor_block_root
-            ? (synthetic_anchor_block_root_hex[0]
-                   ? synthetic_anchor_block_root_hex
-                   : "0x0")
-            : "<unavailable>",
-        (have_synthetic_anchor_block_root
-         && memcmp(
-                synthetic_anchor_block_root.bytes,
-                anchor_root.bytes,
-                LANTERN_ROOT_SIZE)
-                == 0)
-            ? "true"
-            : "false");
-
-    LanternCheckpoint anchor_justified = client->state.latest_justified;
-    LanternCheckpoint anchor_finalized = client->state.latest_finalized;
-    anchor_justified.root = anchor_root;
-    anchor_finalized.root = anchor_root;
+    LanternCheckpoint anchor_checkpoint = {
+        .root = anchor_root,
+        .slot = anchor.slot,
+    };
 
     /*
-     * Seed fork-choice with the anchor block/root while preserving the state's
-     * justified/finalized slots. On restart, LeanSpec reloads persisted
-     * checkpoints; Lantern aliases their roots to this compact anchor because
-     * historical checkpoint blocks may already have been pruned from storage.
+     * leanSpec Store.from_anchor treats the trusted anchor block as both
+     * justified and finalized, regardless of the state's embedded checkpoints.
      */
     if (lantern_fork_choice_set_anchor_with_state(
             &client->fork_choice,
             &anchor,
-            &anchor_justified,
-            &anchor_finalized,
+            &anchor_checkpoint,
+            &anchor_checkpoint,
             &anchor_root,
             &client->state)
         != 0)
@@ -1530,42 +1407,17 @@ int initialize_fork_choice(struct lantern_client *client)
     persist_anchor_block(client, &anchor, &anchor_root);
     if (client->data_dir)
     {
-        LanternState anchor_state_alias = client->state;
-        anchor_state_alias.latest_justified.root = anchor_root;
-        anchor_state_alias.latest_finalized.root = anchor_root;
+        LanternState anchor_state = client->state;
         if (lantern_storage_store_state_for_root(
                 client->data_dir,
                 &anchor_root,
-                &anchor_state_alias)
+                &anchor_state)
             != 0)
         {
             lantern_log_warn(
                 "storage",
                 &meta,
                 "failed to persist anchor state alias");
-        }
-        else
-        {
-            char alias_justified_hex[ROOT_HEX_BUFFER_LEN];
-            char alias_finalized_hex[ROOT_HEX_BUFFER_LEN];
-            format_root_hex(
-                &anchor_state_alias.latest_justified.root,
-                alias_justified_hex,
-                sizeof(alias_justified_hex));
-            format_root_hex(
-                &anchor_state_alias.latest_finalized.root,
-                alias_finalized_hex,
-                sizeof(alias_finalized_hex));
-            lantern_log_info(
-                "forkchoice",
-                &meta,
-                "persisted anchor state alias root=%s justified_slot=%" PRIu64
-                " justified_root=%s finalized_slot=%" PRIu64 " finalized_root=%s",
-                anchor_root_hex[0] ? anchor_root_hex : "0x0",
-                anchor_state_alias.latest_justified.slot,
-                alias_justified_hex[0] ? alias_justified_hex : "0x0",
-                anchor_state_alias.latest_finalized.slot,
-                alias_finalized_hex[0] ? alias_finalized_hex : "0x0");
         }
     }
     lantern_block_body_reset(&anchor.body);

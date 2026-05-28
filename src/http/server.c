@@ -4,6 +4,7 @@
  *
  * Exposes endpoints:
  * - GET /lean/v0/states/finalized  (SSZ state snapshot)
+ * - GET /lean/v0/blocks/finalized  (SSZ signed block snapshot)
  * - GET /lean/v0/checkpoints/justified  (JSON justified checkpoint)
  * - GET /lean/v0/fork_choice       (JSON fork choice tree snapshot)
  * - GET /lean/v0/health            (JSON health response)
@@ -43,6 +44,7 @@ static const int LANTERN_HTTP_LISTEN_BACKLOG = 16;
 static const char LANTERN_HTTP_PATH_HEALTH[] = "/lean/v0/health";
 static const char LANTERN_HTTP_PATH_METRICS[] = "/metrics";
 static const char LANTERN_HTTP_PATH_FINALIZED[] = "/lean/v0/states/finalized";
+static const char LANTERN_HTTP_PATH_FINALIZED_BLOCK[] = "/lean/v0/blocks/finalized";
 static const char LANTERN_HTTP_PATH_JUSTIFIED[] = "/lean/v0/checkpoints/justified";
 static const char LANTERN_HTTP_PATH_FORK_CHOICE[] = "/lean/v0/fork_choice";
 static const char LANTERN_HTTP_PATH_ADMIN_AGGREGATOR[] = "/lean/v0/admin/aggregator";
@@ -57,6 +59,7 @@ static const char LANTERN_HTTP_JSON_MALFORMED[] = "{\"error\":\"malformed reques
 static const char LANTERN_HTTP_JSON_UNKNOWN_ENDPOINT[] = "{\"error\":\"unknown endpoint\"}";
 static const char LANTERN_HTTP_JSON_UNAVAILABLE[] = "{\"error\":\"service unavailable\"}";
 static const char LANTERN_HTTP_JSON_STATE_MISSING[] = "{\"error\":\"finalized state not available\"}";
+static const char LANTERN_HTTP_JSON_BLOCK_MISSING[] = "{\"error\":\"finalized block not available\"}";
 static const char LANTERN_HTTP_JSON_INTERNAL[] = "{\"error\":\"internal error\"}";
 static const char LANTERN_HTTP_JSON_BAD_REQUEST[] = "{\"error\":\"bad request\"}";
 static const char LANTERN_HTTP_JSON_METHOD_NOT_ALLOWED[] = "{\"error\":\"method not allowed\"}";
@@ -1345,6 +1348,116 @@ static void handle_client_connection(
                 "http",
                 &(const struct lantern_log_metadata){.peer = peer_text},
                 "finalized state send failed rc=%d",
+                result);
+            return;
+        }
+
+        lantern_log_info(
+            "http",
+            &(const struct lantern_log_metadata){.peer = peer_text},
+            "GET %s -> 200",
+            path);
+        return;
+    }
+
+    if (strcmp(path, LANTERN_HTTP_PATH_FINALIZED_BLOCK) == 0)
+    {
+        if (!server->callbacks.finalized_block_ssz)
+        {
+            int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
+            lantern_log_error(
+                "http",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "finalized block callback missing rc=%d",
+                rc);
+            return;
+        }
+
+        uint8_t *block_bytes = NULL;
+        size_t block_len = 0;
+        int block_rc = server->callbacks.finalized_block_ssz(
+            server->callbacks.context,
+            &block_bytes,
+            &block_len);
+        if (block_rc != 0)
+        {
+            const char *body = LANTERN_HTTP_JSON_INTERNAL;
+            int status_code = 500;
+            const char *status_text = "Internal Server Error";
+            if (block_rc == LANTERN_HTTP_CB_ERR_NOT_FOUND)
+            {
+                body = LANTERN_HTTP_JSON_BLOCK_MISSING;
+                status_code = 404;
+                status_text = "Not Found";
+            }
+            else if (block_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
+                || block_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
+                || block_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
+            {
+                body = LANTERN_HTTP_JSON_UNAVAILABLE;
+                status_code = 503;
+                status_text = "Service Unavailable";
+            }
+
+            free(block_bytes);
+
+            int rc = send_json_error(client_fd, status_code, status_text, body);
+            if (block_rc == LANTERN_HTTP_CB_ERR_NOT_FOUND)
+            {
+                lantern_log_info(
+                    "http",
+                    &(const struct lantern_log_metadata){.peer = peer_text},
+                    "finalized block missing -> 404");
+            }
+            else if (block_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
+                || block_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
+                || block_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
+            {
+                lantern_log_warn(
+                    "http",
+                    &(const struct lantern_log_metadata){.peer = peer_text},
+                    "finalized block unavailable rc=%d send_rc=%d",
+                    block_rc,
+                    rc);
+            }
+            else
+            {
+                lantern_log_error(
+                    "http",
+                    &(const struct lantern_log_metadata){.peer = peer_text},
+                    "finalized block failed rc=%d send_rc=%d",
+                    block_rc,
+                    rc);
+            }
+            return;
+        }
+
+        if (!block_bytes || block_len == 0)
+        {
+            free(block_bytes);
+            int rc = send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
+            lantern_log_error(
+                "http",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "finalized block empty send_rc=%d",
+                rc);
+            return;
+        }
+
+        result = send_http_response(
+            client_fd,
+            200,
+            "OK",
+            "application/octet-stream",
+            (const char *)block_bytes,
+            block_len);
+        free(block_bytes);
+        if (result != 0)
+        {
+            lantern_log_error(
+                "http",
+                &(const struct lantern_log_metadata){.peer = peer_text},
+                "finalized block send failed rc=%d",
                 result);
             return;
         }
