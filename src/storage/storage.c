@@ -1085,10 +1085,11 @@ static bool block_root_alias_matches_expected(
     }
 
     /*
-     * Checkpoint sync persists the materialized synthetic anchor block under
-     * the hinted checkpoint root, even when that root differs from the
-     * block's computed hash_tree_root because the header's historical
-     * body_root is not reconstructible from the empty synthetic body.
+     * Fork-choice bootstrap can persist the materialized synthetic anchor
+     * block under the hinted checkpoint root when no source block bytes are
+     * available. That root can differ from the block's computed hash_tree_root
+     * because the header's historical body_root is not reconstructible from the
+     * empty synthetic body.
      *
      * The persisted alias is only expected for the anchor-shaped block we
      * synthesize locally: no attestations, no attestation proofs, and no
@@ -1440,6 +1441,71 @@ int lantern_storage_load_state_bytes_for_root(
 cleanup:
     free_path(state_path);
     free_path(states_dir);
+    free(data);
+    return rc;
+}
+
+/**
+ * Load the raw persisted SSZ bytes for a block stored under `data_dir/blocks`.
+ *
+ * @param data_dir Base directory path.
+ * @param root Root used to build the on-disk filename.
+ * @param out_data Output buffer (caller must free) on success.
+ * @param out_len Output length on success.
+ * @return 0 on success.
+ * @return 1 if the block file is missing or empty.
+ * @return -1 on invalid parameters or filesystem errors.
+ */
+int lantern_storage_load_block_bytes_for_root(
+    const char *data_dir,
+    const LanternRoot *root,
+    uint8_t **out_data,
+    size_t *out_len) {
+    if (!data_dir || !root || !out_data || !out_len) {
+        return -1;
+    }
+    *out_data = NULL;
+    *out_len = 0;
+
+    int rc = -1;
+    char *blocks_dir = NULL;
+    char *block_path = NULL;
+    uint8_t *data = NULL;
+    size_t len = 0;
+
+    if (build_blocks_dir(data_dir, &blocks_dir) != 0) {
+        goto cleanup;
+    }
+
+    char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
+    if (lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, root_hex, sizeof(root_hex), 0) != 0) {
+        goto cleanup;
+    }
+    char filename[sizeof(root_hex) + 4];
+    const int name_written = snprintf(filename, sizeof(filename), "%s.ssz", root_hex);
+    if (name_written < 0 || (size_t)name_written >= sizeof(filename)) {
+        goto cleanup;
+    }
+    if (join_path(blocks_dir, filename, &block_path) != 0) {
+        goto cleanup;
+    }
+
+    rc = read_file_buffer(block_path, &data, &len);
+    if (rc != 0) {
+        free(data);
+        data = NULL;
+        rc = (rc > 0) ? 1 : -1;
+        goto cleanup;
+    }
+
+    *out_data = data;
+    *out_len = len;
+    data = NULL;
+    rc = 0;
+
+cleanup:
+    free_path(block_path);
+    free_path(blocks_dir);
     free(data);
     return rc;
 }

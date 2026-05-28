@@ -680,3 +680,67 @@ int http_finalized_state_ssz_cb(void *context, uint8_t **out_bytes, size_t *out_
     }
     return LANTERN_HTTP_CB_ERR_IO;
 }
+
+/**
+ * Get finalized signed block SSZ bytes for the finalized block endpoint.
+ *
+ * @param context    Client instance
+ * @param out_bytes  Output buffer pointer (caller owns and must free)
+ * @param out_len    Output byte length
+ *
+ * @return 0 on success
+ * @return LANTERN_HTTP_CB_ERR_INVALID_PARAM if inputs are NULL
+ * @return LANTERN_HTTP_CB_ERR_INVALID_STATE if client has no snapshot or data dir
+ * @return LANTERN_HTTP_CB_ERR_NOT_FOUND if finalized block is unavailable
+ * @return LANTERN_HTTP_CB_ERR_IO on storage read failure
+ */
+int http_finalized_block_ssz_cb(void *context, uint8_t **out_bytes, size_t *out_len)
+{
+    if (!context || !out_bytes || !out_len)
+    {
+        return LANTERN_HTTP_CB_ERR_INVALID_PARAM;
+    }
+
+    *out_bytes = NULL;
+    *out_len = 0;
+
+    struct lantern_client *client = context;
+    if (!client->data_dir)
+    {
+        return LANTERN_HTTP_CB_ERR_INVALID_STATE;
+    }
+
+    if (!client->has_fork_choice)
+    {
+        return LANTERN_HTTP_CB_ERR_INVALID_STATE;
+    }
+
+    LanternCheckpoint finalized;
+    if (!lantern_fork_choice_read_checkpoint_snapshot(
+            &client->fork_choice,
+            NULL,
+            &finalized))
+    {
+        return LANTERN_HTTP_CB_ERR_INVALID_STATE;
+    }
+
+    if (lantern_root_is_zero(&finalized.root))
+    {
+        return LANTERN_HTTP_CB_ERR_NOT_FOUND;
+    }
+
+    int load_rc = lantern_storage_load_block_bytes_for_root(
+        client->data_dir,
+        &finalized.root,
+        out_bytes,
+        out_len);
+    if (load_rc == 0)
+    {
+        return LANTERN_HTTP_CB_OK;
+    }
+    if (load_rc > 0)
+    {
+        return LANTERN_HTTP_CB_ERR_NOT_FOUND;
+    }
+    return LANTERN_HTTP_CB_ERR_IO;
+}
