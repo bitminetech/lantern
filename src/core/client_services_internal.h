@@ -495,6 +495,14 @@ int reqresp_collect_blocks(
     size_t root_count,
     LanternSignedBlockList *out_blocks);
 
+int reqresp_collect_blocks_by_range(
+    void *context,
+    uint64_t start_slot,
+    uint64_t count,
+    LanternSignedBlockList *out_blocks);
+
+int reqresp_current_slot(void *context, uint64_t *out_slot);
+
 int reqresp_handle_block_response(
     void *context,
     const LanternSignedBlock *block,
@@ -635,6 +643,13 @@ int lantern_client_schedule_blocks_request_batch(
     const LanternRoot *roots,
     const uint32_t *depths,
     size_t root_count,
+    uint64_t request_id);
+
+int lantern_client_schedule_blocks_by_range_request(
+    struct lantern_client *client,
+    const char *peer_id_text,
+    uint64_t start_slot,
+    uint64_t count,
     uint64_t request_id);
 
 /**

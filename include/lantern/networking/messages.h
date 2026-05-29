@@ -21,6 +21,11 @@ typedef struct {
 } LanternBlocksByRootRequest;
 
 typedef struct {
+    uint64_t start_slot;
+    uint64_t count;
+} LanternBlocksByRangeRequest;
+
+typedef struct {
     LanternSignedBlock *blocks;
     size_t length;
     size_t capacity;
@@ -70,6 +75,26 @@ int lantern_network_blocks_by_root_request_encode_snappy(
     size_t *raw_len);
 int lantern_network_blocks_by_root_request_decode_snappy(
     LanternBlocksByRootRequest *req,
+    const uint8_t *data,
+    size_t data_len);
+
+int lantern_network_blocks_by_range_request_encode(
+    const LanternBlocksByRangeRequest *req,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written);
+int lantern_network_blocks_by_range_request_decode(
+    LanternBlocksByRangeRequest *req,
+    const uint8_t *data,
+    size_t data_len);
+int lantern_network_blocks_by_range_request_encode_snappy(
+    const LanternBlocksByRangeRequest *req,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written,
+    size_t *raw_len);
+int lantern_network_blocks_by_range_request_decode_snappy(
+    LanternBlocksByRangeRequest *req,
     const uint8_t *data,
     size_t data_len);
 

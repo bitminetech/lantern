@@ -3375,6 +3375,8 @@ static lantern_client_error client_start_protocols(
     req_callbacks.handle_status = reqresp_handle_status;
     req_callbacks.status_failure = reqresp_status_failure;
     req_callbacks.collect_blocks = reqresp_collect_blocks;
+    req_callbacks.collect_blocks_by_range = reqresp_collect_blocks_by_range;
+    req_callbacks.current_slot = reqresp_current_slot;
     req_callbacks.handle_block_response = reqresp_handle_block_response;
     req_callbacks.blocks_request_complete = reqresp_blocks_request_complete;
 

@@ -35,6 +35,36 @@ static int read_u32_le(const uint8_t *data, size_t data_len, uint32_t *value) {
     return 0;
 }
 
+static int write_u64_le(uint64_t value, uint8_t *out, size_t out_len) {
+    if (!out || out_len < sizeof(uint64_t)) {
+        return -1;
+    }
+    out[0] = (uint8_t)(value & 0xFFu);
+    out[1] = (uint8_t)((value >> 8) & 0xFFu);
+    out[2] = (uint8_t)((value >> 16) & 0xFFu);
+    out[3] = (uint8_t)((value >> 24) & 0xFFu);
+    out[4] = (uint8_t)((value >> 32) & 0xFFu);
+    out[5] = (uint8_t)((value >> 40) & 0xFFu);
+    out[6] = (uint8_t)((value >> 48) & 0xFFu);
+    out[7] = (uint8_t)((value >> 56) & 0xFFu);
+    return 0;
+}
+
+static int read_u64_le(const uint8_t *data, size_t data_len, uint64_t *value) {
+    if (!data || data_len < sizeof(uint64_t) || !value) {
+        return -1;
+    }
+    *value = (uint64_t)data[0]
+        | ((uint64_t)data[1] << 8)
+        | ((uint64_t)data[2] << 16)
+        | ((uint64_t)data[3] << 24)
+        | ((uint64_t)data[4] << 32)
+        | ((uint64_t)data[5] << 40)
+        | ((uint64_t)data[6] << 48)
+        | ((uint64_t)data[7] << 56);
+    return 0;
+}
+
 static int ensure_block_capacity(LanternSignedBlockList *resp, size_t required) {
     if (!resp) {
         return -1;
@@ -418,6 +448,73 @@ int lantern_network_blocks_by_root_request_decode_snappy(
     int decode_rc = lantern_network_blocks_by_root_request_decode(req, raw, written);
     free(raw);
     return decode_rc;
+}
+
+int lantern_network_blocks_by_range_request_encode(
+    const LanternBlocksByRangeRequest *req,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written) {
+    if (!req || !out || !written || out_len < 2u * sizeof(uint64_t)) {
+        return -1;
+    }
+    if (write_u64_le(req->start_slot, out, out_len) != 0
+        || write_u64_le(req->count, out + sizeof(uint64_t), out_len - sizeof(uint64_t)) != 0) {
+        return -1;
+    }
+    *written = 2u * sizeof(uint64_t);
+    return 0;
+}
+
+int lantern_network_blocks_by_range_request_decode(
+    LanternBlocksByRangeRequest *req,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!req || !data || data_len != 2u * sizeof(uint64_t)) {
+        return -1;
+    }
+    if (read_u64_le(data, data_len, &req->start_slot) != 0
+        || read_u64_le(data + sizeof(uint64_t), data_len - sizeof(uint64_t), &req->count) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int lantern_network_blocks_by_range_request_encode_snappy(
+    const LanternBlocksByRangeRequest *req,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written,
+    size_t *raw_len) {
+    if (!req || !out || !written) {
+        return -1;
+    }
+    uint8_t raw[2u * sizeof(uint64_t)];
+    size_t raw_written = 0;
+    if (lantern_network_blocks_by_range_request_encode(req, raw, sizeof(raw), &raw_written) != 0) {
+        return -1;
+    }
+    if (raw_len) {
+        *raw_len = raw_written;
+    }
+    int rc = lantern_snappy_compress(raw, raw_written, out, out_len, written);
+    return rc == LANTERN_SNAPPY_OK ? 0 : -1;
+}
+
+int lantern_network_blocks_by_range_request_decode_snappy(
+    LanternBlocksByRangeRequest *req,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!req || !data) {
+        return -1;
+    }
+    uint8_t raw[2u * sizeof(uint64_t)];
+    size_t raw_written = sizeof(raw);
+    int rc = lantern_snappy_decompress(data, data_len, raw, sizeof(raw), &raw_written);
+    if (rc != LANTERN_SNAPPY_OK) {
+        return -1;
+    }
+    return lantern_network_blocks_by_range_request_decode(req, raw, raw_written);
 }
 
 int lantern_network_signed_block_list_encode(
