@@ -183,6 +183,19 @@ static void log_agg_proof_preview(const LanternByteList *proof) {
         ellipsis);
 }
 
+static const char *pq_error_detail_or_dash(const char *detail) {
+    return detail && detail[0] ? detail : "-";
+}
+
+static void log_pq_prover_setup_error_if_any(void) {
+    char *detail = pq_take_last_error_message();
+    if (!detail) {
+        return;
+    }
+    lantern_log_error("signature", NULL, "%s", pq_error_detail_or_dash(detail));
+    pq_string_free(detail);
+}
+
 static bool write_type2_container(const LanternByteList *raw_proof, LanternByteList *out_encoded) {
     if (!raw_proof || !out_encoded) {
         return false;
@@ -628,6 +641,7 @@ bool lantern_signature_aggregate(
 
     if (ok) {
         pq_xmss_aggregation_setup_prover();
+        log_pq_prover_setup_error_if_any();
         uintptr_t written_len = 0;
         enum PQSigningError err = pq_aggregate_signatures(
             (const struct PQSignatureSchemePublicKey *const *)pubkey_handles,
@@ -641,14 +655,17 @@ bool lantern_signature_aggregate(
             out_proof->length,
             &written_len);
         if (err != Success || written_len == 0 || written_len > out_proof->length) {
+            char *detail = pq_take_last_error_message();
             lantern_log_error(
                 "signature",
                 NULL,
-                "aggregation failed err=%d written=%zu buffer=%zu count=%zu",
+                "aggregation failed err=%d written=%zu buffer=%zu count=%zu detail=%s",
                 (int)err,
                 (size_t)written_len,
                 (size_t)out_proof->length,
-                count);
+                count,
+                pq_error_detail_or_dash(detail));
+            pq_string_free(detail);
             ok = false;
         } else if (lantern_byte_list_resize(out_proof, (size_t)written_len) != 0) {
             lantern_log_error(
@@ -843,6 +860,7 @@ bool lantern_aggregated_signature_proof_aggregate(
 
         if (ok) {
             pq_xmss_aggregation_setup_prover();
+            log_pq_prover_setup_error_if_any();
             uintptr_t written_len = 0u;
             enum PQSigningError agg_err = pq_aggregate_signatures_recursive(
                 child_inputs,
@@ -857,15 +875,18 @@ bool lantern_aggregated_signature_proof_aggregate(
                 out_proof->proof_data.length,
                 &written_len);
             if (agg_err != Success || written_len == 0u || written_len > out_proof->proof_data.length) {
+                char *detail = pq_take_last_error_message();
                 lantern_log_error(
                     "signature",
                     NULL,
-                    "recursive aggregation failed child_count=%zu raw_xmss=%zu err=%d written=%zu buffer=%zu",
+                    "recursive aggregation failed child_count=%zu raw_xmss=%zu err=%d written=%zu buffer=%zu detail=%s",
                     child_count,
                     raw_xmss_count,
                     (int)agg_err,
                     (size_t)written_len,
-                    (size_t)out_proof->proof_data.length);
+                    (size_t)out_proof->proof_data.length,
+                    pq_error_detail_or_dash(detail));
+                pq_string_free(detail);
                 ok = false;
             } else if (lantern_byte_list_resize(&out_proof->proof_data, (size_t)written_len) != 0) {
                 ok = false;
@@ -1119,6 +1140,7 @@ bool lantern_signature_merge_block_type2_proof(
     entries[attestation_count].agg_len = proposer_proof->proof_data.length;
 
     pq_xmss_aggregation_setup_prover();
+    log_pq_prover_setup_error_if_any();
     if (lantern_byte_list_resize(&raw_type2, LANTERN_AGG_PROOF_MAX_BYTES) != 0) {
         goto cleanup;
     }
@@ -1131,13 +1153,16 @@ bool lantern_signature_merge_block_type2_proof(
         raw_type2.length,
         &written_len);
     if (merge_rc != Success || written_len == 0u || written_len > raw_type2.length) {
+        char *detail = pq_take_last_error_message();
         lantern_log_error(
             "signature",
             NULL,
-            "block Type-2 merge failed err=%d entries=%zu written=%zu",
+            "block Type-2 merge failed err=%d entries=%zu written=%zu detail=%s",
             (int)merge_rc,
             component_count,
-            (size_t)written_len);
+            (size_t)written_len,
+            pq_error_detail_or_dash(detail));
+        pq_string_free(detail);
         goto cleanup;
     }
     if (lantern_byte_list_resize(&raw_type2, (size_t)written_len) != 0) {
@@ -1276,6 +1301,7 @@ bool lantern_signature_split_block_type2_proof_by_message(
     }
 
     pq_xmss_aggregation_setup_prover();
+    log_pq_prover_setup_error_if_any();
     if (lantern_byte_list_resize(out_type1_raw, LANTERN_AGG_PROOF_MAX_BYTES) != 0) {
         goto cleanup;
     }
@@ -1292,6 +1318,17 @@ bool lantern_signature_split_block_type2_proof_by_message(
         out_type1_raw->length,
         &written_len);
     if (split_rc != Success || written_len == 0u || written_len > out_type1_raw->length) {
+        char *detail = pq_take_last_error_message();
+        lantern_log_error(
+            "signature",
+            NULL,
+            "block Type-2 split failed err=%d components=%zu written=%zu buffer=%zu detail=%s",
+            (int)split_rc,
+            component_count,
+            (size_t)written_len,
+            (size_t)out_type1_raw->length,
+            pq_error_detail_or_dash(detail));
+        pq_string_free(detail);
         goto cleanup;
     }
     ok = lantern_byte_list_resize(out_type1_raw, (size_t)written_len) == 0;

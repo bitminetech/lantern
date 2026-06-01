@@ -1862,7 +1862,7 @@ static int validator_build_block_internal(
     uint64_t build_started_ms = 0;
     uint64_t collect_started_ms = 0;
     uint64_t collect_finished_ms = 0;
-    LanternRoot parent_root;
+    LanternRoot parent_root = {0};
     LanternAggregatedAttestations attestations;
     LanternAttestationSignatures signatures;
     bool attestations_initialized = false;

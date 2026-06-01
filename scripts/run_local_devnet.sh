@@ -25,7 +25,7 @@ Environment overrides (start):
   BASE_HTTP          Base HTTP port (default: 5055)
   USE_VALIDATOR_CONFIG_PORTS 1 to read QUIC/metrics ports from validator-config.yaml (default: 1)
   AUTO_GENESIS       1 to auto-generate validator-config + genesis if missing (default: 1)
-  GENESIS_ENR_IP     ENR IP to embed in validator-config.yaml (default: 127.0.0.1)
+  GENESIS_ENR_IP     ENR IP to embed in validator-config.yaml (default: 127.0.0.1 for binary/host, docker gateway IP otherwise)
   GENESIS_ACTIVE_EPOCH Active epoch for generated validator-config.yaml (default: 18)
   GENESIS_KEY_TYPE   Key type for generated validator-config.yaml (default: xmss)
   GENESIS_SHUFFLE    Shuffle mode for generated validator-config.yaml (default: roundrobin)
@@ -37,10 +37,14 @@ Environment overrides (start):
   CLEAN_RUN_DIR      1 to delete RUN_DIR data/logs before start (default: 1)
   LEANSPEC_PY        Path to leanSpec python (default: tools/leanSpec/.venv/bin/python)
   LANTERN_IMAGE      Docker image to run (default: lantern:local)
-  DOCKER_NETWORK     Docker network mode (default: host)
+  DOCKER_NETWORK     Docker network mode/name (default: lantern-local-devnet)
+  DOCKER_SUBNET      Subnet to create for the default docker network (default: 172.28.0.0/16)
+  DOCKER_GATEWAY_IP  Gateway IP to advertise in Docker ENRs (default: 172.28.0.1)
+  DOCKER_IP_BASE     First three octets for docker node IPs (default: 172.28.0)
+  DOCKER_IP_START    Last-octet start for docker node IPs (default: 10)
   DOCKER_BUILD       1 to build image before start (default: 1)
   DOCKER_BUILD_ARGS  Extra args passed to docker build (optional)
-  DOCKER_LISTEN_IP   Listen IP for docker nodes (default: 127.0.0.1 for host, 0.0.0.0 otherwise)
+  DOCKER_LISTEN_IP   Listen IP for docker nodes (default: 127.0.0.1 for host, per-node docker IP otherwise)
   ENABLE_COREDUMP    1 to enable core dumps for crashes (default: 0)
 
 Example:
@@ -110,7 +114,7 @@ BASE_METRICS=${BASE_METRICS:-18200}
 BASE_HTTP=${BASE_HTTP:-5055}
 USE_VALIDATOR_CONFIG_PORTS=${USE_VALIDATOR_CONFIG_PORTS:-1}
 AUTO_GENESIS=${AUTO_GENESIS:-1}
-GENESIS_ENR_IP=${GENESIS_ENR_IP:-127.0.0.1}
+GENESIS_ENR_IP=${GENESIS_ENR_IP:-}
 GENESIS_ACTIVE_EPOCH=${GENESIS_ACTIVE_EPOCH:-18}
 GENESIS_KEY_TYPE=${GENESIS_KEY_TYPE:-xmss}
 GENESIS_SHUFFLE=${GENESIS_SHUFFLE:-roundrobin}
@@ -121,19 +125,15 @@ DEVNET=${DEVNET:-devnet4}
 RUN_DIR=${RUN_DIR:-/tmp/lantern-local-devnet-run}
 CLEAN_RUN_DIR=${CLEAN_RUN_DIR:-1}
 LANTERN_IMAGE=${LANTERN_IMAGE:-lantern:local}
-DOCKER_NETWORK=${DOCKER_NETWORK:-host}
+DOCKER_NETWORK=${DOCKER_NETWORK:-lantern-local-devnet}
+DOCKER_SUBNET=${DOCKER_SUBNET:-172.28.0.0/16}
+DOCKER_IP_BASE=${DOCKER_IP_BASE:-172.28.0}
+DOCKER_GATEWAY_IP=${DOCKER_GATEWAY_IP:-${DOCKER_IP_BASE}.1}
+DOCKER_IP_START=${DOCKER_IP_START:-10}
 DOCKER_BUILD=${DOCKER_BUILD:-1}
 DOCKER_BUILD_ARGS=${DOCKER_BUILD_ARGS:-}
 DOCKER_LISTEN_IP=${DOCKER_LISTEN_IP:-}
 ENABLE_COREDUMP=${ENABLE_COREDUMP:-0}
-
-if [[ -z "${DOCKER_LISTEN_IP}" ]]; then
-  if [[ "${DOCKER_NETWORK}" == "host" ]]; then
-    DOCKER_LISTEN_IP="127.0.0.1"
-  else
-    DOCKER_LISTEN_IP="0.0.0.0"
-  fi
-fi
 
 PIDS_FILE="${RUN_DIR}/pids"
 META_FILE="${RUN_DIR}/meta"
@@ -204,6 +204,59 @@ fi
 
 GENESIS_DIR=${GENESIS_DIR_ARG:-${GENESIS_DIR:-/tmp/lantern-local-devnet/genesis}}
 
+docker_uses_host_network() {
+  [[ "${DOCKER_NETWORK}" == "host" ]]
+}
+
+docker_node_ip() {
+  local index=$1
+  echo "${DOCKER_IP_BASE}.$((DOCKER_IP_START + index))"
+}
+
+docker_gateway_ip() {
+  echo "${DOCKER_GATEWAY_IP}"
+}
+
+node_enr_ip() {
+  if [[ -n "${GENESIS_ENR_IP}" ]]; then
+    echo "${GENESIS_ENR_IP}"
+  elif [[ "${RUNTIME}" == "docker" ]] && ! docker_uses_host_network; then
+    docker_gateway_ip
+  else
+    echo "127.0.0.1"
+  fi
+}
+
+docker_node_listen_ip() {
+  local index=$1
+  if [[ -n "${DOCKER_LISTEN_IP}" ]]; then
+    echo "${DOCKER_LISTEN_IP}"
+  elif docker_uses_host_network; then
+    echo "127.0.0.1"
+  else
+    docker_node_ip "${index}"
+  fi
+}
+
+ensure_docker_network() {
+  if [[ "${RUNTIME}" != "docker" ]] || docker_uses_host_network; then
+    return 0
+  fi
+  if [[ "${DOCKER_NETWORK}" == "bridge" || "${DOCKER_NETWORK}" == "none" ]]; then
+    echo "error: docker mode needs a user-defined bridge network for stable ENR IPs; set DOCKER_NETWORK to a custom name or use 'host'" >&2
+    exit 1
+  fi
+  if docker network inspect "${DOCKER_NETWORK}" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "Creating docker network ${DOCKER_NETWORK} (${DOCKER_SUBNET}, gateway ${DOCKER_GATEWAY_IP})..."
+  docker network create \
+    --driver bridge \
+    --subnet "${DOCKER_SUBNET}" \
+    --gateway "${DOCKER_GATEWAY_IP}" \
+    "${DOCKER_NETWORK}" >/dev/null
+}
+
 generate_validator_config() {
   local output="${GENESIS_DIR}/validator-config.yaml"
   local aggregator_index="${GENESIS_AGGREGATOR_INDEX}"
@@ -224,6 +277,8 @@ validators:
 EOF
   for i in $(seq 0 $((NODES-1))); do
     local privkey
+    local enr_ip
+    enr_ip="$(node_enr_ip "${i}")"
     privkey="$(LAN_NODE_INDEX="${i}" python3 - <<'PY'
 import hashlib
 import os
@@ -237,7 +292,7 @@ PY
   - name: "lantern_${i}"
     privkey: "${privkey}"
     enrFields:
-      ip: "${GENESIS_ENR_IP}"
+      ip: "${enr_ip}"
       quic: ${quic}
 EOF
     if (( i == aggregator_index )); then
@@ -254,6 +309,46 @@ EOF
   mv "${tmp}" "${output}"
 }
 
+refresh_validator_config_enr_ips() {
+  local config_path="${GENESIS_DIR}/validator-config.yaml"
+  if [[ ! -f "${config_path}" ]]; then
+    return 1
+  fi
+  if ! command -v yq >/dev/null 2>&1; then
+    echo "error: yq is required to refresh docker ENR IPs in ${config_path}" >&2
+    exit 1
+  fi
+  for i in $(seq 0 $((NODES-1))); do
+    local expected
+    expected="$(node_enr_ip "${i}")"
+    yq eval -i ".validators[${i}].enrFields.ip = \"${expected}\"" "${config_path}"
+  done
+}
+
+validator_config_network_mismatch() {
+  local config_path="${GENESIS_DIR}/validator-config.yaml"
+  if [[ "${RUNTIME}" != "docker" ]] || docker_uses_host_network; then
+    return 1
+  fi
+  if [[ ! -f "${config_path}" ]] || ! command -v yq >/dev/null 2>&1; then
+    return 1
+  fi
+  local validator_count
+  validator_count="$(yq eval '.validators | length' "${config_path}" 2>/dev/null || echo 0)"
+  if ! [[ "${validator_count}" =~ ^[0-9]+$ ]] || (( validator_count < NODES )); then
+    return 0
+  fi
+  for i in $(seq 0 $((NODES-1))); do
+    local expected actual
+    expected="$(node_enr_ip "${i}")"
+    actual="$(yq eval ".validators[${i}].enrFields.ip // \"\"" "${config_path}" 2>/dev/null || echo "")"
+    if [[ "${actual}" != "${expected}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 validator_config_invalid() {
   local config_path="${GENESIS_DIR}/validator-config.yaml"
   if [[ ! -f "${config_path}" ]]; then
@@ -263,6 +358,9 @@ validator_config_invalid() {
     local validator_count total
     validator_count="$(yq eval '.validators | length' "${config_path}" 2>/dev/null || echo 0)"
     if [[ -z "${validator_count}" || "${validator_count}" == "null" || "${validator_count}" -eq 0 ]]; then
+      return 0
+    fi
+    if (( validator_count != NODES )); then
       return 0
     fi
     total="$(yq eval '.validators[].count' "${config_path}" 2>/dev/null | awk '{sum+=$1} END {print sum+0}')"
@@ -300,6 +398,8 @@ else
     exit 1
   fi
 fi
+
+ensure_docker_network
 
 required_files=(
   "config.yaml"
@@ -341,8 +441,28 @@ if (( ${#missing[@]} > 0 )); then
 fi
 
 if validator_config_invalid; then
-  echo "error: validator-config.yaml missing validator counts; regenerate it and retry." >&2
+  if [[ "${AUTO_GENESIS}" != "1" ]]; then
+    echo "error: validator-config.yaml is invalid or does not match ${NODES} node(s); regenerate it and retry." >&2
+    exit 1
+  fi
+  echo "validator-config.yaml invalid or stale for ${NODES} node(s); regenerating genesis artifacts..." >&2
+  generate_validator_config
+  generate_genesis_artifacts
+fi
+
+if validator_config_invalid; then
+  echo "error: validator-config.yaml is invalid or does not match ${NODES} node(s); regenerate it and retry." >&2
   exit 1
+fi
+
+if validator_config_network_mismatch; then
+  if [[ "${AUTO_GENESIS}" != "1" ]]; then
+    echo "error: validator-config.yaml ENR IPs do not match docker network ${DOCKER_NETWORK}; enable AUTO_GENESIS or refresh ${GENESIS_DIR}/validator-config.yaml" >&2
+    exit 1
+  fi
+  echo "validator-config.yaml ENR IPs do not match docker network ${DOCKER_NETWORK}; refreshing and regenerating genesis artifacts..." >&2
+  refresh_validator_config_enr_ips
+  generate_genesis_artifacts
 fi
 
 HASH_SIG_KEYS_DIR="${GENESIS_DIR}/hash-sig-keys"
@@ -433,9 +553,9 @@ PY
 import os
 import pathlib
 import yaml
-from lean_spec.subspecs.containers.state import State, Validators
-from lean_spec.subspecs.containers.validator import Validator
-from lean_spec.types import Bytes52, Uint64
+from lean_spec.forks.lstar.spec import LstarSpec
+from lean_spec.forks.lstar.containers.validator import Validator, Validators
+from lean_spec.types import Bytes52, Uint64, ValidatorIndex
 
 genesis_dir = pathlib.Path(os.environ["GENESIS_DIR"])
 keys_dir = pathlib.Path(os.environ["HASH_SIG_KEYS_DIR"])
@@ -449,10 +569,10 @@ for i in range(num_validators):
         Validator(
             attestation_pubkey=Bytes52(attester_pk),
             proposal_pubkey=Bytes52(proposer_pk),
-            index=Uint64(i),
+            index=ValidatorIndex(i),
         )
     )
-state = State.generate_genesis(
+state = LstarSpec().generate_genesis(
     genesis_time=Uint64(int(config["GENESIS_TIME"])),
     validators=Validators(data=validators),
 )
@@ -544,6 +664,8 @@ for i in $(seq 0 $((NODES-1))); do
   mkdir -p "${DATA}"
 
   if [[ "${RUNTIME}" == "docker" ]]; then
+    LISTEN_IP="$(docker_node_listen_ip "${i}")"
+    CONTAINER_IP="$(docker_node_ip "${i}")"
     if command -v rg >/dev/null 2>&1; then
       if docker ps -a --format '{{.Names}}' | rg -q "^${NODE_ID}$"; then
         echo "error: docker container ${NODE_ID} already exists" >&2
@@ -566,7 +688,7 @@ for i in $(seq 0 $((NODES-1))); do
       -e "LANTERN_CONFIG_DIR=/genesis"
       -e "LANTERN_NODE_ID=${NODE_ID}"
       -e "LANTERN_DEVNET=${DEVNET}"
-      -e "LANTERN_LISTEN_ADDRESS=/ip4/${DOCKER_LISTEN_IP}/udp/${PORT}/quic-v1"
+      -e "LANTERN_LISTEN_ADDRESS=/ip4/${LISTEN_IP}/udp/${PORT}/quic-v1"
       -e "LANTERN_HTTP_PORT=${HTTP}"
       -e "LANTERN_METRICS_PORT=${METRICS}"
       -e "LANTERN_NODE_KEY_PATH=/genesis/lantern_${i}.key"
@@ -583,6 +705,7 @@ for i in $(seq 0 $((NODES-1))); do
       docker_args+=(--network host)
     else
       docker_args+=(--network "${DOCKER_NETWORK}")
+      docker_args+=(--ip "${CONTAINER_IP}")
       docker_args+=(-p "${PORT}:${PORT}/udp" -p "${HTTP}:${HTTP}" -p "${METRICS}:${METRICS}")
     fi
     docker_args+=(--entrypoint /bin/bash)
