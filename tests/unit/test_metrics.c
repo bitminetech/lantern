@@ -163,12 +163,22 @@ static int test_committee_aggregation_metrics(void) {
     lean_metrics_reset();
     lean_metrics_record_committee_signature_aggregation(0.08, 2);
     lean_metrics_record_committee_signature_aggregation(0.12, 1);
+    lean_metrics_record_aggregator_skipped(LEAN_METRICS_AGGREGATOR_SKIPPED_NOT_AGGREGATOR);
+    lean_metrics_record_aggregator_skipped(LEAN_METRICS_AGGREGATOR_SKIPPED_NOT_SYNCED);
+    lean_metrics_record_aggregator_skipped(LEAN_METRICS_AGGREGATOR_SKIPPED_MISSING_STATE);
+    lean_metrics_record_aggregator_skipped(LEAN_METRICS_AGGREGATOR_SKIPPED_SPAWN_FAILED);
+    lean_metrics_record_aggregator_skipped(LEAN_METRICS_AGGREGATOR_SKIPPED_OTHER);
 
     struct lean_metrics_snapshot snapshot;
     memset(&snapshot, 0, sizeof(snapshot));
     lean_metrics_snapshot(&snapshot);
 
     assert(snapshot.committee_aggregated_attestations_total == 3);
+    assert(snapshot.aggregator_skipped_total[LEAN_METRICS_AGGREGATOR_SKIPPED_NOT_AGGREGATOR] == 1);
+    assert(snapshot.aggregator_skipped_total[LEAN_METRICS_AGGREGATOR_SKIPPED_NOT_SYNCED] == 1);
+    assert(snapshot.aggregator_skipped_total[LEAN_METRICS_AGGREGATOR_SKIPPED_MISSING_STATE] == 1);
+    assert(snapshot.aggregator_skipped_total[LEAN_METRICS_AGGREGATOR_SKIPPED_SPAWN_FAILED] == 1);
+    assert(snapshot.aggregator_skipped_total[LEAN_METRICS_AGGREGATOR_SKIPPED_OTHER] == 1);
     assert(snapshot.committee_signatures_aggregation_time.total == 2);
     assert(snapshot.committee_signatures_aggregation_time.sum > 0.0);
     assert(snapshot.committee_signatures_aggregation_time.bucket_count == 9);
@@ -197,6 +207,11 @@ static int test_prometheus_metric_names(void) {
     lean_metrics_record_pq_aggregated_signature_verification(0.75, false);
     lean_metrics_record_pq_block_aggregated_signatures_verification(0.8);
     lean_metrics_record_committee_signature_aggregation(0.3, 3);
+    lean_metrics_record_aggregator_skipped(LEAN_METRICS_AGGREGATOR_SKIPPED_NOT_AGGREGATOR);
+    lean_metrics_record_aggregator_skipped(LEAN_METRICS_AGGREGATOR_SKIPPED_NOT_SYNCED);
+    lean_metrics_record_aggregator_skipped(LEAN_METRICS_AGGREGATOR_SKIPPED_MISSING_STATE);
+    lean_metrics_record_aggregator_skipped(LEAN_METRICS_AGGREGATOR_SKIPPED_SPAWN_FAILED);
+    lean_metrics_record_aggregator_skipped(LEAN_METRICS_AGGREGATOR_SKIPPED_OTHER);
     lean_metrics_record_peer_connection(LEAN_METRICS_DIR_INBOUND, LEAN_METRICS_CONN_RESULT_SUCCESS);
     lean_metrics_record_peer_disconnection(
         LEAN_METRICS_DIR_OUTBOUND,
@@ -293,6 +308,7 @@ static int test_prometheus_metric_names(void) {
         "lean_gossip_mesh_peers",
         "lean_peer_connection_events_total",
         "lean_peer_disconnection_events_total",
+        "lean_aggregator_skipped_total",
         "lean_tick_interval_duration_seconds",
         "lean_attestation_committee_subnet",
         "lean_attestation_committee_count",
@@ -316,6 +332,11 @@ static int test_prometheus_metric_names(void) {
     assert(strstr(body, "lean_node_sync_status{status=\"synced\"}") != NULL);
     assert(strstr(body, "lean_peer_connection_events_total{direction=\"inbound\",result=\"success\"}") != NULL);
     assert(strstr(body, "lean_peer_disconnection_events_total{direction=\"outbound\",reason=\"remote_close\"}") != NULL);
+    assert(strstr(body, "lean_aggregator_skipped_total{reason=\"not_aggregator\"} 1") != NULL);
+    assert(strstr(body, "lean_aggregator_skipped_total{reason=\"not_synced\"} 1") != NULL);
+    assert(strstr(body, "lean_aggregator_skipped_total{reason=\"missing_state\"} 1") != NULL);
+    assert(strstr(body, "lean_aggregator_skipped_total{reason=\"spawn_failed\"} 1") != NULL);
+    assert(strstr(body, "lean_aggregator_skipped_total{reason=\"other\"} 1") != NULL);
     assert(strstr(body, "lean_tick_interval_duration_seconds_bucket{le=\"0.82\"}") != NULL);
 
     assert(strstr(body, "lean_gossip_signatures_count") == NULL);
