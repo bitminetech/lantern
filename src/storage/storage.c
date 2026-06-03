@@ -138,16 +138,6 @@ static size_t bitlist_encoded_size(const struct lantern_bitlist *list) {
     return byte_len + (needs_extra ? 1u : 0u);
 }
 
-static size_t byte_list_encoded_size(const LanternByteList *list) {
-    if (!list) {
-        return 0;
-    }
-    if (list->length > LANTERN_AGG_PROOF_MAX_BYTES) {
-        return 0;
-    }
-    return list->length;
-}
-
 static size_t aggregated_attestation_encoded_size(const LanternAggregatedAttestation *attestation) {
     if (!attestation) {
         return 0;
@@ -257,8 +247,8 @@ static size_t signed_block_encoded_size(const LanternSignedBlock *block) {
     if (message_size == 0) {
         return 0;
     }
-    size_t proof_size = byte_list_encoded_size(&block->proof);
-    if (proof_size == 0 && block->proof.length != 0u) {
+    size_t proof_size = 0;
+    if (lantern_ssz_encode_multi_message_aggregate(&block->proof, NULL, 0, &proof_size) != SSZ_SUCCESS) {
         return 0;
     }
     if (offset_section > SIZE_MAX - message_size

@@ -680,7 +680,7 @@ static void maybe_log_sync_progress(
 
     bool has_orphans = orphan_count > 0;
     bool behind_finalized = has_network_finalized && network_finalized > local_head_slot;
-    bool synced = has_network_finalized && !behind_finalized;
+    bool synced = has_network_finalized && !behind_finalized && !has_orphans;
     bool syncing = !synced;
 
     struct lantern_log_metadata meta = {.validator = client->node_id};

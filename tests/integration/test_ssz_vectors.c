@@ -39,6 +39,7 @@
 #define LANTERN_XMSS_RHO_BYTES (LANTERN_XMSS_RAND_LEN_FE * LANTERN_XMSS_FP_BYTES)
 #define LANTERN_XMSS_SIGNATURE_FIXED_SECTION \
     (SSZ_BYTES_PER_LENGTH_OFFSET + LANTERN_XMSS_RHO_BYTES + SSZ_BYTES_PER_LENGTH_OFFSET)
+#define LANTERN_KOALABEAR_P UINT32_C(2130706433)
 
 struct fixture_stats {
     size_t total;
@@ -664,9 +665,15 @@ static int parse_validator_object(
 
     int attestation_idx = lantern_fixture_object_get_field(doc, object_index, "attestationPubkey");
     if (attestation_idx < 0) {
+        attestation_idx = lantern_fixture_object_get_field(doc, object_index, "attestationPublicKey");
+    }
+    if (attestation_idx < 0) {
         attestation_idx = lantern_fixture_object_get_field(doc, object_index, "attestation_pubkey");
     }
     int proposal_idx = lantern_fixture_object_get_field(doc, object_index, "proposalPubkey");
+    if (proposal_idx < 0) {
+        proposal_idx = lantern_fixture_object_get_field(doc, object_index, "proposalPublicKey");
+    }
     if (proposal_idx < 0) {
         proposal_idx = lantern_fixture_object_get_field(doc, object_index, "proposal_pubkey");
     }
@@ -708,6 +715,9 @@ static int parse_attestation_vote_object(
     memset(out_vote, 0, sizeof(*out_vote));
 
     int validator_idx = lantern_fixture_object_get_field(doc, object_index, "validatorId");
+    if (validator_idx < 0) {
+        validator_idx = lantern_fixture_object_get_field(doc, object_index, "validatorIndex");
+    }
     if (validator_idx < 0) {
         validator_idx = lantern_fixture_object_get_field(doc, object_index, "validator_id");
     }
@@ -1169,6 +1179,86 @@ static int run_uint_fixture(
     LanternRoot root;
     if (root_from_fixed_serialized_bytes(expected_serialized->data, expected_serialized->len, &root) != 0) {
         return record_failure(path, type_name, "failed to compute integer root");
+    }
+    return expect_root_equal(path, type_name, "hash_tree_root", expected_root, &root);
+}
+
+static int fixture_token_to_fp(
+    const struct lantern_fixture_document *doc,
+    int value_idx,
+    uint32_t *out_value) {
+    if (!doc || !out_value) {
+        return -1;
+    }
+    uint64_t numeric = 0u;
+    if (lantern_fixture_token_to_uint64(doc, value_idx, &numeric) == 0) {
+        if (numeric >= LANTERN_KOALABEAR_P) {
+            return -1;
+        }
+        *out_value = (uint32_t)numeric;
+        return 0;
+    }
+
+    size_t len = 0u;
+    const char *text = lantern_fixture_token_string(doc, value_idx, &len);
+    const char prefix[] = "Fp(value=";
+    const size_t prefix_len = sizeof(prefix) - 1u;
+    if (!text || len <= prefix_len + 1u || strncmp(text, prefix, prefix_len) != 0
+        || text[len - 1u] != ')') {
+        return -1;
+    }
+
+    char buffer[32];
+    size_t digits_len = len - prefix_len - 1u;
+    if (digits_len == 0u || digits_len >= sizeof(buffer)) {
+        return -1;
+    }
+    memcpy(buffer, text + prefix_len, digits_len);
+    buffer[digits_len] = '\0';
+
+    char *endptr = NULL;
+    errno = 0;
+    unsigned long long parsed = strtoull(buffer, &endptr, 10);
+    if (errno != 0 || endptr == buffer || *endptr != '\0' || parsed >= LANTERN_KOALABEAR_P) {
+        return -1;
+    }
+
+    *out_value = (uint32_t)parsed;
+    return 0;
+}
+
+static int run_fp_fixture(
+    const char *path,
+    const char *type_name,
+    const struct lantern_fixture_document *doc,
+    int value_idx,
+    const struct byte_buffer *expected_serialized,
+    const LanternRoot *expected_root) {
+    uint32_t value = 0u;
+    if (fixture_token_to_fp(doc, value_idx, &value) != 0) {
+        return record_failure(path, type_name, "invalid Fp value");
+    }
+
+    uint8_t encoded[sizeof(uint32_t)];
+    if (ssz_serialize_uint32(value, encoded) != SSZ_SUCCESS
+        || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, sizeof(encoded)) != 0) {
+        return record_failure(path, type_name, "Fp encode failed");
+    }
+
+    uint32_t decoded = 0u;
+    if (ssz_deserialize_uint32(expected_serialized->data, expected_serialized->len, &decoded) != SSZ_SUCCESS
+        || decoded != value
+        || decoded >= LANTERN_KOALABEAR_P) {
+        return record_failure(path, type_name, "Fp decode failed");
+    }
+    if (ssz_serialize_uint32(decoded, encoded) != SSZ_SUCCESS
+        || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, sizeof(encoded)) != 0) {
+        return -1;
+    }
+
+    LanternRoot root;
+    if (root_from_fixed_serialized_bytes(expected_serialized->data, expected_serialized->len, &root) != 0) {
+        return record_failure(path, type_name, "failed to compute Fp root");
     }
     return expect_root_equal(path, type_name, "hash_tree_root", expected_root, &root);
 }
@@ -2205,6 +2295,81 @@ static int run_aggregated_signature_proof_fixture(
     return expect_root_equal(path, type_name, "hash_tree_root", expected_root, &root);
 }
 
+static int parse_multi_message_aggregate_object(
+    const struct lantern_fixture_document *doc,
+    int value_idx,
+    LanternByteList *out_aggregate) {
+    if (!doc || !out_aggregate) {
+        return -1;
+    }
+    int proof_idx = lantern_fixture_object_get_field(doc, value_idx, "proof");
+    struct byte_buffer proof = {0};
+    if (proof_idx < 0 || parse_hex_data_object(doc, proof_idx, &proof) != 0) {
+        byte_buffer_reset(&proof);
+        return -1;
+    }
+    if (proof.len > BYTELIST_512KIB_LIMIT
+        || lantern_byte_list_resize(out_aggregate, proof.len + SSZ_BYTES_PER_LENGTH_OFFSET) != 0) {
+        byte_buffer_reset(&proof);
+        return -1;
+    }
+    write_u32_le((uint32_t)SSZ_BYTES_PER_LENGTH_OFFSET, out_aggregate->data);
+    if (proof.len > 0u) {
+        memcpy(out_aggregate->data + SSZ_BYTES_PER_LENGTH_OFFSET, proof.data, proof.len);
+    }
+    byte_buffer_reset(&proof);
+    return 0;
+}
+
+static int run_multi_message_aggregate_fixture(
+    const char *path,
+    const char *type_name,
+    const struct lantern_fixture_document *doc,
+    int value_idx,
+    const struct byte_buffer *expected_serialized,
+    const LanternRoot *expected_root) {
+    LanternByteList aggregate;
+    lantern_byte_list_init(&aggregate);
+    if (parse_multi_message_aggregate_object(doc, value_idx, &aggregate) != 0) {
+        lantern_byte_list_reset(&aggregate);
+        return record_failure(path, type_name, "invalid multi-message aggregate fixture");
+    }
+
+    size_t encoded_capacity = expected_serialized->len > 0u ? expected_serialized->len : 1u;
+    uint8_t *encoded = (uint8_t *)malloc(encoded_capacity);
+    size_t encoded_len = 0u;
+    if (!encoded
+        || lantern_ssz_encode_multi_message_aggregate(&aggregate, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
+        || expect_bytes_equal(path, type_name, "encode(value)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
+        free(encoded);
+        lantern_byte_list_reset(&aggregate);
+        return record_failure(path, type_name, "multi-message aggregate encode failed");
+    }
+
+    LanternByteList decoded;
+    lantern_byte_list_init(&decoded);
+    if (lantern_ssz_decode_multi_message_aggregate(&decoded, expected_serialized->data, expected_serialized->len) != SSZ_SUCCESS
+        || lantern_ssz_encode_multi_message_aggregate(&decoded, encoded, encoded_capacity, &encoded_len) != SSZ_SUCCESS
+        || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {
+        free(encoded);
+        lantern_byte_list_reset(&aggregate);
+        lantern_byte_list_reset(&decoded);
+        return record_failure(path, type_name, "multi-message aggregate decode failed");
+    }
+
+    LanternRoot root;
+    if (lantern_hash_tree_root_multi_message_aggregate(&aggregate, &root) != SSZ_SUCCESS) {
+        free(encoded);
+        lantern_byte_list_reset(&aggregate);
+        lantern_byte_list_reset(&decoded);
+        return record_failure(path, type_name, "multi-message aggregate root failed");
+    }
+    free(encoded);
+    lantern_byte_list_reset(&aggregate);
+    lantern_byte_list_reset(&decoded);
+    return expect_root_equal(path, type_name, "hash_tree_root", expected_root, &root);
+}
+
 static int run_type_two_multi_signature_fixture(
     const char *path,
     const char *type_name,
@@ -2745,8 +2910,11 @@ static int run_fixture_case(
     if (strcmp(type_name, "Uint16") == 0) {
         return run_uint_fixture(path, type_name, doc, value_idx, 16u, expected_serialized, expected_root);
     }
-    if (strcmp(type_name, "Uint32") == 0 || strcmp(type_name, "Fp") == 0) {
+    if (strcmp(type_name, "Uint32") == 0) {
         return run_uint_fixture(path, type_name, doc, value_idx, 32u, expected_serialized, expected_root);
+    }
+    if (strcmp(type_name, "Fp") == 0) {
+        return run_fp_fixture(path, type_name, doc, value_idx, expected_serialized, expected_root);
     }
     if (strcmp(type_name, "Uint64") == 0) {
         return run_uint_fixture(path, type_name, doc, value_idx, 64u, expected_serialized, expected_root);
@@ -2858,6 +3026,12 @@ static int run_fixture_case(
     }
     if (strcmp(type_name, "AggregatedSignatureProof") == 0) {
         return run_aggregated_signature_proof_fixture(path, type_name, doc, value_idx, expected_serialized, expected_root);
+    }
+    if (strcmp(type_name, "SingleMessageAggregate") == 0) {
+        return run_aggregated_signature_proof_fixture(path, type_name, doc, value_idx, expected_serialized, expected_root);
+    }
+    if (strcmp(type_name, "MultiMessageAggregate") == 0) {
+        return run_multi_message_aggregate_fixture(path, type_name, doc, value_idx, expected_serialized, expected_root);
     }
     if (strcmp(type_name, "TypeOneMultiSignature") == 0) {
         return run_aggregated_signature_proof_fixture(path, type_name, doc, value_idx, expected_serialized, expected_root);

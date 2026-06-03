@@ -1,8 +1,10 @@
 #include "lantern/networking/gossip_payloads.h"
 
+#include <inttypes.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/ssz.h"
@@ -105,10 +107,11 @@ static size_t signed_block_max_ssz_size(void) {
         return SIZE_MAX;
     }
     size_t total = base + attestations_max;
-    if (LANTERN_AGG_PROOF_MAX_BYTES > SIZE_MAX - total) {
+    size_t proof_max = SSZ_BYTES_PER_LENGTH_OFFSET + LANTERN_AGG_PROOF_MAX_BYTES;
+    if (proof_max > SIZE_MAX - total) {
         return SIZE_MAX;
     }
-    return total + LANTERN_AGG_PROOF_MAX_BYTES;
+    return total + proof_max;
 }
 
 static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
@@ -126,16 +129,14 @@ static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
         return 0;
     }
     total += att_bytes;
-    if (block->proof.length > LANTERN_AGG_PROOF_MAX_BYTES) {
+    size_t proof_size = 0;
+    if (lantern_ssz_encode_multi_message_aggregate(&block->proof, NULL, 0, &proof_size) != SSZ_SUCCESS) {
         return 0;
     }
-    if (block->proof.length > 0u && !block->proof.data) {
+    if (proof_size > SIZE_MAX - total) {
         return 0;
     }
-    if (block->proof.length > SIZE_MAX - total) {
-        return 0;
-    }
-    return total + block->proof.length;
+    return total + proof_size;
 }
 
 static int basic_attestation_data_sanity(const LanternAttestationData *data) {
@@ -174,7 +175,8 @@ static int basic_block_sanity(const LanternSignedBlock *block) {
     }
     size_t att_count = message->body.attestations.length;
     (void)att_count;
-    if (block->proof.length > LANTERN_AGG_PROOF_MAX_BYTES) {
+    size_t proof_size = 0;
+    if (lantern_ssz_encode_multi_message_aggregate(&block->proof, NULL, 0, &proof_size) != SSZ_SUCCESS) {
         return -1;
     }
     return 0;
@@ -228,6 +230,13 @@ int lantern_gossip_encode_signed_block_snappy(
         free(raw);
         return -1;
     }
+    fprintf(
+        stderr,
+        "[lantern-sigdbg] gossip_encode_signed_block slot=%" PRIu64 " attestations=%zu proof_len=%zu raw_ssz_len=%zu\n",
+        block->block.slot,
+        block->block.body.attestations.length,
+        block->proof.length,
+        raw_written);
     /* Use raw snappy (no framing) for gossip messages per Eth2 networking spec */
     int snappy_rc = lantern_snappy_compress_raw(raw, raw_written, out, out_len, written);
     free(raw);

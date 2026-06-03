@@ -19,6 +19,9 @@ ssz_error_t lantern_hash_tree_root_aggregated_attestation(const LanternAggregate
 ssz_error_t lantern_hash_tree_root_aggregated_signature_proof(
     const LanternAggregatedSignatureProof *proof,
     LanternRoot *out_root);
+ssz_error_t lantern_hash_tree_root_multi_message_aggregate(
+    const LanternByteList *aggregate,
+    LanternRoot *out_root);
 ssz_error_t lantern_hash_tree_root_signed_aggregated_attestation(
     const LanternSignedAggregatedAttestation *attestation,
     LanternRoot *out_root);
