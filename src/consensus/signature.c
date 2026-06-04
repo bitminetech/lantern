@@ -167,30 +167,6 @@ static bool prepare_recursive_child(
     return false;
 }
 
-static void log_agg_proof_preview(const LanternByteList *proof) {
-    if (!proof || !proof->data) {
-        lantern_log_debug("signature", NULL, "aggregation proof is empty");
-        return;
-    }
-
-    const size_t preview_len = proof->length < 32u ? proof->length : 32u;
-    char hex[(32u * 2u) + 1u];
-    hex[0] = '\0';
-    if (preview_len > 0) {
-        if (lantern_bytes_to_hex(proof->data, preview_len, hex, sizeof(hex), 0) != 0) {
-            hex[0] = '\0';
-        }
-    }
-    const char *ellipsis = proof->length > preview_len ? "..." : "";
-    lantern_log_debug(
-        "signature",
-        NULL,
-        "aggregation proof preview len=%zu hex=%s%s",
-        proof->length,
-        hex[0] ? hex : "-",
-        ellipsis);
-}
-
 bool lantern_signature_is_zero(const LanternSignature *signature) {
     if (!signature) {
         return false;
@@ -321,13 +297,6 @@ bool lantern_signature_aggregate(
     if (count == 0) {
         return false;
     }
-    lantern_log_info(
-        "signature",
-        NULL,
-        "aggregation start count=%zu epoch=%" PRIu64,
-        count,
-        epoch);
-
     if (lantern_byte_list_resize(out_proof, LANTERN_AGG_PROOF_MAX_BYTES) != 0) {
         lantern_log_error("signature", NULL, "aggregation resize failed max=%zu", (size_t)LANTERN_AGG_PROOF_MAX_BYTES);
         return false;
@@ -436,13 +405,6 @@ bool lantern_signature_aggregate(
             epoch);
     } else {
         lean_metrics_record_pq_aggregated_signature_build(count, elapsed);
-        lantern_log_debug(
-            "signature",
-            NULL,
-            "aggregation ok count=%zu proof_len=%zu elapsed=%.6f",
-            count,
-            out_proof->length,
-            elapsed);
     }
     return ok;
 }
@@ -703,15 +665,6 @@ bool lantern_signature_verify_aggregated(
     if (proof->length == 0 || !proof->data) {
         return false;
     }
-    lantern_log_info(
-        "signature",
-        NULL,
-        "aggregation verify start count=%zu epoch=%" PRIu64 " proof_len=%zu",
-        count,
-        epoch,
-        proof->length);
-    log_agg_proof_preview(proof);
-
     if (count == 1u && proof->length == LANTERN_SIGNATURE_SIZE) {
         double start = get_time_seconds();
         int verify_rc = pq_verify_ssz(

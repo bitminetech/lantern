@@ -1,6 +1,7 @@
 #include "lantern/networking/gossipsub_service.h"
 
 #include <stdbool.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,8 +18,132 @@
 #define LANTERN_GOSSIP_TX_BUFFER_BYTES (4u * LANTERN_GOSSIP_MAX_RPC_BYTES)
 #define LANTERN_GOSSIP_MCACHE_BYTES (4u * LANTERN_GOSSIP_MAX_MESSAGE_BYTES)
 
+static pthread_mutex_t g_lantern_gossipsub_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static int lock_gossipsub(void) {
+    return pthread_mutex_lock(&g_lantern_gossipsub_mutex) == 0 ? 0 : -1;
+}
+
+static void unlock_gossipsub(void) {
+    (void)pthread_mutex_unlock(&g_lantern_gossipsub_mutex);
+}
+
+static libp2p_host_err_t gossipsub_protocol_open_locked(
+    libp2p_host_t *host,
+    libp2p_host_stream_t *stream,
+    libp2p_host_stream_direction_t direction,
+    void *user_data) {
+    struct lantern_gossipsub_protocol_adapter *adapter =
+        (struct lantern_gossipsub_protocol_adapter *)user_data;
+    if (!adapter || !adapter->service || !adapter->on_open) {
+        return LIBP2P_HOST_ERR_INVALID_ARG;
+    }
+    if (lock_gossipsub() != 0) {
+        return LIBP2P_HOST_ERR_INTERNAL;
+    }
+    libp2p_host_err_t rc = adapter->on_open(host, stream, direction, adapter->user_data);
+    unlock_gossipsub();
+    return rc;
+}
+
+static libp2p_host_err_t gossipsub_protocol_event_locked(
+    libp2p_host_t *host,
+    libp2p_host_stream_t *stream,
+    libp2p_host_protocol_event_kind_t kind,
+    void *user_data) {
+    struct lantern_gossipsub_protocol_adapter *adapter =
+        (struct lantern_gossipsub_protocol_adapter *)user_data;
+    if (!adapter || !adapter->service || !adapter->on_event) {
+        return LIBP2P_HOST_ERR_INVALID_ARG;
+    }
+    if (lock_gossipsub() != 0) {
+        return LIBP2P_HOST_ERR_INTERNAL;
+    }
+    libp2p_host_err_t rc = adapter->on_event(host, stream, kind, adapter->user_data);
+    unlock_gossipsub();
+    return rc;
+}
+
+static void wrap_gossipsub_protocols(struct lantern_gossipsub_service *service) {
+    if (!service) {
+        return;
+    }
+    for (size_t i = 0; i < service->gossipsub_protocol_count; i++) {
+        struct lantern_gossipsub_protocol_adapter *adapter = &service->gossipsub_protocol_adapters[i];
+        adapter->service = service;
+        adapter->on_open = service->gossipsub_protocols[i].on_open;
+        adapter->on_event = service->gossipsub_protocols[i].on_event;
+        adapter->user_data = service->gossipsub_protocols[i].user_data;
+        service->gossipsub_protocols[i].on_open = gossipsub_protocol_open_locked;
+        service->gossipsub_protocols[i].on_event = gossipsub_protocol_event_locked;
+        service->gossipsub_protocols[i].user_data = adapter;
+    }
+}
+
+struct gossipsub_message_snapshot {
+    libp2p_gossipsub_event_t event;
+    uint8_t *topic;
+    uint8_t *data;
+};
+
 static int topic_eq(const libp2p_gossipsub_bytes_t topic, const char *expected) {
     return expected && strlen(expected) == topic.len && memcmp(topic.data, expected, topic.len) == 0;
+}
+
+static int copy_gossipsub_bytes(
+    const libp2p_gossipsub_bytes_t source,
+    uint8_t **owned,
+    libp2p_gossipsub_bytes_t *dest) {
+    if (!owned || !dest) {
+        return -1;
+    }
+    *owned = NULL;
+    dest->data = NULL;
+    dest->len = source.len;
+    if (source.len == 0) {
+        return 0;
+    }
+    if (!source.data) {
+        return -1;
+    }
+    uint8_t *copy = (uint8_t *)malloc(source.len);
+    if (!copy) {
+        return -1;
+    }
+    memcpy(copy, source.data, source.len);
+    *owned = copy;
+    dest->data = copy;
+    return 0;
+}
+
+static void gossipsub_message_snapshot_reset(struct gossipsub_message_snapshot *snapshot) {
+    if (!snapshot) {
+        return;
+    }
+    free(snapshot->topic);
+    free(snapshot->data);
+    memset(snapshot, 0, sizeof(*snapshot));
+}
+
+static int gossipsub_message_snapshot_init(
+    struct gossipsub_message_snapshot *snapshot,
+    const libp2p_gossipsub_event_t *event) {
+    if (!snapshot || !event || event->type != LIBP2P_GOSSIPSUB_EVENT_MESSAGE) {
+        return -1;
+    }
+    memset(snapshot, 0, sizeof(*snapshot));
+    snapshot->event = *event;
+    if (copy_gossipsub_bytes(event->topic, &snapshot->topic, &snapshot->event.topic) != 0) {
+        gossipsub_message_snapshot_reset(snapshot);
+        return -1;
+    }
+    if (copy_gossipsub_bytes(event->message.data, &snapshot->data, &snapshot->event.message.data) != 0) {
+        gossipsub_message_snapshot_reset(snapshot);
+        return -1;
+    }
+    snapshot->event.message.topic = snapshot->event.topic;
+    snapshot->event.message.raw_message.data = NULL;
+    return 0;
 }
 
 static bool topic_is_vote_topic(
@@ -623,25 +748,64 @@ static void handle_gossipsub_peer_closed(
 
 static void drain_gossipsub_events(struct lantern_gossipsub_service *service, libp2p_host_time_us_t now_us) {
     libp2p_gossipsub_event_t event;
-    while (libp2p_gossipsub_next_event(service->gossipsub, &event) == LIBP2P_GOSSIPSUB_OK) {
+    while (1) {
+        if (lock_gossipsub() != 0) {
+            return;
+        }
+        if (!service->gossipsub) {
+            unlock_gossipsub();
+            return;
+        }
+        libp2p_gossipsub_err_t next_err = libp2p_gossipsub_next_event(service->gossipsub, &event);
+        if (next_err != LIBP2P_GOSSIPSUB_OK) {
+            unlock_gossipsub();
+            return;
+        }
         if (event.type == LIBP2P_GOSSIPSUB_EVENT_MESSAGE) {
-            int ok = deliver_message(service, &event) == 0;
+            struct gossipsub_message_snapshot snapshot;
+            int snapshot_ok = gossipsub_message_snapshot_init(&snapshot, &event) == 0;
+            if (!snapshot_ok) {
+                if (event.validation) {
+                    (void)libp2p_gossipsub_report_validation(
+                        service->gossipsub,
+                        event.validation,
+                        LIBP2P_GOSSIPSUB_VALIDATION_REJECT);
+                }
+                unlock_gossipsub();
+                continue;
+            }
+            unlock_gossipsub();
+
+            int ok = deliver_message(service, &snapshot.event) == 0;
+            gossipsub_message_snapshot_reset(&snapshot);
             if (event.validation) {
-                (void)libp2p_gossipsub_report_validation(
-                    service->gossipsub,
-                    event.validation,
-                    ok ? LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT : LIBP2P_GOSSIPSUB_VALIDATION_REJECT);
+                if (lock_gossipsub() != 0) {
+                    return;
+                }
+                if (service->gossipsub) {
+                    (void)libp2p_gossipsub_report_validation(
+                        service->gossipsub,
+                        event.validation,
+                        ok ? LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT : LIBP2P_GOSSIPSUB_VALIDATION_REJECT);
+                }
+                unlock_gossipsub();
             }
         } else if (event.type == LIBP2P_GOSSIPSUB_EVENT_PEER_OPENED) {
             handle_gossipsub_peer_opened(service, &event, now_us);
+            unlock_gossipsub();
         } else if (event.type == LIBP2P_GOSSIPSUB_EVENT_PEER_CLOSED) {
             handle_gossipsub_peer_closed(service, &event, now_us);
+            unlock_gossipsub();
         } else if (event.type == LIBP2P_GOSSIPSUB_EVENT_PEER_FAILED) {
             if (event.conn) {
                 handle_writer_open_failed(service, event.conn, now_us);
             }
+            unlock_gossipsub();
         } else if (event.type == LIBP2P_GOSSIPSUB_EVENT_DROPPED || event.type == LIBP2P_GOSSIPSUB_EVENT_ERROR) {
+            unlock_gossipsub();
             lantern_log_debug("gossip", NULL, "gossipsub event type=%d reason=%d", (int)event.type, (int)event.reason);
+        } else {
+            unlock_gossipsub();
         }
     }
 }
@@ -655,6 +819,9 @@ static void gossipsub_host_event(
         return;
     }
     libp2p_host_time_us_t now_us = lantern_libp2p_now_us();
+    if (lock_gossipsub() != 0) {
+        return;
+    }
     if (event->type == LIBP2P_HOST_EVENT_CONN_ESTABLISHED && event->conn) {
         add_peer_connection(service, event->conn, event->dial == NULL, now_us);
     }
@@ -664,6 +831,7 @@ static void gossipsub_host_event(
     } else if (event->type == LIBP2P_HOST_EVENT_STREAM_OPEN_FAILED && event->conn) {
         handle_writer_open_failed(service, event->conn, now_us);
     }
+    unlock_gossipsub();
 }
 
 static void gossipsub_drive(
@@ -674,9 +842,13 @@ static void gossipsub_drive(
     if (!service || !service->gossipsub || !network || !network->host) {
         return;
     }
+    if (lock_gossipsub() != 0) {
+        return;
+    }
     (void)libp2p_gossipsub_drive(service->gossipsub, network->host, now_us, NULL);
-    drain_gossipsub_events(service, now_us);
     repair_all_writers(service, now_us);
+    unlock_gossipsub();
+    drain_gossipsub_events(service, now_us);
 }
 
 static int subscribe_topic(struct lantern_gossipsub_service *service, const char *topic) {
@@ -686,7 +858,15 @@ static int subscribe_topic(struct lantern_gossipsub_service *service, const char
         .enable_idontwant = 1,
         .idontwant_min_message_bytes = LIBP2P_GOSSIPSUB_DEFAULT_IDONTWANT_MIN_BYTES,
     };
-    return libp2p_gossipsub_subscribe(service->gossipsub, &topic_config) == LIBP2P_GOSSIPSUB_OK ? 0 : -1;
+    if (lock_gossipsub() != 0) {
+        return -1;
+    }
+    int rc = service->gossipsub &&
+            libp2p_gossipsub_subscribe(service->gossipsub, &topic_config) == LIBP2P_GOSSIPSUB_OK
+        ? 0
+        : -1;
+    unlock_gossipsub();
+    return rc;
 }
 
 static bool topic_is_vote_topic(
@@ -781,7 +961,11 @@ void lantern_gossipsub_service_stop(struct lantern_gossipsub_service *service) {
         return;
     }
     if (service->network && service->network->host) {
+        if (lock_gossipsub() != 0) {
+            return;
+        }
         (void)libp2p_gossipsub_close(service->gossipsub, service->network->host, 0);
+        unlock_gossipsub();
     }
 }
 
@@ -791,7 +975,12 @@ void lantern_gossipsub_service_reset(struct lantern_gossipsub_service *service) 
     }
     lantern_gossipsub_service_stop(service);
     if (service->gossipsub) {
+        if (lock_gossipsub() != 0) {
+            return;
+        }
         libp2p_gossipsub_deinit(service->gossipsub);
+        service->gossipsub = NULL;
+        unlock_gossipsub();
     }
     free(service->gossipsub_storage);
     free(service->extra_vote_subnet_topics);
@@ -876,6 +1065,7 @@ int lantern_gossipsub_service_start(
         != LIBP2P_GOSSIPSUB_OK) {
         return -1;
     }
+    wrap_gossipsub_protocols(service);
     for (size_t i = 0; i < service->gossipsub_protocol_count; i++) {
         if (lantern_libp2p_host_register_protocol(service->network, &service->gossipsub_protocols[i]) != 0) {
             return -1;
@@ -931,9 +1121,15 @@ static int publish_payload(
         .message_id = {.data = NULL, .len = 0},
         .user_data = NULL,
     };
-    return libp2p_gossipsub_publish(service->gossipsub, &publish, NULL, 0, NULL) == LIBP2P_GOSSIPSUB_OK
+    if (lock_gossipsub() != 0) {
+        return -1;
+    }
+    int rc = service->gossipsub &&
+            libp2p_gossipsub_publish(service->gossipsub, &publish, NULL, 0, NULL) == LIBP2P_GOSSIPSUB_OK
         ? 0
         : -1;
+    unlock_gossipsub();
+    return rc;
 }
 
 int lantern_gossipsub_service_publish_block(
@@ -1024,7 +1220,14 @@ int lantern_gossipsub_service_subscribe_attestation_subnet(
             .enable_idontwant = 1,
             .idontwant_min_message_bytes = LIBP2P_GOSSIPSUB_DEFAULT_IDONTWANT_MIN_BYTES,
         };
-        if (libp2p_gossipsub_subscribe(service->gossipsub, &topic_config) != LIBP2P_GOSSIPSUB_OK) {
+        if (lock_gossipsub() != 0) {
+            return -1;
+        }
+        libp2p_gossipsub_err_t subscribe_err = service->gossipsub
+            ? libp2p_gossipsub_subscribe(service->gossipsub, &topic_config)
+            : LIBP2P_GOSSIPSUB_ERR_STATE;
+        unlock_gossipsub();
+        if (subscribe_err != LIBP2P_GOSSIPSUB_OK) {
             return -1;
         }
     }
