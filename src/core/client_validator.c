@@ -56,6 +56,10 @@ static const uint32_t VALIDATOR_SERVICE_IDLE_SLEEP_MS = 200;
 
 /** Sleep interval between validator service iterations (ms). */
 static const uint32_t VALIDATOR_SERVICE_POLL_SLEEP_MS = 50;
+
+/** Number of 50 ms polls to wait for the current slot block before attesting. */
+static const size_t VALIDATOR_CURRENT_SLOT_BLOCK_WAIT_ATTEMPTS = 8;
+
 static size_t validator_attestation_committee_count(const struct lantern_client *client)
 {
     return lantern_client_attestation_committee_count(client);
@@ -95,6 +99,56 @@ static bool validator_record_aggregation_skipped_once(
         duty->slot_aggregated = true;
     }
     return true;
+}
+
+static bool validator_fork_choice_has_block_at_slot_locked(
+    const struct lantern_client *client,
+    uint64_t slot)
+{
+    if (!client || !client->has_fork_choice || !client->fork_choice.blocks)
+    {
+        return false;
+    }
+    for (size_t i = 0; i < client->fork_choice.block_len; ++i)
+    {
+        if (client->fork_choice.blocks[i].slot == slot)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool validator_current_slot_block_known(struct lantern_client *client, uint64_t slot)
+{
+    if (!client)
+    {
+        return false;
+    }
+    bool state_locked = lantern_client_lock_state(client);
+    if (!state_locked)
+    {
+        return false;
+    }
+    bool known = validator_fork_choice_has_block_at_slot_locked(client, slot);
+    lantern_client_unlock_state(client, state_locked);
+    return known;
+}
+
+static void validator_wait_for_current_slot_block(struct lantern_client *client, uint64_t slot)
+{
+    if (!client || validator_current_slot_block_known(client, slot))
+    {
+        return;
+    }
+    for (size_t i = 0; i < VALIDATOR_CURRENT_SLOT_BLOCK_WAIT_ATTEMPTS; ++i)
+    {
+        validator_sleep_ms(VALIDATOR_SERVICE_POLL_SLEEP_MS);
+        if (validator_current_slot_block_known(client, slot))
+        {
+            break;
+        }
+    }
 }
 
 static bool validator_skip_reason_is_not_synced(const char *reason)
@@ -2390,6 +2444,8 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
 
+    validator_wait_for_current_slot_block(client, slot);
+
     LanternCheckpoint head_cp;
     LanternCheckpoint target_cp;
     LanternCheckpoint source_cp;
@@ -2397,6 +2453,12 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
     if (!state_locked)
     {
         validator_log_duty_skipped(client, slot, "state_lock_failed");
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+    if (lantern_fork_choice_recompute_head(&client->fork_choice) != 0)
+    {
+        lantern_client_unlock_state(client, state_locked);
+        validator_log_duty_skipped(client, slot, "head_recompute_failed");
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
     if (lantern_state_compute_vote_checkpoints(
