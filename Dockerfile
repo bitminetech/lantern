@@ -60,15 +60,10 @@ RUN if [ "${LANTERN_RUST_PROFILE}" = "1" ]; then \
     && echo "LANTERN_RUST_PROFILE=${LANTERN_RUST_PROFILE}" \
     && cat external/c-leanvm-xmss/.cargo/config.toml
 
+ARG LANTERN_FORCE_REBUILD=0
 RUN --mount=type=cache,target=/root/.cargo/registry,sharing=locked,id=cargo-registry-${TARGETPLATFORM} \
     --mount=type=cache,target=/root/.cargo/git,sharing=locked,id=cargo-git-${TARGETPLATFORM} \
-    --mount=type=cache,target=/usr/src/lantern/external/c-leanvm-xmss/target,sharing=locked,id=leanvm-xmss-target-${TARGETPLATFORM}-${LANTERN_RUST_PROFILE} \
-    cd external/c-leanvm-xmss \
-    && cargo build --release --locked \
-    && find target/release -name '*.a' -exec ranlib {} \;
-
-ARG LANTERN_FORCE_REBUILD=0
-RUN --mount=type=cache,target=/root/.ccache,sharing=locked,id=ccache-${TARGETPLATFORM} \
+    --mount=type=cache,target=/root/.ccache,sharing=locked,id=ccache-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/src/lantern/build,sharing=locked,id=lantern-build-${TARGETPLATFORM} \
     echo "LANTERN_FORCE_REBUILD=${LANTERN_FORCE_REBUILD}" \
     && cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DLANTERN_GIT_COMMIT="${GIT_COMMIT}" -DLANTERN_GIT_BRANCH="${GIT_BRANCH}" \
@@ -99,11 +94,17 @@ for path in libdir.glob("*.so.*"):
             pass
 PY
 
-# Preserve leanMultisig sources needed at runtime for XMSS aggregation.
-# The runtime binary expects xmss_aggregate.lean_lang at the build-time cargo checkout path.
+# Preserve the leanVM checkout containing XMSS aggregation sources.
+# Runtime paths are compiled from Cargo's checkout location, so mirror it into the final image.
 RUN --mount=type=cache,target=/root/.cargo/git,sharing=locked,id=cargo-git-${TARGETPLATFORM} \
-    mkdir -p /opt/lantern/share/cargo-git-checkouts \
-    && cp -a /root/.cargo/git/checkouts/leanmultisig-* /opt/lantern/share/cargo-git-checkouts/
+    set -eux; \
+    mkdir -p /opt/lantern/share/cargo-git-checkouts; \
+    mapfile -t xmss_sources < <(find /root/.cargo/git/checkouts -path '*/crates/rec_aggregation/zkdsl_implem/xmss_aggregate.py' -print); \
+    test "${#xmss_sources[@]}" -gt 0; \
+    for xmss_source in "${xmss_sources[@]}"; do \
+        checkout_dir="${xmss_source%/*/crates/rec_aggregation/zkdsl_implem/xmss_aggregate.py}"; \
+        cp -a "${checkout_dir}" /opt/lantern/share/cargo-git-checkouts/; \
+    done
 
 FROM ubuntu:22.04
 
