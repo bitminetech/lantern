@@ -56,6 +56,10 @@ static const uint32_t VALIDATOR_SERVICE_IDLE_SLEEP_MS = 200;
 
 /** Sleep interval between validator service iterations (ms). */
 static const uint32_t VALIDATOR_SERVICE_POLL_SLEEP_MS = 50;
+
+/** Number of 50 ms polls to wait for the current slot block before attesting. */
+static const size_t VALIDATOR_CURRENT_SLOT_BLOCK_WAIT_ATTEMPTS = 8;
+
 static size_t validator_attestation_committee_count(const struct lantern_client *client)
 {
     return lantern_client_attestation_committee_count(client);
@@ -65,7 +69,108 @@ static int validator_publish_aggregated_attestations(struct lantern_client *clie
 static lantern_client_error collect_aggregation_votes(
     struct lantern_client *client,
     LanternAttestations *out_attestations,
-    LanternSignatureList *out_signatures);
+    LanternSignatureList *out_signatures,
+    bool *out_missing_state);
+static lantern_client_error validator_collect_and_aggregate_attestation_signatures(
+    struct lantern_client *client,
+    LanternAggregatedAttestations *out_attestations,
+    LanternAttestationSignatures *out_signatures,
+    bool *out_missing_state);
+
+static bool validator_record_aggregation_skipped_once(
+    struct lantern_client *client,
+    uint64_t slot,
+    lean_metrics_aggregator_skipped_reason_t reason)
+{
+    if (!client)
+    {
+        return false;
+    }
+    struct lantern_validator_duty_state *duty = &client->validator_duty;
+    if (duty->have_aggregation_skip_slot && duty->last_aggregation_skip_slot == slot)
+    {
+        return false;
+    }
+    lean_metrics_record_aggregator_skipped(reason);
+    duty->have_aggregation_skip_slot = true;
+    duty->last_aggregation_skip_slot = slot;
+    if (duty->have_timepoint && duty->last_slot == slot)
+    {
+        duty->slot_aggregated = true;
+    }
+    return true;
+}
+
+static bool validator_fork_choice_has_block_at_slot_locked(
+    const struct lantern_client *client,
+    uint64_t slot)
+{
+    if (!client || !client->has_fork_choice || !client->fork_choice.blocks)
+    {
+        return false;
+    }
+    for (size_t i = 0; i < client->fork_choice.block_len; ++i)
+    {
+        if (client->fork_choice.blocks[i].slot == slot)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool validator_current_slot_block_known(struct lantern_client *client, uint64_t slot)
+{
+    if (!client)
+    {
+        return false;
+    }
+    bool state_locked = lantern_client_lock_state(client);
+    if (!state_locked)
+    {
+        return false;
+    }
+    bool known = validator_fork_choice_has_block_at_slot_locked(client, slot);
+    lantern_client_unlock_state(client, state_locked);
+    return known;
+}
+
+static void validator_wait_for_current_slot_block(struct lantern_client *client, uint64_t slot)
+{
+    if (!client || validator_current_slot_block_known(client, slot))
+    {
+        return;
+    }
+    for (size_t i = 0; i < VALIDATOR_CURRENT_SLOT_BLOCK_WAIT_ATTEMPTS; ++i)
+    {
+        validator_sleep_ms(VALIDATOR_SERVICE_POLL_SLEEP_MS);
+        if (validator_current_slot_block_known(client, slot))
+        {
+            break;
+        }
+    }
+}
+
+static bool validator_skip_reason_is_not_synced(const char *reason)
+{
+    return reason && strncmp(reason, "sync_state=", strlen("sync_state=")) == 0;
+}
+
+static bool validator_aggregation_timepoint_at(
+    const struct lantern_client *client,
+    uint64_t now_milliseconds,
+    struct lantern_slot_timepoint *out_timepoint)
+{
+    if (!client || !client->has_runtime || !out_timepoint)
+    {
+        return false;
+    }
+    if (lantern_slot_clock_compute(&client->runtime.clock, now_milliseconds, out_timepoint) != 0)
+    {
+        return false;
+    }
+    return out_timepoint->phase == LANTERN_DUTY_PHASE_AGGREGATE;
+}
 
 struct lantern_async_block_proposal_job {
     struct lantern_client *client;
@@ -1335,37 +1440,11 @@ lantern_client_error lantern_client_debug_aggregate_attestation_signatures(
     LanternAggregatedAttestations *out_attestations,
     LanternAttestationSignatures *out_signatures)
 {
-    if (!client || !out_attestations || !out_signatures)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    LanternAttestations attestations;
-    LanternSignatureList signatures;
-    lantern_attestations_init(&attestations);
-    lantern_signature_list_init(&signatures);
-
-    lantern_client_error rc = LANTERN_CLIENT_OK;
-    if (rc == LANTERN_CLIENT_OK)
-    {
-        rc = collect_aggregation_votes(
-            client,
-            &attestations,
-            &signatures);
-    }
-    if (rc == LANTERN_CLIENT_OK)
-    {
-        rc = aggregate_attestation_signatures(
-            client,
-            &attestations,
-            &signatures,
-            out_attestations,
-            out_signatures);
-    }
-
-    lantern_attestations_reset(&attestations);
-    lantern_signature_list_reset(&signatures);
-    return rc;
+    return validator_collect_and_aggregate_attestation_signatures(
+        client,
+        out_attestations,
+        out_signatures,
+        NULL);
 }
 
 int lantern_client_debug_publish_aggregated_attestations(
@@ -2193,6 +2272,17 @@ static void process_block_proposal_job(struct lantern_async_block_proposal_job *
             proof_seconds);
         return;
     }
+    bool sigdbg_self_ok = lantern_signature_verify_block_type2_proof(
+        &job->proof_state,
+        &job->block.block,
+        &job->block.proof);
+    fprintf(
+        stderr,
+        "[lantern-sigdbg] proposer_self_verify slot=%" PRIu64 " root=%s proof_len=%zu ok=%s\n",
+        job->slot,
+        root_hex[0] ? root_hex : "0x0",
+        job->block.proof.length,
+        sigdbg_self_ok ? "true" : "false");
 
     lean_metrics_record_block_building_time(total_seconds);
     lean_metrics_record_block_building_success();
@@ -2845,6 +2935,8 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
 
+    validator_wait_for_current_slot_block(client, slot);
+
     LanternCheckpoint head_cp;
     LanternCheckpoint target_cp;
     LanternCheckpoint source_cp;
@@ -2852,6 +2944,12 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
     if (!state_locked)
     {
         validator_log_duty_skipped(client, slot, "state_lock_failed");
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+    if (lantern_fork_choice_recompute_head(&client->fork_choice) != 0)
+    {
+        lantern_client_unlock_state(client, state_locked);
+        validator_log_duty_skipped(client, slot, "head_recompute_failed");
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
     if (lantern_state_compute_vote_checkpoints(
@@ -2963,9 +3061,13 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
 static lantern_client_error collect_aggregation_votes(
     struct lantern_client *client,
     LanternAttestations *out_attestations,
-    LanternSignatureList *out_signatures) {
+    LanternSignatureList *out_signatures,
+    bool *out_missing_state) {
     if (!client || !out_attestations || !out_signatures) {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    if (out_missing_state) {
+        *out_missing_state = false;
     }
     if (lantern_attestations_resize(out_attestations, 0) != 0) {
         return LANTERN_CLIENT_ERR_ALLOC;
@@ -2990,6 +3092,9 @@ static lantern_client_error collect_aggregation_votes(
         LanternAttestationData data;
         memset(&data, 0, sizeof(data));
         if (lantern_store_get_attestation_data(&client->store, &entry->key.data_root, &data) != 0) {
+            if (out_missing_state) {
+                *out_missing_state = true;
+            }
             continue;
         }
         LanternVote vote;
@@ -3011,12 +3116,78 @@ static lantern_client_error collect_aggregation_votes(
     return result;
 }
 
+static lean_metrics_aggregator_skipped_reason_t validator_aggregator_skipped_reason(
+    lantern_client_error result,
+    bool missing_state)
+{
+    switch (result)
+    {
+        case LANTERN_CLIENT_ERR_ALLOC:
+            return LEAN_METRICS_AGGREGATOR_SKIPPED_SPAWN_FAILED;
+        case LANTERN_CLIENT_ERR_IGNORED:
+        case LANTERN_CLIENT_ERR_RUNTIME:
+            return missing_state
+                ? LEAN_METRICS_AGGREGATOR_SKIPPED_MISSING_STATE
+                : LEAN_METRICS_AGGREGATOR_SKIPPED_OTHER;
+        case LANTERN_CLIENT_ERR_INVALID_PARAM:
+        case LANTERN_CLIENT_ERR_CONFIG:
+        case LANTERN_CLIENT_ERR_STORAGE:
+        case LANTERN_CLIENT_ERR_GENESIS:
+        case LANTERN_CLIENT_ERR_VALIDATOR:
+        case LANTERN_CLIENT_ERR_NETWORK:
+        case LANTERN_CLIENT_OK:
+        default:
+            return LEAN_METRICS_AGGREGATOR_SKIPPED_OTHER;
+    }
+}
+
+static lantern_client_error validator_collect_and_aggregate_attestation_signatures(
+    struct lantern_client *client,
+    LanternAggregatedAttestations *out_attestations,
+    LanternAttestationSignatures *out_signatures,
+    bool *out_missing_state)
+{
+    if (!client || !out_attestations || !out_signatures)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    LanternAttestations attestations;
+    LanternSignatureList signatures;
+    lantern_attestations_init(&attestations);
+    lantern_signature_list_init(&signatures);
+
+    lantern_client_error rc = collect_aggregation_votes(
+        client,
+        &attestations,
+        &signatures,
+        out_missing_state);
+    if (rc == LANTERN_CLIENT_OK)
+    {
+        rc = aggregate_attestation_signatures(
+            client,
+            &attestations,
+            &signatures,
+            out_attestations,
+            out_signatures);
+    }
+
+    lantern_attestations_reset(&attestations);
+    lantern_signature_list_reset(&signatures);
+    return rc;
+}
+
 static int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot)
 {
     if (!client || !client->assigned_validators || !client->assigned_validators->enr.is_aggregator) {
+        if (client) {
+            (void)validator_record_aggregation_skipped_once(
+                client,
+                slot,
+                LEAN_METRICS_AGGREGATOR_SKIPPED_NOT_AGGREGATOR);
+        }
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
-    (void)slot;
 
     LanternAggregatedAttestations aggregated_attestations;
     LanternAttestationSignatures aggregated_signatures;
@@ -3024,10 +3195,13 @@ static int validator_publish_aggregated_attestations(struct lantern_client *clie
     lantern_attestation_signatures_init(&aggregated_signatures);
 
     uint64_t aggregation_started_ms = monotonic_millis();
-    lantern_client_error result = lantern_client_debug_aggregate_attestation_signatures(
+    bool missing_state = false;
+    lantern_client_error result = validator_collect_and_aggregate_attestation_signatures(
         client,
         &aggregated_attestations,
-        &aggregated_signatures);
+        &aggregated_signatures,
+        &missing_state);
+    size_t successful_aggregations = 0u;
     uint64_t aggregation_finished_ms = monotonic_millis();
     double aggregation_seconds = 0.0;
     if (aggregation_finished_ms >= aggregation_started_ms) {
@@ -3053,7 +3227,6 @@ static int validator_publish_aggregated_attestations(struct lantern_client *clie
     if (aggregated_signatures.length < count) {
         count = aggregated_signatures.length;
     }
-    size_t successful_aggregations = 0u;
     for (size_t i = 0; i < count; ++i) {
         LanternSignedAggregatedAttestation signed_attestation;
         lantern_signed_aggregated_attestation_init(&signed_attestation);
@@ -3079,6 +3252,12 @@ static int validator_publish_aggregated_attestations(struct lantern_client *clie
     }
 
 cleanup:
+    if (result != LANTERN_CLIENT_OK && successful_aggregations == 0u) {
+        (void)validator_record_aggregation_skipped_once(
+            client,
+            slot,
+            validator_aggregator_skipped_reason(result, missing_state));
+    }
     lantern_aggregated_attestations_reset(&aggregated_attestations);
     lantern_attestation_signatures_reset(&aggregated_signatures);
     return result;
@@ -3370,9 +3549,19 @@ void *validator_thread(void *arg)
 
     while (__atomic_load_n(&client->validator_stop_flag, __ATOMIC_RELAXED) == 0)
     {
+        uint64_t now = validator_wall_time_now_millis();
         const char *skip_reason = validator_service_skip_reason(client);
         if (skip_reason)
         {
+            struct lantern_slot_timepoint skipped_tp;
+            if (validator_skip_reason_is_not_synced(skip_reason)
+                && validator_aggregation_timepoint_at(client, now, &skipped_tp))
+            {
+                (void)validator_record_aggregation_skipped_once(
+                    client,
+                    skipped_tp.slot,
+                    LEAN_METRICS_AGGREGATOR_SKIPPED_NOT_SYNCED);
+            }
             uint64_t skip_slot =
                 client->validator_duty.have_timepoint ? client->validator_duty.last_slot : 0u;
             validator_log_duty_skipped(client, skip_slot, skip_reason);
@@ -3380,7 +3569,6 @@ void *validator_thread(void *arg)
             continue;
         }
 
-        uint64_t now = validator_wall_time_now_millis();
         if (client->has_runtime)
         {
             if (lantern_consensus_runtime_update_time(&client->runtime, now) != 0)
@@ -3406,6 +3594,7 @@ void *validator_thread(void *arg)
             duty->slot_proposed = false;
             duty->slot_attested = false;
             duty->slot_aggregated = false;
+            duty->have_aggregation_skip_slot = false;
             duty->pending_local_proposal = false;
             duty->pending_local_index = 0;
 
@@ -3455,10 +3644,8 @@ void *validator_thread(void *arg)
             case LANTERN_DUTY_PHASE_AGGREGATE:
                 if (!duty->slot_aggregated && duty->slot_attested)
                 {
-                    if (validator_publish_aggregated_attestations(client, tp->slot) == LANTERN_CLIENT_OK)
-                    {
-                        duty->slot_aggregated = true;
-                    }
+                    (void)validator_publish_aggregated_attestations(client, tp->slot);
+                    duty->slot_aggregated = true;
                 }
                 break;
 

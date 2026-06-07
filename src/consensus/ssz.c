@@ -61,6 +61,12 @@ static const size_t AGGREGATED_SIGNATURE_PROOF_FIELDS[] = {
 static const ssz_container_schema_t AGGREGATED_SIGNATURE_PROOF_SCHEMA =
     SSZ_CONTAINER_SCHEMA_FROM_ARRAY(AGGREGATED_SIGNATURE_PROOF_FIELDS);
 
+static const size_t MULTI_MESSAGE_AGGREGATE_FIELDS[] = {
+    0u,
+};
+static const ssz_container_schema_t MULTI_MESSAGE_AGGREGATE_SCHEMA =
+    SSZ_CONTAINER_SCHEMA_FROM_ARRAY(MULTI_MESSAGE_AGGREGATE_FIELDS);
+
 static const size_t SIGNED_AGGREGATED_ATTESTATION_FIELDS[] = {
     LANTERN_ATTESTATION_DATA_SSZ_SIZE,
     0u,
@@ -169,6 +175,13 @@ static ssz_error_t write_u64(uint64_t value, uint8_t *out, size_t out_len, size_
 
 static ssz_error_t read_u64(const uint8_t *data, size_t data_len, uint64_t *value) {
     return ssz_deserialize_uint64(data, data_len, value);
+}
+
+static uint32_t read_u32_le_local(const uint8_t data[4]) {
+    return (uint32_t)data[0]
+        | ((uint32_t)data[1] << 8u)
+        | ((uint32_t)data[2] << 16u)
+        | ((uint32_t)data[3] << 24u);
 }
 
 static ssz_error_t write_root(const LanternRoot *root, uint8_t *out, size_t out_len, size_t *written) {
@@ -293,6 +306,116 @@ static ssz_error_t decode_byte_list(LanternByteList *list, const uint8_t *data, 
         err = SSZ_ERR_ENCODING_INVALID;
     }
     return err;
+}
+
+static ssz_error_t multi_message_aggregate_raw_span(
+    const LanternByteList *aggregate,
+    const uint8_t **out_raw,
+    size_t *out_raw_len) {
+    if (!aggregate || !out_raw || !out_raw_len) {
+        return SSZ_ERR_INVALID_ARGUMENT;
+    }
+    if (aggregate->length == 0u) {
+        *out_raw = NULL;
+        *out_raw_len = 0u;
+        return SSZ_SUCCESS;
+    }
+    if (!aggregate->data || aggregate->length < SSZ_BYTES_PER_LENGTH_OFFSET) {
+        return SSZ_ERR_ENCODING_INVALID;
+    }
+    uint32_t offset = read_u32_le_local(aggregate->data);
+    if (offset != SSZ_BYTES_PER_LENGTH_OFFSET || (size_t)offset > aggregate->length) {
+        return SSZ_ERR_OFFSET_INVALID;
+    }
+    size_t raw_len = aggregate->length - (size_t)offset;
+    if (raw_len > LANTERN_AGG_PROOF_MAX_BYTES) {
+        return SSZ_ERR_LIMIT_EXCEEDED;
+    }
+    *out_raw = raw_len > 0u ? aggregate->data + offset : NULL;
+    *out_raw_len = raw_len;
+    return SSZ_SUCCESS;
+}
+
+struct multi_message_aggregate_codec_ctx {
+    const LanternByteList *write;
+    LanternByteList *read;
+};
+
+static ssz_error_t multi_message_aggregate_write(
+    const void *ctx,
+    uint64_t member_id,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written) {
+    const struct multi_message_aggregate_codec_ctx *aggregate_ctx = ctx;
+    if (!aggregate_ctx || !aggregate_ctx->write || member_id != 0u) {
+        return SSZ_ERR_INVALID_ARGUMENT;
+    }
+    const uint8_t *raw = NULL;
+    size_t raw_len = 0u;
+    ssz_error_t err = multi_message_aggregate_raw_span(aggregate_ctx->write, &raw, &raw_len);
+    if (err != SSZ_SUCCESS) {
+        return err;
+    }
+    return ssz_serialize_list_fixed(
+        raw,
+        raw_len,
+        LANTERN_AGG_PROOF_MAX_BYTES,
+        sizeof(uint8_t),
+        out,
+        out_len,
+        written);
+}
+
+static ssz_error_t multi_message_aggregate_read(
+    void *ctx,
+    uint64_t member_id,
+    const uint8_t *data,
+    size_t data_len) {
+    struct multi_message_aggregate_codec_ctx *aggregate_ctx = ctx;
+    if (!aggregate_ctx || !aggregate_ctx->read || member_id != 0u) {
+        return SSZ_ERR_INVALID_ARGUMENT;
+    }
+    if (data_len > LANTERN_AGG_PROOF_MAX_BYTES) {
+        return SSZ_ERR_LIMIT_EXCEEDED;
+    }
+    ssz_error_t err = lantern_rc_to_ssz(lantern_byte_list_resize(aggregate_ctx->read, data_len + SSZ_BYTES_PER_LENGTH_OFFSET));
+    if (err != SSZ_SUCCESS) {
+        return err;
+    }
+    aggregate_ctx->read->data[0] = SSZ_BYTES_PER_LENGTH_OFFSET;
+    aggregate_ctx->read->data[1] = 0u;
+    aggregate_ctx->read->data[2] = 0u;
+    aggregate_ctx->read->data[3] = 0u;
+    if (data_len > 0u) {
+        memcpy(aggregate_ctx->read->data + SSZ_BYTES_PER_LENGTH_OFFSET, data, data_len);
+    }
+    return SSZ_SUCCESS;
+}
+
+static ssz_error_t encode_multi_message_aggregate(
+    const LanternByteList *aggregate,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written) {
+    if (!aggregate) {
+        return SSZ_ERR_INVALID_ARGUMENT;
+    }
+    struct multi_message_aggregate_codec_ctx ctx = {.write = aggregate};
+    ssz_member_codec_t codec = {.ctx = &ctx, .write = multi_message_aggregate_write};
+    return ssz_serialize_container(&MULTI_MESSAGE_AGGREGATE_SCHEMA, &codec, out, out_len, written);
+}
+
+static ssz_error_t decode_multi_message_aggregate(
+    LanternByteList *aggregate,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!aggregate) {
+        return SSZ_ERR_INVALID_ARGUMENT;
+    }
+    struct multi_message_aggregate_codec_ctx ctx = {.read = aggregate};
+    ssz_member_codec_t codec = {.ctx = &ctx, .read = multi_message_aggregate_read};
+    return ssz_deserialize_container(data, data_len, &MULTI_MESSAGE_AGGREGATE_SCHEMA, &codec);
 }
 
 static ssz_error_t encode_root_list(
@@ -1134,6 +1257,21 @@ ssz_error_t lantern_ssz_decode_aggregated_signature_proof(
     return decode_aggregated_signature_proof(proof, data, data_len);
 }
 
+ssz_error_t lantern_ssz_encode_multi_message_aggregate(
+    const LanternByteList *aggregate,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written) {
+    return encode_multi_message_aggregate(aggregate, out, out_len, written);
+}
+
+ssz_error_t lantern_ssz_decode_multi_message_aggregate(
+    LanternByteList *aggregate,
+    const uint8_t *data,
+    size_t data_len) {
+    return decode_multi_message_aggregate(aggregate, data, data_len);
+}
+
 struct block_header_codec_ctx {
     const LanternBlockHeader *write;
     LanternBlockHeader *read;
@@ -1340,7 +1478,7 @@ static ssz_error_t signed_block_write(
     case 0:
         return lantern_ssz_encode_block(&block_ctx->write->block, out, out_len, written);
     case 1:
-        return encode_byte_list(&block_ctx->write->proof, out, out_len, written);
+        return encode_multi_message_aggregate(&block_ctx->write->proof, out, out_len, written);
     default:
         return SSZ_ERR_INVALID_ARGUMENT;
     }
@@ -1355,7 +1493,7 @@ static ssz_error_t signed_block_read(void *ctx, uint64_t member_id, const uint8_
     case 0:
         return lantern_ssz_decode_block(&block_ctx->read->block, data, data_len);
     case 1:
-        return decode_byte_list(&block_ctx->read->proof, data, data_len);
+        return decode_multi_message_aggregate(&block_ctx->read->proof, data, data_len);
     default:
         return SSZ_ERR_INVALID_ARGUMENT;
     }

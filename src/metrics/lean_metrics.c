@@ -47,6 +47,7 @@ static uint64_t g_block_building_failures_total = 0;
 static uint64_t g_gossip_validation_worker_count = 0;
 static uint64_t g_peer_connection_events_total[LEAN_METRICS_DIR_COUNT][LEAN_METRICS_CONN_RESULT_COUNT];
 static uint64_t g_peer_disconnection_events_total[LEAN_METRICS_DIR_COUNT][LEAN_METRICS_DISCONNECT_REASON_COUNT];
+static uint64_t g_aggregator_skipped_total[LEAN_METRICS_AGGREGATOR_SKIPPED_REASON_COUNT];
 static uint64_t g_state_slots_processed_total = 0;
 static uint64_t g_state_attestations_processed_total = 0;
 
@@ -214,6 +215,7 @@ void lean_metrics_reset(void) {
     g_gossip_validation_worker_count = 0;
     memset(g_peer_connection_events_total, 0, sizeof(g_peer_connection_events_total));
     memset(g_peer_disconnection_events_total, 0, sizeof(g_peer_disconnection_events_total));
+    memset(g_aggregator_skipped_total, 0, sizeof(g_aggregator_skipped_total));
     g_state_slots_processed_total = 0;
     g_state_attestations_processed_total = 0;
     histogram_reset(&g_hist_block_aggregated_payloads);
@@ -428,6 +430,16 @@ void lean_metrics_record_peer_disconnection(
     pthread_mutex_unlock(&g_metrics_lock);
 }
 
+void lean_metrics_record_aggregator_skipped(
+    lean_metrics_aggregator_skipped_reason_t reason) {
+    if (reason >= LEAN_METRICS_AGGREGATOR_SKIPPED_REASON_COUNT) {
+        return;
+    }
+    pthread_mutex_lock(&g_metrics_lock);
+    g_aggregator_skipped_total[reason] += 1;
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
 void lean_metrics_record_gossip_block_size(size_t bytes_len) {
     pthread_mutex_lock(&g_metrics_lock);
     histogram_observe(&g_hist_gossip_block_size, (double)bytes_len);
@@ -476,6 +488,9 @@ void lean_metrics_snapshot(struct lean_metrics_snapshot *out) {
         for (size_t reason = 0; reason < LEAN_METRICS_DISCONNECT_REASON_COUNT; ++reason) {
             out->peer_disconnection_events_total[dir][reason] = g_peer_disconnection_events_total[dir][reason];
         }
+    }
+    for (size_t reason = 0; reason < LEAN_METRICS_AGGREGATOR_SKIPPED_REASON_COUNT; ++reason) {
+        out->aggregator_skipped_total[reason] = g_aggregator_skipped_total[reason];
     }
     out->state_transition_slots_processed_total = g_state_slots_processed_total;
     out->state_transition_attestations_processed_total = g_state_attestations_processed_total;

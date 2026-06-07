@@ -6,6 +6,7 @@
 
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/hash.h"
+#include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/ssz.h"
 
@@ -377,8 +378,12 @@ static void populate_block(LanternBlock *block) {
 }
 
 static void populate_signed_block_proof(LanternSignedBlock *signed_block, uint8_t seed) {
-    assert(lantern_byte_list_resize(&signed_block->proof, 12u) == 0);
-    fill_bytes(signed_block->proof.data, signed_block->proof.length, seed);
+    LanternByteList raw_proof;
+    lantern_byte_list_init(&raw_proof);
+    assert(lantern_byte_list_resize(&raw_proof, 12u) == 0);
+    fill_bytes(raw_proof.data, raw_proof.length, seed);
+    assert(lantern_signature_wrap_type2_proof(&raw_proof, &signed_block->proof));
+    lantern_byte_list_reset(&raw_proof);
 }
 
 static void reset_block(LanternBlock *block) {
@@ -493,8 +498,7 @@ static void test_signed_block_decode_without_signature_section(void) {
 
     LanternSignedBlock decoded;
     lantern_signed_block_with_attestation_init(&decoded);
-    assert(lantern_ssz_decode_signed_block(&decoded, encoded, encoded_len) == SSZ_SUCCESS);
-    assert(decoded.proof.length == 0u);
+    assert(lantern_ssz_decode_signed_block(&decoded, encoded, encoded_len) != SSZ_SUCCESS);
 
     reset_signed_block(&signed_block);
     reset_signed_block(&decoded);

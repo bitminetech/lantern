@@ -680,7 +680,7 @@ static void maybe_log_sync_progress(
 
     bool has_orphans = orphan_count > 0;
     bool behind_finalized = has_network_finalized && network_finalized > local_head_slot;
-    bool synced = has_network_finalized && !behind_finalized;
+    bool synced = has_network_finalized && !behind_finalized && !has_orphans;
     bool syncing = !synced;
 
     struct lantern_log_metadata meta = {.validator = client->node_id};
@@ -1500,6 +1500,29 @@ static bool append_pending_block_for_root(
     return appended;
 }
 
+struct reqresp_range_root {
+    uint64_t slot;
+    LanternRoot root;
+};
+
+static size_t fork_choice_find_root_index(
+    const LanternForkChoice *fork_choice,
+    const LanternRoot *root)
+{
+    if (!fork_choice || !root || !fork_choice->blocks)
+    {
+        return SIZE_MAX;
+    }
+    for (size_t i = 0; i < fork_choice->block_len; ++i)
+    {
+        if (memcmp(fork_choice->blocks[i].root.bytes, root->bytes, LANTERN_ROOT_SIZE) == 0)
+        {
+            return i;
+        }
+    }
+    return SIZE_MAX;
+}
+
 static bool block_response_was_accepted(
     struct lantern_client *client,
     const LanternRoot *block_root,
@@ -1923,6 +1946,141 @@ int reqresp_collect_blocks(
         pending_hits);
 
     return LANTERN_CLIENT_OK;
+}
+
+/**
+ * Collect canonical blocks for a BlocksByRange request.
+ *
+ * @spec tools/leanSpec/src/lean_spec/node/networking/reqresp/handler.py
+ *       handle_blocks_by_range: stream canonical blocks by slot; empty slots
+ *       are skipped.
+ *
+ * Walks the current fork-choice head's parent chain, then loads the matching
+ * signed blocks in increasing slot order. This avoids returning side branches
+ * or same-slot roots that are not on the canonical chain.
+ */
+int reqresp_collect_blocks_by_range(
+    void *context,
+    uint64_t start_slot,
+    uint64_t count,
+    LanternSignedBlockList *out_blocks)
+{
+    if (!context || !out_blocks || count == 0u || count > LANTERN_MAX_REQUEST_BLOCKS)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    if (lantern_signed_block_list_resize(out_blocks, 0) != 0)
+    {
+        return LANTERN_CLIENT_ERR_ALLOC;
+    }
+
+    struct lantern_client *client = context;
+    struct reqresp_range_root descending[LANTERN_MAX_REQUEST_BLOCKS];
+    size_t descending_count = 0;
+
+    bool state_locked = lantern_client_lock_state(client);
+    if (state_locked && client->has_fork_choice)
+    {
+        LanternRoot head_root = {0};
+        if (lantern_fork_choice_current_head(&client->fork_choice, &head_root) == 0)
+        {
+            size_t index = fork_choice_find_root_index(&client->fork_choice, &head_root);
+            for (size_t depth = 0;
+                 index != SIZE_MAX
+                 && index < client->fork_choice.block_len
+                 && depth < client->fork_choice.block_len
+                 && descending_count < LANTERN_MAX_REQUEST_BLOCKS;
+                 ++depth)
+            {
+                const struct lantern_fork_choice_block_entry *entry = &client->fork_choice.blocks[index];
+                if (entry->slot < start_slot)
+                {
+                    break;
+                }
+                if ((entry->slot - start_slot) < count && !lantern_root_is_zero(&entry->root))
+                {
+                    descending[descending_count].slot = entry->slot;
+                    descending[descending_count].root = entry->root;
+                    descending_count += 1u;
+                }
+                index = entry->parent_index;
+            }
+        }
+    }
+    lantern_client_unlock_state(client, state_locked);
+
+    if (descending_count == 0u)
+    {
+        return LANTERN_CLIENT_OK;
+    }
+
+    struct reqresp_range_root ascending[LANTERN_MAX_REQUEST_BLOCKS];
+    size_t root_count = 0;
+    for (size_t i = descending_count; i > 0u; --i)
+    {
+        ascending[root_count++] = descending[i - 1u];
+    }
+
+    bool have_previous = false;
+    uint64_t previous_slot = 0;
+    LanternRoot previous_root = {0};
+    for (size_t i = 0; i < root_count; ++i)
+    {
+        LanternSignedBlockList one;
+        lantern_signed_block_list_init(&one);
+        int rc = reqresp_collect_blocks(context, &ascending[i].root, 1u, &one);
+        if (rc != LANTERN_CLIENT_OK)
+        {
+            lantern_signed_block_list_reset(&one);
+            return rc;
+        }
+        if (one.length == 0u)
+        {
+            lantern_signed_block_list_reset(&one);
+            break;
+        }
+
+        const LanternSignedBlock *block = &one.blocks[0];
+        if (block->block.slot < start_slot || (block->block.slot - start_slot) >= count)
+        {
+            lantern_signed_block_list_reset(&one);
+            break;
+        }
+        if (have_previous && block->block.slot <= previous_slot)
+        {
+            lantern_signed_block_list_reset(&one);
+            break;
+        }
+        if (have_previous
+            && memcmp(block->block.parent_root.bytes, previous_root.bytes, LANTERN_ROOT_SIZE) != 0)
+        {
+            lantern_signed_block_list_reset(&one);
+            break;
+        }
+        if (signed_block_list_append_copy(out_blocks, block) != 0)
+        {
+            lantern_signed_block_list_reset(&one);
+            return LANTERN_CLIENT_ERR_ALLOC;
+        }
+        previous_slot = block->block.slot;
+        previous_root = ascending[i].root;
+        have_previous = true;
+        lantern_signed_block_list_reset(&one);
+    }
+
+    return LANTERN_CLIENT_OK;
+}
+
+int reqresp_current_slot(void *context, uint64_t *out_slot)
+{
+    if (!context || !out_slot)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    return lantern_client_current_slot((const struct lantern_client *)context, out_slot)
+        ? LANTERN_CLIENT_OK
+        : LANTERN_CLIENT_ERR_RUNTIME;
 }
 
 int reqresp_handle_block_response(

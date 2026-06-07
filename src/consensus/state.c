@@ -2400,7 +2400,9 @@ static int lantern_state_process_attestations_internal(
             target_is_justified = true;
             target_was_justified = true;
 
-            latest_justified = vote->target;
+            if (vote->target.slot > latest_justified.slot) {
+                latest_justified = vote->target;
+            }
 
             if (trace_finalization) {
                 lantern_log_debug(

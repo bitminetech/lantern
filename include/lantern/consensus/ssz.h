@@ -66,6 +66,15 @@ ssz_error_t lantern_ssz_decode_aggregated_signature_proof(
     LanternAggregatedSignatureProof *proof,
     const uint8_t *data,
     size_t data_len);
+ssz_error_t lantern_ssz_encode_multi_message_aggregate(
+    const LanternByteList *aggregate,
+    uint8_t *out,
+    size_t remaining,
+    size_t *written);
+ssz_error_t lantern_ssz_decode_multi_message_aggregate(
+    LanternByteList *aggregate,
+    const uint8_t *data,
+    size_t data_len);
 ssz_error_t lantern_ssz_encode_validator(
     const LanternValidator *validator,
     uint8_t *out,

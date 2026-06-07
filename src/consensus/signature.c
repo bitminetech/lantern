@@ -10,7 +10,6 @@
 #include "lantern/metrics/lean_metrics.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/support/log.h"
-#include "lantern/support/strings.h"
 #include "pq-bindings-c-rust.h"
 
 static double get_time_seconds(void) {
@@ -168,30 +167,6 @@ static bool prepare_recursive_child(
     return false;
 }
 
-static void log_agg_proof_preview(const LanternByteList *proof) {
-    if (!proof || !proof->data) {
-        lantern_log_debug("signature", NULL, "aggregation proof is empty");
-        return;
-    }
-
-    const size_t preview_len = proof->length < 32u ? proof->length : 32u;
-    char hex[(32u * 2u) + 1u];
-    hex[0] = '\0';
-    if (preview_len > 0) {
-        if (lantern_bytes_to_hex(proof->data, preview_len, hex, sizeof(hex), 0) != 0) {
-            hex[0] = '\0';
-        }
-    }
-    const char *ellipsis = proof->length > preview_len ? "..." : "";
-    lantern_log_debug(
-        "signature",
-        NULL,
-        "aggregation proof preview len=%zu hex=%s%s",
-        proof->length,
-        hex[0] ? hex : "-",
-        ellipsis);
-}
-
 static const char *pq_error_detail_or_dash(const char *detail) {
     return detail && detail[0] ? detail : "-";
 }
@@ -209,10 +184,10 @@ static bool write_type2_container(const LanternByteList *raw_proof, LanternByteL
     if (!raw_proof || !out_encoded) {
         return false;
     }
-    if (raw_proof->length == 0u || !raw_proof->data) {
+    if (raw_proof->length > 0u && !raw_proof->data) {
         return false;
     }
-    if (raw_proof->length > LANTERN_AGG_PROOF_MAX_BYTES - 4u) {
+    if (raw_proof->length > LANTERN_AGG_PROOF_MAX_BYTES) {
         return false;
     }
     size_t encoded_len = raw_proof->length + 4u;
@@ -223,7 +198,9 @@ static bool write_type2_container(const LanternByteList *raw_proof, LanternByteL
     out_encoded->data[1] = 0u;
     out_encoded->data[2] = 0u;
     out_encoded->data[3] = 0u;
-    memcpy(out_encoded->data + 4u, raw_proof->data, raw_proof->length);
+    if (raw_proof->length > 0u) {
+        memcpy(out_encoded->data + 4u, raw_proof->data, raw_proof->length);
+    }
     return true;
 }
 
@@ -344,6 +321,52 @@ static bool singleton_participant_matches(
         return false;
     }
     return bitlist_count_set_bits(participants) == 1u;
+}
+
+static void sigdbg_print_hex_prefix(const char *label, const uint8_t *data, size_t len, size_t max_len) {
+    fprintf(stderr, "[lantern-sigdbg] %s len=%zu prefix=", label ? label : "bytes", len);
+    size_t limit = len < max_len ? len : max_len;
+    for (size_t i = 0; i < limit; ++i) {
+        fprintf(stderr, "%02x", data ? data[i] : 0u);
+    }
+    if (len > limit) {
+        fprintf(stderr, "...");
+    }
+    fprintf(stderr, "\n");
+}
+
+static void sigdbg_print_type2_bindings(
+    const char *phase,
+    const LanternBlock *block,
+    const struct PQTypeTwoComponent *components,
+    const struct PQTypeTwoMessageBinding *bindings,
+    size_t component_count) {
+    if (!phase || !block || !components || !bindings) {
+        return;
+    }
+    fprintf(
+        stderr,
+        "[lantern-sigdbg] type2_%s slot=%" PRIu64 " proposer=%" PRIu64 " attestations=%zu components=%zu\n",
+        phase,
+        block->slot,
+        block->proposer_index,
+        block->body.attestations.length,
+        component_count);
+    for (size_t i = 0; i < component_count; ++i) {
+        fprintf(
+            stderr,
+            "[lantern-sigdbg] type2_%s component=%zu pubkeys=%zu epoch=%" PRIu64 " message=",
+            phase,
+            i,
+            components[i].pubkey_count,
+            bindings[i].epoch);
+        size_t message_len = bindings[i].message_len;
+        for (size_t j = 0; j < message_len; ++j) {
+            fprintf(stderr, "%02x", bindings[i].message ? bindings[i].message[j] : 0u);
+        }
+        fprintf(stderr, "\n");
+    }
+    fflush(stderr);
 }
 
 static bool build_type2_attestation_component(
@@ -590,13 +613,6 @@ bool lantern_signature_aggregate(
     if (count == 0) {
         return false;
     }
-    lantern_log_info(
-        "signature",
-        NULL,
-        "aggregation start count=%zu epoch=%" PRIu64,
-        count,
-        epoch);
-
     if (lantern_byte_list_resize(out_proof, LANTERN_AGG_PROOF_MAX_BYTES) != 0) {
         lantern_log_error("signature", NULL, "aggregation resize failed max=%zu", (size_t)LANTERN_AGG_PROOF_MAX_BYTES);
         return false;
@@ -710,13 +726,6 @@ bool lantern_signature_aggregate(
             epoch);
     } else {
         lean_metrics_record_pq_aggregated_signature_build(count, elapsed);
-        lantern_log_debug(
-            "signature",
-            NULL,
-            "aggregation ok count=%zu proof_len=%zu elapsed=%.6f",
-            count,
-            out_proof->length,
-            elapsed);
     }
     return ok;
 }
@@ -978,15 +987,6 @@ bool lantern_signature_verify_aggregated(
     if (proof->length == 0 || !proof->data) {
         return false;
     }
-    lantern_log_info(
-        "signature",
-        NULL,
-        "aggregation verify start count=%zu epoch=%" PRIu64 " proof_len=%zu",
-        count,
-        epoch,
-        proof->length);
-    log_agg_proof_preview(proof);
-
     if (count == 1u && proof->length == LANTERN_SIGNATURE_SIZE) {
         double start = get_time_seconds();
         int verify_rc = pq_verify_ssz(
@@ -1128,6 +1128,7 @@ bool lantern_signature_merge_block_type2_proof(
             component_count)) {
         goto cleanup;
     }
+    sigdbg_print_type2_bindings("merge", block, components, bindings, component_count);
 
     for (size_t i = 0; i < attestation_count; ++i) {
         const LanternAggregatedAttestation *attestation = &block->body.attestations.data[i];
@@ -1187,6 +1188,15 @@ bool lantern_signature_merge_block_type2_proof(
         goto cleanup;
     }
     ok = lantern_signature_wrap_type2_proof(&raw_type2, out_encoded_proof);
+    fprintf(
+        stderr,
+        "[lantern-sigdbg] type2_merge_result slot=%" PRIu64 " raw_len=%zu encoded_len=%zu ok=%s\n",
+        block->slot,
+        raw_type2.length,
+        out_encoded_proof->length,
+        ok ? "true" : "false");
+    sigdbg_print_hex_prefix("type2_merge_raw", raw_type2.data, raw_type2.length, 24u);
+    sigdbg_print_hex_prefix("type2_merge_encoded", out_encoded_proof->data, out_encoded_proof->length, 24u);
 
 cleanup:
     if (!ok) {
@@ -1242,6 +1252,14 @@ bool lantern_signature_verify_block_type2_proof(
             component_count)) {
         goto cleanup;
     }
+    sigdbg_print_type2_bindings("verify", block, components, bindings, component_count);
+    fprintf(
+        stderr,
+        "[lantern-sigdbg] type2_verify_input slot=%" PRIu64 " raw_len=%zu encoded_len=%zu\n",
+        block->slot,
+        raw_type2.length,
+        encoded_proof->length);
+    sigdbg_print_hex_prefix("type2_verify_raw", raw_type2.data, raw_type2.length, 24u);
 
     ensure_xmss_verifier_setup();
     double start = get_time_seconds();
@@ -1255,6 +1273,13 @@ bool lantern_signature_verify_block_type2_proof(
     double elapsed = get_time_seconds() - start;
     lean_metrics_record_pq_block_aggregated_signatures_verification(elapsed);
     ok = (verify_rc == 1);
+    fprintf(
+        stderr,
+        "[lantern-sigdbg] type2_verify_result slot=%" PRIu64 " rc=%d ok=%s elapsed=%.6f\n",
+        block->slot,
+        verify_rc,
+        ok ? "true" : "false",
+        elapsed);
     if (!ok) {
         lantern_log_warn(
             "signature",

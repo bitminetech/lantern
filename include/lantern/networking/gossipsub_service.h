@@ -9,6 +9,7 @@
 
 typedef struct libp2p_gossipsub libp2p_gossipsub_t;
 struct lantern_gossipsub_validation_pool;
+struct lantern_gossipsub_service;
 
 #ifdef __cplusplus
 extern "C" {
@@ -64,12 +65,20 @@ struct lantern_gossipsub_peer_connection_state {
     uint8_t used;
 };
 
+struct lantern_gossipsub_protocol_adapter {
+    struct lantern_gossipsub_service *service;
+    libp2p_host_protocol_open_fn_t on_open;
+    libp2p_host_protocol_event_fn_t on_event;
+    void *user_data;
+};
+
 struct lantern_gossipsub_service {
     struct lantern_libp2p_host *network;
     libp2p_gossipsub_t *gossipsub;
     void *gossipsub_storage;
     size_t gossipsub_storage_len;
     libp2p_host_protocol_t gossipsub_protocols[LIBP2P_GOSSIPSUB_PROTOCOL_COUNT];
+    struct lantern_gossipsub_protocol_adapter gossipsub_protocol_adapters[LIBP2P_GOSSIPSUB_PROTOCOL_COUNT];
     size_t gossipsub_protocol_count;
     char block_topic[128];
     char vote_topic[128];

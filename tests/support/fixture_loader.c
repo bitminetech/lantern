@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "lantern/consensus/hash.h"
+#include "lantern/consensus/signature.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/support/strings.h"
 #include "pq-bindings-c-rust.h"
@@ -593,6 +594,9 @@ int lantern_fixture_parse_attestation_message(
 
     int validator_idx = lantern_fixture_object_get_field(doc, attestation_idx, "validatorId");
     if (validator_idx < 0) {
+        validator_idx = lantern_fixture_object_get_field(doc, attestation_idx, "validatorIndex");
+    }
+    if (validator_idx < 0) {
         /* Try snake_case fallback for legacy fixtures */
         validator_idx = lantern_fixture_object_get_field(doc, attestation_idx, "validator_id");
         if (validator_idx < 0) {
@@ -745,6 +749,39 @@ static int lantern_fixture_parse_byte_list_object(
         return -1;
     }
     return 0;
+}
+
+static int lantern_fixture_parse_signed_block_proof(
+    const struct lantern_fixture_document *doc,
+    int proof_idx,
+    LanternByteList *out_encoded) {
+    const jsmntok_t *proof_tok = lantern_fixture_token(doc, proof_idx);
+    if (!proof_tok) {
+        return -1;
+    }
+
+    int inner_idx = -1;
+    if (proof_tok->type == JSMN_OBJECT) {
+        inner_idx = lantern_fixture_object_get_field(doc, proof_idx, "proof");
+    }
+    if (inner_idx < 0) {
+        return lantern_fixture_parse_byte_list_object(doc, proof_idx, out_encoded);
+    }
+
+    LanternByteList raw_proof;
+    lantern_byte_list_init(&raw_proof);
+    int rc = -1;
+    if (lantern_fixture_parse_byte_list_object(doc, inner_idx, &raw_proof) != 0) {
+        goto cleanup;
+    }
+    if (!lantern_signature_wrap_type2_proof(&raw_proof, out_encoded)) {
+        goto cleanup;
+    }
+    rc = 0;
+
+cleanup:
+    lantern_byte_list_reset(&raw_proof);
+    return rc;
 }
 
 int lantern_fixture_parse_aggregated_attestation(
@@ -1222,7 +1259,7 @@ int lantern_fixture_parse_signed_block(
         goto error;
     }
     if (proof_idx >= 0
-        && lantern_fixture_parse_byte_list_object(doc, proof_idx, &signed_block->proof) != 0) {
+        && lantern_fixture_parse_signed_block_proof(doc, proof_idx, &signed_block->proof) != 0) {
         goto error;
     }
     return 0;
@@ -1290,9 +1327,15 @@ int lantern_fixture_parse_anchor_state(
             }
             int attestation_pubkey_idx = lantern_fixture_object_get_field(doc, entry_idx, "attestationPubkey");
             if (attestation_pubkey_idx < 0) {
+                attestation_pubkey_idx = lantern_fixture_object_get_field(doc, entry_idx, "attestationPublicKey");
+            }
+            if (attestation_pubkey_idx < 0) {
                 attestation_pubkey_idx = lantern_fixture_object_get_field(doc, entry_idx, "attestation_pubkey");
             }
             int proposal_pubkey_idx = lantern_fixture_object_get_field(doc, entry_idx, "proposalPubkey");
+            if (proposal_pubkey_idx < 0) {
+                proposal_pubkey_idx = lantern_fixture_object_get_field(doc, entry_idx, "proposalPublicKey");
+            }
             if (proposal_pubkey_idx < 0) {
                 proposal_pubkey_idx = lantern_fixture_object_get_field(doc, entry_idx, "proposal_pubkey");
             }

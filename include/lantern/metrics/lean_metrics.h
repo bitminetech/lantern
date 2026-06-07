@@ -32,6 +32,15 @@ typedef enum {
     LEAN_METRICS_DISCONNECT_REASON_COUNT = 4
 } lean_metrics_disconnection_reason_t;
 
+typedef enum {
+    LEAN_METRICS_AGGREGATOR_SKIPPED_NOT_AGGREGATOR = 0,
+    LEAN_METRICS_AGGREGATOR_SKIPPED_NOT_SYNCED = 1,
+    LEAN_METRICS_AGGREGATOR_SKIPPED_MISSING_STATE = 2,
+    LEAN_METRICS_AGGREGATOR_SKIPPED_SPAWN_FAILED = 3,
+    LEAN_METRICS_AGGREGATOR_SKIPPED_OTHER = 4,
+    LEAN_METRICS_AGGREGATOR_SKIPPED_REASON_COUNT = 5
+} lean_metrics_aggregator_skipped_reason_t;
+
 struct lean_metrics_histogram_snapshot {
     size_t bucket_count;
     double buckets[LEAN_METRICS_MAX_BUCKETS];
@@ -59,6 +68,7 @@ struct lean_metrics_snapshot {
     uint64_t gossip_validation_worker_count;
     uint64_t peer_connection_events_total[LEAN_METRICS_DIR_COUNT][LEAN_METRICS_CONN_RESULT_COUNT];
     uint64_t peer_disconnection_events_total[LEAN_METRICS_DIR_COUNT][LEAN_METRICS_DISCONNECT_REASON_COUNT];
+    uint64_t aggregator_skipped_total[LEAN_METRICS_AGGREGATOR_SKIPPED_REASON_COUNT];
     uint64_t state_transition_slots_processed_total;
     uint64_t state_transition_attestations_processed_total;
     struct lean_metrics_histogram_snapshot block_aggregated_payloads;
@@ -114,6 +124,8 @@ void lean_metrics_record_peer_connection(
 void lean_metrics_record_peer_disconnection(
     lean_metrics_direction_t direction,
     lean_metrics_disconnection_reason_t reason);
+void lean_metrics_record_aggregator_skipped(
+    lean_metrics_aggregator_skipped_reason_t reason);
 void lean_metrics_record_gossip_block_size(size_t bytes_len);
 void lean_metrics_record_gossip_attestation_size(size_t bytes_len);
 void lean_metrics_record_gossip_aggregation_size(size_t bytes_len);

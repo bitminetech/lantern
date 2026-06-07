@@ -42,6 +42,8 @@ static const char *const kLeanDirectionLabels[LEAN_METRICS_DIR_COUNT] = {"inboun
 static const char *const kLeanConnectionResultLabels[LEAN_METRICS_CONN_RESULT_COUNT] = {"success", "timeout", "error"};
 static const char *const kLeanDisconnectionReasonLabels[LEAN_METRICS_DISCONNECT_REASON_COUNT] =
     {"timeout", "remote_close", "local_close", "error"};
+static const char *const kLeanAggregatorSkippedReasonLabels[LEAN_METRICS_AGGREGATOR_SKIPPED_REASON_COUNT] =
+    {"not_aggregator", "not_synced", "missing_state", "spawn_failed", "other"};
 static const char *const kLeanSyncStatusLabels[] = {"idle", "syncing", "synced"};
 
 enum
@@ -755,6 +757,28 @@ static int append_lean_chain_metrics(
     if (rc != 0)
     {
         return rc;
+    }
+
+    rc = metrics_buffer_appendf(
+        buf,
+        "# HELP lean_aggregator_skipped_total Total number of aggregation cycles skipped before submission\n"
+        "# TYPE lean_aggregator_skipped_total counter\n");
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    for (size_t reason = 0; reason < LEAN_METRICS_AGGREGATOR_SKIPPED_REASON_COUNT; ++reason)
+    {
+        rc = metrics_buffer_appendf(
+            buf,
+            "lean_aggregator_skipped_total{reason=\"%s\"} %" PRIu64 "\n",
+            kLeanAggregatorSkippedReasonLabels[reason],
+            lean->aggregator_skipped_total[reason]);
+        if (rc != 0)
+        {
+            return rc;
+        }
     }
 
     rc = metrics_buffer_appendf(

@@ -8,6 +8,7 @@
 
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/hash.h"
+#include "lantern/consensus/signature.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/core/client.h"
 #include "lantern/networking/gossip.h"
@@ -229,6 +230,24 @@ static void rng_fill_bytes(uint8_t *dst, size_t len) {
     }
 }
 
+static void populate_signed_block_proof(LanternByteList *proof, size_t raw_len, uint8_t seed) {
+    LanternByteList raw_proof;
+    lantern_byte_list_init(&raw_proof);
+    check_zero(lantern_byte_list_resize(&raw_proof, raw_len), "raw signed block proof resize");
+    fill_bytes(raw_proof.data, raw_proof.length, seed);
+    CHECK(lantern_signature_wrap_type2_proof(&raw_proof, proof));
+    lantern_byte_list_reset(&raw_proof);
+}
+
+static void populate_random_signed_block_proof(LanternByteList *proof, size_t raw_len) {
+    LanternByteList raw_proof;
+    lantern_byte_list_init(&raw_proof);
+    CHECK(lantern_byte_list_resize(&raw_proof, raw_len) == 0);
+    rng_fill_bytes(raw_proof.data, raw_proof.length);
+    CHECK(lantern_signature_wrap_type2_proof(&raw_proof, proof));
+    lantern_byte_list_reset(&raw_proof);
+}
+
 static size_t signed_block_min_capacity_for_test(const LanternSignedBlock *block) {
     (void)block;
     return 1u << 20; /* generous upper bound for unit tests */
@@ -290,8 +309,7 @@ static void populate_block(LanternSignedBlock *signed_block, uint8_t seed) {
         lantern_aggregated_attestations_append(&signed_block->block.body.attestations, &agg),
         "attestation append");
     lantern_aggregated_attestation_reset(&agg);
-    check_zero(lantern_byte_list_resize(&signed_block->proof, 12u), "signed block proof resize");
-    fill_bytes(signed_block->proof.data, signed_block->proof.length, (uint8_t)(0xE0 + seed));
+    populate_signed_block_proof(&signed_block->proof, 12u, (uint8_t)(0xE0 + seed));
 }
 
 struct block_hook_ctx {
@@ -1252,8 +1270,7 @@ static void test_gossip_block_snappy_roundtrip_random(void) {
             lantern_aggregated_attestation_reset(&agg);
         }
 
-        CHECK(lantern_byte_list_resize(&original.proof, 8u + rng_uniform(32)) == 0);
-        rng_fill_bytes(original.proof.data, original.proof.length);
+        populate_random_signed_block_proof(&original.proof, 8u + rng_uniform(32));
 
         size_t raw_estimate = signed_block_min_capacity_for_test(&original);
         CHECK(raw_estimate > 0);

@@ -1668,6 +1668,78 @@ static int test_attestations_use_updated_finalized_slot_for_gap_check(void) {
     return 0;
 }
 
+static int test_attestations_do_not_regress_latest_justified(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    const uint64_t validator_count = 6;
+    expect_zero(
+        lantern_state_generate_genesis(&state, 750, validator_count),
+        "genesis for latest justified regression test");
+    populate_historical_hashes_for_tests(&state, 22);
+
+    state.latest_finalized.slot = 16;
+    state.latest_finalized.root = get_historical_root_for_tests(&state, 16);
+    state.latest_justified.slot = 22;
+    state.latest_justified.root = get_historical_root_for_tests(&state, 22);
+    expect_zero(
+        lantern_bitlist_resize(&state.justified_slots, 6),
+        "resize justified slots for latest justified regression test");
+    assert(state.justified_slots.bytes != NULL);
+    memset(state.justified_slots.bytes, 0, state.justified_slots.capacity);
+    mark_slot_justified_for_tests(&state, 19);
+    mark_slot_justified_for_tests(&state, state.latest_justified.slot);
+
+    LanternCheckpoint source = {
+        .slot = 19,
+        .root = get_historical_root_for_tests(&state, 19),
+    };
+    LanternCheckpoint stale_target = {
+        .slot = 20,
+        .root = get_historical_root_for_tests(&state, 20),
+    };
+    LanternCheckpoint original_latest = state.latest_justified;
+
+    LanternAttestations attestations;
+    lantern_attestations_init(&attestations);
+    LanternSignatureList signatures;
+    lantern_signature_list_init(&signatures);
+    size_t quorum = (size_t)lantern_consensus_quorum_threshold(validator_count);
+    expect_zero(
+        lantern_attestations_resize(&attestations, quorum),
+        "resize stale target attestations");
+    expect_zero(
+        lantern_signature_list_resize(&signatures, quorum),
+        "resize stale target signatures");
+    for (size_t i = 0; i < quorum; ++i) {
+        build_vote(
+            &attestations.data[i],
+            &signatures.data[i],
+            (uint64_t)i,
+            stale_target.slot,
+            &source,
+            &stale_target,
+            (uint8_t)(0xD0u + i));
+    }
+
+    expect_zero(
+        lantern_state_process_attestations(&state, &attestations, &signatures),
+        "process stale target quorum");
+
+    assert(checkpoints_equal(&state.latest_justified, &original_latest));
+    assert(state.latest_finalized.slot == source.slot);
+
+    bool stale_target_justified = false;
+    expect_zero(
+        lantern_state_get_justified_slot_bit(&state, stale_target.slot, &stale_target_justified),
+        "read stale target justified bit");
+    assert(stale_target_justified);
+
+    lantern_attestations_reset(&attestations);
+    lantern_signature_list_reset(&signatures);
+    lantern_state_reset(&state);
+    return 0;
+}
+
 static int test_pruning_keeps_pending_justifications(void) {
     LanternState state;
     lantern_state_init(&state);
@@ -4480,6 +4552,9 @@ int main(void) {
         return 1;
     }
     if (test_attestations_use_updated_finalized_slot_for_gap_check() != 0) {
+        return 1;
+    }
+    if (test_attestations_do_not_regress_latest_justified() != 0) {
         return 1;
     }
     if (test_pruning_keeps_pending_justifications() != 0) {

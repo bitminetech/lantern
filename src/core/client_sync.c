@@ -841,7 +841,7 @@ int gossip_block_handler(
         lean_metrics_record_gossip_block_size(raw_block_ssz_len);
     }
 
-    lantern_client_record_block(
+    return lantern_client_record_block(
         client,
         block,
         NULL,
@@ -851,7 +851,6 @@ int gossip_block_handler(
         false,
         raw_block_ssz,
         raw_block_ssz_len);
-    return LANTERN_CLIENT_OK;
 }
 
 

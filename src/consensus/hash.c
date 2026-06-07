@@ -68,6 +68,34 @@ static uint32_t read_u32_le(const uint8_t *data) {
         | ((uint32_t)data[3] << 24);
 }
 
+static ssz_error_t multi_message_aggregate_raw_span(
+    const LanternByteList *aggregate,
+    const uint8_t **out_raw,
+    size_t *out_raw_len) {
+    if (!aggregate || !out_raw || !out_raw_len) {
+        return SSZ_ERR_INVALID_ARGUMENT;
+    }
+    if (aggregate->length == 0u) {
+        *out_raw = NULL;
+        *out_raw_len = 0u;
+        return SSZ_SUCCESS;
+    }
+    if (!aggregate->data || aggregate->length < SSZ_BYTES_PER_LENGTH_OFFSET) {
+        return SSZ_ERR_ENCODING_INVALID;
+    }
+    uint32_t offset = read_u32_le(aggregate->data);
+    if (offset != SSZ_BYTES_PER_LENGTH_OFFSET || (size_t)offset > aggregate->length) {
+        return SSZ_ERR_OFFSET_INVALID;
+    }
+    size_t raw_len = aggregate->length - (size_t)offset;
+    if (raw_len > LANTERN_AGG_PROOF_MAX_BYTES) {
+        return SSZ_ERR_LIMIT_EXCEEDED;
+    }
+    *out_raw = raw_len > 0u ? aggregate->data + offset : NULL;
+    *out_raw_len = raw_len;
+    return SSZ_SUCCESS;
+}
+
 ssz_error_t lantern_hash_tree_root_validators_dual(
     const uint8_t *attestation_pubkeys,
     const uint8_t *proposal_pubkeys,
@@ -393,6 +421,26 @@ ssz_error_t lantern_hash_tree_root_aggregated_signature_proof(
     return merkleize_chunks(chunks, 2, 0, out_root);
 }
 
+ssz_error_t lantern_hash_tree_root_multi_message_aggregate(
+    const LanternByteList *aggregate,
+    LanternRoot *out_root) {
+    if (!aggregate || !out_root) {
+        return SSZ_ERR_INVALID_ARGUMENT;
+    }
+    const uint8_t *raw = NULL;
+    size_t raw_len = 0u;
+    LANTERN_RETURN_IF_SSZ_ERROR(multi_message_aggregate_raw_span(aggregate, &raw, &raw_len));
+    LanternRoot proof_root;
+    LANTERN_RETURN_IF_SSZ_ERROR(hash_byte_list(
+        raw,
+        raw_len,
+        LANTERN_AGG_PROOF_MAX_BYTES,
+        &proof_root));
+    ssz_chunk_t chunks[1];
+    chunk_from_root(&proof_root, &chunks[0]);
+    return merkleize_chunks(chunks, 1, 0, out_root);
+}
+
 ssz_error_t lantern_hash_tree_root_signed_aggregated_attestation(
     const LanternSignedAggregatedAttestation *attestation,
     LanternRoot *out_root) {
@@ -560,15 +608,8 @@ ssz_error_t lantern_hash_tree_root_signed_block(const LanternSignedBlock *block,
     }
     LanternRoot message_root;
     LANTERN_RETURN_IF_SSZ_ERROR(lantern_hash_tree_root_block(&block->block, &message_root));
-    if (block->proof.length > LANTERN_AGG_PROOF_MAX_BYTES) {
-        return SSZ_ERR_LIMIT_EXCEEDED;
-    }
     LanternRoot proof_root;
-    LANTERN_RETURN_IF_SSZ_ERROR(hash_byte_list(
-        block->proof.data,
-        block->proof.length,
-        LANTERN_AGG_PROOF_MAX_BYTES,
-        &proof_root));
+    LANTERN_RETURN_IF_SSZ_ERROR(lantern_hash_tree_root_multi_message_aggregate(&block->proof, &proof_root));
     ssz_chunk_t chunks[2];
     chunk_from_root(&message_root, &chunks[0]);
     chunk_from_root(&proof_root, &chunks[1]);
