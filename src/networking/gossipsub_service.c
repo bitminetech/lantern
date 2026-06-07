@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/types.h>
 
+#include "lantern/core/client.h"
 #include "lantern/encoding/snappy.h"
 #include "lantern/networking/gossip.h"
 #include "lantern/networking/gossip_payloads.h"
@@ -681,6 +682,28 @@ static int deliver_message(
     return -1;
 }
 
+static libp2p_gossipsub_validation_result_t validation_result_from_delivery_rc(int rc) {
+    if (rc == LANTERN_CLIENT_OK) {
+        return LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT;
+    }
+    if (rc == LANTERN_CLIENT_ERR_IGNORED) {
+        return LIBP2P_GOSSIPSUB_VALIDATION_IGNORE;
+    }
+    return LIBP2P_GOSSIPSUB_VALIDATION_REJECT;
+}
+
+static const char *validation_result_name(libp2p_gossipsub_validation_result_t result) {
+    switch (result) {
+        case LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT:
+            return "accept";
+        case LIBP2P_GOSSIPSUB_VALIDATION_REJECT:
+            return "reject";
+        case LIBP2P_GOSSIPSUB_VALIDATION_IGNORE:
+            return "ignore";
+    }
+    return "unknown";
+}
+
 static void handle_gossipsub_peer_opened(
     struct lantern_gossipsub_service *service,
     const libp2p_gossipsub_event_t *event,
@@ -776,20 +799,41 @@ static void drain_gossipsub_events(struct lantern_gossipsub_service *service, li
             }
             unlock_gossipsub();
 
-            int ok = deliver_message(service, &snapshot.event) == 0;
-            gossipsub_message_snapshot_reset(&snapshot);
+            int delivery_rc = deliver_message(service, &snapshot.event);
+            libp2p_gossipsub_validation_result_t validation_result =
+                validation_result_from_delivery_rc(delivery_rc);
+            if (event.validation && validation_result != LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT) {
+                void (*log_validation_result)(
+                    const char *,
+                    const struct lantern_log_metadata *,
+                    const char *,
+                    ...) =
+                    validation_result == LIBP2P_GOSSIPSUB_VALIDATION_REJECT
+                        ? lantern_log_warn
+                        : lantern_log_debug;
+                log_validation_result(
+                    "gossip",
+                    NULL,
+                    "gossipsub validation result=%s rc=%d topic=%.*s",
+                    validation_result_name(validation_result),
+                    delivery_rc,
+                    (int)snapshot.event.topic.len,
+                    snapshot.event.topic.data ? (const char *)snapshot.event.topic.data : "");
+            }
             if (event.validation) {
                 if (lock_gossipsub() != 0) {
+                    gossipsub_message_snapshot_reset(&snapshot);
                     return;
                 }
                 if (service->gossipsub) {
                     (void)libp2p_gossipsub_report_validation(
                         service->gossipsub,
                         event.validation,
-                        ok ? LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT : LIBP2P_GOSSIPSUB_VALIDATION_REJECT);
+                        validation_result);
                 }
                 unlock_gossipsub();
             }
+            gossipsub_message_snapshot_reset(&snapshot);
         } else if (event.type == LIBP2P_GOSSIPSUB_EVENT_PEER_OPENED) {
             handle_gossipsub_peer_opened(service, &event, now_us);
             unlock_gossipsub();

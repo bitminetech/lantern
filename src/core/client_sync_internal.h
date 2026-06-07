@@ -560,10 +560,13 @@ int lantern_client_commit_and_publish_current_local_block(
  * @param allow_historical True to allow importing blocks older than local slot
  * @param raw_block_ssz Optional raw SSZ bytes for the block
  * @param raw_block_ssz_len Length of `raw_block_ssz`
+ * @return LANTERN_CLIENT_OK if the block was validated/imported
+ * @return LANTERN_CLIENT_ERR_IGNORED if it was duplicate, stale, or deferred
+ * @return another LANTERN_CLIENT_ERR_* when validation/import failed
  *
  * @note Thread safety: Acquires state_lock via lantern_client_import_block
  */
-void lantern_client_record_block(
+lantern_client_error lantern_client_record_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,
     const LanternRoot *root,

@@ -3126,7 +3126,8 @@ static bool lantern_client_import_block_internal(
     const uint8_t *raw_block_ssz,
     size_t raw_block_ssz_len,
     bool drain_pending_children,
-    bool *out_children_ready)
+    bool *out_children_ready,
+    lantern_client_error *out_result)
 {
     if (out_children_ready)
     {
@@ -3134,11 +3135,16 @@ static bool lantern_client_import_block_internal(
     }
     if (!client || !block || !client->has_state)
     {
+        if (out_result)
+        {
+            *out_result = LANTERN_CLIENT_ERR_INVALID_PARAM;
+        }
         return false;
     }
 
     bool imported = false;
     bool children_ready = false;
+    lantern_client_error import_result = LANTERN_CLIENT_ERR_RUNTIME;
     uint64_t import_started_ms = monotonic_millis();
     const char *import_source =
         allow_historical ? "backfill" : ((meta && meta->peer) ? "gossip" : "local");
@@ -3150,6 +3156,10 @@ static bool lantern_client_import_block_internal(
             meta,
             "failed to acquire state lock for block import slot=%" PRIu64,
             block->block.slot);
+        if (out_result)
+        {
+            *out_result = LANTERN_CLIENT_ERR_RUNTIME;
+        }
         return false;
     }
 
@@ -3183,6 +3193,10 @@ static bool lantern_client_import_block_internal(
         log_import_rejected(block, &block_root_local, import_source, "pre_finalized", meta);
         lantern_client_unlock_state(client, state_locked);
         lantern_client_pending_remove_branch_by_root(client, &block_root_local);
+        if (out_result)
+        {
+            *out_result = LANTERN_CLIENT_ERR_IGNORED;
+        }
         return false;
     }
     if (root_known && allow_historical && block->block.slot <= known_slot)
@@ -3203,6 +3217,10 @@ static bool lantern_client_import_block_internal(
         {
             *out_children_ready = children_ready;
         }
+        if (out_result)
+        {
+            *out_result = LANTERN_CLIENT_ERR_IGNORED;
+        }
         return false;
     }
 
@@ -3213,6 +3231,7 @@ static bool lantern_client_import_block_internal(
             meta))
     {
         log_import_rejected(block, &block_root_local, import_source, "duplicate", meta);
+        import_result = LANTERN_CLIENT_ERR_IGNORED;
         goto cleanup;
     }
 
@@ -3226,6 +3245,7 @@ static bool lantern_client_import_block_internal(
         allow_historical);
     if (parent_action == BLOCK_PARENT_ACTION_UNKNOWN)
     {
+        import_result = LANTERN_CLIENT_ERR_IGNORED;
         goto cleanup;
     }
     bool parent_off_head = parent_action == BLOCK_PARENT_ACTION_KNOWN_OFF_HEAD;
@@ -3448,6 +3468,18 @@ static bool lantern_client_import_block_internal(
         {
             *out_children_ready = children_ready;
         }
+        if (processed)
+        {
+            import_result = LANTERN_CLIENT_OK;
+        }
+        else if (deferred)
+        {
+            import_result = LANTERN_CLIENT_ERR_IGNORED;
+        }
+        if (out_result)
+        {
+            *out_result = import_result;
+        }
         return false;
     }
 
@@ -3498,6 +3530,7 @@ cleanup:
 
     if (imported)
     {
+        import_result = LANTERN_CLIENT_OK;
         persist_block_after_import(client, block, meta);
         update_network_view_after_import(client, block->block.slot, imported_finalized_slot);
         bool quiet_log = false;
@@ -3537,6 +3570,10 @@ cleanup:
     {
         *out_children_ready = children_ready;
     }
+    if (out_result)
+    {
+        *out_result = import_result;
+    }
     return imported;
 }
 
@@ -3560,6 +3597,7 @@ bool lantern_client_import_block(
         raw_block_ssz,
         raw_block_ssz_len,
         true,
+        NULL,
         NULL);
 }
 
@@ -3584,7 +3622,8 @@ bool lantern_client_import_block_without_pending_children(
         raw_block_ssz,
         raw_block_ssz_len,
         false,
-        out_children_ready);
+        out_children_ready,
+        NULL);
 }
 
 
@@ -3609,10 +3648,13 @@ bool lantern_client_import_block_without_pending_children(
  * @param backfill_depth Backfill depth of the block
  * @param raw_block_ssz Optional raw SSZ bytes for the block
  * @param raw_block_ssz_len Length of `raw_block_ssz`
+ * @return LANTERN_CLIENT_OK if the block was validated/imported
+ * @return LANTERN_CLIENT_ERR_IGNORED if it was duplicate, stale, or deferred
+ * @return another LANTERN_CLIENT_ERR_* when validation/import failed
  *
  * @note Thread safety: Acquires state_lock via lantern_client_import_block
  */
-void lantern_client_record_block(
+lantern_client_error lantern_client_record_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,
     const LanternRoot *root,
@@ -3625,7 +3667,7 @@ void lantern_client_record_block(
 {
     if (!client || !block)
     {
-        return;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
 
     LanternRoot computed_root;
@@ -3634,7 +3676,7 @@ void lantern_client_record_block(
     {
         if (lantern_hash_tree_root_block(&block->block, &computed_root) != SSZ_SUCCESS)
         {
-            return;
+            return LANTERN_CLIENT_ERR_RUNTIME;
         }
         selected_root = &computed_root;
     }
@@ -3690,10 +3732,11 @@ void lantern_client_record_block(
             peer_text,
             source))
     {
-        return;
+        return LANTERN_CLIENT_ERR_IGNORED;
     }
 
-    lantern_client_import_block(
+    lantern_client_error import_result = LANTERN_CLIENT_ERR_RUNTIME;
+    (void)lantern_client_import_block_internal(
         client,
         block,
         selected_root,
@@ -3701,5 +3744,9 @@ void lantern_client_record_block(
         backfill_depth,
         allow_historical,
         raw_block_ssz,
-        raw_block_ssz_len);
+        raw_block_ssz_len,
+        true,
+        NULL,
+        &import_result);
+    return import_result;
 }
