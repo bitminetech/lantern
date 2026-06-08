@@ -783,6 +783,7 @@ static bool should_process_block(
 enum block_parent_action
 {
     BLOCK_PARENT_ACTION_UNKNOWN = 0,
+    BLOCK_PARENT_ACTION_DEFERRED,
     BLOCK_PARENT_ACTION_MATCHES_HEAD,
     BLOCK_PARENT_ACTION_KNOWN_OFF_HEAD,
 };
@@ -2308,7 +2309,7 @@ static enum block_parent_action handle_block_parent_locked(
         const char *peer_text = meta && meta->peer ? meta->peer : NULL;
         lantern_client_unlock_state(client, *state_locked);
         *state_locked = false;
-        lantern_client_enqueue_pending_block(
+        bool queued = lantern_client_enqueue_pending_block(
             client,
             block,
             block_root,
@@ -2316,7 +2317,7 @@ static enum block_parent_action handle_block_parent_locked(
             peer_text,
             backfill_depth,
             allow_historical);
-        return BLOCK_PARENT_ACTION_UNKNOWN;
+        return queued ? BLOCK_PARENT_ACTION_DEFERRED : BLOCK_PARENT_ACTION_UNKNOWN;
     }
 
     /*
@@ -3248,6 +3249,11 @@ static bool lantern_client_import_block_internal(
         import_result = LANTERN_CLIENT_ERR_IGNORED;
         goto cleanup;
     }
+    if (parent_action == BLOCK_PARENT_ACTION_DEFERRED)
+    {
+        import_result = LANTERN_CLIENT_OK;
+        goto cleanup;
+    }
     bool parent_off_head = parent_action == BLOCK_PARENT_ACTION_KNOWN_OFF_HEAD;
 
     if (!validate_block_vote_constraints_locked(client, block, meta))
@@ -3331,9 +3337,8 @@ static bool lantern_client_import_block_internal(
                 meta,
                 "failed to rebuild parent state for off-head slot=%" PRIu64,
                 block->block.slot);
-            deferred = true;
             const char *peer_text = meta && meta->peer ? meta->peer : NULL;
-            lantern_client_enqueue_pending_block(
+            deferred = lantern_client_enqueue_pending_block(
                 client,
                 block,
                 &block_root_local,
@@ -3473,6 +3478,10 @@ static bool lantern_client_import_block_internal(
             import_result = LANTERN_CLIENT_OK;
         }
         else if (deferred)
+        {
+            import_result = LANTERN_CLIENT_OK;
+        }
+        else
         {
             import_result = LANTERN_CLIENT_ERR_IGNORED;
         }
@@ -3648,8 +3657,8 @@ bool lantern_client_import_block_without_pending_children(
  * @param backfill_depth Backfill depth of the block
  * @param raw_block_ssz Optional raw SSZ bytes for the block
  * @param raw_block_ssz_len Length of `raw_block_ssz`
- * @return LANTERN_CLIENT_OK if the block was validated/imported
- * @return LANTERN_CLIENT_ERR_IGNORED if it was duplicate, stale, or deferred
+ * @return LANTERN_CLIENT_OK if the block was validated/imported or accepted into pending
+ * @return LANTERN_CLIENT_ERR_IGNORED if it was duplicate, stale, or not retained
  * @return another LANTERN_CLIENT_ERR_* when validation/import failed
  *
  * @note Thread safety: Acquires state_lock via lantern_client_import_block
