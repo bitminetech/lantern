@@ -230,13 +230,6 @@ int lantern_gossip_encode_signed_block_snappy(
         free(raw);
         return -1;
     }
-    fprintf(
-        stderr,
-        "[lantern-sigdbg] gossip_encode_signed_block slot=%" PRIu64 " attestations=%zu proof_len=%zu raw_ssz_len=%zu\n",
-        block->block.slot,
-        block->block.body.attestations.length,
-        block->proof.length,
-        raw_written);
     /* Use raw snappy (no framing) for gossip messages per Eth2 networking spec */
     int snappy_rc = lantern_snappy_compress_raw(raw, raw_written, out, out_len, written);
     free(raw);

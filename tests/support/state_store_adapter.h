@@ -11,7 +11,6 @@
 
 #define lantern_state_init_explicit lantern_state_init
 #define lantern_state_reset_explicit lantern_state_reset
-#define lantern_state_clone_explicit lantern_state_clone
 #define lantern_state_generate_genesis_explicit lantern_state_generate_genesis
 #define lantern_state_process_attestations_explicit lantern_state_process_attestations
 #define lantern_state_process_block_explicit lantern_state_process_block
@@ -35,6 +34,10 @@ struct lantern_test_state_store_slot *lantern_test_state_store_find_slot(const L
 LanternStore *lantern_test_state_store_ensure(LanternState *state);
 const LanternStore *lantern_test_state_store_find(const LanternState *state);
 void lantern_test_state_store_release(LanternState *state);
+
+static inline int lantern_state_clone_explicit(const LanternState *source, LanternState *dest) {
+    return lantern_state_clone(source, dest);
+}
 
 static inline void lantern_test_state_init(LanternState *state) {
     lantern_test_state_store_release(state);

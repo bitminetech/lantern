@@ -708,10 +708,11 @@ int lantern_client_refresh_state_validators(struct lantern_client *client);
  * @param parent_root  Parent block root
  * @param peer_text    Peer ID string (may be NULL)
  * @param backfill_depth Backfill depth of the block
+ * @return true if the block was queued or an existing pending entry was updated
  *
  * @note Thread safety: Acquires pending_lock
  */
-void lantern_client_enqueue_pending_block(
+bool lantern_client_enqueue_pending_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,
     const LanternRoot *block_root,

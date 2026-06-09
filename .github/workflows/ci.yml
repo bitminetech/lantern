@@ -32,18 +32,62 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Compute consensus fixtures cache key
+        id: consensus-fixtures-cache-key
+        shell: bash
+        run: |
+          manifest="${RUNNER_TEMP}/consensus-fixtures-cache-key.txt"
+          {
+            echo "cache-version=v1"
+            echo "runner-os=${RUNNER_OS}"
+            echo "runner-arch=${RUNNER_ARCH}"
+            echo "python=3.12"
+            echo "layer=consensus"
+            echo "fork=Lstar"
+            echo "scheme=test"
+            echo "output=tools/leanSpec/fixtures/consensus"
+            echo "fill-command=uv run fill --fork=Lstar --clean -n auto"
+            echo "leanspec-commit=$(git -C tools/leanSpec rev-parse HEAD)"
+            git -C tools/leanSpec ls-files -z \
+              pyproject.toml \
+              uv.lock \
+              src \
+              tests \
+              packages/testing/pyproject.toml \
+              packages/testing/src \
+              | while IFS= read -r -d '' path; do
+                  echo "leanspec-file $(git -C tools/leanSpec hash-object "$path") $path"
+                done
+            for path in CMakeLists.txt scripts/bootstrap.sh .github/workflows/ci.yml; do
+              echo "lantern-file $(git hash-object "$path") $path"
+            done
+          } > "$manifest"
+          key_hash="$(sha256sum "$manifest" | awk '{print $1}')"
+          echo "key=lantern-consensus-fixtures-v1-${key_hash}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore consensus fixtures cache
+        id: consensus-fixtures-cache
+        uses: actions/cache@v4
+        with:
+          path: tools/leanSpec/fixtures/consensus
+          key: ${{ steps.consensus-fixtures-cache-key.outputs.key }}
+
       - name: Install uv
+        if: steps.consensus-fixtures-cache.outputs.cache-hit != 'true'
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Install Rust toolchain
+        if: steps.consensus-fixtures-cache.outputs.cache-hit != 'true'
         uses: dtolnay/rust-toolchain@stable
 
       - name: Bootstrap submodules
+        if: steps.consensus-fixtures-cache.outputs.cache-hit != 'true'
         run: ./scripts/bootstrap.sh
 
       - name: Generate consensus fixtures
+        if: steps.consensus-fixtures-cache.outputs.cache-hit != 'true'
         run: ./scripts/bootstrap.sh --fixtures
 
       - name: Upload consensus fixtures artifact

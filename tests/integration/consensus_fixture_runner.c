@@ -64,7 +64,7 @@ static int preview_post_state_root_without_signatures(
     LanternStore scratch_store;
     lantern_state_init(&scratch);
     lantern_store_init(&scratch_store);
-    if (lantern_state_clone(state, &scratch) != 0) {
+    if (lantern_state_clone_explicit(state, &scratch) != 0) {
         lantern_store_reset(&scratch_store);
         return -1;
     }
@@ -589,7 +589,7 @@ static int stored_state_add(
         if (existing->has_state) {
             lantern_state_reset(&existing->state);
         }
-        if (lantern_state_clone(state, &existing->state) != 0) {
+        if (lantern_state_clone_explicit(state, &existing->state) != 0) {
             free(votes);
             existing->has_state = false;
             return -1;
@@ -619,7 +619,7 @@ static int stored_state_add(
 
     memset(&entries[count], 0, sizeof(entries[count]));
     entries[count].root = *root;
-    if (lantern_state_clone(state, &entries[count].state) != 0) {
+    if (lantern_state_clone_explicit(state, &entries[count].state) != 0) {
         free(votes);
         return -1;
     }
@@ -686,7 +686,7 @@ static int stored_state_restore(
     }
     int rc = -1;
     lantern_state_reset(state);
-    if (lantern_state_clone(&entry->state, state) != 0) {
+    if (lantern_state_clone_explicit(&entry->state, state) != 0) {
         goto done;
     }
     uint64_t validator_count = state->config.num_validators;

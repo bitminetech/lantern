@@ -3359,7 +3359,7 @@ void lantern_client_request_pending_parent_after_blocks(
     }
 }
 
-void lantern_client_enqueue_pending_block(
+bool lantern_client_enqueue_pending_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,
     const LanternRoot *block_root,
@@ -3370,7 +3370,7 @@ void lantern_client_enqueue_pending_block(
 {
     if (!client || !block || !block_root || !parent_root)
     {
-        return;
+        return false;
     }
 
     LanternRoot block_root_local = *block_root;
@@ -3379,7 +3379,7 @@ void lantern_client_enqueue_pending_block(
     bool locked = lantern_client_lock_pending(client);
     if (!locked)
     {
-        return;
+        return false;
     }
 
     struct lantern_pending_block_list *list = &client->pending_blocks;
@@ -3462,7 +3462,7 @@ void lantern_client_enqueue_pending_block(
                     peer_copy[0] ? peer_copy : "-");
             }
         }
-        return;
+        return true;
     }
 
     if (list->length >= LANTERN_PENDING_BLOCK_LIMIT && list->length > 0)
@@ -3493,7 +3493,7 @@ void lantern_client_enqueue_pending_block(
                     backfill_depth,
                     shallowest_depth);
                 lantern_client_unlock_pending(client, locked);
-                return;
+                return false;
             }
 
             char evicted_hex[ROOT_HEX_BUFFER_LEN];
@@ -3536,7 +3536,7 @@ void lantern_client_enqueue_pending_block(
             &(const struct lantern_log_metadata){.validator = client->node_id},
             "failed to queue pending block slot=%" PRIu64,
             block->block.slot);
-        return;
+        return false;
     }
 
     char block_hex[ROOT_HEX_BUFFER_LEN];
@@ -3608,6 +3608,7 @@ void lantern_client_enqueue_pending_block(
         pending_len,
         parent_cached ? "true" : "false",
         request_parent_now ? "true" : "false");
+    return true;
 }
 
 

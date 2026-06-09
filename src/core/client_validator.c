@@ -2272,17 +2272,6 @@ static void process_block_proposal_job(struct lantern_async_block_proposal_job *
             proof_seconds);
         return;
     }
-    bool sigdbg_self_ok = lantern_signature_verify_block_type2_proof(
-        &job->proof_state,
-        &job->block.block,
-        &job->block.proof);
-    fprintf(
-        stderr,
-        "[lantern-sigdbg] proposer_self_verify slot=%" PRIu64 " root=%s proof_len=%zu ok=%s\n",
-        job->slot,
-        root_hex[0] ? root_hex : "0x0",
-        job->block.proof.length,
-        sigdbg_self_ok ? "true" : "false");
 
     lean_metrics_record_block_building_time(total_seconds);
     lean_metrics_record_block_building_success();
