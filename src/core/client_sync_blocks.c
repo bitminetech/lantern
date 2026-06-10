@@ -421,10 +421,20 @@ static int commit_and_publish_local_block(
     }
 
     pre_transition_finalized = client->state.latest_finalized;
-    LanternRoot state_head_root = {0};
-    if (!compute_state_head_root_locked(client, &state_head_root)
+    LanternRoot current_head_root = {0};
+    bool have_current_head = false;
+    if (client->has_fork_choice)
+    {
+        have_current_head =
+            lantern_fork_choice_current_head(&client->fork_choice, &current_head_root) == 0;
+    }
+    if (!have_current_head)
+    {
+        have_current_head = compute_state_head_root_locked(client, &current_head_root);
+    }
+    if (!have_current_head
         || memcmp(
-               state_head_root.bytes,
+               current_head_root.bytes,
                block->block.parent_root.bytes,
                LANTERN_ROOT_SIZE)
             != 0)
@@ -434,7 +444,7 @@ static int commit_and_publish_local_block(
             char parent_hex[ROOT_HEX_BUFFER_LEN];
             char head_hex[ROOT_HEX_BUFFER_LEN];
             format_root_hex(&block->block.parent_root, parent_hex, sizeof(parent_hex));
-            format_root_hex(&state_head_root, head_hex, sizeof(head_hex));
+            format_root_hex(&current_head_root, head_hex, sizeof(head_hex));
             lantern_log_warn(
                 "propose",
                 &meta,

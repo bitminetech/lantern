@@ -156,6 +156,11 @@ static bool validator_skip_reason_is_not_synced(const char *reason)
     return reason && strncmp(reason, "sync_state=", strlen("sync_state=")) == 0;
 }
 
+static double validator_elapsed_seconds(double started_seconds, double finished_seconds)
+{
+    return finished_seconds >= started_seconds ? finished_seconds - started_seconds : 0.0;
+}
+
 static bool validator_aggregation_timepoint_at(
     const struct lantern_client *client,
     uint64_t now_milliseconds,
@@ -177,7 +182,7 @@ struct lantern_async_block_proposal_job {
     uint64_t slot;
     size_t local_index;
     uint64_t proposer_index;
-    uint64_t build_started_ms;
+    double build_started_seconds;
     uint64_t snapshot_finished_ms;
     LanternRoot parent_root;
     LanternRoot block_root;
@@ -1983,7 +1988,7 @@ static void block_proposal_job_init(
     job->client = client;
     job->slot = slot;
     job->local_index = local_index;
-    job->build_started_ms = monotonic_millis();
+    job->build_started_seconds = lantern_time_now_seconds();
     lantern_signed_block_init(&job->block);
     lantern_state_init(&job->proof_state);
     lantern_state_init(&job->post_state);
@@ -2043,8 +2048,8 @@ static lantern_client_error validator_prepare_block_proposal_job(
 
     LanternAggregatedAttestations attestations;
     lantern_aggregated_attestations_init(&attestations);
-    uint64_t collect_started_ms = monotonic_millis();
-    uint64_t collect_finished_ms = collect_started_ms;
+    double collect_started_seconds = lantern_time_now_seconds();
+    double collect_finished_seconds = collect_started_seconds;
     lantern_client_error result = LANTERN_CLIENT_OK;
     struct lantern_local_validator *local = &client->local_validators[local_index];
     job->proposer_index = local->global_index;
@@ -2083,7 +2088,7 @@ static lantern_client_error validator_prepare_block_proposal_job(
         lantern_client_unlock_state(client, state_locked);
         goto cleanup;
     }
-    collect_finished_ms = monotonic_millis();
+    collect_finished_seconds = lantern_time_now_seconds();
 
     result = validator_build_block_populate_message(
         slot,
@@ -2141,11 +2146,8 @@ static lantern_client_error validator_prepare_block_proposal_job(
     job->snapshot_finished_ms = monotonic_millis();
 
     lean_metrics_record_block_aggregated_payloads(attestations.length);
-    if (collect_finished_ms >= collect_started_ms)
-    {
-        lean_metrics_record_block_building_payload_aggregation_time(
-            (double)(collect_finished_ms - collect_started_ms) / 1000.0);
-    }
+    lean_metrics_record_block_building_payload_aggregation_time(
+        validator_elapsed_seconds(collect_started_seconds, collect_finished_seconds));
 
     *out_job = job;
     job = NULL;
@@ -2244,7 +2246,7 @@ static void process_block_proposal_job(struct lantern_async_block_proposal_job *
     char root_hex[2 * LANTERN_ROOT_SIZE + 3];
     format_root_hex(&job->block_root, root_hex, sizeof(root_hex));
 
-    uint64_t proof_started_ms = monotonic_millis();
+    double proof_started_seconds = lantern_time_now_seconds();
     lantern_client_error proof_rc = validator_build_block_merge_proof_with_state(
         &job->proof_state,
         job->proposer_index,
@@ -2252,13 +2254,10 @@ static void process_block_proposal_job(struct lantern_async_block_proposal_job *
         &job->attestation_signatures,
         &job->proposer_signature,
         &job->block);
-    uint64_t proof_finished_ms = monotonic_millis();
-    double proof_seconds = proof_finished_ms >= proof_started_ms
-        ? (double)(proof_finished_ms - proof_started_ms) / 1000.0
-        : 0.0;
-    double total_seconds = proof_finished_ms >= job->build_started_ms
-        ? (double)(proof_finished_ms - job->build_started_ms) / 1000.0
-        : 0.0;
+    double proof_finished_seconds = lantern_time_now_seconds();
+    double proof_seconds = validator_elapsed_seconds(proof_started_seconds, proof_finished_seconds);
+    double total_seconds =
+        validator_elapsed_seconds(job->build_started_seconds, proof_finished_seconds);
 
     if (proof_rc != LANTERN_CLIENT_OK)
     {
@@ -2368,9 +2367,9 @@ static int validator_build_block_internal(
     LanternRoot *out_block_root)
 {
     lantern_client_error result = LANTERN_CLIENT_OK;
-    uint64_t build_started_ms = 0;
-    uint64_t collect_started_ms = 0;
-    uint64_t collect_finished_ms = 0;
+    double build_started_seconds = 0.0;
+    double collect_started_seconds = 0.0;
+    double collect_finished_seconds = 0.0;
     LanternRoot parent_root = {0};
     LanternAggregatedAttestations attestations;
     LanternAttestationSignatures signatures;
@@ -2387,14 +2386,14 @@ static int validator_build_block_internal(
     }
     struct lantern_local_validator *local = &client->local_validators[local_index];
     lantern_signed_block_init(out_block);
-    build_started_ms = monotonic_millis();
+    build_started_seconds = lantern_time_now_seconds();
 
     lantern_aggregated_attestations_init(&attestations);
     attestations_initialized = true;
     lantern_attestation_signatures_init(&signatures);
     signatures_initialized = true;
 
-    collect_started_ms = monotonic_millis();
+    collect_started_seconds = lantern_time_now_seconds();
     result = validator_build_block_collect_attestations(
         client,
         slot,
@@ -2402,7 +2401,7 @@ static int validator_build_block_internal(
         &parent_root,
         &attestations,
         &signatures);
-    collect_finished_ms = monotonic_millis();
+    collect_finished_seconds = lantern_time_now_seconds();
     if (result != LANTERN_CLIENT_OK)
     {
         goto cleanup;
@@ -2411,11 +2410,8 @@ static int validator_build_block_internal(
     /* TODO: verify that block attestations remain the correct proxy for
      * "aggregated_payloads" in the leanMetrics spec. */
     lean_metrics_record_block_aggregated_payloads(attestations.length);
-    if (collect_finished_ms >= collect_started_ms)
-    {
-        lean_metrics_record_block_building_payload_aggregation_time(
-            (double)(collect_finished_ms - collect_started_ms) / 1000.0);
-    }
+    lean_metrics_record_block_building_payload_aggregation_time(
+        validator_elapsed_seconds(collect_started_seconds, collect_finished_seconds));
 
     result = validator_build_block_populate_message(
         slot,
@@ -2476,12 +2472,9 @@ static int validator_build_block_internal(
 
 cleanup:
     {
-        uint64_t build_finished_ms = monotonic_millis();
-        if (build_finished_ms >= build_started_ms)
-        {
-            lean_metrics_record_block_building_time(
-                (double)(build_finished_ms - build_started_ms) / 1000.0);
-        }
+        double build_finished_seconds = lantern_time_now_seconds();
+        lean_metrics_record_block_building_time(
+            validator_elapsed_seconds(build_started_seconds, build_finished_seconds));
     }
     if (result == LANTERN_CLIENT_OK)
     {
@@ -3183,7 +3176,7 @@ static int validator_publish_aggregated_attestations(struct lantern_client *clie
     lantern_aggregated_attestations_init(&aggregated_attestations);
     lantern_attestation_signatures_init(&aggregated_signatures);
 
-    uint64_t aggregation_started_ms = monotonic_millis();
+    double aggregation_started_seconds = lantern_time_now_seconds();
     bool missing_state = false;
     lantern_client_error result = validator_collect_and_aggregate_attestation_signatures(
         client,
@@ -3191,12 +3184,9 @@ static int validator_publish_aggregated_attestations(struct lantern_client *clie
         &aggregated_signatures,
         &missing_state);
     size_t successful_aggregations = 0u;
-    uint64_t aggregation_finished_ms = monotonic_millis();
-    double aggregation_seconds = 0.0;
-    if (aggregation_finished_ms >= aggregation_started_ms) {
-        aggregation_seconds =
-            (double)(aggregation_finished_ms - aggregation_started_ms) / 1000.0;
-    }
+    double aggregation_finished_seconds = lantern_time_now_seconds();
+    double aggregation_seconds =
+        validator_elapsed_seconds(aggregation_started_seconds, aggregation_finished_seconds);
     uint64_t aggregated_attestations_total = 0;
     if (result == LANTERN_CLIENT_OK) {
         aggregated_attestations_total = (uint64_t)aggregated_attestations.length;

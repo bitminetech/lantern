@@ -328,6 +328,51 @@ static bool cache_state_vote_locked(
 }
 
 
+static bool cache_attestation_signature_locked(
+    struct lantern_client *client,
+    const LanternSignedVote *vote,
+    const struct lantern_log_metadata *meta)
+{
+    if (!client || !vote)
+    {
+        return false;
+    }
+
+    LanternRoot data_root;
+    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &data_root) != SSZ_SUCCESS)
+    {
+        return false;
+    }
+
+    const LanternSignature *signature_to_cache =
+        lantern_client_should_cache_attestation_signature_locked(client, &vote->data)
+            ? &vote->signature
+            : NULL;
+    LanternSignatureKey key = {
+        .validator_index = vote->data.validator_id,
+        .data_root = data_root,
+    };
+    if (lantern_client_set_attestation_signature(
+            client,
+            &key,
+            &vote->data.data,
+            signature_to_cache,
+            vote->data.target.slot)
+        != 0)
+    {
+        lantern_log_debug(
+            "state",
+            meta,
+            "failed to cache gossip signature validator=%" PRIu64 " slot=%" PRIu64,
+            vote->data.validator_id,
+            vote->data.slot);
+        return false;
+    }
+
+    return true;
+}
+
+
 /**
  * @brief Persist votes to storage if configured.
  *
@@ -359,47 +404,13 @@ static void persist_votes_if_configured_locked(
 }
 
 
-/**
- * @brief Validate and apply a received vote while holding state_lock.
- *
- * @param client     Client instance
- * @param vote       Vote to validate and apply (may be modified in place)
- * @param meta       Logging metadata
- * @param rejection  Rejection info to populate on failure
- * @return true if vote was processed successfully
- *
- * @note Thread safety: Caller must hold state_lock
- */
-static bool process_vote_locked(
+static bool verify_vote_signature_against_target_locked(
     struct lantern_client *client,
-    LanternSignedVote *vote,
+    const LanternSignedVote *vote,
     const struct lantern_log_metadata *meta,
     struct lantern_vote_rejection_info *rejection)
 {
     if (!client || !vote || !meta || !rejection)
-    {
-        return false;
-    }
-
-    if (!client->has_fork_choice)
-    {
-        lantern_log_debug(
-            "gossip",
-            meta,
-            "deferring vote validator=%" PRIu64 " slot=%" PRIu64 " (fork choice unavailable)",
-            vote->data.validator_id,
-            vote->data.slot);
-        lantern_vote_rejection_set(rejection, "fork choice unavailable");
-        return false;
-    }
-
-    if (!lantern_client_validate_vote_constraints(
-            client,
-            &vote->data,
-            "gossip",
-            meta,
-            "gossip",
-            rejection))
     {
         return false;
     }
@@ -473,6 +484,59 @@ static bool process_vote_locked(
         return false;
     }
     lantern_state_reset(&target_state);
+    return true;
+}
+
+
+/**
+ * @brief Validate and apply a received vote while holding state_lock.
+ *
+ * @param client     Client instance
+ * @param vote       Vote to validate and apply (may be modified in place)
+ * @param meta       Logging metadata
+ * @param rejection  Rejection info to populate on failure
+ * @return true if vote was processed successfully
+ *
+ * @note Thread safety: Caller must hold state_lock
+ */
+static bool process_vote_locked(
+    struct lantern_client *client,
+    LanternSignedVote *vote,
+    const struct lantern_log_metadata *meta,
+    struct lantern_vote_rejection_info *rejection)
+{
+    if (!client || !vote || !meta || !rejection)
+    {
+        return false;
+    }
+
+    if (!client->has_fork_choice)
+    {
+        lantern_log_debug(
+            "gossip",
+            meta,
+            "deferring vote validator=%" PRIu64 " slot=%" PRIu64 " (fork choice unavailable)",
+            vote->data.validator_id,
+            vote->data.slot);
+        lantern_vote_rejection_set(rejection, "fork choice unavailable");
+        return false;
+    }
+
+    if (!lantern_client_validate_vote_constraints(
+            client,
+            &vote->data,
+            "gossip",
+            meta,
+            "gossip",
+            rejection))
+    {
+        return false;
+    }
+
+    if (!verify_vote_signature_against_target_locked(client, vote, meta, rejection))
+    {
+        return false;
+    }
 
     if (!validate_vote_cache_state(client, &vote->data, meta, rejection))
     {
@@ -484,33 +548,7 @@ static bool process_vote_locked(
         return false;
     }
 
-    LanternRoot data_root;
-    if (lantern_hash_tree_root_attestation_data(&vote->data.data, &data_root) == SSZ_SUCCESS)
-    {
-        const LanternSignature *signature_to_cache =
-            lantern_client_should_cache_attestation_signature_locked(client, &vote->data)
-                ? &vote->signature
-                : NULL;
-        LanternSignatureKey key = {
-            .validator_index = vote->data.validator_id,
-            .data_root = data_root,
-        };
-        if (lantern_client_set_attestation_signature(
-                client,
-                &key,
-                &vote->data.data,
-                signature_to_cache,
-                vote->data.target.slot)
-            != 0)
-        {
-            lantern_log_debug(
-                "state",
-                meta,
-                "failed to cache gossip signature validator=%" PRIu64 " slot=%" PRIu64,
-                vote->data.validator_id,
-                vote->data.slot);
-        }
-    }
+    (void)cache_attestation_signature_locked(client, vote, meta);
 
     persist_votes_if_configured_locked(client, vote, meta);
     return true;
