@@ -262,63 +262,6 @@ void lantern_client_cache_block_aggregated_proofs_locked(
             &attestations->data[i].data,
             attestations->data[i].data.target.slot);
     }
-
-#if LANTERN_AGGREGATED_SIGNATURE_PROOF_INVERSE_PROOF_SIZE <= 1u
-    return;
-#endif
-
-    LanternState scratch;
-    lantern_state_init(&scratch);
-    const LanternState *sig_state = lantern_client_state_for_root_local_locked(
-        client,
-        &block->block.parent_root,
-        &scratch,
-        NULL);
-    if (!sig_state) {
-        lantern_state_reset(&scratch);
-        return;
-    }
-
-    for (size_t i = 0; i < attestations->length; ++i) {
-        LanternRoot data_root;
-        if (lantern_hash_tree_root_attestation_data(&attestations->data[i].data, &data_root) != SSZ_SUCCESS) {
-            continue;
-        }
-        LanternAggregatedSignatureProof proof;
-        lantern_aggregated_signature_proof_init(&proof);
-        if (lantern_bitlist_resize(
-                &proof.participants,
-                attestations->data[i].aggregation_bits.bit_length)
-                != 0) {
-            lantern_aggregated_signature_proof_reset(&proof);
-            continue;
-        }
-        size_t byte_len = (proof.participants.bit_length + 7u) / 8u;
-        if (byte_len > 0u) {
-            if (!proof.participants.bytes || !attestations->data[i].aggregation_bits.bytes) {
-                lantern_aggregated_signature_proof_reset(&proof);
-                continue;
-            }
-            memcpy(proof.participants.bytes, attestations->data[i].aggregation_bits.bytes, byte_len);
-        }
-        if (!lantern_signature_split_block_type2_proof_by_message(
-                sig_state,
-                &block->block,
-                &block->proof,
-                &data_root,
-                &proof.proof_data)) {
-            lantern_aggregated_signature_proof_reset(&proof);
-            continue;
-        }
-        (void)lantern_client_add_new_aggregated_payload(
-            client,
-            &data_root,
-            &attestations->data[i].data,
-            &proof,
-            attestations->data[i].data.target.slot);
-        lantern_aggregated_signature_proof_reset(&proof);
-    }
-    lantern_state_reset(&scratch);
 }
 
 static bool sync_validator_votes_from_preview_locked(
@@ -3526,7 +3469,6 @@ static bool lantern_client_import_block_internal(
     prune_finalized_attestation_material_if_slot_advanced_locked(
         client,
         &pre_transition_finalized);
-    advance_fork_choice_time_locked(client, block, meta);
     prune_finalized_fork_choice_states_if_advanced_locked(
         client,
         &pre_transition_finalized,
