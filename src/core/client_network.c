@@ -779,6 +779,11 @@ static void peer_dialer_handle_record(
         return;
     }
 
+    if (peer_text[0] && lantern_client_is_peer_connected(client, peer_text))
+    {
+        return;
+    }
+
     (void)lantern_libp2p_host_dial_multiaddr(&client->network, multiaddr);
 
     const char *peer_label = peer_text[0] ? peer_text : record->encoded;
@@ -842,6 +847,34 @@ cleanup:
 }
 
 
+void peer_status_refresh(struct lantern_client *client)
+{
+    if (!client || !client->reqresp_running)
+    {
+        return;
+    }
+
+    struct lantern_string_list connected_snapshot;
+    lantern_string_list_init(&connected_snapshot);
+    (void)snapshot_connected_peers(client, &connected_snapshot);
+
+    for (size_t idx = 0; idx < connected_snapshot.len; ++idx)
+    {
+        if (__atomic_load_n(&client->dialer_stop_flag, __ATOMIC_RELAXED) != 0)
+        {
+            break;
+        }
+        const char *peer_text = connected_snapshot.items[idx];
+        if (peer_text && peer_text[0])
+        {
+            request_status_now(client, NULL, peer_text);
+        }
+    }
+
+    lantern_string_list_reset(&connected_snapshot);
+}
+
+
 /**
  * Peer dialer thread function.
  *
@@ -861,6 +894,7 @@ static void *peer_dialer_thread(void *arg)
     while (__atomic_load_n(&client->dialer_stop_flag, __ATOMIC_RELAXED) == 0)
     {
         peer_dialer_attempt(client);
+        peer_status_refresh(client);
         peer_dialer_sleep(client, LANTERN_PEER_DIAL_INTERVAL_SECONDS);
     }
     return NULL;
