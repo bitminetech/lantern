@@ -421,6 +421,8 @@ void redial_peer_on_timeout(struct lantern_client *client, const struct lantern_
  */
 void peer_dialer_attempt(struct lantern_client *client);
 
+void peer_status_refresh(struct lantern_client *client);
+
 
 /**
  * Start the peer dialer service.

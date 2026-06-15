@@ -29,8 +29,10 @@
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
+#include "lantern/consensus/slot_clock.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/consensus/state.h"
+#include "lantern/metrics/lean_metrics.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
@@ -262,63 +264,6 @@ void lantern_client_cache_block_aggregated_proofs_locked(
             &attestations->data[i].data,
             attestations->data[i].data.target.slot);
     }
-
-#if LANTERN_AGGREGATED_SIGNATURE_PROOF_INVERSE_PROOF_SIZE <= 1u
-    return;
-#endif
-
-    LanternState scratch;
-    lantern_state_init(&scratch);
-    const LanternState *sig_state = lantern_client_state_for_root_local_locked(
-        client,
-        &block->block.parent_root,
-        &scratch,
-        NULL);
-    if (!sig_state) {
-        lantern_state_reset(&scratch);
-        return;
-    }
-
-    for (size_t i = 0; i < attestations->length; ++i) {
-        LanternRoot data_root;
-        if (lantern_hash_tree_root_attestation_data(&attestations->data[i].data, &data_root) != SSZ_SUCCESS) {
-            continue;
-        }
-        LanternAggregatedSignatureProof proof;
-        lantern_aggregated_signature_proof_init(&proof);
-        if (lantern_bitlist_resize(
-                &proof.participants,
-                attestations->data[i].aggregation_bits.bit_length)
-                != 0) {
-            lantern_aggregated_signature_proof_reset(&proof);
-            continue;
-        }
-        size_t byte_len = (proof.participants.bit_length + 7u) / 8u;
-        if (byte_len > 0u) {
-            if (!proof.participants.bytes || !attestations->data[i].aggregation_bits.bytes) {
-                lantern_aggregated_signature_proof_reset(&proof);
-                continue;
-            }
-            memcpy(proof.participants.bytes, attestations->data[i].aggregation_bits.bytes, byte_len);
-        }
-        if (!lantern_signature_split_block_type2_proof_by_message(
-                sig_state,
-                &block->block,
-                &block->proof,
-                &data_root,
-                &proof.proof_data)) {
-            lantern_aggregated_signature_proof_reset(&proof);
-            continue;
-        }
-        (void)lantern_client_add_new_aggregated_payload(
-            client,
-            &data_root,
-            &attestations->data[i].data,
-            &proof,
-            attestations->data[i].data.target.slot);
-        lantern_aggregated_signature_proof_reset(&proof);
-    }
-    lantern_state_reset(&scratch);
 }
 
 static bool sync_validator_votes_from_preview_locked(
@@ -421,10 +366,20 @@ static int commit_and_publish_local_block(
     }
 
     pre_transition_finalized = client->state.latest_finalized;
-    LanternRoot state_head_root = {0};
-    if (!compute_state_head_root_locked(client, &state_head_root)
+    LanternRoot current_head_root = {0};
+    bool have_current_head = false;
+    if (client->has_fork_choice)
+    {
+        have_current_head =
+            lantern_fork_choice_current_head(&client->fork_choice, &current_head_root) == 0;
+    }
+    if (!have_current_head)
+    {
+        have_current_head = compute_state_head_root_locked(client, &current_head_root);
+    }
+    if (!have_current_head
         || memcmp(
-               state_head_root.bytes,
+               current_head_root.bytes,
                block->block.parent_root.bytes,
                LANTERN_ROOT_SIZE)
             != 0)
@@ -434,7 +389,7 @@ static int commit_and_publish_local_block(
             char parent_hex[ROOT_HEX_BUFFER_LEN];
             char head_hex[ROOT_HEX_BUFFER_LEN];
             format_root_hex(&block->block.parent_root, parent_hex, sizeof(parent_hex));
-            format_root_hex(&state_head_root, head_hex, sizeof(head_hex));
+            format_root_hex(&current_head_root, head_hex, sizeof(head_hex));
             lantern_log_warn(
                 "propose",
                 &meta,
@@ -2542,6 +2497,50 @@ static bool validate_block_vote_constraints_locked(
 
 
 /**
+ * @brief Records finality-lag diagnostics for an imported block.
+ *
+ * @note Thread safety: Caller must hold state_lock
+ */
+static void record_block_import_metrics_locked(
+    struct lantern_client *client,
+    const LanternSignedBlock *block)
+{
+    const LanternAggregatedAttestations *atts = &block->block.body.attestations;
+    for (size_t i = 0; i < atts->length; ++i)
+    {
+        if (block->block.slot >= atts->data[i].data.slot)
+        {
+            lean_metrics_record_attestation_inclusion_delay(
+                block->block.slot - atts->data[i].data.slot);
+        }
+    }
+
+    if (!client->has_runtime)
+    {
+        return;
+    }
+    struct lantern_slot_timepoint now_tp;
+    uint64_t now_milliseconds = validator_wall_time_now_millis();
+    if (lantern_slot_clock_compute(&client->runtime.clock, now_milliseconds, &now_tp) != 0)
+    {
+        return;
+    }
+    /* Live blocks only: skip backfill/sync imports of past slots, whose import
+     * time bears no relation to their slot boundary. */
+    if (now_tp.slot != block->block.slot)
+    {
+        return;
+    }
+    uint64_t slot_start_ms = 0;
+    if (lantern_slot_clock_slot_start_time(&client->runtime.clock, block->block.slot, &slot_start_ms) != 0
+        || now_milliseconds < slot_start_ms)
+    {
+        return;
+    }
+    lean_metrics_record_block_import_slot_offset((double)(now_milliseconds - slot_start_ms) / 1000.0);
+}
+
+/**
  * @brief Applies the state transition for a block.
  *
  * @param client  Client instance
@@ -2571,6 +2570,8 @@ static bool apply_state_transition_locked(
             block->block.slot);
         return false;
     }
+
+    record_block_import_metrics_locked(client, block);
 
     return true;
 }
@@ -3516,7 +3517,6 @@ static bool lantern_client_import_block_internal(
     prune_finalized_attestation_material_if_slot_advanced_locked(
         client,
         &pre_transition_finalized);
-    advance_fork_choice_time_locked(client, block, meta);
     prune_finalized_fork_choice_states_if_advanced_locked(
         client,
         &pre_transition_finalized,

@@ -2835,8 +2835,9 @@ static int test_collect_attestations_fixed_point(void) {
     fill_root(&state.historical_block_hashes.items[1], 0xE1);
     fill_root(&state.historical_block_hashes.items[2], 0xE2);
 
-    /* Also mark slot 1 as justified since mid checkpoint uses it as source */
-    mark_slot_justified_for_tests(&state, 1);
+    /* Slot 1 is intentionally not pre-marked as justified: the fixed-point
+     * iteration must justify it via the base→mid quorum before the mid→tip
+     * vote becomes collectable. */
 
     /* Use roots from historical_block_hashes so attestations pass validation */
     LanternCheckpoint base = state.latest_justified;

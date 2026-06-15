@@ -1459,43 +1459,46 @@ static int lmd_ghost_compute(
         }
     }
 
-    size_t current = start_index;
-    while (true) {
-        size_t best_child = SIZE_MAX;
-        uint64_t best_weight = 0;
-        bool found = false;
-        for (size_t i = 0; i < store->block_len; ++i) {
-            if (blocks[i].parent_index != current) {
-                continue;
-            }
-            uint64_t candidate_weight = weights[i];
-            if (candidate_weight < min_score) {
-                continue;
-            }
-            bool better = false;
-            if (!found) {
-                better = true;
-            } else if (candidate_weight > best_weight) {
-                better = true;
-            } else if (candidate_weight == best_weight) {
-                int cmp = root_compare(&blocks[i].root, &blocks[best_child].root);
-                if (cmp > 0) {
-                    better = true;
-                }
-            }
-            if (better) {
-                found = true;
-                best_child = i;
-                best_weight = candidate_weight;
-            }
-        }
-        if (!found) {
-            *out_head = blocks[current].root;
-            free(weights);
-            return 0;
-        }
-        current = best_child;
+    size_t *best_child = malloc(store->block_len * sizeof(size_t));
+    if (!best_child) {
+        free(weights);
+        return -1;
     }
+    for (size_t i = 0; i < store->block_len; ++i) {
+        best_child[i] = SIZE_MAX;
+    }
+    for (size_t i = 0; i < store->block_len; ++i) {
+        size_t parent = blocks[i].parent_index;
+        if (parent == SIZE_MAX || parent >= store->block_len) {
+            continue;
+        }
+        if (weights[i] < min_score) {
+            continue;
+        }
+        size_t current_best = best_child[parent];
+        bool better = false;
+        if (current_best == SIZE_MAX) {
+            better = true;
+        } else if (weights[i] > weights[current_best]) {
+            better = true;
+        } else if (weights[i] == weights[current_best]) {
+            if (root_compare(&blocks[i].root, &blocks[current_best].root) > 0) {
+                better = true;
+            }
+        }
+        if (better) {
+            best_child[parent] = i;
+        }
+    }
+
+    size_t current = start_index;
+    while (best_child[current] != SIZE_MAX) {
+        current = best_child[current];
+    }
+    *out_head = blocks[current].root;
+    free(best_child);
+    free(weights);
+    return 0;
 }
 
 static void safe_target_consider_vote(

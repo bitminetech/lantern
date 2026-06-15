@@ -794,6 +794,19 @@ static int append_lean_chain_metrics(
         return rc;
     }
 
+    rc = metrics_buffer_appendf(
+        buf,
+        "# HELP lantern_attestation_head_votes_total Gossip attestation votes by whether the voted head trailed the vote slot\n"
+        "# TYPE lantern_attestation_head_votes_total counter\n"
+        "lantern_attestation_head_votes_total{head=\"fresh\"} %" PRIu64 "\n"
+        "lantern_attestation_head_votes_total{head=\"stale\"} %" PRIu64 "\n",
+        lean->attestation_head_votes_fresh_total,
+        lean->attestation_head_votes_stale_total);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
     rc = append_metric_uint64(
         buf,
         "lean_state_transition_slots_processed_total",
@@ -1261,6 +1274,26 @@ static int append_lean_histograms(
         "lean_gossip_aggregation_size_bytes",
         "Bytes size of a gossip aggregated attestation message",
         &lean->gossip_aggregation_size_bytes);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lantern_attestation_inclusion_delay_slots",
+        "Slots between an included attestation's data slot and the block that included it",
+        &lean->attestation_inclusion_delay_slots);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lantern_block_import_slot_offset_seconds",
+        "Seconds from the start of a block's slot until the block was imported",
+        &lean->block_import_slot_offset_seconds);
     if (rc != 0)
     {
         return rc;

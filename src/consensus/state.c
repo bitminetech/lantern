@@ -79,8 +79,10 @@ struct lantern_block_payload_group {
 };
 static int collect_attestations_for_checkpoint(
     const LanternState *state,
+    const LanternState *justified_view,
     const LanternStore *proof_store,
-    const LanternCheckpoint *checkpoint,
+    const LanternRoot *parent_root,
+    uint64_t block_slot,
     struct lantern_root_list *processed_data_roots,
     LanternAggregatedAttestations *out_attestations,
     LanternAttestationSignatures *out_signatures);
@@ -238,14 +240,49 @@ static int lantern_block_payload_group_compare(const void *lhs, const void *rhs)
     return memcmp(left->data_root.bytes, right->data_root.bytes, LANTERN_ROOT_SIZE);
 }
 
+/* LeanSpec attestation_data_matches_chain against the proposal chain view:
+ * recorded history, then the parent root at the parent's slot, then zero-hash
+ * entries for skipped slots up to the new block. */
+static bool checkpoint_matches_proposal_chain(
+    const LanternState *state,
+    const LanternRoot *parent_root,
+    uint64_t block_slot,
+    const LanternCheckpoint *checkpoint) {
+    if (!state || !parent_root || !checkpoint || lantern_root_is_zero(&checkpoint->root)) {
+        return false;
+    }
+    uint64_t historical_length = (uint64_t)state->historical_block_hashes.length;
+    uint64_t header_slot = state->latest_block_header.slot;
+    uint64_t empty_slots = block_slot > header_slot + 1u ? block_slot - header_slot - 1u : 0u;
+    uint64_t view_length = historical_length + 1u + empty_slots;
+    if (checkpoint->slot >= view_length) {
+        return false;
+    }
+    if (checkpoint->slot < historical_length) {
+        return memcmp(
+                   checkpoint->root.bytes,
+                   state->historical_block_hashes.items[checkpoint->slot].bytes,
+                   LANTERN_ROOT_SIZE)
+            == 0;
+    }
+    if (checkpoint->slot == historical_length) {
+        return memcmp(checkpoint->root.bytes, parent_root->bytes, LANTERN_ROOT_SIZE) == 0;
+    }
+    /* Skipped slots carry the zero hash; a nonzero root can never match. */
+    return false;
+}
+
 static int collect_attestations_for_checkpoint(
     const LanternState *state,
+    const LanternState *justified_view,
     const LanternStore *proof_store,
-    const LanternCheckpoint *checkpoint,
+    const LanternRoot *parent_root,
+    uint64_t block_slot,
     struct lantern_root_list *processed_data_roots,
     LanternAggregatedAttestations *out_attestations,
     LanternAttestationSignatures *out_signatures) {
-    if (!state || !proof_store || !checkpoint || !processed_data_roots || !out_attestations || !out_signatures) {
+    if (!state || !justified_view || !proof_store || !parent_root || !processed_data_roots
+        || !out_attestations || !out_signatures) {
         return -1;
     }
     const struct lantern_aggregated_payload_pool *payloads = &proof_store->known_aggregated_payloads;
@@ -281,10 +318,29 @@ static int collect_attestations_for_checkpoint(
         if (!lantern_attestation_head_is_known(state, proof_store, &data.head)) {
             continue;
         }
-        if (!lantern_checkpoint_equal(&data.source, checkpoint)) {
+        if (!checkpoint_matches_proposal_chain(state, parent_root, block_slot, &data.source)
+            || !checkpoint_matches_proposal_chain(state, parent_root, block_slot, &data.target)) {
+            continue;
+        }
+        /* LeanSpec build_block: the source slot must already be justified on
+         * this chain. */
+        bool source_justified = false;
+        if (lantern_state_get_justified_slot_bit(justified_view, data.source.slot, &source_justified) != 0) {
+            continue;
+        }
+        if (!source_justified) {
             continue;
         }
         if (data.target.slot <= data.source.slot) {
+            continue;
+        }
+        /* LeanSpec build_block: skip attestations whose target slot is already
+         * justified. */
+        bool target_justified = false;
+        if (lantern_state_get_justified_slot_bit(justified_view, data.target.slot, &target_justified) != 0) {
+            continue;
+        }
+        if (target_justified) {
             continue;
         }
         if (lantern_root_list_contains(processed_data_roots, &entry->data_root)) {
@@ -2815,6 +2871,9 @@ int lantern_state_collect_attestations_for_block(
     if (slot_snapshot.latest_block_header.slot == 0u) {
         checkpoint.root = *parent_root;
     }
+    /* LeanSpec build_block re-runs the filter against the post-state justified
+     * slots, so each converged iteration may unlock further sources. */
+    const LanternState *justified_view = &slot_snapshot;
     size_t iteration = 0;
     size_t iteration_guard = store->known_aggregated_payloads.length + 1u;
     if (iteration_guard == 0u) {
@@ -2831,8 +2890,10 @@ int lantern_state_collect_attestations_for_block(
         size_t previous_attestation_count = out_attestations->length;
         if (collect_attestations_for_checkpoint(
                 &slot_snapshot,
+                justified_view,
                 store,
-                &checkpoint,
+                parent_root,
+                block_slot,
                 &processed_data_roots,
                 out_attestations,
                 out_signatures)
@@ -2875,6 +2936,7 @@ int lantern_state_collect_attestations_for_block(
             break;
         }
         checkpoint = post_checkpoint;
+        justified_view = &scratch;
         iteration += 1u;
         if (iteration > iteration_guard) {
             uint64_t store_justified_slot = 0u;

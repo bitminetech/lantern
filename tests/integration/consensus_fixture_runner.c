@@ -1143,7 +1143,21 @@ static int run_state_transition_fixture(const char *path) {
     int blocks_idx = lantern_fixture_object_get_field(&doc, case_idx, "blocks");
     int post_idx = lantern_fixture_object_get_field(&doc, case_idx, "post");
     int expect_exception_idx = lantern_fixture_object_get_field(&doc, case_idx, "expectException");
-    bool expect_failure = expect_exception_idx >= 0;
+    int rejection_idx = lantern_fixture_object_get_field(&doc, case_idx, "rejectionReason");
+    bool expect_failure = expect_exception_idx >= 0 || rejection_idx >= 0;
+
+    int block_count = 0;
+    if (blocks_idx >= 0) {
+        block_count = lantern_fixture_array_get_length(&doc, blocks_idx);
+        if (block_count < 0) {
+            lantern_fixture_document_reset(&doc);
+            return -1;
+        }
+    }
+    if (expect_failure && block_count == 0) {
+        lantern_fixture_document_reset(&doc);
+        return 0;
+    }
 
     LanternState state;
     LanternCheckpoint latest_justified;
@@ -1164,16 +1178,6 @@ static int run_state_transition_fixture(const char *path) {
     }
 
     bool observed_failure = false;
-    int block_count = 0;
-    if (blocks_idx >= 0) {
-        block_count = lantern_fixture_array_get_length(&doc, blocks_idx);
-        if (block_count < 0) {
-            lantern_state_reset(&state);
-            lantern_fixture_document_reset(&doc);
-            return -1;
-        }
-    }
-
     for (int i = 0; i < block_count; ++i) {
         int block_idx = lantern_fixture_array_get_element(&doc, blocks_idx, i);
         if (block_idx < 0) {

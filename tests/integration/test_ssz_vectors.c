@@ -3105,6 +3105,7 @@ static int run_fixture_file(const char *path, void *user_data) {
     int serialized_idx = case_idx >= 0 ? lantern_fixture_object_get_field(&doc, case_idx, "serialized") : -1;
     int root_idx = case_idx >= 0 ? lantern_fixture_object_get_field(&doc, case_idx, "root") : -1;
     int expect_exception_idx = case_idx >= 0 ? lantern_fixture_object_get_field(&doc, case_idx, "expectException") : -1;
+    int rejection_idx = case_idx >= 0 ? lantern_fixture_object_get_field(&doc, case_idx, "rejectionReason") : -1;
     char *type_name = NULL;
     struct byte_buffer expected_serialized = {0};
     LanternRoot expected_root;
@@ -3117,7 +3118,7 @@ static int run_fixture_file(const char *path, void *user_data) {
     int rc = -1;
     if (type_idx < 0 || fixture_token_to_c_string(&doc, type_idx, &type_name) != 0) {
         rc = record_failure(path, NULL, "fixture missing typeName");
-    } else if (expect_exception_idx >= 0) {
+    } else if (expect_exception_idx >= 0 || rejection_idx >= 0) {
         rc = run_decode_rejection_fixture(path, type_name, &doc, case_idx);
     } else if (value_idx < 0 || serialized_idx < 0 || root_idx < 0
         || fixture_token_to_bytes(&doc, serialized_idx, &expected_serialized) != 0

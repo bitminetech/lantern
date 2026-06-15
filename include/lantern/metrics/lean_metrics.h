@@ -71,6 +71,8 @@ struct lean_metrics_snapshot {
     uint64_t aggregator_skipped_total[LEAN_METRICS_AGGREGATOR_SKIPPED_REASON_COUNT];
     uint64_t state_transition_slots_processed_total;
     uint64_t state_transition_attestations_processed_total;
+    uint64_t attestation_head_votes_fresh_total;
+    uint64_t attestation_head_votes_stale_total;
     struct lean_metrics_histogram_snapshot block_aggregated_payloads;
     struct lean_metrics_histogram_snapshot block_building_payload_aggregation_time;
     struct lean_metrics_histogram_snapshot block_building_time;
@@ -92,6 +94,8 @@ struct lean_metrics_snapshot {
     struct lean_metrics_histogram_snapshot gossip_block_size_bytes;
     struct lean_metrics_histogram_snapshot gossip_attestation_size_bytes;
     struct lean_metrics_histogram_snapshot gossip_aggregation_size_bytes;
+    struct lean_metrics_histogram_snapshot attestation_inclusion_delay_slots;
+    struct lean_metrics_histogram_snapshot block_import_slot_offset_seconds;
 };
 
 void lean_metrics_reset(void);
@@ -129,6 +133,9 @@ void lean_metrics_record_aggregator_skipped(
 void lean_metrics_record_gossip_block_size(size_t bytes_len);
 void lean_metrics_record_gossip_attestation_size(size_t bytes_len);
 void lean_metrics_record_gossip_aggregation_size(size_t bytes_len);
+void lean_metrics_record_attestation_head_vote(bool stale);
+void lean_metrics_record_attestation_inclusion_delay(uint64_t slots);
+void lean_metrics_record_block_import_slot_offset(double seconds);
 void lean_metrics_snapshot(struct lean_metrics_snapshot *out);
 
 #ifdef __cplusplus
