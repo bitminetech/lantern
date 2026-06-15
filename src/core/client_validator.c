@@ -1366,6 +1366,57 @@ static lantern_client_error state_aggregate_result_to_client_error(
     }
 }
 
+static void payload_pool_snapshot_reset(struct lantern_aggregated_payload_pool *pool)
+{
+    if (!pool)
+    {
+        return;
+    }
+    for (size_t i = 0; i < pool->length; ++i)
+    {
+        lantern_aggregated_signature_proof_reset(&pool->entries[i].proof);
+    }
+    free(pool->entries);
+    pool->entries = NULL;
+    pool->length = 0;
+    pool->capacity = 0;
+}
+
+static int payload_pool_snapshot(
+    struct lantern_aggregated_payload_pool *dst,
+    const struct lantern_aggregated_payload_pool *src)
+{
+    dst->entries = NULL;
+    dst->length = 0;
+    dst->capacity = 0;
+    if (!src || src->length == 0u || !src->entries)
+    {
+        return 0;
+    }
+    dst->entries = calloc(src->length, sizeof(*dst->entries));
+    if (!dst->entries)
+    {
+        return -1;
+    }
+    dst->capacity = src->length;
+    for (size_t i = 0; i < src->length; ++i)
+    {
+        dst->entries[i].data_root = src->entries[i].data_root;
+        dst->entries[i].target_slot = src->entries[i].target_slot;
+        lantern_aggregated_signature_proof_init(&dst->entries[i].proof);
+        dst->length = i + 1u;
+        if (lantern_aggregated_signature_proof_copy(
+                &dst->entries[i].proof,
+                &src->entries[i].proof)
+            != 0)
+        {
+            payload_pool_snapshot_reset(dst);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static lantern_client_error aggregate_attestation_signatures(
     struct lantern_client *client,
     const LanternAttestations *att_list,
@@ -1389,48 +1440,120 @@ static lantern_client_error aggregate_attestation_signatures(
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
 
-    LanternAttestationSignatureInputs attestation_signatures = {
-        .attestations = att_list,
-        .signatures = att_signatures,
-    };
-    lantern_client_error rc = state_aggregate_result_to_client_error(
-        lantern_state_aggregate(
-            &client->state,
-            &client->store,
-            &attestation_signatures,
-            &client->store.new_aggregated_payloads,
-            &client->store.known_aggregated_payloads,
-            out_attestations,
-            out_signatures));
+    LanternState state_snapshot;
+    LanternStore data_snapshot;
+    struct lantern_aggregated_payload_pool new_snapshot;
+    struct lantern_aggregated_payload_pool known_snapshot;
+    memset(&new_snapshot, 0, sizeof(new_snapshot));
+    memset(&known_snapshot, 0, sizeof(known_snapshot));
+    lantern_store_init(&data_snapshot);
 
-    if (rc == LANTERN_CLIENT_OK)
+    int snapshot_rc = lantern_state_clone(&client->state, &state_snapshot);
+    if (snapshot_rc == 0)
     {
-        lantern_store_clear_new_aggregated_payloads(&client->store);
-
-        for (size_t i = 0; i < out_attestations->length; ++i)
+        snapshot_rc = payload_pool_snapshot(&new_snapshot, &client->store.new_aggregated_payloads);
+    }
+    if (snapshot_rc == 0)
+    {
+        snapshot_rc =
+            payload_pool_snapshot(&known_snapshot, &client->store.known_aggregated_payloads);
+    }
+    if (snapshot_rc == 0)
+    {
+        for (size_t i = 0; i < new_snapshot.length; ++i)
         {
-            LanternRoot data_root;
-            if (lantern_hash_tree_root_attestation_data(&out_attestations->data[i].data, &data_root) != SSZ_SUCCESS)
+            LanternAttestationData data;
+            memset(&data, 0, sizeof(data));
+            if (lantern_store_get_attestation_data(
+                    &client->store,
+                    &new_snapshot.entries[i].data_root,
+                    &data)
+                != 0)
             {
-                rc = LANTERN_CLIENT_ERR_VALIDATOR;
+                continue;
+            }
+            if (lantern_store_add_attestation_data(
+                    &data_snapshot,
+                    &new_snapshot.entries[i].data_root,
+                    &data,
+                    new_snapshot.entries[i].target_slot)
+                != 0)
+            {
+                snapshot_rc = -1;
                 break;
             }
-            int add_rc = lantern_store_add_new_aggregated_payload(
-                &client->store,
-                &data_root,
-                &out_attestations->data[i].data,
-                &out_signatures->data[i],
-                out_attestations->data[i].data.target.slot);
-            if (add_rc != 0)
-            {
-                rc = LANTERN_CLIENT_ERR_ALLOC;
-                break;
-            }
-            (void)lantern_store_remove_attestation_signatures_for_data_root(&client->store, &data_root);
         }
     }
 
     lantern_client_unlock_state(client, state_locked);
+
+    lantern_client_error rc = LANTERN_CLIENT_OK;
+    if (snapshot_rc != 0)
+    {
+        rc = LANTERN_CLIENT_ERR_ALLOC;
+    }
+    else
+    {
+        LanternAttestationSignatureInputs attestation_signatures = {
+            .attestations = att_list,
+            .signatures = att_signatures,
+        };
+        rc = state_aggregate_result_to_client_error(
+            lantern_state_aggregate(
+                &state_snapshot,
+                &data_snapshot,
+                &attestation_signatures,
+                &new_snapshot,
+                &known_snapshot,
+                out_attestations,
+                out_signatures));
+    }
+
+    if (rc == LANTERN_CLIENT_OK)
+    {
+        bool commit_locked = lantern_client_lock_state(client);
+        if (!commit_locked)
+        {
+            rc = LANTERN_CLIENT_ERR_RUNTIME;
+        }
+        else if (!client->has_state)
+        {
+            lantern_client_unlock_state(client, commit_locked);
+            rc = LANTERN_CLIENT_ERR_RUNTIME;
+        }
+        else
+        {
+            (void)lantern_store_remove_new_aggregated_payloads_matching(&client->store, &new_snapshot);
+
+            for (size_t i = 0; i < out_attestations->length; ++i)
+            {
+                LanternRoot data_root;
+                if (lantern_hash_tree_root_attestation_data(&out_attestations->data[i].data, &data_root) != SSZ_SUCCESS)
+                {
+                    rc = LANTERN_CLIENT_ERR_VALIDATOR;
+                    break;
+                }
+                int add_rc = lantern_store_add_new_aggregated_payload(
+                    &client->store,
+                    &data_root,
+                    &out_attestations->data[i].data,
+                    &out_signatures->data[i],
+                    out_attestations->data[i].data.target.slot);
+                if (add_rc != 0)
+                {
+                    rc = LANTERN_CLIENT_ERR_ALLOC;
+                    break;
+                }
+                (void)lantern_store_remove_attestation_signatures_for_data_root(&client->store, &data_root);
+            }
+            lantern_client_unlock_state(client, commit_locked);
+        }
+    }
+
+    lantern_state_reset(&state_snapshot);
+    lantern_store_reset(&data_snapshot);
+    payload_pool_snapshot_reset(&new_snapshot);
+    payload_pool_snapshot_reset(&known_snapshot);
 
     if (rc != LANTERN_CLIENT_OK)
     {
@@ -3740,6 +3863,13 @@ void stop_timing_service(struct lantern_client *client)
  *
  * @note Thread safety: This function is thread-safe
  */
+static void *prover_prewarm_thread(void *arg)
+{
+    (void)arg;
+    lantern_signature_prewarm_prover();
+    return NULL;
+}
+
 int start_validator_service(struct lantern_client *client)
 {
     if (!client)
@@ -3753,6 +3883,11 @@ int start_validator_service(struct lantern_client *client)
     if (client->local_validator_count == 0 || !client->has_runtime)
     {
         return LANTERN_CLIENT_OK;
+    }
+    pthread_t prewarm_thread;
+    if (pthread_create(&prewarm_thread, NULL, prover_prewarm_thread, NULL) == 0)
+    {
+        (void)pthread_detach(prewarm_thread);
     }
     validator_duty_state_reset(&client->validator_duty);
     __atomic_store_n(&client->validator_stop_flag, 0, __ATOMIC_RELAXED);

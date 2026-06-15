@@ -29,8 +29,10 @@
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
+#include "lantern/consensus/slot_clock.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/consensus/state.h"
+#include "lantern/metrics/lean_metrics.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
@@ -2495,6 +2497,50 @@ static bool validate_block_vote_constraints_locked(
 
 
 /**
+ * @brief Records finality-lag diagnostics for an imported block.
+ *
+ * @note Thread safety: Caller must hold state_lock
+ */
+static void record_block_import_metrics_locked(
+    struct lantern_client *client,
+    const LanternSignedBlock *block)
+{
+    const LanternAggregatedAttestations *atts = &block->block.body.attestations;
+    for (size_t i = 0; i < atts->length; ++i)
+    {
+        if (block->block.slot >= atts->data[i].data.slot)
+        {
+            lean_metrics_record_attestation_inclusion_delay(
+                block->block.slot - atts->data[i].data.slot);
+        }
+    }
+
+    if (!client->has_runtime)
+    {
+        return;
+    }
+    struct lantern_slot_timepoint now_tp;
+    uint64_t now_milliseconds = validator_wall_time_now_millis();
+    if (lantern_slot_clock_compute(&client->runtime.clock, now_milliseconds, &now_tp) != 0)
+    {
+        return;
+    }
+    /* Live blocks only: skip backfill/sync imports of past slots, whose import
+     * time bears no relation to their slot boundary. */
+    if (now_tp.slot != block->block.slot)
+    {
+        return;
+    }
+    uint64_t slot_start_ms = 0;
+    if (lantern_slot_clock_slot_start_time(&client->runtime.clock, block->block.slot, &slot_start_ms) != 0
+        || now_milliseconds < slot_start_ms)
+    {
+        return;
+    }
+    lean_metrics_record_block_import_slot_offset((double)(now_milliseconds - slot_start_ms) / 1000.0);
+}
+
+/**
  * @brief Applies the state transition for a block.
  *
  * @param client  Client instance
@@ -2524,6 +2570,8 @@ static bool apply_state_transition_locked(
             block->block.slot);
         return false;
     }
+
+    record_block_import_metrics_locked(client, block);
 
     return true;
 }

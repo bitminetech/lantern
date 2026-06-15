@@ -180,6 +180,12 @@ static void log_pq_prover_setup_error_if_any(void) {
     pq_string_free(detail);
 }
 
+void lantern_signature_prewarm_prover(void) {
+    ensure_xmss_prover_setup();
+    log_pq_prover_setup_error_if_any();
+    ensure_xmss_verifier_setup();
+}
+
 static bool write_type2_container(const LanternByteList *raw_proof, LanternByteList *out_encoded) {
     if (!raw_proof || !out_encoded) {
         return false;
@@ -623,7 +629,7 @@ bool lantern_signature_aggregate(
         log_pq_prover_setup_error_if_any();
         uintptr_t written_len = 0;
         double start = get_time_seconds();
-        enum PQSigningError err = pq_aggregate_signatures(
+        enum PQSigningError err = pq_aggregate_signatures_unverified(
             (const struct PQSignatureSchemePublicKey *const *)pubkey_handles,
             (const struct PQSignature *const *)sig_handles,
             count,
@@ -838,7 +844,7 @@ bool lantern_aggregated_signature_proof_aggregate(
             log_pq_prover_setup_error_if_any();
             uintptr_t written_len = 0u;
             double start = get_time_seconds();
-            enum PQSigningError agg_err = pq_aggregate_signatures_recursive(
+            enum PQSigningError agg_err = pq_aggregate_signatures_recursive_unverified(
                 child_inputs,
                 child_count,
                 raw_inputs,

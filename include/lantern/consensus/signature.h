@@ -17,6 +17,7 @@ typedef struct {
 
 bool lantern_signature_is_zero(const LanternSignature *signature);
 void lantern_signature_zero(LanternSignature *signature);
+void lantern_signature_prewarm_prover(void);
 bool lantern_signature_verify(
     const uint8_t *pubkey_bytes,
     size_t pubkey_len,

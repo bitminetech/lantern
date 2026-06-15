@@ -1694,8 +1694,14 @@ static int run_gossip_topic_fixture(
     int input_idx,
     int output_idx,
     const char *codec_name) {
-    int kind_idx = lantern_fixture_object_get_field(doc, input_idx, "kind");
+    int kind_idx = lantern_fixture_object_get_field(doc, input_idx, "topicKind");
+    if (kind_idx < 0) {
+        kind_idx = lantern_fixture_object_get_field(doc, input_idx, "kind");
+    }
     int digest_idx = lantern_fixture_object_get_field(doc, input_idx, "forkDigest");
+    if (digest_idx < 0) {
+        digest_idx = lantern_fixture_object_get_field(doc, input_idx, "networkName");
+    }
     int subnet_idx = lantern_fixture_object_get_field(doc, input_idx, "subnetId");
     int topic_idx = lantern_fixture_object_get_field(doc, output_idx, "topicString");
     char *kind = NULL;
@@ -2409,6 +2415,9 @@ static int run_decode_failure_fixture(
     struct fixture_stats *stats) {
     int decoder_idx = lantern_fixture_object_get_field(doc, input_idx, "decoder");
     int bytes_idx = lantern_fixture_object_get_field(doc, input_idx, "bytes");
+    if (bytes_idx < 0) {
+        bytes_idx = lantern_fixture_object_get_field(doc, input_idx, "rawBytes");
+    }
     char *decoder = NULL;
     struct byte_buffer bytes = {0};
     bool rejected = false;
@@ -2668,15 +2677,20 @@ static int run_fixture_file(const char *path, void *user_data) {
     }
 
     int case_idx = lantern_fixture_object_get_value_at(&doc, 0, 0);
-    int codec_idx = case_idx >= 0 ? lantern_fixture_object_get_field(&doc, case_idx, "codecName") : -1;
+    int codec_name_idx = case_idx >= 0 ? lantern_fixture_object_get_field(&doc, case_idx, "codecName") : -1;
+    int codec_object_idx = case_idx >= 0 ? lantern_fixture_object_get_field(&doc, case_idx, "codec") : -1;
     int input_idx = case_idx >= 0 ? lantern_fixture_object_get_field(&doc, case_idx, "input") : -1;
     int output_idx = case_idx >= 0 ? lantern_fixture_object_get_field(&doc, case_idx, "output") : -1;
 
     char *codec_name = NULL;
     int rc = -1;
+    if (codec_name_idx < 0 && codec_object_idx >= 0) {
+        codec_name_idx = lantern_fixture_object_get_field(&doc, codec_object_idx, "kind");
+        input_idx = codec_object_idx;
+    }
 
-    if (case_idx < 0 || codec_idx < 0 || input_idx < 0 || output_idx < 0
-        || fixture_token_to_c_string(&doc, codec_idx, &codec_name) != 0) {
+    if (case_idx < 0 || codec_name_idx < 0 || input_idx < 0 || output_idx < 0
+        || fixture_token_to_c_string(&doc, codec_name_idx, &codec_name) != 0) {
         if (stats) {
             stats->total += 1u;
             stats->failed += 1u;

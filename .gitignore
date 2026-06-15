@@ -80,5 +80,3 @@ ci-build*
 # Internal docs
 internal-docs*
 
-# External clients
-external-clients*

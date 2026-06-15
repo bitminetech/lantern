@@ -26,6 +26,7 @@
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"
+#include "lantern/metrics/lean_metrics.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
@@ -369,6 +370,7 @@ static bool cache_attestation_signature_locked(
         return false;
     }
 
+    lean_metrics_record_attestation_head_vote(vote->data.head.slot < vote->data.slot);
     return true;
 }
 

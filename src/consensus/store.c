@@ -796,6 +796,71 @@ void lantern_store_clear_new_aggregated_payloads(LanternStore *store) {
     aggregated_payload_pool_init(&store->new_aggregated_payloads);
 }
 
+static bool aggregated_payload_entries_equal(
+    const struct lantern_aggregated_payload_entry *a,
+    const struct lantern_aggregated_payload_entry *b) {
+    if (!a || !b) {
+        return false;
+    }
+    if (a->target_slot != b->target_slot) {
+        return false;
+    }
+    if (memcmp(a->data_root.bytes, b->data_root.bytes, sizeof(a->data_root.bytes)) != 0) {
+        return false;
+    }
+    if (a->proof.participants.bit_length != b->proof.participants.bit_length) {
+        return false;
+    }
+    size_t participant_bytes = (a->proof.participants.bit_length + 7u) / 8u;
+    if (participant_bytes > 0u
+        && (!a->proof.participants.bytes
+            || !b->proof.participants.bytes
+            || memcmp(a->proof.participants.bytes, b->proof.participants.bytes, participant_bytes) != 0)) {
+        return false;
+    }
+    if (a->proof.proof_data.length != b->proof.proof_data.length) {
+        return false;
+    }
+    if (a->proof.proof_data.length > 0u
+        && (!a->proof.proof_data.data
+            || !b->proof.proof_data.data
+            || memcmp(a->proof.proof_data.data, b->proof.proof_data.data, a->proof.proof_data.length) != 0)) {
+        return false;
+    }
+    return true;
+}
+
+size_t lantern_store_remove_new_aggregated_payloads_matching(
+    LanternStore *store,
+    const struct lantern_aggregated_payload_pool *snapshot) {
+    if (!store || !snapshot || snapshot->length == 0u) {
+        return 0u;
+    }
+    struct lantern_aggregated_payload_pool *pool = &store->new_aggregated_payloads;
+    size_t removed = 0u;
+    size_t write = 0u;
+    for (size_t i = 0; i < pool->length; ++i) {
+        bool matched = false;
+        for (size_t j = 0; j < snapshot->length; ++j) {
+            if (aggregated_payload_entries_equal(&pool->entries[i], &snapshot->entries[j])) {
+                matched = true;
+                break;
+            }
+        }
+        if (matched) {
+            lantern_aggregated_signature_proof_reset(&pool->entries[i].proof);
+            removed += 1u;
+            continue;
+        }
+        if (write != i) {
+            pool->entries[write] = pool->entries[i];
+        }
+        write += 1u;
+    }
+    pool->length = write;
+    return removed;
+}
+
 size_t lantern_store_promote_new_aggregated_payloads(LanternStore *store) {
     if (!store) {
         return 0u;

@@ -124,6 +124,9 @@ int lantern_store_add_attestation_data(
     const LanternAttestationData *data,
     uint64_t target_slot);
 void lantern_store_clear_new_aggregated_payloads(LanternStore *store);
+size_t lantern_store_remove_new_aggregated_payloads_matching(
+    LanternStore *store,
+    const struct lantern_aggregated_payload_pool *snapshot);
 size_t lantern_store_promote_new_aggregated_payloads(LanternStore *store);
 size_t lantern_store_prune_finalized_attestation_material(
     LanternStore *store,

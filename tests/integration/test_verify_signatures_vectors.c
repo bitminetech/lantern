@@ -109,6 +109,7 @@ static int run_verify_signatures_fixture(const char *path) {
         block_idx = lantern_fixture_object_get_field(&doc, case_idx, "signed_block_with_attestation");
     }
     int expect_idx = lantern_fixture_object_get_field(&doc, case_idx, "expectException");
+    int rejection_idx = lantern_fixture_object_get_field(&doc, case_idx, "rejectionReason");
 
     if (anchor_idx < 0 || block_idx < 0) {
         lantern_fixture_document_reset(&doc);
@@ -122,6 +123,12 @@ static int run_verify_signatures_fixture(const char *path) {
     bool expect_failure = false;
     if (expect_idx >= 0) {
         const jsmntok_t *tok = lantern_fixture_token(&doc, expect_idx);
+        if (tok && tok->type == JSMN_STRING) {
+            expect_failure = true;
+        }
+    }
+    if (rejection_idx >= 0) {
+        const jsmntok_t *tok = lantern_fixture_token(&doc, rejection_idx);
         if (tok && tok->type == JSMN_STRING) {
             expect_failure = true;
         }
