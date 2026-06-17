@@ -821,7 +821,9 @@ bool lantern_client_verify_vote_signature(
  * 2. All checkpoint roots must be known in fork choice
  * 3. Checkpoint slots must match the block slots in fork choice
  * 4. Checkpoint ordering must satisfy source <= target <= head
- * 5. Vote slot must not exceed current_slot + 1
+ * 5. Source, target, and head must lie on one parent chain
+ * 6. Vote slot must not precede the head checkpoint slot
+ * 7. Vote slot must not exceed current_slot + 1
  *
  * Per leanSpec: checks that all referenced blocks exist in the store
  * before accepting the attestation.
@@ -928,6 +930,58 @@ bool lantern_client_validate_vote_constraints(
                 "head slot %" PRIu64 " < target slot %" PRIu64,
                 vote->head.slot,
                 vote->target.slot);
+        }
+        return false;
+    }
+
+    if (!lantern_client_checkpoint_is_ancestor_locked(client, &vote->source, &vote->target))
+    {
+        lantern_log_debug(
+            log_facility,
+            meta,
+            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " "
+            "(source not ancestor of target)",
+            label,
+            vote->validator_id,
+            vote->slot);
+        if (out_rejection)
+        {
+            lantern_vote_rejection_set(out_rejection, "Source checkpoint must be ancestor of target");
+        }
+        return false;
+    }
+
+    if (!lantern_client_checkpoint_is_ancestor_locked(client, &vote->target, &vote->head))
+    {
+        lantern_log_debug(
+            log_facility,
+            meta,
+            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " "
+            "(target not ancestor of head)",
+            label,
+            vote->validator_id,
+            vote->slot);
+        if (out_rejection)
+        {
+            lantern_vote_rejection_set(out_rejection, "Target checkpoint must be ancestor of head");
+        }
+        return false;
+    }
+
+    if (vote->slot < vote->head.slot)
+    {
+        lantern_log_debug(
+            log_facility,
+            meta,
+            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " "
+            "(attestation slot before head slot=%" PRIu64 ")",
+            label,
+            vote->validator_id,
+            vote->slot,
+            vote->head.slot);
+        if (out_rejection)
+        {
+            lantern_vote_rejection_set(out_rejection, "Attestation slot precedes head");
         }
         return false;
     }

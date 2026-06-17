@@ -49,6 +49,15 @@ struct lean_metrics_histogram_snapshot {
     uint64_t total;
 };
 
+struct lantern_block_build_stage_timings {
+    double vote_collection_seconds;
+    double key_sig_deserialize_seconds;
+    double pq_aggregate_seconds;
+    double proof_copy_seconds;
+    double lock_waits_seconds;
+    double other_prover_setup_seconds;
+};
+
 struct lean_metrics_snapshot {
     uint64_t attestations_valid_total;
     uint64_t attestations_invalid_total;
@@ -91,6 +100,12 @@ struct lean_metrics_snapshot {
     struct lean_metrics_histogram_snapshot pq_sig_aggregated_signatures_verification_time;
     struct lean_metrics_histogram_snapshot pq_sig_block_aggregated_signatures_verification_time;
     struct lean_metrics_histogram_snapshot committee_signatures_aggregation_time;
+    struct lean_metrics_histogram_snapshot block_build_stage_vote_collection_time;
+    struct lean_metrics_histogram_snapshot block_build_stage_key_sig_deserialize_time;
+    struct lean_metrics_histogram_snapshot block_build_stage_pq_aggregate_time;
+    struct lean_metrics_histogram_snapshot block_build_stage_proof_copy_time;
+    struct lean_metrics_histogram_snapshot block_build_stage_lock_waits_time;
+    struct lean_metrics_histogram_snapshot block_build_stage_other_prover_setup_time;
     struct lean_metrics_histogram_snapshot gossip_block_size_bytes;
     struct lean_metrics_histogram_snapshot gossip_attestation_size_bytes;
     struct lean_metrics_histogram_snapshot gossip_aggregation_size_bytes;
@@ -122,6 +137,8 @@ void lean_metrics_record_pq_aggregated_signature_build(size_t attestation_count,
 void lean_metrics_record_pq_aggregated_signature_verification(double seconds, bool valid);
 void lean_metrics_record_pq_block_aggregated_signatures_verification(double seconds);
 void lean_metrics_record_committee_signature_aggregation(double seconds, uint64_t aggregated_attestations);
+void lean_metrics_record_block_build_stage_timings(
+    const struct lantern_block_build_stage_timings *timings);
 void lean_metrics_record_peer_connection(
     lean_metrics_direction_t direction,
     lean_metrics_connection_result_t result);

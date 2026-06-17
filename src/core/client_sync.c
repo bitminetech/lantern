@@ -758,6 +758,15 @@ static bool validate_gossip_aggregated_attestation_data_locked(
         || head_block_slot != data->head.slot) {
         return false;
     }
+    if (!lantern_client_checkpoint_is_ancestor_locked(client, &data->source, &data->target)) {
+        return false;
+    }
+    if (!lantern_client_checkpoint_is_ancestor_locked(client, &data->target, &data->head)) {
+        return false;
+    }
+    if (data->slot < data->head.slot) {
+        return false;
+    }
 
     uint64_t current_slot = 0u;
     if (!lantern_client_current_slot(client, &current_slot)) {

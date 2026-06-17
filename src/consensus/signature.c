@@ -20,6 +20,32 @@ static double get_time_seconds(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
+#if defined(__GNUC__) || defined(__clang__)
+static __thread struct lantern_block_build_stage_timings *g_stage_timings = NULL;
+#else
+static _Thread_local struct lantern_block_build_stage_timings *g_stage_timings = NULL;
+#endif
+
+void lantern_signature_set_stage_timings(struct lantern_block_build_stage_timings *timings);
+
+void lantern_signature_set_stage_timings(struct lantern_block_build_stage_timings *timings) {
+    g_stage_timings = timings;
+}
+
+static double signature_elapsed_seconds(double started_seconds, double finished_seconds) {
+    if (finished_seconds < started_seconds) {
+        return 0.0;
+    }
+    return finished_seconds - started_seconds;
+}
+
+static void signature_add_stage_seconds(double *stage_seconds, double seconds) {
+    if (!stage_seconds || seconds <= 0.0) {
+        return;
+    }
+    *stage_seconds += seconds;
+}
+
 static bool bytes_are_zero(const uint8_t *bytes, size_t length) {
     if (!bytes && length > 0) {
         return false;
@@ -443,6 +469,39 @@ static bool build_type2_component_set_for_block(
     return true;
 }
 
+static bool build_type2_merge_component_set_for_block(
+    const LanternState *state,
+    const LanternBlock *block,
+    struct lantern_type2_component_work *work,
+    struct PQTypeTwoComponent *components,
+    size_t component_count) {
+    if (!state || !block || !work || !components) {
+        return false;
+    }
+    size_t attestation_count = block->body.attestations.length;
+    if (component_count != attestation_count + 1u) {
+        return false;
+    }
+    if (attestation_count > 0u && !block->body.attestations.data) {
+        return false;
+    }
+    for (size_t i = 0; i < attestation_count; ++i) {
+        const LanternAggregatedAttestation *attestation = &block->body.attestations.data[i];
+        if (!build_type2_attestation_component(
+                state,
+                &attestation->aggregation_bits,
+                &work[i],
+                &components[i])) {
+            return false;
+        }
+    }
+    return build_type2_proposer_component(
+        state,
+        block->proposer_index,
+        &work[attestation_count],
+        &components[attestation_count]);
+}
+
 bool lantern_signature_is_zero(const LanternSignature *signature) {
     if (!signature) {
         return false;
@@ -588,6 +647,7 @@ bool lantern_signature_aggregate(
     }
 
     bool ok = true;
+    double deserialize_started_seconds = get_time_seconds();
     for (size_t i = 0; i < count; ++i) {
         if (!pubkeys[i]) {
             ok = false;
@@ -622,11 +682,24 @@ bool lantern_signature_aggregate(
             break;
         }
     }
+    double deserialize_finished_seconds = get_time_seconds();
+    if (g_stage_timings) {
+        signature_add_stage_seconds(
+            &g_stage_timings->key_sig_deserialize_seconds,
+            signature_elapsed_seconds(deserialize_started_seconds, deserialize_finished_seconds));
+    }
 
     double elapsed = 0.0;
     if (ok) {
+        double setup_started_seconds = get_time_seconds();
         ensure_xmss_prover_setup();
         log_pq_prover_setup_error_if_any();
+        double setup_finished_seconds = get_time_seconds();
+        if (g_stage_timings) {
+            signature_add_stage_seconds(
+                &g_stage_timings->other_prover_setup_seconds,
+                signature_elapsed_seconds(setup_started_seconds, setup_finished_seconds));
+        }
         uintptr_t written_len = 0;
         double start = get_time_seconds();
         enum PQSigningError err = pq_aggregate_signatures_unverified(
@@ -640,6 +713,12 @@ bool lantern_signature_aggregate(
             out_proof->data,
             out_proof->length,
             &written_len);
+        double pq_finished_seconds = get_time_seconds();
+        if (g_stage_timings) {
+            signature_add_stage_seconds(
+                &g_stage_timings->pq_aggregate_seconds,
+                signature_elapsed_seconds(start, pq_finished_seconds));
+        }
         if (err != Success || written_len == 0 || written_len > out_proof->length) {
             char *detail = pq_take_last_error_message();
             lantern_log_error(
@@ -811,6 +890,7 @@ bool lantern_aggregated_signature_proof_aggregate(
             }
         }
 
+        double deserialize_started_seconds = get_time_seconds();
         for (size_t i = 0; ok && i < raw_xmss_count; ++i) {
             if (!raw_xmss[i].pubkey || !raw_xmss[i].signature) {
                 ok = false;
@@ -838,10 +918,23 @@ bool lantern_aggregated_signature_proof_aggregate(
             raw_inputs[i].pubkey = raw_pubkey_handles[i];
             raw_inputs[i].signature = raw_signature_handles[i];
         }
+        double deserialize_finished_seconds = get_time_seconds();
+        if (g_stage_timings) {
+            signature_add_stage_seconds(
+                &g_stage_timings->key_sig_deserialize_seconds,
+                signature_elapsed_seconds(deserialize_started_seconds, deserialize_finished_seconds));
+        }
 
         if (ok) {
+            double setup_started_seconds = get_time_seconds();
             ensure_xmss_prover_setup();
             log_pq_prover_setup_error_if_any();
+            double setup_finished_seconds = get_time_seconds();
+            if (g_stage_timings) {
+                signature_add_stage_seconds(
+                    &g_stage_timings->other_prover_setup_seconds,
+                    signature_elapsed_seconds(setup_started_seconds, setup_finished_seconds));
+            }
             uintptr_t written_len = 0u;
             double start = get_time_seconds();
             enum PQSigningError agg_err = pq_aggregate_signatures_recursive_unverified(
@@ -856,6 +949,12 @@ bool lantern_aggregated_signature_proof_aggregate(
                 out_proof->proof_data.data,
                 out_proof->proof_data.length,
                 &written_len);
+            double pq_finished_seconds = get_time_seconds();
+            if (g_stage_timings) {
+                signature_add_stage_seconds(
+                    &g_stage_timings->pq_aggregate_seconds,
+                    signature_elapsed_seconds(start, pq_finished_seconds));
+            }
             if (agg_err != Success || written_len == 0u || written_len > out_proof->proof_data.length) {
                 char *detail = pq_take_last_error_message();
                 lantern_log_error(
@@ -1066,25 +1165,20 @@ bool lantern_signature_merge_block_type2_proof(
         calloc(component_count, sizeof(*work));
     struct PQTypeTwoComponent *components =
         calloc(component_count, sizeof(*components));
-    struct PQTypeTwoMessageBinding *bindings =
-        calloc(component_count, sizeof(*bindings));
-    LanternRoot *message_roots = calloc(component_count, sizeof(*message_roots));
     struct PQAggregatedSignatureChild *entries =
         calloc(component_count, sizeof(*entries));
     LanternByteList raw_type2;
     lantern_byte_list_init(&raw_type2);
 
     bool ok = false;
-    if (!work || !components || !bindings || !message_roots || !entries) {
+    if (!work || !components || !entries) {
         goto cleanup;
     }
-    if (!build_type2_component_set_for_block(
+    if (!build_type2_merge_component_set_for_block(
             state,
             block,
             work,
             components,
-            bindings,
-            message_roots,
             component_count)) {
         goto cleanup;
     }
@@ -1117,12 +1211,20 @@ bool lantern_signature_merge_block_type2_proof(
     entries[attestation_count].agg_bytes = proposer_proof->proof_data.data;
     entries[attestation_count].agg_len = proposer_proof->proof_data.length;
 
+    double setup_started_seconds = get_time_seconds();
     ensure_xmss_prover_setup();
     log_pq_prover_setup_error_if_any();
+    double setup_finished_seconds = get_time_seconds();
+    if (g_stage_timings) {
+        signature_add_stage_seconds(
+            &g_stage_timings->other_prover_setup_seconds,
+            signature_elapsed_seconds(setup_started_seconds, setup_finished_seconds));
+    }
     if (lantern_byte_list_resize(&raw_type2, LANTERN_AGG_PROOF_MAX_BYTES) != 0) {
         goto cleanup;
     }
     uintptr_t written_len = 0u;
+    double merge_started_seconds = get_time_seconds();
     enum PQSigningError merge_rc = pq_merge_many_type_1(
         entries,
         component_count,
@@ -1130,6 +1232,12 @@ bool lantern_signature_merge_block_type2_proof(
         raw_type2.data,
         raw_type2.length,
         &written_len);
+    double merge_finished_seconds = get_time_seconds();
+    if (g_stage_timings) {
+        signature_add_stage_seconds(
+            &g_stage_timings->pq_aggregate_seconds,
+            signature_elapsed_seconds(merge_started_seconds, merge_finished_seconds));
+    }
     if (merge_rc != Success || written_len == 0u || written_len > raw_type2.length) {
         char *detail = pq_take_last_error_message();
         lantern_log_error(
@@ -1146,7 +1254,14 @@ bool lantern_signature_merge_block_type2_proof(
     if (lantern_byte_list_resize(&raw_type2, (size_t)written_len) != 0) {
         goto cleanup;
     }
+    double copy_started_seconds = get_time_seconds();
     ok = lantern_signature_wrap_type2_proof(&raw_type2, out_encoded_proof);
+    double copy_finished_seconds = get_time_seconds();
+    if (g_stage_timings) {
+        signature_add_stage_seconds(
+            &g_stage_timings->proof_copy_seconds,
+            signature_elapsed_seconds(copy_started_seconds, copy_finished_seconds));
+    }
 
 cleanup:
     if (!ok) {
@@ -1155,8 +1270,6 @@ cleanup:
     lantern_byte_list_reset(&raw_type2);
     reset_type2_component_set(work, component_count);
     free(entries);
-    free(message_roots);
-    free(bindings);
     free(components);
     free(work);
     return ok;

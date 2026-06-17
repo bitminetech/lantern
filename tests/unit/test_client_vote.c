@@ -707,6 +707,128 @@ cleanup:
     return rc;
 }
 
+static int test_record_vote_rejects_sibling_head(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    LanternRoot sibling_root;
+    int rc = 1;
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "vote_sibling_head",
+            &pub,
+            &secret,
+            &anchor_root,
+            &child_root)
+        != 0) {
+        return 1;
+    }
+
+    uint64_t child_slot = 0;
+    if (client_test_slot_for_root(&client, &child_root, &child_slot) != 0) {
+        fprintf(stderr, "failed to resolve child slot for sibling-head vote test\n");
+        goto cleanup;
+    }
+    if (client_test_add_known_block(&client, child_slot, &anchor_root, 0xE1u, &sibling_root) != 0) {
+        fprintf(stderr, "failed to add sibling block for sibling-head vote test\n");
+        goto cleanup;
+    }
+
+    LanternSignedVote vote;
+    if (make_signed_vote_for_validator(&client, secret, 0u, &anchor_root, &child_root, &vote) != 0) {
+        fprintf(stderr, "failed to build signed vote for sibling-head vote test\n");
+        goto cleanup;
+    }
+    vote.data.head.slot = child_slot;
+    vote.data.head.root = sibling_root;
+    if (client_test_sign_vote_with_secret(&vote, secret) != 0) {
+        fprintf(stderr, "failed to sign sibling-head vote\n");
+        goto cleanup;
+    }
+
+    (void)lantern_client_debug_record_vote(&client, &vote, "vote_sibling_head_peer");
+    if (lantern_store_validator_has_vote(&client.store, 0u)) {
+        fprintf(stderr, "sibling-head vote should not be stored\n");
+        goto cleanup;
+    }
+    if (lantern_client_pending_vote_count(&client) != 0u) {
+        fprintf(stderr, "sibling-head vote should not be buffered\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_record_vote_rejects_sibling_source(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    LanternRoot sibling_source_root;
+    LanternRoot target_root;
+    int rc = 1;
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "vote_sibling_source",
+            &pub,
+            &secret,
+            &anchor_root,
+            &child_root)
+        != 0) {
+        return 1;
+    }
+
+    uint64_t child_slot = 0;
+    if (client_test_slot_for_root(&client, &child_root, &child_slot) != 0) {
+        fprintf(stderr, "failed to resolve child slot for sibling-source vote test\n");
+        goto cleanup;
+    }
+    if (client_test_add_known_block(&client, child_slot, &anchor_root, 0xE3u, &sibling_source_root) != 0
+        || client_test_add_known_block(&client, child_slot + 1u, &child_root, 0xE4u, &target_root) != 0) {
+        fprintf(stderr, "failed to add branch blocks for sibling-source vote test\n");
+        goto cleanup;
+    }
+
+    LanternSignedVote vote;
+    memset(&vote, 0, sizeof(vote));
+    vote.data.validator_id = 0u;
+    vote.data.slot = child_slot + 1u;
+    vote.data.source.slot = child_slot;
+    vote.data.source.root = sibling_source_root;
+    vote.data.target.slot = child_slot + 1u;
+    vote.data.target.root = target_root;
+    vote.data.head = vote.data.target;
+    if (client_test_sign_vote_with_secret(&vote, secret) != 0) {
+        fprintf(stderr, "failed to sign sibling-source vote\n");
+        goto cleanup;
+    }
+
+    (void)lantern_client_debug_record_vote(&client, &vote, "vote_sibling_source_peer");
+    if (lantern_store_validator_has_vote(&client.store, 0u)) {
+        fprintf(stderr, "sibling-source vote should not be stored\n");
+        goto cleanup;
+    }
+    if (lantern_client_pending_vote_count(&client) != 0u) {
+        fprintf(stderr, "sibling-source vote should not be buffered\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
 static int test_record_vote_buffers_missing_target_state(void) {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
@@ -1173,6 +1295,65 @@ static int test_record_vote_rejects_head_older_than_target(void) {
 
     if (lantern_store_validator_has_vote(&client.store, 0)) {
         fprintf(stderr, "head older than target vote should have been rejected\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_record_vote_rejects_slot_before_head(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    LanternRoot grandchild_root;
+    int rc = 1;
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "vote_slot_before_head",
+            &pub,
+            &secret,
+            &anchor_root,
+            &child_root)
+        != 0) {
+        return 1;
+    }
+
+    uint64_t child_slot = 0;
+    if (client_test_slot_for_root(&client, &child_root, &child_slot) != 0) {
+        fprintf(stderr, "failed to resolve child slot for slot-before-head test\n");
+        goto cleanup;
+    }
+    if (client_test_add_known_block(&client, child_slot + 1u, &child_root, 0xE5u, &grandchild_root) != 0) {
+        fprintf(stderr, "failed to add grandchild block for slot-before-head test\n");
+        goto cleanup;
+    }
+
+    LanternSignedVote vote;
+    if (make_signed_vote_for_validator(&client, secret, 0u, &anchor_root, &child_root, &vote) != 0) {
+        fprintf(stderr, "failed to build signed vote for slot-before-head test\n");
+        goto cleanup;
+    }
+    vote.data.head.slot = child_slot + 1u;
+    vote.data.head.root = grandchild_root;
+    if (client_test_sign_vote_with_secret(&vote, secret) != 0) {
+        fprintf(stderr, "failed to sign slot-before-head vote\n");
+        goto cleanup;
+    }
+
+    (void)lantern_client_debug_record_vote(&client, &vote, "slot_before_head_peer");
+    if (lantern_store_validator_has_vote(&client.store, 0u)) {
+        fprintf(stderr, "slot-before-head vote should not be stored\n");
+        goto cleanup;
+    }
+    if (lantern_client_pending_vote_count(&client) != 0u) {
+        fprintf(stderr, "slot-before-head vote should not be buffered\n");
         goto cleanup;
     }
 
@@ -4036,6 +4217,12 @@ int main(void) {
     if (test_record_vote_accepts_known_roots() != 0) {
         return 1;
     }
+    if (test_record_vote_rejects_sibling_head() != 0) {
+        return 1;
+    }
+    if (test_record_vote_rejects_sibling_source() != 0) {
+        return 1;
+    }
     if (test_record_vote_buffers_missing_target_state() != 0) {
         return 1;
     }
@@ -4052,6 +4239,9 @@ int main(void) {
         return 1;
     }
     if (test_record_vote_rejects_head_older_than_target() != 0) {
+        return 1;
+    }
+    if (test_record_vote_rejects_slot_before_head() != 0) {
         return 1;
     }
     if (test_record_vote_rejects_future_slot() != 0) {

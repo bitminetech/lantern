@@ -1251,6 +1251,66 @@ static int append_lean_histograms(
 
     rc = append_histogram_metrics(
         buf,
+        "lantern_block_build_stage_vote_collection_seconds",
+        "Per-duty time spent collecting aggregation votes",
+        &lean->block_build_stage_vote_collection_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lantern_block_build_stage_key_sig_deserialize_seconds",
+        "Per-duty time spent deserializing aggregation keys and signatures",
+        &lean->block_build_stage_key_sig_deserialize_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lantern_block_build_stage_pq_aggregate_seconds",
+        "Per-duty time spent in post-quantum signature aggregation",
+        &lean->block_build_stage_pq_aggregate_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lantern_block_build_stage_proof_copy_seconds",
+        "Per-duty time spent copying aggregated proofs",
+        &lean->block_build_stage_proof_copy_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lantern_block_build_stage_lock_waits_seconds",
+        "Per-duty time spent waiting for validator state locks",
+        &lean->block_build_stage_lock_waits_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
+        "lantern_block_build_stage_other_prover_setup_seconds",
+        "Per-duty time spent in prover setup and other unclassified work",
+        &lean->block_build_stage_other_prover_setup_time);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    rc = append_histogram_metrics(
+        buf,
         "lean_gossip_block_size_bytes",
         "Bytes size of a gossip block message",
         &lean->gossip_block_size_bytes);

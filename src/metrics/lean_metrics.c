@@ -22,6 +22,8 @@ static const double kCommitteeAggregationBuckets[] = {0.05, 0.1, 0.25, 0.5, 0.75
 static const double kBlockAggregatedPayloadBuckets[] = {1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0};
 static const double kBlockPayloadAggregationBuckets[] = {0.1, 0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0};
 static const double kBlockBuildingBuckets[] = {0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0};
+static const double kBlockBuildStageBuckets[] =
+    {0.00001, 0.000025, 0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.5};
 static const double kTickIntervalDurationBuckets[] =
     {0.4, 0.6, 0.75, 0.8, 0.805, 0.81, 0.815, 0.82, 0.825, 0.85, 0.9, 1.0, 1.2, 1.6};
 static const double kGossipBlockSizeBuckets[] = {10000.0, 50000.0, 100000.0, 250000.0, 500000.0, 1000000.0, 2000000.0, 5000000.0};
@@ -126,6 +128,30 @@ static struct lean_histogram g_hist_pq_sig_block_aggregated_signatures_verificat
 static struct lean_histogram g_hist_committee_signatures_aggregation = {
     .bounds = kCommitteeAggregationBuckets,
     .bucket_count = ARRAY_LEN(kCommitteeAggregationBuckets),
+};
+static struct lean_histogram g_hist_block_build_stage_vote_collection = {
+    .bounds = kBlockBuildStageBuckets,
+    .bucket_count = ARRAY_LEN(kBlockBuildStageBuckets),
+};
+static struct lean_histogram g_hist_block_build_stage_key_sig_deserialize = {
+    .bounds = kBlockBuildStageBuckets,
+    .bucket_count = ARRAY_LEN(kBlockBuildStageBuckets),
+};
+static struct lean_histogram g_hist_block_build_stage_pq_aggregate = {
+    .bounds = kBlockBuildStageBuckets,
+    .bucket_count = ARRAY_LEN(kBlockBuildStageBuckets),
+};
+static struct lean_histogram g_hist_block_build_stage_proof_copy = {
+    .bounds = kBlockBuildStageBuckets,
+    .bucket_count = ARRAY_LEN(kBlockBuildStageBuckets),
+};
+static struct lean_histogram g_hist_block_build_stage_lock_waits = {
+    .bounds = kBlockBuildStageBuckets,
+    .bucket_count = ARRAY_LEN(kBlockBuildStageBuckets),
+};
+static struct lean_histogram g_hist_block_build_stage_other_prover_setup = {
+    .bounds = kBlockBuildStageBuckets,
+    .bucket_count = ARRAY_LEN(kBlockBuildStageBuckets),
 };
 static struct lean_histogram g_hist_gossip_block_size = {
     .bounds = kGossipBlockSizeBuckets,
@@ -250,6 +276,12 @@ void lean_metrics_reset(void) {
     histogram_reset(&g_hist_pq_sig_aggregated_signatures_verification);
     histogram_reset(&g_hist_pq_sig_block_aggregated_signatures_verification);
     histogram_reset(&g_hist_committee_signatures_aggregation);
+    histogram_reset(&g_hist_block_build_stage_vote_collection);
+    histogram_reset(&g_hist_block_build_stage_key_sig_deserialize);
+    histogram_reset(&g_hist_block_build_stage_pq_aggregate);
+    histogram_reset(&g_hist_block_build_stage_proof_copy);
+    histogram_reset(&g_hist_block_build_stage_lock_waits);
+    histogram_reset(&g_hist_block_build_stage_other_prover_setup);
     histogram_reset(&g_hist_gossip_block_size);
     histogram_reset(&g_hist_gossip_attestation_size);
     histogram_reset(&g_hist_gossip_aggregation_size);
@@ -424,6 +456,33 @@ void lean_metrics_record_committee_signature_aggregation(double seconds, uint64_
     pthread_mutex_unlock(&g_metrics_lock);
 }
 
+void lean_metrics_record_block_build_stage_timings(
+    const struct lantern_block_build_stage_timings *timings) {
+    if (!timings) {
+        return;
+    }
+    pthread_mutex_lock(&g_metrics_lock);
+    histogram_observe(
+        &g_hist_block_build_stage_vote_collection,
+        timings->vote_collection_seconds);
+    histogram_observe(
+        &g_hist_block_build_stage_key_sig_deserialize,
+        timings->key_sig_deserialize_seconds);
+    histogram_observe(
+        &g_hist_block_build_stage_pq_aggregate,
+        timings->pq_aggregate_seconds);
+    histogram_observe(
+        &g_hist_block_build_stage_proof_copy,
+        timings->proof_copy_seconds);
+    histogram_observe(
+        &g_hist_block_build_stage_lock_waits,
+        timings->lock_waits_seconds);
+    histogram_observe(
+        &g_hist_block_build_stage_other_prover_setup,
+        timings->other_prover_setup_seconds);
+    pthread_mutex_unlock(&g_metrics_lock);
+}
+
 void lean_metrics_record_peer_connection(
     lean_metrics_direction_t direction,
     lean_metrics_connection_result_t result) {
@@ -562,6 +621,24 @@ void lean_metrics_snapshot(struct lean_metrics_snapshot *out) {
     histogram_snapshot(
         &out->committee_signatures_aggregation_time,
         &g_hist_committee_signatures_aggregation);
+    histogram_snapshot(
+        &out->block_build_stage_vote_collection_time,
+        &g_hist_block_build_stage_vote_collection);
+    histogram_snapshot(
+        &out->block_build_stage_key_sig_deserialize_time,
+        &g_hist_block_build_stage_key_sig_deserialize);
+    histogram_snapshot(
+        &out->block_build_stage_pq_aggregate_time,
+        &g_hist_block_build_stage_pq_aggregate);
+    histogram_snapshot(
+        &out->block_build_stage_proof_copy_time,
+        &g_hist_block_build_stage_proof_copy);
+    histogram_snapshot(
+        &out->block_build_stage_lock_waits_time,
+        &g_hist_block_build_stage_lock_waits);
+    histogram_snapshot(
+        &out->block_build_stage_other_prover_setup_time,
+        &g_hist_block_build_stage_other_prover_setup);
     histogram_snapshot(&out->gossip_block_size_bytes, &g_hist_gossip_block_size);
     histogram_snapshot(&out->gossip_attestation_size_bytes, &g_hist_gossip_attestation_size);
     histogram_snapshot(&out->gossip_aggregation_size_bytes, &g_hist_gossip_aggregation_size);
