@@ -12,7 +12,7 @@
 #include "lantern/consensus/runtime.h"
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/genesis/genesis.h"
-#include "lantern/http/metrics.h"
+#include "lantern/metrics/server.h"
 #include "lantern/http/server.h"
 #include "lantern/networking/libp2p.h"
 #include "lantern/networking/gossipsub_service.h"

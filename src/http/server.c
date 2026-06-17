@@ -15,32 +15,19 @@
 
 #include "lantern/http/server.h"
 
-#include <arpa/inet.h>
-#include <errno.h>
 #include <inttypes.h>
-#include <netinet/in.h>
-#include <pthread.h>
 #include <stdbool.h>
-#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
 
-#include "lantern/http/common.h"
-#include "lantern/http/metrics.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
 #include "test_driver/driver.h"
 
-static const size_t LANTERN_HTTP_READ_BUFFER_SIZE = 4096;
 static const size_t LANTERN_HTTP_MAX_TEST_DRIVER_BODY_SIZE = 64u * 1024u * 1024u;
-static const int LANTERN_HTTP_LISTEN_BACKLOG = 16;
 static const char LANTERN_HTTP_PATH_HEALTH[] = "/lean/v0/health";
 static const char LANTERN_HTTP_PATH_METRICS[] = "/metrics";
 static const char LANTERN_HTTP_PATH_FINALIZED[] = "/lean/v0/states/finalized";
@@ -64,293 +51,15 @@ static const char LANTERN_HTTP_JSON_INTERNAL[] = "{\"error\":\"internal error\"}
 static const char LANTERN_HTTP_JSON_BAD_REQUEST[] = "{\"error\":\"bad request\"}";
 static const char LANTERN_HTTP_JSON_METHOD_NOT_ALLOWED[] = "{\"error\":\"method not allowed\"}";
 
-enum
-{
-    LANTERN_HTTP_METHOD_CAP = 8,
-    LANTERN_HTTP_PATH_CAP = 256,
-};
-
-struct lantern_http_json_buffer
-{
-    char *data;
-    size_t len;
-    size_t cap;
-};
-
 /**
  * HTTP server module-specific error codes.
  */
 enum
 {
-    LANTERN_HTTP_SERVER_OK = 0,
     LANTERN_HTTP_SERVER_ERR_INVALID_PARAM = -1,
     LANTERN_HTTP_SERVER_ERR_IO = -2,
-    LANTERN_HTTP_SERVER_ERR_FORMATTING = -3,
-    LANTERN_HTTP_SERVER_ERR_MALFORMED_REQUEST = -4,
 };
 
-
-/**
- * Convert a peer address to a printable string.
- *
- * @param peer_addr Peer address (may be NULL).
- * @param out       Output buffer (NUL-terminated on return).
- * @param out_len   Output buffer length.
- *
- * @note Thread safety: This function is thread-safe.
- */
-static void peer_to_text(const struct sockaddr_in *peer_addr, char *out, size_t out_len)
-{
-    if (!out || out_len == 0)
-    {
-        return;
-    }
-
-    const char *fallback = "unknown";
-    if (!peer_addr)
-    {
-        (void)lantern_string_copy(out, out_len, fallback);
-        return;
-    }
-
-    if (!inet_ntop(AF_INET, &peer_addr->sin_addr, out, out_len))
-    {
-        (void)lantern_string_copy(out, out_len, fallback);
-    }
-}
-
-
-/**
- * Parse a minimal HTTP request line (method and path).
- *
- * @param request    Request bytes (NUL-terminated).
- * @param method     Output method buffer (NUL-terminated on success).
- * @param method_len Method buffer length.
- * @param path       Output path buffer (NUL-terminated on success).
- * @param path_len   Path buffer length.
- *
- * @return 0 on success.
- * @return LANTERN_HTTP_SERVER_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_HTTP_SERVER_ERR_MALFORMED_REQUEST on parse failure.
- *
- * @note Thread safety: This function is thread-safe.
- */
-static int parse_request_line(
-    const char *request,
-    char *method,
-    size_t method_len,
-    char *path,
-    size_t path_len)
-{
-    if (!request || !method || method_len == 0 || !path || path_len == 0)
-    {
-        return LANTERN_HTTP_SERVER_ERR_INVALID_PARAM;
-    }
-
-    const char *space = strchr(request, ' ');
-    if (!space)
-    {
-        return LANTERN_HTTP_SERVER_ERR_MALFORMED_REQUEST;
-    }
-
-    size_t method_written = (size_t)(space - request);
-    if (method_written == 0 || method_written >= method_len)
-    {
-        return LANTERN_HTTP_SERVER_ERR_MALFORMED_REQUEST;
-    }
-
-    memcpy(method, request, method_written);
-    method[method_written] = '\0';
-
-    const char *cursor = space;
-    while (*cursor == ' ')
-    {
-        ++cursor;
-    }
-    if (*cursor == '\0')
-    {
-        return LANTERN_HTTP_SERVER_ERR_MALFORMED_REQUEST;
-    }
-
-    const char *path_start = cursor;
-    while (*cursor != '\0'
-        && *cursor != ' '
-        && *cursor != '\r'
-        && *cursor != '\n'
-        && *cursor != '\t')
-    {
-        ++cursor;
-    }
-
-    size_t path_written = (size_t)(cursor - path_start);
-    if (path_written == 0 || path_written >= path_len)
-    {
-        return LANTERN_HTTP_SERVER_ERR_MALFORMED_REQUEST;
-    }
-
-    memcpy(path, path_start, path_written);
-    path[path_written] = '\0';
-    return 0;
-}
-
-
-/**
- * Send an HTTP response and map common errors to server error codes.
- *
- * @param client_fd    Client socket file descriptor.
- * @param status_code  HTTP status code.
- * @param status_text  HTTP status text.
- * @param content_type Content-Type header value.
- * @param body         Response body (may be NULL when body_len is 0).
- * @param body_len     Response body length in bytes.
- *
- * @return 0 on success.
- * @return LANTERN_HTTP_SERVER_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_HTTP_SERVER_ERR_FORMATTING on header formatting failure.
- * @return LANTERN_HTTP_SERVER_ERR_IO on send failure.
- *
- * @note Thread safety: Caller must ensure exclusive access to client_fd.
- */
-static int send_http_response(
-    int client_fd,
-    int status_code,
-    const char *status_text,
-    const char *content_type,
-    const char *body,
-    size_t body_len)
-{
-    int rc = lantern_http_send_response(
-        client_fd,
-        status_code,
-        status_text,
-        content_type,
-        body,
-        body_len);
-    if (rc == 0)
-    {
-        return 0;
-    }
-    if (rc == -1)
-    {
-        return LANTERN_HTTP_SERVER_ERR_INVALID_PARAM;
-    }
-    if (rc == -3)
-    {
-        return LANTERN_HTTP_SERVER_ERR_FORMATTING;
-    }
-    return LANTERN_HTTP_SERVER_ERR_IO;
-}
-
-
-/**
- * Send a JSON error response.
- *
- * @param client_fd   Client socket file descriptor.
- * @param status_code HTTP status code.
- * @param status_text HTTP status text.
- * @param json_body   JSON body (may be NULL).
- *
- * @return 0 on success.
- * @return LANTERN_HTTP_SERVER_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_HTTP_SERVER_ERR_FORMATTING on formatting failure.
- * @return LANTERN_HTTP_SERVER_ERR_IO on send failure.
- *
- * @note Thread safety: Caller must ensure exclusive access to client_fd.
- */
-static int send_json_error(
-    int client_fd,
-    int status_code,
-    const char *status_text,
-    const char *json_body)
-{
-    if (!json_body)
-    {
-        return send_http_response(client_fd, status_code, status_text, "application/json", NULL, 0);
-    }
-    return send_http_response(
-        client_fd,
-        status_code,
-        status_text,
-        "application/json",
-        json_body,
-        strlen(json_body));
-}
-
-static void json_buffer_reset(struct lantern_http_json_buffer *buf)
-{
-    if (!buf)
-    {
-        return;
-    }
-    free(buf->data);
-    buf->data = NULL;
-    buf->len = 0;
-    buf->cap = 0;
-}
-
-static int json_buffer_reserve(struct lantern_http_json_buffer *buf, size_t additional)
-{
-    if (!buf)
-    {
-        return -1;
-    }
-    size_t required = buf->len + additional + 1u;
-    if (required <= buf->cap)
-    {
-        return 0;
-    }
-    size_t new_cap = buf->cap == 0 ? 256u : buf->cap;
-    while (new_cap < required)
-    {
-        if (new_cap > (SIZE_MAX / 2u))
-        {
-            return -1;
-        }
-        new_cap *= 2u;
-    }
-    char *new_data = realloc(buf->data, new_cap);
-    if (!new_data)
-    {
-        return -1;
-    }
-    buf->data = new_data;
-    buf->cap = new_cap;
-    return 0;
-}
-
-static int json_buffer_appendf(struct lantern_http_json_buffer *buf, const char *fmt, ...)
-{
-    if (!buf || !fmt)
-    {
-        return -1;
-    }
-
-    va_list measure;
-    va_start(measure, fmt);
-    int needed = vsnprintf(NULL, 0, fmt, measure);
-    va_end(measure);
-    if (needed < 0)
-    {
-        return -1;
-    }
-
-    if (json_buffer_reserve(buf, (size_t)needed) != 0)
-    {
-        return -1;
-    }
-
-    va_list args;
-    va_start(args, fmt);
-    int written = vsnprintf(buf->data + buf->len, buf->cap - buf->len, fmt, args);
-    va_end(args);
-    if (written < 0 || written != needed)
-    {
-        return -1;
-    }
-
-    buf->len += (size_t)written;
-    return 0;
-}
 
 static int format_fork_choice_response(
     const struct lantern_http_fork_choice_snapshot *snapshot,
@@ -401,11 +110,11 @@ static int format_fork_choice_response(
         return -1;
     }
 
-    struct lantern_http_json_buffer buf;
+    struct lantern_http_buffer buf;
     memset(&buf, 0, sizeof(buf));
-    if (json_buffer_appendf(&buf, "{\"nodes\":[") != 0)
+    if (lantern_http_buffer_appendf(&buf, "{\"nodes\":[") != 0)
     {
-        json_buffer_reset(&buf);
+        lantern_http_buffer_free(&buf);
         return -1;
     }
 
@@ -429,11 +138,11 @@ static int format_fork_choice_response(
                    1)
                    != 0)
         {
-            json_buffer_reset(&buf);
+            lantern_http_buffer_free(&buf);
             return -1;
         }
 
-        if (json_buffer_appendf(
+        if (lantern_http_buffer_appendf(
                 &buf,
                 "%s{\"root\":\"%s\",\"slot\":%" PRIu64
                 ",\"parent_root\":\"%s\",\"proposer_index\":%" PRIu64
@@ -446,12 +155,12 @@ static int format_fork_choice_response(
                 node->weight)
             != 0)
         {
-            json_buffer_reset(&buf);
+            lantern_http_buffer_free(&buf);
             return -1;
         }
     }
 
-    if (json_buffer_appendf(
+    if (lantern_http_buffer_appendf(
             &buf,
             "],\"head\":\"%s\",\"justified\":{\"slot\":%" PRIu64 ",\"root\":\"%s\"},"
             "\"finalized\":{\"slot\":%" PRIu64 ",\"root\":\"%s\"},"
@@ -465,195 +174,12 @@ static int format_fork_choice_response(
             snapshot->validator_count)
         != 0)
     {
-        json_buffer_reset(&buf);
+        lantern_http_buffer_free(&buf);
         return -1;
     }
 
     *out_body = buf.data;
     *out_len = buf.len;
-    return 0;
-}
-
-
-/**
- * Locate the request body inside a raw HTTP request buffer.
- *
- * @param buffer      Request buffer (may be NUL-terminated; NUL terminators are honored).
- * @param buffer_len  Bytes received into the buffer.
- * @param out_body    Output: pointer to the body start inside the buffer (or NULL if absent).
- * @param out_body_len Output: body length available in the buffer.
- * @return true if a body separator was found.
- */
-static bool http_locate_body(
-    const char *buffer,
-    size_t buffer_len,
-    const char **out_body,
-    size_t *out_body_len)
-{
-    if (!buffer || buffer_len == 0 || !out_body || !out_body_len)
-    {
-        return false;
-    }
-    static const char SEPARATOR[] = "\r\n\r\n";
-    const size_t sep_len = sizeof(SEPARATOR) - 1u;
-    if (buffer_len < sep_len)
-    {
-        return false;
-    }
-    for (size_t i = 0; i + sep_len <= buffer_len; ++i)
-    {
-        if (memcmp(buffer + i, SEPARATOR, sep_len) == 0)
-        {
-            *out_body = buffer + i + sep_len;
-            *out_body_len = buffer_len - i - sep_len;
-            return true;
-        }
-    }
-    return false;
-}
-
-static int http_parse_content_length(
-    const char *buffer,
-    size_t buffer_len,
-    size_t *out_content_length)
-{
-    if (!buffer || !out_content_length)
-    {
-        return -1;
-    }
-    *out_content_length = 0;
-    const char *headers_end = NULL;
-    static const char SEPARATOR[] = "\r\n\r\n";
-    const size_t sep_len = sizeof(SEPARATOR) - 1u;
-    for (size_t i = 0; i + sep_len <= buffer_len; ++i)
-    {
-        if (memcmp(buffer + i, SEPARATOR, sep_len) == 0)
-        {
-            headers_end = buffer + i;
-            break;
-        }
-    }
-    if (!headers_end)
-    {
-        return -1;
-    }
-
-    const char *cursor = buffer;
-    static const char HEADER[] = "content-length:";
-    const size_t header_len = sizeof(HEADER) - 1u;
-    while (cursor < headers_end)
-    {
-        const char *line_end = memchr(cursor, '\n', (size_t)(headers_end - cursor));
-        if (!line_end)
-        {
-            line_end = headers_end;
-        }
-        const char *line = cursor;
-        if (line_end > line && *(line_end - 1) == '\r')
-        {
-            line_end -= 1;
-        }
-        size_t line_len = (size_t)(line_end - line);
-        if (line_len >= header_len && strncasecmp(line, HEADER, header_len) == 0)
-        {
-            const char *value = line + header_len;
-            while (value < line_end && (*value == ' ' || *value == '\t'))
-            {
-                ++value;
-            }
-            size_t content_length = 0;
-            if (value == line_end)
-            {
-                return -1;
-            }
-            while (value < line_end)
-            {
-                if (*value < '0' || *value > '9')
-                {
-                    return -1;
-                }
-                size_t digit = (size_t)(*value - '0');
-                if (content_length > (SIZE_MAX - digit) / 10u)
-                {
-                    return -1;
-                }
-                content_length = (content_length * 10u) + digit;
-                ++value;
-            }
-            *out_content_length = content_length;
-            return 0;
-        }
-        cursor = line_end;
-        if (cursor < headers_end && *cursor == '\r')
-        {
-            ++cursor;
-        }
-        if (cursor < headers_end && *cursor == '\n')
-        {
-            ++cursor;
-        }
-    }
-    return -1;
-}
-
-static int http_read_request_body(
-    int client_fd,
-    const char *raw_buffer,
-    size_t raw_buffer_len,
-    char **out_body,
-    size_t *out_body_len)
-{
-    if (client_fd < 0 || !raw_buffer || !out_body || !out_body_len)
-    {
-        return -1;
-    }
-    *out_body = NULL;
-    *out_body_len = 0;
-
-    const char *body_ptr = NULL;
-    size_t available_len = 0;
-    if (!http_locate_body(raw_buffer, raw_buffer_len, &body_ptr, &available_len))
-    {
-        return -1;
-    }
-
-    size_t content_length = 0;
-    if (http_parse_content_length(raw_buffer, raw_buffer_len, &content_length) != 0)
-    {
-        content_length = available_len;
-    }
-    if (content_length > LANTERN_HTTP_MAX_TEST_DRIVER_BODY_SIZE)
-    {
-        return -1;
-    }
-
-    char *body = malloc(content_length + 1u);
-    if (!body)
-    {
-        return -1;
-    }
-    size_t copied = available_len < content_length ? available_len : content_length;
-    if (copied > 0)
-    {
-        memcpy(body, body_ptr, copied);
-    }
-    while (copied < content_length)
-    {
-        ssize_t received = recv(client_fd, body + copied, content_length - copied, 0);
-        if (received < 0 && errno == EINTR)
-        {
-            continue;
-        }
-        if (received <= 0)
-        {
-            free(body);
-            return -1;
-        }
-        copied += (size_t)received;
-    }
-    body[content_length] = '\0';
-    *out_body = body;
-    *out_body_len = content_length;
     return 0;
 }
 
@@ -753,19 +279,23 @@ static int parse_enabled_bool_body(const char *body, size_t body_len, bool *out_
  *
  * @spec https://github.com/leanEthereum/leanSpec/pull/636
  */
-static void handle_admin_aggregator(
-    struct lantern_http_server *server,
-    int client_fd,
-    const char *method,
-    const char *raw_buffer,
-    size_t raw_buffer_len,
-    const char *peer_text)
+static int handle_admin_aggregator(
+    void *context,
+    const struct lantern_http_request *request)
 {
+    struct lantern_http_server *server = context;
+    if (!server || !request)
+    {
+        return LANTERN_HTTP_SERVER_ERR_INVALID_PARAM;
+    }
+    int client_fd = request->client_fd;
+    const char *method = request->method;
+    const char *peer_text = request->peer;
     const bool is_get = (strcmp(method, "GET") == 0);
     const bool is_post = (strcmp(method, "POST") == 0);
     if (!is_get && !is_post)
     {
-        int rc = send_json_error(client_fd, 405, "Method Not Allowed", LANTERN_HTTP_JSON_METHOD_NOT_ALLOWED);
+        int rc = lantern_http_send_json_error(client_fd, 405, "Method Not Allowed", LANTERN_HTTP_JSON_METHOD_NOT_ALLOWED);
         lantern_log_info(
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
@@ -773,27 +303,27 @@ static void handle_admin_aggregator(
             method,
             LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
             rc);
-        return;
+        return 0;
     }
 
     if (is_get)
     {
         if (!server->callbacks.get_is_aggregator)
         {
-            int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
+            int rc = lantern_http_send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
             lantern_log_info(
                 "http",
                 &(const struct lantern_log_metadata){.peer = peer_text},
                 "GET %s -> 503 (rc=%d)",
                 LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
                 rc);
-            return;
+            return 0;
         }
         bool enabled = false;
         int cb_rc = server->callbacks.get_is_aggregator(server->callbacks.context, &enabled);
         if (cb_rc != LANTERN_HTTP_CB_OK)
         {
-            int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
+            int rc = lantern_http_send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
             lantern_log_info(
                 "http",
                 &(const struct lantern_log_metadata){.peer = peer_text},
@@ -801,7 +331,7 @@ static void handle_admin_aggregator(
                 LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
                 cb_rc,
                 rc);
-            return;
+            return 0;
         }
         char body[64];
         int body_len = snprintf(
@@ -811,61 +341,59 @@ static void handle_admin_aggregator(
             enabled ? "true" : "false");
         if (body_len <= 0 || (size_t)body_len >= sizeof(body))
         {
-            send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
-            return;
+            lantern_http_send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
+            return 0;
         }
-        int rc = send_http_response(client_fd, 200, "OK", "application/json", body, (size_t)body_len);
+        int rc = lantern_http_send_response(client_fd, 200, "OK", "application/json", body, (size_t)body_len);
         lantern_log_info(
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
             "GET %s -> 200 (rc=%d)",
             LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
             rc);
-        return;
+        return 0;
     }
 
     /* POST */
     if (!server->callbacks.set_is_aggregator)
     {
-        int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
+        int rc = lantern_http_send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
         lantern_log_info(
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
             "POST %s -> 503 (rc=%d)",
             LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
             rc);
-        return;
+        return 0;
     }
-    const char *body_ptr = NULL;
-    size_t body_len = 0;
-    if (!http_locate_body(raw_buffer, raw_buffer_len, &body_ptr, &body_len) || body_len == 0)
+    if (!request->has_body || request->body_len == 0)
     {
-        int rc = send_json_error(client_fd, 400, "Bad Request", LANTERN_HTTP_JSON_BAD_REQUEST);
+        int rc = lantern_http_send_json_error(client_fd, 400, "Bad Request", LANTERN_HTTP_JSON_BAD_REQUEST);
         lantern_log_info(
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
             "POST %s -> 400 (empty body, rc=%d)",
             LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
             rc);
-        return;
+        return 0;
     }
     bool enabled = false;
-    if (parse_enabled_bool_body(body_ptr, body_len, &enabled) != 0)
+    if (parse_enabled_bool_body(request->body, request->body_len, &enabled) != 0)
     {
-        int rc = send_json_error(client_fd, 400, "Bad Request", LANTERN_HTTP_JSON_BAD_REQUEST);
+        int rc = lantern_http_send_json_error(client_fd, 400, "Bad Request", LANTERN_HTTP_JSON_BAD_REQUEST);
         lantern_log_info(
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
             "POST %s -> 400 (bad body, rc=%d)",
             LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
             rc);
-        return;
+        return 0;
     }
     bool previous = false;
     int cb_rc = server->callbacks.set_is_aggregator(server->callbacks.context, enabled, &previous);
     if (cb_rc != LANTERN_HTTP_CB_OK)
     {
-        int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
+        int rc = lantern_http_send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
         lantern_log_info(
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
@@ -873,7 +401,7 @@ static void handle_admin_aggregator(
             LANTERN_HTTP_PATH_ADMIN_AGGREGATOR,
             cb_rc,
             rc);
-        return;
+        return 0;
     }
     char resp[96];
     int resp_len = snprintf(
@@ -884,10 +412,10 @@ static void handle_admin_aggregator(
         previous ? "true" : "false");
     if (resp_len <= 0 || (size_t)resp_len >= sizeof(resp))
     {
-        send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
-        return;
+        lantern_http_send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
+        return 0;
     }
-    int rc = send_http_response(client_fd, 200, "OK", "application/json", resp, (size_t)resp_len);
+    int rc = lantern_http_send_response(client_fd, 200, "OK", "application/json", resp, (size_t)resp_len);
     lantern_log_info(
         "http",
         &(const struct lantern_log_metadata){.peer = peer_text},
@@ -896,28 +424,25 @@ static void handle_admin_aggregator(
         enabled ? "true" : "false",
         previous ? "true" : "false",
         rc);
+    return 0;
 }
 
-static bool is_test_driver_path(const char *path)
+static int handle_test_driver(
+    void *context,
+    const struct lantern_http_request *request)
 {
-    return path
-        && (strcmp(path, LANTERN_HTTP_PATH_TEST_FC_INIT) == 0
-            || strcmp(path, LANTERN_HTTP_PATH_TEST_FC_STEP) == 0
-            || strcmp(path, LANTERN_HTTP_PATH_TEST_STATE_RUN) == 0
-            || strcmp(path, LANTERN_HTTP_PATH_TEST_VERIFY_RUN) == 0);
-}
-
-static void handle_test_driver(
-    int client_fd,
-    const char *method,
-    const char *path,
-    const char *raw_buffer,
-    size_t raw_buffer_len,
-    const char *peer_text)
-{
+    (void)context;
+    if (!request)
+    {
+        return LANTERN_HTTP_SERVER_ERR_INVALID_PARAM;
+    }
+    int client_fd = request->client_fd;
+    const char *method = request->method;
+    const char *path = request->path;
+    const char *peer_text = request->peer;
     if (strcmp(method, "POST") != 0)
     {
-        int rc = send_json_error(client_fd, 405, "Method Not Allowed", LANTERN_HTTP_JSON_METHOD_NOT_ALLOWED);
+        int rc = lantern_http_send_json_error(client_fd, 405, "Method Not Allowed", LANTERN_HTTP_JSON_METHOD_NOT_ALLOWED);
         lantern_log_info(
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
@@ -925,27 +450,26 @@ static void handle_test_driver(
             method,
             path,
             rc);
-        return;
+        return 0;
     }
 
     char *request_body = NULL;
     size_t request_body_len = 0;
-    if (http_read_request_body(
-            client_fd,
-            raw_buffer,
-            raw_buffer_len,
+    if (lantern_http_request_read_body(
+            request,
+            LANTERN_HTTP_MAX_TEST_DRIVER_BODY_SIZE,
             &request_body,
             &request_body_len)
         != 0)
     {
-        int rc = send_json_error(client_fd, 400, "Bad Request", LANTERN_HTTP_JSON_BAD_REQUEST);
+        int rc = lantern_http_send_json_error(client_fd, 400, "Bad Request", LANTERN_HTTP_JSON_BAD_REQUEST);
         lantern_log_info(
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
             "POST %s -> 400 (body read failed, rc=%d)",
             path,
             rc);
-        return;
+        return 0;
     }
 
     if (strcmp(path, LANTERN_HTTP_PATH_TEST_FC_INIT) == 0)
@@ -956,7 +480,7 @@ static void handle_test_driver(
         free(request_body);
         if (driver_rc != 0)
         {
-            int rc = send_json_error(
+            int rc = lantern_http_send_json_error(
                 client_fd,
                 400,
                 "Bad Request",
@@ -970,16 +494,16 @@ static void handle_test_driver(
                 error ? error : "-",
                 rc);
             free(error);
-            return;
+            return 0;
         }
-        int rc = send_http_response(client_fd, 204, "No Content", "application/json", NULL, 0);
+        int rc = lantern_http_send_response(client_fd, 204, "No Content", "application/json", NULL, 0);
         lantern_log_info(
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
             "POST %s -> 204 (rc=%d)",
             path,
             rc);
-        return;
+        return 0;
     }
 
     char *response_body = NULL;
@@ -1014,7 +538,7 @@ static void handle_test_driver(
     if (driver_rc != 0 || !response_body)
     {
         free(response_body);
-        int rc = send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
+        int rc = lantern_http_send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
         lantern_log_error(
             "http",
             &(const struct lantern_log_metadata){.peer = peer_text},
@@ -1022,10 +546,10 @@ static void handle_test_driver(
             path,
             driver_rc,
             rc);
-        return;
+        return 0;
     }
 
-    int rc = send_http_response(
+    int rc = lantern_http_send_response(
         client_fd,
         200,
         "OK",
@@ -1039,721 +563,455 @@ static void handle_test_driver(
         "POST %s -> 200 (rc=%d)",
         path,
         rc);
+    return 0;
 }
 
 
-/**
- * Handle a single client connection.
- *
- * @param server    HTTP server instance.
- * @param client_fd Client socket file descriptor.
- * @param peer_addr Peer address (may be NULL).
- *
- * @note Thread safety: This function is thread-safe if callbacks are thread-safe.
- */
-static void handle_client_connection(
-    struct lantern_http_server *server,
-    int client_fd,
-    const struct sockaddr_in *peer_addr)
+static int handle_health(
+    void *context,
+    const struct lantern_http_request *request)
 {
-    if (!server || client_fd < 0)
+    (void)context;
+    int rc = lantern_http_send_response(
+        request->client_fd,
+        200,
+        "OK",
+        "application/json",
+        LANTERN_HTTP_JSON_HEALTH,
+        strlen(LANTERN_HTTP_JSON_HEALTH));
+    if (rc == 0)
     {
-        return;
+        lantern_log_info(
+            "http",
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "GET %s -> 200",
+            request->path);
+    }
+    else
+    {
+        lantern_log_error(
+            "http",
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "failed to send health response rc=%d",
+            rc);
+    }
+    return rc;
+}
+
+static int handle_metrics(
+    void *context,
+    const struct lantern_http_request *request)
+{
+    struct lantern_http_server *server = context;
+    return lantern_metrics_handle_http(&server->metrics_handler, request);
+}
+
+static int send_finalized_error(
+    const struct lantern_http_request *request,
+    int callback_rc,
+    const char *missing_body,
+    const char *missing_log,
+    const char *unavailable_log,
+    const char *failed_log)
+{
+    const char *body = LANTERN_HTTP_JSON_INTERNAL;
+    int status_code = 500;
+    const char *status_text = "Internal Server Error";
+    if (callback_rc == LANTERN_HTTP_CB_ERR_NOT_FOUND)
+    {
+        body = missing_body;
+        status_code = 404;
+        status_text = "Not Found";
+    }
+    else if (callback_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
+        || callback_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
+        || callback_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
+    {
+        body = LANTERN_HTTP_JSON_UNAVAILABLE;
+        status_code = 503;
+        status_text = "Service Unavailable";
     }
 
-    char peer_text[INET_ADDRSTRLEN];
-    peer_to_text(peer_addr, peer_text, sizeof(peer_text));
-
-    char buffer[LANTERN_HTTP_READ_BUFFER_SIZE];
-    ssize_t received = -1;
-    do
+    int rc = lantern_http_send_json_error(request->client_fd, status_code, status_text, body);
+    if (callback_rc == LANTERN_HTTP_CB_ERR_NOT_FOUND)
     {
-        received = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
-    } while (received < 0 && errno == EINTR);
-
-    if (received <= 0)
-    {
-        return;
+        lantern_log_info(
+            "http",
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "%s",
+            missing_log);
     }
-    buffer[(size_t)received] = '\0';
+    else if (callback_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
+        || callback_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
+        || callback_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
+    {
+        lantern_log_warn(
+            "http",
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "%s rc=%d send_rc=%d",
+            unavailable_log,
+            callback_rc,
+            rc);
+    }
+    else
+    {
+        lantern_log_error(
+            "http",
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "%s rc=%d send_rc=%d",
+            failed_log,
+            callback_rc,
+            rc);
+    }
+    return rc;
+}
 
-    char method[LANTERN_HTTP_METHOD_CAP];
-    char path[LANTERN_HTTP_PATH_CAP];
+static int send_finalized_bytes(
+    const struct lantern_http_request *request,
+    uint8_t *bytes,
+    size_t len,
+    const char *empty_log,
+    const char *send_failed_log)
+{
+    if (!bytes || len == 0)
+    {
+        free(bytes);
+        int rc = lantern_http_send_json_error(
+            request->client_fd,
+            500,
+            "Internal Server Error",
+            LANTERN_HTTP_JSON_INTERNAL);
+        lantern_log_error(
+            "http",
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "%s send_rc=%d",
+            empty_log,
+            rc);
+        return rc;
+    }
 
-    int result = parse_request_line(buffer, method, sizeof(method), path, sizeof(path));
+    int rc = lantern_http_send_response(
+        request->client_fd,
+        200,
+        "OK",
+        "application/octet-stream",
+        (const char *)bytes,
+        len);
+    free(bytes);
+    if (rc != 0)
+    {
+        lantern_log_error(
+            "http",
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "%s rc=%d",
+            send_failed_log,
+            rc);
+        return rc;
+    }
+
+    lantern_log_info(
+        "http",
+        &(const struct lantern_log_metadata){.peer = request->peer},
+        "GET %s -> 200",
+        request->path);
+    return 0;
+}
+
+static int handle_finalized_state(
+    void *context,
+    const struct lantern_http_request *request)
+{
+    struct lantern_http_server *server = context;
+    if (!server->callbacks.finalized_state_ssz)
+    {
+        int rc = lantern_http_send_json_error(request->client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
+        lantern_log_error(
+            "http",
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "finalized state callback missing rc=%d",
+            rc);
+        return rc;
+    }
+
+    uint8_t *state_bytes = NULL;
+    size_t state_len = 0;
+    int state_rc = server->callbacks.finalized_state_ssz(
+        server->callbacks.context,
+        &state_bytes,
+        &state_len);
+    if (state_rc != 0)
+    {
+        free(state_bytes);
+        return send_finalized_error(
+            request,
+            state_rc,
+            LANTERN_HTTP_JSON_STATE_MISSING,
+            "finalized state missing -> 404",
+            "finalized state unavailable",
+            "finalized state failed");
+    }
+    return send_finalized_bytes(
+        request,
+        state_bytes,
+        state_len,
+        "finalized state empty",
+        "finalized state send failed");
+}
+
+static int handle_finalized_block(
+    void *context,
+    const struct lantern_http_request *request)
+{
+    struct lantern_http_server *server = context;
+    if (!server->callbacks.finalized_block_ssz)
+    {
+        int rc = lantern_http_send_json_error(request->client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
+        lantern_log_error(
+            "http",
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "finalized block callback missing rc=%d",
+            rc);
+        return rc;
+    }
+
+    uint8_t *block_bytes = NULL;
+    size_t block_len = 0;
+    int block_rc = server->callbacks.finalized_block_ssz(
+        server->callbacks.context,
+        &block_bytes,
+        &block_len);
+    if (block_rc != 0)
+    {
+        free(block_bytes);
+        return send_finalized_error(
+            request,
+            block_rc,
+            LANTERN_HTTP_JSON_BLOCK_MISSING,
+            "finalized block missing -> 404",
+            "finalized block unavailable",
+            "finalized block failed");
+    }
+    return send_finalized_bytes(
+        request,
+        block_bytes,
+        block_len,
+        "finalized block empty",
+        "finalized block send failed");
+}
+
+static int send_snapshot_error(
+    const struct lantern_http_request *request,
+    int callback_rc,
+    const char *unavailable_log,
+    const char *failed_log)
+{
+    const char *body = LANTERN_HTTP_JSON_INTERNAL;
+    int status_code = 500;
+    const char *status_text = "Internal Server Error";
+    if (callback_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
+        || callback_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
+        || callback_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
+    {
+        body = LANTERN_HTTP_JSON_UNAVAILABLE;
+        status_code = 503;
+        status_text = "Service Unavailable";
+    }
+
+    int rc = lantern_http_send_json_error(request->client_fd, status_code, status_text, body);
+    if (status_code == 503)
+    {
+        lantern_log_warn(
+            "http",
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "%s rc=%d send_rc=%d",
+            unavailable_log,
+            callback_rc,
+            rc);
+    }
+    else
+    {
+        lantern_log_error(
+            "http",
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "%s rc=%d send_rc=%d",
+            failed_log,
+            callback_rc,
+            rc);
+    }
+    return rc;
+}
+
+static int handle_justified(
+    void *context,
+    const struct lantern_http_request *request)
+{
+    struct lantern_http_server *server = context;
+    if (!server->callbacks.snapshot_head)
+    {
+        int rc = lantern_http_send_json_error(request->client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
+        lantern_log_error(
+            "http",
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "justified snapshot callback missing rc=%d",
+            rc);
+        return rc;
+    }
+
+    struct lantern_http_head_snapshot snapshot;
+    memset(&snapshot, 0, sizeof(snapshot));
+    int snapshot_rc = server->callbacks.snapshot_head(server->callbacks.context, &snapshot);
+    if (snapshot_rc != 0)
+    {
+        return send_snapshot_error(
+            request,
+            snapshot_rc,
+            "justified snapshot unavailable",
+            "justified snapshot failed");
+    }
+
+    char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    if (lantern_bytes_to_hex(
+            snapshot.justified.root.bytes,
+            LANTERN_ROOT_SIZE,
+            root_hex,
+            sizeof(root_hex),
+            1)
+        != 0)
+    {
+        int rc = lantern_http_send_json_error(request->client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
+        lantern_log_error(
+            "http",
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "justified root hex failed send_rc=%d",
+            rc);
+        return rc;
+    }
+
+    char body[256];
+    int body_written = snprintf(
+        body,
+        sizeof(body),
+        "{\"slot\":%" PRIu64 ",\"root\":\"%s\"}",
+        snapshot.justified.slot,
+        root_hex);
+    if (body_written < 0 || (size_t)body_written >= sizeof(body))
+    {
+        int rc = lantern_http_send_json_error(request->client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
+        lantern_log_error(
+            "http",
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "justified response format failed send_rc=%d",
+            rc);
+        return rc;
+    }
+
+    int rc = lantern_http_send_response(
+        request->client_fd,
+        200,
+        "OK",
+        "application/json",
+        body,
+        (size_t)body_written);
+    if (rc != 0)
+    {
+        lantern_log_error(
+            "http",
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "justified response send failed rc=%d",
+            rc);
+        return rc;
+    }
+
+    lantern_log_info(
+        "http",
+        &(const struct lantern_log_metadata){.peer = request->peer},
+        "GET %s -> 200",
+        request->path);
+    return 0;
+}
+
+static int handle_fork_choice(
+    void *context,
+    const struct lantern_http_request *request)
+{
+    struct lantern_http_server *server = context;
+    if (!server->callbacks.snapshot_fork_choice)
+    {
+        int rc = lantern_http_send_json_error(request->client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
+        lantern_log_error(
+            "http",
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "fork choice snapshot callback missing rc=%d",
+            rc);
+        return rc;
+    }
+
+    struct lantern_http_fork_choice_snapshot snapshot;
+    memset(&snapshot, 0, sizeof(snapshot));
+    int snapshot_rc = server->callbacks.snapshot_fork_choice(server->callbacks.context, &snapshot);
+    if (snapshot_rc != 0)
+    {
+        return send_snapshot_error(
+            request,
+            snapshot_rc,
+            "fork choice snapshot unavailable",
+            "fork choice snapshot failed");
+    }
+
+    char *body = NULL;
+    size_t body_len = 0;
+    int result = format_fork_choice_response(&snapshot, &body, &body_len);
+    free(snapshot.nodes);
     if (result != 0)
     {
-        int rc = send_json_error(client_fd, 400, "Bad Request", LANTERN_HTTP_JSON_MALFORMED);
-        if (rc == 0)
-        {
-            lantern_log_info(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "malformed request -> 400");
-        }
-        else
-        {
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "failed to send 400 response rc=%d",
-                rc);
-        }
-        return;
-    }
-
-    if (strcmp(path, LANTERN_HTTP_PATH_ADMIN_AGGREGATOR) == 0)
-    {
-        handle_admin_aggregator(
-            server,
-            client_fd,
-            method,
-            buffer,
-            (size_t)received,
-            peer_text);
-        return;
-    }
-
-    if (is_test_driver_path(path))
-    {
-        handle_test_driver(
-            client_fd,
-            method,
-            path,
-            buffer,
-            (size_t)received,
-            peer_text);
-        return;
-    }
-
-    if (strcmp(method, "GET") != 0)
-    {
-        int rc = send_json_error(client_fd, 404, "Not Found", LANTERN_HTTP_JSON_UNKNOWN_ENDPOINT);
-        if (rc == 0)
-        {
-            lantern_log_info(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "%s %s -> 404",
-                method,
-                path);
-        }
-        else
-        {
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "failed to send 404 response rc=%d",
-                rc);
-        }
-        return;
-    }
-
-    if (strcmp(path, LANTERN_HTTP_PATH_HEALTH) == 0)
-    {
-        int rc = send_http_response(
-            client_fd,
-            200,
-            "OK",
-            "application/json",
-            LANTERN_HTTP_JSON_HEALTH,
-            strlen(LANTERN_HTTP_JSON_HEALTH));
-        if (rc == 0)
-        {
-            lantern_log_info(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "GET %s -> 200",
-                path);
-        }
-        else
-        {
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "failed to send health response rc=%d",
-                rc);
-        }
-        return;
-    }
-
-    if (strcmp(path, LANTERN_HTTP_PATH_METRICS) == 0)
-    {
-        if (!server->callbacks.metrics_snapshot)
-        {
-            int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "metrics callback missing rc=%d",
-                rc);
-            return;
-        }
-
-        struct lantern_metrics_snapshot snapshot;
-        memset(&snapshot, 0, sizeof(snapshot));
-        if (server->callbacks.metrics_snapshot(server->callbacks.context, &snapshot) != 0)
-        {
-            int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "metrics snapshot failed rc=%d",
-                rc);
-            return;
-        }
-
-        char *body = NULL;
-        size_t body_len = 0;
-        result = lantern_metrics_format_prometheus(&snapshot, &body, &body_len);
-        if (result != 0)
-        {
-            int rc = send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "metrics formatting failed result=%d send_rc=%d",
-                result,
-                rc);
-            return;
-        }
-
-        result = send_http_response(
-            client_fd,
-            200,
-            "OK",
-            LANTERN_METRICS_CONTENT_TYPE,
-            body,
-            body_len);
-        free(body);
-        if (result != 0)
-        {
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "metrics send failed rc=%d",
-                result);
-            return;
-        }
-
-        lantern_log_info(
+        int rc = lantern_http_send_json_error(request->client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
+        lantern_log_error(
             "http",
-            &(const struct lantern_log_metadata){.peer = peer_text},
-            "GET %s -> 200",
-            path);
-        return;
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "fork choice response format failed send_rc=%d",
+            rc);
+        return rc;
     }
 
-    if (strcmp(path, LANTERN_HTTP_PATH_FINALIZED) == 0)
+    result = lantern_http_send_response(
+        request->client_fd,
+        200,
+        "OK",
+        "application/json",
+        body,
+        body_len);
+    free(body);
+    if (result != 0)
     {
-        if (!server->callbacks.finalized_state_ssz)
-        {
-            int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "finalized state callback missing rc=%d",
-                rc);
-            return;
-        }
-
-        uint8_t *state_bytes = NULL;
-        size_t state_len = 0;
-        int state_rc = server->callbacks.finalized_state_ssz(
-            server->callbacks.context,
-            &state_bytes,
-            &state_len);
-        if (state_rc != 0)
-        {
-            const char *body = LANTERN_HTTP_JSON_INTERNAL;
-            int status_code = 500;
-            const char *status_text = "Internal Server Error";
-            if (state_rc == LANTERN_HTTP_CB_ERR_NOT_FOUND)
-            {
-                body = LANTERN_HTTP_JSON_STATE_MISSING;
-                status_code = 404;
-                status_text = "Not Found";
-            }
-            else if (state_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
-                || state_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
-                || state_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
-            {
-                body = LANTERN_HTTP_JSON_UNAVAILABLE;
-                status_code = 503;
-                status_text = "Service Unavailable";
-            }
-
-            if (state_bytes)
-            {
-                free(state_bytes);
-            }
-
-            int rc = send_json_error(client_fd, status_code, status_text, body);
-            if (state_rc == LANTERN_HTTP_CB_ERR_NOT_FOUND)
-            {
-                lantern_log_info(
-                    "http",
-                    &(const struct lantern_log_metadata){.peer = peer_text},
-                    "finalized state missing -> 404");
-            }
-            else if (state_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
-                || state_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
-                || state_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
-            {
-                lantern_log_warn(
-                    "http",
-                    &(const struct lantern_log_metadata){.peer = peer_text},
-                    "finalized state unavailable rc=%d send_rc=%d",
-                    state_rc,
-                    rc);
-            }
-            else
-            {
-                lantern_log_error(
-                    "http",
-                    &(const struct lantern_log_metadata){.peer = peer_text},
-                    "finalized state failed rc=%d send_rc=%d",
-                    state_rc,
-                    rc);
-            }
-            return;
-        }
-
-        if (!state_bytes || state_len == 0)
-        {
-            if (state_bytes)
-            {
-                free(state_bytes);
-            }
-            int rc = send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "finalized state empty send_rc=%d",
-                rc);
-            return;
-        }
-
-        result = send_http_response(
-            client_fd,
-            200,
-            "OK",
-            "application/octet-stream",
-            (const char *)state_bytes,
-            state_len);
-        free(state_bytes);
-        if (result != 0)
-        {
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "finalized state send failed rc=%d",
-                result);
-            return;
-        }
-
-        lantern_log_info(
+        lantern_log_error(
             "http",
-            &(const struct lantern_log_metadata){.peer = peer_text},
-            "GET %s -> 200",
-            path);
-        return;
+            &(const struct lantern_log_metadata){.peer = request->peer},
+            "fork choice response send failed rc=%d",
+            result);
+        return result;
     }
 
-    if (strcmp(path, LANTERN_HTTP_PATH_FINALIZED_BLOCK) == 0)
-    {
-        if (!server->callbacks.finalized_block_ssz)
-        {
-            int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "finalized block callback missing rc=%d",
-                rc);
-            return;
-        }
-
-        uint8_t *block_bytes = NULL;
-        size_t block_len = 0;
-        int block_rc = server->callbacks.finalized_block_ssz(
-            server->callbacks.context,
-            &block_bytes,
-            &block_len);
-        if (block_rc != 0)
-        {
-            const char *body = LANTERN_HTTP_JSON_INTERNAL;
-            int status_code = 500;
-            const char *status_text = "Internal Server Error";
-            if (block_rc == LANTERN_HTTP_CB_ERR_NOT_FOUND)
-            {
-                body = LANTERN_HTTP_JSON_BLOCK_MISSING;
-                status_code = 404;
-                status_text = "Not Found";
-            }
-            else if (block_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
-                || block_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
-                || block_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
-            {
-                body = LANTERN_HTTP_JSON_UNAVAILABLE;
-                status_code = 503;
-                status_text = "Service Unavailable";
-            }
-
-            free(block_bytes);
-
-            int rc = send_json_error(client_fd, status_code, status_text, body);
-            if (block_rc == LANTERN_HTTP_CB_ERR_NOT_FOUND)
-            {
-                lantern_log_info(
-                    "http",
-                    &(const struct lantern_log_metadata){.peer = peer_text},
-                    "finalized block missing -> 404");
-            }
-            else if (block_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
-                || block_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
-                || block_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
-            {
-                lantern_log_warn(
-                    "http",
-                    &(const struct lantern_log_metadata){.peer = peer_text},
-                    "finalized block unavailable rc=%d send_rc=%d",
-                    block_rc,
-                    rc);
-            }
-            else
-            {
-                lantern_log_error(
-                    "http",
-                    &(const struct lantern_log_metadata){.peer = peer_text},
-                    "finalized block failed rc=%d send_rc=%d",
-                    block_rc,
-                    rc);
-            }
-            return;
-        }
-
-        if (!block_bytes || block_len == 0)
-        {
-            free(block_bytes);
-            int rc = send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "finalized block empty send_rc=%d",
-                rc);
-            return;
-        }
-
-        result = send_http_response(
-            client_fd,
-            200,
-            "OK",
-            "application/octet-stream",
-            (const char *)block_bytes,
-            block_len);
-        free(block_bytes);
-        if (result != 0)
-        {
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "finalized block send failed rc=%d",
-                result);
-            return;
-        }
-
-        lantern_log_info(
-            "http",
-            &(const struct lantern_log_metadata){.peer = peer_text},
-            "GET %s -> 200",
-            path);
-        return;
-    }
-
-    if (strcmp(path, LANTERN_HTTP_PATH_JUSTIFIED) == 0)
-    {
-        if (!server->callbacks.snapshot_head)
-        {
-            int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "justified snapshot callback missing rc=%d",
-                rc);
-            return;
-        }
-
-        struct lantern_http_head_snapshot snapshot;
-        memset(&snapshot, 0, sizeof(snapshot));
-        int snapshot_rc = server->callbacks.snapshot_head(server->callbacks.context, &snapshot);
-        if (snapshot_rc != 0)
-        {
-            const char *body = LANTERN_HTTP_JSON_INTERNAL;
-            int status_code = 500;
-            const char *status_text = "Internal Server Error";
-            if (snapshot_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
-                || snapshot_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
-                || snapshot_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
-            {
-                body = LANTERN_HTTP_JSON_UNAVAILABLE;
-                status_code = 503;
-                status_text = "Service Unavailable";
-            }
-
-            int rc = send_json_error(client_fd, status_code, status_text, body);
-            if (snapshot_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
-                || snapshot_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
-                || snapshot_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
-            {
-                lantern_log_warn(
-                    "http",
-                    &(const struct lantern_log_metadata){.peer = peer_text},
-                    "justified snapshot unavailable rc=%d send_rc=%d",
-                    snapshot_rc,
-                    rc);
-            }
-            else
-            {
-                lantern_log_error(
-                    "http",
-                    &(const struct lantern_log_metadata){.peer = peer_text},
-                    "justified snapshot failed rc=%d send_rc=%d",
-                    snapshot_rc,
-                    rc);
-            }
-            return;
-        }
-
-        char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        if (lantern_bytes_to_hex(
-                snapshot.justified.root.bytes,
-                LANTERN_ROOT_SIZE,
-                root_hex,
-                sizeof(root_hex),
-                1)
-            != 0)
-        {
-            int rc = send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "justified root hex failed send_rc=%d",
-                rc);
-            return;
-        }
-
-        char body[256];
-        int body_written = snprintf(
-            body,
-            sizeof(body),
-            "{\"slot\":%" PRIu64 ",\"root\":\"%s\"}",
-            snapshot.justified.slot,
-            root_hex);
-        if (body_written < 0 || (size_t)body_written >= sizeof(body))
-        {
-            int rc = send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "justified response format failed send_rc=%d",
-                rc);
-            return;
-        }
-
-        result = send_http_response(
-            client_fd,
-            200,
-            "OK",
-            "application/json",
-            body,
-            (size_t)body_written);
-        if (result != 0)
-        {
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "justified response send failed rc=%d",
-                result);
-            return;
-        }
-
-        lantern_log_info(
-            "http",
-            &(const struct lantern_log_metadata){.peer = peer_text},
-            "GET %s -> 200",
-            path);
-        return;
-    }
-
-    if (strcmp(path, LANTERN_HTTP_PATH_FORK_CHOICE) == 0)
-    {
-        if (!server->callbacks.snapshot_fork_choice)
-        {
-            int rc = send_json_error(client_fd, 503, "Service Unavailable", LANTERN_HTTP_JSON_UNAVAILABLE);
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "fork choice snapshot callback missing rc=%d",
-                rc);
-            return;
-        }
-
-        struct lantern_http_fork_choice_snapshot snapshot;
-        memset(&snapshot, 0, sizeof(snapshot));
-        int snapshot_rc = server->callbacks.snapshot_fork_choice(server->callbacks.context, &snapshot);
-        if (snapshot_rc != 0)
-        {
-            const char *body = LANTERN_HTTP_JSON_INTERNAL;
-            int status_code = 500;
-            const char *status_text = "Internal Server Error";
-            if (snapshot_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
-                || snapshot_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
-                || snapshot_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
-            {
-                body = LANTERN_HTTP_JSON_UNAVAILABLE;
-                status_code = 503;
-                status_text = "Service Unavailable";
-            }
-
-            int rc = send_json_error(client_fd, status_code, status_text, body);
-            if (snapshot_rc == LANTERN_HTTP_CB_ERR_INVALID_STATE
-                || snapshot_rc == LANTERN_HTTP_CB_ERR_LOCK_FAILED
-                || snapshot_rc == LANTERN_HTTP_CB_ERR_UNAVAILABLE)
-            {
-                lantern_log_warn(
-                    "http",
-                    &(const struct lantern_log_metadata){.peer = peer_text},
-                    "fork choice snapshot unavailable rc=%d send_rc=%d",
-                    snapshot_rc,
-                    rc);
-            }
-            else
-            {
-                lantern_log_error(
-                    "http",
-                    &(const struct lantern_log_metadata){.peer = peer_text},
-                    "fork choice snapshot failed rc=%d send_rc=%d",
-                    snapshot_rc,
-                    rc);
-            }
-            return;
-        }
-
-        char *body = NULL;
-        size_t body_len = 0;
-        result = format_fork_choice_response(&snapshot, &body, &body_len);
-        free(snapshot.nodes);
-        if (result != 0)
-        {
-            int rc = send_json_error(client_fd, 500, "Internal Server Error", LANTERN_HTTP_JSON_INTERNAL);
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "fork choice response format failed send_rc=%d",
-                rc);
-            return;
-        }
-
-        result = send_http_response(
-            client_fd,
-            200,
-            "OK",
-            "application/json",
-            body,
-            body_len);
-        free(body);
-        if (result != 0)
-        {
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "fork choice response send failed rc=%d",
-                result);
-            return;
-        }
-
-        lantern_log_info(
-            "http",
-            &(const struct lantern_log_metadata){.peer = peer_text},
-            "GET %s -> 200",
-            path);
-        return;
-    }
-
-    {
-        int rc = send_json_error(client_fd, 404, "Not Found", LANTERN_HTTP_JSON_UNKNOWN_ENDPOINT);
-        if (rc == 0)
-        {
-            lantern_log_info(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "%s %s -> 404",
-                method,
-                path);
-        }
-        else
-        {
-            lantern_log_error(
-                "http",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "failed to send 404 response rc=%d",
-                rc);
-        }
-    }
+    lantern_log_info(
+        "http",
+        &(const struct lantern_log_metadata){.peer = request->peer},
+        "GET %s -> 200",
+        request->path);
+    return 0;
 }
 
-
-/**
- * Thread entry point for the HTTP server accept loop.
- *
- * @param arg Pointer to struct lantern_http_server.
- * @return NULL.
- *
- * @note Thread safety: This function is not thread-safe; it is intended to run
- *       as a single server thread created by lantern_http_server_start().
- */
-static void *lantern_http_thread(void *arg)
-{
-    struct lantern_http_server *server = arg;
-    if (!server)
-    {
-        return NULL;
-    }
-
-    int listen_fd = server->listen_fd;
-    for (;;)
-    {
-        struct sockaddr_in peer;
-        socklen_t peer_len = sizeof(peer);
-        int client_fd = accept(listen_fd, (struct sockaddr *)&peer, &peer_len);
-        if (client_fd < 0)
-        {
-            if (errno == EINTR)
-            {
-                continue;
-            }
-            if (!server->running)
-            {
-                break;
-            }
-            if (errno == EBADF || errno == EINVAL)
-            {
-                break;
-            }
-            if (errno == ECONNABORTED)
-            {
-                continue;
-            }
-            lantern_log_error("http", NULL, "accept failed errno=%d", errno);
-            continue;
-        }
-
-        handle_client_connection(server, client_fd, &peer);
-        close(client_fd);
-    }
-
-    return NULL;
-}
+static const struct lantern_http_route kHttpRoutes[] = {
+    {NULL, LANTERN_HTTP_PATH_ADMIN_AGGREGATOR, handle_admin_aggregator},
+    {NULL, LANTERN_HTTP_PATH_TEST_FC_INIT, handle_test_driver},
+    {NULL, LANTERN_HTTP_PATH_TEST_FC_STEP, handle_test_driver},
+    {NULL, LANTERN_HTTP_PATH_TEST_STATE_RUN, handle_test_driver},
+    {NULL, LANTERN_HTTP_PATH_TEST_VERIFY_RUN, handle_test_driver},
+    {"GET", LANTERN_HTTP_PATH_HEALTH, handle_health},
+    {"GET", LANTERN_HTTP_PATH_METRICS, handle_metrics},
+    {"GET", LANTERN_HTTP_PATH_FINALIZED, handle_finalized_state},
+    {"GET", LANTERN_HTTP_PATH_FINALIZED_BLOCK, handle_finalized_block},
+    {"GET", LANTERN_HTTP_PATH_JUSTIFIED, handle_justified},
+    {"GET", LANTERN_HTTP_PATH_FORK_CHOICE, handle_fork_choice},
+};
 
 
 /**
@@ -1771,9 +1029,7 @@ void lantern_http_server_init(struct lantern_http_server *server)
     }
 
     memset(server, 0, sizeof(*server));
-    server->listen_fd = -1;
-    server->running = 0;
-    server->thread_started = 0;
+    lantern_http_core_init(&server->core);
     server->port = 0;
 }
 
@@ -1804,67 +1060,38 @@ int lantern_http_server_start(
         return LANTERN_HTTP_SERVER_ERR_INVALID_PARAM;
     }
 
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0)
-    {
-        lantern_log_error("http", NULL, "socket creation failed errno=%d", errno);
-        return LANTERN_HTTP_SERVER_ERR_IO;
-    }
-
-    int opt = 1;
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) != 0)
-    {
-        lantern_log_warn("http", NULL, "setsockopt(SO_REUSEADDR) failed errno=%d", errno);
-    }
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port = htons(config->port);
-
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0)
-    {
-        lantern_log_error("http", NULL, "bind failed errno=%d", errno);
-        close(fd);
-        return LANTERN_HTTP_SERVER_ERR_IO;
-    }
-
-    if (listen(fd, LANTERN_HTTP_LISTEN_BACKLOG) != 0)
-    {
-        lantern_log_error("http", NULL, "listen failed errno=%d", errno);
-        close(fd);
-        return LANTERN_HTTP_SERVER_ERR_IO;
-    }
-
-    server->listen_fd = fd;
     server->callbacks = config->callbacks;
-    server->port = config->port;
-    server->running = 1;
-    server->thread_started = 0;
+    server->metrics_handler.callbacks.context = server->callbacks.context;
+    server->metrics_handler.callbacks.snapshot = server->callbacks.metrics_snapshot;
+    server->metrics_handler.log_module = "http";
+    server->metrics_handler.unavailable_json = LANTERN_HTTP_JSON_UNAVAILABLE;
+    server->metrics_handler.formatting_failed_json = LANTERN_HTTP_JSON_INTERNAL;
 
-    if (server->port == 0)
+    struct lantern_http_core_config core_config;
+    memset(&core_config, 0, sizeof(core_config));
+    core_config.port = config->port;
+    core_config.log_module = "http";
+    core_config.listen_label = "http server";
+    core_config.malformed_json = LANTERN_HTTP_JSON_MALFORMED;
+    core_config.unknown_json = LANTERN_HTTP_JSON_UNKNOWN_ENDPOINT;
+    core_config.method_cap = LANTERN_HTTP_CORE_METHOD_CAP;
+    core_config.path_cap = LANTERN_HTTP_CORE_PATH_CAP;
+    core_config.listen_backlog = LANTERN_HTTP_CORE_LISTEN_BACKLOG;
+    core_config.capture_bound_port = true;
+    core_config.context = server;
+    core_config.routes = kHttpRoutes;
+    core_config.route_count = sizeof(kHttpRoutes) / sizeof(kHttpRoutes[0]);
+
+    int rc = lantern_http_core_start(&server->core, &core_config);
+    if (rc != 0)
     {
-        struct sockaddr_in bound_addr;
-        socklen_t bound_len = sizeof(bound_addr);
-        if (getsockname(fd, (struct sockaddr *)&bound_addr, &bound_len) == 0)
+        if (rc == LANTERN_HTTP_CORE_ERR_INVALID_PARAM)
         {
-            server->port = ntohs(bound_addr.sin_port);
+            return LANTERN_HTTP_SERVER_ERR_INVALID_PARAM;
         }
-    }
-
-    int create_rc = pthread_create(&server->thread, NULL, lantern_http_thread, server);
-    if (create_rc != 0)
-    {
-        lantern_log_error("http", NULL, "pthread_create failed rc=%d", create_rc);
-        close(fd);
-        server->listen_fd = -1;
-        server->running = 0;
         return LANTERN_HTTP_SERVER_ERR_IO;
     }
-
-    server->thread_started = 1;
-    lantern_log_info("http", NULL, "http server listening port=%" PRIu16, server->port);
+    server->port = server->core.port;
     return 0;
 }
 
@@ -1883,19 +1110,5 @@ void lantern_http_server_stop(struct lantern_http_server *server)
         return;
     }
 
-    server->running = 0;
-
-    int listen_fd = server->listen_fd;
-    server->listen_fd = -1;
-    if (listen_fd >= 0)
-    {
-        (void)shutdown(listen_fd, SHUT_RDWR);
-        close(listen_fd);
-    }
-
-    if (server->thread_started)
-    {
-        pthread_join(server->thread, NULL);
-        server->thread_started = 0;
-    }
+    lantern_http_core_stop(&server->core);
 }

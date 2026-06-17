@@ -514,7 +514,7 @@ static int test_checkpoint_state_endpoint(void)
 
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(addr);
-    if (getsockname(server.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
+    if (getsockname(server.core.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
     {
         lantern_http_server_stop(&server);
         cleanup_checkpoint_fixture(&fixture);
@@ -615,7 +615,7 @@ static int test_checkpoint_block_endpoint(void)
 
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(addr);
-    if (getsockname(server.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
+    if (getsockname(server.core.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
     {
         lantern_http_server_stop(&server);
         cleanup_checkpoint_fixture(&fixture);
@@ -779,7 +779,7 @@ static int test_justified_state_endpoint(void)
 
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(addr);
-    if (getsockname(server.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
+    if (getsockname(server.core.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
     {
         lantern_http_server_stop(&server);
         return 1;
@@ -918,7 +918,7 @@ static int test_fork_choice_endpoint(void)
 
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(addr);
-    if (getsockname(server.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
+    if (getsockname(server.core.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
     {
         lantern_http_server_stop(&server);
         return 1;
@@ -1095,7 +1095,7 @@ static int test_health_endpoint(void)
 
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(addr);
-    if (getsockname(server.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
+    if (getsockname(server.core.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
     {
         lantern_http_server_stop(&server);
         return 1;
@@ -1156,7 +1156,7 @@ static int test_unknown_route_endpoint(void)
 
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(addr);
-    if (getsockname(server.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
+    if (getsockname(server.core.listen_fd, (struct sockaddr *)&addr, &addr_len) != 0)
     {
         lantern_http_server_stop(&server);
         return 1;

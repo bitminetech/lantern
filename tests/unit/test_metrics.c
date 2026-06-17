@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "lantern/http/metrics.h"
+#include "lantern/metrics/server.h"
 #include "lantern/metrics/lean_metrics.h"
 
 static uint64_t extract_histogram_bucket_value(

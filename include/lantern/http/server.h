@@ -2,17 +2,16 @@
 #define LANTERN_HTTP_SERVER_H
 
 #include <stddef.h>
-#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 
 #include "lantern/consensus/containers.h"
+#include "lantern/http/core.h"
+#include "lantern/metrics/server.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-struct lantern_metrics_snapshot;
 
 typedef enum
 {
@@ -77,12 +76,10 @@ struct lantern_http_server_config {
 };
 
 struct lantern_http_server {
-    int listen_fd;
-    pthread_t thread;
-    int running;
-    int thread_started;
+    struct lantern_http_core_server core;
     uint16_t port;
     struct lantern_http_server_callbacks callbacks;
+    struct lantern_metrics_http_handler metrics_handler;
 };
 
 void lantern_http_server_init(struct lantern_http_server *server);

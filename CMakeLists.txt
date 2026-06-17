@@ -68,8 +68,8 @@ set(LANTERN_LIBRARY_SOURCES
     src/networking/messages.c
     src/encoding/rlp.c
     src/metrics/lean_metrics.c
-    src/http/common.c
-    src/http/metrics.c
+    src/metrics/server.c
+    src/http/core.c
     src/http/server.c
     src/test_driver/driver.c
     src/storage/storage.c

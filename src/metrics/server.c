@@ -1,5 +1,5 @@
 /**
- * @file metrics.c
+ * @file server.c
  * @brief Prometheus metrics HTTP endpoint.
  *
  * Exposes a Prometheus-compatible metrics endpoint:
@@ -10,35 +10,21 @@
  * @spec Prometheus exposition format 0.0.4 and POSIX sockets/pthreads.
  */
 
-#include "lantern/http/metrics.h"
+#include "lantern/metrics/server.h"
 
-#include <arpa/inet.h>
-#include <errno.h>
 #include <inttypes.h>
-#include <netinet/in.h>
-#include <pthread.h>
-#include <stdarg.h>
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
 
-#include "lantern/http/common.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
 #include "lantern/support/version.h"
 
 #define ARRAY_LEN(x) (sizeof(x) / sizeof((x)[0]))
 
-static const size_t LANTERN_METRICS_READ_BUFFER_SIZE = 4096;
-static const size_t LANTERN_METRICS_BODY_DEFAULT_CAP = 1024;
 static const size_t LANTERN_METRICS_BODY_INITIAL_CAP = 2048;
-static const int LANTERN_METRICS_LISTEN_BACKLOG = 16;
 static const char LANTERN_METRICS_ENDPOINT_PATH[] = "/metrics";
 static const char *const kLeanDirectionLabels[LEAN_METRICS_DIR_COUNT] = {"inbound", "outbound"};
 static const char *const kLeanConnectionResultLabels[LEAN_METRICS_CONN_RESULT_COUNT] = {"success", "timeout", "error"};
@@ -47,12 +33,6 @@ static const char *const kLeanDisconnectionReasonLabels[LEAN_METRICS_DISCONNECT_
 static const char *const kLeanAggregatorSkippedReasonLabels[LEAN_METRICS_AGGREGATOR_SKIPPED_REASON_COUNT] =
     {"not_aggregator", "not_synced", "missing_state", "spawn_failed", "other"};
 static const char *const kLeanSyncStatusLabels[] = {"idle", "syncing", "synced"};
-
-enum
-{
-    LANTERN_METRICS_METHOD_CAP = 8,
-    LANTERN_METRICS_PATH_CAP = 128,
-};
 
 /**
  * Metrics server module-specific error codes.
@@ -83,192 +63,17 @@ static const char *metrics_client_label(const struct lantern_metrics_snapshot *s
     return snapshot->lean_client_label;
 }
 
-struct lantern_metrics_body_buffer
-{
-    char *data;  /**< Heap buffer (NUL-terminated). */
-    size_t len;  /**< Bytes written (excluding terminator). */
-    size_t cap;  /**< Allocated capacity in bytes. */
-};
-
-/**
- * @brief Initialize a dynamic metrics body buffer.
- *
- * @param buf         Buffer to initialize (modified in place).
- * @param initial_cap Initial allocation size in bytes (0 uses default).
- *
- * @return 0 on success.
- * @return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_METRICS_SERVER_ERR_OUT_OF_MEMORY on allocation failure.
- *
- * @note Thread safety: This function is thread-safe.
- */
-static int metrics_buffer_init(struct lantern_metrics_body_buffer *buf, size_t initial_cap)
-{
-    if (!buf)
-    {
-        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
-    }
-
-    size_t capacity = initial_cap != 0 ? initial_cap : LANTERN_METRICS_BODY_DEFAULT_CAP;
-    buf->data = malloc(capacity);
-    if (!buf->data)
-    {
-        return LANTERN_METRICS_SERVER_ERR_OUT_OF_MEMORY;
-    }
-
-    buf->len = 0;
-    buf->cap = capacity;
-    buf->data[0] = '\0';
-    return 0;
-}
-
-
-/**
- * @brief Free resources owned by a metrics body buffer.
- *
- * @param buf Buffer to free (may be NULL).
- *
- * @note Thread safety: This function is thread-safe.
- */
-static void metrics_buffer_free(struct lantern_metrics_body_buffer *buf)
-{
-    if (!buf)
-    {
-        return;
-    }
-
-    free(buf->data);
-    buf->data = NULL;
-    buf->len = 0;
-    buf->cap = 0;
-}
-
-
-/**
- * @brief Ensure the buffer can append the requested number of bytes.
- *
- * @param buf   Buffer to grow (modified in place).
- * @param extra Additional bytes required (excluding NUL terminator).
- *
- * @return 0 on success.
- * @return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_METRICS_SERVER_ERR_OUT_OF_MEMORY on allocation failure.
- * @return LANTERN_METRICS_SERVER_ERR_OVERFLOW on size overflow.
- *
- * @note Thread safety: This function is thread-safe.
- */
-static int metrics_buffer_reserve(struct lantern_metrics_body_buffer *buf, size_t extra)
-{
-    if (!buf)
-    {
-        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
-    }
-    if (extra == 0)
-    {
-        return 0;
-    }
-
-    if (buf->len >= SIZE_MAX - 1)
-    {
-        return LANTERN_METRICS_SERVER_ERR_OVERFLOW;
-    }
-    if (extra > (SIZE_MAX - buf->len - 1))
-    {
-        return LANTERN_METRICS_SERVER_ERR_OVERFLOW;
-    }
-
-    size_t required = buf->len + extra + 1;
-    if (required <= buf->cap)
-    {
-        return 0;
-    }
-
-    size_t new_cap = buf->cap != 0 ? buf->cap : LANTERN_METRICS_BODY_DEFAULT_CAP;
-    while (new_cap < required)
-    {
-        if (new_cap > SIZE_MAX / 2)
-        {
-            return LANTERN_METRICS_SERVER_ERR_OVERFLOW;
-        }
-        new_cap *= 2;
-    }
-
-    char *new_data = realloc(buf->data, new_cap);
-    if (!new_data)
-    {
-        return LANTERN_METRICS_SERVER_ERR_OUT_OF_MEMORY;
-    }
-
-    buf->data = new_data;
-    buf->cap = new_cap;
-    return 0;
-}
-
-
-/**
- * @brief Append formatted text to a metrics body buffer.
- *
- * @param buf Buffer to append to (modified in place).
- * @param fmt printf-style format string.
- *
- * @return 0 on success.
- * @return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_METRICS_SERVER_ERR_OUT_OF_MEMORY on allocation failure.
- * @return LANTERN_METRICS_SERVER_ERR_OVERFLOW on size overflow.
- * @return LANTERN_METRICS_SERVER_ERR_FORMATTING on formatting failure.
- *
- * @note Thread safety: This function is thread-safe.
- */
-static int metrics_buffer_appendf(struct lantern_metrics_body_buffer *buf, const char *fmt, ...)
-{
-    if (!buf || !fmt)
-    {
-        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
-    }
-
-    va_list args;
-    va_start(args, fmt);
-
-    va_list measure;
-    va_copy(measure, args);
-    int needed = vsnprintf(NULL, 0, fmt, measure);
-    va_end(measure);
-    if (needed < 0)
-    {
-        va_end(args);
-        return LANTERN_METRICS_SERVER_ERR_FORMATTING;
-    }
-
-    int reserve_rc = metrics_buffer_reserve(buf, (size_t)needed);
-    if (reserve_rc != 0)
-    {
-        va_end(args);
-        return reserve_rc;
-    }
-
-    int written = vsnprintf(buf->data + buf->len, buf->cap - buf->len, fmt, args);
-    va_end(args);
-    if (written < 0 || written != needed)
-    {
-        return LANTERN_METRICS_SERVER_ERR_FORMATTING;
-    }
-
-    buf->len += (size_t)written;
-    return 0;
-}
-
-
 /**
  * @brief Append a single Prometheus metric with a uint64 value.
  */
 static int append_metric_uint64(
-    struct lantern_metrics_body_buffer *buf,
+    struct lantern_http_buffer *buf,
     const char *name,
     const char *help,
     const char *type,
     uint64_t value)
 {
-    return metrics_buffer_appendf(
+    return lantern_http_buffer_appendf(
         buf,
         "# HELP %s %s\n"
         "# TYPE %s %s\n"
@@ -286,13 +91,13 @@ static int append_metric_uint64(
  * @brief Append a single Prometheus metric with a size_t value.
  */
 static int append_metric_size_t(
-    struct lantern_metrics_body_buffer *buf,
+    struct lantern_http_buffer *buf,
     const char *name,
     const char *help,
     const char *type,
     size_t value)
 {
-    return metrics_buffer_appendf(
+    return lantern_http_buffer_appendf(
         buf,
         "# HELP %s %s\n"
         "# TYPE %s %s\n"
@@ -310,7 +115,7 @@ static int append_metric_size_t(
  * @brief Append a Prometheus histogram from a lean metrics snapshot.
  */
 static int append_histogram_metrics(
-    struct lantern_metrics_body_buffer *buf,
+    struct lantern_http_buffer *buf,
     const char *name,
     const char *help,
     const struct lean_metrics_histogram_snapshot *hist)
@@ -320,7 +125,7 @@ static int append_histogram_metrics(
         return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
     }
 
-    int rc = metrics_buffer_appendf(
+    int rc = lantern_http_buffer_appendf(
         buf,
         "# HELP %s %s\n"
         "# TYPE %s histogram\n",
@@ -343,7 +148,7 @@ static int append_histogram_metrics(
     {
         double bound = hist->buckets[i];
         cumulative_count += hist->counts[i];
-        rc = metrics_buffer_appendf(
+        rc = lantern_http_buffer_appendf(
             buf,
             "%s_bucket{le=\"%.9g\"} %" PRIu64 "\n",
             name,
@@ -355,7 +160,7 @@ static int append_histogram_metrics(
         }
     }
 
-    rc = metrics_buffer_appendf(
+    rc = lantern_http_buffer_appendf(
         buf,
         "%s_bucket{le=\"+Inf\"} %" PRIu64 "\n",
         name,
@@ -365,7 +170,7 @@ static int append_histogram_metrics(
         return rc;
     }
 
-    rc = metrics_buffer_appendf(
+    rc = lantern_http_buffer_appendf(
         buf,
         "%s_sum %.9f\n"
         "%s_count %" PRIu64 "\n",
@@ -442,7 +247,7 @@ static const struct lean_metrics_histogram_snapshot *metric_histogram_at(
 }
 
 static int append_metric_scalar(
-    struct lantern_metrics_body_buffer *buf,
+    struct lantern_http_buffer *buf,
     const struct lantern_metrics_snapshot *snapshot,
     const struct metric_scalar_desc *desc)
 {
@@ -475,7 +280,7 @@ static int append_metric_scalar(
 }
 
 static int append_metric_scalars(
-    struct lantern_metrics_body_buffer *buf,
+    struct lantern_http_buffer *buf,
     const struct lantern_metrics_snapshot *snapshot,
     const struct metric_scalar_desc *descs,
     size_t count)
@@ -492,7 +297,7 @@ static int append_metric_scalars(
 }
 
 static int append_client_size_t_metrics(
-    struct lantern_metrics_body_buffer *buf,
+    struct lantern_http_buffer *buf,
     const struct lantern_metrics_snapshot *snapshot,
     const struct metric_client_size_t_desc *descs,
     size_t count)
@@ -500,7 +305,7 @@ static int append_client_size_t_metrics(
     const char *client_label = metrics_client_label(snapshot);
     for (size_t i = 0; i < count; ++i)
     {
-        int rc = metrics_buffer_appendf(
+        int rc = lantern_http_buffer_appendf(
             buf,
             "# HELP %s %s\n"
             "# TYPE %s %s\n"
@@ -521,7 +326,7 @@ static int append_client_size_t_metrics(
 }
 
 static int append_histogram_descs(
-    struct lantern_metrics_body_buffer *buf,
+    struct lantern_http_buffer *buf,
     const struct lean_metrics_snapshot *lean,
     const struct metric_histogram_desc *descs,
     size_t count)
@@ -542,12 +347,12 @@ static int append_histogram_descs(
 }
 
 static int append_peer_vote_metric(
-    struct lantern_metrics_body_buffer *buf,
+    struct lantern_http_buffer *buf,
     const struct lantern_metrics_snapshot *snapshot,
     const struct peer_vote_metric_desc *desc,
     size_t count)
 {
-    int rc = metrics_buffer_appendf(
+    int rc = lantern_http_buffer_appendf(
         buf,
         "# HELP %s %s\n"
         "# TYPE %s %s\n",
@@ -566,7 +371,7 @@ static int append_peer_vote_metric(
         char peer_id[sizeof(metric->peer_id)];
         (void)lantern_string_copy(peer_id, sizeof(peer_id), metric->peer_id);
 
-        rc = metrics_buffer_appendf(
+        rc = lantern_http_buffer_appendf(
             buf,
             "%s{peer=\"%s\"} %" PRIu64 "\n",
             desc->name,
@@ -672,7 +477,7 @@ static const struct metric_histogram_desc kLeanHistograms[] = {
  * @brief Append chain and lean subsystem metrics.
  */
 static int append_lean_chain_metrics(
-    struct lantern_metrics_body_buffer *buf,
+    struct lantern_http_buffer *buf,
     const struct lantern_metrics_snapshot *snapshot)
 {
     if (!buf || !snapshot)
@@ -681,7 +486,7 @@ static int append_lean_chain_metrics(
     }
     const struct lean_metrics_snapshot *lean = &snapshot->lean_metrics;
 
-    int rc = metrics_buffer_appendf(
+    int rc = lantern_http_buffer_appendf(
         buf,
         "# HELP lean_node_info Node information (always 1)\n"
         "# TYPE lean_node_info gauge\n"
@@ -723,7 +528,7 @@ static int append_lean_chain_metrics(
         return rc;
     }
 
-    rc = metrics_buffer_appendf(
+    rc = lantern_http_buffer_appendf(
         buf,
         "# HELP lean_node_sync_status Node sync status\n"
         "# TYPE lean_node_sync_status gauge\n");
@@ -733,7 +538,7 @@ static int append_lean_chain_metrics(
     }
     for (size_t i = 0; i < ARRAY_LEN(kLeanSyncStatusLabels); ++i)
     {
-        rc = metrics_buffer_appendf(
+        rc = lantern_http_buffer_appendf(
             buf,
             "lean_node_sync_status{status=\"%s\"} %" PRIu64 "\n",
             kLeanSyncStatusLabels[i],
@@ -754,7 +559,7 @@ static int append_lean_chain_metrics(
         return rc;
     }
 
-    rc = metrics_buffer_appendf(
+    rc = lantern_http_buffer_appendf(
         buf,
         "# HELP lean_aggregator_skipped_total Total number of aggregation cycles skipped before submission\n"
         "# TYPE lean_aggregator_skipped_total counter\n");
@@ -765,7 +570,7 @@ static int append_lean_chain_metrics(
 
     for (size_t reason = 0; reason < LEAN_METRICS_AGGREGATOR_SKIPPED_REASON_COUNT; ++reason)
     {
-        rc = metrics_buffer_appendf(
+        rc = lantern_http_buffer_appendf(
             buf,
             "lean_aggregator_skipped_total{reason=\"%s\"} %" PRIu64 "\n",
             kLeanAggregatorSkippedReasonLabels[reason],
@@ -776,7 +581,7 @@ static int append_lean_chain_metrics(
         }
     }
 
-    rc = metrics_buffer_appendf(
+    rc = lantern_http_buffer_appendf(
         buf,
         "# HELP lean_finalizations_total Total number of finalization attempts\n"
         "# TYPE lean_finalizations_total counter\n"
@@ -789,7 +594,7 @@ static int append_lean_chain_metrics(
         return rc;
     }
 
-    rc = metrics_buffer_appendf(
+    rc = lantern_http_buffer_appendf(
         buf,
         "# HELP lantern_attestation_head_votes_total Gossip attestation votes by whether the voted head trailed the vote slot\n"
         "# TYPE lantern_attestation_head_votes_total counter\n"
@@ -814,7 +619,7 @@ static int append_lean_chain_metrics(
  * @brief Append per-peer vote gossip metrics.
  */
 static int append_peer_vote_metrics(
-    struct lantern_metrics_body_buffer *buf,
+    struct lantern_http_buffer *buf,
     const struct lantern_metrics_snapshot *snapshot)
 {
     if (!buf || !snapshot)
@@ -848,7 +653,7 @@ static int append_peer_vote_metrics(
  * @brief Append peer connection metrics derived from the lean metrics snapshot.
  */
 static int append_lean_peer_connection_metrics(
-    struct lantern_metrics_body_buffer *buf,
+    struct lantern_http_buffer *buf,
     const struct lean_metrics_snapshot *lean)
 {
     if (!buf || !lean)
@@ -856,7 +661,7 @@ static int append_lean_peer_connection_metrics(
         return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
     }
 
-    int rc = metrics_buffer_appendf(
+    int rc = lantern_http_buffer_appendf(
         buf,
         "# HELP lean_peer_connection_events_total Total number of peer connection events\n"
         "# TYPE lean_peer_connection_events_total counter\n");
@@ -869,7 +674,7 @@ static int append_lean_peer_connection_metrics(
     {
         for (size_t res = 0; res < LEAN_METRICS_CONN_RESULT_COUNT; ++res)
         {
-            rc = metrics_buffer_appendf(
+            rc = lantern_http_buffer_appendf(
                 buf,
                 "lean_peer_connection_events_total{direction=\"%s\",result=\"%s\"} %" PRIu64 "\n",
                 kLeanDirectionLabels[dir],
@@ -882,7 +687,7 @@ static int append_lean_peer_connection_metrics(
         }
     }
 
-    rc = metrics_buffer_appendf(
+    rc = lantern_http_buffer_appendf(
         buf,
         "# HELP lean_peer_disconnection_events_total Total number of peer disconnection events\n"
         "# TYPE lean_peer_disconnection_events_total counter\n");
@@ -895,7 +700,7 @@ static int append_lean_peer_connection_metrics(
     {
         for (size_t reason = 0; reason < LEAN_METRICS_DISCONNECT_REASON_COUNT; ++reason)
         {
-            rc = metrics_buffer_appendf(
+            rc = lantern_http_buffer_appendf(
                 buf,
                 "lean_peer_disconnection_events_total{direction=\"%s\",reason=\"%s\"} %" PRIu64 "\n",
                 kLeanDirectionLabels[dir],
@@ -916,7 +721,7 @@ static int append_lean_peer_connection_metrics(
  * @brief Append histogram metrics derived from the lean metrics snapshot.
  */
 static int append_lean_histograms(
-    struct lantern_metrics_body_buffer *buf,
+    struct lantern_http_buffer *buf,
     const struct lean_metrics_snapshot *lean)
 {
     if (!buf || !lean)
@@ -958,10 +763,10 @@ static int format_metrics_body(
     }
 
     int result = 0;
-    struct lantern_metrics_body_buffer buf;
+    struct lantern_http_buffer buf;
     memset(&buf, 0, sizeof(buf));
 
-    result = metrics_buffer_init(&buf, LANTERN_METRICS_BODY_INITIAL_CAP);
+    result = lantern_http_buffer_init(&buf, LANTERN_METRICS_BODY_INITIAL_CAP);
     if (result != 0)
     {
         return result;
@@ -997,7 +802,7 @@ static int format_metrics_body(
     result = 0;
 
 cleanup:
-    metrics_buffer_free(&buf);
+    lantern_http_buffer_free(&buf);
     return result;
 }
 
@@ -1018,324 +823,76 @@ int lantern_metrics_format_prometheus(
     return 0;
 }
 
-
-/**
- * Convert a peer address to a printable string.
- *
- * @param peer_addr Peer address (may be NULL).
- * @param out       Output buffer (NUL-terminated on return).
- * @param out_len   Output buffer length.
- *
- * @note Thread safety: This function is thread-safe.
- */
-static void peer_to_text(const struct sockaddr_in *peer_addr, char *out, size_t out_len)
+int lantern_metrics_handle_http(
+    void *context,
+    const struct lantern_http_request *request)
 {
-    if (!out || out_len == 0)
-    {
-        return;
-    }
-
-    const char *fallback = "unknown";
-    if (!peer_addr)
-    {
-        (void)lantern_string_copy(out, out_len, fallback);
-        return;
-    }
-
-    if (!inet_ntop(AF_INET, &peer_addr->sin_addr, out, out_len))
-    {
-        (void)lantern_string_copy(out, out_len, fallback);
-    }
-}
-
-
-/**
- * Parse a minimal HTTP request line (method and path).
- *
- * @param request    Request bytes (NUL-terminated).
- * @param method     Output method buffer (NUL-terminated on success).
- * @param method_len Method buffer length.
- * @param path       Output path buffer (NUL-terminated on success).
- * @param path_len   Path buffer length.
- *
- * @return 0 on success.
- * @return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_METRICS_SERVER_ERR_MALFORMED_REQUEST on parse failure.
- *
- * @note Thread safety: This function is thread-safe.
- */
-static int parse_request_line(
-    const char *request,
-    char *method,
-    size_t method_len,
-    char *path,
-    size_t path_len)
-{
-    if (!request || !method || method_len == 0 || !path || path_len == 0)
+    struct lantern_metrics_http_handler *handler = context;
+    if (!handler || !request)
     {
         return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
     }
+    const char *log_module = handler->log_module ? handler->log_module : "metrics";
+    const char *unavailable_json =
+        handler->unavailable_json ? handler->unavailable_json : METRICS_JSON_UNAVAILABLE;
+    const char *formatting_json =
+        handler->formatting_failed_json
+            ? handler->formatting_failed_json
+            : METRICS_JSON_FORMATTING_FAILED;
 
-    const char *space = strchr(request, ' ');
-    if (!space)
+    if (!handler->callbacks.snapshot)
     {
-        return LANTERN_METRICS_SERVER_ERR_MALFORMED_REQUEST;
-    }
-
-    size_t method_written = (size_t)(space - request);
-    if (method_written == 0 || method_written >= method_len)
-    {
-        return LANTERN_METRICS_SERVER_ERR_MALFORMED_REQUEST;
-    }
-
-    memcpy(method, request, method_written);
-    method[method_written] = '\0';
-
-    const char *cursor = space;
-    while (*cursor == ' ')
-    {
-        ++cursor;
-    }
-    if (*cursor == '\0')
-    {
-        return LANTERN_METRICS_SERVER_ERR_MALFORMED_REQUEST;
-    }
-
-    const char *path_start = cursor;
-    while (*cursor != '\0'
-        && *cursor != ' '
-        && *cursor != '\r'
-        && *cursor != '\n'
-        && *cursor != '\t')
-    {
-        ++cursor;
-    }
-
-    size_t path_written = (size_t)(cursor - path_start);
-    if (path_written == 0 || path_written >= path_len)
-    {
-        return LANTERN_METRICS_SERVER_ERR_MALFORMED_REQUEST;
-    }
-
-    memcpy(path, path_start, path_written);
-    path[path_written] = '\0';
-    return 0;
-}
-
-
-/**
- * Send an HTTP response and map common errors to metrics error codes.
- *
- * @param client_fd    Client socket file descriptor.
- * @param status_code  HTTP status code.
- * @param status_text  HTTP status text.
- * @param content_type Content-Type header value.
- * @param body         Response body (may be NULL when body_len is 0).
- * @param body_len     Response body length in bytes.
- *
- * @return 0 on success.
- * @return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_METRICS_SERVER_ERR_FORMATTING on header formatting failure.
- * @return LANTERN_METRICS_SERVER_ERR_IO on send failure.
- *
- * @note Thread safety: Caller must ensure exclusive access to client_fd.
- */
-static int send_http_response(
-    int client_fd,
-    int status_code,
-    const char *status_text,
-    const char *content_type,
-    const char *body,
-    size_t body_len)
-{
-    int rc = lantern_http_send_response(
-        client_fd,
-        status_code,
-        status_text,
-        content_type,
-        body,
-        body_len);
-    if (rc == 0)
-    {
-        return 0;
-    }
-
-    if (rc == -1)
-    {
-        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
-    }
-    if (rc == -3)
-    {
-        return LANTERN_METRICS_SERVER_ERR_FORMATTING;
-    }
-    return LANTERN_METRICS_SERVER_ERR_IO;
-}
-
-
-/**
- * Send a JSON error response.
- *
- * @param client_fd   Client socket file descriptor.
- * @param status_code HTTP status code.
- * @param status_text HTTP status text.
- * @param json_body   JSON body (may be NULL).
- *
- * @return 0 on success.
- * @return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_METRICS_SERVER_ERR_FORMATTING on formatting failure.
- * @return LANTERN_METRICS_SERVER_ERR_IO on send failure.
- *
- * @note Thread safety: Caller must ensure exclusive access to client_fd.
- */
-static int send_json_error(
-    int client_fd,
-    int status_code,
-    const char *status_text,
-    const char *json_body)
-{
-    if (!json_body)
-    {
-        return send_http_response(client_fd, status_code, status_text, "application/json", NULL, 0);
-    }
-
-    return send_http_response(
-        client_fd,
-        status_code,
-        status_text,
-        "application/json",
-        json_body,
-        strlen(json_body));
-}
-
-
-/**
- * Handle a single client connection.
- *
- * @param server    Metrics server instance.
- * @param client_fd Client socket file descriptor.
- * @param peer_addr Peer address (may be NULL).
- *
- * @note Thread safety: This function is thread-safe if callbacks are thread-safe.
- */
-static void handle_client_connection(
-    struct lantern_metrics_server *server,
-    int client_fd,
-    const struct sockaddr_in *peer_addr)
-{
-    if (!server || client_fd < 0)
-    {
-        return;
-    }
-
-    char peer_text[INET_ADDRSTRLEN];
-    peer_to_text(peer_addr, peer_text, sizeof(peer_text));
-
-    char buffer[LANTERN_METRICS_READ_BUFFER_SIZE];
-    ssize_t received = -1;
-    do
-    {
-        received = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
-    } while (received < 0 && errno == EINTR);
-
-    if (received <= 0)
-    {
-        return;
-    }
-    buffer[(size_t)received] = '\0';
-
-    char method[LANTERN_METRICS_METHOD_CAP];
-    char path[LANTERN_METRICS_PATH_CAP];
-
-    int result = parse_request_line(buffer, method, sizeof(method), path, sizeof(path));
-    if (result != 0)
-    {
-        int rc = send_json_error(client_fd, 400, "Bad Request", METRICS_JSON_MALFORMED_REQUEST);
-        if (rc == 0)
-        {
-            lantern_log_info(
-                "metrics",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "malformed request -> 400");
-        }
-        else
-        {
-            lantern_log_error(
-                "metrics",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "failed to send 400 response rc=%d",
-                rc);
-        }
-        return;
-    }
-
-    if (strcmp(method, "GET") != 0 || strcmp(path, LANTERN_METRICS_ENDPOINT_PATH) != 0)
-    {
-        int rc = send_json_error(client_fd, 404, "Not Found", METRICS_JSON_UNKNOWN_ENDPOINT);
-        if (rc == 0)
-        {
-            lantern_log_info(
-                "metrics",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "%s %s -> 404",
-                method,
-                path);
-        }
-        else
-        {
-            lantern_log_error(
-                "metrics",
-                &(const struct lantern_log_metadata){.peer = peer_text},
-                "failed to send 404 response rc=%d",
-                rc);
-        }
-        return;
-    }
-
-    if (!server->callbacks.snapshot)
-    {
-        int rc = send_json_error(client_fd, 503, "Service Unavailable", METRICS_JSON_UNAVAILABLE);
+        int rc = lantern_http_send_json_error(
+            request->client_fd,
+            503,
+            "Service Unavailable",
+            unavailable_json);
         lantern_log_error(
-            "metrics",
-            &(const struct lantern_log_metadata){.peer = peer_text},
+            log_module,
+            &(const struct lantern_log_metadata){.peer = request->peer},
             "metrics callback missing rc=%d",
             rc);
-        return;
+        return rc;
     }
 
     struct lantern_metrics_snapshot snapshot;
     memset(&snapshot, 0, sizeof(snapshot));
-    if (server->callbacks.snapshot(server->callbacks.context, &snapshot) != 0)
+    if (handler->callbacks.snapshot(handler->callbacks.context, &snapshot) != 0)
     {
-        int rc = send_json_error(client_fd, 503, "Service Unavailable", METRICS_JSON_UNAVAILABLE);
+        int rc = lantern_http_send_json_error(
+            request->client_fd,
+            503,
+            "Service Unavailable",
+            unavailable_json);
         lantern_log_error(
-            "metrics",
-            &(const struct lantern_log_metadata){.peer = peer_text},
+            log_module,
+            &(const struct lantern_log_metadata){.peer = request->peer},
             "snapshot failed rc=%d",
             rc);
-        return;
+        return rc;
     }
 
     char *body = NULL;
     size_t body_len = 0;
-    result = format_metrics_body(&snapshot, &body, &body_len);
+    int result = format_metrics_body(&snapshot, &body, &body_len);
     if (result != 0)
     {
-        int rc = send_json_error(
-            client_fd,
+        int rc = lantern_http_send_json_error(
+            request->client_fd,
             500,
             "Internal Server Error",
-            METRICS_JSON_FORMATTING_FAILED);
+            formatting_json);
         lantern_log_error(
-            "metrics",
-            &(const struct lantern_log_metadata){.peer = peer_text},
+            log_module,
+            &(const struct lantern_log_metadata){.peer = request->peer},
             "formatting failed result=%d send_rc=%d",
             result,
             rc);
-        return;
+        return rc;
     }
 
-    result = send_http_response(
-        client_fd,
+    result = lantern_http_send_response(
+        request->client_fd,
         200,
         "OK",
         LANTERN_METRICS_CONTENT_TYPE,
@@ -1345,74 +902,38 @@ static void handle_client_connection(
     if (result != 0)
     {
         lantern_log_error(
-            "metrics",
-            &(const struct lantern_log_metadata){.peer = peer_text},
+            log_module,
+            &(const struct lantern_log_metadata){.peer = request->peer},
             "send failed rc=%d",
             result);
-        return;
+        return result;
     }
 
     lantern_log_info(
-        "metrics",
-        &(const struct lantern_log_metadata){.peer = peer_text},
+        log_module,
+        &(const struct lantern_log_metadata){.peer = request->peer},
         "%s %s -> 200",
-        method,
-        path);
+        request->method,
+        request->path);
+    return 0;
 }
 
-
-/**
- * Thread entry point for the metrics server accept loop.
- *
- * @param arg Pointer to struct lantern_metrics_server.
- * @return NULL.
- *
- * @note Thread safety: This function is not thread-safe; it is intended to run
- *       as a single server thread created by lantern_metrics_server_start().
- */
-static void *lantern_metrics_thread(void *arg)
+static int handle_standalone_metrics_route(
+    void *context,
+    const struct lantern_http_request *request)
 {
-    struct lantern_metrics_server *server = arg;
+    struct lantern_metrics_server *server = context;
     if (!server)
     {
-        return NULL;
+        return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
     }
-
-    int listen_fd = server->listen_fd;
-    for (;;)
-    {
-        struct sockaddr_in peer;
-        socklen_t peer_len = sizeof(peer);
-        int client_fd = accept(listen_fd, (struct sockaddr *)&peer, &peer_len);
-        if (client_fd < 0)
-        {
-            if (errno == EINTR)
-            {
-                continue;
-            }
-            if (errno == EBADF || errno == EINVAL)
-            {
-                break;
-            }
-            lantern_log_error("metrics", NULL, "accept failed errno=%d", errno);
-            continue;
-        }
-
-        handle_client_connection(server, client_fd, &peer);
-        close(client_fd);
-    }
-
-    return NULL;
+    return lantern_metrics_handle_http(&server->handler, request);
 }
 
+static const struct lantern_http_route kMetricsRoutes[] = {
+    {"GET", LANTERN_METRICS_ENDPOINT_PATH, handle_standalone_metrics_route},
+};
 
-/**
- * Initialize a metrics server structure.
- *
- * @param server Server instance to initialize (modified in place).
- *
- * @note Thread safety: Caller must not call concurrently with start/stop.
- */
 void lantern_metrics_server_init(struct lantern_metrics_server *server)
 {
     if (!server)
@@ -1421,31 +942,10 @@ void lantern_metrics_server_init(struct lantern_metrics_server *server)
     }
 
     memset(server, 0, sizeof(*server));
-    server->listen_fd = -1;
-    server->running = 0;
-    server->thread_started = 0;
+    lantern_http_core_init(&server->core);
     server->port = 0;
 }
 
-
-/**
- * Start the metrics server.
- *
- * Creates a listening socket and starts a background thread to accept incoming
- * connections and serve GET /metrics.
- *
- * @param server    Server instance to start (modified in place).
- * @param port      Port to bind (0 binds an ephemeral port).
- * @param callbacks Metrics snapshot callback interface.
- *
- * @spec POSIX sockets and pthreads.
- *
- * @return 0 on success.
- * @return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_METRICS_SERVER_ERR_IO on socket/bind/listen/thread creation failure.
- *
- * @note Thread safety: Caller must serialize start/stop operations.
- */
 int lantern_metrics_server_start(
     struct lantern_metrics_server *server,
     uint16_t port,
@@ -1456,72 +956,32 @@ int lantern_metrics_server_start(
         return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
     }
 
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0)
-    {
-        lantern_log_error("metrics", NULL, "socket creation failed errno=%d", errno);
-        return LANTERN_METRICS_SERVER_ERR_IO;
-    }
-
-    int opt = 1;
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) != 0)
-    {
-        lantern_log_warn("metrics", NULL, "setsockopt(SO_REUSEADDR) failed errno=%d", errno);
-    }
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port = htons(port);
-
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0)
-    {
-        lantern_log_error("metrics", NULL, "bind failed errno=%d", errno);
-        close(fd);
-        return LANTERN_METRICS_SERVER_ERR_IO;
-    }
-
-    if (listen(fd, LANTERN_METRICS_LISTEN_BACKLOG) != 0)
-    {
-        lantern_log_error("metrics", NULL, "listen failed errno=%d", errno);
-        close(fd);
-        return LANTERN_METRICS_SERVER_ERR_IO;
-    }
-
-    server->listen_fd = fd;
     server->callbacks = *callbacks;
+    server->handler.callbacks = *callbacks;
+    server->handler.log_module = "metrics";
+    server->handler.unavailable_json = METRICS_JSON_UNAVAILABLE;
+    server->handler.formatting_failed_json = METRICS_JSON_FORMATTING_FAILED;
     server->port = port;
-    server->running = 1;
-    server->thread_started = 0;
 
-    int create_rc = pthread_create(&server->thread, NULL, lantern_metrics_thread, server);
-    if (create_rc != 0)
-    {
-        lantern_log_error("metrics", NULL, "pthread_create failed rc=%d", create_rc);
-        close(fd);
-        server->listen_fd = -1;
-        server->running = 0;
-        return LANTERN_METRICS_SERVER_ERR_IO;
-    }
+    struct lantern_http_core_config config;
+    memset(&config, 0, sizeof(config));
+    config.port = port;
+    config.log_module = "metrics";
+    config.listen_label = "metrics server";
+    config.malformed_json = METRICS_JSON_MALFORMED_REQUEST;
+    config.unknown_json = METRICS_JSON_UNKNOWN_ENDPOINT;
+    config.method_cap = LANTERN_HTTP_CORE_METHOD_CAP;
+    config.path_cap = LANTERN_HTTP_CORE_METRICS_PATH_CAP;
+    config.listen_backlog = LANTERN_HTTP_CORE_LISTEN_BACKLOG;
+    config.capture_bound_port = false;
+    config.context = server;
+    config.routes = kMetricsRoutes;
+    config.route_count = ARRAY_LEN(kMetricsRoutes);
 
-    server->thread_started = 1;
-    lantern_log_info(
-        "metrics",
-        NULL,
-        "metrics server listening port=%" PRIu16,
-        server->port);
-    return 0;
+    int rc = lantern_http_core_start(&server->core, &config);
+    return rc == 0 ? 0 : LANTERN_METRICS_SERVER_ERR_IO;
 }
 
-
-/**
- * Stop the metrics server if running.
- *
- * @param server Server instance to stop (modified in place).
- *
- * @note Thread safety: Caller must serialize start/stop operations.
- */
 void lantern_metrics_server_stop(struct lantern_metrics_server *server)
 {
     if (!server)
@@ -1529,19 +989,5 @@ void lantern_metrics_server_stop(struct lantern_metrics_server *server)
         return;
     }
 
-    server->running = 0;
-
-    int listen_fd = server->listen_fd;
-    server->listen_fd = -1;
-    if (listen_fd >= 0)
-    {
-        (void)shutdown(listen_fd, SHUT_RDWR);
-        close(listen_fd);
-    }
-
-    if (server->thread_started)
-    {
-        pthread_join(server->thread, NULL);
-        server->thread_started = 0;
-    }
+    lantern_http_core_stop(&server->core);
 }

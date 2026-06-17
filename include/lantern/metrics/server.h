@@ -1,10 +1,10 @@
-#ifndef LANTERN_HTTP_METRICS_H
-#define LANTERN_HTTP_METRICS_H
+#ifndef LANTERN_METRICS_SERVER_H
+#define LANTERN_METRICS_SERVER_H
 
-#include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 
+#include "lantern/http/core.h"
 #include "lantern/metrics/lean_metrics.h"
 
 #ifdef __cplusplus
@@ -54,15 +54,23 @@ struct lantern_metrics_callbacks {
     int (*snapshot)(void *context, struct lantern_metrics_snapshot *out_snapshot);
 };
 
-struct lantern_metrics_server {
-    int listen_fd;
-    pthread_t thread;
-    int running;
-    int thread_started;
-    uint16_t port;
+struct lantern_metrics_http_handler {
     struct lantern_metrics_callbacks callbacks;
+    const char *log_module;
+    const char *unavailable_json;
+    const char *formatting_failed_json;
 };
 
+struct lantern_metrics_server {
+    struct lantern_http_core_server core;
+    uint16_t port;
+    struct lantern_metrics_callbacks callbacks;
+    struct lantern_metrics_http_handler handler;
+};
+
+int lantern_metrics_handle_http(
+    void *context,
+    const struct lantern_http_request *request);
 void lantern_metrics_server_init(struct lantern_metrics_server *server);
 int lantern_metrics_server_start(
     struct lantern_metrics_server *server,
@@ -78,4 +86,4 @@ int lantern_metrics_format_prometheus(
 }
 #endif
 
-#endif /* LANTERN_HTTP_METRICS_H */
+#endif /* LANTERN_METRICS_SERVER_H */
