@@ -33,6 +33,8 @@
 #include "lantern/support/strings.h"
 #include "lantern/support/version.h"
 
+#define ARRAY_LEN(x) (sizeof(x) / sizeof((x)[0]))
+
 static const size_t LANTERN_METRICS_READ_BUFFER_SIZE = 4096;
 static const size_t LANTERN_METRICS_BODY_DEFAULT_CAP = 1024;
 static const size_t LANTERN_METRICS_BODY_INITIAL_CAP = 2048;
@@ -379,6 +381,292 @@ static int append_histogram_metrics(
     return 0;
 }
 
+enum metric_scalar_source
+{
+    METRIC_SCALAR_SNAPSHOT_U64,
+    METRIC_SCALAR_SNAPSHOT_SIZE,
+    METRIC_SCALAR_LEAN_U64,
+};
+
+struct metric_scalar_desc
+{
+    const char *name;
+    const char *help;
+    const char *type;
+    enum metric_scalar_source source;
+    size_t offset;
+};
+
+struct metric_client_size_t_desc
+{
+    const char *name;
+    const char *help;
+    const char *type;
+    size_t offset;
+};
+
+struct metric_histogram_desc
+{
+    const char *name;
+    const char *help;
+    size_t offset;
+};
+
+struct peer_vote_metric_desc
+{
+    const char *name;
+    const char *help;
+    const char *type;
+    size_t offset;
+};
+
+static uint64_t metric_read_u64(const void *base, size_t offset)
+{
+    uint64_t value = 0;
+    memcpy(&value, (const unsigned char *)base + offset, sizeof(value));
+    return value;
+}
+
+static size_t metric_read_size_t(const void *base, size_t offset)
+{
+    size_t value = 0;
+    memcpy(&value, (const unsigned char *)base + offset, sizeof(value));
+    return value;
+}
+
+static const struct lean_metrics_histogram_snapshot *metric_histogram_at(
+    const struct lean_metrics_snapshot *lean,
+    size_t offset)
+{
+    return (const struct lean_metrics_histogram_snapshot *)((const unsigned char *)lean + offset);
+}
+
+static int append_metric_scalar(
+    struct lantern_metrics_body_buffer *buf,
+    const struct lantern_metrics_snapshot *snapshot,
+    const struct metric_scalar_desc *desc)
+{
+    const struct lean_metrics_snapshot *lean = &snapshot->lean_metrics;
+    switch (desc->source)
+    {
+    case METRIC_SCALAR_SNAPSHOT_U64:
+        return append_metric_uint64(
+            buf,
+            desc->name,
+            desc->help,
+            desc->type,
+            metric_read_u64(snapshot, desc->offset));
+    case METRIC_SCALAR_SNAPSHOT_SIZE:
+        return append_metric_size_t(
+            buf,
+            desc->name,
+            desc->help,
+            desc->type,
+            metric_read_size_t(snapshot, desc->offset));
+    case METRIC_SCALAR_LEAN_U64:
+        return append_metric_uint64(
+            buf,
+            desc->name,
+            desc->help,
+            desc->type,
+            metric_read_u64(lean, desc->offset));
+    }
+    return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
+}
+
+static int append_metric_scalars(
+    struct lantern_metrics_body_buffer *buf,
+    const struct lantern_metrics_snapshot *snapshot,
+    const struct metric_scalar_desc *descs,
+    size_t count)
+{
+    for (size_t i = 0; i < count; ++i)
+    {
+        int rc = append_metric_scalar(buf, snapshot, &descs[i]);
+        if (rc != 0)
+        {
+            return rc;
+        }
+    }
+    return 0;
+}
+
+static int append_client_size_t_metrics(
+    struct lantern_metrics_body_buffer *buf,
+    const struct lantern_metrics_snapshot *snapshot,
+    const struct metric_client_size_t_desc *descs,
+    size_t count)
+{
+    const char *client_label = metrics_client_label(snapshot);
+    for (size_t i = 0; i < count; ++i)
+    {
+        int rc = metrics_buffer_appendf(
+            buf,
+            "# HELP %s %s\n"
+            "# TYPE %s %s\n"
+            "%s{client=\"%s\"} %zu\n",
+            descs[i].name,
+            descs[i].help,
+            descs[i].name,
+            descs[i].type,
+            descs[i].name,
+            client_label,
+            metric_read_size_t(snapshot, descs[i].offset));
+        if (rc != 0)
+        {
+            return rc;
+        }
+    }
+    return 0;
+}
+
+static int append_histogram_descs(
+    struct lantern_metrics_body_buffer *buf,
+    const struct lean_metrics_snapshot *lean,
+    const struct metric_histogram_desc *descs,
+    size_t count)
+{
+    for (size_t i = 0; i < count; ++i)
+    {
+        int rc = append_histogram_metrics(
+            buf,
+            descs[i].name,
+            descs[i].help,
+            metric_histogram_at(lean, descs[i].offset));
+        if (rc != 0)
+        {
+            return rc;
+        }
+    }
+    return 0;
+}
+
+static int append_peer_vote_metric(
+    struct lantern_metrics_body_buffer *buf,
+    const struct lantern_metrics_snapshot *snapshot,
+    const struct peer_vote_metric_desc *desc,
+    size_t count)
+{
+    int rc = metrics_buffer_appendf(
+        buf,
+        "# HELP %s %s\n"
+        "# TYPE %s %s\n",
+        desc->name,
+        desc->help,
+        desc->name,
+        desc->type);
+    if (rc != 0)
+    {
+        return rc;
+    }
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
+        char peer_id[sizeof(metric->peer_id)];
+        (void)lantern_string_copy(peer_id, sizeof(peer_id), metric->peer_id);
+
+        rc = metrics_buffer_appendf(
+            buf,
+            "%s{peer=\"%s\"} %" PRIu64 "\n",
+            desc->name,
+            peer_id,
+            metric_read_u64(metric, desc->offset));
+        if (rc != 0)
+        {
+            return rc;
+        }
+    }
+    return 0;
+}
+
+static const struct metric_scalar_desc kChainScalarsBeforeClient[] = {
+    {"lean_node_start_time_seconds", "Start timestamp", "gauge", METRIC_SCALAR_SNAPSHOT_U64, offsetof(struct lantern_metrics_snapshot, lean_node_start_time_seconds)},
+    {"lean_head_slot", "Latest slot of the lean chain", "gauge", METRIC_SCALAR_SNAPSHOT_U64, offsetof(struct lantern_metrics_snapshot, lean_head_slot)},
+    {"lean_current_slot", "Current slot of the lean chain", "gauge", METRIC_SCALAR_SNAPSHOT_U64, offsetof(struct lantern_metrics_snapshot, lean_current_slot)},
+    {"lean_safe_target_slot", "Safe target slot", "gauge", METRIC_SCALAR_SNAPSHOT_U64, offsetof(struct lantern_metrics_snapshot, lean_safe_target_slot)},
+    {"lean_latest_justified_slot", "Latest justified slot observed by state transition", "gauge", METRIC_SCALAR_SNAPSHOT_U64, offsetof(struct lantern_metrics_snapshot, lean_latest_justified_slot)},
+    {"lean_latest_finalized_slot", "Latest finalized slot observed by state transition", "gauge", METRIC_SCALAR_SNAPSHOT_U64, offsetof(struct lantern_metrics_snapshot, lean_latest_finalized_slot)},
+    {"lean_justified_slot", "Current justified slot", "gauge", METRIC_SCALAR_SNAPSHOT_U64, offsetof(struct lantern_metrics_snapshot, lean_justified_slot)},
+    {"lean_finalized_slot", "Current finalized slot", "gauge", METRIC_SCALAR_SNAPSHOT_U64, offsetof(struct lantern_metrics_snapshot, lean_finalized_slot)},
+    {"lean_validators_count", "Number of validators connected to this client", "gauge", METRIC_SCALAR_SNAPSHOT_SIZE, offsetof(struct lantern_metrics_snapshot, lean_validators_count)},
+};
+
+static const struct metric_client_size_t_desc kClientLabelScalars[] = {
+    {"lean_connected_peers", "Number of connected peers", "gauge", offsetof(struct lantern_metrics_snapshot, lean_connected_peers)},
+    {"lean_gossip_mesh_peers", "Number of peers in the gossipsub mesh", "gauge", offsetof(struct lantern_metrics_snapshot, lean_gossip_mesh_peers)},
+};
+
+static const struct metric_scalar_desc kChainScalarsAfterClient[] = {
+    {"lean_gossip_signatures", "Current number of gossip signatures in fork-choice store", "gauge", METRIC_SCALAR_SNAPSHOT_U64, offsetof(struct lantern_metrics_snapshot, lean_gossip_signatures)},
+    {"lean_latest_new_aggregated_payloads", "Current number of new aggregated payloads", "gauge", METRIC_SCALAR_SNAPSHOT_U64, offsetof(struct lantern_metrics_snapshot, lean_latest_new_aggregated_payloads)},
+    {"lean_latest_known_aggregated_payloads", "Current number of known aggregated payloads", "gauge", METRIC_SCALAR_SNAPSHOT_U64, offsetof(struct lantern_metrics_snapshot, lean_latest_known_aggregated_payloads)},
+    {"lean_is_aggregator", "Validator is_aggregator status (1=true, 0=false)", "gauge", METRIC_SCALAR_SNAPSHOT_U64, offsetof(struct lantern_metrics_snapshot, lean_is_aggregator)},
+    {"lean_attestation_committee_subnet", "Current committee attestation subnet", "gauge", METRIC_SCALAR_SNAPSHOT_U64, offsetof(struct lantern_metrics_snapshot, lean_attestation_committee_subnet)},
+    {"lean_attestation_committee_count", "Number of attestation committees", "gauge", METRIC_SCALAR_SNAPSHOT_U64, offsetof(struct lantern_metrics_snapshot, lean_attestation_committee_count)},
+};
+
+static const struct metric_scalar_desc kLeanScalarsBeforeAggregation[] = {
+    {"lean_block_building_success_total", "Successful block builds", "counter", METRIC_SCALAR_LEAN_U64, offsetof(struct lean_metrics_snapshot, block_building_success_total)},
+    {"lean_block_building_failures_total", "Failed block builds (exception in build_block)", "counter", METRIC_SCALAR_LEAN_U64, offsetof(struct lean_metrics_snapshot, block_building_failures_total)},
+    {"lean_gossip_validation_worker_count", "Number of gossip validation workers", "gauge", METRIC_SCALAR_LEAN_U64, offsetof(struct lean_metrics_snapshot, gossip_validation_worker_count)},
+    {"lean_fork_choice_reorgs_total", "Total number of fork choice reorgs", "counter", METRIC_SCALAR_LEAN_U64, offsetof(struct lean_metrics_snapshot, fork_choice_reorgs_total)},
+    {"lean_attestations_valid_total", "Total number of valid attestations", "counter", METRIC_SCALAR_LEAN_U64, offsetof(struct lean_metrics_snapshot, attestations_valid_total)},
+    {"lean_attestations_invalid_total", "Total number of invalid attestations", "counter", METRIC_SCALAR_LEAN_U64, offsetof(struct lean_metrics_snapshot, attestations_invalid_total)},
+    {"lean_pq_sig_attestation_signatures_total", "Total number of individual attestation signatures", "counter", METRIC_SCALAR_LEAN_U64, offsetof(struct lean_metrics_snapshot, pq_sig_attestation_signatures_total)},
+    {"lean_pq_sig_attestation_signatures_valid_total", "Total number of valid individual attestation signatures", "counter", METRIC_SCALAR_LEAN_U64, offsetof(struct lean_metrics_snapshot, pq_sig_attestation_signatures_valid_total)},
+    {"lean_pq_sig_attestation_signatures_invalid_total", "Total number of invalid individual attestation signatures", "counter", METRIC_SCALAR_LEAN_U64, offsetof(struct lean_metrics_snapshot, pq_sig_attestation_signatures_invalid_total)},
+    {"lean_pq_sig_aggregated_signatures_total", "Total number of aggregated signatures", "counter", METRIC_SCALAR_LEAN_U64, offsetof(struct lean_metrics_snapshot, pq_sig_aggregated_signatures_total)},
+    {"lean_pq_sig_aggregated_signatures_valid_total", "Total number of valid aggregated signatures", "counter", METRIC_SCALAR_LEAN_U64, offsetof(struct lean_metrics_snapshot, pq_sig_aggregated_signatures_valid_total)},
+    {"lean_pq_sig_aggregated_signatures_invalid_total", "Total number of invalid aggregated signatures", "counter", METRIC_SCALAR_LEAN_U64, offsetof(struct lean_metrics_snapshot, pq_sig_aggregated_signatures_invalid_total)},
+    {"lean_pq_sig_attestations_in_aggregated_signatures_total", "Total number of attestations included into aggregated signatures", "counter", METRIC_SCALAR_LEAN_U64, offsetof(struct lean_metrics_snapshot, pq_sig_attestations_in_aggregated_signatures_total)},
+};
+
+static const struct metric_scalar_desc kLeanStateScalars[] = {
+    {"lean_state_transition_slots_processed_total", "Total number of processed slots during state transitions", "counter", METRIC_SCALAR_LEAN_U64, offsetof(struct lean_metrics_snapshot, state_transition_slots_processed_total)},
+    {"lean_state_transition_attestations_processed_total", "Total number of attestations processed during state transitions", "counter", METRIC_SCALAR_LEAN_U64, offsetof(struct lean_metrics_snapshot, state_transition_attestations_processed_total)},
+};
+
+static const struct peer_vote_metric_desc kPeerVoteMetrics[] = {
+    {"lean_gossip_votes_received_total", "Vote gossip messages received per peer", "counter", offsetof(struct lantern_peer_vote_metric, received_total)},
+    {"lean_gossip_votes_accepted_total", "Vote gossip messages accepted per peer", "counter", offsetof(struct lantern_peer_vote_metric, accepted_total)},
+    {"lean_gossip_votes_rejected_total", "Vote gossip messages rejected per peer", "counter", offsetof(struct lantern_peer_vote_metric, rejected_total)},
+    {"lean_gossip_votes_last_validator_id", "Last validator id observed per peer", "gauge", offsetof(struct lantern_peer_vote_metric, last_validator_id)},
+    {"lean_gossip_votes_last_slot", "Last vote slot observed per peer", "gauge", offsetof(struct lantern_peer_vote_metric, last_slot)},
+};
+
+static const struct metric_histogram_desc kLeanHistograms[] = {
+    {"lean_block_aggregated_payloads", "Number of aggregated_payloads in a block", offsetof(struct lean_metrics_snapshot, block_aggregated_payloads)},
+    {"lean_block_building_payload_aggregation_time_seconds", "Time taken to build aggregated_payloads during block building", offsetof(struct lean_metrics_snapshot, block_building_payload_aggregation_time)},
+    {"lean_block_building_time_seconds", "Time taken to build a block", offsetof(struct lean_metrics_snapshot, block_building_time)},
+    {"lean_attestations_production_time_seconds", "Time taken to produce attestation", offsetof(struct lean_metrics_snapshot, attestations_production_time)},
+    {"lean_fork_choice_block_processing_time_seconds", "Time taken to process block in fork choice", offsetof(struct lean_metrics_snapshot, fork_choice_block_time)},
+    {"lean_fork_choice_reorg_depth", "Depth of fork choice reorgs (in blocks)", offsetof(struct lean_metrics_snapshot, fork_choice_reorg_depth)},
+    {"lean_tick_interval_duration_seconds", "Elapsed time between clock ticks in seconds", offsetof(struct lean_metrics_snapshot, tick_interval_duration)},
+    {"lean_attestation_validation_time_seconds", "Time taken to validate attestation", offsetof(struct lean_metrics_snapshot, attestation_validation_time)},
+    {"lean_state_transition_time_seconds", "Time to process state transition", offsetof(struct lean_metrics_snapshot, state_transition_time)},
+    {"lean_state_transition_slots_processing_time_seconds", "Time taken to process slots during state transition", offsetof(struct lean_metrics_snapshot, state_slots_time)},
+    {"lean_state_transition_block_processing_time_seconds", "Time taken to process block during state transition", offsetof(struct lean_metrics_snapshot, state_block_time)},
+    {"lean_state_transition_attestations_processing_time_seconds", "Time taken to process attestations during state transition", offsetof(struct lean_metrics_snapshot, state_attestations_time)},
+    {"lean_pq_sig_attestation_signing_time_seconds", "Time taken to sign an attestation", offsetof(struct lean_metrics_snapshot, pq_sig_attestation_signing_time)},
+    {"lean_pq_sig_attestation_verification_time_seconds", "Time taken to verify an attestation signature", offsetof(struct lean_metrics_snapshot, pq_sig_attestation_verification_time)},
+    {"lean_pq_sig_aggregated_signatures_building_time_seconds", "Time taken to build an aggregated attestation signature", offsetof(struct lean_metrics_snapshot, pq_sig_aggregated_signatures_building_time)},
+    {"lean_pq_sig_aggregated_signatures_verification_time_seconds", "Time taken to verify an aggregated attestation signature", offsetof(struct lean_metrics_snapshot, pq_sig_aggregated_signatures_verification_time)},
+    {"lean_pq_sig_block_aggregated_signatures_verification_time_seconds", "Wall-clock time spent verifying aggregated attestation signatures in a block", offsetof(struct lean_metrics_snapshot, pq_sig_block_aggregated_signatures_verification_time)},
+    {"lean_committee_signatures_aggregation_time_seconds", "Time taken to aggregate committee signatures", offsetof(struct lean_metrics_snapshot, committee_signatures_aggregation_time)},
+    {"lantern_block_build_stage_vote_collection_seconds", "Per-duty time spent collecting aggregation votes", offsetof(struct lean_metrics_snapshot, block_build_stage_vote_collection_time)},
+    {"lantern_block_build_stage_key_sig_deserialize_seconds", "Per-duty time spent deserializing aggregation keys and signatures", offsetof(struct lean_metrics_snapshot, block_build_stage_key_sig_deserialize_time)},
+    {"lantern_block_build_stage_pq_aggregate_seconds", "Per-duty time spent in post-quantum signature aggregation", offsetof(struct lean_metrics_snapshot, block_build_stage_pq_aggregate_time)},
+    {"lantern_block_build_stage_proof_copy_seconds", "Per-duty time spent copying aggregated proofs", offsetof(struct lean_metrics_snapshot, block_build_stage_proof_copy_time)},
+    {"lantern_block_build_stage_lock_waits_seconds", "Per-duty time spent waiting for validator state locks", offsetof(struct lean_metrics_snapshot, block_build_stage_lock_waits_time)},
+    {"lantern_block_build_stage_other_prover_setup_seconds", "Per-duty time spent in prover setup and other unclassified work", offsetof(struct lean_metrics_snapshot, block_build_stage_other_prover_setup_time)},
+    {"lean_gossip_block_size_bytes", "Bytes size of a gossip block message", offsetof(struct lean_metrics_snapshot, gossip_block_size_bytes)},
+    {"lean_gossip_attestation_size_bytes", "Bytes size of a gossip attestation message", offsetof(struct lean_metrics_snapshot, gossip_attestation_size_bytes)},
+    {"lean_gossip_aggregation_size_bytes", "Bytes size of a gossip aggregated attestation message", offsetof(struct lean_metrics_snapshot, gossip_aggregation_size_bytes)},
+    {"lantern_attestation_inclusion_delay_slots", "Slots between an included attestation's data slot and the block that included it", offsetof(struct lean_metrics_snapshot, attestation_inclusion_delay_slots)},
+    {"lantern_block_import_slot_offset_seconds", "Seconds from the start of a block's slot until the block was imported", offsetof(struct lean_metrics_snapshot, block_import_slot_offset_seconds)},
+};
+
 
 /**
  * @brief Append chain and lean subsystem metrics.
@@ -391,6 +679,7 @@ static int append_lean_chain_metrics(
     {
         return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
     }
+    const struct lean_metrics_snapshot *lean = &snapshot->lean_metrics;
 
     int rc = metrics_buffer_appendf(
         buf,
@@ -404,190 +693,31 @@ static int append_lean_chain_metrics(
         return rc;
     }
 
-    rc = append_metric_uint64(
+    rc = append_metric_scalars(
         buf,
-        "lean_node_start_time_seconds",
-        "Start timestamp",
-        "gauge",
-        snapshot->lean_node_start_time_seconds);
+        snapshot,
+        kChainScalarsBeforeClient,
+        ARRAY_LEN(kChainScalarsBeforeClient));
     if (rc != 0)
     {
         return rc;
     }
 
-    rc = append_metric_uint64(
+    rc = append_client_size_t_metrics(
         buf,
-        "lean_head_slot",
-        "Latest slot of the lean chain",
-        "gauge",
-        snapshot->lean_head_slot);
+        snapshot,
+        kClientLabelScalars,
+        ARRAY_LEN(kClientLabelScalars));
     if (rc != 0)
     {
         return rc;
     }
 
-    rc = append_metric_uint64(
+    rc = append_metric_scalars(
         buf,
-        "lean_current_slot",
-        "Current slot of the lean chain",
-        "gauge",
-        snapshot->lean_current_slot);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_safe_target_slot",
-        "Safe target slot",
-        "gauge",
-        snapshot->lean_safe_target_slot);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_latest_justified_slot",
-        "Latest justified slot observed by state transition",
-        "gauge",
-        snapshot->lean_latest_justified_slot);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_latest_finalized_slot",
-        "Latest finalized slot observed by state transition",
-        "gauge",
-        snapshot->lean_latest_finalized_slot);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_justified_slot",
-        "Current justified slot",
-        "gauge",
-        snapshot->lean_justified_slot);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_finalized_slot",
-        "Current finalized slot",
-        "gauge",
-        snapshot->lean_finalized_slot);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_size_t(
-        buf,
-        "lean_validators_count",
-        "Number of validators connected to this client",
-        "gauge",
-        snapshot->lean_validators_count);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = metrics_buffer_appendf(
-        buf,
-        "# HELP lean_connected_peers Number of connected peers\n"
-        "# TYPE lean_connected_peers gauge\n"
-        "lean_connected_peers{client=\"%s\"} %zu\n",
-        metrics_client_label(snapshot),
-        snapshot->lean_connected_peers);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = metrics_buffer_appendf(
-        buf,
-        "# HELP lean_gossip_mesh_peers Number of peers in the gossipsub mesh\n"
-        "# TYPE lean_gossip_mesh_peers gauge\n"
-        "lean_gossip_mesh_peers{client=\"%s\"} %zu\n",
-        metrics_client_label(snapshot),
-        snapshot->lean_gossip_mesh_peers);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_gossip_signatures",
-        "Current number of gossip signatures in fork-choice store",
-        "gauge",
-        snapshot->lean_gossip_signatures);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_latest_new_aggregated_payloads",
-        "Current number of new aggregated payloads",
-        "gauge",
-        snapshot->lean_latest_new_aggregated_payloads);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_latest_known_aggregated_payloads",
-        "Current number of known aggregated payloads",
-        "gauge",
-        snapshot->lean_latest_known_aggregated_payloads);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_is_aggregator",
-        "Validator is_aggregator status (1=true, 0=false)",
-        "gauge",
-        snapshot->lean_is_aggregator);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_attestation_committee_subnet",
-        "Current committee attestation subnet",
-        "gauge",
-        snapshot->lean_attestation_committee_subnet);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_attestation_committee_count",
-        "Number of attestation committees",
-        "gauge",
-        snapshot->lean_attestation_committee_count);
+        snapshot,
+        kChainScalarsAfterClient,
+        ARRAY_LEN(kChainScalarsAfterClient));
     if (rc != 0)
     {
         return rc;
@@ -601,7 +731,7 @@ static int append_lean_chain_metrics(
     {
         return rc;
     }
-    for (size_t i = 0; i < (sizeof(kLeanSyncStatusLabels) / sizeof(kLeanSyncStatusLabels[0])); ++i)
+    for (size_t i = 0; i < ARRAY_LEN(kLeanSyncStatusLabels); ++i)
     {
         rc = metrics_buffer_appendf(
             buf,
@@ -614,146 +744,11 @@ static int append_lean_chain_metrics(
         }
     }
 
-    const struct lean_metrics_snapshot *lean = &snapshot->lean_metrics;
-
-    rc = append_metric_uint64(
+    rc = append_metric_scalars(
         buf,
-        "lean_block_building_success_total",
-        "Successful block builds",
-        "counter",
-        lean->block_building_success_total);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_block_building_failures_total",
-        "Failed block builds (exception in build_block)",
-        "counter",
-        lean->block_building_failures_total);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_gossip_validation_worker_count",
-        "Number of gossip validation workers",
-        "gauge",
-        lean->gossip_validation_worker_count);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_fork_choice_reorgs_total",
-        "Total number of fork choice reorgs",
-        "counter",
-        lean->fork_choice_reorgs_total);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_attestations_valid_total",
-        "Total number of valid attestations",
-        "counter",
-        lean->attestations_valid_total);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_attestations_invalid_total",
-        "Total number of invalid attestations",
-        "counter",
-        lean->attestations_invalid_total);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_pq_sig_attestation_signatures_total",
-        "Total number of individual attestation signatures",
-        "counter",
-        lean->pq_sig_attestation_signatures_total);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_pq_sig_attestation_signatures_valid_total",
-        "Total number of valid individual attestation signatures",
-        "counter",
-        lean->pq_sig_attestation_signatures_valid_total);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_pq_sig_attestation_signatures_invalid_total",
-        "Total number of invalid individual attestation signatures",
-        "counter",
-        lean->pq_sig_attestation_signatures_invalid_total);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_pq_sig_aggregated_signatures_total",
-        "Total number of aggregated signatures",
-        "counter",
-        lean->pq_sig_aggregated_signatures_total);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_pq_sig_aggregated_signatures_valid_total",
-        "Total number of valid aggregated signatures",
-        "counter",
-        lean->pq_sig_aggregated_signatures_valid_total);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_pq_sig_aggregated_signatures_invalid_total",
-        "Total number of invalid aggregated signatures",
-        "counter",
-        lean->pq_sig_aggregated_signatures_invalid_total);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_pq_sig_attestations_in_aggregated_signatures_total",
-        "Total number of attestations included into aggregated signatures",
-        "counter",
-        lean->pq_sig_attestations_in_aggregated_signatures_total);
+        snapshot,
+        kLeanScalarsBeforeAggregation,
+        ARRAY_LEN(kLeanScalarsBeforeAggregation));
     if (rc != 0)
     {
         return rc;
@@ -807,30 +802,11 @@ static int append_lean_chain_metrics(
         return rc;
     }
 
-    rc = append_metric_uint64(
+    return append_metric_scalars(
         buf,
-        "lean_state_transition_slots_processed_total",
-        "Total number of processed slots during state transitions",
-        "counter",
-        lean->state_transition_slots_processed_total);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_metric_uint64(
-        buf,
-        "lean_state_transition_attestations_processed_total",
-        "Total number of attestations processed during state "
-        "transitions",
-        "counter",
-        lean->state_transition_attestations_processed_total);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    return 0;
+        snapshot,
+        kLeanStateScalars,
+        ARRAY_LEN(kLeanStateScalars));
 }
 
 
@@ -856,130 +832,9 @@ static int append_peer_vote_metrics(
         count = LANTERN_METRICS_MAX_PEER_VOTE_STATS;
     }
 
-    int rc = metrics_buffer_appendf(
-        buf,
-        "# HELP lean_gossip_votes_received_total Vote gossip messages received per peer\n"
-        "# TYPE lean_gossip_votes_received_total counter\n");
-    if (rc != 0)
+    for (size_t metric_index = 0; metric_index < ARRAY_LEN(kPeerVoteMetrics); ++metric_index)
     {
-        return rc;
-    }
-
-    for (size_t i = 0; i < count; ++i)
-    {
-        const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
-        char peer_id[sizeof(metric->peer_id)];
-        (void)lantern_string_copy(peer_id, sizeof(peer_id), metric->peer_id);
-
-        rc = metrics_buffer_appendf(
-            buf,
-            "lean_gossip_votes_received_total{peer=\"%s\"} %" PRIu64 "\n",
-            peer_id,
-            metric->received_total);
-        if (rc != 0)
-        {
-            return rc;
-        }
-    }
-
-    rc = metrics_buffer_appendf(
-        buf,
-        "# HELP lean_gossip_votes_accepted_total Vote gossip messages accepted per peer\n"
-        "# TYPE lean_gossip_votes_accepted_total counter\n");
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    for (size_t i = 0; i < count; ++i)
-    {
-        const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
-        char peer_id[sizeof(metric->peer_id)];
-        (void)lantern_string_copy(peer_id, sizeof(peer_id), metric->peer_id);
-
-        rc = metrics_buffer_appendf(
-            buf,
-            "lean_gossip_votes_accepted_total{peer=\"%s\"} %" PRIu64 "\n",
-            peer_id,
-            metric->accepted_total);
-        if (rc != 0)
-        {
-            return rc;
-        }
-    }
-
-    rc = metrics_buffer_appendf(
-        buf,
-        "# HELP lean_gossip_votes_rejected_total Vote gossip messages rejected per peer\n"
-        "# TYPE lean_gossip_votes_rejected_total counter\n");
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    for (size_t i = 0; i < count; ++i)
-    {
-        const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
-        char peer_id[sizeof(metric->peer_id)];
-        (void)lantern_string_copy(peer_id, sizeof(peer_id), metric->peer_id);
-
-        rc = metrics_buffer_appendf(
-            buf,
-            "lean_gossip_votes_rejected_total{peer=\"%s\"} %" PRIu64 "\n",
-            peer_id,
-            metric->rejected_total);
-        if (rc != 0)
-        {
-            return rc;
-        }
-    }
-
-    rc = metrics_buffer_appendf(
-        buf,
-        "# HELP lean_gossip_votes_last_validator_id Last validator id observed per peer\n"
-        "# TYPE lean_gossip_votes_last_validator_id gauge\n");
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    for (size_t i = 0; i < count; ++i)
-    {
-        const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
-        char peer_id[sizeof(metric->peer_id)];
-        (void)lantern_string_copy(peer_id, sizeof(peer_id), metric->peer_id);
-
-        rc = metrics_buffer_appendf(
-            buf,
-            "lean_gossip_votes_last_validator_id{peer=\"%s\"} %" PRIu64 "\n",
-            peer_id,
-            metric->last_validator_id);
-        if (rc != 0)
-        {
-            return rc;
-        }
-    }
-
-    rc = metrics_buffer_appendf(
-        buf,
-        "# HELP lean_gossip_votes_last_slot Last vote slot observed per peer\n"
-        "# TYPE lean_gossip_votes_last_slot gauge\n");
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    for (size_t i = 0; i < count; ++i)
-    {
-        const struct lantern_peer_vote_metric *metric = &snapshot->peer_vote_metrics[i];
-        char peer_id[sizeof(metric->peer_id)];
-        (void)lantern_string_copy(peer_id, sizeof(peer_id), metric->peer_id);
-
-        rc = metrics_buffer_appendf(
-            buf,
-            "lean_gossip_votes_last_slot{peer=\"%s\"} %" PRIu64 "\n",
-            peer_id,
-            metric->last_slot);
+        int rc = append_peer_vote_metric(buf, snapshot, &kPeerVoteMetrics[metric_index], count);
         if (rc != 0)
         {
             return rc;
@@ -1069,297 +924,11 @@ static int append_lean_histograms(
         return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
     }
 
-    int rc = append_histogram_metrics(
+    return append_histogram_descs(
         buf,
-        "lean_block_aggregated_payloads",
-        "Number of aggregated_payloads in a block",
-        &lean->block_aggregated_payloads);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_block_building_payload_aggregation_time_seconds",
-        "Time taken to build aggregated_payloads during block building",
-        &lean->block_building_payload_aggregation_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_block_building_time_seconds",
-        "Time taken to build a block",
-        &lean->block_building_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_attestations_production_time_seconds",
-        "Time taken to produce attestation",
-        &lean->attestations_production_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_fork_choice_block_processing_time_seconds",
-        "Time taken to process block in fork choice",
-        &lean->fork_choice_block_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_fork_choice_reorg_depth",
-        "Depth of fork choice reorgs (in blocks)",
-        &lean->fork_choice_reorg_depth);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_tick_interval_duration_seconds",
-        "Elapsed time between clock ticks in seconds",
-        &lean->tick_interval_duration);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_attestation_validation_time_seconds",
-        "Time taken to validate attestation",
-        &lean->attestation_validation_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_state_transition_time_seconds",
-        "Time to process state transition",
-        &lean->state_transition_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_state_transition_slots_processing_time_seconds",
-        "Time taken to process slots during state transition",
-        &lean->state_slots_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_state_transition_block_processing_time_seconds",
-        "Time taken to process block during state transition",
-        &lean->state_block_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_state_transition_attestations_processing_time_seconds",
-        "Time taken to process attestations during state transition",
-        &lean->state_attestations_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_pq_sig_attestation_signing_time_seconds",
-        "Time taken to sign an attestation",
-        &lean->pq_sig_attestation_signing_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_pq_sig_attestation_verification_time_seconds",
-        "Time taken to verify an attestation signature",
-        &lean->pq_sig_attestation_verification_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_pq_sig_aggregated_signatures_building_time_seconds",
-        "Time taken to build an aggregated attestation signature",
-        &lean->pq_sig_aggregated_signatures_building_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_pq_sig_aggregated_signatures_verification_time_seconds",
-        "Time taken to verify an aggregated attestation signature",
-        &lean->pq_sig_aggregated_signatures_verification_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_pq_sig_block_aggregated_signatures_verification_time_seconds",
-        "Wall-clock time spent verifying aggregated attestation signatures in a block",
-        &lean->pq_sig_block_aggregated_signatures_verification_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_committee_signatures_aggregation_time_seconds",
-        "Time taken to aggregate committee signatures",
-        &lean->committee_signatures_aggregation_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lantern_block_build_stage_vote_collection_seconds",
-        "Per-duty time spent collecting aggregation votes",
-        &lean->block_build_stage_vote_collection_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lantern_block_build_stage_key_sig_deserialize_seconds",
-        "Per-duty time spent deserializing aggregation keys and signatures",
-        &lean->block_build_stage_key_sig_deserialize_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lantern_block_build_stage_pq_aggregate_seconds",
-        "Per-duty time spent in post-quantum signature aggregation",
-        &lean->block_build_stage_pq_aggregate_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lantern_block_build_stage_proof_copy_seconds",
-        "Per-duty time spent copying aggregated proofs",
-        &lean->block_build_stage_proof_copy_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lantern_block_build_stage_lock_waits_seconds",
-        "Per-duty time spent waiting for validator state locks",
-        &lean->block_build_stage_lock_waits_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lantern_block_build_stage_other_prover_setup_seconds",
-        "Per-duty time spent in prover setup and other unclassified work",
-        &lean->block_build_stage_other_prover_setup_time);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_gossip_block_size_bytes",
-        "Bytes size of a gossip block message",
-        &lean->gossip_block_size_bytes);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_gossip_attestation_size_bytes",
-        "Bytes size of a gossip attestation message",
-        &lean->gossip_attestation_size_bytes);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lean_gossip_aggregation_size_bytes",
-        "Bytes size of a gossip aggregated attestation message",
-        &lean->gossip_aggregation_size_bytes);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lantern_attestation_inclusion_delay_slots",
-        "Slots between an included attestation's data slot and the block that included it",
-        &lean->attestation_inclusion_delay_slots);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    rc = append_histogram_metrics(
-        buf,
-        "lantern_block_import_slot_offset_seconds",
-        "Seconds from the start of a block's slot until the block was imported",
-        &lean->block_import_slot_offset_seconds);
-    if (rc != 0)
-    {
-        return rc;
-    }
-
-    return 0;
+        lean,
+        kLeanHistograms,
+        ARRAY_LEN(kLeanHistograms));
 }
 
 
