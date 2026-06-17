@@ -2230,13 +2230,15 @@ static int lantern_state_process_attestations_internal(
             /* LeanSpec: silently skip if target <= source (state.py:406) */
             continue;
         }
-        if (vote->source.slot > SIZE_MAX || vote->target.slot > SIZE_MAX) {
+        if (vote->source.slot > SIZE_MAX || vote->target.slot > SIZE_MAX || vote->head.slot > SIZE_MAX) {
             lantern_log_warn(
                 "state",
                 &meta,
-                "attestation rejected: slot range (%" PRIu64 ", %" PRIu64 ") exceeds size_t capacity",
+                "attestation rejected: slot range (%" PRIu64 ", %" PRIu64 ", %" PRIu64
+                ") exceeds size_t capacity",
                 vote->source.slot,
-                vote->target.slot);
+                vote->target.slot,
+                vote->head.slot);
             record_attestation_validation_metric(att_validation_start, false);
             continue;
         }
@@ -2280,19 +2282,23 @@ static int lantern_state_process_attestations_internal(
             continue;
         }
 
-        if (lantern_root_is_zero(&vote->source.root) || lantern_root_is_zero(&vote->target.root)) {
+        if (lantern_root_is_zero(&vote->source.root)
+            || lantern_root_is_zero(&vote->target.root)
+            || lantern_root_is_zero(&vote->head.root)) {
             if (trace_finalization) {
                 lantern_log_debug(
                     "state",
                     &meta,
-                    "finalization trace skip zero_hash_vote source_slot=%" PRIu64 " target_slot=%" PRIu64,
+                    "finalization trace skip zero_hash_vote source_slot=%" PRIu64
+                    " target_slot=%" PRIu64 " head_slot=%" PRIu64,
                     vote->source.slot,
-                    vote->target.slot);
+                    vote->target.slot,
+                    vote->head.slot);
             }
             continue;
         }
 
-        /* LeanSpec: skip if either source or target root mismatches history (state.py:398-402). */
+        /* LeanSpec: skip if source, target, or head root mismatches history. */
         bool source_matches = false;
         size_t source_slot_idx = (size_t)vote->source.slot;
         if (source_slot_idx < state->historical_block_hashes.length) {
@@ -2311,14 +2317,27 @@ static int lantern_state_process_attestations_internal(
                 LANTERN_ROOT_SIZE) == 0;
         }
 
-        if (!source_matches || !target_matches) {
+        bool head_matches = false;
+        if (vote->head.slot <= SIZE_MAX) {
+            size_t head_slot_idx = (size_t)vote->head.slot;
+            if (head_slot_idx < state->historical_block_hashes.length) {
+                head_matches = memcmp(
+                    vote->head.root.bytes,
+                    state->historical_block_hashes.items[head_slot_idx].bytes,
+                    LANTERN_ROOT_SIZE) == 0;
+            }
+        }
+
+        if (!source_matches || !target_matches || !head_matches) {
             if (trace_finalization) {
                 lantern_log_debug(
                     "state",
                     &meta,
-                    "finalization trace skip roots_mismatch source_slot=%" PRIu64 " target_slot=%" PRIu64,
+                    "finalization trace skip roots_mismatch source_slot=%" PRIu64
+                    " target_slot=%" PRIu64 " head_slot=%" PRIu64,
                     vote->source.slot,
-                    vote->target.slot);
+                    vote->target.slot,
+                    vote->head.slot);
             }
             continue;
         }

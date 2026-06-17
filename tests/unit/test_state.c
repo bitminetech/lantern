@@ -247,7 +247,7 @@ static void build_vote(
     uint64_t slot,
     const LanternCheckpoint *source,
     const LanternCheckpoint *target_template,
-    uint8_t head_marker);
+    uint8_t signature_marker);
 
 static void zero_root(LanternRoot *root) {
     if (!root) {
@@ -319,7 +319,7 @@ static void mark_slot_justified_for_tests(LanternState *state, uint64_t slot) {
 /* Helper to populate historical_block_hashes up to the target slot.
  * Entries are filled with synthetic roots based on the slot index.
  * This is required because leanSpec attestation validation checks that
- * source and target roots match the historical_block_hashes. */
+ * source, target, and head roots match the historical_block_hashes. */
 static void populate_historical_hashes_for_tests(LanternState *state, uint64_t up_to_slot) {
     if (!state) {
         return;
@@ -866,7 +866,7 @@ static void build_vote(
     uint64_t slot,
     const LanternCheckpoint *source,
     const LanternCheckpoint *target_template,
-    uint8_t head_marker) {
+    uint8_t signature_marker) {
     if (!out_vote) {
         return;
     }
@@ -876,10 +876,7 @@ static void build_vote(
     out_vote->source = *source;
     out_vote->target = *target_template;
     out_vote->head = out_vote->target;
-    if (head_marker != 0) {
-        fill_root(&out_vote->head.root, head_marker);
-    }
-    uint8_t sig_marker = head_marker ? head_marker : (uint8_t)(validator_id + slot);
+    uint8_t sig_marker = signature_marker ? signature_marker : (uint8_t)(validator_id + slot);
     if (out_signature) {
         fill_signature(out_signature, sig_marker);
     }
@@ -2180,6 +2177,55 @@ static int test_attestations_ignore_zero_hash_votes(void) {
     expect_zero(
         lantern_state_process_attestations(&state, &attestations, &signatures),
         "process zero-hash votes");
+    assert(state.latest_justified.slot == 0);
+    assert(state.latest_finalized.slot == 0);
+    assert(state.justification_roots.length == 0);
+
+    lantern_attestations_reset(&attestations);
+    lantern_signature_list_reset(&signatures);
+    lantern_state_reset(&state);
+    return 0;
+}
+
+static int test_attestations_ignore_head_root_mismatch(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    const uint64_t validator_count = 3;
+    expect_zero(
+        lantern_state_generate_genesis(&state, 766, validator_count),
+        "genesis for head-root mismatch vote test");
+    mark_slot_justified_for_tests(&state, state.latest_justified.slot);
+    populate_historical_hashes_for_tests(&state, 1);
+
+    LanternCheckpoint source = state.latest_justified;
+    source.root = get_historical_root_for_tests(&state, source.slot);
+    LanternCheckpoint target = source;
+    target.slot = source.slot + 1u;
+    target.root = get_historical_root_for_tests(&state, target.slot);
+
+    LanternAttestations attestations;
+    lantern_attestations_init(&attestations);
+    LanternSignatureList signatures;
+    lantern_signature_list_init(&signatures);
+    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.config.num_validators);
+    expect_zero(lantern_attestations_resize(&attestations, quorum), "resize head-mismatch attestations");
+    expect_zero(lantern_signature_list_resize(&signatures, quorum), "resize head-mismatch signatures");
+
+    for (size_t i = 0; i < quorum; ++i) {
+        build_vote(
+            &attestations.data[i],
+            &signatures.data[i],
+            (uint64_t)i,
+            target.slot,
+            &source,
+            &target,
+            (uint8_t)(0xB0u + i));
+        fill_root(&attestations.data[i].head.root, (uint8_t)(0xD0u + i));
+    }
+
+    expect_zero(
+        lantern_state_process_attestations(&state, &attestations, &signatures),
+        "process head-root mismatch votes");
     assert(state.latest_justified.slot == 0);
     assert(state.latest_finalized.slot == 0);
     assert(state.justification_roots.length == 0);
@@ -4568,6 +4614,9 @@ int main(void) {
         return 1;
     }
     if (test_attestations_ignore_zero_hash_votes() != 0) {
+        return 1;
+    }
+    if (test_attestations_ignore_head_root_mismatch() != 0) {
         return 1;
     }
     if (test_attestations_ignore_out_of_range_validator() != 0) {

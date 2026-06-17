@@ -667,6 +667,165 @@ cleanup:
     return rc;
 }
 
+static int test_gossip_aggregated_attestation_rejects_sibling_head(void)
+{
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    LanternRoot sibling_root;
+    LanternSignedAggregatedAttestation attestation;
+    int rc = 1;
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "gossip_agg_sibling_head",
+            &pub,
+            &secret,
+            &anchor_root,
+            &child_root)
+        != 0) {
+        return 1;
+    }
+    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
+
+    if (build_single_participant_aggregated_attestation(
+            &client,
+            secret,
+            &anchor_root,
+            &child_root,
+            &attestation)
+        != 0) {
+        fprintf(stderr, "failed to build base aggregated attestation fixture\n");
+        goto cleanup;
+    }
+
+    LanternAttestationData invalid_data = attestation.data;
+    lantern_signed_aggregated_attestation_reset(&attestation);
+    memset(&attestation, 0, sizeof(attestation));
+    if (client_test_add_known_block(
+            &client,
+            invalid_data.head.slot,
+            &anchor_root,
+            0xE2u,
+            &sibling_root)
+        != 0) {
+        fprintf(stderr, "failed to add sibling block for aggregated attestation test\n");
+        goto cleanup;
+    }
+    invalid_data.head.root = sibling_root;
+
+    if (sign_single_participant_aggregated_attestation(
+            &client,
+            secret,
+            &invalid_data,
+            &attestation)
+        != 0) {
+        fprintf(stderr, "failed to build sibling-head aggregated attestation fixture\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_debug_gossip_aggregated_attestation(&client, &attestation) != LANTERN_CLIENT_ERR_IGNORED) {
+        fprintf(stderr, "sibling-head aggregated attestation gossip should be ignored\n");
+        goto cleanup_attestation;
+    }
+    if (client.store.new_aggregated_payloads.length != 0
+        || client.store.known_aggregated_payloads.length != 0) {
+        fprintf(stderr, "sibling-head aggregated attestation should not be cached\n");
+        goto cleanup_attestation;
+    }
+
+    rc = 0;
+
+cleanup_attestation:
+    lantern_signed_aggregated_attestation_reset(&attestation);
+cleanup:
+    reset_agg_cache(&client);
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_gossip_aggregated_attestation_rejects_slot_before_head(void)
+{
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    LanternRoot grandchild_root;
+    LanternSignedAggregatedAttestation attestation;
+    int rc = 1;
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "gossip_agg_slot_before_head",
+            &pub,
+            &secret,
+            &anchor_root,
+            &child_root)
+        != 0) {
+        return 1;
+    }
+    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
+
+    if (build_single_participant_aggregated_attestation(
+            &client,
+            secret,
+            &anchor_root,
+            &child_root,
+            &attestation)
+        != 0) {
+        fprintf(stderr, "failed to build base aggregated attestation fixture\n");
+        goto cleanup;
+    }
+
+    LanternAttestationData invalid_data = attestation.data;
+    lantern_signed_aggregated_attestation_reset(&attestation);
+    memset(&attestation, 0, sizeof(attestation));
+    if (client_test_add_known_block(
+            &client,
+            invalid_data.head.slot + 1u,
+            &child_root,
+            0xE6u,
+            &grandchild_root)
+        != 0) {
+        fprintf(stderr, "failed to add grandchild block for slot-before-head aggregate test\n");
+        goto cleanup;
+    }
+    invalid_data.head.slot += 1u;
+    invalid_data.head.root = grandchild_root;
+
+    if (sign_single_participant_aggregated_attestation(
+            &client,
+            secret,
+            &invalid_data,
+            &attestation)
+        != 0) {
+        fprintf(stderr, "failed to build slot-before-head aggregated attestation fixture\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_debug_gossip_aggregated_attestation(&client, &attestation) != LANTERN_CLIENT_ERR_IGNORED) {
+        fprintf(stderr, "slot-before-head aggregated attestation gossip should be ignored\n");
+        goto cleanup_attestation;
+    }
+    if (client.store.new_aggregated_payloads.length != 0
+        || client.store.known_aggregated_payloads.length != 0) {
+        fprintf(stderr, "slot-before-head aggregated attestation should not be cached\n");
+        goto cleanup_attestation;
+    }
+
+    rc = 0;
+
+cleanup_attestation:
+    lantern_signed_aggregated_attestation_reset(&attestation);
+cleanup:
+    reset_agg_cache(&client);
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
 int main(void)
 {
     if (test_idle_gossip_ignored() != 0)
@@ -686,6 +845,14 @@ int main(void)
         return 1;
     }
     if (test_gossip_aggregated_attestation_rejects_invalid_topology() != 0)
+    {
+        return 1;
+    }
+    if (test_gossip_aggregated_attestation_rejects_sibling_head() != 0)
+    {
+        return 1;
+    }
+    if (test_gossip_aggregated_attestation_rejects_slot_before_head() != 0)
     {
         return 1;
     }

@@ -599,6 +599,50 @@ bool lantern_client_block_known_locked(
     return true;
 }
 
+bool lantern_client_checkpoint_is_ancestor_locked(
+    struct lantern_client *client,
+    const LanternCheckpoint *ancestor,
+    const LanternCheckpoint *descendant)
+{
+    if (!client || !ancestor || !descendant || !client->has_fork_choice)
+    {
+        return false;
+    }
+    if (ancestor->slot > descendant->slot)
+    {
+        return false;
+    }
+
+    LanternRoot current_root = descendant->root;
+    size_t max_depth = client->fork_choice.block_len;
+    for (size_t depth = 0; depth < max_depth; ++depth)
+    {
+        uint64_t current_slot = 0;
+        LanternRoot parent_root;
+        memset(&parent_root, 0, sizeof(parent_root));
+        if (lantern_fork_choice_block_info(
+                &client->fork_choice,
+                &current_root,
+                &current_slot,
+                &parent_root,
+                NULL)
+            != 0)
+        {
+            return false;
+        }
+        if (current_slot == ancestor->slot)
+        {
+            return memcmp(current_root.bytes, ancestor->root.bytes, LANTERN_ROOT_SIZE) == 0;
+        }
+        if (current_slot < ancestor->slot)
+        {
+            return false;
+        }
+        current_root = parent_root;
+    }
+    return false;
+}
+
 const char *lantern_sync_state_name(LanternSyncState state)
 {
     switch (state)

@@ -107,6 +107,50 @@ bool client_test_pending_contains_root(const struct lantern_client *client, cons
     return false;
 }
 
+int client_test_add_known_block(
+    struct lantern_client *client,
+    uint64_t slot,
+    const LanternRoot *parent_root,
+    uint8_t state_seed,
+    LanternRoot *out_root)
+{
+    if (!client || !parent_root || !out_root || !client->has_fork_choice) {
+        return -1;
+    }
+
+    LanternBlock block;
+    memset(&block, 0, sizeof(block));
+    lantern_block_body_init(&block.body);
+    block.slot = slot;
+    if (lantern_proposer_for_slot(block.slot, client->state.config.num_validators, &block.proposer_index) != 0) {
+        lantern_block_body_reset(&block.body);
+        return -1;
+    }
+    block.parent_root = *parent_root;
+    client_test_fill_root(&block.state_root, state_seed);
+
+    LanternRoot block_root;
+    if (lantern_hash_tree_root_block(&block, &block_root) != SSZ_SUCCESS) {
+        lantern_block_body_reset(&block.body);
+        return -1;
+    }
+    if (lantern_fork_choice_add_block(
+            &client->fork_choice,
+            &block,
+            NULL,
+            &client->state.latest_justified,
+            &client->state.latest_finalized,
+            &block_root)
+        != 0) {
+        lantern_block_body_reset(&block.body);
+        return -1;
+    }
+
+    *out_root = block_root;
+    lantern_block_body_reset(&block.body);
+    return 0;
+}
+
 static void reset_vote_client_on_error(struct lantern_client *client) {
     free(client->pending_gossip_votes.items);
     client->pending_gossip_votes.items = NULL;

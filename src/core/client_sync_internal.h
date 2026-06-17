@@ -157,6 +157,11 @@ bool lantern_client_block_known_locked(
     const LanternRoot *root,
     uint64_t *out_slot);
 
+bool lantern_client_checkpoint_is_ancestor_locked(
+    struct lantern_client *client,
+    const LanternCheckpoint *ancestor,
+    const LanternCheckpoint *descendant);
+
 bool lantern_client_maybe_start_historical_backfill(
     struct lantern_client *client,
     const char *peer_text,
