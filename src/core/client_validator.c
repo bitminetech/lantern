@@ -1677,9 +1677,10 @@ static void process_block_proposal_job(struct lantern_async_block_proposal_job *
     lantern_log_info(
         "propose",
         &(const struct lantern_log_metadata){.validator = client->node_id},
-        "slot %" PRIu64 ", %s, proof ready, proof %.3fs, total %.3fs",
+        "slot %" PRIu64 ", %s, proof ready, attestation_count=%zu, proof %.3fs, total %.3fs",
         job->slot,
         root_hex[0] ? root_hex : "0x0",
+        job->block.block.body.attestations.length,
         proof_seconds,
         total_seconds);
 
