@@ -1684,7 +1684,7 @@ static void process_block_proposal_job(struct lantern_async_block_proposal_job *
         proof_seconds,
         total_seconds);
 
-    int rc = lantern_client_commit_and_publish_current_local_block(
+    int rc = lantern_client_commit_and_publish_local_block(
         client,
         &job->block,
         &job->block_root,
@@ -1700,14 +1700,6 @@ static void process_block_proposal_job(struct lantern_async_block_proposal_job *
             job->slot,
             root_hex[0] ? root_hex : "0x0",
             job->block.block.body.attestations.length);
-    }
-    else if (rc == LANTERN_CLIENT_ERR_IGNORED)
-    {
-        lantern_log_warn(
-            "propose",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "slot %" PRIu64 ", skipped, reason: stale_snapshot",
-            job->slot);
     }
     else
     {

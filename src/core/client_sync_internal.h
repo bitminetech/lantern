@@ -543,14 +543,6 @@ int lantern_client_commit_and_publish_local_block(
     LanternState *post_state,
     LanternStore *post_store);
 
-int lantern_client_commit_and_publish_current_local_block(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *block_root,
-    LanternState *post_state,
-    LanternStore *post_store);
-
-
 /**
  * Record a received block and attempt import.
  *

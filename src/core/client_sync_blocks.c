@@ -100,6 +100,18 @@ static void log_import_rejected(
 static bool compute_state_head_root_locked(
     struct lantern_client *client,
     LanternRoot *out_root);
+static bool lantern_client_import_block_internal(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    const struct lantern_log_metadata *meta,
+    uint32_t backfill_depth,
+    bool allow_historical,
+    const uint8_t *raw_block_ssz,
+    size_t raw_block_ssz_len,
+    bool drain_pending_children,
+    bool *out_children_ready,
+    lantern_client_error *out_result);
 
 static int prepare_off_head_snapshot_state(
     const char *data_dir,
@@ -319,8 +331,7 @@ static int commit_and_publish_local_block(
     const LanternSignedBlock *block,
     const LanternRoot *block_root,
     LanternState *post_state,
-    LanternStore *post_store,
-    bool require_current_parent)
+    LanternStore *post_store)
 {
     if (!client || !block || !block_root || !post_state || !post_store)
     {
@@ -384,25 +395,9 @@ static int commit_and_publish_local_block(
                LANTERN_ROOT_SIZE)
             != 0)
     {
-        if (require_current_parent)
-        {
-            char parent_hex[ROOT_HEX_BUFFER_LEN];
-            char head_hex[ROOT_HEX_BUFFER_LEN];
-            format_root_hex(&block->block.parent_root, parent_hex, sizeof(parent_hex));
-            format_root_hex(&current_head_root, head_hex, sizeof(head_hex));
-            lantern_log_warn(
-                "propose",
-                &meta,
-                "slot %" PRIu64 ", skipped, reason: stale_parent, parent %s, current_head %s",
-                block->block.slot,
-                parent_hex[0] ? parent_hex : "0x0",
-                head_hex[0] ? head_hex : "0x0");
-            lantern_client_unlock_state(client, state_locked);
-            return LANTERN_CLIENT_ERR_IGNORED;
-        }
         lantern_client_unlock_state(client, state_locked);
-        int publish_rc = lantern_client_publish_block(client, block);
-        (void)lantern_client_import_block(
+        lantern_client_error import_result = LANTERN_CLIENT_ERR_RUNTIME;
+        bool imported = lantern_client_import_block_internal(
             client,
             block,
             block_root,
@@ -410,8 +405,17 @@ static int commit_and_publish_local_block(
             0u,
             false,
             NULL,
-            0u);
-        return publish_rc;
+            0u,
+            true,
+            NULL,
+            &import_result);
+        if (!imported)
+        {
+            return import_result == LANTERN_CLIENT_OK
+                ? LANTERN_CLIENT_ERR_IGNORED
+                : import_result;
+        }
+        return lantern_client_publish_block(client, block);
     }
 
     if (client->has_fork_choice
@@ -510,24 +514,7 @@ int lantern_client_commit_and_publish_local_block(
         block,
         block_root,
         post_state,
-        post_store,
-        false);
-}
-
-int lantern_client_commit_and_publish_current_local_block(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *block_root,
-    LanternState *post_state,
-    LanternStore *post_store)
-{
-    return commit_and_publish_local_block(
-        client,
-        block,
-        block_root,
-        post_state,
-        post_store,
-        true);
+        post_store);
 }
 
 static size_t bitlist_encoded_size_bits(size_t bit_length)
