@@ -3724,7 +3724,7 @@ cleanup:
     return rc;
 }
 
-static int test_validator_duties_follow_sync_state(void) {
+static int test_validator_duties_ignore_binary_sync_state(void) {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
     struct PQSignatureSchemeSecretKey *secret = NULL;
@@ -3736,7 +3736,7 @@ static int test_validator_duties_follow_sync_state(void) {
 
     if (client_test_setup_vote_validation_client(
             &client,
-            "validator_sync_state_gate",
+            "validator_lag_state_gate",
             &pub,
             &secret,
             NULL,
@@ -3756,14 +3756,14 @@ static int test_validator_duties_follow_sync_state(void) {
     client.gossip_running = true;
 
     client.sync_state = LANTERN_SYNC_STATE_IDLE;
-    if (validator_service_should_run(&client)) {
-        fprintf(stderr, "validator duties should be suppressed while sync state is IDLE\n");
+    if (!validator_service_should_run(&client)) {
+        fprintf(stderr, "validator duties should run while sync state is IDLE\n");
         goto cleanup;
     }
 
     client.sync_state = LANTERN_SYNC_STATE_SYNCING;
-    if (validator_service_should_run(&client)) {
-        fprintf(stderr, "validator duties should be suppressed while sync state is SYNCING\n");
+    if (!validator_service_should_run(&client)) {
+        fprintf(stderr, "validator duties should run while sync state is SYNCING\n");
         goto cleanup;
     }
 
@@ -3774,8 +3774,8 @@ static int test_validator_duties_follow_sync_state(void) {
     }
 
     client.sync_state = LANTERN_SYNC_STATE_SYNCING;
-    if (validator_service_should_run(&client)) {
-        fprintf(stderr, "validator duties should be re-suppressed after returning to SYNCING\n");
+    if (!validator_service_should_run(&client)) {
+        fprintf(stderr, "validator duties should keep running after returning to SYNCING\n");
         goto cleanup;
     }
 
@@ -3885,6 +3885,147 @@ static int test_local_block_commit_updates_state_before_publish(void) {
     rc = 0;
 
 cleanup:
+    lantern_store_reset(&post_store);
+    lantern_state_reset(&post_state);
+    lantern_signed_block_reset(&block);
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_local_off_head_block_publishes_after_successful_import(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    struct lantern_local_validator validator;
+    bool validator_enabled = true;
+    struct local_block_publish_observer observer;
+    LanternSignedBlock block;
+    LanternState post_state;
+    LanternStore post_store;
+    LanternRoot block_root;
+    LanternRoot child_root;
+    LanternBlock competing_block;
+    LanternRoot competing_root;
+    int rc = 1;
+
+    memset(&validator, 0, sizeof(validator));
+    memset(&observer, 0, sizeof(observer));
+    memset(&block_root, 0, sizeof(block_root));
+    memset(&child_root, 0, sizeof(child_root));
+    memset(&competing_block, 0, sizeof(competing_block));
+    memset(&competing_root, 0, sizeof(competing_root));
+    lantern_signed_block_init(&block);
+    lantern_state_init(&post_state);
+    lantern_store_init(&post_store);
+    lantern_block_body_init(&competing_block.body);
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "local_block_publish_off_head",
+            &pub,
+            &secret,
+            NULL,
+            &child_root)
+        != 0) {
+        goto cleanup;
+    }
+
+    validator.global_index = 0u;
+    validator.attestation_secret_key = secret;
+    validator.proposal_secret_key = secret;
+    client.local_validators = &validator;
+    client.local_validator_count = 1u;
+    client.validator_enabled = &validator_enabled;
+    client.gossip_running = true;
+    snprintf(client.gossip.block_topic, sizeof(client.gossip.block_topic), "test/local_block");
+    lantern_gossipsub_service_set_publish_hook(
+        &client.gossip,
+        local_block_publish_observer_hook,
+        &observer);
+    lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
+
+    if (lantern_fork_choice_set_block_state(&client.fork_choice, &child_root, &client.state) != 0) {
+        fprintf(stderr, "failed to cache child state for off-head local block test\n");
+        goto cleanup;
+    }
+
+    uint64_t slot = client.state.slot + 1u;
+    if (validator_build_block(&client, slot, 0u, &block) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "validator_build_block failed for off-head local block publish test\n");
+        goto cleanup;
+    }
+    if (lantern_hash_tree_root_block(&block.block, &block_root) != SSZ_SUCCESS) {
+        fprintf(stderr, "failed to hash built block for off-head local block publish test\n");
+        goto cleanup;
+    }
+    if (lantern_state_compute_post_state(
+            &client.state,
+            &client.store,
+            &block,
+            &post_state,
+            &post_store,
+            NULL)
+        != 0) {
+        fprintf(stderr, "failed to compute post-state for off-head local block publish test\n");
+        goto cleanup;
+    }
+
+    competing_block.slot = slot;
+    competing_block.proposer_index = block.block.proposer_index;
+    competing_block.parent_root = child_root;
+    client_test_fill_root(&competing_block.state_root, 0xA7u);
+    if (lantern_hash_tree_root_block(&competing_block, &competing_root) != SSZ_SUCCESS) {
+        fprintf(stderr, "failed to hash competing block for off-head local block publish test\n");
+        goto cleanup;
+    }
+    if (lantern_fork_choice_add_block(
+            &client.fork_choice,
+            &competing_block,
+            NULL,
+            &client.state.latest_justified,
+            &client.state.latest_finalized,
+            &competing_root)
+        != 0) {
+        fprintf(stderr, "failed to add competing head for off-head local block publish test\n");
+        goto cleanup;
+    }
+    LanternRoot head_root;
+    memset(&head_root, 0, sizeof(head_root));
+    if (lantern_fork_choice_current_head(&client.fork_choice, &head_root) != 0
+        || memcmp(head_root.bytes, competing_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+        fprintf(stderr, "competing block did not become current head for off-head local block test\n");
+        goto cleanup;
+    }
+
+    observer.client = &client;
+    observer.expected_slot = slot;
+    observer.expected_root = block_root;
+
+    if (lantern_client_commit_and_publish_local_block(
+            &client,
+            &block,
+            &block_root,
+            &post_state,
+            &post_store)
+        != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "off-head local block import/publish failed\n");
+        goto cleanup;
+    }
+    if (observer.calls != 1u) {
+        fprintf(stderr, "off-head local block was imported but not published\n");
+        goto cleanup;
+    }
+    uint64_t imported_slot = 0u;
+    if (client_test_slot_for_root(&client, &block_root, &imported_slot) != 0
+        || imported_slot != slot) {
+        fprintf(stderr, "off-head local block was not retained after import\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_block_body_reset(&competing_block.body);
     lantern_store_reset(&post_store);
     lantern_state_reset(&post_state);
     lantern_signed_block_reset(&block);
@@ -4040,6 +4181,9 @@ int main(void) {
     if (test_local_block_commit_updates_state_before_publish() != 0) {
         return 1;
     }
+    if (test_local_off_head_block_publishes_after_successful_import() != 0) {
+        return 1;
+    }
     if (test_client_load_xmss_keys_reads_annotated_validators() != 0) {
         return 1;
     }
@@ -4094,7 +4238,7 @@ int main(void) {
     if (test_publish_attestations_ignores_peer_status_gate_inputs() != 0) {
         return 1;
     }
-    if (test_validator_duties_follow_sync_state() != 0) {
+    if (test_validator_duties_ignore_binary_sync_state() != 0) {
         return 1;
     }
     if (test_publish_aggregated_attestations_collects_any_slot_and_prunes_gossip() != 0) {

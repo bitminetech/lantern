@@ -2630,6 +2630,10 @@ static void shutdown_network_services(struct lantern_client *client)
     lantern_string_list_reset(&client->connected_peer_ids);
     lantern_string_list_reset(&client->connected_peer_refs);
     lantern_string_list_reset(&client->inbound_peer_ids);
+    free(client->connection_peer_refs);
+    client->connection_peer_refs = NULL;
+    client->connection_peer_ref_count = 0;
+    client->connection_peer_ref_capacity = 0;
 }
 
 

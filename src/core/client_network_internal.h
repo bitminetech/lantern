@@ -313,6 +313,7 @@ void connection_counter_reset(struct lantern_client *client);
  *
  * @param client   Client instance
  * @param delta    Change in connection count (+1 for connect, -1 for disconnect)
+ * @param conn     Transport connection handle (may be NULL)
  * @param peer     Peer ID (may be NULL)
  * @param inbound  True if inbound connection
  * @param reason   Connection close reason code
@@ -322,9 +323,15 @@ void connection_counter_reset(struct lantern_client *client);
 void connection_counter_update(
     struct lantern_client *client,
     int delta,
+    const void *conn,
     const struct lantern_peer_id *peer,
     bool inbound,
     int reason);
+
+bool connection_tie_break_prefers_inbound(
+    const uint8_t *local_peer_id,
+    size_t local_peer_id_len,
+    const struct lantern_peer_id *remote_peer);
 
 
 /**

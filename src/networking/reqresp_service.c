@@ -694,6 +694,38 @@ static int peer_from_conn(libp2p_host_conn_t *conn, struct lantern_peer_id *out_
     return 0;
 }
 
+static int reqresp_peer_id_cmp_bytes(
+    const uint8_t *left,
+    size_t left_len,
+    const uint8_t *right,
+    size_t right_len) {
+    size_t min_len = left_len < right_len ? left_len : right_len;
+    int cmp = memcmp(left, right, min_len);
+    if (cmp != 0) {
+        return cmp;
+    }
+    if (left_len < right_len) {
+        return -1;
+    }
+    if (left_len > right_len) {
+        return 1;
+    }
+    return 0;
+}
+
+static int reqresp_service_prefers_inbound_conn(
+    const struct lantern_reqresp_service *service,
+    const struct lantern_peer_id *peer) {
+    if (!service || !service->network || !peer || service->network->local_peer_id_len == 0) {
+        return 0;
+    }
+    return reqresp_peer_id_cmp_bytes(
+               service->network->local_peer_id,
+               service->network->local_peer_id_len,
+               peer->bytes,
+               peer->len) > 0;
+}
+
 static libp2p_host_conn_t *service_find_conn(
     struct lantern_reqresp_service *service,
     const struct lantern_peer_id *peer) {
@@ -716,7 +748,7 @@ static libp2p_host_conn_t *service_find_conn(
     return conn;
 }
 
-static void service_record_conn(struct lantern_reqresp_service *service, libp2p_host_conn_t *conn) {
+static void service_record_conn(struct lantern_reqresp_service *service, libp2p_host_conn_t *conn, int inbound) {
     if (!service || !conn) {
         return;
     }
@@ -724,12 +756,18 @@ static void service_record_conn(struct lantern_reqresp_service *service, libp2p_
     if (peer_from_conn(conn, &peer) != 0) {
         return;
     }
+    int prefer_inbound = reqresp_service_prefers_inbound_conn(service, &peer) ? 1 : 0;
+    int new_preferred = (inbound ? 1 : 0) == prefer_inbound;
     if (service->lock_initialized) {
         pthread_mutex_lock(&service->lock);
     }
     for (size_t i = 0; i < service->conn_count; ++i) {
         if (lantern_peer_id_equal(&service->conns[i].peer, &peer)) {
-            service->conns[i].conn = conn;
+            int existing_preferred = (service->conns[i].inbound ? 1 : 0) == prefer_inbound;
+            if (new_preferred || !existing_preferred) {
+                service->conns[i].conn = conn;
+                service->conns[i].inbound = inbound ? 1 : 0;
+            }
             if (service->lock_initialized) {
                 pthread_mutex_unlock(&service->lock);
             }
@@ -739,6 +777,7 @@ static void service_record_conn(struct lantern_reqresp_service *service, libp2p_
     if (service->conn_count < LANTERN_REQRESP_MAX_TRACKED_CONNECTIONS) {
         service->conns[service->conn_count].peer = peer;
         service->conns[service->conn_count].conn = conn;
+        service->conns[service->conn_count].inbound = inbound ? 1 : 0;
         service->conn_count++;
     }
     if (service->lock_initialized) {
@@ -1558,7 +1597,7 @@ static void reqresp_host_event(
         return;
     }
     if (event->type == LIBP2P_HOST_EVENT_CONN_ESTABLISHED && event->conn) {
-        service_record_conn(service, event->conn);
+        service_record_conn(service, event->conn, event->dial == NULL);
     } else if (event->type == LIBP2P_HOST_EVENT_CONN_CLOSED && event->conn) {
         service_remove_conn(service, event->conn);
     } else if (event->type == LIBP2P_HOST_EVENT_STREAM_OPEN_FAILED && event->user_data) {

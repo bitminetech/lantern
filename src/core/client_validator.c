@@ -60,6 +60,15 @@ static const uint32_t VALIDATOR_SERVICE_POLL_SLEEP_MS = 50;
 /** Number of 50 ms polls to wait for the current slot block before attesting. */
 static const size_t VALIDATOR_CURRENT_SLOT_BLOCK_WAIT_ATTEMPTS = 8;
 
+/** Slot lag past which local validator duties are silenced. */
+static const uint64_t VALIDATOR_SYNC_LAG_THRESHOLD = 4u;
+
+/** Slot lag past which the network is considered stalled, so duties stay live. */
+static const uint64_t VALIDATOR_NETWORK_STALL_THRESHOLD = 8u;
+
+/** Hysteresis band for reopening a closed duty gate. */
+static const uint64_t VALIDATOR_SYNC_LAG_HYSTERESIS = 2u;
+
 static size_t validator_attestation_committee_count(const struct lantern_client *client)
 {
     return lantern_client_attestation_committee_count(client);
@@ -80,6 +89,10 @@ static lantern_client_error validator_collect_and_aggregate_attestation_signatur
     LanternAttestationSignatures *out_signatures,
     struct lantern_block_build_stage_timings *stage_timings,
     bool *out_missing_state);
+static void validator_log_duty_skipped(
+    struct lantern_client *client,
+    uint64_t slot,
+    const char *reason);
 
 static bool validator_record_aggregation_skipped_once(
     struct lantern_client *client,
@@ -155,11 +168,6 @@ static void validator_wait_for_current_slot_block(struct lantern_client *client,
     }
 }
 
-static bool validator_skip_reason_is_not_synced(const char *reason)
-{
-    return reason && strncmp(reason, "sync_state=", strlen("sync_state=")) == 0;
-}
-
 static double validator_elapsed_seconds(double started_seconds, double finished_seconds)
 {
     return finished_seconds >= started_seconds ? finished_seconds - started_seconds : 0.0;
@@ -211,22 +219,6 @@ static void validator_stage_timings_add_remainder(
             timings->other_prover_setup_seconds -= overage_seconds;
         }
     }
-}
-
-static bool validator_aggregation_timepoint_at(
-    const struct lantern_client *client,
-    uint64_t now_milliseconds,
-    struct lantern_slot_timepoint *out_timepoint)
-{
-    if (!client || !client->has_runtime || !out_timepoint)
-    {
-        return false;
-    }
-    if (lantern_slot_clock_compute(&client->runtime.clock, now_milliseconds, out_timepoint) != 0)
-    {
-        return false;
-    }
-    return out_timepoint->phase == LANTERN_DUTY_PHASE_AGGREGATE;
 }
 
 struct lantern_async_block_proposal_job {
@@ -505,21 +497,148 @@ static const char *validator_service_skip_reason(const struct lantern_client *cl
     {
         return "no_validators";
     }
-    if (client->sync_state != LANTERN_SYNC_STATE_SYNCED)
+    return NULL;
+}
+
+static bool validator_duty_gate_allows(
+    struct lantern_client *client,
+    uint64_t slot,
+    const char *duty)
+{
+    if (!client)
     {
-        switch (client->sync_state)
+        return false;
+    }
+
+    uint64_t head_slot = 0u;
+    uint64_t max_seen_slot = 0u;
+    bool have_head_slot = false;
+    bool state_locked = lantern_client_lock_state(client);
+    if (!state_locked)
+    {
+        validator_log_duty_skipped(client, slot, "duty_gate_state_lock_failed");
+        return false;
+    }
+
+    if (client->has_fork_choice)
+    {
+        LanternRoot head_root;
+        if (lantern_fork_choice_recompute_head(&client->fork_choice) != 0)
         {
-            case LANTERN_SYNC_STATE_IDLE:
-                return "sync_state=idle";
-            case LANTERN_SYNC_STATE_SYNCING:
-                return "sync_state=syncing";
-            case LANTERN_SYNC_STATE_SYNCED:
-                break;
-            default:
-                return "sync_state=unknown";
+            lantern_client_unlock_state(client, state_locked);
+            validator_log_duty_skipped(client, slot, "duty_gate_head_recompute_failed");
+            return false;
+        }
+        if (lantern_fork_choice_current_head(&client->fork_choice, &head_root) == 0
+            && lantern_fork_choice_block_info(
+                   &client->fork_choice,
+                   &head_root,
+                   &head_slot,
+                   NULL,
+                   NULL)
+                   == 0)
+        {
+            have_head_slot = true;
+            max_seen_slot = head_slot;
+        }
+
+        if (client->fork_choice.blocks)
+        {
+            for (size_t i = 0; i < client->fork_choice.block_len; ++i)
+            {
+                uint64_t block_slot = client->fork_choice.blocks[i].slot;
+                if (!have_head_slot || block_slot > max_seen_slot)
+                {
+                    max_seen_slot = block_slot;
+                }
+            }
         }
     }
-    return NULL;
+    else if (client->has_state)
+    {
+        head_slot = client->state.slot;
+        max_seen_slot = head_slot;
+        have_head_slot = true;
+    }
+    lantern_client_unlock_state(client, state_locked);
+
+    if (!have_head_slot)
+    {
+        return true;
+    }
+
+    uint64_t lag = head_slot >= slot ? 0u : slot - head_slot;
+    uint64_t network_lag = max_seen_slot >= slot ? 0u : slot - max_seen_slot;
+    bool network_stalling = network_lag > VALIDATOR_NETWORK_STALL_THRESHOLD;
+    struct lantern_validator_duty_state *duty_state = &client->validator_duty;
+    bool allow = true;
+
+    if (network_stalling)
+    {
+        allow = true;
+        if (duty_state->duty_gate_closed)
+        {
+            duty_state->duty_gate_closed = false;
+            lantern_log_info(
+                "validator",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "duty gate reopened: network stall detected duty=%s slot=%" PRIu64
+                " head=%" PRIu64 " lag=%" PRIu64 " max_seen=%" PRIu64
+                " network_lag=%" PRIu64,
+                duty ? duty : "-",
+                slot,
+                head_slot,
+                lag,
+                max_seen_slot,
+                network_lag);
+        }
+    }
+    else if (duty_state->duty_gate_closed)
+    {
+        uint64_t reopen_lag = VALIDATOR_SYNC_LAG_THRESHOLD > VALIDATOR_SYNC_LAG_HYSTERESIS
+            ? VALIDATOR_SYNC_LAG_THRESHOLD - VALIDATOR_SYNC_LAG_HYSTERESIS
+            : 0u;
+        allow = lag <= reopen_lag;
+        if (allow)
+        {
+            duty_state->duty_gate_closed = false;
+            lantern_log_info(
+                "validator",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "duty gate reopened: local view caught up duty=%s slot=%" PRIu64
+                " head=%" PRIu64 " lag=%" PRIu64,
+                duty ? duty : "-",
+                slot,
+                head_slot,
+                lag);
+        }
+    }
+    else
+    {
+        allow = lag <= VALIDATOR_SYNC_LAG_THRESHOLD;
+        if (!allow)
+        {
+            duty_state->duty_gate_closed = true;
+            lantern_log_info(
+                "validator",
+                &(const struct lantern_log_metadata){.validator = client->node_id},
+                "duty gate closed: local view stale duty=%s slot=%" PRIu64
+                " head=%" PRIu64 " lag=%" PRIu64 " max_seen=%" PRIu64
+                " network_lag=%" PRIu64,
+                duty ? duty : "-",
+                slot,
+                head_slot,
+                lag,
+                max_seen_slot,
+                network_lag);
+        }
+    }
+
+    if (!allow)
+    {
+        validator_log_duty_skipped(client, slot, "duty_gate_stale_view");
+    }
+    return allow;
 }
 
 static void validator_log_duty_skipped(
@@ -2240,6 +2359,10 @@ int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t
         validator_log_duty_skipped(client, slot, skip_reason);
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
+    if (!validator_duty_gate_allows(client, slot, "block"))
+    {
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
 
     struct lantern_async_block_proposal_job *job = NULL;
     int rc = validator_prepare_block_proposal_job(
@@ -2302,6 +2425,10 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
     if (skip_reason)
     {
         validator_log_duty_skipped(client, slot, skip_reason);
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+    if (!validator_duty_gate_allows(client, slot, "attestation"))
+    {
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
     if (!client->local_validators || client->local_validator_count == 0)
@@ -2941,15 +3068,6 @@ void *validator_thread(void *arg)
         const char *skip_reason = validator_service_skip_reason(client);
         if (skip_reason)
         {
-            struct lantern_slot_timepoint skipped_tp;
-            if (validator_skip_reason_is_not_synced(skip_reason)
-                && validator_aggregation_timepoint_at(client, now, &skipped_tp))
-            {
-                (void)validator_record_aggregation_skipped_once(
-                    client,
-                    skipped_tp.slot,
-                    LEAN_METRICS_AGGREGATOR_SKIPPED_NOT_SYNCED);
-            }
             uint64_t skip_slot =
                 client->validator_duty.have_timepoint ? client->validator_duty.last_slot : 0u;
             validator_log_duty_skipped(client, skip_slot, skip_reason);
@@ -3030,7 +3148,7 @@ void *validator_thread(void *arg)
                 break;
 
             case LANTERN_DUTY_PHASE_AGGREGATE:
-                if (!duty->slot_aggregated && duty->slot_attested)
+                if (!duty->slot_aggregated)
                 {
                     (void)validator_publish_aggregated_attestations(client, tp->slot);
                     duty->slot_aggregated = true;

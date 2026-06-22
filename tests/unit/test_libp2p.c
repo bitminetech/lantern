@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const uint8_t kHostSecret[32] = {
@@ -112,30 +113,69 @@ static int connection_counter_keeps_peer_until_last_connection_closes(void) {
         return 1;
     }
 
-    connection_counter_update(&client, 1, &peer, true, LIBP2P_HOST_OK);
-    connection_counter_update(&client, 1, &peer, false, LIBP2P_HOST_OK);
+    const void *conn1 = (const void *)0x1;
+    const void *conn2 = (const void *)0x2;
+    const void *unknown_conn = (const void *)0x3;
+
+    connection_counter_update(&client, 1, conn1, &peer, true, LIBP2P_HOST_OK);
+    connection_counter_update(&client, 1, conn2, &peer, false, LIBP2P_HOST_OK);
     int failed = !lantern_client_is_peer_connected(&client, peer_text)
         || client.connected_peers != 1u
         || client.connected_peer_ids.len != 1u
-        || client.connected_peer_refs.len != 2u;
+        || client.connected_peer_refs.len != 2u
+        || client.connection_peer_ref_count != 2u;
 
-    connection_counter_update(&client, -1, &peer, false, LIBP2P_HOST_OK);
+    connection_counter_update(&client, -1, conn1, NULL, false, LIBP2P_HOST_OK);
     failed = failed || !lantern_client_is_peer_connected(&client, peer_text)
         || client.connected_peers != 1u
         || client.connected_peer_ids.len != 1u
-        || client.connected_peer_refs.len != 1u;
+        || client.connected_peer_refs.len != 1u
+        || client.connection_peer_ref_count != 1u;
 
-    connection_counter_update(&client, -1, &peer, false, LIBP2P_HOST_OK);
+    connection_counter_update(&client, -1, unknown_conn, NULL, false, LIBP2P_HOST_OK);
+    failed = failed || !lantern_client_is_peer_connected(&client, peer_text)
+        || client.connected_peers != 1u
+        || client.connected_peer_ids.len != 1u
+        || client.connected_peer_refs.len != 1u
+        || client.connection_peer_ref_count != 1u;
+
+    connection_counter_update(&client, -1, conn2, NULL, false, LIBP2P_HOST_OK);
     failed = failed || lantern_client_is_peer_connected(&client, peer_text)
         || client.connected_peers != 0u
         || client.connected_peer_ids.len != 0u
-        || client.connected_peer_refs.len != 0u;
+        || client.connected_peer_refs.len != 0u
+        || client.connection_peer_ref_count != 0u;
 
     pthread_mutex_destroy(&client.connection_lock);
     lantern_string_list_reset(&client.connected_peer_ids);
     lantern_string_list_reset(&client.connected_peer_refs);
     lantern_string_list_reset(&client.inbound_peer_ids);
+    free(client.connection_peer_refs);
 
+    return failed;
+}
+
+static int connection_tie_break_is_symmetric(void) {
+    static const uint8_t low_local[] = {0x01};
+    static const uint8_t high_local[] = {0x02};
+    struct lantern_peer_id low_peer = {
+        .bytes = {0x01},
+        .len = 1,
+    };
+    struct lantern_peer_id high_peer = {
+        .bytes = {0x02},
+        .len = 1,
+    };
+    struct lantern_peer_id longer_peer = {
+        .bytes = {0x01, 0x00},
+        .len = 2,
+    };
+
+    int failed = 0;
+    failed = failed || connection_tie_break_prefers_inbound(low_local, sizeof(low_local), &high_peer);
+    failed = failed || !connection_tie_break_prefers_inbound(high_local, sizeof(high_local), &low_peer);
+    failed = failed || connection_tie_break_prefers_inbound(low_local, sizeof(low_local), &longer_peer);
+    failed = failed || !connection_tie_break_prefers_inbound(longer_peer.bytes, longer_peer.len, &low_peer);
     return failed;
 }
 
@@ -147,6 +187,10 @@ int main(void) {
     }
 
     if (connection_counter_keeps_peer_until_last_connection_closes() != 0) {
+        return 1;
+    }
+
+    if (connection_tie_break_is_symmetric() != 0) {
         return 1;
     }
 

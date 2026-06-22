@@ -85,9 +85,325 @@ static lean_metrics_disconnection_reason_t metrics_disconnection_reason_from_cod
     return LEAN_METRICS_DISCONNECT_ERROR;
 }
 
+bool connection_tie_break_prefers_inbound(
+    const uint8_t *local_peer_id,
+    size_t local_peer_id_len,
+    const struct lantern_peer_id *remote_peer)
+{
+    if (!local_peer_id || local_peer_id_len == 0 || !remote_peer || remote_peer->len == 0)
+    {
+        return false;
+    }
+
+    size_t min_len = local_peer_id_len < remote_peer->len ? local_peer_id_len : remote_peer->len;
+    int cmp = memcmp(local_peer_id, remote_peer->bytes, min_len);
+    if (cmp == 0)
+    {
+        if (local_peer_id_len > remote_peer->len)
+        {
+            cmp = 1;
+        }
+        else if (local_peer_id_len < remote_peer->len)
+        {
+            cmp = -1;
+        }
+    }
+    return cmp > 0;
+}
+
 /* ============================================================================
  * Connection Counter Functions
  * ============================================================================ */
+
+static void connection_peer_refs_reset_locked(struct lantern_client *client)
+{
+    if (!client)
+    {
+        return;
+    }
+    free(client->connection_peer_refs);
+    client->connection_peer_refs = NULL;
+    client->connection_peer_ref_count = 0;
+    client->connection_peer_ref_capacity = 0;
+}
+
+static struct lantern_connection_peer_ref *connection_peer_ref_find_locked(
+    struct lantern_client *client,
+    const void *conn)
+{
+    if (!client || !conn)
+    {
+        return NULL;
+    }
+    for (size_t i = 0; i < client->connection_peer_ref_count; ++i)
+    {
+        if (client->connection_peer_refs[i].conn == conn)
+        {
+            return &client->connection_peer_refs[i];
+        }
+    }
+    return NULL;
+}
+
+static bool connection_peer_ref_lookup_locked(
+    struct lantern_client *client,
+    const void *conn,
+    struct lantern_peer_id *out_peer,
+    bool *out_inbound)
+{
+    struct lantern_connection_peer_ref *ref = connection_peer_ref_find_locked(client, conn);
+    if (!ref)
+    {
+        return false;
+    }
+    if (out_peer)
+    {
+        *out_peer = ref->peer;
+    }
+    if (out_inbound)
+    {
+        *out_inbound = ref->inbound;
+    }
+    return true;
+}
+
+static bool connection_peer_ref_lookup(
+    struct lantern_client *client,
+    const void *conn,
+    struct lantern_peer_id *out_peer,
+    bool *out_inbound)
+{
+    if (!client || !client->connection_lock_initialized || !conn)
+    {
+        return false;
+    }
+    bool found = false;
+    if (pthread_mutex_lock(&client->connection_lock) == 0)
+    {
+        found = connection_peer_ref_lookup_locked(client, conn, out_peer, out_inbound);
+        pthread_mutex_unlock(&client->connection_lock);
+    }
+    return found;
+}
+
+static int connection_peer_ref_remember_locked(
+    struct lantern_client *client,
+    const void *conn,
+    const struct lantern_peer_id *peer,
+    bool inbound)
+{
+    if (!client || !conn || !peer || peer->len == 0)
+    {
+        return 0;
+    }
+    struct lantern_connection_peer_ref *existing =
+        connection_peer_ref_find_locked(client, conn);
+    if (existing)
+    {
+        existing->peer = *peer;
+        existing->inbound = inbound;
+        existing->closing = false;
+        return 0;
+    }
+    if (client->connection_peer_ref_count == client->connection_peer_ref_capacity)
+    {
+        size_t next_capacity =
+            client->connection_peer_ref_capacity ? client->connection_peer_ref_capacity * 2u : 8u;
+        struct lantern_connection_peer_ref *next =
+            realloc(client->connection_peer_refs, next_capacity * sizeof(*next));
+        if (!next)
+        {
+            return -1;
+        }
+        client->connection_peer_refs = next;
+        client->connection_peer_ref_capacity = next_capacity;
+    }
+    client->connection_peer_refs[client->connection_peer_ref_count++] =
+        (struct lantern_connection_peer_ref){
+            .conn = conn,
+            .peer = *peer,
+            .inbound = inbound,
+            .closing = false,
+        };
+    return 0;
+}
+
+static bool connection_peer_matches(
+    const struct lantern_connection_peer_ref *ref,
+    const struct lantern_peer_id *peer)
+{
+    return ref && peer && lantern_peer_id_equal(&ref->peer, peer);
+}
+
+static bool connection_dedup_collect_closures(
+    struct lantern_client *client,
+    const void *conn,
+    const struct lantern_peer_id *peer,
+    const void ***out_conns,
+    size_t *out_count,
+    bool *out_current_closing)
+{
+    if (out_conns)
+    {
+        *out_conns = NULL;
+    }
+    if (out_count)
+    {
+        *out_count = 0;
+    }
+    if (out_current_closing)
+    {
+        *out_current_closing = false;
+    }
+    if (!client || !conn || !peer || peer->len == 0 || !out_conns || !out_count
+        || !out_current_closing || !client->connection_lock_initialized
+        || client->network.local_peer_id_len == 0)
+    {
+        return false;
+    }
+
+    bool prefer_inbound = connection_tie_break_prefers_inbound(
+        client->network.local_peer_id,
+        client->network.local_peer_id_len,
+        peer);
+    const void *keep_conn = NULL;
+
+    if (pthread_mutex_lock(&client->connection_lock) != 0)
+    {
+        return false;
+    }
+
+    for (size_t i = 0; i < client->connection_peer_ref_count; ++i)
+    {
+        struct lantern_connection_peer_ref *ref = &client->connection_peer_refs[i];
+        if (connection_peer_matches(ref, peer) && !ref->closing && ref->inbound == prefer_inbound)
+        {
+            keep_conn = ref->conn;
+            break;
+        }
+    }
+    if (!keep_conn)
+    {
+        for (size_t i = 0; i < client->connection_peer_ref_count; ++i)
+        {
+            struct lantern_connection_peer_ref *ref = &client->connection_peer_refs[i];
+            if (connection_peer_matches(ref, peer) && !ref->closing)
+            {
+                keep_conn = ref->conn;
+                break;
+            }
+        }
+    }
+    if (!keep_conn)
+    {
+        pthread_mutex_unlock(&client->connection_lock);
+        return false;
+    }
+
+    size_t close_count = 0;
+    for (size_t i = 0; i < client->connection_peer_ref_count; ++i)
+    {
+        struct lantern_connection_peer_ref *ref = &client->connection_peer_refs[i];
+        if (connection_peer_matches(ref, peer) && !ref->closing && ref->conn != keep_conn)
+        {
+            close_count++;
+        }
+    }
+
+    if (close_count == 0)
+    {
+        pthread_mutex_unlock(&client->connection_lock);
+        return false;
+    }
+
+    const void **close_conns = calloc(close_count, sizeof(*close_conns));
+    if (!close_conns)
+    {
+        pthread_mutex_unlock(&client->connection_lock);
+        return false;
+    }
+
+    size_t out = 0;
+    for (size_t i = 0; i < client->connection_peer_ref_count; ++i)
+    {
+        struct lantern_connection_peer_ref *ref = &client->connection_peer_refs[i];
+        if (connection_peer_matches(ref, peer) && !ref->closing && ref->conn != keep_conn)
+        {
+            ref->closing = true;
+            close_conns[out++] = ref->conn;
+            if (ref->conn == conn)
+            {
+                *out_current_closing = true;
+            }
+        }
+    }
+
+    pthread_mutex_unlock(&client->connection_lock);
+
+    *out_conns = close_conns;
+    *out_count = out;
+    return out != 0;
+}
+
+static bool dedup_peer_connections_after_open(
+    struct lantern_client *client,
+    const void *conn,
+    const struct lantern_peer_id *peer)
+{
+    const void **close_conns = NULL;
+    size_t close_count = 0;
+    bool current_closing = false;
+
+    if (!connection_dedup_collect_closures(
+            client,
+            conn,
+            peer,
+            &close_conns,
+            &close_count,
+            &current_closing))
+    {
+        return false;
+    }
+
+    char peer_text[128];
+    format_peer_id_text(peer, peer_text, sizeof(peer_text));
+    for (size_t i = 0; i < close_count; ++i)
+    {
+        libp2p_host_conn_t *close_conn = (libp2p_host_conn_t *)close_conns[i];
+        if (!close_conn || !client->network.host)
+        {
+            continue;
+        }
+        lantern_log_debug(
+            "network",
+            &(const struct lantern_log_metadata){
+                .validator = client->node_id,
+                .peer = peer_text[0] ? peer_text : NULL,
+            },
+            "closing duplicate peer connection");
+        (void)libp2p_host_conn_close(client->network.host, close_conn, 0);
+    }
+    free(close_conns);
+    return current_closing;
+}
+
+static void connection_peer_ref_remove_locked(struct lantern_client *client, const void *conn)
+{
+    if (!client || !conn)
+    {
+        return;
+    }
+    for (size_t i = 0; i < client->connection_peer_ref_count; ++i)
+    {
+        if (client->connection_peer_refs[i].conn == conn)
+        {
+            client->connection_peer_refs[i] =
+                client->connection_peer_refs[client->connection_peer_ref_count - 1u];
+            client->connection_peer_ref_count -= 1u;
+            return;
+        }
+    }
+}
 
 /**
  * Reset connection counter and connected peer list.
@@ -111,6 +427,7 @@ void connection_counter_reset(struct lantern_client *client)
         lantern_string_list_init(&client->connected_peer_refs);
         lantern_string_list_reset(&client->inbound_peer_ids);
         lantern_string_list_init(&client->inbound_peer_ids);
+        connection_peer_refs_reset_locked(client);
         return;
     }
     if (pthread_mutex_lock(&client->connection_lock) == 0)
@@ -122,6 +439,7 @@ void connection_counter_reset(struct lantern_client *client)
         lantern_string_list_init(&client->connected_peer_refs);
         lantern_string_list_reset(&client->inbound_peer_ids);
         lantern_string_list_init(&client->inbound_peer_ids);
+        connection_peer_refs_reset_locked(client);
         pthread_mutex_unlock(&client->connection_lock);
     }
     else
@@ -133,6 +451,7 @@ void connection_counter_reset(struct lantern_client *client)
         lantern_string_list_init(&client->connected_peer_refs);
         lantern_string_list_reset(&client->inbound_peer_ids);
         lantern_string_list_init(&client->inbound_peer_ids);
+        connection_peer_refs_reset_locked(client);
     }
 }
 
@@ -151,6 +470,7 @@ void connection_counter_reset(struct lantern_client *client)
 void connection_counter_update(
     struct lantern_client *client,
     int delta,
+    const void *conn,
     const struct lantern_peer_id *peer,
     bool inbound,
     int reason)
@@ -161,16 +481,26 @@ void connection_counter_update(
     }
 
     char peer_text[128];
-    format_peer_id_text(peer, peer_text, sizeof(peer_text));
+    struct lantern_peer_id cached_peer;
+    const struct lantern_peer_id *effective_peer = peer;
+    format_peer_id_text(effective_peer, peer_text, sizeof(peer_text));
     size_t total = 0;
     bool was_inbound = inbound;
     bool record_disconnect = false;
+    size_t refs = 0;
     if (pthread_mutex_lock(&client->connection_lock) == 0)
     {
+        if (!peer_text[0] && delta < 0
+            && connection_peer_ref_lookup_locked(client, conn, &cached_peer, &was_inbound))
+        {
+            effective_peer = &cached_peer;
+            format_peer_id_text(effective_peer, peer_text, sizeof(peer_text));
+        }
         if (peer_text[0])
         {
             if (delta > 0)
             {
+                (void)connection_peer_ref_remember_locked(client, conn, effective_peer, inbound);
                 (void)lantern_string_list_append(&client->connected_peer_refs, peer_text);
                 if (!string_list_contains(&client->connected_peer_ids, peer_text))
                 {
@@ -196,6 +526,7 @@ void connection_counter_update(
                 {
                     was_inbound = string_list_contains(&client->inbound_peer_ids, peer_text);
                     string_list_remove(&client->connected_peer_refs, peer_text);
+                    connection_peer_ref_remove_locked(client, conn);
                     if (!string_list_contains(&client->connected_peer_refs, peer_text))
                     {
                         string_list_remove(&client->connected_peer_ids, peer_text);
@@ -208,26 +539,10 @@ void connection_counter_update(
         }
         else
         {
-            if (delta > 0)
-            {
-                client->connected_peers += (size_t)delta;
-            }
-            else if (delta < 0)
-            {
-                size_t before = client->connected_peers;
-                size_t decrease = (size_t)(-delta);
-                if (client->connected_peers > decrease)
-                {
-                    client->connected_peers -= decrease;
-                }
-                else
-                {
-                    client->connected_peers = 0;
-                }
-                record_disconnect = (client->connected_peers != before);
-            }
+            client->connected_peers = client->connected_peer_ids.len;
         }
         total = client->connected_peers;
+        refs = client->connected_peer_refs.len;
         pthread_mutex_unlock(&client->connection_lock);
     }
     else
@@ -252,10 +567,11 @@ void connection_counter_update(
             .validator = client->node_id,
             .peer = peer_text[0] ? peer_text : NULL,
         },
-        "connection %s inbound=%s total=%zu reason=%d (%s)",
+        "connection %s inbound=%s total=%zu refs=%zu reason=%d (%s)",
         delta > 0 ? "opened" : "closed",
         (delta > 0 ? inbound : was_inbound) ? "true" : "false",
         total,
+        refs,
         reason,
         connection_reason_text(reason));
 
@@ -970,6 +1286,7 @@ void stop_peer_dialer(struct lantern_client *client)
  */
 static void handle_connection_opened_event(
     struct lantern_client *client,
+    const void *conn,
     const struct lantern_peer_id *peer,
     bool inbound)
 {
@@ -978,9 +1295,14 @@ static void handle_connection_opened_event(
         return;
     }
 
-    connection_counter_update(client, 1, peer, inbound, 0);
+    connection_counter_update(client, 1, conn, peer, inbound, 0);
 
     if (!peer)
+    {
+        return;
+    }
+    bool current_closing = dedup_peer_connections_after_open(client, conn, peer);
+    if (current_closing)
     {
         return;
     }
@@ -1015,6 +1337,7 @@ static void handle_connection_opened_event(
  */
 static void handle_connection_closed_event(
     struct lantern_client *client,
+    const void *conn,
     const struct lantern_peer_id *peer,
     int reason,
     uint64_t app_error_code,
@@ -1025,7 +1348,7 @@ static void handle_connection_closed_event(
         return;
     }
 
-    connection_counter_update(client, -1, peer, false, reason);
+    connection_counter_update(client, -1, conn, peer, false, reason);
 
     if (!peer)
     {
@@ -1154,13 +1477,17 @@ void connection_events_cb(
     }
     struct lantern_client *client = (struct lantern_client *)user_data;
     struct lantern_peer_id peer;
-    const bool has_peer = connection_event_peer_id(evt->conn, &peer);
+    bool has_peer = connection_event_peer_id(evt->conn, &peer);
+    if (!has_peer && evt->type == LIBP2P_HOST_EVENT_CONN_CLOSED)
+    {
+        has_peer = connection_peer_ref_lookup(client, evt->conn, &peer, NULL);
+    }
     const struct lantern_peer_id *peer_ptr = has_peer ? &peer : NULL;
 
     switch (evt->type)
     {
         case LIBP2P_HOST_EVENT_CONN_ESTABLISHED:
-            handle_connection_opened_event(client, peer_ptr, evt->dial == NULL);
+            handle_connection_opened_event(client, evt->conn, peer_ptr, evt->dial == NULL);
             if (network->host && evt->conn)
             {
                 (void)libp2p_identify_query(&network->identify, network->host, evt->conn, NULL, NULL);
@@ -1169,6 +1496,7 @@ void connection_events_cb(
         case LIBP2P_HOST_EVENT_CONN_CLOSED:
             handle_connection_closed_event(
                 client,
+                evt->conn,
                 peer_ptr,
                 (int)evt->reason,
                 evt->app_error_code,

@@ -409,11 +409,9 @@ static int commit_and_publish_local_block(
             true,
             NULL,
             &import_result);
-        if (!imported)
+        if (!imported && import_result != LANTERN_CLIENT_OK)
         {
-            return import_result == LANTERN_CLIENT_OK
-                ? LANTERN_CLIENT_ERR_IGNORED
-                : import_result;
+            return import_result;
         }
         return lantern_client_publish_block(client, block);
     }
