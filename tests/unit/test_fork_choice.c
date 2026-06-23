@@ -326,7 +326,7 @@ static void configure_fork_choice_with_backing_store(
     assert(lantern_fork_choice_configure(store, config) == 0);
 }
 
-static int test_fork_choice_proposer_attestation_sequence(void) {
+static int test_fork_choice_block_sequence(void) {
     LanternForkChoice store;
     LanternStore backing_store;
     lantern_fork_choice_init(&store);
@@ -347,13 +347,10 @@ static int test_fork_choice_proposer_attestation_sequence(void) {
     init_block(&block_one, 1, 0, &genesis_root, 0xBB);
     LanternRoot block_one_root;
     assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == SSZ_SUCCESS);
-    LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
-    LanternSignedVote proposer_vote_one = make_vote(0, &genesis_cp, &block_one_cp);
     assert(
         lantern_fork_choice_add_block(
             &store,
             &block_one,
-            &proposer_vote_one,
             NULL,
             NULL,
             &block_one_root)
@@ -371,13 +368,10 @@ static int test_fork_choice_proposer_attestation_sequence(void) {
     init_block(&block_two, 2, 0, &block_one_root, 0xCC);
     LanternRoot block_two_root;
     assert(lantern_hash_tree_root_block(&block_two, &block_two_root) == SSZ_SUCCESS);
-    LanternCheckpoint block_two_cp = make_checkpoint(&block_two_root, block_two.slot);
-    LanternSignedVote proposer_vote_two = make_vote(0, &block_one_cp, &block_two_cp);
     assert(
         lantern_fork_choice_add_block(
             &store,
             &block_two,
-            &proposer_vote_two,
             NULL,
             NULL,
             &block_two_root)
@@ -421,7 +415,6 @@ static int test_fork_choice_block_updates_checkpoints(void) {
         lantern_fork_choice_add_block(
             &store,
             &block_one,
-            NULL,
             &block_one_cp,
             NULL,
             &block_one_root)
@@ -441,7 +434,6 @@ static int test_fork_choice_block_updates_checkpoints(void) {
         lantern_fork_choice_add_block(
             &store,
             &block_two,
-            NULL,
             &block_two_cp,
             &block_one_cp,
             &block_two_root)
@@ -461,7 +453,6 @@ static int test_fork_choice_block_updates_checkpoints(void) {
         lantern_fork_choice_add_block(
             &store,
             &block_three,
-            NULL,
             &block_three_cp,
             &block_two_cp,
             &block_three_root)
@@ -540,7 +531,6 @@ static int test_fork_choice_caches_block_states(void) {
         lantern_fork_choice_add_block_with_state(
             &store,
             &child,
-            NULL,
             &child_state.latest_justified,
             &child_state.latest_finalized,
             &child_root,
@@ -613,7 +603,6 @@ static int test_fork_choice_prune_states_keeps_finalized_to_head_chain(void) {
         lantern_fork_choice_add_block_with_state(
             &store,
             &block_one,
-            NULL,
             &genesis_cp,
             &genesis_cp,
             &block_one_root,
@@ -638,7 +627,6 @@ static int test_fork_choice_prune_states_keeps_finalized_to_head_chain(void) {
         lantern_fork_choice_add_block_with_state(
             &store,
             &block_two,
-            NULL,
             &genesis_cp,
             &genesis_cp,
             &block_two_root,
@@ -663,7 +651,6 @@ static int test_fork_choice_prune_states_keeps_finalized_to_head_chain(void) {
         lantern_fork_choice_add_block_with_state(
             &store,
             &block_three,
-            NULL,
             &genesis_cp,
             &genesis_cp,
             &block_three_root,
@@ -687,7 +674,6 @@ static int test_fork_choice_prune_states_keeps_finalized_to_head_chain(void) {
         lantern_fork_choice_add_block_with_state(
             &store,
             &fork_two,
-            NULL,
             &genesis_cp,
             &genesis_cp,
             &fork_two_root,
@@ -783,7 +769,6 @@ static int test_fork_choice_vote_flow(void) {
             &block_one,
             NULL,
             NULL,
-            NULL,
             &block_one_root)
         == 0);
 
@@ -795,7 +780,6 @@ static int test_fork_choice_vote_flow(void) {
         lantern_fork_choice_add_block(
             &store,
             &block_two,
-            NULL,
             NULL,
             NULL,
             &block_two_root)
@@ -872,7 +856,6 @@ static int test_fork_choice_safe_target_uses_new_aggregated_payloads(void) {
             &block_one,
             NULL,
             NULL,
-            NULL,
             &block_one_root)
         == 0);
 
@@ -929,7 +912,6 @@ static int test_fork_choice_checkpoint_progression(void) {
         lantern_fork_choice_add_block(
             &store,
             &block_one,
-            NULL,
             NULL,
             NULL,
             &block_one_root)
@@ -1008,7 +990,6 @@ static int test_fork_choice_restore_checkpoints(void) {
             &block_one,
             NULL,
             NULL,
-            NULL,
             &block_one_root)
         == 0);
 
@@ -1021,7 +1002,6 @@ static int test_fork_choice_restore_checkpoints(void) {
         lantern_fork_choice_add_block(
             &store,
             &block_two,
-            NULL,
             NULL,
             NULL,
             &block_two_root)
@@ -1123,7 +1103,6 @@ static int test_fork_choice_anchor_metadata_survives_checkpoint_restore(void) {
         lantern_fork_choice_add_block(
             &store,
             &block_one,
-            NULL,
             NULL,
             NULL,
             &block_one_root)
@@ -1229,7 +1208,6 @@ static int test_fork_choice_advance_time_schedules_votes(void) {
             &block_voted,
             NULL,
             NULL,
-            NULL,
             &block_voted_root)
         == 0);
 
@@ -1241,7 +1219,6 @@ static int test_fork_choice_advance_time_schedules_votes(void) {
         lantern_fork_choice_add_block(
             &store,
             &block_competing,
-            NULL,
             NULL,
             NULL,
             &block_competing_root)
@@ -1280,70 +1257,6 @@ static int test_fork_choice_advance_time_schedules_votes(void) {
     lantern_fork_choice_reset(&store);
     reset_block(&block_competing);
     reset_block(&block_voted);
-    reset_block(&genesis);
-    return 0;
-}
-
-static int test_fork_choice_add_block_ignores_invalid_proposer_vote(void) {
-    LanternForkChoice store;
-    LanternStore backing_store;
-    lantern_fork_choice_init(&store);
-    lantern_store_init(&backing_store);
-    lantern_store_attach_fork_choice(&backing_store, &store);
-
-    LanternConfig config = {.num_validators = 2, .genesis_time = 100};
-    assert(lantern_fork_choice_configure(&store, &config) == 0);
-
-    LanternBlock genesis;
-    init_block(&genesis, 0, 0, NULL, 0x01);
-    LanternRoot genesis_root;
-    assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
-    LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
-    assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
-
-    LanternBlock parent;
-    init_block(&parent, 1, 0, &genesis_root, 0x02);
-    LanternRoot parent_root;
-    assert(lantern_hash_tree_root_block(&parent, &parent_root) == SSZ_SUCCESS);
-
-    LanternBlock child;
-    init_block(&child, 2, 1, &parent_root, 0x03);
-    LanternRoot child_root;
-    assert(lantern_hash_tree_root_block(&child, &child_root) == SSZ_SUCCESS);
-    assert(lantern_fork_choice_add_block(&store, &child, NULL, NULL, NULL, &child_root) == 0);
-
-    uint64_t child_slot = 0;
-    bool child_has_parent = true;
-    assert(lantern_fork_choice_block_info(&store, &child_root, &child_slot, NULL, &child_has_parent) == 0);
-    assert(child_slot == 2);
-    assert(child_has_parent == false);
-
-    LanternSignedVote bad_proposer_vote;
-    memset(&bad_proposer_vote, 0, sizeof(bad_proposer_vote));
-    bad_proposer_vote.data.validator_id = 1; /* wrong proposer index */
-    bad_proposer_vote.data.slot = parent.slot; /* correct slot */
-    bad_proposer_vote.data.target = make_checkpoint(&parent_root, parent.slot);
-    bad_proposer_vote.data.head = bad_proposer_vote.data.target;
-
-    assert(lantern_fork_choice_add_block(&store, &parent, &bad_proposer_vote, NULL, NULL, &parent_root) == 0);
-
-    uint64_t parent_slot = 0;
-    bool parent_has_parent = true;
-    assert(lantern_fork_choice_block_info(&store, &parent_root, &parent_slot, NULL, &parent_has_parent) == 0);
-    assert(parent_slot == parent.slot);
-    assert(parent_has_parent == true);
-
-    assert(lantern_fork_choice_block_info(&store, &child_root, &child_slot, NULL, &child_has_parent) == 0);
-    assert(child_has_parent == true);
-
-    LanternRoot head;
-    assert(lantern_fork_choice_current_head(&store, &head) == 0);
-    assert(roots_equal(&head, &child_root));
-
-    lantern_store_reset(&backing_store);
-    lantern_fork_choice_reset(&store);
-    reset_block(&child);
-    reset_block(&parent);
     reset_block(&genesis);
     return 0;
 }
@@ -1409,7 +1322,7 @@ static int test_fork_choice_add_block_skips_conflicting_block_attestation(void) 
         goto cleanup;
     }
     block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
-    if (lantern_fork_choice_add_block(&store, &block_one, NULL, NULL, NULL, &block_one_root) != 0) {
+    if (lantern_fork_choice_add_block(&store, &block_one, NULL, NULL, &block_one_root) != 0) {
         fprintf(stderr, "failed to add block one in conflict test\n");
         goto cleanup;
     }
@@ -1420,7 +1333,7 @@ static int test_fork_choice_add_block_skips_conflicting_block_attestation(void) 
         goto cleanup;
     }
     block_two_a_cp = make_checkpoint(&block_two_a_root, block_two_a.slot);
-    if (lantern_fork_choice_add_block(&store, &block_two_a, NULL, NULL, NULL, &block_two_a_root) != 0) {
+    if (lantern_fork_choice_add_block(&store, &block_two_a, NULL, NULL, &block_two_a_root) != 0) {
         fprintf(stderr, "failed to add block two A in conflict test\n");
         goto cleanup;
     }
@@ -1431,7 +1344,7 @@ static int test_fork_choice_add_block_skips_conflicting_block_attestation(void) 
         goto cleanup;
     }
     block_two_b_cp = make_checkpoint(&block_two_b_root, block_two_b.slot);
-    if (lantern_fork_choice_add_block(&store, &block_two_b, NULL, NULL, NULL, &block_two_b_root) != 0) {
+    if (lantern_fork_choice_add_block(&store, &block_two_b, NULL, NULL, &block_two_b_root) != 0) {
         fprintf(stderr, "failed to add block two B in conflict test\n");
         goto cleanup;
     }
@@ -1462,7 +1375,7 @@ static int test_fork_choice_add_block_skips_conflicting_block_attestation(void) 
         goto cleanup;
     }
 
-    if (lantern_fork_choice_add_block(&store, &block_three, NULL, NULL, NULL, &block_three_root) != 0) {
+    if (lantern_fork_choice_add_block(&store, &block_three, NULL, NULL, &block_three_root) != 0) {
         fprintf(stderr, "block import failed when conflicting block attestation should be skipped\n");
         goto cleanup;
     }
@@ -1511,21 +1424,21 @@ static int test_fork_choice_tree_snapshot_reports_weights(void) {
     LanternRoot block_one_root;
     assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == SSZ_SUCCESS);
     LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
-    assert(lantern_fork_choice_add_block(&store, &block_one, NULL, NULL, NULL, &block_one_root) == 0);
+    assert(lantern_fork_choice_add_block(&store, &block_one, NULL, NULL, &block_one_root) == 0);
 
     LanternBlock block_two_a;
     init_block(&block_two_a, 2, 2, &block_one_root, 0x23);
     LanternRoot block_two_a_root;
     assert(lantern_hash_tree_root_block(&block_two_a, &block_two_a_root) == SSZ_SUCCESS);
     LanternCheckpoint block_two_a_cp = make_checkpoint(&block_two_a_root, block_two_a.slot);
-    assert(lantern_fork_choice_add_block(&store, &block_two_a, NULL, NULL, NULL, &block_two_a_root) == 0);
+    assert(lantern_fork_choice_add_block(&store, &block_two_a, NULL, NULL, &block_two_a_root) == 0);
 
     LanternBlock block_two_b;
     init_block(&block_two_b, 2, 3, &block_one_root, 0x24);
     LanternRoot block_two_b_root;
     assert(lantern_hash_tree_root_block(&block_two_b, &block_two_b_root) == SSZ_SUCCESS);
     LanternCheckpoint block_two_b_cp = make_checkpoint(&block_two_b_root, block_two_b.slot);
-    assert(lantern_fork_choice_add_block(&store, &block_two_b, NULL, NULL, NULL, &block_two_b_root) == 0);
+    assert(lantern_fork_choice_add_block(&store, &block_two_b, NULL, NULL, &block_two_b_root) == 0);
 
     LanternSignedVote vote0 = make_vote(0, &block_one_cp, &block_two_a_cp);
     LanternSignedVote vote1 = make_vote(1, &block_one_cp, &block_two_a_cp);
@@ -1598,7 +1511,7 @@ static int test_fork_choice_block_attestation_votes_do_not_bypass_attached_paylo
     LanternRoot block_one_root;
     assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == SSZ_SUCCESS);
     LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
-    assert(lantern_fork_choice_add_block(&store, &block_one, NULL, NULL, NULL, &block_one_root) == 0);
+    assert(lantern_fork_choice_add_block(&store, &block_one, NULL, NULL, &block_one_root) == 0);
 
     LanternBlock branch_a;
     init_block(&branch_a, 2, 0, &block_one_root, 0x93);
@@ -1631,7 +1544,6 @@ static int test_fork_choice_block_attestation_votes_do_not_bypass_attached_paylo
             favored_branch,
             NULL,
             NULL,
-            NULL,
             &favored_root)
         == 0);
 
@@ -1649,7 +1561,6 @@ static int test_fork_choice_block_attestation_votes_do_not_bypass_attached_paylo
         lantern_fork_choice_add_block(
             &store,
             voted_branch,
-            NULL,
             NULL,
             NULL,
             &voted_root)
@@ -1686,21 +1597,21 @@ static int test_fork_choice_accept_new_aggregated_payloads_updates_head(void) {
     LanternRoot block_one_root;
     assert(lantern_hash_tree_root_block(&block_one, &block_one_root) == SSZ_SUCCESS);
     LanternCheckpoint block_one_cp = make_checkpoint(&block_one_root, block_one.slot);
-    assert(lantern_fork_choice_add_block(&store, &block_one, NULL, NULL, NULL, &block_one_root) == 0);
+    assert(lantern_fork_choice_add_block(&store, &block_one, NULL, NULL, &block_one_root) == 0);
 
     LanternBlock block_two_a;
     init_block(&block_two_a, 2, 1, &block_one_root, 0xA3);
     LanternRoot block_two_a_root;
     assert(lantern_hash_tree_root_block(&block_two_a, &block_two_a_root) == SSZ_SUCCESS);
     LanternCheckpoint block_two_a_cp = make_checkpoint(&block_two_a_root, block_two_a.slot);
-    assert(lantern_fork_choice_add_block(&store, &block_two_a, NULL, NULL, NULL, &block_two_a_root) == 0);
+    assert(lantern_fork_choice_add_block(&store, &block_two_a, NULL, NULL, &block_two_a_root) == 0);
 
     LanternBlock block_two_b;
     init_block(&block_two_b, 2, 2, &block_one_root, 0xA4);
     LanternRoot block_two_b_root;
     assert(lantern_hash_tree_root_block(&block_two_b, &block_two_b_root) == SSZ_SUCCESS);
     LanternCheckpoint block_two_b_cp = make_checkpoint(&block_two_b_root, block_two_b.slot);
-    assert(lantern_fork_choice_add_block(&store, &block_two_b, NULL, NULL, NULL, &block_two_b_root) == 0);
+    assert(lantern_fork_choice_add_block(&store, &block_two_b, NULL, NULL, &block_two_b_root) == 0);
 
     LanternSignedVote known_vote = make_vote(0, &block_one_cp, &block_two_a_cp);
     LanternSignedVote new_vote_one = make_vote(1, &block_one_cp, &block_two_b_cp);
@@ -1725,7 +1636,7 @@ static int test_fork_choice_accept_new_aggregated_payloads_updates_head(void) {
 }
 
 int main(void) {
-    if (test_fork_choice_proposer_attestation_sequence() != 0) {
+    if (test_fork_choice_block_sequence() != 0) {
         return 1;
     }
     if (test_fork_choice_block_updates_checkpoints() != 0) {
@@ -1756,9 +1667,6 @@ int main(void) {
         return 1;
     }
     if (test_fork_choice_advance_time_schedules_votes() != 0) {
-        return 1;
-    }
-    if (test_fork_choice_add_block_ignores_invalid_proposer_vote() != 0) {
         return 1;
     }
     if (test_fork_choice_add_block_skips_conflicting_block_attestation() != 0) {

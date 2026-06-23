@@ -3431,7 +3431,6 @@ static int test_collect_attestations_ignores_store_justified_when_parent_state_l
         lantern_fork_choice_add_block_with_state(
             &fork_choice,
             &block_one,
-            NULL,
             &parent_state.latest_justified,
             &parent_state.latest_finalized,
             &block_one_root,
@@ -3541,7 +3540,6 @@ static int test_select_block_parent_uses_fork_choice(void) {
         lantern_fork_choice_add_block(
             &fork_choice,
             &block_one,
-            NULL,
             &state.latest_justified,
             &state.latest_finalized,
             &block_one_root),
@@ -3562,7 +3560,7 @@ static int test_select_block_parent_uses_fork_choice(void) {
     LanternRoot block_two_root;
     expect_ssz_success(lantern_hash_tree_root_block(&block_two, &block_two_root), "block two root");
     expect_zero(
-        lantern_fork_choice_add_block(&fork_choice, &block_two, NULL, NULL, NULL, &block_two_root),
+        lantern_fork_choice_add_block(&fork_choice, &block_two, NULL, NULL, &block_two_root),
         "add block two");
 
     if (lantern_state_select_block_parent(&state, &parent_root) == 0) {
@@ -3628,7 +3626,6 @@ static int test_validator_helpers_use_cached_fork_choice_head_state(void) {
         lantern_fork_choice_add_block_with_state(
             &fork_choice,
             &block_one,
-            NULL,
             &block_one_state.latest_justified,
             &block_one_state.latest_finalized,
             &block_one_root,
@@ -3836,7 +3833,6 @@ static int test_compute_post_state_ignores_store_justified_for_hash(void) {
         lantern_fork_choice_add_block_with_state(
             &fork_choice,
             &block_one,
-            NULL,
             &block_one_state.latest_justified,
             &block_one_state.latest_finalized,
             &block_one_root,
@@ -3911,7 +3907,7 @@ static int test_compute_vote_checkpoints_basic(void) {
     LanternRoot block1_root;
     make_block(&state, 1, &genesis_root, &block1, &block1_root);
     expect_zero(
-        lantern_fork_choice_add_block(&fork_choice, &block1, NULL, NULL, NULL, &block1_root),
+        lantern_fork_choice_add_block(&fork_choice, &block1, NULL, NULL, &block1_root),
         "add block1");
     fork_choice.head = block1_root;
     fork_choice.has_head = true;
@@ -4014,7 +4010,7 @@ static int test_compute_vote_checkpoints_can_match_source(void) {
     LanternRoot block1_root;
     make_block(&state, 1, &genesis_root, &block1, &block1_root);
     expect_zero(
-        lantern_fork_choice_add_block(&fork_choice, &block1, NULL, NULL, NULL, &block1_root),
+        lantern_fork_choice_add_block(&fork_choice, &block1, NULL, NULL, &block1_root),
         "add block1 source-match test");
     fork_choice.head = block1_root;
     fork_choice.has_head = true;
@@ -4070,14 +4066,14 @@ static int test_compute_vote_checkpoints_respects_safe_target(void) {
     LanternRoot block1_root;
     make_block(&state, 1, &genesis_root, &block1, &block1_root);
     expect_zero(
-        lantern_fork_choice_add_block(&fork_choice, &block1, NULL, NULL, NULL, &block1_root),
+        lantern_fork_choice_add_block(&fork_choice, &block1, NULL, NULL, &block1_root),
         "add block1 safe target test");
 
     LanternBlock block2;
     LanternRoot block2_root;
     make_block(&state, 2, &block1_root, &block2, &block2_root);
     expect_zero(
-        lantern_fork_choice_add_block(&fork_choice, &block2, NULL, NULL, NULL, &block2_root),
+        lantern_fork_choice_add_block(&fork_choice, &block2, NULL, NULL, &block2_root),
         "add block2 safe target test");
 
     fork_choice.head = block2_root;
@@ -4150,7 +4146,7 @@ static int test_compute_vote_checkpoints_uses_store_source_when_cached_head_stat
         LanternRoot block_root;
         make_block(&state, slot, &parent_root, &block, &block_root);
         expect_zero(
-            lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, NULL, &block_root),
+            lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, &block_root),
             "add block for source precedence test");
         block_roots[slot] = block_root;
         parent_root = block_root;
@@ -4172,7 +4168,6 @@ static int test_compute_vote_checkpoints_uses_store_source_when_cached_head_stat
         lantern_fork_choice_add_block_with_state(
             &fork_choice,
             &head_block,
-            NULL,
             NULL,
             NULL,
             &block_roots[4],
@@ -4238,7 +4233,7 @@ static int test_compute_vote_checkpoints_justifiable(void) {
         LanternRoot block_root;
         make_block(&state, slot, &parent_root, &block, &block_root);
         expect_zero(
-            lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, NULL, &block_root),
+            lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, &block_root),
             "add block for justifiable test");
         block_roots[slot] = block_root;
         parent_root = block_root;
@@ -4313,7 +4308,7 @@ static int test_compute_vote_checkpoints_consecutive_target(void) {
         LanternRoot block_root;
         make_block(&state, slot, &parent_root, &block, &block_root);
         expect_zero(
-            lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, NULL, &block_root),
+            lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, &block_root),
             "add block for consecutive target test");
         block_roots[slot] = block_root;
         parent_root = block_root;
@@ -4380,7 +4375,7 @@ static int test_compute_vote_checkpoints_advances_beyond_source(void) {
         LanternRoot block_root;
         make_block(&state, slot, &parent_root, &block, &block_root);
         expect_zero(
-            lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, NULL, &block_root),
+            lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, &block_root),
             "add block for advance target test");
         block_roots[slot] = block_root;
         parent_root = block_root;
@@ -4464,7 +4459,7 @@ static int test_compute_vote_checkpoints_uses_finalized_lower_bound_when_safe_st
         LanternRoot block_root;
         make_block(&state, slot, &parent_root, &block, &block_root);
         expect_zero(
-            lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, NULL, &block_root),
+            lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, &block_root),
             "add block for stale safe target lower-bound test");
         block_roots[slot] = block_root;
         parent_root = block_root;

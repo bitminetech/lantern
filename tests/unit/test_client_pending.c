@@ -1371,7 +1371,6 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
             &finalized_block,
             NULL,
             NULL,
-            NULL,
             &finalized_root)
         != 0)
     {

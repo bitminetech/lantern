@@ -1263,7 +1263,6 @@ static int fork_choice_process_block_step(
     if (lantern_fork_choice_add_block(
             &driver->fork_choice,
             &signed_block.block,
-            NULL,
             &block_justified,
             &block_finalized,
             &block_root)

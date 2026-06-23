@@ -137,7 +137,6 @@ int client_test_add_known_block(
     if (lantern_fork_choice_add_block(
             &client->fork_choice,
             &block,
-            NULL,
             &client->state.latest_justified,
             &client->state.latest_finalized,
             &block_root)
@@ -367,7 +366,6 @@ static int client_test_setup_vote_validation_client_common(
     if (lantern_fork_choice_add_block(
             &client->fork_choice,
             &child,
-            NULL,
             &client->state.latest_justified,
             &client->state.latest_finalized,
             &child_root_local)

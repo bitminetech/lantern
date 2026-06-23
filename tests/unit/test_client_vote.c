@@ -858,7 +858,6 @@ static int test_record_vote_buffers_missing_target_state(void) {
     if (lantern_fork_choice_add_block(
             &client.fork_choice,
             &grandchild,
-            NULL,
             &client.state.latest_justified,
             &client.state.latest_finalized,
             &grandchild_root)
@@ -3968,7 +3967,6 @@ static int test_local_off_head_block_publishes_after_successful_import(void) {
     if (lantern_fork_choice_add_block(
             &client.fork_choice,
             &competing_block,
-            NULL,
             &client.state.latest_justified,
             &client.state.latest_finalized,
             &competing_root)

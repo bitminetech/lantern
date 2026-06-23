@@ -2013,7 +2013,6 @@ static int run_fork_choice_fixture(const char *path) {
         if (lantern_fork_choice_add_block(
                 &store,
                 &signed_block.block,
-                NULL,
                 &post_justified,
                 &post_finalized,
                 &block_root)

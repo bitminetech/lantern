@@ -320,7 +320,6 @@ static int test_checkpoint_consumers_use_fork_choice_store(void)
     if (lantern_fork_choice_add_block(
             &client.fork_choice,
             &grandchild_block.block,
-            NULL,
             &client.state.latest_justified,
             &client.state.latest_finalized,
             &grandchild_root)
@@ -937,7 +936,6 @@ static int test_checkpoint_sync_anchor_checkpoint_restores(void)
     if (lantern_fork_choice_add_block_with_state(
             &client.fork_choice,
             &child_block,
-            NULL,
             &remote_justified,
             &remote_finalized,
             &child_root,

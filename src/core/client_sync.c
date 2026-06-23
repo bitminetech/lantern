@@ -1772,7 +1772,6 @@ int restore_persisted_blocks(struct lantern_client *client)
         if (lantern_fork_choice_add_block_with_state(
                 &client->fork_choice,
                 block,
-                NULL,
                 post_justified,
                 post_finalized,
                 &entry->root,

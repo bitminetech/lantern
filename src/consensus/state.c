@@ -82,12 +82,6 @@ static int collect_attestations_for_checkpoint(
     struct lantern_root_list *processed_data_roots,
     LanternAggregatedAttestations *out_attestations,
     LanternAttestationSignatures *out_signatures);
-static int lantern_state_process_attestations_internal(
-    LanternState *state,
-    LanternStore *store,
-    const LanternAttestations *attestations,
-    const LanternSignatureList *signatures,
-    bool apply_consensus_effects);
 static lantern_state_aggregate_result state_select_child_proofs_from_pool(
     const struct lantern_aggregated_payload_pool *pool,
     const LanternRoot *data_root,
@@ -1570,75 +1564,44 @@ static int lantern_state_add_justification_root(
         insert_pos++;
     }
 
-    /* First, expand the root list by appending (we'll shift elements afterward) */
     if (lantern_root_list_append(&state->justification_roots, root) != 0) {
         return -1;
     }
 
-    /* Expand justification_validators bitlist by validator_count bits */
     size_t old_root_count = state->justification_roots.length - 1;
     size_t new_bit_length = state->justification_validators.bit_length + validator_count;
     if (lantern_bitlist_ensure_length(&state->justification_validators, new_bit_length) != 0) {
-        /* Rollback root addition */
         state->justification_roots.length--;
         return -1;
     }
 
-    /* If inserting at the end, we're done - no shifting needed */
     if (insert_pos == old_root_count) {
         return (int)insert_pos;
     }
 
-    /* Shift roots from insert_pos to make room for the new root.
-     * The new root is currently at the end, we need to move it to insert_pos. */
-    LanternRoot temp_root = state->justification_roots.items[old_root_count];
-    for (size_t i = old_root_count; i > insert_pos; --i) {
-        state->justification_roots.items[i] = state->justification_roots.items[i - 1];
+    LanternRoot inserted = state->justification_roots.items[old_root_count];
+    memmove(
+        &state->justification_roots.items[insert_pos + 1u],
+        &state->justification_roots.items[insert_pos],
+        (old_root_count - insert_pos) * sizeof(*state->justification_roots.items));
+    state->justification_roots.items[insert_pos] = inserted;
+
+    for (size_t row = old_root_count; row > insert_pos; --row) {
+        size_t dst = row * validator_count;
+        size_t src = (row - 1u) * validator_count;
+        for (size_t validator = 0; validator < validator_count; ++validator) {
+            bool bit = false;
+            if (lantern_bitlist_get_bit(&state->justification_validators, src + validator, &bit) != 0
+                || lantern_bitlist_set_bit(&state->justification_validators, dst + validator, bit) != 0) {
+                return -1;
+            }
+        }
     }
-    state->justification_roots.items[insert_pos] = temp_root;
-
-    /* Shift validator bits to match the new root order.
-     * We need to move bits from [insert_pos * validator_count] onward.
-     * The bits for the new root (currently at the end) should move to insert_pos. */
-    size_t bits_to_shift = (old_root_count - insert_pos) * validator_count;
-    if (bits_to_shift > 0) {
-        /* Create a temporary buffer to hold the bits we need to shift */
-        size_t shift_start_bit = insert_pos * validator_count;
-
-        /* Copy existing bits from [shift_start_bit, shift_start_bit + bits_to_shift) onward to temporary storage */
-        size_t temp_bytes_needed = (bits_to_shift + 7) / 8;
-        uint8_t *temp_bits = (uint8_t *)calloc(temp_bytes_needed, 1);
-        if (!temp_bits) {
-            /* Can't shift bits - this is a critical error but we'll proceed with unsorted */
-            return (int)insert_pos;
+    size_t insert_start = insert_pos * validator_count;
+    for (size_t validator = 0; validator < validator_count; ++validator) {
+        if (lantern_bitlist_set_bit(&state->justification_validators, insert_start + validator, false) != 0) {
+            return -1;
         }
-
-        /* Extract bits from [shift_start_bit, shift_start_bit + bits_to_shift) */
-        for (size_t i = 0; i < bits_to_shift; ++i) {
-            bool bit_value = false;
-            if (lantern_bitlist_get_bit(&state->justification_validators, shift_start_bit + i, &bit_value) == 0 && bit_value) {
-                temp_bits[i / 8] |= (uint8_t)(1u << (i % 8));
-            }
-        }
-
-        /* Clear the region we're about to rewrite: [shift_start_bit, new_bit_length) */
-        for (size_t i = shift_start_bit; i < new_bit_length; ++i) {
-            lantern_bitlist_set_bit(&state->justification_validators, i, false);
-        }
-
-        /* Write zeros at insert_pos (validator_count bits) - new root votes are all false */
-        /* (already done by clearing above) */
-
-        /* Write shifted bits starting at (insert_pos + 1) * validator_count */
-        size_t dest_start = (insert_pos + 1) * validator_count;
-        for (size_t i = 0; i < bits_to_shift; ++i) {
-            bool bit_value = (temp_bits[i / 8] & (1u << (i % 8))) != 0;
-            if (bit_value) {
-                lantern_bitlist_set_bit(&state->justification_validators, dest_start + i, true);
-            }
-        }
-
-        free(temp_bits);
     }
 
     return (int)insert_pos;
@@ -2147,12 +2110,11 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
     return 0;
 }
 
-static int lantern_state_process_attestations_internal(
+int lantern_state_process_attestations(
     LanternState *state,
     LanternStore *store,
     const LanternAttestations *attestations,
-    const LanternSignatureList *signatures,
-    bool apply_consensus_effects) {
+    const LanternSignatureList *signatures) {
     if (!state || !store || !attestations) {
         return -1;
     }
@@ -2248,11 +2210,6 @@ static int lantern_state_process_attestations_internal(
         if (lantern_store_set_signed_validator_vote(store, (size_t)vote->validator_id, &stored_vote) != 0) {
             record_attestation_validation_metric(att_validation_start, false);
             return -1;
-        }
-
-        if (!apply_consensus_effects) {
-            record_attestation_validation_metric(att_validation_start, true);
-            continue;
         }
 
         /* Skip if target is already justified (leanSpec line 394) */
@@ -2378,45 +2335,35 @@ static int lantern_state_process_attestations_internal(
         record_attestation_validation_metric(att_validation_start, true);
     }
 
-    if (apply_consensus_effects) {
-        if (lantern_state_mark_justified_slot(state, latest_justified.slot) != 0) {
-            if (finalization_attempted) {
-                lean_metrics_record_finalization_attempt(false);
-            }
-            return -1;
+    if (lantern_state_mark_justified_slot(state, latest_justified.slot) != 0) {
+        if (finalization_attempted) {
+            lean_metrics_record_finalization_attempt(false);
         }
-        if (lantern_state_mark_justified_slot(state, latest_finalized.slot) != 0) {
-            if (finalization_attempted) {
-                lean_metrics_record_finalization_attempt(false);
-            }
-            return -1;
+        return -1;
+    }
+    if (lantern_state_mark_justified_slot(state, latest_finalized.slot) != 0) {
+        if (finalization_attempted) {
+            lean_metrics_record_finalization_attempt(false);
         }
+        return -1;
+    }
 
-        state->latest_justified = latest_justified;
-        state->latest_finalized = latest_finalized;
-        if (store->fork_choice) {
-            if (lantern_fork_choice_update_checkpoints(
-                    store->fork_choice,
-                    &state->latest_justified,
-                    &state->latest_finalized)
-                != 0) {
-                if (finalization_attempted) {
-                    lean_metrics_record_finalization_attempt(false);
-                }
-                return -1;
+    state->latest_justified = latest_justified;
+    state->latest_finalized = latest_finalized;
+    if (store->fork_choice) {
+        if (lantern_fork_choice_update_checkpoints(
+                store->fork_choice,
+                &state->latest_justified,
+                &state->latest_finalized)
+            != 0) {
+            if (finalization_attempted) {
+                lean_metrics_record_finalization_attempt(false);
             }
+            return -1;
         }
     }
     lean_metrics_record_state_transition_attestations(att_attempted, lantern_time_now_seconds() - att_batch_start);
     return 0;
-}
-
-int lantern_state_process_attestations(
-    LanternState *state,
-    LanternStore *store,
-    const LanternAttestations *attestations,
-    const LanternSignatureList *signatures) {
-    return lantern_state_process_attestations_internal(state, store, attestations, signatures, true);
 }
 
 int lantern_state_process_block(
@@ -2576,7 +2523,6 @@ int lantern_state_transition(LanternState *state, LanternStore *store, const Lan
         if (lantern_fork_choice_add_block_with_state(
                 store->fork_choice,
                 block,
-                NULL,
                 &state->latest_justified,
                 &state->latest_finalized,
                 NULL,

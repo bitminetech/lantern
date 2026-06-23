@@ -126,29 +126,7 @@ static void update_sync_progress_after_block(struct lantern_client *client)
 
     uint64_t local_slot = 0;
     bool state_locked = lantern_client_lock_state(client);
-    if (state_locked)
-    {
-        local_slot = client->state.latest_block_header.slot;
-        if (client->has_fork_choice)
-        {
-            LanternRoot fork_head = {0};
-            if (lantern_fork_choice_current_head(&client->fork_choice, &fork_head) == 0)
-            {
-                uint64_t fork_slot = 0;
-                if (lantern_fork_choice_block_info(
-                        &client->fork_choice,
-                        &fork_head,
-                        &fork_slot,
-                        NULL,
-                        NULL)
-                    == 0)
-                {
-                    local_slot = fork_slot;
-                }
-            }
-        }
-    }
-    else if (client->has_state)
+    if (state_locked || client->has_state)
     {
         local_slot = client->state.latest_block_header.slot;
         if (client->has_fork_choice)
@@ -407,7 +385,6 @@ static int commit_and_publish_local_block(
         && lantern_fork_choice_add_block_with_state(
                &client->fork_choice,
                &block->block,
-               NULL,
                &post_state->latest_justified,
                &post_state->latest_finalized,
                block_root,
@@ -2225,7 +2202,6 @@ static bool add_competing_fork_block_locked(
     if (lantern_fork_choice_add_block_with_state(
             &client->fork_choice,
             &block->block,
-            NULL,
             post_justified,
             post_finalized,
             block_root,

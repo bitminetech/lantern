@@ -31,13 +31,6 @@ struct lantern_fork_choice_state_entry {
     LanternState state;
 };
 
-struct lantern_fork_choice_root_index_entry {
-    LanternRoot root;
-    size_t value;
-    bool occupied;
-    bool tombstone;
-};
-
 struct lantern_fork_choice_checkpoint_snapshot {
     atomic_uint_fast64_t sequence;
     atomic_uint_fast64_t justified_slot;
@@ -70,10 +63,6 @@ typedef struct lantern_fork_choice {
 
     struct lantern_fork_choice_state_entry *states;
     size_t state_cap;
-
-    struct lantern_fork_choice_root_index_entry *index_entries;
-    size_t index_cap;
-    size_t index_len;
 
     size_t validator_count;
 
@@ -128,14 +117,12 @@ int lantern_fork_choice_set_anchor_with_state(
 int lantern_fork_choice_add_block(
     LanternForkChoice *store,
     const LanternBlock *block,
-    const LanternSignedVote *proposer_attestation,
     const LanternCheckpoint *post_justified,
     const LanternCheckpoint *post_finalized,
     const LanternRoot *block_root_hint);
 int lantern_fork_choice_add_block_with_state(
     LanternForkChoice *store,
     const LanternBlock *block,
-    const LanternSignedVote *proposer_attestation,
     const LanternCheckpoint *post_justified,
     const LanternCheckpoint *post_finalized,
     const LanternRoot *block_root_hint,

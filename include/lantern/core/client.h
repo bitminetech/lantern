@@ -128,24 +128,10 @@ struct lantern_pending_block {
     uint32_t backfill_depth;
 };
 
-struct lantern_pending_parent_index_entry {
-    LanternRoot parent_root;
-    LanternRoot *child_roots;
-    size_t length;
-    size_t capacity;
-};
-
-struct lantern_pending_parent_index {
-    struct lantern_pending_parent_index_entry *entries;
-    size_t length;
-    size_t capacity;
-};
-
 struct lantern_pending_block_list {
     struct lantern_pending_block *items;
     size_t length;
     size_t capacity;
-    struct lantern_pending_parent_index parent_index;
 };
 
 struct lantern_pending_vote {
