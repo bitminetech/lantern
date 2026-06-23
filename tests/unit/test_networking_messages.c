@@ -529,7 +529,7 @@ static void test_replay_devnet_block_payloads(void) {
     }
 }
 
-static void test_status_snappy(void) {
+static void test_status_message(void) {
     LanternStatusMessage status = {
         .finalized = build_checkpoint(0xAA, 42),
         .head = build_checkpoint(0xBB, 64),
@@ -545,18 +545,6 @@ static void test_status_snappy(void) {
     CHECK(memcmp(decoded.finalized.root.bytes, status.finalized.root.bytes, LANTERN_ROOT_SIZE) == 0);
     CHECK(decoded.head.slot == status.head.slot);
 
-    uint8_t compressed[256];
-    size_t compressed_len = 0;
-    size_t status_raw_len = 0;
-    check_zero(
-        lantern_network_status_encode_snappy(&status, compressed, sizeof(compressed), &compressed_len, &status_raw_len),
-        "status encode snappy");
-    CHECK(status_raw_len == 2u * LANTERN_CHECKPOINT_SSZ_SIZE);
-
-    LanternStatusMessage snappy_decoded = {0};
-    check_zero(lantern_network_status_decode_snappy(&snappy_decoded, compressed, compressed_len), "status decode snappy");
-    CHECK(memcmp(snappy_decoded.head.root.bytes, status.head.root.bytes, LANTERN_ROOT_SIZE) == 0);
-    CHECK(snappy_decoded.finalized.slot == status.finalized.slot);
 }
 
 static void test_status_decode_rejects_truncated_payloads(void) {
@@ -574,22 +562,6 @@ static void test_status_decode_rejects_truncated_payloads(void) {
     uint8_t extra_payload[(2u * LANTERN_CHECKPOINT_SSZ_SIZE) + 4u];
     memset(extra_payload, 0, sizeof(extra_payload));
     CHECK(lantern_network_status_decode(&decoded, extra_payload, sizeof(extra_payload)) != 0);
-}
-
-static void test_status_snappy_rejects_truncated_frames(void) {
-    LanternStatusMessage status = {
-        .finalized = build_checkpoint(0x11, 42),
-        .head = build_checkpoint(0x41, 96),
-    };
-    uint8_t fixture[256];
-    size_t fixture_len = 0;
-    size_t raw_len = 0;
-    check_zero(
-        lantern_network_status_encode_snappy(&status, fixture, sizeof(fixture), &fixture_len, &raw_len),
-        "status encode snappy fixture");
-    CHECK(fixture_len > 1);
-    LanternStatusMessage decoded = {0};
-    CHECK(lantern_network_status_decode_snappy(&decoded, fixture, fixture_len - 1) != 0);
 }
 
 static void test_status_reqresp_snappy_fixture(void) {
@@ -665,9 +637,14 @@ static void test_status_reqresp_snappy_fixture(void) {
     CHECK(memcmp(response, snappy_payload, snappy_len) == 0);
 
     LanternStatusMessage decoded = {0};
+    uint8_t decoded_raw[2u * LANTERN_CHECKPOINT_SSZ_SIZE];
+    size_t decoded_raw_len = sizeof(decoded_raw);
+    CHECK(
+        lantern_snappy_decompress(response, response_len, decoded_raw, sizeof(decoded_raw), &decoded_raw_len)
+        == LANTERN_SNAPPY_OK);
     check_zero(
-        lantern_network_status_decode_snappy(&decoded, response, response_len),
-        "reqresp status decode snappy");
+        lantern_network_status_decode(&decoded, decoded_raw, decoded_raw_len),
+        "reqresp status decode");
     expect_checkpoint_seed(&decoded.finalized, 42, 0x11);
     expect_checkpoint_seed(&decoded.head, 96, 0x41);
 
@@ -926,28 +903,8 @@ static void test_blocks_by_root_request(void) {
     CHECK(decoded.roots.length == req.roots.length);
     CHECK(memcmp(decoded.roots.items[1].bytes, req.roots.items[1].bytes, LANTERN_ROOT_SIZE) == 0);
 
-    uint8_t compressed[256];
-    size_t compressed_len = 0;
-    size_t request_raw_len = 0;
-    check_zero(
-        lantern_network_blocks_by_root_request_encode_snappy(
-            &req,
-            compressed,
-            sizeof(compressed),
-            &compressed_len,
-            &request_raw_len),
-        "request encode snappy");
-    CHECK(request_raw_len == expected_written);
-
-    LanternBlocksByRootRequest snappy_decoded;
-    lantern_blocks_by_root_request_init(&snappy_decoded);
-    check_zero(lantern_network_blocks_by_root_request_decode_snappy(&snappy_decoded, compressed, compressed_len), "request decode snappy");
-    CHECK(snappy_decoded.roots.length == req.roots.length);
-    CHECK(memcmp(snappy_decoded.roots.items[0].bytes, req.roots.items[0].bytes, LANTERN_ROOT_SIZE) == 0);
-
     lantern_blocks_by_root_request_reset(&req);
     lantern_blocks_by_root_request_reset(&decoded);
-    lantern_blocks_by_root_request_reset(&snappy_decoded);
 }
 
 static void test_signed_block_list(void) {
@@ -999,33 +956,9 @@ static void test_signed_block_list(void) {
     CHECK(decoded.length == resp.length);
     check_byte_list_equal(&decoded.blocks[1].proof, &resp.blocks[1].proof);
 
-    size_t max_compressed = 0;
-    CHECK(lantern_snappy_max_compressed_size(written, &max_compressed) == LANTERN_SNAPPY_OK);
-    uint8_t *compressed = (uint8_t *)malloc(max_compressed);
-    CHECK(compressed != NULL);
-    size_t compressed_len = 0;
-    size_t response_raw_len = 0;
-    check_zero(
-        lantern_network_signed_block_list_encode_snappy(
-            &resp,
-            compressed,
-            max_compressed,
-            &compressed_len,
-            &response_raw_len),
-        "response encode snappy");
-    CHECK(response_raw_len == written);
-
-    LanternSignedBlockList snappy_decoded;
-    lantern_signed_block_list_init(&snappy_decoded);
-    check_zero(lantern_network_signed_block_list_decode_snappy(&snappy_decoded, compressed, compressed_len), "response decode snappy");
-    CHECK(snappy_decoded.length == resp.length);
-    CHECK(snappy_decoded.blocks[0].block.slot == resp.blocks[0].block.slot);
-
     lantern_signed_block_list_reset(&resp);
     lantern_signed_block_list_reset(&decoded);
-    lantern_signed_block_list_reset(&snappy_decoded);
     free(encoded);
-    free(compressed);
 }
 
 static void test_gossip_helpers(void) {
@@ -1386,9 +1319,8 @@ static void test_client_publish_block_loopback(void) {
 }
 
 int main(void) {
-    test_status_snappy();
+    test_status_message();
     test_status_decode_rejects_truncated_payloads();
-    test_status_snappy_rejects_truncated_frames();
     test_status_reqresp_snappy_fixture();
     test_reqresp_response_code_mapping();
     test_blocks_by_root_per_chunk_framing();

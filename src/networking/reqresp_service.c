@@ -929,6 +929,30 @@ static int encode_signed_block_raw(const LanternSignedBlock *block, uint8_t **ou
     return -1;
 }
 
+static int exchange_append_block_responses(
+    struct lantern_reqresp_exchange *exchange,
+    const LanternSignedBlockList *blocks) {
+    if (!exchange || !blocks) {
+        return -1;
+    }
+    for (size_t i = 0; i < blocks->length; ++i) {
+        uint8_t *block_raw = NULL;
+        size_t block_raw_len = 0;
+        if (encode_signed_block_raw(&blocks->blocks[i], &block_raw, &block_raw_len) != 0
+            || append_frame_from_raw(
+                   &exchange->read_buf,
+                   block_raw,
+                   block_raw_len,
+                   LANTERN_REQRESP_RESPONSE_SUCCESS)
+                   != 0) {
+            free(block_raw);
+            return -1;
+        }
+        free(block_raw);
+    }
+    return 0;
+}
+
 static int exchange_queue_error_response(struct lantern_reqresp_exchange *exchange, uint8_t code, const char *message) {
     if (!exchange) {
         return -1;
@@ -998,22 +1022,10 @@ static int exchange_prepare_blocks_response(struct lantern_reqresp_exchange *exc
             LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
             "Block lookup failed");
     }
-    for (size_t i = 0; i < blocks.length; ++i) {
-        uint8_t *block_raw = NULL;
-        size_t block_raw_len = 0;
-        if (encode_signed_block_raw(&blocks.blocks[i], &block_raw, &block_raw_len) != 0
-            || append_frame_from_raw(
-                   &exchange->read_buf,
-                   block_raw,
-                   block_raw_len,
-                   LANTERN_REQRESP_RESPONSE_SUCCESS)
-                   != 0) {
-            free(block_raw);
-            lantern_signed_block_list_reset(&blocks);
-            lantern_blocks_by_root_request_reset(&req);
-            return -1;
-        }
-        free(block_raw);
+    if (exchange_append_block_responses(exchange, &blocks) != 0) {
+        lantern_signed_block_list_reset(&blocks);
+        lantern_blocks_by_root_request_reset(&req);
+        return -1;
     }
     lantern_log_info(
         "network",
@@ -1089,21 +1101,9 @@ static int exchange_prepare_blocks_by_range_response(
             LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
             "Block range lookup failed");
     }
-    for (size_t i = 0; i < blocks.length; ++i) {
-        uint8_t *block_raw = NULL;
-        size_t block_raw_len = 0;
-        if (encode_signed_block_raw(&blocks.blocks[i], &block_raw, &block_raw_len) != 0
-            || append_frame_from_raw(
-                   &exchange->read_buf,
-                   block_raw,
-                   block_raw_len,
-                   LANTERN_REQRESP_RESPONSE_SUCCESS)
-                   != 0) {
-            free(block_raw);
-            lantern_signed_block_list_reset(&blocks);
-            return -1;
-        }
-        free(block_raw);
+    if (exchange_append_block_responses(exchange, &blocks) != 0) {
+        lantern_signed_block_list_reset(&blocks);
+        return -1;
     }
     lantern_signed_block_list_reset(&blocks);
     return 0;

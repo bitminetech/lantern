@@ -150,18 +150,9 @@ static bool is_root_zero(const LanternRoot *root)
     return true;
 }
 
-static int root_compare_bytes(const LanternRoot *a, const LanternRoot *b)
-{
-    if (!a || !b)
-    {
-        return 0;
-    }
-    return memcmp(a->bytes, b->bytes, LANTERN_ROOT_SIZE);
-}
-
 static bool root_equal(const LanternRoot *a, const LanternRoot *b)
 {
-    return root_compare_bytes(a, b) == 0;
+    return a && b && memcmp(a->bytes, b->bytes, LANTERN_ROOT_SIZE) == 0;
 }
 
 static int milliseconds_from_seconds(uint64_t seconds, uint64_t *out_milliseconds)
@@ -412,39 +403,22 @@ static void hash_mapping_reset(struct hash_mapping_entry **entries, size_t *coun
     *cap = 0;
 }
 
-static const LanternRoot *hash_mapping_leanspec_to_c(
+static const LanternRoot *hash_mapping_lookup(
     const struct hash_mapping_entry *entries,
     size_t count,
-    const LanternRoot *leanspec_hash)
+    const LanternRoot *root,
+    bool leanspec_to_c)
 {
-    if (!entries || !leanspec_hash)
+    if (!entries || !root)
     {
         return NULL;
     }
     for (size_t i = 0; i < count; ++i)
     {
-        if (root_equal(&entries[i].leanspec_hash, leanspec_hash))
+        const LanternRoot *from = leanspec_to_c ? &entries[i].leanspec_hash : &entries[i].c_hash;
+        if (root_equal(from, root))
         {
-            return &entries[i].c_hash;
-        }
-    }
-    return NULL;
-}
-
-static const LanternRoot *hash_mapping_c_to_leanspec(
-    const struct hash_mapping_entry *entries,
-    size_t count,
-    const LanternRoot *c_hash)
-{
-    if (!entries || !c_hash)
-    {
-        return NULL;
-    }
-    for (size_t i = 0; i < count; ++i)
-    {
-        if (root_equal(&entries[i].c_hash, c_hash))
-        {
-            return &entries[i].leanspec_hash;
+            return leanspec_to_c ? &entries[i].c_hash : &entries[i].leanspec_hash;
         }
     }
     return NULL;
@@ -831,26 +805,29 @@ static void map_attestation_data_roots(
     {
         return;
     }
-    const LanternRoot *mapped = hash_mapping_leanspec_to_c(
+    const LanternRoot *mapped = hash_mapping_lookup(
         driver->hash_mapping,
         driver->hash_mapping_count,
-        &data->head.root);
+        &data->head.root,
+        true);
     if (mapped)
     {
         data->head.root = *mapped;
     }
-    mapped = hash_mapping_leanspec_to_c(
+    mapped = hash_mapping_lookup(
         driver->hash_mapping,
         driver->hash_mapping_count,
-        &data->target.root);
+        &data->target.root,
+        true);
     if (mapped)
     {
         data->target.root = *mapped;
     }
-    mapped = hash_mapping_leanspec_to_c(
+    mapped = hash_mapping_lookup(
         driver->hash_mapping,
         driver->hash_mapping_count,
-        &data->source.root);
+        &data->source.root,
+        true);
     if (mapped)
     {
         data->source.root = *mapped;
@@ -1031,30 +1008,33 @@ static int fork_choice_driver_snapshot_json(
             NULL,
             NULL);
     }
-    const LanternRoot *lean_head = hash_mapping_c_to_leanspec(
+    const LanternRoot *lean_head = hash_mapping_lookup(
         driver->hash_mapping,
         driver->hash_mapping_count,
-        &head_root);
+        &head_root,
+        false);
     if (lean_head)
     {
         head_root = *lean_head;
     }
 
     LanternCheckpoint justified = driver->fork_choice.latest_justified;
-    const LanternRoot *lean_justified = hash_mapping_c_to_leanspec(
+    const LanternRoot *lean_justified = hash_mapping_lookup(
         driver->hash_mapping,
         driver->hash_mapping_count,
-        &justified.root);
+        &justified.root,
+        false);
     if (lean_justified)
     {
         justified.root = *lean_justified;
     }
 
     LanternCheckpoint finalized = driver->fork_choice.latest_finalized;
-    const LanternRoot *lean_finalized = hash_mapping_c_to_leanspec(
+    const LanternRoot *lean_finalized = hash_mapping_lookup(
         driver->hash_mapping,
         driver->hash_mapping_count,
-        &finalized.root);
+        &finalized.root,
+        false);
     if (lean_finalized)
     {
         finalized.root = *lean_finalized;
@@ -1066,10 +1046,11 @@ static int fork_choice_driver_snapshot_json(
     if (safe)
     {
         safe_target = *safe;
-        const LanternRoot *lean_safe = hash_mapping_c_to_leanspec(
+        const LanternRoot *lean_safe = hash_mapping_lookup(
             driver->hash_mapping,
             driver->hash_mapping_count,
-            &safe_target);
+            &safe_target,
+            false);
         if (lean_safe)
         {
             safe_target = *lean_safe;
@@ -1167,10 +1148,11 @@ static int fork_choice_process_block_step(
     }
 
     LanternRoot leanspec_parent_root = signed_block.block.parent_root;
-    const LanternRoot *c_parent_root = hash_mapping_leanspec_to_c(
+    const LanternRoot *c_parent_root = hash_mapping_lookup(
         driver->hash_mapping,
         driver->hash_mapping_count,
-        &leanspec_parent_root);
+        &leanspec_parent_root,
+        true);
     bool extends_canonical = c_parent_root
         && root_equal(&driver->canonical_head_block_root, c_parent_root);
 
@@ -1184,26 +1166,29 @@ static int fork_choice_process_block_step(
         for (size_t i = 0; i < signed_block.block.body.attestations.length; ++i)
         {
             LanternAggregatedAttestation *agg = &signed_block.block.body.attestations.data[i];
-            const LanternRoot *mapped = hash_mapping_leanspec_to_c(
+            const LanternRoot *mapped = hash_mapping_lookup(
                 driver->hash_mapping,
                 driver->hash_mapping_count,
-                &agg->data.head.root);
+                &agg->data.head.root,
+                true);
             if (mapped)
             {
                 agg->data.head.root = *mapped;
             }
-            mapped = hash_mapping_leanspec_to_c(
+            mapped = hash_mapping_lookup(
                 driver->hash_mapping,
                 driver->hash_mapping_count,
-                &agg->data.target.root);
+                &agg->data.target.root,
+                true);
             if (mapped)
             {
                 agg->data.target.root = *mapped;
             }
-            mapped = hash_mapping_leanspec_to_c(
+            mapped = hash_mapping_lookup(
                 driver->hash_mapping,
                 driver->hash_mapping_count,
-                &agg->data.source.root);
+                &agg->data.source.root,
+                true);
             if (mapped)
             {
                 agg->data.source.root = *mapped;
@@ -1253,26 +1238,29 @@ static int fork_choice_process_block_step(
         for (size_t i = 0; i < signed_block.block.body.attestations.length; ++i)
         {
             LanternAggregatedAttestation *agg = &signed_block.block.body.attestations.data[i];
-            const LanternRoot *mapped = hash_mapping_leanspec_to_c(
+            const LanternRoot *mapped = hash_mapping_lookup(
                 driver->hash_mapping,
                 driver->hash_mapping_count,
-                &agg->data.head.root);
+                &agg->data.head.root,
+                true);
             if (mapped)
             {
                 agg->data.head.root = *mapped;
             }
-            mapped = hash_mapping_leanspec_to_c(
+            mapped = hash_mapping_lookup(
                 driver->hash_mapping,
                 driver->hash_mapping_count,
-                &agg->data.target.root);
+                &agg->data.target.root,
+                true);
             if (mapped)
             {
                 agg->data.target.root = *mapped;
             }
-            mapped = hash_mapping_leanspec_to_c(
+            mapped = hash_mapping_lookup(
                 driver->hash_mapping,
                 driver->hash_mapping_count,
-                &agg->data.source.root);
+                &agg->data.source.root,
+                true);
             if (mapped)
             {
                 agg->data.source.root = *mapped;

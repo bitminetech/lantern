@@ -173,7 +173,6 @@ int lantern_attestations_resize(LanternAttestations *list, size_t new_length);
 void lantern_validator_indices_init(LanternValidatorIndices *indices);
 void lantern_validator_indices_reset(LanternValidatorIndices *indices);
 int lantern_validator_indices_append(LanternValidatorIndices *indices, LanternValidatorIndex index);
-int lantern_validator_indices_copy(LanternValidatorIndices *dst, const LanternValidatorIndices *src);
 int lantern_validator_indices_resize(LanternValidatorIndices *indices, size_t new_length);
 int lantern_validator_index_compute_subnet_id(
     LanternValidatorIndex index,
@@ -231,9 +230,6 @@ void lantern_attestation_signatures_reset(LanternAttestationSignatures *list);
 int lantern_attestation_signatures_append(
     LanternAttestationSignatures *list,
     const LanternAggregatedSignatureProof *proof);
-int lantern_attestation_signatures_copy(
-    LanternAttestationSignatures *dst,
-    const LanternAttestationSignatures *src);
 int lantern_attestation_signatures_resize(LanternAttestationSignatures *list, size_t new_length);
 
 void lantern_signature_list_init(LanternSignatureList *list);

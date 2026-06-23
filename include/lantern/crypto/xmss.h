@@ -12,7 +12,6 @@ struct PQSignatureSchemePublicKey;
  * Return true when the XMSS library is linked in and responsive.
  */
 bool lantern_xmss_is_available(void);
-size_t lantern_xmss_node_list_limit(void);
 
 int lantern_xmss_load_secret_file(
     const char *path,

@@ -135,24 +135,6 @@ int lantern_validator_indices_append(LanternValidatorIndices *indices, LanternVa
     return 0;
 }
 
-int lantern_validator_indices_copy(LanternValidatorIndices *dst, const LanternValidatorIndices *src) {
-    if (!dst || !src) {
-        return -1;
-    }
-    if (src->length == 0) {
-        lantern_validator_indices_reset(dst);
-        lantern_validator_indices_init(dst);
-        return 0;
-    }
-    if (src->length > LANTERN_VALIDATOR_REGISTRY_LIMIT || !src->data) {
-        return -1;
-    }
-    ENSURE_CAPACITY(dst, data, src->length, 4);
-    memcpy(dst->data, src->data, src->length * sizeof(*src->data));
-    dst->length = src->length;
-    return 0;
-}
-
 int lantern_validator_indices_resize(LanternValidatorIndices *indices, size_t new_length) {
     if (!indices || new_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
         return -1;
@@ -690,30 +672,6 @@ int lantern_attestation_signatures_append(
         return -1;
     }
     list->length += 1;
-    return 0;
-}
-
-int lantern_attestation_signatures_copy(
-    LanternAttestationSignatures *dst,
-    const LanternAttestationSignatures *src) {
-    if (!dst || !src) {
-        return -1;
-    }
-    if (src->length == 0) {
-        lantern_attestation_signatures_reset(dst);
-        lantern_attestation_signatures_init(dst);
-        return 0;
-    }
-    ENSURE_CAPACITY(dst, data, src->length, 4);
-    for (size_t i = dst->length; i < src->length; ++i) {
-        lantern_aggregated_signature_proof_init(&dst->data[i]);
-    }
-    for (size_t i = 0; i < src->length; ++i) {
-        if (lantern_aggregated_signature_proof_copy(&dst->data[i], &src->data[i]) != 0) {
-            return -1;
-        }
-    }
-    dst->length = src->length;
     return 0;
 }
 

@@ -394,30 +394,3 @@ bool lantern_xmss_is_available(void)
      */
     return pq_get_lifetime() > 0u;
 }
-
-size_t lantern_xmss_node_list_limit(void)
-{
-    uint64_t lifetime = pq_get_lifetime();
-    if (lifetime == 0u)
-    {
-        return 0u;
-    }
-
-    size_t log_lifetime = 0u;
-    while ((lifetime & UINT64_C(1)) == 0u)
-    {
-        lifetime >>= 1u;
-        ++log_lifetime;
-    }
-    if (lifetime != UINT64_C(1))
-    {
-        return 0u;
-    }
-
-    size_t shift = (log_lifetime / 2u) + 1u;
-    if (shift >= (sizeof(size_t) * 8u))
-    {
-        return 0u;
-    }
-    return ((size_t)1u) << shift;
-}

@@ -8,7 +8,6 @@
 #include "lantern/consensus/ssz.h"
 #include "lantern/consensus/state.h"
 #include "ssz.h"
-#include "lantern/encoding/snappy.h"
 #include "lantern/networking/reqresp_service.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
@@ -253,43 +252,6 @@ int lantern_network_status_decode(
     return 0;
 }
 
-int lantern_network_status_encode_snappy(
-    const LanternStatusMessage *status,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written,
-    size_t *raw_len) {
-    if (!status || !out || !written) {
-        return -1;
-    }
-    uint8_t raw[2u * LANTERN_CHECKPOINT_SSZ_SIZE];
-    size_t raw_written = sizeof(raw);
-    if (encode_status_raw(status, raw, sizeof(raw), &raw_written) != 0) {
-        return -1;
-    }
-    if (raw_len) {
-        *raw_len = raw_written;
-    }
-    int rc = lantern_snappy_compress(raw, raw_written, out, out_len, written);
-    return rc == LANTERN_SNAPPY_OK ? 0 : -1;
-}
-
-int lantern_network_status_decode_snappy(
-    LanternStatusMessage *status,
-    const uint8_t *data,
-    size_t data_len) {
-    if (!status || !data) {
-        return -1;
-    }
-    uint8_t raw[2u * LANTERN_CHECKPOINT_SSZ_SIZE];
-    size_t raw_written = sizeof(raw);
-    int rc = lantern_snappy_decompress(data, data_len, raw, sizeof(raw), &raw_written);
-    if (rc != LANTERN_SNAPPY_OK) {
-        return -1;
-    }
-    return lantern_network_status_decode(status, raw, raw_written);
-}
-
 int lantern_network_blocks_by_root_request_encode(
     const LanternBlocksByRootRequest *req,
     uint8_t *out,
@@ -382,74 +344,6 @@ int lantern_network_blocks_by_root_request_decode(
     return -1;
 }
 
-static uint8_t *alloc_scratch(size_t size) {
-    return malloc(size > 0 ? size : 1u);
-}
-
-int lantern_network_blocks_by_root_request_encode_snappy(
-    const LanternBlocksByRootRequest *req,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written,
-    size_t *raw_len) {
-    if (!req || !out || !written) {
-        return -1;
-    }
-    if (req->roots.length > (SIZE_MAX - sizeof(uint32_t)) / LANTERN_ROOT_SIZE) {
-        return -1;
-    }
-    size_t raw_size = sizeof(uint32_t) + (req->roots.length * LANTERN_ROOT_SIZE);
-    uint8_t *raw = alloc_scratch(raw_size);
-    if (!raw) {
-        return -1;
-    }
-    size_t raw_written = 0;
-    int result = -1;
-    if (lantern_network_blocks_by_root_request_encode(req, raw, raw_size, &raw_written) == 0) {
-        if (raw_len) {
-            *raw_len = raw_written;
-        }
-        int rc = lantern_snappy_compress(raw, raw_written, out, out_len, written);
-        result = (rc == LANTERN_SNAPPY_OK) ? 0 : -1;
-    }
-    free(raw);
-    return result;
-}
-
-int lantern_network_blocks_by_root_request_decode_snappy(
-    LanternBlocksByRootRequest *req,
-    const uint8_t *data,
-    size_t data_len) {
-    if (!req || !data) {
-        return -1;
-    }
-    size_t raw_len = 0;
-    if (lantern_snappy_uncompressed_length(data, data_len, &raw_len) != LANTERN_SNAPPY_OK) {
-        return -1;
-    }
-    if (raw_len > LANTERN_REQRESP_MAX_CHUNK_BYTES) {
-        lantern_log_warn(
-            "reqresp",
-            NULL,
-            "blocks_by_root request too large raw_len=%zu",
-            raw_len);
-        return -1;
-    }
-    uint8_t *raw = alloc_scratch(raw_len);
-    if (!raw) {
-        return -1;
-    }
-    size_t written = raw_len;
-    int rc = lantern_snappy_decompress(data, data_len, raw, raw_len, &written);
-    if (rc != LANTERN_SNAPPY_OK) {
-        free(raw);
-        return -1;
-    }
-    int decode_rc = lantern_network_blocks_by_root_request_decode(req, raw, written);
-    free(raw);
-    return decode_rc;
-}
-
 int lantern_network_blocks_by_range_request_encode(
     const LanternBlocksByRangeRequest *req,
     uint8_t *out,
@@ -478,43 +372,6 @@ int lantern_network_blocks_by_range_request_decode(
         return -1;
     }
     return 0;
-}
-
-int lantern_network_blocks_by_range_request_encode_snappy(
-    const LanternBlocksByRangeRequest *req,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written,
-    size_t *raw_len) {
-    if (!req || !out || !written) {
-        return -1;
-    }
-    uint8_t raw[2u * sizeof(uint64_t)];
-    size_t raw_written = 0;
-    if (lantern_network_blocks_by_range_request_encode(req, raw, sizeof(raw), &raw_written) != 0) {
-        return -1;
-    }
-    if (raw_len) {
-        *raw_len = raw_written;
-    }
-    int rc = lantern_snappy_compress(raw, raw_written, out, out_len, written);
-    return rc == LANTERN_SNAPPY_OK ? 0 : -1;
-}
-
-int lantern_network_blocks_by_range_request_decode_snappy(
-    LanternBlocksByRangeRequest *req,
-    const uint8_t *data,
-    size_t data_len) {
-    if (!req || !data) {
-        return -1;
-    }
-    uint8_t raw[2u * sizeof(uint64_t)];
-    size_t raw_written = sizeof(raw);
-    int rc = lantern_snappy_decompress(data, data_len, raw, sizeof(raw), &raw_written);
-    if (rc != LANTERN_SNAPPY_OK) {
-        return -1;
-    }
-    return lantern_network_blocks_by_range_request_decode(req, raw, raw_written);
 }
 
 int lantern_network_signed_block_list_encode(
@@ -698,100 +555,4 @@ int lantern_network_signed_block_list_decode(
     }
 
     return 0;
-}
-
-int lantern_network_signed_block_list_encode_snappy(
-    const LanternSignedBlockList *resp,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written,
-    size_t *raw_len) {
-    if (!resp || !out || !written) {
-        return -1;
-    }
-    size_t capacity = resp->length * sizeof(uint32_t) + (resp->length > 0 ? 256u : 1u);
-    while (true) {
-        uint8_t *raw = alloc_scratch(capacity);
-        if (!raw) {
-            return -1;
-        }
-        size_t raw_written = capacity;
-        int rc = lantern_network_signed_block_list_encode(resp, raw, capacity, &raw_written);
-        if (rc == 0) {
-            if (raw_len) {
-                *raw_len = raw_written;
-            }
-            int snappy_rc = lantern_snappy_compress(raw, raw_written, out, out_len, written);
-            free(raw);
-            return snappy_rc == LANTERN_SNAPPY_OK ? 0 : -1;
-        }
-        free(raw);
-        if (capacity > SIZE_MAX / 2) {
-            return -1;
-        }
-        capacity *= 2u;
-    }
-}
-
-int lantern_network_signed_block_list_decode_snappy(
-    LanternSignedBlockList *resp,
-    const uint8_t *data,
-    size_t data_len) {
-    if (!resp || !data) {
-        return -1;
-    }
-    size_t raw_len = 0;
-    if (lantern_snappy_uncompressed_length(data, data_len, &raw_len) != LANTERN_SNAPPY_OK) {
-        return -1;
-    }
-    if (raw_len > LANTERN_REQRESP_MAX_CHUNK_BYTES) {
-        lantern_log_warn(
-            "reqresp",
-            NULL,
-            "blocks_by_root response too large raw_len=%zu",
-            raw_len);
-        return -1;
-    }
-    uint8_t *raw = alloc_scratch(raw_len);
-    if (!raw) {
-        return -1;
-    }
-    size_t written = raw_len;
-    int rc = lantern_snappy_decompress(data, data_len, raw, raw_len, &written);
-    if (rc != LANTERN_SNAPPY_OK) {
-        size_t preview = data_len < LANTERN_STATUS_PREVIEW_BYTES ? data_len : LANTERN_STATUS_PREVIEW_BYTES;
-        char preview_hex[(LANTERN_STATUS_PREVIEW_BYTES * 2u) + 1u];
-        if (preview > 0
-            && lantern_bytes_to_hex(data, preview, preview_hex, sizeof(preview_hex), 0) != 0) {
-            preview_hex[0] = '\0';
-        }
-        lantern_log_trace(
-            "reqresp",
-            NULL,
-            "blocks_by_root decompress failed rc=%d bytes=%zu%s%s",
-            rc,
-            data_len,
-            preview > 0 ? " preview=" : "",
-            preview > 0 ? preview_hex : "");
-        free(raw);
-        return -1;
-    }
-    int decode_rc = lantern_network_signed_block_list_decode(resp, raw, written);
-    if (decode_rc != 0) {
-        size_t preview = written < LANTERN_STATUS_PREVIEW_BYTES ? written : LANTERN_STATUS_PREVIEW_BYTES;
-        char preview_hex[(LANTERN_STATUS_PREVIEW_BYTES * 2u) + 1u];
-        if (preview > 0
-            && lantern_bytes_to_hex(raw, preview, preview_hex, sizeof(preview_hex), 0) != 0) {
-            preview_hex[0] = '\0';
-        }
-        lantern_log_trace(
-            "reqresp",
-            NULL,
-            "blocks_by_root decode failed raw_len=%zu%s%s",
-            written,
-            preview > 0 ? " preview=" : "",
-            preview > 0 ? preview_hex : "");
-    }
-    free(raw);
-    return decode_rc;
 }

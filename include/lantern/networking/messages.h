@@ -47,16 +47,6 @@ int lantern_network_status_decode(
     LanternStatusMessage *status,
     const uint8_t *data,
     size_t data_len);
-int lantern_network_status_encode_snappy(
-    const LanternStatusMessage *status,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written,
-    size_t *raw_len);
-int lantern_network_status_decode_snappy(
-    LanternStatusMessage *status,
-    const uint8_t *data,
-    size_t data_len);
 
 int lantern_network_blocks_by_root_request_encode(
     const LanternBlocksByRootRequest *req,
@@ -64,16 +54,6 @@ int lantern_network_blocks_by_root_request_encode(
     size_t out_len,
     size_t *written);
 int lantern_network_blocks_by_root_request_decode(
-    LanternBlocksByRootRequest *req,
-    const uint8_t *data,
-    size_t data_len);
-int lantern_network_blocks_by_root_request_encode_snappy(
-    const LanternBlocksByRootRequest *req,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written,
-    size_t *raw_len);
-int lantern_network_blocks_by_root_request_decode_snappy(
     LanternBlocksByRootRequest *req,
     const uint8_t *data,
     size_t data_len);
@@ -87,16 +67,6 @@ int lantern_network_blocks_by_range_request_decode(
     LanternBlocksByRangeRequest *req,
     const uint8_t *data,
     size_t data_len);
-int lantern_network_blocks_by_range_request_encode_snappy(
-    const LanternBlocksByRangeRequest *req,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written,
-    size_t *raw_len);
-int lantern_network_blocks_by_range_request_decode_snappy(
-    LanternBlocksByRangeRequest *req,
-    const uint8_t *data,
-    size_t data_len);
 
 int lantern_network_signed_block_list_encode(
     const LanternSignedBlockList *resp,
@@ -104,16 +74,6 @@ int lantern_network_signed_block_list_encode(
     size_t out_len,
     size_t *written);
 int lantern_network_signed_block_list_decode(
-    LanternSignedBlockList *resp,
-    const uint8_t *data,
-    size_t data_len);
-int lantern_network_signed_block_list_encode_snappy(
-    const LanternSignedBlockList *resp,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written,
-    size_t *raw_len);
-int lantern_network_signed_block_list_decode_snappy(
     LanternSignedBlockList *resp,
     const uint8_t *data,
     size_t data_len);
