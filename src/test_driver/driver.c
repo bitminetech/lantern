@@ -465,38 +465,31 @@ static int hash_mapping_add(
     return 0;
 }
 
-static int preview_post_state_root_without_signatures(
-    const LanternState *state,
-    const LanternSignedBlock *signed_block,
+static int apply_block_without_signatures(
+    LanternState *state,
+    const LanternBlock *block,
     LanternRoot *out_state_root)
 {
-    if (!state || !signed_block || !out_state_root || signed_block->block.slot <= state->slot)
+    if (!state || !block || block->slot <= state->slot)
     {
         return -1;
     }
-
-    LanternState scratch;
     LanternStore scratch_store;
-    lantern_state_init(&scratch);
     lantern_store_init(&scratch_store);
     int rc = -1;
-    if (lantern_state_clone(state, &scratch) != 0)
+    if (lantern_state_process_slots(state, block->slot) != 0)
     {
         goto cleanup;
     }
-    if (lantern_state_process_slots(&scratch, signed_block->block.slot) != 0)
+    if (lantern_store_prepare_validator_votes(&scratch_store, state->config.num_validators) != 0)
     {
         goto cleanup;
     }
-    if (lantern_store_prepare_validator_votes(&scratch_store, scratch.config.num_validators) != 0)
+    if (lantern_test_state_process_block_with_store(state, &scratch_store, block) != 0)
     {
         goto cleanup;
     }
-    if (lantern_test_state_process_block_with_store(&scratch, &scratch_store, &signed_block->block) != 0)
-    {
-        goto cleanup;
-    }
-    if (lantern_hash_tree_root_state(&scratch, out_state_root) != SSZ_SUCCESS)
+    if (out_state_root && lantern_hash_tree_root_state(state, out_state_root) != SSZ_SUCCESS)
     {
         goto cleanup;
     }
@@ -504,6 +497,26 @@ static int preview_post_state_root_without_signatures(
 
 cleanup:
     lantern_store_reset(&scratch_store);
+    return rc;
+}
+
+static int preview_post_state_root_without_signatures(
+    const LanternState *state,
+    const LanternSignedBlock *signed_block,
+    LanternRoot *out_state_root)
+{
+    if (!state || !signed_block || !out_state_root)
+    {
+        return -1;
+    }
+
+    LanternState scratch;
+    lantern_state_init(&scratch);
+    int rc = -1;
+    if (lantern_state_clone(state, &scratch) == 0)
+    {
+        rc = apply_block_without_signatures(&scratch, &signed_block->block, out_state_root);
+    }
     lantern_state_reset(&scratch);
     return rc;
 }
@@ -521,25 +534,8 @@ static int state_transition_without_signatures(
     {
         return -1;
     }
-    if (lantern_state_process_slots(state, block->slot) != 0)
-    {
-        return -1;
-    }
-    LanternStore scratch_store;
-    lantern_store_init(&scratch_store);
-    if (lantern_store_prepare_validator_votes(&scratch_store, state->config.num_validators) != 0)
-    {
-        lantern_store_reset(&scratch_store);
-        return -1;
-    }
-    if (lantern_test_state_process_block_with_store(state, &scratch_store, block) != 0)
-    {
-        lantern_store_reset(&scratch_store);
-        return -1;
-    }
-    lantern_store_reset(&scratch_store);
     LanternRoot computed_state_root;
-    if (lantern_hash_tree_root_state(state, &computed_state_root) != SSZ_SUCCESS)
+    if (apply_block_without_signatures(state, block, &computed_state_root) != 0)
     {
         return -1;
     }
@@ -831,6 +827,20 @@ static void map_attestation_data_roots(
     if (mapped)
     {
         data->source.root = *mapped;
+    }
+}
+
+static void map_block_attestation_roots(
+    const struct fork_choice_driver *driver,
+    LanternBlock *block)
+{
+    if (!driver || !block)
+    {
+        return;
+    }
+    for (size_t i = 0; i < block->body.attestations.length; ++i)
+    {
+        map_attestation_data_roots(driver, &block->body.attestations.data[i].data);
     }
 }
 
@@ -1160,40 +1170,10 @@ static int fork_choice_process_block_step(
     LanternCheckpoint block_finalized = driver->state.latest_finalized;
     LanternRoot block_root;
     memset(&block_root, 0, sizeof(block_root));
+    map_block_attestation_roots(driver, &signed_block.block);
 
     if (extends_canonical)
     {
-        for (size_t i = 0; i < signed_block.block.body.attestations.length; ++i)
-        {
-            LanternAggregatedAttestation *agg = &signed_block.block.body.attestations.data[i];
-            const LanternRoot *mapped = hash_mapping_lookup(
-                driver->hash_mapping,
-                driver->hash_mapping_count,
-                &agg->data.head.root,
-                true);
-            if (mapped)
-            {
-                agg->data.head.root = *mapped;
-            }
-            mapped = hash_mapping_lookup(
-                driver->hash_mapping,
-                driver->hash_mapping_count,
-                &agg->data.target.root,
-                true);
-            if (mapped)
-            {
-                agg->data.target.root = *mapped;
-            }
-            mapped = hash_mapping_lookup(
-                driver->hash_mapping,
-                driver->hash_mapping_count,
-                &agg->data.source.root,
-                true);
-            if (mapped)
-            {
-                agg->data.source.root = *mapped;
-            }
-        }
         if (patch_block_hashes_for_c_compat(&driver->state, &signed_block) != 0)
         {
             goto cleanup;
@@ -1235,37 +1215,6 @@ static int fork_choice_process_block_step(
             goto cleanup;
         }
         active_state = &branch_state;
-        for (size_t i = 0; i < signed_block.block.body.attestations.length; ++i)
-        {
-            LanternAggregatedAttestation *agg = &signed_block.block.body.attestations.data[i];
-            const LanternRoot *mapped = hash_mapping_lookup(
-                driver->hash_mapping,
-                driver->hash_mapping_count,
-                &agg->data.head.root,
-                true);
-            if (mapped)
-            {
-                agg->data.head.root = *mapped;
-            }
-            mapped = hash_mapping_lookup(
-                driver->hash_mapping,
-                driver->hash_mapping_count,
-                &agg->data.target.root,
-                true);
-            if (mapped)
-            {
-                agg->data.target.root = *mapped;
-            }
-            mapped = hash_mapping_lookup(
-                driver->hash_mapping,
-                driver->hash_mapping_count,
-                &agg->data.source.root,
-                true);
-            if (mapped)
-            {
-                agg->data.source.root = *mapped;
-            }
-        }
         if (patch_block_hashes_for_c_compat(active_state, &signed_block) != 0)
         {
             goto cleanup;

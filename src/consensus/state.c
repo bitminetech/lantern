@@ -1203,6 +1203,24 @@ static bool lantern_root_is_zero(const LanternRoot *root) {
     return true;
 }
 
+static bool lantern_checkpoint_matches_history(
+    const LanternCheckpoint *checkpoint,
+    const struct lantern_root_list *history) {
+    if (!checkpoint || !history || lantern_root_is_zero(&checkpoint->root) || checkpoint->slot > SIZE_MAX) {
+        return false;
+    }
+    size_t slot = (size_t)checkpoint->slot;
+    return slot < history->length
+        && memcmp(checkpoint->root.bytes, history->items[slot].bytes, LANTERN_ROOT_SIZE) == 0;
+}
+
+static bool lantern_vote_matches_history(const LanternVote *vote, const struct lantern_root_list *history) {
+    return vote
+        && lantern_checkpoint_matches_history(&vote->source, history)
+        && lantern_checkpoint_matches_history(&vote->target, history)
+        && lantern_checkpoint_matches_history(&vote->head, history);
+}
+
 static uint64_t lantern_u64_isqrt(uint64_t value) {
     uint64_t result = 0;
     uint64_t bit = 1ull << 62;
@@ -1880,10 +1898,6 @@ size_t lantern_state_validator_count(const LanternState *state) {
     return state->validator_count;
 }
 
-const uint8_t *lantern_state_validator_pubkey(const LanternState *state, size_t index) {
-    return lantern_state_validator_attestation_pubkey(state, index);
-}
-
 const uint8_t *lantern_state_validator_attestation_pubkey(const LanternState *state, size_t index) {
     if (!state || !state->validators || index >= state->validator_count) {
         return NULL;
@@ -2230,18 +2244,6 @@ static int lantern_state_process_attestations_internal(
             /* LeanSpec: silently skip if target <= source (state.py:406) */
             continue;
         }
-        if (vote->source.slot > SIZE_MAX || vote->target.slot > SIZE_MAX || vote->head.slot > SIZE_MAX) {
-            lantern_log_warn(
-                "state",
-                &meta,
-                "attestation rejected: slot range (%" PRIu64 ", %" PRIu64 ", %" PRIu64
-                ") exceeds size_t capacity",
-                vote->source.slot,
-                vote->target.slot,
-                vote->head.slot);
-            record_attestation_validation_metric(att_validation_start, false);
-            continue;
-        }
         if (!lantern_state_slot_in_justified_window(state, vote->source.slot)) {
             /* LeanSpec: silently skip attestations with source outside justified window */
             if (trace_finalization) {
@@ -2282,53 +2284,8 @@ static int lantern_state_process_attestations_internal(
             continue;
         }
 
-        if (lantern_root_is_zero(&vote->source.root)
-            || lantern_root_is_zero(&vote->target.root)
-            || lantern_root_is_zero(&vote->head.root)) {
-            if (trace_finalization) {
-                lantern_log_debug(
-                    "state",
-                    &meta,
-                    "finalization trace skip zero_hash_vote source_slot=%" PRIu64
-                    " target_slot=%" PRIu64 " head_slot=%" PRIu64,
-                    vote->source.slot,
-                    vote->target.slot,
-                    vote->head.slot);
-            }
-            continue;
-        }
-
         /* LeanSpec: skip if source, target, or head root mismatches history. */
-        bool source_matches = false;
-        size_t source_slot_idx = (size_t)vote->source.slot;
-        if (source_slot_idx < state->historical_block_hashes.length) {
-            source_matches = memcmp(
-                vote->source.root.bytes,
-                state->historical_block_hashes.items[source_slot_idx].bytes,
-                LANTERN_ROOT_SIZE) == 0;
-        }
-
-        bool target_matches = false;
-        size_t target_slot_idx = (size_t)vote->target.slot;
-        if (target_slot_idx < state->historical_block_hashes.length) {
-            target_matches = memcmp(
-                vote->target.root.bytes,
-                state->historical_block_hashes.items[target_slot_idx].bytes,
-                LANTERN_ROOT_SIZE) == 0;
-        }
-
-        bool head_matches = false;
-        if (vote->head.slot <= SIZE_MAX) {
-            size_t head_slot_idx = (size_t)vote->head.slot;
-            if (head_slot_idx < state->historical_block_hashes.length) {
-                head_matches = memcmp(
-                    vote->head.root.bytes,
-                    state->historical_block_hashes.items[head_slot_idx].bytes,
-                    LANTERN_ROOT_SIZE) == 0;
-            }
-        }
-
-        if (!source_matches || !target_matches || !head_matches) {
+        if (!lantern_vote_matches_history(vote, &state->historical_block_hashes)) {
             if (trace_finalization) {
                 lantern_log_debug(
                     "state",

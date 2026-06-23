@@ -27,7 +27,6 @@ struct lantern_log_metadata {
 void lantern_log_set_node_id(const char *node_id);
 void lantern_log_reset_node_id(void);
 void lantern_log_set_level(enum LanternLogLevel level);
-enum LanternLogLevel lantern_log_get_level(void);
 int lantern_log_set_level_from_string(const char *text, enum LanternLogLevel *out_level);
 
 void lantern_log_log(

@@ -52,10 +52,6 @@ void lantern_log_set_level(enum LanternLogLevel level) {
     g_min_level = level;
 }
 
-enum LanternLogLevel lantern_log_get_level(void) {
-    return g_min_level;
-}
-
 static int equals_ignore_case(const char *lhs, const char *rhs) {
     if (!lhs || !rhs) {
         return 0;

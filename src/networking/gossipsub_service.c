@@ -540,57 +540,18 @@ static libp2p_gossipsub_err_t lantern_gossipsub_message_id(
     return LIBP2P_GOSSIPSUB_OK;
 }
 
-static int encode_payload_block(const LanternSignedBlock *block, uint8_t **out, size_t *out_len) {
-    if (!block || !out || !out_len) {
-        return -1;
-    }
-    uint8_t *buffer = (uint8_t *)malloc(LANTERN_GOSSIP_ENCODE_BUFFER_BYTES);
-    if (!buffer) {
-        return -1;
-    }
-    size_t written = 0;
-    if (lantern_gossip_encode_signed_block_snappy(
-            block,
-            buffer,
-            LANTERN_GOSSIP_ENCODE_BUFFER_BYTES,
-            &written)
-        != 0) {
-        free(buffer);
-        return -1;
-    }
-    *out = buffer;
-    *out_len = written;
-    return 0;
-}
+enum gossipsub_payload_kind {
+    GOSSIPSUB_PAYLOAD_BLOCK,
+    GOSSIPSUB_PAYLOAD_VOTE,
+    GOSSIPSUB_PAYLOAD_AGGREGATED_ATTESTATION,
+};
 
-static int encode_payload_vote(const LanternSignedVote *vote, uint8_t **out, size_t *out_len) {
-    if (!vote || !out || !out_len) {
-        return -1;
-    }
-    uint8_t *buffer = (uint8_t *)malloc(LANTERN_GOSSIP_ENCODE_BUFFER_BYTES);
-    if (!buffer) {
-        return -1;
-    }
-    size_t written = 0;
-    if (lantern_gossip_encode_signed_vote_snappy(
-            vote,
-            buffer,
-            LANTERN_GOSSIP_ENCODE_BUFFER_BYTES,
-            &written)
-        != 0) {
-        free(buffer);
-        return -1;
-    }
-    *out = buffer;
-    *out_len = written;
-    return 0;
-}
-
-static int encode_payload_aggregated_attestation(
-    const LanternSignedAggregatedAttestation *attestation,
+static int encode_payload(
+    enum gossipsub_payload_kind kind,
+    const void *payload,
     uint8_t **out,
     size_t *out_len) {
-    if (!attestation || !out || !out_len) {
+    if (!payload || !out || !out_len) {
         return -1;
     }
     uint8_t *buffer = (uint8_t *)malloc(LANTERN_GOSSIP_ENCODE_BUFFER_BYTES);
@@ -598,12 +559,31 @@ static int encode_payload_aggregated_attestation(
         return -1;
     }
     size_t written = 0;
-    if (lantern_gossip_encode_signed_aggregated_attestation_snappy(
-            attestation,
+    int rc = -1;
+    switch (kind) {
+    case GOSSIPSUB_PAYLOAD_BLOCK:
+        rc = lantern_gossip_encode_signed_block_snappy(
+            (const LanternSignedBlock *)payload,
             buffer,
             LANTERN_GOSSIP_ENCODE_BUFFER_BYTES,
-            &written)
-        != 0) {
+            &written);
+        break;
+    case GOSSIPSUB_PAYLOAD_VOTE:
+        rc = lantern_gossip_encode_signed_vote_snappy(
+            (const LanternSignedVote *)payload,
+            buffer,
+            LANTERN_GOSSIP_ENCODE_BUFFER_BYTES,
+            &written);
+        break;
+    case GOSSIPSUB_PAYLOAD_AGGREGATED_ATTESTATION:
+        rc = lantern_gossip_encode_signed_aggregated_attestation_snappy(
+            (const LanternSignedAggregatedAttestation *)payload,
+            buffer,
+            LANTERN_GOSSIP_ENCODE_BUFFER_BYTES,
+            &written);
+        break;
+    }
+    if (rc != 0) {
         free(buffer);
         return -1;
     }
@@ -1184,7 +1164,7 @@ int lantern_gossipsub_service_publish_block(
     }
     uint8_t *payload = NULL;
     size_t payload_len = 0;
-    int rc = encode_payload_block(block, &payload, &payload_len);
+    int rc = encode_payload(GOSSIPSUB_PAYLOAD_BLOCK, block, &payload, &payload_len);
     if (rc == 0) {
         rc = publish_payload(service, service->block_topic, payload, payload_len);
     }
@@ -1217,7 +1197,7 @@ int lantern_gossipsub_service_publish_vote_subnet(
     }
     uint8_t *payload = NULL;
     size_t payload_len = 0;
-    int rc = encode_payload_vote(vote, &payload, &payload_len);
+    int rc = encode_payload(GOSSIPSUB_PAYLOAD_VOTE, vote, &payload, &payload_len);
     if (rc == 0) {
         rc = publish_payload(service, publish_topic, payload, payload_len);
     }
@@ -1233,7 +1213,7 @@ int lantern_gossipsub_service_publish_aggregated_attestation(
     }
     uint8_t *payload = NULL;
     size_t payload_len = 0;
-    int rc = encode_payload_aggregated_attestation(attestation, &payload, &payload_len);
+    int rc = encode_payload(GOSSIPSUB_PAYLOAD_AGGREGATED_ATTESTATION, attestation, &payload, &payload_len);
     if (rc == 0) {
         rc = publish_payload(service, service->aggregated_attestation_topic, payload, payload_len);
     }
@@ -1257,23 +1237,8 @@ int lantern_gossipsub_service_subscribe_attestation_subnet(
         != 0) {
         return -1;
     }
-    if (service->gossipsub && !service->loopback_only) {
-        libp2p_gossipsub_topic_config_t topic_config = {
-            .topic = {.data = (const uint8_t *)topic, .len = strlen(topic)},
-            .validation_mode = LIBP2P_GOSSIPSUB_VALIDATION_REQUIRE_APP,
-            .enable_idontwant = 1,
-            .idontwant_min_message_bytes = LIBP2P_GOSSIPSUB_DEFAULT_IDONTWANT_MIN_BYTES,
-        };
-        if (lock_gossipsub() != 0) {
-            return -1;
-        }
-        libp2p_gossipsub_err_t subscribe_err = service->gossipsub
-            ? libp2p_gossipsub_subscribe(service->gossipsub, &topic_config)
-            : LIBP2P_GOSSIPSUB_ERR_STATE;
-        unlock_gossipsub();
-        if (subscribe_err != LIBP2P_GOSSIPSUB_OK) {
-            return -1;
-        }
+    if (service->gossipsub && !service->loopback_only && subscribe_topic(service, topic) != 0) {
+        return -1;
     }
     return remember_vote_subnet_topic(service, subnet_id, topic);
 }

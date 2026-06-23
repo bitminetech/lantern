@@ -878,29 +878,6 @@ static int build_blocks_request_frame(
     return rc;
 }
 
-static int build_blocks_by_range_request_frame(
-    uint64_t start_slot,
-    uint64_t count,
-    uint8_t **out_frame,
-    size_t *out_frame_len) {
-    if (count == 0u || count > LANTERN_MAX_REQUEST_BLOCKS || !out_frame || !out_frame_len) {
-        return -1;
-    }
-    if (count > UINT64_MAX - start_slot) {
-        return -1;
-    }
-    LanternBlocksByRangeRequest req = {
-        .start_slot = start_slot,
-        .count = count,
-    };
-    uint8_t raw[2u * sizeof(uint64_t)];
-    size_t raw_len = 0;
-    if (lantern_network_blocks_by_range_request_encode(&req, raw, sizeof(raw), &raw_len) != 0) {
-        return -1;
-    }
-    return build_frame_from_raw(raw, raw_len, 0, 0, out_frame, out_frame_len);
-}
-
 static int encode_signed_block_raw(const LanternSignedBlock *block, uint8_t **out_raw, size_t *out_raw_len) {
     if (!block || !out_raw || !out_raw_len) {
         return -1;
@@ -1824,32 +1801,6 @@ int lantern_reqresp_service_request_blocks(
         request_id);
 }
 
-int lantern_reqresp_service_request_blocks_by_range(
-    struct lantern_reqresp_service *service,
-    const struct lantern_peer_id *peer_id,
-    const char *peer_id_text,
-    uint64_t start_slot,
-    uint64_t count,
-    uint64_t request_id) {
-    uint8_t *frame = NULL;
-    size_t frame_len = 0;
-    if (build_blocks_by_range_request_frame(start_slot, count, &frame, &frame_len) != 0) {
-        return -1;
-    }
-    return service_open_exchange(
-        service,
-        peer_id,
-        peer_id_text,
-        LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE,
-        frame,
-        frame_len,
-        NULL,
-        0,
-        start_slot,
-        count,
-        request_id);
-}
-
 struct lantern_reqresp_stream *lantern_reqresp_stream_from_ops(
     void *io_ctx,
     const struct lantern_reqresp_stream_ops *ops,
@@ -1944,22 +1895,4 @@ int lantern_reqresp_read_response_chunk(
         return LANTERN_REQRESP_ERR_PAYLOAD_TOO_LARGE;
     }
     return read_snappy_frame_payload(stream, (size_t)payload_len, out_data, out_len, out_err);
-}
-
-int stream_write_all(struct lantern_reqresp_stream *stream, const uint8_t *data, size_t length, ssize_t *out_err) {
-    if (!stream || (!data && length != 0)) {
-        return LANTERN_REQRESP_ERR_INVALID_PARAM;
-    }
-    size_t offset = 0;
-    while (offset < length) {
-        ssize_t n = stream_write(stream, data + offset, length - offset);
-        if (n <= 0) {
-            if (out_err) {
-                *out_err = n;
-            }
-            return LANTERN_REQRESP_ERR_STREAM_WRITE;
-        }
-        offset += (size_t)n;
-    }
-    return LANTERN_REQRESP_OK;
 }

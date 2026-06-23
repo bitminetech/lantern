@@ -78,7 +78,6 @@ int lantern_state_set_validator_pubkeys_dual(
     const uint8_t *proposal_pubkeys,
     size_t count);
 size_t lantern_state_validator_count(const LanternState *state);
-const uint8_t *lantern_state_validator_pubkey(const LanternState *state, size_t index);
 const uint8_t *lantern_state_validator_attestation_pubkey(const LanternState *state, size_t index);
 const uint8_t *lantern_state_validator_proposal_pubkey(const LanternState *state, size_t index);
 int lantern_state_select_block_parent(
