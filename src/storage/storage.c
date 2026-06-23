@@ -362,33 +362,263 @@ cleanup:
     return rc;
 }
 
-static int build_blocks_dir(const char *data_dir, char **out_path) {
-    return join_path(data_dir, LANTERN_STORAGE_BLOCKS_DIR, out_path);
-}
+enum storage_dir_kind {
+    STORAGE_DIR_BLOCKS,
+    STORAGE_DIR_INVALID_BLOCKS,
+    STORAGE_DIR_INVALID_GOSSIP,
+    STORAGE_DIR_STATES,
+    STORAGE_DIR_INDICES,
+    STORAGE_DIR_SLOT_INDEX,
+    STORAGE_DIR_COUNT,
+};
 
-static int build_invalid_blocks_dir(const char *data_dir, char **out_path) {
-    return join_path(data_dir, LANTERN_STORAGE_INVALID_BLOCKS_DIR, out_path);
-}
+static const char *const STORAGE_DIR_LEAVES[STORAGE_DIR_COUNT] = {
+    [STORAGE_DIR_BLOCKS] = LANTERN_STORAGE_BLOCKS_DIR,
+    [STORAGE_DIR_INVALID_BLOCKS] = LANTERN_STORAGE_INVALID_BLOCKS_DIR,
+    [STORAGE_DIR_INVALID_GOSSIP] = LANTERN_STORAGE_INVALID_GOSSIP_DIR,
+    [STORAGE_DIR_STATES] = LANTERN_STORAGE_STATES_DIR,
+    [STORAGE_DIR_INDICES] = LANTERN_STORAGE_INDICES_DIR,
+};
 
-static int build_invalid_gossip_dir(const char *data_dir, char **out_path) {
-    return join_path(data_dir, LANTERN_STORAGE_INVALID_GOSSIP_DIR, out_path);
-}
-
-static int build_states_dir(const char *data_dir, char **out_path) {
-    return join_path(data_dir, LANTERN_STORAGE_STATES_DIR, out_path);
-}
-
-static int build_indices_dir(const char *data_dir, char **out_path) {
-    return join_path(data_dir, LANTERN_STORAGE_INDICES_DIR, out_path);
-}
-
-static int build_slot_index_dir(const char *data_dir, char **out_path) {
-    char *indices_dir = NULL;
-    if (build_indices_dir(data_dir, &indices_dir) != 0) {
+static int storage_dir_path(
+    const char *data_dir,
+    enum storage_dir_kind kind,
+    char **out_path) {
+    if (!data_dir || !out_path) {
         return -1;
     }
-    int rc = join_path(indices_dir, LANTERN_STORAGE_SLOT_INDEX_DIR, out_path);
-    free_path(indices_dir);
+    *out_path = NULL;
+
+    switch (kind) {
+    case STORAGE_DIR_SLOT_INDEX: {
+        char *indices_dir = NULL;
+        int rc = storage_dir_path(data_dir, STORAGE_DIR_INDICES, &indices_dir);
+        if (rc == 0) {
+            rc = join_path(indices_dir, LANTERN_STORAGE_SLOT_INDEX_DIR, out_path);
+        }
+        free_path(indices_dir);
+        return rc;
+    }
+    default:
+        break;
+    }
+    const unsigned index = (unsigned)kind;
+    if (index >= (unsigned)STORAGE_DIR_COUNT || !STORAGE_DIR_LEAVES[index]) {
+        return -1;
+    }
+    return join_path(data_dir, STORAGE_DIR_LEAVES[index], out_path);
+}
+
+static int ensure_storage_dir(
+    const char *data_dir,
+    enum storage_dir_kind kind,
+    char **out_path) {
+    if (out_path) {
+        *out_path = NULL;
+    }
+    char *path = NULL;
+    if (kind == STORAGE_DIR_SLOT_INDEX
+        && ensure_storage_dir(data_dir, STORAGE_DIR_INDICES, NULL) != 0) {
+        return -1;
+    }
+    if (storage_dir_path(data_dir, kind, &path) != 0 || ensure_directory(path) != 0) {
+        free_path(path);
+        return -1;
+    }
+    if (out_path) {
+        *out_path = path;
+    } else {
+        free_path(path);
+    }
+    return 0;
+}
+
+static int storage_dir_file_path(
+    const char *data_dir,
+    enum storage_dir_kind kind,
+    const char *filename,
+    bool ensure_parent,
+    char **out_path) {
+    if (!data_dir || !filename || !out_path) {
+        return -1;
+    }
+    *out_path = NULL;
+
+    char *dir = NULL;
+    int rc = ensure_parent
+        ? ensure_storage_dir(data_dir, kind, &dir)
+        : storage_dir_path(data_dir, kind, &dir);
+    if (rc == 0) {
+        rc = join_path(dir, filename, out_path);
+    }
+    free_path(dir);
+    return rc;
+}
+
+static int storage_root_file_path(
+    const char *data_dir,
+    enum storage_dir_kind kind,
+    const LanternRoot *root,
+    bool ensure_parent,
+    char **out_path,
+    char *out_root_hex,
+    size_t out_root_hex_len) {
+    if (!data_dir || !root || !out_path) {
+        return -1;
+    }
+    *out_path = NULL;
+
+    char local_hex[2u * LANTERN_ROOT_SIZE + 1u];
+    char *root_hex = out_root_hex ? out_root_hex : local_hex;
+    size_t root_hex_len = out_root_hex ? out_root_hex_len : sizeof(local_hex);
+    if (lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, root_hex, root_hex_len, 0) != 0) {
+        return -1;
+    }
+
+    char filename[2u * LANTERN_ROOT_SIZE + 5u];
+    const int wrote = snprintf(filename, sizeof(filename), "%s.ssz", root_hex);
+    if (wrote < 0 || (size_t)wrote >= sizeof(filename)) {
+        return -1;
+    }
+    return storage_dir_file_path(data_dir, kind, filename, ensure_parent, out_path);
+}
+
+static int storage_write_state_path(const char *path, const LanternState *state) {
+    if (!path || !state || state->config.num_validators == 0) {
+        return -1;
+    }
+
+    int rc = -1;
+    uint8_t *buffer = NULL;
+    const size_t encoded_size = state_encoded_size(state);
+    if (encoded_size == 0) {
+        goto cleanup;
+    }
+    buffer = malloc(encoded_size);
+    if (!buffer) {
+        goto cleanup;
+    }
+    size_t written = 0;
+    if (lantern_ssz_encode_state(state, buffer, encoded_size, &written) != SSZ_SUCCESS
+        || written != encoded_size) {
+        goto cleanup;
+    }
+    rc = write_atomic_file(path, buffer, written);
+
+cleanup:
+    free(buffer);
+    return rc;
+}
+
+static int storage_save_state_file(
+    const char *data_dir,
+    const char *filename,
+    const LanternState *state) {
+    if (!data_dir || !filename) {
+        return -1;
+    }
+
+    char *path = NULL;
+    int rc = join_path(data_dir, filename, &path);
+    if (rc == 0) {
+        rc = storage_write_state_path(path, state);
+    }
+    free_path(path);
+    return rc;
+}
+
+static int storage_load_state_file(
+    const char *data_dir,
+    const char *filename,
+    LanternState *state) {
+    if (!data_dir || !filename || !state) {
+        return -1;
+    }
+
+    int rc = -1;
+    char *path = NULL;
+    uint8_t *data = NULL;
+    size_t data_len = 0;
+    LanternState decoded;
+    lantern_state_init(&decoded);
+    bool decoded_owned = true;
+
+    if (join_path(data_dir, filename, &path) != 0) {
+        goto cleanup;
+    }
+    rc = read_file_buffer(path, &data, &data_len);
+    if (rc != 0) {
+        goto cleanup;
+    }
+    if (lantern_ssz_decode_state(&decoded, data, data_len) != SSZ_SUCCESS
+        || decoded.config.num_validators == 0) {
+        rc = -1;
+        goto cleanup;
+    }
+    lantern_state_reset(state);
+    *state = decoded;
+    decoded_owned = false;
+    rc = 0;
+
+cleanup:
+    free_path(path);
+    free(data);
+    if (decoded_owned) {
+        lantern_state_reset(&decoded);
+    }
+    return rc;
+}
+
+static int storage_load_root_bytes(
+    const char *data_dir,
+    enum storage_dir_kind kind,
+    const LanternRoot *root,
+    uint8_t **out_data,
+    size_t *out_len) {
+    if (!data_dir || !root || !out_data || !out_len) {
+        return -1;
+    }
+    *out_data = NULL;
+    *out_len = 0;
+
+    char *path = NULL;
+    uint8_t *data = NULL;
+    size_t len = 0;
+    int rc = storage_root_file_path(data_dir, kind, root, false, &path, NULL, 0);
+    if (rc != 0) {
+        goto cleanup;
+    }
+    rc = read_file_buffer(path, &data, &len);
+    if (rc != 0) {
+        rc = (rc > 0) ? 1 : -1;
+        goto cleanup;
+    }
+
+    *out_data = data;
+    *out_len = len;
+    data = NULL;
+
+cleanup:
+    free_path(path);
+    free(data);
+    return rc;
+}
+
+static int storage_store_index_record(
+    const char *data_dir,
+    const char *filename,
+    const void *record,
+    size_t record_len) {
+    if (!data_dir || !filename || !record || record_len == 0) {
+        return -1;
+    }
+
+    char *path = NULL;
+    int rc = storage_dir_file_path(data_dir, STORAGE_DIR_INDICES, filename, true, &path);
+    if (rc == 0) {
+        rc = write_atomic_file(path, (const uint8_t *)record, record_len);
+    }
+    free_path(path);
     return rc;
 }
 
@@ -541,64 +771,23 @@ int lantern_storage_prepare(const char *data_dir) {
         return -1;
     }
 
-    int rc = -1;
-    char *blocks_dir = NULL;
-    char *invalid_blocks_dir = NULL;
-    char *invalid_gossip_dir = NULL;
-    char *states_dir = NULL;
-    char *indices_dir = NULL;
-    char *slot_dir = NULL;
-
     if (ensure_directory(data_dir) != 0) {
-        goto cleanup;
+        return -1;
     }
-    if (build_blocks_dir(data_dir, &blocks_dir) != 0) {
-        goto cleanup;
+    const enum storage_dir_kind dirs[] = {
+        STORAGE_DIR_BLOCKS,
+        STORAGE_DIR_INVALID_BLOCKS,
+        STORAGE_DIR_INVALID_GOSSIP,
+        STORAGE_DIR_STATES,
+        STORAGE_DIR_INDICES,
+        STORAGE_DIR_SLOT_INDEX,
+    };
+    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i) {
+        if (ensure_storage_dir(data_dir, dirs[i], NULL) != 0) {
+            return -1;
+        }
     }
-    if (ensure_directory(blocks_dir) != 0) {
-        goto cleanup;
-    }
-    if (build_invalid_blocks_dir(data_dir, &invalid_blocks_dir) != 0) {
-        goto cleanup;
-    }
-    if (ensure_directory(invalid_blocks_dir) != 0) {
-        goto cleanup;
-    }
-    if (build_invalid_gossip_dir(data_dir, &invalid_gossip_dir) != 0) {
-        goto cleanup;
-    }
-    if (ensure_directory(invalid_gossip_dir) != 0) {
-        goto cleanup;
-    }
-    if (build_states_dir(data_dir, &states_dir) != 0) {
-        goto cleanup;
-    }
-    if (ensure_directory(states_dir) != 0) {
-        goto cleanup;
-    }
-    if (build_indices_dir(data_dir, &indices_dir) != 0) {
-        goto cleanup;
-    }
-    if (ensure_directory(indices_dir) != 0) {
-        goto cleanup;
-    }
-    if (build_slot_index_dir(data_dir, &slot_dir) != 0) {
-        goto cleanup;
-    }
-    if (ensure_directory(slot_dir) != 0) {
-        goto cleanup;
-    }
-
-    rc = 0;
-
-cleanup:
-    free_path(blocks_dir);
-    free_path(invalid_blocks_dir);
-    free_path(invalid_gossip_dir);
-    free_path(states_dir);
-    free_path(indices_dir);
-    free_path(slot_dir);
-    return rc;
+    return 0;
 }
 
 /**
@@ -610,40 +799,7 @@ cleanup:
  * @return -1 on invalid parameters, encoding failure, or filesystem errors.
  */
 int lantern_storage_save_state(const char *data_dir, const LanternState *state) {
-    if (!data_dir || !state || state->config.num_validators == 0) {
-        return -1;
-    }
-    int rc = -1;
-    uint8_t *buffer = NULL;
-    char *state_path = NULL;
-
-    const size_t encoded_size = state_encoded_size(state);
-    if (encoded_size == 0) {
-        goto cleanup;
-    }
-
-    buffer = malloc(encoded_size);
-    if (!buffer) {
-        goto cleanup;
-    }
-    size_t written = 0;
-    if (lantern_ssz_encode_state(state, buffer, encoded_size, &written) != SSZ_SUCCESS || written != encoded_size) {
-        goto cleanup;
-    }
-    if (join_path(data_dir, LANTERN_STORAGE_STATE_FILE, &state_path) != 0) {
-        goto cleanup;
-    }
-    rc = write_atomic_file(state_path, buffer, written);
-    if (rc != 0) {
-        goto cleanup;
-    }
-
-    rc = 0;
-
-cleanup:
-    free_path(state_path);
-    free(buffer);
-    return rc;
+    return storage_save_state_file(data_dir, LANTERN_STORAGE_STATE_FILE, state);
 }
 
 /**
@@ -658,48 +814,7 @@ cleanup:
  * @return -1 on invalid parameters or decode/validation errors.
  */
 int lantern_storage_load_state(const char *data_dir, LanternState *state) {
-    if (!data_dir || !state) {
-        return -1;
-    }
-
-    int rc = -1;
-    char *state_path = NULL;
-    uint8_t *data = NULL;
-    size_t data_len = 0;
-
-    LanternState decoded;
-    lantern_state_init(&decoded);
-    bool decoded_owned = true;
-
-    if (join_path(data_dir, LANTERN_STORAGE_STATE_FILE, &state_path) != 0) {
-        goto cleanup;
-    }
-    rc = read_file_buffer(state_path, &data, &data_len);
-    if (rc != 0) {
-        goto cleanup;
-    }
-    if (lantern_ssz_decode_state(&decoded, data, data_len) != SSZ_SUCCESS) {
-        rc = -1;
-        goto cleanup;
-    }
-    free(data);
-    data = NULL;
-    if (decoded.config.num_validators == 0) {
-        rc = -1;
-        goto cleanup;
-    }
-    lantern_state_reset(state);
-    *state = decoded;
-    decoded_owned = false;
-    rc = 0;
-
-cleanup:
-    free_path(state_path);
-    free(data);
-    if (decoded_owned) {
-        lantern_state_reset(&decoded);
-    }
-    return rc;
+    return storage_load_state_file(data_dir, LANTERN_STORAGE_STATE_FILE, state);
 }
 
 /**
@@ -711,40 +826,7 @@ cleanup:
  * @return -1 on invalid parameters, encoding failure, or filesystem errors.
  */
 int lantern_storage_save_finalized_state(const char *data_dir, const LanternState *state) {
-    if (!data_dir || !state || state->config.num_validators == 0) {
-        return -1;
-    }
-    int rc = -1;
-    uint8_t *buffer = NULL;
-    char *state_path = NULL;
-
-    const size_t encoded_size = state_encoded_size(state);
-    if (encoded_size == 0) {
-        goto cleanup;
-    }
-
-    buffer = malloc(encoded_size);
-    if (!buffer) {
-        goto cleanup;
-    }
-    size_t written = 0;
-    if (lantern_ssz_encode_state(state, buffer, encoded_size, &written) != SSZ_SUCCESS || written != encoded_size) {
-        goto cleanup;
-    }
-    if (join_path(data_dir, LANTERN_STORAGE_FINALIZED_STATE_FILE, &state_path) != 0) {
-        goto cleanup;
-    }
-    rc = write_atomic_file(state_path, buffer, written);
-    if (rc != 0) {
-        goto cleanup;
-    }
-
-    rc = 0;
-
-cleanup:
-    free_path(state_path);
-    free(buffer);
-    return rc;
+    return storage_save_state_file(data_dir, LANTERN_STORAGE_FINALIZED_STATE_FILE, state);
 }
 
 /**
@@ -759,48 +841,7 @@ cleanup:
  * @return -1 on invalid parameters or decode/validation errors.
  */
 int lantern_storage_load_finalized_state(const char *data_dir, LanternState *state) {
-    if (!data_dir || !state) {
-        return -1;
-    }
-
-    int rc = -1;
-    char *state_path = NULL;
-    uint8_t *data = NULL;
-    size_t data_len = 0;
-
-    LanternState decoded;
-    lantern_state_init(&decoded);
-    bool decoded_owned = true;
-
-    if (join_path(data_dir, LANTERN_STORAGE_FINALIZED_STATE_FILE, &state_path) != 0) {
-        goto cleanup;
-    }
-    rc = read_file_buffer(state_path, &data, &data_len);
-    if (rc != 0) {
-        goto cleanup;
-    }
-    if (lantern_ssz_decode_state(&decoded, data, data_len) != SSZ_SUCCESS) {
-        rc = -1;
-        goto cleanup;
-    }
-    free(data);
-    data = NULL;
-    if (decoded.config.num_validators == 0) {
-        rc = -1;
-        goto cleanup;
-    }
-    lantern_state_reset(state);
-    *state = decoded;
-    decoded_owned = false;
-    rc = 0;
-
-cleanup:
-    free_path(state_path);
-    free(data);
-    if (decoded_owned) {
-        lantern_state_reset(&decoded);
-    }
-    return rc;
+    return storage_load_state_file(data_dir, LANTERN_STORAGE_FINALIZED_STATE_FILE, state);
 }
 
 /**
@@ -1052,16 +1093,8 @@ static int storage_store_block_internal(
     }
 
     int rc = -1;
-    char *blocks_dir = NULL;
     char *block_path = NULL;
     uint8_t *buffer = NULL;
-
-    if (build_blocks_dir(data_dir, &blocks_dir) != 0) {
-        goto cleanup;
-    }
-    if (ensure_directory(blocks_dir) != 0) {
-        goto cleanup;
-    }
 
     LanternRoot root = {0};
     if (root_override) {
@@ -1069,17 +1102,15 @@ static int storage_store_block_internal(
     } else if (lantern_hash_tree_root_block(&block->block, &root) != SSZ_SUCCESS) {
         goto cleanup;
     }
-    char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
-    if (lantern_bytes_to_hex(root.bytes, LANTERN_ROOT_SIZE, root_hex, sizeof(root_hex), 0) != 0) {
-        goto cleanup;
-    }
-    char filename[sizeof(root_hex) + 4];
-    const int written = snprintf(filename, sizeof(filename), "%s.ssz", root_hex);
-    if (written < 0 || (size_t)written >= sizeof(filename)) {
-        goto cleanup;
-    }
-
-    if (join_path(blocks_dir, filename, &block_path) != 0) {
+    if (storage_root_file_path(
+            data_dir,
+            STORAGE_DIR_BLOCKS,
+            &root,
+            true,
+            &block_path,
+            NULL,
+            0)
+        != 0) {
         goto cleanup;
     }
 
@@ -1125,7 +1156,6 @@ static int storage_store_block_internal(
 cleanup:
     free(buffer);
     free_path(block_path);
-    free_path(blocks_dir);
     return rc;
 }
 
@@ -1164,26 +1194,17 @@ int lantern_storage_store_invalid_block_bytes_for_root(
     }
 
     int rc = -1;
-    char *invalid_blocks_dir = NULL;
     char *block_path = NULL;
 
-    if (build_invalid_blocks_dir(data_dir, &invalid_blocks_dir) != 0) {
-        goto cleanup;
-    }
-    if (ensure_directory(invalid_blocks_dir) != 0) {
-        goto cleanup;
-    }
-
-    char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
-    if (lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, root_hex, sizeof(root_hex), 0) != 0) {
-        goto cleanup;
-    }
-    char filename[sizeof(root_hex) + 4];
-    const int wrote = snprintf(filename, sizeof(filename), "%s.ssz", root_hex);
-    if (wrote < 0 || (size_t)wrote >= sizeof(filename)) {
-        goto cleanup;
-    }
-    if (join_path(invalid_blocks_dir, filename, &block_path) != 0) {
+    if (storage_root_file_path(
+            data_dir,
+            STORAGE_DIR_INVALID_BLOCKS,
+            root,
+            true,
+            &block_path,
+            NULL,
+            0)
+        != 0) {
         goto cleanup;
     }
 
@@ -1191,7 +1212,6 @@ int lantern_storage_store_invalid_block_bytes_for_root(
 
 cleanup:
     free_path(block_path);
-    free_path(invalid_blocks_dir);
     return rc;
 }
 
@@ -1205,18 +1225,11 @@ int lantern_storage_store_invalid_gossip_payload(
     }
 
     int rc = -1;
-    char *invalid_gossip_dir = NULL;
     char *payload_path = NULL;
     char timestamp[32];
     char safe_payload_type[64];
     char filename[128];
 
-    if (build_invalid_gossip_dir(data_dir, &invalid_gossip_dir) != 0) {
-        goto cleanup;
-    }
-    if (ensure_directory(invalid_gossip_dir) != 0) {
-        goto cleanup;
-    }
     if (format_utc_timestamp(timestamp, sizeof(timestamp)) != 0) {
         goto cleanup;
     }
@@ -1234,7 +1247,7 @@ int lantern_storage_store_invalid_gossip_payload(
     if (wrote < 0 || (size_t)wrote >= sizeof(filename)) {
         goto cleanup;
     }
-    if (join_path(invalid_gossip_dir, filename, &payload_path) != 0) {
+    if (storage_dir_file_path(data_dir, STORAGE_DIR_INVALID_GOSSIP, filename, true, &payload_path) != 0) {
         goto cleanup;
     }
 
@@ -1242,7 +1255,6 @@ int lantern_storage_store_invalid_gossip_payload(
 
 cleanup:
     free_path(payload_path);
-    free_path(invalid_gossip_dir);
     return rc;
 }
 
@@ -1263,51 +1275,19 @@ int lantern_storage_store_state_for_root(
         return -1;
     }
 
-    int rc = -1;
-    uint8_t *buffer = NULL;
-    char *states_dir = NULL;
     char *state_path = NULL;
-
-    const size_t encoded_size = state_encoded_size(state);
-    if (encoded_size == 0) {
-        goto cleanup;
+    int rc = storage_root_file_path(
+        data_dir,
+        STORAGE_DIR_STATES,
+        root,
+        true,
+        &state_path,
+        NULL,
+        0);
+    if (rc == 0) {
+        rc = storage_write_state_path(state_path, state);
     }
-    buffer = malloc(encoded_size);
-    if (!buffer) {
-        goto cleanup;
-    }
-    size_t written = 0;
-    if (lantern_ssz_encode_state(state, buffer, encoded_size, &written) != SSZ_SUCCESS || written != encoded_size) {
-        goto cleanup;
-    }
-    if (build_states_dir(data_dir, &states_dir) != 0) {
-        goto cleanup;
-    }
-    if (ensure_directory(states_dir) != 0) {
-        goto cleanup;
-    }
-    char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
-    if (lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, root_hex, sizeof(root_hex), 0) != 0) {
-        goto cleanup;
-    }
-    char filename[sizeof(root_hex) + 4];
-    const int name_written = snprintf(filename, sizeof(filename), "%s.ssz", root_hex);
-    if (name_written < 0 || (size_t)name_written >= sizeof(filename)) {
-        goto cleanup;
-    }
-    if (join_path(states_dir, filename, &state_path) != 0) {
-        goto cleanup;
-    }
-    rc = write_atomic_file(state_path, buffer, written);
-    if (rc != 0) {
-        goto cleanup;
-    }
-    rc = 0;
-
-cleanup:
     free_path(state_path);
-    free_path(states_dir);
-    free(buffer);
     return rc;
 }
 
@@ -1327,55 +1307,7 @@ int lantern_storage_load_state_bytes_for_root(
     const LanternRoot *root,
     uint8_t **out_data,
     size_t *out_len) {
-    if (!data_dir || !root || !out_data || !out_len) {
-        return -1;
-    }
-    *out_data = NULL;
-    *out_len = 0;
-
-    int rc = -1;
-    char *states_dir = NULL;
-    char *state_path = NULL;
-    uint8_t *data = NULL;
-    size_t len = 0;
-
-    if (build_states_dir(data_dir, &states_dir) != 0) {
-        goto cleanup;
-    }
-
-    char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
-    if (lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, root_hex, sizeof(root_hex), 0) != 0) {
-        goto cleanup;
-    }
-    char filename[sizeof(root_hex) + 4];
-    const int name_written = snprintf(filename, sizeof(filename), "%s.ssz", root_hex);
-    if (name_written < 0 || (size_t)name_written >= sizeof(filename)) {
-        goto cleanup;
-    }
-    if (join_path(states_dir, filename, &state_path) != 0) {
-        goto cleanup;
-    }
-
-    rc = read_file_buffer(state_path, &data, &len);
-    if (rc != 0) {
-        if (data) {
-            free(data);
-            data = NULL;
-        }
-        rc = (rc > 0) ? 1 : -1;
-        goto cleanup;
-    }
-
-    *out_data = data;
-    *out_len = len;
-    data = NULL;
-    rc = 0;
-
-cleanup:
-    free_path(state_path);
-    free_path(states_dir);
-    free(data);
-    return rc;
+    return storage_load_root_bytes(data_dir, STORAGE_DIR_STATES, root, out_data, out_len);
 }
 
 /**
@@ -1394,53 +1326,7 @@ int lantern_storage_load_block_bytes_for_root(
     const LanternRoot *root,
     uint8_t **out_data,
     size_t *out_len) {
-    if (!data_dir || !root || !out_data || !out_len) {
-        return -1;
-    }
-    *out_data = NULL;
-    *out_len = 0;
-
-    int rc = -1;
-    char *blocks_dir = NULL;
-    char *block_path = NULL;
-    uint8_t *data = NULL;
-    size_t len = 0;
-
-    if (build_blocks_dir(data_dir, &blocks_dir) != 0) {
-        goto cleanup;
-    }
-
-    char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
-    if (lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, root_hex, sizeof(root_hex), 0) != 0) {
-        goto cleanup;
-    }
-    char filename[sizeof(root_hex) + 4];
-    const int name_written = snprintf(filename, sizeof(filename), "%s.ssz", root_hex);
-    if (name_written < 0 || (size_t)name_written >= sizeof(filename)) {
-        goto cleanup;
-    }
-    if (join_path(blocks_dir, filename, &block_path) != 0) {
-        goto cleanup;
-    }
-
-    rc = read_file_buffer(block_path, &data, &len);
-    if (rc != 0) {
-        free(data);
-        data = NULL;
-        rc = (rc > 0) ? 1 : -1;
-        goto cleanup;
-    }
-
-    *out_data = data;
-    *out_len = len;
-    data = NULL;
-    rc = 0;
-
-cleanup:
-    free_path(block_path);
-    free_path(blocks_dir);
-    free(data);
-    return rc;
+    return storage_load_root_bytes(data_dir, STORAGE_DIR_BLOCKS, root, out_data, out_len);
 }
 
 static int prune_block_files_before_slot(
@@ -1457,7 +1343,7 @@ static int prune_block_files_before_slot(
     char *blocks_dir = NULL;
     DIR *dir = NULL;
 
-    if (build_blocks_dir(data_dir, &blocks_dir) != 0) {
+    if (storage_dir_path(data_dir, STORAGE_DIR_BLOCKS, &blocks_dir) != 0) {
         goto cleanup;
     }
     dir = opendir(blocks_dir);
@@ -1558,7 +1444,7 @@ static int prune_state_files_before_slot(
     char *states_dir = NULL;
     DIR *dir = NULL;
 
-    if (build_states_dir(data_dir, &states_dir) != 0) {
+    if (storage_dir_path(data_dir, STORAGE_DIR_STATES, &states_dir) != 0) {
         goto cleanup;
     }
     dir = opendir(states_dir);
@@ -1645,7 +1531,7 @@ static int prune_slot_indices_before_slot(
     char *slot_dir = NULL;
     DIR *dir = NULL;
 
-    if (build_slot_index_dir(data_dir, &slot_dir) != 0) {
+    if (storage_dir_path(data_dir, STORAGE_DIR_SLOT_INDEX, &slot_dir) != 0) {
         goto cleanup;
     }
     dir = opendir(slot_dir);
@@ -1766,22 +1652,14 @@ int lantern_storage_store_slot_root(
     }
 
     int rc = -1;
-    char *slot_dir = NULL;
     char *slot_path = NULL;
-
-    if (build_slot_index_dir(data_dir, &slot_dir) != 0) {
-        goto cleanup;
-    }
-    if (ensure_directory(slot_dir) != 0) {
-        goto cleanup;
-    }
 
     char filename[64];
     const int written = snprintf(filename, sizeof(filename), "%" PRIu64 ".root", slot);
     if (written < 0 || (size_t)written >= sizeof(filename)) {
         goto cleanup;
     }
-    if (join_path(slot_dir, filename, &slot_path) != 0) {
+    if (storage_dir_file_path(data_dir, STORAGE_DIR_SLOT_INDEX, filename, true, &slot_path) != 0) {
         goto cleanup;
     }
 
@@ -1789,7 +1667,6 @@ int lantern_storage_store_slot_root(
 
 cleanup:
     free_path(slot_path);
-    free_path(slot_dir);
     return rc;
 }
 
@@ -1812,30 +1689,15 @@ int lantern_storage_store_head_root(
         return -1;
     }
 
-    int rc = -1;
-    char *indices_dir = NULL;
-    char *head_path = NULL;
-
-    if (build_indices_dir(data_dir, &indices_dir) != 0) {
-        goto cleanup;
-    }
-    if (ensure_directory(indices_dir) != 0) {
-        goto cleanup;
-    }
-    if (join_path(indices_dir, LANTERN_STORAGE_HEAD_FILE, &head_path) != 0) {
-        goto cleanup;
-    }
-
     const struct lantern_storage_head_record record = {
         .slot = slot,
         .root = *root,
     };
-    rc = write_atomic_file(head_path, (const uint8_t *)&record, sizeof(record));
-
-cleanup:
-    free_path(head_path);
-    free_path(indices_dir);
-    return rc;
+    return storage_store_index_record(
+        data_dir,
+        LANTERN_STORAGE_HEAD_FILE,
+        &record,
+        sizeof(record));
 }
 
 /**
@@ -1857,33 +1719,15 @@ int lantern_storage_store_checkpoints(
         return -1;
     }
 
-    int rc = -1;
-    char *indices_dir = NULL;
-    char *checkpoint_path = NULL;
-
-    if (build_indices_dir(data_dir, &indices_dir) != 0) {
-        goto cleanup;
-    }
-    if (ensure_directory(indices_dir) != 0) {
-        goto cleanup;
-    }
-    if (join_path(indices_dir, LANTERN_STORAGE_CHECKPOINTS_FILE, &checkpoint_path) != 0) {
-        goto cleanup;
-    }
-
     const struct lantern_storage_checkpoint_record record = {
         .justified = *justified,
         .finalized = *finalized,
     };
-    rc = write_atomic_file(
-        checkpoint_path,
-        (const uint8_t *)&record,
+    return storage_store_index_record(
+        data_dir,
+        LANTERN_STORAGE_CHECKPOINTS_FILE,
+        &record,
         sizeof(record));
-
-cleanup:
-    free_path(checkpoint_path);
-    free_path(indices_dir);
-    return rc;
 }
 
 /**
@@ -1912,25 +1756,19 @@ int lantern_storage_collect_blocks(
     }
 
     int rc = -1;
-    char *blocks_dir = NULL;
-
-    if (build_blocks_dir(data_dir, &blocks_dir) != 0) {
-        goto cleanup;
-    }
-
     const struct lantern_log_metadata meta = {0};
     for (size_t i = 0; i < root_count; ++i) {
         char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
-        if (lantern_bytes_to_hex(roots[i].bytes, LANTERN_ROOT_SIZE, root_hex, sizeof(root_hex), 0) != 0) {
-            goto cleanup;
-        }
-        char filename[sizeof(root_hex) + 4];
-        const int wrote = snprintf(filename, sizeof(filename), "%s.ssz", root_hex);
-        if (wrote < 0 || (size_t)wrote >= sizeof(filename)) {
-            goto cleanup;
-        }
         char *block_path = NULL;
-        if (join_path(blocks_dir, filename, &block_path) != 0) {
+        if (storage_root_file_path(
+                data_dir,
+                STORAGE_DIR_BLOCKS,
+                &roots[i],
+                false,
+                &block_path,
+                root_hex,
+                sizeof(root_hex))
+            != 0) {
             goto cleanup;
         }
         lantern_log_trace(
@@ -1997,7 +1835,6 @@ int lantern_storage_collect_blocks(
     rc = 0;
 
 cleanup:
-    free_path(blocks_dir);
     return rc;
 }
 
@@ -2029,7 +1866,7 @@ int lantern_storage_iterate_blocks(
     char *blocks_dir = NULL;
     DIR *dir = NULL;
 
-    if (build_blocks_dir(data_dir, &blocks_dir) != 0) {
+    if (storage_dir_path(data_dir, STORAGE_DIR_BLOCKS, &blocks_dir) != 0) {
         goto cleanup;
     }
     dir = opendir(blocks_dir);
