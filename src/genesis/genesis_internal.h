@@ -12,6 +12,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "internal/yaml_parser.h"
 #include "lantern/genesis/genesis.h"
 
 /**
@@ -30,6 +31,13 @@ enum
 
 void genesis_free_validator_registry(struct lantern_validator_registry *registry);
 void genesis_free_validator_config(struct lantern_validator_config *config);
+
+uint64_t genesis_parse_u64(const char *value, int *ok);
+char *genesis_dup_trimmed(const char *value);
+const char *genesis_yaml_object_value(const LanternYamlObject *object, const char *key);
+int genesis_decode_validator_pubkey_hex(
+    const char *hex,
+    uint8_t out[LANTERN_VALIDATOR_PUBKEY_SIZE]);
 
 int genesis_parse_chain_config(const char *path, struct lantern_chain_config *config);
 int genesis_parse_genesis_validator_pubkeys(

@@ -117,6 +117,38 @@ static const size_t STATE_FIELDS[] = {
 };
 static const ssz_container_schema_t STATE_SCHEMA = SSZ_CONTAINER_SCHEMA_FROM_ARRAY(STATE_FIELDS);
 
+#define DEFINE_STATIC_CONTAINER_CODEC(ENCODE_NAME, DECODE_NAME, TYPE, CTX_TYPE, SCHEMA, WRITE_FN, READ_FN) \
+static ssz_error_t ENCODE_NAME( \
+    const TYPE *value, \
+    uint8_t *out, \
+    size_t out_len, \
+    size_t *written) { \
+    struct CTX_TYPE ctx = {.write = value}; \
+    ssz_member_codec_t codec = {.ctx = &ctx, .write = WRITE_FN}; \
+    return ssz_serialize_container(&SCHEMA, &codec, out, out_len, written); \
+} \
+static ssz_error_t DECODE_NAME(TYPE *value, const uint8_t *data, size_t data_len) { \
+    struct CTX_TYPE ctx = {.read = value}; \
+    ssz_member_codec_t codec = {.ctx = &ctx, .read = READ_FN}; \
+    return ssz_deserialize_container(data, data_len, &SCHEMA, &codec); \
+}
+
+#define DEFINE_PUBLIC_CONTAINER_CODEC(ENCODE_NAME, DECODE_NAME, TYPE, CTX_TYPE, SCHEMA, WRITE_FN, READ_FN) \
+ssz_error_t ENCODE_NAME( \
+    const TYPE *value, \
+    uint8_t *out, \
+    size_t out_len, \
+    size_t *written) { \
+    struct CTX_TYPE ctx = {.write = value}; \
+    ssz_member_codec_t codec = {.ctx = &ctx, .write = WRITE_FN}; \
+    return ssz_serialize_container(&SCHEMA, &codec, out, out_len, written); \
+} \
+ssz_error_t DECODE_NAME(TYPE *value, const uint8_t *data, size_t data_len) { \
+    struct CTX_TYPE ctx = {.read = value}; \
+    ssz_member_codec_t codec = {.ctx = &ctx, .read = READ_FN}; \
+    return ssz_deserialize_container(data, data_len, &SCHEMA, &codec); \
+}
+
 static ssz_error_t lantern_rc_to_ssz(int rc) {
     return rc == 0 ? SSZ_SUCCESS : SSZ_ERR_INVALID_ARGUMENT;
 }
@@ -393,30 +425,14 @@ static ssz_error_t multi_message_aggregate_read(
     return SSZ_SUCCESS;
 }
 
-static ssz_error_t encode_multi_message_aggregate(
-    const LanternByteList *aggregate,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    if (!aggregate) {
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-    struct multi_message_aggregate_codec_ctx ctx = {.write = aggregate};
-    ssz_member_codec_t codec = {.ctx = &ctx, .write = multi_message_aggregate_write};
-    return ssz_serialize_container(&MULTI_MESSAGE_AGGREGATE_SCHEMA, &codec, out, out_len, written);
-}
-
-static ssz_error_t decode_multi_message_aggregate(
-    LanternByteList *aggregate,
-    const uint8_t *data,
-    size_t data_len) {
-    if (!aggregate) {
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-    struct multi_message_aggregate_codec_ctx ctx = {.read = aggregate};
-    ssz_member_codec_t codec = {.ctx = &ctx, .read = multi_message_aggregate_read};
-    return ssz_deserialize_container(data, data_len, &MULTI_MESSAGE_AGGREGATE_SCHEMA, &codec);
-}
+DEFINE_STATIC_CONTAINER_CODEC(
+    encode_multi_message_aggregate,
+    decode_multi_message_aggregate,
+    LanternByteList,
+    multi_message_aggregate_codec_ctx,
+    MULTI_MESSAGE_AGGREGATE_SCHEMA,
+    multi_message_aggregate_write,
+    multi_message_aggregate_read)
 
 static ssz_error_t encode_root_list(
     const struct lantern_root_list *list,
@@ -490,21 +506,14 @@ static ssz_error_t config_read(void *ctx, uint64_t member_id, const uint8_t *dat
     return read_u64(data, data_len, &config_ctx->read->genesis_time);
 }
 
-ssz_error_t lantern_ssz_encode_config(
-    const LanternConfig *config,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    struct config_codec_ctx ctx = {.write = config};
-    ssz_member_codec_t codec = {.ctx = &ctx, .write = config_write};
-    return ssz_serialize_container(&CONFIG_SCHEMA, &codec, out, out_len, written);
-}
-
-ssz_error_t lantern_ssz_decode_config(LanternConfig *config, const uint8_t *data, size_t data_len) {
-    struct config_codec_ctx ctx = {.read = config};
-    ssz_member_codec_t codec = {.ctx = &ctx, .read = config_read};
-    return ssz_deserialize_container(data, data_len, &CONFIG_SCHEMA, &codec);
-}
+DEFINE_PUBLIC_CONTAINER_CODEC(
+    lantern_ssz_encode_config,
+    lantern_ssz_decode_config,
+    LanternConfig,
+    config_codec_ctx,
+    CONFIG_SCHEMA,
+    config_write,
+    config_read)
 
 struct checkpoint_codec_ctx {
     const LanternCheckpoint *write;
@@ -546,24 +555,14 @@ static ssz_error_t checkpoint_read(void *ctx, uint64_t member_id, const uint8_t 
     }
 }
 
-ssz_error_t lantern_ssz_encode_checkpoint(
-    const LanternCheckpoint *checkpoint,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    struct checkpoint_codec_ctx ctx = {.write = checkpoint};
-    ssz_member_codec_t codec = {.ctx = &ctx, .write = checkpoint_write};
-    return ssz_serialize_container(&CHECKPOINT_SCHEMA, &codec, out, out_len, written);
-}
-
-ssz_error_t lantern_ssz_decode_checkpoint(
-    LanternCheckpoint *checkpoint,
-    const uint8_t *data,
-    size_t data_len) {
-    struct checkpoint_codec_ctx ctx = {.read = checkpoint};
-    ssz_member_codec_t codec = {.ctx = &ctx, .read = checkpoint_read};
-    return ssz_deserialize_container(data, data_len, &CHECKPOINT_SCHEMA, &codec);
-}
+DEFINE_PUBLIC_CONTAINER_CODEC(
+    lantern_ssz_encode_checkpoint,
+    lantern_ssz_decode_checkpoint,
+    LanternCheckpoint,
+    checkpoint_codec_ctx,
+    CHECKPOINT_SCHEMA,
+    checkpoint_write,
+    checkpoint_read)
 
 struct attestation_data_codec_ctx {
     const LanternAttestationData *write;
@@ -613,24 +612,14 @@ static ssz_error_t attestation_data_read(void *ctx, uint64_t member_id, const ui
     }
 }
 
-static ssz_error_t encode_attestation_data(
-    const LanternAttestationData *data,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    struct attestation_data_codec_ctx ctx = {.write = data};
-    ssz_member_codec_t codec = {.ctx = &ctx, .write = attestation_data_write};
-    return ssz_serialize_container(&ATTESTATION_DATA_SCHEMA, &codec, out, out_len, written);
-}
-
-static ssz_error_t decode_attestation_data(
-    LanternAttestationData *data,
-    const uint8_t *raw,
-    size_t raw_len) {
-    struct attestation_data_codec_ctx ctx = {.read = data};
-    ssz_member_codec_t codec = {.ctx = &ctx, .read = attestation_data_read};
-    return ssz_deserialize_container(raw, raw_len, &ATTESTATION_DATA_SCHEMA, &codec);
-}
+DEFINE_STATIC_CONTAINER_CODEC(
+    encode_attestation_data,
+    decode_attestation_data,
+    LanternAttestationData,
+    attestation_data_codec_ctx,
+    ATTESTATION_DATA_SCHEMA,
+    attestation_data_write,
+    attestation_data_read)
 
 ssz_error_t lantern_ssz_encode_attestation_data(
     const LanternAttestationData *data,
@@ -687,21 +676,14 @@ static ssz_error_t vote_read(void *ctx, uint64_t member_id, const uint8_t *data,
     }
 }
 
-static ssz_error_t encode_vote_internal(
-    const LanternVote *vote,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    struct vote_codec_ctx ctx = {.write = vote};
-    ssz_member_codec_t codec = {.ctx = &ctx, .write = vote_write};
-    return ssz_serialize_container(&VOTE_SCHEMA, &codec, out, out_len, written);
-}
-
-static ssz_error_t decode_vote_internal(LanternVote *vote, const uint8_t *data, size_t data_len) {
-    struct vote_codec_ctx ctx = {.read = vote};
-    ssz_member_codec_t codec = {.ctx = &ctx, .read = vote_read};
-    return ssz_deserialize_container(data, data_len, &VOTE_SCHEMA, &codec);
-}
+DEFINE_STATIC_CONTAINER_CODEC(
+    encode_vote_internal,
+    decode_vote_internal,
+    LanternVote,
+    vote_codec_ctx,
+    VOTE_SCHEMA,
+    vote_write,
+    vote_read)
 
 ssz_error_t lantern_ssz_encode_vote(
     const LanternVote *vote,
@@ -755,24 +737,14 @@ static ssz_error_t signed_vote_read(void *ctx, uint64_t member_id, const uint8_t
     }
 }
 
-ssz_error_t lantern_ssz_encode_signed_vote(
-    const LanternSignedVote *vote,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    struct signed_vote_codec_ctx ctx = {.write = vote};
-    ssz_member_codec_t codec = {.ctx = &ctx, .write = signed_vote_write};
-    return ssz_serialize_container(&SIGNED_VOTE_SCHEMA, &codec, out, out_len, written);
-}
-
-ssz_error_t lantern_ssz_decode_signed_vote(
-    LanternSignedVote *vote,
-    const uint8_t *data,
-    size_t data_len) {
-    struct signed_vote_codec_ctx ctx = {.read = vote};
-    ssz_member_codec_t codec = {.ctx = &ctx, .read = signed_vote_read};
-    return ssz_deserialize_container(data, data_len, &SIGNED_VOTE_SCHEMA, &codec);
-}
+DEFINE_PUBLIC_CONTAINER_CODEC(
+    lantern_ssz_encode_signed_vote,
+    lantern_ssz_decode_signed_vote,
+    LanternSignedVote,
+    signed_vote_codec_ctx,
+    SIGNED_VOTE_SCHEMA,
+    signed_vote_write,
+    signed_vote_read)
 
 struct validator_codec_ctx {
     const LanternValidator *write;
@@ -818,24 +790,14 @@ static ssz_error_t validator_read(void *ctx, uint64_t member_id, const uint8_t *
     }
 }
 
-ssz_error_t lantern_ssz_encode_validator(
-    const LanternValidator *validator,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    struct validator_codec_ctx ctx = {.write = validator};
-    ssz_member_codec_t codec = {.ctx = &ctx, .write = validator_write};
-    return ssz_serialize_container(&VALIDATOR_SCHEMA, &codec, out, out_len, written);
-}
-
-ssz_error_t lantern_ssz_decode_validator(
-    LanternValidator *validator,
-    const uint8_t *data,
-    size_t data_len) {
-    struct validator_codec_ctx ctx = {.read = validator};
-    ssz_member_codec_t codec = {.ctx = &ctx, .read = validator_read};
-    return ssz_deserialize_container(data, data_len, &VALIDATOR_SCHEMA, &codec);
-}
+DEFINE_PUBLIC_CONTAINER_CODEC(
+    lantern_ssz_encode_validator,
+    lantern_ssz_decode_validator,
+    LanternValidator,
+    validator_codec_ctx,
+    VALIDATOR_SCHEMA,
+    validator_write,
+    validator_read)
 
 static ssz_error_t encode_validators_list(
     const LanternValidator *validators,
@@ -994,24 +956,14 @@ static ssz_error_t aggregated_attestation_read(void *ctx, uint64_t member_id, co
     }
 }
 
-static ssz_error_t encode_aggregated_attestation(
-    const LanternAggregatedAttestation *attestation,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    struct aggregated_attestation_codec_ctx ctx = {.write = attestation};
-    ssz_member_codec_t codec = {.ctx = &ctx, .write = aggregated_attestation_write};
-    return ssz_serialize_container(&AGGREGATED_ATTESTATION_SCHEMA, &codec, out, out_len, written);
-}
-
-static ssz_error_t decode_aggregated_attestation(
-    LanternAggregatedAttestation *attestation,
-    const uint8_t *data,
-    size_t data_len) {
-    struct aggregated_attestation_codec_ctx ctx = {.read = attestation};
-    ssz_member_codec_t codec = {.ctx = &ctx, .read = aggregated_attestation_read};
-    return ssz_deserialize_container(data, data_len, &AGGREGATED_ATTESTATION_SCHEMA, &codec);
-}
+DEFINE_STATIC_CONTAINER_CODEC(
+    encode_aggregated_attestation,
+    decode_aggregated_attestation,
+    LanternAggregatedAttestation,
+    aggregated_attestation_codec_ctx,
+    AGGREGATED_ATTESTATION_SCHEMA,
+    aggregated_attestation_write,
+    aggregated_attestation_read)
 
 struct aggregated_attestations_codec_ctx {
     const LanternAggregatedAttestations *write;
@@ -1145,24 +1097,14 @@ static ssz_error_t signature_proof_read(void *ctx, uint64_t member_id, const uin
     }
 }
 
-static ssz_error_t encode_aggregated_signature_proof(
-    const LanternAggregatedSignatureProof *proof,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    struct signature_proof_codec_ctx ctx = {.write = proof};
-    ssz_member_codec_t codec = {.ctx = &ctx, .write = signature_proof_write};
-    return ssz_serialize_container(&AGGREGATED_SIGNATURE_PROOF_SCHEMA, &codec, out, out_len, written);
-}
-
-static ssz_error_t decode_aggregated_signature_proof(
-    LanternAggregatedSignatureProof *proof,
-    const uint8_t *data,
-    size_t data_len) {
-    struct signature_proof_codec_ctx ctx = {.read = proof};
-    ssz_member_codec_t codec = {.ctx = &ctx, .read = signature_proof_read};
-    return ssz_deserialize_container(data, data_len, &AGGREGATED_SIGNATURE_PROOF_SCHEMA, &codec);
-}
+DEFINE_STATIC_CONTAINER_CODEC(
+    encode_aggregated_signature_proof,
+    decode_aggregated_signature_proof,
+    LanternAggregatedSignatureProof,
+    signature_proof_codec_ctx,
+    AGGREGATED_SIGNATURE_PROOF_SCHEMA,
+    signature_proof_write,
+    signature_proof_read)
 
 struct signed_aggregated_attestation_codec_ctx {
     const LanternSignedAggregatedAttestation *write;
@@ -1208,24 +1150,14 @@ static ssz_error_t signed_aggregated_attestation_read(
     }
 }
 
-ssz_error_t lantern_ssz_encode_signed_aggregated_attestation(
-    const LanternSignedAggregatedAttestation *attestation,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    struct signed_aggregated_attestation_codec_ctx ctx = {.write = attestation};
-    ssz_member_codec_t codec = {.ctx = &ctx, .write = signed_aggregated_attestation_write};
-    return ssz_serialize_container(&SIGNED_AGGREGATED_ATTESTATION_SCHEMA, &codec, out, out_len, written);
-}
-
-ssz_error_t lantern_ssz_decode_signed_aggregated_attestation(
-    LanternSignedAggregatedAttestation *attestation,
-    const uint8_t *data,
-    size_t data_len) {
-    struct signed_aggregated_attestation_codec_ctx ctx = {.read = attestation};
-    ssz_member_codec_t codec = {.ctx = &ctx, .read = signed_aggregated_attestation_read};
-    return ssz_deserialize_container(data, data_len, &SIGNED_AGGREGATED_ATTESTATION_SCHEMA, &codec);
-}
+DEFINE_PUBLIC_CONTAINER_CODEC(
+    lantern_ssz_encode_signed_aggregated_attestation,
+    lantern_ssz_decode_signed_aggregated_attestation,
+    LanternSignedAggregatedAttestation,
+    signed_aggregated_attestation_codec_ctx,
+    SIGNED_AGGREGATED_ATTESTATION_SCHEMA,
+    signed_aggregated_attestation_write,
+    signed_aggregated_attestation_read)
 
 ssz_error_t lantern_ssz_encode_aggregated_attestation(
     const LanternAggregatedAttestation *attestation,
@@ -1324,24 +1256,14 @@ static ssz_error_t block_header_read(void *ctx, uint64_t member_id, const uint8_
     }
 }
 
-ssz_error_t lantern_ssz_encode_block_header(
-    const LanternBlockHeader *header,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    struct block_header_codec_ctx ctx = {.write = header};
-    ssz_member_codec_t codec = {.ctx = &ctx, .write = block_header_write};
-    return ssz_serialize_container(&BLOCK_HEADER_SCHEMA, &codec, out, out_len, written);
-}
-
-ssz_error_t lantern_ssz_decode_block_header(
-    LanternBlockHeader *header,
-    const uint8_t *data,
-    size_t data_len) {
-    struct block_header_codec_ctx ctx = {.read = header};
-    ssz_member_codec_t codec = {.ctx = &ctx, .read = block_header_read};
-    return ssz_deserialize_container(data, data_len, &BLOCK_HEADER_SCHEMA, &codec);
-}
+DEFINE_PUBLIC_CONTAINER_CODEC(
+    lantern_ssz_encode_block_header,
+    lantern_ssz_decode_block_header,
+    LanternBlockHeader,
+    block_header_codec_ctx,
+    BLOCK_HEADER_SCHEMA,
+    block_header_write,
+    block_header_read)
 
 struct block_body_codec_ctx {
     const LanternBlockBody *write;
@@ -1369,24 +1291,14 @@ static ssz_error_t block_body_read(void *ctx, uint64_t member_id, const uint8_t 
     return decode_aggregated_attestations(&body_ctx->read->attestations, data, data_len);
 }
 
-ssz_error_t lantern_ssz_encode_block_body(
-    const LanternBlockBody *body,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    struct block_body_codec_ctx ctx = {.write = body};
-    ssz_member_codec_t codec = {.ctx = &ctx, .write = block_body_write};
-    return ssz_serialize_container(&BLOCK_BODY_SCHEMA, &codec, out, out_len, written);
-}
-
-ssz_error_t lantern_ssz_decode_block_body(
-    LanternBlockBody *body,
-    const uint8_t *data,
-    size_t data_len) {
-    struct block_body_codec_ctx ctx = {.read = body};
-    ssz_member_codec_t codec = {.ctx = &ctx, .read = block_body_read};
-    return ssz_deserialize_container(data, data_len, &BLOCK_BODY_SCHEMA, &codec);
-}
+DEFINE_PUBLIC_CONTAINER_CODEC(
+    lantern_ssz_encode_block_body,
+    lantern_ssz_decode_block_body,
+    LanternBlockBody,
+    block_body_codec_ctx,
+    BLOCK_BODY_SCHEMA,
+    block_body_write,
+    block_body_read)
 
 struct block_codec_ctx {
     const LanternBlock *write;
@@ -1440,24 +1352,14 @@ static ssz_error_t block_read(void *ctx, uint64_t member_id, const uint8_t *data
     }
 }
 
-ssz_error_t lantern_ssz_encode_block(
-    const LanternBlock *block,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    struct block_codec_ctx ctx = {.write = block};
-    ssz_member_codec_t codec = {.ctx = &ctx, .write = block_write};
-    return ssz_serialize_container(&BLOCK_SCHEMA, &codec, out, out_len, written);
-}
-
-ssz_error_t lantern_ssz_decode_block(
-    LanternBlock *block,
-    const uint8_t *data,
-    size_t data_len) {
-    struct block_codec_ctx ctx = {.read = block};
-    ssz_member_codec_t codec = {.ctx = &ctx, .read = block_read};
-    return ssz_deserialize_container(data, data_len, &BLOCK_SCHEMA, &codec);
-}
+DEFINE_PUBLIC_CONTAINER_CODEC(
+    lantern_ssz_encode_block,
+    lantern_ssz_decode_block,
+    LanternBlock,
+    block_codec_ctx,
+    BLOCK_SCHEMA,
+    block_write,
+    block_read)
 
 struct signed_block_codec_ctx {
     const LanternSignedBlock *write;
@@ -1499,24 +1401,14 @@ static ssz_error_t signed_block_read(void *ctx, uint64_t member_id, const uint8_
     }
 }
 
-ssz_error_t lantern_ssz_encode_signed_block(
-    const LanternSignedBlock *block,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    struct signed_block_codec_ctx ctx = {.write = block};
-    ssz_member_codec_t codec = {.ctx = &ctx, .write = signed_block_write};
-    return ssz_serialize_container(&SIGNED_BLOCK_SCHEMA, &codec, out, out_len, written);
-}
-
-ssz_error_t lantern_ssz_decode_signed_block(
-    LanternSignedBlock *block,
-    const uint8_t *data,
-    size_t data_len) {
-    struct signed_block_codec_ctx ctx = {.read = block};
-    ssz_member_codec_t codec = {.ctx = &ctx, .read = signed_block_read};
-    return ssz_deserialize_container(data, data_len, &SIGNED_BLOCK_SCHEMA, &codec);
-}
+DEFINE_PUBLIC_CONTAINER_CODEC(
+    lantern_ssz_encode_signed_block,
+    lantern_ssz_decode_signed_block,
+    LanternSignedBlock,
+    signed_block_codec_ctx,
+    SIGNED_BLOCK_SCHEMA,
+    signed_block_write,
+    signed_block_read)
 
 struct state_codec_ctx {
     const LanternState *write;

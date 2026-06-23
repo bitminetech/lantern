@@ -106,10 +106,6 @@ static uint64_t root_hash(const LanternRoot *root) {
     return hash;
 }
 
-static bool finalization_trace_enabled(void) {
-    return false;
-}
-
 static void format_root_hex(const LanternRoot *root, char *out, size_t out_len) {
     if (!out || out_len == 0) {
         return;
@@ -877,13 +873,9 @@ int lantern_fork_choice_add_block_with_state(
     }
     /* Proposer attestations are cached by the caller after head recomputation. */
     (void)proposer_attestation;
-    bool trace_finalization = finalization_trace_enabled();
-    struct lantern_log_metadata trace_meta = {.has_slot = true, .slot = block->slot};
     struct lantern_log_metadata diag_meta = {.has_slot = true, .slot = block->slot};
     char block_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     char parent_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    uint64_t parent_slot = 0;
-    bool parent_known = false;
     double metrics_start = lantern_time_now_seconds();
     LanternRoot block_root;
     if (block_root_hint) {
@@ -929,14 +921,6 @@ int lantern_fork_choice_add_block_with_state(
 
     size_t previous_block_len = store->block_len;
 
-    if (trace_finalization) {
-        format_root_hex(&block_root, block_hex, sizeof(block_hex));
-        format_root_hex(&block->parent_root, parent_hex, sizeof(parent_hex));
-        if (!root_is_zero(&block->parent_root)) {
-            parent_known =
-                (lantern_fork_choice_block_info(store, &block->parent_root, &parent_slot, NULL, NULL) == 0);
-        }
-    }
     if (register_block(
             store,
             &block_root,
@@ -1030,22 +1014,6 @@ int lantern_fork_choice_add_block_with_state(
         goto rollback;
     }
     lean_metrics_record_fork_choice_block_time(lantern_time_now_seconds() - metrics_start);
-    if (trace_finalization) {
-        lantern_log_debug(
-            "fork_choice",
-            &trace_meta,
-            "finalization trace add_block slot=%" PRIu64 " root=%s parent_root=%s parent_known=%s"
-            " parent_slot=%" PRIu64 " attestations=%zu post_justified=%" PRIu64
-            " post_finalized=%" PRIu64,
-            block->slot,
-            block_hex[0] ? block_hex : "0x0",
-            parent_hex[0] ? parent_hex : "0x0",
-            parent_known ? "true" : "false",
-            parent_known ? parent_slot : 0u,
-            block->body.attestations.length,
-            post_justified ? post_justified->slot : 0u,
-            post_finalized ? post_finalized->slot : 0u);
-    }
     fork_choice_publish_current_checkpoints(store);
     return 0;
 
@@ -1884,28 +1852,17 @@ int lantern_fork_choice_block_info(
     uint64_t *out_slot,
     LanternRoot *out_parent_root,
     bool *out_has_parent) {
-    bool trace_finalization = finalization_trace_enabled();
-    char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    if (trace_finalization) {
-        format_root_hex(root, root_hex, sizeof(root_hex));
-    }
-    const struct lantern_fork_choice_block_entry *entry = NULL;
-    const char *fail_reason = NULL;
-    int rc = -1;
     if (!store || !store->initialized || !root) {
-        fail_reason = "invalid_args";
-        goto done;
+        return -1;
     }
     size_t index = 0;
     if (!map_lookup(store, root, &index)) {
-        fail_reason = "lookup_miss";
-        goto done;
+        return -1;
     }
     if (!store->blocks || index >= store->block_len) {
-        fail_reason = "entry_oob";
-        goto done;
+        return -1;
     }
-    entry = &store->blocks[index];
+    const struct lantern_fork_choice_block_entry *entry = &store->blocks[index];
     if (out_slot) {
         *out_slot = entry->slot;
     }
@@ -1916,39 +1873,7 @@ int lantern_fork_choice_block_info(
         bool has_parent = entry->parent_index != SIZE_MAX && !root_is_zero(&entry->parent_root);
         *out_has_parent = has_parent;
     }
-    rc = 0;
-
-done:
-    if (trace_finalization) {
-        if (rc == 0 && entry) {
-            struct lantern_log_metadata meta = {.has_slot = true, .slot = entry->slot};
-            bool has_parent = entry->parent_index != SIZE_MAX && !root_is_zero(&entry->parent_root);
-            uint64_t parent_slot = 0;
-            if (has_parent && store->blocks && entry->parent_index < store->block_len) {
-                parent_slot = store->blocks[entry->parent_index].slot;
-            }
-            char parent_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-            format_root_hex(&entry->parent_root, parent_hex, sizeof(parent_hex));
-            lantern_log_debug(
-                "fork_choice",
-                &meta,
-                "finalization trace block_info slot=%" PRIu64 " root=%s has_parent=%s parent_slot=%" PRIu64
-                " parent_root=%s",
-                entry->slot,
-                root_hex[0] ? root_hex : "0x0",
-                has_parent ? "true" : "false",
-                has_parent ? parent_slot : 0u,
-                parent_hex[0] ? parent_hex : "0x0");
-        } else {
-            lantern_log_debug(
-                "fork_choice",
-                NULL,
-                "finalization trace block_info miss root=%s reason=%s",
-                root_hex[0] ? root_hex : "0x0",
-                fail_reason ? fail_reason : "error");
-        }
-    }
-    return rc;
+    return 0;
 }
 
 const LanternCheckpoint *lantern_fork_choice_latest_justified(const LanternForkChoice *store) {

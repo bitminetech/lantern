@@ -13,7 +13,6 @@
 #include "lantern/genesis/genesis.h"
 
 #include <ctype.h>
-#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -26,7 +25,6 @@
 static const size_t GENESIS_LINE_BUFFER_LEN = 2048;
 static const size_t GENESIS_INITIAL_INDEX_CAPACITY = 4;
 
-static uint64_t parse_u64(const char *value, bool *out_is_valid);
 static int compare_u64(const void *lhs, const void *rhs);
 static bool entry_has_assignment_index(
     const struct lantern_validator_config_entry *entry,
@@ -53,60 +51,6 @@ static int parse_assignment_file(
 static int finalize_assignment_entries(
     struct lantern_validator_config *config,
     uint64_t validator_count);
-
-
-/**
- * Parse an unsigned 64-bit integer from a string, allowing a trailing comment.
- *
- * The parsed value may be followed by whitespace and an optional `#` comment.
- * Callers must use `out_is_valid` to disambiguate a successful parse of `0`
- * from a failure.
- *
- * @param value Input string to parse (not modified).
- * @param out_is_valid Optional output flag set to true on success, false on failure.
- *
- * @return Parsed value on success, 0 on failure.
- *
- * @note Thread safety: Thread-safe.
- */
-static uint64_t parse_u64(const char *value, bool *out_is_valid)
-{
-    if (out_is_valid)
-    {
-        *out_is_valid = false;
-    }
-    if (!value)
-    {
-        return 0;
-    }
-
-    errno = 0;
-    char *end = NULL;
-    unsigned long long parsed = strtoull(value, &end, 0);
-    if (errno != 0 || end == value)
-    {
-        return 0;
-    }
-
-    while (*end != '\0' && isspace((unsigned char)*end))
-    {
-        ++end;
-    }
-    if (*end != '\0' && *end != '#')
-    {
-        return 0;
-    }
-    if (parsed > (unsigned long long)UINT64_MAX)
-    {
-        return 0;
-    }
-
-    if (out_is_valid)
-    {
-        *out_is_valid = true;
-    }
-    return (uint64_t)parsed;
-}
 
 
 /**
@@ -258,8 +202,8 @@ static int parse_assignment_item_index(
         value = lantern_trim_whitespace((char *)(value + 6));
     }
 
-    bool is_valid_index = false;
-    uint64_t parsed = parse_u64(value, &is_valid_index);
+    int is_valid_index = 0;
+    uint64_t parsed = genesis_parse_u64(value, &is_valid_index);
     if (!is_valid_index)
     {
         return LANTERN_GENESIS_ERR_INVALID_DATA;

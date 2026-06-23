@@ -126,138 +126,6 @@ static void free_path(char *path) {
     free(path);
 }
 
-static size_t bitlist_encoded_size(const struct lantern_bitlist *list) {
-    if (!list) {
-        return 0;
-    }
-    if (list->bit_length == 0) {
-        return 1;
-    }
-    size_t byte_len = (list->bit_length + 7u) / 8u;
-    bool needs_extra = (list->bit_length % 8u) == 0;
-    return byte_len + (needs_extra ? 1u : 0u);
-}
-
-static size_t aggregated_attestation_encoded_size(const LanternAggregatedAttestation *attestation) {
-    if (!attestation) {
-        return 0;
-    }
-    if (attestation->aggregation_bits.bit_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
-        return 0;
-    }
-    size_t bits_size = bitlist_encoded_size(&attestation->aggregation_bits);
-    if (bits_size == 0) {
-        return 0;
-    }
-    size_t fixed_section = SSZ_BYTES_PER_LENGTH_OFFSET + LANTERN_ATTESTATION_DATA_SSZ_SIZE;
-    if (fixed_section > SIZE_MAX - bits_size) {
-        return 0;
-    }
-    return fixed_section + bits_size;
-}
-
-static size_t aggregated_attestations_encoded_size(const LanternAggregatedAttestations *attestations) {
-    if (!attestations) {
-        return 0;
-    }
-    if (attestations->length == 0) {
-        return 0;
-    }
-    if (attestations->length > LANTERN_MAX_ATTESTATIONS || !attestations->data) {
-        return 0;
-    }
-    size_t offset_table = attestations->length * SSZ_BYTES_PER_LENGTH_OFFSET;
-    size_t total = offset_table;
-    for (size_t i = 0; i < attestations->length; ++i) {
-        size_t entry_size = aggregated_attestation_encoded_size(&attestations->data[i]);
-        if (entry_size == 0 || entry_size > SIZE_MAX - total) {
-            return 0;
-        }
-        total += entry_size;
-    }
-    return total;
-}
-
-static size_t root_list_encoded_size(const struct lantern_root_list *list) {
-    if (!list || list->length == 0) {
-        return 0;
-    }
-    return list->length * LANTERN_ROOT_SIZE;
-}
-
-static size_t state_encoded_size(const LanternState *state) {
-    if (!state) {
-        return 0;
-    }
-    if (state->config.num_validators != (uint64_t)state->validator_count) {
-        return 0;
-    }
-    size_t fixed = LANTERN_CONFIG_SSZ_SIZE
-        + sizeof(uint64_t)
-        + LANTERN_BLOCK_HEADER_SSZ_SIZE
-        + (2u * LANTERN_CHECKPOINT_SSZ_SIZE)
-        + (5u * SSZ_BYTES_PER_LENGTH_OFFSET);
-    size_t validator_bytes = 0;
-    if (state->validator_count > 0) {
-        if (!state->validators || state->validator_count > SIZE_MAX / LANTERN_VALIDATOR_SSZ_SIZE) {
-            return 0;
-        }
-        validator_bytes = state->validator_count * LANTERN_VALIDATOR_SSZ_SIZE;
-    }
-    size_t variable = root_list_encoded_size(&state->historical_block_hashes)
-        + bitlist_encoded_size(&state->justified_slots)
-        + validator_bytes
-        + root_list_encoded_size(&state->justification_roots)
-        + bitlist_encoded_size(&state->justification_validators);
-    return fixed + variable;
-}
-
-static size_t block_body_encoded_size(const LanternBlockBody *body) {
-    if (!body) {
-        return SSZ_BYTES_PER_LENGTH_OFFSET;
-    }
-    size_t att_count = body->attestations.length;
-    size_t attestations_bytes = aggregated_attestations_encoded_size(&body->attestations);
-    if (att_count > 0 && attestations_bytes == 0) {
-        return 0;
-    }
-    return SSZ_BYTES_PER_LENGTH_OFFSET + attestations_bytes;
-}
-
-static size_t block_encoded_size(const LanternBlock *block) {
-    if (!block) {
-        return 0;
-    }
-    size_t fixed = (sizeof(uint64_t) * 2u)
-        + (LANTERN_ROOT_SIZE * 2u)
-        + SSZ_BYTES_PER_LENGTH_OFFSET;
-    size_t body_size = block_body_encoded_size(&block->body);
-    if (body_size == 0) {
-        return 0;
-    }
-    return fixed + body_size;
-}
-
-static size_t signed_block_encoded_size(const LanternSignedBlock *block) {
-    if (!block) {
-        return 0;
-    }
-    size_t offset_section = SSZ_BYTES_PER_LENGTH_OFFSET * 2u;
-    size_t message_size = block_encoded_size(&block->block);
-    if (message_size == 0) {
-        return 0;
-    }
-    size_t proof_size = 0;
-    if (lantern_ssz_encode_multi_message_aggregate(&block->proof, NULL, 0, &proof_size) != SSZ_SUCCESS) {
-        return 0;
-    }
-    if (offset_section > SIZE_MAX - message_size
-        || offset_section + message_size > SIZE_MAX - proof_size) {
-        return 0;
-    }
-    return offset_section + message_size + proof_size;
-}
-
 static int write_atomic_file(const char *path, const uint8_t *data, size_t data_len) {
     if (!path || !data || data_len == 0) {
         return -1;
@@ -490,8 +358,9 @@ static int storage_write_state_path(const char *path, const LanternState *state)
 
     int rc = -1;
     uint8_t *buffer = NULL;
-    const size_t encoded_size = state_encoded_size(state);
-    if (encoded_size == 0) {
+    size_t encoded_size = 0;
+    if (lantern_ssz_encode_state(state, NULL, 0, &encoded_size) != SSZ_SUCCESS
+        || encoded_size == 0) {
         goto cleanup;
     }
     buffer = malloc(encoded_size);
@@ -1120,8 +989,9 @@ static int storage_store_block_internal(
         goto cleanup;
     }
 
-    const size_t encoded_size = signed_block_encoded_size(block);
-    if (encoded_size == 0) {
+    size_t encoded_size = 0;
+    if (lantern_ssz_encode_signed_block(block, NULL, 0, &encoded_size) != SSZ_SUCCESS
+        || encoded_size == 0) {
         lantern_log_warn(
             "storage",
             &(const struct lantern_log_metadata){0},

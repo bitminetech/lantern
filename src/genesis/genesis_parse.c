@@ -13,7 +13,6 @@
 #include "genesis_internal.h"
 
 #include <ctype.h>
-#include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -52,15 +51,10 @@ static const char *const VALIDATOR_CONFIG_FIELD_IS_AGGREGATOR = "is_aggregator";
 static const char *const VALIDATOR_CONFIG_FIELD_XMSS_DIR = "xmssDir";
 static const char *const VALIDATOR_CONFIG_FIELD_SUBNET = "subnet";
 
-static uint64_t parse_u64(const char *value, int *ok);
 static int parse_bool(const char *value, int *ok);
-static char *dup_trimmed(const char *value);
-static char *strip_optional_quotes(char *value);
-static const char *yaml_object_value(const LanternYamlObject *object, const char *key);
 static int read_scalar_value(const char *path, const char *key, char **out_value);
 static enum lantern_validator_client_kind classify_validator_client(const char *name);
 static int derive_peer_id_from_privkey_hex(const char *hex, char **out_peer_id);
-static int decode_validator_pubkey_hex(const char *hex, uint8_t out[LANTERN_VALIDATOR_PUBKEY_SIZE]);
 
 static int ensure_pubkey_pair_capacity(
     uint8_t **attestation_pubkeys,
@@ -71,58 +65,6 @@ static int parse_validator_config_entry(
     const LanternYamlObject *object,
     struct lantern_validator_config_entry *entry);
 static void free_validator_config_entry(struct lantern_validator_config_entry *entry);
-
-/**
- * Parse an unsigned 64-bit integer from a string, allowing a trailing comment.
- *
- * The parsed value may be followed by whitespace and an optional `#` comment.
- * Callers must use `ok` to disambiguate a successful parse of `0` from failure.
- *
- * @param value Input string to parse (not modified).
- * @param ok    Optional output flag set to 1 on success, 0 on failure.
- *
- * @return Parsed value on success, 0 on failure.
- *
- * @note Thread safety: Thread-safe.
- */
-static uint64_t parse_u64(const char *value, int *ok)
-{
-    if (ok)
-    {
-        *ok = 0;
-    }
-    if (!value)
-    {
-        return 0;
-    }
-
-    errno = 0;
-    char *end = NULL;
-    unsigned long long parsed = strtoull(value, &end, 0);
-    if (errno != 0 || end == value)
-    {
-        return 0;
-    }
-
-    while (end && *end && isspace((unsigned char)*end))
-    {
-        ++end;
-    }
-    if (end && *end != '\0' && *end != '#')
-    {
-        return 0;
-    }
-    if (parsed > (unsigned long long)UINT64_MAX)
-    {
-        return 0;
-    }
-
-    if (ok)
-    {
-        *ok = 1;
-    }
-    return (uint64_t)parsed;
-}
 
 static int parse_bool(const char *value, int *ok)
 {
@@ -135,7 +77,7 @@ static int parse_bool(const char *value, int *ok)
         return 0;
     }
 
-    char *trimmed = dup_trimmed(value);
+    char *trimmed = genesis_dup_trimmed(value);
     if (!trimmed)
     {
         return 0;
@@ -165,108 +107,6 @@ static int parse_bool(const char *value, int *ok)
     }
     free(trimmed);
     return parsed;
-}
-
-
-/**
- * Duplicate a string after trimming whitespace and optional surrounding quotes.
- *
- * @param value Input string to trim and duplicate.
- *
- * @return Newly allocated trimmed string, or NULL on allocation failure.
- *
- * @note Thread safety: Thread-safe.
- */
-static char *dup_trimmed(const char *value)
-{
-    if (!value)
-    {
-        return NULL;
-    }
-
-    const char *start = value;
-    while (*start && isspace((unsigned char)*start))
-    {
-        ++start;
-    }
-
-    const char *end = start + strlen(start);
-    while (end > start && isspace((unsigned char)*(end - 1)))
-    {
-        --end;
-    }
-
-    if ((end - start) >= 2
-        && ((*start == '"' && *(end - 1) == '"') || (*start == '\'' && *(end - 1) == '\'')))
-    {
-        ++start;
-        --end;
-    }
-
-    return lantern_string_duplicate_len(start, (size_t)(end - start));
-}
-
-
-/**
- * Strip optional surrounding quotes from a YAML scalar (in place).
- *
- * Removes matching surrounding single/double quotes. The input buffer is
- * modified in place.
- *
- * @param value Input string buffer to modify.
- *
- * @return Pointer to the unquoted string within `value`.
- *
- * @note Thread safety: Thread-safe if callers provide exclusive access to `value`.
- */
-static char *strip_optional_quotes(char *value)
-{
-    if (!value || *value == '\0')
-    {
-        return value;
-    }
-
-    if (*value == '"' || *value == '\'')
-    {
-        char quote = *value;
-        ++value;
-        char *endq = strrchr(value, quote);
-        if (endq)
-        {
-            *endq = '\0';
-        }
-    }
-
-    return value;
-}
-
-
-/**
- * Lookup a key value in a YAML object.
- *
- * @param object YAML object to search.
- * @param key    Key to match (exact string compare).
- *
- * @return Matching value pointer, or NULL if not found.
- *
- * @note Thread safety: Thread-safe.
- */
-static const char *yaml_object_value(const LanternYamlObject *object, const char *key)
-{
-    if (!object || !key)
-    {
-        return NULL;
-    }
-
-    for (size_t i = 0; i < object->num_pairs; ++i)
-    {
-        if (object->pairs[i].key && strcmp(object->pairs[i].key, key) == 0)
-        {
-            return object->pairs[i].value;
-        }
-    }
-
-    return NULL;
 }
 
 
@@ -324,7 +164,7 @@ static int read_scalar_value(const char *path, const char *key, char **out_value
         }
 
         char *value = lantern_trim_whitespace(trimmed + key_len + 1);
-        *out_value = dup_trimmed(value);
+        *out_value = genesis_dup_trimmed(value);
         result = *out_value ? LANTERN_GENESIS_OK : LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
         break;
     }
@@ -445,34 +285,6 @@ static int derive_peer_id_from_privkey_hex(const char *hex, char **out_peer_id)
     }
 
     *out_peer_id = dup;
-    return LANTERN_GENESIS_OK;
-}
-
-
-/**
- * Decode a validator pubkey hex string into bytes.
- *
- * @param hex Pubkey as a hex string (no `0x` prefix expected).
- * @param out Output buffer for the decoded pubkey bytes.
- *
- * @return LANTERN_GENESIS_OK on success.
- * @return LANTERN_GENESIS_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_GENESIS_ERR_PARSE on decode failures.
- *
- * @note Thread safety: Thread-safe if callers provide exclusive access to outputs.
- */
-static int decode_validator_pubkey_hex(const char *hex, uint8_t out[LANTERN_VALIDATOR_PUBKEY_SIZE])
-{
-    if (!hex || !out)
-    {
-        return LANTERN_GENESIS_ERR_INVALID_PARAM;
-    }
-
-    if (lantern_hex_decode(hex, out, LANTERN_VALIDATOR_PUBKEY_SIZE) != 0)
-    {
-        return LANTERN_GENESIS_ERR_PARSE;
-    }
-
     return LANTERN_GENESIS_OK;
 }
 
@@ -819,7 +631,7 @@ int genesis_parse_chain_config(const char *path, struct lantern_chain_config *co
         if (strcmp(key, CHAIN_CONFIG_KEY_GENESIS_TIME) == 0)
         {
             int ok = 0;
-            config->genesis_time = parse_u64(value, &ok);
+            config->genesis_time = genesis_parse_u64(value, &ok);
             if (!ok || config->genesis_time == 0)
             {
                 result = LANTERN_GENESIS_ERR_INVALID_DATA;
@@ -830,7 +642,7 @@ int genesis_parse_chain_config(const char *path, struct lantern_chain_config *co
                  || strcmp(key, CHAIN_CONFIG_KEY_NUM_VALIDATORS) == 0)
         {
             int ok = 0;
-            config->validator_count = parse_u64(value, &ok);
+            config->validator_count = genesis_parse_u64(value, &ok);
             if (!ok)
             {
                 result = LANTERN_GENESIS_ERR_INVALID_DATA;
@@ -840,7 +652,7 @@ int genesis_parse_chain_config(const char *path, struct lantern_chain_config *co
         else if (strcmp(key, CHAIN_CONFIG_KEY_ATTESTATION_COMMITTEE_COUNT) == 0)
         {
             int ok = 0;
-            config->attestation_committee_count = parse_u64(value, &ok);
+            config->attestation_committee_count = genesis_parse_u64(value, &ok);
             if (!ok || config->attestation_committee_count == 0)
             {
                 result = LANTERN_GENESIS_ERR_INVALID_DATA;
@@ -868,18 +680,12 @@ int genesis_parse_chain_config(const char *path, struct lantern_chain_config *co
 /**
  * Parse genesis validator pubkeys from a chain config file.
  *
- * Supports the devnet-4 dual-key object format:
+ * Supports the dual-key object format:
  *
  *   GENESIS_VALIDATORS:
  *     - attestation_pubkey: 0x...
  *       proposal_pubkey: 0x...
  *
- * and, as a backward-compatible fallback, the legacy scalar-list format:
- *
- *   GENESIS_VALIDATORS:
- *     - 0x...
- *
- * In the legacy case, the single pubkey is copied into both output arrays.
  * On success, any non-NULL output arrays are caller-owned and must be freed
  * with `free()`.
  *
@@ -919,173 +725,75 @@ int genesis_parse_genesis_validator_pubkeys(
         path,
         CHAIN_CONFIG_KEY_GENESIS_VALIDATORS,
         &object_count);
-    if (objects && object_count > 0)
+    if (!objects || object_count == 0)
     {
-        size_t count = 0;
-        size_t cap = 0;
-        uint8_t *attestation_pubkeys = NULL;
-        uint8_t *proposal_pubkeys = NULL;
-        int result = LANTERN_GENESIS_OK;
-
-        for (size_t i = 0; i < object_count; ++i)
-        {
-            const char *attestation_value = yaml_object_value(
-                &objects[i],
-                CHAIN_CONFIG_FIELD_ATTESTATION_PUBKEY);
-            const char *proposal_value = yaml_object_value(
-                &objects[i],
-                CHAIN_CONFIG_FIELD_PROPOSAL_PUBKEY);
-            if (!attestation_value || !proposal_value)
-            {
-                result = LANTERN_GENESIS_ERR_INVALID_DATA;
-                break;
-            }
-
-            char *attestation_hex = dup_trimmed(attestation_value);
-            char *proposal_hex = dup_trimmed(proposal_value);
-            if (!attestation_hex || !proposal_hex)
-            {
-                free(attestation_hex);
-                free(proposal_hex);
-                result = LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
-                break;
-            }
-
-            result = ensure_pubkey_pair_capacity(
-                &attestation_pubkeys,
-                &proposal_pubkeys,
-                &cap,
-                count + 1);
-            if (result == LANTERN_GENESIS_OK)
-            {
-                result = decode_validator_pubkey_hex(
-                    attestation_hex,
-                    attestation_pubkeys + (count * LANTERN_VALIDATOR_PUBKEY_SIZE));
-            }
-            if (result == LANTERN_GENESIS_OK)
-            {
-                result = decode_validator_pubkey_hex(
-                    proposal_hex,
-                    proposal_pubkeys + (count * LANTERN_VALIDATOR_PUBKEY_SIZE));
-            }
-
-            free(attestation_hex);
-            free(proposal_hex);
-
-            if (result != LANTERN_GENESIS_OK)
-            {
-                result = (result == LANTERN_GENESIS_ERR_OUT_OF_MEMORY)
-                    ? result
-                    : LANTERN_GENESIS_ERR_INVALID_DATA;
-                break;
-            }
-
-            ++count;
-        }
-
         lantern_yaml_free_objects(objects, object_count);
-
-        if (result != LANTERN_GENESIS_OK)
-        {
-            free(attestation_pubkeys);
-            free(proposal_pubkeys);
-            return result;
-        }
-
-        if (count == 0)
-        {
-            free(attestation_pubkeys);
-            free(proposal_pubkeys);
-            return LANTERN_GENESIS_OK;
-        }
-
-        *out_attestation_pubkeys = attestation_pubkeys;
-        *out_proposal_pubkeys = proposal_pubkeys;
-        *out_count = count;
         return LANTERN_GENESIS_OK;
     }
 
-    lantern_yaml_free_objects(objects, object_count);
-
-    FILE *fp = fopen(path, "r");
-    if (!fp)
-    {
-        return LANTERN_GENESIS_ERR_IO;
-    }
-
-    bool in_array = false;
     size_t count = 0;
     size_t cap = 0;
     uint8_t *attestation_pubkeys = NULL;
     uint8_t *proposal_pubkeys = NULL;
     int result = LANTERN_GENESIS_OK;
 
-    char line[GENESIS_SMALL_LINE_BUFFER_LEN];
-    while (fgets(line, sizeof(line), fp))
+    for (size_t i = 0; i < object_count; ++i)
     {
-        char *trimmed = lantern_trim_whitespace(line);
-        if (!trimmed || *trimmed == '\0' || *trimmed == '#')
+        const char *attestation_value = genesis_yaml_object_value(
+            &objects[i],
+            CHAIN_CONFIG_FIELD_ATTESTATION_PUBKEY);
+        const char *proposal_value = genesis_yaml_object_value(
+            &objects[i],
+            CHAIN_CONFIG_FIELD_PROPOSAL_PUBKEY);
+        if (!attestation_value || !proposal_value)
         {
-            continue;
+            result = LANTERN_GENESIS_ERR_INVALID_DATA;
+            break;
         }
 
-        if (!in_array
-            && strncmp(
-                   trimmed,
-                   CHAIN_CONFIG_KEY_GENESIS_VALIDATORS,
-                   strlen(CHAIN_CONFIG_KEY_GENESIS_VALIDATORS))
-                == 0)
+        char *attestation_hex = genesis_dup_trimmed(attestation_value);
+        char *proposal_hex = genesis_dup_trimmed(proposal_value);
+        if (!attestation_hex || !proposal_hex)
         {
-            in_array = true;
-            continue;
+            free(attestation_hex);
+            free(proposal_hex);
+            result = LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
+            break;
         }
-
-        if (!in_array)
-        {
-            continue;
-        }
-
-        if (*trimmed != '-')
-        {
-            in_array = false;
-            continue;
-        }
-
-        char *val = lantern_trim_whitespace(trimmed + 1);
-        if (!val || *val == '\0')
-        {
-            continue;
-        }
-
-        val = strip_optional_quotes(val);
 
         result = ensure_pubkey_pair_capacity(
             &attestation_pubkeys,
             &proposal_pubkeys,
             &cap,
             count + 1);
+        if (result == LANTERN_GENESIS_OK)
+        {
+            result = genesis_decode_validator_pubkey_hex(
+                attestation_hex,
+                attestation_pubkeys + (count * LANTERN_VALIDATOR_PUBKEY_SIZE));
+        }
+        if (result == LANTERN_GENESIS_OK)
+        {
+            result = genesis_decode_validator_pubkey_hex(
+                proposal_hex,
+                proposal_pubkeys + (count * LANTERN_VALIDATOR_PUBKEY_SIZE));
+        }
+
+        free(attestation_hex);
+        free(proposal_hex);
+
         if (result != LANTERN_GENESIS_OK)
         {
+            result = (result == LANTERN_GENESIS_ERR_OUT_OF_MEMORY)
+                ? result
+                : LANTERN_GENESIS_ERR_INVALID_DATA;
             break;
         }
 
-        uint8_t *attestation_dest =
-            attestation_pubkeys + (count * LANTERN_VALIDATOR_PUBKEY_SIZE);
-        result = decode_validator_pubkey_hex(val, attestation_dest);
-        if (result != LANTERN_GENESIS_OK)
-        {
-            result = LANTERN_GENESIS_ERR_INVALID_DATA;
-            break;
-        }
-
-        memcpy(
-            proposal_pubkeys + (count * LANTERN_VALIDATOR_PUBKEY_SIZE),
-            attestation_dest,
-            LANTERN_VALIDATOR_PUBKEY_SIZE);
         ++count;
     }
 
-    fclose(fp);
+    lantern_yaml_free_objects(objects, object_count);
 
     if (result != LANTERN_GENESIS_OK)
     {
@@ -1135,18 +843,18 @@ static int parse_validator_config_entry(
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
 
-    const char *name_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_NAME);
-    const char *priv_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_PRIVKEY);
-    const char *count_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_COUNT);
-    const char *ip_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_IP);
-    const char *quic_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_QUIC);
-    const char *seq_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_SEQ);
-    const char *is_aggregator_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_IS_AGGREGATOR);
-    const char *xmss_dir_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_XMSS_DIR);
-    const char *subnet_val = yaml_object_value(object, VALIDATOR_CONFIG_FIELD_SUBNET);
+    const char *name_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_NAME);
+    const char *priv_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_PRIVKEY);
+    const char *count_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_COUNT);
+    const char *ip_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_IP);
+    const char *quic_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_QUIC);
+    const char *seq_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_SEQ);
+    const char *is_aggregator_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_IS_AGGREGATOR);
+    const char *xmss_dir_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_XMSS_DIR);
+    const char *subnet_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_SUBNET);
 
-    entry->name = dup_trimmed(name_val);
-    entry->privkey_hex = dup_trimmed(priv_val);
+    entry->name = genesis_dup_trimmed(name_val);
+    entry->privkey_hex = genesis_dup_trimmed(priv_val);
     if (!entry->name || !entry->privkey_hex)
     {
         return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
@@ -1161,19 +869,19 @@ static int parse_validator_config_entry(
     }
 
     int ok = 0;
-    entry->count = parse_u64(count_val, &ok);
+    entry->count = genesis_parse_u64(count_val, &ok);
     if (!ok || entry->count == 0)
     {
         return LANTERN_GENESIS_ERR_INVALID_DATA;
     }
 
-    entry->enr.ip = dup_trimmed(ip_val);
+    entry->enr.ip = genesis_dup_trimmed(ip_val);
     if (ip_val && !entry->enr.ip)
     {
         return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
     }
 
-    uint64_t quic_port = parse_u64(quic_val, &ok);
+    uint64_t quic_port = genesis_parse_u64(quic_val, &ok);
     if (!ok || quic_port > UINT16_MAX)
     {
         return LANTERN_GENESIS_ERR_INVALID_DATA;
@@ -1183,7 +891,7 @@ static int parse_validator_config_entry(
     entry->enr.sequence = 1;
     if (seq_val && *seq_val)
     {
-        entry->enr.sequence = parse_u64(seq_val, &ok);
+        entry->enr.sequence = genesis_parse_u64(seq_val, &ok);
         if (!ok)
         {
             return LANTERN_GENESIS_ERR_INVALID_DATA;
@@ -1205,7 +913,7 @@ static int parse_validator_config_entry(
     entry->subnet = 0;
     if (subnet_val && *subnet_val)
     {
-        entry->subnet = parse_u64(subnet_val, &ok);
+        entry->subnet = genesis_parse_u64(subnet_val, &ok);
         if (!ok)
         {
             return LANTERN_GENESIS_ERR_INVALID_DATA;
@@ -1213,7 +921,7 @@ static int parse_validator_config_entry(
         entry->has_subnet = true;
     }
 
-    entry->xmss_dir = dup_trimmed(xmss_dir_val);
+    entry->xmss_dir = genesis_dup_trimmed(xmss_dir_val);
     if (xmss_dir_val && !entry->xmss_dir)
     {
         return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;

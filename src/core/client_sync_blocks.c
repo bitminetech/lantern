@@ -113,19 +113,6 @@ static bool lantern_client_import_block_internal(
     bool *out_children_ready,
     lantern_client_error *out_result);
 
-static int prepare_off_head_snapshot_state(
-    const char *data_dir,
-    const LanternRoot *root,
-    LanternState *state)
-{
-    if (!data_dir || !root || !state)
-    {
-        return -1;
-    }
-
-    return 0;
-}
-
 /* ============================================================================
  * Sync Progress Helpers
  * ============================================================================ */
@@ -515,49 +502,6 @@ int lantern_client_commit_and_publish_local_block(
         post_store);
 }
 
-static size_t bitlist_encoded_size_bits(size_t bit_length)
-{
-    if (bit_length == 0)
-    {
-        return 1;
-    }
-    size_t byte_len = (bit_length + 7u) / 8u;
-    if ((bit_length % 8u) == 0)
-    {
-        return byte_len + 1u;
-    }
-    return byte_len;
-}
-
-static size_t signed_block_base_ssz_size(void)
-{
-    size_t block_fixed = (sizeof(uint64_t) * 2u)
-        + (LANTERN_ROOT_SIZE * 2u)
-        + SSZ_BYTES_PER_LENGTH_OFFSET;
-    size_t body_header = SSZ_BYTES_PER_LENGTH_OFFSET;
-    size_t message_base = SSZ_BYTES_PER_LENGTH_OFFSET + LANTERN_VOTE_SSZ_SIZE + block_fixed + body_header;
-    size_t offsets = SSZ_BYTES_PER_LENGTH_OFFSET * 2u;
-    return offsets + message_base;
-}
-
-static size_t signed_block_max_ssz_size(void)
-{
-    size_t base = signed_block_base_ssz_size();
-    size_t att_bits_max = bitlist_encoded_size_bits(LANTERN_VALIDATOR_REGISTRY_LIMIT);
-    size_t att_entry_max = SSZ_BYTES_PER_LENGTH_OFFSET + LANTERN_ATTESTATION_DATA_SSZ_SIZE + att_bits_max;
-    size_t attestations_max = (size_t)LANTERN_MAX_ATTESTATIONS * (SSZ_BYTES_PER_LENGTH_OFFSET + att_entry_max);
-    if (attestations_max > SIZE_MAX - base)
-    {
-        return SIZE_MAX;
-    }
-    size_t total = base + attestations_max;
-    if (LANTERN_AGG_PROOF_MAX_BYTES > SIZE_MAX - total)
-    {
-        return SIZE_MAX;
-    }
-    return total + LANTERN_AGG_PROOF_MAX_BYTES;
-}
-
 static int encode_block_ssz(
     const LanternSignedBlock *block,
     uint8_t **out_data,
@@ -571,8 +515,9 @@ static int encode_block_ssz(
     *out_data = NULL;
     *out_len = 0;
 
-    const size_t encoded_capacity = signed_block_max_ssz_size();
-    if (encoded_capacity == 0 || encoded_capacity == SIZE_MAX)
+    size_t encoded_capacity = 0;
+    if (lantern_ssz_encode_signed_block(block, NULL, 0, &encoded_capacity) != SSZ_SUCCESS
+        || encoded_capacity == 0)
     {
         return -1;
     }
@@ -1229,8 +1174,7 @@ static bool load_snapshot_state_for_root_locked(
     lantern_state_init(&decoded);
     bool decoded_owned = true;
     bool loaded = false;
-    if (lantern_ssz_decode_state(&decoded, state_bytes, state_len) == SSZ_SUCCESS
-        && prepare_off_head_snapshot_state(client->data_dir, root, &decoded) == 0)
+    if (lantern_ssz_decode_state(&decoded, state_bytes, state_len) == SSZ_SUCCESS)
     {
         lantern_state_reset(out_state);
         *out_state = decoded;
@@ -1439,39 +1383,21 @@ const LanternState *lantern_client_state_for_root_local_locked(
 
     if (client->data_dir && client->data_dir[0])
     {
-        uint8_t *state_bytes = NULL;
-        size_t state_len = 0;
-        if (lantern_storage_load_state_bytes_for_root(
-                client->data_dir,
-                root,
-                &state_bytes,
-                &state_len)
-            == 0
-            && state_bytes
-            && state_len > 0)
+        size_t snapshot_len = 0;
+        if (load_snapshot_state_for_root_locked(client, root, scratch, &snapshot_len))
         {
-            lantern_state_reset(scratch);
-            lantern_state_init(scratch);
-            if (lantern_ssz_decode_state(scratch, state_bytes, state_len) == SSZ_SUCCESS)
+            (void)snapshot_len;
+            cache_rebuilt_state_for_root_locked(
+                client,
+                root,
+                scratch,
+                NULL,
+                "state_for_root_snapshot");
+            if (out_is_scratch)
             {
-                if (prepare_off_head_snapshot_state(client->data_dir, root, scratch) == 0)
-                {
-                    free(state_bytes);
-                    cache_rebuilt_state_for_root_locked(
-                        client,
-                        root,
-                        scratch,
-                        NULL,
-                        "state_for_root_snapshot");
-                    if (out_is_scratch)
-                    {
-                        *out_is_scratch = true;
-                    }
-                    return scratch;
-                }
+                *out_is_scratch = true;
             }
-            lantern_state_reset(scratch);
-            free(state_bytes);
+            return scratch;
         }
     }
 
@@ -1710,66 +1636,22 @@ static bool rebuild_state_for_root_locked(
         }
     }
 
-    /*
-     * Fast path: if a post-state snapshot exists for this root, use it
-     * directly. This is required for checkpoint-sync anchors whose ancestors
-     * are intentionally absent from local fork-choice/state replay history.
-     */
-    if (client->data_dir && client->data_dir[0] != '\0')
+    size_t snapshot_len = 0;
+    if (load_snapshot_state_for_root_locked(client, target_root, out_state, &snapshot_len))
     {
-        uint8_t *state_bytes = NULL;
-        size_t state_len = 0;
-        if (lantern_storage_load_state_bytes_for_root(
-                client->data_dir,
-                target_root,
-                &state_bytes,
-                &state_len)
-                == 0
-            && state_bytes
-            && state_len > 0)
-        {
-            LanternState snapshot;
-            lantern_state_init(&snapshot);
-            if (lantern_ssz_decode_state(&snapshot, state_bytes, state_len) == SSZ_SUCCESS)
-            {
-                if (prepare_off_head_snapshot_state(client->data_dir, target_root, &snapshot) == 0)
-                {
-                    lantern_state_reset(out_state);
-                    *out_state = snapshot;
-                    free(state_bytes);
-                    cache_rebuilt_state_for_root_locked(
-                        client,
-                        target_root,
-                        out_state,
-                        &meta,
-                        "rebuild_snapshot");
-                    lantern_log_debug(
-                        "state",
-                        &meta,
-                        "rebuild_state loaded snapshot target=%s bytes=%zu",
-                        target_hex[0] ? target_hex : "0x0",
-                        state_len);
-                    return true;
-                }
-                lantern_state_reset(&snapshot);
-                lantern_log_warn(
-                    "state",
-                    &meta,
-                    "rebuild_state snapshot prepare failed target=%s bytes=%zu",
-                    target_hex[0] ? target_hex : "0x0",
-                    state_len);
-            }
-            else
-            {
-                lantern_log_warn(
-                    "state",
-                    &meta,
-                    "rebuild_state snapshot decode failed target=%s bytes=%zu",
-                    target_hex[0] ? target_hex : "0x0",
-                    state_len);
-            }
-        }
-        free(state_bytes);
+        cache_rebuilt_state_for_root_locked(
+            client,
+            target_root,
+            out_state,
+            &meta,
+            "rebuild_snapshot");
+        lantern_log_debug(
+            "state",
+            &meta,
+            "rebuild_state loaded snapshot target=%s bytes=%zu",
+            target_hex[0] ? target_hex : "0x0",
+            snapshot_len);
+        return true;
     }
 
     struct lantern_root_chain chain = {0};

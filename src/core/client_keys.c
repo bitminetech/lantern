@@ -270,8 +270,6 @@ cleanup:
 struct xmss_manifest_entry
 {
     uint64_t index;                /**< Validator global index */
-    char *attestation_pubkey_hex;  /**< Attestation public key hex */
-    char *proposal_pubkey_hex;     /**< Proposal public key hex */
     char *attestation_secret_file; /**< Attestation secret key path or filename */
     char *proposal_secret_file;    /**< Proposal secret key path or filename */
 };
@@ -330,8 +328,6 @@ static void xmss_manifest_reset(struct xmss_manifest *manifest)
     }
     for (size_t i = 0; i < manifest->count; ++i)
     {
-        free(manifest->entries[i].attestation_pubkey_hex);
-        free(manifest->entries[i].proposal_pubkey_hex);
         free(manifest->entries[i].attestation_secret_file);
         free(manifest->entries[i].proposal_secret_file);
     }
@@ -478,48 +474,6 @@ static enum xmss_secret_key_role xmss_classify_secret_key_file(const char *path)
 }
 
 
-static int xmss_build_array_path(
-    const char *prefix,
-    const char *leaf,
-    char **out_path)
-{
-    if (!leaf || !out_path)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    *out_path = NULL;
-    if (!prefix || prefix[0] == '\0')
-    {
-        *out_path = lantern_string_duplicate(leaf);
-        return *out_path ? LANTERN_CLIENT_OK : LANTERN_CLIENT_ERR_ALLOC;
-    }
-
-    size_t prefix_len = strlen(prefix);
-    size_t leaf_len = strlen(leaf);
-    size_t total = 0;
-    if (xmss_size_add_overflow(prefix_len, 1u, &total)
-        || xmss_size_add_overflow(total, leaf_len, &total)
-        || xmss_size_add_overflow(total, 1u, &total))
-    {
-        return LANTERN_CLIENT_ERR_CONFIG;
-    }
-
-    char *buffer = malloc(total);
-    if (!buffer)
-    {
-        return LANTERN_CLIENT_ERR_ALLOC;
-    }
-
-    memcpy(buffer, prefix, prefix_len);
-    buffer[prefix_len] = '.';
-    memcpy(buffer + prefix_len + 1u, leaf, leaf_len);
-    buffer[prefix_len + 1u + leaf_len] = '\0';
-    *out_path = buffer;
-    return LANTERN_CLIENT_OK;
-}
-
-
 static int xmss_manifest_load_annotated(
     const char *path,
     const char *node_id,
@@ -528,7 +482,6 @@ static int xmss_manifest_load_annotated(
     int result = LANTERN_CLIENT_ERR_CONFIG;
     LanternYamlObject *objects = NULL;
     size_t count = 0;
-    char *wrapped_array_path = NULL;
     struct xmss_manifest_entry *entries = NULL;
     size_t entry_count = 0;
 
@@ -539,19 +492,6 @@ static int xmss_manifest_load_annotated(
     xmss_manifest_reset(manifest);
 
     objects = lantern_yaml_read_array(path, node_id, &count);
-    if (!objects || count == 0)
-    {
-        lantern_yaml_free_objects(objects, count);
-        objects = NULL;
-        count = 0;
-
-        result = xmss_build_array_path("validators", node_id, &wrapped_array_path);
-        if (result != 0)
-        {
-            goto cleanup;
-        }
-        objects = lantern_yaml_read_array(path, wrapped_array_path, &count);
-    }
     if (!objects || count == 0)
     {
         result = LANTERN_CLIENT_ERR_CONFIG;
@@ -611,23 +551,18 @@ static int xmss_manifest_load_annotated(
             goto cleanup;
         }
 
-        char **pubkey_dst =
-            (role == XMSS_SECRET_KEY_ROLE_ATTESTATION)
-                ? &entry->attestation_pubkey_hex
-                : &entry->proposal_pubkey_hex;
         char **secret_dst =
             (role == XMSS_SECRET_KEY_ROLE_ATTESTATION)
                 ? &entry->attestation_secret_file
                 : &entry->proposal_secret_file;
-        if (*pubkey_dst || *secret_dst)
+        if (*secret_dst)
         {
             result = LANTERN_CLIENT_ERR_CONFIG;
             goto cleanup;
         }
 
-        *pubkey_dst = lantern_string_duplicate(pubkey_hex);
         *secret_dst = lantern_string_duplicate(secret_file);
-        if (!*pubkey_dst || !*secret_dst)
+        if (!*secret_dst)
         {
             result = LANTERN_CLIENT_ERR_ALLOC;
             goto cleanup;
@@ -636,9 +571,7 @@ static int xmss_manifest_load_annotated(
 
     for (size_t i = 0; i < entry_count; ++i)
     {
-        if (!entries[i].attestation_pubkey_hex
-            || !entries[i].proposal_pubkey_hex
-            || !entries[i].attestation_secret_file
+        if (!entries[i].attestation_secret_file
             || !entries[i].proposal_secret_file)
         {
             result = LANTERN_CLIENT_ERR_CONFIG;
@@ -653,7 +586,6 @@ static int xmss_manifest_load_annotated(
 
 cleanup:
     lantern_yaml_free_objects(objects, count);
-    free(wrapped_array_path);
     if (entries)
     {
         struct xmss_manifest tmp = {.entries = entries, .count = entry_count};

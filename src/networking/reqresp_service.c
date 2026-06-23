@@ -13,24 +13,7 @@
 
 enum {
     LANTERN_SNAPPY_FRAME_CHUNK_HEADER_BYTES = 4u,
-    LANTERN_SNAPPY_FRAME_CRC_BYTES = 4u,
-    LANTERN_SNAPPY_FRAME_STREAM_IDENTIFIER_LEN = 6u,
-    LANTERN_SNAPPY_FRAME_STREAM_HEADER_BYTES =
-        LANTERN_SNAPPY_FRAME_CHUNK_HEADER_BYTES + LANTERN_SNAPPY_FRAME_STREAM_IDENTIFIER_LEN,
-    LANTERN_SNAPPY_FRAME_CHUNK_COMPRESSED = 0x00u,
-    LANTERN_SNAPPY_FRAME_CHUNK_UNCOMPRESSED = 0x01u,
-    LANTERN_SNAPPY_FRAME_CHUNK_PADDING_START = 0x02u,
-    LANTERN_SNAPPY_FRAME_CHUNK_PADDING_END = 0x7fu,
-    LANTERN_SNAPPY_FRAME_CHUNK_STREAM_IDENTIFIER = 0xffu,
-};
-
-static const uint8_t LANTERN_SNAPPY_FRAME_MAGIC[LANTERN_SNAPPY_FRAME_STREAM_IDENTIFIER_LEN] = {
-    's',
-    'N',
-    'a',
-    'P',
-    'p',
-    'Y',
+    LANTERN_SNAPPY_FRAME_STREAM_HEADER_BYTES = 10u,
 };
 
 struct reqresp_buffer {
@@ -279,11 +262,6 @@ static uint32_t read_le24(const uint8_t bytes[3]) {
     return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8u) | ((uint32_t)bytes[2] << 16u);
 }
 
-static int is_snappy_padding_chunk(uint8_t type) {
-    return type >= (uint8_t)LANTERN_SNAPPY_FRAME_CHUNK_PADDING_START
-        && type <= (uint8_t)LANTERN_SNAPPY_FRAME_CHUNK_PADDING_END;
-}
-
 static int read_snappy_frame_payload(
     struct lantern_reqresp_stream *stream,
     size_t raw_len,
@@ -309,18 +287,14 @@ static int read_snappy_frame_payload(
     }
     len = (size_t)LANTERN_SNAPPY_FRAME_STREAM_HEADER_BYTES;
 
-    if (payload[0] != (uint8_t)LANTERN_SNAPPY_FRAME_CHUNK_STREAM_IDENTIFIER
-        || read_le24(payload + 1u) != (uint32_t)LANTERN_SNAPPY_FRAME_STREAM_IDENTIFIER_LEN
-        || memcmp(
-               payload + (size_t)LANTERN_SNAPPY_FRAME_CHUNK_HEADER_BYTES,
-               LANTERN_SNAPPY_FRAME_MAGIC,
-               sizeof(LANTERN_SNAPPY_FRAME_MAGIC))
-               != 0) {
+    size_t decoded_total = 0;
+    if (!lantern_snappy_is_framed(payload, len)
+        || lantern_snappy_uncompressed_length(payload, len, &decoded_total) != LANTERN_SNAPPY_OK
+        || decoded_total > raw_len) {
         free(payload);
         return LANTERN_REQRESP_ERR_INVALID_PAYLOAD;
     }
 
-    size_t decoded_total = 0;
     while (decoded_total < raw_len) {
         if (max_payload - len < (size_t)LANTERN_SNAPPY_FRAME_CHUNK_HEADER_BYTES) {
             free(payload);
@@ -339,7 +313,6 @@ static int read_snappy_frame_payload(
         }
         len += (size_t)LANTERN_SNAPPY_FRAME_CHUNK_HEADER_BYTES;
 
-        uint8_t chunk_type = payload[chunk_start];
         size_t chunk_len = (size_t)read_le24(payload + chunk_start + 1u);
         if (chunk_len > max_payload - len) {
             free(payload);
@@ -351,46 +324,12 @@ static int read_snappy_frame_payload(
             return rc;
         }
 
-        const uint8_t *chunk_payload = payload + len;
         len += chunk_len;
-
-        if (chunk_type == (uint8_t)LANTERN_SNAPPY_FRAME_CHUNK_STREAM_IDENTIFIER) {
-            if (chunk_len != (size_t)LANTERN_SNAPPY_FRAME_STREAM_IDENTIFIER_LEN
-                || memcmp(chunk_payload, LANTERN_SNAPPY_FRAME_MAGIC, sizeof(LANTERN_SNAPPY_FRAME_MAGIC)) != 0) {
-                free(payload);
-                return LANTERN_REQRESP_ERR_INVALID_PAYLOAD;
-            }
-            continue;
-        }
-        if (is_snappy_padding_chunk(chunk_type)) {
-            continue;
-        }
-        if (chunk_type != (uint8_t)LANTERN_SNAPPY_FRAME_CHUNK_COMPRESSED
-            && chunk_type != (uint8_t)LANTERN_SNAPPY_FRAME_CHUNK_UNCOMPRESSED) {
+        if (lantern_snappy_uncompressed_length(payload, len, &decoded_total) != LANTERN_SNAPPY_OK
+            || decoded_total > raw_len) {
             free(payload);
             return LANTERN_REQRESP_ERR_INVALID_PAYLOAD;
         }
-        if (chunk_len < (size_t)LANTERN_SNAPPY_FRAME_CRC_BYTES) {
-            free(payload);
-            return LANTERN_REQRESP_ERR_INVALID_PAYLOAD;
-        }
-
-        size_t chunk_raw_len = chunk_len - (size_t)LANTERN_SNAPPY_FRAME_CRC_BYTES;
-        if (chunk_type == (uint8_t)LANTERN_SNAPPY_FRAME_CHUNK_COMPRESSED) {
-            if (lantern_snappy_uncompressed_length_raw(
-                    chunk_payload + (size_t)LANTERN_SNAPPY_FRAME_CRC_BYTES,
-                    chunk_raw_len,
-                    &chunk_raw_len)
-                != LANTERN_SNAPPY_OK) {
-                free(payload);
-                return LANTERN_REQRESP_ERR_INVALID_PAYLOAD;
-            }
-        }
-        if (chunk_raw_len > raw_len - decoded_total) {
-            free(payload);
-            return LANTERN_REQRESP_ERR_INVALID_PAYLOAD;
-        }
-        decoded_total += chunk_raw_len;
     }
 
     uint8_t *scratch = NULL;
@@ -433,21 +372,11 @@ static int snappy_frame_payload_len(
         }
         return 0;
     }
-    if (data[0] != (uint8_t)LANTERN_SNAPPY_FRAME_CHUNK_STREAM_IDENTIFIER
-        || read_le24(data + 1u) != (uint32_t)LANTERN_SNAPPY_FRAME_STREAM_IDENTIFIER_LEN
-        || memcmp(
-               data + (size_t)LANTERN_SNAPPY_FRAME_CHUNK_HEADER_BYTES,
-               LANTERN_SNAPPY_FRAME_MAGIC,
-               sizeof(LANTERN_SNAPPY_FRAME_MAGIC))
-               != 0) {
+    if (!lantern_snappy_is_framed(data, data_len)) {
         return -1;
     }
     size_t offset = (size_t)LANTERN_SNAPPY_FRAME_STREAM_HEADER_BYTES;
     size_t decoded_total = 0;
-    if (raw_len == 0u) {
-        *out_frame_len = offset;
-        return 0;
-    }
     while (decoded_total < raw_len) {
         if (data_len - offset < (size_t)LANTERN_SNAPPY_FRAME_CHUNK_HEADER_BYTES) {
             if (out_need_more) {
@@ -455,7 +384,6 @@ static int snappy_frame_payload_len(
             }
             return 0;
         }
-        uint8_t chunk_type = data[offset];
         size_t chunk_len = (size_t)read_le24(data + offset + 1u);
         offset += (size_t)LANTERN_SNAPPY_FRAME_CHUNK_HEADER_BYTES;
         if (chunk_len > data_len - offset) {
@@ -465,43 +393,11 @@ static int snappy_frame_payload_len(
             return 0;
         }
 
-        const uint8_t *chunk_payload = data + offset;
-        if (chunk_type == (uint8_t)LANTERN_SNAPPY_FRAME_CHUNK_STREAM_IDENTIFIER) {
-            if (chunk_len != (size_t)LANTERN_SNAPPY_FRAME_STREAM_IDENTIFIER_LEN
-                || memcmp(chunk_payload, LANTERN_SNAPPY_FRAME_MAGIC, sizeof(LANTERN_SNAPPY_FRAME_MAGIC)) != 0) {
-                return -1;
-            }
-        } else if (is_snappy_padding_chunk(chunk_type)) {
-            /* no decoded bytes */
-        } else if (chunk_type == (uint8_t)LANTERN_SNAPPY_FRAME_CHUNK_UNCOMPRESSED) {
-            if (chunk_len < (size_t)LANTERN_SNAPPY_FRAME_CRC_BYTES) {
-                return -1;
-            }
-            size_t chunk_raw_len = chunk_len - (size_t)LANTERN_SNAPPY_FRAME_CRC_BYTES;
-            if (chunk_raw_len > raw_len - decoded_total) {
-                return -1;
-            }
-            decoded_total += chunk_raw_len;
-        } else if (chunk_type == (uint8_t)LANTERN_SNAPPY_FRAME_CHUNK_COMPRESSED) {
-            if (chunk_len < (size_t)LANTERN_SNAPPY_FRAME_CRC_BYTES) {
-                return -1;
-            }
-            size_t chunk_raw_len = 0;
-            if (lantern_snappy_uncompressed_length_raw(
-                    chunk_payload + (size_t)LANTERN_SNAPPY_FRAME_CRC_BYTES,
-                    chunk_len - (size_t)LANTERN_SNAPPY_FRAME_CRC_BYTES,
-                    &chunk_raw_len)
-                != LANTERN_SNAPPY_OK) {
-                return -1;
-            }
-            if (chunk_raw_len > raw_len - decoded_total) {
-                return -1;
-            }
-            decoded_total += chunk_raw_len;
-        } else {
+        offset += chunk_len;
+        if (lantern_snappy_uncompressed_length(data, offset, &decoded_total) != LANTERN_SNAPPY_OK
+            || decoded_total > raw_len) {
             return -1;
         }
-        offset += chunk_len;
     }
     *out_frame_len = offset;
     return 0;

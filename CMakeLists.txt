@@ -56,6 +56,7 @@ set(LANTERN_LIBRARY_SOURCES
 		    src/core/client_validator.c
 		    src/genesis/genesis.c
 		    src/genesis/genesis_parse.c
+		    src/genesis/genesis_parse_helpers.c
 		    src/genesis/genesis_parse_registry.c
 		    src/genesis/genesis_validator_config.c
 		    src/encoding/snappy.c

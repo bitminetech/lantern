@@ -30,64 +30,6 @@ static size_t bitlist_encoded_size_bits(size_t bit_length) {
     return byte_len;
 }
 
-static size_t aggregated_attestation_encoded_size(const LanternAggregatedAttestation *attestation) {
-    if (!attestation) {
-        return 0;
-    }
-    if (attestation->aggregation_bits.bit_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
-        return 0;
-    }
-    size_t bits_size = bitlist_encoded_size_bits(attestation->aggregation_bits.bit_length);
-    size_t fixed_section = SSZ_BYTES_PER_LENGTH_OFFSET + LANTERN_ATTESTATION_DATA_SSZ_SIZE;
-    if (fixed_section > SIZE_MAX - bits_size) {
-        return 0;
-    }
-    return fixed_section + bits_size;
-}
-
-static size_t aggregated_attestations_encoded_size(const LanternAggregatedAttestations *attestations) {
-    if (!attestations) {
-        return 0;
-    }
-    if (attestations->length == 0) {
-        return 0;
-    }
-    if (attestations->length > LANTERN_MAX_ATTESTATIONS || !attestations->data) {
-        return 0;
-    }
-    size_t offset_table = attestations->length * SSZ_BYTES_PER_LENGTH_OFFSET;
-    size_t total = offset_table;
-    for (size_t i = 0; i < attestations->length; ++i) {
-        size_t entry = aggregated_attestation_encoded_size(&attestations->data[i]);
-        if (entry == 0 || entry > SIZE_MAX - total) {
-            return 0;
-        }
-        total += entry;
-    }
-    return total;
-}
-
-static size_t aggregated_signature_proof_encoded_size(const LanternAggregatedSignatureProof *proof) {
-    if (!proof) {
-        return 0;
-    }
-    if (proof->participants.bit_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
-        return 0;
-    }
-    if (proof->proof_data.length > LANTERN_AGG_PROOF_MAX_BYTES) {
-        return 0;
-    }
-    size_t participants_size = bitlist_encoded_size_bits(proof->participants.bit_length);
-    size_t fixed_section = SSZ_BYTES_PER_LENGTH_OFFSET * 2u;
-    if (fixed_section > SIZE_MAX - participants_size) {
-        return 0;
-    }
-    if (fixed_section + participants_size > SIZE_MAX - proof->proof_data.length) {
-        return 0;
-    }
-    return fixed_section + participants_size + proof->proof_data.length;
-}
-
 static size_t signed_block_base_ssz_size(void) {
     size_t block_fixed = (sizeof(uint64_t) * 2u)
         + (LANTERN_ROOT_SIZE * 2u)
@@ -112,31 +54,6 @@ static size_t signed_block_max_ssz_size(void) {
         return SIZE_MAX;
     }
     return total + proof_max;
-}
-
-static size_t signed_block_min_capacity(const LanternSignedBlock *block) {
-    if (!block) {
-        return 0;
-    }
-    size_t base = signed_block_base_ssz_size();
-    size_t att_count = block->block.body.attestations.length;
-    size_t att_bytes = aggregated_attestations_encoded_size(&block->block.body.attestations);
-    if (att_count > 0 && att_bytes == 0) {
-        return 0;
-    }
-    size_t total = base;
-    if (att_bytes > SIZE_MAX - total) {
-        return 0;
-    }
-    total += att_bytes;
-    size_t proof_size = 0;
-    if (lantern_ssz_encode_multi_message_aggregate(&block->proof, NULL, 0, &proof_size) != SSZ_SUCCESS) {
-        return 0;
-    }
-    if (proof_size > SIZE_MAX - total) {
-        return 0;
-    }
-    return total + proof_size;
 }
 
 static int basic_attestation_data_sanity(const LanternAttestationData *data) {
@@ -217,8 +134,9 @@ int lantern_gossip_encode_signed_block_snappy(
     if (!block || !out || !written) {
         return -1;
     }
-    size_t raw_capacity = signed_block_min_capacity(block);
-    if (raw_capacity == 0) {
+    size_t raw_capacity = 0;
+    if (lantern_ssz_encode_signed_block(block, NULL, 0, &raw_capacity) != SSZ_SUCCESS
+        || raw_capacity == 0) {
         return -1;
     }
     uint8_t *raw = alloc_buffer(raw_capacity);
@@ -414,11 +332,11 @@ int lantern_gossip_encode_signed_aggregated_attestation_snappy(
     if (basic_signed_aggregated_attestation_sanity(attestation) != 0) {
         return -1;
     }
-    size_t proof_size = aggregated_signature_proof_encoded_size(&attestation->proof);
-    if (proof_size == 0) {
+    size_t raw_capacity = 0;
+    if (lantern_ssz_encode_signed_aggregated_attestation(attestation, NULL, 0, &raw_capacity) != SSZ_SUCCESS
+        || raw_capacity == 0) {
         return -1;
     }
-    size_t raw_capacity = LANTERN_ATTESTATION_DATA_SSZ_SIZE + SSZ_BYTES_PER_LENGTH_OFFSET + proof_size;
     uint8_t *raw = alloc_buffer(raw_capacity);
     if (!raw) {
         return -1;
