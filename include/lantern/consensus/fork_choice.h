@@ -19,7 +19,6 @@ struct lantern_attestation_data_by_root;
 struct lantern_fork_choice_block_entry {
     LanternRoot root;
     LanternRoot parent_root;
-    size_t parent_index;
     uint64_t slot;
     LanternValidatorIndex proposer_index;
     bool has_validator_count;

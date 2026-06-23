@@ -8,10 +8,8 @@ int lantern_client_schedule_blocks_request_batch(
     struct lantern_client *client,
     const char *peer_id_text,
     const LanternRoot *roots,
-    const uint32_t *depths,
     size_t root_count,
     uint64_t request_id) {
-    (void)depths;
     if (!client || !peer_id_text || !roots || root_count == 0 || root_count > LANTERN_MAX_REQUEST_BLOCKS) {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }

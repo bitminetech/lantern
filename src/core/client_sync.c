@@ -714,73 +714,6 @@ static bool state_has_genesis_shape(const LanternState *state)
     return true;
 }
 
-static bool validate_gossip_aggregated_attestation_data_locked(
-    struct lantern_client *client,
-    const LanternAttestationData *data,
-    LanternRoot *out_missing_root)
-{
-    if (!client || !data || !client->has_fork_choice) {
-        return false;
-    }
-    if (out_missing_root) {
-        memset(out_missing_root, 0, sizeof(*out_missing_root));
-    }
-
-    uint64_t source_block_slot = 0u;
-    if (!lantern_client_block_known_locked(client, &data->source.root, &source_block_slot)) {
-        if (out_missing_root) {
-            *out_missing_root = data->source.root;
-        }
-        return false;
-    }
-
-    uint64_t target_block_slot = 0u;
-    if (!lantern_client_block_known_locked(client, &data->target.root, &target_block_slot)) {
-        if (out_missing_root) {
-            *out_missing_root = data->target.root;
-        }
-        return false;
-    }
-
-    uint64_t head_block_slot = 0u;
-    if (!lantern_client_block_known_locked(client, &data->head.root, &head_block_slot)) {
-        if (out_missing_root) {
-            *out_missing_root = data->head.root;
-        }
-        return false;
-    }
-
-    if (data->source.slot > data->target.slot || data->head.slot < data->target.slot) {
-        return false;
-    }
-    if (source_block_slot != data->source.slot
-        || target_block_slot != data->target.slot
-        || head_block_slot != data->head.slot) {
-        return false;
-    }
-    if (!lantern_client_checkpoint_is_ancestor_locked(client, &data->source, &data->target)) {
-        return false;
-    }
-    if (!lantern_client_checkpoint_is_ancestor_locked(client, &data->target, &data->head)) {
-        return false;
-    }
-    if (data->slot < data->head.slot) {
-        return false;
-    }
-
-    uint64_t current_slot = 0u;
-    if (!lantern_client_current_slot(client, &current_slot)) {
-        return false;
-    }
-    uint64_t allowed_slot = current_slot == UINT64_MAX ? UINT64_MAX : current_slot + 1u;
-    if (data->slot > allowed_slot) {
-        return false;
-    }
-
-    return true;
-}
-
-
 /**
  * Handle a block received via gossip.
  *
@@ -937,10 +870,23 @@ static bool verify_and_cache_aggregated_attestation_locked(
         || !attestation->proof.proof_data.data) {
         return false;
     }
-    if (!validate_gossip_aggregated_attestation_data_locked(
+    LanternVote vote = {0};
+    vote.slot = attestation->data.slot;
+    vote.head = attestation->data.head;
+    vote.target = attestation->data.target;
+    vote.source = attestation->data.source;
+    struct lantern_vote_rejection_info rejection;
+    memset(&rejection, 0, sizeof(rejection));
+    if (!lantern_client_validate_vote_constraints(
             client,
-            &attestation->data,
-            out_missing_root)) {
+            &vote,
+            "gossip",
+            meta,
+            "aggregated attestation",
+            &rejection)) {
+        if (out_missing_root && rejection.has_unknown_root) {
+            *out_missing_root = rejection.unknown_root;
+        }
         return false;
     }
 
@@ -2792,12 +2738,10 @@ static bool try_schedule_blocks_request_batch(
         first_root_hex[0] ? first_root_hex : "0x0",
         min_depth == UINT32_MAX ? 0u : min_depth,
         max_depth);
-
     if (lantern_client_schedule_blocks_request_batch(
             client,
             selected_peer,
             roots,
-            depths,
             root_count,
             request_id)
         != 0)

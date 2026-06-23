@@ -19,7 +19,6 @@
 #include "client_internal.h"
 
 #include <inttypes.h>
-#include <stdio.h>
 #include <string.h>
 
 #include "lantern/consensus/fork_choice.h"
@@ -172,7 +171,6 @@ static bool validate_vote_checkpoint(
 
     return true;
 }
-
 
 static bool buffer_pending_vote_locked(
     struct lantern_client *client,
@@ -853,117 +851,101 @@ bool lantern_client_validate_vote_constraints(
     const char *log_facility = (facility && *facility) ? facility : "state";
     const char *label = (context && *context) ? context : "vote";
 
-    if (!validate_vote_checkpoint(
-            client,
-            vote,
-            &vote->source,
-            "source",
-            log_facility,
-            meta,
-            label,
-            out_rejection))
+    const struct
     {
-        return false;
+        const LanternCheckpoint *checkpoint;
+        const char *name;
+    } checkpoints[] = {
+        {&vote->source, "source"},
+        {&vote->target, "target"},
+        {&vote->head, "head"},
+    };
+    for (size_t i = 0; i < sizeof(checkpoints) / sizeof(checkpoints[0]); ++i)
+    {
+        if (!validate_vote_checkpoint(
+                client,
+                vote,
+                checkpoints[i].checkpoint,
+                checkpoints[i].name,
+                log_facility,
+                meta,
+                label,
+                out_rejection))
+        {
+            return false;
+        }
     }
 
-    if (!validate_vote_checkpoint(
-            client,
-            vote,
-            &vote->target,
-            "target",
-            log_facility,
-            meta,
-            label,
-            out_rejection))
+    const struct
     {
-        return false;
-    }
-
-    if (!validate_vote_checkpoint(
-            client,
-            vote,
-            &vote->head,
-            "head",
-            log_facility,
-            meta,
-            label,
-            out_rejection))
+        const LanternCheckpoint *older;
+        const LanternCheckpoint *newer;
+        const char *older_name;
+        const char *newer_name;
+        const char *detail;
+    } slot_order_checks[] = {
+        {&vote->source, &vote->target, "source", "target", "target slot < source"},
+        {&vote->target, &vote->head, "target", "head", "head slot < target"},
+    };
+    for (size_t i = 0; i < sizeof(slot_order_checks) / sizeof(slot_order_checks[0]); ++i)
     {
-        return false;
-    }
-
-    if (vote->target.slot < vote->source.slot)
-    {
+        const uint64_t older_slot = slot_order_checks[i].older->slot;
+        const uint64_t newer_slot = slot_order_checks[i].newer->slot;
+        if (newer_slot >= older_slot)
+        {
+            continue;
+        }
         lantern_log_debug(
             log_facility,
             meta,
-            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " "
-            "(target slot < source)",
+            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (%s)",
             label,
             vote->validator_id,
-            vote->slot);
+            vote->slot,
+            slot_order_checks[i].detail);
         if (out_rejection)
         {
             lantern_vote_rejection_set(
                 out_rejection,
-                "target slot %" PRIu64 " < source slot %" PRIu64,
-                vote->target.slot,
-                vote->source.slot);
+                "%s slot %" PRIu64 " < %s slot %" PRIu64,
+                slot_order_checks[i].newer_name,
+                newer_slot,
+                slot_order_checks[i].older_name,
+                older_slot);
         }
         return false;
     }
 
-    if (vote->head.slot < vote->target.slot)
+    const struct
     {
-        lantern_log_debug(
-            log_facility,
-            meta,
-            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " "
-            "(head slot < target)",
-            label,
-            vote->validator_id,
-            vote->slot);
-        if (out_rejection)
+        const LanternCheckpoint *ancestor;
+        const LanternCheckpoint *descendant;
+        const char *detail;
+        const char *reason;
+    } ancestry_checks[] = {
+        {&vote->source, &vote->target, "source not ancestor of target", "Source checkpoint must be ancestor of target"},
+        {&vote->target, &vote->head, "target not ancestor of head", "Target checkpoint must be ancestor of head"},
+    };
+    for (size_t i = 0; i < sizeof(ancestry_checks) / sizeof(ancestry_checks[0]); ++i)
+    {
+        if (lantern_client_checkpoint_is_ancestor_locked(
+                client,
+                ancestry_checks[i].ancestor,
+                ancestry_checks[i].descendant))
         {
-            lantern_vote_rejection_set(
-                out_rejection,
-                "head slot %" PRIu64 " < target slot %" PRIu64,
-                vote->head.slot,
-                vote->target.slot);
+            continue;
         }
-        return false;
-    }
-
-    if (!lantern_client_checkpoint_is_ancestor_locked(client, &vote->source, &vote->target))
-    {
         lantern_log_debug(
             log_facility,
             meta,
-            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " "
-            "(source not ancestor of target)",
+            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (%s)",
             label,
             vote->validator_id,
-            vote->slot);
+            vote->slot,
+            ancestry_checks[i].detail);
         if (out_rejection)
         {
-            lantern_vote_rejection_set(out_rejection, "Source checkpoint must be ancestor of target");
-        }
-        return false;
-    }
-
-    if (!lantern_client_checkpoint_is_ancestor_locked(client, &vote->target, &vote->head))
-    {
-        lantern_log_debug(
-            log_facility,
-            meta,
-            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " "
-            "(target not ancestor of head)",
-            label,
-            vote->validator_id,
-            vote->slot);
-        if (out_rejection)
-        {
-            lantern_vote_rejection_set(out_rejection, "Target checkpoint must be ancestor of head");
+            lantern_vote_rejection_set(out_rejection, "%s", ancestry_checks[i].reason);
         }
         return false;
     }

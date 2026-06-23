@@ -2011,7 +2011,7 @@ int reqresp_collect_blocks_by_range(
                     descending[descending_count].root = entry->root;
                     descending_count += 1u;
                 }
-                index = entry->parent_index;
+                index = fork_choice_find_root_index(&client->fork_choice, &entry->parent_root);
             }
         }
     }

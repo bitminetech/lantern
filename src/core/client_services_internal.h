@@ -630,7 +630,6 @@ int lantern_reqresp_read_response_chunk(
  * @param client         Client instance
  * @param peer_id_text   Peer ID string
  * @param roots          Block roots to request
- * @param depths         Backfill depth per root (may be NULL for zeros)
  * @param root_count     Number of roots
  * @param request_id     Internal request tracking ID (0 disables tracking)
  * @return 0 on success
@@ -644,7 +643,6 @@ int lantern_client_schedule_blocks_request_batch(
     struct lantern_client *client,
     const char *peer_id_text,
     const LanternRoot *roots,
-    const uint32_t *depths,
     size_t root_count,
     uint64_t request_id);
 

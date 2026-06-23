@@ -1006,12 +1006,14 @@ static int validate_lexicographic_head_among(
             }
             char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
             format_root_hex(&entry->root, root_hex, sizeof(root_hex));
+            char parent_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+            format_root_hex(&entry->parent_root, parent_hex, sizeof(parent_hex));
             fprintf(
                 stderr,
-                "  root=%s weight=%" PRIu64 " parent_index=%zu\n",
+                "  root=%s weight=%" PRIu64 " parent=%s\n",
                 root_hex[0] ? root_hex : "0x0",
                 weights[i],
-                entry->parent_index);
+                parent_hex[0] ? parent_hex : "0x0");
         }
         free(weights);
         return -1;

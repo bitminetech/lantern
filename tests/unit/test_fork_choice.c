@@ -706,8 +706,8 @@ static int test_fork_choice_prune_states_keeps_finalized_to_head_chain(void) {
     assert(block_three_index != SIZE_MAX);
     assert(fork_two_index == SIZE_MAX);
     assert(store.block_len == 2u);
-    assert(store.blocks[block_two_index].parent_index == SIZE_MAX);
-    assert(store.blocks[block_three_index].parent_index == block_two_index);
+    assert(roots_equal(&store.blocks[block_two_index].parent_root, &block_one_root));
+    assert(roots_equal(&store.blocks[block_three_index].parent_root, &block_two_root));
     assert(roots_equal(lantern_fork_choice_anchor_root(&store), &block_two_root));
     uint64_t anchor_slot = 0;
     assert(lantern_fork_choice_anchor_slot(&store, &anchor_slot) == 0);
