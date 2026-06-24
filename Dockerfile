@@ -56,6 +56,8 @@ COPY . .
 RUN LANTERN_BOOTSTRAP_SKIP_SUBMODULE_SYNC=1 ./scripts/bootstrap.sh
 RUN if [ "${LANTERN_RUST_PROFILE}" = "1" ]; then \
         printf '[target."cfg(target_arch = \\"x86_64\\")"]\nrustflags = ["-C", "target-cpu=native", "-C", "force-frame-pointers=yes", "-C", "debuginfo=2"]\n' > external/c-leanvm-xmss/.cargo/config.toml; \
+    else \
+        printf '[target."cfg(target_arch = \\"x86_64\\")"]\nrustflags = ["-C", "target-cpu=x86-64-v2"]\n' > external/c-leanvm-xmss/.cargo/config.toml; \
     fi \
     && echo "LANTERN_RUST_PROFILE=${LANTERN_RUST_PROFILE}" \
     && cat external/c-leanvm-xmss/.cargo/config.toml
