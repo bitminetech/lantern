@@ -42,6 +42,8 @@ RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-too
     && . "$CARGO_HOME/env" \
     && rustup component add rustfmt clippy
 ENV PATH="${CARGO_HOME}/bin:${PATH}"
+ENV CARGO_NET_RETRY=10
+ENV CARGO_HTTP_MULTIPLEXING=false
 ENV CCACHE_DIR=/root/.ccache
 ENV CCACHE_MAXSIZE=2G
 
