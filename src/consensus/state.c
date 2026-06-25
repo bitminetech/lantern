@@ -2834,15 +2834,12 @@ int lantern_state_compute_vote_checkpoints(
     if (lantern_fork_choice_block_info(fork_choice, &head_root, &head_slot, NULL, NULL) != 0) {
         return -1;
     }
-    const LanternCheckpoint *store_latest_justified =
-        lantern_fork_choice_latest_justified(fork_choice);
     const LanternCheckpoint *store_latest_finalized =
         lantern_fork_choice_latest_finalized(fork_choice);
-    LanternCheckpoint source_checkpoint =
-        store_latest_justified ? *store_latest_justified : base_state->latest_justified;
+    LanternCheckpoint source_checkpoint = base_state->latest_justified;
     LanternCheckpoint finalized_checkpoint = base_state->latest_finalized;
-    /* At genesis latest_justified.root is a placeholder zero root. */
-    if (head_slot == 0u && base_state->latest_block_header.slot == 0u) {
+    /* Normalize the genesis placeholder root from the head state. */
+    if (lantern_root_is_zero(&source_checkpoint.root)) {
         source_checkpoint.root = head_root;
     }
     if (store_latest_finalized && !lantern_root_is_zero(&store_latest_finalized->root)) {
@@ -2914,6 +2911,9 @@ int lantern_state_compute_vote_checkpoints(
         target_slot = parent_slot;
     }
 
+    if (source_checkpoint.slot > target_slot) {
+        return -1;
+    }
     out_head->root = head_root;
     out_head->slot = head_slot;
     out_target->root = target_root;

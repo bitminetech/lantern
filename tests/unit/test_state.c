@@ -4132,7 +4132,7 @@ static int test_compute_vote_checkpoints_respects_safe_target(void) {
     return 0;
 }
 
-static int test_compute_vote_checkpoints_uses_store_source_when_cached_head_state_lags(void) {
+static int test_compute_vote_checkpoints_uses_head_state_source_when_store_justified_advances(void) {
     LanternState state;
     LanternForkChoice fork_choice;
     LanternRoot genesis_root;
@@ -4147,7 +4147,7 @@ static int test_compute_vote_checkpoints_uses_store_source_when_cached_head_stat
         make_block(&state, slot, &parent_root, &block, &block_root);
         expect_zero(
             lantern_fork_choice_add_block(&fork_choice, &block, NULL, NULL, &block_root),
-            "add block for source precedence test");
+            "add block for head-state source test");
         block_roots[slot] = block_root;
         parent_root = block_root;
         lantern_block_body_reset(&block.body);
@@ -4160,7 +4160,7 @@ static int test_compute_vote_checkpoints_uses_store_source_when_cached_head_stat
 
     LanternState cached_head_state;
     lantern_state_init(&cached_head_state);
-    expect_zero(lantern_state_clone(&state, &cached_head_state), "clone stale cached head state");
+    expect_zero(lantern_state_clone(&state, &cached_head_state), "clone cached head state");
 
     LanternBlock head_block;
     make_block(&state, 4, &parent_root, &head_block, &block_roots[4]);
@@ -4172,7 +4172,7 @@ static int test_compute_vote_checkpoints_uses_store_source_when_cached_head_stat
             NULL,
             &block_roots[4],
             &cached_head_state),
-        "add head block with lagging cached state");
+        "add head block with cached state");
     lantern_block_body_reset(&head_block.body);
 
     fork_choice.head = block_roots[4];
@@ -4185,28 +4185,28 @@ static int test_compute_vote_checkpoints_uses_store_source_when_cached_head_stat
     store_justified.root = block_roots[3];
     expect_zero(
         lantern_fork_choice_update_checkpoints(&fork_choice, &store_justified, &state.latest_finalized),
-        "advance fork-choice justified beyond state justified");
+        "advance fork-choice justified beyond head-state justified");
 
     LanternCheckpoint head;
     LanternCheckpoint target;
     LanternCheckpoint source;
     int rc = lantern_state_compute_vote_checkpoints(&state, &head, &target, &source);
     if (rc != 0) {
-        fprintf(stderr, "compute vote checkpoints store source precedence failed (rc=%d)\n", rc);
+        fprintf(stderr, "compute vote checkpoints head-state source failed (rc=%d)\n", rc);
         lantern_state_reset(&cached_head_state);
         lantern_state_reset(&state);
         lantern_fork_choice_reset(&fork_choice);
         return 1;
     }
-    if (!checkpoints_equal(&source, &store_justified)) {
-        fprintf(stderr, "source checkpoint should use store latest_justified when cached head state lags\n");
+    if (!checkpoints_equal(&source, &cached_head_state.latest_justified)) {
+        fprintf(stderr, "source checkpoint should use head state's latest_justified\n");
         lantern_state_reset(&cached_head_state);
         lantern_state_reset(&state);
         lantern_fork_choice_reset(&fork_choice);
         return 1;
     }
-    if (checkpoints_equal(&source, &cached_head_state.latest_justified)) {
-        fprintf(stderr, "source checkpoint incorrectly used cached head state latest_justified\n");
+    if (checkpoints_equal(&source, &store_justified)) {
+        fprintf(stderr, "source checkpoint incorrectly used store latest_justified\n");
         lantern_state_reset(&cached_head_state);
         lantern_state_reset(&state);
         lantern_fork_choice_reset(&fork_choice);
@@ -4791,7 +4791,7 @@ int main(void) {
     if (test_compute_vote_checkpoints_can_match_source() != 0) {
         return 1;
     }
-    if (test_compute_vote_checkpoints_uses_store_source_when_cached_head_state_lags() != 0) {
+    if (test_compute_vote_checkpoints_uses_head_state_source_when_store_justified_advances() != 0) {
         return 1;
     }
     if (test_compute_vote_checkpoints_respects_safe_target() != 0) {
