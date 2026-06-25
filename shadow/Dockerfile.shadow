@@ -33,7 +33,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=apt-cache-${TARGE
         python3-pip \
         curl \
         ccache \
-        zlib1g-dev
+        zlib1g-dev \
+        util-linux
 
 # Install latest Rust toolchain via rustup
 ENV CARGO_HOME=/root/.cargo
@@ -69,13 +70,14 @@ RUN if [ "${LANTERN_RUST_PROFILE}" = "1" ]; then \
 ARG LANTERN_FORCE_REBUILD=0
 RUN --mount=type=cache,target=/root/.cargo/registry,sharing=locked,id=cargo-registry-${TARGETPLATFORM} \
     --mount=type=cache,target=/root/.cargo/git,sharing=locked,id=cargo-git-${TARGETPLATFORM} \
-    --mount=type=cache,target=/root/.ccache,sharing=locked,id=ccache-${TARGETPLATFORM} \
-    --mount=type=cache,target=/usr/src/lantern/build,sharing=locked,id=lantern-build-${TARGETPLATFORM} \
+    --mount=type=cache,target=/root/.ccache,sharing=locked,id=ccache-shadow-${TARGETPLATFORM} \
+    --mount=type=cache,target=/usr/src/lantern/build,sharing=locked,id=lantern-build-shadow-${TARGETPLATFORM} \
     echo "LANTERN_FORCE_REBUILD=${LANTERN_FORCE_REBUILD}" \
     && echo "LANTERN_C_LEANVM_XMSS_JEMALLOC=${LANTERN_C_LEANVM_XMSS_JEMALLOC}" \
     && echo "LANTERN_C_LEAN_LIBP2P_AWSLC_CPU_JITTER_ENTROPY=${LANTERN_C_LEAN_LIBP2P_AWSLC_CPU_JITTER_ENTROPY}" \
     && cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DLANTERN_GIT_COMMIT="${GIT_COMMIT}" -DLANTERN_GIT_BRANCH="${GIT_BRANCH}" -DLANTERN_C_LEANVM_XMSS_JEMALLOC="${LANTERN_C_LEANVM_XMSS_JEMALLOC}" -DLANTERN_C_LEAN_LIBP2P_AWSLC_CPU_JITTER_ENTROPY="${LANTERN_C_LEAN_LIBP2P_AWSLC_CPU_JITTER_ENTROPY}" \
-    && cmake --build build --target lantern_cli --parallel "$(nproc)" --clean-first \
+    && taskset -c 0 cmake --build build --target lantern_c_leanvm_xmss_build --parallel 1 \
+    && cmake --build build --target lantern_cli --parallel "$(nproc)" \
     && (cmake --build build --target lantern_client_test --parallel "$(nproc)" || true) \
     && mkdir -p /opt/lantern/bin \
     && cp build/lantern_cli /opt/lantern/bin/lantern \

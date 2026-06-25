@@ -17,11 +17,13 @@ or locally:
 cmake -S . -B build-shadow \
   -DLANTERN_C_LEANVM_XMSS_JEMALLOC=OFF \
   -DLANTERN_C_LEAN_LIBP2P_AWSLC_CPU_JITTER_ENTROPY=OFF
+taskset -c 0 cmake --build build-shadow --target lantern_c_leanvm_xmss_build --parallel 1
 cmake --build build-shadow --target lantern_cli
 ```
 
 - `JEMALLOC=OFF` drops the jemalloc global allocator (it deadlocks Shadow's shim, [shadow#3763](https://github.com/shadow/shadow/issues/3763)).
 - `AWSLC_CPU_JITTER_ENTROPY=OFF` disables aws-lc's CPU-jitter entropy source.
+- `taskset -c 0` on the prover target bakes its thread count to 1, matching Shadow's one CPU per process (see Notes). The Dockerfile does this automatically.
 
 ## Run
 
@@ -42,9 +44,12 @@ above via the per-node environment so the normal lean-quickstart run is unchange
 
 - The jitter source is disabled at build time; RDRAND/RDSEED are masked at runtime via
   `OPENSSL_ia32cap`. With both off, aws-lc falls back to `getrandom`, which Shadow virtualizes.
-  Confirm the mask once on a real x86_64 host.
+- The prover (leanVM) bakes its thread count from the build host's CPU count and asserts it
+  matches at startup. Shadow gives each process one CPU, so the prover must be built with a
+  one-CPU view (`taskset -c 0`) or it aborts with "built for N threads ... please rebuild".
 - The sim-cost model (`src/consensus/shadow_cost.c`) sleeps `n / rate` ns after each real
   prove/verify/merge so prover cost shows on the virtual clock. Rates also accept CLI flags
   (`--shadow-xmss-*-rate`).
 - QUIC needs no patch: Lantern's ngtcp2 UDP path uses plain `sendto`/`recvfrom` and none of the
-  GSO/GRO/ECN options that the Rust and Go stacks patch around. Build against stock Shadow.
+  GSO/GRO/ECN options the Rust and Go stacks patch around. Confirmed: a 4-node lantern devnet
+  boots, peers, and finalizes under stock (unpatched) Shadow 3.3.0.
