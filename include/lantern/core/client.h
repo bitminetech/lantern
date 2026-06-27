@@ -255,6 +255,8 @@ struct lantern_client {
     bool validator_thread_started;
     int validator_stop_flag;
     struct lantern_async_block_proposal_job *block_proposal_job;
+    struct lantern_async_block_proposal_job *prepared_block_proposal_job;
+    uint64_t prebuilt_proposal_signature_slot;
     pthread_mutex_t block_proposal_lock;
     pthread_cond_t block_proposal_cond;
     pthread_t block_proposal_thread;
