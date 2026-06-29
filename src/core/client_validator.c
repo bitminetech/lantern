@@ -1631,10 +1631,6 @@ static lantern_client_error validator_prepare_block_proposal_job(
         result = LANTERN_CLIENT_ERR_VALIDATOR;
         goto cleanup;
     }
-    if (prebuild)
-    {
-        client->prebuilt_proposal_signature_slot = slot;
-    }
     other_finished_seconds = lantern_time_now_seconds();
     validator_add_stage_seconds(
         &job->stage_timings.other_prover_setup_seconds,
@@ -1686,6 +1682,10 @@ static int enqueue_block_proposal_job(
     }
     client->block_proposal_job = job;
     client->block_proposal_inflight = true;
+    if (job->is_prebuild)
+    {
+        client->prebuilt_proposal_signature_slot = job->slot;
+    }
     if (client->block_proposal_cond_initialized)
     {
         pthread_cond_signal(&client->block_proposal_cond);
@@ -1705,6 +1705,7 @@ static void block_proposal_mark_finished(struct lantern_client *client)
         return;
     }
     client->block_proposal_inflight = false;
+    client->prebuilt_proposal_signature_slot = 0u;
     if (client->block_proposal_cond_initialized)
     {
         pthread_cond_broadcast(&client->block_proposal_cond);
@@ -1732,11 +1733,87 @@ static void block_proposal_record_local_success(
     unlock_mutex_with_log(&client->validator_lock, client->node_id, "validator_lock");
 }
 
-static bool process_block_proposal_job(struct lantern_async_block_proposal_job *job)
+static bool block_proposal_local_success_recorded(
+    struct lantern_client *client,
+    size_t local_index,
+    uint64_t slot)
+{
+    bool recorded = false;
+    if (!client || !client->validator_lock_initialized)
+    {
+        return false;
+    }
+    if (pthread_mutex_lock(&client->validator_lock) != 0)
+    {
+        return false;
+    }
+    if (local_index < client->local_validator_count)
+    {
+        recorded = client->local_validators[local_index].last_proposed_slot == slot;
+    }
+    unlock_mutex_with_log(&client->validator_lock, client->node_id, "validator_lock");
+    return recorded;
+}
+
+static int block_proposal_commit_and_log(
+    struct lantern_async_block_proposal_job *job,
+    const char *root_hex,
+    bool require_current_head)
 {
     if (!job || !job->client)
     {
-        return true;
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    struct lantern_client *client = job->client;
+    int rc = require_current_head
+        ? lantern_client_commit_and_publish_current_head_block(
+              client,
+              &job->block,
+              &job->block_root,
+              &job->post_state,
+              &job->post_store)
+        : lantern_client_commit_and_publish_local_block(
+              client,
+              &job->block,
+              &job->block_root,
+              &job->post_state,
+              &job->post_store);
+    if (rc == LANTERN_CLIENT_OK)
+    {
+        block_proposal_record_local_success(client, job->local_index, job->slot);
+        lantern_log_info(
+            "propose",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "slot %" PRIu64 ", %s, %zu attestations",
+            job->slot,
+            root_hex && root_hex[0] ? root_hex : "0x0",
+            job->block.block.body.attestations.length);
+    }
+    else if (require_current_head && rc == LANTERN_CLIENT_ERR_IGNORED)
+    {
+        lantern_log_warn(
+            "propose",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "slot %" PRIu64 ", skipped, reason: prebuild_parent_changed",
+            job->slot);
+    }
+    else
+    {
+        lantern_log_warn(
+            "propose",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "slot %" PRIu64 ", skipped, reason: publish_failed, rc %d",
+            job->slot,
+            rc);
+    }
+    return rc;
+}
+
+static int process_block_proposal_job(struct lantern_async_block_proposal_job *job)
+{
+    if (!job || !job->client)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_client *client = job->client;
     char root_hex[2 * LANTERN_ROOT_SIZE + 3];
@@ -1767,7 +1844,7 @@ static bool process_block_proposal_job(struct lantern_async_block_proposal_job *
             job->slot,
             proof_rc,
             proof_seconds);
-        return true;
+        return LANTERN_CLIENT_ERR_RUNTIME;
     }
 
     validator_stage_timings_add_remainder(&job->stage_timings, total_seconds);
@@ -1784,60 +1861,13 @@ static bool process_block_proposal_job(struct lantern_async_block_proposal_job *
         proof_seconds,
         total_seconds);
 
-    if (job->is_prebuild)
-    {
-        if (client->block_proposal_lock_initialized
-            && pthread_mutex_lock(&client->block_proposal_lock) == 0)
-        {
-            if (!client->block_proposal_stop)
-            {
-                block_proposal_job_free(client->prepared_block_proposal_job);
-                client->prepared_block_proposal_job = job;
-                pthread_mutex_unlock(&client->block_proposal_lock);
-                return false;
-            }
-            pthread_mutex_unlock(&client->block_proposal_lock);
-        }
-        return true;
-    }
-
-    int rc = lantern_client_commit_and_publish_local_block(
-        client,
-        &job->block,
-        &job->block_root,
-        &job->post_state,
-        &job->post_store);
-    if (rc == LANTERN_CLIENT_OK)
-    {
-        block_proposal_record_local_success(client, job->local_index, job->slot);
-        lantern_log_info(
-            "propose",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "slot %" PRIu64 ", %s, %zu attestations",
-            job->slot,
-            root_hex[0] ? root_hex : "0x0",
-            job->block.block.body.attestations.length);
-    }
-    else
-    {
-        lantern_log_warn(
-            "propose",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "slot %" PRIu64 ", skipped, reason: publish_failed, rc %d",
-            job->slot,
-            rc);
-    }
-    return true;
+    return block_proposal_commit_and_log(job, root_hex, job->is_prebuild);
 }
 
 static bool block_proposal_waiting_on_prebuild(struct lantern_client *client, uint64_t slot)
 {
     bool waiting = false;
     if (!client)
-    {
-        return false;
-    }
-    if (client->prebuilt_proposal_signature_slot != slot)
     {
         return false;
     }
@@ -1881,6 +1911,7 @@ static void *block_proposal_worker_main(void *arg)
             struct lantern_async_block_proposal_job *queued = client->block_proposal_job;
             client->block_proposal_job = NULL;
             client->block_proposal_inflight = false;
+            client->prebuilt_proposal_signature_slot = 0u;
             pthread_mutex_unlock(&client->block_proposal_lock);
             block_proposal_job_free(queued);
             break;
@@ -1889,9 +1920,34 @@ static void *block_proposal_worker_main(void *arg)
         client->block_proposal_job = NULL;
         pthread_mutex_unlock(&client->block_proposal_lock);
 
-        if (process_block_proposal_job(job))
+        uint64_t restart_slot = job ? job->slot : 0u;
+        size_t restart_local_index = job ? job->local_index : 0u;
+        bool was_prebuild = job && job->is_prebuild;
+        int rc = process_block_proposal_job(job);
+        block_proposal_job_free(job);
+        if (was_prebuild && rc == LANTERN_CLIENT_ERR_IGNORED)
         {
-            block_proposal_job_free(job);
+            struct lantern_async_block_proposal_job *fresh = NULL;
+            rc = validator_prepare_block_proposal_job(
+                client,
+                restart_slot,
+                restart_local_index,
+                false,
+                &fresh);
+            if (rc == LANTERN_CLIENT_OK)
+            {
+                (void)process_block_proposal_job(fresh);
+                block_proposal_job_free(fresh);
+            }
+            else
+            {
+                lantern_log_warn(
+                    "propose",
+                    &(const struct lantern_log_metadata){.validator = client->node_id},
+                    "slot %" PRIu64 ", skipped, reason: stale_prebuild_rebuild_failed, rc %d",
+                    restart_slot,
+                    rc);
+            }
         }
         block_proposal_mark_finished(client);
     }
@@ -2414,68 +2470,14 @@ int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t
     {
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
+    if (block_proposal_local_success_recorded(client, local_index, slot))
+    {
+        return LANTERN_CLIENT_OK;
+    }
 
-    struct lantern_async_block_proposal_job *prepared = NULL;
-    if (client->block_proposal_lock_initialized
-        && pthread_mutex_lock(&client->block_proposal_lock) == 0)
-    {
-        prepared = client->prepared_block_proposal_job;
-        client->prepared_block_proposal_job = NULL;
-        if (prepared && client->prebuilt_proposal_signature_slot == prepared->slot)
-        {
-            client->prebuilt_proposal_signature_slot = 0u;
-        }
-        pthread_mutex_unlock(&client->block_proposal_lock);
-    }
-    if (prepared && prepared->slot != slot)
-    {
-        block_proposal_job_free(prepared);
-        prepared = NULL;
-    }
-    if (prepared)
-    {
-        bool usable =
-            prepared->local_index == local_index
-            && prepared->block.block.slot == slot
-            && prepared->block.block.proposer_index == prepared->proposer_index;
-        bool state_locked = usable && lantern_client_lock_state(client);
-        if (!state_locked)
-        {
-            usable = false;
-        }
-        else
-        {
-            LanternRoot current_head = {0};
-            usable =
-                client->has_fork_choice
-                && lantern_fork_choice_current_head(&client->fork_choice, &current_head) == 0
-                && memcmp(
-                       current_head.bytes,
-                       prepared->block.block.parent_root.bytes,
-                       LANTERN_ROOT_SIZE)
-                       == 0;
-            lantern_client_unlock_state(client, state_locked);
-        }
-        if (usable)
-        {
-            int rc = lantern_client_commit_and_publish_local_block(
-                client,
-                &prepared->block,
-                &prepared->block_root,
-                &prepared->post_state,
-                &prepared->post_store);
-            if (rc == LANTERN_CLIENT_OK)
-            {
-                block_proposal_record_local_success(client, prepared->local_index, prepared->slot);
-            }
-            block_proposal_job_free(prepared);
-            return rc;
-        }
-        block_proposal_job_free(prepared);
-    }
     if (block_proposal_waiting_on_prebuild(client, slot))
     {
-        return LANTERN_CLIENT_ERR_IGNORED;
+        return LANTERN_CLIENT_OK;
     }
 
     return validator_start_block_proposal_job(client, slot, local_index, false);
@@ -2516,7 +2518,8 @@ static void validator_maybe_prebuild_next_proposal(
     }
     target_interval += tp->interval_index;
 
-    if (client->prebuilt_proposal_signature_slot == next_slot
+    if (block_proposal_local_success_recorded(client, (size_t)local_index, next_slot)
+        || block_proposal_waiting_on_prebuild(client, next_slot)
         || !validator_duty_gate_allows(client, next_slot, "prebuild")
         || !block_proposal_worker_can_accept(client))
     {
@@ -3103,6 +3106,7 @@ int start_block_proposal_worker(struct lantern_client *client)
 
     client->block_proposal_stop = false;
     client->block_proposal_inflight = false;
+    client->prebuilt_proposal_signature_slot = 0u;
     if (pthread_create(&client->block_proposal_thread, NULL, block_proposal_worker_main, client) != 0)
     {
         client->block_proposal_stop = true;
@@ -3151,9 +3155,8 @@ void stop_block_proposal_worker(struct lantern_client *client)
     }
     block_proposal_job_free(client->block_proposal_job);
     client->block_proposal_job = NULL;
-    block_proposal_job_free(client->prepared_block_proposal_job);
-    client->prepared_block_proposal_job = NULL;
     client->block_proposal_inflight = false;
+    client->prebuilt_proposal_signature_slot = 0u;
     client->block_proposal_stop = true;
 
     if (client->block_proposal_cond_initialized)

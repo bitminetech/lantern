@@ -870,7 +870,6 @@ static void client_reset_base(struct lantern_client *client)
     client->validator_thread_started = false;
     client->validator_stop_flag = 1;
     client->block_proposal_job = NULL;
-    client->prepared_block_proposal_job = NULL;
     client->prebuilt_proposal_signature_slot = 0u;
     client->block_proposal_lock_initialized = false;
     client->block_proposal_cond_initialized = false;
