@@ -172,6 +172,7 @@ struct lantern_async_block_proposal_job {
     struct lantern_client *client;
     uint64_t slot;
     size_t local_index;
+    bool is_prebuild;
     uint64_t proposer_index;
     double build_started_seconds;
     uint64_t snapshot_finished_ms;
@@ -1499,6 +1500,7 @@ static lantern_client_error validator_prepare_block_proposal_job(
         return LANTERN_CLIENT_ERR_ALLOC;
     }
     block_proposal_job_init(job, client, slot, local_index);
+    job->is_prebuild = prebuild;
 
     LanternAggregatedAttestations attestations;
     lantern_aggregated_attestations_init(&attestations);
@@ -1782,7 +1784,7 @@ static bool process_block_proposal_job(struct lantern_async_block_proposal_job *
         proof_seconds,
         total_seconds);
 
-    if (client->prebuilt_proposal_signature_slot == job->slot)
+    if (job->is_prebuild)
     {
         if (client->block_proposal_lock_initialized
             && pthread_mutex_lock(&client->block_proposal_lock) == 0)
@@ -1826,6 +1828,34 @@ static bool process_block_proposal_job(struct lantern_async_block_proposal_job *
             rc);
     }
     return true;
+}
+
+static bool block_proposal_waiting_on_prebuild(struct lantern_client *client, uint64_t slot)
+{
+    bool waiting = false;
+    if (!client)
+    {
+        return false;
+    }
+    if (client->prebuilt_proposal_signature_slot != slot)
+    {
+        return false;
+    }
+    if (!client->block_proposal_lock_initialized
+        || pthread_mutex_lock(&client->block_proposal_lock) != 0)
+    {
+        return true;
+    }
+    if (client->prebuilt_proposal_signature_slot == slot)
+    {
+        waiting = client->block_proposal_inflight || client->block_proposal_job;
+        if (!waiting)
+        {
+            client->prebuilt_proposal_signature_slot = 0u;
+        }
+    }
+    pthread_mutex_unlock(&client->block_proposal_lock);
+    return waiting;
 }
 
 static void *block_proposal_worker_main(void *arg)
@@ -2391,6 +2421,10 @@ int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t
     {
         prepared = client->prepared_block_proposal_job;
         client->prepared_block_proposal_job = NULL;
+        if (prepared && client->prebuilt_proposal_signature_slot == prepared->slot)
+        {
+            client->prebuilt_proposal_signature_slot = 0u;
+        }
         pthread_mutex_unlock(&client->block_proposal_lock);
     }
     if (prepared && prepared->slot != slot)
@@ -2438,9 +2472,8 @@ int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t
             return rc;
         }
         block_proposal_job_free(prepared);
-        return LANTERN_CLIENT_OK;
     }
-    if (client->prebuilt_proposal_signature_slot == slot)
+    if (block_proposal_waiting_on_prebuild(client, slot))
     {
         return LANTERN_CLIENT_ERR_IGNORED;
     }
