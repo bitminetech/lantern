@@ -2412,10 +2412,6 @@ int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t
         else
         {
             LanternRoot current_head = {0};
-            const LanternCheckpoint *current_justified =
-                client->has_fork_choice ? lantern_fork_choice_latest_justified(&client->fork_choice) : NULL;
-            uint64_t current_justified_slot =
-                current_justified ? current_justified->slot : client->state.latest_justified.slot;
             usable =
                 client->has_fork_choice
                 && lantern_fork_choice_current_head(&client->fork_choice, &current_head) == 0
@@ -2423,8 +2419,7 @@ int validator_propose_block(struct lantern_client *client, uint64_t slot, size_t
                        current_head.bytes,
                        prepared->block.block.parent_root.bytes,
                        LANTERN_ROOT_SIZE)
-                       == 0
-                && prepared->post_state.latest_justified.slot >= current_justified_slot;
+                       == 0;
             lantern_client_unlock_state(client, state_locked);
         }
         if (usable)

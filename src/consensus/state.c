@@ -308,12 +308,14 @@ static int collect_attestations_for_checkpoint(
         if (!lantern_attestation_head_is_known(state, proof_store, &data.head)) {
             continue;
         }
+        if (data.source.slot != justified_view->latest_justified.slot) {
+            continue;
+        }
         if (!checkpoint_matches_proposal_chain(state, parent_root, block_slot, &data.source)
             || !checkpoint_matches_proposal_chain(state, parent_root, block_slot, &data.target)) {
             continue;
         }
-        /* LeanSpec build_block: the source slot must already be justified on
-         * this chain. */
+
         bool source_justified = false;
         if (lantern_state_get_justified_slot_bit(justified_view, data.source.slot, &source_justified) != 0) {
             continue;
@@ -324,8 +326,7 @@ static int collect_attestations_for_checkpoint(
         if (data.target.slot <= data.source.slot) {
             continue;
         }
-        /* LeanSpec build_block: skip attestations whose target slot is already
-         * justified. */
+    
         bool target_justified = false;
         if (lantern_state_get_justified_slot_bit(justified_view, data.target.slot, &target_justified) != 0) {
             continue;
@@ -336,6 +337,7 @@ static int collect_attestations_for_checkpoint(
         if (lantern_root_list_contains(processed_data_roots, &entry->data_root)) {
             continue;
         }
+        
         bool seen_group = false;
         for (size_t i = 0; i < group_count; ++i) {
             if (memcmp(groups[i].data_root.bytes, entry->data_root.bytes, LANTERN_ROOT_SIZE) == 0) {
