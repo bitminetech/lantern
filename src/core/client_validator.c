@@ -1784,10 +1784,11 @@ static int block_proposal_commit_and_log(
         lantern_log_info(
             "propose",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "slot %" PRIu64 ", %s, %zu attestations",
+            "slot %" PRIu64 ", %s, %zu attestations, prebuild=%s",
             job->slot,
             root_hex && root_hex[0] ? root_hex : "0x0",
-            job->block.block.body.attestations.length);
+            job->block.block.body.attestations.length,
+            job->is_prebuild ? "true" : "false");
     }
     else if (require_current_head && rc == LANTERN_CLIENT_ERR_IGNORED)
     {
