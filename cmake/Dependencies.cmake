@@ -150,11 +150,11 @@ function(_lantern_define_c_leanvm_xmss_variant target_name source_dir cargo_targ
     endif()
 
     set(c_leanvm_xmss_output
-        "${cargo_target_dir}/release/${CMAKE_STATIC_LIBRARY_PREFIX}leanvm_xmss_c${CMAKE_STATIC_LIBRARY_SUFFIX}"
+        "${cargo_target_dir}/multisig-release/${CMAKE_STATIC_LIBRARY_PREFIX}leanvm_xmss_c${CMAKE_STATIC_LIBRARY_SUFFIX}"
     )
     set(c_leanvm_xmss_header "${header_dir}/leanvm-xmss.h")
     set(c_leanvm_xmss_compat_header "${header_dir}/pq-bindings-c-rust.h")
-    set(c_leanvm_xmss_args build --release --locked)
+    set(c_leanvm_xmss_args build --profile multisig-release --locked)
     file(MAKE_DIRECTORY "${header_dir}")
     if(C_XMSS_NO_JEMALLOC)
         list(APPEND c_leanvm_xmss_args --no-default-features)
