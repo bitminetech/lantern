@@ -3132,12 +3132,12 @@ static int test_collect_attestations_respects_max_attestation_data(void) {
             &collected_signatures),
         "collect max attestation-data block");
 
-    if (collected.length != (size_t)LANTERN_MAX_ATTESTATIONS_DATA
+    if (collected.length != (size_t)LANTERN_PRODUCER_MAX_ATTESTATIONS_DATA
         || collected_signatures.length != collected.length) {
         fprintf(
             stderr,
             "expected %u collected attestation-data entries, got %zu\n",
-            (unsigned)LANTERN_MAX_ATTESTATIONS_DATA,
+            (unsigned)LANTERN_PRODUCER_MAX_ATTESTATIONS_DATA,
             collected.length);
         goto fail;
     }

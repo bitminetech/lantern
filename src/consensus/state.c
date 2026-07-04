@@ -279,12 +279,12 @@ static int collect_attestations_for_checkpoint(
     if (!payloads->entries || payloads->length == 0) {
         return 0;
     }
-    if (processed_data_roots->length >= (size_t)LANTERN_MAX_ATTESTATIONS_DATA) {
+    if (processed_data_roots->length >= (size_t)LANTERN_PRODUCER_MAX_ATTESTATIONS_DATA) {
         return 0;
     }
 
     size_t remaining_data_capacity =
-        (size_t)LANTERN_MAX_ATTESTATIONS_DATA - processed_data_roots->length;
+        (size_t)LANTERN_PRODUCER_MAX_ATTESTATIONS_DATA - processed_data_roots->length;
 
     struct lantern_block_payload_group *groups =
         calloc(payloads->length, sizeof(*groups));
