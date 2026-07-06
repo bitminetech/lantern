@@ -118,6 +118,10 @@ int lantern_store_add_known_aggregated_payload(
     const LanternAttestationData *data,
     const LanternAggregatedSignatureProof *proof,
     uint64_t target_slot);
+bool lantern_store_aggregated_payloads_cover_participants(
+    const LanternStore *store,
+    const LanternRoot *data_root,
+    const struct lantern_bitlist *participants);
 int lantern_store_add_attestation_data(
     LanternStore *store,
     const LanternRoot *data_root,

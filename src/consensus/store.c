@@ -291,35 +291,86 @@ static void aggregated_payload_pool_remove_index(
     cache->length -= 1u;
 }
 
-static bool aggregated_payload_pool_covers_proof_participants(
+static void aggregated_payload_pool_mark_participants_covered(
     const struct lantern_aggregated_payload_pool *cache,
     const LanternRoot *data_root,
-    const LanternAggregatedSignatureProof *proof) {
-    if (!cache || !data_root || !proof || !proof->participants.bytes) {
+    bool covered[LANTERN_VALIDATOR_REGISTRY_LIMIT]) {
+    if (!cache || !data_root || !covered) {
+        return;
+    }
+    for (size_t i = 0; i < cache->length; ++i) {
+        if (!root_equals(&cache->entries[i].data_root, data_root)) {
+            continue;
+        }
+        const struct lantern_bitlist *participants = &cache->entries[i].proof.participants;
+        if (!participants->bytes) {
+            continue;
+        }
+        size_t limit = participants->bit_length;
+        if (limit > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+            limit = LANTERN_VALIDATOR_REGISTRY_LIMIT;
+        }
+        for (size_t validator = 0; validator < limit; ++validator) {
+            if (lantern_bitlist_get(participants, validator)) {
+                covered[validator] = true;
+            }
+        }
+    }
+}
+
+static bool bitlist_participants_covered(
+    const struct lantern_bitlist *participants,
+    const bool covered[LANTERN_VALIDATOR_REGISTRY_LIMIT]) {
+    if (!participants || !participants->bytes || !covered) {
         return false;
     }
-    size_t limit = proof_participant_limit(proof);
+    size_t limit = participants->bit_length;
+    if (limit > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        limit = LANTERN_VALIDATOR_REGISTRY_LIMIT;
+    }
     bool has_participant = false;
     for (size_t validator = 0; validator < limit; ++validator) {
-        if (!lantern_bitlist_get(&proof->participants, validator)) {
+        if (!lantern_bitlist_get(participants, validator)) {
             continue;
         }
         has_participant = true;
-        bool covered = false;
-        for (size_t i = 0; i < cache->length; ++i) {
-            if (!root_equals(&cache->entries[i].data_root, data_root)) {
-                continue;
-            }
-            if (lantern_bitlist_get(&cache->entries[i].proof.participants, validator)) {
-                covered = true;
-                break;
-            }
-        }
-        if (!covered) {
+        if (!covered[validator]) {
             return false;
         }
     }
     return has_participant;
+}
+
+static bool aggregated_payload_pool_covers_proof_participants(
+    const struct lantern_aggregated_payload_pool *cache,
+    const LanternRoot *data_root,
+    const LanternAggregatedSignatureProof *proof) {
+    bool covered[LANTERN_VALIDATOR_REGISTRY_LIMIT] = {false};
+    if (!proof) {
+        return false;
+    }
+    aggregated_payload_pool_mark_participants_covered(cache, data_root, covered);
+    return bitlist_participants_covered(&proof->participants, covered);
+}
+
+bool lantern_store_aggregated_payloads_cover_participants(
+    const LanternStore *store,
+    const LanternRoot *data_root,
+    const struct lantern_bitlist *participants) {
+    bool covered[LANTERN_VALIDATOR_REGISTRY_LIMIT] = {false};
+    if (!store || !data_root || !participants
+        || participants->bit_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        return false;
+    }
+    aggregated_payload_pool_mark_participants_covered(
+        &store->new_aggregated_payloads,
+        data_root,
+        covered);
+    aggregated_payload_pool_mark_participants_covered(
+        &store->known_aggregated_payloads,
+        data_root,
+        covered);
+    return bitlist_participants_covered(participants, covered);
 }
 
 static void aggregated_payload_pool_prune_subsets_of_entry(

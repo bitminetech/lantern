@@ -73,4 +73,10 @@ bool lantern_signature_verify_block_type2_proof(
     const LanternState *state,
     const LanternBlock *block,
     const LanternByteList *encoded_proof);
+bool lantern_signature_split_block_type2_attestation_proof(
+    const LanternState *state,
+    const LanternBlock *block,
+    const LanternByteList *encoded_proof,
+    size_t attestation_index,
+    LanternAggregatedSignatureProof *out_proof);
 #endif /* LANTERN_CONSENSUS_SIGNATURE_H */
