@@ -296,7 +296,8 @@ static int commit_and_publish_local_block(
     const LanternSignedBlock *block,
     const LanternRoot *block_root,
     LanternState *post_state,
-    LanternStore *post_store)
+    LanternStore *post_store,
+    bool require_current_parent)
 {
     if (!client || !block || !block_root || !post_state || !post_store)
     {
@@ -361,6 +362,11 @@ static int commit_and_publish_local_block(
             != 0)
     {
         lantern_client_unlock_state(client, state_locked);
+
+        if (require_current_parent)
+        {
+            return LANTERN_CLIENT_ERR_IGNORED;
+        }
         lantern_client_error import_result = LANTERN_CLIENT_ERR_RUNTIME;
         bool imported = lantern_client_import_block_internal(
             client,
@@ -476,7 +482,24 @@ int lantern_client_commit_and_publish_local_block(
         block,
         block_root,
         post_state,
-        post_store);
+        post_store,
+        false);
+}
+
+int lantern_client_commit_and_publish_current_head_block(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    LanternState *post_state,
+    LanternStore *post_store)
+{
+    return commit_and_publish_local_block(
+        client,
+        block,
+        block_root,
+        post_state,
+        post_store,
+        true);
 }
 
 static int encode_block_ssz(

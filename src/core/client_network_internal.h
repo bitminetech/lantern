@@ -418,6 +418,18 @@ void redial_peer_on_timeout(struct lantern_client *client, const struct lantern_
 
 
 /**
+ * Redial a peer by text peer id, bypassing the connected-peer guard. Used by
+ * the req/resp layer to recover when stream opens keep failing against a peer
+ * whose registry entry was lost while a zombie connection keeps the peer
+ * looking connected.
+ *
+ * @param client        Client instance
+ * @param peer_id_text  Text form of the peer id to redial
+ */
+void lantern_client_redial_peer_by_text(struct lantern_client *client, const char *peer_id_text);
+
+
+/**
  * Attempt to dial peers from genesis ENRs.
  *
  * @spec subspecs/networking/discovery.py - peer discovery

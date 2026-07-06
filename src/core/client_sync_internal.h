@@ -544,6 +544,18 @@ int lantern_client_commit_and_publish_local_block(
     LanternStore *post_store);
 
 /**
+ * Commit and publish a locally built block only if its parent is still the
+ * current fork choice head; returns LANTERN_CLIENT_ERR_IGNORED otherwise.
+ * Publishing a stale-parent block guarantees a fork, so proposals skip.
+ */
+int lantern_client_commit_and_publish_current_head_block(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    LanternState *post_state,
+    LanternStore *post_store);
+
+/**
  * Record a received block and attempt import.
  *
  * @spec subspecs/sync/sync.py - block synchronization

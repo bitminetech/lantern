@@ -1372,6 +1372,11 @@ void reqresp_status_failure(void *context, const char *peer_id, int error)
     bool first_failure = record_status_failure_peer_id(client, peer_copy);
     log_status_failure(client, peer_copy, error, first_failure);
 
+    if (peer_copy[0] != '\0' && error == LANTERN_REQRESP_ERR_STREAM_WRITE)
+    {
+        lantern_client_redial_peer_by_text(client, peer_copy);
+    }
+
     if (peer_copy[0] != '\0' && first_failure
         && lantern_client_is_peer_connected(client, peer_copy))
     {

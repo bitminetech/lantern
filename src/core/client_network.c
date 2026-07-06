@@ -960,6 +960,62 @@ void redial_peer_on_timeout(struct lantern_client *client, const struct lantern_
         "peer not in genesis ENRs, skipping redial");
 }
 
+/*
+ * Redial a peer by its text peer id even while it appears connected. Used
+ * when req/resp streams to the peer keep failing: the existing connection may
+ * be a zombie that still carries gossip, so the connected-peer guard in
+ * redial_peer_on_timeout would skip the redial that repopulates the req/resp
+ * connection registry. The dial layer dedupes duplicate connections.
+ */
+void lantern_client_redial_peer_by_text(struct lantern_client *client, const char *peer_id_text)
+{
+    if (!client || !client->network.host || !peer_id_text || !peer_id_text[0])
+    {
+        return;
+    }
+    const struct lantern_enr_record_list *enrs = &client->genesis.enrs;
+    if (!enrs || enrs->count == 0)
+    {
+        return;
+    }
+    for (size_t idx = 0; idx < enrs->count; ++idx)
+    {
+        const struct lantern_enr_record *record = &enrs->records[idx];
+        if (!record || !record->encoded)
+        {
+            continue;
+        }
+        char multiaddr[256];
+        struct lantern_peer_id enr_peer_id;
+        if (lantern_libp2p_enr_to_multiaddr(
+                record,
+                multiaddr,
+                sizeof(multiaddr),
+                &enr_peer_id)
+            != 0)
+        {
+            continue;
+        }
+        char enr_peer_text[128];
+        format_peer_id_text(&enr_peer_id, enr_peer_text, sizeof(enr_peer_text));
+        if (!enr_peer_text[0] || strcmp(enr_peer_text, peer_id_text) != 0)
+        {
+            continue;
+        }
+        lantern_log_info(
+            "network",
+            &(const struct lantern_log_metadata){
+                .validator = client->node_id,
+                .peer = peer_id_text,
+            },
+            "redialing peer after reqresp failure addr=%s",
+            multiaddr);
+        (void)lantern_libp2p_host_dial_multiaddr(&client->network, multiaddr);
+        identify_dial_multiaddr(client, multiaddr, peer_id_text);
+        return;
+    }
+}
+
 
 /* ============================================================================
  * Peer Dialer Helpers
