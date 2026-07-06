@@ -46,6 +46,7 @@
 enum
 {
     ROOT_HEX_BUFFER_LEN = (LANTERN_ROOT_SIZE * 2u) + 3u,
+    BLOCK_AGGREGATE_SPLIT_LIMIT = 4u,
 };
 
 static void adopt_state_locked(struct lantern_client *client, LanternState *state);
@@ -210,37 +211,87 @@ static void update_network_view_after_import(
     }
 }
 
-
 void lantern_client_cache_block_aggregated_proofs_locked(
     struct lantern_client *client,
     const LanternSignedBlock *block)
 {
-    if (!client || !block) {
+    if (!client || !block)
+    {
         return;
     }
     const LanternAggregatedAttestations *attestations = &block->block.body.attestations;
-    if (attestations->length == 0u) {
-        return;
-    }
-    if (!attestations->data) {
-        return;
-    }
-
-    if (block->proof.length == 0u || !block->proof.data) {
+    if (attestations->length == 0u || !attestations->data)
+    {
         return;
     }
 
-    for (size_t i = 0; i < attestations->length; ++i) {
+    LanternState parent_scratch;
+    lantern_state_init(&parent_scratch);
+    const LanternState *parent_state = NULL;
+    bool parent_state_lookup_done = false;
+    size_t split_attempts = 0u;
+
+    for (size_t i = 0; i < attestations->length; ++i)
+    {
+        const LanternAggregatedAttestation *attestation = &attestations->data[i];
         LanternRoot data_root;
-        if (lantern_hash_tree_root_attestation_data(&attestations->data[i].data, &data_root) != SSZ_SUCCESS) {
+        if (lantern_hash_tree_root_attestation_data(&attestation->data, &data_root) != SSZ_SUCCESS)
+        {
             continue;
         }
         (void)lantern_store_add_attestation_data(
             &client->store,
             &data_root,
-            &attestations->data[i].data,
-            attestations->data[i].data.target.slot);
+            &attestation->data,
+            attestation->data.target.slot);
+
+        if (block->proof.length == 0u || !block->proof.data
+            || split_attempts >= BLOCK_AGGREGATE_SPLIT_LIMIT
+            || lantern_store_aggregated_payloads_cover_participants(
+                &client->store,
+                &data_root,
+                &attestation->aggregation_bits))
+        {
+            continue;
+        }
+
+        if (!parent_state_lookup_done)
+        {
+            parent_state = lantern_client_state_for_root_locked(
+                client,
+                &block->block.parent_root,
+                &parent_scratch,
+                NULL);
+            parent_state_lookup_done = true;
+        }
+        if (!parent_state)
+        {
+            continue;
+        }
+
+        LanternAggregatedSignatureProof recovered;
+        lantern_aggregated_signature_proof_init(&recovered);
+        split_attempts += 1u;
+        if (!lantern_signature_split_block_type2_attestation_proof(
+                parent_state,
+                &block->block,
+                &block->proof,
+                i,
+                &recovered))
+        {
+            lantern_aggregated_signature_proof_reset(&recovered);
+            continue;
+        }
+        (void)lantern_store_add_new_aggregated_payload(
+            &client->store,
+            &data_root,
+            &attestation->data,
+            &recovered,
+            attestation->data.target.slot);
+        lantern_aggregated_signature_proof_reset(&recovered);
     }
+
+    lantern_state_reset(&parent_scratch);
 }
 
 static bool sync_validator_votes_from_preview_locked(

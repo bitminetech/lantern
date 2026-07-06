@@ -548,6 +548,51 @@ cleanup:
     return rc;
 }
 
+static int expect_recovered_block_payload(
+    const LanternStore *store,
+    const LanternSignedBlock *block,
+    bool may_be_known,
+    const char *context)
+{
+    if (!store || !block || block->block.body.attestations.length == 0u
+        || !block->block.body.attestations.data) {
+        return -1;
+    }
+    const struct lantern_aggregated_payload_entry *payload = NULL;
+    if (may_be_known) {
+        size_t count =
+            store->new_aggregated_payloads.length + store->known_aggregated_payloads.length;
+        if (count != 1u) {
+            fprintf(stderr, "%s should recover one block-body proof into payload pools\n", context);
+            return -1;
+        }
+        payload = store->new_aggregated_payloads.length != 0u
+            ? &store->new_aggregated_payloads.entries[0]
+            : &store->known_aggregated_payloads.entries[0];
+    } else {
+        if (store->new_aggregated_payloads.length != 1u
+            || store->known_aggregated_payloads.length != 0u) {
+            fprintf(stderr, "%s should stage one recovered block-body proof in new payloads\n", context);
+            return -1;
+        }
+        payload = &store->new_aggregated_payloads.entries[0];
+    }
+
+    LanternRoot data_root;
+    if (lantern_hash_tree_root_attestation_data(
+            &block->block.body.attestations.data[0].data,
+            &data_root)
+        != SSZ_SUCCESS) {
+        return -1;
+    }
+    if (memcmp(payload->data_root.bytes, data_root.bytes, LANTERN_ROOT_SIZE) != 0
+        || !lantern_bitlist_get(&payload->proof.participants, 0u)) {
+        fprintf(stderr, "%s recovered payload does not match block attestation\n", context);
+        return -1;
+    }
+    return 0;
+}
+
 static int test_pending_block_queue(void) {
     struct lantern_client client;
     memset(&client, 0, sizeof(client));
@@ -1652,12 +1697,8 @@ static int test_import_block_accepts_complete_proof(void)
         fprintf(stderr, "state slot did not advance after importing block with complete proof\n");
         goto cleanup;
     }
-    if (fixture.client.store.new_aggregated_payloads.length != 0u) {
-        fprintf(stderr, "canonical import should not stage block-body proofs in new payloads\n");
-        goto cleanup;
-    }
-    if (fixture.client.store.known_aggregated_payloads.length != 0u) {
-        fprintf(stderr, "canonical import should not cache block-body proofs directly in known payloads\n");
+    if (expect_recovered_block_payload(&fixture.client.store, &block, false, "canonical import")
+        != 0) {
         goto cleanup;
     }
     if (fixture.client.store.attestation_data_by_root.length == 0u) {
@@ -2028,12 +2069,8 @@ static int test_restore_persisted_blocks_caches_known_attestation_proofs(void)
         fprintf(stderr, "restore_persisted_blocks failed for known proofs test\n");
         goto cleanup;
     }
-    if (fixture.client.store.new_aggregated_payloads.length != 0u) {
-        fprintf(stderr, "restored blocks should not stage block-body proofs in new payloads\n");
-        goto cleanup;
-    }
-    if (fixture.client.store.known_aggregated_payloads.length != 0u) {
-        fprintf(stderr, "restored blocks should not cache block-body proofs directly in known payloads\n");
+    if (expect_recovered_block_payload(&fixture.client.store, &block, true, "restored blocks")
+        != 0) {
         goto cleanup;
     }
     if (fixture.client.store.attestation_data_by_root.length == 0u) {

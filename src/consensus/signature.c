@@ -1378,3 +1378,140 @@ cleanup:
     free(work);
     return ok;
 }
+
+bool lantern_signature_split_block_type2_attestation_proof(
+    const LanternState *state,
+    const LanternBlock *block,
+    const LanternByteList *encoded_proof,
+    size_t attestation_index,
+    LanternAggregatedSignatureProof *out_proof) {
+    if (!state || !block || !encoded_proof || !out_proof) {
+        return false;
+    }
+    size_t attestation_count = block->body.attestations.length;
+    if (attestation_count == 0u
+        || attestation_index >= attestation_count
+        || !block->body.attestations.data) {
+        return false;
+    }
+
+    const LanternAggregatedAttestation *attestation =
+        &block->body.attestations.data[attestation_index];
+    if (attestation->aggregation_bits.bit_length == 0u
+        || !attestation->aggregation_bits.bytes) {
+        return false;
+    }
+
+    size_t component_count = attestation_count + 1u;
+    struct lantern_type2_component_work *work =
+        calloc(component_count, sizeof(*work));
+    struct PQTypeTwoComponent *components =
+        calloc(component_count, sizeof(*components));
+    LanternByteList raw_type2;
+    lantern_byte_list_init(&raw_type2);
+    LanternAggregatedSignatureProof recovered;
+    lantern_aggregated_signature_proof_init(&recovered);
+
+    bool ok = false;
+    if (!work || !components) {
+        goto cleanup;
+    }
+    if (!lantern_signature_unwrap_type2_proof(encoded_proof, &raw_type2)) {
+        goto cleanup;
+    }
+    if (!build_type2_merge_component_set_for_block(
+            state,
+            block,
+            work,
+            components,
+            component_count)) {
+        goto cleanup;
+    }
+
+    LanternRoot message;
+    if (lantern_hash_tree_root_attestation_data(&attestation->data, &message) != SSZ_SUCCESS) {
+        goto cleanup;
+    }
+
+    size_t bit_bytes = (attestation->aggregation_bits.bit_length + 7u) / 8u;
+    if (lantern_bitlist_resize(&recovered.participants, attestation->aggregation_bits.bit_length) != 0) {
+        goto cleanup;
+    }
+    if (bit_bytes > 0u) {
+        if (!recovered.participants.bytes) {
+            goto cleanup;
+        }
+        memcpy(recovered.participants.bytes, attestation->aggregation_bits.bytes, bit_bytes);
+    }
+
+    if (lantern_byte_list_resize(&recovered.proof_data, LANTERN_AGG_PROOF_MAX_BYTES) != 0) {
+        goto cleanup;
+    }
+
+    double setup_started_seconds = get_time_seconds();
+    ensure_xmss_prover_setup();
+    log_pq_prover_setup_error_if_any();
+    double setup_finished_seconds = get_time_seconds();
+    if (g_stage_timings) {
+        signature_add_stage_seconds(
+            &g_stage_timings->other_prover_setup_seconds,
+            signature_elapsed_seconds(setup_started_seconds, setup_finished_seconds));
+    }
+
+    uintptr_t written_len = 0u;
+    double split_started_seconds = get_time_seconds();
+    enum PQSigningError split_rc = pq_split_type_2_by_message(
+        components,
+        component_count,
+        raw_type2.data,
+        raw_type2.length,
+        message.bytes,
+        LANTERN_ROOT_SIZE,
+        LANTERN_AGGREGATED_SIGNATURE_PROOF_INVERSE_PROOF_SIZE,
+        recovered.proof_data.data,
+        recovered.proof_data.length,
+        &written_len);
+    double split_finished_seconds = get_time_seconds();
+    if (g_stage_timings) {
+        signature_add_stage_seconds(
+            &g_stage_timings->pq_aggregate_seconds,
+            signature_elapsed_seconds(split_started_seconds, split_finished_seconds));
+    }
+    if (split_rc != Success || written_len == 0u || written_len > recovered.proof_data.length) {
+        char *detail = pq_take_last_error_message();
+        lantern_log_debug(
+            "signature",
+            NULL,
+            "block Type-2 split failed err=%d component=%zu components=%zu written=%zu detail=%s",
+            (int)split_rc,
+            attestation_index,
+            component_count,
+            (size_t)written_len,
+            pq_error_detail_or_dash(detail));
+        pq_string_free(detail);
+        goto cleanup;
+    }
+    double copy_started_seconds = get_time_seconds();
+    if (lantern_byte_list_resize(&recovered.proof_data, (size_t)written_len) != 0) {
+        goto cleanup;
+    }
+    if (lantern_aggregated_signature_proof_copy(out_proof, &recovered) != 0) {
+        goto cleanup;
+    }
+    double copy_finished_seconds = get_time_seconds();
+    if (g_stage_timings) {
+        signature_add_stage_seconds(
+            &g_stage_timings->proof_copy_seconds,
+            signature_elapsed_seconds(copy_started_seconds, copy_finished_seconds));
+    }
+    ok = true;
+    shadow_sleep_merge(component_count);
+
+cleanup:
+    lantern_aggregated_signature_proof_reset(&recovered);
+    lantern_byte_list_reset(&raw_type2);
+    reset_type2_component_set(work, component_count);
+    free(components);
+    free(work);
+    return ok;
+}
