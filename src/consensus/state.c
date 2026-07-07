@@ -86,9 +86,12 @@ static lantern_state_aggregate_result state_select_child_proofs_from_pool(
     const struct lantern_aggregated_payload_pool *pool,
     const LanternRoot *data_root,
     bool *covered,
-    LanternAggregatedSignatureProof **out_children,
-    size_t *out_child_count,
-    size_t *out_child_capacity);
+    LanternAggregatedSignatureProof *out_children,
+    size_t out_child_capacity,
+    size_t *out_child_count);
+static const LanternAggregatedSignatureProof *state_select_best_proof_from_pool(
+    const struct lantern_aggregated_payload_pool *pool,
+    const LanternRoot *data_root);
 static lantern_state_aggregate_result state_append_cached_proof(
     const LanternAttestationData *data,
     const LanternAggregatedSignatureProof *proof,
@@ -361,84 +364,23 @@ static int collect_attestations_for_checkpoint(
     }
 
     for (size_t group_index = 0; group_index < group_count; ++group_index) {
-        bool covered[LANTERN_VALIDATOR_REGISTRY_LIMIT];
-        memset(covered, 0, sizeof(covered));
-        LanternAggregatedSignatureProof *selected = NULL;
-        size_t selected_count = 0u;
-        size_t selected_capacity = 0u;
-
-        lantern_state_aggregate_result select_rc = state_select_child_proofs_from_pool(
-            payloads,
-            &groups[group_index].data_root,
-            covered,
-            &selected,
-            &selected_count,
-            &selected_capacity);
-        if (select_rc != LANTERN_STATE_AGGREGATE_OK) {
-            free(selected);
-            rc = -1;
-            break;
-        }
-        if (selected_count == 0u) {
-            free(selected);
+        const LanternAggregatedSignatureProof *best_proof =
+            state_select_best_proof_from_pool(payloads, &groups[group_index].data_root);
+        if (!best_proof) {
             continue;
         }
         if (lantern_root_list_append(processed_data_roots, &groups[group_index].data_root) != 0) {
-            free(selected);
             rc = -1;
             break;
         }
-        if (selected_count == 1u) {
-            if (state_append_cached_proof(
-                    &groups[group_index].data,
-                    &selected[0],
-                    out_attestations,
-                    out_signatures)
-                != LANTERN_STATE_AGGREGATE_OK) {
-                rc = -1;
-            }
-        } else {
-            LanternAggregatedSignatureProof merged;
-            lantern_aggregated_signature_proof_init(&merged);
-
-            lantern_state_aggregate_result merge_rc =
-                lantern_aggregated_signature_proof_aggregate(
-                    state,
-                    NULL,
-                    selected,
-                    selected_count,
-                    NULL,
-                    0u,
-                    &groups[group_index].data_root,
-                    groups[group_index].data.slot,
-                    &merged)
-                    ? LANTERN_STATE_AGGREGATE_OK
-                    : LANTERN_STATE_AGGREGATE_VALIDATOR;
-            lantern_state_aggregate_result append_rc = LANTERN_STATE_AGGREGATE_OK;
-            if (merge_rc == LANTERN_STATE_AGGREGATE_OK) {
-                append_rc = state_append_cached_proof(
-                    &groups[group_index].data,
-                    &merged,
-                    out_attestations,
-                    out_signatures);
-            }
-            if (merge_rc != LANTERN_STATE_AGGREGATE_OK
-                || append_rc != LANTERN_STATE_AGGREGATE_OK) {
-                char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-                format_root_hex(&groups[group_index].data_root, root_hex, sizeof(root_hex));
-                lantern_log_warn(
-                    "state",
-                    NULL,
-                    "failed to merge cached attestation proofs data_root=%s children=%zu merge_rc=%d append_rc=%d",
-                    root_hex[0] ? root_hex : "-",
-                    selected_count,
-                    (int)merge_rc,
-                    (int)append_rc);
-                rc = -1;
-            }
-            lantern_aggregated_signature_proof_reset(&merged);
+        if (state_append_cached_proof(
+                &groups[group_index].data,
+                best_proof,
+                out_attestations,
+                out_signatures)
+            != LANTERN_STATE_AGGREGATE_OK) {
+            rc = -1;
         }
-        free(selected);
         if (rc != 0) {
             break;
         }
@@ -604,7 +546,7 @@ static int state_fill_bitlist_from_ids(
 static size_t state_proof_new_participant_count(
     const LanternAggregatedSignatureProof *proof,
     const bool *covered) {
-    if (!proof || !covered || proof->participants.bit_length == 0u || !proof->participants.bytes) {
+    if (!proof || proof->participants.bit_length == 0u || !proof->participants.bytes) {
         return 0u;
     }
 
@@ -614,7 +556,7 @@ static size_t state_proof_new_participant_count(
         limit = LANTERN_VALIDATOR_REGISTRY_LIMIT;
     }
     for (size_t i = 0; i < limit; ++i) {
-        if (lantern_bitlist_get(&proof->participants, i) && !covered[i]) {
+        if (lantern_bitlist_get(&proof->participants, i) && (!covered || !covered[i])) {
             count += 1u;
         }
     }
@@ -643,29 +585,27 @@ static lantern_state_aggregate_result state_select_child_proofs_from_pool(
     const struct lantern_aggregated_payload_pool *pool,
     const LanternRoot *data_root,
     bool *covered,
-    LanternAggregatedSignatureProof **out_children,
-    size_t *out_child_count,
-    size_t *out_child_capacity) {
-    if (!data_root || !covered || !out_children || !out_child_count || !out_child_capacity) {
+    LanternAggregatedSignatureProof *out_children,
+    size_t out_child_capacity,
+    size_t *out_child_count) {
+    if (!data_root || !covered || !out_children || !out_child_count) {
         return LANTERN_STATE_AGGREGATE_INVALID_PARAM;
     }
     if (!pool || !pool->entries || pool->length == 0u) {
         return LANTERN_STATE_AGGREGATE_OK;
     }
-
-    bool *used = calloc(pool->length, sizeof(*used));
-    if (!used) {
-        return LANTERN_STATE_AGGREGATE_ALLOC;
+    size_t child_limit = out_child_capacity;
+    if (child_limit > LANTERN_MAX_AGGREGATION_CHILDREN) {
+        child_limit = LANTERN_MAX_AGGREGATION_CHILDREN;
+    }
+    if (*out_child_count >= child_limit) {
+        return LANTERN_STATE_AGGREGATE_OK;
     }
 
-    lantern_state_aggregate_result rc = LANTERN_STATE_AGGREGATE_OK;
-    for (;;) {
+    while (*out_child_count < child_limit) {
         size_t best_index = SIZE_MAX;
         size_t best_new_count = 0u;
         for (size_t i = 0; i < pool->length; ++i) {
-            if (used[i]) {
-                continue;
-            }
             if (memcmp(pool->entries[i].data_root.bytes, data_root->bytes, LANTERN_ROOT_SIZE) != 0) {
                 continue;
             }
@@ -679,26 +619,34 @@ static lantern_state_aggregate_result state_select_child_proofs_from_pool(
             break;
         }
 
-        if (*out_child_count >= *out_child_capacity) {
-            size_t desired = *out_child_capacity == 0u ? 4u : (*out_child_capacity * 2u);
-            LanternAggregatedSignatureProof *children =
-                realloc(*out_children, desired * sizeof(*children));
-            if (!children) {
-                rc = LANTERN_STATE_AGGREGATE_ALLOC;
-                break;
-            }
-            *out_children = children;
-            *out_child_capacity = desired;
-        }
-
-        (*out_children)[*out_child_count] = pool->entries[best_index].proof;
+        out_children[*out_child_count] = pool->entries[best_index].proof;
         *out_child_count += 1u;
-        used[best_index] = true;
         state_mark_proof_participants_covered(&pool->entries[best_index].proof, covered);
     }
 
-    free(used);
-    return rc;
+    return LANTERN_STATE_AGGREGATE_OK;
+}
+
+static const LanternAggregatedSignatureProof *state_select_best_proof_from_pool(
+    const struct lantern_aggregated_payload_pool *pool,
+    const LanternRoot *data_root) {
+    if (!pool || !pool->entries || pool->length == 0u || !data_root) {
+        return NULL;
+    }
+
+    const LanternAggregatedSignatureProof *best = NULL;
+    size_t best_count = 0u;
+    for (size_t i = 0; i < pool->length; ++i) {
+        if (memcmp(pool->entries[i].data_root.bytes, data_root->bytes, LANTERN_ROOT_SIZE) != 0) {
+            continue;
+        }
+        size_t count = state_proof_new_participant_count(&pool->entries[i].proof, NULL);
+        if (count > best_count) {
+            best = &pool->entries[i].proof;
+            best_count = count;
+        }
+    }
+    return best;
 }
 
 static lantern_state_aggregate_result state_append_cached_proof(
@@ -940,25 +888,24 @@ lantern_state_aggregate_result lantern_state_aggregate(
 
             bool covered[LANTERN_VALIDATOR_REGISTRY_LIMIT];
             memset(covered, 0, sizeof(covered));
-            LanternAggregatedSignatureProof *children = NULL;
+            LanternAggregatedSignatureProof children[LANTERN_MAX_AGGREGATION_CHILDREN];
             size_t child_count = 0u;
-            size_t child_capacity = 0u;
 
             rc = state_select_child_proofs_from_pool(
                 new_payloads,
                 &groups[i].data_root,
                 covered,
-                &children,
-                &child_count,
-                &child_capacity);
+                children,
+                LANTERN_MAX_AGGREGATION_CHILDREN,
+                &child_count);
             if (rc == LANTERN_STATE_AGGREGATE_OK) {
                 rc = state_select_child_proofs_from_pool(
                     known_payloads,
                     &groups[i].data_root,
                     covered,
-                    &children,
-                    &child_count,
-                    &child_capacity);
+                    children,
+                    LANTERN_MAX_AGGREGATION_CHILDREN,
+                    &child_count);
             }
             if (rc == LANTERN_STATE_AGGREGATE_OK) {
                 rc = state_append_selected_group(
@@ -971,7 +918,6 @@ lantern_state_aggregate_result lantern_state_aggregate(
                     out_signatures);
             }
 
-            free(children);
             if (rc != LANTERN_STATE_AGGREGATE_OK) {
                 break;
             }

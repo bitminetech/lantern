@@ -3481,7 +3481,7 @@ cleanup:
     return rc;
 }
 
-static int test_publish_aggregated_attestations_collects_any_slot_and_prunes_gossip(void) {
+static int test_publish_aggregated_attestations_collects_current_slot_and_prunes_gossip(void) {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
     struct PQSignatureSchemeSecretKey *secret = NULL;
@@ -3511,7 +3511,7 @@ static int test_publish_aggregated_attestations_collects_any_slot_and_prunes_gos
 
     if (client_test_setup_vote_validation_client_with_validator_count(
             &client,
-            "vote_multi_subnet_aggregation",
+            "vote_current_slot_aggregation",
             8u,
             &pub,
             &secret,
@@ -3560,12 +3560,22 @@ static int test_publish_aggregated_attestations_collects_any_slot_and_prunes_gos
     vote4_key.validator_index = vote4.data.validator_id;
     vote4_key.data_root = data_root;
 
-    if (lantern_client_debug_publish_aggregated_attestations(&client, vote0.data.slot + 1u) != LANTERN_CLIENT_OK) {
-        fprintf(stderr, "aggregated attestation publish should succeed for any-slot gossip vote\n");
+    if (lantern_client_debug_publish_aggregated_attestations(&client, vote0.data.slot + 1u) != LANTERN_CLIENT_ERR_IGNORED) {
+        fprintf(stderr, "wrong-slot aggregation should ignore cached current-slot votes\n");
+        goto cleanup;
+    }
+    if (capture.calls != 0u || client.store.new_aggregated_payloads.length != 0u
+        || client.store.attestation_signatures.length != 3u) {
+        fprintf(stderr, "wrong-slot aggregation should not publish or prune current-slot votes\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_debug_publish_aggregated_attestations(&client, vote0.data.slot) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "aggregated attestation publish should succeed for current-slot gossip vote\n");
         goto cleanup;
     }
     if (capture.calls != 1u || capture.payload_len == 0 || !capture.payload) {
-        fprintf(stderr, "expected one aggregated attestation publish in any-slot test\n");
+        fprintf(stderr, "expected one aggregated attestation publish in current-slot test\n");
         goto cleanup;
     }
 
@@ -4311,7 +4321,7 @@ int main(void) {
     if (test_validator_duties_ignore_binary_sync_state() != 0) {
         return 1;
     }
-    if (test_publish_aggregated_attestations_collects_any_slot_and_prunes_gossip() != 0) {
+    if (test_publish_aggregated_attestations_collects_current_slot_and_prunes_gossip() != 0) {
         return 1;
     }
     if (test_interval_2_aggregation_trigger_respects_aggregator_role() != 0) {

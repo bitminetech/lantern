@@ -196,6 +196,7 @@ static int attestation_signature_map_set(
     struct lantern_attestation_signature_map *map,
     const LanternSignatureKey *key,
     const LanternSignature *signature,
+    uint64_t attestation_slot,
     uint64_t target_slot) {
     if (!map || !key || !signature || signature_is_zero(signature)) {
         return -1;
@@ -205,6 +206,7 @@ static int attestation_signature_map_set(
             continue;
         }
         map->entries[i].signature = *signature;
+        map->entries[i].attestation_slot = attestation_slot;
         map->entries[i].target_slot = target_slot;
         return 0;
     }
@@ -229,6 +231,7 @@ static int attestation_signature_map_set(
     }
     map->entries[map->length].key = *key;
     map->entries[map->length].signature = *signature;
+    map->entries[map->length].attestation_slot = attestation_slot;
     map->entries[map->length].target_slot = target_slot;
     map->length += 1u;
     return 0;
@@ -737,7 +740,14 @@ int lantern_store_set_attestation_signature(
     if (!signature || signature_is_zero(signature)) {
         return 0;
     }
-    if (attestation_signature_map_set(&store->attestation_signatures, key, signature, target_slot) != 0) {
+    uint64_t attestation_slot = data ? data->slot : target_slot;
+    if (attestation_signature_map_set(
+            &store->attestation_signatures,
+            key,
+            signature,
+            attestation_slot,
+            target_slot)
+        != 0) {
         return -1;
     }
     return 0;

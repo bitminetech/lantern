@@ -78,12 +78,14 @@ static lantern_client_error collect_aggregation_votes(
     struct lantern_client *client,
     LanternAttestations *out_attestations,
     LanternSignatureList *out_signatures,
+    const uint64_t *scope_slot,
     struct lantern_block_build_stage_timings *stage_timings,
     bool *out_missing_state);
 static lantern_client_error validator_collect_and_aggregate_attestation_signatures(
     struct lantern_client *client,
     LanternAggregatedAttestations *out_attestations,
     LanternAttestationSignatures *out_signatures,
+    const uint64_t *scope_slot,
     struct lantern_block_build_stage_timings *stage_timings,
     bool *out_missing_state);
 static void validator_log_duty_skipped(
@@ -717,6 +719,7 @@ static lantern_client_error aggregate_attestation_signatures(
     const LanternSignatureList *att_signatures,
     LanternAggregatedAttestations *out_attestations,
     LanternAttestationSignatures *out_signatures,
+    const uint64_t *scope_slot,
     struct lantern_block_build_stage_timings *stage_timings)
 {
     if (!client || !att_list || !att_signatures || !out_attestations || !out_signatures)
@@ -748,18 +751,19 @@ static lantern_client_error aggregate_attestation_signatures(
     memset(&known_snapshot, 0, sizeof(known_snapshot));
     lantern_store_init(&data_snapshot);
 
+    bool raw_only = scope_slot != NULL;
     int snapshot_rc = lantern_state_clone(&client->state, &state_snapshot);
     double other_started_seconds = lantern_time_now_seconds();
-    if (snapshot_rc == 0)
+    if (!raw_only && snapshot_rc == 0)
     {
         snapshot_rc = payload_pool_snapshot(&new_snapshot, &client->store.new_aggregated_payloads);
     }
-    if (snapshot_rc == 0)
+    if (!raw_only && snapshot_rc == 0)
     {
         snapshot_rc =
             payload_pool_snapshot(&known_snapshot, &client->store.known_aggregated_payloads);
     }
-    if (snapshot_rc == 0)
+    if (!raw_only && snapshot_rc == 0)
     {
         for (size_t i = 0; i < new_snapshot.length; ++i)
         {
@@ -806,10 +810,10 @@ static lantern_client_error aggregate_attestation_signatures(
         lantern_signature_set_stage_timings(stage_timings);
         lantern_state_aggregate_result aggregate_result = lantern_state_aggregate(
             &state_snapshot,
-            &data_snapshot,
+            raw_only ? NULL : &data_snapshot,
             &attestation_signatures,
-            &new_snapshot,
-            &known_snapshot,
+            raw_only ? NULL : &new_snapshot,
+            raw_only ? NULL : &known_snapshot,
             out_attestations,
             out_signatures);
         lantern_signature_set_stage_timings(NULL);
@@ -884,6 +888,7 @@ lantern_client_error lantern_client_debug_aggregate_attestation_signatures(
         client,
         out_attestations,
         out_signatures,
+        NULL,
         NULL,
         NULL);
 }
@@ -2818,6 +2823,7 @@ static lantern_client_error collect_aggregation_votes(
     struct lantern_client *client,
     LanternAttestations *out_attestations,
     LanternSignatureList *out_signatures,
+    const uint64_t *scope_slot,
     struct lantern_block_build_stage_timings *stage_timings,
     bool *out_missing_state) {
     if (!client || !out_attestations || !out_signatures) {
@@ -2852,12 +2858,18 @@ static lantern_client_error collect_aggregation_votes(
     double collection_started_seconds = lantern_time_now_seconds();
     for (size_t i = 0; i < map->length; ++i) {
         const struct lantern_attestation_signature_entry *entry = &map->entries[i];
+        if (scope_slot && entry->attestation_slot != *scope_slot) {
+            continue;
+        }
         LanternAttestationData data;
         memset(&data, 0, sizeof(data));
         if (lantern_store_get_attestation_data(&client->store, &entry->key.data_root, &data) != 0) {
             if (out_missing_state) {
                 *out_missing_state = true;
             }
+            continue;
+        }
+        if (scope_slot && data.slot != *scope_slot) {
             continue;
         }
         LanternVote vote;
@@ -2912,6 +2924,7 @@ static lantern_client_error validator_collect_and_aggregate_attestation_signatur
     struct lantern_client *client,
     LanternAggregatedAttestations *out_attestations,
     LanternAttestationSignatures *out_signatures,
+    const uint64_t *scope_slot,
     struct lantern_block_build_stage_timings *stage_timings,
     bool *out_missing_state)
 {
@@ -2929,6 +2942,7 @@ static lantern_client_error validator_collect_and_aggregate_attestation_signatur
         client,
         &attestations,
         &signatures,
+        scope_slot,
         stage_timings,
         out_missing_state);
     if (rc == LANTERN_CLIENT_OK)
@@ -2939,6 +2953,7 @@ static lantern_client_error validator_collect_and_aggregate_attestation_signatur
             &signatures,
             out_attestations,
             out_signatures,
+            scope_slot,
             stage_timings);
     }
 
@@ -2970,6 +2985,7 @@ static int validator_publish_aggregated_attestations(struct lantern_client *clie
         client,
         &aggregated_attestations,
         &aggregated_signatures,
+        &slot,
         NULL,
         &missing_state);
     size_t successful_aggregations = 0u;

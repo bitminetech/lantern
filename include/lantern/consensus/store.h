@@ -28,6 +28,7 @@ typedef struct {
 struct lantern_attestation_signature_entry {
     LanternSignatureKey key;
     LanternSignature signature;
+    uint64_t attestation_slot;
     uint64_t target_slot;
 };
 

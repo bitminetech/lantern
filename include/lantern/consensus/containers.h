@@ -26,6 +26,10 @@
 #ifndef LANTERN_INVERSE_PROOF_SIZE
 #define LANTERN_INVERSE_PROOF_SIZE 2u
 #endif
+/* Match ethlambda's default recursive aggregation child cap. */
+#ifndef LANTERN_MAX_AGGREGATION_CHILDREN
+#define LANTERN_MAX_AGGREGATION_CHILDREN 2u
+#endif
 
 struct lantern_bitlist {
     uint8_t *bytes;
