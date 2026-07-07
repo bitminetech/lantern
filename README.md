@@ -1,10 +1,16 @@
-# ![Lantern](docs/assets/lantern-logo.svg)
+<p align="center">
+  <img src="docs/assets/lantern-logo.svg" alt="Lantern" width="360">
+</p>
 
-[![CI](https://github.com/bitminetech/lantern/actions/workflows/ci.yml/badge.svg)](https://github.com/bitminetech/lantern/actions/workflows/ci.yml)
-[![Docker Image Version](https://img.shields.io/docker/v/piertwo/lantern?sort=semver)](https://hub.docker.com/r/piertwo/lantern)
-[![Docker Pulls](https://img.shields.io/docker/pulls/piertwo/lantern)](https://hub.docker.com/r/piertwo/lantern)
+<p align="center">
+  <a href="https://github.com/bitminetech/lantern/actions/workflows/ci.yml"><img src="https://github.com/bitminetech/lantern/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://hub.docker.com/r/piertwo/lantern"><img src="https://img.shields.io/docker/v/piertwo/lantern?sort=semver" alt="Docker Image Version"></a>
+  <a href="https://hub.docker.com/r/piertwo/lantern"><img src="https://img.shields.io/docker/pulls/piertwo/lantern" alt="Docker Pulls"></a>
+</p>
 
-Lantern is a C implementation of [Lean Consensus](https://github.com/leanEthereum/leanSpec.git) for Ethereum.
+<p align="center">
+  Lantern is a post-quantum client of <a href="https://github.com/leanEthereum/leanSpec.git">Lean Consensus</a> for Ethereum.
+</p>
 
 ## Requirements
 
