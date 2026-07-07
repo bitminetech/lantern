@@ -2409,7 +2409,7 @@ static lantern_client_error client_start_protocols(
 
     /*
      * This handler may immediately send Status on CONN_ESTABLISHED. Register
-     * it after reqresp so reqresp has already cached the connection.
+     * it after reqresp so the req/resp protocols and event handler are ready.
      */
     if (lantern_libp2p_host_register_event_handler(&client->network, connection_events_cb, client) != 0)
     {

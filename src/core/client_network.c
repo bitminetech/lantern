@@ -960,16 +960,14 @@ void redial_peer_on_timeout(struct lantern_client *client, const struct lantern_
         "peer not in genesis ENRs, skipping redial");
 }
 
-/*
- * Redial a peer by its text peer id even while it appears connected. Used
- * when req/resp streams to the peer keep failing: the existing connection may
- * be a zombie that still carries gossip, so the connected-peer guard in
- * redial_peer_on_timeout would skip the redial that repopulates the req/resp
- * connection registry. The dial layer dedupes duplicate connections.
- */
+/* Redial a peer by text peer id after req/resp observes that it is disconnected. */
 void lantern_client_redial_peer_by_text(struct lantern_client *client, const char *peer_id_text)
 {
     if (!client || !client->network.host || !peer_id_text || !peer_id_text[0])
+    {
+        return;
+    }
+    if (lantern_client_is_peer_connected(client, peer_id_text))
     {
         return;
     }

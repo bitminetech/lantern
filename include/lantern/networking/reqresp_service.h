@@ -29,7 +29,6 @@
 #define LANTERN_REQRESP_RESPONSE_INVALID_REQUEST 1u
 #define LANTERN_REQRESP_RESPONSE_SERVER_ERROR 2u
 #define LANTERN_REQRESP_RESPONSE_RESOURCE_UNAVAILABLE 3u
-#define LANTERN_REQRESP_MAX_TRACKED_CONNECTIONS 64u
 
 /**
  * Reqresp service error codes.
@@ -136,12 +135,6 @@ struct lantern_reqresp_protocol_context {
     enum lantern_reqresp_protocol_kind kind;
 };
 
-struct lantern_reqresp_conn_entry {
-    struct lantern_peer_id peer;
-    libp2p_host_conn_t *conn;
-    int inbound;
-};
-
 struct lantern_reqresp_service {
     struct lantern_libp2p_host *network;
     struct lantern_reqresp_service_callbacks callbacks;
@@ -151,8 +144,6 @@ struct lantern_reqresp_service {
     struct lantern_reqresp_protocol_context status_context;
     struct lantern_reqresp_protocol_context blocks_context;
     struct lantern_reqresp_protocol_context blocks_by_range_context;
-    struct lantern_reqresp_conn_entry conns[LANTERN_REQRESP_MAX_TRACKED_CONNECTIONS];
-    size_t conn_count;
     struct lantern_reqresp_exchange *exchanges;
     int lock_initialized;
     pthread_mutex_t lock;

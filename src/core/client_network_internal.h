@@ -418,10 +418,7 @@ void redial_peer_on_timeout(struct lantern_client *client, const struct lantern_
 
 
 /**
- * Redial a peer by text peer id, bypassing the connected-peer guard. Used by
- * the req/resp layer to recover when stream opens keep failing against a peer
- * whose registry entry was lost while a zombie connection keeps the peer
- * looking connected.
+ * Redial a peer by text peer id after req/resp observes that it is disconnected.
  *
  * @param client        Client instance
  * @param peer_id_text  Text form of the peer id to redial
