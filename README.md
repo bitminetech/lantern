@@ -1,4 +1,4 @@
-# ![Lantern](docs/assets/lantern-logo-primary.svg)
+# ![Lantern](docs/assets/lantern-logo.svg)
 
 [![CI](https://github.com/bitminetech/lantern/actions/workflows/ci.yml/badge.svg)](https://github.com/bitminetech/lantern/actions/workflows/ci.yml)
 [![Docker Image Version](https://img.shields.io/docker/v/piertwo/lantern?sort=semver)](https://hub.docker.com/r/piertwo/lantern)
