@@ -1767,25 +1767,6 @@ static lantern_client_error validator_prepare_block_proposal_job(
     }
     job->block.block.state_root = computed_state_root;
 
-    const LanternCheckpoint *store_justified = client->has_fork_choice
-        ? lantern_fork_choice_latest_justified(&client->fork_choice)
-        : &client->state.latest_justified;
-    if (store_justified
-        && job->post_state.latest_justified.slot < store_justified->slot)
-    {
-        lantern_log_warn(
-            "propose",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "slot %" PRIu64 ", skipped, reason: proposal_justified_divergence_not_closed"
-            ", block_justified_slot %" PRIu64 ", store_justified_slot %" PRIu64,
-            job->slot,
-            job->post_state.latest_justified.slot,
-            store_justified->slot);
-        result = LANTERN_CLIENT_ERR_IGNORED;
-        lantern_client_unlock_state(client, state_locked);
-        goto cleanup;
-    }
-
     if (lantern_state_clone(&client->state, &job->proof_state) != 0)
     {
         result = LANTERN_CLIENT_ERR_ALLOC;
