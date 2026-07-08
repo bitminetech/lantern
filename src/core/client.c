@@ -60,8 +60,11 @@ static const size_t CHECKPOINT_SYNC_MAX_RESPONSE_BYTES =
     + (LANTERN_VALIDATOR_REGISTRY_LIMIT * 52u)
     + (LANTERN_HISTORICAL_ROOTS_LIMIT * 32u)
     + (LANTERN_JUSTIFICATION_VALIDATORS_LIMIT / 8u);
+static const size_t CHECKPOINT_SYNC_MAX_BLOCK_RESPONSE_BYTES = 64u * 1024u * 1024u;
 static const size_t LANTERN_DEFAULT_ATTESTATION_COMMITTEE_COUNT = 1u;
 static const uint64_t LANTERN_CHECKPOINT_SYNC_STALE_PERSISTED_STATE_SLOT_THRESHOLD = 2u * 32u;
+static const char CHECKPOINT_SYNC_FINALIZED_STATE_PATH[] = "/lean/v0/states/finalized";
+static const char CHECKPOINT_SYNC_FINALIZED_BLOCK_PATH[] = "/lean/v0/blocks/finalized";
 
 static void log_aggregated_payload_interval_transition(
     const struct lantern_client *client,
@@ -1515,6 +1518,187 @@ static lantern_client_error client_finalize_genesis_state(struct lantern_client 
  * Checkpoint Sync Helpers
  * ============================================================================ */
 
+static char *checkpoint_sync_endpoint_url(const char *checkpoint_sync_url, const char *endpoint_path)
+{
+    if (!checkpoint_sync_url || checkpoint_sync_url[0] == '\0'
+        || !endpoint_path || endpoint_path[0] != '/')
+    {
+        return NULL;
+    }
+
+    size_t url_len = strlen(checkpoint_sync_url);
+    size_t endpoint_len = strlen(endpoint_path);
+    while (url_len > 0u && checkpoint_sync_url[url_len - 1u] == '/')
+    {
+        --url_len;
+    }
+
+    const char *known_endpoints[] = {
+        CHECKPOINT_SYNC_FINALIZED_STATE_PATH,
+        CHECKPOINT_SYNC_FINALIZED_BLOCK_PATH,
+    };
+
+    for (size_t i = 0; i < sizeof(known_endpoints) / sizeof(known_endpoints[0]); ++i)
+    {
+        size_t known_len = strlen(known_endpoints[i]);
+        if (url_len < known_len
+            || strncmp(
+                   checkpoint_sync_url + url_len - known_len,
+                   known_endpoints[i],
+                   known_len)
+                   != 0)
+        {
+            continue;
+        }
+        url_len -= known_len;
+        break;
+    }
+
+    size_t out_len = url_len + endpoint_len;
+    char *out = malloc(out_len + 1u);
+    if (!out)
+    {
+        return NULL;
+    }
+    memcpy(out, checkpoint_sync_url, url_len);
+    memcpy(out + url_len, endpoint_path, endpoint_len);
+    out[out_len] = '\0';
+    return out;
+}
+
+static lantern_client_error client_fetch_checkpoint_anchor_block(
+    struct lantern_client *client,
+    const char *checkpoint_sync_url,
+    LanternSignedBlock *out_block,
+    LanternRoot *out_root)
+{
+    if (!client || !checkpoint_sync_url || !out_block || !out_root)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    struct lantern_log_metadata meta = {.validator = client->node_id};
+    char *block_url = checkpoint_sync_endpoint_url(
+        checkpoint_sync_url,
+        CHECKPOINT_SYNC_FINALIZED_BLOCK_PATH);
+    if (!block_url)
+    {
+        lantern_log_error(
+            "checkpoint_sync",
+            &meta,
+            "failed to build finalized block URL from %s",
+            checkpoint_sync_url);
+        return LANTERN_CLIENT_ERR_NETWORK;
+    }
+
+    lantern_log_info(
+        "checkpoint_sync",
+        &meta,
+        "fetching finalized checkpoint block from %s",
+        block_url);
+
+    struct lantern_http_fetch_result fetch_result;
+    int fetch_rc = lantern_http_get_bytes(
+        block_url,
+        "application/octet-stream",
+        CHECKPOINT_SYNC_MAX_BLOCK_RESPONSE_BYTES,
+        &fetch_result);
+    if (fetch_rc != 0)
+    {
+        if (fetch_rc == LANTERN_HTTP_CLIENT_STATUS_ERROR)
+        {
+            lantern_log_error(
+                "checkpoint_sync",
+                &meta,
+                "checkpoint block endpoint returned HTTP %d",
+                fetch_result.status_code);
+        }
+        else
+        {
+            lantern_log_error(
+                "checkpoint_sync",
+                &meta,
+                "failed to fetch checkpoint block from %s",
+                block_url);
+        }
+        lantern_http_fetch_result_reset(&fetch_result);
+        free(block_url);
+        return LANTERN_CLIENT_ERR_NETWORK;
+    }
+
+    free(block_url);
+
+    if (!fetch_result.body || fetch_result.body_len == 0)
+    {
+        lantern_http_fetch_result_reset(&fetch_result);
+        lantern_log_error(
+            "checkpoint_sync",
+            &meta,
+            "checkpoint block endpoint returned an empty block payload");
+        return LANTERN_CLIENT_ERR_NETWORK;
+    }
+
+    if (lantern_ssz_decode_signed_block(out_block, fetch_result.body, fetch_result.body_len)
+        != SSZ_SUCCESS)
+    {
+        lantern_http_fetch_result_reset(&fetch_result);
+        lantern_log_error(
+            "checkpoint_sync",
+            &meta,
+            "failed to decode checkpoint block SSZ (bytes=%zu)",
+            fetch_result.body_len);
+        return LANTERN_CLIENT_ERR_GENESIS;
+    }
+    lantern_http_fetch_result_reset(&fetch_result);
+
+    if (lantern_hash_tree_root_block(&out_block->block, out_root) != SSZ_SUCCESS)
+    {
+        lantern_log_error(
+            "checkpoint_sync",
+            &meta,
+            "failed to compute checkpoint block root");
+        return LANTERN_CLIENT_ERR_GENESIS;
+    }
+
+    return LANTERN_CLIENT_OK;
+}
+
+static bool checkpoint_anchor_block_matches_state_header(
+    const LanternSignedBlock *anchor_block,
+    const LanternState *state,
+    const LanternRoot *state_root)
+{
+    if (!anchor_block || !state || !state_root)
+    {
+        return false;
+    }
+
+    const LanternBlockHeader *header = &state->latest_block_header;
+    if (anchor_block->block.slot != header->slot
+        || anchor_block->block.proposer_index != header->proposer_index
+        || memcmp(
+               anchor_block->block.parent_root.bytes,
+               header->parent_root.bytes,
+               LANTERN_ROOT_SIZE)
+            != 0)
+    {
+        return false;
+    }
+
+    if (!lantern_root_is_zero(&header->state_root)
+        && memcmp(header->state_root.bytes, state_root->bytes, LANTERN_ROOT_SIZE) != 0)
+    {
+        return false;
+    }
+
+    LanternRoot body_root;
+    if (lantern_hash_tree_root_block_body(&anchor_block->block.body, &body_root) != SSZ_SUCCESS)
+    {
+        return false;
+    }
+    return memcmp(body_root.bytes, header->body_root.bytes, LANTERN_ROOT_SIZE) == 0;
+}
+
 static lantern_client_error client_load_state_from_checkpoint(
     struct lantern_client *client,
     const char *checkpoint_sync_url)
@@ -1525,15 +1709,43 @@ static lantern_client_error client_load_state_from_checkpoint(
     }
 
     struct lantern_log_metadata meta = {.validator = client->node_id};
+    LanternSignedBlock anchor_signed_block;
+    lantern_signed_block_init(&anchor_signed_block);
+    LanternRoot anchor_root = {0};
+    lantern_client_error block_rc = client_fetch_checkpoint_anchor_block(
+        client,
+        checkpoint_sync_url,
+        &anchor_signed_block,
+        &anchor_root);
+    if (block_rc != LANTERN_CLIENT_OK)
+    {
+        lantern_signed_block_reset(&anchor_signed_block);
+        return block_rc;
+    }
+
+    char *state_url = checkpoint_sync_endpoint_url(
+        checkpoint_sync_url,
+        CHECKPOINT_SYNC_FINALIZED_STATE_PATH);
+    if (!state_url)
+    {
+        lantern_signed_block_reset(&anchor_signed_block);
+        lantern_log_error(
+            "checkpoint_sync",
+            &meta,
+            "failed to build finalized state URL from %s",
+            checkpoint_sync_url);
+        return LANTERN_CLIENT_ERR_NETWORK;
+    }
+
     lantern_log_info(
         "checkpoint_sync",
         &meta,
         "fetching finalized checkpoint state from %s",
-        checkpoint_sync_url);
+        state_url);
 
     struct lantern_http_fetch_result fetch_result;
     int fetch_rc = lantern_http_get_bytes(
-        checkpoint_sync_url,
+        state_url,
         "application/octet-stream",
         CHECKPOINT_SYNC_MAX_RESPONSE_BYTES,
         &fetch_result);
@@ -1553,9 +1765,11 @@ static lantern_client_error client_load_state_from_checkpoint(
                 "checkpoint_sync",
                 &meta,
                 "failed to fetch checkpoint state from %s",
-                checkpoint_sync_url);
+                state_url);
         }
         lantern_http_fetch_result_reset(&fetch_result);
+        free(state_url);
+        lantern_signed_block_reset(&anchor_signed_block);
         return LANTERN_CLIENT_ERR_NETWORK;
     }
 
@@ -1566,14 +1780,13 @@ static lantern_client_error client_load_state_from_checkpoint(
             "checkpoint_sync",
             &meta,
             "checkpoint sync endpoint returned an empty state payload");
+        free(state_url);
+        lantern_signed_block_reset(&anchor_signed_block);
         return LANTERN_CLIENT_ERR_NETWORK;
     }
 
     LanternState decoded;
     lantern_state_init(&decoded);
-    LanternBlock anchor_block;
-    memset(&anchor_block, 0, sizeof(anchor_block));
-    bool anchor_block_initialized = false;
     bool decoded_owned = true;
     lantern_client_error result = LANTERN_CLIENT_OK;
 
@@ -1656,20 +1869,31 @@ static lantern_client_error client_load_state_from_checkpoint(
         goto cleanup;
     }
 
-    anchor_block.slot = decoded.latest_block_header.slot;
-    anchor_block.proposer_index = decoded.latest_block_header.proposer_index;
-    anchor_block.parent_root = decoded.latest_block_header.parent_root;
-    anchor_block.state_root = state_root;
-    lantern_block_body_init(&anchor_block.body);
-    anchor_block_initialized = true;
+    if (memcmp(anchor_signed_block.block.state_root.bytes, state_root.bytes, LANTERN_ROOT_SIZE) != 0)
+    {
+        char block_state_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+        char state_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+        format_root_hex(
+            &anchor_signed_block.block.state_root,
+            block_state_root_hex,
+            sizeof(block_state_root_hex));
+        format_root_hex(&state_root, state_root_hex, sizeof(state_root_hex));
+        lantern_log_error(
+            "checkpoint_sync",
+            &meta,
+            "checkpoint anchor block/state mismatch block_state_root=%s state_root=%s",
+            block_state_root_hex[0] ? block_state_root_hex : "0x0",
+            state_root_hex[0] ? state_root_hex : "0x0");
+        result = LANTERN_CLIENT_ERR_GENESIS;
+        goto cleanup;
+    }
 
-    LanternRoot anchor_root;
-    if (lantern_hash_tree_root_block(&anchor_block, &anchor_root) != SSZ_SUCCESS)
+    if (!checkpoint_anchor_block_matches_state_header(&anchor_signed_block, &decoded, &state_root))
     {
         lantern_log_error(
             "checkpoint_sync",
             &meta,
-            "failed to compute checkpoint anchor block root");
+            "checkpoint anchor block/header mismatch");
         result = LANTERN_CLIENT_ERR_GENESIS;
         goto cleanup;
     }
@@ -1678,6 +1902,42 @@ static lantern_client_error client_load_state_from_checkpoint(
     char anchor_root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     format_root_hex(&state_root, state_root_hex, sizeof(state_root_hex));
     format_root_hex(&anchor_root, anchor_root_hex, sizeof(anchor_root_hex));
+
+    if (!client->data_dir)
+    {
+        lantern_log_error(
+            "storage",
+            &meta,
+            "checkpoint sync requires a data directory for the anchor block");
+        result = LANTERN_CLIENT_ERR_STORAGE;
+        goto cleanup;
+    }
+    if (lantern_storage_store_block_for_root(
+            client->data_dir,
+            &anchor_root,
+            &anchor_signed_block)
+        != 0)
+    {
+        lantern_log_error(
+            "storage",
+            &meta,
+            "failed to persist checkpoint anchor block");
+        result = LANTERN_CLIENT_ERR_STORAGE;
+        goto cleanup;
+    }
+    if (lantern_storage_store_state_for_root(
+            client->data_dir,
+            &anchor_root,
+            &decoded)
+        != 0)
+    {
+        lantern_log_error(
+            "storage",
+            &meta,
+            "failed to persist checkpoint anchor state alias");
+        result = LANTERN_CLIENT_ERR_STORAGE;
+        goto cleanup;
+    }
 
     lantern_state_reset(&client->state);
     client->state = decoded;
@@ -1699,10 +1959,8 @@ static lantern_client_error client_load_state_from_checkpoint(
 
 cleanup:
     lantern_http_fetch_result_reset(&fetch_result);
-    if (anchor_block_initialized)
-    {
-        lantern_block_body_reset(&anchor_block.body);
-    }
+    free(state_url);
+    lantern_signed_block_reset(&anchor_signed_block);
     if (decoded_owned)
     {
         lantern_state_reset(&decoded);
