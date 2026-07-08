@@ -787,6 +787,7 @@ static int test_checkpoint_sync_anchor_checkpoint_restores(void)
     LanternRoot canonical_state_root = {0};
     LanternRoot expected_anchor_root = {0};
     LanternRoot actual_head = {0};
+    LanternSignedBlock persisted_anchor;
     int rc = 1;
 
     memset(&client, 0, sizeof(client));
@@ -794,6 +795,7 @@ static int test_checkpoint_sync_anchor_checkpoint_restores(void)
     client.has_state = true;
     lantern_state_init(&client.state);
     lantern_store_init(&client.store);
+    lantern_signed_block_with_attestation_init(&persisted_anchor);
 
     if (lantern_state_generate_genesis(&client.state, UINT64_C(1761717362), 5u) != 0)
     {
@@ -839,26 +841,80 @@ static int test_checkpoint_sync_anchor_checkpoint_restores(void)
     }
     client.data_dir = data_dir;
 
+    persisted_anchor.block.slot = client.state.latest_block_header.slot;
+    persisted_anchor.block.proposer_index = client.state.latest_block_header.proposer_index;
+    persisted_anchor.block.parent_root = client.state.latest_block_header.parent_root;
+    if (lantern_aggregated_attestations_resize(
+            &persisted_anchor.block.body.attestations,
+            1u)
+        != 0)
+    {
+        fprintf(stderr, "failed to build checkpoint anchor block body\n");
+        goto cleanup;
+    }
+    LanternAggregatedAttestation *anchor_attestation =
+        &persisted_anchor.block.body.attestations.data[0];
+    if (lantern_bitlist_resize(&anchor_attestation->aggregation_bits, 5u) != 0
+        || lantern_bitlist_set(&anchor_attestation->aggregation_bits, 2u, true) != 0)
+    {
+        fprintf(stderr, "failed to build checkpoint anchor aggregation bits\n");
+        goto cleanup;
+    }
+    anchor_attestation->data.slot = client.state.latest_block_header.slot - 1u;
+    anchor_attestation->data.head = remote_justified;
+    anchor_attestation->data.target = remote_justified;
+    anchor_attestation->data.source = remote_finalized;
+
+    LanternRoot anchor_body_root = {0};
+    if (lantern_hash_tree_root_block_body(&persisted_anchor.block.body, &anchor_body_root)
+        != SSZ_SUCCESS)
+    {
+        fprintf(stderr, "failed to hash checkpoint anchor block body\n");
+        goto cleanup;
+    }
+    client.state.latest_block_header.body_root = anchor_body_root;
+
     if (lantern_hash_tree_root_state(&client.state, &canonical_state_root) != SSZ_SUCCESS)
     {
         fprintf(stderr, "failed to hash checkpoint anchor restore regression state\n");
         goto cleanup;
     }
+    persisted_anchor.block.state_root = canonical_state_root;
 
-    LanternBlock expected_anchor_block;
-    memset(&expected_anchor_block, 0, sizeof(expected_anchor_block));
-    expected_anchor_block.slot = client.state.latest_block_header.slot;
-    expected_anchor_block.proposer_index = client.state.latest_block_header.proposer_index;
-    expected_anchor_block.parent_root = client.state.latest_block_header.parent_root;
-    expected_anchor_block.state_root = canonical_state_root;
-    lantern_block_body_init(&expected_anchor_block.body);
-    if (lantern_hash_tree_root_block(&expected_anchor_block, &expected_anchor_root) != SSZ_SUCCESS)
+    if (lantern_hash_tree_root_block(&persisted_anchor.block, &expected_anchor_root)
+        != SSZ_SUCCESS)
     {
-        lantern_block_body_reset(&expected_anchor_block.body);
         fprintf(stderr, "failed to hash checkpoint anchor restore regression anchor block\n");
         goto cleanup;
     }
-    lantern_block_body_reset(&expected_anchor_block.body);
+    LanternBlockHeader expected_anchor_header = client.state.latest_block_header;
+    expected_anchor_header.state_root = canonical_state_root;
+    LanternRoot expected_header_root = {0};
+    if (lantern_hash_tree_root_block_header(&expected_anchor_header, &expected_header_root)
+        != SSZ_SUCCESS)
+    {
+        fprintf(stderr, "failed to hash checkpoint anchor restore regression header\n");
+        goto cleanup;
+    }
+    if (!roots_equal(&expected_anchor_root, &expected_header_root))
+    {
+        fprintf(stderr, "checkpoint anchor block/header root mismatch in test setup\n");
+        goto cleanup;
+    }
+    if (roots_equal(&expected_anchor_root, &remote_finalized.root))
+    {
+        fprintf(stderr, "test setup failed to create distinct checkpoint anchor root\n");
+        goto cleanup;
+    }
+    if (lantern_storage_store_block_for_root(
+            client.data_dir,
+            &expected_anchor_root,
+            &persisted_anchor)
+        != 0)
+    {
+        fprintf(stderr, "failed to persist checkpoint anchor block for restore regression\n");
+        goto cleanup;
+    }
 
     if (initialize_fork_choice(&client) != LANTERN_CLIENT_OK)
     {
@@ -1014,6 +1070,7 @@ cleanup:
     lantern_fork_choice_reset(&client.fork_choice);
     lantern_store_reset(&client.store);
     lantern_state_reset(&client.state);
+    lantern_signed_block_with_attestation_reset(&persisted_anchor);
     return rc;
 }
 
