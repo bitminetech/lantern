@@ -872,6 +872,10 @@ static ssz_error_t decode_validators_list(
             data + (i * LANTERN_VALIDATOR_SSZ_SIZE),
             LANTERN_VALIDATOR_SSZ_SIZE);
         if (err == SSZ_SUCCESS) {
+            if (decoded.index != (uint64_t)i) {
+                err = SSZ_ERR_ENCODING_INVALID;
+                break;
+            }
             memcpy(attestation_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
                    decoded.attestation_pubkey,
                    LANTERN_VALIDATOR_PUBKEY_SIZE);
@@ -887,19 +891,6 @@ static ssz_error_t decode_validators_list(
             attestation_pubkeys,
             proposal_pubkeys,
             count));
-    }
-    if (err == SSZ_SUCCESS) {
-        for (size_t i = 0u; i < count; ++i) {
-            memset(&decoded, 0, sizeof(decoded));
-            err = lantern_ssz_decode_validator(
-                &decoded,
-                data + (i * LANTERN_VALIDATOR_SSZ_SIZE),
-                LANTERN_VALIDATOR_SSZ_SIZE);
-            if (err != SSZ_SUCCESS) {
-                break;
-            }
-            state->validators[i].index = decoded.index;
-        }
     }
     if (err == SSZ_SUCCESS) {
         state->config.num_validators = count;

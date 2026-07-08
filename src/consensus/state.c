@@ -1708,13 +1708,16 @@ static int lantern_state_prune_justification_roots(
             start_slot,
             &latest_slot);
         if (find_rc != 0) {
-            if (meta) {
-                lantern_log_warn(
-                    "state",
-                    meta,
-                    "justification root missing from history during pruning");
+            if (lantern_state_remove_justification_root(state, (int)i, validator_count) != 0) {
+                if (meta) {
+                    lantern_log_warn(
+                        "state",
+                        meta,
+                        "failed to prune off-chain justification root");
+                }
+                return -1;
             }
-            return -1;
+            continue;
         }
         if (latest_slot <= finalized_slot) {
             if (lantern_state_remove_justification_root(state, (int)i, validator_count) != 0) {
