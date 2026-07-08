@@ -1157,9 +1157,21 @@ static bool load_persisted_checkpoint_anchor_block(
     LanternRoot *out_anchor_root)
 {
     if (!client || !meta || !state_root || !out_anchor_block || !out_anchor_root
-        || !client->data_dir
-        || lantern_root_is_zero(&client->state.latest_finalized.root))
+        || !client->data_dir)
     {
+        return false;
+    }
+
+    LanternBlockHeader expected_anchor_header = client->state.latest_block_header;
+    expected_anchor_header.state_root = *state_root;
+    LanternRoot expected_anchor_root;
+    if (lantern_hash_tree_root_block_header(&expected_anchor_header, &expected_anchor_root)
+        != SSZ_SUCCESS)
+    {
+        lantern_log_warn(
+            "forkchoice",
+            meta,
+            "failed to hash checkpoint state latest block header");
         return false;
     }
 
@@ -1167,7 +1179,7 @@ static bool load_persisted_checkpoint_anchor_block(
     size_t block_len = 0;
     int load_rc = lantern_storage_load_block_bytes_for_root(
         client->data_dir,
-        &client->state.latest_finalized.root,
+        &expected_anchor_root,
         &block_bytes,
         &block_len);
     if (load_rc != 0)
@@ -1206,35 +1218,14 @@ static bool load_persisted_checkpoint_anchor_block(
 
     if (memcmp(
             computed_root.bytes,
-            client->state.latest_finalized.root.bytes,
+            expected_anchor_root.bytes,
             LANTERN_ROOT_SIZE)
         != 0)
     {
         lantern_log_warn(
             "forkchoice",
             meta,
-            "persisted checkpoint anchor block root does not match state finalized root");
-        goto cleanup;
-    }
-
-    if (memcmp(signed_anchor.block.state_root.bytes, state_root->bytes, LANTERN_ROOT_SIZE) != 0)
-    {
-        lantern_log_warn(
-            "forkchoice",
-            meta,
-            "persisted checkpoint anchor block state_root does not match checkpoint state");
-        goto cleanup;
-    }
-
-    if (signed_anchor.block.slot != client->state.latest_block_header.slot)
-    {
-        lantern_log_warn(
-            "forkchoice",
-            meta,
-            "persisted checkpoint anchor block slot mismatch block=%" PRIu64
-            " header=%" PRIu64,
-            signed_anchor.block.slot,
-            client->state.latest_block_header.slot);
+            "persisted checkpoint anchor block root does not match checkpoint header");
         goto cleanup;
     }
 
@@ -1256,7 +1247,7 @@ static bool load_persisted_checkpoint_anchor_block(
             "failed to copy persisted checkpoint anchor block body");
         goto cleanup;
     }
-    *out_anchor_root = computed_root;
+    *out_anchor_root = expected_anchor_root;
     loaded = true;
 
 cleanup:
@@ -1328,6 +1319,26 @@ static int compute_fork_choice_anchor_roots(
             out_anchor_root))
     {
         return LANTERN_CLIENT_OK;
+    }
+
+    LanternBlockBody empty_body;
+    lantern_block_body_init(&empty_body);
+    LanternRoot empty_body_root;
+    bool empty_body_root_ok =
+        lantern_hash_tree_root_block_body(&empty_body, &empty_body_root) == SSZ_SUCCESS;
+    lantern_block_body_reset(&empty_body);
+    if (!empty_body_root_ok
+        || memcmp(
+               empty_body_root.bytes,
+               client->state.latest_block_header.body_root.bytes,
+               LANTERN_ROOT_SIZE)
+               != 0)
+    {
+        lantern_log_error(
+            "forkchoice",
+            meta,
+            "missing persisted checkpoint anchor block for non-empty checkpoint header body");
+        return LANTERN_CLIENT_ERR_RUNTIME;
     }
 
     out_anchor_block->slot = client->state.latest_block_header.slot;
@@ -1936,13 +1947,14 @@ int restore_persisted_blocks(struct lantern_client *client)
             lantern_log_info(
                 "forkchoice",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
-                "aliasing restored justified checkpoint slot=%" PRIu64
+                "rebasing restored justified checkpoint slot=%" PRIu64
                 " original_root=%s anchor_slot=%" PRIu64 " anchor_root=%s",
                 restored_justified.slot,
                 original_justified_hex[0] ? original_justified_hex : "0x0",
                 restore_anchor_slot,
                 anchor_hex[0] ? anchor_hex : "0x0");
             restored_justified.root = *restore_anchor_root;
+            restored_justified.slot = restore_anchor_slot;
         }
         if (!restored_finalized_known && restored_finalized.slot <= restore_anchor_slot)
         {
@@ -1959,13 +1971,14 @@ int restore_persisted_blocks(struct lantern_client *client)
             lantern_log_info(
                 "forkchoice",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
-                "aliasing restored finalized checkpoint slot=%" PRIu64
+                "rebasing restored finalized checkpoint slot=%" PRIu64
                 " original_root=%s anchor_slot=%" PRIu64 " anchor_root=%s",
                 restored_finalized.slot,
                 original_finalized_hex[0] ? original_finalized_hex : "0x0",
                 restore_anchor_slot,
                 anchor_hex[0] ? anchor_hex : "0x0");
             restored_finalized.root = *restore_anchor_root;
+            restored_finalized.slot = restore_anchor_slot;
         }
     }
 
