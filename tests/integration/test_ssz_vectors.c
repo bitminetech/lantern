@@ -2855,6 +2855,29 @@ static int run_decode_rejection_fixture(
             sizeof(uint8_t),
             decoded,
             sizeof(decoded));
+    } else if (strcmp(type_name, "Validators") == 0) {
+        if (bytes.len % LANTERN_VALIDATOR_SSZ_SIZE != 0u) {
+            decode_status = SSZ_ERR_ENCODING_INVALID;
+        } else if (bytes.len / LANTERN_VALIDATOR_SSZ_SIZE > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+            decode_status = SSZ_ERR_LIMIT_EXCEEDED;
+        } else {
+            decode_status = SSZ_SUCCESS;
+            for (size_t i = 0u; i < bytes.len / LANTERN_VALIDATOR_SSZ_SIZE; ++i) {
+                LanternValidator decoded;
+                memset(&decoded, 0, sizeof(decoded));
+                decode_status = lantern_ssz_decode_validator(
+                    &decoded,
+                    bytes.data + (i * LANTERN_VALIDATOR_SSZ_SIZE),
+                    LANTERN_VALIDATOR_SSZ_SIZE);
+                if (decode_status != SSZ_SUCCESS) {
+                    break;
+                }
+                if (decoded.index != (uint64_t)i) {
+                    decode_status = SSZ_ERR_ENCODING_INVALID;
+                    break;
+                }
+            }
+        }
     } else {
         size_t bit_count = 0u;
         if (parse_size_suffix(type_name, "DecodeBitvector", &bit_count) == 0
