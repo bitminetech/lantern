@@ -4,8 +4,8 @@
 
 <p align="center">
   <a href="https://github.com/bitminetech/lantern/actions/workflows/ci.yml"><img src="https://github.com/bitminetech/lantern/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://hub.docker.com/r/piertwo/lantern"><img src="https://img.shields.io/docker/v/piertwo/lantern?sort=semver" alt="Docker Image Version"></a>
-  <a href="https://hub.docker.com/r/piertwo/lantern"><img src="https://img.shields.io/docker/pulls/piertwo/lantern" alt="Docker Pulls"></a>
+  <a href="https://hub.docker.com/r/bitminemavan/lantern"><img src="https://img.shields.io/docker/v/bitminemavan/lantern?sort=semver" alt="Docker Image Version"></a>
+  <a href="https://hub.docker.com/r/bitminemavan/lantern"><img src="https://img.shields.io/docker/pulls/bitminemavan/lantern" alt="Docker Pulls"></a>
 </p>
 
 <p align="center">
