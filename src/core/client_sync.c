@@ -39,7 +39,6 @@ enum
 {
     ROOT_HEX_BUFFER_LEN = (LANTERN_ROOT_SIZE * 2u) + 3u,
     PEER_TEXT_BUFFER_LEN = 128,
-    VALIDATOR_PUBKEY_HEX_BUFFER_LEN = (LANTERN_VALIDATOR_PUBKEY_SIZE * 2u) + 3u,
 };
 
 void lantern_client_set_sync_state_logged(
@@ -2004,69 +2003,15 @@ int restore_persisted_blocks(struct lantern_client *client)
  * ============================================================================ */
 
 /**
- * @brief Update a registry record from a state pubkey fallback.
+ * @brief Populate a packed pubkey buffer from registry records.
  *
- * Copies the pubkey bytes into the registry record and refreshes the
- * cached hex string when possible.
+ * Registry records carry one pubkey, so empty-state initialization uses it for
+ * both attestation and proposal keys.
  *
- * @param record  Registry record to update
- * @param pubkey  Pubkey bytes (LANTERN_VALIDATOR_PUBKEY_SIZE bytes)
- * @param meta    Logging metadata
- * @param index   Validator index (for logging)
- *
- * @note Thread safety: Caller must ensure exclusive access during initialization
- */
-static void update_registry_record_from_state_pubkey(
-    struct lantern_validator_record *record,
-    const uint8_t *pubkey,
-    const struct lantern_log_metadata *meta,
-    size_t index)
-{
-    if (!record || !pubkey || !meta)
-    {
-        return;
-    }
-
-    memcpy(record->pubkey_bytes, pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE);
-    record->has_pubkey_bytes = true;
-
-    char hex[VALIDATOR_PUBKEY_HEX_BUFFER_LEN];
-    if (lantern_bytes_to_hex(pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE, hex, sizeof(hex), 1) != 0)
-    {
-        return;
-    }
-
-    char *dup = lantern_string_duplicate(hex);
-    if (!dup)
-    {
-        lantern_log_warn(
-            "client",
-            meta,
-            "failed to allocate pubkey hex for validator=%zu",
-            index);
-        return;
-    }
-
-    free(record->pubkey_hex);
-    record->pubkey_hex = dup;
-}
-
-
-/**
- * @brief Populate packed attestation/proposal pubkey buffers from registry/state sources.
- *
- * Writes packed arrays of validator pubkeys into the provided output buffers
- * and opportunistically fills missing registry pubkeys from the state.
- *
- * @param client              Client instance
  * @param registry            Validator registry (must have records)
- * @param state_count         Validator count in state
- * @param attestation_packed  Output packed attestation buffer
- * @param proposal_packed     Output packed proposal buffer
+ * @param packed_pubkeys      Output packed pubkey buffer
  * @param count               Number of validators to write
- * @param meta                Logging metadata
  * @param out_registry_used   Output count of pubkeys sourced from registry
- * @param out_state_used      Output count of pubkeys sourced from state fallback
  * @param out_missing_pubkeys Output count of missing pubkeys
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL
@@ -2074,26 +2019,19 @@ static void update_registry_record_from_state_pubkey(
  * @note Thread safety: Caller must ensure exclusive access during initialization
  */
 static int populate_validator_pubkeys(
-    struct lantern_client *client,
     struct lantern_validator_registry *registry,
-    size_t state_count,
-    uint8_t *attestation_packed,
-    uint8_t *proposal_packed,
+    uint8_t *packed_pubkeys,
     size_t count,
-    const struct lantern_log_metadata *meta,
     size_t *out_registry_used,
-    size_t *out_state_used,
     size_t *out_missing_pubkeys)
 {
-    if (!client || !registry || !registry->records || !attestation_packed
-        || !proposal_packed || !meta
-        || !out_registry_used || !out_state_used || !out_missing_pubkeys)
+    if (!registry || !registry->records || !packed_pubkeys
+        || !out_registry_used || !out_missing_pubkeys)
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
 
     *out_registry_used = 0;
-    *out_state_used = 0;
     *out_missing_pubkeys = 0;
 
     for (size_t i = 0; i < count; ++i)
@@ -2105,49 +2043,18 @@ static int populate_validator_pubkeys(
             registry_pub = record->pubkey_bytes;
         }
 
-        const uint8_t *state_attestation_pub = NULL;
-        const uint8_t *state_proposal_pub = NULL;
-        if (state_count > i)
-        {
-            state_attestation_pub = lantern_state_validator_attestation_pubkey(&client->state, i);
-            state_proposal_pub = lantern_state_validator_proposal_pubkey(&client->state, i);
-        }
-        if (state_attestation_pub && lantern_validator_pubkey_is_zero(state_attestation_pub))
-        {
-            state_attestation_pub = NULL;
-        }
-        if (state_proposal_pub && lantern_validator_pubkey_is_zero(state_proposal_pub))
-        {
-            state_proposal_pub = NULL;
-        }
-
-        const uint8_t *chosen_attestation = registry_pub ? registry_pub : state_attestation_pub;
-        const uint8_t *chosen_proposal = state_proposal_pub ? state_proposal_pub : chosen_attestation;
         size_t offset = i * LANTERN_VALIDATOR_PUBKEY_SIZE;
-        if (chosen_attestation)
+        if (registry_pub)
         {
             memcpy(
-                attestation_packed + offset,
-                chosen_attestation,
+                packed_pubkeys + offset,
+                registry_pub,
                 LANTERN_VALIDATOR_PUBKEY_SIZE);
-            memcpy(
-                proposal_packed + offset,
-                chosen_proposal,
-                LANTERN_VALIDATOR_PUBKEY_SIZE);
-            if (!registry_pub && state_attestation_pub)
-            {
-                update_registry_record_from_state_pubkey(record, state_attestation_pub, meta, i);
-                ++(*out_state_used);
-            }
-            else if (registry_pub)
-            {
-                ++(*out_registry_used);
-            }
+            ++(*out_registry_used);
         }
         else
         {
-            memset(attestation_packed + offset, 0, LANTERN_VALIDATOR_PUBKEY_SIZE);
-            memset(proposal_packed + offset, 0, LANTERN_VALIDATOR_PUBKEY_SIZE);
+            memset(packed_pubkeys + offset, 0, LANTERN_VALIDATOR_PUBKEY_SIZE);
             ++(*out_missing_pubkeys);
         }
     }
@@ -2157,13 +2064,12 @@ static int populate_validator_pubkeys(
 
 
 /**
- * Refresh state validator pubkeys from genesis registry.
+ * Validate existing state validator pubkeys or initialize them from genesis registry.
  *
  * @spec subspecs/containers/validator.py - Validator pubkey management
  *
- * Synchronizes validator public keys between the genesis registry
- * and the state. Merges keys from both sources, preferring genesis
- * registry when available, falling back to state pubkeys otherwise.
+ * Existing state pubkeys are part of the verified state root, so they are
+ * preserved. Registry-derived initialization is only used for an empty state.
  *
  * @param client  Client instance
  * @return LANTERN_CLIENT_OK on success
@@ -2184,33 +2090,39 @@ int lantern_client_refresh_state_validators(struct lantern_client *client)
     size_t registry_count = registry->count;
     size_t state_count = lantern_state_validator_count(&client->state);
 
-    bool have_registry = registry->records && registry_count > 0;
-    if (!have_registry)
+    if (state_count > 0)
     {
-        if (state_count == 0)
+        bool have_local_pubkeys =
+            client->genesis.chain_config.validator_attestation_pubkeys
+            && client->genesis.chain_config.validator_proposal_pubkeys
+            && client->genesis.chain_config.validator_pubkeys_count > 0;
+        if (have_local_pubkeys)
         {
-            if (lantern_state_set_validator_pubkeys_dual(&client->state, NULL, NULL, 0) != 0)
+            int validate_rc = lantern_client_validate_state_validator_pubkeys(
+                client,
+                &client->state,
+                "client");
+            if (validate_rc != LANTERN_CLIENT_OK)
             {
-                return LANTERN_CLIENT_ERR_RUNTIME;
+                return validate_rc;
             }
-            return LANTERN_CLIENT_OK;
         }
         lantern_log_info(
             "client",
             &meta,
-            "validator registry missing; retaining existing state pubkeys count=%zu",
+            "retaining existing state pubkeys count=%zu",
             state_count);
         return LANTERN_CLIENT_OK;
     }
 
-    if (state_count > 0 && state_count != registry_count)
+    bool have_registry = registry->records && registry_count > 0;
+    if (!have_registry)
     {
-        lantern_log_warn(
-            "client",
-            &meta,
-            "validator count mismatch registry=%zu state=%zu",
-            registry_count,
-            state_count);
+        if (lantern_state_set_validator_pubkeys(&client->state, NULL, 0) != 0)
+        {
+            return LANTERN_CLIENT_ERR_RUNTIME;
+        }
+        return LANTERN_CLIENT_OK;
     }
 
     size_t count = registry_count;
@@ -2219,58 +2131,45 @@ int lantern_client_refresh_state_validators(struct lantern_client *client)
         return LANTERN_CLIENT_ERR_ALLOC;
     }
     size_t total_bytes = count * LANTERN_VALIDATOR_PUBKEY_SIZE;
-    uint8_t *attestation_packed = malloc(total_bytes);
-    uint8_t *proposal_packed = malloc(total_bytes);
-    if (!attestation_packed || !proposal_packed)
+    uint8_t *packed_pubkeys = malloc(total_bytes);
+    if (!packed_pubkeys)
     {
-        free(attestation_packed);
-        free(proposal_packed);
         return LANTERN_CLIENT_ERR_ALLOC;
     }
     size_t registry_used = 0;
-    size_t state_used = 0;
     size_t missing_pubkeys = 0;
     int pack_rc = populate_validator_pubkeys(
-        client,
         registry,
-        state_count,
-        attestation_packed,
-        proposal_packed,
+        packed_pubkeys,
         count,
-        &meta,
         &registry_used,
-        &state_used,
         &missing_pubkeys);
     if (pack_rc != LANTERN_CLIENT_OK)
     {
-        free(attestation_packed);
-        free(proposal_packed);
+        free(packed_pubkeys);
         return pack_rc;
     }
-    int rc = lantern_state_set_validator_pubkeys_dual(
+    int rc = lantern_state_set_validator_pubkeys(
         &client->state,
-        attestation_packed,
-        proposal_packed,
+        packed_pubkeys,
         count);
-    free(attestation_packed);
-    free(proposal_packed);
+    free(packed_pubkeys);
     if (rc != 0)
     {
         lantern_log_warn(
             "client",
             &meta,
-            "failed to copy validator keypairs into parent state");
+            "failed to copy validator pubkeys into parent state");
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
     size_t enabled = lantern_client_enabled_validator_count(client);
     lantern_log_info(
         "client",
         &meta,
-        "refreshed validator pubkeys count=%zu registry=%zu state_fallback=%zu missing=%zu "
+        "refreshed validator pubkeys count=%zu registry=%zu missing=%zu "
         "local_validators=%zu enabled=%zu",
         count,
         registry_used,
-        state_used,
         missing_pubkeys,
         client->local_validator_count,
         enabled);
@@ -3499,7 +3398,7 @@ bool lantern_client_enqueue_pending_block(
         {
             (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_text);
         }
-        if (backfill_depth < existing->backfill_depth)
+        if (backfill_depth > existing->backfill_depth)
         {
             existing->backfill_depth = backfill_depth;
         }

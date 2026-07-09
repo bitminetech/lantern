@@ -350,6 +350,17 @@ if(LANTERN_BUILD_TESTS)
     )
     add_test(NAME lantern_networking_messages COMMAND lantern_networking_messages_test)
 
+    add_executable(lantern_reqresp_service_test tests/unit/test_reqresp_service.c)
+    target_link_libraries(lantern_reqresp_service_test PRIVATE ${LANTERN_TEST_LINK_LIB})
+    target_include_directories(
+        lantern_reqresp_service_test
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}
+            ${PROJECT_SOURCE_DIR}/src
+            ${PROJECT_SOURCE_DIR}/external/jsmn
+    )
+    add_test(NAME lantern_reqresp_service COMMAND lantern_reqresp_service_test)
+
     add_executable(lantern_gossip_block_dump_decode
         tests/unit/test_gossip_block_dump_decode.c
     )
@@ -539,6 +550,7 @@ if(LANTERN_BUILD_TESTS)
         lantern_slot_clock
         lantern_snappy
         lantern_networking_messages
+        lantern_reqresp_service
         lantern_libp2p
         lantern_fork_choice
         lantern_storage

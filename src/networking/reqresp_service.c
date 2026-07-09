@@ -35,8 +35,9 @@ struct lantern_reqresp_exchange {
     size_t write_off;
     struct reqresp_buffer read_buf;
     LanternRoot *roots;
+    bool *roots_matched;
     size_t root_count;
-    size_t responses_received;
+    size_t matched_root_count;
     uint64_t request_id;
     int completed;
     int request_complete;
@@ -118,6 +119,7 @@ static void exchange_free(struct lantern_reqresp_exchange *exchange) {
     free(exchange->write_buf);
     reqresp_buffer_reset(&exchange->read_buf);
     free(exchange->roots);
+    free(exchange->roots_matched);
     free(exchange);
 }
 
@@ -954,12 +956,54 @@ static int exchange_read_available(struct lantern_reqresp_exchange *exchange, in
     }
 }
 
-static void exchange_fail(struct lantern_reqresp_exchange *exchange, int error) {
+static bool exchange_blocks_request_success(const struct lantern_reqresp_exchange *exchange) {
+    return exchange && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT
+        && exchange->roots_matched
+        && exchange->root_count > 0u
+        && exchange->matched_root_count == exchange->root_count;
+}
+
+static bool exchange_find_unmatched_root_index(
+    const struct lantern_reqresp_exchange *exchange,
+    const LanternRoot *root,
+    size_t *out_index) {
+    if (!exchange || !root || !exchange->roots || !exchange->roots_matched) {
+        return false;
+    }
+    for (size_t i = 0; i < exchange->root_count; ++i) {
+        if (!exchange->roots_matched[i]
+            && memcmp(exchange->roots[i].bytes, root->bytes, LANTERN_ROOT_SIZE) == 0) {
+            if (out_index) {
+                *out_index = i;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+static void exchange_complete_blocks_request(struct lantern_reqresp_exchange *exchange, int success) {
     if (!exchange || exchange->completed) {
         return;
     }
     exchange->completed = 1;
+    if (exchange->service->callbacks.blocks_request_complete) {
+        exchange->service->callbacks.blocks_request_complete(
+            exchange->service->callbacks.context,
+            exchange->peer_id_text,
+            exchange->roots,
+            exchange->root_count,
+            exchange->request_id,
+            success);
+    }
+}
+
+static void exchange_fail(struct lantern_reqresp_exchange *exchange, int error) {
+    if (!exchange || exchange->completed) {
+        return;
+    }
     if (exchange->outbound && exchange->kind == LANTERN_REQRESP_PROTOCOL_STATUS) {
+        exchange->completed = 1;
         if (exchange->service->callbacks.status_failure) {
             exchange->service->callbacks.status_failure(
                 exchange->service->callbacks.context,
@@ -967,16 +1011,21 @@ static void exchange_fail(struct lantern_reqresp_exchange *exchange, int error) 
                 error);
         }
     } else if (exchange->outbound && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT) {
-        if (exchange->service->callbacks.blocks_request_complete) {
-            exchange->service->callbacks.blocks_request_complete(
-                exchange->service->callbacks.context,
-                exchange->peer_id_text,
-                exchange->roots,
-                exchange->root_count,
-                exchange->request_id,
-                exchange->responses_received > 0u ? 1 : 0);
-        }
+        exchange_complete_blocks_request(exchange, 0);
+    } else {
+        exchange->completed = 1;
     }
+}
+
+static void exchange_handle_outbound_closed(struct lantern_reqresp_exchange *exchange, bool reset) {
+    if (!exchange || !exchange->outbound || exchange->completed) {
+        return;
+    }
+    if (!reset && exchange_blocks_request_success(exchange)) {
+        exchange_complete_blocks_request(exchange, 1);
+        return;
+    }
+    exchange_fail(exchange, LANTERN_REQRESP_ERR_STREAM_READ);
 }
 
 static int exchange_handle_outbound_status_frame(
@@ -1029,6 +1078,16 @@ static int exchange_handle_outbound_block_frame(
         exchange_fail(exchange, LANTERN_REQRESP_ERR_INVALID_PAYLOAD);
         return 0;
     }
+    size_t root_index = 0;
+    if (exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT) {
+        LanternRoot block_root = {0};
+        if (lantern_hash_tree_root_block(&block.block, &block_root) != SSZ_SUCCESS
+            || !exchange_find_unmatched_root_index(exchange, &block_root, &root_index)) {
+            lantern_signed_block_reset(&block);
+            exchange_fail(exchange, LANTERN_REQRESP_ERR_INVALID_PAYLOAD);
+            return 0;
+        }
+    }
     int handled = 0;
     if (exchange->service->callbacks.handle_block_response) {
         handled = exchange->service->callbacks.handle_block_response(
@@ -1040,19 +1099,15 @@ static int exchange_handle_outbound_block_frame(
     }
     lantern_signed_block_reset(&block);
     if (handled == 0) {
-        exchange->responses_received += 1u;
-        if (exchange->responses_received >= exchange->root_count) {
-            exchange->completed = 1;
-            if (exchange->service->callbacks.blocks_request_complete) {
-                exchange->service->callbacks.blocks_request_complete(
-                    exchange->service->callbacks.context,
-                    exchange->peer_id_text,
-                    exchange->roots,
-                    exchange->root_count,
-                    exchange->request_id,
-                    1);
-            }
+        if (exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT) {
+            exchange->roots_matched[root_index] = true;
         }
+        exchange->matched_root_count += 1u;
+        if (exchange_blocks_request_success(exchange)) {
+            exchange_complete_blocks_request(exchange, 1);
+        }
+    } else {
+        exchange_fail(exchange, handled);
     }
     return 0;
 }
@@ -1194,23 +1249,10 @@ static libp2p_host_err_t reqresp_on_event(
     }
     struct lantern_reqresp_exchange *exchange = (struct lantern_reqresp_exchange *)user_data;
     if (kind == LIBP2P_HOST_PROTOCOL_EVENT_RESET || kind == LIBP2P_HOST_PROTOCOL_EVENT_CLOSED) {
-        if (exchange->outbound && !exchange->completed) {
-            if (kind == LIBP2P_HOST_PROTOCOL_EVENT_RESET) {
-                exchange_fail(exchange, LANTERN_REQRESP_ERR_STREAM_READ);
-            } else if (exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT && exchange->responses_received > 0u) {
-                exchange->completed = 1;
-                if (exchange->service->callbacks.blocks_request_complete) {
-                    exchange->service->callbacks.blocks_request_complete(
-                        exchange->service->callbacks.context,
-                        exchange->peer_id_text,
-                        exchange->roots,
-                        exchange->root_count,
-                        exchange->request_id,
-                        1);
-                }
-            } else {
-                exchange_fail(exchange, LANTERN_REQRESP_ERR_STREAM_READ);
-            }
+        if (exchange->outbound) {
+            exchange_handle_outbound_closed(
+                exchange,
+                kind == LIBP2P_HOST_PROTOCOL_EVENT_RESET);
         }
         service_remove_exchange(exchange->service, exchange);
         exchange_free(exchange);
@@ -1389,12 +1431,21 @@ static int service_open_exchange(
             peer_id_text);
     }
     if (root_count > 0u) {
+        if (!roots) {
+            exchange_free(exchange);
+            return -1;
+        }
         exchange->roots = (LanternRoot *)calloc(root_count, sizeof(*exchange->roots));
         if (!exchange->roots) {
             exchange_free(exchange);
             return -1;
         }
         memcpy(exchange->roots, roots, root_count * sizeof(*exchange->roots));
+        exchange->roots_matched = (bool *)calloc(root_count, sizeof(*exchange->roots_matched));
+        if (!exchange->roots_matched) {
+            exchange_free(exchange);
+            return -1;
+        }
         exchange->root_count = root_count;
     }
     service_add_exchange(service, exchange);
