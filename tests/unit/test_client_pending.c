@@ -1069,7 +1069,16 @@ static int test_sync_completion_uses_network_finalized_threshold(void)
     }
 
     client.network_view.latest_observed_head_slot = local_head_slot + 1024u;
-    client.network_view.network_finalized_slot = local_head_slot;
+    client.network_view.network_finalized_slot = local_head_slot + 1u;
+    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
+    lantern_client_update_sync_progress(&client, local_head_slot + 1024u);
+    if (client.sync_state == LANTERN_SYNC_STATE_SYNCED) {
+        fprintf(stderr, "sync should not complete from high local head with stale finality\n");
+        goto cleanup;
+    }
+
+    client.network_view.latest_observed_head_slot = local_head_slot + 1024u;
+    client.network_view.network_finalized_slot = client.state.latest_finalized.slot;
     client.sync_state = LANTERN_SYNC_STATE_SYNCING;
     lantern_client_update_sync_progress(&client, local_head_slot);
     if (client.sync_state != LANTERN_SYNC_STATE_SYNCED) {
@@ -1226,6 +1235,68 @@ cleanup:
     return rc;
 }
 
+static int test_peer_status_updates_sync_network_view(void)
+{
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot child_root;
+    LanternRoot finalized_root;
+    const char *peer_id = "16Uiu2HAmPV5jU62WtmDkCEmfq1jzbBDkGbHNsDN78gJyvmv2TuC7";
+    int rc = 1;
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "sync_peer_status_network_view",
+            &pub,
+            &secret,
+            NULL,
+            &child_root)
+        != 0) {
+        return 1;
+    }
+    if (enable_sync_test_peer(&client, peer_id) != 0) {
+        fprintf(stderr, "failed to enable sync test peer\n");
+        goto cleanup;
+    }
+
+    client_test_fill_root(&finalized_root, 0x66u);
+    client.sync_state = LANTERN_SYNC_STATE_IDLE;
+
+    LanternStatusMessage status;
+    memset(&status, 0, sizeof(status));
+    status.head.root = child_root;
+    status.head.slot = client.state.slot + 16u;
+    status.finalized.root = finalized_root;
+    status.finalized.slot = client.state.slot + 8u;
+    if (reqresp_handle_status(&client, &status, peer_id) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "peer status network view update failed\n");
+        goto cleanup;
+    }
+
+    if (!client.network_view.has_latest_observed_head_slot
+        || client.network_view.latest_observed_head_slot != status.head.slot) {
+        fprintf(stderr, "peer status did not update observed network head\n");
+        goto cleanup;
+    }
+    if (!client.network_view.has_network_finalized_slot
+        || client.network_view.network_finalized_slot != status.finalized.slot) {
+        fprintf(stderr, "peer status did not update observed network finalized slot\n");
+        goto cleanup;
+    }
+    if (client.sync_state != LANTERN_SYNC_STATE_SYNCING) {
+        fprintf(stderr, "peer finalized ahead should keep sync incomplete\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    disable_sync_test_peer(&client);
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
 static int test_imported_blocks_update_sync_network_view(void)
 {
     struct block_signature_fixture fixture;
@@ -1257,19 +1328,17 @@ static int test_imported_blocks_update_sync_network_view(void)
         fprintf(stderr, "failed to import first network view block\n");
         goto cleanup;
     }
-    uint64_t first_finalized = fixture.client.state.latest_finalized.slot;
     if (!fixture.client.network_view.has_latest_observed_head_slot
         || fixture.client.network_view.latest_observed_head_slot != first_block.block.slot) {
         fprintf(stderr, "network view head slot did not track first imported block\n");
         goto cleanup;
     }
-    if (!fixture.client.network_view.has_network_finalized_slot
-        || fixture.client.network_view.network_finalized_slot != first_finalized) {
-        fprintf(stderr, "network view finalized slot did not track first imported post-state\n");
+    if (fixture.client.network_view.has_network_finalized_slot) {
+        fprintf(stderr, "imported block should not seed network finalized from local post-state\n");
         goto cleanup;
     }
-    if (fixture.client.sync_state != LANTERN_SYNC_STATE_SYNCED) {
-        fprintf(stderr, "sync did not complete from imported block network view\n");
+    if (fixture.client.sync_state == LANTERN_SYNC_STATE_SYNCED) {
+        fprintf(stderr, "sync should not complete without a peer finalized view\n");
         goto cleanup;
     }
 
@@ -1284,6 +1353,10 @@ static int test_imported_blocks_update_sync_network_view(void)
     }
     if (fixture.client.network_view.latest_observed_head_slot != second_block.block.slot) {
         fprintf(stderr, "network view head slot did not update for newer imported block\n");
+        goto cleanup;
+    }
+    if (fixture.client.network_view.has_network_finalized_slot) {
+        fprintf(stderr, "newer imported block should still not seed network finalized\n");
         goto cleanup;
     }
 
@@ -1728,6 +1801,9 @@ static int test_import_persists_finalized_replay_base(void)
     }
 
     initial_finalized = fixture.client.state.latest_finalized;
+    fixture.client.network_view.network_finalized_slot = initial_finalized.slot;
+    fixture.client.network_view.has_network_finalized_slot = true;
+
     LanternRoot initial_head_root;
     if (test_state_latest_block_root(&fixture.client.state, &initial_head_root) != 0) {
         fprintf(stderr, "failed to compute initial head root for replay base test\n");
@@ -1774,6 +1850,11 @@ static int test_import_persists_finalized_replay_base(void)
 
     if (!finalized_advanced) {
         fprintf(stderr, "finalized checkpoint did not advance in replay base test\n");
+        goto cleanup;
+    }
+    if (!fixture.client.network_view.has_network_finalized_slot
+        || fixture.client.network_view.network_finalized_slot != advanced_finalized.slot) {
+        fprintf(stderr, "network finalized view did not refresh after finalized import\n");
         goto cleanup;
     }
 
@@ -1869,13 +1950,13 @@ static int test_historical_backfill_imports_after_large_gap_connects(void)
         goto cleanup;
     }
 
-    if (!lantern_client_backfill_process_block(
+    if (reqresp_handle_block_response(
             &target.client,
             &block,
-            &root,
-            "12D3KooWbackfill",
-            0u)) {
-        fprintf(stderr, "backfill did not accept fetched head block\n");
+            NULL,
+            0u,
+            "12D3KooWbackfill") != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "reqresp backfill did not accept fetched head block\n");
         goto cleanup;
     }
 
@@ -1907,6 +1988,139 @@ cleanup:
             target.client.pending_lock_initialized = false;
         }
         teardown_block_signature_fixture(&target);
+    }
+    return rc;
+}
+
+static int test_reqresp_parent_response_preserves_backfill_depth(void)
+{
+    struct lantern_client client;
+    LanternSignedBlock child;
+    LanternSignedBlock parent;
+    LanternRoot child_root;
+    LanternRoot parent_root;
+    LanternRoot grandparent_root;
+    uint32_t observed_depth = 0u;
+    bool found_parent = false;
+    int rc = 1;
+
+    memset(&client, 0, sizeof(client));
+    memset(&child, 0, sizeof(child));
+    memset(&parent, 0, sizeof(parent));
+    client.node_id = "test_reqresp_parent_depth";
+
+    if (pthread_mutex_init(&client.state_lock, NULL) != 0) {
+        fprintf(stderr, "failed to initialize state mutex for depth test\n");
+        return 1;
+    }
+    client.state_lock_initialized = true;
+    if (pthread_mutex_init(&client.pending_lock, NULL) != 0) {
+        fprintf(stderr, "failed to initialize pending mutex for depth test\n");
+        pthread_mutex_destroy(&client.state_lock);
+        client.state_lock_initialized = false;
+        return 1;
+    }
+    client.pending_lock_initialized = true;
+
+    lantern_state_init(&client.state);
+    lantern_store_init(&client.store);
+    client.has_state = true;
+
+    lantern_block_body_init(&parent.block.body);
+    parent.block.slot = 41u;
+    parent.block.proposer_index = 0u;
+    client_test_fill_root(&grandparent_root, 0xA1u);
+    parent.block.parent_root = grandparent_root;
+    client_test_fill_root(&parent.block.state_root, 0xA2u);
+    if (lantern_hash_tree_root_block(&parent.block, &parent_root) != SSZ_SUCCESS) {
+        fprintf(stderr, "failed to hash parent block for depth test\n");
+        goto cleanup;
+    }
+
+    lantern_block_body_init(&child.block.body);
+    child.block.slot = 42u;
+    child.block.proposer_index = 0u;
+    child.block.parent_root = parent_root;
+    client_test_fill_root(&child.block.state_root, 0xA3u);
+    if (lantern_hash_tree_root_block(&child.block, &child_root) != SSZ_SUCCESS) {
+        fprintf(stderr, "failed to hash child block for depth test\n");
+        goto cleanup;
+    }
+
+    if (!lantern_client_enqueue_pending_block(
+            &client,
+            &child,
+            &child_root,
+            &parent_root,
+            "12D3KooWdepth",
+            12u,
+            false)) {
+        fprintf(stderr, "failed to enqueue child pending block for depth test\n");
+        goto cleanup;
+    }
+    if (!lantern_client_enqueue_pending_block(
+            &client,
+            &parent,
+            &parent_root,
+            &grandparent_root,
+            "12D3KooWdepth",
+            0u,
+            false)) {
+        fprintf(stderr, "failed to enqueue shallow parent pending block for depth test\n");
+        goto cleanup;
+    }
+
+    if (reqresp_handle_block_response(
+            &client,
+            &parent,
+            NULL,
+            0u,
+            "12D3KooWdepth") != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "reqresp rejected parent response for depth test\n");
+        goto cleanup;
+    }
+
+    if (pthread_mutex_lock(&client.pending_lock) != 0) {
+        fprintf(stderr, "failed to lock pending queue for depth inspection\n");
+        goto cleanup;
+    }
+    for (size_t i = 0; i < client.pending_blocks.length; ++i) {
+        const struct lantern_pending_block *entry = &client.pending_blocks.items[i];
+        if (memcmp(entry->root.bytes, parent_root.bytes, LANTERN_ROOT_SIZE) == 0) {
+            found_parent = true;
+            observed_depth = entry->backfill_depth;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&client.pending_lock);
+
+    if (!found_parent) {
+        fprintf(stderr, "parent response was not retained in pending queue\n");
+        goto cleanup;
+    }
+    if (observed_depth != 13u) {
+        fprintf(
+            stderr,
+            "parent response depth mismatch: got %" PRIu32 " want 13\n",
+            observed_depth);
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_client_debug_pending_reset(&client);
+    lantern_signed_block_with_attestation_reset(&child);
+    lantern_signed_block_with_attestation_reset(&parent);
+    lantern_store_reset(&client.store);
+    lantern_state_reset(&client.state);
+    if (client.pending_lock_initialized) {
+        pthread_mutex_destroy(&client.pending_lock);
+        client.pending_lock_initialized = false;
+    }
+    if (client.state_lock_initialized) {
+        pthread_mutex_destroy(&client.state_lock);
+        client.state_lock_initialized = false;
     }
     return rc;
 }
@@ -2194,6 +2408,9 @@ int main(void) {
     if (test_idle_status_at_known_head_completes_sync() != 0) {
         return 1;
     }
+    if (test_peer_status_updates_sync_network_view() != 0) {
+        return 1;
+    }
     if (test_reqresp_block_response_accepts_missing_parent() != 0) {
         return 1;
     }
@@ -2210,6 +2427,9 @@ int main(void) {
         return 1;
     }
     if (test_historical_backfill_imports_after_large_gap_connects() != 0) {
+        return 1;
+    }
+    if (test_reqresp_parent_response_preserves_backfill_depth() != 0) {
         return 1;
     }
     if (test_import_block_rejects_missing_block_proof() != 0) {

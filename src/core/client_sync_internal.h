@@ -694,16 +694,29 @@ int restore_persisted_blocks(struct lantern_client *client);
 
 
 /**
- * Refresh state validator pubkeys from genesis registry.
+ * Validate existing state validator pubkeys or initialize them from genesis registry.
  *
  * @spec subspecs/containers/state/genesis.py - validator state
  *
  * @param client  Client instance
- * @return 0 on success, -1 on failure
+ * @return LANTERN_CLIENT_OK on success, negative lantern_client_error otherwise
  *
- * @note Thread safety: Acquires validator_lock
+ * @note Thread safety: Caller must ensure exclusive access during initialization
  */
 int lantern_client_refresh_state_validators(struct lantern_client *client);
+
+/**
+ * Validate state validator pubkeys against local genesis validator pubkeys.
+ *
+ * @param client         Client with loaded genesis chain config
+ * @param state          State whose validators should match local genesis
+ * @param log_component  Log component name
+ * @return LANTERN_CLIENT_OK on match, negative lantern_client_error otherwise
+ */
+int lantern_client_validate_state_validator_pubkeys(
+    const struct lantern_client *client,
+    const LanternState *state,
+    const char *log_component);
 
 
 /**

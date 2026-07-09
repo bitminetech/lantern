@@ -2862,8 +2862,9 @@ int lantern_state_compute_vote_checkpoints(
         target_slot = parent_slot;
     }
 
-    if (source_checkpoint.slot > target_slot) {
-        return -1;
+    if (target_slot < source_checkpoint.slot) {
+        target_root = source_checkpoint.root;
+        target_slot = source_checkpoint.slot;
     }
     out_head->root = head_root;
     out_head->slot = head_slot;

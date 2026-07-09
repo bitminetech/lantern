@@ -192,6 +192,16 @@ static bool parent_index_for_block(const LanternForkChoice *store, size_t block_
     return false;
 }
 
+static const LanternState *state_for_block_index(
+    const LanternForkChoice *store,
+    size_t index) {
+    if (!store || !store->states || index >= store->state_cap) {
+        return NULL;
+    }
+    const struct lantern_fork_choice_state_entry *entry = &store->states[index];
+    return entry->has_state ? &entry->state : NULL;
+}
+
 static bool block_descends_from(
     const LanternForkChoice *store,
     size_t block_index,
@@ -381,11 +391,7 @@ const LanternState *lantern_fork_choice_block_state(
     if (!find_block_index(store, root, &index)) {
         return NULL;
     }
-    if (!store->states || index >= store->state_cap) {
-        return NULL;
-    }
-    const struct lantern_fork_choice_state_entry *entry = &store->states[index];
-    return entry->has_state ? &entry->state : NULL;
+    return state_for_block_index(store, index);
 }
 
 const LanternRoot *lantern_fork_choice_anchor_root(const LanternForkChoice *store) {
@@ -585,6 +591,67 @@ static void log_checkpoint_decision(
         candidate_hex[0] ? candidate_hex : "0x0");
 }
 
+static bool derive_finalized_from_head_state(
+    const LanternForkChoice *store,
+    const LanternRoot *head,
+    LanternCheckpoint *out_finalized) {
+    if (!store || !head || !out_finalized) {
+        return false;
+    }
+
+    size_t current = 0;
+    if (!find_block_index(store, head, &current)) {
+        return false;
+    }
+    const LanternState *head_state = state_for_block_index(store, current);
+    if (!head_state) {
+        return false;
+    }
+
+    uint64_t finalized_slot = head_state->latest_finalized.slot;
+    for (size_t depth = 0; depth < store->block_len && current < store->block_len; ++depth) {
+        const struct lantern_fork_choice_block_entry *entry = &store->blocks[current];
+        if (entry->slot == finalized_slot) {
+            out_finalized->root = entry->root;
+            out_finalized->slot = finalized_slot;
+            return true;
+        }
+        if (entry->slot < finalized_slot) {
+            return false;
+        }
+
+        size_t parent = 0;
+        if (!parent_index_for_block(store, current, &parent)) {
+            return false;
+        }
+        current = parent;
+    }
+    return false;
+}
+
+static bool refresh_finalized_from_head_state(LanternForkChoice *store) {
+    if (!store || !store->has_head) {
+        return false;
+    }
+
+    LanternCheckpoint finalized = {0};
+    if (!derive_finalized_from_head_state(store, &store->head, &finalized)) {
+        return false;
+    }
+    if (store->latest_finalized.slot == finalized.slot
+        && root_compare(&store->latest_finalized.root, &finalized.root) == 0) {
+        return false;
+    }
+
+    log_checkpoint_decision(
+        "finalized",
+        "derive_from_head",
+        &store->latest_finalized,
+        &finalized);
+    store->latest_finalized = finalized;
+    return true;
+}
+
 static int update_latest_checkpoints(
     LanternForkChoice *store,
     const LanternCheckpoint *post_justified,
@@ -742,14 +809,16 @@ int lantern_fork_choice_add_block_with_state(
             parent_hex[0] ? parent_hex : "0x0");
         return -1;
     }
-    if (update_latest_checkpoints(store, post_justified, post_finalized, false) != 0) {
+    /* State-backed imports re-derive finalized from the selected head after head recompute. */
+    const LanternCheckpoint *effective_post_finalized = post_state ? NULL : post_finalized;
+    if (update_latest_checkpoints(store, post_justified, effective_post_finalized, false) != 0) {
         char justified_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
         char finalized_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
         char anchor_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
         bool post_justified_known =
             post_justified && checkpoint_known_in_store(store, post_justified);
         bool post_finalized_known =
-            post_finalized && checkpoint_known_in_store(store, post_finalized);
+            effective_post_finalized && checkpoint_known_in_store(store, effective_post_finalized);
         format_root_hex(&block_root, block_hex, sizeof(block_hex));
         format_root_hex(&block->parent_root, parent_hex, sizeof(parent_hex));
         format_root_hex(
@@ -757,7 +826,7 @@ int lantern_fork_choice_add_block_with_state(
             justified_hex,
             sizeof(justified_hex));
         format_root_hex(
-            post_finalized ? &post_finalized->root : NULL,
+            effective_post_finalized ? &effective_post_finalized->root : NULL,
             finalized_hex,
             sizeof(finalized_hex));
         format_root_hex(
@@ -780,7 +849,7 @@ int lantern_fork_choice_add_block_with_state(
             post_justified ? post_justified->slot : 0u,
             justified_hex[0] ? justified_hex : "0x0",
             post_justified_known ? "true" : "false",
-            post_finalized ? post_finalized->slot : 0u,
+            effective_post_finalized ? effective_post_finalized->slot : 0u,
             finalized_hex[0] ? finalized_hex : "0x0",
             post_finalized_known ? "true" : "false");
         goto rollback;
@@ -815,6 +884,9 @@ int lantern_fork_choice_add_block_with_state(
             block->slot,
             block_hex[0] ? block_hex : "0x0");
         goto rollback;
+    }
+    if (post_state) {
+        (void)refresh_finalized_from_head_state(store);
     }
     lean_metrics_record_fork_choice_block_time(lantern_time_now_seconds() - metrics_start);
     fork_choice_publish_current_checkpoints(store);
@@ -1491,6 +1563,7 @@ int lantern_fork_choice_recompute_head(LanternForkChoice *store) {
     free(votes);
     store->head = head;
     store->has_head = true;
+    bool finalized_changed = refresh_finalized_from_head_state(store);
 
     if (had_head && root_compare(&previous_head, &head) != 0) {
         size_t old_index = 0;
@@ -1504,6 +1577,9 @@ int lantern_fork_choice_recompute_head(LanternForkChoice *store) {
         }
     }
 
+    if (finalized_changed) {
+        fork_choice_publish_current_checkpoints(store);
+    }
     return 0;
 }
 

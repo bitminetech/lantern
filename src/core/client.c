@@ -1699,6 +1699,77 @@ static bool checkpoint_anchor_block_matches_state_header(
     return memcmp(body_root.bytes, header->body_root.bytes, LANTERN_ROOT_SIZE) == 0;
 }
 
+int lantern_client_validate_state_validator_pubkeys(
+    const struct lantern_client *client,
+    const LanternState *state,
+    const char *log_component)
+{
+    if (!client || !state)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    const char *component =
+        (log_component && log_component[0] != '\0') ? log_component : "client";
+    const struct lantern_log_metadata meta = {.validator = client->node_id};
+    const struct lantern_chain_config *config = &client->genesis.chain_config;
+    if (!config->validator_attestation_pubkeys
+        || !config->validator_proposal_pubkeys
+        || config->validator_pubkeys_count == 0)
+    {
+        lantern_log_error(
+            component,
+            &meta,
+            "local genesis validator pubkeys unavailable for state validation");
+        return LANTERN_CLIENT_ERR_GENESIS;
+    }
+
+    size_t expected_count = config->validator_pubkeys_count;
+    if (!state->validators
+        || state->validator_count != expected_count
+        || state->config.num_validators != (uint64_t)expected_count)
+    {
+        lantern_log_error(
+            component,
+            &meta,
+            "state validator count mismatch state=%zu config=%" PRIu64 " local=%zu",
+            state->validator_count,
+            state->config.num_validators,
+            expected_count);
+        return LANTERN_CLIENT_ERR_GENESIS;
+    }
+
+    for (size_t i = 0; i < expected_count; ++i)
+    {
+        size_t offset = i * LANTERN_VALIDATOR_PUBKEY_SIZE;
+        const LanternValidator *validator = &state->validators[i];
+        const uint8_t *expected_attestation =
+            config->validator_attestation_pubkeys + offset;
+        const uint8_t *expected_proposal =
+            config->validator_proposal_pubkeys + offset;
+        if (memcmp(
+                validator->attestation_pubkey,
+                expected_attestation,
+                LANTERN_VALIDATOR_PUBKEY_SIZE)
+                != 0
+            || memcmp(
+                   validator->proposal_pubkey,
+                   expected_proposal,
+                   LANTERN_VALIDATOR_PUBKEY_SIZE)
+                   != 0)
+        {
+            lantern_log_error(
+                component,
+                &meta,
+                "state validator pubkey mismatch index=%zu",
+                i);
+            return LANTERN_CLIENT_ERR_GENESIS;
+        }
+    }
+
+    return LANTERN_CLIENT_OK;
+}
+
 static lantern_client_error client_load_state_from_checkpoint(
     struct lantern_client *client,
     const char *checkpoint_sync_url)
@@ -1842,6 +1913,16 @@ static lantern_client_error client_load_state_from_checkpoint(
             decoded.latest_justified.slot,
             decoded.latest_finalized.slot);
         result = LANTERN_CLIENT_ERR_GENESIS;
+        goto cleanup;
+    }
+
+    int pubkey_rc = lantern_client_validate_state_validator_pubkeys(
+        client,
+        &decoded,
+        "checkpoint_sync");
+    if (pubkey_rc != LANTERN_CLIENT_OK)
+    {
+        result = pubkey_rc;
         goto cleanup;
     }
 
@@ -1999,10 +2080,11 @@ static lantern_client_error client_generate_state_from_genesis(struct lantern_cl
 
 
 /**
- * @brief Load persisted state or construct a new genesis state.
+ * @brief Load persisted state, checkpoint state, or construct a genesis state.
  *
- * Attempts to load state and votes from storage; if unavailable, constructs the
- * state from genesis artifacts and persists the initial snapshot.
+ * Reuses fresh persisted state when available. If checkpoint sync is configured
+ * and no reusable state exists, checkpoint sync must succeed; genesis bootstrap
+ * is only used when checkpoint sync is not configured.
  *
  * @param client               Client whose state is being initialized
  * @param options              Client options (checkpoint sync URL, etc.)
@@ -2011,7 +2093,7 @@ static lantern_client_error client_generate_state_from_genesis(struct lantern_cl
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_STORAGE on storage I/O failure
  * @return LANTERN_CLIENT_ERR_GENESIS on genesis construction failure
- * @return LANTERN_CLIENT_ERR_GENESIS when checkpoint sync and genesis fallback both fail
+ * @return negative lantern_client_error when checkpoint sync fails
  *
  * @note Thread safety: Must be called before any concurrent access.
  */
@@ -2097,14 +2179,11 @@ static lantern_client_error client_load_or_build_state(
                 options->checkpoint_sync_url);
             if (checkpoint_rc != LANTERN_CLIENT_OK)
             {
-                lantern_log_warn(
+                lantern_log_error(
                     "checkpoint_sync",
                     &meta,
-                    "checkpoint sync failed; falling back to genesis bootstrap");
-                if (client_generate_state_from_genesis(client) != LANTERN_CLIENT_OK)
-                {
-                    return LANTERN_CLIENT_ERR_GENESIS;
-                }
+                    "checkpoint sync failed; aborting startup");
+                return checkpoint_rc;
             }
         }
         else if (client_generate_state_from_genesis(client) != LANTERN_CLIENT_OK)

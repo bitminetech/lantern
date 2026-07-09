@@ -79,6 +79,91 @@ static void cleanup_dir(const char *path)
     }
 }
 
+static void build_fixture_path(char *buffer, size_t length, const char *relative)
+{
+    if (!buffer || length == 0u || !relative)
+    {
+        return;
+    }
+    int written = snprintf(buffer, length, "%s/%s", LANTERN_TEST_FIXTURE_DIR, relative);
+    if (written <= 0 || (size_t)written >= length)
+    {
+        buffer[0] = '\0';
+    }
+}
+
+static int write_empty_temp_file(char *buffer, size_t length, const char *prefix)
+{
+    if (!buffer || length == 0u || !prefix)
+    {
+        return -1;
+    }
+    int written = snprintf(buffer, length, "/tmp/%s_%ld.yaml", prefix, (long)getpid());
+    if (written <= 0 || (size_t)written >= length)
+    {
+        buffer[0] = '\0';
+        return -1;
+    }
+
+    FILE *fp = fopen(buffer, "w");
+    if (!fp)
+    {
+        buffer[0] = '\0';
+        return -1;
+    }
+    fclose(fp);
+    return 0;
+}
+
+static void cleanup_init_data_dir(const char *data_dir)
+{
+    if (!data_dir)
+    {
+        return;
+    }
+
+    static const char *const files[] = {
+        "state.ssz",
+        "finalized_state.ssz",
+        "votes.bin",
+        "head.bin",
+        "checkpoints.bin",
+    };
+    for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); ++i)
+    {
+        char path[PATH_MAX];
+        int written = snprintf(path, sizeof(path), "%s/%s", data_dir, files[i]);
+        if (written > 0 && (size_t)written < sizeof(path))
+        {
+            cleanup_path(path);
+        }
+    }
+
+    char path[PATH_MAX];
+    int written = snprintf(path, sizeof(path), "%s/indices/slots", data_dir);
+    if (written > 0 && (size_t)written < sizeof(path))
+    {
+        cleanup_dir(path);
+    }
+
+    static const char *const dirs[] = {
+        "blocks",
+        "invalid_blocks",
+        "invalid_gossip",
+        "states",
+        "indices",
+    };
+    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i)
+    {
+        written = snprintf(path, sizeof(path), "%s/%s", data_dir, dirs[i]);
+        if (written > 0 && (size_t)written < sizeof(path))
+        {
+            cleanup_dir(path);
+        }
+    }
+    cleanup_dir(data_dir);
+}
+
 static int build_proposer_only_block_proof(
     const LanternState *state,
     LanternSignedBlock *block,
@@ -1161,8 +1246,181 @@ cleanup:
     return rc;
 }
 
+static int test_checkpoint_validator_pubkeys_checked_and_preserved(void)
+{
+    enum { validator_count = 2u };
+    struct lantern_client client;
+    memset(&client, 0, sizeof(client));
+    client.node_id = "checkpoint_pubkeys_checked";
+    client.has_state = true;
+    lantern_state_init(&client.state);
+
+    uint8_t attestation_pubkeys[validator_count * LANTERN_VALIDATOR_PUBKEY_SIZE];
+    uint8_t proposal_pubkeys[validator_count * LANTERN_VALIDATOR_PUBKEY_SIZE];
+    fill_pubkeys(attestation_pubkeys, validator_count);
+    memcpy(proposal_pubkeys, attestation_pubkeys, sizeof(proposal_pubkeys));
+    for (size_t i = 0; i < sizeof(proposal_pubkeys); ++i)
+    {
+        proposal_pubkeys[i] ^= 0x80u;
+    }
+
+    client.genesis.chain_config.validator_count = validator_count;
+    client.genesis.chain_config.validator_pubkeys_count = validator_count;
+    client.genesis.chain_config.validator_attestation_pubkeys = attestation_pubkeys;
+    client.genesis.chain_config.validator_proposal_pubkeys = proposal_pubkeys;
+
+    struct lantern_validator_record records[validator_count];
+    memset(records, 0, sizeof(records));
+    for (size_t i = 0; i < validator_count; ++i)
+    {
+        records[i].index = i;
+        memset(records[i].pubkey_bytes, 0xEE, LANTERN_VALIDATOR_PUBKEY_SIZE);
+        records[i].has_pubkey_bytes = true;
+    }
+    client.genesis.validator_registry.records = records;
+    client.genesis.validator_registry.count = validator_count;
+
+    int rc = 1;
+    LanternRoot root_before;
+    LanternRoot root_after;
+    if (lantern_state_generate_genesis(&client.state, UINT64_C(1761717362), validator_count) != 0
+        || lantern_state_set_validator_pubkeys_dual(
+               &client.state,
+               attestation_pubkeys,
+               proposal_pubkeys,
+               validator_count)
+               != 0
+        || lantern_hash_tree_root_state(&client.state, &root_before) != SSZ_SUCCESS)
+    {
+        fprintf(stderr, "failed to build checkpoint pubkey regression state\n");
+        goto cleanup;
+    }
+
+    if (lantern_client_validate_state_validator_pubkeys(&client, &client.state, "test")
+        != LANTERN_CLIENT_OK)
+    {
+        fprintf(stderr, "matching checkpoint validator pubkeys were rejected\n");
+        goto cleanup;
+    }
+
+    client.state.validators[1].proposal_pubkey[0] ^= 0x01u;
+    if (lantern_client_validate_state_validator_pubkeys(&client, &client.state, "test")
+        == LANTERN_CLIENT_OK)
+    {
+        fprintf(stderr, "checkpoint validator pubkey mismatch was accepted\n");
+        goto cleanup;
+    }
+    client.state.validators[1].proposal_pubkey[0] ^= 0x01u;
+
+    if (lantern_client_refresh_state_validators(&client) != LANTERN_CLIENT_OK)
+    {
+        fprintf(stderr, "refresh rejected matching verified state pubkeys\n");
+        goto cleanup;
+    }
+
+    if (lantern_hash_tree_root_state(&client.state, &root_after) != SSZ_SUCCESS
+        || !roots_equal(&root_before, &root_after))
+    {
+        fprintf(stderr, "refresh changed verified state root\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    client.genesis.validator_registry.records = NULL;
+    client.genesis.validator_registry.count = 0;
+    lantern_state_reset(&client.state);
+    return rc;
+}
+
+static int test_checkpoint_sync_failure_aborts_without_genesis_fallback(void)
+{
+    char config_path[PATH_MAX] = {0};
+    char validator_config_dir[PATH_MAX] = {0};
+    char nodes_path[PATH_MAX] = {0};
+    char data_template[] = "/tmp/lantern_checkpoint_abortXXXXXX";
+    char *data_dir = NULL;
+    int rc = 1;
+
+    build_fixture_path(config_path, sizeof(config_path), "genesis/config.yaml");
+    build_fixture_path(validator_config_dir, sizeof(validator_config_dir), "genesis");
+    if (config_path[0] == '\0' || validator_config_dir[0] == '\0')
+    {
+        fprintf(stderr, "failed to build fixture paths for checkpoint abort regression\n");
+        return 1;
+    }
+
+    if (write_empty_temp_file(
+            nodes_path,
+            sizeof(nodes_path),
+            "lantern_checkpoint_abort_nodes")
+        != 0)
+    {
+        fprintf(stderr, "failed to write nodes file for checkpoint abort regression\n");
+        return 1;
+    }
+
+    data_dir = mkdtemp(data_template);
+    if (!data_dir)
+    {
+        fprintf(stderr, "failed to create data dir for checkpoint abort regression\n");
+        goto cleanup;
+    }
+
+    struct lantern_client_options options;
+    lantern_client_options_init(&options);
+    options.data_dir = data_dir;
+    options.genesis_config_path = config_path;
+    options.validator_config_dir = validator_config_dir;
+    options.nodes_path = nodes_path;
+    options.node_id = "checkpoint_abort_missing_validator";
+    options.checkpoint_sync_url = "http://127.0.0.1:";
+
+    struct lantern_client client;
+    memset(&client, 0, sizeof(client));
+    lantern_client_error init_rc = lantern_init(&client, &options);
+    if (init_rc == LANTERN_CLIENT_OK)
+    {
+        fprintf(stderr, "checkpoint sync failure unexpectedly allowed startup\n");
+        lantern_shutdown(&client);
+        goto cleanup_options;
+    }
+    if (init_rc != LANTERN_CLIENT_ERR_NETWORK)
+    {
+        fprintf(
+            stderr,
+            "checkpoint sync failure returned %d, expected %d\n",
+            (int)init_rc,
+            (int)LANTERN_CLIENT_ERR_NETWORK);
+        goto cleanup_options;
+    }
+
+    rc = 0;
+
+cleanup_options:
+    lantern_client_options_free(&options);
+cleanup:
+    if (nodes_path[0] != '\0')
+    {
+        cleanup_path(nodes_path);
+    }
+    cleanup_init_data_dir(data_dir);
+    return rc;
+}
+
 int main(void)
 {
+    if (test_checkpoint_validator_pubkeys_checked_and_preserved() != 0)
+    {
+        return 1;
+    }
+
+    if (test_checkpoint_sync_failure_aborts_without_genesis_fallback() != 0)
+    {
+        return 1;
+    }
+
     if (test_reqresp_status_uses_genesis_anchor_before_genesis() != 0)
     {
         return 1;
