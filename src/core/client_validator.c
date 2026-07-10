@@ -57,6 +57,9 @@ static const uint32_t VALIDATOR_SERVICE_IDLE_SLEEP_MS = 200;
 /** Sleep interval between validator service iterations (ms). */
 static const uint32_t VALIDATOR_SERVICE_POLL_SLEEP_MS = 50;
 
+/** Maximum sleep while waiting for a proposal's target slot (ms). */
+static const uint32_t BLOCK_PROPOSAL_BOUNDARY_WAIT_SLICE_MS = 1000;
+
 /** Slot lag past which local validator duties are silenced. */
 static const uint64_t VALIDATOR_SYNC_LAG_THRESHOLD = 4u;
 
@@ -1931,6 +1934,48 @@ static int block_proposal_commit_and_log(
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
     struct lantern_client *client = job->client;
+    uint64_t slot_start_milliseconds = 0u;
+    if (!client->has_runtime
+        || lantern_slot_clock_slot_start_time(
+               &client->runtime.clock,
+               job->slot,
+               &slot_start_milliseconds)
+            != 0)
+    {
+        lantern_log_warn(
+            "propose",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "slot %" PRIu64 ", skipped, reason: slot_boundary_unavailable",
+            job->slot);
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+
+    for (;;)
+    {
+        if (!client->block_proposal_lock_initialized
+            || pthread_mutex_lock(&client->block_proposal_lock) != 0)
+        {
+            return LANTERN_CLIENT_ERR_RUNTIME;
+        }
+        bool stopping = client->block_proposal_stop;
+        pthread_mutex_unlock(&client->block_proposal_lock);
+        if (stopping)
+        {
+            return LANTERN_CLIENT_ERR_IGNORED;
+        }
+
+        uint64_t now_milliseconds = validator_wall_time_now_millis();
+        if (now_milliseconds >= slot_start_milliseconds)
+        {
+            break;
+        }
+        uint64_t delay_milliseconds = slot_start_milliseconds - now_milliseconds;
+        uint32_t sleep_milliseconds = delay_milliseconds > BLOCK_PROPOSAL_BOUNDARY_WAIT_SLICE_MS
+            ? BLOCK_PROPOSAL_BOUNDARY_WAIT_SLICE_MS
+            : (uint32_t)delay_milliseconds;
+        validator_sleep_ms(sleep_milliseconds);
+    }
+
     int rc = lantern_client_commit_and_publish_current_head_block(
         client,
         &job->block,

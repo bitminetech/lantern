@@ -51,6 +51,8 @@ int lantern_client_advance_fork_choice_time_locked(
     uint64_t now_milliseconds,
     bool has_proposal);
 uint64_t monotonic_millis(void);
+uint64_t validator_wall_time_now_millis(void);
+void validator_sleep_ms(uint32_t ms);
 void lantern_client_reset_local_validators(struct lantern_client *client);
 int lantern_client_load_xmss_keys(struct lantern_client *client);
 int validator_sign_with_key(
@@ -388,6 +390,7 @@ static void publish_capture_reset(struct publish_capture *capture) {
 struct local_block_publish_observer {
     struct lantern_client *client;
     uint64_t expected_slot;
+    uint64_t published_at_milliseconds;
     LanternRoot expected_root;
     size_t calls;
     bool saw_state_slot;
@@ -404,6 +407,7 @@ static int local_block_publish_observer_hook(
         return -1;
     }
     observer->calls += 1u;
+    observer->published_at_milliseconds = validator_wall_time_now_millis();
     if (!observer->client) {
         return 0;
     }
@@ -4212,6 +4216,170 @@ static int test_validator_propose_block_skips_genesis_slot(void) {
     return 0;
 }
 
+static int test_prebuilt_proposal_waits_for_target_slot_boundary(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    struct lantern_local_validator validator;
+    struct local_block_publish_observer observer;
+    bool worker_started = false;
+    struct lantern_slot_clock_config config;
+    int rc = 1;
+
+    memset(&client, 0, sizeof(client));
+    memset(&validator, 0, sizeof(validator));
+    memset(&observer, 0, sizeof(observer));
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "proposal_slot_boundary",
+            &pub,
+            &secret,
+            NULL,
+            NULL)
+        != 0) {
+        goto cleanup;
+    }
+
+    validator.global_index = 0u;
+    validator.last_proposed_slot = UINT64_MAX;
+    validator.proposal_secret_key = secret;
+    validator.has_proposal_secret_handle = true;
+    client.local_validators = &validator;
+    client.local_validator_count = 1u;
+    client.gossip_running = true;
+    snprintf(client.gossip.block_topic, sizeof(client.gossip.block_topic), "test/proposal_boundary");
+    observer.client = &client;
+    observer.expected_slot = client.state.slot + 1u;
+    lantern_gossipsub_service_set_publish_hook(
+        &client.gossip,
+        local_block_publish_observer_hook,
+        &observer);
+    lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
+
+    uint64_t now_milliseconds = validator_wall_time_now_millis();
+    uint64_t target_start_seconds = (now_milliseconds / 1000u) + 4u;
+    lantern_slot_clock_config_init(&config);
+    config.genesis_time = target_start_seconds
+        - (observer.expected_slot * (uint64_t)config.seconds_per_slot);
+    if (lantern_slot_clock_init(&client.runtime.clock, &config) != 0) {
+        fprintf(stderr, "failed to initialize proposal boundary clock\n");
+        goto cleanup;
+    }
+    client.has_runtime = true;
+
+    uint64_t slot_start_milliseconds = 0u;
+    if (lantern_slot_clock_slot_start_time(
+            &client.runtime.clock,
+            observer.expected_slot,
+            &slot_start_milliseconds)
+        != 0) {
+        fprintf(stderr, "failed to calculate proposal slot boundary\n");
+        goto cleanup;
+    }
+    if (start_block_proposal_worker(&client) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "failed to start proposal worker for boundary test\n");
+        goto cleanup;
+    }
+    worker_started = true;
+    if (validator_propose_block(&client, observer.expected_slot, 0u) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "failed to enqueue early proposal for boundary test\n");
+        goto cleanup;
+    }
+
+    uint64_t pre_boundary_check = slot_start_milliseconds - 1500u;
+    now_milliseconds = validator_wall_time_now_millis();
+    if (now_milliseconds < pre_boundary_check) {
+        validator_sleep_ms((uint32_t)(pre_boundary_check - now_milliseconds));
+    }
+    now_milliseconds = validator_wall_time_now_millis();
+    if (now_milliseconds >= slot_start_milliseconds) {
+        fprintf(stderr, "proposal boundary test missed its pre-boundary observation window\n");
+        goto cleanup;
+    }
+    bool state_locked = pthread_mutex_lock(&client.state_lock) == 0;
+    if (!state_locked || client.state.slot >= observer.expected_slot) {
+        fprintf(stderr, "prebuilt proposal committed before its target slot\n");
+        if (state_locked) {
+            pthread_mutex_unlock(&client.state_lock);
+        }
+        goto cleanup;
+    }
+    pthread_mutex_unlock(&client.state_lock);
+
+    uint64_t deadline = monotonic_millis() + 10000u;
+    for (;;) {
+        if (pthread_mutex_lock(&client.block_proposal_lock) != 0) {
+            fprintf(stderr, "failed to inspect proposal worker state\n");
+            goto cleanup;
+        }
+        bool inflight = client.block_proposal_inflight || client.block_proposal_job != NULL;
+        pthread_mutex_unlock(&client.block_proposal_lock);
+        if (!inflight) {
+            break;
+        }
+        if (monotonic_millis() >= deadline) {
+            fprintf(stderr, "timed out waiting for boundary-gated proposal\n");
+            goto cleanup;
+        }
+        validator_sleep_ms(10u);
+    }
+
+    if (observer.calls != 1u
+        || observer.published_at_milliseconds < slot_start_milliseconds
+        || !observer.saw_state_slot) {
+        fprintf(stderr, "proposal was not committed and published at/after its target boundary\n");
+        goto cleanup;
+    }
+
+    size_t published_calls = observer.calls;
+    uint64_t committed_slot = client.state.slot;
+    observer.expected_slot = committed_slot + 1u;
+    now_milliseconds = validator_wall_time_now_millis();
+    target_start_seconds = (now_milliseconds / 1000u) + 3u;
+    config.genesis_time = target_start_seconds
+        - (observer.expected_slot * (uint64_t)config.seconds_per_slot);
+    if (lantern_slot_clock_init(&client.runtime.clock, &config) != 0
+        || validator_propose_block(&client, observer.expected_slot, 0u) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "failed to enqueue proposal for shutdown test\n");
+        goto cleanup;
+    }
+
+    deadline = monotonic_millis() + 5000u;
+    bool job_started = false;
+    while (!job_started && monotonic_millis() < deadline) {
+        if (pthread_mutex_lock(&client.block_proposal_lock) != 0) {
+            fprintf(stderr, "failed to inspect proposal worker during shutdown test\n");
+            goto cleanup;
+        }
+        job_started = client.block_proposal_inflight && client.block_proposal_job == NULL;
+        pthread_mutex_unlock(&client.block_proposal_lock);
+        if (!job_started) {
+            validator_sleep_ms(10u);
+        }
+    }
+    if (!job_started) {
+        fprintf(stderr, "proposal worker did not start shutdown test job\n");
+        goto cleanup;
+    }
+
+    stop_block_proposal_worker(&client);
+    worker_started = false;
+    if (observer.calls != published_calls || client.state.slot != committed_slot) {
+        fprintf(stderr, "proposal committed or published after worker shutdown\n");
+        goto cleanup;
+    }
+    rc = 0;
+
+cleanup:
+    if (worker_started) {
+        stop_block_proposal_worker(&client);
+    }
+    lantern_client_local_validator_cleanup(&validator);
+    secret = NULL;
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
 int main(void) {
     if (test_record_vote_accepts_known_roots() != 0) {
         return 1;
@@ -4328,6 +4496,9 @@ int main(void) {
         return 1;
     }
     if (test_validator_propose_block_skips_genesis_slot() != 0) {
+        return 1;
+    }
+    if (test_prebuilt_proposal_waits_for_target_slot_boundary() != 0) {
         return 1;
     }
     puts("lantern_client_vote_test OK");

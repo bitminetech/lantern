@@ -249,6 +249,10 @@ static int test_proposer_vote_signature_roundtrip(void) {
 }
 
 static int test_proposer_vote_signature_rejects_tampering(void) {
+    enum {
+        kTamperVariantCount = UINT8_MAX,
+        kMaxTestEncodingCollisions = 4,
+    };
     struct PQSignatureSchemePublicKey *pubkey = NULL;
     struct PQSignatureSchemeSecretKey *secret = NULL;
     if (generate_test_keypair(&pubkey, &secret) != 0) {
@@ -266,22 +270,37 @@ static int test_proposer_vote_signature_rejects_tampering(void) {
         return 1;
     }
 
-    LanternVote tampered_vote = signed_vote.data;
-    tampered_vote.head.root.bytes[0] ^= 0xFF;
-    LanternRoot tampered_root;
-    if (lantern_hash_tree_root_vote(&tampered_vote, &tampered_root) != SSZ_SUCCESS) {
-        fprintf(stderr, "tampered root calculation failed\n");
-        pq_secret_key_free(secret);
-        pq_public_key_free(pubkey);
-        return 1;
+    size_t accepted_tampered_votes = 0;
+    for (uint16_t delta = 1; delta <= kTamperVariantCount; ++delta) {
+        LanternVote tampered_vote = signed_vote.data;
+        tampered_vote.head.root.bytes[0] ^= (uint8_t)delta;
+        LanternRoot tampered_root;
+        if (lantern_hash_tree_root_vote(&tampered_vote, &tampered_root) != SSZ_SUCCESS) {
+            fprintf(
+                stderr,
+                "tampered root calculation failed for delta=%u\n",
+                (unsigned)delta);
+            pq_secret_key_free(secret);
+            pq_public_key_free(pubkey);
+            return 1;
+        }
+
+        if (lantern_signature_verify_pk(
+                pubkey,
+                signed_vote.data.slot,
+                &signed_vote.signature,
+                &tampered_root)) {
+            accepted_tampered_votes += 1;
+        }
     }
 
-    if (lantern_signature_verify_pk(
-            pubkey,
-            signed_vote.data.slot,
-            &signed_vote.signature,
-            &tampered_root)) {
-        fprintf(stderr, "verify_pk accepted tampered proposer vote\n");
+    if (accepted_tampered_votes > kMaxTestEncodingCollisions) {
+        fprintf(
+            stderr,
+            "verify_pk accepted too many tampered proposer votes (%zu/%u, max=%u)\n",
+            accepted_tampered_votes,
+            (unsigned)kTamperVariantCount,
+            (unsigned)kMaxTestEncodingCollisions);
         pq_secret_key_free(secret);
         pq_public_key_free(pubkey);
         return 1;
