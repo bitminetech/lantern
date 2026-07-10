@@ -48,7 +48,7 @@ int lantern_validator_assignment_copy(
         return -1;
     }
     lantern_validator_assignment_reset(dst);
-    dst->indices = malloc(src->length * sizeof(*dst->indices));
+    dst->indices = calloc(src->length, sizeof(*dst->indices));
     if (!dst->indices) {
         return -1;
     }
@@ -74,7 +74,7 @@ int lantern_validator_assignment_from_config(
         return -1;
     }
     uint64_t count = entry->count;
-    uint64_t *indices = malloc((size_t)count * sizeof(*indices));
+    uint64_t *indices = calloc((size_t)count, sizeof(*indices));
     if (!indices) {
         return -1;
     }
