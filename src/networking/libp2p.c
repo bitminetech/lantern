@@ -8,7 +8,6 @@
 
 #include <openssl/rand.h>
 
-#include <arpa/inet.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -404,13 +403,6 @@ int lantern_libp2p_host_launch(struct lantern_libp2p_host *state) {
     return 0;
 }
 
-int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct lantern_libp2p_config *config) {
-    if (lantern_libp2p_host_prepare(state, config) != 0) {
-        return -1;
-    }
-    return lantern_libp2p_host_launch(state);
-}
-
 int lantern_peer_id_from_text(const char *text, struct lantern_peer_id *out_peer) {
     if (!text || !out_peer) {
         return -1;
@@ -443,54 +435,6 @@ int lantern_peer_id_equal(const struct lantern_peer_id *left, const struct lante
     return left && right && left->len == right->len && memcmp(left->bytes, right->bytes, left->len) == 0;
 }
 
-static int extract_ipv4_multiaddr(
-    const struct lantern_enr_record *record,
-    char *buffer,
-    size_t buffer_len) {
-    const struct lantern_enr_key_value *ip = lantern_enr_record_find(record, "ip");
-    const struct lantern_enr_key_value *port_field = lantern_enr_record_find(record, "quic");
-    if (!port_field) {
-        port_field = lantern_enr_record_find(record, "udp");
-    }
-    if (!ip || !port_field || ip->value_len != 4 || port_field->value_len != 2 || !port_field->value) {
-        return -1;
-    }
-    uint16_t parsed_port = (uint16_t)(((uint16_t)port_field->value[0] << 8) | (uint16_t)port_field->value[1]);
-    char ip_text[INET_ADDRSTRLEN];
-    if (!inet_ntop(AF_INET, ip->value, ip_text, sizeof(ip_text))) {
-        return -1;
-    }
-    int written = snprintf(buffer, buffer_len, "/ip4/%s/udp/%u/quic-v1", ip_text, (unsigned)parsed_port);
-    return written >= 0 && (size_t)written < buffer_len ? 0 : -1;
-}
-
-static int extract_ipv6_multiaddr(
-    const struct lantern_enr_record *record,
-    char *buffer,
-    size_t buffer_len) {
-    const struct lantern_enr_key_value *ip = lantern_enr_record_find(record, "ip6");
-    const struct lantern_enr_key_value *port_field = lantern_enr_record_find(record, "quic6");
-    if (!port_field) {
-        port_field = lantern_enr_record_find(record, "udp6");
-    }
-    if (!port_field) {
-        port_field = lantern_enr_record_find(record, "quic");
-    }
-    if (!port_field) {
-        port_field = lantern_enr_record_find(record, "udp");
-    }
-    if (!ip || !port_field || ip->value_len != 16 || port_field->value_len != 2 || !port_field->value) {
-        return -1;
-    }
-    uint16_t parsed_port = (uint16_t)(((uint16_t)port_field->value[0] << 8) | (uint16_t)port_field->value[1]);
-    char ip_text[INET6_ADDRSTRLEN];
-    if (!inet_ntop(AF_INET6, ip->value, ip_text, sizeof(ip_text))) {
-        return -1;
-    }
-    int written = snprintf(buffer, buffer_len, "/ip6/%s/udp/%u/quic-v1", ip_text, (unsigned)parsed_port);
-    return written >= 0 && (size_t)written < buffer_len ? 0 : -1;
-}
-
 int lantern_libp2p_enr_to_multiaddr(
     const struct lantern_enr_record *record,
     char *buffer,
@@ -517,8 +461,7 @@ int lantern_libp2p_enr_to_multiaddr(
     peer_id->len = peer_len;
 
     char base_addr[128];
-    if (extract_ipv4_multiaddr(record, base_addr, sizeof(base_addr)) != 0 &&
-        extract_ipv6_multiaddr(record, base_addr, sizeof(base_addr)) != 0) {
+    if (lantern_enr_record_multiaddr(record, base_addr, sizeof(base_addr)) != 0) {
         return -1;
     }
 
@@ -528,29 +471,6 @@ int lantern_libp2p_enr_to_multiaddr(
     }
     int written = snprintf(buffer, buffer_len, "%s/p2p/%s", base_addr, peer_text);
     return written >= 0 && (size_t)written < buffer_len ? 0 : -1;
-}
-
-int lantern_libp2p_validate_enr_peer(const struct lantern_enr_record *record) {
-    if (!record) {
-        return -1;
-    }
-    struct lantern_peer_id peer_id;
-    char multiaddr_text[LANTERN_LIBP2P_MULTIADDR_MAX_BYTES];
-    uint8_t multiaddr[LANTERN_LIBP2P_MULTIADDR_MAX_BYTES];
-    size_t multiaddr_len = 0;
-    if (lantern_libp2p_enr_to_multiaddr(record, multiaddr_text, sizeof(multiaddr_text), &peer_id) != 0) {
-        return -1;
-    }
-    if (libp2p_multiaddr_from_string(
-            multiaddr_text,
-            strlen(multiaddr_text),
-            multiaddr,
-            sizeof(multiaddr),
-            &multiaddr_len)
-        != LIBP2P_MULTIADDR_OK) {
-        return -1;
-    }
-    return 0;
 }
 
 int lantern_libp2p_host_dial_multiaddr(

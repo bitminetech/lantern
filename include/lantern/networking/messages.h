@@ -63,14 +63,4 @@ int lantern_network_blocks_by_range_request_decode(
     const uint8_t *data,
     size_t data_len);
 
-int lantern_network_signed_block_list_encode(
-    const LanternSignedBlockList *resp,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written);
-int lantern_network_signed_block_list_decode(
-    LanternSignedBlockList *resp,
-    const uint8_t *data,
-    size_t data_len);
-
 #endif /* LANTERN_NETWORKING_MESSAGES_H */

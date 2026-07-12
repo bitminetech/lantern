@@ -990,7 +990,7 @@ static int resolve_secret_key_path(
     }
     if (client->xmss_secret_path)
     {
-        if (client->validator_assignment.count > 1)
+        if (client->validator_assignment.length > 1)
         {
             return LANTERN_CLIENT_ERR_CONFIG;
         }
@@ -1036,7 +1036,7 @@ static int load_xmss_secret_keys(
     bool has_template = client->xmss_secret_template != NULL;
     bool has_dir = client->xmss_key_dir != NULL;
     bool has_single = (client->xmss_secret_path != NULL)
-        && (client->validator_assignment.count == 1);
+        && (client->validator_assignment.length == 1);
     if (!has_template && !has_dir && !has_single)
     {
         lantern_log_debug(
@@ -1143,39 +1143,6 @@ static int load_xmss_secret_keys(
         client->xmss_key_dir ? client->xmss_key_dir : "-",
         client->xmss_secret_template ? client->xmss_secret_template : "-");
     return LANTERN_CLIENT_OK;
-}
-
-
-/* ============================================================================
- * Public Key Management
- * ============================================================================ */
-
-/**
- * Free all loaded public key handles.
- *
- * @spec subspecs/xmss/keygen.py - key management
- *
- * @param client  Client instance
- *
- * @note Thread safety: Caller must ensure exclusive access during shutdown
- */
-void lantern_client_free_xmss_pubkeys(struct lantern_client *client)
-{
-    if (!client || !client->validator_pubkeys)
-    {
-        return;
-    }
-    for (size_t i = 0; i < client->validator_pubkey_count; ++i)
-    {
-        if (client->validator_pubkeys[i])
-        {
-            pq_public_key_free(client->validator_pubkeys[i]);
-            client->validator_pubkeys[i] = NULL;
-        }
-    }
-    free(client->validator_pubkeys);
-    client->validator_pubkeys = NULL;
-    client->validator_pubkey_count = 0;
 }
 
 

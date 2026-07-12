@@ -399,7 +399,7 @@ static const struct metric_scalar_desc kChainScalarsBeforeClient[] = {
 
 static const struct metric_client_size_t_desc kClientLabelScalars[] = {
     {"lean_connected_peers", "Number of connected peers", "gauge", offsetof(struct lantern_metrics_snapshot, lean_connected_peers)},
-    {"lean_gossip_mesh_peers", "Number of peers in the gossipsub mesh", "gauge", offsetof(struct lantern_metrics_snapshot, lean_gossip_mesh_peers)},
+    {"lean_gossip_mesh_peers", "Sum of peer memberships across locally joined gossipsub topic meshes", "gauge", offsetof(struct lantern_metrics_snapshot, lean_gossip_mesh_peers)},
 };
 
 static const struct metric_scalar_desc kChainScalarsAfterClient[] = {

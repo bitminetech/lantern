@@ -194,8 +194,7 @@ static int seed_known_payload(
         store,
         &data_root,
         data,
-        &proof,
-        vote->data.target.slot);
+        &proof);
     lantern_aggregated_signature_proof_reset(&proof);
     return rc;
 }
@@ -220,8 +219,7 @@ static int seed_new_payload(
         store,
         &data_root,
         data,
-        &proof,
-        vote->data.target.slot);
+        &proof);
     lantern_aggregated_signature_proof_reset(&proof);
     return rc;
 }
@@ -774,12 +772,12 @@ static int test_fork_choice_prune_states_keeps_finalized_to_head_chain(void) {
     assert(lantern_fork_choice_block_state(&store, &block_two_root) != NULL);
     assert(lantern_fork_choice_block_state(&store, &block_three_root) != NULL);
 
-    assert(store.states[block_two_index].has_state);
-    assert(store.states[block_two_index].state.validators != NULL);
-    assert(store.states[block_two_index].state.historical_block_hashes.items != NULL);
-    assert(store.states[block_three_index].has_state);
-    assert(store.states[block_three_index].state.validators != NULL);
-    assert(store.states[block_three_index].state.historical_block_hashes.items != NULL);
+    assert(store.blocks[block_two_index].has_state);
+    assert(store.blocks[block_two_index].state.validators != NULL);
+    assert(store.blocks[block_two_index].state.historical_block_hashes.items != NULL);
+    assert(store.blocks[block_three_index].has_state);
+    assert(store.blocks[block_three_index].state.validators != NULL);
+    assert(store.blocks[block_three_index].state.historical_block_hashes.items != NULL);
 
     lantern_state_reset(&fork_two_state);
     lantern_state_reset(&block_three_state);

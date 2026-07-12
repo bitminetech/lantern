@@ -159,7 +159,7 @@ static void peer_id_to_text_safe(const struct lantern_peer_id *peer, char *out, 
     if (!peer || peer->len == 0) {
         return;
     }
-    if (lantern_peer_id_to_text(peer, out, out_len) != 0) {
+    if (lantern_peer_id_to_text(peer, out, out_len) < 0) {
         out[0] = '\0';
     }
 }
@@ -604,23 +604,19 @@ static int deliver_message(
     if (topic_eq(event->topic, service->block_topic)) {
         LanternSignedBlock block;
         lantern_signed_block_init(&block);
-        uint8_t *raw = NULL;
         size_t raw_len = 0;
         int rc = lantern_gossip_decode_signed_block_snappy(
             &block,
             event->message.data.data,
             event->message.data.len,
-            &raw,
             &raw_len);
         if (rc == 0 && service->block_handler) {
             rc = service->block_handler(
                 &block,
                 &peer,
-                raw,
                 raw_len,
                 service->block_handler_user_data);
         }
-        free(raw);
         lantern_signed_block_reset(&block);
         return rc;
     }
@@ -633,7 +629,6 @@ static int deliver_message(
             rc = service->vote_handler(
                 &vote,
                 &peer,
-                event->message.data.data,
                 event->message.data.len,
                 service->vote_handler_user_data);
         }
@@ -651,7 +646,6 @@ static int deliver_message(
             rc = service->aggregated_attestation_handler(
                 &attestation,
                 &peer,
-                event->message.data.data,
                 event->message.data.len,
                 service->aggregated_attestation_handler_user_data);
         }
@@ -1244,8 +1238,15 @@ int lantern_gossipsub_service_subscribe_attestation_subnet(
 }
 
 size_t lantern_gossipsub_service_mesh_peer_count(const struct lantern_gossipsub_service *service) {
-    (void)service;
-    return 0;
+    size_t count = 0;
+    if (!service || lock_gossipsub() != 0) {
+        return 0;
+    }
+    if (service->gossipsub) {
+        (void)libp2p_gossipsub_mesh_peer_count(service->gossipsub, &count);
+    }
+    unlock_gossipsub();
+    return count;
 }
 
 void lantern_gossipsub_service_set_publish_hook(

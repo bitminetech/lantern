@@ -1,5 +1,7 @@
 #include "client_test_helpers.h"
 
+#include "../../src/core/client_internal.h"
+
 #include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -14,8 +16,224 @@
 #include "lantern/consensus/signature.h"
 #include "lantern/crypto/xmss.h"
 #include "lantern/support/time.h"
+#include "lantern/support/strings.h"
 
 static int client_test_load_fixture_genesis_time(uint64_t *out_time);
+
+int client_test_set_connected_peer(struct lantern_client *client, const char *peer_id_text) {
+    if (!client || !peer_id_text) {
+        return -1;
+    }
+    struct lantern_peer_id peer;
+    if (lantern_peer_id_from_text(peer_id_text, &peer) != 0) {
+        return -1;
+    }
+    struct lantern_connection_peer_ref *ref = calloc(1u, sizeof(*ref));
+    if (!ref) {
+        return -1;
+    }
+    free(client->connection_peer_refs);
+    ref->conn = client;
+    ref->peer = peer;
+    client->connection_peer_refs = ref;
+    client->connection_peer_ref_count = 1u;
+    client->connection_peer_ref_capacity = 1u;
+    client->connected_peers = 1u;
+    return 0;
+}
+
+void client_test_clear_connected_peers(struct lantern_client *client) {
+    if (!client) {
+        return;
+    }
+    free(client->connection_peer_refs);
+    client->connection_peer_refs = NULL;
+    client->connection_peer_ref_count = 0u;
+    client->connection_peer_ref_capacity = 0u;
+    client->connected_peers = 0u;
+}
+
+lantern_client_error validator_collect_and_aggregate_attestation_signatures(
+    struct lantern_client *client,
+    LanternAggregatedAttestations *out_attestations,
+    LanternAttestationSignatures *out_signatures,
+    const uint64_t *scope_slot,
+    struct lantern_block_build_stage_timings *stage_timings,
+    bool *out_missing_state);
+int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot);
+
+int client_test_record_vote(
+    struct lantern_client *client,
+    const LanternSignedVote *vote,
+    const char *peer_id_text) {
+    if (!client || !vote) {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    lantern_client_record_vote(client, vote, peer_id_text);
+    return LANTERN_CLIENT_OK;
+}
+
+int client_test_gossip_block(struct lantern_client *client, const LanternSignedBlock *block) {
+    return client && block
+        ? gossip_block_handler(block, NULL, 0, client)
+        : LANTERN_CLIENT_ERR_INVALID_PARAM;
+}
+
+int client_test_gossip_vote(struct lantern_client *client, const LanternSignedVote *vote) {
+    return client && vote
+        ? gossip_vote_handler(vote, NULL, 0, client)
+        : LANTERN_CLIENT_ERR_INVALID_PARAM;
+}
+
+int client_test_gossip_vote_from(
+    struct lantern_client *client,
+    const LanternSignedVote *vote,
+    const struct lantern_peer_id *from) {
+    return client && vote && from
+        ? gossip_vote_handler(vote, from, 0, client)
+        : LANTERN_CLIENT_ERR_INVALID_PARAM;
+}
+
+int client_test_gossip_aggregated_attestation(
+    struct lantern_client *client,
+    const LanternSignedAggregatedAttestation *attestation) {
+    return client && attestation
+        ? gossip_aggregated_attestation_handler(attestation, NULL, 0, client)
+        : LANTERN_CLIENT_ERR_INVALID_PARAM;
+}
+
+int client_test_import_block(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    const char *peer_id_text) {
+    if (!client || !block || !block_root) {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    return lantern_client_import_block(
+               client,
+               block,
+               block_root,
+               &(const struct lantern_log_metadata){
+                   .validator = client->node_id,
+                   .peer = peer_id_text},
+               0,
+               true)
+        ? 1
+        : 0;
+}
+
+size_t client_test_pending_block_count(const struct lantern_client *client) {
+    if (!client) {
+        return 0;
+    }
+    struct lantern_client *mutable_client = (struct lantern_client *)client;
+    bool locked = lantern_client_lock_pending(mutable_client);
+    size_t count = client->pending_blocks.length;
+    lantern_client_unlock_pending(mutable_client, locked);
+    return count;
+}
+
+size_t client_test_pending_vote_count(const struct lantern_client *client) {
+    if (!client) {
+        return 0;
+    }
+    struct lantern_client *mutable_client = (struct lantern_client *)client;
+    bool locked = lantern_client_lock_state(mutable_client);
+    size_t count = client->pending_gossip_votes.length;
+    lantern_client_unlock_state(mutable_client, locked);
+    return count;
+}
+
+int client_test_enqueue_pending_block(
+    struct lantern_client *client,
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root,
+    const LanternRoot *parent_root,
+    const char *peer_id_text) {
+    if (!client || !block || !block_root || !parent_root) {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    lantern_client_enqueue_pending_block(
+        client,
+        block,
+        block_root,
+        parent_root,
+        peer_id_text,
+        0,
+        false);
+    return LANTERN_CLIENT_OK;
+}
+
+int client_test_pending_entry(
+    const struct lantern_client *client,
+    size_t index,
+    LanternRoot *out_root,
+    LanternRoot *out_parent_root,
+    char *out_peer_text,
+    size_t peer_text_len) {
+    if (!client || (out_peer_text && peer_text_len == 0)) {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+
+    struct lantern_client *mutable_client = (struct lantern_client *)client;
+    bool locked = lantern_client_lock_pending(mutable_client);
+    if (index >= client->pending_blocks.length) {
+        lantern_client_unlock_pending(mutable_client, locked);
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    const struct lantern_pending_block *entry = &client->pending_blocks.items[index];
+    if (out_root) {
+        *out_root = entry->root;
+    }
+    if (out_parent_root) {
+        *out_parent_root = entry->parent_root;
+    }
+    if (out_peer_text) {
+        (void)lantern_string_copy(out_peer_text, peer_text_len, entry->peer_text);
+    }
+    lantern_client_unlock_pending(mutable_client, locked);
+    return LANTERN_CLIENT_OK;
+}
+
+void client_test_pending_reset(struct lantern_client *client) {
+    if (client) {
+        bool locked = lantern_client_lock_pending(client);
+        pending_block_list_reset(&client->pending_blocks);
+        lantern_client_unlock_pending(client, locked);
+    }
+}
+
+lantern_client_error client_test_aggregate_attestation_signatures(
+    struct lantern_client *client,
+    LanternAggregatedAttestations *out_attestations,
+    LanternAttestationSignatures *out_signatures) {
+    return validator_collect_and_aggregate_attestation_signatures(
+        client,
+        out_attestations,
+        out_signatures,
+        NULL,
+        NULL,
+        NULL);
+}
+
+int client_test_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot) {
+    return validator_publish_aggregated_attestations(client, slot);
+}
+
+int client_test_run_interval_aggregation(struct lantern_client *client, uint64_t slot) {
+    if (!client) {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    if (client->validator_duty.slot_aggregated || !client->validator_duty.slot_attested) {
+        return LANTERN_CLIENT_ERR_IGNORED;
+    }
+    int rc = validator_publish_aggregated_attestations(client, slot);
+    if (rc == LANTERN_CLIENT_OK) {
+        client->validator_duty.slot_aggregated = true;
+    }
+    return rc;
+}
 
 int client_test_load_precomputed_keypair(
     size_t validator_index,
@@ -97,7 +315,7 @@ bool client_test_pending_contains_root(const struct lantern_client *client, cons
     size_t count = lantern_client_pending_block_count(client);
     for (size_t i = 0; i < count; ++i) {
         LanternRoot candidate;
-        if (lantern_client_debug_pending_entry(client, i, &candidate, NULL, NULL, NULL, 0) != 0) {
+        if (lantern_client_debug_pending_entry(client, i, &candidate, NULL, NULL, 0) != 0) {
             continue;
         }
         if (memcmp(candidate.bytes, root->bytes, LANTERN_ROOT_SIZE) == 0) {
@@ -229,11 +447,6 @@ static int client_test_setup_vote_validation_client_common(
     }
     client->has_state = true;
 
-    if (lantern_store_prepare_validator_votes(&client->store, (uint64_t)validator_count) != 0) {
-        fprintf(stderr, "failed to prepare store caches for vote test\n");
-        goto finish;
-    }
-
     if (lantern_fork_choice_configure(&client->fork_choice, &client->state.config) != 0) {
         fprintf(stderr, "failed to configure fork choice for vote test\n");
         goto finish;
@@ -325,12 +538,13 @@ static int client_test_setup_vote_validation_client_common(
         goto finish;
     }
 
-    if (lantern_fork_choice_set_anchor(
+    if (lantern_fork_choice_set_anchor_with_state(
             &client->fork_choice,
             &anchor,
             &client->state.latest_justified,
             &client->state.latest_finalized,
-            &anchor_root_local)
+            &anchor_root_local,
+            &client->state)
         != 0) {
         fprintf(stderr, "failed to set anchor for vote test\n");
         goto finish;
@@ -379,11 +593,18 @@ static int client_test_setup_vote_validation_client_common(
         fprintf(stderr, "failed to advance state slot for vote test child block\n");
         goto finish;
     }
-    if (lantern_state_process_block(&client->state, &client->store, &child) != 0) {
+    if (lantern_state_process_block(&client->state, &child) != 0) {
         fprintf(stderr, "failed to process child block into vote test state\n");
         goto finish;
     }
-
+    if (lantern_fork_choice_set_block_state(
+            &client->fork_choice,
+            &child_root_local,
+            &client->state)
+        != 0) {
+        fprintf(stderr, "failed to attach child state for vote test\n");
+        goto finish;
+    }
     if (anchor_root) {
         *anchor_root = anchor_root_local;
     }

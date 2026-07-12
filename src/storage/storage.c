@@ -8,10 +8,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include <sys/stat.h>
-#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -23,50 +21,21 @@
 #endif
 
 #include "lantern/consensus/hash.h"
-#include "lantern/consensus/signature.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/networking/messages.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
 #include "ssz.h"
 
-#define LANTERN_STORAGE_VOTES_MAGIC "LNVOTES\0"
-#define LANTERN_STORAGE_VOTES_VERSION 3u
 #define LANTERN_STORAGE_BLOCKS_DIR "blocks"
-#define LANTERN_STORAGE_INVALID_BLOCKS_DIR "invalid_blocks"
-#define LANTERN_STORAGE_INVALID_GOSSIP_DIR "invalid_gossip"
 #define LANTERN_STORAGE_STATES_DIR "states"
-#define LANTERN_STORAGE_INDICES_DIR "indices"
-#define LANTERN_STORAGE_SLOT_INDEX_DIR "slots"
 #define LANTERN_STORAGE_STATE_FILE "state.ssz"
-#define LANTERN_STORAGE_FINALIZED_STATE_FILE "finalized_state.ssz"
-#define LANTERN_STORAGE_VOTES_FILE "votes.bin"
-#define LANTERN_STORAGE_HEAD_FILE "head.bin"
-#define LANTERN_STORAGE_CHECKPOINTS_FILE "checkpoints.bin"
 
 #if defined(_WIN32)
 #define LANTERN_STORAGE_PATH_SEP '\\'
 #else
 #define LANTERN_STORAGE_PATH_SEP '/'
 #endif
-
-struct lantern_storage_votes_header {
-    char magic[8];
-    uint32_t version;
-    uint32_t reserved;
-    uint64_t validator_count;
-    uint64_t record_count;
-};
-
-struct lantern_storage_head_record {
-    uint64_t slot;
-    LanternRoot root;
-};
-
-struct lantern_storage_checkpoint_record {
-    LanternCheckpoint justified;
-    LanternCheckpoint finalized;
-};
 
 /*
  * Internal helpers for filesystem/path handling, SSZ size estimation, and
@@ -232,20 +201,13 @@ cleanup:
 
 enum storage_dir_kind {
     STORAGE_DIR_BLOCKS,
-    STORAGE_DIR_INVALID_BLOCKS,
-    STORAGE_DIR_INVALID_GOSSIP,
     STORAGE_DIR_STATES,
-    STORAGE_DIR_INDICES,
-    STORAGE_DIR_SLOT_INDEX,
     STORAGE_DIR_COUNT,
 };
 
 static const char *const STORAGE_DIR_LEAVES[STORAGE_DIR_COUNT] = {
     [STORAGE_DIR_BLOCKS] = LANTERN_STORAGE_BLOCKS_DIR,
-    [STORAGE_DIR_INVALID_BLOCKS] = LANTERN_STORAGE_INVALID_BLOCKS_DIR,
-    [STORAGE_DIR_INVALID_GOSSIP] = LANTERN_STORAGE_INVALID_GOSSIP_DIR,
     [STORAGE_DIR_STATES] = LANTERN_STORAGE_STATES_DIR,
-    [STORAGE_DIR_INDICES] = LANTERN_STORAGE_INDICES_DIR,
 };
 
 static int storage_dir_path(
@@ -257,19 +219,6 @@ static int storage_dir_path(
     }
     *out_path = NULL;
 
-    switch (kind) {
-    case STORAGE_DIR_SLOT_INDEX: {
-        char *indices_dir = NULL;
-        int rc = storage_dir_path(data_dir, STORAGE_DIR_INDICES, &indices_dir);
-        if (rc == 0) {
-            rc = join_path(indices_dir, LANTERN_STORAGE_SLOT_INDEX_DIR, out_path);
-        }
-        free_path(indices_dir);
-        return rc;
-    }
-    default:
-        break;
-    }
     const unsigned index = (unsigned)kind;
     if (index >= (unsigned)STORAGE_DIR_COUNT || !STORAGE_DIR_LEAVES[index]) {
         return -1;
@@ -285,10 +234,6 @@ static int ensure_storage_dir(
         *out_path = NULL;
     }
     char *path = NULL;
-    if (kind == STORAGE_DIR_SLOT_INDEX
-        && ensure_storage_dir(data_dir, STORAGE_DIR_INDICES, NULL) != 0) {
-        return -1;
-    }
     if (storage_dir_path(data_dir, kind, &path) != 0 || ensure_directory(path) != 0) {
         free_path(path);
         return -1;
@@ -473,24 +418,6 @@ cleanup:
     return rc;
 }
 
-static int storage_store_index_record(
-    const char *data_dir,
-    const char *filename,
-    const void *record,
-    size_t record_len) {
-    if (!data_dir || !filename || !record || record_len == 0) {
-        return -1;
-    }
-
-    char *path = NULL;
-    int rc = storage_dir_file_path(data_dir, STORAGE_DIR_INDICES, filename, true, &path);
-    if (rc == 0) {
-        rc = write_atomic_file(path, (const uint8_t *)record, record_len);
-    }
-    free_path(path);
-    return rc;
-}
-
 static bool storage_root_is_kept(
     const LanternRoot *root,
     const LanternRoot *keep_roots,
@@ -506,46 +433,6 @@ static bool storage_root_is_kept(
     return false;
 }
 
-static bool parse_root_ssz_filename(const char *filename, LanternRoot *out_root) {
-    if (!filename || !out_root) {
-        return false;
-    }
-    const size_t hex_len = 2u * LANTERN_ROOT_SIZE;
-    const size_t len = strlen(filename);
-    if (len != hex_len + 4u || strcmp(filename + hex_len, ".ssz") != 0) {
-        return false;
-    }
-    char root_hex[(2u * LANTERN_ROOT_SIZE) + 1u];
-    memcpy(root_hex, filename, hex_len);
-    root_hex[hex_len] = '\0';
-    return lantern_hex_decode(root_hex, out_root->bytes, LANTERN_ROOT_SIZE) == 0;
-}
-
-static bool parse_slot_root_filename(const char *filename, uint64_t *out_slot) {
-    if (!filename || !out_slot) {
-        return false;
-    }
-    const size_t len = strlen(filename);
-    if (len <= 5u || strcmp(filename + len - 5u, ".root") != 0) {
-        return false;
-    }
-    if (len - 5u >= 64u) {
-        return false;
-    }
-    char slot_text[64];
-    memcpy(slot_text, filename, len - 5u);
-    slot_text[len - 5u] = '\0';
-
-    errno = 0;
-    char *end = NULL;
-    unsigned long long parsed = strtoull(slot_text, &end, 10);
-    if (errno != 0 || !end || *end != '\0' || parsed > UINT64_MAX) {
-        return false;
-    }
-    *out_slot = (uint64_t)parsed;
-    return true;
-}
-
 static int remove_storage_path(const char *path, int *pruned) {
     if (!path || !pruned) {
         return -1;
@@ -556,75 +443,6 @@ static int remove_storage_path(const char *path, int *pruned) {
     if (*pruned < INT_MAX) {
         *pruned += 1;
     }
-    return 0;
-}
-
-static int format_utc_timestamp(char *buffer, size_t buffer_len) {
-    if (!buffer || buffer_len == 0) {
-        return -1;
-    }
-
-    struct timeval tv;
-    if (gettimeofday(&tv, NULL) != 0) {
-        return -1;
-    }
-
-    const time_t seconds = (time_t)tv.tv_sec;
-    struct tm utc_tm;
-#if defined(_WIN32)
-    if (gmtime_s(&utc_tm, &seconds) != 0) {
-        return -1;
-    }
-#else
-    if (gmtime_r(&seconds, &utc_tm) == NULL) {
-        return -1;
-    }
-#endif
-
-    const int wrote = snprintf(
-        buffer,
-        buffer_len,
-        "%04d%02d%02dT%02d%02d%02d.%06ldZ",
-        utc_tm.tm_year + 1900,
-        utc_tm.tm_mon + 1,
-        utc_tm.tm_mday,
-        utc_tm.tm_hour,
-        utc_tm.tm_min,
-        utc_tm.tm_sec,
-        (long)tv.tv_usec);
-    if (wrote < 0 || (size_t)wrote >= buffer_len) {
-        return -1;
-    }
-    return 0;
-}
-
-static int sanitize_filename_component(const char *input, char *output, size_t output_len) {
-    if (!input || !output || output_len == 0) {
-        return -1;
-    }
-
-    size_t out_index = 0;
-    for (size_t i = 0; input[i] != '\0'; ++i) {
-        if (out_index + 1u >= output_len) {
-            return -1;
-        }
-        const unsigned char ch = (unsigned char)input[i];
-        if ((ch >= 'a' && ch <= 'z')
-            || (ch >= 'A' && ch <= 'Z')
-            || (ch >= '0' && ch <= '9')
-            || ch == '-'
-            || ch == '_') {
-            output[out_index++] = (char)ch;
-        } else {
-            output[out_index++] = '_';
-        }
-    }
-
-    if (out_index == 0) {
-        return -1;
-    }
-
-    output[out_index] = '\0';
     return 0;
 }
 
@@ -645,11 +463,7 @@ int lantern_storage_prepare(const char *data_dir) {
     }
     const enum storage_dir_kind dirs[] = {
         STORAGE_DIR_BLOCKS,
-        STORAGE_DIR_INVALID_BLOCKS,
-        STORAGE_DIR_INVALID_GOSSIP,
         STORAGE_DIR_STATES,
-        STORAGE_DIR_INDICES,
-        STORAGE_DIR_SLOT_INDEX,
     };
     for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i) {
         if (ensure_storage_dir(data_dir, dirs[i], NULL) != 0) {
@@ -684,245 +498,6 @@ int lantern_storage_save_state(const char *data_dir, const LanternState *state) 
  */
 int lantern_storage_load_state(const char *data_dir, LanternState *state) {
     return storage_load_state_file(data_dir, LANTERN_STORAGE_STATE_FILE, state);
-}
-
-/**
- * Persist finalized replay state under `data_dir/finalized_state.ssz`.
- *
- * @param data_dir Base directory path.
- * @param state State to persist.
- * @return 0 on success.
- * @return -1 on invalid parameters, encoding failure, or filesystem errors.
- */
-int lantern_storage_save_finalized_state(const char *data_dir, const LanternState *state) {
-    return storage_save_state_file(data_dir, LANTERN_STORAGE_FINALIZED_STATE_FILE, state);
-}
-
-/**
- * Load a persisted finalized replay state from `data_dir/finalized_state.ssz`.
- *
- * On success, the contents of `state` are replaced.
- *
- * @param data_dir Base directory path.
- * @param state Output state (replaced on success).
- * @return 0 on success.
- * @return 1 if the finalized state file is missing or empty.
- * @return -1 on invalid parameters or decode/validation errors.
- */
-int lantern_storage_load_finalized_state(const char *data_dir, LanternState *state) {
-    return storage_load_state_file(data_dir, LANTERN_STORAGE_FINALIZED_STATE_FILE, state);
-}
-
-/**
- * Persist all present validator votes to `data_dir/votes.bin`.
- *
- * @param data_dir Base directory path.
- * @param state State containing validator votes.
- * @return 0 on success.
- * @return -1 on invalid parameters, encoding failure, or filesystem errors.
- */
-int lantern_storage_save_votes(
-    const char *data_dir,
-    const LanternState *state,
-    const LanternStore *store) {
-    if (!data_dir || !state || !store || state->config.num_validators == 0) {
-        return -1;
-    }
-
-    int rc = -1;
-    uint8_t *buffer = NULL;
-    char *votes_path = NULL;
-
-    const size_t capacity = lantern_store_validator_capacity(store);
-    if (capacity == 0) {
-        goto cleanup;
-    }
-    size_t present = 0;
-    for (size_t i = 0; i < capacity; ++i) {
-        if (lantern_store_validator_has_vote(store, i)) {
-            present++;
-        }
-    }
-    struct lantern_storage_votes_header header = {0};
-    memcpy(header.magic, LANTERN_STORAGE_VOTES_MAGIC, sizeof(header.magic));
-    header.version = LANTERN_STORAGE_VOTES_VERSION;
-    header.validator_count = capacity;
-    header.record_count = present;
-
-    const size_t payload_size = present * (sizeof(uint64_t) + LANTERN_SIGNED_VOTE_SSZ_SIZE);
-    const size_t total_size = sizeof(header) + payload_size;
-    buffer = malloc(total_size);
-    if (!buffer) {
-        goto cleanup;
-    }
-    uint8_t *cursor = buffer;
-    memcpy(cursor, &header, sizeof(header));
-    cursor += sizeof(header);
-
-    for (size_t i = 0; i < capacity; ++i) {
-        if (!lantern_store_validator_has_vote(store, i)) {
-            continue;
-        }
-        const uint64_t validator_index = (uint64_t)i;
-        for (size_t b = 0; b < sizeof(validator_index); ++b) {
-            cursor[b] = (uint8_t)((validator_index >> (8u * b)) & 0xFFu);
-        }
-        cursor += sizeof(validator_index);
-
-        LanternSignedVote signed_vote;
-        if (lantern_store_get_signed_validator_vote(store, i, &signed_vote) != 0) {
-            goto cleanup;
-        }
-        size_t vote_written = 0;
-        if (lantern_ssz_encode_signed_vote(
-                &signed_vote,
-                cursor,
-                LANTERN_SIGNED_VOTE_SSZ_SIZE,
-                &vote_written)
-                != 0
-            || vote_written != LANTERN_SIGNED_VOTE_SSZ_SIZE) {
-            goto cleanup;
-        }
-        cursor += LANTERN_SIGNED_VOTE_SSZ_SIZE;
-    }
-
-    if (join_path(data_dir, LANTERN_STORAGE_VOTES_FILE, &votes_path) != 0) {
-        goto cleanup;
-    }
-    rc = write_atomic_file(votes_path, buffer, total_size);
-
-cleanup:
-    free_path(votes_path);
-    free(buffer);
-    return rc;
-}
-
-/**
- * Load persisted validator votes from `data_dir/votes.bin` into `state`.
- *
- * @param data_dir Base directory path.
- * @param state State to populate with loaded votes.
- * @return 0 on success.
- * @return 1 if the votes file is missing or empty.
- * @return -1 on invalid parameters or decode/validation errors.
- */
-int lantern_storage_load_votes(const char *data_dir, LanternState *state, LanternStore *store) {
-    if (!data_dir || !state || !store) {
-        return -1;
-    }
-
-    int rc = -1;
-    char *votes_path = NULL;
-    uint8_t *data = NULL;
-    size_t data_len = 0;
-
-    if (join_path(data_dir, LANTERN_STORAGE_VOTES_FILE, &votes_path) != 0) {
-        goto cleanup;
-    }
-    rc = read_file_buffer(votes_path, &data, &data_len);
-    if (rc != 0) {
-        goto cleanup;
-    }
-    if (data_len < sizeof(struct lantern_storage_votes_header)) {
-        rc = -1;
-        goto cleanup;
-    }
-    struct lantern_storage_votes_header header;
-    memcpy(&header, data, sizeof(header));
-    if (memcmp(header.magic, LANTERN_STORAGE_VOTES_MAGIC, sizeof(header.magic)) != 0) {
-        rc = -1;
-        goto cleanup;
-    }
-    bool has_signatures = false;
-    size_t signed_vote_size = 0;
-    if (header.version == 1u) {
-        has_signatures = false;
-    } else if (header.version >= 2u) {
-        has_signatures = true;
-        signed_vote_size = LANTERN_SIGNED_VOTE_SSZ_SIZE;
-    } else {
-        rc = -1;
-        goto cleanup;
-    }
-    if (header.validator_count == 0) {
-        rc = -1;
-        goto cleanup;
-    }
-    if (state->config.num_validators == 0) {
-        state->config.num_validators = header.validator_count;
-    }
-    if (state->config.num_validators != header.validator_count) {
-        rc = -1;
-        goto cleanup;
-    }
-    if (lantern_store_prepare_validator_votes(store, state->config.num_validators) != 0) {
-        rc = -1;
-        goto cleanup;
-    }
-    const size_t capacity = lantern_store_validator_capacity(store);
-    for (size_t i = 0; i < capacity; ++i) {
-        lantern_store_clear_validator_vote(store, i);
-    }
-
-    const uint8_t *cursor = data + sizeof(header);
-    size_t remaining = data_len - sizeof(header);
-    size_t records_read = 0;
-    const size_t encoded_vote_size = has_signatures ? signed_vote_size : LANTERN_VOTE_SSZ_SIZE;
-    while (records_read < header.record_count) {
-        if (remaining < sizeof(uint64_t) + encoded_vote_size) {
-            rc = -1;
-            goto cleanup;
-        }
-        uint64_t validator_index = 0;
-        for (size_t b = 0; b < sizeof(validator_index); ++b) {
-            validator_index |= ((uint64_t)cursor[b]) << (8u * b);
-        }
-        cursor += sizeof(validator_index);
-        remaining -= sizeof(validator_index);
-        if (validator_index >= store->validator_votes_len) {
-            rc = -1;
-            goto cleanup;
-        }
-        if (has_signatures) {
-            LanternSignedVote signed_vote;
-            memset(&signed_vote, 0, sizeof(signed_vote));
-            if (lantern_ssz_decode_signed_vote(&signed_vote, cursor, signed_vote_size) != SSZ_SUCCESS) {
-                rc = -1;
-                goto cleanup;
-            }
-            cursor += signed_vote_size;
-            remaining -= signed_vote_size;
-            if (lantern_store_set_signed_validator_vote(store, (size_t)validator_index, &signed_vote) != 0) {
-                rc = -1;
-                goto cleanup;
-            }
-        } else {
-            LanternVote vote;
-            memset(&vote, 0, sizeof(vote));
-            if (lantern_ssz_decode_vote(&vote, cursor, LANTERN_VOTE_SSZ_SIZE) != SSZ_SUCCESS) {
-                rc = -1;
-                goto cleanup;
-            }
-            cursor += LANTERN_VOTE_SSZ_SIZE;
-            remaining -= LANTERN_VOTE_SSZ_SIZE;
-            if (lantern_store_set_validator_vote(store, (size_t)validator_index, &vote) != 0) {
-                rc = -1;
-                goto cleanup;
-            }
-        }
-        records_read++;
-    }
-    if (remaining != 0) {
-        rc = -1;
-        goto cleanup;
-    }
-
-    rc = 0;
-
-cleanup:
-    free_path(votes_path);
-    free(data);
-    return rc;
 }
 
 static bool block_root_alias_matches_expected(
@@ -1054,80 +629,6 @@ int lantern_storage_store_block_for_root(
     return storage_store_block_internal(data_dir, block, root);
 }
 
-int lantern_storage_store_invalid_block_bytes_for_root(
-    const char *data_dir,
-    const LanternRoot *root,
-    const uint8_t *raw_block_ssz,
-    size_t raw_block_ssz_len) {
-    if (!data_dir || !root || !raw_block_ssz || raw_block_ssz_len == 0) {
-        return -1;
-    }
-
-    int rc = -1;
-    char *block_path = NULL;
-
-    if (storage_root_file_path(
-            data_dir,
-            STORAGE_DIR_INVALID_BLOCKS,
-            root,
-            true,
-            &block_path,
-            NULL,
-            0)
-        != 0) {
-        goto cleanup;
-    }
-
-    rc = write_atomic_file(block_path, raw_block_ssz, raw_block_ssz_len);
-
-cleanup:
-    free_path(block_path);
-    return rc;
-}
-
-int lantern_storage_store_invalid_gossip_payload(
-    const char *data_dir,
-    const char *payload_type,
-    const uint8_t *payload,
-    size_t payload_len) {
-    if (!data_dir || !payload_type || !payload || payload_len == 0) {
-        return -1;
-    }
-
-    int rc = -1;
-    char *payload_path = NULL;
-    char timestamp[32];
-    char safe_payload_type[64];
-    char filename[128];
-
-    if (format_utc_timestamp(timestamp, sizeof(timestamp)) != 0) {
-        goto cleanup;
-    }
-    if (sanitize_filename_component(payload_type, safe_payload_type, sizeof(safe_payload_type)) != 0) {
-        goto cleanup;
-    }
-
-    const int wrote = snprintf(
-        filename,
-        sizeof(filename),
-        "%s_%s_%zub.ssz",
-        timestamp,
-        safe_payload_type,
-        payload_len);
-    if (wrote < 0 || (size_t)wrote >= sizeof(filename)) {
-        goto cleanup;
-    }
-    if (storage_dir_file_path(data_dir, STORAGE_DIR_INVALID_GOSSIP, filename, true, &payload_path) != 0) {
-        goto cleanup;
-    }
-
-    rc = write_atomic_file(payload_path, payload, payload_len);
-
-cleanup:
-    free_path(payload_path);
-    return rc;
-}
-
 /**
  * Persist `state` under `data_dir/states` using the given `root` as filename.
  *
@@ -1199,272 +700,46 @@ int lantern_storage_load_block_bytes_for_root(
     return storage_load_root_bytes(data_dir, STORAGE_DIR_BLOCKS, root, out_data, out_len);
 }
 
-static int prune_block_files_before_slot(
-    const char *data_dir,
-    uint64_t slot,
-    const LanternRoot *keep_roots,
-    size_t keep_root_count,
-    int *out_pruned) {
-    if (!data_dir || !out_pruned) {
+struct prune_context {
+    const char *data_dir;
+    uint64_t slot;
+    const LanternRoot *keep_roots;
+    size_t keep_root_count;
+    int pruned;
+};
+
+static int prune_block_state_pair(
+    const LanternSignedBlock *block,
+    const LanternRoot *root,
+    void *context) {
+    struct prune_context *prune = context;
+    if (!block || !root || !prune) {
         return -1;
     }
-
-    int rc = -1;
-    char *blocks_dir = NULL;
-    DIR *dir = NULL;
-
-    if (storage_dir_path(data_dir, STORAGE_DIR_BLOCKS, &blocks_dir) != 0) {
-        goto cleanup;
-    }
-    dir = opendir(blocks_dir);
-    if (!dir) {
-        rc = (errno == ENOENT) ? 0 : -1;
-        goto cleanup;
-    }
-
-    rc = 0;
-    struct dirent *entry = NULL;
-    while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-            continue;
-        }
-        const size_t len = strlen(entry->d_name);
-        if (len < 5u || strcmp(entry->d_name + len - 4u, ".ssz") != 0) {
-            continue;
-        }
-
-        char *block_path = NULL;
-        if (join_path(blocks_dir, entry->d_name, &block_path) != 0) {
-            rc = -1;
-            break;
-        }
-
-        uint8_t *data = NULL;
-        size_t data_len = 0;
-        const int read_rc = read_file_buffer(block_path, &data, &data_len);
-        if (read_rc != 0) {
-            free_path(block_path);
-            if (read_rc == 1) {
-                continue;
-            }
-            rc = -1;
-            break;
-        }
-
-        LanternSignedBlock block;
-        lantern_signed_block_with_attestation_init(&block);
-        if (lantern_ssz_decode_signed_block(&block, data, data_len) != SSZ_SUCCESS) {
-            lantern_signed_block_with_attestation_reset(&block);
-            free(data);
-            free_path(block_path);
-            rc = -1;
-            break;
-        }
-
-        LanternRoot root = {0};
-        bool have_root = parse_root_ssz_filename(entry->d_name, &root);
-        if (!have_root && lantern_hash_tree_root_block(&block.block, &root) == SSZ_SUCCESS) {
-            have_root = true;
-        }
-
-        if (have_root
-            && block.block.slot < slot
-            && !storage_root_is_kept(&root, keep_roots, keep_root_count)
-            && remove_storage_path(block_path, out_pruned) != 0) {
-            rc = -1;
-        }
-
-        lantern_signed_block_with_attestation_reset(&block);
-        free(data);
-        free_path(block_path);
-        if (rc != 0) {
-            break;
-        }
-    }
-
-cleanup:
-    if (dir) {
-        closedir(dir);
-    }
-    free_path(blocks_dir);
-    return rc;
-}
-
-static uint64_t state_snapshot_prune_slot(const LanternState *state) {
-    if (!state) {
+    if (block->block.slot >= prune->slot
+        || storage_root_is_kept(root, prune->keep_roots, prune->keep_root_count)) {
         return 0;
     }
-    if (state->latest_block_header.slot != 0 || state->slot == 0) {
-        return state->latest_block_header.slot;
+
+    const enum storage_dir_kind dirs[] = {STORAGE_DIR_STATES, STORAGE_DIR_BLOCKS};
+    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i) {
+        char *path = NULL;
+        if (storage_root_file_path(
+                prune->data_dir,
+                dirs[i],
+                root,
+                false,
+                &path,
+                NULL,
+                0)
+                != 0
+            || remove_storage_path(path, &prune->pruned) != 0) {
+            free_path(path);
+            return -1;
+        }
+        free_path(path);
     }
-    return state->slot;
-}
-
-static int prune_state_files_before_slot(
-    const char *data_dir,
-    uint64_t slot,
-    const LanternRoot *keep_roots,
-    size_t keep_root_count,
-    int *out_pruned) {
-    if (!data_dir || !out_pruned) {
-        return -1;
-    }
-
-    int rc = -1;
-    char *states_dir = NULL;
-    DIR *dir = NULL;
-
-    if (storage_dir_path(data_dir, STORAGE_DIR_STATES, &states_dir) != 0) {
-        goto cleanup;
-    }
-    dir = opendir(states_dir);
-    if (!dir) {
-        rc = (errno == ENOENT) ? 0 : -1;
-        goto cleanup;
-    }
-
-    rc = 0;
-    struct dirent *entry = NULL;
-    while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-            continue;
-        }
-
-        LanternRoot root = {0};
-        if (!parse_root_ssz_filename(entry->d_name, &root)) {
-            continue;
-        }
-        if (storage_root_is_kept(&root, keep_roots, keep_root_count)) {
-            continue;
-        }
-
-        char *state_path = NULL;
-        if (join_path(states_dir, entry->d_name, &state_path) != 0) {
-            rc = -1;
-            break;
-        }
-
-        uint8_t *data = NULL;
-        size_t data_len = 0;
-        const int read_rc = read_file_buffer(state_path, &data, &data_len);
-        if (read_rc != 0) {
-            free_path(state_path);
-            if (read_rc == 1) {
-                continue;
-            }
-            rc = -1;
-            break;
-        }
-
-        LanternState state;
-        lantern_state_init(&state);
-        if (lantern_ssz_decode_state(&state, data, data_len) != SSZ_SUCCESS) {
-            lantern_state_reset(&state);
-            free(data);
-            free_path(state_path);
-            rc = -1;
-            break;
-        }
-
-        if (state_snapshot_prune_slot(&state) < slot
-            && remove_storage_path(state_path, out_pruned) != 0) {
-            rc = -1;
-        }
-
-        lantern_state_reset(&state);
-        free(data);
-        free_path(state_path);
-        if (rc != 0) {
-            break;
-        }
-    }
-
-cleanup:
-    if (dir) {
-        closedir(dir);
-    }
-    free_path(states_dir);
-    return rc;
-}
-
-static int prune_slot_indices_before_slot(
-    const char *data_dir,
-    uint64_t slot,
-    const LanternRoot *keep_roots,
-    size_t keep_root_count,
-    int *out_pruned) {
-    if (!data_dir || !out_pruned) {
-        return -1;
-    }
-
-    int rc = -1;
-    char *slot_dir = NULL;
-    DIR *dir = NULL;
-
-    if (storage_dir_path(data_dir, STORAGE_DIR_SLOT_INDEX, &slot_dir) != 0) {
-        goto cleanup;
-    }
-    dir = opendir(slot_dir);
-    if (!dir) {
-        rc = (errno == ENOENT) ? 0 : -1;
-        goto cleanup;
-    }
-
-    rc = 0;
-    struct dirent *entry = NULL;
-    while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-            continue;
-        }
-
-        uint64_t indexed_slot = 0;
-        if (!parse_slot_root_filename(entry->d_name, &indexed_slot)
-            || indexed_slot >= slot) {
-            continue;
-        }
-
-        char *slot_path = NULL;
-        if (join_path(slot_dir, entry->d_name, &slot_path) != 0) {
-            rc = -1;
-            break;
-        }
-
-        uint8_t *data = NULL;
-        size_t data_len = 0;
-        const int read_rc = read_file_buffer(slot_path, &data, &data_len);
-        if (read_rc != 0) {
-            free_path(slot_path);
-            if (read_rc == 1) {
-                continue;
-            }
-            rc = -1;
-            break;
-        }
-
-        bool keep = false;
-        if (data_len == LANTERN_ROOT_SIZE) {
-            LanternRoot root = {0};
-            memcpy(root.bytes, data, LANTERN_ROOT_SIZE);
-            keep = storage_root_is_kept(&root, keep_roots, keep_root_count);
-        }
-        free(data);
-
-        if (!keep && remove_storage_path(slot_path, out_pruned) != 0) {
-            rc = -1;
-        }
-
-        free_path(slot_path);
-        if (rc != 0) {
-            break;
-        }
-    }
-
-cleanup:
-    if (dir) {
-        closedir(dir);
-    }
-    free_path(slot_dir);
-    return rc;
+    return 0;
 }
 
 /**
@@ -1489,115 +764,17 @@ int lantern_storage_prune_before_slot(
         return -1;
     }
 
-    int pruned = 0;
-    if (prune_block_files_before_slot(data_dir, slot, keep_roots, keep_root_count, &pruned) != 0) {
-        return -1;
-    }
-    if (prune_state_files_before_slot(data_dir, slot, keep_roots, keep_root_count, &pruned) != 0) {
-        return -1;
-    }
-    if (prune_slot_indices_before_slot(data_dir, slot, keep_roots, keep_root_count, &pruned) != 0) {
-        return -1;
-    }
-    return pruned;
-}
-
-/**
- * Persist the mapping from a slot number to its block root on disk.
- *
- * Writes `root` into `data_dir/indices/slots/<slot>.root` using an
- * atomic write so readers never see a partial file.
- *
- * @param data_dir Base storage directory.
- * @param slot     Slot number to index.
- * @param root     32-byte block root for the slot.
- * @return 0 on success, -1 on error.
- */
-int lantern_storage_store_slot_root(
-    const char *data_dir,
-    uint64_t slot,
-    const LanternRoot *root) {
-    if (!data_dir || !root) {
-        return -1;
-    }
-
-    int rc = -1;
-    char *slot_path = NULL;
-
-    char filename[64];
-    const int written = snprintf(filename, sizeof(filename), "%" PRIu64 ".root", slot);
-    if (written < 0 || (size_t)written >= sizeof(filename)) {
-        goto cleanup;
-    }
-    if (storage_dir_file_path(data_dir, STORAGE_DIR_SLOT_INDEX, filename, true, &slot_path) != 0) {
-        goto cleanup;
-    }
-
-    rc = write_atomic_file(slot_path, root->bytes, LANTERN_ROOT_SIZE);
-
-cleanup:
-    free_path(slot_path);
-    return rc;
-}
-
-/**
- * Persist the current head slot and root so the node can resume after restart.
- *
- * Writes a compact `{slot, root}` record into `data_dir/indices/head.bin`
- * using an atomic write.
- *
- * @param data_dir Base storage directory.
- * @param slot     Head slot number.
- * @param root     32-byte head block root.
- * @return 0 on success, -1 on error.
- */
-int lantern_storage_store_head_root(
-    const char *data_dir,
-    uint64_t slot,
-    const LanternRoot *root) {
-    if (!data_dir || !root) {
-        return -1;
-    }
-
-    const struct lantern_storage_head_record record = {
+    struct prune_context context = {
+        .data_dir = data_dir,
         .slot = slot,
-        .root = *root,
+        .keep_roots = keep_roots,
+        .keep_root_count = keep_root_count,
     };
-    return storage_store_index_record(
-        data_dir,
-        LANTERN_STORAGE_HEAD_FILE,
-        &record,
-        sizeof(record));
-}
-
-/**
- * Persist justified and finalized checkpoint data to disk.
- *
- * Writes both checkpoints as a single record into
- * `data_dir/indices/checkpoints.bin` using an atomic write.
- *
- * @param data_dir   Base storage directory.
- * @param justified  Justified checkpoint to store.
- * @param finalized  Finalized checkpoint to store.
- * @return 0 on success, -1 on error.
- */
-int lantern_storage_store_checkpoints(
-    const char *data_dir,
-    const LanternCheckpoint *justified,
-    const LanternCheckpoint *finalized) {
-    if (!data_dir || !justified || !finalized) {
+    int rc = lantern_storage_iterate_blocks(data_dir, prune_block_state_pair, &context);
+    if (rc < 0) {
         return -1;
     }
-
-    const struct lantern_storage_checkpoint_record record = {
-        .justified = *justified,
-        .finalized = *finalized,
-    };
-    return storage_store_index_record(
-        data_dir,
-        LANTERN_STORAGE_CHECKPOINTS_FILE,
-        &record,
-        sizeof(record));
+    return context.pruned;
 }
 
 /**

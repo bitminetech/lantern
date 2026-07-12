@@ -20,8 +20,6 @@ static int init_range_assignment(
     if (!assignment->indices) {
         return -1;
     }
-    assignment->start_index = start_index;
-    assignment->count = count;
     assignment->length = (size_t)count;
     for (uint64_t i = 0; i < count; ++i) {
         assignment->indices[i] = start_index + i;
@@ -122,28 +120,6 @@ static int expect_timepoint(
     return 0;
 }
 
-static int run_schedule_assertions(const struct lantern_consensus_runtime *runtime) {
-    if (!runtime) {
-        return 1;
-    }
-    struct lantern_duty_schedule schedule;
-    if (lantern_consensus_runtime_schedule_slot(runtime, 1, &schedule) != 0) {
-        fprintf(stderr, "schedule_slot failed for slot 1\n");
-        return 1;
-    }
-    EXPECT_EQ(schedule.slot, 1, "schedule.slot");
-
-    uint64_t slot1_start = (runtime->clock.genesis_time * 1000u) + runtime->clock.milliseconds_per_slot;
-    uint64_t interval = runtime->clock.milliseconds_per_interval;
-    EXPECT_EQ(schedule.phase_start_times[0], slot1_start, "proposal start");
-    EXPECT_EQ(schedule.phase_start_times[1], slot1_start + interval, "vote start");
-    EXPECT_EQ(schedule.phase_start_times[2], slot1_start + interval * 2u, "aggregate start");
-    EXPECT_EQ(schedule.phase_start_times[3], slot1_start + interval * 3u, "safe target start");
-    EXPECT_EQ(schedule.phase_start_times[4], slot1_start + interval * 4u, "vote accept start");
-    EXPECT_EQ(schedule.phase_end_times[4], slot1_start + interval * 5u, "final phase end");
-    return 0;
-}
-
 int main(void) {
     struct lantern_consensus_runtime runtime;
     struct lantern_consensus_runtime_config cfg;
@@ -164,12 +140,8 @@ int main(void) {
         return 1;
     }
 
-    if (lantern_consensus_runtime_validator_count(&runtime) != cfg.validator_count) {
+    if (runtime.validator_count != cfg.validator_count) {
         fprintf(stderr, "validator count mismatch\n");
-        return 1;
-    }
-
-    if (run_schedule_assertions(&runtime) != 0) {
         return 1;
     }
 

@@ -523,26 +523,6 @@ static void state_aggregation_group_sort(struct state_aggregation_group *group) 
     }
 }
 
-static int state_fill_bitlist_from_ids(
-    struct lantern_bitlist *bits,
-    const LanternValidatorIndex *ids,
-    size_t count) {
-    if (!bits || !ids || count == 0u) {
-        return -1;
-    }
-
-    LanternValidatorIndices indices;
-    lantern_validator_indices_init(&indices);
-    if (lantern_validator_indices_resize(&indices, count) != 0) {
-        lantern_validator_indices_reset(&indices);
-        return -1;
-    }
-    memcpy(indices.data, ids, count * sizeof(*ids));
-    int rc = lantern_aggregation_bits_from_validator_indices(bits, &indices);
-    lantern_validator_indices_reset(&indices);
-    return rc;
-}
-
 static size_t state_proof_new_participant_count(
     const LanternAggregatedSignatureProof *proof,
     const bool *covered) {
@@ -704,6 +684,7 @@ static lantern_state_aggregate_result state_append_selected_group(
     }
 
     size_t raw_count = 0u;
+    LanternValidatorIndex highest_raw_id = 0u;
     for (size_t i = 0; i < group->count; ++i) {
         LanternValidatorIndex validator_id = group->validator_ids[i];
         if (covered
@@ -712,13 +693,15 @@ static lantern_state_aggregate_result state_append_selected_group(
             continue;
         }
         raw_count += 1u;
+        if (validator_id > highest_raw_id) {
+            highest_raw_id = validator_id;
+        }
     }
 
     if (raw_count == 0u && child_count < LANTERN_INVERSE_PROOF_SIZE) {
         return LANTERN_STATE_AGGREGATE_OK;
     }
 
-    LanternValidatorIndex *raw_ids = NULL;
     LanternRawXmssSignature *raw_xmss = NULL;
     struct lantern_bitlist xmss_participants;
     LanternAggregatedSignatureProof proof;
@@ -729,9 +712,13 @@ static lantern_state_aggregate_result state_append_selected_group(
     size_t validator_count = lantern_state_validator_count(state);
 
     if (raw_count > 0u) {
-        raw_ids = calloc(raw_count, sizeof(*raw_ids));
+        if (highest_raw_id >= validator_count
+            || lantern_bitlist_resize(&xmss_participants, (size_t)highest_raw_id + 1u) != 0) {
+            rc = LANTERN_STATE_AGGREGATE_RUNTIME;
+            goto cleanup;
+        }
         raw_xmss = calloc(raw_count, sizeof(*raw_xmss));
-        if (!raw_ids || !raw_xmss) {
+        if (!raw_xmss) {
             rc = LANTERN_STATE_AGGREGATE_ALLOC;
             goto cleanup;
         }
@@ -748,6 +735,10 @@ static lantern_state_aggregate_result state_append_selected_group(
                 rc = LANTERN_STATE_AGGREGATE_RUNTIME;
                 goto cleanup;
             }
+            if (lantern_bitlist_set(&xmss_participants, (size_t)validator_id, true) != 0) {
+                rc = LANTERN_STATE_AGGREGATE_RUNTIME;
+                goto cleanup;
+            }
 
             const uint8_t *pubkey =
                 lantern_state_validator_attestation_pubkey(state, (size_t)validator_id);
@@ -755,15 +746,9 @@ static lantern_state_aggregate_result state_append_selected_group(
                 rc = LANTERN_STATE_AGGREGATE_RUNTIME;
                 goto cleanup;
             }
-            raw_ids[raw_index] = validator_id;
             raw_xmss[raw_index].pubkey = pubkey;
             raw_xmss[raw_index].signature = &group->signatures[i];
             raw_index += 1u;
-        }
-
-        if (state_fill_bitlist_from_ids(&xmss_participants, raw_ids, raw_count) != 0) {
-            rc = LANTERN_STATE_AGGREGATE_RUNTIME;
-            goto cleanup;
         }
     }
 
@@ -784,7 +769,6 @@ static lantern_state_aggregate_result state_append_selected_group(
     rc = state_append_cached_proof(&group->data, &proof, out_attestations, out_signatures);
 
 cleanup:
-    free(raw_ids);
     free(raw_xmss);
     lantern_bitlist_reset(&xmss_participants);
     lantern_aggregated_signature_proof_reset(&proof);
@@ -2063,10 +2047,8 @@ int lantern_state_process_block_header(LanternState *state, const LanternBlock *
 
 int lantern_state_process_attestations(
     LanternState *state,
-    LanternStore *store,
-    const LanternAttestations *attestations,
-    const LanternSignatureList *signatures) {
-    if (!state || !store || !attestations) {
+    const LanternAttestations *attestations) {
+    if (!state || !attestations) {
         return -1;
     }
     uint64_t validator_count_u64 = state->config.num_validators;
@@ -2078,10 +2060,6 @@ int lantern_state_process_attestations(
         .has_slot = true,
         .slot = state->slot,
     };
-    if (!store->validator_votes || store->validator_votes_len != validator_count) {
-        return -1;
-    }
-
     if (attestations->length > LANTERN_MAX_ATTESTATIONS) {
         return -1;
     }
@@ -2104,10 +2082,6 @@ int lantern_state_process_attestations(
 
     for (size_t i = 0; i < attestations->length; ++i) {
         const LanternVote *vote = &attestations->data[i];
-        const LanternSignature *signature = NULL;
-        if (signatures && signatures->data && i < signatures->length) {
-            signature = &signatures->data[i];
-        }
         att_attempted += 1;
         double att_validation_start = lantern_time_now_seconds();
         if (vote->validator_id >= validator_count) {
@@ -2152,17 +2126,6 @@ int lantern_state_process_attestations(
                 continue;
             }
         }
-        LanternSignedVote stored_vote;
-        memset(&stored_vote, 0, sizeof(stored_vote));
-        stored_vote.data = *vote;
-        if (signature) {
-            stored_vote.signature = *signature;
-        }
-        if (lantern_store_set_signed_validator_vote(store, (size_t)vote->validator_id, &stored_vote) != 0) {
-            record_attestation_validation_metric(att_validation_start, false);
-            return -1;
-        }
-
         /* Skip if target is already justified (leanSpec line 394) */
         if (target_is_justified) {
             record_attestation_validation_metric(att_validation_start, true);
@@ -2301,27 +2264,14 @@ int lantern_state_process_attestations(
 
     state->latest_justified = latest_justified;
     state->latest_finalized = latest_finalized;
-    if (store->fork_choice) {
-        if (lantern_fork_choice_update_checkpoints(
-                store->fork_choice,
-                &state->latest_justified,
-                &state->latest_finalized)
-            != 0) {
-            if (finalization_attempted) {
-                lean_metrics_record_finalization_attempt(false);
-            }
-            return -1;
-        }
-    }
     lean_metrics_record_state_transition_attestations(att_attempted, lantern_time_now_seconds() - att_batch_start);
     return 0;
 }
 
 int lantern_state_process_block(
     LanternState *state,
-    LanternStore *store,
     const LanternBlock *block) {
-    if (!state || !store || !block) {
+    if (!state || !block) {
         return -1;
     }
     if (lantern_state_validate_block_attestation_data_uniqueness(block) != 0) {
@@ -2342,7 +2292,7 @@ int lantern_state_process_block(
         lantern_attestations_reset(&expanded);
         return -1;
     }
-    if (lantern_state_process_attestations(state, store, &expanded, NULL) != 0) {
+    if (lantern_state_process_attestations(state, &expanded) != 0) {
         lantern_attestations_reset(&expanded);
         return -1;
     }
@@ -2352,8 +2302,8 @@ int lantern_state_process_block(
     return 0;
 }
 
-int lantern_state_transition(LanternState *state, LanternStore *store, const LanternSignedBlock *signed_block) {
-    if (!state || !store || !signed_block) {
+int lantern_state_transition(LanternState *state, const LanternSignedBlock *signed_block) {
+    if (!state || !signed_block) {
         return -1;
     }
     const LanternBlock *block = &signed_block->block;
@@ -2385,7 +2335,7 @@ int lantern_state_transition(LanternState *state, LanternStore *store, const Lan
     double slots_duration = lantern_time_now_seconds() - slots_metrics_start;
     uint64_t slots_processed = block->slot >= slot_before ? (block->slot - slot_before) : 0;
     lean_metrics_record_state_transition_slots(slots_processed, slots_duration);
-    if (lantern_state_process_block(state, store, block) != 0) {
+    if (lantern_state_process_block(state, block) != 0) {
         STATE_FAIL("process block failed");
     }
     LanternRoot computed_state_root;
@@ -2468,19 +2418,6 @@ int lantern_state_transition(LanternState *state, LanternStore *store, const Lan
         }
     } else {
         STATE_FAIL("failed to hash state for slot %" PRIu64, block->slot);
-    }
-
-    if (store->fork_choice) {
-        if (lantern_fork_choice_add_block_with_state(
-                store->fork_choice,
-                block,
-                &state->latest_justified,
-                &state->latest_finalized,
-                NULL,
-                state)
-            != 0) {
-            STATE_FAIL("fork choice add block failed for slot %" PRIu64, block->slot);
-        }
     }
 
     state->slot = block->slot;
@@ -2566,8 +2503,6 @@ int lantern_state_collect_attestations_for_block(
     lantern_state_init(&slot_snapshot);
     LanternState scratch;
     lantern_state_init(&scratch);
-    LanternStore scratch_store;
-    lantern_store_init(&scratch_store);
     struct lantern_root_list processed_data_roots;
     lantern_root_list_init(&processed_data_roots);
     int rc = 0;
@@ -2624,12 +2559,6 @@ int lantern_state_collect_attestations_for_block(
             rc = -1;
             goto cleanup;
         }
-        lantern_store_reset(&scratch_store);
-        lantern_store_init(&scratch_store);
-        if (lantern_store_prepare_validator_votes(&scratch_store, scratch.config.num_validators) != 0) {
-            rc = -1;
-            goto cleanup;
-        }
 
         LanternBlock candidate;
         memset(&candidate, 0, sizeof(candidate));
@@ -2640,7 +2569,7 @@ int lantern_state_collect_attestations_for_block(
         candidate.body.attestations.length = out_attestations->length;
         candidate.body.attestations.capacity = out_attestations->length;
 
-        if (lantern_state_process_block(&scratch, &scratch_store, &candidate) != 0) {
+        if (lantern_state_process_block(&scratch, &candidate) != 0) {
             rc = -1;
             goto cleanup;
         }
@@ -2673,7 +2602,6 @@ int lantern_state_collect_attestations_for_block(
     }
 
 	cleanup:
-    lantern_store_reset(&scratch_store);
     lantern_state_reset(&scratch);
     lantern_state_reset(&slot_snapshot);
     lantern_root_list_reset(&processed_data_roots);
@@ -2689,7 +2617,6 @@ int lantern_state_compute_post_state(
     const LanternStore *store,
     const LanternSignedBlock *block,
     LanternState *out_post_state,
-    LanternStore *out_post_store,
     LanternRoot *out_state_root) {
     if (!state || !store || !block) {
         return -1;
@@ -2705,13 +2632,7 @@ int lantern_state_compute_post_state(
     }
     LanternState scratch;
     lantern_state_init(&scratch);
-    LanternStore scratch_store;
-    lantern_store_init(&scratch_store);
     if (lantern_state_clone(base_state, &scratch) != 0) {
-        return -1;
-    }
-    if (lantern_store_clone_validator_votes(store, &scratch_store) != 0) {
-        lantern_state_reset(&scratch);
         return -1;
     }
     int rc = 0;
@@ -2719,7 +2640,7 @@ int lantern_state_compute_post_state(
         rc = -1;
         goto cleanup;
     }
-    if (lantern_state_process_block(&scratch, &scratch_store, &block->block) != 0) {
+    if (lantern_state_process_block(&scratch, &block->block) != 0) {
         rc = -1;
         goto cleanup;
     }
@@ -2731,13 +2652,7 @@ int lantern_state_compute_post_state(
         *out_post_state = scratch;
         lantern_state_init(&scratch);
     }
-    if (out_post_store) {
-        *out_post_store = scratch_store;
-        lantern_store_init(&scratch_store);
-    }
-
 cleanup:
-    lantern_store_reset(&scratch_store);
     lantern_state_reset(&scratch);
     return rc;
 }
@@ -2754,7 +2669,6 @@ int lantern_state_preview_post_state_root(
         state,
         store,
         block,
-        NULL,
         NULL,
         out_state_root);
 }

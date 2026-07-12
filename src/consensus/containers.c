@@ -104,62 +104,6 @@ int lantern_attestations_resize(LanternAttestations *list, size_t new_length) {
     return 0;
 }
 
-void lantern_validator_indices_init(LanternValidatorIndices *indices) {
-    if (!indices) {
-        return;
-    }
-    indices->data = NULL;
-    indices->length = 0;
-    indices->capacity = 0;
-}
-
-void lantern_validator_indices_reset(LanternValidatorIndices *indices) {
-    if (!indices) {
-        return;
-    }
-    free(indices->data);
-    indices->data = NULL;
-    indices->length = 0;
-    indices->capacity = 0;
-}
-
-int lantern_validator_indices_append(LanternValidatorIndices *indices, LanternValidatorIndex index) {
-    if (!indices || index >= LANTERN_VALIDATOR_REGISTRY_LIMIT) {
-        return -1;
-    }
-    if (indices->length >= LANTERN_VALIDATOR_REGISTRY_LIMIT) {
-        return -1;
-    }
-    ENSURE_CAPACITY(indices, data, indices->length + 1, 4);
-    indices->data[indices->length++] = index;
-    return 0;
-}
-
-int lantern_validator_indices_resize(LanternValidatorIndices *indices, size_t new_length) {
-    if (!indices || new_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
-        return -1;
-    }
-    if (new_length == 0) {
-        if (indices->data && indices->length > 0) {
-            memset(indices->data, 0, indices->length * sizeof(*indices->data));
-        }
-        indices->length = 0;
-        return 0;
-    }
-    ENSURE_CAPACITY(indices, data, new_length, 4);
-    if (!indices->data) {
-        return -1;
-    }
-    size_t old_length = indices->length;
-    if (new_length > old_length) {
-        memset(&indices->data[old_length], 0, (new_length - old_length) * sizeof(*indices->data));
-    } else if (new_length < old_length) {
-        memset(&indices->data[new_length], 0, (old_length - new_length) * sizeof(*indices->data));
-    }
-    indices->length = new_length;
-    return 0;
-}
-
 int lantern_validator_index_compute_subnet_id(
     LanternValidatorIndex index,
     size_t num_committees,
@@ -168,66 +112,6 @@ int lantern_validator_index_compute_subnet_id(
         return -1;
     }
     *out_subnet_id = (size_t)index % num_committees;
-    return 0;
-}
-
-int lantern_aggregation_bits_from_validator_indices(
-    struct lantern_bitlist *out_bits,
-    const LanternValidatorIndices *indices) {
-    if (!out_bits || !indices || indices->length == 0 || !indices->data) {
-        return -1;
-    }
-    if (indices->length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
-        return -1;
-    }
-
-    LanternValidatorIndex max_index = 0;
-    for (size_t i = 0; i < indices->length; ++i) {
-        LanternValidatorIndex index = indices->data[i];
-        if (index >= LANTERN_VALIDATOR_REGISTRY_LIMIT) {
-            return -1;
-        }
-        if (index > max_index) {
-            max_index = index;
-        }
-    }
-
-    if (lantern_bitlist_resize(out_bits, (size_t)max_index + 1u) != 0) {
-        return -1;
-    }
-    for (size_t i = 0; i < indices->length; ++i) {
-        if (lantern_bitlist_set(out_bits, (size_t)indices->data[i], true) != 0) {
-            return -1;
-        }
-    }
-    return 0;
-}
-
-int lantern_aggregation_bits_to_validator_indices(
-    const struct lantern_bitlist *bits,
-    LanternValidatorIndices *out_indices) {
-    if (!bits || !out_indices || bits->bit_length == 0) {
-        return -1;
-    }
-    if (bits->bit_length > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
-        return -1;
-    }
-    if (!bits->bytes) {
-        return -1;
-    }
-    if (lantern_validator_indices_resize(out_indices, 0) != 0) {
-        return -1;
-    }
-    for (size_t i = 0; i < bits->bit_length; ++i) {
-        if (lantern_bitlist_get(bits, i)
-            && lantern_validator_indices_append(out_indices, (LanternValidatorIndex)i) != 0) {
-            (void)lantern_validator_indices_resize(out_indices, 0);
-            return -1;
-        }
-    }
-    if (out_indices->length == 0) {
-        return -1;
-    }
     return 0;
 }
 

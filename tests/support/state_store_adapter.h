@@ -50,93 +50,14 @@ static inline void lantern_test_state_reset(LanternState *state) {
 }
 
 static inline int lantern_test_state_clone(const LanternState *source, LanternState *dest) {
-    int rc = lantern_state_clone_explicit(source, dest);
-    if (rc != 0) {
-        return rc;
-    }
-    const LanternStore *source_store = lantern_test_state_store_find(source);
-    if (!source_store) {
-        return 0;
-    }
-    LanternStore *dest_store = lantern_test_state_store_ensure(dest);
-    if (!dest_store) {
-        lantern_state_reset_explicit(dest);
-        return -1;
-    }
-    if (lantern_store_clone_validator_votes(source_store, dest_store) != 0) {
-        lantern_test_state_reset(dest);
-        return -1;
-    }
-    return 0;
+    return lantern_state_clone_explicit(source, dest);
 }
 
 static inline int lantern_test_state_generate_genesis(
     LanternState *state,
     uint64_t genesis_time,
     uint64_t num_validators) {
-    int rc = lantern_state_generate_genesis_explicit(state, genesis_time, num_validators);
-    if (rc != 0) {
-        return rc;
-    }
-    LanternStore *store = lantern_test_state_store_ensure(state);
-    if (!store) {
-        return -1;
-    }
-    return lantern_store_prepare_validator_votes(store, num_validators);
-}
-
-static inline int lantern_test_state_prepare_validator_votes(LanternState *state, uint64_t validator_count) {
-    LanternStore *store = lantern_test_state_store_ensure(state);
-    return store ? lantern_store_prepare_validator_votes(store, validator_count) : -1;
-}
-
-static inline size_t lantern_test_state_validator_capacity(const LanternState *state) {
-    const LanternStore *store = lantern_test_state_store_find(state);
-    return store ? lantern_store_validator_capacity(store) : 0u;
-}
-
-static inline bool lantern_test_state_validator_has_vote(const LanternState *state, size_t index) {
-    const LanternStore *store = lantern_test_state_store_find(state);
-    return store ? lantern_store_validator_has_vote(store, index) : false;
-}
-
-static inline int lantern_test_state_get_signed_validator_vote(
-    const LanternState *state,
-    size_t index,
-    LanternSignedVote *out_vote) {
-    const LanternStore *store = lantern_test_state_store_find(state);
-    return store ? lantern_store_get_signed_validator_vote(store, index, out_vote) : -1;
-}
-
-static inline int lantern_test_state_get_validator_vote(
-    const LanternState *state,
-    size_t index,
-    LanternVote *out_vote) {
-    const LanternStore *store = lantern_test_state_store_find(state);
-    return store ? lantern_store_get_validator_vote(store, index, out_vote) : -1;
-}
-
-static inline int lantern_test_state_set_signed_validator_vote(
-    LanternState *state,
-    size_t index,
-    const LanternSignedVote *vote) {
-    LanternStore *store = lantern_test_state_store_ensure(state);
-    return store ? lantern_store_set_signed_validator_vote(store, index, vote) : -1;
-}
-
-static inline int lantern_test_state_set_validator_vote(
-    LanternState *state,
-    size_t index,
-    const LanternVote *vote) {
-    LanternStore *store = lantern_test_state_store_ensure(state);
-    return store ? lantern_store_set_validator_vote(store, index, vote) : -1;
-}
-
-static inline void lantern_test_state_clear_validator_vote(LanternState *state, size_t index) {
-    LanternStore *store = lantern_test_state_store_ensure(state);
-    if (store) {
-        lantern_store_clear_validator_vote(store, index);
-    }
+    return lantern_state_generate_genesis_explicit(state, genesis_time, num_validators);
 }
 
 static inline void lantern_test_state_attach_fork_choice(
@@ -148,51 +69,19 @@ static inline void lantern_test_state_attach_fork_choice(
     }
 }
 
-static inline int lantern_test_state_process_block_with_store(
-    LanternState *state,
-    LanternStore *store,
-    const LanternBlock *block) {
-    return lantern_state_process_block_explicit(state, store, block);
-}
-
 #define lantern_state_init(state) lantern_test_state_init((state))
 #define lantern_state_reset(state) lantern_test_state_reset((state))
 #define lantern_state_clone(source, dest) lantern_test_state_clone((source), (dest))
 #define lantern_state_generate_genesis(state, genesis_time, num_validators) \
     lantern_test_state_generate_genesis((state), (genesis_time), (num_validators))
-#define lantern_state_prepare_validator_votes(state, validator_count) \
-    lantern_test_state_prepare_validator_votes((state), (validator_count))
-#define lantern_state_validator_capacity(state) lantern_test_state_validator_capacity((state))
-#define lantern_state_validator_has_vote(state, index) \
-    lantern_test_state_validator_has_vote((state), (index))
-#define lantern_state_get_signed_validator_vote(state, index, out_vote) \
-    lantern_test_state_get_signed_validator_vote((state), (index), (out_vote))
-#define lantern_state_get_validator_vote(state, index, out_vote) \
-    lantern_test_state_get_validator_vote((state), (index), (out_vote))
-#define lantern_state_set_signed_validator_vote(state, index, vote) \
-    lantern_test_state_set_signed_validator_vote((state), (index), (vote))
-#define lantern_state_set_validator_vote(state, index, vote) \
-    lantern_test_state_set_validator_vote((state), (index), (vote))
-#define lantern_state_clear_validator_vote(state, index) \
-    lantern_test_state_clear_validator_vote((state), (index))
 #define lantern_state_attach_fork_choice(state, fork_choice) \
     lantern_test_state_attach_fork_choice((state), (fork_choice))
-#define lantern_state_process_attestations(state, attestations, signatures) \
-    lantern_state_process_attestations_explicit( \
-        (state), \
-        lantern_test_state_store_ensure((state)), \
-        (attestations), \
-        (signatures))
+#define lantern_state_process_attestations(state, attestations) \
+    lantern_state_process_attestations_explicit((state), (attestations))
 #define lantern_state_process_block(state, block) \
-    lantern_state_process_block_explicit( \
-        (state), \
-        lantern_test_state_store_ensure((state)), \
-        (block))
+    lantern_state_process_block_explicit((state), (block))
 #define lantern_state_transition(state, signed_block) \
-    lantern_state_transition_explicit( \
-        (state), \
-        lantern_test_state_store_ensure((state)), \
-        (signed_block))
+    lantern_state_transition_explicit((state), (signed_block))
 #define lantern_state_select_block_parent(state, out_parent_root) \
     lantern_state_select_block_parent_explicit( \
         (state), \
@@ -216,13 +105,12 @@ static inline int lantern_test_state_process_block_with_store(
         (out_target), \
         (out_source))
 #define lantern_state_compute_post_state( \
-    state, block, out_post_state, out_post_store, out_state_root) \
+    state, block, out_post_state, out_state_root) \
     lantern_state_compute_post_state_explicit( \
         (state), \
         lantern_test_state_store_ensure((LanternState *)(state)), \
         (block), \
         (out_post_state), \
-        (out_post_store), \
         (out_state_root))
 #define lantern_state_preview_post_state_root(state, block, out_state_root) \
     lantern_state_preview_post_state_root_explicit( \

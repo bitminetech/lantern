@@ -1382,11 +1382,6 @@ int lantern_fixture_parse_anchor_state(
         free(proposal_pubkeys);
         return -1;
     }
-    if (lantern_state_prepare_validator_votes(state, *validator_count) != 0) {
-        free(attestation_pubkeys);
-        free(proposal_pubkeys);
-        return -1;
-    }
     if (lantern_state_set_validator_pubkeys_dual(
             state,
             attestation_pubkeys,

@@ -488,8 +488,6 @@ void lantern_client_options_init(struct lantern_client_options *options)
     options->genesis_config_path = LANTERN_DEFAULT_GENESIS_CONFIG;
     options->validator_config_dir = LANTERN_DEFAULT_VALIDATOR_CONFIG_DIR;
     options->nodes_path = LANTERN_DEFAULT_NODES_FILE;
-    options->genesis_state_path = NULL;
-    options->use_genesis_state = false;
     options->node_id = LANTERN_DEFAULT_NODE_ID;
     options->node_key_hex = NULL;
     options->node_key_path = NULL;
@@ -843,9 +841,6 @@ static void client_reset_base(struct lantern_client *client)
     memset(client, 0, sizeof(*client));
     lantern_string_list_init(&client->bootnodes);
     lantern_string_list_init(&client->dialer_peers);
-    lantern_string_list_init(&client->connected_peer_ids);
-    lantern_string_list_init(&client->connected_peer_refs);
-    lantern_string_list_init(&client->inbound_peer_ids);
     lantern_string_list_init(&client->status_failure_peer_ids);
     double now_seconds = lantern_time_now_seconds();
     client->start_time_seconds = now_seconds > 0.0 ? (uint64_t)now_seconds : 0u;
@@ -854,40 +849,22 @@ static void client_reset_base(struct lantern_client *client)
     lantern_libp2p_host_init(&client->network);
     lantern_gossipsub_service_init(&client->gossip);
     lantern_reqresp_service_init(&client->reqresp);
-    client->reqresp_running = false;
     lantern_validator_assignment_reset(&client->validator_assignment);
-    client->has_validator_assignment = false;
     lantern_consensus_runtime_reset(&client->runtime);
-    client->has_runtime = false;
     lantern_metrics_server_init(&client->metrics_server);
-    client->metrics_running = false;
     lantern_http_server_init(&client->http_server);
-    client->http_running = false;
     lantern_state_init(&client->state);
     lantern_store_init(&client->store);
     lean_metrics_reset();
-    client->state_lock_initialized = false;
     lantern_fork_choice_init(&client->fork_choice);
     lantern_store_attach_fork_choice(&client->store, &client->fork_choice);
-    client->has_fork_choice = false;
-    client->validator_thread_started = false;
     client->validator_stop_flag = 1;
-    client->block_proposal_job = NULL;
-    client->block_proposal_inflight_slot = 0u;
-    client->block_proposal_lock_initialized = false;
-    client->block_proposal_cond_initialized = false;
-    client->block_proposal_thread_started = false;
     client->block_proposal_stop = true;
-    client->block_proposal_inflight = false;
-    client->timing_thread_started = false;
     client->timing_stop_flag = 1;
-    client->dialer_thread_started = false;
     client->dialer_stop_flag = 1;
     pending_block_list_init(&client->pending_blocks);
     client->block_import_stop = true;
     pending_vote_list_init(&client->pending_gossip_votes);
-    client->pending_lock_initialized = false;
-    client->sync_state = LANTERN_SYNC_STATE_IDLE;
 }
 
 
@@ -1003,13 +980,6 @@ int lantern_client_aggregation_subnet_id(
     {
         return lantern_validator_index_compute_subnet_id(
             entry->indices[0],
-            lantern_client_attestation_committee_count(client),
-            out_subnet_id);
-    }
-    if (entry && entry->has_range)
-    {
-        return lantern_validator_index_compute_subnet_id(
-            entry->start_index,
             lantern_client_attestation_committee_count(client),
             out_subnet_id);
     }
@@ -1177,12 +1147,13 @@ static bool client_try_genesis_from_pubkeys(struct lantern_client *client)
 {
     if (!client->genesis.chain_config.validator_attestation_pubkeys
         || !client->genesis.chain_config.validator_proposal_pubkeys
-        || client->genesis.chain_config.validator_pubkeys_count == 0)
+        || client->genesis.chain_config.validator_count == 0
+        || client->genesis.chain_config.validator_count > SIZE_MAX)
     {
         return false;
     }
 
-    size_t vcount = client->genesis.chain_config.validator_pubkeys_count;
+    size_t vcount = (size_t)client->genesis.chain_config.validator_count;
     if (lantern_state_generate_genesis(
             &client->state, client->genesis.chain_config.genesis_time, vcount)
         != 0)
@@ -1200,317 +1171,7 @@ static bool client_try_genesis_from_pubkeys(struct lantern_client *client)
         return false;
     }
 
-    client->genesis_fallback_used = false;
     return true;
-}
-
-
-/**
- * @brief Attempt genesis creation from the validator registry file.
- *
- * Builds the genesis state using pubkeys sourced from the registry when the
- * explicit pubkey array is unavailable.
- *
- * @param client  Client with loaded genesis registry
- *
- * @return true on success, false otherwise
- *
- * @note Thread safety: Must run before concurrent access to the state.
- */
-static bool client_try_genesis_from_registry(struct lantern_client *client)
-{
-    size_t vcount = client->genesis.validator_registry.count;
-    if (vcount == 0
-        || vcount != client->genesis.chain_config.validator_count)
-    {
-        lantern_log_warn(
-            "client",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "validator registry count (%zu) does not match chain config (%" PRIu64 ")",
-            vcount,
-            client->genesis.chain_config.validator_count);
-        return false;
-    }
-
-    if (lantern_state_generate_genesis(
-            &client->state,
-            client->genesis.chain_config.genesis_time,
-            vcount)
-        != 0)
-    {
-        return false;
-    }
-
-    if (vcount > SIZE_MAX / LANTERN_VALIDATOR_PUBKEY_SIZE)
-    {
-        lantern_log_error(
-            "client",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "validator count overflow while allocating pubkeys");
-        return false;
-    }
-
-    size_t pubkeys_len = vcount * LANTERN_VALIDATOR_PUBKEY_SIZE;
-    uint8_t *pubkeys = calloc(pubkeys_len, sizeof(*pubkeys));
-    if (!pubkeys)
-    {
-        lantern_log_error(
-            "client",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to allocate validator pubkey buffer");
-        return false;
-    }
-
-    bool pubkey_ok = true;
-    for (size_t i = 0; i < vcount; ++i)
-    {
-        const struct lantern_validator_record *rec = &client->genesis.validator_registry.records[i];
-        uint8_t *dest = pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE);
-        if (rec->has_pubkey_bytes)
-        {
-            memcpy(dest, rec->pubkey_bytes, LANTERN_VALIDATOR_PUBKEY_SIZE);
-        }
-        else if (rec->pubkey_hex
-                 && lantern_hex_decode(rec->pubkey_hex, dest, LANTERN_VALIDATOR_PUBKEY_SIZE) == 0)
-        {
-            /* decoded */
-        }
-        else
-        {
-            lantern_log_error(
-                "client",
-                &(const struct lantern_log_metadata){.validator = client->node_id},
-                "missing or invalid pubkey for validator index=%zu; aborting genesis build",
-                i);
-            pubkey_ok = false;
-            break;
-        }
-    }
-
-    bool success = false;
-    if (pubkey_ok
-        && lantern_state_set_validator_pubkeys(&client->state, pubkeys, vcount) == 0)
-    {
-        client->genesis_fallback_used = true;
-        success = true;
-    }
-
-    free(pubkeys);
-    return success;
-}
-
-
-/**
- * @brief Log the deterministic anchor block derived from genesis state.
- *
- * Builds the canonical anchor block from the configured genesis parameters and
- * emits its root for debugging purposes.
- *
- * @param client  Client whose genesis configuration is used
- *
- * @note Thread safety: Read-only access to client during single-threaded init.
- */
-static void client_log_generated_anchor_block(struct lantern_client *client)
-{
-    LanternState generated_state;
-    LanternRoot generated_state_root;
-    LanternBlock generated_block;
-    LanternRoot generated_block_root;
-    bool body_initialized = false;
-    lantern_state_init(&generated_state);
-
-    if (lantern_state_generate_genesis(
-            &generated_state,
-            client->state.config.genesis_time,
-            client->state.config.num_validators)
-        != 0)
-    {
-        goto cleanup;
-    }
-
-    if (lantern_hash_tree_root_state(&generated_state, &generated_state_root) != SSZ_SUCCESS)
-    {
-        goto cleanup;
-    }
-
-    memset(&generated_block, 0, sizeof(generated_block));
-    generated_block.slot = generated_state.slot;
-    generated_block.proposer_index = 0;
-    generated_block.parent_root = generated_state.latest_block_header.parent_root;
-    generated_block.state_root = generated_state_root;
-    lantern_block_body_init(&generated_block.body);
-    body_initialized = true;
-
-    if (lantern_hash_tree_root_block(&generated_block, &generated_block_root) == SSZ_SUCCESS)
-    {
-        char generated_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        format_root_hex(&generated_block_root, generated_hex, sizeof(generated_hex));
-        lantern_log_info(
-            "client",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "generated anchor block root=%s",
-            generated_hex[0] ? generated_hex : "0x0");
-    }
-
-cleanup:
-    if (body_initialized)
-    {
-        lantern_block_body_reset(&generated_block.body);
-    }
-    lantern_state_reset(&generated_state);
-}
-
-
-/**
- * @brief Log all genesis anchor roots for debugging.
- *
- * Emits hash tree roots for the genesis block header, block, signed block, and
- * related canonical variants to help detect mismatched genesis data.
- *
- * @param client     Client containing the prepared genesis state
- * @param state_root Optional state root override (may be NULL)
- *
- * @note Thread safety: Read-only logging during initialization.
- */
-static void client_log_genesis_anchors(
-    struct lantern_client *client,
-    const LanternRoot *state_root)
-{
-    LanternRoot header_root;
-    LanternRoot genesis_block_root;
-    LanternRoot genesis_signed_block_root;
-    LanternRoot canonical_header_root;
-    LanternRoot spec_header_root;
-    char header_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char state_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char block_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char signed_block_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char parent_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char canonical_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char body_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char spec_header_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    header_hex[0] = '\0';
-    state_hex[0] = '\0';
-    block_hex[0] = '\0';
-    signed_block_hex[0] = '\0';
-    parent_hex[0] = '\0';
-    canonical_hex[0] = '\0';
-    body_hex[0] = '\0';
-    spec_header_hex[0] = '\0';
-    if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, &header_root) == SSZ_SUCCESS)
-    {
-        format_root_hex(&header_root, header_hex, sizeof(header_hex));
-    }
-    if (state_root)
-    {
-        format_root_hex(state_root, state_hex, sizeof(state_hex));
-    }
-    LanternBlock genesis_block;
-    memset(&genesis_block, 0, sizeof(genesis_block));
-    genesis_block.slot = client->state.latest_block_header.slot;
-    genesis_block.proposer_index = client->state.latest_block_header.proposer_index;
-    genesis_block.parent_root = client->state.latest_block_header.parent_root;
-    genesis_block.state_root = state_root
-                                 ? *state_root
-                                 : client->state.latest_block_header.state_root;
-    lantern_block_body_init(&genesis_block.body);
-    if (lantern_hash_tree_root_block(&genesis_block, &genesis_block_root) == SSZ_SUCCESS)
-    {
-        format_root_hex(&genesis_block_root, block_hex, sizeof(block_hex));
-    }
-    lantern_block_body_reset(&genesis_block.body);
-    format_root_hex(
-        &client->state.latest_block_header.parent_root,
-        parent_hex,
-        sizeof(parent_hex));
-    LanternBlockHeader canonical_header = client->state.latest_block_header;
-    canonical_header.state_root = state_root ? *state_root : canonical_header.state_root;
-    if (lantern_hash_tree_root_block_header(&canonical_header, &canonical_header_root) == SSZ_SUCCESS)
-    {
-        format_root_hex(&canonical_header_root, canonical_hex, sizeof(canonical_hex));
-    }
-    LanternBlockBody empty_body_snapshot;
-    lantern_block_body_init(&empty_body_snapshot);
-    LanternRoot default_body_root;
-    if (lantern_hash_tree_root_block_body(&empty_body_snapshot, &default_body_root) != SSZ_SUCCESS)
-    {
-        memset(&default_body_root, 0, sizeof(default_body_root));
-    }
-    lantern_block_body_reset(&empty_body_snapshot);
-    LanternBlockHeader spec_header = client->state.latest_block_header;
-    spec_header.state_root = state_root ? *state_root : spec_header.state_root;
-    spec_header.body_root = default_body_root;
-    if (lantern_hash_tree_root_block_header(&spec_header, &spec_header_root) == SSZ_SUCCESS)
-    {
-        format_root_hex(&spec_header_root, spec_header_hex, sizeof(spec_header_hex));
-    }
-    format_root_hex(
-        &client->state.latest_block_header.body_root,
-        body_hex,
-        sizeof(body_hex));
-    LanternSignedBlock genesis_signed;
-    lantern_signed_block_with_attestation_init(&genesis_signed);
-    genesis_signed.block = genesis_block;
-    if (lantern_hash_tree_root_signed_block(&genesis_signed, &genesis_signed_block_root) == SSZ_SUCCESS)
-    {
-        format_root_hex(&genesis_signed_block_root, signed_block_hex, sizeof(signed_block_hex));
-    }
-
-    client_log_generated_anchor_block(client);
-
-    lantern_log_info(
-        "client",
-        &(const struct lantern_log_metadata){.validator = client->node_id},
-        "genesis anchors header_root=%s state_root=%s body_root=%s block_root=%s "
-        "signed_block_root=%s canonical_header_root=%s spec_header_root=%s parent_root=%s",
-        header_hex[0] ? header_hex : "0x0",
-        state_hex[0] ? state_hex : "0x0",
-        body_hex[0] ? body_hex : "0x0",
-        block_hex[0] ? block_hex : "0x0",
-        signed_block_hex[0] ? signed_block_hex : "0x0",
-        canonical_hex[0] ? canonical_hex : "0x0",
-        spec_header_hex[0] ? spec_header_hex : "0x0",
-        parent_hex[0] ? parent_hex : "0x0");
-
-    lantern_signed_block_with_attestation_reset(&genesis_signed);
-}
-
-
-/**
- * @brief Finalize the prepared genesis state.
- *
- * Allocates validator vote records, computes and logs the genesis state root,
- * and marks the client as having an initialized state.
- *
- * @param client  Client holding the generated genesis state
- *
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_GENESIS on failure to prepare votes or hash roots
- *
- * @note Thread safety: Single-threaded initialization only.
- */
-static lantern_client_error client_finalize_genesis_state(struct lantern_client *client)
-{
-    if (lantern_store_prepare_validator_votes(
-            &client->store,
-            client->state.config.num_validators)
-        != 0)
-    {
-        lantern_log_error(
-            "client",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to prepare validator vote records");
-        return LANTERN_CLIENT_ERR_GENESIS;
-    }
-    LanternRoot state_root;
-    if (lantern_hash_tree_root_state(&client->state, &state_root) != SSZ_SUCCESS)
-    {
-        return LANTERN_CLIENT_ERR_GENESIS;
-    }
-
-    client_log_genesis_anchors(client, &state_root);
-    client->has_state = true;
-    return LANTERN_CLIENT_OK;
 }
 
 
@@ -1566,6 +1227,62 @@ static char *checkpoint_sync_endpoint_url(const char *checkpoint_sync_url, const
     return out;
 }
 
+static lantern_client_error client_fetch_checkpoint_bytes(
+    struct lantern_client *client,
+    const char *checkpoint_sync_url,
+    const char *endpoint_path,
+    size_t max_response_bytes,
+    const char *label,
+    struct lantern_http_fetch_result *out_result)
+{
+    if (!client || !checkpoint_sync_url || !endpoint_path || !label || !out_result)
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    memset(out_result, 0, sizeof(*out_result));
+    char *url = checkpoint_sync_endpoint_url(checkpoint_sync_url, endpoint_path);
+    if (!url)
+    {
+        return LANTERN_CLIENT_ERR_NETWORK;
+    }
+
+    struct lantern_log_metadata meta = {.validator = client->node_id};
+    lantern_log_info("checkpoint_sync", &meta, "fetching finalized checkpoint %s from %s", label, url);
+    int fetch_rc = lantern_http_get_bytes(
+        url,
+        "application/octet-stream",
+        max_response_bytes,
+        out_result);
+    if (fetch_rc != 0)
+    {
+        if (fetch_rc == LANTERN_HTTP_CLIENT_STATUS_ERROR)
+        {
+            lantern_log_error(
+                "checkpoint_sync",
+                &meta,
+                "checkpoint %s endpoint returned HTTP %d",
+                label,
+                out_result->status_code);
+        }
+        else
+        {
+            lantern_log_error("checkpoint_sync", &meta, "failed to fetch checkpoint %s", label);
+        }
+        lantern_http_fetch_result_reset(out_result);
+        free(url);
+        return LANTERN_CLIENT_ERR_NETWORK;
+    }
+    free(url);
+
+    if (!out_result->body || out_result->body_len == 0)
+    {
+        lantern_http_fetch_result_reset(out_result);
+        lantern_log_error("checkpoint_sync", &meta, "checkpoint %s endpoint returned no data", label);
+        return LANTERN_CLIENT_ERR_NETWORK;
+    }
+    return LANTERN_CLIENT_OK;
+}
+
 static lantern_client_error client_fetch_checkpoint_anchor_block(
     struct lantern_client *client,
     const char *checkpoint_sync_url,
@@ -1577,67 +1294,20 @@ static lantern_client_error client_fetch_checkpoint_anchor_block(
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
 
-    struct lantern_log_metadata meta = {.validator = client->node_id};
-    char *block_url = checkpoint_sync_endpoint_url(
-        checkpoint_sync_url,
-        CHECKPOINT_SYNC_FINALIZED_BLOCK_PATH);
-    if (!block_url)
-    {
-        lantern_log_error(
-            "checkpoint_sync",
-            &meta,
-            "failed to build finalized block URL from %s",
-            checkpoint_sync_url);
-        return LANTERN_CLIENT_ERR_NETWORK;
-    }
-
-    lantern_log_info(
-        "checkpoint_sync",
-        &meta,
-        "fetching finalized checkpoint block from %s",
-        block_url);
-
     struct lantern_http_fetch_result fetch_result;
-    int fetch_rc = lantern_http_get_bytes(
-        block_url,
-        "application/octet-stream",
+    lantern_client_error fetch_rc = client_fetch_checkpoint_bytes(
+        client,
+        checkpoint_sync_url,
+        CHECKPOINT_SYNC_FINALIZED_BLOCK_PATH,
         CHECKPOINT_SYNC_MAX_BLOCK_RESPONSE_BYTES,
+        "block",
         &fetch_result);
-    if (fetch_rc != 0)
+    if (fetch_rc != LANTERN_CLIENT_OK)
     {
-        if (fetch_rc == LANTERN_HTTP_CLIENT_STATUS_ERROR)
-        {
-            lantern_log_error(
-                "checkpoint_sync",
-                &meta,
-                "checkpoint block endpoint returned HTTP %d",
-                fetch_result.status_code);
-        }
-        else
-        {
-            lantern_log_error(
-                "checkpoint_sync",
-                &meta,
-                "failed to fetch checkpoint block from %s",
-                block_url);
-        }
-        lantern_http_fetch_result_reset(&fetch_result);
-        free(block_url);
-        return LANTERN_CLIENT_ERR_NETWORK;
+        return fetch_rc;
     }
 
-    free(block_url);
-
-    if (!fetch_result.body || fetch_result.body_len == 0)
-    {
-        lantern_http_fetch_result_reset(&fetch_result);
-        lantern_log_error(
-            "checkpoint_sync",
-            &meta,
-            "checkpoint block endpoint returned an empty block payload");
-        return LANTERN_CLIENT_ERR_NETWORK;
-    }
-
+    struct lantern_log_metadata meta = {.validator = client->node_id};
     if (lantern_ssz_decode_signed_block(out_block, fetch_result.body, fetch_result.body_len)
         != SSZ_SUCCESS)
     {
@@ -1715,7 +1385,8 @@ int lantern_client_validate_state_validator_pubkeys(
     const struct lantern_chain_config *config = &client->genesis.chain_config;
     if (!config->validator_attestation_pubkeys
         || !config->validator_proposal_pubkeys
-        || config->validator_pubkeys_count == 0)
+        || config->validator_count == 0
+        || config->validator_count > SIZE_MAX)
     {
         lantern_log_error(
             component,
@@ -1724,7 +1395,7 @@ int lantern_client_validate_state_validator_pubkeys(
         return LANTERN_CLIENT_ERR_GENESIS;
     }
 
-    size_t expected_count = config->validator_pubkeys_count;
+    size_t expected_count = (size_t)config->validator_count;
     if (!state->validators
         || state->validator_count != expected_count
         || state->config.num_validators != (uint64_t)expected_count)
@@ -1794,66 +1465,18 @@ static lantern_client_error client_load_state_from_checkpoint(
         return block_rc;
     }
 
-    char *state_url = checkpoint_sync_endpoint_url(
-        checkpoint_sync_url,
-        CHECKPOINT_SYNC_FINALIZED_STATE_PATH);
-    if (!state_url)
-    {
-        lantern_signed_block_reset(&anchor_signed_block);
-        lantern_log_error(
-            "checkpoint_sync",
-            &meta,
-            "failed to build finalized state URL from %s",
-            checkpoint_sync_url);
-        return LANTERN_CLIENT_ERR_NETWORK;
-    }
-
-    lantern_log_info(
-        "checkpoint_sync",
-        &meta,
-        "fetching finalized checkpoint state from %s",
-        state_url);
-
     struct lantern_http_fetch_result fetch_result;
-    int fetch_rc = lantern_http_get_bytes(
-        state_url,
-        "application/octet-stream",
+    lantern_client_error fetch_rc = client_fetch_checkpoint_bytes(
+        client,
+        checkpoint_sync_url,
+        CHECKPOINT_SYNC_FINALIZED_STATE_PATH,
         CHECKPOINT_SYNC_MAX_RESPONSE_BYTES,
+        "state",
         &fetch_result);
-    if (fetch_rc != 0)
+    if (fetch_rc != LANTERN_CLIENT_OK)
     {
-        if (fetch_rc == LANTERN_HTTP_CLIENT_STATUS_ERROR)
-        {
-            lantern_log_error(
-                "checkpoint_sync",
-                &meta,
-                "checkpoint sync endpoint returned HTTP %d",
-                fetch_result.status_code);
-        }
-        else
-        {
-            lantern_log_error(
-                "checkpoint_sync",
-                &meta,
-                "failed to fetch checkpoint state from %s",
-                state_url);
-        }
-        lantern_http_fetch_result_reset(&fetch_result);
-        free(state_url);
         lantern_signed_block_reset(&anchor_signed_block);
-        return LANTERN_CLIENT_ERR_NETWORK;
-    }
-
-    if (!fetch_result.body || fetch_result.body_len == 0)
-    {
-        lantern_http_fetch_result_reset(&fetch_result);
-        lantern_log_error(
-            "checkpoint_sync",
-            &meta,
-            "checkpoint sync endpoint returned an empty state payload");
-        free(state_url);
-        lantern_signed_block_reset(&anchor_signed_block);
-        return LANTERN_CLIENT_ERR_NETWORK;
+        return fetch_rc;
     }
 
     LanternState decoded;
@@ -1923,19 +1546,6 @@ static lantern_client_error client_load_state_from_checkpoint(
     if (pubkey_rc != LANTERN_CLIENT_OK)
     {
         result = pubkey_rc;
-        goto cleanup;
-    }
-
-    if (lantern_store_prepare_validator_votes(
-            &client->store,
-            decoded.config.num_validators)
-        != 0)
-    {
-        lantern_log_error(
-            "checkpoint_sync",
-            &meta,
-            "failed to prepare validator votes for checkpoint state");
-        result = LANTERN_CLIENT_ERR_GENESIS;
         goto cleanup;
     }
 
@@ -2024,8 +1634,6 @@ static lantern_client_error client_load_state_from_checkpoint(
     client->state = decoded;
     decoded_owned = false;
     client->has_state = true;
-    client->genesis_fallback_used = false;
-
     lantern_log_info(
         "checkpoint_sync",
         &meta,
@@ -2040,7 +1648,6 @@ static lantern_client_error client_load_state_from_checkpoint(
 
 cleanup:
     lantern_http_fetch_result_reset(&fetch_result);
-    free(state_url);
     lantern_signed_block_reset(&anchor_signed_block);
     if (decoded_owned)
     {
@@ -2052,9 +1659,7 @@ cleanup:
 /**
  * @brief Build genesis state using the available artifact priority order.
  *
- * Tries embedded pubkeys first and then the validator registry. Lantern no
- * longer decodes local genesis.ssz for bootstrap so replay/state roots remain
- * deterministic from config/registry inputs.
+ * Builds the state from the canonical validator keypairs in the chain config.
  *
  * @param client  Client being initialized
  *
@@ -2065,17 +1670,12 @@ cleanup:
  */
 static lantern_client_error client_generate_state_from_genesis(struct lantern_client *client)
 {
-    if (client_try_genesis_from_pubkeys(client))
+    if (!client_try_genesis_from_pubkeys(client))
     {
-        return client_finalize_genesis_state(client);
+        return LANTERN_CLIENT_ERR_GENESIS;
     }
-
-    if (client_try_genesis_from_registry(client))
-    {
-        return client_finalize_genesis_state(client);
-    }
-
-    return LANTERN_CLIENT_ERR_GENESIS;
+    client->has_state = true;
+    return LANTERN_CLIENT_OK;
 }
 
 
@@ -2194,15 +1794,6 @@ static lantern_client_error client_load_or_build_state(
 
     if (client->has_state)
     {
-        int votes_rc = lantern_storage_load_votes(client->data_dir, &client->state, &client->store);
-        if (votes_rc < 0)
-        {
-            lantern_log_error(
-                "storage",
-                &meta,
-                "failed to load persisted votes");
-            return LANTERN_CLIENT_ERR_STORAGE;
-        }
         if (initialize_fork_choice(client) != 0)
         {
             return LANTERN_CLIENT_ERR_GENESIS;
@@ -2221,13 +1812,6 @@ static lantern_client_error client_load_or_build_state(
                 "storage",
                 &(const struct lantern_log_metadata){.validator = client->node_id},
                 "failed to persist initial state snapshot");
-        }
-        if (lantern_storage_save_votes(client->data_dir, &client->state, &client->store) != 0)
-        {
-            lantern_log_warn(
-                "storage",
-                &(const struct lantern_log_metadata){.validator = client->node_id},
-                "failed to persist initial votes snapshot");
         }
     }
 
@@ -2328,12 +1912,16 @@ static lantern_client_error client_setup_validators(
         return LANTERN_CLIENT_ERR_VALIDATOR;
     }
 
-    if (lantern_client_refresh_state_validators(client) != 0)
+    if (lantern_client_validate_state_validator_pubkeys(
+            client,
+            &client->state,
+            "client")
+        != 0)
     {
         lantern_log_error(
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to refresh validator pubkeys for '%s'",
+            "validator pubkey validation failed for '%s'",
             client->node_id);
         return LANTERN_CLIENT_ERR_VALIDATOR;
     }
@@ -2346,9 +1934,9 @@ static lantern_client_error client_setup_validators(
     lantern_log_info(
         "client",
         &(const struct lantern_log_metadata){.validator = client->node_id},
-        "validator slice start=%" PRIu64 " count=%" PRIu64,
-        client->validator_assignment.start_index,
-        client->validator_assignment.count);
+        "validator slice start=%" PRIu64 " count=%zu",
+        client->validator_assignment.indices[0],
+        client->validator_assignment.length);
 
     return LANTERN_CLIENT_OK;
 }
@@ -2412,9 +2000,6 @@ static lantern_client_error client_start_network(
     {
         return LANTERN_CLIENT_ERR_CONFIG;
     }
-    memcpy(client->node_private_key, node_key, NODE_PRIVATE_KEY_SIZE);
-    client->has_node_private_key = true;
-
     struct lantern_libp2p_config net_cfg = {
         .listen_multiaddr = client->listen_address,
         .secp256k1_secret = node_key,
@@ -2864,7 +2449,6 @@ static void shutdown_validator_and_keys(struct lantern_client *client)
     stop_validator_service(client);
     stop_block_proposal_worker(client);
     stop_peer_dialer(client);
-    lantern_client_free_xmss_pubkeys(client);
     free(client->xmss_key_dir);
     client->xmss_key_dir = NULL;
     free(client->xmss_public_template);
@@ -2919,9 +2503,6 @@ static void shutdown_network_services(struct lantern_client *client)
     {
         client->connected_peers = 0;
     }
-    lantern_string_list_reset(&client->connected_peer_ids);
-    lantern_string_list_reset(&client->connected_peer_refs);
-    lantern_string_list_reset(&client->inbound_peer_ids);
     free(client->connection_peer_refs);
     client->connection_peer_refs = NULL;
     client->connection_peer_ref_count = 0;
@@ -2934,6 +2515,10 @@ static void clear_status_tracking(struct lantern_client *client)
     client->peer_status_entries = NULL;
     client->peer_status_count = 0;
     client->peer_status_capacity = 0;
+    for (size_t i = 0; i < client->active_blocks_request_count; ++i)
+    {
+        free(client->active_blocks_requests[i].roots);
+    }
     free(client->active_blocks_requests);
     client->active_blocks_requests = NULL;
     client->active_blocks_request_count = 0;
@@ -2949,16 +2534,10 @@ static void clear_peer_vote_tracking(struct lantern_client *client)
     client->peer_vote_stats_cap = 0;
 }
 
-static void clear_validator_enabled(struct lantern_client *client)
-{
-    free(client->validator_enabled);
-    client->validator_enabled = NULL;
-}
-
 static void clear_pending_block_state(struct lantern_client *client)
 {
     pending_block_list_reset(&client->pending_blocks);
-    free(client->backfill.entries);
+    free(client->backfill.roots);
     memset(&client->backfill, 0, sizeof(client->backfill));
 }
 
@@ -3013,7 +2592,7 @@ static void shutdown_peer_tracking(struct lantern_client *client)
 
 
 /**
- * @brief Destroy validator enablement lock and associated arrays.
+ * @brief Destroy the validator lock.
  *
  * @param client  Client whose validator lock is being destroyed
  *
@@ -3023,21 +2602,8 @@ static void shutdown_validator_lock(struct lantern_client *client)
 {
     if (client->validator_lock_initialized)
     {
-        if (pthread_mutex_lock(&client->validator_lock) == 0)
-        {
-            clear_validator_enabled(client);
-            pthread_mutex_unlock(&client->validator_lock);
-        }
-        else
-        {
-            clear_validator_enabled(client);
-        }
         pthread_mutex_destroy(&client->validator_lock);
         client->validator_lock_initialized = false;
-    }
-    else
-    {
-        clear_validator_enabled(client);
     }
 }
 
@@ -3144,8 +2710,6 @@ static void shutdown_genesis_and_network(struct lantern_client *client)
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "shutdown: libp2p host reset");
     lantern_enr_record_reset(&client->local_enr);
-    memset(client->node_private_key, 0, sizeof(client->node_private_key));
-    client->has_node_private_key = false;
 }
 
 
@@ -3159,15 +2723,8 @@ static void shutdown_genesis_and_network(struct lantern_client *client)
 static void shutdown_state_and_runtime(struct lantern_client *client)
 {
     pending_vote_list_reset(&client->pending_gossip_votes);
-    if (client->has_state)
-    {
-        lantern_state_reset(&client->state);
-        client->has_state = false;
-    }
-    else
-    {
-        lantern_state_reset(&client->state);
-    }
+    lantern_state_reset(&client->state);
+    client->has_state = false;
     lantern_store_reset(&client->store);
     if (client->state_lock_initialized)
     {
@@ -3178,7 +2735,6 @@ static void shutdown_state_and_runtime(struct lantern_client *client)
     client->has_fork_choice = false;
     lantern_client_reset_local_validators(client);
     lantern_validator_assignment_reset(&client->validator_assignment);
-    client->has_validator_assignment = false;
     lantern_consensus_runtime_reset(&client->runtime);
     client->has_runtime = false;
 

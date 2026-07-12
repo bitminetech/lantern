@@ -26,7 +26,6 @@
 #include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"
 #include "lantern/metrics/lean_metrics.h"
-#include "lantern/storage/storage.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
 
@@ -211,122 +210,6 @@ static bool buffer_pending_vote_locked(
     return true;
 }
 
-/**
- * @brief Validates vote cache availability.
- *
- * @param client     Client instance
- * @param vote       Vote to validate
- * @param meta       Logging metadata
- * @param rejection  Rejection info to populate on failure
- * @return true if vote cache state is valid
- *
- * @note Thread safety: Caller must hold state_lock
- */
-static bool validate_vote_cache_state(
-    const struct lantern_client *client,
-    const LanternVote *vote,
-    const struct lantern_log_metadata *meta,
-    struct lantern_vote_rejection_info *rejection)
-{
-    if (!client || !vote || !rejection)
-    {
-        return false;
-    }
-
-    uint64_t validator_count = client->state.config.num_validators;
-    bool cache_available = (validator_count != 0) && client->store.validator_votes
-        && (client->store.validator_votes_len != 0);
-    if (!cache_available)
-    {
-        lantern_log_debug(
-            "gossip",
-            meta,
-            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " "
-            "(state vote cache unavailable)",
-            vote->validator_id,
-            vote->slot);
-        lantern_vote_rejection_set(rejection, "state vote cache unavailable");
-        return false;
-    }
-
-    bool validator_in_range = (vote->validator_id < validator_count)
-        && (vote->validator_id < (uint64_t)client->store.validator_votes_len);
-    if (!validator_in_range)
-    {
-        lantern_log_debug(
-            "gossip",
-            meta,
-            "dropping vote validator=%" PRIu64 " slot=%" PRIu64 " "
-            "(validator out of range)",
-            vote->validator_id,
-            vote->slot);
-        lantern_vote_rejection_set(
-            rejection,
-            "validator out of range id=%" PRIu64,
-            vote->validator_id);
-        return false;
-    }
-
-    return true;
-}
-
-bool lantern_client_should_cache_attestation_signature_locked(
-    const struct lantern_client *client,
-    const LanternVote *vote)
-{
-    if (!client || !vote || !client->assigned_validators || !client->assigned_validators->enr.is_aggregator) {
-        return false;
-    }
-    return true;
-}
-
-
-/**
- * @brief Cache a signed validator vote in state.
- *
- * @param client     Client instance
- * @param vote       Signed vote to cache
- * @param meta       Logging metadata
- * @param rejection  Rejection info to populate on failure
- * @return true if vote is cached successfully
- *
- * @note Thread safety: Caller must hold state_lock
- */
-static bool cache_state_vote_locked(
-    struct lantern_client *client,
-    const LanternSignedVote *vote,
-    const struct lantern_log_metadata *meta,
-    struct lantern_vote_rejection_info *rejection)
-{
-    if (!client || !vote || !meta || !rejection)
-    {
-        return false;
-    }
-
-    int result = lantern_store_set_signed_validator_vote(
-        &client->store,
-        (size_t)vote->data.validator_id,
-        vote);
-    if (result != 0)
-    {
-        lantern_log_debug(
-            "state",
-            meta,
-            "failed to cache gossip vote validator=%" PRIu64 " slot=%" PRIu64,
-            vote->data.validator_id,
-            vote->data.slot);
-        lantern_vote_rejection_set(
-            rejection,
-            "failed to cache vote validator=%" PRIu64 " slot=%" PRIu64,
-            vote->data.validator_id,
-            vote->data.slot);
-        return false;
-    }
-
-    return true;
-}
-
-
 static bool cache_attestation_signature_locked(
     struct lantern_client *client,
     const LanternSignedVote *vote,
@@ -343,10 +226,10 @@ static bool cache_attestation_signature_locked(
         return false;
     }
 
-    const LanternSignature *signature_to_cache =
-        lantern_client_should_cache_attestation_signature_locked(client, &vote->data)
-            ? &vote->signature
-            : NULL;
+    const LanternSignature *signature_to_cache = client->assigned_validators
+            && client->assigned_validators->enr.is_aggregator
+        ? &vote->signature
+        : NULL;
     LanternSignatureKey key = {
         .validator_index = vote->data.validator_id,
         .data_root = data_root,
@@ -355,8 +238,7 @@ static bool cache_attestation_signature_locked(
             &client->store,
             &key,
             &vote->data.data,
-            signature_to_cache,
-            vote->data.target.slot)
+            signature_to_cache)
         != 0)
     {
         lantern_log_debug(
@@ -373,37 +255,6 @@ static bool cache_attestation_signature_locked(
 }
 
 
-/**
- * @brief Persist votes to storage if configured.
- *
- * @param client  Client instance
- * @param vote    Vote used for log context
- * @param meta    Logging metadata
- *
- * @note Thread safety: Caller must hold state_lock
- */
-static void persist_votes_if_configured_locked(
-    const struct lantern_client *client,
-    const LanternSignedVote *vote,
-    const struct lantern_log_metadata *meta)
-{
-    if (!client || !vote || !meta || !client->data_dir)
-    {
-        return;
-    }
-
-    if (lantern_storage_save_votes(client->data_dir, &client->state, &client->store) != 0)
-    {
-        lantern_log_warn(
-            "storage",
-            meta,
-            "failed to persist votes after validator=%" PRIu64 " slot=%" PRIu64,
-            vote->data.validator_id,
-            vote->data.slot);
-    }
-}
-
-
 static bool verify_vote_signature_against_target_locked(
     struct lantern_client *client,
     const LanternSignedVote *vote,
@@ -415,41 +266,18 @@ static bool verify_vote_signature_against_target_locked(
         return false;
     }
 
-    LanternState target_state;
-    lantern_state_init(&target_state);
-    LanternRoot missing_target_root = {0};
-    const LanternState *sig_state = lantern_client_state_for_root_local_locked(
+    const LanternState *sig_state = lantern_client_state_for_root_locked(
         client,
-        &vote->data.target.root,
-        &target_state,
-        NULL);
-    if (!sig_state
-        && !lantern_client_find_missing_state_root_locked(
-               client,
-               &vote->data.target.root,
-               &missing_target_root))
-    {
-        sig_state = lantern_client_state_for_root_locked(
-            client,
-            &vote->data.target.root,
-            &target_state,
-            NULL);
-    }
+        &vote->data.target.root);
     if (!sig_state)
     {
         char target_hex[VOTE_ROOT_HEX_BUFFER_LEN];
-        char retry_hex[VOTE_ROOT_HEX_BUFFER_LEN];
         format_root_hex(&vote->data.target.root, target_hex, sizeof(target_hex));
-        format_root_hex(
-            lantern_root_is_zero(&missing_target_root) ? &vote->data.target.root : &missing_target_root,
-            retry_hex,
-            sizeof(retry_hex));
         lantern_log_debug(
             "gossip",
             meta,
-            "missing target state root=%s retry_root=%s for validator=%" PRIu64 " slot=%" PRIu64,
+            "missing target state root=%s for validator=%" PRIu64 " slot=%" PRIu64,
             target_hex[0] ? target_hex : "0x0",
-            retry_hex[0] ? retry_hex : "0x0",
             vote->data.validator_id,
             vote->data.slot);
         lantern_vote_rejection_set(
@@ -458,10 +286,8 @@ static bool verify_vote_signature_against_target_locked(
             vote->data.target.slot,
             target_hex[0] ? target_hex : "0x0");
         rejection->should_retry_after_block_import = true;
-        rejection->retry_root =
-            lantern_root_is_zero(&missing_target_root) ? vote->data.target.root : missing_target_root;
+        rejection->retry_root = vote->data.target.root;
         rejection->retry_slot = vote->data.target.slot;
-        lantern_state_reset(&target_state);
         return false;
     }
 
@@ -480,10 +306,8 @@ static bool verify_vote_signature_against_target_locked(
             vote->data.validator_id,
             vote->data.slot);
         lantern_vote_rejection_set(rejection, "invalid XMSS signature");
-        lantern_state_reset(&target_state);
         return false;
     }
-    lantern_state_reset(&target_state);
     return true;
 }
 
@@ -538,20 +362,7 @@ static bool process_vote_locked(
         return false;
     }
 
-    if (!validate_vote_cache_state(client, &vote->data, meta, rejection))
-    {
-        return false;
-    }
-
-    if (!cache_state_vote_locked(client, vote, meta, rejection))
-    {
-        return false;
-    }
-
-    (void)cache_attestation_signature_locked(client, vote, meta);
-
-    persist_votes_if_configured_locked(client, vote, meta);
-    return true;
+    return cache_attestation_signature_locked(client, vote, meta);
 }
 
 
@@ -644,7 +455,7 @@ static enum lantern_vote_record_status lantern_client_record_vote_internal(
     lantern_client_note_vote_outcome(client, peer_text, &vote_copy, false);
 
     const char *reason_text = rejection.has_reason ? rejection.message : "unknown";
-    if (client->sync_in_progress)
+    if (client->sync_started_ms != 0u)
     {
         lantern_log_debug(
             "gossip",
@@ -821,7 +632,7 @@ bool lantern_client_verify_vote_signature(
  * 4. Checkpoint ordering must satisfy source <= target <= head
  * 5. Source, target, and head must lie on one parent chain
  * 6. Vote slot must not precede the head checkpoint slot
- * 7. Vote slot must not exceed current_slot + 1
+ * 7. Vote slot must not begin more than one interval in the future
  *
  * Per leanSpec: checks that all referenced blocks exist in the store
  * before accepting the attestation.
@@ -925,6 +736,7 @@ bool lantern_client_validate_vote_constraints(
     } ancestry_checks[] = {
         {&vote->source, &vote->target, "source not ancestor of target", "Source checkpoint must be ancestor of target"},
         {&vote->target, &vote->head, "target not ancestor of head", "Target checkpoint must be ancestor of head"},
+        {&client->fork_choice.latest_finalized, &vote->head, "head not descendant of finalized", "Head checkpoint must descend from finalized"},
     };
     for (size_t i = 0; i < sizeof(ancestry_checks) / sizeof(ancestry_checks[0]); ++i)
     {
@@ -968,41 +780,58 @@ bool lantern_client_validate_vote_constraints(
         return false;
     }
 
-    uint64_t current_slot = 0;
-    if (!lantern_client_current_slot(client, &current_slot))
+    uint64_t allowed_slot = 0u;
+    if (client->debug_disable_fork_choice_time)
+    {
+        uint64_t current_slot = 0u;
+        if (!lantern_client_current_slot(client, &current_slot))
+        {
+            return false;
+        }
+        allowed_slot = current_slot == UINT64_MAX ? UINT64_MAX : current_slot + 1u;
+    }
+    else if (client->fork_choice.intervals_per_slot == 0u)
     {
         lantern_log_debug(
             log_facility,
             meta,
-            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (unable to compute current slot)",
+            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (invalid interval clock)",
             label,
             vote->validator_id,
             vote->slot);
         if (out_rejection)
         {
-            lantern_vote_rejection_set(out_rejection, "unable to compute current slot");
+            lantern_vote_rejection_set(out_rejection, "invalid interval clock");
         }
         return false;
     }
-    uint64_t allowed_slot = current_slot == UINT64_MAX ? UINT64_MAX : current_slot + 1u;
+    else
+    {
+        uint64_t admission_horizon = client->fork_choice.time_intervals;
+        if (admission_horizon < UINT64_MAX)
+        {
+            admission_horizon += 1u;
+        }
+        allowed_slot = admission_horizon / client->fork_choice.intervals_per_slot;
+    }
     if (vote->slot > allowed_slot)
     {
         lantern_log_debug(
             log_facility,
             meta,
-            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (current_slot=%" PRIu64 ")",
+            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (current_interval=%" PRIu64 ")",
             label,
             vote->validator_id,
             vote->slot,
-            current_slot);
+            client->fork_choice.time_intervals);
         if (out_rejection)
         {
             lantern_vote_rejection_set(
                 out_rejection,
-                "vote slot=%" PRIu64 " exceeds allowed=%" PRIu64 " current=%" PRIu64,
+                "vote slot=%" PRIu64 " exceeds allowed=%" PRIu64 " current_interval=%" PRIu64,
                 vote->slot,
                 allowed_slot,
-                current_slot);
+                client->fork_choice.time_intervals);
         }
         return false;
     }
@@ -1024,10 +853,7 @@ bool lantern_client_validate_vote_constraints(
  * Performs the complete vote validation and recording pipeline:
  * 1. Validates vote constraints (checkpoints, slots)
  * 2. Verifies XMSS signature
- * 3. Validates vote cache availability and validator range
- * 4. Caches the signed vote in state
- * 5. Stores gossip signature/data for the staged aggregation pipeline
- * 6. Persists votes to storage
+ * 3. Stores gossip signature/data for the staged aggregation pipeline
  *
  * @param client    Client instance
  * @param vote      Signed vote to record

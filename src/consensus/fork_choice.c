@@ -1,6 +1,5 @@
 #include "lantern/consensus/fork_choice.h"
 
-#include <inttypes.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,8 +8,6 @@
 #include "lantern/consensus/quorum.h"
 #include "lantern/consensus/store.h"
 #include "lantern/metrics/lean_metrics.h"
-#include "lantern/support/log.h"
-#include "lantern/support/strings.h"
 #include "lantern/support/time.h"
 
 #define LANTERN_FORK_CHOICE_DEFAULT_SECONDS_PER_SLOT 4u
@@ -107,34 +104,18 @@ static bool find_block_index(const LanternForkChoice *store, const LanternRoot *
     return false;
 }
 
-static void format_root_hex(const LanternRoot *root, char *out, size_t out_len) {
-    if (!out || out_len == 0) {
+static void block_states_reset(LanternForkChoice *store) {
+    if (!store || !store->blocks) {
         return;
     }
-    out[0] = '\0';
-    if (!root) {
-        return;
-    }
-    if (lantern_bytes_to_hex(root->bytes, LANTERN_ROOT_SIZE, out, out_len, 1) != 0) {
-        out[0] = '\0';
-    }
-}
-
-static void states_reset(LanternForkChoice *store) {
-    if (!store || !store->states) {
-        return;
-    }
-    for (size_t i = 0; i < store->state_cap; ++i) {
-        struct lantern_fork_choice_state_entry *entry = &store->states[i];
+    for (size_t i = 0; i < store->block_len; ++i) {
+        struct lantern_fork_choice_block_entry *entry = &store->blocks[i];
         if (!entry->has_state) {
             continue;
         }
         lantern_state_reset(&entry->state);
         entry->has_state = false;
     }
-    free(store->states);
-    store->states = NULL;
-    store->state_cap = 0;
 }
 
 static int ensure_block_capacity(LanternForkChoice *store, size_t required) {
@@ -163,18 +144,7 @@ static int ensure_block_capacity(LanternForkChoice *store, size_t required) {
         memset(&store->blocks[previous_cap], 0, (capacity - previous_cap) * sizeof(*store->blocks));
     }
 
-    struct lantern_fork_choice_state_entry *states = realloc(
-        store->states,
-        capacity * sizeof(*states));
-    if (!states) {
-        return -1;
-    }
-    store->states = states;
-    if (capacity > store->state_cap) {
-        memset(&store->states[store->state_cap], 0, (capacity - store->state_cap) * sizeof(*store->states));
-    }
     store->block_cap = capacity;
-    store->state_cap = capacity;
     return 0;
 }
 
@@ -195,10 +165,10 @@ static bool parent_index_for_block(const LanternForkChoice *store, size_t block_
 static const LanternState *state_for_block_index(
     const LanternForkChoice *store,
     size_t index) {
-    if (!store || !store->states || index >= store->state_cap) {
+    if (!store || !store->blocks || index >= store->block_len) {
         return NULL;
     }
-    const struct lantern_fork_choice_state_entry *entry = &store->states[index];
+    const struct lantern_fork_choice_block_entry *entry = &store->blocks[index];
     return entry->has_state ? &entry->state : NULL;
 }
 
@@ -240,13 +210,8 @@ void lantern_fork_choice_reset(LanternForkChoice *store) {
         return;
     }
     size_t validator_count = store->validator_count;
-    const struct lantern_aggregated_payload_pool *new_aggregated_payloads =
-        store->new_aggregated_payloads;
-    const struct lantern_aggregated_payload_pool *known_aggregated_payloads =
-        store->known_aggregated_payloads;
-    const struct lantern_attestation_data_by_root *attestation_data_by_root =
-        store->attestation_data_by_root;
-    states_reset(store);
+    const LanternStore *attestation_store = store->attestation_store;
+    block_states_reset(store);
     free(store->blocks);
     store->blocks = NULL;
     store->block_cap = 0;
@@ -269,9 +234,7 @@ void lantern_fork_choice_reset(LanternForkChoice *store) {
     store->milliseconds_per_interval =
         ((uint64_t)store->seconds_per_slot * LANTERN_FORK_CHOICE_MILLISECONDS_PER_SECOND) / store->intervals_per_slot;
     store->validator_count = validator_count;
-    store->new_aggregated_payloads = new_aggregated_payloads;
-    store->known_aggregated_payloads = known_aggregated_payloads;
-    store->attestation_data_by_root = attestation_data_by_root;
+    store->attestation_store = attestation_store;
 }
 
 int lantern_fork_choice_configure(LanternForkChoice *store, const LanternConfig *config) {
@@ -324,29 +287,7 @@ static int register_block(
     }
     entry->slot = slot;
     entry->proposer_index = proposer_index;
-    entry->has_validator_count = false;
-    entry->validator_count = 0;
     store->block_len += 1;
-    return 0;
-}
-
-int lantern_fork_choice_set_block_validator_count(
-    LanternForkChoice *store,
-    const LanternRoot *root,
-    uint64_t validator_count) {
-    if (!store || !root || validator_count == 0) {
-        return -1;
-    }
-    size_t index = 0;
-    if (!find_block_index(store, root, &index)) {
-        return -1;
-    }
-    if (!store->blocks || index >= store->block_len) {
-        return -1;
-    }
-    struct lantern_fork_choice_block_entry *entry = &store->blocks[index];
-    entry->validator_count = validator_count;
-    entry->has_validator_count = true;
     return 0;
 }
 
@@ -361,10 +302,6 @@ int lantern_fork_choice_set_block_state(
     if (!find_block_index(store, root, &index)) {
         return -1;
     }
-    if (!store->states || index >= store->state_cap) {
-        return -1;
-    }
-
     LanternState cloned;
     lantern_state_init(&cloned);
     if (lantern_state_clone(state, &cloned) != 0) {
@@ -372,7 +309,7 @@ int lantern_fork_choice_set_block_state(
         return -1;
     }
 
-    struct lantern_fork_choice_state_entry *entry = &store->states[index];
+    struct lantern_fork_choice_block_entry *entry = &store->blocks[index];
     if (entry->has_state) {
         lantern_state_reset(&entry->state);
     }
@@ -434,7 +371,6 @@ int lantern_fork_choice_set_anchor_with_state(
     if (!store || !store->initialized || !anchor_block) {
         return -1;
     }
-    struct lantern_log_metadata meta = {.has_slot = true, .slot = anchor_block->slot};
     LanternRoot root;
     if (block_root_hint) {
         root = *block_root_hint;
@@ -474,36 +410,6 @@ int lantern_fork_choice_set_anchor_with_state(
         != 0) {
         return -1;
     }
-    char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char parent_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char justified_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char finalized_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    format_root_hex(&root, root_hex, sizeof(root_hex));
-    format_root_hex(&anchor_block->parent_root, parent_hex, sizeof(parent_hex));
-    format_root_hex(
-        latest_justified ? &latest_justified->root : NULL,
-        justified_hex,
-        sizeof(justified_hex));
-    format_root_hex(
-        latest_finalized ? &latest_finalized->root : NULL,
-        finalized_hex,
-        sizeof(finalized_hex));
-    lantern_log_info(
-        "forkchoice",
-        &meta,
-        "set anchor slot=%" PRIu64 " root=%s parent=%s justified_slot=%" PRIu64
-        " justified_root=%s finalized_slot=%" PRIu64 " finalized_root=%s"
-        " block_root_hint=%s anchor_state=%s existed=%s",
-        anchor_block->slot,
-        root_hex[0] ? root_hex : "0x0",
-        parent_hex[0] ? parent_hex : "0x0",
-        latest_justified ? latest_justified->slot : 0u,
-        justified_hex[0] ? justified_hex : "0x0",
-        latest_finalized ? latest_finalized->slot : 0u,
-        finalized_hex[0] ? finalized_hex : "0x0",
-        block_root_hint ? "true" : "false",
-        anchor_state ? "true" : "false",
-        existed ? "true" : "false");
     LanternCheckpoint anchor_checkpoint = {
         .root = root,
         .slot = anchor_block->slot,
@@ -566,31 +472,6 @@ static bool should_replace_checkpoint(
     return candidate->slot > current->slot;
 }
 
-static void log_checkpoint_decision(
-    const char *label,
-    const char *decision,
-    const LanternCheckpoint *current,
-    const LanternCheckpoint *candidate) {
-    if (!label || !decision || !current || !candidate) {
-        return;
-    }
-    char current_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char candidate_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    format_root_hex(&current->root, current_hex, sizeof(current_hex));
-    format_root_hex(&candidate->root, candidate_hex, sizeof(candidate_hex));
-    lantern_log_info(
-        "forkchoice",
-        &(const struct lantern_log_metadata){0},
-        "checkpoint %s label=%s current_slot=%" PRIu64 " current_root=%s"
-        " candidate_slot=%" PRIu64 " candidate_root=%s",
-        decision,
-        label,
-        current->slot,
-        current_hex[0] ? current_hex : "0x0",
-        candidate->slot,
-        candidate_hex[0] ? candidate_hex : "0x0");
-}
-
 static bool derive_finalized_from_head_state(
     const LanternForkChoice *store,
     const LanternRoot *head,
@@ -643,11 +524,6 @@ static bool refresh_finalized_from_head_state(LanternForkChoice *store) {
         return false;
     }
 
-    log_checkpoint_decision(
-        "finalized",
-        "derive_from_head",
-        &store->latest_finalized,
-        &finalized);
     store->latest_finalized = finalized;
     return true;
 }
@@ -668,20 +544,7 @@ static int update_latest_checkpoints(
             if (!checkpoint_known_in_store(store, post_justified)) {
                 return -1;
             }
-            log_checkpoint_decision(
-                "justified",
-                "advance",
-                &latest_justified,
-                post_justified);
             latest_justified = *post_justified;
-        } else if (
-            post_justified->slot == latest_justified.slot
-            && root_compare(&post_justified->root, &latest_justified.root) != 0) {
-            log_checkpoint_decision(
-                "justified",
-                "tie_keep_current",
-                &latest_justified,
-                post_justified);
         }
     }
     if (post_finalized && !root_is_zero(&post_finalized->root)) {
@@ -689,20 +552,7 @@ static int update_latest_checkpoints(
             if (!checkpoint_known_in_store(store, post_finalized)) {
                 return -1;
             }
-            log_checkpoint_decision(
-                "finalized",
-                "advance",
-                &latest_finalized,
-                post_finalized);
             latest_finalized = *post_finalized;
-        } else if (
-            post_finalized->slot == latest_finalized.slot
-            && root_compare(&post_finalized->root, &latest_finalized.root) != 0) {
-            log_checkpoint_decision(
-                "finalized",
-                "tie_keep_current",
-                &latest_finalized,
-                post_finalized);
         }
     }
 
@@ -743,9 +593,6 @@ int lantern_fork_choice_add_block_with_state(
     if (!store || !store->initialized || !store->has_anchor || !block) {
         return -1;
     }
-    struct lantern_log_metadata diag_meta = {.has_slot = true, .slot = block->slot};
-    char block_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char parent_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     double metrics_start = lantern_time_now_seconds();
     LanternRoot block_root;
     if (block_root_hint) {
@@ -755,24 +602,6 @@ int lantern_fork_choice_add_block_with_state(
             return -1;
         }
     }
-    LanternRoot hashed_block_root = {0};
-    bool have_hashed_block_root = lantern_hash_tree_root_block(block, &hashed_block_root) == SSZ_SUCCESS;
-    char hinted_block_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    char hashed_block_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    if (block_root_hint && have_hashed_block_root
-        && root_compare(&hashed_block_root, &block_root) != 0) {
-        format_root_hex(&block_root, hinted_block_hex, sizeof(hinted_block_hex));
-        format_root_hex(&hashed_block_root, hashed_block_hex, sizeof(hashed_block_hex));
-        lantern_log_info(
-            "forkchoice",
-            &diag_meta,
-            "block root hint differs from block hash slot=%" PRIu64
-            " hinted_root=%s hashed_root=%s",
-            block->slot,
-            hinted_block_hex[0] ? hinted_block_hex : "0x0",
-            hashed_block_hex[0] ? hashed_block_hex : "0x0");
-    }
-
     LanternCheckpoint previous_latest_justified = store->latest_justified;
     LanternCheckpoint previous_latest_finalized = store->latest_finalized;
     LanternRoot previous_head = store->head;
@@ -780,6 +609,10 @@ int lantern_fork_choice_add_block_with_state(
 
     size_t existing_index = 0;
     bool existed = find_block_index(store, &block_root, &existing_index);
+    if (!existed && block->slot >= store->anchor_slot
+        && !find_block_index(store, &block->parent_root, &existing_index)) {
+        return -1;
+    }
     struct lantern_fork_choice_block_entry previous_entry;
     memset(&previous_entry, 0, sizeof(previous_entry));
     if (existed) {
@@ -798,91 +631,18 @@ int lantern_fork_choice_add_block_with_state(
             block->slot,
             block->proposer_index)
         != 0) {
-        format_root_hex(&block_root, block_hex, sizeof(block_hex));
-        format_root_hex(&block->parent_root, parent_hex, sizeof(parent_hex));
-        lantern_log_warn(
-            "forkchoice",
-            &diag_meta,
-            "add_block register failed slot=%" PRIu64 " root=%s parent=%s",
-            block->slot,
-            block_hex[0] ? block_hex : "0x0",
-            parent_hex[0] ? parent_hex : "0x0");
         return -1;
     }
     /* State-backed imports re-derive finalized from the selected head after head recompute. */
     const LanternCheckpoint *effective_post_finalized = post_state ? NULL : post_finalized;
     if (update_latest_checkpoints(store, post_justified, effective_post_finalized, false) != 0) {
-        char justified_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        char finalized_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        char anchor_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        bool post_justified_known =
-            post_justified && checkpoint_known_in_store(store, post_justified);
-        bool post_finalized_known =
-            effective_post_finalized && checkpoint_known_in_store(store, effective_post_finalized);
-        format_root_hex(&block_root, block_hex, sizeof(block_hex));
-        format_root_hex(&block->parent_root, parent_hex, sizeof(parent_hex));
-        format_root_hex(
-            post_justified ? &post_justified->root : NULL,
-            justified_hex,
-            sizeof(justified_hex));
-        format_root_hex(
-            effective_post_finalized ? &effective_post_finalized->root : NULL,
-            finalized_hex,
-            sizeof(finalized_hex));
-        format_root_hex(
-            store->has_anchor ? &store->anchor_root : NULL,
-            anchor_hex,
-            sizeof(anchor_hex));
-        lantern_log_warn(
-            "forkchoice",
-            &diag_meta,
-            "add_block rejected checkpoints slot=%" PRIu64 " root=%s parent=%s"
-            " anchor_slot=%" PRIu64 " anchor_root=%s post_justified_slot=%" PRIu64
-            " post_justified_root=%s post_justified_known=%s"
-            " post_finalized_slot=%" PRIu64 " post_finalized_root=%s"
-            " post_finalized_known=%s",
-            block->slot,
-            block_hex[0] ? block_hex : "0x0",
-            parent_hex[0] ? parent_hex : "0x0",
-            store->anchor_slot,
-            anchor_hex[0] ? anchor_hex : "0x0",
-            post_justified ? post_justified->slot : 0u,
-            justified_hex[0] ? justified_hex : "0x0",
-            post_justified_known ? "true" : "false",
-            effective_post_finalized ? effective_post_finalized->slot : 0u,
-            finalized_hex[0] ? finalized_hex : "0x0",
-            post_finalized_known ? "true" : "false");
         goto rollback;
     }
 
     if (lantern_fork_choice_recompute_head(store) != 0) {
-        char justified_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        char finalized_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        format_root_hex(&block_root, block_hex, sizeof(block_hex));
-        format_root_hex(&store->latest_justified.root, justified_hex, sizeof(justified_hex));
-        format_root_hex(&store->latest_finalized.root, finalized_hex, sizeof(finalized_hex));
-        lantern_log_warn(
-            "forkchoice",
-            &diag_meta,
-            "add_block head recompute failed slot=%" PRIu64 " root=%s"
-            " latest_justified_slot=%" PRIu64 " latest_justified_root=%s"
-            " latest_finalized_slot=%" PRIu64 " latest_finalized_root=%s",
-            block->slot,
-            block_hex[0] ? block_hex : "0x0",
-            store->latest_justified.slot,
-            justified_hex[0] ? justified_hex : "0x0",
-            store->latest_finalized.slot,
-            finalized_hex[0] ? finalized_hex : "0x0");
         goto rollback;
     }
     if (post_state && lantern_fork_choice_set_block_state(store, &block_root, post_state) != 0) {
-        format_root_hex(&block_root, block_hex, sizeof(block_hex));
-        lantern_log_warn(
-            "forkchoice",
-            &diag_meta,
-            "add_block failed to attach post-state slot=%" PRIu64 " root=%s",
-            block->slot,
-            block_hex[0] ? block_hex : "0x0");
         goto rollback;
     }
     if (post_state) {
@@ -924,63 +684,22 @@ int lantern_fork_choice_restore_checkpoints(
     if (!store || !store->initialized || !store->has_anchor) {
         return -1;
     }
-    struct lantern_log_metadata meta = {0};
-    char anchor_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    format_root_hex(&store->anchor_root, anchor_hex, sizeof(anchor_hex));
-
     LanternCheckpoint restored_latest_justified = store->latest_justified;
     LanternCheckpoint restored_latest_finalized = store->latest_finalized;
 
     if (latest_justified && !root_is_zero(&latest_justified->root)) {
         if (!checkpoint_known_in_store(store, latest_justified)) {
-            char justified_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-            format_root_hex(&latest_justified->root, justified_hex, sizeof(justified_hex));
-            lantern_log_warn(
-                "forkchoice",
-                &meta,
-                "restore checkpoints missing justified checkpoint slot=%" PRIu64
-                " root=%s anchor_slot=%" PRIu64 " anchor_root=%s block_len=%zu",
-                latest_justified->slot,
-                justified_hex[0] ? justified_hex : "0x0",
-                store->anchor_slot,
-                anchor_hex[0] ? anchor_hex : "0x0",
-                store->block_len);
             return -1;
         }
         restored_latest_justified = *latest_justified;
     }
     if (latest_finalized && !root_is_zero(&latest_finalized->root)) {
         if (!checkpoint_known_in_store(store, latest_finalized)) {
-            char finalized_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-            format_root_hex(&latest_finalized->root, finalized_hex, sizeof(finalized_hex));
-            lantern_log_warn(
-                "forkchoice",
-                &meta,
-                "restore checkpoints missing finalized checkpoint slot=%" PRIu64
-                " root=%s anchor_slot=%" PRIu64 " anchor_root=%s block_len=%zu",
-                latest_finalized->slot,
-                finalized_hex[0] ? finalized_hex : "0x0",
-                store->anchor_slot,
-                anchor_hex[0] ? anchor_hex : "0x0",
-                store->block_len);
             return -1;
         }
         restored_latest_finalized = *latest_finalized;
     }
     if (restored_latest_finalized.slot > restored_latest_justified.slot) {
-        char justified_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        char finalized_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        format_root_hex(&restored_latest_justified.root, justified_hex, sizeof(justified_hex));
-        format_root_hex(&restored_latest_finalized.root, finalized_hex, sizeof(finalized_hex));
-        lantern_log_warn(
-            "forkchoice",
-            &meta,
-            "restore checkpoints rejected ordering justified_slot=%" PRIu64
-            " justified_root=%s finalized_slot=%" PRIu64 " finalized_root=%s",
-            restored_latest_justified.slot,
-            justified_hex[0] ? justified_hex : "0x0",
-            restored_latest_finalized.slot,
-            finalized_hex[0] ? finalized_hex : "0x0");
         return -1;
     }
 
@@ -993,19 +712,6 @@ int lantern_fork_choice_restore_checkpoints(
     store->latest_finalized = restored_latest_finalized;
     if (!root_is_zero(&restored_latest_justified.root)
         && lantern_fork_choice_recompute_head(store) != 0) {
-        char justified_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        char finalized_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-        format_root_hex(&restored_latest_justified.root, justified_hex, sizeof(justified_hex));
-        format_root_hex(&restored_latest_finalized.root, finalized_hex, sizeof(finalized_hex));
-        lantern_log_warn(
-            "forkchoice",
-            &meta,
-            "restore checkpoints head recompute failed justified_slot=%" PRIu64
-            " justified_root=%s finalized_slot=%" PRIu64 " finalized_root=%s",
-            restored_latest_justified.slot,
-            justified_hex[0] ? justified_hex : "0x0",
-            restored_latest_finalized.slot,
-            finalized_hex[0] ? finalized_hex : "0x0");
         store->latest_justified = previous_latest_justified;
         store->latest_finalized = previous_latest_finalized;
         store->head = previous_head;
@@ -1021,11 +727,8 @@ int lantern_fork_choice_prune_states(LanternForkChoice *store) {
     if (!store || !store->initialized || !store->has_anchor || !store->has_head) {
         return -1;
     }
-    if (store->block_len == 0 || !store->states) {
+    if (store->block_len == 0) {
         return 0;
-    }
-    if (store->state_cap < store->block_len) {
-        return -1;
     }
     if (root_is_zero(&store->latest_finalized.root)) {
         return 0;
@@ -1088,29 +791,21 @@ int lantern_fork_choice_prune_states(LanternForkChoice *store) {
         return -1;
     }
 
-    size_t kept = 0;
-    size_t evicted = 0;
-    size_t total_with_state = 0;
     for (size_t i = 0; i < store->block_len; ++i) {
-        struct lantern_fork_choice_state_entry *entry = &store->states[i];
+        struct lantern_fork_choice_block_entry *entry = &store->blocks[i];
         if (!entry->has_state) {
             continue;
         }
-        total_with_state++;
         if (i == finalized_index) {
-            kept++;
             continue;
         }
         if (canonical[i] && store->blocks[i].slot >= finalized_slot) {
-            kept++;
             continue;
         }
         lantern_state_reset(&entry->state);
         entry->has_state = false;
-        evicted++;
     }
 
-    size_t blocks_before = store->block_len;
     size_t blocks_kept = 0;
     for (size_t i = 0; i < store->block_len; ++i) {
         if (keep_block[i]) {
@@ -1120,13 +815,10 @@ int lantern_fork_choice_prune_states(LanternForkChoice *store) {
 
     if (blocks_kept < store->block_len) {
         struct lantern_fork_choice_block_entry *new_blocks = NULL;
-        struct lantern_fork_choice_state_entry *new_states = NULL;
         if (blocks_kept > 0) {
             new_blocks = calloc(blocks_kept, sizeof(*new_blocks));
-            new_states = calloc(blocks_kept, sizeof(*new_states));
-            if (!new_blocks || !new_states) {
+            if (!new_blocks) {
                 free(new_blocks);
-                free(new_states);
                 free(canonical);
                 free(keep_block);
                 free(old_to_new);
@@ -1140,26 +832,22 @@ int lantern_fork_choice_prune_states(LanternForkChoice *store) {
                 continue;
             }
             new_blocks[new_index] = store->blocks[old_index];
-            new_states[new_index] = store->states[old_index];
         }
 
         for (size_t i = 0; i < store->block_len; ++i) {
             if (keep_block[i]) {
                 continue;
             }
-            if (store->states[i].has_state) {
-                lantern_state_reset(&store->states[i].state);
-                store->states[i].has_state = false;
+            if (store->blocks[i].has_state) {
+                lantern_state_reset(&store->blocks[i].state);
+                store->blocks[i].has_state = false;
             }
         }
 
         free(store->blocks);
-        free(store->states);
         store->blocks = new_blocks;
-        store->states = new_states;
         store->block_len = blocks_kept;
         store->block_cap = blocks_kept;
-        store->state_cap = blocks_kept;
         store->anchor_root = store->latest_finalized.root;
         store->anchor_slot = finalized_slot;
         store->has_anchor = true;
@@ -1176,18 +864,6 @@ int lantern_fork_choice_prune_states(LanternForkChoice *store) {
             store->latest_justified = store->latest_finalized;
         }
     }
-
-    lantern_log_info(
-        "forkchoice",
-        NULL,
-        "prune_states finalized_slot=%" PRIu64
-        " blocks_before=%zu blocks_after=%zu states_before=%zu evicted=%zu kept=%zu",
-        finalized_slot,
-        blocks_before,
-        store->block_len,
-        total_with_state,
-        evicted,
-        kept);
 
     fork_choice_publish_current_checkpoints(store);
     free(old_to_new);
@@ -1337,10 +1013,11 @@ static void safe_target_consider_vote(
 static const LanternAttestationData *safe_target_lookup_attestation_data(
     const LanternForkChoice *store,
     const LanternRoot *data_root) {
-    if (!store || !store->attestation_data_by_root || !data_root) {
+    if (!store || !store->attestation_store || !data_root) {
         return NULL;
     }
-    const struct lantern_attestation_data_by_root *cache = store->attestation_data_by_root;
+    const struct lantern_attestation_data_by_root *cache =
+        &store->attestation_store->attestation_data_by_root;
     for (size_t i = 0; i < cache->length; ++i) {
         if (memcmp(cache->entries[i].data_root.bytes, data_root->bytes, LANTERN_ROOT_SIZE) == 0) {
             return &cache->entries[i].data;
@@ -1420,13 +1097,6 @@ static int collect_payload_pool_votes(
     return 0;
 }
 
-static bool fork_choice_has_attached_payload_views(const LanternForkChoice *store) {
-    return store
-        && store->new_aggregated_payloads
-        && store->known_aggregated_payloads
-        && store->attestation_data_by_root;
-}
-
 static int collect_known_weight_votes(
     const LanternForkChoice *store,
     struct fork_choice_latest_vote **out_votes,
@@ -1436,7 +1106,9 @@ static int collect_known_weight_votes(
     }
     return collect_payload_pool_votes(
         store,
-        fork_choice_has_attached_payload_views(store) ? store->known_aggregated_payloads : NULL,
+        store->attestation_store
+            ? &store->attestation_store->known_aggregated_payloads
+            : NULL,
         out_votes,
         out_vote_count);
 }
@@ -1594,22 +1266,14 @@ int lantern_fork_choice_update_safe_target(LanternForkChoice *store) {
     if (!store || !store->initialized || !store->has_anchor) {
         return -1;
     }
-    uint64_t validator_count = store->config.num_validators;
-    if (store->has_head && store->blocks) {
-        size_t head_index = 0;
-        if (find_block_index(store, &store->head, &head_index) && head_index < store->block_len) {
-            const struct lantern_fork_choice_block_entry *head_entry = &store->blocks[head_index];
-            if (head_entry->has_validator_count && head_entry->validator_count > 0) {
-                validator_count = head_entry->validator_count;
-            }
-        }
-    }
-    uint64_t threshold = lantern_consensus_quorum_threshold(validator_count);
+    uint64_t threshold = lantern_consensus_quorum_threshold(store->config.num_validators);
     struct fork_choice_latest_vote *safe_votes = NULL;
     size_t safe_vote_count = 0;
     if (collect_payload_pool_votes(
             store,
-            store->new_aggregated_payloads,
+            store->attestation_store
+                ? &store->attestation_store->new_aggregated_payloads
+                : NULL,
             &safe_votes,
             &safe_vote_count)
         != 0) {

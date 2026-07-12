@@ -290,22 +290,19 @@ int http_validator_info_cb(
     memset(out_info, 0, sizeof(*out_info));
     out_info->global_index = client->local_validators[index].global_index;
 
-    bool enabled = true;
+    bool enabled;
     if (client->validator_lock_initialized)
     {
         if (pthread_mutex_lock(&client->validator_lock) != 0)
         {
             return LANTERN_HTTP_CB_ERR_LOCK_FAILED;
         }
-        if (client->validator_enabled && index < client->local_validator_count)
-        {
-            enabled = client->validator_enabled[index];
-        }
+        enabled = !client->local_validators[index].disabled;
         unlock_mutex_with_log(&client->validator_lock, client->node_id, "validator_lock");
     }
-    else if (client->validator_enabled && index < client->local_validator_count)
+    else
     {
-        enabled = client->validator_enabled[index];
+        enabled = !client->local_validators[index].disabled;
     }
     out_info->enabled = enabled;
 
@@ -346,7 +343,7 @@ int http_set_validator_status_cb(void *context, uint64_t global_index, bool enab
         return LANTERN_HTTP_CB_ERR_INVALID_PARAM;
     }
     struct lantern_client *client = context;
-    if (!client->validator_lock_initialized || !client->validator_enabled)
+    if (!client->validator_lock_initialized || !client->local_validators)
     {
         return LANTERN_HTTP_CB_ERR_INVALID_STATE;
     }
@@ -361,13 +358,13 @@ int http_set_validator_status_cb(void *context, uint64_t global_index, bool enab
         unlock_mutex_with_log(&client->validator_lock, client->node_id, "validator_lock");
         return LANTERN_HTTP_CB_ERR_NOT_FOUND;
     }
-    client->validator_enabled[local_index] = enabled;
+    client->local_validators[local_index].disabled = !enabled;
 
     size_t enabled_count = 0;
     size_t disabled_count = 0;
     for (size_t i = 0; i < client->local_validator_count; ++i)
     {
-        if (client->validator_enabled[i])
+        if (!client->local_validators[i].disabled)
         {
             ++enabled_count;
         }

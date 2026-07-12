@@ -41,12 +41,6 @@ struct lantern_slot_timepoint {
     enum lantern_duty_phase phase;
 };
 
-struct lantern_duty_schedule {
-    uint64_t slot;
-    uint64_t phase_start_times[LANTERN_DUTY_PHASE_COUNT];
-    uint64_t phase_end_times[LANTERN_DUTY_PHASE_COUNT];
-};
-
 void lantern_slot_clock_config_init(struct lantern_slot_clock_config *config);
 int lantern_slot_clock_init(struct lantern_slot_clock *clock, const struct lantern_slot_clock_config *config);
 int lantern_slot_clock_compute(
@@ -57,21 +51,6 @@ int lantern_slot_clock_slot_start_time(
     const struct lantern_slot_clock *clock,
     uint64_t slot,
     uint64_t *out_start_time);
-int lantern_slot_clock_phase_start_time(
-    const struct lantern_slot_clock *clock,
-    uint64_t slot,
-    enum lantern_duty_phase phase,
-    uint64_t *out_start_time);
-int lantern_slot_clock_phase_end_time(
-    const struct lantern_slot_clock *clock,
-    uint64_t slot,
-    enum lantern_duty_phase phase,
-    uint64_t *out_end_time);
-int lantern_slot_clock_schedule_slot(
-    const struct lantern_slot_clock *clock,
-    uint64_t slot,
-    struct lantern_duty_schedule *schedule);
-
 #ifdef __cplusplus
 }
 #endif

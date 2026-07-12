@@ -63,13 +63,11 @@ int main(void) {
 
     char config_path[PATH_MAX];
     char annotated_path[PATH_MAX];
-    char state_path[PATH_MAX];
     char validator_config_path[PATH_MAX];
     char nodes_path[PATH_MAX];
 
     build_fixture_path(config_path, sizeof(config_path), "genesis/config.yaml");
     build_fixture_path(annotated_path, sizeof(annotated_path), "genesis/annotated_validators.yaml");
-    build_fixture_path(state_path, sizeof(state_path), "genesis/genesis.ssz");
     build_fixture_path(validator_config_path, sizeof(validator_config_path), "genesis/validator-config.yaml");
 
     if (write_temp_nodes_file(nodes_path, sizeof(nodes_path)) != 0) {
@@ -81,7 +79,6 @@ int main(void) {
         .config_path = config_path,
         .validator_registry_path = annotated_path,
         .nodes_path = nodes_path,
-        .state_path = state_path,
         .validator_config_path = validator_config_path,
     };
 
@@ -101,15 +98,15 @@ int main(void) {
     struct lantern_validator_config_entry *ream0 = lantern_validator_config_find(
         &artifacts.validator_config,
         "ream_0");
-    if (!ream0 || !ream0->has_range || ream0->start_index != 0 || ream0->end_index != 1) {
-        fprintf(stderr, "unexpected range for ream_0\n");
+    if (!ream0 || ream0->indices_len != 1 || ream0->indices[0] != 0) {
+        fprintf(stderr, "unexpected assignment for ream_0\n");
         goto cleanup;
     }
     struct lantern_validator_config_entry *lantern6 = lantern_validator_config_find(
         &artifacts.validator_config,
         "lantern_6");
-    if (!lantern6 || !lantern6->has_range || lantern6->start_index != 6 || lantern6->end_index != 7) {
-        fprintf(stderr, "unexpected range for lantern_6\n");
+    if (!lantern6 || lantern6->indices_len != 1 || lantern6->indices[0] != 6) {
+        fprintf(stderr, "unexpected assignment for lantern_6\n");
         goto cleanup;
     }
     if (!lantern6->enr.is_aggregator || !lantern6->has_subnet || lantern6->subnet != 1) {

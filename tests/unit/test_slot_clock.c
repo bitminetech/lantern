@@ -63,7 +63,7 @@ static int test_slot_progression(void) {
     return 0;
 }
 
-static int test_schedule_helpers(void) {
+static int test_slot_start_time(void) {
     struct lantern_slot_clock clock;
     if (init_clock(&clock, 2) != 0) {
         fprintf(stderr, "clock init failed\n");
@@ -73,25 +73,6 @@ static int test_schedule_helpers(void) {
     uint64_t slot_start = 0;
     CHECK_ZERO(lantern_slot_clock_slot_start_time(&clock, 3, &slot_start), "slot start");
     CHECK_EQ(slot_start, 14000, "slot3 start");
-
-    uint64_t vote_start = 0;
-    CHECK_ZERO(
-        lantern_slot_clock_phase_start_time(&clock, 3, LANTERN_DUTY_PHASE_VOTE, &vote_start),
-        "phase start");
-    CHECK_EQ(vote_start, slot_start + 800, "vote phase start");
-
-    uint64_t safe_end = 0;
-    CHECK_ZERO(
-        lantern_slot_clock_phase_end_time(&clock, 3, LANTERN_DUTY_PHASE_SAFE_TARGET, &safe_end),
-        "phase end");
-    CHECK_EQ(safe_end, slot_start + 3200, "safe phase end");
-
-    struct lantern_duty_schedule schedule;
-    CHECK_ZERO(lantern_slot_clock_schedule_slot(&clock, 1, &schedule), "schedule slot");
-    CHECK_EQ(schedule.slot, 1, "schedule slot index");
-    CHECK_EQ(schedule.phase_start_times[0], 6000, "proposal start slot1");
-    CHECK_EQ(schedule.phase_start_times[1], 6800, "vote start slot1");
-    CHECK_EQ(schedule.phase_end_times[4], 10000, "vote accept end slot1");
 
     return 0;
 }
@@ -156,7 +137,7 @@ int main(void) {
     if (test_subsecond_precision() != 0) {
         return 1;
     }
-    if (test_schedule_helpers() != 0) {
+    if (test_slot_start_time() != 0) {
         return 1;
     }
     if (test_invalid_config() != 0) {

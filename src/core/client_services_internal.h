@@ -12,7 +12,6 @@
  * - client_validator.c: Validator duty execution
  * - client_http.c: HTTP API callbacks
  * - client_reqresp.c: Request/response protocol handling
- * - client_reqresp_stream.c: Stream I/O utilities
  * - client_reqresp_blocks.c: Block request handling
  * - client_keys.c: Key management
  *
@@ -122,22 +121,6 @@ int validator_sign_vote(
     struct lantern_local_validator *validator,
     uint64_t slot,
     LanternSignedVote *vote);
-
-
-/**
- * Store a vote in the client state.
- *
- * @spec subspecs/attestation/attestation.py - vote storage
- *
- * @param client  Client instance
- * @param vote    Vote to store
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL input or overflow
- * @return LANTERN_CLIENT_ERR_RUNTIME if state is unavailable or lock fails
- *
- * @note Thread safety: This function acquires state_lock
- */
-int validator_store_vote(struct lantern_client *client, const LanternSignedVote *vote);
 
 
 /**
@@ -514,8 +497,6 @@ int reqresp_current_slot(void *context, uint64_t *out_slot);
 int reqresp_handle_block_response(
     void *context,
     const LanternSignedBlock *block,
-    const uint8_t *raw_block_ssz,
-    size_t raw_block_ssz_len,
     const char *peer_id);
 
 void reqresp_blocks_request_complete(
@@ -541,7 +522,8 @@ void lantern_client_block_importer_stop(struct lantern_client *client);
  * @param root_count    Number of requested roots
  * @param outcome       Request outcome
  *
- * @note Thread safety: This function acquires status_lock and pending_lock
+ * @note Thread safety: Acquires status_lock and, after releasing it, may
+ * acquire pending_lock when a successful response schedules more backfill.
  */
 void lantern_client_on_blocks_request_complete_batch(
     struct lantern_client *client,
@@ -574,7 +556,8 @@ void lantern_client_on_blocks_request_complete_batch_with_id(
  * @param request_root  Root that was requested
  * @param outcome       Request outcome
  *
- * @note Thread safety: This function acquires status_lock and pending_lock
+ * @note Thread safety: Acquires status_lock and, after releasing it, may
+ * acquire pending_lock when a successful response schedules more backfill.
  */
 void lantern_client_on_blocks_request_complete(
     struct lantern_client *client,
@@ -588,44 +571,8 @@ bool lantern_client_import_block(
     const LanternRoot *block_root,
     const struct lantern_log_metadata *meta,
     uint32_t backfill_depth,
-    bool allow_historical,
-    const uint8_t *raw_block_ssz,
-    size_t raw_block_ssz_len);
+    bool allow_historical);
 
-
-/**
- * Read a response chunk from a reqresp stream.
- *
- * @spec subspecs/networking/reqresp.py - stream protocol
- *
- * @param service               Reqresp service (may be NULL)
- * @param stream                libp2p stream
- * @param protocol              Protocol kind
- * @param out_data              Output data buffer (caller must free)
- * @param out_len               Output data length
- * @param out_err               Output error code (may be NULL)
- * @param out_response_code     Output response code (may be NULL)
- * @param response_code_pending Tracks whether response code is still expected
- * @return 0 on success
- * @return LANTERN_REQRESP_ERR_INVALID_PARAM if required parameters are NULL
- * @return LANTERN_REQRESP_ERR_SET_READ_INTEREST if enabling read interest fails
- * @return LANTERN_REQRESP_ERR_SET_DEADLINE if setting a stream deadline fails
- * @return LANTERN_REQRESP_ERR_STREAM_READ if reading from the stream fails
- * @return LANTERN_REQRESP_ERR_VARINT_HEADER_TOO_LONG if the varint header exceeds limits
- * @return LANTERN_REQRESP_ERR_PAYLOAD_TOO_LARGE if the payload length exceeds limits
- * @return LANTERN_REQRESP_ERR_ALLOC if allocating the payload buffer fails
- *
- * @note Thread safety: This function is thread-safe
- */
-int lantern_reqresp_read_response_chunk(
-    struct lantern_reqresp_service *service,
-    struct lantern_reqresp_stream *stream,
-    enum lantern_reqresp_protocol_kind protocol,
-    uint8_t **out_data,
-    size_t *out_len,
-    ssize_t *out_err,
-    uint8_t *out_response_code,
-    bool *response_code_pending);
 
 /**
  * Schedule a blocks_by_root request to a peer.
@@ -715,17 +662,6 @@ int lantern_client_configure_xmss_sources(
  * @note Thread safety: This function should be called during initialization
  */
 int lantern_client_load_xmss_keys(struct lantern_client *client);
-
-
-/**
- * Free all loaded public key handles.
- *
- * @param client  Client instance
- *
- * @note Thread safety: Caller must ensure exclusive access during shutdown
- */
-void lantern_client_free_xmss_pubkeys(struct lantern_client *client);
-
 
 #ifdef __cplusplus
 }

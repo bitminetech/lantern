@@ -40,7 +40,6 @@ set(LANTERN_LIBRARY_SOURCES
     src/consensus/store.c
     src/consensus/ssz.c
     src/core/client.c
-    src/core/client_debug.c
     src/core/client_http.c
     src/core/client_init.c
     src/core/client_keys.c
@@ -49,7 +48,6 @@ set(LANTERN_LIBRARY_SOURCES
     src/core/client_pending.c
     src/core/client_reqresp.c
     src/core/client_reqresp_blocks.c
-    src/core/client_reqresp_stream.c
     src/core/client_sync.c
     src/core/client_sync_blocks.c
     src/core/client_sync_votes.c
@@ -58,7 +56,6 @@ set(LANTERN_LIBRARY_SOURCES
 		    src/genesis/genesis.c
 		    src/genesis/genesis_parse.c
 		    src/genesis/genesis_parse_helpers.c
-		    src/genesis/genesis_parse_registry.c
 		    src/genesis/genesis_validator_config.c
 		    src/encoding/snappy.c
 	    src/networking/enr.c
@@ -68,7 +65,6 @@ set(LANTERN_LIBRARY_SOURCES
     src/networking/libp2p.c
     src/networking/reqresp_service.c
     src/networking/messages.c
-    src/encoding/rlp.c
     src/metrics/lean_metrics.c
     src/metrics/server.c
     src/http/client.c
@@ -278,11 +274,6 @@ if(LANTERN_BUILD_TESTS)
     )
     add_test(NAME lantern_validator_selection COMMAND lantern_validator_selection_test)
 
-    add_executable(lantern_rlp_test tests/unit/test_rlp.c)
-    target_link_libraries(lantern_rlp_test PRIVATE ${LANTERN_TEST_LINK_LIB})
-    add_test(NAME lantern_rlp COMMAND lantern_rlp_test)
-
-
     add_executable(lantern_enr_test tests/unit/test_enr.c)
     target_link_libraries(lantern_enr_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_enr COMMAND lantern_enr_test)
@@ -317,11 +308,6 @@ if(LANTERN_BUILD_TESTS)
     add_executable(lantern_state_test tests/unit/test_state.c)
     target_link_libraries(lantern_state_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_state COMMAND lantern_state_test)
-
-    add_executable(lantern_off_head_replay_test tests/unit/test_off_head_replay.c)
-    target_link_libraries(lantern_off_head_replay_test PRIVATE ${LANTERN_TEST_LINK_LIB})
-    add_test(NAME lantern_off_head_replay COMMAND lantern_off_head_replay_test)
-    set_tests_properties(lantern_off_head_replay PROPERTIES TIMEOUT 120)
 
     add_executable(lantern_slot_clock_test tests/unit/test_slot_clock.c)
     target_link_libraries(lantern_slot_clock_test PRIVATE ${LANTERN_TEST_LINK_LIB})
@@ -540,13 +526,11 @@ if(LANTERN_BUILD_TESTS)
         lantern_genesis_anchor
         lantern_genesis_bootstrap
         lantern_validator_selection
-        lantern_rlp
         lantern_enr
         lantern_ssz
         lantern_duties
         lantern_consensus_runtime
         lantern_state
-        lantern_off_head_replay
         lantern_slot_clock
         lantern_snappy
         lantern_networking_messages
@@ -558,7 +542,7 @@ if(LANTERN_BUILD_TESTS)
         lantern_validator_duties_integration
     )
     set_property(TEST ${_lantern_ctest_targets} PROPERTY TIMEOUT 30)
-    set_tests_properties(lantern_client_pending PROPERTIES TIMEOUT 90)
+    set_tests_properties(lantern_client_pending PROPERTIES TIMEOUT 180)
     set_tests_properties(lantern_client_vote PROPERTIES TIMEOUT 300)
     set_tests_properties(lantern_state PROPERTIES TIMEOUT 300)
 

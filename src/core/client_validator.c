@@ -76,7 +76,7 @@ static size_t validator_attestation_committee_count(const struct lantern_client 
 
 void lantern_signature_set_stage_timings(struct lantern_block_build_stage_timings *timings);
 
-static int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot);
+int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot);
 static lantern_client_error collect_aggregation_votes(
     struct lantern_client *client,
     LanternAttestations *out_attestations,
@@ -84,7 +84,7 @@ static lantern_client_error collect_aggregation_votes(
     const uint64_t *scope_slot,
     struct lantern_block_build_stage_timings *stage_timings,
     bool *out_missing_state);
-static lantern_client_error validator_collect_and_aggregate_attestation_signatures(
+lantern_client_error validator_collect_and_aggregate_attestation_signatures(
     struct lantern_client *client,
     LanternAggregatedAttestations *out_attestations,
     LanternAttestationSignatures *out_signatures,
@@ -185,7 +185,6 @@ struct lantern_async_block_proposal_job {
     LanternSignedBlock block;
     LanternState proof_state;
     LanternState post_state;
-    LanternStore post_store;
     LanternAttestationSignatures attestation_signatures;
     LanternSignature proposer_signature;
 };
@@ -356,19 +355,9 @@ static void validator_log_status_for_slot(struct lantern_client *client, uint64_
     bool has_network_finalized = false;
     uint64_t network_head = 0u;
     uint64_t network_finalized = 0u;
-    bool should_log = true;
     if (client->status_lock_initialized
         && pthread_mutex_lock(&client->status_lock) == 0)
     {
-        if (client->has_last_status_log_slot && client->last_status_log_slot == slot)
-        {
-            should_log = false;
-        }
-        else
-        {
-            client->last_status_log_slot = slot;
-            client->has_last_status_log_slot = true;
-        }
         sync_state = client->sync_state;
         has_network_head = client->network_view.has_latest_observed_head_slot;
         has_network_finalized = client->network_view.has_network_finalized_slot;
@@ -376,23 +365,12 @@ static void validator_log_status_for_slot(struct lantern_client *client, uint64_
         network_finalized = client->network_view.network_finalized_slot;
         pthread_mutex_unlock(&client->status_lock);
     }
-    else if (client->has_last_status_log_slot && client->last_status_log_slot == slot)
-    {
-        should_log = false;
-    }
     else
     {
-        client->last_status_log_slot = slot;
-        client->has_last_status_log_slot = true;
         has_network_head = client->network_view.has_latest_observed_head_slot;
         has_network_finalized = client->network_view.has_network_finalized_slot;
         network_head = client->network_view.latest_observed_head_slot;
         network_finalized = client->network_view.network_finalized_slot;
-    }
-
-    if (!should_log)
-    {
-        return;
     }
 
     char head_root_hex[2 * LANTERN_ROOT_SIZE + 3];
@@ -606,9 +584,8 @@ static void validator_log_duty_skipped(
     if (client->status_lock_initialized
         && pthread_mutex_lock(&client->status_lock) == 0)
     {
-        if (client->has_last_duty_skip_slot
+        if (client->last_duty_skip_reason
             && client->last_duty_skip_slot == slot
-            && client->last_duty_skip_reason
             && strcmp(client->last_duty_skip_reason, reason) == 0)
         {
             should_log = false;
@@ -616,14 +593,12 @@ static void validator_log_duty_skipped(
         else
         {
             client->last_duty_skip_slot = slot;
-            client->has_last_duty_skip_slot = true;
             client->last_duty_skip_reason = reason;
         }
         pthread_mutex_unlock(&client->status_lock);
     }
-    else if (client->has_last_duty_skip_slot
+    else if (client->last_duty_skip_reason
              && client->last_duty_skip_slot == slot
-             && client->last_duty_skip_reason
              && strcmp(client->last_duty_skip_reason, reason) == 0)
     {
         should_log = false;
@@ -631,7 +606,6 @@ static void validator_log_duty_skipped(
     else
     {
         client->last_duty_skip_slot = slot;
-        client->has_last_duty_skip_slot = true;
         client->last_duty_skip_reason = reason;
     }
 
@@ -701,7 +675,6 @@ static int payload_pool_snapshot(
     for (size_t i = 0; i < src->length; ++i)
     {
         dst->entries[i].data_root = src->entries[i].data_root;
-        dst->entries[i].target_slot = src->entries[i].target_slot;
         lantern_aggregated_signature_proof_init(&dst->entries[i].proof);
         dst->length = i + 1u;
         if (lantern_aggregated_signature_proof_copy(
@@ -783,8 +756,7 @@ static lantern_client_error aggregate_attestation_signatures(
             if (lantern_store_add_attestation_data(
                     &data_snapshot,
                     &new_snapshot.entries[i].data_root,
-                    &data,
-                    new_snapshot.entries[i].target_slot)
+                    &data)
                 != 0)
             {
                 snapshot_rc = -1;
@@ -856,8 +828,7 @@ static lantern_client_error aggregate_attestation_signatures(
                     &client->store,
                     &data_root,
                     &out_attestations->data[i].data,
-                    &out_signatures->data[i],
-                    out_attestations->data[i].data.target.slot);
+                    &out_signatures->data[i]);
                 if (add_rc != 0)
                 {
                     rc = LANTERN_CLIENT_ERR_ALLOC;
@@ -881,46 +852,6 @@ static lantern_client_error aggregate_attestation_signatures(
     }
     return rc;
 }
-
-lantern_client_error lantern_client_debug_aggregate_attestation_signatures(
-    struct lantern_client *client,
-    LanternAggregatedAttestations *out_attestations,
-    LanternAttestationSignatures *out_signatures)
-{
-    return validator_collect_and_aggregate_attestation_signatures(
-        client,
-        out_attestations,
-        out_signatures,
-        NULL,
-        NULL,
-        NULL);
-}
-
-int lantern_client_debug_publish_aggregated_attestations(
-    struct lantern_client *client,
-    uint64_t slot)
-{
-    return validator_publish_aggregated_attestations(client, slot);
-}
-
-int lantern_client_debug_run_interval_aggregation(
-    struct lantern_client *client,
-    uint64_t slot)
-{
-    if (!client) {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    if (client->validator_duty.slot_aggregated || !client->validator_duty.slot_attested) {
-        return LANTERN_CLIENT_ERR_IGNORED;
-    }
-
-    int rc = validator_publish_aggregated_attestations(client, slot);
-    if (rc == LANTERN_CLIENT_OK) {
-        client->validator_duty.slot_aggregated = true;
-    }
-    return rc;
-}
-
 
 /* ============================================================================
  * Mutex Utilities
@@ -1440,13 +1371,12 @@ static lantern_client_error validator_build_block_populate_message(
  * @brief Compute the post-state for a built block without mutating client state.
  *
  * Computes the expected post-state root for the proposed block and optionally
- * returns the post-state plus the updated validator-vote cache.
+ * returns the post-state.
  *
  * @param client         Client instance
  * @param block          Built block to preview
  * @param out_state_root Output for the computed post-state root
  * @param out_post_state Optional output for the computed post-state
- * @param out_post_store Optional output for the computed post-store
  *
  * @return LANTERN_CLIENT_OK on success
  * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
@@ -1458,8 +1388,7 @@ static lantern_client_error validator_build_block_compute_post_state(
     struct lantern_client *client,
     LanternSignedBlock *block,
     LanternRoot *out_state_root,
-    LanternState *out_post_state,
-    LanternStore *out_post_store)
+    LanternState *out_post_state)
 {
     if (!client || !block || !out_state_root)
     {
@@ -1478,7 +1407,6 @@ static lantern_client_error validator_build_block_compute_post_state(
             &client->store,
             block,
             out_post_state,
-            out_post_store,
             out_state_root)
         != 0)
     {
@@ -1617,7 +1545,6 @@ static void block_proposal_job_init(
     lantern_signed_block_init(&job->block);
     lantern_state_init(&job->proof_state);
     lantern_state_init(&job->post_state);
-    lantern_store_init(&job->post_store);
     lantern_attestation_signatures_init(&job->attestation_signatures);
     lantern_signature_zero(&job->proposer_signature);
 }
@@ -1629,7 +1556,6 @@ static void block_proposal_job_reset(struct lantern_async_block_proposal_job *jo
         return;
     }
     lantern_attestation_signatures_reset(&job->attestation_signatures);
-    lantern_store_reset(&job->post_store);
     lantern_state_reset(&job->post_state);
     lantern_state_reset(&job->proof_state);
     lantern_signed_block_reset(&job->block);
@@ -1765,7 +1691,6 @@ static lantern_client_error validator_prepare_block_proposal_job(
             &client->store,
             &job->block,
             &job->post_state,
-            &job->post_store,
             &computed_state_root)
         != 0)
     {
@@ -1976,12 +1901,11 @@ static int block_proposal_commit_and_log(
         validator_sleep_ms(sleep_milliseconds);
     }
 
-    int rc = lantern_client_commit_and_publish_current_head_block(
+    int rc = lantern_client_commit_and_publish_local_block(
         client,
         &job->block,
         &job->block_root,
-        &job->post_state,
-        &job->post_store);
+        &job->post_state);
     if (rc == LANTERN_CLIENT_OK)
     {
         block_proposal_record_local_success(client, job->local_index, job->slot);
@@ -1992,14 +1916,6 @@ static int block_proposal_commit_and_log(
             job->slot,
             root_hex && root_hex[0] ? root_hex : "0x0",
             job->block.block.body.attestations.length);
-    }
-    else if (rc == LANTERN_CLIENT_ERR_IGNORED)
-    {
-        lantern_log_warn(
-            "propose",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "slot %" PRIu64 ", skipped, reason: parent_changed_fork_avoided",
-            job->slot);
     }
     else
     {
@@ -2129,10 +2045,7 @@ static int validator_build_block_internal(
     struct lantern_client *client,
     uint64_t slot,
     size_t local_index,
-    LanternSignedBlock *out_block,
-    LanternState *out_post_state,
-    LanternStore *out_post_store,
-    LanternRoot *out_block_root)
+    LanternSignedBlock *out_block)
 {
     lantern_client_error result = LANTERN_CLIENT_OK;
     double build_started_seconds = 0.0;
@@ -2197,8 +2110,7 @@ static int validator_build_block_internal(
         client,
         out_block,
         &computed_state_root,
-        out_post_state,
-        out_post_store);
+        NULL);
     if (result != LANTERN_CLIENT_OK)
     {
         goto cleanup;
@@ -2209,9 +2121,6 @@ static int validator_build_block_internal(
     if (lantern_hash_tree_root_block(&out_block->block, &block_root) != SSZ_SUCCESS) {
         result = LANTERN_CLIENT_ERR_RUNTIME;
         goto cleanup;
-    }
-    if (out_block_root) {
-        *out_block_root = block_root;
     }
     LanternSignature proposer_signature;
     lantern_signature_zero(&proposer_signature);
@@ -2263,135 +2172,8 @@ cleanup:
     if (result != LANTERN_CLIENT_OK)
     {
         lantern_signed_block_reset(out_block);
-        if (out_post_state)
-        {
-            lantern_state_reset(out_post_state);
-            lantern_state_init(out_post_state);
-        }
-        if (out_post_store)
-        {
-            lantern_store_reset(out_post_store);
-            lantern_store_init(out_post_store);
-        }
     }
     return result;
-}
-
-
-/**
- * Refresh a cached vote with updated checkpoints and re-sign if needed.
- *
- * Compares the vote's source checkpoint with the provided source. If they
- * differ, builds a candidate vote and signs it only if the validator has not
- * already used this slot's attestation key for a different message root.
- *
- * @param validator  Local validator with an attestation signing key
- * @param slot       Slot for signing context
- * @param head       New head checkpoint
- * @param target     New target checkpoint
- * @param source     New source checkpoint
- * @param vote       Vote to update (modified in place)
- * @param out_refreshed Optional output flag set to true when the vote is
- *        updated and re-signed
- *
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL parameters
- * @return LANTERN_CLIENT_ERR_VALIDATOR when the validator key is missing,
- *         signing fails, or refreshing would reuse a slot key for a different
- *         attestation root
- *
- * @note Thread safety: Caller must ensure exclusive access to validator
- */
-int lantern_validator_refresh_cached_vote(
-    struct lantern_local_validator *validator,
-    uint64_t slot,
-    const LanternCheckpoint *head,
-    const LanternCheckpoint *target,
-    const LanternCheckpoint *source,
-    LanternSignedVote *vote,
-    bool *out_refreshed)
-{
-    bool refreshed = false;
-
-    if (out_refreshed)
-    {
-        *out_refreshed = false;
-    }
-    if (!validator || !head || !target || !source || !vote)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    /* If the source checkpoint is unchanged, no refresh is required. */
-    if (vote->data.source.slot != source->slot
-        || memcmp(vote->data.source.root.bytes, source->root.bytes, LANTERN_ROOT_SIZE) != 0)
-    {
-        LanternSignedVote candidate = *vote;
-        candidate.data.head = *head;
-        candidate.data.target = *target;
-        candidate.data.source = *source;
-
-        if (validator_sign_vote(validator, slot, &candidate) != 0)
-        {
-            return LANTERN_CLIENT_ERR_VALIDATOR;
-        }
-        *vote = candidate;
-        refreshed = true;
-    }
-
-    if (out_refreshed)
-    {
-        *out_refreshed = refreshed;
-    }
-    return LANTERN_CLIENT_OK;
-}
-
-
-/**
- * Store a vote in the client state.
- *
- * @param client  Client instance
- * @param vote    Vote to store
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL input or index overflow
- * @return LANTERN_CLIENT_ERR_RUNTIME if state is unavailable or lock fails
- *
- * @note Thread safety: This function acquires state_lock
- */
-int validator_store_vote(struct lantern_client *client, const LanternSignedVote *vote)
-{
-    if (!client || !vote)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    if (!client->has_state)
-    {
-        return LANTERN_CLIENT_ERR_RUNTIME;
-    }
-    if (vote->data.validator_id > SIZE_MAX)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    bool state_locked = lantern_client_lock_state(client);
-    if (!state_locked)
-    {
-        return LANTERN_CLIENT_ERR_RUNTIME;
-    }
-    int rc = lantern_store_set_signed_validator_vote(
-        &client->store,
-        (size_t)vote->data.validator_id,
-        vote);
-    lantern_client_unlock_state(client, state_locked);
-    if (rc != 0)
-    {
-        lantern_log_warn(
-            "validator",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to store attestation validator=%" PRIu64 " slot=%" PRIu64,
-            vote->data.validator_id,
-            vote->data.slot);
-        return LANTERN_CLIENT_ERR_RUNTIME;
-    }
-    return LANTERN_CLIENT_OK;
 }
 
 
@@ -2430,8 +2212,7 @@ int validator_publish_vote(struct lantern_client *client, const LanternSignedVot
                 &client->store,
                 &key,
                 &vote->data.data,
-                &vote->signature,
-                vote->data.target.slot)
+                &vote->signature)
             != 0)
         {
             lantern_log_debug(
@@ -2579,10 +2360,7 @@ int validator_build_block(
         client,
         slot,
         local_index,
-        out_block,
-        NULL,
-        NULL,
-        NULL);
+        out_block);
 }
 
 static int validator_start_block_proposal_job(
@@ -2784,8 +2562,7 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
 
     for (size_t i = 0; i < client->local_validator_count; ++i)
     {
-        bool enabled = client->validator_enabled ? client->validator_enabled[i] : true;
-        if (!enabled)
+        if (client->local_validators[i].disabled)
         {
             continue;
         }
@@ -2821,22 +2598,6 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
         }
         validator->last_attested_slot = slot;
 
-        int store_rc = validator_store_vote(client, &vote);
-        if (store_rc != LANTERN_CLIENT_OK)
-        {
-            lantern_log_warn(
-                "duty",
-                &(const struct lantern_log_metadata){.validator = client->node_id},
-                "slot %" PRIu64 ", skipped, reason: attestation_store_failed, validator %" PRIu64
-                ", rc %d",
-                slot,
-                validator->global_index,
-                store_rc);
-            if (result == LANTERN_CLIENT_OK)
-            {
-                result = (lantern_client_error)store_rc;
-            }
-        }
         int publish_rc = validator_publish_vote(client, &vote);
         if (publish_rc != LANTERN_CLIENT_OK)
         {
@@ -2903,9 +2664,6 @@ static lantern_client_error collect_aggregation_votes(
     double collection_started_seconds = lantern_time_now_seconds();
     for (size_t i = 0; i < map->length; ++i) {
         const struct lantern_attestation_signature_entry *entry = &map->entries[i];
-        if (scope_slot && entry->attestation_slot != *scope_slot) {
-            continue;
-        }
         LanternAttestationData data;
         memset(&data, 0, sizeof(data));
         if (lantern_store_get_attestation_data(&client->store, &entry->key.data_root, &data) != 0) {
@@ -2965,7 +2723,7 @@ static lean_metrics_aggregator_skipped_reason_t validator_aggregator_skipped_rea
     }
 }
 
-static lantern_client_error validator_collect_and_aggregate_attestation_signatures(
+lantern_client_error validator_collect_and_aggregate_attestation_signatures(
     struct lantern_client *client,
     LanternAggregatedAttestations *out_attestations,
     LanternAttestationSignatures *out_signatures,
@@ -3007,7 +2765,7 @@ static lantern_client_error validator_collect_and_aggregate_attestation_signatur
     return rc;
 }
 
-static int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot)
+int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot)
 {
     if (!client || !client->assigned_validators || !client->assigned_validators->enr.is_aggregator) {
         if (client) {
@@ -3223,7 +2981,9 @@ void *timing_thread(void *arg)
         current_interval = client->has_fork_choice ? client->fork_choice.time_intervals : 0u;
         intervals_per_slot = client->has_fork_choice ? client->fork_choice.intervals_per_slot : 0u;
         lantern_client_unlock_state(client, state_locked);
-        if (intervals_per_slot > 0u)
+        if (intervals_per_slot > 0u
+            && current_interval / intervals_per_slot
+                < target_interval / intervals_per_slot)
         {
             validator_log_status_for_slot(client, target_interval / intervals_per_slot);
         }
