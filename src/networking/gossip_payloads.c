@@ -1,15 +1,11 @@
 #include "lantern/networking/gossip_payloads.h"
 
-#include <inttypes.h>
 #include <limits.h>
 #include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
 
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/encoding/snappy.h"
-#include "lantern/support/log.h"
 #include "ssz.h"
 
 static uint8_t *alloc_buffer(size_t size) {
@@ -126,6 +122,40 @@ static size_t signed_aggregated_attestation_max_ssz_size(void) {
     return fixed + proof_max;
 }
 
+static int decode_snappy_payload(
+    const uint8_t *data,
+    size_t data_len,
+    size_t min_raw_len,
+    size_t max_raw_len,
+    uint8_t **out_raw,
+    size_t *out_raw_len) {
+    if (!data || !out_raw || !out_raw_len || min_raw_len == 0 || min_raw_len > max_raw_len) {
+        return -1;
+    }
+    *out_raw = NULL;
+    *out_raw_len = 0;
+
+    size_t raw_len = 0;
+    if (lantern_snappy_uncompressed_length_raw(data, data_len, &raw_len) != LANTERN_SNAPPY_OK
+        || raw_len < min_raw_len
+        || raw_len > max_raw_len) {
+        return -1;
+    }
+    uint8_t *raw = alloc_buffer(raw_len);
+    if (!raw) {
+        return -1;
+    }
+    size_t written = raw_len;
+    if (lantern_snappy_decompress_raw(data, data_len, raw, raw_len, &written) != LANTERN_SNAPPY_OK
+        || written != raw_len) {
+        free(raw);
+        return -1;
+    }
+    *out_raw = raw;
+    *out_raw_len = raw_len;
+    return 0;
+}
+
 int lantern_gossip_encode_signed_block_snappy(
     const LanternSignedBlock *block,
     uint8_t *out,
@@ -173,65 +203,21 @@ int lantern_gossip_decode_signed_block_snappy(
     if (out_raw_block_ssz_len) {
         *out_raw_block_ssz_len = 0;
     }
+    uint8_t *raw = NULL;
     size_t raw_len = 0;
-    int raw_len_rc = lantern_snappy_uncompressed_length_raw(data, data_len, &raw_len);
-    if (raw_len_rc != LANTERN_SNAPPY_OK) {
-        bool framed = lantern_snappy_is_framed(data, data_len);
-        size_t framed_len = 0;
-        int framed_rc = framed ? lantern_snappy_uncompressed_length(data, data_len, &framed_len) : LANTERN_SNAPPY_ERROR_INVALID_INPUT;
-        lantern_log_warn(
-            "gossip",
-            NULL,
-            "gossip block snappy length failed raw_rc=%d framed=%s framed_rc=%d framed_len=%zu data_len=%zu",
-            raw_len_rc,
-            framed ? "true" : "false",
-            framed_rc,
-            framed_len,
-            data_len);
-        return -1;
-    }
     size_t max_ssz = signed_block_max_ssz_size();
-    if (raw_len == 0 || raw_len > max_ssz) {
-        bool framed = lantern_snappy_is_framed(data, data_len);
-        size_t framed_len = 0;
-        int framed_rc = framed ? lantern_snappy_uncompressed_length(data, data_len, &framed_len) : LANTERN_SNAPPY_ERROR_INVALID_INPUT;
-        lantern_log_warn(
-            "gossip",
-            NULL,
-            "gossip block snappy length invalid raw_len=%zu max=%zu framed=%s framed_rc=%d framed_len=%zu data_len=%zu",
-            raw_len,
-            max_ssz,
-            framed ? "true" : "false",
-            framed_rc,
-            framed_len,
-            data_len);
-        return -1;
-    }
-    uint8_t *raw = alloc_buffer(raw_len);
-    if (!raw) {
-        return -1;
-    }
-    size_t written = raw_len;
-    int snappy_rc = lantern_snappy_decompress_raw(data, data_len, raw, raw_len, &written);
-    if (snappy_rc != LANTERN_SNAPPY_OK) {
-        free(raw);
-        return -1;
-    }
-    ssz_error_t decode_rc = lantern_ssz_decode_signed_block(block, raw, written);
-    if (decode_rc != 0) {
-        free(raw);
-        return -1;
-    }
-    if (basic_block_sanity(block) != 0) {
+    if (decode_snappy_payload(data, data_len, 1u, max_ssz, &raw, &raw_len) != 0
+        || lantern_ssz_decode_signed_block(block, raw, raw_len) != SSZ_SUCCESS
+        || basic_block_sanity(block) != 0) {
         free(raw);
         return -1;
     }
     if (out_raw_block_ssz) {
         *out_raw_block_ssz = raw;
-        *out_raw_block_ssz_len = written;
-        raw = NULL;
+        *out_raw_block_ssz_len = raw_len;
+    } else {
+        free(raw);
     }
-    free(raw);
     return 0;
 }
 
@@ -263,62 +249,21 @@ int lantern_gossip_decode_signed_vote_snappy(
     if (!vote || !data) {
         return -1;
     }
+    uint8_t *raw = NULL;
     size_t raw_len = 0;
-    int raw_len_rc = lantern_snappy_uncompressed_length_raw(data, data_len, &raw_len);
-    if (raw_len_rc != LANTERN_SNAPPY_OK) {
-        bool framed = lantern_snappy_is_framed(data, data_len);
-        size_t framed_len = 0;
-        int framed_rc = framed ? lantern_snappy_uncompressed_length(data, data_len, &framed_len) : LANTERN_SNAPPY_ERROR_INVALID_INPUT;
-        lantern_log_warn(
-            "gossip",
-            NULL,
-            "gossip vote snappy length failed raw_rc=%d framed=%s framed_rc=%d framed_len=%zu data_len=%zu",
-            raw_len_rc,
-            framed ? "true" : "false",
-            framed_rc,
-            framed_len,
-            data_len);
+    if (decode_snappy_payload(
+            data,
+            data_len,
+            LANTERN_SIGNED_VOTE_SSZ_SIZE,
+            LANTERN_SIGNED_VOTE_SSZ_SIZE,
+            &raw,
+            &raw_len)
+        != 0) {
         return -1;
     }
-    if (raw_len != LANTERN_SIGNED_VOTE_SSZ_SIZE) {
-        bool framed = lantern_snappy_is_framed(data, data_len);
-        size_t framed_len = 0;
-        int framed_rc = framed ? lantern_snappy_uncompressed_length(data, data_len, &framed_len) : LANTERN_SNAPPY_ERROR_INVALID_INPUT;
-        lantern_log_warn(
-            "gossip",
-            NULL,
-            "gossip vote snappy length mismatch raw_len=%zu expected=%zu framed=%s framed_rc=%d framed_len=%zu data_len=%zu",
-            raw_len,
-            (size_t)LANTERN_SIGNED_VOTE_SSZ_SIZE,
-            framed ? "true" : "false",
-            framed_rc,
-            framed_len,
-            data_len);
-        return -1;
-    }
-    uint8_t *raw = malloc(raw_len > 0 ? raw_len : 1u);
-    if (!raw) {
-        return -1;
-    }
-    size_t written = raw_len;
-    int snappy_rc = lantern_snappy_decompress_raw(data, data_len, raw, raw_len, &written);
-    if (snappy_rc != LANTERN_SNAPPY_OK) {
-        free(raw);
-        return -1;
-    }
-    if (written != raw_len) {
-        free(raw);
-        return -1;
-    }
-    if (lantern_ssz_decode_signed_vote(vote, raw, raw_len) != SSZ_SUCCESS) {
-        free(raw);
-        return -1;
-    }
+    ssz_error_t decode_rc = lantern_ssz_decode_signed_vote(vote, raw, raw_len);
     free(raw);
-    if (basic_vote_sanity(&vote->data) != 0) {
-        return -1;
-    }
-    return 0;
+    return decode_rc == SSZ_SUCCESS && basic_vote_sanity(&vote->data) == 0 ? 0 : -1;
 }
 
 int lantern_gossip_encode_signed_aggregated_attestation_snappy(
@@ -358,33 +303,17 @@ int lantern_gossip_decode_signed_aggregated_attestation_snappy(
     if (!attestation || !data) {
         return -1;
     }
+    uint8_t *raw = NULL;
     size_t raw_len = 0;
-    int raw_len_rc = lantern_snappy_uncompressed_length_raw(data, data_len, &raw_len);
-    if (raw_len_rc != LANTERN_SNAPPY_OK) {
-        return -1;
-    }
     size_t max_ssz = signed_aggregated_attestation_max_ssz_size();
     size_t min_ssz = LANTERN_ATTESTATION_DATA_SSZ_SIZE + SSZ_BYTES_PER_LENGTH_OFFSET + 1u;
-    if (raw_len < min_ssz || raw_len > max_ssz) {
+    if (decode_snappy_payload(data, data_len, min_ssz, max_ssz, &raw, &raw_len) != 0) {
         return -1;
     }
-    uint8_t *raw = alloc_buffer(raw_len);
-    if (!raw) {
-        return -1;
-    }
-    size_t written = raw_len;
-    if (lantern_snappy_decompress_raw(data, data_len, raw, raw_len, &written) != LANTERN_SNAPPY_OK
-        || written != raw_len) {
-        free(raw);
-        return -1;
-    }
-    if (lantern_ssz_decode_signed_aggregated_attestation(attestation, raw, raw_len) != SSZ_SUCCESS) {
-        free(raw);
-        return -1;
-    }
+    ssz_error_t decode_rc = lantern_ssz_decode_signed_aggregated_attestation(attestation, raw, raw_len);
     free(raw);
-    if (basic_signed_aggregated_attestation_sanity(attestation) != 0) {
-        return -1;
-    }
-    return 0;
+    return decode_rc == SSZ_SUCCESS
+            && basic_signed_aggregated_attestation_sanity(attestation) == 0
+        ? 0
+        : -1;
 }

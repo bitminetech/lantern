@@ -5,7 +5,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <sys/types.h>
 
 #include "lantern/networking/libp2p.h"
 #include "lantern/networking/messages.h"
@@ -16,13 +15,7 @@
 #define LANTERN_REQRESP_STATUS_PROTOCOL LANTERN_REQRESP_STATUS_PROTOCOL_SNAPPY
 #define LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL_SNAPPY
 #define LANTERN_REQRESP_BLOCKS_BY_RANGE_PROTOCOL LANTERN_REQRESP_BLOCKS_BY_RANGE_PROTOCOL_SNAPPY
-#define LANTERN_REQRESP_STATUS_PREVIEW_BYTES 256u
 #define LANTERN_REQRESP_MAX_CHUNK_BYTES (10u * 1024u * 1024u)
-#define LANTERN_REQRESP_MAX_CONTEXT_BYTES (1u << 20)
-#define LANTERN_REQRESP_HEADER_MAX_BYTES 10u
-#define LANTERN_REQRESP_TTFB_TIMEOUT_MS 10000u
-#define LANTERN_REQRESP_RESP_TIMEOUT_MS 10000u
-#define LANTERN_REQRESP_STALL_TIMEOUT_MS LANTERN_REQRESP_TTFB_TIMEOUT_MS
 #define LANTERN_REQRESP_MAX_ERROR_MESSAGE_SIZE 256u
 #define LANTERN_MIN_SLOTS_FOR_BLOCK_REQUESTS 3600u
 #define LANTERN_REQRESP_RESPONSE_SUCCESS 0u
@@ -30,27 +23,12 @@
 #define LANTERN_REQRESP_RESPONSE_SERVER_ERROR 2u
 #define LANTERN_REQRESP_RESPONSE_RESOURCE_UNAVAILABLE 3u
 
-/**
- * Reqresp service error codes.
- *
- * Functions return 0 on success and a negative value on failure.
- *
- * When a function also provides an `out_err` parameter, `out_err` contains the
- * underlying libp2p error code or `-errno` value for debugging.
- */
-typedef enum
+enum
 {
-    LANTERN_REQRESP_OK = 0,
-    LANTERN_REQRESP_ERR_INVALID_PARAM = -1000,
-    LANTERN_REQRESP_ERR_SET_DEADLINE = -1001,
-    LANTERN_REQRESP_ERR_SET_READ_INTEREST = -1002,
     LANTERN_REQRESP_ERR_STREAM_READ = -1003,
     LANTERN_REQRESP_ERR_STREAM_WRITE = -1004,
-    LANTERN_REQRESP_ERR_VARINT_HEADER_TOO_LONG = -1005,
-    LANTERN_REQRESP_ERR_PAYLOAD_TOO_LARGE = -1006,
-    LANTERN_REQRESP_ERR_ALLOC = -1007,
     LANTERN_REQRESP_ERR_INVALID_PAYLOAD = -1008,
-} lantern_reqresp_error;
+};
 
 enum lantern_reqresp_protocol_kind {
     LANTERN_REQRESP_PROTOCOL_STATUS = 0,
@@ -59,34 +37,8 @@ enum lantern_reqresp_protocol_kind {
     LANTERN_REQRESP_PROTOCOL_KIND_COUNT,
 };
 
-#define LANTERN_STATUS_PROTOCOL_ID LANTERN_REQRESP_STATUS_PROTOCOL
-#define LANTERN_BLOCKS_BY_ROOT_PROTOCOL_ID LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL
-#define LANTERN_BLOCKS_BY_RANGE_PROTOCOL_ID LANTERN_REQRESP_BLOCKS_BY_RANGE_PROTOCOL
-#define LANTERN_STATUS_PREVIEW_BYTES LANTERN_REQRESP_STATUS_PREVIEW_BYTES
-
 struct lantern_log_metadata;
-
-struct lantern_reqresp_stream;
 struct lantern_reqresp_exchange;
-
-struct lantern_reqresp_stream_ops {
-    ssize_t (*read)(void *io_ctx, void *buf, size_t len);
-    ssize_t (*write)(void *io_ctx, const void *buf, size_t len);
-    int (*close)(void *io_ctx);
-    int (*reset)(void *io_ctx);
-    int (*set_deadline)(void *io_ctx, uint64_t ms);
-    int (*shutdown_write)(void *io_ctx);
-    void (*free_ctx)(void *io_ctx);
-};
-
-struct lantern_reqresp_stream {
-    libp2p_host_t *host;
-    libp2p_host_stream_t *stream;
-    void *io_ctx;
-    struct lantern_reqresp_stream_ops ops;
-    struct lantern_peer_id remote_peer;
-    bool has_remote_peer;
-};
 
 struct lantern_reqresp_service_callbacks {
     void *context;
@@ -169,23 +121,6 @@ int lantern_reqresp_service_request_blocks(
 int lantern_reqresp_service_start(
     struct lantern_reqresp_service *service,
     const struct lantern_reqresp_service_config *config);
-struct lantern_reqresp_stream *lantern_reqresp_stream_from_ops(
-    void *io_ctx,
-    const struct lantern_reqresp_stream_ops *ops,
-    const struct lantern_peer_id *remote_peer);
-void lantern_reqresp_stream_free(struct lantern_reqresp_stream *stream);
-
-int lantern_reqresp_read_response_chunk(
-    struct lantern_reqresp_service *service,
-    struct lantern_reqresp_stream *stream,
-    enum lantern_reqresp_protocol_kind protocol,
-    uint8_t **out_data,
-    size_t *out_len,
-    ssize_t *out_err,
-    uint8_t *out_response_code,
-    bool *response_code_pending);
-
-uint32_t lantern_reqresp_stall_timeout_ms(void);
 
 #ifdef __cplusplus
 }

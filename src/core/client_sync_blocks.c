@@ -902,172 +902,6 @@ static bool build_root_chain_locked(
     return out_chain->length > 0;
 }
 
-static bool resolve_replay_validator_pubkeys(
-    const struct lantern_client *client,
-    const struct lantern_log_metadata *meta,
-    const uint8_t **out_attestation_pubkeys,
-    const uint8_t **out_proposal_pubkeys,
-    size_t *out_validator_count,
-    bool *out_allocated_pubkeys)
-{
-    if (!client
-        || !out_attestation_pubkeys
-        || !out_proposal_pubkeys
-        || !out_validator_count
-        || !out_allocated_pubkeys)
-    {
-        return false;
-    }
-
-    const struct lantern_chain_config *config = &client->genesis.chain_config;
-    size_t validator_count = config->validator_pubkeys_count;
-    const uint8_t *attestation_pubkeys = config->validator_attestation_pubkeys;
-    const uint8_t *proposal_pubkeys = config->validator_proposal_pubkeys;
-    bool allocated_pubkeys = false;
-
-    if (!attestation_pubkeys || !proposal_pubkeys || validator_count == 0)
-    {
-        size_t registry_count = client->genesis.validator_registry.count;
-        if (registry_count > 0 && registry_count == config->validator_count)
-        {
-            if (registry_count > (SIZE_MAX / 2u) / LANTERN_VALIDATOR_PUBKEY_SIZE)
-            {
-                lantern_log_warn(
-                    "state",
-                    meta,
-                    "init_replay_state registry pubkey size overflow count=%zu",
-                    registry_count);
-                return false;
-            }
-
-            validator_count = registry_count;
-            size_t pubkeys_len = validator_count * LANTERN_VALIDATOR_PUBKEY_SIZE;
-            uint8_t *buffer = calloc(pubkeys_len * 2u, sizeof(*buffer));
-            if (!buffer)
-            {
-                lantern_log_warn(
-                    "state",
-                    meta,
-                    "init_replay_state failed to allocate registry pubkey buffers len=%zu",
-                    pubkeys_len * 2u);
-                return false;
-            }
-            uint8_t *attestation_buffer = buffer;
-            uint8_t *proposal_buffer = buffer + pubkeys_len;
-            bool pubkey_ok = true;
-            for (size_t i = 0; i < validator_count; ++i)
-            {
-                const struct lantern_validator_record *rec =
-                    &client->genesis.validator_registry.records[i];
-                uint8_t *dest = attestation_buffer + (i * LANTERN_VALIDATOR_PUBKEY_SIZE);
-                if (rec->has_pubkey_bytes)
-                {
-                    memcpy(dest, rec->pubkey_bytes, LANTERN_VALIDATOR_PUBKEY_SIZE);
-                }
-                else if (rec->pubkey_hex
-                         && lantern_hex_decode(
-                             rec->pubkey_hex,
-                             dest,
-                             LANTERN_VALIDATOR_PUBKEY_SIZE)
-                             == 0)
-                {
-                    /* decoded */
-                }
-                else
-                {
-                    pubkey_ok = false;
-                    break;
-                }
-                memcpy(
-                    proposal_buffer + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
-                    dest,
-                    LANTERN_VALIDATOR_PUBKEY_SIZE);
-            }
-            if (!pubkey_ok)
-            {
-                lantern_log_warn(
-                    "state",
-                    meta,
-                    "init_replay_state failed to populate registry pubkeys");
-                free(buffer);
-                return false;
-            }
-            attestation_pubkeys = attestation_buffer;
-            proposal_pubkeys = proposal_buffer;
-            allocated_pubkeys = true;
-        }
-        else if (client->state.validators && client->state.validator_count > 0)
-        {
-            size_t state_count = client->state.validator_count;
-            if (state_count > (SIZE_MAX / 2u) / LANTERN_VALIDATOR_PUBKEY_SIZE)
-            {
-                lantern_log_warn(
-                    "state",
-                    meta,
-                    "init_replay_state state pubkey size overflow count=%zu",
-                    state_count);
-                return false;
-            }
-            validator_count = state_count;
-            size_t pubkeys_len = validator_count * LANTERN_VALIDATOR_PUBKEY_SIZE;
-            uint8_t *buffer = calloc(pubkeys_len * 2u, sizeof(*buffer));
-            if (!buffer)
-            {
-                lantern_log_warn(
-                    "state",
-                    meta,
-                    "init_replay_state failed to allocate state pubkey buffers len=%zu",
-                    pubkeys_len * 2u);
-                return false;
-            }
-            uint8_t *attestation_buffer = buffer;
-            uint8_t *proposal_buffer = buffer + pubkeys_len;
-            for (size_t i = 0; i < validator_count; ++i)
-            {
-                const LanternValidator *validator = &client->state.validators[i];
-                memcpy(
-                    attestation_buffer + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
-                    validator->attestation_pubkey,
-                    LANTERN_VALIDATOR_PUBKEY_SIZE);
-                memcpy(
-                    proposal_buffer + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
-                    validator->proposal_pubkey,
-                    LANTERN_VALIDATOR_PUBKEY_SIZE);
-            }
-            attestation_pubkeys = attestation_buffer;
-            proposal_pubkeys = proposal_buffer;
-            allocated_pubkeys = true;
-        }
-        else
-        {
-            lantern_log_warn(
-                "state",
-                meta,
-                "init_replay_state missing validator pubkeys");
-            return false;
-        }
-    }
-
-    if (validator_count == 0)
-    {
-        if (allocated_pubkeys)
-        {
-            free((void *)attestation_pubkeys);
-        }
-        lantern_log_warn(
-            "state",
-            meta,
-            "init_replay_state invalid validator_count=0");
-        return false;
-    }
-
-    *out_attestation_pubkeys = attestation_pubkeys;
-    *out_proposal_pubkeys = proposal_pubkeys;
-    *out_validator_count = validator_count;
-    *out_allocated_pubkeys = allocated_pubkeys;
-    return true;
-}
-
 static bool init_replay_state(const struct lantern_client *client, LanternState *out_state)
 {
     if (!client || !out_state)
@@ -1079,75 +913,50 @@ static bool init_replay_state(const struct lantern_client *client, LanternState 
     lantern_state_reset(out_state);
     lantern_state_init(out_state);
 
-    if (client->genesis.state_bytes && client->genesis.state_size > 0)
+    const struct lantern_chain_config *config = &client->genesis.chain_config;
+    if (!config->validator_attestation_pubkeys
+        || !config->validator_proposal_pubkeys
+        || config->validator_count == 0
+        || config->validator_count > SIZE_MAX)
     {
-        lantern_log_debug(
+        lantern_log_warn(
             "state",
             &meta,
-            "init_replay_state ignoring local genesis state bytes size=%zu",
-            client->genesis.state_size);
-    }
-
-    const uint8_t *attestation_pubkeys = NULL;
-    const uint8_t *proposal_pubkeys = NULL;
-    size_t validator_count = 0;
-    bool allocated_pubkeys = false;
-    if (!resolve_replay_validator_pubkeys(
-            client,
-            &meta,
-            &attestation_pubkeys,
-            &proposal_pubkeys,
-            &validator_count,
-            &allocated_pubkeys))
-    {
+            "init_replay_state missing canonical validator keypairs");
         lantern_state_reset(out_state);
         return false;
     }
 
-    const struct lantern_chain_config *config = &client->genesis.chain_config;
     if (lantern_state_generate_genesis(
             out_state,
             config->genesis_time,
-            (uint64_t)validator_count)
+            config->validator_count)
         != 0)
     {
-        if (allocated_pubkeys)
-        {
-            free((void *)attestation_pubkeys);
-        }
         lantern_log_warn(
             "state",
             &meta,
-            "init_replay_state failed to generate genesis time=%" PRIu64 " validators=%zu",
+            "init_replay_state failed to generate genesis time=%" PRIu64 " validators=%" PRIu64,
             config->genesis_time,
-            validator_count);
+            config->validator_count);
         lantern_state_reset(out_state);
         return false;
     }
 
     if (lantern_state_set_validator_pubkeys_dual(
             out_state,
-            attestation_pubkeys,
-            proposal_pubkeys,
-            validator_count)
+            config->validator_attestation_pubkeys,
+            config->validator_proposal_pubkeys,
+            (size_t)config->validator_count)
         != 0)
     {
-        if (allocated_pubkeys)
-        {
-            free((void *)attestation_pubkeys);
-        }
         lantern_log_warn(
             "state",
             &meta,
-            "init_replay_state failed to set validator pubkey pairs count=%zu",
-            validator_count);
+            "init_replay_state failed to set validator pubkey pairs count=%" PRIu64,
+            config->validator_count);
         lantern_state_reset(out_state);
         return false;
-    }
-
-    if (allocated_pubkeys)
-    {
-        free((void *)attestation_pubkeys);
     }
 
     return true;

@@ -87,7 +87,6 @@ static int test_enable_blocks_request_peer(
         return -1;
     }
 
-    lantern_string_list_init(&client->connected_peer_ids);
     if (pthread_mutex_init(&client->connection_lock, NULL) != 0) {
         return -1;
     }
@@ -96,25 +95,21 @@ static int test_enable_blocks_request_peer(
     if (pthread_mutex_init(&client->status_lock, NULL) != 0) {
         pthread_mutex_destroy(&client->connection_lock);
         client->connection_lock_initialized = false;
-        lantern_string_list_reset(&client->connected_peer_ids);
         return -1;
     }
     client->status_lock_initialized = true;
 
-    if (lantern_string_list_append(&client->connected_peer_ids, peer_id) != 0) {
+    if (client_test_set_connected_peer(client, peer_id) != 0) {
         pthread_mutex_destroy(&client->status_lock);
         client->status_lock_initialized = false;
         pthread_mutex_destroy(&client->connection_lock);
         client->connection_lock_initialized = false;
-        lantern_string_list_reset(&client->connected_peer_ids);
         return -1;
     }
-    client->connected_peers = 1u;
 
     client->peer_status_entries = calloc(1u, sizeof(*client->peer_status_entries));
     if (!client->peer_status_entries) {
-        client->connected_peers = 0u;
-        lantern_string_list_reset(&client->connected_peer_ids);
+        client_test_clear_connected_peers(client);
         pthread_mutex_destroy(&client->status_lock);
         client->status_lock_initialized = false;
         pthread_mutex_destroy(&client->connection_lock);
@@ -158,8 +153,7 @@ static void test_disable_blocks_request_peer(struct lantern_client *client)
         client->connection_lock_initialized = false;
     }
 
-    lantern_string_list_reset(&client->connected_peer_ids);
-    client->connected_peers = 0u;
+    client_test_clear_connected_peers(client);
 }
 
 static int test_make_dummy_proof_for_validators(
@@ -839,7 +833,7 @@ static int test_record_vote_buffers_missing_target_state(void) {
     }
     if (test_enable_blocks_request_peer(
             &client,
-            "12D3KooWLU9zbm4c9KTL3f6bAtestVoteMissingTarget111111111111")
+            "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE")
         != 0) {
         fprintf(stderr, "failed to set up schedulable peer for missing target state test\n");
         goto cleanup;
@@ -1402,115 +1396,6 @@ static int test_record_vote_rejects_future_slot(void) {
     rc = 0;
 
 cleanup:
-    client_test_teardown_vote_validation_client(&client, pub, secret);
-    return rc;
-}
-
-static int test_validator_refresh_cached_vote_rejects_changed_root_reuse(void) {
-    struct lantern_client client;
-    struct PQSignatureSchemePublicKey *pub = NULL;
-    struct PQSignatureSchemeSecretKey *secret = NULL;
-    LanternRoot anchor_root;
-    LanternRoot child_root;
-    struct lantern_local_validator validator;
-    int rc = 1;
-
-    memset(&client, 0, sizeof(client));
-    memset(&validator, 0, sizeof(validator));
-
-    if (client_test_setup_vote_validation_client(
-            &client,
-            "vote_refresh",
-            &pub,
-            &secret,
-            &anchor_root,
-            &child_root)
-        != 0) {
-        goto cleanup;
-    }
-
-    validator.global_index = 0;
-    validator.attestation_secret_key = secret;
-    validator.has_attestation_secret_handle = true;
-
-    LanternSignedVote stale;
-    memset(&stale, 0, sizeof(stale));
-    stale.data.validator_id = validator.global_index;
-    stale.data.slot = 4;
-    client_test_fill_root_with_index(&stale.data.head.root, 0x10u);
-    stale.data.head.slot = 4;
-    stale.data.target.slot = 8;
-    client_test_fill_root_with_index(&stale.data.target.root, 0x20u);
-    stale.data.source.slot = 0;
-    stale.data.source.root = anchor_root;
-
-    if (validator_sign_vote(&validator, stale.data.slot, &stale) != LANTERN_CLIENT_OK) {
-        fprintf(stderr, "failed to sign stale vote for refresh test\n");
-        goto cleanup;
-    }
-
-    LanternSignedVote refreshed = stale;
-    LanternCheckpoint new_head = stale.data.head;
-    new_head.slot += 2u;
-    client_test_fill_root_with_index(&new_head.root, 0x30u);
-    LanternCheckpoint new_target = stale.data.target;
-    new_target.slot += 2u;
-    client_test_fill_root_with_index(&new_target.root, 0x40u);
-    LanternCheckpoint new_source = stale.data.source;
-    new_source.slot = 1u;
-    client_test_fill_root_with_index(&new_source.root, 0x50u);
-
-    bool refreshed_flag = false;
-    int refresh_rc = lantern_validator_refresh_cached_vote(
-        &validator,
-        stale.data.slot,
-        &new_head,
-        &new_target,
-        &new_source,
-        &refreshed,
-        &refreshed_flag);
-    if (refresh_rc != LANTERN_CLIENT_ERR_VALIDATOR || refreshed_flag) {
-        fprintf(stderr, "expected cached vote refresh to reject changed root reuse\n");
-        goto cleanup;
-    }
-    if (refreshed.data.source.slot != stale.data.source.slot
-        || memcmp(refreshed.data.source.root.bytes, stale.data.source.root.bytes, LANTERN_ROOT_SIZE) != 0) {
-        fprintf(stderr, "failed refresh mutated cached vote source\n");
-        goto cleanup;
-    }
-    if (memcmp(refreshed.signature.bytes, stale.signature.bytes, LANTERN_SIGNATURE_SIZE) != 0) {
-        fprintf(stderr, "failed refresh mutated cached vote signature\n");
-        goto cleanup;
-    }
-
-    LanternSignedVote second = refreshed;
-    refreshed_flag = true;
-    if (lantern_validator_refresh_cached_vote(
-            &validator,
-            stale.data.slot,
-            &stale.data.head,
-            &stale.data.target,
-            &stale.data.source,
-            &second,
-            &refreshed_flag)
-        != LANTERN_CLIENT_OK) {
-        fprintf(stderr, "expected cached vote refresh to be a no-op\n");
-        goto cleanup;
-    }
-    if (refreshed_flag) {
-        fprintf(stderr, "no-op refresh should not set refreshed flag\n");
-        goto cleanup;
-    }
-    if (memcmp(second.signature.bytes, refreshed.signature.bytes, LANTERN_SIGNATURE_SIZE) != 0) {
-        fprintf(stderr, "cached vote signature changed during no-op refresh\n");
-        goto cleanup;
-    }
-
-    rc = 0;
-
-cleanup:
-    lantern_client_local_validator_cleanup(&validator);
-    secret = NULL;
     client_test_teardown_vote_validation_client(&client, pub, secret);
     return rc;
 }
@@ -3632,7 +3517,6 @@ static int test_publish_attestations_includes_proposer(void) {
     struct PQSignatureSchemeSecretKey *secret = NULL;
     struct publish_capture capture;
     struct lantern_local_validator validator;
-    bool validator_enabled = true;
     LanternSignedVote published_vote;
     int rc = 1;
 
@@ -3658,7 +3542,6 @@ static int test_publish_attestations_includes_proposer(void) {
 
     client.local_validators = &validator;
     client.local_validator_count = 1u;
-    client.validator_enabled = &validator_enabled;
     client.has_runtime = true;
     client.gossip_running = true;
     client.sync_state = LANTERN_SYNC_STATE_SYNCED;
@@ -3717,7 +3600,6 @@ static int test_publish_attestations_ignores_peer_status_gate_inputs(void) {
     struct PQSignatureSchemeSecretKey *secret = NULL;
     struct publish_capture capture;
     struct lantern_local_validator validator;
-    bool validator_enabled = true;
     bool peer_enabled = false;
     int rc = 1;
 
@@ -3742,7 +3624,6 @@ static int test_publish_attestations_ignores_peer_status_gate_inputs(void) {
 
     client.local_validators = &validator;
     client.local_validator_count = 1u;
-    client.validator_enabled = &validator_enabled;
     client.has_runtime = true;
     client.gossip_running = true;
     client.sync_state = LANTERN_SYNC_STATE_SYNCED;
@@ -3755,7 +3636,10 @@ static int test_publish_attestations_ignores_peer_status_gate_inputs(void) {
     lantern_gossipsub_service_set_publish_hook(&client.gossip, publish_capture_hook, &capture);
     lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
 
-    if (test_enable_blocks_request_peer(&client, "peer_status_gate") != 0) {
+    if (test_enable_blocks_request_peer(
+            &client,
+            "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE")
+        != 0) {
         fprintf(stderr, "failed to initialize peer status gate test peer\n");
         goto cleanup;
     }
@@ -3811,7 +3695,6 @@ static int test_validator_duties_ignore_binary_sync_state(void) {
     struct PQSignatureSchemePublicKey *pub = NULL;
     struct PQSignatureSchemeSecretKey *secret = NULL;
     struct lantern_local_validator validator;
-    bool validator_enabled = true;
     int rc = 1;
 
     memset(&validator, 0, sizeof(validator));
@@ -3833,7 +3716,6 @@ static int test_validator_duties_ignore_binary_sync_state(void) {
 
     client.local_validators = &validator;
     client.local_validator_count = 1u;
-    client.validator_enabled = &validator_enabled;
     client.has_runtime = true;
     client.gossip_running = true;
 
@@ -3873,7 +3755,6 @@ static int test_local_block_commit_updates_state_before_publish(void) {
     struct PQSignatureSchemePublicKey *pub = NULL;
     struct PQSignatureSchemeSecretKey *secret = NULL;
     struct lantern_local_validator validator;
-    bool validator_enabled = true;
     struct local_block_publish_observer observer;
     LanternSignedBlock block;
     LanternState post_state;
@@ -3904,7 +3785,6 @@ static int test_local_block_commit_updates_state_before_publish(void) {
     validator.proposal_secret_key = secret;
     client.local_validators = &validator;
     client.local_validator_count = 1u;
-    client.validator_enabled = &validator_enabled;
     client.gossip_running = true;
     snprintf(client.gossip.block_topic, sizeof(client.gossip.block_topic), "test/local_block");
     lantern_gossipsub_service_set_publish_hook(
@@ -3979,7 +3859,6 @@ static int test_local_off_head_block_publishes_after_successful_import(void) {
     struct PQSignatureSchemePublicKey *pub = NULL;
     struct PQSignatureSchemeSecretKey *secret = NULL;
     struct lantern_local_validator validator;
-    bool validator_enabled = true;
     struct local_block_publish_observer observer;
     LanternSignedBlock block;
     LanternState post_state;
@@ -4017,7 +3896,6 @@ static int test_local_off_head_block_publishes_after_successful_import(void) {
     validator.proposal_secret_key = secret;
     client.local_validators = &validator;
     client.local_validator_count = 1u;
-    client.validator_enabled = &validator_enabled;
     client.gossip_running = true;
     snprintf(client.gossip.block_topic, sizeof(client.gossip.block_topic), "test/local_block");
     lantern_gossipsub_service_set_publish_hook(
@@ -4412,9 +4290,6 @@ int main(void) {
         return 1;
     }
     if (test_record_vote_rejects_future_slot() != 0) {
-        return 1;
-    }
-    if (test_validator_refresh_cached_vote_rejects_changed_root_reuse() != 0) {
         return 1;
     }
     if (test_validator_sign_with_key_advances_only_selected_secret() != 0) {

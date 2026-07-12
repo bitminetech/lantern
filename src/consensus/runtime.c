@@ -83,16 +83,6 @@ const struct lantern_slot_timepoint *lantern_consensus_runtime_current_timepoint
     return &runtime->timepoint;
 }
 
-int lantern_consensus_runtime_schedule_slot(
-    const struct lantern_consensus_runtime *runtime,
-    uint64_t slot,
-    struct lantern_duty_schedule *schedule) {
-    if (!runtime || !runtime->initialized || !schedule) {
-        return -1;
-    }
-    return lantern_slot_clock_schedule_slot(&runtime->clock, slot, schedule);
-}
-
 int lantern_consensus_runtime_local_proposer(
     const struct lantern_consensus_runtime *runtime,
     uint64_t slot,
@@ -115,11 +105,4 @@ int lantern_consensus_runtime_local_proposer(
         *out_local_validator_index = local_index;
     }
     return 0;
-}
-
-uint64_t lantern_consensus_runtime_validator_count(const struct lantern_consensus_runtime *runtime) {
-    if (!runtime || !runtime->initialized) {
-        return 0;
-    }
-    return runtime->validator_count;
 }

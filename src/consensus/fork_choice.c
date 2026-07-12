@@ -324,29 +324,7 @@ static int register_block(
     }
     entry->slot = slot;
     entry->proposer_index = proposer_index;
-    entry->has_validator_count = false;
-    entry->validator_count = 0;
     store->block_len += 1;
-    return 0;
-}
-
-int lantern_fork_choice_set_block_validator_count(
-    LanternForkChoice *store,
-    const LanternRoot *root,
-    uint64_t validator_count) {
-    if (!store || !root || validator_count == 0) {
-        return -1;
-    }
-    size_t index = 0;
-    if (!find_block_index(store, root, &index)) {
-        return -1;
-    }
-    if (!store->blocks || index >= store->block_len) {
-        return -1;
-    }
-    struct lantern_fork_choice_block_entry *entry = &store->blocks[index];
-    entry->validator_count = validator_count;
-    entry->has_validator_count = true;
     return 0;
 }
 
@@ -780,6 +758,10 @@ int lantern_fork_choice_add_block_with_state(
 
     size_t existing_index = 0;
     bool existed = find_block_index(store, &block_root, &existing_index);
+    if (!existed && block->slot >= store->anchor_slot
+        && !find_block_index(store, &block->parent_root, &existing_index)) {
+        return -1;
+    }
     struct lantern_fork_choice_block_entry previous_entry;
     memset(&previous_entry, 0, sizeof(previous_entry));
     if (existed) {
@@ -1594,17 +1576,7 @@ int lantern_fork_choice_update_safe_target(LanternForkChoice *store) {
     if (!store || !store->initialized || !store->has_anchor) {
         return -1;
     }
-    uint64_t validator_count = store->config.num_validators;
-    if (store->has_head && store->blocks) {
-        size_t head_index = 0;
-        if (find_block_index(store, &store->head, &head_index) && head_index < store->block_len) {
-            const struct lantern_fork_choice_block_entry *head_entry = &store->blocks[head_index];
-            if (head_entry->has_validator_count && head_entry->validator_count > 0) {
-                validator_count = head_entry->validator_count;
-            }
-        }
-    }
-    uint64_t threshold = lantern_consensus_quorum_threshold(validator_count);
+    uint64_t threshold = lantern_consensus_quorum_threshold(store->config.num_validators);
     struct fork_choice_latest_vote *safe_votes = NULL;
     size_t safe_vote_count = 0;
     if (collect_payload_pool_votes(

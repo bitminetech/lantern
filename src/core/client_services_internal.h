@@ -12,7 +12,6 @@
  * - client_validator.c: Validator duty execution
  * - client_http.c: HTTP API callbacks
  * - client_reqresp.c: Request/response protocol handling
- * - client_reqresp_stream.c: Stream I/O utilities
  * - client_reqresp_blocks.c: Block request handling
  * - client_keys.c: Key management
  *
@@ -594,40 +593,6 @@ bool lantern_client_import_block(
 
 
 /**
- * Read a response chunk from a reqresp stream.
- *
- * @spec subspecs/networking/reqresp.py - stream protocol
- *
- * @param service               Reqresp service (may be NULL)
- * @param stream                libp2p stream
- * @param protocol              Protocol kind
- * @param out_data              Output data buffer (caller must free)
- * @param out_len               Output data length
- * @param out_err               Output error code (may be NULL)
- * @param out_response_code     Output response code (may be NULL)
- * @param response_code_pending Tracks whether response code is still expected
- * @return 0 on success
- * @return LANTERN_REQRESP_ERR_INVALID_PARAM if required parameters are NULL
- * @return LANTERN_REQRESP_ERR_SET_READ_INTEREST if enabling read interest fails
- * @return LANTERN_REQRESP_ERR_SET_DEADLINE if setting a stream deadline fails
- * @return LANTERN_REQRESP_ERR_STREAM_READ if reading from the stream fails
- * @return LANTERN_REQRESP_ERR_VARINT_HEADER_TOO_LONG if the varint header exceeds limits
- * @return LANTERN_REQRESP_ERR_PAYLOAD_TOO_LARGE if the payload length exceeds limits
- * @return LANTERN_REQRESP_ERR_ALLOC if allocating the payload buffer fails
- *
- * @note Thread safety: This function is thread-safe
- */
-int lantern_reqresp_read_response_chunk(
-    struct lantern_reqresp_service *service,
-    struct lantern_reqresp_stream *stream,
-    enum lantern_reqresp_protocol_kind protocol,
-    uint8_t **out_data,
-    size_t *out_len,
-    ssize_t *out_err,
-    uint8_t *out_response_code,
-    bool *response_code_pending);
-
-/**
  * Schedule a blocks_by_root request to a peer.
  *
  * @spec subspecs/networking/reqresp/message.py - BlocksByRoot protocol
@@ -715,17 +680,6 @@ int lantern_client_configure_xmss_sources(
  * @note Thread safety: This function should be called during initialization
  */
 int lantern_client_load_xmss_keys(struct lantern_client *client);
-
-
-/**
- * Free all loaded public key handles.
- *
- * @param client  Client instance
- *
- * @note Thread safety: Caller must ensure exclusive access during shutdown
- */
-void lantern_client_free_xmss_pubkeys(struct lantern_client *client);
-
 
 #ifdef __cplusplus
 }

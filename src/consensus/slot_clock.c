@@ -24,31 +24,6 @@ static enum lantern_duty_phase interval_to_phase(uint32_t interval_index) {
     }
 }
 
-static int phase_to_index(enum lantern_duty_phase phase, uint32_t *out_index) {
-    if (!out_index) {
-        return -1;
-    }
-    switch (phase) {
-    case LANTERN_DUTY_PHASE_PROPOSAL:
-        *out_index = 0;
-        return 0;
-    case LANTERN_DUTY_PHASE_VOTE:
-        *out_index = 1;
-        return 0;
-    case LANTERN_DUTY_PHASE_AGGREGATE:
-        *out_index = 2;
-        return 0;
-    case LANTERN_DUTY_PHASE_SAFE_TARGET:
-        *out_index = 3;
-        return 0;
-    case LANTERN_DUTY_PHASE_VOTE_ACCEPT:
-        *out_index = 4;
-        return 0;
-    default:
-        return -1;
-    }
-}
-
 static int multiply_u64_u32(uint64_t lhs, uint32_t rhs, uint64_t *out) {
     if (!out) {
         return -1;
@@ -197,56 +172,6 @@ static int interval_start_time(
     }
     if (add_u64(slot_start, interval_offset, out_start_time) != 0) {
         return -1;
-    }
-    return 0;
-}
-
-int lantern_slot_clock_phase_start_time(
-    const struct lantern_slot_clock *clock,
-    uint64_t slot,
-    enum lantern_duty_phase phase,
-    uint64_t *out_start_time) {
-    uint32_t interval_index = 0;
-    if (phase_to_index(phase, &interval_index) != 0) {
-        return -1;
-    }
-    return interval_start_time(clock, slot, interval_index, out_start_time);
-}
-
-int lantern_slot_clock_phase_end_time(
-    const struct lantern_slot_clock *clock,
-    uint64_t slot,
-    enum lantern_duty_phase phase,
-    uint64_t *out_end_time) {
-    uint64_t start_time = 0;
-    if (lantern_slot_clock_phase_start_time(clock, slot, phase, &start_time) != 0) {
-        return -1;
-    }
-    if (add_u64(start_time, clock->milliseconds_per_interval, out_end_time) != 0) {
-        return -1;
-    }
-    return 0;
-}
-
-int lantern_slot_clock_schedule_slot(
-    const struct lantern_slot_clock *clock,
-    uint64_t slot,
-    struct lantern_duty_schedule *schedule) {
-    if (!clock || !schedule) {
-        return -1;
-    }
-    schedule->slot = slot;
-    for (uint32_t i = 0; i < LANTERN_DUTY_PHASE_COUNT; ++i) {
-        enum lantern_duty_phase phase = interval_to_phase(i);
-        if (phase == LANTERN_DUTY_PHASE_UNKNOWN) {
-            return -1;
-        }
-        if (lantern_slot_clock_phase_start_time(clock, slot, phase, &schedule->phase_start_times[i]) != 0) {
-            return -1;
-        }
-        if (lantern_slot_clock_phase_end_time(clock, slot, phase, &schedule->phase_end_times[i]) != 0) {
-            return -1;
-        }
     }
     return 0;
 }

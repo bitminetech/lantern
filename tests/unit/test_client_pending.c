@@ -25,52 +25,58 @@ struct block_signature_fixture {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub;
     struct PQSignatureSchemeSecretKey *secret;
-    struct lantern_validator_record *registry_records;
+    uint8_t *validator_keypairs;
     char data_dir_template[TEST_TEMP_PATH_CAPACITY];
 };
 
-static int enable_signature_verification_registry(
+static int enable_signature_verification_keys(
     struct lantern_client *client,
-    struct lantern_validator_record **out_records)
+    uint8_t **out_keypairs)
 {
-    if (!client || !out_records) {
+    if (!client || !out_keypairs) {
         return -1;
     }
     size_t validator_count = lantern_state_validator_count(&client->state);
     if (validator_count == 0) {
         return -1;
     }
-    struct lantern_validator_record *records = calloc(validator_count, sizeof(*records));
-    if (!records) {
+    if (validator_count > (SIZE_MAX / 2u) / LANTERN_VALIDATOR_PUBKEY_SIZE) {
+        return -1;
+    }
+    size_t key_bytes = validator_count * LANTERN_VALIDATOR_PUBKEY_SIZE;
+    uint8_t *keypairs = malloc(key_bytes * 2u);
+    if (!keypairs) {
         return -1;
     }
     for (size_t i = 0; i < validator_count; ++i) {
-        records[i].index = (uint64_t)i;
-        const uint8_t *pubkey = lantern_state_validator_attestation_pubkey(&client->state, i);
-        if (!pubkey) {
-            free(records);
+        const uint8_t *attestation = lantern_state_validator_attestation_pubkey(&client->state, i);
+        const uint8_t *proposal = lantern_state_validator_proposal_pubkey(&client->state, i);
+        if (!attestation || !proposal) {
+            free(keypairs);
             return -1;
         }
-        memcpy(records[i].pubkey_bytes, pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE);
-        records[i].has_pubkey_bytes = true;
+        memcpy(keypairs + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), attestation, LANTERN_VALIDATOR_PUBKEY_SIZE);
+        memcpy(keypairs + key_bytes + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), proposal, LANTERN_VALIDATOR_PUBKEY_SIZE);
     }
-    client->genesis.validator_registry.records = records;
-    client->genesis.validator_registry.count = validator_count;
-    *out_records = records;
+    client->genesis.chain_config.validator_count = validator_count;
+    client->genesis.chain_config.validator_attestation_pubkeys = keypairs;
+    client->genesis.chain_config.validator_proposal_pubkeys = keypairs + key_bytes;
+    *out_keypairs = keypairs;
     return 0;
 }
 
-static void disable_signature_verification_registry(
+static void disable_signature_verification_keys(
     struct lantern_client *client,
-    struct lantern_validator_record **records)
+    uint8_t **keypairs)
 {
-    if (!client || !records) {
+    if (!client || !keypairs) {
         return;
     }
-    free(*records);
-    *records = NULL;
-    client->genesis.validator_registry.records = NULL;
-    client->genesis.validator_registry.count = 0;
+    free(*keypairs);
+    *keypairs = NULL;
+    client->genesis.chain_config.validator_count = 0;
+    client->genesis.chain_config.validator_attestation_pubkeys = NULL;
+    client->genesis.chain_config.validator_proposal_pubkeys = NULL;
 }
 
 static int build_devnet5_block_proof(
@@ -152,7 +158,7 @@ static int setup_block_signature_fixture(
         != 0) {
         return -1;
     }
-    if (enable_signature_verification_registry(&fixture->client, &fixture->registry_records) != 0) {
+    if (enable_signature_verification_keys(&fixture->client, &fixture->validator_keypairs) != 0) {
         client_test_teardown_vote_validation_client(&fixture->client, fixture->pub, fixture->secret);
         fixture->pub = NULL;
         fixture->secret = NULL;
@@ -164,7 +170,7 @@ static int setup_block_signature_fixture(
         "/tmp/lantern_block_sig_XXXXXX");
     fixture->client.data_dir = mkdtemp(fixture->data_dir_template);
     if (!fixture->client.data_dir) {
-        disable_signature_verification_registry(&fixture->client, &fixture->registry_records);
+        disable_signature_verification_keys(&fixture->client, &fixture->validator_keypairs);
         client_test_teardown_vote_validation_client(&fixture->client, fixture->pub, fixture->secret);
         fixture->pub = NULL;
         fixture->secret = NULL;
@@ -178,7 +184,7 @@ static void teardown_block_signature_fixture(struct block_signature_fixture *fix
     if (!fixture) {
         return;
     }
-    disable_signature_verification_registry(&fixture->client, &fixture->registry_records);
+    disable_signature_verification_keys(&fixture->client, &fixture->validator_keypairs);
     if (fixture->client.data_dir && fixture->client.data_dir[0] != '\0') {
         char cleanup_cmd[TEST_TEMP_PATH_CAPACITY + 16];
         int written = snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf %s", fixture->client.data_dir);
@@ -210,27 +216,23 @@ static int enable_sync_test_peer(struct lantern_client *client, const char *peer
         return -1;
     }
     client->status_lock_initialized = true;
-    lantern_string_list_init(&client->connected_peer_ids);
     if (pthread_mutex_init(&client->connection_lock, NULL) != 0) {
         pthread_mutex_destroy(&client->status_lock);
         client->status_lock_initialized = false;
         pthread_mutex_destroy(&client->pending_lock);
         client->pending_lock_initialized = false;
-        lantern_string_list_reset(&client->connected_peer_ids);
         return -1;
     }
     client->connection_lock_initialized = true;
-    if (lantern_string_list_append(&client->connected_peer_ids, peer_id) != 0) {
+    if (client_test_set_connected_peer(client, peer_id) != 0) {
         pthread_mutex_destroy(&client->connection_lock);
         client->connection_lock_initialized = false;
         pthread_mutex_destroy(&client->status_lock);
         client->status_lock_initialized = false;
         pthread_mutex_destroy(&client->pending_lock);
         client->pending_lock_initialized = false;
-        lantern_string_list_reset(&client->connected_peer_ids);
         return -1;
     }
-    client->connected_peers = 1u;
     return 0;
 }
 
@@ -279,8 +281,7 @@ static void disable_sync_test_peer(struct lantern_client *client)
         pthread_mutex_destroy(&client->connection_lock);
         client->connection_lock_initialized = false;
     }
-    lantern_string_list_reset(&client->connected_peer_ids);
-    client->connected_peers = 0u;
+    client_test_clear_connected_peers(client);
     if (client->status_lock_initialized) {
         pthread_mutex_destroy(&client->status_lock);
         client->status_lock_initialized = false;
@@ -1109,7 +1110,7 @@ static int test_idle_status_triggers_syncing_before_gossip_backfill(void)
     struct PQSignatureSchemeSecretKey *secret = NULL;
     LanternRoot child_root;
     LanternSignedBlock orphan_block;
-    const char *peer_id = "16Uiu2HAmPV5jU62WtmDkCEmfq1jzbBDkGbHNsDN78gJyvmv2TuC5";
+    const char *peer_id = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
     int rc = 1;
 
     memset(&orphan_block, 0, sizeof(orphan_block));
@@ -1193,7 +1194,7 @@ static int test_idle_status_at_known_head_completes_sync(void)
     struct PQSignatureSchemePublicKey *pub = NULL;
     struct PQSignatureSchemeSecretKey *secret = NULL;
     LanternRoot child_root;
-    const char *peer_id = "16Uiu2HAmPV5jU62WtmDkCEmfq1jzbBDkGbHNsDN78gJyvmv2TuC6";
+    const char *peer_id = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
     int rc = 1;
 
     if (client_test_setup_vote_validation_client(
@@ -1242,7 +1243,7 @@ static int test_peer_status_updates_sync_network_view(void)
     struct PQSignatureSchemeSecretKey *secret = NULL;
     LanternRoot child_root;
     LanternRoot finalized_root;
-    const char *peer_id = "16Uiu2HAmPV5jU62WtmDkCEmfq1jzbBDkGbHNsDN78gJyvmv2TuC7";
+    const char *peer_id = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
     int rc = 1;
 
     if (client_test_setup_vote_validation_client(

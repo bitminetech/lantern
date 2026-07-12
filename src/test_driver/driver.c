@@ -19,22 +19,14 @@
 #include "tests/support/fixture_loader.h"
 #include "tests/support/state_store_adapter.h"
 
-struct stored_vote_entry {
-    bool has_vote;
-    LanternVote vote;
-};
-
-struct stored_state_entry {
-    LanternRoot root;
-    LanternState state;
-    bool has_state;
-    struct stored_vote_entry *votes;
-    size_t vote_count;
-};
-
 struct hash_mapping_entry {
     LanternRoot leanspec_hash;
     LanternRoot c_hash;
+};
+
+struct stored_votes_entry {
+    LanternRoot root;
+    LanternStore store;
 };
 
 struct fork_choice_driver {
@@ -42,9 +34,9 @@ struct fork_choice_driver {
     LanternStore fork_choice_store;
     LanternState state;
     LanternRoot canonical_head_block_root;
-    struct stored_state_entry *stored_states;
-    size_t stored_state_count;
-    size_t stored_state_cap;
+    struct stored_votes_entry *stored_votes;
+    size_t stored_vote_count;
+    size_t stored_vote_cap;
     struct hash_mapping_entry *hash_mapping;
     size_t hash_mapping_count;
     size_t hash_mapping_cap;
@@ -194,201 +186,94 @@ static void reset_signed_block(LanternSignedBlock *block)
     }
 }
 
-static void stored_state_entries_reset(
-    struct stored_state_entry **entries_ptr,
-    size_t *count_ptr,
-    size_t *cap_ptr)
-{
-    if (!entries_ptr || !count_ptr || !cap_ptr)
-    {
-        return;
-    }
-    struct stored_state_entry *entries = *entries_ptr;
-    if (entries)
-    {
-        for (size_t i = 0; i < *count_ptr; ++i)
-        {
-            if (entries[i].has_state)
-            {
-                lantern_state_reset(&entries[i].state);
-                entries[i].has_state = false;
-            }
-            free(entries[i].votes);
-        }
-        free(entries);
-    }
-    *entries_ptr = NULL;
-    *count_ptr = 0;
-    *cap_ptr = 0;
-}
-
-static struct stored_state_entry *stored_state_find(
-    struct stored_state_entry *entries,
-    size_t count,
+static struct stored_votes_entry *stored_votes_find(
+    struct fork_choice_driver *driver,
     const LanternRoot *root)
 {
-    if (!entries || !root)
+    if (!driver || !root)
     {
         return NULL;
     }
-    for (size_t i = 0; i < count; ++i)
+    for (size_t i = 0; i < driver->stored_vote_count; ++i)
     {
-        if (root_equal(&entries[i].root, root))
+        if (root_equal(&driver->stored_votes[i].root, root))
         {
-            return &entries[i];
+            return &driver->stored_votes[i];
         }
     }
     return NULL;
 }
 
-static int stored_state_add(
-    struct stored_state_entry **entries_ptr,
-    size_t *count_ptr,
-    size_t *cap_ptr,
-    const LanternRoot *root,
-    const LanternState *state,
-    struct stored_vote_entry *votes,
-    size_t vote_count)
+static void stored_votes_reset(struct fork_choice_driver *driver)
 {
-    if (!entries_ptr || !count_ptr || !cap_ptr || !root || !state)
+    if (!driver)
     {
-        free(votes);
-        return -1;
+        return;
     }
-
-    struct stored_state_entry *entry = stored_state_find(*entries_ptr, *count_ptr, root);
-    if (entry)
+    for (size_t i = 0; i < driver->stored_vote_count; ++i)
     {
-        if (entry->has_state)
-        {
-            lantern_state_reset(&entry->state);
-        }
-        if (lantern_state_clone(state, &entry->state) != 0)
-        {
-            free(votes);
-            entry->has_state = false;
-            return -1;
-        }
-        entry->has_state = true;
-        free(entry->votes);
-        entry->votes = votes;
-        entry->vote_count = vote_count;
-        return 0;
+        lantern_store_reset(&driver->stored_votes[i].store);
     }
-
-    if (*count_ptr == *cap_ptr)
-    {
-        size_t new_cap = *cap_ptr == 0 ? 8u : *cap_ptr * 2u;
-        if (new_cap < *cap_ptr)
-        {
-            free(votes);
-            return -1;
-        }
-        struct stored_state_entry *expanded =
-            realloc(*entries_ptr, new_cap * sizeof(*expanded));
-        if (!expanded)
-        {
-            free(votes);
-            return -1;
-        }
-        *entries_ptr = expanded;
-        *cap_ptr = new_cap;
-    }
-
-    entry = &(*entries_ptr)[*count_ptr];
-    memset(entry, 0, sizeof(*entry));
-    entry->root = *root;
-    if (lantern_state_clone(state, &entry->state) != 0)
-    {
-        free(votes);
-        return -1;
-    }
-    entry->has_state = true;
-    entry->votes = votes;
-    entry->vote_count = vote_count;
-    *count_ptr += 1u;
-    return 0;
+    free(driver->stored_votes);
+    driver->stored_votes = NULL;
+    driver->stored_vote_count = 0;
+    driver->stored_vote_cap = 0;
 }
 
-static int stored_state_save(
-    struct stored_state_entry **entries_ptr,
-    size_t *count_ptr,
-    size_t *cap_ptr,
+static int stored_votes_save(
+    struct fork_choice_driver *driver,
     const LanternRoot *root,
     const LanternState *state)
 {
-    if (!entries_ptr || !count_ptr || !cap_ptr || !root || !state)
+    const LanternStore *source = lantern_test_state_store_find(state);
+    if (!driver || !root || !source)
     {
         return -1;
     }
-
-    size_t vote_capacity = lantern_state_validator_capacity(state);
-    struct stored_vote_entry *votes = NULL;
-    if (vote_capacity > 0)
+    struct stored_votes_entry *entry = stored_votes_find(driver, root);
+    if (entry)
     {
-        votes = calloc(vote_capacity, sizeof(*votes));
-        if (!votes)
+        return lantern_store_clone_validator_votes(source, &entry->store);
+    }
+    if (driver->stored_vote_count == driver->stored_vote_cap)
+    {
+        size_t capacity = driver->stored_vote_cap ? driver->stored_vote_cap * 2u : 8u;
+        if (capacity < driver->stored_vote_cap
+            || capacity > SIZE_MAX / sizeof(*driver->stored_votes))
         {
             return -1;
         }
-        for (size_t i = 0; i < vote_capacity; ++i)
+        struct stored_votes_entry *entries =
+            realloc(driver->stored_votes, capacity * sizeof(*entries));
+        if (!entries)
         {
-            if (!lantern_state_validator_has_vote(state, i))
-            {
-                continue;
-            }
-            LanternVote vote;
-            if (lantern_state_get_validator_vote(state, i, &vote) != 0)
-            {
-                free(votes);
-                return -1;
-            }
-            votes[i].has_vote = true;
-            votes[i].vote = vote;
+            return -1;
         }
+        driver->stored_votes = entries;
+        driver->stored_vote_cap = capacity;
     }
-    return stored_state_add(entries_ptr, count_ptr, cap_ptr, root, state, votes, vote_capacity);
+    entry = &driver->stored_votes[driver->stored_vote_count];
+    entry->root = *root;
+    lantern_store_init(&entry->store);
+    if (lantern_store_clone_validator_votes(source, &entry->store) != 0)
+    {
+        lantern_store_reset(&entry->store);
+        return -1;
+    }
+    driver->stored_vote_count += 1u;
+    return 0;
 }
 
-static int stored_state_restore(
-    struct stored_state_entry *entries,
-    size_t count,
+static int stored_votes_restore(
+    struct fork_choice_driver *driver,
     const LanternRoot *root,
     LanternState *state)
 {
-    if (!entries || !root || !state)
-    {
-        return -1;
-    }
-    struct stored_state_entry *entry = stored_state_find(entries, count, root);
-    if (!entry || !entry->has_state)
-    {
-        return -1;
-    }
-    lantern_state_reset(state);
-    if (lantern_state_clone(&entry->state, state) != 0)
-    {
-        return -1;
-    }
-    if (state->config.num_validators == 0)
-    {
-        return -1;
-    }
-    if (lantern_state_prepare_validator_votes(state, state->config.num_validators) != 0)
-    {
-        return -1;
-    }
-    size_t capacity = lantern_state_validator_capacity(state);
-    size_t copy_count = entry->vote_count < capacity ? entry->vote_count : capacity;
-    for (size_t i = 0; entry->votes && i < copy_count; ++i)
-    {
-        if (entry->votes[i].has_vote
-            && lantern_state_set_validator_vote(state, i, &entry->votes[i].vote) != 0)
-        {
-            return -1;
-        }
-    }
-    return 0;
+    struct stored_votes_entry *entry = stored_votes_find(driver, root);
+    LanternStore *dest = lantern_test_state_store_ensure(state);
+    return entry && dest
+        ? lantern_store_clone_validator_votes(&entry->store, dest)
+        : -1;
 }
 
 static void hash_mapping_reset(struct hash_mapping_entry **entries, size_t *count, size_t *cap)
@@ -951,16 +836,15 @@ static int sync_state_to_fork_choice_head(struct fork_choice_driver *driver)
     {
         return 0;
     }
-    if (!stored_state_find(driver->stored_states, driver->stored_state_count, &head_root))
+    const LanternState *head_state =
+        lantern_fork_choice_block_state(&driver->fork_choice, &head_root);
+    if (!head_state)
     {
         return -1;
     }
-    if (stored_state_restore(
-            driver->stored_states,
-            driver->stored_state_count,
-            &head_root,
-            &driver->state)
-        != 0)
+    lantern_state_reset(&driver->state);
+    if (lantern_state_clone(head_state, &driver->state) != 0
+        || stored_votes_restore(driver, &head_root, &driver->state) != 0)
     {
         return -1;
     }
@@ -980,10 +864,7 @@ static void fork_choice_driver_reset(struct fork_choice_driver *driver)
         lantern_store_reset(&driver->fork_choice_store);
         lantern_state_reset(&driver->state);
     }
-    stored_state_entries_reset(
-        &driver->stored_states,
-        &driver->stored_state_count,
-        &driver->stored_state_cap);
+    stored_votes_reset(driver);
     hash_mapping_reset(
         &driver->hash_mapping,
         &driver->hash_mapping_count,
@@ -1199,18 +1080,16 @@ static int fork_choice_process_block_step(
         {
             goto cleanup;
         }
-        if (!stored_state_find(driver->stored_states, driver->stored_state_count, c_parent_root))
+        const LanternState *parent_state =
+            lantern_fork_choice_block_state(&driver->fork_choice, c_parent_root);
+        if (!parent_state)
         {
             goto cleanup;
         }
         lantern_state_init(&branch_state);
         branch_state_initialized = true;
-        if (stored_state_restore(
-                driver->stored_states,
-                driver->stored_state_count,
-                c_parent_root,
-                &branch_state)
-            != 0)
+        if (lantern_state_clone(parent_state, &branch_state) != 0
+            || stored_votes_restore(driver, c_parent_root, &branch_state) != 0)
         {
             goto cleanup;
         }
@@ -1232,31 +1111,13 @@ static int fork_choice_process_block_step(
         block_finalized = active_state->latest_finalized;
     }
 
-    if (transition_performed)
+    if (stored_votes_save(
+            driver,
+            &block_root,
+            transition_performed ? active_state : &driver->state)
+        != 0)
     {
-        if (stored_state_save(
-                &driver->stored_states,
-                &driver->stored_state_count,
-                &driver->stored_state_cap,
-                &block_root,
-                active_state)
-            != 0)
-        {
-            goto cleanup;
-        }
-    }
-    else if (!stored_state_find(driver->stored_states, driver->stored_state_count, &block_root))
-    {
-        if (stored_state_save(
-                &driver->stored_states,
-                &driver->stored_state_count,
-                &driver->stored_state_cap,
-                &block_root,
-                &driver->state)
-            != 0)
-        {
-            goto cleanup;
-        }
+        goto cleanup;
     }
 
     uint64_t previous_finalized_slot = driver->fork_choice.latest_finalized.slot;
@@ -1266,6 +1127,14 @@ static int fork_choice_process_block_step(
             &block_justified,
             &block_finalized,
             &block_root)
+        != 0)
+    {
+        goto cleanup;
+    }
+    if (lantern_fork_choice_set_block_state(
+            &driver->fork_choice,
+            &block_root,
+            transition_performed ? active_state : &driver->state)
         != 0)
     {
         goto cleanup;
@@ -1441,12 +1310,14 @@ int lantern_test_driver_fork_choice_init(
         .root = anchor_root,
         .slot = anchor_block.slot,
     };
-    if (lantern_fork_choice_set_anchor(
+    if (stored_votes_save(&g_driver, &anchor_root, &g_driver.state) != 0
+        || lantern_fork_choice_set_anchor_with_state(
             &g_driver.fork_choice,
             &anchor_block,
             &anchor_checkpoint,
             &anchor_checkpoint,
-            &anchor_root)
+            &anchor_root,
+            &g_driver.state)
         != 0)
     {
         if (out_error)
@@ -1456,20 +1327,13 @@ int lantern_test_driver_fork_choice_init(
         reset_plain_block(&anchor_block);
         goto cleanup_state;
     }
-    if (stored_state_save(
-            &g_driver.stored_states,
-            &g_driver.stored_state_count,
-            &g_driver.stored_state_cap,
-            &anchor_root,
-            &g_driver.state)
-        != 0
-        || hash_mapping_add(
+    if (hash_mapping_add(
                &g_driver.hash_mapping,
                &g_driver.hash_mapping_count,
                &g_driver.hash_mapping_cap,
                &anchor_root,
                &anchor_root)
-               != 0)
+        != 0)
     {
         if (out_error)
         {
@@ -1491,10 +1355,7 @@ cleanup_state:
     lantern_state_reset(&g_driver.state);
     lantern_fork_choice_reset(&g_driver.fork_choice);
     lantern_store_reset(&g_driver.fork_choice_store);
-    stored_state_entries_reset(
-        &g_driver.stored_states,
-        &g_driver.stored_state_count,
-        &g_driver.stored_state_cap);
+    stored_votes_reset(&g_driver);
     hash_mapping_reset(
         &g_driver.hash_mapping,
         &g_driver.hash_mapping_count,

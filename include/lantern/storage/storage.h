@@ -41,11 +41,6 @@ int lantern_storage_store_invalid_block_bytes_for_root(
     const LanternRoot *root,
     const uint8_t *raw_block_ssz,
     size_t raw_block_ssz_len);
-int lantern_storage_store_invalid_gossip_payload(
-    const char *data_dir,
-    const char *payload_type,
-    const uint8_t *payload,
-    size_t payload_len);
 int lantern_storage_store_state_for_root(
     const char *data_dir,
     const LanternRoot *root,

@@ -149,7 +149,6 @@ static void cleanup_init_data_dir(const char *data_dir)
     static const char *const dirs[] = {
         "blocks",
         "invalid_blocks",
-        "invalid_gossip",
         "states",
         "indices",
     };
@@ -1265,20 +1264,8 @@ static int test_checkpoint_validator_pubkeys_checked_and_preserved(void)
     }
 
     client.genesis.chain_config.validator_count = validator_count;
-    client.genesis.chain_config.validator_pubkeys_count = validator_count;
     client.genesis.chain_config.validator_attestation_pubkeys = attestation_pubkeys;
     client.genesis.chain_config.validator_proposal_pubkeys = proposal_pubkeys;
-
-    struct lantern_validator_record records[validator_count];
-    memset(records, 0, sizeof(records));
-    for (size_t i = 0; i < validator_count; ++i)
-    {
-        records[i].index = i;
-        memset(records[i].pubkey_bytes, 0xEE, LANTERN_VALIDATOR_PUBKEY_SIZE);
-        records[i].has_pubkey_bytes = true;
-    }
-    client.genesis.validator_registry.records = records;
-    client.genesis.validator_registry.count = validator_count;
 
     int rc = 1;
     LanternRoot root_before;
@@ -1312,7 +1299,8 @@ static int test_checkpoint_validator_pubkeys_checked_and_preserved(void)
     }
     client.state.validators[1].proposal_pubkey[0] ^= 0x01u;
 
-    if (lantern_client_refresh_state_validators(&client) != LANTERN_CLIENT_OK)
+    if (lantern_client_validate_state_validator_pubkeys(&client, &client.state, "test")
+        != LANTERN_CLIENT_OK)
     {
         fprintf(stderr, "refresh rejected matching verified state pubkeys\n");
         goto cleanup;
@@ -1328,8 +1316,6 @@ static int test_checkpoint_validator_pubkeys_checked_and_preserved(void)
     rc = 0;
 
 cleanup:
-    client.genesis.validator_registry.records = NULL;
-    client.genesis.validator_registry.count = 0;
     lantern_state_reset(&client.state);
     return rc;
 }

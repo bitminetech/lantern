@@ -10,8 +10,9 @@ extern "C" {
 #endif
 
 struct lantern_enr_key_value {
-    char *key;
-    uint8_t *value;
+    const uint8_t *key;
+    size_t key_len;
+    const uint8_t *value;
     size_t value_len;
 };
 
@@ -19,7 +20,7 @@ struct lantern_enr_record {
     char *encoded;
     uint8_t *rlp_bytes;
     size_t rlp_len;
-    uint8_t *signature;
+    const uint8_t *signature;
     size_t signature_len;
     uint64_t sequence;
     struct lantern_enr_key_value *pairs;
@@ -44,7 +45,6 @@ int lantern_enr_record_decode(const char *enr_text, struct lantern_enr_record *r
 const struct lantern_enr_key_value *lantern_enr_record_find(const struct lantern_enr_record *record, const char *key);
 bool lantern_enr_record_is_valid(const struct lantern_enr_record *record);
 int lantern_enr_record_signature_valid(const struct lantern_enr_record *record, bool *out_valid);
-int lantern_enr_record_verify_signature(const struct lantern_enr_record *record, bool *out_valid);
 int lantern_enr_record_node_id(const struct lantern_enr_record *record, uint8_t out_node_id[32]);
 int lantern_enr_record_ip4(const struct lantern_enr_record *record, char *buffer, size_t buffer_len);
 int lantern_enr_record_ip6(const struct lantern_enr_record *record, char *buffer, size_t buffer_len);

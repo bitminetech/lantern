@@ -23,7 +23,6 @@
 #include "lantern/support/strings.h"
 
 static const size_t GENESIS_LINE_BUFFER_LEN = 2048;
-static const size_t GENESIS_INITIAL_INDEX_CAPACITY = 4;
 
 static int compare_u64(const void *lhs, const void *rhs);
 static bool entry_has_assignment_index(
@@ -49,8 +48,7 @@ static int parse_assignment_file(
     size_t *out_assigned_total);
 
 static int finalize_assignment_entries(
-    struct lantern_validator_config *config,
-    uint64_t validator_count);
+    struct lantern_validator_config *config);
 
 
 /**
@@ -104,7 +102,7 @@ static bool entry_has_assignment_index(
 /**
  * Append a validator index to an entry's explicit index list.
  *
- * Rejects duplicate indices and grows `entry->indices` as needed.
+ * Appends an index after the caller has checked it for duplication.
  *
  * @param entry Entry to update.
  * @param index Validator index to append.
@@ -124,48 +122,21 @@ static int append_assignment_index(struct lantern_validator_config_entry *entry,
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
 
-    for (size_t index_pos = 0; index_pos < entry->indices_len; ++index_pos)
+    if (entry->indices_len >= entry->count)
     {
-        if (entry->indices[index_pos] == index)
-        {
-            return LANTERN_GENESIS_ERR_INVALID_DATA;
-        }
+        return LANTERN_GENESIS_ERR_INVALID_DATA;
     }
-
-    if (entry->indices_len == entry->indices_cap)
+    if (!entry->indices)
     {
-        if (entry->indices_len == SIZE_MAX)
+        if (entry->count > SIZE_MAX / sizeof(*entry->indices))
         {
             return LANTERN_GENESIS_ERR_OVERFLOW;
         }
-
-        if (entry->indices_cap > SIZE_MAX / 2)
-        {
-            return LANTERN_GENESIS_ERR_OVERFLOW;
-        }
-
-        size_t new_cap = GENESIS_INITIAL_INDEX_CAPACITY;
-        if (entry->indices_cap != 0)
-        {
-            new_cap = entry->indices_cap * 2;
-        }
-        if (new_cap < (entry->indices_len + 1))
-        {
-            new_cap = entry->indices_len + 1;
-        }
-        if (new_cap > SIZE_MAX / sizeof(*entry->indices))
-        {
-            return LANTERN_GENESIS_ERR_OVERFLOW;
-        }
-
-        void *grown = realloc(entry->indices, new_cap * sizeof(*entry->indices));
-        if (!grown)
+        entry->indices = malloc((size_t)entry->count * sizeof(*entry->indices));
+        if (!entry->indices)
         {
             return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
         }
-
-        entry->indices = grown;
-        entry->indices_cap = new_cap;
     }
 
     entry->indices[entry->indices_len] = index;
@@ -406,8 +377,8 @@ static int parse_assignment_file(
 /**
  * Validate and finalize config entries after explicit assignments are parsed.
  *
- * Ensures each entry has exactly `entry->count` explicit indices, sorts them,
- * and derives a `[start_index, end_index)` range from the minimum and maximum.
+ * Ensures each entry has exactly `entry->count` explicit indices, then sorts
+ * each list for binary-search lookup.
  *
  * @param config          Validator config to validate and update in place.
  * @param validator_count Total number of validators (must be non-zero).
@@ -419,11 +390,9 @@ static int parse_assignment_file(
  *
  * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to config.
  */
-static int finalize_assignment_entries(
-    struct lantern_validator_config *config,
-    uint64_t validator_count)
+static int finalize_assignment_entries(struct lantern_validator_config *config)
 {
-    if (!config || !config->entries || config->count == 0 || validator_count == 0)
+    if (!config || !config->entries || config->count == 0)
     {
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
@@ -437,17 +406,6 @@ static int finalize_assignment_entries(
         }
 
         qsort(entry->indices, entry->indices_len, sizeof(*entry->indices), compare_u64);
-
-        entry->start_index = entry->indices[0];
-
-        uint64_t last = entry->indices[entry->indices_len - 1];
-        if (last == UINT64_MAX)
-        {
-            return LANTERN_GENESIS_ERR_OVERFLOW;
-        }
-
-        entry->end_index = last + 1;
-        entry->has_range = true;
     }
 
     return LANTERN_GENESIS_OK;
@@ -491,8 +449,7 @@ struct lantern_validator_config_entry *lantern_validator_config_find(
 /**
  * Assign contiguous validator index ranges for each config entry.
  *
- * Entries are assigned sequential ranges starting at index 0, in the order they
- * appear in `config->entries`. The assigned range is `[start_index, end_index)`.
+ * Entries receive sequential index lists starting at zero, in config order.
  *
  * @spec Lantern validator-config.yaml and validators.yaml mapping formats.
  *
@@ -523,17 +480,29 @@ int lantern_validator_config_assign_ranges(
             return LANTERN_GENESIS_ERR_INVALID_DATA;
         }
 
-        entry->start_index = next_index;
-
         if (entry->count > (validator_count - next_index))
         {
             return LANTERN_GENESIS_ERR_INVALID_DATA;
         }
 
-        uint64_t end = next_index + entry->count;
-        entry->end_index = end;
-        entry->has_range = true;
-        next_index = end;
+        if (entry->count > SIZE_MAX / sizeof(*entry->indices))
+        {
+            return LANTERN_GENESIS_ERR_OVERFLOW;
+        }
+        uint64_t *indices = realloc(
+            entry->indices,
+            (size_t)entry->count * sizeof(*entry->indices));
+        if (!indices)
+        {
+            return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
+        }
+        entry->indices = indices;
+        entry->indices_len = (size_t)entry->count;
+        for (size_t i = 0; i < entry->indices_len; ++i)
+        {
+            entry->indices[i] = next_index + i;
+        }
+        next_index += entry->count;
     }
 
     if (next_index != validator_count)
@@ -631,7 +600,7 @@ int lantern_validator_config_apply_assignments(
         goto cleanup;
     }
 
-    result = finalize_assignment_entries(config, validator_count);
+    result = finalize_assignment_entries(config);
 
 cleanup:
     fclose(fp);

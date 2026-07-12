@@ -141,22 +141,6 @@ int lantern_store_get_attestation_data(
     const LanternRoot *data_root,
     LanternAttestationData *out_data);
 
-static inline int lantern_store_set_gossip_signature(
-    LanternStore *store,
-    const LanternSignatureKey *key,
-    const LanternAttestationData *data,
-    const LanternSignature *signature,
-    uint64_t target_slot) {
-    return lantern_store_set_attestation_signature(store, key, data, signature, target_slot);
-}
-
-static inline int lantern_store_get_gossip_signature(
-    const LanternStore *store,
-    const LanternSignatureKey *key,
-    LanternSignature *out_signature) {
-    return lantern_store_get_attestation_signature(store, key, out_signature);
-}
-
 #ifdef __cplusplus
 }
 #endif

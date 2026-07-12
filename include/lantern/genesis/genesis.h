@@ -18,7 +18,6 @@ struct lantern_genesis_paths {
     char *config_path;
     char *validator_registry_path;
     char *nodes_path;
-    char *state_path;
     char *validator_config_path;
 };
 
@@ -28,20 +27,6 @@ struct lantern_chain_config {
     uint64_t attestation_committee_count;
     uint8_t *validator_attestation_pubkeys; /* flattened array: count * LANTERN_VALIDATOR_PUBKEY_SIZE */
     uint8_t *validator_proposal_pubkeys;    /* flattened array: count * LANTERN_VALIDATOR_PUBKEY_SIZE */
-    size_t validator_pubkeys_count;         /* entry count shared by both packed arrays */
-};
-
-struct lantern_validator_record {
-    uint64_t index;
-    char *pubkey_hex;
-    char *withdrawal_credentials_hex;
-    uint8_t pubkey_bytes[LANTERN_VALIDATOR_PUBKEY_SIZE];
-    bool has_pubkey_bytes;
-};
-
-struct lantern_validator_registry {
-    struct lantern_validator_record *records;
-    size_t count;
 };
 
 struct lantern_validator_config_enr {
@@ -51,34 +36,19 @@ struct lantern_validator_config_enr {
     bool is_aggregator;
 };
 
-enum lantern_validator_client_kind {
-    LANTERN_VALIDATOR_CLIENT_UNKNOWN = 0,
-    LANTERN_VALIDATOR_CLIENT_LANTERN,
-    LANTERN_VALIDATOR_CLIENT_QLEAN,
-    LANTERN_VALIDATOR_CLIENT_REAM,
-    LANTERN_VALIDATOR_CLIENT_ZEAM,
-};
-
 struct lantern_validator_config_entry {
     char *name;
     char *privkey_hex;
-    char *peer_id_text;
-    enum lantern_validator_client_kind client_kind;
     struct lantern_validator_config_enr enr;
     uint64_t count;
     uint64_t subnet;
     bool has_subnet;
     char *xmss_dir;
-    uint64_t start_index;
-    uint64_t end_index;
-    bool has_range;
     uint64_t *indices;
     size_t indices_len;
-    size_t indices_cap;
 };
 
 struct lantern_validator_config {
-    char *shuffle;
     struct lantern_validator_config_entry *entries;
     size_t count;
 };
@@ -86,10 +56,7 @@ struct lantern_validator_config {
 struct lantern_genesis_artifacts {
     struct lantern_chain_config chain_config;
     struct lantern_enr_record_list enrs;
-    struct lantern_validator_registry validator_registry;
     struct lantern_validator_config validator_config;
-    uint8_t *state_bytes;
-    size_t state_size;
 };
 
 void lantern_genesis_artifacts_init(struct lantern_genesis_artifacts *artifacts);

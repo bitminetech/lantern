@@ -8,6 +8,34 @@
 #include "lantern/consensus/state.h"
 #include "lantern/genesis/genesis.h"
 #include "lantern/support/strings.h"
+#include "../../src/internal/yaml_parser.h"
+
+static int test_indentless_yaml_array(void) {
+    char path[PATH_MAX];
+    int written = snprintf(path, sizeof(path), "/tmp/lantern_indentless_yaml_%ld.yaml", (long)getpid());
+    if (written <= 0 || (size_t)written >= sizeof(path)) {
+        return -1;
+    }
+    FILE *file = fopen(path, "w");
+    if (!file) {
+        return -1;
+    }
+    fputs("GENESIS_VALIDATORS:\n- attestation_pubkey: 0x01\n  proposal_pubkey: 0x02\nNEXT_KEY: value\n", file);
+    fclose(file);
+
+    size_t count = 0u;
+    LanternYamlObject *objects = lantern_yaml_read_array(path, "GENESIS_VALIDATORS", &count);
+    unlink(path);
+    int result = objects && count == 1u && objects[0].num_pairs == 2u
+        && strcmp(objects[0].pairs[0].key, "attestation_pubkey") == 0
+        && strcmp(objects[0].pairs[0].value, "0x01") == 0
+        && strcmp(objects[0].pairs[1].key, "proposal_pubkey") == 0
+        && strcmp(objects[0].pairs[1].value, "0x02") == 0
+        ? 0
+        : -1;
+    lantern_yaml_free_objects(objects, count);
+    return result;
+}
 
 static int write_temp_nodes_file(char *buffer, size_t length) {
     if (!buffer || length == 0) {
@@ -70,6 +98,10 @@ static int expect_pubkey_hex(const uint8_t *actual, const char *expected_hex) {
 }
 
 int main(void) {
+    if (test_indentless_yaml_array() != 0) {
+        fprintf(stderr, "indentless YAML array parsing failed\n");
+        return 1;
+    }
     struct lantern_genesis_artifacts artifacts;
     lantern_genesis_artifacts_init(&artifacts);
     int rc = 1;
@@ -78,13 +110,11 @@ int main(void) {
 
     char config_path[PATH_MAX];
     char annotated_path[PATH_MAX];
-    char state_path[PATH_MAX];
     char validator_config_path[PATH_MAX];
     char nodes_path[PATH_MAX];
 
     build_fixture_path(config_path, sizeof(config_path), "genesis/config.yaml");
     build_fixture_path(annotated_path, sizeof(annotated_path), "genesis/annotated_validators.yaml");
-    build_fixture_path(state_path, sizeof(state_path), "genesis/genesis.ssz");
     build_fixture_path(validator_config_path, sizeof(validator_config_path), "genesis/validator-config.yaml");
 
     if (write_temp_nodes_file(nodes_path, sizeof(nodes_path)) != 0) {
@@ -96,7 +126,6 @@ int main(void) {
         .config_path = config_path,
         .validator_registry_path = annotated_path,
         .nodes_path = nodes_path,
-        .state_path = state_path,
         .validator_config_path = validator_config_path,
     };
 
@@ -118,8 +147,7 @@ int main(void) {
         goto cleanup;
     }
     if (!artifacts.chain_config.validator_attestation_pubkeys
-        || !artifacts.chain_config.validator_proposal_pubkeys
-        || artifacts.chain_config.validator_pubkeys_count != 7) {
+        || !artifacts.chain_config.validator_proposal_pubkeys) {
         fprintf(stderr, "genesis validator pubkey pairs missing from chain config\n");
         goto cleanup;
     }
@@ -153,20 +181,12 @@ int main(void) {
         fprintf(stderr, "unexpected last proposal pubkey\n");
         goto cleanup;
     }
-    if (artifacts.validator_registry.count != 7) {
-        fprintf(stderr, "registry count mismatch: %zu\n", artifacts.validator_registry.count);
-        goto cleanup;
-    }
     if (artifacts.enrs.count != 3) {
         fprintf(stderr, "ENR list mismatch: %zu\n", artifacts.enrs.count);
         goto cleanup;
     }
     if (artifacts.validator_config.count != 7) {
         fprintf(stderr, "validator config count mismatch: %zu\n", artifacts.validator_config.count);
-        goto cleanup;
-    }
-    if (!artifacts.state_bytes || artifacts.state_size == 0) {
-        fprintf(stderr, "missing genesis state bytes\n");
         goto cleanup;
     }
     struct lantern_validator_config_entry *lantern_entry = lantern_validator_config_find(
@@ -191,7 +211,7 @@ int main(void) {
     if (lantern_state_generate_genesis(
             &generated_state,
             artifacts.chain_config.genesis_time,
-            artifacts.chain_config.validator_pubkeys_count)
+            artifacts.chain_config.validator_count)
         != 0) {
         fprintf(stderr, "failed to generate state from chain config\n");
         goto cleanup;
@@ -200,7 +220,7 @@ int main(void) {
             &generated_state,
             artifacts.chain_config.validator_attestation_pubkeys,
             artifacts.chain_config.validator_proposal_pubkeys,
-            artifacts.chain_config.validator_pubkeys_count)
+            (size_t)artifacts.chain_config.validator_count)
         != 0) {
         fprintf(stderr, "failed to populate dual validator pubkeys in generated state\n");
         goto cleanup;

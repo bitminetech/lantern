@@ -196,46 +196,6 @@ static void test_validator_index_helpers(void) {
     assert(lantern_validator_index_compute_subnet_id((LanternValidatorIndex)3, 0, &subnet_id) != 0);
 }
 
-static void test_validator_indices_bitlist_roundtrip(void) {
-    LanternValidatorIndices indices;
-    lantern_validator_indices_init(&indices);
-    assert(lantern_validator_indices_append(&indices, (LanternValidatorIndex)1) == 0);
-    assert(lantern_validator_indices_append(&indices, (LanternValidatorIndex)3) == 0);
-    assert(lantern_validator_indices_append(&indices, (LanternValidatorIndex)3) == 0);
-    assert(lantern_validator_indices_append(&indices, (LanternValidatorIndex)9) == 0);
-
-    struct lantern_bitlist bits;
-    lantern_bitlist_init(&bits);
-    assert(lantern_aggregation_bits_from_validator_indices(&bits, &indices) == 0);
-    assert(bits.bit_length == 10);
-    assert(lantern_bitlist_get(&bits, 1));
-    assert(lantern_bitlist_get(&bits, 3));
-    assert(lantern_bitlist_get(&bits, 9));
-    assert(!lantern_bitlist_get(&bits, 2));
-
-    LanternValidatorIndices restored;
-    lantern_validator_indices_init(&restored);
-    assert(lantern_aggregation_bits_to_validator_indices(&bits, &restored) == 0);
-    assert(restored.length == 3);
-    assert(restored.data[0] == 1);
-    assert(restored.data[1] == 3);
-    assert(restored.data[2] == 9);
-
-    LanternValidatorIndices empty_indices;
-    lantern_validator_indices_init(&empty_indices);
-    assert(lantern_aggregation_bits_from_validator_indices(&bits, &empty_indices) != 0);
-
-    struct lantern_bitlist empty_bits;
-    lantern_bitlist_init(&empty_bits);
-    assert(lantern_aggregation_bits_to_validator_indices(&empty_bits, &restored) != 0);
-
-    lantern_bitlist_reset(&empty_bits);
-    lantern_validator_indices_reset(&empty_indices);
-    lantern_validator_indices_reset(&restored);
-    lantern_bitlist_reset(&bits);
-    lantern_validator_indices_reset(&indices);
-}
-
 static void expect_ok(int rc, const char *context) {
     if (rc != 0) {
         fprintf(stderr, "%s failed (rc=%d)\n", context, rc);
@@ -625,7 +585,6 @@ static void test_state_rejects_truncated_state_payload(void) {
 
 int main(void) {
     test_validator_index_helpers();
-    test_validator_indices_bitlist_roundtrip();
     test_checkpoint_roundtrip();
     test_vote_roundtrip();
     test_signed_vote_roundtrip();

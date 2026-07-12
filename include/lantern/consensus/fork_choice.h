@@ -21,8 +21,6 @@ struct lantern_fork_choice_block_entry {
     LanternRoot parent_root;
     uint64_t slot;
     LanternValidatorIndex proposer_index;
-    bool has_validator_count;
-    uint64_t validator_count;
 };
 
 struct lantern_fork_choice_state_entry {
@@ -164,10 +162,6 @@ int lantern_fork_choice_block_info(
     uint64_t *out_slot,
     LanternRoot *out_parent_root,
     bool *out_has_parent);
-int lantern_fork_choice_set_block_validator_count(
-    LanternForkChoice *store,
-    const LanternRoot *root,
-    uint64_t validator_count);
 int lantern_fork_choice_set_block_state(
     LanternForkChoice *store,
     const LanternRoot *root,

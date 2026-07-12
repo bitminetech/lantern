@@ -159,7 +159,7 @@ static void peer_id_to_text_safe(const struct lantern_peer_id *peer, char *out, 
     if (!peer || peer->len == 0) {
         return;
     }
-    if (lantern_peer_id_to_text(peer, out, out_len) != 0) {
+    if (lantern_peer_id_to_text(peer, out, out_len) < 0) {
         out[0] = '\0';
     }
 }
@@ -1244,8 +1244,15 @@ int lantern_gossipsub_service_subscribe_attestation_subnet(
 }
 
 size_t lantern_gossipsub_service_mesh_peer_count(const struct lantern_gossipsub_service *service) {
-    (void)service;
-    return 0;
+    size_t count = 0;
+    if (!service || lock_gossipsub() != 0) {
+        return 0;
+    }
+    if (service->gossipsub) {
+        (void)libp2p_gossipsub_mesh_peer_count(service->gossipsub, &count);
+    }
+    unlock_gossipsub();
+    return count;
 }
 
 void lantern_gossipsub_service_set_publish_hook(

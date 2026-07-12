@@ -488,8 +488,6 @@ void lantern_client_options_init(struct lantern_client_options *options)
     options->genesis_config_path = LANTERN_DEFAULT_GENESIS_CONFIG;
     options->validator_config_dir = LANTERN_DEFAULT_VALIDATOR_CONFIG_DIR;
     options->nodes_path = LANTERN_DEFAULT_NODES_FILE;
-    options->genesis_state_path = NULL;
-    options->use_genesis_state = false;
     options->node_id = LANTERN_DEFAULT_NODE_ID;
     options->node_key_hex = NULL;
     options->node_key_path = NULL;
@@ -843,9 +841,6 @@ static void client_reset_base(struct lantern_client *client)
     memset(client, 0, sizeof(*client));
     lantern_string_list_init(&client->bootnodes);
     lantern_string_list_init(&client->dialer_peers);
-    lantern_string_list_init(&client->connected_peer_ids);
-    lantern_string_list_init(&client->connected_peer_refs);
-    lantern_string_list_init(&client->inbound_peer_ids);
     lantern_string_list_init(&client->status_failure_peer_ids);
     double now_seconds = lantern_time_now_seconds();
     client->start_time_seconds = now_seconds > 0.0 ? (uint64_t)now_seconds : 0u;
@@ -856,7 +851,6 @@ static void client_reset_base(struct lantern_client *client)
     lantern_reqresp_service_init(&client->reqresp);
     client->reqresp_running = false;
     lantern_validator_assignment_reset(&client->validator_assignment);
-    client->has_validator_assignment = false;
     lantern_consensus_runtime_reset(&client->runtime);
     client->has_runtime = false;
     lantern_metrics_server_init(&client->metrics_server);
@@ -1003,13 +997,6 @@ int lantern_client_aggregation_subnet_id(
     {
         return lantern_validator_index_compute_subnet_id(
             entry->indices[0],
-            lantern_client_attestation_committee_count(client),
-            out_subnet_id);
-    }
-    if (entry && entry->has_range)
-    {
-        return lantern_validator_index_compute_subnet_id(
-            entry->start_index,
             lantern_client_attestation_committee_count(client),
             out_subnet_id);
     }
@@ -1177,12 +1164,13 @@ static bool client_try_genesis_from_pubkeys(struct lantern_client *client)
 {
     if (!client->genesis.chain_config.validator_attestation_pubkeys
         || !client->genesis.chain_config.validator_proposal_pubkeys
-        || client->genesis.chain_config.validator_pubkeys_count == 0)
+        || client->genesis.chain_config.validator_count == 0
+        || client->genesis.chain_config.validator_count > SIZE_MAX)
     {
         return false;
     }
 
-    size_t vcount = client->genesis.chain_config.validator_pubkeys_count;
+    size_t vcount = (size_t)client->genesis.chain_config.validator_count;
     if (lantern_state_generate_genesis(
             &client->state, client->genesis.chain_config.genesis_time, vcount)
         != 0)
@@ -1200,103 +1188,7 @@ static bool client_try_genesis_from_pubkeys(struct lantern_client *client)
         return false;
     }
 
-    client->genesis_fallback_used = false;
     return true;
-}
-
-
-/**
- * @brief Attempt genesis creation from the validator registry file.
- *
- * Builds the genesis state using pubkeys sourced from the registry when the
- * explicit pubkey array is unavailable.
- *
- * @param client  Client with loaded genesis registry
- *
- * @return true on success, false otherwise
- *
- * @note Thread safety: Must run before concurrent access to the state.
- */
-static bool client_try_genesis_from_registry(struct lantern_client *client)
-{
-    size_t vcount = client->genesis.validator_registry.count;
-    if (vcount == 0
-        || vcount != client->genesis.chain_config.validator_count)
-    {
-        lantern_log_warn(
-            "client",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "validator registry count (%zu) does not match chain config (%" PRIu64 ")",
-            vcount,
-            client->genesis.chain_config.validator_count);
-        return false;
-    }
-
-    if (lantern_state_generate_genesis(
-            &client->state,
-            client->genesis.chain_config.genesis_time,
-            vcount)
-        != 0)
-    {
-        return false;
-    }
-
-    if (vcount > SIZE_MAX / LANTERN_VALIDATOR_PUBKEY_SIZE)
-    {
-        lantern_log_error(
-            "client",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "validator count overflow while allocating pubkeys");
-        return false;
-    }
-
-    size_t pubkeys_len = vcount * LANTERN_VALIDATOR_PUBKEY_SIZE;
-    uint8_t *pubkeys = calloc(pubkeys_len, sizeof(*pubkeys));
-    if (!pubkeys)
-    {
-        lantern_log_error(
-            "client",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to allocate validator pubkey buffer");
-        return false;
-    }
-
-    bool pubkey_ok = true;
-    for (size_t i = 0; i < vcount; ++i)
-    {
-        const struct lantern_validator_record *rec = &client->genesis.validator_registry.records[i];
-        uint8_t *dest = pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE);
-        if (rec->has_pubkey_bytes)
-        {
-            memcpy(dest, rec->pubkey_bytes, LANTERN_VALIDATOR_PUBKEY_SIZE);
-        }
-        else if (rec->pubkey_hex
-                 && lantern_hex_decode(rec->pubkey_hex, dest, LANTERN_VALIDATOR_PUBKEY_SIZE) == 0)
-        {
-            /* decoded */
-        }
-        else
-        {
-            lantern_log_error(
-                "client",
-                &(const struct lantern_log_metadata){.validator = client->node_id},
-                "missing or invalid pubkey for validator index=%zu; aborting genesis build",
-                i);
-            pubkey_ok = false;
-            break;
-        }
-    }
-
-    bool success = false;
-    if (pubkey_ok
-        && lantern_state_set_validator_pubkeys(&client->state, pubkeys, vcount) == 0)
-    {
-        client->genesis_fallback_used = true;
-        success = true;
-    }
-
-    free(pubkeys);
-    return success;
 }
 
 
@@ -1715,7 +1607,8 @@ int lantern_client_validate_state_validator_pubkeys(
     const struct lantern_chain_config *config = &client->genesis.chain_config;
     if (!config->validator_attestation_pubkeys
         || !config->validator_proposal_pubkeys
-        || config->validator_pubkeys_count == 0)
+        || config->validator_count == 0
+        || config->validator_count > SIZE_MAX)
     {
         lantern_log_error(
             component,
@@ -1724,7 +1617,7 @@ int lantern_client_validate_state_validator_pubkeys(
         return LANTERN_CLIENT_ERR_GENESIS;
     }
 
-    size_t expected_count = config->validator_pubkeys_count;
+    size_t expected_count = (size_t)config->validator_count;
     if (!state->validators
         || state->validator_count != expected_count
         || state->config.num_validators != (uint64_t)expected_count)
@@ -2024,8 +1917,6 @@ static lantern_client_error client_load_state_from_checkpoint(
     client->state = decoded;
     decoded_owned = false;
     client->has_state = true;
-    client->genesis_fallback_used = false;
-
     lantern_log_info(
         "checkpoint_sync",
         &meta,
@@ -2052,9 +1943,7 @@ cleanup:
 /**
  * @brief Build genesis state using the available artifact priority order.
  *
- * Tries embedded pubkeys first and then the validator registry. Lantern no
- * longer decodes local genesis.ssz for bootstrap so replay/state roots remain
- * deterministic from config/registry inputs.
+ * Builds the state from the canonical validator keypairs in the chain config.
  *
  * @param client  Client being initialized
  *
@@ -2065,17 +1954,11 @@ cleanup:
  */
 static lantern_client_error client_generate_state_from_genesis(struct lantern_client *client)
 {
-    if (client_try_genesis_from_pubkeys(client))
+    if (!client_try_genesis_from_pubkeys(client))
     {
-        return client_finalize_genesis_state(client);
+        return LANTERN_CLIENT_ERR_GENESIS;
     }
-
-    if (client_try_genesis_from_registry(client))
-    {
-        return client_finalize_genesis_state(client);
-    }
-
-    return LANTERN_CLIENT_ERR_GENESIS;
+    return client_finalize_genesis_state(client);
 }
 
 
@@ -2328,12 +2211,16 @@ static lantern_client_error client_setup_validators(
         return LANTERN_CLIENT_ERR_VALIDATOR;
     }
 
-    if (lantern_client_refresh_state_validators(client) != 0)
+    if (lantern_client_validate_state_validator_pubkeys(
+            client,
+            &client->state,
+            "client")
+        != 0)
     {
         lantern_log_error(
             "client",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to refresh validator pubkeys for '%s'",
+            "validator pubkey validation failed for '%s'",
             client->node_id);
         return LANTERN_CLIENT_ERR_VALIDATOR;
     }
@@ -2346,9 +2233,9 @@ static lantern_client_error client_setup_validators(
     lantern_log_info(
         "client",
         &(const struct lantern_log_metadata){.validator = client->node_id},
-        "validator slice start=%" PRIu64 " count=%" PRIu64,
-        client->validator_assignment.start_index,
-        client->validator_assignment.count);
+        "validator slice start=%" PRIu64 " count=%zu",
+        client->validator_assignment.indices[0],
+        client->validator_assignment.length);
 
     return LANTERN_CLIENT_OK;
 }
@@ -2412,9 +2299,6 @@ static lantern_client_error client_start_network(
     {
         return LANTERN_CLIENT_ERR_CONFIG;
     }
-    memcpy(client->node_private_key, node_key, NODE_PRIVATE_KEY_SIZE);
-    client->has_node_private_key = true;
-
     struct lantern_libp2p_config net_cfg = {
         .listen_multiaddr = client->listen_address,
         .secp256k1_secret = node_key,
@@ -2864,7 +2748,6 @@ static void shutdown_validator_and_keys(struct lantern_client *client)
     stop_validator_service(client);
     stop_block_proposal_worker(client);
     stop_peer_dialer(client);
-    lantern_client_free_xmss_pubkeys(client);
     free(client->xmss_key_dir);
     client->xmss_key_dir = NULL;
     free(client->xmss_public_template);
@@ -2919,9 +2802,6 @@ static void shutdown_network_services(struct lantern_client *client)
     {
         client->connected_peers = 0;
     }
-    lantern_string_list_reset(&client->connected_peer_ids);
-    lantern_string_list_reset(&client->connected_peer_refs);
-    lantern_string_list_reset(&client->inbound_peer_ids);
     free(client->connection_peer_refs);
     client->connection_peer_refs = NULL;
     client->connection_peer_ref_count = 0;
@@ -2949,16 +2829,10 @@ static void clear_peer_vote_tracking(struct lantern_client *client)
     client->peer_vote_stats_cap = 0;
 }
 
-static void clear_validator_enabled(struct lantern_client *client)
-{
-    free(client->validator_enabled);
-    client->validator_enabled = NULL;
-}
-
 static void clear_pending_block_state(struct lantern_client *client)
 {
     pending_block_list_reset(&client->pending_blocks);
-    free(client->backfill.entries);
+    free(client->backfill.roots);
     memset(&client->backfill, 0, sizeof(client->backfill));
 }
 
@@ -3013,7 +2887,7 @@ static void shutdown_peer_tracking(struct lantern_client *client)
 
 
 /**
- * @brief Destroy validator enablement lock and associated arrays.
+ * @brief Destroy the validator lock.
  *
  * @param client  Client whose validator lock is being destroyed
  *
@@ -3023,21 +2897,8 @@ static void shutdown_validator_lock(struct lantern_client *client)
 {
     if (client->validator_lock_initialized)
     {
-        if (pthread_mutex_lock(&client->validator_lock) == 0)
-        {
-            clear_validator_enabled(client);
-            pthread_mutex_unlock(&client->validator_lock);
-        }
-        else
-        {
-            clear_validator_enabled(client);
-        }
         pthread_mutex_destroy(&client->validator_lock);
         client->validator_lock_initialized = false;
-    }
-    else
-    {
-        clear_validator_enabled(client);
     }
 }
 
@@ -3144,8 +3005,6 @@ static void shutdown_genesis_and_network(struct lantern_client *client)
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "shutdown: libp2p host reset");
     lantern_enr_record_reset(&client->local_enr);
-    memset(client->node_private_key, 0, sizeof(client->node_private_key));
-    client->has_node_private_key = false;
 }
 
 
@@ -3178,7 +3037,6 @@ static void shutdown_state_and_runtime(struct lantern_client *client)
     client->has_fork_choice = false;
     lantern_client_reset_local_validators(client);
     lantern_validator_assignment_reset(&client->validator_assignment);
-    client->has_validator_assignment = false;
     lantern_consensus_runtime_reset(&client->runtime);
     client->has_runtime = false;
 

@@ -76,7 +76,7 @@ static size_t validator_attestation_committee_count(const struct lantern_client 
 
 void lantern_signature_set_stage_timings(struct lantern_block_build_stage_timings *timings);
 
-static int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot);
+int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot);
 static lantern_client_error collect_aggregation_votes(
     struct lantern_client *client,
     LanternAttestations *out_attestations,
@@ -84,7 +84,7 @@ static lantern_client_error collect_aggregation_votes(
     const uint64_t *scope_slot,
     struct lantern_block_build_stage_timings *stage_timings,
     bool *out_missing_state);
-static lantern_client_error validator_collect_and_aggregate_attestation_signatures(
+lantern_client_error validator_collect_and_aggregate_attestation_signatures(
     struct lantern_client *client,
     LanternAggregatedAttestations *out_attestations,
     LanternAttestationSignatures *out_signatures,
@@ -881,46 +881,6 @@ static lantern_client_error aggregate_attestation_signatures(
     }
     return rc;
 }
-
-lantern_client_error lantern_client_debug_aggregate_attestation_signatures(
-    struct lantern_client *client,
-    LanternAggregatedAttestations *out_attestations,
-    LanternAttestationSignatures *out_signatures)
-{
-    return validator_collect_and_aggregate_attestation_signatures(
-        client,
-        out_attestations,
-        out_signatures,
-        NULL,
-        NULL,
-        NULL);
-}
-
-int lantern_client_debug_publish_aggregated_attestations(
-    struct lantern_client *client,
-    uint64_t slot)
-{
-    return validator_publish_aggregated_attestations(client, slot);
-}
-
-int lantern_client_debug_run_interval_aggregation(
-    struct lantern_client *client,
-    uint64_t slot)
-{
-    if (!client) {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    if (client->validator_duty.slot_aggregated || !client->validator_duty.slot_attested) {
-        return LANTERN_CLIENT_ERR_IGNORED;
-    }
-
-    int rc = validator_publish_aggregated_attestations(client, slot);
-    if (rc == LANTERN_CLIENT_OK) {
-        client->validator_duty.slot_aggregated = true;
-    }
-    return rc;
-}
-
 
 /* ============================================================================
  * Mutex Utilities
@@ -2279,74 +2239,6 @@ cleanup:
 
 
 /**
- * Refresh a cached vote with updated checkpoints and re-sign if needed.
- *
- * Compares the vote's source checkpoint with the provided source. If they
- * differ, builds a candidate vote and signs it only if the validator has not
- * already used this slot's attestation key for a different message root.
- *
- * @param validator  Local validator with an attestation signing key
- * @param slot       Slot for signing context
- * @param head       New head checkpoint
- * @param target     New target checkpoint
- * @param source     New source checkpoint
- * @param vote       Vote to update (modified in place)
- * @param out_refreshed Optional output flag set to true when the vote is
- *        updated and re-signed
- *
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL parameters
- * @return LANTERN_CLIENT_ERR_VALIDATOR when the validator key is missing,
- *         signing fails, or refreshing would reuse a slot key for a different
- *         attestation root
- *
- * @note Thread safety: Caller must ensure exclusive access to validator
- */
-int lantern_validator_refresh_cached_vote(
-    struct lantern_local_validator *validator,
-    uint64_t slot,
-    const LanternCheckpoint *head,
-    const LanternCheckpoint *target,
-    const LanternCheckpoint *source,
-    LanternSignedVote *vote,
-    bool *out_refreshed)
-{
-    bool refreshed = false;
-
-    if (out_refreshed)
-    {
-        *out_refreshed = false;
-    }
-    if (!validator || !head || !target || !source || !vote)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    /* If the source checkpoint is unchanged, no refresh is required. */
-    if (vote->data.source.slot != source->slot
-        || memcmp(vote->data.source.root.bytes, source->root.bytes, LANTERN_ROOT_SIZE) != 0)
-    {
-        LanternSignedVote candidate = *vote;
-        candidate.data.head = *head;
-        candidate.data.target = *target;
-        candidate.data.source = *source;
-
-        if (validator_sign_vote(validator, slot, &candidate) != 0)
-        {
-            return LANTERN_CLIENT_ERR_VALIDATOR;
-        }
-        *vote = candidate;
-        refreshed = true;
-    }
-
-    if (out_refreshed)
-    {
-        *out_refreshed = refreshed;
-    }
-    return LANTERN_CLIENT_OK;
-}
-
-
-/**
  * Store a vote in the client state.
  *
  * @param client  Client instance
@@ -2784,8 +2676,7 @@ int validator_publish_attestations(struct lantern_client *client, uint64_t slot)
 
     for (size_t i = 0; i < client->local_validator_count; ++i)
     {
-        bool enabled = client->validator_enabled ? client->validator_enabled[i] : true;
-        if (!enabled)
+        if (client->local_validators[i].disabled)
         {
             continue;
         }
@@ -2965,7 +2856,7 @@ static lean_metrics_aggregator_skipped_reason_t validator_aggregator_skipped_rea
     }
 }
 
-static lantern_client_error validator_collect_and_aggregate_attestation_signatures(
+lantern_client_error validator_collect_and_aggregate_attestation_signatures(
     struct lantern_client *client,
     LanternAggregatedAttestations *out_attestations,
     LanternAttestationSignatures *out_signatures,
@@ -3007,7 +2898,7 @@ static lantern_client_error validator_collect_and_aggregate_attestation_signatur
     return rc;
 }
 
-static int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot)
+int validator_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot)
 {
     if (!client || !client->assigned_validators || !client->assigned_validators->enr.is_aggregator) {
         if (client) {

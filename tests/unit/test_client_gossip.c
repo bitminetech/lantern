@@ -8,8 +8,11 @@
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
 #include "lantern/core/client.h"
+#include "lantern/metrics/server.h"
+#include "lantern/networking/libp2p.h"
 #include "lantern/support/string_list.h"
 #include "lantern/support/strings.h"
+#include "../../external/c-lean-libp2p/src/protocol/gossipsub/gossipsub_internal.h"
 
 static void reset_agg_cache(struct lantern_client *client)
 {
@@ -17,6 +20,79 @@ static void reset_agg_cache(struct lantern_client *client)
         return;
     }
     lantern_store_reset(&client->store);
+}
+
+static libp2p_gossipsub_err_t test_mesh_message_id(
+    const libp2p_gossipsub_message_t *message,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written,
+    void *user_data)
+{
+    (void)message;
+    (void)user_data;
+    if (!written) {
+        return LIBP2P_GOSSIPSUB_ERR_INVALID_ARG;
+    }
+    *written = 1u;
+    if (!out || out_len < 1u) {
+        return LIBP2P_GOSSIPSUB_ERR_BUF_TOO_SMALL;
+    }
+    out[0] = 1u;
+    return LIBP2P_GOSSIPSUB_OK;
+}
+
+static int seed_test_mesh(struct lantern_gossipsub_service *service)
+{
+    static const uint8_t blocks_topic[] = "blocks";
+    static const uint8_t votes_topic[] = "votes";
+    libp2p_gossipsub_config_t config;
+    size_t blocks_index = 0u;
+    size_t votes_index = 0u;
+
+    if (!service
+        || libp2p_gossipsub_config_default(&config) != LIBP2P_GOSSIPSUB_OK) {
+        return -1;
+    }
+    config.random_fn = lantern_libp2p_gossipsub_random;
+    config.message_id_fn = test_mesh_message_id;
+    if (libp2p_gossipsub_storage_size(&config, &service->gossipsub_storage_len)
+        != LIBP2P_GOSSIPSUB_OK) {
+        return -1;
+    }
+    service->gossipsub_storage = calloc(1u, service->gossipsub_storage_len);
+    if (!service->gossipsub_storage
+        || libp2p_gossipsub_init(
+               service->gossipsub_storage,
+               service->gossipsub_storage_len,
+               &config,
+               &service->gossipsub)
+            != LIBP2P_GOSSIPSUB_OK) {
+        free(service->gossipsub_storage);
+        service->gossipsub_storage = NULL;
+        service->gossipsub_storage_len = 0u;
+        return -1;
+    }
+
+    service->gossipsub->peers[0].used = GOSSIPSUB_PEER_USED;
+    service->gossipsub->peers[1].used = GOSSIPSUB_PEER_USED;
+    if (!gossipsub_find_or_add_topic(
+            service->gossipsub,
+            (libp2p_gossipsub_bytes_t){blocks_topic, sizeof(blocks_topic) - 1u},
+            &blocks_index)
+        || !gossipsub_find_or_add_topic(
+            service->gossipsub,
+            (libp2p_gossipsub_bytes_t){votes_topic, sizeof(votes_topic) - 1u},
+            &votes_index)) {
+        return -1;
+    }
+    service->gossipsub->topics[blocks_index].local_subscribed = 1u;
+    service->gossipsub->topics[votes_index].local_subscribed = 1u;
+    return gossipsub_mesh_add(service->gossipsub, 0u, blocks_index) == LIBP2P_GOSSIPSUB_OK
+            && gossipsub_mesh_add(service->gossipsub, 0u, votes_index) == LIBP2P_GOSSIPSUB_OK
+            && gossipsub_mesh_add(service->gossipsub, 1u, blocks_index) == LIBP2P_GOSSIPSUB_OK
+        ? 0
+        : -1;
 }
 
 static int test_enable_blocks_request_peer(
@@ -27,7 +103,6 @@ static int test_enable_blocks_request_peer(
         return -1;
     }
 
-    lantern_string_list_init(&client->connected_peer_ids);
     if (pthread_mutex_init(&client->connection_lock, NULL) != 0) {
         return -1;
     }
@@ -36,25 +111,21 @@ static int test_enable_blocks_request_peer(
     if (pthread_mutex_init(&client->status_lock, NULL) != 0) {
         pthread_mutex_destroy(&client->connection_lock);
         client->connection_lock_initialized = false;
-        lantern_string_list_reset(&client->connected_peer_ids);
         return -1;
     }
     client->status_lock_initialized = true;
 
-    if (lantern_string_list_append(&client->connected_peer_ids, peer_id) != 0) {
+    if (client_test_set_connected_peer(client, peer_id) != 0) {
         pthread_mutex_destroy(&client->status_lock);
         client->status_lock_initialized = false;
         pthread_mutex_destroy(&client->connection_lock);
         client->connection_lock_initialized = false;
-        lantern_string_list_reset(&client->connected_peer_ids);
         return -1;
     }
-    client->connected_peers = 1u;
 
     client->peer_status_entries = calloc(1u, sizeof(*client->peer_status_entries));
     if (!client->peer_status_entries) {
-        client->connected_peers = 0u;
-        lantern_string_list_reset(&client->connected_peer_ids);
+        client_test_clear_connected_peers(client);
         pthread_mutex_destroy(&client->status_lock);
         client->status_lock_initialized = false;
         pthread_mutex_destroy(&client->connection_lock);
@@ -98,8 +169,7 @@ static void test_disable_blocks_request_peer(struct lantern_client *client)
         client->connection_lock_initialized = false;
     }
 
-    lantern_string_list_reset(&client->connected_peer_ids);
-    client->connected_peers = 0u;
+    client_test_clear_connected_peers(client);
 }
 
 static int sign_single_participant_aggregated_attestation(
@@ -338,6 +408,116 @@ static int test_idle_gossip_ignored(void)
     return 0;
 }
 
+static int test_gossip_vote_metrics_attribute_sender(void)
+{
+    static const char peer_text[] =
+        "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    LanternSignedVote vote;
+    struct lantern_peer_id peer;
+    struct lantern_metrics_snapshot snapshot;
+    char *body = NULL;
+    size_t body_len = 0;
+    int rc = 1;
+
+    if (client_test_setup_vote_validation_client_with_validator_count(
+            &client,
+            "gossip_vote_metrics",
+            2u,
+            &pub,
+            &secret,
+            &anchor_root,
+            &child_root)
+        != 0) {
+        return 1;
+    }
+    if (pthread_mutex_init(&client.peer_vote_lock, NULL) != 0) {
+        fprintf(stderr, "failed to initialize peer vote metrics lock\n");
+        goto cleanup;
+    }
+    client.peer_vote_lock_initialized = true;
+    client.sync_state = LANTERN_SYNC_STATE_SYNCED;
+    if (seed_test_mesh(&client.gossip) != 0) {
+        fprintf(stderr, "failed to seed multi-topic gossip mesh\n");
+        goto cleanup;
+    }
+
+    uint64_t child_slot = 0;
+    if (client_test_slot_for_root(&client, &child_root, &child_slot) != 0) {
+        fprintf(stderr, "failed to resolve child slot for gossip metrics test\n");
+        goto cleanup;
+    }
+    memset(&vote, 0, sizeof(vote));
+    vote.data.validator_id = 1u;
+    vote.data.slot = child_slot;
+    vote.data.head.slot = child_slot;
+    vote.data.head.root = child_root;
+    vote.data.target = vote.data.head;
+    vote.data.source.slot = 0u;
+    vote.data.source.root = anchor_root;
+    if (client_test_sign_vote_with_secret(&vote, secret) != 0) {
+        fprintf(stderr, "failed to sign vote for gossip metrics test\n");
+        goto cleanup;
+    }
+    if (lantern_peer_id_from_text(peer_text, &peer) != 0) {
+        fprintf(stderr, "failed to parse sender peer id\n");
+        goto cleanup;
+    }
+    if (client_test_gossip_vote_from(&client, &vote, &peer) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "gossip vote handler rejected valid sender-attributed vote\n");
+        goto cleanup;
+    }
+
+    memset(&snapshot, 0, sizeof(snapshot));
+    if (metrics_snapshot_cb(&client, &snapshot) != LANTERN_CLIENT_OK
+        || snapshot.peer_vote_metrics_count != 1u
+        || snapshot.lean_gossip_mesh_peers != 3u) {
+        fprintf(stderr, "gossip vote metrics snapshot missing sender entry\n");
+        goto cleanup;
+    }
+    const struct lantern_peer_vote_metric *metric = &snapshot.peer_vote_metrics[0];
+    if (strcmp(metric->peer_id, peer_text) != 0
+        || metric->received_total != 1u
+        || metric->accepted_total != 1u
+        || metric->rejected_total != 0u
+        || metric->last_validator_id != vote.data.validator_id
+        || metric->last_slot != vote.data.slot) {
+        fprintf(stderr, "gossip vote metrics did not attribute the accepted vote to its sender\n");
+        goto cleanup;
+    }
+    if (lantern_metrics_format_prometheus(&snapshot, &body, &body_len) != 0
+        || !body
+        || body_len == 0u
+        || !strstr(body, "lean_gossip_votes_received_total{peer=\"16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE\"} 1")
+        || !strstr(body, "lean_gossip_votes_accepted_total{peer=\"16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE\"} 1")
+        || !strstr(body, "lean_gossip_votes_last_validator_id{peer=\"16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE\"} 1")
+        || !strstr(body, "lean_gossip_votes_last_slot{peer=\"16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE\"} 1")
+        || !strstr(body, "lean_gossip_mesh_peers{client=\"gossip_vote_metrics\"} 3")) {
+        fprintf(stderr, "prometheus output missing sender-attributed gossip vote metrics\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    free(body);
+    lantern_gossipsub_service_reset(&client.gossip);
+    free(client.peer_vote_stats);
+    client.peer_vote_stats = NULL;
+    client.peer_vote_stats_len = 0u;
+    client.peer_vote_stats_cap = 0u;
+    if (client.peer_vote_lock_initialized) {
+        pthread_mutex_destroy(&client.peer_vote_lock);
+        client.peer_vote_lock_initialized = false;
+    }
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
 static int test_gossip_aggregated_attestation_caches_valid_proof(void)
 {
     struct lantern_client client;
@@ -555,7 +735,7 @@ static int test_gossip_aggregated_attestation_rejects_unknown_target(void)
     client.sync_state = LANTERN_SYNC_STATE_SYNCING;
     if (test_enable_blocks_request_peer(
             &client,
-            "12D3KooWQH2VQK1kF2L8a7T4AtestAggUnknownTarget111111111111")
+            "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE")
         != 0) {
         fprintf(stderr, "failed to set up schedulable peer for aggregated gossip test\n");
         goto cleanup;
@@ -829,6 +1009,10 @@ cleanup:
 int main(void)
 {
     if (test_idle_gossip_ignored() != 0)
+    {
+        return 1;
+    }
+    if (test_gossip_vote_metrics_attribute_sender() != 0)
     {
         return 1;
     }

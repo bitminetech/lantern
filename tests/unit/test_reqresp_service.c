@@ -12,20 +12,12 @@
 #define lantern_reqresp_service_request_status lantern_reqresp_service_request_status_for_test
 #define lantern_reqresp_service_request_blocks lantern_reqresp_service_request_blocks_for_test
 #define lantern_reqresp_service_start lantern_reqresp_service_start_for_test
-#define lantern_reqresp_stream_from_ops lantern_reqresp_stream_from_ops_for_test
-#define lantern_reqresp_stream_free lantern_reqresp_stream_free_for_test
-#define lantern_reqresp_read_response_chunk lantern_reqresp_read_response_chunk_for_test
-#define lantern_reqresp_stall_timeout_ms lantern_reqresp_stall_timeout_ms_for_test
 #include "../../src/networking/reqresp_service.c"
 #undef lantern_reqresp_service_init
 #undef lantern_reqresp_service_reset
 #undef lantern_reqresp_service_request_status
 #undef lantern_reqresp_service_request_blocks
 #undef lantern_reqresp_service_start
-#undef lantern_reqresp_stream_from_ops
-#undef lantern_reqresp_stream_free
-#undef lantern_reqresp_read_response_chunk
-#undef lantern_reqresp_stall_timeout_ms
 
 #define CHECK(cond)                                                                  \
     do {                                                                             \

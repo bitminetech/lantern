@@ -150,7 +150,6 @@ void reset_genesis_paths(struct lantern_genesis_paths *paths)
     free(paths->config_path);
     free(paths->validator_registry_path);
     free(paths->nodes_path);
-    free(paths->state_path);
     free(paths->validator_config_path);
     memset(paths, 0, sizeof(*paths));
 }
@@ -219,16 +218,6 @@ int append_genesis_bootnodes(struct lantern_client *client)
         {
             return -1;
         }
-        if (lantern_libp2p_validate_enr_peer(record) != 0)
-        {
-            lantern_log_warn(
-                "network",
-                &(const struct lantern_log_metadata){
-                    .validator = client->node_id,
-                    .peer = record->encoded},
-                "invalid ENR bootnode from genesis");
-            continue;
-        }
         lantern_log_info(
             "network",
             &(const struct lantern_log_metadata){
@@ -265,9 +254,7 @@ int compute_local_validator_assignment(struct lantern_client *client)
         return -1;
     }
     lantern_validator_assignment_reset(&client->validator_assignment);
-    client->has_validator_assignment = false;
     if (lantern_validator_assignment_from_config(
-            &client->genesis.validator_config,
             client->assigned_validators,
             &client->validator_assignment)
         != 0)
@@ -278,7 +265,6 @@ int compute_local_validator_assignment(struct lantern_client *client)
     {
         return -1;
     }
-    client->has_validator_assignment = true;
     return 0;
 }
 
@@ -298,33 +284,20 @@ int compute_local_validator_assignment(struct lantern_client *client)
  */
 int populate_local_validators(struct lantern_client *client)
 {
-    if (!client || !client->has_validator_assignment || !client->assigned_validators)
+    if (!client || !lantern_validator_assignment_is_valid(&client->validator_assignment)
+        || !client->assigned_validators)
     {
         return -1;
     }
 
     struct lantern_log_metadata meta = {.validator = client->node_id};
-    uint64_t local_count = client->validator_assignment.count;
-    if (local_count == 0 || client->validator_assignment.length != local_count)
-    {
-        return -1;
-    }
-    if (!client->validator_assignment.indices)
-    {
-        return -1;
-    }
-    if (local_count > SIZE_MAX)
+    size_t local_count = client->validator_assignment.length;
+    if (local_count == 0 || !client->validator_assignment.indices)
     {
         return -1;
     }
 
     uint64_t total_validators = client->genesis.chain_config.validator_count;
-    if (!client->genesis.validator_registry.records
-        || client->genesis.validator_registry.count < total_validators)
-    {
-        return -1;
-    }
-
     char indices_buf[512];
     indices_buf[0] = '\0';
     size_t written = 0;
@@ -347,8 +320,8 @@ int populate_local_validators(struct lantern_client *client)
     lantern_log_info(
         "client",
         &meta,
-        "local validator assignment start=%" PRIu64 " count=%" PRIu64 " indices=%s",
-        client->validator_assignment.start_index,
+        "local validator assignment start=%" PRIu64 " count=%zu indices=%s",
+        client->validator_assignment.indices[0],
         local_count,
         indices_buf[0] ? indices_buf : "-");
 
@@ -418,7 +391,6 @@ int populate_local_validators(struct lantern_client *client)
             return -1;
         }
         validators[i].global_index = global_index;
-        validators[i].registry = &client->genesis.validator_registry.records[global_index];
         validators[i].secret_len = decoded_len;
         if (decoded_len > 0)
         {
@@ -441,28 +413,10 @@ int populate_local_validators(struct lantern_client *client)
         validators[i].last_attested_slot = UINT64_MAX;
     }
 
-    bool *enabled = calloc(count, sizeof(*enabled));
-    if (!enabled)
-    {
-        for (size_t i = 0; i < count; ++i)
-        {
-            lantern_client_local_validator_cleanup(&validators[i]);
-        }
-        free(validators);
-        lantern_secure_zero(decoded_secret, decoded_len);
-        free(decoded_secret);
-        return -1;
-    }
-    for (size_t i = 0; i < count; ++i)
-    {
-        enabled[i] = true;
-    }
-
     if (!client->validator_lock_initialized)
     {
         if (pthread_mutex_init(&client->validator_lock, NULL) != 0)
         {
-            free(enabled);
             for (size_t i = 0; i < count; ++i)
             {
                 lantern_client_local_validator_cleanup(&validators[i]);
@@ -477,7 +431,6 @@ int populate_local_validators(struct lantern_client *client)
 
     if (pthread_mutex_lock(&client->validator_lock) != 0)
     {
-        free(enabled);
         for (size_t i = 0; i < count; ++i)
         {
             lantern_client_local_validator_cleanup(&validators[i]);
@@ -487,10 +440,6 @@ int populate_local_validators(struct lantern_client *client)
         free(decoded_secret);
         return -1;
     }
-
-    free(client->validator_enabled);
-    client->validator_enabled = enabled;
-    enabled = NULL;
 
     lantern_client_reset_local_validators(client);
     client->local_validators = validators;
@@ -530,7 +479,7 @@ int populate_local_validators(struct lantern_client *client)
  */
 int init_consensus_runtime(struct lantern_client *client)
 {
-    if (!client || !client->has_validator_assignment)
+    if (!client || !lantern_validator_assignment_is_valid(&client->validator_assignment))
     {
         return -1;
     }

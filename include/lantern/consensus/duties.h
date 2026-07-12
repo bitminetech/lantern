@@ -12,8 +12,6 @@ extern "C" {
 #endif
 
 struct lantern_validator_assignment {
-    uint64_t start_index;
-    uint64_t count;
     uint64_t *indices;
     size_t length;
 };
@@ -25,7 +23,6 @@ int lantern_validator_assignment_copy(
     const struct lantern_validator_assignment *src);
 bool lantern_validator_assignment_is_valid(const struct lantern_validator_assignment *assignment);
 int lantern_validator_assignment_from_config(
-    const struct lantern_validator_config *config,
     const struct lantern_validator_config_entry *entry,
     struct lantern_validator_assignment *assignment);
 

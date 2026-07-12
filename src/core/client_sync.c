@@ -71,7 +71,7 @@ static void backfill_session_clear_locked(struct lantern_backfill_session *sessi
     {
         return;
     }
-    free(session->entries);
+    free(session->roots);
     memset(session, 0, sizeof(*session));
 }
 
@@ -93,108 +93,32 @@ void lantern_client_backfill_reset(struct lantern_client *client)
     }
 }
 
-static bool backfill_entry_append_locked(
-    struct lantern_backfill_session *session,
-    const LanternRoot *root,
-    const LanternRoot *parent_root,
-    uint64_t slot,
-    uint32_t depth,
-    const char *peer_text)
-{
-    if (!session || !root || !parent_root)
-    {
-        return false;
-    }
-    for (size_t i = 0; i < session->length; ++i)
-    {
-        struct lantern_backfill_entry *entry = &session->entries[i];
-        if (memcmp(entry->root.bytes, root->bytes, LANTERN_ROOT_SIZE) == 0)
-        {
-            if (depth > entry->depth)
-            {
-                entry->depth = depth;
-            }
-            if (peer_text && peer_text[0])
-            {
-                (void)lantern_string_copy(entry->peer_text, sizeof(entry->peer_text), peer_text);
-            }
-            return true;
-        }
-    }
-    if (session->length == session->capacity)
-    {
-        size_t next_capacity = session->capacity == 0 ? 1024u : session->capacity * 2u;
-        if (next_capacity <= session->capacity
-            || next_capacity > SIZE_MAX / sizeof(*session->entries))
-        {
-            return false;
-        }
-        struct lantern_backfill_entry *grown =
-            realloc(session->entries, next_capacity * sizeof(*grown));
-        if (!grown)
-        {
-            return false;
-        }
-        session->entries = grown;
-        session->capacity = next_capacity;
-    }
-    struct lantern_backfill_entry *entry = &session->entries[session->length++];
-    memset(entry, 0, sizeof(*entry));
-    entry->root = *root;
-    entry->parent_root = *parent_root;
-    entry->slot = slot;
-    entry->depth = depth;
-    if (peer_text && peer_text[0])
-    {
-        (void)lantern_string_copy(entry->peer_text, sizeof(entry->peer_text), peer_text);
-    }
-    return true;
-}
-
-static const struct lantern_backfill_entry *backfill_find_child_locked(
-    const struct lantern_backfill_session *session,
-    const LanternRoot *parent_root)
-{
-    const struct lantern_backfill_entry *best = NULL;
-    if (!session || !parent_root)
-    {
-        return NULL;
-    }
-    for (size_t i = 0; i < session->length; ++i)
-    {
-        const struct lantern_backfill_entry *entry = &session->entries[i];
-        if (entry->imported)
-        {
-            continue;
-        }
-        if (memcmp(entry->parent_root.bytes, parent_root->bytes, LANTERN_ROOT_SIZE) != 0)
-        {
-            continue;
-        }
-        if (!best || entry->slot < best->slot)
-        {
-            best = entry;
-        }
-    }
-    return best;
-}
-
-static void backfill_mark_imported_locked(
+static bool backfill_root_append_locked(
     struct lantern_backfill_session *session,
     const LanternRoot *root)
 {
     if (!session || !root)
     {
-        return;
+        return false;
     }
-    for (size_t i = 0; i < session->length; ++i)
+    if (session->length == session->capacity)
     {
-        if (memcmp(session->entries[i].root.bytes, root->bytes, LANTERN_ROOT_SIZE) == 0)
+        size_t next_capacity = session->capacity == 0 ? 1024u : session->capacity * 2u;
+        if (next_capacity <= session->capacity
+            || next_capacity > SIZE_MAX / sizeof(*session->roots))
         {
-            session->entries[i].imported = true;
-            return;
+            return false;
         }
+        LanternRoot *grown = realloc(session->roots, next_capacity * sizeof(*grown));
+        if (!grown)
+        {
+            return false;
+        }
+        session->roots = grown;
+        session->capacity = next_capacity;
     }
+    session->roots[session->length++] = *root;
+    return true;
 }
 
 static bool backfill_parent_known(struct lantern_client *client, const LanternRoot *root)
@@ -220,66 +144,35 @@ static bool backfill_import_connected_chain(struct lantern_client *client, const
         return false;
     }
 
-    LanternRoot *roots = NULL;
-    size_t root_count = 0;
-    size_t root_capacity = 0;
-    LanternRoot current = *connector_root;
-    uint64_t connected_count = 0;
-
     bool locked = lantern_client_lock_pending(client);
     if (!locked)
     {
         return false;
     }
-    if (!client->backfill.active)
+    struct lantern_backfill_session *session = &client->backfill;
+    if (!session->active
+        || memcmp(session->frontier_root.bytes, connector_root->bytes, LANTERN_ROOT_SIZE) != 0
+        || session->imported_count >= session->length)
     {
         lantern_client_unlock_pending(client, locked);
         return false;
     }
-    for (;;)
+    size_t root_count = session->length - session->imported_count;
+    LanternRoot *roots = malloc(root_count * sizeof(*roots));
+    if (!roots)
     {
-        const struct lantern_backfill_entry *child =
-            backfill_find_child_locked(&client->backfill, &current);
-        if (!child)
-        {
-            break;
-        }
-        if (root_count == root_capacity)
-        {
-            size_t next_capacity = root_capacity == 0 ? 64u : root_capacity * 2u;
-            if (next_capacity <= root_capacity || next_capacity > SIZE_MAX / sizeof(*roots))
-            {
-                lantern_client_unlock_pending(client, locked);
-                free(roots);
-                return false;
-            }
-            LanternRoot *grown = realloc(roots, next_capacity * sizeof(*grown));
-            if (!grown)
-            {
-                lantern_client_unlock_pending(client, locked);
-                free(roots);
-                return false;
-            }
-            roots = grown;
-            root_capacity = next_capacity;
-        }
-        roots[root_count++] = child->root;
-        current = child->root;
-        connected_count += 1u;
-        if (memcmp(current.bytes, client->backfill.head_root.bytes, LANTERN_ROOT_SIZE) == 0)
-        {
-            break;
-        }
+        lantern_client_unlock_pending(client, locked);
+        return false;
+    }
+    LanternRoot session_head = session->head_root;
+    size_t last_unimported = session->length - session->imported_count;
+    for (size_t i = 0; i < root_count; ++i)
+    {
+        roots[i] = session->roots[last_unimported - i - 1u];
     }
     lantern_client_unlock_pending(client, locked);
 
-    if (root_count == 0)
-    {
-        free(roots);
-        return false;
-    }
-
-    uint64_t imported = 0;
+    size_t imported = 0;
     struct lantern_log_metadata meta = {.validator = client->node_id};
     for (size_t i = 0; i < root_count; ++i)
     {
@@ -309,34 +202,39 @@ static bool backfill_import_connected_chain(struct lantern_client *client, const
         locked = lantern_client_lock_pending(client);
         if (locked)
         {
-            backfill_mark_imported_locked(&client->backfill, &roots[i]);
-            client->backfill.imported_count += 1u;
+            if (client->backfill.active
+                && memcmp(client->backfill.head_root.bytes, session_head.bytes, LANTERN_ROOT_SIZE) == 0
+                && client->backfill.imported_count < client->backfill.length)
+            {
+                client->backfill.imported_count += 1u;
+            }
             lantern_client_unlock_pending(client, locked);
         }
     }
 
     locked = lantern_client_lock_pending(client);
-    if (locked)
+    if (locked
+        && client->backfill.active
+        && memcmp(client->backfill.head_root.bytes, session_head.bytes, LANTERN_ROOT_SIZE) == 0)
     {
         char head_hex[ROOT_HEX_BUFFER_LEN];
         format_root_hex(&client->backfill.head_root, head_hex, sizeof(head_hex));
         lantern_log_info(
             "sync",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "historical backfill connected head=%s connected=%" PRIu64 " imported=%" PRIu64
+            "historical backfill connected head=%s connected=%zu imported=%zu"
             " persisted=%" PRIu64 " dropped_gossip=%" PRIu64,
             head_hex[0] ? head_hex : "0x0",
-            connected_count,
+            root_count,
             imported,
             client->backfill.persisted_count,
             client->backfill.dropped_gossip_hints);
-        if (imported == root_count
-            && memcmp(roots[root_count - 1u].bytes, client->backfill.head_root.bytes, LANTERN_ROOT_SIZE) == 0)
+        if (client->backfill.imported_count == client->backfill.length)
         {
             backfill_session_clear_locked(&client->backfill);
         }
-        lantern_client_unlock_pending(client, locked);
     }
+    lantern_client_unlock_pending(client, locked);
     free(roots);
     return imported > 0;
 }
@@ -480,13 +378,7 @@ bool lantern_client_backfill_process_block(
     {
         if (client->backfill.active
             && memcmp(client->backfill.frontier_root.bytes, root->bytes, LANTERN_ROOT_SIZE) == 0
-            && backfill_entry_append_locked(
-                   &client->backfill,
-                   root,
-                   &parent_root,
-                   block->block.slot,
-                   depth,
-                   peer_text))
+            && backfill_root_append_locked(&client->backfill, root))
         {
             client->backfill.frontier_root = parent_root;
             client->backfill.frontier_depth =
@@ -587,61 +479,6 @@ bool lantern_client_backfill_should_drop_gossip(
 }
 
 /* ============================================================================
- * Enabled Validator Count
- * ============================================================================ */
-
-/**
- * Count enabled local validators.
- *
- * @spec subspecs/containers/validator.py - Validator registry
- *
- * Counts the number of locally-managed validators that are currently
- * enabled for voting and block proposal.
- *
- * @param client  Client instance
- * @return Number of enabled validators
- *
- * @note Thread safety: Acquires validator_lock
- */
-size_t lantern_client_enabled_validator_count(struct lantern_client *client)
-{
-    if (!client)
-    {
-        return 0;
-    }
-    size_t enabled = 0;
-    bool locked = false;
-    if (client->validator_lock_initialized)
-    {
-        if (pthread_mutex_lock(&client->validator_lock) == 0)
-        {
-            locked = true;
-        }
-    }
-    size_t limit = client->local_validator_count;
-    if (!client->validator_enabled)
-    {
-        enabled = limit;
-    }
-    else
-    {
-        for (size_t i = 0; i < limit; ++i)
-        {
-            if (client->validator_enabled[i])
-            {
-                ++enabled;
-            }
-        }
-    }
-    if (locked)
-    {
-        pthread_mutex_unlock(&client->validator_lock);
-    }
-    return enabled;
-}
-
-
-/* ============================================================================
  * Gossip Handlers
  * ============================================================================ */
 
@@ -668,7 +505,7 @@ static const char *peer_id_to_text(const struct lantern_peer_id *from, char *out
         return NULL;
     }
 
-    if (lantern_peer_id_to_text(from, out, out_len) != 0)
+    if (lantern_peer_id_to_text(from, out, out_len) < 0)
     {
         out[0] = '\0';
         return NULL;
@@ -1999,185 +1836,6 @@ int restore_persisted_blocks(struct lantern_client *client)
 
 
 /* ============================================================================
- * Validator State Refresh
- * ============================================================================ */
-
-/**
- * @brief Populate a packed pubkey buffer from registry records.
- *
- * Registry records carry one pubkey, so empty-state initialization uses it for
- * both attestation and proposal keys.
- *
- * @param registry            Validator registry (must have records)
- * @param packed_pubkeys      Output packed pubkey buffer
- * @param count               Number of validators to write
- * @param out_registry_used   Output count of pubkeys sourced from registry
- * @param out_missing_pubkeys Output count of missing pubkeys
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL
- *
- * @note Thread safety: Caller must ensure exclusive access during initialization
- */
-static int populate_validator_pubkeys(
-    struct lantern_validator_registry *registry,
-    uint8_t *packed_pubkeys,
-    size_t count,
-    size_t *out_registry_used,
-    size_t *out_missing_pubkeys)
-{
-    if (!registry || !registry->records || !packed_pubkeys
-        || !out_registry_used || !out_missing_pubkeys)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    *out_registry_used = 0;
-    *out_missing_pubkeys = 0;
-
-    for (size_t i = 0; i < count; ++i)
-    {
-        struct lantern_validator_record *record = &registry->records[i];
-        const uint8_t *registry_pub = NULL;
-        if (record->has_pubkey_bytes && !lantern_validator_pubkey_is_zero(record->pubkey_bytes))
-        {
-            registry_pub = record->pubkey_bytes;
-        }
-
-        size_t offset = i * LANTERN_VALIDATOR_PUBKEY_SIZE;
-        if (registry_pub)
-        {
-            memcpy(
-                packed_pubkeys + offset,
-                registry_pub,
-                LANTERN_VALIDATOR_PUBKEY_SIZE);
-            ++(*out_registry_used);
-        }
-        else
-        {
-            memset(packed_pubkeys + offset, 0, LANTERN_VALIDATOR_PUBKEY_SIZE);
-            ++(*out_missing_pubkeys);
-        }
-    }
-
-    return LANTERN_CLIENT_OK;
-}
-
-
-/**
- * Validate existing state validator pubkeys or initialize them from genesis registry.
- *
- * @spec subspecs/containers/validator.py - Validator pubkey management
- *
- * Existing state pubkeys are part of the verified state root, so they are
- * preserved. Registry-derived initialization is only used for an empty state.
- *
- * @param client  Client instance
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM if client is NULL or missing state
- * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
- * @return LANTERN_CLIENT_ERR_RUNTIME if state update fails
- *
- * @note Thread safety: Caller must ensure exclusive access during initialization
- */
-int lantern_client_refresh_state_validators(struct lantern_client *client)
-{
-    if (!client || !client->has_state)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    struct lantern_log_metadata meta = {.validator = client->node_id};
-    struct lantern_validator_registry *registry = &client->genesis.validator_registry;
-    size_t registry_count = registry->count;
-    size_t state_count = lantern_state_validator_count(&client->state);
-
-    if (state_count > 0)
-    {
-        bool have_local_pubkeys =
-            client->genesis.chain_config.validator_attestation_pubkeys
-            && client->genesis.chain_config.validator_proposal_pubkeys
-            && client->genesis.chain_config.validator_pubkeys_count > 0;
-        if (have_local_pubkeys)
-        {
-            int validate_rc = lantern_client_validate_state_validator_pubkeys(
-                client,
-                &client->state,
-                "client");
-            if (validate_rc != LANTERN_CLIENT_OK)
-            {
-                return validate_rc;
-            }
-        }
-        lantern_log_info(
-            "client",
-            &meta,
-            "retaining existing state pubkeys count=%zu",
-            state_count);
-        return LANTERN_CLIENT_OK;
-    }
-
-    bool have_registry = registry->records && registry_count > 0;
-    if (!have_registry)
-    {
-        if (lantern_state_set_validator_pubkeys(&client->state, NULL, 0) != 0)
-        {
-            return LANTERN_CLIENT_ERR_RUNTIME;
-        }
-        return LANTERN_CLIENT_OK;
-    }
-
-    size_t count = registry_count;
-    if (count > SIZE_MAX / LANTERN_VALIDATOR_PUBKEY_SIZE)
-    {
-        return LANTERN_CLIENT_ERR_ALLOC;
-    }
-    size_t total_bytes = count * LANTERN_VALIDATOR_PUBKEY_SIZE;
-    uint8_t *packed_pubkeys = malloc(total_bytes);
-    if (!packed_pubkeys)
-    {
-        return LANTERN_CLIENT_ERR_ALLOC;
-    }
-    size_t registry_used = 0;
-    size_t missing_pubkeys = 0;
-    int pack_rc = populate_validator_pubkeys(
-        registry,
-        packed_pubkeys,
-        count,
-        &registry_used,
-        &missing_pubkeys);
-    if (pack_rc != LANTERN_CLIENT_OK)
-    {
-        free(packed_pubkeys);
-        return pack_rc;
-    }
-    int rc = lantern_state_set_validator_pubkeys(
-        &client->state,
-        packed_pubkeys,
-        count);
-    free(packed_pubkeys);
-    if (rc != 0)
-    {
-        lantern_log_warn(
-            "client",
-            &meta,
-            "failed to copy validator pubkeys into parent state");
-        return LANTERN_CLIENT_ERR_RUNTIME;
-    }
-    size_t enabled = lantern_client_enabled_validator_count(client);
-    lantern_log_info(
-        "client",
-        &meta,
-        "refreshed validator pubkeys count=%zu registry=%zu missing=%zu "
-        "local_validators=%zu enabled=%zu",
-        count,
-        registry_used,
-        missing_pubkeys,
-        client->local_validator_count,
-        enabled);
-    return LANTERN_CLIENT_OK;
-}
-
-
-/* ============================================================================
  * Pending Block Management
  * ============================================================================ */
 
@@ -3412,7 +3070,6 @@ bool lantern_client_enqueue_pending_block(
                     peer_text);
             }
         }
-        existing->received_ms = monotonic_millis();
         size_t pending_len = list->length;
         bool parent_requested = existing->parent_requested;
         uint32_t existing_backfill_depth = existing->backfill_depth;

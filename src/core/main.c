@@ -258,10 +258,7 @@ static lantern_client_error apply_option(
         options->nodes_path = optarg;
         return LANTERN_CLIENT_OK;
     case OPT_GENESIS_STATE:
-        options->genesis_state_path = optarg;
-        return LANTERN_CLIENT_OK;
     case OPT_USE_GENESIS_STATE:
-        options->use_genesis_state = true;
         return LANTERN_CLIENT_OK;
     case OPT_VALIDATOR_CONFIG:
         options->validator_config_dir = optarg;
@@ -689,16 +686,6 @@ static lantern_client_error parse_arguments(
         {
             return LANTERN_CLIENT_ERR_INVALID_PARAM;
         }
-    }
-
-    if (options->use_genesis_state || options->genesis_state_path)
-    {
-        lantern_log_warn(
-            "cli",
-            &(const struct lantern_log_metadata){.validator = options->node_id},
-            "ignoring --genesis-state/--use-genesis-state; Lantern derives genesis from config/annotated_validators");
-        options->use_genesis_state = false;
-        options->genesis_state_path = NULL;
     }
 
     if (options->node_key_hex && options->node_key_path)

@@ -523,26 +523,6 @@ static void state_aggregation_group_sort(struct state_aggregation_group *group) 
     }
 }
 
-static int state_fill_bitlist_from_ids(
-    struct lantern_bitlist *bits,
-    const LanternValidatorIndex *ids,
-    size_t count) {
-    if (!bits || !ids || count == 0u) {
-        return -1;
-    }
-
-    LanternValidatorIndices indices;
-    lantern_validator_indices_init(&indices);
-    if (lantern_validator_indices_resize(&indices, count) != 0) {
-        lantern_validator_indices_reset(&indices);
-        return -1;
-    }
-    memcpy(indices.data, ids, count * sizeof(*ids));
-    int rc = lantern_aggregation_bits_from_validator_indices(bits, &indices);
-    lantern_validator_indices_reset(&indices);
-    return rc;
-}
-
 static size_t state_proof_new_participant_count(
     const LanternAggregatedSignatureProof *proof,
     const bool *covered) {
@@ -704,6 +684,7 @@ static lantern_state_aggregate_result state_append_selected_group(
     }
 
     size_t raw_count = 0u;
+    LanternValidatorIndex highest_raw_id = 0u;
     for (size_t i = 0; i < group->count; ++i) {
         LanternValidatorIndex validator_id = group->validator_ids[i];
         if (covered
@@ -712,13 +693,15 @@ static lantern_state_aggregate_result state_append_selected_group(
             continue;
         }
         raw_count += 1u;
+        if (validator_id > highest_raw_id) {
+            highest_raw_id = validator_id;
+        }
     }
 
     if (raw_count == 0u && child_count < LANTERN_INVERSE_PROOF_SIZE) {
         return LANTERN_STATE_AGGREGATE_OK;
     }
 
-    LanternValidatorIndex *raw_ids = NULL;
     LanternRawXmssSignature *raw_xmss = NULL;
     struct lantern_bitlist xmss_participants;
     LanternAggregatedSignatureProof proof;
@@ -729,9 +712,13 @@ static lantern_state_aggregate_result state_append_selected_group(
     size_t validator_count = lantern_state_validator_count(state);
 
     if (raw_count > 0u) {
-        raw_ids = calloc(raw_count, sizeof(*raw_ids));
+        if (highest_raw_id >= validator_count
+            || lantern_bitlist_resize(&xmss_participants, (size_t)highest_raw_id + 1u) != 0) {
+            rc = LANTERN_STATE_AGGREGATE_RUNTIME;
+            goto cleanup;
+        }
         raw_xmss = calloc(raw_count, sizeof(*raw_xmss));
-        if (!raw_ids || !raw_xmss) {
+        if (!raw_xmss) {
             rc = LANTERN_STATE_AGGREGATE_ALLOC;
             goto cleanup;
         }
@@ -748,6 +735,10 @@ static lantern_state_aggregate_result state_append_selected_group(
                 rc = LANTERN_STATE_AGGREGATE_RUNTIME;
                 goto cleanup;
             }
+            if (lantern_bitlist_set(&xmss_participants, (size_t)validator_id, true) != 0) {
+                rc = LANTERN_STATE_AGGREGATE_RUNTIME;
+                goto cleanup;
+            }
 
             const uint8_t *pubkey =
                 lantern_state_validator_attestation_pubkey(state, (size_t)validator_id);
@@ -755,15 +746,9 @@ static lantern_state_aggregate_result state_append_selected_group(
                 rc = LANTERN_STATE_AGGREGATE_RUNTIME;
                 goto cleanup;
             }
-            raw_ids[raw_index] = validator_id;
             raw_xmss[raw_index].pubkey = pubkey;
             raw_xmss[raw_index].signature = &group->signatures[i];
             raw_index += 1u;
-        }
-
-        if (state_fill_bitlist_from_ids(&xmss_participants, raw_ids, raw_count) != 0) {
-            rc = LANTERN_STATE_AGGREGATE_RUNTIME;
-            goto cleanup;
         }
     }
 
@@ -784,7 +769,6 @@ static lantern_state_aggregate_result state_append_selected_group(
     rc = state_append_cached_proof(&group->data, &proof, out_attestations, out_signatures);
 
 cleanup:
-    free(raw_ids);
     free(raw_xmss);
     lantern_bitlist_reset(&xmss_participants);
     lantern_aggregated_signature_proof_reset(&proof);

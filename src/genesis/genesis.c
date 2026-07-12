@@ -14,7 +14,6 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "genesis_internal.h"
 #include "lantern/support/log.h"
@@ -35,8 +34,7 @@ void lantern_genesis_artifacts_init(struct lantern_genesis_artifacts *artifacts)
         return;
     }
 
-    memset(artifacts, 0, sizeof(*artifacts));
-    lantern_enr_record_list_init(&artifacts->enrs);
+    *artifacts = (struct lantern_genesis_artifacts){0};
 }
 
 
@@ -57,16 +55,11 @@ void lantern_genesis_artifacts_reset(struct lantern_genesis_artifacts *artifacts
     }
 
     lantern_enr_record_list_reset(&artifacts->enrs);
-    genesis_free_validator_registry(&artifacts->validator_registry);
     genesis_free_validator_config(&artifacts->validator_config);
-
-    free(artifacts->state_bytes);
-    artifacts->state_bytes = NULL;
-    artifacts->state_size = 0;
 
     free(artifacts->chain_config.validator_attestation_pubkeys);
     free(artifacts->chain_config.validator_proposal_pubkeys);
-    memset(&artifacts->chain_config, 0, sizeof(artifacts->chain_config));
+    *artifacts = (struct lantern_genesis_artifacts){0};
 }
 
 
@@ -119,49 +112,40 @@ static int load_chain_config_and_pubkeys(
         return result;
     }
 
-    if (attestation_pubkeys && proposal_pubkeys && pubkey_count > 0)
-    {
-        if (config->validator_count != 0 && config->validator_count != pubkey_count)
-        {
-            free(attestation_pubkeys);
-            free(proposal_pubkeys);
-            lantern_log_error(
-                "genesis",
-                NULL,
-                "validator count mismatch in %s config=%" PRIu64 " entries=%zu",
-                config_path,
-                config->validator_count,
-                pubkey_count);
-            return LANTERN_GENESIS_ERR_INVALID_DATA;
-        }
-
-        config->validator_attestation_pubkeys = attestation_pubkeys;
-        config->validator_proposal_pubkeys = proposal_pubkeys;
-        config->validator_pubkeys_count = pubkey_count;
-        if (config->validator_count == 0)
-        {
-            config->validator_count = pubkey_count;
-        }
-
-        lantern_log_info(
-            "genesis",
-            NULL,
-            "loaded %zu genesis pubkeys from %s",
-            pubkey_count,
-            config_path);
-    }
-    else
+    if (!attestation_pubkeys || !proposal_pubkeys || pubkey_count == 0)
     {
         free(attestation_pubkeys);
         free(proposal_pubkeys);
-        lantern_log_warn("genesis", NULL, "no genesis pubkeys found in %s", config_path);
+        lantern_log_error("genesis", NULL, "genesis pubkeys missing from %s", config_path);
+        return LANTERN_GENESIS_ERR_INVALID_DATA;
     }
 
     if (config->validator_count == 0)
     {
-        lantern_log_error("genesis", NULL, "validator count missing or zero in %s", config_path);
+        config->validator_count = pubkey_count;
+    }
+    else if (config->validator_count != pubkey_count)
+    {
+        free(attestation_pubkeys);
+        free(proposal_pubkeys);
+        lantern_log_error(
+            "genesis",
+            NULL,
+            "validator count mismatch in %s config=%" PRIu64 " entries=%zu",
+            config_path,
+            config->validator_count,
+            pubkey_count);
         return LANTERN_GENESIS_ERR_INVALID_DATA;
     }
+
+    config->validator_attestation_pubkeys = attestation_pubkeys;
+    config->validator_proposal_pubkeys = proposal_pubkeys;
+    lantern_log_info(
+        "genesis",
+        NULL,
+        "loaded %zu genesis pubkeys from %s",
+        pubkey_count,
+        config_path);
 
     return LANTERN_GENESIS_OK;
 }
@@ -197,7 +181,6 @@ int lantern_genesis_load(
     }
 
     if (!paths->config_path
-        || !paths->validator_registry_path
         || !paths->nodes_path
         || !paths->validator_config_path)
     {
@@ -212,23 +195,6 @@ int lantern_genesis_load(
     {
         goto error;
     }
-
-    result = genesis_parse_validator_registry(
-        paths->validator_registry_path,
-        &artifacts->validator_registry);
-    if (result != LANTERN_GENESIS_OK)
-    {
-        lantern_log_error(
-            "genesis",
-            NULL,
-            "failed to parse annotated_validators at %s",
-            paths->validator_registry_path);
-        goto error;
-    }
-
-    genesis_merge_chain_pubkeys_into_registry(
-        &artifacts->chain_config,
-        &artifacts->validator_registry);
 
     result = genesis_parse_nodes_file(paths->nodes_path, &artifacts->enrs);
     if (result != LANTERN_GENESIS_OK)
@@ -248,23 +214,6 @@ int lantern_genesis_load(
             "failed to parse validator-config at %s",
             paths->validator_config_path);
         goto error;
-    }
-
-    if (paths->state_path && paths->state_path[0] != '\0')
-    {
-        result = genesis_read_state_blob(
-            paths->state_path,
-            &artifacts->state_bytes,
-            &artifacts->state_size);
-        if (result != LANTERN_GENESIS_OK)
-        {
-            lantern_log_error(
-                "genesis",
-                NULL,
-                "failed to read genesis state at %s",
-                paths->state_path);
-            goto error;
-        }
     }
 
     return LANTERN_GENESIS_OK;

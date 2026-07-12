@@ -270,17 +270,6 @@ static bool validate_vote_cache_state(
     return true;
 }
 
-bool lantern_client_should_cache_attestation_signature_locked(
-    const struct lantern_client *client,
-    const LanternVote *vote)
-{
-    if (!client || !vote || !client->assigned_validators || !client->assigned_validators->enr.is_aggregator) {
-        return false;
-    }
-    return true;
-}
-
-
 /**
  * @brief Cache a signed validator vote in state.
  *
@@ -343,10 +332,10 @@ static bool cache_attestation_signature_locked(
         return false;
     }
 
-    const LanternSignature *signature_to_cache =
-        lantern_client_should_cache_attestation_signature_locked(client, &vote->data)
-            ? &vote->signature
-            : NULL;
+    const LanternSignature *signature_to_cache = client->assigned_validators
+            && client->assigned_validators->enr.is_aggregator
+        ? &vote->signature
+        : NULL;
     LanternSignatureKey key = {
         .validator_index = vote->data.validator_id,
         .data_root = data_root,
@@ -821,7 +810,7 @@ bool lantern_client_verify_vote_signature(
  * 4. Checkpoint ordering must satisfy source <= target <= head
  * 5. Source, target, and head must lie on one parent chain
  * 6. Vote slot must not precede the head checkpoint slot
- * 7. Vote slot must not exceed current_slot + 1
+ * 7. Vote slot must not begin more than one interval in the future
  *
  * Per leanSpec: checks that all referenced blocks exist in the store
  * before accepting the attestation.
@@ -925,6 +914,7 @@ bool lantern_client_validate_vote_constraints(
     } ancestry_checks[] = {
         {&vote->source, &vote->target, "source not ancestor of target", "Source checkpoint must be ancestor of target"},
         {&vote->target, &vote->head, "target not ancestor of head", "Target checkpoint must be ancestor of head"},
+        {&client->fork_choice.latest_finalized, &vote->head, "head not descendant of finalized", "Head checkpoint must descend from finalized"},
     };
     for (size_t i = 0; i < sizeof(ancestry_checks) / sizeof(ancestry_checks[0]); ++i)
     {
@@ -968,41 +958,58 @@ bool lantern_client_validate_vote_constraints(
         return false;
     }
 
-    uint64_t current_slot = 0;
-    if (!lantern_client_current_slot(client, &current_slot))
+    uint64_t allowed_slot = 0u;
+    if (client->debug_disable_fork_choice_time)
+    {
+        uint64_t current_slot = 0u;
+        if (!lantern_client_current_slot(client, &current_slot))
+        {
+            return false;
+        }
+        allowed_slot = current_slot == UINT64_MAX ? UINT64_MAX : current_slot + 1u;
+    }
+    else if (client->fork_choice.intervals_per_slot == 0u)
     {
         lantern_log_debug(
             log_facility,
             meta,
-            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (unable to compute current slot)",
+            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (invalid interval clock)",
             label,
             vote->validator_id,
             vote->slot);
         if (out_rejection)
         {
-            lantern_vote_rejection_set(out_rejection, "unable to compute current slot");
+            lantern_vote_rejection_set(out_rejection, "invalid interval clock");
         }
         return false;
     }
-    uint64_t allowed_slot = current_slot == UINT64_MAX ? UINT64_MAX : current_slot + 1u;
+    else
+    {
+        uint64_t admission_horizon = client->fork_choice.time_intervals;
+        if (admission_horizon < UINT64_MAX)
+        {
+            admission_horizon += 1u;
+        }
+        allowed_slot = admission_horizon / client->fork_choice.intervals_per_slot;
+    }
     if (vote->slot > allowed_slot)
     {
         lantern_log_debug(
             log_facility,
             meta,
-            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (current_slot=%" PRIu64 ")",
+            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (current_interval=%" PRIu64 ")",
             label,
             vote->validator_id,
             vote->slot,
-            current_slot);
+            client->fork_choice.time_intervals);
         if (out_rejection)
         {
             lantern_vote_rejection_set(
                 out_rejection,
-                "vote slot=%" PRIu64 " exceeds allowed=%" PRIu64 " current=%" PRIu64,
+                "vote slot=%" PRIu64 " exceeds allowed=%" PRIu64 " current_interval=%" PRIu64,
                 vote->slot,
                 allowed_slot,
-                current_slot);
+                client->fork_choice.time_intervals);
         }
         return false;
     }

@@ -84,7 +84,6 @@ void lantern_libp2p_host_init(struct lantern_libp2p_host *state);
 void lantern_libp2p_host_reset(struct lantern_libp2p_host *state);
 int lantern_libp2p_host_prepare(struct lantern_libp2p_host *state, const struct lantern_libp2p_config *config);
 int lantern_libp2p_host_launch(struct lantern_libp2p_host *state);
-int lantern_libp2p_host_start(struct lantern_libp2p_host *state, const struct lantern_libp2p_config *config);
 void lantern_libp2p_host_stop(struct lantern_libp2p_host *state);
 int lantern_libp2p_host_register_protocol(
     struct lantern_libp2p_host *state,
@@ -97,7 +96,6 @@ int lantern_libp2p_host_register_drive_handler(
     struct lantern_libp2p_host *state,
     lantern_libp2p_drive_handler handler,
     void *user_data);
-int lantern_libp2p_validate_enr_peer(const struct lantern_enr_record *record);
 int lantern_libp2p_host_dial_multiaddr(
     struct lantern_libp2p_host *state,
     const char *multiaddr_text);
@@ -107,6 +105,7 @@ int lantern_libp2p_enr_to_multiaddr(
     size_t buffer_len,
     struct lantern_peer_id *peer_id);
 int lantern_peer_id_from_text(const char *text, struct lantern_peer_id *out_peer);
+/* Returns the number of characters written on success, or -1 on failure. */
 int lantern_peer_id_to_text(const struct lantern_peer_id *peer, char *buffer, size_t buffer_len);
 int lantern_peer_id_equal(const struct lantern_peer_id *left, const struct lantern_peer_id *right);
 libp2p_host_time_us_t lantern_libp2p_now_us(void);

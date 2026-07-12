@@ -1,6 +1,7 @@
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"
+#include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/store.h"
 #include "lantern/consensus/ssz.h"
@@ -9,6 +10,7 @@
 #include "fixture_runner.h"
 #include "tests/support/fixture_loader.h"
 #include "../support/state_store_adapter.h"
+#include "../../src/core/client_sync_internal.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -24,6 +26,16 @@
 
 #define LABEL_MAX_LENGTH 64
 #define MAX_LABELS 128
+
+struct hash_mapping_entry {
+    LanternRoot leanspec_hash;
+    LanternRoot c_hash;
+};
+
+static const LanternRoot *hash_mapping_leanspec_to_c(
+    struct hash_mapping_entry *entries,
+    size_t count,
+    const LanternRoot *leanspec_hash);
 
 
 static void configure_logging(void) {
@@ -438,11 +450,48 @@ static int record_block_body_known_payloads(
     return 0;
 }
 
+static void map_attestation_roots(
+    LanternAttestationData *data,
+    struct hash_mapping_entry *mapping,
+    size_t mapping_count) {
+    LanternCheckpoint *checkpoints[] = {&data->source, &data->target, &data->head};
+    for (size_t i = 0; i < sizeof(checkpoints) / sizeof(checkpoints[0]); ++i) {
+        const LanternRoot *mapped = hash_mapping_leanspec_to_c(
+            mapping, mapping_count, &checkpoints[i]->root);
+        if (mapped) {
+            checkpoints[i]->root = *mapped;
+        }
+    }
+}
+
+static bool validate_attestation_constraints(
+    const LanternForkChoice *fork_choice,
+    const LanternAttestationData *data,
+    struct hash_mapping_entry *mapping,
+    size_t mapping_count) {
+    struct lantern_client client = {0};
+    client.fork_choice = *fork_choice;
+    client.has_fork_choice = true;
+    LanternVote vote = {.data = *data};
+    map_attestation_roots(&vote.data, mapping, mapping_count);
+    return lantern_client_validate_vote_constraints(
+        &client,
+        &vote,
+        "fixture",
+        &(const struct lantern_log_metadata){0},
+        "attestation",
+        NULL);
+}
+
 static int process_gossip_attestation_step(
     const struct lantern_fixture_document *doc,
     int step_idx,
-    LanternStore *store) {
-    if (!doc || !store) {
+    LanternStore *store,
+    const LanternForkChoice *fork_choice,
+    const LanternState *state,
+    struct hash_mapping_entry *mapping,
+    size_t mapping_count) {
+    if (!doc || !store || !fork_choice || !state) {
         return -1;
     }
     int attestation_idx = lantern_fixture_object_get_field(doc, step_idx, "attestation");
@@ -457,6 +506,23 @@ static int process_gossip_attestation_step(
 
     LanternRoot data_root;
     if (lantern_hash_tree_root_attestation_data(&vote.data.data, &data_root) != SSZ_SUCCESS) {
+        return -1;
+    }
+    size_t validator_count = lantern_state_validator_count(state);
+    if (!validate_attestation_constraints(
+            fork_choice, &vote.data.data, mapping, mapping_count)
+        || vote.data.validator_id >= validator_count) {
+        return -1;
+    }
+    const uint8_t *pubkey = lantern_state_validator_attestation_pubkey(
+        state, (size_t)vote.data.validator_id);
+    if (!pubkey
+        || !lantern_signature_verify(
+            pubkey,
+            LANTERN_VALIDATOR_PUBKEY_SIZE,
+            vote.data.slot,
+            &vote.signature,
+            &data_root)) {
         return -1;
     }
 
@@ -475,8 +541,12 @@ static int process_gossip_attestation_step(
 static int process_gossip_aggregated_attestation_step(
     const struct lantern_fixture_document *doc,
     int step_idx,
-    LanternStore *store) {
-    if (!doc || !store) {
+    LanternStore *store,
+    const LanternForkChoice *fork_choice,
+    const LanternState *state,
+    struct hash_mapping_entry *mapping,
+    size_t mapping_count) {
+    if (!doc || !store || !fork_choice || !state) {
         return -1;
     }
     int attestation_idx = lantern_fixture_object_get_field(doc, step_idx, "attestation");
@@ -504,6 +574,43 @@ static int process_gossip_aggregated_attestation_step(
 
     LanternRoot data_root;
     if (lantern_hash_tree_root_attestation_data(&data, &data_root) != SSZ_SUCCESS) {
+        goto cleanup;
+    }
+    if (!validate_attestation_constraints(fork_choice, &data, mapping, mapping_count)) {
+        goto cleanup;
+    }
+    size_t validator_count = lantern_state_validator_count(state);
+    if (proof.participants.bit_length > validator_count) {
+        goto cleanup;
+    }
+    const uint8_t **pubkeys = calloc(validator_count, sizeof(*pubkeys));
+    if (!pubkeys) {
+        goto cleanup;
+    }
+    size_t pubkey_count = 0u;
+    for (size_t i = 0; i < proof.participants.bit_length; ++i) {
+        if (!lantern_bitlist_get(&proof.participants, i)) {
+            continue;
+        }
+        pubkeys[pubkey_count] = lantern_state_validator_attestation_pubkey(state, i);
+        if (!pubkeys[pubkey_count]) {
+            free(pubkeys);
+            goto cleanup;
+        }
+        ++pubkey_count;
+    }
+    static const uint8_t mock_proof_prefix[] = "\0MOCKED-AGGREGATION-PROOF\0";
+    bool signature_valid = pubkey_count > 0u
+        && ((proof.proof_data.length >= sizeof(mock_proof_prefix) - 1u
+             && memcmp(
+                    proof.proof_data.data,
+                    mock_proof_prefix,
+                    sizeof(mock_proof_prefix) - 1u)
+                    == 0)
+            || lantern_signature_verify_aggregated(
+                pubkeys, pubkey_count, &data_root, &proof.proof_data, data.slot));
+    free(pubkeys);
+    if (!signature_valid) {
         goto cleanup;
     }
     rc = lantern_store_add_new_aggregated_payload(
@@ -713,14 +820,6 @@ static int stored_state_restore(
 done:
     return rc;
 }
-
-/* Hash mapping structure to translate LeanSpec block hashes to C block hashes.
- * This is needed because LeanSpec uses variable-length XMSS signatures which
- * produce different block hashes than C (which uses fixed-length signatures). */
-struct hash_mapping_entry {
-    LanternRoot leanspec_hash;
-    LanternRoot c_hash;
-};
 
 static void hash_mapping_reset(struct hash_mapping_entry **entries_ptr, size_t *count_ptr, size_t *cap_ptr) {
     if (!entries_ptr || !count_ptr || !cap_ptr) {
@@ -1103,6 +1202,7 @@ static int for_each_json(
             continue;
         }
         if (callback(child_path) != 0) {
+            fprintf(stderr, "fixture failed: %s\n", child_path);
             status = -1;
             break;
         }
@@ -1497,9 +1597,24 @@ static int run_fork_choice_fixture(const char *path) {
         }
         int block_idx = lantern_fixture_object_get_field(&doc, step_idx, "block");
         int time_idx = lantern_fixture_object_get_field(&doc, step_idx, "time");
+        bool time_is_interval = false;
+        if (time_idx < 0) {
+            time_idx = lantern_fixture_object_get_field(&doc, step_idx, "interval");
+            time_is_interval = time_idx >= 0;
+        }
         int checks_idx = lantern_fixture_object_get_field(&doc, step_idx, "checks");
         if (is_attestation_step) {
-            if (process_gossip_attestation_step(&doc, step_idx, &fork_choice_store) != 0) {
+            if ((process_gossip_attestation_step(
+                     &doc,
+                     step_idx,
+                     &fork_choice_store,
+                     &store,
+                     &state,
+                     hash_mapping,
+                     hash_mapping_count)
+                 == 0)
+                != step_valid) {
+                fprintf(stderr, "attestation validity mismatch in %s step %d\n", path, i);
                 reset_block(&anchor_block);
                 lantern_fork_choice_reset(&store);
                 lantern_state_reset(&state);
@@ -1511,7 +1626,17 @@ static int run_fork_choice_fixture(const char *path) {
             continue;
         }
         if (is_gossip_aggregated_step) {
-            if (process_gossip_aggregated_attestation_step(&doc, step_idx, &fork_choice_store) != 0) {
+            if ((process_gossip_aggregated_attestation_step(
+                     &doc,
+                     step_idx,
+                     &fork_choice_store,
+                     &store,
+                     &state,
+                     hash_mapping,
+                     hash_mapping_count)
+                 == 0)
+                != step_valid) {
+                fprintf(stderr, "aggregated attestation validity mismatch in %s step %d\n", path, i);
                 reset_block(&anchor_block);
                 lantern_fork_choice_reset(&store);
                 lantern_state_reset(&state);
@@ -1545,7 +1670,9 @@ static int run_fork_choice_fixture(const char *path) {
                     hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
                     return -1;
                 }
-                uint64_t now = (genesis_time * 1000u) + (time_interval * store.milliseconds_per_interval);
+                uint64_t now = time_is_interval
+                    ? (genesis_time * 1000u) + (time_interval * store.milliseconds_per_interval)
+                    : time_interval * 1000u;
                 uint64_t previous_intervals = store.time_intervals;
                 if (lantern_fork_choice_advance_time(&store, now, has_proposal) != 0) {
                     reset_block(&anchor_block);
@@ -1562,8 +1689,9 @@ static int run_fork_choice_fixture(const char *path) {
                         &state,
                         previous_intervals,
                         has_proposal)
-                    != 0) {
-                    fprintf(stderr, "failed to sync payload pools in %s (step %d)\n", path, i);
+                    != 0
+                    || lantern_fork_choice_recompute_head(&store) != 0) {
+                    fprintf(stderr, "failed to sync payload pools/head in %s (step %d)\n", path, i);
                     reset_block(&anchor_block);
                     lantern_fork_choice_reset(&store);
                     lantern_state_reset(&state);
@@ -1863,7 +1991,17 @@ static int run_fork_choice_fixture(const char *path) {
             /* Non-canonical branch: look up parent state using C hash */
             const LanternRoot *c_parent_for_lookup = c_parent_root;
             if (!c_parent_for_lookup) {
-                /* Parent not in mapping - this shouldn't happen for valid fixtures */
+                if (!step_valid
+                    && lantern_fork_choice_add_block(
+                           &store,
+                           &signed_block.block,
+                           NULL,
+                           NULL,
+                           &leanspec_block_root)
+                           != 0) {
+                    reset_block(&signed_block.block);
+                    continue;
+                }
                 fprintf(stderr, "parent not found in hash mapping for fork_choice %s step %d\n", path, i);
                 reset_block(&signed_block.block);
                 reset_block(&anchor_block);

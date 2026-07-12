@@ -243,18 +243,6 @@ bool lantern_client_find_missing_state_root_locked(
     LanternRoot *out_missing_root);
 
 /**
- * Determine whether this node should retain an attestation signature locally.
- *
- * The signature is retained when the node is configured as an aggregator.
- * Attestation subnet selection happens at the gossip subscription layer.
- *
- * @note Caller must hold state_lock.
- */
-bool lantern_client_should_cache_attestation_signature_locked(
-    const struct lantern_client *client,
-    const LanternVote *vote);
-
-/**
  * Cache block-body aggregated proofs as known attestation material.
  *
  * Mirrors the block-body proof caching step from the spec's Store.on_block().
@@ -426,19 +414,6 @@ int clone_signed_block(const LanternSignedBlock *source, LanternSignedBlock *des
 /* ============================================================================
  * Block Sync Functions
  * ============================================================================ */
-
-/**
- * Count enabled local validators.
- *
- * @spec subspecs/duties/duties.py - validator management
- *
- * @param client  Client instance
- * @return Number of enabled validators
- *
- * @note Thread safety: Acquires validator_lock
- */
-size_t lantern_client_enabled_validator_count(struct lantern_client *client);
-
 
 /**
  * Validate vote constraints against fork choice.
@@ -692,18 +667,6 @@ int initialize_fork_choice(struct lantern_client *client);
  */
 int restore_persisted_blocks(struct lantern_client *client);
 
-
-/**
- * Validate existing state validator pubkeys or initialize them from genesis registry.
- *
- * @spec subspecs/containers/state/genesis.py - validator state
- *
- * @param client  Client instance
- * @return LANTERN_CLIENT_OK on success, negative lantern_client_error otherwise
- *
- * @note Thread safety: Caller must ensure exclusive access during initialization
- */
-int lantern_client_refresh_state_validators(struct lantern_client *client);
 
 /**
  * Validate state validator pubkeys against local genesis validator pubkeys.

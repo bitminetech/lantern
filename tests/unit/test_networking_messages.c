@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
-#include <errno.h>
 
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/hash.h"
@@ -18,7 +17,6 @@
 #include "lantern/networking/reqresp_service.h"
 #include "lantern/encoding/snappy.h"
 #include "lantern/support/strings.h"
-#include "multiformats/unsigned_varint/unsigned_varint.h"
 #include "tests/support/fixture_loader.h"
 #include "ssz.h"
 
@@ -50,19 +48,6 @@ static void fill_signature(LanternSignature *signature, uint8_t seed) {
     fill_bytes(signature->bytes, LANTERN_SIGNATURE_SIZE, seed);
 }
 
-static void expect_root_seed(const LanternRoot *root, uint8_t seed) {
-    CHECK(root != NULL);
-    uint8_t expected[LANTERN_ROOT_SIZE];
-    fill_bytes(expected, sizeof(expected), seed);
-    CHECK(memcmp(root->bytes, expected, sizeof(expected)) == 0);
-}
-
-static void expect_checkpoint_seed(const LanternCheckpoint *checkpoint, uint64_t slot, uint8_t seed) {
-    CHECK(checkpoint != NULL);
-    CHECK(checkpoint->slot == slot);
-    expect_root_seed(&checkpoint->root, seed);
-}
-
 static bool build_consensus_fixture_path(const char *relative_path, char *path, size_t path_len) {
     if (!relative_path || !path || path_len == 0) {
         return false;
@@ -88,59 +73,6 @@ static bool consensus_fixture_exists(const char *relative_path) {
     }
     fclose(fp);
     return true;
-}
-
-struct mock_stream_ctx {
-    uint8_t *data;
-    size_t length;
-    size_t position;
-};
-
-static ssize_t mock_stream_read(void *io_ctx, void *buf, size_t len) {
-    struct mock_stream_ctx *ctx = (struct mock_stream_ctx *)io_ctx;
-    if (!ctx || !buf || len == 0) {
-        return -EINVAL;
-    }
-    if (ctx->position >= ctx->length) {
-        return 0;
-    }
-    size_t remaining = ctx->length - ctx->position;
-    size_t to_copy = remaining < len ? remaining : len;
-    memcpy(buf, ctx->data + ctx->position, to_copy);
-    ctx->position += to_copy;
-    return (ssize_t)to_copy;
-}
-
-static ssize_t mock_stream_write(void *io_ctx, const void *buf, size_t len) {
-    (void)io_ctx;
-    (void)buf;
-    (void)len;
-    return -ENOTSUP;
-}
-
-static int mock_stream_close(void *io_ctx) {
-    (void)io_ctx;
-    return 0;
-}
-
-static int mock_stream_reset(void *io_ctx) {
-    (void)io_ctx;
-    return 0;
-}
-
-static int mock_stream_set_deadline(void *io_ctx, uint64_t ms) {
-    (void)io_ctx;
-    (void)ms;
-    return 0;
-}
-
-static void mock_stream_free_ctx(void *io_ctx) {
-    struct mock_stream_ctx *ctx = (struct mock_stream_ctx *)io_ctx;
-    if (!ctx) {
-        return;
-    }
-    free(ctx->data);
-    free(ctx);
 }
 
 static void check_checkpoint_equal(const LanternCheckpoint *expected, const LanternCheckpoint *actual) {
@@ -564,317 +496,6 @@ static void test_status_decode_rejects_truncated_payloads(void) {
     CHECK(lantern_network_status_decode(&decoded, extra_payload, sizeof(extra_payload)) != 0);
 }
 
-static void test_status_reqresp_snappy_fixture(void) {
-    /* Build status message with same values as the fixture */
-    LanternStatusMessage status = {
-        .finalized = build_checkpoint(0x11, 42),
-        .head = build_checkpoint(0x41, 96),
-    };
-
-    /* Encode to raw SSZ then compress with framed snappy */
-    uint8_t raw_ssz[2u * LANTERN_CHECKPOINT_SSZ_SIZE];
-    size_t raw_ssz_len = 0;
-    check_zero(
-        lantern_network_status_encode(&status, raw_ssz, sizeof(raw_ssz), &raw_ssz_len),
-        "status encode");
-    CHECK(raw_ssz_len == 2u * LANTERN_CHECKPOINT_SSZ_SIZE);
-
-    size_t max_compressed = 0;
-    CHECK(lantern_snappy_max_compressed_size(raw_ssz_len, &max_compressed) == LANTERN_SNAPPY_OK);
-    uint8_t *snappy_payload = (uint8_t *)malloc(max_compressed);
-    CHECK(snappy_payload != NULL);
-    size_t snappy_len = 0;
-    CHECK(
-        lantern_snappy_compress(raw_ssz, raw_ssz_len, snappy_payload, max_compressed, &snappy_len)
-        == LANTERN_SNAPPY_OK);
-
-    /* Build reqresp frame - varint encodes the uncompressed SSZ payload size */
-    uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
-    size_t header_len = 0;
-    CHECK(libp2p_uvarint_encode(raw_ssz_len, header, sizeof(header), &header_len) == LIBP2P_UVARINT_OK);
-
-    size_t framed_len = 1u + header_len + snappy_len;
-    uint8_t *framed = (uint8_t *)malloc(framed_len);
-    CHECK(framed != NULL);
-    framed[0] = LANTERN_REQRESP_RESPONSE_SUCCESS;
-    memcpy(framed + 1, header, header_len);
-    memcpy(framed + 1 + header_len, snappy_payload, snappy_len);
-
-    struct mock_stream_ctx *ctx = (struct mock_stream_ctx *)malloc(sizeof(*ctx));
-    CHECK(ctx != NULL);
-    ctx->data = framed;
-    ctx->length = framed_len;
-    ctx->position = 0;
-
-    struct lantern_reqresp_stream_ops ops = {
-        .read = mock_stream_read,
-        .write = mock_stream_write,
-        .close = mock_stream_close,
-        .reset = mock_stream_reset,
-        .set_deadline = mock_stream_set_deadline,
-        .free_ctx = mock_stream_free_ctx,
-    };
-    struct lantern_reqresp_stream *stream = lantern_reqresp_stream_from_ops(ctx, &ops, NULL);
-    CHECK(stream != NULL);
-
-    uint8_t *response = NULL;
-    size_t response_len = 0;
-    ssize_t read_err = 0;
-    uint8_t response_code = 0;
-    check_zero(
-        lantern_reqresp_read_response_chunk(
-            NULL,
-            stream,
-            LANTERN_REQRESP_PROTOCOL_STATUS,
-            &response,
-            &response_len,
-            &read_err,
-            &response_code,
-            NULL),
-        "reqresp read status response");
-    CHECK(response_code == LANTERN_REQRESP_RESPONSE_SUCCESS);
-    CHECK(response_len == snappy_len);
-    CHECK(memcmp(response, snappy_payload, snappy_len) == 0);
-
-    LanternStatusMessage decoded = {0};
-    uint8_t decoded_raw[2u * LANTERN_CHECKPOINT_SSZ_SIZE];
-    size_t decoded_raw_len = sizeof(decoded_raw);
-    CHECK(
-        lantern_snappy_decompress(response, response_len, decoded_raw, sizeof(decoded_raw), &decoded_raw_len)
-        == LANTERN_SNAPPY_OK);
-    check_zero(
-        lantern_network_status_decode(&decoded, decoded_raw, decoded_raw_len),
-        "reqresp status decode");
-    expect_checkpoint_seed(&decoded.finalized, 42, 0x11);
-    expect_checkpoint_seed(&decoded.head, 96, 0x41);
-
-    free(response);
-    lantern_reqresp_stream_free(stream);
-    free(snappy_payload);
-}
-
-static uint8_t *build_reqresp_frame(
-    uint8_t response_code,
-    const uint8_t *payload,
-    size_t payload_len,
-    size_t raw_len,
-    size_t *out_len) {
-    /* Varint encodes the uncompressed payload size (SSZ length). */
-    uint8_t header[LANTERN_REQRESP_HEADER_MAX_BYTES];
-    size_t header_len = 0;
-    CHECK(libp2p_uvarint_encode(raw_len, header, sizeof(header), &header_len) == LIBP2P_UVARINT_OK);
-
-    size_t frame_len = 1u + header_len + payload_len;
-    uint8_t *frame = (uint8_t *)malloc(frame_len);
-    CHECK(frame != NULL);
-    frame[0] = response_code;
-    memcpy(frame + 1u, header, header_len);
-    if (payload_len > 0) {
-        memcpy(frame + 1u + header_len, payload, payload_len);
-    }
-    if (out_len) {
-        *out_len = frame_len;
-    }
-    return frame;
-}
-
-static void test_reqresp_response_code_mapping(void) {
-    const uint8_t status_payload[] = {0x01, 0x02, 0x03, 0x04};
-    size_t raw_len = sizeof(status_payload);
-    size_t max_compressed = 0;
-    CHECK(lantern_snappy_max_compressed_size(raw_len, &max_compressed) == LANTERN_SNAPPY_OK);
-    uint8_t *fixture = (uint8_t *)malloc(max_compressed);
-    CHECK(fixture != NULL);
-    size_t fixture_len = 0;
-    CHECK(
-        lantern_snappy_compress(
-            status_payload,
-            raw_len,
-            fixture,
-            max_compressed,
-            &fixture_len)
-        == LANTERN_SNAPPY_OK);
-    CHECK(fixture_len > 0);
-
-    struct {
-        uint8_t wire_code;
-        uint8_t expected_code;
-    } cases[] = {
-        {LANTERN_REQRESP_RESPONSE_RESOURCE_UNAVAILABLE, LANTERN_REQRESP_RESPONSE_RESOURCE_UNAVAILABLE},
-        {4u, LANTERN_REQRESP_RESPONSE_SERVER_ERROR},
-        {127u, LANTERN_REQRESP_RESPONSE_SERVER_ERROR},
-        {128u, LANTERN_REQRESP_RESPONSE_INVALID_REQUEST},
-        {200u, LANTERN_REQRESP_RESPONSE_INVALID_REQUEST},
-    };
-
-    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
-        size_t frame_len = 0;
-        uint8_t *frame = build_reqresp_frame(
-            cases[i].wire_code,
-            fixture,
-            fixture_len,
-            raw_len,
-            &frame_len);
-
-        struct mock_stream_ctx *ctx = (struct mock_stream_ctx *)malloc(sizeof(*ctx));
-        CHECK(ctx != NULL);
-        ctx->data = frame;
-        ctx->length = frame_len;
-        ctx->position = 0;
-
-        struct lantern_reqresp_stream_ops ops = {
-            .read = mock_stream_read,
-            .write = mock_stream_write,
-            .close = mock_stream_close,
-            .reset = mock_stream_reset,
-            .set_deadline = mock_stream_set_deadline,
-            .free_ctx = mock_stream_free_ctx,
-        };
-        struct lantern_reqresp_stream *stream = lantern_reqresp_stream_from_ops(ctx, &ops, NULL);
-        CHECK(stream != NULL);
-
-        uint8_t *response = NULL;
-        size_t response_len = 0;
-        ssize_t read_err = 0;
-        uint8_t response_code = 0;
-        check_zero(
-            lantern_reqresp_read_response_chunk(
-                NULL,
-                stream,
-                LANTERN_REQRESP_PROTOCOL_STATUS,
-                &response,
-                &response_len,
-                &read_err,
-                &response_code,
-                NULL),
-            "reqresp read response (mapping)");
-        CHECK(response_code == cases[i].expected_code);
-        CHECK(response_len == fixture_len);
-        CHECK(memcmp(response, fixture, fixture_len) == 0);
-
-        free(response);
-        lantern_reqresp_stream_free(stream);
-    }
-
-    free(fixture);
-}
-
-static void test_blocks_by_root_per_chunk_framing(void) {
-    const uint8_t raw_one[] = {0x01, 0x02, 0x03, 0x04};
-    const uint8_t raw_two[] = {0x10, 0x20, 0x30, 0x40, 0x50};
-
-    size_t max_one = 0;
-    CHECK(lantern_snappy_max_compressed_size(sizeof(raw_one), &max_one) == LANTERN_SNAPPY_OK);
-    uint8_t *snappy_one = (uint8_t *)malloc(max_one);
-    CHECK(snappy_one != NULL);
-    size_t snappy_one_len = 0;
-    CHECK(
-        lantern_snappy_compress(
-            raw_one,
-            sizeof(raw_one),
-            snappy_one,
-            max_one,
-            &snappy_one_len)
-        == LANTERN_SNAPPY_OK);
-
-    size_t max_two = 0;
-    CHECK(lantern_snappy_max_compressed_size(sizeof(raw_two), &max_two) == LANTERN_SNAPPY_OK);
-    uint8_t *snappy_two = (uint8_t *)malloc(max_two);
-    CHECK(snappy_two != NULL);
-    size_t snappy_two_len = 0;
-    CHECK(
-        lantern_snappy_compress(
-            raw_two,
-            sizeof(raw_two),
-            snappy_two,
-            max_two,
-            &snappy_two_len)
-        == LANTERN_SNAPPY_OK);
-
-    size_t frame_one_len = 0;
-    uint8_t *frame_one = build_reqresp_frame(
-        LANTERN_REQRESP_RESPONSE_SUCCESS,
-        snappy_one,
-        snappy_one_len,
-        sizeof(raw_one),
-        &frame_one_len);
-    size_t frame_two_len = 0;
-    uint8_t *frame_two = build_reqresp_frame(
-        LANTERN_REQRESP_RESPONSE_SUCCESS,
-        snappy_two,
-        snappy_two_len,
-        sizeof(raw_two),
-        &frame_two_len);
-
-    size_t stream_len = frame_one_len + frame_two_len;
-    uint8_t *stream_bytes = (uint8_t *)malloc(stream_len);
-    CHECK(stream_bytes != NULL);
-    memcpy(stream_bytes, frame_one, frame_one_len);
-    memcpy(stream_bytes + frame_one_len, frame_two, frame_two_len);
-    free(frame_one);
-    free(frame_two);
-
-    struct mock_stream_ctx *ctx = (struct mock_stream_ctx *)malloc(sizeof(*ctx));
-    CHECK(ctx != NULL);
-    ctx->data = stream_bytes;
-    ctx->length = stream_len;
-    ctx->position = 0;
-
-    struct lantern_reqresp_stream_ops ops = {
-        .read = mock_stream_read,
-        .write = mock_stream_write,
-        .close = mock_stream_close,
-        .reset = mock_stream_reset,
-        .set_deadline = mock_stream_set_deadline,
-        .free_ctx = mock_stream_free_ctx,
-    };
-    struct lantern_reqresp_stream *stream = lantern_reqresp_stream_from_ops(ctx, &ops, NULL);
-    CHECK(stream != NULL);
-
-    uint8_t *response = NULL;
-    size_t response_len = 0;
-    ssize_t read_err = 0;
-    uint8_t response_code = 0;
-    check_zero(
-        lantern_reqresp_read_response_chunk(
-            NULL,
-            stream,
-            LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT,
-            &response,
-            &response_len,
-            &read_err,
-            &response_code,
-            NULL),
-        "reqresp read blocks_by_root chunk 1");
-    CHECK(response_code == LANTERN_REQRESP_RESPONSE_SUCCESS);
-    CHECK(response_len == snappy_one_len);
-    CHECK(memcmp(response, snappy_one, snappy_one_len) == 0);
-    free(response);
-
-    response = NULL;
-    response_len = 0;
-    response_code = 0;
-    check_zero(
-        lantern_reqresp_read_response_chunk(
-            NULL,
-            stream,
-            LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT,
-            &response,
-            &response_len,
-            &read_err,
-            &response_code,
-            NULL),
-        "reqresp read blocks_by_root chunk 2");
-    CHECK(response_code == LANTERN_REQRESP_RESPONSE_SUCCESS);
-    CHECK(response_len == snappy_two_len);
-    CHECK(memcmp(response, snappy_two, snappy_two_len) == 0);
-    free(response);
-
-    lantern_reqresp_stream_free(stream);
-    free(snappy_one);
-    free(snappy_two);
-}
-
 static void test_blocks_by_root_request(void) {
     LanternBlocksByRootRequest req;
     lantern_blocks_by_root_request_init(&req);
@@ -907,80 +528,15 @@ static void test_blocks_by_root_request(void) {
     lantern_blocks_by_root_request_reset(&decoded);
 }
 
-static void test_signed_block_list(void) {
-    LanternSignedBlockList resp;
-    lantern_signed_block_list_init(&resp);
-    check_zero(lantern_signed_block_list_resize(&resp, 2), "response resize");
-    populate_block(&resp.blocks[0], 1);
-    populate_block(&resp.blocks[1], 2);
-
-    size_t encoded_capacity = 1u << 20;
-    uint8_t *encoded = (uint8_t *)malloc(encoded_capacity);
-    CHECK(encoded != NULL);
-    for (size_t i = 0; i < resp.length; ++i) {
-        size_t tmp_written = 0;
-        CHECK(lantern_ssz_encode_signed_block(&resp.blocks[i], encoded, encoded_capacity, &tmp_written) == SSZ_SUCCESS);
-        CHECK(tmp_written > 0);
-    }
-    size_t written = 0;
-    check_zero(
-        lantern_network_signed_block_list_encode(&resp, encoded, encoded_capacity, &written),
-        "response encode");
-    CHECK(written >= resp.length * sizeof(uint32_t));
-    uint32_t first_offset = (uint32_t)encoded[0]
-        | ((uint32_t)encoded[1] << 8)
-        | ((uint32_t)encoded[2] << 16)
-        | ((uint32_t)encoded[3] << 24);
-    CHECK(first_offset == resp.length * sizeof(uint32_t));
-    for (size_t i = 0; i < resp.length; ++i) {
-        size_t idx = i * sizeof(uint32_t);
-        uint32_t offset_value = (uint32_t)encoded[idx]
-            | ((uint32_t)encoded[idx + 1] << 8)
-            | ((uint32_t)encoded[idx + 2] << 16)
-            | ((uint32_t)encoded[idx + 3] << 24);
-        CHECK(offset_value >= first_offset);
-        CHECK(offset_value < written);
-        if (i + 1 < resp.length) {
-            size_t next_idx = (i + 1) * sizeof(uint32_t);
-            uint32_t next_value = (uint32_t)encoded[next_idx]
-                | ((uint32_t)encoded[next_idx + 1] << 8)
-                | ((uint32_t)encoded[next_idx + 2] << 16)
-                | ((uint32_t)encoded[next_idx + 3] << 24);
-            CHECK(next_value > offset_value);
-        }
-    }
-
-    LanternSignedBlockList decoded;
-    lantern_signed_block_list_init(&decoded);
-    check_zero(lantern_network_signed_block_list_decode(&decoded, encoded, written), "response decode");
-    CHECK(decoded.length == resp.length);
-    check_byte_list_equal(&decoded.blocks[1].proof, &resp.blocks[1].proof);
-
-    lantern_signed_block_list_reset(&resp);
-    lantern_signed_block_list_reset(&decoded);
-    free(encoded);
-}
-
 static void test_gossip_helpers(void) {
     char topic[128];
-    uint8_t parsed_digest[4];
     char digest_hex[LANTERN_GOSSIP_FORK_DIGEST_HEX_LEN + 1u];
     static const uint8_t fork_digest[4] = {0x12, 0x34, 0x56, 0x78};
     check_zero(lantern_gossip_fork_digest_to_hex(fork_digest, digest_hex), "fork digest hex");
     CHECK(strcmp(digest_hex, "12345678") == 0);
-    check_zero(lantern_gossip_fork_digest_from_hex("12345678", parsed_digest), "fork digest parse");
-    CHECK(memcmp(parsed_digest, fork_digest, sizeof(parsed_digest)) == 0);
-    CHECK(lantern_gossip_fork_digest_from_hex("0x12345678", parsed_digest) != 0);
-    CHECK(lantern_gossip_fork_digest_from_hex("1234567", parsed_digest) != 0);
-    CHECK(lantern_gossip_fork_digest_from_hex("1234567G", parsed_digest) != 0);
 
     check_zero(lantern_gossip_topic_format(LANTERN_GOSSIP_TOPIC_BLOCK, "devnet0", topic, sizeof(topic)), "topic format");
     CHECK(strcmp(topic, "/leanconsensus/devnet0/block/ssz_snappy") == 0);
-
-    struct lantern_gossip_parsed_topic parsed_topic;
-    check_zero(lantern_gossip_topic_parse(topic, &parsed_topic), "topic parse block");
-    CHECK(parsed_topic.kind == LANTERN_GOSSIP_TOPIC_BLOCK);
-    CHECK(strcmp(parsed_topic.network_name, "devnet0") == 0);
 
     check_zero(
         lantern_gossip_topic_format_subnet(
@@ -991,20 +547,6 @@ static void test_gossip_helpers(void) {
             sizeof(topic)),
         "topic format subnet");
     CHECK(strcmp(topic, "/leanconsensus/devnet0/attestation_7/ssz_snappy") == 0);
-    check_zero(lantern_gossip_topic_parse(topic, &parsed_topic), "topic parse subnet");
-    CHECK(parsed_topic.kind == LANTERN_GOSSIP_TOPIC_VOTE_SUBNET);
-    CHECK(strcmp(parsed_topic.network_name, "devnet0") == 0);
-    CHECK(parsed_topic.subnet_id == 7u);
-
-    check_zero(lantern_gossip_topic_parse("/leanconsensus/0x12345678/block/ssz_snappy", &parsed_topic), "topic parse 0x");
-    CHECK(strcmp(parsed_topic.network_name, "0x12345678") == 0);
-    check_zero(lantern_gossip_topic_parse("/leanconsensus/12345678/block/ssz_snappy", &parsed_topic), "topic parse hex");
-    CHECK(strcmp(parsed_topic.network_name, "12345678") == 0);
-    check_zero(lantern_gossip_topic_parse("/leanconsensus/1234567/block/ssz_snappy", &parsed_topic), "topic parse short");
-    CHECK(strcmp(parsed_topic.network_name, "1234567") == 0);
-    check_zero(lantern_gossip_topic_parse("/leanconsensus/not-hex/block/ssz_snappy", &parsed_topic), "topic parse opaque");
-    CHECK(strcmp(parsed_topic.network_name, "not-hex") == 0);
-    CHECK(lantern_gossip_topic_parse("/leanconsensus//block/ssz_snappy", &parsed_topic) != 0);
 
     uint8_t payload[64];
     fill_bytes(payload, sizeof(payload), 0x5A);
@@ -1321,11 +863,7 @@ static void test_client_publish_block_loopback(void) {
 int main(void) {
     test_status_message();
     test_status_decode_rejects_truncated_payloads();
-    test_status_reqresp_snappy_fixture();
-    test_reqresp_response_code_mapping();
-    test_blocks_by_root_per_chunk_framing();
     test_blocks_by_root_request();
-    test_signed_block_list();
     test_gossip_signed_vote_payload();
     test_gossip_signed_block_payload();
     test_gossip_signed_block_accepts_future_attestation_slot();

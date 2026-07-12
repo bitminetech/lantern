@@ -8,7 +8,6 @@
  * blocks_by_root requests, plus peer status processing logic.
  *
  * Related files:
- * - client_reqresp_stream.c: Low-level stream I/O utilities
  * - client_reqresp_blocks.c: Block request operations
  *
  * @note Lock ordering (acquire in this order to prevent deadlocks):
@@ -100,10 +99,6 @@ static void lantern_client_on_peer_status(
     struct lantern_client *client,
     const LanternStatusMessage *peer_status,
     const char *peer_id);
-static void lantern_client_adopt_peer_genesis(
-    struct lantern_client *client,
-    const LanternStatusMessage *peer_status,
-    const char *peer_id_text);
 
 static void copy_peer_id_text(const char *peer_id, char *out, size_t out_len);
 static bool record_status_failure_peer_id(struct lantern_client *client, const char *peer_id_text);
@@ -247,7 +242,7 @@ static void log_status_failure(
                 "reqresp",
                 &meta,
                 "peer does not support %s error=%d (%s)",
-                LANTERN_STATUS_PROTOCOL_ID,
+                LANTERN_REQRESP_STATUS_PROTOCOL,
                 error,
                 reason ? reason : "-");
         }
@@ -257,7 +252,7 @@ static void log_status_failure(
                 "reqresp",
                 &meta,
                 "peer still misses %s support error=%d (%s)",
-                LANTERN_STATUS_PROTOCOL_ID,
+                LANTERN_REQRESP_STATUS_PROTOCOL,
                 error,
                 reason ? reason : "-");
         }
@@ -764,7 +759,6 @@ static void maybe_log_sync_progress(
             client->sync_in_progress = false;
             client->sync_started_ms = 0;
             client->sync_last_log_ms = 0;
-            client->sync_last_imported_blocks = 0;
             client->sync_target_slot = 0;
         }
         maybe_retry_orphan_parent_request(
@@ -784,7 +778,6 @@ static void maybe_log_sync_progress(
         client->sync_in_progress = true;
         client->sync_started_ms = now_ms;
         client->sync_last_log_ms = 0;
-        client->sync_last_imported_blocks = 0;
         client->sync_imported_blocks = 0;
         client->sync_target_slot = has_network_head ? network_head_slot : network_finalized;
         lantern_log_info(
@@ -832,7 +825,6 @@ static void maybe_log_sync_progress(
     }
 
     client->sync_last_log_ms = now_ms;
-    client->sync_last_imported_blocks = client->sync_imported_blocks;
 
     if (should_request_parent)
     {
@@ -1419,7 +1411,11 @@ void reqresp_status_failure(void *context, const char *peer_id, int error)
     if (peer_copy[0] != '\0' && error == LANTERN_REQRESP_ERR_STREAM_WRITE
         && !lantern_client_is_peer_connected(client, peer_copy))
     {
-        lantern_client_redial_peer_by_text(client, peer_copy);
+        struct lantern_peer_id peer;
+        if (lantern_peer_id_from_text(peer_copy, &peer) == 0)
+        {
+            redial_peer(client, &peer);
+        }
     }
 
     if (peer_copy[0] != '\0' && first_failure
@@ -2330,15 +2326,6 @@ static void lantern_client_on_peer_status(
         head_known ? "true" : "false",
         local_slot);
 
-    /* If we bootstrapped via genesis fallback and the peer advertises the genesis head,
-       adopt the peer's head root as our anchor so that subsequent block requests use
-       the correct root. */
-    if (client->genesis_fallback_used && client->has_fork_choice && client->has_state
-        && peer_status->head.slot == 0 && local_slot == 0 && !head_known)
-    {
-        lantern_client_adopt_peer_genesis(client, peer_status, peer_copy);
-    }
-
     lantern_client_peer_status_update(
         client,
         peer_status,
@@ -2351,76 +2338,6 @@ static void lantern_client_on_peer_status(
         local_slot,
         local_finalized_slot,
         head_known);
-}
-
-
-/**
- * Adopt a peer's genesis root as our anchor.
- *
- * @spec subspecs/forkchoice/store.py - Store.get_forkchoice_store()
- *
- * Sets the peer's advertised genesis head as our fork choice anchor.
- * Used during bootstrap with genesis fallback when local genesis
- * state may not match the network's actual genesis block root.
- *
- * @param client        Client instance
- * @param peer_status   Peer status message
- * @param peer_id_text  Peer ID string for logging
- *
- * @note Thread safety: This function is thread-safe
- */
-static void lantern_client_adopt_peer_genesis(
-    struct lantern_client *client,
-    const LanternStatusMessage *peer_status,
-    const char *peer_id_text)
-{
-    if (!client || !peer_status || !client->has_fork_choice)
-    {
-        return;
-    }
-
-    LanternBlock anchor;
-    memset(&anchor, 0, sizeof(anchor));
-    anchor.slot = 0;
-    anchor.proposer_index = 0;
-    /* Use the peer's advertised head root as both state_root and hint so our fork-choice
-       anchor matches the peer even if we cannot reproduce their SSZ state. */
-    anchor.state_root = peer_status->head.root;
-    LanternCheckpoint anchor_checkpoint = peer_status->finalized;
-    anchor_checkpoint.root = peer_status->head.root;
-
-    if (lantern_fork_choice_set_anchor(
-            &client->fork_choice,
-            &anchor,
-            &anchor_checkpoint,
-            &anchor_checkpoint,
-            &peer_status->head.root)
-        != 0)
-    {
-        lantern_log_warn(
-            "fork_choice",
-            &(const struct lantern_log_metadata){
-                .validator = client->node_id,
-                .peer = peer_id_text},
-            "failed to adopt peer genesis root");
-        return;
-    }
-
-    (void)lantern_fork_choice_set_block_validator_count(
-        &client->fork_choice,
-        &peer_status->head.root,
-        client->state.config.num_validators);
-    client->genesis_fallback_used = false;
-
-    char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    format_root_hex(&peer_status->head.root, head_hex, sizeof(head_hex));
-    lantern_log_info(
-        "fork_choice",
-        &(const struct lantern_log_metadata){
-            .validator = client->node_id,
-            .peer = peer_id_text},
-        "adopted peer genesis head_slot=0 root=%s",
-        head_hex);
 }
 
 
