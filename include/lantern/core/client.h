@@ -106,9 +106,7 @@ struct lantern_backfill_session {
     LanternRoot *roots;
     size_t length;
     size_t capacity;
-    uint64_t persisted_count;
     size_t imported_count;
-    uint64_t dropped_gossip_hints;
 };
 
 struct lantern_pending_block {
@@ -116,8 +114,6 @@ struct lantern_pending_block {
     LanternRoot root;
     LanternRoot parent_root;
     char peer_text[128];
-    bool parent_requested;
-    uint64_t parent_requested_ms;
     uint32_t backfill_depth;
 };
 
@@ -141,6 +137,8 @@ struct lantern_pending_vote_list {
 struct lantern_active_blocks_request {
     uint64_t request_id;
     char peer_id[128];
+    LanternRoot *roots;
+    size_t root_count;
     uint64_t started_ms;
     uint64_t deadline_ms;
     bool timeout_recorded;
@@ -291,18 +289,12 @@ struct lantern_client {
     uint64_t sync_last_requested_root_ms;
     uint64_t sync_started_ms;
     uint64_t sync_last_log_ms;
-    uint64_t sync_imported_blocks;
     uint64_t sync_target_slot;
     LanternSyncState sync_state;
-    bool sync_in_progress;
     struct lantern_network_view network_view;
-    uint64_t last_status_log_slot;
-    bool has_last_status_log_slot;
     uint64_t last_duty_skip_slot;
-    bool has_last_duty_skip_slot;
     const char *last_duty_skip_reason;
     size_t status_requests_inflight_total;
-    size_t status_requests_peak;
     bool status_guard_disabled;
     pthread_t dialer_thread;
     bool dialer_thread_started;

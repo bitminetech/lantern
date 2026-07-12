@@ -266,7 +266,7 @@ static int block_publish_hook(
 
     LanternSignedBlock decoded;
     lantern_signed_block_init(&decoded);
-    int rc = lantern_gossip_decode_signed_block_snappy(&decoded, payload, payload_len, NULL, NULL);
+    int rc = lantern_gossip_decode_signed_block_snappy(&decoded, payload, payload_len, NULL);
     if (rc != 0) {
         lantern_signed_block_reset(&decoded);
         return -1;
@@ -415,7 +415,7 @@ static void test_replay_devnet_block_payloads(void) {
 
         LanternSignedBlock decoded;
         lantern_signed_block_init(&decoded);
-        CHECK(lantern_gossip_decode_signed_block_snappy(&decoded, compressed, compressed_len, NULL, NULL) == 0);
+        CHECK(lantern_gossip_decode_signed_block_snappy(&decoded, compressed, compressed_len, NULL) == 0);
 
         CHECK(decoded.block.slot == original.block.slot);
         CHECK(decoded.block.proposer_index == original.block.proposer_index);
@@ -659,14 +659,14 @@ static void test_gossip_signed_block_payload(void) {
     LanternSignedBlock decoded;
     lantern_signed_block_init(&decoded);
     check_zero(
-        lantern_gossip_decode_signed_block_snappy(&decoded, compressed, compressed_len, NULL, NULL),
+        lantern_gossip_decode_signed_block_snappy(&decoded, compressed, compressed_len, NULL),
         "decode signed block gossip");
     CHECK(decoded.block.slot == block.block.slot);
     CHECK(decoded.block.body.attestations.length == block.block.body.attestations.length);
     check_byte_list_equal(&decoded.proof, &block.proof);
 
     uint8_t invalid_payload[] = {0xFF};
-    CHECK(lantern_gossip_decode_signed_block_snappy(&decoded, invalid_payload, sizeof(invalid_payload), NULL, NULL) != 0);
+    CHECK(lantern_gossip_decode_signed_block_snappy(&decoded, invalid_payload, sizeof(invalid_payload), NULL) != 0);
 
     lantern_signed_block_reset(&decoded);
     lantern_signed_block_reset(&block);
@@ -700,7 +700,7 @@ static void test_gossip_signed_block_accepts_future_attestation_slot(void) {
     LanternSignedBlock decoded;
     lantern_signed_block_init(&decoded);
     check_zero(
-        lantern_gossip_decode_signed_block_snappy(&decoded, compressed, compressed_len, NULL, NULL),
+        lantern_gossip_decode_signed_block_snappy(&decoded, compressed, compressed_len, NULL),
         "decode future-slot attestation block gossip");
     CHECK(decoded.block.slot == block.block.slot);
     CHECK(decoded.block.body.attestations.length == block.block.body.attestations.length);
@@ -763,7 +763,7 @@ static void test_gossip_block_snappy_roundtrip_random(void) {
         LanternSignedBlock decoded;
         lantern_signed_block_init(&decoded);
         check_zero(
-            lantern_gossip_decode_signed_block_snappy(&decoded, compressed, written, NULL, NULL),
+            lantern_gossip_decode_signed_block_snappy(&decoded, compressed, written, NULL),
             "random block decode");
 
         CHECK(decoded.block.slot == original.block.slot);

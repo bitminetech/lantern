@@ -81,12 +81,14 @@ static void disable_signature_verification_keys(
 
 static int build_devnet5_block_proof(
     struct block_signature_fixture *fixture,
+    const LanternState *state,
     LanternSignedBlock *block,
     const LanternRoot *block_root,
     const LanternAttestationSignatures *attestation_proofs,
     const LanternSignature *proposer_signature)
 {
-    if (!fixture || !block || !block_root || !attestation_proofs || !proposer_signature) {
+    if (!fixture || !state || !block || !block_root || !attestation_proofs
+        || !proposer_signature) {
         return -1;
     }
 
@@ -98,7 +100,7 @@ static int build_devnet5_block_proof(
 
     size_t proposer_index = (size_t)block->block.proposer_index;
     const uint8_t *proposer_pubkey =
-        lantern_state_validator_proposal_pubkey(&fixture->client.state, proposer_index);
+        lantern_state_validator_proposal_pubkey(state, proposer_index);
     if (!proposer_pubkey) {
         goto cleanup;
     }
@@ -112,7 +114,7 @@ static int build_devnet5_block_proof(
         .signature = proposer_signature,
     };
     if (!lantern_aggregated_signature_proof_aggregate(
-            &fixture->client.state,
+            state,
             &proposer_participants,
             NULL,
             0u,
@@ -124,7 +126,7 @@ static int build_devnet5_block_proof(
         goto cleanup;
     }
     if (!lantern_signature_merge_block_type2_proof(
-            &fixture->client.state,
+            state,
             &block->block,
             attestation_proofs,
             &proposer_proof,
@@ -271,6 +273,9 @@ static void disable_sync_test_peer(struct lantern_client *client)
     client->peer_status_entries = NULL;
     client->peer_status_count = 0u;
     client->peer_status_capacity = 0u;
+    for (size_t i = 0; i < client->active_blocks_request_count; ++i) {
+        free(client->active_blocks_requests[i].roots);
+    }
     free(client->active_blocks_requests);
     client->active_blocks_requests = NULL;
     client->active_blocks_request_count = 0u;
@@ -430,6 +435,7 @@ static int build_signed_block_for_import(
         }
         if (build_devnet5_block_proof(
                 fixture,
+                &fixture->client.state,
                 out_block,
                 &block_signature_root,
                 &attestation_proofs,
@@ -443,6 +449,95 @@ static int build_signed_block_for_import(
 
 cleanup:
     lantern_attestation_signatures_reset(&attestation_proofs);
+    return rc;
+}
+
+static int persist_post_state_for_block(
+    const struct block_signature_fixture *fixture,
+    const LanternSignedBlock *block,
+    const LanternRoot *block_root)
+{
+    LanternState post_state;
+    lantern_state_init(&post_state);
+
+    int rc = -1;
+    if (lantern_state_clone(&fixture->client.state, &post_state) == 0
+        && lantern_state_transition(&post_state, block) == 0
+        && lantern_storage_store_state_for_root(
+               fixture->client.data_dir,
+               block_root,
+               &post_state)
+            == 0) {
+        rc = 0;
+    }
+
+    lantern_state_reset(&post_state);
+    return rc;
+}
+
+static int build_proposer_only_block_for_parent(
+    struct block_signature_fixture *fixture,
+    const LanternState *parent_state,
+    const LanternRoot *parent_root,
+    uint64_t slot,
+    LanternSignedBlock *out_block,
+    LanternRoot *out_root,
+    LanternState *out_post_state)
+{
+    if (!fixture || !fixture->secret || !parent_state || !parent_root || !out_block
+        || !out_root || !out_post_state || slot <= parent_state->slot) {
+        return -1;
+    }
+
+    int rc = -1;
+    LanternAttestationSignatures empty_attestation_proofs;
+    lantern_attestation_signatures_init(&empty_attestation_proofs);
+    lantern_signed_block_init(out_block);
+    lantern_state_init(out_post_state);
+
+    out_block->block.slot = slot;
+    if (lantern_proposer_for_slot(
+            slot,
+            parent_state->config.num_validators,
+            &out_block->block.proposer_index)
+            != 0) {
+        goto cleanup;
+    }
+    out_block->block.parent_root = *parent_root;
+    if (lantern_state_preview_post_state_root(
+            parent_state,
+            &fixture->client.store,
+            out_block,
+            &out_block->block.state_root)
+            != 0
+        || lantern_hash_tree_root_block(&out_block->block, out_root) != SSZ_SUCCESS) {
+        goto cleanup;
+    }
+
+    LanternSignature proposer_signature;
+    memset(&proposer_signature, 0, sizeof(proposer_signature));
+    if (!lantern_signature_sign(fixture->secret, slot, out_root, &proposer_signature)
+        || build_devnet5_block_proof(
+               fixture,
+               parent_state,
+               out_block,
+               out_root,
+               &empty_attestation_proofs,
+               &proposer_signature)
+               != 0
+        || lantern_state_clone(parent_state, out_post_state) != 0
+        || lantern_state_transition(out_post_state, out_block) != 0) {
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_attestation_signatures_reset(&empty_attestation_proofs);
+    if (rc != 0) {
+        lantern_signed_block_reset(out_block);
+        lantern_state_reset(out_post_state);
+    }
     return rc;
 }
 
@@ -534,6 +629,7 @@ static int resign_first_block_attestation(
     }
     if (build_devnet5_block_proof(
             fixture,
+            &fixture->client.state,
             block,
             out_root,
             &attestation_proofs,
@@ -628,7 +724,6 @@ static int test_pending_block_queue(void) {
     const char *peer_b = "12D3KooWpeerB";
     LanternRoot fetched_root;
     LanternRoot fetched_parent;
-    bool parent_requested = true;
     char peer_text[128];
     LanternRoot last_root;
     client_test_fill_root_with_index(&last_root, 0);
@@ -657,7 +752,6 @@ static int test_pending_block_queue(void) {
             0,
             &fetched_root,
             &fetched_parent,
-            &parent_requested,
             peer_text,
             sizeof(peer_text))
         != 0) {
@@ -680,12 +774,6 @@ static int test_pending_block_queue(void) {
         rc = 1;
         goto cleanup;
     }
-    if (parent_requested) {
-        fprintf(stderr, "parent_requested unexpectedly set after schedule failure\n");
-        rc = 1;
-        goto cleanup;
-    }
-
     if (lantern_client_debug_enqueue_pending_block(
             &client,
             &child,
@@ -704,13 +792,11 @@ static int test_pending_block_queue(void) {
         goto cleanup;
     }
 
-    parent_requested = true;
     if (lantern_client_debug_pending_entry(
             &client,
             0,
             &fetched_root,
             &fetched_parent,
-            &parent_requested,
             peer_text,
             sizeof(peer_text))
         != 0) {
@@ -720,96 +806,6 @@ static int test_pending_block_queue(void) {
     }
     if (strcmp(peer_text, peer_b) != 0) {
         fprintf(stderr, "pending peer did not update after duplicate enqueue\n");
-        rc = 1;
-        goto cleanup;
-    }
-
-    if (lantern_client_debug_set_parent_requested(&client, &child_root, true) != 0) {
-        fprintf(stderr, "failed to mark parent_requested for pending block\n");
-        rc = 1;
-        goto cleanup;
-    }
-
-    parent_requested = false;
-    if (lantern_client_debug_pending_entry(
-            &client,
-            0,
-            NULL,
-            NULL,
-            &parent_requested,
-            NULL,
-            0)
-        != 0
-        || !parent_requested) {
-        fprintf(stderr, "parent_requested flag did not persist after manual set\n");
-        rc = 1;
-        goto cleanup;
-    }
-
-    if (lantern_client_debug_on_blocks_request_complete(
-            &client,
-            peer_b,
-            &parent_root,
-            LANTERN_TEST_BLOCKS_REQUEST_SUCCESS)
-        != 0) {
-        fprintf(stderr, "blocks_request_complete debug wrapper failed\n");
-        rc = 1;
-        goto cleanup;
-    }
-
-    parent_requested = true;
-    if (lantern_client_debug_pending_entry(
-            &client,
-            0,
-            NULL,
-            NULL,
-            &parent_requested,
-            NULL,
-            0)
-        != 0) {
-        fprintf(stderr, "failed to inspect parent_requested after completion\n");
-        rc = 1;
-        goto cleanup;
-    }
-    if (parent_requested) {
-        fprintf(stderr, "parent_requested not cleared after completion\n");
-        rc = 1;
-        goto cleanup;
-    }
-
-    if (lantern_client_debug_set_parent_requested(&client, &child_root, true) != 0) {
-        fprintf(stderr, "failed to remark parent_requested for failed completion test\n");
-        rc = 1;
-        goto cleanup;
-    }
-
-    if (lantern_client_debug_on_blocks_request_complete(
-            &client,
-            peer_b,
-            &parent_root,
-            LANTERN_TEST_BLOCKS_REQUEST_FAILED)
-        != 0) {
-        fprintf(stderr, "blocks_request_complete failed outcome wrapper failed\n");
-        rc = 1;
-        goto cleanup;
-    }
-
-    parent_requested = false;
-    if (lantern_client_debug_pending_entry(
-            &client,
-            0,
-            NULL,
-            NULL,
-            &parent_requested,
-            NULL,
-            0)
-        != 0) {
-        fprintf(stderr, "failed to inspect parent_requested after failed completion\n");
-        rc = 1;
-        goto cleanup;
-    }
-    if (!parent_requested) {
-        fprintf(stderr, "parent_requested cleared after failed completion\n");
         rc = 1;
         goto cleanup;
     }
@@ -880,7 +876,7 @@ static int test_pending_block_queue_sync_drops_incoming(void) {
     memset(&client, 0, sizeof(client));
     client.node_id = "test_pending_sync_queue";
     client.sync_state = LANTERN_SYNC_STATE_SYNCING;
-    client.sync_in_progress = true;
+    client.sync_started_ms = 1u;
     client.debug_disable_block_requests = true;
 
     if (pthread_mutex_init(&client.pending_lock, NULL) != 0) {
@@ -1188,6 +1184,89 @@ cleanup:
     return rc;
 }
 
+static int test_active_parent_requests_deduplicate_and_release(void)
+{
+    struct lantern_client client;
+    LanternSignedBlock block;
+    LanternRoot block_root;
+    LanternRoot parent_root;
+    const char *peer_id = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
+    int rc = 1;
+
+    memset(&client, 0, sizeof(client));
+    memset(&block, 0, sizeof(block));
+    client.node_id = "active_parent_request";
+    if (enable_sync_test_peer(&client, peer_id) != 0) {
+        return 1;
+    }
+
+    lantern_block_body_init(&block.block.body);
+    block.block.slot = 10u;
+    client_test_fill_root(&block_root, 0x81u);
+    client_test_fill_root(&parent_root, 0x82u);
+    client.sync_state = LANTERN_SYNC_STATE_IDLE;
+    if (lantern_client_debug_enqueue_pending_block(
+            &client,
+            &block,
+            &block_root,
+            &parent_root,
+            peer_id)
+        != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "failed to enqueue active-request test block\n");
+        goto cleanup;
+    }
+
+    client.active_blocks_requests = calloc(1u, sizeof(*client.active_blocks_requests));
+    if (!client.active_blocks_requests) {
+        goto cleanup;
+    }
+    struct lantern_active_blocks_request *active = &client.active_blocks_requests[0];
+    active->roots = malloc(sizeof(*active->roots));
+    if (!active->roots) {
+        goto cleanup;
+    }
+    active->roots[0] = parent_root;
+    active->root_count = 1u;
+    active->request_id = 7u;
+    active->deadline_ms = UINT64_MAX;
+    (void)snprintf(active->peer_id, sizeof(active->peer_id), "%s", peer_id);
+    client.active_blocks_request_count = 1u;
+    client.active_blocks_request_capacity = 1u;
+    client.next_blocks_request_id = 8u;
+    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
+
+    lantern_client_request_pending_parent_after_blocks(&client, peer_id, NULL);
+    if (client.active_blocks_request_count != 1u || client.next_blocks_request_id != 8u) {
+        fprintf(stderr, "duplicate parent root scheduled while already active\n");
+        goto cleanup;
+    }
+
+    lantern_client_on_blocks_request_complete_batch_with_id(
+        &client,
+        7u,
+        peer_id,
+        &parent_root,
+        1u,
+        LANTERN_BLOCKS_REQUEST_FAILED);
+    if (client.active_blocks_request_count != 0u) {
+        fprintf(stderr, "completed parent request remained active\n");
+        goto cleanup;
+    }
+
+    lantern_client_request_pending_parent_after_blocks(&client, peer_id, NULL);
+    if (client.next_blocks_request_id == 8u) {
+        fprintf(stderr, "failed parent root was not eligible for retry\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_block_body_reset(&block.block.body);
+    disable_sync_test_peer(&client);
+    return rc;
+}
+
 static int test_idle_status_at_known_head_completes_sync(void)
 {
     struct lantern_client client;
@@ -1387,7 +1466,6 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
     LanternRoot finalized_root;
     LanternRoot pending_root;
     LanternRoot pending_parent;
-    bool parent_requested = true;
     char peer_text[128];
     const uint64_t anchor_slot = 8u;
     const uint64_t finalized_slot = 4u;
@@ -1545,8 +1623,6 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
     if (reqresp_handle_block_response(
             &client,
             &block,
-            NULL,
-            0u,
             "12D3KooWparent")
         != LANTERN_CLIENT_OK) {
         fprintf(stderr, "reqresp rejected block accepted into pending queue\n");
@@ -1561,13 +1637,11 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
     }
 
     memset(peer_text, 0, sizeof(peer_text));
-    parent_requested = true;
     if (lantern_client_debug_pending_entry(
             &client,
             0,
             &pending_root,
             &pending_parent,
-            &parent_requested,
             peer_text,
             sizeof(peer_text))
         != 0) {
@@ -1586,12 +1660,6 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
         rc = 1;
         goto cleanup;
     }
-    if (parent_requested) {
-        fprintf(stderr, "parent_requested flag unexpectedly set after scheduling failure\n");
-        rc = 1;
-        goto cleanup;
-    }
-
     lantern_client_debug_pending_reset(&client);
     block.block.slot = finalized_slot;
     client_test_fill_root(&parent_root, 0x21);
@@ -1605,8 +1673,6 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
     if (reqresp_handle_block_response(
             &client,
             &block,
-            NULL,
-            0u,
             "12D3KooWparent")
         == LANTERN_CLIENT_OK) {
         fprintf(stderr, "reqresp accepted block at finalized floor\n");
@@ -1788,7 +1854,7 @@ cleanup:
     return rc;
 }
 
-static int test_import_persists_finalized_replay_base(void)
+static int test_import_persists_finalized_post_state(void)
 {
     struct block_signature_fixture fixture;
     LanternCheckpoint initial_finalized;
@@ -1796,8 +1862,8 @@ static int test_import_persists_finalized_replay_base(void)
     bool finalized_advanced = false;
     int rc = 1;
 
-    if (setup_block_signature_fixture(&fixture, "test_finalized_replay_base") != 0) {
-        fprintf(stderr, "failed to set up finalized replay base fixture\n");
+    if (setup_block_signature_fixture(&fixture, "test_finalized_post_state") != 0) {
+        fprintf(stderr, "failed to set up finalized post-state fixture\n");
         return 1;
     }
 
@@ -1807,7 +1873,7 @@ static int test_import_persists_finalized_replay_base(void)
 
     LanternRoot initial_head_root;
     if (test_state_latest_block_root(&fixture.client.state, &initial_head_root) != 0) {
-        fprintf(stderr, "failed to compute initial head root for replay base test\n");
+        fprintf(stderr, "failed to compute initial head root for post-state test\n");
         goto cleanup;
     }
     if (fixture.client.has_fork_choice
@@ -1816,7 +1882,7 @@ static int test_import_persists_finalized_replay_base(void)
                &initial_head_root,
                &fixture.client.state)
             != 0) {
-        fprintf(stderr, "failed to seed initial head state for replay base test\n");
+        fprintf(stderr, "failed to seed initial head state for post-state test\n");
         goto cleanup;
     }
     if (lantern_storage_store_state_for_root(
@@ -1824,7 +1890,7 @@ static int test_import_persists_finalized_replay_base(void)
             &initial_head_root,
             &fixture.client.state)
         != 0) {
-        fprintf(stderr, "failed to persist initial head state for replay base test\n");
+        fprintf(stderr, "failed to persist initial head state for post-state test\n");
         goto cleanup;
     }
 
@@ -1833,12 +1899,12 @@ static int test_import_persists_finalized_replay_base(void)
         LanternRoot block_root;
         memset(&block, 0, sizeof(block));
         if (build_signed_block_for_import(&fixture, true, true, &block, &block_root) != 0) {
-            fprintf(stderr, "failed to build block for finalized replay base test\n");
+            fprintf(stderr, "failed to build block for finalized post-state test\n");
             lantern_signed_block_with_attestation_reset(&block);
             goto cleanup;
         }
         if (lantern_client_debug_import_block(&fixture.client, &block, &block_root, "12D3KooWbase") != 1) {
-            fprintf(stderr, "failed to import block for finalized replay base test\n");
+            fprintf(stderr, "failed to import block for finalized post-state test\n");
             lantern_signed_block_with_attestation_reset(&block);
             goto cleanup;
         }
@@ -1850,7 +1916,7 @@ static int test_import_persists_finalized_replay_base(void)
     }
 
     if (!finalized_advanced) {
-        fprintf(stderr, "finalized checkpoint did not advance in replay base test\n");
+        fprintf(stderr, "finalized checkpoint did not advance in post-state test\n");
         goto cleanup;
     }
     if (!fixture.client.network_view.has_network_finalized_slot
@@ -1888,23 +1954,205 @@ static int test_import_persists_finalized_replay_base(void)
     }
     lantern_state_reset(&keyed_state);
 
-    LanternState finalized_state;
-    lantern_state_init(&finalized_state);
-    if (lantern_storage_load_finalized_state(fixture.client.data_dir, &finalized_state) != 0) {
-        fprintf(stderr, "persisted finalized replay state missing\n");
-        lantern_state_reset(&finalized_state);
-        goto cleanup;
-    }
-    if (!test_state_matches_root(&finalized_state, &advanced_finalized.root)) {
-        fprintf(stderr, "persisted finalized replay state does not match finalized root\n");
-        lantern_state_reset(&finalized_state);
-        goto cleanup;
-    }
-    lantern_state_reset(&finalized_state);
-
     rc = 0;
 
 cleanup:
+    teardown_block_signature_fixture(&fixture);
+    return rc;
+}
+
+static int test_retained_side_branch_reloads_evicted_parent_state(void)
+{
+    struct block_signature_fixture fixture;
+    LanternSignedBlock branch_a;
+    LanternSignedBlock branch_b;
+    LanternSignedBlock side_child;
+    LanternState branch_a_state;
+    LanternState branch_b_state;
+    LanternState side_child_state;
+    LanternRoot parent_root = {0};
+    LanternRoot branch_a_root = {0};
+    LanternRoot branch_b_root = {0};
+    LanternRoot side_child_root = {0};
+    int rc = 1;
+
+    memset(&branch_a, 0, sizeof(branch_a));
+    memset(&branch_b, 0, sizeof(branch_b));
+    memset(&side_child, 0, sizeof(side_child));
+    lantern_state_init(&branch_a_state);
+    lantern_state_init(&branch_b_state);
+    lantern_state_init(&side_child_state);
+
+    if (setup_block_signature_fixture(&fixture, "test_retained_side_branch_state") != 0) {
+        fprintf(stderr, "failed to set up retained side-branch fixture\n");
+        return 1;
+    }
+    fixture.client.debug_disable_block_requests = true;
+
+    LanternState parent_state;
+    lantern_state_init(&parent_state);
+    if (lantern_state_clone(&fixture.client.state, &parent_state) != 0
+        || test_state_latest_block_root(&parent_state, &parent_root) != 0) {
+        fprintf(stderr, "failed to capture retained side-branch parent state\n");
+        goto cleanup_parent;
+    }
+
+    if (build_proposer_only_block_for_parent(
+            &fixture,
+            &parent_state,
+            &parent_root,
+            parent_state.slot + 1u,
+            &branch_a,
+            &branch_a_root,
+            &branch_a_state)
+            != 0
+        || build_proposer_only_block_for_parent(
+               &fixture,
+               &parent_state,
+               &parent_root,
+               parent_state.slot + 2u,
+               &branch_b,
+               &branch_b_root,
+               &branch_b_state)
+               != 0) {
+        fprintf(stderr, "failed to build retained sibling branches\n");
+        goto cleanup_parent;
+    }
+
+    if (lantern_fork_choice_add_block_with_state(
+            &fixture.client.fork_choice,
+            &branch_a.block,
+            &branch_a_state.latest_justified,
+            &branch_a_state.latest_finalized,
+            &branch_a_root,
+            &branch_a_state)
+            != 0
+        || lantern_fork_choice_add_block_with_state(
+               &fixture.client.fork_choice,
+               &branch_b.block,
+               &branch_b_state.latest_justified,
+               &branch_b_state.latest_finalized,
+               &branch_b_root,
+               &branch_b_state)
+               != 0
+        || lantern_storage_store_state_for_root(
+               fixture.client.data_dir,
+               &branch_a_root,
+               &branch_a_state)
+               != 0
+        || lantern_storage_store_state_for_root(
+               fixture.client.data_dir,
+               &branch_b_root,
+               &branch_b_state)
+               != 0) {
+        fprintf(stderr, "failed to seed retained sibling branch states\n");
+        goto cleanup_parent;
+    }
+
+    LanternCheckpoint parent_checkpoint = {
+        .root = parent_root,
+        .slot = parent_state.slot,
+    };
+    if (lantern_fork_choice_update_checkpoints(
+            &fixture.client.fork_choice,
+            &parent_checkpoint,
+            &parent_checkpoint)
+            != 0) {
+        fprintf(stderr, "failed to advance retained side-branch finalization\n");
+        goto cleanup_parent;
+    }
+
+    LanternRoot selected_head = {0};
+    if (lantern_fork_choice_current_head(&fixture.client.fork_choice, &selected_head) != 0) {
+        fprintf(stderr, "failed to select retained side-branch head\n");
+        goto cleanup_parent;
+    }
+
+    const LanternRoot *side_root = NULL;
+    const LanternState *side_state = NULL;
+    if (memcmp(selected_head.bytes, branch_a_root.bytes, LANTERN_ROOT_SIZE) == 0) {
+        side_root = &branch_b_root;
+        side_state = &branch_b_state;
+    } else if (memcmp(selected_head.bytes, branch_b_root.bytes, LANTERN_ROOT_SIZE) == 0) {
+        side_root = &branch_a_root;
+        side_state = &branch_a_state;
+    } else {
+        fprintf(stderr, "fork choice did not select either retained sibling branch\n");
+        goto cleanup_parent;
+    }
+
+    if (lantern_fork_choice_prune_states(&fixture.client.fork_choice) != 0
+        || lantern_fork_choice_block_info(
+               &fixture.client.fork_choice,
+               side_root,
+               NULL,
+               NULL,
+               NULL)
+               != 0) {
+        fprintf(stderr, "retained side branch was removed during state pruning\n");
+        goto cleanup_parent;
+    }
+    if (lantern_fork_choice_block_state(&fixture.client.fork_choice, side_root) != NULL) {
+        fprintf(stderr, "retained side-branch state was not evicted by pruning\n");
+        goto cleanup_parent;
+    }
+
+    uint8_t *persisted_bytes = NULL;
+    size_t persisted_len = 0u;
+    if (lantern_storage_load_state_bytes_for_root(
+            fixture.client.data_dir,
+            side_root,
+            &persisted_bytes,
+            &persisted_len)
+            != 0
+        || !persisted_bytes
+        || persisted_len == 0u) {
+        free(persisted_bytes);
+        fprintf(stderr, "retained side-branch state was not available on disk\n");
+        goto cleanup_parent;
+    }
+    free(persisted_bytes);
+
+    if (build_proposer_only_block_for_parent(
+            &fixture,
+            side_state,
+            side_root,
+            side_state->slot + 1u,
+            &side_child,
+            &side_child_root,
+            &side_child_state)
+            != 0) {
+        fprintf(stderr, "failed to build valid retained side-branch child\n");
+        goto cleanup_parent;
+    }
+    (void)lantern_client_debug_import_block(
+        &fixture.client,
+        &side_child,
+        &side_child_root,
+        "12D3KooWretained");
+    if (lantern_fork_choice_block_info(
+            &fixture.client.fork_choice,
+            &side_child_root,
+            NULL,
+            NULL,
+            NULL)
+            != 0
+        || !lantern_fork_choice_block_state(&fixture.client.fork_choice, side_root)
+        || !lantern_fork_choice_block_state(&fixture.client.fork_choice, &side_child_root)) {
+        fprintf(stderr, "valid retained side-branch child or its post-state was not imported\n");
+        goto cleanup_parent;
+    }
+
+    rc = 0;
+
+cleanup_parent:
+    lantern_state_reset(&parent_state);
+    lantern_state_reset(&side_child_state);
+    lantern_state_reset(&branch_b_state);
+    lantern_state_reset(&branch_a_state);
+    lantern_signed_block_reset(&side_child);
+    lantern_signed_block_reset(&branch_b);
+    lantern_signed_block_reset(&branch_a);
     teardown_block_signature_fixture(&fixture);
     return rc;
 }
@@ -1954,8 +2202,6 @@ static int test_historical_backfill_imports_after_large_gap_connects(void)
     if (reqresp_handle_block_response(
             &target.client,
             &block,
-            NULL,
-            0u,
             "12D3KooWbackfill") != LANTERN_CLIENT_OK) {
         fprintf(stderr, "reqresp backfill did not accept fetched head block\n");
         goto cleanup;
@@ -2074,8 +2320,6 @@ static int test_reqresp_parent_response_preserves_backfill_depth(void)
     if (reqresp_handle_block_response(
             &client,
             &parent,
-            NULL,
-            0u,
             "12D3KooWdepth") != LANTERN_CLIENT_OK) {
         fprintf(stderr, "reqresp rejected parent response for depth test\n");
         goto cleanup;
@@ -2279,6 +2523,10 @@ static int test_restore_persisted_blocks_caches_known_attestation_proofs(void)
         fprintf(stderr, "failed to persist block fixture for restore known proofs test\n");
         goto cleanup;
     }
+    if (persist_post_state_for_block(&fixture, &block, &block_root) != 0) {
+        fprintf(stderr, "failed to persist post-state fixture for restore known proofs test\n");
+        goto cleanup;
+    }
 
     if (restore_persisted_blocks(&fixture.client) != LANTERN_CLIENT_OK) {
         fprintf(stderr, "restore_persisted_blocks failed for known proofs test\n");
@@ -2353,6 +2601,7 @@ static int test_restore_persisted_blocks_skips_proposer_attestation_cache(void)
             &proposer_signature)
         || build_devnet5_block_proof(
                &fixture,
+               &fixture.client.state,
                &block,
                &block_root,
                &empty_attestation_proofs,
@@ -2365,6 +2614,10 @@ static int test_restore_persisted_blocks_skips_proposer_attestation_cache(void)
     lantern_attestation_signatures_reset(&empty_attestation_proofs);
     if (lantern_storage_store_block(fixture.client.data_dir, &block) != 0) {
         fprintf(stderr, "failed to persist proposer-only block fixture for restore test\n");
+        goto cleanup;
+    }
+    if (persist_post_state_for_block(&fixture, &block, &block_root) != 0) {
+        fprintf(stderr, "failed to persist proposer-only post-state for restore test\n");
         goto cleanup;
     }
 
@@ -2406,6 +2659,9 @@ int main(void) {
     if (test_idle_status_triggers_syncing_before_gossip_backfill() != 0) {
         return 1;
     }
+    if (test_active_parent_requests_deduplicate_and_release() != 0) {
+        return 1;
+    }
     if (test_idle_status_at_known_head_completes_sync() != 0) {
         return 1;
     }
@@ -2421,7 +2677,10 @@ int main(void) {
     if (test_import_block_accepts_complete_proof() != 0) {
         return 1;
     }
-    if (test_import_persists_finalized_replay_base() != 0) {
+    if (test_import_persists_finalized_post_state() != 0) {
+        return 1;
+    }
+    if (test_retained_side_branch_reloads_evicted_parent_state() != 0) {
         return 1;
     }
     if (test_imported_blocks_update_sync_network_view() != 0) {

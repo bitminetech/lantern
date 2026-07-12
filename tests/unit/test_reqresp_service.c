@@ -36,12 +36,8 @@ struct test_blocks_context {
 static int test_handle_block_response(
     void *context,
     const LanternSignedBlock *block,
-    const uint8_t *raw_block_ssz,
-    size_t raw_block_ssz_len,
     const char *peer_id) {
     (void)block;
-    (void)raw_block_ssz;
-    (void)raw_block_ssz_len;
     (void)peer_id;
     struct test_blocks_context *test_context = (struct test_blocks_context *)context;
     if (!test_context) {

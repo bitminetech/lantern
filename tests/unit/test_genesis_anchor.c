@@ -124,10 +124,6 @@ static void cleanup_init_data_dir(const char *data_dir)
 
     static const char *const files[] = {
         "state.ssz",
-        "finalized_state.ssz",
-        "votes.bin",
-        "head.bin",
-        "checkpoints.bin",
     };
     for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); ++i)
     {
@@ -139,19 +135,12 @@ static void cleanup_init_data_dir(const char *data_dir)
         }
     }
 
-    char path[PATH_MAX];
-    int written = snprintf(path, sizeof(path), "%s/indices/slots", data_dir);
-    if (written > 0 && (size_t)written < sizeof(path))
-    {
-        cleanup_dir(path);
-    }
-
     static const char *const dirs[] = {
         "blocks",
-        "invalid_blocks",
         "states",
-        "indices",
     };
+    char path[PATH_MAX];
+    int written = 0;
     for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i)
     {
         written = snprintf(path, sizeof(path), "%s/%s", data_dir, dirs[i]);
@@ -161,73 +150,6 @@ static void cleanup_init_data_dir(const char *data_dir)
         }
     }
     cleanup_dir(data_dir);
-}
-
-static int build_proposer_only_block_proof(
-    const LanternState *state,
-    LanternSignedBlock *block,
-    const LanternRoot *block_root,
-    const LanternSignature *proposer_signature)
-{
-    if (!state || !block || !block_root || !proposer_signature)
-    {
-        return -1;
-    }
-
-    int rc = -1;
-    LanternAggregatedSignatureProof proposer_proof;
-    LanternAttestationSignatures attestation_proofs;
-    struct lantern_bitlist proposer_participants;
-    lantern_aggregated_signature_proof_init(&proposer_proof);
-    lantern_attestation_signatures_init(&attestation_proofs);
-    lantern_bitlist_init(&proposer_participants);
-
-    size_t proposer_index = (size_t)block->block.proposer_index;
-    const uint8_t *proposer_pubkey = lantern_state_validator_proposal_pubkey(state, proposer_index);
-    if (!proposer_pubkey)
-    {
-        goto cleanup;
-    }
-    if (lantern_bitlist_resize(&proposer_participants, proposer_index + 1u) != 0
-        || lantern_bitlist_set(&proposer_participants, proposer_index, true) != 0)
-    {
-        goto cleanup;
-    }
-
-    LanternRawXmssSignature raw_proposer = {
-        .pubkey = proposer_pubkey,
-        .signature = proposer_signature,
-    };
-    if (!lantern_aggregated_signature_proof_aggregate(
-            state,
-            &proposer_participants,
-            NULL,
-            0u,
-            &raw_proposer,
-            1u,
-            block_root,
-            block->block.slot,
-            &proposer_proof))
-    {
-        goto cleanup;
-    }
-    if (!lantern_signature_merge_block_type2_proof(
-            state,
-            &block->block,
-            &attestation_proofs,
-            &proposer_proof,
-            &block->proof))
-    {
-        goto cleanup;
-    }
-
-    rc = 0;
-
-cleanup:
-    lantern_bitlist_reset(&proposer_participants);
-    lantern_attestation_signatures_reset(&attestation_proofs);
-    lantern_aggregated_signature_proof_reset(&proposer_proof);
-    return rc;
 }
 
 static void cleanup_storage_root_file(
@@ -256,80 +178,6 @@ static void cleanup_storage_root_file(
     cleanup_path(path);
 }
 
-static int build_signed_head_block(
-    struct lantern_client *client,
-    struct PQSignatureSchemeSecretKey *secret,
-    LanternSignedBlock *out_block,
-    LanternRoot *out_root)
-{
-    if (!client || !secret || !out_block || !out_root)
-    {
-        return -1;
-    }
-
-    int rc = -1;
-    lantern_signed_block_init(out_block);
-    out_block->block.slot = client->state.slot + 1u;
-    if (lantern_proposer_for_slot(
-            out_block->block.slot,
-            client->state.config.num_validators,
-            &out_block->block.proposer_index)
-        != 0)
-    {
-        goto cleanup;
-    }
-    if (lantern_state_select_block_parent(
-            &client->state,
-            &client->store,
-            &out_block->block.parent_root)
-        != 0)
-    {
-        goto cleanup;
-    }
-
-    if (lantern_state_preview_post_state_root(
-            &client->state,
-            &client->store,
-            out_block,
-            &out_block->block.state_root)
-        != 0)
-    {
-        goto cleanup;
-    }
-    if (lantern_hash_tree_root_block(&out_block->block, out_root) != SSZ_SUCCESS)
-    {
-        goto cleanup;
-    }
-    LanternSignature proposer_signature;
-    memset(&proposer_signature, 0, sizeof(proposer_signature));
-    if (!lantern_signature_sign(
-            secret,
-            out_block->block.slot,
-            out_root,
-            &proposer_signature))
-    {
-        goto cleanup;
-    }
-    if (build_proposer_only_block_proof(
-            &client->state,
-            out_block,
-            out_root,
-            &proposer_signature)
-        != 0)
-    {
-        goto cleanup;
-    }
-
-    rc = 0;
-
-cleanup:
-    if (rc != 0)
-    {
-        lantern_signed_block_reset(out_block);
-    }
-    return rc;
-}
-
 static int test_checkpoint_consumers_use_fork_choice_store(void)
 {
     struct lantern_client client;
@@ -339,14 +187,6 @@ static int test_checkpoint_consumers_use_fork_choice_store(void)
     struct PQSignatureSchemeSecretKey *secret = NULL;
     LanternRoot anchor_root = {0};
     LanternRoot child_root = {0};
-    LanternRoot grandchild_root = {0};
-    LanternSignedBlock grandchild_block;
-    bool grandchild_block_ready = false;
-    bool state_locked = false;
-    bool state_lock_held = false;
-    LanternState scratch;
-    lantern_state_init(&scratch);
-
     char dir_template[] = "/tmp/lantern_checkpoint_consumersXXXXXX";
     char *data_dir = NULL;
     uint8_t *http_bytes = NULL;
@@ -369,13 +209,6 @@ static int test_checkpoint_consumers_use_fork_choice_store(void)
     }
     (void)anchor_root;
 
-    if (build_signed_head_block(&client, secret, &grandchild_block, &grandchild_root) != 0)
-    {
-        fprintf(stderr, "failed to build grandchild block for checkpoint consumer regression\n");
-        goto cleanup;
-    }
-    grandchild_block_ready = true;
-
     char *temp_dir = mkdtemp(dir_template);
     if (!temp_dir)
     {
@@ -395,24 +228,6 @@ static int test_checkpoint_consumers_use_fork_choice_store(void)
         fprintf(stderr, "failed to store child state snapshot for checkpoint consumer regression\n");
         goto cleanup;
     }
-    if (lantern_storage_store_block_for_root(data_dir, &grandchild_root, &grandchild_block) != 0)
-    {
-        fprintf(stderr, "failed to store grandchild block for checkpoint consumer regression\n");
-        goto cleanup;
-    }
-
-    if (lantern_fork_choice_add_block(
-            &client.fork_choice,
-            &grandchild_block.block,
-            &client.state.latest_justified,
-            &client.state.latest_finalized,
-            &grandchild_root)
-        != 0)
-    {
-        fprintf(stderr, "failed to add grandchild to fork choice for checkpoint consumer regression\n");
-        goto cleanup;
-    }
-
     LanternCheckpoint child_checkpoint = {
         .slot = client.state.slot,
         .root = child_root,
@@ -476,27 +291,6 @@ static int test_checkpoint_consumers_use_fork_choice_store(void)
         goto cleanup;
     }
 
-    state_locked = lantern_client_lock_state(&client);
-    if (client.state_lock_initialized && !state_locked)
-    {
-        fprintf(stderr, "failed to lock state for checkpoint consumer regression\n");
-        goto cleanup;
-    }
-    state_lock_held = state_locked;
-
-    bool used_scratch = false;
-    const LanternState *rebuilt =
-        lantern_client_state_for_root_locked(&client, &grandchild_root, &scratch, &used_scratch);
-    if (!rebuilt || !used_scratch)
-    {
-        fprintf(stderr, "grandchild state rebuild did not use finalized shortcut from fork choice\n");
-        goto cleanup;
-    }
-    if (rebuilt->slot != grandchild_block.block.slot)
-    {
-        fprintf(stderr, "grandchild state rebuild returned wrong slot\n");
-        goto cleanup;
-    }
     if (!roots_equal(&client.state.latest_finalized.root, &remote_finalized.root))
     {
         fprintf(stderr, "checkpoint consumer regression mutated client state\n");
@@ -506,24 +300,12 @@ static int test_checkpoint_consumers_use_fork_choice_store(void)
     rc = 0;
 
 cleanup:
-    if (state_lock_held)
-    {
-        lantern_client_unlock_state(&client, state_locked);
-    }
     free(http_bytes);
     free(expected_bytes);
-    lantern_state_reset(&scratch);
-    if (grandchild_block_ready)
-    {
-        lantern_signed_block_reset(&grandchild_block);
-    }
     if (data_dir)
     {
         cleanup_storage_root_file(data_dir, "states", &child_root, "ssz");
         cleanup_storage_root_file(data_dir, "states", &child_root, "meta");
-        cleanup_storage_root_file(data_dir, "states", &grandchild_root, "ssz");
-        cleanup_storage_root_file(data_dir, "states", &grandchild_root, "meta");
-        cleanup_storage_root_file(data_dir, "blocks", &grandchild_root, "ssz");
         char states_dir[PATH_MAX];
         char blocks_dir[PATH_MAX];
         int states_written = snprintf(states_dir, sizeof(states_dir), "%s/states", data_dir);
@@ -819,9 +601,7 @@ static int test_pre_anchor_block_is_rejected_below_anchor_finalization(void)
         &historical_root,
         &(const struct lantern_log_metadata){.validator = client.node_id},
         0,
-        true,
-        NULL,
-        0);
+        true);
     lantern_signed_block_reset(&historical);
 
     if (imported)
@@ -1184,12 +964,6 @@ static int test_reqresp_status_uses_genesis_anchor_before_genesis(void)
         goto cleanup;
     }
 
-    if (lantern_store_prepare_validator_votes(&client.store, client.state.config.num_validators) != 0)
-    {
-        fprintf(stderr, "failed to prepare validator votes for status regression\n");
-        goto cleanup;
-    }
-
     if (initialize_fork_choice(&client) != LANTERN_CLIENT_OK)
     {
         fprintf(stderr, "initialize_fork_choice failed for status regression\n");
@@ -1452,12 +1226,6 @@ int main(void)
         return 1;
     }
 
-    /*
-     * Simulate previously persisted bootstrap snapshots where genesis header
-     * state_root was eagerly populated before restart.
-     */
-    client.state.latest_block_header.state_root = canonical_state_root;
-
     if (initialize_fork_choice(&client) != LANTERN_CLIENT_OK)
     {
         fprintf(stderr, "initialize_fork_choice failed\n");
@@ -1477,15 +1245,7 @@ int main(void)
 
     if (!roots_equal(&actual_head, &expected_anchor_root))
     {
-        fprintf(stderr, "fork choice anchor mismatch for persisted genesis snapshot\n");
-        lantern_state_reset(&client.state);
-        lantern_fork_choice_reset(&client.fork_choice);
-        return 1;
-    }
-
-    if (!roots_equal(&client.state.latest_block_header.state_root, &canonical_state_root))
-    {
-        fprintf(stderr, "initialize_fork_choice unexpectedly rewrote genesis header state_root\n");
+        fprintf(stderr, "fork choice genesis anchor mismatch\n");
         lantern_state_reset(&client.state);
         lantern_fork_choice_reset(&client.fork_choice);
         return 1;

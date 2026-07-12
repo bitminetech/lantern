@@ -24,19 +24,11 @@ struct hash_mapping_entry {
     LanternRoot c_hash;
 };
 
-struct stored_votes_entry {
-    LanternRoot root;
-    LanternStore store;
-};
-
 struct fork_choice_driver {
     LanternForkChoice fork_choice;
     LanternStore fork_choice_store;
     LanternState state;
     LanternRoot canonical_head_block_root;
-    struct stored_votes_entry *stored_votes;
-    size_t stored_vote_count;
-    size_t stored_vote_cap;
     struct hash_mapping_entry *hash_mapping;
     size_t hash_mapping_count;
     size_t hash_mapping_cap;
@@ -186,96 +178,6 @@ static void reset_signed_block(LanternSignedBlock *block)
     }
 }
 
-static struct stored_votes_entry *stored_votes_find(
-    struct fork_choice_driver *driver,
-    const LanternRoot *root)
-{
-    if (!driver || !root)
-    {
-        return NULL;
-    }
-    for (size_t i = 0; i < driver->stored_vote_count; ++i)
-    {
-        if (root_equal(&driver->stored_votes[i].root, root))
-        {
-            return &driver->stored_votes[i];
-        }
-    }
-    return NULL;
-}
-
-static void stored_votes_reset(struct fork_choice_driver *driver)
-{
-    if (!driver)
-    {
-        return;
-    }
-    for (size_t i = 0; i < driver->stored_vote_count; ++i)
-    {
-        lantern_store_reset(&driver->stored_votes[i].store);
-    }
-    free(driver->stored_votes);
-    driver->stored_votes = NULL;
-    driver->stored_vote_count = 0;
-    driver->stored_vote_cap = 0;
-}
-
-static int stored_votes_save(
-    struct fork_choice_driver *driver,
-    const LanternRoot *root,
-    const LanternState *state)
-{
-    const LanternStore *source = lantern_test_state_store_find(state);
-    if (!driver || !root || !source)
-    {
-        return -1;
-    }
-    struct stored_votes_entry *entry = stored_votes_find(driver, root);
-    if (entry)
-    {
-        return lantern_store_clone_validator_votes(source, &entry->store);
-    }
-    if (driver->stored_vote_count == driver->stored_vote_cap)
-    {
-        size_t capacity = driver->stored_vote_cap ? driver->stored_vote_cap * 2u : 8u;
-        if (capacity < driver->stored_vote_cap
-            || capacity > SIZE_MAX / sizeof(*driver->stored_votes))
-        {
-            return -1;
-        }
-        struct stored_votes_entry *entries =
-            realloc(driver->stored_votes, capacity * sizeof(*entries));
-        if (!entries)
-        {
-            return -1;
-        }
-        driver->stored_votes = entries;
-        driver->stored_vote_cap = capacity;
-    }
-    entry = &driver->stored_votes[driver->stored_vote_count];
-    entry->root = *root;
-    lantern_store_init(&entry->store);
-    if (lantern_store_clone_validator_votes(source, &entry->store) != 0)
-    {
-        lantern_store_reset(&entry->store);
-        return -1;
-    }
-    driver->stored_vote_count += 1u;
-    return 0;
-}
-
-static int stored_votes_restore(
-    struct fork_choice_driver *driver,
-    const LanternRoot *root,
-    LanternState *state)
-{
-    struct stored_votes_entry *entry = stored_votes_find(driver, root);
-    LanternStore *dest = lantern_test_state_store_ensure(state);
-    return entry && dest
-        ? lantern_store_clone_validator_votes(&entry->store, dest)
-        : -1;
-}
-
 static void hash_mapping_reset(struct hash_mapping_entry **entries, size_t *count, size_t *cap)
 {
     if (!entries || !count || !cap)
@@ -359,18 +261,12 @@ static int apply_block_without_signatures(
     {
         return -1;
     }
-    LanternStore scratch_store;
-    lantern_store_init(&scratch_store);
     int rc = -1;
     if (lantern_state_process_slots(state, block->slot) != 0)
     {
         goto cleanup;
     }
-    if (lantern_store_prepare_validator_votes(&scratch_store, state->config.num_validators) != 0)
-    {
-        goto cleanup;
-    }
-    if (lantern_test_state_process_block_with_store(state, &scratch_store, block) != 0)
+    if (lantern_state_process_block_explicit(state, block) != 0)
     {
         goto cleanup;
     }
@@ -381,7 +277,6 @@ static int apply_block_without_signatures(
     rc = 0;
 
 cleanup:
-    lantern_store_reset(&scratch_store);
     return rc;
 }
 
@@ -557,8 +452,7 @@ static int aggregate_pending_gossip_attestations(LanternState *state, LanternSto
                 store,
                 &data_root,
                 &aggregated_attestations.data[i].data,
-                &aggregated_signatures.data[i],
-                aggregated_attestations.data[i].data.target.slot)
+                &aggregated_signatures.data[i])
             != 0)
         {
             goto cleanup;
@@ -634,8 +528,7 @@ static int record_block_body_known_payloads(
         int rc = lantern_store_add_attestation_data(
             store,
             &data_root,
-            &attestations->data[i].data,
-            attestations->data[i].data.target.slot);
+            &attestations->data[i].data);
         if (rc != 0)
         {
             return -1;
@@ -667,8 +560,7 @@ static int record_block_body_known_payloads(
             store,
             &data_root,
             &attestations->data[i].data,
-            &proof,
-            attestations->data[i].data.target.slot);
+            &proof);
         lantern_aggregated_signature_proof_reset(&proof);
         if (rc != 0)
         {
@@ -764,8 +656,7 @@ static int process_gossip_attestation_step(
         store,
         &key,
         &vote.data.data,
-        &vote.signature,
-        vote.data.data.target.slot);
+        &vote.signature);
 }
 
 static int process_gossip_aggregated_attestation_step(
@@ -813,8 +704,7 @@ static int process_gossip_aggregated_attestation_step(
         store,
         &data_root,
         &data,
-        &proof,
-        data.target.slot);
+        &proof);
 
 cleanup:
     lantern_aggregated_signature_proof_reset(&proof);
@@ -843,8 +733,7 @@ static int sync_state_to_fork_choice_head(struct fork_choice_driver *driver)
         return -1;
     }
     lantern_state_reset(&driver->state);
-    if (lantern_state_clone(head_state, &driver->state) != 0
-        || stored_votes_restore(driver, &head_root, &driver->state) != 0)
+    if (lantern_state_clone(head_state, &driver->state) != 0)
     {
         return -1;
     }
@@ -864,7 +753,6 @@ static void fork_choice_driver_reset(struct fork_choice_driver *driver)
         lantern_store_reset(&driver->fork_choice_store);
         lantern_state_reset(&driver->state);
     }
-    stored_votes_reset(driver);
     hash_mapping_reset(
         &driver->hash_mapping,
         &driver->hash_mapping_count,
@@ -1088,8 +976,7 @@ static int fork_choice_process_block_step(
         }
         lantern_state_init(&branch_state);
         branch_state_initialized = true;
-        if (lantern_state_clone(parent_state, &branch_state) != 0
-            || stored_votes_restore(driver, c_parent_root, &branch_state) != 0)
+        if (lantern_state_clone(parent_state, &branch_state) != 0)
         {
             goto cleanup;
         }
@@ -1109,15 +996,6 @@ static int fork_choice_process_block_step(
         transition_performed = true;
         block_justified = active_state->latest_justified;
         block_finalized = active_state->latest_finalized;
-    }
-
-    if (stored_votes_save(
-            driver,
-            &block_root,
-            transition_performed ? active_state : &driver->state)
-        != 0)
-    {
-        goto cleanup;
     }
 
     uint64_t previous_finalized_slot = driver->fork_choice.latest_finalized.slot;
@@ -1310,8 +1188,7 @@ int lantern_test_driver_fork_choice_init(
         .root = anchor_root,
         .slot = anchor_block.slot,
     };
-    if (stored_votes_save(&g_driver, &anchor_root, &g_driver.state) != 0
-        || lantern_fork_choice_set_anchor_with_state(
+    if (lantern_fork_choice_set_anchor_with_state(
             &g_driver.fork_choice,
             &anchor_block,
             &anchor_checkpoint,
@@ -1355,7 +1232,6 @@ cleanup_state:
     lantern_state_reset(&g_driver.state);
     lantern_fork_choice_reset(&g_driver.fork_choice);
     lantern_store_reset(&g_driver.fork_choice_store);
-    stored_votes_reset(&g_driver);
     hash_mapping_reset(
         &g_driver.hash_mapping,
         &g_driver.hash_mapping_count,

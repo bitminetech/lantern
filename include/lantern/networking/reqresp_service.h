@@ -65,8 +65,6 @@ struct lantern_reqresp_service_callbacks {
     int (*handle_block_response)(
         void *context,
         const LanternSignedBlock *block,
-        const uint8_t *raw_block_ssz,
-        size_t raw_block_ssz_len,
         const char *peer_id);
     void (*blocks_request_complete)(
         void *context,

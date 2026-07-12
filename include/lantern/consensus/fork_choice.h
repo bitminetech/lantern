@@ -13,17 +13,13 @@
 extern "C" {
 #endif
 
-struct lantern_aggregated_payload_pool;
-struct lantern_attestation_data_by_root;
+struct lantern_store;
 
 struct lantern_fork_choice_block_entry {
     LanternRoot root;
     LanternRoot parent_root;
     uint64_t slot;
     LanternValidatorIndex proposer_index;
-};
-
-struct lantern_fork_choice_state_entry {
     bool has_state;
     LanternState state;
 };
@@ -58,21 +54,9 @@ typedef struct lantern_fork_choice {
     size_t block_len;
     size_t block_cap;
 
-    struct lantern_fork_choice_state_entry *states;
-    size_t state_cap;
-
     size_t validator_count;
 
-    /*
-     * Attached views into store-owned attestation material.
-     *
-     * Aggregated gossip updates the shared store first. Fork-choice consumers
-     * read these pointers to observe the same proof pools and attestation-data
-     * map without maintaining a duplicate cache.
-     */
-    const struct lantern_aggregated_payload_pool *new_aggregated_payloads;
-    const struct lantern_aggregated_payload_pool *known_aggregated_payloads;
-    const struct lantern_attestation_data_by_root *attestation_data_by_root;
+    const struct lantern_store *attestation_store;
 } LanternForkChoice;
 
 struct lantern_fork_choice_tree_node {

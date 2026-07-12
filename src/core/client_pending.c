@@ -3,7 +3,7 @@
  * @brief Pending and persisted block list management
  *
  * Implements list operations for pending blocks (waiting for parent)
- * and persisted blocks (stored for replay).
+ * and persisted blocks (loaded during restart restoration).
  *
  * @note Thread safety:
  *       - Pending list functions require caller to hold pending_lock.
@@ -501,8 +501,6 @@ struct lantern_pending_block *pending_block_list_append(
     entry->root = *block_root;
     entry->parent_root = *parent_root;
     entry->peer_text[0] = '\0';
-    entry->parent_requested = false;
-    entry->parent_requested_ms = 0;
     entry->backfill_depth = backfill_depth;
 
     if (peer_text && *peer_text)

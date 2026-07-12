@@ -928,8 +928,6 @@ static int exchange_handle_outbound_block_frame(
         handled = exchange->service->callbacks.handle_block_response(
             exchange->service->callbacks.context,
             &block,
-            raw,
-            raw_len,
             exchange->peer_id_text);
     }
     lantern_signed_block_reset(&block);

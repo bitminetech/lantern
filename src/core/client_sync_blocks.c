@@ -61,7 +61,7 @@ static void get_head_info_locked(
 static bool finalized_checkpoint_advanced(
     const LanternCheckpoint *previous_finalized,
     const LanternCheckpoint *current_finalized);
-static void persist_finalized_state_if_advanced_locked(
+static void prune_storage_if_finalized_advanced_locked(
     struct lantern_client *client,
     const LanternCheckpoint *previous_finalized,
     const struct lantern_log_metadata *meta);
@@ -75,13 +75,10 @@ static void prune_finalized_fork_choice_states_if_advanced_locked(
 static void persist_state_locked(
     const struct lantern_client *client,
     const struct lantern_log_metadata *meta);
-static void persist_post_state_and_indices_locked(
+static void persist_post_state_locked(
     const struct lantern_client *client,
     const LanternState *post_state,
-    const LanternSignedBlock *block,
     const LanternRoot *block_root,
-    const LanternRoot *head_root,
-    uint64_t head_slot,
     const struct lantern_log_metadata *meta);
 static void log_imported_block(
     const LanternSignedBlock *block,
@@ -108,8 +105,6 @@ static bool lantern_client_import_block_internal(
     const struct lantern_log_metadata *meta,
     uint32_t backfill_depth,
     bool allow_historical,
-    const uint8_t *raw_block_ssz,
-    size_t raw_block_ssz_len,
     bool drain_pending_children,
     bool *out_children_ready,
     lantern_client_error *out_result);
@@ -243,8 +238,6 @@ void lantern_client_cache_block_aggregated_proofs_locked(
         return;
     }
 
-    LanternState parent_scratch;
-    lantern_state_init(&parent_scratch);
     const LanternState *parent_state = NULL;
     bool parent_state_lookup_done = false;
     size_t split_attempts = 0u;
@@ -260,8 +253,7 @@ void lantern_client_cache_block_aggregated_proofs_locked(
         (void)lantern_store_add_attestation_data(
             &client->store,
             &data_root,
-            &attestation->data,
-            attestation->data.target.slot);
+            &attestation->data);
 
         if (block->proof.length == 0u || !block->proof.data
             || split_attempts >= BLOCK_AGGREGATE_SPLIT_LIMIT
@@ -277,9 +269,7 @@ void lantern_client_cache_block_aggregated_proofs_locked(
         {
             parent_state = lantern_client_state_for_root_locked(
                 client,
-                &block->block.parent_root,
-                &parent_scratch,
-                NULL);
+                &block->block.parent_root);
             parent_state_lookup_done = true;
         }
         if (!parent_state)
@@ -304,38 +294,10 @@ void lantern_client_cache_block_aggregated_proofs_locked(
             &client->store,
             &data_root,
             &attestation->data,
-            &recovered,
-            attestation->data.target.slot);
+            &recovered);
         lantern_aggregated_signature_proof_reset(&recovered);
     }
 
-    lantern_state_reset(&parent_scratch);
-}
-
-static bool sync_validator_votes_from_preview_locked(
-    struct lantern_client *client,
-    const LanternStore *preview_store)
-{
-    if (!client || !preview_store)
-    {
-        return false;
-    }
-    if (!preview_store->validator_votes || preview_store->validator_votes_len == 0u)
-    {
-        return true;
-    }
-    if (lantern_store_prepare_validator_votes(
-            &client->store,
-            (uint64_t)preview_store->validator_votes_len)
-        != 0)
-    {
-        return false;
-    }
-    memcpy(
-        client->store.validator_votes,
-        preview_store->validator_votes,
-        preview_store->validator_votes_len * sizeof(*preview_store->validator_votes));
-    return true;
 }
 
 static void persist_block_after_import(
@@ -364,11 +326,9 @@ static int commit_and_publish_local_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,
     const LanternRoot *block_root,
-    LanternState *post_state,
-    LanternStore *post_store,
-    bool require_current_parent)
+    LanternState *post_state)
 {
-    if (!client || !block || !block_root || !post_state || !post_store)
+    if (!client || !block || !block_root || !post_state)
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
@@ -378,7 +338,7 @@ static int commit_and_publish_local_block(
     };
     char root_hex[ROOT_HEX_BUFFER_LEN];
     format_root_hex(block_root, root_hex, sizeof(root_hex));
-    if (client->sync_in_progress)
+    if (client->sync_started_ms != 0u)
     {
         lantern_log_debug(
             "gossip",
@@ -431,10 +391,6 @@ static int commit_and_publish_local_block(
     {
         lantern_client_unlock_state(client, state_locked);
 
-        if (require_current_parent)
-        {
-            return LANTERN_CLIENT_ERR_IGNORED;
-        }
         lantern_client_error import_result = LANTERN_CLIENT_ERR_RUNTIME;
         bool imported = lantern_client_import_block_internal(
             client,
@@ -443,8 +399,6 @@ static int commit_and_publish_local_block(
             &meta,
             0u,
             false,
-            NULL,
-            0u,
             true,
             NULL,
             &import_result);
@@ -469,12 +423,6 @@ static int commit_and_publish_local_block(
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
 
-    if (!sync_validator_votes_from_preview_locked(client, post_store))
-    {
-        lantern_client_unlock_state(client, state_locked);
-        return LANTERN_CLIENT_ERR_RUNTIME;
-    }
-
     lantern_client_cache_block_aggregated_proofs_locked(client, block);
     adopt_state_locked(client, post_state);
     lantern_state_init(post_state);
@@ -489,7 +437,7 @@ static int commit_and_publish_local_block(
     state_locked = lantern_client_lock_state(client);
     if (state_locked)
     {
-        persist_finalized_state_if_advanced_locked(
+        prune_storage_if_finalized_advanced_locked(
             client,
             &pre_transition_finalized,
             &meta);
@@ -503,13 +451,10 @@ static int commit_and_publish_local_block(
             &meta);
         get_head_info_locked(client, &head_root, &head_slot);
         persist_state_locked(client, &meta);
-        persist_post_state_and_indices_locked(
+        persist_post_state_locked(
             client,
             &client->state,
-            block,
             block_root,
-            &head_root,
-            head_slot,
             &meta);
         lantern_client_unlock_state(client, state_locked);
     }
@@ -518,12 +463,6 @@ static int commit_and_publish_local_block(
     {
         persist_block_after_import(client, block, &meta);
         update_network_view_after_import(client, block->block.slot);
-        if (client->status_lock_initialized
-            && pthread_mutex_lock(&client->status_lock) == 0)
-        {
-            client->sync_imported_blocks += 1u;
-            pthread_mutex_unlock(&client->status_lock);
-        }
         lantern_client_pending_remove_by_root(client, block_root);
         lantern_client_process_pending_children(client, block_root);
         update_sync_progress_after_block(client);
@@ -541,127 +480,14 @@ int lantern_client_commit_and_publish_local_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,
     const LanternRoot *block_root,
-    LanternState *post_state,
-    LanternStore *post_store)
+    LanternState *post_state)
 {
     return commit_and_publish_local_block(
         client,
         block,
         block_root,
-        post_state,
-        post_store,
-        false);
+        post_state);
 }
-
-int lantern_client_commit_and_publish_current_head_block(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *block_root,
-    LanternState *post_state,
-    LanternStore *post_store)
-{
-    return commit_and_publish_local_block(
-        client,
-        block,
-        block_root,
-        post_state,
-        post_store,
-        true);
-}
-
-static int encode_block_ssz(
-    const LanternSignedBlock *block,
-    uint8_t **out_data,
-    size_t *out_len)
-{
-    if (!block || !out_data || !out_len)
-    {
-        return -1;
-    }
-
-    *out_data = NULL;
-    *out_len = 0;
-
-    size_t encoded_capacity = 0;
-    if (lantern_ssz_encode_signed_block(block, NULL, 0, &encoded_capacity) != SSZ_SUCCESS
-        || encoded_capacity == 0)
-    {
-        return -1;
-    }
-
-    uint8_t *buffer = malloc(encoded_capacity);
-    if (!buffer)
-    {
-        return -1;
-    }
-
-    size_t written = 0;
-    const ssz_error_t encode_rc = lantern_ssz_encode_signed_block(
-        block,
-        buffer,
-        encoded_capacity,
-        &written);
-    if (encode_rc != 0 || written == 0 || written > encoded_capacity)
-    {
-        free(buffer);
-        return -1;
-    }
-
-    *out_data = buffer;
-    *out_len = written;
-    return 0;
-}
-
-static void persist_invalid_block_on_state_transition_failure(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *block_root,
-    const uint8_t *raw_block_ssz,
-    size_t raw_block_ssz_len,
-    const struct lantern_log_metadata *meta)
-{
-    if (!client || !client->data_dir || !block || !block_root)
-    {
-        return;
-    }
-
-    uint8_t *encoded_block = NULL;
-    size_t encoded_block_len = 0;
-    const uint8_t *bytes_to_write = raw_block_ssz;
-    size_t bytes_to_write_len = raw_block_ssz_len;
-
-    if (!bytes_to_write || bytes_to_write_len == 0)
-    {
-        if (encode_block_ssz(block, &encoded_block, &encoded_block_len) != 0)
-        {
-            lantern_log_warn(
-                "storage",
-                meta,
-                "failed to encode invalid block slot=%" PRIu64 " for persistence",
-                block->block.slot);
-            return;
-        }
-        bytes_to_write = encoded_block;
-        bytes_to_write_len = encoded_block_len;
-    }
-
-    if (lantern_storage_store_invalid_block_bytes_for_root(
-            client->data_dir,
-            block_root,
-            bytes_to_write,
-            bytes_to_write_len)
-        != 0)
-    {
-        lantern_log_warn(
-            "storage",
-            meta,
-            "failed to persist invalid block slot=%" PRIu64,
-            block->block.slot);
-    }
-
-    free(encoded_block);
-}
-
 
 /* ============================================================================
  * Block Import Helpers
@@ -740,228 +566,6 @@ enum block_parent_action
     BLOCK_PARENT_ACTION_KNOWN_OFF_HEAD,
 };
 
-struct lantern_root_chain_entry
-{
-    LanternRoot root;
-    LanternRoot parent_root;
-    uint64_t slot;
-    bool has_parent;
-};
-
-struct lantern_root_chain
-{
-    struct lantern_root_chain_entry *items;
-    size_t length;
-    size_t capacity;
-};
-
-static void root_chain_reset(struct lantern_root_chain *chain)
-{
-    if (!chain)
-    {
-        return;
-    }
-    free(chain->items);
-    chain->items = NULL;
-    chain->length = 0;
-    chain->capacity = 0;
-}
-
-static bool root_chain_contains(const struct lantern_root_chain *chain, const LanternRoot *root)
-{
-    if (!chain || !root)
-    {
-        return false;
-    }
-    for (size_t i = 0; i < chain->length; ++i)
-    {
-        if (memcmp(chain->items[i].root.bytes, root->bytes, LANTERN_ROOT_SIZE) == 0)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool root_chain_append(
-    struct lantern_root_chain *chain,
-    const LanternRoot *root,
-    const LanternRoot *parent_root,
-    uint64_t slot,
-    bool has_parent)
-{
-    if (!chain || !root || !parent_root)
-    {
-        return false;
-    }
-    if (chain->length == chain->capacity)
-    {
-        size_t next_capacity = chain->capacity > 0 ? chain->capacity + (chain->capacity / 2u) : 4u;
-        if (next_capacity < chain->capacity)
-        {
-            return false;
-        }
-        if (next_capacity > SIZE_MAX / sizeof(*chain->items))
-        {
-            return false;
-        }
-        struct lantern_root_chain_entry *expanded = realloc(
-            chain->items,
-            next_capacity * sizeof(*expanded));
-        if (!expanded)
-        {
-            return false;
-        }
-        chain->items = expanded;
-        chain->capacity = next_capacity;
-    }
-    struct lantern_root_chain_entry *entry = &chain->items[chain->length];
-    entry->root = *root;
-    entry->parent_root = *parent_root;
-    entry->slot = slot;
-    entry->has_parent = has_parent;
-    chain->length += 1u;
-    return true;
-}
-
-static bool build_root_chain_locked(
-    struct lantern_client *client,
-    const LanternRoot *target_root,
-    const LanternRoot *stop_root,
-    bool allow_stop_at_or_before_slot,
-    uint64_t stop_slot,
-    struct lantern_root_chain *out_chain)
-{
-    if (!client || !target_root || !out_chain || !client->has_fork_choice)
-    {
-        return false;
-    }
-    root_chain_reset(out_chain);
-
-    LanternRoot current = *target_root;
-    const bool has_stop_root = stop_root && !lantern_root_is_zero(stop_root);
-    bool reached_stop_boundary = false;
-    size_t steps = 0;
-    while (!lantern_root_is_zero(&current))
-    {
-        if (steps > LANTERN_HISTORICAL_ROOTS_LIMIT)
-        {
-            return false;
-        }
-        if (root_chain_contains(out_chain, &current))
-        {
-            return false;
-        }
-
-        LanternRoot parent = {0};
-        uint64_t slot = 0;
-        bool has_parent = false;
-        if (lantern_fork_choice_block_info(
-                &client->fork_choice,
-                &current,
-                &slot,
-                &parent,
-                &has_parent)
-            != 0)
-        {
-            return false;
-        }
-
-        if (has_stop_root
-            && memcmp(current.bytes, stop_root->bytes, LANTERN_ROOT_SIZE) == 0)
-        {
-            reached_stop_boundary = true;
-            break;
-        }
-
-        if (allow_stop_at_or_before_slot && slot <= stop_slot)
-        {
-            reached_stop_boundary = true;
-            break;
-        }
-
-        if (!root_chain_append(out_chain, &current, &parent, slot, has_parent))
-        {
-            return false;
-        }
-
-        if (!has_parent || lantern_root_is_zero(&parent))
-        {
-            break;
-        }
-
-        current = parent;
-        steps += 1u;
-    }
-
-    if (has_stop_root || allow_stop_at_or_before_slot)
-    {
-        return reached_stop_boundary;
-    }
-
-    return out_chain->length > 0;
-}
-
-static bool init_replay_state(const struct lantern_client *client, LanternState *out_state)
-{
-    if (!client || !out_state)
-    {
-        return false;
-    }
-
-    struct lantern_log_metadata meta = {.validator = client->node_id};
-    lantern_state_reset(out_state);
-    lantern_state_init(out_state);
-
-    const struct lantern_chain_config *config = &client->genesis.chain_config;
-    if (!config->validator_attestation_pubkeys
-        || !config->validator_proposal_pubkeys
-        || config->validator_count == 0
-        || config->validator_count > SIZE_MAX)
-    {
-        lantern_log_warn(
-            "state",
-            &meta,
-            "init_replay_state missing canonical validator keypairs");
-        lantern_state_reset(out_state);
-        return false;
-    }
-
-    if (lantern_state_generate_genesis(
-            out_state,
-            config->genesis_time,
-            config->validator_count)
-        != 0)
-    {
-        lantern_log_warn(
-            "state",
-            &meta,
-            "init_replay_state failed to generate genesis time=%" PRIu64 " validators=%" PRIu64,
-            config->genesis_time,
-            config->validator_count);
-        lantern_state_reset(out_state);
-        return false;
-    }
-
-    if (lantern_state_set_validator_pubkeys_dual(
-            out_state,
-            config->validator_attestation_pubkeys,
-            config->validator_proposal_pubkeys,
-            (size_t)config->validator_count)
-        != 0)
-    {
-        lantern_log_warn(
-            "state",
-            &meta,
-            "init_replay_state failed to set validator pubkey pairs count=%" PRIu64,
-            config->validator_count);
-        lantern_state_reset(out_state);
-        return false;
-    }
-
-    return true;
-}
-
 static bool compute_state_head_root_locked(
     struct lantern_client *client,
     LanternRoot *out_root)
@@ -974,63 +578,31 @@ static bool compute_state_head_root_locked(
     {
         return false;
     }
-    if (lantern_hash_tree_root_block_header(&client->state.latest_block_header, out_root) != SSZ_SUCCESS)
-    {
-        return false;
-    }
-    return true;
+    return lantern_hash_tree_root_block_header(
+               &client->state.latest_block_header,
+               out_root)
+        == SSZ_SUCCESS;
 }
 
-static bool rebuild_state_for_root_locked(
+const LanternState *lantern_client_state_for_root_locked(
     struct lantern_client *client,
-    const LanternRoot *target_root,
-    LanternState *out_state,
-    LanternRoot *out_missing_roots,
-    size_t missing_roots_cap,
-    size_t *out_missing_count);
-static void cache_rebuilt_state_for_root_locked(
-    struct lantern_client *client,
-    const LanternRoot *root,
-    const LanternState *state,
-    const struct lantern_log_metadata *meta,
-    const char *context);
-
-static bool state_matches_root(const LanternState *state, const LanternRoot *root)
+    const LanternRoot *root)
 {
-    if (!state || !root)
+    if (!client || !root || !client->has_fork_choice)
     {
-        return false;
-    }
-    LanternRoot state_root;
-    if (lantern_hash_tree_root_state(state, &state_root) != SSZ_SUCCESS)
-    {
-        return false;
-    }
-    LanternBlockHeader header = state->latest_block_header;
-    header.state_root = state_root;
-    LanternRoot header_root;
-    if (lantern_hash_tree_root_block_header(&header, &header_root) != SSZ_SUCCESS)
-    {
-        return false;
-    }
-    return memcmp(header_root.bytes, root->bytes, LANTERN_ROOT_SIZE) == 0;
-}
-
-static bool load_snapshot_state_for_root_locked(
-    const struct lantern_client *client,
-    const LanternRoot *root,
-    LanternState *out_state,
-    size_t *out_state_len)
-{
-    if (out_state_len)
-    {
-        *out_state_len = 0;
-    }
-    if (!client || !root || !out_state || !client->data_dir || client->data_dir[0] == '\0')
-    {
-        return false;
+        return NULL;
     }
 
+    const LanternState *state =
+        lantern_fork_choice_block_state(&client->fork_choice, root);
+    if (state || !client->data_dir || client->data_dir[0] == '\0')
+    {
+        return state;
+    }
+
+    /* Finalization may evict a retained side branch's in-memory state. Its
+     * keyed post-state remains on disk, so rehydrate the cache instead of
+     * treating the known parent as an unresolved block gap. */
     uint8_t *state_bytes = NULL;
     size_t state_len = 0;
     if (lantern_storage_load_state_bytes_for_root(
@@ -1043,400 +615,24 @@ static bool load_snapshot_state_for_root_locked(
         || state_len == 0)
     {
         free(state_bytes);
-        return false;
+        return NULL;
     }
 
-    LanternState decoded;
-    lantern_state_init(&decoded);
-    bool decoded_owned = true;
-    bool loaded = false;
-    if (lantern_ssz_decode_state(&decoded, state_bytes, state_len) == SSZ_SUCCESS)
-    {
-        lantern_state_reset(out_state);
-        *out_state = decoded;
-        decoded_owned = false;
-        loaded = true;
-        if (out_state_len)
-        {
-            *out_state_len = state_len;
-        }
-    }
-
-    if (decoded_owned)
-    {
-        lantern_state_reset(&decoded);
-    }
+    LanternState persisted_state;
+    lantern_state_init(&persisted_state);
+    bool restored =
+        lantern_ssz_decode_state(&persisted_state, state_bytes, state_len) == SSZ_SUCCESS
+        && lantern_fork_choice_set_block_state(
+               &client->fork_choice,
+               root,
+               &persisted_state)
+            == 0;
     free(state_bytes);
-    return loaded;
-}
+    lantern_state_reset(&persisted_state);
 
-static bool load_replay_base_from_finalized_locked(
-    struct lantern_client *client,
-    const LanternRoot *finalized_root,
-    LanternState *out_state,
-    const char **out_source,
-    size_t *out_source_len)
-{
-    if (out_source)
-    {
-        *out_source = NULL;
-    }
-    if (out_source_len)
-    {
-        *out_source_len = 0;
-    }
-    if (!client || !finalized_root || !out_state || lantern_root_is_zero(finalized_root))
-    {
-        return false;
-    }
-
-    if (client->has_state && state_matches_root(&client->state, finalized_root))
-    {
-        if (lantern_state_clone(&client->state, out_state) == 0)
-        {
-            if (out_source)
-            {
-                *out_source = "head";
-            }
-            return true;
-        }
-    }
-
-    if (client->has_fork_choice)
-    {
-        const LanternState *cached_state =
-            lantern_fork_choice_block_state(&client->fork_choice, finalized_root);
-        if (cached_state && lantern_state_clone(cached_state, out_state) == 0)
-        {
-            if (out_source)
-            {
-                *out_source = "fork_choice_cache";
-            }
-            return true;
-        }
-    }
-
-    if (client->data_dir && client->data_dir[0] != '\0')
-    {
-        LanternState persisted_finalized;
-        lantern_state_init(&persisted_finalized);
-        if (lantern_storage_load_finalized_state(client->data_dir, &persisted_finalized) == 0
-            && state_matches_root(&persisted_finalized, finalized_root))
-        {
-            *out_state = persisted_finalized;
-            if (out_source)
-            {
-                *out_source = "finalized_state";
-            }
-            return true;
-        }
-        lantern_state_reset(&persisted_finalized);
-    }
-
-    size_t snapshot_len = 0;
-    if (load_snapshot_state_for_root_locked(client, finalized_root, out_state, &snapshot_len))
-    {
-        cache_rebuilt_state_for_root_locked(
-            client,
-            finalized_root,
-            out_state,
-            NULL,
-            "finalized_base_snapshot");
-        if (out_source)
-        {
-            *out_source = "state_for_root";
-        }
-        if (out_source_len)
-        {
-            *out_source_len = snapshot_len;
-        }
-        return true;
-    }
-
-    if (client->data_dir && client->data_dir[0] != '\0')
-    {
-        LanternState persisted;
-        lantern_state_init(&persisted);
-        if (lantern_storage_load_state(client->data_dir, &persisted) == 0
-            && state_matches_root(&persisted, finalized_root))
-        {
-            *out_state = persisted;
-            if (out_source)
-            {
-                *out_source = "state";
-            }
-            return true;
-        }
-        lantern_state_reset(&persisted);
-    }
-
-    return false;
-}
-
-static void cache_rebuilt_state_for_root_locked(
-    struct lantern_client *client,
-    const LanternRoot *root,
-    const LanternState *state,
-    const struct lantern_log_metadata *meta,
-    const char *context)
-{
-    if (!client || !root || !state)
-    {
-        return;
-    }
-
-    if (client->has_fork_choice
-        && lantern_fork_choice_set_block_state(&client->fork_choice, root, state) != 0)
-    {
-        char root_hex[ROOT_HEX_BUFFER_LEN];
-        struct lantern_log_metadata fallback_meta = {.validator = client->node_id};
-        const struct lantern_log_metadata *log_meta = meta ? meta : &fallback_meta;
-        format_root_hex(root, root_hex, sizeof(root_hex));
-        lantern_log_warn(
-            "forkchoice",
-            log_meta,
-            "failed to cache in-memory state root=%s slot=%" PRIu64 " context=%s",
-            root_hex[0] ? root_hex : "0x0",
-            state->slot,
-            context ? context : "unknown");
-    }
-
-    if (!client->data_dir || !client->data_dir[0])
-    {
-        return;
-    }
-
-    if (lantern_storage_store_state_for_root(client->data_dir, root, state) != 0)
-    {
-        char root_hex[ROOT_HEX_BUFFER_LEN];
-        struct lantern_log_metadata fallback_meta = {.validator = client->node_id};
-        const struct lantern_log_metadata *log_meta = meta ? meta : &fallback_meta;
-        format_root_hex(root, root_hex, sizeof(root_hex));
-        lantern_log_warn(
-            "storage",
-            log_meta,
-            "failed to cache rebuilt state root=%s slot=%" PRIu64 " context=%s",
-            root_hex[0] ? root_hex : "0x0",
-            state->slot,
-            context ? context : "unknown");
-    }
-}
-
-const LanternState *lantern_client_state_for_root_local_locked(
-    struct lantern_client *client,
-    const LanternRoot *root,
-    LanternState *scratch,
-    bool *out_is_scratch)
-{
-    if (out_is_scratch)
-    {
-        *out_is_scratch = false;
-    }
-    if (!client || !root)
-    {
-        return NULL;
-    }
-
-    if (client->has_state && state_matches_root(&client->state, root))
-    {
-        return &client->state;
-    }
-
-    if (client->has_fork_choice)
-    {
-        const LanternState *cached_state =
-            lantern_fork_choice_block_state(&client->fork_choice, root);
-        if (cached_state)
-        {
-            return cached_state;
-        }
-    }
-
-    if (!scratch)
-    {
-        return NULL;
-    }
-
-    if (client->data_dir && client->data_dir[0])
-    {
-        size_t snapshot_len = 0;
-        if (load_snapshot_state_for_root_locked(client, root, scratch, &snapshot_len))
-        {
-            (void)snapshot_len;
-            cache_rebuilt_state_for_root_locked(
-                client,
-                root,
-                scratch,
-                NULL,
-                "state_for_root_snapshot");
-            if (out_is_scratch)
-            {
-                *out_is_scratch = true;
-            }
-            return scratch;
-        }
-    }
-
-    if (client->data_dir && client->data_dir[0] && scratch)
-    {
-        lantern_state_reset(scratch);
-        lantern_state_init(scratch);
-        if (load_replay_base_from_finalized_locked(
-                client,
-                root,
-                scratch,
-                NULL,
-                NULL))
-        {
-            if (out_is_scratch)
-            {
-                *out_is_scratch = true;
-            }
-            return scratch;
-        }
-        lantern_state_reset(scratch);
-    }
-
-    return NULL;
-}
-
-const LanternState *lantern_client_state_for_root_locked(
-    struct lantern_client *client,
-    const LanternRoot *root,
-    LanternState *scratch,
-    bool *out_is_scratch)
-{
-    const LanternState *state = lantern_client_state_for_root_local_locked(
-        client,
-        root,
-        scratch,
-        out_is_scratch);
-    if (state)
-    {
-        return state;
-    }
-
-    if (client->data_dir && client->data_dir[0])
-    {
-        lantern_state_reset(scratch);
-        if (rebuild_state_for_root_locked(client, root, scratch, NULL, 0, NULL))
-        {
-            if (out_is_scratch)
-            {
-                *out_is_scratch = true;
-            }
-            return scratch;
-        }
-        lantern_state_reset(scratch);
-    }
-
-    return NULL;
-}
-
-bool lantern_client_find_missing_state_root_locked(
-    struct lantern_client *client,
-    const LanternRoot *root,
-    LanternRoot *out_missing_root)
-{
-    if (!client || !root || !out_missing_root || !client->has_fork_choice)
-    {
-        return false;
-    }
-
-    memset(out_missing_root, 0, sizeof(*out_missing_root));
-
-    LanternRoot replay_stop_root = {0};
-    uint64_t replay_stop_slot = 0;
-    uint64_t anchor_slot = 0;
-    bool allow_anchor_slot_stop = false;
-
-    const LanternCheckpoint *fork_latest_finalized =
-        lantern_fork_choice_latest_finalized(&client->fork_choice);
-    if (fork_latest_finalized)
-    {
-        replay_stop_root = fork_latest_finalized->root;
-        replay_stop_slot = fork_latest_finalized->slot;
-    }
-    else if (client->has_state)
-    {
-        replay_stop_root = client->state.latest_finalized.root;
-        replay_stop_slot = client->state.latest_finalized.slot;
-    }
-
-    if (!lantern_root_is_zero(&replay_stop_root))
-    {
-        const LanternRoot *anchor_root =
-            lantern_fork_choice_anchor_root(&client->fork_choice);
-        if (anchor_root
-            && memcmp(
-                   anchor_root->bytes,
-                   replay_stop_root.bytes,
-                   LANTERN_ROOT_SIZE)
-                == 0
-            && lantern_fork_choice_anchor_slot(
-                   &client->fork_choice,
-                   &anchor_slot)
-                == 0
-            && replay_stop_slot < anchor_slot)
-        {
-            allow_anchor_slot_stop = true;
-        }
-    }
-
-    LanternRoot current = *root;
-    size_t steps = 0;
-    while (!lantern_root_is_zero(&current))
-    {
-        if (steps > LANTERN_HISTORICAL_ROOTS_LIMIT)
-        {
-            return false;
-        }
-
-        uint64_t slot = 0;
-        LanternRoot parent = {0};
-        bool has_parent = false;
-        if (lantern_fork_choice_block_info(
-                &client->fork_choice,
-                &current,
-                &slot,
-                &parent,
-                &has_parent)
-            != 0)
-        {
-            *out_missing_root = current;
-            return true;
-        }
-
-        if (!lantern_root_is_zero(&replay_stop_root)
-            && memcmp(
-                   current.bytes,
-                   replay_stop_root.bytes,
-                   LANTERN_ROOT_SIZE)
-                == 0)
-        {
-            return false;
-        }
-
-        if (allow_anchor_slot_stop && slot <= anchor_slot)
-        {
-            return false;
-        }
-
-        if (!has_parent || lantern_root_is_zero(&parent))
-        {
-            if (!lantern_root_is_zero(&replay_stop_root) || allow_anchor_slot_stop)
-            {
-                *out_missing_root = current;
-                return true;
-            }
-            return false;
-        }
-
-        current = parent;
-        steps += 1u;
-    }
-
-    return false;
+    return restored
+        ? lantern_fork_choice_block_state(&client->fork_choice, root)
+        : NULL;
 }
 
 static void adopt_state_locked(struct lantern_client *client, LanternState *state)
@@ -1465,431 +661,6 @@ static void adopt_state_locked(struct lantern_client *client, LanternState *stat
     }
     lantern_state_reset(&previous);
 }
-
-static bool rebuild_state_for_root_locked(
-    struct lantern_client *client,
-    const LanternRoot *target_root,
-    LanternState *out_state,
-    LanternRoot *out_missing_roots,
-    size_t missing_roots_cap,
-    size_t *out_missing_count)
-{
-    if (!client || !target_root || !out_state)
-    {
-        return false;
-    }
-    lantern_state_reset(out_state);
-    if (out_missing_count)
-    {
-        *out_missing_count = 0;
-    }
-
-    struct lantern_log_metadata meta = {.validator = client->node_id};
-    char target_hex[ROOT_HEX_BUFFER_LEN];
-    format_root_hex(target_root, target_hex, sizeof(target_hex));
-
-    if (client->has_fork_choice)
-    {
-        const LanternState *cached_state =
-            lantern_fork_choice_block_state(&client->fork_choice, target_root);
-        if (cached_state)
-        {
-            if (lantern_state_clone(cached_state, out_state) == 0)
-            {
-                lantern_log_debug(
-                    "state",
-                    &meta,
-                    "rebuild_state used fork-choice cache target=%s",
-                    target_hex[0] ? target_hex : "0x0");
-                return true;
-            }
-            lantern_state_reset(out_state);
-            lantern_log_warn(
-                "state",
-                &meta,
-                "rebuild_state failed to clone fork-choice cache target=%s",
-                target_hex[0] ? target_hex : "0x0");
-        }
-    }
-
-    size_t snapshot_len = 0;
-    if (load_snapshot_state_for_root_locked(client, target_root, out_state, &snapshot_len))
-    {
-        cache_rebuilt_state_for_root_locked(
-            client,
-            target_root,
-            out_state,
-            &meta,
-            "rebuild_snapshot");
-        lantern_log_debug(
-            "state",
-            &meta,
-            "rebuild_state loaded snapshot target=%s bytes=%zu",
-            target_hex[0] ? target_hex : "0x0",
-            snapshot_len);
-        return true;
-    }
-
-    struct lantern_root_chain chain = {0};
-    LanternState replay_base_state;
-    lantern_state_init(&replay_base_state);
-    bool have_replay_base_state = false;
-    bool use_finalized_shortcut = false;
-    LanternRoot replay_stop_root = {0};
-    uint64_t replay_stop_slot = 0;
-    uint64_t anchor_slot = 0;
-    bool allow_anchor_slot_stop = false;
-    char replay_stop_hex[ROOT_HEX_BUFFER_LEN] = {0};
-
-    if (client->has_fork_choice)
-    {
-        const LanternCheckpoint *fork_latest_finalized =
-            lantern_fork_choice_latest_finalized(&client->fork_choice);
-        if (fork_latest_finalized)
-        {
-            replay_stop_root = fork_latest_finalized->root;
-            replay_stop_slot = fork_latest_finalized->slot;
-        }
-    }
-    else if (client->has_state)
-    {
-        replay_stop_root = client->state.latest_finalized.root;
-        replay_stop_slot = client->state.latest_finalized.slot;
-    }
-    if (!lantern_root_is_zero(&replay_stop_root))
-    {
-        if (client->has_fork_choice)
-        {
-            const LanternRoot *anchor_root =
-                lantern_fork_choice_anchor_root(&client->fork_choice);
-            if (anchor_root
-                && memcmp(
-                       anchor_root->bytes,
-                       replay_stop_root.bytes,
-                       LANTERN_ROOT_SIZE)
-                    == 0
-                && lantern_fork_choice_anchor_slot(
-                       &client->fork_choice,
-                       &anchor_slot)
-                    == 0
-                && replay_stop_slot < anchor_slot)
-            {
-                allow_anchor_slot_stop = true;
-            }
-        }
-
-        const char *replay_base_source = NULL;
-        size_t replay_base_bytes = 0;
-        format_root_hex(&replay_stop_root, replay_stop_hex, sizeof(replay_stop_hex));
-        if (!load_replay_base_from_finalized_locked(
-                client,
-                &replay_stop_root,
-                &replay_base_state,
-                &replay_base_source,
-                &replay_base_bytes))
-        {
-            lantern_log_error(
-                "state",
-                &meta,
-                "rebuild_state missing finalized replay base target=%s finalized=%s",
-                target_hex[0] ? target_hex : "0x0",
-                replay_stop_hex[0] ? replay_stop_hex : "0x0");
-            root_chain_reset(&chain);
-            return false;
-        }
-
-        have_replay_base_state = true;
-        if (!build_root_chain_locked(
-                client,
-                target_root,
-                &replay_stop_root,
-                allow_anchor_slot_stop,
-                anchor_slot,
-                &chain))
-        {
-            lantern_log_error(
-                "state",
-                &meta,
-                "rebuild_state failed to build finalized root chain target=%s finalized=%s",
-                target_hex[0] ? target_hex : "0x0",
-                replay_stop_hex[0] ? replay_stop_hex : "0x0");
-            root_chain_reset(&chain);
-            lantern_state_reset(&replay_base_state);
-            return false;
-        }
-
-        use_finalized_shortcut = true;
-        lantern_log_info(
-            "state",
-            &meta,
-            "rebuild_state using finalized base target=%s finalized=%s source=%s bytes=%zu stop=%s",
-            target_hex[0] ? target_hex : "0x0",
-            replay_stop_hex[0] ? replay_stop_hex : "0x0",
-            replay_base_source ? replay_base_source : "unknown",
-            replay_base_bytes,
-            allow_anchor_slot_stop ? "anchor_slot" : "exact_root");
-    }
-    else if (!build_root_chain_locked(client, target_root, NULL, false, 0, &chain))
-    {
-        lantern_log_warn(
-            "state",
-            &meta,
-            "rebuild_state failed to build root chain target=%s",
-            target_hex[0] ? target_hex : "0x0");
-        root_chain_reset(&chain);
-        if (have_replay_base_state)
-        {
-            lantern_state_reset(&replay_base_state);
-        }
-        return false;
-    }
-
-    size_t root_count = 0;
-    for (size_t i = 0; i < chain.length; ++i)
-    {
-        if (chain.items[i].slot != 0)
-        {
-            root_count += 1u;
-        }
-    }
-
-    lantern_log_info(
-        "state",
-        &meta,
-        "rebuild_state start target=%s mode=%s chain_len=%zu root_count=%zu",
-        target_hex[0] ? target_hex : "0x0",
-        use_finalized_shortcut ? "finalized" : "genesis",
-        chain.length,
-        root_count);
-
-    LanternRoot *roots = NULL;
-    if (root_count > 0)
-    {
-        if (!client->data_dir || !client->data_dir[0])
-        {
-            root_chain_reset(&chain);
-            if (have_replay_base_state)
-            {
-                lantern_state_reset(&replay_base_state);
-            }
-            return false;
-        }
-        roots = calloc(root_count, sizeof(*roots));
-        if (!roots)
-        {
-            root_chain_reset(&chain);
-            if (have_replay_base_state)
-            {
-                lantern_state_reset(&replay_base_state);
-            }
-            return false;
-        }
-        size_t idx = 0;
-        for (size_t i = chain.length; i-- > 0;)
-        {
-            if (chain.items[i].slot == 0)
-            {
-                continue;
-            }
-            roots[idx++] = chain.items[i].root;
-        }
-    }
-
-    LanternSignedBlockList response;
-    lantern_signed_block_list_init(&response);
-    int collect_rc = 0;
-    if (root_count > 0)
-    {
-        collect_rc = lantern_storage_collect_blocks(
-            client->data_dir,
-            roots,
-            root_count,
-            &response);
-    }
-    if (collect_rc != 0 || response.length != root_count)
-    {
-        lantern_log_warn(
-            "state",
-            &meta,
-            "rebuild_state block collection mismatch target=%s collect_rc=%d expected=%zu got=%zu",
-            target_hex[0] ? target_hex : "0x0",
-            collect_rc,
-            root_count,
-            response.length);
-        if (roots && root_count > 0)
-        {
-            LanternRoot *found_roots = NULL;
-            size_t found_count = 0;
-            if (response.length > 0)
-            {
-                found_roots = calloc(response.length, sizeof(*found_roots));
-                if (found_roots)
-                {
-                    for (size_t i = 0; i < response.length; ++i)
-                    {
-                        if (lantern_hash_tree_root_block(&response.blocks[i].block, &found_roots[i]) == SSZ_SUCCESS)
-                        {
-                            found_count += 1u;
-                        }
-                    }
-                }
-            }
-            size_t missing = 0;
-            size_t logged = 0;
-            size_t missing_filled = 0;
-            for (size_t i = 0; i < root_count; ++i)
-            {
-                bool present = false;
-                if (found_roots)
-                {
-                    for (size_t j = 0; j < response.length; ++j)
-                    {
-                        if (memcmp(roots[i].bytes, found_roots[j].bytes, LANTERN_ROOT_SIZE) == 0)
-                        {
-                            present = true;
-                            break;
-                        }
-                    }
-                }
-                if (!present)
-                {
-                    missing += 1u;
-                    if (out_missing_roots && missing_filled < missing_roots_cap)
-                    {
-                        out_missing_roots[missing_filled] = roots[i];
-                        missing_filled += 1u;
-                    }
-                    if (logged < 5)
-                    {
-                        char missing_hex[ROOT_HEX_BUFFER_LEN];
-                        format_root_hex(&roots[i], missing_hex, sizeof(missing_hex));
-                        lantern_log_warn(
-                            "state",
-                            &meta,
-                            "rebuild_state missing block root=%s",
-                            missing_hex[0] ? missing_hex : "0x0");
-                        logged += 1u;
-                    }
-                }
-            }
-            if (out_missing_count)
-            {
-                *out_missing_count = missing_filled;
-            }
-            lantern_log_warn(
-                "state",
-                &meta,
-                "rebuild_state missing_blocks=%zu found_blocks=%zu",
-                missing,
-                found_count);
-            free(found_roots);
-        }
-    }
-    free(roots);
-    roots = NULL;
-    if (collect_rc != 0 || response.length != root_count)
-    {
-        lantern_signed_block_list_reset(&response);
-        root_chain_reset(&chain);
-        if (have_replay_base_state)
-        {
-            lantern_state_reset(&replay_base_state);
-        }
-        return false;
-    }
-
-    bool success = false;
-    if (use_finalized_shortcut)
-    {
-        lantern_state_reset(out_state);
-        *out_state = replay_base_state;
-        lantern_state_init(&replay_base_state);
-        have_replay_base_state = false;
-        success = true;
-    }
-    else
-    {
-        success = init_replay_state(client, out_state);
-    }
-    if (!success)
-    {
-        lantern_log_warn(
-            "state",
-            &meta,
-            "rebuild_state failed to initialize replay state target=%s mode=%s",
-            target_hex[0] ? target_hex : "0x0",
-            use_finalized_shortcut ? "finalized" : "genesis");
-        lantern_signed_block_list_reset(&response);
-        root_chain_reset(&chain);
-        if (have_replay_base_state)
-        {
-            lantern_state_reset(&replay_base_state);
-        }
-        return false;
-    }
-
-    LanternStore replay_store;
-    lantern_store_init(&replay_store);
-    if (lantern_store_prepare_validator_votes(&replay_store, out_state->config.num_validators) != 0)
-    {
-        lantern_signed_block_list_reset(&response);
-        root_chain_reset(&chain);
-        lantern_state_reset(out_state);
-        if (have_replay_base_state)
-        {
-            lantern_state_reset(&replay_base_state);
-        }
-        lantern_store_reset(&replay_store);
-        return false;
-    }
-
-    for (size_t i = 0; i < response.length; ++i)
-    {
-        int transition_rc = lantern_state_transition(out_state, &replay_store, &response.blocks[i]);
-        if (transition_rc != 0)
-        {
-            LanternRoot block_root = {0};
-            char block_hex[ROOT_HEX_BUFFER_LEN] = {0};
-            if (lantern_hash_tree_root_block(&response.blocks[i].block, &block_root) == SSZ_SUCCESS)
-            {
-                format_root_hex(&block_root, block_hex, sizeof(block_hex));
-            }
-            lantern_log_warn(
-                "state",
-                &meta,
-                "rebuild_state transition failed idx=%zu slot=%" PRIu64 " rc=%d root=%s",
-                i,
-                response.blocks[i].block.slot,
-                transition_rc,
-                block_hex[0] ? block_hex : "0x0");
-            lantern_signed_block_list_reset(&response);
-            root_chain_reset(&chain);
-            lantern_state_reset(out_state);
-            if (have_replay_base_state)
-            {
-                lantern_state_reset(&replay_base_state);
-            }
-            lantern_store_reset(&replay_store);
-            return false;
-        }
-    }
-
-    lantern_store_reset(&replay_store);
-    lantern_signed_block_list_reset(&response);
-    root_chain_reset(&chain);
-    if (have_replay_base_state)
-    {
-        lantern_state_reset(&replay_base_state);
-    }
-    cache_rebuilt_state_for_root_locked(
-        client,
-        target_root,
-        out_state,
-        &meta,
-        "rebuild_state");
-    return true;
-}
-
 
 /**
  * Handle parent tracking and competing forks.
@@ -2018,19 +789,13 @@ static enum block_parent_action handle_block_parent_locked(
         return queued ? BLOCK_PARENT_ACTION_DEFERRED : BLOCK_PARENT_ACTION_UNKNOWN;
     }
 
-    /*
-     * client->state may be adopted from replay when fork choice switches heads.
-     * Late-arriving blocks from slots already covered by that adopted state
-     * must be replayed from their parent state instead of transitioning the
-     * adopted head state directly, or state_transition() will reject them as
-     * stale and the ancestor never gets imported into fork choice.
-     */
+    /* Late blocks transition from their cached parent state, not the newer head. */
     if (block->block.slot <= client->state.slot)
     {
         lantern_log_debug(
             "state",
             meta,
-            "routing late block to off-head replay slot=%" PRIu64 " state_slot=%" PRIu64,
+            "routing late block to branch transition slot=%" PRIu64 " state_slot=%" PRIu64,
             block->block.slot,
             client->state.slot);
         return BLOCK_PARENT_ACTION_KNOWN_OFF_HEAD;
@@ -2295,20 +1060,37 @@ static void record_block_import_metrics_locked(
 static bool apply_state_transition_locked(
     struct lantern_client *client,
     const LanternSignedBlock *block,
+    const LanternRoot *block_root,
     const struct lantern_log_metadata *meta)
 {
-    if (!client || !block)
+    if (!client || !block || !block_root)
     {
         return false;
     }
 
-    LanternSignedBlock import_block = *block;
-    if (lantern_state_transition(&client->state, &client->store, &import_block) != 0)
+    if (lantern_state_transition(&client->state, block) != 0)
     {
         lantern_log_warn(
             "state",
             meta,
             "state transition failed for slot=%" PRIu64,
+            block->block.slot);
+        return false;
+    }
+    if (client->has_fork_choice
+        && lantern_fork_choice_add_block_with_state(
+               &client->fork_choice,
+               &block->block,
+               &client->state.latest_justified,
+               &client->state.latest_finalized,
+               block_root,
+               &client->state)
+            != 0)
+    {
+        lantern_log_warn(
+            "forkchoice",
+            meta,
+            "failed to add transitioned block at slot=%" PRIu64,
             block->block.slot);
         return false;
     }
@@ -2503,149 +1285,37 @@ static void prune_finalized_fork_choice_states_if_advanced_locked(
     }
 }
 
-static void persist_finalized_state_if_advanced_locked(
+static void prune_storage_if_finalized_advanced_locked(
     struct lantern_client *client,
     const LanternCheckpoint *previous_finalized,
     const struct lantern_log_metadata *meta)
 {
-    if (!client
-        || !previous_finalized
-        || !client->data_dir
-        || client->data_dir[0] == '\0')
+    if (!client || !previous_finalized || !client->data_dir)
     {
         return;
     }
-
-    struct lantern_log_metadata fallback_meta = {.validator = client->node_id};
-    const struct lantern_log_metadata *log_meta = meta ? meta : &fallback_meta;
-
-    const LanternCheckpoint *current_finalized = &client->state.latest_finalized;
-    if (!finalized_checkpoint_advanced(previous_finalized, current_finalized))
+    const LanternCheckpoint *current = &client->state.latest_finalized;
+    if (!finalized_checkpoint_advanced(previous_finalized, current))
     {
         return;
     }
-
-    char finalized_hex[ROOT_HEX_BUFFER_LEN];
-    format_root_hex(&current_finalized->root, finalized_hex, sizeof(finalized_hex));
-
-    const LanternState *finalized_state = NULL;
-    LanternState loaded_finalized_state;
-    lantern_state_init(&loaded_finalized_state);
-    bool loaded_finalized_state_owned = false;
-
-    if (client->has_fork_choice)
-    {
-        finalized_state =
-            lantern_fork_choice_block_state(&client->fork_choice, &current_finalized->root);
-        if (finalized_state
-            && !state_matches_root(finalized_state, &current_finalized->root))
-        {
-            finalized_state = NULL;
-        }
-    }
-    if (!finalized_state
-        && client->has_state
-        && state_matches_root(&client->state, &current_finalized->root))
-    {
-        finalized_state = &client->state;
-    }
-    if (!finalized_state
-        && load_snapshot_state_for_root_locked(
-               client,
-               &current_finalized->root,
-               &loaded_finalized_state,
-               NULL))
-    {
-        loaded_finalized_state_owned = true;
-        if (state_matches_root(&loaded_finalized_state, &current_finalized->root))
-        {
-            finalized_state = &loaded_finalized_state;
-        }
-    }
-    if (!finalized_state)
-    {
-        lantern_log_warn(
-            "storage",
-            log_meta,
-            "failed to find finalized replay state finalized_slot=%" PRIu64 " root=%s head_slot=%" PRIu64,
-            current_finalized->slot,
-            finalized_hex[0] ? finalized_hex : "0x0",
-            client->state.slot);
-        goto cleanup;
-    }
-
-    if (lantern_storage_store_state_for_root(
+    if (lantern_storage_prune_before_slot(
             client->data_dir,
-            &current_finalized->root,
-            finalized_state)
-        != 0)
+            current->slot,
+            &current->root,
+            1u)
+        < 0)
     {
         lantern_log_warn(
             "storage",
-            log_meta,
-            "failed to persist finalized root state finalized_slot=%" PRIu64 " root=%s head_slot=%" PRIu64,
-            current_finalized->slot,
-            finalized_hex[0] ? finalized_hex : "0x0",
-            client->state.slot);
-        goto cleanup;
-    }
-
-    if (lantern_storage_save_finalized_state(client->data_dir, finalized_state) != 0)
-    {
-        lantern_log_warn(
-            "storage",
-            log_meta,
-            "failed to persist finalized replay state finalized_slot=%" PRIu64 " head_slot=%" PRIu64,
-            current_finalized->slot,
-            client->state.slot);
-        goto cleanup;
-    }
-
-    lantern_log_info(
-        "storage",
-        log_meta,
-        "persisted finalized replay state slot=%" PRIu64 " root=%s head_slot=%" PRIu64,
-        current_finalized->slot,
-        finalized_hex[0] ? finalized_hex : "0x0",
-        client->state.slot);
-
-    int pruned = lantern_storage_prune_before_slot(
-        client->data_dir,
-        current_finalized->slot,
-        &current_finalized->root,
-        1u);
-    if (pruned < 0)
-    {
-        lantern_log_warn(
-            "storage",
-            log_meta,
-            "failed to prune persisted pre-finalized data finalized_slot=%" PRIu64
-            " root=%s",
-            current_finalized->slot,
-            finalized_hex[0] ? finalized_hex : "0x0");
-    }
-    else if (pruned > 0)
-    {
-        lantern_log_info(
-            "storage",
-            log_meta,
-            "pruned persisted pre-finalized data finalized_slot=%" PRIu64
-            " root=%s entries=%d",
-            current_finalized->slot,
-            finalized_hex[0] ? finalized_hex : "0x0",
-            pruned);
-    }
-
-cleanup:
-    if (loaded_finalized_state_owned)
-    {
-        lantern_state_reset(&loaded_finalized_state);
+            meta,
+            "failed to prune persisted data before finalized slot=%" PRIu64,
+            current->slot);
     }
 }
 
-
 /**
- * @brief Persists client state/votes if storage is enabled.
+ * @brief Persists client state if storage is enabled.
  *
  * @param client  Client instance
  * @param meta    Logging metadata
@@ -2669,39 +1339,25 @@ static void persist_state_locked(
             "failed to persist state after slot=%" PRIu64,
             client->state.slot);
     }
-    if (lantern_storage_save_votes(client->data_dir, &client->state, &client->store) != 0)
-    {
-        lantern_log_warn(
-            "storage",
-            meta,
-            "failed to persist votes after slot=%" PRIu64,
-            client->state.slot);
-    }
 }
 
 /**
- * @brief Persist per-block post-state and sync indices.
+ * @brief Persist the post-state owned by a block root.
  *
  * @param client     Client instance
  * @param post_state Post-state after applying the block
- * @param block      Imported block
  * @param block_root Root of the block
- * @param head_root  Current head root
- * @param head_slot  Current head slot
  * @param meta       Logging metadata
  *
  * @note Thread safety: Caller must hold state_lock
  */
-static void persist_post_state_and_indices_locked(
+static void persist_post_state_locked(
     const struct lantern_client *client,
     const LanternState *post_state,
-    const LanternSignedBlock *block,
     const LanternRoot *block_root,
-    const LanternRoot *head_root,
-    uint64_t head_slot,
     const struct lantern_log_metadata *meta)
 {
-    if (!client || !client->data_dir || !post_state || !block || !block_root)
+    if (!client || !client->data_dir || !post_state || !block_root)
     {
         return;
     }
@@ -2712,38 +1368,6 @@ static void persist_post_state_and_indices_locked(
             "storage",
             meta,
             "failed to persist post-state slot=%" PRIu64,
-            block->block.slot);
-    }
-    if (lantern_storage_store_slot_root(
-            client->data_dir,
-            block->block.slot,
-            block_root)
-        != 0)
-    {
-        lantern_log_warn(
-            "storage",
-            meta,
-            "failed to persist slot index slot=%" PRIu64,
-            block->block.slot);
-    }
-    if (lantern_storage_store_head_root(client->data_dir, head_slot, head_root) != 0)
-    {
-        lantern_log_warn(
-            "storage",
-            meta,
-            "failed to persist head index slot=%" PRIu64,
-            head_slot);
-    }
-    if (lantern_storage_store_checkpoints(
-            client->data_dir,
-            &post_state->latest_justified,
-            &post_state->latest_finalized)
-        != 0)
-    {
-        lantern_log_warn(
-            "storage",
-            meta,
-            "failed to persist checkpoints slot=%" PRIu64,
             post_state->slot);
     }
 }
@@ -2842,7 +1466,7 @@ static void log_import_rejected(
  * 5. Validates attestation constraints
  * 6. Applies state transition (head-matching parents only)
  * 7. Updates fork choice
- * 8. Persists state and votes
+ * 8. Persists the block and post-state
  * 9. Processes pending children
  *
  * Per leanSpec: Blocks on competing forks are added to fork choice so
@@ -2854,8 +1478,6 @@ static void log_import_rejected(
  * @param block_root  Precomputed block root (may be NULL)
  * @param meta        Logging metadata
  * @param backfill_depth Backfill depth of the block
- * @param raw_block_ssz Optional raw SSZ bytes for the block
- * @param raw_block_ssz_len Length of `raw_block_ssz`
  * @return true if block was imported successfully
  *
  * @note Thread safety: Acquires state_lock and pending_lock
@@ -2867,8 +1489,6 @@ static bool lantern_client_import_block_internal(
     const struct lantern_log_metadata *meta,
     uint32_t backfill_depth,
     bool allow_historical,
-    const uint8_t *raw_block_ssz,
-    size_t raw_block_ssz_len,
     bool drain_pending_children,
     bool *out_children_ready,
     lantern_client_error *out_result)
@@ -3016,65 +1636,44 @@ static bool lantern_client_import_block_internal(
 
     if (parent_off_head)
     {
-        LanternRoot parent_root = block->block.parent_root;
-        LanternState replay_state;
-        lantern_state_init(&replay_state);
-        bool have_replay_state = false;
+        const LanternRoot parent_root = block->block.parent_root;
+        const LanternState *parent_state =
+            lantern_client_state_for_root_locked(client, &parent_root);
+        LanternState branch_state;
+        lantern_state_init(&branch_state);
+        bool have_branch_state =
+            parent_state && lantern_state_clone(parent_state, &branch_state) == 0;
         bool processed = false;
         bool deferred = false;
-        LanternRoot missing_roots[LANTERN_MAX_REQUEST_BLOCKS];
-        size_t missing_count = 0;
+        LanternRoot previous_head = {0};
+        bool had_previous_head =
+            lantern_fork_choice_current_head(&client->fork_choice, &previous_head) == 0;
 
-        if (rebuild_state_for_root_locked(
-                client,
-                &parent_root,
-                &replay_state,
-                missing_roots,
-                LANTERN_MAX_REQUEST_BLOCKS,
-                &missing_count))
+        if (have_branch_state)
         {
-            have_replay_state = true;
-            LanternStore replay_store;
-            lantern_store_init(&replay_store);
-            bool replay_store_ready =
-                lantern_store_prepare_validator_votes(&replay_store, replay_state.config.num_validators) == 0;
-            if (replay_store_ready
-                && lantern_state_transition(&replay_state, &replay_store, block) == 0)
+            if (lantern_state_transition(&branch_state, block) == 0)
             {
                 processed = add_competing_fork_block_locked(
                     client,
                     block,
                     &block_root_local,
-                    &replay_state,
-                    &replay_state.latest_justified,
-                    &replay_state.latest_finalized,
+                    &branch_state,
+                    &branch_state.latest_justified,
+                    &branch_state.latest_finalized,
                     meta);
             }
             else
             {
-                persist_invalid_block_on_state_transition_failure(
-                    client,
+                log_import_rejected(
                     block,
                     &block_root_local,
-                    raw_block_ssz,
-                    raw_block_ssz_len,
+                    import_source,
+                    "state_transition_failed",
                     meta);
-                lantern_log_warn(
-                    "state",
-                    meta,
-                    "off-head state transition failed for slot=%" PRIu64,
-                    block->block.slot);
-                log_import_rejected(block, &block_root_local, import_source, "state_transition_failed", meta);
             }
-            lantern_store_reset(&replay_store);
         }
         else
         {
-            lantern_log_warn(
-                "state",
-                meta,
-                "failed to rebuild parent state for off-head slot=%" PRIu64,
-                block->block.slot);
             const char *peer_text = meta && meta->peer ? meta->peer : NULL;
             deferred = lantern_client_enqueue_pending_block(
                 client,
@@ -3084,77 +1683,48 @@ static bool lantern_client_import_block_internal(
                 peer_text,
                 backfill_depth,
                 true);
-            if (missing_count > 0)
-            {
-                uint32_t request_depths[LANTERN_MAX_REQUEST_BLOCKS];
-                uint32_t request_depth = backfill_depth + 1u;
-                if (request_depth > LANTERN_MAX_BACKFILL_DEPTH)
-                {
-                    request_depth = LANTERN_MAX_BACKFILL_DEPTH;
-                }
-                for (size_t i = 0; i < missing_count; ++i)
-                {
-                    request_depths[i] = request_depth;
-                }
-                (void)lantern_client_try_schedule_blocks_request_batch(
-                    client,
-                    peer_text,
-                    missing_roots,
-                    request_depths,
-                    missing_count);
-            }
+            uint32_t request_depth =
+                backfill_depth < LANTERN_MAX_BACKFILL_DEPTH
+                    ? backfill_depth + 1u
+                    : LANTERN_MAX_BACKFILL_DEPTH;
+            (void)lantern_client_try_schedule_blocks_request_batch(
+                client,
+                peer_text,
+                &parent_root,
+                &request_depth,
+                1u);
         }
 
-        bool adopted_state = false;
         LanternCheckpoint pre_adopt_finalized = client->state.latest_finalized;
-        if (processed && client->has_fork_choice)
+        bool adopted_state = false;
+        LanternRoot fork_head = {0};
+        if (processed
+            && lantern_fork_choice_current_head(&client->fork_choice, &fork_head) == 0
+            && (!had_previous_head
+                || memcmp(
+                       fork_head.bytes,
+                       previous_head.bytes,
+                       LANTERN_ROOT_SIZE)
+                    != 0))
         {
-            LanternRoot fork_head = {0};
-            bool have_fork_head = lantern_fork_choice_current_head(
-                &client->fork_choice,
-                &fork_head)
-                == 0;
-            LanternRoot state_head = {0};
-            bool have_state_head = have_fork_head && compute_state_head_root_locked(
-                client,
-                &state_head);
-
-            if (have_fork_head && have_state_head
-                && memcmp(fork_head.bytes, state_head.bytes, LANTERN_ROOT_SIZE) != 0)
+            const LanternState *cached_head =
+                lantern_client_state_for_root_locked(client, &fork_head);
+            LanternState head_state;
+            lantern_state_init(&head_state);
+            if (cached_head && lantern_state_clone(cached_head, &head_state) == 0)
             {
-                if (have_replay_state
-                    && memcmp(fork_head.bytes, block_root_local.bytes, LANTERN_ROOT_SIZE) == 0)
-                {
-                    adopt_state_locked(client, &replay_state);
-                    have_replay_state = false;
-                    adopted_state = true;
-                }
-                else
-                {
-                    LanternState head_state;
-                    lantern_state_init(&head_state);
-                    if (rebuild_state_for_root_locked(
-                            client,
-                            &fork_head,
-                            &head_state,
-                            NULL,
-                            0,
-                            NULL))
-                    {
-                        adopt_state_locked(client, &head_state);
-                        adopted_state = true;
-                    }
-                    else
-                    {
-                        lantern_state_reset(&head_state);
-                    }
-                }
+                adopt_state_locked(client, &head_state);
+                adopted_state = true;
+            }
+            else
+            {
+                lantern_state_reset(&head_state);
             }
         }
 
         if (adopted_state)
         {
-            persist_finalized_state_if_advanced_locked(
+            prune_storage_if_finalized_advanced_locked(
                 client,
                 &pre_adopt_finalized,
                 meta);
@@ -3168,23 +1738,15 @@ static bool lantern_client_import_block_internal(
             persist_state_locked(client, meta);
         }
 
-        if (processed && have_replay_state)
+        if (processed)
         {
-            get_head_info_locked(client, &head_root, &head_slot);
-            persist_post_state_and_indices_locked(
+            persist_post_state_locked(
                 client,
-                &replay_state,
-                block,
+                &branch_state,
                 &block_root_local,
-                &head_root,
-                head_slot,
                 meta);
         }
-
-        if (have_replay_state)
-        {
-            lantern_state_reset(&replay_state);
-        }
+        lantern_state_reset(&branch_state);
 
         lantern_client_unlock_state(client, state_locked);
         state_locked = false;
@@ -3211,18 +1773,9 @@ static bool lantern_client_import_block_internal(
         {
             *out_children_ready = children_ready;
         }
-        if (processed)
-        {
-            import_result = LANTERN_CLIENT_OK;
-        }
-        else if (deferred)
-        {
-            import_result = LANTERN_CLIENT_OK;
-        }
-        else
-        {
-            import_result = LANTERN_CLIENT_ERR_IGNORED;
-        }
+        import_result = processed || deferred
+            ? LANTERN_CLIENT_OK
+            : LANTERN_CLIENT_ERR_IGNORED;
         if (out_result)
         {
             *out_result = import_result;
@@ -3231,22 +1784,15 @@ static bool lantern_client_import_block_internal(
     }
 
     LanternCheckpoint pre_transition_finalized = client->state.latest_finalized;
-    if (!apply_state_transition_locked(client, block, meta))
+    if (!apply_state_transition_locked(client, block, &block_root_local, meta))
     {
         log_import_rejected(block, &block_root_local, import_source, "state_transition_failed", meta);
-        persist_invalid_block_on_state_transition_failure(
-            client,
-            block,
-            &block_root_local,
-            raw_block_ssz,
-            raw_block_ssz_len,
-            meta);
         goto cleanup;
     }
 
     lantern_client_cache_block_aggregated_proofs_locked(client, block);
 
-    persist_finalized_state_if_advanced_locked(
+    prune_storage_if_finalized_advanced_locked(
         client,
         &pre_transition_finalized,
         meta);
@@ -3259,13 +1805,10 @@ static bool lantern_client_import_block_internal(
         meta);
     get_head_info_locked(client, &head_root, &head_slot);
     persist_state_locked(client, meta);
-    persist_post_state_and_indices_locked(
+    persist_post_state_locked(
         client,
         &client->state,
-        block,
         &block_root_local,
-        &head_root,
-        head_slot,
         meta);
     imported = true;
 
@@ -3281,8 +1824,7 @@ cleanup:
         if (client->status_lock_initialized
             && pthread_mutex_lock(&client->status_lock) == 0)
         {
-            client->sync_imported_blocks += 1u;
-            quiet_log = client->sync_in_progress;
+            quiet_log = client->sync_started_ms != 0u;
             pthread_mutex_unlock(&client->status_lock);
         }
         lantern_client_pending_remove_by_root(client, &block_root_local);
@@ -3327,9 +1869,7 @@ bool lantern_client_import_block(
     const LanternRoot *block_root,
     const struct lantern_log_metadata *meta,
     uint32_t backfill_depth,
-    bool allow_historical,
-    const uint8_t *raw_block_ssz,
-    size_t raw_block_ssz_len)
+    bool allow_historical)
 {
     return lantern_client_import_block_internal(
         client,
@@ -3338,8 +1878,6 @@ bool lantern_client_import_block(
         meta,
         backfill_depth,
         allow_historical,
-        raw_block_ssz,
-        raw_block_ssz_len,
         true,
         NULL,
         NULL);
@@ -3352,8 +1890,6 @@ bool lantern_client_import_block_without_pending_children(
     const struct lantern_log_metadata *meta,
     uint32_t backfill_depth,
     bool allow_historical,
-    const uint8_t *raw_block_ssz,
-    size_t raw_block_ssz_len,
     bool *out_children_ready)
 {
     return lantern_client_import_block_internal(
@@ -3363,8 +1899,6 @@ bool lantern_client_import_block_without_pending_children(
         meta,
         backfill_depth,
         allow_historical,
-        raw_block_ssz,
-        raw_block_ssz_len,
         false,
         out_children_ready,
         NULL);
@@ -3390,8 +1924,6 @@ bool lantern_client_import_block_without_pending_children(
  * @param peer_text Peer ID string (may be NULL)
  * @param context   Description of source for logging
  * @param backfill_depth Backfill depth of the block
- * @param raw_block_ssz Optional raw SSZ bytes for the block
- * @param raw_block_ssz_len Length of `raw_block_ssz`
  * @return LANTERN_CLIENT_OK if the block was validated/imported or accepted into pending
  * @return LANTERN_CLIENT_ERR_IGNORED if it was duplicate, stale, or not retained
  * @return another LANTERN_CLIENT_ERR_* when validation/import failed
@@ -3405,9 +1937,7 @@ lantern_client_error lantern_client_record_block(
     const char *peer_text,
     const char *context,
     uint32_t backfill_depth,
-    bool allow_historical,
-    const uint8_t *raw_block_ssz,
-    size_t raw_block_ssz_len)
+    bool allow_historical)
 {
     if (!client || !block)
     {
@@ -3446,7 +1976,7 @@ lantern_client_error lantern_client_record_block(
         source = "local";
     }
 
-    if (client->sync_in_progress)
+    if (client->sync_started_ms != 0u)
     {
         lantern_log_debug(
             "gossip",
@@ -3487,8 +2017,6 @@ lantern_client_error lantern_client_record_block(
         &meta,
         backfill_depth,
         allow_historical,
-        raw_block_ssz,
-        raw_block_ssz_len,
         true,
         NULL,
         &import_result);

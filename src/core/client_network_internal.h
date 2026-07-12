@@ -236,18 +236,14 @@ void lantern_client_status_request_failed(
  *
  * @param client   Client instance
  * @param entry    Peer status entry to update
- * @param peer_id  Peer ID for logging
  * @param delta    Change to apply (+1 for start, -1 for complete)
- * @param phase    Phase name for logging
  *
  * @note Thread safety: Caller must hold status_lock
  */
 void lantern_client_status_request_update_locked(
     struct lantern_client *client,
     struct lantern_peer_status_entry *entry,
-    const char *peer_id,
-    int delta,
-    const char *phase);
+    int delta);
 
 
 /* ============================================================================
