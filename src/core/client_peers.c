@@ -416,7 +416,7 @@ void lantern_client_note_status_request_start(
 
     if (entry)
     {
-        lantern_client_status_request_update_locked(client, entry, peer_id, 1, "dispatch");
+        lantern_client_status_request_update_locked(client, entry, 1);
     }
 
     pthread_mutex_unlock(&client->status_lock);
@@ -451,7 +451,7 @@ void lantern_client_status_request_failed(
     if (entry)
     {
         entry->status_request_inflight = false;
-        lantern_client_status_request_update_locked(client, entry, peer_id, -1, "failure");
+        lantern_client_status_request_update_locked(client, entry, -1);
     }
 
     pthread_mutex_unlock(&client->status_lock);
@@ -462,18 +462,14 @@ void lantern_client_status_request_failed(
  *
  * @param client   Client instance
  * @param entry    Peer status entry to update
- * @param peer_id  Peer ID for logging
  * @param delta    Change to apply (+1 for start, -1 for complete)
- * @param phase    Phase name for logging
  *
  * @note Thread safety: Caller must hold status_lock
  */
 void lantern_client_status_request_update_locked(
     struct lantern_client *client,
     struct lantern_peer_status_entry *entry,
-    const char *peer_id,
-    int delta,
-    const char *phase)
+    int delta)
 {
     if (!client || !entry || delta == 0)
     {
@@ -502,10 +498,6 @@ void lantern_client_status_request_update_locked(
             client->status_requests_inflight_total += increase_size;
         }
 
-        if (client->status_requests_inflight_total > client->status_requests_peak)
-        {
-            client->status_requests_peak = client->status_requests_inflight_total;
-        }
     }
     else
     {
@@ -529,18 +521,4 @@ void lantern_client_status_request_update_locked(
         }
     }
 
-    lantern_log_debug(
-        "reqresp",
-        &(const struct lantern_log_metadata){
-            .validator = client->node_id,
-            .peer = (peer_id && peer_id[0]) ? peer_id : NULL,
-        },
-        "status guard %s delta=%d peer_outstanding=%u total_outstanding=%zu "
-        "peak=%zu guard_disabled=%s",
-        phase ? phase : "update",
-        delta,
-        entry->outstanding_status_requests,
-        client->status_requests_inflight_total,
-        client->status_requests_peak,
-        client->status_guard_disabled ? "true" : "false");
 }

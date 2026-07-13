@@ -198,13 +198,13 @@ void lantern_libp2p_host_stop(struct lantern_libp2p_host *state) {
     if (!state || !state->host) {
         return;
     }
-    if (state->started) {
-        (void)libp2p_host_close(state->host, 0);
-    }
     __atomic_store_n(&state->stop_flag, 1, __ATOMIC_RELAXED);
     if (state->drive_thread_started) {
         (void)pthread_join(state->drive_thread, NULL);
         state->drive_thread_started = 0;
+    }
+    if (state->started) {
+        (void)libp2p_host_close(state->host, 0);
     }
     state->started = 0;
 }

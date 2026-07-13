@@ -356,7 +356,7 @@ static void analyze_payload(const char *path) {
     if (raw_len_rc != LANTERN_SNAPPY_OK) {
         LanternSignedBlock block;
         lantern_signed_block_init(&block);
-        int pipeline_rc = lantern_gossip_decode_signed_block_snappy(&block, compressed, compressed_len, NULL, NULL);
+        int pipeline_rc = lantern_gossip_decode_signed_block_snappy(&block, compressed, compressed_len, NULL);
         printf("  gossip_pipeline_rc=%d\n", pipeline_rc);
         lantern_signed_block_reset(&block);
         printf("\n");
@@ -434,7 +434,7 @@ static void analyze_payload(const char *path) {
     LanternSignedBlock pipeline_block;
     lantern_signed_block_init(&pipeline_block);
     int pipeline_rc = lantern_gossip_decode_signed_block_snappy(
-        &pipeline_block, compressed, compressed_len, NULL, NULL);
+        &pipeline_block, compressed, compressed_len, NULL);
     printf("  lantern_gossip_decode_signed_block_snappy_rc=%d\n", pipeline_rc);
 
     lantern_signed_block_reset(&pipeline_block);

@@ -50,8 +50,6 @@ extern "C" {
  * pending list in RAM.
  */
 #define LANTERN_MAX_BACKFILL_DEPTH 65535u
-/** Retry parent fetches if a scheduled request does not complete within this window. */
-#define LANTERN_PENDING_PARENT_REQUEST_STALE_MS 15000u
 /**
  * Timeout used by outbound blocks-by-root request tracking.
  *
@@ -190,57 +188,17 @@ void lantern_client_set_sync_state_logged(
     const char *reason);
 
 /**
- * Get a state snapshot for a specific block root without attempting replay.
+ * Get the post-state owned by fork choice for a specific block root.
  *
- * This probes only exact local sources:
- * - the current state
- * - fork-choice cached states
- * - exact persisted state snapshots / finalized replay base snapshots
- *
- * It does not reconstruct missing states from a chain of blocks.
- *
- * @note Thread safety: Caller must hold state_lock
- */
-const LanternState *lantern_client_state_for_root_local_locked(
-    struct lantern_client *client,
-    const LanternRoot *root,
-    LanternState *scratch,
-    bool *out_is_scratch);
-
-/**
- * Get a state snapshot for a specific block root.
- *
- * Returns a pointer to either the client's current state (if it matches the root)
- * or a scratch state populated from storage/replay. When a scratch state is used,
- * the caller must reset it with lantern_state_reset().
- *
- * @param client          Client instance
- * @param root            Block root to resolve
- * @param scratch         Scratch state storage (must be initialized)
- * @param out_is_scratch  Output true if scratch is used
- * @return Pointer to state to use, or NULL if unavailable
+ * Every block admitted by the live client carries its post-state, matching the
+ * leanSpec Store blocks/states invariant. Missing state therefore means the
+ * block is not locally usable and must be fetched/imported again.
  *
  * @note Thread safety: Caller must hold state_lock
  */
 const LanternState *lantern_client_state_for_root_locked(
     struct lantern_client *client,
-    const LanternRoot *root,
-    LanternState *scratch,
-    bool *out_is_scratch);
-
-/**
- * Find the first missing block/root on the replay path back toward the finalized anchor.
- *
- * Returns true and populates `out_missing_root` when the ancestry required to
- * reconstruct `root` is not locally connected. Returns false when the ancestry
- * looks locally complete or the root cannot be analyzed.
- *
- * @note Thread safety: Caller must hold state_lock
- */
-bool lantern_client_find_missing_state_root_locked(
-    struct lantern_client *client,
-    const LanternRoot *root,
-    LanternRoot *out_missing_root);
+    const LanternRoot *root);
 
 /**
  * Cache block-body aggregated proofs as known attestation material.
@@ -468,8 +426,6 @@ void lantern_client_update_sync_progress(
  * @param meta        Logging metadata
  * @param backfill_depth Backfill depth of the block
  * @param allow_historical True to allow importing blocks older than local slot
- * @param raw_block_ssz Optional raw SSZ bytes for the block
- * @param raw_block_ssz_len Length of `raw_block_ssz`
  * @return true if block was imported successfully
  *
  * @note Thread safety: Acquires state_lock and pending_lock
@@ -480,9 +436,7 @@ bool lantern_client_import_block(
     const LanternRoot *block_root,
     const struct lantern_log_metadata *meta,
     uint32_t backfill_depth,
-    bool allow_historical,
-    const uint8_t *raw_block_ssz,
-    size_t raw_block_ssz_len);
+    bool allow_historical);
 
 /**
  * Import a block without recursively draining its pending descendants.
@@ -501,8 +455,6 @@ bool lantern_client_import_block_without_pending_children(
     const struct lantern_log_metadata *meta,
     uint32_t backfill_depth,
     bool allow_historical,
-    const uint8_t *raw_block_ssz,
-    size_t raw_block_ssz_len,
     bool *out_children_ready);
 
 /**
@@ -515,20 +467,7 @@ int lantern_client_commit_and_publish_local_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,
     const LanternRoot *block_root,
-    LanternState *post_state,
-    LanternStore *post_store);
-
-/**
- * Commit and publish a locally built block only if its parent is still the
- * current fork choice head; returns LANTERN_CLIENT_ERR_IGNORED otherwise.
- * Publishing a stale-parent block guarantees a fork, so proposals skip.
- */
-int lantern_client_commit_and_publish_current_head_block(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *block_root,
-    LanternState *post_state,
-    LanternStore *post_store);
+    LanternState *post_state);
 
 /**
  * Record a received block and attempt import.
@@ -542,8 +481,6 @@ int lantern_client_commit_and_publish_current_head_block(
  * @param context   Description of source for logging
  * @param backfill_depth Backfill depth of the block
  * @param allow_historical True to allow importing blocks older than local slot
- * @param raw_block_ssz Optional raw SSZ bytes for the block
- * @param raw_block_ssz_len Length of `raw_block_ssz`
  * @return LANTERN_CLIENT_OK if the block was validated/imported
  * @return LANTERN_CLIENT_ERR_IGNORED if it was duplicate, stale, or deferred
  * @return another LANTERN_CLIENT_ERR_* when validation/import failed
@@ -557,9 +494,7 @@ lantern_client_error lantern_client_record_block(
     const char *peer_text,
     const char *context,
     uint32_t backfill_depth,
-    bool allow_historical,
-    const uint8_t *raw_block_ssz,
-    size_t raw_block_ssz_len);
+    bool allow_historical);
 
 
 /**
@@ -594,7 +529,6 @@ void lantern_client_replay_pending_gossip_votes(struct lantern_client *client);
  *
  * @param block    Received block
  * @param from     Peer ID of sender
- * @param raw_block_ssz Raw SSZ bytes for the received block (may be NULL)
  * @param raw_block_ssz_len Length of `raw_block_ssz`
  * @param context  Client instance
  * @return 0 on success
@@ -602,7 +536,6 @@ void lantern_client_replay_pending_gossip_votes(struct lantern_client *client);
 int gossip_block_handler(
     const LanternSignedBlock *block,
     const struct lantern_peer_id *from,
-    const uint8_t *raw_block_ssz,
     size_t raw_block_ssz_len,
     void *context);
 
@@ -620,7 +553,6 @@ int gossip_block_handler(
 int gossip_vote_handler(
     const LanternSignedVote *vote,
     const struct lantern_peer_id *from,
-    const uint8_t *raw_vote_payload,
     size_t raw_vote_payload_len,
     void *context);
 
@@ -637,7 +569,6 @@ int gossip_vote_handler(
 int gossip_aggregated_attestation_handler(
     const LanternSignedAggregatedAttestation *attestation,
     const struct lantern_peer_id *from,
-    const uint8_t *raw_attestation_payload,
     size_t raw_attestation_payload_len,
     void *context);
 

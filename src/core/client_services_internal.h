@@ -124,22 +124,6 @@ int validator_sign_vote(
 
 
 /**
- * Store a vote in the client state.
- *
- * @spec subspecs/attestation/attestation.py - vote storage
- *
- * @param client  Client instance
- * @param vote    Vote to store
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL input or overflow
- * @return LANTERN_CLIENT_ERR_RUNTIME if state is unavailable or lock fails
- *
- * @note Thread safety: This function acquires state_lock
- */
-int validator_store_vote(struct lantern_client *client, const LanternSignedVote *vote);
-
-
-/**
  * Publish a vote to the network.
  *
  * @spec subspecs/networking/gossip.py - vote gossip
@@ -513,8 +497,6 @@ int reqresp_current_slot(void *context, uint64_t *out_slot);
 int reqresp_handle_block_response(
     void *context,
     const LanternSignedBlock *block,
-    const uint8_t *raw_block_ssz,
-    size_t raw_block_ssz_len,
     const char *peer_id);
 
 void reqresp_blocks_request_complete(
@@ -540,7 +522,8 @@ void lantern_client_block_importer_stop(struct lantern_client *client);
  * @param root_count    Number of requested roots
  * @param outcome       Request outcome
  *
- * @note Thread safety: This function acquires status_lock and pending_lock
+ * @note Thread safety: Acquires status_lock and, after releasing it, may
+ * acquire pending_lock when a successful response schedules more backfill.
  */
 void lantern_client_on_blocks_request_complete_batch(
     struct lantern_client *client,
@@ -573,7 +556,8 @@ void lantern_client_on_blocks_request_complete_batch_with_id(
  * @param request_root  Root that was requested
  * @param outcome       Request outcome
  *
- * @note Thread safety: This function acquires status_lock and pending_lock
+ * @note Thread safety: Acquires status_lock and, after releasing it, may
+ * acquire pending_lock when a successful response schedules more backfill.
  */
 void lantern_client_on_blocks_request_complete(
     struct lantern_client *client,
@@ -587,9 +571,7 @@ bool lantern_client_import_block(
     const LanternRoot *block_root,
     const struct lantern_log_metadata *meta,
     uint32_t backfill_depth,
-    bool allow_historical,
-    const uint8_t *raw_block_ssz,
-    size_t raw_block_ssz_len);
+    bool allow_historical);
 
 
 /**

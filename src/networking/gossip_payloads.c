@@ -188,17 +188,9 @@ int lantern_gossip_decode_signed_block_snappy(
     LanternSignedBlock *block,
     const uint8_t *data,
     size_t data_len,
-    uint8_t **out_raw_block_ssz,
     size_t *out_raw_block_ssz_len) {
     if (!block || !data) {
         return -1;
-    }
-    if ((out_raw_block_ssz && !out_raw_block_ssz_len)
-        || (!out_raw_block_ssz && out_raw_block_ssz_len)) {
-        return -1;
-    }
-    if (out_raw_block_ssz) {
-        *out_raw_block_ssz = NULL;
     }
     if (out_raw_block_ssz_len) {
         *out_raw_block_ssz_len = 0;
@@ -212,12 +204,10 @@ int lantern_gossip_decode_signed_block_snappy(
         free(raw);
         return -1;
     }
-    if (out_raw_block_ssz) {
-        *out_raw_block_ssz = raw;
+    if (out_raw_block_ssz_len) {
         *out_raw_block_ssz_len = raw_len;
-    } else {
-        free(raw);
     }
+    free(raw);
     return 0;
 }
 

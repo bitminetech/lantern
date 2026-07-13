@@ -60,17 +60,14 @@ int lantern_state_process_slots(LanternState *state, uint64_t target_slot);
 int lantern_state_process_block_header(LanternState *state, const LanternBlock *block);
 int lantern_state_process_attestations(
     LanternState *state,
-    LanternStore *store,
-    const LanternAttestations *attestations,
-    const LanternSignatureList *signatures);
+    const LanternAttestations *attestations);
 int lantern_state_process_block(
     LanternState *state,
-    LanternStore *store,
     const LanternBlock *block);
 bool lantern_state_slot_in_justified_window(const LanternState *state, uint64_t slot);
 int lantern_state_get_justified_slot_bit(const LanternState *state, uint64_t slot, bool *out_value);
 int lantern_state_mark_justified_slot(LanternState *state, uint64_t slot);
-int lantern_state_transition(LanternState *state, LanternStore *store, const LanternSignedBlock *signed_block);
+int lantern_state_transition(LanternState *state, const LanternSignedBlock *signed_block);
 int lantern_state_set_validator_pubkeys(LanternState *state, const uint8_t *pubkeys, size_t count);
 int lantern_state_set_validator_pubkeys_dual(
     LanternState *state,
@@ -103,7 +100,6 @@ int lantern_state_compute_post_state(
     const LanternStore *store,
     const LanternSignedBlock *block,
     LanternState *out_post_state,
-    LanternStore *out_post_store,
     LanternRoot *out_state_root);
 int lantern_state_preview_post_state_root(
     const LanternState *state,

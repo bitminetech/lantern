@@ -169,6 +169,44 @@ static int connection_tie_break_is_symmetric(void) {
     return failed;
 }
 
+static int peer_maintenance_uses_drive_schedule(void) {
+    struct lantern_client client;
+    memset(&client, 0, sizeof(client));
+    client.dialer_stop_flag = 1;
+
+    peer_maintenance_drive(NULL, 100u, &client);
+    if (client.peer_maintenance_next_us != 0u) {
+        return 1;
+    }
+
+    if (start_peer_dialer(&client) != 0) {
+        return 1;
+    }
+    peer_maintenance_drive(NULL, 100u, &client);
+    const uint64_t interval_us = (uint64_t)LANTERN_PEER_DIAL_INTERVAL_SECONDS * 1000000u;
+    if (client.peer_maintenance_next_us != 100u + interval_us) {
+        return 1;
+    }
+    if (start_peer_dialer(&client) != 0
+        || client.peer_maintenance_next_us != 100u + interval_us) {
+        return 1;
+    }
+
+    peer_maintenance_drive(NULL, client.peer_maintenance_next_us - 1u, &client);
+    if (client.peer_maintenance_next_us != 100u + interval_us) {
+        return 1;
+    }
+
+    peer_maintenance_drive(NULL, client.peer_maintenance_next_us, &client);
+    if (client.peer_maintenance_next_us != 100u + (2u * interval_us)) {
+        return 1;
+    }
+
+    stop_peer_dialer(&client);
+    peer_maintenance_drive(NULL, client.peer_maintenance_next_us, &client);
+    return client.peer_maintenance_next_us != 100u + (2u * interval_us);
+}
+
 int main(void) {
     for (size_t i = 0; i < sizeof(kQuickstartGenesisEnrs) / sizeof(kQuickstartGenesisEnrs[0]); ++i) {
         if (validation_accepts_quickstart_enr(kQuickstartGenesisEnrs[i]) != 0) {
@@ -181,6 +219,10 @@ int main(void) {
     }
 
     if (connection_tie_break_is_symmetric() != 0) {
+        return 1;
+    }
+
+    if (peer_maintenance_uses_drive_schedule() != 0) {
         return 1;
     }
 

@@ -76,39 +76,8 @@ static void build_root_file_path(
     assert(written > 0 && (size_t)written < path_len);
 }
 
-static void build_slot_index_path(
-    char *path,
-    size_t path_len,
-    const char *base_dir,
-    uint64_t slot) {
-    int written = snprintf(path, path_len, "%s/indices/slots/%" PRIu64 ".root", base_dir, slot);
-    assert(written > 0 && (size_t)written < path_len);
-}
-
 static bool path_exists(const char *path) {
     return access(path, F_OK) == 0;
-}
-
-static void build_vote(
-    LanternVote *vote,
-    uint64_t slot,
-    uint64_t source_slot,
-    uint64_t target_slot) {
-    memset(vote, 0, sizeof(*vote));
-    vote->slot = slot;
-    vote->source.slot = source_slot;
-    vote->target.slot = target_slot;
-    vote->head.slot = target_slot;
-    memset(vote->source.root.bytes, 0x11, LANTERN_ROOT_SIZE);
-    memset(vote->target.root.bytes, 0x22, LANTERN_ROOT_SIZE);
-    memset(vote->head.root.bytes, 0x33, LANTERN_ROOT_SIZE);
-}
-
-static void fill_signature(LanternSignature *signature, uint8_t marker) {
-    if (!signature) {
-        return;
-    }
-    memset(signature->bytes, marker, LANTERN_SIGNATURE_SIZE);
 }
 
 static void build_signed_block(
@@ -269,12 +238,11 @@ static int test_storage_prunes_before_slot(void) {
         snapshots[i].latest_block_header.parent_root = blocks[i].block.parent_root;
         snapshots[i].latest_block_header.state_root = blocks[i].block.state_root;
         expect_zero(lantern_storage_store_state_for_root(base_dir, &roots[i], &snapshots[i]), "store prune state");
-        expect_zero(lantern_storage_store_slot_root(base_dir, slot, &roots[i]), "store prune slot root");
     }
 
     int pruned = lantern_storage_prune_before_slot(base_dir, 3u, &roots[1], 1u);
-    if (pruned != 3) {
-        fprintf(stderr, "expected prune count 3 got %d\n", pruned);
+    if (pruned != 2) {
+        fprintf(stderr, "expected prune count 2 got %d\n", pruned);
         goto cleanup;
     }
 
@@ -299,13 +267,6 @@ static int test_storage_prunes_before_slot(void) {
     build_root_file_path(path, sizeof(path), base_dir, "states", &roots[2], "ssz");
     expect_true(path_exists(path), "new state preserved");
 
-    build_slot_index_path(path, sizeof(path), base_dir, 1u);
-    expect_true(!path_exists(path), "old slot index pruned");
-    build_slot_index_path(path, sizeof(path), base_dir, 2u);
-    expect_true(path_exists(path), "kept root slot index preserved");
-    build_slot_index_path(path, sizeof(path), base_dir, 3u);
-    expect_true(path_exists(path), "new slot index preserved");
-
     rc = 0;
 
 cleanup:
@@ -326,30 +287,16 @@ cleanup:
         cleanup_path(cleanup_file);
         build_root_file_path(cleanup_file, sizeof(cleanup_file), base_dir, "states", &roots[i], "ssz");
         cleanup_path(cleanup_file);
-        build_slot_index_path(cleanup_file, sizeof(cleanup_file), base_dir, (uint64_t)i + 1u);
-        cleanup_path(cleanup_file);
     }
 
     char blocks_dir[PATH_MAX];
-    char invalid_blocks_dir[PATH_MAX];
     char states_dir[PATH_MAX];
-    char indices_dir[PATH_MAX];
-    char slot_index_dir[PATH_MAX];
     int written = snprintf(blocks_dir, sizeof(blocks_dir), "%s/blocks", base_dir);
     assert(written > 0 && (size_t)written < sizeof(blocks_dir));
-    written = snprintf(invalid_blocks_dir, sizeof(invalid_blocks_dir), "%s/invalid_blocks", base_dir);
-    assert(written > 0 && (size_t)written < sizeof(invalid_blocks_dir));
     written = snprintf(states_dir, sizeof(states_dir), "%s/states", base_dir);
     assert(written > 0 && (size_t)written < sizeof(states_dir));
-    written = snprintf(indices_dir, sizeof(indices_dir), "%s/indices", base_dir);
-    assert(written > 0 && (size_t)written < sizeof(indices_dir));
-    written = snprintf(slot_index_dir, sizeof(slot_index_dir), "%s/slots", indices_dir);
-    assert(written > 0 && (size_t)written < sizeof(slot_index_dir));
     cleanup_dir(blocks_dir);
-    cleanup_dir(invalid_blocks_dir);
     cleanup_dir(states_dir);
-    cleanup_dir(slot_index_dir);
-    cleanup_dir(indices_dir);
     cleanup_dir(base_dir);
     return rc;
 }
@@ -393,55 +340,12 @@ int main(void) {
     assert(loaded_state.config.num_validators == state.config.num_validators);
     lantern_state_reset(&loaded_state);
 
-    LanternVote vote;
-    build_vote(&vote, 5u, 2u, 4u);
-    LanternSignedVote signed_vote;
-    memset(&signed_vote, 0, sizeof(signed_vote));
-    signed_vote.data = vote;
-    fill_signature(&signed_vote.signature, 0xAB);
-    expect_zero(lantern_state_set_signed_validator_vote(&state, 1u, &signed_vote), "set validator vote");
-    expect_zero(
-        lantern_storage_save_votes(base_dir, &state, lantern_test_state_store_ensure(&state)),
-        "save votes");
-    lantern_state_clear_validator_vote(&state, 1u);
-    expect_true(!lantern_state_validator_has_vote(&state, 1u), "vote cleared");
-
-    int load_votes_rc = lantern_storage_load_votes(base_dir, &state, lantern_test_state_store_ensure(&state));
-    if (load_votes_rc != 0) {
-        fprintf(stderr, "expected persisted votes rc=0 got %d\n", load_votes_rc);
-        return EXIT_FAILURE;
-    }
-    expect_true(lantern_state_validator_has_vote(&state, 1u), "vote restored");
-    LanternVote restored_vote;
-    expect_zero(lantern_state_get_validator_vote(&state, 1u, &restored_vote), "get restored vote");
-    assert(restored_vote.slot == vote.slot);
-    assert(restored_vote.source.slot == vote.source.slot);
-    assert(restored_vote.target.slot == vote.target.slot);
-    LanternSignedVote restored_signed_vote;
-    expect_zero(
-        lantern_state_get_signed_validator_vote(&state, 1u, &restored_signed_vote),
-        "get restored signed vote");
-    assert(
-        memcmp(
-            restored_signed_vote.signature.bytes,
-            signed_vote.signature.bytes,
-            LANTERN_SIGNATURE_SIZE)
-        == 0);
-
     LanternSignedBlock block;
     LanternRoot block_root;
     build_signed_block(&state, 1u, &block, &block_root);
     expect_zero(lantern_storage_store_block(base_dir, &block), "store block");
     /* store again to ensure idempotent */
     expect_zero(lantern_storage_store_block(base_dir, &block), "store block duplicate");
-    const uint8_t invalid_payload[] = {0xDE, 0xAD, 0xBE, 0xEF};
-    expect_zero(
-        lantern_storage_store_invalid_block_bytes_for_root(
-            base_dir,
-            &block_root,
-            invalid_payload,
-            sizeof(invalid_payload)),
-        "store invalid block bytes");
     LanternSignedBlockList response;
     lantern_signed_block_list_init(&response);
     expect_zero(
@@ -461,56 +365,27 @@ int main(void) {
     lantern_state_reset(&state);
 
     char state_path[PATH_MAX];
-    char votes_path[PATH_MAX];
     char meta_path[PATH_MAX];
     char blocks_dir[PATH_MAX];
-    char invalid_blocks_dir[PATH_MAX];
     char states_dir[PATH_MAX];
-    char indices_dir[PATH_MAX];
-    char slot_index_dir[PATH_MAX];
     int written = snprintf(state_path, sizeof(state_path), "%s/%s", base_dir, "state.ssz");
     assert(written > 0 && (size_t)written < sizeof(state_path));
-    written = snprintf(votes_path, sizeof(votes_path), "%s/%s", base_dir, "votes.bin");
-    assert(written > 0 && (size_t)written < sizeof(votes_path));
     written = snprintf(meta_path, sizeof(meta_path), "%s/%s", base_dir, "state.meta");
     assert(written > 0 && (size_t)written < sizeof(meta_path));
     written = snprintf(blocks_dir, sizeof(blocks_dir), "%s/%s", base_dir, "blocks");
     assert(written > 0 && (size_t)written < sizeof(blocks_dir));
-    written = snprintf(invalid_blocks_dir, sizeof(invalid_blocks_dir), "%s/%s", base_dir, "invalid_blocks");
-    assert(written > 0 && (size_t)written < sizeof(invalid_blocks_dir));
     written = snprintf(states_dir, sizeof(states_dir), "%s/%s", base_dir, "states");
     assert(written > 0 && (size_t)written < sizeof(states_dir));
-    written = snprintf(indices_dir, sizeof(indices_dir), "%s/%s", base_dir, "indices");
-    assert(written > 0 && (size_t)written < sizeof(indices_dir));
-    written = snprintf(slot_index_dir, sizeof(slot_index_dir), "%s/%s", indices_dir, "slots");
-    assert(written > 0 && (size_t)written < sizeof(slot_index_dir));
 
     char block_path[PATH_MAX];
-    char invalid_block_path[PATH_MAX];
     char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
     expect_zero(lantern_bytes_to_hex(block_root.bytes, LANTERN_ROOT_SIZE, root_hex, sizeof(root_hex), 0), "hex root");
     written = snprintf(block_path, sizeof(block_path), "%s/%s.ssz", blocks_dir, root_hex);
     assert(written > 0 && (size_t)written < sizeof(block_path));
-    written = snprintf(invalid_block_path, sizeof(invalid_block_path), "%s/%s.ssz", invalid_blocks_dir, root_hex);
-    assert(written > 0 && (size_t)written < sizeof(invalid_block_path));
-
-    FILE *invalid_fp = fopen(invalid_block_path, "rb");
-    assert(invalid_fp != NULL);
-    uint8_t invalid_readback[sizeof(invalid_payload)];
-    size_t invalid_read = fread(invalid_readback, 1u, sizeof(invalid_readback), invalid_fp);
-    assert(invalid_read == sizeof(invalid_readback));
-    assert(memcmp(invalid_readback, invalid_payload, sizeof(invalid_readback)) == 0);
-    assert(fgetc(invalid_fp) == EOF);
-    fclose(invalid_fp);
 
     cleanup_path(block_path);
-    cleanup_path(invalid_block_path);
     cleanup_dir(blocks_dir);
-    cleanup_dir(invalid_blocks_dir);
-    cleanup_dir(slot_index_dir);
-    cleanup_dir(indices_dir);
     cleanup_dir(states_dir);
-    cleanup_path(votes_path);
     cleanup_path(meta_path);
     cleanup_path(state_path);
     cleanup_dir(base_dir);
