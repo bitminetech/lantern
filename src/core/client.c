@@ -2333,12 +2333,13 @@ static lantern_client_error client_start_protocols(
      * This handler may immediately send Status on CONN_ESTABLISHED. Register
      * it after reqresp so the req/resp protocols and event handler are ready.
      */
-    if (lantern_libp2p_host_register_event_handler(&client->network, connection_events_cb, client) != 0)
+    if (lantern_libp2p_host_register_event_handler(&client->network, connection_events_cb, client) != 0
+        || lantern_libp2p_host_register_drive_handler(&client->network, peer_maintenance_drive, client) != 0)
     {
         lantern_log_error(
             "network",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to subscribe to libp2p connection events");
+            "failed to register libp2p client handlers");
         return LANTERN_CLIENT_ERR_NETWORK;
     }
 
@@ -2388,7 +2389,7 @@ static lantern_client_error client_start_protocols(
 
 
 /**
- * @brief Launch background services for peer dialing, ping, and validator duties.
+ * @brief Launch background services for peer maintenance and validator duties.
  *
  * Starts auxiliary threads; failures are logged as warnings but do not abort
  * client startup.
@@ -2404,7 +2405,7 @@ static void client_start_background_services(struct lantern_client *client)
         lantern_log_warn(
             "network",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to start peer dialer thread");
+            "failed to enable peer maintenance");
     }
 
     if (start_timing_service(client) != 0)
@@ -2436,7 +2437,7 @@ static void client_start_background_services(struct lantern_client *client)
 /**
  * @brief Stop validator-related services and free xmss key resources.
  *
- * Shuts down validator, ping, and peer dialer threads and frees hash signature
+ * Stops validator workers and network callbacks before freeing hash signature
  * key material paths and buffers.
  *
  * @param client  Client to clean up
@@ -2449,6 +2450,7 @@ static void shutdown_validator_and_keys(struct lantern_client *client)
     stop_validator_service(client);
     stop_block_proposal_worker(client);
     stop_peer_dialer(client);
+    lantern_libp2p_host_stop(&client->network);
     free(client->xmss_key_dir);
     client->xmss_key_dir = NULL;
     free(client->xmss_public_template);

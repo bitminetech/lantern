@@ -20,7 +20,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <inttypes.h>
 
 #include "lantern/networking/libp2p.h"
@@ -690,7 +689,15 @@ void request_status_now(struct lantern_client *client, const struct lantern_peer
             "status guard disabled; allowing concurrent request");
     }
 
-    int status_rc = lantern_reqresp_service_request_status(&client->reqresp, peer, status_peer);
+    struct lantern_peer_id resolved_peer;
+    const struct lantern_peer_id *peer_arg = peer;
+    if (!peer_arg && status_peer
+        && lantern_peer_id_from_text(status_peer, &resolved_peer) == 0)
+    {
+        peer_arg = &resolved_peer;
+    }
+
+    int status_rc = lantern_reqresp_service_request_status(&client->reqresp, peer_arg, status_peer);
     if (status_peer)
     {
         const char *msg = (status_rc == 0)
@@ -842,36 +849,6 @@ void identify_dial_multiaddr(
         },
         "identify query will run after connection opens addr=%s",
         multiaddr);
-}
-
-
-/* ============================================================================
- * Peer Dialer Sleep
- * ============================================================================ */
-
-/**
- * Sleep for a number of seconds, checking stop flag periodically.
- *
- * @param client   Client instance
- * @param seconds  Number of seconds to sleep
- *
- * @note Thread safety: This function is thread-safe
- */
-void peer_dialer_sleep(struct lantern_client *client, unsigned seconds)
-{
-    if (!client || seconds == 0u)
-    {
-        return;
-    }
-    struct timespec req = {.tv_sec = 1, .tv_nsec = 0};
-    for (unsigned i = 0; i < seconds; ++i)
-    {
-        if (__atomic_load_n(&client->dialer_stop_flag, __ATOMIC_RELAXED) != 0)
-        {
-            break;
-        }
-        (void)nanosleep(&req, NULL);
-    }
 }
 
 
@@ -1200,34 +1177,37 @@ void peer_status_refresh(struct lantern_client *client)
 }
 
 
-/**
- * Peer dialer thread function.
- *
- * @param arg  Client instance as void pointer
- * @return NULL
- *
- * @note Thread safety: This function runs in its own thread
- */
-static void *peer_dialer_thread(void *arg)
+void peer_maintenance_drive(
+    struct lantern_libp2p_host *network,
+    libp2p_host_time_us_t now_us,
+    void *user_data)
 {
-    struct lantern_client *client = (struct lantern_client *)arg;
-    if (!client)
+    (void)network;
+    struct lantern_client *client = (struct lantern_client *)user_data;
+    if (!client || __atomic_load_n(&client->dialer_stop_flag, __ATOMIC_ACQUIRE) != 0)
     {
-        return NULL;
+        return;
     }
 
-    while (__atomic_load_n(&client->dialer_stop_flag, __ATOMIC_RELAXED) == 0)
+    libp2p_host_time_us_t next_us =
+        __atomic_load_n(&client->peer_maintenance_next_us, __ATOMIC_RELAXED);
+    if (next_us != 0 && now_us < next_us)
     {
-        peer_dialer_attempt(client);
-        peer_status_refresh(client);
-        peer_dialer_sleep(client, LANTERN_PEER_DIAL_INTERVAL_SECONDS);
+        return;
     }
-    return NULL;
+
+    const libp2p_host_time_us_t interval_us =
+        (libp2p_host_time_us_t)LANTERN_PEER_DIAL_INTERVAL_SECONDS * 1000000u;
+    next_us = now_us > UINT64_MAX - interval_us ? UINT64_MAX : now_us + interval_us;
+    __atomic_store_n(&client->peer_maintenance_next_us, next_us, __ATOMIC_RELAXED);
+
+    peer_dialer_attempt(client);
+    peer_status_refresh(client);
 }
 
 
 /**
- * Start the peer dialer service.
+ * Enable periodic peer maintenance on the libp2p drive thread.
  *
  * @param client  Client instance
  * @return 0 on success, -1 on failure
@@ -1240,24 +1220,18 @@ int start_peer_dialer(struct lantern_client *client)
     {
         return -1;
     }
-    if (client->dialer_thread_started)
+    if (__atomic_load_n(&client->dialer_stop_flag, __ATOMIC_ACQUIRE) == 0)
     {
         return 0;
     }
-    __atomic_store_n(&client->dialer_stop_flag, 0, __ATOMIC_RELAXED);
-    int rc = pthread_create(&client->dialer_thread, NULL, peer_dialer_thread, client);
-    if (rc != 0)
-    {
-        __atomic_store_n(&client->dialer_stop_flag, 1, __ATOMIC_RELAXED);
-        return -1;
-    }
-    client->dialer_thread_started = true;
+    __atomic_store_n(&client->peer_maintenance_next_us, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&client->dialer_stop_flag, 0, __ATOMIC_RELEASE);
     return 0;
 }
 
 
 /**
- * Stop the peer dialer service.
+ * Disable periodic peer maintenance.
  *
  * @param client  Client instance
  *
@@ -1269,14 +1243,7 @@ void stop_peer_dialer(struct lantern_client *client)
     {
         return;
     }
-    if (!client->dialer_thread_started)
-    {
-        __atomic_store_n(&client->dialer_stop_flag, 1, __ATOMIC_RELAXED);
-        return;
-    }
-    __atomic_store_n(&client->dialer_stop_flag, 1, __ATOMIC_RELAXED);
-    (void)pthread_join(client->dialer_thread, NULL);
-    client->dialer_thread_started = false;
+    __atomic_store_n(&client->dialer_stop_flag, 1, __ATOMIC_RELEASE);
 }
 
 
