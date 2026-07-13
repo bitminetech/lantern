@@ -296,9 +296,8 @@ struct lantern_client {
     const char *last_duty_skip_reason;
     size_t status_requests_inflight_total;
     bool status_guard_disabled;
-    pthread_t dialer_thread;
-    bool dialer_thread_started;
     int dialer_stop_flag;
+    uint64_t peer_maintenance_next_us;
     struct lantern_peer_status_entry *peer_status_entries;
     size_t peer_status_count;
     size_t peer_status_capacity;

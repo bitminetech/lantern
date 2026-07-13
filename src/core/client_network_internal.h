@@ -350,17 +350,6 @@ void identify_dial_multiaddr(struct lantern_client *client, const char *multiadd
 
 
 /**
- * Sleep for a number of seconds, checking stop flag periodically.
- *
- * @param client   Client instance
- * @param seconds  Number of seconds to sleep
- *
- * @note Thread safety: This function is thread-safe
- */
-void peer_dialer_sleep(struct lantern_client *client, unsigned seconds);
-
-
-/**
  * Attempt to redial a disconnected genesis peer.
  *
  * @param client  Client instance
@@ -383,9 +372,15 @@ void peer_dialer_attempt(struct lantern_client *client);
 
 void peer_status_refresh(struct lantern_client *client);
 
+/** Run periodic dialing and status refresh work from the libp2p drive thread. */
+void peer_maintenance_drive(
+    struct lantern_libp2p_host *network,
+    libp2p_host_time_us_t now_us,
+    void *user_data);
+
 
 /**
- * Start the peer dialer service.
+ * Enable periodic peer maintenance on the libp2p drive thread.
  *
  * @param client  Client instance
  * @return 0 on success, -1 on failure
@@ -396,7 +391,7 @@ int start_peer_dialer(struct lantern_client *client);
 
 
 /**
- * Stop the peer dialer service.
+ * Disable periodic peer maintenance.
  *
  * @param client  Client instance
  *
