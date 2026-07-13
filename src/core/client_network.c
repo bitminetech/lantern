@@ -690,7 +690,15 @@ void request_status_now(struct lantern_client *client, const struct lantern_peer
             "status guard disabled; allowing concurrent request");
     }
 
-    int status_rc = lantern_reqresp_service_request_status(&client->reqresp, peer, status_peer);
+    struct lantern_peer_id resolved_peer;
+    const struct lantern_peer_id *peer_arg = peer;
+    if (!peer_arg && status_peer
+        && lantern_peer_id_from_text(status_peer, &resolved_peer) == 0)
+    {
+        peer_arg = &resolved_peer;
+    }
+
+    int status_rc = lantern_reqresp_service_request_status(&client->reqresp, peer_arg, status_peer);
     if (status_peer)
     {
         const char *msg = (status_rc == 0)
