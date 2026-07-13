@@ -191,12 +191,11 @@ const char *connection_reason_text(int reason);
  * Decide whether a persisted state is too stale to trust when checkpoint sync
  * is available.
  *
- * Computes the expected wall-clock slot from genesis time and slot duration,
- * then compares it against the persisted state's slot.
+ * Computes the expected wall-clock slot from genesis time, then compares it
+ * against the persisted state's slot.
  *
  * @param persisted_state             Persisted state loaded from storage
  * @param genesis_time                Chain genesis Unix time in seconds
- * @param slot_duration_seconds       Slot duration in seconds
  * @param now_seconds                 Current Unix time in seconds
  * @param out_expected_current_slot   Optional output for expected slot
  * @param out_gap                     Optional output for slot gap
@@ -207,7 +206,6 @@ const char *connection_reason_text(int reason);
 bool lantern_client_persisted_state_is_stale_for_checkpoint_sync(
     const LanternState *persisted_state,
     uint64_t genesis_time,
-    uint32_t slot_duration_seconds,
     uint64_t now_seconds,
     uint64_t *out_expected_current_slot,
     uint64_t *out_gap);

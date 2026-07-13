@@ -536,20 +536,15 @@ void lantern_vote_rejection_set(struct lantern_vote_rejection_info *info, const 
  */
 bool lantern_client_current_slot(const struct lantern_client *client, uint64_t *out_slot)
 {
-    if (!client || !out_slot || !client->has_fork_choice)
+    if (!client || !out_slot || !client->has_state || !client->has_fork_choice)
     {
         return false;
     }
     const LanternForkChoice *store = &client->fork_choice;
-    if (store->seconds_per_slot == 0)
-    {
-        return false;
-    }
     if (!client->debug_disable_fork_choice_time
-        && store->has_anchor
-        && store->intervals_per_slot > 0)
+        && store->has_anchor)
     {
-        *out_slot = store->time_intervals / store->intervals_per_slot;
+        *out_slot = store->time_intervals / LANTERN_INTERVALS_PER_SLOT;
         return true;
     }
     uint64_t now = validator_wall_time_now_seconds();
@@ -557,13 +552,13 @@ bool lantern_client_current_slot(const struct lantern_client *client, uint64_t *
     {
         return false;
     }
-    if (now < store->config.genesis_time)
+    if (now < client->state.config.genesis_time)
     {
         *out_slot = 0;
         return true;
     }
-    uint64_t elapsed = now - store->config.genesis_time;
-    *out_slot = elapsed / store->seconds_per_slot;
+    uint64_t elapsed = now - client->state.config.genesis_time;
+    *out_slot = elapsed / LANTERN_SECONDS_PER_SLOT;
     return true;
 }
 

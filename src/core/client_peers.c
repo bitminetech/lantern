@@ -135,7 +135,12 @@ struct lantern_peer_status_entry *lantern_client_ensure_status_entry_locked(
     const size_t peer_cap = lantern_peer_id_capacity();
     (void)lantern_string_copy(entry->peer_id, peer_cap, peer_id);
 
-    lantern_client_register_vote_peer(client, peer_id);
+    if (client->peer_vote_lock_initialized
+        && pthread_mutex_lock(&client->peer_vote_lock) == 0)
+    {
+        (void)lantern_client_ensure_vote_metric_locked(client, peer_id);
+        pthread_mutex_unlock(&client->peer_vote_lock);
+    }
 
     return entry;
 }
@@ -209,34 +214,6 @@ struct lantern_peer_vote_metric *lantern_client_ensure_vote_metric_locked(
     (void)lantern_string_copy(entry->peer_id, peer_cap, peer_id);
 
     return entry;
-}
-
-
-/**
- * Register a peer for vote tracking.
- *
- * @param client   Client instance
- * @param peer_id  Peer ID to register
- *
- * @note Thread safety: This function acquires peer_vote_lock
- */
-void lantern_client_register_vote_peer(
-    struct lantern_client *client,
-    const char *peer_id)
-{
-    if (!client || !peer_id || !peer_id[0] || !client->peer_vote_lock_initialized)
-    {
-        return;
-    }
-
-    if (pthread_mutex_lock(&client->peer_vote_lock) != 0)
-    {
-        return;
-    }
-
-    (void)lantern_client_ensure_vote_metric_locked(client, peer_id);
-
-    pthread_mutex_unlock(&client->peer_vote_lock);
 }
 
 

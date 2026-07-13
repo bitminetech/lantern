@@ -1022,24 +1022,28 @@ static void record_block_import_metrics_locked(
         }
     }
 
-    if (!client->has_runtime)
-    {
-        return;
-    }
-    struct lantern_slot_timepoint now_tp;
     uint64_t now_milliseconds = validator_wall_time_now_millis();
-    if (lantern_slot_clock_compute(&client->runtime.clock, now_milliseconds, &now_tp) != 0)
+    uint64_t total_interval = 0u;
+    if (lantern_slot_clock_total_interval(
+            client->state.config.genesis_time,
+            now_milliseconds,
+            &total_interval)
+        != 0)
     {
         return;
     }
     /* Live blocks only: skip backfill/sync imports of past slots, whose import
      * time bears no relation to their slot boundary. */
-    if (now_tp.slot != block->block.slot)
+    if (total_interval / LANTERN_INTERVALS_PER_SLOT != block->block.slot)
     {
         return;
     }
     uint64_t slot_start_ms = 0;
-    if (lantern_slot_clock_slot_start_time(&client->runtime.clock, block->block.slot, &slot_start_ms) != 0
+    if (lantern_slot_clock_slot_start_time(
+            client->state.config.genesis_time,
+            block->block.slot,
+            &slot_start_ms)
+            != 0
         || now_milliseconds < slot_start_ms)
     {
         return;

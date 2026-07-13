@@ -10,10 +10,6 @@
 #include "lantern/metrics/lean_metrics.h"
 #include "lantern/support/time.h"
 
-#define LANTERN_FORK_CHOICE_DEFAULT_SECONDS_PER_SLOT 4u
-#define LANTERN_FORK_CHOICE_DEFAULT_INTERVALS_PER_SLOT 5u
-#define LANTERN_FORK_CHOICE_MILLISECONDS_PER_SECOND 1000u
-
 struct fork_choice_latest_vote {
     bool has_checkpoint;
     LanternCheckpoint checkpoint;
@@ -199,10 +195,6 @@ void lantern_fork_choice_init(LanternForkChoice *store) {
     }
     memset(store, 0, sizeof(*store));
     checkpoint_snapshot_init(&store->checkpoint_snapshot);
-    store->seconds_per_slot = LANTERN_FORK_CHOICE_DEFAULT_SECONDS_PER_SLOT;
-    store->intervals_per_slot = LANTERN_FORK_CHOICE_DEFAULT_INTERVALS_PER_SLOT;
-    store->milliseconds_per_interval =
-        ((uint64_t)store->seconds_per_slot * LANTERN_FORK_CHOICE_MILLISECONDS_PER_SECOND) / store->intervals_per_slot;
 }
 
 void lantern_fork_choice_reset(LanternForkChoice *store) {
@@ -229,29 +221,17 @@ void lantern_fork_choice_reset(LanternForkChoice *store) {
     memset(&store->latest_finalized, 0, sizeof(store->latest_finalized));
     checkpoint_snapshot_init(&store->checkpoint_snapshot);
     store->time_intervals = 0;
-    store->seconds_per_slot = LANTERN_FORK_CHOICE_DEFAULT_SECONDS_PER_SLOT;
-    store->intervals_per_slot = LANTERN_FORK_CHOICE_DEFAULT_INTERVALS_PER_SLOT;
-    store->milliseconds_per_interval =
-        ((uint64_t)store->seconds_per_slot * LANTERN_FORK_CHOICE_MILLISECONDS_PER_SECOND) / store->intervals_per_slot;
     store->validator_count = validator_count;
     store->attestation_store = attestation_store;
 }
 
-int lantern_fork_choice_configure(LanternForkChoice *store, const LanternConfig *config) {
-    if (!store || !config) {
-        return -1;
-    }
-    if (config->num_validators == 0) {
+int lantern_fork_choice_configure(LanternForkChoice *store, uint64_t validator_count) {
+    if (!store || validator_count == 0u || validator_count > SIZE_MAX) {
         return -1;
     }
     lantern_fork_choice_reset(store);
 
-    store->config = *config;
-    store->validator_count = (size_t)config->num_validators;
-    store->seconds_per_slot = LANTERN_FORK_CHOICE_DEFAULT_SECONDS_PER_SLOT;
-    store->intervals_per_slot = LANTERN_FORK_CHOICE_DEFAULT_INTERVALS_PER_SLOT;
-    store->milliseconds_per_interval =
-        ((uint64_t)store->seconds_per_slot * LANTERN_FORK_CHOICE_MILLISECONDS_PER_SECOND) / store->intervals_per_slot;
+    store->validator_count = (size_t)validator_count;
     store->initialized = true;
     return 0;
 }
@@ -346,21 +326,6 @@ int lantern_fork_choice_anchor_slot(const LanternForkChoice *store, uint64_t *ou
     return 0;
 }
 
-int lantern_fork_choice_set_anchor(
-    LanternForkChoice *store,
-    const LanternBlock *anchor_block,
-    const LanternCheckpoint *latest_justified,
-    const LanternCheckpoint *latest_finalized,
-    const LanternRoot *block_root_hint) {
-    return lantern_fork_choice_set_anchor_with_state(
-        store,
-        anchor_block,
-        latest_justified,
-        latest_finalized,
-        block_root_hint,
-        NULL);
-}
-
 int lantern_fork_choice_set_anchor_with_state(
     LanternForkChoice *store,
     const LanternBlock *anchor_block,
@@ -368,7 +333,8 @@ int lantern_fork_choice_set_anchor_with_state(
     const LanternCheckpoint *latest_finalized,
     const LanternRoot *block_root_hint,
     const LanternState *anchor_state) {
-    if (!store || !store->initialized || !anchor_block) {
+    if (!store || !store->initialized || !anchor_block
+        || anchor_block->slot > UINT64_MAX / LANTERN_INTERVALS_PER_SLOT) {
         return -1;
     }
     LanternRoot root;
@@ -423,8 +389,7 @@ int lantern_fork_choice_set_anchor_with_state(
     store->has_anchor = true;
     store->anchor_root = root;
     store->anchor_slot = anchor_block->slot;
-    uint64_t anchor_intervals = anchor_block->slot * store->intervals_per_slot;
-    store->time_intervals = anchor_intervals;
+    store->time_intervals = anchor_block->slot * LANTERN_INTERVALS_PER_SLOT;
     if (anchor_state && lantern_fork_choice_set_block_state(store, &root, anchor_state) != 0) {
         store->latest_justified = previous_latest_justified;
         store->latest_finalized = previous_latest_finalized;
@@ -1266,7 +1231,7 @@ int lantern_fork_choice_update_safe_target(LanternForkChoice *store) {
     if (!store || !store->initialized || !store->has_anchor) {
         return -1;
     }
-    uint64_t threshold = lantern_consensus_quorum_threshold(store->config.num_validators);
+    uint64_t threshold = lantern_consensus_quorum_threshold(store->validator_count);
     struct fork_choice_latest_vote *safe_votes = NULL;
     size_t safe_vote_count = 0;
     if (collect_payload_pool_votes(
@@ -1302,46 +1267,35 @@ static int tick_interval(LanternForkChoice *store, bool has_proposal) {
         return -1;
     }
     store->time_intervals += 1;
-    uint64_t current_interval = store->time_intervals % store->intervals_per_slot;
+    uint64_t current_interval = store->time_intervals % LANTERN_INTERVALS_PER_SLOT;
     switch (current_interval) {
-    case 0:
+    case LANTERN_DUTY_PHASE_PROPOSAL:
         if (has_proposal) {
             return lantern_fork_choice_accept_new_aggregated_payloads(store);
         }
         return 0;
-    case 1:
+    case LANTERN_DUTY_PHASE_VOTE:
         /* Interval 1: collect new votes, no store mutation. */
         return 0;
-    case 2:
+    case LANTERN_DUTY_PHASE_AGGREGATE:
         /* Interval 2: committee aggregation handled at validator layer. */
         return 0;
-    case 3:
+    case LANTERN_DUTY_PHASE_SAFE_TARGET:
         return lantern_fork_choice_update_safe_target(store);
-    case 4:
+    case LANTERN_DUTY_PHASE_VOTE_ACCEPT:
         return lantern_fork_choice_accept_new_aggregated_payloads(store);
     default:
         return 0;
     }
 }
 
-int lantern_fork_choice_advance_time(
+int lantern_fork_choice_advance_to(
     LanternForkChoice *store,
-    uint64_t now_milliseconds,
+    uint64_t target_interval,
     bool has_proposal) {
     if (!store || !store->initialized || !store->has_anchor) {
         return -1;
     }
-    uint64_t genesis_milliseconds =
-        (uint64_t)store->config.genesis_time * LANTERN_FORK_CHOICE_MILLISECONDS_PER_SECOND;
-    if (now_milliseconds < genesis_milliseconds) {
-        /* Before genesis - no time to advance yet, but this is not an error */
-        return 0;
-    }
-    if (store->milliseconds_per_interval == 0) {
-        return -1;
-    }
-    uint64_t elapsed = now_milliseconds - genesis_milliseconds;
-    uint64_t target_interval = elapsed / store->milliseconds_per_interval;
     while (store->time_intervals < target_interval) {
         bool will_propose = has_proposal && (store->time_intervals + 1 == target_interval);
         if (tick_interval(store, will_propose) != 0) {

@@ -18,6 +18,13 @@ typedef struct {
 bool lantern_signature_is_zero(const LanternSignature *signature);
 void lantern_signature_zero(LanternSignature *signature);
 void lantern_signature_prewarm_prover(void);
+void lantern_signature_configure_shadow_costs(
+    double aggregate_rate,
+    bool has_aggregate_rate,
+    double verify_rate,
+    bool has_verify_rate,
+    double merge_rate,
+    bool has_merge_rate);
 bool lantern_signature_verify(
     const uint8_t *pubkey_bytes,
     size_t pubkey_len,

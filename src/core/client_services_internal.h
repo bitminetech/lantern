@@ -12,7 +12,7 @@
  * - client_validator.c: Validator duty execution
  * - client_http.c: HTTP API callbacks
  * - client_reqresp.c: Request/response protocol handling
- * - client_reqresp_blocks.c: Block request handling
+ * - client_sync.c: Block request scheduling
  * - client_keys.c: Key management
  *
  * @note Lock ordering (acquire in this order to prevent deadlocks):
@@ -512,31 +512,12 @@ void lantern_client_block_importer_stop(struct lantern_client *client);
 
 
 /**
- * Handle completion of a blocks request.
+ * Handle completion of a tracked blocks request batch.
  *
  * @spec subspecs/networking/reqresp.py - blocks by root
  *
- * @param client        Client instance
- * @param peer_id       Peer ID string
- * @param request_roots Roots that were requested
- * @param root_count    Number of requested roots
- * @param outcome       Request outcome
- *
  * @note Thread safety: Acquires status_lock and, after releasing it, may
  * acquire pending_lock when a successful response schedules more backfill.
- */
-void lantern_client_on_blocks_request_complete_batch(
-    struct lantern_client *client,
-    const char *peer_id,
-    const LanternRoot *request_roots,
-    size_t root_count,
-    enum lantern_blocks_request_outcome outcome);
-
-/**
- * Handle completion of a tracked blocks request batch.
- *
- * Same as lantern_client_on_blocks_request_complete_batch(), but includes
- * the internal request tracking ID used by the active request registry.
  */
 void lantern_client_on_blocks_request_complete_batch_with_id(
     struct lantern_client *client,
@@ -544,25 +525,6 @@ void lantern_client_on_blocks_request_complete_batch_with_id(
     const char *peer_id,
     const LanternRoot *request_roots,
     size_t root_count,
-    enum lantern_blocks_request_outcome outcome);
-
-/**
- * Handle completion of a blocks request (single root).
- *
- * @spec subspecs/networking/reqresp.py - blocks by root
- *
- * @param client        Client instance
- * @param peer_id       Peer ID string
- * @param request_root  Root that was requested
- * @param outcome       Request outcome
- *
- * @note Thread safety: Acquires status_lock and, after releasing it, may
- * acquire pending_lock when a successful response schedules more backfill.
- */
-void lantern_client_on_blocks_request_complete(
-    struct lantern_client *client,
-    const char *peer_id,
-    const LanternRoot *request_root,
     enum lantern_blocks_request_outcome outcome);
 
 bool lantern_client_import_block(
@@ -573,30 +535,6 @@ bool lantern_client_import_block(
     uint32_t backfill_depth,
     bool allow_historical);
 
-
-/**
- * Schedule a blocks_by_root request to a peer.
- *
- * @spec subspecs/networking/reqresp/message.py - BlocksByRoot protocol
- *
- * @param client         Client instance
- * @param peer_id_text   Peer ID string
- * @param roots          Block roots to request
- * @param root_count     Number of roots
- * @param request_id     Internal request tracking ID (0 disables tracking)
- * @return 0 on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM if parameters are invalid, the peer ID is invalid, or any root is zero
- * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
- * @return LANTERN_CLIENT_ERR_NETWORK if stream dialing fails or networking is unavailable
- *
- * @note Thread safety: This function is thread-safe
- */
-int lantern_client_schedule_blocks_request_batch(
-    struct lantern_client *client,
-    const char *peer_id_text,
-    const LanternRoot *roots,
-    size_t root_count,
-    uint64_t request_id);
 
 /* ============================================================================
  * Key Management Functions

@@ -146,19 +146,6 @@ struct lantern_peer_vote_metric *lantern_client_ensure_vote_metric_locked(
 
 
 /**
- * Register a peer for vote tracking.
- *
- * @param client   Client instance
- * @param peer_id  Peer ID to register
- *
- * @note Thread safety: This function acquires peer_vote_lock
- */
-void lantern_client_register_vote_peer(
-    struct lantern_client *client,
-    const char *peer_id);
-
-
-/**
  * Record a vote delivery from a peer.
  *
  * @param client   Client instance

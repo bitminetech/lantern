@@ -7,9 +7,6 @@
  * Implements the reqresp protocol callbacks for status exchange and
  * blocks_by_root requests, plus peer status processing logic.
  *
- * Related files:
- * - client_reqresp_blocks.c: Block request operations
- *
  * @note Lock ordering (acquire in this order to prevent deadlocks):
  *       1. state_lock
  *       2. status_lock
@@ -2280,57 +2277,4 @@ void lantern_client_on_blocks_request_complete_batch_with_id(
             peer_for_logs,
             first_root);
     }
-}
-
-void lantern_client_on_blocks_request_complete_batch(
-    struct lantern_client *client,
-    const char *peer_id,
-    const LanternRoot *request_roots,
-    size_t root_count,
-    enum lantern_blocks_request_outcome outcome)
-{
-    lantern_client_on_blocks_request_complete_batch_with_id(
-        client,
-        0u,
-        peer_id,
-        request_roots,
-        root_count,
-        outcome);
-}
-
-/**
- * Handle completion of a blocks request (single root).
- *
- * @spec subspecs/networking/reqresp - Request lifecycle
- *
- * @param client        Client instance
- * @param peer_id       Peer ID string
- * @param request_root  Root that was requested
- * @param outcome       Request outcome
- *
- * @note Thread safety: Acquires status_lock and, after releasing it, may
- * acquire pending_lock when a successful response schedules more backfill.
- */
-void lantern_client_on_blocks_request_complete(
-    struct lantern_client *client,
-    const char *peer_id,
-    const LanternRoot *request_root,
-    enum lantern_blocks_request_outcome outcome)
-{
-    if (!request_root)
-    {
-        lantern_client_on_blocks_request_complete_batch(
-            client,
-            peer_id,
-            NULL,
-            0u,
-            outcome);
-        return;
-    }
-    lantern_client_on_blocks_request_complete_batch(
-        client,
-        peer_id,
-        request_root,
-        1u,
-        outcome);
 }

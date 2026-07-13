@@ -16,12 +16,22 @@
 #include "lantern/support/time.h"
 #include "lantern/metrics/lean_metrics.h"
 
-#include "lantern/consensus/duties.h"
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/quorum.h"
 #include "lantern/consensus/signature.h"
 #include "lantern/consensus/store.h"
+
+int lantern_proposer_for_slot(
+    uint64_t slot,
+    uint64_t validator_count,
+    uint64_t *out_proposer_index) {
+    if (!out_proposer_index || validator_count == 0u) {
+        return -1;
+    }
+    *out_proposer_index = slot % validator_count;
+    return 0;
+}
 
 static void record_attestation_validation_metric(double start_seconds, bool valid) {
     lean_metrics_record_attestation_validation(lantern_time_now_seconds() - start_seconds, valid);

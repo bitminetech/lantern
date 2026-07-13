@@ -139,16 +139,6 @@ static bool root_equal(const LanternRoot *a, const LanternRoot *b)
     return a && b && memcmp(a->bytes, b->bytes, LANTERN_ROOT_SIZE) == 0;
 }
 
-static int milliseconds_from_seconds(uint64_t seconds, uint64_t *out_milliseconds)
-{
-    if (!out_milliseconds || seconds > UINT64_MAX / 1000u)
-    {
-        return -1;
-    }
-    *out_milliseconds = seconds * 1000u;
-    return 0;
-}
-
 static void driver_format_root_hex(const LanternRoot *root, char *buf, size_t buf_len)
 {
     if (!buf || buf_len == 0)
@@ -480,23 +470,23 @@ static int sync_payload_pools_after_time_advance(
     {
         return -1;
     }
-    if (fork_choice->intervals_per_slot == 0u
-        || fork_choice->time_intervals <= previous_intervals)
+    if (fork_choice->time_intervals <= previous_intervals)
     {
         return 0;
     }
     for (uint64_t step = previous_intervals + 1u; step <= fork_choice->time_intervals; ++step)
     {
-        uint64_t interval_index = step % fork_choice->intervals_per_slot;
+        uint64_t interval_index = step % LANTERN_INTERVALS_PER_SLOT;
         bool step_has_proposal = has_proposal && (step == fork_choice->time_intervals);
-        if (interval_index == 2u)
+        if (interval_index == LANTERN_DUTY_PHASE_AGGREGATE)
         {
             if (aggregate_pending_gossip_attestations(state, store) != 0)
             {
                 return -1;
             }
         }
-        if (interval_index == 4u || (interval_index == 0u && step_has_proposal))
+        if (interval_index == LANTERN_DUTY_PHASE_VOTE_ACCEPT
+            || (interval_index == LANTERN_DUTY_PHASE_PROPOSAL && step_has_proposal))
         {
             size_t promoted = lantern_store_promote_new_aggregated_payloads(store);
             if (promoted > 0u && lantern_fork_choice_accept_new_aggregated_payloads(fork_choice) != 0)
@@ -898,10 +888,13 @@ static int fork_choice_process_block_step(
     bool transition_performed = false;
     LanternState *active_state = &driver->state;
 
-    uint64_t now = (driver->genesis_time * 1000u)
-        + (signed_block.block.slot * driver->fork_choice.seconds_per_slot * 1000u);
+    if (signed_block.block.slot > UINT64_MAX / LANTERN_INTERVALS_PER_SLOT)
+    {
+        goto cleanup;
+    }
+    uint64_t target_interval = signed_block.block.slot * LANTERN_INTERVALS_PER_SLOT;
     uint64_t previous_intervals = driver->fork_choice.time_intervals;
-    if (lantern_fork_choice_advance_time(&driver->fork_choice, now, true) != 0)
+    if (lantern_fork_choice_advance_to(&driver->fork_choice, target_interval, true) != 0)
     {
         goto cleanup;
     }
@@ -1160,11 +1153,7 @@ int lantern_test_driver_fork_choice_init(
     lantern_fork_choice_init(&g_driver.fork_choice);
     lantern_store_init(&g_driver.fork_choice_store);
     lantern_store_attach_fork_choice(&g_driver.fork_choice_store, &g_driver.fork_choice);
-    LanternConfig config = {
-        .num_validators = validator_count,
-        .genesis_time = genesis_time,
-    };
-    if (lantern_fork_choice_configure(&g_driver.fork_choice, &config) != 0)
+    if (lantern_fork_choice_configure(&g_driver.fork_choice, validator_count) != 0)
     {
         if (out_error)
         {
@@ -1339,40 +1328,26 @@ int lantern_test_driver_fork_choice_step(
         }
         else
         {
-            uint64_t now = 0;
+            uint64_t target_interval = 0;
             if (interval_idx >= 0)
             {
-                uint64_t target_interval = 0;
-                if (lantern_fixture_token_to_uint64(&doc, interval_idx, &target_interval) != 0
-                    || g_driver.fork_choice.milliseconds_per_interval == 0u
-                    || g_driver.genesis_time > UINT64_MAX / 1000u
-                    || target_interval
-                           > (UINT64_MAX - (g_driver.genesis_time * 1000u))
-                                 / g_driver.fork_choice.milliseconds_per_interval)
+                if (lantern_fixture_token_to_uint64(&doc, interval_idx, &target_interval) != 0)
                 {
                     rc = -1;
-                }
-                else
-                {
-                    now = (g_driver.genesis_time * 1000u)
-                        + (target_interval * g_driver.fork_choice.milliseconds_per_interval);
                 }
             }
             else
             {
                 uint64_t time_seconds = 0;
-                uint64_t genesis_milliseconds = 0;
-                uint64_t elapsed_milliseconds = 0;
                 if (lantern_fixture_token_to_uint64(&doc, time_idx, &time_seconds) != 0
-                    || milliseconds_from_seconds(g_driver.genesis_time, &genesis_milliseconds) != 0
-                    || milliseconds_from_seconds(time_seconds, &elapsed_milliseconds) != 0
-                    || elapsed_milliseconds > UINT64_MAX - genesis_milliseconds)
+                    || time_seconds > UINT64_MAX / 1000u)
                 {
                     rc = -1;
                 }
                 else
                 {
-                    now = genesis_milliseconds + elapsed_milliseconds;
+                    target_interval =
+                        (time_seconds * 1000u) / LANTERN_MILLISECONDS_PER_INTERVAL;
                 }
             }
             if (rc != 0)
@@ -1382,9 +1357,9 @@ int lantern_test_driver_fork_choice_step(
             else
             {
                 uint64_t previous_intervals = g_driver.fork_choice.time_intervals;
-                rc = lantern_fork_choice_advance_time(
+                rc = lantern_fork_choice_advance_to(
                     &g_driver.fork_choice,
-                    now,
+                    target_interval,
                     has_proposal);
                 if (rc == 0)
                 {

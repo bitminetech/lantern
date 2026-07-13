@@ -790,21 +790,6 @@ bool lantern_client_validate_vote_constraints(
         }
         allowed_slot = current_slot == UINT64_MAX ? UINT64_MAX : current_slot + 1u;
     }
-    else if (client->fork_choice.intervals_per_slot == 0u)
-    {
-        lantern_log_debug(
-            log_facility,
-            meta,
-            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (invalid interval clock)",
-            label,
-            vote->validator_id,
-            vote->slot);
-        if (out_rejection)
-        {
-            lantern_vote_rejection_set(out_rejection, "invalid interval clock");
-        }
-        return false;
-    }
     else
     {
         uint64_t admission_horizon = client->fork_choice.time_intervals;
@@ -812,7 +797,7 @@ bool lantern_client_validate_vote_constraints(
         {
             admission_horizon += 1u;
         }
-        allowed_slot = admission_horizon / client->fork_choice.intervals_per_slot;
+        allowed_slot = admission_horizon / LANTERN_INTERVALS_PER_SLOT;
     }
     if (vote->slot > allowed_slot)
     {

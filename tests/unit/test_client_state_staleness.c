@@ -11,7 +11,6 @@ static int expect_case(
     const char *label,
     uint64_t persisted_slot,
     uint64_t genesis_time,
-    uint32_t slot_duration_seconds,
     uint64_t now_seconds,
     bool expected_stale,
     uint64_t expected_current_slot,
@@ -26,7 +25,6 @@ static int expect_case(
     bool stale = lantern_client_persisted_state_is_stale_for_checkpoint_sync(
         &state,
         genesis_time,
-        slot_duration_seconds,
         now_seconds,
         &current_slot,
         &gap);
@@ -73,8 +71,7 @@ int main(void)
             "fresh_enough_boundary",
             10u,
             1000u,
-            4u,
-            1000u + ((10u + 64u) * 4u),
+            1000u + ((10u + 64u) * LANTERN_SECONDS_PER_SLOT),
             false,
             74u,
             64u)
@@ -87,8 +84,7 @@ int main(void)
             "stale_beyond_boundary",
             10u,
             1000u,
-            4u,
-            1000u + ((10u + 65u) * 4u),
+            1000u + ((10u + 65u) * LANTERN_SECONDS_PER_SLOT),
             true,
             75u,
             65u)
@@ -101,7 +97,6 @@ int main(void)
             "before_genesis",
             0u,
             5000u,
-            4u,
             4990u,
             false,
             0u,

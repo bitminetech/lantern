@@ -376,7 +376,7 @@ static void configure_fork_choice_with_backing_store(
     lantern_fork_choice_init(store);
     lantern_store_init(backing_store);
     lantern_store_attach_fork_choice(backing_store, store);
-    assert(lantern_fork_choice_configure(store, config) == 0);
+    assert(lantern_fork_choice_configure(store, config->num_validators) == 0);
 }
 
 static int test_fork_choice_block_sequence(void) {
@@ -387,14 +387,15 @@ static int test_fork_choice_block_sequence(void) {
     lantern_store_attach_fork_choice(&backing_store, &store);
 
     LanternConfig config = {.num_validators = 1, .genesis_time = 10};
-    assert(lantern_fork_choice_configure(&store, &config) == 0);
+    assert(lantern_fork_choice_configure(&store, config.num_validators) == 0);
 
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0xAA);
     LanternRoot genesis_root;
     assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
-    assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
+    assert(lantern_fork_choice_set_anchor_with_state(
+        &store, &genesis, &genesis_cp, &genesis_cp, &genesis_root, NULL) == 0);
 
     LanternBlock block_one;
     init_block(&block_one, 1, 0, &genesis_root, 0xBB);
@@ -457,7 +458,8 @@ static int test_fork_choice_block_updates_checkpoints(void) {
     LanternRoot genesis_root;
     assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
-    assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
+    assert(lantern_fork_choice_set_anchor_with_state(
+        &store, &genesis, &genesis_cp, &genesis_cp, &genesis_root, NULL) == 0);
 
     LanternBlock block_one;
     init_block(&block_one, 1, 0, &genesis_root, 0x11);
@@ -533,7 +535,7 @@ static int test_fork_choice_caches_block_states(void) {
     lantern_store_attach_fork_choice(&backing_store, &store);
 
     LanternConfig config = {.num_validators = 2, .genesis_time = 77};
-    assert(lantern_fork_choice_configure(&store, &config) == 0);
+    assert(lantern_fork_choice_configure(&store, config.num_validators) == 0);
 
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0x51);
@@ -613,7 +615,7 @@ static int test_fork_choice_prune_states_keeps_finalized_to_head_chain(void) {
     lantern_store_attach_fork_choice(&backing_store, &store);
 
     LanternConfig config = {.num_validators = 3, .genesis_time = 91};
-    assert(lantern_fork_choice_configure(&store, &config) == 0);
+    assert(lantern_fork_choice_configure(&store, config.num_validators) == 0);
 
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0x61);
@@ -935,7 +937,8 @@ static int test_fork_choice_vote_flow(void) {
     LanternRoot genesis_root;
     assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
-    assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
+    assert(lantern_fork_choice_set_anchor_with_state(
+        &store, &genesis, &genesis_cp, &genesis_cp, &genesis_root, NULL) == 0);
 
     LanternRoot head;
     assert(lantern_fork_choice_current_head(&store, &head) == 0);
@@ -1026,7 +1029,8 @@ static int test_fork_choice_safe_target_uses_new_aggregated_payloads(void) {
     LanternRoot genesis_root;
     assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
-    assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
+    assert(lantern_fork_choice_set_anchor_with_state(
+        &store, &genesis, &genesis_cp, &genesis_cp, &genesis_root, NULL) == 0);
 
     LanternBlock block_one;
     init_block(&block_one, 1, 0, &genesis_root, 0x42);
@@ -1078,7 +1082,8 @@ static int test_fork_choice_checkpoint_progression(void) {
     LanternRoot genesis_root;
     assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
-    assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
+    assert(lantern_fork_choice_set_anchor_with_state(
+        &store, &genesis, &genesis_cp, &genesis_cp, &genesis_root, NULL) == 0);
 
     const LanternCheckpoint *initial_justified = lantern_fork_choice_latest_justified(&store);
     const LanternCheckpoint *initial_finalized = lantern_fork_choice_latest_finalized(&store);
@@ -1181,7 +1186,8 @@ static int test_fork_choice_restore_checkpoints(void) {
     LanternRoot genesis_root;
     assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
-    assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
+    assert(lantern_fork_choice_set_anchor_with_state(
+        &store, &genesis, &genesis_cp, &genesis_cp, &genesis_root, NULL) == 0);
 
     LanternBlock block_one;
     init_block(&block_one, 1, 0, &genesis_root, 0x42);
@@ -1264,12 +1270,13 @@ static int test_fork_choice_anchor_metadata_survives_checkpoint_restore(void) {
     LanternCheckpoint embedded_justified = make_checkpoint(&anchor_root, anchor.slot - 1u);
     LanternCheckpoint embedded_finalized = make_checkpoint(&anchor_root, anchor.slot - 2u);
     assert(
-        lantern_fork_choice_set_anchor(
+        lantern_fork_choice_set_anchor_with_state(
             &store,
             &anchor,
             &embedded_justified,
             &embedded_finalized,
-            &anchor_root)
+            &anchor_root,
+            NULL)
         == 0);
 
     const LanternRoot *stored_anchor_root = lantern_fork_choice_anchor_root(&store);
@@ -1343,7 +1350,8 @@ static int test_fork_choice_restore_checkpoints_rejects_unknown_roots(void) {
     LanternRoot anchor_root;
     assert(lantern_hash_tree_root_block(&anchor, &anchor_root) == SSZ_SUCCESS);
     LanternCheckpoint anchor_cp = make_checkpoint(&anchor_root, anchor.slot);
-    assert(lantern_fork_choice_set_anchor(&store, &anchor, &anchor_cp, &anchor_cp, &anchor_root) == 0);
+    assert(lantern_fork_choice_set_anchor_with_state(
+        &store, &anchor, &anchor_cp, &anchor_cp, &anchor_root, NULL) == 0);
 
     LanternCheckpoint latest_justified = anchor_cp;
     LanternCheckpoint latest_finalized = anchor_cp;
@@ -1399,7 +1407,8 @@ static int test_fork_choice_advance_time_schedules_votes(void) {
     LanternRoot genesis_root;
     assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
-    assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
+    assert(lantern_fork_choice_set_anchor_with_state(
+        &store, &genesis, &genesis_cp, &genesis_cp, &genesis_root, NULL) == 0);
 
     LanternBlock block_voted;
     init_block(&block_voted, 1, 0, &genesis_root, 0x11);
@@ -1442,15 +1451,14 @@ static int test_fork_choice_advance_time_schedules_votes(void) {
     const LanternRoot *safe_initial = lantern_fork_choice_safe_target(&store);
     assert(safe_initial && roots_equal(safe_initial, &genesis_root));
 
-    uint64_t genesis_time_ms = config.genesis_time * 1000u;
-    assert(lantern_fork_choice_advance_time(&store, genesis_time_ms + 2400u, false) == 0);
+    assert(lantern_fork_choice_advance_to(&store, 3u, false) == 0);
     const LanternRoot *safe_after = lantern_fork_choice_safe_target(&store);
     assert(safe_after && roots_equal(safe_after, &block_voted_root));
 
     assert(lantern_fork_choice_current_head(&store, &head) == 0);
     assert(roots_equal(&head, &block_voted_root));
 
-    assert(lantern_fork_choice_advance_time(&store, genesis_time_ms + 3200u, false) == 0);
+    assert(lantern_fork_choice_advance_to(&store, 4u, false) == 0);
     assert(lantern_fork_choice_current_head(&store, &head) == 0);
     assert(roots_equal(&head, &block_voted_root));
 
@@ -1504,7 +1512,7 @@ static int test_fork_choice_add_block_skips_conflicting_block_attestation(void) 
     lantern_fork_choice_init(&store);
     lantern_store_attach_fork_choice(&backing_store, &store);
 
-    if (lantern_fork_choice_configure(&store, &config) != 0) {
+    if (lantern_fork_choice_configure(&store, config.num_validators) != 0) {
         fprintf(stderr, "failed to configure fork choice conflict test\n");
         goto cleanup;
     }
@@ -1515,7 +1523,9 @@ static int test_fork_choice_add_block_skips_conflicting_block_attestation(void) 
         goto cleanup;
     }
     genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
-    if (lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) != 0) {
+    if (lantern_fork_choice_set_anchor_with_state(
+            &store, &genesis, &genesis_cp, &genesis_cp, &genesis_root, NULL)
+        != 0) {
         fprintf(stderr, "failed to set anchor in conflict test\n");
         goto cleanup;
     }
@@ -1614,14 +1624,15 @@ static int test_fork_choice_tree_snapshot_reports_weights(void) {
     lantern_store_attach_fork_choice(&backing_store, &store);
 
     LanternConfig config = {.num_validators = 4, .genesis_time = 15};
-    assert(lantern_fork_choice_configure(&store, &config) == 0);
+    assert(lantern_fork_choice_configure(&store, config.num_validators) == 0);
 
     LanternBlock genesis;
     init_block(&genesis, 0, 0, NULL, 0x21);
     LanternRoot genesis_root;
     assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
-    assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
+    assert(lantern_fork_choice_set_anchor_with_state(
+        &store, &genesis, &genesis_cp, &genesis_cp, &genesis_root, NULL) == 0);
 
     LanternBlock block_one;
     init_block(&block_one, 1, 1, &genesis_root, 0x22);
@@ -1708,7 +1719,8 @@ static int test_fork_choice_block_attestation_votes_do_not_bypass_attached_paylo
     LanternRoot genesis_root;
     assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
-    assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
+    assert(lantern_fork_choice_set_anchor_with_state(
+        &store, &genesis, &genesis_cp, &genesis_cp, &genesis_root, NULL) == 0);
 
     LanternBlock block_one;
     init_block(&block_one, 1, 0, &genesis_root, 0x92);
@@ -1794,7 +1806,8 @@ static int test_fork_choice_accept_new_aggregated_payloads_updates_head(void) {
     LanternRoot genesis_root;
     assert(lantern_hash_tree_root_block(&genesis, &genesis_root) == SSZ_SUCCESS);
     LanternCheckpoint genesis_cp = make_checkpoint(&genesis_root, genesis.slot);
-    assert(lantern_fork_choice_set_anchor(&store, &genesis, &genesis_cp, &genesis_cp, &genesis_root) == 0);
+    assert(lantern_fork_choice_set_anchor_with_state(
+        &store, &genesis, &genesis_cp, &genesis_cp, &genesis_root, NULL) == 0);
 
     LanternBlock block_one;
     init_block(&block_one, 1, 0, &genesis_root, 0xA2);

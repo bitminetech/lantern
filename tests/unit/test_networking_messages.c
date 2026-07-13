@@ -788,7 +788,7 @@ static void test_gossipsub_service_loopback(void) {
     struct lantern_gossipsub_service service;
     lantern_gossipsub_service_init(&service);
     snprintf(service.block_topic, sizeof(service.block_topic), "/leanconsensus/devnet0/block/ssz_snappy");
-    lantern_gossipsub_service_set_loopback_only(&service, 1);
+    service.loopback_only = 1;
 
     LanternSignedBlock block;
     lantern_signed_block_init(&block);
@@ -799,7 +799,8 @@ static void test_gossipsub_service_loopback(void) {
         .expected_topic = service.block_topic,
         .called = 0,
     };
-    lantern_gossipsub_service_set_publish_hook(&service, block_publish_hook, &ctx);
+    service.publish_hook = block_publish_hook;
+    service.publish_hook_user_data = &ctx;
 
     CHECK(lantern_gossipsub_service_publish_block(&service, &block) == 0);
     CHECK(ctx.called == 1);
@@ -837,7 +838,7 @@ static void test_client_publish_block_loopback(void) {
     memset(&client, 0, sizeof(client));
     lantern_gossipsub_service_init(&client.gossip);
     snprintf(client.gossip.block_topic, sizeof(client.gossip.block_topic), "/leanconsensus/devnet0/block/ssz_snappy");
-    lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
+    client.gossip.loopback_only = 1;
 
     LanternSignedBlock block;
     lantern_signed_block_init(&block);
@@ -848,7 +849,8 @@ static void test_client_publish_block_loopback(void) {
         .expected_topic = client.gossip.block_topic,
         .called = 0,
     };
-    lantern_gossipsub_service_set_publish_hook(&client.gossip, block_publish_hook, &ctx);
+    client.gossip.publish_hook = block_publish_hook;
+    client.gossip.publish_hook_user_data = &ctx;
 
     client.gossip_running = true;
     client.node_id = "loopback";

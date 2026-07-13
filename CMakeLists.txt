@@ -29,11 +29,8 @@ find_package(Threads REQUIRED)
 
 set(LANTERN_LIBRARY_SOURCES
     src/consensus/containers.c
-    src/consensus/duties.c
     src/consensus/fork_choice.c
     src/consensus/hash.c
-    src/consensus/runtime.c
-    src/consensus/shadow_cost.c
     src/consensus/slot_clock.c
     src/consensus/signature.c
     src/consensus/state.c
@@ -47,7 +44,6 @@ set(LANTERN_LIBRARY_SOURCES
     src/core/client_peers.c
     src/core/client_pending.c
     src/core/client_reqresp.c
-    src/core/client_reqresp_blocks.c
     src/core/client_sync.c
     src/core/client_sync_blocks.c
     src/core/client_sync_votes.c

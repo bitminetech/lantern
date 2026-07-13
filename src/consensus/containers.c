@@ -657,27 +657,12 @@ void lantern_block_body_reset(LanternBlockBody *body) {
     lantern_aggregated_attestations_reset(&body->attestations);
 }
 
-void lantern_block_init(LanternBlock *block) {
-    if (!block) {
-        return;
-    }
-    memset(block, 0, sizeof(*block));
-    lantern_block_body_init(&block->body);
-}
-
-void lantern_block_reset(LanternBlock *block) {
-    if (!block) {
-        return;
-    }
-    lantern_block_body_reset(&block->body);
-    memset(block, 0, sizeof(*block));
-}
-
 void lantern_signed_block_init(LanternSignedBlock *block) {
     if (!block) {
         return;
     }
-    lantern_block_init(&block->block);
+    memset(block, 0, sizeof(*block));
+    lantern_block_body_init(&block->block.body);
     lantern_byte_list_init(&block->proof);
 }
 
@@ -685,6 +670,7 @@ void lantern_signed_block_reset(LanternSignedBlock *block) {
     if (!block) {
         return;
     }
-    lantern_block_reset(&block->block);
+    lantern_block_body_reset(&block->block.body);
     lantern_byte_list_reset(&block->proof);
+    memset(block, 0, sizeof(*block));
 }
