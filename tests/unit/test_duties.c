@@ -1,47 +1,10 @@
-#include "lantern/consensus/duties.h"
+#include "lantern/consensus/state.h"
 #include "lantern/genesis/genesis.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-static int test_explicit_assignment(void) {
-    uint64_t explicit_indices[] = {1, 5, 9};
-    struct lantern_validator_config_entry entry = {
-        .count = 3,
-        .indices = explicit_indices,
-        .indices_len = 3,
-    };
-    struct lantern_validator_assignment assignment;
-    if (lantern_validator_assignment_from_config(&entry, &assignment) != 0) {
-        fprintf(stderr, "assignment with explicit indices failed\n");
-        return 1;
-    }
-    if (assignment.length != 3) {
-        fprintf(stderr, "explicit assignment count mismatch\n");
-        lantern_validator_assignment_reset(&assignment);
-        return 1;
-    }
-    if (assignment.indices[0] != 1 || assignment.indices[1] != 5 || assignment.indices[2] != 9) {
-        fprintf(stderr, "explicit assignment indices not preserved\n");
-        lantern_validator_assignment_reset(&assignment);
-        return 1;
-    }
-    uint64_t local_index = 0;
-    if (!lantern_validator_assignment_contains(&assignment, 5, &local_index) || local_index != 1) {
-        fprintf(stderr, "explicit assignment containment failed\n");
-        lantern_validator_assignment_reset(&assignment);
-        return 1;
-    }
-    if (lantern_validator_assignment_contains(&assignment, 2, NULL)) {
-        fprintf(stderr, "unexpected containment for explicit assignment\n");
-        lantern_validator_assignment_reset(&assignment);
-        return 1;
-    }
-    lantern_validator_assignment_reset(&assignment);
-    return 0;
-}
 
 static int test_assignment_parser(void) {
     char template[] = "/tmp/lantern_assignmentsXXXXXX";
@@ -118,9 +81,6 @@ static int test_proposer_selection(void) {
 }
 
 int main(void) {
-    if (test_explicit_assignment() != 0) {
-        return 1;
-    }
     if (test_assignment_parser() != 0) {
         return 1;
     }

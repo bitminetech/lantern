@@ -12,7 +12,6 @@
 #include <string.h>
 
 #include "lantern/consensus/hash.h"
-#include "lantern/consensus/duties.h"
 #include "lantern/consensus/signature.h"
 #include "lantern/crypto/xmss.h"
 #include "lantern/support/time.h"
@@ -447,7 +446,10 @@ static int client_test_setup_vote_validation_client_common(
     }
     client->has_state = true;
 
-    if (lantern_fork_choice_configure(&client->fork_choice, &client->state.config) != 0) {
+    if (lantern_fork_choice_configure(
+            &client->fork_choice,
+            client->state.config.num_validators)
+        != 0) {
         fprintf(stderr, "failed to configure fork choice for vote test\n");
         goto finish;
     }

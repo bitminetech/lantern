@@ -226,8 +226,6 @@ void lantern_signature_list_reset(LanternSignatureList *list);
 int lantern_signature_list_append(LanternSignatureList *list, const LanternSignature *signature);
 int lantern_signature_list_resize(LanternSignatureList *list, size_t new_length);
 
-void lantern_block_init(LanternBlock *block);
-void lantern_block_reset(LanternBlock *block);
 void lantern_block_body_init(LanternBlockBody *body);
 void lantern_block_body_reset(LanternBlockBody *body);
 

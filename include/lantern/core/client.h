@@ -8,8 +8,7 @@
 
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/store.h"
-#include "lantern/consensus/duties.h"
-#include "lantern/consensus/runtime.h"
+#include "lantern/consensus/slot_clock.h"
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/genesis/genesis.h"
 #include "lantern/metrics/server.h"
@@ -221,9 +220,6 @@ struct lantern_client {
     const struct lantern_validator_config_entry *assigned_validators;
     struct lantern_local_validator *local_validators;
     size_t local_validator_count;
-    struct lantern_validator_assignment validator_assignment;
-    struct lantern_consensus_runtime runtime;
-    bool has_runtime;
     struct lantern_validator_duty_state validator_duty;
     LanternStore store;
     LanternForkChoice fork_choice;

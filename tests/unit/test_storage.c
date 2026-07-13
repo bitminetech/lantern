@@ -12,7 +12,6 @@
 
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/containers.h"
-#include "lantern/consensus/duties.h"
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/networking/messages.h"

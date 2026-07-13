@@ -990,7 +990,7 @@ static int resolve_secret_key_path(
     }
     if (client->xmss_secret_path)
     {
-        if (client->validator_assignment.length > 1)
+        if (client->local_validator_count > 1u)
         {
             return LANTERN_CLIENT_ERR_CONFIG;
         }
@@ -1036,7 +1036,7 @@ static int load_xmss_secret_keys(
     bool has_template = client->xmss_secret_template != NULL;
     bool has_dir = client->xmss_key_dir != NULL;
     bool has_single = (client->xmss_secret_path != NULL)
-        && (client->validator_assignment.length == 1);
+        && (client->local_validator_count == 1u);
     if (!has_template && !has_dir && !has_single)
     {
         lantern_log_debug(

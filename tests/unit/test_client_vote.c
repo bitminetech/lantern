@@ -9,7 +9,6 @@
 #include <unistd.h>
 
 #include "../../src/core/client_services_internal.h"
-#include "lantern/consensus/duties.h"
 #include "client_test_helpers.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
@@ -433,15 +432,19 @@ static int advance_client_fork_choice_intervals(
     struct lantern_client *client,
     size_t count,
     bool has_proposal) {
-    if (!client || !client->has_fork_choice || client->fork_choice.milliseconds_per_interval == 0) {
+    if (!client || !client->has_fork_choice) {
         return -1;
     }
     for (size_t i = 0; i < count; ++i) {
-        uint64_t next_interval = client->fork_choice.time_intervals + 1u;
-        uint64_t now =
-            (client->fork_choice.config.genesis_time * 1000u)
-            + (next_interval * client->fork_choice.milliseconds_per_interval);
-        if (lantern_client_advance_fork_choice_time_locked(client, now, has_proposal) != 0) {
+        uint64_t current = client->fork_choice.time_intervals;
+        if (current == UINT64_MAX
+            || lantern_client_chain_service_tick_to(
+                   client,
+                   current + 1u,
+                   has_proposal,
+                   NULL,
+                   NULL)
+                != 0) {
             return -1;
         }
     }
@@ -1338,10 +1341,9 @@ static int test_record_vote_rejects_future_slot(void) {
     if (now_seconds < 0.0) {
         now_seconds = 0.0;
     }
-    uint32_t seconds_per_slot = client.fork_choice.seconds_per_slot == 0 ? 1u : client.fork_choice.seconds_per_slot;
     uint64_t now = (uint64_t)now_seconds;
-    if (now >= client.fork_choice.config.genesis_time) {
-        current_slot = (now - client.fork_choice.config.genesis_time) / seconds_per_slot;
+    if (now >= client.state.config.genesis_time) {
+        current_slot = (now - client.state.config.genesis_time) / LANTERN_SECONDS_PER_SLOT;
     }
     uint64_t allowed_slot = current_slot == UINT64_MAX ? UINT64_MAX : current_slot + 1u;
     uint64_t future_slot = allowed_slot == UINT64_MAX ? UINT64_MAX : allowed_slot + 8u;
@@ -1964,7 +1966,7 @@ static int test_record_vote_defers_interval_pipeline(void) {
         client.gossip.aggregated_attestation_topic,
         sizeof(client.gossip.aggregated_attestation_topic),
         "test/vote_interval_aggregation");
-    lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
+    client.gossip.loopback_only = 1;
 
     LanternSignedVote vote;
     memset(&vote, 0, sizeof(vote));
@@ -2108,15 +2110,10 @@ static int test_chain_service_tick_to_skips_stale_intervals(void) {
         return 1;
     }
 
-    uint64_t intervals_per_slot = client.fork_choice.intervals_per_slot;
-    uint64_t target_interval = intervals_per_slot * 2u;
+    uint64_t target_interval = LANTERN_INTERVALS_PER_SLOT * 2u;
     uint64_t skipped_to_interval = UINT64_MAX;
     uint64_t ticked_intervals = 0u;
 
-    if (intervals_per_slot == 0u) {
-        fprintf(stderr, "intervals_per_slot unavailable for chain service skip test\n");
-        goto cleanup;
-    }
     if (lantern_client_chain_service_tick_to(
             &client,
             target_interval,
@@ -2127,17 +2124,17 @@ static int test_chain_service_tick_to_skips_stale_intervals(void) {
         fprintf(stderr, "chain service catch-up failed\n");
         goto cleanup;
     }
-    if (skipped_to_interval != target_interval - intervals_per_slot) {
+    if (skipped_to_interval != target_interval - LANTERN_INTERVALS_PER_SLOT) {
         fprintf(stderr,
             "chain service did not skip stale intervals correctly: expected %" PRIu64 " got %" PRIu64 "\n",
-            target_interval - intervals_per_slot,
+            target_interval - LANTERN_INTERVALS_PER_SLOT,
             skipped_to_interval);
         goto cleanup;
     }
-    if (ticked_intervals != intervals_per_slot) {
+    if (ticked_intervals != LANTERN_INTERVALS_PER_SLOT) {
         fprintf(stderr,
             "chain service tick count mismatch after skip: expected %" PRIu64 " got %" PRIu64 "\n",
-            intervals_per_slot,
+            (uint64_t)LANTERN_INTERVALS_PER_SLOT,
             ticked_intervals);
         goto cleanup;
     }
@@ -2247,7 +2244,7 @@ static int test_skip_fork_choice_intervals_large_gap_is_bounded(void) {
         return 1;
     }
 
-    uint64_t target_interval = (client.fork_choice.intervals_per_slot * 1000000u) + 3u;
+    uint64_t target_interval = (LANTERN_INTERVALS_PER_SLOT * 1000000u) + 3u;
     if (lantern_client_skip_fork_choice_intervals_locked(&client, target_interval) != 0) {
         fprintf(stderr, "large-gap skip helper failed to advance intervals\n");
         goto cleanup;
@@ -3200,8 +3197,9 @@ static int test_publish_aggregated_attestations_collects_current_slot_and_prunes
         client.gossip.aggregated_attestation_topic,
         sizeof(client.gossip.aggregated_attestation_topic),
         "test/aggregated_attestation");
-    lantern_gossipsub_service_set_publish_hook(&client.gossip, publish_capture_hook, &capture);
-    lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
+    client.gossip.publish_hook = publish_capture_hook;
+    client.gossip.publish_hook_user_data = &capture;
+    client.gossip.loopback_only = 1;
 
     if (make_signed_vote_for_validator(&client, secret, 0u, &anchor_root, &child_root, &vote0) != 0
         || make_signed_vote_for_validator(&client, secret, 1u, &anchor_root, &child_root, &vote1) != 0
@@ -3324,7 +3322,6 @@ static int test_publish_attestations_includes_proposer(void) {
 
     client.local_validators = &validator;
     client.local_validator_count = 1u;
-    client.has_runtime = true;
     client.gossip_running = true;
     client.sync_state = LANTERN_SYNC_STATE_SYNCED;
     client.gossip.attestation_subnet_id = 0u;
@@ -3333,8 +3330,9 @@ static int test_publish_attestations_includes_proposer(void) {
         client.gossip.vote_subnet_topic,
         sizeof(client.gossip.vote_subnet_topic),
         "test/proposer_vote_subnet");
-    lantern_gossipsub_service_set_publish_hook(&client.gossip, publish_capture_hook, &capture);
-    lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
+    client.gossip.publish_hook = publish_capture_hook;
+    client.gossip.publish_hook_user_data = &capture;
+    client.gossip.loopback_only = 1;
 
     uint64_t slot = client.state.slot + 1u;
     if (validator_publish_attestations(&client, slot) != LANTERN_CLIENT_OK) {
@@ -3401,7 +3399,6 @@ static int test_publish_attestations_ignores_peer_status_gate_inputs(void) {
 
     client.local_validators = &validator;
     client.local_validator_count = 1u;
-    client.has_runtime = true;
     client.gossip_running = true;
     client.sync_state = LANTERN_SYNC_STATE_SYNCED;
     client.gossip.attestation_subnet_id = 0u;
@@ -3410,8 +3407,9 @@ static int test_publish_attestations_ignores_peer_status_gate_inputs(void) {
         client.gossip.vote_subnet_topic,
         sizeof(client.gossip.vote_subnet_topic),
         "test/status_gate_vote_subnet");
-    lantern_gossipsub_service_set_publish_hook(&client.gossip, publish_capture_hook, &capture);
-    lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
+    client.gossip.publish_hook = publish_capture_hook;
+    client.gossip.publish_hook_user_data = &capture;
+    client.gossip.loopback_only = 1;
 
     if (test_enable_blocks_request_peer(
             &client,
@@ -3493,7 +3491,6 @@ static int test_validator_duties_ignore_binary_sync_state(void) {
 
     client.local_validators = &validator;
     client.local_validator_count = 1u;
-    client.has_runtime = true;
     client.gossip_running = true;
 
     client.sync_state = LANTERN_SYNC_STATE_IDLE;
@@ -3562,11 +3559,9 @@ static int test_local_block_commit_updates_state_before_publish(void) {
     client.local_validator_count = 1u;
     client.gossip_running = true;
     snprintf(client.gossip.block_topic, sizeof(client.gossip.block_topic), "test/local_block");
-    lantern_gossipsub_service_set_publish_hook(
-        &client.gossip,
-        local_block_publish_observer_hook,
-        &observer);
-    lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
+    client.gossip.publish_hook = local_block_publish_observer_hook;
+    client.gossip.publish_hook_user_data = &observer;
+    client.gossip.loopback_only = 1;
 
     uint64_t slot = client.state.slot + 1u;
     if (validator_build_block(&client, slot, 0u, &block) != LANTERN_CLIENT_OK) {
@@ -3668,11 +3663,9 @@ static int test_local_off_head_block_publishes_after_successful_import(void) {
     client.local_validator_count = 1u;
     client.gossip_running = true;
     snprintf(client.gossip.block_topic, sizeof(client.gossip.block_topic), "test/local_block");
-    lantern_gossipsub_service_set_publish_hook(
-        &client.gossip,
-        local_block_publish_observer_hook,
-        &observer);
-    lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
+    client.gossip.publish_hook = local_block_publish_observer_hook;
+    client.gossip.publish_hook_user_data = &observer;
+    client.gossip.loopback_only = 1;
 
     if (lantern_fork_choice_set_block_state(&client.fork_choice, &child_root, &client.state) != 0) {
         fprintf(stderr, "failed to cache child state for off-head local block test\n");
@@ -3792,8 +3785,9 @@ static int test_interval_2_aggregation_trigger_respects_aggregator_role(void) {
         client.gossip.aggregated_attestation_topic,
         sizeof(client.gossip.aggregated_attestation_topic),
         "test/interval_aggregation");
-    lantern_gossipsub_service_set_publish_hook(&client.gossip, publish_capture_hook, &capture);
-    lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
+    client.gossip.publish_hook = publish_capture_hook;
+    client.gossip.publish_hook_user_data = &capture;
+    client.gossip.loopback_only = 1;
 
     if (make_signed_vote_for_validator(&client, secret, 0u, &anchor_root, &child_root, &vote0) != 0) {
         fprintf(stderr, "failed to build signed vote for interval aggregation test\n");
@@ -3842,7 +3836,6 @@ static int test_validator_propose_block_skips_genesis_slot(void) {
     struct lantern_client client;
     memset(&client, 0, sizeof(client));
     client.has_state = true;
-    client.has_runtime = true;
     client.has_fork_choice = true;
     client.gossip_running = true;
     client.local_validator_count = 1u;
@@ -3868,7 +3861,6 @@ static int test_prebuilt_proposal_waits_for_target_slot_boundary(void) {
     struct lantern_local_validator validator;
     struct local_block_publish_observer observer;
     bool worker_started = false;
-    struct lantern_slot_clock_config config;
     int rc = 1;
 
     memset(&client, 0, sizeof(client));
@@ -3895,26 +3887,18 @@ static int test_prebuilt_proposal_waits_for_target_slot_boundary(void) {
     snprintf(client.gossip.block_topic, sizeof(client.gossip.block_topic), "test/proposal_boundary");
     observer.client = &client;
     observer.expected_slot = client.state.slot + 1u;
-    lantern_gossipsub_service_set_publish_hook(
-        &client.gossip,
-        local_block_publish_observer_hook,
-        &observer);
-    lantern_gossipsub_service_set_loopback_only(&client.gossip, 1);
+    client.gossip.publish_hook = local_block_publish_observer_hook;
+    client.gossip.publish_hook_user_data = &observer;
+    client.gossip.loopback_only = 1;
 
     uint64_t now_milliseconds = validator_wall_time_now_millis();
     uint64_t target_start_seconds = (now_milliseconds / 1000u) + 4u;
-    lantern_slot_clock_config_init(&config);
-    config.genesis_time = target_start_seconds
-        - (observer.expected_slot * (uint64_t)config.seconds_per_slot);
-    if (lantern_slot_clock_init(&client.runtime.clock, &config) != 0) {
-        fprintf(stderr, "failed to initialize proposal boundary clock\n");
-        goto cleanup;
-    }
-    client.has_runtime = true;
+    client.state.config.genesis_time = target_start_seconds
+        - (observer.expected_slot * LANTERN_SECONDS_PER_SLOT);
 
     uint64_t slot_start_milliseconds = 0u;
     if (lantern_slot_clock_slot_start_time(
-            &client.runtime.clock,
+            client.state.config.genesis_time,
             observer.expected_slot,
             &slot_start_milliseconds)
         != 0) {
@@ -3981,10 +3965,9 @@ static int test_prebuilt_proposal_waits_for_target_slot_boundary(void) {
     observer.expected_slot = committed_slot + 1u;
     now_milliseconds = validator_wall_time_now_millis();
     target_start_seconds = (now_milliseconds / 1000u) + 3u;
-    config.genesis_time = target_start_seconds
-        - (observer.expected_slot * (uint64_t)config.seconds_per_slot);
-    if (lantern_slot_clock_init(&client.runtime.clock, &config) != 0
-        || validator_propose_block(&client, observer.expected_slot, 0u) != LANTERN_CLIENT_OK) {
+    client.state.config.genesis_time = target_start_seconds
+        - (observer.expected_slot * LANTERN_SECONDS_PER_SLOT);
+    if (validator_propose_block(&client, observer.expected_slot, 0u) != LANTERN_CLIENT_OK) {
         fprintf(stderr, "failed to enqueue proposal for shutdown test\n");
         goto cleanup;
     }

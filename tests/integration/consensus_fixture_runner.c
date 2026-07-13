@@ -360,19 +360,20 @@ static int sync_payload_pools_after_time_advance(
     if (!fork_choice || !store || !state) {
         return -1;
     }
-    if (fork_choice->intervals_per_slot == 0u || fork_choice->time_intervals <= previous_intervals) {
+    if (fork_choice->time_intervals <= previous_intervals) {
         return 0;
     }
 
     for (uint64_t step = previous_intervals + 1u; step <= fork_choice->time_intervals; ++step) {
-        uint64_t interval_index = step % fork_choice->intervals_per_slot;
+        uint64_t interval_index = step % LANTERN_INTERVALS_PER_SLOT;
         bool step_has_proposal = has_proposal && (step == fork_choice->time_intervals);
-        if (interval_index == 2u) {
+        if (interval_index == LANTERN_DUTY_PHASE_AGGREGATE) {
             if (aggregate_pending_gossip_attestations(state, store) != 0) {
                 return -1;
             }
         }
-        if (interval_index == 4u || (interval_index == 0u && step_has_proposal)) {
+        if (interval_index == LANTERN_DUTY_PHASE_VOTE_ACCEPT
+            || (interval_index == LANTERN_DUTY_PHASE_PROPOSAL && step_has_proposal)) {
             (void)lantern_store_promote_new_aggregated_payloads(store);
         }
     }
@@ -1398,11 +1399,7 @@ static int run_fork_choice_fixture(const char *path) {
     lantern_fork_choice_init(&store);
     lantern_store_init(&fork_choice_store);
     lantern_store_attach_fork_choice(&fork_choice_store, &store);
-    LanternConfig config = {
-        .num_validators = validator_count,
-        .genesis_time = genesis_time,
-    };
-    if (lantern_fork_choice_configure(&store, &config) != 0) {
+    if (lantern_fork_choice_configure(&store, validator_count) != 0) {
         reset_block(&anchor_block);
         lantern_state_reset(&state);
         lantern_fixture_document_reset(&doc);
@@ -1426,7 +1423,9 @@ static int run_fork_choice_fixture(const char *path) {
         .slot = anchor_block.slot,
     };
 
-    if (lantern_fork_choice_set_anchor(&store, &anchor_block, &anchor_checkpoint, &anchor_checkpoint, &anchor_root) != 0) {
+    if (lantern_fork_choice_set_anchor_with_state(
+            &store, &anchor_block, &anchor_checkpoint, &anchor_checkpoint, &anchor_root, NULL)
+        != 0) {
         reset_block(&anchor_block);
         lantern_fork_choice_reset(&store);
         lantern_state_reset(&state);
@@ -1577,11 +1576,29 @@ static int run_fork_choice_fixture(const char *path) {
                     hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
                     return -1;
                 }
-                uint64_t now = time_is_interval
-                    ? (genesis_time * 1000u) + (time_interval * store.milliseconds_per_interval)
-                    : time_interval * 1000u;
+                uint64_t target_interval = time_interval;
+                if (!time_is_interval) {
+                    uint64_t now = 0;
+                    int clock_rc = -1;
+                    if (time_interval <= UINT64_MAX / 1000u) {
+                        now = time_interval * 1000u;
+                        clock_rc = lantern_slot_clock_total_interval(genesis_time, now, &target_interval);
+                    }
+                    if (clock_rc < 0) {
+                        reset_block(&anchor_block);
+                        lantern_fork_choice_reset(&store);
+                        lantern_state_reset(&state);
+                        lantern_fixture_document_reset(&doc);
+                        stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
+                        hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
+                        return -1;
+                    }
+                    if (clock_rc > 0) {
+                        target_interval = 0;
+                    }
+                }
                 uint64_t previous_intervals = store.time_intervals;
-                if (lantern_fork_choice_advance_time(&store, now, has_proposal) != 0) {
+                if (lantern_fork_choice_advance_to(&store, target_interval, has_proposal) != 0) {
                     reset_block(&anchor_block);
                     lantern_fork_choice_reset(&store);
                     lantern_state_reset(&state);
@@ -1736,9 +1753,19 @@ static int run_fork_choice_fixture(const char *path) {
         hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
             return -1;
         }
-        uint64_t now = (genesis_time * 1000u) + (signed_block.block.slot * store.seconds_per_slot * 1000u);
+        if (signed_block.block.slot > UINT64_MAX / LANTERN_INTERVALS_PER_SLOT) {
+            reset_block(&signed_block.block);
+            reset_block(&anchor_block);
+            lantern_fork_choice_reset(&store);
+            lantern_state_reset(&state);
+            lantern_fixture_document_reset(&doc);
+            stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
+            hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
+            return -1;
+        }
+        uint64_t target_interval = signed_block.block.slot * LANTERN_INTERVALS_PER_SLOT;
         uint64_t previous_intervals = store.time_intervals;
-        if (lantern_fork_choice_advance_time(&store, now, true) != 0) {
+        if (lantern_fork_choice_advance_to(&store, target_interval, true) != 0) {
             fprintf(stderr, "failed to advance fork_choice time in %s step %d\n", path, i);
             reset_block(&signed_block.block);
             reset_block(&anchor_block);

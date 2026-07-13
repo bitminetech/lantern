@@ -465,13 +465,6 @@ void lantern_enr_record_reset(struct lantern_enr_record *record) {
     *record = (struct lantern_enr_record){0};
 }
 
-void lantern_enr_record_list_init(struct lantern_enr_record_list *list) {
-    if (!list) {
-        return;
-    }
-    *list = (struct lantern_enr_record_list){0};
-}
-
 void lantern_enr_record_list_reset(struct lantern_enr_record_list *list) {
     if (!list) {
         return;

@@ -8,7 +8,6 @@
 #include "client_test_helpers.h"
 #include "../../src/core/client_services_internal.h"
 #include "../../src/core/client_sync_internal.h"
-#include "lantern/consensus/duties.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"
@@ -1507,11 +1506,7 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
 
     lantern_fork_choice_init(&client.fork_choice);
     lantern_store_attach_fork_choice(&client.store, &client.fork_choice);
-    LanternConfig fork_cfg = {
-        .num_validators = 8,
-        .genesis_time = 0,
-    };
-    if (lantern_fork_choice_configure(&client.fork_choice, &fork_cfg) != 0) {
+    if (lantern_fork_choice_configure(&client.fork_choice, 8u) != 0) {
         fprintf(stderr, "failed to configure fork choice\n");
         rc = 1;
         goto cleanup;
@@ -1533,12 +1528,13 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
     anchor_block.parent_root = client.state.latest_block_header.parent_root;
     anchor_block.state_root = client.state.latest_block_header.state_root;
 
-    if (lantern_fork_choice_set_anchor(
+    if (lantern_fork_choice_set_anchor_with_state(
             &client.fork_choice,
             &anchor_block,
             &client.state.latest_justified,
             &client.state.latest_finalized,
-            &head_root)
+            &head_root,
+            NULL)
         != 0) {
         fprintf(stderr, "failed to set fork choice anchor\n");
         lantern_block_body_reset(&anchor_block.body);
@@ -2229,7 +2225,8 @@ static int test_historical_backfill_imports_after_large_gap_connects(void)
 cleanup:
     lantern_signed_block_with_attestation_reset(&block);
     if (target_ready) {
-        lantern_client_backfill_reset(&target.client);
+        free(target.client.backfill.roots);
+        target.client.backfill = (struct lantern_backfill_session){0};
         if (target.client.pending_lock_initialized) {
             pthread_mutex_destroy(&target.client.pending_lock);
             target.client.pending_lock_initialized = false;

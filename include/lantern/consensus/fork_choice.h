@@ -7,6 +7,7 @@
 #include <stdatomic.h>
 
 #include "lantern/consensus/containers.h"
+#include "lantern/consensus/slot_clock.h"
 #include "lantern/consensus/state.h"
 
 #ifdef __cplusplus
@@ -37,10 +38,6 @@ typedef struct lantern_fork_choice {
     bool has_anchor;
     LanternRoot anchor_root;
     uint64_t anchor_slot;
-    LanternConfig config;
-    uint32_t seconds_per_slot;
-    uint32_t intervals_per_slot;
-    uint64_t milliseconds_per_interval;
     uint64_t time_intervals;
     LanternCheckpoint latest_justified;
     LanternCheckpoint latest_finalized;
@@ -79,14 +76,8 @@ struct lantern_fork_choice_tree_snapshot {
 void lantern_fork_choice_init(LanternForkChoice *store);
 void lantern_fork_choice_reset(LanternForkChoice *store);
 
-int lantern_fork_choice_configure(LanternForkChoice *store, const LanternConfig *config);
+int lantern_fork_choice_configure(LanternForkChoice *store, uint64_t validator_count);
 
-int lantern_fork_choice_set_anchor(
-    LanternForkChoice *store,
-    const LanternBlock *anchor_block,
-    const LanternCheckpoint *latest_justified,
-    const LanternCheckpoint *latest_finalized,
-    const LanternRoot *block_root_hint);
 int lantern_fork_choice_set_anchor_with_state(
     LanternForkChoice *store,
     const LanternBlock *anchor_block,
@@ -134,9 +125,9 @@ int lantern_fork_choice_accept_new_aggregated_payloads(LanternForkChoice *store)
 int lantern_fork_choice_update_safe_target(LanternForkChoice *store);
 int lantern_fork_choice_recompute_head(LanternForkChoice *store);
 
-int lantern_fork_choice_advance_time(
+int lantern_fork_choice_advance_to(
     LanternForkChoice *store,
-    uint64_t now_milliseconds,
+    uint64_t target_interval,
     bool has_proposal);
 
 int lantern_fork_choice_current_head(const LanternForkChoice *store, LanternRoot *out_head);

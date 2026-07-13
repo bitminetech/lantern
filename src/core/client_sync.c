@@ -75,24 +75,6 @@ static void backfill_session_clear_locked(struct lantern_backfill_session *sessi
     memset(session, 0, sizeof(*session));
 }
 
-void lantern_client_backfill_reset(struct lantern_client *client)
-{
-    if (!client)
-    {
-        return;
-    }
-    bool locked = lantern_client_lock_pending(client);
-    if (locked)
-    {
-        backfill_session_clear_locked(&client->backfill);
-        lantern_client_unlock_pending(client, locked);
-    }
-    else
-    {
-        backfill_session_clear_locked(&client->backfill);
-    }
-}
-
 static bool backfill_root_append_locked(
     struct lantern_backfill_session *session,
     const LanternRoot *root)
@@ -1074,7 +1056,10 @@ int initialize_fork_choice(struct lantern_client *client)
 
     lantern_store_attach_fork_choice(&client->store, &client->fork_choice);
     lantern_fork_choice_reset(&client->fork_choice);
-    if (lantern_fork_choice_configure(&client->fork_choice, &client->state.config) != 0)
+    if (lantern_fork_choice_configure(
+            &client->fork_choice,
+            client->state.config.num_validators)
+        != 0)
     {
         lantern_log_error(
             "forkchoice",
@@ -2013,14 +1998,25 @@ static bool try_schedule_blocks_request_batch(
         request_id,
         root_count,
         first_root_hex[0] ? first_root_hex : "0x0");
-    if (lantern_client_schedule_blocks_request_batch(
+    struct lantern_peer_id peer_id;
+    int schedule_rc = lantern_peer_id_from_text(selected_peer, &peer_id) == 0
+        ? lantern_reqresp_service_request_blocks(
+              &client->reqresp,
+              &peer_id,
+              selected_peer,
+              roots,
+              root_count,
+              request_id)
+        : -1;
+    if (schedule_rc != 0)
+    {
+        lantern_client_on_blocks_request_complete_batch_with_id(
             client,
+            request_id,
             selected_peer,
             roots,
             root_count,
-            request_id)
-        != 0)
-    {
+            LANTERN_BLOCKS_REQUEST_FAILED);
         lantern_log_warn(
             "backfill",
             &(const struct lantern_log_metadata){
@@ -2029,10 +2025,6 @@ static bool try_schedule_blocks_request_batch(
             "not scheduled, peer %s, reason: scheduler_failed, roots %zu",
             selected_peer[0] ? selected_peer : "-",
             root_count);
-        /*
-         * The reqresp scheduler completes parse/open-stream failures itself so
-         * the reserved request id is released exactly once.
-         */
         return false;
     }
 

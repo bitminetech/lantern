@@ -52,7 +52,6 @@ int lantern_enr_record_multiaddr(const struct lantern_enr_record *record, char *
 int lantern_enr_record_eth2(const struct lantern_enr_record *record, struct lantern_enr_eth2_data *out_eth2);
 bool lantern_enr_record_is_aggregator(const struct lantern_enr_record *record);
 
-void lantern_enr_record_list_init(struct lantern_enr_record_list *list);
 void lantern_enr_record_list_reset(struct lantern_enr_record_list *list);
 int lantern_enr_record_list_append(struct lantern_enr_record_list *list, const char *enr_text);
 int lantern_enr_record_build_v4(

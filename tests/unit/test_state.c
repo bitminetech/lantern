@@ -6,7 +6,6 @@
 #include <stdint.h>
 #include <inttypes.h>
 
-#include "lantern/consensus/duties.h"
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/quorum.h"
@@ -394,7 +393,9 @@ static void setup_state_and_fork_choice(
 
     lantern_fork_choice_init(fork_choice);
     lantern_state_attach_fork_choice(state, fork_choice);
-    expect_zero(lantern_fork_choice_configure(fork_choice, &state->config), "configure fork choice for setup");
+    expect_zero(
+        lantern_fork_choice_configure(fork_choice, state->config.num_validators),
+        "configure fork choice for setup");
 
     LanternRoot state_root;
     expect_ssz_success(lantern_hash_tree_root_state(state, &state_root), "hash state for anchor setup");
@@ -417,12 +418,13 @@ static void setup_state_and_fork_choice(
     expect_ssz_success(lantern_hash_tree_root_block(&anchor, out_anchor_root), "hash anchor block");
 
     expect_zero(
-        lantern_fork_choice_set_anchor(
+        lantern_fork_choice_set_anchor_with_state(
             fork_choice,
             &anchor,
             &state->latest_justified,
             &state->latest_finalized,
-            out_anchor_root),
+            out_anchor_root,
+            NULL),
         "set fork choice anchor");
 
     lantern_state_attach_fork_choice(state, fork_choice);
@@ -3545,7 +3547,9 @@ static int test_select_block_parent_uses_fork_choice(void) {
     LanternForkChoice fork_choice;
     lantern_fork_choice_init(&fork_choice);
     lantern_state_attach_fork_choice(&state, &fork_choice);
-    expect_zero(lantern_fork_choice_configure(&fork_choice, &state.config), "configure fork choice");
+    expect_zero(
+        lantern_fork_choice_configure(&fork_choice, state.config.num_validators),
+        "configure fork choice");
     LanternRoot genesis_state_root;
     expect_ssz_success(lantern_hash_tree_root_state(&state, &genesis_state_root), "hash genesis state root");
     state.latest_block_header.state_root = genesis_state_root;
@@ -3562,7 +3566,8 @@ static int test_select_block_parent_uses_fork_choice(void) {
     expect_ssz_success(lantern_hash_tree_root_block(&genesis_block, &genesis_root), "genesis block root");
     LanternCheckpoint genesis_cp = {.root = genesis_root, .slot = genesis_block.slot};
     expect_zero(
-        lantern_fork_choice_set_anchor(&fork_choice, &genesis_block, &genesis_cp, &genesis_cp, &genesis_root),
+        lantern_fork_choice_set_anchor_with_state(
+            &fork_choice, &genesis_block, &genesis_cp, &genesis_cp, &genesis_root, NULL),
         "set anchor");
 
     lantern_state_attach_fork_choice(&state, &fork_choice);

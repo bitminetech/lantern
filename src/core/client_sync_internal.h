@@ -181,7 +181,6 @@ bool lantern_client_backfill_should_drop_gossip(
     const char *peer_text,
     const char *context);
 
-void lantern_client_backfill_reset(struct lantern_client *client);
 void lantern_client_set_sync_state_logged(
     struct lantern_client *client,
     LanternSyncState new_state,
