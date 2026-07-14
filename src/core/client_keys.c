@@ -11,7 +11,6 @@
  *       3. pending_lock
  *       4. validator_lock
  *       5. connection_lock
- *       6. peer_vote_lock
  */
 
 #include "client_internal.h"
@@ -27,7 +26,6 @@
 #include "internal/yaml_parser.h"
 #include "lantern/crypto/xmss.h"
 #include "lantern/support/log.h"
-#include "lantern/support/secure_mem.h"
 #include "lantern/support/strings.h"
 
 
@@ -43,8 +41,6 @@ static bool xmss_size_add_overflow(size_t a, size_t b, size_t *out_sum);
  * Constants
  * ============================================================================ */
 
-static const size_t XMSS_HEX_PREFIX_LENGTH = 2u;
-static const size_t XMSS_HEX_CHARS_PER_BYTE = 2u;
 static const size_t XMSS_KEY_FILENAME_MAX_LEN = 64u;
 static const size_t XMSS_WINDOWS_ABS_PATH_MIN_LEN = 3u;
 static const size_t XMSS_WINDOWS_COLON_INDEX = 1u;
@@ -85,8 +81,6 @@ static void free_local_secret_key_handles(struct lantern_local_validator *valida
     validator->proposal_secret_key = NULL;
     free(validator->proposal_secret_path);
     validator->proposal_secret_path = NULL;
-    validator->has_attestation_secret_handle = false;
-    validator->has_proposal_secret_handle = false;
 }
 
 static void validator_signature_history_reset(
@@ -121,24 +115,9 @@ void lantern_client_local_validator_cleanup(struct lantern_local_validator *vali
         return;
     }
 
-    if (validator->secret)
-    {
-        if (validator->secret_len > 0)
-        {
-            lantern_secure_zero(validator->secret, validator->secret_len);
-        }
-        free(validator->secret);
-        validator->secret = NULL;
-    }
-    validator->secret_len = 0;
-    validator->has_secret = false;
-
     free_local_secret_key_handles(validator);
     validator_signature_history_reset(&validator->attestation_signature_history);
     validator_signature_history_reset(&validator->proposal_signature_history);
-
-    validator->last_proposed_slot = UINT64_MAX;
-    validator->last_attested_slot = UINT64_MAX;
 }
 
 
@@ -172,108 +151,6 @@ void lantern_client_reset_local_validators(struct lantern_client *client)
 
 
 /* ============================================================================
- * Secret Key Decoding
- * ============================================================================ */
-
-/**
- * Decode a hex-encoded validator secret key.
- *
- * @spec subspecs/xmss/keygen.py - key encoding
- *
- * @param hex      Hex string (with optional 0x prefix)
- * @param out_key  Output buffer (caller must free)
- * @param out_len  Output length
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM if any parameter is NULL
- * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
- * @return LANTERN_CLIENT_ERR_VALIDATOR if the hex string is invalid
- *
- * @note Thread safety: This function is thread-safe
- */
-int lantern_client_decode_validator_secret(
-    const char *hex,
-    uint8_t **out_key,
-    size_t *out_len)
-{
-    if (!hex || !out_key || !out_len)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    *out_key = NULL;
-    *out_len = 0;
-
-    int result = LANTERN_CLIENT_ERR_VALIDATOR;
-    char *dup = NULL;
-    size_t dup_len = 0;
-    uint8_t *secret = NULL;
-    size_t secret_len = 0;
-
-    dup = lantern_string_duplicate(hex);
-    if (!dup)
-    {
-        return LANTERN_CLIENT_ERR_ALLOC;
-    }
-    dup_len = strlen(dup);
-
-    char *trimmed = lantern_trim_whitespace(dup);
-    if (!trimmed || *trimmed == '\0')
-    {
-        goto cleanup;
-    }
-
-    const char *hex_start = trimmed;
-    if (hex_start[0] == '0' && (hex_start[1] == 'x' || hex_start[1] == 'X'))
-    {
-        hex_start += XMSS_HEX_PREFIX_LENGTH;
-    }
-    size_t hex_len = strlen(hex_start);
-    if (hex_len == 0 || (hex_len % XMSS_HEX_CHARS_PER_BYTE) != 0)
-    {
-        goto cleanup;
-    }
-
-    secret_len = hex_len / XMSS_HEX_CHARS_PER_BYTE;
-    secret = malloc(secret_len);
-    if (!secret)
-    {
-        result = LANTERN_CLIENT_ERR_ALLOC;
-        goto cleanup;
-    }
-
-    if (lantern_hex_decode(hex_start, secret, secret_len) != 0)
-    {
-        goto cleanup;
-    }
-
-    *out_key = secret;
-    *out_len = secret_len;
-    secret = NULL;
-    secret_len = 0;
-    result = LANTERN_CLIENT_OK;
-
-cleanup:
-    if (secret)
-    {
-        if (secret_len > 0)
-        {
-            lantern_secure_zero(secret, secret_len);
-        }
-        free(secret);
-    }
-    if (dup)
-    {
-        if (dup_len > 0)
-        {
-            lantern_secure_zero(dup, dup_len);
-        }
-        free(dup);
-    }
-    return result;
-}
-
-
-/* ============================================================================
  * Hash-Sig Manifest Types
  * ============================================================================ */
 
@@ -301,24 +178,6 @@ struct xmss_manifest
 /* ============================================================================
  * Hash-Sig Manifest Functions
  * ============================================================================ */
-
-/**
- * Initialize a manifest structure.
- *
- * @param manifest  Manifest to initialize
- *
- * @note Thread safety: This function is thread-safe
- */
-static void xmss_manifest_init(struct xmss_manifest *manifest)
-{
-    if (!manifest)
-    {
-        return;
-    }
-    manifest->entries = NULL;
-    manifest->count = 0;
-}
-
 
 /**
  * Reset and free manifest resources.
@@ -747,32 +606,6 @@ static bool xmss_file_exists(const char *path)
 }
 
 
-static int xmss_resolve_validator_keys_path(
-    const struct lantern_client *client,
-    char **out_path)
-{
-    if (!client || !out_path)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    *out_path = NULL;
-
-    if (client->genesis_paths.validator_registry_path
-        && client->genesis_paths.validator_registry_path[0] != '\0')
-    {
-        *out_path = lantern_string_duplicate(client->genesis_paths.validator_registry_path);
-        if (!*out_path)
-        {
-            return LANTERN_CLIENT_ERR_ALLOC;
-        }
-        return LANTERN_CLIENT_OK;
-    }
-
-    return LANTERN_CLIENT_ERR_CONFIG;
-}
-
-
 /**
  * Format a template path with a validator index.
  *
@@ -1129,8 +962,6 @@ static int load_xmss_secret_keys(
         validator->attestation_secret_key = attestation_secret;
         validator->proposal_secret_key = NULL;
         validator->proposal_secret_path = owned_proposal_path;
-        validator->has_attestation_secret_handle = true;
-        validator->has_proposal_secret_handle = false;
         ++loaded;
     }
     lantern_log_info(
@@ -1173,9 +1004,7 @@ int lantern_client_configure_xmss_sources(
     }
     struct lantern_log_metadata meta = {.validator = client->node_id};
     const char *env_dir = xmss_non_empty(getenv("XMSS_KEY_DIR"));
-    const char *env_public_path = xmss_non_empty(getenv("XMSS_PK_PATH"));
     const char *env_secret_path = xmss_non_empty(getenv("XMSS_SK_PATH"));
-    const char *env_public_template = xmss_non_empty(getenv("XMSS_PK_TEMPLATE"));
     const char *env_secret_template = xmss_non_empty(getenv("XMSS_SK_TEMPLATE"));
 
     const char *resolved_dir = xmss_non_empty(options->xmss_key_dir);
@@ -1208,19 +1037,6 @@ int lantern_client_configure_xmss_sources(
         }
     }
 
-    const char *resolved_public_template = xmss_non_empty(options->xmss_public_template);
-    if (!resolved_public_template)
-    {
-        resolved_public_template = env_public_template;
-    }
-    if (resolved_public_template)
-    {
-        if (set_owned_string(&client->xmss_public_template, resolved_public_template) != 0)
-        {
-            return LANTERN_CLIENT_ERR_ALLOC;
-        }
-    }
-
     const char *resolved_secret_template = xmss_non_empty(options->xmss_secret_template);
     if (!resolved_secret_template)
     {
@@ -1229,19 +1045,6 @@ int lantern_client_configure_xmss_sources(
     if (resolved_secret_template)
     {
         if (set_owned_string(&client->xmss_secret_template, resolved_secret_template) != 0)
-        {
-            return LANTERN_CLIENT_ERR_ALLOC;
-        }
-    }
-
-    const char *resolved_public_path = xmss_non_empty(options->xmss_public_path);
-    if (!resolved_public_path)
-    {
-        resolved_public_path = env_public_path;
-    }
-    if (resolved_public_path)
-    {
-        if (set_owned_string(&client->xmss_public_path, resolved_public_path) != 0)
         {
             return LANTERN_CLIENT_ERR_ALLOC;
         }
@@ -1262,12 +1065,10 @@ int lantern_client_configure_xmss_sources(
     lantern_log_info(
         "crypto",
         &meta,
-        "xmss sources resolved dir=%s annotated_validators=%s pk_path=%s sk_path=%s pk_template=%s sk_template=%s",
+        "xmss sources resolved dir=%s annotated_validators=%s sk_path=%s sk_template=%s",
         client->xmss_key_dir ? client->xmss_key_dir : "-",
         client->genesis_paths.validator_registry_path ? client->genesis_paths.validator_registry_path : "-",
-        client->xmss_public_path ? client->xmss_public_path : "-",
         client->xmss_secret_path ? client->xmss_secret_path : "-",
-        client->xmss_public_template ? client->xmss_public_template : "-",
         client->xmss_secret_template ? client->xmss_secret_template : "-");
     return LANTERN_CLIENT_OK;
 }
@@ -1306,39 +1107,24 @@ int lantern_client_load_xmss_keys(struct lantern_client *client)
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
 
-    struct xmss_manifest manifest;
-    xmss_manifest_init(&manifest);
+    struct xmss_manifest manifest = {0};
     bool manifest_loaded = false;
-    char *annotated_path = NULL;
-
-    int annotated_path_result = xmss_resolve_validator_keys_path(
-        client,
-        &annotated_path);
-    if (annotated_path_result == LANTERN_CLIENT_OK && annotated_path)
+    const char *annotated_path = client->genesis_paths.validator_registry_path;
+    if (xmss_file_exists(annotated_path))
     {
-        bool have_annotated_file = xmss_file_exists(annotated_path);
-        if (have_annotated_file)
+        int manifest_result = xmss_manifest_load_annotated(
+            annotated_path,
+            client->node_id,
+            &manifest);
+        if (manifest_result == LANTERN_CLIENT_OK)
         {
-            int manifest_result = xmss_manifest_load_annotated(
-                annotated_path,
-                client->node_id,
-                &manifest);
-            if (manifest_result == LANTERN_CLIENT_OK)
-            {
-                manifest_loaded = true;
-            }
-            else
-            {
-                free(annotated_path);
-                xmss_manifest_reset(&manifest);
-                return manifest_result;
-            }
+            manifest_loaded = true;
         }
-    }
-    else if (annotated_path_result != LANTERN_CLIENT_ERR_CONFIG)
-    {
-        xmss_manifest_reset(&manifest);
-        return annotated_path_result;
+        else
+        {
+            xmss_manifest_reset(&manifest);
+            return manifest_result;
+        }
     }
 
     const struct xmss_manifest *manifest_ptr = manifest_loaded ? &manifest : NULL;
@@ -1351,19 +1137,15 @@ int lantern_client_load_xmss_keys(struct lantern_client *client)
         manifest_loaded ? "loaded" : "missing",
         client->genesis.chain_config.validator_count,
         client->local_validator_count);
-    /* Note: load_xmss_public_keys removed - per LeanSpec, verification uses
-     * 52-byte serialized pubkeys from state, not full JSON key handles */
     if (client->local_validator_count > 0)
     {
         int result = load_xmss_secret_keys(client, manifest_ptr);
         if (result != 0)
         {
-            free(annotated_path);
             xmss_manifest_reset(&manifest);
             return result;
         }
     }
-    free(annotated_path);
     xmss_manifest_reset(&manifest);
     return LANTERN_CLIENT_OK;
 }

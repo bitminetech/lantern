@@ -54,8 +54,7 @@ void client_test_clear_connected_peers(struct lantern_client *client) {
 
 lantern_client_error validator_collect_and_aggregate_attestation_signatures(
     struct lantern_client *client,
-    LanternAggregatedAttestations *out_attestations,
-    LanternAttestationSignatures *out_signatures,
+    struct lantern_aggregated_payload_pool *out_payloads,
     const uint64_t *scope_slot,
     struct lantern_block_build_stage_timings *stage_timings,
     bool *out_missing_state);
@@ -205,12 +204,10 @@ void client_test_pending_reset(struct lantern_client *client) {
 
 lantern_client_error client_test_aggregate_attestation_signatures(
     struct lantern_client *client,
-    LanternAggregatedAttestations *out_attestations,
-    LanternAttestationSignatures *out_signatures) {
+    struct lantern_aggregated_payload_pool *out_payloads) {
     return validator_collect_and_aggregate_attestation_signatures(
         client,
-        out_attestations,
-        out_signatures,
+        out_payloads,
         NULL,
         NULL,
         NULL);
@@ -298,10 +295,10 @@ void client_test_fill_root_with_index(LanternRoot *root, uint32_t index) {
 }
 
 int client_test_slot_for_root(struct lantern_client *client, const LanternRoot *root, uint64_t *out_slot) {
-    if (!client || !root || !out_slot || !client->has_fork_choice) {
+    if (!client || !root || !out_slot || client->store.block_len == 0u) {
         return -1;
     }
-    if (lantern_fork_choice_block_info(&client->fork_choice, root, out_slot, NULL, NULL) != 0) {
+    if (lantern_fork_choice_block_info(&client->store, root, out_slot, NULL, NULL) != 0) {
         return -1;
     }
     return 0;
@@ -331,7 +328,7 @@ int client_test_add_known_block(
     uint8_t state_seed,
     LanternRoot *out_root)
 {
-    if (!client || !parent_root || !out_root || !client->has_fork_choice) {
+    if (!client || !parent_root || !out_root || client->store.block_len == 0u) {
         return -1;
     }
 
@@ -339,7 +336,7 @@ int client_test_add_known_block(
     memset(&block, 0, sizeof(block));
     lantern_block_body_init(&block.body);
     block.slot = slot;
-    if (lantern_proposer_for_slot(block.slot, client->state.config.num_validators, &block.proposer_index) != 0) {
+    if (lantern_proposer_for_slot(block.slot, client->state.validator_count, &block.proposer_index) != 0) {
         lantern_block_body_reset(&block.body);
         return -1;
     }
@@ -352,7 +349,7 @@ int client_test_add_known_block(
         return -1;
     }
     if (lantern_fork_choice_add_block(
-            &client->fork_choice,
+            &client->store,
             &block,
             &client->state.latest_justified,
             &client->state.latest_finalized,
@@ -372,14 +369,9 @@ static void reset_vote_client_on_error(struct lantern_client *client) {
     client->pending_gossip_votes.items = NULL;
     client->pending_gossip_votes.length = 0;
     client->pending_gossip_votes.capacity = 0;
-    if (client->has_fork_choice) {
-        lantern_fork_choice_reset(&client->fork_choice);
-        client->has_fork_choice = false;
-    }
     lantern_store_reset(&client->store);
-    if (client->has_state) {
+    if (client->state.validator_count > 0u) {
         lantern_state_reset(&client->state);
-        client->has_state = false;
     }
     if (client->state_lock_initialized) {
         pthread_mutex_destroy(&client->state_lock);
@@ -418,11 +410,8 @@ static int client_test_setup_vote_validation_client_common(
 
     memset(client, 0, sizeof(*client));
     client->node_id = (char *)node_id;
-    client->debug_disable_fork_choice_time = true;
     lantern_store_init(&client->store);
     lantern_state_init(&client->state);
-    lantern_fork_choice_init(&client->fork_choice);
-    lantern_store_attach_fork_choice(&client->store, &client->fork_choice);
 
     if (pthread_mutex_init(&client->state_lock, NULL) != 0) {
         fprintf(stderr, "failed to initialize state mutex for vote test\n");
@@ -442,15 +431,6 @@ static int client_test_setup_vote_validation_client_common(
 
     if (lantern_state_generate_genesis(&client->state, genesis_time, (uint64_t)validator_count) != 0) {
         fprintf(stderr, "failed to generate genesis for vote test\n");
-        goto finish;
-    }
-    client->has_state = true;
-
-    if (lantern_fork_choice_configure(
-            &client->fork_choice,
-            client->state.config.num_validators)
-        != 0) {
-        fprintf(stderr, "failed to configure fork choice for vote test\n");
         goto finish;
     }
 
@@ -521,7 +501,7 @@ static int client_test_setup_vote_validation_client_common(
     lantern_block_body_init(&anchor.body);
     anchor_body_init = true;
     anchor.slot = 0;
-    if (lantern_proposer_for_slot(anchor.slot, client->state.config.num_validators, &anchor.proposer_index) != 0) {
+    if (lantern_proposer_for_slot(anchor.slot, client->state.validator_count, &anchor.proposer_index) != 0) {
         fprintf(stderr, "failed to compute anchor proposer for vote test\n");
         goto finish;
     }
@@ -541,7 +521,7 @@ static int client_test_setup_vote_validation_client_common(
     }
 
     if (lantern_fork_choice_set_anchor_with_state(
-            &client->fork_choice,
+            &client->store,
             &anchor,
             &client->state.latest_justified,
             &client->state.latest_finalized,
@@ -556,7 +536,7 @@ static int client_test_setup_vote_validation_client_common(
     lantern_block_body_init(&child.body);
     child_body_init = true;
     child.slot = anchor.slot + 1u;
-    if (lantern_proposer_for_slot(child.slot, client->state.config.num_validators, &child.proposer_index) != 0) {
+    if (lantern_proposer_for_slot(child.slot, client->state.validator_count, &child.proposer_index) != 0) {
         fprintf(stderr, "failed to compute child proposer for vote test\n");
         goto finish;
     }
@@ -580,7 +560,7 @@ static int client_test_setup_vote_validation_client_common(
     }
 
     if (lantern_fork_choice_add_block(
-            &client->fork_choice,
+            &client->store,
             &child,
             &client->state.latest_justified,
             &client->state.latest_finalized,
@@ -589,7 +569,6 @@ static int client_test_setup_vote_validation_client_common(
         fprintf(stderr, "failed to add child block for vote test\n");
         goto finish;
     }
-    client->has_fork_choice = true;
 
     if (lantern_state_process_slots(&client->state, child.slot) != 0) {
         fprintf(stderr, "failed to advance state slot for vote test child block\n");
@@ -600,13 +579,15 @@ static int client_test_setup_vote_validation_client_common(
         goto finish;
     }
     if (lantern_fork_choice_set_block_state(
-            &client->fork_choice,
+            &client->store,
             &child_root_local,
             &client->state)
         != 0) {
         fprintf(stderr, "failed to attach child state for vote test\n");
         goto finish;
     }
+    client->store.time_intervals =
+        ((child.slot + 1u) * LANTERN_INTERVALS_PER_SLOT) - 1u;
     if (anchor_root) {
         *anchor_root = anchor_root_local;
     }

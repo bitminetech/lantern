@@ -9,22 +9,26 @@
 
 struct PQSignatureSchemeSecretKey;
 struct PQSignatureSchemePublicKey;
+struct lantern_aggregated_payload_pool;
 
 typedef struct {
     const uint8_t *pubkey;
     const LanternSignature *signature;
 } LanternRawXmssSignature;
 
+typedef enum {
+    LANTERN_SHADOW_AGGREGATE,
+    LANTERN_SHADOW_VERIFY,
+    LANTERN_SHADOW_MERGE,
+    LANTERN_SHADOW_OPERATION_COUNT,
+} LanternShadowOperation;
+
 bool lantern_signature_is_zero(const LanternSignature *signature);
 void lantern_signature_zero(LanternSignature *signature);
 void lantern_signature_prewarm_prover(void);
 void lantern_signature_configure_shadow_costs(
-    double aggregate_rate,
-    bool has_aggregate_rate,
-    double verify_rate,
-    bool has_verify_rate,
-    double merge_rate,
-    bool has_merge_rate);
+    const double rates[LANTERN_SHADOW_OPERATION_COUNT],
+    uint8_t configured_rates);
 bool lantern_signature_verify(
     const uint8_t *pubkey_bytes,
     size_t pubkey_len,
@@ -73,7 +77,7 @@ bool lantern_signature_unwrap_type2_proof(
 bool lantern_signature_merge_block_type2_proof(
     const LanternState *state,
     const LanternBlock *block,
-    const LanternAttestationSignatures *attestation_proofs,
+    const struct lantern_aggregated_payload_pool *attestation_payloads,
     const LanternAggregatedSignatureProof *proposer_proof,
     LanternByteList *out_encoded_proof);
 bool lantern_signature_verify_block_type2_proof(

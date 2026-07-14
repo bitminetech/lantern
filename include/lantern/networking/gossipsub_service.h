@@ -8,7 +8,6 @@
 #include "lantern/networking/libp2p.h"
 
 typedef struct libp2p_gossipsub libp2p_gossipsub_t;
-struct lantern_gossipsub_validation_pool;
 struct lantern_gossipsub_service;
 
 #ifdef __cplusplus
@@ -17,10 +16,7 @@ extern "C" {
 
 struct lantern_gossipsub_config {
     struct lantern_libp2p_host *network;
-    const char *devnet;
-    const char *data_dir;
     const char *topic_network_name;
-    uint8_t fork_digest[4];
     size_t attestation_subnet_id;
     int subscribe_attestation_subnet;
 };
@@ -63,7 +59,6 @@ struct lantern_gossipsub_peer_connection_state {
 };
 
 struct lantern_gossipsub_protocol_adapter {
-    struct lantern_gossipsub_service *service;
     libp2p_host_protocol_open_fn_t on_open;
     libp2p_host_protocol_event_fn_t on_event;
     void *user_data;
@@ -81,10 +76,7 @@ struct lantern_gossipsub_service {
     char vote_topic[128];
     char vote_subnet_topic[128];
     char aggregated_attestation_topic[128];
-    const char *data_dir;
-    const char *devnet;
     char topic_network_name[64];
-    uint8_t fork_digest[4];
     size_t attestation_subnet_id;
     int subscribe_attestation_subnet;
     int (*publish_hook)(const char *topic, const uint8_t *payload, size_t payload_len, void *user_data);
@@ -98,7 +90,6 @@ struct lantern_gossipsub_service {
     void *aggregated_attestation_handler_user_data;
     char (*extra_vote_subnet_topics)[128];
     size_t extra_vote_subnet_topic_count;
-    struct lantern_gossipsub_validation_pool *validation_pool;
     struct lantern_gossipsub_peer_connection_state peer_connections[LANTERN_GOSSIPSUB_MAX_TRACKED_PEERS];
 };
 

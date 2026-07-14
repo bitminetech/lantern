@@ -48,60 +48,38 @@ static void *grow_capacity(
         (list)->field = grown;                                                          \
     } while (0)
 
-void lantern_attestations_init(LanternAttestations *list) {
-    if (!list) {
-        return;
+void lantern_root_zero(LanternRoot *root) {
+    if (root) {
+        memset(root->bytes, 0, sizeof(root->bytes));
     }
-    list->data = NULL;
-    list->length = 0;
-    list->capacity = 0;
 }
 
-void lantern_attestations_reset(LanternAttestations *list) {
-    if (!list) {
-        return;
+bool lantern_root_is_zero(const LanternRoot *root) {
+    if (!root) {
+        return true;
     }
-    free(list->data);
-    list->data = NULL;
-    list->length = 0;
-    list->capacity = 0;
-}
-
-int lantern_attestations_append(LanternAttestations *list, const LanternVote *vote) {
-    if (!list || !vote) {
-        return -1;
-    }
-    ENSURE_CAPACITY(list, data, list->length + 1, 4);
-    list->data[list->length++] = *vote;
-    return 0;
-}
-
-int lantern_attestations_resize(LanternAttestations *list, size_t new_length) {
-    if (!list) {
-        return -1;
-    }
-    if (new_length == 0) {
-        if (list->data && list->length > 0) {
-            memset(list->data, 0, list->length * sizeof(*list->data));
+    for (size_t i = 0; i < sizeof(root->bytes); ++i) {
+        if (root->bytes[i] != 0u) {
+            return false;
         }
-        list->length = 0;
-        return 0;
     }
-    ENSURE_CAPACITY(list, data, new_length, 4);
-    if (!list->data) {
-        return -1;
+    return true;
+}
+
+bool lantern_root_equal(const LanternRoot *lhs, const LanternRoot *rhs) {
+    return lhs && rhs && memcmp(lhs->bytes, rhs->bytes, sizeof(lhs->bytes)) == 0;
+}
+
+bool lantern_validator_pubkey_is_zero(const uint8_t *pubkey) {
+    if (!pubkey) {
+        return true;
     }
-    size_t old_length = list->length;
-    if (new_length > old_length) {
-        size_t start = old_length;
-        size_t added = new_length - old_length;
-        memset(&list->data[start], 0, added * sizeof(*list->data));
-    } else if (new_length < old_length) {
-        size_t removed = old_length - new_length;
-        memset(&list->data[new_length], 0, removed * sizeof(*list->data));
+    for (size_t i = 0; i < LANTERN_VALIDATOR_PUBKEY_SIZE; ++i) {
+        if (pubkey[i] != 0u) {
+            return false;
+        }
     }
-    list->length = new_length;
-    return 0;
+    return true;
 }
 
 int lantern_validator_index_compute_subnet_id(
@@ -119,9 +97,7 @@ void lantern_bitlist_init(struct lantern_bitlist *list) {
     if (!list) {
         return;
     }
-    list->bytes = NULL;
-    list->bit_length = 0;
-    list->capacity = 0;
+    *list = (struct lantern_bitlist){0};
 }
 
 void lantern_bitlist_reset(struct lantern_bitlist *list) {
@@ -129,9 +105,7 @@ void lantern_bitlist_reset(struct lantern_bitlist *list) {
         return;
     }
     free(list->bytes);
-    list->bytes = NULL;
-    list->bit_length = 0;
-    list->capacity = 0;
+    *list = (struct lantern_bitlist){0};
 }
 
 int lantern_bitlist_resize(struct lantern_bitlist *list, size_t new_bit_length) {
@@ -210,9 +184,7 @@ void lantern_byte_list_init(LanternByteList *list) {
     if (!list) {
         return;
     }
-    list->data = NULL;
-    list->length = 0;
-    list->capacity = 0;
+    *list = (LanternByteList){0};
 }
 
 void lantern_byte_list_reset(LanternByteList *list) {
@@ -220,9 +192,7 @@ void lantern_byte_list_reset(LanternByteList *list) {
         return;
     }
     free(list->data);
-    list->data = NULL;
-    list->length = 0;
-    list->capacity = 0;
+    *list = (LanternByteList){0};
 }
 
 int lantern_byte_list_resize(LanternByteList *list, size_t new_length) {
@@ -258,7 +228,6 @@ int lantern_byte_list_copy(LanternByteList *dst, const LanternByteList *src) {
     }
     if (src->length == 0) {
         lantern_byte_list_reset(dst);
-        lantern_byte_list_init(dst);
         return 0;
     }
     if (src->length > LANTERN_AGG_PROOF_MAX_BYTES) {
@@ -277,8 +246,7 @@ void lantern_aggregated_attestation_init(LanternAggregatedAttestation *attestati
     if (!attestation) {
         return;
     }
-    lantern_bitlist_init(&attestation->aggregation_bits);
-    memset(&attestation->data, 0, sizeof(attestation->data));
+    *attestation = (LanternAggregatedAttestation){0};
 }
 
 void lantern_aggregated_attestation_reset(LanternAggregatedAttestation *attestation) {
@@ -286,7 +254,7 @@ void lantern_aggregated_attestation_reset(LanternAggregatedAttestation *attestat
         return;
     }
     lantern_bitlist_reset(&attestation->aggregation_bits);
-    memset(&attestation->data, 0, sizeof(attestation->data));
+    *attestation = (LanternAggregatedAttestation){0};
 }
 
 int lantern_aggregated_attestation_copy(
@@ -313,9 +281,7 @@ void lantern_aggregated_attestations_init(LanternAggregatedAttestations *list) {
     if (!list) {
         return;
     }
-    list->data = NULL;
-    list->length = 0;
-    list->capacity = 0;
+    *list = (LanternAggregatedAttestations){0};
 }
 
 void lantern_aggregated_attestations_reset(LanternAggregatedAttestations *list) {
@@ -328,9 +294,7 @@ void lantern_aggregated_attestations_reset(LanternAggregatedAttestations *list) 
         }
     }
     free(list->data);
-    list->data = NULL;
-    list->length = 0;
-    list->capacity = 0;
+    *list = (LanternAggregatedAttestations){0};
 }
 
 int lantern_aggregated_attestations_append(
@@ -360,7 +324,6 @@ int lantern_aggregated_attestations_copy(
     }
     if (src->length == 0) {
         lantern_aggregated_attestations_reset(dst);
-        lantern_aggregated_attestations_init(dst);
         return 0;
     }
     ENSURE_CAPACITY(dst, data, src->length, 4);
@@ -404,70 +367,11 @@ int lantern_aggregated_attestations_resize(LanternAggregatedAttestations *list, 
     return 0;
 }
 
-int lantern_expand_aggregated_attestations(
-    const LanternAggregatedAttestations *aggregated,
-    size_t validator_count,
-    LanternAttestations *out_attestations) {
-    if (!aggregated || !out_attestations) {
-        return -1;
-    }
-    if (lantern_attestations_resize(out_attestations, 0) != 0) {
-        return -1;
-    }
-    if (validator_count == 0 || aggregated->length == 0) {
-        return 0;
-    }
-    if (!aggregated->data) {
-        return -1;
-    }
-    int rc = 0;
-    for (size_t i = 0; i < aggregated->length; ++i) {
-        const LanternAggregatedAttestation *att = &aggregated->data[i];
-        size_t bit_length = att->aggregation_bits.bit_length;
-        if (bit_length > 0 && !att->aggregation_bits.bytes) {
-            rc = -1;
-            break;
-        }
-        for (size_t v = 0; v < bit_length; ++v) {
-            if (!lantern_bitlist_get(&att->aggregation_bits, v)) {
-                continue;
-            }
-            if (v >= validator_count) {
-                rc = -1;
-                break;
-            }
-            if (out_attestations->length >= LANTERN_MAX_ATTESTATIONS) {
-                rc = -1;
-                break;
-            }
-            LanternVote vote;
-            memset(&vote, 0, sizeof(vote));
-            vote.validator_id = (uint64_t)v;
-            vote.slot = att->data.slot;
-            vote.head = att->data.head;
-            vote.target = att->data.target;
-            vote.source = att->data.source;
-            if (lantern_attestations_append(out_attestations, &vote) != 0) {
-                rc = -1;
-                break;
-            }
-        }
-        if (rc != 0) {
-            break;
-        }
-    }
-    if (rc != 0) {
-        (void)lantern_attestations_resize(out_attestations, 0);
-    }
-    return rc;
-}
-
 void lantern_aggregated_signature_proof_init(LanternAggregatedSignatureProof *proof) {
     if (!proof) {
         return;
     }
-    lantern_bitlist_init(&proof->participants);
-    lantern_byte_list_init(&proof->proof_data);
+    *proof = (LanternAggregatedSignatureProof){0};
 }
 
 void lantern_aggregated_signature_proof_reset(LanternAggregatedSignatureProof *proof) {
@@ -476,6 +380,7 @@ void lantern_aggregated_signature_proof_reset(LanternAggregatedSignatureProof *p
     }
     lantern_bitlist_reset(&proof->participants);
     lantern_byte_list_reset(&proof->proof_data);
+    *proof = (LanternAggregatedSignatureProof){0};
 }
 
 int lantern_aggregated_signature_proof_copy(
@@ -504,150 +409,22 @@ void lantern_signed_aggregated_attestation_init(LanternSignedAggregatedAttestati
     if (!attestation) {
         return;
     }
-    memset(&attestation->data, 0, sizeof(attestation->data));
-    lantern_aggregated_signature_proof_init(&attestation->proof);
+    *attestation = (LanternSignedAggregatedAttestation){0};
 }
 
 void lantern_signed_aggregated_attestation_reset(LanternSignedAggregatedAttestation *attestation) {
     if (!attestation) {
         return;
     }
-    memset(&attestation->data, 0, sizeof(attestation->data));
     lantern_aggregated_signature_proof_reset(&attestation->proof);
-}
-
-void lantern_attestation_signatures_init(LanternAttestationSignatures *list) {
-    if (!list) {
-        return;
-    }
-    list->data = NULL;
-    list->length = 0;
-    list->capacity = 0;
-}
-
-void lantern_attestation_signatures_reset(LanternAttestationSignatures *list) {
-    if (!list) {
-        return;
-    }
-    if (list->data) {
-        for (size_t i = 0; i < list->length; ++i) {
-            lantern_aggregated_signature_proof_reset(&list->data[i]);
-        }
-    }
-    free(list->data);
-    list->data = NULL;
-    list->length = 0;
-    list->capacity = 0;
-}
-
-int lantern_attestation_signatures_append(
-    LanternAttestationSignatures *list,
-    const LanternAggregatedSignatureProof *proof) {
-    if (!list || !proof) {
-        return -1;
-    }
-    ENSURE_CAPACITY(list, data, list->length + 1, 4);
-    if (list->length >= list->capacity) {
-        return -1;
-    }
-    lantern_aggregated_signature_proof_init(&list->data[list->length]);
-    if (lantern_aggregated_signature_proof_copy(&list->data[list->length], proof) != 0) {
-        lantern_aggregated_signature_proof_reset(&list->data[list->length]);
-        return -1;
-    }
-    list->length += 1;
-    return 0;
-}
-
-int lantern_attestation_signatures_resize(LanternAttestationSignatures *list, size_t new_length) {
-    if (!list) {
-        return -1;
-    }
-    if (new_length == 0) {
-        if (list->data && list->length > 0) {
-            for (size_t i = 0; i < list->length; ++i) {
-                lantern_aggregated_signature_proof_reset(&list->data[i]);
-            }
-        }
-        list->length = 0;
-        return 0;
-    }
-    ENSURE_CAPACITY(list, data, new_length, 4);
-    size_t old_length = list->length;
-    if (new_length > old_length) {
-        for (size_t i = old_length; i < new_length; ++i) {
-            lantern_aggregated_signature_proof_init(&list->data[i]);
-        }
-    } else if (new_length < old_length) {
-        for (size_t i = new_length; i < old_length; ++i) {
-            lantern_aggregated_signature_proof_reset(&list->data[i]);
-        }
-    }
-    list->length = new_length;
-    return 0;
-}
-
-void lantern_signature_list_init(LanternSignatureList *list) {
-    if (!list) {
-        return;
-    }
-    list->data = NULL;
-    list->length = 0;
-    list->capacity = 0;
-}
-
-void lantern_signature_list_reset(LanternSignatureList *list) {
-    if (!list) {
-        return;
-    }
-    free(list->data);
-    list->data = NULL;
-    list->length = 0;
-    list->capacity = 0;
-}
-
-int lantern_signature_list_append(LanternSignatureList *list, const LanternSignature *signature) {
-    if (!list || !signature) {
-        return -1;
-    }
-    ENSURE_CAPACITY(list, data, list->length + 1, 4);
-    list->data[list->length++] = *signature;
-    return 0;
-}
-
-int lantern_signature_list_resize(LanternSignatureList *list, size_t new_length) {
-    if (!list) {
-        return -1;
-    }
-    if (new_length == 0) {
-        if (list->data && list->length > 0) {
-            memset(list->data, 0, list->length * sizeof(*list->data));
-        }
-        list->length = 0;
-        return 0;
-    }
-    ENSURE_CAPACITY(list, data, new_length, 4);
-    if (!list->data) {
-        return -1;
-    }
-    size_t old_length = list->length;
-    if (new_length > old_length) {
-        size_t start = old_length;
-        size_t added = new_length - old_length;
-        memset(&list->data[start], 0, added * sizeof(*list->data));
-    } else if (new_length < old_length) {
-        size_t removed = old_length - new_length;
-        memset(&list->data[new_length], 0, removed * sizeof(*list->data));
-    }
-    list->length = new_length;
-    return 0;
+    *attestation = (LanternSignedAggregatedAttestation){0};
 }
 
 void lantern_block_body_init(LanternBlockBody *body) {
     if (!body) {
         return;
     }
-    lantern_aggregated_attestations_init(&body->attestations);
+    *body = (LanternBlockBody){0};
 }
 
 void lantern_block_body_reset(LanternBlockBody *body) {
@@ -655,15 +432,14 @@ void lantern_block_body_reset(LanternBlockBody *body) {
         return;
     }
     lantern_aggregated_attestations_reset(&body->attestations);
+    *body = (LanternBlockBody){0};
 }
 
 void lantern_signed_block_init(LanternSignedBlock *block) {
     if (!block) {
         return;
     }
-    memset(block, 0, sizeof(*block));
-    lantern_block_body_init(&block->block.body);
-    lantern_byte_list_init(&block->proof);
+    *block = (LanternSignedBlock){0};
 }
 
 void lantern_signed_block_reset(LanternSignedBlock *block) {
@@ -672,5 +448,5 @@ void lantern_signed_block_reset(LanternSignedBlock *block) {
     }
     lantern_block_body_reset(&block->block.body);
     lantern_byte_list_reset(&block->proof);
-    memset(block, 0, sizeof(*block));
+    *block = (LanternSignedBlock){0};
 }

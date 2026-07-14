@@ -497,8 +497,7 @@ static void test_status_decode_rejects_truncated_payloads(void) {
 }
 
 static void test_blocks_by_root_request(void) {
-    LanternBlocksByRootRequest req;
-    lantern_blocks_by_root_request_init(&req);
+    LanternBlocksByRootRequest req = {0};
     check_zero(lantern_root_list_resize(&req.roots, 2), "request roots resize");
     fill_bytes(req.roots.items[0].bytes, LANTERN_ROOT_SIZE, 0x11);
     fill_bytes(req.roots.items[1].bytes, LANTERN_ROOT_SIZE, 0x22);
@@ -518,8 +517,7 @@ static void test_blocks_by_root_request(void) {
               req.roots.length * LANTERN_ROOT_SIZE)
           == 0);
 
-    LanternBlocksByRootRequest decoded;
-    lantern_blocks_by_root_request_init(&decoded);
+    LanternBlocksByRootRequest decoded = {0};
     check_zero(lantern_network_blocks_by_root_request_decode(&decoded, encoded, written), "request decode");
     CHECK(decoded.roots.length == req.roots.length);
     CHECK(memcmp(decoded.roots.items[1].bytes, req.roots.items[1].bytes, LANTERN_ROOT_SIZE) == 0);
@@ -852,7 +850,6 @@ static void test_client_publish_block_loopback(void) {
     client.gossip.publish_hook = block_publish_hook;
     client.gossip.publish_hook_user_data = &ctx;
 
-    client.gossip_running = true;
     client.node_id = "loopback";
 
     CHECK(lantern_client_publish_block(&client, &block) == 0);

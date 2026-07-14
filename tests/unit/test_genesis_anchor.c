@@ -233,7 +233,7 @@ static int test_checkpoint_consumers_use_fork_choice_store(void)
         .root = child_root,
     };
     if (lantern_fork_choice_update_checkpoints(
-            &client.fork_choice,
+            &client.store,
             &child_checkpoint,
             &child_checkpoint)
         != 0)
@@ -360,7 +360,7 @@ static int test_http_checkpoint_callbacks_do_not_take_state_lock(void)
     memset(&justified, 0, sizeof(justified));
     memset(&finalized, 0, sizeof(finalized));
     if (!lantern_fork_choice_read_checkpoint_snapshot(
-            &client.fork_choice,
+            &client.store,
             &justified,
             &finalized))
     {
@@ -395,17 +395,17 @@ static int test_http_checkpoint_callbacks_do_not_take_state_lock(void)
         goto cleanup;
     }
 
-    struct lantern_http_head_snapshot head_snapshot;
-    memset(&head_snapshot, 0, sizeof(head_snapshot));
-    if (http_snapshot_head(&client, &head_snapshot) != LANTERN_HTTP_CB_OK)
+    LanternCheckpoint http_justified;
+    memset(&http_justified, 0, sizeof(http_justified));
+    if (http_snapshot_justified(&client, &http_justified) != LANTERN_HTTP_CB_OK)
     {
-        fprintf(stderr, "http_snapshot_head should not need state_lock\n");
+        fprintf(stderr, "http_snapshot_justified should not need state_lock\n");
         goto cleanup;
     }
-    if (!roots_equal(&head_snapshot.justified.root, &justified.root)
-        || head_snapshot.justified.slot != justified.slot)
+    if (!roots_equal(&http_justified.root, &justified.root)
+        || http_justified.slot != justified.slot)
     {
-        fprintf(stderr, "http_snapshot_head did not read the justified checkpoint snapshot\n");
+        fprintf(stderr, "http_snapshot_justified did not read the checkpoint snapshot\n");
         goto cleanup;
     }
 
@@ -527,7 +527,6 @@ static int test_pre_anchor_block_is_rejected_below_anchor_finalization(void)
     struct lantern_client client;
     memset(&client, 0, sizeof(client));
     client.node_id = "pre_anchor_floor_regression";
-    client.has_state = true;
     lantern_state_init(&client.state);
     lantern_store_init(&client.store);
 
@@ -616,7 +615,6 @@ static int test_pre_anchor_block_is_rejected_below_anchor_finalization(void)
     }
 
     pending_block_list_reset(&client.pending_blocks);
-    lantern_fork_choice_reset(&client.fork_choice);
     lantern_store_reset(&client.store);
     lantern_state_reset(&client.state);
     pthread_mutex_destroy(&client.pending_lock);
@@ -625,7 +623,6 @@ static int test_pre_anchor_block_is_rejected_below_anchor_finalization(void)
 
 cleanup:
     pending_block_list_reset(&client.pending_blocks);
-    lantern_fork_choice_reset(&client.fork_choice);
     lantern_store_reset(&client.store);
     lantern_state_reset(&client.state);
     if (client.pending_lock_initialized)
@@ -656,10 +653,9 @@ static int test_checkpoint_sync_anchor_checkpoint_restores(void)
 
     memset(&client, 0, sizeof(client));
     client.node_id = "checkpoint_anchor_restore";
-    client.has_state = true;
     lantern_state_init(&client.state);
     lantern_store_init(&client.store);
-    lantern_signed_block_with_attestation_init(&persisted_anchor);
+    lantern_signed_block_init(&persisted_anchor);
 
     if (lantern_state_generate_genesis(&client.state, UINT64_C(1761717362), 5u) != 0)
     {
@@ -799,11 +795,7 @@ static int test_checkpoint_sync_anchor_checkpoint_restores(void)
         goto cleanup;
     }
 
-    if (lantern_fork_choice_current_head(&client.fork_choice, &actual_head) != 0)
-    {
-        fprintf(stderr, "failed to read fork choice head for checkpoint anchor restore regression\n");
-        goto cleanup;
-    }
+    actual_head = client.store.head;
     if (!roots_equal(&actual_head, &expected_anchor_root))
     {
         fprintf(stderr, "checkpoint anchor restore regression head mismatch\n");
@@ -811,9 +803,9 @@ static int test_checkpoint_sync_anchor_checkpoint_restores(void)
     }
 
     const LanternCheckpoint *store_justified =
-        lantern_fork_choice_latest_justified(&client.fork_choice);
+        &client.store.latest_justified;
     const LanternCheckpoint *store_finalized =
-        lantern_fork_choice_latest_finalized(&client.fork_choice);
+        &client.store.latest_finalized;
     if (!store_justified || !store_finalized)
     {
         fprintf(stderr, "missing fork-choice checkpoints for checkpoint anchor restore regression\n");
@@ -837,7 +829,7 @@ static int test_checkpoint_sync_anchor_checkpoint_restores(void)
     child_block.slot = client.state.slot + 1u;
     if (lantern_proposer_for_slot(
             child_block.slot,
-            client.state.config.num_validators,
+            client.state.validator_count,
             &child_block.proposer_index)
         != 0)
     {
@@ -854,7 +846,7 @@ static int test_checkpoint_sync_anchor_checkpoint_restores(void)
         goto cleanup;
     }
     if (lantern_fork_choice_add_block_with_state(
-            &client.fork_choice,
+            &client.store,
             &child_block,
             &remote_justified,
             &remote_finalized,
@@ -869,7 +861,7 @@ static int test_checkpoint_sync_anchor_checkpoint_restores(void)
     lantern_block_body_reset(&child_block.body);
 
     const LanternState *cached_anchor_state =
-        lantern_fork_choice_block_state(&client.fork_choice, &expected_anchor_root);
+        lantern_fork_choice_block_state(&client.store, &expected_anchor_root);
     if (!cached_anchor_state)
     {
         fprintf(stderr, "missing cached anchor state for checkpoint anchor restore regression\n");
@@ -931,10 +923,9 @@ cleanup:
         cleanup_dir(data_dir);
         free(data_dir);
     }
-    lantern_fork_choice_reset(&client.fork_choice);
     lantern_store_reset(&client.store);
     lantern_state_reset(&client.state);
-    lantern_signed_block_with_attestation_reset(&persisted_anchor);
+    lantern_signed_block_reset(&persisted_anchor);
     return rc;
 }
 
@@ -943,11 +934,8 @@ static int test_reqresp_status_uses_genesis_anchor_before_genesis(void)
     struct lantern_client client;
     memset(&client, 0, sizeof(client));
     client.node_id = "status_genesis_anchor_regression";
-    client.has_state = true;
     lantern_state_init(&client.state);
     lantern_store_init(&client.store);
-    lantern_fork_choice_init(&client.fork_choice);
-    lantern_store_attach_fork_choice(&client.store, &client.fork_choice);
 
     int rc = 1;
     if (lantern_state_generate_genesis(&client.state, UINT64_C(4102444800), 4u) != 0)
@@ -970,14 +958,7 @@ static int test_reqresp_status_uses_genesis_anchor_before_genesis(void)
         goto cleanup;
     }
 
-    const LanternRoot *anchor_root = lantern_fork_choice_anchor_root(&client.fork_choice);
-    const LanternCheckpoint *store_finalized =
-        lantern_fork_choice_latest_finalized(&client.fork_choice);
-    if (!anchor_root || !store_finalized)
-    {
-        fprintf(stderr, "missing fork-choice anchor checkpoints for status regression\n");
-        goto cleanup;
-    }
+    const LanternRoot *anchor_root = &client.store.anchor.root;
 
     LanternStatusMessage status;
     memset(&status, 0, sizeof(status));
@@ -1013,7 +994,6 @@ static int test_reqresp_status_uses_genesis_anchor_before_genesis(void)
     rc = 0;
 
 cleanup:
-    lantern_fork_choice_reset(&client.fork_choice);
     lantern_store_reset(&client.store);
     lantern_state_reset(&client.state);
     return rc;
@@ -1025,21 +1005,32 @@ static int test_checkpoint_validator_pubkeys_checked_and_preserved(void)
     struct lantern_client client;
     memset(&client, 0, sizeof(client));
     client.node_id = "checkpoint_pubkeys_checked";
-    client.has_state = true;
     lantern_state_init(&client.state);
 
     uint8_t attestation_pubkeys[validator_count * LANTERN_VALIDATOR_PUBKEY_SIZE];
     uint8_t proposal_pubkeys[validator_count * LANTERN_VALIDATOR_PUBKEY_SIZE];
+    LanternValidator validators[validator_count];
     fill_pubkeys(attestation_pubkeys, validator_count);
     memcpy(proposal_pubkeys, attestation_pubkeys, sizeof(proposal_pubkeys));
     for (size_t i = 0; i < sizeof(proposal_pubkeys); ++i)
     {
         proposal_pubkeys[i] ^= 0x80u;
     }
+    for (size_t i = 0; i < validator_count; ++i)
+    {
+        memcpy(
+            validators[i].attestation_pubkey,
+            attestation_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+            LANTERN_VALIDATOR_PUBKEY_SIZE);
+        memcpy(
+            validators[i].proposal_pubkey,
+            proposal_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
+            LANTERN_VALIDATOR_PUBKEY_SIZE);
+        validators[i].index = i;
+    }
 
     client.genesis.chain_config.validator_count = validator_count;
-    client.genesis.chain_config.validator_attestation_pubkeys = attestation_pubkeys;
-    client.genesis.chain_config.validator_proposal_pubkeys = proposal_pubkeys;
+    client.genesis.chain_config.validators = validators;
 
     int rc = 1;
     LanternRoot root_before;
@@ -1189,7 +1180,6 @@ int main(void)
     struct lantern_client client;
     memset(&client, 0, sizeof(client));
     client.node_id = "genesis_anchor_regression";
-    client.has_state = true;
     lantern_state_init(&client.state);
 
     if (lantern_state_generate_genesis(&client.state, UINT64_C(1761717362), 3u) != 0)
@@ -1230,29 +1220,22 @@ int main(void)
     {
         fprintf(stderr, "initialize_fork_choice failed\n");
         lantern_state_reset(&client.state);
-        lantern_fork_choice_reset(&client.fork_choice);
+        lantern_fork_choice_reset(&client.store);
         return 1;
     }
 
-    LanternRoot actual_head;
-    if (lantern_fork_choice_current_head(&client.fork_choice, &actual_head) != 0)
-    {
-        fprintf(stderr, "failed to read fork choice head\n");
-        lantern_state_reset(&client.state);
-        lantern_fork_choice_reset(&client.fork_choice);
-        return 1;
-    }
+    LanternRoot actual_head = client.store.head;
 
     if (!roots_equal(&actual_head, &expected_anchor_root))
     {
         fprintf(stderr, "fork choice genesis anchor mismatch\n");
         lantern_state_reset(&client.state);
-        lantern_fork_choice_reset(&client.fork_choice);
+        lantern_fork_choice_reset(&client.store);
         return 1;
     }
 
     lantern_state_reset(&client.state);
-    lantern_fork_choice_reset(&client.fork_choice);
+    lantern_fork_choice_reset(&client.store);
 
     /*
      * Restart regression: initialize_fork_choice must seed checkpoint-synced
@@ -1260,7 +1243,6 @@ int main(void)
      */
     memset(&client, 0, sizeof(client));
     client.node_id = "fork_choice_checkpoint_restore";
-    client.has_state = true;
     lantern_state_init(&client.state);
 
     if (lantern_state_generate_genesis(&client.state, UINT64_C(1761717362), 4u) != 0)
@@ -1313,35 +1295,28 @@ int main(void)
     {
         fprintf(stderr, "initialize_fork_choice failed for restart regression\n");
         lantern_state_reset(&client.state);
-        lantern_fork_choice_reset(&client.fork_choice);
+        lantern_fork_choice_reset(&client.store);
         return 1;
     }
 
-    LanternRoot restart_head;
-    if (lantern_fork_choice_current_head(&client.fork_choice, &restart_head) != 0)
-    {
-        fprintf(stderr, "failed to read restart regression fork choice head\n");
-        lantern_state_reset(&client.state);
-        lantern_fork_choice_reset(&client.fork_choice);
-        return 1;
-    }
+    LanternRoot restart_head = client.store.head;
     if (!roots_equal(&restart_head, &expected_restart_anchor_root))
     {
         fprintf(stderr, "restart regression head mismatch\n");
         lantern_state_reset(&client.state);
-        lantern_fork_choice_reset(&client.fork_choice);
+        lantern_fork_choice_reset(&client.store);
         return 1;
     }
 
     const LanternCheckpoint *store_justified =
-        lantern_fork_choice_latest_justified(&client.fork_choice);
+        &client.store.latest_justified;
     const LanternCheckpoint *store_finalized =
-        lantern_fork_choice_latest_finalized(&client.fork_choice);
+        &client.store.latest_finalized;
     if (!store_justified || !store_finalized)
     {
         fprintf(stderr, "missing fork-choice checkpoints after restart init\n");
         lantern_state_reset(&client.state);
-        lantern_fork_choice_reset(&client.fork_choice);
+        lantern_fork_choice_reset(&client.store);
         return 1;
     }
     if (store_justified->slot != client.state.latest_block_header.slot
@@ -1352,7 +1327,7 @@ int main(void)
             "(got slot=%" PRIu64 " expected slot=%" PRIu64 ")\n",
             store_justified->slot, client.state.latest_block_header.slot);
         lantern_state_reset(&client.state);
-        lantern_fork_choice_reset(&client.fork_choice);
+        lantern_fork_choice_reset(&client.store);
         return 1;
     }
     if (store_finalized->slot != client.state.latest_block_header.slot
@@ -1363,49 +1338,49 @@ int main(void)
             "(got slot=%" PRIu64 " expected slot=%" PRIu64 ")\n",
             store_finalized->slot, client.state.latest_block_header.slot);
         lantern_state_reset(&client.state);
-        lantern_fork_choice_reset(&client.fork_choice);
+        lantern_fork_choice_reset(&client.store);
         return 1;
     }
 
     if (test_checkpoint_consumers_use_fork_choice_store() != 0)
     {
         lantern_state_reset(&client.state);
-        lantern_fork_choice_reset(&client.fork_choice);
+        lantern_fork_choice_reset(&client.store);
         return 1;
     }
     if (test_http_checkpoint_callbacks_do_not_take_state_lock() != 0)
     {
         lantern_state_reset(&client.state);
-        lantern_fork_choice_reset(&client.fork_choice);
+        lantern_fork_choice_reset(&client.store);
         return 1;
     }
     if (test_checkpoint_sync_parse_url_scheme_handling() != 0)
     {
         lantern_state_reset(&client.state);
-        lantern_fork_choice_reset(&client.fork_choice);
+        lantern_fork_choice_reset(&client.store);
         return 1;
     }
     if (test_pre_anchor_block_is_rejected_below_anchor_finalization() != 0)
     {
         lantern_state_reset(&client.state);
-        lantern_fork_choice_reset(&client.fork_choice);
+        lantern_fork_choice_reset(&client.store);
         return 1;
     }
     if (test_checkpoint_sync_anchor_checkpoint_restores() != 0)
     {
         lantern_state_reset(&client.state);
-        lantern_fork_choice_reset(&client.fork_choice);
+        lantern_fork_choice_reset(&client.store);
         return 1;
     }
 
     if (test_checkpoint_consumers_use_fork_choice_store() != 0)
     {
         lantern_state_reset(&client.state);
-        lantern_fork_choice_reset(&client.fork_choice);
+        lantern_fork_choice_reset(&client.store);
         return 1;
     }
 
     lantern_state_reset(&client.state);
-    lantern_fork_choice_reset(&client.fork_choice);
+    lantern_fork_choice_reset(&client.store);
     return 0;
 }

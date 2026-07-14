@@ -49,7 +49,6 @@ static const uint64_t CLIENT_UTILS_NANOS_PER_MILLI = 1000000ULL;
 static const uint64_t CLIENT_UTILS_NANOS_PER_SECOND = 1000000000ULL;
 #endif
 
-static const size_t CLIENT_UTILS_ROOT_HEX_MIN_LEN = 4;
 static const size_t CLIENT_UTILS_NODE_KEY_SIZE = 32;
 
 
@@ -131,49 +130,6 @@ uint64_t monotonic_millis(void)
         return 0;
     }
     return millis + usec_part;
-#endif
-}
-
-
-/**
- * Get current wall clock time in seconds.
- *
- * @return Current time as Unix timestamp
- *
- * @note Thread safety: This function is thread-safe
- */
-uint64_t validator_wall_time_now_seconds(void)
-{
-#if defined(_WIN32)
-    static const uint64_t WINDOWS_UNIX_EPOCH_DIFF_100NS = 116444736000000000ULL;
-    static const uint64_t WINDOWS_100NS_PER_SECOND = 10000000ULL;
-
-    FILETIME ft;
-    GetSystemTimeAsFileTime(&ft);
-    ULARGE_INTEGER uli;
-    uli.LowPart = ft.dwLowDateTime;
-    uli.HighPart = ft.dwHighDateTime;
-    uint64_t time_100ns = (uint64_t)uli.QuadPart;
-    if (time_100ns < WINDOWS_UNIX_EPOCH_DIFF_100NS)
-    {
-        return 0;
-    }
-
-    // FILETIME is 100-nanosecond intervals since Jan 1, 1601.
-    // Convert to Unix epoch (seconds since Jan 1, 1970).
-    uint64_t unix_100ns = time_100ns - WINDOWS_UNIX_EPOCH_DIFF_100NS;
-    return unix_100ns / WINDOWS_100NS_PER_SECOND;
-#else
-    struct timeval tv;
-    if (gettimeofday(&tv, NULL) != 0)
-    {
-        return 0;
-    }
-    if (tv.tv_sec < 0)
-    {
-        return 0;
-    }
-    return (uint64_t)tv.tv_sec;
 #endif
 }
 
@@ -263,15 +219,13 @@ void validator_sleep_ms(uint32_t ms)
  * State Locking
  * ============================================================================ */
 
-/**
- * @brief Unlock a mutex and log on failure.
- */
-static void unlock_mutex_with_log(
+void lantern_client_unlock_mutex(
     pthread_mutex_t *mutex,
     const char *validator_id,
-    const char *name)
+    const char *name,
+    const char *component)
 {
-    if (!mutex || !name)
+    if (!mutex || !name || !component)
     {
         return;
     }
@@ -280,7 +234,7 @@ static void unlock_mutex_with_log(
     if (unlock_rc != 0)
     {
         lantern_log_warn(
-            "client",
+            component,
             &(const struct lantern_log_metadata){.validator = validator_id},
             "failed to unlock %s: %d",
             name,
@@ -319,7 +273,11 @@ void lantern_client_unlock_state(struct lantern_client *client, bool locked)
 {
     if (locked && client && client->state_lock_initialized)
     {
-        unlock_mutex_with_log(&client->state_lock, client->node_id, "state_lock");
+        lantern_client_unlock_mutex(
+            &client->state_lock,
+            client->node_id,
+            "state_lock",
+            "client");
     }
 }
 
@@ -354,7 +312,11 @@ void lantern_client_unlock_pending(struct lantern_client *client, bool locked)
 {
     if (locked && client && client->pending_lock_initialized)
     {
-        unlock_mutex_with_log(&client->pending_lock, client->node_id, "pending_lock");
+        lantern_client_unlock_mutex(
+            &client->pending_lock,
+            client->node_id,
+            "pending_lock",
+            "client");
     }
 }
 
@@ -382,93 +344,20 @@ void format_root_hex(const LanternRoot *root, char *out, size_t out_len)
     }
     out[0] = '\0';
 
-    if (!root || out_len < CLIENT_UTILS_ROOT_HEX_MIN_LEN)
+    if (!root || out_len < 4u)
     {
         return;
     }
 
-    // Check if root is all zeros
-    bool is_all_zero = true;
-    for (size_t i = 0; i < LANTERN_ROOT_SIZE; ++i)
-    {
-        if (root->bytes[i] != 0)
-        {
-            is_all_zero = false;
-            break;
-        }
-    }
-    if (is_all_zero)
+    if (lantern_root_is_zero(root))
     {
         (void)lantern_string_copy(out, out_len, "0x0");
         return;
     }
-
-    // Format as 0x + hex
-    out[0] = '0';
-    out[1] = 'x';
-    size_t pos = 2;
-
-    static const char hex_chars[] = "0123456789abcdef";
-    for (size_t i = 0; i < LANTERN_ROOT_SIZE && pos + 2 < out_len; ++i)
+    if (lantern_bytes_to_hex(root->bytes, sizeof(root->bytes), out, out_len, 1) != 0)
     {
-        out[pos++] = hex_chars[(root->bytes[i] >> 4) & 0x0F];
-        out[pos++] = hex_chars[root->bytes[i] & 0x0F];
+        out[0] = '\0';
     }
-    out[pos] = '\0';
-}
-
-
-/* ============================================================================
- * Root/Pubkey Utilities
- * ============================================================================ */
-
-/**
- * Check if a root is all zeros.
- *
- * @param root  Root to check
- * @return true if root is NULL or all zero bytes
- *
- * @note Thread safety: This function is thread-safe
- */
-bool lantern_root_is_zero(const LanternRoot *root)
-{
-    if (!root)
-    {
-        return true;
-    }
-    for (size_t i = 0; i < LANTERN_ROOT_SIZE; ++i)
-    {
-        if (root->bytes[i] != 0)
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
-
-/**
- * Check if validator pubkey bytes are all zeros.
- *
- * @param pubkey  Pubkey bytes to check (LANTERN_VALIDATOR_PUBKEY_SIZE bytes)
- * @return true if pubkey is NULL or all zero bytes
- *
- * @note Thread safety: This function is thread-safe
- */
-bool lantern_validator_pubkey_is_zero(const uint8_t *pubkey)
-{
-    if (!pubkey)
-    {
-        return true;
-    }
-    for (size_t i = 0; i < LANTERN_VALIDATOR_PUBKEY_SIZE; ++i)
-    {
-        if (pubkey[i] != 0)
-        {
-            return false;
-        }
-    }
-    return true;
 }
 
 
@@ -536,29 +425,12 @@ void lantern_vote_rejection_set(struct lantern_vote_rejection_info *info, const 
  */
 bool lantern_client_current_slot(const struct lantern_client *client, uint64_t *out_slot)
 {
-    if (!client || !out_slot || !client->has_state || !client->has_fork_choice)
+    if (!client || !out_slot || client->state.validator_count == 0u
+        || client->store.block_len == 0u)
     {
         return false;
     }
-    const LanternForkChoice *store = &client->fork_choice;
-    if (!client->debug_disable_fork_choice_time
-        && store->has_anchor)
-    {
-        *out_slot = store->time_intervals / LANTERN_INTERVALS_PER_SLOT;
-        return true;
-    }
-    uint64_t now = validator_wall_time_now_seconds();
-    if (now == 0)
-    {
-        return false;
-    }
-    if (now < client->state.config.genesis_time)
-    {
-        *out_slot = 0;
-        return true;
-    }
-    uint64_t elapsed = now - client->state.config.genesis_time;
-    *out_slot = elapsed / LANTERN_SECONDS_PER_SLOT;
+    *out_slot = client->store.time_intervals / LANTERN_INTERVALS_PER_SLOT;
     return true;
 }
 
@@ -578,12 +450,12 @@ bool lantern_client_block_known_locked(
     const LanternRoot *root,
     uint64_t *out_slot)
 {
-    if (!client || !root || !client->has_fork_choice)
+    if (!client || !root || client->store.block_len == 0u)
     {
         return false;
     }
     uint64_t slot = 0;
-    if (lantern_fork_choice_block_info(&client->fork_choice, root, &slot, NULL, NULL) != 0)
+    if (lantern_fork_choice_block_info(&client->store, root, &slot, NULL, NULL) != 0)
     {
         return false;
     }
@@ -599,7 +471,7 @@ bool lantern_client_checkpoint_is_ancestor_locked(
     const LanternCheckpoint *ancestor,
     const LanternCheckpoint *descendant)
 {
-    if (!client || !ancestor || !descendant || !client->has_fork_choice)
+    if (!client || !ancestor || !descendant || client->store.block_len == 0u)
     {
         return false;
     }
@@ -609,14 +481,14 @@ bool lantern_client_checkpoint_is_ancestor_locked(
     }
 
     LanternRoot current_root = descendant->root;
-    size_t max_depth = client->fork_choice.block_len;
+    size_t max_depth = client->store.block_len;
     for (size_t depth = 0; depth < max_depth; ++depth)
     {
         uint64_t current_slot = 0;
         LanternRoot parent_root;
         memset(&parent_root, 0, sizeof(parent_root));
         if (lantern_fork_choice_block_info(
-                &client->fork_choice,
+                &client->store,
                 &current_root,
                 &current_slot,
                 &parent_root,
@@ -866,63 +738,6 @@ cleanup:
         free(owned);
     }
     return result;
-}
-
-
-/**
- * Check if a string list contains a value.
- *
- * @param list   String list to search
- * @param value  Value to find
- * @return true if found, false otherwise
- *
- * @note Thread safety: This function is thread-safe
- */
-bool string_list_contains(const struct lantern_string_list *list, const char *value)
-{
-    if (!list || !value)
-    {
-        return false;
-    }
-    for (size_t i = 0; i < list->len; ++i)
-    {
-        if (list->items[i] && strcmp(list->items[i], value) == 0)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-
-/**
- * Remove a value from a string list.
- *
- * @param list   String list to modify
- * @param value  Value to remove
- *
- * @note Thread safety: Caller must hold appropriate lock
- */
-void string_list_remove(struct lantern_string_list *list, const char *value)
-{
-    if (!list || !value)
-    {
-        return;
-    }
-    for (size_t i = 0; i < list->len; ++i)
-    {
-        if (list->items[i] && strcmp(list->items[i], value) == 0)
-        {
-            free(list->items[i]);
-            for (size_t j = i; j + 1 < list->len; ++j)
-            {
-                list->items[j] = list->items[j + 1];
-            }
-            list->len--;
-            list->items[list->len] = NULL;
-            return;
-        }
-    }
 }
 
 

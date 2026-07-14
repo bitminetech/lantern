@@ -49,10 +49,14 @@ typedef struct {
     uint8_t bytes[LANTERN_SIGNATURE_SIZE];
 } LanternSignature;
 
+void lantern_root_zero(LanternRoot *root);
+bool lantern_root_is_zero(const LanternRoot *root);
+bool lantern_root_equal(const LanternRoot *lhs, const LanternRoot *rhs);
+bool lantern_validator_pubkey_is_zero(const uint8_t *pubkey);
+
 typedef uint64_t LanternValidatorIndex;
 
 typedef struct {
-    uint64_t num_validators;
     uint64_t genesis_time;
 } LanternConfig;
 
@@ -95,18 +99,6 @@ typedef struct {
 } LanternSignedVote;
 
 typedef struct {
-    LanternSignature *data;
-    size_t length;
-    size_t capacity;
-} LanternSignatureList;
-
-typedef struct {
-    LanternVote *data;
-    size_t length;
-    size_t capacity;
-} LanternAttestations;
-
-typedef struct {
     struct lantern_bitlist aggregation_bits;
     LanternAttestationData data;
 } LanternAggregatedAttestation;
@@ -126,12 +118,6 @@ typedef struct {
     LanternAttestationData data;
     LanternAggregatedSignatureProof proof;
 } LanternSignedAggregatedAttestation;
-
-typedef struct {
-    LanternAggregatedSignatureProof *data;
-    size_t length;
-    size_t capacity;
-} LanternAttestationSignatures;
 
 typedef struct {
     LanternAggregatedAttestations attestations;
@@ -164,11 +150,6 @@ typedef struct {
     LanternByteList proof;
 } LanternSignedBlock;
 
-void lantern_attestations_init(LanternAttestations *list);
-void lantern_attestations_reset(LanternAttestations *list);
-int lantern_attestations_append(LanternAttestations *list, const LanternVote *vote);
-int lantern_attestations_resize(LanternAttestations *list, size_t new_length);
-
 int lantern_validator_index_compute_subnet_id(
     LanternValidatorIndex index,
     size_t num_committees,
@@ -200,10 +181,6 @@ int lantern_aggregated_attestations_copy(
     LanternAggregatedAttestations *dst,
     const LanternAggregatedAttestations *src);
 int lantern_aggregated_attestations_resize(LanternAggregatedAttestations *list, size_t new_length);
-int lantern_expand_aggregated_attestations(
-    const LanternAggregatedAttestations *aggregated,
-    size_t validator_count,
-    LanternAttestations *out_attestations);
 
 void lantern_aggregated_signature_proof_init(LanternAggregatedSignatureProof *proof);
 void lantern_aggregated_signature_proof_reset(LanternAggregatedSignatureProof *proof);
@@ -214,25 +191,10 @@ int lantern_aggregated_signature_proof_copy(
 void lantern_signed_aggregated_attestation_init(LanternSignedAggregatedAttestation *attestation);
 void lantern_signed_aggregated_attestation_reset(LanternSignedAggregatedAttestation *attestation);
 
-void lantern_attestation_signatures_init(LanternAttestationSignatures *list);
-void lantern_attestation_signatures_reset(LanternAttestationSignatures *list);
-int lantern_attestation_signatures_append(
-    LanternAttestationSignatures *list,
-    const LanternAggregatedSignatureProof *proof);
-int lantern_attestation_signatures_resize(LanternAttestationSignatures *list, size_t new_length);
-
-void lantern_signature_list_init(LanternSignatureList *list);
-void lantern_signature_list_reset(LanternSignatureList *list);
-int lantern_signature_list_append(LanternSignatureList *list, const LanternSignature *signature);
-int lantern_signature_list_resize(LanternSignatureList *list, size_t new_length);
-
 void lantern_block_body_init(LanternBlockBody *body);
 void lantern_block_body_reset(LanternBlockBody *body);
 
 void lantern_signed_block_init(LanternSignedBlock *block);
 void lantern_signed_block_reset(LanternSignedBlock *block);
-
-#define lantern_signed_block_with_attestation_init lantern_signed_block_init
-#define lantern_signed_block_with_attestation_reset lantern_signed_block_reset
 
 #endif /* LANTERN_CONSENSUS_CONTAINERS_H */

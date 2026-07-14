@@ -12,16 +12,11 @@
 
 #include "lantern/metrics/lean_metrics.h"
 #include "lantern/consensus/hash.h"
+#include "lantern/consensus/store.h"
 #include "lantern/support/log.h"
 #include "pq-bindings-c-rust.h"
 
-enum shadow_operation {
-    SHADOW_AGGREGATE,
-    SHADOW_VERIFY,
-    SHADOW_MERGE,
-};
-
-static double g_shadow_rates[3];
+static double g_shadow_rates[LANTERN_SHADOW_OPERATION_COUNT];
 
 static double shadow_env_rate(const char *name) {
     const char *text = getenv(name);
@@ -34,24 +29,21 @@ static double shadow_env_rate(const char *name) {
 }
 
 void lantern_signature_configure_shadow_costs(
-    double aggregate_rate,
-    bool has_aggregate_rate,
-    double verify_rate,
-    bool has_verify_rate,
-    double merge_rate,
-    bool has_merge_rate) {
-    g_shadow_rates[SHADOW_AGGREGATE] = has_aggregate_rate
-        ? aggregate_rate
-        : shadow_env_rate("LANTERN_SHADOW_XMSS_AGGREGATE_RATE");
-    g_shadow_rates[SHADOW_VERIFY] = has_verify_rate
-        ? verify_rate
-        : shadow_env_rate("LANTERN_SHADOW_XMSS_VERIFY_RATE");
-    g_shadow_rates[SHADOW_MERGE] = has_merge_rate
-        ? merge_rate
-        : shadow_env_rate("LANTERN_SHADOW_XMSS_MERGE_RATE");
+    const double rates[LANTERN_SHADOW_OPERATION_COUNT],
+    uint8_t configured_rates) {
+    static const char *const env_names[LANTERN_SHADOW_OPERATION_COUNT] = {
+        "LANTERN_SHADOW_XMSS_AGGREGATE_RATE",
+        "LANTERN_SHADOW_XMSS_VERIFY_RATE",
+        "LANTERN_SHADOW_XMSS_MERGE_RATE",
+    };
+    for (size_t operation = 0; operation < LANTERN_SHADOW_OPERATION_COUNT; ++operation) {
+        g_shadow_rates[operation] = configured_rates & (1u << operation)
+            ? rates[operation]
+            : shadow_env_rate(env_names[operation]);
+    }
 }
 
-static void shadow_sleep(enum shadow_operation operation, size_t count) {
+static void shadow_sleep(LanternShadowOperation operation, size_t count) {
     double rate = g_shadow_rates[operation];
     if (!isfinite(rate) || rate <= 0.0) {
         return;
@@ -103,18 +95,6 @@ static void signature_add_stage_seconds(double *stage_seconds, double seconds) {
     *stage_seconds += seconds;
 }
 
-static bool bytes_are_zero(const uint8_t *bytes, size_t length) {
-    if (!bytes && length > 0) {
-        return false;
-    }
-    for (size_t i = 0; i < length; ++i) {
-        if (bytes[i] != 0u) {
-            return false;
-        }
-    }
-    return true;
-}
-
 struct lantern_recursive_child_input {
     struct PQSignatureSchemePublicKey **pubkey_handles;
 };
@@ -136,13 +116,6 @@ static void ensure_xmss_prover_setup(void) {
 
 static void ensure_xmss_verifier_setup(void) {
     (void)pthread_once(&g_xmss_verifier_setup_once, xmss_verifier_setup_once);
-}
-
-static bool validator_pubkey_bytes_are_zero(const uint8_t *pubkey) {
-    if (!pubkey) {
-        return true;
-    }
-    return bytes_are_zero(pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE);
 }
 
 static void lantern_recursive_child_input_reset(struct lantern_recursive_child_input *child) {
@@ -216,7 +189,7 @@ static bool prepare_recursive_child(
 
         const uint8_t *pubkey =
             lantern_state_validator_attestation_pubkey(state, validator_index);
-        if (!pubkey || validator_pubkey_bytes_are_zero(pubkey)) {
+        if (!pubkey || lantern_validator_pubkey_is_zero(pubkey)) {
             return false;
         }
 
@@ -244,7 +217,7 @@ static bool prepare_recursive_child(
         out_input->pubkey_count = participant_count;
         out_input->agg_bytes = proof->proof_data.data;
         out_input->agg_len = proof->proof_data.length;
-        shadow_sleep(SHADOW_VERIFY, participant_count);
+        shadow_sleep(LANTERN_SHADOW_VERIFY, participant_count);
         return true;
     }
 
@@ -361,7 +334,7 @@ static bool type2_component_init_from_pubkeys(
     }
     work->pubkey_count = pubkey_count;
     for (size_t i = 0; i < pubkey_count; ++i) {
-        if (!pubkeys[i] || validator_pubkey_bytes_are_zero(pubkeys[i])) {
+        if (!pubkeys[i] || lantern_validator_pubkey_is_zero(pubkeys[i])) {
             return false;
         }
         enum PQSigningError pk_err = pq_public_key_deserialize(
@@ -439,7 +412,7 @@ static bool build_type2_attestation_component(
             continue;
         }
         const uint8_t *pubkey = lantern_state_validator_attestation_pubkey(state, i);
-        if (!pubkey || validator_pubkey_bytes_are_zero(pubkey)) {
+        if (!pubkey || lantern_validator_pubkey_is_zero(pubkey)) {
             free(pubkeys);
             return false;
         }
@@ -561,10 +534,8 @@ static bool build_type2_merge_component_set_for_block(
 }
 
 bool lantern_signature_is_zero(const LanternSignature *signature) {
-    if (!signature) {
-        return false;
-    }
-    return bytes_are_zero(signature->bytes, LANTERN_SIGNATURE_SIZE);
+    static const LanternSignature zero_signature;
+    return signature && memcmp(signature, &zero_signature, sizeof(*signature)) == 0;
 }
 
 void lantern_signature_zero(LanternSignature *signature) {
@@ -799,7 +770,7 @@ bool lantern_signature_aggregate(
             ok = false;
         } else {
             elapsed = get_time_seconds() - start;
-            shadow_sleep(SHADOW_AGGREGATE, count);
+            shadow_sleep(LANTERN_SHADOW_AGGREGATE, count);
         }
     }
 
@@ -1032,7 +1003,7 @@ bool lantern_aggregated_signature_proof_aggregate(
                 ok = false;
             } else {
                 elapsed = get_time_seconds() - start;
-                shadow_sleep(SHADOW_AGGREGATE, raw_xmss_count);
+                shadow_sleep(LANTERN_SHADOW_AGGREGATE, raw_xmss_count);
             }
         }
 
@@ -1179,7 +1150,7 @@ bool lantern_signature_verify_aggregated(
             verify_rc,
             elapsed);
         if (verify_rc == 1) {
-            shadow_sleep(SHADOW_VERIFY, count);
+            shadow_sleep(LANTERN_SHADOW_VERIFY, count);
         }
     }
 
@@ -1208,18 +1179,18 @@ bool lantern_signature_verify_aggregated(
 bool lantern_signature_merge_block_type2_proof(
     const LanternState *state,
     const LanternBlock *block,
-    const LanternAttestationSignatures *attestation_proofs,
+    const struct lantern_aggregated_payload_pool *attestation_payloads,
     const LanternAggregatedSignatureProof *proposer_proof,
     LanternByteList *out_encoded_proof) {
-    if (!state || !block || !attestation_proofs || !proposer_proof || !out_encoded_proof) {
+    if (!state || !block || !attestation_payloads || !proposer_proof || !out_encoded_proof) {
         return false;
     }
     size_t attestation_count = block->body.attestations.length;
-    if (attestation_proofs->length != attestation_count) {
+    if (attestation_payloads->length != attestation_count) {
         return false;
     }
     if (attestation_count > 0u
-        && (!block->body.attestations.data || !attestation_proofs->data)) {
+        && (!block->body.attestations.data || !attestation_payloads->entries)) {
         return false;
     }
 
@@ -1248,10 +1219,14 @@ bool lantern_signature_merge_block_type2_proof(
 
     for (size_t i = 0; i < attestation_count; ++i) {
         const LanternAggregatedAttestation *attestation = &block->body.attestations.data[i];
-        const LanternAggregatedSignatureProof *proof = &attestation_proofs->data[i];
-        if (!bitlist_equal(&attestation->aggregation_bits, &proof->participants)) {
+        const struct lantern_aggregated_payload_entry *payload = &attestation_payloads->entries[i];
+        LanternRoot data_root;
+        if (lantern_hash_tree_root_attestation_data(&attestation->data, &data_root) != SSZ_SUCCESS
+            || !lantern_root_equal(&data_root, &payload->data_root)
+            || !bitlist_equal(&attestation->aggregation_bits, &payload->proof.participants)) {
             goto cleanup;
         }
+        const LanternAggregatedSignatureProof *proof = &payload->proof;
         if (proof->proof_data.length == 0u || !proof->proof_data.data) {
             goto cleanup;
         }
@@ -1326,7 +1301,7 @@ bool lantern_signature_merge_block_type2_proof(
             signature_elapsed_seconds(copy_started_seconds, copy_finished_seconds));
     }
     if (ok) {
-        shadow_sleep(SHADOW_MERGE, component_count);
+        shadow_sleep(LANTERN_SHADOW_MERGE, component_count);
     }
 
 cleanup:
@@ -1540,7 +1515,7 @@ bool lantern_signature_split_block_type2_attestation_proof(
             signature_elapsed_seconds(copy_started_seconds, copy_finished_seconds));
     }
     ok = true;
-    shadow_sleep(SHADOW_MERGE, component_count);
+    shadow_sleep(LANTERN_SHADOW_MERGE, component_count);
 
 cleanup:
     lantern_aggregated_signature_proof_reset(&recovered);

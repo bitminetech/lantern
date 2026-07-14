@@ -8,45 +8,6 @@
 
 #include "lantern/consensus/state.h"
 
-static const size_t CONFIG_FIELDS[] = {
-    sizeof(uint64_t),
-};
-static const ssz_container_schema_t CONFIG_SCHEMA = SSZ_CONTAINER_SCHEMA_FROM_ARRAY(CONFIG_FIELDS);
-
-static const size_t CHECKPOINT_FIELDS[] = {
-    LANTERN_ROOT_SIZE,
-    sizeof(uint64_t),
-};
-static const ssz_container_schema_t CHECKPOINT_SCHEMA = SSZ_CONTAINER_SCHEMA_FROM_ARRAY(CHECKPOINT_FIELDS);
-
-static const size_t ATTESTATION_DATA_FIELDS[] = {
-    sizeof(uint64_t),
-    LANTERN_CHECKPOINT_SSZ_SIZE,
-    LANTERN_CHECKPOINT_SSZ_SIZE,
-    LANTERN_CHECKPOINT_SSZ_SIZE,
-};
-static const ssz_container_schema_t ATTESTATION_DATA_SCHEMA =
-    SSZ_CONTAINER_SCHEMA_FROM_ARRAY(ATTESTATION_DATA_FIELDS);
-
-static const size_t VOTE_FIELDS[] = {
-    sizeof(uint64_t),
-    LANTERN_ATTESTATION_DATA_SSZ_SIZE,
-};
-static const ssz_container_schema_t VOTE_SCHEMA = SSZ_CONTAINER_SCHEMA_FROM_ARRAY(VOTE_FIELDS);
-
-static const size_t SIGNED_VOTE_FIELDS[] = {
-    LANTERN_VOTE_SSZ_SIZE,
-    LANTERN_SIGNATURE_SIZE,
-};
-static const ssz_container_schema_t SIGNED_VOTE_SCHEMA = SSZ_CONTAINER_SCHEMA_FROM_ARRAY(SIGNED_VOTE_FIELDS);
-
-static const size_t VALIDATOR_FIELDS[] = {
-    LANTERN_VALIDATOR_PUBKEY_SIZE,
-    LANTERN_VALIDATOR_PUBKEY_SIZE,
-    sizeof(uint64_t),
-};
-static const ssz_container_schema_t VALIDATOR_SCHEMA = SSZ_CONTAINER_SCHEMA_FROM_ARRAY(VALIDATOR_FIELDS);
-
 static const size_t AGGREGATED_ATTESTATION_FIELDS[] = {
     0u,
     LANTERN_ATTESTATION_DATA_SSZ_SIZE,
@@ -61,12 +22,6 @@ static const size_t AGGREGATED_SIGNATURE_PROOF_FIELDS[] = {
 static const ssz_container_schema_t AGGREGATED_SIGNATURE_PROOF_SCHEMA =
     SSZ_CONTAINER_SCHEMA_FROM_ARRAY(AGGREGATED_SIGNATURE_PROOF_FIELDS);
 
-static const size_t MULTI_MESSAGE_AGGREGATE_FIELDS[] = {
-    0u,
-};
-static const ssz_container_schema_t MULTI_MESSAGE_AGGREGATE_SCHEMA =
-    SSZ_CONTAINER_SCHEMA_FROM_ARRAY(MULTI_MESSAGE_AGGREGATE_FIELDS);
-
 static const size_t SIGNED_AGGREGATED_ATTESTATION_FIELDS[] = {
     LANTERN_ATTESTATION_DATA_SSZ_SIZE,
     0u,
@@ -78,15 +33,6 @@ static const size_t BLOCK_BODY_FIELDS[] = {
     0u,
 };
 static const ssz_container_schema_t BLOCK_BODY_SCHEMA = SSZ_CONTAINER_SCHEMA_FROM_ARRAY(BLOCK_BODY_FIELDS);
-
-static const size_t BLOCK_HEADER_FIELDS[] = {
-    sizeof(uint64_t),
-    sizeof(uint64_t),
-    LANTERN_ROOT_SIZE,
-    LANTERN_ROOT_SIZE,
-    LANTERN_ROOT_SIZE,
-};
-static const ssz_container_schema_t BLOCK_HEADER_SCHEMA = SSZ_CONTAINER_SCHEMA_FROM_ARRAY(BLOCK_HEADER_FIELDS);
 
 static const size_t BLOCK_FIELDS[] = {
     sizeof(uint64_t),
@@ -224,18 +170,6 @@ static ssz_error_t read_root(const uint8_t *data, size_t data_len, LanternRoot *
     return read_bytes(root ? root->bytes : NULL, LANTERN_ROOT_SIZE, data, data_len);
 }
 
-static ssz_error_t write_signature(
-    const LanternSignature *signature,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    return write_bytes(signature ? signature->bytes : NULL, LANTERN_SIGNATURE_SIZE, out, out_len, written);
-}
-
-static ssz_error_t read_signature(const uint8_t *data, size_t data_len, LanternSignature *signature) {
-    return read_bytes(signature ? signature->bytes : NULL, LANTERN_SIGNATURE_SIZE, data, data_len);
-}
-
 static ssz_error_t encode_bitlist(
     const struct lantern_bitlist *list,
     uint8_t *out,
@@ -304,43 +238,27 @@ static ssz_error_t encode_byte_list(
     if (!list) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
-    return ssz_serialize_list_fixed(
-        list->data,
-        list->length,
-        LANTERN_AGG_PROOF_MAX_BYTES,
-        sizeof(uint8_t),
-        out,
-        out_len,
-        written);
+    if (list->length > LANTERN_AGG_PROOF_MAX_BYTES) {
+        return SSZ_ERR_LIMIT_EXCEEDED;
+    }
+    return write_bytes(list->data, list->length, out, out_len, written);
 }
 
 static ssz_error_t decode_byte_list(LanternByteList *list, const uint8_t *data, size_t data_len) {
-    if (!list) {
+    if (!list || (data_len > 0u && !data)) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
     if (data_len > LANTERN_AGG_PROOF_MAX_BYTES) {
         return SSZ_ERR_LIMIT_EXCEEDED;
     }
     ssz_error_t err = lantern_rc_to_ssz(lantern_byte_list_resize(list, data_len));
-    if (err != SSZ_SUCCESS) {
-        return err;
-    }
-    uint64_t decoded_count = 0u;
-    err = ssz_deserialize_list_fixed(
-        data,
-        data_len,
-        LANTERN_AGG_PROOF_MAX_BYTES,
-        sizeof(uint8_t),
-        list->data,
-        list->capacity,
-        &decoded_count);
-    if (err == SSZ_SUCCESS && decoded_count != data_len) {
-        err = SSZ_ERR_ENCODING_INVALID;
+    if (err == SSZ_SUCCESS && data_len > 0u) {
+        memcpy(list->data, data, data_len);
     }
     return err;
 }
 
-static ssz_error_t multi_message_aggregate_raw_span(
+ssz_error_t lantern_ssz_multi_message_aggregate_raw_span(
     const LanternByteList *aggregate,
     const uint8_t **out_raw,
     size_t *out_raw_len) {
@@ -368,71 +286,55 @@ static ssz_error_t multi_message_aggregate_raw_span(
     return SSZ_SUCCESS;
 }
 
-struct multi_message_aggregate_codec_ctx {
-    const LanternByteList *write;
-    LanternByteList *read;
-};
-
-static ssz_error_t multi_message_aggregate_write(
-    const void *ctx,
-    uint64_t member_id,
+ssz_error_t lantern_ssz_encode_multi_message_aggregate(
+    const LanternByteList *aggregate,
     uint8_t *out,
     size_t out_len,
     size_t *written) {
-    const struct multi_message_aggregate_codec_ctx *aggregate_ctx = ctx;
-    if (!aggregate_ctx || !aggregate_ctx->write || member_id != 0u) {
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
     const uint8_t *raw = NULL;
     size_t raw_len = 0u;
-    ssz_error_t err = multi_message_aggregate_raw_span(aggregate_ctx->write, &raw, &raw_len);
+    ssz_error_t err = lantern_ssz_multi_message_aggregate_raw_span(aggregate, &raw, &raw_len);
     if (err != SSZ_SUCCESS) {
         return err;
     }
-    return ssz_serialize_list_fixed(
-        raw,
-        raw_len,
-        LANTERN_AGG_PROOF_MAX_BYTES,
-        sizeof(uint8_t),
-        out,
-        out_len,
-        written);
-}
-
-static ssz_error_t multi_message_aggregate_read(
-    void *ctx,
-    uint64_t member_id,
-    const uint8_t *data,
-    size_t data_len) {
-    struct multi_message_aggregate_codec_ctx *aggregate_ctx = ctx;
-    if (!aggregate_ctx || !aggregate_ctx->read || member_id != 0u) {
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-    if (data_len > LANTERN_AGG_PROOF_MAX_BYTES) {
-        return SSZ_ERR_LIMIT_EXCEEDED;
-    }
-    ssz_error_t err = lantern_rc_to_ssz(lantern_byte_list_resize(aggregate_ctx->read, data_len + SSZ_BYTES_PER_LENGTH_OFFSET));
-    if (err != SSZ_SUCCESS) {
+    size_t encoded_len = aggregate->length == 0u
+        ? SSZ_BYTES_PER_LENGTH_OFFSET
+        : aggregate->length;
+    err = prepare_output(encoded_len, out, out_len, written);
+    if (err != SSZ_SUCCESS || !out) {
         return err;
     }
-    aggregate_ctx->read->data[0] = SSZ_BYTES_PER_LENGTH_OFFSET;
-    aggregate_ctx->read->data[1] = 0u;
-    aggregate_ctx->read->data[2] = 0u;
-    aggregate_ctx->read->data[3] = 0u;
-    if (data_len > 0u) {
-        memcpy(aggregate_ctx->read->data + SSZ_BYTES_PER_LENGTH_OFFSET, data, data_len);
+    if (aggregate->length == 0u) {
+        return ssz_serialize_uint32(SSZ_BYTES_PER_LENGTH_OFFSET, out);
     }
+    memcpy(out, aggregate->data, aggregate->length);
     return SSZ_SUCCESS;
 }
 
-DEFINE_STATIC_CONTAINER_CODEC(
-    encode_multi_message_aggregate,
-    decode_multi_message_aggregate,
-    LanternByteList,
-    multi_message_aggregate_codec_ctx,
-    MULTI_MESSAGE_AGGREGATE_SCHEMA,
-    multi_message_aggregate_write,
-    multi_message_aggregate_read)
+ssz_error_t lantern_ssz_decode_multi_message_aggregate(
+    LanternByteList *aggregate,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!aggregate || !data || data_len < SSZ_BYTES_PER_LENGTH_OFFSET) {
+        return SSZ_ERR_INVALID_ARGUMENT;
+    }
+    LanternByteList encoded = {
+        .data = (uint8_t *)data,
+        .length = data_len,
+        .capacity = data_len,
+    };
+    const uint8_t *raw = NULL;
+    size_t raw_len = 0u;
+    ssz_error_t err = lantern_ssz_multi_message_aggregate_raw_span(&encoded, &raw, &raw_len);
+    if (err != SSZ_SUCCESS) {
+        return err;
+    }
+    err = lantern_rc_to_ssz(lantern_byte_list_resize(aggregate, data_len));
+    if (err == SSZ_SUCCESS) {
+        memcpy(aggregate->data, data, data_len);
+    }
+    return err;
+}
 
 static ssz_error_t encode_root_list(
     const struct lantern_root_list *list,
@@ -442,18 +344,19 @@ static ssz_error_t encode_root_list(
     if (!list) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
-    return ssz_serialize_list_fixed(
+    if (list->length > SIZE_MAX / LANTERN_ROOT_SIZE) {
+        return SSZ_ERR_OVERFLOW;
+    }
+    return write_bytes(
         (const uint8_t *)list->items,
-        list->length,
-        SSZ_NO_LIMIT,
-        LANTERN_ROOT_SIZE,
+        list->length * LANTERN_ROOT_SIZE,
         out,
         out_len,
         written);
 }
 
 static ssz_error_t decode_root_list(struct lantern_root_list *list, const uint8_t *data, size_t data_len) {
-    if (!list) {
+    if (!list || (data_len > 0u && !data)) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
     if (data_len % LANTERN_ROOT_SIZE != 0u) {
@@ -461,343 +364,256 @@ static ssz_error_t decode_root_list(struct lantern_root_list *list, const uint8_
     }
     size_t count = data_len / LANTERN_ROOT_SIZE;
     ssz_error_t err = lantern_rc_to_ssz(lantern_root_list_resize(list, count));
-    if (err != SSZ_SUCCESS) {
-        return err;
-    }
-    uint64_t decoded_count = 0u;
-    err = ssz_deserialize_list_fixed(
-        data,
-        data_len,
-        SSZ_NO_LIMIT,
-        LANTERN_ROOT_SIZE,
-        (uint8_t *)list->items,
-        count * sizeof(*list->items),
-        &decoded_count);
-    if (err == SSZ_SUCCESS && decoded_count != count) {
-        err = SSZ_ERR_ENCODING_INVALID;
+    if (err == SSZ_SUCCESS && data_len > 0u) {
+        memcpy(list->items, data, data_len);
     }
     return err;
 }
 
-struct config_codec_ctx {
-    const LanternConfig *write;
-    LanternConfig *read;
-};
-
-static ssz_error_t config_write(
-    const void *ctx,
-    uint64_t member_id,
+ssz_error_t lantern_ssz_encode_config(
+    const LanternConfig *config,
     uint8_t *out,
     size_t out_len,
     size_t *written) {
-    const struct config_codec_ctx *config_ctx = ctx;
-    if (!config_ctx || !config_ctx->write || member_id != 0u) {
+    if (!config) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
-    return write_u64(config_ctx->write->genesis_time, out, out_len, written);
+    return write_u64(config->genesis_time, out, out_len, written);
 }
 
-static ssz_error_t config_read(void *ctx, uint64_t member_id, const uint8_t *data, size_t data_len) {
-    struct config_codec_ctx *config_ctx = ctx;
-    if (!config_ctx || !config_ctx->read || member_id != 0u) {
+ssz_error_t lantern_ssz_decode_config(
+    LanternConfig *config,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!config) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
-    config_ctx->read->num_validators = 0u;
-    return read_u64(data, data_len, &config_ctx->read->genesis_time);
+    return read_u64(data, data_len, &config->genesis_time);
 }
 
-DEFINE_PUBLIC_CONTAINER_CODEC(
-    lantern_ssz_encode_config,
-    lantern_ssz_decode_config,
-    LanternConfig,
-    config_codec_ctx,
-    CONFIG_SCHEMA,
-    config_write,
-    config_read)
-
-struct checkpoint_codec_ctx {
-    const LanternCheckpoint *write;
-    LanternCheckpoint *read;
-};
-
-static ssz_error_t checkpoint_write(
-    const void *ctx,
-    uint64_t member_id,
+ssz_error_t lantern_ssz_encode_checkpoint(
+    const LanternCheckpoint *checkpoint,
     uint8_t *out,
     size_t out_len,
     size_t *written) {
-    const struct checkpoint_codec_ctx *checkpoint_ctx = ctx;
-    if (!checkpoint_ctx || !checkpoint_ctx->write) {
+    if (!checkpoint) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
-    switch (member_id) {
-    case 0:
-        return write_root(&checkpoint_ctx->write->root, out, out_len, written);
-    case 1:
-        return write_u64(checkpoint_ctx->write->slot, out, out_len, written);
-    default:
-        return SSZ_ERR_INVALID_ARGUMENT;
+    ssz_error_t err = prepare_output(LANTERN_CHECKPOINT_SSZ_SIZE, out, out_len, written);
+    if (err != SSZ_SUCCESS || !out) {
+        return err;
     }
+    memcpy(out, checkpoint->root.bytes, LANTERN_ROOT_SIZE);
+    return ssz_serialize_uint64(checkpoint->slot, out + LANTERN_ROOT_SIZE);
 }
 
-static ssz_error_t checkpoint_read(void *ctx, uint64_t member_id, const uint8_t *data, size_t data_len) {
-    struct checkpoint_codec_ctx *checkpoint_ctx = ctx;
-    if (!checkpoint_ctx || !checkpoint_ctx->read) {
+ssz_error_t lantern_ssz_decode_checkpoint(
+    LanternCheckpoint *checkpoint,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!checkpoint || !data) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
-    switch (member_id) {
-    case 0:
-        return read_root(data, data_len, &checkpoint_ctx->read->root);
-    case 1:
-        return read_u64(data, data_len, &checkpoint_ctx->read->slot);
-    default:
-        return SSZ_ERR_INVALID_ARGUMENT;
+    if (data_len != LANTERN_CHECKPOINT_SSZ_SIZE) {
+        return SSZ_ERR_ENCODING_INVALID;
     }
+    memcpy(checkpoint->root.bytes, data, LANTERN_ROOT_SIZE);
+    return ssz_deserialize_uint64(
+        data + LANTERN_ROOT_SIZE,
+        sizeof(uint64_t),
+        &checkpoint->slot);
 }
-
-DEFINE_PUBLIC_CONTAINER_CODEC(
-    lantern_ssz_encode_checkpoint,
-    lantern_ssz_decode_checkpoint,
-    LanternCheckpoint,
-    checkpoint_codec_ctx,
-    CHECKPOINT_SCHEMA,
-    checkpoint_write,
-    checkpoint_read)
-
-struct attestation_data_codec_ctx {
-    const LanternAttestationData *write;
-    LanternAttestationData *read;
-};
-
-static ssz_error_t attestation_data_write(
-    const void *ctx,
-    uint64_t member_id,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    const struct attestation_data_codec_ctx *data_ctx = ctx;
-    if (!data_ctx || !data_ctx->write) {
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-    switch (member_id) {
-    case 0:
-        return write_u64(data_ctx->write->slot, out, out_len, written);
-    case 1:
-        return lantern_ssz_encode_checkpoint(&data_ctx->write->head, out, out_len, written);
-    case 2:
-        return lantern_ssz_encode_checkpoint(&data_ctx->write->target, out, out_len, written);
-    case 3:
-        return lantern_ssz_encode_checkpoint(&data_ctx->write->source, out, out_len, written);
-    default:
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-}
-
-static ssz_error_t attestation_data_read(void *ctx, uint64_t member_id, const uint8_t *data, size_t data_len) {
-    struct attestation_data_codec_ctx *data_ctx = ctx;
-    if (!data_ctx || !data_ctx->read) {
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-    switch (member_id) {
-    case 0:
-        return read_u64(data, data_len, &data_ctx->read->slot);
-    case 1:
-        return lantern_ssz_decode_checkpoint(&data_ctx->read->head, data, data_len);
-    case 2:
-        return lantern_ssz_decode_checkpoint(&data_ctx->read->target, data, data_len);
-    case 3:
-        return lantern_ssz_decode_checkpoint(&data_ctx->read->source, data, data_len);
-    default:
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-}
-
-DEFINE_STATIC_CONTAINER_CODEC(
-    encode_attestation_data,
-    decode_attestation_data,
-    LanternAttestationData,
-    attestation_data_codec_ctx,
-    ATTESTATION_DATA_SCHEMA,
-    attestation_data_write,
-    attestation_data_read)
 
 ssz_error_t lantern_ssz_encode_attestation_data(
     const LanternAttestationData *data,
     uint8_t *out,
     size_t out_len,
     size_t *written) {
-    return encode_attestation_data(data, out, out_len, written);
+    if (!data) {
+        return SSZ_ERR_INVALID_ARGUMENT;
+    }
+    ssz_error_t err = prepare_output(LANTERN_ATTESTATION_DATA_SSZ_SIZE, out, out_len, written);
+    if (err != SSZ_SUCCESS || !out) {
+        return err;
+    }
+    if ((err = ssz_serialize_uint64(data->slot, out)) != SSZ_SUCCESS
+        || (err = lantern_ssz_encode_checkpoint(
+                &data->head,
+                out + sizeof(uint64_t),
+                LANTERN_CHECKPOINT_SSZ_SIZE,
+                NULL))
+            != SSZ_SUCCESS
+        || (err = lantern_ssz_encode_checkpoint(
+                &data->target,
+                out + sizeof(uint64_t) + LANTERN_CHECKPOINT_SSZ_SIZE,
+                LANTERN_CHECKPOINT_SSZ_SIZE,
+                NULL))
+            != SSZ_SUCCESS)
+    {
+        return err;
+    }
+    return lantern_ssz_encode_checkpoint(
+        &data->source,
+        out + sizeof(uint64_t) + (2u * LANTERN_CHECKPOINT_SSZ_SIZE),
+        LANTERN_CHECKPOINT_SSZ_SIZE,
+        NULL);
 }
 
 ssz_error_t lantern_ssz_decode_attestation_data(
-    LanternAttestationData *data,
-    const uint8_t *raw,
-    size_t raw_len) {
-    return decode_attestation_data(data, raw, raw_len);
+    LanternAttestationData *attestation,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!attestation || !data) {
+        return SSZ_ERR_INVALID_ARGUMENT;
+    }
+    if (data_len != LANTERN_ATTESTATION_DATA_SSZ_SIZE) {
+        return SSZ_ERR_ENCODING_INVALID;
+    }
+    ssz_error_t err;
+    if ((err = ssz_deserialize_uint64(data, sizeof(uint64_t), &attestation->slot))
+            != SSZ_SUCCESS
+        || (err = lantern_ssz_decode_checkpoint(
+                &attestation->head,
+                data + sizeof(uint64_t),
+                LANTERN_CHECKPOINT_SSZ_SIZE))
+            != SSZ_SUCCESS
+        || (err = lantern_ssz_decode_checkpoint(
+                &attestation->target,
+                data + sizeof(uint64_t) + LANTERN_CHECKPOINT_SSZ_SIZE,
+                LANTERN_CHECKPOINT_SSZ_SIZE))
+            != SSZ_SUCCESS)
+    {
+        return err;
+    }
+    return lantern_ssz_decode_checkpoint(
+        &attestation->source,
+        data + sizeof(uint64_t) + (2u * LANTERN_CHECKPOINT_SSZ_SIZE),
+        LANTERN_CHECKPOINT_SSZ_SIZE);
 }
-
-struct vote_codec_ctx {
-    const LanternVote *write;
-    LanternVote *read;
-};
-
-static ssz_error_t vote_write(
-    const void *ctx,
-    uint64_t member_id,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    const struct vote_codec_ctx *vote_ctx = ctx;
-    if (!vote_ctx || !vote_ctx->write) {
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-    switch (member_id) {
-    case 0:
-        return write_u64(vote_ctx->write->validator_id, out, out_len, written);
-    case 1:
-        return encode_attestation_data(&vote_ctx->write->data, out, out_len, written);
-    default:
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-}
-
-static ssz_error_t vote_read(void *ctx, uint64_t member_id, const uint8_t *data, size_t data_len) {
-    struct vote_codec_ctx *vote_ctx = ctx;
-    if (!vote_ctx || !vote_ctx->read) {
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-    switch (member_id) {
-    case 0:
-        return read_u64(data, data_len, &vote_ctx->read->validator_id);
-    case 1:
-        return decode_attestation_data(&vote_ctx->read->data, data, data_len);
-    default:
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-}
-
-DEFINE_STATIC_CONTAINER_CODEC(
-    encode_vote_internal,
-    decode_vote_internal,
-    LanternVote,
-    vote_codec_ctx,
-    VOTE_SCHEMA,
-    vote_write,
-    vote_read)
 
 ssz_error_t lantern_ssz_encode_vote(
     const LanternVote *vote,
     uint8_t *out,
     size_t out_len,
     size_t *written) {
-    return encode_vote_internal(vote, out, out_len, written);
+    if (!vote) {
+        return SSZ_ERR_INVALID_ARGUMENT;
+    }
+    ssz_error_t err = prepare_output(LANTERN_VOTE_SSZ_SIZE, out, out_len, written);
+    if (err != SSZ_SUCCESS || !out) {
+        return err;
+    }
+    err = ssz_serialize_uint64(vote->validator_id, out);
+    if (err != SSZ_SUCCESS) {
+        return err;
+    }
+    return lantern_ssz_encode_attestation_data(
+        &vote->data,
+        out + sizeof(uint64_t),
+        LANTERN_ATTESTATION_DATA_SSZ_SIZE,
+        NULL);
 }
 
-ssz_error_t lantern_ssz_decode_vote(LanternVote *vote, const uint8_t *data, size_t data_len) {
-    return decode_vote_internal(vote, data, data_len);
+ssz_error_t lantern_ssz_decode_vote(
+    LanternVote *vote,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!vote || !data) {
+        return SSZ_ERR_INVALID_ARGUMENT;
+    }
+    if (data_len != LANTERN_VOTE_SSZ_SIZE) {
+        return SSZ_ERR_ENCODING_INVALID;
+    }
+    ssz_error_t err = ssz_deserialize_uint64(data, sizeof(uint64_t), &vote->validator_id);
+    if (err != SSZ_SUCCESS) {
+        return err;
+    }
+    return lantern_ssz_decode_attestation_data(
+        &vote->data,
+        data + sizeof(uint64_t),
+        LANTERN_ATTESTATION_DATA_SSZ_SIZE);
 }
 
-struct signed_vote_codec_ctx {
-    const LanternSignedVote *write;
-    LanternSignedVote *read;
-};
-
-static ssz_error_t signed_vote_write(
-    const void *ctx,
-    uint64_t member_id,
+ssz_error_t lantern_ssz_encode_signed_vote(
+    const LanternSignedVote *vote,
     uint8_t *out,
     size_t out_len,
     size_t *written) {
-    const struct signed_vote_codec_ctx *vote_ctx = ctx;
-    if (!vote_ctx || !vote_ctx->write) {
+    if (!vote) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
-    switch (member_id) {
-    case 0:
-        return encode_vote_internal(&vote_ctx->write->data, out, out_len, written);
-    case 1:
-        return write_signature(&vote_ctx->write->signature, out, out_len, written);
-    default:
-        return SSZ_ERR_INVALID_ARGUMENT;
+    ssz_error_t err = prepare_output(LANTERN_SIGNED_VOTE_SSZ_SIZE, out, out_len, written);
+    if (err != SSZ_SUCCESS || !out) {
+        return err;
     }
+    err = lantern_ssz_encode_vote(&vote->data, out, LANTERN_VOTE_SSZ_SIZE, NULL);
+    if (err != SSZ_SUCCESS) {
+        return err;
+    }
+    memcpy(out + LANTERN_VOTE_SSZ_SIZE, vote->signature.bytes, LANTERN_SIGNATURE_SIZE);
+    return SSZ_SUCCESS;
 }
 
-static ssz_error_t signed_vote_read(void *ctx, uint64_t member_id, const uint8_t *data, size_t data_len) {
-    struct signed_vote_codec_ctx *vote_ctx = ctx;
-    if (!vote_ctx || !vote_ctx->read) {
+ssz_error_t lantern_ssz_decode_signed_vote(
+    LanternSignedVote *vote,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!vote || !data) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
-    switch (member_id) {
-    case 0:
-        return decode_vote_internal(&vote_ctx->read->data, data, data_len);
-    case 1:
-        return read_signature(data, data_len, &vote_ctx->read->signature);
-    default:
-        return SSZ_ERR_INVALID_ARGUMENT;
+    if (data_len != LANTERN_SIGNED_VOTE_SSZ_SIZE) {
+        return SSZ_ERR_ENCODING_INVALID;
     }
+    ssz_error_t err = lantern_ssz_decode_vote(&vote->data, data, LANTERN_VOTE_SSZ_SIZE);
+    if (err != SSZ_SUCCESS) {
+        return err;
+    }
+    memcpy(vote->signature.bytes, data + LANTERN_VOTE_SSZ_SIZE, LANTERN_SIGNATURE_SIZE);
+    return SSZ_SUCCESS;
 }
 
-DEFINE_PUBLIC_CONTAINER_CODEC(
-    lantern_ssz_encode_signed_vote,
-    lantern_ssz_decode_signed_vote,
-    LanternSignedVote,
-    signed_vote_codec_ctx,
-    SIGNED_VOTE_SCHEMA,
-    signed_vote_write,
-    signed_vote_read)
-
-struct validator_codec_ctx {
-    const LanternValidator *write;
-    LanternValidator *read;
-};
-
-static ssz_error_t validator_write(
-    const void *ctx,
-    uint64_t member_id,
+ssz_error_t lantern_ssz_encode_validator(
+    const LanternValidator *validator,
     uint8_t *out,
     size_t out_len,
     size_t *written) {
-    const struct validator_codec_ctx *validator_ctx = ctx;
-    if (!validator_ctx || !validator_ctx->write) {
+    if (!validator) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
-    switch (member_id) {
-    case 0:
-        return write_bytes(validator_ctx->write->attestation_pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE, out, out_len, written);
-    case 1:
-        return write_bytes(validator_ctx->write->proposal_pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE, out, out_len, written);
-    case 2:
-        return write_u64(validator_ctx->write->index, out, out_len, written);
-    default:
-        return SSZ_ERR_INVALID_ARGUMENT;
+    ssz_error_t err = prepare_output(LANTERN_VALIDATOR_SSZ_SIZE, out, out_len, written);
+    if (err != SSZ_SUCCESS || !out) {
+        return err;
     }
+    memcpy(out, validator->attestation_pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE);
+    memcpy(
+        out + LANTERN_VALIDATOR_PUBKEY_SIZE,
+        validator->proposal_pubkey,
+        LANTERN_VALIDATOR_PUBKEY_SIZE);
+    return ssz_serialize_uint64(
+        validator->index,
+        out + (2u * LANTERN_VALIDATOR_PUBKEY_SIZE));
 }
 
-static ssz_error_t validator_read(void *ctx, uint64_t member_id, const uint8_t *data, size_t data_len) {
-    struct validator_codec_ctx *validator_ctx = ctx;
-    if (!validator_ctx || !validator_ctx->read) {
+ssz_error_t lantern_ssz_decode_validator(
+    LanternValidator *validator,
+    const uint8_t *data,
+    size_t data_len) {
+    if (!validator || !data) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
-    switch (member_id) {
-    case 0:
-        return read_bytes(validator_ctx->read->attestation_pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE, data, data_len);
-    case 1:
-        return read_bytes(validator_ctx->read->proposal_pubkey, LANTERN_VALIDATOR_PUBKEY_SIZE, data, data_len);
-    case 2:
-        return read_u64(data, data_len, &validator_ctx->read->index);
-    default:
-        return SSZ_ERR_INVALID_ARGUMENT;
+    if (data_len != LANTERN_VALIDATOR_SSZ_SIZE) {
+        return SSZ_ERR_ENCODING_INVALID;
     }
+    memcpy(validator->attestation_pubkey, data, LANTERN_VALIDATOR_PUBKEY_SIZE);
+    memcpy(
+        validator->proposal_pubkey,
+        data + LANTERN_VALIDATOR_PUBKEY_SIZE,
+        LANTERN_VALIDATOR_PUBKEY_SIZE);
+    return ssz_deserialize_uint64(
+        data + (2u * LANTERN_VALIDATOR_PUBKEY_SIZE),
+        sizeof(uint64_t),
+        &validator->index);
 }
-
-DEFINE_PUBLIC_CONTAINER_CODEC(
-    lantern_ssz_encode_validator,
-    lantern_ssz_decode_validator,
-    LanternValidator,
-    validator_codec_ctx,
-    VALIDATOR_SCHEMA,
-    validator_write,
-    validator_read)
 
 static ssz_error_t encode_validators_list(
     const LanternValidator *validators,
@@ -846,57 +662,40 @@ static ssz_error_t decode_validators_list(
         return SSZ_ERR_LIMIT_EXCEEDED;
     }
     if (count == 0u) {
-        state->config.num_validators = 0u;
-        return lantern_rc_to_ssz(lantern_state_set_validator_pubkeys(state, NULL, 0u));
+        free(state->validators);
+        state->validators = NULL;
+        state->validator_count = 0u;
+        return SSZ_SUCCESS;
     }
     if (!data) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
-    if (count > SIZE_MAX / LANTERN_VALIDATOR_PUBKEY_SIZE) {
+    if (count > SIZE_MAX / sizeof(LanternValidator)) {
         return SSZ_ERR_OVERFLOW;
     }
-    uint8_t *attestation_pubkeys = malloc(count * LANTERN_VALIDATOR_PUBKEY_SIZE);
-    uint8_t *proposal_pubkeys = malloc(count * LANTERN_VALIDATOR_PUBKEY_SIZE);
-    if (!attestation_pubkeys || !proposal_pubkeys) {
-        free(attestation_pubkeys);
-        free(proposal_pubkeys);
+    LanternValidator *validators = malloc(count * sizeof(*validators));
+    if (!validators) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
 
     ssz_error_t err = SSZ_SUCCESS;
-    LanternValidator decoded;
     for (size_t i = 0u; i < count && err == SSZ_SUCCESS; ++i) {
-        memset(&decoded, 0, sizeof(decoded));
         err = lantern_ssz_decode_validator(
-            &decoded,
+            &validators[i],
             data + (i * LANTERN_VALIDATOR_SSZ_SIZE),
             LANTERN_VALIDATOR_SSZ_SIZE);
-        if (err == SSZ_SUCCESS) {
-            if (decoded.index != (uint64_t)i) {
-                err = SSZ_ERR_ENCODING_INVALID;
-                break;
-            }
-            memcpy(attestation_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
-                   decoded.attestation_pubkey,
-                   LANTERN_VALIDATOR_PUBKEY_SIZE);
-            memcpy(proposal_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
-                   decoded.proposal_pubkey,
-                   LANTERN_VALIDATOR_PUBKEY_SIZE);
+        if (err == SSZ_SUCCESS && validators[i].index != (uint64_t)i) {
+            err = SSZ_ERR_ENCODING_INVALID;
         }
     }
 
     if (err == SSZ_SUCCESS) {
-        err = lantern_rc_to_ssz(lantern_state_set_validator_pubkeys_dual(
-            state,
-            attestation_pubkeys,
-            proposal_pubkeys,
-            count));
+        free(state->validators);
+        state->validators = validators;
+        state->validator_count = count;
+        validators = NULL;
     }
-    if (err == SSZ_SUCCESS) {
-        state->config.num_validators = count;
-    }
-    free(attestation_pubkeys);
-    free(proposal_pubkeys);
+    free(validators);
     return err;
 }
 
@@ -922,7 +721,7 @@ static ssz_error_t aggregated_attestation_write(
         }
         return encode_bitlist(&att_ctx->write->aggregation_bits, out, out_len, written);
     case 1:
-        return encode_attestation_data(&att_ctx->write->data, out, out_len, written);
+        return lantern_ssz_encode_attestation_data(&att_ctx->write->data, out, out_len, written);
     default:
         return SSZ_ERR_INVALID_ARGUMENT;
     }
@@ -941,15 +740,15 @@ static ssz_error_t aggregated_attestation_read(void *ctx, uint64_t member_id, co
             data_len,
             LANTERN_VALIDATOR_REGISTRY_LIMIT);
     case 1:
-        return decode_attestation_data(&att_ctx->read->data, data, data_len);
+        return lantern_ssz_decode_attestation_data(&att_ctx->read->data, data, data_len);
     default:
         return SSZ_ERR_INVALID_ARGUMENT;
     }
 }
 
-DEFINE_STATIC_CONTAINER_CODEC(
-    encode_aggregated_attestation,
-    decode_aggregated_attestation,
+DEFINE_PUBLIC_CONTAINER_CODEC(
+    lantern_ssz_encode_aggregated_attestation,
+    lantern_ssz_decode_aggregated_attestation,
     LanternAggregatedAttestation,
     aggregated_attestation_codec_ctx,
     AGGREGATED_ATTESTATION_SCHEMA,
@@ -971,7 +770,11 @@ static ssz_error_t aggregated_attestations_write(
     if (!list_ctx || !list_ctx->write || member_id >= list_ctx->write->length) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
-    return encode_aggregated_attestation(&list_ctx->write->data[member_id], out, out_len, written);
+    return lantern_ssz_encode_aggregated_attestation(
+        &list_ctx->write->data[member_id],
+        out,
+        out_len,
+        written);
 }
 
 static ssz_error_t aggregated_attestations_read(void *ctx, uint64_t member_id, const uint8_t *data, size_t data_len) {
@@ -981,7 +784,10 @@ static ssz_error_t aggregated_attestations_read(void *ctx, uint64_t member_id, c
     }
     LanternAggregatedAttestation attestation;
     lantern_aggregated_attestation_init(&attestation);
-    ssz_error_t err = decode_aggregated_attestation(&attestation, data, data_len);
+    ssz_error_t err = lantern_ssz_decode_aggregated_attestation(
+        &attestation,
+        data,
+        data_len);
     if (err == SSZ_SUCCESS) {
         err = lantern_rc_to_ssz(lantern_aggregated_attestations_append(list_ctx->read, &attestation));
     }
@@ -1088,9 +894,9 @@ static ssz_error_t signature_proof_read(void *ctx, uint64_t member_id, const uin
     }
 }
 
-DEFINE_STATIC_CONTAINER_CODEC(
-    encode_aggregated_signature_proof,
-    decode_aggregated_signature_proof,
+DEFINE_PUBLIC_CONTAINER_CODEC(
+    lantern_ssz_encode_aggregated_signature_proof,
+    lantern_ssz_decode_aggregated_signature_proof,
     LanternAggregatedSignatureProof,
     signature_proof_codec_ctx,
     AGGREGATED_SIGNATURE_PROOF_SCHEMA,
@@ -1114,9 +920,13 @@ static ssz_error_t signed_aggregated_attestation_write(
     }
     switch (member_id) {
     case 0:
-        return encode_attestation_data(&att_ctx->write->data, out, out_len, written);
+        return lantern_ssz_encode_attestation_data(&att_ctx->write->data, out, out_len, written);
     case 1:
-        return encode_aggregated_signature_proof(&att_ctx->write->proof, out, out_len, written);
+        return lantern_ssz_encode_aggregated_signature_proof(
+            &att_ctx->write->proof,
+            out,
+            out_len,
+            written);
     default:
         return SSZ_ERR_INVALID_ARGUMENT;
     }
@@ -1133,9 +943,12 @@ static ssz_error_t signed_aggregated_attestation_read(
     }
     switch (member_id) {
     case 0:
-        return decode_attestation_data(&att_ctx->read->data, data, data_len);
+        return lantern_ssz_decode_attestation_data(&att_ctx->read->data, data, data_len);
     case 1:
-        return decode_aggregated_signature_proof(&att_ctx->read->proof, data, data_len);
+        return lantern_ssz_decode_aggregated_signature_proof(
+            &att_ctx->read->proof,
+            data,
+            data_len);
     default:
         return SSZ_ERR_INVALID_ARGUMENT;
     }
@@ -1150,111 +963,58 @@ DEFINE_PUBLIC_CONTAINER_CODEC(
     signed_aggregated_attestation_write,
     signed_aggregated_attestation_read)
 
-ssz_error_t lantern_ssz_encode_aggregated_attestation(
-    const LanternAggregatedAttestation *attestation,
+ssz_error_t lantern_ssz_encode_block_header(
+    const LanternBlockHeader *header,
     uint8_t *out,
     size_t out_len,
     size_t *written) {
-    return encode_aggregated_attestation(attestation, out, out_len, written);
+    if (!header) {
+        return SSZ_ERR_INVALID_ARGUMENT;
+    }
+    ssz_error_t err = prepare_output(LANTERN_BLOCK_HEADER_SSZ_SIZE, out, out_len, written);
+    if (err != SSZ_SUCCESS || !out) {
+        return err;
+    }
+    if ((err = ssz_serialize_uint64(header->slot, out)) != SSZ_SUCCESS
+        || (err = ssz_serialize_uint64(header->proposer_index, out + sizeof(uint64_t)))
+            != SSZ_SUCCESS)
+    {
+        return err;
+    }
+    size_t roots_offset = 2u * sizeof(uint64_t);
+    memcpy(out + roots_offset, header->parent_root.bytes, LANTERN_ROOT_SIZE);
+    memcpy(out + roots_offset + LANTERN_ROOT_SIZE, header->state_root.bytes, LANTERN_ROOT_SIZE);
+    memcpy(out + roots_offset + (2u * LANTERN_ROOT_SIZE), header->body_root.bytes, LANTERN_ROOT_SIZE);
+    return SSZ_SUCCESS;
 }
 
-ssz_error_t lantern_ssz_decode_aggregated_attestation(
-    LanternAggregatedAttestation *attestation,
+ssz_error_t lantern_ssz_decode_block_header(
+    LanternBlockHeader *header,
     const uint8_t *data,
     size_t data_len) {
-    return decode_aggregated_attestation(attestation, data, data_len);
-}
-
-ssz_error_t lantern_ssz_encode_aggregated_signature_proof(
-    const LanternAggregatedSignatureProof *proof,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    return encode_aggregated_signature_proof(proof, out, out_len, written);
-}
-
-ssz_error_t lantern_ssz_decode_aggregated_signature_proof(
-    LanternAggregatedSignatureProof *proof,
-    const uint8_t *data,
-    size_t data_len) {
-    return decode_aggregated_signature_proof(proof, data, data_len);
-}
-
-ssz_error_t lantern_ssz_encode_multi_message_aggregate(
-    const LanternByteList *aggregate,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    return encode_multi_message_aggregate(aggregate, out, out_len, written);
-}
-
-ssz_error_t lantern_ssz_decode_multi_message_aggregate(
-    LanternByteList *aggregate,
-    const uint8_t *data,
-    size_t data_len) {
-    return decode_multi_message_aggregate(aggregate, data, data_len);
-}
-
-struct block_header_codec_ctx {
-    const LanternBlockHeader *write;
-    LanternBlockHeader *read;
-};
-
-static ssz_error_t block_header_write(
-    const void *ctx,
-    uint64_t member_id,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    const struct block_header_codec_ctx *header_ctx = ctx;
-    if (!header_ctx || !header_ctx->write) {
+    if (!header || !data) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
-    switch (member_id) {
-    case 0:
-        return write_u64(header_ctx->write->slot, out, out_len, written);
-    case 1:
-        return write_u64(header_ctx->write->proposer_index, out, out_len, written);
-    case 2:
-        return write_root(&header_ctx->write->parent_root, out, out_len, written);
-    case 3:
-        return write_root(&header_ctx->write->state_root, out, out_len, written);
-    case 4:
-        return write_root(&header_ctx->write->body_root, out, out_len, written);
-    default:
-        return SSZ_ERR_INVALID_ARGUMENT;
+    if (data_len != LANTERN_BLOCK_HEADER_SSZ_SIZE) {
+        return SSZ_ERR_ENCODING_INVALID;
     }
+    ssz_error_t err;
+    if ((err = ssz_deserialize_uint64(data, sizeof(uint64_t), &header->slot))
+            != SSZ_SUCCESS
+        || (err = ssz_deserialize_uint64(
+                data + sizeof(uint64_t),
+                sizeof(uint64_t),
+                &header->proposer_index))
+            != SSZ_SUCCESS)
+    {
+        return err;
+    }
+    size_t roots_offset = 2u * sizeof(uint64_t);
+    memcpy(header->parent_root.bytes, data + roots_offset, LANTERN_ROOT_SIZE);
+    memcpy(header->state_root.bytes, data + roots_offset + LANTERN_ROOT_SIZE, LANTERN_ROOT_SIZE);
+    memcpy(header->body_root.bytes, data + roots_offset + (2u * LANTERN_ROOT_SIZE), LANTERN_ROOT_SIZE);
+    return SSZ_SUCCESS;
 }
-
-static ssz_error_t block_header_read(void *ctx, uint64_t member_id, const uint8_t *data, size_t data_len) {
-    struct block_header_codec_ctx *header_ctx = ctx;
-    if (!header_ctx || !header_ctx->read) {
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-    switch (member_id) {
-    case 0:
-        return read_u64(data, data_len, &header_ctx->read->slot);
-    case 1:
-        return read_u64(data, data_len, &header_ctx->read->proposer_index);
-    case 2:
-        return read_root(data, data_len, &header_ctx->read->parent_root);
-    case 3:
-        return read_root(data, data_len, &header_ctx->read->state_root);
-    case 4:
-        return read_root(data, data_len, &header_ctx->read->body_root);
-    default:
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-}
-
-DEFINE_PUBLIC_CONTAINER_CODEC(
-    lantern_ssz_encode_block_header,
-    lantern_ssz_decode_block_header,
-    LanternBlockHeader,
-    block_header_codec_ctx,
-    BLOCK_HEADER_SCHEMA,
-    block_header_write,
-    block_header_read)
 
 struct block_body_codec_ctx {
     const LanternBlockBody *write;
@@ -1371,7 +1131,11 @@ static ssz_error_t signed_block_write(
     case 0:
         return lantern_ssz_encode_block(&block_ctx->write->block, out, out_len, written);
     case 1:
-        return encode_multi_message_aggregate(&block_ctx->write->proof, out, out_len, written);
+        return lantern_ssz_encode_multi_message_aggregate(
+            &block_ctx->write->proof,
+            out,
+            out_len,
+            written);
     default:
         return SSZ_ERR_INVALID_ARGUMENT;
     }
@@ -1386,7 +1150,10 @@ static ssz_error_t signed_block_read(void *ctx, uint64_t member_id, const uint8_
     case 0:
         return lantern_ssz_decode_block(&block_ctx->read->block, data, data_len);
     case 1:
-        return decode_multi_message_aggregate(&block_ctx->read->proof, data, data_len);
+        return lantern_ssz_decode_multi_message_aggregate(
+            &block_ctx->read->proof,
+            data,
+            data_len);
     default:
         return SSZ_ERR_INVALID_ARGUMENT;
     }
@@ -1483,9 +1250,6 @@ ssz_error_t lantern_ssz_encode_state(
     if (!state) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
-    if (state->config.num_validators != (uint64_t)state->validator_count) {
-        return SSZ_ERR_ENCODING_INVALID;
-    }
     struct state_codec_ctx ctx = {.write = state};
     ssz_member_codec_t codec = {.ctx = &ctx, .write = state_write};
     return ssz_serialize_container(&STATE_SCHEMA, &codec, out, out_len, written);
@@ -1497,9 +1261,5 @@ ssz_error_t lantern_ssz_decode_state(
     size_t data_len) {
     struct state_codec_ctx ctx = {.read = state};
     ssz_member_codec_t codec = {.ctx = &ctx, .read = state_read};
-    ssz_error_t err = ssz_deserialize_container(data, data_len, &STATE_SCHEMA, &codec);
-    if (err == SSZ_SUCCESS) {
-        state->config.num_validators = (uint64_t)state->validator_count;
-    }
-    return err;
+    return ssz_deserialize_container(data, data_len, &STATE_SCHEMA, &codec);
 }

@@ -12,11 +12,6 @@ struct lantern_attestation_signature_map;
 struct lantern_aggregated_payload_pool;
 struct lantern_state_hash_cache;
 
-typedef struct {
-    const LanternAttestations *attestations;
-    const LanternSignatureList *signatures;
-} LanternAttestationSignatureInputs;
-
 typedef enum {
     LANTERN_STATE_AGGREGATE_OK = 0,
     LANTERN_STATE_AGGREGATE_INVALID_PARAM = -1,
@@ -43,7 +38,6 @@ typedef struct {
     struct lantern_bitlist justification_validators;
     LanternValidator *validators;
     size_t validator_count;
-    size_t validator_capacity;
     struct lantern_state_hash_cache *hash_cache;
 } LanternState;
 
@@ -64,7 +58,7 @@ int lantern_state_process_slots(LanternState *state, uint64_t target_slot);
 int lantern_state_process_block_header(LanternState *state, const LanternBlock *block);
 int lantern_state_process_attestations(
     LanternState *state,
-    const LanternAttestations *attestations);
+    const LanternAggregatedAttestations *attestations);
 int lantern_state_process_block(
     LanternState *state,
     const LanternBlock *block);
@@ -92,7 +86,7 @@ int lantern_state_collect_attestations_for_block(
     uint64_t proposer_index,
     const LanternRoot *parent_root,
     LanternAggregatedAttestations *out_attestations,
-    LanternAttestationSignatures *out_signatures);
+    struct lantern_aggregated_payload_pool *out_payloads);
 int lantern_state_compute_vote_checkpoints(
     const LanternState *state,
     const LanternStore *store,
@@ -113,10 +107,6 @@ int lantern_state_preview_post_state_root(
 lantern_state_aggregate_result lantern_state_aggregate(
     const LanternState *state,
     const LanternStore *store,
-    const LanternAttestationSignatureInputs *attestation_signatures,
-    const struct lantern_aggregated_payload_pool *new_payloads,
-    const struct lantern_aggregated_payload_pool *known_payloads,
-    LanternAggregatedAttestations *out_attestations,
-    LanternAttestationSignatures *out_signatures);
+    struct lantern_aggregated_payload_pool *out_payloads);
 
 #endif /* LANTERN_CONSENSUS_STATE_H */

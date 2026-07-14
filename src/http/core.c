@@ -526,18 +526,6 @@ static void fill_config_defaults(struct lantern_http_core_config *config)
     {
         config->unknown_json = DEFAULT_UNKNOWN_JSON;
     }
-    if (config->method_cap == 0)
-    {
-        config->method_cap = LANTERN_HTTP_CORE_METHOD_CAP;
-    }
-    if (config->path_cap == 0)
-    {
-        config->path_cap = LANTERN_HTTP_CORE_PATH_CAP;
-    }
-    if (config->listen_backlog <= 0)
-    {
-        config->listen_backlog = LANTERN_HTTP_CORE_LISTEN_BACKLOG;
-    }
 }
 
 static int route_matches(
@@ -582,9 +570,9 @@ static void handle_client_connection(
     int rc = parse_request_line(
         buffer,
         method,
-        server->config.method_cap,
+        sizeof(method),
         path,
-        server->config.path_cap);
+        sizeof(path));
     if (rc != 0)
     {
         int send_rc = lantern_http_send_json_error(
@@ -717,11 +705,6 @@ int lantern_http_core_start(
 
     struct lantern_http_core_config normalized = *config;
     fill_config_defaults(&normalized);
-    if (normalized.method_cap > LANTERN_HTTP_CORE_METHOD_CAP
-        || normalized.path_cap > LANTERN_HTTP_CORE_PATH_CAP)
-    {
-        return LANTERN_HTTP_CORE_ERR_INVALID_PARAM;
-    }
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
@@ -748,7 +731,7 @@ int lantern_http_core_start(
         close(fd);
         return LANTERN_HTTP_CORE_ERR_IO;
     }
-    if (listen(fd, normalized.listen_backlog) != 0)
+    if (listen(fd, LANTERN_HTTP_CORE_LISTEN_BACKLOG) != 0)
     {
         lantern_log_error(normalized.log_module, NULL, "listen failed errno=%d", errno);
         close(fd);
@@ -757,17 +740,17 @@ int lantern_http_core_start(
 
     server->listen_fd = fd;
     server->config = normalized;
-    server->port = normalized.port;
     server->running = 1;
     server->thread_started = 0;
 
-    if (normalized.capture_bound_port && server->port == 0)
+    uint16_t bound_port = normalized.port;
+    if (bound_port == 0)
     {
         struct sockaddr_in bound_addr;
         socklen_t bound_len = sizeof(bound_addr);
         if (getsockname(fd, (struct sockaddr *)&bound_addr, &bound_len) == 0)
         {
-            server->port = ntohs(bound_addr.sin_port);
+            bound_port = ntohs(bound_addr.sin_port);
         }
     }
 
@@ -787,7 +770,7 @@ int lantern_http_core_start(
         NULL,
         "%s listening port=%" PRIu16,
         normalized.listen_label,
-        server->port);
+        bound_port);
     return LANTERN_HTTP_CORE_OK;
 }
 

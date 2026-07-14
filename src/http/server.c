@@ -67,7 +67,7 @@ static int send_method_not_allowed(int fd) { return lantern_http_send_json_error
 
 
 static int format_fork_choice_response(
-    const struct lantern_http_fork_choice_snapshot *snapshot,
+    const struct lantern_fork_choice_tree_snapshot *snapshot,
     char **out_body,
     size_t *out_len)
 {
@@ -125,7 +125,7 @@ static int format_fork_choice_response(
 
     for (size_t i = 0; i < snapshot->node_count; ++i)
     {
-        const struct lantern_http_fork_choice_node *node = &snapshot->nodes[i];
+        const struct lantern_fork_choice_tree_node *node = &snapshot->nodes[i];
         char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
         char parent_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
         if (lantern_bytes_to_hex(
@@ -822,7 +822,7 @@ static int handle_justified(
     const struct lantern_http_request *request)
 {
     struct lantern_http_server *server = context;
-    if (!server->callbacks.snapshot_head)
+    if (!server->callbacks.snapshot_justified)
     {
         int rc = send_unavailable(request->client_fd);
         lantern_log_error(
@@ -833,9 +833,11 @@ static int handle_justified(
         return rc;
     }
 
-    struct lantern_http_head_snapshot snapshot;
-    memset(&snapshot, 0, sizeof(snapshot));
-    int snapshot_rc = server->callbacks.snapshot_head(server->callbacks.context, &snapshot);
+    LanternCheckpoint justified;
+    memset(&justified, 0, sizeof(justified));
+    int snapshot_rc = server->callbacks.snapshot_justified(
+        server->callbacks.context,
+        &justified);
     if (snapshot_rc != 0)
     {
         return send_snapshot_error(
@@ -847,7 +849,7 @@ static int handle_justified(
 
     char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     if (lantern_bytes_to_hex(
-            snapshot.justified.root.bytes,
+            justified.root.bytes,
             LANTERN_ROOT_SIZE,
             root_hex,
             sizeof(root_hex),
@@ -868,7 +870,7 @@ static int handle_justified(
         body,
         sizeof(body),
         "{\"slot\":%" PRIu64 ",\"root\":\"%s\"}",
-        snapshot.justified.slot,
+        justified.slot,
         root_hex);
     if (body_written < 0 || (size_t)body_written >= sizeof(body))
     {
@@ -922,7 +924,7 @@ static int handle_fork_choice(
         return rc;
     }
 
-    struct lantern_http_fork_choice_snapshot snapshot;
+    struct lantern_fork_choice_tree_snapshot snapshot;
     memset(&snapshot, 0, sizeof(snapshot));
     int snapshot_rc = server->callbacks.snapshot_fork_choice(server->callbacks.context, &snapshot);
     if (snapshot_rc != 0)
@@ -937,7 +939,7 @@ static int handle_fork_choice(
     char *body = NULL;
     size_t body_len = 0;
     int result = format_fork_choice_response(&snapshot, &body, &body_len);
-    free(snapshot.nodes);
+    lantern_fork_choice_tree_snapshot_reset(&snapshot);
     if (result != 0)
     {
         int rc = send_internal(request->client_fd);
@@ -1006,7 +1008,6 @@ void lantern_http_server_init(struct lantern_http_server *server)
 
     memset(server, 0, sizeof(*server));
     lantern_http_core_init(&server->core);
-    server->port = 0;
 }
 
 
@@ -1050,10 +1051,6 @@ int lantern_http_server_start(
     core_config.listen_label = "http server";
     core_config.malformed_json = LANTERN_HTTP_JSON_MALFORMED;
     core_config.unknown_json = LANTERN_HTTP_JSON_UNKNOWN_ENDPOINT;
-    core_config.method_cap = LANTERN_HTTP_CORE_METHOD_CAP;
-    core_config.path_cap = LANTERN_HTTP_CORE_PATH_CAP;
-    core_config.listen_backlog = LANTERN_HTTP_CORE_LISTEN_BACKLOG;
-    core_config.capture_bound_port = true;
     core_config.context = server;
     core_config.routes = kHttpRoutes;
     core_config.route_count = sizeof(kHttpRoutes) / sizeof(kHttpRoutes[0]);
@@ -1067,7 +1064,6 @@ int lantern_http_server_start(
         }
         return LANTERN_HTTP_SERVER_ERR_IO;
     }
-    server->port = server->core.port;
     return 0;
 }
 

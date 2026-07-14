@@ -19,7 +19,6 @@
  *       3. pending_lock
  *       4. validator_lock
  *       5. connection_lock
- *       6. peer_vote_lock
  */
 
 #ifndef LANTERN_CLIENT_SYNC_INTERNAL_H
@@ -215,16 +214,6 @@ void lantern_client_cache_block_aggregated_proofs_locked(
  * ============================================================================ */
 
 /**
- * Initialize a pending vote list.
- *
- * @param list  List to initialize
- *
- * @note Thread safety: This function is thread-safe
- */
-void pending_vote_list_init(struct lantern_pending_vote_list *list);
-
-
-/**
  * Reset and free a pending vote list.
  *
  * @param list  List to reset
@@ -253,16 +242,6 @@ struct lantern_pending_vote *pending_vote_list_append(
 /* ============================================================================
  * Pending Block Functions
  * ============================================================================ */
-
-/**
- * Initialize a pending block list.
- *
- * @param list  List to initialize
- *
- * @note Thread safety: This function is thread-safe
- */
-void pending_block_list_init(struct lantern_pending_block_list *list);
-
 
 /**
  * Reset and free a pending block list.

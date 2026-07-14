@@ -68,40 +68,6 @@ static uint32_t read_u32_le(const uint8_t *data) {
         | ((uint32_t)data[3] << 24);
 }
 
-static ssz_error_t multi_message_aggregate_raw_span(
-    const LanternByteList *aggregate,
-    const uint8_t **out_raw,
-    size_t *out_raw_len) {
-    if (!aggregate || !out_raw || !out_raw_len) {
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-    if (aggregate->length == 0u) {
-        *out_raw = NULL;
-        *out_raw_len = 0u;
-        return SSZ_SUCCESS;
-    }
-    if (!aggregate->data || aggregate->length < SSZ_BYTES_PER_LENGTH_OFFSET) {
-        return SSZ_ERR_ENCODING_INVALID;
-    }
-    uint32_t offset = read_u32_le(aggregate->data);
-    if (offset != SSZ_BYTES_PER_LENGTH_OFFSET || (size_t)offset > aggregate->length) {
-        return SSZ_ERR_OFFSET_INVALID;
-    }
-    size_t raw_len = aggregate->length - (size_t)offset;
-    if (raw_len > LANTERN_AGG_PROOF_MAX_BYTES) {
-        return SSZ_ERR_LIMIT_EXCEEDED;
-    }
-    *out_raw = raw_len > 0u ? aggregate->data + offset : NULL;
-    *out_raw_len = raw_len;
-    return SSZ_SUCCESS;
-}
-
-ssz_error_t lantern_hash_tree_root_validators_dual(
-    const uint8_t *attestation_pubkeys,
-    const uint8_t *proposal_pubkeys,
-    size_t count,
-    LanternRoot *out_root);
-
 static ssz_error_t merkleize_chunks(
     const ssz_chunk_t *chunks,
     size_t chunk_count,
@@ -297,8 +263,6 @@ ssz_error_t lantern_hash_tree_root_config(const LanternConfig *config, LanternRo
     if (!config || !out_root) {
         return SSZ_ERR_INVALID_ARGUMENT;
     }
-    /* Config only contains genesis_time for SSZ hashing (matches Zeam's BeamStateConfig).
-     * num_validators is stored separately and not part of the SSZ-encoded config. */
     ssz_chunk_t chunks[1];
     LANTERN_RETURN_IF_SSZ_ERROR(chunk_from_uint64(config->genesis_time, &chunks[0]));
     return merkleize_chunks(chunks, 1, 0, out_root);
@@ -429,7 +393,8 @@ ssz_error_t lantern_hash_tree_root_multi_message_aggregate(
     }
     const uint8_t *raw = NULL;
     size_t raw_len = 0u;
-    LANTERN_RETURN_IF_SSZ_ERROR(multi_message_aggregate_raw_span(aggregate, &raw, &raw_len));
+    LANTERN_RETURN_IF_SSZ_ERROR(
+        lantern_ssz_multi_message_aggregate_raw_span(aggregate, &raw, &raw_len));
     LanternRoot proof_root;
     LANTERN_RETURN_IF_SSZ_ERROR(hash_byte_list(
         raw,
@@ -793,7 +758,13 @@ static ssz_error_t hash_state_validators_stateless(const LanternState *state, La
         return SSZ_ERR_INVALID_ARGUMENT;
     }
     if (state->validator_count == 0) {
-        return lantern_hash_tree_root_validators(NULL, 0, out_root);
+        ssz_chunk_t root;
+        ssz_error_t err = ssz_hash_tree_root_list_roots(
+            NULL, 0u, LANTERN_VALIDATOR_REGISTRY_LIMIT, NULL, NULL, &root);
+        if (err == SSZ_SUCCESS) {
+            root_from_chunk(&root, out_root);
+        }
+        return err;
     }
     if (!state->validators) {
         return SSZ_ERR_INVALID_ARGUMENT;
@@ -1040,57 +1011,6 @@ ssz_error_t lantern_hash_tree_root_state_cached(LanternState *state, LanternRoot
     ssz_chunk_t root;
     if (ssz_merkle_cache_root(&cache->state_root.cache, &root) != SSZ_SUCCESS) {
         return merkleize_chunks(chunks, 10, 0, out_root);
-    }
-    root_from_chunk(&root, out_root);
-    return SSZ_SUCCESS;
-}
-
-ssz_error_t lantern_hash_tree_root_validators(const uint8_t *pubkeys, size_t count, LanternRoot *out_root) {
-    return lantern_hash_tree_root_validators_dual(pubkeys, pubkeys, count, out_root);
-}
-
-ssz_error_t lantern_hash_tree_root_validators_dual(
-    const uint8_t *attestation_pubkeys,
-    const uint8_t *proposal_pubkeys,
-    size_t count,
-    LanternRoot *out_root) {
-    if (!out_root) {
-        return SSZ_ERR_INVALID_ARGUMENT;
-    }
-    ssz_chunk_t *chunks = NULL;
-    if (count > 0) {
-        if (!attestation_pubkeys || !proposal_pubkeys) {
-            return SSZ_ERR_INVALID_ARGUMENT;
-        }
-        chunks = calloc(count, sizeof(*chunks));
-        if (!chunks) {
-            return SSZ_ERR_HASH_FAILURE;
-        }
-        for (size_t i = 0; i < count; ++i) {
-            LanternRoot validator_root;
-            ssz_error_t err = hash_validator(
-                    attestation_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
-                    proposal_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
-                    (uint64_t)i,
-                    &validator_root);
-            if (err != SSZ_SUCCESS) {
-                free(chunks);
-                return err;
-            }
-            chunk_from_root(&validator_root, &chunks[i]);
-        }
-    }
-    ssz_chunk_t root;
-    ssz_error_t err = ssz_hash_tree_root_list_roots(
-        chunks,
-        count,
-        LANTERN_VALIDATOR_REGISTRY_LIMIT,
-        NULL,
-        NULL,
-        &root);
-    free(chunks);
-    if (err != SSZ_SUCCESS) {
-        return err;
     }
     root_from_chunk(&root, out_root);
     return SSZ_SUCCESS;

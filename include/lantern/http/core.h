@@ -12,7 +12,6 @@ extern "C" {
 
 #define LANTERN_HTTP_CORE_METHOD_CAP 8u
 #define LANTERN_HTTP_CORE_PATH_CAP 256u
-#define LANTERN_HTTP_CORE_METRICS_PATH_CAP 128u
 #define LANTERN_HTTP_CORE_READ_BUFFER_SIZE 4096u
 #define LANTERN_HTTP_CORE_LISTEN_BACKLOG 16
 
@@ -61,10 +60,6 @@ struct lantern_http_core_config {
     const char *listen_label;
     const char *malformed_json;
     const char *unknown_json;
-    size_t method_cap;
-    size_t path_cap;
-    int listen_backlog;
-    bool capture_bound_port;
     void *context;
     const struct lantern_http_route *routes;
     size_t route_count;
@@ -75,7 +70,6 @@ struct lantern_http_core_server {
     pthread_t thread;
     int running;
     int thread_started;
-    uint16_t port;
     struct lantern_http_core_config config;
 };
 

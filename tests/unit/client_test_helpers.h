@@ -85,8 +85,7 @@ int client_test_pending_entry(
 void client_test_pending_reset(struct lantern_client *client);
 lantern_client_error client_test_aggregate_attestation_signatures(
     struct lantern_client *client,
-    LanternAggregatedAttestations *out_attestations,
-    LanternAttestationSignatures *out_signatures);
+    struct lantern_aggregated_payload_pool *out_payloads);
 int client_test_publish_aggregated_attestations(struct lantern_client *client, uint64_t slot);
 int client_test_run_interval_aggregation(struct lantern_client *client, uint64_t slot);
 
