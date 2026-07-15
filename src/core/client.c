@@ -29,12 +29,10 @@
 #include "internal/yaml_parser.h"
 #include "client_internal.h"
 #include "lantern/consensus/containers.h"
-#include "lantern/consensus/duties.h"
 #include "lantern/consensus/fork_choice.h"
 #include "lantern/consensus/hash.h"
-#include "lantern/consensus/runtime.h"
-#include "lantern/consensus/shadow_cost.h"
 #include "lantern/consensus/signature.h"
+#include "lantern/consensus/slot_clock.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/consensus/state.h"
 #include "lantern/crypto/xmss.h"
@@ -50,6 +48,11 @@
 #include "lantern/support/secure_mem.h"
 #include "lantern/support/strings.h"
 #include "lantern/support/time.h"
+
+_Static_assert(
+    sizeof(LanternValidator)
+        == (2u * LANTERN_VALIDATOR_PUBKEY_SIZE) + sizeof(LanternValidatorIndex),
+    "LanternValidator registry entries must not contain padding");
 
 static const size_t NODE_PRIVATE_KEY_SIZE = 32u;
 static const size_t BOOTNODE_LINE_MAX_LEN = 2048u;
@@ -128,7 +131,6 @@ static int client_resolve_gossip_fork_digest(
 bool lantern_client_persisted_state_is_stale_for_checkpoint_sync(
     const LanternState *persisted_state,
     uint64_t genesis_time,
-    uint32_t slot_duration_seconds,
     uint64_t now_seconds,
     uint64_t *out_expected_current_slot,
     uint64_t *out_gap) {
@@ -141,12 +143,12 @@ bool lantern_client_persisted_state_is_stale_for_checkpoint_sync(
     if (out_gap) {
         *out_gap = 0u;
     }
-    if (!persisted_state || slot_duration_seconds == 0u) {
+    if (!persisted_state) {
         return false;
     }
 
     if (now_seconds > genesis_time) {
-        expected_current_slot = (now_seconds - genesis_time) / (uint64_t)slot_duration_seconds;
+        expected_current_slot = (now_seconds - genesis_time) / LANTERN_SECONDS_PER_SLOT;
     }
     if (expected_current_slot > persisted_state->slot) {
         gap = expected_current_slot - persisted_state->slot;
@@ -166,19 +168,18 @@ static void sync_aggregated_payload_pools_after_time_advance(
     struct lantern_client *client,
     uint64_t previous_intervals,
     bool has_proposal) {
-    if (!client || !client->has_fork_choice) {
+    if (!client || client->store.block_len == 0u) {
         return;
     }
-    if (client->fork_choice.intervals_per_slot == 0
-        || client->fork_choice.time_intervals <= previous_intervals) {
+    if (client->store.time_intervals <= previous_intervals) {
         return;
     }
     for (uint64_t step = previous_intervals + 1u;
-         step <= client->fork_choice.time_intervals;
+         step <= client->store.time_intervals;
          ++step) {
-        uint64_t interval_index = step % client->fork_choice.intervals_per_slot;
-        bool step_has_proposal = has_proposal && (step == client->fork_choice.time_intervals);
-        if (interval_index == 3u) {
+        uint64_t interval_index = step % LANTERN_INTERVALS_PER_SLOT;
+        bool step_has_proposal = has_proposal && (step == client->store.time_intervals);
+        if (interval_index == LANTERN_DUTY_PHASE_SAFE_TARGET) {
             log_aggregated_payload_interval_transition(
                 client,
                 "safe_target",
@@ -187,11 +188,12 @@ static void sync_aggregated_payload_pools_after_time_advance(
                 client->store.new_aggregated_payloads.length,
                 client->store.known_aggregated_payloads.length,
                 0u);
-        } else if (interval_index == 4u || (interval_index == 0u && step_has_proposal)) {
+        } else if (interval_index == LANTERN_DUTY_PHASE_VOTE_ACCEPT
+            || (interval_index == LANTERN_DUTY_PHASE_PROPOSAL && step_has_proposal)) {
             size_t new_before = client->store.new_aggregated_payloads.length;
             size_t known_before = client->store.known_aggregated_payloads.length;
             size_t promoted = lantern_store_promote_new_aggregated_payloads(&client->store);
-            if (promoted > 0u && lantern_fork_choice_accept_new_aggregated_payloads(&client->fork_choice) != 0) {
+            if (promoted > 0u && lantern_fork_choice_accept_new_aggregated_payloads(&client->store) != 0) {
                 lantern_log_warn(
                     "forkchoice",
                     &(struct lantern_log_metadata){.validator = client->node_id},
@@ -199,7 +201,9 @@ static void sync_aggregated_payload_pools_after_time_advance(
             }
             log_aggregated_payload_interval_transition(
                 client,
-                interval_index == 4u ? "accept_new" : "proposal_accept_new",
+                interval_index == LANTERN_DUTY_PHASE_VOTE_ACCEPT
+                    ? "accept_new"
+                    : "proposal_accept_new",
                 step,
                 interval_index,
                 new_before,
@@ -209,55 +213,18 @@ static void sync_aggregated_payload_pools_after_time_advance(
     }
 }
 
-static int fork_choice_interval_boundary_milliseconds(
-    const LanternForkChoice *store,
-    uint64_t target_interval,
-    uint64_t *out_now_milliseconds) {
-    if (!store || !out_now_milliseconds || store->milliseconds_per_interval == 0) {
-        return -1;
-    }
-    if (store->config.genesis_time > UINT64_MAX / 1000u) {
-        return -1;
-    }
-    uint64_t genesis_milliseconds = store->config.genesis_time * 1000u;
-    if (target_interval > (UINT64_MAX - genesis_milliseconds) / store->milliseconds_per_interval) {
-        return -1;
-    }
-    *out_now_milliseconds =
-        genesis_milliseconds + (target_interval * store->milliseconds_per_interval);
-    return 0;
-}
-
-static int fork_choice_target_interval(
-    const LanternForkChoice *store,
-    uint64_t now_milliseconds,
-    uint64_t *out_target_interval) {
-    if (!store || !out_target_interval || store->milliseconds_per_interval == 0) {
-        return -1;
-    }
-    if (store->config.genesis_time > UINT64_MAX / 1000u) {
-        return -1;
-    }
-    uint64_t genesis_milliseconds = store->config.genesis_time * 1000u;
-    if (now_milliseconds < genesis_milliseconds) {
-        return 1;
-    }
-    *out_target_interval = (now_milliseconds - genesis_milliseconds) / store->milliseconds_per_interval;
-    return 0;
-}
-
 static bool interval_range_first_with_phase(
     uint64_t start,
     uint64_t end,
-    uint64_t intervals_per_slot,
     uint64_t phase,
     uint64_t *out_interval) {
-    if (intervals_per_slot == 0u || phase >= intervals_per_slot || start > end) {
+    if (phase >= LANTERN_INTERVALS_PER_SLOT || start > end) {
         return false;
     }
     uint64_t distance = end - start;
-    uint64_t remainder = start % intervals_per_slot;
-    uint64_t offset = (phase + intervals_per_slot - remainder) % intervals_per_slot;
+    uint64_t remainder = start % LANTERN_INTERVALS_PER_SLOT;
+    uint64_t offset =
+        (phase + LANTERN_INTERVALS_PER_SLOT - remainder) % LANTERN_INTERVALS_PER_SLOT;
     if (offset > distance) {
         return false;
     }
@@ -270,15 +237,15 @@ static bool interval_range_first_with_phase(
 static bool interval_range_last_with_phase(
     uint64_t start,
     uint64_t end,
-    uint64_t intervals_per_slot,
     uint64_t phase,
     uint64_t *out_interval) {
-    if (intervals_per_slot == 0u || phase >= intervals_per_slot || start > end) {
+    if (phase >= LANTERN_INTERVALS_PER_SLOT || start > end) {
         return false;
     }
     uint64_t distance = end - start;
-    uint64_t remainder = end % intervals_per_slot;
-    uint64_t offset = (remainder + intervals_per_slot - phase) % intervals_per_slot;
+    uint64_t remainder = end % LANTERN_INTERVALS_PER_SLOT;
+    uint64_t offset =
+        (remainder + LANTERN_INTERVALS_PER_SLOT - phase) % LANTERN_INTERVALS_PER_SLOT;
     if (offset > distance) {
         return false;
     }
@@ -291,42 +258,32 @@ static bool interval_range_last_with_phase(
 int lantern_client_tick_fork_choice_interval_locked(
     struct lantern_client *client,
     bool has_proposal) {
-    if (!client || !client->has_fork_choice) {
+    if (!client || client->store.block_len == 0u) {
         return -1;
     }
 
-    uint64_t previous_intervals = client->fork_choice.time_intervals;
+    uint64_t previous_intervals = client->store.time_intervals;
     uint64_t next_interval = previous_intervals + 1u;
     if (next_interval < previous_intervals) {
         return -1;
     }
 
-    uint64_t now_milliseconds = 0;
-    if (fork_choice_interval_boundary_milliseconds(
-            &client->fork_choice,
-            next_interval,
-            &now_milliseconds)
-        != 0) {
-        return -1;
-    }
-
     double tick_start_seconds = lantern_time_now_seconds();
-    int rc = lantern_fork_choice_advance_time(&client->fork_choice, now_milliseconds, has_proposal);
+    int rc = lantern_fork_choice_advance_to(&client->store, next_interval, has_proposal);
     if (rc != 0) {
         return rc;
     }
-    if (client->fork_choice.time_intervals != next_interval) {
+    if (client->store.time_intervals != next_interval) {
         return -1;
     }
 
     if (tick_start_seconds > 0.0) {
-        if (client->has_last_tick_interval_started_seconds
+        if (client->last_tick_interval_started_seconds > 0.0
             && tick_start_seconds >= client->last_tick_interval_started_seconds) {
             lean_metrics_record_tick_interval_duration(
                 tick_start_seconds - client->last_tick_interval_started_seconds);
         }
         client->last_tick_interval_started_seconds = tick_start_seconds;
-        client->has_last_tick_interval_started_seconds = true;
     }
 
     sync_aggregated_payload_pools_after_time_advance(client, previous_intervals, has_proposal);
@@ -336,16 +293,15 @@ int lantern_client_tick_fork_choice_interval_locked(
 int lantern_client_skip_fork_choice_intervals_locked(
     struct lantern_client *client,
     uint64_t target_interval) {
-    if (!client || !client->has_fork_choice) {
+    if (!client || client->store.block_len == 0u) {
         return -1;
     }
-    if (target_interval < client->fork_choice.time_intervals) {
+    if (target_interval < client->store.time_intervals) {
         return -1;
     }
-    uint64_t previous_intervals = client->fork_choice.time_intervals;
-    client->fork_choice.time_intervals = target_interval;
-    uint64_t intervals_per_slot = client->fork_choice.intervals_per_slot;
-    if (intervals_per_slot == 0u || target_interval == previous_intervals) {
+    uint64_t previous_intervals = client->store.time_intervals;
+    client->store.time_intervals = target_interval;
+    if (target_interval == previous_intervals) {
         return 0;
     }
 
@@ -355,27 +311,25 @@ int lantern_client_skip_fork_choice_intervals_locked(
     bool has_accept = interval_range_first_with_phase(
         start_interval,
         target_interval,
-        intervals_per_slot,
-        4u,
+        LANTERN_DUTY_PHASE_VOTE_ACCEPT,
         &first_accept_interval);
     bool has_safe = interval_range_last_with_phase(
         start_interval,
         target_interval,
-        intervals_per_slot,
-        3u,
+        LANTERN_DUTY_PHASE_SAFE_TARGET,
         &last_safe_interval);
 
     if (has_safe && (!has_accept || last_safe_interval < first_accept_interval)) {
         size_t new_before = client->store.new_aggregated_payloads.length;
         size_t known_before = client->store.known_aggregated_payloads.length;
-        if (lantern_fork_choice_update_safe_target(&client->fork_choice) != 0) {
+        if (lantern_fork_choice_update_safe_target(&client->store) != 0) {
             return -1;
         }
         log_aggregated_payload_interval_transition(
             client,
             "skip_safe_target",
             last_safe_interval,
-            last_safe_interval % intervals_per_slot,
+            last_safe_interval % LANTERN_INTERVALS_PER_SLOT,
             new_before,
             known_before,
             0u);
@@ -384,18 +338,18 @@ int lantern_client_skip_fork_choice_intervals_locked(
     if (has_accept) {
         size_t new_before = client->store.new_aggregated_payloads.length;
         size_t known_before = client->store.known_aggregated_payloads.length;
-        if (lantern_fork_choice_accept_new_aggregated_payloads(&client->fork_choice) != 0) {
+        if (lantern_fork_choice_accept_new_aggregated_payloads(&client->store) != 0) {
             return -1;
         }
         size_t promoted = lantern_store_promote_new_aggregated_payloads(&client->store);
-        if (promoted > 0u && lantern_fork_choice_accept_new_aggregated_payloads(&client->fork_choice) != 0) {
+        if (promoted > 0u && lantern_fork_choice_accept_new_aggregated_payloads(&client->store) != 0) {
             return -1;
         }
         log_aggregated_payload_interval_transition(
             client,
             "skip_accept_new",
             first_accept_interval,
-            first_accept_interval % intervals_per_slot,
+            first_accept_interval % LANTERN_INTERVALS_PER_SLOT,
             new_before,
             known_before,
             promoted);
@@ -404,14 +358,14 @@ int lantern_client_skip_fork_choice_intervals_locked(
     if (has_safe && has_accept && last_safe_interval > first_accept_interval) {
         size_t new_before = client->store.new_aggregated_payloads.length;
         size_t known_before = client->store.known_aggregated_payloads.length;
-        if (lantern_fork_choice_update_safe_target(&client->fork_choice) != 0) {
+        if (lantern_fork_choice_update_safe_target(&client->store) != 0) {
             return -1;
         }
         log_aggregated_payload_interval_transition(
             client,
             "skip_safe_target",
             last_safe_interval,
-            last_safe_interval % intervals_per_slot,
+            last_safe_interval % LANTERN_INTERVALS_PER_SLOT,
             new_before,
             known_before,
             0u);
@@ -423,30 +377,35 @@ int lantern_client_advance_fork_choice_time_locked(
     struct lantern_client *client,
     uint64_t now_milliseconds,
     bool has_proposal) {
-    if (!client || !client->has_fork_choice) {
+    if (!client || client->store.block_len == 0u) {
         return -1;
     }
 
-    uint64_t previous_intervals = client->fork_choice.time_intervals;
+    uint64_t previous_intervals = client->store.time_intervals;
     uint64_t target_interval = 0u;
-    int target_rc = fork_choice_target_interval(&client->fork_choice, now_milliseconds, &target_interval);
+    int target_rc = lantern_slot_clock_total_interval(
+        client->state.config.genesis_time,
+        now_milliseconds,
+        &target_interval);
     if (target_rc < 0) {
         return -1;
     }
     if (target_rc == 0
-        && client->fork_choice.intervals_per_slot > 0
         && target_interval > previous_intervals
-        && (target_interval - previous_intervals) > client->fork_choice.intervals_per_slot)
+        && (target_interval - previous_intervals) > LANTERN_INTERVALS_PER_SLOT)
     {
         uint64_t skip_to_interval =
-            target_interval - (uint64_t)client->fork_choice.intervals_per_slot;
+            target_interval - LANTERN_INTERVALS_PER_SLOT;
         if (lantern_client_skip_fork_choice_intervals_locked(client, skip_to_interval) != 0) {
             return -1;
         }
-        previous_intervals = client->fork_choice.time_intervals;
+        previous_intervals = client->store.time_intervals;
     }
 
-    int rc = lantern_fork_choice_advance_time(&client->fork_choice, now_milliseconds, has_proposal);
+    if (target_rc > 0) {
+        return 0;
+    }
+    int rc = lantern_fork_choice_advance_to(&client->store, target_interval, has_proposal);
     if (rc != 0) {
         return rc;
     }
@@ -462,9 +421,7 @@ extern int copy_genesis_paths(struct lantern_genesis_paths *paths,
                               const struct lantern_client_options *options);
 extern void reset_genesis_paths(struct lantern_genesis_paths *paths);
 extern int append_genesis_bootnodes(struct lantern_client *client);
-extern int compute_local_validator_assignment(struct lantern_client *client);
 extern int populate_local_validators(struct lantern_client *client);
-extern int init_consensus_runtime(struct lantern_client *client);
 
 
 /**
@@ -484,36 +441,16 @@ void lantern_client_options_init(struct lantern_client_options *options)
         return;
     }
 
+    memset(options, 0, sizeof(*options));
     options->data_dir = LANTERN_DEFAULT_DATA_DIR;
     options->genesis_config_path = LANTERN_DEFAULT_GENESIS_CONFIG;
     options->validator_config_dir = LANTERN_DEFAULT_VALIDATOR_CONFIG_DIR;
     options->nodes_path = LANTERN_DEFAULT_NODES_FILE;
     options->node_id = LANTERN_DEFAULT_NODE_ID;
-    options->node_key_hex = NULL;
-    options->node_key_path = NULL;
     options->listen_address = LANTERN_DEFAULT_LISTEN_ADDR;
-    options->checkpoint_sync_url = NULL;
     options->http_port = LANTERN_DEFAULT_HTTP_PORT;
     options->metrics_port = LANTERN_DEFAULT_METRICS_PORT;
     options->devnet = LANTERN_DEFAULT_DEVNET;
-    lantern_string_list_init(&options->bootnodes);
-    options->xmss_key_dir = NULL;
-    options->xmss_public_path = NULL;
-    options->xmss_secret_path = NULL;
-    options->xmss_public_template = NULL;
-    options->xmss_secret_template = NULL;
-    options->attestation_committee_count_override = 0;
-    options->has_attestation_committee_count_override = false;
-    options->is_aggregator = false;
-    options->aggregate_subnet_ids = NULL;
-    options->aggregate_subnet_id_count = 0;
-    options->aggregate_subnet_id_capacity = 0;
-    options->shadow_xmss_aggregate_signatures_rate = 0.0;
-    options->has_shadow_xmss_aggregate_signatures_rate = false;
-    options->shadow_xmss_verify_aggregated_signatures_rate = 0.0;
-    options->has_shadow_xmss_verify_aggregated_signatures_rate = false;
-    options->shadow_xmss_merge_rate = 0.0;
-    options->has_shadow_xmss_merge_rate = false;
 }
 
 
@@ -827,9 +764,9 @@ lantern_client_error lantern_client_options_add_bootnodes_argument(
 /**
  * @brief Reset the client struct to baseline defaults.
  *
- * Zeroes all fields and initializes embedded lists, services, and locks to
- * known empty states. This prepares the struct for subsequent initialization
- * steps.
+ * Zeroes all fields, establishes server descriptor sentinels and Store atomics,
+ * and leaves background services stopped. This prepares the struct for
+ * subsequent initialization steps.
  *
  * @param client  Client instance to reset (must not be NULL)
  *
@@ -839,32 +776,16 @@ lantern_client_error lantern_client_options_add_bootnodes_argument(
 static void client_reset_base(struct lantern_client *client)
 {
     memset(client, 0, sizeof(*client));
-    lantern_string_list_init(&client->bootnodes);
-    lantern_string_list_init(&client->dialer_peers);
-    lantern_string_list_init(&client->status_failure_peer_ids);
     double now_seconds = lantern_time_now_seconds();
     client->start_time_seconds = now_seconds > 0.0 ? (uint64_t)now_seconds : 0u;
-    lantern_genesis_artifacts_init(&client->genesis);
-    lantern_enr_record_init(&client->local_enr);
-    lantern_libp2p_host_init(&client->network);
-    lantern_gossipsub_service_init(&client->gossip);
-    lantern_reqresp_service_init(&client->reqresp);
-    lantern_validator_assignment_reset(&client->validator_assignment);
-    lantern_consensus_runtime_reset(&client->runtime);
     lantern_metrics_server_init(&client->metrics_server);
     lantern_http_server_init(&client->http_server);
-    lantern_state_init(&client->state);
     lantern_store_init(&client->store);
     lean_metrics_reset();
-    lantern_fork_choice_init(&client->fork_choice);
-    lantern_store_attach_fork_choice(&client->store, &client->fork_choice);
-    client->validator_stop_flag = 1;
     client->block_proposal_stop = true;
     client->timing_stop_flag = 1;
     client->dialer_stop_flag = 1;
-    pending_block_list_init(&client->pending_blocks);
     client->block_import_stop = true;
-    pending_vote_list_init(&client->pending_gossip_votes);
 }
 
 
@@ -905,7 +826,7 @@ static lantern_client_error client_apply_options(
 
     client->http_port = options->http_port;
     client->metrics_port = options->metrics_port;
-    if (options->has_attestation_committee_count_override)
+    if (options->attestation_committee_count_override > 0u)
     {
         client->debug_attestation_committee_count =
             (size_t)options->attestation_committee_count_override;
@@ -1039,19 +960,6 @@ static lantern_client_error client_init_locks(struct lantern_client *client)
         client->state_lock_initialized = true;
     }
 
-    if (!client->peer_vote_lock_initialized)
-    {
-        if (pthread_mutex_init(&client->peer_vote_lock, NULL) != 0)
-        {
-            lantern_log_error(
-                "client",
-                &(const struct lantern_log_metadata){.validator = client->node_id},
-                "failed to initialize vote metrics lock");
-            return LANTERN_CLIENT_ERR_RUNTIME;
-        }
-        client->peer_vote_lock_initialized = true;
-    }
-
     return LANTERN_CLIENT_OK;
 }
 
@@ -1132,10 +1040,9 @@ static lantern_client_error client_prepare_storage_and_genesis(
 
 
 /**
- * @brief Attempt genesis creation using embedded validator pubkey pairs.
+ * @brief Attempt genesis creation using the embedded validator registry.
  *
- * Builds the initial state from attestation/proposal pubkeys included in the
- * chain configuration.
+ * Builds the initial state from validators included in the chain configuration.
  *
  * @param client  Client with loaded chain configuration
  *
@@ -1145,8 +1052,7 @@ static lantern_client_error client_prepare_storage_and_genesis(
  */
 static bool client_try_genesis_from_pubkeys(struct lantern_client *client)
 {
-    if (!client->genesis.chain_config.validator_attestation_pubkeys
-        || !client->genesis.chain_config.validator_proposal_pubkeys
+    if (!client->genesis.chain_config.validators
         || client->genesis.chain_config.validator_count == 0
         || client->genesis.chain_config.validator_count > SIZE_MAX)
     {
@@ -1161,16 +1067,10 @@ static bool client_try_genesis_from_pubkeys(struct lantern_client *client)
         return false;
     }
 
-    if (lantern_state_set_validator_pubkeys_dual(
-            &client->state,
-            client->genesis.chain_config.validator_attestation_pubkeys,
-            client->genesis.chain_config.validator_proposal_pubkeys,
-            vcount)
-        != 0)
-    {
-        return false;
-    }
-
+    memcpy(
+        client->state.validators,
+        client->genesis.chain_config.validators,
+        vcount * sizeof(*client->state.validators));
     return true;
 }
 
@@ -1383,8 +1283,7 @@ int lantern_client_validate_state_validator_pubkeys(
         (log_component && log_component[0] != '\0') ? log_component : "client";
     const struct lantern_log_metadata meta = {.validator = client->node_id};
     const struct lantern_chain_config *config = &client->genesis.chain_config;
-    if (!config->validator_attestation_pubkeys
-        || !config->validator_proposal_pubkeys
+    if (!config->validators
         || config->validator_count == 0
         || config->validator_count > SIZE_MAX)
     {
@@ -1397,45 +1296,25 @@ int lantern_client_validate_state_validator_pubkeys(
 
     size_t expected_count = (size_t)config->validator_count;
     if (!state->validators
-        || state->validator_count != expected_count
-        || state->config.num_validators != (uint64_t)expected_count)
+        || state->validator_count != expected_count)
     {
         lantern_log_error(
             component,
             &meta,
-            "state validator count mismatch state=%zu config=%" PRIu64 " local=%zu",
+            "state validator count mismatch state=%zu local=%zu",
             state->validator_count,
-            state->config.num_validators,
             expected_count);
         return LANTERN_CLIENT_ERR_GENESIS;
     }
 
-    for (size_t i = 0; i < expected_count; ++i)
+    if (memcmp(
+            state->validators,
+            config->validators,
+            expected_count * sizeof(*state->validators))
+        != 0)
     {
-        size_t offset = i * LANTERN_VALIDATOR_PUBKEY_SIZE;
-        const LanternValidator *validator = &state->validators[i];
-        const uint8_t *expected_attestation =
-            config->validator_attestation_pubkeys + offset;
-        const uint8_t *expected_proposal =
-            config->validator_proposal_pubkeys + offset;
-        if (memcmp(
-                validator->attestation_pubkey,
-                expected_attestation,
-                LANTERN_VALIDATOR_PUBKEY_SIZE)
-                != 0
-            || memcmp(
-                   validator->proposal_pubkey,
-                   expected_proposal,
-                   LANTERN_VALIDATOR_PUBKEY_SIZE)
-                   != 0)
-        {
-            lantern_log_error(
-                component,
-                &meta,
-                "state validator pubkey mismatch index=%zu",
-                i);
-            return LANTERN_CLIENT_ERR_GENESIS;
-        }
+        lantern_log_error(component, &meta, "state validator registry mismatch");
+        return LANTERN_CLIENT_ERR_GENESIS;
     }
 
     return LANTERN_CLIENT_OK;
@@ -1481,7 +1360,6 @@ static lantern_client_error client_load_state_from_checkpoint(
 
     LanternState decoded;
     lantern_state_init(&decoded);
-    bool decoded_owned = true;
     lantern_client_error result = LANTERN_CLIENT_OK;
 
     if (lantern_ssz_decode_state(&decoded, fetch_result.body, fetch_result.body_len) != SSZ_SUCCESS)
@@ -1495,15 +1373,12 @@ static lantern_client_error client_load_state_from_checkpoint(
         goto cleanup;
     }
 
-    if (decoded.config.num_validators == 0
-        || decoded.validator_count == 0
-        || decoded.config.num_validators != (uint64_t)decoded.validator_count)
+    if (decoded.validator_count == 0)
     {
         lantern_log_error(
             "checkpoint_sync",
             &meta,
-            "checkpoint state validator metadata invalid config=%" PRIu64 " decoded=%zu",
-            decoded.config.num_validators,
+            "checkpoint state validator metadata invalid decoded=%zu",
             decoded.validator_count);
         result = LANTERN_CLIENT_ERR_GENESIS;
         goto cleanup;
@@ -1632,8 +1507,7 @@ static lantern_client_error client_load_state_from_checkpoint(
 
     lantern_state_reset(&client->state);
     client->state = decoded;
-    decoded_owned = false;
-    client->has_state = true;
+    decoded = (LanternState){0};
     lantern_log_info(
         "checkpoint_sync",
         &meta,
@@ -1641,7 +1515,7 @@ static lantern_client_error client_load_state_from_checkpoint(
         " validators=%" PRIu64 " finalized_slot=%" PRIu64 " state_root=%s"
         " anchor_root=%s",
         client->state.slot,
-        client->state.config.num_validators,
+        (uint64_t)client->state.validator_count,
         client->state.latest_finalized.slot,
         state_root_hex[0] ? state_root_hex : "0x0",
         anchor_root_hex[0] ? anchor_root_hex : "0x0");
@@ -1649,10 +1523,7 @@ static lantern_client_error client_load_state_from_checkpoint(
 cleanup:
     lantern_http_fetch_result_reset(&fetch_result);
     lantern_signed_block_reset(&anchor_signed_block);
-    if (decoded_owned)
-    {
-        lantern_state_reset(&decoded);
-    }
+    lantern_state_reset(&decoded);
     return result;
 }
 
@@ -1674,7 +1545,6 @@ static lantern_client_error client_generate_state_from_genesis(struct lantern_cl
     {
         return LANTERN_CLIENT_ERR_GENESIS;
     }
-    client->has_state = true;
     return LANTERN_CLIENT_OK;
 }
 
@@ -1712,13 +1582,9 @@ static lantern_client_error client_load_or_build_state(
     int storage_state_rc = lantern_storage_load_state(client->data_dir, &client->state);
     if (storage_state_rc == 0)
     {
-        client->has_state = true;
         from_storage = true;
         if (checkpoint_sync_configured)
         {
-            struct lantern_consensus_runtime_config runtime_config;
-            lantern_consensus_runtime_config_init(&runtime_config);
-
             uint64_t expected_current_slot = 0u;
             uint64_t gap = 0u;
             time_t now_time = time(NULL);
@@ -1726,7 +1592,6 @@ static lantern_client_error client_load_or_build_state(
                 && lantern_client_persisted_state_is_stale_for_checkpoint_sync(
                     &client->state,
                     client->genesis.chain_config.genesis_time,
-                    runtime_config.seconds_per_slot,
                     (uint64_t)now_time,
                     &expected_current_slot,
                     &gap))
@@ -1744,7 +1609,6 @@ static lantern_client_error client_load_or_build_state(
                     gap,
                     LANTERN_CHECKPOINT_SYNC_STALE_PERSISTED_STATE_SLOT_THRESHOLD);
                 lantern_state_reset(&client->state);
-                client->has_state = false;
                 from_storage = false;
                 should_attempt_checkpoint_sync = true;
             }
@@ -1770,7 +1634,7 @@ static lantern_client_error client_load_or_build_state(
         should_attempt_checkpoint_sync = checkpoint_sync_configured;
     }
 
-    if (!client->has_state)
+    if (client->state.validator_count == 0u)
     {
         if (should_attempt_checkpoint_sync)
         {
@@ -1792,7 +1656,7 @@ static lantern_client_error client_load_or_build_state(
         }
     }
 
-    if (client->has_state)
+    if (client->state.validator_count > 0u)
     {
         if (initialize_fork_choice(client) != 0)
         {
@@ -1804,7 +1668,7 @@ static lantern_client_error client_load_or_build_state(
         }
     }
 
-    if (client->has_state && !from_storage)
+    if (client->state.validator_count > 0u && !from_storage)
     {
         if (lantern_storage_save_state(client->data_dir, &client->state) != 0)
         {
@@ -1819,15 +1683,15 @@ static lantern_client_error client_load_or_build_state(
     {
         *loaded_from_storage = from_storage;
     }
-    return client->has_state ? LANTERN_CLIENT_OK : LANTERN_CLIENT_ERR_GENESIS;
+    return client->state.validator_count > 0u ? LANTERN_CLIENT_OK : LANTERN_CLIENT_ERR_GENESIS;
 }
 
 
 /**
  * @brief Configure the client's local validator slice and key material.
  *
- * Validates presence of the node's ENR entry, computes validator assignments,
- * loads local validator definitions, and refreshes pubkeys.
+ * Validates the node's ENR entry, loads its assigned validators, and refreshes
+ * pubkeys.
  *
  * @param client   Client being configured
  * @param options  User-supplied options for key sources
@@ -1857,8 +1721,7 @@ static lantern_client_error client_setup_validators(
 
     if (options->is_aggregator)
     {
-        ((struct lantern_validator_config_entry *)client->assigned_validators)
-            ->enr.is_aggregator = true;
+        client->assigned_validators->enr.is_aggregator = true;
     }
 
     if (!client->assigned_validators->enr.ip || client->assigned_validators->enr.quic_port == 0)
@@ -1882,16 +1745,6 @@ static lantern_client_error client_setup_validators(
 
     adopt_validator_listen_address(client);
 
-    if (compute_local_validator_assignment(client) != 0)
-    {
-        lantern_log_error(
-            "client",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to compute validator assignment for '%s'",
-            client->node_id);
-        return LANTERN_CLIENT_ERR_VALIDATOR;
-    }
-
     if (populate_local_validators(client) != 0)
     {
         lantern_log_error(
@@ -1902,7 +1755,7 @@ static lantern_client_error client_setup_validators(
         return LANTERN_CLIENT_ERR_VALIDATOR;
     }
 
-    if (client->local_validator_count == 0 || !client->has_state)
+    if (client->local_validator_count == 0 || client->state.validator_count == 0u)
     {
         lantern_log_error(
             "client",
@@ -1935,43 +1788,9 @@ static lantern_client_error client_setup_validators(
         "client",
         &(const struct lantern_log_metadata){.validator = client->node_id},
         "validator slice start=%" PRIu64 " count=%zu",
-        client->validator_assignment.indices[0],
-        client->validator_assignment.length);
+        client->local_validators[0].global_index,
+        client->local_validator_count);
 
-    return LANTERN_CLIENT_OK;
-}
-
-
-/**
- * @brief Start the consensus runtime used by validator duties.
- *
- * Initializes runtime structures after state and validator configuration are
- * ready.
- *
- * @param client  Client containing prepared state
- *
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_RUNTIME if initialization fails
- *
- * @note Thread safety: Single-threaded initialization only.
- */
-static lantern_client_error client_start_runtime(struct lantern_client *client)
-{
-    if (init_consensus_runtime(client) != 0)
-    {
-        lantern_log_error(
-            "client",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "failed to initialize consensus runtime");
-        return LANTERN_CLIENT_ERR_RUNTIME;
-    }
-
-    lantern_log_info(
-        "client",
-        &(const struct lantern_log_metadata){.validator = client->node_id},
-        "consensus runtime ready genesis_time=%" PRIu64 " validators=%" PRIu64,
-        client->genesis.chain_config.genesis_time,
-        client->genesis.chain_config.validator_count);
     return LANTERN_CLIENT_OK;
 }
 
@@ -2004,7 +1823,6 @@ static lantern_client_error client_start_network(
         .listen_multiaddr = client->listen_address,
         .secp256k1_secret = node_key,
         .secret_len = NODE_PRIVATE_KEY_SIZE,
-        .allow_outbound_identify = 1,
     };
 
     if (lantern_libp2p_host_prepare(&client->network, &net_cfg) != 0)
@@ -2246,19 +2064,16 @@ static lantern_client_error client_start_protocols(
     }
     struct lantern_gossipsub_config gossip_cfg = {
         .network = &client->network,
-        .devnet = client->devnet,
-        .data_dir = client->data_dir,
         .topic_network_name = topic_network_name,
-        .fork_digest = {fork_digest[0], fork_digest[1], fork_digest[2], fork_digest[3]},
         .attestation_subnet_id = subnet_id,
         .subscribe_attestation_subnet = 1,
     };
-    lantern_gossipsub_service_set_block_handler(&client->gossip, gossip_block_handler, client);
-    lantern_gossipsub_service_set_vote_handler(&client->gossip, gossip_vote_handler, client);
-    lantern_gossipsub_service_set_aggregated_attestation_handler(
-        &client->gossip,
-        gossip_aggregated_attestation_handler,
-        client);
+    client->gossip.block_handler = gossip_block_handler;
+    client->gossip.block_handler_user_data = client;
+    client->gossip.vote_handler = gossip_vote_handler;
+    client->gossip.vote_handler_user_data = client;
+    client->gossip.aggregated_attestation_handler = gossip_aggregated_attestation_handler;
+    client->gossip.aggregated_attestation_handler_user_data = client;
     if (lantern_gossipsub_service_start(&client->gossip, &gossip_cfg) != 0)
     {
         lantern_log_error(
@@ -2268,8 +2083,6 @@ static lantern_client_error client_start_protocols(
         free(subscription_subnet_ids);
         return LANTERN_CLIENT_ERR_NETWORK;
     }
-    client->gossip_running = true;
-
     for (size_t i = 0; i < subscription_subnet_id_count; ++i) {
         size_t current_subnet_id = subscription_subnet_ids[i];
         if (current_subnet_id != subnet_id) {
@@ -2283,7 +2096,6 @@ static lantern_client_error client_start_protocols(
                     "failed to subscribe attestation subnet subnet=%zu",
                     current_subnet_id);
                 lantern_gossipsub_service_reset(&client->gossip);
-                client->gossip_running = false;
                 free(subscription_subnet_ids);
                 return LANTERN_CLIENT_ERR_NETWORK;
             }
@@ -2327,8 +2139,6 @@ static lantern_client_error client_start_protocols(
             "failed to start request/response service");
         return LANTERN_CLIENT_ERR_NETWORK;
     }
-    client->reqresp_running = true;
-
     /*
      * This handler may immediately send Status on CONN_ESTABLISHED. Register
      * it after reqresp so the req/resp protocols and event handler are ready.
@@ -2408,14 +2218,6 @@ static void client_start_background_services(struct lantern_client *client)
             "failed to enable peer maintenance");
     }
 
-    if (start_timing_service(client) != 0)
-    {
-        lantern_log_warn(
-            "forkchoice",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "fork-choice timing inactive");
-    }
-
     if (start_block_proposal_worker(client) != 0)
     {
         lantern_log_warn(
@@ -2424,326 +2226,13 @@ static void client_start_background_services(struct lantern_client *client)
             "block proposal worker inactive");
     }
 
-    if (start_validator_service(client) != 0)
+    if (start_timing_service(client) != 0)
     {
         lantern_log_warn(
-            "validator",
+            "forkchoice",
             &(const struct lantern_log_metadata){.validator = client->node_id},
-            "validator duties inactive");
+            "chain scheduler inactive");
     }
-}
-
-
-/**
- * @brief Stop validator-related services and free xmss key resources.
- *
- * Stops validator workers and network callbacks before freeing hash signature
- * key material paths and buffers.
- *
- * @param client  Client to clean up
- *
- * @note Thread safety: Caller must ensure background threads are not running.
- */
-static void shutdown_validator_and_keys(struct lantern_client *client)
-{
-    stop_timing_service(client);
-    stop_validator_service(client);
-    stop_block_proposal_worker(client);
-    stop_peer_dialer(client);
-    lantern_libp2p_host_stop(&client->network);
-    free(client->xmss_key_dir);
-    client->xmss_key_dir = NULL;
-    free(client->xmss_public_template);
-    client->xmss_public_template = NULL;
-    free(client->xmss_secret_template);
-    client->xmss_secret_template = NULL;
-    free(client->xmss_public_path);
-    client->xmss_public_path = NULL;
-    free(client->xmss_secret_path);
-    client->xmss_secret_path = NULL;
-}
-
-
-/**
- * @brief Stop HTTP and metrics servers and reset their state.
- *
- * @param client  Client whose API servers are being stopped
- *
- * @note Thread safety: Caller must ensure no requests are in flight.
- */
-static void shutdown_http_and_metrics(struct lantern_client *client)
-{
-    lantern_metrics_server_stop(&client->metrics_server);
-    lantern_metrics_server_init(&client->metrics_server);
-    client->metrics_running = false;
-
-    lantern_http_server_stop(&client->http_server);
-    lantern_http_server_init(&client->http_server);
-    client->http_running = false;
-}
-
-
-/**
- * @brief Tear down networking services and related synchronization primitives.
- *
- * Stops networking services, destroys connection lock, and clears peer tracking
- * lists.
- *
- * @param client  Client whose networking stack is being shut down
- *
- * @note Thread safety: Must be called after networking threads have stopped.
- */
-static void shutdown_network_services(struct lantern_client *client)
-{
-    if (client->connection_lock_initialized)
-    {
-        connection_counter_reset(client);
-        pthread_mutex_destroy(&client->connection_lock);
-        client->connection_lock_initialized = false;
-    }
-    else
-    {
-        client->connected_peers = 0;
-    }
-    free(client->connection_peer_refs);
-    client->connection_peer_refs = NULL;
-    client->connection_peer_ref_count = 0;
-    client->connection_peer_ref_capacity = 0;
-}
-
-static void clear_status_tracking(struct lantern_client *client)
-{
-    free(client->peer_status_entries);
-    client->peer_status_entries = NULL;
-    client->peer_status_count = 0;
-    client->peer_status_capacity = 0;
-    for (size_t i = 0; i < client->active_blocks_request_count; ++i)
-    {
-        free(client->active_blocks_requests[i].roots);
-    }
-    free(client->active_blocks_requests);
-    client->active_blocks_requests = NULL;
-    client->active_blocks_request_count = 0;
-    client->active_blocks_request_capacity = 0;
-    client->next_blocks_request_id = 0;
-}
-
-static void clear_peer_vote_tracking(struct lantern_client *client)
-{
-    free(client->peer_vote_stats);
-    client->peer_vote_stats = NULL;
-    client->peer_vote_stats_len = 0;
-    client->peer_vote_stats_cap = 0;
-}
-
-static void clear_pending_block_state(struct lantern_client *client)
-{
-    pending_block_list_reset(&client->pending_blocks);
-    free(client->backfill.roots);
-    memset(&client->backfill, 0, sizeof(client->backfill));
-}
-
-
-/**
- * @brief Free peer tracking structures and destroy associated locks.
- *
- * @param client  Client whose peer tracking data is being cleared
- *
- * @note Thread safety: Caller must ensure no concurrent access to peer data.
- */
-static void shutdown_peer_tracking(struct lantern_client *client)
-{
-    if (client->status_lock_initialized)
-    {
-        if (pthread_mutex_lock(&client->status_lock) == 0)
-        {
-            clear_status_tracking(client);
-            pthread_mutex_unlock(&client->status_lock);
-        }
-        else
-        {
-            clear_status_tracking(client);
-        }
-        pthread_mutex_destroy(&client->status_lock);
-        client->status_lock_initialized = false;
-    }
-    else
-    {
-        clear_status_tracking(client);
-    }
-
-    if (client->peer_vote_lock_initialized)
-    {
-        if (pthread_mutex_lock(&client->peer_vote_lock) == 0)
-        {
-            clear_peer_vote_tracking(client);
-            pthread_mutex_unlock(&client->peer_vote_lock);
-        }
-        else
-        {
-            clear_peer_vote_tracking(client);
-        }
-        pthread_mutex_destroy(&client->peer_vote_lock);
-        client->peer_vote_lock_initialized = false;
-    }
-    else
-    {
-        clear_peer_vote_tracking(client);
-    }
-}
-
-
-/**
- * @brief Destroy the validator lock.
- *
- * @param client  Client whose validator lock is being destroyed
- *
- * @note Thread safety: Caller must ensure no validator access is ongoing.
- */
-static void shutdown_validator_lock(struct lantern_client *client)
-{
-    if (client->validator_lock_initialized)
-    {
-        pthread_mutex_destroy(&client->validator_lock);
-        client->validator_lock_initialized = false;
-    }
-}
-
-
-/**
- * @brief Clear pending block list and destroy its mutex.
- *
- * @param client  Client whose pending blocks are being cleared
- *
- * @note Thread safety: Caller must stop block processing threads first.
- */
-static void shutdown_pending_blocks(struct lantern_client *client)
-{
-    if (client->pending_lock_initialized)
-    {
-        if (pthread_mutex_lock(&client->pending_lock) == 0)
-        {
-            clear_pending_block_state(client);
-            pthread_mutex_unlock(&client->pending_lock);
-        }
-        else
-        {
-            clear_pending_block_state(client);
-        }
-        pthread_mutex_destroy(&client->pending_lock);
-        client->pending_lock_initialized = false;
-    }
-    else
-    {
-        clear_pending_block_state(client);
-    }
-}
-
-
-/**
- * @brief Release string lists and dynamically allocated client strings.
- *
- * @param client  Client whose lists and strings are being freed
- *
- * @note Thread safety: Caller must ensure exclusive access.
- */
-static void shutdown_strings_and_lists(struct lantern_client *client)
-{
-    lantern_string_list_reset(&client->dialer_peers);
-    lantern_string_list_reset(&client->status_failure_peer_ids);
-    lantern_string_list_reset(&client->bootnodes);
-    free(client->data_dir);
-    client->data_dir = NULL;
-    free(client->node_id);
-    client->node_id = NULL;
-    free(client->listen_address);
-    client->listen_address = NULL;
-    free(client->devnet);
-    client->devnet = NULL;
-    free(client->aggregate_subnet_ids);
-    client->aggregate_subnet_ids = NULL;
-    client->aggregate_subnet_id_count = 0;
-}
-
-
-/**
- * @brief Reset genesis artifacts and networking components.
- *
- * Resets req/resp and gossipsub services, libp2p host, local ENR, and zeroes
- * the node private key buffer.
- *
- * @param client  Client whose genesis/network resources are being reset
- *
- * @note Thread safety: Caller must ensure no networking activity is ongoing.
- */
-static void shutdown_genesis_and_network(struct lantern_client *client)
-{
-    reset_genesis_paths(&client->genesis_paths);
-    lantern_genesis_artifacts_reset(&client->genesis);
-    lantern_log_info(
-        "client",
-        &(const struct lantern_log_metadata){.validator = client->node_id},
-        "shutdown: stopping request/response service");
-    lantern_reqresp_service_reset(&client->reqresp);
-    lantern_reqresp_service_init(&client->reqresp);
-    client->reqresp_running = false;
-    lantern_log_info(
-        "client",
-        &(const struct lantern_log_metadata){.validator = client->node_id},
-        "shutdown: request/response service stopped");
-    lantern_log_info(
-        "client",
-        &(const struct lantern_log_metadata){.validator = client->node_id},
-        "shutdown: stopping gossipsub");
-    lantern_gossipsub_service_stop(&client->gossip);
-    client->gossip_running = false;
-    lantern_log_info(
-        "client",
-        &(const struct lantern_log_metadata){.validator = client->node_id},
-        "shutdown: gossipsub stopped");
-    lantern_log_info(
-        "client",
-        &(const struct lantern_log_metadata){.validator = client->node_id},
-        "shutdown: resetting libp2p host");
-    lantern_libp2p_host_reset(&client->network);
-    lantern_gossipsub_service_reset(&client->gossip);
-    lantern_log_info(
-        "client",
-        &(const struct lantern_log_metadata){.validator = client->node_id},
-        "shutdown: libp2p host reset");
-    lantern_enr_record_reset(&client->local_enr);
-}
-
-
-/**
- * @brief Reset state, fork choice, validator assignments, and runtime.
- *
- * @param client  Client to reset
- *
- * @note Thread safety: Caller must ensure no concurrent state access.
- */
-static void shutdown_state_and_runtime(struct lantern_client *client)
-{
-    pending_vote_list_reset(&client->pending_gossip_votes);
-    lantern_state_reset(&client->state);
-    client->has_state = false;
-    lantern_store_reset(&client->store);
-    if (client->state_lock_initialized)
-    {
-        pthread_mutex_destroy(&client->state_lock);
-        client->state_lock_initialized = false;
-    }
-    lantern_fork_choice_reset(&client->fork_choice);
-    client->has_fork_choice = false;
-    lantern_client_reset_local_validators(client);
-    lantern_validator_assignment_reset(&client->validator_assignment);
-    lantern_consensus_runtime_reset(&client->runtime);
-    client->has_runtime = false;
-
-    client->http_port = 0;
-    client->metrics_port = 0;
-    client->assigned_validators = NULL;
-    lantern_log_reset_node_id();
 }
 
 
@@ -2762,8 +2251,6 @@ static void shutdown_state_and_runtime(struct lantern_client *client)
  */
 static lantern_client_error client_start_apis(struct lantern_client *client)
 {
-    client->http_running = false;
-
     struct lantern_metrics_callbacks metrics_callbacks;
     memset(&metrics_callbacks, 0, sizeof(metrics_callbacks));
     metrics_callbacks.context = client;
@@ -2783,18 +2270,14 @@ static lantern_client_error client_start_apis(struct lantern_client *client)
                 client->metrics_port);
             return LANTERN_CLIENT_ERR_NETWORK;
         }
-        client->metrics_running = true;
     }
 
     struct lantern_http_server_config http_config;
     memset(&http_config, 0, sizeof(http_config));
     http_config.port = client->http_port;
     http_config.callbacks.context = client;
-    http_config.callbacks.snapshot_head = http_snapshot_head;
+    http_config.callbacks.snapshot_justified = http_snapshot_justified;
     http_config.callbacks.snapshot_fork_choice = http_snapshot_fork_choice;
-    http_config.callbacks.validator_count = http_validator_count_cb;
-    http_config.callbacks.validator_info = http_validator_info_cb;
-    http_config.callbacks.set_validator_status = http_set_validator_status_cb;
     http_config.callbacks.metrics_snapshot = metrics_snapshot_cb;
     http_config.callbacks.finalized_state_ssz = http_finalized_state_ssz_cb;
     http_config.callbacks.finalized_block_ssz = http_finalized_block_ssz_cb;
@@ -2811,7 +2294,6 @@ static lantern_client_error client_start_apis(struct lantern_client *client)
                 client->http_port);
             return LANTERN_CLIENT_ERR_NETWORK;
         }
-        client->http_running = true;
     }
 
     return LANTERN_CLIENT_OK;
@@ -2852,13 +2334,9 @@ lantern_client_error lantern_init(
     uint8_t node_key[NODE_PRIVATE_KEY_SIZE];
     lantern_client_error err = LANTERN_CLIENT_OK;
 
-    lantern_shadow_xmss_cost_init(
-        options->shadow_xmss_aggregate_signatures_rate,
-        options->has_shadow_xmss_aggregate_signatures_rate,
-        options->shadow_xmss_verify_aggregated_signatures_rate,
-        options->has_shadow_xmss_verify_aggregated_signatures_rate,
-        options->shadow_xmss_merge_rate,
-        options->has_shadow_xmss_merge_rate);
+    lantern_signature_configure_shadow_costs(
+        options->shadow_xmss_rates,
+        options->shadow_xmss_rates_set);
 
     client_reset_base(client);
 
@@ -2898,12 +2376,6 @@ lantern_client_error lantern_init(
         goto error;
     }
 
-    err = client_start_runtime(client);
-    if (err != LANTERN_CLIENT_OK)
-    {
-        goto error;
-    }
-
     err = client_start_network(client, options, node_key);
     if (err != LANTERN_CLIENT_OK)
     {
@@ -2938,15 +2410,15 @@ error:
 /**
  * @brief Shutdown and clean up the Lantern client.
  *
- * Stops all services and releases all resources. After this call, the client
- * struct is zeroed and must be re-initialized before reuse.
+ * Stops all services, releases all resources, and restores the same empty
+ * baseline used at initialization.
  *
  * Shutdown order (reverse of initialization):
  * 1. Validator and ping services
  * 2. HTTP and metrics servers
  * 3. Networking (gossipsub, request/response, libp2p)
- * 4. State and fork choice
- * 5. Genesis artifacts and configuration
+ * 4. Genesis artifacts and configuration
+ * 5. State and fork choice
  *
  * @param client  Client to shutdown (may be NULL, which is a no-op)
  *
@@ -2960,14 +2432,105 @@ void lantern_shutdown(struct lantern_client *client)
         return;
     }
 
-    shutdown_validator_and_keys(client);
-    shutdown_http_and_metrics(client);
+    stop_timing_service(client);
+    stop_block_proposal_worker(client);
+    stop_peer_dialer(client);
+    lantern_libp2p_host_stop(&client->network);
+    free(client->xmss_key_dir);
+    free(client->xmss_secret_template);
+    free(client->xmss_secret_path);
+
+    lantern_metrics_server_stop(&client->metrics_server);
+    lantern_http_server_stop(&client->http_server);
     lantern_client_block_importer_stop(client);
-    shutdown_network_services(client);
-    shutdown_peer_tracking(client);
-    shutdown_validator_lock(client);
-    shutdown_pending_blocks(client);
-    shutdown_strings_and_lists(client);
-    shutdown_genesis_and_network(client);
-    shutdown_state_and_runtime(client);
+
+    connection_counter_reset(client);
+    if (client->connection_lock_initialized)
+    {
+        pthread_mutex_destroy(&client->connection_lock);
+    }
+
+    bool status_locked = client->status_lock_initialized
+        && pthread_mutex_lock(&client->status_lock) == 0;
+    free(client->peer_status_entries);
+    for (size_t i = 0; i < client->active_blocks_request_count; ++i)
+    {
+        free(client->active_blocks_requests[i].roots);
+    }
+    free(client->active_blocks_requests);
+    if (status_locked)
+    {
+        pthread_mutex_unlock(&client->status_lock);
+    }
+    if (client->status_lock_initialized)
+    {
+        pthread_mutex_destroy(&client->status_lock);
+    }
+    if (client->validator_lock_initialized)
+    {
+        pthread_mutex_destroy(&client->validator_lock);
+    }
+
+    bool pending_locked = client->pending_lock_initialized
+        && pthread_mutex_lock(&client->pending_lock) == 0;
+    pending_block_list_reset(&client->pending_blocks);
+    free(client->backfill.roots);
+    if (pending_locked)
+    {
+        pthread_mutex_unlock(&client->pending_lock);
+    }
+    if (client->pending_lock_initialized)
+    {
+        pthread_mutex_destroy(&client->pending_lock);
+    }
+
+    reset_genesis_paths(&client->genesis_paths);
+    lantern_genesis_artifacts_reset(&client->genesis);
+    lantern_log_info(
+        "client",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "shutdown: stopping request/response service");
+    lantern_reqresp_service_reset(&client->reqresp);
+    lantern_log_info(
+        "client",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "shutdown: request/response service stopped");
+    lantern_log_info(
+        "client",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "shutdown: stopping gossipsub");
+    lantern_gossipsub_service_stop(&client->gossip);
+    lantern_log_info(
+        "client",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "shutdown: gossipsub stopped");
+    lantern_log_info(
+        "client",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "shutdown: resetting libp2p host");
+    lantern_libp2p_host_reset(&client->network);
+    lantern_gossipsub_service_reset(&client->gossip);
+    lantern_log_info(
+        "client",
+        &(const struct lantern_log_metadata){.validator = client->node_id},
+        "shutdown: libp2p host reset");
+    lantern_enr_record_reset(&client->local_enr);
+
+    pending_vote_list_reset(&client->pending_gossip_votes);
+    lantern_state_reset(&client->state);
+    lantern_store_reset(&client->store);
+    if (client->state_lock_initialized)
+    {
+        pthread_mutex_destroy(&client->state_lock);
+    }
+    lantern_client_reset_local_validators(client);
+    lantern_log_reset_node_id();
+
+    lantern_string_list_reset(&client->bootnodes);
+    free(client->data_dir);
+    free(client->node_id);
+    free(client->listen_address);
+    free(client->devnet);
+    free(client->aggregate_subnet_ids);
+    client_reset_base(client);
 }

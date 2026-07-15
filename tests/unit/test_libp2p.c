@@ -66,7 +66,6 @@ static int dial_starts_after_launch(void) {
         .listen_multiaddr = "/ip4/127.0.0.1/udp/9310/quic-v1",
         .secp256k1_secret = kHostSecret,
         .secret_len = sizeof(kHostSecret),
-        .allow_outbound_identify = 1,
     };
 
     if (lantern_enr_record_decode(kQuicOnlyEnr, &record) != 0) {

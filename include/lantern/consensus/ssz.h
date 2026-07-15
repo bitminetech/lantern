@@ -75,6 +75,10 @@ ssz_error_t lantern_ssz_decode_multi_message_aggregate(
     LanternByteList *aggregate,
     const uint8_t *data,
     size_t data_len);
+ssz_error_t lantern_ssz_multi_message_aggregate_raw_span(
+    const LanternByteList *aggregate,
+    const uint8_t **out_raw,
+    size_t *out_raw_len);
 ssz_error_t lantern_ssz_encode_validator(
     const LanternValidator *validator,
     uint8_t *out,

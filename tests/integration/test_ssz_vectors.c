@@ -2788,8 +2788,7 @@ static int run_blocks_by_root_request_fixture(
     int value_idx,
     const struct byte_buffer *expected_serialized,
     const LanternRoot *expected_root) {
-    LanternBlocksByRootRequest request;
-    lantern_blocks_by_root_request_init(&request);
+    LanternBlocksByRootRequest request = {0};
     int roots_idx = lantern_fixture_object_get_field(doc, value_idx, "roots");
     if (roots_idx < 0 || parse_root_list_object(doc, roots_idx, &request.roots) != 0) {
         lantern_blocks_by_root_request_reset(&request);
@@ -2805,8 +2804,7 @@ static int run_blocks_by_root_request_fixture(
         lantern_blocks_by_root_request_reset(&request);
         return record_failure(path, type_name, "blocks-by-root-request encode failed");
     }
-    LanternBlocksByRootRequest decoded;
-    lantern_blocks_by_root_request_init(&decoded);
+    LanternBlocksByRootRequest decoded = {0};
     if (lantern_network_blocks_by_root_request_decode(&decoded, expected_serialized->data, expected_serialized->len) != 0
         || lantern_network_blocks_by_root_request_encode(&decoded, encoded, encoded_capacity, &encoded_len) != 0
         || expect_bytes_equal(path, type_name, "decode(serialized)", expected_serialized->data, expected_serialized->len, encoded, encoded_len) != 0) {

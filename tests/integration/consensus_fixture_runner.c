@@ -9,6 +9,7 @@
 #include "lantern/support/strings.h"
 #include "fixture_runner.h"
 #include "tests/support/fixture_loader.h"
+#include "src/test_driver/driver.h"
 #include "../support/state_store_adapter.h"
 #include "../../src/core/client_sync_internal.h"
 
@@ -47,18 +48,6 @@ static void configure_logging(void) {
         return;
     }
     lantern_log_set_level(LANTERN_LOG_LEVEL_WARN);
-}
-
-static bool is_root_zero(const LanternRoot *root) {
-    if (!root) {
-        return false;
-    }
-    for (size_t i = 0; i < LANTERN_ROOT_SIZE; ++i) {
-        if (root->bytes[i] != 0) {
-            return false;
-        }
-    }
-    return true;
 }
 
 static int preview_post_state_root_without_signatures(
@@ -141,7 +130,7 @@ static int patch_block_hashes_for_c_compat(
     /* Compute what latest_block_header will look like after slot processing.
      * If state_root is zero, process_slot fills it with hash(state). */
     LanternBlockHeader header_after_slots = state->latest_block_header;
-    if (is_root_zero(&header_after_slots.state_root)) {
+    if (lantern_root_is_zero(&header_after_slots.state_root)) {
         if (lantern_hash_tree_root_state(state, &header_after_slots.state_root) != SSZ_SUCCESS) {
             return -1;
         }
@@ -177,12 +166,11 @@ static bool aggregated_payload_has_validator(
 }
 
 static int extract_attestation_from_payload_pool(
-    const LanternStore *store,
     const struct lantern_aggregated_payload_pool *pool,
     size_t validator,
     LanternAttestationData *out_attestation,
     bool *out_found) {
-    if (!store || !pool || !out_attestation || !out_found) {
+    if (!pool || !out_attestation || !out_found) {
         return -1;
     }
 
@@ -195,14 +183,8 @@ static int extract_attestation_from_payload_pool(
             continue;
         }
 
-        LanternAttestationData attestation;
-        memset(&attestation, 0, sizeof(attestation));
-        if (lantern_store_get_attestation_data(store, &entry->data_root, &attestation) != 0) {
-            return -1;
-        }
-
-        if (!found || latest.slot < attestation.slot) {
-            latest = attestation;
+        if (!found || latest.slot < entry->data.slot) {
+            latest = entry->data;
             found = true;
         }
     }
@@ -250,39 +232,6 @@ static int fixture_token_to_bool(
     return -1;
 }
 
-static int collect_attestation_signature_inputs(
-    const LanternStore *store,
-    LanternAttestations *out_attestations,
-    LanternSignatureList *out_signatures) {
-    if (!store || !out_attestations || !out_signatures) {
-        return -1;
-    }
-    if (lantern_attestations_resize(out_attestations, 0u) != 0
-        || lantern_signature_list_resize(out_signatures, 0u) != 0) {
-        return -1;
-    }
-
-    for (size_t i = 0; i < store->attestation_signatures.length; ++i) {
-        const struct lantern_attestation_signature_entry *entry = &store->attestation_signatures.entries[i];
-        LanternAttestationData data;
-        memset(&data, 0, sizeof(data));
-        if (lantern_store_get_attestation_data(store, &entry->key.data_root, &data) != 0) {
-            continue;
-        }
-
-        LanternVote vote;
-        memset(&vote, 0, sizeof(vote));
-        vote.validator_id = entry->key.validator_index;
-        vote.data = data;
-
-        if (lantern_attestations_append(out_attestations, &vote) != 0
-            || lantern_signature_list_append(out_signatures, &entry->signature) != 0) {
-            return -1;
-        }
-    }
-    return 0;
-}
-
 static int aggregate_pending_gossip_attestations(
     LanternState *state,
     LanternStore *store) {
@@ -290,69 +239,47 @@ static int aggregate_pending_gossip_attestations(
         return -1;
     }
 
-    LanternAttestations attestations;
-    LanternSignatureList signatures;
-    LanternAggregatedAttestations aggregated_attestations;
-    LanternAttestationSignatures aggregated_signatures;
-    lantern_attestations_init(&attestations);
-    lantern_signature_list_init(&signatures);
-    lantern_aggregated_attestations_init(&aggregated_attestations);
-    lantern_attestation_signatures_init(&aggregated_signatures);
+    struct lantern_aggregated_payload_pool aggregated_payloads = {0};
 
     int rc = -1;
-    if (collect_attestation_signature_inputs(store, &attestations, &signatures) != 0) {
-        goto cleanup;
-    }
-    if (attestations.length == 0u) {
+    if (store->attestation_signatures.length == 0u) {
         rc = 0;
         goto cleanup;
     }
 
-    LanternAttestationSignatureInputs signature_inputs = {
-        .attestations = &attestations,
-        .signatures = &signatures,
-    };
     if (lantern_state_aggregate(
             state,
             store,
-            &signature_inputs,
-            &store->new_aggregated_payloads,
-            &store->known_aggregated_payloads,
-            &aggregated_attestations,
-            &aggregated_signatures)
+            &aggregated_payloads)
         != LANTERN_STATE_AGGREGATE_OK) {
         goto cleanup;
     }
 
     lantern_store_clear_new_aggregated_payloads(store);
-    for (size_t i = 0; i < aggregated_attestations.length; ++i) {
-        LanternRoot data_root;
-        if (lantern_hash_tree_root_attestation_data(&aggregated_attestations.data[i].data, &data_root) != SSZ_SUCCESS) {
-            goto cleanup;
-        }
+    for (size_t i = 0; i < aggregated_payloads.length; ++i) {
+        const struct lantern_aggregated_payload_entry *entry = &aggregated_payloads.entries[i];
         if (lantern_store_add_new_aggregated_payload(
                 store,
-                &data_root,
-                &aggregated_attestations.data[i].data,
-                &aggregated_signatures.data[i])
+                &entry->data_root,
+                &entry->data,
+                &entry->proof)
             != 0) {
             goto cleanup;
         }
-        (void)lantern_store_remove_attestation_signatures_for_data_root(store, &data_root);
+        (void)lantern_store_remove_attestation_signatures_for_data_root(
+            store,
+            &entry->data_root);
     }
 
     rc = 0;
 
 cleanup:
-    lantern_attestations_reset(&attestations);
-    lantern_signature_list_reset(&signatures);
-    lantern_aggregated_attestations_reset(&aggregated_attestations);
-    lantern_attestation_signatures_reset(&aggregated_signatures);
+    lantern_aggregated_payload_pool_reset(&aggregated_payloads);
     return rc;
 }
 
 static int sync_payload_pools_after_time_advance(
-    LanternForkChoice *fork_choice,
+    LanternStore *fork_choice,
     LanternStore *store,
     LanternState *state,
     uint64_t previous_intervals,
@@ -360,19 +287,20 @@ static int sync_payload_pools_after_time_advance(
     if (!fork_choice || !store || !state) {
         return -1;
     }
-    if (fork_choice->intervals_per_slot == 0u || fork_choice->time_intervals <= previous_intervals) {
+    if (fork_choice->time_intervals <= previous_intervals) {
         return 0;
     }
 
     for (uint64_t step = previous_intervals + 1u; step <= fork_choice->time_intervals; ++step) {
-        uint64_t interval_index = step % fork_choice->intervals_per_slot;
+        uint64_t interval_index = step % LANTERN_INTERVALS_PER_SLOT;
         bool step_has_proposal = has_proposal && (step == fork_choice->time_intervals);
-        if (interval_index == 2u) {
+        if (interval_index == LANTERN_DUTY_PHASE_AGGREGATE) {
             if (aggregate_pending_gossip_attestations(state, store) != 0) {
                 return -1;
             }
         }
-        if (interval_index == 4u || (interval_index == 0u && step_has_proposal)) {
+        if (interval_index == LANTERN_DUTY_PHASE_VOTE_ACCEPT
+            || (interval_index == LANTERN_DUTY_PHASE_PROPOSAL && step_has_proposal)) {
             (void)lantern_store_promote_new_aggregated_payloads(store);
         }
     }
@@ -389,13 +317,6 @@ static int record_block_body_known_payloads(
     for (size_t i = 0; i < attestations->length; ++i) {
         LanternRoot data_root;
         if (lantern_hash_tree_root_attestation_data(&attestations->data[i].data, &data_root) != SSZ_SUCCESS) {
-            return -1;
-        }
-        if (lantern_store_add_attestation_data(
-                store,
-                &data_root,
-                &attestations->data[i].data)
-            != 0) {
             return -1;
         }
         LanternAggregatedSignatureProof proof;
@@ -445,13 +366,12 @@ static void map_attestation_roots(
 }
 
 static bool validate_attestation_constraints(
-    const LanternForkChoice *fork_choice,
+    const LanternStore *fork_choice,
     const LanternAttestationData *data,
     struct hash_mapping_entry *mapping,
     size_t mapping_count) {
     struct lantern_client client = {0};
-    client.fork_choice = *fork_choice;
-    client.has_fork_choice = true;
+    client.store = *fork_choice;
     LanternVote vote = {.data = *data};
     map_attestation_roots(&vote.data, mapping, mapping_count);
     return lantern_client_validate_vote_constraints(
@@ -467,7 +387,7 @@ static int process_gossip_attestation_step(
     const struct lantern_fixture_document *doc,
     int step_idx,
     LanternStore *store,
-    const LanternForkChoice *fork_choice,
+    const LanternStore *fork_choice,
     const LanternState *state,
     struct hash_mapping_entry *mapping,
     size_t mapping_count) {
@@ -521,7 +441,7 @@ static int process_gossip_aggregated_attestation_step(
     const struct lantern_fixture_document *doc,
     int step_idx,
     LanternStore *store,
-    const LanternForkChoice *fork_choice,
+    const LanternStore *fork_choice,
     const LanternState *state,
     struct hash_mapping_entry *mapping,
     size_t mapping_count) {
@@ -795,7 +715,7 @@ static int hash_mapping_add(
 }
 
 static int sync_state_to_fork_choice_head(
-    LanternForkChoice *store,
+    LanternStore *store,
     LanternState *state,
     struct stored_state_entry **entries_ptr,
     size_t *count_ptr,
@@ -803,10 +723,10 @@ static int sync_state_to_fork_choice_head(
     if (!store || !state || !entries_ptr || !count_ptr || !current_head_root) {
         return -1;
     }
-    LanternRoot head_root;
-    if (lantern_fork_choice_current_head(store, &head_root) != 0) {
+    if (store->block_len == 0u) {
         return -1;
     }
+    LanternRoot head_root = store->head;
     if (memcmp(head_root.bytes, current_head_root->bytes, LANTERN_ROOT_SIZE) == 0) {
         return 0;
     }
@@ -885,11 +805,7 @@ static int lantern_root_compare_bytes(const LanternRoot *a, const LanternRoot *b
     return memcmp(a->bytes, b->bytes, sizeof(a->bytes));
 }
 
-static bool lantern_root_equal(const LanternRoot *a, const LanternRoot *b) {
-    return lantern_root_compare_bytes(a, b) == 0;
-}
-
-static size_t fork_choice_find_block_index(const LanternForkChoice *store, const LanternRoot *root) {
+static size_t fork_choice_find_block_index(const LanternStore *store, const LanternRoot *root) {
     if (!store || !root || !store->blocks) {
         return SIZE_MAX;
     }
@@ -901,7 +817,7 @@ static size_t fork_choice_find_block_index(const LanternForkChoice *store, const
     return SIZE_MAX;
 }
 
-static uint64_t *fork_choice_compute_known_weights(const LanternForkChoice *store, uint64_t *out_anchor_slot) {
+static uint64_t *fork_choice_compute_known_weights(const LanternStore *store, uint64_t *out_anchor_slot) {
     if (!store || store->block_len == 0) {
         return NULL;
     }
@@ -943,7 +859,7 @@ static void format_root_hex(const LanternRoot *root, char *buf, size_t buf_len) 
 }
 
 static int validate_lexicographic_head_among(
-    const LanternForkChoice *store,
+    const LanternStore *store,
     const LanternRoot *head_root,
     size_t label_count,
     const char **labels,
@@ -957,7 +873,7 @@ static int validate_lexicographic_head_among(
             step_index);
         return -1;
     }
-    if (!store->has_head || store->block_len == 0) {
+    if (store->block_len == 0u) {
         fprintf(stderr, "fork choice store is not initialized for lexicographic check\n");
         return -1;
     }
@@ -1073,6 +989,87 @@ static void reset_signed_block_impl(LanternSignedBlock *block) {
 
 static int run_state_transition_fixture(const char *path);
 static int run_fork_choice_fixture(const char *path);
+
+static int verify_fork_choice_driver_case(
+    const struct lantern_fixture_document *doc,
+    int case_idx,
+    int steps_idx,
+    const char *path) {
+    const jsmntok_t *case_token = lantern_fixture_token(doc, case_idx);
+    if (!case_token) {
+        return -1;
+    }
+    bool expect_init_failure =
+        lantern_fixture_object_get_field(doc, case_idx, "rejectionReason") >= 0;
+    char *error = NULL;
+    int init_rc = lantern_test_driver_fork_choice_init(
+            doc->text + case_token->start,
+            (size_t)(case_token->end - case_token->start),
+            &error);
+    if (expect_init_failure) {
+        free(error);
+        return init_rc != 0 ? 0 : -1;
+    }
+    if (init_rc != 0) {
+        fprintf(stderr, "test driver init failed for %s: %s\n", path, error ? error : "unknown");
+        free(error);
+        return -1;
+    }
+    free(error);
+
+    int step_count = lantern_fixture_array_get_length(doc, steps_idx);
+    for (int i = 0; i < step_count; ++i) {
+        int step_idx = lantern_fixture_array_get_element(doc, steps_idx, i);
+        const jsmntok_t *step_token = lantern_fixture_token(doc, step_idx);
+        char *response = NULL;
+        size_t response_len = 0u;
+        if (!step_token
+            || lantern_test_driver_fork_choice_step(
+                   doc->text + step_token->start,
+                   (size_t)(step_token->end - step_token->start),
+                   &response,
+                   &response_len)
+                != 0) {
+            fprintf(stderr, "test driver step failed for %s step %d\n", path, i);
+            free(response);
+            return -1;
+        }
+
+        struct lantern_fixture_document response_doc;
+        if (lantern_fixture_document_init(&response_doc, response) != 0) {
+            return -1;
+        }
+        bool expected_valid = true;
+        bool accepted = false;
+        int valid_idx = lantern_fixture_object_get_field(doc, step_idx, "valid");
+        int accepted_idx = lantern_fixture_object_get_field(&response_doc, 0, "accepted");
+        if ((valid_idx >= 0 && fixture_token_to_bool(doc, valid_idx, &expected_valid) != 0)
+            || fixture_token_to_bool(&response_doc, accepted_idx, &accepted) != 0
+            || accepted != expected_valid) {
+            fprintf(stderr, "test driver acceptance mismatch for %s step %d\n", path, i);
+            lantern_fixture_document_reset(&response_doc);
+            return -1;
+        }
+
+        int checks_idx = lantern_fixture_object_get_field(doc, step_idx, "checks");
+        int expected_head_idx = lantern_fixture_object_get_field(doc, checks_idx, "headSlot");
+        if (accepted && expected_head_idx >= 0) {
+            int snapshot_idx = lantern_fixture_object_get_field(&response_doc, 0, "snapshot");
+            int actual_head_idx = lantern_fixture_object_get_field(&response_doc, snapshot_idx, "headSlot");
+            uint64_t expected_head = 0u;
+            uint64_t actual_head = 0u;
+            if (lantern_fixture_token_to_uint64(doc, expected_head_idx, &expected_head) != 0
+                || lantern_fixture_token_to_uint64(&response_doc, actual_head_idx, &actual_head) != 0
+                || expected_head != actual_head) {
+                fprintf(stderr, "test driver head mismatch for %s step %d\n", path, i);
+                lantern_fixture_document_reset(&response_doc);
+                return -1;
+            }
+        }
+        lantern_fixture_document_reset(&response_doc);
+    }
+    return 0;
+}
 
 static int for_each_json(
     const char *root,
@@ -1262,13 +1259,13 @@ static int run_state_transition_fixture(const char *path) {
                 if (field_idx >= 0) {
                     uint64_t expected_count = 0;
                     if (lantern_fixture_token_to_uint64(&doc, field_idx, &expected_count) != 0
-                        || state.config.num_validators != expected_count) {
+                        || state.validator_count != expected_count) {
                         fprintf(
                             stderr,
                             "post validator count mismatch in %s: expected %" PRIu64 " got %" PRIu64 "\n",
                             path,
                             expected_count,
-                            state.config.num_validators);
+                            (uint64_t)state.validator_count);
                         result = -1;
                     }
                 }
@@ -1348,6 +1345,12 @@ static int run_fork_choice_fixture(const char *path) {
         hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
         return -1;
     }
+    if (verify_fork_choice_driver_case(&doc, case_idx, steps_idx, path) != 0) {
+        lantern_fixture_document_reset(&doc);
+        stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
+        hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
+        return -1;
+    }
 
     LanternState state;
     LanternCheckpoint latest_justified;
@@ -1393,28 +1396,12 @@ static int run_fork_choice_fixture(const char *path) {
     state.latest_block_header.body_root = anchor_body_root;
     state.slot = anchor_block.slot;
 
-    LanternForkChoice store;
-    LanternStore fork_choice_store;
-    lantern_fork_choice_init(&store);
-    lantern_store_init(&fork_choice_store);
-    lantern_store_attach_fork_choice(&fork_choice_store, &store);
-    LanternConfig config = {
-        .num_validators = validator_count,
-        .genesis_time = genesis_time,
-    };
-    if (lantern_fork_choice_configure(&store, &config) != 0) {
-        reset_block(&anchor_block);
-        lantern_state_reset(&state);
-        lantern_fixture_document_reset(&doc);
-        stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
-        hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
-        return -1;
-    }
-
+    LanternStore store;
+    lantern_store_init(&store);
     LanternRoot anchor_root;
     if (lantern_hash_tree_root_block(&anchor_block, &anchor_root) != SSZ_SUCCESS) {
         reset_block(&anchor_block);
-        lantern_fork_choice_reset(&store);
+        lantern_store_reset(&store);
         lantern_state_reset(&state);
         lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1426,9 +1413,11 @@ static int run_fork_choice_fixture(const char *path) {
         .slot = anchor_block.slot,
     };
 
-    if (lantern_fork_choice_set_anchor(&store, &anchor_block, &anchor_checkpoint, &anchor_checkpoint, &anchor_root) != 0) {
+    if (lantern_fork_choice_set_anchor_with_state(
+            &store, &anchor_block, &anchor_checkpoint, &anchor_checkpoint, &anchor_root, &state)
+        != 0) {
         reset_block(&anchor_block);
-        lantern_fork_choice_reset(&store);
+        lantern_store_reset(&store);
         lantern_state_reset(&state);
         lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1439,7 +1428,7 @@ static int run_fork_choice_fixture(const char *path) {
     if (stored_state_save(&stored_states, &stored_states_count, &stored_states_cap, &anchor_root, &state) != 0) {
         fprintf(stderr, "failed to save anchor state for %s\n", path);
         reset_block(&anchor_block);
-        lantern_fork_choice_reset(&store);
+        lantern_store_reset(&store);
         lantern_state_reset(&state);
         lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1452,7 +1441,7 @@ static int run_fork_choice_fixture(const char *path) {
     if (hash_mapping_add(&hash_mapping, &hash_mapping_count, &hash_mapping_cap, &anchor_root, &anchor_root) != 0) {
         fprintf(stderr, "failed to record anchor hash mapping for %s\n", path);
         reset_block(&anchor_block);
-        lantern_fork_choice_reset(&store);
+        lantern_store_reset(&store);
         lantern_state_reset(&state);
         lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1467,7 +1456,7 @@ static int run_fork_choice_fixture(const char *path) {
     if (step_count < 0) {
         fprintf(stderr, "invalid fork_choice steps array in %s\n", path);
         reset_block(&anchor_block);
-        lantern_fork_choice_reset(&store);
+        lantern_store_reset(&store);
         lantern_state_reset(&state);
         lantern_fixture_document_reset(&doc);
         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1479,7 +1468,7 @@ static int run_fork_choice_fixture(const char *path) {
         if (step_idx < 0) {
             fprintf(stderr, "invalid fork_choice step in %s step %d\n", path, i);
             reset_block(&anchor_block);
-            lantern_fork_choice_reset(&store);
+            lantern_store_reset(&store);
             lantern_state_reset(&state);
             lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1495,7 +1484,7 @@ static int run_fork_choice_fixture(const char *path) {
         int valid_idx = lantern_fixture_object_get_field(&doc, step_idx, "valid");
         if (valid_idx >= 0 && fixture_token_to_bool(&doc, valid_idx, &step_valid) != 0) {
             reset_block(&anchor_block);
-            lantern_fork_choice_reset(&store);
+            lantern_store_reset(&store);
             lantern_state_reset(&state);
             lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1514,7 +1503,7 @@ static int run_fork_choice_fixture(const char *path) {
             if ((process_gossip_attestation_step(
                      &doc,
                      step_idx,
-                     &fork_choice_store,
+                     &store,
                      &store,
                      &state,
                      hash_mapping,
@@ -1523,7 +1512,7 @@ static int run_fork_choice_fixture(const char *path) {
                 != step_valid) {
                 fprintf(stderr, "attestation validity mismatch in %s step %d\n", path, i);
                 reset_block(&anchor_block);
-                lantern_fork_choice_reset(&store);
+                lantern_store_reset(&store);
                 lantern_state_reset(&state);
                 lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1536,7 +1525,7 @@ static int run_fork_choice_fixture(const char *path) {
             if ((process_gossip_aggregated_attestation_step(
                      &doc,
                      step_idx,
-                     &fork_choice_store,
+                     &store,
                      &store,
                      &state,
                      hash_mapping,
@@ -1545,7 +1534,7 @@ static int run_fork_choice_fixture(const char *path) {
                 != step_valid) {
                 fprintf(stderr, "aggregated attestation validity mismatch in %s step %d\n", path, i);
                 reset_block(&anchor_block);
-                lantern_fork_choice_reset(&store);
+                lantern_store_reset(&store);
                 lantern_state_reset(&state);
                 lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1560,7 +1549,7 @@ static int run_fork_choice_fixture(const char *path) {
                 int has_proposal_idx = lantern_fixture_object_get_field(&doc, step_idx, "hasProposal");
                 if (has_proposal_idx >= 0 && fixture_token_to_bool(&doc, has_proposal_idx, &has_proposal) != 0) {
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1570,20 +1559,38 @@ static int run_fork_choice_fixture(const char *path) {
                 uint64_t time_interval = 0;
                 if (lantern_fixture_token_to_uint64(&doc, time_idx, &time_interval) != 0) {
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
                     hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
                     return -1;
                 }
-                uint64_t now = time_is_interval
-                    ? (genesis_time * 1000u) + (time_interval * store.milliseconds_per_interval)
-                    : time_interval * 1000u;
+                uint64_t target_interval = time_interval;
+                if (!time_is_interval) {
+                    uint64_t now = 0;
+                    int clock_rc = -1;
+                    if (time_interval <= UINT64_MAX / 1000u) {
+                        now = time_interval * 1000u;
+                        clock_rc = lantern_slot_clock_total_interval(genesis_time, now, &target_interval);
+                    }
+                    if (clock_rc < 0) {
+                        reset_block(&anchor_block);
+                        lantern_store_reset(&store);
+                        lantern_state_reset(&state);
+                        lantern_fixture_document_reset(&doc);
+                        stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
+                        hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
+                        return -1;
+                    }
+                    if (clock_rc > 0) {
+                        target_interval = 0;
+                    }
+                }
                 uint64_t previous_intervals = store.time_intervals;
-                if (lantern_fork_choice_advance_time(&store, now, has_proposal) != 0) {
+                if (lantern_fork_choice_advance_to(&store, target_interval, has_proposal) != 0) {
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1592,7 +1599,7 @@ static int run_fork_choice_fixture(const char *path) {
                 }
                 if (sync_payload_pools_after_time_advance(
                         &store,
-                        &fork_choice_store,
+                        &store,
                         &state,
                         previous_intervals,
                         has_proposal)
@@ -1600,7 +1607,7 @@ static int run_fork_choice_fixture(const char *path) {
                     || lantern_fork_choice_recompute_head(&store) != 0) {
                     fprintf(stderr, "failed to sync payload pools/head in %s (step %d)\n", path, i);
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1616,7 +1623,7 @@ static int run_fork_choice_fixture(const char *path) {
                     != 0) {
                     fprintf(stderr, "failed to sync canonical state to head in %s (step %d)\n", path, i);
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1624,25 +1631,14 @@ static int run_fork_choice_fixture(const char *path) {
                     return -1;
                 }
                 if (checks_idx >= 0) {
-                    LanternRoot head_root;
-                    if (lantern_fork_choice_current_head(&store, &head_root) != 0) {
-                        reset_block(&anchor_block);
-                        lantern_fork_choice_reset(&store);
-                        lantern_store_reset(&fork_choice_store);
-                        lantern_state_reset(&state);
-                        lantern_fixture_document_reset(&doc);
-                        stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
-                        hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
-                        return -1;
-                    }
+                    LanternRoot head_root = store.head;
 
                     int head_slot_idx = lantern_fixture_object_get_field(&doc, checks_idx, "headSlot");
                     if (head_slot_idx >= 0) {
                         uint64_t expected_slot = 0;
                         if (lantern_fixture_token_to_uint64(&doc, head_slot_idx, &expected_slot) != 0) {
                             reset_block(&anchor_block);
-                            lantern_fork_choice_reset(&store);
-                            lantern_store_reset(&fork_choice_store);
+                            lantern_store_reset(&store);
                             lantern_state_reset(&state);
                             lantern_fixture_document_reset(&doc);
                             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1652,8 +1648,7 @@ static int run_fork_choice_fixture(const char *path) {
                         uint64_t actual_slot = 0;
                         if (lantern_fork_choice_block_info(&store, &head_root, &actual_slot, NULL, NULL) != 0) {
                             reset_block(&anchor_block);
-                            lantern_fork_choice_reset(&store);
-                            lantern_store_reset(&fork_choice_store);
+                            lantern_store_reset(&store);
                             lantern_state_reset(&state);
                             lantern_fixture_document_reset(&doc);
                             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1669,8 +1664,7 @@ static int run_fork_choice_fixture(const char *path) {
                                 expected_slot,
                                 actual_slot);
                             reset_block(&anchor_block);
-                            lantern_fork_choice_reset(&store);
-                            lantern_store_reset(&fork_choice_store);
+                            lantern_store_reset(&store);
                             lantern_state_reset(&state);
                             lantern_fixture_document_reset(&doc);
                             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1685,8 +1679,7 @@ static int run_fork_choice_fixture(const char *path) {
                         const char *label = lantern_fixture_token_string(&doc, head_label_idx, &label_len);
                         if (!label || label_len == 0) {
                             reset_block(&anchor_block);
-                            lantern_fork_choice_reset(&store);
-                            lantern_store_reset(&fork_choice_store);
+                            lantern_store_reset(&store);
                             lantern_state_reset(&state);
                             lantern_fixture_document_reset(&doc);
                             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1701,8 +1694,7 @@ static int run_fork_choice_fixture(const char *path) {
                         label_buf[label_len] = '\0';
                         if (label_registry_assign(&labels, label_buf, &head_root) != 0) {
                             reset_block(&anchor_block);
-                            lantern_fork_choice_reset(&store);
-                            lantern_store_reset(&fork_choice_store);
+                            lantern_store_reset(&store);
                             lantern_state_reset(&state);
                             lantern_fixture_document_reset(&doc);
                             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1717,7 +1709,7 @@ static int run_fork_choice_fixture(const char *path) {
             }
             fprintf(stderr, "fork_choice step missing block/time in %s step %d\n", path, i);
             reset_block(&anchor_block);
-            lantern_fork_choice_reset(&store);
+            lantern_store_reset(&store);
             lantern_state_reset(&state);
             lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1729,20 +1721,30 @@ static int run_fork_choice_fixture(const char *path) {
         if (lantern_fixture_parse_signed_block(&doc, block_idx, &signed_block) != 0) {
             fprintf(stderr, "failed to parse fork_choice block in %s step %d\n", path, i);
             reset_block(&anchor_block);
-            lantern_fork_choice_reset(&store);
+            lantern_store_reset(&store);
             lantern_state_reset(&state);
             lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
         hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
             return -1;
         }
-        uint64_t now = (genesis_time * 1000u) + (signed_block.block.slot * store.seconds_per_slot * 1000u);
+        if (signed_block.block.slot > UINT64_MAX / LANTERN_INTERVALS_PER_SLOT) {
+            reset_block(&signed_block.block);
+            reset_block(&anchor_block);
+            lantern_store_reset(&store);
+            lantern_state_reset(&state);
+            lantern_fixture_document_reset(&doc);
+            stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
+            hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
+            return -1;
+        }
+        uint64_t target_interval = signed_block.block.slot * LANTERN_INTERVALS_PER_SLOT;
         uint64_t previous_intervals = store.time_intervals;
-        if (lantern_fork_choice_advance_time(&store, now, true) != 0) {
+        if (lantern_fork_choice_advance_to(&store, target_interval, true) != 0) {
             fprintf(stderr, "failed to advance fork_choice time in %s step %d\n", path, i);
             reset_block(&signed_block.block);
             reset_block(&anchor_block);
-            lantern_fork_choice_reset(&store);
+            lantern_store_reset(&store);
             lantern_state_reset(&state);
             lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1751,7 +1753,7 @@ static int run_fork_choice_fixture(const char *path) {
         }
         if (sync_payload_pools_after_time_advance(
                 &store,
-                &fork_choice_store,
+                &store,
                 &state,
                 previous_intervals,
                 true)
@@ -1759,7 +1761,7 @@ static int run_fork_choice_fixture(const char *path) {
             fprintf(stderr, "failed to sync payload pools before block in %s (step %d)\n", path, i);
             reset_block(&signed_block.block);
             reset_block(&anchor_block);
-            lantern_fork_choice_reset(&store);
+            lantern_store_reset(&store);
             lantern_state_reset(&state);
             lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1776,7 +1778,7 @@ static int run_fork_choice_fixture(const char *path) {
             fprintf(stderr, "failed to sync canonical state before block in %s (step %d)\n", path, i);
             reset_block(&signed_block.block);
             reset_block(&anchor_block);
-            lantern_fork_choice_reset(&store);
+            lantern_store_reset(&store);
             lantern_state_reset(&state);
             lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1788,7 +1790,7 @@ static int run_fork_choice_fixture(const char *path) {
         if (lantern_hash_tree_root_block(&signed_block.block, &leanspec_block_root) != SSZ_SUCCESS) {
             reset_block(&signed_block.block);
             reset_block(&anchor_block);
-            lantern_fork_choice_reset(&store);
+            lantern_store_reset(&store);
             lantern_state_reset(&state);
             lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1848,7 +1850,7 @@ static int run_fork_choice_fixture(const char *path) {
                 fprintf(stderr, "failed to patch block hashes in fork_choice %s step %d\n", path, i);
                 reset_block(&signed_block.block);
                 reset_block(&anchor_block);
-                lantern_fork_choice_reset(&store);
+                lantern_store_reset(&store);
                 lantern_state_reset(&state);
                 lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1863,7 +1865,7 @@ static int run_fork_choice_fixture(const char *path) {
                 }
                 reset_block(&signed_block.block);
                 reset_block(&anchor_block);
-                lantern_fork_choice_reset(&store);
+                lantern_store_reset(&store);
                 lantern_state_reset(&state);
                 lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1879,7 +1881,7 @@ static int run_fork_choice_fixture(const char *path) {
                     fprintf(stderr, "state transition failed in fork_choice %s step %d\n", path, i);
                     reset_block(&signed_block.block);
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1912,7 +1914,7 @@ static int run_fork_choice_fixture(const char *path) {
                 fprintf(stderr, "parent not found in hash mapping for fork_choice %s step %d\n", path, i);
                 reset_block(&signed_block.block);
                 reset_block(&anchor_block);
-                lantern_fork_choice_reset(&store);
+                lantern_store_reset(&store);
                 lantern_state_reset(&state);
                 lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1925,7 +1927,7 @@ static int run_fork_choice_fixture(const char *path) {
                 fprintf(stderr, "parent state not found for fork_choice %s step %d\n", path, i);
                 reset_block(&signed_block.block);
                 reset_block(&anchor_block);
-                lantern_fork_choice_reset(&store);
+                lantern_store_reset(&store);
                 lantern_state_reset(&state);
                 lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1938,7 +1940,7 @@ static int run_fork_choice_fixture(const char *path) {
                 lantern_state_reset(&branch_state);
                 reset_block(&signed_block.block);
                 reset_block(&anchor_block);
-                lantern_fork_choice_reset(&store);
+                lantern_store_reset(&store);
                 lantern_state_reset(&state);
                 lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1976,7 +1978,7 @@ static int run_fork_choice_fixture(const char *path) {
                 lantern_state_reset(&branch_state);
                 reset_block(&signed_block.block);
                 reset_block(&anchor_block);
-                lantern_fork_choice_reset(&store);
+                lantern_store_reset(&store);
                 lantern_state_reset(&state);
                 lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -1993,7 +1995,7 @@ static int run_fork_choice_fixture(const char *path) {
                 lantern_state_reset(&branch_state);
                 reset_block(&signed_block.block);
                 reset_block(&anchor_block);
-                lantern_fork_choice_reset(&store);
+                lantern_store_reset(&store);
                 lantern_state_reset(&state);
                 lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2010,7 +2012,7 @@ static int run_fork_choice_fixture(const char *path) {
                 lantern_state_reset(&branch_state);
                 reset_block(&signed_block.block);
                 reset_block(&anchor_block);
-                lantern_fork_choice_reset(&store);
+                lantern_store_reset(&store);
                 lantern_state_reset(&state);
                 lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2030,7 +2032,7 @@ static int run_fork_choice_fixture(const char *path) {
                 }
                 reset_block(&signed_block.block);
                 reset_block(&anchor_block);
-                lantern_fork_choice_reset(&store);
+                lantern_store_reset(&store);
                 lantern_state_reset(&state);
                 lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2045,7 +2047,7 @@ static int run_fork_choice_fixture(const char *path) {
                 }
                 reset_block(&signed_block.block);
                 reset_block(&anchor_block);
-                lantern_fork_choice_reset(&store);
+                lantern_store_reset(&store);
                 lantern_state_reset(&state);
                 lantern_fixture_document_reset(&doc);
                 stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2076,21 +2078,21 @@ static int run_fork_choice_fixture(const char *path) {
             }
             reset_block(&signed_block.block);
             reset_block(&anchor_block);
-            lantern_fork_choice_reset(&store);
+            lantern_store_reset(&store);
             lantern_state_reset(&state);
             lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
         hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
                 return -1;
         }
-        if (record_block_body_known_payloads(&fork_choice_store, &signed_block) != 0) {
+        if (record_block_body_known_payloads(&store, &signed_block) != 0) {
             fprintf(stderr, "failed to record block body payloads in %s (step %d)\n", path, i);
             if (branch_state_initialized) {
                 lantern_state_reset(&branch_state);
             }
             reset_block(&signed_block.block);
             reset_block(&anchor_block);
-            lantern_fork_choice_reset(&store);
+            lantern_store_reset(&store);
             lantern_state_reset(&state);
             lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2104,7 +2106,7 @@ static int run_fork_choice_fixture(const char *path) {
             }
             reset_block(&signed_block.block);
             reset_block(&anchor_block);
-            lantern_fork_choice_reset(&store);
+            lantern_store_reset(&store);
             lantern_state_reset(&state);
             lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2113,7 +2115,7 @@ static int run_fork_choice_fixture(const char *path) {
         }
         if (store.latest_finalized.slot > previous_finalized_slot) {
             (void)lantern_store_prune_finalized_attestation_material(
-                &fork_choice_store,
+                &store,
                 store.latest_finalized.slot);
         }
         /* `lantern_fork_choice_add_block()` already expands and applies the
@@ -2133,7 +2135,7 @@ static int run_fork_choice_fixture(const char *path) {
             }
             reset_block(&signed_block.block);
             reset_block(&anchor_block);
-            lantern_fork_choice_reset(&store);
+            lantern_store_reset(&store);
             lantern_state_reset(&state);
             lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2147,7 +2149,7 @@ static int run_fork_choice_fixture(const char *path) {
             }
             reset_block(&signed_block.block);
             reset_block(&anchor_block);
-            lantern_fork_choice_reset(&store);
+            lantern_store_reset(&store);
             lantern_state_reset(&state);
             lantern_fixture_document_reset(&doc);
             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2159,24 +2161,14 @@ static int run_fork_choice_fixture(const char *path) {
         }
 
         if (checks_idx >= 0) {
-            LanternRoot head_root;
-            if (lantern_fork_choice_current_head(&store, &head_root) != 0) {
-                reset_block(&signed_block.block);
-                reset_block(&anchor_block);
-                lantern_fork_choice_reset(&store);
-                lantern_state_reset(&state);
-                lantern_fixture_document_reset(&doc);
-                stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
-        hash_mapping_reset(&hash_mapping, &hash_mapping_count, &hash_mapping_cap);
-                return -1;
-            }
+            LanternRoot head_root = store.head;
             int head_slot_idx = lantern_fixture_object_get_field(&doc, checks_idx, "headSlot");
             if (head_slot_idx >= 0) {
                 uint64_t expected_slot = 0;
                 if (lantern_fixture_token_to_uint64(&doc, head_slot_idx, &expected_slot) != 0) {
                     reset_block(&signed_block.block);
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2187,7 +2179,7 @@ static int run_fork_choice_fixture(const char *path) {
                 if (lantern_fork_choice_block_info(&store, &head_root, &actual_slot, NULL, NULL) != 0) {
                     reset_block(&signed_block.block);
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2204,7 +2196,7 @@ static int run_fork_choice_fixture(const char *path) {
                         actual_slot);
                     reset_block(&signed_block.block);
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2220,7 +2212,7 @@ static int run_fork_choice_fixture(const char *path) {
                 if (!label || label_len == 0) {
                     reset_block(&signed_block.block);
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2236,7 +2228,7 @@ static int run_fork_choice_fixture(const char *path) {
                 if (label_registry_assign(&labels, label_buf, &head_root) != 0) {
                     reset_block(&signed_block.block);
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2251,7 +2243,7 @@ static int run_fork_choice_fixture(const char *path) {
                 if (label_count < 0) {
                     reset_block(&signed_block.block);
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2266,7 +2258,7 @@ static int run_fork_choice_fixture(const char *path) {
                         i);
                     reset_block(&signed_block.block);
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2277,7 +2269,7 @@ static int run_fork_choice_fixture(const char *path) {
                 if (!lex_labels) {
                     reset_block(&signed_block.block);
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2324,7 +2316,7 @@ static int run_fork_choice_fixture(const char *path) {
                 if (!lexicographic_ok) {
                     reset_block(&signed_block.block);
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2339,7 +2331,7 @@ static int run_fork_choice_fixture(const char *path) {
                 if (lantern_fixture_token_to_uint64(&doc, att_target_idx, &expected_slot) != 0) {
                     reset_block(&signed_block.block);
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2349,20 +2341,16 @@ static int run_fork_choice_fixture(const char *path) {
                 LanternCheckpoint head_cp;
                 LanternCheckpoint target_cp;
                 LanternCheckpoint source_cp;
-                LanternStore *state_store = lantern_test_state_store_ensure(&state);
-                struct lantern_fork_choice *saved_fork_choice = state_store ? state_store->fork_choice : NULL;
-                if (state_store) {
-                    state_store->fork_choice = &store;
-                }
-                int checkpoints_rc =
-                    lantern_state_compute_vote_checkpoints(&state, &head_cp, &target_cp, &source_cp);
-                if (state_store) {
-                    state_store->fork_choice = saved_fork_choice;
-                }
+                int checkpoints_rc = (lantern_state_compute_vote_checkpoints_explicit)(
+                    &state,
+                    &store,
+                    &head_cp,
+                    &target_cp,
+                    &source_cp);
                 if (checkpoints_rc != 0) {
                     reset_block(&signed_block.block);
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2379,7 +2367,7 @@ static int run_fork_choice_fixture(const char *path) {
                         target_cp.slot);
                     reset_block(&signed_block.block);
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2394,7 +2382,7 @@ static int run_fork_choice_fixture(const char *path) {
                 if (length < 0) {
                     reset_block(&signed_block.block);
                     reset_block(&anchor_block);
-                    lantern_fork_choice_reset(&store);
+                    lantern_store_reset(&store);
                     lantern_state_reset(&state);
                     lantern_fixture_document_reset(&doc);
                     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2406,7 +2394,7 @@ static int run_fork_choice_fixture(const char *path) {
                     if (check_idx < 0) {
                         reset_block(&signed_block.block);
                         reset_block(&anchor_block);
-                        lantern_fork_choice_reset(&store);
+                        lantern_store_reset(&store);
                         lantern_state_reset(&state);
                         lantern_fixture_document_reset(&doc);
                         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2419,7 +2407,7 @@ static int run_fork_choice_fixture(const char *path) {
                     if (validator_idx < 0 || lantern_fixture_token_to_uint64(&doc, validator_idx, &validator_id) != 0) {
                         reset_block(&signed_block.block);
                         reset_block(&anchor_block);
-                        lantern_fork_choice_reset(&store);
+                        lantern_store_reset(&store);
                         lantern_state_reset(&state);
                         lantern_fixture_document_reset(&doc);
                         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2427,10 +2415,10 @@ static int run_fork_choice_fixture(const char *path) {
                         return -1;
                     }
                     size_t validator = (size_t)validator_id;
-                    if (validator >= store.validator_count) {
+                    if (validator >= state.validator_count) {
                         reset_block(&signed_block.block);
                         reset_block(&anchor_block);
-                        lantern_fork_choice_reset(&store);
+                        lantern_store_reset(&store);
                         lantern_state_reset(&state);
                         lantern_fixture_document_reset(&doc);
                         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2444,7 +2432,7 @@ static int run_fork_choice_fixture(const char *path) {
                     if (!location) {
                         reset_block(&signed_block.block);
                         reset_block(&anchor_block);
-                        lantern_fork_choice_reset(&store);
+                        lantern_store_reset(&store);
                         lantern_state_reset(&state);
                         lantern_fixture_document_reset(&doc);
                         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2454,13 +2442,13 @@ static int run_fork_choice_fixture(const char *path) {
 
                     const struct lantern_aggregated_payload_pool *payload_pool = NULL;
                     if (location_len == 3 && strncmp(location, "new", 3) == 0) {
-                        payload_pool = &fork_choice_store.new_aggregated_payloads;
+                        payload_pool = &store.new_aggregated_payloads;
                     } else if (location_len == 5 && strncmp(location, "known", 5) == 0) {
-                        payload_pool = &fork_choice_store.known_aggregated_payloads;
+                        payload_pool = &store.known_aggregated_payloads;
                     } else {
                         reset_block(&signed_block.block);
                         reset_block(&anchor_block);
-                        lantern_fork_choice_reset(&store);
+                        lantern_store_reset(&store);
                         lantern_state_reset(&state);
                         lantern_fixture_document_reset(&doc);
                         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2471,7 +2459,6 @@ static int run_fork_choice_fixture(const char *path) {
                     LanternAttestationData attestation;
                     bool attestation_found = false;
                     if (extract_attestation_from_payload_pool(
-                            &fork_choice_store,
                             payload_pool,
                             validator,
                             &attestation,
@@ -2479,7 +2466,7 @@ static int run_fork_choice_fixture(const char *path) {
                         != 0) {
                         reset_block(&signed_block.block);
                         reset_block(&anchor_block);
-                        lantern_fork_choice_reset(&store);
+                        lantern_store_reset(&store);
                         lantern_state_reset(&state);
                         lantern_fixture_document_reset(&doc);
                         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2497,7 +2484,7 @@ static int run_fork_choice_fixture(const char *path) {
                             validator_id);
                         reset_block(&signed_block.block);
                         reset_block(&anchor_block);
-                        lantern_fork_choice_reset(&store);
+                        lantern_store_reset(&store);
                         lantern_state_reset(&state);
                         lantern_fixture_document_reset(&doc);
                         stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2518,7 +2505,7 @@ static int run_fork_choice_fixture(const char *path) {
                                 validator_id);
                             reset_block(&signed_block.block);
                             reset_block(&anchor_block);
-                            lantern_fork_choice_reset(&store);
+                            lantern_store_reset(&store);
                             lantern_state_reset(&state);
                             lantern_fixture_document_reset(&doc);
                             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2540,7 +2527,7 @@ static int run_fork_choice_fixture(const char *path) {
                                 validator_id);
                             reset_block(&signed_block.block);
                             reset_block(&anchor_block);
-                            lantern_fork_choice_reset(&store);
+                            lantern_store_reset(&store);
                             lantern_state_reset(&state);
                             lantern_fixture_document_reset(&doc);
                             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2562,7 +2549,7 @@ static int run_fork_choice_fixture(const char *path) {
                                 validator_id);
                             reset_block(&signed_block.block);
                             reset_block(&anchor_block);
-                            lantern_fork_choice_reset(&store);
+                            lantern_store_reset(&store);
                             lantern_state_reset(&state);
                             lantern_fixture_document_reset(&doc);
                             stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);
@@ -2584,7 +2571,7 @@ static int run_fork_choice_fixture(const char *path) {
                                 validator_id);
                             reset_block(&signed_block.block);
                             reset_block(&anchor_block);
-                            lantern_fork_choice_reset(&store);
+                            lantern_store_reset(&store);
                             lantern_state_reset(&state);
                             lantern_fixture_document_reset(&doc);
                             return -1;
@@ -2598,8 +2585,7 @@ static int run_fork_choice_fixture(const char *path) {
     }
 
     reset_block(&anchor_block);
-    lantern_fork_choice_reset(&store);
-    lantern_store_reset(&fork_choice_store);
+    lantern_store_reset(&store);
     lantern_state_reset(&state);
     lantern_fixture_document_reset(&doc);
     stored_state_entries_reset(&stored_states, &stored_states_count, &stored_states_cap);

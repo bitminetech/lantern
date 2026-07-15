@@ -4,9 +4,8 @@
  *
  * @spec subspecs/containers/state/genesis.py in tools/leanSpec
  *
- * Implements genesis path management, bootnode configuration, validator
- * assignment computation, local validator population, and consensus
- * runtime initialization.
+ * Implements genesis path management, bootnode configuration, and local
+ * validator population.
  *
  * Related files:
  * - client.c: Main client initialization and lifecycle
@@ -18,10 +17,8 @@
 
 #include "client_internal.h"
 
-#include "lantern/consensus/runtime.h"
 #include "lantern/networking/libp2p.h"
 #include "lantern/support/log.h"
-#include "lantern/support/secure_mem.h"
 #include "lantern/support/strings.h"
 
 #include <inttypes.h>
@@ -40,7 +37,6 @@ static const char LANTERN_VALIDATOR_CONFIG_FILENAME[] = "validator-config.yaml";
  * ============================================================================ */
 
 void reset_genesis_paths(struct lantern_genesis_paths *paths);
-int append_unique_bootnode(struct lantern_string_list *list, const char *value);
 static int join_path_component(const char *dir, const char *leaf, char **out_path);
 
 
@@ -155,37 +151,6 @@ void reset_genesis_paths(struct lantern_genesis_paths *paths)
 }
 
 
-/* ============================================================================
- * Bootnode Management
- * ============================================================================ */
-
-/**
- * Append a bootnode to the list if not already present.
- *
- * @param list  String list to append to
- * @param value Bootnode address to append
- * @return 0 on success, -1 on failure
- *
- * @note Thread safety: Called during init, no locking required
- */
-int append_unique_bootnode(struct lantern_string_list *list, const char *value)
-{
-    if (!list || !value)
-    {
-        return -1;
-    }
-    if (*value == '\0')
-    {
-        return 0;
-    }
-    if (string_list_contains(list, value))
-    {
-        return 0;
-    }
-    return lantern_string_list_append(list, value);
-}
-
-
 /**
  * Append bootnodes from genesis ENR records.
  *
@@ -214,7 +179,7 @@ int append_genesis_bootnodes(struct lantern_client *client)
         {
             continue;
         }
-        if (append_unique_bootnode(&client->bootnodes, record->encoded) != 0)
+        if (lantern_string_list_append_unique(&client->bootnodes, record->encoded) != 0)
         {
             return -1;
         }
@@ -230,52 +195,12 @@ int append_genesis_bootnodes(struct lantern_client *client)
 }
 
 
-/* ============================================================================
- * Validator Assignment
- * ============================================================================ */
-
 /**
- * Compute validator assignment from assigned validator indices.
- *
- * @spec subspecs/duties/duties.py - validator duties assignment
- *
- * Takes the validator configuration and computes which validators
- * are assigned to this node based on the node ID.
- *
- * @param client Client instance
- * @return 0 on success, -1 on failure
- *
- * @note Thread safety: Called during init, no locking required
- */
-int compute_local_validator_assignment(struct lantern_client *client)
-{
-    if (!client || !client->assigned_validators)
-    {
-        return -1;
-    }
-    lantern_validator_assignment_reset(&client->validator_assignment);
-    if (lantern_validator_assignment_from_config(
-            client->assigned_validators,
-            &client->validator_assignment)
-        != 0)
-    {
-        return -1;
-    }
-    if (!lantern_validator_assignment_is_valid(&client->validator_assignment))
-    {
-        return -1;
-    }
-    return 0;
-}
-
-
-/**
- * Populate local validator keys from assignment.
+ * Populate local validator keys from the assigned validator config.
  *
  * @spec subspecs/xmss/keygen.py - validator key management
  *
- * Allocates and initializes local validator structures, decodes
- * validator secrets, and sets up per-validator state.
+ * Allocates local validator state for the assigned global indices.
  *
  * @param client Client instance
  * @return 0 on success, -1 on failure
@@ -284,31 +209,29 @@ int compute_local_validator_assignment(struct lantern_client *client)
  */
 int populate_local_validators(struct lantern_client *client)
 {
-    if (!client || !lantern_validator_assignment_is_valid(&client->validator_assignment)
-        || !client->assigned_validators)
+    if (!client || !client->assigned_validators
+        || !client->assigned_validators->indices
+        || client->assigned_validators->indices_len == 0u
+        || client->assigned_validators->indices_len != client->assigned_validators->count)
     {
         return -1;
     }
 
     struct lantern_log_metadata meta = {.validator = client->node_id};
-    size_t local_count = client->validator_assignment.length;
-    if (local_count == 0 || !client->validator_assignment.indices)
-    {
-        return -1;
-    }
+    size_t local_count = client->assigned_validators->indices_len;
 
     uint64_t total_validators = client->genesis.chain_config.validator_count;
     char indices_buf[512];
     indices_buf[0] = '\0';
     size_t written = 0;
-    for (size_t i = 0; i < client->validator_assignment.length; ++i)
+    for (size_t i = 0; i < local_count; ++i)
     {
         int n = snprintf(
             indices_buf + written,
             sizeof(indices_buf) - written,
             "%s%" PRIu64,
             written > 0 ? "," : "",
-            client->validator_assignment.indices[i]);
+            client->assigned_validators->indices[i]);
         if (n < 0 || (size_t)n >= sizeof(indices_buf) - written)
         {
             memcpy(indices_buf + (sizeof(indices_buf) > 4 ? sizeof(indices_buf) - 4 : 0), "...", 3);
@@ -321,109 +244,33 @@ int populate_local_validators(struct lantern_client *client)
         "client",
         &meta,
         "local validator assignment start=%" PRIu64 " count=%zu indices=%s",
-        client->validator_assignment.indices[0],
+        client->assigned_validators->indices[0],
         local_count,
         indices_buf[0] ? indices_buf : "-");
-
-    const char *priv_hex = client->assigned_validators->privkey_hex;
-    if (!priv_hex || *priv_hex == '\0')
-    {
-        lantern_log_error(
-            "client",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "validator '%s' missing privkey in validator-config",
-            client->node_id);
-        return -1;
-    }
-
-    uint8_t *decoded_secret = NULL;
-    size_t decoded_len = 0;
-    if (lantern_client_decode_validator_secret(priv_hex, &decoded_secret, &decoded_len) != 0
-        || decoded_len == 0)
-    {
-        lantern_log_error(
-            "client",
-            &(const struct lantern_log_metadata){.validator = client->node_id},
-            "validator '%s' privkey is invalid",
-            client->node_id);
-        if (decoded_secret)
-        {
-            lantern_secure_zero(decoded_secret, decoded_len);
-            free(decoded_secret);
-        }
-        return -1;
-    }
-
-    lantern_log_debug(
-        "client",
-        &meta,
-        "decoded validator secret bytes len=%zu",
-        decoded_len);
-
-    size_t stored_len = strlen(client->assigned_validators->privkey_hex);
-    if (stored_len > 0)
-    {
-        lantern_secure_zero(client->assigned_validators->privkey_hex, stored_len);
-        client->assigned_validators->privkey_hex[0] = '\0';
-    }
 
     size_t count = (size_t)local_count;
     struct lantern_local_validator *validators = calloc(count, sizeof(*validators));
     if (!validators)
     {
-        lantern_secure_zero(decoded_secret, decoded_len);
-        free(decoded_secret);
         return -1;
     }
 
     for (size_t i = 0; i < count; ++i)
     {
-        uint64_t global_index = client->validator_assignment.indices[i];
+        uint64_t global_index = client->assigned_validators->indices[i];
         if (global_index >= total_validators)
         {
-            for (size_t j = 0; j < i; ++j)
-            {
-                lantern_client_local_validator_cleanup(&validators[j]);
-            }
             free(validators);
-            lantern_secure_zero(decoded_secret, decoded_len);
-            free(decoded_secret);
             return -1;
         }
         validators[i].global_index = global_index;
-        validators[i].secret_len = decoded_len;
-        if (decoded_len > 0)
-        {
-            validators[i].secret = malloc(decoded_len);
-            if (!validators[i].secret)
-            {
-                for (size_t j = 0; j <= i; ++j)
-                {
-                    lantern_client_local_validator_cleanup(&validators[j]);
-                }
-                free(validators);
-                lantern_secure_zero(decoded_secret, decoded_len);
-                free(decoded_secret);
-                return -1;
-            }
-            memcpy(validators[i].secret, decoded_secret, decoded_len);
-            validators[i].has_secret = true;
-        }
-        validators[i].last_proposed_slot = UINT64_MAX;
-        validators[i].last_attested_slot = UINT64_MAX;
     }
 
     if (!client->validator_lock_initialized)
     {
         if (pthread_mutex_init(&client->validator_lock, NULL) != 0)
         {
-            for (size_t i = 0; i < count; ++i)
-            {
-                lantern_client_local_validator_cleanup(&validators[i]);
-            }
             free(validators);
-            lantern_secure_zero(decoded_secret, decoded_len);
-            free(decoded_secret);
             return -1;
         }
         client->validator_lock_initialized = true;
@@ -431,13 +278,7 @@ int populate_local_validators(struct lantern_client *client)
 
     if (pthread_mutex_lock(&client->validator_lock) != 0)
     {
-        for (size_t i = 0; i < count; ++i)
-        {
-            lantern_client_local_validator_cleanup(&validators[i]);
-        }
         free(validators);
-        lantern_secure_zero(decoded_secret, decoded_len);
-        free(decoded_secret);
         return -1;
     }
 
@@ -448,57 +289,10 @@ int populate_local_validators(struct lantern_client *client)
 
     pthread_mutex_unlock(&client->validator_lock);
 
-    lantern_secure_zero(decoded_secret, decoded_len);
-    free(decoded_secret);
     lantern_log_info(
         "client",
         &meta,
-        "local validators ready count=%zu secrets_loaded=%zu",
-        client->local_validator_count,
+        "local validators ready count=%zu",
         client->local_validator_count);
-    return 0;
-}
-
-
-/* ============================================================================
- * Consensus Runtime Initialization
- * ============================================================================ */
-
-/**
- * Initialize consensus runtime for a client.
- *
- * @spec subspecs/runtime/runtime.py - consensus runtime
- *
- * Configures and initializes the consensus runtime with genesis time,
- * validator count, and local validator assignment.
- *
- * @param client Client instance
- * @return 0 on success, -1 on failure
- *
- * @note Thread safety: Called during init, no locking required
- */
-int init_consensus_runtime(struct lantern_client *client)
-{
-    if (!client || !lantern_validator_assignment_is_valid(&client->validator_assignment))
-    {
-        return -1;
-    }
-    struct lantern_consensus_runtime_config runtime_config;
-    lantern_consensus_runtime_config_init(&runtime_config);
-    runtime_config.genesis_time = client->genesis.chain_config.genesis_time;
-    runtime_config.validator_count = client->genesis.chain_config.validator_count;
-    if (runtime_config.validator_count == 0)
-    {
-        return -1;
-    }
-    if (lantern_consensus_runtime_init(
-            &client->runtime,
-            &runtime_config,
-            &client->validator_assignment)
-        != 0)
-    {
-        return -1;
-    }
-    client->has_runtime = true;
     return 0;
 }

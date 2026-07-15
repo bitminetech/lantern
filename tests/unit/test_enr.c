@@ -64,8 +64,7 @@ static int test_decode_single(void) {
 }
 
 static int test_record_list(void) {
-    struct lantern_enr_record_list list;
-    lantern_enr_record_list_init(&list);
+    struct lantern_enr_record_list list = {0};
 
     int result = 1;
     if (lantern_enr_record_list_append(&list, kExampleEnr) != 0) {

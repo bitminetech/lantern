@@ -334,7 +334,7 @@ static bool process_vote_locked(
         return false;
     }
 
-    if (!client->has_fork_choice)
+    if (client->store.block_len == 0u)
     {
         lantern_log_debug(
             "gossip",
@@ -373,7 +373,7 @@ static enum lantern_vote_record_status lantern_client_record_vote_internal(
     bool allow_buffering,
     bool is_replay)
 {
-    if (!client || !vote || !client->has_state)
+    if (!client || !vote || client->state.validator_count == 0u)
     {
         return LANTERN_VOTE_RECORD_REJECTED;
     }
@@ -655,7 +655,7 @@ bool lantern_client_validate_vote_constraints(
     const char *context,
     struct lantern_vote_rejection_info *out_rejection)
 {
-    if (!client || !vote || !client->has_fork_choice)
+    if (!client || !vote || client->store.block_len == 0u)
     {
         return false;
     }
@@ -736,7 +736,7 @@ bool lantern_client_validate_vote_constraints(
     } ancestry_checks[] = {
         {&vote->source, &vote->target, "source not ancestor of target", "Source checkpoint must be ancestor of target"},
         {&vote->target, &vote->head, "target not ancestor of head", "Target checkpoint must be ancestor of head"},
-        {&client->fork_choice.latest_finalized, &vote->head, "head not descendant of finalized", "Head checkpoint must descend from finalized"},
+        {&client->store.latest_finalized, &vote->head, "head not descendant of finalized", "Head checkpoint must descend from finalized"},
     };
     for (size_t i = 0; i < sizeof(ancestry_checks) / sizeof(ancestry_checks[0]); ++i)
     {
@@ -780,40 +780,12 @@ bool lantern_client_validate_vote_constraints(
         return false;
     }
 
-    uint64_t allowed_slot = 0u;
-    if (client->debug_disable_fork_choice_time)
+    uint64_t admission_horizon = client->store.time_intervals;
+    if (admission_horizon < UINT64_MAX)
     {
-        uint64_t current_slot = 0u;
-        if (!lantern_client_current_slot(client, &current_slot))
-        {
-            return false;
-        }
-        allowed_slot = current_slot == UINT64_MAX ? UINT64_MAX : current_slot + 1u;
+        admission_horizon += 1u;
     }
-    else if (client->fork_choice.intervals_per_slot == 0u)
-    {
-        lantern_log_debug(
-            log_facility,
-            meta,
-            "dropping %s validator=%" PRIu64 " slot=%" PRIu64 " (invalid interval clock)",
-            label,
-            vote->validator_id,
-            vote->slot);
-        if (out_rejection)
-        {
-            lantern_vote_rejection_set(out_rejection, "invalid interval clock");
-        }
-        return false;
-    }
-    else
-    {
-        uint64_t admission_horizon = client->fork_choice.time_intervals;
-        if (admission_horizon < UINT64_MAX)
-        {
-            admission_horizon += 1u;
-        }
-        allowed_slot = admission_horizon / client->fork_choice.intervals_per_slot;
-    }
+    uint64_t allowed_slot = admission_horizon / LANTERN_INTERVALS_PER_SLOT;
     if (vote->slot > allowed_slot)
     {
         lantern_log_debug(
@@ -823,7 +795,7 @@ bool lantern_client_validate_vote_constraints(
             label,
             vote->validator_id,
             vote->slot,
-            client->fork_choice.time_intervals);
+            client->store.time_intervals);
         if (out_rejection)
         {
             lantern_vote_rejection_set(
@@ -831,7 +803,7 @@ bool lantern_client_validate_vote_constraints(
                 "vote slot=%" PRIu64 " exceeds allowed=%" PRIu64 " current_interval=%" PRIu64,
                 vote->slot,
                 allowed_slot,
-                client->fork_choice.time_intervals);
+                client->store.time_intervals);
         }
         return false;
     }
@@ -872,13 +844,12 @@ void lantern_client_record_vote(
 
 void lantern_client_replay_pending_gossip_votes(struct lantern_client *client)
 {
-    if (!client || !client->has_state)
+    if (!client || client->state.validator_count == 0u)
     {
         return;
     }
 
-    struct lantern_pending_vote_list pending;
-    pending_vote_list_init(&pending);
+    struct lantern_pending_vote_list pending = {0};
 
     bool state_locked = lantern_client_lock_state(client);
     if (!state_locked)
@@ -892,7 +863,7 @@ void lantern_client_replay_pending_gossip_votes(struct lantern_client *client)
     }
 
     pending = client->pending_gossip_votes;
-    pending_vote_list_init(&client->pending_gossip_votes);
+    client->pending_gossip_votes = (struct lantern_pending_vote_list){0};
     lantern_client_unlock_state(client, state_locked);
 
     for (size_t i = 0; i < pending.length; ++i)

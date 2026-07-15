@@ -107,25 +107,6 @@ static int grow_item_capacity(
  * ============================================================================ */
 
 /**
- * Initialize a pending vote list.
- *
- * @param list  List to initialize
- *
- * @note Thread safety: This function is thread-safe
- */
-void pending_vote_list_init(struct lantern_pending_vote_list *list)
-{
-    if (!list)
-    {
-        return;
-    }
-    list->items = NULL;
-    list->length = 0;
-    list->capacity = 0;
-}
-
-
-/**
  * Reset and free a pending vote list.
  *
  * @param list  List to reset
@@ -213,7 +194,7 @@ int clone_signed_block(const LanternSignedBlock *source, LanternSignedBlock *des
         return LANTERN_CLIENT_PENDING_ERR_INVALID_PARAM;
     }
 
-    lantern_signed_block_with_attestation_init(dest);
+    lantern_signed_block_init(dest);
     dest->block.slot = source->block.slot;
     dest->block.proposer_index = source->block.proposer_index;
     dest->block.parent_root = source->block.parent_root;
@@ -223,13 +204,13 @@ int clone_signed_block(const LanternSignedBlock *source, LanternSignedBlock *des
             &dest->block.body.attestations,
             &source->block.body.attestations) != 0)
     {
-        lantern_signed_block_with_attestation_reset(dest);
+        lantern_signed_block_reset(dest);
         return LANTERN_CLIENT_PENDING_ERR_COPY;
     }
 
     if (lantern_byte_list_copy(&dest->proof, &source->proof) != 0)
     {
-        lantern_signed_block_with_attestation_reset(dest);
+        lantern_signed_block_reset(dest);
         return LANTERN_CLIENT_PENDING_ERR_COPY;
     }
 
@@ -277,7 +258,7 @@ void persisted_block_list_reset(struct lantern_persisted_block_list *list)
     {
         for (size_t i = 0; i < list->length; ++i)
         {
-            lantern_signed_block_with_attestation_reset(&list->items[i].block);
+            lantern_signed_block_reset(&list->items[i].block);
         }
         free(list->items);
     }
@@ -341,25 +322,6 @@ int persisted_block_list_append(
  * ============================================================================ */
 
 /**
- * Initialize a pending block list.
- *
- * @param list  List to initialize
- *
- * @note Thread safety: This function is thread-safe
- */
-void pending_block_list_init(struct lantern_pending_block_list *list)
-{
-    if (!list)
-    {
-        return;
-    }
-    list->items = NULL;
-    list->length = 0;
-    list->capacity = 0;
-}
-
-
-/**
  * Reset and free a pending block list.
  *
  * @param list  List to reset
@@ -376,7 +338,7 @@ void pending_block_list_reset(struct lantern_pending_block_list *list)
     {
         for (size_t i = 0; i < list->length; ++i)
         {
-            lantern_signed_block_with_attestation_reset(&list->items[i].block);
+            lantern_signed_block_reset(&list->items[i].block);
         }
         free(list->items);
     }
@@ -432,7 +394,7 @@ void pending_block_list_remove(struct lantern_pending_block_list *list, size_t i
     }
 
     struct lantern_pending_block *entry = &list->items[index];
-    lantern_signed_block_with_attestation_reset(&entry->block);
+    lantern_signed_block_reset(&entry->block);
 
     if (index + 1u < list->length)
     {

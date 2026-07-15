@@ -36,7 +36,7 @@ static libp2p_host_err_t gossipsub_protocol_open_locked(
     void *user_data) {
     struct lantern_gossipsub_protocol_adapter *adapter =
         (struct lantern_gossipsub_protocol_adapter *)user_data;
-    if (!adapter || !adapter->service || !adapter->on_open) {
+    if (!adapter || !adapter->on_open) {
         return LIBP2P_HOST_ERR_INVALID_ARG;
     }
     if (lock_gossipsub() != 0) {
@@ -54,7 +54,7 @@ static libp2p_host_err_t gossipsub_protocol_event_locked(
     void *user_data) {
     struct lantern_gossipsub_protocol_adapter *adapter =
         (struct lantern_gossipsub_protocol_adapter *)user_data;
-    if (!adapter || !adapter->service || !adapter->on_event) {
+    if (!adapter || !adapter->on_event) {
         return LIBP2P_HOST_ERR_INVALID_ARG;
     }
     if (lock_gossipsub() != 0) {
@@ -71,7 +71,6 @@ static void wrap_gossipsub_protocols(struct lantern_gossipsub_service *service) 
     }
     for (size_t i = 0; i < service->gossipsub_protocol_count; i++) {
         struct lantern_gossipsub_protocol_adapter *adapter = &service->gossipsub_protocol_adapters[i];
-        adapter->service = service;
         adapter->on_open = service->gossipsub_protocols[i].on_open;
         adapter->on_event = service->gossipsub_protocols[i].on_event;
         adapter->user_data = service->gossipsub_protocols[i].user_data;
@@ -940,7 +939,6 @@ static int remember_vote_subnet_topic(
 
 static int setup_topics(struct lantern_gossipsub_service *service, const struct lantern_gossipsub_config *config) {
     snprintf(service->topic_network_name, sizeof(service->topic_network_name), "%s", config->topic_network_name);
-    memcpy(service->fork_digest, config->fork_digest, sizeof(service->fork_digest));
     service->attestation_subnet_id = config->attestation_subnet_id;
     service->subscribe_attestation_subnet = config->subscribe_attestation_subnet ? 1 : 0;
     return lantern_gossip_topic_format(
@@ -1034,8 +1032,6 @@ int lantern_gossipsub_service_start(
 
     lantern_gossipsub_service_reset(service);
     service->network = config->network;
-    service->data_dir = config->data_dir;
-    service->devnet = config->devnet;
     if (setup_topics(service, config) != 0) {
         return -1;
     }
@@ -1111,7 +1107,10 @@ int lantern_gossipsub_service_start(
         return -1;
     }
 
-    lantern_log_info("network", &(const struct lantern_log_metadata){.peer = config->devnet}, "gossipsub topics ready");
+    lantern_log_info(
+        "network",
+        &(const struct lantern_log_metadata){.peer = config->topic_network_name},
+        "gossipsub topics ready");
     return 0;
 }
 
@@ -1247,52 +1246,4 @@ size_t lantern_gossipsub_service_mesh_peer_count(const struct lantern_gossipsub_
     }
     unlock_gossipsub();
     return count;
-}
-
-void lantern_gossipsub_service_set_publish_hook(
-    struct lantern_gossipsub_service *service,
-    int (*hook)(const char *topic, const uint8_t *payload, size_t payload_len, void *user_data),
-    void *user_data) {
-    if (service) {
-        service->publish_hook = hook;
-        service->publish_hook_user_data = user_data;
-    }
-}
-
-void lantern_gossipsub_service_set_loopback_only(
-    struct lantern_gossipsub_service *service,
-    int loopback_only) {
-    if (service) {
-        service->loopback_only = loopback_only ? 1 : 0;
-    }
-}
-
-void lantern_gossipsub_service_set_block_handler(
-    struct lantern_gossipsub_service *service,
-    lantern_gossipsub_block_handler handler,
-    void *user_data) {
-    if (service) {
-        service->block_handler = handler;
-        service->block_handler_user_data = user_data;
-    }
-}
-
-void lantern_gossipsub_service_set_vote_handler(
-    struct lantern_gossipsub_service *service,
-    lantern_gossipsub_vote_handler handler,
-    void *user_data) {
-    if (service) {
-        service->vote_handler = handler;
-        service->vote_handler_user_data = user_data;
-    }
-}
-
-void lantern_gossipsub_service_set_aggregated_attestation_handler(
-    struct lantern_gossipsub_service *service,
-    lantern_gossipsub_aggregated_attestation_handler handler,
-    void *user_data) {
-    if (service) {
-        service->aggregated_attestation_handler = handler;
-        service->aggregated_attestation_handler_user_data = user_data;
-    }
 }

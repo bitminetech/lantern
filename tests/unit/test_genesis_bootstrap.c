@@ -146,36 +146,33 @@ int main(void) {
         fprintf(stderr, "unexpected attestation committee count: %llu\n", (unsigned long long)artifacts.chain_config.attestation_committee_count);
         goto cleanup;
     }
-    if (!artifacts.chain_config.validator_attestation_pubkeys
-        || !artifacts.chain_config.validator_proposal_pubkeys) {
-        fprintf(stderr, "genesis validator pubkey pairs missing from chain config\n");
+    if (!artifacts.chain_config.validators) {
+        fprintf(stderr, "genesis validator registry missing from chain config\n");
         goto cleanup;
     }
     if (expect_pubkey_hex(
-            artifacts.chain_config.validator_attestation_pubkeys,
+            artifacts.chain_config.validators[0].attestation_pubkey,
             "0x11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111")
         != 0) {
         fprintf(stderr, "unexpected first attestation pubkey\n");
         goto cleanup;
     }
     if (expect_pubkey_hex(
-            artifacts.chain_config.validator_proposal_pubkeys,
+            artifacts.chain_config.validators[0].proposal_pubkey,
             "0x81818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181")
         != 0) {
         fprintf(stderr, "unexpected first proposal pubkey\n");
         goto cleanup;
     }
     if (expect_pubkey_hex(
-            artifacts.chain_config.validator_attestation_pubkeys
-                + (6u * LANTERN_VALIDATOR_PUBKEY_SIZE),
+            artifacts.chain_config.validators[6].attestation_pubkey,
             "0x17171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717")
         != 0) {
         fprintf(stderr, "unexpected last attestation pubkey\n");
         goto cleanup;
     }
     if (expect_pubkey_hex(
-            artifacts.chain_config.validator_proposal_pubkeys
-                + (6u * LANTERN_VALIDATOR_PUBKEY_SIZE),
+            artifacts.chain_config.validators[6].proposal_pubkey,
             "0x87878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787")
         != 0) {
         fprintf(stderr, "unexpected last proposal pubkey\n");
@@ -216,15 +213,10 @@ int main(void) {
         fprintf(stderr, "failed to generate state from chain config\n");
         goto cleanup;
     }
-    if (lantern_state_set_validator_pubkeys_dual(
-            &generated_state,
-            artifacts.chain_config.validator_attestation_pubkeys,
-            artifacts.chain_config.validator_proposal_pubkeys,
-            (size_t)artifacts.chain_config.validator_count)
-        != 0) {
-        fprintf(stderr, "failed to populate dual validator pubkeys in generated state\n");
-        goto cleanup;
-    }
+    memcpy(
+        generated_state.validators,
+        artifacts.chain_config.validators,
+        generated_state.validator_count * sizeof(*generated_state.validators));
     if (expect_pubkey_hex(
             lantern_state_validator_attestation_pubkey(&generated_state, 0u),
             "0x11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111")

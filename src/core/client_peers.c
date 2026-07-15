@@ -11,7 +11,6 @@
  *       3. pending_lock
  *       4. validator_lock
  *       5. connection_lock
- *       6. peer_vote_lock
  */
 
 #include "client_internal.h"
@@ -21,23 +20,6 @@
 #include <string.h>
 
 #include "lantern/support/strings.h"
-
-
-/* ============================================================================
- * Peer ID Utilities
- * ============================================================================ */
-
-/**
- * Get the capacity for peer ID strings.
- *
- * @return Size of peer_id buffer in lantern_peer_status_entry
- *
- * @note Thread safety: This function is thread-safe
- */
-size_t lantern_peer_id_capacity(void)
-{
-    return sizeof(((struct lantern_peer_status_entry *)0)->peer_id);
-}
 
 
 /* ============================================================================
@@ -62,7 +44,7 @@ struct lantern_peer_status_entry *lantern_client_find_status_entry_locked(
         return NULL;
     }
 
-    const size_t peer_cap = lantern_peer_id_capacity();
+    const size_t peer_cap = sizeof(((struct lantern_peer_status_entry *)0)->peer_id);
     for (size_t i = 0; i < client->peer_status_count; ++i)
     {
         struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
@@ -132,10 +114,7 @@ struct lantern_peer_status_entry *lantern_client_ensure_status_entry_locked(
     entry = &client->peer_status_entries[client->peer_status_count++];
     memset(entry, 0, sizeof(*entry));
 
-    const size_t peer_cap = lantern_peer_id_capacity();
-    (void)lantern_string_copy(entry->peer_id, peer_cap, peer_id);
-
-    lantern_client_register_vote_peer(client, peer_id);
+    (void)lantern_string_copy(entry->peer_id, sizeof(entry->peer_id), peer_id);
 
     return entry;
 }
@@ -146,141 +125,46 @@ struct lantern_peer_status_entry *lantern_client_ensure_status_entry_locked(
  * ============================================================================ */
 
 /**
- * Find or create a peer vote metric entry.
- *
- * @param client   Client instance
- * @param peer_id  Peer ID to find or create
- * @return Pointer to entry, NULL on failure
- *
- * @note Thread safety: Caller must hold peer_vote_lock
- */
-struct lantern_peer_vote_metric *lantern_client_ensure_vote_metric_locked(
-    struct lantern_client *client,
-    const char *peer_id)
-{
-    if (!client || !peer_id || !peer_id[0])
-    {
-        return NULL;
-    }
-
-    struct lantern_peer_vote_metric *entry = NULL;
-    const size_t peer_cap = sizeof(((struct lantern_peer_vote_metric *)0)->peer_id);
-    for (size_t i = 0; i < client->peer_vote_stats_len; ++i)
-    {
-        entry = &client->peer_vote_stats[i];
-        if (strncmp(entry->peer_id, peer_id, peer_cap) == 0)
-        {
-            return entry;
-        }
-    }
-
-    size_t new_capacity = client->peer_vote_stats_cap == 0
-        ? 4u
-        : client->peer_vote_stats_cap * 2u;
-
-    if (new_capacity < client->peer_vote_stats_cap
-        || new_capacity > (SIZE_MAX / sizeof(*client->peer_vote_stats)))
-    {
-        return NULL;
-    }
-
-    if (client->peer_vote_stats_len == client->peer_vote_stats_cap)
-    {
-        struct lantern_peer_vote_metric *grown = realloc(
-            client->peer_vote_stats,
-            new_capacity * sizeof(*client->peer_vote_stats));
-        if (!grown)
-        {
-            return NULL;
-        }
-
-        memset(
-            grown + client->peer_vote_stats_cap,
-            0,
-            (new_capacity - client->peer_vote_stats_cap) * sizeof(*grown));
-
-        client->peer_vote_stats = grown;
-        client->peer_vote_stats_cap = new_capacity;
-    }
-
-    entry = &client->peer_vote_stats[client->peer_vote_stats_len++];
-    memset(entry, 0, sizeof(*entry));
-
-    (void)lantern_string_copy(entry->peer_id, peer_cap, peer_id);
-
-    return entry;
-}
-
-
-/**
- * Register a peer for vote tracking.
- *
- * @param client   Client instance
- * @param peer_id  Peer ID to register
- *
- * @note Thread safety: This function acquires peer_vote_lock
- */
-void lantern_client_register_vote_peer(
-    struct lantern_client *client,
-    const char *peer_id)
-{
-    if (!client || !peer_id || !peer_id[0] || !client->peer_vote_lock_initialized)
-    {
-        return;
-    }
-
-    if (pthread_mutex_lock(&client->peer_vote_lock) != 0)
-    {
-        return;
-    }
-
-    (void)lantern_client_ensure_vote_metric_locked(client, peer_id);
-
-    pthread_mutex_unlock(&client->peer_vote_lock);
-}
-
-
-/**
  * Record a vote delivery from a peer.
  *
  * @param client   Client instance
  * @param peer_id  Peer ID that sent the vote
  * @param vote     Vote that was received (may be NULL)
  *
- * @note Thread safety: This function acquires peer_vote_lock
+ * @note Thread safety: This function acquires status_lock
  */
 void lantern_client_note_vote_delivery(
     struct lantern_client *client,
     const char *peer_id,
     const LanternSignedVote *vote)
 {
-    if (!client || !peer_id || !peer_id[0] || !client->peer_vote_lock_initialized)
+    if (!client || !peer_id || !peer_id[0] || !client->status_lock_initialized)
     {
         return;
     }
 
-    if (pthread_mutex_lock(&client->peer_vote_lock) != 0)
+    if (pthread_mutex_lock(&client->status_lock) != 0)
     {
         return;
     }
 
-    struct lantern_peer_vote_metric *metrics =
-        lantern_client_ensure_vote_metric_locked(client, peer_id);
+    struct lantern_peer_status_entry *entry =
+        lantern_client_ensure_status_entry_locked(client, peer_id);
 
-    if (metrics)
+    if (entry)
     {
-        if (metrics->received_total < UINT64_MAX)
+        if (entry->votes_received < UINT64_MAX)
         {
-            metrics->received_total += 1u;
+            entry->votes_received += 1u;
         }
         if (vote)
         {
-            metrics->last_validator_id = vote->data.validator_id;
-            metrics->last_slot = vote->data.slot;
+            entry->last_vote_validator_id = vote->data.validator_id;
+            entry->last_vote_slot = vote->data.slot;
         }
     }
 
-    pthread_mutex_unlock(&client->peer_vote_lock);
+    pthread_mutex_unlock(&client->status_lock);
 }
 
 
@@ -292,7 +176,7 @@ void lantern_client_note_vote_delivery(
  * @param vote      Vote that was processed (may be NULL)
  * @param accepted  True if vote was accepted, false if rejected
  *
- * @note Thread safety: This function acquires peer_vote_lock
+ * @note Thread safety: This function acquires status_lock
  */
 void lantern_client_note_vote_outcome(
     struct lantern_client *client,
@@ -300,44 +184,44 @@ void lantern_client_note_vote_outcome(
     const LanternSignedVote *vote,
     bool accepted)
 {
-    if (!client || !peer_id || !peer_id[0] || !client->peer_vote_lock_initialized)
+    if (!client || !peer_id || !peer_id[0] || !client->status_lock_initialized)
     {
         return;
     }
 
-    if (pthread_mutex_lock(&client->peer_vote_lock) != 0)
+    if (pthread_mutex_lock(&client->status_lock) != 0)
     {
         return;
     }
 
-    struct lantern_peer_vote_metric *metrics =
-        lantern_client_ensure_vote_metric_locked(client, peer_id);
+    struct lantern_peer_status_entry *entry =
+        lantern_client_ensure_status_entry_locked(client, peer_id);
 
-    if (metrics)
+    if (entry)
     {
         if (accepted)
         {
-            if (metrics->accepted_total < UINT64_MAX)
+            if (entry->votes_accepted < UINT64_MAX)
             {
-                metrics->accepted_total += 1u;
+                entry->votes_accepted += 1u;
             }
         }
         else
         {
-            if (metrics->rejected_total < UINT64_MAX)
+            if (entry->votes_rejected < UINT64_MAX)
             {
-                metrics->rejected_total += 1u;
+                entry->votes_rejected += 1u;
             }
         }
 
         if (vote)
         {
-            metrics->last_validator_id = vote->data.validator_id;
-            metrics->last_slot = vote->data.slot;
+            entry->last_vote_validator_id = vote->data.validator_id;
+            entry->last_vote_slot = vote->data.slot;
         }
     }
 
-    pthread_mutex_unlock(&client->peer_vote_lock);
+    pthread_mutex_unlock(&client->status_lock);
 }
 
 
@@ -390,135 +274,38 @@ bool lantern_client_try_begin_status_request(
 
 
 /**
- * Note that a status request has started.
- *
- * @param client   Client instance
- * @param peer_id  Peer ID the request is for
- *
- * @note Thread safety: This function acquires status_lock
- */
-void lantern_client_note_status_request_start(
-    struct lantern_client *client,
-    const char *peer_id)
-{
-    if (!client || !peer_id || !peer_id[0] || !client->status_lock_initialized)
-    {
-        return;
-    }
-
-    if (pthread_mutex_lock(&client->status_lock) != 0)
-    {
-        return;
-    }
-
-    struct lantern_peer_status_entry *entry =
-        lantern_client_find_status_entry_locked(client, peer_id);
-
-    if (entry)
-    {
-        lantern_client_status_request_update_locked(client, entry, 1);
-    }
-
-    pthread_mutex_unlock(&client->status_lock);
-}
-
-
-/**
  * Note that a status request has failed.
  *
  * @param client   Client instance
  * @param peer_id  Peer ID the request was for
+ * @return true for the first failure since the peer's last successful status
  *
  * @note Thread safety: This function acquires status_lock
  */
-void lantern_client_status_request_failed(
+bool lantern_client_status_request_failed(
     struct lantern_client *client,
     const char *peer_id)
 {
     if (!client || !peer_id || !peer_id[0] || !client->status_lock_initialized)
     {
-        return;
+        return true;
     }
 
     if (pthread_mutex_lock(&client->status_lock) != 0)
     {
-        return;
+        return true;
     }
 
     struct lantern_peer_status_entry *entry =
         lantern_client_find_status_entry_locked(client, peer_id);
+    bool first_failure = !entry || !entry->status_request_failed;
 
     if (entry)
     {
         entry->status_request_inflight = false;
-        lantern_client_status_request_update_locked(client, entry, -1);
+        entry->status_request_failed = true;
     }
 
     pthread_mutex_unlock(&client->status_lock);
-}
-
-/**
- * Update status request tracking counters.
- *
- * @param client   Client instance
- * @param entry    Peer status entry to update
- * @param delta    Change to apply (+1 for start, -1 for complete)
- *
- * @note Thread safety: Caller must hold status_lock
- */
-void lantern_client_status_request_update_locked(
-    struct lantern_client *client,
-    struct lantern_peer_status_entry *entry,
-    int delta)
-{
-    if (!client || !entry || delta == 0)
-    {
-        return;
-    }
-
-    if (delta > 0)
-    {
-        uint32_t increase = (uint32_t)delta;
-        if (UINT32_MAX - entry->outstanding_status_requests < increase)
-        {
-            entry->outstanding_status_requests = UINT32_MAX;
-        }
-        else
-        {
-            entry->outstanding_status_requests += increase;
-        }
-
-        const size_t increase_size = (size_t)increase;
-        if (client->status_requests_inflight_total > SIZE_MAX - increase_size)
-        {
-            client->status_requests_inflight_total = SIZE_MAX;
-        }
-        else
-        {
-            client->status_requests_inflight_total += increase_size;
-        }
-
-    }
-    else
-    {
-        uint32_t decrease = (uint32_t)(-(int64_t)delta);
-        if (entry->outstanding_status_requests > decrease)
-        {
-            entry->outstanding_status_requests -= decrease;
-        }
-        else
-        {
-            entry->outstanding_status_requests = 0;
-        }
-
-        if (client->status_requests_inflight_total > (size_t)decrease)
-        {
-            client->status_requests_inflight_total -= (size_t)decrease;
-        }
-        else
-        {
-            client->status_requests_inflight_total = 0;
-        }
-    }
-
+    return first_failure;
 }

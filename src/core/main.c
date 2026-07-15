@@ -49,9 +49,7 @@ enum {
     OPT_LOG_LEVEL,
     OPT_XMSS_KEY_DIR,
     OPT_HASH_SIG_KEY_DIR,
-    OPT_XMSS_PUBLIC_PATH,
     OPT_XMSS_SECRET_PATH,
-    OPT_XMSS_PUBLIC_TEMPLATE,
     OPT_XMSS_SECRET_TEMPLATE,
     OPT_IS_AGGREGATOR,
     OPT_ATTESTATION_COMMITTEE_COUNT,
@@ -313,9 +311,7 @@ static lantern_client_error apply_option(
         return LANTERN_CLIENT_OK;
     case OPT_XMSS_KEY_DIR:
     case OPT_HASH_SIG_KEY_DIR:
-    case OPT_XMSS_PUBLIC_PATH:
     case OPT_XMSS_SECRET_PATH:
-    case OPT_XMSS_PUBLIC_TEMPLATE:
     case OPT_XMSS_SECRET_TEMPLATE:
         return handle_xmss_option(options, opt, optarg);
     case OPT_IS_AGGREGATOR:
@@ -333,7 +329,6 @@ static lantern_client_error apply_option(
             return LANTERN_CLIENT_ERR_INVALID_PARAM;
         }
         options->attestation_committee_count_override = (uint64_t)parsed_value;
-        options->has_attestation_committee_count_override = true;
         return LANTERN_CLIENT_OK;
     }
     case OPT_AGGREGATE_SUBNET_IDS:
@@ -458,14 +453,8 @@ static lantern_client_error handle_xmss_option(
     case OPT_HASH_SIG_KEY_DIR:
         options->xmss_key_dir = optarg;
         return LANTERN_CLIENT_OK;
-    case OPT_XMSS_PUBLIC_PATH:
-        options->xmss_public_path = optarg;
-        return LANTERN_CLIENT_OK;
     case OPT_XMSS_SECRET_PATH:
         options->xmss_secret_path = optarg;
-        return LANTERN_CLIENT_OK;
-    case OPT_XMSS_PUBLIC_TEMPLATE:
-        options->xmss_public_template = optarg;
         return LANTERN_CLIENT_OK;
     case OPT_XMSS_SECRET_TEMPLATE:
         options->xmss_secret_template = optarg;
@@ -568,31 +557,27 @@ static lantern_client_error handle_shadow_xmss_rate_option(
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
 
-    double *rate = NULL;
-    bool *has_rate = NULL;
+    LanternShadowOperation operation;
     const char *label = NULL;
     switch (opt)
     {
     case OPT_SHADOW_XMSS_AGGREGATE_SIGNATURES_RATE:
-        rate = &options->shadow_xmss_aggregate_signatures_rate;
-        has_rate = &options->has_shadow_xmss_aggregate_signatures_rate;
+        operation = LANTERN_SHADOW_AGGREGATE;
         label = "shadow-xmss-aggregate-signatures-rate";
         break;
     case OPT_SHADOW_XMSS_VERIFY_AGGREGATED_SIGNATURES_RATE:
-        rate = &options->shadow_xmss_verify_aggregated_signatures_rate;
-        has_rate = &options->has_shadow_xmss_verify_aggregated_signatures_rate;
+        operation = LANTERN_SHADOW_VERIFY;
         label = "shadow-xmss-verify-aggregated-signatures-rate";
         break;
     case OPT_SHADOW_XMSS_MERGE_RATE:
-        rate = &options->shadow_xmss_merge_rate;
-        has_rate = &options->has_shadow_xmss_merge_rate;
+        operation = LANTERN_SHADOW_MERGE;
         label = "shadow-xmss-merge-rate";
         break;
     default:
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
 
-    if (parse_double_value(optarg, rate) != LANTERN_CLIENT_OK)
+    if (parse_double_value(optarg, &options->shadow_xmss_rates[operation]) != LANTERN_CLIENT_OK)
     {
         lantern_log_error(
             "cli",
@@ -602,7 +587,7 @@ static lantern_client_error handle_shadow_xmss_rate_option(
             optarg);
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
-    *has_rate = true;
+    options->shadow_xmss_rates_set |= (uint8_t)(1u << operation);
     return LANTERN_CLIENT_OK;
 }
 
@@ -663,9 +648,7 @@ static lantern_client_error parse_arguments(
         {"log-level", required_argument, NULL, OPT_LOG_LEVEL},
         {"xmss-key-dir", required_argument, NULL, OPT_XMSS_KEY_DIR},
         {"hash-sig-key-dir", required_argument, NULL, OPT_HASH_SIG_KEY_DIR},
-        {"xmss-public", required_argument, NULL, OPT_XMSS_PUBLIC_PATH},
         {"xmss-secret", required_argument, NULL, OPT_XMSS_SECRET_PATH},
-        {"xmss-public-template", required_argument, NULL, OPT_XMSS_PUBLIC_TEMPLATE},
         {"xmss-secret-template", required_argument, NULL, OPT_XMSS_SECRET_TEMPLATE},
         {"is-aggregator", no_argument, NULL, OPT_IS_AGGREGATOR},
         {"attestation-committee-count", required_argument, NULL, OPT_ATTESTATION_COMMITTEE_COUNT},
@@ -1022,15 +1005,7 @@ static void print_usage_xmss(void)
     lantern_log_info(
         "main",
         NULL,
-        "  --xmss-public PATH      Path to a single XMSS public key file");
-    lantern_log_info(
-        "main",
-        NULL,
         "  --xmss-secret PATH      Path to a single XMSS secret key file");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --xmss-public-template STR  printf-style template for public key paths");
     lantern_log_info(
         "main",
         NULL,

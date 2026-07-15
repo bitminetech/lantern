@@ -63,8 +63,6 @@ struct lantern_metrics_http_handler {
 
 struct lantern_metrics_server {
     struct lantern_http_core_server core;
-    uint16_t port;
-    struct lantern_metrics_callbacks callbacks;
     struct lantern_metrics_http_handler handler;
 };
 

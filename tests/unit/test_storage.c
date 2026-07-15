@@ -12,7 +12,6 @@
 
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/containers.h"
-#include "lantern/consensus/duties.h"
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/networking/messages.h"
@@ -88,7 +87,7 @@ static void build_signed_block(
     memset(out_block, 0, sizeof(*out_block));
     out_block->block.slot = slot;
     expect_zero(
-        lantern_proposer_for_slot(slot, state->config.num_validators, &out_block->block.proposer_index),
+        lantern_proposer_for_slot(slot, state->validator_count, &out_block->block.proposer_index),
         "compute proposer");
     expect_ssz_success(
         lantern_hash_tree_root_block_header(&state->latest_block_header, &out_block->block.parent_root),
@@ -128,9 +127,7 @@ static int test_storage_rejects_excess_validators(void) {
 
     size_t too_many = (size_t)LANTERN_VALIDATOR_REGISTRY_LIMIT + 1u;
     invalid.config.genesis_time = 555u;
-    invalid.config.num_validators = (uint64_t)too_many;
     invalid.validator_count = too_many;
-    invalid.validator_capacity = too_many;
     invalid.validators = calloc(too_many, sizeof(LanternValidator));
     if (!invalid.validators) {
         perror("calloc validators");
@@ -208,8 +205,7 @@ static int test_storage_prunes_before_slot(void) {
     LanternRoot roots[3];
     bool blocks_ready[3] = {false, false, false};
     bool states_ready[3] = {false, false, false};
-    LanternSignedBlockList collected;
-    lantern_signed_block_list_init(&collected);
+    LanternSignedBlockList collected = {0};
 
     expect_zero(lantern_storage_prepare(base_dir), "prepare prune storage");
     expect_zero(lantern_state_generate_genesis(&state, 123456u, 4u), "generate prune genesis");
@@ -316,7 +312,7 @@ int main(void) {
     expect_zero(lantern_state_generate_genesis(&state, 123456u, 4u), "generate genesis");
 
     /* Populate validator registry with deterministic pubkeys so SSZ encoding works */
-    const size_t genesis_validators = state.config.num_validators;
+    const size_t genesis_validators = state.validator_count;
     const size_t pubkey_bytes = genesis_validators * LANTERN_VALIDATOR_PUBKEY_SIZE;
     uint8_t *dummy_pubkeys = calloc(pubkey_bytes, 1u);
     assert(dummy_pubkeys != NULL);
@@ -337,7 +333,7 @@ int main(void) {
         fprintf(stderr, "expected persisted state rc=0 got %d\n", load_state_rc);
         return EXIT_FAILURE;
     }
-    assert(loaded_state.config.num_validators == state.config.num_validators);
+    assert(loaded_state.validator_count == state.validator_count);
     lantern_state_reset(&loaded_state);
 
     LanternSignedBlock block;
@@ -346,8 +342,7 @@ int main(void) {
     expect_zero(lantern_storage_store_block(base_dir, &block), "store block");
     /* store again to ensure idempotent */
     expect_zero(lantern_storage_store_block(base_dir, &block), "store block duplicate");
-    LanternSignedBlockList response;
-    lantern_signed_block_list_init(&response);
+    LanternSignedBlockList response = {0};
     expect_zero(
         lantern_storage_collect_blocks(base_dir, &block_root, 1u, &response),
         "collect blocks");

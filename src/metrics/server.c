@@ -943,7 +943,6 @@ void lantern_metrics_server_init(struct lantern_metrics_server *server)
 
     memset(server, 0, sizeof(*server));
     lantern_http_core_init(&server->core);
-    server->port = 0;
 }
 
 int lantern_metrics_server_start(
@@ -956,12 +955,10 @@ int lantern_metrics_server_start(
         return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
     }
 
-    server->callbacks = *callbacks;
     server->handler.callbacks = *callbacks;
     server->handler.log_module = "metrics";
     server->handler.unavailable_json = METRICS_JSON_UNAVAILABLE;
     server->handler.formatting_failed_json = METRICS_JSON_FORMATTING_FAILED;
-    server->port = port;
 
     struct lantern_http_core_config config;
     memset(&config, 0, sizeof(config));
@@ -970,10 +967,6 @@ int lantern_metrics_server_start(
     config.listen_label = "metrics server";
     config.malformed_json = METRICS_JSON_MALFORMED_REQUEST;
     config.unknown_json = METRICS_JSON_UNKNOWN_ENDPOINT;
-    config.method_cap = LANTERN_HTTP_CORE_METHOD_CAP;
-    config.path_cap = LANTERN_HTTP_CORE_METRICS_PATH_CAP;
-    config.listen_backlog = LANTERN_HTTP_CORE_LISTEN_BACKLOG;
-    config.capture_bound_port = false;
     config.context = server;
     config.routes = kMetricsRoutes;
     config.route_count = ARRAY_LEN(kMetricsRoutes);

@@ -25,8 +25,7 @@ struct lantern_chain_config {
     uint64_t genesis_time;
     uint64_t validator_count;
     uint64_t attestation_committee_count;
-    uint8_t *validator_attestation_pubkeys; /* flattened array: count * LANTERN_VALIDATOR_PUBKEY_SIZE */
-    uint8_t *validator_proposal_pubkeys;    /* flattened array: count * LANTERN_VALIDATOR_PUBKEY_SIZE */
+    LanternValidator *validators;
 };
 
 struct lantern_validator_config_enr {
@@ -38,7 +37,6 @@ struct lantern_validator_config_enr {
 
 struct lantern_validator_config_entry {
     char *name;
-    char *privkey_hex;
     struct lantern_validator_config_enr enr;
     uint64_t count;
     uint64_t subnet;

@@ -12,7 +12,7 @@
  * - client_validator.c: Validator duty execution
  * - client_http.c: HTTP API callbacks
  * - client_reqresp.c: Request/response protocol handling
- * - client_reqresp_blocks.c: Block request handling
+ * - client_sync.c: Block request scheduling
  * - client_keys.c: Key management
  *
  * @note Lock ordering (acquire in this order to prevent deadlocks):
@@ -21,7 +21,6 @@
  *       3. pending_lock
  *       4. validator_lock
  *       5. connection_lock
- *       6. peer_vote_lock
  */
 
 #ifndef LANTERN_CLIENT_SERVICES_INTERNAL_H
@@ -49,27 +48,6 @@ extern "C" {
 /* ============================================================================
  * Validator Service Functions
  * ============================================================================ */
-
-/**
- * Reset validator duty state.
- *
- * @param state  Duty state to reset
- *
- * @note Thread safety: This function is thread-safe
- */
-void validator_duty_state_reset(struct lantern_validator_duty_state *state);
-
-
-/**
- * Check if the validator service should run.
- *
- * @param client  Client instance
- * @return true if service should run, false otherwise
- *
- * @note Thread safety: This function is thread-safe
- */
-bool validator_service_should_run(const struct lantern_client *client);
-
 
 /**
  * Sign an arbitrary message root with one of a validator's XMSS keys.
@@ -101,26 +79,6 @@ int validator_sign_with_key(
     const LanternRoot *message,
     bool use_proposal_key,
     LanternSignature *out_signature);
-
-
-/**
- * Sign a vote with a validator's attestation secret key.
- *
- * @spec subspecs/xmss/sign.py - signature generation
- *
- * @param validator  Local validator
- * @param slot       Slot number
- * @param vote       Vote to sign (modified in place)
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM on NULL inputs
- * @return LANTERN_CLIENT_ERR_VALIDATOR on hashing or signing failure
- *
- * @note Thread safety: Caller must ensure exclusive access to the validator
- */
-int validator_sign_vote(
-    struct lantern_local_validator *validator,
-    uint64_t slot,
-    LanternSignedVote *vote);
 
 
 /**
@@ -237,71 +195,20 @@ int start_timing_service(struct lantern_client *client);
 void stop_timing_service(struct lantern_client *client);
 
 
-/**
- * Validator service thread function.
- *
- * @param arg  Client instance
- * @return NULL
- *
- * @note Thread safety: This function runs in a separate thread
- */
-void *validator_thread(void *arg);
-
-
-/**
- * Start the validator service.
- *
- * @param client  Client instance
- * @return LANTERN_CLIENT_OK on success or when already running/missing
- *         prerequisites
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM if client is NULL
- * @return LANTERN_CLIENT_ERR_RUNTIME if the service thread cannot be created
- *
- * @note Thread safety: This function is thread-safe
- */
-int start_validator_service(struct lantern_client *client);
-
-
-/**
- * Stop the validator service.
- *
- * @param client  Client instance
- *
- * @note Thread safety: This function is thread-safe
- */
-void stop_validator_service(struct lantern_client *client);
-
-
 /* ============================================================================
  * HTTP Callback Functions
  * ============================================================================ */
 
 /**
- * Find local validator index by global index.
- *
- * @param client        Client instance
- * @param global_index  Global validator index to find
- * @param out_index     Output for local index
- * @return 0 on success, -1 if not found
- *
- * @note Thread safety: This function is thread-safe
- */
-int find_local_validator_index(
-    const struct lantern_client *client,
-    uint64_t global_index,
-    size_t *out_index);
-
-
-/**
- * Get current head snapshot for HTTP API.
+ * Get the current justified checkpoint for HTTP API.
  *
  * @param context       Client instance
- * @param out_snapshot  Output snapshot structure
+ * @param out_checkpoint Output checkpoint
  * @return 0 on success, -1 on failure
  *
  * @note Thread safety: This function is thread-safe
  */
-int http_snapshot_head(void *context, struct lantern_http_head_snapshot *out_snapshot);
+int http_snapshot_justified(void *context, LanternCheckpoint *out_checkpoint);
 
 /**
  * Get current fork-choice tree snapshot for HTTP API.
@@ -314,47 +221,7 @@ int http_snapshot_head(void *context, struct lantern_http_head_snapshot *out_sna
  */
 int http_snapshot_fork_choice(
     void *context,
-    struct lantern_http_fork_choice_snapshot *out_snapshot);
-
-
-/**
- * Get count of local validators for HTTP API.
- *
- * @param context  Client instance
- * @return Number of local validators
- *
- * @note Thread safety: This function is thread-safe
- */
-size_t http_validator_count_cb(void *context);
-
-
-/**
- * Get validator info for HTTP API.
- *
- * @param context   Client instance
- * @param index     Local validator index
- * @param out_info  Output info structure
- * @return 0 on success, -1 on failure
- *
- * @note Thread safety: This function acquires validator_lock
- */
-int http_validator_info_cb(
-    void *context,
-    size_t index,
-    struct lantern_http_validator_info *out_info);
-
-
-/**
- * Set validator enabled/disabled status for HTTP API.
- *
- * @param context       Client instance
- * @param global_index  Global validator index
- * @param enabled       New enabled status
- * @return 0 on success, -1 on failure
- *
- * @note Thread safety: This function acquires validator_lock
- */
-int http_set_validator_status_cb(void *context, uint64_t global_index, bool enabled);
+    struct lantern_fork_choice_tree_snapshot *out_snapshot);
 
 
 /**
@@ -390,7 +257,7 @@ int http_set_is_aggregator_cb(void *context, bool enabled, bool *out_previous);
  * @param out_snapshot  Output snapshot structure
  * @return 0 on success, -1 on failure
  *
- * @note Thread safety: This function acquires state_lock and peer_vote_lock
+ * @note Thread safety: This function acquires state_lock and status_lock
  */
 int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snapshot);
 
@@ -512,31 +379,12 @@ void lantern_client_block_importer_stop(struct lantern_client *client);
 
 
 /**
- * Handle completion of a blocks request.
+ * Handle completion of a tracked blocks request batch.
  *
  * @spec subspecs/networking/reqresp.py - blocks by root
  *
- * @param client        Client instance
- * @param peer_id       Peer ID string
- * @param request_roots Roots that were requested
- * @param root_count    Number of requested roots
- * @param outcome       Request outcome
- *
  * @note Thread safety: Acquires status_lock and, after releasing it, may
  * acquire pending_lock when a successful response schedules more backfill.
- */
-void lantern_client_on_blocks_request_complete_batch(
-    struct lantern_client *client,
-    const char *peer_id,
-    const LanternRoot *request_roots,
-    size_t root_count,
-    enum lantern_blocks_request_outcome outcome);
-
-/**
- * Handle completion of a tracked blocks request batch.
- *
- * Same as lantern_client_on_blocks_request_complete_batch(), but includes
- * the internal request tracking ID used by the active request registry.
  */
 void lantern_client_on_blocks_request_complete_batch_with_id(
     struct lantern_client *client,
@@ -544,25 +392,6 @@ void lantern_client_on_blocks_request_complete_batch_with_id(
     const char *peer_id,
     const LanternRoot *request_roots,
     size_t root_count,
-    enum lantern_blocks_request_outcome outcome);
-
-/**
- * Handle completion of a blocks request (single root).
- *
- * @spec subspecs/networking/reqresp.py - blocks by root
- *
- * @param client        Client instance
- * @param peer_id       Peer ID string
- * @param request_root  Root that was requested
- * @param outcome       Request outcome
- *
- * @note Thread safety: Acquires status_lock and, after releasing it, may
- * acquire pending_lock when a successful response schedules more backfill.
- */
-void lantern_client_on_blocks_request_complete(
-    struct lantern_client *client,
-    const char *peer_id,
-    const LanternRoot *request_root,
     enum lantern_blocks_request_outcome outcome);
 
 bool lantern_client_import_block(
@@ -573,30 +402,6 @@ bool lantern_client_import_block(
     uint32_t backfill_depth,
     bool allow_historical);
 
-
-/**
- * Schedule a blocks_by_root request to a peer.
- *
- * @spec subspecs/networking/reqresp/message.py - BlocksByRoot protocol
- *
- * @param client         Client instance
- * @param peer_id_text   Peer ID string
- * @param roots          Block roots to request
- * @param root_count     Number of roots
- * @param request_id     Internal request tracking ID (0 disables tracking)
- * @return 0 on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM if parameters are invalid, the peer ID is invalid, or any root is zero
- * @return LANTERN_CLIENT_ERR_ALLOC if allocation fails
- * @return LANTERN_CLIENT_ERR_NETWORK if stream dialing fails or networking is unavailable
- *
- * @note Thread safety: This function is thread-safe
- */
-int lantern_client_schedule_blocks_request_batch(
-    struct lantern_client *client,
-    const char *peer_id_text,
-    const LanternRoot *roots,
-    size_t root_count,
-    uint64_t request_id);
 
 /* ============================================================================
  * Key Management Functions
@@ -620,21 +425,6 @@ void lantern_client_local_validator_cleanup(struct lantern_local_validator *vali
  * @note Thread safety: Caller must ensure exclusive access during shutdown
  */
 void lantern_client_reset_local_validators(struct lantern_client *client);
-
-
-/**
- * Decode a hex-encoded validator secret key.
- *
- * @spec subspecs/xmss/keygen.py - key encoding
- *
- * @param hex      Hex string (with optional 0x prefix)
- * @param out_key  Output buffer (caller must free)
- * @param out_len  Output length
- * @return 0 on success, -1 on failure
- *
- * @note Thread safety: This function is thread-safe
- */
-int lantern_client_decode_validator_secret(const char *hex, uint8_t **out_key, size_t *out_len);
 
 
 /**

@@ -18,7 +18,6 @@
  *       3. pending_lock
  *       4. validator_lock
  *       5. connection_lock
- *       6. peer_vote_lock
  */
 
 #ifndef LANTERN_CLIENT_NETWORK_INTERNAL_H
@@ -81,27 +80,20 @@ struct lantern_peer_status_entry
 {
     char peer_id[128];                    /**< Peer ID string */
     LanternStatusMessage status;          /**< Latest status message from peer */
-    bool has_status;                      /**< True if status has been received */
     uint64_t last_status_ms;              /**< Timestamp of last status message */
     bool status_request_inflight;         /**< True if status request is pending */
+    bool status_request_failed;           /**< True until a status request succeeds */
     uint32_t consecutive_blocks_failures; /**< Count of consecutive request failures */
-    uint32_t outstanding_status_requests; /**< Number of outstanding status requests */
-    uint32_t consecutive_ping_failures;   /**< Count of consecutive ping failures */
+    uint64_t votes_received;
+    uint64_t votes_accepted;
+    uint64_t votes_rejected;
+    uint64_t last_vote_validator_id;
+    uint64_t last_vote_slot;
 };
 
 /* ============================================================================
  * Peer Status Functions
  * ============================================================================ */
-
-/**
- * Get the capacity for peer ID strings.
- *
- * @return Size of peer_id buffer in lantern_peer_status_entry
- *
- * @note Thread safety: This function is thread-safe
- */
-size_t lantern_peer_id_capacity(void);
-
 
 /**
  * Find a peer status entry by peer ID.
@@ -132,40 +124,13 @@ struct lantern_peer_status_entry *lantern_client_ensure_status_entry_locked(
 
 
 /**
- * Find or create a peer vote metric entry.
- *
- * @param client   Client instance
- * @param peer_id  Peer ID to find or create
- * @return Pointer to entry, NULL on failure
- *
- * @note Thread safety: Caller must hold peer_vote_lock
- */
-struct lantern_peer_vote_metric *lantern_client_ensure_vote_metric_locked(
-    struct lantern_client *client,
-    const char *peer_id);
-
-
-/**
- * Register a peer for vote tracking.
- *
- * @param client   Client instance
- * @param peer_id  Peer ID to register
- *
- * @note Thread safety: This function acquires peer_vote_lock
- */
-void lantern_client_register_vote_peer(
-    struct lantern_client *client,
-    const char *peer_id);
-
-
-/**
  * Record a vote delivery from a peer.
  *
  * @param client   Client instance
  * @param peer_id  Peer ID that sent the vote
  * @param vote     Vote that was received (may be NULL)
  *
- * @note Thread safety: This function acquires peer_vote_lock
+ * @note Thread safety: This function acquires status_lock
  */
 void lantern_client_note_vote_delivery(
     struct lantern_client *client,
@@ -181,7 +146,7 @@ void lantern_client_note_vote_delivery(
  * @param vote      Vote that was processed (may be NULL)
  * @param accepted  True if vote was accepted, false if rejected
  *
- * @note Thread safety: This function acquires peer_vote_lock
+ * @note Thread safety: This function acquires status_lock
  */
 void lantern_client_note_vote_outcome(
     struct lantern_client *client,
@@ -207,43 +172,17 @@ bool lantern_client_try_begin_status_request(
 
 
 /**
- * Note that a status request has started.
- *
- * @param client   Client instance
- * @param peer_id  Peer ID the request is for
- *
- * @note Thread safety: This function acquires status_lock
- */
-void lantern_client_note_status_request_start(
-    struct lantern_client *client,
-    const char *peer_id);
-
-
-/**
  * Note that a status request has failed.
  *
  * @param client   Client instance
  * @param peer_id  Peer ID the request was for
+ * @return true for the first failure since the peer's last successful status
  *
  * @note Thread safety: This function acquires status_lock
  */
-void lantern_client_status_request_failed(
+bool lantern_client_status_request_failed(
     struct lantern_client *client,
     const char *peer_id);
-
-/**
- * Update status request tracking counters.
- *
- * @param client   Client instance
- * @param entry    Peer status entry to update
- * @param delta    Change to apply (+1 for start, -1 for complete)
- *
- * @note Thread safety: Caller must hold status_lock
- */
-void lantern_client_status_request_update_locked(
-    struct lantern_client *client,
-    struct lantern_peer_status_entry *entry,
-    int delta);
 
 
 /* ============================================================================

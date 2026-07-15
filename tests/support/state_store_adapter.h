@@ -8,6 +8,7 @@
 
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/store.h"
+#include "vote_list.h"
 
 #define lantern_state_init_explicit lantern_state_init
 #define lantern_state_reset_explicit lantern_state_reset
@@ -25,7 +26,8 @@ enum { LANTERN_TEST_STATE_STORE_SLOT_CAP = 64 };
 
 struct lantern_test_state_store_slot {
     LanternState *state;
-    LanternStore store;
+    LanternStore owned_store;
+    LanternStore *store;
     bool in_use;
 };
 
@@ -34,6 +36,9 @@ struct lantern_test_state_store_slot *lantern_test_state_store_find_slot(const L
 LanternStore *lantern_test_state_store_ensure(LanternState *state);
 const LanternStore *lantern_test_state_store_find(const LanternState *state);
 void lantern_test_state_store_release(LanternState *state);
+int lantern_test_state_process_attestations(
+    LanternState *state,
+    const LanternAttestations *attestations);
 
 static inline int lantern_state_clone_explicit(const LanternState *source, LanternState *dest) {
     return lantern_state_clone(source, dest);
@@ -62,10 +67,15 @@ static inline int lantern_test_state_generate_genesis(
 
 static inline void lantern_test_state_attach_fork_choice(
     LanternState *state,
-    struct lantern_fork_choice *fork_choice) {
-    LanternStore *store = lantern_test_state_store_ensure(state);
-    if (store) {
-        lantern_store_attach_fork_choice(store, fork_choice);
+    LanternStore *fork_choice) {
+    struct lantern_test_state_store_slot *slot = lantern_test_state_store_find_slot(state);
+    if (!slot) {
+        (void)lantern_test_state_store_ensure(state);
+        slot = lantern_test_state_store_find_slot(state);
+    }
+    if (slot && fork_choice && slot->store != fork_choice) {
+        lantern_store_reset(&slot->owned_store);
+        slot->store = fork_choice;
     }
 }
 
@@ -77,7 +87,7 @@ static inline void lantern_test_state_attach_fork_choice(
 #define lantern_state_attach_fork_choice(state, fork_choice) \
     lantern_test_state_attach_fork_choice((state), (fork_choice))
 #define lantern_state_process_attestations(state, attestations) \
-    lantern_state_process_attestations_explicit((state), (attestations))
+    lantern_test_state_process_attestations((state), (attestations))
 #define lantern_state_process_block(state, block) \
     lantern_state_process_block_explicit((state), (block))
 #define lantern_state_transition(state, signed_block) \
@@ -88,7 +98,7 @@ static inline void lantern_test_state_attach_fork_choice(
         lantern_test_state_store_ensure((state)), \
         (out_parent_root))
 #define lantern_state_collect_attestations_for_block( \
-    state, block_slot, proposer_index, parent_root, out_attestations, out_signatures) \
+    state, block_slot, proposer_index, parent_root, out_attestations, out_payloads) \
     lantern_state_collect_attestations_for_block_explicit( \
         (state), \
         lantern_test_state_store_ensure((LanternState *)(state)), \
@@ -96,7 +106,7 @@ static inline void lantern_test_state_attach_fork_choice(
         (proposer_index), \
         (parent_root), \
         (out_attestations), \
-        (out_signatures))
+        (out_payloads))
 #define lantern_state_compute_vote_checkpoints(state, out_head, out_target, out_source) \
     lantern_state_compute_vote_checkpoints_explicit( \
         (state), \

@@ -7,16 +7,12 @@
  * Implements the reqresp protocol callbacks for status exchange and
  * blocks_by_root requests, plus peer status processing logic.
  *
- * Related files:
- * - client_reqresp_blocks.c: Block request operations
- *
  * @note Lock ordering (acquire in this order to prevent deadlocks):
  *       1. state_lock
  *       2. status_lock
  *       3. pending_lock
  *       4. validator_lock
  *       5. connection_lock
- *       6. peer_vote_lock
  */
 
 #include "client_internal.h"
@@ -42,7 +38,7 @@ enum {
 
 struct lantern_async_block_import_job
 {
-    struct lantern_client *client;
+    bool cache_aggregated_proofs_only;
     LanternSignedBlock block;
     LanternRoot block_root;
     char peer_id[128];
@@ -98,8 +94,6 @@ static void lantern_client_on_peer_status(
     const LanternStatusMessage *peer_status,
     const char *peer_id);
 
-static void copy_peer_id_text(const char *peer_id, char *out, size_t out_len);
-static bool record_status_failure_peer_id(struct lantern_client *client, const char *peer_id_text);
 static void log_status_failure(
     const struct lantern_client *client,
     const char *peer_id_text,
@@ -139,71 +133,6 @@ static void reqresp_alias_anchor_checkpoint_if_unset(
 /* ============================================================================
  * Reqresp Callbacks
  * ============================================================================ */
-
-/**
- * @brief Copies a peer ID string into a fixed-size buffer.
- *
- * @param peer_id  Peer ID string (may be NULL)
- * @param out      Output buffer
- * @param out_len  Output buffer length
- */
-static void copy_peer_id_text(const char *peer_id, char *out, size_t out_len)
-{
-    if (!out || out_len == 0)
-    {
-        return;
-    }
-
-    out[0] = '\0';
-    if (!peer_id || peer_id[0] == '\0')
-    {
-        return;
-    }
-
-    (void)lantern_string_copy(out, out_len, peer_id);
-}
-
-
-/**
- * @brief Record the peer for failure log throttling.
- *
- * @param client        Client instance
- * @param peer_id_text  Peer ID string (may be empty)
- * @return true if this is the first recorded failure, false otherwise
- *
- * @note Thread safety: This function acquires status_lock
- */
-static bool record_status_failure_peer_id(struct lantern_client *client, const char *peer_id_text)
-{
-    if (!client || !peer_id_text || peer_id_text[0] == '\0')
-    {
-        return true;
-    }
-
-    if (!client->status_lock_initialized)
-    {
-        return true;
-    }
-
-    bool first_failure = true;
-    if (pthread_mutex_lock(&client->status_lock) != 0)
-    {
-        return true;
-    }
-
-    if (string_list_contains(&client->status_failure_peer_ids, peer_id_text))
-    {
-        first_failure = false;
-    }
-    else if (lantern_string_list_append(&client->status_failure_peer_ids, peer_id_text) != 0)
-    {
-        first_failure = true;
-    }
-
-    pthread_mutex_unlock(&client->status_lock);
-    return first_failure;
-}
-
 
 /**
  * @brief Log a status request failure with throttling.
@@ -337,20 +266,18 @@ static void peer_status_local_view(
         return;
     }
 
-    uint64_t local_slot = client->has_state
+    uint64_t local_slot = client->state.validator_count > 0u
         ? client->state.latest_block_header.slot
         : 0u;
-    uint64_t local_finalized_slot = client->has_state
+    uint64_t local_finalized_slot = client->state.validator_count > 0u
         ? client->state.latest_finalized.slot
         : 0u;
-    if (client->has_fork_choice)
+    if (client->store.block_len > 0u)
     {
-        LanternRoot fork_head = {0};
         uint64_t fork_slot = 0;
-        if (lantern_fork_choice_current_head(&client->fork_choice, &fork_head) == 0
-            && lantern_fork_choice_block_info(
-                   &client->fork_choice,
-                   &fork_head,
+        if (lantern_fork_choice_block_info(
+                   &client->store,
+                   &client->store.head,
                    &fork_slot,
                    NULL,
                    NULL)
@@ -358,8 +285,7 @@ static void peer_status_local_view(
         {
             local_slot = fork_slot;
         }
-        const LanternCheckpoint *fork_finalized =
-            lantern_fork_choice_latest_finalized(&client->fork_choice);
+        const LanternCheckpoint *fork_finalized = &client->store.latest_finalized;
         if (fork_finalized && !lantern_root_is_zero(&fork_finalized->root))
         {
             local_finalized_slot = fork_finalized->slot;
@@ -421,29 +347,6 @@ static void maybe_seed_head_request_from_status(
         return;
     }
 
-    uint64_t now_ms = monotonic_millis();
-    bool recently_requested = false;
-    if (client->status_lock_initialized && pthread_mutex_lock(&client->status_lock) == 0)
-    {
-        if (!lantern_root_is_zero(&client->sync_last_requested_root)
-            && memcmp(
-                   client->sync_last_requested_root.bytes,
-                   peer_status->head.root.bytes,
-                   LANTERN_ROOT_SIZE)
-                == 0
-            && client->sync_last_requested_root_ms != 0
-            && now_ms >= client->sync_last_requested_root_ms
-            && (now_ms - client->sync_last_requested_root_ms) < LANTERN_BLOCKS_REQUEST_TIMEOUT_MS)
-        {
-            recently_requested = true;
-        }
-        pthread_mutex_unlock(&client->status_lock);
-    }
-    if (recently_requested)
-    {
-        return;
-    }
-
     const LanternRoot roots[1] = {peer_status->head.root};
     const uint32_t depths[1] = {0u};
     if (!lantern_client_try_schedule_blocks_request_batch(
@@ -454,13 +357,6 @@ static void maybe_seed_head_request_from_status(
             1u))
     {
         return;
-    }
-
-    if (client->status_lock_initialized && pthread_mutex_lock(&client->status_lock) == 0)
-    {
-        client->sync_last_requested_root = peer_status->head.root;
-        client->sync_last_requested_root_ms = now_ms;
-        pthread_mutex_unlock(&client->status_lock);
     }
 
     char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
@@ -479,31 +375,6 @@ static void maybe_seed_head_request_from_status(
         local_finalized_slot);
 }
 
-static void network_view_snapshot_locked(
-    struct lantern_client *client,
-    uint64_t *out_head_slot,
-    bool *out_has_head_slot,
-    uint64_t *out_finalized_slot,
-    bool *out_has_finalized_slot)
-{
-    if (out_head_slot)
-    {
-        *out_head_slot = client ? client->network_view.latest_observed_head_slot : 0u;
-    }
-    if (out_has_head_slot)
-    {
-        *out_has_head_slot = client && client->network_view.has_latest_observed_head_slot;
-    }
-    if (out_finalized_slot)
-    {
-        *out_finalized_slot = client ? client->network_view.network_finalized_slot : 0u;
-    }
-    if (out_has_finalized_slot)
-    {
-        *out_has_finalized_slot = client && client->network_view.has_network_finalized_slot;
-    }
-}
-
 static void update_network_view_from_peer_status_locked(
     struct lantern_client *client,
     const LanternStatusMessage *peer_status)
@@ -513,18 +384,16 @@ static void update_network_view_from_peer_status_locked(
         return;
     }
 
-    if (!client->network_view.has_latest_observed_head_slot
-        || peer_status->head.slot > client->network_view.latest_observed_head_slot)
+    if (lantern_root_is_zero(&client->network_view.head.root)
+        || peer_status->head.slot > client->network_view.head.slot)
     {
-        client->network_view.latest_observed_head_slot = peer_status->head.slot;
-        client->network_view.has_latest_observed_head_slot = true;
+        client->network_view.head = peer_status->head;
     }
 
-    if (!client->network_view.has_network_finalized_slot
-        || peer_status->finalized.slot > client->network_view.network_finalized_slot)
+    if (lantern_root_is_zero(&client->network_view.finalized.root)
+        || peer_status->finalized.slot > client->network_view.finalized.slot)
     {
-        client->network_view.network_finalized_slot = peer_status->finalized.slot;
-        client->network_view.has_network_finalized_slot = true;
+        client->network_view.finalized = peer_status->finalized;
     }
 }
 
@@ -560,16 +429,18 @@ static void format_duration_seconds(uint64_t seconds, char *out, size_t out_len)
 static void maybe_log_sync_progress(
     struct lantern_client *client,
     uint64_t local_slot,
-    uint64_t network_head_slot,
-    bool has_network_head,
-    uint64_t network_finalized,
-    bool has_network_finalized,
+    const LanternStatusMessage *network_view,
     bool allow_sync_complete)
 {
-    if (!client)
+    if (!client || !network_view)
     {
         return;
     }
+
+    bool has_network_head = !lantern_root_is_zero(&network_view->head.root);
+    bool has_network_finalized = !lantern_root_is_zero(&network_view->finalized.root);
+    uint64_t network_head_slot = network_view->head.slot;
+    uint64_t network_finalized = network_view->finalized.slot;
 
     uint64_t now_ms = monotonic_millis();
 
@@ -620,28 +491,22 @@ static void maybe_log_sync_progress(
                 }
             }
         }
-        if (state_locked && client->has_fork_choice)
+        if (state_locked && client->store.block_len > 0u)
         {
-            LanternRoot local_head_root = {0};
-            if (lantern_fork_choice_current_head(&client->fork_choice, &local_head_root) == 0)
+            uint64_t fork_slot = 0;
+            if (lantern_fork_choice_block_info(
+                    &client->store,
+                    &client->store.head,
+                    &fork_slot,
+                    NULL,
+                    NULL)
+                == 0)
             {
-                uint64_t fork_slot = 0;
-                if (lantern_fork_choice_block_info(
-                        &client->fork_choice,
-                        &local_head_root,
-                        &fork_slot,
-                        NULL,
-                        NULL)
-                    == 0)
-                {
-                    local_head_slot = fork_slot;
-                }
+                local_head_slot = fork_slot;
             }
-            const LanternCheckpoint *finalized =
-                lantern_fork_choice_latest_finalized(&client->fork_choice);
-            local_finalized_slot = finalized ? finalized->slot : client->state.latest_finalized.slot;
+            local_finalized_slot = client->store.latest_finalized.slot;
         }
-        else if (state_locked && client->has_state)
+        else if (state_locked && client->state.validator_count > 0u)
         {
             local_finalized_slot = client->state.latest_finalized.slot;
         }
@@ -810,26 +675,14 @@ void lantern_client_update_sync_progress(
         return;
     }
 
-    uint64_t network_head = 0;
-    bool has_network_head = false;
-    uint64_t network_finalized = 0;
-    bool has_network_finalized = false;
-    network_view_snapshot_locked(
-        client,
-        &network_head,
-        &has_network_head,
-        &network_finalized,
-        &has_network_finalized);
+    LanternStatusMessage network_view = client->network_view;
 
     pthread_mutex_unlock(&client->status_lock);
 
     maybe_log_sync_progress(
         client,
         local_slot,
-        network_head,
-        has_network_head,
-        network_finalized,
-        has_network_finalized,
+        &network_view,
         true);
 }
 
@@ -869,11 +722,9 @@ static struct lantern_peer_status_entry *lantern_client_update_peer_status_entry
     }
 
     entry->status_request_inflight = false;
-    lantern_client_status_request_update_locked(client, entry, -1);
+    entry->status_request_failed = false;
 
-    string_list_remove(&client->status_failure_peer_ids, peer_id_text);
-
-    bool head_changed = !entry->has_status
+    bool head_changed = entry->last_status_ms == 0u
         || entry->status.head.slot != peer_status->head.slot
         || memcmp(
             entry->status.head.root.bytes,
@@ -882,7 +733,6 @@ static struct lantern_peer_status_entry *lantern_client_update_peer_status_entry
             != 0;
 
     entry->status = *peer_status;
-    entry->has_status = true;
     entry->last_status_ms = monotonic_millis();
 
     if (out_head_changed)
@@ -931,27 +781,14 @@ static void lantern_client_peer_status_update(
     }
 
     update_network_view_from_peer_status_locked(client, peer_status);
-
-    uint64_t network_head_slot = 0;
-    bool has_network_head = false;
-    uint64_t network_finalized_slot = 0;
-    bool has_network_finalized = false;
-    network_view_snapshot_locked(
-        client,
-        &network_head_slot,
-        &has_network_head,
-        &network_finalized_slot,
-        &has_network_finalized);
+    LanternStatusMessage network_view = client->network_view;
 
     pthread_mutex_unlock(&client->status_lock);
 
     maybe_log_sync_progress(
         client,
         local_slot,
-        network_head_slot,
-        has_network_head,
-        network_finalized_slot,
-        has_network_finalized,
+        &network_view,
         true);
 }
 
@@ -1007,7 +844,10 @@ static bool lantern_client_update_blocks_request_tracking(
             {
                 continue;
             }
-            copy_peer_id_text(request->peer_id, out_effective_peer_id, out_effective_peer_id_len);
+            (void)lantern_string_copy(
+                out_effective_peer_id,
+                out_effective_peer_id_len,
+                request->peer_id);
             size_t last = client->active_blocks_request_count - 1u;
             free(request->roots);
             if (i != last)
@@ -1023,7 +863,10 @@ static bool lantern_client_update_blocks_request_tracking(
 
     if (out_effective_peer_id[0] == '\0')
     {
-        copy_peer_id_text(peer_id, out_effective_peer_id, out_effective_peer_id_len);
+        (void)lantern_string_copy(
+            out_effective_peer_id,
+            out_effective_peer_id_len,
+            peer_id);
     }
 
     if (out_effective_peer_id[0] == '\0')
@@ -1124,37 +967,31 @@ int reqresp_build_status(void *context, LanternStatusMessage *out_status)
     }
     struct lantern_client *client = context;
     memset(out_status, 0, sizeof(*out_status));
-    if (!client->has_state)
+    if (client->state.validator_count == 0u)
     {
         return LANTERN_CLIENT_ERR_GENESIS;
     }
 
     out_status->finalized = client->state.latest_finalized;
-    if (client->has_fork_choice)
+    if (client->store.block_len > 0u
+        && !lantern_root_is_zero(&client->store.latest_finalized.root))
     {
-        const LanternCheckpoint *fork_finalized =
-            lantern_fork_choice_latest_finalized(&client->fork_choice);
-        if (fork_finalized && !lantern_root_is_zero(&fork_finalized->root))
-        {
-            out_status->finalized = *fork_finalized;
-        }
+        out_status->finalized = client->store.latest_finalized;
     }
 
     bool head_set = false;
-    if (client->has_fork_choice)
+    if (client->store.block_len > 0u)
     {
-        LanternRoot fork_head = {{0}};
         uint64_t fork_slot = 0;
-        if (lantern_fork_choice_current_head(&client->fork_choice, &fork_head) == 0
-            && lantern_fork_choice_block_info(
-                   &client->fork_choice,
-                   &fork_head,
+        if (lantern_fork_choice_block_info(
+                   &client->store,
+                   &client->store.head,
                    &fork_slot,
                    NULL,
                    NULL)
                 == 0)
         {
-            out_status->head.root = fork_head;
+            out_status->head.root = client->store.head;
             out_status->head.slot = fork_slot;
             head_set = true;
         }
@@ -1180,27 +1017,20 @@ static void reqresp_alias_anchor_checkpoint_if_unset(
     struct lantern_client *client,
     LanternStatusMessage *status)
 {
-    if (!client || !status || !client->has_fork_choice)
+    if (!client || !status || client->store.block_len == 0u)
     {
         return;
     }
 
-    const LanternRoot *anchor_root = lantern_fork_choice_anchor_root(&client->fork_choice);
-    uint64_t anchor_slot = 0;
-    if (!anchor_root
-        || lantern_fork_choice_anchor_slot(&client->fork_choice, &anchor_slot) != 0)
+    if (status->head.slot == client->store.anchor.slot
+        && lantern_root_is_zero(&status->head.root))
     {
-        return;
+        status->head.root = client->store.anchor.root;
     }
-
-    if (status->head.slot == anchor_slot && lantern_root_is_zero(&status->head.root))
-    {
-        status->head.root = *anchor_root;
-    }
-    if (status->finalized.slot == anchor_slot
+    if (status->finalized.slot == client->store.anchor.slot
         && lantern_root_is_zero(&status->finalized.root))
     {
-        status->finalized.root = *anchor_root;
+        status->finalized.root = client->store.anchor.root;
     }
 }
 
@@ -1278,18 +1108,14 @@ void reqresp_status_failure(void *context, const char *peer_id, int error)
     }
     struct lantern_client *client = context;
     char peer_copy[sizeof(((struct lantern_peer_status_entry *)0)->peer_id)];
-    copy_peer_id_text(peer_id, peer_copy, sizeof(peer_copy));
+    (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_id);
     if (error == 0)
     {
         error = LIBP2P_HOST_ERR_INTERNAL;
     }
 
-    if (peer_copy[0] != '\0')
-    {
-        lantern_client_status_request_failed(client, peer_copy);
-    }
-
-    bool first_failure = record_status_failure_peer_id(client, peer_copy);
+    bool first_failure = peer_copy[0] == '\0'
+        || lantern_client_status_request_failed(client, peer_copy);
     log_status_failure(client, peer_copy, error, first_failure);
 
     if (peer_copy[0] != '\0' && error == LANTERN_REQRESP_ERR_STREAM_WRITE
@@ -1401,29 +1227,6 @@ static bool append_pending_block_for_root(
     return appended;
 }
 
-struct reqresp_range_root {
-    uint64_t slot;
-    LanternRoot root;
-};
-
-static size_t fork_choice_find_root_index(
-    const LanternForkChoice *fork_choice,
-    const LanternRoot *root)
-{
-    if (!fork_choice || !root || !fork_choice->blocks)
-    {
-        return SIZE_MAX;
-    }
-    for (size_t i = 0; i < fork_choice->block_len; ++i)
-    {
-        if (memcmp(fork_choice->blocks[i].root.bytes, root->bytes, LANTERN_ROOT_SIZE) == 0)
-        {
-            return i;
-        }
-    }
-    return SIZE_MAX;
-}
-
 static bool block_response_was_accepted(
     struct lantern_client *client,
     const LanternRoot *block_root,
@@ -1488,7 +1291,7 @@ static uint32_t block_response_backfill_depth(
         return depth;
     }
 
-    if (client->backfill.active
+    if (!lantern_root_is_zero(&client->backfill.head.root)
         && memcmp(client->backfill.frontier_root.bytes, block_root->bytes, LANTERN_ROOT_SIZE) == 0)
     {
         depth = client->backfill.frontier_depth;
@@ -1586,33 +1389,6 @@ static void block_import_job_free(struct lantern_async_block_import_job *job)
     free(job);
 }
 
-static struct lantern_async_block_import_job *block_import_job_new(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *block_root,
-    const char *peer_id)
-{
-    if (!client || !block || !block_root)
-    {
-        return NULL;
-    }
-
-    struct lantern_async_block_import_job *job = calloc(1u, sizeof(*job));
-    if (!job)
-    {
-        return NULL;
-    }
-    job->client = client;
-    job->block_root = *block_root;
-    snprintf(job->peer_id, sizeof(job->peer_id), "%s", peer_id ? peer_id : "");
-    if (clone_signed_block(block, &job->block) != 0)
-    {
-        block_import_job_free(job);
-        return NULL;
-    }
-    return job;
-}
-
 static void *block_import_worker_main(void *arg)
 {
     struct lantern_client *client = (struct lantern_client *)arg;
@@ -1642,23 +1418,32 @@ static void *block_import_worker_main(void *arg)
         {
             client->block_import_tail = NULL;
         }
-        if (client->block_import_queue_len > 0u)
-        {
-            client->block_import_queue_len -= 1u;
-        }
+        client->block_import_queue_len -= 1u;
+        bool stopping = client->block_import_stop;
         pthread_mutex_unlock(&client->block_import_lock);
 
-        int rc = import_block_response_now(
-            job->client,
-            &job->block,
-            &job->block_root,
-            job->peer_id);
+        int rc = LANTERN_CLIENT_OK;
+        if (job->cache_aggregated_proofs_only)
+        {
+            if (!stopping)
+            {
+                lantern_client_cache_block_aggregated_proofs(client, &job->block);
+            }
+        }
+        else
+        {
+            rc = import_block_response_now(
+                client,
+                &job->block,
+                &job->block_root,
+                job->peer_id);
+        }
         if (rc != LANTERN_CLIENT_OK)
         {
             lantern_log_warn(
                 "reqresp",
                 &(const struct lantern_log_metadata){
-                    .validator = job->client ? job->client->node_id : NULL,
+                    .validator = client->node_id,
                     .peer = job->peer_id[0] ? job->peer_id : NULL,
                     .has_slot = true,
                     .slot = job->block.block.slot,
@@ -1677,7 +1462,7 @@ lantern_client_error lantern_client_block_importer_start(struct lantern_client *
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
-    if (client->block_import_thread_started)
+    if (client->block_import_sync_initialized)
     {
         return LANTERN_CLIENT_OK;
     }
@@ -1685,49 +1470,37 @@ lantern_client_error lantern_client_block_importer_start(struct lantern_client *
     {
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
-    client->block_import_lock_initialized = true;
     if (pthread_cond_init(&client->block_import_cond, NULL) != 0)
     {
         pthread_mutex_destroy(&client->block_import_lock);
-        client->block_import_lock_initialized = false;
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
-    client->block_import_cond_initialized = true;
+    client->block_import_sync_initialized = true;
     client->block_import_stop = false;
     if (pthread_create(&client->block_import_thread, NULL, block_import_worker_main, client) != 0)
     {
         client->block_import_stop = true;
         pthread_cond_destroy(&client->block_import_cond);
         pthread_mutex_destroy(&client->block_import_lock);
-        client->block_import_cond_initialized = false;
-        client->block_import_lock_initialized = false;
+        client->block_import_sync_initialized = false;
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
-    client->block_import_thread_started = true;
     return LANTERN_CLIENT_OK;
 }
 
 void lantern_client_block_importer_stop(struct lantern_client *client)
 {
-    if (!client)
+    if (!client || !client->block_import_sync_initialized)
     {
         return;
     }
-    if (client->block_import_lock_initialized
-        && pthread_mutex_lock(&client->block_import_lock) == 0)
+    if (pthread_mutex_lock(&client->block_import_lock) == 0)
     {
         client->block_import_stop = true;
-        if (client->block_import_cond_initialized)
-        {
-            pthread_cond_broadcast(&client->block_import_cond);
-        }
+        pthread_cond_broadcast(&client->block_import_cond);
         pthread_mutex_unlock(&client->block_import_lock);
     }
-    if (client->block_import_thread_started)
-    {
-        pthread_join(client->block_import_thread, NULL);
-        client->block_import_thread_started = false;
-    }
+    pthread_join(client->block_import_thread, NULL);
 
     struct lantern_async_block_import_job *job = client->block_import_head;
     while (job)
@@ -1740,16 +1513,9 @@ void lantern_client_block_importer_stop(struct lantern_client *client)
     client->block_import_tail = NULL;
     client->block_import_queue_len = 0u;
 
-    if (client->block_import_cond_initialized)
-    {
-        pthread_cond_destroy(&client->block_import_cond);
-        client->block_import_cond_initialized = false;
-    }
-    if (client->block_import_lock_initialized)
-    {
-        pthread_mutex_destroy(&client->block_import_lock);
-        client->block_import_lock_initialized = false;
-    }
+    pthread_cond_destroy(&client->block_import_cond);
+    pthread_mutex_destroy(&client->block_import_lock);
+    client->block_import_sync_initialized = false;
     client->block_import_stop = true;
 }
 
@@ -1757,7 +1523,7 @@ static int enqueue_block_import_job(
     struct lantern_client *client,
     struct lantern_async_block_import_job *job)
 {
-    if (!client || !job || !client->block_import_thread_started)
+    if (!client || !job || !client->block_import_sync_initialized)
     {
         return -1;
     }
@@ -1765,25 +1531,122 @@ static int enqueue_block_import_job(
     {
         return -1;
     }
-    if (client->block_import_stop
-        || client->block_import_queue_len >= ASYNC_BLOCK_IMPORT_QUEUE_LIMIT)
+    if (client->block_import_stop)
     {
         pthread_mutex_unlock(&client->block_import_lock);
         return -1;
     }
+
+    /* Proof recovery is optional. Keep required req/resp imports ahead of it,
+     * and evict proof work rather than reject an import when the queue is full. */
+    struct lantern_async_block_import_job *evicted = NULL;
+    if (client->block_import_queue_len >= ASYNC_BLOCK_IMPORT_QUEUE_LIMIT)
+    {
+        if (job->cache_aggregated_proofs_only)
+        {
+            pthread_mutex_unlock(&client->block_import_lock);
+            return -1;
+        }
+
+        struct lantern_async_block_import_job *previous = NULL;
+        struct lantern_async_block_import_job *candidate_previous = NULL;
+        for (struct lantern_async_block_import_job *candidate = client->block_import_head;
+             candidate;
+             candidate = candidate->next)
+        {
+            if (candidate->cache_aggregated_proofs_only)
+            {
+                evicted = candidate;
+                candidate_previous = previous;
+            }
+            previous = candidate;
+        }
+        if (!evicted)
+        {
+            pthread_mutex_unlock(&client->block_import_lock);
+            return -1;
+        }
+        if (candidate_previous)
+        {
+            candidate_previous->next = evicted->next;
+        }
+        else
+        {
+            client->block_import_head = evicted->next;
+        }
+        if (client->block_import_tail == evicted)
+        {
+            client->block_import_tail = candidate_previous;
+        }
+        evicted->next = NULL;
+        client->block_import_queue_len -= 1u;
+    }
+
     job->next = NULL;
-    if (client->block_import_tail)
+    if (!job->cache_aggregated_proofs_only && client->block_import_head)
+    {
+        struct lantern_async_block_import_job *previous = NULL;
+        struct lantern_async_block_import_job *queued = client->block_import_head;
+        while (queued && !queued->cache_aggregated_proofs_only)
+        {
+            previous = queued;
+            queued = queued->next;
+        }
+        if (queued)
+        {
+            job->next = queued;
+            if (previous)
+            {
+                previous->next = job;
+            }
+            else
+            {
+                client->block_import_head = job;
+            }
+        }
+        else
+        {
+            client->block_import_tail->next = job;
+            client->block_import_tail = job;
+        }
+    }
+    else if (client->block_import_tail)
     {
         client->block_import_tail->next = job;
+        client->block_import_tail = job;
     }
     else
     {
         client->block_import_head = job;
+        client->block_import_tail = job;
     }
-    client->block_import_tail = job;
     client->block_import_queue_len += 1u;
     pthread_cond_signal(&client->block_import_cond);
     pthread_mutex_unlock(&client->block_import_lock);
+    block_import_job_free(evicted);
+    return 0;
+}
+
+int lantern_client_enqueue_block_aggregated_proofs(
+    struct lantern_client *client,
+    const LanternSignedBlock *block)
+{
+    if (!client || !block)
+    {
+        return -1;
+    }
+    struct lantern_async_block_import_job *job = calloc(1u, sizeof(*job));
+    if (!job)
+    {
+        return -1;
+    }
+    job->cache_aggregated_proofs_only = true;
+    if (clone_signed_block(block, &job->block) != 0
+        || enqueue_block_import_job(client, job) != 0)
+    {
+        block_import_job_free(job);
+        return -1;
+    }
     return 0;
 }
 
@@ -1827,8 +1690,7 @@ int reqresp_collect_blocks(
         return LANTERN_CLIENT_OK;
     }
 
-    LanternSignedBlockList storage_blocks;
-    lantern_signed_block_list_init(&storage_blocks);
+    LanternSignedBlockList storage_blocks = {0};
     if (client->data_dir && client->data_dir[0] != '\0')
     {
         if (lantern_storage_collect_blocks(
@@ -1910,36 +1772,44 @@ int reqresp_collect_blocks_by_range(
     }
 
     struct lantern_client *client = context;
-    struct reqresp_range_root descending[LANTERN_MAX_REQUEST_BLOCKS];
+    LanternRoot descending[LANTERN_MAX_REQUEST_BLOCKS];
     size_t descending_count = 0;
 
     bool state_locked = lantern_client_lock_state(client);
-    if (state_locked && client->has_fork_choice)
+    if (state_locked && client->store.block_len > 0u)
     {
-        LanternRoot head_root = {0};
-        if (lantern_fork_choice_current_head(&client->fork_choice, &head_root) == 0)
+        LanternRoot root = client->store.head;
+        uint64_t previous_slot = 0;
+        bool have_previous = false;
+        for (;;)
         {
-            size_t index = fork_choice_find_root_index(&client->fork_choice, &head_root);
-            for (size_t depth = 0;
-                 index != SIZE_MAX
-                 && index < client->fork_choice.block_len
-                 && depth < client->fork_choice.block_len
-                 && descending_count < LANTERN_MAX_REQUEST_BLOCKS;
-                 ++depth)
+            uint64_t slot = 0;
+            LanternRoot parent_root = {0};
+            bool has_parent = false;
+            if (lantern_fork_choice_block_info(
+                    &client->store,
+                    &root,
+                    &slot,
+                    &parent_root,
+                    &has_parent)
+                != 0
+                || (have_previous && slot >= previous_slot)
+                || slot < start_slot)
             {
-                const struct lantern_fork_choice_block_entry *entry = &client->fork_choice.blocks[index];
-                if (entry->slot < start_slot)
-                {
-                    break;
-                }
-                if ((entry->slot - start_slot) < count && !lantern_root_is_zero(&entry->root))
-                {
-                    descending[descending_count].slot = entry->slot;
-                    descending[descending_count].root = entry->root;
-                    descending_count += 1u;
-                }
-                index = fork_choice_find_root_index(&client->fork_choice, &entry->parent_root);
+                break;
             }
+            if ((slot - start_slot) < count && !lantern_root_is_zero(&root))
+            {
+                descending[descending_count] = root;
+                descending_count += 1u;
+            }
+            if (!has_parent || lantern_root_is_zero(&parent_root))
+            {
+                break;
+            }
+            previous_slot = slot;
+            have_previous = true;
+            root = parent_root;
         }
     }
     lantern_client_unlock_state(client, state_locked);
@@ -1949,58 +1819,59 @@ int reqresp_collect_blocks_by_range(
         return LANTERN_CLIENT_OK;
     }
 
-    struct reqresp_range_root ascending[LANTERN_MAX_REQUEST_BLOCKS];
+    LanternRoot ascending[LANTERN_MAX_REQUEST_BLOCKS];
     size_t root_count = 0;
     for (size_t i = descending_count; i > 0u; --i)
     {
         ascending[root_count++] = descending[i - 1u];
     }
 
+    LanternSignedBlockList collected = {0};
+    int rc = reqresp_collect_blocks(context, ascending, root_count, &collected);
+    if (rc != LANTERN_CLIENT_OK)
+    {
+        lantern_signed_block_list_reset(&collected);
+        return rc;
+    }
+
     bool have_previous = false;
     uint64_t previous_slot = 0;
     LanternRoot previous_root = {0};
-    for (size_t i = 0; i < root_count; ++i)
+    size_t valid_count = 0;
+    for (size_t i = 0; i < root_count && i < collected.length; ++i)
     {
-        LanternSignedBlockList one;
-        lantern_signed_block_list_init(&one);
-        int rc = reqresp_collect_blocks(context, &ascending[i].root, 1u, &one);
-        if (rc != LANTERN_CLIENT_OK)
+        const LanternSignedBlock *block = &collected.blocks[i];
+        if (!signed_block_matches_root(block, &ascending[i])
+            || block->block.slot < start_slot
+            || (block->block.slot - start_slot) >= count
+            || (have_previous && block->block.slot <= previous_slot))
         {
-            lantern_signed_block_list_reset(&one);
-            return rc;
-        }
-        if (one.length == 0u)
-        {
-            lantern_signed_block_list_reset(&one);
-            break;
-        }
-
-        const LanternSignedBlock *block = &one.blocks[0];
-        if (block->block.slot < start_slot || (block->block.slot - start_slot) >= count)
-        {
-            lantern_signed_block_list_reset(&one);
-            break;
-        }
-        if (have_previous && block->block.slot <= previous_slot)
-        {
-            lantern_signed_block_list_reset(&one);
             break;
         }
         if (have_previous
             && memcmp(block->block.parent_root.bytes, previous_root.bytes, LANTERN_ROOT_SIZE) != 0)
         {
-            lantern_signed_block_list_reset(&one);
             break;
         }
-        if (signed_block_list_append_copy(out_blocks, block) != 0)
+        previous_slot = block->block.slot;
+        previous_root = ascending[i];
+        have_previous = true;
+        valid_count += 1u;
+    }
+
+    if (valid_count > 0u)
+    {
+        if (lantern_signed_block_list_resize(&collected, valid_count) != 0)
         {
-            lantern_signed_block_list_reset(&one);
+            lantern_signed_block_list_reset(&collected);
             return LANTERN_CLIENT_ERR_ALLOC;
         }
-        previous_slot = block->block.slot;
-        previous_root = ascending[i].root;
-        have_previous = true;
-        lantern_signed_block_list_reset(&one);
+        lantern_signed_block_list_reset(out_blocks);
+        *out_blocks = collected;
+    }
+    else
+    {
+        lantern_signed_block_list_reset(&collected);
     }
 
     return LANTERN_CLIENT_OK;
@@ -2033,7 +1904,7 @@ int reqresp_handle_block_response(
     {
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
-    if (!client->block_import_thread_started)
+    if (!client->block_import_sync_initialized)
     {
         if (client->block_import_stop)
         {
@@ -2046,13 +1917,16 @@ int reqresp_handle_block_response(
             peer_id);
     }
 
-    struct lantern_async_block_import_job *job = block_import_job_new(
-        client,
-        block,
-        &block_root,
-        peer_id);
+    struct lantern_async_block_import_job *job = calloc(1u, sizeof(*job));
     if (!job)
     {
+        return LANTERN_CLIENT_ERR_ALLOC;
+    }
+    job->block_root = block_root;
+    snprintf(job->peer_id, sizeof(job->peer_id), "%s", peer_id ? peer_id : "");
+    if (clone_signed_block(block, &job->block) != 0)
+    {
+        block_import_job_free(job);
         return LANTERN_CLIENT_ERR_ALLOC;
     }
     if (enqueue_block_import_job(client, job) == 0)
@@ -2123,7 +1997,7 @@ static void lantern_client_on_peer_status(
     }
 
     char peer_copy[sizeof(((struct lantern_peer_status_entry *)0)->peer_id)];
-    copy_peer_id_text(peer_id, peer_copy, sizeof(peer_copy));
+    (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_id);
 
     uint64_t local_slot = 0;
     uint64_t local_finalized_slot = 0;
@@ -2280,57 +2154,4 @@ void lantern_client_on_blocks_request_complete_batch_with_id(
             peer_for_logs,
             first_root);
     }
-}
-
-void lantern_client_on_blocks_request_complete_batch(
-    struct lantern_client *client,
-    const char *peer_id,
-    const LanternRoot *request_roots,
-    size_t root_count,
-    enum lantern_blocks_request_outcome outcome)
-{
-    lantern_client_on_blocks_request_complete_batch_with_id(
-        client,
-        0u,
-        peer_id,
-        request_roots,
-        root_count,
-        outcome);
-}
-
-/**
- * Handle completion of a blocks request (single root).
- *
- * @spec subspecs/networking/reqresp - Request lifecycle
- *
- * @param client        Client instance
- * @param peer_id       Peer ID string
- * @param request_root  Root that was requested
- * @param outcome       Request outcome
- *
- * @note Thread safety: Acquires status_lock and, after releasing it, may
- * acquire pending_lock when a successful response schedules more backfill.
- */
-void lantern_client_on_blocks_request_complete(
-    struct lantern_client *client,
-    const char *peer_id,
-    const LanternRoot *request_root,
-    enum lantern_blocks_request_outcome outcome)
-{
-    if (!request_root)
-    {
-        lantern_client_on_blocks_request_complete_batch(
-            client,
-            peer_id,
-            NULL,
-            0u,
-            outcome);
-        return;
-    }
-    lantern_client_on_blocks_request_complete_batch(
-        client,
-        peer_id,
-        request_root,
-        1u,
-        outcome);
 }

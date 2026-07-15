@@ -15,7 +15,6 @@
  *       3. pending_lock
  *       4. validator_lock
  *       5. connection_lock
- *       6. peer_vote_lock
  */
 
 #ifndef LANTERN_CLIENT_INTERNAL_H
@@ -47,16 +46,6 @@ extern "C" {
  * @note Thread safety: This function is thread-safe
  */
 uint64_t monotonic_millis(void);
-
-
-/**
- * Get current wall clock time in seconds.
- *
- * @return Current time as Unix timestamp
- *
- * @note Thread safety: This function is thread-safe
- */
-uint64_t validator_wall_time_now_seconds(void);
 
 
 /**
@@ -93,26 +82,6 @@ void validator_sleep_ms(uint32_t ms);
 void format_root_hex(const LanternRoot *root, char *out, size_t out_len);
 
 
-/**
- * Check if a root is all zeros.
- *
- * @param root  Root to check
- * @return true if root is NULL or all zero bytes
- *
- * @note Thread safety: This function is thread-safe
- */
-bool lantern_root_is_zero(const LanternRoot *root);
-
-
-/**
- * Check if validator pubkey bytes are all zeros.
- *
- * @param pubkey  Pubkey bytes to check (LANTERN_VALIDATOR_PUBKEY_SIZE bytes)
- * @return true if pubkey is NULL or all zero bytes
- *
- * @note Thread safety: This function is thread-safe
- */
-bool lantern_validator_pubkey_is_zero(const uint8_t *pubkey);
 const char *lantern_sync_state_name(LanternSyncState state);
 
 
@@ -163,7 +132,6 @@ int load_node_key_bytes(const struct lantern_client_options *options, uint8_t ou
  *
  * @note Thread safety: This function is thread-safe
  */
-bool string_list_contains(const struct lantern_string_list *list, const char *value);
 
 
 /**
@@ -174,7 +142,6 @@ bool string_list_contains(const struct lantern_string_list *list, const char *va
  *
  * @note Thread safety: Caller must hold appropriate lock
  */
-void string_list_remove(struct lantern_string_list *list, const char *value);
 
 
 /**
@@ -191,12 +158,11 @@ const char *connection_reason_text(int reason);
  * Decide whether a persisted state is too stale to trust when checkpoint sync
  * is available.
  *
- * Computes the expected wall-clock slot from genesis time and slot duration,
- * then compares it against the persisted state's slot.
+ * Computes the expected wall-clock slot from genesis time, then compares it
+ * against the persisted state's slot.
  *
  * @param persisted_state             Persisted state loaded from storage
  * @param genesis_time                Chain genesis Unix time in seconds
- * @param slot_duration_seconds       Slot duration in seconds
  * @param now_seconds                 Current Unix time in seconds
  * @param out_expected_current_slot   Optional output for expected slot
  * @param out_gap                     Optional output for slot gap
@@ -207,7 +173,6 @@ const char *connection_reason_text(int reason);
 bool lantern_client_persisted_state_is_stale_for_checkpoint_sync(
     const LanternState *persisted_state,
     uint64_t genesis_time,
-    uint32_t slot_duration_seconds,
     uint64_t now_seconds,
     uint64_t *out_expected_current_slot,
     uint64_t *out_gap);
@@ -261,6 +226,12 @@ int lantern_client_advance_fork_choice_time_locked(
 /* ============================================================================
  * Lock Functions
  * ============================================================================ */
+
+void lantern_client_unlock_mutex(
+    pthread_mutex_t *mutex,
+    const char *validator_id,
+    const char *name,
+    const char *component);
 
 /**
  * Acquire the client state lock.
