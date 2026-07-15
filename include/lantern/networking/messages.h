@@ -31,10 +31,8 @@ typedef struct {
     size_t capacity;
 } LanternSignedBlockList;
 
-void lantern_blocks_by_root_request_init(LanternBlocksByRootRequest *req);
 void lantern_blocks_by_root_request_reset(LanternBlocksByRootRequest *req);
 
-void lantern_signed_block_list_init(LanternSignedBlockList *resp);
 void lantern_signed_block_list_reset(LanternSignedBlockList *resp);
 int lantern_signed_block_list_resize(LanternSignedBlockList *resp, size_t new_length);
 

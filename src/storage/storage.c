@@ -91,10 +91,6 @@ static int join_path(const char *base, const char *leaf, char **out_path) {
     return 0;
 }
 
-static void free_path(char *path) {
-    free(path);
-}
-
 static int write_atomic_file(const char *path, const uint8_t *data, size_t data_len) {
     if (!path || !data || data_len == 0) {
         return -1;
@@ -235,13 +231,13 @@ static int ensure_storage_dir(
     }
     char *path = NULL;
     if (storage_dir_path(data_dir, kind, &path) != 0 || ensure_directory(path) != 0) {
-        free_path(path);
+        free(path);
         return -1;
     }
     if (out_path) {
         *out_path = path;
     } else {
-        free_path(path);
+        free(path);
     }
     return 0;
 }
@@ -264,7 +260,7 @@ static int storage_dir_file_path(
     if (rc == 0) {
         rc = join_path(dir, filename, out_path);
     }
-    free_path(dir);
+    free(dir);
     return rc;
 }
 
@@ -297,7 +293,7 @@ static int storage_root_file_path(
 }
 
 static int storage_write_state_path(const char *path, const LanternState *state) {
-    if (!path || !state || state->config.num_validators == 0) {
+    if (!path || !state || state->validator_count == 0) {
         return -1;
     }
 
@@ -321,65 +317,6 @@ static int storage_write_state_path(const char *path, const LanternState *state)
 
 cleanup:
     free(buffer);
-    return rc;
-}
-
-static int storage_save_state_file(
-    const char *data_dir,
-    const char *filename,
-    const LanternState *state) {
-    if (!data_dir || !filename) {
-        return -1;
-    }
-
-    char *path = NULL;
-    int rc = join_path(data_dir, filename, &path);
-    if (rc == 0) {
-        rc = storage_write_state_path(path, state);
-    }
-    free_path(path);
-    return rc;
-}
-
-static int storage_load_state_file(
-    const char *data_dir,
-    const char *filename,
-    LanternState *state) {
-    if (!data_dir || !filename || !state) {
-        return -1;
-    }
-
-    int rc = -1;
-    char *path = NULL;
-    uint8_t *data = NULL;
-    size_t data_len = 0;
-    LanternState decoded;
-    lantern_state_init(&decoded);
-    bool decoded_owned = true;
-
-    if (join_path(data_dir, filename, &path) != 0) {
-        goto cleanup;
-    }
-    rc = read_file_buffer(path, &data, &data_len);
-    if (rc != 0) {
-        goto cleanup;
-    }
-    if (lantern_ssz_decode_state(&decoded, data, data_len) != SSZ_SUCCESS
-        || decoded.config.num_validators == 0) {
-        rc = -1;
-        goto cleanup;
-    }
-    lantern_state_reset(state);
-    *state = decoded;
-    decoded_owned = false;
-    rc = 0;
-
-cleanup:
-    free_path(path);
-    free(data);
-    if (decoded_owned) {
-        lantern_state_reset(&decoded);
-    }
     return rc;
 }
 
@@ -413,7 +350,7 @@ static int storage_load_root_bytes(
     data = NULL;
 
 cleanup:
-    free_path(path);
+    free(path);
     free(data);
     return rc;
 }
@@ -482,7 +419,16 @@ int lantern_storage_prepare(const char *data_dir) {
  * @return -1 on invalid parameters, encoding failure, or filesystem errors.
  */
 int lantern_storage_save_state(const char *data_dir, const LanternState *state) {
-    return storage_save_state_file(data_dir, LANTERN_STORAGE_STATE_FILE, state);
+    if (!data_dir) {
+        return -1;
+    }
+    char *path = NULL;
+    int rc = join_path(data_dir, LANTERN_STORAGE_STATE_FILE, &path);
+    if (rc == 0) {
+        rc = storage_write_state_path(path, state);
+    }
+    free(path);
+    return rc;
 }
 
 /**
@@ -497,13 +443,43 @@ int lantern_storage_save_state(const char *data_dir, const LanternState *state) 
  * @return -1 on invalid parameters or decode/validation errors.
  */
 int lantern_storage_load_state(const char *data_dir, LanternState *state) {
-    return storage_load_state_file(data_dir, LANTERN_STORAGE_STATE_FILE, state);
+    if (!data_dir || !state) {
+        return -1;
+    }
+
+    int rc = -1;
+    char *path = NULL;
+    uint8_t *data = NULL;
+    size_t data_len = 0;
+    LanternState decoded;
+    lantern_state_init(&decoded);
+
+    if (join_path(data_dir, LANTERN_STORAGE_STATE_FILE, &path) != 0) {
+        goto cleanup;
+    }
+    rc = read_file_buffer(path, &data, &data_len);
+    if (rc != 0) {
+        goto cleanup;
+    }
+    if (lantern_ssz_decode_state(&decoded, data, data_len) != SSZ_SUCCESS
+        || decoded.validator_count == 0) {
+        rc = -1;
+        goto cleanup;
+    }
+    lantern_state_reset(state);
+    *state = decoded;
+    decoded = (LanternState){0};
+    rc = 0;
+
+cleanup:
+    free(path);
+    free(data);
+    lantern_state_reset(&decoded);
+    return rc;
 }
 
-static bool block_root_alias_matches_expected(
-    const LanternSignedBlock *block,
-    const LanternRoot *expected_root) {
-    if (!block || !expected_root) {
+static bool block_is_synthetic_anchor_alias(const LanternSignedBlock *block) {
+    if (!block) {
         return false;
     }
 
@@ -600,7 +576,7 @@ static int storage_store_block_internal(
 
 cleanup:
     free(buffer);
-    free_path(block_path);
+    free(block_path);
     return rc;
 }
 
@@ -642,7 +618,7 @@ int lantern_storage_store_state_for_root(
     const char *data_dir,
     const LanternRoot *root,
     const LanternState *state) {
-    if (!data_dir || !root || !state || state->config.num_validators == 0) {
+    if (!data_dir || !root || !state || state->validator_count == 0) {
         return -1;
     }
 
@@ -658,7 +634,7 @@ int lantern_storage_store_state_for_root(
     if (rc == 0) {
         rc = storage_write_state_path(state_path, state);
     }
-    free_path(state_path);
+    free(state_path);
     return rc;
 }
 
@@ -734,10 +710,10 @@ static int prune_block_state_pair(
                 0)
                 != 0
             || remove_storage_path(path, &prune->pruned) != 0) {
-            free_path(path);
+            free(path);
             return -1;
         }
-        free_path(path);
+        free(path);
     }
     return 0;
 }
@@ -828,7 +804,7 @@ int lantern_storage_collect_blocks(
         uint8_t *data = NULL;
         size_t data_len = 0;
         const int read_rc = read_file_buffer(block_path, &data, &data_len);
-        free_path(block_path);
+        free(block_path);
         if (read_rc != 0) {
             lantern_log_debug(
                 "storage",
@@ -855,7 +831,7 @@ int lantern_storage_collect_blocks(
             goto cleanup;
         }
         if (memcmp(computed.bytes, roots[i].bytes, LANTERN_ROOT_SIZE) != 0) {
-            if (!block_root_alias_matches_expected(dest, &roots[i])) {
+            if (!block_is_synthetic_anchor_alias(dest)) {
                 free(data);
                 goto cleanup;
             }
@@ -941,7 +917,7 @@ int lantern_storage_iterate_blocks(
         uint8_t *data = NULL;
         size_t data_len = 0;
         const int read_rc = read_file_buffer(block_path, &data, &data_len);
-        free_path(block_path);
+        free(block_path);
         if (read_rc != 0) {
             if (read_rc == 1) {
                 continue;
@@ -950,16 +926,16 @@ int lantern_storage_iterate_blocks(
             break;
         }
         LanternSignedBlock block;
-        lantern_signed_block_with_attestation_init(&block);
+        lantern_signed_block_init(&block);
         if (lantern_ssz_decode_signed_block(&block, data, data_len) != SSZ_SUCCESS) {
-            lantern_signed_block_with_attestation_reset(&block);
+            lantern_signed_block_reset(&block);
             free(data);
             rc = -1;
             break;
         }
         LanternRoot computed_root;
         if (lantern_hash_tree_root_block(&block.block, &computed_root) != SSZ_SUCCESS) {
-            lantern_signed_block_with_attestation_reset(&block);
+            lantern_signed_block_reset(&block);
             free(data);
             rc = -1;
             break;
@@ -978,8 +954,8 @@ int lantern_storage_iterate_blocks(
         if (have_root_from_filename) {
             root_for_visitor = &root_from_filename;
             if (memcmp(computed_root.bytes, root_from_filename.bytes, LANTERN_ROOT_SIZE) != 0) {
-                if (!block_root_alias_matches_expected(&block, &root_from_filename)) {
-                    lantern_signed_block_with_attestation_reset(&block);
+                if (!block_is_synthetic_anchor_alias(&block)) {
+                    lantern_signed_block_reset(&block);
                     free(data);
                     rc = -1;
                     break;
@@ -1013,7 +989,7 @@ int lantern_storage_iterate_blocks(
             }
         }
         const int visit_rc = visitor(&block, root_for_visitor, context);
-        lantern_signed_block_with_attestation_reset(&block);
+        lantern_signed_block_reset(&block);
         free(data);
         if (visit_rc != 0) {
             rc = visit_rc;
@@ -1025,6 +1001,6 @@ cleanup:
     if (dir) {
         closedir(dir);
     }
-    free_path(blocks_dir);
+    free(blocks_dir);
     return rc;
 }

@@ -75,13 +75,34 @@ int lantern_string_list_append(struct lantern_string_list *list, const char *val
     return 0;
 }
 
+bool lantern_string_list_contains(const struct lantern_string_list *list, const char *value) {
+    if (!list || !value) {
+        return false;
+    }
+    for (size_t i = 0; i < list->len; ++i) {
+        if (list->items[i] && strcmp(list->items[i], value) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int lantern_string_list_append_unique(struct lantern_string_list *list, const char *value) {
+    if (!list || !value) {
+        return -1;
+    }
+    if (*value == '\0' || lantern_string_list_contains(list, value)) {
+        return 0;
+    }
+    return lantern_string_list_append(list, value);
+}
+
 int lantern_string_list_copy(struct lantern_string_list *dst, const struct lantern_string_list *src) {
     if (!dst || !src) {
         return -1;
     }
 
     lantern_string_list_reset(dst);
-    lantern_string_list_init(dst);
 
     if (src->len == 0) {
         return 0;

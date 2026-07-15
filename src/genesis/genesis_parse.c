@@ -20,7 +20,6 @@
 #include <string.h>
 
 #include "internal/yaml_parser.h"
-#include "lantern/support/secure_mem.h"
 #include "lantern/support/strings.h"
 
 static const size_t GENESIS_LINE_BUFFER_LEN = 2048;
@@ -36,7 +35,6 @@ static const char *const CHAIN_CONFIG_FIELD_PROPOSAL_PUBKEY = "proposal_pubkey";
 
 static const char *const VALIDATOR_CONFIG_ARRAY_VALIDATORS = "validators";
 static const char *const VALIDATOR_CONFIG_FIELD_NAME = "name";
-static const char *const VALIDATOR_CONFIG_FIELD_PRIVKEY = "privkey";
 static const char *const VALIDATOR_CONFIG_FIELD_COUNT = "count";
 static const char *const VALIDATOR_CONFIG_FIELD_IP = "ip";
 static const char *const VALIDATOR_CONFIG_FIELD_QUIC = "quic";
@@ -99,8 +97,6 @@ static int parse_bool(const char *value, int *ok)
 /**
  * Free resources held by a validator config entry.
  *
- * Clears any sensitive material (privkey hex) before freeing.
- *
  * @param entry Entry to reset.
  *
  * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to entry.
@@ -113,16 +109,6 @@ static void free_validator_config_entry(struct lantern_validator_config_entry *e
     }
 
     free(entry->name);
-
-    if (entry->privkey_hex)
-    {
-        size_t len = strlen(entry->privkey_hex);
-        if (len > 0)
-        {
-            lantern_secure_zero(entry->privkey_hex, len);
-        }
-    }
-    free(entry->privkey_hex);
     free(entry->enr.ip);
     free(entry->xmss_dir);
     free(entry->indices);
@@ -165,8 +151,8 @@ void genesis_free_validator_config(struct lantern_validator_config *config)
  * Parse chain configuration scalars from a chain config file.
  *
  * Parses the top-level `GENESIS_TIME` and validator-count scalar
- * (`VALIDATOR_COUNT` or `NUM_VALIDATORS`). Any prior packed pubkeys in
- * `config` are freed and the pubkey fields are reset.
+ * (`VALIDATOR_COUNT` or `NUM_VALIDATORS`). Any prior validator registry in
+ * `config` is freed and reset.
  *
  * @spec Lantern devnet genesis artifact files (lean quickstart).
  *
@@ -191,10 +177,8 @@ int genesis_parse_chain_config(const char *path, struct lantern_chain_config *co
     config->validator_count = 0;
     config->attestation_committee_count = 0;
 
-    free(config->validator_attestation_pubkeys);
-    config->validator_attestation_pubkeys = NULL;
-    free(config->validator_proposal_pubkeys);
-    config->validator_proposal_pubkeys = NULL;
+    free(config->validators);
+    config->validators = NULL;
 
     FILE *fp = fopen(path, "r");
     if (!fp)
@@ -273,7 +257,7 @@ int genesis_parse_chain_config(const char *path, struct lantern_chain_config *co
 
 
 /**
- * Parse genesis validator pubkeys from a chain config file.
+ * Parse genesis validators from a chain config file.
  *
  * Supports the dual-key object format:
  *
@@ -281,14 +265,13 @@ int genesis_parse_chain_config(const char *path, struct lantern_chain_config *co
  *     - attestation_pubkey: 0x...
  *       proposal_pubkey: 0x...
  *
- * On success, any non-NULL output arrays are caller-owned and must be freed
- * with `free()`.
+ * On success, the returned registry is caller-owned and must be freed with
+ * `free()`.
  *
  * @spec Lantern devnet genesis artifact files (lean quickstart).
  *
  * @param path                     Path to the chain config YAML file.
- * @param out_attestation_pubkeys  Output pointer for packed attestation pubkeys.
- * @param out_proposal_pubkeys     Output pointer for packed proposal pubkeys.
+ * @param out_validators           Output pointer for the validator registry.
  * @param out_count                Output pointer for the validator count.
  *
  * @return LANTERN_GENESIS_OK on success.
@@ -300,19 +283,17 @@ int genesis_parse_chain_config(const char *path, struct lantern_chain_config *co
  *
  * @note Thread safety: Thread-safe if callers provide exclusive access to outputs.
  */
-int genesis_parse_genesis_validator_pubkeys(
+int genesis_parse_genesis_validators(
     const char *path,
-    uint8_t **out_attestation_pubkeys,
-    uint8_t **out_proposal_pubkeys,
+    LanternValidator **out_validators,
     size_t *out_count)
 {
-    if (!path || !out_attestation_pubkeys || !out_proposal_pubkeys || !out_count)
+    if (!path || !out_validators || !out_count)
     {
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
 
-    *out_attestation_pubkeys = NULL;
-    *out_proposal_pubkeys = NULL;
+    *out_validators = NULL;
     *out_count = 0;
 
     size_t object_count = 0;
@@ -326,18 +307,14 @@ int genesis_parse_genesis_validator_pubkeys(
         return LANTERN_GENESIS_OK;
     }
 
-    if (object_count > SIZE_MAX / LANTERN_VALIDATOR_PUBKEY_SIZE)
+    if (object_count > SIZE_MAX / sizeof(LanternValidator))
     {
         lantern_yaml_free_objects(objects, object_count);
         return LANTERN_GENESIS_ERR_OVERFLOW;
     }
-    size_t pubkeys_len = object_count * LANTERN_VALIDATOR_PUBKEY_SIZE;
-    uint8_t *attestation_pubkeys = malloc(pubkeys_len);
-    uint8_t *proposal_pubkeys = malloc(pubkeys_len);
-    if (!attestation_pubkeys || !proposal_pubkeys)
+    LanternValidator *validators = calloc(object_count, sizeof(*validators));
+    if (!validators)
     {
-        free(attestation_pubkeys);
-        free(proposal_pubkeys);
         lantern_yaml_free_objects(objects, object_count);
         return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
     }
@@ -369,13 +346,14 @@ int genesis_parse_genesis_validator_pubkeys(
 
         result = genesis_decode_validator_pubkey_hex(
             attestation_hex,
-            attestation_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE));
+            validators[i].attestation_pubkey);
         if (result == LANTERN_GENESIS_OK)
         {
             result = genesis_decode_validator_pubkey_hex(
                 proposal_hex,
-                proposal_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE));
+                validators[i].proposal_pubkey);
         }
+        validators[i].index = (uint64_t)i;
 
         free(attestation_hex);
         free(proposal_hex);
@@ -393,13 +371,11 @@ int genesis_parse_genesis_validator_pubkeys(
 
     if (result != LANTERN_GENESIS_OK)
     {
-        free(attestation_pubkeys);
-        free(proposal_pubkeys);
+        free(validators);
         return result;
     }
 
-    *out_attestation_pubkeys = attestation_pubkeys;
-    *out_proposal_pubkeys = proposal_pubkeys;
+    *out_validators = validators;
     *out_count = object_count;
     return LANTERN_GENESIS_OK;
 }
@@ -433,7 +409,6 @@ static int parse_validator_config_entry(
     }
 
     const char *name_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_NAME);
-    const char *priv_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_PRIVKEY);
     const char *count_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_COUNT);
     const char *ip_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_IP);
     const char *quic_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_QUIC);
@@ -443,8 +418,7 @@ static int parse_validator_config_entry(
     const char *subnet_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_SUBNET);
 
     entry->name = genesis_dup_trimmed(name_val);
-    entry->privkey_hex = genesis_dup_trimmed(priv_val);
-    if (!entry->name || !entry->privkey_hex)
+    if (!entry->name)
     {
         return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
     }

@@ -435,11 +435,11 @@ static int test_gossip_vote_metrics_attribute_sender(void)
         != 0) {
         return 1;
     }
-    if (pthread_mutex_init(&client.peer_vote_lock, NULL) != 0) {
-        fprintf(stderr, "failed to initialize peer vote metrics lock\n");
+    if (pthread_mutex_init(&client.status_lock, NULL) != 0) {
+        fprintf(stderr, "failed to initialize peer status lock\n");
         goto cleanup;
     }
-    client.peer_vote_lock_initialized = true;
+    client.status_lock_initialized = true;
     client.sync_state = LANTERN_SYNC_STATE_SYNCED;
     if (seed_test_mesh(&client.gossip) != 0) {
         fprintf(stderr, "failed to seed multi-topic gossip mesh\n");
@@ -506,13 +506,13 @@ static int test_gossip_vote_metrics_attribute_sender(void)
 cleanup:
     free(body);
     lantern_gossipsub_service_reset(&client.gossip);
-    free(client.peer_vote_stats);
-    client.peer_vote_stats = NULL;
-    client.peer_vote_stats_len = 0u;
-    client.peer_vote_stats_cap = 0u;
-    if (client.peer_vote_lock_initialized) {
-        pthread_mutex_destroy(&client.peer_vote_lock);
-        client.peer_vote_lock_initialized = false;
+    free(client.peer_status_entries);
+    client.peer_status_entries = NULL;
+    client.peer_status_count = 0u;
+    client.peer_status_capacity = 0u;
+    if (client.status_lock_initialized) {
+        pthread_mutex_destroy(&client.status_lock);
+        client.status_lock_initialized = false;
     }
     client_test_teardown_vote_validation_client(&client, pub, secret);
     return rc;
@@ -565,11 +565,6 @@ static int test_gossip_aggregated_attestation_caches_valid_proof(void)
         fprintf(stderr, "valid aggregated attestation should remain pending until migration\n");
         goto cleanup_attestation;
     }
-    if (client.fork_choice.attestation_store != &client.store) {
-        fprintf(stderr, "fork choice should expose attached aggregated attestation store views\n");
-        goto cleanup_attestation;
-    }
-
     LanternRoot data_root;
     if (lantern_hash_tree_root_attestation_data(&attestation.data, &data_root) != SSZ_SUCCESS) {
         fprintf(stderr, "failed to hash attestation data root\n");
@@ -583,36 +578,9 @@ static int test_gossip_aggregated_attestation_caches_valid_proof(void)
         fprintf(stderr, "cached aggregated proof root mismatch\n");
         goto cleanup_attestation;
     }
-    if (!client.fork_choice.attestation_store
-        || client.fork_choice.attestation_store->new_aggregated_payloads.length != 1
-        || !client.fork_choice.attestation_store->new_aggregated_payloads.entries) {
-        fprintf(stderr, "fork choice new aggregated payload pool missing gossip proof\n");
-        goto cleanup_attestation;
-    }
-    if (client.fork_choice.attestation_store->attestation_data_by_root.length != 1
-        || !client.fork_choice.attestation_store->attestation_data_by_root.entries) {
-        fprintf(stderr, "fork choice attestation data map missing gossip attestation data\n");
-        goto cleanup_attestation;
-    }
-    if (memcmp(
-            client.fork_choice.attestation_store->new_aggregated_payloads.entries[0].data_root.bytes,
-            data_root.bytes,
-            LANTERN_ROOT_SIZE)
-        != 0) {
-        fprintf(stderr, "fork choice aggregated payload root mismatch\n");
-        goto cleanup_attestation;
-    }
-    if (memcmp(
-            client.fork_choice.attestation_store->attestation_data_by_root.entries[0].data_root.bytes,
-            data_root.bytes,
-            LANTERN_ROOT_SIZE)
-        != 0) {
-        fprintf(stderr, "fork choice attestation data root mismatch\n");
-        goto cleanup_attestation;
-    }
-    if (client.fork_choice.attestation_store->attestation_data_by_root.entries[0].data.target.slot
+    if (client.store.new_aggregated_payloads.entries[0].data.target.slot
         != attestation.data.target.slot) {
-        fprintf(stderr, "fork choice attestation data target slot mismatch\n");
+        fprintf(stderr, "cached attestation data target slot mismatch\n");
         goto cleanup_attestation;
     }
 

@@ -24,58 +24,56 @@ struct block_signature_fixture {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub;
     struct PQSignatureSchemeSecretKey *secret;
-    uint8_t *validator_keypairs;
+    LanternValidator *validators;
     char data_dir_template[TEST_TEMP_PATH_CAPACITY];
 };
 
 static int enable_signature_verification_keys(
     struct lantern_client *client,
-    uint8_t **out_keypairs)
+    LanternValidator **out_validators)
 {
-    if (!client || !out_keypairs) {
+    if (!client || !out_validators) {
         return -1;
     }
     size_t validator_count = lantern_state_validator_count(&client->state);
     if (validator_count == 0) {
         return -1;
     }
-    if (validator_count > (SIZE_MAX / 2u) / LANTERN_VALIDATOR_PUBKEY_SIZE) {
+    if (validator_count > SIZE_MAX / sizeof(LanternValidator)) {
         return -1;
     }
-    size_t key_bytes = validator_count * LANTERN_VALIDATOR_PUBKEY_SIZE;
-    uint8_t *keypairs = malloc(key_bytes * 2u);
-    if (!keypairs) {
+    LanternValidator *validators = malloc(validator_count * sizeof(*validators));
+    if (!validators) {
         return -1;
     }
     for (size_t i = 0; i < validator_count; ++i) {
         const uint8_t *attestation = lantern_state_validator_attestation_pubkey(&client->state, i);
         const uint8_t *proposal = lantern_state_validator_proposal_pubkey(&client->state, i);
         if (!attestation || !proposal) {
-            free(keypairs);
+            free(validators);
             return -1;
         }
-        memcpy(keypairs + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), attestation, LANTERN_VALIDATOR_PUBKEY_SIZE);
-        memcpy(keypairs + key_bytes + (i * LANTERN_VALIDATOR_PUBKEY_SIZE), proposal, LANTERN_VALIDATOR_PUBKEY_SIZE);
+        memcpy(validators[i].attestation_pubkey, attestation, LANTERN_VALIDATOR_PUBKEY_SIZE);
+        memcpy(validators[i].proposal_pubkey, proposal, LANTERN_VALIDATOR_PUBKEY_SIZE);
+        validators[i].index = i;
     }
     client->genesis.chain_config.validator_count = validator_count;
-    client->genesis.chain_config.validator_attestation_pubkeys = keypairs;
-    client->genesis.chain_config.validator_proposal_pubkeys = keypairs + key_bytes;
-    *out_keypairs = keypairs;
+    client->genesis.chain_config.validators = validators;
+    *out_validators = validators;
     return 0;
 }
 
 static void disable_signature_verification_keys(
     struct lantern_client *client,
-    uint8_t **keypairs)
+    LanternValidator **validators)
 {
-    if (!client || !keypairs) {
+    if (!client || !validators) {
         return;
     }
-    free(*keypairs);
-    *keypairs = NULL;
+    free(*validators);
+    *validators = NULL;
     client->genesis.chain_config.validator_count = 0;
-    client->genesis.chain_config.validator_attestation_pubkeys = NULL;
-    client->genesis.chain_config.validator_proposal_pubkeys = NULL;
+    client->genesis.chain_config.validators = NULL;
 }
 
 static int build_devnet5_block_proof(
@@ -83,10 +81,10 @@ static int build_devnet5_block_proof(
     const LanternState *state,
     LanternSignedBlock *block,
     const LanternRoot *block_root,
-    const LanternAttestationSignatures *attestation_proofs,
+    const struct lantern_aggregated_payload_pool *attestation_payloads,
     const LanternSignature *proposer_signature)
 {
-    if (!fixture || !state || !block || !block_root || !attestation_proofs
+    if (!fixture || !state || !block || !block_root || !attestation_payloads
         || !proposer_signature) {
         return -1;
     }
@@ -127,7 +125,7 @@ static int build_devnet5_block_proof(
     if (!lantern_signature_merge_block_type2_proof(
             state,
             &block->block,
-            attestation_proofs,
+            attestation_payloads,
             &proposer_proof,
             &block->proof)) {
         goto cleanup;
@@ -159,7 +157,7 @@ static int setup_block_signature_fixture(
         != 0) {
         return -1;
     }
-    if (enable_signature_verification_keys(&fixture->client, &fixture->validator_keypairs) != 0) {
+    if (enable_signature_verification_keys(&fixture->client, &fixture->validators) != 0) {
         client_test_teardown_vote_validation_client(&fixture->client, fixture->pub, fixture->secret);
         fixture->pub = NULL;
         fixture->secret = NULL;
@@ -171,7 +169,7 @@ static int setup_block_signature_fixture(
         "/tmp/lantern_block_sig_XXXXXX");
     fixture->client.data_dir = mkdtemp(fixture->data_dir_template);
     if (!fixture->client.data_dir) {
-        disable_signature_verification_keys(&fixture->client, &fixture->validator_keypairs);
+        disable_signature_verification_keys(&fixture->client, &fixture->validators);
         client_test_teardown_vote_validation_client(&fixture->client, fixture->pub, fixture->secret);
         fixture->pub = NULL;
         fixture->secret = NULL;
@@ -185,7 +183,7 @@ static void teardown_block_signature_fixture(struct block_signature_fixture *fix
     if (!fixture) {
         return;
     }
-    disable_signature_verification_keys(&fixture->client, &fixture->validator_keypairs);
+    disable_signature_verification_keys(&fixture->client, &fixture->validators);
     if (fixture->client.data_dir && fixture->client.data_dir[0] != '\0') {
         char cleanup_cmd[TEST_TEMP_PATH_CAPACITY + 16];
         int written = snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf %s", fixture->client.data_dir);
@@ -308,16 +306,17 @@ static int build_signed_block_for_import(
     }
 
     int rc = -1;
-    LanternAttestationSignatures attestation_proofs;
-    lantern_attestation_signatures_init(&attestation_proofs);
+    struct lantern_aggregated_payload_pool attestation_payloads = {0};
+    LanternAggregatedSignatureProof attestation_proof;
+    lantern_aggregated_signature_proof_init(&attestation_proof);
 
-    lantern_signed_block_with_attestation_init(out_block);
+    lantern_signed_block_init(out_block);
 
     uint64_t block_slot = fixture->client.state.slot + 1u;
     out_block->block.slot = block_slot;
     if (lantern_proposer_for_slot(
             block_slot,
-            fixture->client.state.config.num_validators,
+            fixture->client.state.validator_count,
             &out_block->block.proposer_index)
         != 0) {
         goto cleanup;
@@ -375,10 +374,7 @@ static int build_signed_block_for_import(
         if (!include_attestation_proof) {
             goto cleanup;
         }
-        if (lantern_attestation_signatures_resize(&attestation_proofs, 1u) != 0) {
-            goto cleanup;
-        }
-        LanternAggregatedSignatureProof *proof = &attestation_proofs.data[0];
+        LanternAggregatedSignatureProof *proof = &attestation_proof;
         if (lantern_bitlist_resize(&proof->participants, 1u) != 0
             || lantern_bitlist_set(&proof->participants, 0u, true) != 0) {
             goto cleanup;
@@ -405,6 +401,14 @@ static int build_signed_block_for_import(
                 &attestation_root,
                 attestation->data.slot,
                 proof)) {
+            goto cleanup;
+        }
+        if (lantern_aggregated_payload_pool_add(
+                &attestation_payloads,
+                &attestation_root,
+                &attestation->data,
+                proof)
+            != 0) {
             goto cleanup;
         }
     }
@@ -437,7 +441,7 @@ static int build_signed_block_for_import(
                 &fixture->client.state,
                 out_block,
                 &block_signature_root,
-                &attestation_proofs,
+                &attestation_payloads,
                 &proposer_signature)
             != 0) {
             goto cleanup;
@@ -447,7 +451,8 @@ static int build_signed_block_for_import(
     rc = lantern_hash_tree_root_block(&out_block->block, out_root) == SSZ_SUCCESS ? 0 : -1;
 
 cleanup:
-    lantern_attestation_signatures_reset(&attestation_proofs);
+    lantern_aggregated_signature_proof_reset(&attestation_proof);
+    lantern_aggregated_payload_pool_reset(&attestation_payloads);
     return rc;
 }
 
@@ -489,15 +494,14 @@ static int build_proposer_only_block_for_parent(
     }
 
     int rc = -1;
-    LanternAttestationSignatures empty_attestation_proofs;
-    lantern_attestation_signatures_init(&empty_attestation_proofs);
+    struct lantern_aggregated_payload_pool empty_attestation_payloads = {0};
     lantern_signed_block_init(out_block);
     lantern_state_init(out_post_state);
 
     out_block->block.slot = slot;
     if (lantern_proposer_for_slot(
             slot,
-            parent_state->config.num_validators,
+            parent_state->validator_count,
             &out_block->block.proposer_index)
             != 0) {
         goto cleanup;
@@ -521,7 +525,7 @@ static int build_proposer_only_block_for_parent(
                parent_state,
                out_block,
                out_root,
-               &empty_attestation_proofs,
+               &empty_attestation_payloads,
                &proposer_signature)
                != 0
         || lantern_state_clone(parent_state, out_post_state) != 0
@@ -532,7 +536,7 @@ static int build_proposer_only_block_for_parent(
     rc = 0;
 
 cleanup:
-    lantern_attestation_signatures_reset(&empty_attestation_proofs);
+    lantern_aggregated_payload_pool_reset(&empty_attestation_payloads);
     if (rc != 0) {
         lantern_signed_block_reset(out_block);
         lantern_state_reset(out_post_state);
@@ -540,7 +544,7 @@ cleanup:
     return rc;
 }
 
-static int resign_first_block_attestation(
+static int resign_matching_block_attestations(
     struct block_signature_fixture *fixture,
     LanternSignedBlock *block,
     LanternRoot *out_root)
@@ -554,14 +558,12 @@ static int resign_first_block_attestation(
     }
 
     int rc = -1;
-    LanternAttestationSignatures attestation_proofs;
-    lantern_attestation_signatures_init(&attestation_proofs);
+    struct lantern_aggregated_payload_pool attestation_payloads = {0};
+    LanternAggregatedSignatureProof attestation_proof;
+    lantern_aggregated_signature_proof_init(&attestation_proof);
 
     LanternAggregatedAttestation *attestation = &block->block.body.attestations.data[0];
-    if (lantern_attestation_signatures_resize(&attestation_proofs, 1u) != 0) {
-        goto cleanup;
-    }
-    LanternAggregatedSignatureProof *proof = &attestation_proofs.data[0];
+    LanternAggregatedSignatureProof *proof = &attestation_proof;
 
     LanternSignedVote signed_vote;
     memset(&signed_vote, 0, sizeof(signed_vote));
@@ -605,6 +607,28 @@ static int resign_first_block_attestation(
             proof)) {
         goto cleanup;
     }
+    size_t attestation_count = block->block.body.attestations.length;
+    attestation_payloads.entries = calloc(attestation_count, sizeof(*attestation_payloads.entries));
+    if (!attestation_payloads.entries) {
+        goto cleanup;
+    }
+    attestation_payloads.capacity = attestation_count;
+    for (size_t i = 0; i < attestation_count; ++i) {
+        LanternAggregatedAttestation *candidate = &block->block.body.attestations.data[i];
+        struct lantern_aggregated_payload_entry *entry = &attestation_payloads.entries[i];
+        LanternRoot candidate_root;
+        if (lantern_hash_tree_root_attestation_data(&candidate->data, &candidate_root) != SSZ_SUCCESS
+            || memcmp(candidate_root.bytes, attestation_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+            goto cleanup;
+        }
+        entry->data_root = candidate_root;
+        entry->data = candidate->data;
+        lantern_aggregated_signature_proof_init(&entry->proof);
+        attestation_payloads.length = i + 1u;
+        if (lantern_aggregated_signature_proof_copy(&entry->proof, proof) != 0) {
+            goto cleanup;
+        }
+    }
 
     if (lantern_state_preview_post_state_root(
             &fixture->client.state,
@@ -631,7 +655,7 @@ static int resign_first_block_attestation(
             &fixture->client.state,
             block,
             out_root,
-            &attestation_proofs,
+            &attestation_payloads,
             &proposer_signature)
         != 0) {
         goto cleanup;
@@ -640,7 +664,8 @@ static int resign_first_block_attestation(
     rc = 0;
 
 cleanup:
-    lantern_attestation_signatures_reset(&attestation_proofs);
+    lantern_aggregated_signature_proof_reset(&attestation_proof);
+    lantern_aggregated_payload_pool_reset(&attestation_payloads);
     return rc;
 }
 
@@ -682,6 +707,11 @@ static int expect_recovered_block_payload(
         return -1;
     }
     if (memcmp(payload->data_root.bytes, data_root.bytes, LANTERN_ROOT_SIZE) != 0
+        || memcmp(
+               &payload->data,
+               &block->block.body.attestations.data[0].data,
+               sizeof(payload->data))
+            != 0
         || !lantern_bitlist_get(&payload->proof.participants, 0u)) {
         fprintf(stderr, "%s recovered payload does not match block attestation\n", context);
         return -1;
@@ -876,7 +906,6 @@ static int test_pending_block_queue_sync_drops_incoming(void) {
     client.node_id = "test_pending_sync_queue";
     client.sync_state = LANTERN_SYNC_STATE_SYNCING;
     client.sync_started_ms = 1u;
-    client.debug_disable_block_requests = true;
 
     if (pthread_mutex_init(&client.pending_lock, NULL) != 0) {
         fprintf(stderr, "failed to initialize pending mutex\n");
@@ -1022,10 +1051,11 @@ static int test_sync_completion_uses_network_finalized_threshold(void)
         goto cleanup;
     }
 
-    client.network_view.latest_observed_head_slot = local_head_slot + 128u;
-    client.network_view.network_finalized_slot = local_head_slot;
-    client.network_view.has_latest_observed_head_slot = true;
-    client.network_view.has_network_finalized_slot = true;
+    client.network_view.head = (LanternCheckpoint){
+        .root = client.store.head,
+        .slot = local_head_slot + 128u,
+    };
+    client.network_view.finalized = client.store.latest_finalized;
 
     LanternSignedBlock pending_block;
     memset(&pending_block, 0, sizeof(pending_block));
@@ -1056,7 +1086,7 @@ static int test_sync_completion_uses_network_finalized_threshold(void)
     }
 
     lantern_client_debug_pending_reset(&client);
-    client.network_view.network_finalized_slot = local_head_slot + 1u;
+    client.network_view.finalized.slot = local_head_slot + 1u;
     client.sync_state = LANTERN_SYNC_STATE_SYNCING;
     lantern_client_update_sync_progress(&client, local_head_slot);
     if (client.sync_state == LANTERN_SYNC_STATE_SYNCED) {
@@ -1064,8 +1094,8 @@ static int test_sync_completion_uses_network_finalized_threshold(void)
         goto cleanup;
     }
 
-    client.network_view.latest_observed_head_slot = local_head_slot + 1024u;
-    client.network_view.network_finalized_slot = local_head_slot + 1u;
+    client.network_view.head.slot = local_head_slot + 1024u;
+    client.network_view.finalized.slot = local_head_slot + 1u;
     client.sync_state = LANTERN_SYNC_STATE_SYNCING;
     lantern_client_update_sync_progress(&client, local_head_slot + 1024u);
     if (client.sync_state == LANTERN_SYNC_STATE_SYNCED) {
@@ -1073,8 +1103,8 @@ static int test_sync_completion_uses_network_finalized_threshold(void)
         goto cleanup;
     }
 
-    client.network_view.latest_observed_head_slot = local_head_slot + 1024u;
-    client.network_view.network_finalized_slot = client.state.latest_finalized.slot;
+    client.network_view.head.slot = local_head_slot + 1024u;
+    client.network_view.finalized.slot = client.state.latest_finalized.slot;
     client.sync_state = LANTERN_SYNC_STATE_SYNCING;
     lantern_client_update_sync_progress(&client, local_head_slot);
     if (client.sync_state != LANTERN_SYNC_STATE_SYNCED) {
@@ -1353,13 +1383,21 @@ static int test_peer_status_updates_sync_network_view(void)
         goto cleanup;
     }
 
-    if (!client.network_view.has_latest_observed_head_slot
-        || client.network_view.latest_observed_head_slot != status.head.slot) {
+    if (memcmp(
+            client.network_view.head.root.bytes,
+            status.head.root.bytes,
+            LANTERN_ROOT_SIZE)
+            != 0
+        || client.network_view.head.slot != status.head.slot) {
         fprintf(stderr, "peer status did not update observed network head\n");
         goto cleanup;
     }
-    if (!client.network_view.has_network_finalized_slot
-        || client.network_view.network_finalized_slot != status.finalized.slot) {
+    if (memcmp(
+            client.network_view.finalized.root.bytes,
+            status.finalized.root.bytes,
+            LANTERN_ROOT_SIZE)
+            != 0
+        || client.network_view.finalized.slot != status.finalized.slot) {
         fprintf(stderr, "peer status did not update observed network finalized slot\n");
         goto cleanup;
     }
@@ -1407,12 +1445,16 @@ static int test_imported_blocks_update_sync_network_view(void)
         fprintf(stderr, "failed to import first network view block\n");
         goto cleanup;
     }
-    if (!fixture.client.network_view.has_latest_observed_head_slot
-        || fixture.client.network_view.latest_observed_head_slot != first_block.block.slot) {
+    if (memcmp(
+            fixture.client.network_view.head.root.bytes,
+            first_root.bytes,
+            LANTERN_ROOT_SIZE)
+            != 0
+        || fixture.client.network_view.head.slot != first_block.block.slot) {
         fprintf(stderr, "network view head slot did not track first imported block\n");
         goto cleanup;
     }
-    if (fixture.client.network_view.has_network_finalized_slot) {
+    if (!lantern_root_is_zero(&fixture.client.network_view.finalized.root)) {
         fprintf(stderr, "imported block should not seed network finalized from local post-state\n");
         goto cleanup;
     }
@@ -1430,11 +1472,11 @@ static int test_imported_blocks_update_sync_network_view(void)
         fprintf(stderr, "failed to import second network view block\n");
         goto cleanup;
     }
-    if (fixture.client.network_view.latest_observed_head_slot != second_block.block.slot) {
+    if (fixture.client.network_view.head.slot != second_block.block.slot) {
         fprintf(stderr, "network view head slot did not update for newer imported block\n");
         goto cleanup;
     }
-    if (fixture.client.network_view.has_network_finalized_slot) {
+    if (!lantern_root_is_zero(&fixture.client.network_view.finalized.root)) {
         fprintf(stderr, "newer imported block should still not seed network finalized\n");
         goto cleanup;
     }
@@ -1442,8 +1484,8 @@ static int test_imported_blocks_update_sync_network_view(void)
     rc = 0;
 
 cleanup:
-    lantern_signed_block_with_attestation_reset(&second_block);
-    lantern_signed_block_with_attestation_reset(&first_block);
+    lantern_signed_block_reset(&second_block);
+    lantern_signed_block_reset(&first_block);
     if (fixture.client.status_lock_initialized) {
         pthread_mutex_destroy(&fixture.client.status_lock);
         fixture.client.status_lock_initialized = false;
@@ -1487,7 +1529,11 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
     lantern_client_debug_pending_reset(&client);
 
     lantern_state_init(&client.state);
-    client.has_state = true;
+    if (lantern_state_generate_genesis(&client.state, 0u, 8u) != 0) {
+        fprintf(stderr, "failed to generate state for missing-parent response test\n");
+        rc = 1;
+        goto cleanup;
+    }
     client.state.slot = anchor_slot;
     lantern_store_init(&client.store);
 
@@ -1504,21 +1550,13 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
         goto cleanup;
     }
 
-    lantern_fork_choice_init(&client.fork_choice);
-    lantern_store_attach_fork_choice(&client.store, &client.fork_choice);
-    if (lantern_fork_choice_configure(&client.fork_choice, 8u) != 0) {
-        fprintf(stderr, "failed to configure fork choice\n");
-        rc = 1;
-        goto cleanup;
-    }
-    client.has_fork_choice = true;
 
     LanternCheckpoint anchor_checkpoint = {
         .root = head_root,
         .slot = anchor_slot,
     };
     client.state.latest_justified = anchor_checkpoint;
-    client.state.latest_finalized = anchor_checkpoint;
+    memset(&client.state.latest_finalized, 0, sizeof(client.state.latest_finalized));
 
     LanternBlock anchor_block;
     memset(&anchor_block, 0, sizeof(anchor_block));
@@ -1529,12 +1567,12 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
     anchor_block.state_root = client.state.latest_block_header.state_root;
 
     if (lantern_fork_choice_set_anchor_with_state(
-            &client.fork_choice,
+            &client.store,
             &anchor_block,
-            &client.state.latest_justified,
-            &client.state.latest_finalized,
+            &anchor_checkpoint,
+            &anchor_checkpoint,
             &head_root,
-            NULL)
+            &client.state)
         != 0) {
         fprintf(stderr, "failed to set fork choice anchor\n");
         lantern_block_body_reset(&anchor_block.body);
@@ -1560,7 +1598,7 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
     }
 
     if (lantern_fork_choice_add_block(
-            &client.fork_choice,
+            &client.store,
             &finalized_block,
             NULL,
             NULL,
@@ -1579,7 +1617,7 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
         .slot = finalized_slot,
     };
     if (lantern_fork_choice_restore_checkpoints(
-            &client.fork_choice,
+            &client.store,
             &anchor_checkpoint,
             &finalized_checkpoint)
         != 0)
@@ -1684,9 +1722,8 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
 cleanup:
     lantern_client_debug_pending_reset(&client);
     lantern_block_body_reset(&block.block.body);
-    if (client.has_fork_choice) {
-        lantern_fork_choice_reset(&client.fork_choice);
-        client.has_fork_choice = false;
+    if (client.store.block_len > 0u) {
+        lantern_fork_choice_reset(&client.store);
     }
     if (client.pending_lock_initialized) {
         pthread_mutex_destroy(&client.pending_lock);
@@ -1696,9 +1733,8 @@ cleanup:
         pthread_mutex_destroy(&client.state_lock);
         client.state_lock_initialized = false;
     }
-    if (client.has_state) {
+    if (client.state.validator_count > 0u) {
         lantern_state_reset(&client.state);
-        client.has_state = false;
     }
     lantern_store_reset(&client.store);
     return rc;
@@ -1753,8 +1789,7 @@ static int test_reqresp_collect_blocks_pending_fallback(void) {
         goto cleanup;
     }
 
-    LanternSignedBlockList collected;
-    lantern_signed_block_list_init(&collected);
+    LanternSignedBlockList collected = {0};
     int collect_rc = reqresp_collect_blocks(
         &client,
         &pending_root,
@@ -1837,15 +1872,66 @@ static int test_import_block_accepts_complete_proof(void)
         != 0) {
         goto cleanup;
     }
-    if (fixture.client.store.attestation_data_by_root.length == 0u) {
-        fprintf(stderr, "canonical import should retain attestation data for cached block proofs\n");
+    rc = 0;
+
+cleanup:
+    lantern_signed_block_reset(&block);
+    teardown_block_signature_fixture(&fixture);
+    return rc;
+}
+
+static int test_import_block_rejects_duplicate_attestation_data(void)
+{
+    struct block_signature_fixture fixture;
+    LanternSignedBlock block;
+    LanternState transition_state;
+    LanternRoot block_root;
+    uint64_t initial_slot = 0;
+    int rc = 1;
+
+    memset(&block, 0, sizeof(block));
+    lantern_state_init(&transition_state);
+    if (setup_block_signature_fixture(&fixture, "test_import_duplicate_attestation_data") != 0) {
+        fprintf(stderr, "failed to set up duplicate attestation data fixture\n");
+        return 1;
+    }
+
+    initial_slot = fixture.client.state.slot;
+    if (build_signed_block_for_import(&fixture, true, true, &block, &block_root) != 0
+        || lantern_aggregated_attestations_resize(&block.block.body.attestations, 2u) != 0) {
+        fprintf(stderr, "failed to build duplicate attestation data block\n");
+        goto cleanup;
+    }
+
+    LanternAggregatedAttestation *first = &block.block.body.attestations.data[0];
+    LanternAggregatedAttestation *duplicate = &block.block.body.attestations.data[1];
+    duplicate->data = first->data;
+    if (lantern_bitlist_resize(&duplicate->aggregation_bits, first->aggregation_bits.bit_length) != 0
+        || lantern_bitlist_set(&duplicate->aggregation_bits, 0u, true) != 0
+        || resign_matching_block_attestations(&fixture, &block, &block_root) != 0) {
+        fprintf(stderr, "failed to sign duplicate attestation data block\n");
+        goto cleanup;
+    }
+
+    if (lantern_state_clone(&fixture.client.state, &transition_state) != 0
+        || lantern_state_transition(&transition_state, &block) != 0) {
+        fprintf(stderr, "state transition rejected valid split aggregates\n");
+        goto cleanup;
+    }
+    if (lantern_client_debug_import_block(&fixture.client, &block, &block_root, "12D3KooWsig") != 0) {
+        fprintf(stderr, "import accepted duplicate attestation data\n");
+        goto cleanup;
+    }
+    if (fixture.client.state.slot != initial_slot) {
+        fprintf(stderr, "state slot advanced after rejecting duplicate attestation data\n");
         goto cleanup;
     }
 
     rc = 0;
 
 cleanup:
-    lantern_signed_block_with_attestation_reset(&block);
+    lantern_state_reset(&transition_state);
+    lantern_signed_block_reset(&block);
     teardown_block_signature_fixture(&fixture);
     return rc;
 }
@@ -1864,17 +1950,16 @@ static int test_import_persists_finalized_post_state(void)
     }
 
     initial_finalized = fixture.client.state.latest_finalized;
-    fixture.client.network_view.network_finalized_slot = initial_finalized.slot;
-    fixture.client.network_view.has_network_finalized_slot = true;
+    fixture.client.network_view.finalized = initial_finalized;
 
     LanternRoot initial_head_root;
     if (test_state_latest_block_root(&fixture.client.state, &initial_head_root) != 0) {
         fprintf(stderr, "failed to compute initial head root for post-state test\n");
         goto cleanup;
     }
-    if (fixture.client.has_fork_choice
+    if (fixture.client.store.block_len > 0u
         && lantern_fork_choice_set_block_state(
-               &fixture.client.fork_choice,
+               &fixture.client.store,
                &initial_head_root,
                &fixture.client.state)
             != 0) {
@@ -1896,15 +1981,15 @@ static int test_import_persists_finalized_post_state(void)
         memset(&block, 0, sizeof(block));
         if (build_signed_block_for_import(&fixture, true, true, &block, &block_root) != 0) {
             fprintf(stderr, "failed to build block for finalized post-state test\n");
-            lantern_signed_block_with_attestation_reset(&block);
+            lantern_signed_block_reset(&block);
             goto cleanup;
         }
         if (lantern_client_debug_import_block(&fixture.client, &block, &block_root, "12D3KooWbase") != 1) {
             fprintf(stderr, "failed to import block for finalized post-state test\n");
-            lantern_signed_block_with_attestation_reset(&block);
+            lantern_signed_block_reset(&block);
             goto cleanup;
         }
-        lantern_signed_block_with_attestation_reset(&block);
+        lantern_signed_block_reset(&block);
         if (fixture.client.state.latest_finalized.slot > initial_finalized.slot) {
             advanced_finalized = fixture.client.state.latest_finalized;
             finalized_advanced = true;
@@ -1915,8 +2000,12 @@ static int test_import_persists_finalized_post_state(void)
         fprintf(stderr, "finalized checkpoint did not advance in post-state test\n");
         goto cleanup;
     }
-    if (!fixture.client.network_view.has_network_finalized_slot
-        || fixture.client.network_view.network_finalized_slot != advanced_finalized.slot) {
+    if (fixture.client.network_view.finalized.slot != advanced_finalized.slot
+        || memcmp(
+               fixture.client.network_view.finalized.root.bytes,
+               advanced_finalized.root.bytes,
+               LANTERN_ROOT_SIZE)
+            != 0) {
         fprintf(stderr, "network finalized view did not refresh after finalized import\n");
         goto cleanup;
     }
@@ -1983,7 +2072,6 @@ static int test_retained_side_branch_reloads_evicted_parent_state(void)
         fprintf(stderr, "failed to set up retained side-branch fixture\n");
         return 1;
     }
-    fixture.client.debug_disable_block_requests = true;
 
     LanternState parent_state;
     lantern_state_init(&parent_state);
@@ -2016,7 +2104,7 @@ static int test_retained_side_branch_reloads_evicted_parent_state(void)
     }
 
     if (lantern_fork_choice_add_block_with_state(
-            &fixture.client.fork_choice,
+            &fixture.client.store,
             &branch_a.block,
             &branch_a_state.latest_justified,
             &branch_a_state.latest_finalized,
@@ -2024,7 +2112,7 @@ static int test_retained_side_branch_reloads_evicted_parent_state(void)
             &branch_a_state)
             != 0
         || lantern_fork_choice_add_block_with_state(
-               &fixture.client.fork_choice,
+               &fixture.client.store,
                &branch_b.block,
                &branch_b_state.latest_justified,
                &branch_b_state.latest_finalized,
@@ -2050,7 +2138,7 @@ static int test_retained_side_branch_reloads_evicted_parent_state(void)
         .slot = parent_state.slot,
     };
     if (lantern_fork_choice_update_checkpoints(
-            &fixture.client.fork_choice,
+            &fixture.client.store,
             &parent_checkpoint,
             &parent_checkpoint)
             != 0) {
@@ -2058,11 +2146,7 @@ static int test_retained_side_branch_reloads_evicted_parent_state(void)
         goto cleanup_parent;
     }
 
-    LanternRoot selected_head = {0};
-    if (lantern_fork_choice_current_head(&fixture.client.fork_choice, &selected_head) != 0) {
-        fprintf(stderr, "failed to select retained side-branch head\n");
-        goto cleanup_parent;
-    }
+    LanternRoot selected_head = fixture.client.store.head;
 
     const LanternRoot *side_root = NULL;
     const LanternState *side_state = NULL;
@@ -2077,9 +2161,9 @@ static int test_retained_side_branch_reloads_evicted_parent_state(void)
         goto cleanup_parent;
     }
 
-    if (lantern_fork_choice_prune_states(&fixture.client.fork_choice) != 0
+    if (lantern_fork_choice_prune_states(&fixture.client.store) != 0
         || lantern_fork_choice_block_info(
-               &fixture.client.fork_choice,
+               &fixture.client.store,
                side_root,
                NULL,
                NULL,
@@ -2088,7 +2172,7 @@ static int test_retained_side_branch_reloads_evicted_parent_state(void)
         fprintf(stderr, "retained side branch was removed during state pruning\n");
         goto cleanup_parent;
     }
-    if (lantern_fork_choice_block_state(&fixture.client.fork_choice, side_root) != NULL) {
+    if (lantern_fork_choice_block_state(&fixture.client.store, side_root) != NULL) {
         fprintf(stderr, "retained side-branch state was not evicted by pruning\n");
         goto cleanup_parent;
     }
@@ -2127,14 +2211,14 @@ static int test_retained_side_branch_reloads_evicted_parent_state(void)
         &side_child_root,
         "12D3KooWretained");
     if (lantern_fork_choice_block_info(
-            &fixture.client.fork_choice,
+            &fixture.client.store,
             &side_child_root,
             NULL,
             NULL,
             NULL)
             != 0
-        || !lantern_fork_choice_block_state(&fixture.client.fork_choice, side_root)
-        || !lantern_fork_choice_block_state(&fixture.client.fork_choice, &side_child_root)) {
+        || !lantern_fork_choice_block_state(&fixture.client.store, side_root)
+        || !lantern_fork_choice_block_state(&fixture.client.store, &side_child_root)) {
         fprintf(stderr, "valid retained side-branch child or its post-state was not imported\n");
         goto cleanup_parent;
     }
@@ -2167,7 +2251,6 @@ static int test_historical_backfill_imports_after_large_gap_connects(void)
         goto cleanup;
     }
     target_ready = true;
-    target.client.debug_disable_block_requests = true;
     if (pthread_mutex_init(&target.client.pending_lock, NULL) != 0) {
         fprintf(stderr, "failed to initialize target pending mutex\n");
         goto cleanup;
@@ -2180,10 +2263,9 @@ static int test_historical_backfill_imports_after_large_gap_connects(void)
     }
 
     uint64_t local_head_slot = target.client.state.slot;
-    uint64_t anchor_slot = local_head_slot;
-    if (target.client.has_fork_choice) {
-        (void)lantern_fork_choice_anchor_slot(&target.client.fork_choice, &anchor_slot);
-    }
+    uint64_t anchor_slot = target.client.store.block_len > 0u
+        ? target.client.store.anchor.slot
+        : local_head_slot;
     uint64_t peer_reported_head_slot = anchor_slot + LANTERN_PENDING_BLOCK_LIMIT + 1u;
     if (!lantern_client_maybe_start_historical_backfill(
             &target.client,
@@ -2211,7 +2293,7 @@ static int test_historical_backfill_imports_after_large_gap_connects(void)
             block.block.slot);
         goto cleanup;
     }
-    if (target.client.backfill.active) {
+    if (!lantern_root_is_zero(&target.client.backfill.head.root)) {
         fprintf(stderr, "backfill session remained active after importing head\n");
         goto cleanup;
     }
@@ -2223,7 +2305,7 @@ static int test_historical_backfill_imports_after_large_gap_connects(void)
     rc = 0;
 
 cleanup:
-    lantern_signed_block_with_attestation_reset(&block);
+    lantern_signed_block_reset(&block);
     if (target_ready) {
         free(target.client.backfill.roots);
         target.client.backfill = (struct lantern_backfill_session){0};
@@ -2268,7 +2350,10 @@ static int test_reqresp_parent_response_preserves_backfill_depth(void)
 
     lantern_state_init(&client.state);
     lantern_store_init(&client.store);
-    client.has_state = true;
+    if (lantern_state_generate_genesis(&client.state, 0u, 1u) != 0) {
+        fprintf(stderr, "failed to generate state for depth test\n");
+        goto cleanup;
+    }
 
     lantern_block_body_init(&parent.block.body);
     parent.block.slot = 41u;
@@ -2352,8 +2437,8 @@ static int test_reqresp_parent_response_preserves_backfill_depth(void)
 
 cleanup:
     lantern_client_debug_pending_reset(&client);
-    lantern_signed_block_with_attestation_reset(&child);
-    lantern_signed_block_with_attestation_reset(&parent);
+    lantern_signed_block_reset(&child);
+    lantern_signed_block_reset(&parent);
     lantern_store_reset(&client.store);
     lantern_state_reset(&client.state);
     if (client.pending_lock_initialized) {
@@ -2399,7 +2484,7 @@ static int test_import_block_rejects_missing_block_proof(void)
     rc = 0;
 
 cleanup:
-    lantern_signed_block_with_attestation_reset(&block);
+    lantern_signed_block_reset(&block);
     teardown_block_signature_fixture(&fixture);
     return rc;
 }
@@ -2442,7 +2527,7 @@ static int test_import_block_rejects_malformed_block_proof(void)
     rc = 0;
 
 cleanup:
-    lantern_signed_block_with_attestation_reset(&block);
+    lantern_signed_block_reset(&block);
     teardown_block_signature_fixture(&fixture);
     return rc;
 }
@@ -2477,7 +2562,7 @@ static int test_import_block_skips_unknown_attestation_head_root(void)
         unknown_root.bytes[0] ^= 0xFFu;
     }
     block.block.body.attestations.data[0].data.head.root = unknown_root;
-    if (resign_first_block_attestation(&fixture, &block, &block_root) != 0) {
+    if (resign_matching_block_attestations(&fixture, &block, &block_root) != 0) {
         fprintf(stderr, "failed to resign block fixture with unknown attestation head\n");
         goto cleanup;
     }
@@ -2494,7 +2579,7 @@ static int test_import_block_skips_unknown_attestation_head_root(void)
     rc = 0;
 
 cleanup:
-    lantern_signed_block_with_attestation_reset(&block);
+    lantern_signed_block_reset(&block);
     teardown_block_signature_fixture(&fixture);
     return rc;
 }
@@ -2533,15 +2618,10 @@ static int test_restore_persisted_blocks_caches_known_attestation_proofs(void)
         != 0) {
         goto cleanup;
     }
-    if (fixture.client.store.attestation_data_by_root.length == 0u) {
-        fprintf(stderr, "restored blocks should retain attestation data for cached proofs\n");
-        goto cleanup;
-    }
-
     rc = 0;
 
 cleanup:
-    lantern_signed_block_with_attestation_reset(&block);
+    lantern_signed_block_reset(&block);
     teardown_block_signature_fixture(&fixture);
     return rc;
 }
@@ -2587,8 +2667,7 @@ static int test_restore_persisted_blocks_skips_proposer_attestation_cache(void)
         fprintf(stderr, "failed to hash proposer-only restore block\n");
         goto cleanup;
     }
-    LanternAttestationSignatures empty_attestation_proofs;
-    lantern_attestation_signatures_init(&empty_attestation_proofs);
+    struct lantern_aggregated_payload_pool empty_attestation_payloads = {0};
     LanternSignature proposer_signature;
     memset(&proposer_signature, 0, sizeof(proposer_signature));
     if (!lantern_signature_sign(
@@ -2601,14 +2680,14 @@ static int test_restore_persisted_blocks_skips_proposer_attestation_cache(void)
                &fixture.client.state,
                &block,
                &block_root,
-               &empty_attestation_proofs,
+               &empty_attestation_payloads,
                &proposer_signature)
                != 0) {
-        lantern_attestation_signatures_reset(&empty_attestation_proofs);
+        lantern_aggregated_payload_pool_reset(&empty_attestation_payloads);
         fprintf(stderr, "failed to rebuild proposer-only block proof for restore test\n");
         goto cleanup;
     }
-    lantern_attestation_signatures_reset(&empty_attestation_proofs);
+    lantern_aggregated_payload_pool_reset(&empty_attestation_payloads);
     if (lantern_storage_store_block(fixture.client.data_dir, &block) != 0) {
         fprintf(stderr, "failed to persist proposer-only block fixture for restore test\n");
         goto cleanup;
@@ -2622,12 +2701,9 @@ static int test_restore_persisted_blocks_skips_proposer_attestation_cache(void)
         fprintf(stderr, "restore_persisted_blocks failed for proposer cache test\n");
         goto cleanup;
     }
-    if (fixture.client.store.known_aggregated_payloads.length != 0u) {
+    if (fixture.client.store.new_aggregated_payloads.length != 0u
+        || fixture.client.store.known_aggregated_payloads.length != 0u) {
         fprintf(stderr, "proposer-only restored block should not create known block-body proofs\n");
-        goto cleanup;
-    }
-    if (fixture.client.store.attestation_data_by_root.length != 0u) {
-        fprintf(stderr, "proposer-only restored block should not cache proposer attestation data\n");
         goto cleanup;
     }
     if (fixture.client.store.attestation_signatures.length != 0u) {
@@ -2638,7 +2714,7 @@ static int test_restore_persisted_blocks_skips_proposer_attestation_cache(void)
     rc = 0;
 
 cleanup:
-    lantern_signed_block_with_attestation_reset(&block);
+    lantern_signed_block_reset(&block);
     teardown_block_signature_fixture(&fixture);
     return rc;
 }
@@ -2672,6 +2748,9 @@ int main(void) {
         return 1;
     }
     if (test_import_block_accepts_complete_proof() != 0) {
+        return 1;
+    }
+    if (test_import_block_rejects_duplicate_attestation_data() != 0) {
         return 1;
     }
     if (test_import_persists_finalized_post_state() != 0) {

@@ -19,7 +19,6 @@
  *       3. pending_lock
  *       4. validator_lock
  *       5. connection_lock
- *       6. peer_vote_lock
  */
 
 #ifndef LANTERN_CLIENT_SYNC_INTERNAL_H
@@ -200,12 +199,16 @@ const LanternState *lantern_client_state_for_root_locked(
     const LanternRoot *root);
 
 /**
- * Cache block-body aggregated proofs as known attestation material.
+ * Recover block-body aggregated proofs as local attestation material.
  *
- * Mirrors the block-body proof caching step from the spec's Store.on_block().
- * Caller must hold state_lock.
+ * This is an implementation optimization beyond Store.on_block(), which only
+ * registers empty proof sets. Expensive proof splitting runs without state_lock.
  */
-void lantern_client_cache_block_aggregated_proofs_locked(
+void lantern_client_cache_block_aggregated_proofs(
+    struct lantern_client *client,
+    const LanternSignedBlock *block);
+
+int lantern_client_enqueue_block_aggregated_proofs(
     struct lantern_client *client,
     const LanternSignedBlock *block);
 
@@ -213,16 +216,6 @@ void lantern_client_cache_block_aggregated_proofs_locked(
 /* ============================================================================
  * Pending Vote Functions
  * ============================================================================ */
-
-/**
- * Initialize a pending vote list.
- *
- * @param list  List to initialize
- *
- * @note Thread safety: This function is thread-safe
- */
-void pending_vote_list_init(struct lantern_pending_vote_list *list);
-
 
 /**
  * Reset and free a pending vote list.
@@ -253,16 +246,6 @@ struct lantern_pending_vote *pending_vote_list_append(
 /* ============================================================================
  * Pending Block Functions
  * ============================================================================ */
-
-/**
- * Initialize a pending block list.
- *
- * @param list  List to initialize
- *
- * @note Thread safety: This function is thread-safe
- */
-void pending_block_list_init(struct lantern_pending_block_list *list);
-
 
 /**
  * Reset and free a pending block list.
@@ -454,6 +437,7 @@ bool lantern_client_import_block_without_pending_children(
     const struct lantern_log_metadata *meta,
     uint32_t backfill_depth,
     bool allow_historical,
+    bool cache_aggregated_proofs,
     bool *out_children_ready);
 
 /**
@@ -706,10 +690,15 @@ void lantern_client_pending_remove_branch_by_root(
  *
  * @param client       Client instance
  * @param parent_root  Root of the newly imported parent block
+ * @param cache_aggregated_proofs True to split proofs inline; false to
+ *                                enqueue them on the import worker
  *
  * @note Thread safety: Acquires pending_lock and state_lock
  */
-void lantern_client_process_pending_children(struct lantern_client *client, const LanternRoot *parent_root);
+void lantern_client_process_pending_children(
+    struct lantern_client *client,
+    const LanternRoot *parent_root,
+    bool cache_aggregated_proofs);
 
 
 /**

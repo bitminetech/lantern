@@ -10,6 +10,7 @@
 #include "lantern/consensus/store.h"
 #include "lantern/consensus/slot_clock.h"
 #include "lantern/consensus/fork_choice.h"
+#include "lantern/consensus/signature.h"
 #include "lantern/genesis/genesis.h"
 #include "lantern/metrics/server.h"
 #include "lantern/http/server.h"
@@ -72,22 +73,15 @@ struct lantern_client_options {
     const char *devnet;
     struct lantern_string_list bootnodes;
     const char *xmss_key_dir;
-    const char *xmss_public_path;
     const char *xmss_secret_path;
-    const char *xmss_public_template;
     const char *xmss_secret_template;
     uint64_t attestation_committee_count_override;
-    bool has_attestation_committee_count_override;
     bool is_aggregator;
     size_t *aggregate_subnet_ids;
     size_t aggregate_subnet_id_count;
     size_t aggregate_subnet_id_capacity;
-    double shadow_xmss_aggregate_signatures_rate;
-    bool has_shadow_xmss_aggregate_signatures_rate;
-    double shadow_xmss_verify_aggregated_signatures_rate;
-    bool has_shadow_xmss_verify_aggregated_signatures_rate;
-    double shadow_xmss_merge_rate;
-    bool has_shadow_xmss_merge_rate;
+    double shadow_xmss_rates[LANTERN_SHADOW_OPERATION_COUNT];
+    uint8_t shadow_xmss_rates_set;
 };
 
 struct lantern_peer_status_entry;
@@ -95,13 +89,10 @@ struct lantern_active_blocks_request;
 struct lantern_async_block_import_job;
 struct lantern_async_block_proposal_job;
 struct lantern_backfill_session {
-    bool active;
-    LanternRoot head_root;
+    LanternCheckpoint head;
     LanternRoot frontier_root;
-    uint64_t head_slot;
     uint64_t anchor_slot;
     uint32_t frontier_depth;
-    char peer_text[128];
     LanternRoot *roots;
     size_t length;
     size_t capacity;
@@ -140,21 +131,14 @@ struct lantern_active_blocks_request {
     size_t root_count;
     uint64_t started_ms;
     uint64_t deadline_ms;
-    bool timeout_recorded;
 };
 
 struct lantern_validator_duty_state {
-    uint64_t last_slot;
-    uint32_t last_interval;
-    bool have_timepoint;
+    uint64_t slot_marker;
     bool slot_proposed;
     bool slot_attested;
     bool slot_aggregated;
-    uint64_t last_aggregation_skip_slot;
-    bool have_aggregation_skip_slot;
-    bool pending_local_proposal;
-    uint64_t pending_local_index;
-    bool proposal_signal_pending;
+    uint64_t aggregation_skip_marker;
     bool duty_gate_closed;
 };
 
@@ -179,26 +163,12 @@ struct lantern_validator_signature_history {
 
 struct lantern_local_validator {
     uint64_t global_index;
-    bool disabled;
-    uint8_t *secret;
-    size_t secret_len;
-    bool has_secret;
     struct PQSignatureSchemeSecretKey *attestation_secret_key;
     struct PQSignatureSchemeSecretKey *proposal_secret_key;
     char *proposal_secret_path;
-    bool has_attestation_secret_handle;
-    bool has_proposal_secret_handle;
     uint64_t last_proposed_slot;
-    uint64_t last_attested_slot;
     struct lantern_validator_signature_history attestation_signature_history;
     struct lantern_validator_signature_history proposal_signature_history;
-};
-
-struct lantern_network_view {
-    uint64_t latest_observed_head_slot;
-    uint64_t network_finalized_slot;
-    bool has_latest_observed_head_slot;
-    bool has_network_finalized_slot;
 };
 
 struct lantern_client {
@@ -214,58 +184,36 @@ struct lantern_client {
     struct lantern_enr_record local_enr;
     struct lantern_libp2p_host network;
     struct lantern_gossipsub_service gossip;
-    bool gossip_running;
     struct lantern_reqresp_service reqresp;
-    bool reqresp_running;
-    const struct lantern_validator_config_entry *assigned_validators;
+    struct lantern_validator_config_entry *assigned_validators;
     struct lantern_local_validator *local_validators;
     size_t local_validator_count;
     struct lantern_validator_duty_state validator_duty;
     LanternStore store;
-    LanternForkChoice fork_choice;
-    bool has_fork_choice;
     LanternState state;
-    bool has_state;
     pthread_mutex_t state_lock;
     bool state_lock_initialized;
     pthread_mutex_t validator_lock;
     bool validator_lock_initialized;
-    struct lantern_peer_vote_metric *peer_vote_stats;
-    size_t peer_vote_stats_len;
-    size_t peer_vote_stats_cap;
-    pthread_mutex_t peer_vote_lock;
-    bool peer_vote_lock_initialized;
     pthread_t timing_thread;
     bool timing_thread_started;
     int timing_stop_flag;
     double last_tick_interval_started_seconds;
-    bool has_last_tick_interval_started_seconds;
-    pthread_t validator_thread;
-    bool validator_thread_started;
-    int validator_stop_flag;
     struct lantern_async_block_proposal_job *block_proposal_job;
-    uint64_t block_proposal_inflight_slot;
     pthread_mutex_t block_proposal_lock;
     pthread_cond_t block_proposal_cond;
     pthread_t block_proposal_thread;
-    bool block_proposal_lock_initialized;
-    bool block_proposal_cond_initialized;
-    bool block_proposal_thread_started;
+    bool block_proposal_sync_initialized;
     bool block_proposal_stop;
-    bool block_proposal_inflight;
     struct lantern_metrics_server metrics_server;
-    bool metrics_running;
     uint64_t start_time_seconds;
     struct lantern_http_server http_server;
-    bool http_running;
     size_t connected_peers;
     pthread_mutex_t connection_lock;
     bool connection_lock_initialized;
-    struct lantern_string_list dialer_peers;
     struct lantern_connection_peer_ref *connection_peer_refs;
     size_t connection_peer_ref_count;
     size_t connection_peer_ref_capacity;
-    struct lantern_string_list status_failure_peer_ids;
     struct lantern_pending_block_list pending_blocks;
     struct lantern_pending_vote_list pending_gossip_votes;
     struct lantern_backfill_session backfill;
@@ -277,21 +225,15 @@ struct lantern_client {
     pthread_mutex_t block_import_lock;
     pthread_cond_t block_import_cond;
     pthread_t block_import_thread;
-    bool block_import_lock_initialized;
-    bool block_import_cond_initialized;
-    bool block_import_thread_started;
+    bool block_import_sync_initialized;
     bool block_import_stop;
-    LanternRoot sync_last_requested_root;
-    uint64_t sync_last_requested_root_ms;
     uint64_t sync_started_ms;
     uint64_t sync_last_log_ms;
     uint64_t sync_target_slot;
     LanternSyncState sync_state;
-    struct lantern_network_view network_view;
+    LanternStatusMessage network_view;
     uint64_t last_duty_skip_slot;
     const char *last_duty_skip_reason;
-    size_t status_requests_inflight_total;
-    bool status_guard_disabled;
     int dialer_stop_flag;
     uint64_t peer_maintenance_next_us;
     struct lantern_peer_status_entry *peer_status_entries;
@@ -303,15 +245,11 @@ struct lantern_client {
     uint64_t next_blocks_request_id;
     pthread_mutex_t status_lock;
     bool status_lock_initialized;
-    bool debug_disable_block_requests;
-    bool debug_disable_fork_choice_time;
     size_t debug_attestation_committee_count;
     size_t *aggregate_subnet_ids;
     size_t aggregate_subnet_id_count;
     char *xmss_key_dir;
-    char *xmss_public_template;
     char *xmss_secret_template;
-    char *xmss_public_path;
     char *xmss_secret_path;
 };
 

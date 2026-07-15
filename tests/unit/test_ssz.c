@@ -346,7 +346,7 @@ static void reset_signed_block(LanternSignedBlock *block) {
     if (!block) {
         return;
     }
-    lantern_signed_block_with_attestation_reset(block);
+    lantern_signed_block_reset(block);
 }
 
 static void test_block_roundtrip(void) {
@@ -379,7 +379,7 @@ static void test_block_roundtrip(void) {
 
 static void test_signed_block_roundtrip(void) {
     LanternSignedBlock signed_block;
-    lantern_signed_block_with_attestation_init(&signed_block);
+    lantern_signed_block_init(&signed_block);
     populate_block(&signed_block.block);
     populate_signed_block_proof(&signed_block, 0xC1);
 
@@ -388,7 +388,7 @@ static void test_signed_block_roundtrip(void) {
     assert(lantern_ssz_encode_signed_block(&signed_block, buffer, sizeof(buffer), &written) == SSZ_SUCCESS);
 
     LanternSignedBlock decoded;
-    lantern_signed_block_with_attestation_init(&decoded);
+    lantern_signed_block_init(&decoded);
     assert(lantern_ssz_decode_signed_block(&decoded, buffer, written) == SSZ_SUCCESS);
 
     assert(decoded.block.slot == signed_block.block.slot);
@@ -402,7 +402,7 @@ static void test_signed_block_roundtrip(void) {
 
 static void test_signed_block_signature_validation(void) {
     LanternSignedBlock signed_block;
-    lantern_signed_block_with_attestation_init(&signed_block);
+    lantern_signed_block_init(&signed_block);
     populate_block(&signed_block.block);
     populate_signed_block_proof(&signed_block, 0xD1);
 
@@ -411,7 +411,7 @@ static void test_signed_block_signature_validation(void) {
     assert(lantern_ssz_encode_signed_block(&signed_block, buffer, sizeof(buffer), &written) == SSZ_SUCCESS);
 
     LanternSignedBlock decoded;
-    lantern_signed_block_with_attestation_init(&decoded);
+    lantern_signed_block_init(&decoded);
     buffer[sizeof(uint32_t)] = 0x5A; /* corrupt message offset */
     assert(lantern_ssz_decode_signed_block(&decoded, buffer, written) != SSZ_SUCCESS);
     reset_signed_block(&decoded);
@@ -426,7 +426,7 @@ static void test_signed_block_signature_validation(void) {
 
 static void test_signed_block_decode_without_signature_section(void) {
     LanternSignedBlock signed_block;
-    lantern_signed_block_with_attestation_init(&signed_block);
+    lantern_signed_block_init(&signed_block);
     populate_block(&signed_block.block);
 
     uint8_t message_buf[SIGNED_BLOCK_TEST_BUFFER_SIZE];
@@ -449,7 +449,7 @@ static void test_signed_block_decode_without_signature_section(void) {
     memcpy(encoded + (sizeof(uint32_t) * 2u), message_buf, message_written);
 
     LanternSignedBlock decoded;
-    lantern_signed_block_with_attestation_init(&decoded);
+    lantern_signed_block_init(&decoded);
     assert(lantern_ssz_decode_signed_block(&decoded, encoded, encoded_len) != SSZ_SUCCESS);
 
     reset_signed_block(&signed_block);
@@ -460,10 +460,9 @@ static void test_signed_block_decode_without_signature_section(void) {
 static void test_state_roundtrip(void) {
     LanternState state;
     lantern_state_init(&state);
-    state.config.num_validators = 64;
-    state.config.genesis_time = 123456789;
     uint8_t validator_pubkeys[64u * LANTERN_VALIDATOR_PUBKEY_SIZE];
     fill_bytes(validator_pubkeys, sizeof(validator_pubkeys), 0x71);
+    expect_ok(lantern_state_generate_genesis(&state, 123456789u, 64u), "state genesis");
     expect_ok(lantern_state_set_validator_pubkeys(&state, validator_pubkeys, 64u), "state validators");
     state.slot = 42;
     state.latest_block_header.slot = 41;
@@ -497,7 +496,6 @@ static void test_state_roundtrip(void) {
     lantern_state_init(&decoded);
     assert(lantern_ssz_decode_state(&decoded, buffer, written) == SSZ_SUCCESS);
 
-    assert(decoded.config.num_validators == state.config.num_validators);
     assert(decoded.validator_count == state.validator_count);
     assert(decoded.config.genesis_time == state.config.genesis_time);
     assert(decoded.slot == state.slot);
@@ -525,7 +523,7 @@ static void test_state_rejects_truncated_state_payload(void) {
     LanternState genesis_state;
     lantern_state_init(&genesis_state);
     expect_ok(lantern_state_generate_genesis(&genesis_state, 1234, 7), "genesis state");
-    size_t genesis_validator_count = (size_t)genesis_state.config.num_validators;
+    size_t genesis_validator_count = genesis_state.validator_count;
     uint8_t *genesis_attestation_pubkeys = calloc(
         genesis_validator_count,
         LANTERN_VALIDATOR_PUBKEY_SIZE);
@@ -556,7 +554,7 @@ static void test_state_rejects_truncated_state_payload(void) {
         lantern_ssz_decode_state(&decoded_full, encoded, written),
         "decode full state");
     assert(decoded_full.justification_validators.bit_length == 0);
-    assert(decoded_full.config.num_validators == genesis_state.config.num_validators);
+    assert(decoded_full.validator_count == genesis_state.validator_count);
     assert(decoded_full.justified_slots.bit_length == genesis_state.justified_slots.bit_length);
     lantern_state_reset(&decoded_full);
 

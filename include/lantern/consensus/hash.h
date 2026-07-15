@@ -31,12 +31,6 @@ ssz_error_t lantern_hash_tree_root_block(const LanternBlock *block, LanternRoot 
 ssz_error_t lantern_hash_tree_root_signed_block(const LanternSignedBlock *block, LanternRoot *out_root);
 ssz_error_t lantern_hash_tree_root_state(const LanternState *state, LanternRoot *out_root);
 ssz_error_t lantern_hash_tree_root_state_cached(LanternState *state, LanternRoot *out_root);
-ssz_error_t lantern_hash_tree_root_validators(const uint8_t *pubkeys, size_t count, LanternRoot *out_root);
-ssz_error_t lantern_hash_tree_root_validators_dual(
-    const uint8_t *attestation_pubkeys,
-    const uint8_t *proposal_pubkeys,
-    size_t count,
-    LanternRoot *out_root);
 void lantern_state_hash_cache_reset(LanternState *state);
 
 ssz_error_t lantern_merkleize_root_list(

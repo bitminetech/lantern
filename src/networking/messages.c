@@ -12,43 +12,6 @@
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
 
-static int write_u32_le(uint32_t value, uint8_t *out, size_t out_len) {
-    if (!out || out_len < sizeof(uint32_t)) {
-        return -1;
-    }
-    out[0] = (uint8_t)(value & 0xFFu);
-    out[1] = (uint8_t)((value >> 8) & 0xFFu);
-    out[2] = (uint8_t)((value >> 16) & 0xFFu);
-    out[3] = (uint8_t)((value >> 24) & 0xFFu);
-    return 0;
-}
-
-static int read_u32_le(const uint8_t *data, size_t data_len, uint32_t *value) {
-    if (!data || data_len < sizeof(uint32_t) || !value) {
-        return -1;
-    }
-    *value = (uint32_t)data[0]
-        | ((uint32_t)data[1] << 8)
-        | ((uint32_t)data[2] << 16)
-        | ((uint32_t)data[3] << 24);
-    return 0;
-}
-
-static int read_u64_le(const uint8_t *data, size_t data_len, uint64_t *value) {
-    if (!data || data_len < sizeof(uint64_t) || !value) {
-        return -1;
-    }
-    *value = (uint64_t)data[0]
-        | ((uint64_t)data[1] << 8)
-        | ((uint64_t)data[2] << 16)
-        | ((uint64_t)data[3] << 24)
-        | ((uint64_t)data[4] << 32)
-        | ((uint64_t)data[5] << 40)
-        | ((uint64_t)data[6] << 48)
-        | ((uint64_t)data[7] << 56);
-    return 0;
-}
-
 static int ensure_block_capacity(LanternSignedBlockList *resp, size_t required) {
     if (!resp) {
         return -1;
@@ -109,27 +72,11 @@ static void log_status_payload_debug(const char *label, const uint8_t *data, siz
     free(hex);
 }
 
-void lantern_blocks_by_root_request_init(LanternBlocksByRootRequest *req) {
-    if (!req) {
-        return;
-    }
-    lantern_root_list_init(&req->roots);
-}
-
 void lantern_blocks_by_root_request_reset(LanternBlocksByRootRequest *req) {
     if (!req) {
         return;
     }
     lantern_root_list_reset(&req->roots);
-}
-
-void lantern_signed_block_list_init(LanternSignedBlockList *resp) {
-    if (!resp) {
-        return;
-    }
-    resp->blocks = NULL;
-    resp->length = 0;
-    resp->capacity = 0;
 }
 
 void lantern_signed_block_list_reset(LanternSignedBlockList *resp) {
@@ -180,7 +127,7 @@ int lantern_signed_block_list_resize(LanternSignedBlockList *resp, size_t new_le
     return 0;
 }
 
-static int encode_status_raw(
+int lantern_network_status_encode(
     const LanternStatusMessage *status,
     uint8_t *out,
     size_t out_len,
@@ -200,14 +147,6 @@ static int encode_status_raw(
     offset += checkpoint_written;
     *written = offset;
     return 0;
-}
-
-int lantern_network_status_encode(
-    const LanternStatusMessage *status,
-    uint8_t *out,
-    size_t out_len,
-    size_t *written) {
-    return encode_status_raw(status, out, out_len, written);
 }
 
 int lantern_network_status_decode(
@@ -257,7 +196,7 @@ int lantern_network_blocks_by_root_request_encode(
         return -1;
     }
     /* leanSpec: BlocksByRootRequest is container {roots: RequestedBlockRoots}. */
-    if (write_u32_le((uint32_t)sizeof(uint32_t), out, out_len) != 0) {
+    if (ssz_serialize_uint32((uint32_t)sizeof(uint32_t), out) != SSZ_SUCCESS) {
         return -1;
     }
     if (roots_bytes > 0) {
@@ -316,7 +255,7 @@ int lantern_network_blocks_by_root_request_decode(
     /* Canonical SSZ container encoding: [offset=4][packed roots bytes]. */
     if (data_len >= sizeof(uint32_t)) {
         uint32_t offset = 0;
-        if (read_u32_le(data, data_len, &offset) == 0) {
+        if (ssz_deserialize_uint32(data, sizeof(uint32_t), &offset) == SSZ_SUCCESS) {
             if (offset == sizeof(uint32_t) && offset <= data_len) {
                 size_t list_len = data_len - offset;
                 if (list_len % LANTERN_ROOT_SIZE == 0) {
@@ -336,8 +275,12 @@ int lantern_network_blocks_by_range_request_decode(
     if (!req || !data || data_len != 2u * sizeof(uint64_t)) {
         return -1;
     }
-    if (read_u64_le(data, data_len, &req->start_slot) != 0
-        || read_u64_le(data + sizeof(uint64_t), data_len - sizeof(uint64_t), &req->count) != 0) {
+    if (ssz_deserialize_uint64(data, sizeof(uint64_t), &req->start_slot) != SSZ_SUCCESS
+        || ssz_deserialize_uint64(
+               data + sizeof(uint64_t),
+               data_len - sizeof(uint64_t),
+               &req->count)
+            != SSZ_SUCCESS) {
         return -1;
     }
     return 0;

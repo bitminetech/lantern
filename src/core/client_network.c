@@ -11,7 +11,6 @@
  *       3. pending_lock
  *       4. validator_lock
  *       5. connection_lock
- *       6. peer_vote_lock
  */
 
 #include "client_internal.h"
@@ -63,12 +62,6 @@ static void format_peer_id_text(const struct lantern_peer_id *peer, char *out, s
 static lean_metrics_direction_t metrics_direction_from_inbound(bool inbound)
 {
     return inbound ? LEAN_METRICS_DIR_INBOUND : LEAN_METRICS_DIR_OUTBOUND;
-}
-
-static lean_metrics_connection_result_t metrics_connection_result_from_code(int code)
-{
-    (void)code;
-    return LEAN_METRICS_CONN_RESULT_ERROR;
 }
 
 static lean_metrics_disconnection_reason_t metrics_disconnection_reason_from_code(int reason)
@@ -638,7 +631,7 @@ bool lantern_client_is_peer_connected(struct lantern_client *client, const char 
  */
 void request_status_now(struct lantern_client *client, const struct lantern_peer_id *peer, const char *peer_text)
 {
-    if (!client || !client->reqresp_running)
+    if (!client || !client->reqresp.network)
     {
         return;
     }
@@ -668,8 +661,7 @@ void request_status_now(struct lantern_client *client, const struct lantern_peer
     };
 
     bool guard_claimed = false;
-    bool guard_enabled = !client->status_guard_disabled;
-    if (status_peer && client->status_lock_initialized && guard_enabled)
+    if (status_peer && client->status_lock_initialized)
     {
         guard_claimed = lantern_client_try_begin_status_request(client, status_peer);
         if (!guard_claimed)
@@ -681,14 +673,6 @@ void request_status_now(struct lantern_client *client, const struct lantern_peer
             return;
         }
     }
-    else if (status_peer && client->status_guard_disabled)
-    {
-        lantern_log_debug(
-            "reqresp",
-            &meta,
-            "status guard disabled; allowing concurrent request");
-    }
-
     struct lantern_peer_id resolved_peer;
     const struct lantern_peer_id *peer_arg = peer;
     if (!peer_arg && status_peer
@@ -725,16 +709,9 @@ void request_status_now(struct lantern_client *client, const struct lantern_peer
                 .validator = client->node_id},
             "initiated status request to peer");
     }
-    if (status_peer)
+    if (status_peer && status_rc != 0)
     {
-        if (status_rc == 0)
-        {
-            lantern_client_note_status_request_start(client, status_peer);
-        }
-        else
-        {
-            lantern_client_status_request_failed(client, status_peer);
-        }
+        lantern_client_status_request_failed(client, status_peer);
     }
 }
 
@@ -970,8 +947,7 @@ static size_t snapshot_connected_peers(
                 &client->connection_peer_refs[i].peer,
                 peer_text,
                 sizeof(peer_text));
-            if (peer_text[0] && !string_list_contains(out_snapshot, peer_text)
-                && lantern_string_list_append(out_snapshot, peer_text) != 0)
+            if (lantern_string_list_append_unique(out_snapshot, peer_text) != 0)
             {
                 lantern_string_list_reset(out_snapshot);
                 lantern_string_list_init(out_snapshot);
@@ -1076,7 +1052,8 @@ static void peer_dialer_handle_record(
     char peer_text[128];
     format_peer_id_text(&peer_id, peer_text, sizeof(peer_text));
 
-    if (peer_text[0] && connected_snapshot && string_list_contains(connected_snapshot, peer_text))
+    if (peer_text[0] && connected_snapshot
+        && lantern_string_list_contains(connected_snapshot, peer_text))
     {
         return;
     }
@@ -1090,11 +1067,6 @@ static void peer_dialer_handle_record(
 
     const char *peer_label = peer_text[0] ? peer_text : record->encoded;
     identify_dial_multiaddr(client, multiaddr, peer_label);
-
-    if (peer_text[0] && !string_list_contains(&client->dialer_peers, peer_text))
-    {
-        (void)lantern_string_list_append(&client->dialer_peers, peer_text);
-    }
 }
 
 
@@ -1151,7 +1123,7 @@ cleanup:
 
 void peer_status_refresh(struct lantern_client *client)
 {
-    if (!client || !client->reqresp_running)
+    if (!client || !client->reqresp.network)
     {
         return;
     }
@@ -1409,7 +1381,7 @@ static void handle_outgoing_connection_error_event(
 
     lean_metrics_record_peer_connection(
         LEAN_METRICS_DIR_OUTBOUND,
-        metrics_connection_result_from_code(code));
+        LEAN_METRICS_CONN_RESULT_ERROR);
 }
 
 

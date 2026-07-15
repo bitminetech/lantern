@@ -42,13 +42,13 @@ struct checkpoint_callback_ctx
 
 struct snapshot_callback_ctx
 {
-    struct lantern_http_head_snapshot snapshot;
+    LanternCheckpoint checkpoint;
     int rc;
 };
 
 struct fork_choice_snapshot_callback_ctx
 {
-    struct lantern_http_fork_choice_snapshot snapshot;
+    struct lantern_fork_choice_tree_snapshot snapshot;
     int rc;
 };
 
@@ -306,9 +306,9 @@ static int finalized_state_cb(void *context, uint8_t **out_bytes, size_t *out_le
     return LANTERN_HTTP_CB_OK;
 }
 
-static int snapshot_head_cb(void *context, struct lantern_http_head_snapshot *out_snapshot)
+static int snapshot_justified_cb(void *context, LanternCheckpoint *out_checkpoint)
 {
-    if (!context || !out_snapshot)
+    if (!context || !out_checkpoint)
     {
         return LANTERN_HTTP_CB_ERR_INVALID_PARAM;
     }
@@ -317,13 +317,13 @@ static int snapshot_head_cb(void *context, struct lantern_http_head_snapshot *ou
     {
         return ctx->rc;
     }
-    *out_snapshot = ctx->snapshot;
+    *out_checkpoint = ctx->checkpoint;
     return LANTERN_HTTP_CB_OK;
 }
 
 static int snapshot_fork_choice_cb(
     void *context,
-    struct lantern_http_fork_choice_snapshot *out_snapshot)
+    struct lantern_fork_choice_tree_snapshot *out_snapshot)
 {
     if (!context || !out_snapshot)
     {
@@ -758,10 +758,10 @@ static int test_justified_state_endpoint(void)
     struct snapshot_callback_ctx ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.rc = LANTERN_HTTP_CB_OK;
-    ctx.snapshot.justified.slot = 42u;
+    ctx.checkpoint.slot = 42u;
     for (size_t i = 0; i < LANTERN_ROOT_SIZE; ++i)
     {
-        ctx.snapshot.justified.root.bytes[i] = (uint8_t)(0x90u + (uint8_t)i);
+        ctx.checkpoint.root.bytes[i] = (uint8_t)(0x90u + (uint8_t)i);
     }
 
     struct lantern_http_server server;
@@ -770,7 +770,7 @@ static int test_justified_state_endpoint(void)
     memset(&config, 0, sizeof(config));
     config.port = 0;
     config.callbacks.context = &ctx;
-    config.callbacks.snapshot_head = snapshot_head_cb;
+    config.callbacks.snapshot_justified = snapshot_justified_cb;
 
     if (lantern_http_server_start(&server, &config) != 0)
     {
@@ -817,7 +817,7 @@ static int test_justified_state_endpoint(void)
     char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
     expect_zero(
         lantern_bytes_to_hex(
-            ctx.snapshot.justified.root.bytes,
+            ctx.checkpoint.root.bytes,
             LANTERN_ROOT_SIZE,
             root_hex,
             sizeof(root_hex),
@@ -829,7 +829,7 @@ static int test_justified_state_endpoint(void)
         expected,
         sizeof(expected),
         "{\"slot\":%" PRIu64 ",\"root\":\"%s\"}",
-        ctx.snapshot.justified.slot,
+        ctx.checkpoint.slot,
         root_hex);
     expect_true(expected_written > 0 && (size_t)expected_written < sizeof(expected), "expected json length");
 
@@ -870,7 +870,7 @@ static int test_fork_choice_endpoint(void)
     memset(&ctx, 0, sizeof(ctx));
     ctx.rc = LANTERN_HTTP_CB_OK;
 
-    struct lantern_http_fork_choice_node nodes[3];
+    struct lantern_fork_choice_tree_node nodes[3];
     memset(nodes, 0, sizeof(nodes));
 
     for (size_t i = 0; i < LANTERN_ROOT_SIZE; ++i)

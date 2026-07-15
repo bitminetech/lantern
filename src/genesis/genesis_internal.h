@@ -39,10 +39,9 @@ int genesis_decode_validator_pubkey_hex(
     uint8_t out[LANTERN_VALIDATOR_PUBKEY_SIZE]);
 
 int genesis_parse_chain_config(const char *path, struct lantern_chain_config *config);
-int genesis_parse_genesis_validator_pubkeys(
+int genesis_parse_genesis_validators(
     const char *path,
-    uint8_t **out_attestation_pubkeys,
-    uint8_t **out_proposal_pubkeys,
+    LanternValidator **out_validators,
     size_t *out_count);
 int genesis_parse_validator_config(const char *path, struct lantern_validator_config *config);
 int genesis_parse_nodes_file(const char *path, struct lantern_enr_record_list *list);

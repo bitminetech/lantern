@@ -10,20 +10,16 @@
  *       3. pending_lock
  *       4. validator_lock
  *       5. connection_lock
- *       6. peer_vote_lock
  */
 
 #include "client_internal.h"
 
-#include <inttypes.h>
 #include <pthread.h>
 #include <stdbool.h>
-#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "lantern/consensus/fork_choice.h"
-#include "lantern/consensus/hash.h"
 #include "lantern/http/server.h"
 #include "lantern/metrics/lean_metrics.h"
 #include "lantern/storage/storage.h"
@@ -31,120 +27,49 @@
 #include "lantern/support/strings.h"
 
 
-/**
- * @brief Unlock a mutex and log on failure.
- */
-static void unlock_mutex_with_log(
-    pthread_mutex_t *mutex,
-    const char *validator_id,
-    const char *name)
-{
-    if (!mutex || !name)
-    {
-        return;
-    }
-
-    int unlock_rc = pthread_mutex_unlock(mutex);
-    if (unlock_rc != 0)
-    {
-        lantern_log_warn(
-            "client_http",
-            &(const struct lantern_log_metadata){.validator = validator_id},
-            "failed to unlock %s: %d",
-            name,
-            unlock_rc);
-    }
-}
-
-
-/* ============================================================================
- * Validator Index Lookup
- * ============================================================================ */
-
-/**
- * Find local validator index by global index.
- *
- * @param client        Client instance
- * @param global_index  Global validator index to find
- * @param out_index     Output for local index
- *
- * @return 0 on success
- * @return LANTERN_HTTP_CB_ERR_INVALID_PARAM if client or out_index is NULL
- * @return LANTERN_HTTP_CB_ERR_NOT_FOUND if validator is not found
- *
- * @note Thread safety: This function is thread-safe
- */
-int find_local_validator_index(
-    const struct lantern_client *client,
-    uint64_t global_index,
-    size_t *out_index)
-{
-    if (!client || !out_index)
-    {
-        return LANTERN_HTTP_CB_ERR_INVALID_PARAM;
-    }
-    for (size_t i = 0; i < client->local_validator_count; ++i)
-    {
-        if (client->local_validators
-            && client->local_validators[i].global_index == global_index)
-        {
-            *out_index = i;
-            return LANTERN_HTTP_CB_OK;
-        }
-    }
-    return LANTERN_HTTP_CB_ERR_NOT_FOUND;
-}
-
-
 /* ============================================================================
  * HTTP Snapshot Callbacks
  * ============================================================================ */
 
 /**
- * Get current head snapshot for HTTP API.
+ * Get the current justified checkpoint for HTTP API.
  *
  * @param context       Client instance
- * @param out_snapshot  Output snapshot structure
+ * @param out_checkpoint Output checkpoint
  *
  * @return 0 on success
- * @return LANTERN_HTTP_CB_ERR_INVALID_PARAM if context or out_snapshot is NULL
+ * @return LANTERN_HTTP_CB_ERR_INVALID_PARAM if context or out_checkpoint is NULL
  * @return LANTERN_HTTP_CB_ERR_INVALID_STATE if checkpoint snapshot is unavailable
  *
  * @note Thread safety: Reads fork-choice checkpoint snapshots without acquiring state_lock.
  */
-int http_snapshot_head(void *context, struct lantern_http_head_snapshot *out_snapshot)
+int http_snapshot_justified(void *context, LanternCheckpoint *out_checkpoint)
 {
-    if (!context || !out_snapshot)
+    if (!context || !out_checkpoint)
     {
         return LANTERN_HTTP_CB_ERR_INVALID_PARAM;
     }
     struct lantern_client *client = context;
-    memset(out_snapshot, 0, sizeof(*out_snapshot));
 
-    if (!client->has_fork_choice)
+    if (client->store.block_len == 0u)
     {
         return LANTERN_HTTP_CB_ERR_INVALID_STATE;
     }
 
-    LanternCheckpoint justified;
-    LanternCheckpoint finalized;
     if (!lantern_fork_choice_read_checkpoint_snapshot(
-            &client->fork_choice,
-            &justified,
-            &finalized))
+            &client->store,
+            out_checkpoint,
+            NULL))
     {
         return LANTERN_HTTP_CB_ERR_INVALID_STATE;
     }
 
-    out_snapshot->slot = justified.slot;
-    out_snapshot->justified = justified;
-    out_snapshot->finalized = finalized;
     return LANTERN_HTTP_CB_OK;
 }
 
 int http_snapshot_fork_choice(
     void *context,
-    struct lantern_http_fork_choice_snapshot *out_snapshot)
+    struct lantern_fork_choice_tree_snapshot *out_snapshot)
 {
     if (!context || !out_snapshot)
     {
@@ -160,232 +85,15 @@ int http_snapshot_fork_choice(
         return LANTERN_HTTP_CB_ERR_LOCK_FAILED;
     }
 
-    if (!client->has_fork_choice
-        || !client->fork_choice.initialized
-        || !client->fork_choice.has_anchor)
+    if (client->store.block_len == 0u)
     {
         lantern_client_unlock_state(client, state_locked);
         return LANTERN_HTTP_CB_ERR_INVALID_STATE;
     }
 
-    struct lantern_fork_choice_tree_snapshot snapshot;
-    memset(&snapshot, 0, sizeof(snapshot));
-    if (lantern_fork_choice_snapshot_tree(&client->fork_choice, &snapshot) != 0)
-    {
-        lantern_client_unlock_state(client, state_locked);
-        return LANTERN_HTTP_CB_ERR_IO;
-    }
-
-    uint64_t validator_count = 0;
-    const LanternState *head_state =
-        lantern_fork_choice_block_state(&client->fork_choice, &snapshot.head);
-    if (head_state)
-    {
-        validator_count = (uint64_t)lantern_state_validator_count(head_state);
-    }
-    else if (client->has_state)
-    {
-        LanternRoot state_head_root;
-        if (lantern_hash_tree_root_block_header(
-                &client->state.latest_block_header,
-                &state_head_root)
-            != SSZ_SUCCESS)
-        {
-            lantern_fork_choice_tree_snapshot_reset(&snapshot);
-            lantern_client_unlock_state(client, state_locked);
-            return LANTERN_HTTP_CB_ERR_HASH_FAILED;
-        }
-        if (memcmp(state_head_root.bytes, snapshot.head.bytes, LANTERN_ROOT_SIZE) == 0)
-        {
-            validator_count = (uint64_t)lantern_state_validator_count(&client->state);
-        }
-    }
-
-    if (snapshot.node_count > 0)
-    {
-        out_snapshot->nodes = calloc(snapshot.node_count, sizeof(*out_snapshot->nodes));
-        if (!out_snapshot->nodes)
-        {
-            lantern_fork_choice_tree_snapshot_reset(&snapshot);
-            lantern_client_unlock_state(client, state_locked);
-            return LANTERN_HTTP_CB_ERR_IO;
-        }
-    }
-
-    for (size_t i = 0; i < snapshot.node_count; ++i)
-    {
-        out_snapshot->nodes[i].root = snapshot.nodes[i].root;
-        out_snapshot->nodes[i].slot = snapshot.nodes[i].slot;
-        out_snapshot->nodes[i].parent_root = snapshot.nodes[i].parent_root;
-        out_snapshot->nodes[i].proposer_index = snapshot.nodes[i].proposer_index;
-        out_snapshot->nodes[i].weight = snapshot.nodes[i].weight;
-    }
-
-    out_snapshot->node_count = snapshot.node_count;
-    out_snapshot->head = snapshot.head;
-    out_snapshot->justified = snapshot.justified;
-    out_snapshot->finalized = snapshot.finalized;
-    out_snapshot->safe_target = snapshot.safe_target;
-    out_snapshot->validator_count = validator_count;
-
-    lantern_fork_choice_tree_snapshot_reset(&snapshot);
+    int result = lantern_fork_choice_snapshot_tree(&client->store, out_snapshot);
     lantern_client_unlock_state(client, state_locked);
-    return LANTERN_HTTP_CB_OK;
-}
-
-
-/* ============================================================================
- * HTTP Validator Callbacks
- * ============================================================================ */
-
-/**
- * Get count of local validators for HTTP API.
- *
- * @param context  Client instance
- * @return Number of local validators
- *
- * @note Thread safety: This function is thread-safe
- */
-size_t http_validator_count_cb(void *context)
-{
-    const struct lantern_client *client = context;
-    if (!client)
-    {
-        return 0;
-    }
-    return client->local_validator_count;
-}
-
-
-/**
- * Get validator info for HTTP API.
- *
- * @param context   Client instance
- * @param index     Local validator index
- * @param out_info  Output info structure
- *
- * @return 0 on success
- * @return LANTERN_HTTP_CB_ERR_INVALID_PARAM if context or out_info is NULL
- * @return LANTERN_HTTP_CB_ERR_NOT_FOUND if index is out of bounds or validator data is
- *         unavailable
- * @return LANTERN_HTTP_CB_ERR_LOCK_FAILED if validator_lock is initialized but cannot be
- *         acquired
- *
- * @note Thread safety: This function may acquire validator_lock
- */
-int http_validator_info_cb(
-    void *context,
-    size_t index,
-    struct lantern_http_validator_info *out_info)
-{
-    if (!context || !out_info)
-    {
-        return LANTERN_HTTP_CB_ERR_INVALID_PARAM;
-    }
-    struct lantern_client *client = context;
-    if (index >= client->local_validator_count || !client->local_validators)
-    {
-        return LANTERN_HTTP_CB_ERR_NOT_FOUND;
-    }
-    memset(out_info, 0, sizeof(*out_info));
-    out_info->global_index = client->local_validators[index].global_index;
-
-    bool enabled;
-    if (client->validator_lock_initialized)
-    {
-        if (pthread_mutex_lock(&client->validator_lock) != 0)
-        {
-            return LANTERN_HTTP_CB_ERR_LOCK_FAILED;
-        }
-        enabled = !client->local_validators[index].disabled;
-        unlock_mutex_with_log(&client->validator_lock, client->node_id, "validator_lock");
-    }
-    else
-    {
-        enabled = !client->local_validators[index].disabled;
-    }
-    out_info->enabled = enabled;
-
-    const char *base = client->node_id ? client->node_id : "validator";
-    int written = snprintf(
-        out_info->label,
-        sizeof(out_info->label),
-        "%s#%" PRIu64,
-        base,
-        out_info->global_index);
-    if (written < 0 || (size_t)written >= sizeof(out_info->label))
-    {
-        (void)lantern_string_copy(out_info->label, sizeof(out_info->label), base);
-    }
-    return LANTERN_HTTP_CB_OK;
-}
-
-
-/**
- * Set validator enabled/disabled status for HTTP API.
- *
- * @param context       Client instance
- * @param global_index  Global validator index
- * @param enabled       New enabled status
- *
- * @return 0 on success
- * @return LANTERN_HTTP_CB_ERR_INVALID_PARAM if context is NULL
- * @return LANTERN_HTTP_CB_ERR_INVALID_STATE if validator tracking is not initialized
- * @return LANTERN_HTTP_CB_ERR_LOCK_FAILED if validator_lock cannot be acquired
- * @return LANTERN_HTTP_CB_ERR_NOT_FOUND if global_index is not a local validator
- *
- * @note Thread safety: This function acquires validator_lock
- */
-int http_set_validator_status_cb(void *context, uint64_t global_index, bool enabled)
-{
-    if (!context)
-    {
-        return LANTERN_HTTP_CB_ERR_INVALID_PARAM;
-    }
-    struct lantern_client *client = context;
-    if (!client->validator_lock_initialized || !client->local_validators)
-    {
-        return LANTERN_HTTP_CB_ERR_INVALID_STATE;
-    }
-    if (pthread_mutex_lock(&client->validator_lock) != 0)
-    {
-        return LANTERN_HTTP_CB_ERR_LOCK_FAILED;
-    }
-    size_t local_index = 0;
-    if (find_local_validator_index(client, global_index, &local_index) != 0
-        || local_index >= client->local_validator_count)
-    {
-        unlock_mutex_with_log(&client->validator_lock, client->node_id, "validator_lock");
-        return LANTERN_HTTP_CB_ERR_NOT_FOUND;
-    }
-    client->local_validators[local_index].disabled = !enabled;
-
-    size_t enabled_count = 0;
-    size_t disabled_count = 0;
-    for (size_t i = 0; i < client->local_validator_count; ++i)
-    {
-        if (!client->local_validators[i].disabled)
-        {
-            ++enabled_count;
-        }
-        else
-        {
-            ++disabled_count;
-        }
-    }
-
-    unlock_mutex_with_log(&client->validator_lock, client->node_id, "validator_lock");
-
-    lantern_log_info(
-        "validator",
-        &(const struct lantern_log_metadata){.validator = client->node_id},
-        "validator %" PRIu64 " %s (enabled=%zu disabled=%zu)",
-        global_index,
-        enabled ? "activated" : "deactivated",
-        enabled_count,
-        disabled_count);
-
-    return LANTERN_HTTP_CB_OK;
+    return result == 0 ? LANTERN_HTTP_CB_OK : LANTERN_HTTP_CB_ERR_IO;
 }
 
 
@@ -424,11 +132,10 @@ int http_set_is_aggregator_cb(void *context, bool enabled, bool *out_previous)
     {
         return LANTERN_HTTP_CB_ERR_LOCK_FAILED;
     }
-    struct lantern_validator_config_entry *mutable_entry =
-        (struct lantern_validator_config_entry *)client->assigned_validators;
-    bool previous = mutable_entry->enr.is_aggregator;
-    mutable_entry->enr.is_aggregator = enabled;
-    unlock_mutex_with_log(&client->validator_lock, client->node_id, "validator_lock");
+    bool previous = client->assigned_validators->enr.is_aggregator;
+    client->assigned_validators->enr.is_aggregator = enabled;
+    lantern_client_unlock_mutex(
+        &client->validator_lock, client->node_id, "validator_lock", "client_http");
 
     *out_previous = previous;
 
@@ -459,7 +166,7 @@ int http_set_is_aggregator_cb(void *context, bool enabled, bool *out_previous)
  * @return LANTERN_HTTP_CB_ERR_INVALID_PARAM if context or out_snapshot is NULL
  * @return LANTERN_HTTP_CB_ERR_LOCK_FAILED if required locks cannot be acquired
  *
- * @note Thread safety: This function may acquire state_lock and peer_vote_lock
+ * @note Thread safety: This function may acquire state_lock and status_lock
  */
 int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snapshot)
 {
@@ -485,38 +192,32 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
     size_t gossip_signature_count = 0;
     size_t new_aggregated_payload_count = 0;
     size_t known_aggregated_payload_count = 0;
-    if (client->has_fork_choice)
+    if (client->store.block_len > 0u)
     {
-        if (lantern_fork_choice_current_head(&client->fork_choice, &fork_head_root) == 0)
+        fork_head_root = client->store.head;
+        uint64_t slot = 0;
+        if (lantern_fork_choice_block_info(
+                &client->store,
+                &fork_head_root,
+                &slot,
+                NULL,
+                NULL)
+            == 0)
         {
-            uint64_t slot = 0;
-            if (lantern_fork_choice_block_info(
-                    &client->fork_choice,
-                    &fork_head_root,
-                    &slot,
-                    NULL,
-                    NULL)
-                == 0)
-            {
-                fork_head_slot = slot;
-                have_fork_head = true;
-            }
+            fork_head_slot = slot;
+            have_fork_head = true;
         }
 
-        const LanternRoot *safe_target = lantern_fork_choice_safe_target(&client->fork_choice);
-        if (safe_target)
+        slot = 0;
+        if (lantern_fork_choice_block_info(
+                &client->store,
+                &client->store.safe_target,
+                &slot,
+                NULL,
+                NULL)
+            == 0)
         {
-            uint64_t slot = 0;
-            if (lantern_fork_choice_block_info(
-                    &client->fork_choice,
-                    safe_target,
-                    &slot,
-                    NULL,
-                    NULL)
-                == 0)
-            {
-                safe_target_slot = slot;
-            }
+            safe_target_slot = slot;
         }
 
     }
@@ -530,7 +231,7 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
     LanternCheckpoint state_finalized;
     memset(&state_justified, 0, sizeof(state_justified));
     memset(&state_finalized, 0, sizeof(state_finalized));
-    if (client->has_state)
+    if (client->state.validator_count > 0u)
     {
         /* Use the latest_block_header slot which is the actual block slot,
            not state.slot which may be advanced during state transition processing */
@@ -550,8 +251,8 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
     out_snapshot->lean_safe_target_slot = safe_target_slot;
     out_snapshot->lean_latest_justified_slot = state_justified.slot;
     out_snapshot->lean_latest_finalized_slot = state_finalized.slot;
-    out_snapshot->lean_justified_slot = client->state.latest_justified.slot;
-    out_snapshot->lean_finalized_slot = client->state.latest_finalized.slot;
+    out_snapshot->lean_justified_slot = state_justified.slot;
+    out_snapshot->lean_finalized_slot = state_finalized.slot;
     (void)snprintf(
         out_snapshot->lean_client_label,
         sizeof(out_snapshot->lean_client_label),
@@ -576,30 +277,34 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
             return LANTERN_HTTP_CB_ERR_LOCK_FAILED;
         }
         out_snapshot->lean_connected_peers = client->connected_peers;
-        unlock_mutex_with_log(&client->connection_lock, client->node_id, "connection_lock");
+        lantern_client_unlock_mutex(
+            &client->connection_lock, client->node_id, "connection_lock", "client_http");
     }
     out_snapshot->peer_vote_metrics_count = 0;
-    if (client->peer_vote_lock_initialized)
+    if (client->status_lock_initialized)
     {
-        if (pthread_mutex_lock(&client->peer_vote_lock) != 0)
+        if (pthread_mutex_lock(&client->status_lock) != 0)
         {
             return LANTERN_HTTP_CB_ERR_LOCK_FAILED;
         }
 
+        const size_t limit = LANTERN_METRICS_MAX_PEER_VOTE_STATS;
+        for (size_t i = 0;
+             i < client->peer_status_count && out_snapshot->peer_vote_metrics_count < limit;
+             ++i)
         {
-            const size_t limit = LANTERN_METRICS_MAX_PEER_VOTE_STATS;
-            for (size_t i = 0;
-                 i < client->peer_vote_stats_len
-                     && out_snapshot->peer_vote_metrics_count < limit;
-                 ++i)
-            {
-                const struct lantern_peer_vote_metric *entry = &client->peer_vote_stats[i];
-                struct lantern_peer_vote_metric *metric =
-                    &out_snapshot->peer_vote_metrics[out_snapshot->peer_vote_metrics_count++];
-                *metric = *entry;
-            }
-            unlock_mutex_with_log(&client->peer_vote_lock, client->node_id, "peer_vote_lock");
+            const struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
+            struct lantern_peer_vote_metric *metric =
+                &out_snapshot->peer_vote_metrics[out_snapshot->peer_vote_metrics_count++];
+            (void)lantern_string_copy(metric->peer_id, sizeof(metric->peer_id), entry->peer_id);
+            metric->received_total = entry->votes_received;
+            metric->accepted_total = entry->votes_accepted;
+            metric->rejected_total = entry->votes_rejected;
+            metric->last_validator_id = entry->last_vote_validator_id;
+            metric->last_slot = entry->last_vote_slot;
         }
+        lantern_client_unlock_mutex(
+            &client->status_lock, client->node_id, "status_lock", "client_http");
     }
     lean_metrics_snapshot(&out_snapshot->lean_metrics);
     return LANTERN_HTTP_CB_OK;
@@ -609,6 +314,42 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
 /* ============================================================================
  * Checkpoint Sync Callbacks
  * ============================================================================ */
+
+static int load_finalized_ssz(
+    void *context,
+    uint8_t **out_bytes,
+    size_t *out_len,
+    int (*load)(const char *, const LanternRoot *, uint8_t **, size_t *))
+{
+    if (!context || !out_bytes || !out_len || !load)
+    {
+        return LANTERN_HTTP_CB_ERR_INVALID_PARAM;
+    }
+
+    *out_bytes = NULL;
+    *out_len = 0;
+
+    struct lantern_client *client = context;
+    if (!client->data_dir || client->store.block_len == 0u)
+    {
+        return LANTERN_HTTP_CB_ERR_INVALID_STATE;
+    }
+
+    LanternCheckpoint finalized;
+    if (!lantern_fork_choice_read_checkpoint_snapshot(&client->store, NULL, &finalized))
+    {
+        return LANTERN_HTTP_CB_ERR_INVALID_STATE;
+    }
+    if (lantern_root_is_zero(&finalized.root))
+    {
+        return LANTERN_HTTP_CB_ERR_NOT_FOUND;
+    }
+
+    int load_rc = load(client->data_dir, &finalized.root, out_bytes, out_len);
+    return load_rc == 0
+        ? LANTERN_HTTP_CB_OK
+        : (load_rc > 0 ? LANTERN_HTTP_CB_ERR_NOT_FOUND : LANTERN_HTTP_CB_ERR_IO);
+}
 
 /**
  * Get finalized state SSZ bytes for checkpoint sync.
@@ -629,53 +370,11 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
  */
 int http_finalized_state_ssz_cb(void *context, uint8_t **out_bytes, size_t *out_len)
 {
-    if (!context || !out_bytes || !out_len)
-    {
-        return LANTERN_HTTP_CB_ERR_INVALID_PARAM;
-    }
-
-    *out_bytes = NULL;
-    *out_len = 0;
-
-    struct lantern_client *client = context;
-    if (!client->data_dir)
-    {
-        return LANTERN_HTTP_CB_ERR_INVALID_STATE;
-    }
-
-    if (!client->has_fork_choice)
-    {
-        return LANTERN_HTTP_CB_ERR_INVALID_STATE;
-    }
-
-    LanternCheckpoint finalized;
-    if (!lantern_fork_choice_read_checkpoint_snapshot(
-            &client->fork_choice,
-            NULL,
-            &finalized))
-    {
-        return LANTERN_HTTP_CB_ERR_INVALID_STATE;
-    }
-
-    if (lantern_root_is_zero(&finalized.root))
-    {
-        return LANTERN_HTTP_CB_ERR_NOT_FOUND;
-    }
-
-    int load_rc = lantern_storage_load_state_bytes_for_root(
-        client->data_dir,
-        &finalized.root,
+    return load_finalized_ssz(
+        context,
         out_bytes,
-        out_len);
-    if (load_rc == 0)
-    {
-        return LANTERN_HTTP_CB_OK;
-    }
-    if (load_rc > 0)
-    {
-        return LANTERN_HTTP_CB_ERR_NOT_FOUND;
-    }
-    return LANTERN_HTTP_CB_ERR_IO;
+        out_len,
+        lantern_storage_load_state_bytes_for_root);
 }
 
 /**
@@ -693,51 +392,9 @@ int http_finalized_state_ssz_cb(void *context, uint8_t **out_bytes, size_t *out_
  */
 int http_finalized_block_ssz_cb(void *context, uint8_t **out_bytes, size_t *out_len)
 {
-    if (!context || !out_bytes || !out_len)
-    {
-        return LANTERN_HTTP_CB_ERR_INVALID_PARAM;
-    }
-
-    *out_bytes = NULL;
-    *out_len = 0;
-
-    struct lantern_client *client = context;
-    if (!client->data_dir)
-    {
-        return LANTERN_HTTP_CB_ERR_INVALID_STATE;
-    }
-
-    if (!client->has_fork_choice)
-    {
-        return LANTERN_HTTP_CB_ERR_INVALID_STATE;
-    }
-
-    LanternCheckpoint finalized;
-    if (!lantern_fork_choice_read_checkpoint_snapshot(
-            &client->fork_choice,
-            NULL,
-            &finalized))
-    {
-        return LANTERN_HTTP_CB_ERR_INVALID_STATE;
-    }
-
-    if (lantern_root_is_zero(&finalized.root))
-    {
-        return LANTERN_HTTP_CB_ERR_NOT_FOUND;
-    }
-
-    int load_rc = lantern_storage_load_block_bytes_for_root(
-        client->data_dir,
-        &finalized.root,
+    return load_finalized_ssz(
+        context,
         out_bytes,
-        out_len);
-    if (load_rc == 0)
-    {
-        return LANTERN_HTTP_CB_OK;
-    }
-    if (load_rc > 0)
-    {
-        return LANTERN_HTTP_CB_ERR_NOT_FOUND;
-    }
-    return LANTERN_HTTP_CB_ERR_IO;
+        out_len,
+        lantern_storage_load_block_bytes_for_root);
 }

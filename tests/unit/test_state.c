@@ -15,6 +15,37 @@
 #include "pq-bindings-c-rust.h"
 #include "../support/state_store_adapter.h"
 
+typedef struct {
+    LanternSignature *data;
+    size_t length;
+    size_t capacity;
+} LanternSignatureList;
+
+static void lantern_signature_list_init(LanternSignatureList *list) {
+    memset(list, 0, sizeof(*list));
+}
+
+static void lantern_signature_list_reset(LanternSignatureList *list) {
+    free(list->data);
+    memset(list, 0, sizeof(*list));
+}
+
+static int lantern_signature_list_resize(LanternSignatureList *list, size_t length) {
+    if (length > list->capacity) {
+        LanternSignature *data = realloc(list->data, length * sizeof(*data));
+        if (!data) {
+            return -1;
+        }
+        list->data = data;
+        list->capacity = length;
+    }
+    if (length > list->length) {
+        memset(list->data + list->length, 0, (length - list->length) * sizeof(*list->data));
+    }
+    list->length = length;
+    return 0;
+}
+
 static void expect_zero(int rc, const char *label) {
     if (rc != 0) {
         fprintf(stderr, "%s failed (rc=%d)\n", label, rc);
@@ -111,10 +142,9 @@ static int build_proposer_only_block_proof(
 
     int rc = -1;
     LanternAggregatedSignatureProof proposer_proof;
-    LanternAttestationSignatures attestation_proofs;
+    struct lantern_aggregated_payload_pool attestation_payloads = {0};
     struct lantern_bitlist proposer_participants;
     lantern_aggregated_signature_proof_init(&proposer_proof);
-    lantern_attestation_signatures_init(&attestation_proofs);
     lantern_bitlist_init(&proposer_participants);
 
     size_t proposer_index = (size_t)block->proposer_index;
@@ -146,7 +176,7 @@ static int build_proposer_only_block_proof(
     if (!lantern_signature_merge_block_type2_proof(
             state,
             block,
-            &attestation_proofs,
+            &attestation_payloads,
             &proposer_proof,
             out_proof)) {
         goto cleanup;
@@ -156,7 +186,7 @@ static int build_proposer_only_block_proof(
 
 cleanup:
     lantern_bitlist_reset(&proposer_participants);
-    lantern_attestation_signatures_reset(&attestation_proofs);
+    lantern_aggregated_payload_pool_reset(&attestation_payloads);
     lantern_aggregated_signature_proof_reset(&proposer_proof);
     return rc;
 }
@@ -384,19 +414,15 @@ static bool checkpoints_equal(const LanternCheckpoint *a, const LanternCheckpoin
 
 static void setup_state_and_fork_choice(
     LanternState *state,
-    LanternForkChoice *fork_choice,
+    LanternStore *fork_choice,
     uint64_t genesis_time,
     uint64_t validator_count,
     LanternRoot *out_anchor_root) {
     lantern_state_init(state);
     expect_zero(lantern_state_generate_genesis(state, genesis_time, validator_count), "generate genesis for setup");
 
-    lantern_fork_choice_init(fork_choice);
+    lantern_store_init(fork_choice);
     lantern_state_attach_fork_choice(state, fork_choice);
-    expect_zero(
-        lantern_fork_choice_configure(fork_choice, state->config.num_validators),
-        "configure fork choice for setup");
-
     LanternRoot state_root;
     expect_ssz_success(lantern_hash_tree_root_state(state, &state_root), "hash state for anchor setup");
     state->latest_block_header.state_root = state_root;
@@ -424,7 +450,7 @@ static void setup_state_and_fork_choice(
             &state->latest_justified,
             &state->latest_finalized,
             out_anchor_root,
-            NULL),
+            state),
         "set fork choice anchor");
 
     lantern_state_attach_fork_choice(state, fork_choice);
@@ -440,7 +466,7 @@ static void make_block(
     memset(out_block, 0, sizeof(*out_block));
     out_block->slot = slot;
     expect_zero(
-        lantern_proposer_for_slot(slot, state->config.num_validators, &out_block->proposer_index),
+        lantern_proposer_for_slot(slot, state->validator_count, &out_block->proposer_index),
         "compute proposer for block");
     out_block->parent_root = *parent_root;
     memset(out_block->state_root.bytes, 0, sizeof(out_block->state_root.bytes));
@@ -456,7 +482,7 @@ static int test_genesis_state(void) {
     assert(state.justified_slots.bit_length == 0);
 
     assert(state.config.genesis_time == 1234);
-    assert(state.config.num_validators == 8);
+    assert(state.validator_count == 8);
     assert(state.slot == 0);
 
     LanternBlockBody empty_body;
@@ -522,6 +548,7 @@ static int test_validator_registry_limit_enforced(void) {
     uint8_t *pubkeys = calloc(max_pubkey_count, LANTERN_VALIDATOR_PUBKEY_SIZE);
     assert(pubkeys != NULL);
 
+    expect_zero(lantern_state_generate_genesis(&state, 999u, limit), "regenerate at limit");
     expect_zero(lantern_state_set_validator_pubkeys(&state, pubkeys, pubkey_count), "set pubkeys at limit");
     if (lantern_state_set_validator_pubkeys(&state, pubkeys, max_pubkey_count) == 0) {
         fprintf(stderr, "expected pubkey setter to reject counts above limit\n");
@@ -1085,7 +1112,7 @@ static int seed_known_payload_for_vote(
         pq_public_key_free(pubkey);
         return -1;
     }
-    size_t validator_count = (size_t)state->config.num_validators;
+    size_t validator_count = state->validator_count;
     size_t validator_index = (size_t)vote->validator_id;
     if (validator_count == 0u || validator_index >= validator_count) {
         pq_secret_key_free(secret);
@@ -1237,7 +1264,7 @@ static int test_attestations_require_justified_source(void) {
     source_checkpoint.root = get_historical_root_for_tests(&state, source_checkpoint.slot);
     target_checkpoint.root = get_historical_root_for_tests(&state, target_checkpoint.slot);
 
-    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.config.num_validators);
+    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.validator_count);
     expect_zero(
         lantern_attestations_resize(&attestations, quorum),
         "resize unjustified source attestations");
@@ -1480,7 +1507,7 @@ static int test_attestations_finalize_across_gap(void) {
     lantern_attestations_init(&first_vote);
     LanternSignatureList first_sig;
     lantern_signature_list_init(&first_sig);
-    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.config.num_validators);
+    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.validator_count);
     expect_zero(lantern_attestations_resize(&first_vote, quorum), "resize first gap vote");
     expect_zero(lantern_signature_list_resize(&first_sig, quorum), "resize first gap signature");
     for (size_t i = 0; i < quorum; ++i) {
@@ -1839,7 +1866,7 @@ static int test_pruning_keeps_pending_justifications(void) {
     mark_slot_justified_for_tests(&state, state.latest_justified.slot);
     populate_historical_hashes_for_tests(&state, 5);
 
-    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.config.num_validators);
+    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.validator_count);
     LanternAttestations attestations;
     lantern_attestations_init(&attestations);
     LanternSignatureList signatures;
@@ -2301,7 +2328,7 @@ static int test_attestations_ignore_head_root_mismatch(void) {
     lantern_attestations_init(&attestations);
     LanternSignatureList signatures;
     lantern_signature_list_init(&signatures);
-    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.config.num_validators);
+    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.validator_count);
     expect_zero(lantern_attestations_resize(&attestations, quorum), "resize head-mismatch attestations");
     expect_zero(lantern_signature_list_resize(&signatures, quorum), "resize head-mismatch signatures");
 
@@ -2343,7 +2370,7 @@ static int test_attestations_ignore_out_of_range_validator(void) {
     LanternSignatureList signatures;
     lantern_signature_list_init(&signatures);
 
-    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.config.num_validators);
+    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.validator_count);
     size_t att_count = quorum + 1u;
     expect_zero(lantern_attestations_resize(&attestations, att_count), "resize mixed attestations");
     expect_zero(
@@ -2357,7 +2384,7 @@ static int test_attestations_ignore_out_of_range_validator(void) {
     source_checkpoint.root = get_historical_root_for_tests(&state, source_checkpoint.slot);
     target_checkpoint.root = get_historical_root_for_tests(&state, target_checkpoint.slot);
 
-    uint64_t invalid_validator = state.config.num_validators;
+    uint64_t invalid_validator = state.validator_count;
     build_vote(
         &attestations.data[0],
         &signatures.data[0],
@@ -2423,7 +2450,7 @@ static int test_process_block_accepts_mixed_attestations(void) {
     source_checkpoint.root = get_historical_root_for_tests(&state, source_checkpoint.slot);
     target_checkpoint.root = get_historical_root_for_tests(&state, target_checkpoint.slot);
 
-    uint64_t invalid_validator = state.config.num_validators;
+    uint64_t invalid_validator = state.validator_count;
     build_vote(
         &votes.data[0],
         NULL,
@@ -2584,13 +2611,12 @@ static int test_collect_attestations_for_block(void) {
     uint64_t block_slot = state.slot + 1u;
     uint64_t proposer_index = 0;
     expect_zero(
-        lantern_proposer_for_slot(block_slot, state.config.num_validators, &proposer_index),
+        lantern_proposer_for_slot(block_slot, state.validator_count, &proposer_index),
         "collection proposer lookup");
 
     LanternAggregatedAttestations collected;
     lantern_aggregated_attestations_init(&collected);
-    LanternAttestationSignatures collected_signatures;
-    lantern_attestation_signatures_init(&collected_signatures);
+    struct lantern_aggregated_payload_pool collected_payloads = {0};
     expect_zero(
         lantern_state_collect_attestations_for_block(
             &state,
@@ -2598,20 +2624,20 @@ static int test_collect_attestations_for_block(void) {
             proposer_index,
             &parent_root,
             &collected,
-            &collected_signatures),
+            &collected_payloads),
         "collect attestations");
 
     if (collected.length != 1u) {
         fprintf(stderr, "Expected one selected aggregated attestation, got %zu\n", collected.length);
         goto fail_after_collect;
     }
-    if (collected_signatures.length != collected.length) {
-        fprintf(stderr, "Expected signatures for each collected attestation\n");
+    if (collected_payloads.length != collected.length) {
+        fprintf(stderr, "Expected payloads for each collected attestation\n");
         goto fail_after_collect;
     }
 
     const LanternAggregatedAttestation *attestation = &collected.data[0];
-    const LanternAggregatedSignatureProof *proof = &collected_signatures.data[0];
+    const LanternAggregatedSignatureProof *proof = &collected_payloads.entries[0].proof;
     if (attestation->data.slot != signed_votes[0].data.slot
         || !checkpoints_equal(&attestation->data.source, &justified)
         || !checkpoints_equal(&attestation->data.target, &target)
@@ -2649,7 +2675,7 @@ static int test_collect_attestations_for_block(void) {
     }
 
     lantern_aggregated_attestations_reset(&collected);
-    lantern_attestation_signatures_reset(&collected_signatures);
+    lantern_aggregated_payload_pool_reset(&collected_payloads);
     for (size_t i = 0; i < 3u; ++i) {
         pq_secret_key_free(secrets[i]);
         pq_public_key_free(pubkeys[i]);
@@ -2659,7 +2685,7 @@ static int test_collect_attestations_for_block(void) {
 
 fail_after_collect:
     lantern_aggregated_attestations_reset(&collected);
-    lantern_attestation_signatures_reset(&collected_signatures);
+    lantern_aggregated_payload_pool_reset(&collected_payloads);
 
 fail:
     for (size_t i = 0; i < 3u; ++i) {
@@ -2674,7 +2700,7 @@ fail:
     return 1;
 }
 
-static int test_process_block_rejects_duplicate_attestation_data(void) {
+static int test_process_block_accepts_split_attestation_data(void) {
     LanternState state;
     LanternRoot parent_root;
     LanternBlock block;
@@ -2689,14 +2715,14 @@ static int test_process_block_rejects_duplicate_attestation_data(void) {
 
     expect_zero(
         lantern_state_generate_genesis(&state, 905u, 4u),
-        "genesis for duplicate attestation-data block test");
+        "genesis for split attestation-data block test");
     expect_zero(
         lantern_state_process_slots(&state, 2u),
-        "advance slots for duplicate attestation-data block test");
+        "advance slots for split attestation-data block test");
     mark_slot_justified_for_tests(&state, 1u);
     expect_zero(
         lantern_state_select_block_parent(&state, &parent_root),
-        "select block parent for duplicate attestation-data block test");
+        "select block parent for split attestation-data block test");
 
     populate_historical_hashes_for_tests(&state, 2u);
     state.historical_block_hashes.items[0] = parent_root;
@@ -2714,14 +2740,14 @@ static int test_process_block_rejects_duplicate_attestation_data(void) {
     make_block(&state, 2u, &parent_root, &block, &block_root);
     if (append_aggregated_attestation_from_vote(&block.body.attestations, &vote0) != 0
         || append_aggregated_attestation_from_vote(&block.body.attestations, &vote1) != 0) {
-        fprintf(stderr, "failed to build duplicate attestation-data block body\n");
+        fprintf(stderr, "failed to build split attestation-data block body\n");
         lantern_block_body_reset(&block.body);
         lantern_state_reset(&state);
         return 1;
     }
 
-    if (lantern_state_process_block(&state, &block) == 0) {
-        fprintf(stderr, "duplicate attestation data block was incorrectly accepted\n");
+    if (lantern_state_process_block(&state, &block) != 0) {
+        fprintf(stderr, "split attestation data block was incorrectly rejected\n");
         lantern_block_body_reset(&block.body);
         lantern_state_reset(&state);
         return 1;
@@ -2796,7 +2822,7 @@ static int test_process_attestations_preserves_signed_votes(void) {
     LanternSignatureList signatures;
     lantern_signature_list_init(&signatures);
 
-    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.config.num_validators);
+    size_t quorum = (size_t)lantern_consensus_quorum_threshold(state.validator_count);
     expect_zero(
         lantern_attestations_resize(&attestations, quorum),
         "resize attestation input");
@@ -2847,10 +2873,10 @@ cleanup:
 
 static int test_process_block_defers_proposer_attestation(void) {
     LanternState state;
-    LanternForkChoice fork_choice;
+    LanternStore fork_choice;
     LanternRoot anchor_root;
     lantern_state_init(&state);
-    lantern_fork_choice_init(&fork_choice);
+    lantern_store_init(&fork_choice);
     const uint64_t genesis_time = 777;
     const uint64_t validator_count = 1;
     setup_state_and_fork_choice(&state, &fork_choice, genesis_time, validator_count, &anchor_root);
@@ -2865,6 +2891,9 @@ static int test_process_block_defers_proposer_attestation(void) {
 
     /* Populate historical hashes so proposer attestation validation passes */
     populate_historical_hashes_for_tests(&state, 1);
+    expect_zero(
+        lantern_fork_choice_set_block_state(&fork_choice, &anchor_root, &state),
+        "refresh anchor state for proposer vote test");
 
     LanternSignedBlock signed_block;
     memset(&signed_block, 0, sizeof(signed_block));
@@ -2945,10 +2974,8 @@ static int test_process_block_defers_proposer_attestation(void) {
     }
 
     assert(store->attestation_signatures.length == 0u);
-    assert(store->attestation_data_by_root.length == 0u);
 
-    LanternRoot head;
-    expect_zero(lantern_fork_choice_current_head(&fork_choice, &head), "fork choice head after proposer import");
+    LanternRoot head = fork_choice.head;
     assert(memcmp(head.bytes, proposer_block_root.bytes, LANTERN_ROOT_SIZE) == 0);
 
     lantern_byte_list_reset(&signed_block.proof);
@@ -3045,14 +3072,13 @@ static int test_collect_attestations_fixed_point(void) {
     uint64_t block_slot = state.slot + 1u;
     uint64_t proposer_index = 0;
     expect_zero(
-        lantern_proposer_for_slot(block_slot, state.config.num_validators, &proposer_index),
+        lantern_proposer_for_slot(block_slot, state.validator_count, &proposer_index),
         "fixed-point proposer lookup");
     expect_zero(lantern_state_select_block_parent(&state, &parent_root), "fixed-point parent root");
 
     LanternAggregatedAttestations collected;
     lantern_aggregated_attestations_init(&collected);
-    LanternAttestationSignatures collected_signatures;
-    lantern_attestation_signatures_init(&collected_signatures);
+    struct lantern_aggregated_payload_pool collected_payloads = {0};
 
     int rc = 0;
     if (lantern_state_collect_attestations_for_block(
@@ -3061,7 +3087,7 @@ static int test_collect_attestations_fixed_point(void) {
             proposer_index,
             &parent_root,
             &collected,
-            &collected_signatures)
+            &collected_payloads)
         != 0) {
         fprintf(stderr, "fixed-point collection failed\n");
         rc = 1;
@@ -3071,7 +3097,7 @@ static int test_collect_attestations_fixed_point(void) {
     /* With the single-AttestationData-per-block rule, the existing base->mid
      * aggregate is kept as one attestation. A second attestation for mid->tip may or may not be added,
      * depending on whether the fixed-point iteration reaches that checkpoint. */
-    if (collected.length == 0u || collected.length > 2u || collected_signatures.length != collected.length) {
+    if (collected.length == 0u || collected.length > 2u || collected_payloads.length != collected.length) {
         fprintf(stderr, "expected 1 or 2 aggregated attestations after fixed-point collection, got %zu\n", collected.length);
         rc = 1;
         goto cleanup;
@@ -3081,7 +3107,7 @@ static int test_collect_attestations_fixed_point(void) {
     bool saw_mid_group = false;
     for (size_t i = 0; i < collected.length; ++i) {
         const LanternAggregatedAttestation *attestation = &collected.data[i];
-        const LanternAggregatedSignatureProof *proof = &collected_signatures.data[i];
+        const LanternAggregatedSignatureProof *proof = &collected_payloads.entries[i].proof;
         if (checkpoints_equal(&attestation->data.source, &base)) {
             saw_base_group = true;
             for (size_t validator_index = 0; validator_index < 3u; ++validator_index) {
@@ -3133,7 +3159,7 @@ static int test_collect_attestations_fixed_point(void) {
 
 cleanup:
     lantern_aggregated_attestations_reset(&collected);
-    lantern_attestation_signatures_reset(&collected_signatures);
+    lantern_aggregated_payload_pool_reset(&collected_payloads);
     lantern_state_reset(&state);
     return rc;
 }
@@ -3142,11 +3168,10 @@ static int test_collect_attestations_respects_max_attestation_data(void) {
     LanternState state;
     LanternRoot parent_root;
     LanternAggregatedAttestations collected;
-    LanternAttestationSignatures collected_signatures;
+    struct lantern_aggregated_payload_pool collected_payloads = {0};
 
     lantern_state_init(&state);
     lantern_aggregated_attestations_init(&collected);
-    lantern_attestation_signatures_init(&collected_signatures);
 
     expect_zero(
         lantern_state_generate_genesis(&state, 907u, 1u),
@@ -3177,7 +3202,7 @@ static int test_collect_attestations_respects_max_attestation_data(void) {
     uint64_t block_slot = (uint64_t)LANTERN_MAX_ATTESTATIONS_DATA + 2u;
     uint64_t proposer_index = 0u;
     expect_zero(
-        lantern_proposer_for_slot(block_slot, state.config.num_validators, &proposer_index),
+        lantern_proposer_for_slot(block_slot, state.validator_count, &proposer_index),
         "max attestation-data proposer lookup");
 
     expect_zero(
@@ -3187,11 +3212,11 @@ static int test_collect_attestations_respects_max_attestation_data(void) {
             proposer_index,
             &parent_root,
             &collected,
-            &collected_signatures),
+            &collected_payloads),
         "collect max attestation-data block");
 
     if (collected.length != (size_t)LANTERN_PRODUCER_MAX_ATTESTATIONS_DATA
-        || collected_signatures.length != collected.length) {
+        || collected_payloads.length != collected.length) {
         fprintf(
             stderr,
             "expected %u collected attestation-data entries, got %zu\n",
@@ -3214,13 +3239,13 @@ static int test_collect_attestations_respects_max_attestation_data(void) {
     }
 
     lantern_aggregated_attestations_reset(&collected);
-    lantern_attestation_signatures_reset(&collected_signatures);
+    lantern_aggregated_payload_pool_reset(&collected_payloads);
     lantern_state_reset(&state);
     return 0;
 
 fail:
     lantern_aggregated_attestations_reset(&collected);
-    lantern_attestation_signatures_reset(&collected_signatures);
+    lantern_aggregated_payload_pool_reset(&collected_payloads);
     lantern_state_reset(&state);
     return 1;
 }
@@ -3238,11 +3263,10 @@ static int test_collect_attestations_fixed_point_deep_chain(void) {
     uint8_t serialized_pubkeys[validator_count][LANTERN_VALIDATOR_PUBKEY_SIZE];
     LanternSignedVote signed_votes[validator_count];
     LanternAggregatedAttestations collected;
-    LanternAttestationSignatures collected_signatures;
+    struct lantern_aggregated_payload_pool collected_payloads = {0};
     int rc = 0;
     lantern_state_init(&state);
     lantern_aggregated_attestations_init(&collected);
-    lantern_attestation_signatures_init(&collected_signatures);
     memset(pubkeys, 0, sizeof(pubkeys));
     memset(secrets, 0, sizeof(secrets));
     memset(serialized_pubkeys, 0, sizeof(serialized_pubkeys));
@@ -3348,7 +3372,7 @@ static int test_collect_attestations_fixed_point_deep_chain(void) {
     uint64_t block_slot = state.slot + 1u;
     uint64_t proposer_index = 0;
     expect_zero(
-        lantern_proposer_for_slot(block_slot, state.config.num_validators, &proposer_index),
+        lantern_proposer_for_slot(block_slot, state.validator_count, &proposer_index),
         "deep fixed proposer lookup");
     expect_zero(lantern_state_select_block_parent(&state, &parent_root), "deep fixed parent root");
 
@@ -3358,7 +3382,7 @@ static int test_collect_attestations_fixed_point_deep_chain(void) {
             proposer_index,
             &parent_root,
             &collected,
-            &collected_signatures)
+            &collected_payloads)
         != 0) {
         fprintf(stderr, "deep fixed-point collection failed\n");
         rc = 1;
@@ -3367,14 +3391,14 @@ static int test_collect_attestations_fixed_point_deep_chain(void) {
 
     /* All 64 validators share the same AttestationData, so collection should emit one
      * existing aggregate, not a recursively merged full-validator proof. */
-    if (collected.length != 1u || collected_signatures.length != 1u) {
+    if (collected.length != 1u || collected_payloads.length != 1u) {
         fprintf(stderr, "expected one selected attestation, got %zu\n", collected.length);
         rc = 1;
         goto cleanup;
     }
 
     const LanternAggregatedAttestation *attestation = &collected.data[0];
-    const LanternAggregatedSignatureProof *proof = &collected_signatures.data[0];
+    const LanternAggregatedSignatureProof *proof = &collected_payloads.entries[0].proof;
     if (!checkpoints_equal(&attestation->data.source, &base)) {
         fprintf(stderr, "deep-chain source mismatch\n");
         rc = 1;
@@ -3428,7 +3452,7 @@ static int test_collect_attestations_fixed_point_deep_chain(void) {
 
 cleanup:
     lantern_aggregated_attestations_reset(&collected);
-    lantern_attestation_signatures_reset(&collected_signatures);
+    lantern_aggregated_payload_pool_reset(&collected_payloads);
     for (size_t validator_index = 0; validator_index < validator_count; ++validator_index) {
         if (secrets[validator_index]) {
             pq_secret_key_free(secrets[validator_index]);
@@ -3444,7 +3468,7 @@ cleanup:
 static int test_collect_attestations_ignores_store_justified_when_parent_state_lags(void) {
     LanternState state;
     LanternState parent_state;
-    LanternForkChoice fork_choice;
+    LanternStore fork_choice;
     LanternRoot genesis_root;
     LanternRoot block_one_root;
     LanternRoot block_one_state_root;
@@ -3455,13 +3479,12 @@ static int test_collect_attestations_ignores_store_justified_when_parent_state_l
     LanternCheckpoint target;
     LanternVote vote;
     LanternAggregatedAttestations collected;
-    LanternAttestationSignatures collected_signatures;
+    struct lantern_aggregated_payload_pool collected_payloads = {0};
     uint64_t proposer_index = 0;
     int rc = 1;
 
     lantern_state_init(&parent_state);
     lantern_aggregated_attestations_init(&collected);
-    lantern_attestation_signatures_init(&collected_signatures);
     memset(&block_one, 0, sizeof(block_one));
     memset(&block_two, 0, sizeof(block_two));
     memset(&vote, 0, sizeof(vote));
@@ -3498,7 +3521,7 @@ static int test_collect_attestations_ignores_store_justified_when_parent_state_l
 
     store_justified.slot = 1u;
     store_justified.root = block_one_root;
-    const LanternCheckpoint *store_finalized = lantern_fork_choice_latest_finalized(&fork_choice);
+    const LanternCheckpoint *store_finalized = &fork_choice.latest_finalized;
     expect_zero(
         lantern_fork_choice_update_checkpoints(&fork_choice, &store_justified, store_finalized),
         "advance store justified for collection test");
@@ -3509,7 +3532,7 @@ static int test_collect_attestations_ignores_store_justified_when_parent_state_l
     expect_zero(seed_known_payload_for_vote(&state, &vote, 0x88u), "seed store-source payload");
 
     expect_zero(
-        lantern_proposer_for_slot(2u, state.config.num_validators, &proposer_index),
+        lantern_proposer_for_slot(2u, state.validator_count, &proposer_index),
         "compute proposer for store-source block");
     expect_zero(
         lantern_state_collect_attestations_for_block(
@@ -3518,10 +3541,10 @@ static int test_collect_attestations_ignores_store_justified_when_parent_state_l
             proposer_index,
             &block_one_root,
             &collected,
-            &collected_signatures),
+            &collected_payloads),
         "collect store-source attestations");
 
-    if (collected.length != 0u || collected_signatures.length != 0u) {
+    if (collected.length != 0u || collected_payloads.length != 0u) {
         fprintf(stderr, "selected store-source attestation from lagging parent state\n");
         goto cleanup;
     }
@@ -3529,7 +3552,7 @@ static int test_collect_attestations_ignores_store_justified_when_parent_state_l
     rc = 0;
 
 cleanup:
-    lantern_attestation_signatures_reset(&collected_signatures);
+    lantern_aggregated_payload_pool_reset(&collected_payloads);
     lantern_aggregated_attestations_reset(&collected);
     lantern_block_body_reset(&block_two.body);
     lantern_block_body_reset(&block_one.body);
@@ -3544,12 +3567,9 @@ static int test_select_block_parent_uses_fork_choice(void) {
     lantern_state_init(&state);
     expect_zero(lantern_state_generate_genesis(&state, 1200, 4), "genesis for parent selection");
 
-    LanternForkChoice fork_choice;
-    lantern_fork_choice_init(&fork_choice);
+    LanternStore fork_choice;
+    lantern_store_init(&fork_choice);
     lantern_state_attach_fork_choice(&state, &fork_choice);
-    expect_zero(
-        lantern_fork_choice_configure(&fork_choice, state.config.num_validators),
-        "configure fork choice");
     LanternRoot genesis_state_root;
     expect_ssz_success(lantern_hash_tree_root_state(&state, &genesis_state_root), "hash genesis state root");
     state.latest_block_header.state_root = genesis_state_root;
@@ -3567,7 +3587,7 @@ static int test_select_block_parent_uses_fork_choice(void) {
     LanternCheckpoint genesis_cp = {.root = genesis_root, .slot = genesis_block.slot};
     expect_zero(
         lantern_fork_choice_set_anchor_with_state(
-            &fork_choice, &genesis_block, &genesis_cp, &genesis_cp, &genesis_root, NULL),
+            &fork_choice, &genesis_block, &genesis_cp, &genesis_cp, &genesis_root, &state),
         "set anchor");
 
     lantern_state_attach_fork_choice(&state, &fork_choice);
@@ -3580,7 +3600,7 @@ static int test_select_block_parent_uses_fork_choice(void) {
     memset(&block_one, 0, sizeof(block_one));
     block_one.slot = 1;
     expect_zero(
-        lantern_proposer_for_slot(block_one.slot, state.config.num_validators, &block_one.proposer_index),
+        lantern_proposer_for_slot(block_one.slot, state.validator_count, &block_one.proposer_index),
         "proposer slot1");
     lantern_block_body_init(&block_one.body);
     block_one.parent_root = genesis_root;
@@ -3614,7 +3634,7 @@ static int test_select_block_parent_uses_fork_choice(void) {
     memset(&block_two, 0, sizeof(block_two));
     block_two.slot = 2;
     expect_zero(
-        lantern_proposer_for_slot(block_two.slot, state.config.num_validators, &block_two.proposer_index),
+        lantern_proposer_for_slot(block_two.slot, state.validator_count, &block_two.proposer_index),
         "proposer slot2");
     block_two.parent_root = block_one_root;
     lantern_block_body_init(&block_two.body);
@@ -3647,13 +3667,13 @@ static int test_validator_helpers_use_cached_fork_choice_head_state(void) {
     LanternState state;
     LanternState block_one_state;
     LanternState expected_state;
-    LanternForkChoice fork_choice;
+    LanternStore fork_choice;
     LanternRoot genesis_root;
     LanternRoot parent_root;
     LanternRoot preview_state_root;
     LanternRoot expected_state_root;
     LanternAggregatedAttestations collected;
-    LanternAttestationSignatures collected_signatures;
+    struct lantern_aggregated_payload_pool collected_payloads = {0};
     LanternSignedBlock signed_block;
     LanternBlock block_one;
     LanternRoot block_one_root;
@@ -3662,8 +3682,7 @@ static int test_validator_helpers_use_cached_fork_choice_head_state(void) {
     int result = 1;
 
     lantern_aggregated_attestations_init(&collected);
-    lantern_attestation_signatures_init(&collected_signatures);
-    lantern_signed_block_with_attestation_init(&signed_block);
+    lantern_signed_block_init(&signed_block);
     lantern_state_init(&block_one_state);
     lantern_state_init(&expected_state);
 
@@ -3697,7 +3716,7 @@ static int test_validator_helpers_use_cached_fork_choice_head_state(void) {
     }
 
     expect_zero(
-        lantern_proposer_for_slot(2u, state.config.num_validators, &proposer_index),
+        lantern_proposer_for_slot(2u, state.validator_count, &proposer_index),
         "compute proposer for preview block");
     if (lantern_state_collect_attestations_for_block(
             &state,
@@ -3705,12 +3724,12 @@ static int test_validator_helpers_use_cached_fork_choice_head_state(void) {
             proposer_index,
             &parent_root,
             &collected,
-            &collected_signatures)
+            &collected_payloads)
         != 0) {
         fprintf(stderr, "failed to collect attestations from cached fork-choice head state\n");
         goto cleanup;
     }
-    if (collected.length != 0u || collected_signatures.length != 0u) {
+    if (collected.length != 0u || collected_payloads.length != 0u) {
         fprintf(stderr, "expected no collected attestations for empty cached-head test\n");
         goto cleanup;
     }
@@ -3744,8 +3763,8 @@ static int test_validator_helpers_use_cached_fork_choice_head_state(void) {
 cleanup:
     lantern_state_reset(&expected_state);
     lantern_state_reset(&block_one_state);
-    lantern_signed_block_with_attestation_reset(&signed_block);
-    lantern_attestation_signatures_reset(&collected_signatures);
+    lantern_signed_block_reset(&signed_block);
+    lantern_aggregated_payload_pool_reset(&collected_payloads);
     lantern_aggregated_attestations_reset(&collected);
     lantern_block_body_reset(&block_one.body);
     lantern_state_reset(&state);
@@ -3811,7 +3830,7 @@ static int test_compute_post_state_ignores_store_justified_for_hash(void) {
     LanternState block_one_state;
     LanternState expected_state;
     LanternState post_state;
-    LanternForkChoice fork_choice;
+    LanternStore fork_choice;
     LanternRoot genesis_root;
     LanternRoot block_one_root;
     LanternRoot block_one_state_root;
@@ -3853,14 +3872,14 @@ static int test_compute_post_state_ignores_store_justified_for_hash(void) {
 
     store_justified.slot = 1u;
     store_justified.root = block_one_root;
-    const LanternCheckpoint *store_finalized = lantern_fork_choice_latest_finalized(&fork_choice);
+    const LanternCheckpoint *store_finalized = &fork_choice.latest_finalized;
     expect_zero(
         lantern_fork_choice_update_checkpoints(&fork_choice, &store_justified, store_finalized),
         "advance cached parent seal justified");
 
     signed_block.block.slot = 2u;
     expect_zero(
-        lantern_proposer_for_slot(2u, state.config.num_validators, &signed_block.block.proposer_index),
+        lantern_proposer_for_slot(2u, state.validator_count, &signed_block.block.proposer_index),
         "compute cached parent seal proposer");
     signed_block.block.parent_root = block_one_root;
 
@@ -3909,7 +3928,7 @@ cleanup:
 
 static int test_compute_vote_checkpoints_basic(void) {
     LanternState state;
-    LanternForkChoice fork_choice;
+    LanternStore fork_choice;
     LanternRoot genesis_root;
     setup_state_and_fork_choice(&state, &fork_choice, 1500, 4, &genesis_root);
 
@@ -3920,9 +3939,7 @@ static int test_compute_vote_checkpoints_basic(void) {
         lantern_fork_choice_add_block(&fork_choice, &block1, NULL, NULL, &block1_root),
         "add block1");
     fork_choice.head = block1_root;
-    fork_choice.has_head = true;
     fork_choice.safe_target = block1_root;
-    fork_choice.has_safe_target = true;
 
     LanternCheckpoint head;
     LanternCheckpoint target;
@@ -3965,16 +3982,14 @@ static int test_compute_vote_checkpoints_basic(void) {
 
 static int test_compute_vote_checkpoints_genesis_source_uses_head_root(void) {
     LanternState state;
-    LanternForkChoice fork_choice;
+    LanternStore fork_choice;
     LanternRoot genesis_root;
     setup_state_and_fork_choice(&state, &fork_choice, 1525, 4, &genesis_root);
 
     memset(state.latest_justified.root.bytes, 0, sizeof(state.latest_justified.root.bytes));
     state.latest_justified.slot = 0;
     fork_choice.head = genesis_root;
-    fork_choice.has_head = true;
     fork_choice.safe_target = genesis_root;
-    fork_choice.has_safe_target = true;
 
     LanternCheckpoint head;
     LanternCheckpoint target;
@@ -4012,7 +4027,7 @@ static int test_compute_vote_checkpoints_genesis_source_uses_head_root(void) {
 
 static int test_compute_vote_checkpoints_can_match_source(void) {
     LanternState state;
-    LanternForkChoice fork_choice;
+    LanternStore fork_choice;
     LanternRoot genesis_root;
     setup_state_and_fork_choice(&state, &fork_choice, 1550, 4, &genesis_root);
 
@@ -4023,9 +4038,7 @@ static int test_compute_vote_checkpoints_can_match_source(void) {
         lantern_fork_choice_add_block(&fork_choice, &block1, NULL, NULL, &block1_root),
         "add block1 source-match test");
     fork_choice.head = block1_root;
-    fork_choice.has_head = true;
     fork_choice.safe_target = genesis_root;
-    fork_choice.has_safe_target = true;
 
     LanternCheckpoint head;
     LanternCheckpoint target;
@@ -4068,7 +4081,7 @@ static int test_compute_vote_checkpoints_can_match_source(void) {
 
 static int test_compute_vote_checkpoints_respects_safe_target(void) {
     LanternState state;
-    LanternForkChoice fork_choice;
+    LanternStore fork_choice;
     LanternRoot genesis_root;
     setup_state_and_fork_choice(&state, &fork_choice, 1600, 6, &genesis_root);
 
@@ -4087,9 +4100,7 @@ static int test_compute_vote_checkpoints_respects_safe_target(void) {
         "add block2 safe target test");
 
     fork_choice.head = block2_root;
-    fork_choice.has_head = true;
     fork_choice.safe_target = block1_root;
-    fork_choice.has_safe_target = true;
 
     state.latest_finalized.slot = 0;
     state.latest_finalized.root = genesis_root;
@@ -4144,7 +4155,7 @@ static int test_compute_vote_checkpoints_respects_safe_target(void) {
 
 static int test_compute_vote_checkpoints_uses_head_state_source_when_store_justified_advances(void) {
     LanternState state;
-    LanternForkChoice fork_choice;
+    LanternStore fork_choice;
     LanternRoot genesis_root;
     setup_state_and_fork_choice(&state, &fork_choice, 1650, 8, &genesis_root);
 
@@ -4186,9 +4197,7 @@ static int test_compute_vote_checkpoints_uses_head_state_source_when_store_justi
     lantern_block_body_reset(&head_block.body);
 
     fork_choice.head = block_roots[4];
-    fork_choice.has_head = true;
     fork_choice.safe_target = block_roots[4];
-    fork_choice.has_safe_target = true;
 
     LanternCheckpoint store_justified;
     store_justified.slot = 3;
@@ -4231,7 +4240,7 @@ static int test_compute_vote_checkpoints_uses_head_state_source_when_store_justi
 
 static int test_compute_vote_checkpoints_justifiable(void) {
     LanternState state;
-    LanternForkChoice fork_choice;
+    LanternStore fork_choice;
     LanternRoot genesis_root;
     setup_state_and_fork_choice(&state, &fork_choice, 1700, 8, &genesis_root);
 
@@ -4251,9 +4260,7 @@ static int test_compute_vote_checkpoints_justifiable(void) {
     }
 
     fork_choice.head = block_roots[7];
-    fork_choice.has_head = true;
     fork_choice.safe_target = block_roots[7];
-    fork_choice.has_safe_target = true;
 
     state.latest_finalized.slot = 0;
     state.latest_finalized.root = genesis_root;
@@ -4306,7 +4313,7 @@ static int test_compute_vote_checkpoints_justifiable(void) {
 
 static int test_compute_vote_checkpoints_consecutive_target(void) {
     LanternState state;
-    LanternForkChoice fork_choice;
+    LanternStore fork_choice;
     LanternRoot genesis_root;
     setup_state_and_fork_choice(&state, &fork_choice, 1750, 6, &genesis_root);
 
@@ -4326,9 +4333,7 @@ static int test_compute_vote_checkpoints_consecutive_target(void) {
     }
 
     fork_choice.head = block_roots[5];
-    fork_choice.has_head = true;
     fork_choice.safe_target = block_roots[5];
-    fork_choice.has_safe_target = true;
 
     state.latest_finalized.slot = 3;
     state.latest_finalized.root = block_roots[3];
@@ -4373,7 +4378,7 @@ static int test_compute_vote_checkpoints_consecutive_target(void) {
 
 static int test_compute_vote_checkpoints_advances_beyond_source(void) {
     LanternState state;
-    LanternForkChoice fork_choice;
+    LanternStore fork_choice;
     LanternRoot genesis_root;
     setup_state_and_fork_choice(&state, &fork_choice, 1800, 8, &genesis_root);
 
@@ -4393,9 +4398,7 @@ static int test_compute_vote_checkpoints_advances_beyond_source(void) {
     }
 
     fork_choice.head = block_roots[10];
-    fork_choice.has_head = true;
     fork_choice.safe_target = block_roots[10];
-    fork_choice.has_safe_target = true;
 
     for (uint64_t slot = 0; slot <= 6; ++slot) {
         mark_slot_justified_for_tests(&state, slot);
@@ -4457,7 +4460,7 @@ static int test_compute_vote_checkpoints_advances_beyond_source(void) {
 
 static int test_compute_vote_checkpoints_uses_finalized_lower_bound_when_safe_stale(void) {
     LanternState state;
-    LanternForkChoice fork_choice;
+    LanternStore fork_choice;
     LanternRoot genesis_root;
     setup_state_and_fork_choice(&state, &fork_choice, 1850, 6, &genesis_root);
 
@@ -4477,9 +4480,7 @@ static int test_compute_vote_checkpoints_uses_finalized_lower_bound_when_safe_st
     }
 
     fork_choice.head = block_roots[5];
-    fork_choice.has_head = true;
     fork_choice.safe_target = block_roots[1];
-    fork_choice.has_safe_target = true;
 
     state.latest_finalized.slot = 4;
     state.latest_finalized.root = block_roots[4];
@@ -4597,8 +4598,7 @@ static int test_justified_slot_window_helpers(void) {
 
 static int test_state_aggregate_skips_single_child_group(void) {
     LanternState state;
-    LanternAggregatedAttestations aggregated_attestations;
-    LanternAttestationSignatures aggregated_signatures;
+    struct lantern_aggregated_payload_pool aggregated_payloads = {0};
     LanternAggregatedSignatureProof child_proof;
     LanternStore *store = NULL;
     LanternVote vote;
@@ -4606,8 +4606,6 @@ static int test_state_aggregate_skips_single_child_group(void) {
     int rc = 1;
 
     lantern_state_init(&state);
-    lantern_aggregated_attestations_init(&aggregated_attestations);
-    lantern_attestation_signatures_init(&aggregated_signatures);
     lantern_aggregated_signature_proof_init(&child_proof);
     memset(&vote, 0, sizeof(vote));
     memset(&signature, 0, sizeof(signature));
@@ -4646,16 +4644,12 @@ static int test_state_aggregate_skips_single_child_group(void) {
     if (lantern_state_aggregate(
             &state,
             store,
-            NULL,
-            &store->new_aggregated_payloads,
-            &store->known_aggregated_payloads,
-            &aggregated_attestations,
-            &aggregated_signatures)
+            &aggregated_payloads)
         != LANTERN_STATE_AGGREGATE_OK) {
         fprintf(stderr, "state aggregate single-child case failed\n");
         goto cleanup;
     }
-    if (aggregated_attestations.length != 0u || aggregated_signatures.length != 0u) {
+    if (aggregated_payloads.length != 0u) {
         fprintf(stderr, "state aggregate should skip single-child-only groups\n");
         goto cleanup;
     }
@@ -4664,8 +4658,7 @@ static int test_state_aggregate_skips_single_child_group(void) {
 
 cleanup:
     lantern_aggregated_signature_proof_reset(&child_proof);
-    lantern_attestation_signatures_reset(&aggregated_signatures);
-    lantern_aggregated_attestations_reset(&aggregated_attestations);
+    lantern_aggregated_payload_pool_reset(&aggregated_payloads);
     lantern_state_reset(&state);
     return rc;
 }
@@ -4677,14 +4670,11 @@ static int test_state_aggregate_caps_recursive_cached_children(void) {
     struct PQSignatureSchemeSecretKey *secrets[kValidatorCount];
     uint8_t serialized_pubkeys[kValidatorCount][LANTERN_VALIDATOR_PUBKEY_SIZE];
     LanternSignedVote signed_votes[kValidatorCount];
-    LanternAggregatedAttestations aggregated_attestations;
-    LanternAttestationSignatures aggregated_signatures;
+    struct lantern_aggregated_payload_pool aggregated_payloads = {0};
     LanternStore *store = NULL;
     int rc = 1;
 
     lantern_state_init(&state);
-    lantern_aggregated_attestations_init(&aggregated_attestations);
-    lantern_attestation_signatures_init(&aggregated_signatures);
     memset(pubkeys, 0, sizeof(pubkeys));
     memset(secrets, 0, sizeof(secrets));
     memset(serialized_pubkeys, 0, sizeof(serialized_pubkeys));
@@ -4773,45 +4763,33 @@ static int test_state_aggregate_caps_recursive_cached_children(void) {
     if (lantern_state_aggregate(
             &state,
             store,
-            NULL,
-            &store->new_aggregated_payloads,
-            &store->known_aggregated_payloads,
-            &aggregated_attestations,
-            &aggregated_signatures)
+            &aggregated_payloads)
         != LANTERN_STATE_AGGREGATE_OK) {
         fprintf(stderr, "state aggregate recursive child cap case failed\n");
         goto cleanup;
     }
-    if (aggregated_attestations.length != 1u || aggregated_signatures.length != 1u) {
-        fprintf(stderr, "recursive child cap test expected one aggregate, got attestations=%zu signatures=%zu\n",
-                aggregated_attestations.length,
-                aggregated_signatures.length);
+    if (aggregated_payloads.length != 1u) {
+        fprintf(stderr, "recursive child cap test expected one aggregate, got %zu\n",
+                aggregated_payloads.length);
         goto cleanup;
     }
 
-    const LanternAggregatedAttestation *attestation = &aggregated_attestations.data[0];
-    const LanternAggregatedSignatureProof *proof = &aggregated_signatures.data[0];
+    const struct lantern_aggregated_payload_entry *aggregate = &aggregated_payloads.entries[0];
+    const LanternAggregatedSignatureProof *proof = &aggregate->proof;
     const size_t expected_child_count = LANTERN_MAX_AGGREGATION_CHILDREN;
     if (expected_child_count >= kValidatorCount) {
         fprintf(stderr, "recursive child cap test requires at least one unselected cached proof\n");
         goto cleanup;
     }
     for (size_t i = 0; i < expected_child_count; ++i) {
-        if (attestation->aggregation_bits.bit_length <= i
-            || !bitlist_test_bit(&attestation->aggregation_bits, i)) {
-            fprintf(stderr, "recursive child cap attestation bits missed selected child %zu\n", i);
-            goto cleanup;
-        }
         if (proof->participants.bit_length <= i
             || !bitlist_test_bit(&proof->participants, i)) {
             fprintf(stderr, "recursive child cap proof participants missed selected child %zu\n", i);
             goto cleanup;
         }
     }
-    if ((attestation->aggregation_bits.bit_length > expected_child_count
-            && bitlist_test_bit(&attestation->aggregation_bits, expected_child_count))
-        || (proof->participants.bit_length > expected_child_count
-            && bitlist_test_bit(&proof->participants, expected_child_count))) {
+    if (proof->participants.bit_length > expected_child_count
+        && bitlist_test_bit(&proof->participants, expected_child_count)) {
         fprintf(stderr, "recursive child cap proof did not stop at the child limit\n");
         goto cleanup;
     }
@@ -4825,7 +4803,7 @@ static int test_state_aggregate_caps_recursive_cached_children(void) {
             expected_child_count,
             &data_root,
             &proof->proof_data,
-            attestation->data.slot)) {
+            aggregate->data.slot)) {
         fprintf(stderr, "recursive child cap selected proof verification failed\n");
         goto cleanup;
     }
@@ -4841,8 +4819,7 @@ cleanup:
             pq_public_key_free(pubkeys[i]);
         }
     }
-    lantern_attestation_signatures_reset(&aggregated_signatures);
-    lantern_aggregated_attestations_reset(&aggregated_attestations);
+    lantern_aggregated_payload_pool_reset(&aggregated_payloads);
     lantern_state_reset(&state);
     return rc;
 }
@@ -4863,7 +4840,7 @@ int main(void) {
     if (test_block_header_rejects_zero_parent_root() != 0) {
         return 1;
     }
-    if (test_process_block_rejects_duplicate_attestation_data() != 0) {
+    if (test_process_block_accepts_split_attestation_data() != 0) {
         return 1;
     }
     if (test_process_slots_sets_state_root() != 0) {

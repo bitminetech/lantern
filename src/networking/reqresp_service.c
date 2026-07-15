@@ -604,8 +604,7 @@ static int exchange_prepare_blocks_response(struct lantern_reqresp_exchange *exc
     if (!exchange || !exchange->service || !raw) {
         return -1;
     }
-    LanternBlocksByRootRequest req;
-    lantern_blocks_by_root_request_init(&req);
+    LanternBlocksByRootRequest req = {0};
     if (lantern_network_blocks_by_root_request_decode(&req, raw, raw_len) != 0) {
         lantern_blocks_by_root_request_reset(&req);
         return exchange_queue_error_response(
@@ -613,8 +612,7 @@ static int exchange_prepare_blocks_response(struct lantern_reqresp_exchange *exc
             LANTERN_REQRESP_RESPONSE_INVALID_REQUEST,
             "Invalid BlocksByRootRequest");
     }
-    LanternSignedBlockList blocks;
-    lantern_signed_block_list_init(&blocks);
+    LanternSignedBlockList blocks = {0};
     int collect_rc = exchange->service->callbacks.collect_blocks
         ? exchange->service->callbacks.collect_blocks(
               exchange->service->callbacks.context,
@@ -695,8 +693,7 @@ static int exchange_prepare_blocks_by_range_response(
             "Requested slot predates history window");
     }
 
-    LanternSignedBlockList blocks;
-    lantern_signed_block_list_init(&blocks);
+    LanternSignedBlockList blocks = {0};
     int collect_rc = exchange->service->callbacks.collect_blocks_by_range(
         exchange->service->callbacks.context,
         req.start_slot,
