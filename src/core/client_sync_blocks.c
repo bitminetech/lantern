@@ -105,6 +105,7 @@ static bool lantern_client_import_block_internal(
     const struct lantern_log_metadata *meta,
     uint32_t backfill_depth,
     bool allow_historical,
+    bool cache_aggregated_proofs,
     bool drain_pending_children,
     bool *out_children_ready,
     lantern_client_error *out_result);
@@ -210,7 +211,7 @@ static void update_network_view_after_import(
     }
 }
 
-void lantern_client_cache_block_aggregated_proofs_locked(
+void lantern_client_cache_block_aggregated_proofs(
     struct lantern_client *client,
     const LanternSignedBlock *block)
 {
@@ -224,15 +225,36 @@ void lantern_client_cache_block_aggregated_proofs_locked(
         return;
     }
 
-    const LanternState *parent_state = NULL;
-    bool parent_state_lookup_done = false;
+    LanternRoot block_root;
+    if (lantern_hash_tree_root_block(&block->block, &block_root) != SSZ_SUCCESS)
+    {
+        return;
+    }
+
+    LanternRoot data_roots[LANTERN_MAX_ATTESTATIONS];
+    bool split_needed[LANTERN_MAX_ATTESTATIONS] = {false};
+    LanternState parent_state;
+    lantern_state_init(&parent_state);
     size_t split_attempts = 0u;
 
+    bool state_locked = lantern_client_lock_state(client);
+    if (!state_locked)
+    {
+        return;
+    }
+    if (!lantern_client_block_known_locked(client, &block_root, NULL))
+    {
+        lantern_client_unlock_state(client, state_locked);
+        lantern_state_reset(&parent_state);
+        return;
+    }
     for (size_t i = 0; i < attestations->length; ++i)
     {
         const LanternAggregatedAttestation *attestation = &attestations->data[i];
-        LanternRoot data_root;
-        if (lantern_hash_tree_root_attestation_data(&attestation->data, &data_root) != SSZ_SUCCESS)
+        if (lantern_hash_tree_root_attestation_data(
+                &attestation->data,
+                &data_roots[i])
+            != SSZ_SUCCESS)
         {
             continue;
         }
@@ -240,29 +262,37 @@ void lantern_client_cache_block_aggregated_proofs_locked(
             || split_attempts >= BLOCK_AGGREGATE_SPLIT_LIMIT
             || lantern_store_aggregated_payloads_cover_participants(
                 &client->store,
-                &data_root,
+                &data_roots[i],
                 &attestation->aggregation_bits))
         {
             continue;
         }
+        split_needed[i] = true;
+        split_attempts += 1u;
+    }
+    const LanternState *cached_parent = split_attempts > 0u
+        ? lantern_client_state_for_root_locked(client, &block->block.parent_root)
+        : NULL;
+    bool have_parent = cached_parent
+        && lantern_state_clone(cached_parent, &parent_state) == 0;
+    lantern_client_unlock_state(client, state_locked);
 
-        if (!parent_state_lookup_done)
-        {
-            parent_state = lantern_client_state_for_root_locked(
-                client,
-                &block->block.parent_root);
-            parent_state_lookup_done = true;
-        }
-        if (!parent_state)
+    if (!have_parent)
+    {
+        lantern_state_reset(&parent_state);
+        return;
+    }
+    for (size_t i = 0; i < attestations->length; ++i)
+    {
+        if (!split_needed[i])
         {
             continue;
         }
-
+        const LanternAggregatedAttestation *attestation = &attestations->data[i];
         LanternAggregatedSignatureProof recovered;
         lantern_aggregated_signature_proof_init(&recovered);
-        split_attempts += 1u;
         if (!lantern_signature_split_block_type2_attestation_proof(
-                parent_state,
+                &parent_state,
                 &block->block,
                 &block->proof,
                 i,
@@ -271,14 +301,26 @@ void lantern_client_cache_block_aggregated_proofs_locked(
             lantern_aggregated_signature_proof_reset(&recovered);
             continue;
         }
-        (void)lantern_store_add_new_aggregated_payload(
-            &client->store,
-            &data_root,
-            &attestation->data,
-            &recovered);
+        state_locked = lantern_client_lock_state(client);
+        if (state_locked)
+        {
+            if (lantern_client_block_known_locked(client, &block_root, NULL)
+                && !lantern_store_aggregated_payloads_cover_participants(
+                    &client->store,
+                    &data_roots[i],
+                    &attestation->aggregation_bits))
+            {
+                (void)lantern_store_add_new_aggregated_payload(
+                    &client->store,
+                    &data_roots[i],
+                    &attestation->data,
+                    &recovered);
+            }
+            lantern_client_unlock_state(client, state_locked);
+        }
         lantern_aggregated_signature_proof_reset(&recovered);
     }
-
+    lantern_state_reset(&parent_state);
 }
 
 static void persist_block_after_import(
@@ -380,6 +422,7 @@ static int commit_and_publish_local_block(
             &meta,
             0u,
             false,
+            false,
             true,
             NULL,
             &import_result);
@@ -387,7 +430,9 @@ static int commit_and_publish_local_block(
         {
             return import_result;
         }
-        return lantern_client_publish_block(client, block);
+        int publish_rc = lantern_client_publish_block(client, block);
+        (void)lantern_client_enqueue_block_aggregated_proofs(client, block);
+        return publish_rc;
     }
 
     if (client->store.block_len > 0u
@@ -404,7 +449,6 @@ static int commit_and_publish_local_block(
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
 
-    lantern_client_cache_block_aggregated_proofs_locked(client, block);
     adopt_state_locked(client, post_state);
     lantern_state_init(post_state);
     get_head_info_locked(client, &head_root, &head_slot);
@@ -414,6 +458,7 @@ static int commit_and_publish_local_block(
     state_locked = false;
 
     int publish_rc = lantern_client_publish_block(client, block);
+    (void)lantern_client_enqueue_block_aggregated_proofs(client, block);
 
     state_locked = lantern_client_lock_state(client);
     if (state_locked)
@@ -445,7 +490,7 @@ static int commit_and_publish_local_block(
         persist_block_after_import(client, block, &meta);
         update_network_view_after_import(client, block_root, block->block.slot);
         lantern_client_pending_remove_by_root(client, block_root);
-        lantern_client_process_pending_children(client, block_root);
+        lantern_client_process_pending_children(client, block_root, false);
         update_sync_progress_after_block(client);
         lantern_client_replay_pending_gossip_votes(client);
     }
@@ -843,8 +888,6 @@ static bool add_competing_fork_block_locked(
     {
         return false;
     }
-
-    lantern_client_cache_block_aggregated_proofs_locked(client, block);
 
     char block_hex[ROOT_HEX_BUFFER_LEN];
     char parent_hex[ROOT_HEX_BUFFER_LEN];
@@ -1447,6 +1490,7 @@ static bool lantern_client_import_block_internal(
     const struct lantern_log_metadata *meta,
     uint32_t backfill_depth,
     bool allow_historical,
+    bool cache_aggregated_proofs,
     bool drain_pending_children,
     bool *out_children_ready,
     lantern_client_error *out_result)
@@ -1528,7 +1572,10 @@ static bool lantern_client_import_block_internal(
         persist_block_after_import(client, block, meta);
         if (drain_pending_children)
         {
-            lantern_client_process_pending_children(client, &block_root_local);
+            lantern_client_process_pending_children(
+                client,
+                &block_root_local,
+                cache_aggregated_proofs);
         }
         else
         {
@@ -1576,6 +1623,20 @@ static bool lantern_client_import_block_internal(
         goto cleanup;
     }
     bool parent_off_head = parent_action == BLOCK_PARENT_ACTION_KNOWN_OFF_HEAD;
+
+    if (lantern_state_validate_attestation_data_constraints(
+            &block->block.body.attestations,
+            true)
+        != 0)
+    {
+        log_import_rejected(
+            block,
+            &block_root_local,
+            import_source,
+            "attestation_data_constraints",
+            meta);
+        goto cleanup;
+    }
 
     if (!validate_block_vote_constraints_locked(client, block, meta))
     {
@@ -1711,11 +1772,18 @@ static bool lantern_client_import_block_internal(
         }
         if (processed)
         {
+            if (cache_aggregated_proofs)
+            {
+                lantern_client_cache_block_aggregated_proofs(client, block);
+            }
             persist_block_after_import(client, block, meta);
             update_network_view_after_import(client, &block_root_local, block->block.slot);
             if (drain_pending_children)
             {
-                lantern_client_process_pending_children(client, &block_root_local);
+                lantern_client_process_pending_children(
+                    client,
+                    &block_root_local,
+                    cache_aggregated_proofs);
             }
             else
             {
@@ -1745,8 +1813,6 @@ static bool lantern_client_import_block_internal(
         goto cleanup;
     }
 
-    lantern_client_cache_block_aggregated_proofs_locked(client, block);
-
     prune_storage_if_finalized_advanced_locked(
         client,
         &pre_transition_finalized,
@@ -1772,6 +1838,10 @@ cleanup:
 
     if (imported)
     {
+        if (cache_aggregated_proofs)
+        {
+            lantern_client_cache_block_aggregated_proofs(client, block);
+        }
         import_result = LANTERN_CLIENT_OK;
         persist_block_after_import(client, block, meta);
         update_network_view_after_import(client, &block_root_local, block->block.slot);
@@ -1785,7 +1855,10 @@ cleanup:
         lantern_client_pending_remove_by_root(client, &block_root_local);
         if (drain_pending_children)
         {
-            lantern_client_process_pending_children(client, &block_root_local);
+            lantern_client_process_pending_children(
+                client,
+                &block_root_local,
+                cache_aggregated_proofs);
         }
         else
         {
@@ -1834,6 +1907,7 @@ bool lantern_client_import_block(
         backfill_depth,
         allow_historical,
         true,
+        true,
         NULL,
         NULL);
 }
@@ -1845,6 +1919,7 @@ bool lantern_client_import_block_without_pending_children(
     const struct lantern_log_metadata *meta,
     uint32_t backfill_depth,
     bool allow_historical,
+    bool cache_aggregated_proofs,
     bool *out_children_ready)
 {
     return lantern_client_import_block_internal(
@@ -1854,6 +1929,7 @@ bool lantern_client_import_block_without_pending_children(
         meta,
         backfill_depth,
         allow_historical,
+        cache_aggregated_proofs,
         false,
         out_children_ready,
         NULL);
@@ -1972,8 +2048,20 @@ lantern_client_error lantern_client_record_block(
         &meta,
         backfill_depth,
         allow_historical,
+        false,
         true,
         NULL,
         &import_result);
+    if (import_result == LANTERN_CLIENT_OK)
+    {
+        if (strcmp(source, "gossip") == 0)
+        {
+            (void)lantern_client_enqueue_block_aggregated_proofs(client, block);
+        }
+        else
+        {
+            lantern_client_cache_block_aggregated_proofs(client, block);
+        }
+    }
     return import_result;
 }

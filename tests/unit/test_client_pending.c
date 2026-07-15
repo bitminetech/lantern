@@ -544,7 +544,7 @@ cleanup:
     return rc;
 }
 
-static int resign_first_block_attestation(
+static int resign_matching_block_attestations(
     struct block_signature_fixture *fixture,
     LanternSignedBlock *block,
     LanternRoot *out_root)
@@ -607,13 +607,27 @@ static int resign_first_block_attestation(
             proof)) {
         goto cleanup;
     }
-    if (lantern_aggregated_payload_pool_add(
-            &attestation_payloads,
-            &attestation_root,
-            &attestation->data,
-            proof)
-        != 0) {
+    size_t attestation_count = block->block.body.attestations.length;
+    attestation_payloads.entries = calloc(attestation_count, sizeof(*attestation_payloads.entries));
+    if (!attestation_payloads.entries) {
         goto cleanup;
+    }
+    attestation_payloads.capacity = attestation_count;
+    for (size_t i = 0; i < attestation_count; ++i) {
+        LanternAggregatedAttestation *candidate = &block->block.body.attestations.data[i];
+        struct lantern_aggregated_payload_entry *entry = &attestation_payloads.entries[i];
+        LanternRoot candidate_root;
+        if (lantern_hash_tree_root_attestation_data(&candidate->data, &candidate_root) != SSZ_SUCCESS
+            || memcmp(candidate_root.bytes, attestation_root.bytes, LANTERN_ROOT_SIZE) != 0) {
+            goto cleanup;
+        }
+        entry->data_root = candidate_root;
+        entry->data = candidate->data;
+        lantern_aggregated_signature_proof_init(&entry->proof);
+        attestation_payloads.length = i + 1u;
+        if (lantern_aggregated_signature_proof_copy(&entry->proof, proof) != 0) {
+            goto cleanup;
+        }
     }
 
     if (lantern_state_preview_post_state_root(
@@ -1866,6 +1880,62 @@ cleanup:
     return rc;
 }
 
+static int test_import_block_rejects_duplicate_attestation_data(void)
+{
+    struct block_signature_fixture fixture;
+    LanternSignedBlock block;
+    LanternState transition_state;
+    LanternRoot block_root;
+    uint64_t initial_slot = 0;
+    int rc = 1;
+
+    memset(&block, 0, sizeof(block));
+    lantern_state_init(&transition_state);
+    if (setup_block_signature_fixture(&fixture, "test_import_duplicate_attestation_data") != 0) {
+        fprintf(stderr, "failed to set up duplicate attestation data fixture\n");
+        return 1;
+    }
+
+    initial_slot = fixture.client.state.slot;
+    if (build_signed_block_for_import(&fixture, true, true, &block, &block_root) != 0
+        || lantern_aggregated_attestations_resize(&block.block.body.attestations, 2u) != 0) {
+        fprintf(stderr, "failed to build duplicate attestation data block\n");
+        goto cleanup;
+    }
+
+    LanternAggregatedAttestation *first = &block.block.body.attestations.data[0];
+    LanternAggregatedAttestation *duplicate = &block.block.body.attestations.data[1];
+    duplicate->data = first->data;
+    if (lantern_bitlist_resize(&duplicate->aggregation_bits, first->aggregation_bits.bit_length) != 0
+        || lantern_bitlist_set(&duplicate->aggregation_bits, 0u, true) != 0
+        || resign_matching_block_attestations(&fixture, &block, &block_root) != 0) {
+        fprintf(stderr, "failed to sign duplicate attestation data block\n");
+        goto cleanup;
+    }
+
+    if (lantern_state_clone(&fixture.client.state, &transition_state) != 0
+        || lantern_state_transition(&transition_state, &block) != 0) {
+        fprintf(stderr, "state transition rejected valid split aggregates\n");
+        goto cleanup;
+    }
+    if (lantern_client_debug_import_block(&fixture.client, &block, &block_root, "12D3KooWsig") != 0) {
+        fprintf(stderr, "import accepted duplicate attestation data\n");
+        goto cleanup;
+    }
+    if (fixture.client.state.slot != initial_slot) {
+        fprintf(stderr, "state slot advanced after rejecting duplicate attestation data\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_state_reset(&transition_state);
+    lantern_signed_block_reset(&block);
+    teardown_block_signature_fixture(&fixture);
+    return rc;
+}
+
 static int test_import_persists_finalized_post_state(void)
 {
     struct block_signature_fixture fixture;
@@ -2492,7 +2562,7 @@ static int test_import_block_skips_unknown_attestation_head_root(void)
         unknown_root.bytes[0] ^= 0xFFu;
     }
     block.block.body.attestations.data[0].data.head.root = unknown_root;
-    if (resign_first_block_attestation(&fixture, &block, &block_root) != 0) {
+    if (resign_matching_block_attestations(&fixture, &block, &block_root) != 0) {
         fprintf(stderr, "failed to resign block fixture with unknown attestation head\n");
         goto cleanup;
     }
@@ -2678,6 +2748,9 @@ int main(void) {
         return 1;
     }
     if (test_import_block_accepts_complete_proof() != 0) {
+        return 1;
+    }
+    if (test_import_block_rejects_duplicate_attestation_data() != 0) {
         return 1;
     }
     if (test_import_persists_finalized_post_state() != 0) {

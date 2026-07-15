@@ -38,6 +38,7 @@ enum {
 
 struct lantern_async_block_import_job
 {
+    bool cache_aggregated_proofs_only;
     LanternSignedBlock block;
     LanternRoot block_root;
     char peer_id[128];
@@ -1418,13 +1419,25 @@ static void *block_import_worker_main(void *arg)
             client->block_import_tail = NULL;
         }
         client->block_import_queue_len -= 1u;
+        bool stopping = client->block_import_stop;
         pthread_mutex_unlock(&client->block_import_lock);
 
-        int rc = import_block_response_now(
-            client,
-            &job->block,
-            &job->block_root,
-            job->peer_id);
+        int rc = LANTERN_CLIENT_OK;
+        if (job->cache_aggregated_proofs_only)
+        {
+            if (!stopping)
+            {
+                lantern_client_cache_block_aggregated_proofs(client, &job->block);
+            }
+        }
+        else
+        {
+            rc = import_block_response_now(
+                client,
+                &job->block,
+                &job->block_root,
+                job->peer_id);
+        }
         if (rc != LANTERN_CLIENT_OK)
         {
             lantern_log_warn(
@@ -1518,24 +1531,122 @@ static int enqueue_block_import_job(
     {
         return -1;
     }
-    if (client->block_import_stop
-        || client->block_import_queue_len >= ASYNC_BLOCK_IMPORT_QUEUE_LIMIT)
+    if (client->block_import_stop)
     {
         pthread_mutex_unlock(&client->block_import_lock);
         return -1;
     }
-    if (client->block_import_tail)
+
+    /* Proof recovery is optional. Keep required req/resp imports ahead of it,
+     * and evict proof work rather than reject an import when the queue is full. */
+    struct lantern_async_block_import_job *evicted = NULL;
+    if (client->block_import_queue_len >= ASYNC_BLOCK_IMPORT_QUEUE_LIMIT)
+    {
+        if (job->cache_aggregated_proofs_only)
+        {
+            pthread_mutex_unlock(&client->block_import_lock);
+            return -1;
+        }
+
+        struct lantern_async_block_import_job *previous = NULL;
+        struct lantern_async_block_import_job *candidate_previous = NULL;
+        for (struct lantern_async_block_import_job *candidate = client->block_import_head;
+             candidate;
+             candidate = candidate->next)
+        {
+            if (candidate->cache_aggregated_proofs_only)
+            {
+                evicted = candidate;
+                candidate_previous = previous;
+            }
+            previous = candidate;
+        }
+        if (!evicted)
+        {
+            pthread_mutex_unlock(&client->block_import_lock);
+            return -1;
+        }
+        if (candidate_previous)
+        {
+            candidate_previous->next = evicted->next;
+        }
+        else
+        {
+            client->block_import_head = evicted->next;
+        }
+        if (client->block_import_tail == evicted)
+        {
+            client->block_import_tail = candidate_previous;
+        }
+        evicted->next = NULL;
+        client->block_import_queue_len -= 1u;
+    }
+
+    job->next = NULL;
+    if (!job->cache_aggregated_proofs_only && client->block_import_head)
+    {
+        struct lantern_async_block_import_job *previous = NULL;
+        struct lantern_async_block_import_job *queued = client->block_import_head;
+        while (queued && !queued->cache_aggregated_proofs_only)
+        {
+            previous = queued;
+            queued = queued->next;
+        }
+        if (queued)
+        {
+            job->next = queued;
+            if (previous)
+            {
+                previous->next = job;
+            }
+            else
+            {
+                client->block_import_head = job;
+            }
+        }
+        else
+        {
+            client->block_import_tail->next = job;
+            client->block_import_tail = job;
+        }
+    }
+    else if (client->block_import_tail)
     {
         client->block_import_tail->next = job;
+        client->block_import_tail = job;
     }
     else
     {
         client->block_import_head = job;
+        client->block_import_tail = job;
     }
-    client->block_import_tail = job;
     client->block_import_queue_len += 1u;
     pthread_cond_signal(&client->block_import_cond);
     pthread_mutex_unlock(&client->block_import_lock);
+    block_import_job_free(evicted);
+    return 0;
+}
+
+int lantern_client_enqueue_block_aggregated_proofs(
+    struct lantern_client *client,
+    const LanternSignedBlock *block)
+{
+    if (!client || !block)
+    {
+        return -1;
+    }
+    struct lantern_async_block_import_job *job = calloc(1u, sizeof(*job));
+    if (!job)
+    {
+        return -1;
+    }
+    job->cache_aggregated_proofs_only = true;
+    if (clone_signed_block(block, &job->block) != 0
+        || enqueue_block_import_job(client, job) != 0)
+    {
+        block_import_job_free(job);
+        return -1;
+    }
     return 0;
 }
 

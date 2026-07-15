@@ -56,6 +56,9 @@ int lantern_state_generate_genesis(LanternState *state, uint64_t genesis_time, u
 int lantern_state_process_slot(LanternState *state);
 int lantern_state_process_slots(LanternState *state, uint64_t target_slot);
 int lantern_state_process_block_header(LanternState *state, const LanternBlock *block);
+int lantern_state_validate_attestation_data_constraints(
+    const LanternAggregatedAttestations *attestations,
+    bool require_unique_data);
 int lantern_state_process_attestations(
     LanternState *state,
     const LanternAggregatedAttestations *attestations);

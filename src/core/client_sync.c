@@ -1327,7 +1327,7 @@ int restore_persisted_blocks(struct lantern_client *client)
                    post_state)
                 == 0)
         {
-            lantern_client_cache_block_aggregated_proofs_locked(
+            lantern_client_cache_block_aggregated_proofs(
                 client,
                 &entry->block);
         }
@@ -2627,7 +2627,8 @@ bool lantern_client_enqueue_pending_block(
  */
 void lantern_client_process_pending_children(
     struct lantern_client *client,
-    const LanternRoot *parent_root)
+    const LanternRoot *parent_root,
+    bool cache_aggregated_proofs)
 {
     if (!client || !parent_root)
     {
@@ -2741,7 +2742,14 @@ void lantern_client_process_pending_children(
                 &meta,
                 replays[i].backfill_depth,
                 true,
+                cache_aggregated_proofs,
                 &children_ready);
+            if (children_ready && !cache_aggregated_proofs)
+            {
+                (void)lantern_client_enqueue_block_aggregated_proofs(
+                    client,
+                    &replays[i].block);
+            }
             if (imported)
             {
                 imported_count += 1u;

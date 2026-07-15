@@ -90,8 +90,9 @@ static lantern_state_aggregate_result state_append_block_proof(
     LanternAggregatedAttestations *out_attestations,
     struct lantern_aggregated_payload_pool *out_payloads);
 
-static int lantern_state_validate_attestation_data_count(
-    const LanternAggregatedAttestations *attestations) {
+int lantern_state_validate_attestation_data_constraints(
+    const LanternAggregatedAttestations *attestations,
+    bool require_unique_data) {
     if (!attestations || attestations->length > LANTERN_MAX_ATTESTATIONS
         || (attestations->length > 0u && !attestations->data)) {
         return -1;
@@ -106,6 +107,10 @@ static int lantern_state_validate_attestation_data_count(
             break;
         }
         if (lantern_root_list_contains(&seen_data_roots, &data_root)) {
+            if (require_unique_data) {
+                rc = -1;
+                break;
+            }
             continue;
         }
         if (seen_data_roots.length >= (size_t)LANTERN_MAX_ATTESTATIONS_DATA
@@ -1881,7 +1886,7 @@ int lantern_state_process_attestations(
         .has_slot = true,
         .slot = state->slot,
     };
-    if (lantern_state_validate_attestation_data_count(attestations) != 0
+    if (lantern_state_validate_attestation_data_constraints(attestations, false) != 0
         || state->justification_roots.length > SIZE_MAX / validator_count
         || state->justification_validators.bit_length
             != state->justification_roots.length * validator_count) {
