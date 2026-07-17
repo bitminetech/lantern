@@ -28,6 +28,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=apt-cache-${TARGE
         git \
         ninja-build \
         pkg-config \
+        libcurl4-openssl-dev \
+        libevent-dev \
+        libyaml-dev \
         flex \
         python3 \
         python3-pip \
@@ -146,6 +149,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=apt-cache-${TARGE
         ca-certificates \
         libssl3 \
         libstdc++6 \
+        libcurl4 \
+        libevent-2.1-7 \
+        libevent-extra-2.1-7 \
+        libevent-pthreads-2.1-7 \
+        libyaml-0-2 \
         zlib1g \
     && if [ "$INCLUDE_DEBUG_TOOLS" = "true" ]; then \
         apt-get install -y --no-install-recommends gdb linux-tools-generic valgrind \

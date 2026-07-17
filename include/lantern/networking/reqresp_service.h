@@ -88,12 +88,8 @@ struct lantern_reqresp_protocol_context {
 struct lantern_reqresp_service {
     struct lantern_libp2p_host *network;
     struct lantern_reqresp_service_callbacks callbacks;
-    libp2p_host_protocol_t status_protocol;
-    libp2p_host_protocol_t blocks_protocol;
-    libp2p_host_protocol_t blocks_by_range_protocol;
-    struct lantern_reqresp_protocol_context status_context;
-    struct lantern_reqresp_protocol_context blocks_context;
-    struct lantern_reqresp_protocol_context blocks_by_range_context;
+    libp2p_host_protocol_t protocols[LANTERN_REQRESP_PROTOCOL_KIND_COUNT];
+    struct lantern_reqresp_protocol_context protocol_contexts[LANTERN_REQRESP_PROTOCOL_KIND_COUNT];
     struct lantern_reqresp_exchange *exchanges;
     int lock_initialized;
     pthread_mutex_t lock;

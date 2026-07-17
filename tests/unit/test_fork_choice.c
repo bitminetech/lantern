@@ -9,6 +9,7 @@
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/store.h"
 #include "lantern/consensus/state.h"
+#include "../support/validator_registry.h"
 #include "../support/vote_list.h"
 
 #ifdef NDEBUG
@@ -273,7 +274,7 @@ static void seed_state_allocations(
     for (size_t i = 0; i < pubkey_bytes; ++i) {
         pubkeys[i] = (uint8_t)(seed + (uint8_t)i);
     }
-    assert(lantern_state_set_validator_pubkeys(state, pubkeys, validator_count) == 0);
+    assert(lantern_test_state_set_validator_pubkeys(state, pubkeys, validator_count) == 0);
     free(pubkeys);
 
     assert(lantern_root_list_resize(&state->historical_block_hashes, history_len) == 0);

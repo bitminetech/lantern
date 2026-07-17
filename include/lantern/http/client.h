@@ -15,20 +15,11 @@ enum
     LANTERN_HTTP_CLIENT_ERR = -1,
 };
 
-struct lantern_http_url {
-    char *host;
-    uint16_t port;
-    char *path;
-};
-
 struct lantern_http_fetch_result {
     int status_code;
     uint8_t *body;
     size_t body_len;
 };
-
-int lantern_http_url_parse(const char *url, struct lantern_http_url *out_url);
-void lantern_http_url_reset(struct lantern_http_url *url);
 
 int lantern_http_get_bytes(
     const char *url,

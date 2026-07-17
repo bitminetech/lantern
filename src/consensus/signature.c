@@ -177,7 +177,7 @@ static bool prepare_recursive_child(
         return false;
     }
 
-    size_t validator_count = lantern_state_validator_count(state);
+    size_t validator_count = state->validators ? state->validator_count : 0u;
     size_t pubkey_index = 0u;
     for (size_t validator_index = 0; validator_index < proof->participants.bit_length; ++validator_index) {
         if (!lantern_bitlist_get(&proof->participants, validator_index)) {
@@ -187,8 +187,7 @@ static bool prepare_recursive_child(
             return false;
         }
 
-        const uint8_t *pubkey =
-            lantern_state_validator_attestation_pubkey(state, validator_index);
+        const uint8_t *pubkey = state->validators[validator_index].attestation_pubkey;
         if (!pubkey || lantern_validator_pubkey_is_zero(pubkey)) {
             return false;
         }
@@ -394,7 +393,7 @@ static bool build_type2_attestation_component(
     if (!state || !participants || !work || !component) {
         return false;
     }
-    size_t validator_count = lantern_state_validator_count(state);
+    size_t validator_count = state->validators ? state->validator_count : 0u;
     if (participants->bit_length > validator_count) {
         return false;
     }
@@ -411,7 +410,7 @@ static bool build_type2_attestation_component(
         if (!lantern_bitlist_get(participants, i)) {
             continue;
         }
-        const uint8_t *pubkey = lantern_state_validator_attestation_pubkey(state, i);
+        const uint8_t *pubkey = state->validators[i].attestation_pubkey;
         if (!pubkey || lantern_validator_pubkey_is_zero(pubkey)) {
             free(pubkeys);
             return false;
@@ -431,11 +430,11 @@ static bool build_type2_proposer_component(
     if (!state || !work || !component) {
         return false;
     }
-    size_t validator_count = lantern_state_validator_count(state);
+    size_t validator_count = state->validators ? state->validator_count : 0u;
     if (proposer_index >= validator_count) {
         return false;
     }
-    const uint8_t *pubkey = lantern_state_validator_proposal_pubkey(state, (size_t)proposer_index);
+    const uint8_t *pubkey = state->validators[proposer_index].proposal_pubkey;
     return type2_component_init_from_pubkeys(&pubkey, 1u, work, component);
 }
 

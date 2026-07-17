@@ -1,15 +1,6 @@
-/**
- * @file main.c
- * @brief Lantern client entry point and command-line interface
- *
- * Provides the main entry point for the Lantern consensus client, handling:
- * - Command-line argument parsing
- * - Signal handling for graceful shutdown
- * - Client initialization and lifecycle management
- */
-
 #include "lantern/core/client.h"
 #include "lantern/support/log.h"
+#include "lantern/support/strings.h"
 #include "lantern/support/version.h"
 
 #include <ctype.h>
@@ -57,800 +48,451 @@ enum {
     OPT_SHADOW_XMSS_AGGREGATE_SIGNATURES_RATE,
     OPT_SHADOW_XMSS_VERIFY_AGGREGATED_SIGNATURES_RATE,
     OPT_SHADOW_XMSS_MERGE_RATE,
-    /* Deprecated: legacy file-path flags retained so pre-migration
-     * lean-quickstart wrappers keep working. Each resolves to the parent
-     * directory of the given file and feeds validator_config_dir. */
     OPT_LEGACY_VALIDATOR_REGISTRY_PATH,
     OPT_LEGACY_VALIDATOR_KEYS_PATH,
     OPT_LEGACY_VALIDATOR_CONFIG_PATH,
 };
 
-/* Return a heap-allocated copy of dirname(path). Program-lifetime allocation. */
-static const char *derive_parent_dir(const char *path)
-{
-    if (!path || !*path)
-    {
-        return NULL;
-    }
-    char *copy = strdup(path);
-    if (!copy)
-    {
-        return NULL;
-    }
-    char *dir = dirname(copy);
-    char *result = dir ? strdup(dir) : NULL;
-    free(copy);
-    return result;
-}
+static const struct option OPTIONS[] = {
+    {"data-dir", required_argument, NULL, 'd'},
+    {"genesis-config", required_argument, NULL, OPT_GENESIS_CONFIG},
+    {"nodes-path", required_argument, NULL, OPT_NODES_PATH},
+    {"genesis-state", required_argument, NULL, OPT_GENESIS_STATE},
+    {"use-genesis-state", no_argument, NULL, OPT_USE_GENESIS_STATE},
+    {"validator_config", required_argument, NULL, OPT_VALIDATOR_CONFIG},
+    {"validator-registry-path", required_argument, NULL, OPT_LEGACY_VALIDATOR_REGISTRY_PATH},
+    {"validator-keys-path", required_argument, NULL, OPT_LEGACY_VALIDATOR_KEYS_PATH},
+    {"validator-config", required_argument, NULL, OPT_LEGACY_VALIDATOR_CONFIG_PATH},
+    {"node-id", required_argument, NULL, OPT_NODE_ID},
+    {"node-key", required_argument, NULL, OPT_NODE_KEY},
+    {"node-key-path", required_argument, NULL, OPT_NODE_KEY_PATH},
+    {"listen-address", required_argument, NULL, OPT_LISTEN_ADDRESS},
+    {"checkpoint-sync-url", required_argument, NULL, OPT_CHECKPOINT_SYNC_URL},
+    {"http-port", required_argument, NULL, OPT_HTTP_PORT},
+    {"metrics-port", required_argument, NULL, OPT_METRICS_PORT},
+    {"bootnode", required_argument, NULL, OPT_BOOTNODE},
+    {"bootnodes", required_argument, NULL, OPT_BOOTNODES},
+    {"bootnodes-file", required_argument, NULL, OPT_BOOTNODE_FILE},
+    {"devnet", required_argument, NULL, OPT_DEVNET},
+    {"log-level", required_argument, NULL, OPT_LOG_LEVEL},
+    {"xmss-key-dir", required_argument, NULL, OPT_XMSS_KEY_DIR},
+    {"hash-sig-key-dir", required_argument, NULL, OPT_HASH_SIG_KEY_DIR},
+    {"xmss-secret", required_argument, NULL, OPT_XMSS_SECRET_PATH},
+    {"xmss-secret-template", required_argument, NULL, OPT_XMSS_SECRET_TEMPLATE},
+    {"is-aggregator", no_argument, NULL, OPT_IS_AGGREGATOR},
+    {"attestation-committee-count", required_argument, NULL, OPT_ATTESTATION_COMMITTEE_COUNT},
+    {"aggregate-subnet-ids", required_argument, NULL, OPT_AGGREGATE_SUBNET_IDS},
+    {"shadow-xmss-aggregate-signatures-rate", required_argument, NULL, OPT_SHADOW_XMSS_AGGREGATE_SIGNATURES_RATE},
+    {"shadow-xmss-verify-aggregated-signatures-rate", required_argument, NULL, OPT_SHADOW_XMSS_VERIFY_AGGREGATED_SIGNATURES_RATE},
+    {"shadow-xmss-merge-rate", required_argument, NULL, OPT_SHADOW_XMSS_MERGE_RATE},
+    {"help", no_argument, NULL, 'h'},
+    {"version", no_argument, NULL, 'v'},
+    {0, 0, 0, 0},
+};
 
-/* Forward declarations */
-static lantern_client_error configure_logging_from_env(void);
-static lantern_client_error register_signal_handlers(void);
-static lantern_client_error apply_option(
-    struct lantern_client_options *options,
-    int opt,
-    const char *optarg,
-    bool *show_help,
-    bool *show_version);
-static lantern_client_error handle_port_option(
-    struct lantern_client_options *options,
-    int opt,
-    const char *optarg);
-static lantern_client_error handle_bootnode_option(
-    struct lantern_client_options *options,
-    int opt,
-    const char *optarg);
-static lantern_client_error handle_xmss_option(
-    struct lantern_client_options *options,
-    int opt,
-    const char *optarg);
-static lantern_client_error handle_aggregate_subnet_ids_option(
-    struct lantern_client_options *options,
-    const char *optarg);
-static lantern_client_error handle_shadow_xmss_rate_option(
-    struct lantern_client_options *options,
-    int opt,
-    const char *optarg);
-static lantern_client_error parse_arguments(
-    struct lantern_client_options *options,
-    int argc,
-    char **argv,
-    bool *show_help,
-    bool *show_version);
-static lantern_client_error validate_required_options(
-    const struct lantern_client_options *options);
-static lantern_client_error run_main_loop(struct lantern_client *client);
-static void print_usage(const char *prog);
-static lantern_client_error parse_double_value(const char *text, double *out_value);
-static lantern_client_error parse_u16(const char *text, uint16_t *out_value);
-static lantern_client_error parse_size_t_nonnegative(const char *text, size_t *out_value);
-static lantern_client_error parse_size_t_positive(const char *text, size_t *out_value);
+static volatile sig_atomic_t keep_running = 1;
 
-/** Flag indicating whether the main loop should continue running. */
-static volatile sig_atomic_t g_keep_running = 1;
-
-static void configure_allocator_from_env(void)
+static void configure_allocator(void)
 {
 #if defined(__GLIBC__) && defined(M_ARENA_MAX)
-    const char *arena_env = getenv("MALLOC_ARENA_MAX");
-    if (!arena_env || arena_env[0] == '\0')
+    const char *configured = getenv("MALLOC_ARENA_MAX");
+    if (!configured || !configured[0])
     {
         (void)mallopt(M_ARENA_MAX, 2);
     }
 #endif
 }
 
-
-/**
- * Handle termination signals (SIGINT, SIGTERM).
- *
- * Sets the global keep_running flag to false to trigger graceful shutdown.
- *
- * @param signo  Signal number (unused)
- *
- * @note Thread safety: Async-signal safe; only writes a sig_atomic_t flag.
- */
-static void lantern_handle_signal(int signo)
+static void stop_running(int signal_number)
 {
-    (void)signo;
-    g_keep_running = 0;
+    (void)signal_number;
+    keep_running = 0;
 }
 
-
-/**
- * Register signal handlers for graceful shutdown.
- *
- * @return 0 on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM if registration fails
- *
- * @note Thread safety: Must be called during single-threaded startup.
- */
-static lantern_client_error register_signal_handlers(void)
+static int register_signals(void)
 {
-    if (signal(SIGINT, lantern_handle_signal) == SIG_ERR
-        || signal(SIGTERM, lantern_handle_signal) == SIG_ERR)
-    {
-        lantern_log_error(
-            "cli",
-            &(const struct lantern_log_metadata){0},
-            "failed to register signal handlers");
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    return LANTERN_CLIENT_OK;
+    return signal(SIGINT, stop_running) == SIG_ERR || signal(SIGTERM, stop_running) == SIG_ERR
+        ? -1
+        : 0;
 }
 
-
-/**
- * Configure logging from the LANTERN_LOG_LEVEL environment variable.
- *
- * @return LANTERN_CLIENT_OK on success or if the variable is unset
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM if the value is invalid
- *
- * @note Thread safety: Must be called during single-threaded startup.
- */
-static lantern_client_error configure_logging_from_env(void)
+static int parse_unsigned(const char *text, uint64_t maximum, bool allow_zero, uint64_t *out)
 {
-    const char *env_log_level = getenv("LANTERN_LOG_LEVEL");
-    if (!env_log_level)
+    if (!text || !out)
     {
-        return LANTERN_CLIENT_OK;
+        return -1;
     }
-
-    if (lantern_log_set_level_from_string(env_log_level, NULL) != 0)
-    {
-        lantern_log_error(
-            "cli",
-            &(const struct lantern_log_metadata){0},
-            "invalid LANTERN_LOG_LEVEL '%s'",
-            env_log_level);
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    return LANTERN_CLIENT_OK;
-}
-
-
-/**
- * Apply a single parsed option to the client options structure.
- *
- * @param options       Options structure to update
- * @param opt           Parsed option identifier
- * @param optarg        Argument provided to the option (may be NULL)
- * @param show_help     Output flag indicating help request
- * @param show_version  Output flag indicating version request
- *
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM on invalid option or parse error
- * @return LANTERN_CLIENT_ERR_ALLOC on allocation failure
- *
- * @note Thread safety: Not thread-safe; mutates caller-owned options.
- */
-static lantern_client_error apply_option(
-    struct lantern_client_options *options,
-    int opt,
-    const char *optarg,
-    bool *show_help,
-    bool *show_version)
-{
-    if (!options || !show_help || !show_version)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    switch (opt)
-    {
-    case 'd':
-        options->data_dir = optarg;
-        return LANTERN_CLIENT_OK;
-    case 'h':
-        *show_help = true;
-        return LANTERN_CLIENT_OK;
-    case 'v':
-        *show_version = true;
-        return LANTERN_CLIENT_OK;
-    case OPT_GENESIS_CONFIG:
-        options->genesis_config_path = optarg;
-        return LANTERN_CLIENT_OK;
-    case OPT_NODES_PATH:
-        options->nodes_path = optarg;
-        return LANTERN_CLIENT_OK;
-    case OPT_GENESIS_STATE:
-    case OPT_USE_GENESIS_STATE:
-        return LANTERN_CLIENT_OK;
-    case OPT_VALIDATOR_CONFIG:
-        options->validator_config_dir = optarg;
-        return LANTERN_CLIENT_OK;
-    case OPT_LEGACY_VALIDATOR_REGISTRY_PATH:
-    case OPT_LEGACY_VALIDATOR_KEYS_PATH:
-    case OPT_LEGACY_VALIDATOR_CONFIG_PATH:
-    {
-        const char *parent = derive_parent_dir(optarg);
-        if (!parent)
-        {
-            return LANTERN_CLIENT_ERR_INVALID_PARAM;
-        }
-        options->validator_config_dir = parent;
-        return LANTERN_CLIENT_OK;
-    }
-    case OPT_NODE_ID:
-        options->node_id = optarg;
-        return LANTERN_CLIENT_OK;
-    case OPT_NODE_KEY:
-        options->node_key_hex = optarg;
-        return LANTERN_CLIENT_OK;
-    case OPT_NODE_KEY_PATH:
-        options->node_key_path = optarg;
-        return LANTERN_CLIENT_OK;
-    case OPT_LISTEN_ADDRESS:
-        options->listen_address = optarg;
-        return LANTERN_CLIENT_OK;
-    case OPT_CHECKPOINT_SYNC_URL:
-        options->checkpoint_sync_url = optarg;
-        return LANTERN_CLIENT_OK;
-    case OPT_HTTP_PORT:
-    case OPT_METRICS_PORT:
-        return handle_port_option(options, opt, optarg);
-    case OPT_BOOTNODE:
-    case OPT_BOOTNODES:
-    case OPT_BOOTNODE_FILE:
-        return handle_bootnode_option(options, opt, optarg);
-    case OPT_DEVNET:
-        options->devnet = optarg;
-        return LANTERN_CLIENT_OK;
-    case OPT_LOG_LEVEL:
-        if (lantern_log_set_level_from_string(optarg, NULL) != 0)
-        {
-            lantern_log_error(
-                "cli",
-                &(const struct lantern_log_metadata){.validator = options->node_id},
-                "invalid log-level '%s'",
-                optarg);
-            return LANTERN_CLIENT_ERR_INVALID_PARAM;
-        }
-        return LANTERN_CLIENT_OK;
-    case OPT_XMSS_KEY_DIR:
-    case OPT_HASH_SIG_KEY_DIR:
-    case OPT_XMSS_SECRET_PATH:
-    case OPT_XMSS_SECRET_TEMPLATE:
-        return handle_xmss_option(options, opt, optarg);
-    case OPT_IS_AGGREGATOR:
-        options->is_aggregator = true;
-        return LANTERN_CLIENT_OK;
-    case OPT_ATTESTATION_COMMITTEE_COUNT: {
-        size_t parsed_value = 0;
-        if (parse_size_t_positive(optarg, &parsed_value) != LANTERN_CLIENT_OK)
-        {
-            lantern_log_error(
-                "cli",
-                &(const struct lantern_log_metadata){.validator = options->node_id},
-                "invalid attestation-committee-count '%s'",
-                optarg ? optarg : "");
-            return LANTERN_CLIENT_ERR_INVALID_PARAM;
-        }
-        options->attestation_committee_count_override = (uint64_t)parsed_value;
-        return LANTERN_CLIENT_OK;
-    }
-    case OPT_AGGREGATE_SUBNET_IDS:
-        return handle_aggregate_subnet_ids_option(options, optarg);
-    case OPT_SHADOW_XMSS_AGGREGATE_SIGNATURES_RATE:
-    case OPT_SHADOW_XMSS_VERIFY_AGGREGATED_SIGNATURES_RATE:
-    case OPT_SHADOW_XMSS_MERGE_RATE:
-        return handle_shadow_xmss_rate_option(options, opt, optarg);
-    default:
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-}
-
-
-/**
- * Handle port-related CLI options.
- *
- * @param options  Options structure to update
- * @param opt      Parsed option identifier
- * @param optarg   Port value string
- *
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM on parse error or invalid option
- *
- * @note Thread safety: Not thread-safe; mutates caller-owned options.
- */
-static lantern_client_error handle_port_option(
-    struct lantern_client_options *options,
-    int opt,
-    const char *optarg)
-{
-    if (!options || !optarg)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    uint16_t *target_port = (opt == OPT_HTTP_PORT) ? &options->http_port : &options->metrics_port;
-    const char *label = (opt == OPT_HTTP_PORT) ? "http-port" : "metrics-port";
-
-    if (parse_u16(optarg, target_port) != 0)
-    {
-        lantern_log_error(
-            "cli",
-            &(const struct lantern_log_metadata){.validator = options->node_id},
-            "invalid %s '%s'",
-            label,
-            optarg);
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    return LANTERN_CLIENT_OK;
-}
-
-
-/**
- * Handle bootnode-related CLI options.
- *
- * @param options  Options structure to update
- * @param opt      Parsed option identifier
- * @param optarg   ENR value or path
- *
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM on error
- *
- * @note Thread safety: Not thread-safe; mutates caller-owned options.
- */
-static lantern_client_error handle_bootnode_option(
-    struct lantern_client_options *options,
-    int opt,
-    const char *optarg)
-{
-    if (!options || !optarg)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    lantern_client_error result = LANTERN_CLIENT_ERR_INVALID_PARAM;
-    switch (opt)
-    {
-    case OPT_BOOTNODE:
-        result = lantern_client_options_add_bootnode(options, optarg);
-        break;
-    case OPT_BOOTNODES:
-        result = lantern_client_options_add_bootnodes_argument(options, optarg);
-        break;
-    case OPT_BOOTNODE_FILE:
-        result = lantern_client_options_add_bootnodes_from_file(options, optarg);
-        break;
-    default:
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    return result;
-}
-
-
-/**
- * Handle hash signature configuration options.
- *
- * @param options  Options structure to update
- * @param opt      Parsed option identifier
- * @param optarg   Option argument string
- *
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM on invalid option
- *
- * @note Thread safety: Not thread-safe; mutates caller-owned options.
- */
-static lantern_client_error handle_xmss_option(
-    struct lantern_client_options *options,
-    int opt,
-    const char *optarg)
-{
-    if (!options)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    switch (opt)
-    {
-    case OPT_XMSS_KEY_DIR:
-    case OPT_HASH_SIG_KEY_DIR:
-        options->xmss_key_dir = optarg;
-        return LANTERN_CLIENT_OK;
-    case OPT_XMSS_SECRET_PATH:
-        options->xmss_secret_path = optarg;
-        return LANTERN_CLIENT_OK;
-    case OPT_XMSS_SECRET_TEMPLATE:
-        options->xmss_secret_template = optarg;
-        return LANTERN_CLIENT_OK;
-    default:
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-}
-
-static char *trim_mutable(char *text)
-{
-    if (!text)
-    {
-        return NULL;
-    }
-    while (*text && isspace((unsigned char)*text))
+    while (isspace((unsigned char)*text))
     {
         ++text;
     }
-    char *end = text + strlen(text);
-    while (end > text && isspace((unsigned char)*(end - 1)))
+    if (!*text || *text == '-')
     {
-        --end;
+        return -1;
     }
-    *end = '\0';
-    return text;
+    errno = 0;
+    char *end = NULL;
+    unsigned long long value = strtoull(text, &end, 10);
+    while (end && isspace((unsigned char)*end))
+    {
+        ++end;
+    }
+    if (errno != 0 || end == text || (end && *end) || value > maximum
+        || (!allow_zero && value == 0u))
+    {
+        return -1;
+    }
+    *out = (uint64_t)value;
+    return 0;
 }
 
-static lantern_client_error handle_aggregate_subnet_ids_option(
-    struct lantern_client_options *options,
-    const char *optarg)
+static const char *parent_directory(const char *path)
 {
-    if (!options || !optarg)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    char *copy = strdup(optarg);
+    char *copy = path && path[0] ? strdup(path) : NULL;
     if (!copy)
     {
-        return LANTERN_CLIENT_ERR_ALLOC;
+        return NULL;
     }
+    char *directory = dirname(copy);
+    char *result = directory ? strdup(directory) : NULL;
+    free(copy);
+    return result;
+}
 
-    size_t added = 0;
-    char *cursor = copy;
-    lantern_client_error result = LANTERN_CLIENT_OK;
-    while (cursor)
+static lantern_client_error add_subnets(
+    struct lantern_client_options *options,
+    const char *argument)
+{
+    char *copy = argument ? strdup(argument) : NULL;
+    if (!copy)
     {
-        char *comma = strchr(cursor, ',');
+        return argument ? LANTERN_CLIENT_ERR_ALLOC : LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+    size_t added = 0u;
+    lantern_client_error result = LANTERN_CLIENT_OK;
+    for (char *entry = copy; entry;)
+    {
+        char *comma = strchr(entry, ',');
         if (comma)
         {
             *comma = '\0';
         }
-        char *part = trim_mutable(cursor);
-        if (part && *part != '\0')
+        char *trimmed = lantern_trim_whitespace(entry);
+        uint64_t subnet = 0u;
+        if (trimmed && trimmed[0])
         {
-            size_t subnet_id = 0;
-            if (parse_size_t_nonnegative(part, &subnet_id) != LANTERN_CLIENT_OK)
+            if (parse_unsigned(trimmed, SIZE_MAX, true, &subnet) != 0)
             {
-                lantern_log_error(
-                    "cli",
-                    &(const struct lantern_log_metadata){.validator = options->node_id},
-                    "invalid aggregate-subnet-ids entry '%s'",
-                    part);
                 result = LANTERN_CLIENT_ERR_INVALID_PARAM;
                 break;
             }
-            result = lantern_client_options_add_aggregate_subnet_id(options, subnet_id);
+            result = lantern_client_options_add_aggregate_subnet_id(options, (size_t)subnet);
             if (result != LANTERN_CLIENT_OK)
             {
                 break;
             }
-            added += 1u;
+            ++added;
         }
-        cursor = comma ? comma + 1 : NULL;
+        entry = comma ? comma + 1 : NULL;
     }
-
     free(copy);
-    if (result != LANTERN_CLIENT_OK)
-    {
-        return result;
-    }
-    if (added == 0)
-    {
-        lantern_log_error(
-            "cli",
-            &(const struct lantern_log_metadata){.validator = options->node_id},
-            "--aggregate-subnet-ids requires at least one subnet id");
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    return LANTERN_CLIENT_OK;
+    return result == LANTERN_CLIENT_OK && added == 0u
+        ? LANTERN_CLIENT_ERR_INVALID_PARAM
+        : result;
 }
 
-static lantern_client_error handle_shadow_xmss_rate_option(
+static lantern_client_error set_shadow_rate(
     struct lantern_client_options *options,
-    int opt,
-    const char *optarg)
+    int option,
+    const char *argument)
 {
-    if (!options || !optarg)
+    if (!argument || isspace((unsigned char)argument[0]))
     {
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
-
+    char *end = NULL;
+    double value = strtod(argument, &end);
+    if (end == argument || (end && *end))
+    {
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
     LanternShadowOperation operation;
-    const char *label = NULL;
-    switch (opt)
+    switch (option)
     {
     case OPT_SHADOW_XMSS_AGGREGATE_SIGNATURES_RATE:
         operation = LANTERN_SHADOW_AGGREGATE;
-        label = "shadow-xmss-aggregate-signatures-rate";
         break;
     case OPT_SHADOW_XMSS_VERIFY_AGGREGATED_SIGNATURES_RATE:
         operation = LANTERN_SHADOW_VERIFY;
-        label = "shadow-xmss-verify-aggregated-signatures-rate";
         break;
     case OPT_SHADOW_XMSS_MERGE_RATE:
         operation = LANTERN_SHADOW_MERGE;
-        label = "shadow-xmss-merge-rate";
         break;
     default:
         return LANTERN_CLIENT_ERR_INVALID_PARAM;
     }
-
-    if (parse_double_value(optarg, &options->shadow_xmss_rates[operation]) != LANTERN_CLIENT_OK)
-    {
-        lantern_log_error(
-            "cli",
-            &(const struct lantern_log_metadata){.validator = options->node_id},
-            "invalid %s '%s'",
-            label,
-            optarg);
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
+    options->shadow_xmss_rates[operation] = value;
     options->shadow_xmss_rates_set |= (uint8_t)(1u << operation);
     return LANTERN_CLIENT_OK;
 }
 
+static lantern_client_error apply_option(
+    struct lantern_client_options *options,
+    int option,
+    const char *argument,
+    bool *help,
+    bool *version)
+{
+    uint64_t number = 0u;
+    switch (option)
+    {
+    case 'd':
+        options->data_dir = argument;
+        return LANTERN_CLIENT_OK;
+    case 'h':
+        *help = true;
+        return LANTERN_CLIENT_OK;
+    case 'v':
+        *version = true;
+        return LANTERN_CLIENT_OK;
+    case OPT_GENESIS_CONFIG:
+        options->genesis_config_path = argument;
+        return LANTERN_CLIENT_OK;
+    case OPT_NODES_PATH:
+        options->nodes_path = argument;
+        return LANTERN_CLIENT_OK;
+    case OPT_VALIDATOR_CONFIG:
+        options->validator_config_dir = argument;
+        return LANTERN_CLIENT_OK;
+    case OPT_NODE_ID:
+        options->node_id = argument;
+        return LANTERN_CLIENT_OK;
+    case OPT_NODE_KEY:
+        options->node_key_hex = argument;
+        return LANTERN_CLIENT_OK;
+    case OPT_NODE_KEY_PATH:
+        options->node_key_path = argument;
+        return LANTERN_CLIENT_OK;
+    case OPT_LISTEN_ADDRESS:
+        options->listen_address = argument;
+        return LANTERN_CLIENT_OK;
+    case OPT_CHECKPOINT_SYNC_URL:
+        options->checkpoint_sync_url = argument;
+        return LANTERN_CLIENT_OK;
+    case OPT_DEVNET:
+        options->devnet = argument;
+        return LANTERN_CLIENT_OK;
+    case OPT_XMSS_KEY_DIR:
+    case OPT_HASH_SIG_KEY_DIR:
+        options->xmss_key_dir = argument;
+        return LANTERN_CLIENT_OK;
+    case OPT_XMSS_SECRET_PATH:
+        options->xmss_secret_path = argument;
+        return LANTERN_CLIENT_OK;
+    case OPT_XMSS_SECRET_TEMPLATE:
+        options->xmss_secret_template = argument;
+        return LANTERN_CLIENT_OK;
+    case OPT_GENESIS_STATE:
+    case OPT_USE_GENESIS_STATE:
+        return LANTERN_CLIENT_OK;
+    case OPT_LEGACY_VALIDATOR_REGISTRY_PATH:
+    case OPT_LEGACY_VALIDATOR_KEYS_PATH:
+    case OPT_LEGACY_VALIDATOR_CONFIG_PATH:
+        options->validator_config_dir = parent_directory(argument);
+        return options->validator_config_dir ? LANTERN_CLIENT_OK : LANTERN_CLIENT_ERR_ALLOC;
+    case OPT_HTTP_PORT:
+    case OPT_METRICS_PORT:
+        if (parse_unsigned(argument, UINT16_MAX, true, &number) != 0)
+        {
+            return LANTERN_CLIENT_ERR_INVALID_PARAM;
+        }
+        if (option == OPT_HTTP_PORT)
+        {
+            options->http_port = (uint16_t)number;
+        }
+        else
+        {
+            options->metrics_port = (uint16_t)number;
+        }
+        return LANTERN_CLIENT_OK;
+    case OPT_BOOTNODE:
+        return lantern_client_options_add_bootnode(options, argument);
+    case OPT_BOOTNODES:
+        return lantern_client_options_add_bootnodes_argument(options, argument);
+    case OPT_BOOTNODE_FILE:
+        return lantern_client_options_add_bootnodes_from_file(options, argument);
+    case OPT_LOG_LEVEL:
+        return lantern_log_set_level_from_string(argument, NULL) == 0
+            ? LANTERN_CLIENT_OK
+            : LANTERN_CLIENT_ERR_INVALID_PARAM;
+    case OPT_IS_AGGREGATOR:
+        options->is_aggregator = true;
+        return LANTERN_CLIENT_OK;
+    case OPT_ATTESTATION_COMMITTEE_COUNT:
+        if (parse_unsigned(argument, SIZE_MAX, false, &number) != 0)
+        {
+            return LANTERN_CLIENT_ERR_INVALID_PARAM;
+        }
+        options->attestation_committee_count_override = number;
+        return LANTERN_CLIENT_OK;
+    case OPT_AGGREGATE_SUBNET_IDS:
+        return add_subnets(options, argument);
+    case OPT_SHADOW_XMSS_AGGREGATE_SIGNATURES_RATE:
+    case OPT_SHADOW_XMSS_VERIFY_AGGREGATED_SIGNATURES_RATE:
+    case OPT_SHADOW_XMSS_MERGE_RATE:
+        return set_shadow_rate(options, option, argument);
+    default:
+        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+    }
+}
 
-/**
- * Parse CLI arguments and populate client options.
- *
- * @param options       Options structure to populate
- * @param argc          Argument count
- * @param argv          Argument vector
- * @param show_help     Output flag indicating help was requested
- * @param show_version  Output flag indicating version was requested
- *
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM on invalid input or parse failure
- *
- * @note Thread safety: Not thread-safe; mutates caller-owned options and
- *       relies on global getopt state.
- */
-static lantern_client_error parse_arguments(
+static int parse_arguments(
     struct lantern_client_options *options,
     int argc,
     char **argv,
-    bool *show_help,
-    bool *show_version)
+    bool *help,
+    bool *version)
 {
-    if (!options || !argv || !show_help || !show_version)
+    *help = false;
+    *version = false;
+    int option = 0;
+    while ((option = getopt_long(argc, argv, "d:hv", OPTIONS, NULL)) != -1)
     {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    *show_help = false;
-    *show_version = false;
-
-    static const struct option long_options[] = {
-        {"data-dir", required_argument, NULL, 'd'},
-        {"genesis-config", required_argument, NULL, OPT_GENESIS_CONFIG},
-        {"nodes-path", required_argument, NULL, OPT_NODES_PATH},
-        {"genesis-state", required_argument, NULL, OPT_GENESIS_STATE},
-        {"use-genesis-state", no_argument, NULL, OPT_USE_GENESIS_STATE},
-        {"validator_config", required_argument, NULL, OPT_VALIDATOR_CONFIG},
-        /* Deprecated: pre-migration lean-quickstart wrappers pass these three as
-         * file paths; we accept them and derive the parent directory. */
-        {"validator-registry-path", required_argument, NULL, OPT_LEGACY_VALIDATOR_REGISTRY_PATH},
-        {"validator-keys-path", required_argument, NULL, OPT_LEGACY_VALIDATOR_KEYS_PATH},
-        {"validator-config", required_argument, NULL, OPT_LEGACY_VALIDATOR_CONFIG_PATH},
-        {"node-id", required_argument, NULL, OPT_NODE_ID},
-        {"node-key", required_argument, NULL, OPT_NODE_KEY},
-        {"node-key-path", required_argument, NULL, OPT_NODE_KEY_PATH},
-        {"listen-address", required_argument, NULL, OPT_LISTEN_ADDRESS},
-        {"checkpoint-sync-url", required_argument, NULL, OPT_CHECKPOINT_SYNC_URL},
-        {"http-port", required_argument, NULL, OPT_HTTP_PORT},
-        {"metrics-port", required_argument, NULL, OPT_METRICS_PORT},
-        {"bootnode", required_argument, NULL, OPT_BOOTNODE},
-        {"bootnodes", required_argument, NULL, OPT_BOOTNODES},
-        {"bootnodes-file", required_argument, NULL, OPT_BOOTNODE_FILE},
-        {"devnet", required_argument, NULL, OPT_DEVNET},
-        {"log-level", required_argument, NULL, OPT_LOG_LEVEL},
-        {"xmss-key-dir", required_argument, NULL, OPT_XMSS_KEY_DIR},
-        {"hash-sig-key-dir", required_argument, NULL, OPT_HASH_SIG_KEY_DIR},
-        {"xmss-secret", required_argument, NULL, OPT_XMSS_SECRET_PATH},
-        {"xmss-secret-template", required_argument, NULL, OPT_XMSS_SECRET_TEMPLATE},
-        {"is-aggregator", no_argument, NULL, OPT_IS_AGGREGATOR},
-        {"attestation-committee-count", required_argument, NULL, OPT_ATTESTATION_COMMITTEE_COUNT},
-        {"aggregate-subnet-ids", required_argument, NULL, OPT_AGGREGATE_SUBNET_IDS},
-        {"shadow-xmss-aggregate-signatures-rate", required_argument, NULL, OPT_SHADOW_XMSS_AGGREGATE_SIGNATURES_RATE},
-        {"shadow-xmss-verify-aggregated-signatures-rate", required_argument, NULL, OPT_SHADOW_XMSS_VERIFY_AGGREGATED_SIGNATURES_RATE},
-        {"shadow-xmss-merge-rate", required_argument, NULL, OPT_SHADOW_XMSS_MERGE_RATE},
-        {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'v'},
-        {0, 0, 0, 0},
-    };
-
-    int opt = 0;
-    int option_index = 0;
-    while ((opt = getopt_long(argc, argv, "d:hv", long_options, &option_index)) != -1)
-    {
-        if (apply_option(options, opt, optarg, show_help, show_version) != LANTERN_CLIENT_OK)
+        if (apply_option(options, option, optarg, help, version) != LANTERN_CLIENT_OK)
         {
-            return LANTERN_CLIENT_ERR_INVALID_PARAM;
+            return -1;
         }
     }
-
-    if (options->node_key_hex && options->node_key_path)
+    if ((options->node_key_hex && options->node_key_path)
+        || (options->aggregate_subnet_id_count > 0u && !options->is_aggregator))
     {
-        lantern_log_error(
-            "cli",
-            &(const struct lantern_log_metadata){.validator = options->node_id},
-            "specify only one of --node-key or --node-key-path");
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
+        return -1;
     }
-    if (options->aggregate_subnet_id_count > 0 && !options->is_aggregator)
-    {
-        lantern_log_error(
-            "cli",
-            &(const struct lantern_log_metadata){.validator = options->node_id},
-            "--aggregate-subnet-ids requires --is-aggregator");
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    return LANTERN_CLIENT_OK;
+    return 0;
 }
 
-
-/**
- * Validate required options are present.
- *
- * @param options  Populated options structure
- *
- * @return LANTERN_CLIENT_OK when required options are present
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM when validation fails
- *
- * @note Thread safety: Reentrant; read-only access to options.
- */
-static lantern_client_error validate_required_options(
-    const struct lantern_client_options *options)
+static int run_until_signal(struct lantern_client *client)
 {
-    if (!options)
+    struct timespec delay = {.tv_sec = 1, .tv_nsec = 0};
+    while (keep_running)
     {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    if (!options->node_id)
-    {
-        lantern_log_error(
-            "cli",
-            &(const struct lantern_log_metadata){0},
-            "--node-id is required");
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    return LANTERN_CLIENT_OK;
-}
-
-
-/**
- * Run the main sleep loop until shutdown is requested.
- *
- * @param client  Initialized client instance (used for logging)
- *
- * @return LANTERN_CLIENT_OK on clean exit
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM on failure
- *
- * @note Thread safety: Relies on the global shutdown flag; should be invoked
- *       from the main thread.
- */
-static lantern_client_error run_main_loop(struct lantern_client *client)
-{
-    if (!client)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    const struct timespec sleep_request = {
-        .tv_sec = 1,
-        .tv_nsec = 0,
-    };
-    struct timespec sleep_remaining = sleep_request;
-    while (g_keep_running)
-    {
-        if (nanosleep(&sleep_remaining, &sleep_remaining) != 0)
+        struct timespec remaining = delay;
+        while (nanosleep(&remaining, &remaining) != 0)
         {
-            if (errno == EINTR)
+            if (errno != EINTR)
             {
-                sleep_remaining = sleep_request;
-                continue;
+                lantern_log_error(
+                    "cli",
+                    &(const struct lantern_log_metadata){.validator = client->node_id},
+                    "sleep failed: %s",
+                    strerror(errno));
+                return -1;
             }
-
-            lantern_log_error(
-                "cli",
-                &(const struct lantern_log_metadata){.validator = client->node_id},
-                "sleep interrupted: %s",
-                strerror(errno));
-            return LANTERN_CLIENT_ERR_INVALID_PARAM;
         }
-        sleep_remaining = sleep_request;
     }
-
-    return LANTERN_CLIENT_OK;
+    return 0;
 }
 
+static void print_usage(const char *program)
+{
+    lantern_log_info(
+        "main",
+        NULL,
+        "Usage: %s [options]\n"
+        "  --data-dir PATH              Data directory (default %s)\n"
+        "  --genesis-config PATH        Path to genesis config YAML\n"
+        "  --nodes-path PATH            Path to nodes.yaml\n"
+        "  --genesis-state PATH         Deprecated; ignored\n"
+        "  --use-genesis-state          Deprecated; ignored\n"
+        "  --validator_config DIR       Directory with validator artifacts\n"
+        "  --node-id NAME               Node identifier\n"
+        "  --node-key HEX               Local 32-byte private key\n"
+        "  --node-key-path PATH         File containing the private key",
+        program,
+        LANTERN_DEFAULT_DATA_DIR);
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --listen-address ADDR        QUIC listen multiaddr\n"
+        "  --checkpoint-sync-url URL    Remote finalized-state endpoint\n"
+        "  --http-port PORT             HTTP API port\n"
+        "  --metrics-port PORT          Metrics port\n"
+        "  --bootnode ENR               Add one bootnode\n"
+        "  --bootnodes VALUE            ENR or YAML/list file\n"
+        "  --bootnodes-file PATH        Newline-delimited ENRs\n"
+        "  --devnet NAME                Gossip topic devnet identifier\n"
+        "  --attestation-committee-count N  Override committee count\n"
+        "  --is-aggregator              Enable aggregation\n"
+        "  --aggregate-subnet-ids IDS   Comma-separated imported subnets");
+    lantern_log_info(
+        "main",
+        NULL,
+        "  --xmss-key-dir PATH          XMSS key directory\n"
+        "  --hash-sig-key-dir PATH      Alias for --xmss-key-dir\n"
+        "  --xmss-secret PATH           Single XMSS secret key\n"
+        "  --xmss-secret-template STR   Secret-key path template\n"
+        "  --shadow-xmss-aggregate-signatures-rate N\n"
+        "  --shadow-xmss-verify-aggregated-signatures-rate N\n"
+        "  --shadow-xmss-merge-rate N\n"
+        "  --log-level LEVEL            trace, debug, info, warn, or error\n"
+        "  --help                       Show this message\n"
+        "  --version                    Print version information");
+}
 
-/**
- * Program entry point.
- *
- * Parses command-line arguments, configures logging, initializes the client,
- * and blocks until a shutdown signal is received.
- *
- * @param argc  Argument count
- * @param argv  Argument vector
- *
- * @return 0 on clean shutdown
- * @return 1 on argument or initialization failure
- *
- * @note Thread safety: Must be invoked on the process main thread before any
- *       additional threads are started.
- */
 int main(int argc, char **argv)
 {
-    configure_allocator_from_env();
-
-    int exit_code = 0;
+    configure_allocator();
     struct lantern_client_options options;
     lantern_client_options_init(&options);
+    struct lantern_client client = {0};
+    bool help = false;
+    bool version = false;
+    int exit_code = 1;
 
-    struct lantern_client client;
-    memset(&client, 0, sizeof(client));
-
-    bool show_version = false;
-    bool show_help = false;
-
-    if (register_signal_handlers() != 0)
+    const char *environment_level = getenv("LANTERN_LOG_LEVEL");
+    if (register_signals() != 0
+        || (environment_level && lantern_log_set_level_from_string(environment_level, NULL) != 0)
+        || parse_arguments(&options, argc, argv, &help, &version) != 0)
     {
-        exit_code = 1;
         goto cleanup;
     }
-
-    if (configure_logging_from_env() != 0)
-    {
-        exit_code = 1;
-        goto cleanup;
-    }
-
-    if (parse_arguments(&options, argc, argv, &show_help, &show_version) != 0)
-    {
-        exit_code = 1;
-        goto cleanup;
-    }
-
-    if (show_version)
+    if (version)
     {
         lantern_log_info(
-            "main", NULL, "lantern %s (commit %s, branch %s)",
-            LANTERN_VERSION, LANTERN_GIT_COMMIT, LANTERN_GIT_BRANCH);
+            "main",
+            NULL,
+            "lantern %s (commit %s, branch %s)",
+            LANTERN_VERSION,
+            LANTERN_GIT_COMMIT,
+            LANTERN_GIT_BRANCH);
+        exit_code = 0;
         goto cleanup;
     }
-
-    if (show_help)
+    if (help)
     {
         print_usage(argv[0]);
+        exit_code = 0;
         goto cleanup;
     }
-
     lantern_log_info(
-        "cli", NULL, "lantern %s (commit %s, branch %s)",
-        LANTERN_VERSION, LANTERN_GIT_COMMIT, LANTERN_GIT_BRANCH);
-
-    if (validate_required_options(&options) != 0)
+        "cli",
+        NULL,
+        "lantern %s (commit %s, branch %s)",
+        LANTERN_VERSION,
+        LANTERN_GIT_COMMIT,
+        LANTERN_GIT_BRANCH);
+    if (!options.node_id)
     {
-        exit_code = 1;
         goto cleanup;
     }
-
-    if (lantern_init(&client, &options) != 0)
+    if (lantern_init(&client, &options) != LANTERN_CLIENT_OK)
     {
         lantern_log_error(
             "cli",
             &(const struct lantern_log_metadata){.validator = options.node_id},
             "initialization failed");
-        exit_code = 1;
         goto cleanup;
     }
-
     lantern_log_info(
         "cli",
         &(const struct lantern_log_metadata){.validator = client.node_id},
@@ -861,17 +503,7 @@ int main(int argc, char **argv)
         client.genesis.enrs.count,
         client.bootnodes.len,
         client.local_enr.encoded ? client.local_enr.encoded : "-");
-
-    if (run_main_loop(&client) != 0)
-    {
-        exit_code = 1;
-        goto cleanup;
-    }
-
-    lantern_log_info(
-        "cli",
-        &(const struct lantern_log_metadata){.validator = client.node_id},
-        "shutdown requested");
+    exit_code = run_until_signal(&client) == 0 ? 0 : 1;
 
 cleanup:
     lantern_shutdown(&client);
@@ -881,314 +513,4 @@ cleanup:
         print_usage(argv[0]);
     }
     return exit_code;
-}
-
-
-/**
- * @brief Print path-related CLI options.
- */
-static void print_usage_paths(void)
-{
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --data-dir PATH              Data directory (default %s)",
-        LANTERN_DEFAULT_DATA_DIR);
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --genesis-config PATH        Path to genesis config YAML");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --nodes-path PATH            Path to nodes.yaml");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --genesis-state PATH         Deprecated; ignored");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --use-genesis-state          Deprecated; ignored");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --validator_config DIR       Directory with annotated_validators.yaml and validator-config.yaml");
-}
-
-
-/**
- * @brief Print node identity CLI options.
- */
-static void print_usage_node_identity(void)
-{
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --node-id NAME               Node identifier (e.g., ream_0)");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --node-key HEX               Local node private key (32-byte hex)");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --node-key-path PATH         Path to file containing node private key hex");
-}
-
-
-/**
- * @brief Print network-related CLI options.
- */
-static void print_usage_network(void)
-{
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --listen-address ADDR        QUIC listen multiaddr");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --checkpoint-sync-url URL    Fetch finalized state from remote beacon API");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --http-port PORT             HTTP API port");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --metrics-port PORT          Metrics port");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --bootnode ENR               Add a bootnode enr");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --bootnodes VALUE            ENR or path to YAML/List file of ENRs");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --bootnodes-file PATH        File with newline-delimited ENRs");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --devnet NAME                Devnet identifier for gossip topics");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --attestation-committee-count N  Number of attestation committees (subnets); overrides config.yaml ATTESTATION_COMMITTEE_COUNT");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --is-aggregator              Mark this node as the subnet aggregator");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --aggregate-subnet-ids IDS   Comma-separated attestation subnets this aggregator imports");
-}
-
-
-/**
- * @brief Print hash signature key CLI options.
- */
-static void print_usage_xmss(void)
-{
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --xmss-key-dir PATH     Directory containing XMSS key files");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --hash-sig-key-dir PATH Alias for --xmss-key-dir");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --xmss-secret PATH      Path to a single XMSS secret key file");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --xmss-secret-template STR  printf-style template for secret key paths");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --shadow-xmss-aggregate-signatures-rate N  Shadow XMSS aggregate signatures per second");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --shadow-xmss-verify-aggregated-signatures-rate N  Shadow XMSS aggregate verification signatures per second");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --shadow-xmss-merge-rate N  Shadow XMSS Type-1 components merged per second");
-}
-
-
-/**
- * @brief Print miscellaneous CLI options.
- */
-static void print_usage_misc(void)
-{
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --log-level LEVEL           Minimum log level (trace, debug, info, warn, error)");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --help                       Show this message");
-    lantern_log_info(
-        "main",
-        NULL,
-        "  --version                    Print version information");
-}
-
-
-/**
- * Print command-line usage information.
- *
- * Outputs all available command-line options and their descriptions
- * to the log.
- *
- * @param prog  Program name (typically argv[0])
- *
- * @note Thread safety: Intended for single-threaded CLI execution before
- *       worker threads are started.
- */
-static void print_usage(const char *prog)
-{
-    lantern_log_info("main", NULL, "Usage: %s [options]", prog);
-    print_usage_paths();
-    print_usage_node_identity();
-    print_usage_network();
-    print_usage_xmss();
-    print_usage_misc();
-}
-
-static lantern_client_error parse_double_value(const char *text, double *out_value)
-{
-    if (!text || !out_value)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    if (isspace((unsigned char)text[0]))
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    char *end = NULL;
-    double parsed = strtod(text, &end);
-    if (end == text || (end && *end != '\0'))
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    *out_value = parsed;
-    return LANTERN_CLIENT_OK;
-}
-
-
-/**
- * Parse a string as an unsigned 16-bit integer.
- *
- * @param text       String to parse
- * @param out_value  Output parameter for the parsed value
- *
- * @return LANTERN_CLIENT_OK on success
- * @return LANTERN_CLIENT_ERR_INVALID_PARAM if text is NULL, out_value is NULL, or parsing fails
- *
- * @note Thread safety: Reentrant; no shared state.
- */
-static lantern_client_error parse_u16(const char *text, uint16_t *out_value)
-{
-    if (!text || !out_value)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    errno = 0;
-    char *end = NULL;
-    long parsed = strtol(text, &end, 10);
-    if (errno != 0 || end == text)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    while (end && *end != '\0' && isspace((unsigned char)*end))
-    {
-        ++end;
-    }
-    if (end && *end != '\0')
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    if (parsed < 0 || parsed > UINT16_MAX)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    *out_value = (uint16_t)parsed;
-    return LANTERN_CLIENT_OK;
-}
-
-static lantern_client_error parse_size_t_nonnegative(const char *text, size_t *out_value)
-{
-    if (!text || !out_value)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    while (*text && isspace((unsigned char)*text))
-    {
-        ++text;
-    }
-    if (*text == '-')
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    errno = 0;
-    char *end = NULL;
-    unsigned long long parsed = strtoull(text, &end, 10);
-    if (errno != 0 || end == text)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    while (end && *end != '\0' && isspace((unsigned char)*end))
-    {
-        ++end;
-    }
-    if ((end && *end != '\0') || parsed > (unsigned long long)SIZE_MAX)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    *out_value = (size_t)parsed;
-    return LANTERN_CLIENT_OK;
-}
-
-static lantern_client_error parse_size_t_positive(const char *text, size_t *out_value)
-{
-    if (!text || !out_value)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    errno = 0;
-    char *end = NULL;
-    unsigned long long parsed = strtoull(text, &end, 10);
-    if (errno != 0 || end == text)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-    while (end && *end != '\0' && isspace((unsigned char)*end))
-    {
-        ++end;
-    }
-    if ((end && *end != '\0') || parsed == 0 || parsed > (unsigned long long)SIZE_MAX)
-    {
-        return LANTERN_CLIENT_ERR_INVALID_PARAM;
-    }
-
-    *out_value = (size_t)parsed;
-    return LANTERN_CLIENT_OK;
 }

@@ -64,11 +64,18 @@ static lean_metrics_direction_t metrics_direction_from_inbound(bool inbound)
     return inbound ? LEAN_METRICS_DIR_INBOUND : LEAN_METRICS_DIR_OUTBOUND;
 }
 
-static lean_metrics_disconnection_reason_t metrics_disconnection_reason_from_code(int reason)
+static lean_metrics_disconnection_reason_t metrics_disconnection_reason_from_close(
+    int reason,
+    bool locally_initiated,
+    uint64_t transport_error_code)
 {
-    if (reason == LIBP2P_HOST_OK)
+    if (locally_initiated)
     {
         return LEAN_METRICS_DISCONNECT_LOCAL_CLOSE;
+    }
+    if (transport_error_code != 0U)
+    {
+        return LEAN_METRICS_DISCONNECT_ERROR;
     }
     if (reason == LIBP2P_HOST_ERR_CLOSED)
     {
@@ -456,6 +463,8 @@ void connection_counter_reset(struct lantern_client *client)
  * @param peer     Peer ID (may be NULL)
  * @param inbound  True if inbound connection
  * @param reason   Connection close reason code
+ * @param locally_initiated  True if the local host requested the close
+ * @param transport_error_code  Transport-specific close error code
  *
  * @note Thread safety: This function acquires connection_lock
  */
@@ -465,7 +474,9 @@ void connection_counter_update(
     const void *conn,
     const struct lantern_peer_id *peer,
     bool inbound,
-    int reason)
+    int reason,
+    bool locally_initiated,
+    uint64_t transport_error_code)
 {
     if (!client || !client->connection_lock_initialized)
     {
@@ -573,7 +584,10 @@ void connection_counter_update(
     {
         lean_metrics_record_peer_disconnection(
             metrics_direction_from_inbound(was_inbound),
-            metrics_disconnection_reason_from_code(reason));
+            metrics_disconnection_reason_from_close(
+                reason,
+                locally_initiated,
+                transport_error_code));
     }
 }
 
@@ -1243,7 +1257,7 @@ static void handle_connection_opened_event(
         return;
     }
 
-    connection_counter_update(client, 1, conn, peer, inbound, 0);
+    connection_counter_update(client, 1, conn, peer, inbound, 0, false, 0U);
 
     if (!peer)
     {
@@ -1288,6 +1302,7 @@ static void handle_connection_closed_event(
     const void *conn,
     const struct lantern_peer_id *peer,
     int reason,
+    bool locally_initiated,
     uint64_t app_error_code,
     uint64_t transport_error_code)
 {
@@ -1296,7 +1311,15 @@ static void handle_connection_closed_event(
         return;
     }
 
-    connection_counter_update(client, -1, conn, peer, false, reason);
+    connection_counter_update(
+        client,
+        -1,
+        conn,
+        peer,
+        false,
+        reason,
+        locally_initiated,
+        transport_error_code);
 
     if (!peer)
     {
@@ -1310,12 +1333,23 @@ static void handle_connection_closed_event(
         .validator = client->node_id,
         .peer = peer_text[0] ? peer_text : NULL,
     };
-    if (reason == LIBP2P_HOST_OK && peer_still_connected)
+    if (locally_initiated && peer_still_connected)
     {
         lantern_log_debug(
             "network",
             &meta,
             "duplicate connection closed reason=%d (%s) app_error=%" PRIu64 " transport_error=%" PRIu64,
+            reason,
+            connection_reason_text(reason),
+            app_error_code,
+            transport_error_code);
+    }
+    else if (locally_initiated)
+    {
+        lantern_log_debug(
+            "network",
+            &meta,
+            "local connection closed reason=%d (%s) app_error=%" PRIu64 " transport_error=%" PRIu64,
             reason,
             connection_reason_text(reason),
             app_error_code,
@@ -1333,10 +1367,15 @@ static void handle_connection_closed_event(
             transport_error_code);
     }
 
-    if (reason != LIBP2P_HOST_OK)
+    if (connection_close_should_redial(reason, locally_initiated))
     {
         redial_peer(client, peer);
     }
+}
+
+bool connection_close_should_redial(int reason, bool locally_initiated)
+{
+    return !locally_initiated && reason != LIBP2P_HOST_OK;
 }
 
 
@@ -1447,6 +1486,7 @@ void connection_events_cb(
                 evt->conn,
                 peer_ptr,
                 (int)evt->reason,
+                evt->locally_initiated != 0U,
                 evt->app_error_code,
                 evt->transport_error_code);
             break;

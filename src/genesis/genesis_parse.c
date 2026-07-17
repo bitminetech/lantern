@@ -1,288 +1,131 @@
-/**
- * @file genesis_parse.c
- * @brief Parsing and memory helpers for Lantern genesis artifacts.
- *
- * Implements internal helpers used by the public genesis API:
- * - YAML parsing for config/validators/validator-config/nodes files
- * - Memory ownership helpers for validator config structures
- *
- * @spec Lantern devnet genesis artifact files (lean quickstart).
- */
-
 #include "genesis_internal.h"
 
-#include <ctype.h>
-#include <inttypes.h>
 #include <limits.h>
-#include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "internal/yaml_parser.h"
 #include "lantern/support/strings.h"
 
-static const size_t GENESIS_LINE_BUFFER_LEN = 2048;
-static const size_t GENESIS_SMALL_LINE_BUFFER_LEN = 1024;
-
-static const char *const CHAIN_CONFIG_KEY_GENESIS_TIME = "GENESIS_TIME";
-static const char *const CHAIN_CONFIG_KEY_VALIDATOR_COUNT = "VALIDATOR_COUNT";
-static const char *const CHAIN_CONFIG_KEY_NUM_VALIDATORS = "NUM_VALIDATORS";
-static const char *const CHAIN_CONFIG_KEY_ATTESTATION_COMMITTEE_COUNT = "ATTESTATION_COMMITTEE_COUNT";
-static const char *const CHAIN_CONFIG_KEY_GENESIS_VALIDATORS = "GENESIS_VALIDATORS";
-static const char *const CHAIN_CONFIG_FIELD_ATTESTATION_PUBKEY = "attestation_pubkey";
-static const char *const CHAIN_CONFIG_FIELD_PROPOSAL_PUBKEY = "proposal_pubkey";
-
-static const char *const VALIDATOR_CONFIG_ARRAY_VALIDATORS = "validators";
-static const char *const VALIDATOR_CONFIG_FIELD_NAME = "name";
-static const char *const VALIDATOR_CONFIG_FIELD_COUNT = "count";
-static const char *const VALIDATOR_CONFIG_FIELD_IP = "ip";
-static const char *const VALIDATOR_CONFIG_FIELD_QUIC = "quic";
-static const char *const VALIDATOR_CONFIG_FIELD_SEQ = "seq";
-static const char *const VALIDATOR_CONFIG_FIELD_IS_AGGREGATOR = "is_aggregator";
-static const char *const VALIDATOR_CONFIG_FIELD_XMSS_DIR = "xmssDir";
-static const char *const VALIDATOR_CONFIG_FIELD_SUBNET = "subnet";
-
-static int parse_bool(const char *value, int *ok);
-
-static int parse_validator_config_entry(
-    const LanternYamlObject *object,
-    struct lantern_validator_config_entry *entry);
-static void free_validator_config_entry(struct lantern_validator_config_entry *entry);
-
-static int parse_bool(const char *value, int *ok)
+static const char *mapping_scalar(
+    const struct lantern_yaml_document *document,
+    const yaml_node_t *mapping,
+    const char *key)
 {
-    if (ok)
-    {
-        *ok = 0;
-    }
-    if (!value)
-    {
-        return 0;
-    }
-
-    char *trimmed = genesis_dup_trimmed(value);
-    if (!trimmed)
-    {
-        return 0;
-    }
-
-    for (char *p = trimmed; *p; ++p)
-    {
-        *p = (char)tolower((unsigned char)*p);
-    }
-
-    int parsed = 0;
-    if (strcmp(trimmed, "true") == 0 || strcmp(trimmed, "1") == 0)
-    {
-        parsed = 1;
-        if (ok)
-        {
-            *ok = 1;
-        }
-    }
-    else if (strcmp(trimmed, "false") == 0 || strcmp(trimmed, "0") == 0)
-    {
-        parsed = 0;
-        if (ok)
-        {
-            *ok = 1;
-        }
-    }
-    free(trimmed);
-    return parsed;
+    return lantern_yaml_scalar(lantern_yaml_mapping_get(document, mapping, key));
 }
 
+static int parse_u64_field(
+    const struct lantern_yaml_document *document,
+    const yaml_node_t *mapping,
+    const char *key,
+    uint64_t *out)
+{
+    int ok = 0;
+    const char *value = mapping_scalar(document, mapping, key);
+    if (value)
+    {
+        *out = genesis_parse_u64(value, &ok);
+    }
+    return value && ok ? 0 : -1;
+}
 
-/**
- * Free resources held by a validator config entry.
- *
- * @param entry Entry to reset.
- *
- * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to entry.
- */
+static int parse_bool(const char *value, bool *out)
+{
+    if (!value || !out)
+    {
+        return -1;
+    }
+    if (strcmp(value, "true") == 0 || strcmp(value, "1") == 0)
+    {
+        *out = true;
+        return 0;
+    }
+    if (strcmp(value, "false") == 0 || strcmp(value, "0") == 0)
+    {
+        *out = false;
+        return 0;
+    }
+    return -1;
+}
+
 static void free_validator_config_entry(struct lantern_validator_config_entry *entry)
 {
-    if (!entry)
+    if (entry)
     {
-        return;
+        free(entry->name);
+        free(entry->enr.ip);
+        free(entry->xmss_dir);
+        free(entry->indices);
+        *entry = (struct lantern_validator_config_entry){0};
     }
-
-    free(entry->name);
-    free(entry->enr.ip);
-    free(entry->xmss_dir);
-    free(entry->indices);
 }
 
-
-/**
- * Free resources held by a validator config.
- *
- * Frees owned entries, then resets `config` to an empty state. Safe to call
- * with NULL.
- *
- * @spec Lantern devnet genesis artifact files (lean quickstart).
- *
- * @param config Config to reset.
- *
- * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to config.
- */
 void genesis_free_validator_config(struct lantern_validator_config *config)
 {
     if (!config)
     {
         return;
     }
-
-    if (config->entries)
+    for (size_t i = 0; i < config->count; ++i)
     {
-        for (size_t i = 0; i < config->count; ++i)
-        {
-            free_validator_config_entry(&config->entries[i]);
-        }
-        free(config->entries);
+        free_validator_config_entry(&config->entries[i]);
     }
-
+    free(config->entries);
     *config = (struct lantern_validator_config){0};
 }
 
-
-/**
- * Parse chain configuration scalars from a chain config file.
- *
- * Parses the top-level `GENESIS_TIME` and validator-count scalar
- * (`VALIDATOR_COUNT` or `NUM_VALIDATORS`). Any prior validator registry in
- * `config` is freed and reset.
- *
- * @spec Lantern devnet genesis artifact files (lean quickstart).
- *
- * @param path   Path to the chain config YAML file.
- * @param config Config to populate (modified in place).
- *
- * @return LANTERN_GENESIS_OK on success.
- * @return LANTERN_GENESIS_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_GENESIS_ERR_IO on file I/O errors.
- * @return LANTERN_GENESIS_ERR_INVALID_DATA on parse/validation failures.
- *
- * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to config.
- */
 int genesis_parse_chain_config(const char *path, struct lantern_chain_config *config)
 {
     if (!path || !config)
     {
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
-
-    config->genesis_time = 0;
-    config->validator_count = 0;
-    config->attestation_committee_count = 0;
-
     free(config->validators);
-    config->validators = NULL;
+    *config = (struct lantern_chain_config){0};
 
-    FILE *fp = fopen(path, "r");
-    if (!fp)
+    struct lantern_yaml_document document;
+    if (lantern_yaml_document_load(path, &document) != 0)
     {
         return LANTERN_GENESIS_ERR_IO;
     }
-
-    int result = LANTERN_GENESIS_OK;
-    char line[GENESIS_SMALL_LINE_BUFFER_LEN];
-
-    while (fgets(line, sizeof(line), fp))
+    const yaml_node_t *root = lantern_yaml_root(&document);
+    int result = LANTERN_GENESIS_ERR_INVALID_DATA;
+    if (root && root->type == YAML_MAPPING_NODE
+        && parse_u64_field(&document, root, "GENESIS_TIME", &config->genesis_time) == 0
+        && config->genesis_time != 0u)
     {
-        char *trimmed = lantern_trim_whitespace(line);
-        if (!trimmed || *trimmed == '\0' || *trimmed == '#')
+        const char *count_key = NULL;
+        if (mapping_scalar(&document, root, "VALIDATOR_COUNT"))
         {
-            continue;
+            count_key = "VALIDATOR_COUNT";
         }
-
-        char *sep = strchr(trimmed, ':');
-        if (!sep)
+        else if (mapping_scalar(&document, root, "NUM_VALIDATORS"))
         {
-            continue;
+            count_key = "NUM_VALIDATORS";
         }
-
-        *sep = '\0';
-        const char *key = trimmed;
-        char *value = lantern_trim_whitespace(sep + 1);
-
-        if (strcmp(key, CHAIN_CONFIG_KEY_GENESIS_TIME) == 0)
-        {
-            int ok = 0;
-            config->genesis_time = genesis_parse_u64(value, &ok);
-            if (!ok || config->genesis_time == 0)
-            {
-                result = LANTERN_GENESIS_ERR_INVALID_DATA;
-                break;
-            }
-        }
-        else if (strcmp(key, CHAIN_CONFIG_KEY_VALIDATOR_COUNT) == 0
-                 || strcmp(key, CHAIN_CONFIG_KEY_NUM_VALIDATORS) == 0)
-        {
-            int ok = 0;
-            config->validator_count = genesis_parse_u64(value, &ok);
-            if (!ok)
-            {
-                result = LANTERN_GENESIS_ERR_INVALID_DATA;
-                break;
-            }
-        }
-        else if (strcmp(key, CHAIN_CONFIG_KEY_ATTESTATION_COMMITTEE_COUNT) == 0)
-        {
-            int ok = 0;
-            config->attestation_committee_count = genesis_parse_u64(value, &ok);
-            if (!ok || config->attestation_committee_count == 0)
-            {
-                result = LANTERN_GENESIS_ERR_INVALID_DATA;
-                break;
-            }
-        }
+        const char *committees = mapping_scalar(&document, root, "ATTESTATION_COMMITTEE_COUNT");
+        result = (!count_key
+                  || parse_u64_field(
+                         &document,
+                         root,
+                         count_key,
+                         &config->validator_count)
+                      == 0)
+                && (!committees
+                || (parse_u64_field(
+                        &document,
+                        root,
+                        "ATTESTATION_COMMITTEE_COUNT",
+                        &config->attestation_committee_count)
+                        == 0
+                    && config->attestation_committee_count != 0u))
+            ? LANTERN_GENESIS_OK
+            : LANTERN_GENESIS_ERR_INVALID_DATA;
     }
-
-    fclose(fp);
-
-    if (result != LANTERN_GENESIS_OK)
-    {
-        return result;
-    }
-
-    if (config->genesis_time == 0)
-    {
-        return LANTERN_GENESIS_ERR_INVALID_DATA;
-    }
-
-    return LANTERN_GENESIS_OK;
+    lantern_yaml_document_reset(&document);
+    return result;
 }
 
-
-/**
- * Parse genesis validators from a chain config file.
- *
- * Supports the dual-key object format:
- *
- *   GENESIS_VALIDATORS:
- *     - attestation_pubkey: 0x...
- *       proposal_pubkey: 0x...
- *
- * On success, the returned registry is caller-owned and must be freed with
- * `free()`.
- *
- * @spec Lantern devnet genesis artifact files (lean quickstart).
- *
- * @param path                     Path to the chain config YAML file.
- * @param out_validators           Output pointer for the validator registry.
- * @param out_count                Output pointer for the validator count.
- *
- * @return LANTERN_GENESIS_OK on success.
- * @return LANTERN_GENESIS_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_GENESIS_ERR_IO on file I/O errors.
- * @return LANTERN_GENESIS_ERR_OUT_OF_MEMORY on allocation failure.
- * @return LANTERN_GENESIS_ERR_OVERFLOW on size/capacity overflow.
- * @return LANTERN_GENESIS_ERR_INVALID_DATA on parse/validation failures.
- *
- * @note Thread safety: Thread-safe if callers provide exclusive access to outputs.
- */
 int genesis_parse_genesis_validators(
     const char *path,
     LanternValidator **out_validators,
@@ -292,334 +135,185 @@ int genesis_parse_genesis_validators(
     {
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
-
     *out_validators = NULL;
-    *out_count = 0;
+    *out_count = 0u;
 
-    size_t object_count = 0;
-    LanternYamlObject *objects = lantern_yaml_read_array(
-        path,
-        CHAIN_CONFIG_KEY_GENESIS_VALIDATORS,
-        &object_count);
-    if (!objects || object_count == 0)
+    struct lantern_yaml_document document;
+    if (lantern_yaml_document_load(path, &document) != 0)
     {
-        lantern_yaml_free_objects(objects, object_count);
+        return LANTERN_GENESIS_ERR_IO;
+    }
+    const yaml_node_t *root = lantern_yaml_root(&document);
+    const yaml_node_t *sequence = lantern_yaml_mapping_get(
+        &document,
+        root,
+        "GENESIS_VALIDATORS");
+    size_t count = lantern_yaml_sequence_length(sequence);
+    if (count == 0u)
+    {
+        lantern_yaml_document_reset(&document);
         return LANTERN_GENESIS_OK;
     }
-
-    if (object_count > SIZE_MAX / sizeof(LanternValidator))
+    LanternValidator *validators = calloc(count, sizeof(*validators));
+    int result = validators ? LANTERN_GENESIS_OK : LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
+    for (size_t i = 0; result == LANTERN_GENESIS_OK && i < count; ++i)
     {
-        lantern_yaml_free_objects(objects, object_count);
-        return LANTERN_GENESIS_ERR_OVERFLOW;
-    }
-    LanternValidator *validators = calloc(object_count, sizeof(*validators));
-    if (!validators)
-    {
-        lantern_yaml_free_objects(objects, object_count);
-        return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
-    }
-    int result = LANTERN_GENESIS_OK;
-
-    for (size_t i = 0; i < object_count; ++i)
-    {
-        const char *attestation_value = genesis_yaml_object_value(
-            &objects[i],
-            CHAIN_CONFIG_FIELD_ATTESTATION_PUBKEY);
-        const char *proposal_value = genesis_yaml_object_value(
-            &objects[i],
-            CHAIN_CONFIG_FIELD_PROPOSAL_PUBKEY);
-        if (!attestation_value || !proposal_value)
+        const yaml_node_t *entry = lantern_yaml_sequence_get(&document, sequence, i);
+        const char *attestation = mapping_scalar(&document, entry, "attestation_pubkey");
+        const char *proposal = mapping_scalar(&document, entry, "proposal_pubkey");
+        if (!attestation || !proposal
+            || genesis_decode_validator_pubkey_hex(
+                   attestation,
+                   validators[i].attestation_pubkey)
+                != LANTERN_GENESIS_OK
+            || genesis_decode_validator_pubkey_hex(
+                   proposal,
+                   validators[i].proposal_pubkey)
+                != LANTERN_GENESIS_OK)
         {
             result = LANTERN_GENESIS_ERR_INVALID_DATA;
-            break;
         }
-
-        char *attestation_hex = genesis_dup_trimmed(attestation_value);
-        char *proposal_hex = genesis_dup_trimmed(proposal_value);
-        if (!attestation_hex || !proposal_hex)
-        {
-            free(attestation_hex);
-            free(proposal_hex);
-            result = LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
-            break;
-        }
-
-        result = genesis_decode_validator_pubkey_hex(
-            attestation_hex,
-            validators[i].attestation_pubkey);
-        if (result == LANTERN_GENESIS_OK)
-        {
-            result = genesis_decode_validator_pubkey_hex(
-                proposal_hex,
-                validators[i].proposal_pubkey);
-        }
-        validators[i].index = (uint64_t)i;
-
-        free(attestation_hex);
-        free(proposal_hex);
-
-        if (result != LANTERN_GENESIS_OK)
-        {
-            result = (result == LANTERN_GENESIS_ERR_OUT_OF_MEMORY)
-                ? result
-                : LANTERN_GENESIS_ERR_INVALID_DATA;
-            break;
-        }
+        validators[i].index = i;
     }
-
-    lantern_yaml_free_objects(objects, object_count);
-
+    lantern_yaml_document_reset(&document);
     if (result != LANTERN_GENESIS_OK)
     {
         free(validators);
         return result;
     }
-
     *out_validators = validators;
-    *out_count = object_count;
+    *out_count = count;
     return LANTERN_GENESIS_OK;
 }
 
-
-/**
- * Parse a validator-config.yaml entry into a config entry struct.
- *
- * Populates `entry` by duplicating required fields from `object`. On success,
- * `entry` owns any allocated strings and must be released with
- * `free_validator_config_entry()`.
- *
- * @param object YAML object to parse.
- * @param entry  Entry to populate (modified in place).
- *
- * @return LANTERN_GENESIS_OK on success.
- * @return LANTERN_GENESIS_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_GENESIS_ERR_OUT_OF_MEMORY on allocation failure.
- * @return LANTERN_GENESIS_ERR_INVALID_DATA on validation failures.
- * @return LANTERN_GENESIS_ERR_PARSE on decode/derivation failures.
- *
- * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to entry.
- */
 static int parse_validator_config_entry(
-    const LanternYamlObject *object,
+    const struct lantern_yaml_document *document,
+    const yaml_node_t *mapping,
     struct lantern_validator_config_entry *entry)
 {
-    if (!object || !entry)
-    {
-        return LANTERN_GENESIS_ERR_INVALID_PARAM;
-    }
-
-    const char *name_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_NAME);
-    const char *count_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_COUNT);
-    const char *ip_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_IP);
-    const char *quic_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_QUIC);
-    const char *seq_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_SEQ);
-    const char *is_aggregator_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_IS_AGGREGATOR);
-    const char *xmss_dir_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_XMSS_DIR);
-    const char *subnet_val = genesis_yaml_object_value(object, VALIDATOR_CONFIG_FIELD_SUBNET);
-
-    entry->name = genesis_dup_trimmed(name_val);
-    if (!entry->name)
-    {
-        return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
-    }
-
+    const yaml_node_t *enr = lantern_yaml_mapping_get(document, mapping, "enrFields");
+    const char *name = mapping_scalar(document, mapping, "name");
+    const char *ip = mapping_scalar(document, enr, "ip");
+    const char *quic = mapping_scalar(document, enr, "quic");
     int ok = 0;
-    entry->count = genesis_parse_u64(count_val, &ok);
-    if (!ok || entry->count == 0)
+    if (!name || !ip || !quic)
     {
         return LANTERN_GENESIS_ERR_INVALID_DATA;
     }
-
-    entry->enr.ip = genesis_dup_trimmed(ip_val);
-    if (ip_val && !entry->enr.ip)
+    entry->name = lantern_string_duplicate(name);
+    entry->enr.ip = lantern_string_duplicate(ip);
+    entry->count = genesis_parse_u64(mapping_scalar(document, mapping, "count"), &ok);
+    if (!entry->name || !entry->enr.ip)
     {
         return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
     }
-
-    uint64_t quic_port = genesis_parse_u64(quic_val, &ok);
-    if (!ok || quic_port > UINT16_MAX)
+    if (!ok || entry->count == 0u)
     {
         return LANTERN_GENESIS_ERR_INVALID_DATA;
     }
-    entry->enr.quic_port = (uint16_t)quic_port;
-
-    entry->enr.sequence = 1;
-    if (seq_val && *seq_val)
+    uint64_t port = genesis_parse_u64(quic, &ok);
+    if (!ok || port > UINT16_MAX)
     {
-        entry->enr.sequence = genesis_parse_u64(seq_val, &ok);
+        return LANTERN_GENESIS_ERR_INVALID_DATA;
+    }
+    entry->enr.quic_port = (uint16_t)port;
+    entry->enr.sequence = 1u;
+    const char *sequence = mapping_scalar(document, enr, "seq");
+    if (sequence)
+    {
+        entry->enr.sequence = genesis_parse_u64(sequence, &ok);
         if (!ok)
         {
             return LANTERN_GENESIS_ERR_INVALID_DATA;
         }
     }
-
-    entry->enr.is_aggregator = false;
-    if (is_aggregator_val && *is_aggregator_val)
+    const char *aggregator = mapping_scalar(document, enr, "is_aggregator");
+    if (!aggregator)
     {
-        int bool_ok = 0;
-        entry->enr.is_aggregator = parse_bool(is_aggregator_val, &bool_ok) ? true : false;
-        if (!bool_ok)
-        {
-            return LANTERN_GENESIS_ERR_INVALID_DATA;
-        }
+        aggregator = mapping_scalar(document, mapping, "isAggregator");
     }
-
-    entry->has_subnet = false;
-    entry->subnet = 0;
-    if (subnet_val && *subnet_val)
+    if (aggregator && parse_bool(aggregator, &entry->enr.is_aggregator) != 0)
     {
-        entry->subnet = genesis_parse_u64(subnet_val, &ok);
+        return LANTERN_GENESIS_ERR_INVALID_DATA;
+    }
+    const char *subnet = mapping_scalar(document, mapping, "subnet");
+    if (subnet)
+    {
+        entry->subnet = genesis_parse_u64(subnet, &ok);
+        entry->has_subnet = ok != 0;
         if (!ok)
         {
             return LANTERN_GENESIS_ERR_INVALID_DATA;
         }
-        entry->has_subnet = true;
     }
-
-    entry->xmss_dir = genesis_dup_trimmed(xmss_dir_val);
-    if (xmss_dir_val && !entry->xmss_dir)
+    const char *xmss_dir = mapping_scalar(document, mapping, "xmssDir");
+    if (xmss_dir && !(entry->xmss_dir = lantern_string_duplicate(xmss_dir)))
     {
         return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
     }
     return LANTERN_GENESIS_OK;
 }
 
-
-/**
- * Parse validator configuration entries from a validator-config.yaml file.
- *
- * On success, `config` owns the returned buffers and must be released with
- * `genesis_free_validator_config()`.
- *
- * @spec Lantern devnet genesis artifact files (lean quickstart).
- *
- * @param path   Path to validator-config.yaml.
- * @param config Config to populate.
- *
- * @return LANTERN_GENESIS_OK on success.
- * @return LANTERN_GENESIS_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_GENESIS_ERR_IO on file I/O errors.
- * @return LANTERN_GENESIS_ERR_OUT_OF_MEMORY on allocation failure.
- * @return LANTERN_GENESIS_ERR_OVERFLOW on size/capacity overflow.
- * @return LANTERN_GENESIS_ERR_INVALID_DATA on validation failures.
- * @return LANTERN_GENESIS_ERR_PARSE on parse failures.
- *
- * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to config.
- */
 int genesis_parse_validator_config(const char *path, struct lantern_validator_config *config)
 {
     if (!path || !config)
     {
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
-
     genesis_free_validator_config(config);
-
-    size_t object_count = 0;
-    LanternYamlObject *objects = lantern_yaml_read_array(
-        path,
-        VALIDATOR_CONFIG_ARRAY_VALIDATORS,
-        &object_count);
-    if (!objects || object_count == 0)
+    struct lantern_yaml_document document;
+    if (lantern_yaml_document_load(path, &document) != 0)
     {
-        lantern_yaml_free_objects(objects, object_count);
-        return LANTERN_GENESIS_ERR_PARSE;
+        return LANTERN_GENESIS_ERR_IO;
     }
-
-    if (object_count > SIZE_MAX / sizeof(*config->entries))
+    const yaml_node_t *entries_node = lantern_yaml_mapping_get(
+        &document,
+        lantern_yaml_root(&document),
+        "validators");
+    size_t count = lantern_yaml_sequence_length(entries_node);
+    config->entries = calloc(count, sizeof(*config->entries));
+    int result = count > 0u && config->entries
+        ? LANTERN_GENESIS_OK
+        : LANTERN_GENESIS_ERR_PARSE;
+    config->count = count;
+    for (size_t i = 0; result == LANTERN_GENESIS_OK && i < count; ++i)
     {
-        lantern_yaml_free_objects(objects, object_count);
-        return LANTERN_GENESIS_ERR_OVERFLOW;
+        result = parse_validator_config_entry(
+            &document,
+            lantern_yaml_sequence_get(&document, entries_node, i),
+            &config->entries[i]);
     }
-
-    struct lantern_validator_config_entry *entries = calloc(object_count, sizeof(*entries));
-    if (!entries)
+    lantern_yaml_document_reset(&document);
+    if (result != LANTERN_GENESIS_OK)
     {
-        lantern_yaml_free_objects(objects, object_count);
-        return LANTERN_GENESIS_ERR_OUT_OF_MEMORY;
+        genesis_free_validator_config(config);
     }
-
-    for (size_t i = 0; i < object_count; ++i)
-    {
-        int result = parse_validator_config_entry(&objects[i], &entries[i]);
-        if (result != LANTERN_GENESIS_OK)
-        {
-            for (size_t j = 0; j <= i; ++j)
-            {
-                free_validator_config_entry(&entries[j]);
-            }
-            free(entries);
-            lantern_yaml_free_objects(objects, object_count);
-            return result;
-        }
-    }
-
-    lantern_yaml_free_objects(objects, object_count);
-
-    config->entries = entries;
-    config->count = object_count;
-    return LANTERN_GENESIS_OK;
+    return result;
 }
 
-
-/**
- * Parse `nodes.yaml` and append ENR entries to a list.
- *
- * @spec Lantern devnet genesis artifact files (lean quickstart).
- *
- * @param path Path to nodes.yaml.
- * @param list Record list to append to.
- *
- * @return LANTERN_GENESIS_OK on success.
- * @return LANTERN_GENESIS_ERR_INVALID_PARAM on invalid parameters.
- * @return LANTERN_GENESIS_ERR_IO on file I/O errors.
- * @return LANTERN_GENESIS_ERR_PARSE on parse failures.
- *
- * @note Thread safety: Not thread-safe. Caller must ensure exclusive access to list.
- */
 int genesis_parse_nodes_file(const char *path, struct lantern_enr_record_list *list)
 {
     if (!path || !list)
     {
         return LANTERN_GENESIS_ERR_INVALID_PARAM;
     }
-
-    FILE *fp = fopen(path, "r");
-    if (!fp)
+    struct lantern_yaml_document document;
+    if (lantern_yaml_document_load(path, &document) != 0)
     {
         return LANTERN_GENESIS_ERR_IO;
     }
-
-    int result = LANTERN_GENESIS_OK;
-    char line[GENESIS_LINE_BUFFER_LEN];
-
-    while (fgets(line, sizeof(line), fp))
+    const yaml_node_t *root = lantern_yaml_root(&document);
+    int result = !root || root->type == YAML_SEQUENCE_NODE
+        ? LANTERN_GENESIS_OK
+        : LANTERN_GENESIS_ERR_PARSE;
+    for (size_t i = 0; result == LANTERN_GENESIS_OK && i < lantern_yaml_sequence_length(root); ++i)
     {
-        char *trimmed = lantern_trim_whitespace(line);
-        if (!trimmed || *trimmed == '\0' || *trimmed == '#')
-        {
-            continue;
-        }
-
-        char *enr = strstr(trimmed, "enr:");
-        if (!enr)
-        {
-            continue;
-        }
-
-        enr = lantern_trim_whitespace(enr);
-        if (!enr || *enr == '\0')
-        {
-            continue;
-        }
-
-        if (lantern_enr_record_list_append(list, enr) != 0)
+        const char *enr = lantern_yaml_scalar(lantern_yaml_sequence_get(&document, root, i));
+        if (!enr || lantern_enr_record_list_append(list, enr) != 0)
         {
             result = LANTERN_GENESIS_ERR_PARSE;
-            break;
         }
     }
-
-    fclose(fp);
+    lantern_yaml_document_reset(&document);
     return result;
 }

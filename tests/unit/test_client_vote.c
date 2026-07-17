@@ -546,10 +546,10 @@ static int build_proposer_only_block_proof(
     lantern_bitlist_init(&proposer_participants);
 
     size_t proposer_index = (size_t)block->block.proposer_index;
-    const uint8_t *proposer_pubkey = lantern_state_validator_proposal_pubkey(state, proposer_index);
-    if (!proposer_pubkey) {
+    if (!state->validators || proposer_index >= state->validator_count) {
         goto cleanup;
     }
+    const uint8_t *proposer_pubkey = state->validators[proposer_index].proposal_pubkey;
     if (lantern_bitlist_resize(&proposer_participants, proposer_index + 1u) != 0
         || lantern_bitlist_set(&proposer_participants, proposer_index, true) != 0) {
         goto cleanup;
@@ -1129,12 +1129,13 @@ static int test_record_vote_replays_buffered_vote_after_block_import(void) {
         goto cleanup;
     }
     client.data_dir = data_dir_template;
-    if (mkdir(client.data_dir, 0700) != 0) {
+    if (mkdir(client.data_dir, 0700) != 0
+        || lantern_storage_open(&client.storage, client.data_dir) != 0) {
         fprintf(stderr, "failed to create temp dir for buffered vote replay test\n");
         goto cleanup;
     }
     if (lantern_storage_store_state_for_root(
-            client.data_dir,
+            &client.storage,
             &grandchild_block.block.parent_root,
             &client.state)
         != 0) {
@@ -1190,6 +1191,7 @@ static int test_record_vote_replays_buffered_vote_after_block_import(void) {
     rc = 0;
 
 cleanup:
+    lantern_storage_close(&client.storage);
     if (client.data_dir && client.data_dir[0] != '\0') {
         char cleanup_cmd[320];
         int written = snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf %s", client.data_dir);

@@ -17,6 +17,7 @@
 #include "lantern/networking/libp2p.h"
 #include "lantern/networking/gossipsub_service.h"
 #include "lantern/networking/reqresp_service.h"
+#include "lantern/storage/storage.h"
 #include "lantern/support/string_list.h"
 
 #include "pq-bindings-c-rust.h"
@@ -173,6 +174,7 @@ struct lantern_local_validator {
 
 struct lantern_client {
     char *data_dir;
+    struct lantern_storage storage;
     char *node_id;
     char *listen_address;
     uint16_t http_port;

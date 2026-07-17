@@ -1087,9 +1087,13 @@ static lantern_client_error validator_build_block_merge_proof_with_state(
     lantern_bitlist_init(&proposer_participants);
 
     lantern_client_error result = LANTERN_CLIENT_OK;
-    const uint8_t *proposer_pubkey =
-        lantern_state_validator_proposal_pubkey(state, (size_t)proposer_index);
-    if (!proposer_pubkey || lantern_validator_pubkey_is_zero(proposer_pubkey))
+    if (!state->validators || proposer_index >= state->validator_count)
+    {
+        result = LANTERN_CLIENT_ERR_VALIDATOR;
+        goto cleanup;
+    }
+    const uint8_t *proposer_pubkey = state->validators[proposer_index].proposal_pubkey;
+    if (lantern_validator_pubkey_is_zero(proposer_pubkey))
     {
         result = LANTERN_CLIENT_ERR_VALIDATOR;
         goto cleanup;

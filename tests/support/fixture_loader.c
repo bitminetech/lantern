@@ -16,6 +16,7 @@
 #include "lantern/support/strings.h"
 #include "pq-bindings-c-rust.h"
 #include "state_store_adapter.h"
+#include "validator_registry.h"
 
 #define JSON_INITIAL_TOKENS 256
 #define LANTERN_XMSS_FP_BYTES 4u
@@ -1382,7 +1383,7 @@ int lantern_fixture_parse_anchor_state(
         free(proposal_pubkeys);
         return -1;
     }
-    if (lantern_state_set_validator_pubkeys_dual(
+    if (lantern_test_state_set_validator_pubkeys_dual(
             state,
             attestation_pubkeys,
             proposal_pubkeys,
