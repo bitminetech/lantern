@@ -8,35 +8,6 @@
 #include "lantern/consensus/state.h"
 #include "lantern/genesis/genesis.h"
 #include "lantern/support/strings.h"
-#include "../../src/internal/yaml_parser.h"
-
-static int test_indentless_yaml_array(void) {
-    char path[PATH_MAX];
-    int written = snprintf(path, sizeof(path), "/tmp/lantern_indentless_yaml_%ld.yaml", (long)getpid());
-    if (written <= 0 || (size_t)written >= sizeof(path)) {
-        return -1;
-    }
-    FILE *file = fopen(path, "w");
-    if (!file) {
-        return -1;
-    }
-    fputs("GENESIS_VALIDATORS:\n- attestation_pubkey: 0x01\n  proposal_pubkey: 0x02\nNEXT_KEY: value\n", file);
-    fclose(file);
-
-    size_t count = 0u;
-    LanternYamlObject *objects = lantern_yaml_read_array(path, "GENESIS_VALIDATORS", &count);
-    unlink(path);
-    int result = objects && count == 1u && objects[0].num_pairs == 2u
-        && strcmp(objects[0].pairs[0].key, "attestation_pubkey") == 0
-        && strcmp(objects[0].pairs[0].value, "0x01") == 0
-        && strcmp(objects[0].pairs[1].key, "proposal_pubkey") == 0
-        && strcmp(objects[0].pairs[1].value, "0x02") == 0
-        ? 0
-        : -1;
-    lantern_yaml_free_objects(objects, count);
-    return result;
-}
-
 static int write_temp_nodes_file(char *buffer, size_t length) {
     if (!buffer || length == 0) {
         return -1;
@@ -98,10 +69,6 @@ static int expect_pubkey_hex(const uint8_t *actual, const char *expected_hex) {
 }
 
 int main(void) {
-    if (test_indentless_yaml_array() != 0) {
-        fprintf(stderr, "indentless YAML array parsing failed\n");
-        return 1;
-    }
     struct lantern_genesis_artifacts artifacts;
     lantern_genesis_artifacts_init(&artifacts);
     int rc = 1;
@@ -218,14 +185,14 @@ int main(void) {
         artifacts.chain_config.validators,
         generated_state.validator_count * sizeof(*generated_state.validators));
     if (expect_pubkey_hex(
-            lantern_state_validator_attestation_pubkey(&generated_state, 0u),
+            generated_state.validators[0].attestation_pubkey,
             "0x11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111")
         != 0) {
         fprintf(stderr, "generated state attestation pubkey mismatch\n");
         goto cleanup;
     }
     if (expect_pubkey_hex(
-            lantern_state_validator_proposal_pubkey(&generated_state, 0u),
+            generated_state.validators[0].proposal_pubkey,
             "0x81818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181")
         != 0) {
         fprintf(stderr, "generated state proposal pubkey mismatch\n");

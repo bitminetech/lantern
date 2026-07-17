@@ -319,7 +319,7 @@ static int load_finalized_ssz(
     void *context,
     uint8_t **out_bytes,
     size_t *out_len,
-    int (*load)(const char *, const LanternRoot *, uint8_t **, size_t *))
+    int (*load)(const struct lantern_storage *, const LanternRoot *, uint8_t **, size_t *))
 {
     if (!context || !out_bytes || !out_len || !load)
     {
@@ -330,7 +330,7 @@ static int load_finalized_ssz(
     *out_len = 0;
 
     struct lantern_client *client = context;
-    if (!client->data_dir || client->store.block_len == 0u)
+    if (!client->storage.backend || client->store.block_len == 0u)
     {
         return LANTERN_HTTP_CB_ERR_INVALID_STATE;
     }
@@ -345,7 +345,7 @@ static int load_finalized_ssz(
         return LANTERN_HTTP_CB_ERR_NOT_FOUND;
     }
 
-    int load_rc = load(client->data_dir, &finalized.root, out_bytes, out_len);
+    int load_rc = load(&client->storage, &finalized.root, out_bytes, out_len);
     return load_rc == 0
         ? LANTERN_HTTP_CB_OK
         : (load_rc > 0 ? LANTERN_HTTP_CB_ERR_NOT_FOUND : LANTERN_HTTP_CB_ERR_IO);

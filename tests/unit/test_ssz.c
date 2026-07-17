@@ -9,6 +9,7 @@
 #include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/ssz.h"
+#include "../support/validator_registry.h"
 
 #define SIGNED_BLOCK_TEST_BUFFER_SIZE 32768
 
@@ -463,7 +464,7 @@ static void test_state_roundtrip(void) {
     uint8_t validator_pubkeys[64u * LANTERN_VALIDATOR_PUBKEY_SIZE];
     fill_bytes(validator_pubkeys, sizeof(validator_pubkeys), 0x71);
     expect_ok(lantern_state_generate_genesis(&state, 123456789u, 64u), "state genesis");
-    expect_ok(lantern_state_set_validator_pubkeys(&state, validator_pubkeys, 64u), "state validators");
+    expect_ok(lantern_test_state_set_validator_pubkeys(&state, validator_pubkeys, 64u), "state validators");
     state.slot = 42;
     state.latest_block_header.slot = 41;
     state.latest_block_header.proposer_index = 3;
@@ -533,7 +534,7 @@ static void test_state_rejects_truncated_state_payload(void) {
     assert(genesis_attestation_pubkeys != NULL);
     assert(genesis_proposal_pubkeys != NULL);
     expect_ok(
-        lantern_state_set_validator_pubkeys_dual(
+        lantern_test_state_set_validator_pubkeys_dual(
             &genesis_state,
             genesis_attestation_pubkeys,
             genesis_proposal_pubkeys,

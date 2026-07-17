@@ -15,6 +15,8 @@
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -24,7 +26,6 @@
 
 #define ARRAY_LEN(x) (sizeof(x) / sizeof((x)[0]))
 
-static const size_t LANTERN_METRICS_BODY_INITIAL_CAP = 2048;
 static const char LANTERN_METRICS_ENDPOINT_PATH[] = "/metrics";
 static const char *const kLeanDirectionLabels[LEAN_METRICS_DIR_COUNT] = {"inbound", "outbound"};
 static const char *const kLeanConnectionResultLabels[LEAN_METRICS_CONN_RESULT_COUNT] = {"success", "timeout", "error"};
@@ -42,14 +43,19 @@ enum
     LANTERN_METRICS_SERVER_OK = 0,
     LANTERN_METRICS_SERVER_ERR_INVALID_PARAM = -1,
     LANTERN_METRICS_SERVER_ERR_OUT_OF_MEMORY = -2,
-    LANTERN_METRICS_SERVER_ERR_OVERFLOW = -3,
     LANTERN_METRICS_SERVER_ERR_IO = -4,
     LANTERN_METRICS_SERVER_ERR_FORMATTING = -5,
-    LANTERN_METRICS_SERVER_ERR_MALFORMED_REQUEST = -6,
-    LANTERN_METRICS_SERVER_ERR_UNAVAILABLE = -7,
 };
 
-static const char METRICS_JSON_MALFORMED_REQUEST[] = "{\"error\":\"malformed request\"}";
+static int lantern_http_buffer_appendf(FILE *buffer, const char *format, ...)
+{
+    va_list arguments;
+    va_start(arguments, format);
+    int result = vfprintf(buffer, format, arguments);
+    va_end(arguments);
+    return result < 0 ? LANTERN_METRICS_SERVER_ERR_FORMATTING : LANTERN_METRICS_SERVER_OK;
+}
+
 static const char METRICS_JSON_UNKNOWN_ENDPOINT[] = "{\"error\":\"unknown endpoint\"}";
 static const char METRICS_JSON_UNAVAILABLE[] = "{\"error\":\"metrics unavailable\"}";
 static const char METRICS_JSON_FORMATTING_FAILED[] = "{\"error\":\"metrics formatting failed\"}";
@@ -67,7 +73,7 @@ static const char *metrics_client_label(const struct lantern_metrics_snapshot *s
  * @brief Append a single Prometheus metric with a uint64 value.
  */
 static int append_metric_uint64(
-    struct lantern_http_buffer *buf,
+    FILE *buf,
     const char *name,
     const char *help,
     const char *type,
@@ -91,7 +97,7 @@ static int append_metric_uint64(
  * @brief Append a single Prometheus metric with a size_t value.
  */
 static int append_metric_size_t(
-    struct lantern_http_buffer *buf,
+    FILE *buf,
     const char *name,
     const char *help,
     const char *type,
@@ -115,7 +121,7 @@ static int append_metric_size_t(
  * @brief Append a Prometheus histogram from a lean metrics snapshot.
  */
 static int append_histogram_metrics(
-    struct lantern_http_buffer *buf,
+    FILE *buf,
     const char *name,
     const char *help,
     const struct lean_metrics_histogram_snapshot *hist)
@@ -247,7 +253,7 @@ static const struct lean_metrics_histogram_snapshot *metric_histogram_at(
 }
 
 static int append_metric_scalar(
-    struct lantern_http_buffer *buf,
+    FILE *buf,
     const struct lantern_metrics_snapshot *snapshot,
     const struct metric_scalar_desc *desc)
 {
@@ -280,7 +286,7 @@ static int append_metric_scalar(
 }
 
 static int append_metric_scalars(
-    struct lantern_http_buffer *buf,
+    FILE *buf,
     const struct lantern_metrics_snapshot *snapshot,
     const struct metric_scalar_desc *descs,
     size_t count)
@@ -297,7 +303,7 @@ static int append_metric_scalars(
 }
 
 static int append_client_size_t_metrics(
-    struct lantern_http_buffer *buf,
+    FILE *buf,
     const struct lantern_metrics_snapshot *snapshot,
     const struct metric_client_size_t_desc *descs,
     size_t count)
@@ -326,7 +332,7 @@ static int append_client_size_t_metrics(
 }
 
 static int append_histogram_descs(
-    struct lantern_http_buffer *buf,
+    FILE *buf,
     const struct lean_metrics_snapshot *lean,
     const struct metric_histogram_desc *descs,
     size_t count)
@@ -347,7 +353,7 @@ static int append_histogram_descs(
 }
 
 static int append_peer_vote_metric(
-    struct lantern_http_buffer *buf,
+    FILE *buf,
     const struct lantern_metrics_snapshot *snapshot,
     const struct peer_vote_metric_desc *desc,
     size_t count)
@@ -477,7 +483,7 @@ static const struct metric_histogram_desc kLeanHistograms[] = {
  * @brief Append chain and lean subsystem metrics.
  */
 static int append_lean_chain_metrics(
-    struct lantern_http_buffer *buf,
+    FILE *buf,
     const struct lantern_metrics_snapshot *snapshot)
 {
     if (!buf || !snapshot)
@@ -619,7 +625,7 @@ static int append_lean_chain_metrics(
  * @brief Append per-peer vote gossip metrics.
  */
 static int append_peer_vote_metrics(
-    struct lantern_http_buffer *buf,
+    FILE *buf,
     const struct lantern_metrics_snapshot *snapshot)
 {
     if (!buf || !snapshot)
@@ -653,7 +659,7 @@ static int append_peer_vote_metrics(
  * @brief Append peer connection metrics derived from the lean metrics snapshot.
  */
 static int append_lean_peer_connection_metrics(
-    struct lantern_http_buffer *buf,
+    FILE *buf,
     const struct lean_metrics_snapshot *lean)
 {
     if (!buf || !lean)
@@ -721,7 +727,7 @@ static int append_lean_peer_connection_metrics(
  * @brief Append histogram metrics derived from the lean metrics snapshot.
  */
 static int append_lean_histograms(
-    struct lantern_http_buffer *buf,
+    FILE *buf,
     const struct lean_metrics_snapshot *lean)
 {
     if (!buf || !lean)
@@ -762,47 +768,51 @@ static int format_metrics_body(
         return LANTERN_METRICS_SERVER_ERR_INVALID_PARAM;
     }
 
-    int result = 0;
-    struct lantern_http_buffer buf;
-    memset(&buf, 0, sizeof(buf));
-
-    result = lantern_http_buffer_init(&buf, LANTERN_METRICS_BODY_INITIAL_CAP);
-    if (result != 0)
+    *out_body = NULL;
+    *out_len = 0u;
+    FILE *buf = open_memstream(out_body, out_len);
+    if (!buf)
     {
-        return result;
+        return LANTERN_METRICS_SERVER_ERR_OUT_OF_MEMORY;
     }
 
-    result = append_lean_chain_metrics(&buf, snapshot);
-    if (result != 0)
-    {
-        goto cleanup;
-    }
-
-    result = append_peer_vote_metrics(&buf, snapshot);
+    int result = append_lean_chain_metrics(buf, snapshot);
     if (result != 0)
     {
         goto cleanup;
     }
 
-    result = append_lean_peer_connection_metrics(&buf, &snapshot->lean_metrics);
+    result = append_peer_vote_metrics(buf, snapshot);
     if (result != 0)
     {
         goto cleanup;
     }
 
-    result = append_lean_histograms(&buf, &snapshot->lean_metrics);
+    result = append_lean_peer_connection_metrics(buf, &snapshot->lean_metrics);
     if (result != 0)
     {
         goto cleanup;
     }
 
-    *out_body = buf.data;
-    *out_len = buf.len;
-    buf.data = NULL;
+    result = append_lean_histograms(buf, &snapshot->lean_metrics);
+    if (result != 0)
+    {
+        goto cleanup;
+    }
+
     result = 0;
 
 cleanup:
-    lantern_http_buffer_free(&buf);
+    if (fclose(buf) != 0 && result == 0)
+    {
+        result = LANTERN_METRICS_SERVER_ERR_FORMATTING;
+    }
+    if (result != 0)
+    {
+        free(*out_body);
+        *out_body = NULL;
+        *out_len = 0u;
+    }
     return result;
 }
 
@@ -843,7 +853,7 @@ int lantern_metrics_handle_http(
     if (!handler->callbacks.snapshot)
     {
         int rc = lantern_http_send_json_error(
-            request->client_fd,
+            request,
             503,
             "Service Unavailable",
             unavailable_json);
@@ -860,7 +870,7 @@ int lantern_metrics_handle_http(
     if (handler->callbacks.snapshot(handler->callbacks.context, &snapshot) != 0)
     {
         int rc = lantern_http_send_json_error(
-            request->client_fd,
+            request,
             503,
             "Service Unavailable",
             unavailable_json);
@@ -878,7 +888,7 @@ int lantern_metrics_handle_http(
     if (result != 0)
     {
         int rc = lantern_http_send_json_error(
-            request->client_fd,
+            request,
             500,
             "Internal Server Error",
             formatting_json);
@@ -892,7 +902,7 @@ int lantern_metrics_handle_http(
     }
 
     result = lantern_http_send_response(
-        request->client_fd,
+        request,
         200,
         "OK",
         LANTERN_METRICS_CONTENT_TYPE,
@@ -965,7 +975,6 @@ int lantern_metrics_server_start(
     config.port = port;
     config.log_module = "metrics";
     config.listen_label = "metrics server";
-    config.malformed_json = METRICS_JSON_MALFORMED_REQUEST;
     config.unknown_json = METRICS_JSON_UNKNOWN_ENDPOINT;
     config.context = server;
     config.routes = kMetricsRoutes;

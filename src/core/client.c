@@ -965,9 +965,9 @@ static lantern_client_error client_init_locks(struct lantern_client *client)
 
 
 /**
- * @brief Prepare storage directories and load genesis artifacts.
+ * @brief Open persistent storage and load genesis artifacts.
  *
- * Ensures the data directory exists, copies bootnodes and path configuration,
+ * Opens the data store, copies bootnodes and path configuration,
  * loads genesis configuration, and validates validator assignment coverage.
  *
  * @param client   Client being prepared
@@ -984,7 +984,7 @@ static lantern_client_error client_prepare_storage_and_genesis(
     struct lantern_client *client,
     const struct lantern_client_options *options)
 {
-    if (lantern_storage_prepare(client->data_dir) != 0)
+    if (lantern_storage_open(&client->storage, client->data_dir) != 0)
     {
         lantern_log_error(
             "storage",
@@ -1479,7 +1479,7 @@ static lantern_client_error client_load_state_from_checkpoint(
         goto cleanup;
     }
     if (lantern_storage_store_block_for_root(
-            client->data_dir,
+            &client->storage,
             &anchor_root,
             &anchor_signed_block)
         != 0)
@@ -1492,7 +1492,7 @@ static lantern_client_error client_load_state_from_checkpoint(
         goto cleanup;
     }
     if (lantern_storage_store_state_for_root(
-            client->data_dir,
+            &client->storage,
             &anchor_root,
             &decoded)
         != 0)
@@ -1579,7 +1579,7 @@ static lantern_client_error client_load_or_build_state(
     const struct lantern_log_metadata meta = {.validator = client ? client->node_id : NULL};
     bool from_storage = false;
     bool should_attempt_checkpoint_sync = false;
-    int storage_state_rc = lantern_storage_load_state(client->data_dir, &client->state);
+    int storage_state_rc = lantern_storage_load_state(&client->storage, &client->state);
     if (storage_state_rc == 0)
     {
         from_storage = true;
@@ -1670,7 +1670,7 @@ static lantern_client_error client_load_or_build_state(
 
     if (client->state.validator_count > 0u && !from_storage)
     {
-        if (lantern_storage_save_state(client->data_dir, &client->state) != 0)
+        if (lantern_storage_save_state(&client->storage, &client->state) != 0)
         {
             lantern_log_warn(
                 "storage",
@@ -2527,6 +2527,7 @@ void lantern_shutdown(struct lantern_client *client)
     lantern_log_reset_node_id();
 
     lantern_string_list_reset(&client->bootnodes);
+    lantern_storage_close(&client->storage);
     free(client->data_dir);
     free(client->node_id);
     free(client->listen_address);

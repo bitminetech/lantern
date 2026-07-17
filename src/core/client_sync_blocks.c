@@ -335,7 +335,7 @@ static void persist_block_after_import(
 
     struct lantern_log_metadata fallback = {.validator = client->node_id};
     const struct lantern_log_metadata *log_meta = meta ? meta : &fallback;
-    if (lantern_storage_store_block(client->data_dir, block) != 0)
+    if (lantern_storage_store_block(&client->storage, block) != 0)
     {
         lantern_log_debug(
             "storage",
@@ -632,7 +632,7 @@ const LanternState *lantern_client_state_for_root_locked(
     uint8_t *state_bytes = NULL;
     size_t state_len = 0;
     if (lantern_storage_load_state_bytes_for_root(
-            client->data_dir,
+            &client->storage,
             root,
             &state_bytes,
             &state_len)
@@ -1301,7 +1301,7 @@ static void prune_storage_if_finalized_advanced_locked(
         return;
     }
     if (lantern_storage_prune_before_slot(
-            client->data_dir,
+            &client->storage,
             current->slot,
             &current->root,
             1u)
@@ -1332,7 +1332,7 @@ static void persist_state_locked(
         return;
     }
 
-    if (lantern_storage_save_state(client->data_dir, &client->state) != 0)
+    if (lantern_storage_save_state(&client->storage, &client->state) != 0)
     {
         lantern_log_warn(
             "storage",
@@ -1363,7 +1363,7 @@ static void persist_post_state_locked(
         return;
     }
 
-    if (lantern_storage_store_state_for_root(client->data_dir, block_root, post_state) != 0)
+    if (lantern_storage_store_state_for_root(&client->storage, block_root, post_state) != 0)
     {
         lantern_log_warn(
             "storage",

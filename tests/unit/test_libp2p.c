@@ -1,6 +1,7 @@
 #include "../../src/core/client_network_internal.h"
 
 #include "lantern/core/client.h"
+#include "lantern/metrics/lean_metrics.h"
 #include "lantern/networking/enr.h"
 #include "lantern/networking/libp2p.h"
 #include "lantern/support/string_list.h"
@@ -117,23 +118,23 @@ static int connection_counter_keeps_peer_until_last_connection_closes(void) {
     const void *conn2 = (const void *)0x2;
     const void *unknown_conn = (const void *)0x3;
 
-    connection_counter_update(&client, 1, conn1, &peer, true, LIBP2P_HOST_OK);
-    connection_counter_update(&client, 1, conn2, &peer, false, LIBP2P_HOST_OK);
+    connection_counter_update(&client, 1, conn1, &peer, true, LIBP2P_HOST_OK, false, 0U);
+    connection_counter_update(&client, 1, conn2, &peer, false, LIBP2P_HOST_OK, false, 0U);
     int failed = !lantern_client_is_peer_connected(&client, peer_text)
         || client.connected_peers != 1u
         || client.connection_peer_ref_count != 2u;
 
-    connection_counter_update(&client, -1, conn1, NULL, false, LIBP2P_HOST_OK);
+    connection_counter_update(&client, -1, conn1, NULL, false, LIBP2P_HOST_OK, true, 0U);
     failed = failed || !lantern_client_is_peer_connected(&client, peer_text)
         || client.connected_peers != 1u
         || client.connection_peer_ref_count != 1u;
 
-    connection_counter_update(&client, -1, unknown_conn, NULL, false, LIBP2P_HOST_OK);
+    connection_counter_update(&client, -1, unknown_conn, NULL, false, LIBP2P_HOST_OK, true, 0U);
     failed = failed || !lantern_client_is_peer_connected(&client, peer_text)
         || client.connected_peers != 1u
         || client.connection_peer_ref_count != 1u;
 
-    connection_counter_update(&client, -1, conn2, NULL, false, LIBP2P_HOST_OK);
+    connection_counter_update(&client, -1, conn2, NULL, false, LIBP2P_HOST_OK, true, 0U);
     failed = failed || lantern_client_is_peer_connected(&client, peer_text)
         || client.connected_peers != 0u
         || client.connection_peer_ref_count != 0u;
@@ -165,6 +166,56 @@ static int connection_tie_break_is_symmetric(void) {
     failed = failed || !connection_tie_break_prefers_inbound(high_local, sizeof(high_local), &low_peer);
     failed = failed || connection_tie_break_prefers_inbound(low_local, sizeof(low_local), &longer_peer);
     failed = failed || !connection_tie_break_prefers_inbound(longer_peer.bytes, longer_peer.len, &low_peer);
+    return failed;
+}
+
+static int connection_recovery_respects_close_origin(void) {
+    if (connection_close_should_redial(LIBP2P_HOST_ERR_CLOSED, true)) {
+        return 1;
+    }
+    if (!connection_close_should_redial(LIBP2P_HOST_ERR_CLOSED, false)) {
+        return 1;
+    }
+    return connection_close_should_redial(LIBP2P_HOST_OK, false) ? 1 : 0;
+}
+
+static int connection_metrics_classify_close_details(void) {
+    static const char *peer_text = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
+    struct lantern_client client;
+    struct lantern_peer_id peer;
+    int conns[3];
+
+    memset(&client, 0, sizeof(client));
+    if (pthread_mutex_init(&client.connection_lock, NULL) != 0) {
+        return 1;
+    }
+    client.connection_lock_initialized = true;
+    if (lantern_peer_id_from_text(peer_text, &peer) != 0) {
+        pthread_mutex_destroy(&client.connection_lock);
+        return 1;
+    }
+
+    lean_metrics_reset();
+
+    connection_counter_update(&client, 1, &conns[0], &peer, false, LIBP2P_HOST_OK, false, 0U);
+    connection_counter_update(&client, -1, &conns[0], NULL, false, LIBP2P_HOST_ERR_CLOSED, true, 73U);
+
+    connection_counter_update(&client, 1, &conns[1], &peer, false, LIBP2P_HOST_OK, false, 0U);
+    connection_counter_update(&client, -1, &conns[1], NULL, false, LIBP2P_HOST_ERR_CLOSED, false, 0U);
+
+    connection_counter_update(&client, 1, &conns[2], &peer, false, LIBP2P_HOST_OK, false, 0U);
+    connection_counter_update(&client, -1, &conns[2], NULL, false, LIBP2P_HOST_ERR_CLOSED, false, 73U);
+
+    struct lean_metrics_snapshot snapshot;
+    lean_metrics_snapshot(&snapshot);
+    const uint64_t *outbound = snapshot.peer_disconnection_events_total[LEAN_METRICS_DIR_OUTBOUND];
+    int failed = outbound[LEAN_METRICS_DISCONNECT_LOCAL_CLOSE] != 1U
+        || outbound[LEAN_METRICS_DISCONNECT_REMOTE_CLOSE] != 1U
+        || outbound[LEAN_METRICS_DISCONNECT_ERROR] != 1U
+        || outbound[LEAN_METRICS_DISCONNECT_TIMEOUT] != 0U;
+
+    pthread_mutex_destroy(&client.connection_lock);
+    free(client.connection_peer_refs);
     return failed;
 }
 
@@ -218,6 +269,14 @@ int main(void) {
     }
 
     if (connection_tie_break_is_symmetric() != 0) {
+        return 1;
+    }
+
+    if (connection_recovery_respects_close_origin() != 0) {
+        return 1;
+    }
+
+    if (connection_metrics_classify_close_details() != 0) {
         return 1;
     }
 

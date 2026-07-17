@@ -621,7 +621,7 @@ static lantern_state_aggregate_result state_append_selected_group(
     lantern_aggregated_signature_proof_init(&proof);
 
     lantern_state_aggregate_result rc = LANTERN_STATE_AGGREGATE_OK;
-    size_t validator_count = lantern_state_validator_count(state);
+    size_t validator_count = state->validators ? state->validator_count : 0u;
 
     if (raw_count > 0u) {
         if (highest_raw_id >= validator_count
@@ -653,8 +653,7 @@ static lantern_state_aggregate_result state_append_selected_group(
                 goto cleanup;
             }
 
-            const uint8_t *pubkey =
-                lantern_state_validator_attestation_pubkey(state, (size_t)validator_id);
+            const uint8_t *pubkey = state->validators[validator_id].attestation_pubkey;
             if (!pubkey || lantern_validator_pubkey_is_zero(pubkey)) {
                 rc = LANTERN_STATE_AGGREGATE_RUNTIME;
                 goto cleanup;
@@ -1570,61 +1569,6 @@ static int lantern_state_prune_justification_roots(
         }
     }
     return 0;
-}
-
-int lantern_state_set_validator_pubkeys_dual(
-    LanternState *state,
-    const uint8_t *attestation_pubkeys,
-    const uint8_t *proposal_pubkeys,
-    size_t count) {
-    if (!state) {
-        return -1;
-    }
-    if (count > (size_t)LANTERN_VALIDATOR_REGISTRY_LIMIT) {
-        return -1;
-    }
-    if (count != state->validator_count) {
-        return -1;
-    }
-    if (count > 0 && (!state->validators || !attestation_pubkeys || !proposal_pubkeys)) {
-        return -1;
-    }
-    for (size_t i = 0; i < count; ++i) {
-        memcpy(
-            state->validators[i].attestation_pubkey,
-            attestation_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
-            LANTERN_VALIDATOR_PUBKEY_SIZE);
-        memcpy(
-            state->validators[i].proposal_pubkey,
-            proposal_pubkeys + (i * LANTERN_VALIDATOR_PUBKEY_SIZE),
-            LANTERN_VALIDATOR_PUBKEY_SIZE);
-    }
-    return 0;
-}
-
-int lantern_state_set_validator_pubkeys(LanternState *state, const uint8_t *pubkeys, size_t count) {
-    return lantern_state_set_validator_pubkeys_dual(state, pubkeys, pubkeys, count);
-}
-
-size_t lantern_state_validator_count(const LanternState *state) {
-    if (!state || !state->validators) {
-        return 0;
-    }
-    return state->validator_count;
-}
-
-const uint8_t *lantern_state_validator_attestation_pubkey(const LanternState *state, size_t index) {
-    if (!state || !state->validators || index >= state->validator_count) {
-        return NULL;
-    }
-    return state->validators[index].attestation_pubkey;
-}
-
-const uint8_t *lantern_state_validator_proposal_pubkey(const LanternState *state, size_t index) {
-    if (!state || !state->validators || index >= state->validator_count) {
-        return NULL;
-    }
-    return state->validators[index].proposal_pubkey;
 }
 
 void lantern_state_init(LanternState *state) {

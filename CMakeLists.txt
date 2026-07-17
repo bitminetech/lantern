@@ -26,6 +26,10 @@ set(SECP256K1_BUILD_CTIME_TESTS OFF CACHE BOOL "" FORCE)
 set(SECP256K1_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
 find_package(Threads REQUIRED)
+find_package(CURL REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBYAML REQUIRED IMPORTED_TARGET yaml-0.1)
+pkg_check_modules(LIBEVENT REQUIRED IMPORTED_TARGET libevent_extra libevent_pthreads)
 
 set(LANTERN_LIBRARY_SOURCES
     src/consensus/containers.c
@@ -95,7 +99,13 @@ function(lantern_define_library target_name wrapper_target)
             _POSIX_C_SOURCE=200809L
     )
     lantern_configure_dependencies(${target_name} ${wrapper_target})
-    target_link_libraries(${target_name} PRIVATE Threads::Threads)
+    target_link_libraries(${target_name} PRIVATE Threads::Threads CURL::libcurl PkgConfig::LIBYAML PkgConfig::LIBEVENT)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Keep vendored AWS-LC from interposing on libcurl's OpenSSL backend.
+        target_link_options(${target_name} INTERFACE
+            "LINKER:--exclude-libs,libssl.a"
+            "LINKER:--exclude-libs,libcrypto.a")
+    endif()
 endfunction()
 
 lantern_define_library(lantern lantern_c_leanvm_xmss)

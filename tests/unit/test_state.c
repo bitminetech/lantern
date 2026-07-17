@@ -14,6 +14,7 @@
 #include "lantern/metrics/lean_metrics.h"
 #include "pq-bindings-c-rust.h"
 #include "../support/state_store_adapter.h"
+#include "../support/validator_registry.h"
 
 typedef struct {
     LanternSignature *data;
@@ -125,7 +126,7 @@ static int set_test_validator_pubkey(
         pubkeys + (validator_index * LANTERN_VALIDATOR_PUBKEY_SIZE),
         serialized_pubkey,
         LANTERN_VALIDATOR_PUBKEY_SIZE);
-    int rc = lantern_state_set_validator_pubkeys(state, pubkeys, validator_count);
+    int rc = lantern_test_state_set_validator_pubkeys(state, pubkeys, validator_count);
     free(pubkeys);
     return rc;
 }
@@ -148,10 +149,10 @@ static int build_proposer_only_block_proof(
     lantern_bitlist_init(&proposer_participants);
 
     size_t proposer_index = (size_t)block->proposer_index;
-    const uint8_t *proposer_pubkey = lantern_state_validator_proposal_pubkey(state, proposer_index);
-    if (!proposer_pubkey) {
+    if (!state->validators || proposer_index >= state->validator_count) {
         goto cleanup;
     }
+    const uint8_t *proposer_pubkey = state->validators[proposer_index].proposal_pubkey;
     if (lantern_bitlist_resize(&proposer_participants, proposer_index + 1u) != 0
         || lantern_bitlist_set(&proposer_participants, proposer_index, true) != 0) {
         goto cleanup;
@@ -244,7 +245,7 @@ static int set_test_validator_pubkeys(
             LANTERN_VALIDATOR_PUBKEY_SIZE);
     }
 
-    int rc = lantern_state_set_validator_pubkeys_dual(
+    int rc = lantern_test_state_set_validator_pubkeys_dual(
         state,
         attestation_pubkeys,
         proposal_pubkeys,
@@ -549,8 +550,8 @@ static int test_validator_registry_limit_enforced(void) {
     assert(pubkeys != NULL);
 
     expect_zero(lantern_state_generate_genesis(&state, 999u, limit), "regenerate at limit");
-    expect_zero(lantern_state_set_validator_pubkeys(&state, pubkeys, pubkey_count), "set pubkeys at limit");
-    if (lantern_state_set_validator_pubkeys(&state, pubkeys, max_pubkey_count) == 0) {
+    expect_zero(lantern_test_state_set_validator_pubkeys(&state, pubkeys, pubkey_count), "set pubkeys at limit");
+    if (lantern_test_state_set_validator_pubkeys(&state, pubkeys, max_pubkey_count) == 0) {
         fprintf(stderr, "expected pubkey setter to reject counts above limit\n");
         free(pubkeys);
         lantern_state_reset(&state);
@@ -1147,7 +1148,7 @@ static int seed_known_payload_for_vote(
                     LANTERN_VALIDATOR_PUBKEY_SIZE);
             }
         }
-        if (lantern_state_set_validator_pubkeys_dual(
+        if (lantern_test_state_set_validator_pubkeys_dual(
                 state,
                 attestation_pubkeys,
                 proposal_pubkeys,

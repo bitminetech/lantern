@@ -408,14 +408,13 @@ static int process_gossip_attestation_step(
     if (lantern_hash_tree_root_attestation_data(&vote.data.data, &data_root) != SSZ_SUCCESS) {
         return -1;
     }
-    size_t validator_count = lantern_state_validator_count(state);
+    size_t validator_count = state->validators ? state->validator_count : 0u;
     if (!validate_attestation_constraints(
             fork_choice, &vote.data.data, mapping, mapping_count)
         || vote.data.validator_id >= validator_count) {
         return -1;
     }
-    const uint8_t *pubkey = lantern_state_validator_attestation_pubkey(
-        state, (size_t)vote.data.validator_id);
+    const uint8_t *pubkey = state->validators[vote.data.validator_id].attestation_pubkey;
     if (!pubkey
         || !lantern_signature_verify(
             pubkey,
@@ -478,7 +477,7 @@ static int process_gossip_aggregated_attestation_step(
     if (!validate_attestation_constraints(fork_choice, &data, mapping, mapping_count)) {
         goto cleanup;
     }
-    size_t validator_count = lantern_state_validator_count(state);
+    size_t validator_count = state->validators ? state->validator_count : 0u;
     if (proof.participants.bit_length > validator_count) {
         goto cleanup;
     }
@@ -491,7 +490,7 @@ static int process_gossip_aggregated_attestation_step(
         if (!lantern_bitlist_get(&proof.participants, i)) {
             continue;
         }
-        pubkeys[pubkey_count] = lantern_state_validator_attestation_pubkey(state, i);
+        pubkeys[pubkey_count] = state->validators[i].attestation_pubkey;
         if (!pubkeys[pubkey_count]) {
             free(pubkeys);
             goto cleanup;

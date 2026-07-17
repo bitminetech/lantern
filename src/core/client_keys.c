@@ -210,32 +210,6 @@ static void xmss_manifest_reset(struct xmss_manifest *manifest)
 
 
 /**
- * Get a string value from a YAML object.
- *
- * @param object  YAML object
- * @param key     Key to look up
- * @return Value string or NULL if not found
- *
- * @note Thread safety: This function is thread-safe
- */
-static const char *xmss_yaml_value(const LanternYamlObject *object, const char *key)
-{
-    if (!object || !key || !object->pairs)
-    {
-        return NULL;
-    }
-    for (size_t i = 0; i < object->num_pairs; ++i)
-    {
-        if (object->pairs[i].key && strcmp(object->pairs[i].key, key) == 0)
-        {
-            return object->pairs[i].value;
-        }
-    }
-    return NULL;
-}
-
-
-/**
  * Parse a uint64 from text.
  *
  * @param text       Text to parse
@@ -352,8 +326,7 @@ static int xmss_manifest_load_annotated(
     struct xmss_manifest *manifest)
 {
     int result = LANTERN_CLIENT_ERR_CONFIG;
-    LanternYamlObject *objects = NULL;
-    size_t count = 0;
+    struct lantern_yaml_document document = {0};
     struct xmss_manifest_entry *entries = NULL;
     size_t entry_count = 0;
 
@@ -363,10 +336,17 @@ static int xmss_manifest_load_annotated(
     }
     xmss_manifest_reset(manifest);
 
-    objects = lantern_yaml_read_array(path, node_id, &count);
-    if (!objects || count == 0)
+    if (lantern_yaml_document_load(path, &document) != 0)
     {
-        result = LANTERN_CLIENT_ERR_CONFIG;
+        goto cleanup;
+    }
+    const yaml_node_t *objects = lantern_yaml_mapping_get(
+        &document,
+        lantern_yaml_root(&document),
+        node_id);
+    size_t count = lantern_yaml_sequence_length(objects);
+    if (count == 0u)
+    {
         goto cleanup;
     }
 
@@ -384,9 +364,13 @@ static int xmss_manifest_load_annotated(
 
     for (size_t i = 0; i < count; ++i)
     {
-        const char *index_text = xmss_yaml_value(&objects[i], "index");
-        const char *pubkey_hex = xmss_yaml_value(&objects[i], "pubkey_hex");
-        const char *secret_file = xmss_yaml_value(&objects[i], "privkey_file");
+        const yaml_node_t *object = lantern_yaml_sequence_get(&document, objects, i);
+        const char *index_text = lantern_yaml_scalar(
+            lantern_yaml_mapping_get(&document, object, "index"));
+        const char *pubkey_hex = lantern_yaml_scalar(
+            lantern_yaml_mapping_get(&document, object, "pubkey_hex"));
+        const char *secret_file = lantern_yaml_scalar(
+            lantern_yaml_mapping_get(&document, object, "privkey_file"));
         if (!index_text || !pubkey_hex || !secret_file)
         {
             result = LANTERN_CLIENT_ERR_CONFIG;
@@ -457,7 +441,7 @@ static int xmss_manifest_load_annotated(
     result = LANTERN_CLIENT_OK;
 
 cleanup:
-    lantern_yaml_free_objects(objects, count);
+    lantern_yaml_document_reset(&document);
     if (entries)
     {
         struct xmss_manifest tmp = {.entries = entries, .count = entry_count};
