@@ -159,7 +159,7 @@ static bool backfill_import_connected_chain(struct lantern_client *client, const
     for (size_t i = 0; i < root_count; ++i)
     {
         LanternSignedBlockList blocks = {0};
-        if (lantern_storage_collect_blocks(client->data_dir, &roots[i], 1u, &blocks) != 0
+        if (lantern_storage_collect_blocks(&client->storage, &roots[i], 1u, &blocks) != 0
             || blocks.length == 0)
         {
             lantern_signed_block_list_reset(&blocks);
@@ -309,7 +309,7 @@ bool lantern_client_backfill_process_block(
         return false;
     }
 
-    if (lantern_storage_store_block_for_root(client->data_dir, root, block) != 0)
+    if (lantern_storage_store_block_for_root(&client->storage, root, block) != 0)
     {
         char root_hex[ROOT_HEX_BUFFER_LEN];
         format_root_hex(root, root_hex, sizeof(root_hex));
@@ -635,7 +635,7 @@ static bool verify_and_cache_aggregated_attestation_locked(
         return false;
     }
 
-    size_t validator_count = lantern_state_validator_count(sig_state);
+    size_t validator_count = sig_state->validators ? sig_state->validator_count : 0u;
     size_t bit_length = attestation->proof.participants.bit_length;
     if (bit_length > validator_count) {
         return false;
@@ -659,7 +659,7 @@ static bool verify_and_cache_aggregated_attestation_locked(
         if (!lantern_bitlist_get(&attestation->proof.participants, i)) {
             continue;
         }
-        const uint8_t *pubkey = lantern_state_validator_attestation_pubkey(sig_state, i);
+        const uint8_t *pubkey = sig_state->validators[i].attestation_pubkey;
         if (!pubkey || lantern_validator_pubkey_is_zero(pubkey)) {
             free(pubkeys);
             return false;
@@ -806,8 +806,8 @@ void persist_anchor_block(
 
     struct lantern_log_metadata meta = {.validator = client->node_id};
     if (root_to_log
-        ? lantern_storage_store_block_for_root(client->data_dir, root_to_log, &stored_anchor) != 0
-        : lantern_storage_store_block(client->data_dir, &stored_anchor) != 0)
+        ? lantern_storage_store_block_for_root(&client->storage, root_to_log, &stored_anchor) != 0
+        : lantern_storage_store_block(&client->storage, &stored_anchor) != 0)
     {
         lantern_log_warn(
             "storage",
@@ -859,7 +859,7 @@ static bool load_persisted_checkpoint_anchor_block(
     uint8_t *block_bytes = NULL;
     size_t block_len = 0;
     int load_rc = lantern_storage_load_block_bytes_for_root(
-        client->data_dir,
+        &client->storage,
         &expected_anchor_root,
         &block_bytes,
         &block_len);
@@ -1079,7 +1079,7 @@ int initialize_fork_choice(struct lantern_client *client)
     {
         LanternState anchor_state = client->state;
         if (lantern_storage_store_state_for_root(
-                client->data_dir,
+                &client->storage,
                 &anchor_root,
                 &anchor_state)
             != 0)
@@ -1160,7 +1160,7 @@ static bool load_restored_block_state(
     uint8_t *state_bytes = NULL;
     size_t state_len = 0;
     if (lantern_storage_load_state_bytes_for_root(
-            client->data_dir,
+            &client->storage,
             root,
             &state_bytes,
             &state_len)
@@ -1222,7 +1222,7 @@ static void restore_keep_roots_append(
 /**
  * Restore persisted blocks from storage into fork choice.
  *
- * @spec subspecs/storage/sqlite.py - Database.prune_before_slot()
+ * @spec node/storage/database.py - Database.prune_before_slot()
  *
  * Prunes persisted blocks/states strictly before the finalized slot, then
  * restores only the remaining finalized-or-newer block window into fork
@@ -1259,7 +1259,7 @@ int restore_persisted_blocks(struct lantern_client *client)
     uint64_t finalized_slot = client->state.latest_finalized.slot;
     if (finalized_slot > 0
         && lantern_storage_prune_before_slot(
-               client->data_dir,
+               &client->storage,
                finalized_slot,
                keep_roots,
                keep_root_count)
@@ -1275,7 +1275,7 @@ int restore_persisted_blocks(struct lantern_client *client)
     struct lantern_persisted_block_list list;
     persisted_block_list_init(&list);
     if (lantern_storage_iterate_blocks(
-            client->data_dir,
+            &client->storage,
             collect_block_visitor,
             &list)
         < 0)

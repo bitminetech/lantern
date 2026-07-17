@@ -552,7 +552,8 @@ bool lantern_client_verify_vote_signature(
             context ? context : "vote");
         return false;
     }
-    size_t state_validator_count = lantern_state_validator_count(state_override);
+    size_t state_validator_count =
+        state_override->validators ? state_override->validator_count : 0u;
     if (state_validator_count == 0)
     {
         lantern_log_warn(
@@ -573,9 +574,8 @@ bool lantern_client_verify_vote_signature(
             state_validator_count);
         return false;
     }
-    const uint8_t *pubkey_bytes = lantern_state_validator_attestation_pubkey(
-        state_override,
-        (size_t)vote->data.validator_id);
+    const uint8_t *pubkey_bytes =
+        state_override->validators[vote->data.validator_id].attestation_pubkey;
     if (!pubkey_bytes || lantern_validator_pubkey_is_zero(pubkey_bytes))
     {
         lantern_log_warn(

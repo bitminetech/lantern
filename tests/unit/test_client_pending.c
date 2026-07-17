@@ -35,7 +35,7 @@ static int enable_signature_verification_keys(
     if (!client || !out_validators) {
         return -1;
     }
-    size_t validator_count = lantern_state_validator_count(&client->state);
+    size_t validator_count = client->state.validators ? client->state.validator_count : 0u;
     if (validator_count == 0) {
         return -1;
     }
@@ -47,12 +47,8 @@ static int enable_signature_verification_keys(
         return -1;
     }
     for (size_t i = 0; i < validator_count; ++i) {
-        const uint8_t *attestation = lantern_state_validator_attestation_pubkey(&client->state, i);
-        const uint8_t *proposal = lantern_state_validator_proposal_pubkey(&client->state, i);
-        if (!attestation || !proposal) {
-            free(validators);
-            return -1;
-        }
+        const uint8_t *attestation = client->state.validators[i].attestation_pubkey;
+        const uint8_t *proposal = client->state.validators[i].proposal_pubkey;
         memcpy(validators[i].attestation_pubkey, attestation, LANTERN_VALIDATOR_PUBKEY_SIZE);
         memcpy(validators[i].proposal_pubkey, proposal, LANTERN_VALIDATOR_PUBKEY_SIZE);
         validators[i].index = i;
@@ -96,11 +92,10 @@ static int build_devnet5_block_proof(
     lantern_bitlist_init(&proposer_participants);
 
     size_t proposer_index = (size_t)block->block.proposer_index;
-    const uint8_t *proposer_pubkey =
-        lantern_state_validator_proposal_pubkey(state, proposer_index);
-    if (!proposer_pubkey) {
+    if (!state->validators || proposer_index >= state->validator_count) {
         goto cleanup;
     }
+    const uint8_t *proposer_pubkey = state->validators[proposer_index].proposal_pubkey;
     if (lantern_bitlist_resize(&proposer_participants, proposer_index + 1u) != 0
         || lantern_bitlist_set(&proposer_participants, proposer_index, true) != 0) {
         goto cleanup;
@@ -168,7 +163,8 @@ static int setup_block_signature_fixture(
         sizeof(fixture->data_dir_template),
         "/tmp/lantern_block_sig_XXXXXX");
     fixture->client.data_dir = mkdtemp(fixture->data_dir_template);
-    if (!fixture->client.data_dir) {
+    if (!fixture->client.data_dir
+        || lantern_storage_open(&fixture->client.storage, fixture->client.data_dir) != 0) {
         disable_signature_verification_keys(&fixture->client, &fixture->validators);
         client_test_teardown_vote_validation_client(&fixture->client, fixture->pub, fixture->secret);
         fixture->pub = NULL;
@@ -184,6 +180,7 @@ static void teardown_block_signature_fixture(struct block_signature_fixture *fix
         return;
     }
     disable_signature_verification_keys(&fixture->client, &fixture->validators);
+    lantern_storage_close(&fixture->client.storage);
     if (fixture->client.data_dir && fixture->client.data_dir[0] != '\0') {
         char cleanup_cmd[TEST_TEMP_PATH_CAPACITY + 16];
         int written = snprintf(cleanup_cmd, sizeof(cleanup_cmd), "rm -rf %s", fixture->client.data_dir);
@@ -329,7 +326,7 @@ static int build_signed_block_for_import(
         goto cleanup;
     }
     if (lantern_storage_store_state_for_root(
-            fixture->client.data_dir,
+            &fixture->client.storage,
             &out_block->block.parent_root,
             &fixture->client.state)
         != 0) {
@@ -379,10 +376,10 @@ static int build_signed_block_for_import(
             || lantern_bitlist_set(&proof->participants, 0u, true) != 0) {
             goto cleanup;
         }
-        const uint8_t *pubkey = lantern_state_validator_attestation_pubkey(&fixture->client.state, 0u);
-        if (!pubkey) {
+        if (!fixture->client.state.validators) {
             goto cleanup;
         }
+        const uint8_t *pubkey = fixture->client.state.validators[0].attestation_pubkey;
         LanternRoot attestation_root;
         if (lantern_hash_tree_root_attestation_data(&attestation->data, &attestation_root) != SSZ_SUCCESS) {
             goto cleanup;
@@ -468,7 +465,7 @@ static int persist_post_state_for_block(
     if (lantern_state_clone(&fixture->client.state, &post_state) == 0
         && lantern_state_transition(&post_state, block) == 0
         && lantern_storage_store_state_for_root(
-               fixture->client.data_dir,
+               &fixture->client.storage,
                block_root,
                &post_state)
             == 0) {
@@ -583,10 +580,10 @@ static int resign_matching_block_attestations(
         goto cleanup;
     }
 
-    const uint8_t *pubkey = lantern_state_validator_attestation_pubkey(&fixture->client.state, 0u);
-    if (!pubkey) {
+    if (!fixture->client.state.validators) {
         goto cleanup;
     }
+    const uint8_t *pubkey = fixture->client.state.validators[0].attestation_pubkey;
     LanternRoot attestation_root;
     if (lantern_hash_tree_root_attestation_data(&attestation->data, &attestation_root) != SSZ_SUCCESS) {
         goto cleanup;
@@ -1967,7 +1964,7 @@ static int test_import_persists_finalized_post_state(void)
         goto cleanup;
     }
     if (lantern_storage_store_state_for_root(
-            fixture.client.data_dir,
+            &fixture.client.storage,
             &initial_head_root,
             &fixture.client.state)
         != 0) {
@@ -2013,7 +2010,7 @@ static int test_import_persists_finalized_post_state(void)
     uint8_t *state_bytes = NULL;
     size_t state_len = 0u;
     if (lantern_storage_load_state_bytes_for_root(
-            fixture.client.data_dir,
+            &fixture.client.storage,
             &advanced_finalized.root,
             &state_bytes,
             &state_len)
@@ -2120,12 +2117,12 @@ static int test_retained_side_branch_reloads_evicted_parent_state(void)
                &branch_b_state)
                != 0
         || lantern_storage_store_state_for_root(
-               fixture.client.data_dir,
+               &fixture.client.storage,
                &branch_a_root,
                &branch_a_state)
                != 0
         || lantern_storage_store_state_for_root(
-               fixture.client.data_dir,
+               &fixture.client.storage,
                &branch_b_root,
                &branch_b_state)
                != 0) {
@@ -2180,7 +2177,7 @@ static int test_retained_side_branch_reloads_evicted_parent_state(void)
     uint8_t *persisted_bytes = NULL;
     size_t persisted_len = 0u;
     if (lantern_storage_load_state_bytes_for_root(
-            fixture.client.data_dir,
+            &fixture.client.storage,
             side_root,
             &persisted_bytes,
             &persisted_len)
@@ -2601,7 +2598,7 @@ static int test_restore_persisted_blocks_caches_known_attestation_proofs(void)
         fprintf(stderr, "failed to build block fixture for restore known proofs test\n");
         goto cleanup;
     }
-    if (lantern_storage_store_block(fixture.client.data_dir, &block) != 0) {
+    if (lantern_storage_store_block(&fixture.client.storage, &block) != 0) {
         fprintf(stderr, "failed to persist block fixture for restore known proofs test\n");
         goto cleanup;
     }
@@ -2688,7 +2685,7 @@ static int test_restore_persisted_blocks_skips_proposer_attestation_cache(void)
         goto cleanup;
     }
     lantern_aggregated_payload_pool_reset(&empty_attestation_payloads);
-    if (lantern_storage_store_block(fixture.client.data_dir, &block) != 0) {
+    if (lantern_storage_store_block(&fixture.client.storage, &block) != 0) {
         fprintf(stderr, "failed to persist proposer-only block fixture for restore test\n");
         goto cleanup;
     }

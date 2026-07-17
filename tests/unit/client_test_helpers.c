@@ -16,6 +16,7 @@
 #include "lantern/crypto/xmss.h"
 #include "lantern/support/time.h"
 #include "lantern/support/strings.h"
+#include "../support/validator_registry.h"
 
 static int client_test_load_fixture_genesis_time(uint64_t *out_time);
 
@@ -471,7 +472,7 @@ static int client_test_setup_vote_validation_client_common(
             LANTERN_VALIDATOR_PUBKEY_SIZE);
     }
 
-    if (lantern_state_set_validator_pubkeys_dual(
+    if (lantern_test_state_set_validator_pubkeys_dual(
             &client->state,
             serialized_pubkeys,
             serialized_pubkeys,
@@ -480,7 +481,7 @@ static int client_test_setup_vote_validation_client_common(
         fprintf(stderr, "failed to set dual validator pubkeys for vote test\n");
         goto finish;
     }
-    const uint8_t *stored_pub = lantern_state_validator_attestation_pubkey(&client->state, 0);
+    const uint8_t *stored_pub = client->state.validators[0].attestation_pubkey;
     if (!stored_pub) {
         fprintf(stderr, "stored validator attestation pubkey missing after load\n");
         goto finish;

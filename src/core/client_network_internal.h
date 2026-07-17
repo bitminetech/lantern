@@ -210,6 +210,8 @@ void connection_counter_reset(struct lantern_client *client);
  * @param peer     Peer ID (may be NULL)
  * @param inbound  True if inbound connection
  * @param reason   Connection close reason code
+ * @param locally_initiated  True if the local host requested the close
+ * @param transport_error_code  Transport-specific close error code
  *
  * @note Thread safety: This function acquires connection_lock
  */
@@ -219,7 +221,12 @@ void connection_counter_update(
     const void *conn,
     const struct lantern_peer_id *peer,
     bool inbound,
-    int reason);
+    int reason,
+    bool locally_initiated,
+    uint64_t transport_error_code);
+
+/** Return whether a close event should trigger reactive peer recovery. */
+bool connection_close_should_redial(int reason, bool locally_initiated);
 
 bool connection_tie_break_prefers_inbound(
     const uint8_t *local_peer_id,

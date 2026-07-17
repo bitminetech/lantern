@@ -43,6 +43,12 @@ struct lantern_reqresp_exchange {
     struct lantern_reqresp_exchange *next;
 };
 
+static const char *const kReqrespProtocolIds[LANTERN_REQRESP_PROTOCOL_KIND_COUNT] = {
+    [LANTERN_REQRESP_PROTOCOL_STATUS] = LANTERN_REQRESP_STATUS_PROTOCOL,
+    [LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT] = LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL,
+    [LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE] = LANTERN_REQRESP_BLOCKS_BY_RANGE_PROTOCOL,
+};
+
 static uint8_t normalize_response_code(uint8_t code) {
     if (code <= LANTERN_REQRESP_RESPONSE_RESOURCE_UNAVAILABLE) {
         return code;
@@ -1170,52 +1176,26 @@ int lantern_reqresp_service_start(
         service->lock_initialized = 1;
     }
 
-    service->status_protocol.id = (const uint8_t *)LANTERN_REQRESP_STATUS_PROTOCOL;
-    service->status_protocol.id_len = strlen(LANTERN_REQRESP_STATUS_PROTOCOL);
-    service->status_protocol.on_open = reqresp_on_open;
-    service->status_protocol.on_event = reqresp_on_event;
-    service->status_context.service = service;
-    service->status_context.kind = LANTERN_REQRESP_PROTOCOL_STATUS;
-    service->status_protocol.user_data = &service->status_context;
-
-    service->blocks_protocol.id = (const uint8_t *)LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL;
-    service->blocks_protocol.id_len = strlen(LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL);
-    service->blocks_protocol.on_open = reqresp_on_open;
-    service->blocks_protocol.on_event = reqresp_on_event;
-    service->blocks_context.service = service;
-    service->blocks_context.kind = LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT;
-    service->blocks_protocol.user_data = &service->blocks_context;
-
-    service->blocks_by_range_protocol.id = (const uint8_t *)LANTERN_REQRESP_BLOCKS_BY_RANGE_PROTOCOL;
-    service->blocks_by_range_protocol.id_len = strlen(LANTERN_REQRESP_BLOCKS_BY_RANGE_PROTOCOL);
-    service->blocks_by_range_protocol.on_open = reqresp_on_open;
-    service->blocks_by_range_protocol.on_event = reqresp_on_event;
-    service->blocks_by_range_context.service = service;
-    service->blocks_by_range_context.kind = LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE;
-    service->blocks_by_range_protocol.user_data = &service->blocks_by_range_context;
-
-    if (lantern_libp2p_host_register_protocol(service->network, &service->status_protocol) != 0 ||
-        lantern_libp2p_host_register_protocol(service->network, &service->blocks_protocol) != 0 ||
-        lantern_libp2p_host_register_protocol(service->network, &service->blocks_by_range_protocol) != 0) {
-        return -1;
+    for (size_t i = 0; i < LANTERN_REQRESP_PROTOCOL_KIND_COUNT; ++i) {
+        libp2p_host_protocol_t *protocol = &service->protocols[i];
+        struct lantern_reqresp_protocol_context *context = &service->protocol_contexts[i];
+        protocol->id = (const uint8_t *)kReqrespProtocolIds[i];
+        protocol->id_len = strlen(kReqrespProtocolIds[i]);
+        protocol->on_open = reqresp_on_open;
+        protocol->on_event = reqresp_on_event;
+        protocol->user_data = context;
+        context->service = service;
+        context->kind = (enum lantern_reqresp_protocol_kind)i;
+    }
+    for (size_t i = 0; i < LANTERN_REQRESP_PROTOCOL_KIND_COUNT; ++i) {
+        if (lantern_libp2p_host_register_protocol(service->network, &service->protocols[i]) != 0) {
+            return -1;
+        }
     }
     if (lantern_libp2p_host_register_event_handler(service->network, reqresp_host_event, service) != 0) {
         return -1;
     }
     return 0;
-}
-
-static const char *reqresp_protocol_id_for_kind(enum lantern_reqresp_protocol_kind kind) {
-    switch (kind) {
-    case LANTERN_REQRESP_PROTOCOL_STATUS:
-        return LANTERN_REQRESP_STATUS_PROTOCOL;
-    case LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT:
-        return LANTERN_REQRESP_BLOCKS_BY_ROOT_PROTOCOL;
-    case LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE:
-        return LANTERN_REQRESP_BLOCKS_BY_RANGE_PROTOCOL;
-    default:
-        return NULL;
-    }
 }
 
 static int service_open_exchange(
@@ -1228,7 +1208,8 @@ static int service_open_exchange(
     const LanternRoot *roots,
     size_t root_count,
     uint64_t request_id) {
-    if (!service || !service->network || !service->network->host || !peer_id || !frame || frame_len == 0u) {
+    if (!service || !service->network || !service->network->host || !peer_id || !frame || frame_len == 0u
+        || (unsigned)kind >= LANTERN_REQRESP_PROTOCOL_KIND_COUNT) {
         free(frame);
         return -1;
     }
@@ -1275,12 +1256,7 @@ static int service_open_exchange(
         exchange->root_count = root_count;
     }
     service_add_exchange(service, exchange);
-    const char *protocol = reqresp_protocol_id_for_kind(kind);
-    if (!protocol) {
-        service_remove_exchange(service, exchange);
-        exchange_free(exchange);
-        return -1;
-    }
+    const char *protocol = kReqrespProtocolIds[kind];
     libp2p_host_stream_open_t *open = NULL;
     libp2p_host_err_t err = libp2p_host_open_stream(
         service->network->host,

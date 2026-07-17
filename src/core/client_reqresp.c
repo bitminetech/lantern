@@ -1691,10 +1691,10 @@ int reqresp_collect_blocks(
     }
 
     LanternSignedBlockList storage_blocks = {0};
-    if (client->data_dir && client->data_dir[0] != '\0')
+    if (client->storage.backend)
     {
         if (lantern_storage_collect_blocks(
-                client->data_dir,
+                &client->storage,
                 roots,
                 root_count,
                 &storage_blocks)

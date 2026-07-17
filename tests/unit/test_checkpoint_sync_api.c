@@ -17,13 +17,17 @@
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/ssz.h"
+#include "lantern/http/client.h"
 #include "lantern/http/server.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/strings.h"
+#include "../support/storage_cleanup.h"
+#include "../support/validator_registry.h"
 
 struct checkpoint_fixture
 {
     char *data_dir;
+    struct lantern_storage storage;
     LanternState state;
     LanternRoot root;
     uint8_t *ssz_bytes;
@@ -70,32 +74,6 @@ static void expect_true(bool value, const char *label)
     }
 }
 
-static void cleanup_path(const char *path)
-{
-    if (!path)
-    {
-        return;
-    }
-    if (unlink(path) != 0 && errno != ENOENT)
-    {
-        fprintf(stderr, "failed to remove %s: %s\n", path, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-}
-
-static void cleanup_dir(const char *path)
-{
-    if (!path)
-    {
-        return;
-    }
-    if (rmdir(path) != 0 && errno != ENOENT)
-    {
-        fprintf(stderr, "failed to remove dir %s: %s\n", path, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-}
-
 static int build_checkpoint_fixture(struct checkpoint_fixture *fixture)
 {
     if (!fixture)
@@ -117,6 +95,10 @@ static int build_checkpoint_fixture(struct checkpoint_fixture *fixture)
         perror("strdup");
         return 1;
     }
+    if (lantern_storage_open(&fixture->storage, fixture->data_dir) != 0)
+    {
+        return 1;
+    }
 
     lantern_state_init(&fixture->state);
     if (lantern_state_generate_genesis(&fixture->state, 1234u, 4u) != 0)
@@ -130,7 +112,7 @@ static int build_checkpoint_fixture(struct checkpoint_fixture *fixture)
     {
         pubkeys[i] = (uint8_t)(0x20 + (i & 0x3Fu));
     }
-    if (lantern_state_set_validator_pubkeys(&fixture->state, pubkeys, 4u) != 0)
+    if (lantern_test_state_set_validator_pubkeys(&fixture->state, pubkeys, 4u) != 0)
     {
         fprintf(stderr, "failed to set validator pubkeys\n");
         return 1;
@@ -140,14 +122,14 @@ static int build_checkpoint_fixture(struct checkpoint_fixture *fixture)
     fixture->state.latest_finalized.root = fixture->root;
     fixture->state.latest_finalized.slot = 0;
 
-    if (lantern_storage_store_state_for_root(fixture->data_dir, &fixture->root, &fixture->state) != 0)
+    if (lantern_storage_store_state_for_root(&fixture->storage, &fixture->root, &fixture->state) != 0)
     {
         fprintf(stderr, "failed to store state for root\n");
         return 1;
     }
 
     if (lantern_storage_load_state_bytes_for_root(
-            fixture->data_dir,
+            &fixture->storage,
             &fixture->root,
             &fixture->ssz_bytes,
             &fixture->ssz_len)
@@ -227,58 +209,12 @@ static void cleanup_checkpoint_fixture(struct checkpoint_fixture *fixture)
 
     if (fixture->data_dir)
     {
-        char root_hex[2u * LANTERN_ROOT_SIZE + 1u];
-        if (lantern_bytes_to_hex(
-                fixture->root.bytes,
-                LANTERN_ROOT_SIZE,
-                root_hex,
-                sizeof(root_hex),
-                0)
-            == 0)
+        lantern_storage_close(&fixture->storage);
+        if (lantern_test_remove_storage_dir(fixture->data_dir) != 0)
         {
-            char states_dir[PATH_MAX];
-            int dir_written = snprintf(states_dir, sizeof(states_dir), "%s/states", fixture->data_dir);
-            if (dir_written > 0 && (size_t)dir_written < sizeof(states_dir))
-            {
-                char state_path[PATH_MAX];
-                char meta_path[PATH_MAX];
-                int state_written = snprintf(state_path, sizeof(state_path), "%s/%s.ssz", states_dir, root_hex);
-                int meta_written = snprintf(meta_path, sizeof(meta_path), "%s/%s.meta", states_dir, root_hex);
-                if (state_written > 0 && (size_t)state_written < sizeof(state_path))
-                {
-                    cleanup_path(state_path);
-                }
-                if (meta_written > 0 && (size_t)meta_written < sizeof(meta_path))
-                {
-                    cleanup_path(meta_path);
-                }
-                cleanup_dir(states_dir);
-            }
-
-            char block_root_hex[2u * LANTERN_ROOT_SIZE + 1u];
-            if (lantern_bytes_to_hex(
-                    fixture->block_root.bytes,
-                    LANTERN_ROOT_SIZE,
-                    block_root_hex,
-                    sizeof(block_root_hex),
-                    0)
-                == 0)
-            {
-                char blocks_dir[PATH_MAX];
-                int dir_written = snprintf(blocks_dir, sizeof(blocks_dir), "%s/blocks", fixture->data_dir);
-                if (dir_written > 0 && (size_t)dir_written < sizeof(blocks_dir))
-                {
-                    char block_path[PATH_MAX];
-                    int block_written = snprintf(block_path, sizeof(block_path), "%s/%s.ssz", blocks_dir, block_root_hex);
-                    if (block_written > 0 && (size_t)block_written < sizeof(block_path))
-                    {
-                        cleanup_path(block_path);
-                    }
-                    cleanup_dir(blocks_dir);
-                }
-            }
+            fprintf(stderr, "failed to remove storage dir %s: %s\n", fixture->data_dir, strerror(errno));
+            exit(EXIT_FAILURE);
         }
-        cleanup_dir(fixture->data_dir);
         free(fixture->data_dir);
         fixture->data_dir = NULL;
     }
@@ -730,7 +666,7 @@ static int test_storage_block_bytes(void)
         "decode block fixture");
     expect_zero(
         lantern_storage_store_block_for_root(
-            fixture.data_dir,
+            &fixture.storage,
             &fixture.block_root,
             &block),
         "store block");
@@ -740,7 +676,7 @@ static int test_storage_block_bytes(void)
     size_t loaded_len = 0;
     expect_zero(
         lantern_storage_load_block_bytes_for_root(
-            fixture.data_dir,
+            &fixture.storage,
             &fixture.block_root,
             &loaded,
             &loaded_len),
@@ -1141,6 +1077,61 @@ static int test_health_endpoint(void)
     return 0;
 }
 
+static int test_http_client(void)
+{
+    struct lantern_http_fetch_result result = {0};
+    expect_true(
+        lantern_http_get_bytes("http://", NULL, 1024u, &result) == LANTERN_HTTP_CLIENT_ERR,
+        "HTTP client initializes before libevent");
+    struct lantern_http_server server;
+    lantern_http_server_init(&server);
+    struct lantern_http_server_config config = {0};
+    if (lantern_http_server_start(&server, &config) != 0)
+    {
+        return 1;
+    }
+    struct sockaddr_in address;
+    socklen_t address_len = sizeof(address);
+    if (getsockname(
+            server.core.listen_fd,
+            (struct sockaddr *)&address,
+            &address_len)
+        != 0)
+    {
+        lantern_http_server_stop(&server);
+        return 1;
+    }
+    char url[128];
+    snprintf(
+        url,
+        sizeof(url),
+        "http://127.0.0.1:%u/lean/v0/health",
+        (unsigned int)ntohs(address.sin_port));
+    expect_zero(
+        lantern_http_get_bytes(url, "application/json", 1024u, &result),
+        "HTTP client fetch");
+    expect_true(result.status_code == 200 && result.body_len > 0u, "HTTP client response");
+    lantern_http_fetch_result_reset(&result);
+
+    expect_true(
+        lantern_http_get_bytes(url, "application/json", 2u, &result)
+            == LANTERN_HTTP_CLIENT_ERR,
+        "HTTP client response limit");
+    snprintf(
+        url,
+        sizeof(url),
+        "http://127.0.0.1:%u/unknown",
+        (unsigned int)ntohs(address.sin_port));
+    expect_true(
+        lantern_http_get_bytes(url, NULL, 1024u, &result)
+            == LANTERN_HTTP_CLIENT_STATUS_ERROR
+            && result.status_code == 404,
+        "HTTP client status response");
+    lantern_http_fetch_result_reset(&result);
+    lantern_http_server_stop(&server);
+    return 0;
+}
+
 static int test_unknown_route_endpoint(void)
 {
     struct lantern_http_server server;
@@ -1204,6 +1195,10 @@ static int test_unknown_route_endpoint(void)
 
 int main(void)
 {
+    if (test_http_client() != 0)
+    {
+        return 1;
+    }
     if (test_storage_state_bytes() != 0)
     {
         return 1;

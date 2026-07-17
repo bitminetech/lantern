@@ -4,6 +4,7 @@
 #include "lantern/consensus/state.h"
 #include "lantern/consensus/store.h"
 #include "lantern/metrics/lean_metrics.h"
+#include "../support/validator_registry.h"
 
 #include "pq-bindings-c-rust.h"
 
@@ -486,7 +487,7 @@ static int test_recursive_aggregated_signature_roundtrip(void) {
     }
 
     if (lantern_state_generate_genesis(&state, 0u, kSignerCount) != 0
-        || lantern_state_set_validator_pubkeys(&state, flattened_pubkeys, kSignerCount) != 0) {
+        || lantern_test_state_set_validator_pubkeys(&state, flattened_pubkeys, kSignerCount) != 0) {
         fprintf(stderr, "recursive aggregate: state pubkey setup failed\n");
         goto fail;
     }
@@ -760,7 +761,7 @@ static int test_block_type2_attestation_split_roundtrip(void) {
     }
 
     if (lantern_state_generate_genesis(&state, 0u, kValidatorCount) != 0
-        || lantern_state_set_validator_pubkeys(&state, flattened_pubkeys, kValidatorCount) != 0) {
+        || lantern_test_state_set_validator_pubkeys(&state, flattened_pubkeys, kValidatorCount) != 0) {
         fprintf(stderr, "block split: state pubkey setup failed\n");
         goto cleanup;
     }

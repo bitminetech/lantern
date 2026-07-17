@@ -198,7 +198,9 @@ static int sign_single_participant_aggregated_attestation(
         return -1;
     }
 
-    const uint8_t *validator_pubkey = lantern_state_validator_attestation_pubkey(&client->state, 0u);
+    const uint8_t *validator_pubkey = client->state.validators
+        ? client->state.validators[0].attestation_pubkey
+        : NULL;
     if (!validator_pubkey) {
         lantern_signed_aggregated_attestation_reset(out_attestation);
         return -1;
@@ -634,7 +636,9 @@ static int test_gossip_aggregated_attestation_rejects_invalid_proof(void)
         fprintf(stderr, "aggregated attestation proof unexpectedly empty\n");
         goto cleanup_attestation;
     }
-    validator_pubkey = lantern_state_validator_attestation_pubkey(&client.state, 0u);
+    validator_pubkey = client.state.validators
+        ? client.state.validators[0].attestation_pubkey
+        : NULL;
     if (!validator_pubkey) {
         fprintf(stderr, "aggregated attestation validator pubkey missing\n");
         goto cleanup_attestation;
