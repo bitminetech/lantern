@@ -1700,16 +1700,12 @@ static bool lantern_client_import_block_internal(
                 peer_text,
                 backfill_depth,
                 true);
-            uint32_t request_depth =
-                backfill_depth < LANTERN_MAX_BACKFILL_DEPTH
-                    ? backfill_depth + 1u
-                    : LANTERN_MAX_BACKFILL_DEPTH;
             (void)lantern_client_try_schedule_blocks_request_batch(
                 client,
                 peer_text,
                 &parent_root,
-                &request_depth,
-                1u);
+                1u,
+                NULL);
         }
 
         LanternCheckpoint pre_adopt_finalized = client->state.latest_finalized;

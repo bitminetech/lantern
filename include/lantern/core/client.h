@@ -87,6 +87,7 @@ struct lantern_client_options {
 
 struct lantern_peer_status_entry;
 struct lantern_active_blocks_request;
+struct lantern_block_fetch;
 struct lantern_async_block_import_job;
 struct lantern_async_block_proposal_job;
 struct lantern_backfill_session {
@@ -127,11 +128,10 @@ struct lantern_pending_vote_list {
 
 struct lantern_active_blocks_request {
     uint64_t request_id;
+    LanternRoot backfill_session_head;
     char peer_id[128];
     LanternRoot *roots;
     size_t root_count;
-    uint64_t started_ms;
-    uint64_t deadline_ms;
 };
 
 struct lantern_validator_duty_state {
@@ -244,6 +244,9 @@ struct lantern_client {
     struct lantern_active_blocks_request *active_blocks_requests;
     size_t active_blocks_request_count;
     size_t active_blocks_request_capacity;
+    struct lantern_block_fetch *block_fetches;
+    size_t block_fetch_count;
+    size_t block_fetch_capacity;
     uint64_t next_blocks_request_id;
     pthread_mutex_t status_lock;
     bool status_lock_initialized;

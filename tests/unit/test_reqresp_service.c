@@ -30,15 +30,17 @@
 struct test_blocks_context {
     size_t handled_count;
     int complete_called;
-    int complete_success;
+    enum lantern_reqresp_blocks_request_result complete_result;
 };
 
 static int test_handle_block_response(
     void *context,
     const LanternSignedBlock *block,
-    const char *peer_id) {
+    const char *peer_id,
+    uint64_t request_id) {
     (void)block;
     (void)peer_id;
+    (void)request_id;
     struct test_blocks_context *test_context = (struct test_blocks_context *)context;
     if (!test_context) {
         return -1;
@@ -50,20 +52,16 @@ static int test_handle_block_response(
 static void test_blocks_request_complete(
     void *context,
     const char *peer_id,
-    const LanternRoot *roots,
-    size_t root_count,
     uint64_t request_id,
-    int success) {
+    enum lantern_reqresp_blocks_request_result result) {
     (void)peer_id;
-    (void)roots;
-    (void)root_count;
     (void)request_id;
     struct test_blocks_context *test_context = (struct test_blocks_context *)context;
     if (!test_context) {
         return;
     }
     test_context->complete_called += 1;
-    test_context->complete_success = success;
+    test_context->complete_result = result;
 }
 
 static int run_blocks_exchange(
@@ -73,9 +71,9 @@ static int run_blocks_exchange(
     size_t block_count,
     size_t *out_handled_count,
     int *out_complete_called,
-    int *out_complete_success) {
+    int *out_complete_result) {
     if (!roots || root_count == 0u || (!blocks && block_count > 0u)
-        || !out_handled_count || !out_complete_called || !out_complete_success) {
+        || !out_handled_count || !out_complete_called || !out_complete_result) {
         return -1;
     }
 
@@ -133,7 +131,7 @@ static int run_blocks_exchange(
 
     *out_handled_count = test_context.handled_count;
     *out_complete_called = test_context.complete_called;
-    *out_complete_success = test_context.complete_success;
+    *out_complete_result = (int)test_context.complete_result;
 
     free(exchange.roots);
     free(exchange.roots_matched);
@@ -174,7 +172,7 @@ static void test_blocks_by_root_full_batch_succeeds(void) {
 
     size_t handled_count = 0;
     int complete_called = 0;
-    int complete_success = 0;
+    int complete_result = LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED;
     CHECK(
         run_blocks_exchange(
             roots,
@@ -183,11 +181,11 @@ static void test_blocks_by_root_full_batch_succeeds(void) {
             2u,
             &handled_count,
             &complete_called,
-            &complete_success)
+            &complete_result)
         == 0);
     CHECK(handled_count == 2u);
     CHECK(complete_called == 1);
-    CHECK(complete_success == 1);
+    CHECK(complete_result == LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS);
 
     lantern_signed_block_reset(&blocks[1]);
     lantern_signed_block_reset(&blocks[0]);
@@ -204,7 +202,7 @@ static void test_blocks_by_root_partial_batch_fails_on_close(void) {
 
     size_t handled_count = 0;
     int complete_called = 0;
-    int complete_success = 1;
+    int complete_result = LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS;
     CHECK(
         run_blocks_exchange(
             roots,
@@ -213,11 +211,11 @@ static void test_blocks_by_root_partial_batch_fails_on_close(void) {
             1u,
             &handled_count,
             &complete_called,
-            &complete_success)
+            &complete_result)
         == 0);
     CHECK(handled_count == 1u);
     CHECK(complete_called == 1);
-    CHECK(complete_success == 0);
+    CHECK(complete_result == LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED);
 
     lantern_signed_block_reset(&blocks[1]);
     lantern_signed_block_reset(&blocks[0]);
@@ -231,7 +229,7 @@ static void test_blocks_by_root_unrequested_block_fails_before_callback(void) {
 
     size_t handled_count = 0;
     int complete_called = 0;
-    int complete_success = 1;
+    int complete_result = LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS;
     CHECK(
         run_blocks_exchange(
             &requested_root,
@@ -240,19 +238,76 @@ static void test_blocks_by_root_unrequested_block_fails_before_callback(void) {
             1u,
             &handled_count,
             &complete_called,
-            &complete_success)
+            &complete_result)
         == 0);
     CHECK(handled_count == 0u);
     CHECK(complete_called == 1);
-    CHECK(complete_success == 0);
+    CHECK(complete_result == LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED);
 
     lantern_signed_block_reset(&block);
+}
+
+static void test_blocks_by_root_empty_batch_is_reported(void) {
+    LanternRoot root;
+    fill_root(&root, 0x70u);
+
+    size_t handled_count = 0;
+    int complete_called = 0;
+    int complete_result = LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS;
+    CHECK(
+        run_blocks_exchange(
+            &root,
+            1u,
+            NULL,
+            0u,
+            &handled_count,
+            &complete_called,
+            &complete_result)
+        == 0);
+    CHECK(handled_count == 0u);
+    CHECK(complete_called == 1);
+    CHECK(complete_result == LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_EMPTY);
+}
+
+static void test_blocks_by_root_timeout_completes_failure_once(void) {
+    struct test_blocks_context test_context;
+    memset(&test_context, 0, sizeof(test_context));
+
+    struct lantern_reqresp_service service;
+    memset(&service, 0, sizeof(service));
+    service.callbacks.context = &test_context;
+    service.callbacks.blocks_request_complete = test_blocks_request_complete;
+
+    struct lantern_reqresp_exchange exchange;
+    memset(&exchange, 0, sizeof(exchange));
+    exchange.service = &service;
+    exchange.kind = LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT;
+    exchange.outbound = 1;
+    exchange.request_id = 42u;
+    exchange.deadline_us = 100u;
+    service.exchanges = &exchange;
+
+    reqresp_drive(NULL, 99u, &service);
+    CHECK(test_context.complete_called == 0);
+
+    reqresp_drive(NULL, 100u, &service);
+    CHECK(test_context.complete_called == 1);
+    CHECK(test_context.complete_result == LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED);
+    CHECK(exchange.completed == 1);
+
+    reqresp_drive(NULL, 200u, &service);
+    CHECK(test_context.complete_called == 1);
+    exchange_handle_outbound_closed(&exchange, true);
+    CHECK(test_context.complete_called == 1);
+    service.exchanges = NULL;
 }
 
 int main(void) {
     test_blocks_by_root_full_batch_succeeds();
     test_blocks_by_root_partial_batch_fails_on_close();
     test_blocks_by_root_unrequested_block_fails_before_callback();
+    test_blocks_by_root_empty_batch_is_reported();
+    test_blocks_by_root_timeout_completes_failure_once();
     puts("lantern_reqresp_service_test OK");
     return 0;
 }

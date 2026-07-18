@@ -2458,6 +2458,7 @@ void lantern_shutdown(struct lantern_client *client)
         free(client->active_blocks_requests[i].roots);
     }
     free(client->active_blocks_requests);
+    free(client->block_fetches);
     if (status_locked)
     {
         pthread_mutex_unlock(&client->status_lock);

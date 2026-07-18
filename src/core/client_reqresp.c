@@ -39,6 +39,7 @@ enum {
 struct lantern_async_block_import_job
 {
     bool cache_aggregated_proofs_only;
+    LanternRoot backfill_session_head;
     LanternSignedBlock block;
     LanternRoot block_root;
     char peer_id[128];
@@ -115,15 +116,6 @@ static void lantern_client_peer_status_update(
     const LanternStatusMessage *peer_status,
     const char *peer_id_text,
     uint64_t local_slot);
-static bool lantern_client_update_blocks_request_tracking(
-    struct lantern_client *client,
-    uint64_t request_id,
-    const char *peer_id,
-    enum lantern_blocks_request_outcome outcome,
-    uint32_t *out_failure_count,
-    bool *out_entry_found,
-    char *out_effective_peer_id,
-    size_t out_effective_peer_id_len);
 static const char *lantern_blocks_request_outcome_text(enum lantern_blocks_request_outcome outcome);
 static void reqresp_alias_anchor_checkpoint_if_unset(
     struct lantern_client *client,
@@ -312,22 +304,32 @@ static void maybe_seed_head_request_from_status(
     {
         return;
     }
-    if (head_known || lantern_root_is_zero(&peer_status->head.root))
+    if (lantern_root_is_zero(&peer_status->head.root))
+    {
+        return;
+    }
+
+    LanternRoot request_root = peer_status->head.root;
+    LanternRoot backfill_session_head = {0};
+    bool historical_backfill_active = lantern_client_historical_backfill_snapshot(
+        client,
+        &request_root,
+        &backfill_session_head);
+    if (head_known && !historical_backfill_active)
     {
         return;
     }
 
     const bool peer_finalized_ahead = peer_status->finalized.slot > local_finalized_slot;
     const bool peer_head_ahead = peer_status->head.slot > local_head_slot;
-    if (!peer_finalized_ahead && !peer_head_ahead)
+    if (!peer_finalized_ahead && !peer_head_ahead && !historical_backfill_active)
     {
         return;
     }
 
-    bool historical_backfill_started = false;
-    if (peer_head_ahead)
+    if (!historical_backfill_active && peer_head_ahead)
     {
-        historical_backfill_started = lantern_client_maybe_start_historical_backfill(
+        historical_backfill_active = lantern_client_ensure_historical_backfill(
             client,
             peer_id_text,
             &peer_status->head.root,
@@ -342,33 +344,40 @@ static void maybe_seed_head_request_from_status(
         has_pending_blocks = client->pending_blocks.length > 0;
     }
     lantern_client_unlock_pending(client, pending_locked);
-    if (has_pending_blocks && !historical_backfill_started)
+    if (has_pending_blocks && !historical_backfill_active)
     {
         return;
     }
 
-    const LanternRoot roots[1] = {peer_status->head.root};
-    const uint32_t depths[1] = {0u};
+    if (historical_backfill_active
+        && !lantern_client_historical_backfill_snapshot(
+            client,
+            &request_root,
+            &backfill_session_head))
+    {
+        return;
+    }
+    const LanternRoot roots[1] = {request_root};
     if (!lantern_client_try_schedule_blocks_request_batch(
             client,
             peer_id_text,
             roots,
-            depths,
-            1u))
+            1u,
+            historical_backfill_active ? &backfill_session_head : NULL))
     {
         return;
     }
 
-    char head_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    format_root_hex(&peer_status->head.root, head_hex, sizeof(head_hex));
+    char request_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
+    format_root_hex(&request_root, request_hex, sizeof(request_hex));
     lantern_log_info(
         "sync",
         &(const struct lantern_log_metadata){
             .validator = client->node_id,
             .peer = peer_id_text},
-        "peer is ahead; requesting head block root=%s peer_head_slot=%" PRIu64
+        "peer is ahead; requesting sync block root=%s peer_head_slot=%" PRIu64
         " peer_finalized_slot=%" PRIu64 " local_head_slot=%" PRIu64 " local_finalized_slot=%" PRIu64,
-        head_hex[0] ? head_hex : "0x0",
+        request_hex[0] ? request_hex : "0x0",
         peer_status->head.slot,
         peer_status->finalized.slot,
         local_head_slot,
@@ -794,132 +803,6 @@ static void lantern_client_peer_status_update(
 
 
 /**
- * @brief Update blocks request tracking state for a peer.
- *
- * @param client            Client instance
- * @param request_id        Internal request tracking ID (0 for untracked)
- * @param peer_id           Peer ID string
- * @param outcome           Request outcome
- * @param out_failure_count Output consecutive failure count
- * @param out_entry_found   Output whether peer entry was found
- * @param out_effective_peer_id Output peer ID used for logging/follow-up
- * @param out_effective_peer_id_len Output buffer length
- * @return true if tracking was updated (status_lock acquired), false otherwise
- *
- * @note Thread safety: This function acquires status_lock
- */
-static bool lantern_client_update_blocks_request_tracking(
-    struct lantern_client *client,
-    uint64_t request_id,
-    const char *peer_id,
-    enum lantern_blocks_request_outcome outcome,
-    uint32_t *out_failure_count,
-    bool *out_entry_found,
-    char *out_effective_peer_id,
-    size_t out_effective_peer_id_len)
-{
-    if (!client || !out_failure_count || !out_entry_found || !out_effective_peer_id
-        || out_effective_peer_id_len == 0)
-    {
-        return false;
-    }
-
-    *out_failure_count = 0;
-    *out_entry_found = false;
-    out_effective_peer_id[0] = '\0';
-
-    const size_t peer_cap = sizeof(((struct lantern_peer_status_entry *)0)->peer_id);
-    if (pthread_mutex_lock(&client->status_lock) != 0)
-    {
-        return false;
-    }
-
-    bool tracking_matched = request_id == 0u;
-    if (request_id != 0u && client->active_blocks_request_count > 0)
-    {
-        for (size_t i = 0; i < client->active_blocks_request_count; ++i)
-        {
-            struct lantern_active_blocks_request *request = &client->active_blocks_requests[i];
-            if (request->request_id != request_id)
-            {
-                continue;
-            }
-            (void)lantern_string_copy(
-                out_effective_peer_id,
-                out_effective_peer_id_len,
-                request->peer_id);
-            size_t last = client->active_blocks_request_count - 1u;
-            free(request->roots);
-            if (i != last)
-            {
-                client->active_blocks_requests[i] = client->active_blocks_requests[last];
-            }
-            memset(&client->active_blocks_requests[last], 0, sizeof(*request));
-            client->active_blocks_request_count = last;
-            tracking_matched = true;
-            break;
-        }
-    }
-
-    if (out_effective_peer_id[0] == '\0')
-    {
-        (void)lantern_string_copy(
-            out_effective_peer_id,
-            out_effective_peer_id_len,
-            peer_id);
-    }
-
-    if (out_effective_peer_id[0] == '\0')
-    {
-        pthread_mutex_unlock(&client->status_lock);
-        return true;
-    }
-
-    if (!tracking_matched)
-    {
-        pthread_mutex_unlock(&client->status_lock);
-        return true;
-    }
-
-    for (size_t i = 0; i < client->peer_status_count; ++i)
-    {
-        struct lantern_peer_status_entry *entry = &client->peer_status_entries[i];
-        if (strncmp(entry->peer_id, out_effective_peer_id, peer_cap) == 0)
-        {
-            switch (outcome)
-            {
-            case LANTERN_BLOCKS_REQUEST_SUCCESS:
-                entry->consecutive_blocks_failures = 0;
-                break;
-            case LANTERN_BLOCKS_REQUEST_FAILED:
-                if (entry->consecutive_blocks_failures < UINT32_MAX)
-                {
-                    entry->consecutive_blocks_failures += 1;
-                }
-                break;
-            case LANTERN_BLOCKS_REQUEST_EMPTY:
-                if (entry->consecutive_blocks_failures < UINT32_MAX)
-                {
-                    entry->consecutive_blocks_failures += 1;
-                }
-                break;
-            case LANTERN_BLOCKS_REQUEST_ABORTED:
-                break;
-            default:
-                break;
-            }
-            *out_failure_count = entry->consecutive_blocks_failures;
-            *out_entry_found = true;
-            break;
-        }
-    }
-
-    pthread_mutex_unlock(&client->status_lock);
-    return true;
-}
-
-
-/**
  * @brief Convert blocks request outcome to text.
  *
  * @param outcome Request outcome
@@ -1275,6 +1158,52 @@ static bool block_response_was_accepted(
     return known;
 }
 
+/* Request ID zero is the synchronous/untracked path used by local callers.
+ * Network responses must still belong to the exact active request and root. */
+static bool block_response_request_context(
+    struct lantern_client *client,
+    const LanternRoot *block_root,
+    uint64_t request_id,
+    bool *out_active,
+    LanternRoot *out_backfill_session_head)
+{
+    if (!client || !block_root || !out_active || !out_backfill_session_head)
+    {
+        return false;
+    }
+    *out_active = request_id == 0u;
+    *out_backfill_session_head = (LanternRoot){0};
+    if (request_id == 0u)
+    {
+        return true;
+    }
+    if (!client->status_lock_initialized || pthread_mutex_lock(&client->status_lock) != 0)
+    {
+        return false;
+    }
+    for (size_t i = 0; i < client->active_blocks_request_count; ++i)
+    {
+        const struct lantern_active_blocks_request *request =
+            &client->active_blocks_requests[i];
+        if (request->request_id != request_id)
+        {
+            continue;
+        }
+        for (size_t j = 0; j < request->root_count; ++j)
+        {
+            if (memcmp(request->roots[j].bytes, block_root->bytes, LANTERN_ROOT_SIZE) == 0)
+            {
+                *out_active = true;
+                *out_backfill_session_head = request->backfill_session_head;
+                break;
+            }
+        }
+        break;
+    }
+    pthread_mutex_unlock(&client->status_lock);
+    return true;
+}
+
 static uint32_t block_response_backfill_depth(
     struct lantern_client *client,
     const LanternRoot *block_root)
@@ -1290,13 +1219,6 @@ static uint32_t block_response_backfill_depth(
     {
         return depth;
     }
-
-    if (!lantern_root_is_zero(&client->backfill.head.root)
-        && memcmp(client->backfill.frontier_root.bytes, block_root->bytes, LANTERN_ROOT_SIZE) == 0)
-    {
-        depth = client->backfill.frontier_depth;
-    }
-
     for (size_t i = 0; i < client->pending_blocks.length; ++i)
     {
         const struct lantern_pending_block *entry = &client->pending_blocks.items[i];
@@ -1322,7 +1244,8 @@ static int import_block_response_now(
     struct lantern_client *client,
     const LanternSignedBlock *block,
     const LanternRoot *block_root,
-    const char *peer_id)
+    const char *peer_id,
+    const LanternRoot *backfill_session_head)
 {
     struct lantern_log_metadata meta = {
         .validator = client ? client->node_id : NULL,
@@ -1337,17 +1260,18 @@ static int import_block_response_now(
 
     char root_hex[ROOT_HEX_BUFFER_LEN];
     format_root_hex(block_root, root_hex, sizeof(root_hex));
-    uint32_t backfill_depth = block_response_backfill_depth(client, block_root);
-    if (lantern_client_backfill_process_block(
+    if (backfill_session_head && !lantern_root_is_zero(backfill_session_head))
+    {
+        lantern_client_handle_historical_backfill_block(
             client,
             block,
             block_root,
             peer_id,
-            backfill_depth))
-    {
+            backfill_session_head);
         return LANTERN_CLIENT_OK;
     }
 
+    uint32_t backfill_depth = block_response_backfill_depth(client, block_root);
     bool imported = lantern_client_import_block(
         client,
         block,
@@ -1436,7 +1360,8 @@ static void *block_import_worker_main(void *arg)
                 client,
                 &job->block,
                 &job->block_root,
-                job->peer_id);
+                job->peer_id,
+                &job->backfill_session_head);
         }
         if (rc != LANTERN_CLIENT_OK)
         {
@@ -1891,7 +1816,8 @@ int reqresp_current_slot(void *context, uint64_t *out_slot)
 int reqresp_handle_block_response(
     void *context,
     const LanternSignedBlock *block,
-    const char *peer_id)
+    const char *peer_id,
+    uint64_t request_id)
 {
     if (!context || !block)
     {
@@ -1904,6 +1830,21 @@ int reqresp_handle_block_response(
     {
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
+    bool request_active = false;
+    LanternRoot backfill_session_head = {0};
+    if (!block_response_request_context(
+            client,
+            &block_root,
+            request_id,
+            &request_active,
+            &backfill_session_head))
+    {
+        return LANTERN_CLIENT_ERR_RUNTIME;
+    }
+    if (!request_active)
+    {
+        return LANTERN_CLIENT_OK;
+    }
     if (!client->block_import_sync_initialized)
     {
         if (client->block_import_stop)
@@ -1914,7 +1855,8 @@ int reqresp_handle_block_response(
             client,
             block,
             &block_root,
-            peer_id);
+            peer_id,
+            &backfill_session_head);
     }
 
     struct lantern_async_block_import_job *job = calloc(1u, sizeof(*job));
@@ -1923,6 +1865,7 @@ int reqresp_handle_block_response(
         return LANTERN_CLIENT_ERR_ALLOC;
     }
     job->block_root = block_root;
+    job->backfill_session_head = backfill_session_head;
     snprintf(job->peer_id, sizeof(job->peer_id), "%s", peer_id ? peer_id : "");
     if (clone_signed_block(block, &job->block) != 0)
     {
@@ -1940,22 +1883,31 @@ int reqresp_handle_block_response(
 void reqresp_blocks_request_complete(
     void *context,
     const char *peer_id,
-    const LanternRoot *roots,
-    size_t root_count,
     uint64_t request_id,
-    int success)
+    enum lantern_reqresp_blocks_request_result result)
 {
     if (!context)
     {
         return;
     }
+    enum lantern_blocks_request_outcome outcome = LANTERN_BLOCKS_REQUEST_FAILED;
+    switch (result)
+    {
+    case LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS:
+        outcome = LANTERN_BLOCKS_REQUEST_SUCCESS;
+        break;
+    case LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_EMPTY:
+        outcome = LANTERN_BLOCKS_REQUEST_EMPTY;
+        break;
+    case LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED:
+    default:
+        break;
+    }
     lantern_client_on_blocks_request_complete_batch_with_id(
         (struct lantern_client *)context,
         request_id,
         peer_id,
-        roots,
-        root_count,
-        success ? LANTERN_BLOCKS_REQUEST_SUCCESS : LANTERN_BLOCKS_REQUEST_FAILED);
+        outcome);
 }
 
 
@@ -2042,63 +1994,46 @@ static void lantern_client_on_peer_status(
  *
  * @spec subspecs/networking/reqresp - Request lifecycle
  *
- * Updates peer tracking state after a blocks_by_root request completes:
- * - Finalizes active request registry entry (when tracked)
- * - Updates consecutive failure counter
+ * Finalizes the active attempt and advances its root-scoped retry lifecycle.
  *
  * @param client        Client instance
- * @param request_id    Internal request tracking ID (0 for untracked completion)
+ * @param request_id    Internal request tracking ID; stale or unknown IDs are ignored
  * @param peer_id       Peer ID string
- * @param request_roots Roots that were requested
- * @param root_count    Number of requested roots
  * @param outcome       Request outcome
  *
- * @note Thread safety: Acquires status_lock and, after releasing it, may
- * acquire pending_lock when a successful response schedules more backfill.
+ * @note Thread safety: Acquires status_lock; successful responses may then
+ * acquire pending_lock while scheduling a newly discovered parent.
  */
 void lantern_client_on_blocks_request_complete_batch_with_id(
     struct lantern_client *client,
     uint64_t request_id,
     const char *peer_id,
-    const LanternRoot *request_roots,
-    size_t root_count,
     enum lantern_blocks_request_outcome outcome)
 {
     if (!client || !client->status_lock_initialized)
     {
         return;
     }
-    uint32_t failure_count = 0;
-    bool entry_found = false;
-    char effective_peer[sizeof(((struct lantern_peer_status_entry *)0)->peer_id)];
-    effective_peer[0] = '\0';
-    if (!lantern_client_update_blocks_request_tracking(
+    struct lantern_blocks_request_completion completion;
+    if (!lantern_client_complete_blocks_request(
             client,
             request_id,
             peer_id,
             outcome,
-            &failure_count,
-            &entry_found,
-            effective_peer,
-            sizeof(effective_peer)))
+            &completion))
     {
         return;
     }
 
-    const char *peer_for_logs = effective_peer[0] ? effective_peer : peer_id;
-
-    const LanternRoot *first_root = NULL;
-    if (request_roots && root_count > 0)
+    if (completion.root_count == 0u)
     {
-        first_root = &request_roots[0];
+        return;
     }
+    const char *peer_for_logs = completion.peer_id[0] ? completion.peer_id : peer_id;
+    const LanternRoot *first_root = &completion.first_root;
 
     char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];
-    root_hex[0] = '\0';
-    if (first_root)
-    {
-        format_root_hex(first_root, root_hex, sizeof(root_hex));
-    }
+    format_root_hex(first_root, root_hex, sizeof(root_hex));
     const char *outcome_text = lantern_blocks_request_outcome_text(outcome);
     if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS && client->sync_started_ms != 0u)
     {
@@ -2107,12 +2042,11 @@ void lantern_client_on_blocks_request_complete_batch_with_id(
             &(const struct lantern_log_metadata){
                 .validator = client->node_id,
                 .peer = peer_for_logs && peer_for_logs[0] ? peer_for_logs : NULL},
-            "response %s, roots %zu, first_root %s, entry_found %s, consecutive_failures %" PRIu32,
+            "response %s, roots %zu, first_root %s, attempt %" PRIu32,
             outcome_text,
-            root_count,
+            completion.root_count,
             root_hex[0] ? root_hex : "0x0",
-            entry_found ? "true" : "false",
-            failure_count);
+            completion.attempts);
     }
     else
     {
@@ -2123,12 +2057,11 @@ void lantern_client_on_blocks_request_complete_batch_with_id(
                 &(const struct lantern_log_metadata){
                     .validator = client->node_id,
                     .peer = peer_for_logs && peer_for_logs[0] ? peer_for_logs : NULL},
-                "response %s, roots %zu, first_root %s, entry_found %s, consecutive_failures %" PRIu32,
+                "response %s, roots %zu, first_root %s, attempt %" PRIu32,
                 outcome_text,
-                root_count,
+                completion.root_count,
                 root_hex[0] ? root_hex : "0x0",
-                entry_found ? "true" : "false",
-                failure_count);
+                completion.attempts);
         }
         else
         {
@@ -2138,20 +2071,23 @@ void lantern_client_on_blocks_request_complete_batch_with_id(
                     .validator = client->node_id,
                     .peer = peer_for_logs && peer_for_logs[0] ? peer_for_logs : NULL},
                 "request failed, peer %s, reason: %s, roots %zu, first_root %s"
-                ", consecutive_failures %" PRIu32,
+                ", attempt %" PRIu32 ", retry_scheduled %s, exhausted %s",
                 peer_for_logs && peer_for_logs[0] ? peer_for_logs : "-",
                 outcome_text,
-                root_count,
+                completion.root_count,
                 root_hex[0] ? root_hex : "0x0",
-                failure_count);
+                completion.attempts,
+                completion.retry_scheduled ? "true" : "false",
+                completion.exhausted ? "true" : "false");
         }
     }
 
-    if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS && peer_for_logs && peer_for_logs[0] != '\0')
+    if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS)
     {
         lantern_client_request_pending_parent_after_blocks(
             client,
             peer_for_logs,
             first_root);
+        return;
     }
 }

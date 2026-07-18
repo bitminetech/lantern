@@ -364,15 +364,14 @@ int reqresp_current_slot(void *context, uint64_t *out_slot);
 int reqresp_handle_block_response(
     void *context,
     const LanternSignedBlock *block,
-    const char *peer_id);
+    const char *peer_id,
+    uint64_t request_id);
 
 void reqresp_blocks_request_complete(
     void *context,
     const char *peer_id,
-    const LanternRoot *roots,
-    size_t root_count,
     uint64_t request_id,
-    int success);
+    enum lantern_reqresp_blocks_request_result result);
 
 lantern_client_error lantern_client_block_importer_start(struct lantern_client *client);
 void lantern_client_block_importer_stop(struct lantern_client *client);
@@ -390,8 +389,6 @@ void lantern_client_on_blocks_request_complete_batch_with_id(
     struct lantern_client *client,
     uint64_t request_id,
     const char *peer_id,
-    const LanternRoot *request_roots,
-    size_t root_count,
     enum lantern_blocks_request_outcome outcome);
 
 bool lantern_client_import_block(
