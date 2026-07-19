@@ -83,7 +83,6 @@ struct lantern_peer_status_entry
     uint64_t last_status_ms;              /**< Timestamp of last status message */
     bool status_request_inflight;         /**< True if status request is pending */
     bool status_request_failed;           /**< True until a status request succeeds */
-    uint32_t consecutive_blocks_failures; /**< Count of consecutive request failures */
     uint64_t votes_received;
     uint64_t votes_accepted;
     uint64_t votes_rejected;

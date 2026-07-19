@@ -1175,6 +1175,8 @@ void peer_maintenance_drive(
         return;
     }
 
+    lantern_client_drive_block_fetch_retries(client, now_us);
+
     libp2p_host_time_us_t next_us =
         __atomic_load_n(&client->peer_maintenance_next_us, __ATOMIC_RELAXED);
     if (next_us != 0 && now_us < next_us)
