@@ -24,6 +24,7 @@
 #ifndef LANTERN_CLIENT_SYNC_INTERNAL_H
 #define LANTERN_CLIENT_SYNC_INTERNAL_H
 
+#include "client_network_internal.h"
 #include "lantern/core/client.h"
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/state.h"
@@ -49,27 +50,21 @@ extern "C" {
  * pending list in RAM.
  */
 #define LANTERN_MAX_BACKFILL_DEPTH 65535u
-/**
- * Timeout used by outbound blocks-by-root request tracking.
- *
- * Requests that exceed this duration are expired from the active request registry
- * and treated as failed for peer scoring.
- */
-#define LANTERN_BLOCKS_REQUEST_TIMEOUT_MS 12000u
-/**
- * Hard cap for request tracking entry lifetime after soft timeout.
- *
- * Requests remain marked inflight after the first timeout signal so peer-side
- * stream parsing can still complete without opening parallel replacement
- * streams. If a request never completes, this hard timeout eventually releases
- * the slot.
- */
-#define LANTERN_BLOCKS_REQUEST_HARD_TIMEOUT_MS 60000u
-
-
+#define LANTERN_BLOCK_FETCH_MAX_ATTEMPTS 10u
+#define LANTERN_BLOCK_FETCH_INITIAL_BACKOFF_US 5000u
 /* ============================================================================
  * Internal Types
  * ============================================================================ */
+
+struct lantern_block_fetch
+{
+    LanternRoot root;
+    LanternRoot backfill_session_head;
+    libp2p_host_time_us_t retry_at_us;
+    uint32_t attempts;
+    size_t failed_peer_count;
+    char failed_peers[LANTERN_BLOCK_FETCH_MAX_ATTEMPTS][128];
+};
 
 /**
  * Vote rejection information.
@@ -86,6 +81,16 @@ struct lantern_vote_rejection_info
     bool should_retry_after_block_import; /**< True if block import may unblock the vote */
     LanternRoot retry_root; /**< Root whose eventual import may unblock validation */
     uint64_t retry_slot; /**< Slot associated with retry_root */
+};
+
+struct lantern_blocks_request_completion
+{
+    char peer_id[128];
+    LanternRoot first_root;
+    size_t root_count;
+    uint32_t attempts;
+    bool retry_scheduled;
+    bool exhausted;
 };
 
 
@@ -159,19 +164,25 @@ bool lantern_client_checkpoint_is_ancestor_locked(
     const LanternCheckpoint *ancestor,
     const LanternCheckpoint *descendant);
 
-bool lantern_client_maybe_start_historical_backfill(
+bool lantern_client_ensure_historical_backfill(
     struct lantern_client *client,
     const char *peer_text,
     const LanternRoot *head_root,
     uint64_t head_slot,
     uint64_t local_head_slot);
 
-bool lantern_client_backfill_process_block(
+bool lantern_client_historical_backfill_snapshot(
+    struct lantern_client *client,
+    LanternRoot *out_frontier_root,
+    LanternRoot *out_session_head);
+
+/** Consume a response tied to a historical session, including a stale response. */
+void lantern_client_handle_historical_backfill_block(
     struct lantern_client *client,
     const LanternSignedBlock *block,
     const LanternRoot *root,
     const char *peer_text,
-    uint32_t depth);
+    const LanternRoot *session_head);
 
 bool lantern_client_backfill_should_drop_gossip(
     struct lantern_client *client,
@@ -646,18 +657,38 @@ void lantern_client_request_pending_parent_after_blocks(
  * @param client      Client instance
  * @param peer_text   Preferred peer ID string (may be NULL)
  * @param roots       Block roots to request
- * @param depths      Backfill depth per root (may be NULL)
  * @param root_count  Number of roots
+ * @param backfill_session_head Historical session identity, or NULL for ordinary requests
  * @return true if scheduling succeeded, false otherwise
  *
- * @note Thread safety: This function is thread-safe
+ * @note Thread safety: Acquires status_lock
  */
 bool lantern_client_try_schedule_blocks_request_batch(
     struct lantern_client *client,
     const char *peer_text,
     const LanternRoot *roots,
-    const uint32_t *depths,
-    size_t root_count);
+    size_t root_count,
+    const LanternRoot *backfill_session_head);
+
+bool lantern_client_complete_blocks_request(
+    struct lantern_client *client,
+    uint64_t request_id,
+    enum lantern_blocks_request_outcome outcome,
+    struct lantern_blocks_request_completion *out_completion);
+
+/** Drive root-scoped block fetch retries whose exponential backoff has elapsed. */
+void lantern_client_drive_block_fetch_retries(
+    struct lantern_client *client,
+    libp2p_host_time_us_t now_us);
+
+/** Select a request peer while honoring the failed-peer set for retry_root. */
+bool lantern_client_select_blocks_request_peer_locked(
+    struct lantern_client *client,
+    const char *preferred_peer,
+    const LanternRoot *retry_root,
+    uint64_t now_ms,
+    char *out_peer,
+    size_t out_peer_len);
 
 
 /**

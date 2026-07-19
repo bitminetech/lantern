@@ -22,7 +22,6 @@
 #define LANTERN_REQRESP_RESPONSE_INVALID_REQUEST 1u
 #define LANTERN_REQRESP_RESPONSE_SERVER_ERROR 2u
 #define LANTERN_REQRESP_RESPONSE_RESOURCE_UNAVAILABLE 3u
-
 enum
 {
     LANTERN_REQRESP_ERR_STREAM_READ = -1003,
@@ -35,6 +34,12 @@ enum lantern_reqresp_protocol_kind {
     LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT = 1,
     LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE = 2,
     LANTERN_REQRESP_PROTOCOL_KIND_COUNT,
+};
+
+enum lantern_reqresp_blocks_request_result {
+    LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED = 0,
+    LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS = 1,
+    LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_EMPTY = 2,
 };
 
 struct lantern_log_metadata;
@@ -65,14 +70,12 @@ struct lantern_reqresp_service_callbacks {
     int (*handle_block_response)(
         void *context,
         const LanternSignedBlock *block,
-        const char *peer_id);
+        const char *peer_id,
+        uint64_t request_id);
     void (*blocks_request_complete)(
         void *context,
-        const char *peer_id,
-        const LanternRoot *roots,
-        size_t root_count,
         uint64_t request_id,
-        int success);
+        enum lantern_reqresp_blocks_request_result result);
 };
 
 struct lantern_reqresp_service_config {

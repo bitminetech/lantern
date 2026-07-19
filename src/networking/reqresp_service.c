@@ -1,5 +1,6 @@
 #include "lantern/networking/reqresp_service.h"
 
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -9,6 +10,8 @@
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
+
+#define LANTERN_REQRESP_BLOCKS_REQUEST_TIMEOUT_US (12u * 1000000u)
 
 enum {
     LANTERN_SNAPPY_FRAME_CHUNK_HEADER_BYTES = 4u,
@@ -38,6 +41,7 @@ struct lantern_reqresp_exchange {
     size_t root_count;
     size_t matched_root_count;
     uint64_t request_id;
+    libp2p_host_time_us_t deadline_us;
     int completed;
     int request_complete;
     struct lantern_reqresp_exchange *next;
@@ -820,7 +824,9 @@ static bool exchange_find_unmatched_root_index(
     return false;
 }
 
-static void exchange_complete_blocks_request(struct lantern_reqresp_exchange *exchange, int success) {
+static void exchange_complete_blocks_request(
+    struct lantern_reqresp_exchange *exchange,
+    enum lantern_reqresp_blocks_request_result result) {
     if (!exchange || exchange->completed) {
         return;
     }
@@ -828,11 +834,8 @@ static void exchange_complete_blocks_request(struct lantern_reqresp_exchange *ex
     if (exchange->service->callbacks.blocks_request_complete) {
         exchange->service->callbacks.blocks_request_complete(
             exchange->service->callbacks.context,
-            exchange->peer_id_text,
-            exchange->roots,
-            exchange->root_count,
             exchange->request_id,
-            success);
+            result);
     }
 }
 
@@ -849,7 +852,7 @@ static void exchange_fail(struct lantern_reqresp_exchange *exchange, int error) 
                 error);
         }
     } else if (exchange->outbound && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT) {
-        exchange_complete_blocks_request(exchange, 0);
+        exchange_complete_blocks_request(exchange, LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED);
     } else {
         exchange->completed = 1;
     }
@@ -860,10 +863,65 @@ static void exchange_handle_outbound_closed(struct lantern_reqresp_exchange *exc
         return;
     }
     if (!reset && exchange_blocks_request_success(exchange)) {
-        exchange_complete_blocks_request(exchange, 1);
+        exchange_complete_blocks_request(exchange, LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS);
+        return;
+    }
+    if (!reset && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT
+        && exchange->matched_root_count == 0u) {
+        exchange_complete_blocks_request(exchange, LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_EMPTY);
         return;
     }
     exchange_fail(exchange, LANTERN_REQRESP_ERR_STREAM_READ);
+}
+
+static struct lantern_reqresp_exchange *service_claim_timed_out_blocks_exchange(
+    struct lantern_reqresp_service *service,
+    libp2p_host_time_us_t now_us) {
+    if (!service) {
+        return NULL;
+    }
+    if (service->lock_initialized) {
+        pthread_mutex_lock(&service->lock);
+    }
+    struct lantern_reqresp_exchange *expired = NULL;
+    for (struct lantern_reqresp_exchange *exchange = service->exchanges;
+         exchange;
+         exchange = exchange->next) {
+        if (exchange->outbound
+            && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT
+            && !exchange->completed
+            && exchange->deadline_us != 0u
+            && now_us >= exchange->deadline_us) {
+            exchange->deadline_us = 0u;
+            expired = exchange;
+            break;
+        }
+    }
+    if (service->lock_initialized) {
+        pthread_mutex_unlock(&service->lock);
+    }
+    return expired;
+}
+
+static void reqresp_drive(
+    struct lantern_libp2p_host *network,
+    libp2p_host_time_us_t now_us,
+    void *user_data) {
+    (void)network;
+    struct lantern_reqresp_service *service = user_data;
+    struct lantern_reqresp_exchange *exchange = NULL;
+    while ((exchange = service_claim_timed_out_blocks_exchange(service, now_us)) != NULL) {
+        lantern_log_warn(
+            "reqresp",
+            &(const struct lantern_log_metadata){
+                .peer = exchange->peer_id_text[0] ? exchange->peer_id_text : NULL},
+            "blocks_by_root request timed out request_id=%" PRIu64,
+            exchange->request_id);
+        exchange_fail(exchange, LANTERN_REQRESP_ERR_STREAM_READ);
+        if (exchange->host && exchange->stream) {
+            (void)libp2p_host_stream_reset(exchange->host, exchange->stream, 0u);
+        }
+    }
 }
 
 static int exchange_handle_outbound_status_frame(
@@ -931,7 +989,8 @@ static int exchange_handle_outbound_block_frame(
         handled = exchange->service->callbacks.handle_block_response(
             exchange->service->callbacks.context,
             &block,
-            exchange->peer_id_text);
+            exchange->peer_id_text,
+            exchange->request_id);
     }
     lantern_signed_block_reset(&block);
     if (handled == 0) {
@@ -940,7 +999,9 @@ static int exchange_handle_outbound_block_frame(
         }
         exchange->matched_root_count += 1u;
         if (exchange_blocks_request_success(exchange)) {
-            exchange_complete_blocks_request(exchange, 1);
+            exchange_complete_blocks_request(
+                exchange,
+                LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS);
         }
     } else {
         exchange_fail(exchange, handled);
@@ -1069,6 +1130,12 @@ static libp2p_host_err_t reqresp_on_open(
     exchange->host = host;
     exchange->stream = stream;
     exchange_set_peer_text_from_conn(exchange, conn);
+    if (exchange->outbound && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT) {
+        libp2p_host_time_us_t now_us = lantern_libp2p_now_us();
+        exchange->deadline_us = now_us > UINT64_MAX - LANTERN_REQRESP_BLOCKS_REQUEST_TIMEOUT_US
+            ? UINT64_MAX
+            : now_us + LANTERN_REQRESP_BLOCKS_REQUEST_TIMEOUT_US;
+    }
     (void)libp2p_host_stream_set_user_data(stream, exchange);
     return LIBP2P_HOST_OK;
 }
@@ -1192,7 +1259,8 @@ int lantern_reqresp_service_start(
             return -1;
         }
     }
-    if (lantern_libp2p_host_register_event_handler(service->network, reqresp_host_event, service) != 0) {
+    if (lantern_libp2p_host_register_event_handler(service->network, reqresp_host_event, service) != 0
+        || lantern_libp2p_host_register_drive_handler(service->network, reqresp_drive, service) != 0) {
         return -1;
     }
     return 0;
