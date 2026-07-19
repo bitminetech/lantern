@@ -51,10 +51,8 @@ static int test_handle_block_response(
 
 static void test_blocks_request_complete(
     void *context,
-    const char *peer_id,
     uint64_t request_id,
     enum lantern_reqresp_blocks_request_result result) {
-    (void)peer_id;
     (void)request_id;
     struct test_blocks_context *test_context = (struct test_blocks_context *)context;
     if (!test_context) {

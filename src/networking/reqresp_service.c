@@ -834,7 +834,6 @@ static void exchange_complete_blocks_request(
     if (exchange->service->callbacks.blocks_request_complete) {
         exchange->service->callbacks.blocks_request_complete(
             exchange->service->callbacks.context,
-            exchange->peer_id_text,
             exchange->request_id,
             result);
     }

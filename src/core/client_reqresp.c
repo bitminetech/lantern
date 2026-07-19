@@ -1882,7 +1882,6 @@ int reqresp_handle_block_response(
 
 void reqresp_blocks_request_complete(
     void *context,
-    const char *peer_id,
     uint64_t request_id,
     enum lantern_reqresp_blocks_request_result result)
 {
@@ -1906,7 +1905,6 @@ void reqresp_blocks_request_complete(
     lantern_client_on_blocks_request_complete_batch_with_id(
         (struct lantern_client *)context,
         request_id,
-        peer_id,
         outcome);
 }
 
@@ -1998,7 +1996,6 @@ static void lantern_client_on_peer_status(
  *
  * @param client        Client instance
  * @param request_id    Internal request tracking ID; stale or unknown IDs are ignored
- * @param peer_id       Peer ID string
  * @param outcome       Request outcome
  *
  * @note Thread safety: Acquires status_lock; successful responses may then
@@ -2007,7 +2004,6 @@ static void lantern_client_on_peer_status(
 void lantern_client_on_blocks_request_complete_batch_with_id(
     struct lantern_client *client,
     uint64_t request_id,
-    const char *peer_id,
     enum lantern_blocks_request_outcome outcome)
 {
     if (!client || !client->status_lock_initialized)
@@ -2018,18 +2014,13 @@ void lantern_client_on_blocks_request_complete_batch_with_id(
     if (!lantern_client_complete_blocks_request(
             client,
             request_id,
-            peer_id,
             outcome,
             &completion))
     {
         return;
     }
 
-    if (completion.root_count == 0u)
-    {
-        return;
-    }
-    const char *peer_for_logs = completion.peer_id[0] ? completion.peer_id : peer_id;
+    const char *peer_for_logs = completion.peer_id;
     const LanternRoot *first_root = &completion.first_root;
 
     char root_hex[(LANTERN_ROOT_SIZE * 2u) + 3u];

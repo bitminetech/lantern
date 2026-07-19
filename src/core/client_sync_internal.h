@@ -673,7 +673,6 @@ bool lantern_client_try_schedule_blocks_request_batch(
 bool lantern_client_complete_blocks_request(
     struct lantern_client *client,
     uint64_t request_id,
-    const char *peer_id,
     enum lantern_blocks_request_outcome outcome,
     struct lantern_blocks_request_completion *out_completion);
 

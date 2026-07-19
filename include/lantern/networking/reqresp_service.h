@@ -74,7 +74,6 @@ struct lantern_reqresp_service_callbacks {
         uint64_t request_id);
     void (*blocks_request_complete)(
         void *context,
-        const char *peer_id,
         uint64_t request_id,
         enum lantern_reqresp_blocks_request_result result);
 };

@@ -1305,7 +1305,7 @@ cleanup:
     return rc;
 }
 
-static int test_active_parent_requests_deduplicate_and_release(void)
+static int test_active_parent_requests_deduplicate_and_retry(void)
 {
     struct lantern_client client;
     LanternSignedBlock block;
@@ -1368,7 +1368,6 @@ static int test_active_parent_requests_deduplicate_and_release(void)
     lantern_client_on_blocks_request_complete_batch_with_id(
         &client,
         7u,
-        peer_id,
         LANTERN_BLOCKS_REQUEST_FAILED);
     if (client.next_blocks_request_id != 8u || client.active_blocks_request_count != 0u
         || client.block_fetch_count != 1u || client.block_fetches[0].retry_at_us == 0u) {
@@ -2478,7 +2477,6 @@ static int run_historical_backfill_retry_completion(
     lantern_client_on_blocks_request_complete_batch_with_id(
         &client,
         21u,
-        peer_id,
         outcome);
     libp2p_host_time_us_t after_us = lantern_libp2p_now_us();
 
@@ -2656,7 +2654,6 @@ static int test_block_fetch_exponential_backoff_and_attempt_exhaustion(void)
         lantern_client_on_blocks_request_complete_batch_with_id(
             &client,
             request_id,
-            peer_id,
             LANTERN_BLOCKS_REQUEST_FAILED);
         libp2p_host_time_us_t after_us = lantern_libp2p_now_us();
         if (client.active_blocks_request_count != 0u) {
@@ -2713,7 +2710,6 @@ static int test_block_fetch_lifecycle_cleans_up_on_success_and_session_replaceme
     lantern_client_on_blocks_request_complete_batch_with_id(
         &client,
         201u,
-        peer_id,
         LANTERN_BLOCKS_REQUEST_SUCCESS);
     if (client.block_fetch_count != 0u || client.active_blocks_request_count != 0u) {
         fprintf(stderr, "successful root fetch did not clear its lifecycle\n");
@@ -2754,7 +2750,6 @@ static int test_block_fetch_lifecycle_cleans_up_on_success_and_session_replaceme
     lantern_client_on_blocks_request_complete_batch_with_id(
         &client,
         201u,
-        peer_id,
         LANTERN_BLOCKS_REQUEST_FAILED);
     if (client.block_fetch_count != 1u || client.block_fetches[0].attempts != 1u
         || client.block_fetches[0].failed_peer_count != 0u
@@ -2994,7 +2989,6 @@ static int test_stale_async_backfill_completion_is_discarded(void)
     lantern_client_on_blocks_request_complete_batch_with_id(
         &fixture.client,
         1u,
-        peer_id,
         LANTERN_BLOCKS_REQUEST_SUCCESS);
     if (fixture.client.active_blocks_request_count != 0u
         || reqresp_handle_block_response(&fixture.client, &stale_block, peer_id, 1u)
@@ -3438,7 +3432,7 @@ int main(void) {
     if (test_idle_status_triggers_syncing_before_gossip_backfill() != 0) {
         return 1;
     }
-    if (test_active_parent_requests_deduplicate_and_release() != 0) {
+    if (test_active_parent_requests_deduplicate_and_retry() != 0) {
         return 1;
     }
     if (test_idle_status_at_known_head_completes_sync() != 0) {

@@ -369,7 +369,6 @@ int reqresp_handle_block_response(
 
 void reqresp_blocks_request_complete(
     void *context,
-    const char *peer_id,
     uint64_t request_id,
     enum lantern_reqresp_blocks_request_result result);
 
@@ -388,7 +387,6 @@ void lantern_client_block_importer_stop(struct lantern_client *client);
 void lantern_client_on_blocks_request_complete_batch_with_id(
     struct lantern_client *client,
     uint64_t request_id,
-    const char *peer_id,
     enum lantern_blocks_request_outcome outcome);
 
 bool lantern_client_import_block(

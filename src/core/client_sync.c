@@ -286,7 +286,7 @@ bool lantern_client_historical_backfill_snapshot(
     LanternRoot *out_frontier_root,
     LanternRoot *out_session_head)
 {
-    if (!client || !out_frontier_root)
+    if (!client || !out_frontier_root || !out_session_head)
     {
         return false;
     }
@@ -300,10 +300,7 @@ bool lantern_client_historical_backfill_snapshot(
     if (active)
     {
         *out_frontier_root = client->backfill.frontier_root;
-        if (out_session_head)
-        {
-            *out_session_head = client->backfill.head.root;
-        }
+        *out_session_head = client->backfill.head.root;
     }
     lantern_client_unlock_pending(client, locked);
     return active;
@@ -1494,7 +1491,7 @@ void lantern_client_pending_remove_by_root(struct lantern_client *client, const 
     lantern_client_unlock_pending(client, locked);
 }
 
-static uint32_t active_blocks_requests_for_peer_locked(
+static size_t active_blocks_requests_for_peer_locked(
     const struct lantern_client *client,
     const char *peer_id)
 {
@@ -1503,7 +1500,7 @@ static uint32_t active_blocks_requests_for_peer_locked(
         return 0u;
     }
 
-    uint32_t count = 0u;
+    size_t count = 0u;
     for (size_t i = 0; i < client->active_blocks_request_count; ++i)
     {
         const struct lantern_active_blocks_request *request = &client->active_blocks_requests[i];
@@ -1513,10 +1510,7 @@ static uint32_t active_blocks_requests_for_peer_locked(
         }
         if (strncmp(request->peer_id, peer_id, sizeof(request->peer_id)) == 0)
         {
-            if (count < UINT32_MAX)
-            {
-                count += 1u;
-            }
+            count += 1u;
         }
     }
     return count;
@@ -1654,8 +1648,8 @@ static void block_fetch_record_failed_peer(
 
 static libp2p_host_time_us_t block_fetch_retry_delay_us(uint32_t attempts)
 {
-    uint32_t exponent = attempts > 0u ? attempts - 1u : 0u;
-    return (libp2p_host_time_us_t)LANTERN_BLOCK_FETCH_INITIAL_BACKOFF_US << exponent;
+    return (libp2p_host_time_us_t)LANTERN_BLOCK_FETCH_INITIAL_BACKOFF_US
+        << (attempts - 1u);
 }
 
 static bool reserve_active_blocks_request_locked(
@@ -1736,9 +1730,9 @@ static bool peer_status_is_fresh(
 
 static bool peer_request_candidate_is_better(
     const struct lantern_peer_status_entry *candidate,
-    uint32_t candidate_inflight,
+    size_t candidate_inflight,
     const struct lantern_peer_status_entry *best,
-    uint32_t best_inflight,
+    size_t best_inflight,
     uint64_t now_ms)
 {
     if (!best)
@@ -1764,7 +1758,7 @@ static bool block_request_peer_is_eligible_locked(
     const struct lantern_block_fetch *fetch,
     bool enforce_failed_peers,
     bool *out_unfailed_connected,
-    uint32_t *out_inflight)
+    size_t *out_inflight)
 {
     if (!client || !entry || !entry->peer_id[0]
         || !lantern_client_is_peer_connected(client, entry->peer_id))
@@ -1779,7 +1773,7 @@ static bool block_request_peer_is_eligible_locked(
     {
         *out_unfailed_connected = true;
     }
-    uint32_t inflight = active_blocks_requests_for_peer_locked(client, entry->peer_id);
+    size_t inflight = active_blocks_requests_for_peer_locked(client, entry->peer_id);
     if (out_inflight)
     {
         *out_inflight = inflight;
@@ -1796,12 +1790,12 @@ static struct lantern_peer_status_entry *select_blocks_request_peer_pass_locked(
     uint64_t now_ms)
 {
     struct lantern_peer_status_entry *best = NULL;
-    uint32_t best_inflight = 0u;
+    size_t best_inflight = 0u;
     if (preferred_peer && preferred_peer[0])
     {
         struct lantern_peer_status_entry *preferred =
             lantern_client_ensure_status_entry_locked(client, preferred_peer);
-        uint32_t inflight = 0u;
+        size_t inflight = 0u;
         if (block_request_peer_is_eligible_locked(
                 client,
                 preferred,
@@ -1822,7 +1816,7 @@ static struct lantern_peer_status_entry *select_blocks_request_peer_pass_locked(
         {
             continue;
         }
-        uint32_t inflight = 0u;
+        size_t inflight = 0u;
         if (!block_request_peer_is_eligible_locked(
                 client,
                 candidate,
@@ -1873,7 +1867,6 @@ bool lantern_client_select_blocks_request_peer_locked(
         now_ms);
     if (!selected && fetch && fetch->failed_peer_count > 0u && !unfailed_connected_peer)
     {
-        memset(fetch->failed_peers, 0, sizeof(fetch->failed_peers));
         fetch->failed_peer_count = 0u;
         selected = select_blocks_request_peer_pass_locked(
             client,
@@ -1966,9 +1959,7 @@ static bool schedule_blocks_request_batch(
         }
         struct lantern_block_fetch *fetch =
             block_fetch_find_locked(client, &roots[i], NULL);
-        if ((retry_root && (!fetch
-                || memcmp(retry_root->bytes, roots[i].bytes, LANTERN_ROOT_SIZE) != 0))
-            || (!retry_root && fetch))
+        if ((retry_root && !fetch) || (!retry_root && fetch))
         {
             continue;
         }
@@ -2060,10 +2051,7 @@ static bool schedule_blocks_request_batch(
                 fetch->backfill_session_head = *backfill_session_head;
             }
         }
-        if (fetch->attempts < UINT32_MAX)
-        {
-            fetch->attempts += 1u;
-        }
+        fetch->attempts += 1u;
         fetch->retry_at_us = 0u;
     }
     pthread_mutex_unlock(&client->status_lock);
@@ -2092,7 +2080,6 @@ static bool schedule_blocks_request_batch(
         lantern_client_on_blocks_request_complete_batch_with_id(
             client,
             request_id,
-            selected_peer,
             LANTERN_BLOCKS_REQUEST_ABORTED);
         lantern_log_warn(
             "backfill",
@@ -2137,7 +2124,6 @@ bool lantern_client_try_schedule_blocks_request_batch(
 bool lantern_client_complete_blocks_request(
     struct lantern_client *client,
     uint64_t request_id,
-    const char *peer_id,
     enum lantern_blocks_request_outcome outcome,
     struct lantern_blocks_request_completion *out_completion)
 {
@@ -2163,7 +2149,7 @@ bool lantern_client_complete_blocks_request(
     if (request_index == SIZE_MAX)
     {
         pthread_mutex_unlock(&client->status_lock);
-        return true;
+        return false;
     }
 
     struct lantern_active_blocks_request *request =
@@ -2171,7 +2157,7 @@ bool lantern_client_complete_blocks_request(
     (void)lantern_string_copy(
         out_completion->peer_id,
         sizeof(out_completion->peer_id),
-        request->peer_id[0] ? request->peer_id : peer_id);
+        request->peer_id);
     out_completion->root_count = request->root_count;
     out_completion->first_root = request->roots[0];
 
@@ -2195,12 +2181,6 @@ bool lantern_client_complete_blocks_request(
             block_fetch_remove_locked(client, fetch_index);
             continue;
         }
-        if (outcome != LANTERN_BLOCKS_REQUEST_FAILED
-            && outcome != LANTERN_BLOCKS_REQUEST_EMPTY)
-        {
-            continue;
-        }
-
         block_fetch_record_failed_peer(fetch, out_completion->peer_id);
         if (fetch->attempts >= LANTERN_BLOCK_FETCH_MAX_ATTEMPTS)
         {
@@ -2303,34 +2283,6 @@ void lantern_client_drive_block_fetch_retries(
         }
         pthread_mutex_unlock(&client->status_lock);
     }
-}
-
-static bool try_schedule_blocks_request(
-    struct lantern_client *client,
-    const char *peer_text,
-    const LanternRoot *root,
-    uint32_t backfill_depth)
-{
-    if (!client || !root || lantern_root_is_zero(root))
-    {
-        return false;
-    }
-    if (backfill_depth > LANTERN_MAX_BACKFILL_DEPTH)
-    {
-        return false;
-    }
-
-    const char *preferred_peer = NULL;
-    if (peer_text && peer_text[0])
-    {
-        preferred_peer = peer_text;
-    }
-    return lantern_client_try_schedule_blocks_request_batch(
-        client,
-        preferred_peer,
-        root,
-        1u,
-        NULL);
 }
 
 struct pending_parent_candidate
@@ -2761,12 +2713,12 @@ bool lantern_client_enqueue_pending_block(
         if (should_request && !parent_cached
             && existing_backfill_depth < LANTERN_MAX_BACKFILL_DEPTH)
         {
-            uint32_t request_depth = existing_backfill_depth + 1u;
-            if (try_schedule_blocks_request(
+            if (lantern_client_try_schedule_blocks_request_batch(
                     client,
                     peer_copy[0] ? peer_copy : NULL,
                     &request_root,
-                    request_depth))
+                    1u,
+                    NULL))
             {
                 lantern_log_info(
                     "backfill",
@@ -2883,12 +2835,12 @@ bool lantern_client_enqueue_pending_block(
         {
             (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_text);
         }
-        uint32_t request_depth = entry_backfill_depth + 1u;
-        if (try_schedule_blocks_request(
+        if (lantern_client_try_schedule_blocks_request_batch(
                 client,
                 peer_copy[0] ? peer_copy : NULL,
                 &parent_root_local,
-                request_depth))
+                1u,
+                NULL))
         {
             request_scheduled = true;
             lantern_log_info(
