@@ -1556,7 +1556,6 @@ static bool lantern_client_import_block_internal(
             block->block.slot,
             block_hex[0] ? block_hex : "0x0",
             historical_floor_slot);
-        log_import_rejected(block, &block_root_local, import_source, "pre_finalized", meta);
         lantern_client_unlock_state(client, state_locked);
         lantern_client_pending_remove_branch_by_root(client, &block_root_local);
         if (out_result)
@@ -1567,7 +1566,6 @@ static bool lantern_client_import_block_internal(
     }
     if (root_known && allow_historical && block->block.slot <= known_slot)
     {
-        log_import_rejected(block, &block_root_local, import_source, "duplicate", meta);
         lantern_client_unlock_state(client, state_locked);
         persist_block_after_import(client, block, meta);
         if (drain_pending_children)
@@ -1599,7 +1597,6 @@ static bool lantern_client_import_block_internal(
             known_slot,
             meta))
     {
-        log_import_rejected(block, &block_root_local, import_source, "duplicate", meta);
         import_result = LANTERN_CLIENT_ERR_IGNORED;
         goto cleanup;
     }

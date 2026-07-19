@@ -1158,6 +1158,21 @@ static bool block_response_was_accepted(
     return known;
 }
 
+static bool block_response_is_pre_finalized(
+    struct lantern_client *client,
+    uint64_t block_slot)
+{
+    bool state_locked = lantern_client_lock_state(client);
+    if (!state_locked)
+    {
+        return false;
+    }
+    bool pre_finalized = client->store.block_len > 0u
+        && block_slot <= client->store.latest_finalized.slot;
+    lantern_client_unlock_state(client, state_locked);
+    return pre_finalized;
+}
+
 /* Request ID zero is the synchronous/untracked path used by local callers.
  * Network responses must still belong to the exact active request and root. */
 static bool block_response_request_context(
@@ -1284,13 +1299,35 @@ static int import_block_response_now(
     bool accepted = imported || block_response_was_accepted(client, block_root, &pending, &known);
     if (accepted)
     {
-        lantern_log_info(
+        if (known && !imported)
+        {
+            lantern_log_debug(
+                "backfill",
+                &meta,
+                "slot %" PRIu64 ", %s, response duplicate",
+                block->block.slot,
+                root_hex[0] ? root_hex : "0x0");
+        }
+        else
+        {
+            lantern_log_info(
+                "backfill",
+                &meta,
+                "slot %" PRIu64 ", %s, response %s",
+                block->block.slot,
+                root_hex[0] ? root_hex : "0x0",
+                imported ? "imported" : (pending ? "queued" : "accepted"));
+        }
+        return LANTERN_CLIENT_OK;
+    }
+    if (block_response_is_pre_finalized(client, block->block.slot))
+    {
+        lantern_log_debug(
             "backfill",
             &meta,
-            "slot %" PRIu64 ", %s, response %s",
+            "slot %" PRIu64 ", %s, response pre-finalized",
             block->block.slot,
-            root_hex[0] ? root_hex : "0x0",
-            imported ? "imported" : (pending ? "queued" : (known ? "duplicate" : "accepted")));
+            root_hex[0] ? root_hex : "0x0");
         return LANTERN_CLIENT_OK;
     }
 

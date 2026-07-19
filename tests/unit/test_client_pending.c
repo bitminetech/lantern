@@ -1803,8 +1803,8 @@ static int test_reqresp_block_response_accepts_missing_parent(void) {
             &block,
             "12D3KooWparent",
             0u)
-        == LANTERN_CLIENT_OK) {
-        fprintf(stderr, "reqresp accepted block at finalized floor\n");
+        != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "reqresp did not ignore block at finalized floor\n");
         rc = 1;
         goto cleanup;
     }
