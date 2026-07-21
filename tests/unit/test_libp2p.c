@@ -9,8 +9,10 @@
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static const uint8_t kHostSecret[32] = {
     0xb7, 0x1c, 0x71, 0xa6, 0x7e, 0x11, 0x77, 0xad,
@@ -18,6 +20,45 @@ static const uint8_t kHostSecret[32] = {
     0x17, 0xae, 0x16, 0xc6, 0x66, 0x8d, 0x31, 0x3e,
     0xac, 0x2f, 0x96, 0xdb, 0xcd, 0xa3, 0xf2, 0x91,
 };
+
+static const uint8_t kPeerSecret[32] = {
+    0x31, 0xb4, 0xc8, 0x67, 0x02, 0x89, 0x5e, 0x1d,
+    0xa6, 0x73, 0xf0, 0x42, 0x9b, 0xcd, 0x16, 0x75,
+    0xe8, 0x54, 0x2f, 0x90, 0x6a, 0x13, 0xdc, 0x48,
+    0x7f, 0x25, 0xb9, 0x01, 0x5c, 0xee, 0x3a, 0x64,
+};
+
+struct connection_event_counts {
+    int established;
+    int closed;
+};
+
+static void count_connection_events(
+    struct lantern_libp2p_host *network,
+    const libp2p_host_event_t *event,
+    void *user_data) {
+    (void)network;
+    struct connection_event_counts *counts = user_data;
+    if (!event || !counts) {
+        return;
+    }
+    if (event->type == LIBP2P_HOST_EVENT_CONN_ESTABLISHED) {
+        (void)__atomic_add_fetch(&counts->established, 1, __ATOMIC_RELAXED);
+    } else if (event->type == LIBP2P_HOST_EVENT_CONN_CLOSED) {
+        (void)__atomic_add_fetch(&counts->closed, 1, __ATOMIC_RELAXED);
+    }
+}
+
+static int wait_for_event_count(const int *count, int expected) {
+    const struct timespec pause = {.tv_sec = 0, .tv_nsec = 5000000};
+    for (size_t attempt = 0; attempt < 600u; ++attempt) {
+        if (__atomic_load_n(count, __ATOMIC_RELAXED) >= expected) {
+            return 0;
+        }
+        (void)nanosleep(&pause, NULL);
+    }
+    return -1;
+}
 
 static const char *kQuicOnlyEnr =
     "enr:-IW4QKbT-CoCAKBpbYNfzfFcPfYjkqHyH-5sFlVkaKlNEPN1M5M34vIYb8HyCg56m7-V13pKWZqH9ThdYtXjjavDrP4BgmlkgnY0"
@@ -257,6 +298,82 @@ static int peer_maintenance_uses_drive_schedule(void) {
     return client.peer_maintenance_next_us != 100u + (2u * interval_us);
 }
 
+static int graceful_stop_precedes_same_identity_restart(void) {
+    struct lantern_libp2p_host restarting;
+    struct lantern_libp2p_host peer;
+    struct connection_event_counts peer_events = {0};
+    const char *restarting_listen = "/ip4/127.0.0.1/udp/19310/quic-v1";
+    const char *peer_listen = "/ip4/127.0.0.1/udp/19311/quic-v1";
+    char peer_multiaddr[256];
+    char peer_text[LANTERN_LIBP2P_PEER_TEXT_MAX_BYTES];
+    struct lantern_peer_id peer_id;
+    int rc = 1;
+
+    lantern_libp2p_host_init(&restarting);
+    lantern_libp2p_host_init(&peer);
+    struct lantern_libp2p_config restarting_config = {
+        .listen_multiaddr = restarting_listen,
+        .secp256k1_secret = kHostSecret,
+        .secret_len = sizeof(kHostSecret),
+    };
+    struct lantern_libp2p_config peer_config = {
+        .listen_multiaddr = peer_listen,
+        .secp256k1_secret = kPeerSecret,
+        .secret_len = sizeof(kPeerSecret),
+    };
+
+    if (lantern_libp2p_host_prepare(&peer, &peer_config) != 0) {
+        fprintf(stderr, "failed to prepare persistent libp2p peer\n");
+        goto cleanup;
+    }
+    memset(&peer_id, 0, sizeof(peer_id));
+    memcpy(peer_id.bytes, peer.local_peer_id, peer.local_peer_id_len);
+    peer_id.len = peer.local_peer_id_len;
+    if (lantern_peer_id_to_text(&peer_id, peer_text, sizeof(peer_text)) < 0
+        || snprintf(
+               peer_multiaddr,
+               sizeof(peer_multiaddr),
+               "%s/p2p/%s",
+               peer_listen,
+               peer_text)
+            < 0
+        || lantern_libp2p_host_register_event_handler(
+               &peer,
+               count_connection_events,
+               &peer_events)
+            != 0
+        || lantern_libp2p_host_prepare(&restarting, &restarting_config) != 0
+        || lantern_libp2p_host_launch(&peer) != 0
+        || lantern_libp2p_host_launch(&restarting) != 0
+        || lantern_libp2p_host_dial_multiaddr(&restarting, peer_multiaddr) != 0
+        || wait_for_event_count(&peer_events.established, 1) != 0) {
+        fprintf(stderr, "failed to establish initial libp2p connection\n");
+        goto cleanup;
+    }
+
+    lantern_libp2p_host_stop(&restarting);
+    if (wait_for_event_count(&peer_events.closed, 1) != 0) {
+        fprintf(stderr, "peer did not observe graceful close before restart\n");
+        goto cleanup;
+    }
+
+    lantern_libp2p_host_reset(&restarting);
+    if (lantern_libp2p_host_prepare(&restarting, &restarting_config) != 0
+        || lantern_libp2p_host_launch(&restarting) != 0
+        || lantern_libp2p_host_dial_multiaddr(&restarting, peer_multiaddr) != 0
+        || wait_for_event_count(&peer_events.established, 2) != 0) {
+        fprintf(stderr, "same-identity libp2p restart did not reconnect\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_libp2p_host_reset(&restarting);
+    lantern_libp2p_host_reset(&peer);
+    return rc;
+}
+
 int main(void) {
     for (size_t i = 0; i < sizeof(kQuickstartGenesisEnrs) / sizeof(kQuickstartGenesisEnrs[0]); ++i) {
         if (validation_accepts_quickstart_enr(kQuickstartGenesisEnrs[i]) != 0) {
@@ -281,6 +398,10 @@ int main(void) {
     }
 
     if (peer_maintenance_uses_drive_schedule() != 0) {
+        return 1;
+    }
+
+    if (graceful_stop_precedes_same_identity_restart() != 0) {
         return 1;
     }
 
