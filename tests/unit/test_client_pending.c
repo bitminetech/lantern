@@ -1104,7 +1104,7 @@ cleanup:
     return rc;
 }
 
-static int test_sync_completion_uses_network_finalized_threshold(void)
+static int test_sync_completion_requires_resolved_head_and_finalized_threshold(void)
 {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
@@ -1195,12 +1195,12 @@ static int test_sync_completion_uses_network_finalized_threshold(void)
         goto cleanup;
     }
 
-    client.network_view.head.slot = local_head_slot + 1024u;
+    client.network_view.head.slot = local_head_slot;
     client.network_view.finalized.slot = client.state.latest_finalized.slot;
     client.sync_state = LANTERN_SYNC_STATE_SYNCING;
     lantern_client_update_sync_progress(&client, local_head_slot);
     if (client.sync_state != LANTERN_SYNC_STATE_SYNCED) {
-        fprintf(stderr, "sync should complete at network finalized threshold\n");
+        fprintf(stderr, "sync should complete once the network head and finality are resolved\n");
         goto cleanup;
     }
 
@@ -1216,6 +1216,121 @@ cleanup:
         pthread_mutex_destroy(&client.status_lock);
         client.status_lock_initialized = false;
     }
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_mixed_peer_heads_keep_network_target_stable(void)
+{
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot local_head;
+    LanternRoot peer_head;
+    LanternRoot competing_head;
+    LanternRoot higher_head;
+    LanternRoot lower_head;
+    const char *peer_a = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
+    const char *peer_b = "16Uiu2HAkutTMoTzDw1tCvSRtu6YoixJwS46S1ZFxW8hSx9fWHiPs";
+    int rc = 1;
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "sync_unknown_equal_slot_head",
+            &pub,
+            &secret,
+            NULL,
+            &local_head)
+        != 0) {
+        return 1;
+    }
+    if (enable_sync_test_peer(&client, peer_a) != 0
+        || set_sync_test_connected_peers(&client, peer_a, peer_b) != 0) {
+        fprintf(stderr, "failed to enable mixed-head sync test peers\n");
+        goto cleanup;
+    }
+
+    client_test_fill_root(&peer_head, 0x5du);
+    client_test_fill_root(&competing_head, 0x6du);
+    client_test_fill_root(&higher_head, 0x7du);
+    client_test_fill_root(&lower_head, 0x8du);
+    client.network_view.head = (LanternCheckpoint){
+        .root = local_head,
+        .slot = client.state.slot,
+    };
+    client.network_view.finalized = client.store.latest_finalized;
+    client.sync_state = LANTERN_SYNC_STATE_SYNCED;
+
+    LanternStatusMessage status = {
+        .head = {
+            .root = peer_head,
+            .slot = client.state.slot,
+        },
+        .finalized = client.store.latest_finalized,
+    };
+    uint64_t request_id_before = client.next_blocks_request_id;
+    if (reqresp_handle_status(&client, &status, peer_a) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "equal-slot peer status update failed\n");
+        goto cleanup;
+    }
+    if (client.next_blocks_request_id == request_id_before) {
+        fprintf(stderr, "unknown equal-slot peer head did not trigger blocks_by_root\n");
+        goto cleanup;
+    }
+    if (client.sync_state != LANTERN_SYNC_STATE_SYNCING) {
+        fprintf(stderr, "unknown equal-slot peer head should make sync incomplete\n");
+        goto cleanup;
+    }
+    if (!lantern_root_equal(&client.network_view.head.root, &peer_head)) {
+        fprintf(stderr, "unknown equal-slot peer head did not become the sync target\n");
+        goto cleanup;
+    }
+
+    status.head = (LanternCheckpoint){
+        .root = local_head,
+        .slot = client.state.slot,
+    };
+    if (reqresp_handle_status(&client, &status, peer_b) != LANTERN_CLIENT_OK
+        || !lantern_root_equal(&client.network_view.head.root, &peer_head)) {
+        fprintf(stderr, "known equal-slot peer head replaced the unresolved sync target\n");
+        goto cleanup;
+    }
+
+    status.head.root = competing_head;
+    request_id_before = client.next_blocks_request_id;
+    if (reqresp_handle_status(&client, &status, peer_b) != LANTERN_CLIENT_OK
+        || client.next_blocks_request_id == request_id_before
+        || !lantern_root_equal(&client.network_view.head.root, &peer_head)) {
+        fprintf(stderr, "competing equal-slot head changed the active unresolved target\n");
+        goto cleanup;
+    }
+
+    status.head = (LanternCheckpoint){
+        .root = higher_head,
+        .slot = client.state.slot + 2u,
+    };
+    if (reqresp_handle_status(&client, &status, peer_b) != LANTERN_CLIENT_OK
+        || !lantern_root_equal(&client.network_view.head.root, &higher_head)) {
+        fprintf(stderr, "higher peer head did not advance the active sync target\n");
+        goto cleanup;
+    }
+
+    status.head = (LanternCheckpoint){
+        .root = lower_head,
+        .slot = client.state.slot + 1u,
+    };
+    request_id_before = client.next_blocks_request_id;
+    if (reqresp_handle_status(&client, &status, peer_a) != LANTERN_CLIENT_OK
+        || client.next_blocks_request_id == request_id_before
+        || client.network_view.head.slot != client.state.slot + 2u
+        || !lantern_root_equal(&client.network_view.head.root, &higher_head)) {
+        fprintf(stderr, "lower unknown peer head regressed the active sync target\n");
+        goto cleanup;
+    }
+    rc = 0;
+
+cleanup:
+    disable_sync_test_peer(&client);
     client_test_teardown_vote_validation_client(&client, pub, secret);
     return rc;
 }
@@ -3426,7 +3541,10 @@ int main(void) {
     if (test_pending_block_queue_sync_drops_incoming() != 0) {
         return 1;
     }
-    if (test_sync_completion_uses_network_finalized_threshold() != 0) {
+    if (test_sync_completion_requires_resolved_head_and_finalized_threshold() != 0) {
+        return 1;
+    }
+    if (test_mixed_peer_heads_keep_network_target_stable() != 0) {
         return 1;
     }
     if (test_idle_status_triggers_syncing_before_gossip_backfill() != 0) {
