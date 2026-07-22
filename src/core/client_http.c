@@ -245,6 +245,17 @@ int metrics_snapshot_cb(void *context, struct lantern_metrics_snapshot *out_snap
     }
     lantern_client_unlock_state(client, state_locked);
 
+    LanternCheckpoint fork_justified;
+    LanternCheckpoint fork_finalized;
+    if (lantern_fork_choice_read_checkpoint_snapshot(
+            &client->store,
+            &fork_justified,
+            &fork_finalized))
+    {
+        state_justified = fork_justified;
+        state_finalized = fork_finalized;
+    }
+
     out_snapshot->lean_node_start_time_seconds = client->start_time_seconds;
     out_snapshot->lean_head_slot = have_fork_head ? fork_head_slot : state_head_slot;
     out_snapshot->lean_current_slot = current_slot;
