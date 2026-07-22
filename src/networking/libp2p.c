@@ -205,6 +205,12 @@ void lantern_libp2p_host_stop(struct lantern_libp2p_host *state) {
     }
     if (state->started) {
         (void)libp2p_host_close(state->host, 0);
+        (void)libp2p_host_drive(
+            state->host,
+            lantern_libp2p_now_us(),
+            LIBP2P_HOST_READY_APP,
+            NULL);
+        drain_host_events(state);
     }
     state->started = 0;
 }

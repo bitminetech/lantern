@@ -102,8 +102,8 @@ static void log_status_failure(
     bool first_failure);
 static void peer_status_local_view(
     struct lantern_client *client,
-    const LanternRoot *head_root,
-    uint64_t *out_local_slot,
+    const LanternCheckpoint *head,
+    LanternCheckpoint *out_local_head,
     uint64_t *out_local_finalized_slot,
     bool *out_head_known);
 static struct lantern_peer_status_entry *lantern_client_update_peer_status_entry_locked(
@@ -115,7 +115,8 @@ static void lantern_client_peer_status_update(
     struct lantern_client *client,
     const LanternStatusMessage *peer_status,
     const char *peer_id_text,
-    uint64_t local_slot);
+    const LanternCheckpoint *local_head,
+    bool head_known);
 static const char *lantern_blocks_request_outcome_text(enum lantern_blocks_request_outcome outcome);
 static void reqresp_alias_anchor_checkpoint_if_unset(
     struct lantern_client *client,
@@ -221,22 +222,23 @@ static void log_status_failure(
  * @brief Determine local slot and whether a head root is known.
  *
  * @param client         Client instance
- * @param head_root      Head root to check
- * @param out_local_slot Output local slot snapshot
+ * @param head           Head checkpoint to check
+ * @param out_local_head Output local head checkpoint snapshot
+ * @param out_local_finalized_slot Output local finalized slot snapshot
  * @param out_head_known Output true if head is known locally
  *
  * @note Thread safety: This function may acquire state_lock
  */
 static void peer_status_local_view(
     struct lantern_client *client,
-    const LanternRoot *head_root,
-    uint64_t *out_local_slot,
+    const LanternCheckpoint *head,
+    LanternCheckpoint *out_local_head,
     uint64_t *out_local_finalized_slot,
     bool *out_head_known)
 {
-    if (out_local_slot)
+    if (out_local_head)
     {
-        *out_local_slot = 0;
+        *out_local_head = (LanternCheckpoint){0};
     }
     if (out_local_finalized_slot)
     {
@@ -247,7 +249,7 @@ static void peer_status_local_view(
         *out_head_known = false;
     }
 
-    if (!client || !head_root || !out_local_slot || !out_local_finalized_slot || !out_head_known)
+    if (!client || !head || !out_local_head || !out_local_finalized_slot || !out_head_known)
     {
         return;
     }
@@ -258,7 +260,7 @@ static void peer_status_local_view(
         return;
     }
 
-    uint64_t local_slot = client->state.validator_count > 0u
+    out_local_head->slot = client->state.validator_count > 0u
         ? client->state.latest_block_header.slot
         : 0u;
     uint64_t local_finalized_slot = client->state.validator_count > 0u
@@ -275,7 +277,8 @@ static void peer_status_local_view(
                    NULL)
                 == 0)
         {
-            local_slot = fork_slot;
+            out_local_head->root = client->store.head;
+            out_local_head->slot = fork_slot;
         }
         const LanternCheckpoint *fork_finalized = &client->store.latest_finalized;
         if (fork_finalized && !lantern_root_is_zero(&fork_finalized->root))
@@ -283,10 +286,11 @@ static void peer_status_local_view(
             local_finalized_slot = fork_finalized->slot;
         }
     }
-    bool head_known = lantern_client_block_known_locked(client, head_root, NULL);
+    uint64_t known_head_slot = 0u;
+    bool head_known = lantern_client_block_known_locked(client, &head->root, &known_head_slot)
+        && known_head_slot == head->slot;
     lantern_client_unlock_state(client, state_locked);
 
-    *out_local_slot = local_slot;
     *out_local_finalized_slot = local_finalized_slot;
     *out_head_known = head_known;
 
@@ -321,13 +325,14 @@ static void maybe_seed_head_request_from_status(
     }
 
     const bool peer_finalized_ahead = peer_status->finalized.slot > local_finalized_slot;
-    const bool peer_head_ahead = peer_status->head.slot > local_head_slot;
-    if (!peer_finalized_ahead && !peer_head_ahead && !historical_backfill_active)
+    const bool peer_head_unresolved = !head_known
+        && peer_status->head.slot > local_finalized_slot;
+    if (!peer_finalized_ahead && !peer_head_unresolved && !historical_backfill_active)
     {
         return;
     }
 
-    if (!historical_backfill_active && peer_head_ahead)
+    if (!historical_backfill_active && peer_head_unresolved)
     {
         historical_backfill_active = lantern_client_ensure_historical_backfill(
             client,
@@ -375,7 +380,7 @@ static void maybe_seed_head_request_from_status(
         &(const struct lantern_log_metadata){
             .validator = client->node_id,
             .peer = peer_id_text},
-        "peer is ahead; requesting sync block root=%s peer_head_slot=%" PRIu64
+        "peer head unresolved; requesting sync block root=%s peer_head_slot=%" PRIu64
         " peer_finalized_slot=%" PRIu64 " local_head_slot=%" PRIu64 " local_finalized_slot=%" PRIu64,
         request_hex[0] ? request_hex : "0x0",
         peer_status->head.slot,
@@ -386,15 +391,27 @@ static void maybe_seed_head_request_from_status(
 
 static void update_network_view_from_peer_status_locked(
     struct lantern_client *client,
-    const LanternStatusMessage *peer_status)
+    const LanternStatusMessage *peer_status,
+    const LanternCheckpoint *local_head,
+    bool head_known)
 {
     if (!client || !peer_status)
     {
         return;
     }
 
+    /* Advance monotonically by slot. At the same slot, replace the local head
+     * once with an unresolved peer head, then keep that peer target stable. */
+    bool current_is_local_head = local_head
+        && !lantern_root_is_zero(&local_head->root)
+        && client->network_view.head.slot == local_head->slot
+        && lantern_root_equal(&client->network_view.head.root, &local_head->root);
+    bool equal_slot_recovery = !head_known
+        && peer_status->head.slot == client->network_view.head.slot
+        && current_is_local_head;
     if (lantern_root_is_zero(&client->network_view.head.root)
-        || peer_status->head.slot > client->network_view.head.slot)
+        || peer_status->head.slot > client->network_view.head.slot
+        || equal_slot_recovery)
     {
         client->network_view.head = peer_status->head;
     }
@@ -457,6 +474,7 @@ static void maybe_log_sync_progress(
     size_t orphan_count = 0;
     uint64_t local_head_slot = local_slot;
     uint64_t local_finalized_slot = 0;
+    bool network_head_known = false;
     char pending_peer[sizeof(((struct lantern_pending_block *)0)->peer_text)];
     pending_peer[0] = '\0';
     char orphan_peer[sizeof(((struct lantern_pending_block *)0)->peer_text)];
@@ -514,6 +532,13 @@ static void maybe_log_sync_progress(
                 local_head_slot = fork_slot;
             }
             local_finalized_slot = client->store.latest_finalized.slot;
+            uint64_t known_head_slot = 0u;
+            network_head_known = has_network_head
+                && lantern_client_block_known_locked(
+                    client,
+                    &network_view->head.root,
+                    &known_head_slot)
+                && known_head_slot == network_head_slot;
         }
         else if (state_locked && client->state.validator_count > 0u)
         {
@@ -538,7 +563,13 @@ static void maybe_log_sync_progress(
     bool behind_finalized = has_network_finalized && network_finalized > local_head_slot;
     bool finalized_caught_up =
         has_network_finalized && local_finalized_slot >= network_finalized;
-    bool synced = has_network_finalized && !behind_finalized && finalized_caught_up && !has_orphans;
+    bool head_resolved = has_network_head
+        && (network_head_slot <= local_finalized_slot || network_head_known);
+    bool synced = has_network_finalized
+        && !behind_finalized
+        && finalized_caught_up
+        && head_resolved
+        && !has_orphans;
     bool syncing = !synced;
 
     struct lantern_log_metadata meta = {.validator = client->node_id};
@@ -564,7 +595,7 @@ static void maybe_log_sync_progress(
                 &meta);
             return;
         }
-        lantern_client_set_sync_state_logged(client, LANTERN_SYNC_STATE_SYNCED, "head caught finalized");
+        lantern_client_set_sync_state_logged(client, LANTERN_SYNC_STATE_SYNCED, "head ancestry resolved");
         if (client->sync_started_ms != 0u)
         {
             uint64_t target_slot =
@@ -759,7 +790,7 @@ static struct lantern_peer_status_entry *lantern_client_update_peer_status_entry
  * @param client       Client instance
  * @param peer_status  Peer status message
  * @param peer_id_text Peer ID string for tracking/logging
- * @param local_slot   Local slot snapshot
+ * @param local_head   Local head checkpoint snapshot
  *
  * @note Thread safety: This function acquires status_lock
  */
@@ -767,9 +798,10 @@ static void lantern_client_peer_status_update(
     struct lantern_client *client,
     const LanternStatusMessage *peer_status,
     const char *peer_id_text,
-    uint64_t local_slot)
+    const LanternCheckpoint *local_head,
+    bool head_known)
 {
-    if (!client || !peer_status || !peer_id_text)
+    if (!client || !peer_status || !peer_id_text || !local_head)
     {
         return;
     }
@@ -789,14 +821,14 @@ static void lantern_client_peer_status_update(
         return;
     }
 
-    update_network_view_from_peer_status_locked(client, peer_status);
+    update_network_view_from_peer_status_locked(client, peer_status, local_head, head_known);
     LanternStatusMessage network_view = client->network_view;
 
     pthread_mutex_unlock(&client->status_lock);
 
     maybe_log_sync_progress(
         client,
-        local_slot,
+        local_head->slot,
         &network_view,
         true);
 }
@@ -1986,13 +2018,13 @@ static void lantern_client_on_peer_status(
     char peer_copy[sizeof(((struct lantern_peer_status_entry *)0)->peer_id)];
     (void)lantern_string_copy(peer_copy, sizeof(peer_copy), peer_id);
 
-    uint64_t local_slot = 0;
+    LanternCheckpoint local_head = {0};
     uint64_t local_finalized_slot = 0;
     bool head_known = false;
     peer_status_local_view(
         client,
-        &peer_status->head.root,
-        &local_slot,
+        &peer_status->head,
+        &local_head,
         &local_finalized_slot,
         &head_known);
 
@@ -2007,18 +2039,19 @@ static void lantern_client_on_peer_status(
         peer_status->head.slot,
         peer_status->finalized.slot,
         head_known ? "true" : "false",
-        local_slot);
+        local_head.slot);
 
     lantern_client_peer_status_update(
         client,
         peer_status,
         peer_copy,
-        local_slot);
+        &local_head,
+        head_known);
     maybe_seed_head_request_from_status(
         client,
         peer_status,
         peer_copy,
-        local_slot,
+        local_head.slot,
         local_finalized_slot,
         head_known);
 }

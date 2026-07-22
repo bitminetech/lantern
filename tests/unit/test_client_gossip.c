@@ -474,10 +474,26 @@ static int test_gossip_vote_metrics_attribute_sender(void)
         goto cleanup;
     }
 
+    LanternCheckpoint fork_justified;
+    LanternCheckpoint fork_finalized;
+    if (!lantern_fork_choice_read_checkpoint_snapshot(
+            &client.store,
+            &fork_justified,
+            &fork_finalized)) {
+        fprintf(stderr, "failed to read fork-choice checkpoints for metrics test\n");
+        goto cleanup;
+    }
+    client.state.latest_justified.slot = fork_justified.slot + 100u;
+    client.state.latest_finalized.slot = fork_finalized.slot + 100u;
+
     memset(&snapshot, 0, sizeof(snapshot));
     if (metrics_snapshot_cb(&client, &snapshot) != LANTERN_CLIENT_OK
         || snapshot.peer_vote_metrics_count != 1u
-        || snapshot.lean_gossip_mesh_peers != 3u) {
+        || snapshot.lean_gossip_mesh_peers != 3u
+        || snapshot.lean_latest_justified_slot != fork_justified.slot
+        || snapshot.lean_latest_finalized_slot != fork_finalized.slot
+        || snapshot.lean_justified_slot != fork_justified.slot
+        || snapshot.lean_finalized_slot != fork_finalized.slot) {
         fprintf(stderr, "gossip vote metrics snapshot missing sender entry\n");
         goto cleanup;
     }
