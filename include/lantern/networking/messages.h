@@ -60,5 +60,10 @@ int lantern_network_blocks_by_range_request_decode(
     LanternBlocksByRangeRequest *req,
     const uint8_t *data,
     size_t data_len);
+int lantern_network_blocks_by_range_request_encode(
+    const LanternBlocksByRangeRequest *req,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written);
 
 #endif /* LANTERN_NETWORKING_MESSAGES_H */

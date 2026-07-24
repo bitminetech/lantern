@@ -3396,7 +3396,7 @@ static int test_publish_attestations_gate_on_unresolved_network_head(void) {
 
     if (client_test_setup_vote_validation_client(
             &client,
-            "vote_publish_peer_status_ignored",
+            "vote_publish_network_head_gate",
             &pub,
             &secret,
             NULL,

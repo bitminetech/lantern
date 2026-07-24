@@ -354,13 +354,6 @@ static bool validator_duty_gate_allows(
     }
 
     LanternCheckpoint network_head = {0};
-    if (client->status_lock_initialized
-        && pthread_mutex_lock(&client->status_lock) == 0)
-    {
-        network_head = client->network_view.head;
-        pthread_mutex_unlock(&client->status_lock);
-    }
-
     uint64_t head_slot = 0u;
     uint64_t max_seen_slot = 0u;
     uint64_t finalized_slot = 0u;
@@ -371,6 +364,13 @@ static bool validator_duty_gate_allows(
     {
         validator_log_duty_skipped(client, slot, "duty_gate_state_lock_failed");
         return false;
+    }
+
+    if (client->status_lock_initialized
+        && pthread_mutex_lock(&client->status_lock) == 0)
+    {
+        network_head = client->network_view.head;
+        pthread_mutex_unlock(&client->status_lock);
     }
 
     if (client->store.block_len > 0u)
@@ -419,6 +419,7 @@ static bool validator_duty_gate_allows(
     {
         head_slot = client->state.slot;
         max_seen_slot = head_slot;
+        finalized_slot = client->state.latest_finalized.slot;
         have_head_slot = true;
     }
     lantern_client_unlock_state(client, state_locked);
