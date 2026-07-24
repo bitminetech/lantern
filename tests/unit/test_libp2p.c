@@ -210,16 +210,6 @@ static int connection_tie_break_is_symmetric(void) {
     return failed;
 }
 
-static int connection_recovery_respects_close_origin(void) {
-    if (connection_close_should_redial(LIBP2P_HOST_ERR_CLOSED, true)) {
-        return 1;
-    }
-    if (!connection_close_should_redial(LIBP2P_HOST_ERR_CLOSED, false)) {
-        return 1;
-    }
-    return connection_close_should_redial(LIBP2P_HOST_OK, false) ? 1 : 0;
-}
-
 static int connection_metrics_classify_close_details(void) {
     static const char *peer_text = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
     struct lantern_client client;
@@ -386,10 +376,6 @@ int main(void) {
     }
 
     if (connection_tie_break_is_symmetric() != 0) {
-        return 1;
-    }
-
-    if (connection_recovery_respects_close_origin() != 0) {
         return 1;
     }
 

@@ -500,6 +500,116 @@ static void test_blocks_by_root_timeout_completes_failure_once(void) {
     service.exchanges = NULL;
 }
 
+static void test_pre_open_blocks_timeout_completes_failure_once(void) {
+    struct test_blocks_context test_context = {0};
+    struct lantern_reqresp_service service = {0};
+    service.callbacks.context = &test_context;
+    service.callbacks.blocks_request_complete = test_blocks_request_complete;
+
+    struct lantern_reqresp_exchange *exchange = calloc(1u, sizeof(*exchange));
+    CHECK(exchange != NULL);
+    exchange->service = &service;
+    exchange->kind = LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE;
+    exchange->outbound = 1;
+    exchange->request_id = 4242u;
+    exchange_refresh_blocks_deadline(exchange, 100u);
+    service.exchanges = exchange;
+
+    libp2p_host_t host = {
+        .magic = HOST_MAGIC,
+        .state = HOST_STATE_STARTED,
+    };
+    libp2p_host_stream_open_t open = {
+        .host = &host,
+        .state = HOST_OPEN_EVENTED,
+        .user_data = exchange,
+    };
+    exchange->host = &host;
+    exchange->open = &open;
+
+    CHECK(exchange->stream == NULL);
+    CHECK(exchange->deadline_us == 100u + LANTERN_REQRESP_BLOCKS_REQUEST_TIMEOUT_US);
+
+    reqresp_drive(NULL, exchange->deadline_us - 1u, &service);
+    CHECK(test_context.complete_called == 0);
+
+    reqresp_drive(NULL, exchange->deadline_us, &service);
+    CHECK(test_context.complete_called == 1);
+    CHECK(test_context.complete_result == LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED);
+    CHECK(exchange->completed == 1);
+    CHECK(exchange->deadline_us == 0u);
+    CHECK(service.exchanges == exchange);
+
+    reqresp_drive(NULL, UINT64_MAX, &service);
+    CHECK(test_context.complete_called == 1);
+
+    libp2p_host_event_t event = {
+        .type = LIBP2P_HOST_EVENT_STREAM_OPEN_FAILED,
+        .user_data = exchange,
+        .reason = LIBP2P_HOST_ERR_CLOSED,
+    };
+    reqresp_host_event(NULL, &event, &service);
+    CHECK(service.exchanges == NULL);
+    CHECK(test_context.complete_called == 1);
+}
+
+static void test_pre_open_cancel_releases_host_attempt(void) {
+    struct test_blocks_context test_context = {0};
+    struct lantern_reqresp_service service = {0};
+    service.callbacks.context = &test_context;
+    service.callbacks.blocks_request_complete = test_blocks_request_complete;
+
+    struct lantern_reqresp_exchange *exchange = calloc(1u, sizeof(*exchange));
+    CHECK(exchange != NULL);
+    exchange->service = &service;
+    exchange->kind = LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE;
+    exchange->outbound = 1;
+    exchange->request_id = 4243u;
+    exchange_refresh_blocks_deadline(exchange, 100u);
+    service.exchanges = exchange;
+
+    struct test_transport transport = {
+        .read_result = LIBP2P_HOST_ERR_WOULD_BLOCK,
+    };
+    libp2p_host_t host;
+    libp2p_host_stream_t stream;
+    libp2p_host_stream_open_t open = {0};
+    init_test_host_stream(&host, &stream, &transport);
+    host.streams = &stream;
+    host.stream_capacity = 1u;
+    stream.state = HOST_STREAM_NEGOTIATING;
+    stream.open_attempt = &open;
+    open.host = &host;
+    open.state = HOST_OPEN_NEGOTIATING;
+    open.user_data = exchange;
+    exchange->host = &host;
+    exchange->open = &open;
+
+    CHECK(lantern_reqresp_service_cancel_blocks_by_range_for_test(&service, 4243u));
+    reqresp_drive(NULL, 100u, &service);
+    CHECK(service.exchanges == NULL);
+    CHECK(test_context.complete_called == 0);
+    CHECK(transport.reset_called == 1u);
+    CHECK(open.state == HOST_OPEN_FREE);
+    CHECK(stream.state == HOST_STREAM_FREE);
+}
+
+static void test_blocks_deadline_refresh_preserves_full_response_window(void) {
+    struct lantern_reqresp_service service = {0};
+    struct lantern_reqresp_exchange exchange = {
+        .service = &service,
+        .kind = LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE,
+        .outbound = 1,
+    };
+
+    exchange_refresh_blocks_deadline(&exchange, 100u);
+    CHECK(exchange.deadline_us == 100u + LANTERN_REQRESP_BLOCKS_REQUEST_TIMEOUT_US);
+    exchange_refresh_blocks_deadline(&exchange, 500u);
+    CHECK(exchange.deadline_us == 500u + LANTERN_REQRESP_BLOCKS_REQUEST_TIMEOUT_US);
+    exchange_refresh_blocks_deadline(&exchange, UINT64_MAX);
+    CHECK(exchange.deadline_us == UINT64_MAX);
+}
+
 static void test_blocks_by_range_timeout_distinguishes_received_data(void) {
     enum lantern_reqresp_blocks_request_result expected_results[] = {
         LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED,
@@ -893,6 +1003,9 @@ int main(void) {
     test_blocks_by_root_unrequested_block_fails_before_callback();
     test_blocks_by_root_empty_batch_is_reported();
     test_blocks_by_root_timeout_completes_failure_once();
+    test_pre_open_blocks_timeout_completes_failure_once();
+    test_pre_open_cancel_releases_host_attempt();
+    test_blocks_deadline_refresh_preserves_full_response_window();
     test_blocks_by_range_timeout_distinguishes_received_data();
     test_blocks_by_range_closed_read_completes_success();
     test_cancelled_range_does_not_timeout_or_complete();
