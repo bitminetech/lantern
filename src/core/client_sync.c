@@ -1699,6 +1699,7 @@ bool lantern_client_complete_range_request(
     }
 
     bool should_continue = false;
+    bool range_completed = false;
     if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS)
     {
         lantern_string_list_reset(&range->failed_peers);
@@ -1706,6 +1707,10 @@ bool lantern_client_complete_range_request(
         if (range->next_slot <= range->target_slot)
         {
             should_continue = true;
+        }
+        else
+        {
+            range_completed = true;
         }
     }
     else
@@ -1730,6 +1735,15 @@ bool lantern_client_complete_range_request(
     if (should_continue)
     {
         (void)lantern_client_schedule_next_range_request(client);
+    }
+    else if (range_completed)
+    {
+        /* Covering the requested slots does not prove that every pending
+         * branch connected to the imported ancestry. */
+        lantern_client_request_pending_parent_after_blocks(
+            client,
+            peer_text[0] ? peer_text : NULL,
+            NULL);
     }
     return true;
 }

@@ -2920,6 +2920,137 @@ cleanup:
     return rc;
 }
 
+static int test_terminal_range_recovery_requests_unresolved_parent(void)
+{
+    struct lantern_client client;
+    LanternSignedBlock orphan;
+    LanternRoot orphan_root;
+    LanternRoot parent_root;
+    const char *peer_id = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
+    int rc = 1;
+
+    memset(&client, 0, sizeof(client));
+    lantern_signed_block_init(&orphan);
+    client.node_id = "terminal_range_parent_recovery";
+    if (enable_sync_test_peer(&client, peer_id) != 0) {
+        goto cleanup;
+    }
+
+    orphan.block.slot = 25u;
+    client_test_fill_root(&orphan_root, 0x83u);
+    client_test_fill_root(&parent_root, 0x84u);
+    if (lantern_client_debug_enqueue_pending_block(
+            &client,
+            &orphan,
+            &orphan_root,
+            &parent_root,
+            peer_id)
+        != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "failed to enqueue passive range orphan\n");
+        goto cleanup;
+    }
+
+    client.range_sync.next_slot = 20u;
+    client.range_sync.target_slot = 24u;
+    client.range_sync.request_id = 90u;
+    client.range_sync.request_start_slot = 20u;
+    client.range_sync.request_count = 5u;
+    (void)snprintf(
+        client.range_sync.request_peer,
+        sizeof(client.range_sync.request_peer),
+        "%s",
+        peer_id);
+
+    uint64_t request_id_before = client.next_blocks_request_id;
+    if (!lantern_client_complete_range_request(
+            &client,
+            90u,
+            LANTERN_BLOCKS_REQUEST_SUCCESS)
+        || client.range_sync.next_slot != 25u
+        || client.range_sync.request_id != 0u
+        || client.next_blocks_request_id == request_id_before
+        || lantern_client_pending_block_count(&client) != 1u) {
+        fprintf(stderr, "terminal range completion abandoned unresolved parent recovery\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_signed_block_reset(&orphan);
+    disable_sync_test_peer(&client);
+    return rc;
+}
+
+static int test_import_completed_range_requests_unresolved_parent(void)
+{
+    struct lantern_client client;
+    LanternSignedBlock orphan;
+    LanternRoot orphan_root;
+    LanternRoot parent_root;
+    const char *peer_id = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
+    int rc = 1;
+
+    memset(&client, 0, sizeof(client));
+    lantern_signed_block_init(&orphan);
+    client.node_id = "import_completed_range_parent_recovery";
+    if (enable_sync_test_peer(&client, peer_id) != 0) {
+        goto cleanup;
+    }
+    if (pthread_mutex_lock(&client.status_lock) != 0) {
+        goto cleanup;
+    }
+    struct lantern_peer_status_entry *peer =
+        lantern_client_ensure_status_entry_locked(&client, peer_id);
+    pthread_mutex_unlock(&client.status_lock);
+    if (!peer) {
+        goto cleanup;
+    }
+
+    orphan.block.slot = 25u;
+    client_test_fill_root(&orphan_root, 0x85u);
+    client_test_fill_root(&parent_root, 0x86u);
+    if (lantern_client_debug_enqueue_pending_block(
+            &client,
+            &orphan,
+            &orphan_root,
+            &parent_root,
+            peer_id)
+        != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "failed to enqueue import-race range orphan\n");
+        goto cleanup;
+    }
+
+    client.range_sync.next_slot = 20u;
+    client.range_sync.target_slot = 24u;
+    client.range_sync.request_id = 91u;
+    client.range_sync.request_start_slot = 20u;
+    client.range_sync.request_count = 5u;
+    (void)snprintf(
+        client.range_sync.request_peer,
+        sizeof(client.range_sync.request_peer),
+        "%s",
+        peer_id);
+
+    uint64_t request_id_before = client.next_blocks_request_id;
+    lantern_client_update_sync_progress(&client, 24u);
+    if (client.range_sync.next_slot != 0u
+        || client.range_sync.target_slot != 0u
+        || client.range_sync.request_id != 0u
+        || client.next_blocks_request_id == request_id_before
+        || lantern_client_pending_block_count(&client) != 1u) {
+        fprintf(stderr, "import-completed range abandoned unresolved parent recovery\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_signed_block_reset(&orphan);
+    disable_sync_test_peer(&client);
+    return rc;
+}
+
 static int test_range_completion_rejects_exclusive_end_overflow(void)
 {
     struct lantern_client client;
@@ -3478,6 +3609,12 @@ int main(void) {
         return 1;
     }
     if (test_range_response_bounds_and_completion_progress() != 0) {
+        return 1;
+    }
+    if (test_terminal_range_recovery_requests_unresolved_parent() != 0) {
+        return 1;
+    }
+    if (test_import_completed_range_requests_unresolved_parent() != 0) {
         return 1;
     }
     if (test_range_completion_rejects_exclusive_end_overflow() != 0) {
