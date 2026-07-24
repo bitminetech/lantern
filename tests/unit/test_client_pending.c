@@ -2938,11 +2938,50 @@ static void set_range_request_for_test(
     client->range_sync.request_id = request_id;
     client->range_sync.request_start_slot = client->range_sync.next_slot;
     client->range_sync.request_count = count;
+    client->range_sync.request_next_slot = 0u;
     (void)snprintf(
         client->range_sync.request_peer,
         sizeof(client->range_sync.request_peer),
         "%s",
         peer_id);
+}
+
+static int test_partial_range_failure_preserves_received_progress(void)
+{
+    struct lantern_client client;
+    const char *peer_id = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
+    int rc = 1;
+
+    memset(&client, 0, sizeof(client));
+    client.node_id = "partial_range_progress";
+    if (enable_sync_test_peer(&client, peer_id) != 0)
+    {
+        goto cleanup;
+    }
+
+    client.range_sync.next_slot = 20u;
+    client.range_sync.target_slot = 30u;
+    set_range_request_for_test(&client, 100u, 8u, peer_id);
+    lantern_client_note_range_response(&client, 100u, 20u);
+    lantern_client_note_range_response(&client, 100u, 22u);
+
+    if (!lantern_client_complete_range_request(
+            &client,
+            100u,
+            LANTERN_BLOCKS_REQUEST_FAILED)
+        || client.range_sync.next_slot != 23u
+        || client.range_sync.request_id != 0u
+        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_id))
+    {
+        fprintf(stderr, "partial range failure discarded received progress\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    disable_sync_test_peer(&client);
+    return rc;
 }
 
 static int test_range_batch_size_adapts_and_locks_after_data_timeout(void)
@@ -3919,6 +3958,9 @@ int main(void) {
         return 1;
     }
     if (test_range_response_bounds_and_completion_progress() != 0) {
+        return 1;
+    }
+    if (test_partial_range_failure_preserves_received_progress() != 0) {
         return 1;
     }
     if (test_range_batch_size_adapts_and_locks_after_data_timeout() != 0) {

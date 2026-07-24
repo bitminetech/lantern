@@ -1624,6 +1624,7 @@ bool lantern_client_schedule_next_range_request(struct lantern_client *client)
     range->request_id = next_blocks_request_id_locked(client);
     range->request_start_slot = range->next_slot;
     range->request_count = count;
+    range->request_next_slot = 0u;
     (void)lantern_string_copy(
         range->request_peer,
         sizeof(range->request_peer),
@@ -1714,6 +1715,29 @@ void lantern_client_update_range_sync_target(
     (void)lantern_client_schedule_next_range_request(client);
 }
 
+void lantern_client_note_range_response(
+    struct lantern_client *client,
+    uint64_t request_id,
+    uint64_t block_slot)
+{
+    if (!client || request_id == 0u || block_slot == UINT64_MAX
+        || !client->status_lock_initialized
+        || pthread_mutex_lock(&client->status_lock) != 0)
+    {
+        return;
+    }
+
+    struct lantern_range_sync_state *range = &client->range_sync;
+    if (range->request_id == request_id
+        && block_slot >= range->request_start_slot
+        && block_slot - range->request_start_slot < range->request_count
+        && block_slot + 1u > range->request_next_slot)
+    {
+        range->request_next_slot = block_slot + 1u;
+    }
+    pthread_mutex_unlock(&client->status_lock);
+}
+
 bool lantern_client_complete_range_request(
     struct lantern_client *client,
     uint64_t request_id,
@@ -1734,11 +1758,13 @@ bool lantern_client_complete_range_request(
 
     uint64_t start_slot = range->request_start_slot;
     uint64_t count = range->request_count;
+    uint64_t request_next_slot = range->request_next_slot;
     char peer_text[PEER_TEXT_BUFFER_LEN];
     (void)lantern_string_copy(peer_text, sizeof(peer_text), range->request_peer);
     range->request_id = 0u;
     range->request_start_slot = 0u;
     range->request_count = 0u;
+    range->request_next_slot = 0u;
     range->request_peer[0] = '\0';
 
     if (count == 0u || start_slot > UINT64_MAX - count)
@@ -1769,8 +1795,20 @@ bool lantern_client_complete_range_request(
             range_batch_policy_timed_out_with_data(range);
         }
         range->peers_exhausted = false;
-        should_continue =
+        bool peer_recorded =
             lantern_string_list_append_unique(&range->failed_peers, peer_text) == 0;
+        if (request_next_slot > range->next_slot)
+        {
+            range->next_slot = request_next_slot;
+        }
+        if (range->next_slot <= range->target_slot)
+        {
+            should_continue = peer_recorded;
+        }
+        else
+        {
+            range_completed = true;
+        }
     }
     pthread_mutex_unlock(&client->status_lock);
 
