@@ -61,7 +61,8 @@ enum lantern_blocks_request_outcome
     LANTERN_BLOCKS_REQUEST_SUCCESS = 0,
     LANTERN_BLOCKS_REQUEST_FAILED = 1,
     LANTERN_BLOCKS_REQUEST_ABORTED = 2,
-    LANTERN_BLOCKS_REQUEST_EMPTY = 3
+    LANTERN_BLOCKS_REQUEST_EMPTY = 3,
+    LANTERN_BLOCKS_REQUEST_TIMED_OUT_WITH_DATA = 4
 };
 
 /** Peer status considered stale after this many milliseconds. */

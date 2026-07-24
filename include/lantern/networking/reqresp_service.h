@@ -40,6 +40,7 @@ enum lantern_reqresp_blocks_request_result {
     LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED = 0,
     LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS = 1,
     LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_EMPTY = 2,
+    LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_TIMED_OUT_WITH_DATA = 3,
 };
 
 struct lantern_log_metadata;
@@ -104,6 +105,9 @@ extern "C" {
 
 void lantern_reqresp_service_init(struct lantern_reqresp_service *service);
 void lantern_reqresp_service_reset(struct lantern_reqresp_service *service);
+bool lantern_reqresp_service_cancel_blocks_by_range(
+    struct lantern_reqresp_service *service,
+    uint64_t request_id);
 int lantern_reqresp_service_request_status(
     struct lantern_reqresp_service *service,
     const struct lantern_peer_id *peer_id,
@@ -114,6 +118,13 @@ int lantern_reqresp_service_request_blocks(
     const char *peer_id_text,
     const LanternRoot *roots,
     size_t root_count,
+    uint64_t request_id);
+int lantern_reqresp_service_request_blocks_by_range(
+    struct lantern_reqresp_service *service,
+    const struct lantern_peer_id *peer_id,
+    const char *peer_id_text,
+    uint64_t start_slot,
+    uint64_t count,
     uint64_t request_id);
 int lantern_reqresp_service_start(
     struct lantern_reqresp_service *service,

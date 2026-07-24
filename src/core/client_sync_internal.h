@@ -46,10 +46,11 @@ extern "C" {
  * Maximum parent depth for ancestor backfill requests.
  *
  * Keep this independent from the in-memory pending queue limit so a fresh
- * node can backfill deep historical ancestors without requiring a huge
+ * node can recover deep orphan ancestry without requiring a huge
  * pending list in RAM.
  */
 #define LANTERN_MAX_BACKFILL_DEPTH 65535u
+#define LANTERN_MAX_SYNC_RANGE_SLOTS (LANTERN_MAX_REQUEST_BLOCKS * 64u)
 #define LANTERN_BLOCK_FETCH_MAX_ATTEMPTS 10u
 #define LANTERN_BLOCK_FETCH_INITIAL_BACKOFF_US 5000u
 /* ============================================================================
@@ -59,7 +60,6 @@ extern "C" {
 struct lantern_block_fetch
 {
     LanternRoot root;
-    LanternRoot backfill_session_head;
     libp2p_host_time_us_t retry_at_us;
     uint32_t attempts;
     size_t failed_peer_count;
@@ -163,33 +163,6 @@ bool lantern_client_checkpoint_is_ancestor_locked(
     struct lantern_client *client,
     const LanternCheckpoint *ancestor,
     const LanternCheckpoint *descendant);
-
-bool lantern_client_ensure_historical_backfill(
-    struct lantern_client *client,
-    const char *peer_text,
-    const LanternRoot *head_root,
-    uint64_t head_slot,
-    uint64_t local_head_slot);
-
-bool lantern_client_historical_backfill_snapshot(
-    struct lantern_client *client,
-    LanternRoot *out_frontier_root,
-    LanternRoot *out_session_head);
-
-/** Consume a response tied to a historical session, including a stale response. */
-void lantern_client_handle_historical_backfill_block(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *root,
-    const char *peer_text,
-    const LanternRoot *session_head);
-
-bool lantern_client_backfill_should_drop_gossip(
-    struct lantern_client *client,
-    const LanternSignedBlock *block,
-    const LanternRoot *root,
-    const char *peer_text,
-    const char *context);
 
 void lantern_client_set_sync_state_logged(
     struct lantern_client *client,
@@ -658,7 +631,6 @@ void lantern_client_request_pending_parent_after_blocks(
  * @param peer_text   Preferred peer ID string (may be NULL)
  * @param roots       Block roots to request
  * @param root_count  Number of roots
- * @param backfill_session_head Historical session identity, or NULL for ordinary requests
  * @return true if scheduling succeeded, false otherwise
  *
  * @note Thread safety: Acquires status_lock
@@ -667,14 +639,28 @@ bool lantern_client_try_schedule_blocks_request_batch(
     struct lantern_client *client,
     const char *peer_text,
     const LanternRoot *roots,
-    size_t root_count,
-    const LanternRoot *backfill_session_head);
+    size_t root_count);
 
 bool lantern_client_complete_blocks_request(
     struct lantern_client *client,
     uint64_t request_id,
     enum lantern_blocks_request_outcome outcome,
     struct lantern_blocks_request_completion *out_completion);
+
+/** Start or extend range catch-up for a received-block gap or an ahead peer status. */
+void lantern_client_update_range_sync_target(
+    struct lantern_client *client,
+    uint64_t local_head_slot,
+    uint64_t target_slot);
+
+/** Schedule the next batch for an already-discovered range target. */
+bool lantern_client_schedule_next_range_request(struct lantern_client *client);
+
+/** Complete a tracked blocks-by-range request. */
+bool lantern_client_complete_range_request(
+    struct lantern_client *client,
+    uint64_t request_id,
+    enum lantern_blocks_request_outcome outcome);
 
 /** Drive root-scoped block fetch retries whose exponential backoff has elapsed. */
 void lantern_client_drive_block_fetch_retries(

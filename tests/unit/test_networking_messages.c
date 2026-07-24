@@ -526,6 +526,33 @@ static void test_blocks_by_root_request(void) {
     lantern_blocks_by_root_request_reset(&decoded);
 }
 
+static void test_blocks_by_range_request(void) {
+    LanternBlocksByRangeRequest request = {
+        .start_slot = UINT64_C(0x0102030405060708),
+        .count = 128u,
+    };
+    uint8_t encoded[2u * sizeof(uint64_t)];
+    size_t written = 0u;
+    CHECK(
+        lantern_network_blocks_by_range_request_encode(
+            &request,
+            encoded,
+            sizeof(encoded),
+            &written)
+        == 0);
+    CHECK(written == sizeof(encoded));
+
+    LanternBlocksByRangeRequest decoded = {0};
+    CHECK(
+        lantern_network_blocks_by_range_request_decode(
+            &decoded,
+            encoded,
+            written)
+        == 0);
+    CHECK(decoded.start_slot == request.start_slot);
+    CHECK(decoded.count == request.count);
+}
+
 static void test_gossip_helpers(void) {
     char topic[128];
     char digest_hex[LANTERN_GOSSIP_FORK_DIGEST_HEX_LEN + 1u];
@@ -863,6 +890,7 @@ int main(void) {
     test_status_message();
     test_status_decode_rejects_truncated_payloads();
     test_blocks_by_root_request();
+    test_blocks_by_range_request();
     test_gossip_signed_vote_payload();
     test_gossip_signed_block_payload();
     test_gossip_signed_block_accepts_future_attestation_slot();
