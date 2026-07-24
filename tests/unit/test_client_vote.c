@@ -3382,7 +3382,7 @@ cleanup:
     return rc;
 }
 
-static int test_publish_attestations_allow_unresolved_unfinalized_network_head(void) {
+static int test_publish_attestations_gate_on_unresolved_network_head(void) {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
     struct PQSignatureSchemeSecretKey *secret = NULL;
@@ -3396,7 +3396,7 @@ static int test_publish_attestations_allow_unresolved_unfinalized_network_head(v
 
     if (client_test_setup_vote_validation_client(
             &client,
-            "vote_publish_peer_status_ignored",
+            "vote_publish_network_head_gate",
             &pub,
             &secret,
             NULL,
@@ -3470,10 +3470,20 @@ static int test_publish_attestations_allow_unresolved_unfinalized_network_head(v
     client_test_fill_root(&client.network_view.head.root, 0xcdu);
 
     uint64_t unresolved_slot = mismatched_slot + 1u;
+    if (validator_publish_attestations(&client, unresolved_slot)
+            != LANTERN_CLIENT_ERR_RUNTIME
+        || capture.calls != 0u) {
+        fprintf(stderr, "unresolved network head should block validator attestation\n");
+        goto cleanup;
+    }
+
+    client.network_view.head = (LanternCheckpoint){
+        .root = client.store.head,
+        .slot = client.state.slot,
+    };
     if (validator_publish_attestations(&client, unresolved_slot) != LANTERN_CLIENT_OK
-        || capture.calls != 1u
-        || client.validator_duty.duty_gate_closed) {
-        fprintf(stderr, "unresolved unfinalized head should not close validator duties\n");
+        || capture.calls != 1u) {
+        fprintf(stderr, "resolved network head should reopen validator attestation\n");
         goto cleanup;
     }
 
@@ -4112,7 +4122,7 @@ int main(void) {
     if (test_publish_attestations_includes_proposer() != 0) {
         return 1;
     }
-    if (test_publish_attestations_allow_unresolved_unfinalized_network_head() != 0) {
+    if (test_publish_attestations_gate_on_unresolved_network_head() != 0) {
         return 1;
     }
     if (test_validator_duties_ignore_binary_sync_state() != 0) {

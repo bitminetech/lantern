@@ -353,14 +353,24 @@ static bool validator_duty_gate_allows(
         return false;
     }
 
+    LanternCheckpoint network_head = {0};
     uint64_t head_slot = 0u;
     uint64_t max_seen_slot = 0u;
+    uint64_t finalized_slot = 0u;
     bool have_head_slot = false;
+    bool network_head_known = false;
     bool state_locked = lantern_client_lock_state(client);
     if (!state_locked)
     {
         validator_log_duty_skipped(client, slot, "duty_gate_state_lock_failed");
         return false;
+    }
+
+    if (client->status_lock_initialized
+        && pthread_mutex_lock(&client->status_lock) == 0)
+    {
+        network_head = client->network_view.head;
+        pthread_mutex_unlock(&client->status_lock);
     }
 
     if (client->store.block_len > 0u)
@@ -373,6 +383,7 @@ static bool validator_duty_gate_allows(
             return false;
         }
         head_root = client->store.head;
+        finalized_slot = client->store.latest_finalized.slot;
         if (lantern_fork_choice_block_info(
                    &client->store,
                    &head_root,
@@ -396,14 +407,30 @@ static bool validator_duty_gate_allows(
                 }
             }
         }
+        uint64_t known_network_head_slot = 0u;
+        network_head_known = !lantern_root_is_zero(&network_head.root)
+            && lantern_client_block_known_locked(
+                client,
+                &network_head.root,
+                &known_network_head_slot)
+            && known_network_head_slot == network_head.slot;
     }
     else if (client->state.validator_count > 0u)
     {
         head_slot = client->state.slot;
         max_seen_slot = head_slot;
+        finalized_slot = client->state.latest_finalized.slot;
         have_head_slot = true;
     }
     lantern_client_unlock_state(client, state_locked);
+
+    if (!lantern_root_is_zero(&network_head.root)
+        && network_head.slot > finalized_slot
+        && !network_head_known)
+    {
+        validator_log_duty_skipped(client, slot, "network_head_unresolved");
+        return false;
+    }
 
     if (!have_head_slot)
     {

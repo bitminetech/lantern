@@ -328,6 +328,8 @@ static void maybe_log_sync_progress(
     size_t pending = 0;
     bool has_orphans = false;
     uint64_t local_head_slot = local_slot;
+    uint64_t local_finalized_slot = 0u;
+    bool network_head_known = false;
     {
         bool state_locked = lantern_client_lock_state(client);
         bool pending_locked = lantern_client_lock_pending(client);
@@ -373,6 +375,18 @@ static void maybe_log_sync_progress(
             {
                 local_head_slot = fork_slot;
             }
+            local_finalized_slot = client->store.latest_finalized.slot;
+            uint64_t known_head_slot = 0u;
+            network_head_known = has_network_head
+                && lantern_client_block_known_locked(
+                    client,
+                    &network_view->head.root,
+                    &known_head_slot)
+                && known_head_slot == network_head_slot;
+        }
+        else if (state_locked && client->state.validator_count > 0u)
+        {
+            local_finalized_slot = client->state.latest_finalized.slot;
         }
         lantern_client_unlock_pending(client, pending_locked);
         lantern_client_unlock_state(client, state_locked);
@@ -390,8 +404,11 @@ static void maybe_log_sync_progress(
     }
 
     bool behind_finalized = has_network_finalized && network_finalized > local_head_slot;
+    bool head_resolved = has_network_head
+        && (network_head_slot <= local_finalized_slot || network_head_known);
     bool synced = has_network_finalized
         && !behind_finalized
+        && head_resolved
         && !has_orphans;
     bool syncing = !synced;
 
@@ -765,9 +782,8 @@ static void reqresp_alias_anchor_checkpoint_if_unset(
  *
  * @spec subspecs/networking/reqresp/message.py - Status protocol
  *
- * Processes a peer's status message, updates peer tracking, and records
- * sync progress. Block requests are driven by received blocks with missing
- * ancestry, not by ordinary differences between peer and local heads.
+ * Processes a peer's status message, updates peer tracking, records sync
+ * progress, and starts range recovery when the peer head is ahead.
  *
  * @param context      Client instance
  * @param peer_status  Status message from peer
@@ -1748,9 +1764,9 @@ void reqresp_blocks_request_complete(
  *
  * @spec subspecs/forkchoice/store.py - Sync decision logic
  *
- * Updates peer status tracking and sync progress based on the received
- * status message. Status is peer knowledge, not proof that local block
- * ancestry is missing, so it does not create new synchronization work.
+ * Updates peer status tracking and sync progress. An ahead peer head starts
+ * range catch-up through reqresp so gossip loss cannot strand the local node
+ * on a stale branch.
  *
  * @param client       Client instance
  * @param peer_status  Status message from peer
@@ -1806,7 +1822,13 @@ static void lantern_client_on_peer_status(
         peer_copy,
         &local_head,
         head_known);
-    (void)lantern_client_schedule_next_range_request(client);
+    if (peer_status->head.slot > local_head.slot)
+    {
+        lantern_client_update_range_sync_target(
+            client,
+            local_head.slot,
+            peer_status->head.slot);
+    }
 }
 
 

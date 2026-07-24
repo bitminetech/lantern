@@ -647,13 +647,13 @@ bool lantern_client_complete_blocks_request(
     enum lantern_blocks_request_outcome outcome,
     struct lantern_blocks_request_completion *out_completion);
 
-/** Start or extend range catch-up for a gap discovered from a received block. */
+/** Start or extend range catch-up for a received-block gap or an ahead peer status. */
 void lantern_client_update_range_sync_target(
     struct lantern_client *client,
     uint64_t local_head_slot,
     uint64_t target_slot);
 
-/** Schedule the next batch for an already-discovered range gap. */
+/** Schedule the next batch for an already-discovered range target. */
 bool lantern_client_schedule_next_range_request(struct lantern_client *client);
 
 /** Complete a tracked blocks-by-range request. */
