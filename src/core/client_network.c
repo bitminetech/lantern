@@ -843,92 +843,6 @@ void identify_dial_multiaddr(
 }
 
 
-/**
- * Attempt to redial a disconnected genesis peer.
- *
- * @param client  Client instance
- * @param peer    Peer ID to redial
- *
- * @note Thread safety: This function acquires connection_lock
- */
-void redial_peer(struct lantern_client *client, const struct lantern_peer_id *peer)
-{
-    if (!client || !client->network.host || !peer)
-    {
-        return;
-    }
-
-    const struct lantern_enr_record_list *enrs = &client->genesis.enrs;
-    if (!enrs || enrs->count == 0)
-    {
-        return;
-    }
-
-    char peer_text[128];
-    format_peer_id_text(peer, peer_text, sizeof(peer_text));
-
-    /* Check if we're still connected to this peer (e.g., via another connection).
-     * If so, skip the redial to avoid creating duplicate connections. */
-    if (peer_text[0] && lantern_client_is_peer_connected(client, peer_text))
-    {
-        lantern_log_debug(
-            "network",
-            &(const struct lantern_log_metadata){
-                .validator = client->node_id,
-                .peer = peer_text,
-            },
-            "peer still connected via another connection, skipping redial");
-        return;
-    }
-
-    /* Search for the peer in genesis ENRs */
-    for (size_t idx = 0; idx < enrs->count; ++idx)
-    {
-        const struct lantern_enr_record *record = &enrs->records[idx];
-        if (!record || !record->encoded)
-        {
-            continue;
-        }
-
-        char multiaddr[256];
-        struct lantern_peer_id enr_peer_id;
-        if (lantern_libp2p_enr_to_multiaddr(
-                record,
-                multiaddr,
-                sizeof(multiaddr),
-                &enr_peer_id) != 0)
-        {
-            continue;
-        }
-
-        if (lantern_peer_id_equal(peer, &enr_peer_id))
-        {
-            /* Found matching peer in genesis, redial */
-            lantern_log_info(
-                "network",
-                &(const struct lantern_log_metadata){
-                    .validator = client->node_id,
-                    .peer = peer_text[0] ? peer_text : NULL,
-                },
-                "redialing peer addr=%s",
-                multiaddr);
-
-            (void)lantern_libp2p_host_dial_multiaddr(&client->network, multiaddr);
-            identify_dial_multiaddr(client, multiaddr, peer_text[0] ? peer_text : record->encoded);
-            return;
-        }
-    }
-
-    /* Peer not found in genesis ENRs - cannot redial */
-    lantern_log_trace(
-        "network",
-        &(const struct lantern_log_metadata){
-            .validator = client->node_id,
-            .peer = peer_text[0] ? peer_text : NULL,
-        },
-        "peer not in genesis ENRs, skipping redial");
-}
-
 /* ============================================================================
  * Peer Dialer Helpers
  * ============================================================================ */
@@ -1368,18 +1282,7 @@ static void handle_connection_closed_event(
             app_error_code,
             transport_error_code);
     }
-
-    if (connection_close_should_redial(reason, locally_initiated))
-    {
-        redial_peer(client, peer);
-    }
 }
-
-bool connection_close_should_redial(int reason, bool locally_initiated)
-{
-    return !locally_initiated && reason != LIBP2P_HOST_OK;
-}
-
 
 /**
  * Handle outgoing connection error events.
