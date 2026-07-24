@@ -1697,11 +1697,19 @@ int reqresp_handle_block_response(
         {
             return LANTERN_CLIENT_ERR_RUNTIME;
         }
-        return import_block_response_now(
+        int rc = import_block_response_now(
             client,
             block,
             &block_root,
             peer_id);
+        if (rc == LANTERN_CLIENT_OK)
+        {
+            lantern_client_note_range_response(
+                client,
+                request_id,
+                block->block.slot);
+        }
+        return rc;
     }
 
     struct lantern_async_block_import_job *job = calloc(1u, sizeof(*job));
@@ -1718,6 +1726,10 @@ int reqresp_handle_block_response(
     }
     if (enqueue_block_import_job(client, job) == 0)
     {
+        lantern_client_note_range_response(
+            client,
+            request_id,
+            block->block.slot);
         return LANTERN_CLIENT_OK;
     }
     block_import_job_free(job);
