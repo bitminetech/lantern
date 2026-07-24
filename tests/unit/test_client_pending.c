@@ -1098,7 +1098,7 @@ cleanup:
     return rc;
 }
 
-static int test_sync_completion_requires_resolved_head_and_finalized_threshold(void)
+static int test_sync_completion_requires_finalized_threshold_and_no_orphans(void)
 {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
@@ -1164,37 +1164,27 @@ static int test_sync_completion_requires_resolved_head_and_finalized_threshold(v
     }
     lantern_block_body_reset(&pending_block.block.body);
 
-    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
+    client.sync_state = LANTERN_SYNC_STATE_SYNCED;
     lantern_client_update_sync_progress(&client, local_head_slot);
-    if (client.sync_state == LANTERN_SYNC_STATE_SYNCED) {
-        fprintf(stderr, "sync should not complete while orphan parents are pending\n");
+    if (client.sync_state != LANTERN_SYNC_STATE_SYNCING) {
+        fprintf(stderr, "unresolved orphan ancestry should make the client syncing\n");
         goto cleanup;
     }
 
     lantern_client_debug_pending_reset(&client);
     client.network_view.finalized.slot = local_head_slot + 1u;
-    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
+    client.sync_state = LANTERN_SYNC_STATE_SYNCED;
     lantern_client_update_sync_progress(&client, local_head_slot);
-    if (client.sync_state == LANTERN_SYNC_STATE_SYNCED) {
-        fprintf(stderr, "sync should not complete below network finalized slot\n");
+    if (client.sync_state != LANTERN_SYNC_STATE_SYNCING) {
+        fprintf(stderr, "network finalized lag should make the client syncing\n");
         goto cleanup;
     }
 
-    client.network_view.head.slot = local_head_slot + 1024u;
-    client.network_view.finalized.slot = local_head_slot + 1u;
-    client.sync_state = LANTERN_SYNC_STATE_SYNCING;
-    lantern_client_update_sync_progress(&client, local_head_slot + 1024u);
-    if (client.sync_state == LANTERN_SYNC_STATE_SYNCED) {
-        fprintf(stderr, "sync should not complete from high local head with stale finality\n");
-        goto cleanup;
-    }
-
-    client.network_view.head.slot = local_head_slot;
     client.network_view.finalized.slot = client.state.latest_finalized.slot;
     client.sync_state = LANTERN_SYNC_STATE_SYNCING;
     lantern_client_update_sync_progress(&client, local_head_slot);
     if (client.sync_state != LANTERN_SYNC_STATE_SYNCED) {
-        fprintf(stderr, "sync should complete once the network head and finality are resolved\n");
+        fprintf(stderr, "unknown unfinalized head should not block sync completion\n");
         goto cleanup;
     }
 
@@ -1273,8 +1263,8 @@ static int test_mixed_peer_heads_keep_network_target_stable(void)
         fprintf(stderr, "equal-slot status incorrectly triggered blocks_by_root\n");
         goto cleanup;
     }
-    if (client.sync_state != LANTERN_SYNC_STATE_SYNCING) {
-        fprintf(stderr, "unknown equal-slot peer head should make sync incomplete\n");
+    if (client.sync_state != LANTERN_SYNC_STATE_SYNCED) {
+        fprintf(stderr, "unknown equal-slot peer head should not change sync state\n");
         goto cleanup;
     }
     if (!lantern_root_equal(&client.network_view.head.root, &peer_head)) {
@@ -1313,8 +1303,9 @@ static int test_mixed_peer_heads_keep_network_target_stable(void)
         || !lantern_root_equal(&client.network_view.head.root, &higher_head)
         || client.range_sync.next_slot != client.state.slot + 1u
         || client.range_sync.target_slot != client.state.slot + 2u
+        || client.sync_state != LANTERN_SYNC_STATE_SYNCED
         || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_b)) {
-        fprintf(stderr, "higher peer head did not start forward range catch-up\n");
+        fprintf(stderr, "higher peer head did not start catch-up while staying synced\n");
         goto cleanup;
     }
 
@@ -1689,6 +1680,24 @@ static int test_imported_blocks_update_sync_network_view(void)
         fprintf(stderr, "failed to build second network view block\n");
         goto cleanup;
     }
+    const uint64_t obsolete_request_id = 91u;
+    fixture.client.range_sync.next_slot = second_block.block.slot;
+    fixture.client.range_sync.target_slot = second_block.block.slot;
+    fixture.client.range_sync.request_id = obsolete_request_id;
+    fixture.client.range_sync.request_start_slot = second_block.block.slot;
+    fixture.client.range_sync.request_count = 1u;
+    (void)snprintf(
+        fixture.client.range_sync.request_peer,
+        sizeof(fixture.client.range_sync.request_peer),
+        "%s",
+        "12D3KooWview");
+    if (lantern_string_list_append_unique(
+            &fixture.client.range_sync.failed_peers,
+            "12D3KooWfailed")
+        != 0) {
+        fprintf(stderr, "failed to seed obsolete range peer state\n");
+        goto cleanup;
+    }
     if (lantern_client_debug_import_block(&fixture.client, &second_block, &second_root, "12D3KooWview") != 1) {
         fprintf(stderr, "failed to import second network view block\n");
         goto cleanup;
@@ -1701,10 +1710,31 @@ static int test_imported_blocks_update_sync_network_view(void)
         fprintf(stderr, "newer imported block should still not seed network finalized\n");
         goto cleanup;
     }
+    if (fixture.client.range_sync.next_slot != 0u
+        || fixture.client.range_sync.target_slot != 0u
+        || fixture.client.range_sync.request_id != 0u
+        || fixture.client.range_sync.request_start_slot != 0u
+        || fixture.client.range_sync.request_count != 0u
+        || fixture.client.range_sync.request_peer[0] != '\0'
+        || fixture.client.range_sync.failed_peers.len != 0u) {
+        fprintf(stderr, "imported catch-up block did not retire reached range state\n");
+        goto cleanup;
+    }
+    reqresp_blocks_request_complete(
+        &fixture.client,
+        obsolete_request_id,
+        LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED);
+    if (fixture.client.range_sync.target_slot != 0u
+        || fixture.client.range_sync.request_id != 0u
+        || fixture.client.range_sync.failed_peers.len != 0u) {
+        fprintf(stderr, "stale range completion revived retired range state\n");
+        goto cleanup;
+    }
 
     rc = 0;
 
 cleanup:
+    lantern_string_list_reset(&fixture.client.range_sync.failed_peers);
     lantern_signed_block_reset(&second_block);
     lantern_signed_block_reset(&first_block);
     if (fixture.client.status_lock_initialized) {
@@ -3287,7 +3317,7 @@ int main(void) {
     if (test_pending_block_queue_sync_drops_incoming() != 0) {
         return 1;
     }
-    if (test_sync_completion_requires_resolved_head_and_finalized_threshold() != 0) {
+    if (test_sync_completion_requires_finalized_threshold_and_no_orphans() != 0) {
         return 1;
     }
     if (test_mixed_peer_heads_keep_network_target_stable() != 0) {

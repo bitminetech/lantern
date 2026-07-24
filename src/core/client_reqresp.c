@@ -328,8 +328,6 @@ static void maybe_log_sync_progress(
     size_t pending = 0;
     bool has_orphans = false;
     uint64_t local_head_slot = local_slot;
-    uint64_t local_finalized_slot = 0;
-    bool network_head_known = false;
     {
         bool state_locked = lantern_client_lock_state(client);
         bool pending_locked = lantern_client_lock_pending(client);
@@ -375,18 +373,6 @@ static void maybe_log_sync_progress(
             {
                 local_head_slot = fork_slot;
             }
-            local_finalized_slot = client->store.latest_finalized.slot;
-            uint64_t known_head_slot = 0u;
-            network_head_known = has_network_head
-                && lantern_client_block_known_locked(
-                    client,
-                    &network_view->head.root,
-                    &known_head_slot)
-                && known_head_slot == network_head_slot;
-        }
-        else if (state_locked && client->state.validator_count > 0u)
-        {
-            local_finalized_slot = client->state.latest_finalized.slot;
         }
         lantern_client_unlock_pending(client, pending_locked);
         lantern_client_unlock_state(client, state_locked);
@@ -404,14 +390,8 @@ static void maybe_log_sync_progress(
     }
 
     bool behind_finalized = has_network_finalized && network_finalized > local_head_slot;
-    bool finalized_caught_up =
-        has_network_finalized && local_finalized_slot >= network_finalized;
-    bool head_resolved = has_network_head
-        && (network_head_slot <= local_finalized_slot || network_head_known);
     bool synced = has_network_finalized
         && !behind_finalized
-        && finalized_caught_up
-        && head_resolved
         && !has_orphans;
     bool syncing = !synced;
 
@@ -424,7 +404,7 @@ static void maybe_log_sync_progress(
         {
             return;
         }
-        lantern_client_set_sync_state_logged(client, LANTERN_SYNC_STATE_SYNCED, "head ancestry resolved");
+        lantern_client_set_sync_state_logged(client, LANTERN_SYNC_STATE_SYNCED, "network finality reached");
         if (client->sync_started_ms != 0u)
         {
             uint64_t target_slot =
@@ -525,6 +505,12 @@ void lantern_client_update_sync_progress(
         return;
     }
 
+    struct lantern_range_sync_state *range = &client->range_sync;
+    if (range->target_slot != 0u && local_slot >= range->target_slot)
+    {
+        lantern_string_list_reset(&range->failed_peers);
+        *range = (struct lantern_range_sync_state){0};
+    }
     LanternStatusMessage network_view = client->network_view;
 
     pthread_mutex_unlock(&client->status_lock);
