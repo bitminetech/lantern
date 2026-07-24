@@ -579,7 +579,7 @@ static void test_cancelled_range_does_not_timeout_or_complete(void) {
     service.exchanges = NULL;
 }
 
-static void test_blocks_by_range_accepts_sparse_and_clean_empty(void) {
+static void test_blocks_by_range_accepts_sparse_and_reports_clean_empty(void) {
     LanternSignedBlock blocks[2];
     make_block(&blocks[0], 40u, 0x80u);
     make_block(&blocks[1], 42u, 0x90u);
@@ -608,7 +608,7 @@ static void test_blocks_by_range_accepts_sparse_and_clean_empty(void) {
 
     handled_count = 0u;
     complete_called = 0;
-    complete_result = LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS;
+    complete_result = LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED;
     CHECK(
         run_blocks_exchange(
             LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE,
@@ -625,7 +625,7 @@ static void test_blocks_by_range_accepts_sparse_and_clean_empty(void) {
         == 0);
     CHECK(handled_count == 0u);
     CHECK(complete_called == 1);
-    CHECK(complete_result == LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS);
+    CHECK(complete_result == LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_EMPTY);
 
     handled_count = 0u;
     complete_called = 0;
@@ -827,7 +827,7 @@ int main(void) {
     test_blocks_by_root_timeout_completes_failure_once();
     test_blocks_by_range_closed_read_completes_success();
     test_cancelled_range_does_not_timeout_or_complete();
-    test_blocks_by_range_accepts_sparse_and_clean_empty();
+    test_blocks_by_range_accepts_sparse_and_reports_clean_empty();
     test_blocks_by_range_rejects_slot_below_start();
     test_blocks_by_range_rejects_slot_at_exclusive_end();
     test_blocks_by_range_rejects_duplicate_slot();

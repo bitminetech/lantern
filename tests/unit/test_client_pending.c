@@ -2929,6 +2929,126 @@ cleanup:
     return rc;
 }
 
+static int test_empty_range_rotates_peers_and_waits_for_status_refresh(void)
+{
+    struct lantern_client client;
+    const char *peer_a = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
+    const char *peer_b = "16Uiu2HAkutTMoTzDw1tCvSRtu6YoixJwS46S1ZFxW8hSx9fWHiPs";
+    LanternRoot peer_head;
+    int rc = 1;
+
+    memset(&client, 0, sizeof(client));
+    client.node_id = "empty_range_rotation";
+    client_test_fill_root(&peer_head, 0x87u);
+    if (enable_sync_test_peer(&client, peer_a) != 0
+        || set_sync_test_connected_peers(&client, peer_a, peer_b) != 0)
+    {
+        goto cleanup;
+    }
+
+    if (pthread_mutex_lock(&client.status_lock) != 0)
+    {
+        goto cleanup;
+    }
+    struct lantern_peer_status_entry *status_a =
+        lantern_client_ensure_status_entry_locked(&client, peer_a);
+    struct lantern_peer_status_entry *status_b =
+        lantern_client_ensure_status_entry_locked(&client, peer_b);
+    status_a = lantern_client_find_status_entry_locked(&client, peer_a);
+    status_b = lantern_client_find_status_entry_locked(&client, peer_b);
+    if (status_a && status_b)
+    {
+        status_a->status.head = (LanternCheckpoint){
+            .root = peer_head,
+            .slot = 24u,
+        };
+        status_b->status = status_a->status;
+        status_a->last_status_ms = 1u;
+        status_b->last_status_ms = 1u;
+    }
+    pthread_mutex_unlock(&client.status_lock);
+    if (!status_a || !status_b)
+    {
+        goto cleanup;
+    }
+
+    client.range_sync.next_slot = 20u;
+    client.range_sync.target_slot = 24u;
+    client.next_blocks_request_id = 1u;
+    if (lantern_string_list_append_unique(
+            &client.range_sync.failed_peers,
+            peer_a)
+        != 0)
+    {
+        goto cleanup;
+    }
+    uint64_t request_id_before = client.next_blocks_request_id;
+    LanternStatusMessage refreshed = status_a->status;
+    if (reqresp_handle_status(&client, &refreshed, peer_a) != LANTERN_CLIENT_OK
+        || client.next_blocks_request_id != request_id_before + 1u
+        || !client.range_sync.peers_exhausted
+        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_a)
+        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_b))
+    {
+        fprintf(stderr, "status refresh interrupted range peer rotation\n");
+        goto cleanup;
+    }
+
+    lantern_string_list_reset(&client.range_sync.failed_peers);
+    client.range_sync.peers_exhausted = false;
+    client.range_sync.request_id = 90u;
+    client.range_sync.request_start_slot = 20u;
+    client.range_sync.request_count = 5u;
+    (void)snprintf(
+        client.range_sync.request_peer,
+        sizeof(client.range_sync.request_peer),
+        "%s",
+        peer_a);
+
+    request_id_before = client.next_blocks_request_id;
+    if (!lantern_client_complete_range_request(
+            &client,
+            90u,
+            LANTERN_BLOCKS_REQUEST_EMPTY)
+        || client.range_sync.next_slot != 20u
+        || client.range_sync.request_id != 0u
+        || client.next_blocks_request_id != request_id_before + 1u
+        || !client.range_sync.peers_exhausted
+        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_a)
+        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_b))
+    {
+        fprintf(stderr, "empty range did not rotate once and preserve its retry slot\n");
+        goto cleanup;
+    }
+
+    request_id_before = client.next_blocks_request_id;
+    if (lantern_client_schedule_next_range_request(&client)
+        || lantern_client_schedule_next_range_request(&client)
+        || client.next_blocks_request_id != request_id_before)
+    {
+        fprintf(stderr, "exhausted range peers retried without refreshed eligibility\n");
+        goto cleanup;
+    }
+
+    if (reqresp_handle_status(&client, &refreshed, peer_a) != LANTERN_CLIENT_OK
+        || client.range_sync.next_slot != 20u
+        || client.range_sync.request_id != 0u
+        || client.next_blocks_request_id != request_id_before + 1u
+        || !client.range_sync.peers_exhausted
+        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_a)
+        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_b))
+    {
+        fprintf(stderr, "fresh status did not permit exactly one backed-off range retry\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    disable_sync_test_peer(&client);
+    return rc;
+}
+
 static int test_terminal_range_recovery_requests_unresolved_parent(void)
 {
     struct lantern_client client;
@@ -3618,6 +3738,9 @@ int main(void) {
         return 1;
     }
     if (test_range_response_bounds_and_completion_progress() != 0) {
+        return 1;
+    }
+    if (test_empty_range_rotates_peers_and_waits_for_status_refresh() != 0) {
         return 1;
     }
     if (test_terminal_range_recovery_requests_unresolved_parent() != 0) {

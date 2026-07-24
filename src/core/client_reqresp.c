@@ -648,6 +648,17 @@ static void lantern_client_peer_status_update(
         return;
     }
 
+    struct lantern_range_sync_state *range = &client->range_sync;
+    if (range->peers_exhausted && range->request_id == 0u
+        && range->next_slot != 0u
+        && range->next_slot <= range->target_slot)
+    {
+        if (lantern_string_list_remove(&range->failed_peers, peer_id_text))
+        {
+            range->peers_exhausted = false;
+        }
+    }
+
     update_network_view_from_peer_status_locked(client, peer_status, local_head, head_known);
     LanternStatusMessage network_view = client->network_view;
 

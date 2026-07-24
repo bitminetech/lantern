@@ -131,6 +131,7 @@ struct lantern_range_sync_state {
     uint64_t request_count;
     char request_peer[128];
     struct lantern_string_list failed_peers;
+    bool peers_exhausted;
 };
 
 struct lantern_validator_duty_state {

@@ -1567,9 +1567,11 @@ bool lantern_client_schedule_next_range_request(struct lantern_client *client)
     }
     if (!peer)
     {
+        range->peers_exhausted = true;
         pthread_mutex_unlock(&client->status_lock);
         return false;
     }
+    range->peers_exhausted = false;
     uint64_t batch_end_slot = peer->status.head.slot < desired_end_slot
         ? peer->status.head.slot
         : desired_end_slot;
@@ -1656,6 +1658,7 @@ void lantern_client_update_range_sync_target(
         {
             range->next_slot = local_next_slot;
             lantern_string_list_reset(&range->failed_peers);
+            range->peers_exhausted = false;
         }
         if (bounded_target_slot > range->target_slot)
         {
@@ -1703,6 +1706,7 @@ bool lantern_client_complete_range_request(
     if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS)
     {
         lantern_string_list_reset(&range->failed_peers);
+        range->peers_exhausted = false;
         range->next_slot = start_slot + count;
         if (range->next_slot <= range->target_slot)
         {
@@ -1715,6 +1719,7 @@ bool lantern_client_complete_range_request(
     }
     else
     {
+        range->peers_exhausted = false;
         should_continue =
             lantern_string_list_append_unique(&range->failed_peers, peer_text) == 0;
     }

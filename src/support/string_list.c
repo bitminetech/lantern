@@ -87,6 +87,28 @@ bool lantern_string_list_contains(const struct lantern_string_list *list, const 
     return false;
 }
 
+bool lantern_string_list_remove(struct lantern_string_list *list, const char *value) {
+    if (!list || !value) {
+        return false;
+    }
+    for (size_t i = 0; i < list->len; ++i) {
+        if (!list->items[i] || strcmp(list->items[i], value) != 0) {
+            continue;
+        }
+        free(list->items[i]);
+        if (i + 1u < list->len) {
+            memmove(
+                &list->items[i],
+                &list->items[i + 1u],
+                (list->len - i - 1u) * sizeof(*list->items));
+        }
+        list->len -= 1u;
+        list->items[list->len] = NULL;
+        return true;
+    }
+    return false;
+}
+
 int lantern_string_list_append_unique(struct lantern_string_list *list, const char *value) {
     if (!list || !value) {
         return -1;

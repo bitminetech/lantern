@@ -893,7 +893,9 @@ static void exchange_handle_outbound_closed(struct lantern_reqresp_exchange *exc
     if (!reset && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE) {
         exchange_complete_blocks_request(
             exchange,
-            LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS);
+            exchange->matched_root_count > 0u
+                ? LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS
+                : LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_EMPTY);
         return;
     }
     if (!reset && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT
