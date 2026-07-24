@@ -873,16 +873,6 @@ void reqresp_status_failure(void *context, const char *peer_id, int error)
         || lantern_client_status_request_failed(client, peer_copy);
     log_status_failure(client, peer_copy, error, first_failure);
 
-    if (peer_copy[0] != '\0' && error == LANTERN_REQRESP_ERR_STREAM_WRITE
-        && !lantern_client_is_peer_connected(client, peer_copy))
-    {
-        struct lantern_peer_id peer;
-        if (lantern_peer_id_from_text(peer_copy, &peer) == 0)
-        {
-            redial_peer(client, &peer);
-        }
-    }
-
     if (peer_copy[0] != '\0' && first_failure
         && lantern_client_is_peer_connected(client, peer_copy))
     {

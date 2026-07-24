@@ -46,6 +46,7 @@ struct lantern_reqresp_exchange {
     LanternRoot last_range_root;
     uint64_t request_id;
     libp2p_host_time_us_t deadline_us;
+    libp2p_host_stream_open_t *open;
     uint64_t total_read_bytes;
     int completed;
     int cancelled;
@@ -824,6 +825,17 @@ static bool exchange_is_outbound_blocks_request(
             || exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE);
 }
 
+static void exchange_refresh_blocks_deadline(
+    struct lantern_reqresp_exchange *exchange,
+    libp2p_host_time_us_t now_us) {
+    if (!exchange_is_outbound_blocks_request(exchange)) {
+        return;
+    }
+    exchange->deadline_us = now_us > UINT64_MAX - LANTERN_REQRESP_BLOCKS_REQUEST_TIMEOUT_US
+        ? UINT64_MAX
+        : now_us + LANTERN_REQRESP_BLOCKS_REQUEST_TIMEOUT_US;
+}
+
 static bool exchange_blocks_request_success(const struct lantern_reqresp_exchange *exchange) {
     return exchange && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT
         && exchange->roots_matched
@@ -951,7 +963,7 @@ static struct lantern_reqresp_exchange *service_claim_cancelled_range_exchange(
         if (exchange->outbound
             && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE
             && exchange->cancelled
-            && exchange->stream) {
+            && (exchange->stream || exchange->open)) {
             exchange->cancelled = 0;
             cancelled = exchange;
             break;
@@ -971,6 +983,19 @@ static void exchange_abort_stream(struct lantern_reqresp_exchange *exchange) {
     (void)libp2p_host_stream_reset(exchange->host, exchange->stream, 0u);
 }
 
+static bool exchange_cancel_pending_open(struct lantern_reqresp_exchange *exchange) {
+    if (!exchange || !exchange->host || !exchange->open || exchange->stream) {
+        return false;
+    }
+    libp2p_host_err_t err =
+        libp2p_host_stream_open_cancel(exchange->host, exchange->open, exchange);
+    if (err != LIBP2P_HOST_OK && err != LIBP2P_HOST_ERR_NOT_FOUND) {
+        return false;
+    }
+    exchange->open = NULL;
+    return true;
+}
+
 static void reqresp_drive(
     struct lantern_libp2p_host *network,
     libp2p_host_time_us_t now_us,
@@ -979,9 +1004,18 @@ static void reqresp_drive(
     struct lantern_reqresp_service *service = user_data;
     struct lantern_reqresp_exchange *exchange = NULL;
     while ((exchange = service_claim_cancelled_range_exchange(service)) != NULL) {
-        exchange_abort_stream(exchange);
+        if (exchange_cancel_pending_open(exchange)) {
+            service_remove_exchange(service, exchange);
+            exchange_free(exchange);
+        } else {
+            exchange_abort_stream(exchange);
+        }
     }
     while ((exchange = service_claim_timed_out_blocks_exchange(service, now_us)) != NULL) {
+        bool pending_open_cancelled = exchange_cancel_pending_open(exchange);
+        if (pending_open_cancelled) {
+            service_remove_exchange(service, exchange);
+        }
         lantern_log_warn(
             "reqresp",
             &(const struct lantern_log_metadata){
@@ -999,7 +1033,11 @@ static void reqresp_drive(
         } else {
             exchange_fail(exchange, LANTERN_REQRESP_ERR_STREAM_READ);
         }
-        exchange_abort_stream(exchange);
+        if (pending_open_cancelled) {
+            exchange_free(exchange);
+        } else {
+            exchange_abort_stream(exchange);
+        }
     }
 }
 
@@ -1234,13 +1272,9 @@ static libp2p_host_err_t reqresp_on_open(
     }
     exchange->host = host;
     exchange->stream = stream;
+    exchange->open = NULL;
     exchange_set_peer_text_from_conn(exchange, conn);
-    if (exchange_is_outbound_blocks_request(exchange)) {
-        libp2p_host_time_us_t now_us = lantern_libp2p_now_us();
-        exchange->deadline_us = now_us > UINT64_MAX - LANTERN_REQRESP_BLOCKS_REQUEST_TIMEOUT_US
-            ? UINT64_MAX
-            : now_us + LANTERN_REQRESP_BLOCKS_REQUEST_TIMEOUT_US;
-    }
+    exchange_refresh_blocks_deadline(exchange, lantern_libp2p_now_us());
     (void)libp2p_host_stream_set_user_data(stream, exchange);
     return LIBP2P_HOST_OK;
 }
@@ -1477,6 +1511,7 @@ static int service_open_exchange(
         }
         exchange->root_count = root_count;
     }
+    exchange_refresh_blocks_deadline(exchange, lantern_libp2p_now_us());
     service_add_exchange(service, exchange);
     const char *protocol = kReqrespProtocolIds[kind];
     libp2p_host_stream_open_t *open = NULL;
@@ -1492,6 +1527,7 @@ static int service_open_exchange(
         exchange_free(exchange);
         return -1;
     }
+    exchange->open = open;
     return 0;
 }
 

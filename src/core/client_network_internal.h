@@ -225,9 +225,6 @@ void connection_counter_update(
     bool locally_initiated,
     uint64_t transport_error_code);
 
-/** Return whether a close event should trigger reactive peer recovery. */
-bool connection_close_should_redial(int reason, bool locally_initiated);
-
 bool connection_tie_break_prefers_inbound(
     const uint8_t *local_peer_id,
     size_t local_peer_id_len,
@@ -294,16 +291,6 @@ void adopt_validator_listen_address(struct lantern_client *client);
  */
 void identify_dial_multiaddr(struct lantern_client *client, const char *multiaddr, const char *peer_label);
 
-
-/**
- * Attempt to redial a disconnected genesis peer.
- *
- * @param client  Client instance
- * @param peer    Peer ID to redial
- *
- * @note Thread safety: This function acquires connection_lock
- */
-void redial_peer(struct lantern_client *client, const struct lantern_peer_id *peer);
 
 /**
  * Attempt to dial peers from genesis ENRs.
