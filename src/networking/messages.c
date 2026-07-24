@@ -285,3 +285,19 @@ int lantern_network_blocks_by_range_request_decode(
     }
     return 0;
 }
+
+int lantern_network_blocks_by_range_request_encode(
+    const LanternBlocksByRangeRequest *req,
+    uint8_t *out,
+    size_t out_len,
+    size_t *written) {
+    if (!req || !out || !written || out_len < 2u * sizeof(uint64_t)) {
+        return -1;
+    }
+    if (ssz_serialize_uint64(req->start_slot, out) != SSZ_SUCCESS
+        || ssz_serialize_uint64(req->count, out + sizeof(uint64_t)) != SSZ_SUCCESS) {
+        return -1;
+    }
+    *written = 2u * sizeof(uint64_t);
+    return 0;
+}

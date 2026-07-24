@@ -90,16 +90,6 @@ struct lantern_active_blocks_request;
 struct lantern_block_fetch;
 struct lantern_async_block_import_job;
 struct lantern_async_block_proposal_job;
-struct lantern_backfill_session {
-    LanternCheckpoint head;
-    LanternRoot frontier_root;
-    uint64_t anchor_slot;
-    uint32_t frontier_depth;
-    LanternRoot *roots;
-    size_t length;
-    size_t capacity;
-    size_t imported_count;
-};
 
 struct lantern_pending_block {
     LanternSignedBlock block;
@@ -128,10 +118,19 @@ struct lantern_pending_vote_list {
 
 struct lantern_active_blocks_request {
     uint64_t request_id;
-    LanternRoot backfill_session_head;
     char peer_id[128];
     LanternRoot *roots;
     size_t root_count;
+};
+
+struct lantern_range_sync_state {
+    uint64_t next_slot;
+    uint64_t target_slot;
+    uint64_t request_id;
+    uint64_t request_start_slot;
+    uint64_t request_count;
+    char request_peer[128];
+    struct lantern_string_list failed_peers;
 };
 
 struct lantern_validator_duty_state {
@@ -218,12 +217,10 @@ struct lantern_client {
     size_t connection_peer_ref_capacity;
     struct lantern_pending_block_list pending_blocks;
     struct lantern_pending_vote_list pending_gossip_votes;
-    struct lantern_backfill_session backfill;
     pthread_mutex_t pending_lock;
     bool pending_lock_initialized;
     struct lantern_async_block_import_job *block_import_head;
     struct lantern_async_block_import_job *block_import_tail;
-    size_t block_import_queue_len;
     pthread_mutex_t block_import_lock;
     pthread_cond_t block_import_cond;
     pthread_t block_import_thread;
@@ -247,6 +244,7 @@ struct lantern_client {
     struct lantern_block_fetch *block_fetches;
     size_t block_fetch_count;
     size_t block_fetch_capacity;
+    struct lantern_range_sync_state range_sync;
     uint64_t next_blocks_request_id;
     pthread_mutex_t status_lock;
     bool status_lock_initialized;

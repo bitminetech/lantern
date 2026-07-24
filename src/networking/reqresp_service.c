@@ -40,6 +40,10 @@ struct lantern_reqresp_exchange {
     bool *roots_matched;
     size_t root_count;
     size_t matched_root_count;
+    uint64_t range_start_slot;
+    uint64_t range_count;
+    uint64_t last_range_slot;
+    LanternRoot last_range_root;
     uint64_t request_id;
     libp2p_host_time_us_t deadline_us;
     int completed;
@@ -519,6 +523,33 @@ static int build_blocks_request_frame(
     return rc;
 }
 
+static int build_blocks_by_range_request_frame(
+    uint64_t start_slot,
+    uint64_t count,
+    uint8_t **out_frame,
+    size_t *out_frame_len) {
+    if (count == 0u || count > LANTERN_MAX_REQUEST_BLOCKS
+        || start_slot > UINT64_MAX - count
+        || !out_frame || !out_frame_len) {
+        return -1;
+    }
+    LanternBlocksByRangeRequest req = {
+        .start_slot = start_slot,
+        .count = count,
+    };
+    uint8_t raw[2u * sizeof(uint64_t)];
+    size_t raw_len = 0u;
+    if (lantern_network_blocks_by_range_request_encode(
+            &req,
+            raw,
+            sizeof(raw),
+            &raw_len)
+        != 0) {
+        return -1;
+    }
+    return build_frame_from_raw(raw, raw_len, 0, 0, out_frame, out_frame_len);
+}
+
 static int encode_signed_block_raw(const LanternSignedBlock *block, uint8_t **out_raw, size_t *out_raw_len) {
     if (!block || !out_raw || !out_raw_len) {
         return -1;
@@ -674,33 +705,12 @@ static int exchange_prepare_blocks_by_range_response(
             LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
             "Block lookup not available");
     }
-    if (req.count == 0u || req.count > LANTERN_MAX_REQUEST_BLOCKS) {
+    if (req.count == 0u || req.count > LANTERN_MAX_REQUEST_BLOCKS
+        || req.start_slot > UINT64_MAX - req.count) {
         return exchange_queue_error_response(
             exchange,
             LANTERN_REQRESP_RESPONSE_INVALID_REQUEST,
-            "Invalid count");
-    }
-    if (!exchange->service->callbacks.current_slot) {
-        return exchange_queue_error_response(
-            exchange,
-            LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
-            "Current slot not available");
-    }
-    uint64_t current_slot = 0;
-    if (exchange->service->callbacks.current_slot(exchange->service->callbacks.context, &current_slot) != 0) {
-        return exchange_queue_error_response(
-            exchange,
-            LANTERN_REQRESP_RESPONSE_SERVER_ERROR,
-            "Current slot not available");
-    }
-    uint64_t window_floor = current_slot >= LANTERN_MIN_SLOTS_FOR_BLOCK_REQUESTS
-        ? current_slot - LANTERN_MIN_SLOTS_FOR_BLOCK_REQUESTS
-        : 0u;
-    if (req.start_slot < window_floor) {
-        return exchange_queue_error_response(
-            exchange,
-            LANTERN_REQRESP_RESPONSE_RESOURCE_UNAVAILABLE,
-            "Requested slot predates history window");
+            "Invalid range");
     }
 
     LanternSignedBlockList blocks = {0};
@@ -798,6 +808,13 @@ static int exchange_read_available(struct lantern_reqresp_exchange *exchange, in
     }
 }
 
+static bool exchange_is_outbound_blocks_request(
+    const struct lantern_reqresp_exchange *exchange) {
+    return exchange && exchange->outbound
+        && (exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT
+            || exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE);
+}
+
 static bool exchange_blocks_request_success(const struct lantern_reqresp_exchange *exchange) {
     return exchange && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT
         && exchange->roots_matched
@@ -851,7 +868,7 @@ static void exchange_fail(struct lantern_reqresp_exchange *exchange, int error) 
                 exchange->peer_id_text,
                 error);
         }
-    } else if (exchange->outbound && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT) {
+    } else if (exchange_is_outbound_blocks_request(exchange)) {
         exchange_complete_blocks_request(exchange, LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED);
     } else {
         exchange->completed = 1;
@@ -864,6 +881,12 @@ static void exchange_handle_outbound_closed(struct lantern_reqresp_exchange *exc
     }
     if (!reset && exchange_blocks_request_success(exchange)) {
         exchange_complete_blocks_request(exchange, LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS);
+        return;
+    }
+    if (!reset && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE) {
+        exchange_complete_blocks_request(
+            exchange,
+            LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS);
         return;
     }
     if (!reset && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT
@@ -887,8 +910,7 @@ static struct lantern_reqresp_exchange *service_claim_timed_out_blocks_exchange(
     for (struct lantern_reqresp_exchange *exchange = service->exchanges;
          exchange;
          exchange = exchange->next) {
-        if (exchange->outbound
-            && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT
+        if (exchange_is_outbound_blocks_request(exchange)
             && !exchange->completed
             && exchange->deadline_us != 0u
             && now_us >= exchange->deadline_us) {
@@ -915,7 +937,10 @@ static void reqresp_drive(
             "reqresp",
             &(const struct lantern_log_metadata){
                 .peer = exchange->peer_id_text[0] ? exchange->peer_id_text : NULL},
-            "blocks_by_root request timed out request_id=%" PRIu64,
+            "%s request timed out request_id=%" PRIu64,
+            exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE
+                ? "blocks_by_range"
+                : "blocks_by_root",
             exchange->request_id);
         exchange_fail(exchange, LANTERN_REQRESP_ERR_STREAM_READ);
         if (exchange->host && exchange->stream) {
@@ -961,6 +986,11 @@ static int exchange_handle_outbound_block_frame(
         return -1;
     }
     if (code == LANTERN_REQRESP_RESPONSE_RESOURCE_UNAVAILABLE) {
+        if (exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE) {
+            exchange_complete_blocks_request(
+                exchange,
+                LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_EMPTY);
+        }
         return 0;
     }
     if (code != LANTERN_REQRESP_RESPONSE_SUCCESS || !raw) {
@@ -974,11 +1004,29 @@ static int exchange_handle_outbound_block_frame(
         exchange_fail(exchange, LANTERN_REQRESP_ERR_INVALID_PAYLOAD);
         return 0;
     }
+    uint64_t block_slot = block.block.slot;
     size_t root_index = 0;
+    LanternRoot block_root = {0};
     if (exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT) {
-        LanternRoot block_root = {0};
         if (lantern_hash_tree_root_block(&block.block, &block_root) != SSZ_SUCCESS
             || !exchange_find_unmatched_root_index(exchange, &block_root, &root_index)) {
+            lantern_signed_block_reset(&block);
+            exchange_fail(exchange, LANTERN_REQRESP_ERR_INVALID_PAYLOAD);
+            return 0;
+        }
+    } else if (exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE) {
+        bool has_previous = exchange->matched_root_count > 0u;
+        if (exchange->range_count == 0u
+            || block_slot < exchange->range_start_slot
+            || block_slot - exchange->range_start_slot >= exchange->range_count
+            || (has_previous && block_slot <= exchange->last_range_slot)
+            || (has_previous
+                && memcmp(
+                       block.block.parent_root.bytes,
+                       exchange->last_range_root.bytes,
+                       LANTERN_ROOT_SIZE)
+                    != 0)
+            || lantern_hash_tree_root_block(&block.block, &block_root) != SSZ_SUCCESS) {
             lantern_signed_block_reset(&block);
             exchange_fail(exchange, LANTERN_REQRESP_ERR_INVALID_PAYLOAD);
             return 0;
@@ -996,6 +1044,9 @@ static int exchange_handle_outbound_block_frame(
     if (handled == 0) {
         if (exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT) {
             exchange->roots_matched[root_index] = true;
+        } else if (exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE) {
+            exchange->last_range_slot = block_slot;
+            exchange->last_range_root = block_root;
         }
         exchange->matched_root_count += 1u;
         if (exchange_blocks_request_success(exchange)) {
@@ -1130,7 +1181,7 @@ static libp2p_host_err_t reqresp_on_open(
     exchange->host = host;
     exchange->stream = stream;
     exchange_set_peer_text_from_conn(exchange, conn);
-    if (exchange->outbound && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_ROOT) {
+    if (exchange_is_outbound_blocks_request(exchange)) {
         libp2p_host_time_us_t now_us = lantern_libp2p_now_us();
         exchange->deadline_us = now_us > UINT64_MAX - LANTERN_REQRESP_BLOCKS_REQUEST_TIMEOUT_US
             ? UINT64_MAX
@@ -1275,9 +1326,15 @@ static int service_open_exchange(
     size_t frame_len,
     const LanternRoot *roots,
     size_t root_count,
-    uint64_t request_id) {
+    uint64_t request_id,
+    const LanternBlocksByRangeRequest *range_request) {
     if (!service || !service->network || !service->network->host || !peer_id || !frame || frame_len == 0u
-        || (unsigned)kind >= LANTERN_REQRESP_PROTOCOL_KIND_COUNT) {
+        || (unsigned)kind >= LANTERN_REQRESP_PROTOCOL_KIND_COUNT
+        || (kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE
+            && (!range_request
+                || range_request->count == 0u
+                || range_request->start_slot > UINT64_MAX - range_request->count))
+        || (kind != LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE && range_request)) {
         free(frame);
         return -1;
     }
@@ -1299,6 +1356,10 @@ static int service_open_exchange(
     exchange->write_buf = frame;
     exchange->write_len = frame_len;
     exchange->request_id = request_id;
+    if (range_request) {
+        exchange->range_start_slot = range_request->start_slot;
+        exchange->range_count = range_request->count;
+    }
     if (peer_id_text) {
         (void)lantern_string_copy(
             exchange->peer_id_text,
@@ -1365,7 +1426,8 @@ int lantern_reqresp_service_request_status(
             frame_len,
             NULL,
             0,
-            0)
+            0,
+            NULL)
         != 0) {
         if (service && service->callbacks.status_failure) {
             service->callbacks.status_failure(
@@ -1399,5 +1461,40 @@ int lantern_reqresp_service_request_blocks(
         frame_len,
         roots,
         root_count,
-        request_id);
+        request_id,
+        NULL);
+}
+
+int lantern_reqresp_service_request_blocks_by_range(
+    struct lantern_reqresp_service *service,
+    const struct lantern_peer_id *peer_id,
+    const char *peer_id_text,
+    uint64_t start_slot,
+    uint64_t count,
+    uint64_t request_id) {
+    uint8_t *frame = NULL;
+    size_t frame_len = 0u;
+    if (build_blocks_by_range_request_frame(
+            start_slot,
+            count,
+            &frame,
+            &frame_len)
+        != 0) {
+        return -1;
+    }
+    LanternBlocksByRangeRequest request = {
+        .start_slot = start_slot,
+        .count = count,
+    };
+    return service_open_exchange(
+        service,
+        peer_id,
+        peer_id_text,
+        LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE,
+        frame,
+        frame_len,
+        NULL,
+        0u,
+        request_id,
+        &request);
 }

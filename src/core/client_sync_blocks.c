@@ -1701,8 +1701,7 @@ static bool lantern_client_import_block_internal(
                 client,
                 peer_text,
                 &parent_root,
-                1u,
-                NULL);
+                1u);
         }
 
         LanternCheckpoint pre_adopt_finalized = client->state.latest_finalized;
@@ -2021,16 +2020,6 @@ lantern_client_error lantern_client_record_block(
             block->block.proposer_index,
             root_hex[0] ? root_hex : "0x0",
             source);
-    }
-
-    if (lantern_client_backfill_should_drop_gossip(
-            client,
-            block,
-            selected_root,
-            peer_text,
-            source))
-    {
-        return LANTERN_CLIENT_ERR_IGNORED;
     }
 
     lantern_client_error import_result = LANTERN_CLIENT_ERR_RUNTIME;
