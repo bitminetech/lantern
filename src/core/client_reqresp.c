@@ -690,6 +690,8 @@ static const char *lantern_blocks_request_outcome_text(enum lantern_blocks_reque
         return "empty";
     case LANTERN_BLOCKS_REQUEST_ABORTED:
         return "aborted";
+    case LANTERN_BLOCKS_REQUEST_TIMED_OUT_WITH_DATA:
+        return "timed_out_with_data";
     default:
         return "unknown";
     }
@@ -1749,6 +1751,9 @@ void reqresp_blocks_request_complete(
         break;
     case LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_EMPTY:
         outcome = LANTERN_BLOCKS_REQUEST_EMPTY;
+        break;
+    case LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_TIMED_OUT_WITH_DATA:
+        outcome = LANTERN_BLOCKS_REQUEST_TIMED_OUT_WITH_DATA;
         break;
     case LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED:
     default:

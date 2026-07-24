@@ -54,6 +54,7 @@ struct test_transport {
     size_t read_len;
     size_t read_offset;
     size_t reset_called;
+    size_t stop_sending_called;
 };
 
 static libp2p_host_err_t test_transport_stream_read(
@@ -96,9 +97,22 @@ static libp2p_host_err_t test_transport_stream_reset(
     return LIBP2P_HOST_OK;
 }
 
+static libp2p_host_err_t test_transport_stream_stop_sending(
+    void *transport,
+    void *stream,
+    uint64_t app_error_code) {
+    (void)stream;
+    (void)app_error_code;
+    struct test_transport *test_transport = transport;
+    CHECK(test_transport != NULL);
+    test_transport->stop_sending_called += 1u;
+    return LIBP2P_HOST_OK;
+}
+
 static const libp2p_host_transport_vtable_t test_transport_vtable = {
     .stream_read = test_transport_stream_read,
     .stream_reset = test_transport_stream_reset,
+    .stream_stop_sending = test_transport_stream_stop_sending,
 };
 
 static void init_test_host_stream(
@@ -458,6 +472,15 @@ static void test_blocks_by_root_timeout_completes_failure_once(void) {
     exchange.deadline_us = 100u;
     service.exchanges = &exchange;
 
+    struct test_transport transport = {
+        .read_result = LIBP2P_HOST_ERR_WOULD_BLOCK,
+    };
+    libp2p_host_t host;
+    libp2p_host_stream_t stream;
+    init_test_host_stream(&host, &stream, &transport);
+    exchange.host = &host;
+    exchange.stream = &stream;
+
     reqresp_drive(NULL, 99u, &service);
     CHECK(test_context.complete_called == 0);
 
@@ -465,12 +488,55 @@ static void test_blocks_by_root_timeout_completes_failure_once(void) {
     CHECK(test_context.complete_called == 1);
     CHECK(test_context.complete_result == LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED);
     CHECK(exchange.completed == 1);
+    CHECK(transport.stop_sending_called == 1u);
+    CHECK(transport.reset_called == 1u);
 
     reqresp_drive(NULL, 200u, &service);
     CHECK(test_context.complete_called == 1);
+    CHECK(transport.stop_sending_called == 1u);
+    CHECK(transport.reset_called == 1u);
     exchange_handle_outbound_closed(&exchange, true);
     CHECK(test_context.complete_called == 1);
     service.exchanges = NULL;
+}
+
+static void test_blocks_by_range_timeout_distinguishes_received_data(void) {
+    enum lantern_reqresp_blocks_request_result expected_results[] = {
+        LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED,
+        LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_TIMED_OUT_WITH_DATA,
+    };
+    for (size_t i = 0; i < sizeof(expected_results) / sizeof(expected_results[0]); ++i) {
+        struct test_blocks_context test_context = {0};
+        struct lantern_reqresp_service service = {0};
+        service.callbacks.context = &test_context;
+        service.callbacks.blocks_request_complete = test_blocks_request_complete;
+
+        struct lantern_reqresp_exchange exchange = {0};
+        exchange.service = &service;
+        exchange.kind = LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE;
+        exchange.outbound = 1;
+        exchange.request_id = 43u + i;
+        exchange.deadline_us = 100u;
+        exchange.total_read_bytes = i;
+        service.exchanges = &exchange;
+
+        struct test_transport transport = {
+            .read_result = LIBP2P_HOST_ERR_WOULD_BLOCK,
+        };
+        libp2p_host_t host;
+        libp2p_host_stream_t stream;
+        init_test_host_stream(&host, &stream, &transport);
+        exchange.host = &host;
+        exchange.stream = &stream;
+
+        reqresp_drive(NULL, 100u, &service);
+        CHECK(test_context.complete_called == 1);
+        CHECK(test_context.complete_result == expected_results[i]);
+        CHECK(exchange.completed == 1);
+        CHECK(transport.stop_sending_called == 1u);
+        CHECK(transport.reset_called == 1u);
+        service.exchanges = NULL;
+    }
 }
 
 static void test_blocks_by_range_closed_read_completes_success(void) {
@@ -570,11 +636,13 @@ static void test_cancelled_range_does_not_timeout_or_complete(void) {
 
     reqresp_drive(NULL, 200u, &service);
     CHECK(transport.reset_called == 1u);
+    CHECK(transport.stop_sending_called == 1u);
     CHECK(exchange.cancelled == 0);
     CHECK(test_context.complete_called == 0);
 
     reqresp_drive(NULL, 300u, &service);
     CHECK(transport.reset_called == 1u);
+    CHECK(transport.stop_sending_called == 1u);
     CHECK(test_context.complete_called == 0);
     service.exchanges = NULL;
 }
@@ -825,6 +893,7 @@ int main(void) {
     test_blocks_by_root_unrequested_block_fails_before_callback();
     test_blocks_by_root_empty_batch_is_reported();
     test_blocks_by_root_timeout_completes_failure_once();
+    test_blocks_by_range_timeout_distinguishes_received_data();
     test_blocks_by_range_closed_read_completes_success();
     test_cancelled_range_does_not_timeout_or_complete();
     test_blocks_by_range_accepts_sparse_and_reports_clean_empty();

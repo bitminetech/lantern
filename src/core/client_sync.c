@@ -39,6 +39,7 @@ enum
 {
     ROOT_HEX_BUFFER_LEN = (LANTERN_ROOT_SIZE * 2u) + 3u,
     PEER_TEXT_BUFFER_LEN = 128,
+    LANTERN_RANGE_REQUEST_INITIAL_SLOTS = 8,
 };
 
 void lantern_client_set_sync_state_logged(
@@ -1532,6 +1533,48 @@ static struct lantern_peer_status_entry *select_range_request_peer_locked(
     return best;
 }
 
+static void range_batch_policy_init(struct lantern_range_sync_state *range)
+{
+    if (!range || range->batch_size != 0u)
+    {
+        return;
+    }
+    range->batch_size = LANTERN_RANGE_REQUEST_INITIAL_SLOTS;
+}
+
+static void range_batch_policy_succeeded(struct lantern_range_sync_state *range)
+{
+    range_batch_policy_init(range);
+    if (!range)
+    {
+        return;
+    }
+    if (!range->batch_size_locked
+        && range->batch_size < LANTERN_MAX_REQUEST_BLOCKS)
+    {
+        range->batch_size *= 2u;
+        if (range->batch_size > LANTERN_MAX_REQUEST_BLOCKS)
+        {
+            range->batch_size = LANTERN_MAX_REQUEST_BLOCKS;
+        }
+    }
+}
+
+static void range_batch_policy_timed_out_with_data(
+    struct lantern_range_sync_state *range)
+{
+    range_batch_policy_init(range);
+    if (!range)
+    {
+        return;
+    }
+    if (range->batch_size > LANTERN_RANGE_REQUEST_INITIAL_SLOTS)
+    {
+        range->batch_size /= 2u;
+    }
+    range->batch_size_locked = true;
+}
+
 bool lantern_client_schedule_next_range_request(struct lantern_client *client)
 {
     if (!client || !client->status_lock_initialized
@@ -1541,6 +1584,7 @@ bool lantern_client_schedule_next_range_request(struct lantern_client *client)
     }
 
     struct lantern_range_sync_state *range = &client->range_sync;
+    range_batch_policy_init(range);
     if (range->request_id != 0u || range->next_slot == 0u
         || range->next_slot > range->target_slot)
     {
@@ -1549,8 +1593,8 @@ bool lantern_client_schedule_next_range_request(struct lantern_client *client)
     }
 
     uint64_t remaining = range->target_slot - range->next_slot + 1u;
-    uint64_t desired_count = remaining > LANTERN_MAX_REQUEST_BLOCKS
-        ? LANTERN_MAX_REQUEST_BLOCKS
+    uint64_t desired_count = remaining > range->batch_size
+        ? range->batch_size
         : remaining;
     uint64_t desired_end_slot = range->next_slot + desired_count - 1u;
     uint64_t now_ms = monotonic_millis();
@@ -1649,6 +1693,7 @@ void lantern_client_update_range_sync_target(
         : max_target_slot;
     if (range->next_slot == 0u)
     {
+        range_batch_policy_init(range);
         range->next_slot = local_next_slot;
         range->target_slot = bounded_target_slot;
     }
@@ -1705,7 +1750,7 @@ bool lantern_client_complete_range_request(
     bool range_completed = false;
     if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS)
     {
-        lantern_string_list_reset(&range->failed_peers);
+        range_batch_policy_succeeded(range);
         range->peers_exhausted = false;
         range->next_slot = start_slot + count;
         if (range->next_slot <= range->target_slot)
@@ -1719,6 +1764,10 @@ bool lantern_client_complete_range_request(
     }
     else
     {
+        if (outcome == LANTERN_BLOCKS_REQUEST_TIMED_OUT_WITH_DATA)
+        {
+            range_batch_policy_timed_out_with_data(range);
+        }
         range->peers_exhausted = false;
         should_continue =
             lantern_string_list_append_unique(&range->failed_peers, peer_text) == 0;

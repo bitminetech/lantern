@@ -46,6 +46,7 @@ struct lantern_reqresp_exchange {
     LanternRoot last_range_root;
     uint64_t request_id;
     libp2p_host_time_us_t deadline_us;
+    uint64_t total_read_bytes;
     int completed;
     int cancelled;
     int request_complete;
@@ -803,6 +804,7 @@ static int exchange_read_available(struct lantern_reqresp_exchange *exchange, in
         if (read_len > 0u && reqresp_buffer_append(&exchange->read_buf, tmp, read_len) != 0) {
             return -1;
         }
+        exchange->total_read_bytes += (uint64_t)read_len;
         if (fin) {
             if (out_fin) {
                 *out_fin = 1;
@@ -961,6 +963,14 @@ static struct lantern_reqresp_exchange *service_claim_cancelled_range_exchange(
     return cancelled;
 }
 
+static void exchange_abort_stream(struct lantern_reqresp_exchange *exchange) {
+    if (!exchange || !exchange->host || !exchange->stream) {
+        return;
+    }
+    (void)libp2p_host_stream_stop_sending(exchange->host, exchange->stream, 0u);
+    (void)libp2p_host_stream_reset(exchange->host, exchange->stream, 0u);
+}
+
 static void reqresp_drive(
     struct lantern_libp2p_host *network,
     libp2p_host_time_us_t now_us,
@@ -969,7 +979,7 @@ static void reqresp_drive(
     struct lantern_reqresp_service *service = user_data;
     struct lantern_reqresp_exchange *exchange = NULL;
     while ((exchange = service_claim_cancelled_range_exchange(service)) != NULL) {
-        (void)libp2p_host_stream_reset(exchange->host, exchange->stream, 0u);
+        exchange_abort_stream(exchange);
     }
     while ((exchange = service_claim_timed_out_blocks_exchange(service, now_us)) != NULL) {
         lantern_log_warn(
@@ -981,10 +991,15 @@ static void reqresp_drive(
                 ? "blocks_by_range"
                 : "blocks_by_root",
             exchange->request_id);
-        exchange_fail(exchange, LANTERN_REQRESP_ERR_STREAM_READ);
-        if (exchange->host && exchange->stream) {
-            (void)libp2p_host_stream_reset(exchange->host, exchange->stream, 0u);
+        if (exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE
+            && exchange->total_read_bytes > 0u) {
+            exchange_complete_blocks_request(
+                exchange,
+                LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_TIMED_OUT_WITH_DATA);
+        } else {
+            exchange_fail(exchange, LANTERN_REQRESP_ERR_STREAM_READ);
         }
+        exchange_abort_stream(exchange);
     }
 }
 
