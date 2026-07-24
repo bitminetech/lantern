@@ -47,6 +47,7 @@ struct lantern_reqresp_exchange {
     uint64_t request_id;
     libp2p_host_time_us_t deadline_us;
     int completed;
+    int cancelled;
     int request_complete;
     struct lantern_reqresp_exchange *next;
 };
@@ -790,6 +791,12 @@ static int exchange_read_available(struct lantern_reqresp_exchange *exchange, in
         if (err == LIBP2P_HOST_ERR_WOULD_BLOCK) {
             return 0;
         }
+        if (err == LIBP2P_HOST_ERR_CLOSED) {
+            if (out_fin) {
+                *out_fin = 1;
+            }
+            return 0;
+        }
         if (err != LIBP2P_HOST_OK) {
             return -1;
         }
@@ -925,6 +932,33 @@ static struct lantern_reqresp_exchange *service_claim_timed_out_blocks_exchange(
     return expired;
 }
 
+static struct lantern_reqresp_exchange *service_claim_cancelled_range_exchange(
+    struct lantern_reqresp_service *service) {
+    if (!service) {
+        return NULL;
+    }
+    if (service->lock_initialized) {
+        pthread_mutex_lock(&service->lock);
+    }
+    struct lantern_reqresp_exchange *cancelled = NULL;
+    for (struct lantern_reqresp_exchange *exchange = service->exchanges;
+         exchange;
+         exchange = exchange->next) {
+        if (exchange->outbound
+            && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE
+            && exchange->cancelled
+            && exchange->stream) {
+            exchange->cancelled = 0;
+            cancelled = exchange;
+            break;
+        }
+    }
+    if (service->lock_initialized) {
+        pthread_mutex_unlock(&service->lock);
+    }
+    return cancelled;
+}
+
 static void reqresp_drive(
     struct lantern_libp2p_host *network,
     libp2p_host_time_us_t now_us,
@@ -932,6 +966,9 @@ static void reqresp_drive(
     (void)network;
     struct lantern_reqresp_service *service = user_data;
     struct lantern_reqresp_exchange *exchange = NULL;
+    while ((exchange = service_claim_cancelled_range_exchange(service)) != NULL) {
+        (void)libp2p_host_stream_reset(exchange->host, exchange->stream, 0u);
+    }
     while ((exchange = service_claim_timed_out_blocks_exchange(service, now_us)) != NULL) {
         lantern_log_warn(
             "reqresp",
@@ -1238,7 +1275,16 @@ static libp2p_host_err_t reqresp_on_event(
         if (!exchange->outbound && exchange->request_complete && !exchange->write_buf && exchange->read_buf.len == 0u) {
             (void)libp2p_host_stream_finish(host, stream);
         }
-        (void)fin;
+        if (exchange->outbound && fin) {
+            if (!exchange->completed && exchange->read_buf.len != 0u) {
+                exchange_fail(exchange, LANTERN_REQRESP_ERR_INVALID_PAYLOAD);
+            } else {
+                exchange_handle_outbound_closed(exchange, false);
+            }
+            (void)libp2p_host_stream_set_user_data(stream, NULL);
+            service_remove_exchange(exchange->service, exchange);
+            exchange_free(exchange);
+        }
     }
     return LIBP2P_HOST_OK;
 }
@@ -1278,6 +1324,36 @@ void lantern_reqresp_service_reset(struct lantern_reqresp_service *service) {
         pthread_mutex_destroy(&service->lock);
     }
     memset(service, 0, sizeof(*service));
+}
+
+bool lantern_reqresp_service_cancel_blocks_by_range(
+    struct lantern_reqresp_service *service,
+    uint64_t request_id) {
+    if (!service || request_id == 0u) {
+        return false;
+    }
+    if (service->lock_initialized) {
+        pthread_mutex_lock(&service->lock);
+    }
+    bool cancelled = false;
+    for (struct lantern_reqresp_exchange *exchange = service->exchanges;
+         exchange;
+         exchange = exchange->next) {
+        if (exchange->outbound
+            && exchange->kind == LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE
+            && exchange->request_id == request_id
+            && !exchange->completed) {
+            exchange->completed = 1;
+            exchange->cancelled = 1;
+            exchange->deadline_us = 0u;
+            cancelled = true;
+            break;
+        }
+    }
+    if (service->lock_initialized) {
+        pthread_mutex_unlock(&service->lock);
+    }
+    return cancelled;
 }
 
 int lantern_reqresp_service_start(

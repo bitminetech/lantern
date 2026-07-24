@@ -1326,10 +1326,10 @@ static int test_mixed_peer_heads_keep_network_target_stable(void)
 
     request_id_before = client.next_blocks_request_id;
     if (reqresp_handle_status(&client, &status, peer_a) != LANTERN_CLIENT_OK
-        || client.next_blocks_request_id == request_id_before
+        || client.next_blocks_request_id != request_id_before
         || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_a)
         || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_b)) {
-        fprintf(stderr, "fresh status did not restore a previously failed range peer\n");
+        fprintf(stderr, "fresh status revived a failed peer within the same range frontier\n");
         goto cleanup;
     }
     rc = 0;
@@ -2741,6 +2741,13 @@ static int test_range_response_bounds_and_completion_progress(void)
         sizeof(client.range_sync.request_peer),
         "%s",
         peer_id);
+    if (lantern_string_list_append_unique(
+            &client.range_sync.failed_peers,
+            "16Uiu2HAmPreviouslyFailed")
+        != 0) {
+        fprintf(stderr, "failed to seed range failure lifecycle\n");
+        goto cleanup;
+    }
 
     block.block.slot = 23u;
     if (reqresp_handle_block_response(&client, &block, peer_id, 90u)
@@ -2755,8 +2762,9 @@ static int test_range_response_bounds_and_completion_progress(void)
             LANTERN_BLOCKS_REQUEST_SUCCESS)
         || client.range_sync.next_slot != 23u
         || client.range_sync.target_slot != 24u
-        || client.range_sync.request_id != 0u) {
-        fprintf(stderr, "successful range batch did not advance by its full slot span\n");
+        || client.range_sync.request_id != 0u
+        || client.range_sync.failed_peers.len != 0u) {
+        fprintf(stderr, "successful range batch did not advance and reset peer failures\n");
         goto cleanup;
     }
 
@@ -2793,11 +2801,28 @@ static int test_range_response_bounds_and_completion_progress(void)
         goto cleanup;
     }
     uint64_t request_id_before = client.next_blocks_request_id;
-    lantern_client_update_range_sync_target(&client, peer_id, 24u, UINT64_MAX);
+    lantern_client_update_range_sync_target(&client, peer_id, 22u, UINT64_MAX);
     if (client.next_blocks_request_id == request_id_before
-        || client.range_sync.target_slot != 24u + LANTERN_MAX_SYNC_RANGE_SLOTS
+        || client.range_sync.next_slot != 25u
+        || client.range_sync.target_slot != 22u + LANTERN_MAX_SYNC_RANGE_SLOTS
         || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_id)) {
-        fprintf(stderr, "range scheduling ignored its window or available peer\n");
+        fprintf(stderr, "range scheduling rewound an authoritative scanned frontier\n");
+        goto cleanup;
+    }
+    const char *old_frontier_peer = "16Uiu2HAmOldFrontier";
+    if (lantern_string_list_append_unique(
+            &client.range_sync.failed_peers,
+            old_frontier_peer)
+            != 0) {
+        fprintf(stderr, "failed to seed old-frontier peer state\n");
+        goto cleanup;
+    }
+    lantern_client_update_range_sync_target(&client, peer_id, 25u, UINT64_MAX);
+    if (client.range_sync.next_slot != 26u
+        || lantern_string_list_contains(
+            &client.range_sync.failed_peers,
+            old_frontier_peer)) {
+        fprintf(stderr, "local catch-up retained failures from an obsolete frontier\n");
         goto cleanup;
     }
     rc = 0;

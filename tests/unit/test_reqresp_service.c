@@ -5,10 +5,13 @@
 
 #include "lantern/consensus/containers.h"
 #include "lantern/consensus/hash.h"
+#include "../../external/c-lean-libp2p/src/libp2p/libp2p_host_internal.h"
 
 /* Exercise static exchange handling without adding test hooks to production code. */
 #define lantern_reqresp_service_init lantern_reqresp_service_init_for_test
 #define lantern_reqresp_service_reset lantern_reqresp_service_reset_for_test
+#define lantern_reqresp_service_cancel_blocks_by_range \
+    lantern_reqresp_service_cancel_blocks_by_range_for_test
 #define lantern_reqresp_service_request_status lantern_reqresp_service_request_status_for_test
 #define lantern_reqresp_service_request_blocks lantern_reqresp_service_request_blocks_for_test
 #define lantern_reqresp_service_request_blocks_by_range lantern_reqresp_service_request_blocks_by_range_for_test
@@ -16,6 +19,7 @@
 #include "../../src/networking/reqresp_service.c"
 #undef lantern_reqresp_service_init
 #undef lantern_reqresp_service_reset
+#undef lantern_reqresp_service_cancel_blocks_by_range
 #undef lantern_reqresp_service_request_status
 #undef lantern_reqresp_service_request_blocks
 #undef lantern_reqresp_service_request_blocks_by_range
@@ -43,6 +47,77 @@ struct test_range_serve_context {
     size_t current_slot_called;
     uint64_t current_slot;
 };
+
+struct test_transport {
+    libp2p_host_err_t read_result;
+    const uint8_t *read_data;
+    size_t read_len;
+    size_t read_offset;
+    size_t reset_called;
+};
+
+static libp2p_host_err_t test_transport_stream_read(
+    void *transport,
+    void *stream,
+    uint8_t *out,
+    size_t out_len,
+    size_t *read_len,
+    int *fin) {
+    (void)stream;
+    (void)out;
+    (void)out_len;
+    struct test_transport *test_transport = transport;
+    CHECK(test_transport != NULL);
+    CHECK(read_len != NULL);
+    CHECK(fin != NULL);
+    if (test_transport->read_offset < test_transport->read_len) {
+        size_t remaining = test_transport->read_len - test_transport->read_offset;
+        size_t copied = remaining < out_len ? remaining : out_len;
+        memcpy(out, test_transport->read_data + test_transport->read_offset, copied);
+        test_transport->read_offset += copied;
+        *read_len = copied;
+        *fin = 0;
+        return LIBP2P_HOST_OK;
+    }
+    *read_len = 0u;
+    *fin = 0;
+    return test_transport->read_result;
+}
+
+static libp2p_host_err_t test_transport_stream_reset(
+    void *transport,
+    void *stream,
+    uint64_t app_error_code) {
+    (void)stream;
+    (void)app_error_code;
+    struct test_transport *test_transport = transport;
+    CHECK(test_transport != NULL);
+    test_transport->reset_called += 1u;
+    return LIBP2P_HOST_OK;
+}
+
+static const libp2p_host_transport_vtable_t test_transport_vtable = {
+    .stream_read = test_transport_stream_read,
+    .stream_reset = test_transport_stream_reset,
+};
+
+static void init_test_host_stream(
+    libp2p_host_t *host,
+    libp2p_host_stream_t *stream,
+    struct test_transport *transport) {
+    CHECK(host != NULL);
+    CHECK(stream != NULL);
+    CHECK(transport != NULL);
+    memset(host, 0, sizeof(*host));
+    memset(stream, 0, sizeof(*stream));
+    host->magic = HOST_MAGIC;
+    host->state = HOST_STATE_STARTED;
+    host->config.transport = &test_transport_vtable;
+    host->transport = transport;
+    stream->host = host;
+    stream->transport_stream = transport;
+    stream->state = HOST_STREAM_OPEN;
+}
 
 static int test_handle_block_response(
     void *context,
@@ -398,6 +473,112 @@ static void test_blocks_by_root_timeout_completes_failure_once(void) {
     service.exchanges = NULL;
 }
 
+static void test_blocks_by_range_closed_read_completes_success(void) {
+    struct test_blocks_context test_context;
+    memset(&test_context, 0, sizeof(test_context));
+
+    struct lantern_reqresp_service service;
+    memset(&service, 0, sizeof(service));
+    service.callbacks.context = &test_context;
+    service.callbacks.handle_block_response = test_handle_block_response;
+    service.callbacks.blocks_request_complete = test_blocks_request_complete;
+
+    struct lantern_reqresp_exchange *exchange = calloc(1u, sizeof(*exchange));
+    CHECK(exchange != NULL);
+    exchange->service = &service;
+    exchange->kind = LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE;
+    exchange->outbound = 1;
+    exchange->request_id = 43u;
+    exchange->range_start_slot = 40u;
+    exchange->range_count = 3u;
+    service.exchanges = exchange;
+
+    LanternSignedBlock block;
+    make_block(&block, 40u, 0x75u);
+    uint8_t *raw = NULL;
+    size_t raw_len = 0u;
+    CHECK(encode_signed_block_raw(&block, &raw, &raw_len) == 0);
+    struct reqresp_buffer response = {0};
+    CHECK(
+        append_frame_from_raw(
+            &response,
+            raw,
+            raw_len,
+            LANTERN_REQRESP_RESPONSE_SUCCESS)
+        == 0);
+    free(raw);
+
+    struct test_transport transport = {
+        .read_result = LIBP2P_HOST_ERR_CLOSED,
+        .read_data = response.data,
+        .read_len = response.len,
+    };
+    libp2p_host_t host;
+    libp2p_host_stream_t stream;
+    init_test_host_stream(&host, &stream, &transport);
+    exchange->host = &host;
+    exchange->stream = &stream;
+    stream.user_data = exchange;
+
+    CHECK(
+        reqresp_on_event(
+            &host,
+            &stream,
+            LIBP2P_HOST_PROTOCOL_EVENT_READABLE,
+            NULL)
+        == LIBP2P_HOST_OK);
+    CHECK(test_context.handled_count == 1u);
+    CHECK(test_context.complete_called == 1);
+    CHECK(test_context.complete_result == LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_SUCCESS);
+    CHECK(service.exchanges == NULL);
+    CHECK(stream.user_data == NULL);
+    reqresp_buffer_reset(&response);
+    lantern_signed_block_reset(&block);
+}
+
+static void test_cancelled_range_does_not_timeout_or_complete(void) {
+    struct test_blocks_context test_context;
+    memset(&test_context, 0, sizeof(test_context));
+
+    struct lantern_reqresp_service service;
+    memset(&service, 0, sizeof(service));
+    service.callbacks.context = &test_context;
+    service.callbacks.blocks_request_complete = test_blocks_request_complete;
+
+    struct lantern_reqresp_exchange exchange;
+    memset(&exchange, 0, sizeof(exchange));
+    exchange.service = &service;
+    exchange.kind = LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE;
+    exchange.outbound = 1;
+    exchange.request_id = 44u;
+    exchange.deadline_us = 100u;
+    service.exchanges = &exchange;
+
+    struct test_transport transport = {
+        .read_result = LIBP2P_HOST_ERR_WOULD_BLOCK,
+    };
+    libp2p_host_t host;
+    libp2p_host_stream_t stream;
+    init_test_host_stream(&host, &stream, &transport);
+    exchange.host = &host;
+    exchange.stream = &stream;
+
+    CHECK(lantern_reqresp_service_cancel_blocks_by_range_for_test(&service, 44u));
+    CHECK(exchange.completed == 1);
+    CHECK(exchange.cancelled == 1);
+    CHECK(exchange.deadline_us == 0u);
+
+    reqresp_drive(NULL, 200u, &service);
+    CHECK(transport.reset_called == 1u);
+    CHECK(exchange.cancelled == 0);
+    CHECK(test_context.complete_called == 0);
+
+    reqresp_drive(NULL, 300u, &service);
+    CHECK(transport.reset_called == 1u);
+    CHECK(test_context.complete_called == 0);
+    service.exchanges = NULL;
+}
+
 static void test_blocks_by_range_accepts_sparse_and_clean_empty(void) {
     LanternSignedBlock blocks[2];
     make_block(&blocks[0], 40u, 0x80u);
@@ -644,6 +825,8 @@ int main(void) {
     test_blocks_by_root_unrequested_block_fails_before_callback();
     test_blocks_by_root_empty_batch_is_reported();
     test_blocks_by_root_timeout_completes_failure_once();
+    test_blocks_by_range_closed_read_completes_success();
+    test_cancelled_range_does_not_timeout_or_complete();
     test_blocks_by_range_accepts_sparse_and_clean_empty();
     test_blocks_by_range_rejects_slot_below_start();
     test_blocks_by_range_rejects_slot_at_exclusive_end();

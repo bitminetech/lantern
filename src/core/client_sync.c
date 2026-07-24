@@ -1532,48 +1532,6 @@ static struct lantern_peer_status_entry *select_range_request_peer_locked(
     return best;
 }
 
-static bool block_import_queue_is_empty(struct lantern_client *client)
-{
-    if (!client->block_import_sync_initialized)
-    {
-        return true;
-    }
-    if (pthread_mutex_lock(&client->block_import_lock) != 0)
-    {
-        return false;
-    }
-    bool empty = !client->block_import_stop && client->block_import_head == NULL;
-    pthread_mutex_unlock(&client->block_import_lock);
-    return empty;
-}
-
-static void range_sync_restore_peer_locked(
-    struct lantern_range_sync_state *range,
-    const char *peer_id)
-{
-    if (!range || !peer_id || !peer_id[0])
-    {
-        return;
-    }
-    for (size_t i = 0; i < range->failed_peers.len; ++i)
-    {
-        char *failed_peer = range->failed_peers.items[i];
-        if (!failed_peer || strcmp(failed_peer, peer_id) != 0)
-        {
-            continue;
-        }
-        free(failed_peer);
-        range->failed_peers.len -= 1u;
-        if (i != range->failed_peers.len)
-        {
-            range->failed_peers.items[i] =
-                range->failed_peers.items[range->failed_peers.len];
-        }
-        range->failed_peers.items[range->failed_peers.len] = NULL;
-        return;
-    }
-}
-
 static bool schedule_next_range_request(struct lantern_client *client)
 {
     if (!client || !client->status_lock_initialized
@@ -1688,7 +1646,6 @@ void lantern_client_update_range_sync_target(
     uint64_t target_slot = peer_head_slot < max_target_slot
         ? peer_head_slot
         : max_target_slot;
-    range_sync_restore_peer_locked(range, peer_id);
     if (range->next_slot == 0u)
     {
         range->next_slot = local_next_slot;
@@ -1696,15 +1653,10 @@ void lantern_client_update_range_sync_target(
     }
     else
     {
-        if (range->request_id == 0u && range->next_slot > range->target_slot
-            && local_head_slot < range->target_slot
-            && block_import_queue_is_empty(client))
-        {
-            range->next_slot = local_next_slot;
-        }
         if (range->request_id == 0u && local_next_slot > range->next_slot)
         {
             range->next_slot = local_next_slot;
+            lantern_string_list_reset(&range->failed_peers);
         }
         if (target_slot > range->target_slot)
         {
@@ -1750,6 +1702,7 @@ bool lantern_client_complete_range_request(
     bool should_continue = false;
     if (outcome == LANTERN_BLOCKS_REQUEST_SUCCESS)
     {
+        lantern_string_list_reset(&range->failed_peers);
         range->next_slot = start_slot + count;
         if (range->next_slot <= range->target_slot)
         {

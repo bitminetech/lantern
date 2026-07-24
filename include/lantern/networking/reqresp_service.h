@@ -104,6 +104,9 @@ extern "C" {
 
 void lantern_reqresp_service_init(struct lantern_reqresp_service *service);
 void lantern_reqresp_service_reset(struct lantern_reqresp_service *service);
+bool lantern_reqresp_service_cancel_blocks_by_range(
+    struct lantern_reqresp_service *service,
+    uint64_t request_id);
 int lantern_reqresp_service_request_status(
     struct lantern_reqresp_service *service,
     const struct lantern_peer_id *peer_id,

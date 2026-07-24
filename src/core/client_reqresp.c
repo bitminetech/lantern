@@ -505,9 +505,11 @@ void lantern_client_update_sync_progress(
         return;
     }
 
+    uint64_t retired_request_id = 0u;
     struct lantern_range_sync_state *range = &client->range_sync;
     if (range->target_slot != 0u && local_slot >= range->target_slot)
     {
+        retired_request_id = range->request_id;
         lantern_string_list_reset(&range->failed_peers);
         *range = (struct lantern_range_sync_state){0};
     }
@@ -515,6 +517,12 @@ void lantern_client_update_sync_progress(
 
     pthread_mutex_unlock(&client->status_lock);
 
+    if (retired_request_id != 0u)
+    {
+        (void)lantern_reqresp_service_cancel_blocks_by_range(
+            &client->reqresp,
+            retired_request_id);
+    }
     maybe_log_sync_progress(
         client,
         local_slot,
