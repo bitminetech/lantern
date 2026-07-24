@@ -759,8 +759,9 @@ static void reqresp_alias_anchor_checkpoint_if_unset(
  *
  * @spec subspecs/networking/reqresp/message.py - Status protocol
  *
- * Processes a peer's status message, updates peer tracking, records
- * sync progress, and routes ahead peers into forward range catch-up.
+ * Processes a peer's status message, updates peer tracking, and records
+ * sync progress. Block requests are driven by received blocks with missing
+ * ancestry, not by ordinary differences between peer and local heads.
  *
  * @param context      Client instance
  * @param peer_status  Status message from peer
@@ -1742,7 +1743,8 @@ void reqresp_blocks_request_complete(
  * @spec subspecs/forkchoice/store.py - Sync decision logic
  *
  * Updates peer status tracking and sync progress based on the received
- * status message. Ahead peer heads route forward range catch-up.
+ * status message. Status is peer knowledge, not proof that local block
+ * ancestry is missing, so it does not create new synchronization work.
  *
  * @param client       Client instance
  * @param peer_status  Status message from peer
@@ -1798,14 +1800,7 @@ static void lantern_client_on_peer_status(
         peer_copy,
         &local_head,
         head_known);
-    if (peer_status->head.slot > local_head.slot)
-    {
-        lantern_client_update_range_sync_target(
-            client,
-            peer_copy,
-            local_head.slot,
-            peer_status->head.slot);
-    }
+    (void)lantern_client_schedule_next_range_request(client);
 }
 
 

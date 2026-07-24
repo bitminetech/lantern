@@ -1532,7 +1532,7 @@ static struct lantern_peer_status_entry *select_range_request_peer_locked(
     return best;
 }
 
-static bool schedule_next_range_request(struct lantern_client *client)
+bool lantern_client_schedule_next_range_request(struct lantern_client *client)
 {
     if (!client || !client->status_lock_initialized
         || pthread_mutex_lock(&client->status_lock) != 0)
@@ -1625,12 +1625,11 @@ static bool schedule_next_range_request(struct lantern_client *client)
 
 void lantern_client_update_range_sync_target(
     struct lantern_client *client,
-    const char *peer_id,
     uint64_t local_head_slot,
-    uint64_t peer_head_slot)
+    uint64_t target_slot)
 {
-    if (!client || !peer_id || !peer_id[0] || !client->status_lock_initialized
-        || peer_head_slot <= local_head_slot
+    if (!client || !client->status_lock_initialized
+        || target_slot <= local_head_slot
         || local_head_slot == UINT64_MAX
         || pthread_mutex_lock(&client->status_lock) != 0)
     {
@@ -1643,13 +1642,13 @@ void lantern_client_update_range_sync_target(
         local_head_slot > UINT64_MAX - LANTERN_MAX_SYNC_RANGE_SLOTS
         ? UINT64_MAX
         : local_head_slot + LANTERN_MAX_SYNC_RANGE_SLOTS;
-    uint64_t target_slot = peer_head_slot < max_target_slot
-        ? peer_head_slot
+    uint64_t bounded_target_slot = target_slot < max_target_slot
+        ? target_slot
         : max_target_slot;
     if (range->next_slot == 0u)
     {
         range->next_slot = local_next_slot;
-        range->target_slot = target_slot;
+        range->target_slot = bounded_target_slot;
     }
     else
     {
@@ -1658,13 +1657,13 @@ void lantern_client_update_range_sync_target(
             range->next_slot = local_next_slot;
             lantern_string_list_reset(&range->failed_peers);
         }
-        if (target_slot > range->target_slot)
+        if (bounded_target_slot > range->target_slot)
         {
-            range->target_slot = target_slot;
+            range->target_slot = bounded_target_slot;
         }
     }
     pthread_mutex_unlock(&client->status_lock);
-    (void)schedule_next_range_request(client);
+    (void)lantern_client_schedule_next_range_request(client);
 }
 
 bool lantern_client_complete_range_request(
@@ -1730,7 +1729,7 @@ bool lantern_client_complete_range_request(
 
     if (should_continue)
     {
-        (void)schedule_next_range_request(client);
+        (void)lantern_client_schedule_next_range_request(client);
     }
     return true;
 }
@@ -2476,8 +2475,7 @@ bool lantern_client_enqueue_pending_block(
     }
 
     struct lantern_pending_block_list *list = &client->pending_blocks;
-    bool request_parent_now =
-        request_parent || client->sync_state != LANTERN_SYNC_STATE_IDLE;
+    bool request_parent_now = request_parent;
     if (backfill_depth > LANTERN_MAX_BACKFILL_DEPTH)
     {
         backfill_depth = LANTERN_MAX_BACKFILL_DEPTH;

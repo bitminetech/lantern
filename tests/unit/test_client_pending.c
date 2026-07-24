@@ -1299,13 +1299,12 @@ static int test_mixed_peer_heads_keep_network_target_stable(void)
     };
     request_id_before = client.next_blocks_request_id;
     if (reqresp_handle_status(&client, &status, peer_b) != LANTERN_CLIENT_OK
-        || client.next_blocks_request_id == request_id_before
+        || client.next_blocks_request_id != request_id_before
         || !lantern_root_equal(&client.network_view.head.root, &higher_head)
-        || client.range_sync.next_slot != client.state.slot + 1u
-        || client.range_sync.target_slot != client.state.slot + 2u
-        || client.sync_state != LANTERN_SYNC_STATE_SYNCED
-        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_b)) {
-        fprintf(stderr, "higher peer head did not start catch-up while staying synced\n");
+        || client.range_sync.next_slot != 0u
+        || client.range_sync.target_slot != 0u
+        || client.sync_state != LANTERN_SYNC_STATE_SYNCED) {
+        fprintf(stderr, "higher peer status initiated range work or changed sync classification\n");
         goto cleanup;
     }
 
@@ -1315,21 +1314,12 @@ static int test_mixed_peer_heads_keep_network_target_stable(void)
     };
     request_id_before = client.next_blocks_request_id;
     if (reqresp_handle_status(&client, &status, peer_a) != LANTERN_CLIENT_OK
-        || client.next_blocks_request_id == request_id_before
+        || client.next_blocks_request_id != request_id_before
         || client.network_view.head.slot != client.state.slot + 2u
         || !lantern_root_equal(&client.network_view.head.root, &higher_head)
-        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_a)
-        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_b)) {
-        fprintf(stderr, "range catch-up did not use an alternative peer's partial range\n");
-        goto cleanup;
-    }
-
-    request_id_before = client.next_blocks_request_id;
-    if (reqresp_handle_status(&client, &status, peer_a) != LANTERN_CLIENT_OK
-        || client.next_blocks_request_id != request_id_before
-        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_a)
-        || !lantern_string_list_contains(&client.range_sync.failed_peers, peer_b)) {
-        fprintf(stderr, "fresh status revived a failed peer within the same range frontier\n");
+        || client.range_sync.next_slot != 0u
+        || client.range_sync.target_slot != 0u) {
+        fprintf(stderr, "lower peer status initiated range work or regressed the network target\n");
         goto cleanup;
     }
     rc = 0;
@@ -1345,7 +1335,8 @@ static int test_idle_status_triggers_syncing_before_gossip_backfill(void)
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
     struct PQSignatureSchemeSecretKey *secret = NULL;
-    LanternRoot child_root;
+    LanternRoot local_head;
+    LanternRoot orphan_root;
     LanternSignedBlock orphan_block;
     const char *peer_id = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
     int rc = 1;
@@ -1357,7 +1348,7 @@ static int test_idle_status_triggers_syncing_before_gossip_backfill(void)
             &pub,
             &secret,
             NULL,
-            &child_root)
+            &local_head)
         != 0) {
         return 1;
     }
@@ -1371,6 +1362,10 @@ static int test_idle_status_triggers_syncing_before_gossip_backfill(void)
     orphan_block.block.proposer_index = 0u;
     client_test_fill_root(&orphan_block.block.parent_root, 0x91u);
     client_test_fill_root(&orphan_block.block.state_root, 0x92u);
+    if (lantern_hash_tree_root_block(&orphan_block.block, &orphan_root) != SSZ_SUCCESS) {
+        fprintf(stderr, "failed to hash historical orphan block\n");
+        goto cleanup;
+    }
 
     client.sync_state = LANTERN_SYNC_STATE_IDLE;
     if (lantern_client_debug_gossip_block(&client, &orphan_block) != LANTERN_CLIENT_ERR_IGNORED) {
@@ -1388,11 +1383,12 @@ static int test_idle_status_triggers_syncing_before_gossip_backfill(void)
 
     LanternStatusMessage status;
     memset(&status, 0, sizeof(status));
-    status.head.root = child_root;
-    status.head.slot = client.state.slot;
+    status.head.root = orphan_root;
+    status.head.slot = orphan_block.block.slot;
     status.finalized = client.state.latest_finalized;
     status.finalized.slot = client.state.slot + 1u;
     client_test_fill_root(&status.finalized.root, 0x55u);
+    uint64_t request_id_before = client.next_blocks_request_id;
     if (reqresp_handle_status(&client, &status, peer_id) != LANTERN_CLIENT_OK) {
         fprintf(stderr, "peer status update failed\n");
         goto cleanup;
@@ -1401,8 +1397,13 @@ static int test_idle_status_triggers_syncing_before_gossip_backfill(void)
         fprintf(stderr, "peer status finalized ahead should keep sync incomplete\n");
         goto cleanup;
     }
+    if (client.next_blocks_request_id != request_id_before
+        || client.range_sync.next_slot != 0u
+        || client.range_sync.target_slot != 0u) {
+        fprintf(stderr, "ahead peer status should not initiate range work\n");
+        goto cleanup;
+    }
 
-    uint64_t request_id_before = client.next_blocks_request_id;
     if (lantern_client_debug_gossip_block(&client, &orphan_block) != LANTERN_CLIENT_OK) {
         fprintf(stderr, "SYNCING gossip block should be accepted into pending flow\n");
         goto cleanup;
@@ -1412,7 +1413,85 @@ static int test_idle_status_triggers_syncing_before_gossip_backfill(void)
         goto cleanup;
     }
     if (client.next_blocks_request_id == request_id_before) {
-        fprintf(stderr, "SYNCING unknown-parent gossip block should trigger blocks_by_root\n");
+        fprintf(stderr, "received historical block should trigger blocks_by_range\n");
+        goto cleanup;
+    }
+    if (client.range_sync.next_slot != client.state.slot + 1u
+        || client.range_sync.target_slot != orphan_block.block.slot - 1u
+        || client.block_fetch_count != 0u
+        || client.active_blocks_request_count != 0u) {
+        fprintf(stderr, "received historical block did not route its gap exclusively through range sync\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    lantern_block_body_reset(&orphan_block.block.body);
+    disable_sync_test_peer(&client);
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
+static int test_received_direct_parent_gap_uses_blocks_by_root(void)
+{
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot local_head;
+    LanternRoot orphan_root;
+    LanternSignedBlock orphan_block;
+    const char *peer_id = "16Uiu2HAmQj1RDNAxopeeeCFPRr3zhJYmH6DEPHYKmxLViLahWcFE";
+    int rc = 1;
+
+    memset(&orphan_block, 0, sizeof(orphan_block));
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "sync_direct_parent_backfill",
+            &pub,
+            &secret,
+            NULL,
+            &local_head)
+        != 0) {
+        return 1;
+    }
+    if (enable_sync_test_peer(&client, peer_id) != 0) {
+        fprintf(stderr, "failed to enable direct-parent sync test peer\n");
+        goto cleanup;
+    }
+
+    lantern_block_body_init(&orphan_block.block.body);
+    orphan_block.block.slot = client.state.slot + 1u;
+    orphan_block.block.proposer_index = 0u;
+    client_test_fill_root(&orphan_block.block.parent_root, 0x93u);
+    client_test_fill_root(&orphan_block.block.state_root, 0x94u);
+    if (lantern_hash_tree_root_block(&orphan_block.block, &orphan_root) != SSZ_SUCCESS) {
+        fprintf(stderr, "failed to hash direct-parent orphan block\n");
+        goto cleanup;
+    }
+
+    LanternStatusMessage status = {
+        .head = {
+            .root = orphan_root,
+            .slot = orphan_block.block.slot,
+        },
+        .finalized = client.state.latest_finalized,
+    };
+    status.finalized.slot = client.state.slot + 1u;
+    client_test_fill_root(&status.finalized.root, 0x56u);
+    client.sync_state = LANTERN_SYNC_STATE_IDLE;
+    if (reqresp_handle_status(&client, &status, peer_id) != LANTERN_CLIENT_OK) {
+        fprintf(stderr, "direct-parent peer status update failed\n");
+        goto cleanup;
+    }
+
+    uint64_t request_id_before = client.next_blocks_request_id;
+    if (lantern_client_debug_gossip_block(&client, &orphan_block) != LANTERN_CLIENT_OK
+        || lantern_client_pending_block_count(&client) != 1u
+        || client.next_blocks_request_id == request_id_before
+        || client.range_sync.next_slot != 0u
+        || client.range_sync.target_slot != 0u) {
+        fprintf(stderr, "direct-parent miss did not recover exclusively by block root\n");
         goto cleanup;
     }
 
@@ -1615,6 +1694,14 @@ static int test_peer_status_updates_sync_network_view(void)
     }
     if (client.sync_state != LANTERN_SYNC_STATE_SYNCING) {
         fprintf(stderr, "peer finalized ahead should keep sync incomplete\n");
+        goto cleanup;
+    }
+    if (client.next_blocks_request_id != 0u
+        || client.range_sync.next_slot != 0u
+        || client.range_sync.target_slot != 0u
+        || client.block_fetch_count != 0u
+        || client.active_blocks_request_count != 0u) {
+        fprintf(stderr, "peer status should classify sync without initiating block requests\n");
         goto cleanup;
     }
 
@@ -2801,7 +2888,7 @@ static int test_range_response_bounds_and_completion_progress(void)
         goto cleanup;
     }
     uint64_t request_id_before = client.next_blocks_request_id;
-    lantern_client_update_range_sync_target(&client, peer_id, 22u, UINT64_MAX);
+    lantern_client_update_range_sync_target(&client, 22u, UINT64_MAX);
     if (client.next_blocks_request_id == request_id_before
         || client.range_sync.next_slot != 25u
         || client.range_sync.target_slot != 22u + LANTERN_MAX_SYNC_RANGE_SLOTS
@@ -2817,7 +2904,7 @@ static int test_range_response_bounds_and_completion_progress(void)
         fprintf(stderr, "failed to seed old-frontier peer state\n");
         goto cleanup;
     }
-    lantern_client_update_range_sync_target(&client, peer_id, 25u, UINT64_MAX);
+    lantern_client_update_range_sync_target(&client, 25u, UINT64_MAX);
     if (client.range_sync.next_slot != 26u
         || lantern_string_list_contains(
             &client.range_sync.failed_peers,
@@ -3349,6 +3436,9 @@ int main(void) {
         return 1;
     }
     if (test_idle_status_triggers_syncing_before_gossip_backfill() != 0) {
+        return 1;
+    }
+    if (test_received_direct_parent_gap_uses_blocks_by_root() != 0) {
         return 1;
     }
     if (test_active_parent_requests_deduplicate_and_retry() != 0) {

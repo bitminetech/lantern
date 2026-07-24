@@ -793,6 +793,10 @@ static enum block_parent_action handle_block_parent_locked(
         const char *peer_text = meta && meta->peer ? meta->peer : NULL;
         lantern_client_unlock_state(client, *state_locked);
         *state_locked = false;
+
+        bool has_range_gap = !allow_historical
+            && block->block.slot > head_slot
+            && block->block.slot - head_slot > 1u;
         bool queued = lantern_client_enqueue_pending_block(
             client,
             block,
@@ -800,7 +804,14 @@ static enum block_parent_action handle_block_parent_locked(
             &parent_root,
             peer_text,
             backfill_depth,
-            allow_historical);
+            allow_historical || !has_range_gap);
+        if (queued && has_range_gap)
+        {
+            lantern_client_update_range_sync_target(
+                client,
+                head_slot,
+                block->block.slot - 1u);
+        }
         return queued ? BLOCK_PARENT_ACTION_DEFERRED : BLOCK_PARENT_ACTION_UNKNOWN;
     }
 
