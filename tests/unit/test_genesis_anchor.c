@@ -700,14 +700,22 @@ static int test_checkpoint_sync_anchor_checkpoint_restores(void)
         lantern_block_body_reset(&child_block.body);
         goto cleanup;
     }
-    if (lantern_fork_choice_add_block_with_state(
-            &client.store,
-            &child_block,
-            &remote_justified,
-            &remote_finalized,
-            &child_root,
-            NULL)
-        != 0)
+    /* A disk-backed store must have the selected head's post-state available. */
+    LanternState child_state;
+    lantern_state_init(&child_state);
+    if (lantern_state_clone(&client.state, &child_state) != 0)
+    {
+        lantern_block_body_reset(&child_block.body);
+        goto cleanup;
+    }
+    child_state.slot = child_block.slot;
+    child_state.latest_block_header.slot = child_block.slot;
+    child_state.latest_block_header.parent_root = child_block.parent_root;
+    int child_result = lantern_fork_choice_add_block_with_state(
+        &client.store, &child_block, &remote_justified, &remote_finalized,
+        &child_root, &child_state);
+    lantern_state_reset(&child_state);
+    if (child_result != 0)
     {
         fprintf(stderr, "fork choice rejected first post-anchor block for checkpoint anchor restore regression\n");
         lantern_block_body_reset(&child_block.body);

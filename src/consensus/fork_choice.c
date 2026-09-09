@@ -10,6 +10,21 @@
 #include "lantern/metrics/lean_metrics.h"
 #include "lantern/support/time.h"
 
+enum
+{
+    POST_STATE_CACHE_CAPACITY = 10,
+};
+
+/* Retain roots rather than entry addresses: block-array growth can relocate entries. */
+struct lantern_post_state_cache
+{
+    struct lantern_state_storage storage;
+    LanternRoot roots[POST_STATE_CACHE_CAPACITY];
+    size_t length;
+};
+
+static const size_t s_post_state_cache_bytes = 64u * 1024u * 1024u;
+
 struct lantern_fork_choice_root_index_entry {
     bool occupied;
     LanternRoot root;
@@ -178,6 +193,134 @@ static bool find_block_index(const LanternStore *store, const LanternRoot *root,
     return false;
 }
 
+static size_t post_state_bytes(const LanternState *state)
+{
+    /* Cloned/decoded states own these buffers; transient Merkle caches are not cloned. */
+    return sizeof(*state)
+        + state->historical_block_hashes.capacity * sizeof(LanternRoot)
+        + state->justification_roots.capacity * sizeof(LanternRoot)
+        + state->justified_slots.capacity
+        + state->justification_validators.capacity
+        + state->validator_count * sizeof(*state->validators);
+}
+
+static void state_cache_forget(const LanternStore *store, const LanternRoot *root)
+{
+    struct lantern_post_state_cache *cache = store->state_cache;
+    if (!cache)
+    {
+        return;
+    }
+
+    for (size_t i = 0; i < cache->length; ++i)
+    {
+        if (root_compare(&cache->roots[i], root) == 0)
+        {
+            memmove(&cache->roots[i], &cache->roots[i + 1u],
+                (cache->length - i - 1u) * sizeof(*cache->roots));
+            --cache->length;
+            return;
+        }
+    }
+}
+
+static void state_cache_touch(const LanternStore *store, const LanternRoot *root)
+{
+    struct lantern_post_state_cache *cache = store->state_cache;
+    if (!cache)
+    {
+        return;
+    }
+
+    state_cache_forget(store, root);
+    cache->roots[cache->length++] = *root;
+}
+
+static void state_cache_make_room(
+    const LanternStore *store, const LanternRoot *root, const LanternState *state)
+{
+    struct lantern_post_state_cache *cache = store->state_cache;
+    if (!cache)
+    {
+        return;
+    }
+
+    for (;;)
+    {
+        size_t bytes = post_state_bytes(state);
+        size_t count = 1u;
+        size_t victim = SIZE_MAX;
+        size_t victim_index = 0u;
+        for (size_t i = 0; i < cache->length; ++i)
+        {
+            if (root_compare(&cache->roots[i], root) == 0)
+            {
+                continue;
+            }
+
+            size_t index = 0u;
+            if (!find_block_index(store, &cache->roots[i], &index))
+            {
+                continue;
+            }
+
+            size_t entry_bytes = post_state_bytes(&store->blocks[index].state);
+            bytes = entry_bytes > SIZE_MAX - bytes ? SIZE_MAX : bytes + entry_bytes;
+            ++count;
+            if (victim == SIZE_MAX && root_compare(&cache->roots[i], &store->head) != 0)
+            {
+                victim = i;
+                victim_index = index;
+            }
+        }
+
+        if ((count <= sizeof(cache->roots) / sizeof(*cache->roots)
+                && bytes <= s_post_state_cache_bytes)
+            || victim == SIZE_MAX)
+        {
+            return;
+        }
+
+        LanternRoot victim_root = cache->roots[victim];
+        state_cache_forget(store, &victim_root);
+        lantern_state_reset(&store->blocks[victim_index].state);
+    }
+}
+
+static int state_cache_prepare(
+    const LanternStore *store, const LanternRoot *root, const LanternState *state)
+{
+    if (store->state_cache
+        && store->state_cache->storage.save(
+            store->state_cache->storage.context, root, state) != 0)
+    {
+        return -1;
+    }
+
+    state_cache_make_room(store, root, state);
+    return 0;
+}
+
+int lantern_fork_choice_set_state_storage(
+    LanternStore *store, const struct lantern_state_storage *storage)
+{
+    if (!store || !storage || !storage->load || !storage->save
+        || store->block_len != 0u || store->state_cache)
+    {
+        return -1;
+    }
+
+    struct lantern_post_state_cache *cache = calloc(1u, sizeof(*cache));
+    if (!cache)
+    {
+        return -1;
+    }
+
+    cache->storage = *storage;
+    store->state_cache = cache;
+    return 0;
+}
+
 static void block_states_reset(LanternStore *store) {
     if (!store || !store->blocks) {
         return;
@@ -252,9 +395,9 @@ static int fork_choice_validator_count(const LanternStore *store, size_t *out_co
         || !find_block_index(store, &store->head, &head_index)) {
         return -1;
     }
-    const LanternState *state = state_for_block_index(store, head_index);
+    const LanternState *state = lantern_fork_choice_block_state(store, &store->head);
 
-    if (!state) {
+    if (!state && !store->state_cache) {
         size_t anchor_index = 0u;
         if (find_block_index(store, &store->anchor.root, &anchor_index)) {
             state = state_for_block_index(store, anchor_index);
@@ -300,6 +443,7 @@ void lantern_fork_choice_reset(LanternStore *store) {
     block_states_reset(store);
     free(store->blocks);
     free(store->root_index);
+    free(store->state_cache);
     lantern_store_init(store);
     store->attestation_signatures = attestation_signatures;
     store->new_aggregated_payloads = new_payloads;
@@ -364,11 +508,18 @@ int lantern_fork_choice_set_block_state(
         return -1;
     }
 
+    if (state_cache_prepare(store, root, &cloned) != 0)
+    {
+        lantern_state_reset(&cloned);
+        return -1;
+    }
+
     struct lantern_fork_choice_block_entry *entry = &store->blocks[index];
     if (entry->state.validator_count > 0u) {
         lantern_state_reset(&entry->state);
     }
     entry->state = cloned;
+    state_cache_touch(store, root);
     return 0;
 }
 
@@ -382,7 +533,30 @@ const LanternState *lantern_fork_choice_block_state(
     if (!find_block_index(store, root, &index)) {
         return NULL;
     }
-    return state_for_block_index(store, index);
+    struct lantern_fork_choice_block_entry *entry = &store->blocks[index];
+    if (entry->state.validator_count == 0u && store->state_cache)
+    {
+        LanternState loaded;
+        lantern_state_init(&loaded);
+        struct lantern_state_storage *storage = &store->state_cache->storage;
+        if (storage->load(storage->context, root, &loaded) != 0
+            || loaded.validator_count == 0u)
+        {
+            lantern_state_reset(&loaded);
+            return NULL;
+        }
+
+        state_cache_make_room(store, root, &loaded);
+        entry->state = loaded;
+    }
+
+    if (entry->state.validator_count == 0u)
+    {
+        return NULL;
+    }
+
+    state_cache_touch(store, root);
+    return &entry->state;
 }
 
 int lantern_fork_choice_set_anchor_with_state(
@@ -497,7 +671,7 @@ static bool derive_finalized_from_head_state(
     if (!find_block_index(store, head, &current)) {
         return false;
     }
-    const LanternState *head_state = state_for_block_index(store, current);
+    const LanternState *head_state = lantern_fork_choice_block_state(store, head);
     if (!head_state) {
         return false;
     }
@@ -646,6 +820,12 @@ int lantern_fork_choice_add_block_with_state(
         return -1;
     }
 
+    if (post_state && state_cache_prepare(store, &block_root, &staged_state) != 0)
+    {
+        lantern_state_reset(&staged_state);
+        return -1;
+    }
+
     if (register_block(
             store,
             &block_root,
@@ -660,6 +840,7 @@ int lantern_fork_choice_add_block_with_state(
     if (post_state) {
         previous_state = store->blocks[block_index].state;
         store->blocks[block_index].state = staged_state;
+        state_cache_touch(store, &block_root);
         lantern_state_init(&staged_state);
     }
 
@@ -693,8 +874,14 @@ rollback:
     store->head = previous_head;
 
     if (post_state) {
+        state_cache_forget(store, &block_root);
         lantern_state_reset(&store->blocks[block_index].state);
         store->blocks[block_index].state = previous_state;
+        if (previous_state.validator_count > 0u)
+        {
+            state_cache_make_room(store, &block_root, &previous_state);
+            state_cache_touch(store, &block_root);
+        }
         lantern_state_init(&previous_state);
     }
 
@@ -829,7 +1016,7 @@ int lantern_fork_choice_prune_states(LanternStore *store) {
         free(old_to_new);
         return -1;
     }
-    if (blocks_kept < store->block_len && !state_for_block_index(store, finalized_index)) {
+    if (blocks_kept < store->block_len && !lantern_fork_choice_block_state(store, &store->blocks[finalized_index].root)) {
         free(canonical);
         free(keep_block);
         free(old_to_new);
@@ -847,6 +1034,7 @@ int lantern_fork_choice_prune_states(LanternStore *store) {
         if (canonical[i] && store->blocks[i].slot >= finalized_slot) {
             continue;
         }
+        state_cache_forget(store, &entry->root);
         lantern_state_reset(&entry->state);
     }
 
@@ -1195,6 +1383,11 @@ int lantern_fork_choice_recompute_head(LanternStore *store) {
         return -1;
     }
     free(votes);
+    if (store->state_cache && !lantern_fork_choice_block_state(store, &head))
+    {
+        return -1;
+    }
+
     store->head = head;
     bool finalized_changed = refresh_finalized_from_head_state(store);
 

@@ -670,6 +670,43 @@ static int compute_fork_choice_anchor_roots(
  *
  * @note Thread safety: Should be called during initialization
  */
+static int load_cached_post_state(void *context, const LanternRoot *root, LanternState *out)
+{
+    struct lantern_client *client = context;
+    uint8_t *bytes = NULL;
+    size_t length = 0u;
+    int result = lantern_storage_load_state_bytes_for_root(
+        &client->storage, root, &bytes, &length);
+    if (result == 0)
+    {
+        result = lantern_ssz_decode_state(out, bytes, length) == SSZ_SUCCESS ? 0 : -1;
+    }
+
+    free(bytes);
+    if (result != 0)
+    {
+        lantern_log(LANTERN_LOG_LEVEL_WARN, "storage",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "post-state cache miss could not be loaded from disk");
+    }
+
+    return result;
+}
+
+static int save_cached_post_state(void *context, const LanternRoot *root, const LanternState *state)
+{
+    struct lantern_client *client = context;
+    int result = lantern_storage_store_state_for_root(&client->storage, root, state);
+    if (result != 0)
+    {
+        lantern_log(LANTERN_LOG_LEVEL_ERROR, "storage",
+            &(const struct lantern_log_metadata){.validator = client->node_id},
+            "post-state persistence failed slot=%" PRIu64, state->slot);
+    }
+
+    return result;
+}
+
 int initialize_fork_choice(struct lantern_client *client)
 {
     if (!client || client->state.validator_count == 0u)
@@ -680,6 +717,20 @@ int initialize_fork_choice(struct lantern_client *client)
     const struct lantern_log_metadata meta = {.validator = client->node_id};
 
     lantern_fork_choice_reset(&client->store);
+
+    if (client->data_dir)
+    {
+        const struct lantern_state_storage storage =
+        {
+            .load = load_cached_post_state,
+            .save = save_cached_post_state,
+            .context = client,
+        };
+        if (lantern_fork_choice_set_state_storage(&client->store, &storage) != 0)
+        {
+            return LANTERN_CLIENT_ERR_ALLOC;
+        }
+    }
 
     LanternRoot anchor_state_root;
     LanternBlock anchor;
@@ -722,21 +773,6 @@ int initialize_fork_choice(struct lantern_client *client)
         return LANTERN_CLIENT_ERR_RUNTIME;
     }
     persist_anchor_block(client, &anchor, &anchor_root);
-    if (client->data_dir)
-    {
-        LanternState anchor_state = client->state;
-        if (lantern_storage_store_state_for_root(
-                &client->storage,
-                &anchor_root,
-                &anchor_state)
-            != 0)
-        {
-            lantern_log(LANTERN_LOG_LEVEL_WARN,
-                "storage",
-                &meta,
-                "failed to persist anchor state alias");
-        }
-    }
     lantern_block_body_reset(&anchor.body);
     return LANTERN_CLIENT_OK;
 }
