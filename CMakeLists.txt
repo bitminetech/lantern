@@ -421,6 +421,10 @@ if(LANTERN_BUILD_TESTS)
     target_link_libraries(lantern_fork_choice_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_fork_choice COMMAND lantern_fork_choice_test)
 
+    add_executable(lantern_state_cache_test tests/unit/test_state_cache.c)
+    target_link_libraries(lantern_state_cache_test PRIVATE ${LANTERN_TEST_LINK_LIB})
+    add_test(NAME lantern_state_cache COMMAND lantern_state_cache_test)
+
     add_executable(lantern_storage_test tests/unit/test_storage.c)
     target_link_libraries(lantern_storage_test PRIVATE ${LANTERN_TEST_LINK_LIB})
     add_test(NAME lantern_storage COMMAND lantern_storage_test)

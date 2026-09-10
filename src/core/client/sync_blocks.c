@@ -630,7 +630,7 @@ const LanternState *lantern_client_state_for_root_locked(
 
     const LanternState *state =
         lantern_fork_choice_block_state(&client->store, root);
-    if (state || !client->data_dir || client->data_dir[0] == '\0')
+    if (state || client->store.state_cache || !client->data_dir || client->data_dir[0] == '\0')
     {
         return state;
     }
@@ -1392,8 +1392,9 @@ static bool persist_post_state_locked(
     {
         return false;
     }
-    if (!client->data_dir)
+    if (!client->data_dir || client->store.state_cache)
     {
+        /* Configured caches complete write-through persistence during admission. */
         return true;
     }
 

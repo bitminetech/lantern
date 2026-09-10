@@ -172,9 +172,10 @@ void lantern_client_set_sync_state_logged(struct lantern_client *client,
 /**
  * Get the post-state owned by fork choice for a specific block root.
  *
- * Every block admitted by the live client carries its post-state, matching the
- * leanSpec Store blocks/states invariant. Missing state therefore means the
- * block is not locally usable and must be fetched/imported again.
+ * Disk-backed stores reload evicted states through fork choice. The legacy
+ * fallback also supports client fixtures with storage but no cache adapter.
+ * A NULL result means the state could not be loaded; callers must defer or
+ * report failure rather than treat eviction as an invalid block.
  *
  * @note Thread safety: Caller must hold state_lock
  */

@@ -78,6 +78,7 @@ struct lantern_fork_choice_block_entry
 };
 
 struct lantern_fork_choice_root_index_entry;
+struct lantern_post_state_cache;
 
 struct lantern_fork_choice_checkpoint_snapshot
 {
@@ -110,6 +111,8 @@ struct lantern_store
     /* Root-to-block index used by fork-choice ancestry walks. */
     struct lantern_fork_choice_root_index_entry *root_index;
     size_t root_index_cap;
+    /* Optional disk-backed residency policy; fork choice owns its lifetime. */
+    struct lantern_post_state_cache *state_cache;
 };
 
 void lantern_store_init(LanternStore *store);
