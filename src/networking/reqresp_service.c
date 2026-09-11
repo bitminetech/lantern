@@ -1387,6 +1387,22 @@ static libp2p_host_err_t reqresp_on_open(
     return LIBP2P_HOST_OK;
 }
 
+/* The host releases the stream after a callback error without a terminal callback. */
+static libp2p_host_err_t exchange_fail_and_release(
+    struct lantern_reqresp_exchange *exchange,
+    int error)
+{
+    (void)libp2p_host_stream_set_user_data(exchange->stream, NULL);
+
+    if (service_remove_exchange(exchange->service, exchange))
+    {
+        exchange_fail(exchange, error);
+        exchange_free(exchange);
+    }
+
+    return LIBP2P_HOST_ERR_PROTOCOL;
+}
+
 static libp2p_host_err_t reqresp_on_event(
     libp2p_host_t *host,
     libp2p_host_stream_t *stream,
@@ -1422,26 +1438,24 @@ static libp2p_host_err_t reqresp_on_event(
     }
     if (kind == LIBP2P_HOST_PROTOCOL_EVENT_WRITABLE && exchange->write_buf) {
         if (exchange_flush_write(exchange) != 0) {
-            exchange_fail(exchange, LANTERN_REQRESP_ERR_STREAM_WRITE);
-            return LIBP2P_HOST_ERR_PROTOCOL;
+            return exchange_fail_and_release(exchange, LANTERN_REQRESP_ERR_STREAM_WRITE);
         }
         return LIBP2P_HOST_OK;
     }
     if (kind == LIBP2P_HOST_PROTOCOL_EVENT_READABLE) {
         int fin = 0;
         if (exchange_read_available(exchange, &fin) != 0) {
-            exchange_fail(exchange, LANTERN_REQRESP_ERR_STREAM_READ);
-            return LIBP2P_HOST_ERR_PROTOCOL;
+            return exchange_fail_and_release(exchange, LANTERN_REQRESP_ERR_STREAM_READ);
         }
         if (exchange->outbound) {
             if (exchange_parse_outbound_frames(exchange) != 0) {
-                return LIBP2P_HOST_ERR_PROTOCOL;
+                return exchange_fail_and_release(exchange, LANTERN_REQRESP_ERR_INVALID_PAYLOAD);
             }
         } else if (exchange_handle_inbound_request(exchange) != 0) {
-            return LIBP2P_HOST_ERR_PROTOCOL;
+            return exchange_fail_and_release(exchange, LANTERN_REQRESP_ERR_INVALID_PAYLOAD);
         }
         if (!exchange->outbound && exchange->write_buf && exchange_flush_write(exchange) != 0) {
-            return LIBP2P_HOST_ERR_PROTOCOL;
+            return exchange_fail_and_release(exchange, LANTERN_REQRESP_ERR_STREAM_WRITE);
         }
         if (!exchange->outbound && exchange->request_complete && !exchange->write_buf && exchange->read_buf.len == 0u) {
             (void)libp2p_host_stream_finish(host, stream);
