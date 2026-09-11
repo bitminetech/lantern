@@ -53,6 +53,9 @@ struct test_transport {
     const uint8_t *read_data;
     size_t read_len;
     size_t read_offset;
+    libp2p_host_err_t write_result;
+    size_t write_allowance;
+    size_t written;
     size_t reset_called;
     size_t stop_sending_called;
 };
@@ -85,6 +88,24 @@ static libp2p_host_err_t test_transport_stream_read(
     return test_transport->read_result;
 }
 
+static libp2p_host_err_t test_transport_stream_write(
+    void *transport,
+    void *stream,
+    const uint8_t *data,
+    size_t data_len,
+    int fin,
+    size_t *accepted)
+{
+    (void)stream;
+    (void)data;
+    (void)fin;
+    struct test_transport *test = transport;
+    *accepted = data_len < test->write_allowance ? data_len : test->write_allowance;
+    test->write_allowance -= *accepted;
+    test->written += *accepted;
+    return *accepted ? LIBP2P_HOST_OK : test->write_result;
+}
+
 static libp2p_host_err_t test_transport_stream_reset(
     void *transport,
     void *stream,
@@ -111,6 +132,7 @@ static libp2p_host_err_t test_transport_stream_stop_sending(
 
 static const libp2p_host_transport_vtable_t test_transport_vtable = {
     .stream_read = test_transport_stream_read,
+    .stream_write = test_transport_stream_write,
     .stream_reset = test_transport_stream_reset,
     .stream_stop_sending = test_transport_stream_stop_sending,
 };
@@ -770,6 +792,116 @@ static void test_blocks_by_range_reset_then_closed_completes_once(void) {
     CHECK(transport.reset_called == 1u);
 }
 
+/* Run the real dispatcher: callback errors release the slot without a close callback. */
+static void test_callback_failure_releases_exchange(void)
+{
+    const struct
+    {
+        bool outbound;
+        bool read_error;
+        bool readable;
+        bool completed;
+    } cases[] =
+    {
+        {false, false, false, false},
+        {true, false, false, false},
+        {false, true, true, false},
+        {true, true, true, false},
+        {false, false, true, false},
+        {true, false, false, true},
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
+    {
+        struct test_blocks_context context = {0};
+        struct lantern_reqresp_service service = {0};
+        service.callbacks.context = &context;
+        service.callbacks.blocks_request_complete = test_blocks_request_complete;
+        struct lantern_reqresp_protocol_context protocol_context =
+        {
+            .service = &service,
+            .kind = LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE,
+        };
+        libp2p_host_protocol_t protocol =
+        {
+            .on_event = reqresp_on_event,
+            .user_data = &protocol_context,
+        };
+        struct test_transport transport =
+        {
+            .read_result = cases[i].read_error
+                ? LIBP2P_HOST_ERR_INTERNAL : LIBP2P_HOST_ERR_WOULD_BLOCK,
+            .write_result = LIBP2P_HOST_ERR_WOULD_BLOCK,
+            .write_allowance = 1024u,
+        };
+        libp2p_host_t host;
+        libp2p_host_stream_t stream;
+        init_test_host_stream(&host, &stream, &transport);
+        host.streams = &stream;
+        host.stream_capacity = 1u;
+        stream.protocol = &protocol;
+        struct lantern_reqresp_exchange *exchange = calloc(1u, sizeof(*exchange));
+        CHECK(exchange != NULL);
+        exchange->service = &service;
+        exchange->host = &host;
+        exchange->stream = &stream;
+        exchange->kind = LANTERN_REQRESP_PROTOCOL_BLOCKS_BY_RANGE;
+        exchange->outbound = cases[i].outbound;
+        exchange->completed = cases[i].completed;
+        exchange->write_len = 1024u * 1024u;
+        exchange->write_buf = malloc(exchange->write_len);
+        CHECK(exchange->write_buf != NULL);
+        service_add_exchange(&service, exchange);
+        stream.user_data = exchange;
+        libp2p_host_drive_result_t result = {0};
+        uint8_t progress = 0;
+
+        /* Backpressure keeps the partially sent response alive for a later event. */
+        if (!cases[i].read_error)
+        {
+            stream.pending_writable = 1u;
+            CHECK(host_protocol_event_one(&host, &result, &progress) == LIBP2P_HOST_OK);
+            CHECK(exchange->write_off == 1024u);
+            CHECK(service.exchanges == exchange);
+            CHECK(stream.user_data == exchange);
+            CHECK(context.complete_called == 0);
+        }
+
+        transport.write_result = LIBP2P_HOST_ERR_INTERNAL;
+        stream.pending_readable = cases[i].readable;
+        stream.pending_writable = !cases[i].readable;
+        CHECK(host_protocol_event_one(&host, &result, &progress) == LIBP2P_HOST_ERR_PROTOCOL);
+        CHECK(service.exchanges == NULL);
+        CHECK(stream.user_data == NULL);
+        CHECK(stream.state == HOST_STREAM_FREE);
+        CHECK(transport.reset_called == 1u);
+        int expected = cases[i].outbound && !cases[i].completed;
+        CHECK(context.complete_called == expected);
+
+        if (expected)
+        {
+            CHECK(context.complete_result == LANTERN_REQRESP_BLOCKS_REQUEST_RESULT_FAILED);
+        }
+
+        /* Reuse the released slot, then complete its new exchange exactly once. */
+        init_test_host_stream(&host, &stream, &transport);
+        host.streams = &stream;
+        host.stream_capacity = 1u;
+        stream.protocol = &protocol;
+        CHECK(reqresp_on_open(&host, &stream, LIBP2P_HOST_STREAM_INBOUND,
+                             &protocol_context) == LIBP2P_HOST_OK);
+        CHECK(service.exchanges != NULL);
+        stream.pending_reset = 1u;
+        CHECK(host_protocol_event_one(&host, &result, &progress) == LIBP2P_HOST_OK);
+        CHECK(service.exchanges == NULL);
+        CHECK(stream.user_data == NULL);
+        stream.pending_closed = 1u;
+        CHECK(host_protocol_event_one(&host, &result, &progress) == LIBP2P_HOST_OK);
+        CHECK(stream.state == HOST_STREAM_FREE);
+        CHECK(context.complete_called == expected);
+    }
+}
+
 static void test_stale_stream_exchange_is_ignored(void) {
     struct lantern_reqresp_service service = {0};
     struct lantern_reqresp_protocol_context protocol_ctx = {
@@ -1150,6 +1282,7 @@ int main(void) {
     test_blocks_by_range_timeout_distinguishes_received_data();
     test_blocks_by_range_closed_read_completes_success();
     test_blocks_by_range_reset_then_closed_completes_once();
+    test_callback_failure_releases_exchange();
     test_stale_stream_exchange_is_ignored();
     test_stale_open_failure_is_ignored();
     test_outbound_exchange_is_queued_for_drive_thread();
