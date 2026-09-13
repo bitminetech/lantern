@@ -10,7 +10,7 @@
 
 static atomic_int s_default_min_level = LANTERN_LOG_LEVEL_INFO;
 
-static const char *level_to_string(enum lantern_log_level level)
+static const char* level_to_string(enum lantern_log_level level)
 {
     switch (level)
     {

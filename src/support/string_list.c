@@ -274,7 +274,7 @@ size_t lantern_string_list_count(const struct lantern_string_list *list)
     return list && list->storage ? list->storage->len : 0u;
 }
 
-const char *lantern_string_list_get(const struct lantern_string_list *list,
+const char* lantern_string_list_get(const struct lantern_string_list *list,
                                    size_t index)
 {
     if (!list || !list->storage || index >= list->storage->len)

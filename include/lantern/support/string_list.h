@@ -187,7 +187,7 @@ size_t lantern_string_list_count(const struct lantern_string_list *list);
  * @return A borrowed null-terminated string when `index` is valid.
  * @return `NULL` when `list` is `NULL` or `index` is out of range.
  */
-const char *lantern_string_list_get(const struct lantern_string_list *list,
+const char* lantern_string_list_get(const struct lantern_string_list *list,
                                     size_t index);
 
 #ifdef __cplusplus

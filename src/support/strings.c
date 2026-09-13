@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-char *lantern_string_duplicate(const char *source)
+char* lantern_string_duplicate(const char *source)
 {
     if (!source)
     {
@@ -15,7 +15,7 @@ char *lantern_string_duplicate(const char *source)
     return lantern_string_duplicate_len(source, strlen(source));
 }
 
-char *lantern_string_duplicate_len(const char *source, size_t length)
+char* lantern_string_duplicate_len(const char *source, size_t length)
 {
     if (!source || length == SIZE_MAX)
     {
@@ -77,7 +77,7 @@ lantern_string_copy(char *dst, size_t dst_len, const char *src,
                                : LANTERN_STRING_COPY_TRUNCATED;
 }
 
-char *lantern_trim_whitespace(char *value)
+char* lantern_trim_whitespace(char *value)
 {
     if (!value)
     {
