@@ -37,7 +37,7 @@ enum lantern_string_copy_result
  * @return An owned null-terminated duplicate on success.
  * @return `NULL` when `source` is `NULL` or allocation fails.
  */
-char* lantern_string_duplicate(const char *source);
+char *lantern_string_duplicate(const char *source);
 
 /**
  * Allocate a terminated copy of an exact source byte count.
@@ -55,7 +55,7 @@ char* lantern_string_duplicate(const char *source);
  * @return `NULL` when `source` is `NULL`, `length` equals `SIZE_MAX`, or
  * allocation fails.
  */
-char* lantern_string_duplicate_len(const char *source, size_t length);
+char *lantern_string_duplicate_len(const char *source, size_t length);
 
 /**
  * Copy a string into a bounded destination and add a null terminator.
@@ -97,7 +97,7 @@ lantern_string_copy(char *dst, size_t dst_len, const char *src,
  * null byte when the string contains only whitespace.
  * @return `NULL` when `value` is `NULL`.
  */
-char* lantern_trim_whitespace(char *value);
+char *lantern_trim_whitespace(char *value);
 
 #ifdef __cplusplus
 }
