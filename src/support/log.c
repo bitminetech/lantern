@@ -186,7 +186,6 @@ static enum lantern_log_sink_result default_sink(
     format_component_tag(record->component, tag);
 
     enum lantern_log_sink_result result = LANTERN_LOG_SINK_OK;
-    /* Keep one record contiguous when threads share the default stream. */
     flockfile(target);
 
     if (fprintf(target, "%s  %-5s  %-12s", record->timestamp,
