@@ -1322,7 +1322,7 @@ static int run_fork_choice_fixture(const char *path) {
     }
 
     /* leanSpec generates this fixture's recursive aggregated proofs against an
-     * older leanMultisig revision than the one Lantern's c-leanvm-xmss now uses.
+     * older leanMultisig revision than the one Lantern's c-leanvm now uses.
      * The proofs deserialize but fail verification under the new revision.
      * Re-enable once leanSpec catches up to the new leanMultisig pin. */
     if (strstr(path, "test_finalization_prunes_stale_attestation_signatures") != NULL) {

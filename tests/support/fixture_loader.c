@@ -14,7 +14,7 @@
 #include "lantern/consensus/signature.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/support/strings.h"
-#include "pq-bindings-c-rust.h"
+#include "leanvm.h"
 #include "state_store_adapter.h"
 #include "validator_registry.h"
 

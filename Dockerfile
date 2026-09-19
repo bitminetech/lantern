@@ -53,7 +53,7 @@ ENV CCACHE_MAXSIZE=2G
 ARG GIT_COMMIT=unknown
 ARG GIT_BRANCH=unknown
 ARG LANTERN_RUST_PROFILE=0
-ARG LANTERN_C_LEANVM_XMSS_JEMALLOC=ON
+ARG LANTERN_C_LEANVM_JEMALLOC=ON
 ARG LANTERN_C_LEAN_LIBP2P_AWSLC_CPU_JITTER_ENTROPY=ON
 
 WORKDIR /usr/src/lantern
@@ -61,13 +61,11 @@ WORKDIR /usr/src/lantern
 COPY . .
 
 RUN LANTERN_BOOTSTRAP_SKIP_SUBMODULE_SYNC=1 ./scripts/bootstrap.sh
-RUN if [ "${LANTERN_RUST_PROFILE}" = "1" ]; then \
-        printf '[target."cfg(target_arch = \\"x86_64\\")"]\nrustflags = ["-C", "target-cpu=native", "-C", "force-frame-pointers=yes", "-C", "debuginfo=2"]\n' > external/c-leanvm-xmss/.cargo/config.toml; \
-    else \
-        printf '[target."cfg(target_arch = \\"x86_64\\")"]\nrustflags = ["-C", "target-cpu=x86-64-v3"]\n' > external/c-leanvm-xmss/.cargo/config.toml; \
+RUN mkdir -p external/c-leanvm/.cargo && if [ "${LANTERN_RUST_PROFILE}" = "1" ]; then \
+        printf '[target."cfg(target_arch = \\"x86_64\\")"]\nrustflags = ["-C", "target-cpu=native", "-C", "force-frame-pointers=yes", "-C", "debuginfo=2"]\n' > external/c-leanvm/.cargo/config.toml; \
     fi \
     && echo "LANTERN_RUST_PROFILE=${LANTERN_RUST_PROFILE}" \
-    && cat external/c-leanvm-xmss/.cargo/config.toml
+    && cat external/c-leanvm/.cargo/config.toml
 
 ARG LANTERN_FORCE_REBUILD=0
 RUN --mount=type=cache,target=/root/.cargo/registry,sharing=locked,id=cargo-registry-${TARGETPLATFORM} \
@@ -75,9 +73,9 @@ RUN --mount=type=cache,target=/root/.cargo/registry,sharing=locked,id=cargo-regi
     --mount=type=cache,target=/root/.ccache,sharing=locked,id=ccache-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/src/lantern/build,sharing=locked,id=lantern-build-${TARGETPLATFORM} \
     echo "LANTERN_FORCE_REBUILD=${LANTERN_FORCE_REBUILD}" \
-    && echo "LANTERN_C_LEANVM_XMSS_JEMALLOC=${LANTERN_C_LEANVM_XMSS_JEMALLOC}" \
+    && echo "LANTERN_C_LEANVM_JEMALLOC=${LANTERN_C_LEANVM_JEMALLOC}" \
     && echo "LANTERN_C_LEAN_LIBP2P_AWSLC_CPU_JITTER_ENTROPY=${LANTERN_C_LEAN_LIBP2P_AWSLC_CPU_JITTER_ENTROPY}" \
-    && cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DLANTERN_GIT_COMMIT="${GIT_COMMIT}" -DLANTERN_GIT_BRANCH="${GIT_BRANCH}" -DLANTERN_C_LEANVM_XMSS_JEMALLOC="${LANTERN_C_LEANVM_XMSS_JEMALLOC}" -DLANTERN_C_LEAN_LIBP2P_AWSLC_CPU_JITTER_ENTROPY="${LANTERN_C_LEAN_LIBP2P_AWSLC_CPU_JITTER_ENTROPY}" \
+    && cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DLANTERN_GIT_COMMIT="${GIT_COMMIT}" -DLANTERN_GIT_BRANCH="${GIT_BRANCH}" -DLANTERN_C_LEANVM_JEMALLOC="${LANTERN_C_LEANVM_JEMALLOC}" -DLANTERN_C_LEAN_LIBP2P_AWSLC_CPU_JITTER_ENTROPY="${LANTERN_C_LEAN_LIBP2P_AWSLC_CPU_JITTER_ENTROPY}" \
     && cmake --build build --target lantern_cli --parallel "$(nproc)" --clean-first \
     && (cmake --build build --target lantern_client_test --parallel "$(nproc)" || true) \
     && mkdir -p /opt/lantern/bin \

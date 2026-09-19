@@ -15,9 +15,9 @@ or locally:
 
 ```sh
 cmake -S . -B build-shadow \
-  -DLANTERN_C_LEANVM_XMSS_JEMALLOC=OFF \
+  -DLANTERN_C_LEANVM_JEMALLOC=OFF \
   -DLANTERN_C_LEAN_LIBP2P_AWSLC_CPU_JITTER_ENTROPY=OFF
-taskset -c 0 cmake --build build-shadow --target lantern_c_leanvm_xmss_build --parallel 1
+taskset -c 0 cmake --build build-shadow --target lantern_c_leanvm_build --parallel 1
 cmake --build build-shadow --target lantern_cli
 ```
 

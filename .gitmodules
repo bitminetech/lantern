@@ -17,9 +17,9 @@
 [submodule "tools/hash-sig-cli"]
 	path = tools/hash-sig-cli
 	url = https://github.com/blockblaz/hash-sig-cli.git
-[submodule "external/c-leanvm-xmss"]
-	path = external/c-leanvm-xmss
-	url = https://github.com/Pier-Two/c-leanvm-xmss.git
+[submodule "external/c-leanvm"]
+	path = external/c-leanvm
+	url = https://github.com/bitminetech/c-leanvm.git
 [submodule "external/c-lean-libp2p"]
 	path = external/c-lean-libp2p
 	url = https://github.com/Pier-Two/c-lean-libp2p.git

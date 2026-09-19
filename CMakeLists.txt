@@ -144,7 +144,7 @@ function(lantern_define_library target_name wrapper_target)
     endif()
 endfunction()
 
-lantern_define_library(lantern lantern_c_leanvm_xmss)
+lantern_define_library(lantern lantern_c_leanvm)
 
 set(LANTERN_FIXTURE_GENERATOR_DIR
     "${PROJECT_SOURCE_DIR}/tools/leanSpec")
@@ -212,7 +212,7 @@ set(LANTERN_CONSENSUS_FIXTURE_DIR
 option(LANTERN_BUILD_TESTS "Build lantern unit tests" ON)
 if(LANTERN_BUILD_TESTS)
     enable_testing()
-    lantern_define_library(lantern_test lantern_c_leanvm_xmss_test)
+    lantern_define_library(lantern_test lantern_c_leanvm_test)
     target_sources(lantern_test
         PRIVATE
             tests/test_driver/driver.c
@@ -608,7 +608,9 @@ if(LANTERN_BUILD_TESTS)
 
     get_property(_lantern_build_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
     foreach(_lantern_target IN LISTS _lantern_build_targets)
-        if(_lantern_target MATCHES "^lantern_.*_test$")
+        get_target_property(_lantern_target_type ${_lantern_target} TYPE)
+        if(_lantern_target MATCHES "^lantern_.*_test$"
+           AND _lantern_target_type STREQUAL "EXECUTABLE")
             target_compile_options(
                 ${_lantern_target}
                 PRIVATE

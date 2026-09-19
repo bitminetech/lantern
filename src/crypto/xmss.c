@@ -14,7 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "pq-bindings-c-rust.h"
+#include "leanvm.h"
 
 #include "lantern/support/secure_mem.h"
 

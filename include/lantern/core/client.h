@@ -20,7 +20,7 @@
 #include "lantern/storage/storage.h"
 #include "lantern/support/string_list.h"
 
-#include "pq-bindings-c-rust.h"
+#include "leanvm.h"
 
 #ifdef __cplusplus
 extern "C"

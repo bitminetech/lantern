@@ -18,6 +18,7 @@ __pycache__/
 
 # macOS metadata
 .DS_Store
+**/._*
 
 # Large devnet fixtures not required for docker build
 tools/lean-quickstart/local-devnet/clients/

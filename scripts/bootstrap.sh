@@ -50,7 +50,7 @@ if [[ -d "${ROOT_DIR}/.git" ]]; then
         git submodule update --init --recursive \
             external/c-lean-libp2p \
             external/c-ssz \
-            external/c-leanvm-xmss \
+            external/c-leanvm \
             tools/leanSpec
     fi
 else

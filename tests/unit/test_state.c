@@ -12,7 +12,7 @@
 #include "lantern/consensus/signature.h"
 #include "lantern/consensus/state.h"
 #include "lantern/metrics/lean_metrics.h"
-#include "pq-bindings-c-rust.h"
+#include "leanvm.h"
 #include "../support/state_store_adapter.h"
 #include "../support/validator_registry.h"
 

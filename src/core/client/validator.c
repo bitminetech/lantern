@@ -833,18 +833,6 @@ lantern_client_error validator_collect_and_aggregate_attestation_signatures(
  * Vote Signing and Storage
  * ============================================================================ */
 
-/**
- * Check whether a slot is within a prepared XMSS interval.
- *
- * @param prepared Prepared interval returned by pq_get_prepared_interval()
- * @param slot     Slot/epoch to test
- * @return true when slot is signable by the currently prepared key state
- */
-static bool validator_slot_in_prepared_interval(struct PQRange prepared, uint64_t slot)
-{
-    return prepared.start <= slot && slot < prepared.end;
-}
-
 static bool validator_signature_history_find_slot(
     const struct lantern_validator_signature_history *history,
     uint64_t slot,
@@ -904,10 +892,9 @@ static lantern_client_error validator_signature_history_reserve(
 /*
  * Retain enough records to guard every slot a key could still legitimately
  * re-sign: proposals may sign shortly before their slot opens and cached-vote
- * refresh stays at the vote's own slot, so a few hundred slots is generous. Resident keys
- * cannot sign below their advanced prepared interval, so pruned slots stay
- * unsignable; only file-loaded proposal keys rely on the history alone, and
- * proposals never reach back through this window.
+ * refresh stays at the vote's own slot. LeanVM-B keys have a fixed activation
+ * interval, not an advancing preparation window. This in-memory history only
+ * guards retained slots; it is not persistent slashing protection.
  */
 #define LANTERN_SIGNATURE_HISTORY_RETENTION_SLOTS UINT64_C(256)
 
@@ -1069,31 +1056,11 @@ int validator_sign_with_key(
     }
 
     int result = LANTERN_CLIENT_OK;
-    struct PQRange prepared = pq_get_prepared_interval(selected_key);
-    if (prepared.end <= prepared.start)
+    struct PQRange active = pq_get_activation_interval(selected_key);
+    if (active.end <= active.start || slot < active.start || slot >= active.end)
     {
         result = LANTERN_CLIENT_ERR_VALIDATOR;
         goto cleanup;
-    }
-    if (slot < prepared.start)
-    {
-        result = LANTERN_CLIENT_ERR_VALIDATOR;
-        goto cleanup;
-    }
-
-    while (!validator_slot_in_prepared_interval(prepared, slot))
-    {
-        uint64_t previous_start = prepared.start;
-        uint64_t previous_end = prepared.end;
-        pq_advance_preparation(selected_key);
-        prepared = pq_get_prepared_interval(selected_key);
-        if (prepared.end <= prepared.start
-            || (prepared.start == previous_start && prepared.end == previous_end)
-            || slot < prepared.start)
-        {
-            result = LANTERN_CLIENT_ERR_VALIDATOR;
-            goto cleanup;
-        }
     }
 
     if (!lantern_signature_sign(selected_key, slot, message, out_signature))

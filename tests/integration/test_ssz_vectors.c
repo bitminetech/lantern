@@ -15,7 +15,7 @@
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/ssz.h"
 #include "lantern/networking/messages.h"
-#include "pq-bindings-c-rust.h"
+#include "leanvm.h"
 #include "ssz.h"
 #include "ssz_deserialize.h"
 #include "ssz_merkle.h"

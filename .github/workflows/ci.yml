@@ -48,7 +48,7 @@ jobs:
             echo "output=tools/leanSpec/fixtures/consensus"
             echo "fill-command=uv run fill --fork=Lstar --clean -n auto tests/consensus/lstar/networking"
             echo "leanspec-commit=$(git -C tools/leanSpec rev-parse HEAD)"
-            echo "leanvm-xmss-commit=$(git -C external/c-leanvm-xmss rev-parse HEAD)"
+            echo "leanvm-commit=$(git -C external/c-leanvm rev-parse HEAD)"
             git -C tools/leanSpec ls-files -z \
               pyproject.toml \
               uv.lock \

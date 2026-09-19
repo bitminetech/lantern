@@ -119,7 +119,7 @@ if(NOT CARGO_EXECUTABLE)
     message(FATAL_ERROR "cargo is required to build post-quantum signature bindings. Install Rust (https://rustup.rs/) and ensure cargo is on PATH.")
 endif()
 
-option(LANTERN_C_LEANVM_XMSS_JEMALLOC "Use jemalloc as the c-leanvm-xmss Rust global allocator" ON)
+option(LANTERN_C_LEANVM_JEMALLOC "Use jemalloc as the c-leanvm Rust global allocator" ON)
 option(LANTERN_C_LEAN_LIBP2P_AWSLC_CPU_JITTER_ENTROPY "Use the AWS-LC CPU-jitter entropy source in c-lean-libp2p" ON)
 
 function(_lantern_define_snappy target_name source_dir)
@@ -141,71 +141,65 @@ function(_lantern_define_snappy target_name source_dir)
     endif()
 endfunction()
 
-function(_lantern_define_c_leanvm_xmss_variant target_name source_dir cargo_target_dir header_dir)
-    set(options NO_JEMALLOC TEST_CONFIG)
-    cmake_parse_arguments(C_XMSS "${options}" "" "" ${ARGN})
+function(_lantern_define_c_leanvm_variant target_name source_dir cargo_target_dir header_dir)
+    set(options NO_JEMALLOC)
+    cmake_parse_arguments(C_LEANVM "${options}" "" "" ${ARGN})
 
     if(TARGET ${target_name})
         return()
     endif()
 
-    set(c_leanvm_xmss_output
-        "${cargo_target_dir}/multisig-release/${CMAKE_STATIC_LIBRARY_PREFIX}leanvm_xmss_c${CMAKE_STATIC_LIBRARY_SUFFIX}"
+    set(c_leanvm_output
+        "${cargo_target_dir}/multisig-release/${CMAKE_STATIC_LIBRARY_PREFIX}leanvm_c${CMAKE_STATIC_LIBRARY_SUFFIX}"
     )
-    set(c_leanvm_xmss_header "${header_dir}/leanvm-xmss.h")
-    set(c_leanvm_xmss_compat_header "${header_dir}/pq-bindings-c-rust.h")
-    set(c_leanvm_xmss_args build --profile multisig-release --locked)
+    set(c_leanvm_header "${header_dir}/leanvm.h")
+    set(c_leanvm_compat_header "${header_dir}/pq-bindings-c-rust.h")
+    set(c_leanvm_args build --profile multisig-release --locked)
     file(MAKE_DIRECTORY "${header_dir}")
-    if(C_XMSS_NO_JEMALLOC)
-        list(APPEND c_leanvm_xmss_args --no-default-features)
-    endif()
-    if(C_XMSS_TEST_CONFIG)
-        list(APPEND c_leanvm_xmss_args --features test-config)
+    if(C_LEANVM_NO_JEMALLOC)
+        list(APPEND c_leanvm_args --no-default-features)
     endif()
 
     add_custom_command(
-        OUTPUT "${c_leanvm_xmss_output}" "${c_leanvm_xmss_header}" "${c_leanvm_xmss_compat_header}"
+        OUTPUT "${c_leanvm_output}" "${c_leanvm_header}" "${c_leanvm_compat_header}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${header_dir}"
         COMMAND
             "${CMAKE_COMMAND}" -E env
             "CARGO_TARGET_DIR=${cargo_target_dir}"
-            "LEANVM_XMSS_HEADER_DIR=${header_dir}"
-            "${CARGO_EXECUTABLE}" ${c_leanvm_xmss_args}
+            "LEANVM_HEADER_DIR=${header_dir}"
+            "${CARGO_EXECUTABLE}" ${c_leanvm_args}
         COMMAND
             "${CMAKE_COMMAND}" -E copy_if_different
             "${source_dir}/include/pq-bindings-c-rust.h"
-            "${c_leanvm_xmss_compat_header}"
+            "${c_leanvm_compat_header}"
         WORKING_DIRECTORY "${source_dir}"
         DEPENDS
             "${source_dir}/Cargo.toml"
             "${source_dir}/Cargo.lock"
+            "${source_dir}/.cargo/config.toml"
             "${source_dir}/build.rs"
             "${source_dir}/cbindgen.toml"
+            "${source_dir}/include/pq-bindings-c-rust.h"
             "${source_dir}/src/lib.rs"
-        COMMENT "Building c-leanvm-xmss Rust bindings${C_XMSS_TEST_CONFIG}"
+            "${source_dir}/src/aggregate.rs"
+        COMMENT "Building Lantern LeanVM Rust bindings"
         VERBATIM
     )
 
-    add_custom_target(${target_name}_build DEPENDS "${c_leanvm_xmss_output}" "${c_leanvm_xmss_header}" "${c_leanvm_xmss_compat_header}")
+    add_custom_target(${target_name}_build DEPENDS "${c_leanvm_output}" "${c_leanvm_header}" "${c_leanvm_compat_header}")
 
     add_library(${target_name} STATIC IMPORTED GLOBAL)
     set_target_properties(${target_name}
         PROPERTIES
-            IMPORTED_LOCATION "${c_leanvm_xmss_output}"
+            IMPORTED_LOCATION "${c_leanvm_output}"
             INTERFACE_INCLUDE_DIRECTORIES "${header_dir};${source_dir}/include"
     )
-    if(C_XMSS_TEST_CONFIG)
-        set_target_properties(${target_name}
-            PROPERTIES
-        INTERFACE_COMPILE_DEFINITIONS "LANTERN_AGGREGATED_SIGNATURE_PROOF_INVERSE_PROOF_SIZE=1"
-        )
-    endif()
 
     add_dependencies(${target_name} ${target_name}_build)
 endfunction()
 
 function(lantern_configure_dependencies target)
-    set(wrapper_target "lantern_c_leanvm_xmss")
+    set(wrapper_target "lantern_c_leanvm")
     if(ARGC GREATER 1)
         set(wrapper_target "${ARGV1}")
     endif()
@@ -215,30 +209,30 @@ function(lantern_configure_dependencies target)
     endif()
 
     set(external_root ${PROJECT_SOURCE_DIR}/external)
-    set(c_leanvm_xmss_allocator_options)
-    if(NOT LANTERN_C_LEANVM_XMSS_JEMALLOC)
-        list(APPEND c_leanvm_xmss_allocator_options NO_JEMALLOC)
+    set(c_leanvm_allocator_options)
+    if(NOT LANTERN_C_LEANVM_JEMALLOC)
+        list(APPEND c_leanvm_allocator_options NO_JEMALLOC)
     endif()
 
     _lantern_define_c_lean_libp2p(lantern_c_lean_libp2p ${external_root}/c-lean-libp2p)
     _lantern_configure_awslc_openssl_package(${external_root}/c-lean-libp2p)
     _lantern_define_static(lantern_c_ssz ${external_root}/c-ssz)
     _lantern_define_snappy(lantern_snappy_c ${external_root}/snappy-c)
-    _lantern_define_c_leanvm_xmss_variant(
-        lantern_c_leanvm_xmss
-        ${external_root}/c-leanvm-xmss
-        ${CMAKE_BINARY_DIR}/c-leanvm-xmss/prod
-        ${CMAKE_BINARY_DIR}/c-leanvm-xmss/prod/include
-        ${c_leanvm_xmss_allocator_options}
+    _lantern_define_c_leanvm_variant(
+        lantern_c_leanvm
+        ${external_root}/c-leanvm
+        ${CMAKE_BINARY_DIR}/c-leanvm/prod
+        ${CMAKE_BINARY_DIR}/c-leanvm/prod/include
+        ${c_leanvm_allocator_options}
     )
-    _lantern_define_c_leanvm_xmss_variant(
-        lantern_c_leanvm_xmss_test
-        ${external_root}/c-leanvm-xmss
-        ${CMAKE_BINARY_DIR}/c-leanvm-xmss/test
-        ${CMAKE_BINARY_DIR}/c-leanvm-xmss/test/include
-        ${c_leanvm_xmss_allocator_options}
-        TEST_CONFIG
-    )
+    # Tests use the same Rust implementation, with a cheaper proof rate chosen
+    # by their C callers. Do not compile an identical Rust crate a second time.
+    if(NOT TARGET lantern_c_leanvm_test)
+        add_library(lantern_c_leanvm_test INTERFACE)
+        target_link_libraries(lantern_c_leanvm_test INTERFACE lantern_c_leanvm)
+        target_compile_definitions(lantern_c_leanvm_test INTERFACE
+            LANTERN_AGGREGATED_SIGNATURE_PROOF_INVERSE_PROOF_SIZE=1)
+    endif()
 
     target_link_libraries(${target}
         PUBLIC

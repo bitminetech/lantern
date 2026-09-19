@@ -6,7 +6,7 @@
 #include "lantern/metrics/lean_metrics.h"
 #include "../support/validator_registry.h"
 
-#include "pq-bindings-c-rust.h"
+#include "leanvm.h"
 
 #include <assert.h>
 #include <stdbool.h>
@@ -792,7 +792,8 @@ static int test_block_type2_attestation_split_roundtrip(void) {
             fprintf(stderr, "block split: attestation 0 participant setup failed\n");
             goto cleanup;
         }
-        init_attestation_data(&attestation_1->data, 2u, 0x41);
+        /* LeanVM-B permits one message per epoch in a merged proof. */
+        init_attestation_data(&attestation_1->data, 1u, 0x41);
         if (!set_participants(
                 &attestation_1->aggregation_bits,
                 kValidatorCount,
@@ -929,6 +930,22 @@ static int test_block_type2_attestation_split_roundtrip(void) {
             &signed_block.block,
             &signed_block.proof)) {
         fprintf(stderr, "block split: type-2 verify failed\n");
+        goto cleanup;
+    }
+    signed_block.block.state_root.bytes[0] ^= 1u;
+    bool accepted_wrong_message = lantern_signature_verify_block_type2_proof(
+        &state, &signed_block.block, &signed_block.proof);
+    signed_block.block.state_root.bytes[0] ^= 1u;
+    if (accepted_wrong_message) {
+        fprintf(stderr, "block split: accepted wrong block message\n");
+        goto cleanup;
+    }
+    signed_block.block.body.attestations.data[0].data.slot += 4u;
+    bool accepted_wrong_slot = lantern_signature_verify_block_type2_proof(
+        &state, &signed_block.block, &signed_block.proof);
+    signed_block.block.body.attestations.data[0].data.slot -= 4u;
+    if (accepted_wrong_slot) {
+        fprintf(stderr, "block split: accepted wrong attestation slot\n");
         goto cleanup;
     }
     if (!lantern_signature_split_block_type2_attestation_proof(

@@ -14,7 +14,7 @@
 #include "lantern/consensus/hash.h"
 #include "lantern/consensus/store.h"
 #include "lantern/support/log.h"
-#include "pq-bindings-c-rust.h"
+#include "leanvm.h"
 
 static double g_shadow_rates[LANTERN_SHADOW_OPERATION_COUNT];
 
@@ -225,6 +225,8 @@ static bool prepare_recursive_child(
         out_input->pubkey_count = participant_count;
         out_input->agg_bytes = proof->proof_data.data;
         out_input->agg_len = proof->proof_data.length;
+        memcpy(out_input->message, message->bytes, LANTERN_ROOT_SIZE);
+        out_input->epoch = epoch;
         shadow_sleep(LANTERN_SHADOW_VERIFY, participant_count);
         return true;
     }
@@ -463,56 +465,6 @@ static bool build_type2_component_set_for_block(
     const LanternBlock *block,
     struct lantern_type2_component_work *work,
     struct PQTypeTwoComponent *components,
-    struct PQTypeTwoMessageBinding *bindings,
-    LanternRoot *message_roots,
-    size_t component_count) {
-    if (!state || !block || !work || !components || !bindings || !message_roots) {
-        return false;
-    }
-    size_t attestation_count = block->body.attestations.length;
-    if (component_count != attestation_count + 1u) {
-        return false;
-    }
-    if (attestation_count > 0u && !block->body.attestations.data) {
-        return false;
-    }
-    for (size_t i = 0; i < attestation_count; ++i) {
-        const LanternAggregatedAttestation *attestation = &block->body.attestations.data[i];
-        if (!build_type2_attestation_component(
-                state,
-                &attestation->aggregation_bits,
-                &work[i],
-                &components[i])) {
-            return false;
-        }
-        if (lantern_hash_tree_root_attestation_data(&attestation->data, &message_roots[i]) != SSZ_SUCCESS) {
-            return false;
-        }
-        bindings[i].message = message_roots[i].bytes;
-        bindings[i].message_len = LANTERN_ROOT_SIZE;
-        bindings[i].epoch = attestation->data.slot;
-    }
-    if (!build_type2_proposer_component(
-            state,
-            block->proposer_index,
-            &work[attestation_count],
-            &components[attestation_count])) {
-        return false;
-    }
-    if (lantern_hash_tree_root_block(block, &message_roots[attestation_count]) != SSZ_SUCCESS) {
-        return false;
-    }
-    bindings[attestation_count].message = message_roots[attestation_count].bytes;
-    bindings[attestation_count].message_len = LANTERN_ROOT_SIZE;
-    bindings[attestation_count].epoch = block->slot;
-    return true;
-}
-
-static bool build_type2_merge_component_set_for_block(
-    const LanternState *state,
-    const LanternBlock *block,
-    struct lantern_type2_component_work *work,
-    struct PQTypeTwoComponent *components,
     size_t component_count) {
     if (!state || !block || !work || !components) {
         return false;
@@ -533,7 +485,19 @@ static bool build_type2_merge_component_set_for_block(
                 &components[i])) {
             return false;
         }
+        LanternRoot message;
+        if (lantern_hash_tree_root_attestation_data(&attestation->data, &message) != SSZ_SUCCESS) {
+            return false;
+        }
+        memcpy(components[i].message, message.bytes, LANTERN_ROOT_SIZE);
+        components[i].epoch = attestation->data.slot;
     }
+    LanternRoot block_root;
+    if (lantern_hash_tree_root_block(block, &block_root) != SSZ_SUCCESS) {
+        return false;
+    }
+    memcpy(components[attestation_count].message, block_root.bytes, LANTERN_ROOT_SIZE);
+    components[attestation_count].epoch = block->slot;
     return build_type2_proposer_component(
         state,
         block->proposer_index,
@@ -1214,7 +1178,7 @@ bool lantern_signature_merge_block_type2_proof(
     if (!work || !components || !entries) {
         goto cleanup;
     }
-    if (!build_type2_merge_component_set_for_block(
+    if (!build_type2_component_set_for_block(
             state,
             block,
             work,
@@ -1240,6 +1204,8 @@ bool lantern_signature_merge_block_type2_proof(
         entries[i].pubkey_count = components[i].pubkey_count;
         entries[i].agg_bytes = proof->proof_data.data;
         entries[i].agg_len = proof->proof_data.length;
+        memcpy(entries[i].message, components[i].message, LANTERN_ROOT_SIZE);
+        entries[i].epoch = components[i].epoch;
     }
 
     if (!singleton_participant_matches(
@@ -1254,6 +1220,8 @@ bool lantern_signature_merge_block_type2_proof(
     entries[attestation_count].pubkey_count = components[attestation_count].pubkey_count;
     entries[attestation_count].agg_bytes = proposer_proof->proof_data.data;
     entries[attestation_count].agg_len = proposer_proof->proof_data.length;
+    memcpy(entries[attestation_count].message, components[attestation_count].message, LANTERN_ROOT_SIZE);
+    entries[attestation_count].epoch = components[attestation_count].epoch;
 
     double setup_started_seconds = get_time_seconds();
     ensure_xmss_prover_setup();
@@ -1339,14 +1307,11 @@ bool lantern_signature_verify_block_type2_proof(
         calloc(component_count, sizeof(*work));
     struct PQTypeTwoComponent *components =
         calloc(component_count, sizeof(*components));
-    struct PQTypeTwoMessageBinding *bindings =
-        calloc(component_count, sizeof(*bindings));
-    LanternRoot *message_roots = calloc(component_count, sizeof(*message_roots));
     LanternByteList raw_type2;
     lantern_byte_list_init(&raw_type2);
 
     bool ok = false;
-    if (!work || !components || !bindings || !message_roots) {
+    if (!work || !components) {
         goto cleanup;
     }
     if (!lantern_signature_unwrap_type2_proof(encoded_proof, &raw_type2)) {
@@ -1357,18 +1322,14 @@ bool lantern_signature_verify_block_type2_proof(
             block,
             work,
             components,
-            bindings,
-            message_roots,
             component_count)) {
         goto cleanup;
     }
 
     ensure_xmss_verifier_setup();
     double start = get_time_seconds();
-    int verify_rc = pq_verify_type_2_with_messages(
+    int verify_rc = pq_verify_type_2(
         components,
-        component_count,
-        bindings,
         component_count,
         raw_type2.data,
         raw_type2.length);
@@ -1388,8 +1349,6 @@ bool lantern_signature_verify_block_type2_proof(
 cleanup:
     lantern_byte_list_reset(&raw_type2);
     reset_type2_component_set(work, component_count);
-    free(message_roots);
-    free(bindings);
     free(components);
     free(work);
     return ok;
@@ -1435,7 +1394,7 @@ bool lantern_signature_split_block_type2_attestation_proof(
     if (!lantern_signature_unwrap_type2_proof(encoded_proof, &raw_type2)) {
         goto cleanup;
     }
-    if (!build_type2_merge_component_set_for_block(
+    if (!build_type2_component_set_for_block(
             state,
             block,
             work,

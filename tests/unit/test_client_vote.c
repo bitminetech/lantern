@@ -1426,6 +1426,46 @@ cleanup:
     return rc;
 }
 
+static int test_validator_sign_with_key_checks_activation_range(void) {
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct lantern_local_validator validator = {0};
+    LanternRoot message;
+    LanternSignature signature;
+    int rc = 1;
+    client_test_fill_root_with_index(&message, 0xA17Eu);
+    if (pq_key_gen(16u, 16u, &pub, &validator.proposal_secret_key) != Success) {
+        fprintf(stderr, "activation-range test keygen failed\n");
+        goto cleanup;
+    }
+    struct PQRange active = pq_get_activation_interval(validator.proposal_secret_key);
+    if (active.start != 16u || active.end != 32u) {
+        fprintf(stderr, "activation-range test returned wrong interval\n");
+        goto cleanup;
+    }
+    const uint64_t outside[] = {15u, 32u};
+    for (size_t i = 0; i < 2u; ++i) {
+        if (validator_sign_with_key(&validator, outside[i], &message, true, &signature)
+            != LANTERN_CLIENT_ERR_VALIDATOR) {
+            fprintf(stderr, "signing outside activation range was not rejected\n");
+            goto cleanup;
+        }
+    }
+    const uint64_t inside[] = {16u, 31u};
+    for (size_t i = 0; i < 2u; ++i) {
+        if (validator_sign_with_key(&validator, inside[i], &message, true, &signature)
+                != LANTERN_CLIENT_OK
+            || !lantern_signature_verify_pk(pub, inside[i], &signature, &message)) {
+            fprintf(stderr, "signing activation-range boundary failed\n");
+            goto cleanup;
+        }
+    }
+    rc = 0;
+cleanup:
+    lantern_client_local_validator_cleanup(&validator);
+    pq_public_key_free(pub);
+    return rc;
+}
+
 static int test_validator_sign_with_key_uses_only_selected_secret(void) {
     struct PQSignatureSchemePublicKey *pub = NULL;
     struct PQSignatureSchemePublicKey *unused_pub = NULL;
@@ -1453,11 +1493,11 @@ static int test_validator_sign_with_key_uses_only_selected_secret(void) {
     validator.attestation_secret_key = attestation_secret;
     validator.proposal_secret_key = proposal_secret;
 
-    struct PQRange initial_attestation = pq_get_prepared_interval(validator.attestation_secret_key);
-    struct PQRange initial_proposal = pq_get_prepared_interval(validator.proposal_secret_key);
+    struct PQRange initial_attestation = pq_get_activation_interval(validator.attestation_secret_key);
+    struct PQRange initial_proposal = pq_get_activation_interval(validator.proposal_secret_key);
     if (initial_attestation.end <= initial_attestation.start
         || initial_proposal.end <= initial_proposal.start) {
-        fprintf(stderr, "prepared interval unavailable for key-isolation test\n");
+        fprintf(stderr, "activation interval unavailable for key-isolation test\n");
         goto cleanup;
     }
 
@@ -1469,8 +1509,8 @@ static int test_validator_sign_with_key_uses_only_selected_secret(void) {
         goto cleanup;
     }
 
-    struct PQRange updated_attestation = pq_get_prepared_interval(validator.attestation_secret_key);
-    struct PQRange updated_proposal = pq_get_prepared_interval(validator.proposal_secret_key);
+    struct PQRange updated_attestation = pq_get_activation_interval(validator.attestation_secret_key);
+    struct PQRange updated_proposal = pq_get_activation_interval(validator.proposal_secret_key);
     if (updated_attestation.start != initial_attestation.start
         || updated_attestation.end != initial_attestation.end) {
         fprintf(stderr, "attestation key should not advance during proposal signing\n");
@@ -1530,9 +1570,9 @@ static int test_validator_sign_with_key_rejects_different_message_same_slot(void
     validator.global_index = 0u;
     validator.proposal_secret_key = secret;
 
-    struct PQRange prepared = pq_get_prepared_interval(validator.proposal_secret_key);
+    struct PQRange prepared = pq_get_activation_interval(validator.proposal_secret_key);
     if (prepared.end <= prepared.start) {
-        fprintf(stderr, "prepared interval unavailable for signing reuse guard test\n");
+        fprintf(stderr, "activation interval unavailable for signing reuse guard test\n");
         goto cleanup;
     }
     uint64_t slot = prepared.start;
@@ -1617,11 +1657,11 @@ static int test_validator_build_block_leaves_attestation_key_untouched(void) {
     client.local_validators = &validator;
     client.local_validator_count = 1u;
 
-    struct PQRange initial_attestation = pq_get_prepared_interval(validator.attestation_secret_key);
-    struct PQRange initial_proposal = pq_get_prepared_interval(validator.proposal_secret_key);
+    struct PQRange initial_attestation = pq_get_activation_interval(validator.attestation_secret_key);
+    struct PQRange initial_proposal = pq_get_activation_interval(validator.proposal_secret_key);
     if (initial_attestation.end <= initial_attestation.start
         || initial_proposal.end <= initial_proposal.start) {
-        fprintf(stderr, "prepared interval unavailable for block build key-isolation test\n");
+        fprintf(stderr, "activation interval unavailable for block build key-isolation test\n");
         goto cleanup;
     }
 
@@ -1636,15 +1676,15 @@ static int test_validator_build_block_leaves_attestation_key_untouched(void) {
         goto cleanup;
     }
 
-    struct PQRange updated_attestation = pq_get_prepared_interval(validator.attestation_secret_key);
-    struct PQRange updated_proposal = pq_get_prepared_interval(validator.proposal_secret_key);
+    struct PQRange updated_attestation = pq_get_activation_interval(validator.attestation_secret_key);
+    struct PQRange updated_proposal = pq_get_activation_interval(validator.proposal_secret_key);
     if (updated_attestation.start != initial_attestation.start
         || updated_attestation.end != initial_attestation.end) {
         fprintf(stderr, "attestation key should remain unchanged during block production\n");
         goto cleanup;
     }
     if (!pq_range_contains_slot(updated_proposal, slot)) {
-        fprintf(stderr, "proposal key was not prepared for block slot %" PRIu64 "\n", slot);
+        fprintf(stderr, "proposal key was not active for block slot %" PRIu64 "\n", slot);
         goto cleanup;
     }
     if (block.proof.length == 0u
@@ -4019,6 +4059,9 @@ cleanup:
 }
 
 int main(void) {
+    if (test_validator_sign_with_key_checks_activation_range() != 0) {
+        return 1;
+    }
     if (test_record_vote_accepts_known_roots() != 0) {
         return 1;
     }
