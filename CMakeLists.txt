@@ -221,6 +221,12 @@ if(LANTERN_BUILD_TESTS)
     )
     set(LANTERN_TEST_LINK_LIB lantern_test)
 
+    # Manual regeneration tool for the checked-in, test-only XMSS key pairs.
+    # Linking the active bridge keeps fixture encoding aligned with its pin.
+    add_executable(lantern_generate_xmss_fixtures EXCLUDE_FROM_ALL
+        tests/support/generate_xmss_fixtures.c)
+    target_link_libraries(lantern_generate_xmss_fixtures PRIVATE ${LANTERN_TEST_LINK_LIB})
+
     set(_lantern_state_transition_fixture_dir
         "${LANTERN_CONSENSUS_FIXTURE_DIR}/state_transition/lstar/state_transition")
     set(_lantern_fork_choice_fixture_dir

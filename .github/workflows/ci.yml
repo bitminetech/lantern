@@ -6,6 +6,7 @@ on:
       - main
       - 'release/**'
       - 'feature/**'
+      - 'devnet-*'
   pull_request:
     branches:
       - '**'
@@ -134,6 +135,12 @@ jobs:
 
       - name: Configure (CMake)
         run: cmake -S . -B build -GNinja -DLANTERN_BUILD_TESTS=ON
+
+      - name: Test LeanVM bridge
+        working-directory: external/c-leanvm
+        env:
+          LEANVM_NUM_THREADS: '4'
+        run: cargo test --release --locked -- --include-ignored --test-threads=1
 
       - name: Build
         run: cmake --build build --parallel

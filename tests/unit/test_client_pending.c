@@ -438,7 +438,9 @@ static int build_signed_block_for_import(
     LanternSignedVote proposer_vote;
     memset(&proposer_vote, 0, sizeof(proposer_vote));
     proposer_vote.data.validator_id = out_block->block.proposer_index;
-    proposer_vote.data.slot = block_slot;
+    /* LeanVM-B binds one message per slot. The included attestation is from
+     * the parent slot, distinct from the new block's proposer signature. */
+    proposer_vote.data.slot = fixture->client.state.slot;
     proposer_vote.data.head = head;
     proposer_vote.data.target = target;
     proposer_vote.data.source = source;
