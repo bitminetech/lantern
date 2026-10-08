@@ -87,7 +87,9 @@ static bool lantern_attestation_head_is_known(
 struct lantern_block_payload_group {
     LanternRoot data_root;
     LanternAttestationData data;
+    const LanternAggregatedSignatureProof *best_proof;
 };
+static int lantern_state_find_justification_root_index(const LanternState *state, const LanternRoot *root);
 static int collect_attestations_for_checkpoint(
     const LanternState *state,
     const LanternState *justified_view,
@@ -106,7 +108,10 @@ static lantern_state_aggregate_result state_select_child_proofs_from_pool(
     size_t *out_child_count);
 static const LanternAggregatedSignatureProof *state_select_best_proof_from_pool(
     const struct lantern_aggregated_payload_pool *pool,
-    const LanternRoot *data_root);
+    const LanternState *justified_view,
+    const LanternRoot *data_root,
+    const LanternRoot *target_root,
+    size_t *out_new_voters);
 static lantern_state_aggregate_result state_append_block_proof(
     const LanternRoot *data_root,
     const LanternAttestationData *data,
@@ -309,8 +314,15 @@ static int collect_attestations_for_checkpoint(
         if (seen_group) {
             continue;
         }
+        size_t new_voters = 0u;
+        const LanternAggregatedSignatureProof *best_proof = state_select_best_proof_from_pool(
+            payloads, justified_view, &entry->data_root, &data->target.root, &new_voters);
+        if (!best_proof || new_voters == 0u) {
+            continue;
+        }
         groups[group_count].data_root = entry->data_root;
         groups[group_count].data = *data;
+        groups[group_count].best_proof = best_proof;
         group_count += 1u;
     }
 
@@ -322,8 +334,7 @@ static int collect_attestations_for_checkpoint(
     }
 
     for (size_t group_index = 0; group_index < group_count; ++group_index) {
-        const LanternAggregatedSignatureProof *best_proof =
-            state_select_best_proof_from_pool(payloads, &groups[group_index].data_root);
+        const LanternAggregatedSignatureProof *best_proof = groups[group_index].best_proof;
         if (!best_proof) {
             continue;
         }
@@ -544,24 +555,71 @@ static lantern_state_aggregate_result state_select_child_proofs_from_pool(
     return LANTERN_STATE_AGGREGATE_OK;
 }
 
+static size_t state_proof_new_voter_count(
+    const LanternState *justified_view,
+    const LanternRoot *target_root,
+    const LanternAggregatedSignatureProof *proof) {
+    if (!proof || proof->participants.bit_length == 0u || !proof->participants.bytes) {
+        return 0u;
+    }
+    size_t validator_count = justified_view ? justified_view->validator_count : 0u;
+    int root_index = justified_view && target_root
+        ? lantern_state_find_justification_root_index(justified_view, target_root)
+        : -1;
+    size_t limit = proof->participants.bit_length;
+    if (limit > LANTERN_VALIDATOR_REGISTRY_LIMIT) {
+        limit = LANTERN_VALIDATOR_REGISTRY_LIMIT;
+    }
+    size_t count = 0u;
+    for (size_t i = 0; i < limit; ++i) {
+        if (!lantern_bitlist_get(&proof->participants, i)) {
+            continue;
+        }
+        if (root_index >= 0 && i < validator_count) {
+            size_t bit_index = (size_t)root_index * validator_count + i;
+            if (bit_index < justified_view->justification_validators.bit_length
+                && lantern_bitlist_get(&justified_view->justification_validators, bit_index)) {
+                continue;
+            }
+        }
+        count += 1u;
+    }
+    return count;
+}
+
 static const LanternAggregatedSignatureProof *state_select_best_proof_from_pool(
     const struct lantern_aggregated_payload_pool *pool,
-    const LanternRoot *data_root) {
+    const LanternState *justified_view,
+    const LanternRoot *data_root,
+    const LanternRoot *target_root,
+    size_t *out_new_voters) {
+    if (out_new_voters) {
+        *out_new_voters = 0u;
+    }
     if (!pool || !pool->entries || pool->length == 0u || !data_root) {
         return NULL;
     }
 
     const LanternAggregatedSignatureProof *best = NULL;
+    size_t best_new = 0u;
     size_t best_count = 0u;
     for (size_t i = 0; i < pool->length; ++i) {
         if (memcmp(pool->entries[i].data_root.bytes, data_root->bytes, LANTERN_ROOT_SIZE) != 0) {
             continue;
         }
         size_t count = state_proof_new_participant_count(&pool->entries[i].proof, NULL);
-        if (count > best_count) {
+        if (count == 0u) {
+            continue;
+        }
+        size_t new_voters = state_proof_new_voter_count(justified_view, target_root, &pool->entries[i].proof);
+        if (!best || new_voters > best_new || (new_voters == best_new && count > best_count)) {
             best = &pool->entries[i].proof;
+            best_new = new_voters;
             best_count = count;
         }
+    }
+    if (out_new_voters) {
+        *out_new_voters = best_new;
     }
     return best;
 }
@@ -1306,7 +1364,7 @@ static int lantern_state_append_historical_root(LanternState *state, const Lante
         return -1;
     }
     if (state->historical_block_hashes.length >= LANTERN_HISTORICAL_ROOTS_LIMIT) {
-        return 0;
+        return -1;
     }
     return lantern_root_list_append(&state->historical_block_hashes, root);
 }
@@ -1882,12 +1940,30 @@ int lantern_state_process_attestations(
         const LanternAttestationData *data = &attestation->data;
         double att_validation_start = metrics_now_seconds_or_negative();
         bool source_is_justified = false;
+        if (!lantern_state_slot_in_justified_window(state, data->source.slot)) {
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
+                "state",
+                &meta,
+                "attestation source slot %" PRIu64 " is outside the justified window",
+                data->source.slot);
+            record_attestation_validation_metric(att_validation_start, false);
+            return -1;
+        }
         if (lantern_state_get_justified_slot_bit(state, data->source.slot, &source_is_justified) != 0
             || !source_is_justified) {
             continue;
         }
 
         bool target_is_justified = false;
+        if (!lantern_state_slot_in_justified_window(state, data->target.slot)) {
+            lantern_log(LANTERN_LOG_LEVEL_WARN,
+                "state",
+                &meta,
+                "attestation target slot %" PRIu64 " is outside the justified window",
+                data->target.slot);
+            record_attestation_validation_metric(att_validation_start, false);
+            return -1;
+        }
         if (lantern_state_get_justified_slot_bit(state, data->target.slot, &target_is_justified) != 0) {
             continue;
         }

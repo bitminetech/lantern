@@ -337,14 +337,29 @@ static void mark_slot_justified_for_tests(LanternState *state, uint64_t slot) {
     }
     /* Calculate the relative index from the finalized-slot anchor. */
     size_t index = (size_t)(slot - anchor);
-    expect_zero(
-        lantern_bitlist_resize(&state->justified_slots, index + 1),
-        "resize justified slots for test");
+    if (state->justified_slots.bit_length < index + 1u) {
+        expect_zero(
+            lantern_bitlist_resize(&state->justified_slots, index + 1),
+            "resize justified slots for test");
+    }
     assert(state->justified_slots.bytes != NULL);
     size_t byte_index = index / 8u;
     assert(byte_index < state->justified_slots.capacity);
     size_t bit_index = index % 8u;
     state->justified_slots.bytes[byte_index] |= (uint8_t)(1u << bit_index);
+}
+
+static void extend_justified_window_for_tests(LanternState *state, uint64_t up_to_slot) {
+    uint64_t anchor = justified_slots_anchor_for_tests(state);
+    if (up_to_slot < anchor) {
+        return;
+    }
+    size_t window = (size_t)(up_to_slot - anchor + 1u);
+    if (state->justified_slots.bit_length < window) {
+        expect_zero(
+            lantern_bitlist_resize(&state->justified_slots, window),
+            "resize justified window for test");
+    }
 }
 
 /* Helper to populate historical_block_hashes up to the target slot.
@@ -363,6 +378,7 @@ static void populate_historical_hashes_for_tests(LanternState *state, uint64_t u
         /* Fill each slot's hash with a deterministic pattern based on slot index */
         fill_root(&state->historical_block_hashes.items[i], (uint8_t)(0x10u + i));
     }
+    extend_justified_window_for_tests(state, up_to_slot);
 }
 
 /* Get the root from historical_block_hashes for a given slot */
@@ -1295,6 +1311,43 @@ static int test_attestations_require_justified_source(void) {
     return 0;
 }
 
+static int test_attestations_reject_slots_outside_justified_window(void) {
+    LanternState state;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, 601, 4), "genesis for justified window test");
+    populate_historical_hashes_for_tests(&state, 3);
+
+    LanternAttestations attestations;
+    lantern_attestations_init(&attestations);
+    LanternSignatureList signatures;
+    lantern_signature_list_init(&signatures);
+    expect_zero(lantern_attestations_resize(&attestations, 1), "resize window attestations");
+    expect_zero(lantern_signature_list_resize(&signatures, 1), "resize window signatures");
+
+    LanternCheckpoint source = state.latest_justified;
+    source.root = get_historical_root_for_tests(&state, 0);
+    LanternCheckpoint target = {.slot = 5u};
+    fill_root(&target.root, 0x77u);
+    build_vote(&attestations.data[0], &signatures.data[0], 0u, 5u, &source, &target, 0x41u);
+    assert(lantern_state_process_attestations(&state, &attestations) != 0);
+
+    LanternCheckpoint late_source = {.slot = 6u};
+    fill_root(&late_source.root, 0x78u);
+    LanternCheckpoint late_target = {.slot = 7u};
+    fill_root(&late_target.root, 0x79u);
+    build_vote(&attestations.data[0], &signatures.data[0], 0u, 7u, &late_source, &late_target, 0x42u);
+    assert(lantern_state_process_attestations(&state, &attestations) != 0);
+
+    LanternCheckpoint inside_target = {.slot = 3u, .root = get_historical_root_for_tests(&state, 3)};
+    build_vote(&attestations.data[0], &signatures.data[0], 0u, 3u, &source, &inside_target, 0x43u);
+    expect_zero(lantern_state_process_attestations(&state, &attestations), "process vote inside window");
+
+    lantern_attestations_reset(&attestations);
+    lantern_signature_list_reset(&signatures);
+    lantern_state_reset(&state);
+    return 0;
+}
+
 static int test_attestations_accept_duplicate_votes(void) {
     LanternState state;
     lantern_state_init(&state);
@@ -1353,6 +1406,7 @@ static void setup_prejustified_consecutive_source(
     expect_zero(
         lantern_root_list_resize(&state->historical_block_hashes, (size_t)(target_slot + 1u)),
         "resize historical hashes for consecutive attestation test");
+    extend_justified_window_for_tests(state, target_slot);
     fill_root(&state->historical_block_hashes.items[slot_one - 1u], alt_marker);
     fill_root(&state->historical_block_hashes.items[slot_one], source_marker);
     fill_root(&state->historical_block_hashes.items[target_slot], target_marker);
@@ -1649,7 +1703,7 @@ static int test_attestations_use_updated_finalized_slot_for_gap_check(void) {
     state.latest_justified.root = get_historical_root_for_tests(&state, 3);
 
     expect_zero(
-        lantern_bitlist_resize(&state.justified_slots, 6),
+        lantern_bitlist_resize(&state.justified_slots, 9),
         "resize justified slots for updated finalized gap-check test");
     assert(state.justified_slots.bytes != NULL);
     memset(state.justified_slots.bytes, 0, state.justified_slots.capacity);
@@ -2988,6 +3042,94 @@ static int test_process_block_defers_proposer_attestation(void) {
     return 0;
 }
 
+static int test_collect_attestations_prefers_new_voters(void) {
+    LanternState state;
+    LanternRoot parent_root;
+    int rc = 1;
+    lantern_state_init(&state);
+    expect_zero(lantern_state_generate_genesis(&state, 951, 4), "genesis for new voter test");
+    expect_zero(lantern_root_list_resize(&state.historical_block_hashes, 3), "history for new voter test");
+    extend_justified_window_for_tests(&state, 2);
+    expect_zero(lantern_state_select_block_parent(&state, &parent_root), "new voter parent root");
+    state.historical_block_hashes.items[0] = parent_root;
+    fill_root(&state.historical_block_hashes.items[1], 0xE1);
+    fill_root(&state.historical_block_hashes.items[2], 0xE2);
+
+    LanternCheckpoint base = state.latest_justified;
+    base.root = parent_root;
+    LanternCheckpoint mid = base;
+    mid.slot = 1u;
+    mid.root = state.historical_block_hashes.items[1];
+
+    LanternAttestations recorded;
+    lantern_attestations_init(&recorded);
+    LanternSignatureList recorded_signatures;
+    lantern_signature_list_init(&recorded_signatures);
+    expect_zero(lantern_attestations_resize(&recorded, 2), "resize recorded votes");
+    expect_zero(lantern_signature_list_resize(&recorded_signatures, 2), "resize recorded signatures");
+    build_vote(&recorded.data[0], &recorded_signatures.data[0], 0, mid.slot, &base, &mid, 0x11);
+    build_vote(&recorded.data[1], &recorded_signatures.data[1], 1, mid.slot, &base, &mid, 0x12);
+    expect_zero(lantern_state_process_attestations(&state, &recorded), "record votes 0 and 1");
+    assert(state.latest_justified.slot == 0u);
+
+    LanternVote vote;
+    LanternSignature vote_signature;
+    build_vote(&vote, &vote_signature, 2, mid.slot, &base, &mid, 0x13);
+    LanternRoot data_root;
+    expect_ssz_success(lantern_hash_tree_root_attestation_data(&vote.data, &data_root), "hash new voter data");
+    LanternStore *store = lantern_test_state_store_ensure(&state);
+
+    uint64_t proposer_index = 0;
+    expect_zero(lantern_proposer_for_slot(state.slot + 1u, state.validator_count, &proposer_index), "proposer");
+    LanternAggregatedAttestations collected;
+    lantern_aggregated_attestations_init(&collected);
+    struct lantern_aggregated_payload_pool collected_payloads = {0};
+
+    const uint64_t counted_ids[] = {0u, 1u};
+    LanternAggregatedSignatureProof counted;
+    expect_zero(build_cached_proof_for_validators(&counted, counted_ids, 2u, 0x21u), "build counted proof");
+    expect_zero(lantern_store_add_known_aggregated_payload(store, &data_root, &vote.data, &counted), "seed counted");
+    lantern_aggregated_signature_proof_reset(&counted);
+    if (lantern_state_collect_attestations_for_block(
+            &state, state.slot + 1u, proposer_index, &parent_root, &collected, &collected_payloads) != 0
+        || collected.length != 0u) {
+        fprintf(stderr, "data adding no new voters should be left out of the block\n");
+        goto cleanup;
+    }
+
+    const uint64_t wide_ids[] = {0u, 1u, 2u};
+    const uint64_t fresh_ids[] = {2u, 3u};
+    LanternAggregatedSignatureProof wide;
+    LanternAggregatedSignatureProof fresh;
+    expect_zero(build_cached_proof_for_validators(&wide, wide_ids, 3u, 0x31u), "build wide proof");
+    expect_zero(build_cached_proof_for_validators(&fresh, fresh_ids, 2u, 0x41u), "build fresh proof");
+    expect_zero(lantern_store_add_known_aggregated_payload(store, &data_root, &vote.data, &wide), "seed wide");
+    expect_zero(lantern_store_add_known_aggregated_payload(store, &data_root, &vote.data, &fresh), "seed fresh");
+    lantern_aggregated_signature_proof_reset(&wide);
+    lantern_aggregated_signature_proof_reset(&fresh);
+    if (lantern_state_collect_attestations_for_block(
+            &state, state.slot + 1u, proposer_index, &parent_root, &collected, &collected_payloads) != 0
+        || collected.length != 1u) {
+        fprintf(stderr, "expected one attestation from the new voter proofs\n");
+        goto cleanup;
+    }
+    const struct lantern_bitlist *bits = &collected.data[0].aggregation_bits;
+    if (bits->bit_length != 4u || bitlist_test_bit(bits, 0u) || bitlist_test_bit(bits, 1u)
+        || !bitlist_test_bit(bits, 2u) || !bitlist_test_bit(bits, 3u)) {
+        fprintf(stderr, "builder should pick the proof adding validators 2 and 3\n");
+        goto cleanup;
+    }
+    rc = 0;
+
+cleanup:
+    lantern_aggregated_attestations_reset(&collected);
+    lantern_aggregated_payload_pool_reset(&collected_payloads);
+    lantern_attestations_reset(&recorded);
+    lantern_signature_list_reset(&recorded_signatures);
+    lantern_state_reset(&state);
+    return rc;
+}
+
 static int test_collect_attestations_fixed_point(void) {
     LanternState state;
     LanternRoot parent_root;
@@ -3002,6 +3144,7 @@ static int test_collect_attestations_fixed_point(void) {
     expect_zero(
         lantern_root_list_resize(&state.historical_block_hashes, 3),
         "resize historical hashes for fixed-point test");
+    extend_justified_window_for_tests(&state, 2);
     expect_zero(lantern_state_select_block_parent(&state, &parent_root), "fixed-point parent root precompute");
     /* Slot 0: set to match the aliased genesis parent root used during block production */
     state.historical_block_hashes.items[0] = parent_root;
@@ -3285,6 +3428,7 @@ static int test_collect_attestations_fixed_point_deep_chain(void) {
     expect_zero(
         lantern_root_list_resize(&state.historical_block_hashes, 2),
         "resize historical hashes for deep fixed-point test");
+    extend_justified_window_for_tests(&state, 1);
     expect_zero(lantern_state_select_block_parent(&state, &parent_root), "deep fixed parent root precompute");
     state.historical_block_hashes.items[0] = parent_root;
     fill_root(&state.historical_block_hashes.items[1], 0x40);
@@ -3504,6 +3648,7 @@ static int test_collect_attestations_ignores_store_justified_when_parent_state_l
     expect_zero(
         lantern_root_list_resize(&parent_state.historical_block_hashes, 3u),
         "resize lagging parent history");
+    extend_justified_window_for_tests(&parent_state, 2);
     parent_state.historical_block_hashes.items[0] = genesis_root;
     parent_state.historical_block_hashes.items[1] = block_one_root;
 
@@ -4532,11 +4677,11 @@ static int test_history_limits_enforced(void) {
     expect_zero(lantern_state_generate_genesis(&state, genesis_time, validator_count), "genesis for history test");
 
     expect_zero(
-        lantern_root_list_resize(&state.historical_block_hashes, LANTERN_HISTORICAL_ROOTS_LIMIT),
+        lantern_root_list_resize(&state.historical_block_hashes, LANTERN_HISTORICAL_ROOTS_LIMIT - 1u),
         "prep historical roots");
     fill_root(&state.historical_block_hashes.items[0], 0x5Au);
     expect_zero(
-        lantern_bitlist_resize(&state.justified_slots, LANTERN_HISTORICAL_ROOTS_LIMIT),
+        lantern_bitlist_resize(&state.justified_slots, LANTERN_HISTORICAL_ROOTS_LIMIT - 1u),
         "prep justified slots");
 
     state.latest_block_header.slot = LANTERN_HISTORICAL_ROOTS_LIMIT;
@@ -4558,8 +4703,61 @@ static int test_history_limits_enforced(void) {
     assert(state.historical_block_hashes.items[0].bytes[0] == 0x5Au);
     assert(state.justified_slots.bit_length == LANTERN_HISTORICAL_ROOTS_LIMIT);
 
+    LanternBlock next;
+    memset(&next, 0, sizeof(next));
+    next.slot = block.slot + 1u;
+    expect_zero(lantern_state_process_slots(&state, next.slot), "advance to block past history limit");
+    expect_zero(
+        lantern_proposer_for_slot(next.slot, validator_count, &next.proposer_index),
+        "proposer for block past history limit");
+    expect_ssz_success(
+        lantern_hash_tree_root_block_header(&state.latest_block_header, &next.parent_root),
+        "hash parent header for block past history limit");
+    lantern_block_body_init(&next.body);
+    assert(lantern_state_process_block_header(&state, &next) != 0);
+    assert(state.historical_block_hashes.length == LANTERN_HISTORICAL_ROOTS_LIMIT);
+    lantern_block_body_reset(&next.body);
+
     lantern_block_body_reset(&block.body);
     lantern_state_reset(&state);
+    return 0;
+}
+
+static int test_payload_pool_keeps_merged_proof(void) {
+    struct lantern_aggregated_payload_pool pool = {0};
+    LanternRoot data_root;
+    fill_root(&data_root, 0x31u);
+    LanternAttestationData data;
+    memset(&data, 0, sizeof(data));
+    data.slot = 4u;
+
+    const uint64_t subnet_a[] = {0u, 1u};
+    const uint64_t subnet_b[] = {2u, 3u};
+    const uint64_t merged_ids[] = {0u, 1u, 2u, 3u};
+    LanternAggregatedSignatureProof a;
+    LanternAggregatedSignatureProof b;
+    LanternAggregatedSignatureProof merged;
+    expect_zero(build_cached_proof_for_validators(&a, subnet_a, 2u, 0x51u), "build subnet a proof");
+    expect_zero(build_cached_proof_for_validators(&b, subnet_b, 2u, 0x61u), "build subnet b proof");
+    expect_zero(build_cached_proof_for_validators(&merged, merged_ids, 4u, 0x71u), "build merged proof");
+
+    expect_zero(lantern_aggregated_payload_pool_add(&pool, &data_root, &data, &a), "add subnet a proof");
+    expect_zero(lantern_aggregated_payload_pool_add(&pool, &data_root, &data, &b), "add subnet b proof");
+    assert(pool.length == 2u);
+    expect_zero(lantern_aggregated_payload_pool_add(&pool, &data_root, &data, &merged), "add merged proof");
+    assert(pool.length == 1u);
+    assert(pool.entries[0].proof.participants.bit_length == 4u);
+    for (size_t i = 0; i < 4u; ++i) {
+        assert(lantern_bitlist_get(&pool.entries[0].proof.participants, i));
+    }
+
+    expect_zero(lantern_aggregated_payload_pool_add(&pool, &data_root, &data, &a), "add covered proof");
+    assert(pool.length == 1u);
+
+    lantern_aggregated_signature_proof_reset(&a);
+    lantern_aggregated_signature_proof_reset(&b);
+    lantern_aggregated_signature_proof_reset(&merged);
+    lantern_aggregated_payload_pool_reset(&pool);
     return 0;
 }
 
@@ -4869,6 +5067,15 @@ int main(void) {
         return 1;
     }
     if (test_attestations_require_justified_source() != 0) {
+        return 1;
+    }
+    if (test_attestations_reject_slots_outside_justified_window() != 0) {
+        return 1;
+    }
+    if (test_payload_pool_keeps_merged_proof() != 0) {
+        return 1;
+    }
+    if (test_collect_attestations_prefers_new_voters() != 0) {
         return 1;
     }
     if (test_attestations_accept_duplicate_votes() != 0) {

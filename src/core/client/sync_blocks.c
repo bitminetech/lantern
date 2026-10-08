@@ -33,6 +33,7 @@
 #include "lantern/consensus/ssz.h"
 #include "lantern/consensus/state.h"
 #include "lantern/metrics/lean_metrics.h"
+#include "lantern/networking/reqresp_service.h"
 #include "lantern/storage/storage.h"
 #include "lantern/support/log.h"
 #include "lantern/support/strings.h"
@@ -211,11 +212,30 @@ static void update_network_view_after_import(
     }
 }
 
+bool lantern_client_should_cache_block_proofs(struct lantern_client *client)
+{
+    if (!client || !client->assigned_validators || !client->assigned_validators->enr.is_aggregator)
+    {
+        return false;
+    }
+    if (!client->status_lock_initialized)
+    {
+        return client->sync_state == LANTERN_SYNC_STATE_SYNCED;
+    }
+    if (pthread_mutex_lock(&client->status_lock) != 0)
+    {
+        return false;
+    }
+    bool synced = client->sync_state == LANTERN_SYNC_STATE_SYNCED;
+    pthread_mutex_unlock(&client->status_lock);
+    return synced;
+}
+
 void lantern_client_cache_block_aggregated_proofs(
     struct lantern_client *client,
     const LanternSignedBlock *block)
 {
-    if (!client || !block)
+    if (!client || !block || !lantern_client_should_cache_block_proofs(client))
     {
         return;
     }
@@ -668,6 +688,22 @@ const LanternState *lantern_client_state_for_root_locked(
     return restored
         ? lantern_fork_choice_block_state(&client->store, root)
         : NULL;
+}
+
+const LanternState *lantern_client_target_state_locked(
+    struct lantern_client *client,
+    const LanternCheckpoint *target)
+{
+    if (!client || !target)
+    {
+        return NULL;
+    }
+    const LanternState *state = lantern_client_state_for_root_locked(client, &target->root);
+    if (state || !lantern_fork_choice_pruned_ancestor_known(&client->store, target))
+    {
+        return state;
+    }
+    return lantern_client_state_for_root_locked(client, &client->store.anchor.root);
 }
 
 static void adopt_state_locked(struct lantern_client *client, LanternState *state)
@@ -1330,9 +1366,10 @@ static void prune_storage_if_finalized_advanced_locked(
     {
         return;
     }
-    if (lantern_storage_prune_before_slot(
+    if (lantern_storage_prune_before_slots(
             &client->storage,
             current->slot,
+            lantern_client_block_retention_cutoff(client, current->slot),
             &current->root,
             1u)
         < 0)
@@ -1486,6 +1523,29 @@ static void log_import_rejected(
 /* ============================================================================
  * Block Import
  * ============================================================================ */
+
+static uint64_t current_wall_slot(const struct lantern_client *client)
+{
+    uint64_t total_interval = 0u;
+    if (lantern_slot_clock_total_interval(
+            client->state.config.genesis_time,
+            validator_wall_time_now_millis(),
+            &total_interval)
+        != 0)
+    {
+        return 0u;
+    }
+    return total_interval / LANTERN_INTERVALS_PER_SLOT;
+}
+
+uint64_t lantern_client_block_retention_cutoff(const struct lantern_client *client, uint64_t finalized_slot)
+{
+    uint64_t current_slot = client ? current_wall_slot(client) : 0u;
+    uint64_t cutoff = current_slot > LANTERN_MIN_SLOTS_FOR_BLOCK_REQUESTS
+        ? current_slot - LANTERN_MIN_SLOTS_FOR_BLOCK_REQUESTS
+        : 0u;
+    return cutoff < finalized_slot ? cutoff : finalized_slot;
+}
 
 /**
  * Import a block into the client state and fork choice.
@@ -1657,6 +1717,24 @@ static bool lantern_client_import_block_internal(
         goto cleanup;
     }
     bool parent_off_head = parent_action == BLOCK_PARENT_ACTION_KNOWN_OFF_HEAD;
+
+    uint64_t parent_slot = 0u;
+    if (!lantern_client_block_known_locked(client, &block->block.parent_root, &parent_slot))
+    {
+        parent_slot = block->block.slot;
+    }
+    switch (lantern_fork_choice_check_block_slot(block->block.slot, parent_slot, current_wall_slot(client)))
+    {
+    case LANTERN_BLOCK_SLOT_GAP_TOO_LARGE:
+        log_import_rejected(block, &block_root_local, import_source, "slot_gap_too_large", meta);
+        goto cleanup;
+    case LANTERN_BLOCK_SLOT_TOO_FAR_IN_FUTURE:
+        log_import_rejected(block, &block_root_local, import_source, "block_too_far_in_future", meta);
+        import_result = LANTERN_CLIENT_ERR_IGNORED;
+        goto cleanup;
+    case LANTERN_BLOCK_SLOT_OK:
+        break;
+    }
 
     if (lantern_state_validate_attestation_data_constraints(
             &block->block.body.attestations,

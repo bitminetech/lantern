@@ -1017,6 +1017,82 @@ cleanup:
     return rc;
 }
 
+static int test_record_vote_accepts_pruned_finalized_source(void) {
+    struct lantern_client client;
+    struct PQSignatureSchemePublicKey *pub = NULL;
+    struct PQSignatureSchemeSecretKey *secret = NULL;
+    LanternRoot anchor_root;
+    LanternRoot child_root;
+    LanternRoot pruned_root;
+    struct lantern_validator_config_entry assigned;
+    int rc = 1;
+
+    memset(&assigned, 0, sizeof(assigned));
+
+    if (client_test_setup_vote_validation_client(
+            &client,
+            "vote_pruned_source",
+            &pub,
+            &secret,
+            &anchor_root,
+            &child_root)
+        != 0) {
+        return 1;
+    }
+    assigned.enr.is_aggregator = true;
+    client.assigned_validators = &assigned;
+
+    client.store.pruned_blocks = calloc(1u, sizeof(*client.store.pruned_blocks));
+    if (!client.store.pruned_blocks) {
+        goto cleanup;
+    }
+    client_test_fill_root(&pruned_root, 0xA6u);
+    client.store.pruned_blocks[0].root = pruned_root;
+    client.store.pruned_blocks[0].slot = 0u;
+    client.store.pruned_block_len = 1u;
+    client.store.pruned_block_cap = 1u;
+
+    LanternSignedVote vote;
+    memset(&vote, 0, sizeof(vote));
+    uint64_t child_slot = 0;
+    if (client_test_slot_for_root(&client, &child_root, &child_slot) != 0) {
+        fprintf(stderr, "failed to resolve child slot for pruned source test\n");
+        goto cleanup;
+    }
+    vote.data.validator_id = 0u;
+    vote.data.slot = child_slot;
+    vote.data.head.slot = child_slot;
+    vote.data.head.root = child_root;
+    vote.data.target.slot = child_slot;
+    vote.data.target.root = child_root;
+    vote.data.source.slot = 0u;
+    vote.data.source.root = pruned_root;
+
+    if (client_test_sign_vote_with_secret(&vote, secret) != 0) {
+        fprintf(stderr, "failed to sign vote with pruned source\n");
+        goto cleanup;
+    }
+    if (lantern_client_debug_record_vote(&client, &vote, "vote_pruned_source_peer") != 0) {
+        fprintf(stderr, "lantern_client_debug_record_vote failed for pruned source test\n");
+        goto cleanup;
+    }
+    if (!store_has_attestation_data_for_vote(&client.store, &vote)) {
+        fprintf(stderr, "vote with a pruned finalized source should be accepted\n");
+        goto cleanup;
+    }
+    if (lantern_client_pending_vote_count(&client) != 0u) {
+        fprintf(stderr, "vote with a pruned finalized source should not be buffered\n");
+        goto cleanup;
+    }
+
+    rc = 0;
+
+cleanup:
+    client.assigned_validators = NULL;
+    client_test_teardown_vote_validation_client(&client, pub, secret);
+    return rc;
+}
+
 static int test_record_vote_buffers_unknown_head(void) {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
@@ -3415,7 +3491,7 @@ cleanup:
     return rc;
 }
 
-static int test_publish_attestations_gate_on_unresolved_network_head(void) {
+static int test_publish_attestations_ignore_unresolved_network_head(void) {
     struct lantern_client client;
     struct PQSignatureSchemePublicKey *pub = NULL;
     struct PQSignatureSchemeSecretKey *secret = NULL;
@@ -3503,20 +3579,9 @@ static int test_publish_attestations_gate_on_unresolved_network_head(void) {
     client_test_fill_root(&client.network_view.head.root, 0xcdu);
 
     uint64_t unresolved_slot = mismatched_slot + 1u;
-    if (validator_publish_attestations(&client, unresolved_slot)
-            != LANTERN_CLIENT_ERR_RUNTIME
-        || capture.calls != 0u) {
-        fprintf(stderr, "unresolved network head should block validator attestation\n");
-        goto cleanup;
-    }
-
-    client.network_view.head = (LanternCheckpoint){
-        .root = client.store.head,
-        .slot = client.state.slot,
-    };
     if (validator_publish_attestations(&client, unresolved_slot) != LANTERN_CLIENT_OK
         || capture.calls != 1u) {
-        fprintf(stderr, "resolved network head should reopen validator attestation\n");
+        fprintf(stderr, "unresolved network head should not block validator attestation\n");
         goto cleanup;
     }
 
@@ -4077,6 +4142,9 @@ int main(void) {
     if (test_record_vote_buffers_source_root_known_only_via_historical_hashes() != 0) {
         return 1;
     }
+    if (test_record_vote_accepts_pruned_finalized_source() != 0) {
+        return 1;
+    }
     if (test_record_vote_buffers_unknown_head() != 0) {
         return 1;
     }
@@ -4158,7 +4226,7 @@ int main(void) {
     if (test_publish_attestations_includes_proposer() != 0) {
         return 1;
     }
-    if (test_publish_attestations_gate_on_unresolved_network_head() != 0) {
+    if (test_publish_attestations_ignore_unresolved_network_head() != 0) {
         return 1;
     }
     if (test_validator_duties_ignore_binary_sync_state() != 0) {

@@ -778,6 +778,27 @@ static int test_fork_choice_prune_states_keeps_finalized_to_head_chain(void) {
     assert(store.blocks[block_three_index].state.validators != NULL);
     assert(store.blocks[block_three_index].state.historical_block_hashes.items != NULL);
 
+    LanternCheckpoint fork_two_cp = make_checkpoint(&fork_two_root, fork_two.slot);
+    LanternCheckpoint block_one_wrong_slot = make_checkpoint(&block_one_root, block_two.slot);
+    assert(store.pruned_block_len == 2u);
+    assert(store.pruned_blocks[0].slot == genesis.slot);
+    assert(roots_equal(&store.pruned_blocks[0].root, &genesis_root));
+    assert(store.pruned_blocks[1].slot == block_one.slot);
+    assert(roots_equal(&store.pruned_blocks[1].root, &block_one_root));
+    assert(lantern_fork_choice_pruned_ancestor_known(&store, &genesis_cp));
+    assert(lantern_fork_choice_pruned_ancestor_known(&store, &block_one_cp));
+    assert(!lantern_fork_choice_pruned_ancestor_known(&store, &fork_two_cp));
+    assert(!lantern_fork_choice_pruned_ancestor_known(&store, &block_two_cp));
+    assert(!lantern_fork_choice_pruned_ancestor_known(&store, &block_one_wrong_slot));
+
+    assert(lantern_fork_choice_recompute_head(&store) == 0);
+    assert(roots_equal(&store.head, &block_three_root));
+    assert(roots_equal(&store.latest_finalized.root, &genesis_root));
+    assert(store.latest_finalized.slot == genesis.slot);
+    assert(lantern_fork_choice_prune_states(&store) == 0);
+    assert(store.block_len == 2u);
+    assert(store.pruned_block_len == 2u);
+
     lantern_state_reset(&fork_two_state);
     lantern_state_reset(&block_three_state);
     lantern_state_reset(&block_two_state);
@@ -2067,7 +2088,22 @@ static int test_latest_vote_equal_slot_tie_break_is_deterministic(void) {
     return 0;
 }
 
+static int test_fork_choice_check_block_slot_bounds(void) {
+    assert(lantern_fork_choice_check_block_slot(11, 10, 10) == LANTERN_BLOCK_SLOT_OK);
+    assert(lantern_fork_choice_check_block_slot(11, 10, 11) == LANTERN_BLOCK_SLOT_OK);
+    assert(lantern_fork_choice_check_block_slot(12, 10, 10) == LANTERN_BLOCK_SLOT_TOO_FAR_IN_FUTURE);
+    assert(lantern_fork_choice_check_block_slot(1, 0, 0) == LANTERN_BLOCK_SLOT_OK);
+    assert(lantern_fork_choice_check_block_slot(2, 0, 0) == LANTERN_BLOCK_SLOT_TOO_FAR_IN_FUTURE);
+    uint64_t limit = LANTERN_HISTORICAL_ROOTS_LIMIT;
+    assert(lantern_fork_choice_check_block_slot(limit + 5u, 5u, limit + 10u) == LANTERN_BLOCK_SLOT_OK);
+    assert(lantern_fork_choice_check_block_slot(limit + 6u, 5u, limit + 10u) == LANTERN_BLOCK_SLOT_GAP_TOO_LARGE);
+    return 0;
+}
+
 int main(void) {
+    if (test_fork_choice_check_block_slot_bounds() != 0) {
+        return 1;
+    }
     if (test_fork_choice_block_sequence() != 0) {
         return 1;
     }

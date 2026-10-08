@@ -698,31 +698,67 @@ static int remove_root_file(const char *directory, const LanternRoot *root, int 
     return remove_error == ENOENT ? 0 : -1;
 }
 
-struct prune_context {
-    struct storage_context *storage;
-    uint64_t slot;
-    const LanternRoot *keep_roots;
-    size_t keep_root_count;
-    int count;
-};
-
-static int prune_block(const LanternSignedBlock *block, const LanternRoot *root, void *context)
+static int read_block_file_link(const char *path, uint64_t *out_slot, LanternRoot *out_parent_root)
 {
-    struct prune_context *prune = context;
-    if (block->block.slot >= prune->slot
-        || root_is_kept(root, prune->keep_roots, prune->keep_root_count))
+    FILE *file = fopen(path, "rb");
+    if (!file)
     {
-        return 0;
+        return errno == ENOENT ? 1 : -1;
     }
-    return remove_root_file(prune->storage->states_dir, root, &prune->count) == 0
-            && remove_root_file(prune->storage->blocks_dir, root, &prune->count) == 0
-        ? 0
-        : -1;
+    uint8_t offset_bytes[4];
+    uint8_t header[8u + 8u + LANTERN_ROOT_SIZE];
+    int result = -1;
+    if (fread(offset_bytes, 1u, sizeof(offset_bytes), file) == sizeof(offset_bytes))
+    {
+        uint32_t offset = (uint32_t)offset_bytes[0] | ((uint32_t)offset_bytes[1] << 8)
+            | ((uint32_t)offset_bytes[2] << 16) | ((uint32_t)offset_bytes[3] << 24);
+        if (fseek(file, (long)offset, SEEK_SET) == 0
+            && fread(header, 1u, sizeof(header), file) == sizeof(header))
+        {
+            uint64_t slot = 0u;
+            for (size_t i = 0; i < 8u; ++i)
+            {
+                slot |= (uint64_t)header[i] << (8u * i);
+            }
+            *out_slot = slot;
+            if (out_parent_root)
+            {
+                memcpy(out_parent_root->bytes, &header[16], LANTERN_ROOT_SIZE);
+            }
+            result = 0;
+        }
+    }
+    fclose(file);
+    return result;
 }
 
-int lantern_storage_prune_before_slot(
+int lantern_storage_load_block_link(
     const struct lantern_storage *storage,
-    uint64_t slot,
+    const LanternRoot *root,
+    uint64_t *out_slot,
+    LanternRoot *out_parent_root)
+{
+    struct storage_context *context = get_context(storage);
+    if (!context || !root || !out_slot || !out_parent_root)
+    {
+        return -1;
+    }
+    char *path = root_path(context->blocks_dir, root);
+    if (!path || pthread_rwlock_rdlock(&context->lock) != 0)
+    {
+        free(path);
+        return -1;
+    }
+    int result = read_block_file_link(path, out_slot, out_parent_root);
+    pthread_rwlock_unlock(&context->lock);
+    free(path);
+    return result;
+}
+
+int lantern_storage_prune_before_slots(
+    const struct lantern_storage *storage,
+    uint64_t state_slot,
+    uint64_t block_slot,
     const LanternRoot *keep_roots,
     size_t keep_root_count)
 {
@@ -732,13 +768,56 @@ int lantern_storage_prune_before_slot(
     {
         return -1;
     }
-    struct prune_context context = {
-        .storage = backend,
-        .slot = slot,
-        .keep_roots = keep_roots,
-        .keep_root_count = keep_root_count,
-    };
-    int result = scan_blocks(backend, prune_block, &context);
+    int count = 0;
+    int result = 0;
+    DIR *directory = opendir(backend->blocks_dir);
+    if (!directory)
+    {
+        result = errno == ENOENT ? 0 : -1;
+    }
+    struct dirent *entry;
+    while (directory && result == 0 && (entry = readdir(directory)) != NULL)
+    {
+        LanternRoot root;
+        if (!filename_root(entry->d_name, &root) || root_is_kept(&root, keep_roots, keep_root_count))
+        {
+            continue;
+        }
+        char *path = join_path(backend->blocks_dir, entry->d_name);
+        uint64_t slot = 0u;
+        int read_result = path ? read_block_file_link(path, &slot, NULL) : -1;
+        free(path);
+        if (read_result > 0)
+        {
+            continue;
+        }
+        if (read_result < 0)
+        {
+            result = -1;
+            break;
+        }
+        if (slot < state_slot && remove_root_file(backend->states_dir, &root, &count) != 0)
+        {
+            result = -1;
+        }
+        if (result == 0 && slot < block_slot && remove_root_file(backend->blocks_dir, &root, &count) != 0)
+        {
+            result = -1;
+        }
+    }
+    if (directory)
+    {
+        closedir(directory);
+    }
     pthread_rwlock_unlock(&backend->lock);
-    return result == 0 ? context.count : -1;
+    return result == 0 ? count : -1;
+}
+
+int lantern_storage_prune_before_slot(
+    const struct lantern_storage *storage,
+    uint64_t slot,
+    const LanternRoot *keep_roots,
+    size_t keep_root_count)
+{
+    return lantern_storage_prune_before_slots(storage, slot, slot, keep_roots, keep_root_count);
 }

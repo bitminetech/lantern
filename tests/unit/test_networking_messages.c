@@ -633,6 +633,51 @@ static void test_gossip_helpers(void) {
     free(compressed);
 }
 
+static void test_gossip_message_id_large_payload(void) {
+    char topic[128];
+    CHECK(lantern_gossip_topic_format(LANTERN_GOSSIP_TOPIC_BLOCK, "12345678", topic, sizeof(topic)) == 0);
+
+    size_t payload_len = 8192u;
+    uint8_t *payload = malloc(payload_len);
+    CHECK(payload);
+    rng_fill_bytes(payload, payload_len);
+
+    size_t max_compressed = 0;
+    CHECK(lantern_snappy_max_compressed_size_raw(payload_len, &max_compressed) == LANTERN_SNAPPY_OK);
+    uint8_t *compressed = malloc(max_compressed);
+    CHECK(compressed);
+    size_t compressed_len = 0;
+    CHECK(lantern_snappy_compress_raw(payload, payload_len, compressed, max_compressed, &compressed_len)
+          == LANTERN_SNAPPY_OK);
+
+    uint8_t *scratch = malloc(payload_len);
+    CHECK(scratch);
+    LanternGossipMessageId expected;
+    size_t required = 0;
+    check_zero(lantern_gossip_compute_message_id(&expected, (const uint8_t *)topic, strlen(topic),
+                                                 compressed, compressed_len, scratch, payload_len, &required),
+               "large message id with full scratch");
+    CHECK(required == 0);
+
+    LanternGossipMessageId small_scratch_id;
+    uint8_t small_scratch[4096];
+    check_zero(lantern_gossip_compute_message_id(&small_scratch_id, (const uint8_t *)topic, strlen(topic),
+                                                 compressed, compressed_len, small_scratch,
+                                                 sizeof(small_scratch), &required),
+               "large message id with small scratch");
+    CHECK(required == payload_len);
+
+    LanternGossipMessageId actual;
+    check_zero(lantern_gossip_message_id(&actual, (const uint8_t *)topic, strlen(topic), compressed, compressed_len),
+               "large message id");
+    CHECK(memcmp(actual.bytes, expected.bytes, LANTERN_GOSSIP_MESSAGE_ID_SIZE) == 0);
+    CHECK(memcmp(actual.bytes, small_scratch_id.bytes, LANTERN_GOSSIP_MESSAGE_ID_SIZE) != 0);
+
+    free(scratch);
+    free(compressed);
+    free(payload);
+}
+
 static void test_gossip_signed_vote_payload(void) {
     LanternSignedVote vote = build_signed_vote(3, 12, 0x44);
 
@@ -907,6 +952,7 @@ int main(void) {
     test_gossipsub_service_remembers_extra_attestation_subnets();
     test_client_publish_block_loopback();
     test_gossip_helpers();
+    test_gossip_message_id_large_payload();
     puts("lantern_networking_messages_test OK");
     return 0;
 }

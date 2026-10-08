@@ -77,6 +77,16 @@ int lantern_fork_choice_set_anchor_with_state(
     const LanternCheckpoint *latest_finalized,
     const LanternRoot *block_root_hint, const LanternState *anchor_state);
 
+enum lantern_block_slot_check
+{
+    LANTERN_BLOCK_SLOT_OK = 0,
+    LANTERN_BLOCK_SLOT_GAP_TOO_LARGE,
+    LANTERN_BLOCK_SLOT_TOO_FAR_IN_FUTURE,
+};
+
+enum lantern_block_slot_check lantern_fork_choice_check_block_slot(
+    uint64_t block_slot, uint64_t parent_slot, uint64_t current_slot);
+
 int lantern_fork_choice_add_block(LanternStore *store,
                                   const LanternBlock *block,
                                   const LanternCheckpoint *post_justified,
@@ -139,6 +149,8 @@ int lantern_fork_choice_block_info(const LanternStore *store,
                                    const LanternRoot *root, uint64_t *out_slot,
                                    LanternRoot *out_parent_root,
                                    bool *out_has_parent);
+bool lantern_fork_choice_pruned_ancestor_known(
+    const LanternStore *store, const LanternCheckpoint *checkpoint);
 /**
  * Replace a known block's cached state with an owned copy.
  *

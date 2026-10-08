@@ -443,6 +443,7 @@ void lantern_fork_choice_reset(LanternStore *store) {
     block_states_reset(store);
     free(store->blocks);
     free(store->root_index);
+    free(store->pruned_blocks);
     free(store->state_cache);
     lantern_store_init(store);
     store->attestation_signatures = attestation_signatures;
@@ -659,6 +660,76 @@ static bool should_replace_checkpoint(
     return candidate->slot > current->slot;
 }
 
+static bool pruned_block_at_slot(const LanternStore *store, uint64_t slot, LanternRoot *out_root) {
+    if (!store || !store->pruned_blocks) {
+        return false;
+    }
+    size_t low = 0u;
+    size_t high = store->pruned_block_len;
+    while (low < high) {
+        size_t mid = low + (high - low) / 2u;
+        uint64_t mid_slot = store->pruned_blocks[mid].slot;
+        if (mid_slot == slot) {
+            if (out_root) {
+                *out_root = store->pruned_blocks[mid].root;
+            }
+            return true;
+        }
+        if (mid_slot < slot) {
+            low = mid + 1u;
+        } else {
+            high = mid;
+        }
+    }
+    return false;
+}
+
+static size_t count_tree_ancestors(const LanternStore *store, size_t block_index) {
+    size_t count = 0u;
+    size_t current = block_index;
+    size_t parent = 0u;
+    while (count < store->block_len && parent_index_for_block(store, current, &parent)) {
+        count += 1u;
+        current = parent;
+    }
+    return count;
+}
+
+static int reserve_pruned_blocks(LanternStore *store, size_t additional) {
+    if (additional == 0u || store->pruned_block_len + additional <= store->pruned_block_cap) {
+        return 0;
+    }
+    size_t capacity = store->pruned_block_cap > 0u ? store->pruned_block_cap : 64u;
+    while (capacity < store->pruned_block_len + additional) {
+        capacity *= 2u;
+    }
+    struct lantern_fork_choice_pruned_block *grown =
+        realloc(store->pruned_blocks, capacity * sizeof(*grown));
+    if (!grown) {
+        return -1;
+    }
+    store->pruned_blocks = grown;
+    store->pruned_block_cap = capacity;
+    return 0;
+}
+
+static void record_pruned_ancestors(LanternStore *store, size_t block_index, size_t count) {
+    size_t base = store->pruned_block_len;
+    size_t written = 0u;
+    size_t current = block_index;
+    size_t parent = 0u;
+    while (written < count && parent_index_for_block(store, current, &parent)) {
+        written += 1u;
+        struct lantern_fork_choice_pruned_block *entry = &store->pruned_blocks[base + count - written];
+        entry->root = store->blocks[parent].root;
+        entry->slot = store->blocks[parent].slot;
+        current = parent;
+    }
+    if (written == count) {
+        store->pruned_block_len = base + count;
+    }
+}
+
 static bool derive_finalized_from_head_state(
     const LanternStore *store,
     const LanternRoot *head,
@@ -690,7 +761,13 @@ static bool derive_finalized_from_head_state(
 
         size_t parent = 0;
         if (!parent_index_for_block(store, current, &parent)) {
-            return false;
+            LanternRoot pruned_root;
+            if (!pruned_block_at_slot(store, finalized_slot, &pruned_root)) {
+                return false;
+            }
+            out_finalized->root = pruned_root;
+            out_finalized->slot = finalized_slot;
+            return true;
         }
         current = parent;
     }
@@ -753,6 +830,19 @@ static int update_latest_checkpoints(
         fork_choice_publish_current_checkpoints(store);
     }
     return 0;
+}
+
+enum lantern_block_slot_check lantern_fork_choice_check_block_slot(
+    uint64_t block_slot,
+    uint64_t parent_slot,
+    uint64_t current_slot) {
+    if (block_slot > parent_slot && block_slot - parent_slot > LANTERN_HISTORICAL_ROOTS_LIMIT) {
+        return LANTERN_BLOCK_SLOT_GAP_TOO_LARGE;
+    }
+    if (current_slot < UINT64_MAX && block_slot > current_slot + 1u) {
+        return LANTERN_BLOCK_SLOT_TOO_FAR_IN_FUTURE;
+    }
+    return LANTERN_BLOCK_SLOT_OK;
 }
 
 int lantern_fork_choice_add_block(
@@ -961,9 +1051,11 @@ int lantern_fork_choice_prune_states(LanternStore *store) {
 
     size_t head_index = 0;
     size_t finalized_index = 0;
-    if (!find_block_index(store, &store->head, &head_index)
-        || !find_block_index(store, &store->latest_finalized.root, &finalized_index)) {
+    if (!find_block_index(store, &store->head, &head_index)) {
         return -1;
+    }
+    if (!find_block_index(store, &store->latest_finalized.root, &finalized_index)) {
+        return lantern_fork_choice_pruned_ancestor_known(store, &store->latest_finalized) ? 0 : -1;
     }
     if (head_index >= store->block_len || finalized_index >= store->block_len) {
         return -1;
@@ -1022,6 +1114,13 @@ int lantern_fork_choice_prune_states(LanternStore *store) {
         free(old_to_new);
         return -1;
     }
+    size_t pruned_ancestor_count = count_tree_ancestors(store, finalized_index);
+    if (reserve_pruned_blocks(store, pruned_ancestor_count) != 0) {
+        free(canonical);
+        free(keep_block);
+        free(old_to_new);
+        return -1;
+    }
 
     for (size_t i = 0; i < store->block_len; ++i) {
         struct lantern_fork_choice_block_entry *entry = &store->blocks[i];
@@ -1058,6 +1157,7 @@ int lantern_fork_choice_prune_states(LanternStore *store) {
             }
             new_blocks[new_index] = store->blocks[old_index];
         }
+        record_pruned_ancestors(store, finalized_index, pruned_ancestor_count);
 
         for (size_t i = 0; i < store->block_len; ++i) {
             if (keep_block[i]) {
@@ -1522,6 +1622,17 @@ int lantern_fork_choice_block_info(
         *out_has_parent = parent_index_for_block(store, index, &parent);
     }
     return 0;
+}
+
+bool lantern_fork_choice_pruned_ancestor_known(
+    const LanternStore *store,
+    const LanternCheckpoint *checkpoint) {
+    if (!store || !checkpoint || lantern_root_is_zero(&checkpoint->root)) {
+        return false;
+    }
+    LanternRoot root;
+    return pruned_block_at_slot(store, checkpoint->slot, &root)
+        && root_compare(&root, &checkpoint->root) == 0;
 }
 
 bool lantern_fork_choice_read_checkpoint_snapshot(

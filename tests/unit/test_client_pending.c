@@ -2252,6 +2252,14 @@ cleanup:
     return rc;
 }
 
+static void make_synced_aggregator(struct lantern_client *client, struct lantern_validator_config_entry *assigned)
+{
+    memset(assigned, 0, sizeof(*assigned));
+    assigned->enr.is_aggregator = true;
+    client->assigned_validators = assigned;
+    client->sync_state = LANTERN_SYNC_STATE_SYNCED;
+}
+
 static int test_import_block_accepts_complete_proof(void)
 {
     struct block_signature_fixture fixture;
@@ -2260,11 +2268,13 @@ static int test_import_block_accepts_complete_proof(void)
     uint64_t initial_slot = 0;
     int rc = 1;
 
+    struct lantern_validator_config_entry assigned;
     memset(&block, 0, sizeof(block));
     if (setup_block_signature_fixture(&fixture, "test_import_complete_proof") != 0) {
         fprintf(stderr, "failed to set up block proof fixture\n");
         return 1;
     }
+    make_synced_aggregator(&fixture.client, &assigned);
 
     initial_slot = fixture.client.state.slot;
     if (build_signed_block_for_import(&fixture, true, true, &block, &block_root) != 0) {
@@ -2282,6 +2292,40 @@ static int test_import_block_accepts_complete_proof(void)
     }
     if (expect_recovered_block_payload(&fixture.client.store, &block, false, "canonical import")
         != 0) {
+        goto cleanup;
+    }
+    rc = 0;
+
+cleanup:
+    fixture.client.assigned_validators = NULL;
+    lantern_signed_block_reset(&block);
+    teardown_block_signature_fixture(&fixture);
+    return rc;
+}
+
+static int test_import_block_skips_proof_recovery_when_not_aggregator(void)
+{
+    struct block_signature_fixture fixture;
+    LanternSignedBlock block;
+    LanternRoot block_root;
+    int rc = 1;
+
+    memset(&block, 0, sizeof(block));
+    if (setup_block_signature_fixture(&fixture, "test_import_no_proof_recovery") != 0) {
+        fprintf(stderr, "failed to set up no recovery fixture\n");
+        return 1;
+    }
+    if (build_signed_block_for_import(&fixture, true, true, &block, &block_root) != 0) {
+        fprintf(stderr, "failed to build no recovery block\n");
+        goto cleanup;
+    }
+    if (lantern_client_debug_import_block(&fixture.client, &block, &block_root, "12D3KooWsig") != 1) {
+        fprintf(stderr, "import rejected block in no recovery test\n");
+        goto cleanup;
+    }
+    if (fixture.client.store.new_aggregated_payloads.length != 0u
+        || fixture.client.store.known_aggregated_payloads.length != 0u) {
+        fprintf(stderr, "a node that is not an aggregator should not recover block-body proofs\n");
         goto cleanup;
     }
     rc = 0;
@@ -3796,11 +3840,13 @@ static int test_restore_persisted_blocks_caches_known_attestation_proofs(void)
     LanternRoot block_root;
     int rc = 1;
 
+    struct lantern_validator_config_entry assigned;
     memset(&block, 0, sizeof(block));
     if (setup_block_signature_fixture(&fixture, "test_restore_known_proofs") != 0) {
         fprintf(stderr, "failed to set up restore known proofs fixture\n");
         return 1;
     }
+    make_synced_aggregator(&fixture.client, &assigned);
 
     if (build_signed_block_for_import(&fixture, true, true, &block, &block_root) != 0) {
         fprintf(stderr, "failed to build block fixture for restore known proofs test\n");
@@ -3826,6 +3872,7 @@ static int test_restore_persisted_blocks_caches_known_attestation_proofs(void)
     rc = 0;
 
 cleanup:
+    fixture.client.assigned_validators = NULL;
     lantern_signed_block_reset(&block);
     teardown_block_signature_fixture(&fixture);
     return rc;
@@ -3959,6 +4006,9 @@ int main(void) {
         return 1;
     }
     if (test_import_block_accepts_complete_proof() != 0) {
+        return 1;
+    }
+    if (test_import_block_skips_proof_recovery_when_not_aggregator() != 0) {
         return 1;
     }
     if (test_import_block_rejects_duplicate_attestation_data() != 0) {

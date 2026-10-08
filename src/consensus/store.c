@@ -360,16 +360,20 @@ static bool bitlist_participants_covered(
     return has_participant;
 }
 
-static bool aggregated_payload_pool_covers_proof_participants(
+static bool aggregated_payload_pool_has_superset(
     const struct lantern_aggregated_payload_pool *cache,
     const LanternRoot *data_root,
     const LanternAggregatedSignatureProof *proof) {
-    bool covered[LANTERN_VALIDATOR_REGISTRY_LIMIT] = {false};
-    if (!proof) {
+    if (!cache || !cache->entries || !data_root || !proof) {
         return false;
     }
-    aggregated_payload_pool_mark_participants_covered(cache, data_root, covered);
-    return bitlist_participants_covered(&proof->participants, covered);
+    for (size_t i = 0; i < cache->length; ++i) {
+        if (lantern_root_equal(&cache->entries[i].data_root, data_root)
+            && proof_participants_subset_of(proof, &cache->entries[i].proof)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool lantern_store_aggregated_payloads_cover_participants(
@@ -439,7 +443,7 @@ static int aggregated_payload_pool_add_with_limit(
         pool->entries[i].data = *data;
         return 0;
     }
-    if (aggregated_payload_pool_covers_proof_participants(pool, data_root, proof)) {
+    if (aggregated_payload_pool_has_superset(pool, data_root, proof)) {
         return 0;
     }
     while (pool->length >= max_length) {

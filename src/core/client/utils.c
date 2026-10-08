@@ -480,6 +480,12 @@ bool lantern_client_checkpoint_is_ancestor_locked(
     {
         return false;
     }
+    if (!lantern_client_block_known_locked(client, &ancestor->root, NULL)
+        && lantern_fork_choice_pruned_ancestor_known(&client->store, ancestor))
+    {
+        return lantern_client_block_known_locked(client, &descendant->root, NULL)
+            || lantern_fork_choice_pruned_ancestor_known(&client->store, descendant);
+    }
 
     LanternRoot current_root = descendant->root;
     size_t max_depth = client->store.block_len;

@@ -38,9 +38,15 @@ int lantern_gossip_topic_format_subnet(enum lantern_gossip_topic_kind kind,
                                        size_t subnet_id, char *buffer,
                                        size_t buffer_len);
 
+#define LANTERN_GOSSIP_MAX_UNCOMPRESSED_SIZE (10u * 1024u * 1024u)
+
 int lantern_gossip_compute_message_id(
     LanternGossipMessageId *message_id, const uint8_t *topic, size_t topic_len,
     const uint8_t *payload, size_t payload_len, uint8_t *snappy_scratch,
     size_t snappy_scratch_len, size_t *required_scratch);
+
+int lantern_gossip_message_id(
+    LanternGossipMessageId *message_id, const uint8_t *topic, size_t topic_len,
+    const uint8_t *payload, size_t payload_len);
 
 #endif /* LANTERN_NETWORKING_GOSSIP_H */

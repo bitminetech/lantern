@@ -527,33 +527,12 @@ static libp2p_gossipsub_err_t lantern_gossipsub_message_id(
     }
 
     LanternGossipMessageId id;
-    uint8_t stack_scratch[4096];
-    size_t required = 0;
-    int rc = lantern_gossip_compute_message_id(
+    int rc = lantern_gossip_message_id(
         &id,
         message->topic.data,
         message->topic.len,
         message->data.data,
-        message->data.len,
-        stack_scratch,
-        sizeof(stack_scratch),
-        &required);
-    if (rc != 0 && required > sizeof(stack_scratch)) {
-        uint8_t *scratch = (uint8_t *)malloc(required);
-        if (!scratch) {
-            return LIBP2P_GOSSIPSUB_ERR_INTERNAL;
-        }
-        rc = lantern_gossip_compute_message_id(
-            &id,
-            message->topic.data,
-            message->topic.len,
-            message->data.data,
-            message->data.len,
-            scratch,
-            required,
-            NULL);
-        free(scratch);
-    }
+        message->data.len);
     if (rc != 0) {
         return LIBP2P_GOSSIPSUB_ERR_INTERNAL;
     }

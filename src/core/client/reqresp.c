@@ -1443,6 +1443,10 @@ int lantern_client_enqueue_block_aggregated_proofs(
     {
         return -1;
     }
+    if (!lantern_client_should_cache_block_proofs(client))
+    {
+        return 0;
+    }
     struct lantern_async_block_import_job *job = calloc(1u, sizeof(*job));
     if (!job)
     {
@@ -1583,12 +1587,14 @@ int reqresp_collect_blocks_by_range(
     LanternRoot descending[LANTERN_MAX_REQUEST_BLOCKS];
     size_t descending_count = 0;
 
+    LanternRoot root = {0};
+    uint64_t previous_slot = 0;
+    bool have_previous = false;
+    bool continue_in_storage = false;
     bool state_locked = lantern_client_lock_state(client);
     if (state_locked && client->store.block_len > 0u)
     {
-        LanternRoot root = client->store.head;
-        uint64_t previous_slot = 0;
-        bool have_previous = false;
+        root = client->store.head;
         for (;;)
         {
             uint64_t slot = 0;
@@ -1600,9 +1606,12 @@ int reqresp_collect_blocks_by_range(
                     &slot,
                     &parent_root,
                     &has_parent)
-                != 0
-                || (have_previous && slot >= previous_slot)
-                || slot < start_slot)
+                != 0)
+            {
+                continue_in_storage = have_previous;
+                break;
+            }
+            if ((have_previous && slot >= previous_slot) || slot < start_slot)
             {
                 break;
             }
@@ -1611,16 +1620,40 @@ int reqresp_collect_blocks_by_range(
                 descending[descending_count] = root;
                 descending_count += 1u;
             }
-            if (!has_parent || lantern_root_is_zero(&parent_root))
+            if (lantern_root_is_zero(&parent_root))
             {
                 break;
             }
             previous_slot = slot;
             have_previous = true;
             root = parent_root;
+            if (!has_parent)
+            {
+                continue_in_storage = true;
+                break;
+            }
         }
     }
     lantern_client_unlock_state(client, state_locked);
+
+    while (continue_in_storage && descending_count < LANTERN_MAX_REQUEST_BLOCKS
+           && !lantern_root_is_zero(&root))
+    {
+        uint64_t slot = 0;
+        LanternRoot parent_root = {0};
+        if (lantern_storage_load_block_link(&client->storage, &root, &slot, &parent_root) != 0
+            || slot >= previous_slot || slot < start_slot)
+        {
+            break;
+        }
+        if ((slot - start_slot) < count)
+        {
+            descending[descending_count] = root;
+            descending_count += 1u;
+        }
+        previous_slot = slot;
+        root = parent_root;
+    }
 
     if (descending_count == 0u)
     {
@@ -1642,9 +1675,9 @@ int reqresp_collect_blocks_by_range(
         return rc;
     }
 
-    bool have_previous = false;
-    uint64_t previous_slot = 0;
-    LanternRoot previous_root = {0};
+    bool have_valid = false;
+    uint64_t valid_slot = 0;
+    LanternRoot valid_root = {0};
     size_t valid_count = 0;
     for (size_t i = 0; i < root_count && i < collected.length; ++i)
     {
@@ -1652,18 +1685,18 @@ int reqresp_collect_blocks_by_range(
         if (!signed_block_matches_root(block, &ascending[i])
             || block->block.slot < start_slot
             || (block->block.slot - start_slot) >= count
-            || (have_previous && block->block.slot <= previous_slot))
+            || (have_valid && block->block.slot <= valid_slot))
         {
             break;
         }
-        if (have_previous
-            && memcmp(block->block.parent_root.bytes, previous_root.bytes, LANTERN_ROOT_SIZE) != 0)
+        if (have_valid
+            && memcmp(block->block.parent_root.bytes, valid_root.bytes, LANTERN_ROOT_SIZE) != 0)
         {
             break;
         }
-        previous_slot = block->block.slot;
-        previous_root = ascending[i];
-        have_previous = true;
+        valid_slot = block->block.slot;
+        valid_root = ascending[i];
+        have_valid = true;
         valid_count += 1u;
     }
 

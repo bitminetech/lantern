@@ -46,6 +46,15 @@ int lantern_storage_prune_before_slot(const struct lantern_storage *storage,
                                       uint64_t slot,
                                       const LanternRoot *keep_roots,
                                       size_t keep_root_count);
+int lantern_storage_prune_before_slots(const struct lantern_storage *storage,
+                                       uint64_t state_slot,
+                                       uint64_t block_slot,
+                                       const LanternRoot *keep_roots,
+                                       size_t keep_root_count);
+int lantern_storage_load_block_link(const struct lantern_storage *storage,
+                                    const LanternRoot *root,
+                                    uint64_t *out_slot,
+                                    LanternRoot *out_parent_root);
 int lantern_storage_collect_blocks(const struct lantern_storage *storage,
                                    const LanternRoot *roots, size_t root_count,
                                    LanternSignedBlockList *out_blocks);

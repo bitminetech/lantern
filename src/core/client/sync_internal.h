@@ -183,6 +183,10 @@ const LanternState *
 lantern_client_state_for_root_locked(struct lantern_client *client,
                                      const LanternRoot *root);
 
+const LanternState *
+lantern_client_target_state_locked(struct lantern_client *client,
+                                   const LanternCheckpoint *target);
+
 /**
  * Recover block-body aggregated proofs as local attestation material.
  *
@@ -192,6 +196,10 @@ lantern_client_state_for_root_locked(struct lantern_client *client,
  */
 void lantern_client_cache_block_aggregated_proofs(
     struct lantern_client *client, const LanternSignedBlock *block);
+
+bool lantern_client_should_cache_block_proofs(struct lantern_client *client);
+
+uint64_t lantern_client_block_retention_cutoff(const struct lantern_client *client, uint64_t finalized_slot);
 
 int lantern_client_enqueue_block_aggregated_proofs(
     struct lantern_client *client, const LanternSignedBlock *block);

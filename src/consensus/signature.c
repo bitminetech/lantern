@@ -405,9 +405,6 @@ static bool build_type2_attestation_component(
         return false;
     }
     size_t validator_count = state->validators ? state->validator_count : 0u;
-    if (participants->bit_length > validator_count) {
-        return false;
-    }
     size_t pubkey_count = bitlist_count_set_bits(participants);
     if (pubkey_count == 0u) {
         return false;
@@ -420,6 +417,10 @@ static bool build_type2_attestation_component(
     for (size_t i = 0; i < participants->bit_length; ++i) {
         if (!lantern_bitlist_get(participants, i)) {
             continue;
+        }
+        if (i >= validator_count) {
+            free(pubkeys);
+            return false;
         }
         const uint8_t *pubkey = state->validators[i].attestation_pubkey;
         if (!pubkey || lantern_validator_pubkey_is_zero(pubkey)) {

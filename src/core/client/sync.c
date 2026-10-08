@@ -272,9 +272,9 @@ static bool verify_and_cache_aggregated_attestation_locked(
         return false;
     }
 
-    const LanternState *sig_state = lantern_client_state_for_root_locked(
+    const LanternState *sig_state = lantern_client_target_state_locked(
         client,
-        &attestation->data.target.root);
+        &attestation->data.target);
     if (!sig_state) {
         if (out_missing_root) {
             *out_missing_root = attestation->data.target.root;
@@ -284,12 +284,12 @@ static bool verify_and_cache_aggregated_attestation_locked(
 
     size_t validator_count = sig_state->validators ? sig_state->validator_count : 0u;
     size_t bit_length = attestation->proof.participants.bit_length;
-    if (bit_length > validator_count) {
-        return false;
-    }
     size_t participant_count = 0;
     for (size_t i = 0; i < bit_length; ++i) {
         if (lantern_bitlist_get(&attestation->proof.participants, i)) {
+            if (i >= validator_count) {
+                return false;
+            }
             participant_count += 1u;
         }
     }
@@ -941,9 +941,10 @@ int restore_persisted_blocks(struct lantern_client *client)
 
     uint64_t finalized_slot = client->state.latest_finalized.slot;
     if (finalized_slot > 0
-        && lantern_storage_prune_before_slot(
+        && lantern_storage_prune_before_slots(
                &client->storage,
                finalized_slot,
+               lantern_client_block_retention_cutoff(client, finalized_slot),
                keep_roots,
                keep_root_count)
             < 0)

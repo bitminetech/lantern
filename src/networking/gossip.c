@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <openssl/sha.h>
@@ -160,4 +161,27 @@ int lantern_gossip_compute_message_id(
     }
     memcpy(message_id->bytes, digest, LANTERN_GOSSIP_MESSAGE_ID_SIZE);
     return 0;
+}
+
+int lantern_gossip_message_id(
+    LanternGossipMessageId *message_id,
+    const uint8_t *topic,
+    size_t topic_len,
+    const uint8_t *payload,
+    size_t payload_len) {
+    uint8_t stack_scratch[4096];
+    size_t required = 0;
+    int rc = lantern_gossip_compute_message_id(
+        message_id, topic, topic_len, payload, payload_len, stack_scratch, sizeof(stack_scratch), &required);
+    if (rc != 0 || required <= sizeof(stack_scratch) || required > LANTERN_GOSSIP_MAX_UNCOMPRESSED_SIZE) {
+        return rc;
+    }
+    uint8_t *scratch = malloc(required);
+    if (!scratch) {
+        return -1;
+    }
+    rc = lantern_gossip_compute_message_id(
+        message_id, topic, topic_len, payload, payload_len, scratch, required, NULL);
+    free(scratch);
+    return rc;
 }

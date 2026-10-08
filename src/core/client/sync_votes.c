@@ -113,6 +113,10 @@ static bool validate_vote_checkpoint(
 
     uint64_t block_slot = 0;
     bool known = lantern_client_block_known_locked(client, &checkpoint->root, &block_slot);
+    if (!known && lantern_fork_choice_pruned_ancestor_known(&client->store, checkpoint))
+    {
+        return true;
+    }
     if (!known)
     {
         lantern_log(LANTERN_LOG_LEVEL_DEBUG,
@@ -266,9 +270,9 @@ static bool verify_vote_signature_against_target_locked(
         return false;
     }
 
-    const LanternState *sig_state = lantern_client_state_for_root_locked(
+    const LanternState *sig_state = lantern_client_target_state_locked(
         client,
-        &vote->data.target.root);
+        &vote->data.target);
     if (!sig_state)
     {
         char target_hex[VOTE_ROOT_HEX_BUFFER_LEN];

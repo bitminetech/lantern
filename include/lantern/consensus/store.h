@@ -89,6 +89,12 @@ struct lantern_fork_choice_checkpoint_snapshot
     atomic_uchar finalized_root[LANTERN_ROOT_SIZE];
 };
 
+struct lantern_fork_choice_pruned_block
+{
+    LanternRoot root;
+    uint64_t slot;
+};
+
 struct lantern_store
 {
     struct lantern_attestation_signature_map attestation_signatures;
@@ -111,6 +117,9 @@ struct lantern_store
     /* Root-to-block index used by fork-choice ancestry walks. */
     struct lantern_fork_choice_root_index_entry *root_index;
     size_t root_index_cap;
+    struct lantern_fork_choice_pruned_block *pruned_blocks;
+    size_t pruned_block_len;
+    size_t pruned_block_cap;
     /* Optional disk-backed residency policy; fork choice owns its lifetime. */
     struct lantern_post_state_cache *state_cache;
 };

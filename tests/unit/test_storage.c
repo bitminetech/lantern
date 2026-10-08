@@ -204,6 +204,92 @@ static int test_storage_prunes_before_slot(void)
     return 0;
 }
 
+static int test_storage_prunes_blocks_after_states(void)
+{
+    char template[] = "/tmp/lantern_storage_prune_splitXXXXXX";
+    char *directory = mkdtemp(template);
+    struct lantern_storage storage = {0};
+    LanternState state;
+    LanternState snapshots[3];
+    LanternSignedBlock blocks[3];
+    LanternRoot roots[3];
+    LanternSignedBlockList collected = {0};
+    lantern_state_init(&state);
+    if (!directory || lantern_storage_open(&storage, directory) != 0)
+    {
+        return 1;
+    }
+    expect_zero(lantern_state_generate_genesis(&state, 123456u, 4u), "generate split prune genesis");
+    populate_pubkeys(&state, 0xC0u);
+    for (size_t i = 0; i < 3u; ++i)
+    {
+        uint64_t slot = (uint64_t)i + 1u;
+        build_signed_block(&state, slot, &blocks[i], &roots[i]);
+        expect_zero(
+            lantern_storage_store_block_for_root(&storage, &roots[i], &blocks[i]),
+            "store split prune block");
+        lantern_state_init(&snapshots[i]);
+        expect_zero(lantern_state_clone(&state, &snapshots[i]), "clone split prune state");
+        snapshots[i].slot = slot;
+        snapshots[i].latest_block_header.slot = slot;
+        expect_zero(
+            lantern_storage_store_state_for_root(&storage, &roots[i], &snapshots[i]),
+            "store split prune state");
+    }
+
+    int pruned = lantern_storage_prune_before_slots(&storage, 3u, 2u, NULL, 0u);
+    if (pruned != 3)
+    {
+        fprintf(stderr, "expected split prune count 3 got %d\n", pruned);
+        return 1;
+    }
+    expect_zero(
+        lantern_storage_collect_blocks(&storage, roots, 3u, &collected),
+        "collect split pruned blocks");
+    if (collected.length != 2u || collected.blocks[0].block.slot != 2u
+        || collected.blocks[1].block.slot != 3u)
+    {
+        fprintf(stderr, "split prune retained the wrong blocks\n");
+        return 1;
+    }
+    for (size_t i = 0; i < 3u; ++i)
+    {
+        uint8_t *bytes = NULL;
+        size_t length = 0u;
+        int result = lantern_storage_load_state_bytes_for_root(
+            &storage,
+            &roots[i],
+            &bytes,
+            &length);
+        free(bytes);
+        if ((i < 2u && result != 1) || (i == 2u && result != 0))
+        {
+            fprintf(stderr, "split prune retained the wrong states\n");
+            return 1;
+        }
+    }
+    uint64_t link_slot = 0u;
+    LanternRoot link_parent = {0};
+    if (lantern_storage_load_block_link(&storage, &roots[2], &link_slot, &link_parent) != 0
+        || link_slot != 3u
+        || memcmp(link_parent.bytes, blocks[2].block.parent_root.bytes, LANTERN_ROOT_SIZE) != 0
+        || lantern_storage_load_block_link(&storage, &roots[0], &link_slot, &link_parent) != 1)
+    {
+        fprintf(stderr, "block link read the wrong slot or parent\n");
+        return 1;
+    }
+
+    lantern_signed_block_list_reset(&collected);
+    for (size_t i = 0; i < 3u; ++i)
+    {
+        lantern_signed_block_reset(&blocks[i]);
+        lantern_state_reset(&snapshots[i]);
+    }
+    lantern_state_reset(&state);
+    cleanup_storage(&storage, directory);
+    return 0;
+}
+
 int main(void)
 {
     char template[] = "/tmp/lantern_storage_testXXXXXX";
@@ -248,7 +334,8 @@ int main(void)
     lantern_state_reset(&state);
     cleanup_storage(&storage, directory);
     if (test_storage_rejects_excess_validators() != 0
-        || test_storage_prunes_before_slot() != 0)
+        || test_storage_prunes_before_slot() != 0
+        || test_storage_prunes_blocks_after_states() != 0)
     {
         return EXIT_FAILURE;
     }
