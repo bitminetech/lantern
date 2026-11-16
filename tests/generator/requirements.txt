@@ -1,0 +1,19 @@
+# Python packages for the vector generator, installed into a virtual environment
+# in the image from platform/linux/Dockerfile.
+#
+# The dependencies of consensus-specs v1.7.0-beta.4 (aa16bb4), copied from its
+# pyproject.toml. run.sh clones that commit and generates its fork modules, so
+# the package itself is not installed.
+blake3==1.0.10
+eth-ssz-specs==0.1.0
+eth-utils==6.0.0
+frozendict==2.4.7
+lru-dict==1.4.1
+marko==2.2.4
+py_arkworks_bls12381==0.5.0
+ruamel.yaml==0.19.1
+setuptools==84.0.0
+# The deneb and later spec modules import ckzg (the version its test extra pins).
+ckzg==2.1.8
+# Reads the snappy-compressed SSZ files of the consensus tests (the version its test extra pins).
+python-snappy==0.7.3

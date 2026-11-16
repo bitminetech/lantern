@@ -1,0 +1,788 @@
+/*
+ * Committees and attestations, ARM64. Requirements: docs/reference/block-processing.md.
+ */
+
+.set CIDX_BYTES, LIST_FIXED + 8 * MAX_COMMITTEES_PER_SLOT     /* an IndexList of committee indices */
+.set FLAGS_BYTES, LIST_FIXED + 8 * 3                            /* an IndexList of participation flags */
+.set ATTEST_EXTRA, 2 * CIDX_BYTES + IndexedAttestation__fixed + 8
+
+/* ---------------------------------------------------------------- Sorting */
+
+/* Sift the entry at root down the heap of entries below end, at x0. Uses x5-x8. */
+.macro SIFT root, end
+97: lsl     x5, \root, #1
+    add     x5, x5, #1                      /* child = 2 * root + 1 */
+    cmp     x5, \end
+    b.hs    98f
+    ldr     x7, [x0, x5, lsl #3]
+    add     x6, x5, #1
+    cmp     x6, \end
+    b.hs    96f
+    ldr     x8, [x0, x6, lsl #3]
+    cmp     x8, x7                          /* the larger child */
+    csel    x5, x6, x5, hi
+    csel    x7, x8, x7, hi
+96: ldr     x8, [x0, \root, lsl #3]
+    cmp     x8, x7
+    b.hs    98f
+    str     x7, [x0, \root, lsl #3]
+    str     x8, [x0, x5, lsl #3]
+    mov     \root, x5
+    b       97b
+98:
+.endm
+
+/* L0: sort the x1 u64 entries at x0, ascending (heapsort). A leaf; uses x2-x8. */
+LOCAL_FUNCTION sort_u64
+    UNWIND_END_PROLOGUE
+    cmp     x1, #2
+    b.lo    9f
+    lsr     x2, x1, #1
+1:  cbz     x2, 2f
+    sub     x2, x2, #1
+    mov     x3, x2
+    SIFT    x3, x1
+    b       1b
+2:  mov     x4, x1
+3:  sub     x4, x4, #1
+    cbz     x4, 9f
+    ldr     x5, [x0]
+    ldr     x6, [x0, x4, lsl #3]
+    str     x6, [x0]
+    str     x5, [x0, x4, lsl #3]
+    mov     x3, #0
+    SIFT    x3, x4
+    b       3b
+9:  ret
+END_FUNCTION sort_u64
+
+/* ---------------------------------------------------------------- Committees */
+
+LEAF lantern_get_committee_indices
+    mov     x2, #LIST_FIXED
+    str     x2, [x1, #LIST_OFFSET]
+    add     x2, x1, #LIST_FIXED
+    mov     x3, #0                          /* bit */
+1:  cmp     x3, #MAX_COMMITTEES_PER_SLOT
+    b.hs    2f
+    lsr     x4, x3, #3
+    ldrb    w4, [x0, x4]
+    and     x5, x3, #7
+    lsr     w4, w4, w5
+    tbz     w4, #0, 3f
+    str     x3, [x2], #8
+3:  add     x3, x3, #1
+    b       1b
+2:  add     x3, x1, #LIST_FIXED
+    sub     x2, x2, x3
+    lsr     x2, x2, #3
+    str     x2, [x1, #LIST_COUNT]
+    RETURN_OK
+END_FUNCTION lantern_get_committee_indices
+
+/* x19 state, x20 epoch, x21 scratch, x22 out, x23 list. */
+FUNCTION lantern_get_committee_count_per_slot
+    ENTER 16
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+    NEED_SCRATCH x21, x19, 1, 9f
+    LDQ     x9, x19, BeaconState_validators + 8
+    ldr     x10, [x21]
+    SCRATCH_LIST x23, x21, x10, 0, x9
+    mov     x0, x19
+    mov     x1, x20
+    mov     x2, x23
+    bl      lantern_get_active_validator_indices
+    cbnz    x0, 7f
+    ldr     x9, [x23, #LIST_COUNT]
+    lsr     x9, x9, #LOG2_SLOTS_PER_EPOCH
+    mov     x10, #TARGET_COMMITTEE_SIZE
+    udiv    x9, x9, x10
+    mov     x10, #MAX_COMMITTEES_PER_SLOT
+    cmp     x9, x10
+    csel    x9, x9, x10, lo
+    cmp     x9, #1
+    csinc   x9, x9, xzr, hs                 /* max(1, ...) */
+    str     x9, [x22]
+    mov     x0, #LANTERN_OK
+7:  LEAVE 16
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
+END_FUNCTION lantern_get_committee_count_per_slot
+
+/*
+ * x19 indices, x20 seed, x21 i, x22 end, x23 scratch, x24 out entries, x25 scratch size.
+ * Locals: L len(indices), L+8 i, L+16 shuffled.
+ */
+FUNCTION lantern_compute_committee
+    ENTER 32
+    mov     x19, x0
+    mov     x20, x1
+    mov     x23, x4
+    ldr     x9, [x19, #LIST_COUNT]          /* n */
+    str     x9, [sp, #L]
+    ldr     x10, [x2]                       /* index */
+    ldr     x11, [x3]                       /* count */
+    cbz     x11, 8f
+    mul     x12, x9, x10
+    udiv    x21, x12, x11                   /* start = len(indices) * index // count */
+    add     x10, x10, #1
+    mul     x12, x9, x10
+    udiv    x22, x12, x11                   /* end = len(indices) * (index + 1) // count */
+    sub     x12, x22, x21
+    lsl     x13, x12, #3
+    add     x13, x13, #LIST_FIXED
+    ldr     x14, [x5, #LIST_SIZE]
+    cmp     x14, x13
+    b.lo    9f
+    mov     x13, #LIST_FIXED
+    str     x13, [x5, #LIST_OFFSET]
+    str     x12, [x5, #LIST_COUNT]
+    add     x24, x5, #LIST_FIXED
+    ldr     x25, [x23]
+1:  cmp     x21, x22
+    b.hs    2f
+    str     x21, [sp, #(L + 8)]
+    str     x25, [x23]
+    add     x0, sp, #(L + 8)                /* indices[compute_shuffled_index(i, len(indices), seed)] */
+    add     x1, sp, #L
+    mov     x2, x20
+    mov     x3, x23
+    add     x4, sp, #(L + 16)
+    bl      lantern_compute_shuffled_index
+    cbnz    x0, 7f
+    ldr     x9, [sp, #(L + 16)]
+    add     x10, x19, #LIST_FIXED
+    ldr     x9, [x10, x9, lsl #3]
+    str     x9, [x24], #8
+    add     x21, x21, #1
+    b       1b
+2:  mov     x0, #LANTERN_OK
+7:  LEAVE 32
+8:  mov     x0, #LANTERN_INVALID_SHUFFLED_INDEX
+    LEAVE 32
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 32
+END_FUNCTION lantern_compute_committee
+
+/*
+ * x19 state, x20 slot, x21 index pointer, x22 scratch, x23 out, x24 scratch size, x25 n, x26 list.
+ * Locals: L epoch, L+8 committees per slot, L+16 domain type, L+24 seed (32), L+56 index, L+64 count.
+ */
+FUNCTION lantern_get_beacon_committee
+    ENTER 80
+    mov     x19, x0
+    ldr     x20, [x1]
+    mov     x21, x2
+    mov     x22, x3
+    mov     x23, x4
+    NEED_SCRATCH x22, x19, 2, 9f
+    ldr     x24, [x22]
+    LDQ     x25, x19, BeaconState_validators + 8
+    lsr     x9, x20, #LOG2_SLOTS_PER_EPOCH  /* epoch = compute_epoch_at_slot(slot) */
+    str     x9, [sp, #L]
+    mov     x0, x19
+    add     x1, sp, #L
+    mov     x2, x22
+    add     x3, sp, #(L + 8)
+    bl      lantern_get_committee_count_per_slot
+    cbnz    x0, 7f
+    SCRATCH_LIST x26, x22, x24, 0, x25
+    mov     x0, x19
+    add     x1, sp, #L
+    mov     x2, x26
+    bl      lantern_get_active_validator_indices
+    cbnz    x0, 7f
+    mov     w9, #DOMAIN_BEACON_ATTESTER
+    str     w9, [sp, #(L + 16)]
+    mov     x0, x19
+    add     x1, sp, #L
+    add     x2, sp, #(L + 16)
+    add     x3, sp, #(L + 24)
+    bl      lantern_get_seed
+    cbnz    x0, 7f
+    ldr     x9, [sp, #(L + 8)]              /* index = (slot % SLOTS_PER_EPOCH) * committees_per_slot + index */
+    and     x10, x20, #(SLOTS_PER_EPOCH - 1)
+    mul     x10, x10, x9
+    ldr     x11, [x21]
+    adds    x10, x10, x11
+    b.cs    6f
+    str     x10, [sp, #(L + 56)]
+    lsl     x9, x9, #LOG2_SLOTS_PER_EPOCH   /* count = committees_per_slot * SLOTS_PER_EPOCH */
+    str     x9, [sp, #(L + 64)]
+    SCRATCH_GIVE x22, x24, 1, x25
+    mov     x0, x26
+    add     x1, sp, #(L + 24)
+    add     x2, sp, #(L + 56)
+    add     x3, sp, #(L + 64)
+    mov     x4, x22
+    mov     x5, x23
+    bl      lantern_compute_committee
+7:  LEAVE 80
+6:  mov     x0, #LANTERN_INVALID_OVERFLOW
+    LEAVE 80
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 80
+END_FUNCTION lantern_get_beacon_committee
+
+/*
+ * x19 state, x20 attestation, x21 scratch, x22 out, x23 scratch size, x24 n, x25 committee indices,
+ * x26 committee, x27 committee offset, x28 committee index cursor.
+ * Locals: L committee index, L+8 the scratch size the callee gets, L+16 bits, L+24 bit count, L+32 cursor end.
+ */
+FUNCTION lantern_get_attesting_indices
+    ENTER 48
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+    NEED_SCRATCH_B x21, x19, 3, CIDX_BYTES, 9f
+    LDQ     x24, x19, BeaconState_validators + 8
+    lsl     x9, x24, #3                     /* out has room for every validator */
+    add     x9, x9, #LIST_FIXED
+    ldr     x10, [x22, #LIST_SIZE]
+    cmp     x10, x9
+    b.lo    9f
+    ldr     x23, [x21]
+    MOVQ    x9, CIDX_BYTES
+    sub     x10, x23, x9
+    add     x25, x21, x10                   /* committee indices: the last CIDX_BYTES */
+    str     x9, [x25]
+    lsl     x11, x24, #3
+    add     x11, x11, #LIST_FIXED
+    sub     x10, x10, x11
+    add     x26, x21, x10                   /* the committee: the L(n) before */
+    str     x11, [x26]
+    str     x10, [sp, #(L + 8)]
+    add     x0, x20, #Attestation_committee_bits
+    mov     x1, x25
+    bl      lantern_get_committee_indices
+    PART    x9, x10, x20, Attestation_aggregation_bits
+    str     x9, [sp, #(L + 16)]
+    str     x10, [sp, #(L + 24)]
+    mov     x9, #LIST_FIXED
+    str     x9, [x22, #LIST_OFFSET]
+    str     xzr, [x22, #LIST_COUNT]
+    mov     x27, #0
+    add     x28, x25, #LIST_FIXED
+    ldr     x9, [x25, #LIST_COUNT]
+    add     x9, x28, x9, lsl #3
+    str     x9, [sp, #(L + 32)]
+1:  ldr     x9, [sp, #(L + 32)]
+    cmp     x28, x9
+    b.hs    4f
+    ldr     x9, [x28], #8
+    str     x9, [sp, #L]
+    ldr     x9, [sp, #(L + 8)]
+    str     x9, [x21]
+    mov     x0, x19                         /* committee = get_beacon_committee(state, data.slot, committee_index) */
+    add     x1, x20, #(Attestation_data + AttestationData_slot)
+    add     x2, sp, #L
+    mov     x3, x21
+    mov     x4, x26
+    bl      lantern_get_beacon_committee
+    cbnz    x0, 7f
+    ldr     x9, [x26, #LIST_COUNT]
+    add     x10, x26, #LIST_FIXED
+    ldr     x11, [sp, #(L + 16)]            /* bits */
+    ldr     x12, [sp, #(L + 24)]            /* bit count */
+    ldr     x13, [x22, #LIST_COUNT]
+    add     x14, x22, #LIST_FIXED
+    add     x14, x14, x13, lsl #3
+2:  cbz     x9, 3f
+    cmp     x27, x12                        /* aggregation_bits[committee_offset + index] */
+    b.hs    8f
+    lsr     x15, x27, #3
+    ldrb    w15, [x11, x15]
+    and     x16, x27, #7
+    lsr     w15, w15, w16
+    ldr     x16, [x10], #8
+    tbz     w15, #0, 25f
+    str     x16, [x14], #8
+    add     x13, x13, #1
+25: add     x27, x27, #1
+    sub     x9, x9, #1
+    b       2b
+3:  str     x13, [x22, #LIST_COUNT]
+    b       1b
+4:  add     x0, x22, #LIST_FIXED            /* a set: ascending */
+    ldr     x1, [x22, #LIST_COUNT]
+    bl      sort_u64
+    mov     x0, #LANTERN_OK
+7:  LEAVE 48
+8:  mov     x0, #LANTERN_INVALID_ATTESTATION
+    LEAVE 48
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 48
+END_FUNCTION lantern_get_attesting_indices
+
+/* x19 state, x20 attestation, x21 scratch, x22 out, x23 scratch size, x24 n, x25 the attesting list. */
+FUNCTION lantern_get_indexed_attestation
+    ENTER 16
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+    NEED_SCRATCH_B x21, x19, 4, CIDX_BYTES, 9f
+    LDQ     x24, x19, BeaconState_validators + 8
+    ldr     x23, [x21]
+    SCRATCH_LIST x25, x21, x23, 0, x24
+    SCRATCH_GIVE x21, x23, 1, x24
+    mov     x0, x19
+    mov     x1, x20
+    mov     x2, x21
+    mov     x3, x25
+    bl      lantern_get_attesting_indices
+    cbnz    x0, 7f
+    ldr     x9, [x25, #LIST_COUNT]          /* out: attesting_indices, data, signature */
+    lsl     x10, x9, #3
+    MOVQ    x11, IndexedAttestation__fixed
+    add     x10, x10, x11
+    ldr     x12, [x22]
+    cmp     x12, x10
+    b.lo    9f
+    str     x11, [x22, #IndexedAttestation_attesting_indices]
+    str     x9, [x22, #(IndexedAttestation_attesting_indices + 8)]
+    add     x0, x22, x11
+    add     x1, x25, #LIST_FIXED
+    lsl     x2, x9, #3
+    bl      lantern_copy
+    add     x0, x22, #IndexedAttestation_data
+    add     x1, x20, #Attestation_data
+    mov     x2, #AttestationData__mem
+    bl      lantern_copy
+    add     x0, x22, #IndexedAttestation_signature
+    add     x1, x20, #Attestation_signature
+    mov     x2, #96
+    bl      lantern_copy
+    mov     x0, #LANTERN_OK
+7:  LEAVE 16
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
+END_FUNCTION lantern_get_indexed_attestation
+
+/*
+ * x19 state, x20 indexed attestation, x21 scratch, x22 out, x23 scratch size, x24 keys,
+ * x25 indices, x26 count. Locals: L domain type, L+8 domain (32), L+40 message (24 + 32).
+ */
+FUNCTION lantern_is_valid_indexed_attestation
+    ENTER 96
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+    str     xzr, [x22]
+    PART    x25, x26, x20, IndexedAttestation_attesting_indices
+    cbz     x26, 8f                         /* len(indices) == 0: False */
+    mov     x9, #1                          /* indices sorted and unique */
+1:  cmp     x9, x26
+    b.hs    2f
+    sub     x10, x9, #1
+    ldr     x11, [x25, x10, lsl #3]
+    ldr     x12, [x25, x9, lsl #3]
+    cmp     x12, x11
+    b.ls    8f
+    add     x9, x9, #1
+    b       1b
+2:  sub     x9, x26, #1                     /* the largest index names a validator */
+    ldr     x9, [x25, x9, lsl #3]
+    LDQ     x10, x19, BeaconState_validators + 8
+    cmp     x9, x10
+    b.hs    6f
+    mov     x9, #48                         /* pubkeys: a BlsPublicKeyList at the end of scratch */
+    mul     x9, x9, x26
+    add     x9, x9, #(24 + 7)
+    and     x9, x9, #-8
+    ldr     x23, [x21]
+    MOVQ    x10, LANTERN_SCRATCH_FIXED
+    add     x10, x10, x9
+    cmp     x23, x10
+    b.lo    9f
+    sub     x10, x23, x9
+    add     x24, x21, x10
+    str     x9, [x24]
+    mov     x11, #24
+    str     x11, [x24, #8]
+    str     x26, [x24, #16]
+    str     x10, [x21]
+    add     x11, x24, #24
+    mov     x9, #0
+3:  cmp     x9, x26
+    b.hs    4f
+    ldr     x12, [x25, x9, lsl #3]
+    PART    x13, x14, x19, BeaconState_validators
+    add     x13, x13, x12, lsl #7
+    ldp     x14, x15, [x13, #Validator_pubkey]
+    stp     x14, x15, [x11]
+    ldp     x14, x15, [x13, #(Validator_pubkey + 16)]
+    stp     x14, x15, [x11, #16]
+    ldp     x14, x15, [x13, #(Validator_pubkey + 32)]
+    stp     x14, x15, [x11, #32]
+    add     x11, x11, #48
+    add     x9, x9, #1
+    b       3b
+4:  mov     w9, #DOMAIN_BEACON_ATTESTER     /* domain = get_domain(state, DOMAIN_BEACON_ATTESTER, data.target.epoch) */
+    str     w9, [sp, #L]
+    mov     x0, x19
+    add     x1, sp, #L
+    add     x2, x20, #(IndexedAttestation_data + AttestationData_target + Checkpoint_epoch)
+    mov     x3, x21
+    add     x4, sp, #(L + 8)
+    bl      lantern_get_domain
+    cbnz    x0, 7f
+    ADDRESS x0, lantern_type_AttestationData
+    add     x1, x20, #IndexedAttestation_data
+    add     x2, sp, #(L + 8)
+    mov     x3, x21
+    add     x4, sp, #(L + 64)
+    bl      lantern_compute_signing_root
+    cbnz    x0, 7f
+    mov     x9, #56
+    str     x9, [sp, #(L + 40)]
+    mov     x9, #24
+    str     x9, [sp, #(L + 48)]
+    mov     x9, #32
+    str     x9, [sp, #(L + 56)]
+    mov     x0, x24                         /* bls.FastAggregateVerify(pubkeys, signing_root, signature) */
+    add     x1, sp, #(L + 40)
+    add     x2, x20, #IndexedAttestation_signature
+    mov     x3, x21
+    mov     x4, x22
+    CALL_GLOBAL crypto_bls_fast_aggregate_verify
+7:  LEAVE 96
+8:  mov     x0, #LANTERN_OK
+    LEAVE 96
+6:  mov     x0, #LANTERN_INVALID_VALIDATOR_INDEX
+    LEAVE 96
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 96
+END_FUNCTION lantern_is_valid_indexed_attestation
+
+/*
+ * x19 state, x20 data, x21 delay, x22 out, x23 matching source, x24 matching target, x25 matching head.
+ * Locals: L current epoch, L+8 target root (32), L+40 head root (32), L+72 SLOTS_PER_EPOCH, L+80 its root.
+ */
+FUNCTION lantern_get_attestation_participation_flag_indices
+    ENTER 96
+    mov     x19, x0
+    mov     x20, x1
+    ldr     x21, [x2]
+    mov     x22, x3
+    mov     x0, x19
+    add     x1, sp, #L
+    bl      lantern_get_current_epoch
+    ldr     x9, [x20, #(AttestationData_target + Checkpoint_epoch)]
+    ldr     x10, [sp, #L]
+    ADDQ    x11, x19, BeaconState_current_justified_checkpoint
+    ADDQ    x12, x19, BeaconState_previous_justified_checkpoint
+    cmp     x9, x10
+    csel    x11, x11, x12, eq               /* justified_checkpoint */
+    ldr     x12, [x11, #Checkpoint_epoch]   /* is_matching_source = data.source == justified_checkpoint */
+    ldr     x13, [x20, #(AttestationData_source + Checkpoint_epoch)]
+    mov     x23, #0
+    cmp     x12, x13
+    b.ne    1f
+    add     x14, x20, #(AttestationData_source + Checkpoint_root)
+    add     x15, x11, #Checkpoint_root
+    NE32    x14, x15, 1f
+    mov     x23, #1
+1:  mov     x0, x19                         /* target_root = get_block_root(state, data.target.epoch) */
+    add     x1, x20, #(AttestationData_target + Checkpoint_epoch)
+    add     x2, sp, #(L + 8)
+    bl      lantern_get_block_root
+    cbnz    x0, 7f
+    mov     x24, #0
+    add     x14, x20, #(AttestationData_target + Checkpoint_root)
+    add     x15, sp, #(L + 8)
+    NE32    x14, x15, 2f
+    mov     x24, x23                        /* is_matching_target = is_matching_source and target_root_matches */
+2:  mov     x0, x19                         /* head_root = get_block_root_at_slot(state, data.slot) */
+    add     x1, x20, #AttestationData_slot
+    add     x2, sp, #(L + 40)
+    bl      lantern_get_block_root_at_slot
+    cbnz    x0, 7f
+    mov     x25, #0
+    add     x14, x20, #AttestationData_beacon_block_root
+    add     x15, sp, #(L + 40)
+    NE32    x14, x15, 3f
+    mov     x25, x24
+3:  mov     x0, #LANTERN_INVALID_SOURCE     /* assert is_matching_source */
+    cbz     x23, 7f
+    mov     x9, #SLOTS_PER_EPOCH
+    str     x9, [sp, #(L + 72)]
+    add     x0, sp, #(L + 72)
+    add     x1, sp, #(L + 80)
+    bl      lantern_integer_squareroot
+    mov     x9, #LIST_FIXED
+    str     x9, [x22, #LIST_OFFSET]
+    add     x10, x22, #LIST_FIXED
+    ldr     x11, [sp, #(L + 80)]
+    cmp     x21, x11                        /* source within integer_squareroot(SLOTS_PER_EPOCH) */
+    b.hi    4f
+    mov     x12, #TIMELY_SOURCE_FLAG_INDEX
+    str     x12, [x10], #8
+4:  cbz     x24, 5f
+    mov     x12, #TIMELY_TARGET_FLAG_INDEX
+    str     x12, [x10], #8
+5:  cbz     x25, 6f
+    cmp     x21, #MIN_ATTESTATION_INCLUSION_DELAY
+    b.ne    6f
+    mov     x12, #TIMELY_HEAD_FLAG_INDEX
+    str     x12, [x10], #8
+6:  add     x11, x22, #LIST_FIXED
+    sub     x10, x10, x11
+    lsr     x10, x10, #3
+    str     x10, [x22, #LIST_COUNT]
+    mov     x0, #LANTERN_OK
+7:  LEAVE 96
+END_FUNCTION lantern_get_attestation_participation_flag_indices
+
+/*
+ * x19 state, x20 attestation, x21 config, x22 scratch, x23 result, x24 scratch size, x25 n,
+ * x26 committee indices, x27 committee, x28 committee offset.
+ * Locals: L previous epoch, L+8 current epoch, L+16 committees per slot, L+24 committee index,
+ * L+32 inclusion delay, L+40 valid, L+48 flags (FLAGS_BYTES), L+96 proposer, L+104 base reward,
+ * L+112 index, L+120 proposer reward numerator, L+128 flag, L+136 cursor end, L+144 the indexed
+ * attestation, L+152 the attesting list, L+160 the scratch size callees get, L+168 participation.
+ */
+FUNCTION lantern_process_attestation
+    ENTER 176
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+    mov     x23, x4
+    NEED_SCRATCH_B x22, x19, 10, ATTEST_EXTRA, 9f
+    str     xzr, [x23]
+    ldr     x24, [x22]
+    LDQ     x25, x19, BeaconState_validators + 8
+    MOVQ    x9, CIDX_BYTES                  /* own scratch at the end: committee indices, committee, indexed attestation, attesting */
+    sub     x10, x24, x9
+    add     x26, x22, x10
+    str     x9, [x26]
+    lsl     x11, x25, #3
+    add     x11, x11, #LIST_FIXED           /* L(n) */
+    sub     x10, x10, x11
+    add     x27, x22, x10
+    str     x11, [x27]
+    MOVQ    x12, IndexedAttestation__fixed + 8
+    add     x12, x12, x11
+    sub     x10, x10, x12
+    add     x13, x22, x10
+    str     x12, [x13]
+    str     x13, [sp, #(L + 144)]
+    sub     x10, x10, x11
+    add     x13, x22, x10
+    str     x11, [x13]
+    str     x13, [sp, #(L + 152)]
+    str     x10, [sp, #(L + 160)]
+    mov     x0, x19
+    add     x1, sp, #L
+    bl      lantern_get_previous_epoch
+    mov     x0, x19
+    add     x1, sp, #(L + 8)
+    bl      lantern_get_current_epoch
+    mov     x0, #LANTERN_INVALID_ATTESTATION
+    ldr     x9, [x20, #(Attestation_data + AttestationData_target + Checkpoint_epoch)]
+    ldp     x10, x11, [sp, #L]
+    cmp     x9, x10                         /* assert data.target.epoch in (previous, current) */
+    ccmp    x9, x11, #4, ne
+    b.ne    6f
+    ldr     x10, [x20, #(Attestation_data + AttestationData_slot)]
+    lsr     x11, x10, #LOG2_SLOTS_PER_EPOCH /* assert data.target.epoch == compute_epoch_at_slot(data.slot) */
+    cmp     x9, x11
+    b.ne    6f
+    adds    x11, x10, #MIN_ATTESTATION_INCLUSION_DELAY  /* assert data.slot + MIN_ATTESTATION_INCLUSION_DELAY <= state.slot */
+    b.cs    5f
+    LDQ     x12, x19, BeaconState_slot
+    cmp     x11, x12
+    b.hi    6f
+    ldr     x11, [x20, #(Attestation_data + AttestationData_index)]
+    cbnz    x11, 6f                         /* assert data.index == 0 */
+    add     x0, x20, #Attestation_committee_bits
+    mov     x1, x26
+    bl      lantern_get_committee_indices
+    mov     x28, #0                         /* committee_offset */
+    add     x9, x26, #LIST_FIXED
+    ldr     x10, [x26, #LIST_COUNT]
+    add     x10, x9, x10, lsl #3
+    str     x10, [sp, #(L + 136)]
+    str     x9, [sp, #(L + 112)]            /* the cursor over committee indices */
+1:  ldr     x9, [sp, #(L + 112)]
+    ldr     x10, [sp, #(L + 136)]
+    cmp     x9, x10
+    b.hs    3f
+    ldr     x10, [x9], #8
+    str     x9, [sp, #(L + 112)]
+    str     x10, [sp, #(L + 24)]
+    ldr     x9, [sp, #(L + 160)]
+    str     x9, [x22]
+    mov     x0, x19                         /* assert committee_index < get_committee_count_per_slot(...) */
+    add     x1, x20, #(Attestation_data + AttestationData_target + Checkpoint_epoch)
+    mov     x2, x22
+    add     x3, sp, #(L + 16)
+    bl      lantern_get_committee_count_per_slot
+    cbnz    x0, 7f
+    ldr     x9, [sp, #(L + 24)]
+    ldr     x10, [sp, #(L + 16)]
+    mov     x0, #LANTERN_INVALID_ATTESTATION
+    cmp     x9, x10
+    b.hs    6f
+    ldr     x9, [sp, #(L + 160)]
+    str     x9, [x22]
+    mov     x0, x19
+    add     x1, x20, #(Attestation_data + AttestationData_slot)
+    add     x2, sp, #(L + 24)
+    mov     x3, x22
+    mov     x4, x27
+    bl      lantern_get_beacon_committee
+    CHECK_STATUS x23, 7f, 8f
+    PART    x11, x12, x20, Attestation_aggregation_bits
+    ldr     x9, [x27, #LIST_COUNT]
+    mov     x13, #0                         /* committee_attesters */
+2:  cbz     x9, 25f
+    cmp     x28, x12                        /* aggregation_bits[committee_offset + index] */
+    mov     x0, #LANTERN_INVALID_ATTESTATION
+    b.hs    6f
+    lsr     x14, x28, #3
+    ldrb    w14, [x11, x14]
+    and     x15, x28, #7
+    lsr     w14, w14, w15
+    and     x14, x14, #1
+    add     x13, x13, x14
+    add     x28, x28, #1
+    sub     x9, x9, #1
+    b       2b
+25: mov     x0, #LANTERN_INVALID_ATTESTATION
+    cbz     x13, 6f                         /* assert len(committee_attesters) > 0 */
+    b       1b
+3:  LDQ     x9, x20, Attestation_aggregation_bits + 8
+    cmp     x9, x28                         /* assert len(attestation.aggregation_bits) == committee_offset */
+    mov     x0, #LANTERN_INVALID_ATTESTATION
+    b.ne    6f
+    LDQ     x9, x19, BeaconState_slot
+    ldr     x10, [x20, #(Attestation_data + AttestationData_slot)]
+    sub     x9, x9, x10
+    str     x9, [sp, #(L + 32)]
+    MOVQ    x9, FLAGS_BYTES
+    str     x9, [sp, #(L + 48)]
+    mov     x0, x19                         /* participation_flag_indices */
+    add     x1, x20, #Attestation_data
+    add     x2, sp, #(L + 32)
+    add     x3, sp, #(L + 48)
+    bl      lantern_get_attestation_participation_flag_indices
+    CHECK_STATUS x23, 7f, 8f
+    ldr     x9, [sp, #(L + 160)]
+    str     x9, [x22]
+    mov     x0, x19                         /* assert is_valid_indexed_attestation(state, get_indexed_attestation(...)) */
+    mov     x1, x20
+    mov     x2, x22
+    ldr     x3, [sp, #(L + 144)]
+    bl      lantern_get_indexed_attestation
+    CHECK_STATUS x23, 7f, 8f
+    ldr     x9, [sp, #(L + 160)]
+    str     x9, [x22]
+    mov     x0, x19
+    ldr     x1, [sp, #(L + 144)]
+    mov     x2, x22
+    add     x3, sp, #(L + 40)
+    bl      lantern_is_valid_indexed_attestation
+    CHECK_STATUS x23, 7f, 8f
+    ldr     x9, [sp, #(L + 40)]
+    mov     x0, #LANTERN_INVALID_ATTESTATION
+    cbz     x9, 6f
+    ldr     x9, [x20, #(Attestation_data + AttestationData_target + Checkpoint_epoch)]
+    ldr     x10, [sp, #(L + 8)]
+    cmp     x9, x10
+    b.ne    31f
+    PART    x9, x10, x19, BeaconState_current_epoch_participation
+    b       32f
+31: PART    x9, x10, x19, BeaconState_previous_epoch_participation
+32: str     x9, [sp, #(L + 168)]
+    ldr     x9, [sp, #(L + 160)]
+    str     x9, [x22]
+    mov     x0, x19                         /* for index in get_attesting_indices(state, attestation) */
+    mov     x1, x20
+    mov     x2, x22
+    ldr     x3, [sp, #(L + 152)]
+    bl      lantern_get_attesting_indices
+    CHECK_STATUS x23, 7f, 8f
+    str     xzr, [sp, #(L + 120)]
+    ldr     x26, [sp, #(L + 152)]           /* the attesting list; the committee indices are done */
+    add     x27, x26, #LIST_FIXED
+    ldr     x9, [x26, #LIST_COUNT]
+    add     x9, x27, x9, lsl #3
+    str     x9, [sp, #(L + 136)]
+4:  ldr     x9, [sp, #(L + 136)]
+    cmp     x27, x9
+    b.hs    45f
+    ldr     x9, [x27], #8
+    str     x9, [sp, #(L + 112)]
+    mov     x28, #0                         /* for flag_index, weight in enumerate(PARTICIPATION_FLAG_WEIGHTS) */
+41: cmp     x28, #3
+    b.hs    4b
+    ldr     x10, [sp, #(L + 48 + LIST_COUNT)]   /* flag_index in participation_flag_indices */
+    add     x11, sp, #(L + 48 + LIST_FIXED)
+42: cbz     x10, 44f
+    ldr     x12, [x11], #8
+    cmp     x12, x28
+    b.eq    43f
+    sub     x10, x10, #1
+    b       42b
+43: str     x28, [sp, #(L + 128)]
+    ldr     x9, [sp, #(L + 168)]            /* and not has_flag(epoch_participation[index], flag_index) */
+    ldr     x10, [sp, #(L + 112)]
+    add     x0, x9, x10
+    add     x1, sp, #(L + 128)
+    add     x2, sp, #(L + 40)
+    bl      lantern_has_flag
+    ldr     x9, [sp, #(L + 40)]
+    cbnz    x9, 44f
+    ldr     x9, [sp, #(L + 168)]            /* epoch_participation[index] = add_flag(...) */
+    ldr     x10, [sp, #(L + 112)]
+    add     x0, x9, x10
+    add     x1, sp, #(L + 128)
+    mov     x2, x0
+    bl      lantern_add_flag
+    ldr     x9, [sp, #(L + 160)]
+    str     x9, [x22]
+    mov     x0, x19                         /* proposer_reward_numerator += get_base_reward(state, index) * weight */
+    add     x1, sp, #(L + 112)
+    mov     x2, x22
+    add     x3, sp, #(L + 104)
+    bl      lantern_get_base_reward
+    cbnz    x0, 7f
+    ldr     x9, [sp, #(L + 104)]
+    mov     x10, #TIMELY_TARGET_WEIGHT
+    mov     x11, #TIMELY_SOURCE_WEIGHT
+    cmp     x28, #TIMELY_TARGET_FLAG_INDEX
+    csel    x10, x10, x11, eq
+    mul     x9, x9, x10
+    ldr     x10, [sp, #(L + 120)]
+    adds    x10, x10, x9
+    b.cs    5f
+    str     x10, [sp, #(L + 120)]
+44: add     x28, x28, #1
+    b       41b
+45: ldr     x9, [sp, #(L + 120)]            /* proposer_reward = numerator // proposer_reward_denominator */
+    mov     x10, #((WEIGHT_DENOMINATOR - PROPOSER_WEIGHT) * WEIGHT_DENOMINATOR / PROPOSER_WEIGHT)
+    udiv    x9, x9, x10
+    str     x9, [sp, #(L + 120)]
+    mov     x0, x19
+    add     x1, sp, #(L + 96)
+    bl      lantern_get_beacon_proposer_index
+    mov     x0, x19
+    add     x1, sp, #(L + 96)
+    add     x2, sp, #(L + 120)
+    bl      lantern_increase_balance
+8:  mov     x0, #LANTERN_OK
+7:  LEAVE 176
+5:  mov     x0, #LANTERN_INVALID_OVERFLOW
+6:  str     x0, [x23]
+    mov     x0, #LANTERN_OK
+    LEAVE 176
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 176
+END_FUNCTION lantern_process_attestation

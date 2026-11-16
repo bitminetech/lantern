@@ -1,0 +1,685 @@
+# Fork choice
+
+## Contents
+
+### Functions
+
+- [`lantern_get_forkchoice_store`](#function-lantern_get_forkchoice_store): a store from an anchor state and block.
+- [`lantern_store_size`](#function-lantern_store_size): the buffer size of a store with given capacities.
+- [`lantern_store_copy`](#function-lantern_store_copy): copies a store into a buffer with more capacity.
+- [`lantern_store_justified_checkpoint_state`](#function-lantern_store_justified_checkpoint_state): keeps what the store needs of the justified checkpoint state.
+- [`lantern_get_current_slot`](#function-lantern_get_current_slot): the slot of the store's time.
+- [`lantern_get_current_store_epoch`](#function-lantern_get_current_store_epoch): the epoch of the store's time.
+- [`lantern_get_ancestor`](#function-lantern_get_ancestor): the ancestor of a node at a slot.
+- [`lantern_get_checkpoint_block`](#function-lantern_get_checkpoint_block): the block of an epoch in the chain of a root.
+- [`lantern_get_weight`](#function-lantern_get_weight): the attesting balance and boost of a node.
+- [`lantern_get_filtered_node_tree`](#function-lantern_get_filtered_node_tree): the nodes of the viable branches.
+- [`lantern_get_head`](#function-lantern_get_head): the head of LMD GHOST over the viable branches.
+- [`lantern_on_tick`](#function-lantern_on_tick): moves the store's time forward.
+- [`lantern_on_block`](#function-lantern_on_block): adds a block to the store.
+- [`lantern_validate_on_attestation`](#function-lantern_validate_on_attestation): the store checks of an attestation.
+- [`lantern_store_target_checkpoint_state`](#function-lantern_store_target_checkpoint_state): advances a block state to its checkpoint.
+- [`lantern_on_attestation`](#function-lantern_on_attestation): records the votes of an attestation.
+- [`lantern_on_attester_slashing`](#function-lantern_on_attester_slashing): records equivocating validators.
+- [`lantern_get_proposer_head`](#function-lantern_get_proposer_head): the head to build on, or its parent for a reorg.
+- [`lantern_is_data_available`](#function-lantern_is_data_available): checks the column sidecars of a block.
+- [`lantern_verify_data_column_sidecar`](#function-lantern_verify_data_column_sidecar): checks the lengths of a column sidecar.
+- [`lantern_verify_data_column_sidecar_kzg_proofs`](#function-lantern_verify_data_column_sidecar_kzg_proofs): checks the cells of a column sidecar.
+
+### Types
+
+- [`Store`](#type-store): the fork choice store.
+- [`BlockNode`](#type-blocknode): one block of the store.
+- [`StoreValidator`](#type-storevalidator): the latest message and justified balance of one validator.
+- [`StoreRoom`](#type-storeroom): the capacities of a store.
+- [`BlockOptions`](#type-blockoptions): the answers of the execution engine and of data availability for a block.
+- [`ColumnSidecars`](#type-columnsidecars): a list of column sidecars.
+
+## Spec
+
+- Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), `phase0/fork-choice.md` with the changes of `bellatrix`, `capella`, `deneb` and `fulu`, and `fulu/p2p-interface.md` for the column sidecar checks.
+- Section: Fork choice, at the latest definition of each function from phase0 to fulu.
+
+## Common rules
+
+- As in [block-processing.md](block-processing.md#common-rules).
+- A `ForkChoiceNode` is a u64: the index of its `BlockNode` in the store. The spec's nodes are always blocks of `store.blocks`, and a root names one node, so the index stands for the root.
+- `store.blocks` is the `blocks` part of the `Store`; a `BlockNode` keeps the fields of the block that fork choice reads.
+- The caller keeps `store.block_states` and `store.checkpoint_states`, and passes the state a function reads as an argument. The store keeps the fields of those states that fork choice reads again later: the post-state `current_justified_checkpoint` of each block, and the balances of the justified checkpoint state.
+- `store.checkpoint_states[store.justified_checkpoint]` is read through the balances of the store. A function that reads it returns `LANTERN_NEED_JUSTIFIED_STATE`, before any change, when `balances_checkpoint` is not `justified_checkpoint`. The caller then passes that checkpoint state to lantern_store_justified_checkpoint_state and calls again.
+- A function that changes the store makes every check first and changes the store only after the last check holds, so a call that fails a spec check leaves the store unchanged ("Invalid calls to handlers must not modify store").
+- The config is the store's copy, made by lantern_get_forkchoice_store.
+- A Uint64 result outside 0 to 2^64 - 1 fails with `LANTERN_INVALID_OVERFLOW`, as the spec's Uint64 does.
+- Spec helpers that only these functions call are L0 helpers of `asm/core/<ISA>/forkchoice.s`, named by the spec: get_voting_source, get_attestation_score, get_proposer_score, calculate_committee_fraction, update_checkpoints, update_unrealized_checkpoints, on_tick_per_slot, record_block_timeliness, get_shuffling_dependent_root, update_proposer_boost_root, compute_pulled_up_tip, update_latest_messages, is_head_weak, is_parent_strong and is_proposer_equivocation.
+
+## Test vectors
+
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/fulu/fork_choice/<handler>/`, for mainnet and minimal.
+  - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
+  - The runner follows `tests/formats/fork_choice/README.md` of the spec: it keeps the block states and checkpoint states, runs the attestations and attester slashings of each valid block after it, and checks `head` with lantern_get_head and `get_proposer_head` with lantern_get_proposer_head at the head and the current slot.
+- The fork choice compliance cases of the release, `comptests.tar.gz` with the SHA-256 in tests/generator/generate.py: `tests/minimal/fulu/fork_choice_compliance/<handler>/`, as `minimal-fork_choice_compliance-<handler>.bin`.
+  - Every case has `bls_setting` 2, so `runner-minimal-bls-off` runs them.
+  - The runner follows the spec's compliance runner (`tests/generators/compliance_runners/fork_choice/runner/test_run.py`): it ignores invalid attestations and attester slashings inside a valid block, and checks `viable_for_head_roots_and_weights` with lantern_get_filtered_node_tree and lantern_get_weight.
+- The KZG trusted setup: `presets/<preset>/trusted_setups/trusted_setup_4096.json` of the pinned spec, as `<preset>-kzg_setup.bin`.
+
+## Function `lantern_get_forkchoice_store`
+
+The store of the anchor: its block as the only node, its epoch and root as all four checkpoints, its state as the justified checkpoint state.
+
+### Signature
+
+```
+lantern_get_forkchoice_store(anchor_state, anchor_block, config, room, scratch, store) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `anchor_state` | input | `BeaconState` |
+| `anchor_block` | input | `BeaconBlock` |
+| `config` | input | `Config` |
+| `room` | input | `StoreRoom` |
+| `scratch` | scratch | `Scratch` |
+| `store` | output | `Store`, its `size` set by the caller |
+
+### Returns
+
+- `LANTERN_OK`: `store` holds the store.
+- `LANTERN_BUFFER_TOO_SMALL`: `store` is below lantern_store_size of `room`, `room` has no node or fewer validators than the anchor state, or `scratch` is short.
+- `LANTERN_INVALID_ANCHOR`: `anchor_block.state_root` is not hash_tree_root(anchor_state).
+- `LANTERN_INVALID_OVERFLOW`: the anchor slot's time does not fit in a Uint64.
+
+### Function does
+
+- Sets `genesis_time_ms` to seconds_to_milliseconds(genesis_time), which gives UINT64_MAX when the product does not fit.
+- Gives the anchor node `parent` `NODE_NONE`, `timely` 0, `justified_checkpoint` the anchor state's `current_justified_checkpoint`, and `unrealized_justified_checkpoint` the anchor checkpoint.
+- Gives `room.nodes` and `room.validators` entries of capacity to the two parts; every `StoreValidator` starts with no latest message.
+- Ends with lantern_store_justified_checkpoint_state of the anchor state.
+
+### Limits
+
+- Scratch: S(0).
+
+## Function `lantern_store_size`
+
+The bytes of a store with the capacities of room.
+
+### Signature
+
+```
+lantern_store_size(room, size) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `size` holds `STORE_FIXED` + `room.nodes` * `BlockNode__mem` + `room.validators` * `StoreValidator__mem`.
+- `LANTERN_INVALID_OVERFLOW`: the size does not fit in a u64.
+
+## Function `lantern_store_copy`
+
+Copies store into out with the capacities of room: the resize function of the `Store` (ARCHITECTURE.md section 6).
+
+### Signature
+
+```
+lantern_store_copy(store, room, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the store.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` is below lantern_store_size of the capacities, or a capacity is below the entries the store holds.
+
+### Function does
+
+- New `StoreValidator` entries have no latest message, no balance and no flags.
+
+## Function `lantern_store_justified_checkpoint_state`
+
+Keeps the balances of state as those of `store.checkpoint_states[store.justified_checkpoint]`.
+
+### Signature
+
+```
+lantern_store_justified_checkpoint_state(store, state) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | state | `Store` |
+| `state` | input | `BeaconState`: the checkpoint state of `store.justified_checkpoint` |
+
+### Returns
+
+- `LANTERN_OK`: done.
+- `LANTERN_BUFFER_TOO_SMALL`: the store has fewer `StoreValidator` entries than the state has validators. The store is unchanged.
+- `LANTERN_INVALID_OVERFLOW`: the sum of the balances does not fit. The store is unchanged.
+
+### Caller must
+
+- Pass the state of store_target_checkpoint_state for `store.justified_checkpoint`, or the anchor state for the anchor checkpoint.
+
+### Function does
+
+- For each entry i: `effective_balance` of validator i, `STORE_IN_REGISTRY`, and `STORE_ACTIVE_UNSLASHED` when it is active at get_current_epoch(state) and not slashed; entries past the registry get 0 and lose both flags. `STORE_EQUIVOCATING` stays.
+- Sets `balances_total` to get_total_balance of the active unslashed validators, and `balances_checkpoint` to `justified_checkpoint`.
+
+## Function `lantern_get_current_slot`
+
+(store.time_ms - store.genesis_time_ms) // SLOT_DURATION_MS.
+
+### Signature
+
+```
+lantern_get_current_slot(store, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the slot.
+- `LANTERN_INVALID_OVERFLOW`: `time_ms` is before `genesis_time_ms`.
+
+## Function `lantern_get_current_store_epoch`
+
+compute_epoch_at_slot(get_current_slot(store)).
+
+### Signature
+
+```
+lantern_get_current_store_epoch(store, out) -> status
+```
+
+### Returns
+
+- As lantern_get_current_slot.
+
+## Function `lantern_get_ancestor`
+
+The node itself when its slot is at most slot, else the ancestor of its parent.
+
+### Signature
+
+```
+lantern_get_ancestor(store, node, slot, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the node.
+- `LANTERN_INVALID_UNKNOWN_BLOCK`: the walk reaches a block whose parent is not in the store.
+
+### Caller must
+
+- Pass a node of the store.
+
+## Function `lantern_get_checkpoint_block`
+
+The root of get_ancestor(root, compute_start_slot_at_epoch(epoch)).
+
+### Signature
+
+```
+lantern_get_checkpoint_block(store, root, epoch, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the Root.
+- `LANTERN_INVALID_UNKNOWN_BLOCK`: root is not in the store, or the walk leaves it.
+- `LANTERN_INVALID_OVERFLOW`: the start slot of epoch does not fit.
+
+## Function `lantern_get_weight`
+
+get_attestation_score of the node with the justified checkpoint state, plus get_proposer_score when the boosted block descends from the node.
+
+### Signature
+
+```
+lantern_get_weight(store, node, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the Gwei.
+- `LANTERN_NEED_JUSTIFIED_STATE`: see Common rules.
+- `LANTERN_INVALID_UNKNOWN_BLOCK`, `LANTERN_INVALID_OVERFLOW`: a spec failure of get_ancestor or of a sum.
+
+### Function does
+
+- get_attestation_score: the sum of `effective_balance` over the entries with `STORE_ACTIVE_UNSLASHED`, a latest message, no `STORE_EQUIVOCATING`, and is_ancestor(latest message node, node).
+
+## Function `lantern_get_filtered_node_tree`
+
+The nodes of the justified node's subtree on a branch whose leaf has the store's justified and finalized checkpoints.
+
+### Signature
+
+```
+lantern_get_filtered_node_tree(store, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | `Store` |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | `IndexList`, its `size` set by the caller |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the nodes, in ascending order.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or `out` has too little room.
+- `LANTERN_INVALID_UNKNOWN_BLOCK`, `LANTERN_INVALID_OVERFLOW`: a spec failure of get_voting_source, get_checkpoint_block or a sum.
+
+### Caller must
+
+- Keep `out` apart from `scratch`.
+
+### Function does
+
+- Marks the subtree in index order (a parent comes before its children), then runs filter_node_tree for all its nodes at once in reverse order: a node with children is in the tree when a child is; a leaf when its voting source and finalized checkpoint block agree with the store.
+
+### Limits
+
+- Scratch: S(1), with n the node count of the store.
+
+## Function `lantern_get_head`
+
+From the justified node, the child of greatest (weight, root) among the viable nodes, until a node has no viable child.
+
+### Signature
+
+```
+lantern_get_head(store, scratch, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the head node.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short.
+- `LANTERN_NEED_JUSTIFIED_STATE`: see Common rules.
+- `LANTERN_INVALID_UNKNOWN_BLOCK`, `LANTERN_INVALID_OVERFLOW`: a spec failure of lantern_get_filtered_node_tree or get_weight.
+
+### Function does
+
+- Reads the tree of lantern_get_filtered_node_tree.
+- Compares roots as byte strings, first byte first.
+
+### Limits
+
+- Scratch: S(1), with n the node count of the store.
+
+## Function `lantern_on_tick`
+
+on_tick_per_slot at the start of each slot up to the slot of time_ms, then at time_ms.
+
+### Signature
+
+```
+lantern_on_tick(store, time_ms, result) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID`, or `LANTERN_INVALID_OVERFLOW` when time_ms is before `genesis_time_ms`; then the store is unchanged.
+
+### Function does
+
+- on_tick_per_slot: sets `time_ms`; at a new slot clears `proposer_boost_root`; at a new epoch runs update_checkpoints with the unrealized checkpoints.
+
+## Function `lantern_on_block`
+
+The fulu on_block, with is_data_available given by the caller.
+
+### Signature
+
+```
+lantern_on_block(store, signed_block, state, options, scratch, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | state | `Store` |
+| `signed_block` | input | `SignedBeaconBlock` |
+| `state` | state | `BeaconState`: a copy of the post-state of the block's parent, which becomes the block's post-state |
+| `options` | input | `BlockOptions` |
+| `scratch` | scratch | `Scratch` |
+| `result` | output | `Result` |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID` when the block is in the store, or the first failed check: `LANTERN_INVALID_UNKNOWN_BLOCK` (parent), `LANTERN_INVALID_FUTURE_SLOT`, `LANTERN_INVALID_NOT_FINALIZED`, `LANTERN_INVALID_DATA_UNAVAILABLE`, a check of lantern_state_transition, or a spec failure of get_head, get_ancestor or compute_pulled_up_tip.
+- `LANTERN_BUFFER_TOO_SMALL`: the store has no room for a node, scratch is short, or lantern_state_transition needs room in `state`. Nothing is changed.
+- `LANTERN_NEED_JUSTIFIED_STATE`: see Common rules. Nothing is changed.
+
+### Caller must
+
+- Pass in `options.data_available` the value of lantern_is_data_available for the block's column sidecars (`retrieve_column_sidecars` is the caller's), or 0 when they cannot be retrieved.
+- Keep `state` as `store.block_states[block_root]` when the call adds a node; a known block adds none and leaves `state` unchanged.
+
+### Function does
+
+- A known root returns `LANTERN_VALID` before any other step.
+- Runs state_transition with validate_result, then get_head before adding the block, then computes compute_pulled_up_tip's process_justification_and_finalization on `state` and restores the four fields it changes.
+- Then writes in spec order: the node, record_block_timeliness, update_proposer_boost_root, update_checkpoints, and compute_pulled_up_tip's updates.
+
+### Limits
+
+- Scratch: that of lantern_state_transition, and S(1) with n the node count of the store.
+
+## Function `lantern_validate_on_attestation`
+
+The asserts of validate_on_attestation.
+
+### Signature
+
+```
+lantern_validate_on_attestation(store, attestation, is_from_block) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: every check holds.
+- `LANTERN_INVALID_ATTESTATION_TARGET`: the target epoch is not the current or previous epoch (when `is_from_block` is 0), not the epoch of the slot, or the target root is not the checkpoint block of the head vote.
+- `LANTERN_INVALID_UNKNOWN_BLOCK`: the target root or the head vote is not in the store.
+- `LANTERN_INVALID_ATTESTATION_SLOT`: the head vote's block is after the attestation's slot.
+- `LANTERN_INVALID_FUTURE_SLOT`: the current slot is not after the attestation's slot.
+- `LANTERN_INVALID_OVERFLOW`: a slot sum does not fit.
+
+## Function `lantern_store_target_checkpoint_state`
+
+The base state advanced to the start slot of the target epoch, when it is before it.
+
+### Signature
+
+```
+lantern_store_target_checkpoint_state(state, target, config, scratch, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | state | `BeaconState`: a copy of `store.block_states[target.root]` |
+| `target` | input | `Checkpoint` |
+| `config` | input | `Config` |
+| `scratch` | scratch | `Scratch` |
+| `result` | output | `Result` |
+
+### Returns
+
+- As lantern_process_slots; `LANTERN_INVALID_OVERFLOW` when the start slot does not fit.
+
+### Caller must
+
+- Keep `state` as `store.checkpoint_states[target]`. The spec skips the call when the target is already there.
+
+## Function `lantern_on_attestation`
+
+validate_on_attestation, then the attesting indices of the target state, is_valid_indexed_attestation, and update_latest_messages.
+
+### Signature
+
+```
+lantern_on_attestation(store, attestation, is_from_block, target_state, scratch, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | state | `Store` |
+| `attestation` | input | `Attestation` |
+| `is_from_block` | input | u64: 1 or 0 |
+| `target_state` | input | `BeaconState`: `store.checkpoint_states[attestation.data.target]` |
+| `scratch` | scratch | `Scratch` |
+| `result` | output | `Result` |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID`, a code of lantern_validate_on_attestation, `LANTERN_INVALID_ATTESTATION` when the indexed attestation is not valid, or a failure of get_attesting_indices.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or an attesting index has no `StoreValidator` entry. The store is unchanged.
+
+### Caller must
+
+- Call lantern_validate_on_attestation first and make the target state only when it returns `LANTERN_OK`.
+
+### Function does
+
+- update_latest_messages: for each attesting index without `STORE_EQUIVOCATING`, sets the latest message to (target epoch, head vote node) when there is none or the target epoch is greater.
+
+### Limits
+
+- Scratch: S(8) + `FC_ATTEST_EXTRA`, with n the validators of `target_state`.
+
+## Function `lantern_on_attester_slashing`
+
+Marks the indices common to both attestations of a valid slashing as equivocating.
+
+### Signature
+
+```
+lantern_on_attester_slashing(store, attester_slashing, state, scratch, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | state | `Store` |
+| `attester_slashing` | input | `AttesterSlashing` |
+| `state` | input | `BeaconState`: `store.block_states[store.justified_checkpoint.root]` |
+| `scratch` | scratch | `Scratch` |
+| `result` | output | `Result` |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID`, or `LANTERN_INVALID_ATTESTER_SLASHING` when the data are not slashable or an indexed attestation is not valid.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short, or a common index has no `StoreValidator` entry. The store is unchanged.
+
+### Limits
+
+- Scratch: S(7).
+
+## Function `lantern_get_proposer_head`
+
+The fulu get_proposer_head: the parent of a late, weak head when a single slot reorg is safe, else the head.
+
+### Signature
+
+```
+lantern_get_proposer_head(store, head, slot, head_state, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | input | `Store` |
+| `head` | input | u64: a node |
+| `slot` | input | u64 |
+| `head_state` | input | `BeaconState`: `store.block_states` of the head |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | u64: a node |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the node.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short.
+- `LANTERN_NEED_JUSTIFIED_STATE`: see Common rules.
+- `LANTERN_INVALID_UNKNOWN_BLOCK`: the head's parent is not in the store, or a walk leaves it.
+- `LANTERN_INVALID_PROPOSER_BOOST`: the head holds the proposer boost.
+- `LANTERN_INVALID_OVERFLOW`, `LANTERN_INVALID_VALIDATOR_INDEX`: a spec failure of a sum, or an equivocating committee member that the justified state lacks.
+
+### Function does
+
+- Computes every condition, as the spec does, before it decides; is_head_weak reads the committees of `head_state` and the `effective_balance` of the store's entries.
+
+### Limits
+
+- Scratch: S(3), with n the validators of `head_state`.
+
+## Function `lantern_is_data_available`
+
+Whether every column sidecar passes verify_data_column_sidecar and verify_data_column_sidecar_kzg_proofs.
+
+### Signature
+
+```
+lantern_is_data_available(sidecars, settings, config, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `sidecars` | input | `ColumnSidecars`: the value of retrieve_column_sidecars |
+| `settings` | input | asm-crypto `KzgSettings` of the trusted setup |
+| `config` | input | `Config` |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | u64: 1 or 0 |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds 1 or 0. A KZG input that does not decode gives 0, as the spec's exception makes on_block fail.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short.
+
+### Limits
+
+- Scratch: `DA_SCRATCH_FIXED` + n * `DA_SCRATCH_PER_BLOB`, with n the most commitments of one sidecar.
+
+## Function `lantern_verify_data_column_sidecar`
+
+The index, the commitment count against the blob limit of the epoch, and the column and proof counts.
+
+### Signature
+
+```
+lantern_verify_data_column_sidecar(sidecar, config, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds 1 or 0.
+
+## Function `lantern_verify_data_column_sidecar_kzg_proofs`
+
+verify_cell_kzg_proof_batch of the commitments, the column index for each cell, the cells and the proofs.
+
+### Signature
+
+```
+lantern_verify_data_column_sidecar_kzg_proofs(sidecar, settings, scratch, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds 1 or 0; 0 when a commitment, cell or proof does not decode.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short.
+
+### Caller must
+
+- Pass a sidecar that verify_data_column_sidecar accepts.
+
+### Function does
+
+- Copies the four inputs into asm-crypto lists at the end of scratch and calls `crypto_kzg_verify_cell_kzg_proof_batch` with the front.
+
+### Limits
+
+- Scratch: `DA_SCRATCH_FIXED` + n * `DA_SCRATCH_PER_BLOB`, with n the commitments of the sidecar.
+
+## Type `Store`
+
+The fork choice store: a value with two parts.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `size` | u64 | Bytes of the buffer |
+| 8 | `time_ms` | u64 | |
+| 16 | `genesis_time_ms` | u64 | |
+| 24 | `justified_checkpoint` | Checkpoint | |
+| 64 | `finalized_checkpoint` | Checkpoint | |
+| 104 | `unrealized_justified_checkpoint` | Checkpoint | |
+| 144 | `unrealized_finalized_checkpoint` | Checkpoint | |
+| 184 | `proposer_boost_root` | Root | |
+| 216 | `balances_checkpoint` | Checkpoint | The checkpoint whose state gave the balances |
+| 256 | `balances_total` | u64 | get_total_balance of the active unslashed validators of that state |
+| 264 | `blocks` | PartRef | `BlockNode` entries, in the order they were added |
+| 280 | `validators` | PartRef | `StoreValidator` entries, entry i for validator i |
+| 296 | `config` | `Config` | |
+
+### Rules
+
+- `STORE_FIXED` (296 + `CONFIG_SIZE`) bytes of fixed fields; the `blocks` part starts there, the `validators` part after it.
+- A parent node has a lower index than its children.
+- The capacity of `blocks` is its part's bytes over `BlockNode__mem`; the `count` of `validators` is its capacity.
+- `equivocating_indices`, `latest_messages`, `block_timeliness` and `unrealized_justifications` are fields of the entries.
+
+## Type `BlockNode`
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `root` | Root | hash_tree_root of the block |
+| 32 | `parent_root` | Root | |
+| 64 | `slot` | u64 | |
+| 72 | `proposer_index` | u64 | |
+| 80 | `parent` | u64 | Index of the parent node, or `NODE_NONE` |
+| 88 | `justified_checkpoint` | Checkpoint | `current_justified_checkpoint` of the block's post-state |
+| 128 | `unrealized_justified_checkpoint` | Checkpoint | `unrealized_justifications[root]` |
+| 168 | `timely` | u64 | `block_timeliness[root]`: 1 or 0; 0 for the anchor |
+
+### Rules
+
+- `BlockNode__mem` (176) bytes.
+
+## Type `StoreValidator`
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `latest_epoch` | u64 | The epoch of the latest message |
+| 8 | `latest_node` | u64 | The node of the latest message, or `NODE_NONE` when there is none |
+| 16 | `effective_balance` | u64 | In the justified checkpoint state |
+| 24 | `flags` | u64 | `STORE_ACTIVE_UNSLASHED`, `STORE_EQUIVOCATING`, `STORE_IN_REGISTRY` |
+
+### Rules
+
+- `StoreValidator__mem` (32) bytes.
+
+## Type `StoreRoom`
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `nodes` | u64 | Capacity of `blocks` |
+| 8 | `validators` | u64 | Capacity of `validators` |
+
+## Type `BlockOptions`
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `execution_valid` | u64 | 1: the execution engine accepts the payload |
+| 8 | `data_available` | u64 | 1: is_data_available holds for the block |
+
+## Type `ColumnSidecars`
+
+A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, then a `PartRef` at 8 to the nested sidecar values.
+
+## Results
+
+<!-- CI generates the tick table for each function here. -->
