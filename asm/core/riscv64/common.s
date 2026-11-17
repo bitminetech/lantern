@@ -9,6 +9,7 @@
 .include "kzg.inc"
 .include "preset.inc"
 .include "lantern.inc"
+.include "fork_numbers.inc"
 .include "platform.inc"
 .include "snappy.inc"
 .include "reqresp_protocols.inc"
@@ -26,3 +27,4 @@
 .include "reqresp.s"
 .include "engine.s"
 .include "jsonrpc.s"
+.include "node.s"

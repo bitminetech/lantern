@@ -433,3 +433,84 @@
  */
 .set DA_SCRATCH_FIXED, 8 + 4 * LIST_FIXED + CRYPTO_KZG_SCRATCH
 .set DA_SCRATCH_PER_BLOB, 48 + 8 + CRYPTO_KZG_CELL_SIZE + 48 + CRYPTO_KZG_SCRATCH_PER_ENTRY
+
+/* ------------------------------------------------------------ Node (node.md) */
+
+/* Node: the state of the node */
+.set Node_next_id, 8                   /* the next BufferId */
+.set Node_time_ms, 16
+.set Node_head_root, 24
+.set Node_anchor_state_id, 56
+.set Node_blocks, 64                   /* PartRef of NodeBlock */
+.set Node_checkpoints, 80              /* PartRef of NodeCheckpoint */
+.set Node_pow_blocks, 96               /* PartRef of PowBlock values, 96 bytes each */
+.set Node_flags, 112                   /* NODE_FLAG_* */
+.set NODE_FLAG_OPTIMISTIC, 1           /* import payloads as NOT_VALIDATED until the execution engine answers */
+.set NODE_FLAG_JUSTIFIED_PENDING, 2    /* a JUSTIFIED_STATE work is queued */
+.set Node_config, 120
+.set NODE_FIXED, 120 + CONFIG_SIZE
+.set NODE_STATE_SLOT, 48               /* BeaconState.slot in the value of every fork */
+
+/* NodeBlock: a block the node knows */
+.set NodeBlock_root, 0
+.set NodeBlock_parent_root, 32
+.set NodeBlock_slot, 64
+.set NodeBlock_data_id, 72             /* the SignedBeaconBlock's SSZ bytes */
+.set NodeBlock_state_id, 80            /* its post-state, 0 until imported */
+.set NodeBlock_status, 88              /* NODE_BLOCK_* */
+.set NodeBlock_data_available, 96
+.set NodeBlock_result, 104             /* the result of its import */
+.set NodeBlock__mem, 112
+.set NODE_BLOCK_WAITING, 1             /* its parent is not imported yet */
+.set NODE_BLOCK_IMPORTING, 2           /* an IMPORT_BLOCK work is queued */
+.set NODE_BLOCK_IMPORTED, 3
+.set NODE_BLOCK_INVALID, 4
+
+/* NodeCheckpoint: store.checkpoint_states */
+.set NodeCheckpoint_epoch, 0
+.set NodeCheckpoint_root, 8
+.set NodeCheckpoint_state_id, 40
+.set NodeCheckpoint__mem, 48
+.set POW_BLOCK_BYTES, 96
+
+/* NodeRoom: the capacities of a Node */
+.set NodeRoom_blocks, 0
+.set NodeRoom_checkpoints, 8
+.set NodeRoom_pow_blocks, 16
+
+/* NodeEvent kinds, after the size and kind header */
+.set NODE_EV_TICK, 1                   /* 16 time_ms */
+.set NODE_EV_BLOCK, 2                  /* 16 data_available, 24 a ByteList of the SSZ bytes */
+.set NODE_EV_ATTESTATION, 3            /* 16 is_from_block, 24 a ByteList of the SSZ bytes */
+.set NODE_EV_ATTESTER_SLASHING, 4      /* 24 a ByteList of the SSZ bytes */
+.set NODE_EV_POW_BLOCK, 5              /* 24 a ByteList of the SSZ bytes */
+.set NODE_EV_PAYLOAD_STATUS, 6         /* 16 block_hash, 48 status, 56 has_latest, 64 latest_valid_hash */
+.set NODE_EV_WORK_DONE, 7              /* the work's fields from 16 (as NodeAction), then 64 result, 72 checkpoint epoch, 80 root */
+.set NodeEvent_result, 64
+.set NodeEvent_checkpoint, 72
+.set NODE_EV_WORK_DONE_SIZE, 112
+.set NodeEvent_bytes, 24               /* a ByteList whose bytes start at its offset 24 */
+
+/* NodeAction kinds, after the size and kind header */
+.set NODE_ACT_BYTES_PUT, 1             /* 16 id, 24 a ByteList of the bytes */
+.set NODE_ACT_STATE_COPY, 2            /* 16 source id, 24 new id */
+.set NODE_ACT_STATE_FREE, 3            /* 16 id */
+.set NODE_ACT_BYTES_FREE, 4            /* 16 id */
+.set NODE_ACT_WORK, 5                  /* 16 kind, 24 state_a, 32 state_b, 40 data, 48 target, 56 arg */
+.set NodeAction_work_kind, 16
+.set NodeAction_state_a, 24
+.set NodeAction_state_b, 32
+.set NodeAction_data, 40
+.set NodeAction_target, 48
+.set NodeAction_arg, 56
+.set NODE_ACT_WORK_SIZE, 64
+
+/* Work kinds of lantern_node_run */
+.set NODE_WORK_IMPORT_BLOCK, 1         /* a: a copy of the parent's post-state; data: the block */
+.set NODE_WORK_JUSTIFIED_STATE, 2      /* a: the justified checkpoint state */
+.set NODE_WORK_TARGET_STATE, 3         /* a: a copy of the target root's block state */
+.set NODE_WORK_ATTESTATION, 4          /* a: the target checkpoint state, or 0; data: the attestation */
+.set NODE_WORK_ATTESTER_SLASHING, 5    /* a: the justified root's block state; data: the slashing */
+.set LANTERN_NEED_TARGET_STATE, 55     /* lantern_node_run: an attestation needs its target checkpoint state */
+.set LANTERN_INVALID_ENCODING, 56     /* lantern_node_run, the node hooks: the bytes are not an SSZ encoding of the type */
+.set LANTERN_INVALID_EVENT, 57        /* lantern_node_step: an event breaks the rules of its kind */

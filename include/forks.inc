@@ -8,13 +8,7 @@
  * defines many functions once for each fork, so the fork is part of the name.
  */
 
-.set FORK_PHASE0, 0
-.set FORK_ALTAIR, 1
-.set FORK_BELLATRIX, 2
-.set FORK_CAPELLA, 3
-.set FORK_DENEB, 4
-.set FORK_ELECTRA, 5
-.set FORK_FULU, 6
+.include "fork_numbers.inc"
 
 .ifndef FORK
 .error "assemble lantern.s with --defsym FORK=<FORK_*>"

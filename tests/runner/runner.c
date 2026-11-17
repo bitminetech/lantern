@@ -226,6 +226,15 @@ ABI uint64_t LF(on_attester_slashing)(void *store, const void *attester_slashing
 ABI uint64_t lantern_store_payload_status(void *store, const void *node, const void *payload_status, void *result);
 ABI uint64_t LF(get_proposer_head)(const void *store, const void *head, const void *slot, const void *head_state,
                                        void *scratch, void *out);
+
+/* The node core: docs/reference/node.md. */
+ABI uint64_t lantern_node_size(const void *room, void *size);
+ABI uint64_t lantern_node_init(const void *room, const void *config, const void *anchor_root, const void *anchor_slot,
+                               const void *flags, void *node);
+ABI uint64_t lantern_node_copy(const void *node, const void *room, void *out);
+ABI uint64_t lantern_node_step(void *node, void *store, const void *events, void *scratch, void *actions, void *result);
+ABI uint64_t lantern_node_run(void *node, void *store, void *seen, const void *work, void *state_a, void *state_b,
+                              const void *data, void *scratch, void *event);
 #if FORK == FORK_DENEB || FORK == FORK_ELECTRA
 ABI uint64_t LF(is_data_available)(const void *blob_kzg_commitments, const void *blobs, const void *proofs,
                                        const void *settings, void *scratch, void *out);
@@ -1747,6 +1756,7 @@ typedef struct {
     size_t npayloads;
     uint8_t *pow[16];  /* the pow_block steps: PowBlock values */
     size_t npow;
+    struct node_shell *shell; /* node mode: the store is the node's, and the node keeps the states */
 } fc_node;
 
 #if FORK >= FORK_BELLATRIX
@@ -1990,6 +2000,33 @@ static uint64_t blobs_available(tv parts, tv step, const uint8_t *body, const ch
 }
 #endif
 
+/* is_data_available of the block of a step whose body is body: the blobs or columns of the step, 1 before deneb. */
+static uint64_t step_data_available(tv parts, tv step, const uint8_t *body, const char **why) {
+    uint64_t out = 1;
+    (void)parts;
+    (void)step;
+    (void)body;
+    (void)why;
+#if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+    out = blobs_available(parts, step, body, why);
+#endif
+#if FORK == FORK_FULU
+    tv columns = tv_get(step, "columns");
+    if (columns) {
+        if (rd64(columns + 1) == 0) out = 0; /* retrieve_column_sidecars raises: not enough data */
+        else {
+            uint64_t lsize;
+            uint8_t *list = column_sidecars(parts, columns, &lsize, why);
+            if (!list) return 0;
+            if (CALL(LF(is_data_available), list, kzg_settings, config, fresh_scratch(), &out) != 0)
+                *why = "is_data_available: status not 0";
+            free(list);
+        }
+    }
+#endif
+    return out;
+}
+
 /* An on_block step, then the block's attestations and attester slashings when it is valid. */
 static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
     char key[128];
@@ -2006,7 +2043,6 @@ static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
     /* BlockOptions: the engine's answer for the payload (optimistic sync tests), VALID when the case gives none. */
     const uint8_t *body0 = nested(block, field_offset("BeaconBlock", 4));
     uint64_t options[4] = {PAYLOAD_VALID, 1, 0, 0};
-    (void)body0;
 #if FORK >= FORK_BELLATRIX
     const uint8_t *payload = nested(body0, field_offset("BeaconBlockBody", 9));
     const uint8_t *hash = payload + field_offset("ExecutionPayload", 12);
@@ -2038,26 +2074,7 @@ static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
             break;
         }
     }
-#if FORK == FORK_DENEB || FORK == FORK_ELECTRA
-    options[1] = blobs_available(parts, step, body0, why);
-#endif
-#if FORK == FORK_FULU
-    tv columns = tv_get(step, "columns");
-    if (columns) {
-        if (rd64(columns + 1) == 0) options[1] = 0; /* retrieve_column_sidecars raises: not enough data */
-        else {
-            uint64_t lsize;
-            uint8_t *list = column_sidecars(parts, columns, &lsize, why);
-            if (!list) {
-                free(signed_block);
-                return;
-            }
-            if (CALL(LF(is_data_available), list, kzg_settings, config, fresh_scratch(), &options[1]) != 0)
-                *why = "is_data_available: status not 0";
-            free(list);
-        }
-    }
-#endif
+    options[1] = step_data_available(parts, step, body0, why);
 
     kept_state *parent = find_kept(n->blocks, n->nblocks, parent_root, 0, 0);
     uint64_t size = parent ? parent->size : n->anchor_size, result = 0xA5A5A5A5A5A5A5A5u, st = 0;
@@ -2097,8 +2114,12 @@ static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
     free(signed_block);
 }
 
-/* The head node, through the retry rule. */
+static uint64_t shell_head(fc_node *n, const char **why);
+static const uint8_t *shell_state_of(fc_node *n, const uint8_t *root);
+
+/* The head node, through the retry rule. Node mode: the node's head. */
 static uint64_t fc_head(fc_node *n, const char **why) {
+    if (n->shell) return shell_head(n, why);
     uint64_t head = 0;
     uint64_t st = FC_RETRY(n, why, CALL(LF(get_head), n->store, fresh_scratch(), &head), break, NULL, 0);
     if (!*why && st != 0) *why = "get_head: status not 0";
@@ -2207,11 +2228,12 @@ static void fc_checks(fc_node *n, tv checks, const char **why) {
                 break;
             }
             kept_state *k = find_kept(n->blocks, n->nblocks, node_at(n, head), 0, 0);
-            if (!k) {
+            const uint8_t *head_state = n->shell ? shell_state_of(n, node_at(n, head)) : k ? k->state : NULL;
+            if (!head_state) {
                 *why = "no state for the head";
                 break;
             }
-            uint64_t st = FC_RETRY(n, why, CALL(LF(get_proposer_head), n->store, &head, &slot, k->state, fresh_scratch(), &out),
+            uint64_t st = FC_RETRY(n, why, CALL(LF(get_proposer_head), n->store, &head, &slot, head_state, fresh_scratch(), &out),
                                    break, NULL, 0);
             if (*why) break;
             if (st != 0) *why = "get_proposer_head: status not 0";
@@ -2224,6 +2246,489 @@ static void fc_checks(fc_node *n, tv checks, const char **why) {
     }
 }
 
+static void root_of(const char *type, const uint8_t *value, uint8_t root[32], const char **why);
+
+/*
+ * The anchor state, the anchor block and the store of a case. Returns the anchor block, or NULL with a reason.
+ */
+static uint8_t *fc_setup(fc_node *n, tv parts, const char **why) {
+    uint64_t slen, blen, vsize;
+    const uint8_t *enc = tv_bytes(tv_get(parts, "anchor_state"), &slen);
+    n->anchor = load_state(enc, slen, &n->anchor_size, why);
+    if (!n->anchor) return NULL;
+    uint8_t *anchor_block = decode(type_by_name("BeaconBlock"), tv_bytes(tv_get(parts, "anchor_block"), &blen), blen, &vsize, why);
+    if (!anchor_block) return NULL;
+    /* Small capacities, so that the store grows through lantern_store_copy. */
+    uint64_t room[2] = {2, 1}, need = 0;
+    CALL(lantern_store_size, room, &need);
+    n->store = buffer(need);
+    n->size = need;
+    wr64(n->store, need);
+    uint64_t st;
+    while ((st = CALL(LF(get_forkchoice_store), n->anchor, anchor_block, config, room, fresh_scratch(), n->store)) == 1 &&
+           room[1] < (1u << 24)) {
+        room[1] *= 2;
+        CALL(lantern_store_size, room, &need);
+        free(n->store);
+        n->store = buffer(need);
+        n->size = need;
+        wr64(n->store, need);
+    }
+    if (st != 0) *why = "get_forkchoice_store: status not 0";
+    else if (!guard_ok(n->store, n->size)) *why = "get_forkchoice_store wrote out of bounds";
+    if (*why) {
+        free(anchor_block);
+        return NULL;
+    }
+    return anchor_block;
+}
+
+/* ---------------------------------------------------------------- Node mode */
+
+/*
+ * The fork_choice files a second time, through the node core (docs/reference/node.md). The runner
+ * plays the shell: it maps each BufferId to a buffer, does the actions of lantern_node_step in
+ * order, runs each WORK action with lantern_node_run when it comes to it, and passes the events
+ * that run writes to the next step, until a step gives no work. It sends a valid block's
+ * attestations and attester slashings as events, as the direct runner calls them. The checks read
+ * the store and the node's head. Cases with payload_status steps are left to the direct runner.
+ */
+
+/* include/lantern.inc: Node, NodeBlock, the events, the actions and the work kinds. */
+#define NODE_HEAD_ROOT 24
+#define NODE_BLOCKS 64
+#define NODE_BLOCK_BYTES 112
+#define NB_STATE_ID 80
+#define NB_STATUS 88
+enum { NB_WAITING = 1, NB_IMPORTING, NB_IMPORTED, NB_INVALID };
+enum { EV_TICK = 1, EV_BLOCK, EV_ATTESTATION, EV_ATTESTER_SLASHING, EV_POW_BLOCK, EV_PAYLOAD_STATUS, EV_WORK_DONE };
+enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK };
+enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING };
+#define EV_RESULT 64
+#define EV_WORK_DONE_SIZE 112
+#define LANTERN_NEED_TARGET_STATE 55
+#define SHELL_RESULTS 1024
+
+typedef struct {
+    uint64_t id, size;
+    uint8_t *b;
+} shell_buf;
+
+struct node_shell {
+    uint8_t *node, *actions;
+    uint64_t node_size, room[3], actions_size;
+    shell_buf *bufs;
+    size_t nbufs;
+    uint8_t *pending; /* the events of the next step */
+    uint64_t pending_len, pending_cap;
+    uint64_t results[2][SHELL_RESULTS]; /* the last results of the ATTESTATION and ATTESTER_SLASHING works */
+    size_t nresults[2];
+};
+
+static shell_buf *shell_find(struct node_shell *s, uint64_t id) {
+    for (size_t i = 0; i < s->nbufs; i++)
+        if (s->bufs[i].id == id) return &s->bufs[i];
+    return NULL;
+}
+
+static void shell_keep(struct node_shell *s, uint64_t id, uint8_t *b, uint64_t size, const char **why) {
+    if (!id || shell_find(s, id)) {
+        *why = "an action gives an id in use";
+        free(b);
+        return;
+    }
+    s->bufs = realloc(s->bufs, (s->nbufs + 1) * sizeof *s->bufs);
+    if (!s->bufs) {
+        fprintf(stderr, "out of memory\n");
+        exit(2);
+    }
+    s->bufs[s->nbufs].id = id;
+    s->bufs[s->nbufs].size = size;
+    s->bufs[s->nbufs].b = b;
+    s->nbufs++;
+}
+
+static void shell_drop(struct node_shell *s, uint64_t id, const char **why) {
+    shell_buf *b = shell_find(s, id);
+    if (!b) {
+        *why = "a FREE action names no buffer";
+        return;
+    }
+    free(b->b);
+    *b = s->bufs[--s->nbufs];
+}
+
+/* Room for an event of size bytes at the end of the pending events. */
+static uint8_t *shell_append(struct node_shell *s, uint64_t size) {
+    if (s->pending_len + size > s->pending_cap) {
+        s->pending_cap = 2 * (s->pending_len + size);
+        s->pending = realloc(s->pending, (size_t)s->pending_cap);
+        if (!s->pending) {
+            fprintf(stderr, "out of memory\n");
+            exit(2);
+        }
+    }
+    uint8_t *e = s->pending + s->pending_len;
+    s->pending_len += size;
+    return e;
+}
+
+/* An event of kind with the u64 arg at 16 and, when bytes is not NULL, a ByteList of them at 24. */
+static void shell_event(struct node_shell *s, uint64_t kind, uint64_t arg, const uint8_t *bytes, uint64_t len) {
+    uint64_t size = bytes ? (48 + len + 7) & ~(uint64_t)7 : 24;
+    uint8_t *e = shell_append(s, size);
+    memset(e, 0, (size_t)size);
+    wr64(e, size);
+    wr64(e + 8, kind);
+    wr64(e + 16, arg);
+    if (bytes) {
+        wr64(e + 24, size - 24);
+        wr64(e + 32, 24);
+        wr64(e + 40, len);
+        memcpy(e + 48, bytes, (size_t)len);
+    }
+}
+
+/* The node's entry of the block root, or NULL. */
+static const uint8_t *shell_block(const struct node_shell *s, const uint8_t *root) {
+    const uint8_t *b = s->node + rd64(s->node + NODE_BLOCKS);
+    for (uint64_t i = 0, c = rd64(s->node + NODE_BLOCKS + 8); i < c; i++, b += NODE_BLOCK_BYTES)
+        if (!memcmp(b, root, 32)) return b;
+    return NULL;
+}
+
+/* The store node of the node's head root. */
+static uint64_t shell_head(fc_node *n, const char **why) {
+    for (uint64_t i = 0; i < node_count(n); i++)
+        if (!memcmp(node_at(n, i), n->shell->node + NODE_HEAD_ROOT, 32)) return i;
+    *why = "the node's head is not in the store";
+    return 0;
+}
+
+/* The post-state the node keeps for the block root, or NULL. */
+static const uint8_t *shell_state_of(fc_node *n, const uint8_t *root) {
+    const uint8_t *e = shell_block(n->shell, root);
+    if (!e || rd64(e + NB_STATUS) != NB_IMPORTED) return NULL;
+    shell_buf *b = shell_find(n->shell, rd64(e + NB_STATE_ID));
+    return b ? b->b : NULL;
+}
+
+/* The resize step for the node: copy it with twice the capacity of each part. */
+static void shell_grow_node(struct node_shell *s, const char **why) {
+    uint64_t room[3] = {2 * s->room[0], 2 * s->room[1], 2 * s->room[2]}, need = 0;
+    if (CALL(lantern_node_size, room, &need) != 0) {
+        *why = "lantern_node_size status";
+        return;
+    }
+    uint8_t *out = buffer(need);
+    wr64(out, need);
+    if (CALL(lantern_node_copy, s->node, room, out) != 0) *why = "lantern_node_copy status";
+    else if (!guard_ok(out, need)) *why = "lantern_node_copy wrote out of bounds";
+    if (*why) {
+        free(out);
+        return;
+    }
+    free(s->node);
+    s->node = out;
+    s->node_size = need;
+    memcpy(s->room, room, sizeof room);
+}
+
+/*
+ * A WORK action: lantern_node_run with its buffers, again with more room while it asks for it,
+ * then its WORK_DONE event for the next step.
+ */
+static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
+    struct node_shell *s = n->shell;
+    uint64_t kind = rd64(work + 16), a_id = rd64(work + 24), d_id = rd64(work + 40);
+    shell_buf *a = a_id ? shell_find(s, a_id) : NULL, *d = d_id ? shell_find(s, d_id) : NULL;
+    if ((a_id && !a) || (d_id && !d) || rd64(work + 32)) {
+        *why = "a WORK action names no buffer";
+        return;
+    }
+    uint8_t *ev = buffer(EV_WORK_DONE_SIZE);
+    uint64_t st = 1, growth = 2;
+    for (int t = 0; t < 32 && st == 1 && !*why; t++) {
+        uint8_t *snode = copy_of(s->node, s->node_size), *sstore = copy_of(n->store, n->size);
+        uint8_t *sa = a ? copy_of(a->b, a->size) : NULL;
+        memset(ev, FILL, EV_WORK_DONE_SIZE);
+        st = CALL(lantern_node_run, s->node, n->store, NULL, work, a ? a->b : NULL, NULL, d ? d->b : NULL, fresh_scratch(), ev);
+        if (st != 0 && (memcmp(snode, s->node, (size_t)s->node_size) || memcmp(sstore, n->store, (size_t)n->size) ||
+                        (a && memcmp(sa, a->b, (size_t)a->size))))
+            *why = "lantern_node_run: a non-zero status changed a state";
+        free(snode);
+        free(sstore);
+        free(sa);
+        if (st != 1 || *why) break;
+        /* BUFFER_TOO_SMALL: the store for a node or for the justified balances, else the state's lists. */
+        if ((kind == WORK_IMPORT_BLOCK && node_count(n) < node_capacity(n->store)) || kind == WORK_TARGET_STATE) {
+            if (!a) *why = "lantern_node_run: no room, and no state";
+            else {
+                a->b = regrow(a->b, &a->size, growth, why);
+                growth *= 2;
+            }
+        } else
+            grow_store(n, why);
+    }
+    if (!*why && st != 0) {
+        static char msg[64];
+        snprintf(msg, sizeof msg, "lantern_node_run: status %llu", (unsigned long long)st);
+        *why = msg;
+    }
+    if (!*why && (!guard_ok(ev, EV_WORK_DONE_SIZE) || !guard_ok(s->node, s->node_size) || !guard_ok(n->store, n->size) ||
+                  (a && !guard_ok(a->b, a->size))))
+        *why = "lantern_node_run wrote out of bounds";
+    if (!*why && (rd64(ev) != EV_WORK_DONE_SIZE || rd64(ev + 8) != EV_WORK_DONE || memcmp(ev + 16, work + 16, 48)))
+        *why = "lantern_node_run: the event is not the WORK_DONE of the work";
+    if (!*why) {
+        uint64_t result = rd64(ev + EV_RESULT);
+        int k = kind == WORK_ATTESTATION ? 0 : kind == WORK_ATTESTER_SLASHING ? 1 : -1;
+        if (k >= 0 && !(k == 0 && result == LANTERN_NEED_TARGET_STATE)) {
+            if (s->nresults[k] == SHELL_RESULTS) *why = "too many results";
+            else s->results[k][s->nresults[k]++] = result;
+        }
+        memcpy(shell_append(s, EV_WORK_DONE_SIZE), ev, EV_WORK_DONE_SIZE);
+    }
+    free(ev);
+}
+
+/* One lantern_node_step with the pending events, again with more room while it asks for it, then its actions in order. */
+static void shell_step(fc_node *n, const char **why) {
+    struct node_shell *s = n->shell;
+    uint64_t len = s->pending_len, esize = 24 + len, count = 0, nevents = 0, st = 1;
+    uint8_t *events = buffer(esize);
+    wr64(events, esize);
+    wr64(events + 8, 24);
+    wr64(events + 16, len);
+    memcpy(events + 24, s->pending, (size_t)len);
+    s->pending_len = 0;
+    for (uint64_t at = 0; at < len; at += rd64(events + 24 + at)) nevents++;
+    for (int t = 0; t < 32 && st == 1 && !*why; t++) {
+        wr64(s->actions + 8, 24);
+        wr64(s->actions + 16, 0);
+        uint8_t *snode = copy_of(s->node, s->node_size), *sstore = copy_of(n->store, n->size);
+        st = CALL(lantern_node_step, s->node, n->store, events, fresh_scratch(), s->actions, &count);
+        if (st != 0 && (memcmp(snode, s->node, (size_t)s->node_size) || memcmp(sstore, n->store, (size_t)n->size)))
+            *why = "lantern_node_step: a non-zero status changed a state";
+        free(snode);
+        free(sstore);
+        if (st != 1 || *why) break;
+        shell_grow_node(s, why); /* BUFFER_TOO_SMALL: the node's parts or the actions */
+        free(s->actions);
+        s->actions_size *= 2;
+        s->actions = buffer(s->actions_size);
+        wr64(s->actions, s->actions_size);
+    }
+    if (!*why && st != 0) {
+        static char msg[64];
+        snprintf(msg, sizeof msg, "lantern_node_step: status %llu", (unsigned long long)st);
+        *why = msg;
+    }
+    if (!*why && (!guard_ok(s->node, s->node_size) || !guard_ok(n->store, n->size) || !guard_ok(s->actions, s->actions_size)))
+        *why = "lantern_node_step wrote out of bounds";
+    if (!*why && count != nevents) *why = "lantern_node_step: result is not the event count";
+    uint64_t used = *why ? 0 : rd64(s->actions + 16);
+    if (!*why && (rd64(s->actions + 8) != 24 || 24 + used > s->actions_size)) *why = "lantern_node_step: actions out of bounds";
+    for (uint64_t at = 0; at < used && !*why;) {
+        uint8_t *act = s->actions + 24 + at;
+        uint64_t size = rd64(act), kind = rd64(act + 8);
+        if (size < 16 || size % 8 || at + size > used) {
+            *why = "lantern_node_step: an action breaks its size";
+            break;
+        }
+        if (kind == ACT_BYTES_PUT && size >= 48 && rd64(act + 24) == size - 24 && rd64(act + 32) == 24 &&
+            rd64(act + 40) <= size - 48)
+            shell_keep(s, rd64(act + 16), copy_of(act + 24, size - 24), size - 24, why);
+        else if (kind == ACT_STATE_COPY && size == 32) {
+            shell_buf *src = shell_find(s, rd64(act + 16));
+            if (!src) *why = "STATE_COPY names no buffer";
+            else shell_keep(s, rd64(act + 24), copy_of(src->b, src->size), src->size, why);
+        } else if ((kind == ACT_STATE_FREE || kind == ACT_BYTES_FREE) && size == 32)
+            shell_drop(s, rd64(act + 16), why);
+        else if (kind == ACT_WORK && size == 64)
+            shell_work(n, act, why);
+        else
+            *why = "lantern_node_step: an action of no kind";
+        at += size;
+    }
+    free(events);
+}
+
+/* Steps until the node gives no more work. */
+static void shell_settle(fc_node *n, const char **why) {
+    for (int k = 0; n->shell->pending_len && !*why; k++) {
+        if (k == 4096) *why = "the node does not settle";
+        else shell_step(n, why);
+    }
+}
+
+/* The SSZ bytes of value of the named type, from offset 24 of the returned buffer, their length in *len. */
+static uint8_t *encoded(const char *type, const uint8_t *value, uint64_t *len, const char **why) {
+    const uint8_t *desc = type_by_name(type);
+    uint64_t scsize, need = 0;
+    uint8_t *scr = scratch_for(desc, &scsize), *out = NULL;
+    if (ssz_serialize_size(desc, value, scr, &need) != 0) *why = "serialize_size status";
+    else {
+        out = buffer(need);
+        wr64(out, need);
+        if (ssz_serialize(desc, value, scr, out) != 0) *why = "serialize status";
+        *len = need - 24;
+    }
+    free(scr);
+    return out;
+}
+
+/* A block step through the node, then the block's attestations and attester slashings as events when it is valid. */
+static void shell_block_step(fc_node *n, tv parts, tv step, const char **why) {
+    struct node_shell *s = n->shell;
+    char key[128];
+    uint64_t blen, vsize;
+    tv bname = tv_get(step, "block"), v = tv_get(step, "valid");
+    int valid = !v || (*v == T_BOOL && v[1]);
+    snprintf(key, sizeof key, "%.*s", (int)rd64(bname + 1), (const char *)(bname + 9));
+    const uint8_t *bytes = tv_bytes(tv_get(parts, key), &blen);
+    uint8_t *signed_block = decode(type_by_name("SignedBeaconBlock"), bytes, blen, &vsize, why), root[32];
+    if (!signed_block) return;
+    const uint8_t *block = nested(signed_block, field_offset("SignedBeaconBlock", 0));
+    const uint8_t *body = nested(block, field_offset("BeaconBlock", 4));
+    root_of("BeaconBlock", block, root, why);
+    uint64_t available = step_data_available(parts, step, body, why);
+    if (!*why) {
+        shell_event(s, EV_BLOCK, available, bytes, blen);
+        shell_settle(n, why);
+    }
+    const uint8_t *e = *why ? NULL : shell_block(s, root);
+    int imported = e && rd64(e + NB_STATUS) == NB_IMPORTED;
+    if (!*why && valid && !imported) {
+        static char msg[96];
+        snprintf(msg, sizeof msg, "block: expected imported, node status %llu, result %llu",
+                 e ? (unsigned long long)rd64(e + NB_STATUS) : 0ull, e ? (unsigned long long)rd64(e + 104) : 0ull);
+        *why = msg;
+    } else if (!*why && !valid && imported) *why = "block: expected not imported";
+    if (!*why && valid) {
+        s->nresults[0] = s->nresults[1] = 0;
+        uint64_t ref = field_offset("BeaconBlockBody", 5), natt = rd64(body + ref + 8), nsl;
+        const uint8_t *a = body + rd64(body + ref);
+        for (uint64_t i = 0; i < natt && !*why; i++, a += rd64(a)) {
+            uint64_t olen = 0;
+            uint8_t *enc = encoded("Attestation", a, &olen, why);
+            if (enc) shell_event(s, EV_ATTESTATION, 1, enc + 24, olen);
+            free(enc);
+        }
+        ref = field_offset("BeaconBlockBody", 4);
+        nsl = rd64(body + ref + 8);
+        a = body + rd64(body + ref);
+        for (uint64_t i = 0; i < nsl && !*why; i++, a += rd64(a)) {
+            uint64_t olen = 0;
+            uint8_t *enc = encoded("AttesterSlashing", a, &olen, why);
+            if (enc) shell_event(s, EV_ATTESTER_SLASHING, 0, enc + 24, olen);
+            free(enc);
+        }
+        shell_settle(n, why);
+        if (!*why && (s->nresults[0] != natt || s->nresults[1] != nsl)) *why = "the block's operations: not one result each";
+        for (size_t i = 0; i < s->nresults[0] && !*why; i++)
+            if (s->results[0][i] != 0) *why = "a block attestation is not valid";
+        for (size_t i = 0; i < s->nresults[1] && !*why; i++)
+            if (s->results[1][i] != 0) *why = "a block attester slashing is not valid";
+    }
+    free(signed_block);
+}
+
+/* Whether a case runs in node mode: one with no payload_status step. */
+static int node_mode(tv parts) {
+    tv steps = tv_get(parts, "steps");
+    tv st = steps ? steps + 9 : NULL;
+    for (uint64_t k = 0, c = steps ? rd64(steps + 1) : 0; k < c; k++, st = tv_skip(st))
+        if (tv_get(st, "payload_status")) return 0;
+    return steps != NULL;
+}
+
+/* One case through the node: the shell's buffers, then each step as events. */
+static void fc_node_case(tv parts, const char **why) {
+    fc_node n;
+    memset(&n, 0, sizeof n);
+    struct node_shell *s = calloc(1, sizeof *s);
+    if (!s) {
+        fprintf(stderr, "out of memory\n");
+        exit(2);
+    }
+    n.shell = s;
+    uint8_t *anchor_block = fc_setup(&n, parts, why);
+    if (anchor_block) {
+        /* Small capacities, so that the node grows through lantern_node_copy. */
+        uint8_t root[32];
+        uint64_t slot = rd64(anchor_block + field_offset("BeaconBlock", 0)), flags = 0, need = 0;
+        s->room[0] = 2;
+        s->room[1] = 2;
+        s->room[2] = 1;
+        root_of("BeaconBlock", anchor_block, root, why);
+        if (!*why && CALL(lantern_node_size, s->room, &need) != 0) *why = "lantern_node_size status";
+        if (!*why) {
+            s->node = buffer(need);
+            s->node_size = need;
+            wr64(s->node, need);
+            /* The node picks the fork of a slot by the fork epochs: this runner's fork and the ones before at genesis. */
+            uint8_t ncfg[CONFIG_SIZE];
+            memcpy(ncfg, config, CONFIG_SIZE);
+            for (uint64_t f = FORK_ALTAIR; f <= FORK_FULU; f++) wr64(ncfg + 16 * f, f <= FORK ? 0 : UINT64_MAX);
+            if (CALL(lantern_node_init, s->room, ncfg, root, &slot, &flags, s->node) != 0) *why = "lantern_node_init status";
+            else if (!guard_ok(s->node, need)) *why = "lantern_node_init wrote out of bounds";
+            else if (memcmp(s->node + NODE_HEAD_ROOT, root, 32)) *why = "lantern_node_init: the head is not the anchor";
+        }
+        s->actions_size = 256;
+        s->actions = buffer(s->actions_size);
+        wr64(s->actions, s->actions_size);
+        if (!*why) shell_keep(s, 1, copy_of(n.anchor, n.anchor_size), n.anchor_size, why);
+    }
+    tv steps = tv_get(parts, "steps");
+    tv st = steps ? steps + 9 : NULL;
+    for (uint64_t k = 0, c = steps ? rd64(steps + 1) : 0; k < c && !*why; k++, st = tv_skip(st)) {
+        tv v = tv_get(st, "valid");
+        int valid = !v || (*v == T_BOOL && v[1]);
+        if (tv_get(st, "tick")) {
+            uint64_t secs = tv_u64(tv_get(st, "tick")), ms = secs > UINT64_MAX / 1000 ? UINT64_MAX : secs * 1000;
+            shell_event(s, EV_TICK, ms, NULL, 0);
+            shell_settle(&n, why);
+        } else if (tv_get(st, "block")) {
+            shell_block_step(&n, parts, st, why);
+        } else if (tv_get(st, "attestation") || tv_get(st, "attester_slashing") || tv_get(st, "pow_block")) {
+            int att = tv_get(st, "attestation") != NULL, pow = tv_get(st, "pow_block") != NULL;
+            tv nm = tv_get(st, att ? "attestation" : pow ? "pow_block" : "attester_slashing");
+            char key[128];
+            uint64_t olen;
+            snprintf(key, sizeof key, "%.*s", (int)rd64(nm + 1), (const char *)(nm + 9));
+            const uint8_t *bytes = tv_bytes(tv_get(parts, key), &olen);
+            s->nresults[0] = s->nresults[1] = 0;
+            shell_event(s, att ? EV_ATTESTATION : pow ? EV_POW_BLOCK : EV_ATTESTER_SLASHING, 0, bytes, olen);
+            shell_settle(&n, why);
+            if (!*why && !pow) {
+                size_t r = att ? 0 : 1;
+                if (s->nresults[r] != 1) *why = att ? "attestation: not one result" : "attester_slashing: not one result";
+                else if ((s->results[r][0] == 0) != valid) *why = att ? "attestation: result" : "attester_slashing: result";
+            }
+        } else if (tv_get(st, "checks")) {
+            fc_checks(&n, tv_get(st, "checks"), why);
+        } else {
+            *why = "unknown step";
+        }
+        if (!*why && !guard_ok(scratch_buf, SCRATCH_BYTES)) *why = "wrote past the scratch";
+        if (*why) {
+            static char msg[192];
+            snprintf(msg, sizeof msg, "step %llu: %s", (unsigned long long)k, *why);
+            *why = msg;
+        }
+    }
+    for (size_t k = 0; k < s->nbufs; k++) free(s->bufs[k].b);
+    free(s->bufs);
+    free(s->pending);
+    free(s->node);
+    free(s->actions);
+    free(s);
+    free(n.store);
+    free(n.anchor);
+    free(anchor_block);
+}
+
 /* compliance: the rules of the spec's fork choice compliance runner (tests/generators/compliance_runners). */
 static void run_fork_choice(const char *file, const char *dir, case_file *f, int compliance) {
 #if FORK >= FORK_DENEB
@@ -2233,37 +2738,14 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
 #endif
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
-        uint64_t len, slen, blen, vsize;
+        uint64_t len, vsize;
         tv parts = next_case(f, &name, &len);
         if (skip_case(parts)) continue;
         fc_node n;
         memset(&n, 0, sizeof n);
         n.compliance = compliance;
-        const uint8_t *enc = tv_bytes(tv_get(parts, "anchor_state"), &slen);
-        n.anchor = load_state(enc, slen, &n.anchor_size, &why);
-        uint8_t *anchor_block = NULL;
-        if (n.anchor) anchor_block = decode(type_by_name("BeaconBlock"), tv_bytes(tv_get(parts, "anchor_block"), &blen), blen, &vsize, &why);
-        if (anchor_block) {
-            /* Small capacities, so that the store grows through lantern_store_copy. */
-            uint64_t room[2] = {2, 1}, need = 0;
-            CALL(lantern_store_size, room, &need);
-            n.store = buffer(need);
-            n.size = need;
-            wr64(n.store, need);
-            uint64_t st;
-            while ((st = CALL(LF(get_forkchoice_store), n.anchor, anchor_block, config, room, fresh_scratch(), n.store)) == 1 &&
-                   room[1] < (1u << 24)) {
-                room[1] *= 2;
-                CALL(lantern_store_size, room, &need);
-                free(n.store);
-                n.store = buffer(need);
-                n.size = need;
-                wr64(n.store, need);
-            }
-            if (st != 0) why = "get_forkchoice_store: status not 0";
-            else if (!guard_ok(n.store, n.size)) why = "get_forkchoice_store wrote out of bounds";
-            else keep(&n.blocks, &n.nblocks, node_at(&n, 0), 0, copy_of(n.anchor, n.anchor_size), n.anchor_size);
-        }
+        uint8_t *anchor_block = fc_setup(&n, parts, &why);
+        if (anchor_block) keep(&n.blocks, &n.nblocks, node_at(&n, 0), 0, copy_of(n.anchor, n.anchor_size), n.anchor_size);
         tv steps = tv_get(parts, "steps");
         tv s = steps ? steps + 9 : NULL;
         for (uint64_t k = 0, c = steps ? rd64(steps + 1) : 0; k < c && !why; k++, s = tv_skip(s)) {
@@ -2340,12 +2822,17 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
         free(n.anchor);
         free(anchor_block);
         report(file, name, len, why == NULL, why);
+        if (!compliance && node_mode(parts)) {
+            char nname[256];
+            int nlen = snprintf(nname, sizeof nname, "%.*s (node)", (int)len, name);
+            const char *nwhy = NULL;
+            fc_node_case(parts, &nwhy);
+            report(file, nname, (uint64_t)nlen, nwhy == NULL, nwhy);
+        }
     }
 }
 
 /* ---------------------------------------------------------------- Merkle proofs */
-
-static void root_of(const char *type, const uint8_t *value, uint8_t root[32], const char **why);
 
 #if FORK == FORK_FULU
 /*

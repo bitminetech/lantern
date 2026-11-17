@@ -64,8 +64,8 @@ build_objects() {
             objects="$objects $out/$preset/$fork.o"
         done
         # A name the assembler does not know becomes an undefined symbol, not an error:
-        # the core objects may only call asm-ssz, asm-crypto, asm-snappy and the common object.
-        unknown=$(llvm-nm -u $out/$preset/*.o | sed 's/^ *U //; s/^_//' | grep -v '^\(crypto_\|ssz_\|snappy_\|lantern_store_\|lantern_seen_\)' | grep -v ':$' | grep . || true)
+        # the core objects may only call asm-ssz, asm-crypto, asm-snappy and each other.
+        unknown=$(llvm-nm -u $out/$preset/*.o | sed 's/^ *U //; s/^_//' | grep -v '^\(crypto_\|ssz_\|snappy_\|lantern_\)' | grep -v ':$' | grep . || true)
         if [ -n "$unknown" ]; then
             echo "objects.sh: undefined symbols in the core of $os $isa $preset: $unknown" >&2
             exit 1

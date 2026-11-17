@@ -35,6 +35,7 @@ build/linux-x86_64/runner-minimal-fulu ~/.cache/lantern/vectors minimal-fulu-ope
 - The runners of altair to fulu also run `fork` (the upgrade of a state of the fork before) and `transition` (blocks across the fork epoch: the blocks up to `fork_block` with the fork before, process_slots of the fork before to the fork slot, the upgrade, then the other blocks; a block on the fork slot gets its signature check, process_block and state root check, since its slots ran before the upgrade).
 - The phase0 runners also run `genesis` (initialization and validity).
 - The runners of altair to fulu also run fork choice and its compliance cases; those of bellatrix to fulu also run sync.
+- The fork choice cases run a second time through the node core, with the runner as the shell (docs/reference/node.md, Test vectors).
 - Every runner runs the gossip validation files of its fork (`networking`) lantern's p2p helper files (`p2p`) and lantern's req/resp encoding files (`reqresp`) and lantern's Engine API client files (`engine`); the fulu runners also run custody. The runners of deneb to fulu run `merkle_proof`: the proof of a blob commitment for deneb and electra, of the commitment list for fulu.
 
 ## Buffers
