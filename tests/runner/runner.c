@@ -43,9 +43,6 @@
 #error "build with -DFORK=<FORK_* number> -DFORK_NAME=<fork>, for example -DFORK=6 -DFORK_NAME=fulu"
 #endif
 
-/* The forks whose state transition lantern has: phase0 and fulu so far (asm/core/<ISA>/lantern.s). */
-#define FORK_HAS_STF (FORK == FORK_PHASE0 || FORK == FORK_FULU)
-
 #define STR_(x) #x
 #define STR(x) STR_(x)
 #define CAT_(a, b, c) a##b##c
@@ -65,7 +62,6 @@ ABI uint64_t ssz_hash_tree_root(const void *type, const void *value, void *scrat
 /* lantern: include/descriptors.inc. */
 extern const uint8_t LF(types)[];
 
-#if FORK_HAS_STF
 /* The state transition of every fork: docs/reference/. */
 ABI uint64_t LF(beacon_state_copy_size)(const void *state, const void *room, void *size);
 ABI uint64_t LF(beacon_state_copy)(const void *state, const void *room, void *out);
@@ -89,9 +85,11 @@ ABI uint64_t LF(get_inactivity_penalty_deltas)(const void *state, const void *co
 
 /* An operation: (state, operation, config, scratch, result). The operations of this runner's fork. */
 typedef ABI uint64_t (*op_fn)(void *state, const void *op, const void *config, void *scratch, void *result);
-#if FORK >= FORK_CAPELLA
+#if FORK >= FORK_BELLATRIX
 ABI uint64_t LF(process_execution_payload)(void *state, const void *body, const void *execution_valid,
                                                const void *config, void *scratch, void *result);
+#endif
+#if FORK >= FORK_CAPELLA
 #define OPS_CAPELLA(X)                                                                                         \
     X(withdrawals, withdrawals, execution_payload, ExecutionPayload)                                           \
     X(bls_to_execution_change, bls_to_execution_change, address_change, SignedBLSToExecutionChange)
@@ -106,7 +104,7 @@ ABI uint64_t LF(process_execution_payload)(void *state, const void *body, const 
 #else
 #define OPS_ELECTRA(X)
 #endif
-#if FORK <= FORK_DENEB
+#if FORK <= FORK_ELECTRA
 #define OPS_DEPOSIT(X) X(deposit, deposit, deposit, Deposit)
 #else
 #define OPS_DEPOSIT(X)
@@ -165,7 +163,6 @@ typedef ABI uint64_t (*epoch_fn)(void *state, const void *config, void *scratch,
     EPOCH_ALTAIR(X) EPOCH_HISTORY(X) EPOCH_ELECTRA(X) EPOCH_FULU(X)                                            \
     X(epoch)
 EPOCH_FUNCTIONS(EPOCH_FN)
-#endif
 
 #if FORK == FORK_FULU /* fork choice and networking: the fulu object so far */
 
@@ -750,7 +747,6 @@ static const int bls_off = 0;
 #endif
 static int skipped;
 
-#if FORK_HAS_STF
 /*
  * Bytes of the scratch buffer. The runner fills all of it before every call, so its size sets most of the
  * runner's own time: it is the largest need of any call of the vectors, rounded up (tests/runner/README.md).
@@ -944,13 +940,13 @@ static void run_operations(const char *file, const char *handler, case_file *f) 
         if (state && op) {
             uint64_t result = 0xA5A5A5A5A5A5A5A5u, st;
             if (payload) {
-#if FORK >= FORK_CAPELLA
+#if FORK >= FORK_BELLATRIX
                 tv ex = tv_get(tv_get(parts, "execution"), "execution_valid");
                 uint64_t valid = ex && *ex == T_BOOL ? ex[1] : 1;
                 st = CALL(LF(process_execution_payload), state, op, &valid, config, fresh_scratch(), &result);
 #else
                 st = 1;
-                why = "no execution payload handler for this fork yet";
+                why = "the fork has no execution payload";
 #endif
             } else {
                 st = checked_call(OPS[k].name, (uint64_t)(uintptr_t)OPS[k].fn,
@@ -1109,7 +1105,6 @@ static void run_shuffling(const char *file, case_file *f) {
     }
 }
 
-#endif
 #if FORK == FORK_FULU
 /* ---------------------------------------------------------------- Custody */
 
@@ -1173,7 +1168,6 @@ static void run_custody(const char *file, const char *handler, case_file *f) {
 
 #endif
 
-#if FORK_HAS_STF
 /* ---------------------------------------------------------------- Rewards */
 
 /* Whether the IndexList pair (rewards, penalties) equals the SSZ Deltas in want. */
@@ -1241,7 +1235,6 @@ static void run_rewards(const char *file, case_file *f) {
     }
 }
 
-#endif
 
 #if FORK == FORK_FULU /* fork choice and networking: the fulu object so far */
 /* ---------------------------------------------------------------- Fork choice */
@@ -2222,7 +2215,6 @@ int main(int argc, char **argv) {
         /* The signatures-off runner runs only the handlers whose cases can have bls_setting 2. */
         if (!bls_off && !strcmp(kind, "descriptors")) run_descriptors(file, &f);
         else if (!bls_off && !strncmp(kind, "ssz_static-", 11)) run_ssz_static(file, kind + 11, &f);
-#if FORK_HAS_STF
         else if (!bls_off && !strncmp(kind, "epoch_processing-", 17)) run_epoch(file, kind + 17, &f);
         else if (!bls_off && !strcmp(kind, "shuffling-core")) run_shuffling(file, &f);
         else if (!strncmp(kind, "operations-", 11)) run_operations(file, kind + 11, &f);
@@ -2230,7 +2222,6 @@ int main(int argc, char **argv) {
         else if (!strcmp(kind, "sanity-blocks") || !strcmp(kind, "finality-finality") || !strcmp(kind, "random-random"))
             run_blocks(file, &f);
         else if (!bls_off && !strncmp(kind, "rewards-", 8)) run_rewards(file, &f);
-#endif
 #if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
                               !strcmp(kind, "networking-compute_columns_for_custody_group")))

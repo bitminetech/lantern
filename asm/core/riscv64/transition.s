@@ -212,6 +212,20 @@ SPEC_FUNCTION process_operations
 .if FORK >= FORK_FULU
     LDQ     t0, s2, BeaconBlockBody_deposits + 8    # assert len(body.deposits) == 0
     beqz    t0, 1f
+.elseif FORK == FORK_ELECTRA
+    LDQ     t0, s1, BeaconState_eth1_data + Eth1Data_deposit_count
+    LDQ     t1, s1, BeaconState_deposit_requests_start_index
+    bleu    t0, t1, 0f
+    mv      t0, t1                          # eth1_deposit_index_limit
+0:  LDQ     t1, s1, BeaconState_eth1_deposit_index
+    li      t2, 0                           # limit - eth1_deposit_index while below the limit, else 0
+    bleu    t0, t1, 3f
+    sub     t2, t0, t1
+3:  li      t1, MAX_DEPOSITS
+    bleu    t2, t1, 4f
+    mv      t2, t1
+4:  LDQ     t1, s2, BeaconBlockBody_deposits + 8    # assert len(body.deposits) == that
+    beq     t2, t1, 1f
 .else
     LDQ     t0, s1, BeaconState_eth1_data + Eth1Data_deposit_count
     LDQ     t1, s1, BeaconState_eth1_deposit_index
@@ -262,10 +276,10 @@ SPEC_END process_operations
 
 .if FORK >= FORK_ELECTRA
 /*
- * L0: a0 = LANTERN_OK when state a0 has room for the appends of block body a1,
- * else LANTERN_BUFFER_TOO_SMALL. A leaf.
+ * L0: a0 = LANTERN_OK when state a0 has room for the appends of the execution requests of
+ * block body a1 and t4 more pending deposits, else LANTERN_BUFFER_TOO_SMALL. A leaf.
  */
-LOCAL_FUNCTION block_room
+LOCAL_FUNCTION requests_room
     UNWIND_END_PROLOGUE
     PART    a2, a3, a1, BeaconBlockBody_execution_requests
     LDQ     a3, a2, ExecutionRequests_deposits + 8
@@ -275,7 +289,8 @@ LOCAL_FUNCTION block_room
     li      t1, 1
     blt     t0, t1, 9f
     FREE    BeaconState_pending_deposits, BeaconState_pending_partial_withdrawals, PendingDeposit__mem
-    add     a6, a3, a5                      # deposit requests, and the excess of each switch to compounding
+    add     a6, t4, a3                      # deposit requests, and the excess of each switch to compounding
+    add     a6, a6, a5
     blt     t0, a6, 9f
     FREE    BeaconState_pending_partial_withdrawals, BeaconState_pending_consolidations, PendingPartialWithdrawal__mem
     blt     t0, a4, 9f
@@ -290,7 +305,36 @@ LOCAL_FUNCTION block_room
     ret
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     ret
+END_FUNCTION requests_room
+
+.if FORK == FORK_ELECTRA
+/*
+ * L0: a0 = LANTERN_OK when state a0 has room for the appends of block body a1, else
+ * LANTERN_BUFFER_TOO_SMALL: a validator and a pending deposit for each deposit, and the
+ * appends of the execution requests. s1 state, s2 body.
+ */
+LOCAL_FUNCTION block_room
+    ENTER 0
+    mv      s1, a0
+    mv      s2, a1
+    call    validator_room
+    LDQ     t4, s2, BeaconBlockBody_deposits + 8
+    bltu    a0, t4, 9f
+    mv      a0, s1
+    mv      a1, s2
+    call    requests_room
+    LEAVE 0
+9:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 0
 END_FUNCTION block_room
+.else
+/* L0: requests_room with no deposits. */
+LOCAL_FUNCTION block_room
+    UNWIND_END_PROLOGUE
+    li      t4, 0
+    j       requests_room
+END_FUNCTION block_room
+.endif
 
 .else
 .if FORK == FORK_PHASE0
@@ -364,12 +408,10 @@ LOCAL_FUNCTION block_scratch
     mv      t1, t2
 1:
 .endif
-.if FORK >= FORK_CAPELLA
+.if FORK >= FORK_BELLATRIX
     PART    t3, t4, a1, BeaconBlockBody_execution_payload  # the payload: its header and transactions
-    LDQ     t4, t3, ExecutionPayload_withdrawals
-    LDQ     t5, t3, ExecutionPayload_transactions
-    sub     t4, t4, t5
-    li      t2, LANTERN_SCRATCH_FIXED + HEADER_ROOM + 24 + WLIST_BYTES
+    TX_BYTES t4, t3, t5
+    li      t2, LANTERN_SCRATCH_FIXED + HEADER_ROOM + 24 + PAYLOAD_WLIST_BYTES
     add     t2, t2, t4
     bleu    t2, t1, 2f
     mv      t1, t2
@@ -431,6 +473,23 @@ SPEC_FUNCTION process_block
     mv      a5, s6
     call    lantern_process_execution_payload
     BLOCK_STEP
+.elseif FORK == FORK_BELLATRIX
+    mv      a0, s1                          # if is_execution_enabled(state, block.body):
+    mv      a1, s7
+    addi    a2, sp, L
+    call    lantern_is_execution_enabled
+    ld      t0, L(sp)
+    beqz    t0, 1f
+    sd      s8, 0(s5)
+    mv      a0, s1
+    mv      a1, s7
+    mv      a2, s3
+    mv      a3, s4
+    mv      a4, s5
+    mv      a5, s6
+    call    lantern_process_execution_payload
+    BLOCK_STEP
+1:
 .endif
     sd      s8, 0(s5)
     mv      a0, s1

@@ -92,6 +92,7 @@ lantern_get_custody_groups(node_id, custody_group_count, config, out) -> status
 ### ABI
 
 - Argument order: `node_id`, `custody_group_count`, `config`, `out`.
+- Forks: fulu.
 
 ## Function `lantern_compute_columns_for_custody_group`
 
@@ -120,6 +121,7 @@ lantern_compute_columns_for_custody_group(custody_group, config, out) -> status
 ### ABI
 
 - Argument order: `custody_group`, `config`, `out`.
+- Forks: fulu.
 
 ## Function `lantern_compute_subnet_for_data_column_sidecar`
 
@@ -147,6 +149,7 @@ lantern_compute_subnet_for_data_column_sidecar(column_index, config, out) -> sta
 ### ABI
 
 - Argument order: `column_index`, `config`, `out`.
+- Forks: fulu.
 
 ## Function `lantern_verify_data_column_sidecar_inclusion_proof`
 
@@ -179,6 +182,7 @@ lantern_verify_data_column_sidecar_inclusion_proof(sidecar, scratch, out) -> sta
 ### ABI
 
 - Argument order: `sidecar`, `scratch`, `out`.
+- Forks: fulu.
 
 ## Function `lantern_verify_partial_data_column_header_inclusion_proof`
 
@@ -205,6 +209,7 @@ lantern_verify_partial_data_column_header_inclusion_proof(header, scratch, out) 
 ### ABI
 
 - Argument order: `header`, `scratch`, `out`.
+- Forks: fulu.
 
 ## Function `lantern_verify_partial_data_column_sidecar_kzg_proofs`
 
@@ -235,6 +240,7 @@ lantern_verify_partial_data_column_sidecar_kzg_proofs(sidecar, header, column_in
 ### ABI
 
 - Argument order: `sidecar`, `header`, `column_index`, `settings`, `scratch`, `out`.
+- Forks: fulu.
 
 ## Function `lantern_seen_size`
 

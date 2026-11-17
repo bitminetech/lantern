@@ -252,6 +252,14 @@ SPEC_FUNCTION process_deposit_request
     add     x1, sp, #L
     bl      append_pending_deposit
     cbnz    x0, 7f
+.if FORK == FORK_ELECTRA
+    LDQ     x9, x19, BeaconState_deposit_requests_start_index
+    cmn     x9, #1                          /* == UNSET_DEPOSIT_REQUESTS_START_INDEX: set it */
+    b.ne    1f
+    ldr     x9, [x20, #DepositRequest_index]
+    STQ     x9, x19, BeaconState_deposit_requests_start_index
+1:
+.endif
     str     xzr, [x21]
 7:  LEAVE 192
 SPEC_END process_deposit_request

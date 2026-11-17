@@ -230,6 +230,7 @@ SPEC_END process_bls_to_execution_change
 SPEC_FUNCTION process_deposit_request
     ENTER 192
     mov     %rdi, %rbx
+    mov     %rsi, %r12
     mov     %r8, %rbp
     lea     L(%rsp), %rdi                   # PendingDeposit(pubkey, withdrawal_credentials, amount, signature, slot=state.slot)
     mov     $(DepositRequest_signature + 96), %edx
@@ -241,6 +242,13 @@ SPEC_FUNCTION process_deposit_request
     call    append_pending_deposit
     test    %rax, %rax
     jnz     7f
+.if FORK == FORK_ELECTRA
+    cmpq    $-1, BeaconState_deposit_requests_start_index(%rbx)    # == UNSET_DEPOSIT_REQUESTS_START_INDEX: set it
+    jne     1f
+    mov     DepositRequest_index(%r12), %rcx
+    mov     %rcx, BeaconState_deposit_requests_start_index(%rbx)
+1:
+.endif
     movq    $0, (%rbp)
 7:  LEAVE 192
 SPEC_END process_deposit_request

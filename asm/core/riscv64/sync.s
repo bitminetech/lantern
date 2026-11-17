@@ -9,7 +9,7 @@
 /*
  * s1 state, s2 scratch, s3 out, s4 validator count, s5 scratch size, s6 active list,
  * s7 active count, s8 i, s9 members so far, s10 candidate.
- * Locals: L epoch, L+8 domain type, L+16 seed, L+48 message (seed, i // 16), L+88 digest,
+ * Locals: L epoch, L+8 domain type, L+16 seed, L+48 message (seed, i // 16 from electra, i // 32 before), L+88 digest,
  * L+120 i % count, L+128 shuffled index, L+136 active count.
  */
 SPEC_FUNCTION get_next_sync_committee_indices
@@ -69,25 +69,43 @@ SPEC_FUNCTION get_next_sync_committee_indices
     slli    t0, t0, 3
     add     t0, s6, t0
     ld      s10, LIST_FIXED(t0)             # candidate_index
+.if FORK >= FORK_ELECTRA
     srli    t0, s8, 4
+.else
+    srli    t0, s8, 5
+.endif
     sd      t0, (L + 80)(sp)
     addi    a0, sp, (L + 48)                # random_bytes = sha256(seed + uint_to_bytes(i // 16))
     li      a1, 40
     addi    a2, sp, (L + 88)
     call    sha256_short
+.if FORK >= FORK_ELECTRA
     andi    t0, s8, 15
     slli    t0, t0, 1
     add     t0, sp, t0
     lhu     t0, (L + 88)(t0)                # random_value
+.else
+    andi    t0, s8, 31
+    add     t0, sp, t0
+    lbu     t0, (L + 88)(t0)                # random_byte = sha256(seed + uint_to_bytes(i // 32))[i % 32]
+.endif
     PART    t1, t2, s1, BeaconState_validators
     slli    t2, s10, 7
     add     t1, t1, t2
     ld      t1, Validator_effective_balance(t1)
-    li      t2, 0xffff
+.if FORK >= FORK_ELECTRA
+    li      t2, 0xffff                      # MAX_RANDOM_VALUE
+.else
+    li      t2, 0xff                        # MAX_RANDOM_BYTE
+.endif
     mulhu   t3, t1, t2
     bnez    t3, 6f
     mul     t1, t1, t2
+.if FORK >= FORK_ELECTRA
     li      t2, MAX_EFFECTIVE_BALANCE_ELECTRA
+.else
+    li      t2, MAX_EFFECTIVE_BALANCE
+.endif
     mul     t2, t2, t0
     bltu    t1, t2, 2f
     slli    t0, s9, 3

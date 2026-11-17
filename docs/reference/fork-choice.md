@@ -107,6 +107,10 @@ lantern_get_forkchoice_store(anchor_state, anchor_block, config, room, scratch, 
 
 - Scratch: S(0).
 
+### ABI
+
+- Forks: fulu.
+
 ## Function `lantern_store_size`
 
 The bytes of a store with the capacities of room.
@@ -173,6 +177,10 @@ lantern_store_justified_checkpoint_state(store, state) -> status
 - For each entry i: `effective_balance` of validator i, `STORE_IN_REGISTRY`, and `STORE_ACTIVE_UNSLASHED` when it is active at get_current_epoch(state) and not slashed; entries past the registry get 0 and lose both flags. `STORE_EQUIVOCATING` stays.
 - Sets `balances_total` to get_total_balance of the active unslashed validators, and `balances_checkpoint` to `justified_checkpoint`.
 
+### ABI
+
+- Forks: fulu.
+
 ## Function `lantern_get_current_slot`
 
 (store.time_ms - store.genesis_time_ms) // SLOT_DURATION_MS.
@@ -188,6 +196,10 @@ lantern_get_current_slot(store, out) -> status
 - `LANTERN_OK`: `out` holds the slot.
 - `LANTERN_INVALID_OVERFLOW`: `time_ms` is before `genesis_time_ms`.
 
+### ABI
+
+- Forks: fulu.
+
 ## Function `lantern_get_current_store_epoch`
 
 compute_epoch_at_slot(get_current_slot(store)).
@@ -201,6 +213,10 @@ lantern_get_current_store_epoch(store, out) -> status
 ### Returns
 
 - As lantern_get_current_slot.
+
+### ABI
+
+- Forks: fulu.
 
 ## Function `lantern_get_ancestor`
 
@@ -221,6 +237,10 @@ lantern_get_ancestor(store, node, slot, out) -> status
 
 - Pass a node of the store.
 
+### ABI
+
+- Forks: fulu.
+
 ## Function `lantern_get_checkpoint_block`
 
 The root of get_ancestor(root, compute_start_slot_at_epoch(epoch)).
@@ -236,6 +256,10 @@ lantern_get_checkpoint_block(store, root, epoch, out) -> status
 - `LANTERN_OK`: `out` holds the Root.
 - `LANTERN_INVALID_UNKNOWN_BLOCK`: root is not in the store, or the walk leaves it.
 - `LANTERN_INVALID_OVERFLOW`: the start slot of epoch does not fit.
+
+### ABI
+
+- Forks: fulu.
 
 ## Function `lantern_get_weight`
 
@@ -256,6 +280,10 @@ lantern_get_weight(store, node, out) -> status
 ### Function does
 
 - get_attestation_score: the sum of `effective_balance` over the entries with `STORE_ACTIVE_UNSLASHED`, a latest message, no `STORE_EQUIVOCATING`, and is_ancestor(latest message node, node).
+
+### ABI
+
+- Forks: fulu.
 
 ## Function `lantern_get_filtered_node_tree`
 
@@ -293,6 +321,10 @@ lantern_get_filtered_node_tree(store, scratch, out) -> status
 
 - Scratch: S(1), with n the node count of the store.
 
+### ABI
+
+- Forks: fulu.
+
 ## Function `lantern_get_head`
 
 From the justified node, the child of greatest (weight, root) among the viable nodes, until a node has no viable child.
@@ -319,6 +351,10 @@ lantern_get_head(store, scratch, out) -> status
 
 - Scratch: S(1), with n the node count of the store.
 
+### ABI
+
+- Forks: fulu.
+
 ## Function `lantern_on_tick`
 
 on_tick_per_slot at the start of each slot up to the slot of time_ms, then at time_ms.
@@ -336,6 +372,10 @@ lantern_on_tick(store, time_ms, result) -> status
 ### Function does
 
 - on_tick_per_slot: sets `time_ms`; at a new slot clears `proposer_boost_root`; at a new epoch runs update_checkpoints with the unrealized checkpoints.
+
+### ABI
+
+- Forks: fulu.
 
 ## Function `lantern_on_block`
 
@@ -383,6 +423,10 @@ lantern_on_block(store, signed_block, state, options, scratch, result) -> status
 
 - Scratch: that of lantern_state_transition, and S(1) with n the node count of the store.
 
+### ABI
+
+- Forks: fulu.
+
 ## Function `lantern_validate_on_attestation`
 
 The asserts of validate_on_attestation.
@@ -401,6 +445,10 @@ lantern_validate_on_attestation(store, attestation, is_from_block) -> status
 - `LANTERN_INVALID_ATTESTATION_SLOT`: the head vote's block is after the attestation's slot.
 - `LANTERN_INVALID_FUTURE_SLOT`: the current slot is not after the attestation's slot.
 - `LANTERN_INVALID_OVERFLOW`: a slot sum does not fit.
+
+### ABI
+
+- Forks: fulu.
 
 ## Function `lantern_store_target_checkpoint_state`
 
@@ -429,6 +477,10 @@ lantern_store_target_checkpoint_state(state, target, config, scratch, result) ->
 ### Caller must
 
 - Keep `state` as `store.checkpoint_states[target]`. The spec skips the call when the target is already there.
+
+### ABI
+
+- Forks: fulu.
 
 ## Function `lantern_on_attestation`
 
@@ -468,6 +520,10 @@ lantern_on_attestation(store, attestation, is_from_block, target_state, scratch,
 
 - Scratch: S(8) + `FC_ATTEST_EXTRA`, with n the validators of `target_state`.
 
+### ABI
+
+- Forks: fulu.
+
 ## Function `lantern_on_attester_slashing`
 
 Marks the indices common to both attestations of a valid slashing as equivocating.
@@ -496,6 +552,10 @@ lantern_on_attester_slashing(store, attester_slashing, state, scratch, result) -
 ### Limits
 
 - Scratch: S(7).
+
+### ABI
+
+- Forks: fulu.
 
 ## Function `lantern_get_proposer_head`
 
@@ -534,6 +594,10 @@ lantern_get_proposer_head(store, head, slot, head_state, scratch, out) -> status
 ### Limits
 
 - Scratch: S(3), with n the validators of `head_state`.
+
+### ABI
+
+- Forks: fulu.
 
 ## Function `lantern_store_payload_status`
 
@@ -594,6 +658,10 @@ lantern_is_data_available(sidecars, settings, config, scratch, out) -> status
 
 - Scratch: `DA_SCRATCH_FIXED` + n * `DA_SCRATCH_PER_BLOB`, with n the most commitments of one sidecar.
 
+### ABI
+
+- Forks: fulu.
+
 ## Function `lantern_verify_data_column_sidecar`
 
 The index, the commitment count against the blob limit of the epoch, and the column and proof counts.
@@ -607,6 +675,10 @@ lantern_verify_data_column_sidecar(sidecar, config, out) -> status
 ### Returns
 
 - `LANTERN_OK`: `out` holds 1 or 0.
+
+### ABI
+
+- Forks: fulu.
 
 ## Function `lantern_verify_data_column_sidecar_kzg_proofs`
 
@@ -634,6 +706,10 @@ lantern_verify_data_column_sidecar_kzg_proofs(sidecar, settings, scratch, out) -
 ### Limits
 
 - Scratch: `DA_SCRATCH_FIXED` + n * `DA_SCRATCH_PER_BLOB`, with n the commitments of the sidecar.
+
+### ABI
+
+- Forks: fulu.
 
 ## Type `Store`
 

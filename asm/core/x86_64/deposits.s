@@ -289,7 +289,71 @@ SPEC_FUNCTION add_validator_to_registry
     LEAVE 144
 SPEC_END add_validator_to_registry
 
-.if FORK <= FORK_DENEB
+.if FORK <= FORK_ELECTRA
+.if FORK == FORK_ELECTRA
+/*
+ * The deposit's (pubkey, withdrawal_credentials, amount, signature) are the fields of the
+ * DepositData at rsi. rbx state, rbp data, r12 config, r13 scratch.
+ * Locals: L zero amount, L+8 valid, L+16 the PendingDeposit.
+ */
+SPEC_FUNCTION apply_deposit
+    ENTER 208
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    mov     BeaconState_pending_deposits(%rbx), %rax    # room for the PendingDeposit, before any change
+    mov     (BeaconState_pending_deposits + 8)(%rbx), %rcx
+    mov     BeaconState_pending_partial_withdrawals(%rbx), %rdx
+    sub     %rax, %rdx
+    inc     %rcx
+    imul    $PendingDeposit__mem, %rcx, %rcx
+    cmp     %rdx, %rcx
+    ja      9f
+    mov     %rbx, %rdi
+    lea     DepositData_pubkey(%rbp), %rsi  # if pubkey not in validator_pubkeys
+    call    find_pubkey
+    cmp     $-1, %rax
+    jne     5f
+    mov     %rbx, %rdi                      # room for the validator, before any change
+    call    validator_room
+    test    %rax, %rax
+    jz      9f
+    mov     %rbp, %rdi
+    mov     %r12, %rsi
+    mov     %r13, %rdx
+    lea     (L + 8)(%rsp), %rcx
+    call    lantern_is_valid_deposit_signature
+    test    %rax, %rax
+    jnz     7f
+    cmpq    $0, (L + 8)(%rsp)
+    je      8f                              # an invalid signature: the deposit is skipped
+    movq    $0, L(%rsp)
+    mov     %rbx, %rdi                      # add_validator_to_registry(state, pubkey, withdrawal_credentials, Gwei(0))
+    lea     DepositData_pubkey(%rbp), %rsi
+    lea     DepositData_withdrawal_credentials(%rbp), %rdx
+    lea     L(%rsp), %rcx
+    call    lantern_add_validator_to_registry
+    test    %rax, %rax
+    jnz     7f
+5:  lea     (L + 16)(%rsp), %rdi            # state.pending_deposits.append(PendingDeposit(..., slot=GENESIS_SLOT))
+    mov     %rbp, %rsi
+    mov     $DepositData__mem, %edx
+    call    lantern_copy
+    movq    $0, (L + 16 + PendingDeposit_slot)(%rsp)
+    mov     %rbx, %rdi
+    lea     (L + 16)(%rsp), %rsi
+    call    append_pending_deposit
+    jmp     7f
+8:  xor     %eax, %eax
+7:  LEAVE 208
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 208
+SPEC_END apply_deposit
+.if (PendingDeposit_slot != DepositData__mem) || (PendingDeposit__mem > 192)
+.error "apply_deposit copies a DepositData into the first fields of a PendingDeposit"
+.endif
+.else
 /*
  * The deposit's (pubkey, withdrawal_credentials, amount, signature) are the fields of the
  * DepositData at rsi. rbx state, rbp data, r12 config, r13 scratch. Locals: L index, L+8 valid.
@@ -333,6 +397,7 @@ SPEC_FUNCTION apply_deposit
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
 SPEC_END apply_deposit
+.endif
 
 /*
  * rbx state, rbp deposit, r12 config, r13 scratch, r14 result, r15 scratch size.
@@ -491,6 +556,14 @@ SPEC_FUNCTION process_pending_deposits
     imul    $PendingDeposit__mem, %r14, %rax
     add     %rax, %rsi
     mov     PendingDeposit_slot(%rsi), %rax
+.if FORK == FORK_ELECTRA
+    test    %rax, %rax                      # a deposit request (slot > GENESIS_SLOT)
+    jz      11f
+    mov     BeaconState_eth1_deposit_index(%rbx), %rcx
+    cmp     BeaconState_deposit_requests_start_index(%rbx), %rcx    # while Eth1 bridge deposits are pending
+    jb      4f
+11:
+.endif
     cmp     (L + 32)(%rsp), %rax            # a deposit not yet finalized
     ja      4f
     cmp     $MAX_PENDING_DEPOSITS_PER_EPOCH, %r14

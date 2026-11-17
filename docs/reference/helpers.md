@@ -66,7 +66,7 @@
 - `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
 - A function never makes an OS call and never keeps a pointer after it returns.
 - Role: L1. Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
-- Forks: the state transition is in the objects of phase0 and fulu. A function says under Function does what the forks change, and under ABI the forks that have it when not all do.
+- Forks: the state transition is in the object of every fork. A function says under Function does what the forks change, and under ABI the forks that have it when not all do.
 - Symbol: `lantern_<fork>_<name>` for the function `lantern_<name>`, in the object of each fork that the core builds (`FORKS` in platform/objects.sh), with `_` before it on macOS. Calls inside an object use its local label `lantern_<name>`.
 
 ## Function `lantern_integer_squareroot`
@@ -255,6 +255,7 @@ lantern_is_compounding_withdrawal_credential(withdrawal_credentials, out) -> sta
 ### ABI
 
 - Argument order: `withdrawal_credentials`, `out`.
+- Forks: electra and later.
 
 ## Function `lantern_has_compounding_withdrawal_credential`
 
@@ -280,6 +281,7 @@ lantern_has_compounding_withdrawal_credential(validator, out) -> status
 ### ABI
 
 - Argument order: `validator`, `out`.
+- Forks: electra and later.
 
 ## Function `lantern_get_max_effective_balance`
 
@@ -305,6 +307,7 @@ lantern_get_max_effective_balance(validator, out) -> status
 ### ABI
 
 - Argument order: `validator`, `out`.
+- Forks: electra and later.
 
 ## Function `lantern_compute_epoch_at_slot`
 
@@ -711,6 +714,7 @@ lantern_has_flag(flags, flag_index, out) -> status
 ### ABI
 
 - Argument order: `flags`, `flag_index`, `out`.
+- Forks: altair and later.
 
 ## Function `lantern_add_flag`
 
@@ -737,6 +741,7 @@ lantern_add_flag(flags, flag_index, out) -> status
 ### ABI
 
 - Argument order: `flags`, `flag_index`, `out`.
+- Forks: altair and later.
 
 ## Function `lantern_get_finality_delay`
 
@@ -843,6 +848,7 @@ lantern_get_unslashed_participating_indices(state, flag_index, epoch, scratch, o
 ### ABI
 
 - Argument order: `state`, `flag_index`, `epoch`, `scratch`, `out`.
+- Forks: altair and later.
 
 ## Function `lantern_get_base_reward_per_increment`
 
@@ -870,6 +876,7 @@ lantern_get_base_reward_per_increment(state, scratch, out) -> status
 ### ABI
 
 - Argument order: `state`, `scratch`, `out`.
+- Forks: altair and later.
 
 ## Function `lantern_get_base_reward`
 
@@ -1069,6 +1076,7 @@ lantern_compute_proposer_indices(state, epoch, seed, indices, scratch, out) -> s
 ### ABI
 
 - Argument order: `state`, `epoch`, `seed`, `indices`, `scratch`, `out`.
+- Forks: fulu.
 
 ## Function `lantern_get_beacon_proposer_indices`
 
@@ -1098,6 +1106,7 @@ lantern_get_beacon_proposer_indices(state, epoch, scratch, out) -> status
 ### ABI
 
 - Argument order: `state`, `epoch`, `scratch`, `out`.
+- Forks: fulu.
 
 ## Function `lantern_compute_fork_data_root`
 

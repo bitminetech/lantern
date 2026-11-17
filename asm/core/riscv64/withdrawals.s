@@ -21,6 +21,7 @@ SPEC_LEAF has_eth1_withdrawal_credential
     RETURN_OK
 SPEC_END has_eth1_withdrawal_credential
 
+.if FORK >= FORK_ELECTRA
 /* Locals: sp+0 validator, sp+8 out, sp+16 the eth1 flag. */
 SPEC_FUNCTION has_execution_withdrawal_credential
     FRAME 32
@@ -39,6 +40,18 @@ SPEC_FUNCTION has_execution_withdrawal_credential
     li      a0, LANTERN_OK
     UNFRAME 32
 SPEC_END has_execution_withdrawal_credential
+.endif
+
+/* Before electra the two predicates take has_eth1_withdrawal_credential and MAX_EFFECTIVE_BALANCE. */
+.if FORK >= FORK_ELECTRA
+.macro WITHDRAWAL_CREDENTIAL
+    call    lantern_has_execution_withdrawal_credential
+.endm
+.else
+.macro WITHDRAWAL_CREDENTIAL
+    call    lantern_has_eth1_withdrawal_credential
+.endm
+.endif
 
 /* Locals: sp+0 validator, sp+8 balance, sp+16 epoch, sp+24 out, sp+32 the credential flag. */
 SPEC_FUNCTION is_fully_withdrawable_validator
@@ -48,7 +61,7 @@ SPEC_FUNCTION is_fully_withdrawable_validator
     sd      a2, 16(sp)
     sd      a3, 24(sp)
     addi    a1, sp, 32
-    call    lantern_has_execution_withdrawal_credential
+    WITHDRAWAL_CREDENTIAL
     ld      a0, 0(sp)
     ld      a1, 8(sp)
     ld      a2, 16(sp)
@@ -72,11 +85,16 @@ SPEC_FUNCTION is_partially_withdrawable_validator
     sd      a0, 0(sp)
     sd      a1, 8(sp)
     sd      a2, 16(sp)
+.if FORK >= FORK_ELECTRA
     addi    a1, sp, 24
     call    lantern_get_max_effective_balance
+.else
+    li      t0, MAX_EFFECTIVE_BALANCE
+    sd      t0, 24(sp)
+.endif
     ld      a0, 0(sp)
     addi    a1, sp, 32
-    call    lantern_has_execution_withdrawal_credential
+    WITHDRAWAL_CREDENTIAL
     ld      a0, 0(sp)
     ld      a1, 8(sp)
     ld      t0, 32(sp)                      # has_execution_withdrawal_credential
@@ -93,6 +111,7 @@ SPEC_FUNCTION is_partially_withdrawable_validator
     UNFRAME 48
 SPEC_END is_partially_withdrawable_validator
 
+.if FORK >= FORK_ELECTRA
 SPEC_LEAF is_eligible_for_partial_withdrawals
     ld      a3, Validator_exit_epoch(a0)
     ld      a4, Validator_effective_balance(a0)
@@ -126,6 +145,7 @@ SPEC_LEAF get_pending_balance_to_withdraw
 4:  li      a0, LANTERN_INVALID_OVERFLOW
     ret
 SPEC_END get_pending_balance_to_withdraw
+.endif
 
 /* ---------------------------------------------------------------- Expected withdrawals */
 
@@ -215,6 +235,7 @@ LOCAL_FUNCTION append_withdrawal
     ret
 END_FUNCTION append_withdrawal
 
+.if FORK >= FORK_ELECTRA
 /*
  * s1 state, s2 withdrawal index, s3 prior, s4 scratch, s5 out, s6 all,
  * s7 limit, s8 entry, s9 entries left, s10 processed.
@@ -308,6 +329,7 @@ SPEC_FUNCTION get_pending_partial_withdrawals
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
 SPEC_END get_pending_partial_withdrawals
+.endif
 
 /*
  * s1 state, s2 withdrawal index, s3 prior, s4 scratch, s5 out, s6 all,
@@ -381,6 +403,7 @@ SPEC_FUNCTION get_validators_sweep_withdrawals
     call    lantern_is_partially_withdrawable_validator
     ld      t0, (L + 24)(sp)
     beqz    t0, 41f
+.if FORK >= FORK_ELECTRA
     PART    a0, t0, s1, BeaconState_validators
     slli    t0, s8, 7
     add     a0, a0, t0
@@ -389,6 +412,11 @@ SPEC_FUNCTION get_validators_sweep_withdrawals
     ld      a4, (L + 16)(sp)                # amount = balance - get_max_effective_balance(validator)
     ld      t0, (L + 32)(sp)
     sub     a4, a4, t0
+.else
+    ld      a4, (L + 16)(sp)                # amount = balance - MAX_EFFECTIVE_BALANCE
+    li      t0, MAX_EFFECTIVE_BALANCE
+    sub     a4, a4, t0
+.endif
 4:  PART    a3, t0, s1, BeaconState_validators
     slli    t0, s8, 7
     add     a3, a3, t0
@@ -437,6 +465,7 @@ SPEC_FUNCTION get_expected_withdrawals
     sd      zero, LIST_COUNT(t0)
     LDQ     t0, s1, BeaconState_next_withdrawal_index
     sd      t0, L(sp)
+.if FORK >= FORK_ELECTRA
     li      t0, 2 * SWEEP_BYTES
     sub     t0, s4, t0
     sd      t0, 0(s2)
@@ -451,11 +480,18 @@ SPEC_FUNCTION get_expected_withdrawals
     addi    a1, s3, 16
     addi    a2, s5, 16
     call    concat_withdrawals
+.else
+    sd      zero, 8(s5)                     # no partial withdrawals before electra
+.endif
     li      t0, 2 * SWEEP_BYTES
     sub     t0, s4, t0
     sd      t0, 0(s2)
     mv      a0, s1                          # get_validators_sweep_withdrawals(state, withdrawal_index, withdrawals)
+.if FORK >= FORK_ELECTRA
     mv      a1, s5
+.else
+    addi    a1, sp, L
+.endif
     addi    a2, s3, 16
     mv      a3, s2
     mv      a4, s6
@@ -508,6 +544,7 @@ SPEC_LEAF update_next_withdrawal_index
 1:  RETURN_OK
 SPEC_END update_next_withdrawal_index
 
+.if FORK >= FORK_ELECTRA
 SPEC_FUNCTION update_pending_partial_withdrawals
     FRAME 0
     ld      t0, 0(a1)
@@ -524,6 +561,7 @@ SPEC_FUNCTION update_pending_partial_withdrawals
 1:  li      a0, LANTERN_OK
     UNFRAME 0
 SPEC_END update_pending_partial_withdrawals
+.endif
 
 SPEC_LEAF update_next_withdrawal_validator_index
     LDQ     a4, a0, BeaconState_validators + 8
@@ -589,9 +627,11 @@ SPEC_FUNCTION process_withdrawals
     mv      a0, s1
     addi    a1, s5, 16
     call    lantern_update_next_withdrawal_index
+.if FORK >= FORK_ELECTRA
     mv      a0, s1
     mv      a1, s5                          # processed_partial_withdrawals_count
     call    lantern_update_pending_partial_withdrawals
+.endif
     mv      a0, s1
     addi    a1, s5, 16
     call    lantern_update_next_withdrawal_validator_index

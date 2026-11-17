@@ -598,6 +598,10 @@ SPEC_FUNCTION get_attestation_participation_flag_indices
     add     $8, %rcx
 4:  test    %r15, %r15
     jz      5f
+.if FORK < FORK_DENEB
+    cmp     $SLOTS_PER_EPOCH, %r12          # and inclusion_delay <= SLOTS_PER_EPOCH
+    ja      5f
+.endif
     movq    $TIMELY_TARGET_FLAG_INDEX, (%rcx)
     add     $8, %rcx
 5:  cmpq    $0, S7(%rsp)
@@ -855,6 +859,14 @@ SPEC_FUNCTION process_attestation
     jc      5f
     cmp     BeaconState_slot(%rbx), %rdx
     ja      6f
+.if FORK < FORK_DENEB
+    mov     (Attestation_data + AttestationData_slot)(%rbp), %rdx   # assert state.slot <= data.slot + SLOTS_PER_EPOCH
+    add     $SLOTS_PER_EPOCH, %rdx
+    jc      5f
+    cmp     BeaconState_slot(%rbx), %rdx
+    jb      6f
+.endif
+.if FORK >= FORK_ELECTRA
     cmpq    $0, (Attestation_data + AttestationData_index)(%rbp)  # assert data.index == 0
     jne     6f
     lea     Attestation_committee_bits(%rbp), %rdi
@@ -916,6 +928,34 @@ SPEC_FUNCTION process_attestation
 3:  mov     $LANTERN_INVALID_ATTESTATION, %eax  # assert len(attestation.aggregation_bits) == committee_offset
     cmp     (Attestation_aggregation_bits + 8)(%rbp), %r14
     jne     6f
+.else
+    mov     (L + 160)(%rsp), %rax
+    mov     %rax, (%r12)
+    mov     %rbx, %rdi                      # assert data.index < get_committee_count_per_slot(state, data.target.epoch)
+    lea     (Attestation_data + AttestationData_target + Checkpoint_epoch)(%rbp), %rsi
+    mov     %r12, %rdx
+    lea     (L + 16)(%rsp), %rcx
+    call    lantern_get_committee_count_per_slot
+    test    %rax, %rax
+    jnz     7f
+    mov     (Attestation_data + AttestationData_index)(%rbp), %rcx
+    mov     $LANTERN_INVALID_ATTESTATION, %eax
+    cmp     (L + 16)(%rsp), %rcx
+    jae     6f
+    mov     (L + 160)(%rsp), %rax
+    mov     %rax, (%r12)
+    mov     %rbx, %rdi                      # committee = get_beacon_committee(state, data.slot, data.index)
+    lea     (Attestation_data + AttestationData_slot)(%rbp), %rsi
+    lea     (Attestation_data + AttestationData_index)(%rbp), %rdx
+    mov     %r12, %rcx
+    mov     %r15, %r8
+    call    lantern_get_beacon_committee
+    CHECK_STATUS %r13, 7f, 8f
+    mov     $LANTERN_INVALID_ATTESTATION, %eax  # assert len(attestation.aggregation_bits) == len(committee)
+    mov     LIST_COUNT(%r15), %rcx
+    cmp     (Attestation_aggregation_bits + 8)(%rbp), %rcx
+    jne     6f
+.endif
     mov     BeaconState_slot(%rbx), %rax
     sub     (Attestation_data + AttestationData_slot)(%rbp), %rax
     mov     %rax, (L + 32)(%rsp)
@@ -1019,9 +1059,20 @@ SPEC_FUNCTION process_attestation
     xor     %edx, %edx
     div     %rcx
     mov     %rax, (L + 120)(%rsp)
+.if FORK >= FORK_FULU
     mov     %rbx, %rdi
     lea     (L + 96)(%rsp), %rsi
     call    lantern_get_beacon_proposer_index
+.else
+    mov     (L + 160)(%rsp), %rax
+    mov     %rax, (%r12)
+    mov     %rbx, %rdi
+    mov     %r12, %rsi
+    lea     (L + 96)(%rsp), %rdx
+    call    lantern_get_beacon_proposer_index
+    test    %rax, %rax
+    jnz     7f
+.endif
     mov     %rbx, %rdi
     lea     (L + 96)(%rsp), %rsi
     lea     (L + 120)(%rsp), %rdx

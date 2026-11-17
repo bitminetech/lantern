@@ -1407,7 +1407,11 @@ SPEC_FUNCTION process_historical_summaries_update
     bltu    t0, t1, 9f
     LDQ     t0, s1, BeaconState_historical_summaries
     LDQ     t1, s1, BeaconState_historical_summaries + 8
+.if FORK >= FORK_ELECTRA
     LDQ     t2, s1, BeaconState_pending_deposits        # the next part starts its room's end
+.else
+    ld      t2, 0(s1)                       # the last part ends at the end of the value
+.endif
     sub     t2, t2, t0
     addi    t3, t1, 1
     slli    t3, t3, 6                       # HistoricalSummary__mem is 64

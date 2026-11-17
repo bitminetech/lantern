@@ -62,7 +62,11 @@ SPEC_FUNCTION process_sync_aggregate
     mv      s3, a2
     mv      s4, a3
     mv      s5, a4
+.if FORK >= FORK_FULU
     NEED_SCRATCH_B s4, s1, 1, SYNC_AGG_EXTRA, 9f
+.else
+    NEED_SCRATCH_B s4, s1, 2, SYNC_AGG_EXTRA, 9f    # get_beacon_proposer_index takes S(2)
+.endif
     sd      zero, 0(s5)
     ld      s6, 0(s4)
     li      t0, SYNC_KEYS_LIST              # own scratch at the end: keys, committee indices, points
@@ -237,6 +241,18 @@ SPEC_FUNCTION process_sync_aggregate
     li      t1, (WEIGHT_DENOMINATOR - PROPOSER_WEIGHT)
     divu    t0, t0, t1
     sd      t0, (L + 184)(sp)
+    mv      a0, s1                          # get_beacon_proposer_index(state): the loop changes only balances
+.if FORK >= FORK_FULU
+    addi    a1, sp, (L + 192)
+.else
+    li      t0, SYNC_AGG_EXTRA
+    sub     t0, s6, t0
+    sd      t0, 0(s4)
+    mv      a1, s4
+    addi    a2, sp, (L + 192)
+.endif
+    call    lantern_get_beacon_proposer_index
+    bnez    a0, 7f
     li      s10, 0
 43: li      t1, SYNC_COMMITTEE_SIZE
     bgeu    s10, t1, 8f
@@ -247,9 +263,6 @@ SPEC_FUNCTION process_sync_aggregate
     mv      a0, s1                          # increase_balance(state, participant_index, participant_reward)
     addi    a2, sp, (L + 176)
     call    lantern_increase_balance
-    mv      a0, s1
-    addi    a1, sp, (L + 192)
-    call    lantern_get_beacon_proposer_index
     mv      a0, s1                          # increase_balance(state, proposer, proposer_reward)
     addi    a1, sp, (L + 192)
     addi    a2, sp, (L + 184)

@@ -210,6 +210,20 @@ SPEC_FUNCTION process_operations
 .if FORK >= FORK_FULU
     LDQ     x9, x20, BeaconBlockBody_deposits + 8   /* assert len(body.deposits) == 0 */
     cbz     x9, 1f
+.elseif FORK == FORK_ELECTRA
+    LDQ     x9, x19, BeaconState_eth1_data + Eth1Data_deposit_count
+    LDQ     x10, x19, BeaconState_deposit_requests_start_index
+    cmp     x9, x10
+    csel    x9, x9, x10, lo                 /* eth1_deposit_index_limit */
+    LDQ     x10, x19, BeaconState_eth1_deposit_index
+    subs    x9, x9, x10
+    csel    x9, x9, xzr, hi                 /* limit - eth1_deposit_index while below the limit, else 0 */
+    mov     x10, #MAX_DEPOSITS
+    cmp     x9, x10
+    csel    x9, x9, x10, lo
+    LDQ     x10, x20, BeaconBlockBody_deposits + 8   /* assert len(body.deposits) == that */
+    cmp     x10, x9
+    b.eq    1f
 .else
     LDQ     x9, x19, BeaconState_eth1_data + Eth1Data_deposit_count
     LDQ     x10, x19, BeaconState_eth1_deposit_index
@@ -261,10 +275,10 @@ SPEC_END process_operations
 
 .if FORK >= FORK_ELECTRA
 /*
- * L0: x0 = LANTERN_OK when state x0 has room for the appends of block body x1,
- * else LANTERN_BUFFER_TOO_SMALL. A leaf.
+ * L0: x0 = LANTERN_OK when state x0 has room for the appends of the execution requests of
+ * block body x1 and x6 more pending deposits, else LANTERN_BUFFER_TOO_SMALL. A leaf.
  */
-LOCAL_FUNCTION block_room
+LOCAL_FUNCTION requests_room
     UNWIND_END_PROLOGUE
     PART    x2, x3, x1, BeaconBlockBody_execution_requests
     LDQ     x3, x2, ExecutionRequests_deposits + 8
@@ -274,7 +288,8 @@ LOCAL_FUNCTION block_room
     cmp     x9, #1
     b.lt    9f
     FREE    BeaconState_pending_deposits, BeaconState_pending_partial_withdrawals, PendingDeposit__mem
-    add     x6, x3, x5                      /* deposit requests, and the excess of each switch to compounding */
+    add     x6, x6, x3                      /* deposit requests, and the excess of each switch to compounding */
+    add     x6, x6, x5
     cmp     x9, x6
     b.lt    9f
     FREE    BeaconState_pending_partial_withdrawals, BeaconState_pending_consolidations, PendingPartialWithdrawal__mem
@@ -292,7 +307,37 @@ LOCAL_FUNCTION block_room
     ret
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     ret
+END_FUNCTION requests_room
+
+.if FORK == FORK_ELECTRA
+/*
+ * L0: x0 = LANTERN_OK when state x0 has room for the appends of block body x1, else
+ * LANTERN_BUFFER_TOO_SMALL: a validator and a pending deposit for each deposit, and the
+ * appends of the execution requests. x19 state, x20 body.
+ */
+LOCAL_FUNCTION block_room
+    ENTER 0
+    mov     x19, x0
+    mov     x20, x1
+    bl      validator_room
+    LDQ     x6, x20, BeaconBlockBody_deposits + 8
+    cmp     x0, x6
+    b.lo    9f
+    mov     x0, x19
+    mov     x1, x20
+    bl      requests_room
+    LEAVE 0
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 0
 END_FUNCTION block_room
+.else
+/* L0: requests_room with no deposits. */
+LOCAL_FUNCTION block_room
+    UNWIND_END_PROLOGUE
+    mov     x6, #0
+    b       requests_room
+END_FUNCTION block_room
+.endif
 .else
 .if FORK == FORK_PHASE0
 /* x9 = the free bytes of a list of nested values of state x0: its end x12 - its start - its entries' sizes. Uses x10, x11, x13. */

@@ -291,7 +291,68 @@ SPEC_FUNCTION add_validator_to_registry
     LEAVE 144
 SPEC_END add_validator_to_registry
 
-.if FORK <= FORK_DENEB
+.if FORK <= FORK_ELECTRA
+.if FORK == FORK_ELECTRA
+/*
+ * The deposit's (pubkey, withdrawal_credentials, amount, signature) are the fields of the
+ * DepositData at a1. s1 state, s2 data, s3 config, s4 scratch.
+ * Locals: L zero amount, L+8 valid, L+16 the PendingDeposit.
+ */
+SPEC_FUNCTION apply_deposit
+    ENTER 208
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+    LDQ     t1, s1, BeaconState_pending_deposits    # room for the PendingDeposit, before any change
+    LDQ     t2, s1, BeaconState_pending_deposits + 8
+    LDQ     t3, s1, BeaconState_pending_partial_withdrawals
+    sub     t3, t3, t1
+    addi    t2, t2, 1
+    li      t4, PendingDeposit__mem
+    mul     t2, t2, t4
+    bgtu    t2, t3, 9f
+    mv      a0, s1
+    addi    a1, s2, DepositData_pubkey      # if pubkey not in validator_pubkeys
+    call    find_pubkey
+    li      t0, -1
+    bne     a0, t0, 5f
+    mv      a0, s1                          # room for the validator, before any change
+    call    validator_room
+    beqz    a0, 9f
+    mv      a0, s2
+    mv      a1, s3
+    mv      a2, s4
+    addi    a3, sp, (L + 8)
+    call    lantern_is_valid_deposit_signature
+    bnez    a0, 7f
+    ld      t0, (L + 8)(sp)
+    beqz    t0, 8f                          # an invalid signature: the deposit is skipped
+    sd      zero, L(sp)
+    mv      a0, s1                          # add_validator_to_registry(state, pubkey, withdrawal_credentials, Gwei(0))
+    addi    a1, s2, DepositData_pubkey
+    addi    a2, s2, DepositData_withdrawal_credentials
+    addi    a3, sp, L
+    call    lantern_add_validator_to_registry
+    bnez    a0, 7f
+5:  addi    a0, sp, (L + 16)                # state.pending_deposits.append(PendingDeposit(..., slot=GENESIS_SLOT))
+    mv      a1, s2
+    li      a2, DepositData__mem
+    call    lantern_copy
+    sd      zero, (L + 16 + PendingDeposit_slot)(sp)
+    mv      a0, s1
+    addi    a1, sp, (L + 16)
+    call    append_pending_deposit
+    j       7f
+8:  li      a0, LANTERN_OK
+7:  LEAVE 208
+9:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 208
+SPEC_END apply_deposit
+.if (PendingDeposit_slot != DepositData__mem) || (PendingDeposit__mem > 192)
+.error "apply_deposit copies a DepositData into the first fields of a PendingDeposit"
+.endif
+.else
 /*
  * The deposit's (pubkey, withdrawal_credentials, amount, signature) are the fields of the
  * DepositData at a1. s1 state, s2 data, s3 config, s4 scratch. Locals: L index, L+8 valid.
@@ -333,6 +394,7 @@ SPEC_FUNCTION apply_deposit
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
 SPEC_END apply_deposit
+.endif
 
 /*
  * s1 state, s2 deposit, s3 config, s4 scratch, s5 result, s6 scratch size.
@@ -488,6 +550,13 @@ SPEC_FUNCTION process_pending_deposits
     mul     t2, s9, t2
     add     t0, t0, t2
     ld      t1, PendingDeposit_slot(t0)
+.if FORK == FORK_ELECTRA
+    beqz    t1, 11f                         # a deposit request (slot > GENESIS_SLOT)
+    LDQ     t2, s1, BeaconState_eth1_deposit_index
+    LDQ     t3, s1, BeaconState_deposit_requests_start_index
+    bltu    t2, t3, 4f                      # while Eth1 bridge deposits are pending
+11:
+.endif
     ld      t2, (L + 32)(sp)
     bgtu    t1, t2, 4f                      # a deposit not yet finalized
     li      t1, MAX_PENDING_DEPOSITS_PER_EPOCH

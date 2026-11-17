@@ -31,7 +31,7 @@ build/linux-x86_64/runner-minimal-fulu ~/.cache/lantern/vectors minimal-fulu-ope
 
 - Each runner calls the `lantern_<fork>_*` functions of its fork, built with `-DFORK=<number> -DFORK_NAME=<fork>` (include/forks.inc).
 - Every runner runs the `descriptors` and `ssz_static` files of its fork.
-- The runners of the forks whose state transition is done (`FORK_HAS_STF` in runner.c: phase0 and fulu) also run the state transition files: epoch processing, operations, sanity, finality, random, rewards and shuffling.
+- Every runner also runs the state transition files of its fork: epoch processing, operations, sanity, finality, random, rewards and shuffling.
 - The fulu runners also run fork choice, sync and networking.
 
 ## Buffers

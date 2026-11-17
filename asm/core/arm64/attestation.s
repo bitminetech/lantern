@@ -596,6 +596,10 @@ SPEC_FUNCTION get_attestation_participation_flag_indices
     mov     x12, #TIMELY_SOURCE_FLAG_INDEX
     str     x12, [x10], #8
 4:  cbz     x24, 5f
+.if FORK < FORK_DENEB
+    cmp     x21, #SLOTS_PER_EPOCH           /* and inclusion_delay <= SLOTS_PER_EPOCH */
+    b.hi    5f
+.endif
     mov     x12, #TIMELY_TARGET_FLAG_INDEX
     str     x12, [x10], #8
 5:  cbz     x25, 6f
@@ -858,6 +862,13 @@ SPEC_FUNCTION process_attestation
     LDQ     x12, x19, BeaconState_slot
     cmp     x11, x12
     b.hi    6f
+.if FORK < FORK_DENEB
+    adds    x11, x10, #SLOTS_PER_EPOCH      /* assert state.slot <= data.slot + SLOTS_PER_EPOCH */
+    b.cs    5f
+    cmp     x12, x11
+    b.hi    6f
+.endif
+.if FORK >= FORK_ELECTRA
     ldr     x11, [x20, #(Attestation_data + AttestationData_index)]
     cbnz    x11, 6f                         /* assert data.index == 0 */
     add     x0, x20, #Attestation_committee_bits
@@ -921,6 +932,35 @@ SPEC_FUNCTION process_attestation
     cmp     x9, x28                         /* assert len(attestation.aggregation_bits) == committee_offset */
     mov     x0, #LANTERN_INVALID_ATTESTATION
     b.ne    6f
+.else
+    ldr     x9, [sp, #(L + 160)]
+    str     x9, [x22]
+    mov     x0, x19                         /* assert data.index < get_committee_count_per_slot(state, data.target.epoch) */
+    add     x1, x20, #(Attestation_data + AttestationData_target + Checkpoint_epoch)
+    mov     x2, x22
+    add     x3, sp, #(L + 16)
+    bl      lantern_get_committee_count_per_slot
+    cbnz    x0, 7f
+    ldr     x9, [x20, #(Attestation_data + AttestationData_index)]
+    ldr     x10, [sp, #(L + 16)]
+    mov     x0, #LANTERN_INVALID_ATTESTATION
+    cmp     x9, x10
+    b.hs    6f
+    ldr     x9, [sp, #(L + 160)]
+    str     x9, [x22]
+    mov     x0, x19                         /* committee = get_beacon_committee(state, data.slot, data.index) */
+    add     x1, x20, #(Attestation_data + AttestationData_slot)
+    add     x2, x20, #(Attestation_data + AttestationData_index)
+    mov     x3, x22
+    mov     x4, x27
+    bl      lantern_get_beacon_committee
+    CHECK_STATUS x23, 7f, 8f
+    LDQ     x9, x20, Attestation_aggregation_bits + 8
+    ldr     x10, [x27, #LIST_COUNT]
+    cmp     x9, x10                         /* assert len(attestation.aggregation_bits) == len(committee) */
+    mov     x0, #LANTERN_INVALID_ATTESTATION
+    b.ne    6f
+.endif
     LDQ     x9, x19, BeaconState_slot
     ldr     x10, [x20, #(Attestation_data + AttestationData_slot)]
     sub     x9, x9, x10
@@ -1029,9 +1069,19 @@ SPEC_FUNCTION process_attestation
     mov     x10, #((WEIGHT_DENOMINATOR - PROPOSER_WEIGHT) * WEIGHT_DENOMINATOR / PROPOSER_WEIGHT)
     udiv    x9, x9, x10
     str     x9, [sp, #(L + 120)]
+.if FORK >= FORK_FULU
     mov     x0, x19
     add     x1, sp, #(L + 96)
     bl      lantern_get_beacon_proposer_index
+.else
+    ldr     x9, [sp, #(L + 160)]
+    str     x9, [x22]
+    mov     x0, x19
+    mov     x1, x22
+    add     x2, sp, #(L + 96)
+    bl      lantern_get_beacon_proposer_index
+    cbnz    x0, 7f
+.endif
     mov     x0, x19
     add     x1, sp, #(L + 96)
     add     x2, sp, #(L + 120)

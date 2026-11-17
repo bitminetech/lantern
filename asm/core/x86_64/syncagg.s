@@ -40,7 +40,11 @@ SPEC_FUNCTION process_sync_aggregate
     mov     %rsi, %rbp
     mov     %rcx, %r12
     mov     %r8, %r13
+.if FORK >= FORK_FULU
     NEED_SCRATCH_B %r12, %rbx, 1, SYNC_AGG_EXTRA, 9f
+.else
+    NEED_SCRATCH_B %r12, %rbx, 2, SYNC_AGG_EXTRA, 9f    # get_beacon_proposer_index takes S(2)
+.endif
     movq    $0, (%r13)
     mov     (%r12), %rax
     mov     %rax, S9(%rsp)
@@ -221,6 +225,19 @@ SPEC_FUNCTION process_sync_aggregate
     xor     %edx, %edx
     div     %rcx
     mov     %rax, (L + 184)(%rsp)
+    mov     %rbx, %rdi                      # get_beacon_proposer_index(state): the loop changes only balances
+.if FORK >= FORK_FULU
+    lea     (L + 192)(%rsp), %rsi
+.else
+    mov     S9(%rsp), %rax
+    sub     $SYNC_AGG_EXTRA, %rax
+    mov     %rax, (%r12)
+    mov     %r12, %rsi
+    lea     (L + 192)(%rsp), %rdx
+.endif
+    call    lantern_get_beacon_proposer_index
+    test    %rax, %rax
+    jnz     7f
     xor     %r14d, %r14d
 43: cmp     $SYNC_COMMITTEE_SIZE, %r14
     jae     8f
@@ -231,9 +248,6 @@ SPEC_FUNCTION process_sync_aggregate
     mov     %rbx, %rdi                      # increase_balance(state, participant_index, participant_reward)
     lea     (L + 176)(%rsp), %rdx
     call    lantern_increase_balance
-    mov     %rbx, %rdi
-    lea     (L + 192)(%rsp), %rsi
-    call    lantern_get_beacon_proposer_index
     mov     %rbx, %rdi                      # increase_balance(state, proposer, proposer_reward)
     lea     (L + 192)(%rsp), %rsi
     lea     (L + 184)(%rsp), %rdx

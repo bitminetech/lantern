@@ -223,6 +223,19 @@ SPEC_FUNCTION process_operations
 .if FORK >= FORK_FULU
     cmpq    $0, (BeaconBlockBody_deposits + 8)(%rbp)    # assert len(body.deposits) == 0
     je      1f
+.elseif FORK == FORK_ELECTRA
+    mov     (BeaconState_eth1_data + Eth1Data_deposit_count)(%rbx), %rax
+    mov     BeaconState_deposit_requests_start_index(%rbx), %rdx
+    cmp     %rdx, %rax
+    cmova   %rdx, %rax                      # eth1_deposit_index_limit
+    xor     %ecx, %ecx
+    sub     BeaconState_eth1_deposit_index(%rbx), %rax
+    cmovbe  %rcx, %rax                      # limit - eth1_deposit_index while below the limit, else 0
+    mov     $MAX_DEPOSITS, %edx
+    cmp     %rdx, %rax
+    cmova   %rdx, %rax
+    cmp     (BeaconBlockBody_deposits + 8)(%rbp), %rax  # assert len(body.deposits) == that
+    je      1f
 .else
     mov     (BeaconState_eth1_data + Eth1Data_deposit_count)(%rbx), %rax
     mov     $LANTERN_INVALID_OVERFLOW, %ecx
@@ -275,10 +288,10 @@ SPEC_END process_operations
 
 .if FORK >= FORK_ELECTRA
 /*
- * L0: rax = LANTERN_OK when state rdi has room for the appends of block body rsi,
- * else LANTERN_BUFFER_TOO_SMALL. A leaf.
+ * L0: rax = LANTERN_OK when state rdi has room for the appends of the execution requests of
+ * block body rsi and r10 more pending deposits, else LANTERN_BUFFER_TOO_SMALL. A leaf.
  */
-LOCAL_FUNCTION block_room
+LOCAL_FUNCTION requests_room
     UNWIND_END_PROLOGUE
     PART    %r8, %r9, %rsi, BeaconBlockBody_execution_requests
     mov     (ExecutionRequests_deposits + 8)(%r8), %rsi
@@ -288,7 +301,8 @@ LOCAL_FUNCTION block_room
     cmp     $1, %rax
     jl      9f
     FREE    BeaconState_pending_deposits, BeaconState_pending_partial_withdrawals, PendingDeposit__mem
-    lea     (%rsi,%r8), %rcx                # deposit requests, and the excess of each switch to compounding
+    lea     (%r10,%rsi), %rcx               # deposit requests, and the excess of each switch to compounding
+    add     %r8, %rcx
     cmp     %rcx, %rax
     jl      9f
     FREE    BeaconState_pending_partial_withdrawals, BeaconState_pending_consolidations, PendingPartialWithdrawal__mem
@@ -304,7 +318,37 @@ LOCAL_FUNCTION block_room
     ret
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     ret
+END_FUNCTION requests_room
+
+.if FORK == FORK_ELECTRA
+/*
+ * L0: rax = LANTERN_OK when state rdi has room for the appends of block body rsi, else
+ * LANTERN_BUFFER_TOO_SMALL: a validator and a pending deposit for each deposit, and the
+ * appends of the execution requests. rbx state, rbp body.
+ */
+LOCAL_FUNCTION block_room
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    call    validator_room
+    mov     (BeaconBlockBody_deposits + 8)(%rbp), %r10
+    cmp     %r10, %rax
+    jb      9f
+    mov     %rbx, %rdi
+    mov     %rbp, %rsi
+    call    requests_room
+    LEAVE 0
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 0
 END_FUNCTION block_room
+.else
+/* L0: requests_room with no deposits. */
+LOCAL_FUNCTION block_room
+    UNWIND_END_PROLOGUE
+    xor     %r10d, %r10d
+    jmp     requests_room
+END_FUNCTION block_room
+.endif
 
 .else
 .if FORK == FORK_PHASE0
@@ -375,11 +419,10 @@ LOCAL_FUNCTION block_scratch
     cmp     %rax, %rdx
     cmova   %rdx, %rax
 .endif
-.if FORK >= FORK_CAPELLA
+.if FORK >= FORK_BELLATRIX
     PART    %r8, %r9, %rsi, BeaconBlockBody_execution_payload     # the payload: its header and transactions
-    mov     ExecutionPayload_withdrawals(%r8), %rdx
-    sub     ExecutionPayload_transactions(%r8), %rdx
-    add     $(LANTERN_SCRATCH_FIXED + HEADER_ROOM + 24 + WLIST_BYTES), %rdx
+    TX_BYTES %rdx, %r8
+    add     $(LANTERN_SCRATCH_FIXED + HEADER_ROOM + 24 + PAYLOAD_WLIST_BYTES), %rdx
     cmp     %rax, %rdx
     cmova   %rdx, %rax
 .endif
@@ -448,6 +491,23 @@ SPEC_FUNCTION process_block
     mov     %r14, %r9
     call    lantern_process_execution_payload
     BLOCK_STEP
+.elseif FORK == FORK_BELLATRIX
+    mov     %rbx, %rdi                      # if is_execution_enabled(state, block.body):
+    mov     %r15, %rsi
+    lea     L(%rsp), %rdx
+    call    lantern_is_execution_enabled
+    cmpq    $0, L(%rsp)
+    je      1f
+    SCRATCH_RESET
+    mov     %rbx, %rdi
+    mov     %r15, %rsi
+    mov     S7(%rsp), %rdx
+    mov     %r12, %rcx
+    mov     %r13, %r8
+    mov     %r14, %r9
+    call    lantern_process_execution_payload
+    BLOCK_STEP
+1:
 .endif
     SCRATCH_RESET
     mov     %rbx, %rdi

@@ -22,6 +22,9 @@
 - [`lantern_is_eligible_for_partial_withdrawals`](#function-lantern_is_eligible_for_partial_withdrawals): whether a pending partial withdrawal may be paid.
 - [`lantern_get_pending_balance_to_withdraw`](#function-lantern_get_pending_balance_to_withdraw): the pending partial withdrawals of a validator.
 - [`lantern_process_execution_payload`](#function-lantern_process_execution_payload): checks the payload and stores its header.
+- [`lantern_is_merge_transition_complete`](#function-lantern_is_merge_transition_complete): whether the state holds a payload header.
+- [`lantern_is_merge_transition_block`](#function-lantern_is_merge_transition_block): whether a body holds the first payload.
+- [`lantern_is_execution_enabled`](#function-lantern_is_execution_enabled): whether a block runs its payload.
 - [`lantern_get_blob_parameters`](#function-lantern_get_blob_parameters): the blob limit of an epoch.
 - [`lantern_kzg_commitment_to_versioned_hash`](#function-lantern_kzg_commitment_to_versioned_hash): the versioned hash of a commitment.
 - [`lantern_compute_time_at_slot`](#function-lantern_compute_time_at_slot): the start time of a slot.
@@ -82,7 +85,7 @@
 
 ## Test vectors
 
-- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/fulu/operations/<handler>/` for mainnet and minimal.
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/operations/<handler>/` of each fork, for mainnet and minimal.
   - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
   - Cases with `bls_setting` 2 were made with signature checks turned off. `runner-<preset>` skips them; `runner-<preset>-bls-off` runs only them, with the three asm-crypto signature checks replaced by tests/runner/bls_off.c as in the spec's test mode.
 
@@ -104,7 +107,9 @@ lantern_process_block(state, block, execution_valid, config, scratch, result) ->
 ### Function does
 
 - Phase0: the header, RANDAO, eth1 data and operations.
-- Fulu: also the withdrawals and the execution payload after the header, and the sync aggregate last.
+- Altair and later: also the sync aggregate last.
+- Bellatrix: also the execution payload after the header, when lantern_is_execution_enabled.
+- Capella and later: also the withdrawals and the execution payload after the header.
 
 ### Limits
 
@@ -134,9 +139,17 @@ Checks that the payload's withdrawals are the expected ones, then applies them a
 lantern_process_withdrawals(state, payload, config, scratch, result) -> status
 ```
 
+### Function does
+
+- Electra and later: also drops the processed pending partial withdrawals.
+
 ### Limits
 
 - Scratch: S(0).
+
+### ABI
+
+- Forks: capella and later.
 
 ## Function `lantern_get_expected_withdrawals`
 
@@ -161,6 +174,15 @@ lantern_get_expected_withdrawals(state, scratch, out) -> status
 - `LANTERN_OK`: `out` holds the withdrawals.
 - `LANTERN_BUFFER_TOO_SMALL`: scratch has fewer than 8 + 2 * the bytes of a `WithdrawalsSweep` + the bytes of a `Withdrawals` value.
 - A `LANTERN_INVALID_*` code: a check of a callee failed.
+
+### Function does
+
+- Capella and deneb: the validator sweep, with processed_partial_withdrawals_count 0.
+- Electra and later: the pending partial withdrawals, then the validator sweep.
+
+### ABI
+
+- Forks: capella and later.
 
 ## Function `lantern_get_pending_partial_withdrawals`
 
@@ -189,6 +211,10 @@ lantern_get_pending_partial_withdrawals(state, withdrawal_index, prior_withdrawa
 - `LANTERN_INVALID_VALIDATOR_INDEX`: a pending withdrawal names no validator.
 - `LANTERN_INVALID_WITHDRAWALS_LIMIT`: prior_withdrawals is above the limit.
 
+### ABI
+
+- Forks: electra and later.
+
 ## Function `lantern_get_validators_sweep_withdrawals`
 
 The full and partial withdrawals of up to MAX_VALIDATORS_PER_WITHDRAWALS_SWEEP validators from next_withdrawal_validator_index.
@@ -216,6 +242,14 @@ lantern_get_validators_sweep_withdrawals(state, withdrawal_index, prior_withdraw
 - `LANTERN_INVALID_VALIDATOR_INDEX`: next_withdrawal_validator_index names no validator.
 - `LANTERN_INVALID_WITHDRAWALS_LIMIT`: prior_withdrawals is at MAX_WITHDRAWALS_PER_PAYLOAD or above.
 
+### Function does
+
+- A partial withdrawal is balance - MAX_EFFECTIVE_BALANCE in capella and deneb, and balance - lantern_get_max_effective_balance(validator) from electra on.
+
+### ABI
+
+- Forks: capella and later.
+
 ## Function `lantern_get_balance_after_withdrawals`
 
 state.balances[validator_index] less the amounts of withdrawals to it.
@@ -240,6 +274,10 @@ lantern_get_balance_after_withdrawals(state, validator_index, withdrawals, out) 
 - `LANTERN_OK`: `out` holds the balance.
 - `LANTERN_INVALID_OVERFLOW`: the withdrawn sum is above the balance.
 
+### ABI
+
+- Forks: capella and later.
+
 ## Function `lantern_apply_withdrawals`
 
 decrease_balance by each withdrawal.
@@ -253,6 +291,10 @@ lantern_apply_withdrawals(state, withdrawals) -> status
 ### Returns
 
 - `LANTERN_OK`, always.
+
+### ABI
+
+- Forks: capella and later.
 
 ## Function `lantern_update_next_withdrawal_index`
 
@@ -268,6 +310,10 @@ lantern_update_next_withdrawal_index(state, withdrawals) -> status
 
 - `LANTERN_OK`, always.
 
+### ABI
+
+- Forks: capella and later.
+
 ## Function `lantern_update_pending_partial_withdrawals`
 
 Drops the first processed_partial_withdrawals_count pending partial withdrawals.
@@ -281,6 +327,10 @@ lantern_update_pending_partial_withdrawals(state, processed_partial_withdrawals_
 ### Returns
 
 - `LANTERN_OK`, always.
+
+### ABI
+
+- Forks: electra and later.
 
 ## Function `lantern_update_next_withdrawal_validator_index`
 
@@ -296,6 +346,10 @@ lantern_update_next_withdrawal_validator_index(state, withdrawals) -> status
 
 - `LANTERN_OK`, always.
 
+### ABI
+
+- Forks: capella and later.
+
 ## Function `lantern_is_fully_withdrawable_validator`
 
 Execution credentials, withdrawable_epoch at most epoch, and a balance above 0.
@@ -309,6 +363,14 @@ lantern_is_fully_withdrawable_validator(validator, balance, epoch, out) -> statu
 ### Returns
 
 - `LANTERN_OK`, always.
+
+### Function does
+
+- Capella and deneb: the credential check is lantern_has_eth1_withdrawal_credential; electra and later: lantern_has_execution_withdrawal_credential.
+
+### ABI
+
+- Forks: capella and later.
 
 ## Function `lantern_is_partially_withdrawable_validator`
 
@@ -324,6 +386,14 @@ lantern_is_partially_withdrawable_validator(validator, balance, out) -> status
 
 - `LANTERN_OK`, always.
 
+### Function does
+
+- Capella and deneb: lantern_has_eth1_withdrawal_credential and MAX_EFFECTIVE_BALANCE; electra and later: lantern_has_execution_withdrawal_credential and lantern_get_max_effective_balance.
+
+### ABI
+
+- Forks: capella and later.
+
 ## Function `lantern_has_eth1_withdrawal_credential`
 
 The first credential byte is ETH1_ADDRESS_WITHDRAWAL_PREFIX.
@@ -337,6 +407,10 @@ lantern_has_eth1_withdrawal_credential(validator, out) -> status
 ### Returns
 
 - `LANTERN_OK`, always.
+
+### ABI
+
+- Forks: capella and later.
 
 ## Function `lantern_has_execution_withdrawal_credential`
 
@@ -352,6 +426,10 @@ lantern_has_execution_withdrawal_credential(validator, out) -> status
 
 - `LANTERN_OK`, always.
 
+### ABI
+
+- Forks: electra and later.
+
 ## Function `lantern_is_eligible_for_partial_withdrawals`
 
 Not exiting, an effective balance of at least MIN_ACTIVATION_BALANCE, and a balance above it.
@@ -365,6 +443,10 @@ lantern_is_eligible_for_partial_withdrawals(validator, balance, out) -> status
 ### Returns
 
 - `LANTERN_OK`, always.
+
+### ABI
+
+- Forks: electra and later.
 
 ## Function `lantern_get_pending_balance_to_withdraw`
 
@@ -381,6 +463,10 @@ lantern_get_pending_balance_to_withdraw(state, validator_index, out) -> status
 - `LANTERN_OK`: `out` holds the sum.
 - `LANTERN_INVALID_OVERFLOW`: the sum leaves the Uint64 range.
 
+### ABI
+
+- Forks: electra and later.
+
 ## Function `lantern_process_execution_payload`
 
 Checks the payload's parent hash, prev_randao, timestamp, blob count and the engine's answer; stores its header.
@@ -391,9 +477,73 @@ Checks the payload's parent hash, prev_randao, timestamp, blob count and the eng
 lantern_process_execution_payload(state, body, execution_valid, config, scratch, result) -> status
 ```
 
+### Function does
+
+- Bellatrix: checks the parent hash only when lantern_is_merge_transition_complete.
+- Deneb and later: checks the blob count against MAX_BLOBS_PER_BLOCK in deneb, MAX_BLOBS_PER_BLOCK_ELECTRA in electra, and lantern_get_blob_parameters(epoch) from fulu on.
+- The header has withdrawals_root from capella on, and blob_gas_used and excess_blob_gas from deneb on.
+
 ### Limits
 
 - Scratch: S(0).
+
+### ABI
+
+- Forks: bellatrix and later.
+
+## Function `lantern_is_merge_transition_complete`
+
+Whether the state's latest execution payload header differs from the empty header.
+
+### Signature
+
+```
+lantern_is_merge_transition_complete(state, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`, always: `out` is 1 when state.latest_execution_payload_header != ExecutionPayloadHeader(), else 0.
+
+### ABI
+
+- Forks: bellatrix.
+
+## Function `lantern_is_merge_transition_block`
+
+Whether the body holds the first payload: the merge is not complete and body.execution_payload differs from the empty payload.
+
+### Signature
+
+```
+lantern_is_merge_transition_block(state, body, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`, always: `out` is 1 or 0.
+
+### ABI
+
+- Forks: bellatrix.
+
+## Function `lantern_is_execution_enabled`
+
+Whether the block runs its payload: lantern_is_merge_transition_block or lantern_is_merge_transition_complete.
+
+### Signature
+
+```
+lantern_is_execution_enabled(state, body, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`, always: `out` is 1 or 0.
+
+### ABI
+
+- Forks: bellatrix.
 
 ## Function `lantern_get_blob_parameters`
 
@@ -417,6 +567,10 @@ lantern_get_blob_parameters(epoch, config, out) -> status
 
 - `LANTERN_OK`, always.
 
+### ABI
+
+- Forks: fulu.
+
 ## Function `lantern_kzg_commitment_to_versioned_hash`
 
 VERSIONED_HASH_VERSION_KZG + sha256(kzg_commitment)[1:].
@@ -430,6 +584,10 @@ lantern_kzg_commitment_to_versioned_hash(kzg_commitment, out) -> status
 ### Returns
 
 - `LANTERN_OK`, always.
+
+### ABI
+
+- Forks: deneb and later.
 
 ## Function `lantern_compute_time_at_slot`
 
@@ -486,7 +644,9 @@ lantern_process_operations(state, body, config, scratch, result) -> status
 
 ### Function does
 
-- Before fulu: asserts len(body.deposits) == min(MAX_DEPOSITS, eth1_data.deposit_count - eth1_deposit_index), and applies the deposits after the attestations.
+- Phase0 to deneb: asserts len(body.deposits) == min(MAX_DEPOSITS, eth1_data.deposit_count - eth1_deposit_index).
+- Electra: with limit = min(eth1_data.deposit_count, deposit_requests_start_index), asserts len(body.deposits) == min(MAX_DEPOSITS, limit - eth1_deposit_index) while eth1_deposit_index < limit, else len(body.deposits) == 0.
+- Phase0 to electra: applies the deposits after the attestations.
 - Fulu: asserts that the body holds no deposits.
 - Capella and later: also the BLS to execution changes; electra and later: also the execution requests.
 
@@ -515,7 +675,7 @@ lantern_process_deposit(state, deposit, config, scratch, result) -> status
 
 ### ABI
 
-- Forks: phase0 to deneb.
+- Forks: phase0 to electra.
 
 ## Function `lantern_apply_deposit`
 
@@ -540,10 +700,16 @@ lantern_apply_deposit(state, data, config, scratch) -> status
 
 - `LANTERN_OK`: the deposit is applied, or skipped for an invalid signature.
 - `LANTERN_BUFFER_TOO_SMALL`: a new validator has no room in the validator lists. The state is unchanged.
+- Electra: `LANTERN_BUFFER_TOO_SMALL` also when pending_deposits has no room for one more entry. The state is unchanged.
+
+### Function does
+
+- Phase0 to deneb: a new validator gets the deposit's amount; the validator of a known key gets its balance increased.
+- Electra: a new validator starts with balance 0, and the deposit, for a known key too, goes to state.pending_deposits with slot GENESIS_SLOT.
 
 ### ABI
 
-- Forks: phase0 to deneb.
+- Forks: phase0 to electra.
 
 ## Function `lantern_process_proposer_slashing`
 
@@ -587,6 +753,9 @@ lantern_process_attestation(state, attestation, config, scratch, result) -> stat
 
 - Phase0: checks the attestation, including data.slot + SLOTS_PER_EPOCH >= state.slot and the source against the justified checkpoint of its epoch, then appends a PendingAttestation to the list of its target epoch.
 - Phase0: makes every check, the signature included, and the room check before it changes the state.
+- Altair to deneb: asserts data.index < get_committee_count_per_slot, and len(aggregation_bits) == len(committee) for the committee of data.index.
+- Altair to capella: also asserts state.slot <= data.slot + SLOTS_PER_EPOCH.
+- Electra and later: asserts data.index == 0, and takes the committees of committee_bits, each with an attester.
 
 ### Limits
 
@@ -626,6 +795,10 @@ lantern_process_bls_to_execution_change(state, signed_address_change, config, sc
 
 - Scratch: S(0).
 
+### ABI
+
+- Forks: capella and later.
+
 ## Function `lantern_process_deposit_request`
 
 Appends a pending deposit of the request at the state's slot.
@@ -639,6 +812,14 @@ lantern_process_deposit_request(state, deposit_request, config, scratch, result)
 ### Returns
 
 - `LANTERN_BUFFER_TOO_SMALL`: pending_deposits has no room.
+
+### Function does
+
+- Electra: also sets deposit_requests_start_index to the request's index while it is UNSET_DEPOSIT_REQUESTS_START_INDEX.
+
+### ABI
+
+- Forks: electra and later.
 
 ## Function `lantern_process_withdrawal_request`
 
@@ -658,6 +839,10 @@ lantern_process_withdrawal_request(state, withdrawal_request, config, scratch, r
 
 - Scratch: S(1).
 
+### ABI
+
+- Forks: electra and later.
+
 ## Function `lantern_process_consolidation_request`
 
 A switch to compounding, or a queued consolidation, when the request's checks hold.
@@ -676,6 +861,10 @@ lantern_process_consolidation_request(state, consolidation_request, config, scra
 
 - Scratch: S(1).
 
+### ABI
+
+- Forks: electra and later.
+
 ## Function `lantern_is_valid_switch_to_compounding_request`
 
 Same source and target key of an active, unexited validator with 0x01 credentials of the source address.
@@ -689,6 +878,10 @@ lantern_is_valid_switch_to_compounding_request(state, consolidation_request, out
 ### Returns
 
 - `LANTERN_OK`, always.
+
+### ABI
+
+- Forks: electra and later.
 
 ## Function `lantern_switch_to_compounding_validator`
 
@@ -704,6 +897,10 @@ lantern_switch_to_compounding_validator(state, index) -> status
 
 - `LANTERN_BUFFER_TOO_SMALL`: pending_deposits has no room; the state is unchanged.
 
+### ABI
+
+- Forks: electra and later.
+
 ## Function `lantern_queue_excess_active_balance`
 
 Moves a balance above MIN_ACTIVATION_BALANCE to a pending deposit with the infinity signature at GENESIS_SLOT.
@@ -717,6 +914,10 @@ lantern_queue_excess_active_balance(state, index) -> status
 ### Returns
 
 - `LANTERN_BUFFER_TOO_SMALL`: pending_deposits has no room; the state is unchanged.
+
+### ABI
+
+- Forks: electra and later.
 
 ## Function `lantern_compute_consolidation_epoch_and_update_churn`
 
@@ -732,6 +933,10 @@ lantern_compute_consolidation_epoch_and_update_churn(state, consolidation_balanc
 
 - Scratch: S(1).
 
+### ABI
+
+- Forks: electra and later.
+
 ## Function `lantern_process_sync_aggregate`
 
 Checks the sync committee signature over the previous slot's block root, then pays or penalizes each member and pays the proposer.
@@ -744,7 +949,11 @@ lantern_process_sync_aggregate(state, sync_aggregate, config, scratch, result) -
 
 ### Limits
 
-- Scratch: S(1).
+- Scratch: S(1); before fulu S(2), for lantern_get_beacon_proposer_index.
+
+### ABI
+
+- Forks: altair and later.
 
 ## Function `lantern_slash_validator`
 
@@ -828,6 +1037,10 @@ lantern_get_committee_indices(committee_bits, out) -> status
 ### Caller must
 
 - Give `out` room for MAX_COMMITTEES_PER_SLOT entries.
+
+### ABI
+
+- Forks: electra and later.
 
 ## Function `lantern_get_committee_count_per_slot`
 
@@ -933,6 +1146,14 @@ lantern_get_attestation_participation_flag_indices(state, data, inclusion_delay,
 - `LANTERN_OK`: `out` holds the flags as an `IndexList`.
 - `LANTERN_INVALID_SOURCE`: the source is not the justified checkpoint.
 - `LANTERN_INVALID_BLOCK_ROOT_SLOT`: a block root is out of range.
+
+### Function does
+
+- Altair to capella: the target flag also needs inclusion_delay <= SLOTS_PER_EPOCH.
+
+### ABI
+
+- Forks: altair and later.
 
 ## Function `lantern_get_beacon_proposer_index`
 

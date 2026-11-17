@@ -35,9 +35,6 @@ SSZ_DEPTH LOG2_SLOTS_PER_EPOCH, SLOTS_PER_EPOCH
 
 /* ---------------------------------------------------------------- Functions */
 
-/* The forks whose state transition is done: phase0 and fulu so far. The others hold their types. */
-.set FORK_HAS_STF, (FORK == FORK_PHASE0) || (FORK == FORK_FULU)
-.if FORK_HAS_STF
 .include "memory.s"
 .include "helpers.s"
 .include "state.s"
@@ -62,7 +59,6 @@ SSZ_DEPTH LOG2_SLOTS_PER_EPOCH, SLOTS_PER_EPOCH
 .include "syncagg.s"
 .endif
 .include "transition.s"
-.endif
 /* Fork choice and networking are in the fulu object so far. */
 .if FORK == FORK_FULU
 .include "forkchoice.s"

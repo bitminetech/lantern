@@ -65,6 +65,129 @@ SPEC_LEAF compute_time_at_slot
 SPEC_END compute_time_at_slot
 
 .if FORK >= FORK_BELLATRIX
+/* dst = the bytes of the transactions part of payload p: up to the withdrawals part from capella on, else to the end of the value. */
+.macro TX_BYTES dst, p
+.if FORK >= FORK_CAPELLA
+    mov     ExecutionPayload_withdrawals(\p), \dst
+.else
+    mov     (\p), \dst
+.endif
+    sub     ExecutionPayload_transactions(\p), \dst
+.endm
+.if FORK >= FORK_CAPELLA
+.set PAYLOAD_WLIST_BYTES, WLIST_BYTES
+.else
+.set PAYLOAD_WLIST_BYTES, 0
+.endif
+.endif
+
+.if FORK == FORK_BELLATRIX
+/* L0: rax = 1 when the rsi bytes at rdi are all zero, else 0. A leaf. */
+LOCAL_FUNCTION all_zero
+    UNWIND_END_PROLOGUE
+1:  test    %rsi, %rsi
+    jz      2f
+    cmpb    $0, (%rdi)
+    jne     3f
+    inc     %rdi
+    dec     %rsi
+    jmp     1b
+2:  mov     $1, %eax
+    ret
+3:  xor     %eax, %eax
+    ret
+END_FUNCTION all_zero
+
+/*
+ * rax = 1 when the fields that ExecutionPayload and ExecutionPayloadHeader share are all zero
+ * and extra_data is empty in the value of type at rdi, else 0: parent_hash to prev_randao,
+ * block_number to timestamp, extra_data, base_fee_per_gas and block_hash. Uses rbx.
+ */
+.macro EMPTY_SHARED_FIELDS type
+    mov     %rdi, %rbx
+    lea     \type\()_parent_hash(%rbx), %rdi
+    mov     $(\type\()_prev_randao + 32 - \type\()_parent_hash), %esi
+    call    all_zero
+    test    %rax, %rax
+    jz      99f
+    lea     \type\()_block_number(%rbx), %rdi
+    mov     $32, %esi
+    call    all_zero
+    test    %rax, %rax
+    jz      99f
+    xor     %eax, %eax
+    cmpq    $0, (\type\()_extra_data + 8)(%rbx)
+    jne     99f
+    lea     \type\()_base_fee_per_gas(%rbx), %rdi
+    mov     $64, %esi
+    call    all_zero
+99:
+.endm
+.if (ExecutionPayload_block_hash != ExecutionPayload_base_fee_per_gas + 32) || (ExecutionPayloadHeader_block_hash != ExecutionPayloadHeader_base_fee_per_gas + 32) || (ExecutionPayload_timestamp != ExecutionPayload_block_number + 24) || (ExecutionPayloadHeader_timestamp != ExecutionPayloadHeader_block_number + 24)
+.error "EMPTY_SHARED_FIELDS checks base_fee_per_gas with block_hash, and block_number to timestamp, as one range"
+.endif
+
+/* rbx the header. Locals: L out. */
+SPEC_FUNCTION is_merge_transition_complete
+    ENTER 16
+    mov     %rsi, L(%rsp)
+    add     BeaconState_latest_execution_payload_header(%rdi), %rdi    # state.latest_execution_payload_header != ExecutionPayloadHeader.empty()
+    EMPTY_SHARED_FIELDS ExecutionPayloadHeader
+    test    %rax, %rax
+    jz      1f
+    lea     ExecutionPayloadHeader_transactions_root(%rbx), %rdi
+    mov     $32, %esi
+    call    all_zero
+1:  xor     $1, %eax
+    mov     L(%rsp), %rcx
+    mov     %rax, (%rcx)
+    xor     %eax, %eax
+    LEAVE 16
+SPEC_END is_merge_transition_complete
+
+/* rbx the payload, rbp body, r12 out. Locals: L complete. */
+SPEC_FUNCTION is_merge_transition_block
+    ENTER 16
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    lea     L(%rsp), %rsi
+    call    lantern_is_merge_transition_complete
+    xor     %eax, %eax
+    cmpq    $0, L(%rsp)
+    jne     7f                              # not is_merge_transition_complete(state)
+    PART    %rdi, %rax, %rbp, BeaconBlockBody_execution_payload   # and body.execution_payload != ExecutionPayload.empty()
+    EMPTY_SHARED_FIELDS ExecutionPayload
+    test    %rax, %rax
+    jz      1f
+    xor     %eax, %eax
+    cmpq    $0, (ExecutionPayload_transactions + 8)(%rbx)
+    sete    %al
+1:  xor     $1, %eax
+7:  mov     %rax, (%r12)
+    xor     %eax, %eax
+    LEAVE 16
+SPEC_END is_merge_transition_block
+
+/* rbx state, rbp body, r12 out. Locals: L block, L+8 complete. */
+SPEC_FUNCTION is_execution_enabled
+    ENTER 16
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    lea     L(%rsp), %rdx
+    call    lantern_is_merge_transition_block
+    mov     %rbx, %rdi
+    lea     (L + 8)(%rsp), %rsi
+    call    lantern_is_merge_transition_complete
+    mov     L(%rsp), %rax                   # is_merge_transition_block(state, body) or is_merge_transition_complete(state)
+    or      (L + 8)(%rsp), %rax
+    mov     %rax, (%r12)
+    xor     %eax, %eax
+    LEAVE 16
+SPEC_END is_execution_enabled
+.endif
+
+.if FORK >= FORK_BELLATRIX
 /*
  * rbx state, rbp body, r12 config, r13 scratch, r14 result, r15 payload,
  * S7 execution_valid, S8 the new header, S9 scratch size.
@@ -80,20 +203,26 @@ SPEC_FUNCTION process_execution_payload
     mov     %r9, %r14
     PART    %r15, %rax, %rbp, BeaconBlockBody_execution_payload
     # Scratch: the new header value, then a standalone Transactions or Withdrawals value to hash.
-    mov     ExecutionPayload_withdrawals(%r15), %rcx
-    sub     ExecutionPayload_transactions(%r15), %rcx  # bytes of the transactions part
-    MOVQ    %rax, LANTERN_SCRATCH_FIXED + HEADER_ROOM + 24 + WLIST_BYTES
+    TX_BYTES %rcx, %r15                     # bytes of the transactions part
+    MOVQ    %rax, LANTERN_SCRATCH_FIXED + HEADER_ROOM + 24 + PAYLOAD_WLIST_BYTES
     add     %rcx, %rax
     mov     (%r13), %rcx
     mov     %rcx, S9(%rsp)
     cmp     %rax, %rcx
     jb      9f
+.if FORK == FORK_BELLATRIX
+    mov     %rbx, %rdi                      # if is_merge_transition_complete(state):
+    lea     (L + 48)(%rsp), %rsi
+    call    lantern_is_merge_transition_complete
+    cmpq    $0, (L + 48)(%rsp)
+    je      2f
+.endif
     mov     BeaconState_latest_execution_payload_header(%rbx), %rax    # the header value in its part
     lea     ExecutionPayloadHeader_block_hash(%rbx,%rax), %rcx
     lea     ExecutionPayload_parent_hash(%r15), %rdx
     mov     $LANTERN_INVALID_PAYLOAD_PARENT_HASH, %eax  # assert payload.parent_hash == latest header's block_hash
     NE32    %rdx, %rcx, 6f
-    mov     %rbx, %rdi
+2:  mov     %rbx, %rdi
     lea     L(%rsp), %rsi
     call    lantern_get_current_epoch
     mov     %rbx, %rdi                      # assert payload.prev_randao == get_randao_mix(state, epoch)
@@ -115,14 +244,23 @@ SPEC_FUNCTION process_execution_payload
     mov     $LANTERN_INVALID_PAYLOAD_TIMESTAMP, %eax
     cmp     (L + 40)(%rsp), %rcx
     jne     6f
-    lea     L(%rsp), %rdi                   # assert len(blob_kzg_commitments) <= max_blobs_per_block
+.if FORK >= FORK_DENEB
+.if FORK >= FORK_FULU
+    lea     L(%rsp), %rdi                   # assert len(blob_kzg_commitments) <= get_blob_parameters(epoch).max_blobs_per_block
     mov     %r12, %rsi
     lea     (L + 48)(%rsp), %rdx
     call    lantern_get_blob_parameters
+    mov     (L + 56)(%rsp), %rdx
+.elseif FORK == FORK_ELECTRA
+    mov     CONFIG_MAX_BLOBS_PER_BLOCK_ELECTRA(%r12), %rdx
+.else
+    mov     CONFIG_MAX_BLOBS_PER_BLOCK(%r12), %rdx
+.endif
     mov     (BeaconBlockBody_blob_kzg_commitments + 8)(%rbp), %rcx
     mov     $LANTERN_INVALID_BLOB_COUNT, %eax
-    cmp     (L + 56)(%rsp), %rcx
+    cmp     %rdx, %rcx
     ja      6f
+.endif
     mov     S7(%rsp), %rcx                  # assert execution_engine.verify_and_notify_new_payload(...)
     mov     $LANTERN_INVALID_PAYLOAD, %eax
     cmpq    $0, (%rcx)
@@ -172,10 +310,16 @@ LOCAL_FUNCTION build_payload_header
     lea     ExecutionPayload_parent_hash(%rbp), %rsi
     mov     $(ExecutionPayload_block_number - ExecutionPayload_parent_hash), %edx
     call    lantern_copy
-    .irp f, block_number, gas_limit, gas_used, timestamp, blob_gas_used, excess_blob_gas
+    .irp f, block_number, gas_limit, gas_used, timestamp
     mov     ExecutionPayload_\f(%rbp), %rax
     mov     %rax, ExecutionPayloadHeader_\f(%rbx)
     .endr
+.if FORK >= FORK_DENEB
+    .irp f, blob_gas_used, excess_blob_gas
+    mov     ExecutionPayload_\f(%rbp), %rax
+    mov     %rax, ExecutionPayloadHeader_\f(%rbx)
+    .endr
+.endif
     lea     ExecutionPayloadHeader_base_fee_per_gas(%rbx), %rdi
     lea     ExecutionPayload_base_fee_per_gas(%rbp), %rsi
     COPY32  %rdi, %rsi
@@ -190,6 +334,7 @@ LOCAL_FUNCTION build_payload_header
     and     $-8, %rax
     mov     %rax, (%rbx)
     call    lantern_copy
+.if FORK >= FORK_CAPELLA
     # withdrawals_root = hash_tree_root(payload.withdrawals): a standalone Withdrawals value in scratch.
     lea     -(HEADER_ROOM + WLIST_BYTES)(%r13), %rax
     lea     (%r12,%rax), %r14
@@ -209,9 +354,9 @@ LOCAL_FUNCTION build_payload_header
     CALL_GLOBAL ssz_hash_tree_root
     test    %rax, %rax
     jnz     7f
+.endif
     # transactions_root = hash_tree_root(payload.transactions): its part copied into a standalone value.
-    mov     ExecutionPayload_withdrawals(%rbp), %r15
-    sub     ExecutionPayload_transactions(%rbp), %r15  # bytes of the part
+    TX_BYTES %r15, %rbp                     # bytes of the part
     mov     %r13, %rax
     sub     $(HEADER_ROOM + LIST_FIXED), %rax
     sub     %r15, %rax

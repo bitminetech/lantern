@@ -9,7 +9,7 @@
 /*
  * x19 state, x20 scratch, x21 out, x22 validator count, x23 scratch size, x24 active list,
  * x25 active count, x26 i, x27 members so far, x28 candidate.
- * Locals: L epoch, L+8 domain type, L+16 seed, L+48 message (seed, i // 16), L+88 digest,
+ * Locals: L epoch, L+8 domain type, L+16 seed, L+48 message (seed, i // 16 from electra, i // 32 before), L+88 digest,
  * L+120 i % count, L+128 shuffled index, L+136 active count.
  */
 SPEC_FUNCTION get_next_sync_committee_indices
@@ -70,24 +70,42 @@ SPEC_FUNCTION get_next_sync_committee_indices
     ldr     x9, [sp, #(L + 128)]
     add     x10, x24, #LIST_FIXED
     ldr     x28, [x10, x9, lsl #3]          /* candidate_index */
+.if FORK >= FORK_ELECTRA
     lsr     x9, x26, #4
+.else
+    lsr     x9, x26, #5
+.endif
     str     x9, [sp, #(L + 80)]
     add     x0, sp, #(L + 48)               /* random_bytes = sha256(seed + uint_to_bytes(i // 16)) */
     mov     x1, #40
     add     x2, sp, #(L + 88)
     bl      sha256_short
+.if FORK >= FORK_ELECTRA
     and     x9, x26, #15
     lsl     x9, x9, #1
     add     x10, sp, #(L + 88)
     ldrh    w9, [x10, x9]                   /* random_value */
+.else
+    and     x9, x26, #31
+    add     x10, sp, #(L + 88)
+    ldrb    w9, [x10, x9]                   /* random_byte = sha256(seed + uint_to_bytes(i // 32))[i % 32] */
+.endif
     PART    x10, x11, x19, BeaconState_validators
     add     x10, x10, x28, lsl #7
     ldr     x10, [x10, #Validator_effective_balance]
-    mov     x11, #0xffff
+.if FORK >= FORK_ELECTRA
+    mov     x11, #0xffff                    /* MAX_RANDOM_VALUE */
+.else
+    mov     x11, #0xff                      /* MAX_RANDOM_BYTE */
+.endif
     umulh   x12, x10, x11
     cbnz    x12, 6f
     mul     x10, x10, x11
+.if FORK >= FORK_ELECTRA
     MOVQ    x11, MAX_EFFECTIVE_BALANCE_ELECTRA
+.else
+    MOVQ    x11, MAX_EFFECTIVE_BALANCE
+.endif
     mul     x11, x11, x9
     cmp     x10, x11
     b.lo    2f

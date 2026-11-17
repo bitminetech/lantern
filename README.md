@@ -10,11 +10,11 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 
 | File | Covers |
 |---|---|
-| [docs/reference/helpers.md](docs/reference/helpers.md) | Beacon chain helpers of phase0 and Fulu, shuffling, domains and signing roots |
+| [docs/reference/helpers.md](docs/reference/helpers.md) | Beacon chain helpers of every fork, shuffling, domains and signing roots |
 | [docs/reference/state.md](docs/reference/state.md) | Beacon state buffers |
-| [docs/reference/epoch-processing.md](docs/reference/epoch-processing.md) | Epoch processing of phase0 and Fulu |
-| [docs/reference/block-processing.md](docs/reference/block-processing.md) | Block processing of phase0 and Fulu |
-| [docs/reference/state-transition.md](docs/reference/state-transition.md) | State transition of phase0 and Fulu |
+| [docs/reference/epoch-processing.md](docs/reference/epoch-processing.md) | Epoch processing of every fork |
+| [docs/reference/block-processing.md](docs/reference/block-processing.md) | Block processing of every fork |
+| [docs/reference/state-transition.md](docs/reference/state-transition.md) | State transition of every fork |
 | [docs/reference/fork-choice.md](docs/reference/fork-choice.md) | Fulu fork choice and data availability |
 | [docs/reference/networking.md](docs/reference/networking.md) | Fulu networking rules: custody, gossip validation |
 | [include/lantern.inc](include/lantern.inc) | Constants |

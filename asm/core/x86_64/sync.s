@@ -9,7 +9,7 @@
 /*
  * rbx state, rbp scratch, r12 out, r13 active list, r14 i, r15 members so far,
  * S7 validator count, S8 scratch size, S9 candidate.
- * Locals: L epoch, L+8 domain type, L+16 seed, L+48 message (seed, i // 16), L+88 digest,
+ * Locals: L epoch, L+8 domain type, L+16 seed, L+48 message (seed, i // 16 from electra, i // 32 before), L+88 digest,
  * L+120 i % count, L+128 shuffled index, L+136 active count.
  */
 SPEC_FUNCTION get_next_sync_committee_indices
@@ -75,25 +75,42 @@ SPEC_FUNCTION get_next_sync_committee_indices
     mov     LIST_FIXED(%r13,%rax,8), %rax   # candidate_index
     mov     %rax, S9(%rsp)
     mov     %r14, %rax
+.if FORK >= FORK_ELECTRA
     shr     $4, %rax
+.else
+    shr     $5, %rax
+.endif
     mov     %rax, (L + 80)(%rsp)
     lea     (L + 48)(%rsp), %rdi            # random_bytes = sha256(seed + uint_to_bytes(i // 16))
     mov     $40, %esi
     lea     (L + 88)(%rsp), %rdx
     call    sha256_short
     mov     %r14, %rax
+.if FORK >= FORK_ELECTRA
     and     $15, %eax
     movzwl  (L + 88)(%rsp,%rax,2), %ecx     # random_value
+.else
+    and     $31, %eax
+    movzbl  (L + 88)(%rsp,%rax), %ecx       # random_byte = sha256(seed + uint_to_bytes(i // 32))[i % 32]
+.endif
     mov     S9(%rsp), %rax
     mov     BeaconState_validators(%rbx), %rdx
     add     %rbx, %rdx
     shl     $7, %rax
     mov     Validator_effective_balance(%rdx,%rax), %rax
-    mov     $0xffff, %edx
+.if FORK >= FORK_ELECTRA
+    mov     $0xffff, %edx                   # MAX_RANDOM_VALUE
+.else
+    mov     $0xff, %edx                     # MAX_RANDOM_BYTE
+.endif
     mul     %rdx
     test    %rdx, %rdx
     jnz     6f
+.if FORK >= FORK_ELECTRA
     MOVQ    %rdx, MAX_EFFECTIVE_BALANCE_ELECTRA
+.else
+    MOVQ    %rdx, MAX_EFFECTIVE_BALANCE
+.endif
     imul    %rcx, %rdx
     cmp     %rdx, %rax
     jb      2f

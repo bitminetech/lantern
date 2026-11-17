@@ -36,7 +36,11 @@ SPEC_FUNCTION process_sync_aggregate
     mov     x21, x2
     mov     x22, x3
     mov     x23, x4
+.if FORK >= FORK_FULU
     NEED_SCRATCH_B x22, x19, 1, SYNC_AGG_EXTRA, 9f
+.else
+    NEED_SCRATCH_B x22, x19, 2, SYNC_AGG_EXTRA, 9f    /* get_beacon_proposer_index takes S(2) */
+.endif
     str     xzr, [x23]
     ldr     x24, [x22]
     MOVQ    x9, SYNC_KEYS_LIST              /* own scratch at the end: keys, committee indices, points */
@@ -228,6 +232,18 @@ SPEC_FUNCTION process_sync_aggregate
     mov     x10, #(WEIGHT_DENOMINATOR - PROPOSER_WEIGHT)
     udiv    x9, x9, x10
     str     x9, [sp, #(L + 184)]
+    mov     x0, x19                         /* get_beacon_proposer_index(state): the loop changes only balances */
+.if FORK >= FORK_FULU
+    add     x1, sp, #(L + 192)
+.else
+    MOVQ    x9, SYNC_AGG_EXTRA
+    sub     x9, x24, x9
+    str     x9, [x22]
+    mov     x1, x22
+    add     x2, sp, #(L + 192)
+.endif
+    bl      lantern_get_beacon_proposer_index
+    cbnz    x0, 7f
     mov     x28, #0
 43: cmp     x28, #SYNC_COMMITTEE_SIZE
     b.hs    8f
@@ -241,9 +257,6 @@ SPEC_FUNCTION process_sync_aggregate
     mov     x0, x19                         /* increase_balance(state, participant_index, participant_reward) */
     add     x2, sp, #(L + 176)
     bl      lantern_increase_balance
-    mov     x0, x19
-    add     x1, sp, #(L + 192)
-    bl      lantern_get_beacon_proposer_index
     mov     x0, x19                         /* increase_balance(state, proposer, proposer_reward) */
     add     x1, sp, #(L + 192)
     add     x2, sp, #(L + 184)

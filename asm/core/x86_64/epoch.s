@@ -1443,7 +1443,11 @@ SPEC_FUNCTION process_historical_summaries_update
     jb      9f
     mov     BeaconState_historical_summaries(%rbx), %rax
     mov     (BeaconState_historical_summaries + 8)(%rbx), %rcx
+.if FORK >= FORK_ELECTRA
     mov     BeaconState_pending_deposits(%rbx), %rdx    # the next part starts its room's end
+.else
+    mov     (%rbx), %rdx                    # the last part ends at the end of the value
+.endif
     sub     %rax, %rdx
     lea     1(%rcx), %rsi
     shl     $6, %rsi                        # HistoricalSummary__mem is 64

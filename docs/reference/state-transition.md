@@ -16,7 +16,7 @@
 ## Spec
 
 - Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs/phase0/beacon-chain.md).
-- Section: Beacon chain state transition function, phase0, with the fulu blocks and epochs.
+- Section: Beacon chain state transition function, phase0, with the blocks and epochs of each fork.
 
 ## Common rules
 
@@ -24,7 +24,7 @@
 
 ## Test vectors
 
-- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/fulu/sanity/slots/`, `sanity/blocks/`, `finality/finality/` and `random/random/`, for mainnet and minimal.
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/sanity/slots/`, `sanity/blocks/`, `finality/finality/` and `random/random/` of each fork, for mainnet and minimal.
   - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
 
 ## Function `lantern_state_transition`

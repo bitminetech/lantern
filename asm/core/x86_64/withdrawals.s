@@ -21,6 +21,7 @@ SPEC_LEAF has_eth1_withdrawal_credential
     RETURN_OK
 SPEC_END has_eth1_withdrawal_credential
 
+.if FORK >= FORK_ELECTRA
 /* Locals: rsp+0 validator, rsp+8 out, rsp+16 the eth1 flag. */
 SPEC_FUNCTION has_execution_withdrawal_credential
     FRAME 32
@@ -40,6 +41,18 @@ SPEC_FUNCTION has_execution_withdrawal_credential
     xor     %eax, %eax
     UNFRAME 32
 SPEC_END has_execution_withdrawal_credential
+.endif
+
+/* Before electra the two predicates take has_eth1_withdrawal_credential and MAX_EFFECTIVE_BALANCE. */
+.if FORK >= FORK_ELECTRA
+.macro WITHDRAWAL_CREDENTIAL
+    call    lantern_has_execution_withdrawal_credential
+.endm
+.else
+.macro WITHDRAWAL_CREDENTIAL
+    call    lantern_has_eth1_withdrawal_credential
+.endm
+.endif
 
 /* Locals: rsp+0 validator, rsp+8 balance, rsp+16 epoch, rsp+24 out, rsp+32 the credential flag. */
 SPEC_FUNCTION is_fully_withdrawable_validator
@@ -49,7 +62,7 @@ SPEC_FUNCTION is_fully_withdrawable_validator
     mov     %rdx, 16(%rsp)
     mov     %rcx, 24(%rsp)
     lea     32(%rsp), %rsi
-    call    lantern_has_execution_withdrawal_credential
+    WITHDRAWAL_CREDENTIAL
     mov     0(%rsp), %rdi
     mov     32(%rsp), %rax
     mov     16(%rsp), %rdx
@@ -72,11 +85,16 @@ SPEC_FUNCTION is_partially_withdrawable_validator
     mov     %rdi, 0(%rsp)
     mov     %rsi, 8(%rsp)
     mov     %rdx, 16(%rsp)
+.if FORK >= FORK_ELECTRA
     lea     24(%rsp), %rsi
     call    lantern_get_max_effective_balance
+.else
+    MOVQ    %rax, MAX_EFFECTIVE_BALANCE
+    mov     %rax, 24(%rsp)
+.endif
     mov     0(%rsp), %rdi
     lea     32(%rsp), %rsi
-    call    lantern_has_execution_withdrawal_credential
+    WITHDRAWAL_CREDENTIAL
     mov     0(%rsp), %rdi
     mov     8(%rsp), %rsi
     mov     32(%rsp), %rax                  # has_execution_withdrawal_credential
@@ -92,6 +110,7 @@ SPEC_FUNCTION is_partially_withdrawable_validator
     UNFRAME 48
 SPEC_END is_partially_withdrawable_validator
 
+.if FORK >= FORK_ELECTRA
 SPEC_LEAF is_eligible_for_partial_withdrawals
     xor     %eax, %eax
     cmpq    $-1, Validator_exit_epoch(%rdi) # exit_epoch == FAR_FUTURE_EPOCH
@@ -123,6 +142,7 @@ SPEC_LEAF get_pending_balance_to_withdraw
 4:  mov     $LANTERN_INVALID_OVERFLOW, %eax
     ret
 SPEC_END get_pending_balance_to_withdraw
+.endif
 
 /* ---------------------------------------------------------------- Expected withdrawals */
 
@@ -194,6 +214,7 @@ LOCAL_FUNCTION append_withdrawal
     ret
 END_FUNCTION append_withdrawal
 
+.if FORK >= FORK_ELECTRA
 /*
  * rbx state, rbp withdrawal index, r12 prior, r13 out, r14 entry, r15 entries left,
  * S7 all, S8 limit, S9 processed. Locals: L epoch, L+8 validator index, L+16 balance, L+24 eligible.
@@ -284,6 +305,7 @@ SPEC_FUNCTION get_pending_partial_withdrawals
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 32
 SPEC_END get_pending_partial_withdrawals
+.endif
 
 /*
  * rbx state, rbp withdrawal index, r12 prior, r13 out, r14 validator index, r15 sweep left,
@@ -351,11 +373,17 @@ SPEC_FUNCTION get_validators_sweep_withdrawals
     call    lantern_is_partially_withdrawable_validator
     cmpq    $0, (L + 24)(%rsp)
     je      41f
+.if FORK >= FORK_ELECTRA
     VALIDATOR %rdi, %rbx, %r14
     lea     (L + 32)(%rsp), %rsi
     call    lantern_get_max_effective_balance
     mov     (L + 16)(%rsp), %r8             # amount = balance - get_max_effective_balance(validator)
     sub     (L + 32)(%rsp), %r8
+.else
+    mov     (L + 16)(%rsp), %r8             # amount = balance - MAX_EFFECTIVE_BALANCE
+    MOVQ    %rax, MAX_EFFECTIVE_BALANCE
+    sub     %rax, %r8
+.endif
 4:  VALIDATOR %rcx, %rbx, %r14
     lea     16(%r13), %rdi
     mov     %rbp, %rsi
@@ -401,6 +429,7 @@ SPEC_FUNCTION get_expected_withdrawals
     movq    $0, (16 + LIST_COUNT)(%r12)
     mov     BeaconState_next_withdrawal_index(%rbx), %rax
     mov     %rax, L(%rsp)
+.if FORK >= FORK_ELECTRA
     lea     -(2 * SWEEP_BYTES)(%r13), %rax
     mov     %rax, (%rbp)
     mov     %rbx, %rdi                      # get_pending_partial_withdrawals(state, withdrawal_index, withdrawals)
@@ -415,10 +444,17 @@ SPEC_FUNCTION get_expected_withdrawals
     lea     16(%r12), %rsi
     lea     16(%r14), %rdx
     call    concat_withdrawals
+.else
+    movq    $0, 8(%r14)                     # no partial withdrawals before electra
+.endif
     lea     -(2 * SWEEP_BYTES)(%r13), %rax
     mov     %rax, (%rbp)
     mov     %rbx, %rdi                      # get_validators_sweep_withdrawals(state, withdrawal_index, withdrawals)
+.if FORK >= FORK_ELECTRA
     mov     %r14, %rsi
+.else
+    lea     L(%rsp), %rsi
+.endif
     lea     16(%r12), %rdx
     mov     %rbp, %rcx
     mov     %r15, %r8
@@ -472,6 +508,7 @@ SPEC_LEAF update_next_withdrawal_index
 1:  RETURN_OK
 SPEC_END update_next_withdrawal_index
 
+.if FORK >= FORK_ELECTRA
 SPEC_LEAF update_pending_partial_withdrawals
     mov     (%rsi), %rax
     test    %rax, %rax
@@ -486,6 +523,7 @@ SPEC_LEAF update_pending_partial_withdrawals
     jmp     lantern_copy
 1:  RETURN_OK
 SPEC_END update_pending_partial_withdrawals
+.endif
 
 SPEC_LEAF update_next_withdrawal_validator_index
     mov     LIST_COUNT(%rsi), %rax
@@ -558,9 +596,11 @@ SPEC_FUNCTION process_withdrawals
     mov     %rbx, %rdi
     lea     16(%r14), %rsi
     call    lantern_update_next_withdrawal_index
+.if FORK >= FORK_ELECTRA
     mov     %rbx, %rdi
     mov     %r14, %rsi                      # processed_partial_withdrawals_count
     call    lantern_update_pending_partial_withdrawals
+.endif
     mov     %rbx, %rdi
     lea     16(%r14), %rsi
     call    lantern_update_next_withdrawal_validator_index

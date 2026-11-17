@@ -35,6 +35,7 @@
 - [`lantern_process_participation_flag_updates`](#function-lantern_process_participation_flag_updates): rotates the participation flags.
 - [`lantern_initiate_validator_exit`](#function-lantern_initiate_validator_exit): starts the exit of a validator.
 - [`lantern_get_validator_churn_limit`](#function-lantern_get_validator_churn_limit): the validators that may activate or exit in an epoch.
+- [`lantern_get_validator_activation_churn_limit`](#function-lantern_get_validator_activation_churn_limit): the validators that may activate in a deneb epoch.
 - [`lantern_compute_exit_epoch_and_update_churn`](#function-lantern_compute_exit_epoch_and_update_churn): the exit epoch for a balance, and the churn update.
 - [`lantern_get_balance_churn_limit`](#function-lantern_get_balance_churn_limit): the balance churn limit.
 - [`lantern_get_activation_exit_churn_limit`](#function-lantern_get_activation_exit_churn_limit): the churn limit of activations and exits.
@@ -74,7 +75,7 @@
 
 ## Test vectors
 
-- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/fulu/epoch_processing/<handler>/` for mainnet and minimal.
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/epoch_processing/<handler>/` of each fork, for mainnet and minimal.
   - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
 
 ## Function `lantern_process_justification_and_finalization`
@@ -271,6 +272,10 @@ lantern_process_inactivity_updates(state, config, scratch, result) -> status
 
 - Scratch: S(3).
 
+### ABI
+
+- Forks: altair and later.
+
 ## Function `lantern_process_rewards_and_penalties`
 
 In each epoch after the first, computes the deltas of the three flags and of inactivity, then applies each.
@@ -324,6 +329,10 @@ lantern_get_flag_index_deltas(state, flag_index, scratch, rewards, penalties) ->
 ### Limits
 
 - Scratch: S(3).
+
+### ABI
+
+- Forks: altair and later.
 
 ## Function `lantern_get_inactivity_penalty_deltas`
 
@@ -590,6 +599,10 @@ lantern_process_pending_consolidations(state, config, scratch, result) -> status
 
 - `LANTERN_OK`: `result` is `LANTERN_VALID`.
 
+### ABI
+
+- Forks: electra and later.
+
 ## Function `lantern_process_effective_balance_updates`
 
 Sets the effective balance of each validator whose balance left the hysteresis band.
@@ -696,6 +709,10 @@ lantern_process_participation_flag_updates(state, config, scratch, result) -> st
 
 - `LANTERN_OK`: `result` is `LANTERN_VALID`.
 
+### ABI
+
+- Forks: altair and later.
+
 ## Function `lantern_process_participation_record_updates`
 
 Moves current_epoch_attestations to previous_epoch_attestations and empties current_epoch_attestations.
@@ -767,6 +784,24 @@ lantern_get_validator_churn_limit(state, config, out) -> status
 
 - Forks: phase0 to deneb.
 
+## Function `lantern_get_validator_activation_churn_limit`
+
+min(MAX_PER_EPOCH_ACTIVATION_CHURN_LIMIT, lantern_get_validator_churn_limit(state)).
+
+### Signature
+
+```
+lantern_get_validator_activation_churn_limit(state, config, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`, always.
+
+### ABI
+
+- Forks: deneb.
+
 ## Function `lantern_compute_exit_epoch_and_update_churn`
 
 The epoch at which exit_balance may exit, with the exit churn of the state updated for it.
@@ -797,6 +832,10 @@ lantern_compute_exit_epoch_and_update_churn(state, exit_balance, config, scratch
 
 - Scratch: S(1).
 
+### ABI
+
+- Forks: electra and later.
+
 ## Function `lantern_get_balance_churn_limit`
 
 max(MIN_PER_EPOCH_CHURN_LIMIT_ELECTRA, total active balance // CHURN_LIMIT_QUOTIENT), down to a whole increment.
@@ -815,6 +854,10 @@ lantern_get_balance_churn_limit(state, config, scratch, out) -> status
 ### Limits
 
 - Scratch: S(1).
+
+### ABI
+
+- Forks: electra and later.
 
 ## Function `lantern_get_activation_exit_churn_limit`
 
@@ -835,6 +878,10 @@ lantern_get_activation_exit_churn_limit(state, config, scratch, out) -> status
 
 - Scratch: S(1).
 
+### ABI
+
+- Forks: electra and later.
+
 ## Function `lantern_get_consolidation_churn_limit`
 
 The balance churn limit minus the activation and exit churn limit.
@@ -854,6 +901,10 @@ lantern_get_consolidation_churn_limit(state, config, scratch, out) -> status
 
 - Scratch: S(1).
 
+### ABI
+
+- Forks: electra and later.
+
 ## Function `lantern_process_pending_deposits`
 
 Applies pending deposits in order while they are finalized, under MAX_PENDING_DEPOSITS_PER_EPOCH and within the churn; postpones deposits of exited validators.
@@ -869,9 +920,17 @@ lantern_process_pending_deposits(state, config, scratch, result) -> status
 - `LANTERN_OK`: `result` is `LANTERN_VALID`, or `LANTERN_INVALID_OVERFLOW`.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short, or the validator lists have room for fewer than MAX_PENDING_DEPOSITS_PER_EPOCH new entries.
 
+### Function does
+
+- Electra: also stops at a deposit request (slot > GENESIS_SLOT) while eth1_deposit_index < deposit_requests_start_index.
+
 ### Limits
 
 - Scratch: S(1).
+
+### ABI
+
+- Forks: electra and later.
 
 ## Function `lantern_apply_pending_deposit`
 
@@ -904,6 +963,10 @@ lantern_apply_pending_deposit(state, deposit, config, scratch) -> status
 ### Limits
 
 - Scratch: S(0).
+
+### ABI
+
+- Forks: electra and later.
 
 ## Function `lantern_is_valid_deposit_signature`
 
@@ -1063,6 +1126,10 @@ lantern_process_sync_committee_updates(state, config, scratch, result) -> status
 
 - Scratch: S(2) + 2 * `SyncCommittee__mem` + 24 + 8 * SYNC_COMMITTEE_SIZE + 24 bytes.
 
+### ABI
+
+- Forks: altair and later.
+
 ## Function `lantern_get_next_sync_committee`
 
 The committee of lantern_get_next_sync_committee_indices, with its aggregate public key.
@@ -1095,6 +1162,10 @@ lantern_get_next_sync_committee(state, scratch, out) -> status
 
 - Scratch: S(2) + `SyncCommittee__mem` + 24 + 8 * SYNC_COMMITTEE_SIZE + 24 bytes.
 
+### ABI
+
+- Forks: altair and later.
+
 ## Function `lantern_get_next_sync_committee_indices`
 
 SYNC_COMMITTEE_SIZE validators drawn from the next epoch's active validators, weighted by effective balance.
@@ -1119,9 +1190,18 @@ lantern_get_next_sync_committee_indices(state, scratch, out) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short, or `out` has room for fewer than SYNC_COMMITTEE_SIZE entries.
 - `LANTERN_INVALID_NO_INDICES`: no validator is active in the next epoch.
 
+### Function does
+
+- Altair to deneb: a candidate passes when effective_balance * 255 >= MAX_EFFECTIVE_BALANCE * sha256(seed + uint_to_bytes(i // 32))[i % 32].
+- Electra and later: a candidate passes when effective_balance * 65535 >= MAX_EFFECTIVE_BALANCE_ELECTRA * the two bytes at i % 16 * 2 of sha256(seed + uint_to_bytes(i // 16)).
+
 ### Limits
 
 - Scratch: S(2).
+
+### ABI
+
+- Forks: altair and later.
 
 ## Function `lantern_process_proposer_lookahead`
 
@@ -1142,9 +1222,13 @@ lantern_process_proposer_lookahead(state, config, scratch, result) -> status
 
 - Scratch: S(2).
 
+### ABI
+
+- Forks: fulu.
+
 ## Function `lantern_process_epoch`
 
-The fifteen epoch steps of the spec, in its order.
+The epoch steps of the spec of its fork, in its order.
 
 ### Signature
 
@@ -1161,7 +1245,10 @@ lantern_process_epoch(state, config, scratch, result) -> status
 ### Function does
 
 - Phase0: justification and finalization, rewards and penalties, registry updates, slashings, eth1 data reset, effective balance updates, slashings reset, RANDAO mixes reset, historical roots update, participation record updates.
-- Fulu: the steps of each fork from altair to fulu.
+- Altair and bellatrix: justification and finalization, inactivity updates, rewards and penalties, registry updates, slashings, eth1 data reset, effective balance updates, slashings reset, RANDAO mixes reset, historical roots update, participation flag updates, sync committee updates.
+- Capella and deneb: the altair steps, with the historical summaries update for the historical roots update.
+- Electra: the capella steps, with pending deposits and pending consolidations after the eth1 data reset.
+- Fulu: the electra steps, then the proposer lookahead.
 ### Limits
 
 - Scratch: the most of its steps.
