@@ -211,6 +211,11 @@
 .set LANTERN_INVALID_DEPOSIT, 46                /* process_deposit: the deposit's Merkle proof */
 .set LANTERN_INVALID_MERGE_BLOCK, 47            /* validate_merge_block: the terminal PoW block conditions */
 .set LANTERN_INVALID_TOPIC, 48                  /* lantern_gossip_topic, lantern_gossip_topic_parse: not a gossip topic */
+.set LANTERN_INVALID_PROTOCOL, 49               /* lantern_reqresp_protocol_parse, lantern_reqresp_protocol_id: not a req/resp protocol */
+.set LANTERN_INVALID_CHUNK, 50                  /* lantern_reqresp_read_header, lantern_reqresp_read_payload: invalid input */
+
+/* lantern_reqresp_read_header, lantern_reqresp_read_payload: the stream's bytes end before the chunk does. */
+.set LANTERN_REQRESP_MORE, 51
 
 /* ------------------------------------------------------------ Scratch (docs/reference/helpers.md, Type Scratch) */
 
@@ -330,6 +335,47 @@
 .set SeenHeader_block_root, 0
 .set SeenHeader_header_root, 32
 .set SeenHeader_header, 64
+
+/*
+ * The list limits of the req/resp message types that are config values: the values of the
+ * mainnet and minimal configs (include/types.inc, Req/resp messages).
+ */
+.set REQUEST_BLOCKS_LIMIT, 1024                    /* MAX_REQUEST_BLOCKS */
+.set REQUEST_BLOCKS_LIMIT_DENEB, 128               /* MAX_REQUEST_BLOCKS_DENEB */
+.set REQUEST_BLOB_SIDECARS_LIMIT, 128 * 6          /* MAX_REQUEST_BLOCKS_DENEB * MAX_BLOBS_PER_BLOCK */
+.set REQUEST_BLOB_SIDECARS_LIMIT_ELECTRA, 128 * 9  /* MAX_REQUEST_BLOCKS_DENEB * MAX_BLOBS_PER_BLOCK_ELECTRA */
+
+/* ReqRespProtocol: a req/resp method and its version (req-resp.md) */
+.set ReqRespProtocol_method, 0         /* REQRESP_* */
+.set ReqRespProtocol_version, 8
+.set ReqRespProtocol__mem, 16
+.set REQRESP_STATUS, 1
+.set REQRESP_GOODBYE, 2
+.set REQRESP_BEACON_BLOCKS_BY_RANGE, 3
+.set REQRESP_BEACON_BLOCKS_BY_ROOT, 4
+.set REQRESP_PING, 5
+.set REQRESP_METADATA, 6
+.set REQRESP_BLOB_SIDECARS_BY_RANGE, 7
+.set REQRESP_BLOB_SIDECARS_BY_ROOT, 8
+.set REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE, 9
+.set REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT, 10
+.set REQRESP_BEACON_BLOCKS_BY_HEAD, 11
+.set REQRESP_METHODS, 11
+
+/* ChunkHeader: the parts of a req/resp chunk before its payload (req-resp.md) */
+.set ChunkHeader_kind, 0               /* CHUNK_REQUEST or CHUNK_RESPONSE */
+.set ChunkHeader_context_length, 8     /* 0 or 4 */
+.set ChunkHeader_result, 16
+.set ChunkHeader_context, 24           /* ForkDigest in the low 4 bytes */
+.set ChunkHeader_length, 32
+.set ChunkHeader_header_bytes, 40
+.set ChunkHeader__mem, 48
+.set CHUNK_REQUEST, 0
+.set CHUNK_RESPONSE, 1
+
+/* SizeBounds: the least and most SSZ bytes of a type (req-resp.md) */
+.set SizeBounds_min, 0
+.set SizeBounds_max, 8
 
 /* GossipTopic: a gossip topic (networking.md) */
 .set GossipTopic_fork_digest, 0        /* ForkDigest in the low 4 bytes */

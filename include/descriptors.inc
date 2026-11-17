@@ -48,6 +48,8 @@
     \m ProposerSlashing, F_ProposerSlashing
     .if FORK == FORK_DENEB || FORK == FORK_ELECTRA
     \m BlobSidecar, F_BlobSidecar
+    \m BlobSidecarsByRangeRequest, F_BlobSidecarsByRangeRequest
+    \m BlobIdentifiers, N_BlobIdentifier
     \m BlobIdentifier, F_BlobIdentifier
     .endif
     .if FORK >= FORK_FULU
@@ -172,6 +174,12 @@
     \m SyncAggregatorSelectionData, F_SyncAggregatorSelectionData
     .endif
     .if FORK >= FORK_FULU
+    \m DataColumnSidecarsByRangeRequest, F_DataColumnSidecarsByRangeRequest
+    .endif
+    .if FORK >= FORK_FULU
+    \m DataColumnsByRootIdentifiers, N_DataColumnsByRootIdentifier
+    .endif
+    .if FORK >= FORK_FULU
     \m DataColumnsByRootIdentifier, F_DataColumnsByRootIdentifier
     .endif
     .if FORK >= FORK_FULU
@@ -183,10 +191,28 @@
     .if FORK >= FORK_FULU
     \m MatrixEntry, F_MatrixEntry
     .endif
+    \m Status, F_Status
+    .if FORK >= FORK_FULU
+    \m StatusV2, F_StatusV2
+    .endif
+    \m MetaData, F_MetaData
+    .if FORK >= FORK_ALTAIR
+    \m MetaDataV2, F_MetaDataV2
+    .endif
+    .if FORK >= FORK_FULU
+    \m MetaDataV3, F_MetaDataV3
+    .endif
+    \m BeaconBlocksByRangeRequest, F_BeaconBlocksByRangeRequest
+    .if FORK >= FORK_FULU
+    \m BeaconBlocksByHeadRequest, F_BeaconBlocksByHeadRequest
+    .endif
+    \m ENRForkID, F_ENRForkID
     \m SigningData, F_SigningData
     \m ForkData, F_ForkData
     \m DepositMessage, F_DepositMessage
     \m BlockRoots, N_Bytes32
+    \m BeaconBlockRoots, N_Bytes32
+    \m ErrorMessage, N_Uint8
     \m HistoricalRoots, N_Bytes32
     \m RandaoMixes, N_Bytes32
     \m Slashings, N_Uint64
@@ -230,6 +256,10 @@
     \m ExtraData
     .endif
     \m JustificationBits
+    \m Attnets
+    .if FORK >= FORK_ALTAIR
+    \m Syncnets
+    .endif
     .if FORK >= FORK_ALTAIR
     \m SyncCommitteeBits
     .endif
@@ -391,6 +421,30 @@
     .if FORK >= FORK_FULU
     \m MatrixEntry
     .endif
+    \m ErrorMessage
+    \m Status
+    .if FORK >= FORK_FULU
+    \m StatusV2
+    .endif
+    \m MetaData
+    .if FORK >= FORK_ALTAIR
+    \m MetaDataV2
+    .endif
+    .if FORK >= FORK_FULU
+    \m MetaDataV3
+    .endif
+    \m BeaconBlocksByRangeRequest
+    \m BeaconBlockRoots
+    .if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+    \m BlobSidecarsByRangeRequest
+    \m BlobIdentifiers
+    .endif
+    .if FORK >= FORK_FULU
+    \m DataColumnSidecarsByRangeRequest
+    \m DataColumnsByRootIdentifiers
+    \m BeaconBlocksByHeadRequest
+    .endif
+    \m ENRForkID
     \m SigningData
     \m ForkData
     \m DepositMessage
@@ -653,6 +707,10 @@ SSZ_DFIELD N_Bytes48, BlobSidecar, kzg_commitment
 SSZ_DFIELD N_Bytes48, BlobSidecar, kzg_proof
 SSZ_DFIELD N_SignedBeaconBlockHeader, BlobSidecar, signed_block_header
 SSZ_DFIELD N_KZGCommitmentInclusionProof, BlobSidecar, kzg_commitment_inclusion_proof
+
+SSZ_FIELDS BlobSidecarsByRangeRequest
+SSZ_DFIELD N_Uint64, BlobSidecarsByRangeRequest, start_slot
+SSZ_DFIELD N_Uint64, BlobSidecarsByRangeRequest, count
 
 SSZ_FIELDS BlobIdentifier
 SSZ_DFIELD N_Bytes32, BlobIdentifier, block_root
@@ -922,6 +980,11 @@ SSZ_DFIELD N_Uint64, SyncAggregatorSelectionData, subcommittee_index
 .endif
 
 .if FORK >= FORK_FULU
+SSZ_FIELDS DataColumnSidecarsByRangeRequest
+SSZ_DFIELD N_Uint64, DataColumnSidecarsByRangeRequest, start_slot
+SSZ_DFIELD N_Uint64, DataColumnSidecarsByRangeRequest, count
+SSZ_DFIELD N_DataColumnIndices, DataColumnSidecarsByRangeRequest, columns
+
 SSZ_FIELDS DataColumnsByRootIdentifier
 SSZ_DFIELD N_Bytes32, DataColumnsByRootIdentifier, block_root
 SSZ_DFIELD N_DataColumnIndices, DataColumnsByRootIdentifier, columns
@@ -945,6 +1008,58 @@ SSZ_DFIELD N_Bytes48, MatrixEntry, kzg_proof
 SSZ_DFIELD N_Uint64, MatrixEntry, column_index
 SSZ_DFIELD N_Uint64, MatrixEntry, row_index
 .endif
+
+SSZ_FIELDS Status
+SSZ_DFIELD N_Bytes4, Status, fork_digest
+SSZ_DFIELD N_Bytes32, Status, finalized_root
+SSZ_DFIELD N_Uint64, Status, finalized_epoch
+SSZ_DFIELD N_Bytes32, Status, head_root
+SSZ_DFIELD N_Uint64, Status, head_slot
+
+.if FORK >= FORK_FULU
+SSZ_FIELDS StatusV2
+SSZ_DFIELD N_Bytes4, StatusV2, fork_digest
+SSZ_DFIELD N_Bytes32, StatusV2, finalized_root
+SSZ_DFIELD N_Uint64, StatusV2, finalized_epoch
+SSZ_DFIELD N_Bytes32, StatusV2, head_root
+SSZ_DFIELD N_Uint64, StatusV2, head_slot
+SSZ_DFIELD N_Uint64, StatusV2, earliest_available_slot
+.endif
+
+SSZ_FIELDS MetaData
+SSZ_DFIELD N_Uint64, MetaData, seq_number
+SSZ_DFIELD N_Attnets, MetaData, attnets
+
+.if FORK >= FORK_ALTAIR
+SSZ_FIELDS MetaDataV2
+SSZ_DFIELD N_Uint64, MetaDataV2, seq_number
+SSZ_DFIELD N_Attnets, MetaDataV2, attnets
+SSZ_DFIELD N_Syncnets, MetaDataV2, syncnets
+.endif
+
+.if FORK >= FORK_FULU
+SSZ_FIELDS MetaDataV3
+SSZ_DFIELD N_Uint64, MetaDataV3, seq_number
+SSZ_DFIELD N_Attnets, MetaDataV3, attnets
+SSZ_DFIELD N_Syncnets, MetaDataV3, syncnets
+SSZ_DFIELD N_Uint64, MetaDataV3, custody_group_count
+.endif
+
+SSZ_FIELDS BeaconBlocksByRangeRequest
+SSZ_DFIELD N_Uint64, BeaconBlocksByRangeRequest, start_slot
+SSZ_DFIELD N_Uint64, BeaconBlocksByRangeRequest, count
+SSZ_DFIELD N_Uint64, BeaconBlocksByRangeRequest, step
+
+.if FORK >= FORK_FULU
+SSZ_FIELDS BeaconBlocksByHeadRequest
+SSZ_DFIELD N_Bytes32, BeaconBlocksByHeadRequest, beacon_root
+SSZ_DFIELD N_Uint64, BeaconBlocksByHeadRequest, count
+.endif
+
+SSZ_FIELDS ENRForkID
+SSZ_DFIELD N_Bytes4, ENRForkID, fork_digest
+SSZ_DFIELD N_Bytes4, ENRForkID, next_fork_version
+SSZ_DFIELD N_Uint64, ENRForkID, next_fork_epoch
 
 SSZ_FIELDS SigningData
 SSZ_DFIELD N_Bytes32, SigningData, object_root

@@ -10,6 +10,8 @@
 .include "preset.inc"
 .include "lantern.inc"
 .include "platform.inc"
+.include "snappy.inc"
+.include "reqresp_protocols.inc"
 .include "gossip_topics.inc"
 .include "macros.s"
 
@@ -20,3 +22,4 @@
 .include "store.s"
 .include "seen.s"
 .include "topics.s"
+.include "reqresp.s"

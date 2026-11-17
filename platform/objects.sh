@@ -56,7 +56,7 @@ build_objects() {
         mkdir -p "$out/$preset"
         # The core (include/forks.inc): asm/core/<ISA>/common.s once, and
         # asm/core/<ISA>/lantern.s once for each fork in $FORKS, with FORK set.
-        core="-I$root/include/$preset -I$root/include -I$plat -I$root/asm/core/$isa -I$dep/asm-ssz/include -I$dep/asm-crypto/include"
+        core="-I$root/include/$preset -I$root/include -I$plat -I$root/asm/core/$isa -I$dep/asm-ssz/include -I$dep/asm-crypto/include -I$dep/asm-snappy/include"
         as $core -c "$root/asm/core/$isa/common.s" -o "$out/$preset/common.o"
         objects="$objects $out/$preset/common.o"
         for fork in $FORKS; do

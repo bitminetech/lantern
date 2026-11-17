@@ -20,6 +20,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `generate.py` | Fetches the archives, checks their pins, writes the case files |
 | `requirements.txt` | Python packages, pinned |
 | `p2p.py` | The cases of the p2p helpers, from the pinned spec modules |
+| `reqresp.py` | The cases of the req/resp encoding, and the req/resp message types of the spec's text |
 
 ## Sources
 
@@ -37,7 +38,8 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 |---|---|
 | `<preset>-<fork>-<runner>-<handler>.bin` | The spec's cases of one handler of one fork: each case's files as parts |
 | `<preset>-<fork>-p2p-<function>.bin` | Lantern's cases of one p2p helper of networking.md: `config` (the values that replace the preset's), `input`, and `output`, null where the spec raises |
-| `<preset>-<fork>-descriptors.bin` | Each SSZ container type of the fork with its reference `TypeDescriptor` |
+| `<preset>-<fork>-reqresp-<function>.bin` | Lantern's cases of one function of req-resp.md: `input`, and `output`, null or a string (`more`, `invalid`) where the function refuses the input |
+| `<preset>-<fork>-descriptors.bin` | Each SSZ container type of the fork, and each req/resp message type, with its reference `TypeDescriptor` |
 | `<preset>-config.bin` | One case: `configs/<preset>.yaml` |
 | `<preset>-kzg_setup.bin` | One case: the three point lists of `trusted_setup_4096.json` as bytes |
 | `manifest.txt` | Each file, its case count and its SHA-256 |

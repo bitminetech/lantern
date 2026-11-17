@@ -600,3 +600,99 @@ SSZ_FIELD PartialDataColumnPartsMetadata, available, CellsBitList
 SSZ_FIELD PartialDataColumnPartsMetadata, requests, CellsBitList
 SSZ_END PartialDataColumnPartsMetadata
 .endif
+
+/* ------------------------------------------------------------ Req/resp messages */
+
+/*
+ * The messages of the req/resp methods (docs/reference/req-resp.md): the containers that
+ * p2p-interface.md states in its text, and its list types. A list limit that is a config
+ * value takes the value of the mainnet and minimal configs (REQUEST_*_LIMIT of
+ * include/lantern.inc); the request handlers check counts against the config.
+ */
+SSZ_LIST ErrorMessage, Uint8, 256
+
+SSZ_CONTAINER Status, 0
+SSZ_FIELD Status, fork_digest, Bytes4
+SSZ_FIELD Status, finalized_root, Bytes32
+SSZ_FIELD Status, finalized_epoch, Uint64
+SSZ_FIELD Status, head_root, Bytes32
+SSZ_FIELD Status, head_slot, Uint64
+SSZ_END Status
+
+.if TYPES_FORK >= FORK_FULU
+SSZ_CONTAINER StatusV2, 0
+SSZ_FIELD StatusV2, fork_digest, Bytes4
+SSZ_FIELD StatusV2, finalized_root, Bytes32
+SSZ_FIELD StatusV2, finalized_epoch, Uint64
+SSZ_FIELD StatusV2, head_root, Bytes32
+SSZ_FIELD StatusV2, head_slot, Uint64
+SSZ_FIELD StatusV2, earliest_available_slot, Uint64
+SSZ_END StatusV2
+.endif
+
+SSZ_CONTAINER MetaData, 0
+SSZ_FIELD MetaData, seq_number, Uint64
+SSZ_FIELD MetaData, attnets, Attnets
+SSZ_END MetaData
+
+.if TYPES_FORK >= FORK_ALTAIR
+SSZ_CONTAINER MetaDataV2, 0
+SSZ_FIELD MetaDataV2, seq_number, Uint64
+SSZ_FIELD MetaDataV2, attnets, Attnets
+SSZ_FIELD MetaDataV2, syncnets, Syncnets
+SSZ_END MetaDataV2
+.endif
+
+.if TYPES_FORK >= FORK_FULU
+SSZ_CONTAINER MetaDataV3, 0
+SSZ_FIELD MetaDataV3, seq_number, Uint64
+SSZ_FIELD MetaDataV3, attnets, Attnets
+SSZ_FIELD MetaDataV3, syncnets, Syncnets
+SSZ_FIELD MetaDataV3, custody_group_count, Uint64
+SSZ_END MetaDataV3
+.endif
+
+SSZ_CONTAINER BeaconBlocksByRangeRequest, 0
+SSZ_FIELD BeaconBlocksByRangeRequest, start_slot, Uint64
+SSZ_FIELD BeaconBlocksByRangeRequest, count, Uint64
+SSZ_FIELD BeaconBlocksByRangeRequest, step, Uint64
+SSZ_END BeaconBlocksByRangeRequest
+
+.if TYPES_FORK >= FORK_DENEB
+SSZ_LIST BeaconBlockRoots, Bytes32, REQUEST_BLOCKS_LIMIT_DENEB
+.else
+SSZ_LIST BeaconBlockRoots, Bytes32, REQUEST_BLOCKS_LIMIT
+.endif
+
+.if TYPES_FORK == FORK_DENEB || TYPES_FORK == FORK_ELECTRA
+SSZ_CONTAINER BlobSidecarsByRangeRequest, 0
+SSZ_FIELD BlobSidecarsByRangeRequest, start_slot, Uint64
+SSZ_FIELD BlobSidecarsByRangeRequest, count, Uint64
+SSZ_END BlobSidecarsByRangeRequest
+.if TYPES_FORK == FORK_ELECTRA
+SSZ_LIST BlobIdentifiers, BlobIdentifier, REQUEST_BLOB_SIDECARS_LIMIT_ELECTRA
+.else
+SSZ_LIST BlobIdentifiers, BlobIdentifier, REQUEST_BLOB_SIDECARS_LIMIT
+.endif
+.endif
+
+.if TYPES_FORK >= FORK_FULU
+SSZ_CONTAINER DataColumnSidecarsByRangeRequest, 1
+SSZ_FIELD DataColumnSidecarsByRangeRequest, start_slot, Uint64
+SSZ_FIELD DataColumnSidecarsByRangeRequest, count, Uint64
+SSZ_FIELD DataColumnSidecarsByRangeRequest, columns, DataColumnIndices
+SSZ_END DataColumnSidecarsByRangeRequest
+
+SSZ_LIST DataColumnsByRootIdentifiers, DataColumnsByRootIdentifier, REQUEST_BLOCKS_LIMIT_DENEB
+
+SSZ_CONTAINER BeaconBlocksByHeadRequest, 0
+SSZ_FIELD BeaconBlocksByHeadRequest, beacon_root, Bytes32
+SSZ_FIELD BeaconBlocksByHeadRequest, count, Uint64
+SSZ_END BeaconBlocksByHeadRequest
+.endif
+
+SSZ_CONTAINER ENRForkID, 0
+SSZ_FIELD ENRForkID, fork_digest, Bytes4
+SSZ_FIELD ENRForkID, next_fork_version, Bytes4
+SSZ_FIELD ENRForkID, next_fork_epoch, Uint64
+SSZ_END ENRForkID

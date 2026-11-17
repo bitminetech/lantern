@@ -351,6 +351,16 @@ ABI uint64_t LF(compute_max_request_data_column_sidecars)(const void *config, vo
 ABI uint64_t LF(compute_next_fork_digest)(const void *root, const void *epoch, const void *config, void *scratch, void *out);
 #endif
 
+/* Req/resp encoding: docs/reference/req-resp.md. */
+ABI uint64_t lantern_reqresp_protocol_parse(const void *id, void *out);
+ABI uint64_t lantern_reqresp_protocol_id(const void *protocol, void *out);
+ABI uint64_t lantern_reqresp_chunk_size(const void *n, void *out);
+ABI uint64_t lantern_reqresp_write_chunk(const void *header, const void *payload, void *scratch, void *out);
+ABI uint64_t lantern_reqresp_read_header(const void *input, void *header);
+ABI uint64_t lantern_reqresp_read_payload(const void *input, const void *start, const void *length, const void *eof,
+                                          void *scratch, void *out, void *consumed);
+ABI uint64_t lantern_ssz_size_bounds(const void *type, void *out);
+
 /* ---------------------------------------------------------------- ABI check */
 
 #define STACK_CAP 65536 /* README: stack per call */
@@ -2916,6 +2926,193 @@ static void run_p2p(const char *file, const char *handler, case_file *f) {
     memcpy(config, base_config, CONFIG_SIZE);
 }
 
+/* ---------------------------------------------------------------- Req/resp encoding */
+
+#define INVALID_PROTOCOL 49
+#define INVALID_CHUNK 50
+#define REQRESP_MORE 51
+
+/* A ByteList of junk bytes, then len bytes of b, with room for room more bytes. */
+static uint8_t *list_of(const uint8_t *b, uint64_t len, uint64_t junk, uint64_t room, uint64_t *size) {
+    *size = 24 + junk + len + room;
+    uint8_t *l = buffer(*size);
+    wr64(l, *size);
+    wr64(l + 8, 24);
+    wr64(l + 16, junk + len);
+    for (uint64_t k = 0; k < junk; k++) l[24 + k] = (uint8_t)(0xC0 + k);
+    if (len) memcpy(l + 24 + junk, b, (size_t)len);
+    return l;
+}
+
+/* Whether want is the string text. */
+static int is_text(tv want, const char *text) {
+    return want && *want == T_STRING && rd64(want + 1) == strlen(text) && !memcmp(want + 9, text, strlen(text));
+}
+
+/* Reads one chunk of the bytes of list l from byte at: its header (kind, context length) and payload. */
+static const char *read_back(const uint8_t *l, uint64_t at, uint64_t kind, uint64_t context_length, uint64_t *header,
+                             uint8_t **payload, uint64_t *consumed) {
+    header[0] = kind;
+    header[1] = context_length;
+    uint64_t size, eof = 1;
+    uint8_t *view = list_of(l + 24 + at, rd64(l + 16) - at, 0, 0, &size);
+    const char *why = NULL;
+    if (CALL(lantern_reqresp_read_header, view, header) != 0) why = "the written header does not read back";
+    else {
+        uint64_t length = header[4], start = header[5], osize = 24 + length;
+        *payload = buffer(osize);
+        wr64(*payload, osize);
+        if (CALL(lantern_reqresp_read_payload, view, &start, &length, &eof, fresh_scratch(), *payload, consumed) != 0)
+            why = "the written payload does not read back";
+    }
+    free(view);
+    return why;
+}
+
+/* reqresp-<function>: lantern's cases of the req/resp encoding (tests/generator/reqresp.py). */
+static void run_reqresp(const char *file, const char *handler, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, blen, size, st;
+        tv parts = next_case(f, &name, &len);
+        tv in = tv_get(parts, "input"), want = tv_get(parts, "output");
+        int null = want && *want == T_NULL;
+        if (!strcmp(handler, "ssz_size_bounds")) {
+            char tname[128];
+            tv tn = tv_get(in, "type"); /* a string */
+            snprintf(tname, sizeof tname, "%.*s", (int)rd64(tn + 1), (const char *)(tn + 9));
+            const uint8_t *desc = type_by_name(tname);
+            if (!desc) continue; /* a type lantern does not have */
+            uint8_t *out = buffer(16);
+            st = CALL(lantern_ssz_size_bounds, desc, out);
+            if (st) why = "status";
+            else if (rd64(out) != tv_u64(tv_get(want, "min")) || rd64(out + 8) != tv_u64(tv_get(want, "max"))) why = "bounds differ";
+            else if (!guard_ok(out, 16)) why = "wrote past out";
+            free(out);
+        } else if (!strcmp(handler, "protocol_parse")) {
+            uint8_t *id = byte_list(tv_get(in, "id"), &size), *out = buffer(16);
+            st = CALL(lantern_reqresp_protocol_parse, id, out);
+            if (null) {
+                if (st != INVALID_PROTOCOL) why = "status";
+                else if (out[0] != FILL) why = "wrote out for a bad ID";
+            } else if (st) why = "status";
+            else if (rd64(out) != tv_u64(tv_get(want, "method")) || rd64(out + 8) != tv_u64(tv_get(want, "version"))) why = "protocol differs";
+            if (!why && !guard_ok(out, 16)) why = "wrote past out";
+            free(id);
+            free(out);
+        } else if (!strcmp(handler, "protocol_id")) {
+            uint64_t protocol[2] = {tv_u64(tv_get(in, "method")), tv_u64(tv_get(in, "version"))}, sl = 0;
+            const uint8_t *string = null ? NULL : tv_bytes(want, &sl);
+            size = 24 + (null ? 64 : sl);
+            uint8_t *out = buffer(size);
+            wr64(out, size);
+            st = CALL(lantern_reqresp_protocol_id, protocol, out);
+            if (null) {
+                if (st != INVALID_PROTOCOL) why = "status";
+            } else if (st) why = "status";
+            else if (rd64(out + 8) != 24 || rd64(out + 16) != sl || memcmp(out + 24, string, (size_t)sl)) why = "ID differs";
+            else {
+                uint8_t *small = buffer(size - 1);
+                wr64(small, size - 1);
+                if (CALL(lantern_reqresp_protocol_id, protocol, small) != 1) why = "short out accepted";
+                free(small);
+            }
+            if (!why && !guard_ok(out, size)) why = "wrote past out";
+            free(out);
+        } else if (!strcmp(handler, "chunk_size")) {
+            uint64_t n = tv_u64(tv_get(in, "n"));
+            uint8_t *out = buffer(8);
+            st = CALL(lantern_reqresp_chunk_size, &n, out);
+            if (null) {
+                if (st != 4) why = "status";
+            } else if (st) why = "status";
+            else if (rd64(out) != tv_u64(want)) why = "size differs";
+            if (!why && !guard_ok(out, 8)) why = "wrote past out";
+            free(out);
+        } else if (!strcmp(handler, "read_header")) {
+            const uint8_t *b = tv_bytes(tv_get(in, "bytes"), &blen);
+            uint8_t *input = list_of(b, blen, 0, 0, &size);
+            uint64_t header[6] = {tv_u64(tv_get(in, "kind")), tv_u64(tv_get(in, "context_length")), 7, 7, 7, 7};
+            st = CALL(lantern_reqresp_read_header, input, header);
+            if (is_text(want, "more")) {
+                if (st != REQRESP_MORE) why = "status";
+                else if (header[2] != 7 || header[5] != 7) why = "wrote the header";
+            } else if (is_text(want, "invalid")) {
+                if (st != INVALID_CHUNK) why = "status";
+            } else if (st) why = "status";
+            else {
+                uint8_t ctx[8] = {0};
+                memcpy(ctx, tv_bytes(tv_get(want, "context"), &blen), 4);
+                if (header[2] != tv_u64(tv_get(want, "result")) || header[3] != rd64(ctx) || header[4] != tv_u64(tv_get(want, "length")) ||
+                    header[5] != tv_u64(tv_get(want, "header_bytes")))
+                    why = "header differs";
+            }
+            if (!why && !guard_ok(input, size)) why = "wrote past input";
+            free(input);
+        } else if (!strcmp(handler, "read_payload")) {
+            const uint8_t *b = tv_bytes(tv_get(in, "bytes"), &blen);
+            uint64_t start = 3, length = tv_u64(tv_get(in, "length")), eof = tv_u64(tv_get(in, "eof")), consumed = 7;
+            uint8_t *input = list_of(b, blen, start, 0, &size);
+            uint64_t osize = 24 + length;
+            uint8_t *out = buffer(osize);
+            wr64(out, osize);
+            st = CALL(lantern_reqresp_read_payload, input, &start, &length, &eof, fresh_scratch(), out, &consumed);
+            if (is_text(want, "more")) {
+                if (st != REQRESP_MORE) why = "status";
+            } else if (is_text(want, "invalid")) {
+                if (st != INVALID_CHUNK) why = "status";
+            } else if (st) why = "status";
+            else {
+                const uint8_t *p = tv_bytes(tv_get(want, "payload"), &blen);
+                if (rd64(out + 8) != 24 || rd64(out + 16) != blen || memcmp(out + 24, p, (size_t)blen)) why = "payload differs";
+                else if (consumed != tv_u64(tv_get(want, "consumed"))) why = "consumed differs";
+                else if (length) {
+                    uint8_t *small = buffer(osize - 1);
+                    wr64(small, osize - 1);
+                    if (CALL(lantern_reqresp_read_payload, input, &start, &length, &eof, fresh_scratch(), small, &consumed) != 1)
+                        why = "short out accepted";
+                    free(small);
+                }
+            }
+            if (!why && !guard_ok(out, osize)) why = "wrote past out";
+            free(input);
+            free(out);
+        } else if (!strcmp(handler, "write_chunk")) {
+            uint64_t kind = tv_u64(tv_get(in, "kind")), clen = tv_u64(tv_get(in, "context_length")), result = tv_u64(tv_get(in, "result"));
+            uint64_t header[6] = {kind, clen, result, 0, 99, 99}, psize, osize, csize = 0;
+            memcpy(&header[3], tv_bytes(tv_get(in, "context"), &blen), 4);
+            uint8_t *payload = byte_list(tv_get(in, "payload"), &psize);
+            uint64_t plen = rd64(payload + 16);
+            if (CALL(lantern_reqresp_chunk_size, &plen, &csize) != 0) why = "chunk size status";
+            uint8_t *out = list_of(NULL, 0, 7, csize, &osize), *before = copy_of(out, osize + GUARD);
+            /* One byte less room than the bound: BUFFER_TOO_SMALL, out unchanged. */
+            wr64(out, osize - 1);
+            if (!why && CALL(lantern_reqresp_write_chunk, header, payload, fresh_scratch(), out) != 1) why = "short out accepted";
+            wr64(out, osize);
+            if (!why && memcmp(out + 8, before + 8, (size_t)(osize - 8))) why = "a refused write changed out";
+            if (!why && (st = CALL(lantern_reqresp_write_chunk, header, payload, fresh_scratch(), out)) != 0) why = "status";
+            if (!why && (memcmp(out + 24, before + 24, 7) || rd64(out + 8) != 24)) why = "changed the bytes before the chunk";
+            if (!why && !guard_ok(out, osize)) why = "wrote past out";
+            if (!why) {
+                uint64_t back[6], consumed = 0;
+                uint8_t *p = NULL;
+                why = read_back(out, 7, kind, clen, back, &p, &consumed);
+                if (!why) {
+                    uint64_t ctx = kind == 1 && result == 0 && clen ? header[3] : 0;
+                    if (back[2] != (kind ? result : 0) || back[3] != ctx) why = "result or context differs";
+                    else if (back[4] != plen || memcmp(p + 24, payload + 24, (size_t)plen)) why = "payload differs";
+                    else if (7 + back[5] + consumed != rd64(out + 16)) why = "the chunk has more bytes than it reads";
+                }
+                free(p);
+            }
+            free(before);
+            free(payload);
+            free(out);
+        } else why = "no such handler";
+        report(file, name, len, why == NULL, why);
+    }
+}
+
 /* ---------------------------------------------------------------- Main */
 
 int main(int argc, char **argv) {
@@ -2962,6 +3159,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "sync-optimistic")) run_fork_choice(file, argv[1], &f, 0);
         else if (!bls_off && !strncmp(kind, "networking-gossip_", 18)) run_gossip(file, argv[1], kind + 18, &f);
         else if (!bls_off && !strncmp(kind, "p2p-", 4)) run_p2p(file, kind + 4, &f);
+        else if (!bls_off && !strncmp(kind, "reqresp-", 8)) run_reqresp(file, kind + 8, &f);
 #if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
                               !strcmp(kind, "networking-compute_columns_for_custody_group")))
