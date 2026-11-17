@@ -3,6 +3,13 @@
  */
 
 .set NODE_ROOT_ENTRY, 40                /* lantern_node_step: a flag, then the root of a BLOCK event */
+/* reg = the node x19's ByteList of the libp2p events it queued. */
+.macro P2P_OUT reg
+    ldr     \reg, [x19, #Node_p2p_out]
+    add     \reg, x19, \reg
+.endm
+
+.set NODE_BLOB_HEADER, 8 + 32 * FIELD_ELEMENTS_PER_BLOB + 48 + 48   /* the signed_block_header in a BlobSidecar's SSZ bytes */
 
 /* Call lantern_<fork>_<name> for the fork in x15 (FORK_PHASE0 to FORK_FULU). */
 .macro FORK_CALL name
@@ -91,8 +98,9 @@ FUNCTION lantern_node_size
     NODE_SIZE_ADD checkpoints, NodeCheckpoint__mem
     NODE_SIZE_ADD pow_blocks, POW_BLOCK_BYTES
     NODE_SIZE_ADD peers, NodePeer__mem
-    ldr     x10, [x0, #NodeRoom_p2p_out]
-    adds    x10, x10, #7
+    NODE_SIZE_ADD messages, NodeMessage__mem
+    ldr     x10, [x0, #NodeRoom_p2p_out] /* a ByteList */
+    adds    x10, x10, #(24 + 7)
     b.cs    9f
     and     x10, x10, #~7
     adds    x12, x12, x10
@@ -132,8 +140,17 @@ LOCAL_FUNCTION node_layout
     str     xzr, [x0, #(Node_streams + 8)]
     ldr     x10, [x1, #NodeRoom_streams]
     madd    x9, x10, x12, x9
-    str     x9, [x0, #Node_p2p_out]
-    str     xzr, [x0, #(Node_p2p_out + 8)]
+    NODE_PART messages, messages, NodeMessage__mem
+    str     x9, [x0, #Node_p2p_out]         /* one ByteList, empty */
+    mov     x10, #1
+    str     x10, [x0, #(Node_p2p_out + 8)]
+    ldr     x10, [x1, #NodeRoom_p2p_out]
+    add     x10, x10, #(24 + 7)
+    and     x10, x10, #~7
+    add     x11, x0, x9
+    mov     x12, #24
+    stp     x10, x12, [x11]
+    str     xzr, [x11, #16]
     ret
 END_FUNCTION node_layout
 
@@ -253,7 +270,13 @@ FUNCTION lantern_node_copy
     NODE_COPY_ROOM pow_blocks, Node_pow_blocks
     NODE_COPY_ROOM peers, Node_peers
     NODE_COPY_ROOM streams, Node_streams
-    NODE_COPY_ROOM p2p_out, Node_p2p_out
+    NODE_COPY_ROOM messages, Node_messages
+    ldr     x9, [x20, #NodeRoom_p2p_out]    /* the queued bytes fit */
+    ldr     x10, [x19, #Node_p2p_out]
+    add     x10, x19, x10
+    ldr     x10, [x10, #16]
+    cmp     x9, x10
+    b.lo    8f
     ldr     x24, [x19, #Node_stream_bytes]  /* a stream's request bytes fit */
     ldr     x9, [x20, #NodeRoom_request_bytes]
     add     x9, x9, #(NodeStream__fixed + 7)
@@ -271,10 +294,15 @@ FUNCTION lantern_node_copy
     NODE_COPY_PART Node_checkpoints, NodeCheckpoint__mem
     NODE_COPY_PART Node_pow_blocks, POW_BLOCK_BYTES
     NODE_COPY_PART Node_peers, NodePeer__mem
-    PART    x1, x2, x19, Node_p2p_out       /* the queued bytes */
-    str     x2, [x21, #(Node_p2p_out + 8)]
-    ldr     x9, [x21, #Node_p2p_out]
-    add     x0, x21, x9
+    NODE_COPY_PART Node_messages, NodeMessage__mem
+    ldr     x1, [x19, #Node_p2p_out]        /* the queued bytes */
+    add     x1, x19, x1
+    ldr     x2, [x1, #16]
+    ldr     x0, [x21, #Node_p2p_out]
+    add     x0, x21, x0
+    str     x2, [x0, #16]
+    add     x0, x0, #24
+    add     x1, x1, #24
     bl      lantern_copy
     PART    x22, x23, x19, Node_streams     /* each stream, with the request room of the new stride */
     str     x23, [x21, #(Node_streams + 8)]
@@ -383,7 +411,7 @@ LOCAL_FUNCTION node_find_checkpoint
     ret
 END_FUNCTION node_find_checkpoint
 
-/* L0: a WORK action: kind x0, state_a x1, state_b x2, data x3, target x4, arg x5. */
+/* L0: x0 = a WORK action: kind x0, state_a x1, state_b x2, data x3, target x4, arg x5; state_c 0. */
 LOCAL_FUNCTION node_work
     FRAME 48
     stp     x0, x1, [sp, #16]
@@ -395,7 +423,9 @@ LOCAL_FUNCTION node_work
     ldp     x9, x10, [sp, #16]
     stp     x9, x10, [x0, #NodeAction_work_kind]
     ldp     x9, x10, [sp, #32]
-    stp     x9, x10, [x0, #NodeAction_state_b]
+    str     x9, [x0, #NodeAction_state_b]
+    str     xzr, [x0, #NodeAction_state_c]
+    str     x10, [x0, #NodeAction_data]
     ldp     x9, x10, [sp, #48]
     stp     x9, x10, [x0, #NodeAction_target]
     UNFRAME 48
@@ -755,11 +785,13 @@ LOCAL_FUNCTION node_event
     cmp     x10, #LANTERN_NEED_JUSTIFIED_STATE
     b.ne    51f
     bl      node_justified                  /* the justified state, then the same import again */
-    add     x0, x21, #NodeAction_work_kind
-    ldp     x0, x1, [x0]
-    ldp     x2, x3, [x21, #NodeAction_state_b]
+    ldp     x0, x1, [x21, #NodeAction_work_kind]
+    ldr     x2, [x21, #NodeAction_state_b]
+    ldr     x3, [x21, #NodeAction_data]
     ldp     x4, x5, [x21, #NodeAction_target]
     bl      node_work
+    ldr     x9, [x21, #NodeAction_state_c]
+    str     x9, [x0, #NodeAction_state_c]
     LEAVE 48
 51: cbnz    x10, 52f
     mov     x9, #NODE_BLOCK_IMPORTED        /* imported: then its waiting children */
@@ -791,12 +823,13 @@ LOCAL_FUNCTION node_event
     cbz     x0, 71f
     mov     x1, x0
     mov     x0, #NODE_WORK_ATTESTATION
-    ldp     x2, x3, [x21, #NodeAction_state_b]
+    ldr     x2, [x21, #NodeAction_state_b]
+    ldr     x3, [x21, #NodeAction_data]
     ldp     x4, x5, [x21, #NodeAction_target]
     bl      node_work
     LEAVE 48
 62: cmp     x9, #NODE_WORK_SERVE               /* SERVE: the chunk to its stream, then the next block or the close */
-    b.ne    70f
+    b.ne    63f
     ldr     x0, [x21, #NodeAction_target]
     bl      node_find_stream
     cmn     x0, #1
@@ -841,6 +874,70 @@ LOCAL_FUNCTION node_event
     mov     x0, x22
     bl      node_drop_stream
     LEAVE 48
+63: cmp     x9, #NODE_WORK_GOSSIP              /* GOSSIP: the VALIDATION, then a valid block to import */
+    b.ne    70f
+    mov     x0, #LIBP2P_ACCEPT
+    mov     x11, #LIBP2P_IGNORE
+    mov     x12, #LIBP2P_REJECT
+    cmp     x10, #LANTERN_GOSSIP_REJECT
+    csel    x11, x12, x11, eq
+    cmp     x10, #LANTERN_VALID
+    csel    x25, x0, x11, eq
+    ldr     x0, [x21, #NodeAction_target]
+    mov     x1, x25
+    bl      node_validation
+    ldr     x1, [x21, #NodeAction_state_b]     /* the proposer state */
+    cbz     x1, 64f
+    mov     x0, #NODE_ACT_STATE_FREE
+    mov     x2, #0
+    bl      node_ids
+64: ldr     x0, [x21, #NodeAction_target]
+    bl      node_find_message
+    cmn     x0, #1
+    b.eq    66f
+    mov     x22, x1
+    cmp     x25, #LIBP2P_ACCEPT
+    b.ne    65f
+    ldr     x9, [x22, #NodeMessage_topic]
+    cmp     x9, #GOSSIP_BEACON_BLOCK
+    b.ne    65f
+    add     x0, x21, #NodeEvent_root           /* a new block keeps the bytes */
+    bl      node_find_block
+    cmn     x0, #1
+    b.ne    65f
+    PART    x9, x10, x19, Node_blocks
+    str     x10, [sp, #(L + 40)]
+    mov     x11, #NodeBlock__mem
+    madd    x9, x10, x11, x9
+    add     x11, x21, #NodeEvent_root
+    COPY32  x9, x11
+    add     x11, x9, #NodeBlock_parent_root
+    add     x12, x22, #NodeMessage_parent_root
+    COPY32  x11, x12
+    ldr     x11, [x22, #NodeMessage_slot]
+    str     x11, [x9, #NodeBlock_slot]
+    ldr     x11, [x21, #NodeAction_data]
+    str     x11, [x9, #NodeBlock_data_id]
+    str     xzr, [x9, #NodeBlock_state_id]
+    mov     x11, #NODE_BLOCK_WAITING
+    str     x11, [x9, #NodeBlock_status]
+    mov     x11, #1
+    str     x11, [x9, #NodeBlock_data_available]
+    str     xzr, [x9, #NodeBlock_result]
+    add     x10, x10, #1
+    str     x10, [x19, #(Node_blocks + 8)]
+    mov     x0, x22
+    bl      node_drop_message
+    ldr     x0, [sp, #(L + 40)]
+    bl      node_try_import
+    LEAVE 48
+65: mov     x0, x22
+    bl      node_drop_message
+66: mov     x0, #NODE_ACT_BYTES_FREE           /* else its bytes go */
+    ldr     x1, [x21, #NodeAction_data]
+    mov     x2, #0
+    bl      node_ids
+    LEAVE 48
 70: cmp     x9, #NODE_WORK_ATTESTATION         /* done with an attestation or a slashing: free its bytes */
     ccmp    x9, #NODE_WORK_ATTESTER_SLASHING, #4, ne
     b.ne    79f
@@ -856,16 +953,17 @@ END_FUNCTION node_event
 /* L0: x0 = room for an event of x0 bytes at the end of the node's queued libp2p events, its size written, or 0. Uses x9-x12. */
 LOCAL_FUNCTION node_out
     UNWIND_END_PROLOGUE
-    ldp     x9, x10, [x19, #Node_p2p_out]   /* offset, bytes used; the part ends at the node's end */
-    ldr     x11, [x19]
-    sub     x11, x11, x9
+    P2P_OUT x9
+    ldr     x10, [x9, #16]
+    ldr     x11, [x9]
+    sub     x11, x11, #24
     sub     x11, x11, x10
     cmp     x11, x0
     b.lo    1f
-    add     x12, x19, x9
+    add     x12, x9, #24
     add     x12, x12, x10
     add     x10, x10, x0
-    str     x10, [x19, #(Node_p2p_out + 8)]
+    str     x10, [x9, #16]
     str     x0, [x12]
     mov     x0, x12
     ret
@@ -888,8 +986,9 @@ END_FUNCTION node_out_handle
 /* L0: drops the first x0 queued libp2p events, which libp2p took. */
 LOCAL_FUNCTION node_out_consume
     FRAME 16
-    ldp     x9, x10, [x19, #Node_p2p_out]
-    add     x11, x19, x9
+    P2P_OUT x9
+    ldr     x10, [x9, #16]
+    add     x11, x9, #24
     mov     x12, #0
 1:  cbz     x0, 2f
     cmp     x12, x10
@@ -899,7 +998,7 @@ LOCAL_FUNCTION node_out_consume
     sub     x0, x0, #1
     b       1b
 2:  sub     x2, x10, x12
-    str     x2, [x19, #(Node_p2p_out + 8)]
+    str     x2, [x9, #16]
     mov     x0, x11
     add     x1, x11, x12
     bl      lantern_copy
@@ -1452,12 +1551,452 @@ LOCAL_FUNCTION node_serve
     LEAVE 0
 END_FUNCTION node_serve
 
-/* L0: the libp2p application notice x0. x21 the notice, x22 an entry, x25 method, x26 version. */
+/* ------------------------------------------------------------ gossip */
+
+/* L0: x0 = the index of the message of libp2p handle x0, or 2^64 - 1; x1 = its entry. Uses x9-x11. */
+LOCAL_FUNCTION node_find_message
+    UNWIND_END_PROLOGUE
+    PART    x1, x10, x19, Node_messages
+    mov     x9, #0
+1:  cmp     x9, x10
+    b.hs    2f
+    ldr     x11, [x1, #NodeMessage_handle]
+    cmp     x11, x0
+    b.eq    3f
+    add     x1, x1, #NodeMessage__mem
+    add     x9, x9, #1
+    b       1b
+2:  mov     x0, #-1
+    ret
+3:  mov     x0, x9
+    ret
+END_FUNCTION node_find_message
+
+/* L0: removes the message entry x0: the last entry takes its place. */
+LOCAL_FUNCTION node_drop_message
+    FRAME 16
+    PART    x9, x10, x19, Node_messages
+    sub     x10, x10, #1
+    str     x10, [x19, #(Node_messages + 8)]
+    mov     x11, #NodeMessage__mem
+    madd    x1, x10, x11, x9
+    cmp     x1, x0
+    b.eq    1f
+    mov     x2, #NodeMessage__mem
+    bl      lantern_copy
+1:  UNFRAME 16
+END_FUNCTION node_drop_message
+
+/* L0: x0 = 1 when the actions have room for x0 bytes and 4096 more, else 0. Uses x9-x12. */
+LOCAL_FUNCTION node_room
+    UNWIND_END_PROLOGUE
+    ldp     x9, x10, [x24, #8]
+    ldr     x11, [x24]
+    sub     x11, x11, x9
+    sub     x11, x11, x10
+    add     x12, x0, #4096
+    cmp     x11, x12
+    cset    x0, hs
+    ret
+END_FUNCTION node_room
+
+/* L0: a VALIDATION of the libp2p message handle x0 with the result x1. */
+LOCAL_FUNCTION node_validation
+    FRAME 16
+    stp     x0, x1, [sp, #16]
+    mov     x0, #LIBP2P_EV_VALIDATION_SIZE
+    bl      node_out
+    cbz     x0, 1f
+    mov     x9, #LIBP2P_EVENT_VALIDATION
+    str     x9, [x0, #8]
+    ldp     x9, x10, [sp, #16]
+    stp     x9, x10, [x0, #16]
+1:  UNFRAME 16
+END_FUNCTION node_validation
+
+/* L0: the gossip topic x0 with the subnet x1 at the node's ForkDigest: a SUBSCRIBE event. x21 the topic's length. Locals: L a GossipTopic, L+24 a ByteList of the topic. */
+LOCAL_FUNCTION node_sub
+    ENTER 176
+    ldr     x9, [x19, #Node_fork_digest]
+    str     x9, [sp, #(L + GossipTopic_fork_digest)]
+    stp     x0, x1, [sp, #(L + GossipTopic_name)]
+    mov     x9, #(24 + 128)
+    mov     x10, #24
+    stp     x9, x10, [sp, #(L + 24)]
+    str     xzr, [sp, #(L + 40)]
+    add     x0, sp, #L
+    add     x1, sp, #(L + 24)
+    bl      lantern_gossip_topic
+    cbnz    x0, 9f
+    ldr     x21, [sp, #(L + 40)]
+    add     x0, x21, #(24 + 7)
+    and     x0, x0, #~7
+    bl      node_out
+    cbz     x0, 9f
+    mov     x9, #LIBP2P_EVENT_SUBSCRIBE
+    stp     x9, x21, [x0, #8]
+    add     x0, x0, #24
+    add     x1, sp, #(L + 48)
+    mov     x2, x21
+    bl      lantern_copy
+9:  LEAVE 176
+END_FUNCTION node_sub
+
+/*
+ * L0: the gossip topics of the fork of the store's epoch, at its ForkDigest: SUBSCRIBE events,
+ * once for each digest, when p2p_out has room for them. x21 the fork, x22 a subnet, x25 the
+ * subnets. Locals: L an epoch, L+8 a ForkDigest.
+ */
+LOCAL_FUNCTION node_subscribe
+    ENTER 16
+    P2P_OUT x9
+    ldr     x11, [x9]
+    ldr     x10, [x9, #16]
+    sub     x11, x11, #24
+    sub     x11, x11, x10
+    mov     x12, #(64 * 128)
+    cmp     x11, x12
+    b.lo    9f
+    mov     x0, x20
+    bl      node_store_slot
+    mov     x9, #SLOTS_PER_EPOCH
+    udiv    x9, x0, x9
+    str     x9, [sp, #L]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x21, x0
+    mov     x15, x0
+    str     xzr, [sp, #(L + 8)]
+    add     x0, x19, #Node_genesis_validators_root
+    add     x1, sp, #L
+    add     x2, x19, #Node_config
+    mov     x3, x23
+    add     x4, sp, #(L + 8)
+    FORK_CALL compute_fork_digest
+    cbnz    x0, 9f
+    ldr     x9, [x19, #Node_flags]
+    ldr     x10, [sp, #(L + 8)]
+    tbz     x9, #2, 1f                      /* NODE_FLAG_SUBSCRIBED */
+    ldr     x11, [x19, #Node_fork_digest]
+    cmp     x10, x11
+    b.eq    9f
+1:  str     x10, [x19, #Node_fork_digest]
+    orr     x9, x9, #NODE_FLAG_SUBSCRIBED
+    str     x9, [x19, #Node_flags]
+    .irp name, GOSSIP_BEACON_BLOCK, GOSSIP_BEACON_AGGREGATE_AND_PROOF, GOSSIP_VOLUNTARY_EXIT, GOSSIP_PROPOSER_SLASHING, GOSSIP_ATTESTER_SLASHING
+    mov     x0, #\name
+    mov     x1, #0
+    bl      node_sub
+    .endr
+    cmp     x21, #FORK_ALTAIR
+    b.lo    9f
+    mov     x0, #GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF
+    mov     x1, #0
+    bl      node_sub
+    cmp     x21, #FORK_CAPELLA
+    b.lo    9f
+    mov     x0, #GOSSIP_BLS_TO_EXECUTION_CHANGE
+    mov     x1, #0
+    bl      node_sub
+    cmp     x21, #FORK_DENEB                /* deneb and electra: every blob sidecar subnet */
+    b.lo    9f
+    cmp     x21, #FORK_FULU
+    b.hs    9f
+    LDQ     x25, x19, Node_config + CONFIG_BLOB_SIDECAR_SUBNET_COUNT
+    cmp     x21, #FORK_ELECTRA
+    b.lo    2f
+    LDQ     x25, x19, Node_config + CONFIG_BLOB_SIDECAR_SUBNET_COUNT_ELECTRA
+2:  mov     x22, #0
+3:  cmp     x22, x25
+    b.hs    9f
+    mov     x0, #GOSSIP_BLOB_SIDECAR
+    mov     x1, x22
+    bl      node_sub
+    add     x22, x22, #1
+    b       3b
+9:  LEAVE 16
+END_FUNCTION node_subscribe
+
+/*
+ * L0: the MESSAGE x0 of libp2p, whose data is in the libp2p state x1: its MESSAGE_ID, then a
+ * NodeMessage with its bytes, uncompressed, in a BYTES_PUT. x21 the notice, x22 the libp2p state,
+ * x25 the entry, x26 the scratch size, restored on return, x27 the topic's ByteList, then the
+ * bytes', x28 the data's ByteList. Locals: L a GossipTopic, L+24 the message-id, L+48 a length.
+ */
+LOCAL_FUNCTION node_message
+    ENTER 64
+    mov     x21, x0
+    mov     x22, x1
+    ldr     x26, [x23]
+    ldr     x9, [x21, #LIBP2P_ACT_MSG_TOPIC_LEN]    /* the topic's and the data's ByteLists at the end of scratch */
+    add     x9, x9, #(24 + 7)
+    and     x9, x9, #~7
+    ldr     x10, [x21, #LIBP2P_ACT_MSG_DATA_LEN]
+    add     x10, x10, #(24 + 7)
+    and     x10, x10, #~7
+    add     x11, x9, x10
+    MOVQ    x12, LANTERN_SCRATCH_FIXED
+    add     x12, x11, x12
+    cmp     x26, x12
+    b.lo    99f
+    sub     x12, x26, x11
+    str     x12, [x23]
+    add     x27, x23, x12
+    add     x28, x27, x9
+    mov     x13, #24
+    ldr     x14, [x21, #LIBP2P_ACT_MSG_TOPIC_LEN]
+    stp     x9, x13, [x27]
+    str     x14, [x27, #16]
+    ldr     x15, [x21, #LIBP2P_ACT_MSG_DATA_LEN]
+    stp     x10, x13, [x28]
+    str     x15, [x28, #16]
+    add     x0, x27, #24
+    add     x1, x21, #LIBP2P_ACT_MSG_TOPIC
+    mov     x2, x14
+    bl      lantern_copy
+    add     x0, x28, #24
+    ldr     x9, [x21, #LIBP2P_ACT_MSG_DATA_OFF]
+    add     x1, x22, x9
+    ldr     x2, [x21, #LIBP2P_ACT_MSG_DATA_LEN]
+    bl      lantern_copy
+    mov     x0, x27                         /* the topic */
+    add     x1, sp, #L
+    bl      lantern_gossip_topic_parse
+    cbz     x0, 1f
+    stp     xzr, xzr, [sp, #(L + GossipTopic_name)]
+1:  mov     x0, x20                         /* the message-id, of the fork of the store's slot */
+    bl      node_store_slot
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x27
+    mov     x1, x28
+    add     x2, x19, #Node_config
+    mov     x3, x23
+    add     x4, sp, #(L + 24)
+    FORK_CALL compute_message_id
+    cbnz    x0, 99f
+    mov     x0, #LIBP2P_EV_MSG_ID_SIZE      /* MESSAGE_ID */
+    bl      node_out
+    cbz     x0, 99f
+    mov     x9, #LIBP2P_EVENT_MESSAGE_ID
+    str     x9, [x0, #8]
+    ldr     x9, [x21, #LIBP2P_ACT_HANDLE]
+    mov     x10, #20
+    stp     x9, x10, [x0, #16]
+    add     x0, x0, #32
+    stp     xzr, xzr, [x0]
+    stp     xzr, xzr, [x0, #16]
+    add     x1, sp, #(L + 24)
+    mov     x2, #20
+    bl      lantern_copy
+    PART    x9, x10, x19, Node_messages     /* the entry */
+    ldr     x11, [x19, #Node_p2p_out]
+    ldr     x12, [x19, #Node_messages]
+    sub     x11, x11, x12
+    mov     x12, #NodeMessage__mem
+    udiv    x11, x11, x12
+    cmp     x10, x11
+    b.hs    99f
+    madd    x25, x10, x12, x9
+    add     x10, x10, #1
+    str     x10, [x19, #(Node_messages + 8)]
+    mov     x0, x25
+    mov     x1, #NodeMessage__mem
+    bl      lantern_zero
+    ldr     x9, [x21, #LIBP2P_ACT_HANDLE]
+    ldr     x10, [x21, #LIBP2P_ACT_MSG_PEER]
+    stp     x9, x10, [x25, #NodeMessage_handle]
+    ldp     x9, x10, [sp, #(L + GossipTopic_name)]
+    stp     x9, x10, [x25, #NodeMessage_topic]
+    mov     x9, #NODE_MESSAGE_CORRUPT       /* the bytes, uncompressed */
+    str     x9, [x25, #NodeMessage_state]
+    mov     x0, x28
+    add     x1, sp, #(L + 48)
+    CALL_GLOBAL snappy_get_uncompressed_length
+    cbnz    x0, 99f
+    ldr     x9, [sp, #(L + 48)]
+    LDQ     x10, x19, Node_config + CONFIG_MAX_PAYLOAD_SIZE
+    cmp     x9, x10
+    b.hi    99f
+    mov     x10, #NODE_MESSAGE_NO_ROOM
+    str     x10, [x25, #NodeMessage_state]
+    add     x9, x9, #(24 + 7)
+    and     x9, x9, #~7
+    ldr     x10, [x23]
+    cmp     x10, x9
+    b.lo    99f
+    add     x0, x9, #48                     /* room for its BYTES_PUT */
+    bl      node_room
+    cbz     x0, 99f
+    ldr     x10, [x23]
+    ldr     x9, [sp, #(L + 48)]
+    add     x9, x9, #(24 + 7)
+    and     x9, x9, #~7
+    sub     x10, x10, x9
+    str     x10, [x23]
+    add     x27, x23, x10
+    mov     x10, #24
+    stp     x9, x10, [x27]
+    str     xzr, [x27, #16]
+    mov     x0, x28
+    mov     x1, x27
+    CALL_GLOBAL snappy_uncompress
+    cbz     x0, 2f
+    mov     x9, #NODE_MESSAGE_CORRUPT
+    str     x9, [x25, #NodeMessage_state]
+    b       99f
+2:  ldr     x9, [x25, #NodeMessage_topic]   /* the slot and parent root of a block or a block header */
+    ldr     x10, [x27, #16]
+    add     x11, x27, #24
+    cmp     x9, #GOSSIP_BEACON_BLOCK
+    b.ne    3f
+    cmp     x10, #(100 + 84)
+    b.lo    5f
+    add     x11, x11, #100
+    b       4f
+3:  cmp     x9, #GOSSIP_BLOB_SIDECAR
+    b.ne    31f
+    MOVQ    x12, NODE_BLOB_HEADER + 48
+    cmp     x10, x12
+    b.lo    5f
+    MOVQ    x12, NODE_BLOB_HEADER
+    add     x11, x11, x12
+    b       4f
+31: cmp     x9, #GOSSIP_DATA_COLUMN_SIDECAR
+    b.ne    5f
+    cmp     x10, #(20 + 48)
+    b.lo    5f
+    add     x11, x11, #20
+4:  ldr     x12, [x11]
+    str     x12, [x25, #NodeMessage_slot]
+    add     x0, x25, #NodeMessage_parent_root
+    add     x1, x11, #16
+    mov     x2, #32
+    bl      lantern_copy
+5:  mov     x0, x27                         /* the bytes, kept by the shell */
+    bl      node_put
+    str     x0, [x25, #NodeMessage_data_id]
+    mov     x9, #NODE_MESSAGE_ID
+    str     x9, [x25, #NodeMessage_state]
+99: str     x26, [x23]
+    LEAVE 64
+END_FUNCTION node_message
+
+/*
+ * L0: the MESSAGE_STATUS x0 of libp2p. NEW: a GOSSIP work with the head state, for a block or
+ * block header a copy of its parent's post-state, and the state of the justified root; or a
+ * VALIDATION when the node holds no bytes for it. Else its bytes and its entry go. x21 the notice,
+ * x22 the entry, x25 the head state, x26 the proposer state, x27 the justified state.
+ */
+LOCAL_FUNCTION node_message_status
+    ENTER 0
+    mov     x21, x0
+    ldr     x0, [x21, #LIBP2P_ACT_HANDLE]
+    bl      node_find_message
+    cmn     x0, #1
+    b.eq    99f
+    mov     x22, x1
+    ldr     x9, [x21, #LIBP2P_ACT_STATUS]
+    cmp     x9, #LIBP2P_MSG_NEW
+    b.ne    80f
+    ldr     x9, [x22, #NodeMessage_state]
+    cmp     x9, #NODE_MESSAGE_ID
+    b.eq    1f
+    mov     x1, #LIBP2P_IGNORE
+    cmp     x9, #NODE_MESSAGE_CORRUPT
+    b.ne    70f
+    mov     x1, #LIBP2P_REJECT
+70: ldr     x0, [x22, #NodeMessage_handle]
+    bl      node_validation
+    b       80f
+1:  mov     x0, #(NODE_ACT_WORK_SIZE + 32)  /* room for the work and a state copy */
+    bl      node_room
+    mov     x1, #LIBP2P_IGNORE
+    cbz     x0, 70b
+    mov     x25, #0                         /* the head state */
+    add     x0, x19, #Node_head_root
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    2f
+    ldr     x25, [x1, #NodeBlock_state_id]
+2:  mov     x26, #0                         /* the proposer state: a copy of the parent's, when it comes before */
+    ldr     x9, [x22, #NodeMessage_topic]
+    cmp     x9, #GOSSIP_BEACON_BLOCK
+    ccmp    x9, #GOSSIP_BLOB_SIDECAR, #4, ne
+    ccmp    x9, #GOSSIP_DATA_COLUMN_SIDECAR, #4, ne
+    b.ne    3f
+    add     x0, x22, #NodeMessage_parent_root
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    3f
+    ldr     x9, [x1, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_IMPORTED
+    b.ne    3f
+    ldr     x9, [x1, #NodeBlock_slot]
+    ldr     x10, [x22, #NodeMessage_slot]
+    cmp     x10, x9
+    b.ls    3f
+    ldr     x27, [x1, #NodeBlock_state_id]
+    bl      node_new_id
+    mov     x26, x0
+    mov     x0, #NODE_ACT_STATE_COPY
+    mov     x1, x27
+    mov     x2, x26
+    bl      node_ids
+3:  mov     x27, #0                         /* the state of the justified root */
+    add     x0, x20, #(Store_justified_checkpoint + 8)
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    4f
+    ldr     x9, [x1, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_IMPORTED
+    b.ne    4f
+    ldr     x27, [x1, #NodeBlock_state_id]
+4:  mov     x0, #NODE_WORK_GOSSIP
+    mov     x1, x25
+    mov     x2, x26
+    ldr     x3, [x22, #NodeMessage_data_id]
+    ldr     x4, [x22, #NodeMessage_handle]
+    ldp     x5, x9, [x22, #NodeMessage_topic]
+    orr     x5, x5, x9, lsl #8
+    bl      node_work
+    str     x27, [x0, #NodeAction_state_c]
+    mov     x9, #NODE_MESSAGE_VALIDATING
+    str     x9, [x22, #NodeMessage_state]
+    LEAVE 0
+80: ldr     x1, [x22, #NodeMessage_data_id] /* no work: its bytes and its entry go */
+    cbz     x1, 81f
+    mov     x0, #32
+    bl      node_room
+    cbz     x0, 81f
+    mov     x0, #NODE_ACT_BYTES_FREE
+    ldr     x1, [x22, #NodeMessage_data_id]
+    mov     x2, #0
+    bl      node_ids
+81: mov     x0, x22
+    bl      node_drop_message
+99: LEAVE 0
+END_FUNCTION node_message_status
+
+/* L0: the libp2p application notice x0 of the libp2p state x1. x21 the notice, x22 an entry, x25 method, x26 version, x27 the state. */
 LOCAL_FUNCTION node_notice
     ENTER 0
     mov     x21, x0
+    mov     x27, x1
     ldr     x9, [x21, #LIBP2P_ACT_KIND]
-    cmp     x9, #LIBP2P_ACTION_PEER_CONNECTED
+    cmp     x9, #LIBP2P_ACTION_MESSAGE
+    b.ne    60f
+    mov     x0, x21
+    mov     x1, x27
+    bl      node_message
+    LEAVE 0
+60: cmp     x9, #LIBP2P_ACTION_MESSAGE_STATUS
+    b.ne    61f
+    mov     x0, x21
+    bl      node_message_status
+    LEAVE 0
+61: cmp     x9, #LIBP2P_ACTION_PEER_CONNECTED
     b.ne    10f
     PART    x10, x11, x19, Node_peers       /* a new peer: its entry, or DISCONNECT when the table is full */
     ldr     x12, [x19, #Node_streams]
@@ -1507,7 +2046,7 @@ LOCAL_FUNCTION node_notice
     mov     x25, x0
     mov     x26, x1
     PART    x10, x11, x19, Node_streams
-    ldr     x12, [x19, #Node_p2p_out]
+    ldr     x12, [x19, #Node_messages]
     ldr     x13, [x19, #Node_streams]
     sub     x12, x12, x13
     ldr     x13, [x19, #Node_stream_bytes]
@@ -1589,9 +2128,10 @@ LOCAL_FUNCTION node_notice
 59: LEAVE 0
 END_FUNCTION node_notice
 
-/* L0: x0 = the WAKEUP time of the libp2p actions in the ByteList x0, after their application notices. x21 an action, x22 the end, x25 the time. */
+/* L0: x0 = the WAKEUP time of the libp2p actions in the ByteList x0, after their application notices, of the libp2p state x1. x21 an action, x22 the end, x25 the time, x26 the state. */
 LOCAL_FUNCTION node_p2p_notices
     ENTER 0
+    mov     x26, x1
     ldp     x9, x10, [x0, #8]
     add     x21, x0, x9
     add     x22, x21, x10
@@ -1608,6 +2148,7 @@ LOCAL_FUNCTION node_p2p_notices
     cmp     x9, #LIBP2P_ACTION_SEND_DATAGRAM
     b.hs    3f
     mov     x0, x21
+    mov     x1, x26
     bl      node_notice
 3:  ldr     x9, [x21]
     add     x21, x21, x9
@@ -1616,38 +2157,76 @@ LOCAL_FUNCTION node_p2p_notices
     LEAVE 0
 END_FUNCTION node_p2p_notices
 
-/* L0: the libp2p event list x0: the libp2p events of the P2P events from x1 to x2, then the node's queued events. */
-LOCAL_FUNCTION node_p2p_fill
+/* L0: the libp2p events of the P2P events from x0 to x1 join the end of the node's queued events. x21, x22 the range, x25 the queue. */
+LOCAL_FUNCTION node_p2p_append
     ENTER 0
-    mov     x25, x0
-    mov     x21, x1
-    mov     x22, x2
-    mov     x9, #24
-    str     x9, [x25, #8]
-    add     x26, x25, #24
+    mov     x21, x0
+    mov     x22, x1
+    P2P_OUT x25
 1:  cmp     x21, x22
-    b.hs    2f
+    b.hs    9f
     ldr     x9, [x21, #8]
     cmp     x9, #NODE_EV_P2P
-    b.ne    11f
-    mov     x0, x26
-    add     x1, x21, #16
+    b.ne    2f
     ldr     x2, [x21, #16]
-    add     x26, x26, x2
+    ldr     x9, [x25, #16]
+    add     x0, x25, #24
+    add     x0, x0, x9
+    add     x10, x9, x2
+    str     x10, [x25, #16]
+    add     x1, x21, #16
     bl      lantern_copy
-11: ldr     x9, [x21]
+2:  ldr     x9, [x21]
     add     x21, x21, x9
     b       1b
-2:  mov     x0, x26
-    ldp     x9, x2, [x19, #Node_p2p_out]
-    add     x1, x19, x9
-    add     x26, x26, x2
-    bl      lantern_copy
-    sub     x9, x26, x25
-    sub     x9, x9, #24
-    str     x9, [x25, #16]
-    LEAVE 0
-END_FUNCTION node_p2p_fill
+9:  LEAVE 0
+END_FUNCTION node_p2p_append
+
+/*
+ * L0: of the P2P events from x0 to x1, the first x2 were taken: x0 = the next P2P event, or x1;
+ * x1 = the bytes of the libp2p events of the P2P events from there on. Uses x9-x11.
+ */
+LOCAL_FUNCTION node_p2p_left
+    UNWIND_END_PROLOGUE
+    mov     x9, x0
+    mov     x10, x1
+    mov     x0, x1
+    mov     x1, #0
+1:  cmp     x9, x10
+    b.hs    9f
+    ldr     x11, [x9, #8]
+    cmp     x11, #NODE_EV_P2P
+    b.ne    3f
+    cbz     x2, 2f
+    sub     x2, x2, #1
+    b       3f
+2:  cmp     x0, x10
+    b.ne    21f
+    mov     x0, x9
+21: ldr     x11, [x9, #16]
+    add     x1, x1, x11
+3:  ldr     x11, [x9]
+    add     x9, x9, x11
+    b       1b
+9:  ret
+END_FUNCTION node_p2p_left
+
+/* L0: x0 = the events in the first x0 bytes of the node's queue. Uses x9-x12. */
+LOCAL_FUNCTION node_out_count
+    UNWIND_END_PROLOGUE
+    P2P_OUT x9
+    add     x9, x9, #24
+    mov     x10, #0
+    mov     x11, #0
+1:  cmp     x10, x0
+    b.hs    2f
+    ldr     x12, [x9, x10]
+    add     x10, x10, x12
+    add     x11, x11, #1
+    b       1b
+2:  mov     x0, x11
+    ret
+END_FUNCTION node_out_count
 
 /*
  * L0: libp2p_step of the state x0 with the tick x1, the event list x2 and the scratch x3, its
@@ -1668,10 +2247,13 @@ LOCAL_FUNCTION node_p2p_round
     sub     x11, x11, x10
     subs    x11, x11, x4
     b.lo    8f
-    and     x11, x11, #~7
     MOVQ    x12, LIBP2P_ACTIONS_MIN + 24 + 16
     cmp     x11, x12
     b.lo    8f
+    lsr     x13, x11, #1                    /* half of it, when that is enough: the rest for the notices */
+    cmp     x13, x12
+    csel    x11, x13, x11, hs
+    and     x11, x11, #~7
     add     x28, x24, x9
     add     x28, x28, x10
     mov     x12, #NODE_ACT_P2P_LIST
@@ -1790,9 +2372,9 @@ END_FUNCTION node_block_entry
 /*
  * (node, store, p2p, tick, events, scratch, actions, result): x19 node, x20 store, x21 the
  * events, x22 their end, x23 scratch, x24 actions, x25 result, x26 the event count, x27 the
- * BLOCK and POW_BLOCK events, x28 the event bytes, then the root entries of the BLOCK events.
+ * BLOCK, POW_BLOCK and GOSSIP WORK_DONE events, x28 the event bytes, then the root entries of the BLOCK events.
  * Locals: L the WORK_DONE events, L+8 the scratch size, L+16 p2p, L+24 tick, L+32 the end of
- * the events handled, L+40 the libp2p event list, L+48 the libp2p scratch, L+56 the bytes of
+ * the events handled, L+40 the queue's free bytes the P2P events take, saved, L+48 the libp2p scratch, L+56 the bytes of
  * the P2P events, L+64 the P2P events, L+72 the action room kept for the node, L+80 wakeup,
  * L+88 libp2p's StepResult, L+96 libp2p's actions, L+104 the libp2p steps, L+112 a stream waits.
  */
@@ -1838,6 +2420,8 @@ FUNCTION lantern_node_step
     cmp     x12, #NODE_EV_WORK_DONE_SIZE
     b.lo    7f
     ldr     x14, [x11, #NodeAction_work_kind]   /* SERVE: a ByteList of the chunk inside */
+    cmp     x14, #NODE_WORK_GOSSIP          /* GOSSIP: a block it may add */
+    cinc    x27, x27, eq
     cmp     x14, #NODE_WORK_SERVE
     b.ne    22f
     cmp     x12, #(NodeEvent_chunk + 24)
@@ -1937,17 +2521,20 @@ FUNCTION lantern_node_step
     sub     x9, x9, x10
     cmp     x9, x27
     b.lo    8f
-    mov     x9, #NODE_ROOT_ENTRY            /* scratch: the root entries and libp2p's lists at its end */
+    mov     x9, #NODE_ROOT_ENTRY            /* scratch: the root entries, and with p2p the queue's bytes the P2P events take and libp2p's scratch, at its end */
     mul     x12, x27, x9
     ldr     x9, [sp, #(L + 16)]
     cbz     x9, 52f
-    ldr     x9, [sp, #(L + 56)]
-    add     x12, x12, x9
-    ldr     x9, [x19]
-    ldr     x10, [x19, #Node_p2p_out]
+    P2P_OUT x13                             /* the queue has room for the P2P events */
+    ldr     x9, [x13]
+    ldr     x10, [x13, #16]
+    sub     x9, x9, #24
     sub     x9, x9, x10
-    add     x12, x12, x9
-    MOVQ    x9, 24 + LIBP2P_SCRATCH_SIZE
+    ldr     x10, [sp, #(L + 56)]
+    cmp     x9, x10
+    b.lo    8f
+    add     x12, x12, x10
+    MOVQ    x9, LIBP2P_SCRATCH_SIZE
     add     x12, x12, x9
 52: ldr     x9, [x20, #Store_validators]    /* and what get_head needs */
     ldr     x10, [x20, #Store_blocks]
@@ -1968,15 +2555,9 @@ FUNCTION lantern_node_step
     ldr     x9, [sp, #(L + 16)]
     cbz     x9, 53f
     mov     x9, #NODE_ROOT_ENTRY
-    madd    x9, x27, x9, x28                /* the libp2p event list, then libp2p's scratch */
+    madd    x9, x27, x9, x28                /* the saved queue bytes, then libp2p's scratch */
     str     x9, [sp, #(L + 40)]
     ldr     x10, [sp, #(L + 56)]
-    ldr     x11, [x19]
-    ldr     x12, [x19, #Node_p2p_out]
-    sub     x11, x11, x12
-    add     x10, x10, x11
-    add     x10, x10, #24
-    str     x10, [x9]
     add     x9, x9, x10
     str     x9, [sp, #(L + 48)]
     MOVQ    x10, LIBP2P_SCRATCH_SIZE
@@ -1994,46 +2575,58 @@ FUNCTION lantern_node_step
 12: ldr     x9, [x27]
     add     x27, x27, x9
     b       11b
-13: str     x22, [sp, #(L + 32)]            /* libp2p: the P2P events and the queued events */
+13: str     x22, [sp, #(L + 32)]            /* libp2p: the queued events, then the P2P events */
     mov     x9, #-1
     str     x9, [sp, #(L + 80)]
     ldr     x9, [sp, #(L + 16)]
     cbz     x9, 30f
-    ldr     x0, [sp, #(L + 40)]
-    mov     x1, x21
-    mov     x2, x22
-    bl      node_p2p_fill
+    P2P_OUT x27                             /* x27 the queue, x28 its bytes before the P2P events */
+    ldr     x28, [x27, #16]
+    ldr     x0, [sp, #(L + 40)]             /* the free bytes of the queue the P2P events take, kept */
+    add     x1, x27, #24
+    add     x1, x1, x28
+    ldr     x2, [sp, #(L + 56)]
+    bl      lantern_copy
+    mov     x0, x21
+    mov     x1, x22
+    bl      node_p2p_append
     ldp     x0, x1, [sp, #(L + 16)]
-    ldr     x2, [sp, #(L + 40)]
+    mov     x2, x27
     ldr     x3, [sp, #(L + 48)]
     ldr     x4, [sp, #(L + 72)]
     add     x5, sp, #(L + 88)
     bl      node_p2p_round
     cbz     x0, 24f
-    cmp     x0, #LIBP2P_BUFFER_TOO_SMALL    /* a status of libp2p: nothing is changed */
+    str     x0, [sp, #(L + 104)]            /* a status of libp2p: the queue as it was, and nothing else changed */
+    str     x28, [x27, #16]
+    add     x0, x27, #24
+    add     x0, x0, x28
+    ldr     x1, [sp, #(L + 40)]
+    ldr     x2, [sp, #(L + 56)]
+    bl      lantern_copy
+    ldr     x9, [sp, #(L + 104)]
+    cmp     x9, #LIBP2P_BUFFER_TOO_SMALL
     mov     x9, #LANTERN_BUFFER_TOO_SMALL
     mov     x10, #LANTERN_INVALID_EVENT
     csel    x0, x9, x10, eq
     b       14f
 24: str     x1, [sp, #(L + 96)]             /* from here on the step holds */
+    mov     x0, x28                         /* the P2P events libp2p took: k less the queued ones */
+    bl      node_out_count
     ldr     x9, [sp, #(L + 88)]
-    ldr     x10, [sp, #(L + 64)]
-    cmp     x9, x10
-    b.hs    25f
-    mov     x11, x21                        /* libp2p took k < n P2P events: the step ends at the next */
-26: ldr     x12, [x11, #8]
-    cmp     x12, #NODE_EV_P2P
-    b.ne    27f
-    cbz     x9, 28f
-    sub     x9, x9, #1
-27: ldr     x12, [x11]
-    add     x11, x11, x12
-    b       26b
-28: str     x11, [sp, #(L + 32)]
-    b       29f
-25: sub     x0, x9, x10                     /* and the queued events it took */
+    subs    x2, x9, x0
+    csel    x2, x2, xzr, hs
+    mov     x0, x21
+    mov     x1, x22
+    bl      node_p2p_left
+    str     x0, [sp, #(L + 32)]             /* the step ends at the next one */
+    ldr     x9, [x27, #16]                  /* the ones left go from the queue's end */
+    sub     x9, x9, x1
+    str     x9, [x27, #16]
+    ldr     x0, [sp, #(L + 88)]             /* the ones taken from its front */
     bl      node_out_consume
 29: ldr     x0, [sp, #(L + 96)]
+    ldr     x1, [sp, #(L + 16)]
     bl      node_p2p_notices
     str     x0, [sp, #(L + 80)]
 30: ldr     x9, [x23]                       /* then each event, in order */
@@ -2060,22 +2653,19 @@ FUNCTION lantern_node_step
     str     xzr, [sp, #(L + 112)]
     ldr     x9, [sp, #(L + 16)]             /* the next block of each stream that serves, then libp2p again */
     cbz     x9, 40f
+    bl      node_subscribe
     bl      node_serve
     str     x0, [sp, #(L + 112)]
     str     xzr, [sp, #(L + 104)]
-32: ldr     x9, [x19, #(Node_p2p_out + 8)]
+32: P2P_OUT x2
+    ldr     x9, [x2, #16]
     cbz     x9, 40f
     ldr     x10, [sp, #(L + 104)]
     cmp     x10, #NODE_P2P_ROUNDS
     b.hs    40f
     add     x10, x10, #1
     str     x10, [sp, #(L + 104)]
-    ldr     x0, [sp, #(L + 40)]
-    mov     x1, x22
-    mov     x2, x22
-    bl      node_p2p_fill
     ldp     x0, x1, [sp, #(L + 16)]
-    ldr     x2, [sp, #(L + 40)]
     ldr     x3, [sp, #(L + 48)]
     mov     x4, #4096
     add     x5, sp, #(L + 88)
@@ -2085,10 +2675,12 @@ FUNCTION lantern_node_step
     ldr     x0, [sp, #(L + 88)]
     bl      node_out_consume
     ldr     x0, [sp, #(L + 96)]
+    ldr     x1, [sp, #(L + 16)]
     bl      node_p2p_notices
     str     x0, [sp, #(L + 80)]
     b       32b
-40: ldr     x9, [x19, #(Node_p2p_out + 8)]  /* events left, or a stream that waits: the next step is due now */
+40: P2P_OUT x9                              /* events left, or a stream that waits: the next step is due now */
+    ldr     x9, [x9, #16]
     ldr     x10, [sp, #(L + 112)]
     orr     x9, x9, x10
     cbz     x9, 41f
@@ -2111,25 +2703,30 @@ FUNCTION lantern_node_step
 END_FUNCTION lantern_node_step
 
 /*
- * (node, store, seen, work, state_a, state_b, data, scratch, event): x19 node, x20 store,
- * x21 work, x22 state_a, x23 data, x24 scratch, x25 event. Locals: L the BlockOptions (32).
+ * (node, store, seen, work, state_a, state_b, state_c, data, settings, scratch, event): x19 node,
+ * x20 store, x21 work, x22 state_a, x23 data, x24 scratch, x25 event, x26 the event's room.
+ * Locals: L the BlockOptions (32), or a chunk's size, a fork digest and a ChunkHeader (64);
+ * L+64 seen, L+72 state_b, L+80 state_c, L+88 settings, L+96 a NodeGossip.
  */
 FUNCTION lantern_node_run
-    ENTER 64
+    ENTER 192
     mov     x19, x0
     mov     x20, x1
     mov     x21, x3
     mov     x22, x4
-    mov     x23, x6
-    mov     x24, x7
-    ldr     x25, [sp, #(96 + 64)]           /* the ninth argument */
+    stp     x2, x5, [sp, #(L + 64)]         /* seen, state_b, state_c, settings */
+    str     x6, [sp, #(L + 80)]
+    mov     x23, x7
+    ldp     x9, x24, [sp, #(96 + 192)]      /* the ninth to eleventh arguments */
+    str     x9, [sp, #(L + 88)]
+    ldr     x25, [sp, #(96 + 192 + 16)]
     ldr     x26, [x25]                      /* the event's room */
     cmp     x26, #NODE_EV_WORK_DONE_SIZE
     b.lo    7f
     mov     x9, #NODE_EV_WORK_DONE_SIZE     /* the event: the work's fields, the result */
     mov     x10, #NODE_EV_WORK_DONE
     stp     x9, x10, [x25]
-    .irp off, 16, 24, 32, 40, 48, 56
+    .irp off, 16, 24, 32, 40, 48, 56, 64
     ldr     x9, [x21, #\off]
     str     x9, [x25, #\off]
     .endr
@@ -2177,11 +2774,11 @@ FUNCTION lantern_node_run
     b.ne    99f
     str     x0, [x25, #NodeEvent_result]
     mov     x0, #LANTERN_OK
-    LEAVE 64
+    LEAVE 192
 18: mov     x9, #LANTERN_INVALID_ENCODING
     str     x9, [x25, #NodeEvent_result]
     mov     x0, #LANTERN_OK
-    LEAVE 64
+    LEAVE 192
 10: cmp     x9, #NODE_WORK_JUSTIFIED_STATE
     b.ne    20f
     ldr     x0, [x22, #NODE_STATE_SLOT]     /* JUSTIFIED_STATE: the fork of the state's slot */
@@ -2191,7 +2788,7 @@ FUNCTION lantern_node_run
     mov     x0, x20
     mov     x1, x22
     FORK_CALL store_justified_checkpoint_state
-    LEAVE 64
+    LEAVE 192
 20: cmp     x9, #NODE_WORK_TARGET_STATE
     b.ne    30f
     ldr     x0, [x22, #NODE_STATE_SLOT]     /* TARGET_STATE: store_target_checkpoint_state of the checkpoint */
@@ -2209,7 +2806,7 @@ FUNCTION lantern_node_run
     mov     x3, x24
     add     x4, x25, #NodeEvent_result
     FORK_CALL store_target_checkpoint_state
-    LEAVE 64
+    LEAVE 192
 30: cmp     x9, #NODE_WORK_ATTESTATION
     b.ne    40f
     ldr     x9, [x23, #16]                  /* ATTESTATION: the fork of its slot */
@@ -2229,7 +2826,7 @@ FUNCTION lantern_node_run
     add     x5, x25, #NodeEvent_result
     add     x6, x25, #NodeEvent_checkpoint
     FORK_CALL node_attestation
-    LEAVE 64
+    LEAVE 192
 40: cmp     x9, #NODE_WORK_ATTESTER_SLASHING
     b.ne    50f
     mov     x0, x20                         /* ATTESTER_SLASHING: the fork of the store's slot */
@@ -2243,9 +2840,9 @@ FUNCTION lantern_node_run
     mov     x3, x24
     add     x4, x25, #NodeEvent_result
     FORK_CALL node_attester_slashing
-99: LEAVE 64
+99: LEAVE 192
 50: cmp     x9, #NODE_WORK_SERVE
-    b.ne    8f
+    b.ne    60f
     ldr     x9, [x23, #16]                  /* SERVE: the chunk of the block's bytes, with room for it */
     cmp     x9, #(100 + 84)
     b.lo    18b
@@ -2304,9 +2901,41 @@ FUNCTION lantern_node_run
     add     x9, x9, #NodeEvent_chunk
     str     x9, [x25]
     mov     x0, #LANTERN_OK
-    LEAVE 64
+    LEAVE 192
+60: cmp     x9, #NODE_WORK_GOSSIP
+    b.ne    8f
+    ldr     x9, [sp, #(L + 64)]             /* GOSSIP: the inputs of the fork's node_gossip */
+    str     x9, [sp, #(L + 96 + NodeGossip_seen)]
+    str     x20, [sp, #(L + 96 + NodeGossip_store)]
+    ldr     x9, [x19, #Node_time_ms]
+    str     x9, [sp, #(L + 96 + NodeGossip_time_ms)]
+    ldr     x9, [x21, #NodeAction_arg]
+    and     x10, x9, #255
+    lsr     x9, x9, #8
+    str     x10, [sp, #(L + 96 + NodeGossip_topic)]
+    str     x9, [sp, #(L + 96 + NodeGossip_subnet)]
+    str     x22, [sp, #(L + 96 + NodeGossip_head)]
+    ldp     x9, x10, [sp, #(L + 72)]
+    str     x9, [sp, #(L + 96 + NodeGossip_proposer)]
+    str     x10, [sp, #(L + 96 + NodeGossip_justified)]
+    ldr     x9, [sp, #(L + 88)]
+    str     x9, [sp, #(L + 96 + NodeGossip_settings)]
+    add     x9, x19, #Node_config
+    str     x9, [sp, #(L + 96 + NodeGossip_config)]
+    mov     x0, x20
+    bl      node_store_slot
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    add     x0, sp, #(L + 96)
+    mov     x1, x23
+    mov     x2, x24
+    add     x3, x25, #NodeEvent_result
+    add     x4, x25, #NodeEvent_root
+    FORK_CALL node_gossip
+    LEAVE 192
 8:  mov     x0, #LANTERN_INVALID_EVENT
-    LEAVE 64
+    LEAVE 192
 7:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 64
+    LEAVE 192
 END_FUNCTION lantern_node_run

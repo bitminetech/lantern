@@ -274,3 +274,265 @@ SPEC_FUNCTION node_attester_slashing
     mov     %rcx, (%r13)
     LEAVE 0
 SPEC_END node_attester_slashing
+
+/*
+ * (args, data, scratch, result, root): the gossip validation of the topic args.topic for the
+ * message in data, decoded with the fork's type. For beacon_block, blob_sidecar and
+ * data_column_sidecar the proposer state first gets process_slots to the message's slot. A valid
+ * beacon_block gives its root. rbx args, rbp the message, r12 scratch, r13 result, r14 root,
+ * r15 the topic; S7-S10 the arguments past the sixth. Locals: L a slot, L+8 a result, L+16 the
+ * proposer state, L+24 the scratch size, restored on return.
+ */
+SPEC_FUNCTION node_gossip
+    ENTER 32
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    mov     %r8, %r14
+    mov     (%r12), %rax
+    mov     %rax, (L + 24)(%rsp)
+    movq    $0, (%r13)
+    mov     NodeGossip_topic(%rbx), %r15
+    ADDRESS %rdi, lantern_type_SignedBeaconBlock    # the type of the topic
+    cmp     $GOSSIP_BEACON_BLOCK, %r15
+    je      1f
+    ADDRESS %rdi, lantern_type_SignedAggregateAndProof
+    cmp     $GOSSIP_BEACON_AGGREGATE_AND_PROOF, %r15
+    je      1f
+.if FORK >= FORK_ELECTRA
+    ADDRESS %rdi, lantern_type_SingleAttestation
+.else
+    ADDRESS %rdi, lantern_type_Attestation
+.endif
+    cmp     $GOSSIP_BEACON_ATTESTATION, %r15
+    je      1f
+    ADDRESS %rdi, lantern_type_SignedVoluntaryExit
+    cmp     $GOSSIP_VOLUNTARY_EXIT, %r15
+    je      1f
+    ADDRESS %rdi, lantern_type_ProposerSlashing
+    cmp     $GOSSIP_PROPOSER_SLASHING, %r15
+    je      1f
+    ADDRESS %rdi, lantern_type_AttesterSlashing
+    cmp     $GOSSIP_ATTESTER_SLASHING, %r15
+    je      1f
+.if FORK >= FORK_ALTAIR
+    ADDRESS %rdi, lantern_type_SignedContributionAndProof
+    cmp     $GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF, %r15
+    je      1f
+    ADDRESS %rdi, lantern_type_SyncCommitteeMessage
+    cmp     $GOSSIP_SYNC_COMMITTEE, %r15
+    je      1f
+.endif
+.if FORK >= FORK_CAPELLA
+    ADDRESS %rdi, lantern_type_SignedBLSToExecutionChange
+    cmp     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %r15
+    je      1f
+.endif
+.if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+    ADDRESS %rdi, lantern_type_BlobSidecar
+    cmp     $GOSSIP_BLOB_SIDECAR, %r15
+    je      1f
+.endif
+.if FORK >= FORK_FULU
+    ADDRESS %rdi, lantern_type_DataColumnSidecar
+    cmp     $GOSSIP_DATA_COLUMN_SIDECAR, %r15
+    je      1f
+.endif
+    movq    $LANTERN_GOSSIP_IGNORE, (%r13)  # a topic of no type in this fork
+    xor     %eax, %eax
+    jmp     99f
+1:  mov     %rbp, %rsi
+    mov     %r12, %rdx
+    call    node_decode
+    cmp     $1, %rax
+    je      8f
+    ja      7f
+    mov     %rdx, %rbp
+    mov     NodeGossip_proposer(%rbx), %rax # the proposer state at the message's slot
+    mov     %rax, (L + 16)(%rsp)
+    test    %rax, %rax
+    jz      20f
+    cmp     $GOSSIP_BEACON_BLOCK, %r15
+    jne     11f
+    PART    %rcx, %rdx, %rbp, SignedBeaconBlock_message
+    mov     BeaconBlock_slot(%rcx), %rax
+    jmp     14f
+11:
+.if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+    cmp     $GOSSIP_BLOB_SIDECAR, %r15
+    jne     12f
+    mov     (BlobSidecar_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_slot)(%rbp), %rax
+    jmp     14f
+12:
+.endif
+.if FORK >= FORK_FULU
+    cmp     $GOSSIP_DATA_COLUMN_SIDECAR, %r15
+    jne     13f
+    mov     (DataColumnSidecar_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_slot)(%rbp), %rax
+    jmp     14f
+13:
+.endif
+    jmp     20f
+14: mov     %rax, L(%rsp)
+    mov     (L + 16)(%rsp), %rdi
+    cmp     NODE_STATE_SLOT(%rdi), %rax
+    jbe     20f
+    lea     L(%rsp), %rsi
+    mov     NodeGossip_config(%rbx), %rdx
+    mov     %r12, %rcx
+    lea     (L + 8)(%rsp), %r8
+    call    lantern_process_slots
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8f
+    test    %rax, %rax
+    jnz     99f
+    cmpq    $0, (L + 8)(%rsp)
+    je      20f
+    movq    $LANTERN_GOSSIP_IGNORE, (%r13)  # the slots do not run: no answer of the spec
+    jmp     99f
+20: mov     NodeGossip_seen(%rbx), %rdi     # the check of the topic
+    mov     NodeGossip_store(%rbx), %rsi
+    mov     %rbp, %rdx
+    lea     NodeGossip_time_ms(%rbx), %rcx
+    mov     NodeGossip_head(%rbx), %rax
+    cmpq    $0, (L + 16)(%rsp)
+    jne     21f
+    mov     %rax, (L + 16)(%rsp)
+21: cmp     $GOSSIP_BEACON_BLOCK, %r15
+    jne     30f
+    mov     %rax, %r8
+    mov     (L + 16)(%rsp), %r9
+.if FORK == FORK_BELLATRIX
+    mov     NodeGossip_justified(%rbx), %r10
+    test    %r10, %r10
+    cmovz   %rax, %r10
+    mov     %r10, S7(%rsp)
+    mov     %r12, S8(%rsp)
+    mov     %r13, S9(%rsp)
+.else
+    mov     %r12, S7(%rsp)
+    mov     %r13, S8(%rsp)
+.endif
+    call    lantern_validate_beacon_block_gossip
+    test    %rax, %rax
+    jnz     98f
+    cmpq    $0, (%r13)                      # a valid block: its root
+    jne     99f
+    PART    %rsi, %rax, %rbp, SignedBeaconBlock_message
+    ADDRESS %rdi, lantern_type_BeaconBlock
+    mov     %r12, %rdx
+    mov     %r14, %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    cmp     $SSZ_BUFFER_TOO_SMALL, %rax
+    je      8f
+    jmp     99f
+30: cmp     $GOSSIP_BEACON_AGGREGATE_AND_PROOF, %r15
+    jne     31f
+    mov     %rax, %r8
+    mov     %r12, %r9
+    mov     %r13, S7(%rsp)
+    call    lantern_validate_beacon_aggregate_and_proof_gossip
+    jmp     98f
+31: cmp     $GOSSIP_BEACON_ATTESTATION, %r15
+    jne     32f
+    lea     NodeGossip_subnet(%rbx), %r8
+    mov     %rax, %r9
+    mov     %r12, S7(%rsp)
+    mov     %r13, S8(%rsp)
+    call    lantern_validate_beacon_attestation_gossip
+    jmp     98f
+32: cmp     $GOSSIP_VOLUNTARY_EXIT, %r15
+    jne     33f
+    mov     %rax, %r8
+    mov     %r12, %r9
+    mov     %r13, S7(%rsp)
+    call    lantern_validate_voluntary_exit_gossip
+    jmp     98f
+33: cmp     $GOSSIP_PROPOSER_SLASHING, %r15
+    jne     34f
+    mov     %rax, %rcx
+    mov     %r12, %r8
+    mov     %r13, %r9
+    call    lantern_validate_proposer_slashing_gossip
+    jmp     98f
+34: cmp     $GOSSIP_ATTESTER_SLASHING, %r15
+    jne     35f
+    mov     %rax, %rcx
+    mov     %r12, %r8
+    mov     %r13, %r9
+    call    lantern_validate_attester_slashing_gossip
+    jmp     98f
+35:
+.if FORK >= FORK_ALTAIR
+    cmp     $GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF, %r15
+    jne     36f
+    mov     %rax, %r8
+    mov     %r12, %r9
+    mov     %r13, S7(%rsp)
+    call    lantern_validate_sync_committee_contribution_and_proof_gossip
+    jmp     98f
+36: cmp     $GOSSIP_SYNC_COMMITTEE, %r15
+    jne     37f
+    lea     NodeGossip_subnet(%rbx), %r8
+    mov     %rax, %r9
+    mov     %r12, S7(%rsp)
+    mov     %r13, S8(%rsp)
+    call    lantern_validate_sync_committee_message_gossip
+    jmp     98f
+37:
+.endif
+.if FORK >= FORK_CAPELLA
+    cmp     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %r15
+    jne     38f
+    mov     %rax, %r8
+    mov     %r12, %r9
+    mov     %r13, S7(%rsp)
+    call    lantern_validate_bls_to_execution_change_gossip
+    jmp     98f
+38:
+.endif
+.if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+    cmp     $GOSSIP_BLOB_SIDECAR, %r15
+    jne     39f
+    lea     NodeGossip_subnet(%rbx), %r8
+    mov     %rax, %r9
+    mov     (L + 16)(%rsp), %rax
+    mov     %rax, S7(%rsp)
+    mov     NodeGossip_settings(%rbx), %rax
+    mov     %rax, S8(%rsp)
+    mov     %r12, S9(%rsp)
+    mov     %r13, S10(%rsp)
+    call    lantern_validate_blob_sidecar_gossip
+    jmp     98f
+39:
+.endif
+.if FORK >= FORK_FULU
+    cmp     $GOSSIP_DATA_COLUMN_SIDECAR, %r15
+    jne     40f
+    lea     NodeGossip_subnet(%rbx), %r8
+    mov     %rax, %r9
+    mov     (L + 16)(%rsp), %rax
+    mov     %rax, S7(%rsp)
+    mov     NodeGossip_settings(%rbx), %rax
+    mov     %rax, S8(%rsp)
+    mov     %r12, S9(%rsp)
+    mov     %r13, S10(%rsp)
+    call    lantern_validate_data_column_sidecar_gossip
+    jmp     98f
+40:
+.endif
+    movq    $LANTERN_GOSSIP_IGNORE, (%r13)
+    xor     %eax, %eax
+    jmp     99f
+98: cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8f
+    jmp     99f
+7:  movq    $LANTERN_GOSSIP_REJECT, (%r13)  # no SSZ encoding of the type
+    xor     %eax, %eax
+    jmp     99f
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+99: mov     (L + 24)(%rsp), %rcx
+    mov     %rcx, (%r12)
+    LEAVE 32
+SPEC_END node_gossip

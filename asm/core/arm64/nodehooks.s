@@ -261,3 +261,256 @@ SPEC_FUNCTION node_attester_slashing
 99: str     x28, [x22]
     LEAVE 0
 SPEC_END node_attester_slashing
+
+/*
+ * (args, data, scratch, result, root): the gossip validation of the topic args.topic for the
+ * message in data, decoded with the fork's type. For beacon_block, blob_sidecar and
+ * data_column_sidecar the proposer state first gets process_slots to the message's slot. A valid
+ * beacon_block gives its root. x19 args, x20 the message, x21 scratch, x22 result, x23 root,
+ * x24 the topic, x25 the slot, x26 the proposer state, x28 the scratch size, restored on return.
+ * Locals: (16 + L) a slot and a result. The two arguments past the eighth go at sp.
+ */
+SPEC_FUNCTION node_gossip
+    ENTER_OUT 16, 16
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+    mov     x23, x4
+    ldr     x28, [x21]
+    str     xzr, [x22]
+    ldr     x24, [x19, #NodeGossip_topic]
+    ADDRESS x0, lantern_type_SignedBeaconBlock     /* the type of the topic */
+    cmp     x24, #GOSSIP_BEACON_BLOCK
+    b.eq    1f
+    ADDRESS x0, lantern_type_SignedAggregateAndProof
+    cmp     x24, #GOSSIP_BEACON_AGGREGATE_AND_PROOF
+    b.eq    1f
+.if FORK >= FORK_ELECTRA
+    ADDRESS x0, lantern_type_SingleAttestation
+.else
+    ADDRESS x0, lantern_type_Attestation
+.endif
+    cmp     x24, #GOSSIP_BEACON_ATTESTATION
+    b.eq    1f
+    ADDRESS x0, lantern_type_SignedVoluntaryExit
+    cmp     x24, #GOSSIP_VOLUNTARY_EXIT
+    b.eq    1f
+    ADDRESS x0, lantern_type_ProposerSlashing
+    cmp     x24, #GOSSIP_PROPOSER_SLASHING
+    b.eq    1f
+    ADDRESS x0, lantern_type_AttesterSlashing
+    cmp     x24, #GOSSIP_ATTESTER_SLASHING
+    b.eq    1f
+.if FORK >= FORK_ALTAIR
+    ADDRESS x0, lantern_type_SignedContributionAndProof
+    cmp     x24, #GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF
+    b.eq    1f
+    ADDRESS x0, lantern_type_SyncCommitteeMessage
+    cmp     x24, #GOSSIP_SYNC_COMMITTEE
+    b.eq    1f
+.endif
+.if FORK >= FORK_CAPELLA
+    ADDRESS x0, lantern_type_SignedBLSToExecutionChange
+    cmp     x24, #GOSSIP_BLS_TO_EXECUTION_CHANGE
+    b.eq    1f
+.endif
+.if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+    ADDRESS x0, lantern_type_BlobSidecar
+    cmp     x24, #GOSSIP_BLOB_SIDECAR
+    b.eq    1f
+.endif
+.if FORK >= FORK_FULU
+    ADDRESS x0, lantern_type_DataColumnSidecar
+    cmp     x24, #GOSSIP_DATA_COLUMN_SIDECAR
+    b.eq    1f
+.endif
+    mov     x9, #LANTERN_GOSSIP_IGNORE      /* a topic of no type in this fork */
+    str     x9, [x22]
+    mov     x0, #LANTERN_OK
+    b       99f
+1:  mov     x1, x20
+    mov     x2, x21
+    bl      node_decode
+    cmp     x0, #1
+    b.eq    8f
+    b.hi    7f
+    mov     x20, x1
+    ldr     x26, [x19, #NodeGossip_proposer]        /* the proposer state at the message's slot */
+    cbz     x26, 20f
+    cmp     x24, #GOSSIP_BEACON_BLOCK
+    b.ne    11f
+    PART    x9, x10, x20, SignedBeaconBlock_message
+    ldr     x25, [x9, #BeaconBlock_slot]
+    b       14f
+11:
+.if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+    cmp     x24, #GOSSIP_BLOB_SIDECAR
+    b.ne    12f
+    LDQ     x25, x20, BlobSidecar_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_slot
+    b       14f
+12:
+.endif
+.if FORK >= FORK_FULU
+    cmp     x24, #GOSSIP_DATA_COLUMN_SIDECAR
+    b.ne    13f
+    LDQ     x25, x20, DataColumnSidecar_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_slot
+    b       14f
+13:
+.endif
+    b       20f
+14: ldr     x9, [x26, #NODE_STATE_SLOT]
+    cmp     x9, x25
+    b.hs    20f
+    str     x25, [sp, #(16 + L)]
+    mov     x0, x26
+    add     x1, sp, #(16 + L)
+    ldr     x2, [x19, #NodeGossip_config]
+    mov     x3, x21
+    add     x4, sp, #(16 + L + 8)
+    bl      lantern_process_slots
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8f
+    cbnz    x0, 99f
+    ldr     x9, [sp, #(16 + L + 8)]
+    cbz     x9, 20f
+    mov     x9, #LANTERN_GOSSIP_IGNORE      /* the slots do not run: no answer of the spec */
+    str     x9, [x22]
+    b       99f
+20: ldr     x0, [x19, #NodeGossip_seen]     /* the check of the topic */
+    ldr     x1, [x19, #NodeGossip_store]
+    mov     x2, x20
+    add     x3, x19, #NodeGossip_time_ms
+    ldr     x9, [x19, #NodeGossip_head]
+    cbnz    x26, 21f
+    mov     x26, x9
+21: cmp     x24, #GOSSIP_BEACON_BLOCK
+    b.ne    30f
+    mov     x4, x9
+    mov     x5, x26
+.if FORK == FORK_BELLATRIX
+    ldr     x6, [x19, #NodeGossip_justified]
+    cbnz    x6, 22f
+    mov     x6, x9
+22: mov     x7, x21
+    str     x22, [sp]
+.else
+    mov     x6, x21
+    mov     x7, x22
+.endif
+    bl      lantern_validate_beacon_block_gossip
+    cbnz    x0, 98f
+    ldr     x9, [x22]                       /* a valid block: its root */
+    cbnz    x9, 99f
+    PART    x1, x9, x20, SignedBeaconBlock_message
+    ADDRESS x0, lantern_type_BeaconBlock
+    mov     x2, x21
+    mov     x3, x23
+    CALL_GLOBAL ssz_hash_tree_root
+    cmp     x0, #SSZ_BUFFER_TOO_SMALL
+    b.eq    8f
+    b       99f
+30: cmp     x24, #GOSSIP_BEACON_AGGREGATE_AND_PROOF
+    b.ne    31f
+    mov     x4, x9
+    mov     x5, x21
+    mov     x6, x22
+    bl      lantern_validate_beacon_aggregate_and_proof_gossip
+    b       98f
+31: cmp     x24, #GOSSIP_BEACON_ATTESTATION
+    b.ne    32f
+    add     x4, x19, #NodeGossip_subnet
+    mov     x5, x9
+    mov     x6, x21
+    mov     x7, x22
+    bl      lantern_validate_beacon_attestation_gossip
+    b       98f
+32: cmp     x24, #GOSSIP_VOLUNTARY_EXIT
+    b.ne    33f
+    mov     x4, x9
+    mov     x5, x21
+    mov     x6, x22
+    bl      lantern_validate_voluntary_exit_gossip
+    b       98f
+33: cmp     x24, #GOSSIP_PROPOSER_SLASHING
+    b.ne    34f
+    mov     x3, x9
+    mov     x4, x21
+    mov     x5, x22
+    bl      lantern_validate_proposer_slashing_gossip
+    b       98f
+34: cmp     x24, #GOSSIP_ATTESTER_SLASHING
+    b.ne    35f
+    mov     x3, x9
+    mov     x4, x21
+    mov     x5, x22
+    bl      lantern_validate_attester_slashing_gossip
+    b       98f
+35:
+.if FORK >= FORK_ALTAIR
+    cmp     x24, #GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF
+    b.ne    36f
+    mov     x4, x9
+    mov     x5, x21
+    mov     x6, x22
+    bl      lantern_validate_sync_committee_contribution_and_proof_gossip
+    b       98f
+36: cmp     x24, #GOSSIP_SYNC_COMMITTEE
+    b.ne    37f
+    add     x4, x19, #NodeGossip_subnet
+    mov     x5, x9
+    mov     x6, x21
+    mov     x7, x22
+    bl      lantern_validate_sync_committee_message_gossip
+    b       98f
+37:
+.endif
+.if FORK >= FORK_CAPELLA
+    cmp     x24, #GOSSIP_BLS_TO_EXECUTION_CHANGE
+    b.ne    38f
+    mov     x4, x9
+    mov     x5, x21
+    mov     x6, x22
+    bl      lantern_validate_bls_to_execution_change_gossip
+    b       98f
+38:
+.endif
+.if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+    cmp     x24, #GOSSIP_BLOB_SIDECAR
+    b.ne    39f
+    add     x4, x19, #NodeGossip_subnet
+    mov     x5, x9
+    mov     x6, x26
+    ldr     x7, [x19, #NodeGossip_settings]
+    stp     x21, x22, [sp]
+    bl      lantern_validate_blob_sidecar_gossip
+    b       98f
+39:
+.endif
+.if FORK >= FORK_FULU
+    cmp     x24, #GOSSIP_DATA_COLUMN_SIDECAR
+    b.ne    40f
+    add     x4, x19, #NodeGossip_subnet
+    mov     x5, x9
+    mov     x6, x26
+    ldr     x7, [x19, #NodeGossip_settings]
+    stp     x21, x22, [sp]
+    bl      lantern_validate_data_column_sidecar_gossip
+    b       98f
+40:
+.endif
+    mov     x9, #LANTERN_GOSSIP_IGNORE
+    str     x9, [x22]
+    mov     x0, #LANTERN_OK
+    b       99f
+98: cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8f
+    b       99f
+7:  mov     x9, #LANTERN_GOSSIP_REJECT      /* no SSZ encoding of the type */
+    str     x9, [x22]
+    mov     x0, #LANTERN_OK
+    b       99f
+8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+99: str     x28, [x21]
+    LEAVE_OUT 16, 16
+SPEC_END node_gossip

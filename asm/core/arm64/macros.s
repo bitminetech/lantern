@@ -42,6 +42,51 @@
 /* Local of a non-leaf function: the address of byte off of the locals. */
 .set L, 96
 
+/*
+ * Frame of a non-leaf function that calls functions with arguments on the stack: the frame of
+ * ENTER, then out bytes below it for those arguments, from sp. Its locals are at sp + LO.
+ * out: a multiple of 16.
+ */
+.macro ENTER_OUT locals, out
+    stp     x29, x30, [sp, #-(96 + \locals)]!
+    UNWIND_SAVE_FPLR_X (96 + \locals)
+    mov     x29, sp
+    UNWIND_SET_FP
+    stp     x19, x20, [sp, #16]
+    UNWIND_SAVE_REGP x19, x20, 16, (96 + \locals)
+    stp     x21, x22, [sp, #32]
+    UNWIND_SAVE_REGP x21, x22, 32, (96 + \locals)
+    stp     x23, x24, [sp, #48]
+    UNWIND_SAVE_REGP x23, x24, 48, (96 + \locals)
+    stp     x25, x26, [sp, #64]
+    UNWIND_SAVE_REGP x25, x26, 64, (96 + \locals)
+    stp     x27, x28, [sp, #80]
+    UNWIND_SAVE_REGP x27, x28, 80, (96 + \locals)
+    sub     sp, sp, #(\out)
+    UNWIND_ALLOC (\out)
+    UNWIND_END_PROLOGUE
+.endm
+
+.macro LEAVE_OUT locals, out
+    UNWIND_BEGIN_EPILOGUE
+    add     sp, sp, #(\out)
+    UNWIND_FREE (\out)
+    ldp     x27, x28, [sp, #80]
+    UNWIND_RESTORE_REGP x27, x28, 80
+    ldp     x25, x26, [sp, #64]
+    UNWIND_RESTORE_REGP x25, x26, 64
+    ldp     x23, x24, [sp, #48]
+    UNWIND_RESTORE_REGP x23, x24, 48
+    ldp     x21, x22, [sp, #32]
+    UNWIND_RESTORE_REGP x21, x22, 32
+    ldp     x19, x20, [sp, #16]
+    UNWIND_RESTORE_REGP x19, x20, 16
+    ldp     x29, x30, [sp], #(96 + \locals)
+    UNWIND_RESTORE_FPLR_X (96 + \locals)
+    UNWIND_END_EPILOGUE
+    ret
+.endm
+
 /* reg = imm, any 64-bit constant. */
 .macro MOVQ reg, imm
     movz    \reg, #((\imm) & 0xffff)

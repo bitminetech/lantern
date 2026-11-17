@@ -14,6 +14,7 @@
 - [`lantern_node_block_root`](#function-lantern_node_block_root): the root of a block's SSZ bytes, for one fork.
 - [`lantern_node_attestation`](#function-lantern_node_attestation): on_attestation of an attestation's SSZ bytes, for one fork.
 - [`lantern_node_attester_slashing`](#function-lantern_node_attester_slashing): on_attester_slashing of a slashing's SSZ bytes, for one fork.
+- [`lantern_node_gossip`](#function-lantern_node_gossip): the gossip validation of a message's SSZ bytes, for one fork.
 
 ### Types
 
@@ -23,6 +24,8 @@
 - [`NodeCheckpoint`](#type-nodecheckpoint): a checkpoint state the node keeps.
 - [`NodePeer`](#type-nodepeer): a connected libp2p peer.
 - [`NodeStream`](#type-nodestream): a req/resp stream a peer opened.
+- [`NodeMessage`](#type-nodemessage): a gossip message the node holds.
+- [`NodeGossip`](#type-nodegossip): the inputs of lantern_node_gossip.
 - [`NodeAnchor`](#type-nodeanchor): the anchor of lantern_node_init.
 - [`NodeStepResult`](#type-nodestepresult): the output of lantern_node_step.
 - [`NodeEvents`](#type-nodeevents), [`NodeEvent`](#type-nodeevent): the events of lantern_node_step.
@@ -32,6 +35,7 @@
 
 - Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), `fork-choice.md` of phase0 to fulu: the handlers, `store.block_states` and `store.checkpoint_states`.
 - `p2p-interface.md` of phase0, altair and fulu, The Req/Resp domain: Status, Goodbye, Ping and MetaData, their versions, and the result codes.
+- `p2p-interface.md` of phase0 to fulu, The gossip domain: the topics of each fork, the message-id, `MAX_PAYLOAD_SIZE`, and the validation of each topic, as [networking.md](networking.md) gives it.
 - ARCHITECTURE.md sections 2 and 6: the event and action model; section 7: the calls to asm-libp2p.
 
 ## Common rules
@@ -45,9 +49,10 @@
 - A state's slot is the u64 at `NODE_STATE_SLOT` of its value in every fork.
 - The node owns a libp2p `State` of asm-libp2p, built by the shell with `libp2p_init` from a config whose protocol list is lantern_node_protocols. lantern_node_step calls `libp2p_step` with it: first with the libp2p events of the `NODE_EV_P2P` events and the events the node queued, then with the events the node queued in that step, up to `NODE_P2P_ROUNDS` times.
 - libp2p's actions go out in a `NODE_ACT_P2P_LIST` action. The shell does its shell requests in order; the node took its application notices.
+- The node's queue (`p2p_out`) is one ByteList of libp2p events inside the node. libp2p_step reads it in place.
 - A stream carries one request and one answer, as the req/resp functions of [req-resp.md](req-resp.md) encode them.
 - lantern_node_size, lantern_node_init, lantern_node_copy, lantern_node_step, lantern_node_run and lantern_node_protocols are in the common object of the core (asm/core/<ISA>/node.s), and each symbol is its name.
-- lantern_node_import, lantern_node_block_root, lantern_node_attestation and lantern_node_attester_slashing are in each fork object (asm/core/<ISA>/nodehooks.s), exported as `lantern_<fork>_<name>`.
+- lantern_node_import, lantern_node_block_root, lantern_node_attestation, lantern_node_attester_slashing and lantern_node_gossip are in each fork object (asm/core/<ISA>/nodehooks.s), exported as `lantern_<fork>_<name>`.
 
 ## Test vectors
 
@@ -69,6 +74,11 @@
   - BeaconBlocksByRange v2 from the anchor's slot to the head's must give each block of the chain, in slot order.
   - BeaconBlocksByRoot v2 of the head, a root of no block, and the chain's first block must give the head and the first block.
   - Each chunk must have result 0, the block's SSZ bytes, and compute_fork_digest of the block's epoch as context bytes.
+- The `fork_choice-get_head` and `fork_choice-on_block` cases a third time, over gossip: each case reports with ` (gossip)` after its name.
+  - Only cases with no `payload_status` step whose valid blocks each have their own slot and come at or after the start of that slot.
+  - The runner opens the same network. The node's topics must reach the peer.
+  - Each valid block goes from the peer as a beacon_block message, Snappy compressed, on the topic of the block's epoch. The node must import it.
+  - The other steps go as in node mode; the checks must hold.
 
 ## Function `lantern_node_size`
 
@@ -185,7 +195,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 
 ### Function does
 
-- Room: `actions` has the event bytes + 512 per event + 128 per known block + 512 bytes free, and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; `scratch` also holds the libp2p event list and `LIBP2P_SCRATCH_SIZE` with `p2p`; the blocks part has an entry free per `NODE_EV_BLOCK`; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node.
+- Room: `actions` has the event bytes + 512 per event + 128 per known block + 512 bytes free, and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node.
 - Before any change: the root of each `NODE_EV_BLOCK`, with lantern_node_block_root of the fork of its slot. A status of that call is the step's.
 - `NODE_EV_TICK`: sets `time_ms` of the node, then on_tick of the fork of the new slot.
 - `NODE_EV_BLOCK`: for a root the node does not know, a `NODE_ACT_BYTES_PUT` of the bytes and a `NodeBlock` in `NODE_BLOCK_WAITING`. Bytes that are no `SignedBeaconBlock` are dropped.
@@ -198,7 +208,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - A checkpoint state the node does not have: a `NODE_ACT_STATE_COPY` of the post-state of the checkpoint's root, a `NodeCheckpoint`, and a `NODE_WORK_TARGET_STATE`.
 - An attestation or slashing done: a `NODE_ACT_BYTES_FREE` of its bytes.
 - The head: get_head of the fork of the store's slot into `head_root`, or a `NODE_WORK_JUSTIFIED_STATE` when it returns `LANTERN_NEED_JUSTIFIED_STATE`.
-- libp2p first, before the node's events: libp2p_step with the `NODE_EV_P2P` events and the queued events. When it accepts k of n P2P events, with k < n, the step handles the node's events before the next P2P event and gives that count as `accepted`.
+- libp2p first, before the node's events: libp2p_step with the queued events, then the `NODE_EV_P2P` events, after them in the queue. The first libp2p_step takes at most half the action room left, when that half is enough, so the notices have room. When it accepts k of n P2P events, with k < n, the P2P events it did not take leave the queue, the step handles the node's events before the next P2P event, and gives that count as `accepted`. A status of libp2p_step leaves the queue as it was.
 - `PEER_CONNECTED`: a `NodePeer`, or a `DISCONNECT` when the peers part is full. `PEER_DISCONNECTED`: the peer and its streams go.
 - `STREAM_INBOUND`: a `NodeStream` of the protocol's method and version, or a `STREAM_RESET` when the streams part is full. `STREAM_DATA`: the bytes join the stream's request, or a `STREAM_RESET` when they pass its room. `STREAM_EOF`: the request is complete. `STREAM_RESET`: the stream goes.
 - A request is read when its bytes are complete: Status is kept in the `NodePeer` and answered with the node's Status of the same version; Ping is answered with `metadata_seq`; MetaData, on the stream's opening, with the node's MetaData of the same version; Goodbye gets a `STREAM_CLOSE`. A request that is not valid gets result 1, InvalidRequest; a method of no answer below gets result 3, ResourceUnavailable.
@@ -209,6 +219,10 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - `NODE_EV_WORK_DONE` of `NODE_WORK_SERVE`: the chunk goes out in a `STREAM_WRITE`, then the stream's next block, or a `STREAM_CLOSE` after the last; a result other than `LANTERN_VALID`, or no room in `p2p_out`, gives a `STREAM_RESET`.
 - An answer is one chunk of lantern_reqresp_write_chunk in a `STREAM_WRITE`, then a `STREAM_CLOSE`; then the stream goes.
 - The node's Status: compute_fork_digest of the store's epoch, the store's finalized checkpoint, `head_root` and its slot, and `earliest_slot`. Its MetaData: `metadata_seq`, no attestation or sync subnets, and `CUSTODY_REQUIREMENT` custody groups.
+- After the head, with `p2p`: a `SUBSCRIBE` of each topic of the fork of the store's epoch at compute_fork_digest of that epoch, once for each digest, when `p2p_out` has 8192 bytes free. The topics: beacon_block, beacon_aggregate_and_proof, voluntary_exit, proposer_slashing and attester_slashing; from altair sync_committee_contribution_and_proof; from capella bls_to_execution_change; in deneb and electra blob_sidecar of each subnet.
+- `MESSAGE`: a `MESSAGE_ID` of compute_message_id of the fork of the store's slot, then a `NodeMessage` when the messages part has room. Its data uncompressed with Snappy goes in a `NODE_ACT_BYTES_PUT`, and for a block, a blob sidecar or a column sidecar the slot and parent root of its block header go in the entry. Data that is no Snappy block of at most `MAX_PAYLOAD_SIZE` bytes makes the entry `NODE_MESSAGE_CORRUPT`; data that does not fit in `scratch` or the actions makes it `NODE_MESSAGE_NO_ROOM`.
+- `MESSAGE_STATUS` of `LIBP2P_MSG_NEW` for an entry with bytes: a `NODE_WORK_GOSSIP` with the head's post-state, the post-state of the justified root, and for a block, a blob sidecar or a column sidecar whose parent is imported at an earlier slot a `NODE_ACT_STATE_COPY` of the parent's post-state; the entry takes `NODE_MESSAGE_VALIDATING`. With no bytes, or no room in the actions, a `VALIDATION` of `LIBP2P_IGNORE`, or `LIBP2P_REJECT` for `NODE_MESSAGE_CORRUPT`. Any other status: the bytes and the entry go.
+- `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`: a `VALIDATION` of `LIBP2P_ACCEPT` for `LANTERN_VALID`, `LIBP2P_REJECT` for `LANTERN_GOSSIP_REJECT`, else `LIBP2P_IGNORE`; a `NODE_ACT_STATE_FREE` of the proposer state. A valid beacon_block of a root the node does not know keeps its bytes as a `NodeBlock` in `NODE_BLOCK_WAITING` with `data_available` 1, then imports as a `NODE_EV_BLOCK` does. Else the bytes go. The entry goes.
 
 ### Function never
 
@@ -221,7 +235,7 @@ One `NODE_ACT_WORK` with its buffers. It writes the `NODE_EV_WORK_DONE` event of
 ### Signature
 
 ```
-lantern_node_run(node, store, seen, work, state_a, state_b, data, scratch, event) -> status
+lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, settings, scratch, event) -> status
 ```
 
 ### Arguments
@@ -234,7 +248,9 @@ lantern_node_run(node, store, seen, work, state_a, state_b, data, scratch, event
 | `work` | input | `NodeAction` of kind `NODE_ACT_WORK` |
 | `state_a` | state | `BeaconState`: the buffer of the work's `state_a`, or 0 |
 | `state_b` | state | `BeaconState`: the buffer of the work's `state_b`, or 0 |
+| `state_c` | state | `BeaconState`: the buffer of the work's `state_c`, or 0 |
 | `data` | input | ByteList: the buffer of the work's `data`, or 0 |
+| `settings` | input | asm-crypto `KzgSettings`, or 0 |
 | `scratch` | scratch | `Scratch` |
 | `event` | output | `NodeEvent`: its `size` set by the caller to the bytes of the buffer, `NODE_EV_WORK_DONE_SIZE` or more |
 
@@ -256,6 +272,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, data, scratch, event
 - `NODE_WORK_ATTESTATION`: lantern_node_attestation of the fork of the attestation's slot; `is_from_block` is the work's `arg`.
 - `NODE_WORK_ATTESTER_SLASHING`: lantern_node_attester_slashing of the fork of the store's slot.
 - `NODE_WORK_SERVE`: the response chunk of the block in `data`, with lantern_reqresp_write_chunk, as a ByteList at `NodeEvent_chunk` of the event; its context bytes are compute_fork_digest of the block's epoch for version 2, none for version 1. The event's `size` then covers the chunk.
+- `NODE_WORK_GOSSIP`: lantern_node_gossip of the fork of the store's slot, with a `NodeGossip` of `seen`, the store, `time_ms`, the topic and subnet of `arg`, `state_a` as head, `state_b` as proposer, `state_c` as justified, `settings` and the node's config. The root of a valid beacon_block goes at `NodeEvent_root`.
 - Bytes too short for their type give the result `LANTERN_INVALID_ENCODING`.
 
 ## Function `lantern_node_protocols`
@@ -404,9 +421,46 @@ lantern_node_attester_slashing(store, data, state, scratch, result) -> status
 
 - Export: `lantern_<fork>_node_attester_slashing` of each fork object.
 
+## Function `lantern_node_gossip`
+
+The gossip validation of the topic of a `NodeGossip` for SSZ bytes, decoded with the fork's types.
+
+### Signature
+
+```
+lantern_node_gossip(args, data, scratch, result, root) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `args` | input | `NodeGossip` |
+| `data` | input | ByteList: the uncompressed message |
+| `scratch` | scratch | `Scratch` |
+| `result` | output | `Result` |
+| `root` | output | Root |
+
+### Returns
+
+- `LANTERN_OK`: `result` is that of the topic's lantern_validate_<topic>_gossip, `LANTERN_GOSSIP_REJECT` when `data` is no value of the topic's type, or `LANTERN_GOSSIP_IGNORE` for a topic of no type in the fork or a proposer state whose slots do not run.
+- `LANTERN_BUFFER_TOO_SMALL`: as the topic's function or lantern_process_slots, or `scratch` cannot hold the decoded value.
+
+### Function does
+
+- The types: beacon_block `SignedBeaconBlock`, beacon_aggregate_and_proof `SignedAggregateAndProof`, beacon_attestation `Attestation` (`SingleAttestation` from electra), voluntary_exit `SignedVoluntaryExit`, proposer_slashing `ProposerSlashing`, attester_slashing `AttesterSlashing`, sync_committee_contribution_and_proof `SignedContributionAndProof`, sync_committee `SyncCommitteeMessage`, bls_to_execution_change `SignedBLSToExecutionChange`, blob_sidecar `BlobSidecar`, data_column_sidecar `DataColumnSidecar`.
+- beacon_block, blob_sidecar and data_column_sidecar: lantern_process_slots of the proposer state to the slot of the message's block header, when the state is before it. With no proposer state, the head state is the proposer state.
+- Bellatrix beacon_block: the justified state, or the head state with none.
+- A valid beacon_block: hash_tree_root of its message in `root`.
+- Decodes into the end of `scratch`; the scratch `size` is restored on return.
+
+### ABI
+
+- Export: `lantern_<fork>_node_gossip` of each fork object.
+
 ## Type `Node`
 
-The state of the node: a value with three parts.
+The state of the node: a value with parts.
 
 ### Layout
 
@@ -423,19 +477,22 @@ The state of the node: a value with three parts.
 | 112 | `flags` | u64 | `NODE_FLAG_*` |
 | 120 | `peers` | PartRef | `NodePeer` entries |
 | 136 | `streams` | PartRef | `NodeStream` entries of `stream_bytes` each |
-| 152 | `p2p_out` | PartRef | Bytes: the libp2p events the node made for its next libp2p step; the count is in bytes |
+| 152 | `p2p_out` | PartRef | One ByteList, offset 24: the libp2p events the node made for its next libp2p step |
 | 168 | `stream_bytes` | u64 | `NodeStream__fixed` + the request room, a multiple of 8 |
 | 176 | `metadata_seq` | u64 | MetaData `seq_number` |
 | 184 | `genesis_validators_root` | Root | Of the anchor |
 | 216 | `earliest_slot` | u64 | The anchor's slot: the first block the node serves |
-| 224 | `config` | `Config` | |
+| 224 | `messages` | PartRef | `NodeMessage` entries |
+| 240 | `fork_digest` | u64 | The ForkDigest of the subscribed topics: 4 bytes |
+| 248 | `config` | `Config` | |
 
 ### Rules
 
-- `NODE_FIXED` (224 + `CONFIG_SIZE`) bytes of fixed fields; the parts follow in the order above.
-- The capacity of a part is its bytes up to the next part, or to `size`, over its entry's bytes; `p2p_out` holds bytes to `size`.
+- `NODE_FIXED` (248 + `CONFIG_SIZE`) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, p2p_out.
+- The capacity of a part is its bytes up to the next part over its entry's bytes; `p2p_out` is the last part.
 - `NODE_FLAG_OPTIMISTIC`: blocks are imported as `PAYLOAD_STATUS_NOT_VALIDATED`.
 - `NODE_FLAG_JUSTIFIED_PENDING`: a `NODE_WORK_JUSTIFIED_STATE` is queued.
+- `NODE_FLAG_SUBSCRIBED`: the topics of `fork_digest` are subscribed.
 
 ## Type `NodeRoom`
 
@@ -449,7 +506,8 @@ The state of the node: a value with three parts.
 | 24 | `peers` | u64 | Capacity of `peers` |
 | 32 | `streams` | u64 | Capacity of `streams` |
 | 40 | `request_bytes` | u64 | Request bytes each stream holds, below 2^32 |
-| 48 | `p2p_out` | u64 | Bytes of `p2p_out` |
+| 48 | `p2p_out` | u64 | Bytes of the events in `p2p_out` |
+| 56 | `messages` | u64 | Capacity of `messages` |
 
 ## Type `NodeBlock`
 
@@ -524,6 +582,46 @@ The state of the node: a value with three parts.
 
 - `stream_bytes` of the node: `NodeStream__fixed` (72) + the request room.
 
+## Type `NodeMessage`
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `handle` | u64 | The libp2p message Handle |
+| 8 | `peer` | u64 | The libp2p peer Handle |
+| 16 | `topic` | u64 | `GOSSIP_*`, or 0 for a topic of no name |
+| 24 | `subnet` | u64 | |
+| 32 | `data_id` | u64 | `BufferId` of the uncompressed bytes, or 0 |
+| 40 | `state` | u64 | `NODE_MESSAGE_ID`, `NODE_MESSAGE_VALIDATING`, `NODE_MESSAGE_NO_ROOM` or `NODE_MESSAGE_CORRUPT` |
+| 48 | `slot` | u64 | The slot of its block header |
+| 56 | `parent_root` | Root | The parent root of its block header |
+
+### Rules
+
+- `NodeMessage__mem` (88) bytes.
+
+## Type `NodeGossip`
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `seen` | address | `Seen` |
+| 8 | `store` | address | `Store` |
+| 16 | `time_ms` | u64 | `current_time_ms` |
+| 24 | `topic` | u64 | `GOSSIP_*` |
+| 32 | `subnet` | u64 | |
+| 40 | `head` | address | The head's post-state |
+| 48 | `proposer` | address | A copy of the parent's post-state, or 0 |
+| 56 | `justified` | address | The post-state of the justified root, or 0 |
+| 64 | `settings` | address | asm-crypto `KzgSettings`, or 0 |
+| 72 | `config` | address | `Config` |
+
+### Rules
+
+- `NodeGossip__mem` (80) bytes.
+
 ## Type `NodeAnchor`
 
 ### Layout
@@ -562,7 +660,7 @@ The events of one step: a ByteList whose bytes are `NodeEvent` entries one after
 
 - `NODE_EV_TICK`: 24 bytes or more.
 - An event with `bytes`: its ByteList's offset is 24 and its bytes end inside the event.
-- `NODE_EV_WORK_DONE`: `NODE_EV_WORK_DONE_SIZE` bytes; offsets 16 to 63 are those of the work's `NodeAction`, `result` at `NodeEvent_result`, and a Checkpoint at `NodeEvent_checkpoint` for `LANTERN_NEED_TARGET_STATE`. For `NODE_WORK_SERVE`, a ByteList of the chunk at `NodeEvent_chunk`, offset 24, inside the event.
+- `NODE_EV_WORK_DONE`: `NODE_EV_WORK_DONE_SIZE` bytes; offsets 16 to 71 are those of the work's `NodeAction`, `result` at `NodeEvent_result`, and a Checkpoint at `NodeEvent_checkpoint` for `LANTERN_NEED_TARGET_STATE`. For `NODE_WORK_SERVE`, a ByteList of the chunk at `NodeEvent_chunk`, offset 24, inside the event. For `NODE_WORK_GOSSIP` of a valid beacon_block, its root at `NodeEvent_root`.
 - `NODE_EV_P2P`: a libp2p shell result `Event` from 16, its size a multiple of 8 inside the event; only with `p2p`.
 - `NODE_EV_PAYLOAD_STATUS` is `LANTERN_INVALID_EVENT` in this version.
 
@@ -581,9 +679,10 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 | 16 | `work_kind` or `id` | u64 | `NODE_ACT_WORK`: `NODE_WORK_*`; else the id |
 | 24 | `state_a` or `bytes` | u64 or ByteList | `NODE_ACT_WORK`: a `BufferId`; `NODE_ACT_STATE_COPY`: the new id; `NODE_ACT_BYTES_PUT`: the bytes, offset 24 |
 | 32 | `state_b` | u64 | `NODE_ACT_WORK`: a `BufferId` |
-| 40 | `data` | u64 | `NODE_ACT_WORK`: a `BufferId` of bytes |
-| 48 | `target` | u64 | `NODE_ACT_WORK`: a `NodeBlock` index, a `NodeCheckpoint` index, or a stream Handle |
-| 56 | `arg` | u64 | `NODE_ACT_WORK`: `is_from_block` of an attestation, the epoch of a checkpoint, or the protocol version of a SERVE |
+| 40 | `state_c` | u64 | `NODE_ACT_WORK`: a `BufferId` |
+| 48 | `data` | u64 | `NODE_ACT_WORK`: a `BufferId` of bytes |
+| 56 | `target` | u64 | `NODE_ACT_WORK`: a `NodeBlock` index, a `NodeCheckpoint` index, a stream Handle, or a message Handle |
+| 64 | `arg` | u64 | `NODE_ACT_WORK`: `is_from_block` of an attestation, the epoch of a checkpoint, the protocol version of a SERVE, or topic + 256 * subnet of a GOSSIP |
 
 ### Rules
 

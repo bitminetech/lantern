@@ -235,7 +235,7 @@ ABI uint64_t lantern_node_step(void *node, void *store, void *p2p, const void *t
                                void *actions, void *result);
 ABI uint64_t lantern_node_protocols(void *out, void *count);
 ABI uint64_t lantern_node_run(void *node, void *store, void *seen, const void *work, void *state_a, void *state_b,
-                              const void *data, void *scratch, void *event);
+                              void *state_c, const void *data, const void *settings, void *scratch, void *event);
 #if FORK == FORK_DENEB || FORK == FORK_ELECTRA
 ABI uint64_t LF(is_data_available)(const void *blob_kzg_commitments, const void *blobs, const void *proofs,
                                        const void *settings, void *scratch, void *out);
@@ -2304,9 +2304,9 @@ static uint8_t *fc_setup(fc_node *n, tv parts, const char **why) {
 enum { NB_WAITING = 1, NB_IMPORTING, NB_IMPORTED, NB_INVALID };
 enum { EV_TICK = 1, EV_BLOCK, EV_ATTESTATION, EV_ATTESTER_SLASHING, EV_POW_BLOCK, EV_PAYLOAD_STATUS, EV_WORK_DONE, EV_P2P };
 enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK, ACT_P2P_LIST };
-enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING, WORK_SERVE };
-#define EV_RESULT 64
-#define EV_WORK_DONE_SIZE 112
+enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING, WORK_SERVE, WORK_GOSSIP };
+#define EV_RESULT 72
+#define EV_WORK_DONE_SIZE 120
 #define LANTERN_NEED_TARGET_STATE 55
 #define SHELL_RESULTS 1024
 
@@ -2315,12 +2315,14 @@ typedef struct {
     uint8_t *b;
 } shell_buf;
 
-#define NODE_ROOM_FIELDS 7 /* NodeRoom: blocks, checkpoints, pow_blocks, peers, streams, request_bytes, p2p_out */
+#define NODE_ROOM_FIELDS 8 /* NodeRoom: blocks, checkpoints, pow_blocks, peers, streams, request_bytes, p2p_out, messages */
 
 struct p2p_net;
 
 struct node_shell {
     struct p2p_net *net; /* node-p2p: the network of the node's libp2p state */
+    uint8_t *seen;       /* the Seen of the node's gossip */
+    uint64_t seen_size, seen_room[4];
     uint8_t *node, *actions;
     uint64_t node_size, room[NODE_ROOM_FIELDS], actions_size;
     shell_buf *bufs;
@@ -2441,18 +2443,40 @@ static void shell_grow_node(struct node_shell *s, const char **why) {
     memcpy(s->room, room, sizeof room);
 }
 
+/* The node's Seen with seen_room, or a copy of it with that room. */
+static void shell_seen(struct node_shell *s, const char **why) {
+    uint64_t need = 0;
+    if (CALL(lantern_seen_size, s->seen_room, &need) != 0) {
+        *why = "lantern_seen_size status";
+        return;
+    }
+    uint8_t *b = buffer(need);
+    wr64(b, need);
+    if (!s->seen) {
+        if (CALL(lantern_seen_init, s->seen_room, b) != 0) *why = "lantern_seen_init status";
+    } else if (CALL(lantern_seen_copy, s->seen, s->seen_room, b) != 0) *why = "lantern_seen_copy status";
+    free(s->seen);
+    s->seen = b;
+    s->seen_size = need;
+}
+
 /*
  * A WORK action: lantern_node_run with its buffers, again with more room while it asks for it,
  * then its WORK_DONE event for the next step.
  */
 static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     struct node_shell *s = n->shell;
-    uint64_t kind = rd64(work + 16), a_id = rd64(work + 24), d_id = rd64(work + 40);
-    shell_buf *a = a_id ? shell_find(s, a_id) : NULL, *d = d_id ? shell_find(s, d_id) : NULL;
-    if ((a_id && !a) || (d_id && !d) || rd64(work + 32)) {
+    uint64_t kind = rd64(work + 16), a_id = rd64(work + 24), b_id = rd64(work + 32), c_id = rd64(work + 40), d_id = rd64(work + 48);
+    shell_buf *a = a_id ? shell_find(s, a_id) : NULL, *b = b_id ? shell_find(s, b_id) : NULL;
+    shell_buf *c = c_id ? shell_find(s, c_id) : NULL, *d = d_id ? shell_find(s, d_id) : NULL;
+    if ((a_id && !a) || (b_id && !b) || (c_id && !c) || (d_id && !d)) {
         *why = "a WORK action names no buffer";
         return;
     }
+    const void *settings = NULL;
+#if FORK >= FORK_DENEB
+    settings = kzg_settings;
+#endif
     uint64_t ev_size = EV_WORK_DONE_SIZE;
     uint8_t *ev = buffer(ev_size);
     uint64_t st = 1, growth = 2;
@@ -2461,7 +2485,8 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         uint8_t *sa = a ? copy_of(a->b, a->size) : NULL;
         memset(ev, FILL, (size_t)ev_size);
         wr64(ev, ev_size);
-        st = CALL(lantern_node_run, s->node, n->store, NULL, work, a ? a->b : NULL, NULL, d ? d->b : NULL, fresh_scratch(), ev);
+        st = CALL(lantern_node_run, s->node, n->store, s->seen, work, a ? a->b : NULL, b ? b->b : NULL, c ? c->b : NULL,
+                  d ? d->b : NULL, settings, fresh_scratch(), ev);
         if (st != 0 && (memcmp(snode, s->node, (size_t)s->node_size) || memcmp(sstore, n->store, (size_t)n->size) ||
                         (a && memcmp(sa, a->b, (size_t)a->size))))
             *why = "lantern_node_run: a non-zero status changed a state";
@@ -2474,6 +2499,13 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
             free(ev);
             ev_size *= 4;
             ev = buffer(ev_size);
+        } else if (kind == WORK_GOSSIP) { /* the Seen, and the proposer state's lists */
+            for (int i = 0; i < 4; i++) s->seen_room[i] *= 2;
+            shell_seen(s, why);
+            if (b) {
+                b->b = regrow(b->b, &b->size, growth, why);
+                growth *= 2;
+            }
         } else if ((kind == WORK_IMPORT_BLOCK && node_count(n) < node_capacity(n->store)) || kind == WORK_TARGET_STATE) {
             if (!a) *why = "lantern_node_run: no room, and no state";
             else {
@@ -2493,7 +2525,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         *why = "lantern_node_run wrote out of bounds";
     uint64_t esize = *why ? 0 : rd64(ev);
     if (!*why && (esize < EV_WORK_DONE_SIZE || esize > ev_size || esize % 8 || rd64(ev + 8) != EV_WORK_DONE ||
-                  memcmp(ev + 16, work + 16, 48) || (kind != WORK_SERVE && esize != EV_WORK_DONE_SIZE)))
+                  memcmp(ev + 16, work + 16, 56) || (kind != WORK_SERVE && esize != EV_WORK_DONE_SIZE)))
         *why = "lantern_node_run: the event is not the WORK_DONE of the work";
     if (!*why) {
         uint64_t result = rd64(ev + EV_RESULT);
@@ -2576,7 +2608,7 @@ static void shell_step(fc_node *n, const char **why) {
             else shell_keep(s, rd64(act + 24), copy_of(src->b, src->size), src->size, why);
         } else if ((kind == ACT_STATE_FREE || kind == ACT_BYTES_FREE) && size == 32)
             shell_drop(s, rd64(act + 16), why);
-        else if (kind == ACT_WORK && size == 64)
+        else if (kind == ACT_WORK && size == 72)
             shell_work(n, act, why);
         else if (kind == ACT_P2P_LIST && s->net && size >= 40 && rd64(act + 16) == size - 16 && rd64(act + 24) == 24 &&
                  rd64(act + 32) == size - 40) {
@@ -2695,6 +2727,9 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
         uint64_t flags = 0, need = 0;
         for (int i = 0; i < NODE_ROOM_FIELDS; i++) s->room[i] = 2;
         s->room[2] = 1;
+        s->seen_room[0] = s->seen_room[1] = s->seen_room[2] = 1;
+        s->seen_room[3] = 64;
+        shell_seen(s, why);
         root_of("BeaconBlock", *anchor_block, anchor, why);
         wr64(anchor + 32, rd64(*anchor_block + field_offset("BeaconBlock", 0)));
         memcpy(anchor + 40, n->anchor + field_offset("BeaconState", 1), 32);
@@ -2721,6 +2756,7 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
 
 static void shell_close(fc_node *n, uint8_t *anchor_block) {
     struct node_shell *s = n->shell;
+    free(s->seen);
     for (size_t k = 0; k < s->nbufs; k++) free(s->bufs[k].b);
     free(s->bufs);
     free(s->pending);
@@ -2815,7 +2851,7 @@ struct p2p_net {
     struct node_shell *shell;
     uint8_t *state[2], *scratch, *actions, *events; /* the peer's scratch, actions and events */
     uint64_t events_len, now, conn[2], dial_conn, token, node_handle;
-    int connected;
+    int connected, topics;
     struct {
         uint64_t tag, handle;
         int opened, eof, reset, failed;
@@ -2920,6 +2956,10 @@ static void p2p_peer_app(struct p2p_net *net, uint8_t *act) {
     if (kind == P2P_ACT_PEER_CONNECTED) {
         net->node_handle = rd64(act + 16);
         net->connected = 1;
+        return;
+    }
+    if (kind == 19) { /* PEER_TOPIC: the node joins or leaves a topic */
+        if (rd64(act + 24)) net->topics++;
         return;
     }
     for (int k = 0; k < P2P_STREAMS; k++) {
@@ -3130,6 +3170,7 @@ static void p2p_open(fc_node *n, struct p2p_net *net, const char **why) {
     s->room[4] = 4;       /* streams */
     if (s->room[5] < 8192) s->room[5] = 8192;      /* request bytes */
     if (s->room[6] < (1u << 20)) s->room[6] = 1u << 20; /* queued libp2p events */
+    if (s->room[7] < 16) s->room[7] = 16;               /* gossip messages */
     if (!*why) { /* the node with that room, then its libp2p state */
         uint8_t *old = s->node;
         uint64_t need = 0;
@@ -3222,7 +3263,7 @@ static void run_node_p2p(const char *file, case_file *f) {
             int k = p2p_request(&n, &net, 3, "goodbye", 1, reason, 8, &why);
             if (!why && net.st[k].len) why = "goodbye: an answer";
         }
-        if (!why && rd64(s->node + 152 + 8)) why = "the node keeps libp2p events at the end"; /* Node_p2p_out */
+        if (!why && rd64(s->node + rd64(s->node + 152) + 16)) why = "the node keeps libp2p events at the end"; /* Node_p2p_out: a ByteList */
         p2p_close(&net);
         shell_close(&n, anchor_block);
         report(file, name, len, why == NULL, why);
@@ -3346,6 +3387,188 @@ static void fc_serve_check(fc_node *n, tv parts, const char **why) {
     free(blocks);
 }
 
+/* asm-snappy at the pin of platform/deps.sh, for the peer's messages. */
+ABI uint64_t snappy_compress_size(const void *input, void *size);
+ABI uint64_t snappy_compress(const void *input, void *scratch, void *compressed);
+#define SNAPPY_SCRATCH_COMPRESS 32776
+enum { GOSSIP_BEACON_BLOCK_TOPIC = 1 }; /* include/lantern.inc GOSSIP_BEACON_BLOCK */
+
+/* The peer publishes the SSZ bytes ssz as a message of the topic string topic: Snappy, its message-id, a PUBLISH. */
+static void p2p_publish(struct p2p_net *net, const uint8_t *topic, uint64_t tlen, const uint8_t *ssz, uint64_t len,
+                        const char **why) {
+    uint64_t csize = 0;
+    uint8_t ncfg[CONFIG_SIZE], id[32] = {0};
+    node_config(ncfg);
+    uint8_t *in = serialized(ssz, len, &(uint64_t){0});
+    CALL(snappy_compress_size, in, &csize);
+    uint8_t *out = buffer(csize), *scr = buffer(SNAPPY_SCRATCH_COMPRESS + 64);
+    wr64(out, csize);
+    wr64(scr, SNAPPY_SCRATCH_COMPRESS + 64);
+    uint8_t *tl = serialized(topic, tlen, &(uint64_t){0});
+    if (CALL(snappy_compress, in, scr, out) != 0) *why = "snappy_compress status";
+    else if (CALL(LF(compute_message_id), tl, out, ncfg, fresh_scratch(), id) != 0) *why = "compute_message_id status";
+    else {
+        uint64_t dlen = rd64(out + 16), toff = 72 + ((tlen + 7) & ~(uint64_t)7);
+        uint8_t *e = p2p_event(net, 1, 15 /* PUBLISH */, toff + dlen);
+        wr64(e + 16, 20);
+        memcpy(e + 24, id, 20);
+        wr64(e + 56, tlen);
+        wr64(e + 64, dlen);
+        memcpy(e + 72, topic, (size_t)tlen);
+        memcpy(e + toff, out + 24, (size_t)dlen);
+    }
+    free(in);
+    free(out);
+    free(scr);
+    free(tl);
+}
+
+static const uint8_t *gossip_root; /* the block p2p_imported waits for */
+static int p2p_imported(struct p2p_net *net, int arg) {
+    (void)arg;
+    const uint8_t *e = shell_block(net->shell, gossip_root);
+    return e && rd64(e + NB_STATUS) >= NB_IMPORTED;
+}
+static int p2p_subscribed(struct p2p_net *net, int arg) { return net->topics >= arg; }
+static int p2p_never(struct p2p_net *net, int arg) {
+    (void)net;
+    (void)arg;
+    return 0;
+}
+
+/* Rounds of the network that the node may use to handle its events. */
+static void p2p_settle(fc_node *n, struct p2p_net *net, const char **why) {
+    for (int k = 0; k < 6 && !*why; k++) {
+        shell_step(n, why);
+        if (!*why) p2p_peer_step(net, why);
+        net->now += 10;
+    }
+    (void)p2p_never;
+}
+
+/*
+ * Whether a case's valid blocks can all come over gossip: each in its own slot, after a tick to
+ * that slot, and no payload_status step.
+ */
+static int gossip_case(tv parts, uint64_t genesis_ms) {
+    tv steps = tv_get(parts, "steps"), st = steps ? steps + 9 : NULL;
+    uint64_t now = 0, slots[256], nslots = 0, slot_ms = rd64(config + 104);
+    for (uint64_t k = 0, c = steps ? rd64(steps + 1) : 0; k < c; k++, st = tv_skip(st)) {
+        tv v = tv_get(st, "valid");
+        if (tv_get(st, "payload_status")) return 0;
+        if (tv_get(st, "tick")) now = tv_u64(tv_get(st, "tick")) * 1000;
+        if (!tv_get(st, "block") || (v && !(*v == T_BOOL && v[1]))) continue;
+        tv bname = tv_get(st, "block");
+        char key[128];
+        uint64_t blen, vsize;
+        const char *why = NULL;
+        snprintf(key, sizeof key, "%.*s", (int)rd64(bname + 1), (const char *)(bname + 9));
+        uint8_t *sb = decode(type_by_name("SignedBeaconBlock"), tv_bytes(tv_get(parts, key), &blen), blen, &vsize, &why);
+        if (!sb) return 0;
+        uint64_t slot = rd64(nested(sb, field_offset("SignedBeaconBlock", 0)) + field_offset("BeaconBlock", 0));
+        free(sb);
+        if (nslots == 256 || now < genesis_ms + slot * slot_ms) return 0;
+        for (uint64_t i = 0; i < nslots; i++)
+            if (slots[i] == slot) return 0;
+        slots[nslots++] = slot;
+    }
+    return nslots > 0;
+}
+
+/*
+ * A case through a node that gets its blocks over gossip: the peer publishes each valid block on
+ * beacon_block after the case's ticks, and the node must import it; the other steps are events
+ * as in fc_node_case, and the checks must hold.
+ */
+static void fc_gossip_case(tv parts, int *ran, const char **why) {
+    fc_node n;
+    uint8_t *anchor_block;
+    *ran = 0;
+    struct node_shell *s = shell_open(&n, parts, &anchor_block, why);
+    uint64_t genesis_ms = *why ? 0 : rd64(n.store + STORE_GENESIS_TIME_MS);
+    if (*why || !gossip_case(parts, genesis_ms)) {
+        shell_close(&n, anchor_block);
+        return;
+    }
+    *ran = 1;
+    struct p2p_net net;
+    uint8_t gvr[32], ncfg[CONFIG_SIZE];
+    memcpy(gvr, n.anchor + field_offset("BeaconState", 1), 32);
+    node_config(ncfg);
+    p2p_open(&n, &net, why);
+    if (!*why) p2p_run(&n, &net, p2p_subscribed, 5, why); /* the node's topics reach the peer */
+    tv steps = tv_get(parts, "steps");
+    tv st = steps ? steps + 9 : NULL;
+    for (uint64_t k = 0, c = steps ? rd64(steps + 1) : 0; k < c && !*why; k++, st = tv_skip(st)) {
+        tv v = tv_get(st, "valid");
+        int valid = !v || (*v == T_BOOL && v[1]);
+        if (tv_get(st, "tick")) {
+            uint64_t secs = tv_u64(tv_get(st, "tick")), ms = secs > UINT64_MAX / 1000 ? UINT64_MAX : secs * 1000;
+            shell_event(s, EV_TICK, ms, NULL, 0);
+            p2p_settle(&n, &net, why);
+        } else if (tv_get(st, "block")) {
+            if (!valid) continue;
+            char key[128];
+            uint64_t blen, vsize;
+            tv bname = tv_get(st, "block");
+            snprintf(key, sizeof key, "%.*s", (int)rd64(bname + 1), (const char *)(bname + 9));
+            const uint8_t *bytes = tv_bytes(tv_get(parts, key), &blen);
+            uint8_t *sb = decode(type_by_name("SignedBeaconBlock"), bytes, blen, &vsize, why), root[32];
+            if (!sb) break;
+            const uint8_t *block = nested(sb, field_offset("SignedBeaconBlock", 0));
+            root_of("BeaconBlock", block, root, why);
+            uint64_t epoch = rd64(block + field_offset("BeaconBlock", 0)) / SLOTS_PER_EPOCH_RUNNER;
+            uint8_t topic[24] = {0}, list[24 + 128];
+            wr64(list, sizeof list);
+            CALL(LF(compute_fork_digest), gvr, &epoch, ncfg, fresh_scratch(), topic);
+            wr64(topic + 8, GOSSIP_BEACON_BLOCK_TOPIC);
+            if (!*why && CALL(lantern_gossip_topic, topic, list) != 0) *why = "gossip_topic status";
+            if (!*why) p2p_publish(&net, list + 24, rd64(list + 16), bytes, blen, why);
+            gossip_root = root;
+            if (!*why) p2p_run(&n, &net, p2p_imported, 0, why);
+            if (*why && !strcmp(*why, "the network does not get there")) *why = "a valid block is not imported over gossip";
+            if (!*why) { /* the block's attestations and attester slashings, as fc_node_case gives them */
+                const uint8_t *body = nested(block, field_offset("BeaconBlock", 4));
+                uint64_t ref = field_offset("BeaconBlockBody", 5);
+                const uint8_t *a = body + rd64(body + ref);
+                for (uint64_t i = 0, cnt = rd64(body + ref + 8); i < cnt && !*why; i++, a += rd64(a)) {
+                    uint64_t olen = 0;
+                    uint8_t *enc = encoded("Attestation", a, &olen, why);
+                    if (enc) shell_event(s, EV_ATTESTATION, 1, enc + 24, olen);
+                    free(enc);
+                }
+                ref = field_offset("BeaconBlockBody", 4);
+                a = body + rd64(body + ref);
+                for (uint64_t i = 0, cnt = rd64(body + ref + 8); i < cnt && !*why; i++, a += rd64(a)) {
+                    uint64_t olen = 0;
+                    uint8_t *enc = encoded("AttesterSlashing", a, &olen, why);
+                    if (enc) shell_event(s, EV_ATTESTER_SLASHING, 0, enc + 24, olen);
+                    free(enc);
+                }
+                p2p_settle(&n, &net, why);
+            }
+            free(sb);
+        } else if (tv_get(st, "attestation") || tv_get(st, "attester_slashing") || tv_get(st, "pow_block")) {
+            int att = tv_get(st, "attestation") != NULL, pow = tv_get(st, "pow_block") != NULL;
+            tv nm = tv_get(st, att ? "attestation" : pow ? "pow_block" : "attester_slashing");
+            char key[128];
+            uint64_t olen;
+            snprintf(key, sizeof key, "%.*s", (int)rd64(nm + 1), (const char *)(nm + 9));
+            shell_event(s, att ? EV_ATTESTATION : pow ? EV_POW_BLOCK : EV_ATTESTER_SLASHING, 0, tv_bytes(tv_get(parts, key), &olen), olen);
+            p2p_settle(&n, &net, why);
+        } else if (tv_get(st, "checks")) {
+            fc_checks(&n, tv_get(st, "checks"), why);
+        }
+        if (*why) {
+            static char msg[192];
+            snprintf(msg, sizeof msg, "step %llu: %s", (unsigned long long)k, *why);
+            *why = msg;
+        }
+    }
+    p2p_close(&net);
+    shell_close(&n, anchor_block);
+}
+
 /* compliance: the rules of the spec's fork choice compliance runner (tests/generators/compliance_runners). */
 static void run_fork_choice(const char *file, const char *dir, case_file *f, int compliance) {
     /* Node mode also serves the chain of these files' cases over libp2p. */
@@ -3447,6 +3670,13 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
             const char *nwhy = NULL;
             fc_node_case(parts, serve, &nwhy);
             report(file, nname, (uint64_t)nlen, nwhy == NULL, nwhy);
+            int ran = 0;
+            const char *gwhy = NULL;
+            if (serve) fc_gossip_case(parts, &ran, &gwhy);
+            if (ran) {
+                nlen = snprintf(nname, sizeof nname, "%.*s (gossip)", (int)len, name);
+                report(file, nname, (uint64_t)nlen, gwhy == NULL, gwhy);
+            }
         }
     }
 }

@@ -447,6 +447,7 @@
 .set Node_flags, 112                   /* NODE_FLAG_* */
 .set NODE_FLAG_OPTIMISTIC, 1           /* import payloads as NOT_VALIDATED until the execution engine answers */
 .set NODE_FLAG_JUSTIFIED_PENDING, 2    /* a JUSTIFIED_STATE work is queued */
+.set NODE_FLAG_SUBSCRIBED, 4           /* the gossip topics of fork_digest are subscribed */
 .set Node_peers, 120                   /* PartRef of NodePeer */
 .set Node_streams, 136                 /* PartRef of NodeStream entries of Node_stream_bytes each */
 .set Node_p2p_out, 152                 /* PartRef of bytes: libp2p events the node made for its next libp2p step */
@@ -454,8 +455,10 @@
 .set Node_metadata_seq, 176            /* MetaData.seq_number */
 .set Node_genesis_validators_root, 184
 .set Node_earliest_slot, 216           /* the slot of the anchor: the first block the node serves */
-.set Node_config, 224
-.set NODE_FIXED, 224 + CONFIG_SIZE
+.set Node_messages, 224                /* PartRef of NodeMessage */
+.set Node_fork_digest, 240             /* the ForkDigest of the subscribed topics, 4 bytes */
+.set Node_config, 248
+.set NODE_FIXED, 248 + CONFIG_SIZE
 .set NODE_STATE_SLOT, 48               /* BeaconState.slot in the value of every fork */
 
 /* NodeBlock: a block the node knows */
@@ -510,6 +513,34 @@
 .set NodeStream_request, 72
 .set NodeStream__fixed, 72
 
+/* NodeMessage: a gossip message the node holds */
+.set NodeMessage_handle, 0             /* the libp2p message Handle */
+.set NodeMessage_peer, 8               /* the libp2p peer Handle */
+.set NodeMessage_topic, 16             /* GOSSIP_*, or 0 for a topic of no name */
+.set NodeMessage_subnet, 24
+.set NodeMessage_data_id, 32           /* BufferId of the uncompressed bytes, or 0 */
+.set NodeMessage_state, 40             /* NODE_MESSAGE_* */
+.set NodeMessage_slot, 48              /* the slot of its block or block header */
+.set NodeMessage_parent_root, 56       /* the parent root of its block or block header */
+.set NodeMessage__mem, 88
+.set NODE_MESSAGE_ID, 1                /* its MESSAGE_ID is sent */
+.set NODE_MESSAGE_VALIDATING, 2        /* a GOSSIP work is queued */
+.set NODE_MESSAGE_NO_ROOM, 3           /* the bytes did not fit in the actions: IGNORE */
+.set NODE_MESSAGE_CORRUPT, 4           /* the data is no Snappy block of at most MAX_PAYLOAD_SIZE bytes: REJECT */
+
+/* NodeGossip: the inputs of lantern_node_gossip */
+.set NodeGossip_seen, 0
+.set NodeGossip_store, 8
+.set NodeGossip_time_ms, 16
+.set NodeGossip_topic, 24              /* GOSSIP_* */
+.set NodeGossip_subnet, 32
+.set NodeGossip_head, 40               /* head_state */
+.set NodeGossip_proposer, 48           /* proposer_state, or 0 */
+.set NodeGossip_justified, 56          /* justified_state, or 0 */
+.set NodeGossip_settings, 64           /* asm-crypto KzgSettings, or 0 */
+.set NodeGossip_config, 72             /* the node's Config */
+.set NodeGossip__mem, 80
+
 /* NodeAnchor: the input of lantern_node_init */
 .set NodeAnchor_root, 0                /* hash_tree_root of the anchor block */
 .set NodeAnchor_slot, 32
@@ -525,6 +556,7 @@
 .set NodeRoom_streams, 32
 .set NodeRoom_request_bytes, 40        /* request bytes each stream holds */
 .set NodeRoom_p2p_out, 48              /* bytes of libp2p events the node holds for its next libp2p step */
+.set NodeRoom_messages, 56
 
 /* NodeStepResult: the output of lantern_node_step */
 .set NodeStepResult_accepted, 0        /* events handled, from the first */
@@ -537,12 +569,12 @@
 .set NODE_EV_ATTESTER_SLASHING, 4      /* 24 a ByteList of the SSZ bytes */
 .set NODE_EV_POW_BLOCK, 5              /* 24 a ByteList of the SSZ bytes */
 .set NODE_EV_PAYLOAD_STATUS, 6         /* 16 block_hash, 48 status, 56 has_latest, 64 latest_valid_hash */
-.set NODE_EV_WORK_DONE, 7              /* the work's fields from 16 (as NodeAction), then 64 result, 72 checkpoint epoch, 80 root */
+.set NODE_EV_WORK_DONE, 7              /* the work's fields from 16 (as NodeAction), then 72 result, 80 checkpoint epoch, 88 root */
 .set NODE_EV_P2P, 8                    /* 16 a libp2p shell result Event */
 .set NODE_EV_LAST, 8
-.set NodeEvent_result, 64
-.set NodeEvent_checkpoint, 72
-.set NODE_EV_WORK_DONE_SIZE, 112
+.set NodeEvent_result, 72
+.set NodeEvent_checkpoint, 80
+.set NODE_EV_WORK_DONE_SIZE, 120
 .set NodeEvent_bytes, 24               /* a ByteList whose bytes start at its offset 24 */
 
 /* NodeAction kinds, after the size and kind header */
@@ -550,15 +582,16 @@
 .set NODE_ACT_STATE_COPY, 2            /* 16 source id, 24 new id */
 .set NODE_ACT_STATE_FREE, 3            /* 16 id */
 .set NODE_ACT_BYTES_FREE, 4            /* 16 id */
-.set NODE_ACT_WORK, 5                  /* 16 kind, 24 state_a, 32 state_b, 40 data, 48 target, 56 arg */
+.set NODE_ACT_WORK, 5                  /* 16 kind, 24 state_a, 32 state_b, 40 state_c, 48 data, 56 target, 64 arg */
 .set NODE_ACT_P2P_LIST, 6              /* 16 a ByteList of libp2p Actions: the shell does its shell requests in order */
 .set NodeAction_work_kind, 16
 .set NodeAction_state_a, 24
 .set NodeAction_state_b, 32
-.set NodeAction_data, 40
-.set NodeAction_target, 48
-.set NodeAction_arg, 56
-.set NODE_ACT_WORK_SIZE, 64
+.set NodeAction_state_c, 40
+.set NodeAction_data, 48
+.set NodeAction_target, 56
+.set NodeAction_arg, 64
+.set NODE_ACT_WORK_SIZE, 72
 
 /* Work kinds of lantern_node_run */
 .set NODE_WORK_IMPORT_BLOCK, 1         /* a: a copy of the parent's post-state; data: the block */
@@ -567,6 +600,8 @@
 .set NODE_WORK_ATTESTATION, 4          /* a: the target checkpoint state, or 0; data: the attestation */
 .set NODE_WORK_ATTESTER_SLASHING, 5    /* a: the justified root's block state; data: the slashing */
 .set NODE_WORK_SERVE, 6                /* data: a block's SSZ bytes; target: the stream Handle; arg: the protocol version */
+.set NODE_WORK_GOSSIP, 7               /* a: head state; b: proposer state; c: justified state; data: the message; target: its Handle; arg: topic + 256 * subnet */
+.set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block: its root */
 .set NodeEvent_chunk, NODE_EV_WORK_DONE_SIZE   /* SERVE: a ByteList of the response chunk after the WORK_DONE fields */
 .set LANTERN_NEED_TARGET_STATE, 55     /* lantern_node_run: an attestation needs its target checkpoint state */
 .set LANTERN_INVALID_ENCODING, 56     /* lantern_node_run, the node hooks: the bytes are not an SSZ encoding of the type */

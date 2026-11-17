@@ -6,6 +6,14 @@
 
 .set NODE_ROOT_ENTRY, 40                # lantern_node_step: a flag, then the root of a BLOCK event
 
+/* reg = the node s1's ByteList of the libp2p events it queued. */
+.macro P2P_OUT reg
+    ld      \reg, Node_p2p_out(s1)
+    add     \reg, s1, \reg
+.endm
+
+.set NODE_BLOB_HEADER, 8 + 32 * FIELD_ELEMENTS_PER_BLOB + 48 + 48   # the signed_block_header in a BlobSidecar's SSZ bytes
+
 /* Call lantern_<fork>_<name> for the fork in t6 (FORK_PHASE0 to FORK_FULU). Uses t5. */
 .macro FORK_CALL name
     li      t5, FORK_ALTAIR
@@ -116,8 +124,9 @@ FUNCTION lantern_node_size
     NODE_SIZE_ADD checkpoints, NodeCheckpoint__mem
     NODE_SIZE_ADD pow_blocks, POW_BLOCK_BYTES
     NODE_SIZE_ADD peers, NodePeer__mem
-    ld      t0, NodeRoom_p2p_out(a0)
-    addi    t1, t0, 7
+    NODE_SIZE_ADD messages, NodeMessage__mem
+    ld      t0, NodeRoom_p2p_out(a0)        # a ByteList
+    addi    t1, t0, 24 + 7
     bltu    t1, t0, 9f
     andi    t1, t1, -8
     add     t0, t3, t1
@@ -160,8 +169,18 @@ LOCAL_FUNCTION node_layout
     ld      t1, NodeRoom_streams(a1)
     mul     t1, t1, t3
     add     t0, t0, t1
-    sd      t0, Node_p2p_out(a0)
-    sd      zero, (Node_p2p_out + 8)(a0)
+    NODE_PART messages, messages, NodeMessage__mem
+    sd      t0, Node_p2p_out(a0)            # one ByteList, empty
+    li      t1, 1
+    sd      t1, (Node_p2p_out + 8)(a0)
+    ld      t1, NodeRoom_p2p_out(a1)
+    addi    t1, t1, 24 + 7
+    andi    t1, t1, -8
+    add     t2, a0, t0
+    sd      t1, 0(t2)
+    li      t1, 24
+    sd      t1, 8(t2)
+    sd      zero, 16(t2)
     ret
 END_FUNCTION node_layout
 
@@ -276,7 +295,12 @@ FUNCTION lantern_node_copy
     NODE_COPY_ROOM pow_blocks, Node_pow_blocks
     NODE_COPY_ROOM peers, Node_peers
     NODE_COPY_ROOM streams, Node_streams
-    NODE_COPY_ROOM p2p_out, Node_p2p_out
+    NODE_COPY_ROOM messages, Node_messages
+    ld      t0, NodeRoom_p2p_out(s2)        # the queued bytes fit
+    ld      t1, Node_p2p_out(s1)
+    add     t1, s1, t1
+    ld      t1, 16(t1)
+    bltu    t0, t1, 8f
     ld      s8, Node_stream_bytes(s1)       # a stream's request bytes fit
     ld      t0, NodeRoom_request_bytes(s2)
     addi    t0, t0, NodeStream__fixed + 7
@@ -293,10 +317,15 @@ FUNCTION lantern_node_copy
     NODE_COPY_PART Node_checkpoints, NodeCheckpoint__mem
     NODE_COPY_PART Node_pow_blocks, POW_BLOCK_BYTES
     NODE_COPY_PART Node_peers, NodePeer__mem
-    PART    a1, a2, s1, Node_p2p_out        # the queued bytes
-    sd      a2, (Node_p2p_out + 8)(s3)
-    ld      t0, Node_p2p_out(s3)
-    add     a0, s3, t0
+    NODE_COPY_PART Node_messages, NodeMessage__mem
+    ld      a1, Node_p2p_out(s1)            # the queued bytes
+    add     a1, s1, a1
+    ld      a2, 16(a1)
+    ld      a0, Node_p2p_out(s3)
+    add     a0, s3, a0
+    sd      a2, 16(a0)
+    addi    a0, a0, 24
+    addi    a1, a1, 24
     call    lantern_copy
     PART    s4, s7, s1, Node_streams        # each stream, with the request room of the new stride
     sd      s7, (Node_streams + 8)(s3)
@@ -387,7 +416,7 @@ LOCAL_FUNCTION node_find_checkpoint
     ret
 END_FUNCTION node_find_checkpoint
 
-/* A WORK action: kind a0, state_a a1, state_b a2, data a3, target a4, arg a5. Uses t0-t2. */
+/* a0 = a WORK action: kind a0, state_a a1, state_b a2, data a3, target a4, arg a5; state_c 0. Uses t0-t2. */
 LOCAL_FUNCTION node_work
     UNWIND_END_PROLOGUE
     ld      t0, 8(s6)
@@ -403,9 +432,11 @@ LOCAL_FUNCTION node_work
     sd      a0, NodeAction_work_kind(t2)
     sd      a1, NodeAction_state_a(t2)
     sd      a2, NodeAction_state_b(t2)
+    sd      zero, NodeAction_state_c(t2)
     sd      a3, NodeAction_data(t2)
     sd      a4, NodeAction_target(t2)
     sd      a5, NodeAction_arg(t2)
+    mv      a0, t2
     ret
 END_FUNCTION node_work
 
@@ -773,6 +804,8 @@ LOCAL_FUNCTION node_event
     ld      a4, NodeAction_target(s3)
     ld      a5, NodeAction_arg(s3)
     call    node_work
+    ld      t0, NodeAction_state_c(s3)
+    sd      t0, NodeAction_state_c(a0)
     LEAVE 48
 51: bnez    t1, 52f
     li      t0, NODE_BLOCK_IMPORTED         # imported: then its waiting children
@@ -811,7 +844,7 @@ LOCAL_FUNCTION node_event
     call    node_work
     LEAVE 48
 62: li      t2, NODE_WORK_SERVE             # SERVE: the chunk to its stream, then the next block or the close
-    bne     t0, t2, 70f
+    bne     t0, t2, 63f
     ld      a0, NodeAction_target(s3)
     call    node_find_stream
     li      t0, -1
@@ -857,6 +890,70 @@ LOCAL_FUNCTION node_event
     mv      a0, s4
     call    node_drop_stream
     LEAVE 48
+63: li      t2, NODE_WORK_GOSSIP            # GOSSIP: the VALIDATION, then a valid block to import
+    bne     t0, t2, 70f
+    li      s7, LIBP2P_ACCEPT
+    beqz    t1, 631f
+    li      s7, LIBP2P_IGNORE
+    li      t2, LANTERN_GOSSIP_REJECT
+    bne     t1, t2, 631f
+    li      s7, LIBP2P_REJECT
+631: ld     a0, NodeAction_target(s3)
+    mv      a1, s7
+    call    node_validation
+    ld      a1, NodeAction_state_b(s3)      # the proposer state
+    beqz    a1, 64f
+    li      a0, NODE_ACT_STATE_FREE
+    li      a2, 0
+    call    node_ids
+64: ld      a0, NodeAction_target(s3)
+    call    node_find_message
+    li      t0, -1
+    beq     a0, t0, 66f
+    mv      s4, a1
+    li      t0, LIBP2P_ACCEPT
+    bne     s7, t0, 65f
+    ld      t0, NodeMessage_topic(s4)
+    li      t1, GOSSIP_BEACON_BLOCK
+    bne     t0, t1, 65f
+    addi    a0, s3, NodeEvent_root          # a new block keeps the bytes
+    call    node_find_block
+    li      t0, -1
+    bne     a0, t0, 65f
+    PART    t0, t1, s1, Node_blocks
+    sd      t1, (L + 40)(sp)
+    li      t2, NodeBlock__mem
+    mul     t2, t1, t2
+    add     t0, t0, t2
+    addi    t2, s3, NodeEvent_root
+    COPY32  t0, t2
+    addi    t2, t0, NodeBlock_parent_root
+    addi    t3, s4, NodeMessage_parent_root
+    COPY32  t2, t3
+    ld      t2, NodeMessage_slot(s4)
+    sd      t2, NodeBlock_slot(t0)
+    ld      t2, NodeAction_data(s3)
+    sd      t2, NodeBlock_data_id(t0)
+    sd      zero, NodeBlock_state_id(t0)
+    li      t2, NODE_BLOCK_WAITING
+    sd      t2, NodeBlock_status(t0)
+    li      t2, 1
+    sd      t2, NodeBlock_data_available(t0)
+    sd      zero, NodeBlock_result(t0)
+    addi    t1, t1, 1
+    sd      t1, (Node_blocks + 8)(s1)
+    mv      a0, s4
+    call    node_drop_message
+    ld      a0, (L + 40)(sp)
+    call    node_try_import
+    LEAVE 48
+65: mv      a0, s4
+    call    node_drop_message
+66: li      a0, NODE_ACT_BYTES_FREE         # else its bytes go
+    ld      a1, NodeAction_data(s3)
+    li      a2, 0
+    call    node_ids
+    LEAVE 48
 70: li      t2, NODE_WORK_ATTESTATION       # done with an attestation or a slashing: free its bytes
     beq     t0, t2, 71f
     li      t2, NODE_WORK_ATTESTER_SLASHING
@@ -873,16 +970,16 @@ END_FUNCTION node_event
 /* a0 = room for an event of a0 bytes at the end of the node's queued libp2p events, its size written, or 0. Uses t0-t3. */
 LOCAL_FUNCTION node_out
     UNWIND_END_PROLOGUE
-    ld      t0, Node_p2p_out(s1)            # offset, bytes used; the part ends at the node's end
-    ld      t1, (Node_p2p_out + 8)(s1)
-    ld      t2, 0(s1)
-    sub     t2, t2, t0
+    P2P_OUT t0
+    ld      t1, 16(t0)
+    ld      t2, 0(t0)
+    addi    t2, t2, -24
     sub     t2, t2, t1
     bltu    t2, a0, 1f
-    add     t3, s1, t0
+    addi    t3, t0, 24
     add     t3, t3, t1
     add     t1, t1, a0
-    sd      t1, (Node_p2p_out + 8)(s1)
+    sd      t1, 16(t0)
     sd      a0, 0(t3)
     mv      a0, t3
     ret
@@ -908,9 +1005,9 @@ END_FUNCTION node_out_handle
 /* Drops the first a0 queued libp2p events, which libp2p took. */
 LOCAL_FUNCTION node_out_consume
     FRAME 0
-    ld      t0, Node_p2p_out(s1)
-    add     t0, s1, t0
-    ld      t1, (Node_p2p_out + 8)(s1)
+    P2P_OUT t4
+    ld      t1, 16(t4)
+    addi    t0, t4, 24
     li      t2, 0
 1:  beqz    a0, 2f
     bgeu    t2, t1, 2f
@@ -920,7 +1017,7 @@ LOCAL_FUNCTION node_out_consume
     addi    a0, a0, -1
     j       1b
 2:  sub     a2, t1, t2
-    sd      a2, (Node_p2p_out + 8)(s1)
+    sd      a2, 16(t4)
     mv      a0, t0
     add     a1, t0, t2
     call    lantern_copy
@@ -1480,12 +1577,461 @@ LOCAL_FUNCTION node_serve
     LEAVE 0
 END_FUNCTION node_serve
 
-/* The libp2p application notice a0. s3 the notice, s4 an entry, s7 method, s8 version. */
+/* ------------------------------------------------------------ gossip */
+
+/* a0 = the index of the message of libp2p handle a0, or 2^64 - 1; a1 = its entry. Uses t0-t2, a7. */
+LOCAL_FUNCTION node_find_message
+    UNWIND_END_PROLOGUE
+    PART    a1, t1, s1, Node_messages
+    li      t0, 0
+1:  bgeu    t0, t1, 2f
+    ld      t2, NodeMessage_handle(a1)
+    beq     t2, a0, 3f
+    addi    a1, a1, NodeMessage__mem
+    addi    t0, t0, 1
+    j       1b
+2:  li      a0, -1
+    ret
+3:  mv      a0, t0
+    ret
+END_FUNCTION node_find_message
+
+/* Removes the message entry a0: the last entry takes its place. */
+LOCAL_FUNCTION node_drop_message
+    FRAME 0
+    PART    t0, t1, s1, Node_messages
+    addi    t1, t1, -1
+    sd      t1, (Node_messages + 8)(s1)
+    li      t2, NodeMessage__mem
+    mul     t1, t1, t2
+    add     a1, t0, t1
+    beq     a1, a0, 1f
+    li      a2, NodeMessage__mem
+    call    lantern_copy
+1:  UNFRAME 0
+END_FUNCTION node_drop_message
+
+/* a0 = 1 when the actions have room for a0 bytes and 4096 more, else 0. Uses t0-t3. */
+LOCAL_FUNCTION node_room
+    UNWIND_END_PROLOGUE
+    ld      t0, 0(s6)
+    ld      t1, 8(s6)
+    ld      t2, 16(s6)
+    sub     t0, t0, t1
+    sub     t0, t0, t2
+    li      t3, 4096
+    add     t3, a0, t3
+    sltu    a0, t0, t3
+    xori    a0, a0, 1
+    ret
+END_FUNCTION node_room
+
+/* A VALIDATION of the libp2p message handle a0 with the result a1. */
+LOCAL_FUNCTION node_validation
+    FRAME 16
+    sd      a0, F(sp)
+    sd      a1, (F + 8)(sp)
+    li      a0, LIBP2P_EV_VALIDATION_SIZE
+    call    node_out
+    beqz    a0, 1f
+    li      t0, LIBP2P_EVENT_VALIDATION
+    sd      t0, 8(a0)
+    ld      t0, F(sp)
+    sd      t0, 16(a0)
+    ld      t0, (F + 8)(sp)
+    sd      t0, 24(a0)
+1:  UNFRAME 16
+END_FUNCTION node_validation
+
+/* The gossip topic a0 with the subnet a1 at the node's ForkDigest: a SUBSCRIBE event. s3 the topic's length. Locals: L a GossipTopic, L+24 a ByteList of the topic. */
+LOCAL_FUNCTION node_sub
+    ENTER 176
+    ld      t0, Node_fork_digest(s1)
+    sd      t0, (L + GossipTopic_fork_digest)(sp)
+    sd      a0, (L + GossipTopic_name)(sp)
+    sd      a1, (L + GossipTopic_subnet_id)(sp)
+    li      t0, 24 + 128
+    sd      t0, (L + 24)(sp)
+    li      t0, 24
+    sd      t0, (L + 32)(sp)
+    sd      zero, (L + 40)(sp)
+    addi    a0, sp, L
+    addi    a1, sp, L + 24
+    call    lantern_gossip_topic
+    bnez    a0, 9f
+    ld      s3, (L + 40)(sp)
+    addi    a0, s3, 24 + 7
+    andi    a0, a0, -8
+    call    node_out
+    beqz    a0, 9f
+    li      t0, LIBP2P_EVENT_SUBSCRIBE
+    sd      t0, 8(a0)
+    sd      s3, 16(a0)
+    addi    a0, a0, 24
+    addi    a1, sp, L + 48
+    mv      a2, s3
+    call    lantern_copy
+9:  LEAVE 176
+END_FUNCTION node_sub
+
+/*
+ * The gossip topics of the fork of the store's epoch, at its ForkDigest: SUBSCRIBE events, once
+ * for each digest, when p2p_out has room for them. s3 the fork, s4 a subnet, s7 the subnets.
+ * Locals: L an epoch, L+8 a ForkDigest.
+ */
+LOCAL_FUNCTION node_subscribe
+    ENTER 16
+    P2P_OUT t0
+    ld      t1, 0(t0)
+    ld      t2, 16(t0)
+    addi    t1, t1, -24
+    sub     t1, t1, t2
+    li      t2, 64 * 128
+    bltu    t1, t2, 9f
+    mv      a0, s2
+    call    node_store_slot
+    li      t0, SLOTS_PER_EPOCH
+    divu    t0, a0, t0
+    sd      t0, L(sp)
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      s3, a0
+    mv      t6, a0
+    sd      zero, (L + 8)(sp)
+    addi    a0, s1, Node_genesis_validators_root
+    addi    a1, sp, L
+    addi    a2, s1, Node_config
+    mv      a3, s5
+    addi    a4, sp, L + 8
+    FORK_CALL compute_fork_digest
+    bnez    a0, 9f
+    ld      t0, Node_flags(s1)
+    ld      t1, (L + 8)(sp)
+    andi    t2, t0, NODE_FLAG_SUBSCRIBED
+    beqz    t2, 1f
+    ld      t2, Node_fork_digest(s1)
+    beq     t1, t2, 9f
+1:  sd      t1, Node_fork_digest(s1)
+    ori     t0, t0, NODE_FLAG_SUBSCRIBED
+    sd      t0, Node_flags(s1)
+    .irp name, GOSSIP_BEACON_BLOCK, GOSSIP_BEACON_AGGREGATE_AND_PROOF, GOSSIP_VOLUNTARY_EXIT, GOSSIP_PROPOSER_SLASHING, GOSSIP_ATTESTER_SLASHING
+    li      a0, \name
+    li      a1, 0
+    call    node_sub
+    .endr
+    li      t0, FORK_ALTAIR
+    bltu    s3, t0, 9f
+    li      a0, GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF
+    li      a1, 0
+    call    node_sub
+    li      t0, FORK_CAPELLA
+    bltu    s3, t0, 9f
+    li      a0, GOSSIP_BLS_TO_EXECUTION_CHANGE
+    li      a1, 0
+    call    node_sub
+    li      t0, FORK_DENEB                  # deneb and electra: every blob sidecar subnet
+    bltu    s3, t0, 9f
+    li      t0, FORK_FULU
+    bgeu    s3, t0, 9f
+    LDQ     s7, s1, Node_config + CONFIG_BLOB_SIDECAR_SUBNET_COUNT
+    li      t0, FORK_ELECTRA
+    bltu    s3, t0, 2f
+    LDQ     s7, s1, Node_config + CONFIG_BLOB_SIDECAR_SUBNET_COUNT_ELECTRA
+2:  li      s4, 0
+3:  bgeu    s4, s7, 9f
+    li      a0, GOSSIP_BLOB_SIDECAR
+    mv      a1, s4
+    call    node_sub
+    addi    s4, s4, 1
+    j       3b
+9:  LEAVE 16
+END_FUNCTION node_subscribe
+
+/*
+ * The MESSAGE a0 of libp2p, whose data is in the libp2p state a1: its MESSAGE_ID, then a
+ * NodeMessage with its bytes, uncompressed, in a BYTES_PUT. s3 the notice, s4 the libp2p state,
+ * s7 the entry, s8 the scratch size, restored on return, s9 the topic's ByteList, then the
+ * bytes', s10 the data's ByteList. Locals: L a GossipTopic, L+24 the message-id, L+48 a length.
+ */
+LOCAL_FUNCTION node_message
+    ENTER 64
+    mv      s3, a0
+    mv      s4, a1
+    ld      s8, 0(s5)
+    ld      t0, LIBP2P_ACT_MSG_TOPIC_LEN(s3)    # the topic's and the data's ByteLists at the end of scratch
+    addi    t0, t0, 24 + 7
+    andi    t0, t0, -8
+    ld      t1, LIBP2P_ACT_MSG_DATA_LEN(s3)
+    addi    t1, t1, 24 + 7
+    andi    t1, t1, -8
+    add     t2, t0, t1
+    li      t3, LANTERN_SCRATCH_FIXED
+    add     t3, t2, t3
+    bltu    s8, t3, 99f
+    sub     t3, s8, t2
+    sd      t3, 0(s5)
+    add     s9, s5, t3
+    add     s10, s9, t0
+    li      t3, 24
+    sd      t0, 0(s9)
+    sd      t3, 8(s9)
+    ld      t0, LIBP2P_ACT_MSG_TOPIC_LEN(s3)
+    sd      t0, 16(s9)
+    sd      t1, 0(s10)
+    sd      t3, 8(s10)
+    ld      t1, LIBP2P_ACT_MSG_DATA_LEN(s3)
+    sd      t1, 16(s10)
+    addi    a0, s9, 24
+    addi    a1, s3, LIBP2P_ACT_MSG_TOPIC
+    mv      a2, t0
+    call    lantern_copy
+    addi    a0, s10, 24
+    ld      t0, LIBP2P_ACT_MSG_DATA_OFF(s3)
+    add     a1, s4, t0
+    ld      a2, LIBP2P_ACT_MSG_DATA_LEN(s3)
+    call    lantern_copy
+    mv      a0, s9                          # the topic
+    addi    a1, sp, L
+    call    lantern_gossip_topic_parse
+    beqz    a0, 1f
+    sd      zero, (L + GossipTopic_name)(sp)
+    sd      zero, (L + GossipTopic_subnet_id)(sp)
+1:  mv      a0, s2                          # the message-id, of the fork of the store's slot
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    mv      a0, s9
+    mv      a1, s10
+    addi    a2, s1, Node_config
+    mv      a3, s5
+    addi    a4, sp, L + 24
+    FORK_CALL compute_message_id
+    bnez    a0, 99f
+    li      a0, LIBP2P_EV_MSG_ID_SIZE       # MESSAGE_ID
+    call    node_out
+    beqz    a0, 99f
+    li      t0, LIBP2P_EVENT_MESSAGE_ID
+    sd      t0, 8(a0)
+    ld      t0, LIBP2P_ACT_HANDLE(s3)
+    sd      t0, 16(a0)
+    li      t0, 20
+    sd      t0, 24(a0)
+    addi    a0, a0, 32
+    sd      zero, 0(a0)
+    sd      zero, 8(a0)
+    sd      zero, 16(a0)
+    sd      zero, 24(a0)
+    addi    a1, sp, L + 24
+    li      a2, 20
+    call    lantern_copy
+    PART    t0, t1, s1, Node_messages       # the entry
+    ld      t2, Node_p2p_out(s1)
+    ld      t3, Node_messages(s1)
+    sub     t2, t2, t3
+    li      t3, NodeMessage__mem
+    divu    t2, t2, t3
+    bgeu    t1, t2, 99f
+    mul     s7, t1, t3
+    add     s7, s7, t0
+    addi    t1, t1, 1
+    sd      t1, (Node_messages + 8)(s1)
+    mv      a0, s7
+    li      a1, NodeMessage__mem
+    call    lantern_zero
+    ld      t0, LIBP2P_ACT_HANDLE(s3)
+    sd      t0, NodeMessage_handle(s7)
+    ld      t0, LIBP2P_ACT_MSG_PEER(s3)
+    sd      t0, NodeMessage_peer(s7)
+    ld      t0, (L + GossipTopic_name)(sp)
+    sd      t0, NodeMessage_topic(s7)
+    ld      t0, (L + GossipTopic_subnet_id)(sp)
+    sd      t0, NodeMessage_subnet(s7)
+    li      t0, NODE_MESSAGE_CORRUPT        # the bytes, uncompressed
+    sd      t0, NodeMessage_state(s7)
+    mv      a0, s10
+    addi    a1, sp, L + 48
+    CALL_GLOBAL snappy_get_uncompressed_length
+    bnez    a0, 99f
+    ld      t0, (L + 48)(sp)
+    LDQ     t1, s1, Node_config + CONFIG_MAX_PAYLOAD_SIZE
+    bgtu    t0, t1, 99f
+    li      t1, NODE_MESSAGE_NO_ROOM
+    sd      t1, NodeMessage_state(s7)
+    addi    t0, t0, 24 + 7
+    andi    t0, t0, -8
+    ld      t1, 0(s5)
+    bltu    t1, t0, 99f
+    addi    a0, t0, 48                      # room for its BYTES_PUT
+    call    node_room
+    beqz    a0, 99f
+    ld      t1, 0(s5)
+    ld      t0, (L + 48)(sp)
+    addi    t0, t0, 24 + 7
+    andi    t0, t0, -8
+    sub     t1, t1, t0
+    sd      t1, 0(s5)
+    add     s9, s5, t1
+    sd      t0, 0(s9)
+    li      t0, 24
+    sd      t0, 8(s9)
+    sd      zero, 16(s9)
+    mv      a0, s10
+    mv      a1, s9
+    CALL_GLOBAL snappy_uncompress
+    beqz    a0, 2f
+    li      t0, NODE_MESSAGE_CORRUPT
+    sd      t0, NodeMessage_state(s7)
+    j       99f
+2:  ld      t0, NodeMessage_topic(s7)       # the slot and parent root of a block or a block header
+    ld      t1, 16(s9)
+    addi    t2, s9, 24
+    li      t3, GOSSIP_BEACON_BLOCK
+    bne     t0, t3, 3f
+    li      t3, 100 + 84
+    bltu    t1, t3, 5f
+    addi    t2, t2, 100
+    j       4f
+3:  li      t3, GOSSIP_BLOB_SIDECAR
+    bne     t0, t3, 31f
+    li      t3, NODE_BLOB_HEADER + 48
+    bltu    t1, t3, 5f
+    li      t3, NODE_BLOB_HEADER
+    add     t2, t2, t3
+    j       4f
+31: li      t3, GOSSIP_DATA_COLUMN_SIDECAR
+    bne     t0, t3, 5f
+    li      t3, 20 + 48
+    bltu    t1, t3, 5f
+    addi    t2, t2, 20
+4:  LDU64   t3, t2, 0, t4                   # 4-aligned
+    sd      t3, NodeMessage_slot(s7)
+    addi    a0, s7, NodeMessage_parent_root
+    addi    a1, t2, 16
+    li      a2, 32
+    call    lantern_copy
+5:  mv      a0, s9                          # the bytes, kept by the shell
+    call    node_put
+    sd      a0, NodeMessage_data_id(s7)
+    li      t0, NODE_MESSAGE_ID
+    sd      t0, NodeMessage_state(s7)
+99: sd      s8, 0(s5)
+    LEAVE 64
+END_FUNCTION node_message
+
+/*
+ * The MESSAGE_STATUS a0 of libp2p. NEW: a GOSSIP work with the head state, for a block or block
+ * header a copy of its parent's post-state, and the state of the justified root; or a VALIDATION
+ * when the node holds no bytes for it. Else its bytes and its entry go. s3 the notice, s4 the
+ * entry, s7 the head state, s8 the proposer state, s9 the justified state.
+ */
+LOCAL_FUNCTION node_message_status
+    ENTER 0
+    mv      s3, a0
+    ld      a0, LIBP2P_ACT_HANDLE(s3)
+    call    node_find_message
+    li      t0, -1
+    beq     a0, t0, 99f
+    mv      s4, a1
+    ld      t0, LIBP2P_ACT_STATUS(s3)
+    li      t1, LIBP2P_MSG_NEW
+    bne     t0, t1, 80f
+    ld      t0, NodeMessage_state(s4)
+    li      t1, NODE_MESSAGE_ID
+    beq     t0, t1, 1f
+    li      a1, LIBP2P_IGNORE
+    li      t1, NODE_MESSAGE_CORRUPT
+    bne     t0, t1, 70f
+    li      a1, LIBP2P_REJECT
+70: ld      a0, NodeMessage_handle(s4)
+    call    node_validation
+    j       80f
+1:  li      a0, NODE_ACT_WORK_SIZE + 32     # room for the work and a state copy
+    call    node_room
+    li      a1, LIBP2P_IGNORE
+    beqz    a0, 70b
+    li      s7, 0                           # the head state
+    addi    a0, s1, Node_head_root
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 2f
+    ld      s7, NodeBlock_state_id(a1)
+2:  li      s8, 0                           # the proposer state: a copy of the parent's, when it comes before
+    ld      t0, NodeMessage_topic(s4)
+    li      t1, GOSSIP_BEACON_BLOCK
+    beq     t0, t1, 21f
+    li      t1, GOSSIP_BLOB_SIDECAR
+    beq     t0, t1, 21f
+    li      t1, GOSSIP_DATA_COLUMN_SIDECAR
+    bne     t0, t1, 3f
+21: addi    a0, s4, NodeMessage_parent_root
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 3f
+    ld      t0, NodeBlock_status(a1)
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 3f
+    ld      t0, NodeBlock_slot(a1)
+    ld      t1, NodeMessage_slot(s4)
+    bleu    t1, t0, 3f
+    ld      s9, NodeBlock_state_id(a1)
+    call    node_new_id
+    mv      s8, a0
+    li      a0, NODE_ACT_STATE_COPY
+    mv      a1, s9
+    mv      a2, s8
+    call    node_ids
+3:  li      s9, 0                           # the state of the justified root
+    ADDQ    a0, s2, Store_justified_checkpoint + 8
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 4f
+    ld      t0, NodeBlock_status(a1)
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 4f
+    ld      s9, NodeBlock_state_id(a1)
+4:  li      a0, NODE_WORK_GOSSIP
+    mv      a1, s7
+    mv      a2, s8
+    ld      a3, NodeMessage_data_id(s4)
+    ld      a4, NodeMessage_handle(s4)
+    ld      a5, NodeMessage_subnet(s4)
+    slli    a5, a5, 8
+    ld      t0, NodeMessage_topic(s4)
+    or      a5, a5, t0
+    call    node_work
+    sd      s9, NodeAction_state_c(a0)
+    li      t0, NODE_MESSAGE_VALIDATING
+    sd      t0, NodeMessage_state(s4)
+    LEAVE 0
+80: ld      a1, NodeMessage_data_id(s4)     # no work: its bytes and its entry go
+    beqz    a1, 81f
+    li      a0, 32
+    call    node_room
+    beqz    a0, 81f
+    li      a0, NODE_ACT_BYTES_FREE
+    ld      a1, NodeMessage_data_id(s4)
+    li      a2, 0
+    call    node_ids
+81: mv      a0, s4
+    call    node_drop_message
+99: LEAVE 0
+END_FUNCTION node_message_status
+
+/* The libp2p application notice a0 of the libp2p state a1. s3 the notice, s4 an entry, s7 method, s8 version. */
 LOCAL_FUNCTION node_notice
     ENTER 0
     mv      s3, a0
     ld      t0, LIBP2P_ACT_KIND(s3)
-    li      t1, LIBP2P_ACTION_PEER_CONNECTED
+    li      t1, LIBP2P_ACTION_MESSAGE
+    bne     t0, t1, 60f
+    call    node_message                    # a0, a1 as given
+    LEAVE 0
+60: li      t1, LIBP2P_ACTION_MESSAGE_STATUS
+    bne     t0, t1, 61f
+    call    node_message_status
+    LEAVE 0
+61: li      t1, LIBP2P_ACTION_PEER_CONNECTED
     bne     t0, t1, 10f
     ld      t2, Node_streams(s1)            # a new peer: its entry, or DISCONNECT when the table is full
     ld      t3, Node_peers(s1)
@@ -1536,7 +2082,7 @@ LOCAL_FUNCTION node_notice
     beqz    a0, 28f
     mv      s7, a0
     mv      s8, a1
-    ld      t0, Node_p2p_out(s1)
+    ld      t0, Node_messages(s1)
     ld      t1, Node_streams(s1)
     sub     t0, t0, t1
     ld      t2, Node_stream_bytes(s1)
@@ -1620,9 +2166,10 @@ LOCAL_FUNCTION node_notice
 59: LEAVE 0
 END_FUNCTION node_notice
 
-/* a0 = the WAKEUP time of the libp2p actions in the ByteList a0, after their application notices. s3 an action, s4 the end, s7 the time. */
+/* a0 = the WAKEUP time of the libp2p actions in the ByteList a0, after their application notices, of the libp2p state a1. s3 an action, s4 the end, s7 the time, s8 the state. */
 LOCAL_FUNCTION node_p2p_notices
     ENTER 0
+    mv      s8, a1
     ld      t0, 8(a0)
     add     s3, a0, t0
     ld      t0, 16(a0)
@@ -1639,6 +2186,7 @@ LOCAL_FUNCTION node_p2p_notices
     li      t1, LIBP2P_ACTION_SEND_DATAGRAM
     bgeu    t0, t1, 3f
     mv      a0, s3
+    mv      a1, s8
     call    node_notice
 3:  ld      t0, 0(s3)
     add     s3, s3, t0
@@ -1647,38 +2195,73 @@ LOCAL_FUNCTION node_p2p_notices
     LEAVE 0
 END_FUNCTION node_p2p_notices
 
-/* The libp2p event list a0: the libp2p events of the P2P events from a1 to a2, then the node's queued events. s3, s4 the range, s7 the list, s8 where the next event goes. */
-LOCAL_FUNCTION node_p2p_fill
+/* The libp2p events of the P2P events from a0 to a1 join the end of the node's queued events. s3, s4 the range, s7 the queue. */
+LOCAL_FUNCTION node_p2p_append
     ENTER 0
-    mv      s7, a0
-    mv      s3, a1
-    mv      s4, a2
-    li      t0, 24
-    sd      t0, 8(s7)
-    addi    s8, s7, 24
-1:  bgeu    s3, s4, 2f
+    mv      s3, a0
+    mv      s4, a1
+    P2P_OUT s7
+1:  bgeu    s3, s4, 9f
     ld      t0, 8(s3)
     li      t1, NODE_EV_P2P
-    bne     t0, t1, 11f
-    mv      a0, s8
-    addi    a1, s3, 16
+    bne     t0, t1, 2f
     ld      a2, 16(s3)
-    add     s8, s8, a2
+    ld      t0, 16(s7)
+    addi    a0, s7, 24
+    add     a0, a0, t0
+    add     t1, t0, a2
+    sd      t1, 16(s7)
+    addi    a1, s3, 16
     call    lantern_copy
-11: ld      t0, 0(s3)
+2:  ld      t0, 0(s3)
     add     s3, s3, t0
     j       1b
-2:  mv      a0, s8
-    ld      t0, Node_p2p_out(s1)
-    add     a1, s1, t0
-    ld      a2, (Node_p2p_out + 8)(s1)
-    add     s8, s8, a2
-    call    lantern_copy
-    sub     t0, s8, s7
-    addi    t0, t0, -24
-    sd      t0, 16(s7)
-    LEAVE 0
-END_FUNCTION node_p2p_fill
+9:  LEAVE 0
+END_FUNCTION node_p2p_append
+
+/*
+ * Of the P2P events from a0 to a1, the first a2 were taken: a0 = the next P2P event, or a1;
+ * a1 = the bytes of the libp2p events of the P2P events from there on. Uses t0-t2.
+ */
+LOCAL_FUNCTION node_p2p_left
+    UNWIND_END_PROLOGUE
+    mv      t0, a0
+    mv      t1, a1
+    mv      a0, a1
+    li      a1, 0
+1:  bgeu    t0, t1, 9f
+    ld      t2, 8(t0)
+    addi    t2, t2, -NODE_EV_P2P
+    bnez    t2, 3f
+    beqz    a2, 2f
+    addi    a2, a2, -1
+    j       3f
+2:  bne     a0, t1, 21f
+    mv      a0, t0
+21: ld      t2, 16(t0)
+    add     a1, a1, t2
+3:  ld      t2, 0(t0)
+    add     t0, t0, t2
+    j       1b
+9:  ret
+END_FUNCTION node_p2p_left
+
+/* a0 = the events in the first a0 bytes of the node's queue. Uses t0-t3. */
+LOCAL_FUNCTION node_out_count
+    UNWIND_END_PROLOGUE
+    P2P_OUT t0
+    addi    t0, t0, 24
+    li      t1, 0
+    li      t2, 0
+1:  bgeu    t1, a0, 2f
+    add     t3, t0, t1
+    ld      t3, 0(t3)
+    add     t1, t1, t3
+    addi    t2, t2, 1
+    j       1b
+2:  mv      a0, t2
+    ret
+END_FUNCTION node_out_count
 
 /*
  * libp2p_step of the state a0 with the tick a1, the event list a2 and the scratch a3, its
@@ -1700,9 +2283,12 @@ LOCAL_FUNCTION node_p2p_round
     sub     t0, t0, t2
     bltu    t0, a4, 8f
     sub     t0, t0, a4
-    andi    t0, t0, -8
     li      t3, LIBP2P_ACTIONS_MIN + 24 + 16
     bltu    t0, t3, 8f
+    srli    t4, t0, 1                       # half of it, when that is enough: the rest for the notices
+    bltu    t4, t3, 1f
+    mv      t0, t4
+1:  andi    t0, t0, -8
     add     s10, s6, t1
     add     s10, s10, t2
     sd      t0, 0(s10)
@@ -1825,10 +2411,10 @@ END_FUNCTION node_block_entry
 
 /*
  * (node, store, p2p, tick, events, scratch, actions, result): s1 node, s2 store, s3 the events,
- * s4 their end, s5 scratch, s6 actions, s7 result, s8 the event count, s9 the BLOCK and
- * POW_BLOCK events then an event, s10 the event bytes then a root entry at the end of scratch,
+ * s4 their end, s5 scratch, s6 actions, s7 result, s8 the event count, s9 the BLOCK,
+ * POW_BLOCK and GOSSIP WORK_DONE events then an event, s10 the event bytes then a root entry at the end of scratch,
  * t5 the WORK_DONE events in the first pass. Locals: L the WORK_DONE events, L+8 the scratch
- * size, L+16 p2p, L+24 tick, L+32 the end of the events handled, L+40 the libp2p event list,
+ * size, L+16 p2p, L+24 tick, L+32 the end of the events handled, L+40 the queue's free bytes the P2P events take, saved,
  * L+48 the libp2p scratch, L+56 the bytes of the P2P events, L+64 the P2P events, L+72 the
  * action room kept for the node, L+80 wakeup, L+88 libp2p's StepResult, L+96 libp2p's actions,
  * L+104 the libp2p steps, L+112 a stream waits.
@@ -1877,7 +2463,10 @@ FUNCTION lantern_node_step
     li      t4, NODE_EV_WORK_DONE_SIZE
     bltu    t2, t4, 7f
     ld      t4, NodeAction_work_kind(t0)    # SERVE: a ByteList of the chunk inside
-    li      t6, NODE_WORK_SERVE
+    li      t6, NODE_WORK_GOSSIP            # GOSSIP: a block it may add
+    bne     t4, t6, 23f
+    addi    s9, s9, 1
+23: li      t6, NODE_WORK_SERVE
     bne     t4, t6, 22f
     li      t4, NodeEvent_chunk + 24
     bltu    t2, t4, 7f
@@ -1976,17 +2565,19 @@ FUNCTION lantern_node_step
     ld      t1, (Node_pow_blocks + 8)(s1)
     sub     t0, t0, t1
     bltu    t0, s9, 8f
-    li      t3, NODE_ROOT_ENTRY             # scratch: the root entries and libp2p's lists at its end
+    li      t3, NODE_ROOT_ENTRY             # scratch: the root entries, and with p2p the queue's bytes the P2P events take and libp2p's scratch, at its end
     mul     t3, s9, t3
     ld      t0, (L + 16)(sp)
     beqz    t0, 52f
-    ld      t0, (L + 56)(sp)
-    add     t3, t3, t0
-    ld      t0, 0(s1)
-    ld      t1, Node_p2p_out(s1)
+    P2P_OUT t4                              # the queue has room for the P2P events
+    ld      t0, 0(t4)
+    ld      t1, 16(t4)
+    addi    t0, t0, -24
     sub     t0, t0, t1
-    add     t3, t3, t0
-    li      t0, 24 + LIBP2P_SCRATCH_SIZE
+    ld      t1, (L + 56)(sp)
+    bltu    t0, t1, 8f
+    add     t3, t3, t1
+    li      t0, LIBP2P_SCRATCH_SIZE
     add     t3, t3, t0
 52: LDQ     t0, s2, Store_validators        # and what get_head needs
     LDQ     t1, s2, Store_blocks
@@ -2005,17 +2596,11 @@ FUNCTION lantern_node_step
     add     s10, s5, t1
     ld      t0, (L + 16)(sp)
     beqz    t0, 53f
-    li      t0, NODE_ROOT_ENTRY             # the libp2p event list, then libp2p's scratch
+    li      t0, NODE_ROOT_ENTRY             # the saved queue bytes, then libp2p's scratch
     mul     t0, s9, t0
     add     t0, s10, t0
     sd      t0, (L + 40)(sp)
-    ld      t1, 0(s1)
-    ld      t2, Node_p2p_out(s1)
-    sub     t1, t1, t2
-    ld      t2, (L + 56)(sp)
-    add     t1, t1, t2
-    addi    t1, t1, 24
-    sd      t1, 0(t0)
+    ld      t1, (L + 56)(sp)
     add     t0, t0, t1
     sd      t0, (L + 48)(sp)
     li      t1, LIBP2P_SCRATCH_SIZE
@@ -2033,47 +2618,60 @@ FUNCTION lantern_node_step
 12: ld      t0, 0(s9)
     add     s9, s9, t0
     j       11b
-13: sd      s4, (L + 32)(sp)                # libp2p: the P2P events and the queued events
+13: sd      s4, (L + 32)(sp)                # libp2p: the queued events, then the P2P events
     li      t0, -1
     sd      t0, (L + 80)(sp)
     ld      t0, (L + 16)(sp)
     beqz    t0, 30f
-    ld      a0, (L + 40)(sp)
-    mv      a1, s3
-    mv      a2, s4
-    call    node_p2p_fill
+    P2P_OUT s9                              # s9 the queue, s10 its bytes before the P2P events
+    ld      s10, 16(s9)
+    ld      a0, (L + 40)(sp)                # the free bytes of the queue the P2P events take, kept
+    addi    a1, s9, 24
+    add     a1, a1, s10
+    ld      a2, (L + 56)(sp)
+    call    lantern_copy
+    mv      a0, s3
+    mv      a1, s4
+    call    node_p2p_append
     ld      a0, (L + 16)(sp)
     ld      a1, (L + 24)(sp)
-    ld      a2, (L + 40)(sp)
+    mv      a2, s9
     ld      a3, (L + 48)(sp)
     ld      a4, (L + 72)(sp)
     addi    a5, sp, L + 88
     call    node_p2p_round
     beqz    a0, 24f
-    li      t0, LIBP2P_BUFFER_TOO_SMALL     # a status of libp2p: nothing is changed
-    li      t1, LANTERN_INVALID_EVENT
-    bne     a0, t0, 241f
-    li      t1, LANTERN_BUFFER_TOO_SMALL
-241: mv     a0, t1
+    sd      a0, (L + 104)(sp)               # a status of libp2p: the queue as it was, and nothing else changed
+    sd      s10, 16(s9)
+    addi    a0, s9, 24
+    add     a0, a0, s10
+    ld      a1, (L + 40)(sp)
+    ld      a2, (L + 56)(sp)
+    call    lantern_copy
+    ld      t0, (L + 104)(sp)
+    li      t1, LIBP2P_BUFFER_TOO_SMALL
+    li      a0, LANTERN_INVALID_EVENT
+    bne     t0, t1, 14f
+    li      a0, LANTERN_BUFFER_TOO_SMALL
     j       14f
 24: sd      a1, (L + 96)(sp)                # from here on the step holds
+    mv      a0, s10                         # the P2P events libp2p took: k less the queued ones
+    call    node_out_count
     ld      t0, (L + 88)(sp)
-    ld      t1, (L + 64)(sp)
-    bgeu    t0, t1, 25f
-    mv      t2, s3                          # libp2p took k < n P2P events: the step ends at the next
-26: ld      t3, 8(t2)
-    li      t4, NODE_EV_P2P
-    bne     t3, t4, 27f
-    beqz    t0, 28f
-    addi    t0, t0, -1
-27: ld      t3, 0(t2)
-    add     t2, t2, t3
-    j       26b
-28: sd      t2, (L + 32)(sp)
-    j       29f
-25: sub     a0, t0, t1                      # and the queued events it took
+    sub     a2, t0, a0
+    bgeu    t0, a0, 25f
+    li      a2, 0
+25: mv      a0, s3
+    mv      a1, s4
+    call    node_p2p_left
+    sd      a0, (L + 32)(sp)                # the step ends at the next one
+    ld      t0, 16(s9)                      # the ones left go from the queue's end
+    sub     t0, t0, a1
+    sd      t0, 16(s9)
+    ld      a0, (L + 88)(sp)                # the ones taken from its front
     call    node_out_consume
 29: ld      a0, (L + 96)(sp)
+    ld      a1, (L + 16)(sp)
     call    node_p2p_notices
     sd      a0, (L + 80)(sp)
 30: ld      t0, 0(s5)                       # then each event, in order
@@ -2100,23 +2698,20 @@ FUNCTION lantern_node_step
     sd      zero, (L + 112)(sp)
     ld      t0, (L + 16)(sp)                # the next block of each stream that serves, then libp2p again
     beqz    t0, 40f
+    call    node_subscribe
     call    node_serve
     sd      a0, (L + 112)(sp)
     sd      zero, (L + 104)(sp)
-32: ld      t0, (Node_p2p_out + 8)(s1)
+32: P2P_OUT a2
+    ld      t0, 16(a2)
     beqz    t0, 40f
     ld      t1, (L + 104)(sp)
     li      t2, NODE_P2P_ROUNDS
     bgeu    t1, t2, 40f
     addi    t1, t1, 1
     sd      t1, (L + 104)(sp)
-    ld      a0, (L + 40)(sp)
-    mv      a1, s4
-    mv      a2, s4
-    call    node_p2p_fill
     ld      a0, (L + 16)(sp)
     ld      a1, (L + 24)(sp)
-    ld      a2, (L + 40)(sp)
     ld      a3, (L + 48)(sp)
     li      a4, 4096
     addi    a5, sp, L + 88
@@ -2126,10 +2721,12 @@ FUNCTION lantern_node_step
     ld      a0, (L + 88)(sp)
     call    node_out_consume
     ld      a0, (L + 96)(sp)
+    ld      a1, (L + 16)(sp)
     call    node_p2p_notices
     sd      a0, (L + 80)(sp)
     j       32b
-40: ld      t0, (Node_p2p_out + 8)(s1)      # events left, or a stream that waits: the next step is due now
+40: P2P_OUT t0                              # events left, or a stream that waits: the next step is due now
+    ld      t0, 16(t0)
     ld      t1, (L + 112)(sp)
     or      t0, t0, t1
     beqz    t0, 41f
@@ -2153,18 +2750,25 @@ FUNCTION lantern_node_step
 END_FUNCTION lantern_node_step
 
 /*
- * (node, store, seen, work, state_a, state_b, data, scratch, event): s1 node, s2 store, s3 work,
- * s4 state_a, s5 data, s6 scratch, s7 event. Locals: L the BlockOptions (32).
+ * (node, store, seen, work, state_a, state_b, state_c, data, settings, scratch, event): s1 node,
+ * s2 store, s3 work, s4 state_a, s5 data, s6 scratch, s7 event, s8 the event's room, s9 a
+ * temporary. Locals: L the BlockOptions (32), or a chunk's size, a fork digest and a ChunkHeader
+ * (64); L+64 seen, L+72 state_b, L+80 state_c, L+88 settings, L+96 a NodeGossip.
  */
 FUNCTION lantern_node_run
-    ENTER 64
+    ENTER 192
     mv      s1, a0
     mv      s2, a1
     mv      s3, a3
     mv      s4, a4
-    mv      s5, a6
-    mv      s6, a7
-    ld      s7, (64 + 96)(sp)               # the ninth argument
+    sd      a2, (L + 64)(sp)                # seen, state_b, state_c, settings
+    sd      a5, (L + 72)(sp)
+    sd      a6, (L + 80)(sp)
+    mv      s5, a7
+    ld      t0, (192 + 96)(sp)               # the ninth to eleventh arguments
+    sd      t0, (L + 88)(sp)
+    ld      s6, (192 + 96 + 8)(sp)
+    ld      s7, (192 + 96 + 16)(sp)
     ld      s8, 0(s7)                       # the event's room
     li      t0, NODE_EV_WORK_DONE_SIZE
     bltu    s8, t0, 7f
@@ -2172,7 +2776,7 @@ FUNCTION lantern_node_run
     sd      t0, 0(s7)
     li      t0, NODE_EV_WORK_DONE
     sd      t0, 8(s7)
-    .irp off, 16, 24, 32, 40, 48, 56
+    .irp off, 16, 24, 32, 40, 48, 56, 64
     ld      t0, \off(s3)
     sd      t0, \off(s7)
     .endr
@@ -2220,11 +2824,11 @@ FUNCTION lantern_node_run
     bne     a0, t0, 99f
     sd      a0, NodeEvent_result(s7)
     li      a0, LANTERN_OK
-    LEAVE 64
+    LEAVE 192
 18: li      t0, LANTERN_INVALID_ENCODING
     sd      t0, NodeEvent_result(s7)
     li      a0, LANTERN_OK
-    LEAVE 64
+    LEAVE 192
 10: li      t1, NODE_WORK_JUSTIFIED_STATE
     bne     t0, t1, 20f
     ld      a0, NODE_STATE_SLOT(s4)         # JUSTIFIED_STATE: the fork of the state's slot
@@ -2234,7 +2838,7 @@ FUNCTION lantern_node_run
     mv      a0, s2
     mv      a1, s4
     FORK_CALL store_justified_checkpoint_state
-    LEAVE 64
+    LEAVE 192
 20: li      t1, NODE_WORK_TARGET_STATE
     bne     t0, t1, 30f
     ld      a0, NODE_STATE_SLOT(s4)         # TARGET_STATE: store_target_checkpoint_state of the checkpoint
@@ -2252,7 +2856,7 @@ FUNCTION lantern_node_run
     mv      a3, s6
     addi    a4, s7, NodeEvent_result
     FORK_CALL store_target_checkpoint_state
-    LEAVE 64
+    LEAVE 192
 30: li      t1, NODE_WORK_ATTESTATION
     bne     t0, t1, 40f
     ld      t0, 16(s5)                      # ATTESTATION: the fork of its slot
@@ -2272,7 +2876,7 @@ FUNCTION lantern_node_run
     addi    a5, s7, NodeEvent_result
     addi    a6, s7, NodeEvent_checkpoint
     FORK_CALL node_attestation
-    LEAVE 64
+    LEAVE 192
 40: li      t1, NODE_WORK_ATTESTER_SLASHING
     bne     t0, t1, 50f
     mv      a0, s2                          # ATTESTER_SLASHING: the fork of the store's slot
@@ -2286,9 +2890,9 @@ FUNCTION lantern_node_run
     mv      a3, s6
     addi    a4, s7, NodeEvent_result
     FORK_CALL node_attester_slashing
-99: LEAVE 64
+99: LEAVE 192
 50: li      t1, NODE_WORK_SERVE
-    bne     t0, t1, 8f
+    bne     t0, t1, 60f
     ld      t0, 16(s5)                      # SERVE: the chunk of the block's bytes, with room for it
     li      t1, 100 + 84
     bltu    t0, t1, 18b
@@ -2348,9 +2952,42 @@ FUNCTION lantern_node_run
     addi    t0, t0, NodeEvent_chunk
     sd      t0, 0(s7)
     li      a0, LANTERN_OK
-    LEAVE 64
+    LEAVE 192
+60: li      t1, NODE_WORK_GOSSIP
+    bne     t0, t1, 8f
+    ld      t0, (L + 64)(sp)                # GOSSIP: the inputs of the fork's node_gossip
+    sd      t0, (L + 96 + NodeGossip_seen)(sp)
+    sd      s2, (L + 96 + NodeGossip_store)(sp)
+    ld      t0, Node_time_ms(s1)
+    sd      t0, (L + 96 + NodeGossip_time_ms)(sp)
+    ld      t0, NodeAction_arg(s3)
+    andi    t1, t0, 255
+    srli    t0, t0, 8
+    sd      t1, (L + 96 + NodeGossip_topic)(sp)
+    sd      t0, (L + 96 + NodeGossip_subnet)(sp)
+    sd      s4, (L + 96 + NodeGossip_head)(sp)
+    ld      t0, (L + 72)(sp)
+    sd      t0, (L + 96 + NodeGossip_proposer)(sp)
+    ld      t0, (L + 80)(sp)
+    sd      t0, (L + 96 + NodeGossip_justified)(sp)
+    ld      t0, (L + 88)(sp)
+    sd      t0, (L + 96 + NodeGossip_settings)(sp)
+    addi    t0, s1, Node_config
+    sd      t0, (L + 96 + NodeGossip_config)(sp)
+    mv      a0, s2
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    addi    a0, sp, L + 96
+    mv      a1, s5
+    mv      a2, s6
+    addi    a3, s7, NodeEvent_result
+    addi    a4, s7, NodeEvent_root
+    FORK_CALL node_gossip
+    LEAVE 192
 8:  li      a0, LANTERN_INVALID_EVENT
-    LEAVE 64
+    LEAVE 192
 7:  li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 64
+    LEAVE 192
 END_FUNCTION lantern_node_run
