@@ -2769,6 +2769,7 @@ static void shell_close(fc_node *n, uint8_t *anchor_block) {
 }
 
 static void fc_serve_check(fc_node *n, tv parts, const char **why);
+static void fc_sync_check(tv parts, const char **why);
 
 /* One case through the node: the shell's buffers, then each step as events; with serve, then fc_serve_check. */
 static void fc_node_case(tv parts, int serve, const char **why) {
@@ -2814,6 +2815,7 @@ static void fc_node_case(tv parts, int serve, const char **why) {
         }
     }
     if (serve && !*why) fc_serve_check(&n, parts, why);
+    if (serve && !*why) fc_sync_check(parts, why);
     shell_close(&n, anchor_block);
 }
 
@@ -2847,8 +2849,27 @@ enum { P2P_ACT_DIAL = 1, P2P_ACT_ADOPT, P2P_ACT_REFUSE, P2P_ACT_SEND, P2P_ACT_CL
 #define P2P_PEER_ACTIONS (P2P_ACTIONS_MIN + (4u << 20))
 
 /* The network: side 0 is the node's libp2p state, side 1 the peer's. */
+/* SLOTS_PER_EPOCH of the preset (presets/<preset>/phase0.yaml). */
+#define SLOTS_PER_EPOCH_RUNNER (strcmp(PRESET, "minimal") ? 32u : 8u)
+
+/* A block of a case: its root, parent root, slot and SSZ bytes. */
+typedef struct {
+    uint8_t root[32], parent[32];
+    uint64_t slot, len;
+    const uint8_t *bytes;
+} case_block;
+
 struct p2p_net {
     struct node_shell *shell;
+    case_block **chain; /* with a chain, the peer serves BeaconBlocksByRange of it */
+    size_t nchain;
+    uint8_t gvr[32];
+    struct {
+        uint64_t handle;
+        int eof;
+        uint8_t *data;
+        uint64_t len;
+    } in[P2P_STREAMS]; /* the node's streams to the peer */
     uint8_t *state[2], *scratch, *actions, *events; /* the peer's scratch, actions and events */
     uint64_t events_len, now, conn[2], dial_conn, token, node_handle;
     int connected, topics;
@@ -2962,6 +2983,31 @@ static void p2p_peer_app(struct p2p_net *net, uint8_t *act) {
         if (rd64(act + 24)) net->topics++;
         return;
     }
+    if (kind == P2P_ACT_STREAM_INBOUND) {
+        for (int k = 0; k < P2P_STREAMS; k++)
+            if (!net->in[k].handle) {
+                net->in[k].handle = rd64(act + 16);
+                net->in[k].eof = 0;
+                net->in[k].len = 0;
+                return;
+            }
+        return;
+    }
+    for (int k = 0; k < P2P_STREAMS; k++) {
+        if (!net->in[k].handle || net->in[k].handle != rd64(act + 16)) continue;
+        if (kind == P2P_ACT_STREAM_DATA) {
+            uint64_t count = rd64(act + 24);
+            net->in[k].data = realloc(net->in[k].data, (size_t)(net->in[k].len + count + 1));
+            if (!net->in[k].data) {
+                fprintf(stderr, "out of memory\n");
+                exit(2);
+            }
+            memcpy(net->in[k].data + net->in[k].len, act + 32, (size_t)count);
+            net->in[k].len += count;
+        } else if (kind == P2P_ACT_STREAM_EOF) net->in[k].eof = 1;
+        else if (kind == P2P_ACT_STREAM_RESET) net->in[k].handle = 0;
+        return;
+    }
     for (int k = 0; k < P2P_STREAMS; k++) {
         if (kind == P2P_ACT_STREAM_OPENED && net->st[k].tag == rd64(act + 24) && !net->st[k].opened) {
             net->st[k].handle = rd64(act + 16);
@@ -2985,6 +3031,55 @@ static void p2p_peer_app(struct p2p_net *net, uint8_t *act) {
         } else if (kind == P2P_ACT_STREAM_EOF) net->st[k].eof = 1;
         else if (kind == P2P_ACT_STREAM_RESET) net->st[k].reset = 1;
         return;
+    }
+}
+
+static void node_config(uint8_t *ncfg);
+
+/*
+ * The peer's answers to the node's complete requests: BeaconBlocksByRange of the chain's blocks
+ * in the range, each a chunk of result 0 with the ForkDigest of its epoch; then the close.
+ */
+static void p2p_serve(struct p2p_net *net, const char **why) {
+    uint8_t ncfg[CONFIG_SIZE];
+    node_config(ncfg);
+    for (int k = 0; k < P2P_STREAMS && !*why; k++) {
+        if (!net->in[k].handle || !net->in[k].eof) continue;
+        uint64_t header[6] = {0, 0, 0, 0, 0, 0}, consumed = 0, eof = 1, length = 24;
+        uint8_t *input = serialized(net->in[k].data, net->in[k].len, &(uint64_t){0}), *req = buffer(24 + 32);
+        wr64(req, 24 + 32);
+        wr64(req + 8, 24);
+        wr64(req + 16, 0);
+        if (CALL(lantern_reqresp_read_header, input, header) != 0 || header[4] != 24 ||
+            CALL(lantern_reqresp_read_payload, input, &header[5], &length, &eof, fresh_scratch(), req, &consumed) != 0)
+            *why = "the peer: the node's request is not a BeaconBlocksByRange request";
+        uint64_t start = rd64(req + 24), count = rd64(req + 32);
+        free(input);
+        free(req);
+        for (size_t b = 0; b < net->nchain && !*why; b++) {
+            const case_block *cb = net->chain[b];
+            if (cb->slot < start || cb->slot - start >= count) continue;
+            uint64_t h[6] = {1, 4, 0, 0, 0, 0}, csize = 0, len = cb->len, epoch = cb->slot / SLOTS_PER_EPOCH_RUNNER;
+            CALL(LF(compute_fork_digest), net->gvr, &epoch, ncfg, fresh_scratch(), &h[3]);
+            CALL(lantern_reqresp_chunk_size, &len, &csize);
+            uint8_t *payload = serialized(cb->bytes, cb->len, &(uint64_t){0}), *out = buffer(24 + csize);
+            wr64(out, 24 + csize);
+            wr64(out + 8, 24);
+            wr64(out + 16, 0);
+            if (CALL(lantern_reqresp_write_chunk, h, payload, fresh_scratch(), out) != 0) *why = "the peer: write_chunk status";
+            else {
+                uint64_t n = rd64(out + 16);
+                uint8_t *w = p2p_event(net, 1, P2P_EV_STREAM_WRITE, 32 + n);
+                wr64(w + 16, net->in[k].handle);
+                wr64(w + 24, n);
+                memcpy(w + 32, out + 24, (size_t)n);
+            }
+            free(payload);
+            free(out);
+        }
+        uint8_t *c = p2p_event(net, 1, P2P_EV_STREAM_CLOSE, 24);
+        wr64(c + 16, net->in[k].handle);
+        net->in[k].handle = 0;
     }
 }
 
@@ -3013,6 +3108,7 @@ static void p2p_peer_step(struct p2p_net *net, const char **why) {
         if (kind <= P2P_ACT_CLOSE || kind == P2P_ACT_SEND_DATAGRAM) p2p_shell(net, 1, act, why);
         else p2p_peer_app(net, act);
     }
+    if (!*why && net->chain) p2p_serve(net, why);
 }
 
 /* Steps of both sides, 10 ms apart, until done(net) or 400 rounds. */
@@ -3185,7 +3281,7 @@ static void p2p_open(fc_node *n, struct p2p_net *net, const char **why) {
     uint64_t nprotos = 0;
     wr64(protos, sizeof protos);
     if (!*why && CALL(lantern_node_protocols, protos, &nprotos) != 0) *why = "lantern_node_protocols status";
-    uint8_t *cfg0 = *why ? NULL : p2p_config(0, protos + 24, nprotos), *cfg1 = *why ? NULL : p2p_config(1, NULL, 0);
+    uint8_t *cfg0 = *why ? NULL : p2p_config(0, protos + 24, nprotos), *cfg1 = *why ? NULL : p2p_config(1, protos + 24, nprotos);
     if (!*why) net->state[0] = p2p_make(cfg0, why);
     if (!*why) net->state[1] = p2p_make(cfg1, why);
     free(cfg0);
@@ -3221,7 +3317,10 @@ static void p2p_open(fc_node *n, struct p2p_net *net, const char **why) {
 }
 
 static void p2p_close(struct p2p_net *net) {
-    for (int k = 0; k < P2P_STREAMS; k++) free(net->st[k].data);
+    for (int k = 0; k < P2P_STREAMS; k++) {
+        free(net->st[k].data);
+        free(net->in[k].data);
+    }
     free(net->state[0]);
     free(net->state[1]);
     free(net->scratch);
@@ -3270,16 +3369,6 @@ static void run_node_p2p(const char *file, case_file *f) {
     }
 }
 
-/* SLOTS_PER_EPOCH of the preset (presets/<preset>/phase0.yaml). */
-#define SLOTS_PER_EPOCH_RUNNER (strcmp(PRESET, "minimal") ? 32u : 8u)
-
-/* A block of a case: its root, parent root, slot and SSZ bytes. */
-typedef struct {
-    uint8_t root[32], parent[32];
-    uint64_t slot, len;
-    const uint8_t *bytes;
-} case_block;
-
 /*
  * The chunks of stream k: one for each block of want, in order, each with result 0, the
  * ForkDigest of the block's epoch as context, and the block's SSZ bytes; then no more bytes.
@@ -3313,11 +3402,8 @@ static void p2p_check_blocks(struct p2p_net *net, int k, case_block **want, size
     if (msg[0]) *why = msg;
 }
 
-/*
- * Node mode, after the steps of a case whose checks name a head: the node serves the chain of that
- * head, from the case's valid blocks, with BlocksByRange and BlocksByRoot.
- */
-static void fc_serve_check(fc_node *n, tv parts, const char **why) {
+/* The chain of the last head a case's checks name, from its valid blocks, in slot order. */
+static size_t case_chain(tv parts, case_block **blocks_out, case_block ***chain_out, const char **why) {
     tv steps = tv_get(parts, "steps"), st = steps ? steps + 9 : NULL, head = NULL;
     uint64_t count = steps ? rd64(steps + 1) : 0, nblocks = 0;
     case_block *blocks = xmalloc(sizeof *blocks * (count ? count : 1));
@@ -3357,6 +3443,18 @@ static void fc_serve_check(fc_node *n, tv parts, const char **why) {
         chain[a] = chain[z];
         chain[z] = t;
     }
+    *blocks_out = blocks;
+    *chain_out = chain;
+    return nchain;
+}
+
+/*
+ * Node mode, after the steps of a case whose checks name a head: the node serves the chain of that
+ * head, from the case's valid blocks, with BlocksByRange and BlocksByRoot.
+ */
+static void fc_serve_check(fc_node *n, tv parts, const char **why) {
+    case_block *blocks, **chain;
+    size_t nchain = case_chain(parts, &blocks, &chain, why);
     if (!*why && nchain) {
         struct p2p_net net;
         uint8_t gvr[32];
@@ -3382,6 +3480,72 @@ static void fc_serve_check(fc_node *n, tv parts, const char **why) {
         }
         if (!*why && rd64(n->shell->node + 136 + 8)) *why = "the node keeps a stream at the end"; /* Node_streams */
         p2p_close(&net);
+    }
+    free(chain);
+    free(blocks);
+}
+
+static case_block **sync_chain; /* the chain p2p_synced waits for */
+static size_t sync_nchain;
+static int p2p_synced(struct p2p_net *net, int arg) {
+    (void)arg;
+    for (size_t b = 0; b < sync_nchain; b++) {
+        const uint8_t *e = shell_block(net->shell, sync_chain[b]->root);
+        if (!e || rd64(e + NB_STATUS) != NB_IMPORTED) return 0;
+    }
+    return 1;
+}
+
+/*
+ * Node mode, after fc_serve_check: a new node at the case's anchor, at the case's last tick, gets
+ * the Status of a peer whose head is the chain's last block; it must sync the chain from the
+ * peer with BeaconBlocksByRange, and take its last block as head.
+ */
+static void fc_sync_check(tv parts, const char **why) {
+    case_block *blocks, **chain;
+    size_t nchain = case_chain(parts, &blocks, &chain, why);
+    tv steps = tv_get(parts, "steps"), st = steps ? steps + 9 : NULL;
+    uint64_t last_ms = 0;
+    for (uint64_t k = 0, c = steps ? rd64(steps + 1) : 0; k < c; k++, st = tv_skip(st))
+        if (tv_get(st, "tick")) {
+            uint64_t secs = tv_u64(tv_get(st, "tick"));
+            last_ms = secs > UINT64_MAX / 1000 ? UINT64_MAX : secs * 1000;
+        }
+    if (!*why && nchain) {
+        fc_node m;
+        uint8_t *anchor_block;
+        struct node_shell *s = shell_open(&m, parts, &anchor_block, why);
+        uint64_t genesis_ms = *why ? 0 : rd64(m.store + STORE_GENESIS_TIME_MS);
+        if (!*why) {
+            shell_event(s, EV_TICK, last_ms, NULL, 0);
+            shell_settle(&m, why);
+        }
+        struct p2p_net net;
+        s->room[5] = 1u << 18; /* request bytes: a block's chunk */
+        if (!*why) p2p_open(&m, &net, why);
+        if (!*why) {
+            net.chain = chain;
+            net.nchain = nchain;
+            memcpy(net.gvr, m.anchor + field_offset("BeaconState", 1), 32);
+            uint8_t ncfg[CONFIG_SIZE], status[92] = {0}, digest[8] = {0};
+            node_config(ncfg);
+            uint64_t epoch = last_ms < genesis_ms ? 0 : (last_ms - genesis_ms) / rd64(config + 104) / SLOTS_PER_EPOCH_RUNNER;
+            CALL(LF(compute_fork_digest), net.gvr, &epoch, ncfg, fresh_scratch(), digest);
+            memcpy(status, digest, 4); /* fork_digest, finalized (0, 0), head_root, head_slot, earliest_available_slot */
+            memcpy(status + 44, chain[nchain - 1]->root, 32);
+            wr64(status + 76, chain[nchain - 1]->slot);
+            wr64(status + 84, rd64(s->node + 216)); /* Node_earliest_slot */
+            p2p_request(&m, &net, 0, "status", FORK >= FORK_FULU ? 2 : 1, status, FORK >= FORK_FULU ? 92 : 84, why);
+            sync_chain = chain;
+            sync_nchain = nchain;
+            if (!*why) p2p_run(&m, &net, p2p_synced, 0, why);
+            if (*why && !strcmp(*why, "the network does not get there")) *why = "sync: the node does not import the peer's chain";
+            if (!*why) shell_settle(&m, why);
+            if (!*why && memcmp(s->node + NODE_HEAD_ROOT, chain[nchain - 1]->root, 32))
+                *why = "sync: the head is not the chain's last block";
+            p2p_close(&net);
+        }
+        shell_close(&m, anchor_block);
     }
     free(chain);
     free(blocks);

@@ -448,6 +448,7 @@
 .set NODE_FLAG_OPTIMISTIC, 1           /* import payloads as NOT_VALIDATED until the execution engine answers */
 .set NODE_FLAG_JUSTIFIED_PENDING, 2    /* a JUSTIFIED_STATE work is queued */
 .set NODE_FLAG_SUBSCRIBED, 4           /* the gossip topics of fork_digest are subscribed */
+.set NODE_FLAG_SYNCING, 8              /* a BeaconBlocksByRange request of the node is open */
 .set Node_peers, 120                   /* PartRef of NodePeer */
 .set Node_streams, 136                 /* PartRef of NodeStream entries of Node_stream_bytes each */
 .set Node_p2p_out, 152                 /* PartRef of bytes: libp2p events the node made for its next libp2p step */
@@ -457,8 +458,9 @@
 .set Node_earliest_slot, 216           /* the slot of the anchor: the first block the node serves */
 .set Node_messages, 224                /* PartRef of NodeMessage */
 .set Node_fork_digest, 240             /* the ForkDigest of the subscribed topics, 4 bytes */
-.set Node_config, 248
-.set NODE_FIXED, 248 + CONFIG_SIZE
+.set Node_sync_slot, 248               /* the first slot of the next BeaconBlocksByRange request, at least */
+.set Node_config, 256
+.set NODE_FIXED, 256 + CONFIG_SIZE
 .set NODE_STATE_SLOT, 48               /* BeaconState.slot in the value of every fork */
 
 /* NodeBlock: a block the node knows */
@@ -475,6 +477,7 @@
 .set NODE_BLOCK_IMPORTING, 2           /* an IMPORT_BLOCK work is queued */
 .set NODE_BLOCK_IMPORTED, 3
 .set NODE_BLOCK_INVALID, 4
+.set NODE_BLOCK_HASHING, 5             /* from a response: a SYNC_BLOCK work of its root is queued; root 0 */
 
 /* NodeCheckpoint: store.checkpoint_states */
 .set NodeCheckpoint_epoch, 0
@@ -508,6 +511,10 @@
 .set NODE_STREAM_EOF, 2                /* the request is being read; the peer closed its side */
 .set NODE_STREAM_SERVE, 3              /* the next block of the list is due */
 .set NODE_STREAM_SERVING, 4            /* a SERVE work of the next block is queued */
+.set NODE_STREAM_OPENING, 5            /* the node's request: OPEN_STREAM is sent; handle holds its tag */
+.set NODE_STREAM_RESPONSE, 6           /* the node's request is sent; list holds the response bytes; next 1 after STREAM_EOF */
+.set NODE_STREAM_TAG, 0x8000000000000000  /* the bit of an OPEN_STREAM tag of the node */
+.set NODE_SYNC_BATCH, 64               /* the most blocks of one BeaconBlocksByRange request of the node */
 .set NodeStream_next, 40               /* SERVE: the index of the next BufferId of the list */
 .set NodeStream_list, 48               /* a ByteList: the request bytes, then the BufferIds of the blocks to send */
 .set NodeStream_request, 72
@@ -601,6 +608,7 @@
 .set NODE_WORK_ATTESTER_SLASHING, 5    /* a: the justified root's block state; data: the slashing */
 .set NODE_WORK_SERVE, 6                /* data: a block's SSZ bytes; target: the stream Handle; arg: the protocol version */
 .set NODE_WORK_GOSSIP, 7               /* a: head state; b: proposer state; c: justified state; data: the message; target: its Handle; arg: topic + 256 * subnet */
+.set NODE_WORK_SYNC_BLOCK, 8           /* data: a block's SSZ bytes from a response; target: its NodeBlock index */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block: its root */
 .set NodeEvent_chunk, NODE_EV_WORK_DONE_SIZE   /* SERVE: a ByteList of the response chunk after the WORK_DONE fields */
 .set LANTERN_NEED_TARGET_STATE, 55     /* lantern_node_run: an attestation needs its target checkpoint state */
