@@ -2,6 +2,7 @@
  * The execution payload, x86-64. Requirements: docs/reference/block-processing.md.
  */
 
+.if FORK >= FORK_FULU
 SPEC_LEAF get_blob_parameters
     mov     (%rdi), %rax                    # epoch
     mov     CONFIG_BLOB_SCHEDULE_COUNT(%rsi), %rcx
@@ -23,7 +24,9 @@ SPEC_LEAF get_blob_parameters
     mov     %r8, 8(%rdx)
     RETURN_OK
 SPEC_END get_blob_parameters
+.endif
 
+.if FORK >= FORK_DENEB
 /* Locals: rsp+0 out. */
 SPEC_FUNCTION kzg_commitment_to_versioned_hash
     FRAME 16
@@ -36,6 +39,7 @@ SPEC_FUNCTION kzg_commitment_to_versioned_hash
     xor     %eax, %eax
     UNFRAME 16
 SPEC_END kzg_commitment_to_versioned_hash
+.endif
 
 SPEC_LEAF compute_time_at_slot
     mov     %rdx, %r8                       # config
@@ -60,6 +64,7 @@ SPEC_LEAF compute_time_at_slot
     ret
 SPEC_END compute_time_at_slot
 
+.if FORK >= FORK_BELLATRIX
 /*
  * rbx state, rbp body, r12 config, r13 scratch, r14 result, r15 payload,
  * S7 execution_valid, S8 the new header, S9 scratch size.
@@ -148,7 +153,9 @@ SPEC_FUNCTION process_execution_payload
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 64
 SPEC_END process_execution_payload
+.endif
 
+.if FORK >= FORK_BELLATRIX
 /*
  * The ExecutionPayloadHeader of payload rsi at rdi, with scratch rdx of size rcx whose last
  * HEADER_ROOM bytes hold rdi. rbx header, rbp payload, r12 scratch, r13 scratch size,
@@ -227,7 +234,10 @@ LOCAL_FUNCTION build_payload_header
     CALL_GLOBAL ssz_hash_tree_root
 7:  LEAVE 16
 END_FUNCTION build_payload_header
+.endif
 
+.if FORK >= FORK_BELLATRIX
 .if (ExecutionPayload_parent_hash != ExecutionPayloadHeader_parent_hash) || (ExecutionPayload_prev_randao != ExecutionPayloadHeader_prev_randao) || (ExecutionPayload_block_number != ExecutionPayloadHeader_block_number)
 .error "build_payload_header copies parent_hash to prev_randao in one block"
+.endif
 .endif

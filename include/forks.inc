@@ -23,6 +23,30 @@
 .error "FORK is not a fork of lantern"
 .endif
 
+/*
+ * The preset values that the spec renames at a fork: FORK_<name> is the value this
+ * object's fork uses. Needs preset.inc first.
+ */
+.if FORK >= FORK_BELLATRIX
+.set FORK_MIN_SLASHING_PENALTY_QUOTIENT, MIN_SLASHING_PENALTY_QUOTIENT_BELLATRIX
+.set FORK_PROPORTIONAL_SLASHING_MULTIPLIER, PROPORTIONAL_SLASHING_MULTIPLIER_BELLATRIX
+.set FORK_INACTIVITY_PENALTY_QUOTIENT, INACTIVITY_PENALTY_QUOTIENT_BELLATRIX
+.elseif FORK == FORK_ALTAIR
+.set FORK_MIN_SLASHING_PENALTY_QUOTIENT, MIN_SLASHING_PENALTY_QUOTIENT_ALTAIR
+.set FORK_PROPORTIONAL_SLASHING_MULTIPLIER, PROPORTIONAL_SLASHING_MULTIPLIER_ALTAIR
+.set FORK_INACTIVITY_PENALTY_QUOTIENT, INACTIVITY_PENALTY_QUOTIENT_ALTAIR
+.else
+.set FORK_MIN_SLASHING_PENALTY_QUOTIENT, MIN_SLASHING_PENALTY_QUOTIENT
+.set FORK_PROPORTIONAL_SLASHING_MULTIPLIER, PROPORTIONAL_SLASHING_MULTIPLIER
+.set FORK_INACTIVITY_PENALTY_QUOTIENT, INACTIVITY_PENALTY_QUOTIENT
+.endif
+.if FORK >= FORK_ELECTRA
+.set FORK_MIN_SLASHING_PENALTY_QUOTIENT, MIN_SLASHING_PENALTY_QUOTIENT_ELECTRA
+.set FORK_WHISTLEBLOWER_REWARD_QUOTIENT, WHISTLEBLOWER_REWARD_QUOTIENT_ELECTRA
+.else
+.set FORK_WHISTLEBLOWER_REWARD_QUOTIENT, WHISTLEBLOWER_REWARD_QUOTIENT
+.endif
+
 /* Expands m with the name of this object's fork and the rest of the arguments. */
 .macro FORK_NAMED m, args:vararg
 .if FORK == FORK_PHASE0
@@ -74,6 +98,29 @@
 .macro SPEC_END name
     FORK_LABEL_END \name
     END_FUNCTION lantern_\name
+.endm
+
+/*
+ * A spec function that the spec defines from fork first on, which the code of earlier
+ * forks also calls: exported from first on, a local label lantern_<name> before it.
+ */
+.macro SPEC_FUNCTION_FROM first, name
+.if FORK >= \first
+    SPEC_FUNCTION \name
+.else
+    LOCAL_FUNCTION lantern_\name
+.endif
+.endm
+.macro SPEC_LEAF_FROM first, name
+    SPEC_FUNCTION_FROM \first, \name
+    UNWIND_END_PROLOGUE
+.endm
+.macro SPEC_END_FROM first, name
+.if FORK >= \first
+    SPEC_END \name
+.else
+    END_FUNCTION lantern_\name
+.endif
 .endm
 
 /* Exported data of this fork's object: lantern_<fork>_<name>. */

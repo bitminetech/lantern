@@ -51,11 +51,16 @@ SPEC_END is_active_validator
 SPEC_LEAF is_eligible_for_activation_queue
     ld      a2, Validator_activation_eligibility_epoch(a0)
     ld      a3, Validator_effective_balance(a0)
-    li      a4, MIN_ACTIVATION_BALANCE
     li      a5, 0
     li      a6, -1
     bne     a2, a6, 1f                      # activation_eligibility_epoch == FAR_FUTURE_EPOCH
+.if FORK >= FORK_ELECTRA
+    li      a4, MIN_ACTIVATION_BALANCE
     bltu    a3, a4, 1f                      # and effective_balance >= MIN_ACTIVATION_BALANCE
+.else
+    li      a4, MAX_EFFECTIVE_BALANCE
+    bne     a3, a4, 1f                      # and effective_balance == MAX_EFFECTIVE_BALANCE
+.endif
     li      a5, 1
 1:  sd      a5, 0(a1)
     RETURN_OK
@@ -86,6 +91,7 @@ SPEC_LEAF is_slashable_validator
     RETURN_OK
 SPEC_END is_slashable_validator
 
+.if FORK >= FORK_ELECTRA
 SPEC_LEAF is_compounding_withdrawal_credential
     lbu     a2, 0(a0)
     addi    a2, a2, -COMPOUNDING_WITHDRAWAL_PREFIX
@@ -93,14 +99,18 @@ SPEC_LEAF is_compounding_withdrawal_credential
     sd      a2, 0(a1)
     RETURN_OK
 SPEC_END is_compounding_withdrawal_credential
+.endif
 
+.if FORK >= FORK_ELECTRA
 SPEC_FUNCTION has_compounding_withdrawal_credential
     FRAME 0
     addi    a0, a0, Validator_withdrawal_credentials
     call    lantern_is_compounding_withdrawal_credential
     UNFRAME 0
 SPEC_END has_compounding_withdrawal_credential
+.endif
 
+.if FORK >= FORK_ELECTRA
 SPEC_FUNCTION get_max_effective_balance
     FRAME 16
     sd      a1, 0(sp)                       # out
@@ -115,6 +125,7 @@ SPEC_FUNCTION get_max_effective_balance
     li      a0, LANTERN_OK
     UNFRAME 16
 SPEC_END get_max_effective_balance
+.endif
 
 /* ---------------------------------------------------------------- Misc */
 
@@ -145,6 +156,53 @@ SPEC_LEAF compute_activation_exit_epoch
 1:  li      a0, LANTERN_INVALID_OVERFLOW
     ret
 SPEC_END compute_activation_exit_epoch
+
+/*
+ * s1 branch, s2 depth, s3 index, s4 root, s5 out, s6 i.
+ * Locals: L value (32), L+32 the two halves (64).
+ */
+SPEC_FUNCTION is_valid_merkle_branch
+    ENTER 96
+    mv      s1, a1
+    ld      s2, 0(a2)
+    ld      s3, 0(a3)
+    mv      s4, a4
+    mv      s5, a5
+    addi    t0, sp, L                       # value = leaf
+    COPY32  t0, a0
+    li      s6, 0
+1:  bgeu    s6, s2, 3f
+    slli    t0, s6, 5                       # branch[i]
+    add     t0, s1, t0
+    srl     t1, s3, s6                      # index // (2**i) % 2; 0 once i reaches 64
+    li      t2, 64
+    bltu    s6, t2, 11f
+    li      t1, 0
+11: addi    t2, sp, (L + 32)
+    addi    t3, sp, L
+    andi    t1, t1, 1
+    beqz    t1, 2f
+    COPY32  t2, t0                          # hash(branch[i] + value)
+    addi    t2, t2, 32
+    COPY32  t2, t3
+    j       21f
+2:  COPY32  t2, t3                          # hash(value + branch[i])
+    addi    t2, t2, 32
+    COPY32  t2, t0
+21: addi    a0, sp, (L + 32)
+    li      a1, 64
+    addi    a2, sp, L
+    call    sha256_short
+    addi    s6, s6, 1
+    j       1b
+3:  addi    t0, sp, L                       # value == root
+    li      t1, 0
+    NE32    t0, s4, 4f
+    li      t1, 1
+4:  sd      t1, 0(s5)
+    li      a0, LANTERN_OK
+    LEAVE 96
+SPEC_END is_valid_merkle_branch
 
 /* ---------------------------------------------------------------- Accessors */
 
@@ -326,6 +384,7 @@ SPEC_END decrease_balance
 
 /* ---------------------------------------------------------------- Participation flags and rewards */
 
+.if FORK >= FORK_ALTAIR
 SPEC_LEAF has_flag
     lbu     a3, 0(a0)
     ld      a4, 0(a1)
@@ -334,7 +393,9 @@ SPEC_LEAF has_flag
     sd      a3, 0(a2)
     RETURN_OK
 SPEC_END has_flag
+.endif
 
+.if FORK >= FORK_ALTAIR
 SPEC_LEAF add_flag
     lbu     a3, 0(a0)
     ld      a4, 0(a1)
@@ -344,6 +405,7 @@ SPEC_LEAF add_flag
     sb      a3, 0(a2)
     RETURN_OK
 SPEC_END add_flag
+.endif
 
 SPEC_FUNCTION get_finality_delay
     FRAME 32
@@ -424,6 +486,7 @@ SPEC_FUNCTION get_eligible_validator_indices
     LEAVE 16
 SPEC_END get_eligible_validator_indices
 
+.if FORK >= FORK_ALTAIR
 /*
  * s1 state, s2 flag_index, s3 epoch, s4 scratch, s5 out,
  * s7 epoch_participation, s8 active list entries, s9 entries left, s10 out entries.
@@ -502,7 +565,9 @@ SPEC_FUNCTION get_unslashed_participating_indices
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
 SPEC_END get_unslashed_participating_indices
+.endif
 
+.if FORK >= FORK_ALTAIR
 SPEC_FUNCTION get_base_reward_per_increment
     FRAME 32
     sd      a2, 0(sp)                       # out
@@ -520,7 +585,40 @@ SPEC_FUNCTION get_base_reward_per_increment
     li      a0, LANTERN_OK
 1:  UNFRAME 32
 SPEC_END get_base_reward_per_increment
+.endif
 
+.if FORK == FORK_PHASE0
+/* Locals: sp+0 state, sp+8 index, sp+16 out, sp+24 total active balance, sp+32 its square root. */
+SPEC_FUNCTION get_base_reward
+    FRAME 48
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+    sd      a3, 16(sp)
+    mv      a1, a2
+    addi    a2, sp, 24
+    call    lantern_get_total_active_balance
+    bnez    a0, 1f
+    addi    a0, sp, 24
+    addi    a1, sp, 32
+    call    lantern_integer_squareroot
+    ld      a0, 0(sp)
+    ld      a1, 8(sp)
+    ld      a1, 0(a1)
+    PART    t0, t1, a0, BeaconState_validators
+    slli    a1, a1, 7
+    add     t0, t0, a1
+    ld      t0, Validator_effective_balance(t0)
+    li      t1, BASE_REWARD_FACTOR          # fits: effective_balance is at most MAX_EFFECTIVE_BALANCE
+    mul     t0, t0, t1
+    ld      t1, 32(sp)
+    divu    t0, t0, t1                      # // integer_squareroot(total_balance)
+    srli    t0, t0, 2                       # // BASE_REWARDS_PER_EPOCH, which is 4
+    ld      t3, 16(sp)
+    sd      t0, 0(t3)
+    li      a0, LANTERN_OK
+1:  UNFRAME 48
+SPEC_END get_base_reward
+.else
 SPEC_FUNCTION get_base_reward
     FRAME 32
     sd      a0, 0(sp)                       # state
@@ -546,3 +644,4 @@ SPEC_FUNCTION get_base_reward
     li      a0, LANTERN_OK
 1:  UNFRAME 32
 SPEC_END get_base_reward
+.endif

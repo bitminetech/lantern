@@ -45,7 +45,8 @@ lantern_beacon_state_copy_size(state, room, size) -> status
 
 ### Function does
 
-- Adds the fixed part of the state and, for each of its 12 parts, the bytes of its entries plus the room for its kind, rounded up to 8.
+- Adds the fixed part of the state and, for each of its parts, the bytes of its entries plus the room for its kind, rounded up to 8.
+- Phase0: the entries of previous_epoch_attestations and current_epoch_attestations are nested values, each starting with its size.
 - Gives the part of `latest_execution_payload_header` room for an `extra_data` of MAX_EXTRA_DATA_BYTES.
 
 ### ABI
@@ -148,11 +149,13 @@ The free entries that a copy gives each list of a `BeaconState`.
 | 24 | `pending_deposits` | u64 | Entries of room in pending_deposits |
 | 32 | `pending_partial_withdrawals` | u64 | Entries of room in pending_partial_withdrawals |
 | 40 | `pending_consolidations` | u64 | Entries of room in pending_consolidations |
+| 48 | `historical_roots` | u64 | Entries of room in historical_roots |
+| 56 | `pending_attestations` | u64 | Entries of room in each of previous_epoch_attestations and current_epoch_attestations, each the size of a PendingAttestation with the longest aggregation_bits |
 
 ### Rules
 
-- 48 bytes.
-- historical_roots gets no room: no fork after capella appends to it.
+- 64 bytes.
+- A copy uses the fields of the lists that its fork's state holds.
 
 ## Results
 

@@ -3,6 +3,7 @@
  * Requirements: docs/reference/block-processing.md.
  */
 
+.if FORK >= FORK_FULU
 SPEC_LEAF get_beacon_proposer_index
     mov     BeaconState_slot(%rdi), %rax
     and     $(SLOTS_PER_EPOCH - 1), %eax
@@ -10,6 +11,57 @@ SPEC_LEAF get_beacon_proposer_index
     mov     %rax, (%rsi)
     RETURN_OK
 SPEC_END get_beacon_proposer_index
+.else
+/*
+ * Before fulu: (state, scratch, out), with scratch S(2).
+ * rbx state, rbp scratch, r12 out, r13 scratch size, r14 indices.
+ * Locals: L epoch, L+8 domain type, L+16 the message (seed 32, slot 8), L+56 seed (32).
+ */
+SPEC_FUNCTION get_beacon_proposer_index
+    ENTER 96
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    NEED_SCRATCH %rbp, %rbx, 2, 9f
+    mov     (%rbp), %r13
+    mov     %rbx, %rdi
+    lea     L(%rsp), %rsi
+    call    lantern_get_current_epoch
+    movl    $DOMAIN_BEACON_PROPOSER, (L + 8)(%rsp)
+    mov     %rbx, %rdi                      # seed = hash(get_seed(state, epoch, DOMAIN_BEACON_PROPOSER) + uint_to_bytes(state.slot))
+    lea     L(%rsp), %rsi
+    lea     (L + 8)(%rsp), %rdx
+    lea     (L + 16)(%rsp), %rcx
+    call    lantern_get_seed
+    test    %rax, %rax
+    jnz     7f
+    mov     BeaconState_slot(%rbx), %rax
+    mov     %rax, (L + 48)(%rsp)
+    lea     (L + 16)(%rsp), %rdi
+    mov     $40, %esi
+    lea     (L + 56)(%rsp), %rdx
+    call    sha256_short
+    mov     (BeaconState_validators + 8)(%rbx), %rcx
+    SCRATCH_LIST %r14, %rbp, %r13, 0, %rcx  # indices: the last list
+    mov     %rbx, %rdi                      # indices = get_active_validator_indices(state, epoch)
+    lea     L(%rsp), %rsi
+    mov     %r14, %rdx
+    call    lantern_get_active_validator_indices
+    test    %rax, %rax
+    jnz     7f
+    mov     (BeaconState_validators + 8)(%rbx), %rcx
+    SCRATCH_GIVE %rbp, %r13, 1, %rcx
+    mov     %rbx, %rdi                      # compute_proposer_index(state, indices, seed)
+    mov     %r14, %rsi
+    lea     (L + 56)(%rsp), %rdx
+    mov     %rbp, %rcx
+    mov     %r12, %r8
+    call    lantern_compute_proposer_index
+7:  LEAVE 96
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 96
+SPEC_END get_beacon_proposer_index
+.endif
 
 SPEC_LEAF xor
     movdqu  (%rdi), %xmm0
@@ -56,8 +108,20 @@ SPEC_FUNCTION process_block_header
     cmp     (BeaconState_latest_block_header + BeaconBlockHeader_slot)(%rbx), %rcx
     jbe     6f
     mov     %rbx, %rdi
+.if FORK >= FORK_FULU
     lea     L(%rsp), %rsi
     call    lantern_get_beacon_proposer_index
+.else
+    mov     %r12, %rsi
+    lea     L(%rsp), %rdx
+    call    lantern_get_beacon_proposer_index
+    test    %rax, %rax
+    jz      3f
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      7f
+    jmp     6f
+3:
+.endif
     mov     BeaconBlock_proposer_index(%rbp), %rcx
     mov     $LANTERN_INVALID_PROPOSER_INDEX, %eax   # assert block.proposer_index == get_beacon_proposer_index(state)
     cmp     L(%rsp), %rcx

@@ -16,6 +16,7 @@
 - [`lantern_compute_epoch_at_slot`](#function-lantern_compute_epoch_at_slot): the epoch of a slot.
 - [`lantern_compute_start_slot_at_epoch`](#function-lantern_compute_start_slot_at_epoch): the first slot of an epoch.
 - [`lantern_compute_activation_exit_epoch`](#function-lantern_compute_activation_exit_epoch): the epoch when an activation or exit takes effect.
+- [`lantern_is_valid_merkle_branch`](#function-lantern_is_valid_merkle_branch): checks a Merkle branch.
 - [`lantern_get_current_epoch`](#function-lantern_get_current_epoch): the epoch of the state.
 - [`lantern_get_previous_epoch`](#function-lantern_get_previous_epoch): the epoch before, or 0.
 - [`lantern_get_block_root_at_slot`](#function-lantern_get_block_root_at_slot): a recent block root by slot.
@@ -55,7 +56,7 @@
 
 ## Spec
 
-- Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), each function at its latest definition from phase0 to fulu.
+- Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), each function at its definition in the fork of its object (include/forks.inc).
 - Section: Helper functions of `beacon-chain.md` in phase0, altair, electra and fulu.
 
 ## Common rules
@@ -65,6 +66,7 @@
 - `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
 - A function never makes an OS call and never keeps a pointer after it returns.
 - Role: L1. Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Forks: the state transition is in the objects of phase0 and fulu. A function says under Function does what the forks change, and under ABI the forks that have it when not all do.
 - Symbol: `lantern_<fork>_<name>` for the function `lantern_<name>`, in the object of each fork that the core builds (`FORKS` in platform/objects.sh), with `_` before it on macOS. Calls inside an object use its local label `lantern_<name>`.
 
 ## Function `lantern_integer_squareroot`
@@ -168,6 +170,10 @@ lantern_is_eligible_for_activation_queue(validator, out) -> status
 ### Returns
 
 - `LANTERN_OK`, always.
+
+### Function does
+
+- Before electra: effective_balance == MAX_EFFECTIVE_BALANCE; electra and later: effective_balance >= MIN_ACTIVATION_BALANCE.
 
 ### ABI
 
@@ -376,6 +382,31 @@ lantern_compute_activation_exit_epoch(epoch, out) -> status
 ### ABI
 
 - Argument order: `epoch`, `out`.
+
+## Function `lantern_is_valid_merkle_branch`
+
+Whether the leaf, hashed up with the branch for depth levels by the bits of index, gives the root.
+
+### Signature
+
+```
+lantern_is_valid_merkle_branch(leaf, branch, depth, index, root, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `leaf` | input | Bytes32 |
+| `branch` | input | depth Bytes32 values |
+| `depth` | input | u64 |
+| `index` | input | u64 |
+| `root` | input | Bytes32 |
+| `out` | output | u64: 1 when valid, else 0 |
+
+### Returns
+
+- `LANTERN_OK`, always.
 
 ## Function `lantern_get_current_epoch`
 
@@ -868,6 +899,11 @@ lantern_get_base_reward(state, index, scratch, out) -> status
 
 - Pass an index below the number of validators.
 
+### Function does
+
+- Phase0: effective_balance * BASE_REWARD_FACTOR // integer_squareroot(total active balance) // BASE_REWARDS_PER_EPOCH.
+- Altair and later: the effective balance increments times lantern_get_base_reward_per_increment.
+
 ### ABI
 
 - Argument order: `state`, `index`, `scratch`, `out`.
@@ -993,6 +1029,11 @@ lantern_compute_proposer_index(state, indices, seed, scratch, out) -> status
 ### Caller must
 
 - Pass indices below the number of validators.
+
+### Function does
+
+- Before electra: draws one random byte per candidate, sha256(seed + uint_to_bytes(i // 32))[i % 32], against MAX_EFFECTIVE_BALANCE.
+- Electra and later: draws a 16-bit value per candidate against MAX_EFFECTIVE_BALANCE_ELECTRA.
 
 ### ABI
 

@@ -63,6 +63,7 @@ END_FUNCTION sort_u64
 
 /* ---------------------------------------------------------------- Committees */
 
+.if FORK >= FORK_ELECTRA
 SPEC_LEAF get_committee_indices
     li      a2, LIST_FIXED
     sd      a2, LIST_OFFSET(a1)
@@ -87,6 +88,7 @@ SPEC_LEAF get_committee_indices
     sd      a2, LIST_COUNT(a1)
     RETURN_OK
 SPEC_END get_committee_indices
+.endif
 
 /* s1 state, s2 epoch, s3 scratch, s4 out, s5 list. */
 SPEC_FUNCTION get_committee_count_per_slot
@@ -235,6 +237,7 @@ SPEC_FUNCTION get_beacon_committee
     LEAVE 80
 SPEC_END get_beacon_committee
 
+.if FORK >= FORK_ELECTRA
 /*
  * s1 state, s2 attestation, s3 scratch, s4 out, s5 scratch size, s6 n, s7 committee indices,
  * s8 committee, s9 committee offset, s10 committee index cursor.
@@ -329,6 +332,75 @@ SPEC_FUNCTION get_attesting_indices
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 48
 SPEC_END get_attesting_indices
+.else
+/*
+ * Before electra: the committee of data.index. A PendingAttestation of phase0 has the same
+ * aggregation_bits and data, so the function also takes one.
+ * s1 state, s2 attestation, s3 scratch, s4 out, s5 scratch size, s6 n, s7 committee.
+ */
+.if FORK == FORK_PHASE0
+.if (PendingAttestation_aggregation_bits != Attestation_aggregation_bits) || (PendingAttestation_data != Attestation_data)
+.error "PendingAttestation does not start with the fields of Attestation"
+.endif
+.endif
+SPEC_FUNCTION get_attesting_indices
+    ENTER 16
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+    NEED_SCRATCH s3, s1, 3, 9f
+    LDQ     s6, s1, BeaconState_validators + 8
+    slli    t0, s6, 3                       # out has room for every validator
+    addi    t0, t0, LIST_FIXED
+    ld      t1, LIST_SIZE(s4)
+    bltu    t1, t0, 9f
+    ld      s5, 0(s3)
+    SCRATCH_LIST s7, s3, s5, 0, s6          # the committee: the last list
+    SCRATCH_GIVE s3, s5, 1, s6
+    mv      a0, s1                          # committee = get_beacon_committee(state, data.slot, data.index)
+    addi    a1, s2, (Attestation_data + AttestationData_slot)
+    addi    a2, s2, (Attestation_data + AttestationData_index)
+    mv      a3, s3
+    mv      a4, s7
+    call    lantern_get_beacon_committee
+    bnez    a0, 7f
+    PART    t2, t3, s2, Attestation_aggregation_bits
+    ld      t0, LIST_COUNT(s7)
+    addi    t1, s7, LIST_FIXED
+    li      t4, LIST_FIXED
+    sd      t4, LIST_OFFSET(s4)
+    li      t4, 0                           # the count
+    addi    t5, s4, LIST_FIXED
+    li      s8, 0                           # i
+2:  bgeu    s8, t0, 3f
+    bgeu    s8, t3, 8f                      # aggregation_bits[i]
+    srli    t6, s8, 3
+    add     t6, t2, t6
+    lbu     t6, 0(t6)
+    andi    a6, s8, 7
+    srl     t6, t6, a6
+    ld      a6, 0(t1)
+    addi    t1, t1, 8
+    andi    t6, t6, 1
+    beqz    t6, 25f
+    sd      a6, 0(t5)
+    addi    t5, t5, 8
+    addi    t4, t4, 1
+25: addi    s8, s8, 1
+    j       2b
+3:  sd      t4, LIST_COUNT(s4)
+    addi    a0, s4, LIST_FIXED              # a set: ascending
+    mv      a1, t4
+    call    sort_u64
+    li      a0, LANTERN_OK
+7:  LEAVE 16
+8:  li      a0, LANTERN_INVALID_ATTESTATION
+    LEAVE 16
+9:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
+SPEC_END get_attesting_indices
+.endif
 
 /* s1 state, s2 attestation, s3 scratch, s4 out, s5 scratch size, s6 n, s7 the attesting list. */
 SPEC_FUNCTION get_indexed_attestation
@@ -470,6 +542,7 @@ SPEC_FUNCTION is_valid_indexed_attestation
     LEAVE 96
 SPEC_END is_valid_indexed_attestation
 
+.if FORK >= FORK_ALTAIR
 /*
  * s1 state, s2 data, s3 delay, s4 out, s5 matching source, s6 matching target, s7 matching head.
  * Locals: L current epoch, L+8 target root (32), L+40 head root (32), L+72 SLOTS_PER_EPOCH, L+80 its root.
@@ -548,7 +621,187 @@ SPEC_FUNCTION get_attestation_participation_flag_indices
     li      a0, LANTERN_OK
 7:  LEAVE 96
 SPEC_END get_attestation_participation_flag_indices
+.endif
 
+.if FORK == FORK_PHASE0
+/*
+ * s1 state, s2 attestation, s3 config, s4 scratch, s5 result, s6 scratch size,
+ * s8 the PartRef offset of the list to append to, s9 the indexed attestation, s10 the committee.
+ * Locals: L previous epoch, L+8 current epoch, L+16 committees per slot, L+24 valid,
+ * L+32 proposer index, L+40 the scratch size callees get, L+48 the new value, L+56 its bit bytes.
+ */
+SPEC_FUNCTION process_attestation
+    ENTER 64
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+    mv      s5, a4
+    NEED_SCRATCH_B s4, s1, 10, ATTEST_EXTRA, 9f
+    sd      zero, 0(s5)
+    ld      s6, 0(s4)
+    LDQ     t1, s1, BeaconState_validators + 8
+    slli    t1, t1, 3
+    addi    t1, t1, LIST_FIXED              # own scratch at the end: the indexed attestation, the committee
+    li      t2, IndexedAttestation__fixed + 8
+    add     t2, t2, t1
+    sub     t0, s6, t2
+    add     s9, s4, t0
+    sd      t2, 0(s9)
+    sub     t0, t0, t1
+    add     s10, s4, t0
+    sd      t1, 0(s10)
+    sd      t0, (L + 40)(sp)
+    mv      a0, s1
+    addi    a1, sp, L
+    call    lantern_get_previous_epoch
+    mv      a0, s1
+    addi    a1, sp, (L + 8)
+    call    lantern_get_current_epoch
+    li      a0, LANTERN_INVALID_ATTESTATION
+    ld      t0, (Attestation_data + AttestationData_target + Checkpoint_epoch)(s2)
+    ld      t1, L(sp)                       # assert data.target.epoch in (previous, current)
+    beq     t0, t1, 1f
+    ld      t1, (L + 8)(sp)
+    bne     t0, t1, 6f
+1:  ld      t2, (Attestation_data + AttestationData_slot)(s2)
+    srli    t3, t2, LOG2_SLOTS_PER_EPOCH    # assert data.target.epoch == compute_epoch_at_slot(data.slot)
+    bne     t3, t0, 6f
+    addi    t3, t2, MIN_ATTESTATION_INCLUSION_DELAY     # assert data.slot + MIN_ATTESTATION_INCLUSION_DELAY <= state.slot
+    bltu    t3, t2, 5f
+    LDQ     t4, s1, BeaconState_slot
+    bltu    t4, t3, 6f
+    addi    t3, t2, SLOTS_PER_EPOCH         # assert state.slot <= data.slot + SLOTS_PER_EPOCH
+    bltu    t3, t2, 5f
+    bltu    t3, t4, 6f
+    ld      t0, (L + 40)(sp)
+    sd      t0, 0(s4)
+    mv      a0, s1                          # assert data.index < get_committee_count_per_slot(state, data.target.epoch)
+    addi    a1, s2, (Attestation_data + AttestationData_target + Checkpoint_epoch)
+    mv      a2, s4
+    addi    a3, sp, (L + 16)
+    call    lantern_get_committee_count_per_slot
+    bnez    a0, 7f
+    li      a0, LANTERN_INVALID_ATTESTATION
+    ld      t0, (Attestation_data + AttestationData_index)(s2)
+    ld      t1, (L + 16)(sp)
+    bgeu    t0, t1, 6f
+    ld      t0, (L + 40)(sp)
+    sd      t0, 0(s4)
+    mv      a0, s1                          # committee = get_beacon_committee(state, data.slot, data.index)
+    addi    a1, s2, (Attestation_data + AttestationData_slot)
+    addi    a2, s2, (Attestation_data + AttestationData_index)
+    mv      a3, s4
+    mv      a4, s10
+    call    lantern_get_beacon_committee
+    CHECK_STATUS s5, 7f, 8f
+    ld      t0, LIST_COUNT(s10)
+    LDQ     t1, s2, Attestation_aggregation_bits + 8
+    li      a0, LANTERN_INVALID_ATTESTATION
+    bne     t0, t1, 6f                      # assert len(attestation.aggregation_bits) == len(committee)
+    ld      t0, (L + 40)(sp)
+    sd      t0, 0(s4)
+    mv      a0, s1                          # proposer_index = get_beacon_proposer_index(state)
+    mv      a1, s4
+    addi    a2, sp, (L + 32)
+    call    lantern_get_beacon_proposer_index
+    CHECK_STATUS s5, 7f, 8f
+    ld      t0, (Attestation_data + AttestationData_target + Checkpoint_epoch)(s2)
+    ld      t1, (L + 8)(sp)
+    bne     t0, t1, 1f
+    ADDQ    t1, s1, BeaconState_current_justified_checkpoint
+    li      s8, BeaconState_current_epoch_attestations
+    j       2f
+1:  ADDQ    t1, s1, BeaconState_previous_justified_checkpoint
+    li      s8, BeaconState_previous_epoch_attestations
+2:  addi    t0, s2, (Attestation_data + AttestationData_source)
+    li      a0, LANTERN_INVALID_ATTESTATION
+    ld      t2, Checkpoint_epoch(t0)        # assert data.source == the justified checkpoint of its epoch
+    ld      t3, Checkpoint_epoch(t1)
+    bne     t2, t3, 6f
+    addi    t0, t0, Checkpoint_root
+    addi    t1, t1, Checkpoint_root
+    NE32    t0, t1, 6f
+    ld      t0, (L + 40)(sp)
+    sd      t0, 0(s4)
+    mv      a0, s1                          # assert is_valid_indexed_attestation(state, get_indexed_attestation(...))
+    mv      a1, s2
+    mv      a2, s4
+    mv      a3, s9
+    call    lantern_get_indexed_attestation
+    CHECK_STATUS s5, 7f, 8f
+    ld      t0, (L + 40)(sp)
+    sd      t0, 0(s4)
+    mv      a0, s1
+    mv      a1, s9
+    mv      a2, s4
+    addi    a3, sp, (L + 24)
+    call    lantern_is_valid_indexed_attestation
+    CHECK_STATUS s5, 7f, 8f
+    ld      t0, (L + 24)(sp)
+    li      a0, LANTERN_INVALID_ATTESTATION
+    beqz    t0, 6f
+    add     t0, s1, s8                      # append the PendingAttestation: the end of the list's entries
+    ld      t1, 0(t0)
+    ld      t2, 8(t0)
+    add     t3, s1, t1
+3:  beqz    t2, 4f
+    ld      t4, 0(t3)
+    add     t3, t3, t4
+    addi    t2, t2, -1
+    j       3b
+4:  li      t4, BeaconState_previous_epoch_attestations
+    bne     s8, t4, 41f
+    LDQ     t5, s1, BeaconState_current_epoch_attestations  # the list ends where the next part starts
+    j       42f
+41: ld      t5, 0(s1)                       # or at the end of the value
+42: add     t5, s1, t5
+    LDQ     t6, s2, Attestation_aggregation_bits + 8
+    addi    t2, t6, 7
+    srli    t2, t2, 3                       # the bytes of aggregation_bits
+    li      t4, PendingAttestation__fixed + 7
+    add     t4, t4, t2
+    andi    t4, t4, -8                      # the PendingAttestation's size
+    add     t1, t3, t4
+    bltu    t5, t1, 9f                      # no room: the state is unchanged
+    beqz    t2, 43f
+    add     t1, t3, t4                      # zero the padding after the bit bytes
+    sd      zero, -8(t1)
+43: sd      t4, 0(t3)                       # size; aggregation_bits at the end of the fixed part
+    li      t1, PendingAttestation__fixed
+    sd      t1, PendingAttestation_aggregation_bits(t3)
+    sd      t6, (PendingAttestation_aggregation_bits + 8)(t3)
+    LDQ     t1, s1, BeaconState_slot        # inclusion_delay = state.slot - data.slot
+    ld      t0, (Attestation_data + AttestationData_slot)(s2)
+    sub     t1, t1, t0
+    sd      t1, PendingAttestation_inclusion_delay(t3)
+    ld      t1, (L + 32)(sp)
+    sd      t1, PendingAttestation_proposer_index(t3)
+    sd      t3, (L + 48)(sp)
+    sd      t2, (L + 56)(sp)
+    addi    a0, t3, PendingAttestation_data
+    addi    a1, s2, Attestation_data
+    li      a2, AttestationData__mem
+    call    lantern_copy
+    ld      a0, (L + 48)(sp)
+    addi    a0, a0, PendingAttestation__fixed
+    PART    a1, t0, s2, Attestation_aggregation_bits
+    ld      a2, (L + 56)(sp)
+    call    lantern_copy
+    add     t0, s1, s8                      # the count, last
+    ld      t1, 8(t0)
+    addi    t1, t1, 1
+    sd      t1, 8(t0)
+8:  li      a0, LANTERN_OK
+7:  LEAVE 64
+5:  li      a0, LANTERN_INVALID_OVERFLOW
+6:  sd      a0, 0(s5)
+    li      a0, LANTERN_OK
+    LEAVE 64
+9:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 64
+SPEC_END process_attestation
+.else
 /*
  * s1 state, s2 attestation, s3 config, s4 scratch, s5 result, s6 scratch size, s7 n,
  * s8 committee indices, s9 committee, s10 committee offset.
@@ -793,6 +1046,7 @@ SPEC_FUNCTION process_attestation
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 176
 SPEC_END process_attestation
+.endif
 
 .if TIMELY_SOURCE_WEIGHT != TIMELY_HEAD_WEIGHT
 .error "lantern_process_attestation takes the source weight for the head flag"

@@ -2,33 +2,67 @@
  * Beacon state buffers, x86-64. Requirements: docs/reference/state.md.
  */
 
+.if FORK >= FORK_BELLATRIX
 /* Room of an ExecutionPayloadHeader value with the longest extra_data. */
 .set HEADER_ROOM, (ExecutionPayloadHeader__fixed + MAX_EXTRA_DATA_BYTES + 7) / 8 * 8
+.endif
+.if FORK == FORK_PHASE0
+/* Room of a PendingAttestation value with the longest aggregation_bits. */
+.set PENDING_ATTESTATION_ROOM, (PendingAttestation__fixed + (MAX_VALIDATORS_PER_COMMITTEE + 7) / 8 + 7) / 8 * 8
+.endif
 
-/* The parts of a BeaconState, in field order: PartRef offset, entry stride, StateRoom offset or -1. */
+/* The stride of a list of nested values, which each start with their size. */
+.set STATE_NESTED, -1
+
+/*
+ * The parts of a BeaconState of this fork, in field order: PartRef offset, entry stride
+ * (0: one nested value; STATE_NESTED: a list of nested values), StateRoom offset or -1.
+ */
 .macro STATE_PARTS m
-    \m BeaconState_historical_roots, Bytes32__mem, -1
+    \m BeaconState_historical_roots, Bytes32__mem, 48
     \m BeaconState_eth1_data_votes, Eth1Data__mem, 8
     \m BeaconState_validators, Validator__mem, 0
     \m BeaconState_balances, 8, 0
+.if FORK == FORK_PHASE0
+    \m BeaconState_previous_epoch_attestations, STATE_NESTED, 56
+    \m BeaconState_current_epoch_attestations, STATE_NESTED, 56
+.else
     \m BeaconState_previous_epoch_participation, 1, 0
     \m BeaconState_current_epoch_participation, 1, 0
     \m BeaconState_inactivity_scores, 8, 0
+.endif
+.if FORK >= FORK_BELLATRIX
     \m BeaconState_latest_execution_payload_header, 0, -1
+.endif
+.if FORK >= FORK_CAPELLA
     \m BeaconState_historical_summaries, HistoricalSummary__mem, 16
+.endif
+.if FORK >= FORK_ELECTRA
     \m BeaconState_pending_deposits, PendingDeposit__mem, 24
     \m BeaconState_pending_partial_withdrawals, PendingPartialWithdrawal__mem, 32
     \m BeaconState_pending_consolidations, PendingConsolidation__mem, 40
+.endif
 .endm
 
 /*
  * rax = the capacity a copy gives one part of state st with room rm: its entry
  * bytes plus room, rounded up to 8. Also rcx = its entry bytes, rdx = its count,
- * r8 = where its entries are.
+ * r8 = where its entries are. Uses r11.
  */
 .macro PART_CAPACITY st, rm, ref, stride, room
     PART    %r8, %rdx, \st, \ref
-    .if \stride
+    .if (\stride) == STATE_NESTED
+    xor     %ecx, %ecx                      # the entry bytes: the sum of the nested values' sizes
+    mov     %rdx, %r11
+93: test    %r11, %r11
+    jz      94f
+    mov     (%r8,%rcx), %rax
+    add     %rax, %rcx
+    dec     %r11
+    jmp     93b
+94: imul    $PENDING_ATTESTATION_ROOM, (\room)(\rm), %rax
+    add     %rcx, %rax
+    .elseif \stride
     imul    $(\stride), %rdx, %rcx
     .if (\room) >= 0
     imul    $(\stride), (\room)(\rm), %rax

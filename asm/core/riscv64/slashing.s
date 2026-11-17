@@ -15,7 +15,11 @@ SPEC_FUNCTION slash_validator
     mv      s4, a3
     mv      s5, a4
     mv      s6, a5
+.if FORK >= FORK_FULU
     NEED_SCRATCH s5, s1, 1, 9f
+.else
+    NEED_SCRATCH s5, s1, 2, 9f                  # get_beacon_proposer_index takes S(2)
+.endif
     sd      zero, 0(s6)
     sd      s2, (L + 48)(sp)
     LDQ     t0, s1, BeaconState_validators + 8
@@ -55,7 +59,7 @@ SPEC_FUNCTION slash_validator
     add     t2, t2, t3
     bltu    t2, t3, 5f
     sd      t2, 0(t1)
-    li      t4, MIN_SLASHING_PENALTY_QUOTIENT_ELECTRA
+    li      t4, FORK_MIN_SLASHING_PENALTY_QUOTIENT
     divu    t4, t3, t4
     sd      t4, (L + 8)(sp)
     mv      a0, s1
@@ -63,18 +67,35 @@ SPEC_FUNCTION slash_validator
     addi    a2, sp, (L + 8)
     call    lantern_decrease_balance
     mv      a0, s1
+.if FORK >= FORK_FULU
     addi    a1, sp, (L + 16)
     call    lantern_get_beacon_proposer_index
+.else
+    mv      a1, s5
+    addi    a2, sp, (L + 16)
+    call    lantern_get_beacon_proposer_index
+    beqz    a0, 3f
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 7f
+    sd      a0, 0(s6)
+    j       8f
+3:
+.endif
     ld      t0, (L + 16)(sp)                # whistleblower_index = proposer_index when None
     beqz    s3, 2f
     ld      t0, 0(s3)
 2:  sd      t0, (L + 40)(sp)
     ld      t3, Validator_effective_balance(s7)
-    li      t4, WHISTLEBLOWER_REWARD_QUOTIENT_ELECTRA
+    li      t4, FORK_WHISTLEBLOWER_REWARD_QUOTIENT
     divu    t4, t3, t4                      # whistleblower_reward
+.if FORK >= FORK_ALTAIR
     li      t5, PROPOSER_WEIGHT
     mul     t5, t4, t5
     srli    t5, t5, 6                       # // WEIGHT_DENOMINATOR
+.else
+    li      t5, PROPOSER_REWARD_QUOTIENT
+    divu    t5, t4, t5                      # proposer_reward = whistleblower_reward // PROPOSER_REWARD_QUOTIENT
+.endif
     sd      t5, (L + 32)(sp)
     sub     t4, t4, t5
     sd      t4, (L + 24)(sp)
@@ -147,7 +168,11 @@ SPEC_FUNCTION process_proposer_slashing
     mv      s3, a2
     mv      s4, a3
     mv      s5, a4
+.if FORK >= FORK_FULU
     NEED_SCRATCH s4, s1, 1, 9f
+.else
+    NEED_SCRATCH s4, s1, 2, 9f                  # slash_validator takes S(2)
+.endif
     sd      zero, 0(s5)
     li      a0, LANTERN_INVALID_PROPOSER_SLASHING
     addi    t0, s2, (ProposerSlashing_signed_header_1 + SignedBeaconBlockHeader_message)

@@ -15,7 +15,11 @@ SPEC_FUNCTION slash_validator
     mov     %rcx, %r13
     mov     %r8, %r14
     mov     %r9, %r15
+.if FORK >= FORK_FULU
     NEED_SCRATCH %r14, %rbx, 1, 9f
+.else
+    NEED_SCRATCH %r14, %rbx, 2, 9f              # get_beacon_proposer_index takes S(2)
+.endif
     movq    $0, (%r15)
     mov     %rbp, (L + 48)(%rsp)
     cmp     (BeaconState_validators + 8)(%rbx), %rbp
@@ -50,7 +54,7 @@ SPEC_FUNCTION slash_validator
     add     %rax, %r8
     jc      5f
     mov     %r8, (%rdx)
-    MOVQ    %rcx, MIN_SLASHING_PENALTY_QUOTIENT_ELECTRA
+    MOVQ    %rcx, FORK_MIN_SLASHING_PENALTY_QUOTIENT
     xor     %edx, %edx
     div     %rcx
     mov     %rax, (L + 8)(%rsp)
@@ -59,8 +63,21 @@ SPEC_FUNCTION slash_validator
     lea     (L + 8)(%rsp), %rdx
     call    lantern_decrease_balance
     mov     %rbx, %rdi
+.if FORK >= FORK_FULU
     lea     (L + 16)(%rsp), %rsi
     call    lantern_get_beacon_proposer_index
+.else
+    mov     %r14, %rsi
+    lea     (L + 16)(%rsp), %rdx
+    call    lantern_get_beacon_proposer_index
+    test    %rax, %rax
+    jz      3f
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      7f
+    mov     %rax, (%r15)
+    jmp     8f
+3:
+.endif
     mov     (L + 16)(%rsp), %rax            # whistleblower_index = proposer_index when None
     test    %r12, %r12
     jz      2f
@@ -68,11 +85,19 @@ SPEC_FUNCTION slash_validator
 2:  mov     %rax, (L + 40)(%rsp)
     mov     S7(%rsp), %rcx
     mov     Validator_effective_balance(%rcx), %rax
-    MOVQ    %rcx, WHISTLEBLOWER_REWARD_QUOTIENT_ELECTRA
+    MOVQ    %rcx, FORK_WHISTLEBLOWER_REWARD_QUOTIENT
     xor     %edx, %edx
     div     %rcx                            # whistleblower_reward
+.if FORK >= FORK_ALTAIR
     imul    $PROPOSER_WEIGHT, %rax, %rcx
     shr     $6, %rcx                        # // WEIGHT_DENOMINATOR
+.else
+    mov     %rax, %rcx                      # proposer_reward = whistleblower_reward // PROPOSER_REWARD_QUOTIENT
+    shr     $3, %rcx
+.if PROPOSER_REWARD_QUOTIENT != 8
+.error "slash_validator divides by PROPOSER_REWARD_QUOTIENT with a shift by 3"
+.endif
+.endif
     mov     %rcx, (L + 32)(%rsp)
     sub     %rcx, %rax
     mov     %rax, (L + 24)(%rsp)
@@ -141,7 +166,11 @@ SPEC_FUNCTION process_proposer_slashing
     mov     %rdx, %r12
     mov     %rcx, %r13
     mov     %r8, %r14
+.if FORK >= FORK_FULU
     NEED_SCRATCH %r13, %rbx, 1, 9f
+.else
+    NEED_SCRATCH %r13, %rbx, 2, 9f              # slash_validator takes S(2)
+.endif
     movq    $0, (%r14)
     mov     $LANTERN_INVALID_PROPOSER_SLASHING, %eax
     lea     (ProposerSlashing_signed_header_1 + SignedBeaconBlockHeader_message)(%rbp), %rsi

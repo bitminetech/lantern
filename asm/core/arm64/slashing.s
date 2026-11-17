@@ -15,7 +15,11 @@ SPEC_FUNCTION slash_validator
     mov     x22, x3
     mov     x23, x4
     mov     x24, x5
+.if FORK >= FORK_FULU
     NEED_SCRATCH x23, x19, 1, 9f
+.else
+    NEED_SCRATCH x23, x19, 2, 9f                /* get_beacon_proposer_index takes S(2) */
+.endif
     str     xzr, [x24]
     str     x20, [sp, #(L + 48)]
     LDQ     x9, x19, BeaconState_validators + 8
@@ -53,7 +57,7 @@ SPEC_FUNCTION slash_validator
     adds    x11, x11, x12
     b.cs    5f
     str     x11, [x10]
-    MOVQ    x13, MIN_SLASHING_PENALTY_QUOTIENT_ELECTRA
+    MOVQ    x13, FORK_MIN_SLASHING_PENALTY_QUOTIENT
     udiv    x13, x12, x13
     str     x13, [sp, #(L + 8)]
     mov     x0, x19
@@ -61,18 +65,35 @@ SPEC_FUNCTION slash_validator
     add     x2, sp, #(L + 8)
     bl      lantern_decrease_balance
     mov     x0, x19
+.if FORK >= FORK_FULU
     add     x1, sp, #(L + 16)
     bl      lantern_get_beacon_proposer_index
+.else
+    mov     x1, x23
+    add     x2, sp, #(L + 16)
+    bl      lantern_get_beacon_proposer_index
+    cbz     x0, 2f
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    7f
+    str     x0, [x24]
+    b       8f
+2:
+.endif
     ldr     x9, [sp, #(L + 16)]             /* whistleblower_index = proposer_index when None */
     cbz     x21, 1f
     ldr     x9, [x21]
 1:  str     x9, [sp, #(L + 40)]
     ldr     x12, [x25, #Validator_effective_balance]
-    MOVQ    x13, WHISTLEBLOWER_REWARD_QUOTIENT_ELECTRA
+    MOVQ    x13, FORK_WHISTLEBLOWER_REWARD_QUOTIENT
     udiv    x13, x12, x13                   /* whistleblower_reward */
+.if FORK >= FORK_ALTAIR
     mov     x14, #PROPOSER_WEIGHT
     mul     x14, x13, x14
     lsr     x14, x14, #6                    /* // WEIGHT_DENOMINATOR */
+.else
+    mov     x14, #PROPOSER_REWARD_QUOTIENT
+    udiv    x14, x13, x14                   /* proposer_reward = whistleblower_reward // PROPOSER_REWARD_QUOTIENT */
+.endif
     str     x14, [sp, #(L + 32)]
     sub     x13, x13, x14
     str     x13, [sp, #(L + 24)]
@@ -143,7 +164,11 @@ SPEC_FUNCTION process_proposer_slashing
     mov     x21, x2
     mov     x22, x3
     mov     x23, x4
+.if FORK >= FORK_FULU
     NEED_SCRATCH x22, x19, 1, 9f
+.else
+    NEED_SCRATCH x22, x19, 2, 9f                /* slash_validator takes S(2) */
+.endif
     str     xzr, [x23]
     mov     x0, #LANTERN_INVALID_PROPOSER_SLASHING
     add     x9, x20, #(ProposerSlashing_signed_header_1 + SignedBeaconBlockHeader_message)

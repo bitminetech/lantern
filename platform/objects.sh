@@ -60,6 +60,13 @@ build_objects() {
             as $core -Wa,-defsym,FORK=$(fork_number $fork) -c "$root/asm/core/$isa/lantern.s" -o "$out/$preset/$fork.o"
             objects="$objects $out/$preset/$fork.o"
         done
+        # A name the assembler does not know becomes an undefined symbol, not an error:
+        # the core objects may only call asm-ssz and asm-crypto and the common object.
+        unknown=$(llvm-nm -u $out/$preset/*.o | sed 's/^ *U //; s/^_//' | grep -v '^\(crypto_\|ssz_\|lantern_store_\|lantern_seen_\)' | grep -v ':$' | grep . || true)
+        if [ -n "$unknown" ]; then
+            echo "objects.sh: undefined symbols in the core of $os $isa $preset: $unknown" >&2
+            exit 1
+        fi
         shell=$root/asm/shell/$os/$isa/shell.s
         if [ -e "$shell" ]; then
             as -I"$root/include/$preset" -I"$root/include" -I"$plat" -I"$root/asm/shell/$os/$isa" \

@@ -223,6 +223,7 @@ SPEC_FUNCTION compute_proposer_index
     slli    t0, t0, 3
     add     t0, s2, t0
     ld      s9, LIST_FIXED(t0)              # candidate_index
+.if FORK >= FORK_ELECTRA
     srli    t0, s6, 4                       # random_bytes = sha256(seed + uint_to_bytes(i // 16))
     sd      t0, (L + 56)(sp)
     addi    a0, sp, (L + 24)
@@ -243,6 +244,27 @@ SPEC_FUNCTION compute_proposer_index
     mul     t1, t1, t2                      # effective_balance * MAX_RANDOM_VALUE
     li      t2, MAX_EFFECTIVE_BALANCE_ELECTRA
     mul     t2, t2, t0                      # MAX_EFFECTIVE_BALANCE_ELECTRA * random_value fits
+.else
+    srli    t0, s6, 5                       # sha256(seed + uint_to_bytes(i // 32))
+    sd      t0, (L + 56)(sp)
+    addi    a0, sp, (L + 24)
+    li      a1, 40
+    addi    a2, sp, (L + 64)
+    call    sha256_short
+    andi    t0, s6, 31
+    add     t0, sp, t0
+    lbu     t0, (L + 64)(t0)                # random_byte
+    PART    t1, t2, s1, BeaconState_validators
+    slli    t2, s9, 7
+    add     t1, t1, t2
+    ld      t1, Validator_effective_balance(t1)
+    li      t2, 0xff
+    mulhu   t3, t1, t2
+    bnez    t3, 6f
+    mul     t1, t1, t2                      # effective_balance * MAX_RANDOM_BYTE
+    li      t2, MAX_EFFECTIVE_BALANCE
+    mul     t2, t2, t0                      # MAX_EFFECTIVE_BALANCE * random_byte fits
+.endif
     bgeu    t1, t2, 2f
     addi    s6, s6, 1
     j       1b
@@ -255,6 +277,7 @@ SPEC_FUNCTION compute_proposer_index
     LEAVE 96
 SPEC_END compute_proposer_index
 
+.if FORK >= FORK_FULU
 /*
  * s1 state, s2 seed, s3 indices, s4 scratch, s5 out, s6 slot index, s7 start slot,
  * s8 scratch size. Locals: L start slot, L+8 the message (seed, slot), L+48 the slot seed.
@@ -300,7 +323,9 @@ SPEC_FUNCTION compute_proposer_indices
 6:  li      a0, LANTERN_INVALID_OVERFLOW
     LEAVE 80
 SPEC_END compute_proposer_indices
+.endif
 
+.if FORK >= FORK_FULU
 /*
  * s1 state, s2 epoch, s3 scratch, s4 out, s5 validator count, s6 scratch size, s7 active list.
  * Locals: L domain type, L+8 seed.
@@ -340,6 +365,7 @@ SPEC_FUNCTION get_beacon_proposer_indices
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 48
 SPEC_END get_beacon_proposer_indices
+.endif
 
 /* ---------------------------------------------------------------- Domains and signing roots */
 

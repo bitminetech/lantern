@@ -17,14 +17,32 @@ SPEC_FUNCTION process_randao
     mov     %rdx, %r12
     mov     %rcx, %r13
     mov     %r8, %r14
+.if FORK >= FORK_FULU
     NEED_SCRATCH %r13, %rbx, 0, 9f
+.else
+    NEED_SCRATCH %r13, %rbx, 2, 9f              # get_beacon_proposer_index takes S(2)
+.endif
     movq    $0, (%r14)
+    mov     (%r13), %r15
     mov     %rbx, %rdi
     lea     L(%rsp), %rsi
     call    lantern_get_current_epoch
     mov     %rbx, %rdi
+.if FORK >= FORK_FULU
     lea     (L + 8)(%rsp), %rsi
     call    lantern_get_beacon_proposer_index
+.else
+    mov     %r13, %rsi
+    lea     (L + 8)(%rsp), %rdx
+    call    lantern_get_beacon_proposer_index
+    mov     %r15, (%r13)
+    test    %rax, %rax
+    jz      1f
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      7f
+    jmp     6f
+1:
+.endif
     mov     (L + 8)(%rsp), %rcx
     mov     $LANTERN_INVALID_VALIDATOR_INDEX, %eax
     cmp     (BeaconState_validators + 8)(%rbx), %rcx
@@ -202,15 +220,34 @@ SPEC_FUNCTION process_operations
     mov     %r8, %r14
     mov     (%r13), %r15
     movq    $0, (%r14)
+.if FORK >= FORK_FULU
     cmpq    $0, (BeaconBlockBody_deposits + 8)(%rbp)    # assert len(body.deposits) == 0
     je      1f
-    movq    $LANTERN_INVALID_DEPOSITS, (%r14)
+.else
+    mov     (BeaconState_eth1_data + Eth1Data_deposit_count)(%rbx), %rax
+    mov     $LANTERN_INVALID_OVERFLOW, %ecx
+    sub     BeaconState_eth1_deposit_index(%rbx), %rax  # state.eth1_data.deposit_count - state.eth1_deposit_index
+    jb      2f
+    mov     $MAX_DEPOSITS, %edx
+    cmp     %rdx, %rax
+    cmova   %rdx, %rax
+    cmp     (BeaconBlockBody_deposits + 8)(%rbp), %rax  # assert len(body.deposits) == min(MAX_DEPOSITS, ...)
+    je      1f
+.endif
+    mov     $LANTERN_INVALID_DEPOSITS, %ecx
+2:  mov     %rcx, (%r14)
     jmp     8f
 1:  FOR_FIXED %rbp, BeaconBlockBody_proposer_slashings, ProposerSlashing__mem, lantern_process_proposer_slashing
     FOR_VARIABLE %rbp, BeaconBlockBody_attester_slashings, lantern_process_attester_slashing
     FOR_VARIABLE %rbp, BeaconBlockBody_attestations, lantern_process_attestation
+.if FORK < FORK_FULU
+    FOR_FIXED %rbp, BeaconBlockBody_deposits, Deposit__mem, lantern_process_deposit
+.endif
     FOR_FIXED %rbp, BeaconBlockBody_voluntary_exits, SignedVoluntaryExit__mem, lantern_process_voluntary_exit
+.if FORK >= FORK_CAPELLA
     FOR_FIXED %rbp, BeaconBlockBody_bls_to_execution_changes, SignedBLSToExecutionChange__mem, lantern_process_bls_to_execution_change
+.endif
+.if FORK >= FORK_ELECTRA
     PART    %rax, %rcx, %rbp, BeaconBlockBody_execution_requests
     mov     %rax, S9(%rsp)
     mov     S9(%rsp), %rdx
@@ -219,6 +256,7 @@ SPEC_FUNCTION process_operations
     FOR_FIXED %rdx, ExecutionRequests_withdrawals, WithdrawalRequest__mem, lantern_process_withdrawal_request
     mov     S9(%rsp), %rdx
     FOR_FIXED %rdx, ExecutionRequests_consolidations, ConsolidationRequest__mem, lantern_process_consolidation_request
+.endif
 8:  xor     %eax, %eax
 7:  LEAVE 16
 SPEC_END process_operations
@@ -235,6 +273,7 @@ SPEC_END process_operations
     sub     ((\ref) + 8)(%rdi), %rax
 .endm
 
+.if FORK >= FORK_ELECTRA
 /*
  * L0: rax = LANTERN_OK when state rdi has room for the appends of block body rsi,
  * else LANTERN_BUFFER_TOO_SMALL. A leaf.
@@ -267,6 +306,61 @@ LOCAL_FUNCTION block_room
     ret
 END_FUNCTION block_room
 
+.else
+.if FORK == FORK_PHASE0
+/* rax = the free bytes of a list of nested values of state rbx: its end offset rcx - its start - its entries' sizes. Uses rdx, r8, r9. */
+.macro FREE_NESTED ref
+    mov     (\ref)(%rbx), %rdx
+    mov     ((\ref) + 8)(%rbx), %r8
+    mov     %rcx, %rax
+    sub     %rdx, %rax
+    add     %rbx, %rdx
+91: test    %r8, %r8
+    jz      92f
+    mov     (%rdx), %r9
+    sub     %r9, %rax
+    add     %r9, %rdx
+    dec     %r8
+    jmp     91b
+92:
+.endm
+.endif
+
+/*
+ * L0: rax = LANTERN_OK when state rdi has room for the appends of block body rsi, else
+ * LANTERN_BUFFER_TOO_SMALL: an eth1 data vote, a validator for each deposit and, in phase0,
+ * a PendingAttestation for each attestation in each epoch's list.
+ * rbx state, rbp body, r12 the bytes the attestations may add to one list.
+ */
+LOCAL_FUNCTION block_room
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    FREE    BeaconState_eth1_data_votes, BeaconState_validators, Eth1Data__mem
+    cmp     $1, %rax
+    jl      9f
+    mov     %rbx, %rdi
+    call    validator_room
+    cmp     (BeaconBlockBody_deposits + 8)(%rbp), %rax
+    jb      9f
+.if FORK == FORK_PHASE0
+    imul    $PENDING_ATTESTATION_ROOM, (BeaconBlockBody_attestations + 8)(%rbp), %r12
+    mov     BeaconState_current_epoch_attestations(%rbx), %rcx
+    FREE_NESTED BeaconState_previous_epoch_attestations
+    cmp     %r12, %rax
+    jb      9f
+    mov     (%rbx), %rcx
+    FREE_NESTED BeaconState_current_epoch_attestations
+    cmp     %r12, %rax
+    jb      9f
+.endif
+    xor     %eax, %eax
+    LEAVE 0
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 0
+END_FUNCTION block_room
+.endif
+
 /*
  * L0: rax = the scratch that lantern_process_block needs for body rsi, with rdx validators.
  * A leaf.
@@ -276,15 +370,19 @@ LOCAL_FUNCTION block_scratch
     lea     LIST_FIXED(,%rdx,8), %rcx       # L(n)
     imul    $10, %rcx, %rax                 # attestations: S(10) + ATTEST_EXTRA
     add     $(LANTERN_SCRATCH_FIXED + ATTEST_EXTRA), %rax
+.if FORK >= FORK_ALTAIR
     lea     (LANTERN_SCRATCH_FIXED + SYNC_AGG_EXTRA)(%rcx), %rdx    # sync aggregate: S(1) + SYNC_AGG_EXTRA
     cmp     %rax, %rdx
     cmova   %rdx, %rax
+.endif
+.if FORK >= FORK_CAPELLA
     PART    %r8, %r9, %rsi, BeaconBlockBody_execution_payload     # the payload: its header and transactions
     mov     ExecutionPayload_withdrawals(%r8), %rdx
     sub     ExecutionPayload_transactions(%r8), %rdx
     add     $(LANTERN_SCRATCH_FIXED + HEADER_ROOM + 24 + WLIST_BYTES), %rdx
     cmp     %rax, %rdx
     cmova   %rdx, %rax
+.endif
     ret
 END_FUNCTION block_scratch
 
@@ -332,6 +430,7 @@ SPEC_FUNCTION process_block
     mov     %r14, %r8
     call    lantern_process_block_header
     BLOCK_STEP
+.if FORK >= FORK_CAPELLA
     SCRATCH_RESET
     mov     %rbx, %rdi
     PART    %rsi, %rax, %r15, BeaconBlockBody_execution_payload
@@ -349,6 +448,7 @@ SPEC_FUNCTION process_block
     mov     %r14, %r9
     call    lantern_process_execution_payload
     BLOCK_STEP
+.endif
     SCRATCH_RESET
     mov     %rbx, %rdi
     mov     %r15, %rsi
@@ -373,6 +473,7 @@ SPEC_FUNCTION process_block
     mov     %r14, %r8
     call    lantern_process_operations
     BLOCK_STEP
+.if FORK >= FORK_ALTAIR
     SCRATCH_RESET
     mov     %rbx, %rdi
     lea     BeaconBlockBody_sync_aggregate(%r15), %rsi
@@ -381,6 +482,7 @@ SPEC_FUNCTION process_block
     mov     %r14, %r8
     call    lantern_process_sync_aggregate
     BLOCK_STEP
+.endif
 8:  xor     %eax, %eax
 7:  LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
@@ -451,6 +553,7 @@ LOCAL_FUNCTION slots_room
     jae     1f
     xor     %eax, %eax
 1:  mov     %rax, %rsi
+.if FORK >= FORK_ELECTRA
     mov     $MAX_PENDING_DEPOSITS_PER_EPOCH, %ecx   # room for the validators those epochs may add
     mul     %rcx
     test    %rdx, %rdx
@@ -460,7 +563,28 @@ LOCAL_FUNCTION slots_room
     VALIDATOR_LISTS LIST_ROOM
     cmp     24(%rsp), %r9
     jb      9f
-    mov     0(%rsp), %rax                   # and for a historical summary per batch boundary
+.else
+    movq    $0, 24(%rsp)                    # epochs add no validators
+.endif
+.if FORK == FORK_PHASE0
+    test    %rsi, %rsi                      # the current epoch's attestations move to the previous list once
+    jz      4f
+    mov     BeaconState_current_epoch_attestations(%rdi), %rcx
+    mov     (BeaconState_current_epoch_attestations + 8)(%rdi), %rdx
+    lea     (%rdi,%rcx), %r9
+    xor     %eax, %eax
+3:  test    %rdx, %rdx
+    jz      31f
+    add     (%r9), %rax
+    add     (%r9), %r9
+    dec     %rdx
+    jmp     3b
+31: sub     BeaconState_previous_epoch_attestations(%rdi), %rcx
+    cmp     %rcx, %rax
+    ja      9f
+4:
+.endif
+    mov     0(%rsp), %rax                   # and for a historical root or summary per batch boundary
     shr     $LOG2_SLOTS_PER_EPOCH, %rax
     xor     %edx, %edx
     mov     $(SLOTS_PER_HISTORICAL_ROOT / SLOTS_PER_EPOCH), %ecx
@@ -473,16 +597,28 @@ LOCAL_FUNCTION slots_room
     sub     %rax, %r9
     jae     2f
     xor     %r9d, %r9d
-2:  mov     BeaconState_pending_deposits(%rdi), %rax
+2:
+.if FORK >= FORK_CAPELLA
+.if FORK >= FORK_ELECTRA
+    mov     BeaconState_pending_deposits(%rdi), %rax
+.else
+    mov     (%rdi), %rax                    # the last part ends at the end of the value
+.endif
     sub     BeaconState_historical_summaries(%rdi), %rax
     shr     $6, %rax
     sub     (BeaconState_historical_summaries + 8)(%rdi), %rax
+.else
+    mov     BeaconState_eth1_data_votes(%rdi), %rax
+    sub     BeaconState_historical_roots(%rdi), %rax
+    shr     $5, %rax
+    sub     (BeaconState_historical_roots + 8)(%rdi), %rax
+.endif
     cmp     %r9, %rax
     jb      9f
     mov     (BeaconState_validators + 8)(%rdi), %rax    # scratch: process_epoch with every validator the epochs may add
     add     24(%rsp), %rax
     lea     LIST_FIXED(,%rax,8), %rax
-    imul    $11, %rax, %rax
+    imul    $EPOCH_LISTS, %rax, %rax
     add     $(LANTERN_SCRATCH_FIXED + EPOCH_EXTRA), %rax
     mov     16(%rsp), %rcx
     cmp     %rax, %rcx

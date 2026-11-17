@@ -30,7 +30,9 @@ build/linux-x86_64/runner-minimal-fulu ~/.cache/lantern/vectors minimal-fulu-ope
 | `runner-<preset>-<fork>-bls-off` | The cases of the fork with `bls_setting` 2, linked with `bls_off.c` |
 
 - Each runner calls the `lantern_<fork>_*` functions of its fork, built with `-DFORK=<number> -DFORK_NAME=<fork>` (include/forks.inc).
-- The runners of phase0 to electra run the `descriptors` and `ssz_static` files so far: only the fulu object has spec functions yet.
+- Every runner runs the `descriptors` and `ssz_static` files of its fork.
+- The runners of the forks whose state transition is done (`FORK_HAS_STF` in runner.c: phase0 and fulu) also run the state transition files: epoch processing, operations, sanity, finality, random, rewards and shuffling.
+- The fulu runners also run fork choice, sync and networking.
 
 ## Buffers
 

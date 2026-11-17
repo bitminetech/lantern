@@ -32,6 +32,8 @@
 - [`lantern_process_attester_slashing`](#function-lantern_process_attester_slashing): slashes the attesters of two conflicting attestations.
 - [`lantern_process_attestation`](#function-lantern_process_attestation): records an attestation's participation flags.
 - [`lantern_process_voluntary_exit`](#function-lantern_process_voluntary_exit): starts a signed exit.
+- [`lantern_process_deposit`](#function-lantern_process_deposit): checks a deposit's proof and applies it.
+- [`lantern_apply_deposit`](#function-lantern_apply_deposit): credits a deposit, or adds a validator for it.
 - [`lantern_process_bls_to_execution_change`](#function-lantern_process_bls_to_execution_change): moves BLS credentials to an execution address.
 - [`lantern_process_deposit_request`](#function-lantern_process_deposit_request): queues a deposit request.
 - [`lantern_process_withdrawal_request`](#function-lantern_process_withdrawal_request): exits or queues a partial withdrawal.
@@ -63,7 +65,7 @@
 
 ## Spec
 
-- Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), each function at its latest definition from phase0 to fulu.
+- Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), each function at its definition in the fork of its object (include/forks.inc).
 - Section: Block processing of `beacon-chain.md` in phase0, altair, bellatrix, capella, deneb, electra and fulu, with the helpers it calls.
 
 ## Common rules
@@ -98,6 +100,11 @@ lantern_process_block(state, block, execution_valid, config, scratch, result) ->
 
 - `LANTERN_OK`: `result` is `LANTERN_VALID` or the first failed check.
 - `LANTERN_BUFFER_TOO_SMALL`: scratch, or room for the body's appends, is short. Checked before any step runs.
+
+### Function does
+
+- Phase0: the header, RANDAO, eth1 data and operations.
+- Fulu: also the withdrawals and the execution payload after the header, and the sync aggregate last.
 
 ### Limits
 
@@ -477,9 +484,66 @@ Checks that the body holds no deposits, then applies each list of operations in 
 lantern_process_operations(state, body, config, scratch, result) -> status
 ```
 
+### Function does
+
+- Before fulu: asserts len(body.deposits) == min(MAX_DEPOSITS, eth1_data.deposit_count - eth1_deposit_index), and applies the deposits after the attestations.
+- Fulu: asserts that the body holds no deposits.
+- Capella and later: also the BLS to execution changes; electra and later: also the execution requests.
+
 ### Limits
 
 - Scratch: S(10).
+
+## Function `lantern_process_deposit`
+
+Checks the deposit's Merkle proof against eth1_data.deposit_root at eth1_deposit_index, steps the index and applies the deposit.
+
+### Signature
+
+```
+lantern_process_deposit(state, deposit, config, scratch, result) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID`, `LANTERN_INVALID_DEPOSIT` when the proof fails, or `LANTERN_INVALID_OVERFLOW`.
+- `LANTERN_BUFFER_TOO_SMALL`: the validator lists have no room for a new validator, or `scratch` is short. The state is unchanged.
+
+### Function does
+
+- Checks the room before any change.
+
+### ABI
+
+- Forks: phase0 to deneb.
+
+## Function `lantern_apply_deposit`
+
+Adds a validator for a new public key when its deposit signature is valid, or increases the balance of the validator with the key.
+
+### Signature
+
+```
+lantern_apply_deposit(state, data, config, scratch) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | state | `BeaconState` |
+| `data` | input | `DepositData`: pubkey, withdrawal_credentials, amount and signature |
+| `config` | input | `Config` |
+| `scratch` | scratch | `Scratch` |
+
+### Returns
+
+- `LANTERN_OK`: the deposit is applied, or skipped for an invalid signature.
+- `LANTERN_BUFFER_TOO_SMALL`: a new validator has no room in the validator lists. The state is unchanged.
+
+### ABI
+
+- Forks: phase0 to deneb.
 
 ## Function `lantern_process_proposer_slashing`
 
@@ -519,9 +583,15 @@ Checks the attestation's epochs, delay, committees and signature, sets the flags
 lantern_process_attestation(state, attestation, config, scratch, result) -> status
 ```
 
+### Function does
+
+- Phase0: checks the attestation, including data.slot + SLOTS_PER_EPOCH >= state.slot and the source against the justified checkpoint of its epoch, then appends a PendingAttestation to the list of its target epoch.
+- Phase0: makes every check, the signature included, and the room check before it changes the state.
+
 ### Limits
 
 - Scratch: S(10).
+- Phase0: room for one PendingAttestation in the list of the target epoch.
 
 ## Function `lantern_process_voluntary_exit`
 
@@ -532,6 +602,11 @@ Checks an active, unexited, old enough validator with no pending withdrawals and
 ```
 lantern_process_voluntary_exit(state, signed_voluntary_exit, config, scratch, result) -> status
 ```
+
+### Function does
+
+- Before deneb: the domain is get_domain(state, DOMAIN_VOLUNTARY_EXIT, voluntary_exit.epoch); deneb and later: compute_domain with CAPELLA_FORK_VERSION.
+- Electra and later: also asserts get_pending_balance_to_withdraw(state, index) == 0.
 
 ### Limits
 
@@ -692,9 +767,16 @@ lantern_slash_validator(state, slashed_index, whistleblower_index, config, scrat
 | `scratch` | scratch | `Scratch` |
 | `result` | output | `Result` |
 
+### Function does
+
+- The penalty quotient is MIN_SLASHING_PENALTY_QUOTIENT in phase0, _ALTAIR in altair, _BELLATRIX from bellatrix to deneb, and _ELECTRA from electra on.
+- The whistleblower quotient is WHISTLEBLOWER_REWARD_QUOTIENT before electra and _ELECTRA from electra on.
+- Phase0: the proposer reward is the whistleblower reward // PROPOSER_REWARD_QUOTIENT; altair and later: * PROPOSER_WEIGHT // WEIGHT_DENOMINATOR.
+
 ### Limits
 
 - Scratch: S(1).
+- Before fulu: scratch S(2), for lantern_get_beacon_proposer_index.
 
 ## Function `lantern_is_slashable_attestation_data`
 
@@ -804,6 +886,11 @@ The members of the attestation's committees whose aggregation bits are set, asce
 lantern_get_attesting_indices(state, attestation, scratch, out) -> status
 ```
 
+### Function does
+
+- Before electra: the committee of data.index. A phase0 PendingAttestation, whose aggregation_bits and data sit where those of an Attestation are, is a valid input.
+- Electra and later: the committees of committee_bits, in order.
+
 ### Limits
 
 - Scratch: S(4).
@@ -849,17 +936,28 @@ lantern_get_attestation_participation_flag_indices(state, data, inclusion_delay,
 
 ## Function `lantern_get_beacon_proposer_index`
 
-state.proposer_lookahead[state.slot % SLOTS_PER_EPOCH].
+The proposer of state.slot: state.proposer_lookahead[state.slot % SLOTS_PER_EPOCH] from fulu on; before fulu, lantern_compute_proposer_index of the active validators with the seed of the slot.
 
 ### Signature
 
 ```
-lantern_get_beacon_proposer_index(state, out) -> status
+lantern_get_beacon_proposer_index(state, out) -> status                 (fulu)
+lantern_get_beacon_proposer_index(state, scratch, out) -> status        (before fulu)
 ```
 
 ### Returns
 
-- `LANTERN_OK`, always.
+- `LANTERN_OK`: `out` holds the proposer. Fulu always returns it.
+- `LANTERN_BUFFER_TOO_SMALL`: before fulu, `scratch` has fewer than S(2) bytes.
+- Before fulu, the statuses of lantern_get_seed and lantern_compute_proposer_index.
+
+### Function does
+
+- Before fulu: seed = sha256(get_seed(state, epoch, DOMAIN_BEACON_PROPOSER) + uint_to_bytes(state.slot)).
+
+### Limits
+
+- Before fulu: scratch S(2).
 
 ## Function `lantern_get_set_bit_count`
 

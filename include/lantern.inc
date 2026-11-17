@@ -135,7 +135,8 @@
 .set CONFIG_BLOB_SCHEDULE_COUNT, 384
 .set CONFIG_BLOB_SCHEDULE, 392          /* entries of (EPOCH, MAX_BLOBS_PER_BLOCK), 16 bytes each */
 .set CONFIG_BLOB_SCHEDULE_MAX, 32
-.set CONFIG_SIZE, 392 + 16 * 32
+.set CONFIG_MAX_BLOBS_PER_BLOCK, 392 + 16 * 32  /* deneb's limit, after the schedule */
+.set CONFIG_SIZE, 392 + 16 * 32 + 8
 
 /* ------------------------------------------------------------ Results of spec checks */
 
@@ -164,7 +165,7 @@
 .set LANTERN_INVALID_BLOB_COUNT, 18             /* process_execution_payload: too many blob commitments */
 .set LANTERN_INVALID_PAYLOAD, 19                /* process_execution_payload: the execution engine rejects the payload */
 .set LANTERN_INVALID_RANDAO_REVEAL, 20          /* process_randao: the reveal's signature */
-.set LANTERN_INVALID_DEPOSITS, 21               /* process_operations: the body holds deposits */
+.set LANTERN_INVALID_DEPOSITS, 21               /* process_operations: the body's number of deposits */
 .set LANTERN_INVALID_PROPOSER_SLASHING, 22      /* process_proposer_slashing: a check */
 .set LANTERN_INVALID_ATTESTER_SLASHING, 23      /* process_attester_slashing, on_attester_slashing: a check */
 .set LANTERN_INVALID_ATTESTATION, 24            /* process_attestation: a check; on_attestation: the indexed attestation */
@@ -195,6 +196,7 @@
 .set LANTERN_INVALID_PARENT_PAYLOAD, 43         /* on_block: the parent's payload is INVALIDATED (bellatrix optimistic-sync.md) */
 .set LANTERN_GOSSIP_IGNORE, 44                  /* a gossip validation function: an [IGNORE] check fails (GossipIgnore) */
 .set LANTERN_GOSSIP_REJECT, 45                  /* a gossip validation function: a [REJECT] check fails (GossipReject) */
+.set LANTERN_INVALID_DEPOSIT, 46                /* process_deposit: the deposit's Merkle proof */
 
 /* ------------------------------------------------------------ Scratch (docs/reference/helpers.md, Type Scratch) */
 

@@ -177,7 +177,8 @@ SPEC_END get_seed
 
 /*
  * x19 state, x20 indices, x21 seed, x22 scratch, x23 out, x24 i, x25 total, x26 scratch size.
- * Locals: L i % total, L+8 total, L+16 shuffled, L+24 message (seed, i // 16), L+64 digest.
+ * Locals: L i % total, L+8 total, L+16 shuffled, L+24 message (seed, i // 16, or i // 32
+ * before electra), L+64 digest.
  */
 SPEC_FUNCTION compute_proposer_index
     ENTER 96
@@ -207,6 +208,7 @@ SPEC_FUNCTION compute_proposer_index
     ldr     x9, [sp, #(L + 16)]
     add     x10, x20, #LIST_FIXED
     ldr     x27, [x10, x9, lsl #3]          /* candidate_index */
+.if FORK >= FORK_ELECTRA
     lsr     x9, x24, #4                     /* random_bytes = sha256(seed + uint_to_bytes(i // 16)) */
     str     x9, [sp, #(L + 56)]
     add     x0, sp, #(L + 24)
@@ -228,6 +230,28 @@ SPEC_FUNCTION compute_proposer_index
     mul     x11, x11, x9                    /* MAX_EFFECTIVE_BALANCE_ELECTRA * random_value fits */
     cmp     x10, x11
     b.hs    2f
+.else
+    lsr     x9, x24, #5                     /* sha256(seed + uint_to_bytes(i // 32)) */
+    str     x9, [sp, #(L + 56)]
+    add     x0, sp, #(L + 24)
+    mov     x1, #40
+    add     x2, sp, #(L + 64)
+    bl      sha256_short
+    and     x9, x24, #31
+    add     x10, sp, #(L + 64)
+    ldrb    w9, [x10, x9]                   /* random_byte */
+    PART    x10, x11, x19, BeaconState_validators
+    add     x10, x10, x27, lsl #7
+    ldr     x10, [x10, #Validator_effective_balance]
+    mov     x11, #0xff
+    umulh   x12, x10, x11
+    cbnz    x12, 6f
+    mul     x10, x10, x11                   /* effective_balance * MAX_RANDOM_BYTE */
+    MOVQ    x11, MAX_EFFECTIVE_BALANCE
+    mul     x11, x11, x9                    /* MAX_EFFECTIVE_BALANCE * random_byte fits */
+    cmp     x10, x11
+    b.hs    2f
+.endif
     add     x24, x24, #1
     b       1b
 2:  str     x27, [x23]
@@ -239,6 +263,7 @@ SPEC_FUNCTION compute_proposer_index
     LEAVE 96
 SPEC_END compute_proposer_index
 
+.if FORK >= FORK_FULU
 /*
  * x19 state, x20 seed, x21 indices, x22 scratch, x23 out, x24 slot index, x25 start slot,
  * x26 scratch size. Locals: L start slot, L+8 the message (seed, slot), L+48 the slot seed.
@@ -283,7 +308,9 @@ SPEC_FUNCTION compute_proposer_indices
 6:  mov     x0, #LANTERN_INVALID_OVERFLOW
     LEAVE 80
 SPEC_END compute_proposer_indices
+.endif
 
+.if FORK >= FORK_FULU
 /*
  * x19 state, x20 epoch, x21 scratch, x22 out, x23 validator count, x24 scratch size, x25 active list.
  * Locals: L domain type, L+8 seed.
@@ -323,6 +350,7 @@ SPEC_FUNCTION get_beacon_proposer_indices
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 48
 SPEC_END get_beacon_proposer_indices
+.endif
 
 /* ---------------------------------------------------------------- Domains and signing roots */
 

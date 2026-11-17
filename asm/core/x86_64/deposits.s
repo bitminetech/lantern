@@ -1,21 +1,36 @@
 /*
- * Deposits applied in epoch processing, x86-64. Requirements: docs/reference/epoch-processing.md.
+ * Deposits and the validator registry, x86-64. Requirements: docs/reference/block-processing.md
+ * and docs/reference/epoch-processing.md.
  */
 
+.if FORK >= FORK_ELECTRA
 .if (PendingDeposit_pubkey != DepositData_pubkey) || (PendingDeposit_withdrawal_credentials != DepositData_withdrawal_credentials) || (PendingDeposit_amount != DepositData_amount) || (PendingDeposit_signature != DepositData_signature)
 .error "PendingDeposit does not start with the DepositData layout"
+.endif
 .endif
 .if (DepositMessage_pubkey != DepositData_pubkey) || (DepositMessage_withdrawal_credentials != DepositData_withdrawal_credentials) || (DepositMessage_amount != DepositData_amount)
 .error "DepositData does not start with the DepositMessage layout"
 .endif
 
-/* The five lists that grow with each validator, as PartSpecs: PartRef, next PartRef, stride. */
+/*
+ * The lists that grow with each validator, as PartSpecs: PartRef, next PartRef (0: the
+ * part ends at the end of the value), stride.
+ */
+.if FORK >= FORK_BELLATRIX
+.set INACTIVITY_SCORES_NEXT, BeaconState_latest_execution_payload_header
+.else
+.set INACTIVITY_SCORES_NEXT, 0
+.endif
 .macro VALIDATOR_LISTS m
     \m part_validators, BeaconState_validators, BeaconState_balances, Validator__mem
+.if FORK == FORK_PHASE0
+    \m part_balances, BeaconState_balances, BeaconState_previous_epoch_attestations, 8
+.else
     \m part_balances, BeaconState_balances, BeaconState_previous_epoch_participation, 8
     \m part_previous_epoch_participation, BeaconState_previous_epoch_participation, BeaconState_current_epoch_participation, 1
     \m part_current_epoch_participation, BeaconState_current_epoch_participation, BeaconState_inactivity_scores, 1
-    \m part_inactivity_scores, BeaconState_inactivity_scores, BeaconState_latest_execution_payload_header, 8
+    \m part_inactivity_scores, BeaconState_inactivity_scores, INACTIVITY_SCORES_NEXT, 8
+.endif
 .endm
 
 .macro PART_SPEC label, ref, next, stride
@@ -27,7 +42,7 @@
     .p2align 3
 VALIDATOR_LISTS PART_SPEC
 
-/* r9 = min(r9, free entries of one list of state rdi). Uses rax, rcx, rdx. */
+/* r9 = min(r9, free entries of one list of state rdi). A next of 0 reads the value's size, where the last part ends. Uses rax, rcx, rdx. */
 .macro LIST_ROOM label, ref, next, stride
     mov     (\next)(%rdi), %rax
     sub     (\ref)(%rdi), %rax
@@ -45,7 +60,7 @@ VALIDATOR_LISTS PART_SPEC
     cmovb   %rax, %r9
 .endm
 
-/* L0: rax = the fewest free entries in the five validator lists of state rdi. */
+/* L0: rax = the fewest free entries in the validator lists of state rdi. */
 LOCAL_FUNCTION validator_room
     UNWIND_END_PROLOGUE
     mov     $-1, %r9
@@ -92,7 +107,7 @@ END_FUNCTION find_pubkey
  * rbx deposit, rbp config, r12 scratch, r13 out. Locals: L domain type, L+8 zero root,
  * L+40 domain, L+72 the signing root as a ByteList (header 24, then 32 bytes).
  */
-SPEC_FUNCTION is_valid_deposit_signature
+SPEC_FUNCTION_FROM FORK_ELECTRA, is_valid_deposit_signature
     ENTER 128
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -128,7 +143,7 @@ SPEC_FUNCTION is_valid_deposit_signature
     mov     %r13, %r8
     CALL_GLOBAL crypto_bls_verify
 7:  LEAVE 128
-SPEC_END is_valid_deposit_signature
+SPEC_END_FROM FORK_ELECTRA, is_valid_deposit_signature
 
 /* rbx out, rbp amount. Locals: L max effective balance. */
 SPEC_FUNCTION get_validator_from_deposit
@@ -149,9 +164,14 @@ SPEC_FUNCTION get_validator_from_deposit
     movq    $-1, Validator_activation_epoch(%rbx)
     movq    $-1, Validator_exit_epoch(%rbx)
     movq    $-1, Validator_withdrawable_epoch(%rbx)
+.if FORK >= FORK_ELECTRA
     mov     %rbx, %rdi
     lea     L(%rsp), %rsi
     call    lantern_get_max_effective_balance
+.else
+    MOVQ    %rax, MAX_EFFECTIVE_BALANCE
+    mov     %rax, L(%rsp)
+.endif
     mov     (%rbp), %rax
     MOVQ    %rcx, EFFECTIVE_BALANCE_INCREMENT
     xor     %edx, %edx
@@ -172,14 +192,14 @@ SPEC_END get_validator_from_deposit
 .error "lantern_get_validator_from_deposit writes FAR_FUTURE_EPOCH as -1"
 .endif
 
-SPEC_LEAF get_index_for_new_validator
+SPEC_LEAF_FROM FORK_ALTAIR, get_index_for_new_validator
     mov     (BeaconState_validators + 8)(%rdi), %rax
     mov     %rax, (%rsi)
     RETURN_OK
-SPEC_END get_index_for_new_validator
+SPEC_END_FROM FORK_ALTAIR, get_index_for_new_validator
 
-/* rbx state, rbp value, r12 stride. */
-SPEC_FUNCTION set_or_append_list
+/* rbx state, rbp value, r12 stride. Phase0 appends with it too. */
+SPEC_FUNCTION_FROM FORK_ALTAIR, set_or_append_list
     ENTER 16
     mov     %rdi, %rbx
     mov     %rcx, %rbp
@@ -212,7 +232,7 @@ SPEC_FUNCTION set_or_append_list
     LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-SPEC_END set_or_append_list
+SPEC_END_FROM FORK_ALTAIR, set_or_append_list
 
 /*
  * rbx state, rbp pubkey, r12 withdrawal credentials, r13 amount.
@@ -246,6 +266,7 @@ SPEC_FUNCTION add_validator_to_registry
     lea     (L + 128)(%rsp), %rdx
     mov     %r13, %rcx
     call    lantern_set_or_append_list
+.if FORK >= FORK_ALTAIR
     mov     %rbx, %rdi
     ADDRESS %rsi, part_previous_epoch_participation
     lea     (L + 128)(%rsp), %rdx
@@ -261,12 +282,118 @@ SPEC_FUNCTION add_validator_to_registry
     lea     (L + 128)(%rsp), %rdx
     lea     (L + 136)(%rsp), %rcx
     call    lantern_set_or_append_list
+.endif
     xor     %eax, %eax
     LEAVE 144
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 144
 SPEC_END add_validator_to_registry
 
+.if FORK <= FORK_DENEB
+/*
+ * The deposit's (pubkey, withdrawal_credentials, amount, signature) are the fields of the
+ * DepositData at rsi. rbx state, rbp data, r12 config, r13 scratch. Locals: L index, L+8 valid.
+ */
+SPEC_FUNCTION apply_deposit
+    ENTER 16
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    lea     DepositData_pubkey(%rbp), %rsi  # if pubkey not in validator_pubkeys
+    call    find_pubkey
+    cmp     $-1, %rax
+    jne     5f
+    mov     %rbx, %rdi                      # room for the validator, before any change
+    call    validator_room
+    test    %rax, %rax
+    jz      9f
+    mov     %rbp, %rdi
+    mov     %r12, %rsi
+    mov     %r13, %rdx
+    lea     (L + 8)(%rsp), %rcx
+    call    lantern_is_valid_deposit_signature
+    test    %rax, %rax
+    jnz     7f
+    cmpq    $0, (L + 8)(%rsp)
+    je      8f                              # an invalid signature: the deposit is skipped
+    mov     %rbx, %rdi
+    lea     DepositData_pubkey(%rbp), %rsi
+    lea     DepositData_withdrawal_credentials(%rbp), %rdx
+    lea     DepositData_amount(%rbp), %rcx
+    call    lantern_add_validator_to_registry
+    jmp     7f
+5:  mov     %rax, L(%rsp)                   # else increase_balance(state, index, amount)
+    mov     %rbx, %rdi
+    lea     L(%rsp), %rsi
+    lea     DepositData_amount(%rbp), %rdx
+    call    lantern_increase_balance
+8:  xor     %eax, %eax
+7:  LEAVE 16
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 16
+SPEC_END apply_deposit
+
+/*
+ * rbx state, rbp deposit, r12 config, r13 scratch, r14 result, r15 scratch size.
+ * Locals: L leaf (32), L+32 depth, L+40 index, L+48 valid.
+ */
+SPEC_FUNCTION process_deposit
+    ENTER 64
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    mov     %r8, %r14
+    movq    $0, (%r14)
+    mov     (%r13), %r15
+    mov     %rbx, %rdi                      # room for a new validator, before any change
+    call    validator_room
+    test    %rax, %rax
+    jz      9f
+    ADDRESS %rdi, lantern_type_DepositData  # leaf = hash_tree_root(deposit.data)
+    lea     Deposit_data(%rbp), %rsi
+    mov     %r13, %rdx
+    lea     L(%rsp), %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    test    %rax, %rax
+    jnz     7f
+    movq    $(DEPOSIT_CONTRACT_TREE_DEPTH + 1), (L + 32)(%rsp)
+    mov     BeaconState_eth1_deposit_index(%rbx), %rax
+    mov     %rax, (L + 40)(%rsp)
+    lea     L(%rsp), %rdi                   # assert is_valid_merkle_branch(...)
+    lea     Deposit_proof(%rbp), %rsi
+    lea     (L + 32)(%rsp), %rdx
+    lea     (L + 40)(%rsp), %rcx
+    lea     (BeaconState_eth1_data + Eth1Data_deposit_root)(%rbx), %r8
+    lea     (L + 48)(%rsp), %r9
+    call    lantern_is_valid_merkle_branch
+    test    %rax, %rax
+    jnz     7f
+    mov     $LANTERN_INVALID_DEPOSIT, %eax
+    cmpq    $0, (L + 48)(%rsp)
+    je      6f
+    mov     BeaconState_eth1_deposit_index(%rbx), %rcx     # state.eth1_deposit_index += 1
+    add     $1, %rcx
+    mov     $LANTERN_INVALID_OVERFLOW, %eax
+    jc      6f
+    mov     %rcx, BeaconState_eth1_deposit_index(%rbx)
+    mov     %r15, (%r13)
+    mov     %rbx, %rdi
+    lea     Deposit_data(%rbp), %rsi
+    mov     %r12, %rdx
+    mov     %r13, %rcx
+    call    lantern_apply_deposit
+7:  LEAVE 64
+6:  mov     %rax, (%r14)
+    xor     %eax, %eax
+    LEAVE 64
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 64
+SPEC_END process_deposit
+.endif
+
+.if FORK >= FORK_ELECTRA
 /* rbx state, rbp deposit, r12 config, r13 scratch. Locals: L valid, L+8 index. */
 SPEC_FUNCTION apply_pending_deposit
     ENTER 16
@@ -301,9 +428,13 @@ SPEC_FUNCTION apply_pending_deposit
 8:  xor     %eax, %eax
 7:  LEAVE 16
 SPEC_END apply_pending_deposit
+.endif
 
+.if FORK >= FORK_ELECTRA
 .set POSTPONE_BYTES, MAX_PENDING_DEPOSITS_PER_EPOCH * PendingDeposit__mem
+.endif
 
+.if FORK >= FORK_ELECTRA
 /*
  * rbx state, rbp config, r12 scratch, r13 result, r14 next deposit index, r15 processed,
  * S7 available, S8 postponed, S9 postponed count, S10 scratch size.
@@ -436,3 +567,4 @@ SPEC_FUNCTION process_pending_deposits
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 240
 SPEC_END process_pending_deposits
+.endif

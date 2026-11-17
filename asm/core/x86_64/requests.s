@@ -3,6 +3,7 @@
  * Requirements: docs/reference/block-processing.md.
  */
 
+.if FORK >= FORK_ELECTRA
 /* Append the PendingDeposit at rsi to state rdi; rax = LANTERN_BUFFER_TOO_SMALL when it has no room. */
 LOCAL_FUNCTION append_pending_deposit
     UNWIND_END_PROLOGUE
@@ -23,6 +24,7 @@ LOCAL_FUNCTION append_pending_deposit
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     ret
 END_FUNCTION append_pending_deposit
+.endif
 
 /* ---------------------------------------------------------------- Voluntary exits and credential changes */
 
@@ -63,6 +65,7 @@ SPEC_FUNCTION process_voluntary_exit
     jc      5f
     cmp     %rdx, %rcx
     jb      6f
+.if FORK >= FORK_ELECTRA
     mov     %rbx, %rdi                      # assert get_pending_balance_to_withdraw(state, index) == 0
     lea     (SignedVoluntaryExit_message + VoluntaryExit_validator_index)(%rbp), %rsi
     lea     (L + 112)(%rsp), %rdx
@@ -71,13 +74,23 @@ SPEC_FUNCTION process_voluntary_exit
     mov     $LANTERN_INVALID_VOLUNTARY_EXIT, %eax
     cmpq    $0, (L + 112)(%rsp)
     jne     6f
-    movl    $DOMAIN_VOLUNTARY_EXIT, (L + 16)(%rsp)  # domain = compute_domain(DOMAIN_VOLUNTARY_EXIT, CAPELLA_FORK_VERSION, gvr)
-    lea     (L + 16)(%rsp), %rdi
+.endif
+    movl    $DOMAIN_VOLUNTARY_EXIT, (L + 16)(%rsp)
+.if FORK >= FORK_DENEB
+    lea     (L + 16)(%rsp), %rdi            # domain = compute_domain(DOMAIN_VOLUNTARY_EXIT, CAPELLA_FORK_VERSION, gvr)
     lea     CONFIG_CAPELLA_FORK_VERSION(%r12), %rsi
     lea     BeaconState_genesis_validators_root(%rbx), %rdx
     mov     %r13, %rcx
     lea     (L + 24)(%rsp), %r8
     call    lantern_compute_domain
+.else
+    mov     %rbx, %rdi                      # domain = get_domain(state, DOMAIN_VOLUNTARY_EXIT, voluntary_exit.epoch)
+    lea     (L + 16)(%rsp), %rsi
+    lea     (SignedVoluntaryExit_message + VoluntaryExit_epoch)(%rbp), %rdx
+    mov     %r13, %rcx
+    lea     (L + 24)(%rsp), %r8
+    call    lantern_get_domain
+.endif
     test    %rax, %rax
     jnz     7f
     ADDRESS %rdi, lantern_type_VoluntaryExit
@@ -134,6 +147,7 @@ LOCAL_FUNCTION verify_root_signature
     UNFRAME 16
 END_FUNCTION verify_root_signature
 
+.if FORK >= FORK_CAPELLA
 /*
  * rbx state, rbp signed change, r12 config, r13 scratch, r14 result, r15 validator.
  * Locals: L digest (32), L+56 ByteList header (24), L+80 signing root (32),
@@ -207,9 +221,11 @@ SPEC_FUNCTION process_bls_to_execution_change
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 176
 SPEC_END process_bls_to_execution_change
+.endif
 
 /* ---------------------------------------------------------------- Execution layer requests */
 
+.if FORK >= FORK_ELECTRA
 /* rbx state, rbp result. Locals: L the PendingDeposit. */
 SPEC_FUNCTION process_deposit_request
     ENTER 192
@@ -228,9 +244,12 @@ SPEC_FUNCTION process_deposit_request
     movq    $0, (%rbp)
 7:  LEAVE 192
 SPEC_END process_deposit_request
+.endif
 
+.if FORK >= FORK_ELECTRA
 .if (DepositRequest_pubkey != PendingDeposit_pubkey) || (DepositRequest_withdrawal_credentials != PendingDeposit_withdrawal_credentials) || (DepositRequest_amount != PendingDeposit_amount) || (DepositRequest_signature != PendingDeposit_signature) || (PendingDeposit_slot != DepositRequest_signature + 96) || (PendingDeposit__mem > 192)
 .error "process_deposit_request copies a DepositRequest's first fields into a PendingDeposit"
+.endif
 .endif
 
 /* Branch to label when the 20 bytes at addr differ from credentials[12:] of validator. Uses r11. */
@@ -269,6 +288,7 @@ SPEC_END process_deposit_request
     ja      \fail
 .endm
 
+.if FORK >= FORK_ELECTRA
 /*
  * rbx state, rbp request, r12 config, r13 scratch, r14 result, r15 validator,
  * S8 amount, S9 pending balance. Locals: L epoch, L+8 predicate, L+16 index, L+24 pending,
@@ -399,7 +419,9 @@ SPEC_FUNCTION process_withdrawal_request
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 80
 SPEC_END process_withdrawal_request
+.endif
 
+.if FORK >= FORK_ELECTRA
 /* rbx state, rbp request, r12 out, r13 validator. Locals: L epoch, L+8 predicate. */
 SPEC_FUNCTION is_valid_switch_to_compounding_request
     ENTER 16
@@ -438,7 +460,9 @@ SPEC_FUNCTION is_valid_switch_to_compounding_request
 8:  xor     %eax, %eax
     LEAVE 16
 SPEC_END is_valid_switch_to_compounding_request
+.endif
 
+.if FORK >= FORK_ELECTRA
 /* rbx state, rbp index. Locals: L the PendingDeposit (PendingDeposit__mem). */
 SPEC_FUNCTION queue_excess_active_balance
     ENTER 192
@@ -481,11 +505,15 @@ SPEC_FUNCTION queue_excess_active_balance
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 192
 SPEC_END queue_excess_active_balance
+.endif
 
+.if FORK >= FORK_ELECTRA
 .if (Validator_withdrawal_credentials != Validator_pubkey + 48) || (PendingDeposit_withdrawal_credentials != PendingDeposit_pubkey + 48)
 .error "lantern_queue_excess_active_balance copies pubkey and credentials together"
 .endif
+.endif
 
+.if FORK >= FORK_ELECTRA
 /* rbx state, rbp index pointer. */
 SPEC_FUNCTION switch_to_compounding_validator
     ENTER 16
@@ -501,7 +529,9 @@ SPEC_FUNCTION switch_to_compounding_validator
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
 SPEC_END switch_to_compounding_validator
+.endif
 
+.if FORK >= FORK_ELECTRA
 /*
  * rbx state, rbp balance, r12 config, r13 scratch, r14 out, r15 result, S7 earliest.
  * Locals: L current epoch, L+8 activation exit epoch, L+16 churn.
@@ -569,7 +599,9 @@ SPEC_FUNCTION compute_consolidation_epoch_and_update_churn
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 32
 SPEC_END compute_consolidation_epoch_and_update_churn
+.endif
 
+.if FORK >= FORK_ELECTRA
 /*
  * rbx state, rbp request, r12 config, r13 scratch, r14 result, r15 source,
  * S7 target, S8 source index, S9 target index. Locals: L predicate, L+8 epoch, L+16 churn,
@@ -719,3 +751,4 @@ SPEC_FUNCTION process_consolidation_request
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 48
 SPEC_END process_consolidation_request
+.endif

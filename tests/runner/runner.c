@@ -43,6 +43,9 @@
 #error "build with -DFORK=<FORK_* number> -DFORK_NAME=<fork>, for example -DFORK=6 -DFORK_NAME=fulu"
 #endif
 
+/* The forks whose state transition lantern has: phase0 and fulu so far (asm/core/<ISA>/lantern.s). */
+#define FORK_HAS_STF (FORK == FORK_PHASE0 || FORK == FORK_FULU)
+
 #define STR_(x) #x
 #define STR(x) STR_(x)
 #define CAT_(a, b, c) a##b##c
@@ -62,42 +65,109 @@ ABI uint64_t ssz_hash_tree_root(const void *type, const void *value, void *scrat
 /* lantern: include/descriptors.inc. */
 extern const uint8_t LF(types)[];
 
-#if FORK == FORK_FULU /* the spec functions of the other forks come in later steps */
-
-/* lantern functions: docs/reference/. */
+#if FORK_HAS_STF
+/* The state transition of every fork: docs/reference/. */
 ABI uint64_t LF(beacon_state_copy_size)(const void *state, const void *room, void *size);
 ABI uint64_t LF(beacon_state_copy)(const void *state, const void *room, void *out);
 
 ABI uint64_t LF(compute_shuffled_permutation)(const void *index_count, const void *seed, void *scratch, void *out);
 ABI uint64_t LF(compute_shuffled_index)(const void *index, const void *index_count, const void *seed, void *scratch,
                                             void *out);
+#if FORK >= FORK_ALTAIR
 ABI uint64_t LF(get_flag_index_deltas)(const void *state, const void *flag_index, void *scratch, void *rewards,
                                            void *penalties);
+#else
+/* A phase0 component of the attestation deltas: (state, scratch, rewards, penalties). */
+typedef ABI uint64_t (*deltas_fn)(const void *state, void *scratch, void *rewards, void *penalties);
+ABI uint64_t LF(get_source_deltas)(const void *state, void *scratch, void *rewards, void *penalties);
+ABI uint64_t LF(get_target_deltas)(const void *state, void *scratch, void *rewards, void *penalties);
+ABI uint64_t LF(get_head_deltas)(const void *state, void *scratch, void *rewards, void *penalties);
+ABI uint64_t LF(get_inclusion_delay_deltas)(const void *state, void *scratch, void *rewards, void *penalties);
+#endif
 ABI uint64_t LF(get_inactivity_penalty_deltas)(const void *state, const void *config, void *scratch, void *rewards,
                                                    void *penalties);
 
-/* An operation: (state, operation, config, scratch, result). */
+/* An operation: (state, operation, config, scratch, result). The operations of this runner's fork. */
 typedef ABI uint64_t (*op_fn)(void *state, const void *op, const void *config, void *scratch, void *result);
+#if FORK >= FORK_CAPELLA
 ABI uint64_t LF(process_execution_payload)(void *state, const void *body, const void *execution_valid,
                                                const void *config, void *scratch, void *result);
+#define OPS_CAPELLA(X)                                                                                         \
+    X(withdrawals, withdrawals, execution_payload, ExecutionPayload)                                           \
+    X(bls_to_execution_change, bls_to_execution_change, address_change, SignedBLSToExecutionChange)
+#else
+#define OPS_CAPELLA(X)
+#endif
+#if FORK >= FORK_ELECTRA
+#define OPS_ELECTRA(X)                                                                                         \
+    X(deposit_request, deposit_request, deposit_request, DepositRequest)                                       \
+    X(withdrawal_request, withdrawal_request, withdrawal_request, WithdrawalRequest)                           \
+    X(consolidation_request, consolidation_request, consolidation_request, ConsolidationRequest)
+#else
+#define OPS_ELECTRA(X)
+#endif
+#if FORK <= FORK_DENEB
+#define OPS_DEPOSIT(X) X(deposit, deposit, deposit, Deposit)
+#else
+#define OPS_DEPOSIT(X)
+#endif
+#if FORK >= FORK_ALTAIR
+#define OPS_ALTAIR(X) X(sync_aggregate, sync_aggregate, sync_aggregate, SyncAggregate)
+#else
+#define OPS_ALTAIR(X)
+#endif
 #define OP_FN(handler, fn, part, type) ABI uint64_t LF(process_##fn)(void *, const void *, const void *, void *, void *);
 #define OPERATIONS(X)                                                                                          \
     X(block_header, block_header, block, BeaconBlock)                                                          \
-    X(withdrawals, withdrawals, execution_payload, ExecutionPayload)                                           \
     X(voluntary_exit, voluntary_exit, voluntary_exit, SignedVoluntaryExit)                                     \
-    X(bls_to_execution_change, bls_to_execution_change, address_change, SignedBLSToExecutionChange)           \
-    X(deposit_request, deposit_request, deposit_request, DepositRequest)                                       \
-    X(withdrawal_request, withdrawal_request, withdrawal_request, WithdrawalRequest)                           \
-    X(consolidation_request, consolidation_request, consolidation_request, ConsolidationRequest)               \
     X(proposer_slashing, proposer_slashing, proposer_slashing, ProposerSlashing)                               \
     X(attester_slashing, attester_slashing, attester_slashing, AttesterSlashing)                               \
     X(attestation, attestation, attestation, Attestation)                                                      \
-    X(sync_aggregate, sync_aggregate, sync_aggregate, SyncAggregate)
+    OPS_ALTAIR(X) OPS_CAPELLA(X) OPS_DEPOSIT(X) OPS_ELECTRA(X)
 OPERATIONS(OP_FN)
 
 ABI uint64_t LF(process_slots)(void *state, const void *slot, const void *config, void *scratch, void *result);
 ABI uint64_t LF(state_transition)(void *state, const void *signed_block, const void *options, const void *config,
                                       void *scratch, void *result);
+
+/* An epoch processing function: (state, config, scratch, result). The steps of this runner's fork. */
+typedef ABI uint64_t (*epoch_fn)(void *state, const void *config, void *scratch, void *result);
+#define EPOCH_FN(name) ABI uint64_t LF(process_##name)(void *, const void *, void *, void *);
+#if FORK >= FORK_ALTAIR
+#define EPOCH_ALTAIR(X) X(inactivity_updates) X(participation_flag_updates) X(sync_committee_updates)
+#else
+#define EPOCH_ALTAIR(X) X(participation_record_updates)
+#endif
+#if FORK >= FORK_CAPELLA
+#define EPOCH_HISTORY(X) X(historical_summaries_update)
+#else
+#define EPOCH_HISTORY(X) X(historical_roots_update)
+#endif
+#if FORK >= FORK_ELECTRA
+#define EPOCH_ELECTRA(X) X(pending_deposits) X(pending_consolidations)
+#else
+#define EPOCH_ELECTRA(X)
+#endif
+#if FORK >= FORK_FULU
+#define EPOCH_FULU(X) X(proposer_lookahead)
+#else
+#define EPOCH_FULU(X)
+#endif
+#define EPOCH_FUNCTIONS(X)                                                                                     \
+    X(justification_and_finalization)                                                                          \
+    X(rewards_and_penalties)                                                                                   \
+    X(registry_updates)                                                                                        \
+    X(slashings)                                                                                               \
+    X(eth1_data_reset)                                                                                         \
+    X(effective_balance_updates)                                                                               \
+    X(slashings_reset)                                                                                         \
+    X(randao_mixes_reset)                                                                                      \
+    EPOCH_ALTAIR(X) EPOCH_HISTORY(X) EPOCH_ELECTRA(X) EPOCH_FULU(X)                                            \
+    X(epoch)
+EPOCH_FUNCTIONS(EPOCH_FN)
+#endif
+
+#if FORK == FORK_FULU /* fork choice and networking: the fulu object so far */
 
 /* Fork choice: docs/reference/fork-choice.md. */
 ABI uint64_t LF(get_forkchoice_store)(const void *anchor_state, const void *anchor_block, const void *config,
@@ -182,27 +252,6 @@ ABI uint64_t LF(validate_partial_data_column_sidecar_gossip)(void *seen, const v
 ABI uint64_t crypto_kzg_trusted_setup_of_bytes(const void *g1_lagrange, const void *g1_monomial,
                                                const void *g2_monomial, void *settings);
 
-/* An epoch processing function: (state, config, scratch, result). */
-typedef ABI uint64_t (*epoch_fn)(void *state, const void *config, void *scratch, void *result);
-#define EPOCH_FN(name) ABI uint64_t LF(process_##name)(void *, const void *, void *, void *);
-#define EPOCH_FUNCTIONS(X)                                                                                     \
-    X(justification_and_finalization)                                                                          \
-    X(inactivity_updates)                                                                                      \
-    X(rewards_and_penalties)                                                                                   \
-    X(registry_updates)                                                                                        \
-    X(slashings)                                                                                               \
-    X(eth1_data_reset)                                                                                         \
-    X(pending_consolidations)                                                                                  \
-    X(effective_balance_updates)                                                                               \
-    X(slashings_reset)                                                                                         \
-    X(randao_mixes_reset)                                                                                      \
-    X(historical_summaries_update)                                                                             \
-    X(participation_flag_updates)                                                                              \
-    X(pending_deposits)                                                                                        \
-    X(sync_committee_updates)                                                                                  \
-    X(proposer_lookahead)                                                                                      \
-    X(epoch)
-EPOCH_FUNCTIONS(EPOCH_FN)
 #endif
 
 /* ---------------------------------------------------------------- ABI check */
@@ -618,10 +667,11 @@ static const struct {
     {"VALIDATOR_CUSTODY_REQUIREMENT", 360, 0},
     {"BALANCE_PER_ADDITIONAL_CUSTODY_GROUP", 368, 0},
     {"MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS", 376, 0},
+    {"MAX_BLOBS_PER_BLOCK", 392 + 16 * 32, 0},
 };
 #define CONFIG_BLOB_SCHEDULE_COUNT 384
 #define CONFIG_BLOB_SCHEDULE 392
-#define CONFIG_SIZE (392 + 16 * 32)
+#define CONFIG_SIZE (392 + 16 * 32 + 8)
 
 static uint8_t config[CONFIG_SIZE];
 
@@ -700,8 +750,7 @@ static const int bls_off = 0;
 #endif
 static int skipped;
 
-#if FORK == FORK_FULU /* the handlers of the spec functions, which only the fulu object has so far */
-
+#if FORK_HAS_STF
 /*
  * Bytes of the scratch buffer. The runner fills all of it before every call, so its size sets most of the
  * runner's own time: it is the largest need of any call of the vectors, rounded up (tests/runner/README.md).
@@ -710,13 +759,6 @@ static int skipped;
 #define SCRATCH_BYTES (4u << 20)
 #endif
 static uint8_t *scratch_buf;
-
-/* The config of one case: the preset's, with the values of the case's config.yaml when it has one. */
-static void case_config(tv parts) {
-    memcpy(config, base_config, CONFIG_SIZE);
-    tv c = tv_get(parts, "config");
-    if (c) config_from_map(c, 1);
-}
 
 /* The bls_setting of a case: 0 when it has none. */
 static uint64_t bls_setting(tv parts) {
@@ -749,7 +791,7 @@ static uint8_t *load_state(const uint8_t *enc, uint64_t len, uint64_t *size, con
     uint64_t vsize = 0;
     uint8_t *value = decode(desc, enc, len, &vsize, why);
     if (!value) return NULL;
-    uint64_t room[6] = {64, 64, 4, 9000, 64, 64}, need = 0;
+    uint64_t room[8] = {64, 64, 4, 9000, 64, 64, 4, 4096}, need = 0; /* StateRoom: docs/reference/state.md */
     CALL(LF(beacon_state_copy_size), value, room, &need);
     uint8_t *state = buffer(need + 4096);
     wr64(state, need + 4096);
@@ -772,7 +814,8 @@ static uint8_t *load_state(const uint8_t *enc, uint64_t len, uint64_t *size, con
  * with each list's room times growth. The old buffer is freed.
  */
 static uint8_t *regrow(uint8_t *state, uint64_t *size, uint64_t growth, const char **why) {
-    uint64_t room[6] = {64 * growth, 2048 * growth, 4 * growth, 9000 * growth, 64 * growth, 64 * growth}, need = 0;
+    uint64_t room[8] = {64 * growth, 2048 * growth, 4 * growth,  9000 * growth,
+                        64 * growth, 64 * growth,   4 * growth, 4096 * growth}, need = 0;
     CALL(LF(beacon_state_copy_size), state, room, &need);
     uint8_t *out = buffer(need);
     wr64(out, need);
@@ -901,9 +944,14 @@ static void run_operations(const char *file, const char *handler, case_file *f) 
         if (state && op) {
             uint64_t result = 0xA5A5A5A5A5A5A5A5u, st;
             if (payload) {
+#if FORK >= FORK_CAPELLA
                 tv ex = tv_get(tv_get(parts, "execution"), "execution_valid");
                 uint64_t valid = ex && *ex == T_BOOL ? ex[1] : 1;
                 st = CALL(LF(process_execution_payload), state, op, &valid, config, fresh_scratch(), &result);
+#else
+                st = 1;
+                why = "no execution payload handler for this fork yet";
+#endif
             } else {
                 st = checked_call(OPS[k].name, (uint64_t)(uintptr_t)OPS[k].fn,
                                   (const void *const[]){state, op, config, fresh_scratch(), &result}, 5);
@@ -1061,6 +1109,8 @@ static void run_shuffling(const char *file, case_file *f) {
     }
 }
 
+#endif
+#if FORK == FORK_FULU
 /* ---------------------------------------------------------------- Custody */
 
 /* The 32 little endian bytes of an integer value: tag 1 (u64) or tag 8 (Uint256). */
@@ -1121,6 +1171,9 @@ static void run_custody(const char *file, const char *handler, case_file *f) {
     }
 }
 
+#endif
+
+#if FORK_HAS_STF
 /* ---------------------------------------------------------------- Rewards */
 
 /* Whether the IndexList pair (rewards, penalties) equals the SSZ Deltas in want. */
@@ -1135,8 +1188,25 @@ static int deltas_equal(const uint8_t *rewards, const uint8_t *penalties, tv wan
     return !memcmp(rewards + 24, w + o1, (size_t)(o2 - o1)) && !memcmp(penalties + 24, w + o2, (size_t)(wlen - o2));
 }
 
+#if FORK >= FORK_ALTAIR
+#define DELTAS_COUNT 4
+#else
+#define DELTAS_COUNT 5
+#endif
 static void run_rewards(const char *file, case_file *f) {
+#if FORK >= FORK_ALTAIR
     static const char *const names[4] = {"source_deltas", "target_deltas", "head_deltas", "inactivity_penalty_deltas"};
+#else
+    static const char *const names[5] = {"source_deltas", "target_deltas", "head_deltas", "inclusion_delay_deltas",
+                                         "inactivity_penalty_deltas"};
+    static const struct {
+        const char *name;
+        deltas_fn fn;
+    } COMPONENTS[4] = {{STR(LF(get_source_deltas)), LF(get_source_deltas)},
+                       {STR(LF(get_target_deltas)), LF(get_target_deltas)},
+                       {STR(LF(get_head_deltas)), LF(get_head_deltas)},
+                       {STR(LF(get_inclusion_delay_deltas)), LF(get_inclusion_delay_deltas)}};
+#endif
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
         uint64_t len, plen, size;
@@ -1146,13 +1216,22 @@ static void run_rewards(const char *file, case_file *f) {
         if (state) {
             uint64_t lsize = 24 + 8 * 4096 * 64;
             uint8_t *rw = buffer(lsize), *pn = buffer(lsize);
-            for (uint64_t flag = 0; flag < 4 && !why; flag++) {
+            for (uint64_t flag = 0; flag < DELTAS_COUNT && !why; flag++) {
                 wr64(rw, lsize);
                 wr64(pn, lsize);
+#if FORK >= FORK_ALTAIR
                 uint64_t st = flag < 3 ? CALL(LF(get_flag_index_deltas), state, &flag, fresh_scratch(), rw, pn)
                                        : CALL(LF(get_inactivity_penalty_deltas), state, config, fresh_scratch(), rw, pn);
-                if (st != 0) why = "status not 0";
-                else if (!deltas_equal(rw, pn, tv_get(parts, names[flag]))) why = names[flag];
+#else
+                uint64_t st = flag < 4 ? checked_call(COMPONENTS[flag].name, (uint64_t)(uintptr_t)COMPONENTS[flag].fn,
+                                                      (const void *const[]){state, fresh_scratch(), rw, pn}, 4)
+                                       : CALL(LF(get_inactivity_penalty_deltas), state, config, fresh_scratch(), rw, pn);
+#endif
+                if (st != 0) {
+                    static char msg[96];
+                    snprintf(msg, sizeof msg, "%s: status %llu", names[flag], (unsigned long long)st);
+                    why = msg;
+                } else if (!deltas_equal(rw, pn, tv_get(parts, names[flag]))) why = names[flag];
             }
             free(rw);
             free(pn);
@@ -1162,6 +1241,9 @@ static void run_rewards(const char *file, case_file *f) {
     }
 }
 
+#endif
+
+#if FORK == FORK_FULU /* fork choice and networking: the fulu object so far */
 /* ---------------------------------------------------------------- Fork choice */
 
 /*
@@ -1813,6 +1895,13 @@ static void run_merkle_proof(const char *file, case_file *f) {
 
 /* ---------------------------------------------------------------- Gossip */
 
+/* The config of one case: the preset's, with the values of the case's config.yaml when it has one. */
+static void case_config(tv parts) {
+    memcpy(config, base_config, CONFIG_SIZE);
+    tv c = tv_get(parts, "config");
+    if (c) config_from_map(c, 1);
+}
+
 #define SEEN_KEYS 8
 #define SEEN_HEADERS 56
 #define SEEN_HEADER_BYTES 72
@@ -2133,7 +2222,7 @@ int main(int argc, char **argv) {
         /* The signatures-off runner runs only the handlers whose cases can have bls_setting 2. */
         if (!bls_off && !strcmp(kind, "descriptors")) run_descriptors(file, &f);
         else if (!bls_off && !strncmp(kind, "ssz_static-", 11)) run_ssz_static(file, kind + 11, &f);
-#if FORK == FORK_FULU
+#if FORK_HAS_STF
         else if (!bls_off && !strncmp(kind, "epoch_processing-", 17)) run_epoch(file, kind + 17, &f);
         else if (!bls_off && !strcmp(kind, "shuffling-core")) run_shuffling(file, &f);
         else if (!strncmp(kind, "operations-", 11)) run_operations(file, kind + 11, &f);
@@ -2141,6 +2230,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(kind, "sanity-blocks") || !strcmp(kind, "finality-finality") || !strcmp(kind, "random-random"))
             run_blocks(file, &f);
         else if (!bls_off && !strncmp(kind, "rewards-", 8)) run_rewards(file, &f);
+#endif
+#if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
                               !strcmp(kind, "networking-compute_columns_for_custody_group")))
             run_custody(file, kind + 11, &f);

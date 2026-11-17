@@ -2,6 +2,7 @@
  * The execution payload, RISC-V. Requirements: docs/reference/block-processing.md.
  */
 
+.if FORK >= FORK_FULU
 SPEC_LEAF get_blob_parameters
     ld      a3, 0(a0)                       # epoch
     ld      a4, CONFIG_BLOB_SCHEDULE_COUNT(a1)
@@ -22,7 +23,9 @@ SPEC_LEAF get_blob_parameters
     sd      t1, 8(a2)
     RETURN_OK
 SPEC_END get_blob_parameters
+.endif
 
+.if FORK >= FORK_DENEB
 /* Locals: sp+0 out. */
 SPEC_FUNCTION kzg_commitment_to_versioned_hash
     FRAME 16
@@ -36,6 +39,7 @@ SPEC_FUNCTION kzg_commitment_to_versioned_hash
     li      a0, LANTERN_OK
     UNFRAME 16
 SPEC_END kzg_commitment_to_versioned_hash
+.endif
 
 SPEC_LEAF compute_time_at_slot
     ld      a4, 0(a0)                       # genesis_time
@@ -58,6 +62,7 @@ SPEC_LEAF compute_time_at_slot
     ret
 SPEC_END compute_time_at_slot
 
+.if FORK >= FORK_BELLATRIX
 /*
  * s1 state, s2 body, s3 execution_valid, s4 config, s5 scratch, s6 result,
  * s7 payload, s8 the new header, s9 scratch size.
@@ -139,7 +144,9 @@ SPEC_FUNCTION process_execution_payload
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 64
 SPEC_END process_execution_payload
+.endif
 
+.if FORK >= FORK_BELLATRIX
 /*
  * The ExecutionPayloadHeader of payload s7 at a0, with scratch s5 of size s9 whose last
  * HEADER_ROOM bytes hold a0. Uses the callee saved registers of
@@ -223,7 +230,10 @@ LOCAL_FUNCTION build_payload_header
     CALL_GLOBAL ssz_hash_tree_root
 7:  LEAVE 16
 END_FUNCTION build_payload_header
+.endif
 
+.if FORK >= FORK_BELLATRIX
 .if (ExecutionPayload_parent_hash != ExecutionPayloadHeader_parent_hash) || (ExecutionPayload_prev_randao != ExecutionPayloadHeader_prev_randao) || (ExecutionPayload_block_number != ExecutionPayloadHeader_block_number)
 .error "build_payload_header copies parent_hash to prev_randao in one block"
+.endif
 .endif

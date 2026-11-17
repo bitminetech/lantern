@@ -6,6 +6,7 @@
 
 /* ---------------------------------------------------------------- Justification and finalization */
 
+.if FORK >= FORK_ALTAIR
 /*
  * s1 state, s2 config, s3 scratch, s4 result, s5 validator count, s6 previous list, s7 current list, s8 scratch.
  * Locals: L current epoch, L+8 previous epoch, L+16 total active, L+24 previous target balance,
@@ -83,6 +84,7 @@ SPEC_FUNCTION process_justification_and_finalization
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 64
 SPEC_END process_justification_and_finalization
+.endif
 
 /* dst (40 bytes, a Checkpoint) = src. Uses a6. */
 .macro COPY_CHECKPOINT dst, src
@@ -200,6 +202,7 @@ SPEC_END weigh_justification_and_finalization
 
 /* ---------------------------------------------------------------- Inactivity */
 
+.if FORK >= FORK_ALTAIR
 /*
  * s1 state, s2 config, s3 scratch, s4 result, s5 validator count, s6 eligible list,
  * s7 participating list, s8 score, s9 eligible cursor, s10 participating cursor.
@@ -293,6 +296,7 @@ SPEC_FUNCTION process_inactivity_updates
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 80
 SPEC_END process_inactivity_updates
+.endif
 
 /* ---------------------------------------------------------------- Rewards and penalties */
 
@@ -307,6 +311,7 @@ LOCAL_FUNCTION zero_deltas
     tail    lantern_zero
 END_FUNCTION zero_deltas
 
+.if FORK >= FORK_ALTAIR
 /*
  * s1 state, s2 flag index, s3 scratch, s4 rewards, s5 penalties, s6 validator count,
  * s7 participating list, s8 eligible list, s9 eligible cursor, s10 participating cursor.
@@ -441,7 +446,9 @@ SPEC_FUNCTION get_flag_index_deltas
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 112
 SPEC_END get_flag_index_deltas
+.endif
 
+.if FORK >= FORK_ALTAIR
 /*
  * s1 state, s2 config, s3 scratch, s4 rewards, s5 penalties, s6 validator count,
  * s7 participating list, s8 eligible list, s9 eligible cursor, s10 participating cursor.
@@ -517,7 +524,7 @@ SPEC_FUNCTION get_inactivity_penalty_deltas
     ld      t1, 0(t1)
     mul     t0, t0, t1                      # penalty_numerator
     ld      t1, CONFIG_INACTIVITY_SCORE_BIAS(s2)
-    li      t3, INACTIVITY_PENALTY_QUOTIENT_BELLATRIX
+    li      t3, FORK_INACTIVITY_PENALTY_QUOTIENT
     mul     t1, t1, t3                      # penalty_denominator
     divu    t0, t0, t1
     slli    t1, t2, 3
@@ -531,7 +538,9 @@ SPEC_FUNCTION get_inactivity_penalty_deltas
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 64
 SPEC_END get_inactivity_penalty_deltas
+.endif
 
+.if FORK >= FORK_ALTAIR
 /*
  * s1 state, s2 config, s3 scratch, s4 result, s5 validator count, s6 delta pair, s7 index,
  * s8 the scratch size on entry. Scratch: lists 0 to 7 at its end. Locals: L epoch, L+8 flag index, L+16 index.
@@ -610,9 +619,11 @@ SPEC_FUNCTION process_rewards_and_penalties
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
 SPEC_END process_rewards_and_penalties
+.endif
 
 /* ---------------------------------------------------------------- Registry */
 
+.if FORK >= FORK_ELECTRA
 /*
  * s1 state, s2 config, s3 scratch, s4 result, s5 validator, s6 index, s7 validator count.
  * Locals: L current epoch, L+8 activation epoch, L+16 predicate, L+24 index.
@@ -723,7 +734,219 @@ SPEC_FUNCTION initiate_validator_exit
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
 SPEC_END initiate_validator_exit
+.else
+/*
+ * Before electra. s1 state, s2 config, s3 scratch, s4 result, s5 validator, s6 index,
+ * s7 validator count, s8 activations left, s9 the queue's next validator, s10 its key.
+ * Locals: L current epoch, L+8 activation epoch, L+16 predicate, L+24 index, L+32 churn limit.
+ */
+SPEC_FUNCTION process_registry_updates
+    ENTER 48
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+    sd      zero, 0(s4)
+    mv      a0, s1
+    addi    a1, sp, L
+    call    lantern_get_current_epoch
+    addi    a0, sp, L
+    addi    a1, sp, (L + 8)
+    call    lantern_compute_activation_exit_epoch
+    LDQ     s7, s1, BeaconState_validators + 8
+    li      s6, 0
+1:  bgeu    s6, s7, 4f                      # for index, validator in enumerate(state.validators)
+    PART    s5, t0, s1, BeaconState_validators
+    slli    t0, s6, 7
+    add     s5, s5, t0
+    mv      a0, s5
+    addi    a1, sp, (L + 16)
+    call    lantern_is_eligible_for_activation_queue
+    ld      t0, (L + 16)(sp)
+    beqz    t0, 2f
+    ld      t0, L(sp)                       # activation_eligibility_epoch = current_epoch + 1
+    addi    t0, t0, 1
+    sd      t0, Validator_activation_eligibility_epoch(s5)
+2:  mv      a0, s5
+    addi    a1, sp, L
+    addi    a2, sp, (L + 16)
+    call    lantern_is_active_validator
+    ld      t0, (L + 16)(sp)
+    beqz    t0, 3f
+    ld      t0, Validator_effective_balance(s5)
+    ld      t1, CONFIG_EJECTION_BALANCE(s2)
+    bgtu    t0, t1, 3f
+    sd      s6, (L + 24)(sp)                # initiate_validator_exit(state, index)
+    mv      a0, s1
+    addi    a1, sp, (L + 24)
+    mv      a2, s2
+    mv      a3, s3
+    mv      a4, s4
+    call    lantern_initiate_validator_exit
+    bnez    a0, 7f
+    ld      t0, 0(s4)
+    bnez    t0, 7f
+3:  addi    s6, s6, 1
+    j       1b
+4:  mv      a0, s1                          # the churn limit
+    mv      a1, s2
+    addi    a2, sp, (L + 32)
+.if FORK == FORK_DENEB
+    call    lantern_get_validator_activation_churn_limit
+.else
+    call    lantern_get_validator_churn_limit
+.endif
+    ld      s8, (L + 32)(sp)
+5:  beqz    s8, 8f                          # the queue, by (activation_eligibility_epoch, index):
+    li      s9, -1                          # take its first validator, which activation then leaves out
+    li      s10, -1
+    li      s6, 0
+51: bgeu    s6, s7, 54f
+    PART    s5, t0, s1, BeaconState_validators
+    slli    t0, s6, 7
+    add     s5, s5, t0
+    mv      a0, s1
+    mv      a1, s5
+    addi    a2, sp, (L + 16)
+    call    lantern_is_eligible_for_activation
+    ld      t0, (L + 16)(sp)
+    beqz    t0, 53f
+    ld      t0, Validator_activation_eligibility_epoch(s5)
+    bgeu    t0, s10, 53f                    # the lowest epoch; in index order, the first wins a tie
+    mv      s10, t0
+    mv      s9, s6
+53: addi    s6, s6, 1
+    j       51b
+54: li      t0, -1
+    beq     s9, t0, 8f                      # the queue is empty
+    PART    s5, t0, s1, BeaconState_validators
+    slli    t0, s9, 7
+    add     s5, s5, t0
+    ld      t0, (L + 8)(sp)                 # activation_epoch = compute_activation_exit_epoch(get_current_epoch(state))
+    sd      t0, Validator_activation_epoch(s5)
+    addi    s8, s8, -1
+    j       5b
+8:  sd      zero, 0(s4)
+    li      a0, LANTERN_OK
+7:  LEAVE 48
+SPEC_END process_registry_updates
 
+/* Before electra. A leaf. */
+SPEC_LEAF get_validator_churn_limit
+    LDQ     a3, a0, BeaconState_slot
+    srli    a3, a3, LOG2_SLOTS_PER_EPOCH    # the current epoch
+    PART    a4, a5, a0, BeaconState_validators
+    li      t0, 0                           # len(get_active_validator_indices(state, get_current_epoch(state)))
+1:  beqz    a5, 3f
+    ld      t1, Validator_activation_epoch(a4)
+    ld      t2, Validator_exit_epoch(a4)
+    bgtu    t1, a3, 2f
+    bgeu    a3, t2, 2f
+    addi    t0, t0, 1
+2:  addi    a4, a4, Validator__mem
+    addi    a5, a5, -1
+    j       1b
+3:  ld      t1, CONFIG_CHURN_LIMIT_QUOTIENT(a1)
+    divu    t0, t0, t1
+    ld      t1, CONFIG_MIN_PER_EPOCH_CHURN_LIMIT(a1)
+    bgeu    t0, t1, 4f                      # max(MIN_PER_EPOCH_CHURN_LIMIT, ...)
+    mv      t0, t1
+4:  sd      t0, 0(a2)
+    RETURN_OK
+SPEC_END get_validator_churn_limit
+
+.if FORK == FORK_DENEB
+/* Locals: sp+0 config, sp+8 out, sp+16 churn limit. */
+SPEC_FUNCTION get_validator_activation_churn_limit
+    FRAME 32
+    sd      a1, 0(sp)
+    sd      a2, 8(sp)
+    addi    a2, sp, 16
+    call    lantern_get_validator_churn_limit
+    ld      a1, 0(sp)
+    ld      t0, 16(sp)
+    ld      t1, CONFIG_MAX_PER_EPOCH_ACTIVATION_CHURN_LIMIT(a1)
+    bleu    t0, t1, 1f                      # min(MAX_PER_EPOCH_ACTIVATION_CHURN_LIMIT, get_validator_churn_limit(state))
+    mv      t0, t1
+1:  ld      t1, 8(sp)
+    sd      t0, 0(t1)
+    li      a0, LANTERN_OK
+    UNFRAME 32
+SPEC_END get_validator_activation_churn_limit
+.endif
+
+/*
+ * Before electra. s1 state, s2 index, s3 config, s5 validator, s6 result.
+ * Locals: L current epoch, L+8 exit queue epoch, L+16 churn limit.
+ */
+SPEC_FUNCTION initiate_validator_exit
+    ENTER 32
+    mv      s1, a0
+    ld      s2, 0(a1)
+    mv      s3, a2
+    mv      s6, a4
+    sd      zero, 0(s6)
+    PART    s5, t0, s1, BeaconState_validators
+    slli    t0, s2, 7
+    add     s5, s5, t0
+    ld      t0, Validator_exit_epoch(s5)
+    li      t1, -1
+    bne     t0, t1, 8f                      # already exiting
+    mv      a0, s1
+    addi    a1, sp, L
+    call    lantern_get_current_epoch
+    addi    a0, sp, L
+    addi    a1, sp, (L + 8)
+    call    lantern_compute_activation_exit_epoch
+    bnez    a0, 6f
+    ld      t0, (L + 8)(sp)                 # exit_queue_epoch = max(exit_epochs + [compute_activation_exit_epoch(...)])
+    PART    t1, t2, s1, BeaconState_validators
+    li      t4, -1
+1:  beqz    t2, 2f
+    ld      t3, Validator_exit_epoch(t1)
+    beq     t3, t4, 11f
+    bleu    t3, t0, 11f
+    mv      t0, t3
+11: addi    t1, t1, Validator__mem
+    addi    t2, t2, -1
+    j       1b
+2:  PART    t1, t2, s1, BeaconState_validators
+    li      t5, 0                           # exit_queue_churn = len([v for v in validators if v.exit_epoch == exit_queue_epoch])
+3:  beqz    t2, 4f
+    ld      t3, Validator_exit_epoch(t1)
+    bne     t3, t0, 31f
+    addi    t5, t5, 1
+31: addi    t1, t1, Validator__mem
+    addi    t2, t2, -1
+    j       3b
+4:  sd      t0, (L + 8)(sp)
+    sd      t5, L(sp)
+    mv      a0, s1
+    mv      a1, s3
+    addi    a2, sp, (L + 16)
+    call    lantern_get_validator_churn_limit
+    ld      t0, (L + 8)(sp)
+    ld      t5, L(sp)
+    ld      t1, (L + 16)(sp)
+    bltu    t5, t1, 5f                      # if exit_queue_churn >= get_validator_churn_limit(state): exit_queue_epoch += 1
+    addi    t1, t0, 1
+    bltu    t1, t0, 6f
+    mv      t0, t1
+5:  sd      t0, Validator_exit_epoch(s5)
+    ld      t1, CONFIG_MIN_VALIDATOR_WITHDRAWABILITY_DELAY(s3)
+    add     t1, t0, t1                      # exit_epoch + MIN_VALIDATOR_WITHDRAWABILITY_DELAY
+    bltu    t1, t0, 6f
+    sd      t1, Validator_withdrawable_epoch(s5)
+8:  li      a0, LANTERN_OK
+    LEAVE 32
+6:  li      t0, LANTERN_INVALID_OVERFLOW
+    sd      t0, 0(s6)
+    li      a0, LANTERN_OK
+    LEAVE 32
+SPEC_END initiate_validator_exit
+.endif
+
+.if FORK >= FORK_ELECTRA
 /*
  * s1 state, s2 exit balance, s3 config, s4 scratch, s5 out, s6 earliest exit epoch,
  * s7 per epoch churn, s8 exit balance to consume, s9 result.
@@ -788,7 +1011,9 @@ SPEC_FUNCTION compute_exit_epoch_and_update_churn
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
 SPEC_END compute_exit_epoch_and_update_churn
+.endif
 
+.if FORK >= FORK_ELECTRA
 SPEC_FUNCTION get_balance_churn_limit
     FRAME 32
     sd      a1, 0(sp)                       # config
@@ -812,7 +1037,9 @@ SPEC_FUNCTION get_balance_churn_limit
     li      a0, LANTERN_OK
 1:  UNFRAME 32
 SPEC_END get_balance_churn_limit
+.endif
 
+.if FORK >= FORK_ELECTRA
 SPEC_FUNCTION get_activation_exit_churn_limit
     FRAME 32
     sd      a0, 0(sp)
@@ -831,7 +1058,9 @@ SPEC_FUNCTION get_activation_exit_churn_limit
     li      a0, LANTERN_OK
 1:  UNFRAME 32
 SPEC_END get_activation_exit_churn_limit
+.endif
 
+.if FORK >= FORK_ELECTRA
 SPEC_FUNCTION get_consolidation_churn_limit
     FRAME 48
     sd      a0, 0(sp)
@@ -855,6 +1084,7 @@ SPEC_FUNCTION get_consolidation_churn_limit
     li      a0, LANTERN_OK
 1:  UNFRAME 48
 SPEC_END get_consolidation_churn_limit
+.endif
 
 /* ---------------------------------------------------------------- Slashings */
 
@@ -886,14 +1116,19 @@ SPEC_FUNCTION process_slashings
     add     t2, t2, t3
     addi    t1, t1, -1
     bnez    t1, 1b
-    li      t3, PROPORTIONAL_SLASHING_MULTIPLIER_BELLATRIX
+    li      t3, FORK_PROPORTIONAL_SLASHING_MULTIPLIER
     mul     t2, t2, t3
     ld      t3, (L + 8)(sp)
     bltu    t2, t3, 11f                     # adjusted_total_slashing_balance
     mv      t2, t3
-11: li      t4, EFFECTIVE_BALANCE_INCREMENT
+11:
+.if FORK >= FORK_ELECTRA
+    li      t4, EFFECTIVE_BALANCE_INCREMENT
     divu    t3, t3, t4
     divu    s6, t2, t3                      # penalty_per_effective_balance_increment
+.else
+    mv      s6, t2                          # before electra: the adjusted total
+.endif
     LDQ     s8, s1, BeaconState_validators + 8
     li      s7, 0
 2:  bgeu    s7, s8, 8f
@@ -910,6 +1145,11 @@ SPEC_FUNCTION process_slashings
     li      t4, EFFECTIVE_BALANCE_INCREMENT
     divu    t1, t1, t4
     mul     t1, s6, t1
+.if FORK < FORK_ELECTRA
+    ld      t2, (L + 8)(sp)                 # penalty_numerator // total_balance * increment
+    divu    t1, t1, t2
+    mul     t1, t1, t4
+.endif
     sd      t1, (L + 24)(sp)
     sd      s7, (L + 16)(sp)
     mv      a0, s1
@@ -946,6 +1186,7 @@ SPEC_FUNCTION process_eth1_data_reset
     UNFRAME 32
 SPEC_END process_eth1_data_reset
 
+.if FORK >= FORK_ELECTRA
 /*
  * s1 state, s2 result, s3 next epoch, s4 consolidation, s5 consolidations left, s6 processed.
  * Locals: L epoch, L+8 source index, L+16 target index, L+24 balance.
@@ -1005,6 +1246,7 @@ SPEC_FUNCTION process_pending_consolidations
     li      a0, LANTERN_OK
     LEAVE 32
 SPEC_END process_pending_consolidations
+.endif
 
 /* ---------------------------------------------------------------- Effective balances */
 
@@ -1019,9 +1261,14 @@ SPEC_FUNCTION process_effective_balance_updates
     PART    s3, t0, s1, BeaconState_validators
     slli    t0, s4, 7
     add     s3, s3, t0
+.if FORK >= FORK_ELECTRA
     mv      a0, s3
     addi    a1, sp, L
     call    lantern_get_max_effective_balance
+.else
+    li      t0, MAX_EFFECTIVE_BALANCE
+    sd      t0, L(sp)
+.endif
     PART    t0, t1, s1, BeaconState_balances
     slli    t1, s4, 3
     add     t0, t0, t1
@@ -1092,6 +1339,55 @@ SPEC_FUNCTION process_randao_mixes_reset
     UNFRAME 32
 SPEC_END process_randao_mixes_reset
 
+.if FORK <= FORK_BELLATRIX
+.if BeaconState_state_roots != BeaconState_block_roots + BlockRoots__mem
+.error "the state's block_roots and state_roots are not laid out as one HistoricalBatch"
+.endif
+/* s1 state, s2 scratch, s3 result, s4 the new entry. Locals: L epoch. */
+SPEC_FUNCTION process_historical_roots_update
+    ENTER 16
+    mv      s1, a0
+    mv      s2, a2
+    mv      s3, a3
+    mv      a0, s1
+    addi    a1, sp, L
+    call    lantern_get_current_epoch
+    ld      t0, L(sp)                       # if next_epoch % (SLOTS_PER_HISTORICAL_ROOT // SLOTS_PER_EPOCH) == 0
+    addi    t0, t0, 1
+    li      t1, (SLOTS_PER_HISTORICAL_ROOT / SLOTS_PER_EPOCH - 1)
+    and     t0, t0, t1
+    bnez    t0, 8f
+    ld      t0, 0(s2)                       # scratch for the root
+    li      t1, SSZ_SCR_WORK + HistoricalBatch__work
+    bltu    t0, t1, 9f
+    LDQ     t0, s1, BeaconState_historical_roots
+    LDQ     t1, s1, BeaconState_historical_roots + 8
+    LDQ     t2, s1, BeaconState_eth1_data_votes     # the next part starts at its room's end
+    sub     t2, t2, t0
+    addi    t3, t1, 1
+    slli    t3, t3, 5
+    bltu    t2, t3, 9f
+    add     s4, s1, t0
+    slli    t1, t1, 5
+    add     s4, s4, t1
+    ADDRESS a0, lantern_type_HistoricalBatch    # historical_roots.append(hash_tree_root(HistoricalBatch(block_roots, state_roots)))
+    ADDQ    a1, s1, BeaconState_block_roots
+    mv      a2, s2
+    mv      a3, s4
+    CALL_GLOBAL ssz_hash_tree_root
+    bnez    a0, 7f
+    LDQ     t1, s1, BeaconState_historical_roots + 8
+    addi    t1, t1, 1
+    STQ     t1, s1, BeaconState_historical_roots + 8
+8:  sd      zero, 0(s3)
+    li      a0, LANTERN_OK
+7:  LEAVE 16
+9:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
+SPEC_END process_historical_roots_update
+.endif
+
+.if FORK >= FORK_CAPELLA
 /* s1 state, s2 scratch, s3 result, s4 the new summary. Locals: L epoch. */
 SPEC_FUNCTION process_historical_summaries_update
     ENTER 16
@@ -1138,7 +1434,9 @@ SPEC_FUNCTION process_historical_summaries_update
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
 SPEC_END process_historical_summaries_update
+.endif
 
+.if FORK >= FORK_ALTAIR
 /* s1 state, s2 result. previous_epoch_participation = current; current = zeros, one per validator. */
 SPEC_FUNCTION process_participation_flag_updates
     ENTER 16
@@ -1158,11 +1456,13 @@ SPEC_FUNCTION process_participation_flag_updates
     li      a0, LANTERN_OK
     LEAVE 16
 SPEC_END process_participation_flag_updates
+.endif
 
 /* ---------------------------------------------------------------- Proposer lookahead */
 
 .set LOOKAHEAD_LOCALS, (8 * SLOTS_PER_EPOCH + 8 + 15) / 16 * 16
 
+.if FORK >= FORK_FULU
 /* s1 state, s2 config, s3 scratch, s4 result. Locals: L the last epoch's proposers, then the epoch. */
 SPEC_FUNCTION process_proposer_lookahead
     ENTER LOOKAHEAD_LOCALS
@@ -1197,10 +1497,20 @@ SPEC_FUNCTION process_proposer_lookahead
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE LOOKAHEAD_LOCALS
 SPEC_END process_proposer_lookahead
+.endif
 
 /* ---------------------------------------------------------------- The epoch */
 
+.if FORK >= FORK_ELECTRA
+.set EPOCH_LISTS, 11
 .set EPOCH_EXTRA, SYNC_COMMITTEE_SCRATCH + SyncCommittee__mem + POSTPONE_BYTES
+.elseif FORK >= FORK_ALTAIR
+.set EPOCH_LISTS, 11
+.set EPOCH_EXTRA, SYNC_COMMITTEE_SCRATCH + SyncCommittee__mem
+.else
+.set EPOCH_LISTS, 13
+.set EPOCH_EXTRA, PENDING_REFS_BYTES
+.endif
 
 /* One step: stop at a failed status or a failed check. s1-s4 hold the arguments, s5 the scratch size. */
 .macro EPOCH_STEP fn
@@ -1222,12 +1532,19 @@ SPEC_FUNCTION process_epoch
     mv      s2, a1
     mv      s3, a2
     mv      s4, a3
-    NEED_SCRATCH_B s3, s1, 11, EPOCH_EXTRA, 9f
+    NEED_SCRATCH_B s3, s1, EPOCH_LISTS, EPOCH_EXTRA, 9f
+.if FORK >= FORK_ELECTRA
     mv      a0, s1                          # room for the deposits of the epoch
     call    validator_room
     li      t0, MAX_PENDING_DEPOSITS_PER_EPOCH
     bltu    a0, t0, 9f
-    mv      a0, s1                          # and for a historical summary when one is due
+.endif
+.if FORK == FORK_PHASE0
+    mv      a0, s1                          # room for the current epoch's attestations in the previous list
+    call    record_room
+    bnez    a0, 9f
+.endif
+    mv      a0, s1                          # and for a historical batch root or summary when one is due
     addi    a1, sp, L
     call    lantern_get_current_epoch
     ld      t0, L(sp)
@@ -1235,39 +1552,70 @@ SPEC_FUNCTION process_epoch
     li      t1, (SLOTS_PER_HISTORICAL_ROOT / SLOTS_PER_EPOCH - 1)
     and     t0, t0, t1
     bnez    t0, 1f
+.if FORK >= FORK_CAPELLA
     LDQ     t0, s1, BeaconState_historical_summaries
     LDQ     t1, s1, BeaconState_historical_summaries + 8
+.if FORK >= FORK_ELECTRA
     LDQ     t2, s1, BeaconState_pending_deposits
+.else
+    ld      t2, 0(s1)                       # the last part ends at the end of the value
+.endif
     sub     t2, t2, t0
     addi    t3, t1, 1
     slli    t3, t3, 6
+.else
+    LDQ     t0, s1, BeaconState_historical_roots
+    LDQ     t1, s1, BeaconState_historical_roots + 8
+    LDQ     t2, s1, BeaconState_eth1_data_votes
+    sub     t2, t2, t0
+    addi    t3, t1, 1
+    slli    t3, t3, 5
+.endif
     bltu    t2, t3, 9f
 1:  ld      s5, 0(s3)
     EPOCH_STEP lantern_process_justification_and_finalization
+.if FORK >= FORK_ALTAIR
     EPOCH_STEP lantern_process_inactivity_updates
+.endif
     EPOCH_STEP lantern_process_rewards_and_penalties
     EPOCH_STEP lantern_process_registry_updates
     EPOCH_STEP lantern_process_slashings
     EPOCH_STEP lantern_process_eth1_data_reset
+.if FORK >= FORK_ELECTRA
     EPOCH_STEP lantern_process_pending_deposits
     EPOCH_STEP lantern_process_pending_consolidations
+.endif
     EPOCH_STEP lantern_process_effective_balance_updates
     EPOCH_STEP lantern_process_slashings_reset
     EPOCH_STEP lantern_process_randao_mixes_reset
+.if FORK >= FORK_CAPELLA
     EPOCH_STEP lantern_process_historical_summaries_update
+.else
+    EPOCH_STEP lantern_process_historical_roots_update
+.endif
+.if FORK >= FORK_ALTAIR
     EPOCH_STEP lantern_process_participation_flag_updates
     EPOCH_STEP lantern_process_sync_committee_updates
+.else
+    EPOCH_STEP lantern_process_participation_record_updates
+.endif
+.if FORK >= FORK_FULU
     EPOCH_STEP lantern_process_proposer_lookahead
+.endif
 8:  li      a0, LANTERN_OK
 7:  LEAVE 16
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
 SPEC_END process_epoch
 
+.if FORK >= FORK_ELECTRA
 .if PendingConsolidation__mem != 16
 .error "lantern_process_pending_consolidations shifts by 4 for PendingConsolidation"
 .endif
+.endif
 
+.if FORK >= FORK_CAPELLA
 .if HistoricalSummary__mem != 64
 .error "lantern_process_historical_summaries_update shifts by 6 for HistoricalSummary"
+.endif
 .endif

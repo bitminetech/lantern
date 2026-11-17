@@ -51,10 +51,17 @@ SPEC_END is_active_validator
 SPEC_LEAF is_eligible_for_activation_queue
     ldr     x2, [x0, #Validator_activation_eligibility_epoch]
     ldr     x3, [x0, #Validator_effective_balance]
+.if FORK >= FORK_ELECTRA
     MOVQ    x4, MIN_ACTIVATION_BALANCE
     cmn     x2, #1                          /* activation_eligibility_epoch == FAR_FUTURE_EPOCH */
     ccmp    x3, x4, #0, eq                  /* and effective_balance >= MIN_ACTIVATION_BALANCE */
     cset    x5, hs
+.else
+    MOVQ    x4, MAX_EFFECTIVE_BALANCE
+    cmn     x2, #1                          /* activation_eligibility_epoch == FAR_FUTURE_EPOCH */
+    ccmp    x3, x4, #0, eq                  /* and effective_balance == MAX_EFFECTIVE_BALANCE */
+    cset    x5, eq
+.endif
     str     x5, [x1]
     RETURN_OK
 SPEC_END is_eligible_for_activation_queue
@@ -84,6 +91,7 @@ SPEC_LEAF is_slashable_validator
     RETURN_OK
 SPEC_END is_slashable_validator
 
+.if FORK >= FORK_ELECTRA
 SPEC_LEAF is_compounding_withdrawal_credential
     ldrb    w2, [x0]
     cmp     w2, #COMPOUNDING_WITHDRAWAL_PREFIX
@@ -91,14 +99,18 @@ SPEC_LEAF is_compounding_withdrawal_credential
     str     x3, [x1]
     RETURN_OK
 SPEC_END is_compounding_withdrawal_credential
+.endif
 
+.if FORK >= FORK_ELECTRA
 SPEC_FUNCTION has_compounding_withdrawal_credential
     FRAME 0
     add     x0, x0, #Validator_withdrawal_credentials
     bl      lantern_is_compounding_withdrawal_credential
     UNFRAME 0
 SPEC_END has_compounding_withdrawal_credential
+.endif
 
+.if FORK >= FORK_ELECTRA
 SPEC_FUNCTION get_max_effective_balance
     FRAME 16
     str     x1, [sp, #16]                   /* out */
@@ -114,6 +126,7 @@ SPEC_FUNCTION get_max_effective_balance
     mov     x0, #LANTERN_OK
     UNFRAME 16
 SPEC_END get_max_effective_balance
+.endif
 
 /* ---------------------------------------------------------------- Misc */
 
@@ -144,6 +157,51 @@ SPEC_LEAF compute_activation_exit_epoch
 1:  mov     x0, #LANTERN_INVALID_OVERFLOW
     ret
 SPEC_END compute_activation_exit_epoch
+
+/*
+ * x19 branch, x20 depth, x21 index, x22 root, x23 out, x24 i.
+ * Locals: L value (32), L+32 the two halves (64).
+ */
+SPEC_FUNCTION is_valid_merkle_branch
+    ENTER 96
+    mov     x19, x1
+    ldr     x20, [x2]
+    ldr     x21, [x3]
+    mov     x22, x4
+    mov     x23, x5
+    add     x9, sp, #L                      /* value = leaf */
+    COPY32  x9, x0
+    mov     x24, #0
+1:  cmp     x24, x20
+    b.hs    3f
+    add     x9, x19, x24, lsl #5            /* branch[i] */
+    lsr     x10, x21, x24                   /* index // (2**i) % 2; 0 once i reaches 64 */
+    cmp     x24, #64
+    csel    x10, x10, xzr, lo
+    add     x11, sp, #(L + 32)
+    add     x12, sp, #L
+    tbz     x10, #0, 2f
+    COPY32  x11, x9                         /* hash(branch[i] + value) */
+    add     x11, x11, #32
+    COPY32  x11, x12
+    b       21f
+2:  COPY32  x11, x12                        /* hash(value + branch[i]) */
+    add     x11, x11, #32
+    COPY32  x11, x9
+21: add     x0, sp, #(L + 32)
+    mov     x1, #64
+    add     x2, sp, #L
+    bl      sha256_short
+    add     x24, x24, #1
+    b       1b
+3:  add     x14, sp, #L                     /* value == root */
+    mov     x9, #0
+    NE32    x14, x22, 4f
+    mov     x9, #1
+4:  str     x9, [x23]
+    mov     x0, #LANTERN_OK
+    LEAVE 96
+SPEC_END is_valid_merkle_branch
 
 /* ---------------------------------------------------------------- Accessors */
 
@@ -316,6 +374,7 @@ SPEC_END decrease_balance
 
 /* ---------------------------------------------------------------- Participation flags and rewards */
 
+.if FORK >= FORK_ALTAIR
 SPEC_LEAF has_flag
     ldrb    w3, [x0]
     ldr     x4, [x1]
@@ -324,7 +383,9 @@ SPEC_LEAF has_flag
     str     x3, [x2]
     RETURN_OK
 SPEC_END has_flag
+.endif
 
+.if FORK >= FORK_ALTAIR
 SPEC_LEAF add_flag
     ldrb    w3, [x0]
     ldr     x4, [x1]
@@ -334,6 +395,7 @@ SPEC_LEAF add_flag
     strb    w3, [x2]
     RETURN_OK
 SPEC_END add_flag
+.endif
 
 SPEC_FUNCTION get_finality_delay
     FRAME 32
@@ -413,6 +475,7 @@ SPEC_FUNCTION get_eligible_validator_indices
     LEAVE 16
 SPEC_END get_eligible_validator_indices
 
+.if FORK >= FORK_ALTAIR
 /*
  * x19 state, x20 flag_index, x21 epoch, x22 scratch, x23 out,
  * x25 epoch_participation, x26 active list entries, x27 entries left, x28 out entries.
@@ -491,7 +554,9 @@ SPEC_FUNCTION get_unslashed_participating_indices
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
 SPEC_END get_unslashed_participating_indices
+.endif
 
+.if FORK >= FORK_ALTAIR
 SPEC_FUNCTION get_base_reward_per_increment
     FRAME 32
     str     x2, [sp, #16]                   /* out */
@@ -509,7 +574,37 @@ SPEC_FUNCTION get_base_reward_per_increment
     mov     x0, #LANTERN_OK
 1:  UNFRAME 32
 SPEC_END get_base_reward_per_increment
+.endif
 
+.if FORK == FORK_PHASE0
+/* Locals: sp+16 state, sp+24 index, sp+32 out, sp+40 total active balance, sp+48 its square root. */
+SPEC_FUNCTION get_base_reward
+    FRAME 48
+    stp     x0, x1, [sp, #16]
+    str     x3, [sp, #32]
+    mov     x1, x2
+    add     x2, sp, #40
+    bl      lantern_get_total_active_balance
+    cbnz    x0, 1f
+    add     x0, sp, #40
+    add     x1, sp, #48
+    bl      lantern_integer_squareroot
+    ldp     x0, x1, [sp, #16]
+    ldr     x1, [x1]
+    PART    x9, x10, x0, BeaconState_validators
+    add     x9, x9, x1, lsl #7
+    ldr     x9, [x9, #Validator_effective_balance]
+    mov     x10, #BASE_REWARD_FACTOR        /* fits: effective_balance is at most MAX_EFFECTIVE_BALANCE */
+    mul     x9, x9, x10
+    ldr     x10, [sp, #48]
+    udiv    x9, x9, x10                     /* // integer_squareroot(total_balance) */
+    lsr     x9, x9, #2                      /* // BASE_REWARDS_PER_EPOCH, which is 4 */
+    ldr     x12, [sp, #32]
+    str     x9, [x12]
+    mov     x0, #LANTERN_OK
+1:  UNFRAME 48
+SPEC_END get_base_reward
+.else
 SPEC_FUNCTION get_base_reward
     FRAME 32
     stp     x0, x1, [sp, #16]               /* state, index */
@@ -532,3 +627,4 @@ SPEC_FUNCTION get_base_reward
     mov     x0, #LANTERN_OK
 1:  UNFRAME 32
 SPEC_END get_base_reward
+.endif

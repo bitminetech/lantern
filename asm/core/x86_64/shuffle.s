@@ -212,6 +212,7 @@ SPEC_FUNCTION compute_proposer_index
     mov     (L + 16)(%rsp), %rax
     mov     LIST_FIXED(%rbp,%rax,8), %rax   # candidate_index
     mov     %rax, S9(%rsp)
+.if FORK >= FORK_ELECTRA
     mov     %r15, %rax                      # random_bytes = sha256(seed + uint_to_bytes(i // 16))
     shr     $4, %rax
     mov     %rax, (L + 56)(%rsp)
@@ -233,6 +234,29 @@ SPEC_FUNCTION compute_proposer_index
     jnz     6f
     MOVQ    %rdx, MAX_EFFECTIVE_BALANCE_ELECTRA
     imul    %rcx, %rdx                      # MAX_EFFECTIVE_BALANCE_ELECTRA * random_value fits
+.else
+    mov     %r15, %rax                      # sha256(seed + uint_to_bytes(i // 32))
+    shr     $5, %rax
+    mov     %rax, (L + 56)(%rsp)
+    lea     (L + 24)(%rsp), %rdi
+    mov     $40, %esi
+    lea     (L + 64)(%rsp), %rdx
+    call    sha256_short
+    mov     %r15, %rax
+    and     $31, %eax
+    movzbl  (L + 64)(%rsp,%rax), %ecx       # random_byte
+    mov     S9(%rsp), %rax
+    mov     BeaconState_validators(%rbx), %rdx
+    add     %rbx, %rdx
+    shl     $7, %rax
+    mov     Validator_effective_balance(%rdx,%rax), %rax
+    mov     $0xff, %edx
+    mul     %rdx                            # effective_balance * MAX_RANDOM_BYTE
+    test    %rdx, %rdx
+    jnz     6f
+    MOVQ    %rdx, MAX_EFFECTIVE_BALANCE
+    imul    %rcx, %rdx                      # MAX_EFFECTIVE_BALANCE * random_byte fits
+.endif
     cmp     %rdx, %rax
     jae     2f
     inc     %r15
@@ -247,6 +271,7 @@ SPEC_FUNCTION compute_proposer_index
     LEAVE 96
 SPEC_END compute_proposer_index
 
+.if FORK >= FORK_FULU
 /*
  * rbx state, rbp seed, r12 indices, r13 scratch, r14 out, r15 slot index, S8 scratch size.
  * Locals: L start slot, L+8 the message (seed, slot), L+48 the slot seed.
@@ -295,7 +320,9 @@ SPEC_FUNCTION compute_proposer_indices
 6:  mov     $LANTERN_INVALID_OVERFLOW, %eax
     LEAVE 80
 SPEC_END compute_proposer_indices
+.endif
 
+.if FORK >= FORK_FULU
 /*
  * rbx state, rbp epoch, r12 scratch, r13 out, r14 validator count, r15 scratch size, S7 active list.
  * Locals: L domain type, L+8 seed.
@@ -337,6 +364,7 @@ SPEC_FUNCTION get_beacon_proposer_indices
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 48
 SPEC_END get_beacon_proposer_indices
+.endif
 
 /* ---------------------------------------------------------------- Domains and signing roots */
 

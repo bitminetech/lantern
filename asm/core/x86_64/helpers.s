@@ -56,9 +56,15 @@ SPEC_LEAF is_eligible_for_activation_queue
     xor     %eax, %eax
     cmpq    $-1, Validator_activation_eligibility_epoch(%rdi)  # activation_eligibility_epoch == FAR_FUTURE_EPOCH
     jne     1f
+.if FORK >= FORK_ELECTRA
     MOVQ    %rcx, MIN_ACTIVATION_BALANCE
     cmp     %rcx, Validator_effective_balance(%rdi)    # and effective_balance >= MIN_ACTIVATION_BALANCE
     jb      1f
+.else
+    MOVQ    %rcx, MAX_EFFECTIVE_BALANCE
+    cmp     %rcx, Validator_effective_balance(%rdi)    # and effective_balance == MAX_EFFECTIVE_BALANCE
+    jne     1f
+.endif
     mov     $1, %eax
 1:  mov     %rax, (%rsi)
     RETURN_OK
@@ -88,6 +94,7 @@ SPEC_LEAF is_slashable_validator
     RETURN_OK
 SPEC_END is_slashable_validator
 
+.if FORK >= FORK_ELECTRA
 SPEC_LEAF is_compounding_withdrawal_credential
     xor     %eax, %eax
     cmpb    $COMPOUNDING_WITHDRAWAL_PREFIX, (%rdi)
@@ -95,12 +102,16 @@ SPEC_LEAF is_compounding_withdrawal_credential
     mov     %rax, (%rsi)
     RETURN_OK
 SPEC_END is_compounding_withdrawal_credential
+.endif
 
+.if FORK >= FORK_ELECTRA
 SPEC_LEAF has_compounding_withdrawal_credential
     add     $Validator_withdrawal_credentials, %rdi
     jmp     lantern_is_compounding_withdrawal_credential
 SPEC_END has_compounding_withdrawal_credential
+.endif
 
+.if FORK >= FORK_ELECTRA
 /* Locals: rsp+0 out, rsp+8 the compounding flag. */
 SPEC_FUNCTION get_max_effective_balance
     FRAME 16
@@ -116,6 +127,7 @@ SPEC_FUNCTION get_max_effective_balance
     xor     %eax, %eax
     UNFRAME 16
 SPEC_END get_max_effective_balance
+.endif
 
 /* ---------------------------------------------------------------- Misc */
 
@@ -147,6 +159,57 @@ SPEC_LEAF compute_activation_exit_epoch
 1:  mov     $LANTERN_INVALID_OVERFLOW, %eax
     ret
 SPEC_END compute_activation_exit_epoch
+
+/*
+ * rbx branch, rbp depth, r12 index, r13 root, r14 out, r15 i.
+ * Locals: L value (32), L+32 the two halves (64).
+ */
+SPEC_FUNCTION is_valid_merkle_branch
+    ENTER 96
+    mov     %rsi, %rbx
+    mov     (%rdx), %rbp
+    mov     (%rcx), %r12
+    mov     %r8, %r13
+    mov     %r9, %r14
+    lea     L(%rsp), %rax                   # value = leaf
+    COPY32  %rax, %rdi
+    xor     %r15d, %r15d
+1:  cmp     %rbp, %r15
+    jae     3f
+    mov     %r15, %rax                      # branch[i]
+    shl     $5, %rax
+    add     %rbx, %rax
+    mov     %r12, %rdx                      # index // (2**i) % 2; 0 once i reaches 64
+    mov     %r15, %rcx
+    shr     %cl, %rdx
+    cmp     $64, %r15
+    jb      11f
+    xor     %edx, %edx
+11: lea     (L + 32)(%rsp), %rsi
+    lea     L(%rsp), %rdi
+    test    $1, %dl
+    jz      2f
+    COPY32  %rsi, %rax                      # hash(branch[i] + value)
+    add     $32, %rsi
+    COPY32  %rsi, %rdi
+    jmp     21f
+2:  COPY32  %rsi, %rdi                      # hash(value + branch[i])
+    add     $32, %rsi
+    COPY32  %rsi, %rax
+21: lea     (L + 32)(%rsp), %rdi
+    mov     $64, %esi
+    lea     L(%rsp), %rdx
+    call    sha256_short
+    inc     %r15
+    jmp     1b
+3:  lea     L(%rsp), %rax                   # value == root
+    xor     %ecx, %ecx
+    NE32    %rax, %r13, 4f
+    mov     $1, %ecx
+4:  mov     %rcx, (%r14)
+    xor     %eax, %eax
+    LEAVE 96
+SPEC_END is_valid_merkle_branch
 
 /* ---------------------------------------------------------------- Accessors */
 
@@ -321,6 +384,7 @@ SPEC_END decrease_balance
 
 /* ---------------------------------------------------------------- Participation flags and rewards */
 
+.if FORK >= FORK_ALTAIR
 SPEC_LEAF has_flag
     movzbl  (%rdi), %eax
     mov     (%rsi), %rcx
@@ -329,7 +393,9 @@ SPEC_LEAF has_flag
     mov     %rax, (%rdx)
     RETURN_OK
 SPEC_END has_flag
+.endif
 
+.if FORK >= FORK_ALTAIR
 SPEC_LEAF add_flag
     movzbl  (%rdi), %eax
     mov     (%rsi), %rcx
@@ -339,6 +405,7 @@ SPEC_LEAF add_flag
     mov     %al, (%rdx)
     RETURN_OK
 SPEC_END add_flag
+.endif
 
 /* Locals: rsp+0 state, rsp+8 out, rsp+16 previous epoch. */
 SPEC_FUNCTION get_finality_delay
@@ -418,6 +485,7 @@ SPEC_FUNCTION get_eligible_validator_indices
     LEAVE 16
 SPEC_END get_eligible_validator_indices
 
+.if FORK >= FORK_ALTAIR
 /*
  * rbx state, rbp flag_index, r12 epoch then the active list cursor, r13 scratch then the
  * entries left, r14 out, r15 epoch_participation, S7 out entries.
@@ -501,7 +569,9 @@ SPEC_FUNCTION get_unslashed_participating_indices
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 32
 SPEC_END get_unslashed_participating_indices
+.endif
 
+.if FORK >= FORK_ALTAIR
 /* Locals: rsp+0 out, rsp+8 total active balance, rsp+16 its square root. */
 SPEC_FUNCTION get_base_reward_per_increment
     FRAME 32
@@ -521,8 +591,41 @@ SPEC_FUNCTION get_base_reward_per_increment
     xor     %eax, %eax
 1:  UNFRAME 32
 SPEC_END get_base_reward_per_increment
+.endif
 
 /* Locals: rsp+0 state, rsp+8 index, rsp+16 out, rsp+24 base reward per increment. */
+.if FORK == FORK_PHASE0
+/* Locals: rsp+0 state, rsp+8 index, rsp+16 out, rsp+24 total active balance, rsp+32 its square root. */
+SPEC_FUNCTION get_base_reward
+    FRAME 48
+    mov     %rdi, 0(%rsp)
+    mov     %rsi, 8(%rsp)
+    mov     %rcx, 16(%rsp)
+    mov     %rdx, %rsi
+    lea     24(%rsp), %rdx
+    call    lantern_get_total_active_balance
+    test    %rax, %rax
+    jnz     1f
+    lea     24(%rsp), %rdi
+    lea     32(%rsp), %rsi
+    call    lantern_integer_squareroot
+    mov     0(%rsp), %rdi
+    mov     8(%rsp), %rsi
+    mov     (%rsi), %rsi
+    mov     BeaconState_validators(%rdi), %rcx
+    add     %rdi, %rcx
+    shl     $7, %rsi
+    mov     Validator_effective_balance(%rcx,%rsi), %rax
+    imul    $BASE_REWARD_FACTOR, %rax, %rax # fits: effective_balance is at most MAX_EFFECTIVE_BALANCE
+    xor     %edx, %edx
+    divq    32(%rsp)                        # // integer_squareroot(total_balance)
+    shr     $2, %rax                        # // BASE_REWARDS_PER_EPOCH, which is 4
+    mov     16(%rsp), %rcx
+    mov     %rax, (%rcx)
+    xor     %eax, %eax
+1:  UNFRAME 48
+SPEC_END get_base_reward
+.else
 SPEC_FUNCTION get_base_reward
     FRAME 32
     mov     %rdi, 0(%rsp)
@@ -549,3 +652,4 @@ SPEC_FUNCTION get_base_reward
     xor     %eax, %eax
 1:  UNFRAME 32
 SPEC_END get_base_reward
+.endif

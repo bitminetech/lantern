@@ -17,14 +17,31 @@ SPEC_FUNCTION process_randao
     mov     x21, x2
     mov     x22, x3
     mov     x23, x4
+.if FORK >= FORK_FULU
     NEED_SCRATCH x22, x19, 0, 9f
+.else
+    NEED_SCRATCH x22, x19, 2, 9f                /* get_beacon_proposer_index takes S(2) */
+.endif
     str     xzr, [x23]
+    ldr     x24, [x22]
     mov     x0, x19
     add     x1, sp, #L
     bl      lantern_get_current_epoch
     mov     x0, x19
+.if FORK >= FORK_FULU
     add     x1, sp, #(L + 8)
     bl      lantern_get_beacon_proposer_index
+.else
+    mov     x1, x22
+    add     x2, sp, #(L + 8)
+    bl      lantern_get_beacon_proposer_index
+    str     x24, [x22]
+    cbz     x0, 1f
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    7f
+    b       6f
+1:
+.endif
     ldr     x9, [sp, #(L + 8)]
     PART    x24, x10, x19, BeaconState_validators
     cmp     x9, x10
@@ -190,20 +207,41 @@ SPEC_FUNCTION process_operations
     mov     x23, x4
     ldr     x24, [x22]
     str     xzr, [x23]
+.if FORK >= FORK_FULU
     LDQ     x9, x20, BeaconBlockBody_deposits + 8   /* assert len(body.deposits) == 0 */
     cbz     x9, 1f
-    mov     x9, #LANTERN_INVALID_DEPOSITS
-    str     x9, [x23]
+.else
+    LDQ     x9, x19, BeaconState_eth1_data + Eth1Data_deposit_count
+    LDQ     x10, x19, BeaconState_eth1_deposit_index
+    subs    x9, x9, x10                     /* state.eth1_data.deposit_count - state.eth1_deposit_index */
+    mov     x11, #LANTERN_INVALID_OVERFLOW
+    b.lo    2f
+    mov     x10, #MAX_DEPOSITS
+    cmp     x9, x10
+    csel    x9, x9, x10, lo
+    LDQ     x10, x20, BeaconBlockBody_deposits + 8   /* assert len(body.deposits) == min(MAX_DEPOSITS, ...) */
+    cmp     x10, x9
+    b.eq    1f
+.endif
+    mov     x11, #LANTERN_INVALID_DEPOSITS
+2:  str     x11, [x23]
     b       8f
 1:  FOR_FIXED x20, BeaconBlockBody_proposer_slashings, ProposerSlashing__mem, lantern_process_proposer_slashing
     FOR_VARIABLE x20, BeaconBlockBody_attester_slashings, lantern_process_attester_slashing
     FOR_VARIABLE x20, BeaconBlockBody_attestations, lantern_process_attestation
+.if FORK < FORK_FULU
+    FOR_FIXED x20, BeaconBlockBody_deposits, Deposit__mem, lantern_process_deposit
+.endif
     FOR_FIXED x20, BeaconBlockBody_voluntary_exits, SignedVoluntaryExit__mem, lantern_process_voluntary_exit
+.if FORK >= FORK_CAPELLA
     FOR_FIXED x20, BeaconBlockBody_bls_to_execution_changes, SignedBLSToExecutionChange__mem, lantern_process_bls_to_execution_change
+.endif
+.if FORK >= FORK_ELECTRA
     PART    x27, x9, x20, BeaconBlockBody_execution_requests
     FOR_FIXED x27, ExecutionRequests_deposits, DepositRequest__mem, lantern_process_deposit_request
     FOR_FIXED x27, ExecutionRequests_withdrawals, WithdrawalRequest__mem, lantern_process_withdrawal_request
     FOR_FIXED x27, ExecutionRequests_consolidations, ConsolidationRequest__mem, lantern_process_consolidation_request
+.endif
 8:  mov     x0, #LANTERN_OK
 7:  LEAVE 16
 SPEC_END process_operations
@@ -221,6 +259,7 @@ SPEC_END process_operations
     sub     x9, x12, x11
 .endm
 
+.if FORK >= FORK_ELECTRA
 /*
  * L0: x0 = LANTERN_OK when state x0 has room for the appends of block body x1,
  * else LANTERN_BUFFER_TOO_SMALL. A leaf.
@@ -254,6 +293,62 @@ LOCAL_FUNCTION block_room
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     ret
 END_FUNCTION block_room
+.else
+.if FORK == FORK_PHASE0
+/* x9 = the free bytes of a list of nested values of state x0: its end x12 - its start - its entries' sizes. Uses x10, x11, x13. */
+.macro FREE_NESTED ref
+    LDQ     x10, x0, \ref
+    LDQ     x11, x0, (\ref) + 8
+    add     x13, x0, x10
+    sub     x9, x12, x10
+91: cbz     x11, 92f
+    ldr     x10, [x13]
+    sub     x9, x9, x10
+    add     x13, x13, x10
+    sub     x11, x11, #1
+    b       91b
+92:
+.endm
+.endif
+
+/*
+ * L0: x0 = LANTERN_OK when state x0 has room for the appends of block body x1, else
+ * LANTERN_BUFFER_TOO_SMALL: an eth1 data vote, a validator for each deposit and, in phase0,
+ * a PendingAttestation for each attestation in each epoch's list.
+ * x19 state, x20 body.
+ */
+LOCAL_FUNCTION block_room
+    ENTER 0
+    mov     x19, x0
+    mov     x20, x1
+    FREE    BeaconState_eth1_data_votes, BeaconState_validators, Eth1Data__mem
+    cmp     x9, #1
+    b.lt    9f
+    mov     x0, x19
+    bl      validator_room
+    LDQ     x9, x20, BeaconBlockBody_deposits + 8
+    cmp     x0, x9
+    b.lo    9f
+.if FORK == FORK_PHASE0
+    LDQ     x9, x20, BeaconBlockBody_attestations + 8
+    MOVQ    x10, PENDING_ATTESTATION_ROOM
+    mul     x14, x9, x10                    /* the bytes the attestations may add to one list */
+    mov     x0, x19
+    LDQ     x12, x0, BeaconState_current_epoch_attestations
+    FREE_NESTED BeaconState_previous_epoch_attestations
+    cmp     x9, x14
+    b.lo    9f
+    ldr     x12, [x0]
+    FREE_NESTED BeaconState_current_epoch_attestations
+    cmp     x9, x14
+    b.lo    9f
+.endif
+    mov     x0, #LANTERN_OK
+    LEAVE 0
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 0
+END_FUNCTION block_room
+.endif
 
 /*
  * L0: x0 = the scratch that lantern_process_block needs for body x1, with x2 validators.
@@ -267,18 +362,20 @@ LOCAL_FUNCTION block_scratch
     mul     x10, x9, x10
     MOVQ    x11, LANTERN_SCRATCH_FIXED + ATTEST_EXTRA
     add     x10, x10, x11
+.if FORK >= FORK_ALTAIR
     MOVQ    x11, LANTERN_SCRATCH_FIXED + SYNC_AGG_EXTRA      /* sync aggregate: S(1) + SYNC_AGG_EXTRA */
     add     x11, x11, x9
     cmp     x11, x10
     csel    x10, x11, x10, hi
+.endif
+.if FORK >= FORK_BELLATRIX
     PART    x12, x13, x1, BeaconBlockBody_execution_payload /* the payload: its header and transactions */
-    LDQ     x13, x12, ExecutionPayload_withdrawals
-    LDQ     x14, x12, ExecutionPayload_transactions
-    sub     x13, x13, x14
-    MOVQ    x11, LANTERN_SCRATCH_FIXED + HEADER_ROOM + 24 + WLIST_BYTES
+    TX_BYTES x13, x12, x14
+    MOVQ    x11, LANTERN_SCRATCH_FIXED + HEADER_ROOM + 24 + PAYLOAD_WLIST_BYTES
     add     x11, x11, x13
     cmp     x11, x10
     csel    x10, x11, x10, hi
+.endif
     mov     x0, x10
     ret
 END_FUNCTION block_scratch
@@ -318,6 +415,7 @@ SPEC_FUNCTION process_block
     mov     x4, x24
     bl      lantern_process_block_header
     BLOCK_STEP
+.if FORK >= FORK_CAPELLA
     str     x26, [x23]
     mov     x0, x19
     PART    x1, x9, x25, BeaconBlockBody_execution_payload
@@ -335,6 +433,24 @@ SPEC_FUNCTION process_block
     mov     x5, x24
     bl      lantern_process_execution_payload
     BLOCK_STEP
+.elseif FORK == FORK_BELLATRIX
+    mov     x0, x19                         /* if is_execution_enabled(state, block.body): */
+    mov     x1, x25
+    add     x2, sp, #L
+    bl      lantern_is_execution_enabled
+    ldr     x9, [sp, #L]
+    cbz     x9, 1f
+    str     x26, [x23]
+    mov     x0, x19
+    mov     x1, x25
+    mov     x2, x21
+    mov     x3, x22
+    mov     x4, x23
+    mov     x5, x24
+    bl      lantern_process_execution_payload
+    BLOCK_STEP
+1:
+.endif
     str     x26, [x23]
     mov     x0, x19
     mov     x1, x25
@@ -359,6 +475,7 @@ SPEC_FUNCTION process_block
     mov     x4, x24
     bl      lantern_process_operations
     BLOCK_STEP
+.if FORK >= FORK_ALTAIR
     str     x26, [x23]
     mov     x0, x19
     add     x1, x25, #BeaconBlockBody_sync_aggregate
@@ -367,6 +484,7 @@ SPEC_FUNCTION process_block
     mov     x4, x24
     bl      lantern_process_sync_aggregate
     BLOCK_STEP
+.endif
 8:  mov     x0, #LANTERN_OK
 7:  LEAVE 16
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
@@ -427,6 +545,7 @@ LOCAL_FUNCTION slots_room
     lsr     x6, x4, #LOG2_SLOTS_PER_EPOCH
     subs    x5, x5, x6                      /* epochs crossed */
     csel    x5, x5, xzr, hs
+.if FORK >= FORK_ELECTRA
     mov     x6, #MAX_PENDING_DEPOSITS_PER_EPOCH     /* room for the validators those epochs may add */
     umulh   x7, x5, x6
     cbnz    x7, 9f
@@ -435,18 +554,51 @@ LOCAL_FUNCTION slots_room
     VALIDATOR_LISTS LIST_ROOM
     cmp     x9, x7
     b.lo    9f
-    lsr     x8, x1, #(LOG2_SLOTS_PER_EPOCH)         /* and for a historical summary per batch boundary */
+.else
+    mov     x7, #0                          /* epochs add no validators */
+.endif
+.if FORK == FORK_PHASE0
+    cbz     x5, 4f                          /* the current epoch's attestations move to the previous list once */
+    LDQ     x10, x0, BeaconState_current_epoch_attestations
+    LDQ     x11, x0, BeaconState_current_epoch_attestations + 8
+    add     x12, x0, x10
+    mov     x13, #0
+2:  cbz     x11, 3f
+    ldr     x14, [x12]
+    add     x13, x13, x14
+    add     x12, x12, x14
+    sub     x11, x11, #1
+    b       2b
+3:  LDQ     x11, x0, BeaconState_previous_epoch_attestations
+    sub     x10, x10, x11
+    cmp     x13, x10
+    b.hi    9f
+4:
+.endif
+    lsr     x8, x1, #(LOG2_SLOTS_PER_EPOCH)         /* and for a historical root or summary per batch boundary */
     lsr     x9, x4, #(LOG2_SLOTS_PER_EPOCH)
     mov     x10, #(SLOTS_PER_HISTORICAL_ROOT / SLOTS_PER_EPOCH)
     udiv    x8, x8, x10
     udiv    x9, x9, x10
     subs    x8, x8, x9                      /* none when the slot is before the state's batch */
     csel    x8, x8, xzr, hs
+.if FORK >= FORK_CAPELLA
     LDQ     x10, x0, BeaconState_historical_summaries
     LDQ     x11, x0, BeaconState_historical_summaries + 8
+.if FORK >= FORK_ELECTRA
     LDQ     x12, x0, BeaconState_pending_deposits
+.else
+    ldr     x12, [x0]                       /* the last part ends at the end of the value */
+.endif
     sub     x12, x12, x10
     lsr     x12, x12, #6
+.else
+    LDQ     x10, x0, BeaconState_historical_roots
+    LDQ     x11, x0, BeaconState_historical_roots + 8
+    LDQ     x12, x0, BeaconState_eth1_data_votes
+    sub     x12, x12, x10
+    lsr     x12, x12, #5
+.endif
     sub     x12, x12, x11
     cmp     x12, x8
     b.lo    9f
@@ -454,7 +606,7 @@ LOCAL_FUNCTION slots_room
     add     x9, x9, x7
     lsl     x9, x9, #3
     add     x9, x9, #LIST_FIXED
-    mov     x10, #11
+    mov     x10, #EPOCH_LISTS
     mul     x9, x9, x10
     MOVQ    x10, LANTERN_SCRATCH_FIXED + EPOCH_EXTRA
     add     x9, x9, x10

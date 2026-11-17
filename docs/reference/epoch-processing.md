@@ -5,11 +5,23 @@
 ### Functions
 
 - [`lantern_process_justification_and_finalization`](#function-lantern_process_justification_and_finalization): justifies and finalizes checkpoints.
+- [`lantern_get_matching_source_attestations`](#function-lantern_get_matching_source_attestations): the pending attestations of an epoch.
+- [`lantern_get_matching_target_attestations`](#function-lantern_get_matching_target_attestations): those that vote for the epoch's target.
+- [`lantern_get_matching_head_attestations`](#function-lantern_get_matching_head_attestations): those that also vote for the head.
+- [`lantern_get_unslashed_attesting_indices`](#function-lantern_get_unslashed_attesting_indices): the unslashed validators of a set of pending attestations.
+- [`lantern_get_attesting_balance`](#function-lantern_get_attesting_balance): their total effective balance.
 - [`lantern_weigh_justification_and_finalization`](#function-lantern_weigh_justification_and_finalization): the checkpoint updates for given target balances.
 - [`lantern_process_inactivity_updates`](#function-lantern_process_inactivity_updates): updates inactivity scores.
 - [`lantern_process_rewards_and_penalties`](#function-lantern_process_rewards_and_penalties): applies the rewards and penalties of the previous epoch.
 - [`lantern_get_flag_index_deltas`](#function-lantern_get_flag_index_deltas): the rewards and penalties of one participation flag.
 - [`lantern_get_inactivity_penalty_deltas`](#function-lantern_get_inactivity_penalty_deltas): the inactivity penalties.
+- [`lantern_get_proposer_reward`](#function-lantern_get_proposer_reward): the proposer's share of an attester's base reward.
+- [`lantern_get_attestation_component_deltas`](#function-lantern_get_attestation_component_deltas): the deltas of one set of matching attestations.
+- [`lantern_get_source_deltas`](#function-lantern_get_source_deltas): the deltas of the source votes.
+- [`lantern_get_target_deltas`](#function-lantern_get_target_deltas): the deltas of the target votes.
+- [`lantern_get_head_deltas`](#function-lantern_get_head_deltas): the deltas of the head votes.
+- [`lantern_get_inclusion_delay_deltas`](#function-lantern_get_inclusion_delay_deltas): the rewards for early inclusion.
+- [`lantern_get_attestation_deltas`](#function-lantern_get_attestation_deltas): all of phase0's attestation deltas.
 - [`lantern_process_registry_updates`](#function-lantern_process_registry_updates): queues, ejects and activates validators.
 - [`lantern_process_slashings`](#function-lantern_process_slashings): applies the correlated slashing penalties.
 - [`lantern_process_eth1_data_reset`](#function-lantern_process_eth1_data_reset): clears the eth1 votes at the end of a voting period.
@@ -17,9 +29,12 @@
 - [`lantern_process_effective_balance_updates`](#function-lantern_process_effective_balance_updates): updates effective balances with hysteresis.
 - [`lantern_process_slashings_reset`](#function-lantern_process_slashings_reset): clears the next slashings entry.
 - [`lantern_process_randao_mixes_reset`](#function-lantern_process_randao_mixes_reset): carries the RANDAO mix into the next epoch.
+- [`lantern_process_historical_roots_update`](#function-lantern_process_historical_roots_update): appends a historical batch root.
 - [`lantern_process_historical_summaries_update`](#function-lantern_process_historical_summaries_update): appends a historical summary.
+- [`lantern_process_participation_record_updates`](#function-lantern_process_participation_record_updates): rotates the pending attestations.
 - [`lantern_process_participation_flag_updates`](#function-lantern_process_participation_flag_updates): rotates the participation flags.
 - [`lantern_initiate_validator_exit`](#function-lantern_initiate_validator_exit): starts the exit of a validator.
+- [`lantern_get_validator_churn_limit`](#function-lantern_get_validator_churn_limit): the validators that may activate or exit in an epoch.
 - [`lantern_compute_exit_epoch_and_update_churn`](#function-lantern_compute_exit_epoch_and_update_churn): the exit epoch for a balance, and the churn update.
 - [`lantern_get_balance_churn_limit`](#function-lantern_get_balance_churn_limit): the balance churn limit.
 - [`lantern_get_activation_exit_churn_limit`](#function-lantern_get_activation_exit_churn_limit): the churn limit of activations and exits.
@@ -43,8 +58,10 @@
 
 ## Spec
 
-- Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), each function at its latest definition from phase0 to fulu.
+- Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), each function at its definition in the fork of its object (include/forks.inc).
 - Section: Epoch processing of `beacon-chain.md` in phase0, altair, bellatrix, capella, electra and fulu, and the electra helpers it calls.
+- A list of matching attestations is an [`IndexList`](helpers.md#type-indexlist) of the offsets of PendingAttestation values from the start of the state, in the order of the state's list.
+- The phase0 functions that read pending attestations take S(k) plus 24 + 8 * MAX_ATTESTATIONS * SLOTS_PER_EPOCH bytes, the matching attestations of one epoch, at the end of their scratch.
 
 ## Common rules
 
@@ -75,9 +92,141 @@ lantern_process_justification_and_finalization(state, config, scratch, result) -
 - `LANTERN_OK`: `result` is `LANTERN_VALID`, or the failed check of lantern_get_block_root.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
 
+
+### Function does
+
+- Phase0: the target balances are lantern_get_attesting_balance of lantern_get_matching_target_attestations of each epoch.
+- Altair and later: the total balances of the unslashed participating indices of the timely target flag.
 ### Limits
 
 - Scratch: S(3).
+- Phase0: scratch S(6) and the matching attestations.
+
+## Function `lantern_get_matching_source_attestations`
+
+The pending attestations of epoch: current_epoch_attestations when epoch is the current epoch, else previous_epoch_attestations.
+
+### Signature
+
+```
+lantern_get_matching_source_attestations(state, epoch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `epoch` | input | u64 |
+| `out` | output | `IndexList` of offsets of PendingAttestation values |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the attestations.
+- `LANTERN_INVALID_PARTICIPATION_EPOCH`: epoch is neither the previous nor the current epoch.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has no room for the list's entries.
+
+### ABI
+
+- Forks: phase0.
+
+## Function `lantern_get_matching_target_attestations`
+
+The matching source attestations of epoch whose target root is get_block_root of epoch.
+
+### Signature
+
+```
+lantern_get_matching_target_attestations(state, epoch, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the attestations.
+- The statuses of lantern_get_matching_source_attestations and lantern_get_block_root.
+
+### Function does
+
+- Reads the block root only when a source attestation exists, as the spec's list comprehension does.
+
+### ABI
+
+- Forks: phase0.
+
+## Function `lantern_get_matching_head_attestations`
+
+The matching target attestations of epoch whose beacon_block_root is get_block_root_at_slot of their slot.
+
+### Signature
+
+```
+lantern_get_matching_head_attestations(state, epoch, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the attestations.
+- The statuses of lantern_get_matching_target_attestations and lantern_get_block_root_at_slot.
+
+### ABI
+
+- Forks: phase0.
+
+## Function `lantern_get_unslashed_attesting_indices`
+
+The union of the attesting indices of the attestations, without slashed validators, in ascending order.
+
+### Signature
+
+```
+lantern_get_unslashed_attesting_indices(state, attestations, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `attestations` | input | `IndexList` of offsets of PendingAttestation values |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | `IndexList` with room for every validator |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the indices.
+- `LANTERN_INVALID_ATTESTATION`: an attestation has fewer aggregation bits than its committee.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` or `out` is short.
+
+### Limits
+
+- Scratch: S(5).
+
+### ABI
+
+- Forks: phase0.
+
+## Function `lantern_get_attesting_balance`
+
+lantern_get_total_balance of the unslashed attesting indices of the attestations.
+
+### Signature
+
+```
+lantern_get_attesting_balance(state, attestations, scratch, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the balance.
+- The statuses of lantern_get_unslashed_attesting_indices.
+
+### Limits
+
+- Scratch: S(6).
+
+### ABI
+
+- Forks: phase0.
 
 ## Function `lantern_weigh_justification_and_finalization`
 
@@ -137,9 +286,14 @@ lantern_process_rewards_and_penalties(state, config, scratch, result) -> status
 - `LANTERN_OK`: `result` is `LANTERN_VALID`.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
 
+
+### Function does
+
+- Phase0: increases each balance by its reward and then decreases it by its penalty of lantern_get_attestation_deltas.
 ### Limits
 
 - Scratch: S(11).
+- Phase0: scratch S(13) and the matching attestations.
 
 ## Function `lantern_get_flag_index_deltas`
 
@@ -197,9 +351,167 @@ lantern_get_inactivity_penalty_deltas(state, config, scratch, rewards, penalties
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short, or an output has room for fewer entries than there are validators.
 - A `LANTERN_INVALID_*` code: a spec check of a callee failed.
 
+
+### Function does
+
+- Phase0: in an inactivity leak, each eligible validator pays BASE_REWARDS_PER_EPOCH base rewards minus a proposer reward, and one that is no unslashed target attester also its effective balance times the finality delay // INACTIVITY_PENALTY_QUOTIENT.
+- The quotient is INACTIVITY_PENALTY_QUOTIENT in phase0, _ALTAIR in altair, and _BELLATRIX from bellatrix on.
 ### Limits
 
 - Scratch: S(3).
+- Phase0: scratch S(7) and the matching attestations.
+
+## Function `lantern_get_proposer_reward`
+
+lantern_get_base_reward of the attester // PROPOSER_REWARD_QUOTIENT.
+
+### Signature
+
+```
+lantern_get_proposer_reward(state, attesting_index, scratch, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the reward.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than S(1) bytes.
+
+### ABI
+
+- Forks: phase0.
+
+## Function `lantern_get_attestation_component_deltas`
+
+For each eligible validator: a reward when it is an unslashed attester of the attestations, else a penalty of its base reward.
+
+### Signature
+
+```
+lantern_get_attestation_component_deltas(state, attestations, scratch, rewards, penalties) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `rewards` and `penalties` hold one entry per validator.
+- `LANTERN_INVALID_OVERFLOW`: a sum leaves the u64 range.
+- The statuses of lantern_get_unslashed_attesting_indices and lantern_get_eligible_validator_indices.
+
+### Function does
+
+- Rewards the full base reward in an inactivity leak, else base_reward * (attesting balance // increment) // (total balance // increment).
+- Computes the base reward of each validator from one total active balance, the value the spec's cached get_base_reward reads.
+
+### Limits
+
+- Scratch: S(7).
+
+### ABI
+
+- Forks: phase0.
+
+## Function `lantern_get_source_deltas`
+
+lantern_get_attestation_component_deltas of the matching source attestations of the previous epoch.
+
+### Signature
+
+```
+lantern_get_source_deltas(state, scratch, rewards, penalties) -> status
+```
+
+### Limits
+
+- Scratch: S(7) and the matching attestations.
+
+### ABI
+
+- Forks: phase0.
+
+## Function `lantern_get_target_deltas`
+
+lantern_get_attestation_component_deltas of the matching target attestations of the previous epoch.
+
+### Signature
+
+```
+lantern_get_target_deltas(state, scratch, rewards, penalties) -> status
+```
+
+### Limits
+
+- Scratch: S(7) and the matching attestations.
+
+### ABI
+
+- Forks: phase0.
+
+## Function `lantern_get_head_deltas`
+
+lantern_get_attestation_component_deltas of the matching head attestations of the previous epoch.
+
+### Signature
+
+```
+lantern_get_head_deltas(state, scratch, rewards, penalties) -> status
+```
+
+### Limits
+
+- Scratch: S(7) and the matching attestations.
+
+### ABI
+
+- Forks: phase0.
+
+## Function `lantern_get_inclusion_delay_deltas`
+
+For each unslashed source attester: its earliest attestation gives the proposer a proposer reward and the attester the rest of its base reward // the inclusion delay.
+
+### Signature
+
+```
+lantern_get_inclusion_delay_deltas(state, scratch, rewards, penalties) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `rewards` holds the rewards; `penalties` is all zero.
+- `LANTERN_INVALID_OVERFLOW`: a sum leaves the u64 range, or an inclusion delay is 0.
+
+### Function does
+
+- Of the attestations with the smallest delay, takes the first in list order, as the spec's min does.
+
+### Limits
+
+- Scratch: S(9) and the matching attestations.
+
+### ABI
+
+- Forks: phase0.
+
+## Function `lantern_get_attestation_deltas`
+
+The sums of the source, target, head and inclusion delay rewards, and of the source, target, head and inactivity penalties.
+
+### Signature
+
+```
+lantern_get_attestation_deltas(state, config, scratch, rewards, penalties) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `rewards` and `penalties` hold the sums.
+- `LANTERN_INVALID_OVERFLOW`: a sum leaves the u64 range.
+
+### Limits
+
+- Scratch: S(11) and the matching attestations.
+
+### ABI
+
+- Forks: phase0.
 
 ## Function `lantern_process_registry_updates`
 
@@ -216,6 +528,11 @@ lantern_process_registry_updates(state, config, scratch, result) -> status
 - `LANTERN_OK`: `result` is `LANTERN_VALID`, or the failed check of lantern_initiate_validator_exit.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
 
+
+### Function does
+
+- Before electra: queues and ejects in one pass over the validators, then activates the queue in order of (activation_eligibility_epoch, index), up to lantern_get_validator_churn_limit.
+- Electra and later: activates each eligible validator.
 ### Limits
 
 - Scratch: S(1).
@@ -235,6 +552,12 @@ lantern_process_slashings(state, config, scratch, result) -> status
 - `LANTERN_OK`: `result` is `LANTERN_VALID`.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
 
+
+### Function does
+
+- The multiplier is PROPORTIONAL_SLASHING_MULTIPLIER in phase0, _ALTAIR in altair, and _BELLATRIX from bellatrix on.
+- Before electra: the penalty is effective_balance // increment * adjusted total // total balance * increment.
+- Electra and later: the penalty is the penalty per increment times the increments of the effective balance.
 ### Limits
 
 - Scratch: S(1).
@@ -281,6 +604,10 @@ lantern_process_effective_balance_updates(state, config, scratch, result) -> sta
 
 - `LANTERN_OK`: `result` is `LANTERN_VALID`.
 
+### Function does
+
+- The cap is MAX_EFFECTIVE_BALANCE before electra, and lantern_get_max_effective_balance of the validator from electra on.
+
 ## Function `lantern_process_slashings_reset`
 
 Sets the slashings entry of the next epoch to 0.
@@ -309,6 +636,29 @@ lantern_process_randao_mixes_reset(state, config, scratch, result) -> status
 
 - `LANTERN_OK`: `result` is `LANTERN_VALID`.
 
+## Function `lantern_process_historical_roots_update`
+
+When the next epoch starts a historical batch, appends hash_tree_root of HistoricalBatch(block_roots, state_roots) to historical_roots.
+
+### Signature
+
+```
+lantern_process_historical_roots_update(state, config, scratch, result) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID`.
+- `LANTERN_BUFFER_TOO_SMALL`: the root is due and historical_roots has no room, or `scratch` is short.
+
+### Function does
+
+- Hashes the state's block_roots and state_roots in place: they are laid out as one HistoricalBatch value.
+
+### ABI
+
+- Forks: phase0 to bellatrix.
+
 ## Function `lantern_process_historical_summaries_update`
 
 When the next epoch starts a historical batch, appends the roots of block_roots and state_roots.
@@ -328,6 +678,10 @@ lantern_process_historical_summaries_update(state, config, scratch, result) -> s
 
 - Hashes with `ssz_hash_tree_root` of asm-ssz.
 
+### ABI
+
+- Forks: capella and later.
+
 ## Function `lantern_process_participation_flag_updates`
 
 Moves the current participation flags to the previous ones and zeroes the current ones.
@@ -341,6 +695,25 @@ lantern_process_participation_flag_updates(state, config, scratch, result) -> st
 ### Returns
 
 - `LANTERN_OK`: `result` is `LANTERN_VALID`.
+
+## Function `lantern_process_participation_record_updates`
+
+Moves current_epoch_attestations to previous_epoch_attestations and empties current_epoch_attestations.
+
+### Signature
+
+```
+lantern_process_participation_record_updates(state, config, scratch, result) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID`.
+- `LANTERN_BUFFER_TOO_SMALL`: the previous list has less room than the current list's entries take.
+
+### ABI
+
+- Forks: phase0.
 
 ## Function `lantern_initiate_validator_exit`
 
@@ -367,9 +740,32 @@ lantern_initiate_validator_exit(state, index, config, scratch, result) -> status
 - `LANTERN_OK`: `result` is `LANTERN_VALID`, or `LANTERN_INVALID_OVERFLOW` when an epoch leaves the Uint64 range.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short; the state is unchanged.
 
+
+### Function does
+
+- Before electra: the exit epoch is the latest exit epoch or the activation exit epoch of the current epoch, plus one when that epoch has lantern_get_validator_churn_limit exits.
+- Electra and later: the exit epoch of lantern_compute_exit_epoch_and_update_churn.
 ### Limits
 
 - Scratch: S(1).
+
+## Function `lantern_get_validator_churn_limit`
+
+max(MIN_PER_EPOCH_CHURN_LIMIT, the active validators of the current epoch // CHURN_LIMIT_QUOTIENT).
+
+### Signature
+
+```
+lantern_get_validator_churn_limit(state, config, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`, always.
+
+### ABI
+
+- Forks: phase0 to deneb.
 
 ## Function `lantern_compute_exit_epoch_and_update_churn`
 
@@ -533,6 +929,10 @@ lantern_is_valid_deposit_signature(deposit, config, scratch, out) -> status
 - `LANTERN_OK`: `out` holds 1 for a valid signature, else 0.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short.
 
+
+### ABI
+
+- Forks: exported from electra on. Earlier objects keep it as the local label lantern_is_valid_deposit_signature, which their own code calls.
 ### Function does
 
 - Takes the domain of DOMAIN_DEPOSIT with GENESIS_FORK_VERSION and a zero root.
@@ -566,6 +966,11 @@ lantern_add_validator_to_registry(state, pubkey, withdrawal_credentials, amount)
 - `LANTERN_OK`: done.
 - `LANTERN_BUFFER_TOO_SMALL`: one of the five lists has no room; the state is unchanged.
 
+### Function does
+
+- Phase0: appends the validator and its balance.
+- Altair and later: also its participation flags and inactivity score.
+
 ## Function `lantern_get_validator_from_deposit`
 
 A validator with FAR_FUTURE_EPOCH epochs and the effective balance of amount, down to an increment and up to its maximum.
@@ -589,6 +994,10 @@ lantern_get_validator_from_deposit(pubkey, withdrawal_credentials, amount, out) 
 
 - `LANTERN_OK`, always.
 
+### Function does
+
+- The effective balance cap is MAX_EFFECTIVE_BALANCE before electra, and lantern_get_max_effective_balance from electra on.
+
 ## Function `lantern_get_index_for_new_validator`
 
 The number of validators.
@@ -602,6 +1011,10 @@ lantern_get_index_for_new_validator(state, out) -> status
 ### Returns
 
 - `LANTERN_OK`, always.
+
+### ABI
+
+- Forks: exported from altair on. Earlier objects keep it as the local label lantern_get_index_for_new_validator, which their own code calls.
 
 ## Function `lantern_set_or_append_list`
 
@@ -626,6 +1039,10 @@ lantern_set_or_append_list(state, part, index, value) -> status
 
 - `LANTERN_OK`: done.
 - `LANTERN_BUFFER_TOO_SMALL`: an append has no room; the state is unchanged.
+
+### ABI
+
+- Forks: exported from altair on. Earlier objects keep it as the local label lantern_set_or_append_list, which their own code calls.
 
 ## Function `lantern_process_sync_committee_updates`
 
@@ -740,6 +1157,11 @@ lantern_process_epoch(state, config, scratch, result) -> status
 - `LANTERN_OK`: `result` is `LANTERN_VALID`, or the failed check of a step; on a failed check the later steps do not run.
 - `LANTERN_BUFFER_TOO_SMALL`: `scratch` is short, or the state lacks the room of a step: MAX_PENDING_DEPOSITS_PER_EPOCH new validators, and one historical summary when one is due. Checked before any step runs.
 
+
+### Function does
+
+- Phase0: justification and finalization, rewards and penalties, registry updates, slashings, eth1 data reset, effective balance updates, slashings reset, RANDAO mixes reset, historical roots update, participation record updates.
+- Fulu: the steps of each fork from altair to fulu.
 ### Limits
 
 - Scratch: the most of its steps.
