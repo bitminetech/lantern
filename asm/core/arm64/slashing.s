@@ -7,7 +7,7 @@
  * x25 validator. Locals: L epoch, L+8 penalty, L+16 proposer, L+24 whistleblower reward,
  * L+32 proposer reward, L+40 whistleblower, L+48 slashed index.
  */
-FUNCTION lantern_slash_validator
+SPEC_FUNCTION slash_validator
     ENTER 64
     mov     x19, x0
     ldr     x20, [x1]
@@ -96,9 +96,9 @@ FUNCTION lantern_slash_validator
     LEAVE 64
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 64
-END_FUNCTION lantern_slash_validator
+SPEC_END slash_validator
 
-LEAF lantern_is_slashable_attestation_data
+SPEC_LEAF is_slashable_attestation_data
     mov     x3, #0                          /* data_1 != data_2 */
     mov     x4, #0
 1:  ldr     x5, [x0, x4]
@@ -125,7 +125,7 @@ LEAF lantern_is_slashable_attestation_data
     cset    x3, lo
 4:  str     x3, [x2]
     RETURN_OK
-END_FUNCTION lantern_is_slashable_attestation_data
+SPEC_END is_slashable_attestation_data
 
 .if (AttestationData__mem & 7) || (AttestationData__mem != 128)
 .error "lantern_is_slashable_attestation_data compares AttestationData 8 bytes at a time"
@@ -136,7 +136,7 @@ END_FUNCTION lantern_is_slashable_attestation_data
  * x25 signed header. Locals: L predicate, L+8 epoch, L+16 domain type, L+24 domain (32),
  * L+56 signing root as a ByteList (56), L+112 index.
  */
-FUNCTION lantern_process_proposer_slashing
+SPEC_FUNCTION process_proposer_slashing
     ENTER 128
     mov     x19, x0
     mov     x20, x1
@@ -205,7 +205,7 @@ FUNCTION lantern_process_proposer_slashing
     LEAVE 128
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 128
-END_FUNCTION lantern_process_proposer_slashing
+SPEC_END process_proposer_slashing
 
 /*
  * L0 of lantern_process_proposer_slashing: check the signature of signed header x25 by
@@ -255,7 +255,7 @@ END_FUNCTION check_header_signature
  * x25 attestation_2, x26 cursor 1, x27 cursor 2, x28 slashed_any.
  * Locals: L predicate, L+8 epoch, L+16 index, L+24 end 1, L+32 end 2, L+40 scratch size.
  */
-FUNCTION lantern_process_attester_slashing
+SPEC_FUNCTION process_attester_slashing
     ENTER 48
     mov     x19, x0
     mov     x20, x1
@@ -353,4 +353,4 @@ FUNCTION lantern_process_attester_slashing
     LEAVE 48
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 48
-END_FUNCTION lantern_process_attester_slashing
+SPEC_END process_attester_slashing

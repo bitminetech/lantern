@@ -34,7 +34,7 @@
  * L+64 signing root as a ByteList (56), L+120 block root (32), L+152 valid or bit count, L+160 total active balance,
  * L+168 base reward per increment, L+176 participant reward, L+184 proposer reward, L+192 proposer, L+200 the one.
  */
-FUNCTION lantern_process_sync_aggregate
+SPEC_FUNCTION process_sync_aggregate
     ENTER 208
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -252,7 +252,7 @@ FUNCTION lantern_process_sync_aggregate
     LEAVE 208
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 208
-END_FUNCTION lantern_process_sync_aggregate
+SPEC_END process_sync_aggregate
 
 .if WEIGHT_DENOMINATOR != 64
 .error "lantern_process_sync_aggregate divides by WEIGHT_DENOMINATOR with a shift by 6"

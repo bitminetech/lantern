@@ -51,7 +51,7 @@ lantern_beacon_state_copy_size(state, room, size) -> status
 ### ABI
 
 - Role: L1.
-- Symbol: `lantern_beacon_state_copy_size`.
+- Symbol: `lantern_<fork>_beacon_state_copy_size`, as in [helpers.md](helpers.md#common-rules).
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `state`, `room`, `size`.
 
@@ -97,7 +97,7 @@ lantern_beacon_state_copy(state, room, out) -> status
 ### ABI
 
 - Role: L1.
-- Symbol: `lantern_beacon_state_copy`.
+- Symbol: `lantern_<fork>_beacon_state_copy`, as in [helpers.md](helpers.md#common-rules).
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `state`, `room`, `out`.
 
@@ -130,7 +130,7 @@ lantern_copy(dst, src, n) -> nothing
 ### ABI
 
 - Role: L0.
-- Symbol: `lantern_copy`.
+- Symbol: the local label `lantern_copy` in each object of the core.
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6). It returns no status.
 - Argument order: `dst`, `src`, `n`.
 

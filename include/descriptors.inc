@@ -608,8 +608,8 @@ lantern_types_end:
 /* ------------------------------------------------------------ Type table for the tests */
 
 /*
- * lantern_types: u64 count, then for each root type the distance back from
- * lantern_types to its header and to its name (a zero ended string).
+ * lantern_<fork>_types (FORK_DATA, include/forks.inc): u64 count, then for each root type
+ * the distance back from the table to its header and to its name (a zero ended string).
  */
 .macro SSZ_NAME T
 lantern_type_name_\T:
@@ -623,7 +623,7 @@ lantern_type_name_\T:
 
 SSZ_ROOTS SSZ_NAME
     .p2align 3
-DATA_GLOBAL lantern_types
+FORK_DATA types
 lantern_types_table:
     .quad SSZ_HC
 SSZ_ROOTS SSZ_TABLE_ENTRY

@@ -66,6 +66,16 @@
     .cfi_startproc
 .endm
 
+/* A global function label at this address, for an export that shares its code with a local label. */
+.macro GLOBAL_LABEL name
+    .globl \name
+    .type \name, %function
+\name:
+.endm
+.macro GLOBAL_LABEL_END name
+    .size \name, . - \name
+.endm
+
 /* Call a global function: of this library, or of a dependency. */
 .macro CALL_GLOBAL name
 .ifdef ISA_ARM64

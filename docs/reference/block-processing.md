@@ -74,7 +74,7 @@
 - Scratch is S(k) of [Type Scratch](helpers.md#type-scratch), with k under Limits.
 - `execution_valid` is the answer of the execution engine to the payload, given by the caller: 1 valid, 0 not.
 - A function never makes an OS call and never keeps a pointer after it returns.
-- Role: L1. Convention: the core ABI for each ISA (ARCHITECTURE.md section 6). Symbol: the function name (`_` prefixed on macOS).
+- Role, convention and symbol: as in [helpers.md](helpers.md#common-rules).
 - The `process_*` operation functions take (`state`, the operation, `config`, `scratch`, `result`) in that order.
 - Signatures are verified with `crypto_bls_verify`, `crypto_bls_fast_aggregate_verify` and `crypto_bls_eth_fast_aggregate_verify` of asm-crypto; keys are combined with its `crypto_bls_g1_*` functions.
 

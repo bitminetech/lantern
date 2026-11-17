@@ -33,7 +33,7 @@ END_FUNCTION append_pending_deposit
  * x19 state, x20 signed exit, x21 config, x22 scratch, x23 result, x24 validator.
  * Locals: L epoch, L+8 predicate, L+16 domain type, L+24 domain (32), L+56 signing root as a ByteList (24 + 32), L+112 pending.
  */
-FUNCTION lantern_process_voluntary_exit
+SPEC_FUNCTION process_voluntary_exit
     ENTER 128
     mov     x19, x0
     mov     x20, x1
@@ -117,7 +117,7 @@ FUNCTION lantern_process_voluntary_exit
     LEAVE 128
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 128
-END_FUNCTION lantern_process_voluntary_exit
+SPEC_END process_voluntary_exit
 
 /*
  * L0: verify a BLS signature over a signing root. x0 public key, x1 signature,
@@ -146,7 +146,7 @@ END_FUNCTION verify_root_signature
  * Locals: L digest (32), L+32 zero root, L+56 ByteList header (24), L+80 signing root (32),
  * L+112 domain type, L+120 domain... domain at L+128 (32).
  */
-FUNCTION lantern_process_bls_to_execution_change
+SPEC_FUNCTION process_bls_to_execution_change
     ENTER 176
     mov     x19, x0
     mov     x20, x1
@@ -216,12 +216,12 @@ FUNCTION lantern_process_bls_to_execution_change
     LEAVE 176
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 176
-END_FUNCTION lantern_process_bls_to_execution_change
+SPEC_END process_bls_to_execution_change
 
 /* ---------------------------------------------------------------- Execution layer requests */
 
 /* x19 state, x20 request, x21 result. Locals: L the PendingDeposit. */
-FUNCTION lantern_process_deposit_request
+SPEC_FUNCTION process_deposit_request
     ENTER 192
     mov     x19, x0
     mov     x20, x1
@@ -238,7 +238,7 @@ FUNCTION lantern_process_deposit_request
     cbnz    x0, 7f
     str     xzr, [x21]
 7:  LEAVE 192
-END_FUNCTION lantern_process_deposit_request
+SPEC_END process_deposit_request
 
 .if (DepositRequest_pubkey != PendingDeposit_pubkey) || (DepositRequest_withdrawal_credentials != PendingDeposit_withdrawal_credentials) || (DepositRequest_amount != PendingDeposit_amount) || (DepositRequest_signature != PendingDeposit_signature) || (PendingDeposit_slot != DepositRequest_signature + 96) || (PendingDeposit__mem > 192)
 .error "process_deposit_request copies a DepositRequest's first fields into a PendingDeposit"
@@ -262,7 +262,7 @@ END_FUNCTION lantern_process_deposit_request
  * x26 amount, x27 pending balance. Locals: L epoch, L+8 predicate, L+16 index, L+24 pending,
  * L+32 to_withdraw, L+40 exit queue epoch, L+48 the PendingPartialWithdrawal (24).
  */
-FUNCTION lantern_process_withdrawal_request
+SPEC_FUNCTION process_withdrawal_request
     ENTER 80
     mov     x19, x0
     mov     x20, x1
@@ -387,10 +387,10 @@ FUNCTION lantern_process_withdrawal_request
     LEAVE 80
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 80
-END_FUNCTION lantern_process_withdrawal_request
+SPEC_END process_withdrawal_request
 
 /* x19 state, x20 request, x21 out, x22 validator. Locals: L epoch, L+8 predicate. */
-FUNCTION lantern_is_valid_switch_to_compounding_request
+SPEC_FUNCTION is_valid_switch_to_compounding_request
     ENTER 16
     mov     x19, x0
     mov     x20, x1
@@ -444,10 +444,10 @@ FUNCTION lantern_is_valid_switch_to_compounding_request
     str     x9, [x21]
 8:  mov     x0, #LANTERN_OK
     LEAVE 16
-END_FUNCTION lantern_is_valid_switch_to_compounding_request
+SPEC_END is_valid_switch_to_compounding_request
 
 /* x19 state, x20 index. Locals: L the PendingDeposit (PendingDeposit__mem). */
-FUNCTION lantern_queue_excess_active_balance
+SPEC_FUNCTION queue_excess_active_balance
     ENTER 192
     mov     x19, x0
     ldr     x20, [x1]
@@ -489,14 +489,14 @@ FUNCTION lantern_queue_excess_active_balance
     LEAVE 192
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 192
-END_FUNCTION lantern_queue_excess_active_balance
+SPEC_END queue_excess_active_balance
 
 .if (Validator_withdrawal_credentials != Validator_pubkey + 48) || (PendingDeposit_withdrawal_credentials != PendingDeposit_pubkey + 48)
 .error "lantern_queue_excess_active_balance copies pubkey and credentials together"
 .endif
 
 /* x19 state, x20 index pointer. */
-FUNCTION lantern_switch_to_compounding_validator
+SPEC_FUNCTION switch_to_compounding_validator
     ENTER 16
     mov     x19, x0
     mov     x20, x1
@@ -520,13 +520,13 @@ FUNCTION lantern_switch_to_compounding_validator
     LEAVE 16
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_switch_to_compounding_validator
+SPEC_END switch_to_compounding_validator
 
 /*
  * x19 state, x20 balance, x21 config, x22 scratch, x23 out, x24 earliest, x25 churn,
  * x26 to consume, x27 result. Locals: L current epoch, L+8 activation exit epoch, L+16 churn.
  */
-FUNCTION lantern_compute_consolidation_epoch_and_update_churn
+SPEC_FUNCTION compute_consolidation_epoch_and_update_churn
     ENTER 32
     mov     x19, x0
     ldr     x20, [x1]
@@ -583,14 +583,14 @@ FUNCTION lantern_compute_consolidation_epoch_and_update_churn
     LEAVE 32
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
-END_FUNCTION lantern_compute_consolidation_epoch_and_update_churn
+SPEC_END compute_consolidation_epoch_and_update_churn
 
 /*
  * x19 state, x20 request, x21 config, x22 scratch, x23 result, x24 source, x25 target,
  * x26 source index, x27 target index. Locals: L predicate, L+8 epoch, L+16 churn, L+24 pending,
  * L+32 index, L+40 exit epoch.
  */
-FUNCTION lantern_process_consolidation_request
+SPEC_FUNCTION process_consolidation_request
     ENTER 48
     mov     x19, x0
     mov     x20, x1
@@ -755,4 +755,4 @@ FUNCTION lantern_process_consolidation_request
     LEAVE 48
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 48
-END_FUNCTION lantern_process_consolidation_request
+SPEC_END process_consolidation_request

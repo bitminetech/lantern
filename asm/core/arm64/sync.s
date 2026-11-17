@@ -12,7 +12,7 @@
  * Locals: L epoch, L+8 domain type, L+16 seed, L+48 message (seed, i // 16), L+88 digest,
  * L+120 i % count, L+128 shuffled index, L+136 active count.
  */
-FUNCTION lantern_get_next_sync_committee_indices
+SPEC_FUNCTION get_next_sync_committee_indices
     ENTER 144
     mov     x19, x0
     mov     x20, x1
@@ -105,10 +105,10 @@ FUNCTION lantern_get_next_sync_committee_indices
     LEAVE 144
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 144
-END_FUNCTION lantern_get_next_sync_committee_indices
+SPEC_END get_next_sync_committee_indices
 
 /* x19 state, x20 scratch, x21 out, x22 scratch size, x23 member, x24 indices, x25 keys. */
-FUNCTION lantern_get_next_sync_committee
+SPEC_FUNCTION get_next_sync_committee
     ENTER 16
     mov     x19, x0
     mov     x20, x1
@@ -165,10 +165,10 @@ FUNCTION lantern_get_next_sync_committee
 7:  LEAVE 16
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_get_next_sync_committee
+SPEC_END get_next_sync_committee
 
 /* x19 state, x20 config, x21 scratch, x22 result, x23 scratch size, x24 new committee. Locals: L epoch. */
-FUNCTION lantern_process_sync_committee_updates
+SPEC_FUNCTION process_sync_committee_updates
     ENTER 16
     mov     x19, x0
     mov     x20, x1
@@ -205,7 +205,7 @@ FUNCTION lantern_process_sync_committee_updates
 7:  LEAVE 16
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_process_sync_committee_updates
+SPEC_END process_sync_committee_updates
 
 .if EPOCHS_PER_SYNC_COMMITTEE_PERIOD & (EPOCHS_PER_SYNC_COMMITTEE_PERIOD - 1)
 .error "EPOCHS_PER_SYNC_COMMITTEE_PERIOD is not a power of two"

@@ -64,7 +64,8 @@
 - Each function returns its status in the ABI integer return register: `LANTERN_OK`, `LANTERN_BUFFER_TOO_SMALL`, or the `LANTERN_INVALID_*` code of a failed spec check (include/lantern.inc).
 - `state` is a valid `BeaconState` value (include/types.inc) with every PartRef in range.
 - A function never makes an OS call and never keeps a pointer after it returns.
-- Role: L1. Convention: the core ABI for each ISA (ARCHITECTURE.md section 6). Symbol: the function name (`_` prefixed on macOS).
+- Role: L1. Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Symbol: `lantern_<fork>_<name>` for the function `lantern_<name>`, in the object of each fork that the core builds (`FORKS` in platform/objects.sh), with `_` before it on macOS. Calls inside an object use its local label `lantern_<name>`.
 
 ## Function `lantern_integer_squareroot`
 

@@ -2,6 +2,7 @@
 # toolchain, then run every vector file on each of the 7 supported targets
 # (ARCHITECTURE.md sections 1, 4 and 7). RISC-V runs under QEMU. The -bls-off
 # runners run the cases made with signature checks off (tests/runner/bls_off.c).
+# tests/runner/run.sh and run.ps1 run one process per runner and file on each core.
 # The vectors are large, so a cache keyed by the generator holds them for every job.
 name: ci
 
@@ -65,6 +66,7 @@ jobs:
           - { isa: riscv64, runs-on: ubuntu-24.04-arm, qemu: qemu-riscv64, part: rest }
     runs-on: ${{ matrix.runs-on }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with: { name: build, path: build }
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -83,13 +85,9 @@ jobs:
             rest)       files=$(cd vectors && ls *.bin | grep -v fork_choice_compliance) ;;
             *)          files=$(cd vectors && ls *.bin) ;;
           esac
-          status=0
-          for runner in mainnet minimal mainnet-bls-off minimal-bls-off; do
-            chmod +x build/linux-${{ matrix.isa }}/runner-$runner
-            ${{ matrix.qemu }} build/linux-${{ matrix.isa }}/runner-$runner vectors $files \
-              | tee -a results-linux-${{ matrix.isa }}-${{ matrix.part }}.txt || status=1
-          done
-          exit $status
+          chmod +x build/linux-${{ matrix.isa }}/runner-*
+          QEMU="${{ matrix.qemu }}" tests/runner/run.sh build/linux-${{ matrix.isa }} vectors $files \
+            | tee results-linux-${{ matrix.isa }}-${{ matrix.part }}.txt
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
@@ -106,6 +104,7 @@ jobs:
           - { isa: arm64,  runs-on: windows-11-arm }
     runs-on: ${{ matrix.runs-on }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with: { name: build, path: build }
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -117,13 +116,8 @@ jobs:
       - name: Run vectors
         shell: pwsh
         run: |
-          $files = Get-ChildItem vectors -Filter *.bin | ForEach-Object { $_.Name }
-          $status = 0
-          foreach ($runner in 'mainnet', 'minimal', 'mainnet-bls-off', 'minimal-bls-off') {
-            & "build/windows-${{ matrix.isa }}/runner-$runner.exe" vectors @files | Tee-Object -Append results-windows-${{ matrix.isa }}.txt
-            if ($LASTEXITCODE -ne 0) { $status = 1 }
-          }
-          exit $status
+          tests/runner/run.ps1 build/windows-${{ matrix.isa }} vectors | Tee-Object results-windows-${{ matrix.isa }}.txt
+          exit $LASTEXITCODE
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:

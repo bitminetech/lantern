@@ -1,6 +1,7 @@
 /*
  * lantern core for RISC-V (RV64GC, LP64D).
- * One unit: this file includes every core module of lantern.
+ * One object for each fork: the build assembles this file with --defsym FORK=<FORK_*>
+ * (include/forks.inc). It includes every core module whose code reads a fork's layouts.
  * Requirements: docs/reference/. Layouts: include/.
  *
  * v1: follows the steps and function calls of consensus-specs v1.7.0-beta.4.
@@ -17,6 +18,7 @@
 .include "ssz_types.inc"
 .include "types.inc"
 .include "platform.inc"
+.include "forks.inc"
 .include "macros.s"
 
 /* Powers of two that the core divides by with shifts and masks. */
@@ -33,6 +35,7 @@ SSZ_DEPTH LOG2_SLOTS_PER_EPOCH, SLOTS_PER_EPOCH
 
 /* ---------------------------------------------------------------- Functions */
 
+.include "memory.s"
 .include "helpers.s"
 .include "state.s"
 .include "shuffle.s"
@@ -48,6 +51,7 @@ SSZ_DEPTH LOG2_SLOTS_PER_EPOCH, SLOTS_PER_EPOCH
 .include "syncagg.s"
 .include "transition.s"
 .include "forkchoice.s"
+.include "seen_find.s"
 .include "networking.s"
 
 /* ---------------------------------------------------------------- Read only data */

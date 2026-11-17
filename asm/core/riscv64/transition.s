@@ -10,7 +10,7 @@
  * Locals: L epoch, L+8 proposer index, L+16 domain type, L+24 domain (32),
  * L+56 signing root as a ByteList (56), L+112 sha256(reveal), L+144 mix.
  */
-FUNCTION lantern_process_randao
+SPEC_FUNCTION process_randao
     ENTER 176
     mv      s1, a0
     mv      s2, a1
@@ -79,10 +79,10 @@ FUNCTION lantern_process_randao
     LEAVE 176
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 176
-END_FUNCTION lantern_process_randao
+SPEC_END process_randao
 
 /* s1 state, s2 body, s3 result. */
-FUNCTION lantern_process_eth1_data
+SPEC_FUNCTION process_eth1_data
     ENTER 16
     mv      s1, a0
     mv      s2, a1
@@ -132,7 +132,7 @@ FUNCTION lantern_process_eth1_data
     LEAVE 16
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_process_eth1_data
+SPEC_END process_eth1_data
 
 .if Eth1Data__mem != 72
 .error "lantern_process_eth1_data compares Eth1Data 8 bytes at a time"
@@ -183,7 +183,7 @@ END_FUNCTION lantern_process_eth1_data
 .endm
 
 /* s1 state, s2 body, s3 config, s4 scratch, s5 result, s6 scratch size, s7 entry, s8 left, s9 requests. */
-FUNCTION lantern_process_operations
+SPEC_FUNCTION process_operations
     ENTER 16
     mv      s1, a0
     mv      s2, a1
@@ -208,7 +208,7 @@ FUNCTION lantern_process_operations
     FOR_FIXED s9, ExecutionRequests_consolidations, ConsolidationRequest__mem, lantern_process_consolidation_request
 8:  li      a0, LANTERN_OK
 7:  LEAVE 16
-END_FUNCTION lantern_process_operations
+SPEC_END process_operations
 
 /* ---------------------------------------------------------------- The block */
 
@@ -290,7 +290,7 @@ END_FUNCTION block_scratch
 .endm
 
 /* s1 state, s2 block, s3 execution_valid, s4 config, s5 scratch, s6 result, s7 body, s8 scratch size. */
-FUNCTION lantern_process_block
+SPEC_FUNCTION process_block
     ENTER 16
     mv      s1, a0
     mv      s2, a1
@@ -369,12 +369,12 @@ FUNCTION lantern_process_block
 7:  LEAVE 16
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_process_block
+SPEC_END process_block
 
 /* ---------------------------------------------------------------- Slots */
 
 /* s1 state, s2 scratch, s3 slot index. Locals: L the state root, L+32 the header root. */
-FUNCTION lantern_process_slot
+SPEC_FUNCTION process_slot
     ENTER 64
     mv      s1, a0
     mv      s2, a1
@@ -416,7 +416,7 @@ FUNCTION lantern_process_slot
     COPY32  t0, t1
     li      a0, LANTERN_OK
 7:  LEAVE 64
-END_FUNCTION lantern_process_slot
+SPEC_END process_slot
 
 /*
  * L0: a0 = LANTERN_OK when state a0 has the room and scratch a2 the bytes to reach slot a1
@@ -473,7 +473,7 @@ LOCAL_FUNCTION slots_room
 END_FUNCTION slots_room
 
 /* s1 state, s2 slot, s3 config, s4 scratch, s5 result, s6 scratch size. */
-FUNCTION lantern_process_slots
+SPEC_FUNCTION process_slots
     ENTER 16
     mv      s1, a0
     ld      s2, 0(a1)
@@ -519,7 +519,7 @@ FUNCTION lantern_process_slots
     j       2b
 8:  li      a0, LANTERN_OK
 7:  LEAVE 16
-END_FUNCTION lantern_process_slots
+SPEC_END process_slots
 
 /* ---------------------------------------------------------------- Blocks and the transition */
 
@@ -527,7 +527,7 @@ END_FUNCTION lantern_process_slots
  * s1 state, s2 signed block, s3 scratch, s4 out, s5 block, s6 proposer.
  * Locals: L epoch, L+8 domain type, L+16 domain (32), L+48 signing root as a ByteList (56).
  */
-FUNCTION lantern_verify_block_signature
+SPEC_FUNCTION verify_block_signature
     ENTER 112
     mv      s1, a0
     mv      s2, a1
@@ -569,13 +569,13 @@ FUNCTION lantern_verify_block_signature
 7:  LEAVE 112
 6:  li      a0, LANTERN_INVALID_VALIDATOR_INDEX
     LEAVE 112
-END_FUNCTION lantern_verify_block_signature
+SPEC_END verify_block_signature
 
 /*
  * s1 state, s2 signed block, s3 options, s4 config, s5 scratch, s6 result, s7 block,
  * s8 scratch size. Locals: L valid, L+8 state root (32).
  */
-FUNCTION lantern_state_transition
+SPEC_FUNCTION state_transition
     ENTER 48
     mv      s1, a0
     mv      s2, a1
@@ -657,4 +657,4 @@ FUNCTION lantern_state_transition
 7:  LEAVE 48
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 48
-END_FUNCTION lantern_state_transition
+SPEC_END state_transition

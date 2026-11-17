@@ -3,16 +3,16 @@
  * Requirements: docs/reference/block-processing.md.
  */
 
-LEAF lantern_get_beacon_proposer_index
+SPEC_LEAF get_beacon_proposer_index
     LDQ     x2, x0, BeaconState_slot
     and     x2, x2, #(SLOTS_PER_EPOCH - 1)
     ADDQ    x3, x0, BeaconState_proposer_lookahead
     ldr     x2, [x3, x2, lsl #3]
     str     x2, [x1]
     RETURN_OK
-END_FUNCTION lantern_get_beacon_proposer_index
+SPEC_END get_beacon_proposer_index
 
-LEAF lantern_xor
+SPEC_LEAF xor
     ldp     x3, x4, [x0]
     ldp     x5, x6, [x1]
     eor     x3, x3, x5
@@ -24,10 +24,10 @@ LEAF lantern_xor
     eor     x4, x4, x6
     stp     x3, x4, [x2, #16]
     RETURN_OK
-END_FUNCTION lantern_xor
+SPEC_END xor
 
 /* bits x0, length x1 (pointer to the bit count), out x2. */
-LEAF lantern_get_set_bit_count
+SPEC_LEAF get_set_bit_count
     ldr     x1, [x1]
     mov     x3, #0                          /* count */
     mov     x4, #0                          /* bit */
@@ -43,13 +43,13 @@ LEAF lantern_get_set_bit_count
     b       1b
 2:  str     x3, [x2]
     RETURN_OK
-END_FUNCTION lantern_get_set_bit_count
+SPEC_END get_set_bit_count
 
 /*
  * x19 state, x20 block, x21 scratch, x22 result, x23 body.
  * Locals: L proposer index, L+8 latest header root, L+40 body root.
  */
-FUNCTION lantern_process_block_header
+SPEC_FUNCTION process_block_header
     ENTER 80
     mov     x19, x0
     mov     x20, x1
@@ -125,4 +125,4 @@ FUNCTION lantern_process_block_header
 6:  str     x0, [x22]
     mov     x0, #LANTERN_OK
     LEAVE 80
-END_FUNCTION lantern_process_block_header
+SPEC_END process_block_header

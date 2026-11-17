@@ -13,16 +13,16 @@
 
 /* ---------------------------------------------------------------- Credentials and eligibility */
 
-LEAF lantern_has_eth1_withdrawal_credential
+SPEC_LEAF has_eth1_withdrawal_credential
     xor     %eax, %eax
     cmpb    $ETH1_ADDRESS_WITHDRAWAL_PREFIX, Validator_withdrawal_credentials(%rdi)
     sete    %al
     mov     %rax, (%rsi)
     RETURN_OK
-END_FUNCTION lantern_has_eth1_withdrawal_credential
+SPEC_END has_eth1_withdrawal_credential
 
 /* Locals: rsp+0 validator, rsp+8 out, rsp+16 the eth1 flag. */
-FUNCTION lantern_has_execution_withdrawal_credential
+SPEC_FUNCTION has_execution_withdrawal_credential
     FRAME 32
     mov     %rdi, 0(%rsp)
     mov     %rsi, 8(%rsp)
@@ -39,10 +39,10 @@ FUNCTION lantern_has_execution_withdrawal_credential
     mov     %rax, (%rsi)
     xor     %eax, %eax
     UNFRAME 32
-END_FUNCTION lantern_has_execution_withdrawal_credential
+SPEC_END has_execution_withdrawal_credential
 
 /* Locals: rsp+0 validator, rsp+8 balance, rsp+16 epoch, rsp+24 out, rsp+32 the credential flag. */
-FUNCTION lantern_is_fully_withdrawable_validator
+SPEC_FUNCTION is_fully_withdrawable_validator
     FRAME 48
     mov     %rdi, 0(%rsp)
     mov     %rsi, 8(%rsp)
@@ -64,10 +64,10 @@ FUNCTION lantern_is_fully_withdrawable_validator
     mov     %rax, (%rcx)
     xor     %eax, %eax
     UNFRAME 48
-END_FUNCTION lantern_is_fully_withdrawable_validator
+SPEC_END is_fully_withdrawable_validator
 
 /* Locals: rsp+0 validator, rsp+8 balance, rsp+16 out, rsp+24 max effective balance, rsp+32 the credential flag. */
-FUNCTION lantern_is_partially_withdrawable_validator
+SPEC_FUNCTION is_partially_withdrawable_validator
     FRAME 48
     mov     %rdi, 0(%rsp)
     mov     %rsi, 8(%rsp)
@@ -90,9 +90,9 @@ FUNCTION lantern_is_partially_withdrawable_validator
     mov     %rax, (%rdx)
     xor     %eax, %eax
     UNFRAME 48
-END_FUNCTION lantern_is_partially_withdrawable_validator
+SPEC_END is_partially_withdrawable_validator
 
-LEAF lantern_is_eligible_for_partial_withdrawals
+SPEC_LEAF is_eligible_for_partial_withdrawals
     xor     %eax, %eax
     cmpq    $-1, Validator_exit_epoch(%rdi) # exit_epoch == FAR_FUTURE_EPOCH
     jne     1f
@@ -103,9 +103,9 @@ LEAF lantern_is_eligible_for_partial_withdrawals
     seta    %al
 1:  mov     %rax, (%rdx)
     RETURN_OK
-END_FUNCTION lantern_is_eligible_for_partial_withdrawals
+SPEC_END is_eligible_for_partial_withdrawals
 
-LEAF lantern_get_pending_balance_to_withdraw
+SPEC_LEAF get_pending_balance_to_withdraw
     mov     (%rsi), %rsi
     PART    %r8, %rcx, %rdi, BeaconState_pending_partial_withdrawals
     xor     %eax, %eax
@@ -122,11 +122,11 @@ LEAF lantern_get_pending_balance_to_withdraw
     RETURN_OK
 4:  mov     $LANTERN_INVALID_OVERFLOW, %eax
     ret
-END_FUNCTION lantern_get_pending_balance_to_withdraw
+SPEC_END get_pending_balance_to_withdraw
 
 /* ---------------------------------------------------------------- Expected withdrawals */
 
-LEAF lantern_get_balance_after_withdrawals
+SPEC_LEAF get_balance_after_withdrawals
     mov     (%rsi), %rsi                    # validator_index
     mov     LIST_COUNT(%rdx), %r8
     lea     LIST_FIXED(%rdx), %r9
@@ -149,7 +149,7 @@ LEAF lantern_get_balance_after_withdrawals
     RETURN_OK
 4:  mov     $LANTERN_INVALID_OVERFLOW, %eax
     ret
-END_FUNCTION lantern_get_balance_after_withdrawals
+SPEC_END get_balance_after_withdrawals
 
 /*
  * The list all = prior + new, for get_balance_after_withdrawals: rdi = all (a Withdrawals value),
@@ -198,7 +198,7 @@ END_FUNCTION append_withdrawal
  * rbx state, rbp withdrawal index, r12 prior, r13 out, r14 entry, r15 entries left,
  * S7 all, S8 limit, S9 processed. Locals: L epoch, L+8 validator index, L+16 balance, L+24 eligible.
  */
-FUNCTION lantern_get_pending_partial_withdrawals
+SPEC_FUNCTION get_pending_partial_withdrawals
     ENTER 32
     mov     %rdi, %rbx
     mov     (%rsi), %rbp
@@ -283,14 +283,14 @@ FUNCTION lantern_get_pending_partial_withdrawals
     LEAVE 32
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 32
-END_FUNCTION lantern_get_pending_partial_withdrawals
+SPEC_END get_pending_partial_withdrawals
 
 /*
  * rbx state, rbp withdrawal index, r12 prior, r13 out, r14 validator index, r15 sweep left,
  * S7 all, S8 validator count, S9 processed.
  * Locals: L epoch, L+8 validator index, L+16 balance, L+24 predicate, L+32 max effective balance.
  */
-FUNCTION lantern_get_validators_sweep_withdrawals
+SPEC_FUNCTION get_validators_sweep_withdrawals
     ENTER 48
     mov     %rdi, %rbx
     mov     (%rsi), %rbp
@@ -380,10 +380,10 @@ FUNCTION lantern_get_validators_sweep_withdrawals
     LEAVE 48
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 48
-END_FUNCTION lantern_get_validators_sweep_withdrawals
+SPEC_END get_validators_sweep_withdrawals
 
 /* rbx state, rbp scratch, r12 out, r13 scratch size, r14 the partial sweep, r15 the validator sweep. Locals: L withdrawal index. */
-FUNCTION lantern_get_expected_withdrawals
+SPEC_FUNCTION get_expected_withdrawals
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -437,12 +437,12 @@ FUNCTION lantern_get_expected_withdrawals
 7:  LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-END_FUNCTION lantern_get_expected_withdrawals
+SPEC_END get_expected_withdrawals
 
 /* ---------------------------------------------------------------- Applying withdrawals */
 
 /* rbx state, rbp entry, r12 entries left. */
-FUNCTION lantern_apply_withdrawals
+SPEC_FUNCTION apply_withdrawals
     ENTER 16
     mov     %rdi, %rbx
     lea     LIST_FIXED(%rsi), %rbp
@@ -458,9 +458,9 @@ FUNCTION lantern_apply_withdrawals
     jmp     1b
 2:  xor     %eax, %eax
     LEAVE 16
-END_FUNCTION lantern_apply_withdrawals
+SPEC_END apply_withdrawals
 
-LEAF lantern_update_next_withdrawal_index
+SPEC_LEAF update_next_withdrawal_index
     mov     LIST_COUNT(%rsi), %rax
     test    %rax, %rax
     jz      1f
@@ -470,9 +470,9 @@ LEAF lantern_update_next_withdrawal_index
     inc     %rax
     mov     %rax, BeaconState_next_withdrawal_index(%rdi)
 1:  RETURN_OK
-END_FUNCTION lantern_update_next_withdrawal_index
+SPEC_END update_next_withdrawal_index
 
-LEAF lantern_update_pending_partial_withdrawals
+SPEC_LEAF update_pending_partial_withdrawals
     mov     (%rsi), %rax
     test    %rax, %rax
     jz      1f
@@ -485,9 +485,9 @@ LEAF lantern_update_pending_partial_withdrawals
     mov     %r8, %rdi
     jmp     lantern_copy
 1:  RETURN_OK
-END_FUNCTION lantern_update_pending_partial_withdrawals
+SPEC_END update_pending_partial_withdrawals
 
-LEAF lantern_update_next_withdrawal_validator_index
+SPEC_LEAF update_next_withdrawal_validator_index
     mov     LIST_COUNT(%rsi), %rax
     cmp     $MAX_WITHDRAWALS_PER_PAYLOAD, %rax
     jne     1f
@@ -502,12 +502,12 @@ LEAF lantern_update_next_withdrawal_validator_index
     divq    (BeaconState_validators + 8)(%rdi)
     mov     %rdx, BeaconState_next_withdrawal_validator_index(%rdi)
     RETURN_OK
-END_FUNCTION lantern_update_next_withdrawal_validator_index
+SPEC_END update_next_withdrawal_validator_index
 
 /* ---------------------------------------------------------------- process_withdrawals */
 
 /* rbx state, rbp payload, r12 scratch, r13 result, r14 expected, r15 scratch size. */
-FUNCTION lantern_process_withdrawals
+SPEC_FUNCTION process_withdrawals
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -572,4 +572,4 @@ FUNCTION lantern_process_withdrawals
     LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-END_FUNCTION lantern_process_withdrawals
+SPEC_END process_withdrawals

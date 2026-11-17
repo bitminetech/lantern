@@ -64,12 +64,12 @@ STATE_PARTS STATE_PART_ORDER
     add     x3, x3, x9
 .endm
 
-LEAF lantern_beacon_state_copy_size
+SPEC_LEAF beacon_state_copy_size
     MOVQ    x3, BeaconState__fixed
     STATE_PARTS SIZE_PART
     str     x3, [x2]
     RETURN_OK
-END_FUNCTION lantern_beacon_state_copy_size
+SPEC_END beacon_state_copy_size
 
 /* x19 state, x20 room, x21 out, x22 cursor. */
 .macro COPY_PART ref, stride, room
@@ -85,7 +85,7 @@ END_FUNCTION lantern_beacon_state_copy_size
     bl      lantern_copy
 .endm
 
-FUNCTION lantern_beacon_state_copy
+SPEC_FUNCTION beacon_state_copy
     ENTER 16
     mov     x19, x0
     mov     x20, x1
@@ -106,38 +106,4 @@ FUNCTION lantern_beacon_state_copy
     LEAVE 16
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_beacon_state_copy
-
-LEAF lantern_copy
-    cmp     x2, #64
-    b.lo    2f
-1:  ldp     q0, q1, [x1]
-    ldp     q2, q3, [x1, #32]
-    add     x1, x1, #64
-    stp     q0, q1, [x0]
-    stp     q2, q3, [x0, #32]
-    add     x0, x0, #64
-    sub     x2, x2, #64
-    cmp     x2, #64
-    b.hs    1b
-2:  cbz     x2, 4f
-3:  ldrb    w3, [x1], #1
-    strb    w3, [x0], #1
-    subs    x2, x2, #1
-    b.ne    3b
-4:  ret
-END_FUNCTION lantern_copy
-
-LEAF lantern_zero
-    cmp     x1, #16
-    b.lo    2f
-1:  stp     xzr, xzr, [x0], #16
-    sub     x1, x1, #16
-    cmp     x1, #16
-    b.hs    1b
-2:  cbz     x1, 4f
-3:  strb    wzr, [x0], #1
-    subs    x1, x1, #1
-    b.ne    3b
-4:  ret
-END_FUNCTION lantern_zero
+SPEC_END beacon_state_copy

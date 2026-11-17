@@ -96,7 +96,7 @@ END_FUNCTION find_pubkey
  * s1 deposit, s2 config, s3 scratch, s4 out. Locals: L domain type, L+8 zero root,
  * L+40 domain, L+72 the signing root as a ByteList (header 24, then 32 bytes).
  */
-FUNCTION lantern_is_valid_deposit_signature
+SPEC_FUNCTION is_valid_deposit_signature
     ENTER 128
     mv      s1, a0
     mv      s2, a1
@@ -135,10 +135,10 @@ FUNCTION lantern_is_valid_deposit_signature
     mv      a4, s4
     CALL_GLOBAL crypto_bls_verify
 7:  LEAVE 128
-END_FUNCTION lantern_is_valid_deposit_signature
+SPEC_END is_valid_deposit_signature
 
 /* s1 out, s2 amount. Locals: L max effective balance. The public key and credentials are 8-aligned. */
-FUNCTION lantern_get_validator_from_deposit
+SPEC_FUNCTION get_validator_from_deposit
     ENTER 16
     mv      s1, a3
     mv      s2, a2
@@ -168,20 +168,20 @@ FUNCTION lantern_get_validator_from_deposit
 1:  sd      t2, Validator_effective_balance(s1)
     li      a0, LANTERN_OK
     LEAVE 16
-END_FUNCTION lantern_get_validator_from_deposit
+SPEC_END get_validator_from_deposit
 
 .if Validator_slashed != 88 || Validator_activation_eligibility_epoch != 96
 .error "lantern_get_validator_from_deposit zeroes slashed and its padding with one 8-byte store"
 .endif
 
-LEAF lantern_get_index_for_new_validator
+SPEC_LEAF get_index_for_new_validator
     LDQ     a2, a0, BeaconState_validators + 8
     sd      a2, 0(a1)
     RETURN_OK
-END_FUNCTION lantern_get_index_for_new_validator
+SPEC_END get_index_for_new_validator
 
 /* s1 state, s2 the entry, s3 stride, s4 value. */
-FUNCTION lantern_set_or_append_list
+SPEC_FUNCTION set_or_append_list
     ENTER 16
     mv      s1, a0
     mv      s4, a3
@@ -214,13 +214,13 @@ FUNCTION lantern_set_or_append_list
     LEAVE 16
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_set_or_append_list
+SPEC_END set_or_append_list
 
 /*
  * s1 state, s2 pubkey, s3 withdrawal credentials, s4 amount.
  * Locals: L the validator (128), L+128 index, L+136 zero.
  */
-FUNCTION lantern_add_validator_to_registry
+SPEC_FUNCTION add_validator_to_registry
     ENTER 144
     mv      s1, a0
     mv      s2, a1
@@ -267,10 +267,10 @@ FUNCTION lantern_add_validator_to_registry
     LEAVE 144
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 144
-END_FUNCTION lantern_add_validator_to_registry
+SPEC_END add_validator_to_registry
 
 /* s1 state, s2 deposit, s3 config, s4 scratch. Locals: L valid, L+8 index. */
-FUNCTION lantern_apply_pending_deposit
+SPEC_FUNCTION apply_pending_deposit
     ENTER 16
     mv      s1, a0
     mv      s2, a1
@@ -302,7 +302,7 @@ FUNCTION lantern_apply_pending_deposit
     call    lantern_increase_balance
 8:  li      a0, LANTERN_OK
 7:  LEAVE 16
-END_FUNCTION lantern_apply_pending_deposit
+SPEC_END apply_pending_deposit
 
 .set POSTPONE_BYTES, MAX_PENDING_DEPOSITS_PER_EPOCH * PendingDeposit__mem
 
@@ -312,7 +312,7 @@ END_FUNCTION lantern_apply_pending_deposit
  * Locals: L current epoch, L+8 next epoch, L+16 churn, L+24 reached, L+32 finalized slot,
  * L+40 the deposit (PendingDeposit__mem bytes), L+232 the entries kept.
  */
-FUNCTION lantern_process_pending_deposits
+SPEC_FUNCTION process_pending_deposits
     ENTER 240
     mv      s1, a0
     mv      s2, a1
@@ -440,4 +440,4 @@ FUNCTION lantern_process_pending_deposits
 7:  LEAVE 240
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 240
-END_FUNCTION lantern_process_pending_deposits
+SPEC_END process_pending_deposits

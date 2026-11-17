@@ -2,7 +2,7 @@
  * The execution payload, x86-64. Requirements: docs/reference/block-processing.md.
  */
 
-LEAF lantern_get_blob_parameters
+SPEC_LEAF get_blob_parameters
     mov     (%rdi), %rax                    # epoch
     mov     CONFIG_BLOB_SCHEDULE_COUNT(%rsi), %rcx
 1:  test    %rcx, %rcx                      # the schedule, from its latest epoch down
@@ -22,10 +22,10 @@ LEAF lantern_get_blob_parameters
     mov     %r9, (%rdx)
     mov     %r8, 8(%rdx)
     RETURN_OK
-END_FUNCTION lantern_get_blob_parameters
+SPEC_END get_blob_parameters
 
 /* Locals: rsp+0 out. */
-FUNCTION lantern_kzg_commitment_to_versioned_hash
+SPEC_FUNCTION kzg_commitment_to_versioned_hash
     FRAME 16
     mov     %rsi, 0(%rsp)
     mov     %rsi, %rdx
@@ -35,9 +35,9 @@ FUNCTION lantern_kzg_commitment_to_versioned_hash
     movb    $VERSIONED_HASH_VERSION_KZG, (%rsi)
     xor     %eax, %eax
     UNFRAME 16
-END_FUNCTION lantern_kzg_commitment_to_versioned_hash
+SPEC_END kzg_commitment_to_versioned_hash
 
-LEAF lantern_compute_time_at_slot
+SPEC_LEAF compute_time_at_slot
     mov     %rdx, %r8                       # config
     mov     (%rdi), %rax                    # genesis_time
     mov     $1000, %r9d
@@ -58,14 +58,14 @@ LEAF lantern_compute_time_at_slot
     RETURN_OK
 2:  mov     $LANTERN_INVALID_OVERFLOW, %eax
     ret
-END_FUNCTION lantern_compute_time_at_slot
+SPEC_END compute_time_at_slot
 
 /*
  * rbx state, rbp body, r12 config, r13 scratch, r14 result, r15 payload,
  * S7 execution_valid, S8 the new header, S9 scratch size.
  * Locals: L epoch, L+8 mix, L+40 time, L+48 blob parameters (16).
  */
-FUNCTION lantern_process_execution_payload
+SPEC_FUNCTION process_execution_payload
     ENTER 64
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -147,7 +147,7 @@ FUNCTION lantern_process_execution_payload
     LEAVE 64
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 64
-END_FUNCTION lantern_process_execution_payload
+SPEC_END process_execution_payload
 
 /*
  * The ExecutionPayloadHeader of payload rsi at rdi, with scratch rdx of size rcx whose last

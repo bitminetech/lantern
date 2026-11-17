@@ -8,7 +8,8 @@ build/linux-x86_64/runner-minimal ~/.cache/lantern/vectors minimal-operations-at
 
 - Arguments: the vector folder, then the files to run. Files of the other preset are skipped.
 - The status is 0 only when every case of every file passes.
-- `tests/runner/docker.sh` builds every target in Docker and runs the three Linux ISAs; `tests/runner/macos.sh` runs the macOS runners.
+- `tests/runner/run.sh RUNNER_DIR VECTOR_DIR [FILE ...]` runs the four runners of one target, one process for each runner and file, as many at once as the machine has cores. `QEMU` sets the command that runs them, `JOBS` the processes at once. `run.ps1` does the same on Windows.
+- `tests/runner/docker.sh` builds every target in Docker and runs the three Linux ISAs; `tests/runner/macos.sh` runs the macOS runners. Both call `run.sh`.
 
 ## Files
 
@@ -17,6 +18,7 @@ build/linux-x86_64/runner-minimal ~/.cache/lantern/vectors minimal-operations-at
 | `runner.c` | Reads the case files of tests/generator/, calls lantern for each case and compares the results |
 | `bls_off.c` | Stand-ins for the three BLS verify functions of asm-crypto that return valid, for `runner-<preset>-bls-off` |
 | `abi_<ISA>.s` | `abi_call`: calls a lantern function and checks that it keeps the registers and stack of the core ABI |
+| `run.sh`, `run.ps1` | Run the four runners of one target on every core, and merge their results |
 | `docker.sh`, `macos.sh` | Build and run scripts |
 
 ## Runners

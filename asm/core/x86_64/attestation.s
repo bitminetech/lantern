@@ -60,7 +60,7 @@ END_FUNCTION sort_u64
 
 /* ---------------------------------------------------------------- Committees */
 
-LEAF lantern_get_committee_indices
+SPEC_LEAF get_committee_indices
     movq    $LIST_FIXED, LIST_OFFSET(%rsi)
     lea     LIST_FIXED(%rsi), %rdx
     xor     %ecx, %ecx                      # bit
@@ -77,10 +77,10 @@ LEAF lantern_get_committee_indices
     shr     $3, %rdx
     mov     %rdx, LIST_COUNT(%rsi)
     RETURN_OK
-END_FUNCTION lantern_get_committee_indices
+SPEC_END get_committee_indices
 
 /* rbx state, rbp epoch, r12 scratch, r13 out, r14 list. */
-FUNCTION lantern_get_committee_count_per_slot
+SPEC_FUNCTION get_committee_count_per_slot
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -112,13 +112,13 @@ FUNCTION lantern_get_committee_count_per_slot
 7:  LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-END_FUNCTION lantern_get_committee_count_per_slot
+SPEC_END get_committee_count_per_slot
 
 /*
  * rbx indices, rbp seed, r12 i, r13 end, r14 scratch, r15 out entries, S7 scratch size.
  * Locals: L len(indices), L+8 i, L+16 shuffled.
  */
-FUNCTION lantern_compute_committee
+SPEC_FUNCTION compute_committee
     ENTER 32
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -172,13 +172,13 @@ FUNCTION lantern_compute_committee
     LEAVE 32
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 32
-END_FUNCTION lantern_compute_committee
+SPEC_END compute_committee
 
 /*
  * rbx state, rbp slot, r12 index pointer, r13 scratch, r14 out, r15 scratch size, S7 n, S8 list.
  * Locals: L epoch, L+8 committees per slot, L+16 domain type, L+24 seed (32), L+56 index, L+64 count.
  */
-FUNCTION lantern_get_beacon_committee
+SPEC_FUNCTION get_beacon_committee
     ENTER 80
     mov     %rdi, %rbx
     mov     (%rsi), %rbp
@@ -238,14 +238,14 @@ FUNCTION lantern_get_beacon_committee
     LEAVE 80
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 80
-END_FUNCTION lantern_get_beacon_committee
+SPEC_END get_beacon_committee
 
 /*
  * rbx state, rbp attestation, r12 scratch, r13 out, r14 committee offset, r15 committee index cursor,
  * S7 committee, S8 committee indices.
  * Locals: L committee index, L+8 the scratch size the callee gets, L+16 bits, L+24 bit count, L+32 cursor end.
  */
-FUNCTION lantern_get_attesting_indices
+SPEC_FUNCTION get_attesting_indices
     ENTER 48
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -327,10 +327,10 @@ FUNCTION lantern_get_attesting_indices
     LEAVE 48
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 48
-END_FUNCTION lantern_get_attesting_indices
+SPEC_END get_attesting_indices
 
 /* rbx state, rbp attestation, r12 scratch, r13 out, r14 scratch size, r15 the attesting list. */
-FUNCTION lantern_get_indexed_attestation
+SPEC_FUNCTION get_indexed_attestation
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -370,13 +370,13 @@ FUNCTION lantern_get_indexed_attestation
 7:  LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-END_FUNCTION lantern_get_indexed_attestation
+SPEC_END get_indexed_attestation
 
 /*
  * rbx state, rbp indexed attestation, r12 scratch, r13 out, r14 indices, r15 count, S7 keys.
  * Locals: L domain type, L+8 domain (32), L+40 message (24 + 32).
  */
-FUNCTION lantern_is_valid_indexed_attestation
+SPEC_FUNCTION is_valid_indexed_attestation
     ENTER 96
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -463,13 +463,13 @@ FUNCTION lantern_is_valid_indexed_attestation
     LEAVE 96
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 96
-END_FUNCTION lantern_is_valid_indexed_attestation
+SPEC_END is_valid_indexed_attestation
 
 /*
  * rbx state, rbp data, r12 delay, r13 out, r14 matching source, r15 matching target, S7 matching head.
  * Locals: L current epoch, L+8 target root (32), L+40 head root (32), L+72 SLOTS_PER_EPOCH, L+80 its root.
  */
-FUNCTION lantern_get_attestation_participation_flag_indices
+SPEC_FUNCTION get_attestation_participation_flag_indices
     ENTER 96
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -542,7 +542,7 @@ FUNCTION lantern_get_attestation_participation_flag_indices
     mov     %rcx, LIST_COUNT(%r13)
     xor     %eax, %eax
 7:  LEAVE 96
-END_FUNCTION lantern_get_attestation_participation_flag_indices
+SPEC_END get_attestation_participation_flag_indices
 
 /*
  * rbx state, rbp attestation, r12 scratch, r13 result, r14 committee offset then the flag index,
@@ -552,7 +552,7 @@ END_FUNCTION lantern_get_attestation_participation_flag_indices
  * L+112 index or cursor, L+120 proposer reward numerator, L+128 flag, L+136 cursor end, L+144 the indexed
  * attestation, L+152 the attesting list, L+160 the scratch size callees get, L+168 participation.
  */
-FUNCTION lantern_process_attestation
+SPEC_FUNCTION process_attestation
     ENTER 176
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -780,7 +780,7 @@ FUNCTION lantern_process_attestation
     LEAVE 176
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 176
-END_FUNCTION lantern_process_attestation
+SPEC_END process_attestation
 
 .if TIMELY_SOURCE_WEIGHT != TIMELY_HEAD_WEIGHT
 .error "lantern_process_attestation takes the source weight for the head flag"

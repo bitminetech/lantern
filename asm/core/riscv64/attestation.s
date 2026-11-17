@@ -63,7 +63,7 @@ END_FUNCTION sort_u64
 
 /* ---------------------------------------------------------------- Committees */
 
-LEAF lantern_get_committee_indices
+SPEC_LEAF get_committee_indices
     li      a2, LIST_FIXED
     sd      a2, LIST_OFFSET(a1)
     addi    a2, a1, LIST_FIXED
@@ -86,10 +86,10 @@ LEAF lantern_get_committee_indices
     srli    a2, a2, 3
     sd      a2, LIST_COUNT(a1)
     RETURN_OK
-END_FUNCTION lantern_get_committee_indices
+SPEC_END get_committee_indices
 
 /* s1 state, s2 epoch, s3 scratch, s4 out, s5 list. */
-FUNCTION lantern_get_committee_count_per_slot
+SPEC_FUNCTION get_committee_count_per_slot
     ENTER 16
     mv      s1, a0
     mv      s2, a1
@@ -118,13 +118,13 @@ FUNCTION lantern_get_committee_count_per_slot
 7:  LEAVE 16
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_get_committee_count_per_slot
+SPEC_END get_committee_count_per_slot
 
 /*
  * s1 indices, s2 seed, s3 i, s4 end, s5 scratch, s6 out entries, s7 scratch size.
  * Locals: L len(indices), L+8 i, L+16 shuffled.
  */
-FUNCTION lantern_compute_committee
+SPEC_FUNCTION compute_committee
     ENTER 32
     mv      s1, a0
     mv      s2, a1
@@ -173,13 +173,13 @@ FUNCTION lantern_compute_committee
     LEAVE 32
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
-END_FUNCTION lantern_compute_committee
+SPEC_END compute_committee
 
 /*
  * s1 state, s2 slot, s3 index pointer, s4 scratch, s5 out, s6 scratch size, s7 n, s8 list.
  * Locals: L epoch, L+8 committees per slot, L+16 domain type, L+24 seed (32), L+56 index, L+64 count.
  */
-FUNCTION lantern_get_beacon_committee
+SPEC_FUNCTION get_beacon_committee
     ENTER 80
     mv      s1, a0
     ld      s2, 0(a1)
@@ -233,14 +233,14 @@ FUNCTION lantern_get_beacon_committee
     LEAVE 80
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 80
-END_FUNCTION lantern_get_beacon_committee
+SPEC_END get_beacon_committee
 
 /*
  * s1 state, s2 attestation, s3 scratch, s4 out, s5 scratch size, s6 n, s7 committee indices,
  * s8 committee, s9 committee offset, s10 committee index cursor.
  * Locals: L committee index, L+8 the scratch size the callee gets, L+16 bits, L+24 bit count, L+32 cursor end.
  */
-FUNCTION lantern_get_attesting_indices
+SPEC_FUNCTION get_attesting_indices
     ENTER 48
     mv      s1, a0
     mv      s2, a1
@@ -328,10 +328,10 @@ FUNCTION lantern_get_attesting_indices
     LEAVE 48
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 48
-END_FUNCTION lantern_get_attesting_indices
+SPEC_END get_attesting_indices
 
 /* s1 state, s2 attestation, s3 scratch, s4 out, s5 scratch size, s6 n, s7 the attesting list. */
-FUNCTION lantern_get_indexed_attestation
+SPEC_FUNCTION get_indexed_attestation
     ENTER 16
     mv      s1, a0
     mv      s2, a1
@@ -372,13 +372,13 @@ FUNCTION lantern_get_indexed_attestation
 7:  LEAVE 16
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_get_indexed_attestation
+SPEC_END get_indexed_attestation
 
 /*
  * s1 state, s2 indexed attestation, s3 scratch, s4 out, s5 scratch size, s6 keys,
  * s7 indices, s8 count. Locals: L domain type, L+8 domain (32), L+40 message (24 + 32).
  */
-FUNCTION lantern_is_valid_indexed_attestation
+SPEC_FUNCTION is_valid_indexed_attestation
     ENTER 96
     mv      s1, a0
     mv      s2, a1
@@ -468,13 +468,13 @@ FUNCTION lantern_is_valid_indexed_attestation
     LEAVE 96
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 96
-END_FUNCTION lantern_is_valid_indexed_attestation
+SPEC_END is_valid_indexed_attestation
 
 /*
  * s1 state, s2 data, s3 delay, s4 out, s5 matching source, s6 matching target, s7 matching head.
  * Locals: L current epoch, L+8 target root (32), L+40 head root (32), L+72 SLOTS_PER_EPOCH, L+80 its root.
  */
-FUNCTION lantern_get_attestation_participation_flag_indices
+SPEC_FUNCTION get_attestation_participation_flag_indices
     ENTER 96
     mv      s1, a0
     mv      s2, a1
@@ -547,7 +547,7 @@ FUNCTION lantern_get_attestation_participation_flag_indices
     sd      t1, LIST_COUNT(s4)
     li      a0, LANTERN_OK
 7:  LEAVE 96
-END_FUNCTION lantern_get_attestation_participation_flag_indices
+SPEC_END get_attestation_participation_flag_indices
 
 /*
  * s1 state, s2 attestation, s3 config, s4 scratch, s5 result, s6 scratch size, s7 n,
@@ -557,7 +557,7 @@ END_FUNCTION lantern_get_attestation_participation_flag_indices
  * L+112 index, L+120 proposer reward numerator, L+128 flag, L+136 cursor end, L+144 the indexed
  * attestation, L+152 the attesting list, L+160 the scratch size callees get, L+168 participation.
  */
-FUNCTION lantern_process_attestation
+SPEC_FUNCTION process_attestation
     ENTER 176
     mv      s1, a0
     mv      s2, a1
@@ -792,7 +792,7 @@ FUNCTION lantern_process_attestation
     LEAVE 176
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 176
-END_FUNCTION lantern_process_attestation
+SPEC_END process_attestation
 
 .if TIMELY_SOURCE_WEIGHT != TIMELY_HEAD_WEIGHT
 .error "lantern_process_attestation takes the source weight for the head flag"

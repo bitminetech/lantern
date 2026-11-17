@@ -5,7 +5,7 @@
 
 /* ---------------------------------------------------------------- Math */
 
-LEAF lantern_integer_squareroot
+SPEC_LEAF integer_squareroot
     mov     (%rdi), %r8                     # n
     cmp     $-1, %r8
     jne     1f
@@ -28,20 +28,20 @@ LEAF lantern_integer_squareroot
     jmp     2b
 3:  mov     %rcx, (%rsi)
     RETURN_OK
-END_FUNCTION lantern_integer_squareroot
+SPEC_END integer_squareroot
 
-LEAF lantern_saturating_sub
+SPEC_LEAF saturating_sub
     mov     (%rdi), %rax
     sub     (%rsi), %rax                    # a > b ? a - b : 0
     jae     1f
     xor     %eax, %eax
 1:  mov     %rax, (%rdx)
     RETURN_OK
-END_FUNCTION lantern_saturating_sub
+SPEC_END saturating_sub
 
 /* ---------------------------------------------------------------- Predicates */
 
-LEAF lantern_is_active_validator
+SPEC_LEAF is_active_validator
     mov     (%rsi), %rcx                    # epoch
     xor     %eax, %eax
     cmp     Validator_activation_epoch(%rdi), %rcx  # activation_epoch <= epoch
@@ -50,9 +50,9 @@ LEAF lantern_is_active_validator
     setb    %al
 1:  mov     %rax, (%rdx)
     RETURN_OK
-END_FUNCTION lantern_is_active_validator
+SPEC_END is_active_validator
 
-LEAF lantern_is_eligible_for_activation_queue
+SPEC_LEAF is_eligible_for_activation_queue
     xor     %eax, %eax
     cmpq    $-1, Validator_activation_eligibility_epoch(%rdi)  # activation_eligibility_epoch == FAR_FUTURE_EPOCH
     jne     1f
@@ -62,9 +62,9 @@ LEAF lantern_is_eligible_for_activation_queue
     mov     $1, %eax
 1:  mov     %rax, (%rsi)
     RETURN_OK
-END_FUNCTION lantern_is_eligible_for_activation_queue
+SPEC_END is_eligible_for_activation_queue
 
-LEAF lantern_is_eligible_for_activation
+SPEC_LEAF is_eligible_for_activation
     mov     (BeaconState_finalized_checkpoint + Checkpoint_epoch)(%rdi), %rcx
     xor     %eax, %eax
     cmp     %rcx, Validator_activation_eligibility_epoch(%rsi) # activation_eligibility_epoch <= finalized epoch
@@ -73,9 +73,9 @@ LEAF lantern_is_eligible_for_activation
     sete    %al
 1:  mov     %rax, (%rdx)
     RETURN_OK
-END_FUNCTION lantern_is_eligible_for_activation
+SPEC_END is_eligible_for_activation
 
-LEAF lantern_is_slashable_validator
+SPEC_LEAF is_slashable_validator
     mov     (%rsi), %rcx                    # epoch
     xor     %eax, %eax
     cmpb    $0, Validator_slashed(%rdi)     # not slashed
@@ -86,23 +86,23 @@ LEAF lantern_is_slashable_validator
     setb    %al
 1:  mov     %rax, (%rdx)
     RETURN_OK
-END_FUNCTION lantern_is_slashable_validator
+SPEC_END is_slashable_validator
 
-LEAF lantern_is_compounding_withdrawal_credential
+SPEC_LEAF is_compounding_withdrawal_credential
     xor     %eax, %eax
     cmpb    $COMPOUNDING_WITHDRAWAL_PREFIX, (%rdi)
     sete    %al
     mov     %rax, (%rsi)
     RETURN_OK
-END_FUNCTION lantern_is_compounding_withdrawal_credential
+SPEC_END is_compounding_withdrawal_credential
 
-LEAF lantern_has_compounding_withdrawal_credential
+SPEC_LEAF has_compounding_withdrawal_credential
     add     $Validator_withdrawal_credentials, %rdi
     jmp     lantern_is_compounding_withdrawal_credential
-END_FUNCTION lantern_has_compounding_withdrawal_credential
+SPEC_END has_compounding_withdrawal_credential
 
 /* Locals: rsp+0 out, rsp+8 the compounding flag. */
-FUNCTION lantern_get_max_effective_balance
+SPEC_FUNCTION get_max_effective_balance
     FRAME 16
     mov     %rsi, 0(%rsp)
     lea     8(%rsp), %rsi
@@ -115,18 +115,18 @@ FUNCTION lantern_get_max_effective_balance
     mov     %rax, (%rsi)
     xor     %eax, %eax
     UNFRAME 16
-END_FUNCTION lantern_get_max_effective_balance
+SPEC_END get_max_effective_balance
 
 /* ---------------------------------------------------------------- Misc */
 
-LEAF lantern_compute_epoch_at_slot
+SPEC_LEAF compute_epoch_at_slot
     mov     (%rdi), %rax
     shr     $LOG2_SLOTS_PER_EPOCH, %rax
     mov     %rax, (%rsi)
     RETURN_OK
-END_FUNCTION lantern_compute_epoch_at_slot
+SPEC_END compute_epoch_at_slot
 
-LEAF lantern_compute_start_slot_at_epoch
+SPEC_LEAF compute_start_slot_at_epoch
     mov     (%rdi), %rax
     mov     %rax, %rcx
     shr     $(64 - LOG2_SLOTS_PER_EPOCH), %rcx
@@ -136,9 +136,9 @@ LEAF lantern_compute_start_slot_at_epoch
     RETURN_OK
 1:  mov     $LANTERN_INVALID_OVERFLOW, %eax
     ret
-END_FUNCTION lantern_compute_start_slot_at_epoch
+SPEC_END compute_start_slot_at_epoch
 
-LEAF lantern_compute_activation_exit_epoch
+SPEC_LEAF compute_activation_exit_epoch
     mov     (%rdi), %rax
     add     $(1 + MAX_SEED_LOOKAHEAD), %rax
     jc      1f
@@ -146,17 +146,17 @@ LEAF lantern_compute_activation_exit_epoch
     RETURN_OK
 1:  mov     $LANTERN_INVALID_OVERFLOW, %eax
     ret
-END_FUNCTION lantern_compute_activation_exit_epoch
+SPEC_END compute_activation_exit_epoch
 
 /* ---------------------------------------------------------------- Accessors */
 
-LEAF lantern_get_current_epoch
+SPEC_LEAF get_current_epoch
     add     $BeaconState_slot, %rdi
     jmp     lantern_compute_epoch_at_slot
-END_FUNCTION lantern_get_current_epoch
+SPEC_END get_current_epoch
 
 /* Locals: rsp+0 out, rsp+8 current epoch, rsp+16 the constant 1. */
-FUNCTION lantern_get_previous_epoch
+SPEC_FUNCTION get_previous_epoch
     FRAME 32
     mov     %rsi, 0(%rsp)
     lea     8(%rsp), %rsi
@@ -167,9 +167,9 @@ FUNCTION lantern_get_previous_epoch
     mov     0(%rsp), %rdx
     call    lantern_saturating_sub
     UNFRAME 32
-END_FUNCTION lantern_get_previous_epoch
+SPEC_END get_previous_epoch
 
-LEAF lantern_get_block_root_at_slot
+SPEC_LEAF get_block_root_at_slot
     mov     (%rsi), %rcx                    # slot
     mov     BeaconState_slot(%rdi), %r8
     cmp     %r8, %rcx                       # slot < state.slot
@@ -185,10 +185,10 @@ LEAF lantern_get_block_root_at_slot
     RETURN_OK
 1:  mov     $LANTERN_INVALID_BLOCK_ROOT_SLOT, %eax
     ret
-END_FUNCTION lantern_get_block_root_at_slot
+SPEC_END get_block_root_at_slot
 
 /* Locals: rsp+0 state, rsp+8 out, rsp+16 the start slot. */
-FUNCTION lantern_get_block_root
+SPEC_FUNCTION get_block_root
     FRAME 32
     mov     %rdi, 0(%rsp)
     mov     %rdx, 8(%rsp)
@@ -202,22 +202,22 @@ FUNCTION lantern_get_block_root
     mov     8(%rsp), %rdx
     call    lantern_get_block_root_at_slot
 1:  UNFRAME 32
-END_FUNCTION lantern_get_block_root
+SPEC_END get_block_root
 
-LEAF lantern_get_randao_mix
+SPEC_LEAF get_randao_mix
     mov     (%rsi), %rcx
     and     $(EPOCHS_PER_HISTORICAL_VECTOR - 1), %rcx
     shl     $5, %rcx
     lea     BeaconState_randao_mixes(%rdi,%rcx), %rax
     COPY32  %rdx, %rax
     RETURN_OK
-END_FUNCTION lantern_get_randao_mix
+SPEC_END get_randao_mix
 
 /*
  * rbx state, rbp epoch, r12 out, r13 validator, r14 index, r15 out entries, S7 validator count.
  * Locals: the is_active_validator result.
  */
-FUNCTION lantern_get_active_validator_indices
+SPEC_FUNCTION get_active_validator_indices
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -251,9 +251,9 @@ FUNCTION lantern_get_active_validator_indices
     LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-END_FUNCTION lantern_get_active_validator_indices
+SPEC_END get_active_validator_indices
 
-LEAF lantern_get_total_balance
+SPEC_LEAF get_total_balance
     PART    %r8, %r9, %rdi, BeaconState_validators
     mov     LIST_COUNT(%rsi), %rcx
     lea     LIST_FIXED(%rsi), %rsi
@@ -272,10 +272,10 @@ LEAF lantern_get_total_balance
     mov     %r9, %rax
 3:  mov     %rax, (%rdx)
     RETURN_OK
-END_FUNCTION lantern_get_total_balance
+SPEC_END get_total_balance
 
 /* rbx state, rbp scratch, r12 out; locals: the epoch. The index list is the scratch after its size. */
-FUNCTION lantern_get_total_active_balance
+SPEC_FUNCTION get_total_active_balance
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -296,20 +296,20 @@ FUNCTION lantern_get_total_active_balance
     mov     %r12, %rdx
     call    lantern_get_total_balance
 9:  LEAVE 16
-END_FUNCTION lantern_get_total_active_balance
+SPEC_END get_total_active_balance
 
 /* ---------------------------------------------------------------- Mutators */
 
-LEAF lantern_increase_balance
+SPEC_LEAF increase_balance
     mov     (%rsi), %rcx                    # index
     mov     (%rdx), %rax                    # delta
     mov     BeaconState_balances(%rdi), %r8
     add     %rdi, %r8
     add     %rax, (%r8,%rcx,8)
     RETURN_OK
-END_FUNCTION lantern_increase_balance
+SPEC_END increase_balance
 
-LEAF lantern_decrease_balance
+SPEC_LEAF decrease_balance
     mov     (%rsi), %rcx                    # index
     mov     BeaconState_balances(%rdi), %r8
     add     %rdi, %r8
@@ -317,20 +317,20 @@ LEAF lantern_decrease_balance
     mov     %rdx, %rsi
     mov     %rdi, %rdx
     jmp     lantern_saturating_sub
-END_FUNCTION lantern_decrease_balance
+SPEC_END decrease_balance
 
 /* ---------------------------------------------------------------- Participation flags and rewards */
 
-LEAF lantern_has_flag
+SPEC_LEAF has_flag
     movzbl  (%rdi), %eax
     mov     (%rsi), %rcx
     shr     %cl, %eax
     and     $1, %eax
     mov     %rax, (%rdx)
     RETURN_OK
-END_FUNCTION lantern_has_flag
+SPEC_END has_flag
 
-LEAF lantern_add_flag
+SPEC_LEAF add_flag
     movzbl  (%rdi), %eax
     mov     (%rsi), %rcx
     mov     $1, %r8d
@@ -338,10 +338,10 @@ LEAF lantern_add_flag
     or      %r8d, %eax
     mov     %al, (%rdx)
     RETURN_OK
-END_FUNCTION lantern_add_flag
+SPEC_END add_flag
 
 /* Locals: rsp+0 state, rsp+8 out, rsp+16 previous epoch. */
-FUNCTION lantern_get_finality_delay
+SPEC_FUNCTION get_finality_delay
     FRAME 32
     mov     %rdi, 0(%rsp)
     mov     %rsi, 8(%rsp)
@@ -354,10 +354,10 @@ FUNCTION lantern_get_finality_delay
     mov     %rax, (%rsi)
     xor     %eax, %eax
     UNFRAME 32
-END_FUNCTION lantern_get_finality_delay
+SPEC_END get_finality_delay
 
 /* Locals: rsp+0 out, rsp+8 the finality delay. */
-FUNCTION lantern_is_in_inactivity_leak
+SPEC_FUNCTION is_in_inactivity_leak
     FRAME 16
     mov     %rsi, 0(%rsp)
     lea     8(%rsp), %rsi
@@ -369,13 +369,13 @@ FUNCTION lantern_is_in_inactivity_leak
     mov     %rax, (%rsi)
     xor     %eax, %eax
     UNFRAME 16
-END_FUNCTION lantern_is_in_inactivity_leak
+SPEC_END is_in_inactivity_leak
 
 /*
  * rbx state, rbp out, r12 validator, r13 validator count, r14 index, r15 out entries.
  * Locals: previous epoch at L, is_active_validator result at L + 8.
  */
-FUNCTION lantern_get_eligible_validator_indices
+SPEC_FUNCTION get_eligible_validator_indices
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -416,14 +416,14 @@ FUNCTION lantern_get_eligible_validator_indices
     LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-END_FUNCTION lantern_get_eligible_validator_indices
+SPEC_END get_eligible_validator_indices
 
 /*
  * rbx state, rbp flag_index, r12 epoch then the active list cursor, r13 scratch then the
  * entries left, r14 out, r15 epoch_participation, S7 out entries.
  * Locals: previous epoch at L, current epoch at L + 8, has_flag result at L + 16, index at L + 24.
  */
-FUNCTION lantern_get_unslashed_participating_indices
+SPEC_FUNCTION get_unslashed_participating_indices
     ENTER 32
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -500,10 +500,10 @@ FUNCTION lantern_get_unslashed_participating_indices
 8:  LEAVE 32
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 32
-END_FUNCTION lantern_get_unslashed_participating_indices
+SPEC_END get_unslashed_participating_indices
 
 /* Locals: rsp+0 out, rsp+8 total active balance, rsp+16 its square root. */
-FUNCTION lantern_get_base_reward_per_increment
+SPEC_FUNCTION get_base_reward_per_increment
     FRAME 32
     mov     %rdx, 0(%rsp)
     lea     8(%rsp), %rdx
@@ -520,10 +520,10 @@ FUNCTION lantern_get_base_reward_per_increment
     mov     %rax, (%rcx)
     xor     %eax, %eax
 1:  UNFRAME 32
-END_FUNCTION lantern_get_base_reward_per_increment
+SPEC_END get_base_reward_per_increment
 
 /* Locals: rsp+0 state, rsp+8 index, rsp+16 out, rsp+24 base reward per increment. */
-FUNCTION lantern_get_base_reward
+SPEC_FUNCTION get_base_reward
     FRAME 32
     mov     %rdi, 0(%rsp)
     mov     %rsi, 8(%rsp)
@@ -548,4 +548,4 @@ FUNCTION lantern_get_base_reward
     mov     %rax, (%rcx)
     xor     %eax, %eax
 1:  UNFRAME 32
-END_FUNCTION lantern_get_base_reward
+SPEC_END get_base_reward

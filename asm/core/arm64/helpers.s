@@ -5,7 +5,7 @@
 
 /* ---------------------------------------------------------------- Math */
 
-LEAF lantern_integer_squareroot
+SPEC_LEAF integer_squareroot
     ldr     x2, [x0]                        /* n */
     cmn     x2, #1
     b.ne    1f
@@ -24,20 +24,20 @@ LEAF lantern_integer_squareroot
     b       2b
 3:  str     x3, [x1]
     RETURN_OK
-END_FUNCTION lantern_integer_squareroot
+SPEC_END integer_squareroot
 
-LEAF lantern_saturating_sub
+SPEC_LEAF saturating_sub
     ldr     x3, [x0]
     ldr     x4, [x1]
     subs    x5, x3, x4
     csel    x5, x5, xzr, hi                 /* a > b ? a - b : 0 */
     str     x5, [x2]
     RETURN_OK
-END_FUNCTION lantern_saturating_sub
+SPEC_END saturating_sub
 
 /* ---------------------------------------------------------------- Predicates */
 
-LEAF lantern_is_active_validator
+SPEC_LEAF is_active_validator
     ldr     x3, [x1]                        /* epoch */
     ldr     x4, [x0, #Validator_activation_epoch]
     ldr     x5, [x0, #Validator_exit_epoch]
@@ -46,9 +46,9 @@ LEAF lantern_is_active_validator
     cset    x6, lo
     str     x6, [x2]
     RETURN_OK
-END_FUNCTION lantern_is_active_validator
+SPEC_END is_active_validator
 
-LEAF lantern_is_eligible_for_activation_queue
+SPEC_LEAF is_eligible_for_activation_queue
     ldr     x2, [x0, #Validator_activation_eligibility_epoch]
     ldr     x3, [x0, #Validator_effective_balance]
     MOVQ    x4, MIN_ACTIVATION_BALANCE
@@ -57,9 +57,9 @@ LEAF lantern_is_eligible_for_activation_queue
     cset    x5, hs
     str     x5, [x1]
     RETURN_OK
-END_FUNCTION lantern_is_eligible_for_activation_queue
+SPEC_END is_eligible_for_activation_queue
 
-LEAF lantern_is_eligible_for_activation
+SPEC_LEAF is_eligible_for_activation
     LDQ     x3, x0, BeaconState_finalized_checkpoint + Checkpoint_epoch
     ldr     x4, [x1, #Validator_activation_eligibility_epoch]
     ldr     x5, [x1, #Validator_activation_epoch]
@@ -68,9 +68,9 @@ LEAF lantern_is_eligible_for_activation
     cset    x6, eq
     str     x6, [x2]
     RETURN_OK
-END_FUNCTION lantern_is_eligible_for_activation
+SPEC_END is_eligible_for_activation
 
-LEAF lantern_is_slashable_validator
+SPEC_LEAF is_slashable_validator
     ldr     x3, [x1]                        /* epoch */
     ldrb    w4, [x0, #Validator_slashed]
     ldr     x5, [x0, #Validator_activation_epoch]
@@ -82,24 +82,24 @@ LEAF lantern_is_slashable_validator
     csel    x7, x7, xzr, eq
     str     x7, [x2]
     RETURN_OK
-END_FUNCTION lantern_is_slashable_validator
+SPEC_END is_slashable_validator
 
-LEAF lantern_is_compounding_withdrawal_credential
+SPEC_LEAF is_compounding_withdrawal_credential
     ldrb    w2, [x0]
     cmp     w2, #COMPOUNDING_WITHDRAWAL_PREFIX
     cset    x3, eq
     str     x3, [x1]
     RETURN_OK
-END_FUNCTION lantern_is_compounding_withdrawal_credential
+SPEC_END is_compounding_withdrawal_credential
 
-FUNCTION lantern_has_compounding_withdrawal_credential
+SPEC_FUNCTION has_compounding_withdrawal_credential
     FRAME 0
     add     x0, x0, #Validator_withdrawal_credentials
     bl      lantern_is_compounding_withdrawal_credential
     UNFRAME 0
-END_FUNCTION lantern_has_compounding_withdrawal_credential
+SPEC_END has_compounding_withdrawal_credential
 
-FUNCTION lantern_get_max_effective_balance
+SPEC_FUNCTION get_max_effective_balance
     FRAME 16
     str     x1, [sp, #16]                   /* out */
     add     x1, sp, #24
@@ -113,18 +113,18 @@ FUNCTION lantern_get_max_effective_balance
     str     x3, [x1]
     mov     x0, #LANTERN_OK
     UNFRAME 16
-END_FUNCTION lantern_get_max_effective_balance
+SPEC_END get_max_effective_balance
 
 /* ---------------------------------------------------------------- Misc */
 
-LEAF lantern_compute_epoch_at_slot
+SPEC_LEAF compute_epoch_at_slot
     ldr     x2, [x0]
     lsr     x2, x2, #LOG2_SLOTS_PER_EPOCH
     str     x2, [x1]
     RETURN_OK
-END_FUNCTION lantern_compute_epoch_at_slot
+SPEC_END compute_epoch_at_slot
 
-LEAF lantern_compute_start_slot_at_epoch
+SPEC_LEAF compute_start_slot_at_epoch
     ldr     x2, [x0]
     lsr     x3, x2, #(64 - LOG2_SLOTS_PER_EPOCH)
     cbnz    x3, 1f                          /* epoch * SLOTS_PER_EPOCH leaves the Uint64 range */
@@ -133,9 +133,9 @@ LEAF lantern_compute_start_slot_at_epoch
     RETURN_OK
 1:  mov     x0, #LANTERN_INVALID_OVERFLOW
     ret
-END_FUNCTION lantern_compute_start_slot_at_epoch
+SPEC_END compute_start_slot_at_epoch
 
-LEAF lantern_compute_activation_exit_epoch
+SPEC_LEAF compute_activation_exit_epoch
     ldr     x2, [x0]
     adds    x2, x2, #(1 + MAX_SEED_LOOKAHEAD)
     b.cs    1f
@@ -143,18 +143,18 @@ LEAF lantern_compute_activation_exit_epoch
     RETURN_OK
 1:  mov     x0, #LANTERN_INVALID_OVERFLOW
     ret
-END_FUNCTION lantern_compute_activation_exit_epoch
+SPEC_END compute_activation_exit_epoch
 
 /* ---------------------------------------------------------------- Accessors */
 
-FUNCTION lantern_get_current_epoch
+SPEC_FUNCTION get_current_epoch
     FRAME 0
     ADDQ    x0, x0, BeaconState_slot
     bl      lantern_compute_epoch_at_slot
     UNFRAME 0
-END_FUNCTION lantern_get_current_epoch
+SPEC_END get_current_epoch
 
-FUNCTION lantern_get_previous_epoch
+SPEC_FUNCTION get_previous_epoch
     FRAME 32
     str     x1, [sp, #16]                   /* out */
     add     x1, sp, #24
@@ -166,9 +166,9 @@ FUNCTION lantern_get_previous_epoch
     ldr     x2, [sp, #16]
     bl      lantern_saturating_sub
     UNFRAME 32
-END_FUNCTION lantern_get_previous_epoch
+SPEC_END get_previous_epoch
 
-LEAF lantern_get_block_root_at_slot
+SPEC_LEAF get_block_root_at_slot
     ldr     x4, [x1]                        /* slot */
     LDQ     x5, x0, BeaconState_slot
     cmp     x4, x5                          /* slot < state.slot */
@@ -183,9 +183,9 @@ LEAF lantern_get_block_root_at_slot
     RETURN_OK
 1:  mov     x0, #LANTERN_INVALID_BLOCK_ROOT_SLOT
     ret
-END_FUNCTION lantern_get_block_root_at_slot
+SPEC_END get_block_root_at_slot
 
-FUNCTION lantern_get_block_root
+SPEC_FUNCTION get_block_root
     FRAME 32
     stp     x0, x2, [sp, #16]               /* state, out */
     mov     x0, x1
@@ -196,22 +196,22 @@ FUNCTION lantern_get_block_root
     add     x1, sp, #32
     bl      lantern_get_block_root_at_slot
 1:  UNFRAME 32
-END_FUNCTION lantern_get_block_root
+SPEC_END get_block_root
 
-LEAF lantern_get_randao_mix
+SPEC_LEAF get_randao_mix
     ldr     x3, [x1]
     and     x3, x3, #(EPOCHS_PER_HISTORICAL_VECTOR - 1)
     ADDQ    x4, x0, BeaconState_randao_mixes
     add     x4, x4, x3, lsl #5
     COPY32  x2, x4
     RETURN_OK
-END_FUNCTION lantern_get_randao_mix
+SPEC_END get_randao_mix
 
 /*
  * x19 state, x20 epoch, x21 out, x22 validator, x23 validators left,
  * x24 index, x25 out entries; locals: the is_active_validator result.
  */
-FUNCTION lantern_get_active_validator_indices
+SPEC_FUNCTION get_active_validator_indices
     ENTER 16
     mov     x19, x0
     mov     x20, x1
@@ -246,9 +246,9 @@ FUNCTION lantern_get_active_validator_indices
     LEAVE 16
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_get_active_validator_indices
+SPEC_END get_active_validator_indices
 
-LEAF lantern_get_total_balance
+SPEC_LEAF get_total_balance
     PART    x3, x4, x0, BeaconState_validators
     ldr     x5, [x1, #LIST_COUNT]
     add     x6, x1, #LIST_FIXED
@@ -265,10 +265,10 @@ LEAF lantern_get_total_balance
     csel    x7, x7, x8, hi                  /* max(EFFECTIVE_BALANCE_INCREMENT, sum) */
     str     x7, [x2]
     RETURN_OK
-END_FUNCTION lantern_get_total_balance
+SPEC_END get_total_balance
 
 /* x19 state, x20 scratch, x21 out; locals: the epoch. The index list is the scratch after its size. */
-FUNCTION lantern_get_total_active_balance
+SPEC_FUNCTION get_total_active_balance
     ENTER 16
     mov     x19, x0
     mov     x20, x1
@@ -288,11 +288,11 @@ FUNCTION lantern_get_total_active_balance
     mov     x2, x21
     bl      lantern_get_total_balance
 9:  LEAVE 16
-END_FUNCTION lantern_get_total_active_balance
+SPEC_END get_total_active_balance
 
 /* ---------------------------------------------------------------- Mutators */
 
-LEAF lantern_increase_balance
+SPEC_LEAF increase_balance
     ldr     x3, [x1]                        /* index */
     ldr     x4, [x2]                        /* delta */
     PART    x5, x6, x0, BeaconState_balances
@@ -301,9 +301,9 @@ LEAF lantern_increase_balance
     add     x6, x6, x4
     str     x6, [x5]
     RETURN_OK
-END_FUNCTION lantern_increase_balance
+SPEC_END increase_balance
 
-FUNCTION lantern_decrease_balance
+SPEC_FUNCTION decrease_balance
     FRAME 0
     ldr     x3, [x1]                        /* index */
     PART    x4, x5, x0, BeaconState_balances
@@ -312,20 +312,20 @@ FUNCTION lantern_decrease_balance
     mov     x2, x0
     bl      lantern_saturating_sub
     UNFRAME 0
-END_FUNCTION lantern_decrease_balance
+SPEC_END decrease_balance
 
 /* ---------------------------------------------------------------- Participation flags and rewards */
 
-LEAF lantern_has_flag
+SPEC_LEAF has_flag
     ldrb    w3, [x0]
     ldr     x4, [x1]
     lsr     w3, w3, w4
     and     x3, x3, #1
     str     x3, [x2]
     RETURN_OK
-END_FUNCTION lantern_has_flag
+SPEC_END has_flag
 
-LEAF lantern_add_flag
+SPEC_LEAF add_flag
     ldrb    w3, [x0]
     ldr     x4, [x1]
     mov     w5, #1
@@ -333,9 +333,9 @@ LEAF lantern_add_flag
     orr     w3, w3, w5
     strb    w3, [x2]
     RETURN_OK
-END_FUNCTION lantern_add_flag
+SPEC_END add_flag
 
-FUNCTION lantern_get_finality_delay
+SPEC_FUNCTION get_finality_delay
     FRAME 32
     stp     x0, x1, [sp, #16]
     add     x1, sp, #32
@@ -347,9 +347,9 @@ FUNCTION lantern_get_finality_delay
     str     x2, [x1]
     mov     x0, #LANTERN_OK
     UNFRAME 32
-END_FUNCTION lantern_get_finality_delay
+SPEC_END get_finality_delay
 
-FUNCTION lantern_is_in_inactivity_leak
+SPEC_FUNCTION is_in_inactivity_leak
     FRAME 16
     str     x1, [sp, #16]
     add     x1, sp, #24
@@ -361,13 +361,13 @@ FUNCTION lantern_is_in_inactivity_leak
     str     x2, [x1]
     mov     x0, #LANTERN_OK
     UNFRAME 16
-END_FUNCTION lantern_is_in_inactivity_leak
+SPEC_END is_in_inactivity_leak
 
 /*
  * x19 state, x20 out, x21 validator, x22 validators left, x23 index, x24 out entries,
  * x25 previous epoch; locals: previous epoch at L, is_active_validator result at L + 8.
  */
-FUNCTION lantern_get_eligible_validator_indices
+SPEC_FUNCTION get_eligible_validator_indices
     ENTER 16
     mov     x19, x0
     mov     x20, x1
@@ -411,14 +411,14 @@ FUNCTION lantern_get_eligible_validator_indices
     LEAVE 16
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_get_eligible_validator_indices
+SPEC_END get_eligible_validator_indices
 
 /*
  * x19 state, x20 flag_index, x21 epoch, x22 scratch, x23 out,
  * x25 epoch_participation, x26 active list entries, x27 entries left, x28 out entries.
  * Locals: previous epoch at L, current epoch at L + 8, has_flag result at L + 16.
  */
-FUNCTION lantern_get_unslashed_participating_indices
+SPEC_FUNCTION get_unslashed_participating_indices
     ENTER 32
     mov     x19, x0
     mov     x20, x1
@@ -490,9 +490,9 @@ FUNCTION lantern_get_unslashed_participating_indices
 8:  LEAVE 32
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
-END_FUNCTION lantern_get_unslashed_participating_indices
+SPEC_END get_unslashed_participating_indices
 
-FUNCTION lantern_get_base_reward_per_increment
+SPEC_FUNCTION get_base_reward_per_increment
     FRAME 32
     str     x2, [sp, #16]                   /* out */
     add     x2, sp, #24
@@ -508,9 +508,9 @@ FUNCTION lantern_get_base_reward_per_increment
     str     x10, [x11]
     mov     x0, #LANTERN_OK
 1:  UNFRAME 32
-END_FUNCTION lantern_get_base_reward_per_increment
+SPEC_END get_base_reward_per_increment
 
-FUNCTION lantern_get_base_reward
+SPEC_FUNCTION get_base_reward
     FRAME 32
     stp     x0, x1, [sp, #16]               /* state, index */
     str     x3, [sp, #32]                   /* out */
@@ -531,4 +531,4 @@ FUNCTION lantern_get_base_reward
     str     x9, [x12]
     mov     x0, #LANTERN_OK
 1:  UNFRAME 32
-END_FUNCTION lantern_get_base_reward
+SPEC_END get_base_reward

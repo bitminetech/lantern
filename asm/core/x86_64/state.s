@@ -57,13 +57,13 @@
     add     %rax, %r9
 .endm
 
-LEAF lantern_beacon_state_copy_size
+SPEC_LEAF beacon_state_copy_size
     mov     %rdx, %r10
     mov     $BeaconState__fixed, %r9d
     STATE_PARTS SIZE_PART
     mov     %r9, (%r10)
     RETURN_OK
-END_FUNCTION lantern_beacon_state_copy_size
+SPEC_END beacon_state_copy_size
 
 /* rbx state, rbp room, r12 out, r13 cursor. */
 .macro COPY_PART ref, stride, room
@@ -77,7 +77,7 @@ END_FUNCTION lantern_beacon_state_copy_size
     call    lantern_copy
 .endm
 
-FUNCTION lantern_beacon_state_copy
+SPEC_FUNCTION beacon_state_copy
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -97,18 +97,4 @@ FUNCTION lantern_beacon_state_copy
     LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-END_FUNCTION lantern_beacon_state_copy
-
-/* dst rdi, src rsi, n rdx: forward, so a copy to a lower, overlapping place is right. */
-LEAF lantern_copy
-    mov     %rdx, %rcx
-    rep movsb
-    RETURN_OK
-END_FUNCTION lantern_copy
-
-LEAF lantern_zero
-    mov     %rsi, %rcx
-    xor     %eax, %eax
-    rep stosb
-    ret
-END_FUNCTION lantern_zero
+SPEC_END beacon_state_copy

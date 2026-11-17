@@ -168,24 +168,24 @@ LOCAL_FUNCTION checkpoint_block
     ret
 END_FUNCTION checkpoint_block
 
-LEAF lantern_get_current_slot
+SPEC_LEAF get_current_slot
     STORE_SLOT x2, x0, 9f
     str     x2, [x1]
     RETURN_OK
 9:  mov     x0, #LANTERN_INVALID_OVERFLOW
     ret
-END_FUNCTION lantern_get_current_slot
+SPEC_END get_current_slot
 
-LEAF lantern_get_current_store_epoch
+SPEC_LEAF get_current_store_epoch
     STORE_SLOT x2, x0, 9f
     lsr     x2, x2, #LOG2_SLOTS_PER_EPOCH
     str     x2, [x1]
     RETURN_OK
 9:  mov     x0, #LANTERN_INVALID_OVERFLOW
     ret
-END_FUNCTION lantern_get_current_store_epoch
+SPEC_END get_current_store_epoch
 
-FUNCTION lantern_get_ancestor
+SPEC_FUNCTION get_ancestor
     FRAME 16
     str     x3, [sp, #16]
     ldr     x1, [x1]
@@ -195,10 +195,10 @@ FUNCTION lantern_get_ancestor
     ldr     x3, [sp, #16]
     str     x1, [x3]
 1:  UNFRAME 16
-END_FUNCTION lantern_get_ancestor
+SPEC_END get_ancestor
 
 /* Locals: sp+16 store, sp+24 out, sp+32 epoch. */
-FUNCTION lantern_get_checkpoint_block
+SPEC_FUNCTION get_checkpoint_block
     FRAME 32
     stp     x0, x3, [sp, #16]
     ldr     x2, [x2]
@@ -218,7 +218,7 @@ FUNCTION lantern_get_checkpoint_block
 7:  UNFRAME 32
 8:  mov     x0, #LANTERN_INVALID_UNKNOWN_BLOCK
     UNFRAME 32
-END_FUNCTION lantern_get_checkpoint_block
+SPEC_END get_checkpoint_block
 
 /* ---------------------------------------------------------------- Weights */
 
@@ -338,7 +338,7 @@ LOCAL_FUNCTION weight
     LEAVE 0
 END_FUNCTION weight
 
-FUNCTION lantern_get_weight
+SPEC_FUNCTION get_weight
     FRAME 16
     str     x2, [sp, #16]
     NEED_BALANCES x0, 8f
@@ -350,7 +350,7 @@ FUNCTION lantern_get_weight
 7:  UNFRAME 16
 8:  mov     x0, #LANTERN_NEED_JUSTIFIED_STATE
     UNFRAME 16
-END_FUNCTION lantern_get_weight
+SPEC_END get_weight
 
 /* ---------------------------------------------------------------- get_head */
 
@@ -525,7 +525,7 @@ LOCAL_FUNCTION head
 END_FUNCTION head
 
 /* x19 store, x20 out. */
-FUNCTION lantern_get_filtered_node_tree
+SPEC_FUNCTION get_filtered_node_tree
     ENTER 0
     mov     x19, x0
     mov     x20, x2
@@ -562,9 +562,9 @@ FUNCTION lantern_get_filtered_node_tree
 7:  LEAVE 0
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 0
-END_FUNCTION lantern_get_filtered_node_tree
+SPEC_END get_filtered_node_tree
 
-FUNCTION lantern_get_head
+SPEC_FUNCTION get_head
     FRAME 16
     str     x2, [sp, #16]
     NEED_BALANCES x0, 8f
@@ -575,7 +575,7 @@ FUNCTION lantern_get_head
 7:  UNFRAME 16
 8:  mov     x0, #LANTERN_NEED_JUSTIFIED_STATE
     UNFRAME 16
-END_FUNCTION lantern_get_head
+SPEC_END get_head
 
 /* ---------------------------------------------------------------- Checkpoints and time */
 
@@ -618,7 +618,7 @@ LOCAL_FUNCTION on_tick_per_slot
 END_FUNCTION on_tick_per_slot
 
 /* x19 store, x20 time_ms, x21 result, x22 tick slot, x23 genesis_time_ms, x24 SLOT_DURATION_MS. */
-FUNCTION lantern_on_tick
+SPEC_FUNCTION on_tick
     ENTER 0
     mov     x19, x0
     ldr     x20, [x1]
@@ -646,35 +646,15 @@ FUNCTION lantern_on_tick
     str     x9, [x21]
     mov     x0, #LANTERN_OK
     LEAVE 0
-END_FUNCTION lantern_on_tick
+SPEC_END on_tick
 
 /* ---------------------------------------------------------------- The store */
-
-LEAF lantern_store_size
-    ldp     x2, x3, [x0]                    /* nodes, validators */
-    mov     x4, #BlockNode__mem
-    umulh   x5, x2, x4
-    cbnz    x5, 9f
-    mul     x2, x2, x4
-    lsr     x5, x3, #59                     /* validators * StoreValidator__mem fits */
-    cbnz    x5, 9f
-    lsl     x3, x3, #5
-    adds    x2, x2, x3
-    b.cs    9f
-    MOVQ    x4, STORE_FIXED
-    adds    x2, x2, x4
-    b.cs    9f
-    str     x2, [x1]
-    RETURN_OK
-9:  mov     x0, #LANTERN_INVALID_OVERFLOW
-    ret
-END_FUNCTION lantern_store_size
 
 /*
  * x0 store, x1 state; x2 entries, x3 entry count, x4 validators, x5 validator count,
  * x6 epoch, x7 total, x8 i.
  */
-LEAF lantern_store_justified_checkpoint_state
+SPEC_LEAF store_justified_checkpoint_state
     PART    x2, x3, x0, Store_validators
     PART    x4, x5, x1, BeaconState_validators
     cmp     x5, x3
@@ -724,14 +704,14 @@ LEAF lantern_store_justified_checkpoint_state
     ret
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     ret
-END_FUNCTION lantern_store_justified_checkpoint_state
+SPEC_END store_justified_checkpoint_state
 
 /*
  * x19 anchor state, x20 anchor block, x21 config, x22 room, x23 scratch, x24 store,
  * x25 node capacity, x26 validator capacity, x27 anchor epoch, x28 the anchor node.
  * Locals: L state root (32), L+32 anchor root (32), L+64 size.
  */
-FUNCTION lantern_get_forkchoice_store
+SPEC_FUNCTION get_forkchoice_store
     ENTER 80
     mov     x19, x0
     mov     x20, x1
@@ -746,7 +726,7 @@ FUNCTION lantern_get_forkchoice_store
     b.lo    9f
     mov     x0, x22
     add     x1, sp, #(L + 64)
-    bl      lantern_store_size
+    CALL_GLOBAL lantern_store_size
     cbnz    x0, 9f
     ldr     x9, [sp, #(L + 64)]
     ldr     x10, [x24]
@@ -861,122 +841,7 @@ FUNCTION lantern_get_forkchoice_store
     LEAVE 80
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 80
-END_FUNCTION lantern_get_forkchoice_store
-
-/* x19 store, x20 room, x21 out, x22 node capacity, x23 validator capacity, x24 old validator count. Locals: L size. */
-FUNCTION lantern_store_copy
-    ENTER 16
-    mov     x19, x0
-    mov     x20, x1
-    mov     x21, x2
-    ldp     x22, x23, [x20]
-    LDQ     x9, x19, Store_blocks + 8
-    cmp     x22, x9
-    b.lo    9f
-    LDQ     x24, x19, Store_validators + 8
-    cmp     x23, x24
-    b.lo    9f
-    mov     x0, x20
-    add     x1, sp, #L
-    bl      lantern_store_size
-    cbnz    x0, 9f
-    ldr     x9, [sp, #L]
-    ldr     x10, [x21]
-    cmp     x10, x9
-    b.lo    9f
-    add     x0, x21, #8                     /* the fixed fields after size */
-    add     x1, x19, #8
-    MOVQ    x2, STORE_FIXED - 8
-    bl      lantern_copy
-    MOVQ    x9, STORE_FIXED                 /* the parts at their new capacities */
-    str     x9, [x21, #Store_blocks]
-    mov     x10, #BlockNode__mem
-    madd    x11, x22, x10, x9
-    str     x11, [x21, #Store_validators]
-    str     x23, [x21, #(Store_validators + 8)]
-    add     x0, x21, x9
-    PART    x1, x2, x19, Store_blocks
-    mov     x10, #BlockNode__mem
-    mul     x2, x2, x10
-    bl      lantern_copy
-    LDQ     x9, x21, Store_validators
-    add     x0, x21, x9
-    PART    x1, x2, x19, Store_validators
-    lsl     x2, x2, #5
-    bl      lantern_copy
-    LDQ     x9, x21, Store_validators       /* the new entries: no latest message, balance or flags */
-    add     x9, x21, x9
-    add     x9, x9, x24, lsl #5
-    sub     x10, x23, x24
-    mov     x11, #-1
-1:  cbz     x10, 2f
-    stp     xzr, x11, [x9]
-    stp     xzr, xzr, [x9, #16]
-    add     x9, x9, #StoreValidator__mem
-    sub     x10, x10, #1
-    b       1b
-2:  mov     x0, #LANTERN_OK
-    LEAVE 16
-9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 16
-END_FUNCTION lantern_store_copy
-
-/*
- * Optimistic sync: x0 store, x1 node, x2 payload_status, x3 result. x4 node index, x6 node count,
- * x7 nodes, x8 BlockNode__mem, x9 the node.
- */
-LEAF lantern_store_payload_status
-    str     xzr, [x3]
-    ldr     x4, [x1]
-    ldr     x5, [x2]
-    LDQ     x6, x0, Store_blocks + 8
-    cmp     x4, x6
-    b.hs    8f
-    LDQ     x7, x0, Store_blocks
-    add     x7, x0, x7
-    mov     x8, #BlockNode__mem
-    madd    x9, x4, x8, x7
-    ldr     x10, [x9, #BlockNode_payload_status]
-    cmp     x10, #PAYLOAD_STATUS_NOT_VALIDATED  /* only NOT_VALIDATED blocks change */
-    b.ne    6f
-    cmp     x5, #PAYLOAD_STATUS_VALID
-    b.eq    3f
-    cmp     x5, #PAYLOAD_STATUS_INVALIDATED
-    b.ne    6f
-    mov     x10, #PAYLOAD_STATUS_INVALIDATED    /* the block and its descendants: children come after parents */
-    str     x10, [x9, #BlockNode_payload_status]
-    add     x4, x4, #1
-1:  cmp     x4, x6
-    b.hs    6f
-    madd    x9, x4, x8, x7
-    ldr     x10, [x9, #BlockNode_parent]
-    cmn     x10, #1
-    b.eq    2f
-    madd    x11, x10, x8, x7
-    ldr     x11, [x11, #BlockNode_payload_status]
-    cmp     x11, #PAYLOAD_STATUS_INVALIDATED
-    b.ne    2f
-    ldr     x11, [x9, #BlockNode_payload_status]
-    cmp     x11, #PAYLOAD_STATUS_NOT_VALIDATED
-    b.ne    2f
-    mov     x11, #PAYLOAD_STATUS_INVALIDATED
-    str     x11, [x9, #BlockNode_payload_status]
-2:  add     x4, x4, #1
-    b       1b
-3:  mov     x10, #PAYLOAD_STATUS_VALID          /* the block and its NOT_VALIDATED ancestors */
-4:  str     x10, [x9, #BlockNode_payload_status]
-    ldr     x4, [x9, #BlockNode_parent]
-    cmn     x4, #1
-    b.eq    6f
-    madd    x9, x4, x8, x7
-    ldr     x11, [x9, #BlockNode_payload_status]
-    cmp     x11, #PAYLOAD_STATUS_NOT_VALIDATED
-    b.eq    4b
-6:  RETURN_OK
-8:  mov     x9, #LANTERN_INVALID_UNKNOWN_BLOCK
-    str     x9, [x3]
-    RETURN_OK
-END_FUNCTION lantern_store_payload_status
+SPEC_END get_forkchoice_store
 
 /* ---------------------------------------------------------------- Attestations */
 
@@ -1045,16 +910,16 @@ LOCAL_FUNCTION validate_attestation
     LEAVE 0
 END_FUNCTION validate_attestation
 
-FUNCTION lantern_validate_on_attestation
+SPEC_FUNCTION validate_on_attestation
     FRAME 0
     add     x1, x1, #Attestation_data
     ldr     x2, [x2]
     bl      validate_attestation
     UNFRAME 0
-END_FUNCTION lantern_validate_on_attestation
+SPEC_END validate_on_attestation
 
 /* Local: sp+16 the start slot. */
-FUNCTION lantern_store_target_checkpoint_state
+SPEC_FUNCTION store_target_checkpoint_state
     FRAME 16
     ldr     x9, [x1, #Checkpoint_epoch]
     lsr     x10, x9, #(64 - LOG2_SLOTS_PER_EPOCH)
@@ -1074,13 +939,13 @@ FUNCTION lantern_store_target_checkpoint_state
     str     x9, [x4]
     mov     x0, #LANTERN_OK
     UNFRAME 16
-END_FUNCTION lantern_store_target_checkpoint_state
+SPEC_END store_target_checkpoint_state
 
 /*
  * x19 store, x20 attestation, x21 is_from_block, x22 target state, x23 scratch, x24 result,
  * x25 scratch size for callees, x26 indexed attestation, x27 head vote node. Locals: L valid.
  */
-FUNCTION lantern_on_attestation
+SPEC_FUNCTION on_attestation
     ENTER 16
     mov     x19, x0
     mov     x20, x1
@@ -1149,13 +1014,13 @@ FUNCTION lantern_on_attestation
     LEAVE 16
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_on_attestation
+SPEC_END on_attestation
 
 /*
  * x19 store, x20 attester slashing, x21 state, x22 scratch, x23 result, x24 attestation_1,
  * x25 attestation_2, x26 scratch size. Locals: L out.
  */
-FUNCTION lantern_on_attester_slashing
+SPEC_FUNCTION on_attester_slashing
     ENTER 16
     mov     x19, x0
     mov     x20, x1
@@ -1243,7 +1108,7 @@ FUNCTION lantern_on_attester_slashing
     LEAVE 16
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_on_attester_slashing
+SPEC_END on_attester_slashing
 
 /* ---------------------------------------------------------------- get_proposer_head */
 
@@ -1254,7 +1119,7 @@ END_FUNCTION lantern_on_attester_slashing
  * Condition bits: 1 head_late, 2 ffg_competitive, 4 finalization_ok, 8 proposing_on_time,
  * 16 single_slot_reorg, 32 head_weak, 64 parent_strong, 128 current_time_ok, 256 proposer_equivocation.
  */
-FUNCTION lantern_get_proposer_head
+SPEC_FUNCTION get_proposer_head
     ENTER 48
     mov     x19, x0
     ldr     x20, [x1]
@@ -1431,7 +1296,7 @@ FUNCTION lantern_get_proposer_head
     LEAVE 48
 11: mov     x0, #LANTERN_INVALID_VALIDATOR_INDEX
     LEAVE 48
-END_FUNCTION lantern_get_proposer_head
+SPEC_END get_proposer_head
 
 /* ---------------------------------------------------------------- on_block */
 
@@ -1443,7 +1308,7 @@ END_FUNCTION lantern_get_proposer_head
  * L+152 saved previous justified (40), L+192 saved current justified (40), L+232 saved finalized (40),
  * L+272 its result, L+280 timely, L+288 head dependent node, then the boost.
  */
-FUNCTION lantern_on_block
+SPEC_FUNCTION on_block
     ENTER 304
     mov     x19, x0
     mov     x20, x1
@@ -1708,12 +1573,12 @@ FUNCTION lantern_on_block
     LEAVE 304
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 304
-END_FUNCTION lantern_on_block
+SPEC_END on_block
 
 /* ---------------------------------------------------------------- Data availability */
 
 /* x19 sidecar, x20 config, x21 out. Locals: L epoch, L+8 blob parameters (16). */
-FUNCTION lantern_verify_data_column_sidecar
+SPEC_FUNCTION verify_data_column_sidecar
     ENTER 32
     mov     x19, x0
     mov     x20, x1
@@ -1745,7 +1610,7 @@ FUNCTION lantern_verify_data_column_sidecar
     str     x9, [x21]
 8:  mov     x0, #LANTERN_OK
     LEAVE 32
-END_FUNCTION lantern_verify_data_column_sidecar
+SPEC_END verify_data_column_sidecar
 
 /* A list of x23 entries of stride bytes at the end of scratch x21, below x28: reg = its address. Uses x9, x10. */
 .macro DA_LIST reg, stride
@@ -1763,7 +1628,7 @@ END_FUNCTION lantern_verify_data_column_sidecar
  * x19 sidecar, x20 settings, x21 scratch, x22 out, x23 n, x24 commitments, x25 cell indices,
  * x26 cells, x27 proofs, x28 scratch size left. Locals: L valid.
  */
-FUNCTION lantern_verify_data_column_sidecar_kzg_proofs
+SPEC_FUNCTION verify_data_column_sidecar_kzg_proofs
     ENTER 16
     mov     x19, x0
     mov     x20, x1
@@ -1824,14 +1689,14 @@ FUNCTION lantern_verify_data_column_sidecar_kzg_proofs
     LEAVE 16
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_verify_data_column_sidecar_kzg_proofs
+SPEC_END verify_data_column_sidecar_kzg_proofs
 
 .if CRYPTO_KZG_CELL_SIZE != 2048
 .error "lantern_verify_data_column_sidecar_kzg_proofs sizes cells with a shift by 11"
 .endif
 
 /* x19 sidecar, x20 settings, x21 config, x22 scratch, x23 out, x24 sidecars left, x25 scratch size. */
-FUNCTION lantern_is_data_available
+SPEC_FUNCTION is_data_available
     ENTER 16
     PART    x19, x24, x0, 8                 /* a standalone list: its PartRef at 8 */
     mov     x20, x1
@@ -1863,4 +1728,4 @@ FUNCTION lantern_is_data_available
     b       1b
 8:  mov     x0, #LANTERN_OK
 7:  LEAVE 16
-END_FUNCTION lantern_is_data_available
+SPEC_END is_data_available

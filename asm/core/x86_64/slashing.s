@@ -7,7 +7,7 @@
  * S7 validator. Locals: L epoch, L+8 penalty, L+16 proposer, L+24 whistleblower reward,
  * L+32 proposer reward, L+40 whistleblower, L+48 slashed index.
  */
-FUNCTION lantern_slash_validator
+SPEC_FUNCTION slash_validator
     ENTER 64
     mov     %rdi, %rbx
     mov     (%rsi), %rbp
@@ -94,13 +94,13 @@ FUNCTION lantern_slash_validator
     LEAVE 64
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 64
-END_FUNCTION lantern_slash_validator
+SPEC_END slash_validator
 
 .if WEIGHT_DENOMINATOR != 64
 .error "lantern_slash_validator divides by WEIGHT_DENOMINATOR with a shift by 6"
 .endif
 
-LEAF lantern_is_slashable_attestation_data
+SPEC_LEAF is_slashable_attestation_data
     xor     %eax, %eax                      # data_1 != data_2
     xor     %ecx, %ecx
 1:  mov     (%rdi,%rcx), %r8
@@ -123,7 +123,7 @@ LEAF lantern_is_slashable_attestation_data
     setb    %al
 4:  mov     %rax, (%rdx)
     RETURN_OK
-END_FUNCTION lantern_is_slashable_attestation_data
+SPEC_END is_slashable_attestation_data
 
 .if (AttestationData__mem & 7) || (AttestationData__mem != 128)
 .error "lantern_is_slashable_attestation_data compares AttestationData 8 bytes at a time"
@@ -134,7 +134,7 @@ END_FUNCTION lantern_is_slashable_attestation_data
  * Locals: L predicate, L+8 epoch, L+16 domain type, L+24 domain (32),
  * L+56 signing root as a ByteList (56), L+112 index.
  */
-FUNCTION lantern_process_proposer_slashing
+SPEC_FUNCTION process_proposer_slashing
     ENTER 128
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -199,7 +199,7 @@ FUNCTION lantern_process_proposer_slashing
     LEAVE 128
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 128
-END_FUNCTION lantern_process_proposer_slashing
+SPEC_END process_proposer_slashing
 
 /*
  * L0 of lantern_process_proposer_slashing: check the signature of signed header rsi by
@@ -253,7 +253,7 @@ END_FUNCTION check_header_signature
  * S7 cursor 2, S8 attestation_2, S9 slashed_any.
  * Locals: L predicate, L+8 epoch, L+16 index, L+24 end 1, L+32 end 2, L+40 scratch size.
  */
-FUNCTION lantern_process_attester_slashing
+SPEC_FUNCTION process_attester_slashing
     ENTER 48
     mov     %rdi, %rbx
     mov     %rsi, %rax
@@ -355,4 +355,4 @@ FUNCTION lantern_process_attester_slashing
     LEAVE 48
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 48
-END_FUNCTION lantern_process_attester_slashing
+SPEC_END process_attester_slashing

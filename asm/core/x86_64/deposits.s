@@ -92,7 +92,7 @@ END_FUNCTION find_pubkey
  * rbx deposit, rbp config, r12 scratch, r13 out. Locals: L domain type, L+8 zero root,
  * L+40 domain, L+72 the signing root as a ByteList (header 24, then 32 bytes).
  */
-FUNCTION lantern_is_valid_deposit_signature
+SPEC_FUNCTION is_valid_deposit_signature
     ENTER 128
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -128,10 +128,10 @@ FUNCTION lantern_is_valid_deposit_signature
     mov     %r13, %r8
     CALL_GLOBAL crypto_bls_verify
 7:  LEAVE 128
-END_FUNCTION lantern_is_valid_deposit_signature
+SPEC_END is_valid_deposit_signature
 
 /* rbx out, rbp amount. Locals: L max effective balance. */
-FUNCTION lantern_get_validator_from_deposit
+SPEC_FUNCTION get_validator_from_deposit
     ENTER 16
     mov     %rcx, %rbx
     mov     %rdx, %rbp
@@ -163,7 +163,7 @@ FUNCTION lantern_get_validator_from_deposit
 1:  mov     %rax, Validator_effective_balance(%rbx)
     xor     %eax, %eax
     LEAVE 16
-END_FUNCTION lantern_get_validator_from_deposit
+SPEC_END get_validator_from_deposit
 
 .if Validator_slashed != 88 || Validator_activation_eligibility_epoch != 96
 .error "lantern_get_validator_from_deposit zeroes slashed and its padding with one 8-byte store"
@@ -172,14 +172,14 @@ END_FUNCTION lantern_get_validator_from_deposit
 .error "lantern_get_validator_from_deposit writes FAR_FUTURE_EPOCH as -1"
 .endif
 
-LEAF lantern_get_index_for_new_validator
+SPEC_LEAF get_index_for_new_validator
     mov     (BeaconState_validators + 8)(%rdi), %rax
     mov     %rax, (%rsi)
     RETURN_OK
-END_FUNCTION lantern_get_index_for_new_validator
+SPEC_END get_index_for_new_validator
 
 /* rbx state, rbp value, r12 stride. */
-FUNCTION lantern_set_or_append_list
+SPEC_FUNCTION set_or_append_list
     ENTER 16
     mov     %rdi, %rbx
     mov     %rcx, %rbp
@@ -212,13 +212,13 @@ FUNCTION lantern_set_or_append_list
     LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-END_FUNCTION lantern_set_or_append_list
+SPEC_END set_or_append_list
 
 /*
  * rbx state, rbp pubkey, r12 withdrawal credentials, r13 amount.
  * Locals: L the validator (128), L+128 index, L+136 zero.
  */
-FUNCTION lantern_add_validator_to_registry
+SPEC_FUNCTION add_validator_to_registry
     ENTER 144
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -265,10 +265,10 @@ FUNCTION lantern_add_validator_to_registry
     LEAVE 144
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 144
-END_FUNCTION lantern_add_validator_to_registry
+SPEC_END add_validator_to_registry
 
 /* rbx state, rbp deposit, r12 config, r13 scratch. Locals: L valid, L+8 index. */
-FUNCTION lantern_apply_pending_deposit
+SPEC_FUNCTION apply_pending_deposit
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -300,7 +300,7 @@ FUNCTION lantern_apply_pending_deposit
     call    lantern_increase_balance
 8:  xor     %eax, %eax
 7:  LEAVE 16
-END_FUNCTION lantern_apply_pending_deposit
+SPEC_END apply_pending_deposit
 
 .set POSTPONE_BYTES, MAX_PENDING_DEPOSITS_PER_EPOCH * PendingDeposit__mem
 
@@ -310,7 +310,7 @@ END_FUNCTION lantern_apply_pending_deposit
  * Locals: L current epoch, L+8 next epoch, L+16 churn, L+24 reached, L+32 finalized slot,
  * L+40 the deposit (PendingDeposit__mem bytes), L+232 the entries kept.
  */
-FUNCTION lantern_process_pending_deposits
+SPEC_FUNCTION process_pending_deposits
     ENTER 240
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -435,4 +435,4 @@ FUNCTION lantern_process_pending_deposits
 7:  LEAVE 240
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 240
-END_FUNCTION lantern_process_pending_deposits
+SPEC_END process_pending_deposits

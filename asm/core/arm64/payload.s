@@ -2,7 +2,7 @@
  * The execution payload, ARM64. Requirements: docs/reference/block-processing.md.
  */
 
-LEAF lantern_get_blob_parameters
+SPEC_LEAF get_blob_parameters
     ldr     x3, [x0]                        /* epoch */
     ldr     x4, [x1, #CONFIG_BLOB_SCHEDULE_COUNT]
     add     x5, x1, #CONFIG_BLOB_SCHEDULE
@@ -19,9 +19,9 @@ LEAF lantern_get_blob_parameters
     ldr     x8, [x1, #CONFIG_MAX_BLOBS_PER_BLOCK_ELECTRA]
     stp     x7, x8, [x2]
     RETURN_OK
-END_FUNCTION lantern_get_blob_parameters
+SPEC_END get_blob_parameters
 
-FUNCTION lantern_kzg_commitment_to_versioned_hash
+SPEC_FUNCTION kzg_commitment_to_versioned_hash
     FRAME 16
     str     x1, [sp, #16]
     mov     x2, x1
@@ -32,9 +32,9 @@ FUNCTION lantern_kzg_commitment_to_versioned_hash
     strb    w9, [x1]
     mov     x0, #LANTERN_OK
     UNFRAME 16
-END_FUNCTION lantern_kzg_commitment_to_versioned_hash
+SPEC_END kzg_commitment_to_versioned_hash
 
-LEAF lantern_compute_time_at_slot
+SPEC_LEAF compute_time_at_slot
     ldr     x4, [x0]                        /* genesis_time */
     ldr     x5, [x1]                        /* slot */
     mov     x6, #1000
@@ -54,14 +54,14 @@ LEAF lantern_compute_time_at_slot
     RETURN_OK
 1:  mov     x0, #LANTERN_INVALID_OVERFLOW
     ret
-END_FUNCTION lantern_compute_time_at_slot
+SPEC_END compute_time_at_slot
 
 /*
  * x19 state, x20 body, x21 execution_valid, x22 config, x23 scratch, x24 result,
  * x25 payload, x26 the new header, x27 scratch size.
  * Locals: L epoch, L+8 mix, L+40 time, L+48 blob parameters (16).
  */
-FUNCTION lantern_process_execution_payload
+SPEC_FUNCTION process_execution_payload
     ENTER 64
     mov     x19, x0
     mov     x20, x1
@@ -144,7 +144,7 @@ FUNCTION lantern_process_execution_payload
     LEAVE 64
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 64
-END_FUNCTION lantern_process_execution_payload
+SPEC_END process_execution_payload
 
 /*
  * The ExecutionPayloadHeader of payload x25 at x0, with scratch x23 of size x27 whose last

@@ -7,6 +7,16 @@
 # The asm-crypto objects lantern calls, and those that its dependencies call.
 CRYPTO_OBJECTS="sha256 hmac bls12381"
 
+# The forks that lantern's core has an object for (include/forks.inc).
+FORKS="fulu"
+fork_number() {
+    case $1 in
+      phase0) echo 0 ;; altair) echo 1 ;; bellatrix) echo 2 ;; capella) echo 3 ;;
+      deneb) echo 4 ;; electra) echo 5 ;; fulu) echo 6 ;;
+      *) echo "unknown fork $1" >&2; exit 2 ;;
+    esac
+}
+
 build_objects() {
     os=$1
     out=$2
@@ -41,14 +51,15 @@ build_objects() {
     for preset in mainnet minimal; do
         objects=""
         mkdir -p "$out/$preset"
-        # The core is one unit, asm/core/<ISA>/lantern.s, which includes its modules.
-        core=$root/asm/core/$isa/lantern.s
-        if [ -e "$core" ]; then
-            as -I"$root/include/$preset" -I"$root/include" -I"$plat" -I"$root/asm/core/$isa" \
-                -I"$dep/asm-ssz/include" -I"$dep/asm-crypto/include" \
-                -c "$core" -o "$out/$preset/lantern.o"
-            objects="$objects $out/$preset/lantern.o"
-        fi
+        # The core (include/forks.inc): asm/core/<ISA>/common.s once, and
+        # asm/core/<ISA>/lantern.s once for each fork in $FORKS, with FORK set.
+        core="-I$root/include/$preset -I$root/include -I$plat -I$root/asm/core/$isa -I$dep/asm-ssz/include -I$dep/asm-crypto/include"
+        as $core -c "$root/asm/core/$isa/common.s" -o "$out/$preset/common.o"
+        objects="$objects $out/$preset/common.o"
+        for fork in $FORKS; do
+            as $core -Wa,-defsym,FORK=$(fork_number $fork) -c "$root/asm/core/$isa/lantern.s" -o "$out/$preset/$fork.o"
+            objects="$objects $out/$preset/$fork.o"
+        done
         shell=$root/asm/shell/$os/$isa/shell.s
         if [ -e "$shell" ]; then
             as -I"$root/include/$preset" -I"$root/include" -I"$plat" -I"$root/asm/shell/$os/$isa" \

@@ -11,14 +11,6 @@ case "$(uname -m)" in
   x86_64) isa=x86_64 ;;
   *) echo "unsupported Mac: $(uname -m)" >&2; exit 2 ;;
 esac
-files="$*"
-[ -n "$files" ] || files=$(cd "$vectors" && ls *.bin)
 "$root/platform/macos/link-runner.sh" $isa "$root/build/macos-$isa"
-status=0
-for preset in mainnet minimal; do
-    echo "== macos $isa $preset"
-    "$root/build/macos-$isa/runner-$preset" "$vectors" $files || status=1
-    echo "== macos $isa $preset, signatures off"
-    "$root/build/macos-$isa/runner-$preset-bls-off" "$vectors" $files || status=1
-done
-exit $status
+echo "== macos $isa"
+"$root/tests/runner/run.sh" "$root/build/macos-$isa" "$vectors" "$@"

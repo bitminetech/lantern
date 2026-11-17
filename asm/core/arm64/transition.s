@@ -10,7 +10,7 @@
  * Locals: L epoch, L+8 proposer index, L+16 domain type, L+24 domain (32),
  * L+56 signing root as a ByteList (56), L+112 sha256(reveal), L+144 mix.
  */
-FUNCTION lantern_process_randao
+SPEC_FUNCTION process_randao
     ENTER 176
     mov     x19, x0
     mov     x20, x1
@@ -77,10 +77,10 @@ FUNCTION lantern_process_randao
     LEAVE 176
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 176
-END_FUNCTION lantern_process_randao
+SPEC_END process_randao
 
 /* x19 state, x20 body, x21 result. */
-FUNCTION lantern_process_eth1_data
+SPEC_FUNCTION process_eth1_data
     ENTER 16
     mov     x19, x0
     mov     x20, x1
@@ -130,7 +130,7 @@ FUNCTION lantern_process_eth1_data
     LEAVE 16
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_process_eth1_data
+SPEC_END process_eth1_data
 
 .if Eth1Data__mem != 72
 .error "lantern_process_eth1_data compares Eth1Data 8 bytes at a time"
@@ -181,7 +181,7 @@ END_FUNCTION lantern_process_eth1_data
 .endm
 
 /* x19 state, x20 body, x21 config, x22 scratch, x23 result, x24 scratch size, x25 entry, x26 left, x27 requests. */
-FUNCTION lantern_process_operations
+SPEC_FUNCTION process_operations
     ENTER 16
     mov     x19, x0
     mov     x20, x1
@@ -206,7 +206,7 @@ FUNCTION lantern_process_operations
     FOR_FIXED x27, ExecutionRequests_consolidations, ConsolidationRequest__mem, lantern_process_consolidation_request
 8:  mov     x0, #LANTERN_OK
 7:  LEAVE 16
-END_FUNCTION lantern_process_operations
+SPEC_END process_operations
 
 /* ---------------------------------------------------------------- The block */
 
@@ -291,7 +291,7 @@ END_FUNCTION block_scratch
 .endm
 
 /* x19 state, x20 block, x21 execution_valid, x22 config, x23 scratch, x24 result, x25 body, x26 scratch size. */
-FUNCTION lantern_process_block
+SPEC_FUNCTION process_block
     ENTER 16
     mov     x19, x0
     mov     x20, x1
@@ -371,12 +371,12 @@ FUNCTION lantern_process_block
 7:  LEAVE 16
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_process_block
+SPEC_END process_block
 
 /* ---------------------------------------------------------------- Slots */
 
 /* x19 state, x20 scratch, x21 slot index. Locals: L the state root, L+32 the header root. */
-FUNCTION lantern_process_slot
+SPEC_FUNCTION process_slot
     ENTER 64
     mov     x19, x0
     mov     x20, x1
@@ -413,7 +413,7 @@ FUNCTION lantern_process_slot
     COPY32  x9, x10
     mov     x0, #LANTERN_OK
 7:  LEAVE 64
-END_FUNCTION lantern_process_slot
+SPEC_END process_slot
 
 /*
  * L0: x0 = LANTERN_OK when state x0 has the room and scratch x2 the bytes to reach slot x1
@@ -471,7 +471,7 @@ LOCAL_FUNCTION slots_room
 END_FUNCTION slots_room
 
 /* x19 state, x20 slot, x21 config, x22 scratch, x23 result, x24 scratch size. */
-FUNCTION lantern_process_slots
+SPEC_FUNCTION process_slots
     ENTER 16
     mov     x19, x0
     ldr     x20, [x1]
@@ -519,7 +519,7 @@ FUNCTION lantern_process_slots
     b       2b
 8:  mov     x0, #LANTERN_OK
 7:  LEAVE 16
-END_FUNCTION lantern_process_slots
+SPEC_END process_slots
 
 /* ---------------------------------------------------------------- Blocks and the transition */
 
@@ -527,7 +527,7 @@ END_FUNCTION lantern_process_slots
  * x19 state, x20 signed block, x21 scratch, x22 out, x23 block, x24 proposer.
  * Locals: L epoch, L+8 domain type, L+16 domain (32), L+48 signing root as a ByteList (56).
  */
-FUNCTION lantern_verify_block_signature
+SPEC_FUNCTION verify_block_signature
     ENTER 112
     mov     x19, x0
     mov     x20, x1
@@ -569,13 +569,13 @@ FUNCTION lantern_verify_block_signature
 7:  LEAVE 112
 6:  mov     x0, #LANTERN_INVALID_VALIDATOR_INDEX
     LEAVE 112
-END_FUNCTION lantern_verify_block_signature
+SPEC_END verify_block_signature
 
 /*
  * x19 state, x20 signed block, x21 options, x22 config, x23 scratch, x24 result, x25 block,
  * x26 scratch size. Locals: L valid, L+8 state root (32).
  */
-FUNCTION lantern_state_transition
+SPEC_FUNCTION state_transition
     ENTER 48
     mov     x19, x0
     mov     x20, x1
@@ -657,4 +657,4 @@ FUNCTION lantern_state_transition
 7:  LEAVE 48
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 48
-END_FUNCTION lantern_state_transition
+SPEC_END state_transition

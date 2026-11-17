@@ -64,6 +64,14 @@ _\name:
     .cfi_startproc
 .endm
 
+/* A global function label at this address, for an export that shares its code with a local label. */
+.macro GLOBAL_LABEL name
+    .globl _\name
+_\name:
+.endm
+.macro GLOBAL_LABEL_END name
+.endm
+
 /* Call a global function: of this library, or of a dependency. Mach-O adds a leading underscore. */
 .macro CALL_GLOBAL name
 .ifdef ISA_ARM64

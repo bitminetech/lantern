@@ -29,7 +29,7 @@ END_FUNCTION sha256_short
  * s1 index count, s2 seed, s3 scratch, s4 out, s5 entries, s6 round, s7 pivot,
  * s8 buckets, s9 bucket hashes, s10 bucket. Locals: L the message (seed, round, bucket), L+40 the digest.
  */
-FUNCTION lantern_compute_shuffled_permutation
+SPEC_FUNCTION compute_shuffled_permutation
     ENTER 80
     ld      s1, 0(a0)
     mv      s2, a1
@@ -115,10 +115,10 @@ FUNCTION lantern_compute_shuffled_permutation
     LEAVE 80
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 80
-END_FUNCTION lantern_compute_shuffled_permutation
+SPEC_END compute_shuffled_permutation
 
 /* s1 index, s2 count pointer, s3 seed, s4 scratch, s5 out, s6 list. */
-FUNCTION lantern_compute_shuffled_index
+SPEC_FUNCTION compute_shuffled_index
     ENTER 16
     ld      s1, 0(a0)
     mv      s2, a1
@@ -156,13 +156,13 @@ FUNCTION lantern_compute_shuffled_index
     LEAVE 16
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_compute_shuffled_index
+SPEC_END compute_shuffled_index
 
 /*
  * Locals: sp+0 the message (domain type 4, epoch 8, mix 32), sp+48 the mix epoch, sp+56 out,
  * sp+64 the mix. The message's epoch and mix are 4-aligned, so they are written a word at a time.
  */
-FUNCTION lantern_get_seed
+SPEC_FUNCTION get_seed
     FRAME 96
     ld      t0, 0(a1)
     li      t1, EPOCHS_PER_HISTORICAL_VECTOR - MIN_SEED_LOOKAHEAD - 1
@@ -189,13 +189,13 @@ FUNCTION lantern_get_seed
     UNFRAME 96
 8:  li      a0, LANTERN_INVALID_OVERFLOW
     UNFRAME 96
-END_FUNCTION lantern_get_seed
+SPEC_END get_seed
 
 /*
  * s1 state, s2 indices, s3 seed, s4 scratch, s5 out, s6 i, s7 total, s8 scratch size, s9 candidate.
  * Locals: L i % total, L+8 total, L+16 shuffled, L+24 message (seed, i // 16), L+64 digest.
  */
-FUNCTION lantern_compute_proposer_index
+SPEC_FUNCTION compute_proposer_index
     ENTER 96
     mv      s1, a0
     mv      s2, a1
@@ -253,13 +253,13 @@ FUNCTION lantern_compute_proposer_index
     LEAVE 96
 8:  li      a0, LANTERN_INVALID_NO_INDICES
     LEAVE 96
-END_FUNCTION lantern_compute_proposer_index
+SPEC_END compute_proposer_index
 
 /*
  * s1 state, s2 seed, s3 indices, s4 scratch, s5 out, s6 slot index, s7 start slot,
  * s8 scratch size. Locals: L start slot, L+8 the message (seed, slot), L+48 the slot seed.
  */
-FUNCTION lantern_compute_proposer_indices
+SPEC_FUNCTION compute_proposer_indices
     ENTER 80
     mv      s1, a0
     mv      s2, a2
@@ -299,13 +299,13 @@ FUNCTION lantern_compute_proposer_indices
 7:  LEAVE 80
 6:  li      a0, LANTERN_INVALID_OVERFLOW
     LEAVE 80
-END_FUNCTION lantern_compute_proposer_indices
+SPEC_END compute_proposer_indices
 
 /*
  * s1 state, s2 epoch, s3 scratch, s4 out, s5 validator count, s6 scratch size, s7 active list.
  * Locals: L domain type, L+8 seed.
  */
-FUNCTION lantern_get_beacon_proposer_indices
+SPEC_FUNCTION get_beacon_proposer_indices
     ENTER 48
     mv      s1, a0
     mv      s2, a1
@@ -339,7 +339,7 @@ FUNCTION lantern_get_beacon_proposer_indices
 7:  LEAVE 48
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 48
-END_FUNCTION lantern_get_beacon_proposer_indices
+SPEC_END get_beacon_proposer_indices
 
 /* ---------------------------------------------------------------- Domains and signing roots */
 
@@ -348,7 +348,7 @@ END_FUNCTION lantern_get_beacon_proposer_indices
 .endif
 
 /* Locals: sp+0 the ForkData value: current_version (4), genesis_validators_root (32). Both inputs are 4-aligned. */
-FUNCTION lantern_compute_fork_data_root
+SPEC_FUNCTION compute_fork_data_root
     FRAME 48
     lw      t0, 0(a0)
     sw      t0, 0(sp)
@@ -360,10 +360,10 @@ FUNCTION lantern_compute_fork_data_root
     ADDRESS a0, lantern_type_ForkData
     CALL_GLOBAL ssz_hash_tree_root
     UNFRAME 48
-END_FUNCTION lantern_compute_fork_data_root
+SPEC_END compute_fork_data_root
 
 /* Locals: sp+0 domain type pointer, sp+8 out, sp+16 the fork data root. */
-FUNCTION lantern_compute_domain
+SPEC_FUNCTION compute_domain
     FRAME 48
     sd      a0, 0(sp)
     sd      a4, 8(sp)
@@ -383,9 +383,9 @@ FUNCTION lantern_compute_domain
     .endr
     li      a0, LANTERN_OK
 1:  UNFRAME 48
-END_FUNCTION lantern_compute_domain
+SPEC_END compute_domain
 
-FUNCTION lantern_get_domain
+SPEC_FUNCTION get_domain
     FRAME 0
     ld      t0, 0(a2)
     LDQ     t1, a0, BeaconState_fork + Fork_epoch
@@ -398,10 +398,10 @@ FUNCTION lantern_get_domain
     ADDQ    a2, t3, BeaconState_genesis_validators_root
     call    lantern_compute_domain
     UNFRAME 0
-END_FUNCTION lantern_get_domain
+SPEC_END get_domain
 
 /* Locals: sp+0 the SigningData value (object_root, domain), sp+64 domain, sp+72 scratch, sp+80 out. */
-FUNCTION lantern_compute_signing_root
+SPEC_FUNCTION compute_signing_root
     FRAME 96
     sd      a2, 64(sp)
     sd      a3, 72(sp)
@@ -419,4 +419,4 @@ FUNCTION lantern_compute_signing_root
     ld      a3, 80(sp)
     CALL_GLOBAL ssz_hash_tree_root
 1:  UNFRAME 96
-END_FUNCTION lantern_compute_signing_root
+SPEC_END compute_signing_root

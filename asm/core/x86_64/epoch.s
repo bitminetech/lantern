@@ -11,7 +11,7 @@
  * S7 current list. Locals: L current epoch, L+8 previous epoch, L+16 total active,
  * L+24 previous target balance, L+32 current target balance, L+40 flag index, L+48 the scratch size on entry.
  */
-FUNCTION lantern_process_justification_and_finalization
+SPEC_FUNCTION process_justification_and_finalization
     ENTER 64
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -79,7 +79,7 @@ FUNCTION lantern_process_justification_and_finalization
     LEAVE 64
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 64
-END_FUNCTION lantern_process_justification_and_finalization
+SPEC_END process_justification_and_finalization
 
 /* dst (40 bytes, a Checkpoint) = src. Uses xmm0, xmm1, r11. */
 .macro COPY_CHECKPOINT dst, src
@@ -97,7 +97,7 @@ END_FUNCTION lantern_process_justification_and_finalization
  * Locals: L old previous justified (40), L+48 old current justified (40),
  * L+96 previous epoch, L+104 current epoch, L+112 root (32).
  */
-FUNCTION lantern_weigh_justification_and_finalization
+SPEC_FUNCTION weigh_justification_and_finalization
     ENTER 160
     mov     %rdi, %rbx
     mov     (%rsi), %rbp
@@ -197,7 +197,7 @@ FUNCTION lantern_weigh_justification_and_finalization
 56: movq    $0, (%r14)
 6:  xor     %eax, %eax
     LEAVE 160
-END_FUNCTION lantern_weigh_justification_and_finalization
+SPEC_END weigh_justification_and_finalization
 
 /* ---------------------------------------------------------------- Inactivity */
 
@@ -207,7 +207,7 @@ END_FUNCTION lantern_weigh_justification_and_finalization
  * Locals: L epoch, L+8 previous epoch, L+16 flag index, L+24 in leak, L+32 eligible end,
  * L+40 participating end, L+56 the constant 1, L+64 the scratch size on entry.
  */
-FUNCTION lantern_process_inactivity_updates
+SPEC_FUNCTION process_inactivity_updates
     ENTER 80
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -293,7 +293,7 @@ FUNCTION lantern_process_inactivity_updates
     LEAVE 80
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 80
-END_FUNCTION lantern_process_inactivity_updates
+SPEC_END process_inactivity_updates
 
 /* ---------------------------------------------------------------- Rewards and penalties */
 
@@ -314,7 +314,7 @@ END_FUNCTION zero_deltas
  * L+32 eligible end, L+40 participating end, L+48 base reward, L+72 index, L+80 weight,
  * L+88 the scratch size on entry.
  */
-FUNCTION lantern_get_flag_index_deltas
+SPEC_FUNCTION get_flag_index_deltas
     ENTER 112
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -442,14 +442,14 @@ FUNCTION lantern_get_flag_index_deltas
 8:  LEAVE 112
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 112
-END_FUNCTION lantern_get_flag_index_deltas
+SPEC_END get_flag_index_deltas
 
 /*
  * rbx state, rbp config, r12 scratch, r13 rewards, r14 penalties, r15 eligible cursor,
  * S7 participating list then its cursor, S8 eligible list.
  * Locals: L previous epoch, L+8 flag index, L+24 eligible end, L+32 participating end, L+40 the scratch size.
  */
-FUNCTION lantern_get_inactivity_penalty_deltas
+SPEC_FUNCTION get_inactivity_penalty_deltas
     ENTER 64
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -535,13 +535,13 @@ FUNCTION lantern_get_inactivity_penalty_deltas
 8:  LEAVE 64
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 64
-END_FUNCTION lantern_get_inactivity_penalty_deltas
+SPEC_END get_inactivity_penalty_deltas
 
 /*
  * rbx state, rbp config, r12 scratch, r13 result, r14 delta pair, r15 index,
  * S7 the scratch size on entry. Scratch: lists 0 to 7 at its end. Locals: L epoch, L+8 flag index, L+16 index.
  */
-FUNCTION lantern_process_rewards_and_penalties
+SPEC_FUNCTION process_rewards_and_penalties
     ENTER 32
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -617,7 +617,7 @@ FUNCTION lantern_process_rewards_and_penalties
 7:  LEAVE 32
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 32
-END_FUNCTION lantern_process_rewards_and_penalties
+SPEC_END process_rewards_and_penalties
 
 /* ---------------------------------------------------------------- Registry */
 
@@ -625,7 +625,7 @@ END_FUNCTION lantern_process_rewards_and_penalties
  * rbx state, rbp config, r12 scratch, r13 result, r14 validator, r15 index, S7 validator count.
  * Locals: L current epoch, L+8 activation epoch, L+16 predicate, L+24 index.
  */
-FUNCTION lantern_process_registry_updates
+SPEC_FUNCTION process_registry_updates
     ENTER 32
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -693,10 +693,10 @@ FUNCTION lantern_process_registry_updates
 7:  LEAVE 32
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 32
-END_FUNCTION lantern_process_registry_updates
+SPEC_END process_registry_updates
 
 /* rbx state, rbp index, r12 config, r13 scratch, r14 validator, r15 result. Locals: L exit queue epoch. */
-FUNCTION lantern_initiate_validator_exit
+SPEC_FUNCTION initiate_validator_exit
     ENTER 16
     mov     %rdi, %rbx
     mov     (%rsi), %rbp
@@ -735,13 +735,13 @@ FUNCTION lantern_initiate_validator_exit
     LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-END_FUNCTION lantern_initiate_validator_exit
+SPEC_END initiate_validator_exit
 
 /*
  * rbx state, rbp exit balance, r12 config, r13 scratch, r14 out, r15 result, S7 earliest exit epoch.
  * Locals: L current epoch, L+8 activation exit epoch, L+16 churn.
  */
-FUNCTION lantern_compute_exit_epoch_and_update_churn
+SPEC_FUNCTION compute_exit_epoch_and_update_churn
     ENTER 32
     mov     %rdi, %rbx
     mov     (%rsi), %rbp
@@ -801,10 +801,10 @@ FUNCTION lantern_compute_exit_epoch_and_update_churn
     LEAVE 32
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 32
-END_FUNCTION lantern_compute_exit_epoch_and_update_churn
+SPEC_END compute_exit_epoch_and_update_churn
 
 /* Locals: rsp+0 config, rsp+8 out, rsp+16 total active balance. */
-FUNCTION lantern_get_balance_churn_limit
+SPEC_FUNCTION get_balance_churn_limit
     FRAME 32
     mov     %rsi, 0(%rsp)
     mov     %rcx, 8(%rsp)
@@ -828,10 +828,10 @@ FUNCTION lantern_get_balance_churn_limit
     mov     %rax, (%rcx)
     xor     %eax, %eax
 1:  UNFRAME 32
-END_FUNCTION lantern_get_balance_churn_limit
+SPEC_END get_balance_churn_limit
 
 /* Locals: rsp+0 config, rsp+8 out, rsp+16 the balance churn limit. */
-FUNCTION lantern_get_activation_exit_churn_limit
+SPEC_FUNCTION get_activation_exit_churn_limit
     FRAME 32
     mov     %rsi, 0(%rsp)
     mov     %rcx, 8(%rsp)
@@ -848,10 +848,10 @@ FUNCTION lantern_get_activation_exit_churn_limit
     mov     %rax, (%rcx)
     xor     %eax, %eax
 1:  UNFRAME 32
-END_FUNCTION lantern_get_activation_exit_churn_limit
+SPEC_END get_activation_exit_churn_limit
 
 /* Locals: rsp+0 state, rsp+8 config, rsp+16 scratch, rsp+24 out, rsp+32 balance churn, rsp+40 activation exit churn. */
-FUNCTION lantern_get_consolidation_churn_limit
+SPEC_FUNCTION get_consolidation_churn_limit
     FRAME 48
     mov     %rdi, 0(%rsp)
     mov     %rsi, 8(%rsp)
@@ -874,7 +874,7 @@ FUNCTION lantern_get_consolidation_churn_limit
     mov     %rax, (%rcx)
     xor     %eax, %eax
 1:  UNFRAME 48
-END_FUNCTION lantern_get_consolidation_churn_limit
+SPEC_END get_consolidation_churn_limit
 
 /* ---------------------------------------------------------------- Slashings */
 
@@ -882,7 +882,7 @@ END_FUNCTION lantern_get_consolidation_churn_limit
  * rbx state, rbp config, r12 scratch, r13 result, r14 index, r15 penalty per increment.
  * Locals: L epoch, L+8 total balance, L+16 index, L+24 penalty.
  */
-FUNCTION lantern_process_slashings
+SPEC_FUNCTION process_slashings
     ENTER 32
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -951,12 +951,12 @@ FUNCTION lantern_process_slashings
 7:  LEAVE 32
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 32
-END_FUNCTION lantern_process_slashings
+SPEC_END process_slashings
 
 /* ---------------------------------------------------------------- Eth1 data, consolidations */
 
 /* Locals: rsp+0 state, rsp+8 result, rsp+16 epoch. */
-FUNCTION lantern_process_eth1_data_reset
+SPEC_FUNCTION process_eth1_data_reset
     FRAME 32
     mov     %rdi, 0(%rsp)
     mov     %rcx, 8(%rsp)
@@ -975,13 +975,13 @@ FUNCTION lantern_process_eth1_data_reset
     movq    $0, (%rcx)
     xor     %eax, %eax
     UNFRAME 32
-END_FUNCTION lantern_process_eth1_data_reset
+SPEC_END process_eth1_data_reset
 
 /*
  * rbx state, rbp result, r12 next epoch, r13 consolidation, r14 consolidations left, r15 processed.
  * Locals: L epoch, L+8 source index, L+16 target index, L+24 balance.
  */
-FUNCTION lantern_process_pending_consolidations
+SPEC_FUNCTION process_pending_consolidations
     ENTER 32
     mov     %rdi, %rbx
     mov     %rcx, %rbp
@@ -1039,7 +1039,7 @@ FUNCTION lantern_process_pending_consolidations
 5:  movq    $0, (%rbp)
     xor     %eax, %eax
     LEAVE 32
-END_FUNCTION lantern_process_pending_consolidations
+SPEC_END process_pending_consolidations
 
 .if PendingConsolidation__mem != 16
 .error "lantern_process_pending_consolidations shifts by 4 for PendingConsolidation"
@@ -1048,7 +1048,7 @@ END_FUNCTION lantern_process_pending_consolidations
 /* ---------------------------------------------------------------- Effective balances */
 
 /* rbx state, rbp result, r12 validator, r13 index, r14 validator count. Locals: L max effective balance. */
-FUNCTION lantern_process_effective_balance_updates
+SPEC_FUNCTION process_effective_balance_updates
     ENTER 16
     mov     %rdi, %rbx
     mov     %rcx, %rbp
@@ -1089,12 +1089,12 @@ FUNCTION lantern_process_effective_balance_updates
 3:  movq    $0, (%rbp)
     xor     %eax, %eax
     LEAVE 16
-END_FUNCTION lantern_process_effective_balance_updates
+SPEC_END process_effective_balance_updates
 
 /* ---------------------------------------------------------------- Resets and rotations */
 
 /* Locals: rsp+0 state, rsp+8 result, rsp+16 epoch. */
-FUNCTION lantern_process_slashings_reset
+SPEC_FUNCTION process_slashings_reset
     FRAME 32
     mov     %rdi, 0(%rsp)
     mov     %rcx, 8(%rsp)
@@ -1109,10 +1109,10 @@ FUNCTION lantern_process_slashings_reset
     movq    $0, (%rcx)
     xor     %eax, %eax
     UNFRAME 32
-END_FUNCTION lantern_process_slashings_reset
+SPEC_END process_slashings_reset
 
 /* Locals: rsp+0 state, rsp+8 result, rsp+16 epoch. */
-FUNCTION lantern_process_randao_mixes_reset
+SPEC_FUNCTION process_randao_mixes_reset
     FRAME 32
     mov     %rdi, 0(%rsp)
     mov     %rcx, 8(%rsp)
@@ -1130,10 +1130,10 @@ FUNCTION lantern_process_randao_mixes_reset
     movq    $0, (%rcx)
     xor     %eax, %eax
     UNFRAME 32
-END_FUNCTION lantern_process_randao_mixes_reset
+SPEC_END process_randao_mixes_reset
 
 /* rbx state, rbp scratch, r12 result, r13 the new summary. Locals: L epoch. */
-FUNCTION lantern_process_historical_summaries_update
+SPEC_FUNCTION process_historical_summaries_update
     ENTER 16
     mov     %rdi, %rbx
     mov     %rdx, %rbp
@@ -1174,14 +1174,14 @@ FUNCTION lantern_process_historical_summaries_update
     LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-END_FUNCTION lantern_process_historical_summaries_update
+SPEC_END process_historical_summaries_update
 
 .if HistoricalSummary__mem != 64
 .error "lantern_process_historical_summaries_update shifts by 6 for HistoricalSummary"
 .endif
 
 /* rbx state, rbp result. previous_epoch_participation = current; current = zeros, one per validator. */
-FUNCTION lantern_process_participation_flag_updates
+SPEC_FUNCTION process_participation_flag_updates
     ENTER 16
     mov     %rdi, %rbx
     mov     %rcx, %rbp
@@ -1196,14 +1196,14 @@ FUNCTION lantern_process_participation_flag_updates
     movq    $0, (%rbp)
     xor     %eax, %eax
     LEAVE 16
-END_FUNCTION lantern_process_participation_flag_updates
+SPEC_END process_participation_flag_updates
 
 /* ---------------------------------------------------------------- Proposer lookahead */
 
 .set LOOKAHEAD_LOCALS, (8 * SLOTS_PER_EPOCH + 8 + 15) / 16 * 16
 
 /* rbx state, rbp config, r12 scratch, r13 result. Locals: L the last epoch's proposers, then the epoch. */
-FUNCTION lantern_process_proposer_lookahead
+SPEC_FUNCTION process_proposer_lookahead
     ENTER LOOKAHEAD_LOCALS
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -1233,7 +1233,7 @@ FUNCTION lantern_process_proposer_lookahead
 7:  LEAVE LOOKAHEAD_LOCALS
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE LOOKAHEAD_LOCALS
-END_FUNCTION lantern_process_proposer_lookahead
+SPEC_END process_proposer_lookahead
 
 /* ---------------------------------------------------------------- The epoch */
 
@@ -1254,7 +1254,7 @@ END_FUNCTION lantern_process_proposer_lookahead
 .endm
 
 /* rbx state, rbp config, r12 scratch, r13 result, r14 scratch size. Locals: L epoch. */
-FUNCTION lantern_process_epoch
+SPEC_FUNCTION process_epoch
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -1300,4 +1300,4 @@ FUNCTION lantern_process_epoch
 7:  LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-END_FUNCTION lantern_process_epoch
+SPEC_END process_epoch

@@ -10,7 +10,7 @@
  * Locals: L epoch, L+8 proposer index, L+16 domain type, L+24 domain (32),
  * L+56 signing root as a ByteList (56), L+112 sha256(reveal), L+144 mix.
  */
-FUNCTION lantern_process_randao
+SPEC_FUNCTION process_randao
     ENTER 176
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -79,10 +79,10 @@ FUNCTION lantern_process_randao
     LEAVE 176
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 176
-END_FUNCTION lantern_process_randao
+SPEC_END process_randao
 
 /* rbx state, rbp body, r12 result. */
-FUNCTION lantern_process_eth1_data
+SPEC_FUNCTION process_eth1_data
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -131,7 +131,7 @@ FUNCTION lantern_process_eth1_data
     LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-END_FUNCTION lantern_process_eth1_data
+SPEC_END process_eth1_data
 
 .if Eth1Data__mem != 72
 .error "lantern_process_eth1_data compares Eth1Data 8 bytes at a time"
@@ -193,7 +193,7 @@ END_FUNCTION lantern_process_eth1_data
 .endm
 
 /* rbx state, rbp body, r12 config, r13 scratch, r14 result, r15 scratch size, S7 entry, S8 left, S9 requests. */
-FUNCTION lantern_process_operations
+SPEC_FUNCTION process_operations
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -221,7 +221,7 @@ FUNCTION lantern_process_operations
     FOR_FIXED %rdx, ExecutionRequests_consolidations, ConsolidationRequest__mem, lantern_process_consolidation_request
 8:  xor     %eax, %eax
 7:  LEAVE 16
-END_FUNCTION lantern_process_operations
+SPEC_END process_operations
 
 /* ---------------------------------------------------------------- The block */
 
@@ -303,7 +303,7 @@ END_FUNCTION block_scratch
 .endm
 
 /* rbx state, rbp block, r12 config, r13 scratch, r14 result, r15 body, S7 execution_valid, S8 scratch size. */
-FUNCTION lantern_process_block
+SPEC_FUNCTION process_block
     ENTER 16
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -385,12 +385,12 @@ FUNCTION lantern_process_block
 7:  LEAVE 16
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
-END_FUNCTION lantern_process_block
+SPEC_END process_block
 
 /* ---------------------------------------------------------------- Slots */
 
 /* rbx state, rbp scratch, r12 slot index. Locals: L the state root, L+32 the header root. */
-FUNCTION lantern_process_slot
+SPEC_FUNCTION process_slot
     ENTER 64
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -429,7 +429,7 @@ FUNCTION lantern_process_slot
     COPY32  %rdi, %rsi
     xor     %eax, %eax
 7:  LEAVE 64
-END_FUNCTION lantern_process_slot
+SPEC_END process_slot
 
 /*
  * L0: rax = LANTERN_OK when state rdi has the room and scratch rdx the bytes to reach slot rsi
@@ -498,7 +498,7 @@ LOCAL_FUNCTION slots_room
 END_FUNCTION slots_room
 
 /* rbx state, rbp slot, r12 config, r13 scratch, r14 result, r15 scratch size. */
-FUNCTION lantern_process_slots
+SPEC_FUNCTION process_slots
     ENTER 16
     mov     %rdi, %rbx
     mov     (%rsi), %rbp
@@ -544,7 +544,7 @@ FUNCTION lantern_process_slots
     jmp     2b
 8:  xor     %eax, %eax
 7:  LEAVE 16
-END_FUNCTION lantern_process_slots
+SPEC_END process_slots
 
 /* ---------------------------------------------------------------- Blocks and the transition */
 
@@ -552,7 +552,7 @@ END_FUNCTION lantern_process_slots
  * rbx state, rbp signed block, r12 scratch, r13 out, r14 block, r15 proposer.
  * Locals: L epoch, L+8 domain type, L+16 domain (32), L+48 signing root as a ByteList (56).
  */
-FUNCTION lantern_verify_block_signature
+SPEC_FUNCTION verify_block_signature
     ENTER 112
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -595,13 +595,13 @@ FUNCTION lantern_verify_block_signature
 7:  LEAVE 112
 6:  mov     $LANTERN_INVALID_VALIDATOR_INDEX, %eax
     LEAVE 112
-END_FUNCTION lantern_verify_block_signature
+SPEC_END verify_block_signature
 
 /*
  * rbx state, rbp signed block, r12 options, r13 config, r14 scratch, r15 result,
  * S7 block, S8 scratch size. Locals: L valid, L+8 state root (32).
  */
-FUNCTION lantern_state_transition
+SPEC_FUNCTION state_transition
     ENTER 48
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -693,4 +693,4 @@ FUNCTION lantern_state_transition
 7:  LEAVE 48
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 48
-END_FUNCTION lantern_state_transition
+SPEC_END state_transition

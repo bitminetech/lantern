@@ -52,7 +52,7 @@
 - `state` is a valid `BeaconState` value (include/types.inc) whose parts have the room each function names; `config` is a [`Config`](helpers.md#type-config); `scratch` is a [`Scratch`](helpers.md#type-scratch); `result` is a [`Result`](helpers.md#type-result).
 - The scratch a function needs is S(k) of [Type Scratch](helpers.md#type-scratch), with k under its Limits. Each function checks it, and the room of each list it may append to, before it changes the state, and returns `LANTERN_BUFFER_TOO_SMALL` with the state unchanged when either is short.
 - A function never makes an OS call and never keeps a pointer after it returns.
-- Role: L1. Convention: the core ABI for each ISA (ARCHITECTURE.md section 6). Symbol: the function name (`_` prefixed on macOS).
+- Role, convention and symbol: as in [helpers.md](helpers.md#common-rules).
 - The `process_*` functions take (`state`, `config`, `scratch`, `result`) in that order.
 
 ## Test vectors

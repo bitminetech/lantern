@@ -6,7 +6,7 @@
  * s1 out entries, s2 NUMBER_OF_CUSTODY_GROUPS, s3 custody_group_count, s4 groups found, s5 out.
  * Locals: L current_id (32), L+32 the digest (32).
  */
-FUNCTION lantern_get_custody_groups
+SPEC_FUNCTION get_custody_groups
     ENTER 64
     ld      s2, CONFIG_NUMBER_OF_CUSTODY_GROUPS(a2)
     ld      s3, 0(a1)
@@ -85,9 +85,9 @@ FUNCTION lantern_get_custody_groups
     LEAVE 64
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 64
-END_FUNCTION lantern_get_custody_groups
+SPEC_END get_custody_groups
 
-LEAF lantern_compute_columns_for_custody_group
+SPEC_LEAF compute_columns_for_custody_group
     ld      t0, CONFIG_NUMBER_OF_CUSTODY_GROUPS(a1)
     ld      t1, 0(a0)
     bgeu    t1, t0, 8f                      # assert custody_group < NUMBER_OF_CUSTODY_GROUPS
@@ -114,195 +114,13 @@ LEAF lantern_compute_columns_for_custody_group
     ret
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     ret
-END_FUNCTION lantern_compute_columns_for_custody_group
+SPEC_END compute_columns_for_custody_group
 
 /* ---------------------------------------------------------------- Seen */
 
 .if SeenKey__mem != 32 || SeenBits__mem != 320 || SeenBlock__mem != 40 || SEEN_BITS_BYTES * 8 < MAX_VALIDATORS_PER_COMMITTEE || SEEN_BITS_BYTES * 8 < SYNC_COMMITTEE_SIZE / SYNC_COMMITTEE_SUBNET_COUNT
 .error "the gossip code assumes the Seen layouts of include/lantern.inc"
 .endif
-
-LEAF lantern_seen_size
-    ld      t0, SeenRoom_keys(a0)
-    ld      t1, SeenRoom_bits(a0)
-    ld      t2, SeenRoom_blocks(a0)
-    ld      t3, SeenRoom_header_bytes(a0)
-    li      t4, SEEN_FIXED
-    srli    t5, t0, 59                      # keys * 32 fits
-    bnez    t5, 9f
-    slli    t5, t0, 5
-    add     t6, t4, t5
-    bltu    t6, t4, 9f
-    mv      t4, t6
-    li      t5, SeenBits__mem
-    mulhu   t6, t1, t5
-    bnez    t6, 9f
-    mul     t5, t1, t5
-    add     t6, t4, t5
-    bltu    t6, t4, 9f
-    mv      t4, t6
-    li      t5, SeenBlock__mem
-    mulhu   t6, t2, t5
-    bnez    t6, 9f
-    mul     t5, t2, t5
-    add     t6, t4, t5
-    bltu    t6, t4, 9f
-    add     t5, t6, t3
-    bltu    t5, t6, 9f
-    sd      t5, 0(a1)
-    li      a0, LANTERN_OK
-    ret
-9:  li      a0, LANTERN_INVALID_OVERFLOW
-    ret
-END_FUNCTION lantern_seen_size
-
-/* Locals: sp+0 room, sp+8 seen, sp+16 size. */
-FUNCTION lantern_seen_init
-    FRAME 32
-    sd      a0, 0(sp)
-    sd      a1, 8(sp)
-    addi    a1, sp, 16
-    call    lantern_seen_size
-    bnez    a0, 9f
-    ld      a0, 0(sp)
-    ld      a1, 8(sp)
-    ld      t0, 16(sp)
-    ld      t1, 0(a1)
-    bltu    t1, t0, 9f
-    li      t0, SEEN_FIXED                  # each part empty, at the offsets of room's capacities
-    sd      t0, Seen_keys(a1)
-    sd      zero, (Seen_keys + 8)(a1)
-    ld      t1, SeenRoom_keys(a0)
-    slli    t1, t1, 5
-    add     t0, t0, t1
-    sd      t0, Seen_bits(a1)
-    sd      zero, (Seen_bits + 8)(a1)
-    ld      t1, SeenRoom_bits(a0)
-    li      t2, SeenBits__mem
-    mul     t1, t1, t2
-    add     t0, t0, t1
-    sd      t0, Seen_blocks(a1)
-    sd      zero, (Seen_blocks + 8)(a1)
-    ld      t1, SeenRoom_blocks(a0)
-    li      t2, SeenBlock__mem
-    mul     t1, t1, t2
-    add     t0, t0, t1
-    sd      t0, Seen_headers(a1)
-    sd      zero, (Seen_headers + 8)(a1)
-    sd      zero, Seen_header_bytes(a1)
-    li      a0, LANTERN_OK
-    UNFRAME 32
-9:  li      a0, LANTERN_BUFFER_TOO_SMALL
-    UNFRAME 32
-END_FUNCTION lantern_seen_init
-
-/* Copy the entries of stride bytes of part ref of seen s1 into out s3, and set the part's count. Uses s4. */
-.macro SEEN_PART_COPY ref, stride
-    PART    a1, s4, s1, \ref
-    LDQ     a0, s3, \ref
-    add     a0, s3, a0
-    li      t0, \stride
-    mul     a2, s4, t0
-    call    lantern_copy
-    STQ     s4, s3, (\ref) + 8
-.endm
-
-/* s1 seen, s2 room, s3 out, s4 count. */
-FUNCTION lantern_seen_copy
-    ENTER 0
-    mv      s1, a0
-    mv      s2, a1
-    mv      s3, a2
-    ld      t0, SeenRoom_keys(s2)           # each capacity holds what seen holds
-    ld      t1, (Seen_keys + 8)(s1)
-    bltu    t0, t1, 9f
-    ld      t0, SeenRoom_bits(s2)
-    ld      t1, (Seen_bits + 8)(s1)
-    bltu    t0, t1, 9f
-    ld      t0, SeenRoom_blocks(s2)
-    ld      t1, (Seen_blocks + 8)(s1)
-    bltu    t0, t1, 9f
-    ld      t0, SeenRoom_header_bytes(s2)
-    ld      t1, Seen_header_bytes(s1)
-    bltu    t0, t1, 9f
-    mv      a0, s2
-    mv      a1, s3
-    call    lantern_seen_init
-    bnez    a0, 7f
-    SEEN_PART_COPY Seen_keys, SeenKey__mem
-    SEEN_PART_COPY Seen_bits, SeenBits__mem
-    SEEN_PART_COPY Seen_blocks, SeenBlock__mem
-    SEEN_PART_COPY Seen_headers, 0
-    ld      a1, Seen_headers(s1)            # the headers: their bytes in use
-    add     a1, s1, a1
-    ld      a0, Seen_headers(s3)
-    add     a0, s3, a0
-    ld      a2, Seen_header_bytes(s1)
-    sd      a2, Seen_header_bytes(s3)
-    call    lantern_copy
-    li      a0, LANTERN_OK
-7:  LEAVE 0
-9:  li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 0
-END_FUNCTION lantern_seen_copy
-
-/* L0: a0 = the SeenBlock of root a1 in seen a0, or 0. A leaf; uses a2-a5, t0-t3. */
-LOCAL_FUNCTION seen_find_block
-    UNWIND_END_PROLOGUE
-    PART    a2, a3, a0, Seen_blocks
-1:  beqz    a3, 3f
-    ld      t0, 0(a2)
-    ld      t1, 0(a1)
-    bne     t0, t1, 2f
-    ld      t0, 8(a2)
-    ld      t1, 8(a1)
-    bne     t0, t1, 2f
-    ld      t0, 16(a2)
-    ld      t1, 16(a1)
-    bne     t0, t1, 2f
-    ld      t0, 24(a2)
-    ld      t1, 24(a1)
-    beq     t0, t1, 4f
-2:  addi    a2, a2, SeenBlock__mem
-    addi    a3, a3, -1
-    j       1b
-3:  li      a0, 0
-    ret
-4:  mv      a0, a2
-    ret
-END_FUNCTION seen_find_block
-
-/* Locals: sp+0 seen, sp+8 root, sp+16 payload_status. */
-FUNCTION lantern_seen_add_block
-    FRAME 32
-    ld      a2, 0(a2)
-    sd      a0, 0(sp)
-    sd      a1, 8(sp)
-    sd      a2, 16(sp)
-    call    seen_find_block
-    bnez    a0, 2f
-    ld      a0, 0(sp)
-    ld      a1, 8(sp)
-    PART    t0, t1, a0, Seen_blocks         # room for one more
-    ld      t2, Seen_headers(a0)
-    ld      t3, Seen_blocks(a0)
-    sub     t2, t2, t3
-    li      t3, SeenBlock__mem
-    divu    t2, t2, t3
-    bgeu    t1, t2, 9f
-    mul     t2, t1, t3
-    add     t0, t0, t2
-    addi    t1, t1, 1
-    sd      t1, (Seen_blocks + 8)(a0)
-    COPY32  t0, a1
-    mv      a0, t0
-2:  ld      a2, 16(sp)
-    sd      a2, SeenBlock_payload_status(a0)
-    li      a0, LANTERN_OK
-    UNFRAME 32
-9:  li      a0, LANTERN_BUFFER_TOO_SMALL
-    UNFRAME 32
-END_FUNCTION lantern_seen_add_block
 
 /* L0: a0 = 1 when seen a0 holds the SeenKey (a1 kind, a2 a, a3 b, a4 c), else 0. A leaf; uses a5, t0-t2. */
 LOCAL_FUNCTION seen_find_key
@@ -721,7 +539,7 @@ END_FUNCTION block_lookup
  * s1 seen, s2 store, s3 signed exit, s4 current_time_ms, s5 head state, s6 scratch, s7 result,
  * s8 validator, s9 validator index. Locals: L current epoch, L+8 predicate, L+16 domain type, L+24 domain (32).
  */
-FUNCTION lantern_validate_voluntary_exit_gossip
+SPEC_FUNCTION validate_voluntary_exit_gossip
     ENTER 64
     mv      s1, a0
     mv      s2, a1
@@ -802,13 +620,13 @@ FUNCTION lantern_validate_voluntary_exit_gossip
 7:  LEAVE 64
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 64
-END_FUNCTION lantern_validate_voluntary_exit_gossip
+SPEC_END validate_voluntary_exit_gossip
 
 /*
  * s1 seen, s2 store, s3 proposer slashing, s5 head state, s6 scratch, s7 result, s8 validator,
  * s9 proposer index, s10 signed header. Locals: L current epoch, L+8 predicate.
  */
-FUNCTION lantern_validate_proposer_slashing_gossip
+SPEC_FUNCTION validate_proposer_slashing_gossip
     ENTER 16
     mv      s1, a0
     mv      s2, a1
@@ -889,13 +707,13 @@ FUNCTION lantern_validate_proposer_slashing_gossip
 7:  LEAVE 16
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_validate_proposer_slashing_gossip
+SPEC_END validate_proposer_slashing_gossip
 
 /*
  * s1 seen, s2 store, s3 signed change, s4 current_time_ms, s5 head state, s6 scratch, s7 result,
  * s8 validator, s9 validator index. Locals: L digest (32), L+32 domain type, L+40 domain (32).
  */
-FUNCTION lantern_validate_bls_to_execution_change_gossip
+SPEC_FUNCTION validate_bls_to_execution_change_gossip
     ENTER 80
     mv      s1, a0
     mv      s2, a1
@@ -968,7 +786,7 @@ FUNCTION lantern_validate_bls_to_execution_change_gossip
 7:  LEAVE 80
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 80
-END_FUNCTION lantern_validate_bls_to_execution_change_gossip
+SPEC_END validate_bls_to_execution_change_gossip
 
 /* ---------------------------------------------------------------- Gossip: attestations */
 
@@ -977,7 +795,7 @@ END_FUNCTION lantern_validate_bls_to_execution_change_gossip
  * s8 subnet_id, s9 scratch size, s10 validator count.
  * Locals: L committees_per_slot, L+8 committee list, L+16 block node.
  */
-FUNCTION lantern_validate_beacon_attestation_gossip
+SPEC_FUNCTION validate_beacon_attestation_gossip
     ENTER 32
     mv      s1, a0
     mv      s2, a1
@@ -1102,7 +920,7 @@ FUNCTION lantern_validate_beacon_attestation_gossip
 7:  LEAVE 32
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
-END_FUNCTION lantern_validate_beacon_attestation_gossip
+SPEC_END validate_beacon_attestation_gossip
 
 /*
  * s1 seen, s2 store, s3 signed aggregate and proof, s4 current_time_ms, s5 head state, s6 scratch,
@@ -1111,7 +929,7 @@ END_FUNCTION lantern_validate_beacon_attestation_gossip
  * L+64 attesting list, L+72 indexed attestation, L+80 front size, L+88 valid, L+96 digest (32),
  * L+128 aggregate and proof, L+136 target epoch.
  */
-FUNCTION lantern_validate_beacon_aggregate_and_proof_gossip
+SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     ENTER 144
     mv      s1, a0
     mv      s2, a1
@@ -1360,7 +1178,7 @@ FUNCTION lantern_validate_beacon_aggregate_and_proof_gossip
 7:  LEAVE 144
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 144
-END_FUNCTION lantern_validate_beacon_aggregate_and_proof_gossip
+SPEC_END validate_beacon_aggregate_and_proof_gossip
 
 /* ---------------------------------------------------------------- Gossip: sync committee */
 
@@ -1394,7 +1212,7 @@ END_FUNCTION lantern_validate_beacon_aggregate_and_proof_gossip
  * s1 seen, s2 store, s3 message, s4 current_time_ms, s5 head state, s6 scratch, s7 result,
  * s8 subnet_id, s9 validator, s10 i.
  */
-FUNCTION lantern_validate_sync_committee_message_gossip
+SPEC_FUNCTION validate_sync_committee_message_gossip
     ENTER 0
     mv      s1, a0
     mv      s2, a1
@@ -1466,7 +1284,7 @@ FUNCTION lantern_validate_sync_committee_message_gossip
 7:  LEAVE 0
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 0
-END_FUNCTION lantern_validate_sync_committee_message_gossip
+SPEC_END validate_sync_committee_message_gossip
 
 /*
  * s1 seen, s2 store, s3 signed contribution and proof, s4 current_time_ms, s5 head state, s6 scratch,
@@ -1474,7 +1292,7 @@ END_FUNCTION lantern_validate_sync_committee_message_gossip
  * Locals: L selection data (16), L+16 digest (32), L+48 key list, L+56 front size, L+64 domain type,
  * L+72 epoch, L+80 domain (32), L+112 the signing root buffer (56), L+168 valid.
  */
-FUNCTION lantern_validate_sync_committee_contribution_and_proof_gossip
+SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
     ENTER 176
     mv      s1, a0
     mv      s2, a1
@@ -1674,7 +1492,7 @@ FUNCTION lantern_validate_sync_committee_contribution_and_proof_gossip
 7:  LEAVE 176
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 176
-END_FUNCTION lantern_validate_sync_committee_contribution_and_proof_gossip
+SPEC_END validate_sync_committee_contribution_and_proof_gossip
 
 /* ---------------------------------------------------------------- Gossip: attester slashings */
 
@@ -1683,7 +1501,7 @@ END_FUNCTION lantern_validate_sync_committee_contribution_and_proof_gossip
  * s8 attestation 1, s9 attestation 2, s10 intersection list.
  * Locals: L front size, L+8 list 1, L+16 list 2, L+24 new indices, L+32 current epoch, L+40 predicate.
  */
-FUNCTION lantern_validate_attester_slashing_gossip
+SPEC_FUNCTION validate_attester_slashing_gossip
     ENTER 48
     mv      s1, a0
     mv      s2, a1
@@ -1880,7 +1698,7 @@ FUNCTION lantern_validate_attester_slashing_gossip
 7:  LEAVE 48
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 48
-END_FUNCTION lantern_validate_attester_slashing_gossip
+SPEC_END validate_attester_slashing_gossip
 
 /* ---------------------------------------------------------------- Gossip: blocks and columns */
 
@@ -1889,7 +1707,7 @@ END_FUNCTION lantern_validate_attester_slashing_gossip
  * s7 scratch, s8 result, s9 block, s10 parent node.
  * Locals: L blob parameters (16), L+16 expected proposer, L+24 epoch, L+32 time.
  */
-FUNCTION lantern_validate_beacon_block_gossip
+SPEC_FUNCTION validate_beacon_block_gossip
     ENTER 48
     mv      s1, a0
     mv      s2, a1
@@ -2001,7 +1819,7 @@ FUNCTION lantern_validate_beacon_block_gossip
 7:  LEAVE 48
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 48
-END_FUNCTION lantern_validate_beacon_block_gossip
+SPEC_END validate_beacon_block_gossip
 
 /* ---------------------------------------------------------------- Columns */
 
@@ -2014,7 +1832,7 @@ END_FUNCTION lantern_validate_beacon_block_gossip
 .error "the subtree index of blob_kzg_commitments assumes a body of 13 fields"
 .endif
 
-LEAF lantern_compute_subnet_for_data_column_sidecar
+SPEC_LEAF compute_subnet_for_data_column_sidecar
     ld      t0, CONFIG_DATA_COLUMN_SIDECAR_SUBNET_COUNT(a1)
     beqz    t0, 9f
     ld      t1, 0(a0)
@@ -2024,7 +1842,7 @@ LEAF lantern_compute_subnet_for_data_column_sidecar
     ret
 9:  li      a0, LANTERN_INVALID_OVERFLOW
     ret
-END_FUNCTION lantern_compute_subnet_for_data_column_sidecar
+SPEC_END compute_subnet_for_data_column_sidecar
 
 /*
  * L0: a0 = status, a1 = is_valid_merkle_branch(hash_tree_root of the a2 commitments at a1, the branch at a3,
@@ -2098,7 +1916,7 @@ LOCAL_FUNCTION commitments_in_body
 END_FUNCTION commitments_in_body
 
 /* Locals: sp+0 out. */
-FUNCTION lantern_verify_data_column_sidecar_inclusion_proof
+SPEC_FUNCTION verify_data_column_sidecar_inclusion_proof
     FRAME 16
     sd      a2, 0(sp)
     sd      zero, 0(a2)
@@ -2112,10 +1930,10 @@ FUNCTION lantern_verify_data_column_sidecar_inclusion_proof
     ld      t0, 0(sp)
     sd      a1, 0(t0)
 7:  UNFRAME 16
-END_FUNCTION lantern_verify_data_column_sidecar_inclusion_proof
+SPEC_END verify_data_column_sidecar_inclusion_proof
 
 /* Locals: sp+0 out. */
-FUNCTION lantern_verify_partial_data_column_header_inclusion_proof
+SPEC_FUNCTION verify_partial_data_column_header_inclusion_proof
     FRAME 16
     sd      a2, 0(sp)
     sd      zero, 0(a2)
@@ -2129,7 +1947,7 @@ FUNCTION lantern_verify_partial_data_column_header_inclusion_proof
     ld      t0, 0(sp)
     sd      a1, 0(t0)
 7:  UNFRAME 16
-END_FUNCTION lantern_verify_partial_data_column_header_inclusion_proof
+SPEC_END verify_partial_data_column_header_inclusion_proof
 
 /* dst = the set bits of the BitList at PartRef ref of value v. Uses t0-t4. */
 .macro BIT_COUNT dst, v, ref
@@ -2153,7 +1971,7 @@ END_FUNCTION lantern_verify_partial_data_column_header_inclusion_proof
  * s1 sidecar, s2 settings, s3 scratch, s4 out, s5 n, s6 commitments, s7 cell indices,
  * s8 cells, s9 proofs, s10 scratch size left. Locals: L valid, L+8 header, L+16 column index.
  */
-FUNCTION lantern_verify_partial_data_column_sidecar_kzg_proofs
+SPEC_FUNCTION verify_partial_data_column_sidecar_kzg_proofs
     ENTER 32
     mv      s1, a0
     sd      a1, (L + 8)(sp)
@@ -2245,7 +2063,7 @@ FUNCTION lantern_verify_partial_data_column_sidecar_kzg_proofs
     LEAVE 32
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
-END_FUNCTION lantern_verify_partial_data_column_sidecar_kzg_proofs
+SPEC_END verify_partial_data_column_sidecar_kzg_proofs
 
 /*
  * L0: the checks of a block header shared by the column topics, from is_future_slot to the finalized ancestor:
@@ -2322,7 +2140,7 @@ END_FUNCTION header_checks
  * s8 result, s9 the block header, s10 parent node.
  * Locals: L subnet_id, L+8 settings, L+16 out, L+24 expected proposer.
  */
-FUNCTION lantern_validate_data_column_sidecar_gossip
+SPEC_FUNCTION validate_data_column_sidecar_gossip
     ENTER 32
     mv      s1, a0
     mv      s2, a1
@@ -2407,7 +2225,7 @@ FUNCTION lantern_validate_data_column_sidecar_gossip
 7:  LEAVE 32
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
-END_FUNCTION lantern_validate_data_column_sidecar_gossip
+SPEC_END validate_data_column_sidecar_gossip
 
 /*
  * s1 seen, s2 store, s3 sidecar, s4 current_time_ms, s5 head state, s6 proposer state, s7 scratch,
@@ -2415,7 +2233,7 @@ END_FUNCTION lantern_validate_data_column_sidecar_gossip
  * Locals: L group_id, L+8 column_index, L+16 settings, L+24 out, L+32 header root (32),
  * L+64 expected proposer, L+72 the block header root (32).
  */
-FUNCTION lantern_validate_partial_data_column_sidecar_gossip
+SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
     ENTER 112
     mv      s1, a0
     mv      s2, a1
@@ -2554,4 +2372,4 @@ FUNCTION lantern_validate_partial_data_column_sidecar_gossip
 7:  LEAVE 112
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 112
-END_FUNCTION lantern_validate_partial_data_column_sidecar_gossip
+SPEC_END validate_partial_data_column_sidecar_gossip

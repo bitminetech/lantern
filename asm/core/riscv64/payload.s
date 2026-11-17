@@ -2,7 +2,7 @@
  * The execution payload, RISC-V. Requirements: docs/reference/block-processing.md.
  */
 
-LEAF lantern_get_blob_parameters
+SPEC_LEAF get_blob_parameters
     ld      a3, 0(a0)                       # epoch
     ld      a4, CONFIG_BLOB_SCHEDULE_COUNT(a1)
     addi    a5, a1, CONFIG_BLOB_SCHEDULE
@@ -21,10 +21,10 @@ LEAF lantern_get_blob_parameters
     sd      t0, 0(a2)
     sd      t1, 8(a2)
     RETURN_OK
-END_FUNCTION lantern_get_blob_parameters
+SPEC_END get_blob_parameters
 
 /* Locals: sp+0 out. */
-FUNCTION lantern_kzg_commitment_to_versioned_hash
+SPEC_FUNCTION kzg_commitment_to_versioned_hash
     FRAME 16
     sd      a1, 0(sp)
     mv      a2, a1
@@ -35,9 +35,9 @@ FUNCTION lantern_kzg_commitment_to_versioned_hash
     sb      t0, 0(a1)
     li      a0, LANTERN_OK
     UNFRAME 16
-END_FUNCTION lantern_kzg_commitment_to_versioned_hash
+SPEC_END kzg_commitment_to_versioned_hash
 
-LEAF lantern_compute_time_at_slot
+SPEC_LEAF compute_time_at_slot
     ld      a4, 0(a0)                       # genesis_time
     ld      a5, 0(a1)                       # slot
     li      a6, 1000
@@ -56,14 +56,14 @@ LEAF lantern_compute_time_at_slot
     RETURN_OK
 2:  li      a0, LANTERN_INVALID_OVERFLOW
     ret
-END_FUNCTION lantern_compute_time_at_slot
+SPEC_END compute_time_at_slot
 
 /*
  * s1 state, s2 body, s3 execution_valid, s4 config, s5 scratch, s6 result,
  * s7 payload, s8 the new header, s9 scratch size.
  * Locals: L epoch, L+8 mix, L+40 time, L+48 blob parameters (16).
  */
-FUNCTION lantern_process_execution_payload
+SPEC_FUNCTION process_execution_payload
     ENTER 64
     mv      s1, a0
     mv      s2, a1
@@ -138,7 +138,7 @@ FUNCTION lantern_process_execution_payload
     LEAVE 64
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 64
-END_FUNCTION lantern_process_execution_payload
+SPEC_END process_execution_payload
 
 /*
  * The ExecutionPayloadHeader of payload s7 at a0, with scratch s5 of size s9 whose last

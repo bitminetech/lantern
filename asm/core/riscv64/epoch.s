@@ -11,7 +11,7 @@
  * Locals: L current epoch, L+8 previous epoch, L+16 total active, L+24 previous target balance,
  * L+32 current target balance, L+40 flag index, L+48 the scratch size on entry.
  */
-FUNCTION lantern_process_justification_and_finalization
+SPEC_FUNCTION process_justification_and_finalization
     ENTER 64
     mv      s1, a0
     mv      s2, a1
@@ -82,7 +82,7 @@ FUNCTION lantern_process_justification_and_finalization
     LEAVE 64
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 64
-END_FUNCTION lantern_process_justification_and_finalization
+SPEC_END process_justification_and_finalization
 
 /* dst (40 bytes, a Checkpoint) = src. Uses a6. */
 .macro COPY_CHECKPOINT dst, src
@@ -104,7 +104,7 @@ END_FUNCTION lantern_process_justification_and_finalization
  * Locals: L old previous justified (40), L+48 old current justified (40),
  * L+96 previous epoch, L+104 current epoch, L+112 root (32).
  */
-FUNCTION lantern_weigh_justification_and_finalization
+SPEC_FUNCTION weigh_justification_and_finalization
     ENTER 160
     mv      s1, a0
     ld      s2, 0(a1)
@@ -196,7 +196,7 @@ FUNCTION lantern_weigh_justification_and_finalization
 56: sd      zero, 0(s5)
 6:  li      a0, LANTERN_OK
     LEAVE 160
-END_FUNCTION lantern_weigh_justification_and_finalization
+SPEC_END weigh_justification_and_finalization
 
 /* ---------------------------------------------------------------- Inactivity */
 
@@ -206,7 +206,7 @@ END_FUNCTION lantern_weigh_justification_and_finalization
  * Locals: L epoch, L+8 previous epoch, L+16 flag index, L+24 in leak, L+32 eligible end,
  * L+40 participating end, L+56 the constant 1, L+64 the scratch size on entry.
  */
-FUNCTION lantern_process_inactivity_updates
+SPEC_FUNCTION process_inactivity_updates
     ENTER 80
     mv      s1, a0
     mv      s2, a1
@@ -292,7 +292,7 @@ FUNCTION lantern_process_inactivity_updates
     LEAVE 80
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 80
-END_FUNCTION lantern_process_inactivity_updates
+SPEC_END process_inactivity_updates
 
 /* ---------------------------------------------------------------- Rewards and penalties */
 
@@ -314,7 +314,7 @@ END_FUNCTION zero_deltas
  * L+32 eligible end, L+40 participating end, L+48 base reward, L+56 scratch,
  * L+72 index, L+80 weight, L+88 the scratch size on entry.
  */
-FUNCTION lantern_get_flag_index_deltas
+SPEC_FUNCTION get_flag_index_deltas
     ENTER 112
     mv      s1, a0
     mv      s2, a1
@@ -440,14 +440,14 @@ FUNCTION lantern_get_flag_index_deltas
 8:  LEAVE 112
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 112
-END_FUNCTION lantern_get_flag_index_deltas
+SPEC_END get_flag_index_deltas
 
 /*
  * s1 state, s2 config, s3 scratch, s4 rewards, s5 penalties, s6 validator count,
  * s7 participating list, s8 eligible list, s9 eligible cursor, s10 participating cursor.
  * Locals: L previous epoch, L+8 flag index, L+24 eligible end, L+32 participating end, L+40 the scratch size.
  */
-FUNCTION lantern_get_inactivity_penalty_deltas
+SPEC_FUNCTION get_inactivity_penalty_deltas
     ENTER 64
     mv      s1, a0
     mv      s2, a1
@@ -530,13 +530,13 @@ FUNCTION lantern_get_inactivity_penalty_deltas
 8:  LEAVE 64
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 64
-END_FUNCTION lantern_get_inactivity_penalty_deltas
+SPEC_END get_inactivity_penalty_deltas
 
 /*
  * s1 state, s2 config, s3 scratch, s4 result, s5 validator count, s6 delta pair, s7 index,
  * s8 the scratch size on entry. Scratch: lists 0 to 7 at its end. Locals: L epoch, L+8 flag index, L+16 index.
  */
-FUNCTION lantern_process_rewards_and_penalties
+SPEC_FUNCTION process_rewards_and_penalties
     ENTER 32
     mv      s1, a0
     mv      s2, a1
@@ -609,7 +609,7 @@ FUNCTION lantern_process_rewards_and_penalties
 7:  LEAVE 32
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
-END_FUNCTION lantern_process_rewards_and_penalties
+SPEC_END process_rewards_and_penalties
 
 /* ---------------------------------------------------------------- Registry */
 
@@ -617,7 +617,7 @@ END_FUNCTION lantern_process_rewards_and_penalties
  * s1 state, s2 config, s3 scratch, s4 result, s5 validator, s6 index, s7 validator count.
  * Locals: L current epoch, L+8 activation epoch, L+16 predicate, L+24 index.
  */
-FUNCTION lantern_process_registry_updates
+SPEC_FUNCTION process_registry_updates
     ENTER 32
     mv      s1, a0
     mv      s2, a1
@@ -680,10 +680,10 @@ FUNCTION lantern_process_registry_updates
 7:  LEAVE 32
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
-END_FUNCTION lantern_process_registry_updates
+SPEC_END process_registry_updates
 
 /* s1 state, s2 index, s3 config, s4 scratch, s5 validator, s6 result. Locals: L exit queue epoch. */
-FUNCTION lantern_initiate_validator_exit
+SPEC_FUNCTION initiate_validator_exit
     ENTER 16
     mv      s1, a0
     ld      s2, 0(a1)
@@ -722,14 +722,14 @@ FUNCTION lantern_initiate_validator_exit
     LEAVE 16
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_initiate_validator_exit
+SPEC_END initiate_validator_exit
 
 /*
  * s1 state, s2 exit balance, s3 config, s4 scratch, s5 out, s6 earliest exit epoch,
  * s7 per epoch churn, s8 exit balance to consume, s9 result.
  * Locals: L current epoch, L+8 activation exit epoch, L+16 churn.
  */
-FUNCTION lantern_compute_exit_epoch_and_update_churn
+SPEC_FUNCTION compute_exit_epoch_and_update_churn
     ENTER 32
     mv      s1, a0
     ld      s2, 0(a1)
@@ -787,9 +787,9 @@ FUNCTION lantern_compute_exit_epoch_and_update_churn
     LEAVE 32
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
-END_FUNCTION lantern_compute_exit_epoch_and_update_churn
+SPEC_END compute_exit_epoch_and_update_churn
 
-FUNCTION lantern_get_balance_churn_limit
+SPEC_FUNCTION get_balance_churn_limit
     FRAME 32
     sd      a1, 0(sp)                       # config
     sd      a3, 8(sp)                       # out
@@ -811,9 +811,9 @@ FUNCTION lantern_get_balance_churn_limit
     sd      t0, 0(a3)
     li      a0, LANTERN_OK
 1:  UNFRAME 32
-END_FUNCTION lantern_get_balance_churn_limit
+SPEC_END get_balance_churn_limit
 
-FUNCTION lantern_get_activation_exit_churn_limit
+SPEC_FUNCTION get_activation_exit_churn_limit
     FRAME 32
     sd      a0, 0(sp)
     sd      a1, 8(sp)
@@ -830,9 +830,9 @@ FUNCTION lantern_get_activation_exit_churn_limit
     sd      t0, 0(a3)
     li      a0, LANTERN_OK
 1:  UNFRAME 32
-END_FUNCTION lantern_get_activation_exit_churn_limit
+SPEC_END get_activation_exit_churn_limit
 
-FUNCTION lantern_get_consolidation_churn_limit
+SPEC_FUNCTION get_consolidation_churn_limit
     FRAME 48
     sd      a0, 0(sp)
     sd      a1, 8(sp)
@@ -854,7 +854,7 @@ FUNCTION lantern_get_consolidation_churn_limit
     sd      t0, 0(a3)
     li      a0, LANTERN_OK
 1:  UNFRAME 48
-END_FUNCTION lantern_get_consolidation_churn_limit
+SPEC_END get_consolidation_churn_limit
 
 /* ---------------------------------------------------------------- Slashings */
 
@@ -862,7 +862,7 @@ END_FUNCTION lantern_get_consolidation_churn_limit
  * s1 state, s2 config, s3 scratch, s4 result, s5 epoch, s6 penalty per increment,
  * s7 index, s8 validator count. Locals: L epoch, L+8 total balance, L+16 index, L+24 penalty.
  */
-FUNCTION lantern_process_slashings
+SPEC_FUNCTION process_slashings
     ENTER 32
     mv      s1, a0
     mv      s2, a1
@@ -923,11 +923,11 @@ FUNCTION lantern_process_slashings
 7:  LEAVE 32
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 32
-END_FUNCTION lantern_process_slashings
+SPEC_END process_slashings
 
 /* ---------------------------------------------------------------- Eth1 data, consolidations */
 
-FUNCTION lantern_process_eth1_data_reset
+SPEC_FUNCTION process_eth1_data_reset
     FRAME 32
     sd      a0, 0(sp)
     sd      a3, 8(sp)
@@ -944,13 +944,13 @@ FUNCTION lantern_process_eth1_data_reset
 1:  sd      zero, 0(a3)
     li      a0, LANTERN_OK
     UNFRAME 32
-END_FUNCTION lantern_process_eth1_data_reset
+SPEC_END process_eth1_data_reset
 
 /*
  * s1 state, s2 result, s3 next epoch, s4 consolidation, s5 consolidations left, s6 processed.
  * Locals: L epoch, L+8 source index, L+16 target index, L+24 balance.
  */
-FUNCTION lantern_process_pending_consolidations
+SPEC_FUNCTION process_pending_consolidations
     ENTER 32
     mv      s1, a0
     mv      s2, a3
@@ -1004,12 +1004,12 @@ FUNCTION lantern_process_pending_consolidations
 5:  sd      zero, 0(s2)
     li      a0, LANTERN_OK
     LEAVE 32
-END_FUNCTION lantern_process_pending_consolidations
+SPEC_END process_pending_consolidations
 
 /* ---------------------------------------------------------------- Effective balances */
 
 /* s1 state, s2 result, s3 validator, s4 index, s5 validator count. Locals: L max effective balance. */
-FUNCTION lantern_process_effective_balance_updates
+SPEC_FUNCTION process_effective_balance_updates
     ENTER 16
     mv      s1, a0
     mv      s2, a3
@@ -1045,11 +1045,11 @@ FUNCTION lantern_process_effective_balance_updates
 3:  sd      zero, 0(s2)
     li      a0, LANTERN_OK
     LEAVE 16
-END_FUNCTION lantern_process_effective_balance_updates
+SPEC_END process_effective_balance_updates
 
 /* ---------------------------------------------------------------- Resets and rotations */
 
-FUNCTION lantern_process_slashings_reset
+SPEC_FUNCTION process_slashings_reset
     FRAME 32
     sd      a0, 0(sp)
     sd      a3, 8(sp)
@@ -1068,9 +1068,9 @@ FUNCTION lantern_process_slashings_reset
     sd      zero, 0(a3)
     li      a0, LANTERN_OK
     UNFRAME 32
-END_FUNCTION lantern_process_slashings_reset
+SPEC_END process_slashings_reset
 
-FUNCTION lantern_process_randao_mixes_reset
+SPEC_FUNCTION process_randao_mixes_reset
     FRAME 32
     sd      a0, 0(sp)
     sd      a3, 8(sp)
@@ -1090,10 +1090,10 @@ FUNCTION lantern_process_randao_mixes_reset
     sd      zero, 0(a3)
     li      a0, LANTERN_OK
     UNFRAME 32
-END_FUNCTION lantern_process_randao_mixes_reset
+SPEC_END process_randao_mixes_reset
 
 /* s1 state, s2 scratch, s3 result, s4 the new summary. Locals: L epoch. */
-FUNCTION lantern_process_historical_summaries_update
+SPEC_FUNCTION process_historical_summaries_update
     ENTER 16
     mv      s1, a0
     mv      s2, a2
@@ -1137,10 +1137,10 @@ FUNCTION lantern_process_historical_summaries_update
     LEAVE 16
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_process_historical_summaries_update
+SPEC_END process_historical_summaries_update
 
 /* s1 state, s2 result. previous_epoch_participation = current; current = zeros, one per validator. */
-FUNCTION lantern_process_participation_flag_updates
+SPEC_FUNCTION process_participation_flag_updates
     ENTER 16
     mv      s1, a0
     mv      s2, a3
@@ -1157,14 +1157,14 @@ FUNCTION lantern_process_participation_flag_updates
     sd      zero, 0(s2)
     li      a0, LANTERN_OK
     LEAVE 16
-END_FUNCTION lantern_process_participation_flag_updates
+SPEC_END process_participation_flag_updates
 
 /* ---------------------------------------------------------------- Proposer lookahead */
 
 .set LOOKAHEAD_LOCALS, (8 * SLOTS_PER_EPOCH + 8 + 15) / 16 * 16
 
 /* s1 state, s2 config, s3 scratch, s4 result. Locals: L the last epoch's proposers, then the epoch. */
-FUNCTION lantern_process_proposer_lookahead
+SPEC_FUNCTION process_proposer_lookahead
     ENTER LOOKAHEAD_LOCALS
     mv      s1, a0
     mv      s2, a1
@@ -1196,7 +1196,7 @@ FUNCTION lantern_process_proposer_lookahead
 7:  LEAVE LOOKAHEAD_LOCALS
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE LOOKAHEAD_LOCALS
-END_FUNCTION lantern_process_proposer_lookahead
+SPEC_END process_proposer_lookahead
 
 /* ---------------------------------------------------------------- The epoch */
 
@@ -1216,7 +1216,7 @@ END_FUNCTION lantern_process_proposer_lookahead
 .endm
 
 /* s1 state, s2 config, s3 scratch, s4 result, s5 scratch size. Locals: L epoch. */
-FUNCTION lantern_process_epoch
+SPEC_FUNCTION process_epoch
     ENTER 16
     mv      s1, a0
     mv      s2, a1
@@ -1262,7 +1262,7 @@ FUNCTION lantern_process_epoch
 7:  LEAVE 16
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
-END_FUNCTION lantern_process_epoch
+SPEC_END process_epoch
 
 .if PendingConsolidation__mem != 16
 .error "lantern_process_pending_consolidations shifts by 4 for PendingConsolidation"

@@ -46,6 +46,7 @@
 - `store.blocks` of the spec is the store's nodes and the `blocks` of `seen`: a root in `seen` names a block that is known, but failed its state transition or waits to be imported, so it has no post-state. A root in `store.block_states` is a node of the store.
 - `block_payload_statuses` of the spec is `BlockNode.payload_status` for a node and `SeenBlock.payload_status` for a block of `seen`.
 - Signatures are verified with `crypto_bls_verify` and `crypto_bls_eth_fast_aggregate_verify` of asm-crypto, KZG proofs with `crypto_kzg_verify_cell_kzg_proof_batch`.
+- lantern_seen_size, lantern_seen_init, lantern_seen_copy and lantern_seen_add_block read no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
 
 ## Test vectors
 

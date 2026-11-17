@@ -3,15 +3,15 @@
  * Requirements: docs/reference/block-processing.md.
  */
 
-LEAF lantern_get_beacon_proposer_index
+SPEC_LEAF get_beacon_proposer_index
     mov     BeaconState_slot(%rdi), %rax
     and     $(SLOTS_PER_EPOCH - 1), %eax
     mov     BeaconState_proposer_lookahead(%rdi,%rax,8), %rax
     mov     %rax, (%rsi)
     RETURN_OK
-END_FUNCTION lantern_get_beacon_proposer_index
+SPEC_END get_beacon_proposer_index
 
-LEAF lantern_xor
+SPEC_LEAF xor
     movdqu  (%rdi), %xmm0
     movdqu  (%rsi), %xmm1
     pxor    %xmm1, %xmm0
@@ -21,10 +21,10 @@ LEAF lantern_xor
     pxor    %xmm1, %xmm0
     movdqu  %xmm0, 16(%rdx)
     RETURN_OK
-END_FUNCTION lantern_xor
+SPEC_END xor
 
 /* bits rdi, length rsi (pointer to the bit count), out rdx. */
-LEAF lantern_get_set_bit_count
+SPEC_LEAF get_set_bit_count
     mov     (%rsi), %rsi
     xor     %eax, %eax                      # count
     xor     %ecx, %ecx                      # bit
@@ -36,13 +36,13 @@ LEAF lantern_get_set_bit_count
     jmp     1b
 2:  mov     %rax, (%rdx)
     RETURN_OK
-END_FUNCTION lantern_get_set_bit_count
+SPEC_END get_set_bit_count
 
 /*
  * rbx state, rbp block, r12 scratch, r13 result, r14 body.
  * Locals: L proposer index, L+8 latest header root, L+40 body root.
  */
-FUNCTION lantern_process_block_header
+SPEC_FUNCTION process_block_header
     ENTER 80
     mov     %rdi, %rbx
     mov     %rsi, %rbp
@@ -109,4 +109,4 @@ FUNCTION lantern_process_block_header
 6:  mov     %rax, (%r13)
     xor     %eax, %eax
     LEAVE 80
-END_FUNCTION lantern_process_block_header
+SPEC_END process_block_header
