@@ -365,6 +365,15 @@ ABI uint64_t lantern_ssz_size_bounds(const void *type, void *out);
 ABI uint64_t lantern_jwt_token(const void *secret, const void *iat, void *scratch, void *out);
 ABI uint64_t lantern_http_post(const void *host, const void *token, const void *body, void *out);
 ABI uint64_t lantern_http_parse_response(const void *input, const void *eof, void *body, void *out);
+ABI uint64_t lantern_engine_exchange_capabilities(const void *id, void *out);
+#if FORK >= FORK_BELLATRIX
+ABI uint64_t LF(engine_new_payload_size)(const void *block, void *out);
+ABI uint64_t LF(engine_new_payload)(const void *block, const void *id, void *scratch, void *out);
+ABI uint64_t LF(engine_forkchoice_updated)(const void *state, const void *id, void *out);
+#endif
+#if FORK >= FORK_ELECTRA
+ABI uint64_t LF(get_execution_requests_list)(const void *requests, void *out);
+#endif
 
 /* ---------------------------------------------------------------- ABI check */
 
@@ -3137,7 +3146,67 @@ static void run_engine(const char *file, const char *handler, case_file *f) {
         uint64_t len, blen, size, st;
         tv parts = next_case(f, &name, &len);
         tv in = tv_get(parts, "input"), want = tv_get(parts, "output");
-        if (!strcmp(handler, "jwt_token")) {
+        if (!strcmp(handler, "exchange_capabilities") || !strcmp(handler, "forkchoice_updated") || !strcmp(handler, "new_payload") ||
+            !strcmp(handler, "get_execution_requests_list")) {
+            uint64_t wl, need = 24 + 512, id = tv_get(in, "id") ? tv_u64(tv_get(in, "id")) : 0;
+            const uint8_t *w = tv_bytes(want, &wl);
+            uint8_t *value = NULL;
+            const char *dwhy = NULL;
+            (void)w;
+            if (!strcmp(handler, "new_payload") || !strcmp(handler, "get_execution_requests_list")) {
+                int np = !strcmp(handler, "new_payload");
+                const uint8_t *enc = tv_bytes(tv_get(in, np ? "block" : "execution_requests"), &blen);
+                uint64_t vsize;
+                value = decode(type_by_name(np ? "BeaconBlock" : "ExecutionRequests"), enc, blen, &vsize, &dwhy);
+                if (!value) {
+                    report(file, name, len, 0, dwhy);
+                    continue;
+                }
+                need = 24 + wl;
+#if FORK >= FORK_BELLATRIX
+                if (np) {
+                    uint64_t bound = 0;
+                    if (CALL(LF(engine_new_payload_size), value, &bound) != 0) why = "size status";
+                    else if (bound < wl) why = "the size is below the request";
+                    need = 24 + bound;
+                }
+#endif
+            }
+            uint8_t *out = buffer(need), *small = buffer(need - 1);
+            wr64(out, need);
+            wr64(small, need - 1);
+            uint64_t st2 = 1;
+            if (!why) {
+                if (!strcmp(handler, "exchange_capabilities")) {
+                    st = CALL(lantern_engine_exchange_capabilities, &id, out);
+                    st2 = CALL(lantern_engine_exchange_capabilities, &id, small);
+                }
+#if FORK >= FORK_BELLATRIX
+                else if (!strcmp(handler, "forkchoice_updated")) {
+                    const uint8_t *state = tv_bytes(tv_get(in, "state"), &blen);
+                    st = CALL(LF(engine_forkchoice_updated), state, &id, out);
+                    st2 = CALL(LF(engine_forkchoice_updated), state, &id, small);
+                } else if (!strcmp(handler, "new_payload")) {
+                    st = CALL(LF(engine_new_payload), value, &id, fresh_scratch(), out);
+                    st2 = CALL(LF(engine_new_payload), value, &id, fresh_scratch(), small);
+                }
+#endif
+#if FORK >= FORK_ELECTRA
+                else if (!strcmp(handler, "get_execution_requests_list")) {
+                    st = CALL(LF(get_execution_requests_list), value, out);
+                    st2 = wl ? CALL(LF(get_execution_requests_list), value, small) : 1;
+                }
+#endif
+                else st = 99;
+                if (st) why = "status";
+                else if (!list_holds(out, want)) why = "output differs";
+                else if (!guard_ok(out, need)) why = "wrote past out";
+                else if (st2 != 1) why = "short out accepted";
+            }
+            free(value);
+            free(out);
+            free(small);
+        } else if (!strcmp(handler, "jwt_token")) {
             uint64_t iat = tv_u64(tv_get(in, "iat"));
             const uint8_t *secret = tv_bytes(tv_get(in, "secret"), &blen);
             size = 24 + 128;

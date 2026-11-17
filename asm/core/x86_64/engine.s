@@ -554,4 +554,33 @@ FUNCTION lantern_http_parse_response
     LEAVE 32
 END_FUNCTION lantern_http_parse_response
 
+/* The text of engine_exchangeCapabilities, before the code that takes its lengths. */
+    RODATA
+.include "engine_caps.inc"
+
+/* (id, out): the request of engine_exchangeCapabilities. */
+FUNCTION lantern_engine_exchange_capabilities
+    UNWIND_END_PROLOGUE
+    mov     (%rdi), %rax
+    cmpq    $(24 + 512), (%rsi)
+    jb      8f
+    mov     %rsi, %r9
+    lea     24(%rsi), %rdi
+    lea     j_caps_open(%rip), %rsi
+    mov     $j_caps_open_len, %ecx
+    rep movsb
+    call    decimal
+    lea     j_caps_close(%rip), %rsi
+    mov     $j_caps_close_len, %ecx
+    rep movsb
+    lea     24(%r9), %rax
+    sub     %rax, %rdi
+    movq    $24, 8(%r9)
+    mov     %rdi, 16(%r9)
+    xor     %eax, %eax
+    ret
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    ret
+END_FUNCTION lantern_engine_exchange_capabilities
+
 ENGINE_TEXT_DATA

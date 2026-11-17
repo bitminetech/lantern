@@ -60,6 +60,7 @@ def http_cases():
 
 
 def cases(fork, preset):
+    yield from request_cases(fork, preset)
     secret = hashlib.sha256(b"lantern jwt").digest()
     for iat in (0, 1, 9, 10, 1700000000, 1999999999, U64):
         yield "jwt_token", f"iat_{iat}", {"input": {"secret": secret, "iat": iat}, "output": jwt(secret, iat)}
@@ -98,3 +99,84 @@ def cases(fork, preset):
     ]
     for k, data in enumerate(bad):
         yield "http_parse_response", f"bad_{k}", {"input": {"bytes": data, "eof": 1}, "output": "invalid"}
+
+
+FORKS = ("phase0", "altair", "bellatrix", "capella", "deneb", "electra", "fulu")
+
+
+def q(n):
+    """QUANTITY: lowercase hex, no leading zeros."""
+    return "0x%x" % int(n)
+
+
+def d(b):
+    """DATA: lowercase hex, two digits a byte."""
+    return "0x" + bytes(b).hex()
+
+
+def payload_json(spec, fork, p):
+    f = FORKS.index(fork)
+    o = {"parentHash": d(p.parent_hash), "feeRecipient": d(p.fee_recipient), "stateRoot": d(p.state_root),
+         "receiptsRoot": d(p.receipts_root), "logsBloom": d(p.logs_bloom), "prevRandao": d(p.prev_randao),
+         "blockNumber": q(p.block_number), "gasLimit": q(p.gas_limit), "gasUsed": q(p.gas_used),
+         "timestamp": q(p.timestamp), "extraData": d(p.extra_data), "baseFeePerGas": q(p.base_fee_per_gas),
+         "blockHash": d(p.block_hash), "transactions": [d(t) for t in p.transactions]}
+    if f >= FORKS.index("capella"):
+        o["withdrawals"] = [{"index": q(w.index), "validatorIndex": q(w.validator_index), "address": d(w.address),
+                             "amount": q(w.amount)} for w in p.withdrawals]
+    if f >= FORKS.index("deneb"):
+        o["blobGasUsed"] = q(p.blob_gas_used)
+        o["excessBlobGas"] = q(p.excess_blob_gas)
+    return o
+
+
+def rpc(id_, method, params):
+    return json.dumps({"jsonrpc": "2.0", "id": id_, "method": method, "params": params}, separators=(",", ":")).encode()
+
+
+def new_payload_json(spec, fork, block, id_):
+    f = FORKS.index(fork)
+    body = block.body
+    params = [payload_json(spec, fork, body.execution_payload)]
+    version = 1 if f == FORKS.index("bellatrix") else 2 if f == FORKS.index("capella") else 3
+    if f >= FORKS.index("deneb"):
+        params.append([d(spec.kzg_commitment_to_versioned_hash(c)) for c in body.blob_kzg_commitments])
+        params.append(d(block.parent_root))
+    if f >= FORKS.index("electra"):
+        version = 4
+        params.append([d(r) for r in spec.get_execution_requests_list(body.execution_requests)])
+    return rpc(id_, f"engine_newPayloadV{version}", params)
+
+
+def request_cases(fork, preset):
+    import random
+    from eth_consensus_specs.debug import random_value as rv
+    spec = __import__(f"eth_consensus_specs.{fork}.{preset}", fromlist=["*"])
+    f = FORKS.index(fork)
+    yield "exchange_capabilities", "id_7", {"input": {"id": 7}, "output": rpc(7, "engine_exchangeCapabilities", [[
+        "engine_newPayloadV1", "engine_newPayloadV2", "engine_newPayloadV3", "engine_newPayloadV4",
+        "engine_forkchoiceUpdatedV1", "engine_forkchoiceUpdatedV2", "engine_forkchoiceUpdatedV3"]])}
+    if f < FORKS.index("bellatrix"):
+        return
+    rng = random.Random(f"{fork}-{preset}")
+    fcu = 1 if f == FORKS.index("bellatrix") else 2 if f == FORKS.index("capella") else 3
+    for k, id_ in enumerate((0, 1, 255, U64)):
+        hashes = [bytes(rng.getrandbits(8) for _ in range(32)) for _ in range(3)]
+        if k == 0:
+            hashes[1] = hashes[2] = bytes(32)
+        state = {"headBlockHash": d(hashes[0]), "safeBlockHash": d(hashes[1]), "finalizedBlockHash": d(hashes[2])}
+        yield "forkchoice_updated", f"fcu_{k}", {"input": {"state": b"".join(hashes), "id": id_},
+                                                  "output": rpc(id_, f"engine_forkchoiceUpdatedV{fcu}", [state, None])}
+    modes = [rv.RandomizationMode.mode_random, rv.RandomizationMode.mode_zero, rv.RandomizationMode.mode_max,
+             rv.RandomizationMode.mode_nil_count, rv.RandomizationMode.mode_one_count, rv.RandomizationMode.mode_max_count]
+    for m, mode in enumerate(modes):
+        for k in range(3 if m == 0 else 1):
+            block = rv.get_random_ssz_object(rng, spec.BeaconBlock, 3000, 3, mode, k == 2)
+            id_ = rng.choice([0, 1, 12345, U64])
+            yield "new_payload", f"{mode.name}_{k}", {"input": {"block": block.encode_bytes(), "id": id_},
+                                                      "output": new_payload_json(spec, fork, block, id_)}
+            if f >= FORKS.index("electra"):
+                reqs = spec.get_execution_requests_list(block.body.execution_requests)
+                out = b"".join(len(r).to_bytes(8, "little") + bytes(r) for r in reqs)
+                yield "get_execution_requests_list", f"{mode.name}_{k}", {
+                    "input": {"execution_requests": block.body.execution_requests.encode_bytes()}, "output": out}

@@ -20,13 +20,14 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | [docs/reference/fork-choice.md](docs/reference/fork-choice.md) | Fork choice and data availability of every fork |
 | [docs/reference/networking.md](docs/reference/networking.md) | Networking rules: gossip validation of every fork, blob sidecars, custody, fork digests, subnets, ENR values, topics and message-ids |
 | [docs/reference/req-resp.md](docs/reference/req-resp.md) | Req/resp encoding: protocol IDs, request and response chunks, SSZ size bounds |
-| [docs/reference/engine-api.md](docs/reference/engine-api.md) | Engine API client: JWT, HTTP/1.1 |
+| [docs/reference/engine-api.md](docs/reference/engine-api.md) | Engine API client: JSON-RPC requests of each fork, JWT, HTTP/1.1 |
 | [include/lantern.inc](include/lantern.inc) | Constants |
 | [include/types.inc](include/types.inc) | SSZ types and layouts of each fork, phase0 to Fulu, and the req/resp messages |
 | [include/forks.inc](include/forks.inc) | The forks, and the names of each fork's exports |
 | [include/gossip_topics.inc](include/gossip_topics.inc) | The gossip topic names |
 | [include/reqresp_protocols.inc](include/reqresp_protocols.inc) | The req/resp method names and versions |
 | [include/engine_text.inc](include/engine_text.inc) | The text of the Engine API client's JWTs and HTTP messages |
+| [include/engine_json.inc](include/engine_json.inc), [include/engine_caps.inc](include/engine_caps.inc) | The JSON text of the Engine API requests |
 
 ## Targets
 
