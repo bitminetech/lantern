@@ -20,12 +20,15 @@ as() { clang --target=$target $march "$@"; }
 build_objects linux "$out"
 
 # Test runners (C), linked statically so QEMU user mode needs no target libraries:
-# runner-<preset>, and runner-<preset>-bls-off for the cases made with signature checks off.
+# runner-<preset>-<fork>, and runner-<preset>-<fork>-bls-off for the cases made with signature checks off.
 for preset in mainnet minimal; do
-    clang --target=$target $march -std=c11 -O2 -Wall -Wextra -Werror -static -fuse-ld=lld -DPRESET=\"$preset\" \
-        "$root/tests/runner/runner.c" -I"$root/platform/linux" -I"$root/tests/runner" \
-        "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps -o "$out/runner-$preset"
-    clang --target=$target $march -std=c11 -O2 -Wall -Wextra -Werror -static -fuse-ld=lld -DPRESET=\"$preset\" -DBLS_OFF \
-        "$root/tests/runner/runner.c" "$root/tests/runner/bls_off.c" -I"$root/platform/linux" -I"$root/tests/runner" \
-        "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_off -o "$out/runner-$preset-bls-off"
+    for fork in $FORKS; do
+        flags="-std=c11 -O2 -Wall -Wextra -Werror -static -fuse-ld=lld -DPRESET=\"$preset\" -DFORK=$(fork_number $fork) -DFORK_NAME=$fork"
+        clang --target=$target $march $flags \
+            "$root/tests/runner/runner.c" -I"$root/platform/linux" -I"$root/tests/runner" \
+            "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps -o "$out/runner-$preset-$fork"
+        clang --target=$target $march $flags -DBLS_OFF \
+            "$root/tests/runner/runner.c" "$root/tests/runner/bls_off.c" -I"$root/platform/linux" -I"$root/tests/runner" \
+            "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_off -o "$out/runner-$preset-$fork-bls-off"
+    done
 done

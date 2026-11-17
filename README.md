@@ -2,7 +2,7 @@
 
 An Ethereum consensus client, a beacon node, in assembly.
 
-The Fulu beacon chain on mainnet: state transition, fork choice, data availability, gossip and req/resp, sync, the Engine API client and storage. It runs no validators.
+The beacon chain on mainnet, every fork from phase0 to Fulu: state transition, fork choice, data availability, gossip and req/resp, sync, the Engine API client and storage. It runs no validators.
 
 Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blob/2a19d3f7fa737af1c01720b6e891703e53a682aa/ARCHITECTURE.md)
 
@@ -18,7 +18,8 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | [docs/reference/fork-choice.md](docs/reference/fork-choice.md) | Fulu fork choice and data availability |
 | [docs/reference/networking.md](docs/reference/networking.md) | Fulu networking rules: custody, gossip validation |
 | [include/lantern.inc](include/lantern.inc) | Constants |
-| [include/types.inc](include/types.inc) | Fulu SSZ types and layouts |
+| [include/types.inc](include/types.inc) | SSZ types and layouts of each fork, phase0 to Fulu |
+| [include/forks.inc](include/forks.inc) | The forks, and the names of each fork's exports |
 
 ## Targets
 

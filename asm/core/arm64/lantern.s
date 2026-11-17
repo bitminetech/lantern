@@ -15,10 +15,10 @@
 .include "kzg.inc"
 .include "preset.inc"
 .include "lantern.inc"
+.include "forks.inc"
 .include "ssz_types.inc"
 .include "types.inc"
 .include "platform.inc"
-.include "forks.inc"
 .include "macros.s"
 
 /* Powers of two that the core divides by with shifts and masks. */
@@ -35,6 +35,8 @@ SSZ_DEPTH LOG2_SLOTS_PER_EPOCH, SLOTS_PER_EPOCH
 
 /* ---------------------------------------------------------------- Functions */
 
+/* The spec functions are in the fulu object so far; the other objects hold their fork's types. */
+.if FORK == FORK_FULU
 .include "memory.s"
 .include "helpers.s"
 .include "state.s"
@@ -53,6 +55,7 @@ SSZ_DEPTH LOG2_SLOTS_PER_EPOCH, SLOTS_PER_EPOCH
 .include "forkchoice.s"
 .include "seen_find.s"
 .include "networking.s"
+.endif
 
 /* ---------------------------------------------------------------- Read only data */
 

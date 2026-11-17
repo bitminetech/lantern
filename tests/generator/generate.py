@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Fetch, check and convert the consensus spec tests into binary case files.
 
-Usage: python tests/generator/generate.py OUT_DIR [RUNNER ...]
+Usage: python tests/generator/generate.py OUT_DIR [FORK | RUNNER ...]
 
 Run it through tests/generator/run.sh, which uses the image from
 platform/linux/Dockerfile and the packages in requirements.txt. The file
-format is in README.md next to this script. With RUNNER names, only those
-spec test runners are converted.
+format is in README.md next to this script. With FORK names, only those forks
+are converted; with RUNNER names, only those spec test runners.
 """
 import hashlib
 import json
@@ -32,10 +32,14 @@ ARCHIVES = {  # SHA-256 of each archive of consensus-specs v1.7.0-beta.4 (aa16bb
 # The fork choice compliance cases of the release, made by the spec's
 # tests/generators/compliance_runners: the minimal preset only.
 COMPTESTS = ("comptests.tar.gz", "minimal", "ccb3149d29e4179e852499f1a3d121424dbac22745375908cd9059350aece746")
-FORK = "fulu"
-# Spec test runners outside lantern's scope (README of the repo: Fulu only, no
-# light client server, no fork upgrade, no genesis from eth1, no fast confirmation).
-SKIP = {"light_client", "fork", "transition", "genesis", "fast_confirmation"}
+# The forks of lantern's core, in order (include/forks.inc).
+FORKS = ("phase0", "altair", "bellatrix", "capella", "deneb", "electra", "fulu")
+# Spec test runners outside lantern's scope: it serves no light clients and
+# has no fast confirmation.
+SKIP = {"light_client", "fast_confirmation"}
+# The spec writes the shuffling cases for phase0 only; every later fork keeps
+# its functions, so each fork's file holds them.
+EVERY_FORK = {("phase0", "shuffling")}
 CASE = re.compile(r"tests/(mainnet|minimal)/(\w+)/(\w+)/(\w+)/(\w+)/([^/]+)/([^/]+)$")
 
 MAGIC = b"LANTVEC1"
@@ -99,27 +103,30 @@ def fetch(url, sha256, path):
         fail(f"{url} has SHA-256 {h.hexdigest()}, expected {sha256}")
 
 
-def read_cases(archive, runners):
-    """Yield (runner, handler, suite, case, {file name: bytes}) for the Fulu cases of one archive."""
+def read_cases(archive, forks, runners):
+    """Yield (fork, runner, handler, suite, case, {file name: bytes}) for the cases of forks in one archive."""
     current, files = None, {}
+
+    def flush():
+        fork, runner = current[0], current[1]
+        for target in forks if (fork, runner) in EVERY_FORK else [fork]:
+            yield (target, *current[1:], files)
+
     with tarfile.open(archive, "r:gz") as tar:
         for member in tar:
             m = CASE.search(member.name) if member.isfile() else None
-            if not m or m.group(3) in SKIP:
+            if not m or m.group(3) in SKIP or (runners and m.group(3) not in runners):
                 continue
-            # Fulu cases, and the shuffling cases, which only phase0 holds.
-            if m.group(2) != FORK and (m.group(2), m.group(3)) != ("phase0", "shuffling"):
+            if m.group(2) not in forks and (m.group(2), m.group(3)) not in EVERY_FORK:
                 continue
-            if runners and m.group(3) not in runners:
-                continue
-            key = m.groups()[2:6]
+            key = m.groups()[1:6]
             if key != current:
                 if current:
-                    yield (*current, files)
+                    yield from flush()
                 current, files = key, {}
             files[m.group(7)] = tar.extractfile(member).read()
     if current:
-        yield (*current, files)
+        yield from flush()
 
 
 def case_parts(name, files):
@@ -137,17 +144,39 @@ def case_parts(name, files):
     return parts
 
 
+class CaseFile:
+    """A case file written one case at a time; close() sets the count and gives (count, SHA-256)."""
+
+    def __init__(self, path):
+        self.f = open(path, "wb")
+        self.f.write(MAGIC + u64(0))
+        self.count = 0
+
+    def add(self, name, parts):
+        self.f.write(blob(name.encode()) + tlv(parts))
+        self.count += 1
+
+    def close(self):
+        self.f.seek(len(MAGIC))
+        self.f.write(u64(self.count))
+        self.f.close()
+        h = hashlib.sha256()
+        with open(self.f.name, "rb") as f:
+            while chunk := f.read(1 << 20):
+                h.update(chunk)
+        return self.count, h.hexdigest()
+
+
 def write_file(path, cases):
-    data = bytearray(MAGIC + u64(len(cases)))
+    out = CaseFile(path)
     for name, parts in cases:
-        data += blob(name.encode()) + tlv(parts)
-    path.write_bytes(data)
-    return len(cases), hashlib.sha256(data).hexdigest()
+        out.add(name, parts)
+    return out.close()
 
 
-def write_descriptors(path, preset):
-    """Every SSZ container type of the Fulu spec, with its reference descriptor."""
-    spec = __import__(f"eth_consensus_specs.{FORK}.{preset}", fromlist=["*"])
+def write_descriptors(path, fork, preset):
+    """Every SSZ container type of the fork's spec, with its reference descriptor."""
+    spec = __import__(f"eth_consensus_specs.{fork}.{preset}", fromlist=["*"])
     types = {}
     for name in sorted(dir(spec)):
         t = getattr(spec, name)
@@ -177,9 +206,11 @@ def write_config(path, preset):
 
 def main():
     if len(sys.argv) < 2:
-        fail("usage: generate.py OUT_DIR [RUNNER ...]")
+        fail("usage: generate.py OUT_DIR [FORK | RUNNER ...]")
     out = pathlib.Path(sys.argv[1])
-    runners = set(sys.argv[2:])
+    names = sys.argv[2:]
+    forks = [fork for fork in FORKS if fork in names] or list(FORKS)
+    runners = {name for name in names if name not in FORKS}
     sources = out / "sources"
     sources.mkdir(parents=True, exist_ok=True)
     manifest = []
@@ -189,29 +220,38 @@ def main():
             archives.append((COMPTESTS[0], COMPTESTS[2]))
         for name, digest in archives:
             fetch(RELEASE + name, digest, sources / name)
-        count, digest = write_descriptors(out / f"{preset}-descriptors.bin", preset)
-        manifest.append((f"{preset}-descriptors.bin", count, digest))
+        for fork in forks:
+            file = f"{preset}-{fork}-descriptors.bin"
+            count, digest = write_descriptors(out / file, fork, preset)
+            manifest.append((file, count, digest))
         count, digest = write_config(out / f"{preset}-config.bin", preset)
         manifest.append((f"{preset}-config.bin", count, digest))
         count, digest = write_kzg_setup(out / f"{preset}-kzg_setup.bin", preset)
         manifest.append((f"{preset}-kzg_setup.bin", count, digest))
-        groups = {}
+        files = {}
         for archive, _ in archives:
-            for runner, handler, suite, case, files in read_cases(sources / archive, runners):
+            for fork, runner, handler, suite, case, data in read_cases(sources / archive, forks, runners):
+                file = f"{preset}-{fork}-{runner}-{handler}.bin"
+                if file not in files:
+                    files[file] = CaseFile(out / file)
                 name = f"{suite}/{case}"
-                groups.setdefault((runner, handler), []).append((name, case_parts(name, files)))
-        for (runner, handler), cases in sorted(groups.items()):
-            file = f"{preset}-{runner}-{handler}.bin"
-            count, digest = write_file(out / file, cases)
+                files[file].add(name, case_parts(name, data))
+        for file in sorted(files):
+            count, digest = files[file].close()
             manifest.append((file, count, digest))
             print(f"{file}: {count} cases")
-    # With RUNNER names, the entries of the other files stay.
+    # With FORK or RUNNER names, the entries of the other files stay.
     path = out / "manifest.txt"
     entries = {}
-    if runners and path.exists():
+    if names and path.exists():
         entries = {line.split()[0]: line for line in path.read_text().splitlines() if line}
     entries.update({file: f"{file} {count} {digest}" for file, count, digest in manifest})
     path.write_text("\n".join(entries[file] for file in sorted(entries)) + "\n")
+    # A full run leaves only its own case files, so no file of an older layout stays.
+    if not names:
+        for stale in out.glob("*.bin"):
+            if stale.name not in entries:
+                stale.unlink()
 
 
 if __name__ == "__main__":

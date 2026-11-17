@@ -3,12 +3,13 @@
 ## Run
 
 ```bash
-build/linux-x86_64/runner-minimal ~/.cache/lantern/vectors minimal-operations-attestation.bin
+build/linux-x86_64/runner-minimal-fulu ~/.cache/lantern/vectors minimal-fulu-operations-attestation.bin
 ```
 
-- Arguments: the vector folder, then the files to run. Files of the other preset are skipped.
+- Arguments: the vector folder, then the files to run. Files of another preset or fork are skipped.
+- A file of a kind the runner has no handler for prints a `SKIP` line.
 - The status is 0 only when every case of every file passes.
-- `tests/runner/run.sh RUNNER_DIR VECTOR_DIR [FILE ...]` runs the four runners of one target, one process for each runner and file, as many at once as the machine has cores. `QEMU` sets the command that runs them, `JOBS` the processes at once. `run.ps1` does the same on Windows.
+- `tests/runner/run.sh RUNNER_DIR VECTOR_DIR [FILE ...]` runs the runners of one target, one process for each runner and file, as many at once as the machine has cores. Each file goes to the runners of its preset and fork. `QEMU` sets the command that runs them, `JOBS` the processes at once. `run.ps1` does the same on Windows.
 - `tests/runner/docker.sh` builds every target in Docker and runs the three Linux ISAs; `tests/runner/macos.sh` runs the macOS runners. Both call `run.sh`.
 
 ## Files
@@ -18,15 +19,18 @@ build/linux-x86_64/runner-minimal ~/.cache/lantern/vectors minimal-operations-at
 | `runner.c` | Reads the case files of tests/generator/, calls lantern for each case and compares the results |
 | `bls_off.c` | Stand-ins for the three BLS verify functions of asm-crypto that return valid, for `runner-<preset>-bls-off` |
 | `abi_<ISA>.s` | `abi_call`: calls a lantern function and checks that it keeps the registers and stack of the core ABI |
-| `run.sh`, `run.ps1` | Run the four runners of one target on every core, and merge their results |
+| `run.sh`, `run.ps1` | Run the runners of one target on every core, and merge their results |
 | `docker.sh`, `macos.sh` | Build and run scripts |
 
 ## Runners
 
 | Runner | Cases |
 |---|---|
-| `runner-<preset>` | Every case whose `bls_setting` is 0 or 1 |
-| `runner-<preset>-bls-off` | The cases with `bls_setting` 2, linked with `bls_off.c` |
+| `runner-<preset>-<fork>` | Every case of the fork whose `bls_setting` is 0 or 1 |
+| `runner-<preset>-<fork>-bls-off` | The cases of the fork with `bls_setting` 2, linked with `bls_off.c` |
+
+- Each runner calls the `lantern_<fork>_*` functions of its fork, built with `-DFORK=<number> -DFORK_NAME=<fork>` (include/forks.inc).
+- The runners of phase0 to electra run the `descriptors` and `ssz_static` files so far: only the fulu object has spec functions yet.
 
 ## Buffers
 

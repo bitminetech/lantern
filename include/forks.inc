@@ -19,20 +19,45 @@
 .ifndef FORK
 .error "assemble lantern.s with --defsym FORK=<FORK_*>"
 .endif
-.if FORK != FORK_FULU
-.error "lantern's core has only the fulu object yet"
+.if FORK < FORK_PHASE0 || FORK > FORK_FULU
+.error "FORK is not a fork of lantern"
 .endif
+
+/* Expands m with the name of this object's fork and the rest of the arguments. */
+.macro FORK_NAMED m, args:vararg
+.if FORK == FORK_PHASE0
+    \m phase0, \args
+.elseif FORK == FORK_ALTAIR
+    \m altair, \args
+.elseif FORK == FORK_BELLATRIX
+    \m bellatrix, \args
+.elseif FORK == FORK_CAPELLA
+    \m capella, \args
+.elseif FORK == FORK_DENEB
+    \m deneb, \args
+.elseif FORK == FORK_ELECTRA
+    \m electra, \args
+.else
+    \m fulu, \args
+.endif
+.endm
+
+.macro FORK_GLOBAL_LABEL fork, name
+    GLOBAL_LABEL lantern_\fork\()_\name
+.endm
+.macro FORK_GLOBAL_LABEL_END fork, name
+    GLOBAL_LABEL_END lantern_\fork\()_\name
+.endm
+.macro FORK_DATA_GLOBAL fork, name
+    DATA_GLOBAL lantern_\fork\()_\name
+.endm
 
 /* The export lantern_<fork>_<name> of this object, at this address. */
 .macro FORK_LABEL name
-.if FORK == FORK_FULU
-    GLOBAL_LABEL lantern_fulu_\name
-.endif
+    FORK_NAMED FORK_GLOBAL_LABEL, \name
 .endm
 .macro FORK_LABEL_END name
-.if FORK == FORK_FULU
-    GLOBAL_LABEL_END lantern_fulu_\name
-.endif
+    FORK_NAMED FORK_GLOBAL_LABEL_END, \name
 .endm
 
 /* A spec function of this fork's object: lantern_<name> inside it, lantern_<fork>_<name> outside. */
@@ -53,7 +78,5 @@
 
 /* Exported data of this fork's object: lantern_<fork>_<name>. */
 .macro FORK_DATA name
-.if FORK == FORK_FULU
-    DATA_GLOBAL lantern_fulu_\name
-.endif
+    FORK_NAMED FORK_DATA_GLOBAL, \name
 .endm

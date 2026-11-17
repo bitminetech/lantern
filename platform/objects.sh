@@ -8,7 +8,7 @@
 CRYPTO_OBJECTS="sha256 hmac bls12381"
 
 # The forks that lantern's core has an object for (include/forks.inc).
-FORKS="fulu"
+FORKS="phase0 altair bellatrix capella deneb electra fulu"
 fork_number() {
     case $1 in
       phase0) echo 0 ;; altair) echo 1 ;; bellatrix) echo 2 ;; capella) echo 3 ;;

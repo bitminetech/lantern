@@ -9,7 +9,8 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 - The output folder must be outside this repo.
 - It runs in the image from [platform/linux/Dockerfile](../../platform/linux/Dockerfile).
 - The output folder keeps the downloads (`sources/`), the consensus-specs clone and the Python environment. A second run downloads nothing.
-- Spec test runner names after the folder, such as `fork_choice_compliance`, convert only those runners. The other entries of `manifest.txt` stay.
+- Fork names after the folder, such as `fulu`, convert only those forks; spec test runner names, such as `fork_choice_compliance`, only those runners. The other entries of `manifest.txt` stay.
+- A run with no names leaves only its own `.bin` files in the folder.
 
 ## Files
 
@@ -23,8 +24,8 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 
 | Archive | What it gives |
 |---|---|
-| `mainnet.tar.gz`, `minimal.tar.gz` of consensus-specs v1.7.0-beta.4 | The fulu cases of every runner in scope, and the phase0 shuffling cases |
-| `comptests.tar.gz` of the same release | The fulu fork choice compliance cases, minimal only |
+| `mainnet.tar.gz`, `minimal.tar.gz` of consensus-specs v1.7.0-beta.4 | The cases of phase0 to fulu of every runner in scope |
+| `comptests.tar.gz` of the same release | The fork choice compliance cases of altair to fulu, minimal only |
 | The consensus-specs clone at aa16bb4 | The type descriptors, the configs and the KZG trusted setup |
 
 - Each archive's SHA-256 is pinned in `generate.py`.
@@ -33,13 +34,16 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 
 | File | Cases |
 |---|---|
-| `<preset>-<runner>-<handler>.bin` | The spec's cases of one handler: each case's files as parts |
-| `<preset>-descriptors.bin` | Each SSZ container type of fulu with its reference `TypeDescriptor` |
+| `<preset>-<fork>-<runner>-<handler>.bin` | The spec's cases of one handler of one fork: each case's files as parts |
+| `<preset>-<fork>-descriptors.bin` | Each SSZ container type of the fork with its reference `TypeDescriptor` |
 | `<preset>-config.bin` | One case: `configs/<preset>.yaml` |
 | `<preset>-kzg_setup.bin` | One case: the three point lists of `trusted_setup_4096.json` as bytes |
 | `manifest.txt` | Each file, its case count and its SHA-256 |
 
 - `<preset>`: `mainnet` or `minimal`.
+- `<fork>`: `phase0`, `altair`, `bellatrix`, `capella`, `deneb`, `electra` or `fulu`.
+- Runners in scope: every runner of the spec tests except `light_client` and `fast_confirmation`.
+- The spec writes the `shuffling` cases for phase0 only. Each fork's `shuffling` file holds them, since every fork keeps those functions.
 
 ## File format
 

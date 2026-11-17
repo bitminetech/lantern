@@ -1,12 +1,13 @@
 /*
  * lantern vector runner. Test code: lantern itself is assembly.
  *
- * Usage: runner-<preset> VECTOR_DIR FILE ...
+ * Usage: runner-<preset>-<fork> VECTOR_DIR FILE ...
  *
  * Reads the case files that tests/generator/ writes (format in its README),
- * calls lantern for every case and compares the results. Files of the other
- * preset, and files of a kind the runner does not know, are skipped. It
- * exits with status 0 only when every case of every file it runs passes.
+ * calls the lantern functions of one fork for every case and compares the
+ * results. Files of another preset or fork are skipped; a file of a kind the
+ * runner has no handler for prints a SKIP line. It exits with status 0 only
+ * when every case of every file it runs passes.
  *
  * Buffers are allocated at the size each function asks for, with guard bytes
  * after them, and output buffers start filled with 0xA5, so a write out of
@@ -30,6 +31,25 @@
 #error "build with -DPRESET=\"mainnet\" or -DPRESET=\"minimal\""
 #endif
 
+/* The forks of include/forks.inc. */
+#define FORK_PHASE0 0
+#define FORK_ALTAIR 1
+#define FORK_BELLATRIX 2
+#define FORK_CAPELLA 3
+#define FORK_DENEB 4
+#define FORK_ELECTRA 5
+#define FORK_FULU 6
+#if !defined(FORK) || !defined(FORK_NAME)
+#error "build with -DFORK=<FORK_* number> -DFORK_NAME=<fork>, for example -DFORK=6 -DFORK_NAME=fulu"
+#endif
+
+#define STR_(x) #x
+#define STR(x) STR_(x)
+#define CAT_(a, b, c) a##b##c
+#define CAT(a, b, c) CAT_(a, b, c)
+/* LF(name): lantern_<fork>_<name>, the export of the fork that this runner tests. */
+#define LF(name) CAT(lantern_, FORK_NAME, _##name)
+
 /* ---------------------------------------------------------------- Interfaces */
 
 /* asm-ssz, at the pin in platform/deps.sh. */
@@ -40,25 +60,27 @@ ABI uint64_t ssz_deserialize_size(const void *type, const void *serialized, void
 ABI uint64_t ssz_hash_tree_root(const void *type, const void *value, void *scratch, void *root);
 
 /* lantern: include/descriptors.inc. */
-extern const uint8_t lantern_fulu_types[];
+extern const uint8_t LF(types)[];
+
+#if FORK == FORK_FULU /* the spec functions of the other forks come in later steps */
 
 /* lantern functions: docs/reference/. */
-ABI uint64_t lantern_fulu_beacon_state_copy_size(const void *state, const void *room, void *size);
-ABI uint64_t lantern_fulu_beacon_state_copy(const void *state, const void *room, void *out);
+ABI uint64_t LF(beacon_state_copy_size)(const void *state, const void *room, void *size);
+ABI uint64_t LF(beacon_state_copy)(const void *state, const void *room, void *out);
 
-ABI uint64_t lantern_fulu_compute_shuffled_permutation(const void *index_count, const void *seed, void *scratch, void *out);
-ABI uint64_t lantern_fulu_compute_shuffled_index(const void *index, const void *index_count, const void *seed, void *scratch,
+ABI uint64_t LF(compute_shuffled_permutation)(const void *index_count, const void *seed, void *scratch, void *out);
+ABI uint64_t LF(compute_shuffled_index)(const void *index, const void *index_count, const void *seed, void *scratch,
                                             void *out);
-ABI uint64_t lantern_fulu_get_flag_index_deltas(const void *state, const void *flag_index, void *scratch, void *rewards,
+ABI uint64_t LF(get_flag_index_deltas)(const void *state, const void *flag_index, void *scratch, void *rewards,
                                            void *penalties);
-ABI uint64_t lantern_fulu_get_inactivity_penalty_deltas(const void *state, const void *config, void *scratch, void *rewards,
+ABI uint64_t LF(get_inactivity_penalty_deltas)(const void *state, const void *config, void *scratch, void *rewards,
                                                    void *penalties);
 
 /* An operation: (state, operation, config, scratch, result). */
 typedef ABI uint64_t (*op_fn)(void *state, const void *op, const void *config, void *scratch, void *result);
-ABI uint64_t lantern_fulu_process_execution_payload(void *state, const void *body, const void *execution_valid,
+ABI uint64_t LF(process_execution_payload)(void *state, const void *body, const void *execution_valid,
                                                const void *config, void *scratch, void *result);
-#define OP_FN(handler, fn, part, type) ABI uint64_t lantern_fulu_process_##fn(void *, const void *, const void *, void *, void *);
+#define OP_FN(handler, fn, part, type) ABI uint64_t LF(process_##fn)(void *, const void *, const void *, void *, void *);
 #define OPERATIONS(X)                                                                                          \
     X(block_header, block_header, block, BeaconBlock)                                                          \
     X(withdrawals, withdrawals, execution_payload, ExecutionPayload)                                           \
@@ -73,73 +95,73 @@ ABI uint64_t lantern_fulu_process_execution_payload(void *state, const void *bod
     X(sync_aggregate, sync_aggregate, sync_aggregate, SyncAggregate)
 OPERATIONS(OP_FN)
 
-ABI uint64_t lantern_fulu_process_slots(void *state, const void *slot, const void *config, void *scratch, void *result);
-ABI uint64_t lantern_fulu_state_transition(void *state, const void *signed_block, const void *options, const void *config,
+ABI uint64_t LF(process_slots)(void *state, const void *slot, const void *config, void *scratch, void *result);
+ABI uint64_t LF(state_transition)(void *state, const void *signed_block, const void *options, const void *config,
                                       void *scratch, void *result);
 
 /* Fork choice: docs/reference/fork-choice.md. */
-ABI uint64_t lantern_fulu_get_forkchoice_store(const void *anchor_state, const void *anchor_block, const void *config,
+ABI uint64_t LF(get_forkchoice_store)(const void *anchor_state, const void *anchor_block, const void *config,
                                           const void *room, void *scratch, void *store);
 ABI uint64_t lantern_store_size(const void *room, void *size);
 ABI uint64_t lantern_store_copy(const void *store, const void *room, void *out);
-ABI uint64_t lantern_fulu_store_justified_checkpoint_state(void *store, const void *state);
-ABI uint64_t lantern_fulu_get_current_slot(const void *store, void *out);
-ABI uint64_t lantern_fulu_on_tick(void *store, const void *time_ms, void *result);
-ABI uint64_t lantern_fulu_get_head(const void *store, void *scratch, void *out);
-ABI uint64_t lantern_fulu_get_filtered_node_tree(const void *store, void *scratch, void *out);
-ABI uint64_t lantern_fulu_get_weight(const void *store, const void *node, void *out);
-ABI uint64_t lantern_fulu_on_block(void *store, const void *signed_block, void *state, const void *options, void *scratch,
+ABI uint64_t LF(store_justified_checkpoint_state)(void *store, const void *state);
+ABI uint64_t LF(get_current_slot)(const void *store, void *out);
+ABI uint64_t LF(on_tick)(void *store, const void *time_ms, void *result);
+ABI uint64_t LF(get_head)(const void *store, void *scratch, void *out);
+ABI uint64_t LF(get_filtered_node_tree)(const void *store, void *scratch, void *out);
+ABI uint64_t LF(get_weight)(const void *store, const void *node, void *out);
+ABI uint64_t LF(on_block)(void *store, const void *signed_block, void *state, const void *options, void *scratch,
                               void *result);
-ABI uint64_t lantern_fulu_validate_on_attestation(const void *store, const void *attestation, const void *is_from_block);
-ABI uint64_t lantern_fulu_store_target_checkpoint_state(void *state, const void *target, const void *config, void *scratch,
+ABI uint64_t LF(validate_on_attestation)(const void *store, const void *attestation, const void *is_from_block);
+ABI uint64_t LF(store_target_checkpoint_state)(void *state, const void *target, const void *config, void *scratch,
                                                    void *result);
-ABI uint64_t lantern_fulu_on_attestation(void *store, const void *attestation, const void *is_from_block,
+ABI uint64_t LF(on_attestation)(void *store, const void *attestation, const void *is_from_block,
                                     const void *target_state, void *scratch, void *result);
-ABI uint64_t lantern_fulu_on_attester_slashing(void *store, const void *attester_slashing, const void *state, void *scratch,
+ABI uint64_t LF(on_attester_slashing)(void *store, const void *attester_slashing, const void *state, void *scratch,
                                           void *result);
 ABI uint64_t lantern_store_payload_status(void *store, const void *node, const void *payload_status, void *result);
-ABI uint64_t lantern_fulu_get_proposer_head(const void *store, const void *head, const void *slot, const void *head_state,
+ABI uint64_t LF(get_proposer_head)(const void *store, const void *head, const void *slot, const void *head_state,
                                        void *scratch, void *out);
-ABI uint64_t lantern_fulu_is_data_available(const void *sidecars, const void *settings, const void *config, void *scratch,
+ABI uint64_t LF(is_data_available)(const void *sidecars, const void *settings, const void *config, void *scratch,
                                        void *out);
 
 /* Networking rules: docs/reference/networking.md. */
-ABI uint64_t lantern_fulu_get_custody_groups(const void *node_id, const void *custody_group_count, const void *config,
+ABI uint64_t LF(get_custody_groups)(const void *node_id, const void *custody_group_count, const void *config,
                                         void *out);
-ABI uint64_t lantern_fulu_compute_columns_for_custody_group(const void *custody_group, const void *config, void *out);
+ABI uint64_t LF(compute_columns_for_custody_group)(const void *custody_group, const void *config, void *out);
 
 /* Gossip: docs/reference/networking.md. */
-ABI uint64_t lantern_fulu_verify_partial_data_column_header_inclusion_proof(const void *header, void *scratch, void *out);
+ABI uint64_t LF(verify_partial_data_column_header_inclusion_proof)(const void *header, void *scratch, void *out);
 ABI uint64_t lantern_seen_size(const void *room, void *size);
 ABI uint64_t lantern_seen_init(const void *room, void *seen);
 ABI uint64_t lantern_seen_copy(const void *seen, const void *room, void *out);
 ABI uint64_t lantern_seen_add_block(void *seen, const void *root, const void *payload_status);
-ABI uint64_t lantern_fulu_validate_beacon_block_gossip(void *seen, const void *store, const void *block, const void *now,
+ABI uint64_t LF(validate_beacon_block_gossip)(void *seen, const void *store, const void *block, const void *now,
                                                   const void *head_state, const void *proposer_state, void *scratch, void *result);
-ABI uint64_t lantern_fulu_validate_beacon_aggregate_and_proof_gossip(void *seen, const void *store, const void *aggregate,
+ABI uint64_t LF(validate_beacon_aggregate_and_proof_gossip)(void *seen, const void *store, const void *aggregate,
                                                                 const void *now, const void *head_state, void *scratch,
                                                                 void *result);
-ABI uint64_t lantern_fulu_validate_beacon_attestation_gossip(void *seen, const void *store, const void *attestation, const void *now,
+ABI uint64_t LF(validate_beacon_attestation_gossip)(void *seen, const void *store, const void *attestation, const void *now,
                                                         const void *subnet_id, const void *head_state, void *scratch,
                                                         void *result);
-ABI uint64_t lantern_fulu_validate_voluntary_exit_gossip(void *seen, const void *store, const void *exit, const void *now,
+ABI uint64_t LF(validate_voluntary_exit_gossip)(void *seen, const void *store, const void *exit, const void *now,
                                                     const void *head_state, void *scratch, void *result);
-ABI uint64_t lantern_fulu_validate_proposer_slashing_gossip(void *seen, const void *store, const void *slashing, const void *head_state,
+ABI uint64_t LF(validate_proposer_slashing_gossip)(void *seen, const void *store, const void *slashing, const void *head_state,
                                                        void *scratch, void *result);
-ABI uint64_t lantern_fulu_validate_attester_slashing_gossip(void *seen, const void *store, const void *slashing, const void *head_state,
+ABI uint64_t LF(validate_attester_slashing_gossip)(void *seen, const void *store, const void *slashing, const void *head_state,
                                                        void *scratch, void *result);
-ABI uint64_t lantern_fulu_validate_sync_committee_contribution_and_proof_gossip(void *seen, const void *store, const void *contribution,
+ABI uint64_t LF(validate_sync_committee_contribution_and_proof_gossip)(void *seen, const void *store, const void *contribution,
                                                                            const void *now, const void *head_state, void *scratch,
                                                                            void *result);
-ABI uint64_t lantern_fulu_validate_sync_committee_message_gossip(void *seen, const void *store, const void *message, const void *now,
+ABI uint64_t LF(validate_sync_committee_message_gossip)(void *seen, const void *store, const void *message, const void *now,
                                                             const void *subnet_id, const void *head_state, void *scratch,
                                                             void *result);
-ABI uint64_t lantern_fulu_validate_bls_to_execution_change_gossip(void *seen, const void *store, const void *change, const void *now,
+ABI uint64_t LF(validate_bls_to_execution_change_gossip)(void *seen, const void *store, const void *change, const void *now,
                                                              const void *head_state, void *scratch, void *result);
-ABI uint64_t lantern_fulu_validate_data_column_sidecar_gossip(void *seen, const void *store, const void *sidecar, const void *now,
+ABI uint64_t LF(validate_data_column_sidecar_gossip)(void *seen, const void *store, const void *sidecar, const void *now,
                                                          const void *subnet_id, const void *head_state, const void *proposer_state,
                                                          const void *settings, void *scratch, void *result);
-ABI uint64_t lantern_fulu_validate_partial_data_column_sidecar_gossip(void *seen, const void *store, const void *sidecar, const void *now,
+ABI uint64_t LF(validate_partial_data_column_sidecar_gossip)(void *seen, const void *store, const void *sidecar, const void *now,
                                                                  const void *group_id, const void *column_index,
                                                                  const void *head_state, const void *proposer_state,
                                                                  const void *settings, void *scratch, void *result);
@@ -162,7 +184,7 @@ ABI uint64_t crypto_kzg_trusted_setup_of_bytes(const void *g1_lagrange, const vo
 
 /* An epoch processing function: (state, config, scratch, result). */
 typedef ABI uint64_t (*epoch_fn)(void *state, const void *config, void *scratch, void *result);
-#define EPOCH_FN(name) ABI uint64_t lantern_fulu_process_##name(void *, const void *, void *, void *);
+#define EPOCH_FN(name) ABI uint64_t LF(process_##name)(void *, const void *, void *, void *);
 #define EPOCH_FUNCTIONS(X)                                                                                     \
     X(justification_and_finalization)                                                                          \
     X(inactivity_updates)                                                                                      \
@@ -181,6 +203,7 @@ typedef ABI uint64_t (*epoch_fn)(void *state, const void *config, void *scratch,
     X(proposer_lookahead)                                                                                      \
     X(epoch)
 EPOCH_FUNCTIONS(EPOCH_FN)
+#endif
 
 /* ---------------------------------------------------------------- ABI check */
 
@@ -234,7 +257,7 @@ __attribute__((unused)) static uint64_t checked_call(const char *name, uint64_t 
 }
 
 #define CALL(f, ...)                                                                                           \
-    checked_call(#f, (uint64_t)(uintptr_t)(f), (const void *const[]){__VA_ARGS__},                             \
+    checked_call(STR(f), (uint64_t)(uintptr_t)(f), (const void *const[]){__VA_ARGS__},                             \
                  sizeof((const void *const[]){__VA_ARGS__}) / sizeof(const void *))
 
 /* ---------------------------------------------------------------- Bytes and buffers */
@@ -377,11 +400,11 @@ typedef struct {
 
 /* The root type of lantern named name, or NULL. */
 static const uint8_t *type_by_name(const char *name) {
-    uint64_t n = rd64(lantern_fulu_types);
+    uint64_t n = rd64(LF(types));
     for (uint64_t i = 0; i < n; i++) {
-        const uint8_t *e = lantern_fulu_types + 8 + 16 * i;
-        const char *tname = (const char *)(lantern_fulu_types - rd64(e + 8));
-        if (!strcmp(tname, name)) return lantern_fulu_types - rd64(e);
+        const uint8_t *e = LF(types) + 8 + 16 * i;
+        const char *tname = (const char *)(LF(types) - rd64(e + 8));
+        if (!strcmp(tname, name)) return LF(types) - rd64(e);
     }
     return NULL;
 }
@@ -660,14 +683,24 @@ static void load_config(const char *dir) {
     free(f.data);
 }
 
-/* The config of one case: the preset's, with the values of the case's config.yaml when it has one. */
-static void case_config(tv parts) {
-    memcpy(config, base_config, CONFIG_SIZE);
-    tv c = tv_get(parts, "config");
-    if (c) config_from_map(c, 1);
-}
 
 /* ---------------------------------------------------------------- States */
+
+
+/*
+ * Whether this is the signatures-off runner. bls_setting 2 cases were made with
+ * signature checks off: runner-<preset>-<fork> skips them, and
+ * runner-<preset>-<fork>-bls-off (built with BLS_OFF and tests/runner/bls_off.c)
+ * runs only them. skipped counts the cases this runner skips.
+ */
+#ifdef BLS_OFF
+static const int bls_off = 1;
+#else
+static const int bls_off = 0;
+#endif
+static int skipped;
+
+#if FORK == FORK_FULU /* the handlers of the spec functions, which only the fulu object has so far */
 
 /*
  * Bytes of the scratch buffer. The runner fills all of it before every call, so its size sets most of the
@@ -678,8 +711,33 @@ static void case_config(tv parts) {
 #endif
 static uint8_t *scratch_buf;
 
-/* A fresh scratch for one call: filled, with its size set. */
+/* The config of one case: the preset's, with the values of the case's config.yaml when it has one. */
+static void case_config(tv parts) {
+    memcpy(config, base_config, CONFIG_SIZE);
+    tv c = tv_get(parts, "config");
+    if (c) config_from_map(c, 1);
+}
+
+/* The bls_setting of a case: 0 when it has none. */
+static uint64_t bls_setting(tv parts) {
+    tv v = tv_get(tv_get(parts, "meta"), "bls_setting");
+    return v ? tv_u64(v) : 0;
+}
+
+/* Whether this runner skips a case, by its bls_setting. */
+static int skip_case(tv parts) {
+#ifdef BLS_OFF
+    int skip = bls_setting(parts) != 2;
+#else
+    int skip = bls_setting(parts) == 2;
+#endif
+    skipped += skip;
+    return skip;
+}
+
+/* A fresh scratch for one call: filled, with its size set. The buffer is made at the first call. */
 static uint8_t *fresh_scratch(void) {
+    if (!scratch_buf) scratch_buf = buffer(SCRATCH_BYTES);
     memset(scratch_buf, FILL, SCRATCH_BYTES + GUARD);
     wr64(scratch_buf, SCRATCH_BYTES);
     return scratch_buf;
@@ -692,15 +750,15 @@ static uint8_t *load_state(const uint8_t *enc, uint64_t len, uint64_t *size, con
     uint8_t *value = decode(desc, enc, len, &vsize, why);
     if (!value) return NULL;
     uint64_t room[6] = {64, 64, 4, 9000, 64, 64}, need = 0;
-    CALL(lantern_fulu_beacon_state_copy_size, value, room, &need);
+    CALL(LF(beacon_state_copy_size), value, room, &need);
     uint8_t *state = buffer(need + 4096);
     wr64(state, need + 4096);
-    if (CALL(lantern_fulu_beacon_state_copy, value, room, state) != 0) {
-        *why = "lantern_fulu_beacon_state_copy status";
+    if (CALL(LF(beacon_state_copy), value, room, state) != 0) {
+        *why = STR(LF(beacon_state_copy)) " status";
         free(state);
         state = NULL;
     } else if (!guard_ok(state, need + 4096)) {
-        *why = "lantern_fulu_beacon_state_copy wrote out of bounds";
+        *why = STR(LF(beacon_state_copy)) " wrote out of bounds";
         free(state);
         state = NULL;
     }
@@ -715,10 +773,10 @@ static uint8_t *load_state(const uint8_t *enc, uint64_t len, uint64_t *size, con
  */
 static uint8_t *regrow(uint8_t *state, uint64_t *size, uint64_t growth, const char **why) {
     uint64_t room[6] = {64 * growth, 2048 * growth, 4 * growth, 9000 * growth, 64 * growth, 64 * growth}, need = 0;
-    CALL(lantern_fulu_beacon_state_copy_size, state, room, &need);
+    CALL(LF(beacon_state_copy_size), state, room, &need);
     uint8_t *out = buffer(need);
     wr64(out, need);
-    if (CALL(lantern_fulu_beacon_state_copy, state, room, out) != 0) {
+    if (CALL(LF(beacon_state_copy), state, room, out) != 0) {
         *why = "regrow: copy status";
         free(out);
         return state;
@@ -754,7 +812,7 @@ static const struct {
     const char *handler, *name;
     epoch_fn fn;
 } EPOCH[] = {
-#define EPOCH_ENTRY(name) {#name, "lantern_fulu_process_" #name, lantern_fulu_process_##name},
+#define EPOCH_ENTRY(name) {#name, STR(LF(process_##name)), LF(process_##name)},
     EPOCH_FUNCTIONS(EPOCH_ENTRY)
     {NULL, NULL, NULL}};
 
@@ -796,7 +854,7 @@ static void run_epoch(const char *file, const char *handler, case_file *f) {
             state = load_state(e, elen, &size, &why);
             if (state) {
                 uint64_t result = 0xA5A5A5A5A5A5A5A5u;
-                uint64_t st = CALL(lantern_fulu_process_epoch, state, config, fresh_scratch(), &result);
+                uint64_t st = CALL(LF(process_epoch), state, config, fresh_scratch(), &result);
                 if (st != 0) why = "process_epoch: status not 0";
                 else if (post_epoch) {
                     uint64_t qlen;
@@ -817,36 +875,9 @@ static const struct {
     const char *handler, *name, *part, *type;
     op_fn fn;
 } OPS[] = {
-#define OP_ENTRY(handler, fn, part, type) {#handler, "lantern_fulu_process_" #fn, #part, #type, lantern_fulu_process_##fn},
+#define OP_ENTRY(handler, fn, part, type) {#handler, STR(LF(process_##fn)), #part, #type, LF(process_##fn)},
     OPERATIONS(OP_ENTRY)
     {NULL, NULL, NULL, NULL, NULL}};
-
-/* The bls_setting of a case: 0 when it has none. */
-static uint64_t bls_setting(tv parts) {
-    tv v = tv_get(tv_get(parts, "meta"), "bls_setting");
-    return v ? tv_u64(v) : 0;
-}
-
-/*
- * Whether this runner skips a case. bls_setting 2 cases were made with
- * signature checks off: runner-<preset> skips them, and runner-<preset>-bls-off
- * (built with BLS_OFF and tests/runner/bls_off.c) runs only them.
- */
-#ifdef BLS_OFF
-static const int bls_off = 1;
-#else
-static const int bls_off = 0;
-#endif
-static int skipped;
-static int skip_case(tv parts) {
-#ifdef BLS_OFF
-    int skip = bls_setting(parts) != 2;
-#else
-    int skip = bls_setting(parts) == 2;
-#endif
-    skipped += skip;
-    return skip;
-}
 
 static void run_operations(const char *file, const char *handler, case_file *f) {
     int k = 0, payload = !strcmp(handler, "execution_payload");
@@ -872,7 +903,7 @@ static void run_operations(const char *file, const char *handler, case_file *f) 
             if (payload) {
                 tv ex = tv_get(tv_get(parts, "execution"), "execution_valid");
                 uint64_t valid = ex && *ex == T_BOOL ? ex[1] : 1;
-                st = CALL(lantern_fulu_process_execution_payload, state, op, &valid, config, fresh_scratch(), &result);
+                st = CALL(LF(process_execution_payload), state, op, &valid, config, fresh_scratch(), &result);
             } else {
                 st = checked_call(OPS[k].name, (uint64_t)(uintptr_t)OPS[k].fn,
                                   (const void *const[]){state, op, config, fresh_scratch(), &result}, 5);
@@ -916,7 +947,7 @@ static void run_slots(const char *file, case_file *f) {
             uint8_t *before = buffer(size);
             for (uint64_t growth = 2;; growth *= 2) {
                 memcpy(before, state, (size_t)size);
-                st = CALL(lantern_fulu_process_slots, state, &slot, config, fresh_scratch(), &result);
+                st = CALL(LF(process_slots), state, &slot, config, fresh_scratch(), &result);
                 if (st != 1 || growth > 1024) break;
                 if (memcmp(before, state, (size_t)size)) {
                     why = "BUFFER_TOO_SMALL changed the state";
@@ -961,7 +992,7 @@ static void run_blocks(const char *file, case_file *f) {
             if (!block) break;
             uint64_t options[2] = {1, 1}, result = 0xA5A5A5A5A5A5A5A5u, st;
             for (uint64_t growth = 2;; growth *= 2) {
-                st = CALL(lantern_fulu_state_transition, state, block, options, config, fresh_scratch(), &result);
+                st = CALL(LF(state_transition), state, block, options, config, fresh_scratch(), &result);
                 if (st != 1 || growth > 1024) break;
                 state = regrow(state, &size, growth, &why);
             }
@@ -1005,7 +1036,7 @@ static void run_shuffling(const char *file, case_file *f) {
             uint64_t osize = 24 + 8 * count;
             uint8_t *out = buffer(osize);
             wr64(out, osize);
-            if (CALL(lantern_fulu_compute_shuffled_permutation, &count, seed, fresh_scratch(), out) != 0) why = "status";
+            if (CALL(LF(compute_shuffled_permutation), &count, seed, fresh_scratch(), out) != 0) why = "status";
             else if (!guard_ok(out, osize)) why = "wrote past out";
             else if (rd64(out + 16) != count) why = "count";
             else {
@@ -1017,12 +1048,12 @@ static void run_shuffling(const char *file, case_file *f) {
             uint64_t idx[2] = {0, count - 1};
             for (int k = 0; k < 2 && !why; k++) {
                 uint64_t got = 0;
-                if (CALL(lantern_fulu_compute_shuffled_index, &idx[k], &count, seed, fresh_scratch(), &got) != 0)
+                if (CALL(LF(compute_shuffled_index), &idx[k], &count, seed, fresh_scratch(), &got) != 0)
                     why = "shuffled_index status";
                 else if (got != rd64(out + 24 + 8 * idx[k])) why = "shuffled_index differs";
             }
             uint64_t bad = count;
-            if (!why && CALL(lantern_fulu_compute_shuffled_index, &bad, &count, seed, fresh_scratch(), &bad) != 5)
+            if (!why && CALL(LF(compute_shuffled_index), &bad, &count, seed, fresh_scratch(), &bad) != 5)
                 why = "shuffled_index: index == count not rejected";
             free(out);
         }
@@ -1063,23 +1094,23 @@ static void run_custody(const char *file, const char *handler, case_file *f) {
             uint8_t node_id[32];
             tv_uint256(tv_get(m, "node_id"), node_id);
             uint64_t count = tv_u64(tv_get(m, "custody_group_count"));
-            st = CALL(lantern_fulu_get_custody_groups, node_id, &count, config, out);
+            st = CALL(LF(get_custody_groups), node_id, &count, config, out);
             /* One entry less room than the count: BUFFER_TOO_SMALL. */
             if (!st && n > 0) {
                 uint8_t *small = buffer(osize - 8);
                 wr64(small, osize - 8);
-                if (CALL(lantern_fulu_get_custody_groups, node_id, &count, config, small) != 1) why = "short out accepted";
+                if (CALL(LF(get_custody_groups), node_id, &count, config, small) != 1) why = "short out accepted";
                 free(small);
             }
         } else {
             uint64_t group = tv_u64(tv_get(m, "custody_group"));
-            st = CALL(lantern_fulu_compute_columns_for_custody_group, &group, config, out);
+            st = CALL(LF(compute_columns_for_custody_group), &group, config, out);
         }
         /* NUMBER_OF_CUSTODY_GROUPS (+ 1 for a count) fails the spec's assert. */
         uint64_t over = rd64(config + 280) + groups, got = 0;
         uint8_t node0[32] = {0};
-        uint64_t bad = groups ? CALL(lantern_fulu_get_custody_groups, node0, &over, config, &got)
-                              : CALL(lantern_fulu_compute_columns_for_custody_group, &over, config, &got);
+        uint64_t bad = groups ? CALL(LF(get_custody_groups), node0, &over, config, &got)
+                              : CALL(LF(compute_columns_for_custody_group), &over, config, &got);
         if (bad != 42) why = "assert not checked";
         if (st != 0) why = "status";
         else if (!guard_ok(out, osize)) why = "wrote past out";
@@ -1118,8 +1149,8 @@ static void run_rewards(const char *file, case_file *f) {
             for (uint64_t flag = 0; flag < 4 && !why; flag++) {
                 wr64(rw, lsize);
                 wr64(pn, lsize);
-                uint64_t st = flag < 3 ? CALL(lantern_fulu_get_flag_index_deltas, state, &flag, fresh_scratch(), rw, pn)
-                                       : CALL(lantern_fulu_get_inactivity_penalty_deltas, state, config, fresh_scratch(), rw, pn);
+                uint64_t st = flag < 3 ? CALL(LF(get_flag_index_deltas), state, &flag, fresh_scratch(), rw, pn)
+                                       : CALL(LF(get_inactivity_penalty_deltas), state, config, fresh_scratch(), rw, pn);
                 if (st != 0) why = "status not 0";
                 else if (!deltas_equal(rw, pn, tv_get(parts, names[flag]))) why = names[flag];
             }
@@ -1279,7 +1310,7 @@ static kept_state *checkpoint_state(fc_node *n, const uint8_t *cp, const char **
     uint64_t size = base->size, result = 1, st = 1;
     uint8_t *state = copy_of(base->state, size);
     for (uint64_t growth = 2; growth <= 1024; growth *= 2) {
-        st = CALL(lantern_fulu_store_target_checkpoint_state, state, cp, config, fresh_scratch(), &result);
+        st = CALL(LF(store_target_checkpoint_state), state, cp, config, fresh_scratch(), &result);
         if (st != 1) break;
         state = regrow(state, &size, growth, why);
     }
@@ -1319,7 +1350,7 @@ static kept_state *checkpoint_state(fc_node *n, const uint8_t *cp, const char **
                 kept_state *k_ = checkpoint_state((n), (n)->store + STORE_JUSTIFIED, (why));                    \
                 if (!k_) break;                                                                                \
                 uint64_t s2_;                                                                                  \
-                while ((s2_ = CALL(lantern_fulu_store_justified_checkpoint_state, (n)->store, k_->state)) == 1 &&       \
+                while ((s2_ = CALL(LF(store_justified_checkpoint_state), (n)->store, k_->state)) == 1 &&       \
                        !*(why))                                                                                \
                     grow_store((n), (why));                                                                    \
                 if (s2_ != 0) *(why) = "store_justified_checkpoint_state status";                              \
@@ -1343,13 +1374,13 @@ static const uint8_t *node_at(const fc_node *n, uint64_t i) {
 
 /* on_attestation as the node runs it: validate, make the target state, then the call. */
 static uint64_t fc_attestation(fc_node *n, const uint8_t *att, uint64_t from_block, const char **why) {
-    uint64_t st = CALL(lantern_fulu_validate_on_attestation, n->store, att, &from_block);
+    uint64_t st = CALL(LF(validate_on_attestation), n->store, att, &from_block);
     if (st != 0) return st;
     const uint8_t *target = att + field_offset("Attestation", 1) + field_offset("AttestationData", 4);
     kept_state *k = checkpoint_state(n, target, why);
     if (!k) return 0;
     uint64_t result = 0xA5A5A5A5A5A5A5A5u;
-    st = FC_RETRY(n, why, CALL(lantern_fulu_on_attestation, n->store, att, &from_block, k->state, fresh_scratch(), &result),
+    st = FC_RETRY(n, why, CALL(LF(on_attestation), n->store, att, &from_block, k->state, fresh_scratch(), &result),
                   grow_store(n, why), NULL, 0);
     if (st != 0) {
         *why = "on_attestation: status not 0";
@@ -1365,7 +1396,7 @@ static uint64_t fc_attester_slashing(fc_node *n, const uint8_t *slashing, const 
         return 0;
     }
     uint64_t result = 0xA5A5A5A5A5A5A5A5u;
-    uint64_t st = FC_RETRY(n, why, CALL(lantern_fulu_on_attester_slashing, n->store, slashing, k->state, fresh_scratch(), &result),
+    uint64_t st = FC_RETRY(n, why, CALL(LF(on_attester_slashing), n->store, slashing, k->state, fresh_scratch(), &result),
                            grow_store(n, why), NULL, 0);
     if (st != 0) {
         *why = "on_attester_slashing: status not 0";
@@ -1456,7 +1487,7 @@ static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
                 free(signed_block);
                 return;
             }
-            if (CALL(lantern_fulu_is_data_available, list, kzg_settings, config, fresh_scratch(), &options[1]) != 0)
+            if (CALL(LF(is_data_available), list, kzg_settings, config, fresh_scratch(), &options[1]) != 0)
                 *why = "is_data_available: status not 0";
             free(list);
         }
@@ -1467,7 +1498,7 @@ static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
     uint8_t *state = copy_of(parent ? parent->state : n->anchor, size);
     uint64_t before = node_count(n), growth = 2;
     /* BUFFER_TOO_SMALL: the store when it is full, else the state's lists. */
-    st = FC_RETRY(n, why, CALL(lantern_fulu_on_block, n->store, signed_block, state, options, fresh_scratch(), &result),
+    st = FC_RETRY(n, why, CALL(LF(on_block), n->store, signed_block, state, options, fresh_scratch(), &result),
                   if (node_count(n) == node_capacity(n->store)) grow_store(n, why);
                   else { state = regrow(state, &size, growth, why); growth *= 2; }, state, size);
     if (*why) {
@@ -1503,7 +1534,7 @@ static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
 /* The head node, through the retry rule. */
 static uint64_t fc_head(fc_node *n, const char **why) {
     uint64_t head = 0;
-    uint64_t st = FC_RETRY(n, why, CALL(lantern_fulu_get_head, n->store, fresh_scratch(), &head), break, NULL, 0);
+    uint64_t st = FC_RETRY(n, why, CALL(LF(get_head), n->store, fresh_scratch(), &head), break, NULL, 0);
     if (!*why && st != 0) *why = "get_head: status not 0";
     return head;
 }
@@ -1526,7 +1557,7 @@ static void fc_viable(fc_node *n, tv want, const char **why) {
     wr64(tree, lsize);
     memset(in, 0, count);
     memset(parent_of, 0, count);
-    if (CALL(lantern_fulu_get_filtered_node_tree, n->store, fresh_scratch(), tree) != 0) *why = "get_filtered_node_tree status";
+    if (CALL(LF(get_filtered_node_tree), n->store, fresh_scratch(), tree) != 0) *why = "get_filtered_node_tree status";
     for (uint64_t k = 0; !*why && k < rd64(tree + 16); k++) in[rd64(tree + 24 + 8 * k)] = 1;
     for (uint64_t i = 0; !*why && i < count; i++) {
         uint64_t p = rd64(node_at(n, i) + NODE_PARENT);
@@ -1540,7 +1571,7 @@ static void fc_viable(fc_node *n, tv want, const char **why) {
     if (!*why && (*want != T_LIST || rd64(want + 1) != nleaves)) *why = "check viable_for_head_roots_and_weights: count";
     for (uint64_t k = 0; !*why && k < nleaves; k++) {
         uint64_t node = leaves[k], weight = 0, found = 0;
-        uint64_t st = FC_RETRY(n, why, CALL(lantern_fulu_get_weight, n->store, &node, &weight), break, NULL, 0);
+        uint64_t st = FC_RETRY(n, why, CALL(LF(get_weight), n->store, &node, &weight), break, NULL, 0);
         if (*why) break;
         if (st != 0) {
             *why = "get_weight: status not 0";
@@ -1576,7 +1607,7 @@ static void fc_checks(fc_node *n, tv checks, const char **why) {
             uint64_t lsize = 24 + 8 * node_count(n);
             uint8_t *tree = buffer(lsize);
             wr64(tree, lsize);
-            if (!*why && CALL(lantern_fulu_get_filtered_node_tree, n->store, fresh_scratch(), tree) != 0)
+            if (!*why && CALL(LF(get_filtered_node_tree), n->store, fresh_scratch(), tree) != 0)
                 *why = "get_filtered_node_tree: status not 0";
             else if (!*why) {
                 uint64_t count = rd64(tree + 16), found = 0;
@@ -1605,7 +1636,7 @@ static void fc_checks(fc_node *n, tv checks, const char **why) {
         } else if (!strcmp(key, "get_proposer_head")) {
             uint64_t head = fc_head(n, why), slot = 0, out = 0;
             if (*why) break;
-            if (CALL(lantern_fulu_get_current_slot, n->store, &slot) != 0) {
+            if (CALL(LF(get_current_slot), n->store, &slot) != 0) {
                 *why = "get_current_slot status";
                 break;
             }
@@ -1614,7 +1645,7 @@ static void fc_checks(fc_node *n, tv checks, const char **why) {
                 *why = "no state for the head";
                 break;
             }
-            uint64_t st = FC_RETRY(n, why, CALL(lantern_fulu_get_proposer_head, n->store, &head, &slot, k->state, fresh_scratch(), &out),
+            uint64_t st = FC_RETRY(n, why, CALL(LF(get_proposer_head), n->store, &head, &slot, k->state, fresh_scratch(), &out),
                                    break, NULL, 0);
             if (*why) break;
             if (st != 0) *why = "get_proposer_head: status not 0";
@@ -1650,7 +1681,7 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
             n.size = need;
             wr64(n.store, need);
             uint64_t st;
-            while ((st = CALL(lantern_fulu_get_forkchoice_store, n.anchor, anchor_block, config, room, fresh_scratch(), n.store)) == 1 &&
+            while ((st = CALL(LF(get_forkchoice_store), n.anchor, anchor_block, config, room, fresh_scratch(), n.store)) == 1 &&
                    room[1] < (1u << 24)) {
                 room[1] *= 2;
                 CALL(lantern_store_size, room, &need);
@@ -1671,7 +1702,7 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
             if (tv_get(s, "tick")) {
                 uint64_t secs = tv_u64(tv_get(s, "tick")), ms = secs > UINT64_MAX / 1000 ? UINT64_MAX : secs * 1000;
                 uint64_t result = 0xA5A5A5A5A5A5A5A5u;
-                if (CALL(lantern_fulu_on_tick, n.store, &ms, &result) != 0) why = "on_tick: status not 0";
+                if (CALL(LF(on_tick), n.store, &ms, &result) != 0) why = "on_tick: status not 0";
                 else if ((result == 0) != valid) why = "on_tick: result";
             } else if (tv_get(s, "block")) {
                 fc_block(&n, parts, s, &why);
@@ -1770,7 +1801,7 @@ static void run_merkle_proof(const char *file, case_file *f) {
             if (flip) ssz[4 + 208] ^= 1;
             uint8_t *hdr = decode(type_by_name("PartialDataColumnHeader"), ssz, size, &vsize, &why);
             uint64_t out = 7;
-            if (hdr && CALL(lantern_fulu_verify_partial_data_column_header_inclusion_proof, hdr, fresh_scratch(), &out) != 0) why = "status";
+            if (hdr && CALL(LF(verify_partial_data_column_header_inclusion_proof), hdr, fresh_scratch(), &out) != 0) why = "status";
             else if (hdr && out != (uint64_t)!flip) why = flip ? "a changed branch passes" : "the proof fails";
             free(hdr);
         }
@@ -1833,7 +1864,7 @@ static uint8_t *gossip_proposer_state(fc_node *n, const uint8_t *parent_root, ui
     *size = k->size;
     uint8_t *state = copy_of(k->state, k->size);
     uint64_t result = 0, st, growth = 2;
-    while ((st = CALL(lantern_fulu_process_slots, state, &slot, config, fresh_scratch(), &result)) == 1 && !*why)
+    while ((st = CALL(LF(process_slots), state, &slot, config, fresh_scratch(), &result)) == 1 && !*why)
         state = regrow(state, size, growth *= 2, why);
     if (st != 0 || result != 0) {
         free(state);
@@ -1890,7 +1921,7 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
                 n.store = buffer(need);
                 n.size = need;
                 wr64(n.store, need);
-                while ((st = CALL(lantern_fulu_get_forkchoice_store, n.anchor, block, config, room, fresh_scratch(), n.store)) == 1 &&
+                while ((st = CALL(LF(get_forkchoice_store), n.anchor, block, config, room, fresh_scratch(), n.store)) == 1 &&
                        room[1] < (1u << 24)) {
                     room[1] *= 2;
                     CALL(lantern_store_size, room, &need);
@@ -1909,13 +1940,13 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
             } else { /* imported: on_tick to its slot, then on_block */
                 uint64_t slot = rd64(block + field_offset("BeaconBlock", 0)), result = 0;
                 uint64_t ms = rd64(n.store + STORE_GENESIS_TIME_MS) + slot * rd64(config + 104);
-                if (rd64(n.store + STORE_TIME_MS) < ms && CALL(lantern_fulu_on_tick, n.store, &ms, &result) != 0) why = "on_tick status";
+                if (rd64(n.store + STORE_TIME_MS) < ms && CALL(LF(on_tick), n.store, &ms, &result) != 0) why = "on_tick status";
                 kept_state *parent = kept_of(&n, block + field_offset("BeaconBlock", 2));
                 if (!parent) why = "a block's parent is not imported";
                 else {
                     uint64_t options[2] = {status == PAYLOAD_VALID ? PAYLOAD_VALID : PAYLOAD_NOT_VALIDATED, 1}, size = parent->size, growth = 2;
                     uint8_t *state = copy_of(parent->state, size);
-                    uint64_t st = FC_RETRY(&n, &why, CALL(lantern_fulu_on_block, n.store, signed_block, state, options, fresh_scratch(), &result),
+                    uint64_t st = FC_RETRY(&n, &why, CALL(LF(on_block), n.store, signed_block, state, options, fresh_scratch(), &result),
                                            if (node_count(&n) == node_capacity(n.store)) grow_store(&n, &why);
                                            else { state = regrow(state, &size, growth, &why); growth *= 2; }, state, size);
                     if (!why && (st != 0 || result != 0)) why = "on_block of a meta block";
@@ -2007,28 +2038,28 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
                 const char *nm = topics[t].topic;
                 void *sb = seen.b, *store = n.store;
                 if (!strcmp(nm, "beacon_block"))
-                    st = CALL(lantern_fulu_validate_beacon_block_gossip, sb, store, msg, &now, head_state, pstate, fresh_scratch(), &result);
+                    st = CALL(LF(validate_beacon_block_gossip), sb, store, msg, &now, head_state, pstate, fresh_scratch(), &result);
                 else if (!strcmp(nm, "beacon_aggregate_and_proof"))
-                    st = CALL(lantern_fulu_validate_beacon_aggregate_and_proof_gossip, sb, store, msg, &now, head_state, fresh_scratch(), &result);
+                    st = CALL(LF(validate_beacon_aggregate_and_proof_gossip), sb, store, msg, &now, head_state, fresh_scratch(), &result);
                 else if (!strcmp(nm, "beacon_attestation"))
-                    st = CALL(lantern_fulu_validate_beacon_attestation_gossip, sb, store, msg, &now, &subnet, head_state, fresh_scratch(), &result);
+                    st = CALL(LF(validate_beacon_attestation_gossip), sb, store, msg, &now, &subnet, head_state, fresh_scratch(), &result);
                 else if (!strcmp(nm, "voluntary_exit"))
-                    st = CALL(lantern_fulu_validate_voluntary_exit_gossip, sb, store, msg, &now, head_state, fresh_scratch(), &result);
+                    st = CALL(LF(validate_voluntary_exit_gossip), sb, store, msg, &now, head_state, fresh_scratch(), &result);
                 else if (!strcmp(nm, "proposer_slashing"))
-                    st = CALL(lantern_fulu_validate_proposer_slashing_gossip, sb, store, msg, head_state, fresh_scratch(), &result);
+                    st = CALL(LF(validate_proposer_slashing_gossip), sb, store, msg, head_state, fresh_scratch(), &result);
                 else if (!strcmp(nm, "attester_slashing"))
-                    st = CALL(lantern_fulu_validate_attester_slashing_gossip, sb, store, msg, head_state, fresh_scratch(), &result);
+                    st = CALL(LF(validate_attester_slashing_gossip), sb, store, msg, head_state, fresh_scratch(), &result);
                 else if (!strcmp(nm, "sync_committee_contribution_and_proof"))
-                    st = CALL(lantern_fulu_validate_sync_committee_contribution_and_proof_gossip, sb, store, msg, &now, head_state, fresh_scratch(), &result);
+                    st = CALL(LF(validate_sync_committee_contribution_and_proof_gossip), sb, store, msg, &now, head_state, fresh_scratch(), &result);
                 else if (!strcmp(nm, "sync_committee_message"))
-                    st = CALL(lantern_fulu_validate_sync_committee_message_gossip, sb, store, msg, &now, &subnet, head_state, fresh_scratch(), &result);
+                    st = CALL(LF(validate_sync_committee_message_gossip), sb, store, msg, &now, &subnet, head_state, fresh_scratch(), &result);
                 else if (!strcmp(nm, "bls_to_execution_change"))
-                    st = CALL(lantern_fulu_validate_bls_to_execution_change_gossip, sb, store, msg, &now, head_state, fresh_scratch(), &result);
+                    st = CALL(LF(validate_bls_to_execution_change_gossip), sb, store, msg, &now, head_state, fresh_scratch(), &result);
                 else if (!strcmp(nm, "data_column_sidecar"))
-                    st = CALL(lantern_fulu_validate_data_column_sidecar_gossip, sb, store, msg, &now, &subnet, head_state, pstate, kzg_settings,
+                    st = CALL(LF(validate_data_column_sidecar_gossip), sb, store, msg, &now, &subnet, head_state, pstate, kzg_settings,
                               fresh_scratch(), &result);
                 else
-                    st = CALL(lantern_fulu_validate_partial_data_column_sidecar_gossip, sb, store, msg, &now, group, &column, head_state, pstate,
+                    st = CALL(LF(validate_partial_data_column_sidecar_gossip), sb, store, msg, &now, group, &column, head_state, pstate,
                               kzg_settings, fresh_scratch(), &result);
                 if (st != 0 && memcmp(snap, seen.b, (size_t)seen.size)) why = "a non-zero status changed seen";
                 /* A failed check leaves seen as it was, except that a partial column keeps the header it
@@ -2073,6 +2104,8 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
     }
 }
 
+#endif
+
 /* ---------------------------------------------------------------- Main */
 
 int main(int argc, char **argv) {
@@ -2081,8 +2114,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     load_config(argv[1]);
-    scratch_buf = buffer(SCRATCH_BYTES);
-    const char *prefix = PRESET "-";
+    const char *prefix = PRESET "-" STR(FORK_NAME) "-";
     size_t plen = strlen(prefix);
     for (int a = 2; a < argc; a++) {
         const char *file = argv[a];
@@ -2101,6 +2133,7 @@ int main(int argc, char **argv) {
         /* The signatures-off runner runs only the handlers whose cases can have bls_setting 2. */
         if (!bls_off && !strcmp(kind, "descriptors")) run_descriptors(file, &f);
         else if (!bls_off && !strncmp(kind, "ssz_static-", 11)) run_ssz_static(file, kind + 11, &f);
+#if FORK == FORK_FULU
         else if (!bls_off && !strncmp(kind, "epoch_processing-", 17)) run_epoch(file, kind + 17, &f);
         else if (!bls_off && !strcmp(kind, "shuffling-core")) run_shuffling(file, &f);
         else if (!strncmp(kind, "operations-", 11)) run_operations(file, kind + 11, &f);
@@ -2116,7 +2149,9 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "sync-optimistic")) run_fork_choice(file, argv[1], &f, 0);
         else if (!bls_off && !strncmp(kind, "networking-gossip_", 18)) run_gossip(file, argv[1], kind + 18, &f);
         else if (!bls_off && !strcmp(kind, "merkle_proof-single_merkle_proof")) run_merkle_proof(file, &f);
+#endif
         else {
+            if (!bls_off) printf("SKIP %s: the runner has no handler for it\n", file);
             free(f.data);
             continue;
         }

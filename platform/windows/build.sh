@@ -19,12 +19,15 @@ as() { clang --target=$target $march "$@"; }
 . "$root/platform/objects.sh"
 build_objects windows "$out"
 
-# runner-<preset>.exe, and runner-<preset>-bls-off.exe for the cases made with signature checks off.
+# runner-<preset>-<fork>.exe, and runner-<preset>-<fork>-bls-off.exe for the cases made with signature checks off.
 for preset in mainnet minimal; do
-    /opt/llvm-mingw/bin/$mingw-clang $march -std=c11 -O2 -Wall -Wextra -Werror -static -DPRESET=\"$preset\" \
-        "$root/tests/runner/runner.c" -I"$root/platform/windows" -I"$root/tests/runner" \
-        "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps -o "$out/runner-$preset.exe"
-    /opt/llvm-mingw/bin/$mingw-clang $march -std=c11 -O2 -Wall -Wextra -Werror -static -DPRESET=\"$preset\" -DBLS_OFF \
-        "$root/tests/runner/runner.c" "$root/tests/runner/bls_off.c" -I"$root/platform/windows" -I"$root/tests/runner" \
-        "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_off -o "$out/runner-$preset-bls-off.exe"
+    for fork in $FORKS; do
+        flags="-std=c11 -O2 -Wall -Wextra -Werror -static -DPRESET=\"$preset\" -DFORK=$(fork_number $fork) -DFORK_NAME=$fork"
+        /opt/llvm-mingw/bin/$mingw-clang $march $flags \
+            "$root/tests/runner/runner.c" -I"$root/platform/windows" -I"$root/tests/runner" \
+            "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps -o "$out/runner-$preset-$fork.exe"
+        /opt/llvm-mingw/bin/$mingw-clang $march $flags -DBLS_OFF \
+            "$root/tests/runner/runner.c" "$root/tests/runner/bls_off.c" -I"$root/platform/windows" -I"$root/tests/runner" \
+            "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_off -o "$out/runner-$preset-$fork-bls-off.exe"
+    done
 done

@@ -1,10 +1,10 @@
-# Run the four runners of one target over vector files: one process for each
+# Run the runners of one target over vector files: one process for each
 # runner and file, as many at once as the machine has cores. PowerShell 7.
 # Usage: tests/runner/run.ps1 RUNNER_DIR VECTOR_DIR [FILE ...]
 #
 # The same as tests/runner/run.sh, for Windows: RUNNER_DIR holds
-# runner-<preset>.exe and runner-<preset>-bls-off.exe, JOBS is the number of
-# processes at once, and the output and status are those of run.sh.
+# runner-<preset>-<fork>.exe and runner-<preset>-<fork>-bls-off.exe, JOBS is the
+# number of processes at once, and the output and status are those of run.sh.
 param(
     [Parameter(Mandatory)] [string] $RunnerDir,
     [Parameter(Mandatory)] [string] $VectorDir,
@@ -20,11 +20,16 @@ $logs = (New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()
 
 try {
     # One work item for each runner and file, the largest files first, so that
-    # the longest processes start early. A file goes to the runners of its preset.
+    # the longest processes start early. A file <preset>-<fork>-*.bin goes to the
+    # two runners of its preset and fork; other files are left out.
+    $forks = 'phase0', 'altair', 'bellatrix', 'capella', 'deneb', 'electra', 'fulu'
     $work = $Files | ForEach-Object { Get-Item (Join-Path $VectorDir $_) } | Sort-Object Length -Descending | ForEach-Object {
-        $preset = $_.Name.Split('-')[0]
-        "runner-$preset $($_.Name)"
-        "runner-$preset-bls-off $($_.Name)"
+        $parts = $_.Name.Split('-')
+        $runner = "runner-$($parts[0])-$($parts[1])"
+        if (Test-Path (Join-Path $RunnerDir "$runner$exe")) {
+            "$runner $($_.Name)"
+            "$runner-bls-off $($_.Name)"
+        }
     }
 
     # Each process writes runner.file.log, and its exit status as the last line.
@@ -37,7 +42,8 @@ try {
     }
 
     $status = 0
-    foreach ($runner in 'runner-mainnet', 'runner-mainnet-bls-off', 'runner-minimal', 'runner-minimal-bls-off') {
+    $runners = foreach ($preset in 'mainnet', 'minimal') { foreach ($fork in $forks) { "runner-$preset-$fork"; "runner-$preset-$fork-bls-off" } }
+    foreach ($runner in $runners) {
         $runnerLogs = Get-ChildItem $logs -Filter "$runner.*.log" | Where-Object { $_.Name.StartsWith("$runner.") } | Sort-Object Name
         if (-not $runnerLogs) { continue }
         "== $runner"

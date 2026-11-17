@@ -1,12 +1,14 @@
 #!/bin/sh
-# Run the four runners of one target over vector files: one process for each
+# Run the runners of one target over vector files: one process for each
 # runner and file, as many at once as the machine has cores.
 # Usage: tests/runner/run.sh RUNNER_DIR VECTOR_DIR [FILE ...]
 #
-# RUNNER_DIR holds runner-<preset> and runner-<preset>-bls-off. With no FILE,
-# every .bin file in VECTOR_DIR runs. QEMU is the command that runs the runners
-# for an ISA other than the host's. JOBS is the number of processes at once,
-# the number of cores when unset. tests/runner/run.ps1 does the same on Windows.
+# RUNNER_DIR holds runner-<preset>-<fork> and runner-<preset>-<fork>-bls-off.
+# A file <preset>-<fork>-*.bin goes to the two runners of its preset and fork;
+# other files are left out. With no FILE, every .bin file in VECTOR_DIR runs.
+# QEMU is the command that runs the runners for an ISA other than the host's.
+# JOBS is the number of processes at once, the number of cores when unset.
+# tests/runner/run.ps1 does the same on Windows.
 #
 # For each runner it prints the file lines in name order, the largest stack of
 # each function over its processes, and the totals. The status is 0 only when
@@ -24,11 +26,15 @@ logs=$(mktemp -d)
 trap 'rm -rf "$logs"' EXIT
 
 # One work line for each runner and file, the largest files first, so that the
-# longest processes start early. A file goes to the runners of its preset.
+# longest processes start early.
+forks="phase0 altair bellatrix capella deneb electra fulu"
 for file in $(cd "$vectors" && ls -S $files); do
     preset=${file%%-*}
-    echo "runner-$preset $file"
-    echo "runner-$preset-bls-off $file"
+    rest=${file#*-}
+    runner=runner-$preset-${rest%%-*}
+    [ -e "$runners/$runner" ] || continue
+    echo "$runner $file"
+    echo "$runner-bls-off $file"
 done > "$logs/work"
 
 # Each process writes runner.file.log, and its exit status as the last line.
@@ -38,7 +44,8 @@ xargs -n 2 -P "$jobs" sh -c '
 ' sh "$runners" "$vectors" "$logs" < "$logs/work" || true
 
 status=0
-for runner in runner-mainnet runner-mainnet-bls-off runner-minimal runner-minimal-bls-off; do
+for runner in $(for preset in mainnet minimal; do for fork in $forks; do
+                    echo runner-$preset-$fork runner-$preset-$fork-bls-off; done; done); do
     set -- "$logs/$runner".*.log
     [ -e "$1" ] || continue
     echo "== $runner${QEMU:+ (under $QEMU)}"
