@@ -34,7 +34,8 @@ build/linux-x86_64/runner-minimal-fulu ~/.cache/lantern/vectors minimal-fulu-ope
 - Every runner also runs the state transition files of its fork: epoch processing, operations, sanity, finality, random, rewards and shuffling.
 - The runners of altair to fulu also run `fork` (the upgrade of a state of the fork before) and `transition` (blocks across the fork epoch: the blocks up to `fork_block` with the fork before, process_slots of the fork before to the fork slot, the upgrade, then the other blocks; a block on the fork slot gets its signature check, process_block and state root check, since its slots ran before the upgrade).
 - The phase0 runners also run `genesis` (initialization and validity).
-- The runners of altair to fulu also run fork choice and its compliance cases; those of bellatrix to fulu also run sync. The fulu runners also run networking.
+- The runners of altair to fulu also run fork choice and its compliance cases; those of bellatrix to fulu also run sync.
+- Every runner runs the gossip validation files of its fork (`networking`); the fulu runners also run custody. The runners of deneb to fulu run `merkle_proof`: the proof of a blob commitment for deneb and electra, of the commitment list for fulu.
 
 ## Buffers
 

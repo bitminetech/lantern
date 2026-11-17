@@ -2,6 +2,7 @@
  * Networking rules, x86-64. Requirements: docs/reference/networking.md.
  */
 
+.if FORK >= FORK_FULU
 /*
  * rbx out entries, rbp NUMBER_OF_CUSTODY_GROUPS, r12 custody_group_count, r13 groups found, r14 out.
  * Locals: L current_id (32), L+32 the digest (32).
@@ -107,6 +108,7 @@ SPEC_LEAF compute_columns_for_custody_group
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     ret
 SPEC_END compute_columns_for_custody_group
+.endif
 
 /* ---------------------------------------------------------------- Seen */
 
@@ -586,6 +588,7 @@ SPEC_FUNCTION validate_voluntary_exit_gossip
     jc      3f
     cmp     %rax, (L + 8)(%rsp)
     jb      5f
+.if FORK >= FORK_DENEB
     movl    $DOMAIN_VOLUNTARY_EXIT, (L + 24)(%rsp)  # [REJECT] the signature: compute_domain(DOMAIN_VOLUNTARY_EXIT, CAPELLA_FORK_VERSION, gvr)
     lea     (L + 24)(%rsp), %rdi
     lea     (Store_config + CONFIG_CAPELLA_FORK_VERSION)(%rbp), %rsi
@@ -603,6 +606,19 @@ SPEC_FUNCTION validate_voluntary_exit_gossip
     lea     SignedVoluntaryExit_signature(%r12), %r8
     mov     %r15, %r9
     call    verify_with_domain
+.else
+    lea     SignedVoluntaryExit_signature(%r12), %rax   # [REJECT] the signature: get_domain(state, DOMAIN_VOLUNTARY_EXIT, voluntary_exit.epoch)
+    mov     %rax, S7(%rsp)
+    mov     %r15, S8(%rsp)
+    mov     %r14, %rdi
+    mov     $DOMAIN_VOLUNTARY_EXIT, %esi
+    mov     (SignedVoluntaryExit_message + VoluntaryExit_epoch)(%r12), %rdx
+    ADDRESS %rcx, lantern_type_VoluntaryExit
+    lea     SignedVoluntaryExit_message(%r12), %r8
+    mov     S9(%rsp), %r9
+    add     $Validator_pubkey, %r9
+    call    verify_signed
+.endif
     test    %rax, %rax
     jnz     7f
     test    %rdx, %rdx
@@ -711,6 +727,7 @@ SPEC_FUNCTION validate_proposer_slashing_gossip
     GOSSIP_TAIL L, 32
 SPEC_END validate_proposer_slashing_gossip
 
+.if FORK >= FORK_CAPELLA
 /*
  * rbx seen, rbp store, r12 signed change, r13 current_time_ms, r14 head state, r15 scratch; S9 validator,
  * S10 validator index. Locals: L result, L+8 digest (32), L+40 domain type, L+48 domain (32).
@@ -790,9 +807,11 @@ SPEC_FUNCTION validate_bls_to_execution_change_gossip
     jmp     8f
     GOSSIP_TAIL L, 80
 SPEC_END validate_bls_to_execution_change_gossip
+.endif
 
 /* ---------------------------------------------------------------- Gossip: attestations */
 
+.if FORK >= FORK_ELECTRA
 /*
  * rbx seen, rbp store, r12 single attestation, r13 current_time_ms, r14 head state, r15 scratch;
  * S9 scratch size, S10 validator count. Locals: L result, L+8 subnet_id, L+16 committees_per_slot,
@@ -939,6 +958,171 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     jmp     8f
     GOSSIP_TAIL L, 48
 SPEC_END validate_beacon_attestation_gossip
+.else
+/*
+ * rbx seen, rbp store, r12 attestation, r13 current_time_ms, r14 head state, r15 scratch;
+ * S9 scratch size, S10 validator count. Locals: L result, L+8 subnet_id, L+16 committees_per_slot,
+ * L+24 committee list, L+32 block node, L+40 participant index, L+48 bit length, L+56 bit count.
+ */
+SPEC_FUNCTION validate_beacon_attestation_gossip
+    ENTER 64
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     (%rcx), %r13
+    mov     (%r8), %rax
+    mov     %rax, (L + 8)(%rsp)
+    mov     %r9, %r14
+    mov     (64 + 96)(%rsp), %r15           # the seventh and eighth arguments
+    mov     (64 + 96 + 8)(%rsp), %rax
+    mov     %rax, L(%rsp)
+    movq    $0, (%rax)
+    NEED_SCRATCH %r15, %r14, 3, 9f
+    mov     (%r15), %rax
+    mov     %rax, S9(%rsp)
+    mov     (BeaconState_validators + 8)(%r14), %rax
+    mov     %rax, S10(%rsp)
+    mov     %rbp, %rdi                      # [IGNORE] the block voted for has been seen; [REJECT] it passed validation
+    mov     %rbx, %rsi
+    lea     (Attestation_data + AttestationData_beacon_block_root)(%r12), %rdx
+    call    block_lookup
+    test    %rdx, %rdx
+    jz      4f
+    cmp     $2, %rdx
+    jne     5f
+    mov     %rax, (L + 32)(%rsp)
+    mov     S9(%rsp), %rax                  # [REJECT] the committee index is in range
+    mov     %rax, (%r15)
+    mov     %r14, %rdi
+    lea     (Attestation_data + AttestationData_target + Checkpoint_epoch)(%r12), %rsi
+    mov     %r15, %rdx
+    lea     (L + 16)(%rsp), %rcx
+    call    lantern_get_committee_count_per_slot
+    CHECK_RESULT L, 7f, 8f
+    mov     (L + 16)(%rsp), %rcx
+    mov     (Attestation_data + AttestationData_index)(%r12), %rdx
+    cmp     %rcx, %rdx
+    jae     5f
+    mov     (Attestation_data + AttestationData_slot)(%r12), %rax    # [REJECT] the subnet: compute_subnet_for_attestation
+    and     $(SLOTS_PER_EPOCH - 1), %rax
+    imul    %rcx, %rax
+    add     %rdx, %rax
+    and     $(ATTESTATION_SUBNET_COUNT - 1), %rax
+    cmp     (L + 8)(%rsp), %rax
+    jne     5f
+.if FORK >= FORK_DENEB
+    mov     %rbp, %rdi                      # [IGNORE] not from a future slot
+    mov     (Attestation_data + AttestationData_slot)(%r12), %rsi
+    mov     %r13, %rdx
+    call    is_future_slot
+    test    %rax, %rax
+    jnz     4f
+    mov     %rbp, %rdi                      # [IGNORE] the current or previous epoch
+    mov     (Attestation_data + AttestationData_slot)(%r12), %rsi
+    shr     $LOG2_SLOTS_PER_EPOCH, %rsi
+    mov     %r13, %rdx
+    call    is_current_or_previous_epoch
+    test    %rax, %rax
+    jz      4f
+.else
+    mov     %rbp, %rdi                      # [IGNORE] the slot is within ATTESTATION_PROPAGATION_SLOT_RANGE
+    mov     (Attestation_data + AttestationData_slot)(%r12), %rsi
+    mov     (Store_config + CONFIG_ATTESTATION_PROPAGATION_SLOT_RANGE)(%rbp), %rdx
+    mov     %r13, %rcx
+    call    is_within_slot_range
+    test    %rax, %rax
+    jz      4f
+.endif
+    mov     (Attestation_data + AttestationData_slot)(%r12), %rax    # [REJECT] the epoch matches the target
+    shr     $LOG2_SLOTS_PER_EPOCH, %rax
+    cmp     (Attestation_data + AttestationData_target + Checkpoint_epoch)(%r12), %rax
+    jne     5f
+    PART    %rdi, %rax, %r12, Attestation_aggregation_bits  # [REJECT] unaggregated: exactly one bit set
+    mov     %rax, (L + 48)(%rsp)
+    lea     (L + 48)(%rsp), %rsi
+    lea     (L + 56)(%rsp), %rdx
+    call    lantern_get_set_bit_count
+    cmpq    $1, (L + 56)(%rsp)
+    jne     5f
+    mov     S10(%rsp), %rcx                 # committee = get_beacon_committee(state, data.slot, committee_index)
+    mov     S9(%rsp), %rdx
+    SCRATCH_LIST %rax, %r15, %rdx, 0, %rcx
+    mov     %rax, (L + 24)(%rsp)
+    SCRATCH_GIVE %r15, %rdx, 1, %rcx
+    mov     %r14, %rdi
+    lea     (Attestation_data + AttestationData_slot)(%r12), %rsi
+    lea     (Attestation_data + AttestationData_index)(%r12), %rdx
+    mov     %r15, %rcx
+    mov     (L + 24)(%rsp), %r8
+    call    lantern_get_beacon_committee
+    CHECK_RESULT L, 7f, 8f
+    mov     (L + 24)(%rsp), %rsi            # [REJECT] len(aggregation_bits) == len(committee)
+    mov     LIST_COUNT(%rsi), %rax
+    cmp     (L + 48)(%rsp), %rax
+    jne     5f
+    PART    %rdi, %rax, %r12, Attestation_aggregation_bits  # participant_index: the committee member of the set bit
+    xor     %ecx, %ecx
+1:  bt      %rcx, (%rdi)
+    jc      2f
+    inc     %rcx
+    jmp     1b
+2:  mov     (L + 24)(%rsp), %rsi
+    mov     LIST_FIXED(%rsi,%rcx,8), %rcx
+    mov     %rcx, (L + 40)(%rsp)
+    mov     %rbx, %rdi                      # [IGNORE] no attestation seen for (target epoch, participant)
+    mov     $SEEN_ATTESTATION, %esi
+    mov     (Attestation_data + AttestationData_target + Checkpoint_epoch)(%r12), %rdx
+    xor     %r8d, %r8d
+    call    seen_find_key
+    test    %rax, %rax
+    jnz     4f
+    mov     (L + 40)(%rsp), %rdx            # [REJECT] the signature: is_valid_indexed_attestation of the one attester
+    VALIDATOR_AT %r9, %r14, %rdx, 5f
+    mov     S10(%rsp), %rcx
+    mov     S9(%rsp), %rdx
+    SCRATCH_GIVE %r15, %rdx, 1, %rcx
+    lea     Attestation_signature(%r12), %rax
+    mov     %rax, S7(%rsp)
+    mov     %r15, S8(%rsp)
+    mov     %r14, %rdi
+    mov     $DOMAIN_BEACON_ATTESTER, %esi
+    mov     (Attestation_data + AttestationData_target + Checkpoint_epoch)(%r12), %rdx
+    ADDRESS %rcx, lantern_type_AttestationData
+    lea     Attestation_data(%r12), %r8
+    add     $Validator_pubkey, %r9
+    call    verify_signed
+    test    %rax, %rax
+    jnz     7f
+    test    %rdx, %rdx
+    jz      5f
+    mov     %rbp, %rdi                      # [REJECT] the target block is an ancestor of the LMD vote block
+    mov     (L + 32)(%rsp), %rsi
+    mov     (Attestation_data + AttestationData_target + Checkpoint_epoch)(%r12), %rdx
+    lea     (Attestation_data + AttestationData_target + Checkpoint_root)(%r12), %rcx
+    call    checkpoint_is
+    CHECK_RESULT L, 7f, 8f
+    test    %rdx, %rdx
+    jz      5f
+    mov     %rbp, %rdi                      # [IGNORE] the finalized checkpoint is an ancestor of the block
+    mov     (L + 32)(%rsp), %rsi
+    call    finalized_is_ancestor
+    CHECK_RESULT L, 7f, 8f
+    test    %rdx, %rdx
+    jz      4f
+    mov     %rbx, %rdi                      # seen.attestation_validator_epochs.add(...)
+    call    seen_key_room
+    test    %rax, %rax
+    jz      9f
+    mov     %rbx, %rdi
+    mov     $SEEN_ATTESTATION, %esi
+    mov     (Attestation_data + AttestationData_target + Checkpoint_epoch)(%r12), %rdx
+    mov     (L + 40)(%rsp), %rcx
+    xor     %r8d, %r8d
+    call    seen_add_key
+    jmp     8f
+    GOSSIP_TAIL L, 64
+SPEC_END validate_beacon_attestation_gossip
+.endif
 
 /*
  * rbx seen, rbp store, r12 signed aggregate and proof, r13 current_time_ms, r14 head state, r15 scratch;
@@ -984,6 +1168,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     %rcx, (L + 144)(%rsp)
     mov     (Attestation_data + AttestationData_target + Checkpoint_epoch)(%rdx), %rcx
     mov     %rcx, (L + 136)(%rsp)
+.if FORK >= FORK_ELECTRA
     cmpq    $0, (Attestation_data + AttestationData_index)(%rdx)  # [REJECT] data.index is zero
     jne     5f
     xor     %ecx, %ecx                      # [REJECT] exactly one committee in committee_bits
@@ -998,6 +1183,10 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     jmp     1b
 2:  cmp     $1, %rsi
     jne     5f
+.else
+    mov     (Attestation_data + AttestationData_index)(%rdx), %rcx    # index = aggregate.data.index
+    mov     %rcx, (L + 8)(%rsp)
+.endif
     ADDRESS %rdi, lantern_type_AttestationData  # [IGNORE] no seen aggregate with a superset of the bits
     lea     Attestation_data(%rdx), %rsi
     mov     %r15, %rdx
@@ -1013,7 +1202,11 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     %rbx, %rdi
     mov     $SEEN_AGGREGATE, %esi
     lea     (L + 24)(%rsp), %rdx
-    mov     (L + 8)(%rsp), %rcx
+.if FORK >= FORK_ELECTRA
+    mov     (L + 8)(%rsp), %rcx             # the key: (data root, committee index)
+.else
+    xor     %ecx, %ecx                      # the key: the data root
+.endif
     xor     %r8d, %r8d
     call    seen_superset
     test    %rax, %rax
@@ -1045,6 +1238,7 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     (L + 8)(%rsp), %rax
     cmp     (L + 16)(%rsp), %rax
     jae     5f
+.if FORK >= FORK_DENEB
     mov     %rbp, %rdi                      # [IGNORE] not from a future slot
     mov     S9(%rsp), %rsi
     mov     (Attestation_data + AttestationData_slot)(%rsi), %rsi
@@ -1060,6 +1254,16 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     call    is_current_or_previous_epoch
     test    %rax, %rax
     jz      4f
+.else
+    mov     %rbp, %rdi                      # [IGNORE] the slot is within ATTESTATION_PROPAGATION_SLOT_RANGE
+    mov     S9(%rsp), %rsi
+    mov     (Attestation_data + AttestationData_slot)(%rsi), %rsi
+    mov     (Store_config + CONFIG_ATTESTATION_PROPAGATION_SLOT_RANGE)(%rbp), %rdx
+    mov     %r13, %rcx
+    call    is_within_slot_range
+    test    %rax, %rax
+    jz      4f
+.endif
     mov     S9(%rsp), %rax                  # [REJECT] the epoch matches the target
     mov     (Attestation_data + AttestationData_slot)(%rax), %rax
     shr     $LOG2_SLOTS_PER_EPOCH, %rax
@@ -1208,7 +1412,11 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     %rbx, %rdi
     mov     $SEEN_AGGREGATE, %esi
     lea     (L + 24)(%rsp), %rdx
-    mov     (L + 8)(%rsp), %rcx
+.if FORK >= FORK_ELECTRA
+    mov     (L + 8)(%rsp), %rcx             # the key: (data root, committee index)
+.else
+    xor     %ecx, %ecx                      # the key: the data root
+.endif
     xor     %r8d, %r8d
     call    seen_add_bits
     jmp     8f
@@ -1217,6 +1425,7 @@ SPEC_END validate_beacon_aggregate_and_proof_gossip
 
 /* ---------------------------------------------------------------- Gossip: sync committee */
 
+.if FORK >= FORK_ALTAIR
 .set SYNC_SUBCOMMITTEE_SIZE, SYNC_COMMITTEE_SIZE / SYNC_COMMITTEE_SUBNET_COUNT
 .set SYNC_SUB_KEYS, 24 + 48 * SYNC_SUBCOMMITTEE_SIZE    /* a BlsPublicKeyList of one subcommittee */
 .if (SYNC_SUBCOMMITTEE_SIZE / TARGET_AGGREGATORS_PER_SYNC_SUBCOMMITTEE) > 1
@@ -1546,6 +1755,7 @@ SPEC_FUNCTION validate_sync_committee_contribution_and_proof_gossip
     jmp     8f
     GOSSIP_TAIL L, 208
 SPEC_END validate_sync_committee_contribution_and_proof_gossip
+.endif
 
 /* ---------------------------------------------------------------- Gossip: attester slashings */
 
@@ -1752,23 +1962,36 @@ SPEC_END validate_attester_slashing_gossip
 /*
  * rbx seen, rbp store, r12 signed block, r13 current_time_ms, r14 head state, r15 block; S9 proposer state,
  * S10 parent node. Locals: L result, L+8 scratch, L+16 blob parameters (16), L+32 expected proposer,
- * L+40 epoch, L+48 time.
+ * L+40 epoch, L+48 time, L+56 parent payload status, L+64 a predicate, L+72 bellatrix: the justified state.
  */
 SPEC_FUNCTION validate_beacon_block_gossip
-    ENTER 64
+    ENTER 80
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     %rdx, %r12
     mov     (%rcx), %r13
     mov     %r8, %r14
     mov     %r9, S9(%rsp)
-    mov     (64 + 96)(%rsp), %rax           # the seventh and eighth arguments
+.if FORK == FORK_BELLATRIX
+    mov     (80 + 96)(%rsp), %rax           # bellatrix: the seventh to ninth arguments, the justified state first
+    mov     %rax, (L + 72)(%rsp)
+    mov     (80 + 96 + 8)(%rsp), %rax
     mov     %rax, (L + 8)(%rsp)
-    mov     (64 + 96 + 8)(%rsp), %rax
+    mov     (80 + 96 + 16)(%rsp), %rax
+.else
+    mov     (80 + 96)(%rsp), %rax           # the seventh and eighth arguments
+    mov     %rax, (L + 8)(%rsp)
+    mov     (80 + 96 + 8)(%rsp), %rax
+.endif
     mov     %rax, L(%rsp)
     movq    $0, (%rax)
     mov     (L + 8)(%rsp), %rax
+.if FORK >= FORK_FULU
     NEED_SCRATCH %rax, %r14, 0, 9f
+.else
+    mov     S9(%rsp), %rcx
+    NEED_SCRATCH %rax, %rcx, 2, 9f          # get_beacon_proposer_index of the proposer state takes S(2)
+.endif
     PART    %r15, %rax, %r12, SignedBeaconBlock_message
     mov     %rbx, %rdi                      # [IGNORE] the first block for (slot, proposer)
     mov     $SEEN_PROPOSER_SLOT, %esi
@@ -1797,11 +2020,31 @@ SPEC_FUNCTION validate_beacon_block_gossip
     mov     %rax, S10(%rsp)
     cmp     $2, %rdx
     je      1f
+.if FORK >= FORK_CAPELLA
     cmp     $PAYLOAD_STATUS_NOT_VALIDATED, %rcx     # no post-state: [REJECT] with an optimistic payload, else [IGNORE]
     je      5f
     jmp     4f
-1:  cmp     $PAYLOAD_STATUS_INVALIDATED, %rcx       # [IGNORE] the parent's payload is invalid
+.elseif FORK == FORK_BELLATRIX
+    mov     %rcx, (L + 56)(%rsp)
+    mov     (L + 72)(%rsp), %rdi            # no post-state: is_execution_enabled(justified checkpoint state, block.body)
+    PART    %rsi, %rax, %r15, BeaconBlock_body
+    lea     (L + 64)(%rsp), %rdx
+    call    lantern_is_execution_enabled
+    cmpq    $0, (L + 64)(%rsp)
+    je      5f                              # [REJECT] the parent failed validation, execution not enabled
+    cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, (L + 56)(%rsp)   # [REJECT] with an optimistic payload, else [IGNORE]
+    je      5f
+    jmp     4f
+.else
+    jmp     5f                              # [REJECT] the parent failed validation
+.endif
+1:
+.if FORK >= FORK_CAPELLA
+    cmp     $PAYLOAD_STATUS_INVALIDATED, %rcx       # [IGNORE] the parent's payload is invalid
     je      4f
+.elseif FORK == FORK_BELLATRIX
+    mov     %rcx, (L + 56)(%rsp)            # parent_payload_status, for the payload checks
+.endif
     mov     BeaconBlock_proposer_index(%r15), %rax  # [REJECT] the proposer index is valid
     VALIDATOR_AT %r9, %r14, %rax, 5f
     lea     SignedBeaconBlock_signature(%r12), %rax # [REJECT] the proposer signature
@@ -1820,6 +2063,15 @@ SPEC_FUNCTION validate_beacon_block_gossip
     jnz     7f
     test    %rdx, %rdx
     jz      5f
+.if FORK == FORK_BELLATRIX
+    mov     %r14, %rdi                      # if is_execution_enabled(state, block.body):
+    PART    %rsi, %rax, %r15, BeaconBlock_body
+    lea     (L + 64)(%rsp), %rdx
+    call    lantern_is_execution_enabled
+    cmpq    $0, (L + 64)(%rsp)
+    je      2f
+.endif
+.if FORK >= FORK_BELLATRIX
     lea     BeaconState_genesis_time(%r14), %rdi    # [REJECT] the payload timestamp is compute_time_at_slot
     lea     BeaconBlock_slot(%r15), %rsi
     lea     Store_config(%rbp), %rdx
@@ -1831,6 +2083,12 @@ SPEC_FUNCTION validate_beacon_block_gossip
     mov     ExecutionPayload_timestamp(%rdx), %rax
     cmp     (L + 48)(%rsp), %rax
     jne     5f
+.endif
+.if FORK == FORK_BELLATRIX
+    cmpq    $PAYLOAD_STATUS_INVALIDATED, (L + 56)(%rsp)    # [IGNORE] the parent passed validation but its payload is invalid
+    je      4f
+2:
+.endif
     mov     S10(%rsp), %rax                 # [REJECT] a higher slot than the parent
     NODE    %rcx, %rbp, %rax
     mov     BlockNode_slot(%rcx), %rax
@@ -1842,6 +2100,7 @@ SPEC_FUNCTION validate_beacon_block_gossip
     CHECK_RESULT L, 7f, 8f
     test    %rdx, %rdx
     jz      5f
+.if FORK >= FORK_FULU
     mov     BeaconBlock_slot(%r15), %rax    # [REJECT] at most max_blobs_per_block commitments
     shr     $LOG2_SLOTS_PER_EPOCH, %rax
     mov     %rax, (L + 40)(%rsp)
@@ -1849,12 +2108,26 @@ SPEC_FUNCTION validate_beacon_block_gossip
     lea     Store_config(%rbp), %rsi
     lea     (L + 16)(%rsp), %rdx
     call    lantern_get_blob_parameters
+.elseif FORK == FORK_ELECTRA
+    mov     (Store_config + CONFIG_MAX_BLOBS_PER_BLOCK_ELECTRA)(%rbp), %rax     # [REJECT] at most MAX_BLOBS_PER_BLOCK_ELECTRA commitments
+    mov     %rax, (L + 24)(%rsp)
+.elseif FORK == FORK_DENEB
+    mov     (Store_config + CONFIG_MAX_BLOBS_PER_BLOCK)(%rbp), %rax             # [REJECT] at most MAX_BLOBS_PER_BLOCK commitments
+    mov     %rax, (L + 24)(%rsp)
+.endif
+.if FORK >= FORK_DENEB
     PART    %rax, %rcx, %r15, BeaconBlock_body
     mov     (BeaconBlockBody_blob_kzg_commitments + 8)(%rax), %rax
     cmp     (L + 24)(%rsp), %rax
     ja      5f
+.endif
     mov     S9(%rsp), %rdi                  # [REJECT] the expected proposer of the parent state at the slot
+.if FORK >= FORK_FULU
     lea     (L + 32)(%rsp), %rsi
+.else
+    mov     (L + 8)(%rsp), %rsi
+    lea     (L + 32)(%rsp), %rdx
+.endif
     call    lantern_get_beacon_proposer_index
     CHECK_RESULT L, 7f, 8f
     mov     (L + 32)(%rsp), %rax
@@ -1871,11 +2144,12 @@ SPEC_FUNCTION validate_beacon_block_gossip
     xor     %r8d, %r8d
     call    seen_add_key
     jmp     8f
-    GOSSIP_TAIL L, 64
+    GOSSIP_TAIL L, 80
 SPEC_END validate_beacon_block_gossip
 
 /* ---------------------------------------------------------------- Columns */
 
+.if FORK >= FORK_FULU
 /*
  * get_subtree_index(get_generalized_index(BeaconBlockBody, "blob_kzg_commitments")): field 11 of the 13 fields
  * of BeaconBlockBody, whose tree has 16 leaves, so the generalized index is 16 + 11 = 27 and the subtree index 11.
@@ -2114,8 +2388,11 @@ SPEC_FUNCTION verify_partial_data_column_sidecar_kzg_proofs
     LEAVE 32
 SPEC_END verify_partial_data_column_sidecar_kzg_proofs
 
+.endif
+
+.if FORK >= FORK_DENEB
 /*
- * L0: the checks of a block header shared by the column topics, from is_future_slot to the finalized ancestor:
+ * L0: the checks of a block header shared by the sidecar topics, from is_future_slot to the finalized ancestor:
  * rax = status, rdx = LANTERN_VALID, LANTERN_GOSSIP_IGNORE or LANTERN_GOSSIP_REJECT, rcx = the parent node.
  * Takes rbx seen, rbp store, r13 current_time_ms, r14 head state, r15 scratch, and rdi the SignedBeaconBlockHeader.
  * rbx-r15 are the caller's and stay unchanged. Locals: rsp+0 and rsp+8 the stack arguments of verify_signed,
@@ -2191,6 +2468,176 @@ LOCAL_FUNCTION header_checks
     mov     %rax, %rdx
     jmp     8b
 END_FUNCTION header_checks
+.endif
+
+/* ---------------------------------------------------------------- Blob sidecars */
+
+.if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+.if FORK == FORK_ELECTRA
+.set BLOB_SUBNETS, CONFIG_BLOB_SIDECAR_SUBNET_COUNT_ELECTRA
+.set BLOB_LIMIT, CONFIG_MAX_BLOBS_PER_BLOCK_ELECTRA
+.else
+.set BLOB_SUBNETS, CONFIG_BLOB_SIDECAR_SUBNET_COUNT
+.set BLOB_LIMIT, CONFIG_MAX_BLOBS_PER_BLOCK
+.endif
+
+/* (blob_index, config, out): blob_index % BLOB_SIDECAR_SUBNET_COUNT, _ELECTRA from electra on. */
+SPEC_LEAF compute_subnet_for_blob_sidecar
+    mov     BLOB_SUBNETS(%rsi), %rcx
+    test    %rcx, %rcx
+    jz      9f
+    mov     (%rdi), %rax
+    mov     %rdx, %r8
+    xor     %edx, %edx
+    div     %rcx
+    mov     %rdx, (%r8)
+    RETURN_OK
+9:  mov     $LANTERN_INVALID_OVERFLOW, %eax
+    ret
+SPEC_END compute_subnet_for_blob_sidecar
+
+/*
+ * (sidecar, out): is_valid_merkle_branch of hash_tree_root(kzg_commitment) at the subtree index of
+ * blob_kzg_commitments[index] against the header's body_root. rbx sidecar, rbp out.
+ * Locals: L the commitment as two chunks (64), L+64 its root (32), L+96 depth, L+104 index.
+ */
+SPEC_FUNCTION verify_blob_sidecar_inclusion_proof
+    ENTER 112
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    lea     L(%rsp), %rdi
+    mov     $64, %esi
+    call    lantern_zero
+    lea     L(%rsp), %rdi
+    lea     BlobSidecar_kzg_commitment(%rbx), %rsi
+    mov     $48, %edx
+    call    lantern_copy
+    lea     L(%rsp), %rdi                   # hash_tree_root(Bytes48): its two chunks
+    mov     $64, %esi
+    lea     (L + 64)(%rsp), %rdx
+    call    sha256_short
+    movq    $KZG_COMMITMENT_INCLUSION_PROOF_DEPTH, (L + 96)(%rsp)
+    mov     BlobSidecar_index(%rbx), %rax   # field 11 of the body, the list's data root, then the index
+    add     $(11 << (KZG_COMMITMENT_INCLUSION_PROOF_DEPTH - 4)), %rax
+    mov     %rax, (L + 104)(%rsp)
+    lea     (L + 64)(%rsp), %rdi
+    lea     BlobSidecar_kzg_commitment_inclusion_proof(%rbx), %rsi
+    lea     (L + 96)(%rsp), %rdx
+    lea     (L + 104)(%rsp), %rcx
+    lea     (BlobSidecar_signed_block_header + SignedBeaconBlockHeader_message + BeaconBlockHeader_body_root)(%rbx), %r8
+    mov     %rbp, %r9
+    call    lantern_is_valid_merkle_branch
+    LEAVE 112
+SPEC_END verify_blob_sidecar_inclusion_proof
+.if (1 << (KZG_COMMITMENT_INCLUSION_PROOF_DEPTH - 5)) != MAX_BLOB_COMMITMENTS_PER_BLOCK
+.error "verify_blob_sidecar_inclusion_proof assumes a body of 16 leaves and a list of MAX_BLOB_COMMITMENTS_PER_BLOCK"
+.endif
+
+/*
+ * rbx seen, rbp store, r12 sidecar, r13 current_time_ms, r14 head state, r15 scratch; S9 the block header,
+ * S10 scratch size. Locals: L result, L+8 subnet_id, L+16 proposer state, L+24 settings, L+32 out,
+ * L+40 expected proposer.
+ */
+SPEC_FUNCTION validate_blob_sidecar_gossip
+    ENTER 48
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     (%rcx), %r13
+    mov     (%r8), %rax
+    mov     %rax, (L + 8)(%rsp)
+    mov     %r9, %r14
+    mov     (48 + 96)(%rsp), %rax           # the seventh to tenth arguments
+    mov     %rax, (L + 16)(%rsp)
+    mov     (48 + 96 + 8)(%rsp), %rax
+    mov     %rax, (L + 24)(%rsp)
+    mov     (48 + 96 + 16)(%rsp), %r15
+    mov     (48 + 96 + 24)(%rsp), %rax
+    mov     %rax, L(%rsp)
+    movq    $0, (%rax)
+    mov     (L + 16)(%rsp), %rcx
+    NEED_SCRATCH %r15, %rcx, 2, 9f          # get_beacon_proposer_index of the proposer state takes S(2)
+    mov     (%r15), %rax
+    mov     %rax, S10(%rsp)
+    lea     (BlobSidecar_signed_block_header + SignedBeaconBlockHeader_message)(%r12), %rax
+    mov     %rax, S9(%rsp)
+    mov     %rbx, %rdi                      # [IGNORE] the first sidecar for (slot, proposer, index)
+    mov     $SEEN_BLOB_SIDECAR, %esi
+    mov     BeaconBlockHeader_slot(%rax), %rdx
+    mov     BeaconBlockHeader_proposer_index(%rax), %rcx
+    mov     BlobSidecar_index(%r12), %r8
+    call    seen_find_key
+    test    %rax, %rax
+    jnz     4f
+    mov     BlobSidecar_index(%r12), %rax   # [REJECT] the index is below the blob limit
+    cmp     (Store_config + BLOB_LIMIT)(%rbp), %rax
+    jae     5f
+    lea     BlobSidecar_index(%r12), %rdi   # [REJECT] the subnet: compute_subnet_for_blob_sidecar
+    lea     Store_config(%rbp), %rsi
+    lea     (L + 32)(%rsp), %rdx
+    call    lantern_compute_subnet_for_blob_sidecar
+    CHECK_RESULT L, 7f, 8f
+    mov     (L + 8)(%rsp), %rax
+    cmp     (L + 32)(%rsp), %rax
+    jne     5f
+    lea     BlobSidecar_signed_block_header(%r12), %rdi     # the header checks, through the finalized ancestor
+    call    header_checks
+    test    %rax, %rax
+    jnz     7f
+    test    %rdx, %rdx
+    jz      1f
+    mov     %rdx, %rax
+    jmp     6f
+1:  mov     %r12, %rdi                      # [REJECT] verify_blob_sidecar_inclusion_proof
+    lea     (L + 32)(%rsp), %rsi
+    call    lantern_verify_blob_sidecar_inclusion_proof
+    test    %rax, %rax
+    jnz     7f
+    cmpq    $0, (L + 32)(%rsp)
+    je      5f
+    mov     S10(%rsp), %rax                 # [REJECT] verify_blob_kzg_proof(blob, kzg_commitment, kzg_proof)
+    mov     %rax, (%r15)
+    mov     (L + 24)(%rsp), %rdi
+    lea     BlobSidecar_blob(%r12), %rsi
+    lea     BlobSidecar_kzg_commitment(%r12), %rdx
+    lea     BlobSidecar_kzg_proof(%r12), %rcx
+    mov     %r15, %r8
+    lea     (L + 32)(%rsp), %r9
+    CALL_GLOBAL crypto_kzg_verify_blob_kzg_proof
+    cmp     $CRYPTO_BUFFER_TOO_SMALL, %rax
+    je      9f
+    test    %rax, %rax                      # an input that does not decode: the spec's exception
+    jnz     5f
+    cmpq    $0, (L + 32)(%rsp)
+    je      5f
+    mov     S10(%rsp), %rax                 # [REJECT] the expected proposer of the parent state at the slot
+    mov     %rax, (%r15)
+    mov     (L + 16)(%rsp), %rdi
+    mov     %r15, %rsi
+    lea     (L + 40)(%rsp), %rdx
+    call    lantern_get_beacon_proposer_index
+    CHECK_RESULT L, 7f, 8f
+    mov     S9(%rsp), %rcx
+    mov     (L + 40)(%rsp), %rax
+    cmp     BeaconBlockHeader_proposer_index(%rcx), %rax
+    jne     5f
+    mov     %rbx, %rdi                      # seen.blob_sidecar_tuples.add(...)
+    call    seen_key_room
+    test    %rax, %rax
+    jz      9f
+    mov     S9(%rsp), %rax
+    mov     %rbx, %rdi
+    mov     $SEEN_BLOB_SIDECAR, %esi
+    mov     BeaconBlockHeader_slot(%rax), %rdx
+    mov     BeaconBlockHeader_proposer_index(%rax), %rcx
+    mov     BlobSidecar_index(%r12), %r8
+    call    seen_add_key
+    jmp     8f
+    GOSSIP_TAIL L, 48
+SPEC_END validate_blob_sidecar_gossip
+.endif
+
+.if FORK >= FORK_FULU
 
 /*
  * rbx seen, rbp store, r12 sidecar, r13 current_time_ms, r14 head state, r15 scratch; S9 the block header,
@@ -2447,3 +2894,4 @@ SPEC_FUNCTION validate_partial_data_column_sidecar_gossip
     jmp     8f
     GOSSIP_TAIL L, 128
 SPEC_END validate_partial_data_column_sidecar_gossip
+.endif

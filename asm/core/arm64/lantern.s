@@ -72,11 +72,8 @@ SSZ_DEPTH LOG2_SLOTS_PER_EPOCH, SLOTS_PER_EPOCH
 .include "upgrade.s"
 .endif
 .include "forkchoice.s"
-/* Networking is in the fulu object so far. */
-.if FORK == FORK_FULU
 .include "seen_find.s"
 .include "networking.s"
-.endif
 
 /* ---------------------------------------------------------------- Read only data */
 

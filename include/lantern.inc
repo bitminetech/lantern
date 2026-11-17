@@ -142,7 +142,10 @@
 .set CONFIG_TERMINAL_TOTAL_DIFFICULTY, 392 + 16 * 32 + 32          /* Uint256, little endian */
 .set CONFIG_TERMINAL_BLOCK_HASH, 392 + 16 * 32 + 64                /* Hash32 */
 .set CONFIG_TERMINAL_BLOCK_HASH_ACTIVATION_EPOCH, 392 + 16 * 32 + 96
-.set CONFIG_SIZE, 392 + 16 * 32 + 104
+.set CONFIG_ATTESTATION_PROPAGATION_SLOT_RANGE, 392 + 16 * 32 + 104
+.set CONFIG_BLOB_SIDECAR_SUBNET_COUNT, 392 + 16 * 32 + 112
+.set CONFIG_BLOB_SIDECAR_SUBNET_COUNT_ELECTRA, 392 + 16 * 32 + 120
+.set CONFIG_SIZE, 392 + 16 * 32 + 128
 
 /* ------------------------------------------------------------ Results of spec checks */
 
@@ -300,6 +303,7 @@
 .set SEEN_SYNC_MESSAGE, 8              /* sync_message_validator_slots: (slot, validator index, subnet ID) */
 .set SEEN_BLS_CHANGE, 9                /* bls_to_execution_change_indices */
 .set SEEN_DATA_COLUMN, 10              /* data_column_sidecar_tuples: (slot, proposer index, column index) */
+.set SEEN_BLOB_SIDECAR, 11             /* blob_sidecar_tuples: (slot, proposer index, blob index) */
 
 /* SeenBits: aggregate_data_roots and sync_contribution_data */
 .set SeenBits_kind, 0

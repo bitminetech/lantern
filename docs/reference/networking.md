@@ -10,6 +10,8 @@
 - [`lantern_verify_data_column_sidecar_inclusion_proof`](#function-lantern_verify_data_column_sidecar_inclusion_proof): checks that a sidecar's commitments are in its block.
 - [`lantern_verify_partial_data_column_header_inclusion_proof`](#function-lantern_verify_partial_data_column_header_inclusion_proof): the same check for a partial column header.
 - [`lantern_verify_partial_data_column_sidecar_kzg_proofs`](#function-lantern_verify_partial_data_column_sidecar_kzg_proofs): checks the cells of a partial column.
+- [`lantern_compute_subnet_for_blob_sidecar`](#function-lantern_compute_subnet_for_blob_sidecar): the subnet of a blob sidecar.
+- [`lantern_verify_blob_sidecar_inclusion_proof`](#function-lantern_verify_blob_sidecar_inclusion_proof): checks that a blob sidecar's commitment is in its block.
 - [`lantern_seen_size`](#function-lantern_seen_size): the buffer size of a `Seen` with given capacities.
 - [`lantern_seen_init`](#function-lantern_seen_init): an empty `Seen`.
 - [`lantern_seen_copy`](#function-lantern_seen_copy): copies a `Seen` into a buffer with more capacity.
@@ -23,6 +25,7 @@
 - [`lantern_validate_sync_committee_contribution_and_proof_gossip`](#gossip-validation-functions): topic `sync_committee_contribution_and_proof`.
 - [`lantern_validate_sync_committee_message_gossip`](#gossip-validation-functions): topic `sync_committee_{subnet_id}`.
 - [`lantern_validate_bls_to_execution_change_gossip`](#gossip-validation-functions): topic `bls_to_execution_change`.
+- [`lantern_validate_blob_sidecar_gossip`](#gossip-validation-functions): topic `blob_sidecar_{subnet_id}`.
 - [`lantern_validate_data_column_sidecar_gossip`](#gossip-validation-functions): topic `data_column_sidecar_{subnet_id}`.
 - [`lantern_validate_partial_data_column_sidecar_gossip`](#gossip-validation-functions): partial messages of `data_column_sidecar_{subnet_id}`.
 
@@ -36,7 +39,7 @@
 ## Spec
 
 - Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), each function at its latest definition from phase0 to fulu.
-- Section: `fulu/das-core.md`, Custody; `p2p-interface.md` of phase0, altair, bellatrix, capella, deneb, electra and fulu, and `fulu/partial-columns/p2p-interface.md`, The gossip domain; the helpers they call from `phase0/validator.md` and `altair/validator.md`.
+- Section: `fulu/das-core.md`, Custody; `p2p-interface.md` of phase0, altair, bellatrix, capella, deneb, electra and fulu, and `fulu/partial-columns/p2p-interface.md`, The gossip domain; the helpers they call from `validator.md` of phase0, altair, deneb and electra.
 
 ## Common rules
 
@@ -45,17 +48,20 @@
 - `store` is a [`Store`](fork-choice.md#type-store). As in [fork-choice.md](fork-choice.md#common-rules), the caller keeps `store.block_states`.
 - `store.blocks` of the spec is the store's nodes and the `blocks` of `seen`: a root in `seen` names a block that is known, but failed its state transition or waits to be imported, so it has no post-state. A root in `store.block_states` is a node of the store.
 - `block_payload_statuses` of the spec is `BlockNode.payload_status` for a node and `SeenBlock.payload_status` for a block of `seen`.
-- Signatures are verified with `crypto_bls_verify` and `crypto_bls_eth_fast_aggregate_verify` of asm-crypto, KZG proofs with `crypto_kzg_verify_cell_kzg_proof_batch`.
+- Signatures are verified with `crypto_bls_verify` and `crypto_bls_eth_fast_aggregate_verify` of asm-crypto, KZG proofs with `crypto_kzg_verify_blob_kzg_proof` (deneb, electra) and `crypto_kzg_verify_cell_kzg_proof_batch` (fulu).
 - lantern_seen_size, lantern_seen_init, lantern_seen_copy and lantern_seen_add_block read no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
 
 ## Test vectors
 
-- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/fulu/networking/<handler>/`, for mainnet and minimal.
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/networking/<handler>/` of phase0 to fulu, for mainnet and minimal.
   - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
-  - Handlers `get_custody_groups` and `compute_columns_for_custody_group`: the runner compares `result` with the output list.
-  - Handlers `gossip_<topic>`: the runner follows `tests/formats/networking/gossip_validation.md` of the spec. It builds the store with lantern_get_forkchoice_store and lantern_on_block, records a `failed` or `pending` block with lantern_seen_add_block, sets a block's `payload_status` with lantern_store_payload_status, writes `finalized_checkpoint` into the store and `seen_partial_data_column_headers` into `seen`, then validates each message in order and compares `valid`, `ignore` or `reject`.
-  - Each gossip case holds a `config` part, which sets every fork epoch up to fulu to 0; the runner applies it over the preset's config.
-- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/fulu/merkle_proof/single_merkle_proof/BeaconBlockBody/`: the runner builds a `PartialDataColumnHeader` of the body's `blob_kzg_commitments`, the case's `branch` and a block header with the body's root, and checks that lantern_verify_partial_data_column_header_inclusion_proof accepts it, and rejects it with one branch byte changed.
+  - Handlers `get_custody_groups` and `compute_columns_for_custody_group` (fulu): the runner compares `result` with the output list.
+  - Handlers `gossip_<topic>`: the runner follows `tests/formats/networking/gossip_validation.md` of the spec. It builds the store with lantern_get_forkchoice_store and lantern_on_block, records a `failed` or `pending` block with lantern_seen_add_block, sets a block's `payload_status` with lantern_store_payload_status, writes `finalized_checkpoint` into the store and, for fulu, `seen_partial_data_column_headers` into `seen`, then validates each message in order and compares `valid`, `ignore` or `reject`.
+  - Bellatrix: the runner passes as `justified_state` the state it keeps for the root of the store's `justified_checkpoint`.
+  - The runner applies the `config` part of a gossip case over the preset's config.
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/merkle_proof/single_merkle_proof/BeaconBlockBody/` of deneb to fulu.
+  - Deneb and electra: the runner builds a `BlobSidecar` of the commitment that the case's `leaf_index` names, the case's `branch` and a block header with the body's root, and checks that lantern_verify_blob_sidecar_inclusion_proof accepts it, and rejects it with one branch byte changed.
+  - Fulu: the runner builds a `PartialDataColumnHeader` of the body's `blob_kzg_commitments`, the case's `branch` and a block header with the body's root, and checks that lantern_verify_partial_data_column_header_inclusion_proof accepts it, and rejects it with one branch byte changed.
 
 ## Function `lantern_get_custody_groups`
 
@@ -242,6 +248,66 @@ lantern_verify_partial_data_column_sidecar_kzg_proofs(sidecar, header, column_in
 - Argument order: `sidecar`, `header`, `column_index`, `settings`, `scratch`, `out`.
 - Forks: fulu.
 
+## Function `lantern_compute_subnet_for_blob_sidecar`
+
+blob_index % `BLOB_SIDECAR_SUBNET_COUNT` (deneb), or % `BLOB_SIDECAR_SUBNET_COUNT_ELECTRA` (electra).
+
+### Signature
+
+```
+lantern_compute_subnet_for_blob_sidecar(blob_index, config, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `blob_index` | input | u64 |
+| `config` | input | `Config` |
+| `out` | output | u64 |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the subnet.
+- `LANTERN_INVALID_OVERFLOW`: the subnet count is 0, so the spec's modulo raises.
+
+### ABI
+
+- Argument order: `blob_index`, `config`, `out`.
+- Forks: deneb and electra.
+
+## Function `lantern_verify_blob_sidecar_inclusion_proof`
+
+is_valid_merkle_branch of hash_tree_root(sidecar.kzg_commitment) with `kzg_commitment_inclusion_proof`, depth `KZG_COMMITMENT_INCLUSION_PROOF_DEPTH`, the subtree index of `blob_kzg_commitments[sidecar.index]` in `BeaconBlockBody`, and the header's `body_root`.
+
+### Signature
+
+```
+lantern_verify_blob_sidecar_inclusion_proof(sidecar, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `sidecar` | input | `BlobSidecar` |
+| `out` | output | u64: 1 or 0 |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the result.
+
+### Function does
+
+- The subtree index is 11 * 2^(`KZG_COMMITMENT_INCLUSION_PROOF_DEPTH` - 4) + sidecar.index: field 11 of the body's 16 leaves, the list's data root, then the element. The low `KZG_COMMITMENT_INCLUSION_PROOF_DEPTH` bits are those of the spec's index for any sidecar.index.
+- hash_tree_root of the commitment is the SHA-256 of its 48 bytes and 16 zero bytes.
+- The core does not assemble when 2^(`KZG_COMMITMENT_INCLUSION_PROOF_DEPTH` - 5) is not `MAX_BLOB_COMMITMENTS_PER_BLOCK`.
+
+### ABI
+
+- Argument order: `sidecar`, `out`.
+- Forks: deneb and electra.
+
 ## Function `lantern_seen_size`
 
 The bytes of a `Seen` with the capacities of room.
@@ -333,9 +399,12 @@ lantern_validate_attester_slashing_gossip(seen, store, attester_slashing, head_s
 lantern_validate_sync_committee_contribution_and_proof_gossip(seen, store, signed_contribution_and_proof, current_time_ms, head_state, scratch, result) -> status
 lantern_validate_sync_committee_message_gossip(seen, store, sync_committee_message, current_time_ms, subnet_id, head_state, scratch, result) -> status
 lantern_validate_bls_to_execution_change_gossip(seen, store, signed_bls_to_execution_change, current_time_ms, head_state, scratch, result) -> status
+lantern_validate_blob_sidecar_gossip(seen, store, blob_sidecar, current_time_ms, subnet_id, head_state, proposer_state, settings, scratch, result) -> status
 lantern_validate_data_column_sidecar_gossip(seen, store, sidecar, current_time_ms, subnet_id, head_state, proposer_state, settings, scratch, result) -> status
 lantern_validate_partial_data_column_sidecar_gossip(seen, store, sidecar, current_time_ms, group_id, column_index, head_state, proposer_state, settings, scratch, result) -> status
 ```
+
+- Bellatrix: lantern_validate_beacon_block_gossip takes `justified_state` after `proposer_state`: (seen, store, signed_beacon_block, current_time_ms, head_state, proposer_state, justified_state, scratch, result).
 
 ### Arguments
 
@@ -343,13 +412,14 @@ lantern_validate_partial_data_column_sidecar_gossip(seen, store, sidecar, curren
 |---|---|---|
 | `seen` | state | `Seen` |
 | `store` | input | `Store` |
-| the message | input | the topic's type: `SignedBeaconBlock`, `SignedAggregateAndProof`, `SingleAttestation`, `SignedVoluntaryExit`, `ProposerSlashing`, `AttesterSlashing`, `SignedContributionAndProof`, `SyncCommitteeMessage`, `SignedBLSToExecutionChange`, `DataColumnSidecar` or `PartialDataColumnSidecar` |
+| the message | input | the topic's type of the fork: `SignedBeaconBlock`, `SignedAggregateAndProof`, `Attestation` (phase0 to deneb) or `SingleAttestation` (electra and later), `SignedVoluntaryExit`, `ProposerSlashing`, `AttesterSlashing`, `SignedContributionAndProof`, `SyncCommitteeMessage`, `SignedBLSToExecutionChange`, `BlobSidecar`, `DataColumnSidecar` or `PartialDataColumnSidecar` |
 | `current_time_ms` | input | u64 |
 | `subnet_id` | input | u64 |
 | `group_id` | input | `PartialDataColumnGroupID` |
 | `column_index` | input | u64 |
 | `head_state` | input | `BeaconState`: `store.block_states[get_head(store).root]` |
 | `proposer_state` | input | `BeaconState`: a copy of `store.block_states` of the message's parent block after process_slots to the message's slot; read only when the parent is a node of the store and the message's slot is after the parent's |
+| `justified_state` | input | `BeaconState`: `store.block_states[store.justified_checkpoint.root]` |
 | `settings` | input | asm-crypto `KzgSettings` |
 | `scratch` | scratch | `Scratch` |
 | `result` | output | `Result` |
@@ -370,6 +440,14 @@ lantern_validate_partial_data_column_sidecar_gossip(seen, store, sidecar, curren
 - is_non_strict_superset skips a seen bitfield of another length, where the spec's `zip(strict=True)` raises.
 - `prior_header != header` compares the hash_tree_root of the two headers.
 - The attester slashing intersection works on sorted copies of the two index lists in scratch.
+- `beacon_block`, a parent with no post-state: phase0 and altair give `LANTERN_GOSSIP_REJECT`. Bellatrix decides by is_execution_enabled(justified_state, block.body), then the parent's payload status. Capella and later decide by the parent's payload status.
+- `beacon_block`, bellatrix: the payload timestamp check and the `INVALIDATED` parent check run only when is_execution_enabled(head_state, block.body) holds. Capella and later run them always.
+- `beacon_block`, the commitment limit: `MAX_BLOBS_PER_BLOCK` (deneb), `MAX_BLOBS_PER_BLOCK_ELECTRA` (electra), the `max_blobs_per_block` of get_blob_parameters at the block's epoch (fulu).
+- `beacon_attestation_{subnet_id}` and `beacon_aggregate_and_proof`, phase0 to capella: the slot is within `ATTESTATION_PROPAGATION_SLOT_RANGE` of the current slot (is_within_slot_range). Deneb and later: the slot is not in the future and its epoch is the current or previous epoch.
+- `beacon_attestation_{subnet_id}`, phase0 to deneb: the message is an `Attestation`. It has exactly one aggregation bit set and as many bits as the committee; the participant is the committee member at the set bit, and is_valid_indexed_attestation checks its one signature.
+- `beacon_aggregate_and_proof`, phase0 to deneb: the committee index is `data.index`, and `aggregate_data_roots` is keyed by the data root alone. Electra and later key it by the data root and the committee index.
+- `voluntary_exit`, phase0 to capella: the signature domain is get_domain(state, `DOMAIN_VOLUNTARY_EXIT`, voluntary_exit.epoch). Deneb and later use the capella fork version, as process_voluntary_exit does.
+- `blob_sidecar_{subnet_id}`: the index limit is `MAX_BLOBS_PER_BLOCK` (deneb) or `MAX_BLOBS_PER_BLOCK_ELECTRA` (electra). A blob, commitment or proof that `crypto_kzg_verify_blob_kzg_proof` cannot decode gives `LANTERN_GOSSIP_REJECT`, where the spec's verify_blob_kzg_proof raises.
 
 ### Limits
 
@@ -377,7 +455,9 @@ lantern_validate_partial_data_column_sidecar_gossip(seen, store, sidecar, curren
 
 | Topic | Scratch |
 |---|---|
-| `beacon_block`, `voluntary_exit`, `proposer_slashing`, `bls_to_execution_change`, `sync_committee_{subnet_id}` | S(0) |
+| `beacon_block` (fulu), `voluntary_exit`, `proposer_slashing`, `bls_to_execution_change`, `sync_committee_{subnet_id}` | S(0) |
+| `beacon_block` (phase0 to electra) | S(2), with n the validator count of proposer_state: get_beacon_proposer_index |
+| `blob_sidecar_{subnet_id}` | S(2), with n the validator count of proposer_state, and at least `CRYPTO_KZG_SCRATCH` of asm-crypto |
 | `beacon_attestation_{subnet_id}` | S(3) |
 | `beacon_aggregate_and_proof` | S(10) + `IndexedAttestation__fixed` + 8 |
 | `sync_committee_contribution_and_proof` | S(1) + 24 + 48 * `SYNC_COMMITTEE_SIZE` / `SYNC_COMMITTEE_SUBNET_COUNT` |
@@ -387,6 +467,7 @@ lantern_validate_partial_data_column_sidecar_gossip(seen, store, sidecar, curren
 ### ABI
 
 - Argument order: as in the signatures. An argument after the eighth (the sixth on x86-64) is on the stack, as the core ABI says.
+- Forks: every fork has `beacon_block`, `beacon_aggregate_and_proof`, `beacon_attestation_{subnet_id}`, `voluntary_exit`, `proposer_slashing` and `attester_slashing`. The sync committee topics are in altair and later, `bls_to_execution_change` in capella and later, `blob_sidecar_{subnet_id}` in deneb and electra, the column topics in fulu.
 
 ## Type `NodeID`
 
@@ -398,7 +479,7 @@ A Uint256: 32 bytes, little endian.
 
 ## Type `Seen`
 
-The spec's `Seen` of fulu, and the blocks of `store.blocks` that have no post-state: a value with four parts.
+The spec's `Seen` of every fork, and the blocks of `store.blocks` that have no post-state: a value with four parts.
 
 ### Layout
 
@@ -446,6 +527,7 @@ The spec's `Seen` of fulu, and the blocks of `store.blocks` that have no post-st
 | `SEEN_SYNC_MESSAGE` (8) | `sync_message_validator_slots` | (slot, validator index, subnet ID) |
 | `SEEN_BLS_CHANGE` (9) | `bls_to_execution_change_indices` | (validator index) |
 | `SEEN_DATA_COLUMN` (10) | `data_column_sidecar_tuples` | (slot, proposer index, column index) |
+| `SEEN_BLOB_SIDECAR` (11) | `blob_sidecar_tuples` | (slot, proposer index, blob index) |
 
 - `SeenKey__mem` (32) bytes.
 

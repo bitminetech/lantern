@@ -238,20 +238,27 @@ ABI uint64_t LF(is_data_available)(const void *sidecars, const void *settings, c
 ABI uint64_t crypto_kzg_trusted_setup_of_bytes(const void *g1_lagrange, const void *g1_monomial,
                                                const void *g2_monomial, void *settings);
 
-#if FORK == FORK_FULU /* networking: the fulu object so far */
+#if FORK == FORK_FULU
 /* Networking rules: docs/reference/networking.md. */
 ABI uint64_t LF(get_custody_groups)(const void *node_id, const void *custody_group_count, const void *config,
                                         void *out);
 ABI uint64_t LF(compute_columns_for_custody_group)(const void *custody_group, const void *config, void *out);
+ABI uint64_t LF(verify_partial_data_column_header_inclusion_proof)(const void *header, void *scratch, void *out);
+#endif
 
 /* Gossip: docs/reference/networking.md. */
-ABI uint64_t LF(verify_partial_data_column_header_inclusion_proof)(const void *header, void *scratch, void *out);
 ABI uint64_t lantern_seen_size(const void *room, void *size);
 ABI uint64_t lantern_seen_init(const void *room, void *seen);
 ABI uint64_t lantern_seen_copy(const void *seen, const void *room, void *out);
 ABI uint64_t lantern_seen_add_block(void *seen, const void *root, const void *payload_status);
+#if FORK == FORK_BELLATRIX
+ABI uint64_t LF(validate_beacon_block_gossip)(void *seen, const void *store, const void *block, const void *now,
+                                                  const void *head_state, const void *proposer_state,
+                                                  const void *justified_state, void *scratch, void *result);
+#else
 ABI uint64_t LF(validate_beacon_block_gossip)(void *seen, const void *store, const void *block, const void *now,
                                                   const void *head_state, const void *proposer_state, void *scratch, void *result);
+#endif
 ABI uint64_t LF(validate_beacon_aggregate_and_proof_gossip)(void *seen, const void *store, const void *aggregate,
                                                                 const void *now, const void *head_state, void *scratch,
                                                                 void *result);
@@ -264,14 +271,36 @@ ABI uint64_t LF(validate_proposer_slashing_gossip)(void *seen, const void *store
                                                        void *scratch, void *result);
 ABI uint64_t LF(validate_attester_slashing_gossip)(void *seen, const void *store, const void *slashing, const void *head_state,
                                                        void *scratch, void *result);
+#if FORK >= FORK_ALTAIR
 ABI uint64_t LF(validate_sync_committee_contribution_and_proof_gossip)(void *seen, const void *store, const void *contribution,
                                                                            const void *now, const void *head_state, void *scratch,
                                                                            void *result);
 ABI uint64_t LF(validate_sync_committee_message_gossip)(void *seen, const void *store, const void *message, const void *now,
                                                             const void *subnet_id, const void *head_state, void *scratch,
                                                             void *result);
+#define GOSSIP_ALTAIR(X)                                                                                       \
+    X(sync_committee_contribution_and_proof, SignedContributionAndProof)                                       \
+    X(sync_committee_message, SyncCommitteeMessage)
+#else
+#define GOSSIP_ALTAIR(X)
+#endif
+#if FORK >= FORK_CAPELLA
 ABI uint64_t LF(validate_bls_to_execution_change_gossip)(void *seen, const void *store, const void *change, const void *now,
                                                              const void *head_state, void *scratch, void *result);
+#define GOSSIP_CAPELLA(X) X(bls_to_execution_change, SignedBLSToExecutionChange)
+#else
+#define GOSSIP_CAPELLA(X)
+#endif
+#if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+ABI uint64_t LF(verify_blob_sidecar_inclusion_proof)(const void *sidecar, void *out);
+ABI uint64_t LF(validate_blob_sidecar_gossip)(void *seen, const void *store, const void *sidecar, const void *now,
+                                                  const void *subnet_id, const void *head_state, const void *proposer_state,
+                                                  const void *settings, void *scratch, void *result);
+#define GOSSIP_BLOBS(X) X(blob_sidecar, BlobSidecar)
+#else
+#define GOSSIP_BLOBS(X)
+#endif
+#if FORK >= FORK_FULU
 ABI uint64_t LF(validate_data_column_sidecar_gossip)(void *seen, const void *store, const void *sidecar, const void *now,
                                                          const void *subnet_id, const void *head_state, const void *proposer_state,
                                                          const void *settings, void *scratch, void *result);
@@ -279,19 +308,25 @@ ABI uint64_t LF(validate_partial_data_column_sidecar_gossip)(void *seen, const v
                                                                  const void *group_id, const void *column_index,
                                                                  const void *head_state, const void *proposer_state,
                                                                  const void *settings, void *scratch, void *result);
+#define GOSSIP_COLUMNS(X)                                                                                      \
+    X(data_column_sidecar, DataColumnSidecar)                                                                  \
+    X(partial_data_column_sidecar, PartialDataColumnSidecar)
+#else
+#define GOSSIP_COLUMNS(X)
+#endif
+#if FORK >= FORK_ELECTRA
+#define ATTESTATION_TYPE SingleAttestation
+#else
+#define ATTESTATION_TYPE Attestation
+#endif
 #define GOSSIP_TOPICS(X)                                                                                       \
     X(beacon_block, SignedBeaconBlock)                                                                         \
     X(beacon_aggregate_and_proof, SignedAggregateAndProof)                                                     \
-    X(beacon_attestation, SingleAttestation)                                                                   \
+    X(beacon_attestation, ATTESTATION_TYPE)                                                                    \
     X(voluntary_exit, SignedVoluntaryExit)                                                                     \
     X(proposer_slashing, ProposerSlashing)                                                                     \
     X(attester_slashing, AttesterSlashing)                                                                     \
-    X(sync_committee_contribution_and_proof, SignedContributionAndProof)                                       \
-    X(sync_committee_message, SyncCommitteeMessage)                                                            \
-    X(bls_to_execution_change, SignedBLSToExecutionChange)                                                     \
-    X(data_column_sidecar, DataColumnSidecar)                                                                  \
-    X(partial_data_column_sidecar, PartialDataColumnSidecar)
-#endif
+    GOSSIP_ALTAIR(X) GOSSIP_CAPELLA(X) GOSSIP_BLOBS(X) GOSSIP_COLUMNS(X)
 
 /* ---------------------------------------------------------------- ABI check */
 
@@ -717,10 +752,13 @@ static const struct {
     {"TERMINAL_TOTAL_DIFFICULTY", 392 + 16 * 32 + 32, 2},
     {"TERMINAL_BLOCK_HASH", 392 + 16 * 32 + 64, 3},
     {"TERMINAL_BLOCK_HASH_ACTIVATION_EPOCH", 392 + 16 * 32 + 96, 0},
+    {"ATTESTATION_PROPAGATION_SLOT_RANGE", 392 + 16 * 32 + 104, 0},
+    {"BLOB_SIDECAR_SUBNET_COUNT", 392 + 16 * 32 + 112, 0},
+    {"BLOB_SIDECAR_SUBNET_COUNT_ELECTRA", 392 + 16 * 32 + 120, 0},
 };
 #define CONFIG_BLOB_SCHEDULE_COUNT 384
 #define CONFIG_BLOB_SCHEDULE 392
-#define CONFIG_SIZE (392 + 16 * 32 + 104)
+#define CONFIG_SIZE (392 + 16 * 32 + 128)
 
 static uint8_t config[CONFIG_SIZE];
 
@@ -2253,15 +2291,16 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
     }
 }
 
-#if FORK == FORK_FULU /* networking: the fulu object so far */
 /* ---------------------------------------------------------------- Merkle proofs */
 
+static void root_of(const char *type, const uint8_t *value, uint8_t root[32], const char **why);
+
+#if FORK == FORK_FULU
 /*
  * merkle_proof-single_merkle_proof, BeaconBlockBody: the proof of blob_kzg_commitments. A partial column header
  * made of the body's commitments, the case's branch and a block header with the body's root must pass
  * lantern_fulu_verify_partial_data_column_header_inclusion_proof, and fail with one branch byte changed.
  */
-static void root_of(const char *type, const uint8_t *value, uint8_t root[32], const char **why);
 static void run_merkle_proof(const char *file, case_file *f) {
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
@@ -2304,6 +2343,62 @@ static void run_merkle_proof(const char *file, case_file *f) {
         report(file, name, len, why == NULL, why);
     }
 }
+
+#endif
+
+#if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+/*
+ * merkle_proof-single_merkle_proof, BeaconBlockBody: the proof of blob_kzg_commitments[i]. A blob sidecar of that
+ * commitment, the case's branch and a block header with the body's root must pass
+ * lantern_verify_blob_sidecar_inclusion_proof, and fail with one branch byte changed.
+ */
+static void run_merkle_proof(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, blen, vsize;
+        tv parts = next_case(f, &name, &len);
+        if (strncmp(name, "BeaconBlockBody/", 16)) {
+            report(file, name, len, 0, "not a BeaconBlockBody case");
+            continue;
+        }
+        tv proof = tv_get(parts, "proof"), branch = tv_get(proof, "branch");
+        uint8_t *body = decode(type_by_name("BeaconBlockBody"), tv_bytes(tv_get(parts, "object"), &blen), blen, &vsize, &why);
+        if (!body) {
+            report(file, name, len, 0, why);
+            continue;
+        }
+        /* The generalized index: field 11 of a body of 16 leaves, the list's data root, then the element. */
+        uint64_t depth = rd64(branch + 1), leaves = depth > 5 && depth < 40 ? 1ull << (depth - 5) : 0;
+        uint64_t base = 27 * 2 * leaves, gindex = tv_u64(tv_get(proof, "leaf_index"));
+        uint64_t ref = field_offset("BeaconBlockBody", 11), count = rd64(body + ref + 8), index = gindex - base;
+        uint64_t size = ssz_size(type_by_name("BlobSidecar"));
+        uint64_t blob = size - 8 - 48 - 48 - 208 - 32 * depth; /* the SSZ size of the blob */
+        if (!leaves || gindex < base || index >= count || size < 8 + 48 + 48 + 208 + 32 * depth)
+            why = "not the proof of a blob commitment";
+        uint8_t *ssz = buffer(size), body_root[32];
+        memset(ssz, 0, (size_t)size);
+        if (!why) {
+            wr64(ssz, index);
+            memcpy(ssz + 8 + blob, body + rd64(body + ref) + 48 * index, 48);
+            root_of("BeaconBlockBody", body, body_root, &why);
+            memcpy(ssz + 8 + blob + 96 + 80, body_root, 32); /* the header's body_root */
+            tv e = branch + 9;
+            for (uint64_t k = 0; k < depth; k++, e = tv_skip(e)) memcpy(ssz + size - 32 * depth + 32 * k, tv_bytes(e, &blen), 32);
+        }
+        for (int flip = 0; flip < 2 && !why; flip++) {
+            if (flip) ssz[size - 32 * depth] ^= 1;
+            uint8_t *sc = decode(type_by_name("BlobSidecar"), ssz, size, &vsize, &why);
+            uint64_t out = 7;
+            if (sc && CALL(LF(verify_blob_sidecar_inclusion_proof), sc, &out) != 0) why = "status";
+            else if (sc && out != (uint64_t)!flip) why = flip ? "a changed branch passes" : "the proof fails";
+            free(sc);
+        }
+        free(ssz);
+        free(body);
+        report(file, name, len, why == NULL, why);
+    }
+}
+#endif
 
 /* ---------------------------------------------------------------- Gossip */
 
@@ -2378,7 +2473,7 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
     static const struct {
         const char *topic, *type;
     } topics[] = {
-#define GOSSIP_ENTRY(name, type) {#name, #type},
+#define GOSSIP_ENTRY(name, type) {#name, STR(type)},
         GOSSIP_TOPICS(GOSSIP_ENTRY)};
     int t = -1;
     for (int k = 0; k < (int)(sizeof topics / sizeof topics[0]); k++)
@@ -2387,7 +2482,11 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
         printf("SKIP %s: lantern has no handler %s\n", file, handler);
         return;
     }
+#if FORK >= FORK_DENEB
     load_kzg_settings(dir);
+#else
+    (void)dir;
+#endif
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
         uint64_t len, slen, blen, vsize;
@@ -2445,7 +2544,8 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
                 kept_state *parent = kept_of(&n, block + field_offset("BeaconBlock", 2));
                 if (!parent) why = "a block's parent is not imported";
                 else {
-                    uint64_t options[2] = {status == PAYLOAD_VALID ? PAYLOAD_VALID : PAYLOAD_NOT_VALIDATED, 1}, size = parent->size, growth = 2;
+                    uint64_t options[4] = {status == PAYLOAD_VALID ? PAYLOAD_VALID : PAYLOAD_NOT_VALIDATED, 1, 0, 0};
+                    uint64_t size = parent->size, growth = 2;
                     uint8_t *state = copy_of(parent->state, size);
                     uint64_t st = FC_RETRY(&n, &why, CALL(LF(on_block), n.store, signed_block, state, options, fresh_scratch(), &result),
                                            if (node_count(&n) == node_capacity(n.store)) grow_store(&n, &why);
@@ -2477,6 +2577,7 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
                 free(sb);
             }
         }
+#if FORK == FORK_FULU
         tv hdrs = tv_get(meta, "seen_partial_data_column_headers");
         b = hdrs ? hdrs + 9 : NULL;
         for (uint64_t k = 0, c = hdrs ? rd64(hdrs + 1) : 0; k < c && !why; k++, b = tv_skip(b)) {
@@ -2495,6 +2596,7 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
             wr64(seen.b + SEEN_HEADER_BYTES, rd64(seen.b + SEEN_HEADER_BYTES) + entry);
             free(hdr);
         }
+#endif
         tv msgs = tv_get(meta, "messages"), m = msgs + 9;
         for (uint64_t k = 0, c = rd64(msgs + 1); k < c && !why; k++, m = tv_skip(m)) {
             char key[160];
@@ -2508,10 +2610,15 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
             tv tm = tv_get(m, "current_time_ms"), sn = tv_get(m, "subnet_id"), ci = tv_get(m, "column_index"), gi = tv_get(m, "group_id");
             uint64_t now = tm ? tv_u64(tm) : 0, subnet = sn ? tv_u64(sn) : 0, column = ci ? tv_u64(ci) : 0;
             uint8_t *group = NULL;
+#if FORK == FORK_FULU
             if (gi) {
                 snprintf(key, sizeof key, "%.*s", (int)rd64(gi + 1), (const char *)(gi + 9));
                 group = decode(type_by_name("PartialDataColumnGroupID"), tv_bytes(tv_get(parts, key), &blen), blen, &vsize, &why);
             }
+#else
+            (void)gi;
+            (void)column;
+#endif
             /* The parent and slot of a message with a block or block header. */
             const uint8_t *slotp = NULL, *parentp = NULL;
             if (!strcmp(handler, "beacon_block")) {
@@ -2520,7 +2627,8 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
                 parentp = blk + field_offset("BeaconBlock", 2);
             } else {
                 const uint8_t *h = NULL; /* a SignedBeaconBlockHeader: its message first, of fixed size */
-                if (!strcmp(handler, "data_column_sidecar")) h = msg + field_offset("DataColumnSidecar", 4);
+                if (!strcmp(handler, "blob_sidecar")) h = msg + field_offset("BlobSidecar", 4);
+                else if (!strcmp(handler, "data_column_sidecar")) h = msg + field_offset("DataColumnSidecar", 4);
                 else if (!strcmp(handler, "partial_data_column_sidecar")) {
                     uint64_t ref = field_offset("PartialDataColumnSidecar", 3);
                     if (rd64(msg + ref + 8) == 1) h = msg + rd64(msg + ref) + field_offset("PartialDataColumnHeader", 1);
@@ -2538,8 +2646,15 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
                 uint8_t *snap = copy_of(seen.b, seen.size);
                 const char *nm = topics[t].topic;
                 void *sb = seen.b, *store = n.store;
-                if (!strcmp(nm, "beacon_block"))
+                if (!strcmp(nm, "beacon_block")) {
+#if FORK == FORK_BELLATRIX
+                    kept_state *jk = kept_of(&n, n.store + STORE_JUSTIFIED + 8);
+                    st = CALL(LF(validate_beacon_block_gossip), sb, store, msg, &now, head_state, pstate, jk ? jk->state : head_state,
+                              fresh_scratch(), &result);
+#else
                     st = CALL(LF(validate_beacon_block_gossip), sb, store, msg, &now, head_state, pstate, fresh_scratch(), &result);
+#endif
+                }
                 else if (!strcmp(nm, "beacon_aggregate_and_proof"))
                     st = CALL(LF(validate_beacon_aggregate_and_proof_gossip), sb, store, msg, &now, head_state, fresh_scratch(), &result);
                 else if (!strcmp(nm, "beacon_attestation"))
@@ -2550,18 +2665,32 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
                     st = CALL(LF(validate_proposer_slashing_gossip), sb, store, msg, head_state, fresh_scratch(), &result);
                 else if (!strcmp(nm, "attester_slashing"))
                     st = CALL(LF(validate_attester_slashing_gossip), sb, store, msg, head_state, fresh_scratch(), &result);
+#if FORK >= FORK_ALTAIR
                 else if (!strcmp(nm, "sync_committee_contribution_and_proof"))
                     st = CALL(LF(validate_sync_committee_contribution_and_proof_gossip), sb, store, msg, &now, head_state, fresh_scratch(), &result);
                 else if (!strcmp(nm, "sync_committee_message"))
                     st = CALL(LF(validate_sync_committee_message_gossip), sb, store, msg, &now, &subnet, head_state, fresh_scratch(), &result);
+#endif
+#if FORK >= FORK_CAPELLA
                 else if (!strcmp(nm, "bls_to_execution_change"))
                     st = CALL(LF(validate_bls_to_execution_change_gossip), sb, store, msg, &now, head_state, fresh_scratch(), &result);
+#endif
+#if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+                else if (!strcmp(nm, "blob_sidecar"))
+                    st = CALL(LF(validate_blob_sidecar_gossip), sb, store, msg, &now, &subnet, head_state, pstate, kzg_settings,
+                              fresh_scratch(), &result);
+#endif
+#if FORK >= FORK_FULU
                 else if (!strcmp(nm, "data_column_sidecar"))
                     st = CALL(LF(validate_data_column_sidecar_gossip), sb, store, msg, &now, &subnet, head_state, pstate, kzg_settings,
                               fresh_scratch(), &result);
                 else
                     st = CALL(LF(validate_partial_data_column_sidecar_gossip), sb, store, msg, &now, group, &column, head_state, pstate,
                               kzg_settings, fresh_scratch(), &result);
+#else
+                else
+                    why = "a topic with no call";
+#endif
                 if (st != 0 && memcmp(snap, seen.b, (size_t)seen.size)) why = "a non-zero status changed seen";
                 /* A failed check leaves seen as it was, except that a partial column keeps the header it
                    recorded before its cell checks, as the spec does. */
@@ -2605,7 +2734,6 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
     }
 }
 
-#endif
 
 /* ---------------------------------------------------------------- Main */
 
@@ -2651,11 +2779,13 @@ int main(int argc, char **argv) {
         else if (!strncmp(kind, "fork_choice-", 12)) run_fork_choice(file, argv[1], &f, 0);
         else if (!strncmp(kind, "fork_choice_compliance-", 23)) run_fork_choice(file, argv[1], &f, 1);
         else if (!bls_off && !strcmp(kind, "sync-optimistic")) run_fork_choice(file, argv[1], &f, 0);
+        else if (!bls_off && !strncmp(kind, "networking-gossip_", 18)) run_gossip(file, argv[1], kind + 18, &f);
 #if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
                               !strcmp(kind, "networking-compute_columns_for_custody_group")))
             run_custody(file, kind + 11, &f);
-        else if (!bls_off && !strncmp(kind, "networking-gossip_", 18)) run_gossip(file, argv[1], kind + 18, &f);
+#endif
+#if FORK >= FORK_DENEB
         else if (!bls_off && !strcmp(kind, "merkle_proof-single_merkle_proof")) run_merkle_proof(file, &f);
 #endif
         else {

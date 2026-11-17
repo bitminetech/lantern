@@ -18,7 +18,7 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | [docs/reference/fork-upgrades.md](docs/reference/fork-upgrades.md) | The upgrade of a state to each fork |
 | [docs/reference/genesis.md](docs/reference/genesis.md) | The phase0 genesis state |
 | [docs/reference/fork-choice.md](docs/reference/fork-choice.md) | Fork choice and data availability of every fork |
-| [docs/reference/networking.md](docs/reference/networking.md) | Fulu networking rules: custody, gossip validation |
+| [docs/reference/networking.md](docs/reference/networking.md) | Networking rules: gossip validation of every fork, blob sidecars, custody |
 | [include/lantern.inc](include/lantern.inc) | Constants |
 | [include/types.inc](include/types.inc) | SSZ types and layouts of each fork, phase0 to Fulu |
 | [include/forks.inc](include/forks.inc) | The forks, and the names of each fork's exports |
@@ -36,7 +36,7 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | Repo | Commit | Functions used |
 |---|---|---|
 | [asm-ssz](https://github.com/bitminetech/asm-ssz) | [`3c8c9b4`](https://github.com/bitminetech/asm-ssz/tree/3c8c9b405efe432bc0153aa3d0a9a5d31e6d3328) | `ssz_hash_tree_root` |
-| [asm-crypto](https://github.com/bitminetech/asm-crypto) | [`e7e0731`](https://github.com/bitminetech/asm-crypto/tree/e7e0731e379102ad15b927f1558c93b0cb1c93d4) | `crypto_sha256`, `crypto_bls_verify`, `crypto_bls_fast_aggregate_verify`, `crypto_bls_eth_fast_aggregate_verify`, `crypto_bls_eth_aggregate_pubkeys`, `crypto_bls_g1_decode`, `crypto_bls_g1_neg`, `crypto_bls_g1_add`, `crypto_bls_g1_compress`, `crypto_kzg_verify_cell_kzg_proof_batch` |
+| [asm-crypto](https://github.com/bitminetech/asm-crypto) | [`e7e0731`](https://github.com/bitminetech/asm-crypto/tree/e7e0731e379102ad15b927f1558c93b0cb1c93d4) | `crypto_sha256`, `crypto_bls_verify`, `crypto_bls_fast_aggregate_verify`, `crypto_bls_eth_fast_aggregate_verify`, `crypto_bls_eth_aggregate_pubkeys`, `crypto_bls_g1_decode`, `crypto_bls_g1_neg`, `crypto_bls_g1_add`, `crypto_bls_g1_compress`, `crypto_kzg_verify_blob_kzg_proof`, `crypto_kzg_verify_blob_kzg_proof_batch`, `crypto_kzg_verify_cell_kzg_proof_batch` |
 | [asm-snappy](https://github.com/bitminetech/asm-snappy) | [`b84f65a`](https://github.com/bitminetech/asm-snappy/tree/b84f65a17f51dead69d22a7f6c5a16f7b2975d2a) | <Functions> |
 | [asm-libp2p](https://github.com/bitminetech/asm-libp2p) | [`84d113b`](https://github.com/bitminetech/asm-libp2p/tree/84d113b76577806c9e76eb4b820be16282157b8a) | <Functions> |
 | [asm-quic](https://github.com/bitminetech/asm-quic) | [`533cdb8`](https://github.com/bitminetech/asm-quic/tree/533cdb8a777a68b5397324cf73f41ff185e76b21) | <Functions> |

@@ -1237,7 +1237,7 @@ The config values of the network, read at run time. Layout: the `CONFIG_*` offse
 
 ### Rules
 
-- Each value is a u64, little endian.
+- Each value is a u64, little endian, except `CONFIG_TERMINAL_TOTAL_DIFFICULTY`, a Uint256 of 32 bytes, little endian, and `CONFIG_TERMINAL_BLOCK_HASH`, a Hash32.
 - A Version takes the low 4 bytes of its u64; the other 4 bytes are 0.
 - `CONFIG_BLOB_SCHEDULE` holds `CONFIG_BLOB_SCHEDULE_COUNT` entries of (EPOCH, MAX_BLOBS_PER_BLOCK), at most 32, in ascending EPOCH.
 - `CONFIG_SIZE` bytes.
