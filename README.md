@@ -17,7 +17,7 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | [docs/reference/state-transition.md](docs/reference/state-transition.md) | State transition of every fork |
 | [docs/reference/fork-upgrades.md](docs/reference/fork-upgrades.md) | The upgrade of a state to each fork |
 | [docs/reference/genesis.md](docs/reference/genesis.md) | The phase0 genesis state |
-| [docs/reference/fork-choice.md](docs/reference/fork-choice.md) | Fulu fork choice and data availability |
+| [docs/reference/fork-choice.md](docs/reference/fork-choice.md) | Fork choice and data availability of every fork |
 | [docs/reference/networking.md](docs/reference/networking.md) | Fulu networking rules: custody, gossip validation |
 | [include/lantern.inc](include/lantern.inc) | Constants |
 | [include/types.inc](include/types.inc) | SSZ types and layouts of each fork, phase0 to Fulu |

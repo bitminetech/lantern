@@ -203,8 +203,6 @@ typedef ABI uint64_t (*epoch_fn)(void *state, const void *config, void *scratch,
     X(epoch)
 EPOCH_FUNCTIONS(EPOCH_FN)
 
-#if FORK == FORK_FULU /* fork choice and networking: the fulu object so far */
-
 /* Fork choice: docs/reference/fork-choice.md. */
 ABI uint64_t LF(get_forkchoice_store)(const void *anchor_state, const void *anchor_block, const void *config,
                                           const void *room, void *scratch, void *store);
@@ -228,9 +226,19 @@ ABI uint64_t LF(on_attester_slashing)(void *store, const void *attester_slashing
 ABI uint64_t lantern_store_payload_status(void *store, const void *node, const void *payload_status, void *result);
 ABI uint64_t LF(get_proposer_head)(const void *store, const void *head, const void *slot, const void *head_state,
                                        void *scratch, void *out);
+#if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+ABI uint64_t LF(is_data_available)(const void *blob_kzg_commitments, const void *blobs, const void *proofs,
+                                       const void *settings, void *scratch, void *out);
+#elif FORK >= FORK_FULU
 ABI uint64_t LF(is_data_available)(const void *sidecars, const void *settings, const void *config, void *scratch,
                                        void *out);
+#endif
 
+/* asm-crypto, at the pin in platform/deps.sh. */
+ABI uint64_t crypto_kzg_trusted_setup_of_bytes(const void *g1_lagrange, const void *g1_monomial,
+                                               const void *g2_monomial, void *settings);
+
+#if FORK == FORK_FULU /* networking: the fulu object so far */
 /* Networking rules: docs/reference/networking.md. */
 ABI uint64_t LF(get_custody_groups)(const void *node_id, const void *custody_group_count, const void *config,
                                         void *out);
@@ -283,11 +291,6 @@ ABI uint64_t LF(validate_partial_data_column_sidecar_gossip)(void *seen, const v
     X(bls_to_execution_change, SignedBLSToExecutionChange)                                                     \
     X(data_column_sidecar, DataColumnSidecar)                                                                  \
     X(partial_data_column_sidecar, PartialDataColumnSidecar)
-
-/* asm-crypto, at the pin in platform/deps.sh. */
-ABI uint64_t crypto_kzg_trusted_setup_of_bytes(const void *g1_lagrange, const void *g1_monomial,
-                                               const void *g2_monomial, void *settings);
-
 #endif
 
 /* ---------------------------------------------------------------- ABI check */
@@ -653,10 +656,11 @@ static void run_ssz_static(const char *file, const char *type_name, case_file *f
 /* ---------------------------------------------------------------- Config */
 
 /* include/lantern.inc: CONFIG_* offsets. Kind 0: a u64; kind 1: a 4-byte Version. */
+/* A config value: kind 0 a u64, 1 a Version, 2 a Uint256, 3 a Hash32. */
 static const struct {
     const char *name;
     uint64_t offset;
-    int version;
+    int kind;
 } CONFIG_FIELDS[] = {
     {"GENESIS_FORK_VERSION", 0, 1},
     {"ALTAIR_FORK_VERSION", 8, 1},
@@ -710,10 +714,13 @@ static const struct {
     {"MIN_GENESIS_TIME", 392 + 16 * 32 + 8, 0},
     {"MIN_GENESIS_ACTIVE_VALIDATOR_COUNT", 392 + 16 * 32 + 16, 0},
     {"GENESIS_DELAY", 392 + 16 * 32 + 24, 0},
+    {"TERMINAL_TOTAL_DIFFICULTY", 392 + 16 * 32 + 32, 2},
+    {"TERMINAL_BLOCK_HASH", 392 + 16 * 32 + 64, 3},
+    {"TERMINAL_BLOCK_HASH_ACTIVATION_EPOCH", 392 + 16 * 32 + 96, 0},
 };
 #define CONFIG_BLOB_SCHEDULE_COUNT 384
 #define CONFIG_BLOB_SCHEDULE 392
-#define CONFIG_SIZE (392 + 16 * 32 + 32)
+#define CONFIG_SIZE (392 + 16 * 32 + 104)
 
 static uint8_t config[CONFIG_SIZE];
 
@@ -726,9 +733,9 @@ static void config_from_map(tv map, int overrides) {
             fprintf(stderr, "config: no %s\n", CONFIG_FIELDS[i].name);
             exit(2);
         }
-        if (CONFIG_FIELDS[i].version) {
+        uint8_t *dst = config + CONFIG_FIELDS[i].offset;
+        if (CONFIG_FIELDS[i].kind == 1) {
             /* YAML reads an unquoted 0x00000000 as a number: its 4 bytes, big endian. */
-            uint8_t *dst = config + CONFIG_FIELDS[i].offset;
             memset(dst, 0, 8);
             if (*v == T_INT) {
                 uint64_t n = tv_u64(v);
@@ -738,6 +745,22 @@ static void config_from_map(tv map, int overrides) {
                 const uint8_t *b = tv_bytes(v, &len);
                 memcpy(dst, b, len < 4 ? len : 4);
             }
+        } else if (CONFIG_FIELDS[i].kind == 2) { /* little endian */
+            memset(dst, 0, 32);
+            if (*v == T_UINT256) memcpy(dst, v + 1, 32);
+            else wr64(dst, tv_u64(v));
+        } else if (CONFIG_FIELDS[i].kind == 3) { /* an unquoted 0x... hash reads as a number: its bytes, big endian */
+            uint8_t le[32] = {0};
+            memset(dst, 0, 32);
+            if (*v == T_UINT256) memcpy(le, v + 1, 32);
+            else if (*v == T_INT) wr64(le, tv_u64(v));
+            else {
+                uint64_t len;
+                const uint8_t *b = tv_bytes(v, &len);
+                memcpy(dst, b, len < 32 ? len : 32);
+                continue;
+            }
+            for (int b = 0; b < 32; b++) dst[b] = le[31 - b];
         } else {
             wr64(config + CONFIG_FIELDS[i].offset, tv_u64(v));
         }
@@ -1543,7 +1566,6 @@ static void run_rewards(const char *file, case_file *f) {
 }
 
 
-#if FORK == FORK_FULU /* fork choice and networking: the fulu object so far */
 /* ---------------------------------------------------------------- Fork choice */
 
 /*
@@ -1572,6 +1594,7 @@ enum { PAYLOAD_VALID = 0, PAYLOAD_INVALIDATED = 1, PAYLOAD_NOT_VALIDATED = 2 };
 #define LANTERN_NEED_JUSTIFIED_STATE 41
 #define KZG_SETTINGS_BYTES 1198368
 
+#if FORK >= FORK_DENEB
 static uint8_t *kzg_settings;
 
 /* Decode the trusted setup of <preset>-kzg_setup.bin into kzg_settings, once. */
@@ -1601,6 +1624,7 @@ static void load_kzg_settings(const char *dir) {
     for (int k = 0; k < 3; k++) free(lists[k]);
     free(f.data);
 }
+#endif
 
 /* The mem offset of field i of the container type named name. */
 static uint64_t field_offset(const char *name, uint64_t i) {
@@ -1631,7 +1655,18 @@ typedef struct {
         uint64_t status, has_latest;
     } payloads[64];
     size_t npayloads;
+    uint8_t *pow[16];  /* the pow_block steps: PowBlock values */
+    size_t npow;
 } fc_node;
+
+#if FORK >= FORK_BELLATRIX
+/* The PowBlock of the case with block_hash hash, or NULL (get_pow_block). */
+static const uint8_t *find_pow(const fc_node *n, const uint8_t *hash) {
+    for (size_t i = 0; i < n->npow; i++)
+        if (!memcmp(n->pow[i], hash, 32)) return n->pow[i];
+    return NULL;
+}
+#endif
 
 static uint8_t *copy_of(const uint8_t *b, uint64_t size) {
     uint8_t *c = buffer(size);
@@ -1787,6 +1822,7 @@ static uint64_t fc_attester_slashing(fc_node *n, const uint8_t *slashing, const 
     return result;
 }
 
+#if FORK == FORK_FULU
 /* The ColumnSidecars value of the column files named in list names. */
 static uint8_t *column_sidecars(tv parts, tv names, uint64_t *size, const char **why) {
     const uint8_t *desc = type_by_name("DataColumnSidecar");
@@ -1821,6 +1857,48 @@ static uint8_t *column_sidecars(tv parts, tv names, uint64_t *size, const char *
     *size = total;
     return list;
 }
+#elif FORK >= FORK_DENEB
+/* An asm-crypto list (size, offset 24, count, then the entries) of count entries of width bytes from bytes. */
+static uint8_t *kzg_list(const uint8_t *bytes, uint64_t count, uint64_t width) {
+    uint64_t total = 24 + ((count * width + 7) & ~(uint64_t)7);
+    uint8_t *list = buffer(total);
+    wr64(list, total);
+    wr64(list + 8, 24);
+    wr64(list + 16, count);
+    if (count) memcpy(list + 24, bytes, (size_t)(count * width));
+    return list;
+}
+
+/* is_data_available of a block: the blobs and proofs of the step against the body's blob_kzg_commitments. */
+static uint64_t blobs_available(tv parts, tv step, const uint8_t *body, const char **why) {
+    tv bname = tv_get(step, "blobs"), proofs = tv_get(step, "proofs");
+    const uint8_t *blob_bytes = NULL;
+    uint64_t blen = 0, nproofs = proofs && *proofs == T_LIST ? rd64(proofs + 1) : 0, out = 0;
+    if (bname && *bname == T_STRING) {
+        char key[128];
+        snprintf(key, sizeof key, "%.*s", (int)rd64(bname + 1), (const char *)(bname + 9));
+        blob_bytes = tv_bytes(tv_get(parts, key), &blen);
+    }
+    uint8_t *pbytes = buffer(48 * (nproofs ? nproofs : 1));
+    tv e = nproofs ? proofs + 9 : NULL;
+    for (uint64_t i = 0; i < nproofs; i++, e = tv_skip(e)) {
+        uint64_t plen;
+        const uint8_t *p = tv_bytes(e, &plen);
+        if (plen == 48) memcpy(pbytes + 48 * i, p, 48);
+    }
+    uint64_t ref = field_offset("BeaconBlockBody", 11);
+    uint8_t *commitments = kzg_list(body + rd64(body + ref), rd64(body + ref + 8), 48);
+    uint8_t *blobs = kzg_list(blob_bytes, blen / 131072, 131072);
+    uint8_t *plist = kzg_list(pbytes, nproofs, 48);
+    if (CALL(LF(is_data_available), commitments, blobs, plist, kzg_settings, fresh_scratch(), &out) != 0)
+        *why = "is_data_available: status not 0";
+    free(commitments);
+    free(blobs);
+    free(plist);
+    free(pbytes);
+    return out;
+}
+#endif
 
 /* An on_block step, then the block's attestations and attester slashings when it is valid. */
 static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
@@ -1835,10 +1913,21 @@ static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
     const uint8_t *block = nested(signed_block, field_offset("SignedBeaconBlock", 0));
     const uint8_t *parent_root = block + field_offset("BeaconBlock", 2);
 
-    /* The engine's answer for the payload (optimistic sync tests), VALID when the case gives none. */
+    /* BlockOptions: the engine's answer for the payload (optimistic sync tests), VALID when the case gives none. */
     const uint8_t *body0 = nested(block, field_offset("BeaconBlock", 4));
-    const uint8_t *hash = nested(body0, field_offset("BeaconBlockBody", 9)) + field_offset("ExecutionPayload", 12);
-    uint64_t options[2] = {PAYLOAD_VALID, 1};
+    uint64_t options[4] = {PAYLOAD_VALID, 1, 0, 0};
+    (void)body0;
+#if FORK >= FORK_BELLATRIX
+    const uint8_t *payload = nested(body0, field_offset("BeaconBlockBody", 9));
+    const uint8_t *hash = payload + field_offset("ExecutionPayload", 12);
+    /* get_pow_block: the PowBlocks of the case's pow_block steps, by hash. */
+    const uint8_t *pow = find_pow(n, payload + field_offset("ExecutionPayload", 0));
+    options[2] = (uint64_t)(uintptr_t)pow;
+    options[3] = pow ? (uint64_t)(uintptr_t)find_pow(n, pow + 32) : 0;
+#else
+    static const uint8_t no_hash[32];
+    const uint8_t *hash = no_hash;
+#endif
     for (size_t k = 0; k < n->npayloads; k++) {
         if (memcmp(n->payloads[k].block_hash, hash, 32)) continue;
         options[0] = n->payloads[k].status;
@@ -1859,6 +1948,10 @@ static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
             break;
         }
     }
+#if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+    options[1] = blobs_available(parts, step, body0, why);
+#endif
+#if FORK == FORK_FULU
     tv columns = tv_get(step, "columns");
     if (columns) {
         if (rd64(columns + 1) == 0) options[1] = 0; /* retrieve_column_sidecars raises: not enough data */
@@ -1874,6 +1967,7 @@ static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
             free(list);
         }
     }
+#endif
 
     kept_state *parent = find_kept(n->blocks, n->nblocks, parent_root, 0, 0);
     uint64_t size = parent ? parent->size : n->anchor_size, result = 0xA5A5A5A5A5A5A5A5u, st = 0;
@@ -2042,7 +2136,11 @@ static void fc_checks(fc_node *n, tv checks, const char **why) {
 
 /* compliance: the rules of the spec's fork choice compliance runner (tests/generators/compliance_runners). */
 static void run_fork_choice(const char *file, const char *dir, case_file *f, int compliance) {
+#if FORK >= FORK_DENEB
     load_kzg_settings(dir);
+#else
+    (void)dir;
+#endif
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
         uint64_t len, slen, blen, vsize;
@@ -2103,6 +2201,18 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
                 }
             } else if (tv_get(s, "checks")) {
                 fc_checks(&n, tv_get(s, "checks"), &why);
+            } else if (tv_get(s, "pow_block")) {
+#if FORK >= FORK_BELLATRIX
+                tv nm = tv_get(s, "pow_block");
+                char key[128];
+                uint64_t plen;
+                snprintf(key, sizeof key, "%.*s", (int)rd64(nm + 1), (const char *)(nm + 9));
+                uint8_t *pb = decode(type_by_name("PowBlock"), tv_bytes(tv_get(parts, key), &plen), plen, &vsize, &why);
+                if (pb && n.npow == 16) why = "too many pow_block steps";
+                else if (pb) n.pow[n.npow++] = pb;
+#else
+                why = "a pow_block step before bellatrix";
+#endif
             } else if (tv_get(s, "payload_status")) {
                 /* bellatrix optimistic-sync.md: SYNCING and ACCEPTED are NOT_VALIDATED, INVALID and INVALID_BLOCK_HASH INVALIDATED. */
                 tv ps = tv_get(s, "payload_status"), st = tv_get(ps, "status"), lvh = tv_get(ps, "latest_valid_hash");
@@ -2133,6 +2243,7 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
         }
         for (size_t k = 0; k < n.nblocks; k++) free(n.blocks[k].state);
         for (size_t k = 0; k < n.ncheckpoints; k++) free(n.checkpoints[k].state);
+        for (size_t k = 0; k < n.npow; k++) free(n.pow[k]);
         free(n.blocks);
         free(n.checkpoints);
         free(n.store);
@@ -2142,6 +2253,7 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
     }
 }
 
+#if FORK == FORK_FULU /* networking: the fulu object so far */
 /* ---------------------------------------------------------------- Merkle proofs */
 
 /*
@@ -2536,13 +2648,13 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "genesis-initialization")) run_genesis_init(file, &f);
         else if (!bls_off && !strcmp(kind, "genesis-validity")) run_genesis_validity(file, &f);
 #endif
+        else if (!strncmp(kind, "fork_choice-", 12)) run_fork_choice(file, argv[1], &f, 0);
+        else if (!strncmp(kind, "fork_choice_compliance-", 23)) run_fork_choice(file, argv[1], &f, 1);
+        else if (!bls_off && !strcmp(kind, "sync-optimistic")) run_fork_choice(file, argv[1], &f, 0);
 #if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
                               !strcmp(kind, "networking-compute_columns_for_custody_group")))
             run_custody(file, kind + 11, &f);
-        else if (!strncmp(kind, "fork_choice-", 12)) run_fork_choice(file, argv[1], &f, 0);
-        else if (!strncmp(kind, "fork_choice_compliance-", 23)) run_fork_choice(file, argv[1], &f, 1);
-        else if (!bls_off && !strcmp(kind, "sync-optimistic")) run_fork_choice(file, argv[1], &f, 0);
         else if (!bls_off && !strncmp(kind, "networking-gossip_", 18)) run_gossip(file, argv[1], kind + 18, &f);
         else if (!bls_off && !strcmp(kind, "merkle_proof-single_merkle_proof")) run_merkle_proof(file, &f);
 #endif

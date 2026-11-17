@@ -80,6 +80,9 @@
     \m ExecutionPayloadHeader, F_ExecutionPayloadHeader
     .endif
     .if FORK >= FORK_BELLATRIX
+    \m PowBlock, F_PowBlock
+    .endif
+    .if FORK >= FORK_BELLATRIX
     \m Transactions, N_Transaction
     .endif
     .if FORK >= FORK_BELLATRIX
@@ -303,6 +306,9 @@
     .endif
     .if FORK >= FORK_BELLATRIX
     \m ExecutionPayloadHeader
+    .endif
+    .if FORK >= FORK_BELLATRIX
+    \m PowBlock
     .endif
     .if FORK >= FORK_BELLATRIX
     \m Transactions
@@ -765,6 +771,13 @@ SSZ_DFIELD N_Uint64, ExecutionPayloadHeader, blob_gas_used
 .if FORK >= FORK_DENEB
 SSZ_DFIELD N_Uint64, ExecutionPayloadHeader, excess_blob_gas
 .endif
+.endif
+
+.if FORK >= FORK_BELLATRIX
+SSZ_FIELDS PowBlock
+SSZ_DFIELD N_Bytes32, PowBlock, block_hash
+SSZ_DFIELD N_Bytes32, PowBlock, parent_hash
+SSZ_DFIELD N_Uint256, PowBlock, total_difficulty
 .endif
 
 .if FORK >= FORK_CAPELLA

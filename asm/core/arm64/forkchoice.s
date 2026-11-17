@@ -816,11 +816,16 @@ SPEC_FUNCTION get_forkchoice_store
     add     x10, sp, #(L + 32)
     COPY32  x9, x10
     str     xzr, [x28, #BlockNode_timely]
+.if FORK >= FORK_BELLATRIX
     PART    x9, x10, x20, BeaconBlock_body  /* the anchor's payload counts as VALID */
     PART    x11, x10, x9, BeaconBlockBody_execution_payload
     add     x9, x11, #ExecutionPayload_block_hash
     add     x10, x28, #BlockNode_block_hash
     COPY32  x10, x9
+.else
+    stp     xzr, xzr, [x28, #BlockNode_block_hash]          /* no payload before bellatrix: a zero hash */
+    stp     xzr, xzr, [x28, #(BlockNode_block_hash + 16)]
+.endif
     mov     x9, #PAYLOAD_STATUS_VALID
     str     x9, [x28, #BlockNode_payload_status]
     PART    x9, x10, x24, Store_validators  /* latest_messages = {} */
@@ -1273,7 +1278,16 @@ SPEC_FUNCTION get_proposer_head
 64: cmp     x14, #1
     b.ls    65f
     orr     x26, x26, #256
-65: mov     x9, #(1 | 2 | 4 | 8 | 16 | 32 | 64)
+65:
+.if FORK >= FORK_FULU
+    orr     x26, x26, #512                  /* fulu drops the shuffling_stable condition */
+.else
+    tst     x21, #(SLOTS_PER_EPOCH - 1)     /* shuffling_stable = is_shuffling_stable(slot): slot % SLOTS_PER_EPOCH != 0 */
+    b.eq    651f
+    orr     x26, x26, #512
+651:
+.endif
+    mov     x9, #(1 | 2 | 4 | 8 | 16 | 32 | 64 | 512)
     and     x10, x26, x9
     cmp     x10, x9
     b.eq    66f
@@ -1298,6 +1312,95 @@ SPEC_FUNCTION get_proposer_head
     LEAVE 48
 SPEC_END get_proposer_head
 
+/* ---------------------------------------------------------------- The merge block */
+
+.if FORK == FORK_BELLATRIX
+/* L0: x0 = 1 when the Uint256 at x0 is below the one at x1, else 0. A leaf; uses x2-x4. */
+LOCAL_FUNCTION u256_lo
+    UNWIND_END_PROLOGUE
+    mov     x4, #24                         /* from the most significant u64 down */
+1:  ldr     x2, [x0, x4]
+    ldr     x3, [x1, x4]
+    cmp     x2, x3
+    b.lo    2f
+    b.hi    3f
+    subs    x4, x4, #8
+    b.hs    1b
+3:  mov     x0, #0
+    ret
+2:  mov     x0, #1
+    ret
+END_FUNCTION u256_lo
+
+/* (block, parent, config, out). Locals: sp+16 block, parent, config, out; sp+48 the first condition. */
+SPEC_FUNCTION is_valid_terminal_pow_block
+    FRAME 48
+    stp     x0, x1, [sp, #16]
+    stp     x2, x3, [sp, #32]
+    add     x0, x0, #PowBlock_total_difficulty  /* is_total_difficulty_reached = block.total_difficulty >= TERMINAL_TOTAL_DIFFICULTY */
+    add     x1, x2, #CONFIG_TERMINAL_TOTAL_DIFFICULTY
+    bl      u256_lo
+    eor     x9, x0, #1
+    str     x9, [sp, #48]
+    ldr     x0, [sp, #24]                   /* is_parent_total_difficulty_valid = parent.total_difficulty < TERMINAL_TOTAL_DIFFICULTY */
+    add     x0, x0, #PowBlock_total_difficulty
+    ldr     x1, [sp, #32]
+    add     x1, x1, #CONFIG_TERMINAL_TOTAL_DIFFICULTY
+    bl      u256_lo
+    ldr     x9, [sp, #48]
+    and     x9, x9, x0
+    ldr     x3, [sp, #40]
+    str     x9, [x3]
+    mov     x0, #LANTERN_OK
+    UNFRAME 48
+SPEC_END is_valid_terminal_pow_block
+
+/* x19 block, x20 pow_block, x21 pow_parent, x22 config, x23 payload. Locals: L valid. */
+SPEC_FUNCTION validate_merge_block
+    ENTER 16
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+    PART    x9, x10, x19, BeaconBlock_body
+    PART    x23, x10, x9, BeaconBlockBody_execution_payload
+    add     x9, x22, #CONFIG_TERMINAL_BLOCK_HASH    /* TERMINAL_BLOCK_HASH != Hash32(): the override */
+    ldp     x10, x11, [x9]
+    ldp     x12, x13, [x9, #16]
+    orr     x10, x10, x11
+    orr     x12, x12, x13
+    orr     x10, x10, x12
+    cbz     x10, 1f
+    ldr     x10, [x19, #BeaconBlock_slot]   /* assert compute_epoch_at_slot(block.slot) >= TERMINAL_BLOCK_HASH_ACTIVATION_EPOCH */
+    lsr     x10, x10, #LOG2_SLOTS_PER_EPOCH
+    LDQ     x11, x22, CONFIG_TERMINAL_BLOCK_HASH_ACTIVATION_EPOCH
+    cmp     x10, x11
+    b.lo    6f
+    add     x14, x23, #ExecutionPayload_parent_hash     /* assert payload.parent_hash == TERMINAL_BLOCK_HASH */
+    NE32    x14, x9, 6f
+    b       8f
+1:  cbz     x20, 6f                         /* assert pow_block is not None: get_pow_block(payload.parent_hash) */
+    add     x14, x23, #ExecutionPayload_parent_hash
+    add     x15, x20, #PowBlock_block_hash
+    NE32    x14, x15, 6f
+    cbz     x21, 6f                         /* assert pow_parent is not None: get_pow_block(pow_block.parent_hash) */
+    add     x14, x20, #PowBlock_parent_hash
+    add     x15, x21, #PowBlock_block_hash
+    NE32    x14, x15, 6f
+    mov     x0, x20                         /* assert is_valid_terminal_pow_block(pow_block, pow_parent) */
+    mov     x1, x21
+    mov     x2, x22
+    add     x3, sp, #L
+    bl      lantern_is_valid_terminal_pow_block
+    ldr     x9, [sp, #L]
+    cbz     x9, 6f
+8:  mov     x0, #LANTERN_OK
+    LEAVE 16
+6:  mov     x0, #LANTERN_INVALID_MERGE_BLOCK
+    LEAVE 16
+SPEC_END validate_merge_block
+.endif
+
 /* ---------------------------------------------------------------- on_block */
 
 /*
@@ -1306,7 +1409,7 @@ SPEC_END get_proposer_head
  * Locals: L block root (32), L+32 transition options (16), L+48 head, L+56 current slot,
  * L+64 pulled up justified (40), L+104 pulled up finalized (40), L+144 saved justification bits,
  * L+152 saved previous justified (40), L+192 saved current justified (40), L+232 saved finalized (40),
- * L+272 its result, L+280 timely, L+288 head dependent node, then the boost.
+ * L+272 its result, L+280 timely, L+288 head dependent node, then the boost, L+296 bellatrix: is_merge_transition_block.
  */
 SPEC_FUNCTION on_block
     ENTER 304
@@ -1364,9 +1467,11 @@ SPEC_FUNCTION on_block
     add     x15, x19, #(Store_finalized_checkpoint + Checkpoint_root)
     mov     x0, #LANTERN_INVALID_NOT_FINALIZED
     NE32    x14, x15, 6f
+.if FORK >= FORK_DENEB
     ldr     x9, [x22, #BlockOptions_data_available]     /* assert is_data_available(block_root) */
     mov     x0, #LANTERN_INVALID_DATA_UNAVAILABLE
     cbz     x9, 6f
+.endif
     LDQ     x9, x19, Store_blocks + 8       /* before the state changes: room for the node */
     LDQ     x10, x19, Store_blocks
     LDQ     x11, x19, Store_validators
@@ -1382,6 +1487,12 @@ SPEC_FUNCTION on_block
     add     x9, x9, x10
     cmp     x26, x9
     b.lo    9f
+.if FORK == FORK_BELLATRIX
+    mov     x0, x21                         /* is_merge_transition_block(pre_state, block.body), before the state changes */
+    PART    x1, x9, x25, BeaconBlock_body
+    add     x2, sp, #(L + 296)
+    bl      lantern_is_merge_transition_block
+.endif
     mov     x9, #1                          /* state_transition(state, signed_block, validate_result=True) */
     ldr     x10, [x22, #BlockOptions_payload_status]
     cmp     x10, #PAYLOAD_STATUS_INVALIDATED
@@ -1397,6 +1508,17 @@ SPEC_FUNCTION on_block
     cbnz    x0, 7f
     ldr     x9, [x24]
     cbnz    x9, 8f
+.if FORK == FORK_BELLATRIX
+    ldr     x9, [sp, #(L + 296)]            /* if is_merge_transition_block(pre_state, block.body): validate_merge_block(block) */
+    cbz     x9, 1f
+    mov     x0, x25
+    ldr     x1, [x22, #BlockOptions_pow_block]
+    ldr     x2, [x22, #BlockOptions_pow_parent]
+    add     x3, x19, #Store_config
+    bl      lantern_validate_merge_block
+    cbnz    x0, 6f
+1:
+.endif
     str     x26, [x23]                      /* head = get_head(store), before the block is added */
     mov     x0, x19
     mov     x1, x23
@@ -1520,11 +1642,16 @@ SPEC_FUNCTION on_block
     COPY40  x9, x10
     ldr     x9, [sp, #(L + 280)]            /* block_timeliness[block_root] */
     str     x9, [x28, #BlockNode_timely]
+.if FORK >= FORK_BELLATRIX
     PART    x9, x10, x25, BeaconBlock_body  /* the payload's hash and status */
     PART    x11, x10, x9, BeaconBlockBody_execution_payload
     add     x9, x11, #ExecutionPayload_block_hash
     add     x10, x28, #BlockNode_block_hash
     COPY32  x10, x9
+.else
+    stp     xzr, xzr, [x28, #BlockNode_block_hash]          /* no payload before bellatrix: a zero hash */
+    stp     xzr, xzr, [x28, #(BlockNode_block_hash + 16)]
+.endif
     ldr     x9, [x22, #BlockOptions_payload_status]
     str     x9, [x28, #BlockNode_payload_status]
     cbnz    x9, 44f                         /* VALID: so are its NOT_VALIDATED ancestors */
@@ -1576,6 +1703,34 @@ SPEC_FUNCTION on_block
 SPEC_END on_block
 
 /* ---------------------------------------------------------------- Data availability */
+
+.if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+/*
+ * (blob_kzg_commitments, blobs, proofs, settings, scratch, out): verify_blob_kzg_proof_batch of the blobs
+ * and proofs that retrieve_blobs_and_proofs gave. Locals: sp+16 out.
+ */
+SPEC_FUNCTION is_data_available
+    FRAME 16
+    str     x5, [sp, #16]
+    mov     x9, x0
+    mov     x10, x2
+    mov     x0, x3                          /* asm-crypto: settings, blobs, commitments, proofs, scratch, valid */
+    mov     x2, x9
+    mov     x3, x10
+    CALL_GLOBAL crypto_kzg_verify_blob_kzg_proof_batch
+    cmp     x0, #CRYPTO_BUFFER_TOO_SMALL
+    b.eq    9f
+    cbz     x0, 8f
+    ldr     x9, [sp, #16]                   /* a KZG input that fails its checks: the spec's exception, not available */
+    str     xzr, [x9]
+8:  mov     x0, #LANTERN_OK
+    UNFRAME 16
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    UNFRAME 16
+SPEC_END is_data_available
+.endif
+
+.if FORK >= FORK_FULU
 
 /* x19 sidecar, x20 config, x21 out. Locals: L epoch, L+8 blob parameters (16). */
 SPEC_FUNCTION verify_data_column_sidecar
@@ -1729,3 +1884,4 @@ SPEC_FUNCTION is_data_available
 8:  mov     x0, #LANTERN_OK
 7:  LEAVE 16
 SPEC_END is_data_available
+.endif

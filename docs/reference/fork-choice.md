@@ -17,13 +17,15 @@
 - [`lantern_get_head`](#function-lantern_get_head): the head of LMD GHOST over the viable branches.
 - [`lantern_on_tick`](#function-lantern_on_tick): moves the store's time forward.
 - [`lantern_on_block`](#function-lantern_on_block): adds a block to the store.
+- [`lantern_validate_merge_block`](#function-lantern_validate_merge_block): checks the terminal PoW block of the first payload.
+- [`lantern_is_valid_terminal_pow_block`](#function-lantern_is_valid_terminal_pow_block): whether a PoW block reaches the terminal total difficulty and its parent does not.
 - [`lantern_validate_on_attestation`](#function-lantern_validate_on_attestation): the store checks of an attestation.
 - [`lantern_store_target_checkpoint_state`](#function-lantern_store_target_checkpoint_state): advances a block state to its checkpoint.
 - [`lantern_on_attestation`](#function-lantern_on_attestation): records the votes of an attestation.
 - [`lantern_on_attester_slashing`](#function-lantern_on_attester_slashing): records equivocating validators.
 - [`lantern_get_proposer_head`](#function-lantern_get_proposer_head): the head to build on, or its parent for a reorg.
 - [`lantern_store_payload_status`](#function-lantern_store_payload_status): records a later answer of the execution engine for a block.
-- [`lantern_is_data_available`](#function-lantern_is_data_available): checks the column sidecars of a block.
+- [`lantern_is_data_available`](#function-lantern_is_data_available): checks the blobs or the column sidecars of a block.
 - [`lantern_verify_data_column_sidecar`](#function-lantern_verify_data_column_sidecar): checks the lengths of a column sidecar.
 - [`lantern_verify_data_column_sidecar_kzg_proofs`](#function-lantern_verify_data_column_sidecar_kzg_proofs): checks the cells of a column sidecar.
 
@@ -39,7 +41,7 @@
 ## Spec
 
 - Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), `phase0/fork-choice.md` with the changes of `bellatrix`, `capella`, `deneb` and `fulu`, `bellatrix/optimistic-sync.md`, and `fulu/p2p-interface.md` for the column sidecar checks.
-- Section: Fork choice, at the latest definition of each function from phase0 to fulu.
+- Section: Fork choice, each function at its definition in the fork of its object, from phase0 to fulu.
 
 ## Common rules
 
@@ -57,14 +59,16 @@
 
 ## Test vectors
 
-- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/fulu/fork_choice/<handler>/`, for mainnet and minimal.
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/fork_choice/<handler>/` of altair to fulu, for mainnet and minimal.
   - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
   - The runner follows `tests/formats/fork_choice/README.md` of the spec: it keeps the block states and checkpoint states, runs the attestations and attester slashings of each valid block after it, and checks `head` with lantern_get_head and `get_proposer_head` with lantern_get_proposer_head at the head and the current slot.
-- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/fulu/sync/optimistic/`: the fork choice format with `payload_status` steps.
+  - Bellatrix: the `pow_block` steps are the PowBlocks of get_pow_block; the runner passes the one whose hash is the payload's parent_hash, and its parent, in `BlockOptions`.
+  - Deneb and electra: the `blobs` and `proofs` of a block step go to lantern_is_data_available with the body's blob_kzg_commitments. Fulu: the `columns` of a block step go to lantern_is_data_available.
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/sync/optimistic/` of bellatrix to fulu: the fork choice format with `payload_status` steps.
   - The runner maps `VALID` to `PAYLOAD_STATUS_VALID`, `SYNCING` and `ACCEPTED` to `NOT_VALIDATED`, `INVALID` and `INVALID_BLOCK_HASH` to `INVALIDATED`, and passes it in `BlockOptions`.
   - For `INVALID` with a `latest_valid_hash`, it first sets `INVALIDATED` with lantern_store_payload_status on each ancestor of the block whose `block_hash` is not that hash, as the spec's test helper `add_optimistic_block` does.
-- The fork choice compliance cases of the release, `comptests.tar.gz` with the SHA-256 in tests/generator/generate.py: `tests/minimal/fulu/fork_choice_compliance/<handler>/`, as `minimal-fork_choice_compliance-<handler>.bin`.
-  - Every case has `bls_setting` 2, so `runner-minimal-bls-off` runs them.
+- The fork choice compliance cases of the release, `comptests.tar.gz` with the SHA-256 in tests/generator/generate.py: `tests/minimal/<fork>/fork_choice_compliance/<handler>/` of altair to fulu, as `minimal-<fork>-fork_choice_compliance-<handler>.bin`.
+  - Every case has `bls_setting` 2, so `runner-minimal-<fork>-bls-off` runs them.
   - The runner follows the spec's compliance runner (`tests/generators/compliance_runners/fork_choice/runner/test_run.py`): it ignores invalid attestations and attester slashings inside a valid block, and checks `viable_for_head_roots_and_weights` with lantern_get_filtered_node_tree and lantern_get_weight.
 - The KZG trusted setup: `presets/<preset>/trusted_setups/trusted_setup_4096.json` of the pinned spec, as `<preset>-kzg_setup.bin`.
 
@@ -106,10 +110,6 @@ lantern_get_forkchoice_store(anchor_state, anchor_block, config, room, scratch, 
 ### Limits
 
 - Scratch: S(0).
-
-### ABI
-
-- Forks: fulu.
 
 ## Function `lantern_store_size`
 
@@ -177,10 +177,6 @@ lantern_store_justified_checkpoint_state(store, state) -> status
 - For each entry i: `effective_balance` of validator i, `STORE_IN_REGISTRY`, and `STORE_ACTIVE_UNSLASHED` when it is active at get_current_epoch(state) and not slashed; entries past the registry get 0 and lose both flags. `STORE_EQUIVOCATING` stays.
 - Sets `balances_total` to get_total_balance of the active unslashed validators, and `balances_checkpoint` to `justified_checkpoint`.
 
-### ABI
-
-- Forks: fulu.
-
 ## Function `lantern_get_current_slot`
 
 (store.time_ms - store.genesis_time_ms) // SLOT_DURATION_MS.
@@ -196,10 +192,6 @@ lantern_get_current_slot(store, out) -> status
 - `LANTERN_OK`: `out` holds the slot.
 - `LANTERN_INVALID_OVERFLOW`: `time_ms` is before `genesis_time_ms`.
 
-### ABI
-
-- Forks: fulu.
-
 ## Function `lantern_get_current_store_epoch`
 
 compute_epoch_at_slot(get_current_slot(store)).
@@ -213,10 +205,6 @@ lantern_get_current_store_epoch(store, out) -> status
 ### Returns
 
 - As lantern_get_current_slot.
-
-### ABI
-
-- Forks: fulu.
 
 ## Function `lantern_get_ancestor`
 
@@ -237,10 +225,6 @@ lantern_get_ancestor(store, node, slot, out) -> status
 
 - Pass a node of the store.
 
-### ABI
-
-- Forks: fulu.
-
 ## Function `lantern_get_checkpoint_block`
 
 The root of get_ancestor(root, compute_start_slot_at_epoch(epoch)).
@@ -256,10 +240,6 @@ lantern_get_checkpoint_block(store, root, epoch, out) -> status
 - `LANTERN_OK`: `out` holds the Root.
 - `LANTERN_INVALID_UNKNOWN_BLOCK`: root is not in the store, or the walk leaves it.
 - `LANTERN_INVALID_OVERFLOW`: the start slot of epoch does not fit.
-
-### ABI
-
-- Forks: fulu.
 
 ## Function `lantern_get_weight`
 
@@ -280,10 +260,6 @@ lantern_get_weight(store, node, out) -> status
 ### Function does
 
 - get_attestation_score: the sum of `effective_balance` over the entries with `STORE_ACTIVE_UNSLASHED`, a latest message, no `STORE_EQUIVOCATING`, and is_ancestor(latest message node, node).
-
-### ABI
-
-- Forks: fulu.
 
 ## Function `lantern_get_filtered_node_tree`
 
@@ -321,10 +297,6 @@ lantern_get_filtered_node_tree(store, scratch, out) -> status
 
 - Scratch: S(1), with n the node count of the store.
 
-### ABI
-
-- Forks: fulu.
-
 ## Function `lantern_get_head`
 
 From the justified node, the child of greatest (weight, root) among the viable nodes, until a node has no viable child.
@@ -351,10 +323,6 @@ lantern_get_head(store, scratch, out) -> status
 
 - Scratch: S(1), with n the node count of the store.
 
-### ABI
-
-- Forks: fulu.
-
 ## Function `lantern_on_tick`
 
 on_tick_per_slot at the start of each slot up to the slot of time_ms, then at time_ms.
@@ -373,13 +341,9 @@ lantern_on_tick(store, time_ms, result) -> status
 
 - on_tick_per_slot: sets `time_ms`; at a new slot clears `proposer_boost_root`; at a new epoch runs update_checkpoints with the unrealized checkpoints.
 
-### ABI
-
-- Forks: fulu.
-
 ## Function `lantern_on_block`
 
-The fulu on_block, with is_data_available given by the caller.
+The on_block of the object's fork, with is_data_available and get_pow_block given by the caller.
 
 ### Signature
 
@@ -400,13 +364,14 @@ lantern_on_block(store, signed_block, state, options, scratch, result) -> status
 
 ### Returns
 
-- `LANTERN_OK`: `result` is `LANTERN_VALID` when the block is in the store, or the first failed check: `LANTERN_INVALID_UNKNOWN_BLOCK` (parent), `LANTERN_INVALID_PARENT_PAYLOAD`, `LANTERN_INVALID_FUTURE_SLOT`, `LANTERN_INVALID_NOT_FINALIZED`, `LANTERN_INVALID_DATA_UNAVAILABLE`, a check of lantern_state_transition, or a spec failure of get_head, get_ancestor or compute_pulled_up_tip.
+- `LANTERN_OK`: `result` is `LANTERN_VALID` when the block is in the store, or the first failed check: `LANTERN_INVALID_UNKNOWN_BLOCK` (parent), `LANTERN_INVALID_PARENT_PAYLOAD`, `LANTERN_INVALID_FUTURE_SLOT`, `LANTERN_INVALID_NOT_FINALIZED`, `LANTERN_INVALID_DATA_UNAVAILABLE`, a check of lantern_state_transition, `LANTERN_INVALID_MERGE_BLOCK`, or a spec failure of get_head, get_ancestor or compute_pulled_up_tip.
 - `LANTERN_BUFFER_TOO_SMALL`: the store has no room for a node, scratch is short, or lantern_state_transition needs room in `state`. Nothing is changed.
 - `LANTERN_NEED_JUSTIFIED_STATE`: see Common rules. Nothing is changed.
 
 ### Caller must
 
-- Pass in `options.data_available` the value of lantern_is_data_available for the block's column sidecars (`retrieve_column_sidecars` is the caller's), or 0 when they cannot be retrieved.
+- Deneb and later: pass in `options.data_available` the value of lantern_is_data_available for the block's blobs and proofs (deneb, electra: `retrieve_blobs_and_proofs` is the caller's) or column sidecars (fulu: `retrieve_column_sidecars` is the caller's), or 0 when they cannot be retrieved.
+- Bellatrix: pass in `options.pow_block` the PowBlock of get_pow_block(body.execution_payload.parent_hash) and in `options.pow_parent` that of its parent_hash, each 0 when the execution layer has none.
 - Pass in `options.payload_status` the execution engine's answer for the payload: `VALID`, `NOT_VALIDATED` for an optimistic import, or `INVALIDATED`.
 - Keep `state` as `store.block_states[block_root]` when the call adds a node; a known block adds none and leaves `state` unchanged.
 
@@ -417,15 +382,59 @@ lantern_on_block(store, signed_block, state, options, scratch, result) -> status
 - verify_and_notify_new_payload is true when `options.payload_status` is not `INVALIDATED`.
 - Runs state_transition with validate_result, then get_head before adding the block, then computes compute_pulled_up_tip's process_justification_and_finalization on `state` and restores the four fields it changes.
 - Then writes in spec order: the node, record_block_timeliness, update_proposer_boost_root, update_checkpoints, and compute_pulled_up_tip's updates.
-- The node keeps `body.execution_payload.block_hash` and `options.payload_status`. A `VALID` block makes its `NOT_VALIDATED` ancestors `VALID`, as a transition to `VALID` does.
+- The node keeps `body.execution_payload.block_hash` (a zero hash before bellatrix) and `options.payload_status`. A `VALID` block makes its `NOT_VALIDATED` ancestors `VALID`, as a transition to `VALID` does.
+- Deneb and later: asserts `options.data_available` after the finalized checks.
+- Bellatrix: after state_transition, runs lantern_validate_merge_block when lantern_is_merge_transition_block holds for the parent's state and the body; it reads that before the state changes.
 
 ### Limits
 
 - Scratch: that of lantern_state_transition, and S(1) with n the node count of the store.
 
+## Function `lantern_validate_merge_block`
+
+The asserts of validate_merge_block: with a TERMINAL_BLOCK_HASH override, the activation epoch and the payload's parent_hash; else a PoW block and its parent that lantern_is_valid_terminal_pow_block accepts.
+
+### Signature
+
+```
+lantern_validate_merge_block(block, pow_block, pow_parent, config) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `block` | input | `BeaconBlock` |
+| `pow_block` | input | `PowBlock` of get_pow_block(block.body.execution_payload.parent_hash), or 0 for None |
+| `pow_parent` | input | `PowBlock` of get_pow_block(pow_block.parent_hash), or 0 for None |
+| `config` | input | `Config`: TERMINAL_TOTAL_DIFFICULTY, TERMINAL_BLOCK_HASH and TERMINAL_BLOCK_HASH_ACTIVATION_EPOCH |
+
+### Returns
+
+- `LANTERN_OK`: every check holds.
+- `LANTERN_INVALID_MERGE_BLOCK`: a check fails, a PoW block is None, or a PoW block's hash is not the one asked for.
+
 ### ABI
 
-- Forks: fulu.
+- Forks: bellatrix.
+
+## Function `lantern_is_valid_terminal_pow_block`
+
+block.total_difficulty >= TERMINAL_TOTAL_DIFFICULTY and parent.total_difficulty < TERMINAL_TOTAL_DIFFICULTY, as Uint256.
+
+### Signature
+
+```
+lantern_is_valid_terminal_pow_block(block, parent, config, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`, always: `out` is 1 or 0.
+
+### ABI
+
+- Forks: bellatrix.
 
 ## Function `lantern_validate_on_attestation`
 
@@ -445,10 +454,6 @@ lantern_validate_on_attestation(store, attestation, is_from_block) -> status
 - `LANTERN_INVALID_ATTESTATION_SLOT`: the head vote's block is after the attestation's slot.
 - `LANTERN_INVALID_FUTURE_SLOT`: the current slot is not after the attestation's slot.
 - `LANTERN_INVALID_OVERFLOW`: a slot sum does not fit.
-
-### ABI
-
-- Forks: fulu.
 
 ## Function `lantern_store_target_checkpoint_state`
 
@@ -477,10 +482,6 @@ lantern_store_target_checkpoint_state(state, target, config, scratch, result) ->
 ### Caller must
 
 - Keep `state` as `store.checkpoint_states[target]`. The spec skips the call when the target is already there.
-
-### ABI
-
-- Forks: fulu.
 
 ## Function `lantern_on_attestation`
 
@@ -520,10 +521,6 @@ lantern_on_attestation(store, attestation, is_from_block, target_state, scratch,
 
 - Scratch: S(8) + `FC_ATTEST_EXTRA`, with n the validators of `target_state`.
 
-### ABI
-
-- Forks: fulu.
-
 ## Function `lantern_on_attester_slashing`
 
 Marks the indices common to both attestations of a valid slashing as equivocating.
@@ -553,13 +550,9 @@ lantern_on_attester_slashing(store, attester_slashing, state, scratch, result) -
 
 - Scratch: S(7).
 
-### ABI
-
-- Forks: fulu.
-
 ## Function `lantern_get_proposer_head`
 
-The fulu get_proposer_head: the parent of a late, weak head when a single slot reorg is safe, else the head.
+The get_proposer_head of the object's fork: the parent of a late, weak head when a single slot reorg is safe, else the head.
 
 ### Signature
 
@@ -590,14 +583,11 @@ lantern_get_proposer_head(store, head, slot, head_state, scratch, out) -> status
 ### Function does
 
 - Computes every condition, as the spec does, before it decides; is_head_weak reads the committees of `head_state` and the `effective_balance` of the store's entries.
+- Before fulu: the reorg also needs shuffling_stable: slot % SLOTS_PER_EPOCH != 0.
 
 ### Limits
 
 - Scratch: S(3), with n the validators of `head_state`.
-
-### ABI
-
-- Forks: fulu.
 
 ## Function `lantern_store_payload_status`
 
@@ -631,18 +621,22 @@ lantern_store_payload_status(store, node, payload_status, result) -> status
 
 ## Function `lantern_is_data_available`
 
-Whether every column sidecar passes verify_data_column_sidecar and verify_data_column_sidecar_kzg_proofs.
+Deneb and electra: whether verify_blob_kzg_proof_batch holds for the blobs and proofs against the commitments. Fulu: whether every column sidecar passes verify_data_column_sidecar and verify_data_column_sidecar_kzg_proofs.
 
 ### Signature
 
 ```
-lantern_is_data_available(sidecars, settings, config, scratch, out) -> status
+lantern_is_data_available(blob_kzg_commitments, blobs, proofs, settings, scratch, out) -> status      (deneb, electra)
+lantern_is_data_available(sidecars, settings, config, scratch, out) -> status                        (fulu)
 ```
 
 ### Arguments
 
 | Name | Role | Type |
 |---|---|---|
+| `blob_kzg_commitments` | input | a standalone `BlobKZGCommitments` value of the block's body: an asm-crypto `KzgCommitmentList` |
+| `blobs` | input | asm-crypto `BlobList`: the blobs of retrieve_blobs_and_proofs |
+| `proofs` | input | asm-crypto `KzgProofList`: the proofs of retrieve_blobs_and_proofs |
 | `sidecars` | input | `ColumnSidecars`: the value of retrieve_column_sidecars |
 | `settings` | input | asm-crypto `KzgSettings` of the trusted setup |
 | `config` | input | `Config` |
@@ -656,11 +650,11 @@ lantern_is_data_available(sidecars, settings, config, scratch, out) -> status
 
 ### Limits
 
-- Scratch: `DA_SCRATCH_FIXED` + n * `DA_SCRATCH_PER_BLOB`, with n the most commitments of one sidecar.
+- Scratch: deneb and electra, `CRYPTO_KZG_SCRATCH` + n * `CRYPTO_KZG_SCRATCH_PER_ENTRY` of asm-crypto, with n the blobs; fulu, `DA_SCRATCH_FIXED` + n * `DA_SCRATCH_PER_BLOB`, with n the most commitments of one sidecar.
 
 ### ABI
 
-- Forks: fulu.
+- Forks: deneb and later.
 
 ## Function `lantern_verify_data_column_sidecar`
 
@@ -792,7 +786,9 @@ The fork choice store: a value with two parts.
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `payload_status` | u64 | `PAYLOAD_STATUS_*`: the execution engine's answer for the payload |
-| 8 | `data_available` | u64 | 1: is_data_available holds for the block |
+| 8 | `data_available` | u64 | 1: is_data_available holds for the block; read from deneb on |
+| 16 | `pow_block` | pointer | Bellatrix: the `PowBlock` of get_pow_block(body.execution_payload.parent_hash), or 0 for None |
+| 24 | `pow_parent` | pointer | Bellatrix: the `PowBlock` of get_pow_block(pow_block.parent_hash), or 0 for None |
 
 ## Type `ColumnSidecars`
 

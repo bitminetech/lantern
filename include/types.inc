@@ -423,6 +423,13 @@ SSZ_FIELD ExecutionPayloadHeader, blob_gas_used, Uint64
 SSZ_FIELD ExecutionPayloadHeader, excess_blob_gas, Uint64
 .endif
 SSZ_END ExecutionPayloadHeader
+.if TYPES_FORK >= FORK_BELLATRIX
+SSZ_CONTAINER PowBlock, 0
+SSZ_FIELD PowBlock, block_hash, Bytes32
+SSZ_FIELD PowBlock, parent_hash, Bytes32
+SSZ_FIELD PowBlock, total_difficulty, Uint256
+SSZ_END PowBlock
+.endif
 
 SSZ_CONTAINER ExecutionPayload, 1
 SSZ_FIELD ExecutionPayload, parent_hash, Bytes32

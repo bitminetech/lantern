@@ -139,7 +139,10 @@
 .set CONFIG_MIN_GENESIS_TIME, 392 + 16 * 32 + 8
 .set CONFIG_MIN_GENESIS_ACTIVE_VALIDATOR_COUNT, 392 + 16 * 32 + 16
 .set CONFIG_GENESIS_DELAY, 392 + 16 * 32 + 24
-.set CONFIG_SIZE, 392 + 16 * 32 + 32
+.set CONFIG_TERMINAL_TOTAL_DIFFICULTY, 392 + 16 * 32 + 32          /* Uint256, little endian */
+.set CONFIG_TERMINAL_BLOCK_HASH, 392 + 16 * 32 + 64                /* Hash32 */
+.set CONFIG_TERMINAL_BLOCK_HASH_ACTIVATION_EPOCH, 392 + 16 * 32 + 96
+.set CONFIG_SIZE, 392 + 16 * 32 + 104
 
 /* ------------------------------------------------------------ Results of spec checks */
 
@@ -200,6 +203,7 @@
 .set LANTERN_GOSSIP_IGNORE, 44                  /* a gossip validation function: an [IGNORE] check fails (GossipIgnore) */
 .set LANTERN_GOSSIP_REJECT, 45                  /* a gossip validation function: a [REJECT] check fails (GossipReject) */
 .set LANTERN_INVALID_DEPOSIT, 46                /* process_deposit: the deposit's Merkle proof */
+.set LANTERN_INVALID_MERGE_BLOCK, 47            /* validate_merge_block: the terminal PoW block conditions */
 
 /* ------------------------------------------------------------ Scratch (docs/reference/helpers.md, Type Scratch) */
 
@@ -261,6 +265,8 @@
 /* BlockOptions */
 .set BlockOptions_payload_status, 0   /* PAYLOAD_STATUS_*: the execution engine's answer for the payload */
 .set BlockOptions_data_available, 8
+.set BlockOptions_pow_block, 16       /* bellatrix: get_pow_block(payload.parent_hash), a PowBlock, or 0 for None */
+.set BlockOptions_pow_parent, 24      /* bellatrix: get_pow_block(pow_block.parent_hash), or 0 for None */
 
 /* ------------------------------------------------------------ Gossip (docs/reference/networking.md) */
 
