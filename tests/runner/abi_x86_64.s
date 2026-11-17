@@ -1,7 +1,7 @@
 /*
  * ABI check for the test runner, x86-64 (System V AMD64 psABI). AT&T syntax. Test code: it is not part of the library.
  *
- * abi_call(ctx) calls ctx.fn with the 6 arguments in ctx, after it sets every
+ * abi_call(ctx) calls ctx.fn with the 11 arguments in ctx, after it sets every
  * register the callee must keep to a known value and paints ctx.paint bytes
  * of stack below the call. It then records in ctx the status, a mask of the
  * kept state that changed, and the bytes of stack the call used.
@@ -48,8 +48,20 @@ FUNCTION abi_call
     mov     32(%r15), %rcx
     mov     40(%r15), %r8
     mov     112(%r15), %r9
+    sub     $48, %rsp                       /* arguments 7 to 11 on the stack */
+    mov     120(%r15), %rax
+    mov     %rax, 0(%rsp)
+    mov     128(%r15), %rax
+    mov     %rax, 8(%rsp)
+    mov     136(%r15), %rax
+    mov     %rax, 16(%rsp)
+    mov     144(%r15), %rax
+    mov     %rax, 24(%rsp)
+    mov     152(%r15), %rax
+    mov     %rax, 32(%rsp)
     mov     8(%r15), %rdi
     call    *%r11
+    add     $48, %rsp
     xor     %ecx, %ecx
     movabs  $0x0f1e2d3c4b5a6978, %rdx
     cmp     %rdx, %rbx

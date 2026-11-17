@@ -11,8 +11,11 @@
 .set F_VIABLE, 4           # in get_filtered_node_tree
 .set F_CHILD_VIABLE, 8     # has a child in get_filtered_node_tree
 
-.if BlockNode__mem != 176 || StoreValidator__mem != 32 || Checkpoint__mem != 40 || Checkpoint_root != 8
+.if BlockNode__mem != 216 || StoreValidator__mem != 32 || Checkpoint__mem != 40 || Checkpoint_root != 8
 .error "the fork choice code assumes the layouts of include/lantern.inc"
+.endif
+.if PAYLOAD_STATUS_VALID != 0 || PAYLOAD_STATUS_INVALIDATED != 1
+.error "the fork choice code tests PAYLOAD_STATUS_VALID as 0"
 .endif
 .if STORE_ACTIVE_UNSLASHED != 1 || STORE_EQUIVOCATING != 2 || STORE_IN_REGISTRY != 4
 .error "the fork choice code tests the StoreValidator flags by bit number"
@@ -240,6 +243,11 @@ LOCAL_FUNCTION attestation_score
     ld      t3, StoreValidator_latest_node(a5)
     li      t4, -1                          # index in store.latest_messages
     beq     t3, t4, 4f
+    mul     t5, t3, a3                      # not a vote for an INVALIDATED block (optimistic sync)
+    add     t5, a2, t5
+    ld      t6, BlockNode_payload_status(t5)
+    li      t5, PAYLOAD_STATUS_INVALIDATED
+    beq     t6, t5, 4f
 2:  mul     t5, t3, a3                      # is_ancestor(latest message node, node)
     add     t5, a2, t5
     ld      t6, BlockNode_slot(t5)
@@ -304,6 +312,10 @@ LOCAL_FUNCTION weight
     call    find_node
     li      t0, -1
     beq     a0, t0, 8f
+    NODE    t0, s1, a0                      # no boost from an INVALIDATED block (optimistic sync)
+    ld      t0, BlockNode_payload_status(t0)
+    li      t1, PAYLOAD_STATUS_INVALIDATED
+    beq     t0, t1, 6f
     mv      a1, a0                          # is_ancestor(store, proposer_boost_node, node)
     NODE    t0, s1, s2
     ld      a2, BlockNode_slot(t0)
@@ -386,6 +398,9 @@ LOCAL_FUNCTION filter_tree
     ld      t2, BlockNode_parent(t1)
     li      t0, -1
     beq     t2, t0, 15f
+    ld      t3, BlockNode_payload_status(t1)
+    li      t0, PAYLOAD_STATUS_INVALIDATED  # removed from fork choice (optimistic sync)
+    beq     t3, t0, 15f
     slli    t2, t2, 3
     add     t2, s2, t2
     ld      t3, 0(t2)
@@ -840,6 +855,12 @@ FUNCTION lantern_get_forkchoice_store
     addi    t1, sp, (L + 32)
     COPY32  t0, t1
     sd      zero, BlockNode_timely(s10)
+    PART    t0, t1, s2, BeaconBlock_body    # the anchor's payload counts as VALID
+    PART    t2, t1, t0, BeaconBlockBody_execution_payload
+    addi    t0, t2, ExecutionPayload_block_hash
+    addi    t1, s10, BlockNode_block_hash
+    COPY32  t1, t0
+    sd      zero, BlockNode_payload_status(s10)
     PART    t0, t1, s6, Store_validators    # latest_messages = {}
     li      t2, -1
 2:  beqz    t1, 3f
@@ -921,6 +942,60 @@ FUNCTION lantern_store_copy
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
 END_FUNCTION lantern_store_copy
+
+/*
+ * Optimistic sync: a0 store, a1 node, a2 payload_status, a3 result. a4 node index, a5 payload_status,
+ * t0 node count, t1 nodes, t2 BlockNode__mem, t3 the node.
+ */
+LEAF lantern_store_payload_status
+    sd      zero, 0(a3)
+    ld      a4, 0(a1)
+    ld      a5, 0(a2)
+    ld      t0, (Store_blocks + 8)(a0)
+    bgeu    a4, t0, 8f
+    ld      t1, Store_blocks(a0)
+    add     t1, a0, t1
+    li      t2, BlockNode__mem
+    mul     t3, a4, t2
+    add     t3, t1, t3
+    ld      t4, BlockNode_payload_status(t3)
+    li      t6, PAYLOAD_STATUS_NOT_VALIDATED    # only NOT_VALIDATED blocks change
+    bne     t4, t6, 6f
+    beqz    a5, 3f
+    li      t5, PAYLOAD_STATUS_INVALIDATED
+    bne     a5, t5, 6f
+    sd      t5, BlockNode_payload_status(t3)    # the block and its descendants: children come after parents
+    addi    a4, a4, 1
+1:  bgeu    a4, t0, 6f
+    mul     t3, a4, t2
+    add     t3, t1, t3
+    ld      t4, BlockNode_parent(t3)
+    li      a6, -1
+    beq     t4, a6, 2f
+    mul     t4, t4, t2
+    add     t4, t1, t4
+    ld      t4, BlockNode_payload_status(t4)
+    bne     t4, t5, 2f
+    ld      t4, BlockNode_payload_status(t3)
+    bne     t4, t6, 2f
+    sd      t5, BlockNode_payload_status(t3)
+2:  addi    a4, a4, 1
+    j       1b
+3:  sd      zero, BlockNode_payload_status(t3)  # VALID: the block and its NOT_VALIDATED ancestors
+    ld      a4, BlockNode_parent(t3)
+    li      a6, -1
+    beq     a4, a6, 6f
+    mul     t3, a4, t2
+    add     t3, t1, t3
+    ld      t4, BlockNode_payload_status(t3)
+    beq     t4, t6, 3b
+6:  li      a0, LANTERN_OK
+    ret
+8:  li      t0, LANTERN_INVALID_UNKNOWN_BLOCK
+    sd      t0, 0(a3)
+    li      a0, LANTERN_OK
+    ret
+END_FUNCTION lantern_store_payload_status
 
 /* ---------------------------------------------------------------- Attestations */
 
@@ -1413,6 +1488,11 @@ FUNCTION lantern_on_block
     li      t0, -1
     li      a0, LANTERN_INVALID_UNKNOWN_BLOCK
     beq     s9, t0, 6f
+    NODE    t0, s1, s9                      # the parent's payload is not INVALIDATED (optimistic sync)
+    ld      t0, BlockNode_payload_status(t0)
+    li      t1, PAYLOAD_STATUS_INVALIDATED
+    li      a0, LANTERN_INVALID_PARENT_PAYLOAD
+    beq     t0, t1, 6f
     STORE_SLOT t0, s1, 5f                   # assert get_current_slot(store) >= block.slot
     sd      t0, (L + 56)(sp)
     ld      t1, BeaconBlock_slot(s7)
@@ -1451,7 +1531,9 @@ FUNCTION lantern_on_block
     bltu    s8, t0, 9f
     li      t0, 1                           # state_transition(state, signed_block, validate_result=True)
     sd      t0, (L + 32)(sp)
-    ld      t1, BlockOptions_execution_valid(s4)
+    ld      t1, BlockOptions_payload_status(s4)
+    addi    t1, t1, -PAYLOAD_STATUS_INVALIDATED
+    snez    t1, t1                          # execution_valid: VALID or NOT_VALIDATED
     sd      t1, (L + 40)(sp)
     mv      a0, s3
     mv      a1, s2
@@ -1589,6 +1671,25 @@ FUNCTION lantern_on_block
     COPY40  t0, t1
     ld      t0, (L + 280)(sp)               # block_timeliness[block_root]
     sd      t0, BlockNode_timely(s10)
+    PART    t0, t1, s7, BeaconBlock_body    # the payload's hash and status
+    PART    t2, t1, t0, BeaconBlockBody_execution_payload
+    addi    t0, t2, ExecutionPayload_block_hash
+    addi    t1, s10, BlockNode_block_hash
+    COPY32  t1, t0
+    ld      t0, BlockOptions_payload_status(s4)
+    sd      t0, BlockNode_payload_status(s10)
+    bnez    t0, 44f                         # VALID: so are its NOT_VALIDATED ancestors
+    mv      t1, s9
+    li      t3, PAYLOAD_STATUS_NOT_VALIDATED
+43: li      t0, -1
+    beq     t1, t0, 44f
+    NODE    t2, s1, t1
+    ld      t0, BlockNode_payload_status(t2)
+    bne     t0, t3, 44f
+    sd      zero, BlockNode_payload_status(t2)
+    ld      t1, BlockNode_parent(t2)
+    j       43b
+44:
     ld      t0, (L + 288)(sp)               # proposer_boost_root = block_root
     beqz    t0, 42f
     addi    t0, s1, Store_proposer_boost_root

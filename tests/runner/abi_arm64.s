@@ -1,7 +1,7 @@
 /*
  * ABI check for the test runner, ARM64 (AAPCS64). Test code: it is not part of the library.
  *
- * abi_call(ctx) calls ctx.fn with the 6 arguments in ctx, after it sets every
+ * abi_call(ctx) calls ctx.fn with the 11 arguments in ctx, after it sets every
  * register the callee must keep to a known value and paints ctx.paint bytes
  * of stack below the call. It then records in ctx the status, a mask of the
  * kept state that changed, and the bytes of stack the call used.
@@ -125,8 +125,15 @@ FUNCTION abi_call
     ldp     x1, x2, [x28, #16]
     ldp     x3, x4, [x28, #32]
     ldr     x5, [x28, #112]
+    ldp     x6, x7, [x28, #120]             /* arguments 7 and 8 in x6, x7; 9 to 11 on the stack */
+    sub     sp, sp, #32
+    ldp     x9, x10, [x28, #136]
+    stp     x9, x10, [sp]
+    ldr     x9, [x28, #152]
+    str     x9, [sp, #16]
     ldr     x0, [x28, #8]
     blr     x16
+    add     sp, sp, #32
     mov     x9, #0
     movz    x10, #0x6978
     movk    x10, #0x4b5a, lsl #16

@@ -97,10 +97,64 @@ ABI uint64_t lantern_on_attestation(void *store, const void *attestation, const 
                                     const void *target_state, void *scratch, void *result);
 ABI uint64_t lantern_on_attester_slashing(void *store, const void *attester_slashing, const void *state, void *scratch,
                                           void *result);
+ABI uint64_t lantern_store_payload_status(void *store, const void *node, const void *payload_status, void *result);
 ABI uint64_t lantern_get_proposer_head(const void *store, const void *head, const void *slot, const void *head_state,
                                        void *scratch, void *out);
 ABI uint64_t lantern_is_data_available(const void *sidecars, const void *settings, const void *config, void *scratch,
                                        void *out);
+
+/* Networking rules: docs/reference/networking.md. */
+ABI uint64_t lantern_get_custody_groups(const void *node_id, const void *custody_group_count, const void *config,
+                                        void *out);
+ABI uint64_t lantern_compute_columns_for_custody_group(const void *custody_group, const void *config, void *out);
+
+/* Gossip: docs/reference/networking.md. */
+ABI uint64_t lantern_verify_partial_data_column_header_inclusion_proof(const void *header, void *scratch, void *out);
+ABI uint64_t lantern_seen_size(const void *room, void *size);
+ABI uint64_t lantern_seen_init(const void *room, void *seen);
+ABI uint64_t lantern_seen_copy(const void *seen, const void *room, void *out);
+ABI uint64_t lantern_seen_add_block(void *seen, const void *root, const void *payload_status);
+ABI uint64_t lantern_validate_beacon_block_gossip(void *seen, const void *store, const void *block, const void *now,
+                                                  const void *head_state, const void *proposer_state, void *scratch, void *result);
+ABI uint64_t lantern_validate_beacon_aggregate_and_proof_gossip(void *seen, const void *store, const void *aggregate,
+                                                                const void *now, const void *head_state, void *scratch,
+                                                                void *result);
+ABI uint64_t lantern_validate_beacon_attestation_gossip(void *seen, const void *store, const void *attestation, const void *now,
+                                                        const void *subnet_id, const void *head_state, void *scratch,
+                                                        void *result);
+ABI uint64_t lantern_validate_voluntary_exit_gossip(void *seen, const void *store, const void *exit, const void *now,
+                                                    const void *head_state, void *scratch, void *result);
+ABI uint64_t lantern_validate_proposer_slashing_gossip(void *seen, const void *store, const void *slashing, const void *head_state,
+                                                       void *scratch, void *result);
+ABI uint64_t lantern_validate_attester_slashing_gossip(void *seen, const void *store, const void *slashing, const void *head_state,
+                                                       void *scratch, void *result);
+ABI uint64_t lantern_validate_sync_committee_contribution_and_proof_gossip(void *seen, const void *store, const void *contribution,
+                                                                           const void *now, const void *head_state, void *scratch,
+                                                                           void *result);
+ABI uint64_t lantern_validate_sync_committee_message_gossip(void *seen, const void *store, const void *message, const void *now,
+                                                            const void *subnet_id, const void *head_state, void *scratch,
+                                                            void *result);
+ABI uint64_t lantern_validate_bls_to_execution_change_gossip(void *seen, const void *store, const void *change, const void *now,
+                                                             const void *head_state, void *scratch, void *result);
+ABI uint64_t lantern_validate_data_column_sidecar_gossip(void *seen, const void *store, const void *sidecar, const void *now,
+                                                         const void *subnet_id, const void *head_state, const void *proposer_state,
+                                                         const void *settings, void *scratch, void *result);
+ABI uint64_t lantern_validate_partial_data_column_sidecar_gossip(void *seen, const void *store, const void *sidecar, const void *now,
+                                                                 const void *group_id, const void *column_index,
+                                                                 const void *head_state, const void *proposer_state,
+                                                                 const void *settings, void *scratch, void *result);
+#define GOSSIP_TOPICS(X)                                                                                       \
+    X(beacon_block, SignedBeaconBlock)                                                                         \
+    X(beacon_aggregate_and_proof, SignedAggregateAndProof)                                                     \
+    X(beacon_attestation, SingleAttestation)                                                                   \
+    X(voluntary_exit, SignedVoluntaryExit)                                                                     \
+    X(proposer_slashing, ProposerSlashing)                                                                     \
+    X(attester_slashing, AttesterSlashing)                                                                     \
+    X(sync_committee_contribution_and_proof, SignedContributionAndProof)                                       \
+    X(sync_committee_message, SyncCommitteeMessage)                                                            \
+    X(bls_to_execution_change, SignedBLSToExecutionChange)                                                     \
+    X(data_column_sidecar, DataColumnSidecar)                                                                  \
+    X(partial_data_column_sidecar, PartialDataColumnSidecar)
 
 /* asm-crypto, at the pin in platform/deps.sh. */
 ABI uint64_t crypto_kzg_trusted_setup_of_bytes(const void *g1_lagrange, const void *g1_monomial,
@@ -134,7 +188,7 @@ EPOCH_FUNCTIONS(EPOCH_FN)
 #define PAINT_BYTES (STACK_CAP + 4096)
 
 typedef struct {
-    uint64_t fn, arg[5], paint, status, fault, stack, scratch[4], arg5;
+    uint64_t fn, arg[5], paint, status, fault, stack, scratch[4], arg5, more[5]; /* more: arguments 7 to 11 */
 } abi_ctx;
 ABI void abi_call(abi_ctx *ctx);
 
@@ -158,13 +212,18 @@ static fn_stats *stats_for(const char *name) {
     return &stats[stats_count++];
 }
 
-/* Call lantern function f, named name, with up to 6 pointer arguments. */
+/* Call lantern function f, named name, with up to 11 pointer arguments. */
 __attribute__((unused)) static uint64_t checked_call(const char *name, uint64_t f, const void *const *args, size_t n) {
     abi_ctx c;
     memset(&c, 0, sizeof c);
     c.fn = f;
+    if (n > 11) {
+        fprintf(stderr, "%s: more than 11 arguments\n", name);
+        exit(2);
+    }
     for (size_t i = 0; i < n && i < 5; i++) c.arg[i] = (uint64_t)(uintptr_t)args[i];
     if (n > 5) c.arg5 = (uint64_t)(uintptr_t)args[5];
+    for (size_t i = 6; i < n; i++) c.more[i - 6] = (uint64_t)(uintptr_t)args[i];
     c.paint = PAINT_BYTES;
     abi_call(&c);
     fn_stats *s = stats_for(name);
@@ -543,19 +602,11 @@ static const struct {
 
 static uint8_t config[CONFIG_SIZE];
 
-static void load_config(const char *dir) {
-    case_file f;
-    char name[64];
-    snprintf(name, sizeof name, "%s-config.bin", PRESET);
-    if (!read_file(dir, name, &f)) {
-        fprintf(stderr, "%s/%s: missing\n", dir, name);
-        exit(2);
-    }
-    const char *cname;
-    uint64_t clen;
-    tv map = next_case(&f, &cname, &clen);
+/* Fill config from a config map; with overrides set, a value the map does not hold stays. */
+static void config_from_map(tv map, int overrides) {
     for (size_t i = 0; i < sizeof CONFIG_FIELDS / sizeof CONFIG_FIELDS[0]; i++) {
         tv v = tv_get(map, CONFIG_FIELDS[i].name);
+        if (!v && overrides) continue;
         if (!v) {
             fprintf(stderr, "config: no %s\n", CONFIG_FIELDS[i].name);
             exit(2);
@@ -577,6 +628,7 @@ static void load_config(const char *dir) {
         }
     }
     tv sched = tv_get(map, "BLOB_SCHEDULE");
+    if (!sched && overrides) return;
     uint64_t n = sched && *sched == T_LIST ? rd64(sched + 1) : 0;
     if (n > 32) {
         fprintf(stderr, "config: BLOB_SCHEDULE has more than 32 entries\n");
@@ -589,7 +641,30 @@ static void load_config(const char *dir) {
         wr64(config + CONFIG_BLOB_SCHEDULE + 16 * i + 8, tv_u64(tv_get(e, "MAX_BLOBS_PER_BLOCK")));
         e = tv_skip(e);
     }
+}
+
+/* The config of <preset>-config.bin, and a copy of it for the cases that override values. */
+static uint8_t base_config[CONFIG_SIZE];
+static void load_config(const char *dir) {
+    case_file f;
+    char name[64];
+    snprintf(name, sizeof name, "%s-config.bin", PRESET);
+    if (!read_file(dir, name, &f)) {
+        fprintf(stderr, "%s/%s: missing\n", dir, name);
+        exit(2);
+    }
+    const char *cname;
+    uint64_t clen;
+    config_from_map(next_case(&f, &cname, &clen), 0);
+    memcpy(base_config, config, CONFIG_SIZE);
     free(f.data);
+}
+
+/* The config of one case: the preset's, with the values of the case's config.yaml when it has one. */
+static void case_config(tv parts) {
+    memcpy(config, base_config, CONFIG_SIZE);
+    tv c = tv_get(parts, "config");
+    if (c) config_from_map(c, 1);
 }
 
 /* ---------------------------------------------------------------- States */
@@ -949,6 +1024,66 @@ static void run_shuffling(const char *file, case_file *f) {
     }
 }
 
+/* ---------------------------------------------------------------- Custody */
+
+/* The 32 little endian bytes of an integer value: tag 1 (u64) or tag 8 (Uint256). */
+static void tv_uint256(tv v, uint8_t out[32]) {
+    memset(out, 0, 32);
+    if (v && *v == T_UINT256) memcpy(out, v + 1, 32);
+    else wr64(out, tv_u64(v));
+}
+
+/* Whether IndexList out holds the integers of the list want. */
+static int list_equals(const uint8_t *out, tv want) {
+    if (!want || *want != T_LIST || rd64(out + 16) != rd64(want + 1)) return 0;
+    tv e = want + 9;
+    for (uint64_t k = 0; k < rd64(want + 1); k++, e = tv_skip(e))
+        if (rd64(out + 24 + 8 * k) != tv_u64(e)) return 0;
+    return 1;
+}
+
+/* networking-get_custody_groups and networking-compute_columns_for_custody_group. */
+static void run_custody(const char *file, const char *handler, case_file *f) {
+    int groups = !strcmp(handler, "get_custody_groups");
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len;
+        tv m = tv_get(next_case(f, &name, &len), "meta");
+        tv want = tv_get(m, "result");
+        uint64_t n = rd64(want + 1), osize = 24 + 8 * n, st;
+        uint8_t *out = buffer(osize);
+        wr64(out, osize);
+        if (groups) {
+            uint8_t node_id[32];
+            tv_uint256(tv_get(m, "node_id"), node_id);
+            uint64_t count = tv_u64(tv_get(m, "custody_group_count"));
+            st = CALL(lantern_get_custody_groups, node_id, &count, config, out);
+            /* One entry less room than the count: BUFFER_TOO_SMALL. */
+            if (!st && n > 0) {
+                uint8_t *small = buffer(osize - 8);
+                wr64(small, osize - 8);
+                if (CALL(lantern_get_custody_groups, node_id, &count, config, small) != 1) why = "short out accepted";
+                free(small);
+            }
+        } else {
+            uint64_t group = tv_u64(tv_get(m, "custody_group"));
+            st = CALL(lantern_compute_columns_for_custody_group, &group, config, out);
+        }
+        /* NUMBER_OF_CUSTODY_GROUPS (+ 1 for a count) fails the spec's assert. */
+        uint64_t over = rd64(config + 280) + groups, got = 0;
+        uint8_t node0[32] = {0};
+        uint64_t bad = groups ? CALL(lantern_get_custody_groups, node0, &over, config, &got)
+                              : CALL(lantern_compute_columns_for_custody_group, &over, config, &got);
+        if (bad != 42) why = "assert not checked";
+        if (st != 0) why = "status";
+        else if (!guard_ok(out, osize)) why = "wrote past out";
+        else if (rd64(out + 8) != 24) why = "offset";
+        else if (!list_equals(out, want)) why = "result differs";
+        free(out);
+        report(file, name, len, why == NULL, why);
+    }
+}
+
 /* ---------------------------------------------------------------- Rewards */
 
 /* Whether the IndexList pair (rewards, penalties) equals the SSZ Deltas in want. */
@@ -1008,7 +1143,11 @@ static void run_rewards(const char *file, case_file *f) {
 #define STORE_BOOST_ROOT 184
 #define STORE_BLOCKS 264
 #define STORE_VALIDATORS 280
-#define NODE_BYTES 176
+#define NODE_BYTES 216
+#define NODE_PARENT 80
+#define NODE_BLOCK_HASH 176
+#define NODE_PAYLOAD_STATUS 208
+enum { PAYLOAD_VALID = 0, PAYLOAD_INVALIDATED = 1, PAYLOAD_NOT_VALIDATED = 2 };
 #define NODE_SLOT 64
 #define NODE_PARENT 80
 #define LANTERN_NEED_JUSTIFIED_STATE 41
@@ -1068,6 +1207,11 @@ typedef struct {
     uint8_t *anchor;  /* a valid state to pass where on_block reads none */
     uint64_t anchor_size;
     int compliance;   /* the compliance runner's rules: invalid operations inside a valid block are ignored */
+    struct {          /* the payload_status steps: the execution engine's answer for a payload */
+        uint8_t block_hash[32], latest_valid_hash[32];
+        uint64_t status, has_latest;
+    } payloads[64];
+    size_t npayloads;
 } fc_node;
 
 static uint8_t *copy_of(const uint8_t *b, uint64_t size) {
@@ -1272,7 +1416,30 @@ static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
     const uint8_t *block = nested(signed_block, field_offset("SignedBeaconBlock", 0));
     const uint8_t *parent_root = block + field_offset("BeaconBlock", 2);
 
-    uint64_t options[2] = {1, 1};
+    /* The engine's answer for the payload (optimistic sync tests), VALID when the case gives none. */
+    const uint8_t *body0 = nested(block, field_offset("BeaconBlock", 4));
+    const uint8_t *hash = nested(body0, field_offset("BeaconBlockBody", 9)) + field_offset("ExecutionPayload", 12);
+    uint64_t options[2] = {PAYLOAD_VALID, 1};
+    for (size_t k = 0; k < n->npayloads; k++) {
+        if (memcmp(n->payloads[k].block_hash, hash, 32)) continue;
+        options[0] = n->payloads[k].status;
+        /* INVALID with latestValidHash: the harness invalidates the chain down to that hash. */
+        kept_state *p = n->payloads[k].status == PAYLOAD_INVALIDATED && n->payloads[k].has_latest
+                            ? find_kept(n->blocks, n->nblocks, parent_root, 0, 0) : NULL;
+        static const uint8_t zero[32];
+        for (uint64_t i = 0; p && i < node_count(n); i++) {
+            if (memcmp(node_at(n, i), parent_root, 32)) continue;
+            uint64_t node = i, result = 1;
+            while (node != UINT64_MAX && memcmp(node_at(n, node) + NODE_BLOCK_HASH, n->payloads[k].latest_valid_hash, 32) &&
+                   memcmp(node_at(n, node) + NODE_BLOCK_HASH, zero, 32)) {
+                uint64_t status = PAYLOAD_INVALIDATED;
+                if (CALL(lantern_store_payload_status, n->store, &node, &status, &result) != 0 || result != 0)
+                    *why = "store_payload_status";
+                node = rd64(node_at(n, node) + NODE_PARENT);
+            }
+            break;
+        }
+    }
     tv columns = tv_get(step, "columns");
     if (columns) {
         if (rd64(columns + 1) == 0) options[1] = 0; /* retrieve_column_sidecars raises: not enough data */
@@ -1517,6 +1684,23 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
                 }
             } else if (tv_get(s, "checks")) {
                 fc_checks(&n, tv_get(s, "checks"), &why);
+            } else if (tv_get(s, "payload_status")) {
+                /* bellatrix optimistic-sync.md: SYNCING and ACCEPTED are NOT_VALIDATED, INVALID and INVALID_BLOCK_HASH INVALIDATED. */
+                tv ps = tv_get(s, "payload_status"), st = tv_get(ps, "status"), lvh = tv_get(ps, "latest_valid_hash");
+                uint64_t hlen, slen2;
+                const uint8_t *h = tv_bytes(tv_get(s, "block_hash"), &hlen);
+                const char *text = (const char *)(st + 9);
+                slen2 = rd64(st + 1);
+                if (n.npayloads == 64 || hlen != 32) why = "payload_status step";
+                else {
+                    memcpy(n.payloads[n.npayloads].block_hash, h, 32);
+                    n.payloads[n.npayloads].status = slen2 == 5 && !memcmp(text, "VALID", 5) ? PAYLOAD_VALID
+                                                     : (slen2 == 7 && !memcmp(text, "SYNCING", 7)) || (slen2 == 8 && !memcmp(text, "ACCEPTED", 8))
+                                                         ? PAYLOAD_NOT_VALIDATED : PAYLOAD_INVALIDATED;
+                    n.payloads[n.npayloads].has_latest = lvh && *lvh == T_BYTES;
+                    if (n.payloads[n.npayloads].has_latest) memcpy(n.payloads[n.npayloads].latest_valid_hash, lvh + 9, 32);
+                    n.npayloads++;
+                }
             } else {
                 why = "unknown step";
             }
@@ -1535,6 +1719,350 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
         free(n.store);
         free(n.anchor);
         free(anchor_block);
+        report(file, name, len, why == NULL, why);
+    }
+}
+
+/* ---------------------------------------------------------------- Merkle proofs */
+
+/*
+ * merkle_proof-single_merkle_proof, BeaconBlockBody: the proof of blob_kzg_commitments. A partial column header
+ * made of the body's commitments, the case's branch and a block header with the body's root must pass
+ * lantern_verify_partial_data_column_header_inclusion_proof, and fail with one branch byte changed.
+ */
+static void root_of(const char *type, const uint8_t *value, uint8_t root[32], const char **why);
+static void run_merkle_proof(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, blen, vsize;
+        tv parts = next_case(f, &name, &len);
+        if (strncmp(name, "BeaconBlockBody/", 16)) {
+            report(file, name, len, 0, "not a BeaconBlockBody case");
+            continue;
+        }
+        tv proof = tv_get(parts, "proof"), branch = tv_get(proof, "branch");
+        uint8_t *body = decode(type_by_name("BeaconBlockBody"), tv_bytes(tv_get(parts, "object"), &blen), blen, &vsize, &why);
+        if (!body) {
+            report(file, name, len, 0, why);
+            continue;
+        }
+        if (tv_u64(tv_get(proof, "leaf_index")) != 27 || rd64(branch + 1) != 4) why = "not the proof of blob_kzg_commitments";
+        uint64_t ref = field_offset("BeaconBlockBody", 11), count = rd64(body + ref + 8);
+        /* The SSZ bytes of PartialDataColumnHeader: offset, SignedBeaconBlockHeader, the branch, the commitments. */
+        uint64_t size = 4 + 208 + 128 + 48 * count;
+        uint8_t *ssz = buffer(size);
+        memset(ssz, 0, (size_t)size);
+        ssz[0] = (4 + 208 + 128) & 0xff; /* the offset of the commitments, 4 bytes little endian */
+        ssz[1] = (4 + 208 + 128) >> 8;
+        uint8_t body_root[32];
+        root_of("BeaconBlockBody", body, body_root, &why);
+        memcpy(ssz + 4 + 80, body_root, 32); /* the header's body_root: after slot, proposer_index, parent_root, state_root */
+        tv e = branch + 9;
+        for (int k = 0; k < 4; k++, e = tv_skip(e)) memcpy(ssz + 4 + 208 + 32 * k, tv_bytes(e, &blen), 32);
+        memcpy(ssz + 4 + 208 + 128, body + rd64(body + ref), (size_t)(48 * count));
+        for (int flip = 0; flip < 2 && !why; flip++) {
+            if (flip) ssz[4 + 208] ^= 1;
+            uint8_t *hdr = decode(type_by_name("PartialDataColumnHeader"), ssz, size, &vsize, &why);
+            uint64_t out = 7;
+            if (hdr && CALL(lantern_verify_partial_data_column_header_inclusion_proof, hdr, fresh_scratch(), &out) != 0) why = "status";
+            else if (hdr && out != (uint64_t)!flip) why = flip ? "a changed branch passes" : "the proof fails";
+            free(hdr);
+        }
+        free(ssz);
+        free(body);
+        report(file, name, len, why == NULL, why);
+    }
+}
+
+/* ---------------------------------------------------------------- Gossip */
+
+#define SEEN_KEYS 8
+#define SEEN_HEADERS 56
+#define SEEN_HEADER_BYTES 72
+#define GOSSIP_IGNORE 44
+#define GOSSIP_REJECT 45
+
+typedef struct {
+    uint8_t *b;
+    uint64_t size, room[4]; /* keys, bits, blocks, header_bytes */
+} seen_buf;
+
+/* A Seen with the capacities of s->room. */
+static void seen_make(seen_buf *s, const char **why) {
+    uint64_t need = 0;
+    if (CALL(lantern_seen_size, s->room, &need) != 0) {
+        *why = "lantern_seen_size status";
+        return;
+    }
+    uint8_t *b = buffer(need);
+    wr64(b, need);
+    if (!s->b) {
+        if (CALL(lantern_seen_init, s->room, b) != 0) *why = "lantern_seen_init status";
+    } else if (CALL(lantern_seen_copy, s->b, s->room, b) != 0) *why = "lantern_seen_copy status";
+    else if (!guard_ok(b, need)) *why = "lantern_seen_copy wrote out of bounds";
+    free(s->b);
+    s->b = b;
+    s->size = need;
+}
+
+/* The resize step for seen: twice each capacity. */
+static void seen_grow(seen_buf *s, const char **why) {
+    for (int i = 0; i < 4; i++) s->room[i] *= 2;
+    seen_make(s, why);
+}
+
+/* The kept state of a root, or NULL. */
+static kept_state *kept_of(fc_node *n, const uint8_t *root) { return find_kept(n->blocks, n->nblocks, root, 0, 0); }
+
+/* hash_tree_root of value of the named type. */
+static void root_of(const char *type, const uint8_t *value, uint8_t root[32], const char **why) {
+    if (CALL(ssz_hash_tree_root, type_by_name(type), value, fresh_scratch(), root) != 0) *why = "hash_tree_root status";
+}
+
+/* A copy of the state of parent_root after process_slots to slot, or NULL when lantern reads none. */
+static uint8_t *gossip_proposer_state(fc_node *n, const uint8_t *parent_root, uint64_t slot, uint64_t *size,
+                                      const char **why) {
+    kept_state *k = kept_of(n, parent_root);
+    if (!k || slot <= rd64(k->state + field_offset("BeaconState", 2))) return NULL;
+    *size = k->size;
+    uint8_t *state = copy_of(k->state, k->size);
+    uint64_t result = 0, st, growth = 2;
+    while ((st = CALL(lantern_process_slots, state, &slot, config, fresh_scratch(), &result)) == 1 && !*why)
+        state = regrow(state, size, growth *= 2, why);
+    if (st != 0 || result != 0) {
+        free(state);
+        return NULL;
+    }
+    return state;
+}
+
+static void run_gossip(const char *file, const char *dir, const char *handler, case_file *f) {
+    static const struct {
+        const char *topic, *type;
+    } topics[] = {
+#define GOSSIP_ENTRY(name, type) {#name, #type},
+        GOSSIP_TOPICS(GOSSIP_ENTRY)};
+    int t = -1;
+    for (int k = 0; k < (int)(sizeof topics / sizeof topics[0]); k++)
+        if (!strcmp(handler, topics[k].topic)) t = k;
+    if (t < 0) {
+        printf("SKIP %s: lantern has no handler %s\n", file, handler);
+        return;
+    }
+    load_kzg_settings(dir);
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, slen, blen, vsize;
+        tv parts = next_case(f, &name, &len);
+        if (skip_case(parts)) continue;
+        case_config(parts);
+        tv meta = tv_get(parts, "meta");
+        fc_node n;
+        memset(&n, 0, sizeof n);
+        seen_buf seen = {NULL, 0, {1, 1, 1, 64}};
+        seen_make(&seen, &why);
+        n.anchor = load_state(tv_bytes(tv_get(parts, "state"), &slen), slen, &n.anchor_size, &why);
+        tv blocks = tv_get(meta, "blocks"), b = blocks + 9;
+        for (uint64_t k = 0, c = rd64(blocks + 1); k < c && !why; k++, b = tv_skip(b)) {
+            char key[160];
+            tv bn = tv_get(b, "block");
+            snprintf(key, sizeof key, "%.*s", (int)rd64(bn + 1), (const char *)(bn + 9));
+            uint8_t *signed_block = decode(type_by_name("SignedBeaconBlock"), tv_bytes(tv_get(parts, key), &blen), blen, &vsize, &why);
+            if (!signed_block) break;
+            const uint8_t *block = nested(signed_block, field_offset("SignedBeaconBlock", 0));
+            uint8_t root[32];
+            root_of("BeaconBlock", block, root, &why);
+            tv ps = tv_get(b, "payload_status"), fl = tv_get(b, "failed"), pe = tv_get(b, "pending");
+            uint64_t status = PAYLOAD_VALID;
+            if (ps) {
+                const char *text = (const char *)(ps + 9);
+                status = !strncmp(text, "VALID", 5) ? PAYLOAD_VALID : !strncmp(text, "INVALIDATED", 11) ? PAYLOAD_INVALIDATED : PAYLOAD_NOT_VALIDATED;
+            }
+            if (k == 0) { /* the anchor */
+                uint64_t room[2] = {4, 1}, need = 0, st;
+                CALL(lantern_store_size, room, &need);
+                n.store = buffer(need);
+                n.size = need;
+                wr64(n.store, need);
+                while ((st = CALL(lantern_get_forkchoice_store, n.anchor, block, config, room, fresh_scratch(), n.store)) == 1 &&
+                       room[1] < (1u << 24)) {
+                    room[1] *= 2;
+                    CALL(lantern_store_size, room, &need);
+                    free(n.store);
+                    n.store = buffer(need);
+                    n.size = need;
+                    wr64(n.store, need);
+                }
+                if (st != 0) why = "get_forkchoice_store status";
+                else keep(&n.blocks, &n.nblocks, node_at(&n, 0), 0, copy_of(n.anchor, n.anchor_size), n.anchor_size);
+            } else if ((fl && fl[1]) || (pe && pe[1])) { /* seen, with no post-state */
+                if (!ps) status = PAYLOAD_NOT_VALIDATED;
+                uint64_t st;
+                while ((st = CALL(lantern_seen_add_block, seen.b, root, &status)) == 1 && !why) seen_grow(&seen, &why);
+                if (st != 0) why = "seen_add_block status";
+            } else { /* imported: on_tick to its slot, then on_block */
+                uint64_t slot = rd64(block + field_offset("BeaconBlock", 0)), result = 0;
+                uint64_t ms = rd64(n.store + STORE_GENESIS_TIME_MS) + slot * rd64(config + 104);
+                if (rd64(n.store + STORE_TIME_MS) < ms && CALL(lantern_on_tick, n.store, &ms, &result) != 0) why = "on_tick status";
+                kept_state *parent = kept_of(&n, block + field_offset("BeaconBlock", 2));
+                if (!parent) why = "a block's parent is not imported";
+                else {
+                    uint64_t options[2] = {status == PAYLOAD_VALID ? PAYLOAD_VALID : PAYLOAD_NOT_VALIDATED, 1}, size = parent->size, growth = 2;
+                    uint8_t *state = copy_of(parent->state, size);
+                    uint64_t st = FC_RETRY(&n, &why, CALL(lantern_on_block, n.store, signed_block, state, options, fresh_scratch(), &result),
+                                           if (node_count(&n) == node_capacity(n.store)) grow_store(&n, &why);
+                                           else { state = regrow(state, &size, growth, &why); growth *= 2; }, state, size);
+                    if (!why && (st != 0 || result != 0)) why = "on_block of a meta block";
+                    if (!why) {
+                        uint64_t node = node_count(&n) - 1;
+                        keep(&n.blocks, &n.nblocks, node_at(&n, node), 0, state, size);
+                        state = NULL;
+                        if (status == PAYLOAD_INVALIDATED &&
+                            (CALL(lantern_store_payload_status, n.store, &node, &status, &result) != 0 || result != 0))
+                            why = "store_payload_status";
+                    }
+                    free(state);
+                }
+            }
+            free(signed_block);
+        }
+        tv fin = tv_get(meta, "finalized_checkpoint");
+        if (fin && !why) { /* the case's finalized checkpoint */
+            wr64(n.store + STORE_FINALIZED, tv_u64(tv_get(fin, "epoch")));
+            tv r = tv_get(fin, "root"), fb = tv_get(fin, "block");
+            if (r) memcpy(n.store + STORE_FINALIZED + 8, tv_bytes(r, &blen), 32);
+            else {
+                char key[160];
+                snprintf(key, sizeof key, "%.*s", (int)rd64(fb + 1), (const char *)(fb + 9));
+                uint8_t *sb = decode(type_by_name("SignedBeaconBlock"), tv_bytes(tv_get(parts, key), &blen), blen, &vsize, &why);
+                if (sb) root_of("BeaconBlock", nested(sb, field_offset("SignedBeaconBlock", 0)), n.store + STORE_FINALIZED + 8, &why);
+                free(sb);
+            }
+        }
+        tv hdrs = tv_get(meta, "seen_partial_data_column_headers");
+        b = hdrs ? hdrs + 9 : NULL;
+        for (uint64_t k = 0, c = hdrs ? rd64(hdrs + 1) : 0; k < c && !why; k++, b = tv_skip(b)) {
+            char key[160];
+            tv hn = tv_get(b, "header");
+            snprintf(key, sizeof key, "%.*s", (int)rd64(hn + 1), (const char *)(hn + 9));
+            uint8_t *hdr = decode(type_by_name("PartialDataColumnHeader"), tv_bytes(tv_get(parts, key), &blen), blen, &vsize, &why);
+            if (!hdr) break;
+            uint64_t entry = 64 + rd64(hdr);
+            while (rd64(seen.b + SEEN_HEADER_BYTES) + entry > seen.room[3] && !why) seen_grow(&seen, &why);
+            uint8_t *at = seen.b + rd64(seen.b + SEEN_HEADERS) + rd64(seen.b + SEEN_HEADER_BYTES);
+            memcpy(at, tv_bytes(tv_get(b, "block_root"), &blen), 32);
+            root_of("PartialDataColumnHeader", hdr, at + 32, &why);
+            memcpy(at + 64, hdr, (size_t)rd64(hdr));
+            wr64(seen.b + SEEN_HEADERS + 8, rd64(seen.b + SEEN_HEADERS + 8) + 1);
+            wr64(seen.b + SEEN_HEADER_BYTES, rd64(seen.b + SEEN_HEADER_BYTES) + entry);
+            free(hdr);
+        }
+        tv msgs = tv_get(meta, "messages"), m = msgs + 9;
+        for (uint64_t k = 0, c = rd64(msgs + 1); k < c && !why; k++, m = tv_skip(m)) {
+            char key[160];
+            tv mn = tv_get(m, "message");
+            snprintf(key, sizeof key, "%.*s", (int)rd64(mn + 1), (const char *)(mn + 9));
+            uint8_t *msg = decode(type_by_name(topics[t].type), tv_bytes(tv_get(parts, key), &blen), blen, &vsize, &why);
+            if (!msg) break;
+            uint64_t head = fc_head(&n, &why);
+            kept_state *hk = why ? NULL : kept_of(&n, node_at(&n, head));
+            if (!why && !hk) why = "no state for the head";
+            tv tm = tv_get(m, "current_time_ms"), sn = tv_get(m, "subnet_id"), ci = tv_get(m, "column_index"), gi = tv_get(m, "group_id");
+            uint64_t now = tm ? tv_u64(tm) : 0, subnet = sn ? tv_u64(sn) : 0, column = ci ? tv_u64(ci) : 0;
+            uint8_t *group = NULL;
+            if (gi) {
+                snprintf(key, sizeof key, "%.*s", (int)rd64(gi + 1), (const char *)(gi + 9));
+                group = decode(type_by_name("PartialDataColumnGroupID"), tv_bytes(tv_get(parts, key), &blen), blen, &vsize, &why);
+            }
+            /* The parent and slot of a message with a block or block header. */
+            const uint8_t *slotp = NULL, *parentp = NULL;
+            if (!strcmp(handler, "beacon_block")) {
+                const uint8_t *blk = nested(msg, field_offset("SignedBeaconBlock", 0));
+                slotp = blk + field_offset("BeaconBlock", 0);
+                parentp = blk + field_offset("BeaconBlock", 2);
+            } else {
+                const uint8_t *h = NULL; /* a SignedBeaconBlockHeader: its message first, of fixed size */
+                if (!strcmp(handler, "data_column_sidecar")) h = msg + field_offset("DataColumnSidecar", 4);
+                else if (!strcmp(handler, "partial_data_column_sidecar")) {
+                    uint64_t ref = field_offset("PartialDataColumnSidecar", 3);
+                    if (rd64(msg + ref + 8) == 1) h = msg + rd64(msg + ref) + field_offset("PartialDataColumnHeader", 1);
+                }
+                if (h) {
+                    slotp = h + field_offset("BeaconBlockHeader", 0);
+                    parentp = h + field_offset("BeaconBlockHeader", 2);
+                }
+            }
+            uint64_t psize = 0;
+            uint8_t *proposer = slotp && !why ? gossip_proposer_state(&n, parentp, rd64(slotp), &psize, &why) : NULL;
+            const uint8_t *head_state = hk ? hk->state : NULL, *pstate = proposer ? proposer : head_state;
+            uint64_t result = 0xA5A5A5A5A5A5A5A5u, st = 0;
+            for (int tries = 0; tries < 24 && !why; tries++) {
+                uint8_t *snap = copy_of(seen.b, seen.size);
+                const char *nm = topics[t].topic;
+                void *sb = seen.b, *store = n.store;
+                if (!strcmp(nm, "beacon_block"))
+                    st = CALL(lantern_validate_beacon_block_gossip, sb, store, msg, &now, head_state, pstate, fresh_scratch(), &result);
+                else if (!strcmp(nm, "beacon_aggregate_and_proof"))
+                    st = CALL(lantern_validate_beacon_aggregate_and_proof_gossip, sb, store, msg, &now, head_state, fresh_scratch(), &result);
+                else if (!strcmp(nm, "beacon_attestation"))
+                    st = CALL(lantern_validate_beacon_attestation_gossip, sb, store, msg, &now, &subnet, head_state, fresh_scratch(), &result);
+                else if (!strcmp(nm, "voluntary_exit"))
+                    st = CALL(lantern_validate_voluntary_exit_gossip, sb, store, msg, &now, head_state, fresh_scratch(), &result);
+                else if (!strcmp(nm, "proposer_slashing"))
+                    st = CALL(lantern_validate_proposer_slashing_gossip, sb, store, msg, head_state, fresh_scratch(), &result);
+                else if (!strcmp(nm, "attester_slashing"))
+                    st = CALL(lantern_validate_attester_slashing_gossip, sb, store, msg, head_state, fresh_scratch(), &result);
+                else if (!strcmp(nm, "sync_committee_contribution_and_proof"))
+                    st = CALL(lantern_validate_sync_committee_contribution_and_proof_gossip, sb, store, msg, &now, head_state, fresh_scratch(), &result);
+                else if (!strcmp(nm, "sync_committee_message"))
+                    st = CALL(lantern_validate_sync_committee_message_gossip, sb, store, msg, &now, &subnet, head_state, fresh_scratch(), &result);
+                else if (!strcmp(nm, "bls_to_execution_change"))
+                    st = CALL(lantern_validate_bls_to_execution_change_gossip, sb, store, msg, &now, head_state, fresh_scratch(), &result);
+                else if (!strcmp(nm, "data_column_sidecar"))
+                    st = CALL(lantern_validate_data_column_sidecar_gossip, sb, store, msg, &now, &subnet, head_state, pstate, kzg_settings,
+                              fresh_scratch(), &result);
+                else
+                    st = CALL(lantern_validate_partial_data_column_sidecar_gossip, sb, store, msg, &now, group, &column, head_state, pstate,
+                              kzg_settings, fresh_scratch(), &result);
+                if (st != 0 && memcmp(snap, seen.b, (size_t)seen.size)) why = "a non-zero status changed seen";
+                /* A failed check leaves seen as it was, except that a partial column keeps the header it
+                   recorded before its cell checks, as the spec does. */
+                else if (st == 0 && result != 0 && strcmp(nm, "partial_data_column_sidecar") &&
+                         memcmp(snap, seen.b, (size_t)seen.size))
+                    why = "a failed check changed seen";
+                free(snap);
+                if (st != 1) break;
+                seen_grow(&seen, &why);
+            }
+            if (!why && !guard_ok(seen.b, seen.size)) why = "wrote past seen";
+            if (!why && st != 0) {
+                static char msg2[64];
+                snprintf(msg2, sizeof msg2, "status %llu", (unsigned long long)st);
+                why = msg2;
+            }
+            if (!why) {
+                tv ex = tv_get(m, "expected");
+                const char *want = (const char *)(ex + 9), *got = result == 0 ? "valid" : result == GOSSIP_IGNORE ? "ignore"
+                                                                       : result == GOSSIP_REJECT ? "reject" : "other";
+                if (strncmp(want, got, (size_t)rd64(ex + 1)) || strlen(got) != rd64(ex + 1)) {
+                    static char msg2[160];
+                    snprintf(msg2, sizeof msg2, "message %llu: expected %.*s, got %s (%llu)", (unsigned long long)k, (int)rd64(ex + 1), want,
+                             got, (unsigned long long)result);
+                    why = msg2;
+                }
+            }
+            free(proposer);
+            free(group);
+            free(msg);
+        }
+        for (size_t k = 0; k < n.nblocks; k++) free(n.blocks[k].state);
+        for (size_t k = 0; k < n.ncheckpoints; k++) free(n.checkpoints[k].state);
+        free(n.blocks);
+        free(n.checkpoints);
+        free(n.store);
+        free(n.anchor);
+        free(seen.b);
+        memcpy(config, base_config, CONFIG_SIZE);
         report(file, name, len, why == NULL, why);
     }
 }
@@ -1574,8 +2102,14 @@ int main(int argc, char **argv) {
         else if (!strcmp(kind, "sanity-blocks") || !strcmp(kind, "finality-finality") || !strcmp(kind, "random-random"))
             run_blocks(file, &f);
         else if (!bls_off && !strncmp(kind, "rewards-", 8)) run_rewards(file, &f);
+        else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
+                              !strcmp(kind, "networking-compute_columns_for_custody_group")))
+            run_custody(file, kind + 11, &f);
         else if (!strncmp(kind, "fork_choice-", 12)) run_fork_choice(file, argv[1], &f, 0);
         else if (!strncmp(kind, "fork_choice_compliance-", 23)) run_fork_choice(file, argv[1], &f, 1);
+        else if (!bls_off && !strcmp(kind, "sync-optimistic")) run_fork_choice(file, argv[1], &f, 0);
+        else if (!bls_off && !strncmp(kind, "networking-gossip_", 18)) run_gossip(file, argv[1], kind + 18, &f);
+        else if (!bls_off && !strcmp(kind, "merkle_proof-single_merkle_proof")) run_merkle_proof(file, &f);
         else {
             free(f.data);
             continue;

@@ -22,6 +22,7 @@
 - [`lantern_on_attestation`](#function-lantern_on_attestation): records the votes of an attestation.
 - [`lantern_on_attester_slashing`](#function-lantern_on_attester_slashing): records equivocating validators.
 - [`lantern_get_proposer_head`](#function-lantern_get_proposer_head): the head to build on, or its parent for a reorg.
+- [`lantern_store_payload_status`](#function-lantern_store_payload_status): records a later answer of the execution engine for a block.
 - [`lantern_is_data_available`](#function-lantern_is_data_available): checks the column sidecars of a block.
 - [`lantern_verify_data_column_sidecar`](#function-lantern_verify_data_column_sidecar): checks the lengths of a column sidecar.
 - [`lantern_verify_data_column_sidecar_kzg_proofs`](#function-lantern_verify_data_column_sidecar_kzg_proofs): checks the cells of a column sidecar.
@@ -37,7 +38,7 @@
 
 ## Spec
 
-- Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), `phase0/fork-choice.md` with the changes of `bellatrix`, `capella`, `deneb` and `fulu`, and `fulu/p2p-interface.md` for the column sidecar checks.
+- Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), `phase0/fork-choice.md` with the changes of `bellatrix`, `capella`, `deneb` and `fulu`, `bellatrix/optimistic-sync.md`, and `fulu/p2p-interface.md` for the column sidecar checks.
 - Section: Fork choice, at the latest definition of each function from phase0 to fulu.
 
 ## Common rules
@@ -50,6 +51,7 @@
 - A function that changes the store makes every check first and changes the store only after the last check holds, so a call that fails a spec check leaves the store unchanged ("Invalid calls to handlers must not modify store").
 - The config is the store's copy, made by lantern_get_forkchoice_store.
 - A Uint64 result outside 0 to 2^64 - 1 fails with `LANTERN_INVALID_OVERFLOW`, as the spec's Uint64 does.
+- Optimistic sync: each node keeps the execution engine's answer for its payload as a `PayloadValidationStatus` (`PAYLOAD_STATUS_*` of bellatrix p2p-interface.md). An `INVALIDATED` node is removed from fork choice ("Consensus engines MUST support removing blocks from fork choice that transition from `NOT_VALIDATED` to `INVALIDATED`"): it and its subtree are not in the tree of get_filtered_node_tree, so get_head never walks to them, and get_weight counts neither the latest messages for them nor a proposer boost of them.
 - Spec helpers that only these functions call are L0 helpers of `asm/core/<ISA>/forkchoice.s`, named by the spec: get_voting_source, get_attestation_score, get_proposer_score, calculate_committee_fraction, update_checkpoints, update_unrealized_checkpoints, on_tick_per_slot, record_block_timeliness, get_shuffling_dependent_root, update_proposer_boost_root, compute_pulled_up_tip, update_latest_messages, is_head_weak, is_parent_strong and is_proposer_equivocation.
 
 ## Test vectors
@@ -57,6 +59,9 @@
 - consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/fulu/fork_choice/<handler>/`, for mainnet and minimal.
   - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
   - The runner follows `tests/formats/fork_choice/README.md` of the spec: it keeps the block states and checkpoint states, runs the attestations and attester slashings of each valid block after it, and checks `head` with lantern_get_head and `get_proposer_head` with lantern_get_proposer_head at the head and the current slot.
+- consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/fulu/sync/optimistic/`: the fork choice format with `payload_status` steps.
+  - The runner maps `VALID` to `PAYLOAD_STATUS_VALID`, `SYNCING` and `ACCEPTED` to `NOT_VALIDATED`, `INVALID` and `INVALID_BLOCK_HASH` to `INVALIDATED`, and passes it in `BlockOptions`.
+  - For `INVALID` with a `latest_valid_hash`, it first sets `INVALIDATED` with lantern_store_payload_status on each ancestor of the block whose `block_hash` is not that hash, as the spec's test helper `add_optimistic_block` does.
 - The fork choice compliance cases of the release, `comptests.tar.gz` with the SHA-256 in tests/generator/generate.py: `tests/minimal/fulu/fork_choice_compliance/<handler>/`, as `minimal-fork_choice_compliance-<handler>.bin`.
   - Every case has `bls_setting` 2, so `runner-minimal-bls-off` runs them.
   - The runner follows the spec's compliance runner (`tests/generators/compliance_runners/fork_choice/runner/test_run.py`): it ignores invalid attestations and attester slashings inside a valid block, and checks `viable_for_head_roots_and_weights` with lantern_get_filtered_node_tree and lantern_get_weight.
@@ -354,20 +359,24 @@ lantern_on_block(store, signed_block, state, options, scratch, result) -> status
 
 ### Returns
 
-- `LANTERN_OK`: `result` is `LANTERN_VALID` when the block is in the store, or the first failed check: `LANTERN_INVALID_UNKNOWN_BLOCK` (parent), `LANTERN_INVALID_FUTURE_SLOT`, `LANTERN_INVALID_NOT_FINALIZED`, `LANTERN_INVALID_DATA_UNAVAILABLE`, a check of lantern_state_transition, or a spec failure of get_head, get_ancestor or compute_pulled_up_tip.
+- `LANTERN_OK`: `result` is `LANTERN_VALID` when the block is in the store, or the first failed check: `LANTERN_INVALID_UNKNOWN_BLOCK` (parent), `LANTERN_INVALID_PARENT_PAYLOAD`, `LANTERN_INVALID_FUTURE_SLOT`, `LANTERN_INVALID_NOT_FINALIZED`, `LANTERN_INVALID_DATA_UNAVAILABLE`, a check of lantern_state_transition, or a spec failure of get_head, get_ancestor or compute_pulled_up_tip.
 - `LANTERN_BUFFER_TOO_SMALL`: the store has no room for a node, scratch is short, or lantern_state_transition needs room in `state`. Nothing is changed.
 - `LANTERN_NEED_JUSTIFIED_STATE`: see Common rules. Nothing is changed.
 
 ### Caller must
 
 - Pass in `options.data_available` the value of lantern_is_data_available for the block's column sidecars (`retrieve_column_sidecars` is the caller's), or 0 when they cannot be retrieved.
+- Pass in `options.payload_status` the execution engine's answer for the payload: `VALID`, `NOT_VALIDATED` for an optimistic import, or `INVALIDATED`.
 - Keep `state` as `store.block_states[block_root]` when the call adds a node; a known block adds none and leaves `state` unchanged.
 
 ### Function does
 
 - A known root returns `LANTERN_VALID` before any other step.
+- A parent whose payload is `INVALIDATED` fails with `LANTERN_INVALID_PARENT_PAYLOAD` (optimistic-sync.md: "The parent of the block MUST NOT have an `INVALIDATED` execution payload").
+- verify_and_notify_new_payload is true when `options.payload_status` is not `INVALIDATED`.
 - Runs state_transition with validate_result, then get_head before adding the block, then computes compute_pulled_up_tip's process_justification_and_finalization on `state` and restores the four fields it changes.
 - Then writes in spec order: the node, record_block_timeliness, update_proposer_boost_root, update_checkpoints, and compute_pulled_up_tip's updates.
+- The node keeps `body.execution_payload.block_hash` and `options.payload_status`. A `VALID` block makes its `NOT_VALIDATED` ancestors `VALID`, as a transition to `VALID` does.
 
 ### Limits
 
@@ -525,6 +534,36 @@ lantern_get_proposer_head(store, head, slot, head_state, scratch, out) -> status
 
 - Scratch: S(3), with n the validators of `head_state`.
 
+## Function `lantern_store_payload_status`
+
+A later answer of the execution engine for the payload of a node: `NOT_VALIDATED` to `VALID`, or `NOT_VALIDATED` to `INVALIDATED` (optimistic-sync.md, Transitioning between `VALID`, `INVALIDATED` and `NOT_VALIDATED`).
+
+### Signature
+
+```
+lantern_store_payload_status(store, node, payload_status, result) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | state | `Store` |
+| `node` | input | u64 |
+| `payload_status` | input | u64: `PAYLOAD_STATUS_VALID` or `PAYLOAD_STATUS_INVALIDATED` |
+| `result` | output | `Result` |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID`, or `LANTERN_INVALID_UNKNOWN_BLOCK` when node is not below the node count; then the store is unchanged.
+
+### Function does
+
+- A node that is not `NOT_VALIDATED`, or another payload_status, changes nothing: the spec leaves `VALID` to `INVALIDATED` and back to the user.
+- `VALID`: the node and each `NOT_VALIDATED` ancestor up to the first that is not become `VALID`.
+- `INVALIDATED`: the node and each `NOT_VALIDATED` descendant become `INVALIDATED`.
+- Finding the node from a `latestValidHash` is the caller's: `BlockNode.block_hash` holds each payload's hash.
+
 ## Function `lantern_is_data_available`
 
 Whether every column sidecar passes verify_data_column_sidecar and verify_data_column_sidecar_kzg_proofs.
@@ -638,10 +677,12 @@ The fork choice store: a value with two parts.
 | 88 | `justified_checkpoint` | Checkpoint | `current_justified_checkpoint` of the block's post-state |
 | 128 | `unrealized_justified_checkpoint` | Checkpoint | `unrealized_justifications[root]` |
 | 168 | `timely` | u64 | `block_timeliness[root]`: 1 or 0; 0 for the anchor |
+| 176 | `block_hash` | Hash32 | `body.execution_payload.block_hash` of the block |
+| 208 | `payload_status` | u64 | `PAYLOAD_STATUS_*`: the execution engine's answer for the payload; `VALID` for the anchor |
 
 ### Rules
 
-- `BlockNode__mem` (176) bytes.
+- `BlockNode__mem` (216) bytes.
 
 ## Type `StoreValidator`
 
@@ -673,7 +714,7 @@ The fork choice store: a value with two parts.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0 | `execution_valid` | u64 | 1: the execution engine accepts the payload |
+| 0 | `payload_status` | u64 | `PAYLOAD_STATUS_*`: the execution engine's answer for the payload |
 | 8 | `data_available` | u64 | 1: is_data_available holds for the block |
 
 ## Type `ColumnSidecars`

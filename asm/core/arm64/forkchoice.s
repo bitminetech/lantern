@@ -11,8 +11,11 @@
 .set F_VIABLE, 4           /* in get_filtered_node_tree */
 .set F_CHILD_VIABLE, 8     /* has a child in get_filtered_node_tree */
 
-.if BlockNode__mem != 176 || StoreValidator__mem != 32 || Checkpoint__mem != 40 || Checkpoint_root != 8
+.if BlockNode__mem != 216 || StoreValidator__mem != 32 || Checkpoint__mem != 40 || Checkpoint_root != 8
 .error "the fork choice code assumes the layouts of include/lantern.inc"
+.endif
+.if PAYLOAD_STATUS_VALID != 0 || PAYLOAD_STATUS_INVALIDATED != 1
+.error "the fork choice code tests PAYLOAD_STATUS_VALID as 0"
 .endif
 .if STORE_ACTIVE_UNSLASHED != 1 || STORE_EQUIVOCATING != 2 || STORE_IN_REGISTRY != 4
 .error "the fork choice code tests the StoreValidator flags by bit number"
@@ -242,6 +245,10 @@ LOCAL_FUNCTION attestation_score
     ldr     x9, [x5, #StoreValidator_latest_node]
     cmn     x9, #1                          /* index in store.latest_messages */
     b.eq    4f
+    madd    x10, x9, x3, x2                 /* not a vote for an INVALIDATED block (optimistic sync) */
+    ldr     x11, [x10, #BlockNode_payload_status]
+    cmp     x11, #PAYLOAD_STATUS_INVALIDATED
+    b.eq    4f
 2:  madd    x10, x9, x3, x2                 /* is_ancestor(latest message node, node) */
     ldr     x11, [x10, #BlockNode_slot]
     cmp     x11, x4
@@ -304,6 +311,10 @@ LOCAL_FUNCTION weight
     bl      find_node
     cmn     x0, #1
     b.eq    8f
+    NODE    x9, x19, x0                     /* no boost from an INVALIDATED block (optimistic sync) */
+    ldr     x9, [x9, #BlockNode_payload_status]
+    cmp     x9, #PAYLOAD_STATUS_INVALIDATED
+    b.eq    6f
     mov     x1, x0                          /* is_ancestor(store, proposer_boost_node, node) */
     NODE    x9, x19, x20
     ldr     x2, [x9, #BlockNode_slot]
@@ -384,6 +395,9 @@ LOCAL_FUNCTION filter_tree
     madd    x10, x24, x9, x28
     ldr     x11, [x10, #BlockNode_parent]
     cmn     x11, #1
+    b.eq    15f
+    ldr     x12, [x10, #BlockNode_payload_status]
+    cmp     x12, #PAYLOAD_STATUS_INVALIDATED    /* removed from fork choice (optimistic sync) */
     b.eq    15f
     ldr     x12, [x20, x11, lsl #3]
     tbz     x12, #0, 15f
@@ -822,6 +836,13 @@ FUNCTION lantern_get_forkchoice_store
     add     x10, sp, #(L + 32)
     COPY32  x9, x10
     str     xzr, [x28, #BlockNode_timely]
+    PART    x9, x10, x20, BeaconBlock_body  /* the anchor's payload counts as VALID */
+    PART    x11, x10, x9, BeaconBlockBody_execution_payload
+    add     x9, x11, #ExecutionPayload_block_hash
+    add     x10, x28, #BlockNode_block_hash
+    COPY32  x10, x9
+    mov     x9, #PAYLOAD_STATUS_VALID
+    str     x9, [x28, #BlockNode_payload_status]
     PART    x9, x10, x24, Store_validators  /* latest_messages = {} */
     mov     x11, #-1
 1:  cbz     x10, 2f
@@ -899,6 +920,63 @@ FUNCTION lantern_store_copy
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
 END_FUNCTION lantern_store_copy
+
+/*
+ * Optimistic sync: x0 store, x1 node, x2 payload_status, x3 result. x4 node index, x6 node count,
+ * x7 nodes, x8 BlockNode__mem, x9 the node.
+ */
+LEAF lantern_store_payload_status
+    str     xzr, [x3]
+    ldr     x4, [x1]
+    ldr     x5, [x2]
+    LDQ     x6, x0, Store_blocks + 8
+    cmp     x4, x6
+    b.hs    8f
+    LDQ     x7, x0, Store_blocks
+    add     x7, x0, x7
+    mov     x8, #BlockNode__mem
+    madd    x9, x4, x8, x7
+    ldr     x10, [x9, #BlockNode_payload_status]
+    cmp     x10, #PAYLOAD_STATUS_NOT_VALIDATED  /* only NOT_VALIDATED blocks change */
+    b.ne    6f
+    cmp     x5, #PAYLOAD_STATUS_VALID
+    b.eq    3f
+    cmp     x5, #PAYLOAD_STATUS_INVALIDATED
+    b.ne    6f
+    mov     x10, #PAYLOAD_STATUS_INVALIDATED    /* the block and its descendants: children come after parents */
+    str     x10, [x9, #BlockNode_payload_status]
+    add     x4, x4, #1
+1:  cmp     x4, x6
+    b.hs    6f
+    madd    x9, x4, x8, x7
+    ldr     x10, [x9, #BlockNode_parent]
+    cmn     x10, #1
+    b.eq    2f
+    madd    x11, x10, x8, x7
+    ldr     x11, [x11, #BlockNode_payload_status]
+    cmp     x11, #PAYLOAD_STATUS_INVALIDATED
+    b.ne    2f
+    ldr     x11, [x9, #BlockNode_payload_status]
+    cmp     x11, #PAYLOAD_STATUS_NOT_VALIDATED
+    b.ne    2f
+    mov     x11, #PAYLOAD_STATUS_INVALIDATED
+    str     x11, [x9, #BlockNode_payload_status]
+2:  add     x4, x4, #1
+    b       1b
+3:  mov     x10, #PAYLOAD_STATUS_VALID          /* the block and its NOT_VALIDATED ancestors */
+4:  str     x10, [x9, #BlockNode_payload_status]
+    ldr     x4, [x9, #BlockNode_parent]
+    cmn     x4, #1
+    b.eq    6f
+    madd    x9, x4, x8, x7
+    ldr     x11, [x9, #BlockNode_payload_status]
+    cmp     x11, #PAYLOAD_STATUS_NOT_VALIDATED
+    b.eq    4b
+6:  RETURN_OK
+8:  mov     x9, #LANTERN_INVALID_UNKNOWN_BLOCK
+    str     x9, [x3]
+    RETURN_OK
+END_FUNCTION lantern_store_payload_status
 
 /* ---------------------------------------------------------------- Attestations */
 
@@ -1394,6 +1472,11 @@ FUNCTION lantern_on_block
     cmn     x27, #1
     mov     x0, #LANTERN_INVALID_UNKNOWN_BLOCK
     b.eq    6f
+    NODE    x9, x19, x27                    /* the parent's payload is not INVALIDATED (optimistic sync) */
+    ldr     x9, [x9, #BlockNode_payload_status]
+    cmp     x9, #PAYLOAD_STATUS_INVALIDATED
+    mov     x0, #LANTERN_INVALID_PARENT_PAYLOAD
+    b.eq    6f
     STORE_SLOT x9, x19, 5f                  /* assert get_current_slot(store) >= block.slot */
     str     x9, [sp, #(L + 56)]
     ldr     x10, [x25, #BeaconBlock_slot]
@@ -1435,7 +1518,9 @@ FUNCTION lantern_on_block
     cmp     x26, x9
     b.lo    9f
     mov     x9, #1                          /* state_transition(state, signed_block, validate_result=True) */
-    ldr     x10, [x22, #BlockOptions_execution_valid]
+    ldr     x10, [x22, #BlockOptions_payload_status]
+    cmp     x10, #PAYLOAD_STATUS_INVALIDATED
+    cset    x10, ne                         /* execution_valid: VALID or NOT_VALIDATED */
     stp     x9, x10, [sp, #(L + 32)]
     mov     x0, x21
     mov     x1, x20
@@ -1570,6 +1655,25 @@ FUNCTION lantern_on_block
     COPY40  x9, x10
     ldr     x9, [sp, #(L + 280)]            /* block_timeliness[block_root] */
     str     x9, [x28, #BlockNode_timely]
+    PART    x9, x10, x25, BeaconBlock_body  /* the payload's hash and status */
+    PART    x11, x10, x9, BeaconBlockBody_execution_payload
+    add     x9, x11, #ExecutionPayload_block_hash
+    add     x10, x28, #BlockNode_block_hash
+    COPY32  x10, x9
+    ldr     x9, [x22, #BlockOptions_payload_status]
+    str     x9, [x28, #BlockNode_payload_status]
+    cbnz    x9, 44f                         /* VALID: so are its NOT_VALIDATED ancestors */
+    mov     x10, x27
+43: cmn     x10, #1
+    b.eq    44f
+    NODE    x11, x19, x10
+    ldr     x12, [x11, #BlockNode_payload_status]
+    cmp     x12, #PAYLOAD_STATUS_NOT_VALIDATED
+    b.ne    44f
+    str     xzr, [x11, #BlockNode_payload_status]
+    ldr     x10, [x11, #BlockNode_parent]
+    b       43b
+44:
     ldr     x9, [sp, #(L + 288)]            /* proposer_boost_root = block_root */
     cbz     x9, 42f
     add     x9, x19, #Store_proposer_boost_root

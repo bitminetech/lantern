@@ -12,8 +12,11 @@
 .set F_VIABLE, 4           # in get_filtered_node_tree
 .set F_CHILD_VIABLE, 8     # has a child in get_filtered_node_tree
 
-.if BlockNode__mem != 176 || StoreValidator__mem != 32 || Checkpoint__mem != 40 || Checkpoint_root != 8
+.if BlockNode__mem != 216 || StoreValidator__mem != 32 || Checkpoint__mem != 40 || Checkpoint_root != 8
 .error "the fork choice code assumes the layouts of include/lantern.inc"
+.endif
+.if PAYLOAD_STATUS_VALID != 0 || PAYLOAD_STATUS_INVALIDATED != 1
+.error "the fork choice code tests PAYLOAD_STATUS_VALID as 0"
 .endif
 .if STORE_ACTIVE_UNSLASHED != 1 || STORE_EQUIVOCATING != 2 || STORE_IN_REGISTRY != 4
 .error "the fork choice code tests the StoreValidator flags by bit number"
@@ -255,6 +258,9 @@ LOCAL_FUNCTION attestation_score
     mov     StoreValidator_latest_node(%rcx), %rax
     cmp     $-1, %rax                       # index in store.latest_messages
     je      4f
+    imul    $BlockNode__mem, %rax, %rdx     # not a vote for an INVALIDATED block (optimistic sync)
+    cmpq    $PAYLOAD_STATUS_INVALIDATED, BlockNode_payload_status(%r8,%rdx)
+    je      4f
 2:  imul    $BlockNode__mem, %rax, %rdx     # is_ancestor(latest message node, node)
     add     %r8, %rdx
     cmp     %r9, BlockNode_slot(%rdx)
@@ -317,6 +323,9 @@ LOCAL_FUNCTION weight
     call    find_node
     cmp     $-1, %rax
     je      8f
+    NODE    %rcx, %rbx, %rax                # no boost from an INVALIDATED block (optimistic sync)
+    cmpq    $PAYLOAD_STATUS_INVALIDATED, BlockNode_payload_status(%rcx)
+    je      6f
     mov     %rax, %rsi                      # is_ancestor(store, proposer_boost_node, node)
     NODE    %rcx, %rbx, %rbp
     mov     BlockNode_slot(%rcx), %rdx
@@ -401,6 +410,8 @@ LOCAL_FUNCTION filter_tree
     mov     BlockNode_parent(%r13,%rcx), %rdx
     cmp     $-1, %rdx
     je      15f
+    cmpq    $PAYLOAD_STATUS_INVALIDATED, BlockNode_payload_status(%r13,%rcx)
+    je      15f                             # removed from fork choice (optimistic sync)
     testq   $F_SUBTREE, (%rbp,%rdx,8)
     jz      15f
     orq     $F_CHILD, (%rbp,%rdx,8)
@@ -846,6 +857,12 @@ FUNCTION lantern_get_forkchoice_store
     lea     (L + 32)(%rsp), %rcx
     COPY32  %rdx, %rcx
     movq    $0, BlockNode_timely(%rax)
+    PART    %rdx, %rcx, %rbp, BeaconBlock_body      # the anchor's payload counts as VALID
+    PART    %rsi, %rcx, %rdx, BeaconBlockBody_execution_payload
+    add     $ExecutionPayload_block_hash, %rsi
+    lea     BlockNode_block_hash(%rax), %rdx
+    COPY32  %rdx, %rsi
+    movq    $PAYLOAD_STATUS_VALID, BlockNode_payload_status(%rax)
     PART    %rax, %rcx, %r15, Store_validators      # latest_messages = {}
 2:  test    %rcx, %rcx
     jz      3f
@@ -928,6 +945,59 @@ FUNCTION lantern_store_copy
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 16
 END_FUNCTION lantern_store_copy
+
+/*
+ * Optimistic sync: rdi store, rsi node, rdx payload_status, rcx result. rsi node index,
+ * r8 node count, r9 nodes, rax the node.
+ */
+LEAF lantern_store_payload_status
+    movq    $0, (%rcx)
+    mov     (%rsi), %rsi
+    mov     (%rdx), %rdx
+    mov     (Store_blocks + 8)(%rdi), %r8
+    cmp     %r8, %rsi
+    jae     8f
+    mov     Store_blocks(%rdi), %r9
+    add     %rdi, %r9
+    imul    $BlockNode__mem, %rsi, %rax
+    add     %r9, %rax
+    cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, BlockNode_payload_status(%rax)
+    jne     6f                              # only NOT_VALIDATED blocks change
+    test    %rdx, %rdx
+    jz      3f
+    cmp     $PAYLOAD_STATUS_INVALIDATED, %rdx
+    jne     6f
+    movq    $PAYLOAD_STATUS_INVALIDATED, BlockNode_payload_status(%rax)    # the block and its descendants
+    inc     %rsi
+1:  cmp     %r8, %rsi
+    jae     6f
+    imul    $BlockNode__mem, %rsi, %rax
+    add     %r9, %rax
+    mov     BlockNode_parent(%rax), %rdx
+    cmp     $-1, %rdx
+    je      2f
+    imul    $BlockNode__mem, %rdx, %rdx
+    cmpq    $PAYLOAD_STATUS_INVALIDATED, BlockNode_payload_status(%r9,%rdx)
+    jne     2f
+    cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, BlockNode_payload_status(%rax)
+    jne     2f
+    movq    $PAYLOAD_STATUS_INVALIDATED, BlockNode_payload_status(%rax)
+2:  inc     %rsi
+    jmp     1b
+3:  movq    $PAYLOAD_STATUS_VALID, BlockNode_payload_status(%rax)  # VALID: the block and its NOT_VALIDATED ancestors
+    mov     BlockNode_parent(%rax), %rsi
+    cmp     $-1, %rsi
+    je      6f
+    imul    $BlockNode__mem, %rsi, %rax
+    add     %r9, %rax
+    cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, BlockNode_payload_status(%rax)
+    je      3b
+6:  xor     %eax, %eax
+    ret
+8:  movq    $LANTERN_INVALID_UNKNOWN_BLOCK, (%rcx)
+    xor     %eax, %eax
+    ret
+END_FUNCTION lantern_store_payload_status
 
 /* ---------------------------------------------------------------- Attestations */
 
@@ -1465,6 +1535,11 @@ FUNCTION lantern_on_block
     cmp     $-1, %rax
     mov     $LANTERN_INVALID_UNKNOWN_BLOCK, %eax
     je      6f
+    mov     S9(%rsp), %rcx                  # the parent's payload is not INVALIDATED (optimistic sync)
+    NODE    %rcx, %rbx, %rcx
+    cmpq    $PAYLOAD_STATUS_INVALIDATED, BlockNode_payload_status(%rcx)
+    mov     $LANTERN_INVALID_PARENT_PAYLOAD, %eax
+    je      6f
     STORE_SLOT %rbx, 5f                     # assert get_current_slot(store) >= block.slot
     mov     %rax, (L + 56)(%rsp)
     mov     S7(%rsp), %rcx
@@ -1508,7 +1583,9 @@ FUNCTION lantern_on_block
     cmp     %rax, S8(%rsp)
     jb      9f
     movq    $1, (L + 32)(%rsp)              # state_transition(state, signed_block, validate_result=True)
-    mov     BlockOptions_execution_valid(%r13), %rax
+    xor     %eax, %eax                      # execution_valid: VALID or NOT_VALIDATED
+    cmpq    $PAYLOAD_STATUS_INVALIDATED, BlockOptions_payload_status(%r13)
+    setne   %al
     mov     %rax, (L + 40)(%rsp)
     mov     %r12, %rdi
     mov     %rbp, %rsi
@@ -1652,6 +1729,25 @@ FUNCTION lantern_on_block
     COPY40  %rdx, %rcx
     mov     (L + 280)(%rsp), %rcx           # block_timeliness[block_root]
     mov     %rcx, BlockNode_timely(%rax)
+    PART    %rdx, %rcx, %rsi, BeaconBlock_body      # the payload's hash and status
+    PART    %rdi, %rcx, %rdx, BeaconBlockBody_execution_payload
+    add     $ExecutionPayload_block_hash, %rdi
+    lea     BlockNode_block_hash(%rax), %rdx
+    COPY32  %rdx, %rdi
+    mov     BlockOptions_payload_status(%r13), %rcx
+    mov     %rcx, BlockNode_payload_status(%rax)
+    test    %rcx, %rcx
+    jnz     92f                             # VALID: so are its NOT_VALIDATED ancestors
+    mov     S9(%rsp), %rcx
+91: cmp     $-1, %rcx
+    je      92f
+    NODE    %rdx, %rbx, %rcx
+    cmpq    $PAYLOAD_STATUS_NOT_VALIDATED, BlockNode_payload_status(%rdx)
+    jne     92f
+    movq    $PAYLOAD_STATUS_VALID, BlockNode_payload_status(%rdx)
+    mov     BlockNode_parent(%rdx), %rcx
+    jmp     91b
+92:
     cmpq    $0, (L + 288)(%rsp)             # proposer_boost_root = block_root
     je      42f
     lea     Store_proposer_boost_root(%rbx), %rdx

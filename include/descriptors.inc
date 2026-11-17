@@ -188,6 +188,7 @@
     \m BlockRoots
     \m Bytes32
     \m Uint64
+    \m BlobKZGCommitments
 .endm
 
 /* ------------------------------------------------------------ Plan: node, field and header indices */

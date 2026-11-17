@@ -191,6 +191,11 @@
  */
 .set LANTERN_NEED_JUSTIFIED_STATE, 41
 
+.set LANTERN_INVALID_CUSTODY_GROUP, 42          /* get_custody_groups, compute_columns_for_custody_group: above NUMBER_OF_CUSTODY_GROUPS */
+.set LANTERN_INVALID_PARENT_PAYLOAD, 43         /* on_block: the parent's payload is INVALIDATED (bellatrix optimistic-sync.md) */
+.set LANTERN_GOSSIP_IGNORE, 44                  /* a gossip validation function: an [IGNORE] check fails (GossipIgnore) */
+.set LANTERN_GOSSIP_REJECT, 45                  /* a gossip validation function: a [REJECT] check fails (GossipReject) */
+
 /* ------------------------------------------------------------ Scratch (docs/reference/helpers.md, Type Scratch) */
 
 .set LANTERN_SCRATCH_FIXED, 1048576       /* bytes of scratch for fixed size work, on top of the index lists */
@@ -230,7 +235,9 @@
 .set BlockNode_justified_checkpoint, 88
 .set BlockNode_unrealized_justified_checkpoint, 128
 .set BlockNode_timely, 168
-.set BlockNode__mem, 176
+.set BlockNode_block_hash, 176         /* body.execution_payload.block_hash */
+.set BlockNode_payload_status, 208     /* PAYLOAD_STATUS_*: the execution engine's answer for the payload */
+.set BlockNode__mem, 216
 
 /* StoreValidator */
 .set StoreValidator_latest_epoch, 0
@@ -247,8 +254,63 @@
 .set StoreRoom_validators, 8
 
 /* BlockOptions */
-.set BlockOptions_execution_valid, 0
+.set BlockOptions_payload_status, 0   /* PAYLOAD_STATUS_*: the execution engine's answer for the payload */
 .set BlockOptions_data_available, 8
+
+/* ------------------------------------------------------------ Gossip (docs/reference/networking.md) */
+
+/* Seen */
+.set Seen_keys, 8                      /* PartRef of SeenKey */
+.set Seen_bits, 24                     /* PartRef of SeenBits */
+.set Seen_blocks, 40                   /* PartRef of SeenBlock */
+.set Seen_headers, 56                  /* PartRef of SeenHeader, back to back */
+.set Seen_header_bytes, 72             /* bytes of the headers part in use */
+.set SEEN_FIXED, 80
+
+/* SeenRoom */
+.set SeenRoom_keys, 0
+.set SeenRoom_bits, 8
+.set SeenRoom_blocks, 16
+.set SeenRoom_header_bytes, 24
+
+/* SeenKey: the sets of the spec's Seen whose entries are numbers */
+.set SeenKey_kind, 0
+.set SeenKey_a, 8
+.set SeenKey_b, 16
+.set SeenKey_c, 24
+.set SeenKey__mem, 32
+.set SEEN_PROPOSER_SLOT, 1             /* proposer_slots: (slot, proposer index) */
+.set SEEN_AGGREGATOR_EPOCH, 2          /* aggregator_epochs: (epoch, aggregator index) */
+.set SEEN_VOLUNTARY_EXIT, 3            /* voluntary_exit_indices */
+.set SEEN_PROPOSER_SLASHING, 4         /* proposer_slashing_indices */
+.set SEEN_ATTESTER_SLASHING, 5         /* attester_slashing_indices */
+.set SEEN_ATTESTATION, 6               /* attestation_validator_epochs: (epoch, validator index) */
+.set SEEN_SYNC_CONTRIBUTION, 7         /* sync_contribution_aggregator_slots: (slot, aggregator index, subcommittee index) */
+.set SEEN_SYNC_MESSAGE, 8              /* sync_message_validator_slots: (slot, validator index, subnet ID) */
+.set SEEN_BLS_CHANGE, 9                /* bls_to_execution_change_indices */
+.set SEEN_DATA_COLUMN, 10              /* data_column_sidecar_tuples: (slot, proposer index, column index) */
+
+/* SeenBits: aggregate_data_roots and sync_contribution_data */
+.set SeenBits_kind, 0
+.set SeenBits_root, 8
+.set SeenBits_a, 40
+.set SeenBits_b, 48
+.set SeenBits_length, 56
+.set SeenBits_bits, 64
+.set SeenBits__mem, 320
+.set SEEN_BITS_BYTES, 256              /* MAX_VALIDATORS_PER_COMMITTEE bits */
+.set SEEN_AGGREGATE, 1                 /* (data root, committee index) */
+.set SEEN_CONTRIBUTION, 2              /* (beacon_block_root, slot, subcommittee index) */
+
+/* SeenBlock: a root of store.blocks without a post-state */
+.set SeenBlock_root, 0
+.set SeenBlock_payload_status, 32
+.set SeenBlock__mem, 40
+
+/* SeenHeader: partial_data_column_headers */
+.set SeenHeader_block_root, 0
+.set SeenHeader_header_root, 32
+.set SeenHeader_header, 64
 
 /*
  * Scratch of lantern_verify_data_column_sidecar_kzg_proofs for a sidecar of n

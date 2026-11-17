@@ -16,6 +16,7 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | [docs/reference/block-processing.md](docs/reference/block-processing.md) | Fulu block processing |
 | [docs/reference/state-transition.md](docs/reference/state-transition.md) | Fulu state transition |
 | [docs/reference/fork-choice.md](docs/reference/fork-choice.md) | Fulu fork choice and data availability |
+| [docs/reference/networking.md](docs/reference/networking.md) | Fulu networking rules: custody, gossip validation |
 | [include/lantern.inc](include/lantern.inc) | Constants |
 | [include/types.inc](include/types.inc) | Fulu SSZ types and layouts |
 
@@ -54,7 +55,7 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | Item | Location |
 |---|---|
 | Vector generator | [tests/generator/](tests/generator/) |
-| Test runner | [tests/runner/](tests/runner/) |
+| Test runner | [tests/runner/](tests/runner/README.md) |
 | Signatures-off runner, for cases with `bls_setting` 2 | [tests/runner/bls_off.c](tests/runner/bls_off.c) |
 | CI, 7 targets | [.github/workflows/ci.yml](.github/workflows/ci.yml) |
 

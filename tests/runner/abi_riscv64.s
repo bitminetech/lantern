@@ -1,7 +1,7 @@
 /*
  * ABI check for the test runner, RISC-V (RISC-V ELF psABI, LP64D). Test code: it is not part of the library.
  *
- * abi_call(ctx) calls ctx.fn with the 6 arguments in ctx, after it sets every
+ * abi_call(ctx) calls ctx.fn with the 11 arguments in ctx, after it sets every
  * register the callee must keep to a known value and paints ctx.paint bytes
  * of stack below the call. It then records in ctx the status, a mask of the
  * kept state that changed, and the bytes of stack the call used.
@@ -97,8 +97,18 @@ FUNCTION abi_call
     ld      a3, 32(s11)
     ld      a4, 40(s11)
     ld      a5, 112(s11)
+    ld      a6, 120(s11)                    # arguments 7 and 8 in a6, a7; 9 to 11 on the stack
+    ld      a7, 128(s11)
+    addi    sp, sp, -32
+    ld      t1, 136(s11)
+    sd      t1, 0(sp)
+    ld      t1, 144(s11)
+    sd      t1, 8(sp)
+    ld      t1, 152(s11)
+    sd      t1, 16(sp)
     ld      a0, 8(s11)
     jalr    t0
+    addi    sp, sp, 32
     li      t5, 0
     li      t1, 0xf1e2d3c4b5a6978
     xor     t1, t1, s0

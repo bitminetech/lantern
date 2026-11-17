@@ -48,6 +48,7 @@ SSZ_DEPTH LOG2_SLOTS_PER_EPOCH, SLOTS_PER_EPOCH
 .include "syncagg.s"
 .include "transition.s"
 .include "forkchoice.s"
+.include "networking.s"
 
 /* ---------------------------------------------------------------- Read only data */
 
