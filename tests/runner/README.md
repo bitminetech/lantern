@@ -26,6 +26,16 @@ build/linux-x86_64/runner-minimal ~/.cache/lantern/vectors minimal-operations-at
 | `runner-<preset>` | Every case whose `bls_setting` is 0 or 1 |
 | `runner-<preset>-bls-off` | The cases with `bls_setting` 2, linked with `bls_off.c` |
 
+## Buffers
+
+| Buffer | How the runner prepares it |
+|---|---|
+| Scratch | One buffer of `SCRATCH_BYTES` (4 MiB), refilled with `0xA5` before every call, so a call that reads scratch it did not write gives a wrong result |
+| Outputs and states | Allocated at the size each function asks for, filled with `0xA5`, with 64 guard bytes after them that must stay unchanged |
+
+- `SCRATCH_BYTES` is more than any call of the vectors needs. The largest need is a KZG check of a column: 2 MiB of asm-crypto scratch plus about 10 KB per blob. Refilling the scratch is most of the runner's own time, so it is not larger.
+- `-DSCRATCH_BYTES=<bytes>` sets another size, for example when new vectors need more.
+
 ## Call check
 
 `abi_call(ctx)` sets each register the callee must keep to a known value, paints `paint` bytes of stack below the call, calls `fn`, then records the status, a mask of the kept state that changed, and the stack the call used.

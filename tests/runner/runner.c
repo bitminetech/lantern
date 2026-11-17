@@ -669,7 +669,13 @@ static void case_config(tv parts) {
 
 /* ---------------------------------------------------------------- States */
 
-#define SCRATCH_BYTES (64u << 20)
+/*
+ * Bytes of the scratch buffer. The runner fills all of it before every call, so its size sets most of the
+ * runner's own time: it is the largest need of any call of the vectors, rounded up (tests/runner/README.md).
+ */
+#ifndef SCRATCH_BYTES
+#define SCRATCH_BYTES (4u << 20)
+#endif
 static uint8_t *scratch_buf;
 
 /* A fresh scratch for one call: filled, with its size set. */
