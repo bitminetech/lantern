@@ -216,6 +216,14 @@
 
 /* lantern_reqresp_read_header, lantern_reqresp_read_payload: the stream's bytes end before the chunk does. */
 .set LANTERN_REQRESP_MORE, 51
+.set LANTERN_INVALID_HTTP, 52                   /* lantern_http_parse_response: not a valid HTTP/1.1 response */
+
+/* lantern_http_parse_response: the connection's bytes end before the response does. */
+.set LANTERN_HTTP_MORE, 53
+
+/* HttpResponse (engine-api.md) */
+.set HttpResponse_status, 0
+.set HttpResponse_consumed, 8
 
 /* ------------------------------------------------------------ Scratch (docs/reference/helpers.md, Type Scratch) */
 

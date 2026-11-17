@@ -12,6 +12,7 @@
 .include "platform.inc"
 .include "snappy.inc"
 .include "reqresp_protocols.inc"
+.include "engine_text.inc"
 .include "gossip_topics.inc"
 .include "macros.s"
 
@@ -23,3 +24,4 @@
 .include "seen.s"
 .include "topics.s"
 .include "reqresp.s"
+.include "engine.s"

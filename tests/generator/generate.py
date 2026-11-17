@@ -25,6 +25,7 @@ from ssz.container import Container
 import descriptor  # asm-ssz tests/generator/descriptor.py, at the pin in platform/deps.sh
 import p2p  # lantern's p2p helper cases, from the pinned spec modules
 import reqresp  # lantern's req/resp encoding cases and message types
+import engine  # lantern's Engine API client cases
 
 RELEASE = "https://github.com/ethereum/consensus-specs/releases/download/v1.7.0-beta.4/"
 ARCHIVES = {  # SHA-256 of each archive of consensus-specs v1.7.0-beta.4 (aa16bb4)
@@ -228,13 +229,15 @@ def main():
             file = f"{preset}-{fork}-descriptors.bin"
             count, digest = write_descriptors(out / file, fork, preset)
             manifest.append((file, count, digest))
-        if not runners or "p2p" in runners or "reqresp" in runners:
+        if not runners or "p2p" in runners or "reqresp" in runners or "engine" in runners:
             for fork in forks:
                 cases = {}
                 for handler, name, parts in p2p.cases(fork, preset):
                     cases.setdefault(f"{preset}-{fork}-p2p-{handler}.bin", []).append((name, parts))
                 for handler, name, parts in reqresp.cases(fork, preset):
                     cases.setdefault(f"{preset}-{fork}-reqresp-{handler}.bin", []).append((name, parts))
+                for handler, name, parts in engine.cases(fork, preset):
+                    cases.setdefault(f"{preset}-{fork}-engine-{handler}.bin", []).append((name, parts))
                 for file, items in sorted(cases.items()):
                     count, digest = write_file(out / file, items)
                     manifest.append((file, count, digest))

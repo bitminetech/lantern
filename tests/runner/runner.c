@@ -361,6 +361,11 @@ ABI uint64_t lantern_reqresp_read_payload(const void *input, const void *start, 
                                           void *scratch, void *out, void *consumed);
 ABI uint64_t lantern_ssz_size_bounds(const void *type, void *out);
 
+/* Engine API client: docs/reference/engine-api.md. */
+ABI uint64_t lantern_jwt_token(const void *secret, const void *iat, void *scratch, void *out);
+ABI uint64_t lantern_http_post(const void *host, const void *token, const void *body, void *out);
+ABI uint64_t lantern_http_parse_response(const void *input, const void *eof, void *body, void *out);
+
 /* ---------------------------------------------------------------- ABI check */
 
 #define STACK_CAP 65536 /* README: stack per call */
@@ -3113,6 +3118,88 @@ static void run_reqresp(const char *file, const char *handler, case_file *f) {
     }
 }
 
+/* ---------------------------------------------------------------- Engine API client */
+
+#define INVALID_HTTP 52
+#define HTTP_MORE 53
+
+/* Whether ByteList l holds exactly the bytes of want. */
+static int list_holds(const uint8_t *l, tv want) {
+    uint64_t wl;
+    const uint8_t *w = tv_bytes(want, &wl);
+    return rd64(l + 8) == 24 && rd64(l + 16) == wl && !memcmp(l + 24, w, (size_t)wl);
+}
+
+/* engine-<function>: lantern's cases of the Engine API client (tests/generator/engine.py). */
+static void run_engine(const char *file, const char *handler, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, blen, size, st;
+        tv parts = next_case(f, &name, &len);
+        tv in = tv_get(parts, "input"), want = tv_get(parts, "output");
+        if (!strcmp(handler, "jwt_token")) {
+            uint64_t iat = tv_u64(tv_get(in, "iat"));
+            const uint8_t *secret = tv_bytes(tv_get(in, "secret"), &blen);
+            size = 24 + 128;
+            uint8_t *out = buffer(size), small[24 + 127];
+            wr64(out, size);
+            st = CALL(lantern_jwt_token, secret, &iat, fresh_scratch(), out);
+            if (st) why = "status";
+            else if (!list_holds(out, want)) why = "token differs";
+            else if (!guard_ok(out, size)) why = "wrote past out";
+            wr64(small, sizeof small);
+            if (!why && CALL(lantern_jwt_token, secret, &iat, fresh_scratch(), small) != 1) why = "short out accepted";
+            free(out);
+        } else if (!strcmp(handler, "http_post")) {
+            uint64_t hs, ts, bs, wl;
+            uint8_t *host = byte_list(tv_get(in, "host"), &hs), *token = byte_list(tv_get(in, "token"), &ts);
+            uint8_t *body = byte_list(tv_get(in, "body"), &bs);
+            tv_bytes(want, &wl);
+            size = 24 + wl;
+            uint8_t *out = buffer(size), *small = buffer(size - 1);
+            wr64(out, size);
+            wr64(small, size - 1);
+            st = CALL(lantern_http_post, host, token, body, out);
+            if (st) why = "status";
+            else if (!list_holds(out, want)) why = "request differs";
+            else if (!guard_ok(out, size)) why = "wrote past out";
+            else if (CALL(lantern_http_post, host, token, body, small) != 1) why = "short out accepted";
+            free(host);
+            free(token);
+            free(body);
+            free(out);
+            free(small);
+        } else if (!strcmp(handler, "http_parse_response")) {
+            const uint8_t *b = tv_bytes(tv_get(in, "bytes"), &blen);
+            uint64_t eof = tv_u64(tv_get(in, "eof")), isize, out[2] = {7, 7}, wl = 0;
+            uint8_t *input = list_of(b, blen, 0, 0, &isize);
+            if (*want == T_MAP) tv_bytes(tv_get(want, "body"), &wl);
+            size = 24 + wl;
+            uint8_t *body = buffer(size);
+            wr64(body, size);
+            st = CALL(lantern_http_parse_response, input, &eof, body, out);
+            if (is_text(want, "more")) {
+                if (st != HTTP_MORE) why = "status";
+                else if (out[0] != 7) why = "wrote out";
+            } else if (is_text(want, "invalid")) {
+                if (st != INVALID_HTTP) why = "status";
+            } else if (st) why = "status";
+            else if (out[0] != tv_u64(tv_get(want, "status")) || out[1] != tv_u64(tv_get(want, "consumed"))) why = "status or consumed differs";
+            else if (!list_holds(body, tv_get(want, "body"))) why = "body differs";
+            else if (wl) {
+                uint8_t *small = buffer(size - 1);
+                wr64(small, size - 1);
+                if (CALL(lantern_http_parse_response, input, &eof, small, out) != 1) why = "short body accepted";
+                free(small);
+            }
+            if (!why && !guard_ok(body, size)) why = "wrote past body";
+            free(input);
+            free(body);
+        } else why = "no such handler";
+        report(file, name, len, why == NULL, why);
+    }
+}
+
 /* ---------------------------------------------------------------- Main */
 
 int main(int argc, char **argv) {
@@ -3160,6 +3247,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strncmp(kind, "networking-gossip_", 18)) run_gossip(file, argv[1], kind + 18, &f);
         else if (!bls_off && !strncmp(kind, "p2p-", 4)) run_p2p(file, kind + 4, &f);
         else if (!bls_off && !strncmp(kind, "reqresp-", 8)) run_reqresp(file, kind + 8, &f);
+        else if (!bls_off && !strncmp(kind, "engine-", 7)) run_engine(file, kind + 7, &f);
 #if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
                               !strcmp(kind, "networking-compute_columns_for_custody_group")))
