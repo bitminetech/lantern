@@ -899,7 +899,20 @@ LOCAL_FUNCTION node_event
     cmp     x25, #LIBP2P_ACCEPT
     b.ne    65f
     ldr     x9, [x22, #NodeMessage_topic]
-    cmp     x9, #GOSSIP_BEACON_BLOCK
+    cmp     x9, #GOSSIP_ATTESTER_SLASHING
+    b.ne    641f
+    ldr     x1, [x21, #NodeAction_state_c]     /* a valid attester slashing keeps the bytes: on_attester_slashing with the justified root's state */
+    cbz     x1, 65f
+    mov     x0, #NODE_WORK_ATTESTER_SLASHING
+    mov     x2, #0
+    ldr     x3, [x21, #NodeAction_data]
+    mov     x4, #0
+    mov     x5, #0
+    bl      node_work
+    mov     x0, x22
+    bl      node_drop_message
+    LEAVE 48
+641: cmp    x9, #GOSSIP_BEACON_BLOCK
     b.ne    65f
     add     x0, x21, #NodeEvent_root           /* a new block keeps the bytes */
     bl      node_find_block

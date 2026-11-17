@@ -914,7 +914,20 @@ LOCAL_FUNCTION node_event
     li      t0, LIBP2P_ACCEPT
     bne     s7, t0, 65f
     ld      t0, NodeMessage_topic(s4)
-    li      t1, GOSSIP_BEACON_BLOCK
+    li      t1, GOSSIP_ATTESTER_SLASHING
+    bne     t0, t1, 641f
+    ld      a1, NodeAction_state_c(s3)      # a valid attester slashing keeps the bytes: on_attester_slashing with the justified root's state
+    beqz    a1, 65f
+    li      a0, NODE_WORK_ATTESTER_SLASHING
+    li      a2, 0
+    ld      a3, NodeAction_data(s3)
+    li      a4, 0
+    li      a5, 0
+    call    node_work
+    mv      a0, s4
+    call    node_drop_message
+    LEAVE 48
+641: li     t1, GOSSIP_BEACON_BLOCK
     bne     t0, t1, 65f
     addi    a0, s3, NodeEvent_root          # a new block keeps the bytes
     call    node_find_block

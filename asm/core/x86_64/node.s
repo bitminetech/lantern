@@ -877,7 +877,21 @@ LOCAL_FUNCTION node_event
     mov     %rdx, %r13
     cmpq    $LIBP2P_ACCEPT, S7(%rsp)
     jne     65f
-    cmpq    $GOSSIP_BEACON_BLOCK, NodeMessage_topic(%r13)
+    cmpq    $GOSSIP_ATTESTER_SLASHING, NodeMessage_topic(%r13)
+    jne     641f
+    mov     NodeAction_state_c(%r12), %rsi  # a valid attester slashing keeps the bytes: on_attester_slashing with the justified root's state
+    test    %rsi, %rsi
+    jz      65f
+    mov     $NODE_WORK_ATTESTER_SLASHING, %edi
+    xor     %edx, %edx
+    mov     NodeAction_data(%r12), %rcx
+    xor     %r8d, %r8d
+    xor     %r9d, %r9d
+    call    node_work
+    mov     %r13, %rdi
+    call    node_drop_message
+    LEAVE 48
+641: cmpq   $GOSSIP_BEACON_BLOCK, NodeMessage_topic(%r13)
     jne     65f
     lea     NodeEvent_root(%r12), %rdi      # a new block keeps the bytes
     call    node_find_block

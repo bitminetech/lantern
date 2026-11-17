@@ -3391,7 +3391,7 @@ static void fc_serve_check(fc_node *n, tv parts, const char **why) {
 ABI uint64_t snappy_compress_size(const void *input, void *size);
 ABI uint64_t snappy_compress(const void *input, void *scratch, void *compressed);
 #define SNAPPY_SCRATCH_COMPRESS 32776
-enum { GOSSIP_BEACON_BLOCK_TOPIC = 1 }; /* include/lantern.inc GOSSIP_BEACON_BLOCK */
+enum { GOSSIP_BEACON_BLOCK_TOPIC = 1, GOSSIP_ATTESTER_SLASHING_TOPIC = 6 }; /* include/lantern.inc GOSSIP_* */
 
 /* The peer publishes the SSZ bytes ssz as a message of the topic string topic: Snappy, its message-id, a PUBLISH. */
 static void p2p_publish(struct p2p_net *net, const uint8_t *topic, uint64_t tlen, const uint8_t *ssz, uint64_t len,
@@ -3499,11 +3499,33 @@ static void fc_gossip_case(tv parts, int *ran, const char **why) {
     if (!*why) p2p_run(&n, &net, p2p_subscribed, 5, why); /* the node's topics reach the peer */
     tv steps = tv_get(parts, "steps");
     tv st = steps ? steps + 9 : NULL;
+    uint64_t now_ms = 0, slashings = 0, slashings_applied = 0;
     for (uint64_t k = 0, c = steps ? rd64(steps + 1) : 0; k < c && !*why; k++, st = tv_skip(st)) {
         tv v = tv_get(st, "valid");
         int valid = !v || (*v == T_BOOL && v[1]);
-        if (tv_get(st, "tick")) {
+        if (tv_get(st, "attester_slashing") && valid) { /* over gossip, on the topic of the tick's epoch; else as an event */
+            char key[128];
+            uint64_t olen, before = s->nresults[1];
+            tv nm = tv_get(st, "attester_slashing");
+            snprintf(key, sizeof key, "%.*s", (int)rd64(nm + 1), (const char *)(nm + 9));
+            const uint8_t *bytes = tv_bytes(tv_get(parts, key), &olen);
+            uint64_t epoch = now_ms < genesis_ms ? 0 : (now_ms - genesis_ms) / rd64(config + 104) / SLOTS_PER_EPOCH_RUNNER;
+            uint8_t topic[24] = {0}, list[24 + 128];
+            wr64(list, sizeof list);
+            CALL(LF(compute_fork_digest), gvr, &epoch, ncfg, fresh_scratch(), topic);
+            wr64(topic + 8, GOSSIP_ATTESTER_SLASHING_TOPIC);
+            if (CALL(lantern_gossip_topic, topic, list) != 0) *why = "gossip_topic status";
+            if (!*why) p2p_publish(&net, list + 24, rd64(list + 16), bytes, olen, why);
+            if (!*why) p2p_settle(&n, &net, why);
+            slashings++;
+            if (!*why && s->nresults[1] > before) slashings_applied++;
+            else if (!*why) {
+                shell_event(s, EV_ATTESTER_SLASHING, 0, bytes, olen);
+                p2p_settle(&n, &net, why);
+            }
+        } else if (tv_get(st, "tick")) {
             uint64_t secs = tv_u64(tv_get(st, "tick")), ms = secs > UINT64_MAX / 1000 ? UINT64_MAX : secs * 1000;
+            now_ms = ms;
             shell_event(s, EV_TICK, ms, NULL, 0);
             p2p_settle(&n, &net, why);
         } else if (tv_get(st, "block")) {
@@ -3565,6 +3587,7 @@ static void fc_gossip_case(tv parts, int *ran, const char **why) {
             *why = msg;
         }
     }
+    if (!*why && slashings && !slashings_applied) *why = "no valid attester slashing is applied over gossip";
     p2p_close(&net);
     shell_close(&n, anchor_block);
 }
