@@ -16,7 +16,19 @@ permissions:
   contents: read
 
 jobs:
+  # The cache key of the vectors: the hash of the generator, computed once on Linux, since
+  # Windows checks files out with other line endings.
+  key:
+    runs-on: ubuntu-24.04
+    outputs:
+      generator: ${{ steps.key.outputs.hash }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - id: key
+        run: echo "hash=${{ hashFiles('tests/generator/*') }}" >> "$GITHUB_OUTPUT"
+
   vectors:
+    needs: key
     strategy:
       fail-fast: false
       matrix:
@@ -29,7 +41,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: vectors
-          key: vectors-${{ matrix.fork }}-${{ hashFiles('tests/generator/*') }}
+          key: vectors-${{ matrix.fork }}-${{ needs.key.outputs.generator }}
           enableCrossOsArchive: true
           lookup-only: true
       - name: Generate the vectors
@@ -43,7 +55,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: vectors
-          key: vectors-${{ matrix.fork }}-${{ hashFiles('tests/generator/*') }}
+          key: vectors-${{ matrix.fork }}-${{ needs.key.outputs.generator }}
           enableCrossOsArchive: true
 
   build:
@@ -80,7 +92,7 @@ jobs:
             !build/macos-arm64/minimal/
 
   linux:
-    needs: [vectors, build]
+    needs: [key, vectors, build]
     strategy:
       fail-fast: false
       matrix:
@@ -98,7 +110,7 @@ jobs:
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: vectors
-          key: vectors-${{ matrix.fork }}-${{ hashFiles('tests/generator/*') }}
+          key: vectors-${{ matrix.fork }}-${{ needs.key.outputs.generator }}
           enableCrossOsArchive: true
           fail-on-cache-miss: true
       - if: matrix.qemu != ''
@@ -116,7 +128,7 @@ jobs:
           path: results-linux-${{ matrix.isa }}-${{ matrix.fork }}.txt
 
   windows:
-    needs: [vectors, build]
+    needs: [key, vectors, build]
     strategy:
       fail-fast: false
       matrix:
@@ -133,7 +145,7 @@ jobs:
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: vectors
-          key: vectors-${{ matrix.fork }}-${{ hashFiles('tests/generator/*') }}
+          key: vectors-${{ matrix.fork }}-${{ needs.key.outputs.generator }}
           enableCrossOsArchive: true
           fail-on-cache-miss: true
       - name: Run vectors
@@ -148,7 +160,7 @@ jobs:
           path: results-windows-${{ matrix.isa }}-${{ matrix.fork }}.txt
 
   macos:
-    needs: [vectors, build]
+    needs: [key, vectors, build]
     strategy:
       fail-fast: false
       matrix:
@@ -165,7 +177,7 @@ jobs:
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: vectors
-          key: vectors-${{ matrix.fork }}-${{ hashFiles('tests/generator/*') }}
+          key: vectors-${{ matrix.fork }}-${{ needs.key.outputs.generator }}
           enableCrossOsArchive: true
           fail-on-cache-miss: true
       - name: Run vectors
