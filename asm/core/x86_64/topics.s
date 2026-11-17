@@ -2,9 +2,12 @@
  * Gossip topic strings, x86-64: in the common object. Requirements: docs/reference/networking.md.
  */
 
-/* al = the lowercase hex digit of the value 0 to 15 in eax. */
+/*
+ * al = the lowercase hex digit of the value 0 to 15 in eax. In a macro with no parameters,
+ * the macOS assembler reads $1 to $9 as macro arguments, so the immediate is $(10).
+ */
 .macro HEX_DIGIT
-    cmp     $10, %eax
+    cmp     $(10), %eax
     jb      91f
     add     $('a' - 10 - '0'), %eax
 91: add     $'0', %eax
