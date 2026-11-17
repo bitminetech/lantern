@@ -61,6 +61,7 @@ def http_cases():
 
 def cases(fork, preset):
     yield from request_cases(fork, preset)
+    yield from response_case_parts()
     secret = hashlib.sha256(b"lantern jwt").digest()
     for iat in (0, 1, 9, 10, 1700000000, 1999999999, U64):
         yield "jwt_token", f"iat_{iat}", {"input": {"secret": secret, "iat": iat}, "output": jwt(secret, iat)}
@@ -180,3 +181,72 @@ def request_cases(fork, preset):
                 out = b"".join(len(r).to_bytes(8, "little") + bytes(r) for r in reqs)
                 yield "get_execution_requests_list", f"{mode.name}_{k}", {
                     "input": {"execution_requests": block.body.execution_requests.encode_bytes()}, "output": out}
+
+
+STATUSES = ["VALID", "INVALID", "SYNCING", "ACCEPTED", "INVALID_BLOCK_HASH"]
+METHODS = ["engine_newPayloadV1", "engine_newPayloadV2", "engine_newPayloadV3", "engine_newPayloadV4",
+           "engine_forkchoiceUpdatedV1", "engine_forkchoiceUpdatedV2", "engine_forkchoiceUpdatedV3"]
+
+
+def response_cases():
+    """(name, method, body, expected or "invalid")."""
+    h = "0x" + "ab" * 32
+    out = []
+
+    def want(id_, status=0, latest=None, payload_id=None, caps=0, error=None):
+        return {"id": id_, "error": 0 if error is None else 1, "error_code": 0 if error is None else error,
+                "status": status, "latest_valid_hash": latest, "payload_id": payload_id, "capabilities": caps}
+
+    styles = [dict(separators=(",", ":")), dict(indent=2), dict(separators=(", ", ": ")), dict(indent="\t")]
+    for k, st in enumerate(STATUSES):
+        for s, style in enumerate(styles):
+            r = {"jsonrpc": "2.0", "id": k, "result": {"status": st, "latestValidHash": h, "validationError": None}}
+            out.append((f"np_{st}_{s}", 1, json.dumps(r, **style).encode(), want(k, k + 1, bytes.fromhex(h[2:]))))
+    r = {"result": {"validationError": "a \"quoted\" \\ é\nline", "status": "INVALID", "latestValidHash": None}, "id": 2 ** 64 - 1, "jsonrpc": "2.0"}
+    out.append(("np_reordered", 1, json.dumps(r).encode(), want(2 ** 64 - 1, 2)))
+    r = {"jsonrpc": "2.0", "id": 0, "extra": {"a": [1, 2.5e-3, -7, True, False, None, {"b": "]}\\\""}]}, "result": {"status": "SYNCING"}}
+    out.append(("np_extra_members", 1, json.dumps(r).encode(), want(0, 3)))
+    out.append(("np_spaces", 1, b' \r\n\t{"id" :7 ,"result":{ "status" : "ACCEPTED" , "latestValidHash" : null } }\n ', want(7, 4)))
+    out.append(("np_duplicate", 1, b'{"id":1,"result":{"status":"VALID","status":"SYNCING"}}', want(1, 3)))
+    err = {"jsonrpc": "2.0", "id": 3, "error": {"code": -32602, "message": "Invalid params", "data": {"err": "x"}}}
+    out.append(("error", 1, json.dumps(err).encode(), want(3, error=-32602)))
+    out.append(("error_and_result", 2, b'{"id":4,"result":{"payloadStatus":{"status":"VALID"}},"error":{"code":5,"message":""}}', want(4, error=5)))
+    out.append(("error_code_min", 3, b'{"id":4,"error":{"code":-9223372036854775808}}', want(4, error=-(2 ** 63))))
+    out.append(("error_code_max", 3, b'{"id":4,"error":{"message":"m","code":9223372036854775807}}', want(4, error=2 ** 63 - 1)))
+    for pid in (None, "0x0123456789abcdef"):
+        r = {"jsonrpc": "2.0", "id": 9, "result": {"payloadStatus": {"status": "VALID", "latestValidHash": h, "validationError": None}, "payloadId": pid}}
+        out.append((f"fcu_{pid}", 2, json.dumps(r).encode(),
+                    want(9, 1, bytes.fromhex(h[2:]), None if pid is None else bytes.fromhex(pid[2:]))))
+    out.append(("fcu_no_payload_id", 2, b'{"id":9,"result":{"payloadStatus":{"status":"SYNCING","latestValidHash":null}}}', want(9, 3)))
+    for k, names in enumerate([[], METHODS, ["engine_newPayloadV1", "engine_getPayloadV5", "engine_forkchoiceUpdatedV3", "x"], ["engine_newPayloadV4"]]):
+        mask = sum(1 << METHODS.index(n) for n in names if n in METHODS)
+        r = {"jsonrpc": "2.0", "id": k, "result": names}
+        out.append((f"caps_{k}", 3, json.dumps(r).encode(), want(k, caps=mask)))
+    bad = [
+        (1, b""), (1, b"[]"), (1, b'"x"'), (1, b'{"id":1,"result":{"status":"VALID"}} x'), (1, b'{"id":1,"result":{"status":"VALID"}'),
+        (1, b'{"result":{"status":"VALID"}}'), (1, b'{"id":-1,"result":{"status":"VALID"}}'), (1, b'{"id":1.5,"result":{"status":"VALID"}}'),
+        (1, b'{"id":1e3,"result":{"status":"VALID"}}'), (1, b'{"id":"1","result":{"status":"VALID"}}'),
+        (1, b'{"id":18446744073709551616,"result":{"status":"VALID"}}'), (1, b'{"id":1}'), (1, b'{"id":1,"result":{}}'),
+        (1, b'{"id":1,"result":{"status":"valid"}}'), (1, b'{"id":1,"result":{"status":"VALID","latestValidHash":"0xab"}}'),
+        (1, b'{"id":1,"result":{"status":"VALID","latestValidHash":"0x' + b"zz" * 32 + b'"}}'),
+        (1, b'{"id":1,"result":{"status":"VALID","latestValidHash":7}}'), (1, b'{"id":1,"result":"VALID"}'),
+        (1, b'{"id":1,"result":{"status":"VAL\\u0049D"}}'), (1, b'{"id":1,"x":"\\q","result":{"status":"VALID"}}'),
+        (1, b'{"id":1,"x":[1,2,"result":{"status":"VALID"}}'), (1, b'{"id":1,"result":{"status":"VALID"},}'),
+        (1, b'{"id":1 "result":{"status":"VALID"}}'), (1, b'{"id":1,"result":{"status":"VALID"}}}'),
+        (1, b'{"id":1,"x":tru,"result":{"status":"VALID"}}'), (1, b'{"id":1,"x":"a\nb","result":{"status":"VALID"}}'),
+        (1, b'{"id":1,"error":{"message":"m"}}'), (1, b'{"id":1,"error":{"code":1.5}}'), (1, b'{"id":1,"error":{"code":9223372036854775808}}'),
+        (1, b'{"id":1,"x":01,"result":{"status":"VALID"}}'), (1, b'{"id":01,"result":{"status":"VALID"}}'),
+        (2, b'{"id":1,"result":{"status":"VALID"}}'), (2, b'{"id":1,"result":{"payloadStatus":{"status":"VALID"},"payloadId":"0x01"}}'),
+        (3, b'{"id":1,"result":{"status":"VALID"}}'), (3, b'{"id":1,"result":["engine_newPayloadV1",1]}'),
+    ]
+    for k, (method, body) in enumerate(bad):
+        out.append((f"bad_{k}", method, body, "invalid"))
+    return out
+
+
+def response_case_parts():
+    for name, method, body, w in response_cases():
+        if w != "invalid":
+            w = dict(w)
+            w["latest_valid_hash"] = w["latest_valid_hash"] if w["latest_valid_hash"] is not None else None
+        yield "parse_response", name, {"input": {"body": body, "method": method}, "output": w}

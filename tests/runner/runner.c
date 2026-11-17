@@ -366,6 +366,7 @@ ABI uint64_t lantern_jwt_token(const void *secret, const void *iat, void *scratc
 ABI uint64_t lantern_http_post(const void *host, const void *token, const void *body, void *out);
 ABI uint64_t lantern_http_parse_response(const void *input, const void *eof, void *body, void *out);
 ABI uint64_t lantern_engine_exchange_capabilities(const void *id, void *out);
+ABI uint64_t lantern_engine_parse_response(const void *body, const void *method, void *out);
 #if FORK >= FORK_BELLATRIX
 ABI uint64_t LF(engine_new_payload_size)(const void *block, void *out);
 ABI uint64_t LF(engine_new_payload)(const void *block, const void *id, void *scratch, void *out);
@@ -3206,6 +3207,30 @@ static void run_engine(const char *file, const char *handler, case_file *f) {
             free(value);
             free(out);
             free(small);
+        } else if (!strcmp(handler, "parse_response")) {
+            uint64_t method = tv_u64(tv_get(in, "method")), bsize;
+            uint8_t *body = byte_list(tv_get(in, "body"), &bsize), *out = buffer(96);
+            st = CALL(lantern_engine_parse_response, body, &method, out);
+            if (is_text(want, "invalid")) {
+                if (st != 54) why = "status";
+            } else if (st) why = "status";
+            else {
+                tv lv = tv_get(want, "latest_valid_hash"), pv = tv_get(want, "payload_id"), ec = tv_get(want, "error_code");
+                int64_t code = *ec == T_NEG_INT ? (int64_t)rd64(ec + 1) : (int64_t)tv_u64(ec);
+                if (rd64(out) != tv_u64(tv_get(want, "id"))) why = "id differs";
+                else if (rd64(out + 8) != tv_u64(tv_get(want, "error"))) why = "error differs";
+                else if (rd64(out + 8) && (int64_t)rd64(out + 16) != code) why = "error code differs";
+                else if (!rd64(out + 8) && rd64(out + 24) != tv_u64(tv_get(want, "status"))) why = "status differs";
+                else if (!rd64(out + 8) && method != 3 && rd64(out + 32) != (uint64_t)(*lv == T_BYTES)) why = "latest valid hash presence differs";
+                else if (!rd64(out + 8) && *lv == T_BYTES && memcmp(out + 40, tv_bytes(lv, &blen), 32)) why = "latest valid hash differs";
+                else if (!rd64(out + 8) && method == 2 && rd64(out + 72) != (uint64_t)(*pv == T_BYTES)) why = "payload id presence differs";
+                else if (!rd64(out + 8) && *pv == T_BYTES && memcmp(out + 80, tv_bytes(pv, &blen), 8)) why = "payload id differs";
+                else if (!rd64(out + 8) && method == 3 && rd64(out + 88) != tv_u64(tv_get(want, "capabilities"))) why = "capabilities differ";
+            }
+            if (!why && !guard_ok(out, 96)) why = "wrote past out";
+            if (!why && !guard_ok(body, bsize)) why = "wrote past body";
+            free(body);
+            free(out);
         } else if (!strcmp(handler, "jwt_token")) {
             uint64_t iat = tv_u64(tv_get(in, "iat"));
             const uint8_t *secret = tv_bytes(tv_get(in, "secret"), &blen);

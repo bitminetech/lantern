@@ -9,6 +9,7 @@
 - [`lantern_engine_new_payload`](#function-lantern_engine_new_payload): the JSON-RPC request of engine_newPayload for a block.
 - [`lantern_engine_forkchoice_updated`](#function-lantern_engine_forkchoice_updated): the JSON-RPC request of engine_forkchoiceUpdated.
 - [`lantern_engine_exchange_capabilities`](#function-lantern_engine_exchange_capabilities): the JSON-RPC request of engine_exchangeCapabilities.
+- [`lantern_engine_parse_response`](#function-lantern_engine_parse_response): the result of a JSON-RPC response.
 - [`lantern_jwt_token`](#function-lantern_jwt_token): the JWT of an Engine API request.
 - [`lantern_http_post`](#function-lantern_http_post): the HTTP/1.1 request of a JSON-RPC call.
 - [`lantern_http_parse_response`](#function-lantern_http_parse_response): the status and body of an HTTP/1.1 response.
@@ -16,6 +17,7 @@
 ### Types
 
 - [`ForkchoiceState`](#type-forkchoicestate): the three block hashes of engine_forkchoiceUpdated.
+- [`EngineResponse`](#type-engineresponse): the result of a JSON-RPC response.
 - [`HttpResponse`](#type-httpresponse): the parts of an HTTP/1.1 response.
 
 ## Spec
@@ -30,12 +32,13 @@
 - A beacon node without validators calls three methods: engine_exchangeCapabilities, engine_newPayload and engine_forkchoiceUpdated, the latter with null payload attributes.
 - The versions follow the fork of the block: bellatrix engine_newPayloadV1 and engine_forkchoiceUpdatedV1; capella V2 and V2; deneb V3 and V3; electra and fulu engine_newPayloadV4 and engine_forkchoiceUpdatedV3.
 - JSON is written compact, with no spaces, in the field order of the spec's lists. A `QUANTITY` is lowercase hex with no leading zeros, `0x0` for zero; `DATA` is lowercase hex, two digits a byte.
-- lantern_get_execution_requests_list, lantern_engine_new_payload_size, lantern_engine_new_payload and lantern_engine_forkchoice_updated read the fork's layouts, and are in the objects of bellatrix and later (electra and later for the first). lantern_engine_exchange_capabilities, lantern_jwt_token, lantern_http_post and lantern_http_parse_response read no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
+- lantern_get_execution_requests_list, lantern_engine_new_payload_size, lantern_engine_new_payload and lantern_engine_forkchoice_updated read the fork's layouts, and are in the objects of bellatrix and later (electra and later for the first). lantern_engine_exchange_capabilities, lantern_engine_parse_response, lantern_jwt_token, lantern_http_post and lantern_http_parse_response read no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
 
 ## Test vectors
 
 - Lantern's cases, `<preset>-<fork>-engine-<function>.bin` of phase0 to fulu, made by tests/generator/engine.py: no official cases test these functions.
   - Requests: random blocks of the fork from the spec's `debug/random_value.py`, in each of its modes, and the JSON that the encoding rules of `common.md` give for them, with `kzg_commitment_to_versioned_hash` and `get_execution_requests_list` of the spec module.
+  - Responses: JSON-RPC responses of each method that Python's `json` module writes with several spacings and member orders, with members the parser ignores, and with values the spec does not allow.
   - JWTs: the token of RFC 7519 with Python's `hmac`, `hashlib` and `base64` modules.
   - HTTP responses: messages that follow RFC 9112, split at every byte to test the `LANTERN_HTTP_MORE` results, and malformed ones.
 
@@ -165,6 +168,44 @@ lantern_engine_exchange_capabilities(id, out) -> status
 
 - Argument order: `id`, `out`.
 
+## Function `lantern_engine_parse_response`
+
+The id and the result or error of the JSON-RPC response body of a call of method.
+
+### Signature
+
+```
+lantern_engine_parse_response(body, method, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `body` | input | `ByteList`: the HTTP body |
+| `method` | input | u64: `ENGINE_METHOD_*` of include/lantern.inc, the method called |
+| `out` | output | `EngineResponse` |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the response.
+- `LANTERN_INVALID_JSON`: the body is not one JSON object with an integer `id` and a `result` or an `error` of the method's form. `out` is not valid.
+
+### Function does
+
+- Takes JSON as RFC 8259 writes it, with whitespace between tokens and around the object, and nothing after it.
+- Ignores every member it does not read, `jsonrpc` and `validationError` included, whatever its value.
+- Takes `error` before `result` when the object has both. An `error` needs an integer `code` from -2^63 to 2^63 - 1.
+- engine_newPayload: `result` is a `PayloadStatusV1`: `status` is one of the five strings, and `latestValidHash` is a 32 byte `DATA`, or null, or absent.
+- engine_forkchoiceUpdated: `result` has a `PayloadStatusV1` in `payloadStatus`, and `payloadId` is an 8 byte `DATA`, or null, or absent.
+- engine_exchangeCapabilities: `result` is an array of strings; each name of the methods lantern calls sets its bit, and other names are ignored.
+- Takes a later member of the same name over an earlier one.
+- Compares names and strings byte for byte: a string with an escape matches no name.
+
+### ABI
+
+- Argument order: `body`, `method`, `out`.
+
 ## Function `lantern_jwt_token`
 
 The JWS compact serialization of the claims `{"iat":iat}`, with the header `{"alg":"HS256","typ":"JWT"}` and the HMAC-SHA256 of secret: base64url(header) + `.` + base64url(claims) + `.` + base64url(mac), without padding.
@@ -270,6 +311,30 @@ lantern_http_parse_response(input, eof, body, out) -> status
 | 0 | `head_block_hash` | Hash32 | The payload block hash of the head |
 | 32 | `safe_block_hash` | Hash32 | Of the safe block |
 | 64 | `finalized_block_hash` | Hash32 | Of the finalized block |
+
+## Type `EngineResponse`
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `id` | u64 | The response's id |
+| 8 | `error` | u64 | 1 for an error response, else 0 |
+| 16 | `error_code` | i64 | The error's code |
+| 24 | `status` | u64 | `ENGINE_STATUS_*` of the `PayloadStatusV1`, else 0 |
+| 32 | `has_latest_valid_hash` | u64 | 1 when `latestValidHash` is not null |
+| 40 | `latest_valid_hash` | Hash32 | |
+| 72 | `has_payload_id` | u64 | 1 when `payloadId` is not null |
+| 80 | `payload_id` | 8 bytes | |
+| 88 | `capabilities` | u64 | Bits 0 to 3: engine_newPayloadV1 to V4; bits 4 to 6: engine_forkchoiceUpdatedV1 to V3 |
+
+- `EngineResponse__mem` (96) bytes.
+
+| Status | `status` |
+|---|---|
+| `ENGINE_STATUS_VALID` (1) | `VALID` |
+| `ENGINE_STATUS_INVALID` (2) | `INVALID` |
+| `ENGINE_STATUS_SYNCING` (3) | `SYNCING` |
+| `ENGINE_STATUS_ACCEPTED` (4) | `ACCEPTED` |
+| `ENGINE_STATUS_INVALID_BLOCK_HASH` (5) | `INVALID_BLOCK_HASH` |
 
 ## Type `HttpResponse`
 

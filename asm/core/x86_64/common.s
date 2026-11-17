@@ -25,3 +25,4 @@
 .include "topics.s"
 .include "reqresp.s"
 .include "engine.s"
+.include "jsonrpc.s"

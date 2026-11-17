@@ -221,6 +221,28 @@
 /* lantern_http_parse_response: the connection's bytes end before the response does. */
 .set LANTERN_HTTP_MORE, 53
 
+.set LANTERN_INVALID_JSON, 54                   /* lantern_engine_parse_response: not a JSON-RPC response of the method */
+
+/* EngineResponse (engine-api.md) */
+.set EngineResponse_id, 0
+.set EngineResponse_error, 8
+.set EngineResponse_error_code, 16
+.set EngineResponse_status, 24
+.set EngineResponse_has_latest_valid_hash, 32
+.set EngineResponse_latest_valid_hash, 40
+.set EngineResponse_has_payload_id, 72
+.set EngineResponse_payload_id, 80
+.set EngineResponse_capabilities, 88
+.set EngineResponse__mem, 96
+.set ENGINE_METHOD_NEW_PAYLOAD, 1
+.set ENGINE_METHOD_FORKCHOICE_UPDATED, 2
+.set ENGINE_METHOD_EXCHANGE_CAPABILITIES, 3
+.set ENGINE_STATUS_VALID, 1
+.set ENGINE_STATUS_INVALID, 2
+.set ENGINE_STATUS_SYNCING, 3
+.set ENGINE_STATUS_ACCEPTED, 4
+.set ENGINE_STATUS_INVALID_BLOCK_HASH, 5
+
 /* HttpResponse (engine-api.md) */
 .set HttpResponse_status, 0
 .set HttpResponse_consumed, 8
