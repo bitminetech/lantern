@@ -5,7 +5,7 @@
 # and liblantern-minimal.a in OUT_DIR.
 
 # The asm-crypto objects lantern calls, and those that its dependencies call.
-CRYPTO_OBJECTS="sha256 hmac bls12381"
+CRYPTO_OBJECTS="sha256 hmac bls12381 chacha20 aes x25519 p256 secp256k1 sha512 ed25519"
 
 # The forks that lantern's core has an object for (include/forks.inc).
 FORKS="phase0 altair bellatrix capella deneb electra fulu"
@@ -36,6 +36,13 @@ build_objects() {
     as -I"$dep/asm-snappy/include" -I"$dep/asm-snappy/platform/$os" \
         -c "$dep/asm-snappy/asm/core/$isa/snappy.s" -o "$out/deps/snappy.o"
     deps="$deps $out/deps/snappy.o"
+    # asm-libp2p's core, and the asm-quic core it calls; their shells are not linked.
+    as -I"$dep/asm-libp2p/include" -I"$dep/asm-crypto/include" -I"$dep/asm-quic/include" \
+        -I"$dep/asm-libp2p/platform/$os" -I"$dep/asm-libp2p/asm/core/$isa" \
+        -c "$dep/asm-libp2p/asm/core/$isa/libp2p.s" -o "$out/deps/libp2p.o"
+    as -I"$dep/asm-quic/include" -I"$dep/asm-crypto/include" -I"$dep/asm-quic/platform/$os" \
+        -I"$dep/asm-quic/asm/core/$isa" -c "$dep/asm-quic/asm/core/$isa/quic.s" -o "$out/deps/quic.o"
+    deps="$deps $out/deps/libp2p.o $out/deps/quic.o"
 
     # The signatures-off test runner (tests/runner/bls_off.c) links a copy of the
     # BLS object whose three signature checks are renamed, so that the stand-ins
@@ -56,7 +63,7 @@ build_objects() {
         mkdir -p "$out/$preset"
         # The core (include/forks.inc): asm/core/<ISA>/common.s once, and
         # asm/core/<ISA>/lantern.s once for each fork in $FORKS, with FORK set.
-        core="-I$root/include/$preset -I$root/include -I$plat -I$root/asm/core/$isa -I$dep/asm-ssz/include -I$dep/asm-crypto/include -I$dep/asm-snappy/include"
+        core="-I$root/include/$preset -I$root/include -I$plat -I$root/asm/core/$isa -I$dep/asm-ssz/include -I$dep/asm-crypto/include -I$dep/asm-snappy/include -I$dep/asm-libp2p/include"
         as $core -c "$root/asm/core/$isa/common.s" -o "$out/$preset/common.o"
         objects="$objects $out/$preset/common.o"
         for fork in $FORKS; do
@@ -64,8 +71,8 @@ build_objects() {
             objects="$objects $out/$preset/$fork.o"
         done
         # A name the assembler does not know becomes an undefined symbol, not an error:
-        # the core objects may only call asm-ssz, asm-crypto, asm-snappy and each other.
-        unknown=$(llvm-nm -u $out/$preset/*.o | sed 's/^ *U //; s/^_//' | grep -v '^\(crypto_\|ssz_\|snappy_\|lantern_\)' | grep -v ':$' | grep . || true)
+        # the core objects may only call asm-ssz, asm-crypto, asm-snappy, asm-libp2p and each other.
+        unknown=$(llvm-nm -u $out/$preset/*.o | sed 's/^ *U //; s/^_//' | grep -v '^\(crypto_\|ssz_\|snappy_\|libp2p_\|lantern_\)' | grep -v ':$' | grep . || true)
         if [ -n "$unknown" ]; then
             echo "objects.sh: undefined symbols in the core of $os $isa $preset: $unknown" >&2
             exit 1

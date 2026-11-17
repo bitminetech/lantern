@@ -229,10 +229,11 @@ ABI uint64_t LF(get_proposer_head)(const void *store, const void *head, const vo
 
 /* The node core: docs/reference/node.md. */
 ABI uint64_t lantern_node_size(const void *room, void *size);
-ABI uint64_t lantern_node_init(const void *room, const void *config, const void *anchor_root, const void *anchor_slot,
-                               const void *flags, void *node);
+ABI uint64_t lantern_node_init(const void *room, const void *config, const void *anchor, const void *flags, void *node);
 ABI uint64_t lantern_node_copy(const void *node, const void *room, void *out);
-ABI uint64_t lantern_node_step(void *node, void *store, const void *events, void *scratch, void *actions, void *result);
+ABI uint64_t lantern_node_step(void *node, void *store, void *p2p, const void *tick, const void *events, void *scratch,
+                               void *actions, void *result);
+ABI uint64_t lantern_node_protocols(void *out, void *count);
 ABI uint64_t lantern_node_run(void *node, void *store, void *seen, const void *work, void *state_a, void *state_b,
                               const void *data, void *scratch, void *event);
 #if FORK == FORK_DENEB || FORK == FORK_ELECTRA
@@ -2301,8 +2302,8 @@ static uint8_t *fc_setup(fc_node *n, tv parts, const char **why) {
 #define NB_STATE_ID 80
 #define NB_STATUS 88
 enum { NB_WAITING = 1, NB_IMPORTING, NB_IMPORTED, NB_INVALID };
-enum { EV_TICK = 1, EV_BLOCK, EV_ATTESTATION, EV_ATTESTER_SLASHING, EV_POW_BLOCK, EV_PAYLOAD_STATUS, EV_WORK_DONE };
-enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK };
+enum { EV_TICK = 1, EV_BLOCK, EV_ATTESTATION, EV_ATTESTER_SLASHING, EV_POW_BLOCK, EV_PAYLOAD_STATUS, EV_WORK_DONE, EV_P2P };
+enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK, ACT_P2P_LIST };
 enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING };
 #define EV_RESULT 64
 #define EV_WORK_DONE_SIZE 112
@@ -2314,9 +2315,14 @@ typedef struct {
     uint8_t *b;
 } shell_buf;
 
+#define NODE_ROOM_FIELDS 7 /* NodeRoom: blocks, checkpoints, pow_blocks, peers, streams, request_bytes, p2p_out */
+
+struct p2p_net;
+
 struct node_shell {
+    struct p2p_net *net; /* node-p2p: the network of the node's libp2p state */
     uint8_t *node, *actions;
-    uint64_t node_size, room[3], actions_size;
+    uint64_t node_size, room[NODE_ROOM_FIELDS], actions_size;
     shell_buf *bufs;
     size_t nbufs;
     uint8_t *pending; /* the events of the next step */
@@ -2415,7 +2421,8 @@ static const uint8_t *shell_state_of(fc_node *n, const uint8_t *root) {
 
 /* The resize step for the node: copy it with twice the capacity of each part. */
 static void shell_grow_node(struct node_shell *s, const char **why) {
-    uint64_t room[3] = {2 * s->room[0], 2 * s->room[1], 2 * s->room[2]}, need = 0;
+    uint64_t room[NODE_ROOM_FIELDS], need = 0;
+    for (int i = 0; i < NODE_ROOM_FIELDS; i++) room[i] = 2 * s->room[i];
     if (CALL(lantern_node_size, room, &need) != 0) {
         *why = "lantern_node_size status";
         return;
@@ -2492,10 +2499,14 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     free(ev);
 }
 
+static void *p2p_state_of(struct p2p_net *net);
+static void p2p_tick(struct p2p_net *net, int side, uint8_t *tick);
+static void p2p_shell(struct p2p_net *net, int side, uint8_t *act, const char **why);
+
 /* One lantern_node_step with the pending events, again with more room while it asks for it, then its actions in order. */
 static void shell_step(fc_node *n, const char **why) {
     struct node_shell *s = n->shell;
-    uint64_t len = s->pending_len, esize = 24 + len, count = 0, nevents = 0, st = 1;
+    uint64_t len = s->pending_len, esize = 24 + len, count[2] = {0, 0}, nevents = 0, st = 1;
     uint8_t *events = buffer(esize);
     wr64(events, esize);
     wr64(events + 8, 24);
@@ -2506,12 +2517,18 @@ static void shell_step(fc_node *n, const char **why) {
     for (int t = 0; t < 32 && st == 1 && !*why; t++) {
         wr64(s->actions + 8, 24);
         wr64(s->actions + 16, 0);
-        uint8_t *snode = copy_of(s->node, s->node_size), *sstore = copy_of(n->store, n->size);
-        st = CALL(lantern_node_step, s->node, n->store, events, fresh_scratch(), s->actions, &count);
-        if (st != 0 && (memcmp(snode, s->node, (size_t)s->node_size) || memcmp(sstore, n->store, (size_t)n->size)))
+        uint8_t *snode = copy_of(s->node, s->node_size), *sstore = copy_of(n->store, n->size), tick[56];
+        void *p2p = s->net ? p2p_state_of(s->net) : NULL;
+        uint64_t p2p_size = p2p ? rd64(p2p) : 0;
+        uint8_t *sp2p = p2p ? copy_of(p2p, p2p_size) : NULL;
+        if (s->net) p2p_tick(s->net, 0, tick);
+        st = CALL(lantern_node_step, s->node, n->store, p2p, s->net ? tick : NULL, events, fresh_scratch(), s->actions, count);
+        if (st != 0 && (memcmp(snode, s->node, (size_t)s->node_size) || memcmp(sstore, n->store, (size_t)n->size) ||
+                        (p2p && memcmp(sp2p, p2p, (size_t)p2p_size))))
             *why = "lantern_node_step: a non-zero status changed a state";
         free(snode);
         free(sstore);
+        free(sp2p);
         if (st != 1 || *why) break;
         shell_grow_node(s, why); /* BUFFER_TOO_SMALL: the node's parts or the actions */
         free(s->actions);
@@ -2526,7 +2543,13 @@ static void shell_step(fc_node *n, const char **why) {
     }
     if (!*why && (!guard_ok(s->node, s->node_size) || !guard_ok(n->store, n->size) || !guard_ok(s->actions, s->actions_size)))
         *why = "lantern_node_step wrote out of bounds";
-    if (!*why && count != nevents) *why = "lantern_node_step: result is not the event count";
+    if (!*why && !s->net && (count[0] != nevents || count[1] != UINT64_MAX)) *why = "lantern_node_step: result is not the event count";
+    if (!*why && count[0] > nevents) *why = "lantern_node_step: more events handled than given";
+    if (!*why && count[0] < nevents) { /* the events not handled go again, before the new ones */
+        uint64_t at = 0;
+        for (uint64_t k = 0; k < count[0]; k++) at += rd64(events + 24 + at);
+        memcpy(shell_append(s, len - at), events + 24 + at, (size_t)(len - at));
+    }
     uint64_t used = *why ? 0 : rd64(s->actions + 16);
     if (!*why && (rd64(s->actions + 8) != 24 || 24 + used > s->actions_size)) *why = "lantern_node_step: actions out of bounds";
     for (uint64_t at = 0; at < used && !*why;) {
@@ -2547,7 +2570,12 @@ static void shell_step(fc_node *n, const char **why) {
             shell_drop(s, rd64(act + 16), why);
         else if (kind == ACT_WORK && size == 64)
             shell_work(n, act, why);
-        else
+        else if (kind == ACT_P2P_LIST && s->net && size >= 40 && rd64(act + 16) == size - 16 && rd64(act + 24) == 24 &&
+                 rd64(act + 32) == size - 40) {
+            /* the shell requests of libp2p, in order; the node took the application notices */
+            for (uint64_t at2 = 0; at2 < rd64(act + 32) && !*why; at2 += rd64(act + 40 + at2))
+                p2p_shell(s->net, 0, act + 40 + at2, why);
+        } else
             *why = "lantern_node_step: an action of no kind";
         at += size;
     }
@@ -2643,25 +2671,25 @@ static int node_mode(tv parts) {
     return steps != NULL;
 }
 
-/* One case through the node: the shell's buffers, then each step as events. */
-static void fc_node_case(tv parts, const char **why) {
-    fc_node n;
-    memset(&n, 0, sizeof n);
+/* The node of a case's anchor, with the shell's buffers: the store, the node, the actions, the anchor state as id 1. */
+static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_block, const char **why) {
+    memset(n, 0, sizeof *n);
     struct node_shell *s = calloc(1, sizeof *s);
     if (!s) {
         fprintf(stderr, "out of memory\n");
         exit(2);
     }
-    n.shell = s;
-    uint8_t *anchor_block = fc_setup(&n, parts, why);
-    if (anchor_block) {
+    n->shell = s;
+    *anchor_block = fc_setup(n, parts, why);
+    if (*anchor_block) {
         /* Small capacities, so that the node grows through lantern_node_copy. */
-        uint8_t root[32];
-        uint64_t slot = rd64(anchor_block + field_offset("BeaconBlock", 0)), flags = 0, need = 0;
-        s->room[0] = 2;
-        s->room[1] = 2;
+        uint8_t anchor[72]; /* NodeAnchor: root, slot, genesis_validators_root */
+        uint64_t flags = 0, need = 0;
+        for (int i = 0; i < NODE_ROOM_FIELDS; i++) s->room[i] = 2;
         s->room[2] = 1;
-        root_of("BeaconBlock", anchor_block, root, why);
+        root_of("BeaconBlock", *anchor_block, anchor, why);
+        wr64(anchor + 32, rd64(*anchor_block + field_offset("BeaconBlock", 0)));
+        memcpy(anchor + 40, n->anchor + field_offset("BeaconState", 1), 32);
         if (!*why && CALL(lantern_node_size, s->room, &need) != 0) *why = "lantern_node_size status";
         if (!*why) {
             s->node = buffer(need);
@@ -2671,15 +2699,36 @@ static void fc_node_case(tv parts, const char **why) {
             uint8_t ncfg[CONFIG_SIZE];
             memcpy(ncfg, config, CONFIG_SIZE);
             for (uint64_t f = FORK_ALTAIR; f <= FORK_FULU; f++) wr64(ncfg + 16 * f, f <= FORK ? 0 : UINT64_MAX);
-            if (CALL(lantern_node_init, s->room, ncfg, root, &slot, &flags, s->node) != 0) *why = "lantern_node_init status";
+            if (CALL(lantern_node_init, s->room, ncfg, anchor, &flags, s->node) != 0) *why = "lantern_node_init status";
             else if (!guard_ok(s->node, need)) *why = "lantern_node_init wrote out of bounds";
-            else if (memcmp(s->node + NODE_HEAD_ROOT, root, 32)) *why = "lantern_node_init: the head is not the anchor";
+            else if (memcmp(s->node + NODE_HEAD_ROOT, anchor, 32)) *why = "lantern_node_init: the head is not the anchor";
         }
         s->actions_size = 256;
         s->actions = buffer(s->actions_size);
         wr64(s->actions, s->actions_size);
-        if (!*why) shell_keep(s, 1, copy_of(n.anchor, n.anchor_size), n.anchor_size, why);
+        if (!*why) shell_keep(s, 1, copy_of(n->anchor, n->anchor_size), n->anchor_size, why);
     }
+    return s;
+}
+
+static void shell_close(fc_node *n, uint8_t *anchor_block) {
+    struct node_shell *s = n->shell;
+    for (size_t k = 0; k < s->nbufs; k++) free(s->bufs[k].b);
+    free(s->bufs);
+    free(s->pending);
+    free(s->node);
+    free(s->actions);
+    free(s);
+    free(n->store);
+    free(n->anchor);
+    free(anchor_block);
+}
+
+/* One case through the node: the shell's buffers, then each step as events. */
+static void fc_node_case(tv parts, const char **why) {
+    fc_node n;
+    uint8_t *anchor_block;
+    struct node_shell *s = shell_open(&n, parts, &anchor_block, why);
     tv steps = tv_get(parts, "steps");
     tv st = steps ? steps + 9 : NULL;
     for (uint64_t k = 0, c = steps ? rd64(steps + 1) : 0; k < c && !*why; k++, st = tv_skip(st)) {
@@ -2718,15 +2767,427 @@ static void fc_node_case(tv parts, const char **why) {
             *why = msg;
         }
     }
-    for (size_t k = 0; k < s->nbufs; k++) free(s->bufs[k].b);
-    free(s->bufs);
-    free(s->pending);
-    free(s->node);
-    free(s->actions);
-    free(s);
-    free(n.store);
-    free(n.anchor);
-    free(anchor_block);
+    shell_close(&n, anchor_block);
+}
+
+/* ---------------------------------------------------------------- Node over libp2p */
+
+/*
+ * node-p2p: the node of a case and a bare asm-libp2p peer in memory, with the runner as the
+ * network between them, as tests/runner of asm-libp2p does. The peer dials the node, then asks
+ * for Status, Ping and MetaData and says Goodbye. The answers must be the case's.
+ */
+
+/* asm-libp2p at the pin of platform/deps.sh: the entry points, and the values of include/libp2p.inc used here. */
+ABI uint64_t libp2p_state_size(const void *config, void *size);
+ABI uint64_t libp2p_init(const void *config, void *state);
+ABI uint64_t libp2p_step(void *state, const void *tick, const void *events, void *scratch, void *actions, void *result);
+#define P2P_CFG_FIXED 776
+#define P2P_PROTO_SIZE 136
+#define P2P_SCRATCH_SIZE 608928
+#define P2P_ACTIONS_MIN 1056768
+#define P2P_RECEIVE_MAX 65536
+#define P2P_ST_PEER_ID_LEN 152 /* include/state.inc */
+#define P2P_ST_PEER_ID 160
+enum { P2P_EV_ACCEPTED = 1, P2P_EV_CONNECTED, P2P_EV_DIAL_FAILED, P2P_EV_RECEIVED, P2P_EV_SENT, P2P_EV_CLOSED, P2P_EV_DIAL,
+       P2P_EV_DISCONNECT, P2P_EV_OPEN_STREAM, P2P_EV_STREAM_WRITE, P2P_EV_STREAM_CLOSE, P2P_EV_STREAM_RESET };
+enum { P2P_ACT_DIAL = 1, P2P_ACT_ADOPT, P2P_ACT_REFUSE, P2P_ACT_SEND, P2P_ACT_CLOSE, P2P_ACT_WAKEUP, P2P_ACT_PEER_CONNECTED,
+       P2P_ACT_PEER_DISCONNECTED, P2P_ACT_DIAL_FAILED, P2P_ACT_STREAM_INBOUND, P2P_ACT_STREAM_OPENED, P2P_ACT_STREAM_FAILED,
+       P2P_ACT_STREAM_DATA, P2P_ACT_STREAM_EOF, P2P_ACT_STREAM_RESET, P2P_ACT_SEND_DATAGRAM = 23 };
+#define NODE_PEERS 120          /* include/lantern.inc: Node_peers */
+#define NODE_PEER_BYTES 176     /* NodePeer__mem */
+#define P2P_STREAMS 8
+#define P2P_PEER_ACTIONS (P2P_ACTIONS_MIN + (4u << 20))
+
+/* The network: side 0 is the node's libp2p state, side 1 the peer's. */
+struct p2p_net {
+    struct node_shell *shell;
+    uint8_t *state[2], *scratch, *actions, *events; /* the peer's scratch, actions and events */
+    uint64_t events_len, now, conn[2], dial_conn, token, node_handle;
+    int connected;
+    struct {
+        uint64_t tag, handle;
+        int opened, eof, reset, failed;
+        uint8_t data[4096];
+        uint64_t len;
+    } st[P2P_STREAMS];
+};
+
+static void *p2p_state_of(struct p2p_net *net) { return net->state[0]; }
+
+/* The tick of a side: the time of the network, entropy that depends on it. */
+static void p2p_tick(struct p2p_net *net, int side, uint8_t *tick) {
+    wr64(tick, net->now);
+    for (int k = 0; k < 32; k++) tick[8 + k] = (uint8_t)(k * 13 + net->now + (uint64_t)side * 7);
+    wr64(tick + 40, net->now * 1000);
+    wr64(tick + 48, 1794700800 + net->now / 1000);
+}
+
+/* Room for a libp2p event of kind for a side, zeroed, its size and kind set: a NODE_EV_P2P for the node. */
+static uint8_t *p2p_event(struct p2p_net *net, int side, uint64_t kind, uint64_t size) {
+    size = (size + 7) & ~(uint64_t)7;
+    uint8_t *e;
+    if (side == 0) {
+        uint8_t *w = shell_append(net->shell, 16 + size);
+        memset(w, 0, (size_t)(16 + size));
+        wr64(w, 16 + size);
+        wr64(w + 8, EV_P2P);
+        e = w + 16;
+    } else {
+        net->events = realloc(net->events, (size_t)(24 + net->events_len + size));
+        if (!net->events) {
+            fprintf(stderr, "out of memory\n");
+            exit(2);
+        }
+        e = net->events + 24 + net->events_len;
+        memset(e, 0, (size_t)size);
+        net->events_len += size;
+    }
+    wr64(e, size);
+    wr64(e + 8, kind);
+    return e;
+}
+
+/* A shell request of a side, as a socket layer: the dial of the peer reaches the node. */
+static void p2p_shell(struct p2p_net *net, int side, uint8_t *act, const char **why) {
+    uint64_t kind = rd64(act + 8);
+    if (kind == P2P_ACT_DIAL) {
+        if (side != 1) {
+            *why = "the node dials";
+            return;
+        }
+        net->dial_conn = rd64(act + 16);
+        uint8_t *e = p2p_event(net, 0, P2P_EV_ACCEPTED, 56);
+        wr64(e + 16, ++net->token);
+        wr64(e + 24, 4);
+        wr64(e + 32, 40001);
+        e[40] = 10;
+        e[43] = 2;
+    } else if (kind == P2P_ACT_ADOPT || kind == P2P_ACT_REFUSE) {
+        if (side != 0 || rd64(act + 16) != net->token) {
+            *why = "an ADOPT or REFUSE of no dial";
+            return;
+        }
+        if (kind == P2P_ACT_REFUSE) {
+            uint8_t *e = p2p_event(net, 1, P2P_EV_DIAL_FAILED, 32);
+            wr64(e + 16, net->dial_conn);
+            wr64(e + 24, 104);
+            return;
+        }
+        net->conn[0] = rd64(act + 24);
+        net->conn[1] = net->dial_conn;
+        uint8_t *e = p2p_event(net, 1, P2P_EV_CONNECTED, 24);
+        wr64(e + 16, net->dial_conn);
+    } else if (kind == P2P_ACT_SEND) {
+        uint64_t conn = rd64(act + 16), count = rd64(act + 24);
+        if (conn != net->conn[side]) return;
+        for (uint64_t at = 0; at < count; at += P2P_RECEIVE_MAX) {
+            uint64_t k = count - at > P2P_RECEIVE_MAX ? P2P_RECEIVE_MAX : count - at;
+            uint8_t *e = p2p_event(net, 1 - side, P2P_EV_RECEIVED, 32 + k);
+            wr64(e + 16, net->conn[1 - side]);
+            wr64(e + 24, k);
+            memcpy(e + 32, act + 32 + at, (size_t)k);
+        }
+        uint8_t *e = p2p_event(net, side, P2P_EV_SENT, 32);
+        wr64(e + 16, conn);
+        wr64(e + 24, count);
+    } else if (kind == P2P_ACT_CLOSE) {
+        uint64_t conn = rd64(act + 16);
+        uint8_t *e = p2p_event(net, side, P2P_EV_CLOSED, 32);
+        wr64(e + 16, conn);
+        if (conn == net->conn[side]) {
+            e = p2p_event(net, 1 - side, P2P_EV_CLOSED, 32);
+            wr64(e + 16, net->conn[1 - side]);
+            net->conn[0] = net->conn[1] = 0;
+        }
+    }
+}
+
+/* An application notice of the peer. */
+static void p2p_peer_app(struct p2p_net *net, uint8_t *act) {
+    uint64_t kind = rd64(act + 8);
+    if (kind == P2P_ACT_PEER_CONNECTED) {
+        net->node_handle = rd64(act + 16);
+        net->connected = 1;
+        return;
+    }
+    for (int k = 0; k < P2P_STREAMS; k++) {
+        if (kind == P2P_ACT_STREAM_OPENED && net->st[k].tag == rd64(act + 24) && !net->st[k].opened) {
+            net->st[k].handle = rd64(act + 16);
+            net->st[k].opened = 1;
+            return;
+        }
+        if (kind == P2P_ACT_STREAM_FAILED && net->st[k].tag == rd64(act + 16) && !net->st[k].opened) {
+            net->st[k].failed = 1;
+            return;
+        }
+        if (!net->st[k].opened || net->st[k].handle != rd64(act + 16)) continue;
+        if (kind == P2P_ACT_STREAM_DATA) {
+            uint64_t count = rd64(act + 24);
+            if (net->st[k].len + count <= sizeof net->st[k].data) memcpy(net->st[k].data + net->st[k].len, act + 32, (size_t)count);
+            net->st[k].len += count;
+        } else if (kind == P2P_ACT_STREAM_EOF) net->st[k].eof = 1;
+        else if (kind == P2P_ACT_STREAM_RESET) net->st[k].reset = 1;
+        return;
+    }
+}
+
+/* One libp2p step of the peer with its events. */
+static void p2p_peer_step(struct p2p_net *net, const char **why) {
+    uint8_t tick[56];
+    uint64_t result = 0;
+    p2p_tick(net, 1, tick);
+    wr64(net->events, 24 + net->events_len);
+    wr64(net->events + 8, 24);
+    wr64(net->events + 16, net->events_len);
+    wr64(net->actions, P2P_PEER_ACTIONS);
+    uint64_t st = CALL(libp2p_step, net->state[1], tick, net->events, net->scratch, net->actions, &result);
+    if (st != 0) {
+        *why = "libp2p_step of the peer: status not 0";
+        return;
+    }
+    uint64_t at = 0;
+    for (uint64_t k = 0; k < result; k++) at += rd64(net->events + 24 + at);
+    memmove(net->events + 24, net->events + 24 + at, (size_t)(net->events_len - at));
+    net->events_len -= at;
+    uint64_t off = rd64(net->actions + 8), count = rd64(net->actions + 16);
+    for (uint64_t a = 0; a < count && !*why; a += rd64(net->actions + off + a)) {
+        uint8_t *act = net->actions + off + a;
+        uint64_t kind = rd64(act + 8);
+        if (kind <= P2P_ACT_CLOSE || kind == P2P_ACT_SEND_DATAGRAM) p2p_shell(net, 1, act, why);
+        else p2p_peer_app(net, act);
+    }
+}
+
+/* Steps of both sides, 10 ms apart, until done(net) or 400 rounds. */
+static void p2p_run(fc_node *n, struct p2p_net *net, int (*done)(struct p2p_net *, int), int arg, const char **why) {
+    for (int r = 0; r < 400 && !*why; r++) {
+        if (done(net, arg)) return;
+        shell_step(n, why);
+        if (!*why) p2p_peer_step(net, why);
+        net->now += 10;
+    }
+    if (!*why && !done(net, arg)) *why = "the network does not get there";
+}
+
+static int p2p_connected(struct p2p_net *net, int arg) {
+    (void)arg;
+    return net->connected && rd64(net->shell->node + NODE_PEERS + 8) == 1;
+}
+static int p2p_opened(struct p2p_net *net, int k) { return net->st[k].opened || net->st[k].failed; }
+static int p2p_ended(struct p2p_net *net, int k) { return net->st[k].eof || net->st[k].reset; }
+
+/* A libp2p config of a side, with the protocol list protos of n entries. */
+static uint8_t *p2p_config(int side, const uint8_t *protos, uint64_t n) {
+    uint64_t size = P2P_CFG_FIXED + n * P2P_PROTO_SIZE;
+    uint8_t *c = buffer(size);
+    memset(c, 0, (size_t)size);
+    static const uint64_t fields[][2] = {
+        {8, 1},                                                        /* key_type: Ed25519 */
+        {80, 1000},   {88, 8},     {96, 64},     {104, 16},  {112, 8}, /* now, the slots */
+        {120, 1 << 22}, {128, 1024}, {136, 256}, {144, 64},  {152, 3}, /* heap, caches, muxers */
+        {160, 1 << 18}, {168, 1 << 20}, {176, 1 << 19}, {184, 10000}, {192, 5000}, {200, 1 << 20},
+        {224, 8},     {232, 6},    {240, 12},    {248, 6},   {256, 4},  {264, 2}, /* D */
+        {272, 700},   {280, 60000}, {288, 6},    {296, 3},   {304, 120000}, {312, 60000}, {320, 10000},
+        {328, 10000}, {336, 1},    {352, 5000},  {360, 10},  {368, 3000}, {376, 3}, {384, 60}, {392, 2},
+        {640, 1},     {648, 1024}, {656, 64},    {664, 3},   {672, 1000}, {680, 10}, /* gossipsub v1.2 */
+    };
+    for (size_t i = 0; i < sizeof fields / sizeof fields[0]; i++) wr64(c + fields[i][0], fields[i][1]);
+    wr64(c, size);
+    for (int i = 0; i < 32; i++) {
+        c[16 + i] = (uint8_t)(side * 31 + i + 1);
+        c[48 + i] = (uint8_t)(side * 17 + i * 3);
+    }
+    double factor = 0.25;
+    memcpy(c + 344, &factor, 8);
+    wr64(c + 528, 7);
+    memcpy(c + 536, "lantern", 7);
+    wr64(c + 600, 10);
+    memcpy(c + 608, "eth2/1.0.0", 10);
+    wr64(c + 208, P2P_CFG_FIXED);
+    wr64(c + 216, n);
+    if (n) memcpy(c + P2P_CFG_FIXED, protos, (size_t)(n * P2P_PROTO_SIZE));
+    return c;
+}
+
+/* A libp2p state of a config. */
+static uint8_t *p2p_make(uint8_t *cfg, const char **why) {
+    uint64_t size = 0;
+    if (CALL(libp2p_state_size, cfg, &size) != 0) {
+        *why = "libp2p_state_size status";
+        return NULL;
+    }
+    uint8_t *st = buffer(size);
+    wr64(st, size);
+    if (CALL(libp2p_init, cfg, st) != 0) {
+        *why = "libp2p_init status";
+        free(st);
+        return NULL;
+    }
+    return st;
+}
+
+/*
+ * One request of the peer on a new stream of protocol name/version: the request's SSZ bytes as
+ * one chunk, unless req is NULL, then the close of its side; then the stream's end. Returns the
+ * stream's index.
+ */
+static int p2p_request(fc_node *n, struct p2p_net *net, int k, const char *name, uint64_t version, const uint8_t *req,
+                       uint64_t len, const char **why) {
+    char id[128];
+    int idlen = snprintf(id, sizeof id, "/eth2/beacon_chain/req/%s/%llu/ssz_snappy", name, (unsigned long long)version);
+    net->st[k].tag = 500 + (uint64_t)k;
+    uint8_t *e = p2p_event(net, 1, P2P_EV_OPEN_STREAM, 40 + P2P_PROTO_SIZE);
+    wr64(e + 16, net->node_handle);
+    wr64(e + 24, net->st[k].tag);
+    wr64(e + 32, 1);
+    wr64(e + 40, (uint64_t)idlen);
+    memcpy(e + 48, id, (size_t)idlen);
+    p2p_run(n, net, p2p_opened, k, why);
+    if (*why) return k;
+    if (net->st[k].failed) {
+        *why = "the node refuses the protocol";
+        return k;
+    }
+    if (req) {
+        uint64_t header[6] = {0, 0, 0, 0, 0, 0}, csize = 0;
+        CALL(lantern_reqresp_chunk_size, &len, &csize);
+        uint8_t *payload = serialized(req, len, &(uint64_t){0}), *out = buffer(24 + csize);
+        wr64(out, 24 + csize);
+        wr64(out + 8, 24);
+        wr64(out + 16, 0);
+        if (CALL(lantern_reqresp_write_chunk, header, payload, fresh_scratch(), out) != 0) *why = "write_chunk status";
+        else {
+            uint64_t count = rd64(out + 16);
+            uint8_t *w = p2p_event(net, 1, P2P_EV_STREAM_WRITE, 32 + count);
+            wr64(w + 16, net->st[k].handle);
+            wr64(w + 24, count);
+            memcpy(w + 32, out + 24, (size_t)count);
+        }
+        free(payload);
+        free(out);
+    }
+    uint8_t *c = p2p_event(net, 1, P2P_EV_STREAM_CLOSE, 24);
+    wr64(c + 16, net->st[k].handle);
+    p2p_run(n, net, p2p_ended, k, why);
+    if (!*why && net->st[k].reset) *why = "the node resets the stream";
+    return k;
+}
+
+/* The response of one chunk of stream k: result 0 and the SSZ bytes want. */
+static void p2p_check_response(struct p2p_net *net, int k, const uint8_t *want, uint64_t wlen, const char *what,
+                               const char **why) {
+    static char msg[96];
+    uint64_t header[6] = {1, 0, 0, 0, 0, 0}, consumed = 0, eof = 1;
+    uint8_t *input = serialized(net->st[k].data, net->st[k].len, &(uint64_t){0}), *out = buffer(24 + wlen + 8);
+    wr64(out, 24 + wlen + 8);
+    if (CALL(lantern_reqresp_read_header, input, header) != 0) snprintf(msg, sizeof msg, "%s: no response header", what);
+    else if (header[2] != 0) snprintf(msg, sizeof msg, "%s: result %llu", what, (unsigned long long)header[2]);
+    else if (header[4] != wlen) snprintf(msg, sizeof msg, "%s: length %llu", what, (unsigned long long)header[4]);
+    else if (CALL(lantern_reqresp_read_payload, input, &header[5], &header[4], &eof, fresh_scratch(), out, &consumed) != 0)
+        snprintf(msg, sizeof msg, "%s: payload status", what);
+    else if (memcmp(out + 24, want, (size_t)wlen)) snprintf(msg, sizeof msg, "%s: bytes differ", what);
+    else if (header[5] + consumed != net->st[k].len) snprintf(msg, sizeof msg, "%s: bytes after the chunk", what);
+    else msg[0] = 0;
+    if (msg[0]) *why = msg;
+    free(input);
+    free(out);
+}
+
+static void run_node_p2p(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, slen, mlen;
+        tv parts = next_case(f, &name, &len);
+        if (skip_case(parts)) continue;
+        fc_node n;
+        uint8_t *anchor_block;
+        struct node_shell *s = shell_open(&n, parts, &anchor_block, &why);
+        struct p2p_net net;
+        memset(&net, 0, sizeof net);
+        net.shell = s;
+        net.now = 1000;
+        s->net = &net;
+        s->room[3] = 4;       /* peers */
+        s->room[4] = 4;       /* streams */
+        s->room[5] = 256;     /* request bytes */
+        s->room[6] = 1 << 16; /* queued libp2p events */
+        if (!why) { /* the node with the room of a peer, then its libp2p state */
+            uint8_t *old = s->node;
+            uint64_t need = 0;
+            CALL(lantern_node_size, s->room, &need);
+            s->node = buffer(need);
+            wr64(s->node, need);
+            if (CALL(lantern_node_copy, old, s->room, s->node) != 0) why = "lantern_node_copy status";
+            s->node_size = need;
+            free(old);
+        }
+        uint8_t protos[64 * P2P_PROTO_SIZE + 24];
+        uint64_t nprotos = 0;
+        wr64(protos, sizeof protos);
+        if (!why && CALL(lantern_node_protocols, protos, &nprotos) != 0) why = "lantern_node_protocols status";
+        uint8_t *cfg0 = why ? NULL : p2p_config(0, protos + 24, nprotos), *cfg1 = why ? NULL : p2p_config(1, NULL, 0);
+        if (!why) net.state[0] = p2p_make(cfg0, &why);
+        if (!why) net.state[1] = p2p_make(cfg1, &why);
+        free(cfg0);
+        free(cfg1);
+        net.scratch = buffer(P2P_SCRATCH_SIZE);
+        wr64(net.scratch, P2P_SCRATCH_SIZE);
+        net.actions = buffer(P2P_PEER_ACTIONS);
+        s->actions_size = 4u << 20;
+        free(s->actions);
+        s->actions = buffer(s->actions_size);
+        wr64(s->actions, s->actions_size);
+        net.events = xmalloc(24);
+        if (!why) { /* the peer dials the node */
+            uint8_t *e = p2p_event(&net, 1, P2P_EV_DIAL, 128);
+            wr64(e + 16, 7);
+            wr64(e + 24, 4);
+            wr64(e + 32, 9000);
+            e[40] = 10;
+            e[43] = 1;
+            uint64_t idlen = rd64(net.state[0] + P2P_ST_PEER_ID_LEN);
+            wr64(e + 56, idlen);
+            memcpy(e + 64, net.state[0] + P2P_ST_PEER_ID, (size_t)idlen);
+            p2p_run(&n, &net, p2p_connected, 0, &why);
+        }
+        if (!why) { /* the node's entry of the peer */
+            const uint8_t *peer = s->node + rd64(s->node + NODE_PEERS);
+            uint64_t idlen = rd64(net.state[1] + P2P_ST_PEER_ID_LEN);
+            if (rd64(peer + 120) != idlen || memcmp(peer + 128, net.state[1] + P2P_ST_PEER_ID, (size_t)idlen))
+                why = "the node's peer entry: not the peer's ID";
+        }
+        const uint8_t *status = tv_bytes(tv_get(parts, "status"), &slen), *metadata = tv_bytes(tv_get(parts, "metadata"), &mlen);
+        if (!why) { /* Status: the node's answer, and the node keeps the peer's */
+            int k = p2p_request(&n, &net, 0, "status", tv_u64(tv_get(parts, "status_version")), status, slen, &why);
+            if (!why) p2p_check_response(&net, k, status, slen, "status", &why);
+            const uint8_t *peer = s->node + rd64(s->node + NODE_PEERS);
+            if (!why && (!(rd64(peer + 16) & 1) || memcmp(peer + 24, status, 4) || memcmp(peer + 32, status + 4, 80)))
+                why = "the node's peer entry: not the peer's Status";
+        }
+        if (!why) { /* Ping: the node's seq_number, 0 */
+            static const uint8_t seq[8] = {5}, zero[8];
+            int k = p2p_request(&n, &net, 1, "ping", 1, seq, 8, &why);
+            if (!why) p2p_check_response(&net, k, zero, 8, "ping", &why);
+        }
+        if (!why) { /* MetaData: no request bytes */
+            int k = p2p_request(&n, &net, 2, "metadata", tv_u64(tv_get(parts, "metadata_version")), NULL, 0, &why);
+            if (!why) p2p_check_response(&net, k, metadata, mlen, "metadata", &why);
+        }
+        if (!why) { /* Goodbye: the node closes the stream with no answer */
+            static const uint8_t reason[8] = {1};
+            int k = p2p_request(&n, &net, 3, "goodbye", 1, reason, 8, &why);
+            if (!why && net.st[k].len) why = "goodbye: an answer";
+        }
+        if (!why && rd64(s->node + 152 + 8)) why = "the node keeps libp2p events at the end"; /* Node_p2p_out */
+        free(net.state[0]);
+        free(net.state[1]);
+        free(net.scratch);
+        free(net.actions);
+        free(net.events);
+        shell_close(&n, anchor_block);
+        report(file, name, len, why == NULL, why);
+    }
 }
 
 /* compliance: the rules of the spec's fork choice compliance runner (tests/generators/compliance_runners). */
@@ -3829,6 +4290,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strncmp(kind, "p2p-", 4)) run_p2p(file, kind + 4, &f);
         else if (!bls_off && !strncmp(kind, "reqresp-", 8)) run_reqresp(file, kind + 8, &f);
         else if (!bls_off && !strncmp(kind, "engine-", 7)) run_engine(file, kind + 7, &f);
+        else if (!bls_off && !strcmp(kind, "node-p2p")) run_node_p2p(file, &f);
 #if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
                               !strcmp(kind, "networking-compute_columns_for_custody_group")))

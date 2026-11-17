@@ -88,28 +88,39 @@ LOCAL_FUNCTION node_store_slot
 1:  ret
 END_FUNCTION node_store_slot
 
-/* (room, size): NODE_FIXED + the room of each part. */
-FUNCTION lantern_node_size
-    UNWIND_END_PROLOGUE
-    ld      t0, NodeRoom_blocks(a0)
-    li      t1, NodeBlock__mem
-    mulhu   t2, t0, t1
-    bnez    t2, 9f
-    mul     t3, t0, t1
-    ld      t0, NodeRoom_checkpoints(a0)
-    li      t1, NodeCheckpoint__mem
+/* t3 += the room a0 field times width; to 9f on overflow. Uses t0-t2. */
+.macro NODE_SIZE_ADD field, width
+    ld      t0, NodeRoom_\field(a0)
+    li      t1, \width
     mulhu   t2, t0, t1
     bnez    t2, 9f
     mul     t0, t0, t1
     add     t0, t3, t0
     bltu    t0, t3, 9f
     mv      t3, t0
-    ld      t0, NodeRoom_pow_blocks(a0)
-    li      t1, POW_BLOCK_BYTES
+.endm
+
+/* (room, size): NODE_FIXED + the room of each part. Uses t0-t3. */
+FUNCTION lantern_node_size
+    UNWIND_END_PROLOGUE
+    ld      t0, NodeRoom_request_bytes(a0)  # the bytes of a stream
+    srli    t1, t0, 32
+    bnez    t1, 9f
+    addi    t0, t0, NodeStream__fixed + 7
+    andi    t1, t0, -8
+    ld      t0, NodeRoom_streams(a0)
     mulhu   t2, t0, t1
     bnez    t2, 9f
-    mul     t0, t0, t1
-    add     t0, t3, t0
+    mul     t3, t0, t1
+    NODE_SIZE_ADD blocks, NodeBlock__mem
+    NODE_SIZE_ADD checkpoints, NodeCheckpoint__mem
+    NODE_SIZE_ADD pow_blocks, POW_BLOCK_BYTES
+    NODE_SIZE_ADD peers, NodePeer__mem
+    ld      t0, NodeRoom_p2p_out(a0)
+    addi    t1, t0, 7
+    bltu    t1, t0, 9f
+    andi    t1, t1, -8
+    add     t0, t3, t1
     bltu    t0, t3, 9f
     mv      t3, t0
     li      t1, NODE_FIXED
@@ -122,41 +133,51 @@ FUNCTION lantern_node_size
     ret
 END_FUNCTION lantern_node_size
 
-/* Lay out the parts of the node a0 for the room a1 at NODE_FIXED, with no entries. Uses t0-t2. */
+/* The next part of the node a0 at t0; t0 += the room a1 field times width. Uses t1, t2. */
+.macro NODE_PART part, field, width
+    sd      t0, Node_\part(a0)
+    sd      zero, (Node_\part + 8)(a0)
+    ld      t1, NodeRoom_\field(a1)
+    li      t2, \width
+    mul     t1, t1, t2
+    add     t0, t0, t1
+.endm
+
+/* Lay out the parts of the node a0 for the room a1 at NODE_FIXED, with no entries. Uses t0-t3. */
 LOCAL_FUNCTION node_layout
     UNWIND_END_PROLOGUE
+    ld      t3, NodeRoom_request_bytes(a1)
+    addi    t3, t3, NodeStream__fixed + 7
+    andi    t3, t3, -8
+    sd      t3, Node_stream_bytes(a0)
     li      t0, NODE_FIXED
-    sd      t0, Node_blocks(a0)
-    sd      zero, (Node_blocks + 8)(a0)
-    ld      t1, NodeRoom_blocks(a1)
-    li      t2, NodeBlock__mem
-    mul     t1, t1, t2
+    NODE_PART blocks, blocks, NodeBlock__mem
+    NODE_PART checkpoints, checkpoints, NodeCheckpoint__mem
+    NODE_PART pow_blocks, pow_blocks, POW_BLOCK_BYTES
+    NODE_PART peers, peers, NodePeer__mem
+    sd      t0, Node_streams(a0)
+    sd      zero, (Node_streams + 8)(a0)
+    ld      t1, NodeRoom_streams(a1)
+    mul     t1, t1, t3
     add     t0, t0, t1
-    sd      t0, Node_checkpoints(a0)
-    sd      zero, (Node_checkpoints + 8)(a0)
-    ld      t1, NodeRoom_checkpoints(a1)
-    li      t2, NodeCheckpoint__mem
-    mul     t1, t1, t2
-    add     t0, t0, t1
-    sd      t0, Node_pow_blocks(a0)
-    sd      zero, (Node_pow_blocks + 8)(a0)
+    sd      t0, Node_p2p_out(a0)
+    sd      zero, (Node_p2p_out + 8)(a0)
     ret
 END_FUNCTION node_layout
 
 /*
- * (room, config, anchor_root, anchor_slot, flags, node): a node whose one block is the anchor,
- * imported, with post-state id 1, and whose one checkpoint is (anchor epoch, anchor root) at
- * state id 1. s1 room, s2 config, s3 anchor root, s4 anchor slot, s5 flags, s6 node.
- * Locals: L the size.
+ * (room, config, anchor, flags, node): a node whose one block is the anchor, imported, with
+ * post-state id 1, and whose one checkpoint is (anchor epoch, anchor root) at state id 1.
+ * s1 room, s2 config, s3 anchor, s4 anchor slot, s5 flags, s6 node. Locals: L the size.
  */
 FUNCTION lantern_node_init
     ENTER 16
     mv      s1, a0
     mv      s2, a1
     mv      s3, a2
-    ld      s4, 0(a3)
-    ld      s5, 0(a4)
-    mv      s6, a5
+    ld      s4, NodeAnchor_slot(s3)
+    ld      s5, 0(a3)
+    mv      s6, a4
     addi    a1, sp, L
     call    lantern_node_size
     bnez    a0, 9f
@@ -175,8 +196,12 @@ FUNCTION lantern_node_init
     li      t0, 1
     sd      t0, Node_anchor_state_id(s6)
     sd      s5, Node_flags(s6)
+    sd      s4, Node_earliest_slot(s6)
     addi    t0, s6, Node_head_root
     COPY32  t0, s3
+    addi    t0, s6, Node_genesis_validators_root
+    addi    t1, s3, NodeAnchor_genesis_validators_root
+    COPY32  t0, t1
     addi    a0, s6, Node_config
     mv      a1, s2
     li      a2, CONFIG_SIZE
@@ -223,7 +248,17 @@ END_FUNCTION lantern_node_init
     call    lantern_copy
 .endm
 
-/* (node, room, out): the node in out, with the capacities of room. s1 node, s2 room, s3 out. Locals: L the size. */
+/* Branch to 8f when the room s2 field is below the entries of the part at ref of the node s1. Uses t0, t1. */
+.macro NODE_COPY_ROOM field, ref
+    ld      t0, NodeRoom_\field(s2)
+    ld      t1, ((\ref) + 8)(s1)
+    bltu    t0, t1, 8f
+.endm
+
+/*
+ * (node, room, out): the node in out, with the capacities of room. s1 node, s2 room, s3 out,
+ * s4 a stream, s7 the streams left, s8 the old stream bytes, s9 the new stream. Locals: L the size.
+ */
 FUNCTION lantern_node_copy
     ENTER 16
     mv      s1, a0
@@ -236,15 +271,17 @@ FUNCTION lantern_node_copy
     ld      t0, 0(s3)
     ld      t1, L(sp)
     bltu    t0, t1, 8f
-    ld      t0, NodeRoom_blocks(s2)         # each capacity holds the entries
-    ld      t1, (Node_blocks + 8)(s1)
-    bltu    t0, t1, 8f
-    ld      t0, NodeRoom_checkpoints(s2)
-    ld      t1, (Node_checkpoints + 8)(s1)
-    bltu    t0, t1, 8f
-    ld      t0, NodeRoom_pow_blocks(s2)
-    ld      t1, (Node_pow_blocks + 8)(s1)
-    bltu    t0, t1, 8f
+    NODE_COPY_ROOM blocks, Node_blocks      # each capacity holds the entries
+    NODE_COPY_ROOM checkpoints, Node_checkpoints
+    NODE_COPY_ROOM pow_blocks, Node_pow_blocks
+    NODE_COPY_ROOM peers, Node_peers
+    NODE_COPY_ROOM streams, Node_streams
+    NODE_COPY_ROOM p2p_out, Node_p2p_out
+    ld      s8, Node_stream_bytes(s1)       # a stream's request bytes fit
+    ld      t0, NodeRoom_request_bytes(s2)
+    addi    t0, t0, NodeStream__fixed + 7
+    andi    t0, t0, -8
+    bltu    t0, s8, 8f
     addi    a0, s3, 8                       # the fixed fields
     addi    a1, s1, 8
     li      a2, NODE_FIXED - 8
@@ -252,10 +289,32 @@ FUNCTION lantern_node_copy
     mv      a0, s3
     mv      a1, s2
     call    node_layout
-    NODE_COPY_PART Node_blocks, NodeBlock__mem     # the entries of each part
+    NODE_COPY_PART Node_blocks, NodeBlock__mem      # the entries of each part
     NODE_COPY_PART Node_checkpoints, NodeCheckpoint__mem
     NODE_COPY_PART Node_pow_blocks, POW_BLOCK_BYTES
-    li      a0, LANTERN_OK
+    NODE_COPY_PART Node_peers, NodePeer__mem
+    PART    a1, a2, s1, Node_p2p_out        # the queued bytes
+    sd      a2, (Node_p2p_out + 8)(s3)
+    ld      t0, Node_p2p_out(s3)
+    add     a0, s3, t0
+    call    lantern_copy
+    PART    s4, s7, s1, Node_streams        # each stream, with the request room of the new stride
+    sd      s7, (Node_streams + 8)(s3)
+    ld      t0, Node_streams(s3)
+    add     s9, s3, t0
+1:  beqz    s7, 2f
+    mv      a0, s9
+    mv      a1, s4
+    mv      a2, s8
+    call    lantern_copy
+    ld      t0, Node_stream_bytes(s3)
+    addi    t1, t0, -NodeStream_list
+    sd      t1, NodeStream_list(s9)
+    add     s9, s9, t0
+    add     s4, s4, s8
+    addi    s7, s7, -1
+    j       1b
+2:  li      a0, LANTERN_OK
 9:  LEAVE 16
 8:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 16
@@ -762,6 +821,766 @@ LOCAL_FUNCTION node_event
 79: LEAVE 48
 END_FUNCTION node_event
 
+/* ------------------------------------------------------------ libp2p */
+
+/* a0 = room for an event of a0 bytes at the end of the node's queued libp2p events, its size written, or 0. Uses t0-t3. */
+LOCAL_FUNCTION node_out
+    UNWIND_END_PROLOGUE
+    ld      t0, Node_p2p_out(s1)            # offset, bytes used; the part ends at the node's end
+    ld      t1, (Node_p2p_out + 8)(s1)
+    ld      t2, 0(s1)
+    sub     t2, t2, t0
+    sub     t2, t2, t1
+    bltu    t2, a0, 1f
+    add     t3, s1, t0
+    add     t3, t3, t1
+    add     t1, t1, a0
+    sd      t1, (Node_p2p_out + 8)(s1)
+    sd      a0, 0(t3)
+    mv      a0, t3
+    ret
+1:  li      a0, 0
+    ret
+END_FUNCTION node_out
+
+/* A queued libp2p event of kind a0 with the handle a1: DISCONNECT, STREAM_CLOSE or STREAM_RESET. */
+LOCAL_FUNCTION node_out_handle
+    FRAME 16
+    sd      a0, F(sp)
+    sd      a1, (F + 8)(sp)
+    li      a0, 24
+    call    node_out
+    beqz    a0, 1f
+    ld      t0, F(sp)
+    sd      t0, 8(a0)
+    ld      t0, (F + 8)(sp)
+    sd      t0, 16(a0)
+1:  UNFRAME 16
+END_FUNCTION node_out_handle
+
+/* Drops the first a0 queued libp2p events, which libp2p took. */
+LOCAL_FUNCTION node_out_consume
+    FRAME 0
+    ld      t0, Node_p2p_out(s1)
+    add     t0, s1, t0
+    ld      t1, (Node_p2p_out + 8)(s1)
+    li      t2, 0
+1:  beqz    a0, 2f
+    bgeu    t2, t1, 2f
+    add     t3, t0, t2
+    ld      t3, 0(t3)
+    add     t2, t2, t3
+    addi    a0, a0, -1
+    j       1b
+2:  sub     a2, t1, t2
+    sd      a2, (Node_p2p_out + 8)(s1)
+    mv      a0, t0
+    add     a1, t0, t2
+    call    lantern_copy
+    UNFRAME 0
+END_FUNCTION node_out_consume
+
+/* a0 = the index of the peer of libp2p handle a0, or 2^64 - 1; a1 = its entry. Uses t0-t2. */
+LOCAL_FUNCTION node_find_peer
+    UNWIND_END_PROLOGUE
+    PART    a1, t1, s1, Node_peers
+    li      t0, 0
+1:  bgeu    t0, t1, 2f
+    ld      t2, NodePeer_handle(a1)
+    beq     t2, a0, 3f
+    addi    a1, a1, NodePeer__mem
+    addi    t0, t0, 1
+    j       1b
+2:  li      a0, -1
+    ret
+3:  mv      a0, t0
+    ret
+END_FUNCTION node_find_peer
+
+/* a0 = the index of the stream of libp2p handle a0, or 2^64 - 1; a1 = its entry. Uses t0-t3. */
+LOCAL_FUNCTION node_find_stream
+    UNWIND_END_PROLOGUE
+    PART    a1, t1, s1, Node_streams
+    ld      t3, Node_stream_bytes(s1)
+    li      t0, 0
+1:  bgeu    t0, t1, 2f
+    ld      t2, NodeStream_handle(a1)
+    beq     t2, a0, 3f
+    add     a1, a1, t3
+    addi    t0, t0, 1
+    j       1b
+2:  li      a0, -1
+    ret
+3:  mv      a0, t0
+    ret
+END_FUNCTION node_find_stream
+
+/* Removes the stream entry a0: the last entry takes its place. */
+LOCAL_FUNCTION node_drop_stream
+    FRAME 0
+    PART    t0, t1, s1, Node_streams
+    ld      t2, Node_stream_bytes(s1)
+    addi    t1, t1, -1
+    sd      t1, (Node_streams + 8)(s1)
+    mul     t3, t1, t2
+    add     a1, t0, t3
+    beq     a1, a0, 1f
+    mv      a2, t2
+    call    lantern_copy
+1:  UNFRAME 0
+END_FUNCTION node_drop_stream
+
+/* Removes the peer entry a0 and its streams. s3 the entry, s4 its handle. */
+LOCAL_FUNCTION node_drop_peer
+    ENTER 0
+    mv      s3, a0
+    ld      s4, NodePeer_handle(s3)
+1:  PART    a0, t1, s1, Node_streams        # its streams
+    ld      t2, Node_stream_bytes(s1)
+2:  beqz    t1, 3f
+    ld      t3, NodeStream_peer(a0)
+    bne     t3, s4, 21f
+    call    node_drop_stream
+    j       1b
+21: add     a0, a0, t2
+    addi    t1, t1, -1
+    j       2b
+3:  PART    t0, t1, s1, Node_peers          # the entry: the last takes its place
+    addi    t1, t1, -1
+    sd      t1, (Node_peers + 8)(s1)
+    li      t2, NodePeer__mem
+    mul     t2, t1, t2
+    add     a1, t0, t2
+    beq     a1, s3, 9f
+    mv      a0, s3
+    li      a2, NodePeer__mem
+    call    lantern_copy
+9:  LEAVE 0
+END_FUNCTION node_drop_peer
+
+/*
+ * a0 = the method of protocol index a0 of lantern_node_protocols, or 0; a1 = its version.
+ * The protocols go by method, then by version. Uses t0-t4.
+ */
+LOCAL_FUNCTION node_protocol
+    UNWIND_END_PROLOGUE
+    ADDRESS t0, reqresp_names
+    li      t1, 1
+1:  li      t4, REQRESP_METHODS
+    bgtu    t1, t4, 8f
+    ld      t2, 8(t0)
+    srli    t2, t2, 8                       # the mask of its versions
+    li      t3, 1
+2:  li      t4, 8
+    bgeu    t3, t4, 4f
+    srl     t4, t2, t3
+    andi    t4, t4, 1
+    beqz    t4, 3f
+    beqz    a0, 5f
+    addi    a0, a0, -1
+3:  addi    t3, t3, 1
+    j       2b
+4:  addi    t1, t1, 1
+    addi    t0, t0, 16
+    j       1b
+5:  mv      a0, t1
+    mv      a1, t3
+    ret
+8:  li      a0, 0
+    li      a1, 0
+    ret
+END_FUNCTION node_protocol
+
+/*
+ * A response of one chunk on the stream entry a0, result a1, payload a2 of a3 bytes: a
+ * STREAM_WRITE and a STREAM_CLOSE, or a STREAM_RESET when the node has no room; then the entry
+ * goes. s3 entry, s4 result, s7 payload, s8 its bytes then the chunk's, s9 the scratch size,
+ * s10 the chunk's ByteList. Locals: L a ChunkHeader, L+48 a size, L+56 the payload's ByteList.
+ */
+LOCAL_FUNCTION node_respond
+    ENTER 64
+    mv      s3, a0
+    mv      s4, a1
+    mv      s7, a2
+    mv      s8, a3
+    sd      s8, (L + 48)(sp)
+    addi    a0, sp, L + 48
+    addi    a1, sp, L + 48
+    call    lantern_reqresp_chunk_size
+    ld      s9, 0(s5)                       # the chunk, then the payload, at the end of scratch
+    addi    t0, s8, 24 + 7
+    andi    t0, t0, -8
+    ld      t1, (L + 48)(sp)
+    addi    t1, t1, 24 + 7
+    andi    t1, t1, -8
+    add     t2, t0, t1
+    bltu    s9, t2, 8f
+    sub     t3, s9, t2
+    sd      t3, 0(s5)
+    add     s10, s5, t3
+    add     t4, s10, t1
+    li      t5, 24
+    sd      t1, 0(s10)
+    sd      t5, 8(s10)
+    sd      zero, 16(s10)
+    sd      t0, 0(t4)
+    sd      t5, 8(t4)
+    sd      s8, 16(t4)
+    sd      t4, (L + 56)(sp)
+    addi    a0, t4, 24
+    mv      a1, s7
+    mv      a2, s8
+    call    lantern_copy
+    li      t0, CHUNK_RESPONSE
+    sd      t0, (L + ChunkHeader_kind)(sp)
+    sd      zero, (L + ChunkHeader_context_length)(sp)
+    sd      s4, (L + ChunkHeader_result)(sp)
+    addi    a0, sp, L
+    ld      a1, (L + 56)(sp)
+    mv      a2, s5
+    mv      a3, s10
+    call    lantern_reqresp_write_chunk
+    bnez    a0, 8f
+    ld      s8, 16(s10)                     # a STREAM_WRITE of the chunk, then a STREAM_CLOSE
+    addi    t0, s8, 32 + 7
+    andi    t0, t0, -8
+    sd      t0, (L + 48)(sp)
+    addi    a0, t0, 24
+    call    node_out
+    beqz    a0, 8f
+    ld      t0, (L + 48)(sp)
+    li      t1, LIBP2P_EVENT_STREAM_WRITE
+    sd      t0, 0(a0)
+    sd      t1, 8(a0)
+    ld      t1, NodeStream_handle(s3)
+    sd      t1, 16(a0)
+    sd      s8, 24(a0)
+    add     t2, a0, t0
+    li      t3, 24
+    sd      t3, 0(t2)
+    li      t3, LIBP2P_EVENT_STREAM_CLOSE
+    sd      t3, 8(t2)
+    sd      t1, 16(t2)
+    addi    a0, a0, 32
+    ld      t0, 8(s10)
+    add     a1, s10, t0
+    mv      a2, s8
+    call    lantern_copy
+    j       9f
+8:  li      a0, LIBP2P_EVENT_STREAM_RESET
+    ld      a1, NodeStream_handle(s3)
+    call    node_out_handle
+9:  sd      s9, 0(s5)
+    mv      a0, s3
+    call    node_drop_stream
+    LEAVE 64
+END_FUNCTION node_respond
+
+/*
+ * The request of the stream entry a0, when its bytes are all there: Status, Ping and MetaData
+ * get their answer, Goodbye a close; other methods get ResourceUnavailable. s3 entry, s4 method,
+ * s7 the request's size, s8 the scratch size, s9 the payload, s10 a peer or a slot.
+ * Locals: L a ChunkHeader, L+48 consumed or an epoch, L+56 a length or a fork digest, L+64 eof
+ * or a payload (96).
+ */
+LOCAL_FUNCTION node_request
+    ENTER 176
+    mv      s3, a0
+    ld      s4, NodeStream_method(s3)
+    li      t0, REQRESP_METADATA            # MetaData: no request bytes
+    beq     s4, t0, 50f
+    ld      t1, NodeStream_version(s3)      # the SSZ size of the request
+    li      s7, 84
+    li      t0, REQRESP_STATUS
+    bne     s4, t0, 1f
+    li      t0, 2
+    bltu    t1, t0, 3f
+    li      s7, 92
+    j       3f
+1:  li      s7, 8
+    li      t0, REQRESP_GOODBYE
+    beq     s4, t0, 3f
+    li      t0, REQRESP_PING
+    beq     s4, t0, 3f
+    li      a1, 3                           # ResourceUnavailable
+    j       91f
+3:  sd      zero, (L + ChunkHeader_kind)(sp)        # CHUNK_REQUEST
+    sd      zero, (L + ChunkHeader_context_length)(sp)
+    addi    a0, s3, NodeStream_list
+    addi    a1, sp, L
+    call    lantern_reqresp_read_header
+    li      t0, LANTERN_REQRESP_MORE
+    beq     a0, t0, 80f
+    bnez    a0, 90f
+    ld      t0, (L + ChunkHeader_length)(sp)
+    bne     t0, s7, 90f
+    ld      s8, 0(s5)                       # the payload's ByteList at the end of scratch
+    addi    t0, s8, -128
+    sd      t0, 0(s5)
+    add     s9, s5, t0
+    li      t1, 128
+    sd      t1, 0(s9)
+    li      t1, 24
+    sd      t1, 8(s9)
+    sd      zero, 16(s9)
+    sd      s7, (L + 56)(sp)                # length and eof, by address
+    ld      t0, NodeStream_state(s3)
+    addi    t0, t0, -NODE_STREAM_EOF
+    seqz    t0, t0
+    sd      t0, (L + 64)(sp)
+    addi    a0, s3, NodeStream_list
+    addi    a1, sp, L + ChunkHeader_header_bytes
+    addi    a2, sp, L + 56
+    addi    a3, sp, L + 64
+    mv      a4, s5
+    mv      a5, s9
+    addi    a6, sp, L + 48
+    call    lantern_reqresp_read_payload
+    sd      s8, 0(s5)
+    li      t0, LANTERN_REQRESP_MORE
+    beq     a0, t0, 80f
+    bnez    a0, 90f
+    addi    s9, s9, 24                      # the SSZ bytes
+    li      t0, REQRESP_GOODBYE
+    bne     s4, t0, 10f
+    li      a0, LIBP2P_EVENT_STREAM_CLOSE   # Goodbye: a close
+    ld      a1, NodeStream_handle(s3)
+    call    node_out_handle
+    mv      a0, s3
+    call    node_drop_stream
+    LEAVE 176
+10: li      t0, REQRESP_PING
+    bne     s4, t0, 20f
+    ld      t0, Node_metadata_seq(s1)       # Ping: our seq_number
+    sd      t0, (L + 64)(sp)
+    mv      a0, s3
+    li      a1, 0
+    addi    a2, sp, L + 64
+    li      a3, 8
+    call    node_respond
+    LEAVE 176
+20: ld      a0, NodeStream_peer(s3)         # Status: the peer's, then ours
+    call    node_find_peer
+    li      t0, -1
+    beq     a0, t0, 21f
+    mv      s10, a1
+    sd      zero, NodePeer_fork_digest(s10)
+    addi    a0, s10, NodePeer_fork_digest
+    mv      a1, s9
+    li      a2, 4
+    call    lantern_copy
+    addi    a0, s10, NodePeer_finalized_root        # finalized root and epoch, head root and slot
+    addi    a1, s9, 4
+    li      a2, 32 + 8 + 32 + 8
+    call    lantern_copy
+    sd      zero, NodePeer_earliest_slot(s10)
+    li      t0, 92
+    bne     s7, t0, 22f
+    addi    a0, s10, NodePeer_earliest_slot
+    addi    a1, s9, 84
+    li      a2, 8
+    call    lantern_copy
+22: ld      t0, NodePeer_flags(s10)
+    ori     t0, t0, NODE_PEER_STATUS
+    sd      t0, NodePeer_flags(s10)
+21: mv      a0, s2                          # ForkDigest of the store's epoch
+    call    node_store_slot
+    mv      s10, a0
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    li      t0, SLOTS_PER_EPOCH
+    divu    t0, s10, t0
+    sd      t0, (L + 48)(sp)
+    addi    a0, s1, Node_genesis_validators_root
+    addi    a1, sp, L + 48
+    addi    a2, s1, Node_config
+    mv      a3, s5
+    addi    a4, sp, L + 56
+    FORK_CALL compute_fork_digest
+    addi    a0, sp, L + 64
+    addi    a1, sp, L + 56
+    li      a2, 4
+    call    lantern_copy
+    addi    a0, sp, L + 64 + 4              # finalized_root, finalized_epoch
+    addi    a1, s2, Store_finalized_checkpoint + 8
+    li      a2, 32
+    call    lantern_copy
+    addi    a0, sp, L + 64 + 36
+    addi    a1, s2, Store_finalized_checkpoint
+    li      a2, 8
+    call    lantern_copy
+    addi    a0, sp, L + 64 + 44             # head_root, head_slot
+    addi    a1, s1, Node_head_root
+    li      a2, 32
+    call    lantern_copy
+    addi    a0, s1, Node_head_root
+    call    node_find_block
+    li      t1, 0
+    li      t0, -1
+    beq     a0, t0, 23f
+    ld      t1, NodeBlock_slot(a1)
+23: sd      t1, (L + 56)(sp)
+    addi    a0, sp, L + 64 + 76
+    addi    a1, sp, L + 56
+    li      a2, 8
+    call    lantern_copy
+    addi    a0, sp, L + 64 + 84             # earliest_available_slot: Status v2
+    addi    a1, s1, Node_earliest_slot
+    li      a2, 8
+    call    lantern_copy
+    mv      a0, s3
+    li      a1, 0
+    addi    a2, sp, L + 64
+    mv      a3, s7
+    call    node_respond
+    LEAVE 176
+50: addi    a0, sp, L + 64                  # MetaData: seq_number, attnets, syncnets, custody_group_count
+    li      a1, 32
+    call    lantern_zero
+    ld      t0, Node_metadata_seq(s1)
+    sd      t0, (L + 64)(sp)
+    LDQ     t0, s1, Node_config + CONFIG_CUSTODY_REQUIREMENT
+    sd      t0, (L + 56)(sp)
+    addi    a0, sp, L + 64 + 17
+    addi    a1, sp, L + 56
+    li      a2, 8
+    call    lantern_copy
+    ld      t0, NodeStream_version(s3)
+    li      a3, 16
+    li      t1, 2
+    bltu    t0, t1, 51f
+    li      a3, 17
+    beq     t0, t1, 51f
+    li      a3, 25
+51: mv      a0, s3
+    li      a1, 0
+    addi    a2, sp, L + 64
+    call    node_respond
+    LEAVE 176
+80: ld      t0, NodeStream_state(s3)        # more bytes come, unless the peer closed
+    li      t1, NODE_STREAM_EOF
+    beq     t0, t1, 90f
+    LEAVE 176
+90: li      a1, 1                           # InvalidRequest
+91: mv      a0, s3
+    mv      a2, sp
+    li      a3, 0
+    call    node_respond
+    LEAVE 176
+END_FUNCTION node_request
+
+/* The libp2p application notice a0. s3 the notice, s4 an entry, s7 method, s8 version. */
+LOCAL_FUNCTION node_notice
+    ENTER 0
+    mv      s3, a0
+    ld      t0, LIBP2P_ACT_KIND(s3)
+    li      t1, LIBP2P_ACTION_PEER_CONNECTED
+    bne     t0, t1, 10f
+    ld      t2, Node_streams(s1)            # a new peer: its entry, or DISCONNECT when the table is full
+    ld      t3, Node_peers(s1)
+    sub     t2, t2, t3
+    li      t3, NodePeer__mem
+    divu    t2, t2, t3
+    ld      t4, (Node_peers + 8)(s1)
+    bltu    t4, t2, 1f
+    li      a0, LIBP2P_EVENT_DISCONNECT
+    ld      a1, LIBP2P_ACT_PEER(s3)
+    call    node_out_handle
+    LEAVE 0
+1:  mul     s4, t4, t3
+    ld      t5, Node_peers(s1)
+    add     s4, s4, t5
+    add     s4, s4, s1
+    addi    t4, t4, 1
+    sd      t4, (Node_peers + 8)(s1)
+    mv      a0, s4
+    li      a1, NodePeer__mem
+    call    lantern_zero
+    ld      t0, LIBP2P_ACT_PEER(s3)
+    sd      t0, NodePeer_handle(s4)
+    ld      t0, LIBP2P_ACT_PC_DIRECTION(s3)
+    sd      t0, NodePeer_direction(s4)
+    ld      a2, LIBP2P_ACT_PC_ID_LEN(s3)
+    li      t0, 48
+    bleu    a2, t0, 2f
+    li      a2, 48
+2:  sd      a2, NodePeer_id_len(s4)
+    addi    a0, s4, NodePeer_id
+    addi    a1, s3, LIBP2P_ACT_PC_ID
+    call    lantern_copy
+    LEAVE 0
+10: li      t1, LIBP2P_ACTION_PEER_DISCONNECTED
+    bne     t0, t1, 20f
+    ld      a0, LIBP2P_ACT_PEER(s3)
+    call    node_find_peer
+    li      t0, -1
+    beq     a0, t0, 19f
+    mv      a0, a1
+    call    node_drop_peer
+19: LEAVE 0
+20: li      t1, LIBP2P_ACTION_STREAM_INBOUND
+    bne     t0, t1, 30f
+    ld      a0, LIBP2P_ACT_SI_PROTOCOL(s3)  # a request stream: its entry, or a reset
+    call    node_protocol
+    beqz    a0, 28f
+    mv      s7, a0
+    mv      s8, a1
+    ld      t0, Node_p2p_out(s1)
+    ld      t1, Node_streams(s1)
+    sub     t0, t0, t1
+    ld      t2, Node_stream_bytes(s1)
+    divu    t0, t0, t2
+    ld      t3, (Node_streams + 8)(s1)
+    bgeu    t3, t0, 28f
+    mul     t4, t3, t2
+    add     s4, s1, t1
+    add     s4, s4, t4
+    addi    t3, t3, 1
+    sd      t3, (Node_streams + 8)(s1)
+    ld      t0, LIBP2P_ACT_STREAM(s3)
+    sd      t0, NodeStream_handle(s4)
+    ld      t0, LIBP2P_ACT_SI_PEER(s3)
+    sd      t0, NodeStream_peer(s4)
+    sd      s7, NodeStream_method(s4)
+    sd      s8, NodeStream_version(s4)
+    li      t0, NODE_STREAM_REQUEST
+    sd      t0, NodeStream_state(s4)
+    addi    t0, t2, -NodeStream_list
+    sd      t0, NodeStream_list(s4)
+    li      t0, 24
+    sd      t0, (NodeStream_list + 8)(s4)
+    sd      zero, (NodeStream_list + 16)(s4)
+    mv      a0, s4
+    call    node_request
+    LEAVE 0
+28: li      a0, LIBP2P_EVENT_STREAM_RESET
+    ld      a1, LIBP2P_ACT_STREAM(s3)
+    call    node_out_handle
+    LEAVE 0
+30: li      t1, LIBP2P_ACTION_STREAM_DATA
+    bne     t0, t1, 40f
+    ld      a0, LIBP2P_ACT_STREAM(s3)       # request bytes: kept, then read
+    call    node_find_stream
+    li      t0, -1
+    beq     a0, t0, 39f
+    mv      s4, a1
+    ld      t0, (NodeStream_list + 16)(s4)
+    ld      a2, LIBP2P_ACT_SD_COUNT(s3)
+    ld      t1, NodeStream_list(s4)
+    addi    t1, t1, -24
+    sub     t1, t1, t0
+    bgtu    a2, t1, 38f
+    addi    a0, s4, NodeStream_request
+    add     a0, a0, t0
+    addi    a1, s3, LIBP2P_ACT_SD_DATA
+    add     t0, t0, a2
+    sd      t0, (NodeStream_list + 16)(s4)
+    call    lantern_copy
+    mv      a0, s4
+    call    node_request
+39: LEAVE 0
+38: li      a0, LIBP2P_EVENT_STREAM_RESET   # more than the room: a reset
+    ld      a1, NodeStream_handle(s4)
+    call    node_out_handle
+    mv      a0, s4
+    call    node_drop_stream
+    LEAVE 0
+40: li      t1, LIBP2P_ACTION_STREAM_EOF
+    bne     t0, t1, 50f
+    ld      a0, LIBP2P_ACT_STREAM(s3)
+    call    node_find_stream
+    li      t0, -1
+    beq     a0, t0, 49f
+    li      t0, NODE_STREAM_EOF
+    sd      t0, NodeStream_state(a1)
+    mv      a0, a1
+    call    node_request
+49: LEAVE 0
+50: li      t1, LIBP2P_ACTION_STREAM_RESET
+    bne     t0, t1, 59f
+    ld      a0, LIBP2P_ACT_STREAM(s3)
+    call    node_find_stream
+    li      t0, -1
+    beq     a0, t0, 59f
+    mv      a0, a1
+    call    node_drop_stream
+59: LEAVE 0
+END_FUNCTION node_notice
+
+/* a0 = the WAKEUP time of the libp2p actions in the ByteList a0, after their application notices. s3 an action, s4 the end, s7 the time. */
+LOCAL_FUNCTION node_p2p_notices
+    ENTER 0
+    ld      t0, 8(a0)
+    add     s3, a0, t0
+    ld      t0, 16(a0)
+    add     s4, s3, t0
+    li      s7, -1
+1:  bgeu    s3, s4, 9f
+    ld      t0, LIBP2P_ACT_KIND(s3)
+    li      t1, LIBP2P_ACTION_WAKEUP
+    bne     t0, t1, 2f
+    ld      s7, LIBP2P_ACT_TIME(s3)
+    j       3f
+2:  li      t1, LIBP2P_ACTION_PEER_CONNECTED
+    bltu    t0, t1, 3f
+    li      t1, LIBP2P_ACTION_SEND_DATAGRAM
+    bgeu    t0, t1, 3f
+    mv      a0, s3
+    call    node_notice
+3:  ld      t0, 0(s3)
+    add     s3, s3, t0
+    j       1b
+9:  mv      a0, s7
+    LEAVE 0
+END_FUNCTION node_p2p_notices
+
+/* The libp2p event list a0: the libp2p events of the P2P events from a1 to a2, then the node's queued events. s3, s4 the range, s7 the list, s8 where the next event goes. */
+LOCAL_FUNCTION node_p2p_fill
+    ENTER 0
+    mv      s7, a0
+    mv      s3, a1
+    mv      s4, a2
+    li      t0, 24
+    sd      t0, 8(s7)
+    addi    s8, s7, 24
+1:  bgeu    s3, s4, 2f
+    ld      t0, 8(s3)
+    li      t1, NODE_EV_P2P
+    bne     t0, t1, 11f
+    mv      a0, s8
+    addi    a1, s3, 16
+    ld      a2, 16(s3)
+    add     s8, s8, a2
+    call    lantern_copy
+11: ld      t0, 0(s3)
+    add     s3, s3, t0
+    j       1b
+2:  mv      a0, s8
+    ld      t0, Node_p2p_out(s1)
+    add     a1, s1, t0
+    ld      a2, (Node_p2p_out + 8)(s1)
+    add     s8, s8, a2
+    call    lantern_copy
+    sub     t0, s8, s7
+    addi    t0, t0, -24
+    sd      t0, 16(s7)
+    LEAVE 0
+END_FUNCTION node_p2p_fill
+
+/*
+ * libp2p_step of the state a0 with the tick a1, the event list a2 and the scratch a3, its
+ * actions in a P2P_LIST action that takes the action room left less a4 bytes, its StepResult at
+ * a5: a0 = 0 and a1 = the actions' ByteList; 1 when the room is short; or libp2p's status, with
+ * no action added. s3 state, s4 tick, s7 list, s8 scratch, s9 result, s10 the action.
+ */
+LOCAL_FUNCTION node_p2p_round
+    ENTER 0
+    mv      s3, a0
+    mv      s4, a1
+    mv      s7, a2
+    mv      s8, a3
+    mv      s9, a5
+    ld      t0, 0(s6)
+    ld      t1, 8(s6)
+    ld      t2, 16(s6)
+    sub     t0, t0, t1
+    sub     t0, t0, t2
+    bltu    t0, a4, 8f
+    sub     t0, t0, a4
+    andi    t0, t0, -8
+    li      t3, LIBP2P_ACTIONS_MIN + 24 + 16
+    bltu    t0, t3, 8f
+    add     s10, s6, t1
+    add     s10, s10, t2
+    sd      t0, 0(s10)
+    li      t3, NODE_ACT_P2P_LIST
+    sd      t3, 8(s10)
+    addi    t3, t0, -16
+    sd      t3, 16(s10)
+    li      t3, 24
+    sd      t3, 24(s10)
+    sd      zero, 32(s10)
+    mv      a0, s3
+    mv      a1, s4
+    mv      a2, s7
+    mv      a3, s8
+    addi    a4, s10, 16
+    mv      a5, s9
+    CALL_GLOBAL libp2p_step
+    bnez    a0, 9f
+    ld      t0, 32(s10)                     # the action holds the actions written
+    addi    t0, t0, 24
+    sd      t0, 16(s10)
+    addi    t0, t0, 16
+    sd      t0, 0(s10)
+    ld      t1, 16(s6)
+    add     t1, t1, t0
+    sd      t1, 16(s6)
+    addi    a1, s10, 16
+    li      a0, 0
+    LEAVE 0
+8:  li      a0, 1
+9:  LEAVE 0
+END_FUNCTION node_p2p_round
+
+/*
+ * (out, count): the protocol IDs of the req/resp protocols the node answers, as libp2p
+ * ProtocolEntry values in the ByteList out, by method then version; count = how many.
+ * s1 out, s2 count, s3 the protocols, s4 an index, s5 an entry. Locals: L a ReqRespProtocol,
+ * L+16 a ByteList of an ID.
+ */
+FUNCTION lantern_node_protocols
+    ENTER 176
+    mv      s1, a0
+    mv      s2, a1
+    li      s3, 0
+1:  mv      a0, s3
+    call    node_protocol
+    beqz    a0, 2f
+    addi    s3, s3, 1
+    j       1b
+2:  li      t0, LIBP2P_PROTO_SIZE
+    mul     t0, s3, t0
+    addi    t1, t0, 24
+    ld      t2, 0(s1)
+    bltu    t2, t1, 8f
+    li      t1, 24
+    sd      t1, 8(s1)
+    sd      t0, 16(s1)
+    sd      s3, 0(s2)
+    li      s4, 0
+    addi    s5, s1, 24
+3:  bgeu    s4, s3, 7f
+    mv      a0, s4
+    call    node_protocol
+    sd      a0, L(sp)
+    sd      a1, (L + 8)(sp)
+    mv      a0, s5
+    li      a1, LIBP2P_PROTO_SIZE
+    call    lantern_zero
+    li      t0, 24 + 128
+    sd      t0, (L + 16)(sp)
+    li      t0, 24
+    sd      t0, (L + 24)(sp)
+    sd      zero, (L + 32)(sp)
+    addi    a0, sp, L
+    addi    a1, sp, L + 16
+    call    lantern_reqresp_protocol_id
+    ld      a2, (L + 32)(sp)
+    sd      a2, 0(s5)
+    addi    a0, s5, 8
+    addi    a1, sp, L + 40
+    call    lantern_copy
+    addi    s5, s5, LIBP2P_PROTO_SIZE
+    addi    s4, s4, 1
+    j       3b
+7:  li      a0, LANTERN_OK
+    LEAVE 176
+8:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 176
+END_FUNCTION lantern_node_protocols
+
 /*
  * The root entry at a1 of the BLOCK event a0: its first u64 is 0 and the root follows, or the
  * first u64 is not 0 when the bytes are no SignedBeaconBlock. a0 = the status. s3 the ByteList,
@@ -793,26 +1612,34 @@ LOCAL_FUNCTION node_block_entry
 END_FUNCTION node_block_entry
 
 /*
- * (node, store, events, scratch, actions, result): s1 node, s2 store, s3 the events, s4 their
- * end, s5 scratch, s6 actions, s7 result, s8 the event count, s9 the BLOCK and POW_BLOCK
- * events then an event, s10 the event bytes then a root entry at the end of scratch, t5 the
- * WORK_DONE events in the first pass. Locals: L the WORK_DONE events, L+8 the scratch size.
+ * (node, store, p2p, tick, events, scratch, actions, result): s1 node, s2 store, s3 the events,
+ * s4 their end, s5 scratch, s6 actions, s7 result, s8 the event count, s9 the BLOCK and
+ * POW_BLOCK events then an event, s10 the event bytes then a root entry at the end of scratch,
+ * t5 the WORK_DONE events in the first pass. Locals: L the WORK_DONE events, L+8 the scratch
+ * size, L+16 p2p, L+24 tick, L+32 the end of the events handled, L+40 the libp2p event list,
+ * L+48 the libp2p scratch, L+56 the bytes of the P2P events, L+64 the P2P events, L+72 the
+ * action room kept for the node, L+80 wakeup, L+88 libp2p's StepResult, L+96 libp2p's actions,
+ * L+104 the libp2p steps.
  */
 FUNCTION lantern_node_step
-    ENTER 16
+    ENTER 112
     mv      s1, a0
     mv      s2, a1
-    ld      t0, 8(a2)
-    ld      t1, 16(a2)
-    add     s3, a2, t0
+    sd      a2, (L + 16)(sp)
+    sd      a3, (L + 24)(sp)
+    ld      t0, 8(a4)
+    ld      t1, 16(a4)
+    add     s3, a4, t0
     add     s4, s3, t1
-    mv      s5, a3
-    mv      s6, a4
-    mv      s7, a5
+    mv      s5, a5
+    mv      s6, a6
+    mv      s7, a7
     li      s8, 0                           # first: check every event, and count
     li      s9, 0
     li      s10, 0
     li      t5, 0
+    sd      zero, (L + 56)(sp)
+    sd      zero, (L + 64)(sp)
     mv      t0, s3
 1:  bgeu    t0, s4, 5f
     sub     t1, s4, t0
@@ -826,7 +1653,7 @@ FUNCTION lantern_node_step
     bnez    t4, 7f
     bgtu    t2, t1, 7f
     addi    t4, t3, -1
-    li      t6, NODE_EV_WORK_DONE
+    li      t6, NODE_EV_LAST
     bgeu    t4, t6, 7f
     li      t4, NODE_EV_TICK
     bne     t3, t4, 2f
@@ -834,10 +1661,30 @@ FUNCTION lantern_node_step
     bltu    t2, t4, 7f
     j       4f
 2:  li      t4, NODE_EV_WORK_DONE
-    bne     t3, t4, 3f
+    bne     t3, t4, 21f
     li      t4, NODE_EV_WORK_DONE_SIZE
     bltu    t2, t4, 7f
     addi    t5, t5, 1
+    j       4f
+21: li      t4, NODE_EV_P2P                 # a libp2p event inside, for a node with a libp2p state
+    bne     t3, t4, 3f
+    ld      t4, (L + 16)(sp)
+    beqz    t4, 7f
+    li      t4, 16 + 16
+    bltu    t2, t4, 7f
+    ld      t4, 16(t0)
+    li      t6, 16
+    bltu    t4, t6, 7f
+    andi    t6, t4, 7
+    bnez    t6, 7f
+    addi    t6, t2, -16
+    bgtu    t4, t6, 7f
+    ld      t6, (L + 56)(sp)
+    add     t6, t6, t4
+    sd      t6, (L + 56)(sp)
+    ld      t6, (L + 64)(sp)
+    addi    t6, t6, 1
+    sd      t6, (L + 64)(sp)
     j       4f
 3:  li      t4, NODE_EV_PAYLOAD_STATUS      # the ByteList at 24: its bytes inside the event
     beq     t3, t4, 7f
@@ -859,14 +1706,7 @@ FUNCTION lantern_node_step
     add     t0, t0, t2
     j       1b
 5:  sd      t5, L(sp)
-    ld      t0, 0(s6)                       # room: actions, node parts, scratch
-    ld      t1, 8(s6)
-    bltu    t0, t1, 8f
-    sub     t0, t0, t1
-    ld      t1, 16(s6)
-    bltu    t0, t1, 8f
-    sub     t0, t0, t1
-    li      t1, 512
+    li      t1, 512                         # room: actions, node parts, scratch
     mul     t1, s8, t1
     add     t1, t1, s10
     ld      t2, (Node_blocks + 8)(s1)
@@ -874,6 +1714,18 @@ FUNCTION lantern_node_step
     mul     t2, t2, t3
     add     t1, t1, t2
     addi    t1, t1, 512
+    sd      t1, (L + 72)(sp)
+    ld      t2, (L + 16)(sp)
+    beqz    t2, 51f
+    li      t2, LIBP2P_ACTIONS_MIN + 24 + 16
+    add     t1, t1, t2
+51: ld      t0, 0(s6)
+    ld      t2, 8(s6)
+    bltu    t0, t2, 8f
+    sub     t0, t0, t2
+    ld      t2, 16(s6)
+    bltu    t0, t2, 8f
+    sub     t0, t0, t2
     bltu    t0, t1, 8f
     ld      t0, Node_checkpoints(s1)        # blocks: one entry for each BLOCK event
     ld      t1, Node_blocks(s1)
@@ -893,7 +1745,7 @@ FUNCTION lantern_node_step
     slli    t1, t5, 1
     addi    t1, t1, 2
     bltu    t0, t1, 8f
-    ld      t0, 0(s1)                       # pow blocks: one for each POW_BLOCK event
+    ld      t0, Node_peers(s1)              # pow blocks: one for each POW_BLOCK event
     ld      t1, Node_pow_blocks(s1)
     sub     t0, t0, t1
     li      t1, POW_BLOCK_BYTES
@@ -901,7 +1753,19 @@ FUNCTION lantern_node_step
     ld      t1, (Node_pow_blocks + 8)(s1)
     sub     t0, t0, t1
     bltu    t0, s9, 8f
-    LDQ     t0, s2, Store_validators        # scratch for get_head
+    li      t3, NODE_ROOT_ENTRY             # scratch: the root entries and libp2p's lists at its end
+    mul     t3, s9, t3
+    ld      t0, (L + 16)(sp)
+    beqz    t0, 52f
+    ld      t0, (L + 56)(sp)
+    add     t3, t3, t0
+    ld      t0, 0(s1)
+    ld      t1, Node_p2p_out(s1)
+    sub     t0, t0, t1
+    add     t3, t3, t0
+    li      t0, 24 + LIBP2P_SCRATCH_SIZE
+    add     t3, t3, t0
+52: LDQ     t0, s2, Store_validators        # and what get_head needs
     LDQ     t1, s2, Store_blocks
     sub     t0, t0, t1
     slli    t0, t0, 4
@@ -909,19 +1773,31 @@ FUNCTION lantern_node_step
     divu    t0, t0, t1
     li      t1, LANTERN_SCRATCH_FIXED + 64
     add     t0, t0, t1
+    add     t0, t0, t3
     ld      t1, 0(s5)
     bltu    t1, t0, 8f
-    ld      t0, 0(s5)                       # scratch: a root entry for each BLOCK event at its end
-    sd      t0, (L + 8)(sp)
-    li      t1, NODE_ROOT_ENTRY
-    mul     t1, s9, t1
-    bltu    t0, t1, 8f
-    sub     t0, t0, t1
-    li      t1, LANTERN_SCRATCH_FIXED
-    bltu    t0, t1, 8f
-    sd      t0, 0(s5)
-    add     s10, s5, t0
-    mv      s9, s3                          # the root of each BLOCK event, before any change
+    sd      t1, (L + 8)(sp)
+    sub     t1, t1, t3
+    sd      t1, 0(s5)
+    add     s10, s5, t1
+    ld      t0, (L + 16)(sp)
+    beqz    t0, 53f
+    li      t0, NODE_ROOT_ENTRY             # the libp2p event list, then libp2p's scratch
+    mul     t0, s9, t0
+    add     t0, s10, t0
+    sd      t0, (L + 40)(sp)
+    ld      t1, 0(s1)
+    ld      t2, Node_p2p_out(s1)
+    sub     t1, t1, t2
+    ld      t2, (L + 56)(sp)
+    add     t1, t1, t2
+    addi    t1, t1, 24
+    sd      t1, 0(t0)
+    add     t0, t0, t1
+    sd      t0, (L + 48)(sp)
+    li      t1, LIBP2P_SCRATCH_SIZE
+    sd      t1, 0(t0)
+53: mv      s9, s3                          # the root of each BLOCK event, before any change
 11: bgeu    s9, s4, 13f
     ld      t0, 8(s9)
     li      t1, NODE_EV_BLOCK
@@ -934,10 +1810,59 @@ FUNCTION lantern_node_step
 12: ld      t0, 0(s9)
     add     s9, s9, t0
     j       11b
-13: ld      t0, 0(s5)
+13: sd      s4, (L + 32)(sp)                # libp2p: the P2P events and the queued events
+    li      t0, -1
+    sd      t0, (L + 80)(sp)
+    ld      t0, (L + 16)(sp)
+    beqz    t0, 30f
+    ld      a0, (L + 40)(sp)
+    mv      a1, s3
+    mv      a2, s4
+    call    node_p2p_fill
+    ld      a0, (L + 16)(sp)
+    ld      a1, (L + 24)(sp)
+    ld      a2, (L + 40)(sp)
+    ld      a3, (L + 48)(sp)
+    ld      a4, (L + 72)(sp)
+    addi    a5, sp, L + 88
+    call    node_p2p_round
+    beqz    a0, 24f
+    li      t0, LIBP2P_BUFFER_TOO_SMALL     # a status of libp2p: nothing is changed
+    li      t1, LANTERN_INVALID_EVENT
+    bne     a0, t0, 241f
+    li      t1, LANTERN_BUFFER_TOO_SMALL
+241: mv     a0, t1
+    j       14f
+24: sd      a1, (L + 96)(sp)                # from here on the step holds
+    ld      t0, (L + 88)(sp)
+    ld      t1, (L + 64)(sp)
+    bgeu    t0, t1, 25f
+    mv      t2, s3                          # libp2p took k < n P2P events: the step ends at the next
+26: ld      t3, 8(t2)
+    li      t4, NODE_EV_P2P
+    bne     t3, t4, 27f
+    beqz    t0, 28f
+    addi    t0, t0, -1
+27: ld      t3, 0(t2)
+    add     t2, t2, t3
+    j       26b
+28: sd      t2, (L + 32)(sp)
+    j       29f
+25: sub     a0, t0, t1                      # and the queued events it took
+    call    node_out_consume
+29: ld      a0, (L + 96)(sp)
+    call    node_p2p_notices
+    sd      a0, (L + 80)(sp)
+30: ld      t0, 0(s5)                       # then each event, in order
     add     s10, s5, t0
-    mv      s9, s3                          # then each event, in order
-6:  bgeu    s9, s4, 9f
+    li      s8, 0
+    mv      s9, s3
+6:  ld      t0, (L + 32)(sp)
+    bgeu    s9, t0, 9f
+    addi    s8, s8, 1
+    ld      t0, 8(s9)
+    li      t1, NODE_EV_P2P
+    beq     t0, t1, 15f
     mv      a0, s9
     mv      a1, s10
     call    node_event
@@ -948,19 +1873,55 @@ FUNCTION lantern_node_step
 15: ld      t0, 0(s9)
     add     s9, s9, t0
     j       6b
-9:  ld      t0, (L + 8)(sp)
+9:  call    node_head
+    ld      t0, (L + 16)(sp)                # libp2p again with the node's queued events
+    beqz    t0, 40f
+    sd      zero, (L + 104)(sp)
+32: ld      t0, (Node_p2p_out + 8)(s1)
+    beqz    t0, 40f
+    ld      t1, (L + 104)(sp)
+    li      t2, NODE_P2P_ROUNDS
+    bgeu    t1, t2, 40f
+    addi    t1, t1, 1
+    sd      t1, (L + 104)(sp)
+    ld      a0, (L + 40)(sp)
+    mv      a1, s4
+    mv      a2, s4
+    call    node_p2p_fill
+    ld      a0, (L + 16)(sp)
+    ld      a1, (L + 24)(sp)
+    ld      a2, (L + 40)(sp)
+    ld      a3, (L + 48)(sp)
+    li      a4, 4096
+    addi    a5, sp, L + 88
+    call    node_p2p_round
+    bnez    a0, 40f
+    sd      a1, (L + 96)(sp)
+    ld      a0, (L + 88)(sp)
+    call    node_out_consume
+    ld      a0, (L + 96)(sp)
+    call    node_p2p_notices
+    sd      a0, (L + 80)(sp)
+    j       32b
+40: ld      t0, (Node_p2p_out + 8)(s1)      # events left: the next step is due now
+    beqz    t0, 41f
+    ld      t1, (L + 24)(sp)
+    ld      t1, LIBP2P_TICK_NOW(t1)
+    sd      t1, (L + 80)(sp)
+41: ld      t0, (L + 8)(sp)
     sd      t0, 0(s5)
-    call    node_head
-    sd      s8, 0(s7)
+    sd      s8, NodeStepResult_accepted(s7)
+    ld      t0, (L + 80)(sp)
+    sd      t0, NodeStepResult_wakeup(s7)
     li      a0, LANTERN_OK
-    LEAVE 16
-14: ld      t0, (L + 8)(sp)                 # a status of the first pass: nothing is changed
+    LEAVE 112
+14: ld      t0, (L + 8)(sp)                 # a status before any change
     sd      t0, 0(s5)
-    LEAVE 16
+    LEAVE 112
 7:  li      a0, LANTERN_INVALID_EVENT
-    LEAVE 16
+    LEAVE 112
 8:  li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 16
+    LEAVE 112
 END_FUNCTION lantern_node_step
 
 /*

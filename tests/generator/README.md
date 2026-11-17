@@ -22,6 +22,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `p2p.py` | The cases of the p2p helpers, from the pinned spec modules |
 | `engine.py` | The cases of the Engine API client: JWTs, HTTP requests and responses |
 | `reqresp.py` | The cases of the req/resp encoding, and the req/resp message types of the spec's text |
+| `node.py` | The cases of the node core over libp2p: an anchor, and the Status and MetaData the node answers |
 
 ## Sources
 
@@ -29,7 +30,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 |---|---|
 | `mainnet.tar.gz`, `minimal.tar.gz` of consensus-specs v1.7.0-beta.4 | The cases of phase0 to fulu of every runner in scope |
 | `comptests.tar.gz` of the same release | The fork choice compliance cases of altair to fulu, minimal only |
-| The consensus-specs clone at aa16bb4 | The type descriptors, the configs, the KZG trusted setup, and the expected results of the p2p helper cases |
+| The consensus-specs clone at aa16bb4 | The type descriptors, the configs, the KZG trusted setup, and the expected results of the p2p helper cases and the node cases |
 
 - Each archive's SHA-256 is pinned in `generate.py`.
 

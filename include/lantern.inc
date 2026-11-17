@@ -447,8 +447,15 @@
 .set Node_flags, 112                   /* NODE_FLAG_* */
 .set NODE_FLAG_OPTIMISTIC, 1           /* import payloads as NOT_VALIDATED until the execution engine answers */
 .set NODE_FLAG_JUSTIFIED_PENDING, 2    /* a JUSTIFIED_STATE work is queued */
-.set Node_config, 120
-.set NODE_FIXED, 120 + CONFIG_SIZE
+.set Node_peers, 120                   /* PartRef of NodePeer */
+.set Node_streams, 136                 /* PartRef of NodeStream entries of Node_stream_bytes each */
+.set Node_p2p_out, 152                 /* PartRef of bytes: libp2p events the node made for its next libp2p step */
+.set Node_stream_bytes, 168            /* NodeStream__fixed + the request room, a multiple of 8 */
+.set Node_metadata_seq, 176            /* MetaData.seq_number */
+.set Node_genesis_validators_root, 184
+.set Node_earliest_slot, 216           /* the slot of the anchor: the first block the node serves */
+.set Node_config, 224
+.set NODE_FIXED, 224 + CONFIG_SIZE
 .set NODE_STATE_SLOT, 48               /* BeaconState.slot in the value of every fork */
 
 /* NodeBlock: a block the node knows */
@@ -473,10 +480,52 @@
 .set NodeCheckpoint__mem, 48
 .set POW_BLOCK_BYTES, 96
 
+/* NodePeer: a connected libp2p peer */
+.set NodePeer_handle, 0                /* the libp2p peer Handle */
+.set NodePeer_direction, 8             /* LIBP2P_INBOUND or LIBP2P_OUTBOUND */
+.set NodePeer_flags, 16                /* NODE_PEER_* */
+.set NODE_PEER_STATUS, 1               /* a Status of the peer was read */
+.set NodePeer_fork_digest, 24          /* Status: 4 bytes */
+.set NodePeer_finalized_root, 32
+.set NodePeer_finalized_epoch, 64
+.set NodePeer_head_root, 72
+.set NodePeer_head_slot, 104
+.set NodePeer_earliest_slot, 112       /* Status v2: earliest_available_slot */
+.set NodePeer_id_len, 120
+.set NodePeer_id, 128                  /* the peer ID, at most 48 bytes */
+.set NodePeer__mem, 176
+
+/* NodeStream: an open req/resp stream; the request bytes follow the fixed fields */
+.set NodeStream_handle, 0              /* the libp2p stream Handle */
+.set NodeStream_peer, 8                /* the libp2p peer Handle */
+.set NodeStream_method, 16             /* REQRESP_* */
+.set NodeStream_version, 24
+.set NodeStream_state, 32              /* NODE_STREAM_* */
+.set NODE_STREAM_REQUEST, 1            /* the request is being read */
+.set NODE_STREAM_EOF, 2                /* the peer closed its side */
+.set NodeStream_list, 40               /* a ByteList of the request bytes held: size, offset 24, count */
+.set NodeStream_request, 64
+.set NodeStream__fixed, 64
+
+/* NodeAnchor: the input of lantern_node_init */
+.set NodeAnchor_root, 0                /* hash_tree_root of the anchor block */
+.set NodeAnchor_slot, 32
+.set NodeAnchor_genesis_validators_root, 40
+.set NodeAnchor__mem, 72
+.set NODE_P2P_ROUNDS, 8                /* libp2p steps of one node step for the node's own events, at most */
+
 /* NodeRoom: the capacities of a Node */
 .set NodeRoom_blocks, 0
 .set NodeRoom_checkpoints, 8
 .set NodeRoom_pow_blocks, 16
+.set NodeRoom_peers, 24
+.set NodeRoom_streams, 32
+.set NodeRoom_request_bytes, 40        /* request bytes each stream holds */
+.set NodeRoom_p2p_out, 48              /* bytes of libp2p events the node holds for its next libp2p step */
+
+/* NodeStepResult: the output of lantern_node_step */
+.set NodeStepResult_accepted, 0        /* events handled, from the first */
+.set NodeStepResult_wakeup, 8          /* monotonic ms by which the next step is due; 2^64 - 1 for none */
 
 /* NodeEvent kinds, after the size and kind header */
 .set NODE_EV_TICK, 1                   /* 16 time_ms */
@@ -486,6 +535,8 @@
 .set NODE_EV_POW_BLOCK, 5              /* 24 a ByteList of the SSZ bytes */
 .set NODE_EV_PAYLOAD_STATUS, 6         /* 16 block_hash, 48 status, 56 has_latest, 64 latest_valid_hash */
 .set NODE_EV_WORK_DONE, 7              /* the work's fields from 16 (as NodeAction), then 64 result, 72 checkpoint epoch, 80 root */
+.set NODE_EV_P2P, 8                    /* 16 a libp2p shell result Event */
+.set NODE_EV_LAST, 8
 .set NodeEvent_result, 64
 .set NodeEvent_checkpoint, 72
 .set NODE_EV_WORK_DONE_SIZE, 112
@@ -497,6 +548,7 @@
 .set NODE_ACT_STATE_FREE, 3            /* 16 id */
 .set NODE_ACT_BYTES_FREE, 4            /* 16 id */
 .set NODE_ACT_WORK, 5                  /* 16 kind, 24 state_a, 32 state_b, 40 data, 48 target, 56 arg */
+.set NODE_ACT_P2P_LIST, 6              /* 16 a ByteList of libp2p Actions: the shell does its shell requests in order */
 .set NodeAction_work_kind, 16
 .set NodeAction_state_a, 24
 .set NodeAction_state_b, 32

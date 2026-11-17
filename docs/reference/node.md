@@ -9,6 +9,7 @@
 - [`lantern_node_copy`](#function-lantern_node_copy): copies a `Node` into a buffer with more capacity.
 - [`lantern_node_step`](#function-lantern_node_step): handles events and gives actions.
 - [`lantern_node_run`](#function-lantern_node_run): does one unit of work on beacon states or stored bytes.
+- [`lantern_node_protocols`](#function-lantern_node_protocols): the req/resp protocol IDs for the libp2p config.
 - [`lantern_node_import`](#function-lantern_node_import): on_block of a block's SSZ bytes, for one fork.
 - [`lantern_node_block_root`](#function-lantern_node_block_root): the root of a block's SSZ bytes, for one fork.
 - [`lantern_node_attestation`](#function-lantern_node_attestation): on_attestation of an attestation's SSZ bytes, for one fork.
@@ -20,13 +21,18 @@
 - [`NodeRoom`](#type-noderoom): the capacities of a `Node`.
 - [`NodeBlock`](#type-nodeblock): a block the node knows.
 - [`NodeCheckpoint`](#type-nodecheckpoint): a checkpoint state the node keeps.
+- [`NodePeer`](#type-nodepeer): a connected libp2p peer.
+- [`NodeStream`](#type-nodestream): a req/resp stream a peer opened.
+- [`NodeAnchor`](#type-nodeanchor): the anchor of lantern_node_init.
+- [`NodeStepResult`](#type-nodestepresult): the output of lantern_node_step.
 - [`NodeEvents`](#type-nodeevents), [`NodeEvent`](#type-nodeevent): the events of lantern_node_step.
 - [`NodeActions`](#type-nodeactions), [`NodeAction`](#type-nodeaction): the actions of lantern_node_step.
 
 ## Spec
 
 - Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), `fork-choice.md` of phase0 to fulu: the handlers, `store.block_states` and `store.checkpoint_states`.
-- ARCHITECTURE.md sections 2 and 6: the event and action model.
+- `p2p-interface.md` of phase0, altair and fulu, The Req/Resp domain: Status, Goodbye, Ping and MetaData, their versions, and the result codes.
+- ARCHITECTURE.md sections 2 and 6: the event and action model; section 7: the calls to asm-libp2p.
 
 ## Common rules
 
@@ -37,7 +43,10 @@
 - The node keeps `store.block_states` as the post-state id of each imported `NodeBlock`, and `store.checkpoint_states` as its `NodeCheckpoint` entries.
 - The fork of a slot is the last fork whose epoch in the node's config is at most the slot's epoch. The node calls the functions of the fork of the block, the attestation, the state or the store's slot it works on.
 - A state's slot is the u64 at `NODE_STATE_SLOT` of its value in every fork.
-- lantern_node_size, lantern_node_init, lantern_node_copy, lantern_node_step and lantern_node_run are in the common object of the core (asm/core/<ISA>/node.s), and each symbol is its name.
+- The node owns a libp2p `State` of asm-libp2p, built by the shell with `libp2p_init` from a config whose protocol list is lantern_node_protocols. lantern_node_step calls `libp2p_step` with it: first with the libp2p events of the `NODE_EV_P2P` events and the events the node queued, then with the events the node queued in that step, up to `NODE_P2P_ROUNDS` times.
+- libp2p's actions go out in a `NODE_ACT_P2P_LIST` action. The shell does its shell requests in order; the node took its application notices.
+- A stream carries one request and one answer, as the req/resp functions of [req-resp.md](req-resp.md) encode them.
+- lantern_node_size, lantern_node_init, lantern_node_copy, lantern_node_step, lantern_node_run and lantern_node_protocols are in the common object of the core (asm/core/<ISA>/node.s), and each symbol is its name.
 - lantern_node_import, lantern_node_block_root, lantern_node_attestation and lantern_node_attester_slashing are in each fork object (asm/core/<ISA>/nodehooks.s), exported as `lantern_<fork>_<name>`.
 
 ## Test vectors
@@ -51,6 +60,11 @@
   - The checks read the store, the node's `head_root`, and the post-state the node keeps for the head.
   - Cases with `payload_status` steps run only directly.
   - A non-zero status of lantern_node_step or lantern_node_run must leave the node, the store and the work's state byte for byte unchanged.
+- Lantern's cases `<preset>-<fork>-node-p2p.bin` of altair to fulu, made by tests/generator/node.py with the pinned spec: an anchor state and block at the first slot of epoch 2, and the Status and MetaData the node answers.
+  - The answers come from get_forkchoice_store, get_head and compute_fork_digest of the spec module, with each fork up to the case's at epoch 0 and each later fork at 2^64 - 1.
+  - The runner plays the network between the node's libp2p state and a bare asm-libp2p peer, as tests/runner of asm-libp2p does. The peer dials the node and opens one stream for each request.
+  - Status (v2 in fulu, v1 before) and MetaData (v3 in fulu, v2 before) must be the case's; Ping must give 0; Goodbye must close with no answer.
+  - The node's peer entry must hold the peer's ID and the Status it sent.
 
 ## Function `lantern_node_size`
 
@@ -81,7 +95,7 @@ A node whose one block is the anchor, imported with post-state id 1, and whose o
 ### Signature
 
 ```
-lantern_node_init(room, config, anchor_root, anchor_slot, flags, node) -> status
+lantern_node_init(room, config, anchor, flags, node) -> status
 ```
 
 ### Arguments
@@ -90,8 +104,7 @@ lantern_node_init(room, config, anchor_root, anchor_slot, flags, node) -> status
 |---|---|---|
 | `room` | input | `NodeRoom` |
 | `config` | input | `Config` |
-| `anchor_root` | input | Root: hash_tree_root of the anchor block |
-| `anchor_slot` | input | u64 |
+| `anchor` | input | `NodeAnchor` |
 | `flags` | input | u64: `NODE_FLAG_*` |
 | `node` | output | `Node`, its `size` set |
 
@@ -137,7 +150,7 @@ Checks every event, then handles each in order, then sets the head.
 ### Signature
 
 ```
-lantern_node_step(node, store, events, scratch, actions, result) -> status
+lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> status
 ```
 
 ### Arguments
@@ -146,25 +159,29 @@ lantern_node_step(node, store, events, scratch, actions, result) -> status
 |---|---|---|
 | `node` | state | `Node` |
 | `store` | state | `Store` |
+| `p2p` | state | asm-libp2p `State`, or 0 for a node with no network |
+| `tick` | input | asm-libp2p `Tick`, with `p2p` |
 | `events` | input | `NodeEvents` |
 | `scratch` | scratch | `Scratch` |
 | `actions` | state | `NodeActions`: the step adds its actions after the ones there |
-| `result` | output | u64: the number of events |
+| `result` | output | `NodeStepResult` |
 
 ### Returns
 
-- `LANTERN_OK`: the events are handled and the actions added.
-- `LANTERN_INVALID_EVENT`: an event breaks the rules of `NodeEvent`. Nothing is changed.
+- `LANTERN_OK`: the events up to `accepted` are handled and the actions added.
+- `LANTERN_INVALID_EVENT`: an event breaks the rules of `NodeEvent`, or libp2p_step takes a libp2p event as invalid. Nothing is changed.
 - `LANTERN_BUFFER_TOO_SMALL`: `actions`, a part of `node`, or `scratch` has too little room. Nothing is changed.
 
 ### Caller must
 
 - Do the actions in order before the next step.
+- Pass the events after `accepted` again in the next step, before new ones.
+- Step again by `wakeup`.
 - Grow the node with lantern_node_copy and give more room to `actions` and `scratch` on `LANTERN_BUFFER_TOO_SMALL`, then call again with the same events.
 
 ### Function does
 
-- Room: `actions` has the event bytes + 512 per event + 128 per known block + 512 bytes free; the blocks part has an entry free per `NODE_EV_BLOCK`; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node.
+- Room: `actions` has the event bytes + 512 per event + 128 per known block + 512 bytes free, and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; `scratch` also holds the libp2p event list and `LIBP2P_SCRATCH_SIZE` with `p2p`; the blocks part has an entry free per `NODE_EV_BLOCK`; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node.
 - Before any change: the root of each `NODE_EV_BLOCK`, with lantern_node_block_root of the fork of its slot. A status of that call is the step's.
 - `NODE_EV_TICK`: sets `time_ms` of the node, then on_tick of the fork of the new slot.
 - `NODE_EV_BLOCK`: for a root the node does not know, a `NODE_ACT_BYTES_PUT` of the bytes and a `NodeBlock` in `NODE_BLOCK_WAITING`. Bytes that are no `SignedBeaconBlock` are dropped.
@@ -177,6 +194,12 @@ lantern_node_step(node, store, events, scratch, actions, result) -> status
 - A checkpoint state the node does not have: a `NODE_ACT_STATE_COPY` of the post-state of the checkpoint's root, a `NodeCheckpoint`, and a `NODE_WORK_TARGET_STATE`.
 - An attestation or slashing done: a `NODE_ACT_BYTES_FREE` of its bytes.
 - The head: get_head of the fork of the store's slot into `head_root`, or a `NODE_WORK_JUSTIFIED_STATE` when it returns `LANTERN_NEED_JUSTIFIED_STATE`.
+- libp2p first, before the node's events: libp2p_step with the `NODE_EV_P2P` events and the queued events. When it accepts k of n P2P events, with k < n, the step handles the node's events before the next P2P event and gives that count as `accepted`.
+- `PEER_CONNECTED`: a `NodePeer`, or a `DISCONNECT` when the peers part is full. `PEER_DISCONNECTED`: the peer and its streams go.
+- `STREAM_INBOUND`: a `NodeStream` of the protocol's method and version, or a `STREAM_RESET` when the streams part is full. `STREAM_DATA`: the bytes join the stream's request, or a `STREAM_RESET` when they pass its room. `STREAM_EOF`: the request is complete. `STREAM_RESET`: the stream goes.
+- A request is read when its bytes are complete: Status is kept in the `NodePeer` and answered with the node's Status of the same version; Ping is answered with `metadata_seq`; MetaData, on the stream's opening, with the node's MetaData of the same version; Goodbye gets a `STREAM_CLOSE`. A request that is not valid gets result 1, InvalidRequest; another method gets result 3, ResourceUnavailable.
+- An answer is one chunk of lantern_reqresp_write_chunk in a `STREAM_WRITE`, then a `STREAM_CLOSE`; then the stream goes.
+- The node's Status: compute_fork_digest of the store's epoch, the store's finalized checkpoint, `head_root` and its slot, and `earliest_slot`. Its MetaData: `metadata_seq`, no attestation or sync subnets, and `CUSTODY_REQUIREMENT` custody groups.
 
 ### Function never
 
@@ -224,6 +247,28 @@ lantern_node_run(node, store, seen, work, state_a, state_b, data, scratch, event
 - `NODE_WORK_ATTESTATION`: lantern_node_attestation of the fork of the attestation's slot; `is_from_block` is the work's `arg`.
 - `NODE_WORK_ATTESTER_SLASHING`: lantern_node_attester_slashing of the fork of the store's slot.
 - Bytes too short for their type give the result `LANTERN_INVALID_ENCODING`.
+
+## Function `lantern_node_protocols`
+
+The protocol IDs of every req/resp method and version of [req-resp.md](req-resp.md), by method, then by version: the protocol list of the node's libp2p config. A `STREAM_INBOUND` names its protocol by its index here.
+
+### Signature
+
+```
+lantern_node_protocols(out, count) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `out` | output | ByteList of asm-libp2p `ProtocolEntry` values, its `size` set |
+| `count` | output | u64 |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the entries and `count` their number.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer entries.
 
 ## Function `lantern_node_import`
 
@@ -366,12 +411,19 @@ The state of the node: a value with three parts.
 | 80 | `checkpoints` | PartRef | `NodeCheckpoint` entries |
 | 96 | `pow_blocks` | PartRef | `PowBlock` values of `POW_BLOCK_BYTES` |
 | 112 | `flags` | u64 | `NODE_FLAG_*` |
-| 120 | `config` | `Config` | |
+| 120 | `peers` | PartRef | `NodePeer` entries |
+| 136 | `streams` | PartRef | `NodeStream` entries of `stream_bytes` each |
+| 152 | `p2p_out` | PartRef | Bytes: the libp2p events the node made for its next libp2p step; the count is in bytes |
+| 168 | `stream_bytes` | u64 | `NodeStream__fixed` + the request room, a multiple of 8 |
+| 176 | `metadata_seq` | u64 | MetaData `seq_number` |
+| 184 | `genesis_validators_root` | Root | Of the anchor |
+| 216 | `earliest_slot` | u64 | The anchor's slot: the first block the node serves |
+| 224 | `config` | `Config` | |
 
 ### Rules
 
-- `NODE_FIXED` (120 + `CONFIG_SIZE`) bytes of fixed fields; the parts follow in the order above.
-- The capacity of a part is its bytes up to the next part, or to `size`, over its entry's bytes.
+- `NODE_FIXED` (224 + `CONFIG_SIZE`) bytes of fixed fields; the parts follow in the order above.
+- The capacity of a part is its bytes up to the next part, or to `size`, over its entry's bytes; `p2p_out` holds bytes to `size`.
 - `NODE_FLAG_OPTIMISTIC`: blocks are imported as `PAYLOAD_STATUS_NOT_VALIDATED`.
 - `NODE_FLAG_JUSTIFIED_PENDING`: a `NODE_WORK_JUSTIFIED_STATE` is queued.
 
@@ -384,6 +436,10 @@ The state of the node: a value with three parts.
 | 0 | `blocks` | u64 | Capacity of `blocks` |
 | 8 | `checkpoints` | u64 | Capacity of `checkpoints` |
 | 16 | `pow_blocks` | u64 | Capacity of `pow_blocks` |
+| 24 | `peers` | u64 | Capacity of `peers` |
+| 32 | `streams` | u64 | Capacity of `streams` |
+| 40 | `request_bytes` | u64 | Request bytes each stream holds, below 2^32 |
+| 48 | `p2p_out` | u64 | Bytes of `p2p_out` |
 
 ## Type `NodeBlock`
 
@@ -418,6 +474,64 @@ The state of the node: a value with three parts.
 
 - `NodeCheckpoint__mem` (48) bytes. The first 40 bytes are a `Checkpoint`.
 
+## Type `NodePeer`
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `handle` | u64 | The libp2p peer Handle |
+| 8 | `direction` | u64 | `LIBP2P_INBOUND` or `LIBP2P_OUTBOUND` |
+| 16 | `flags` | u64 | `NODE_PEER_STATUS`: a Status of the peer was read |
+| 24 | `fork_digest` | u64 | Its Status: 4 bytes |
+| 32 | `finalized_root` | Root | |
+| 64 | `finalized_epoch` | u64 | |
+| 72 | `head_root` | Root | |
+| 104 | `head_slot` | u64 | |
+| 112 | `earliest_slot` | u64 | Status v2 `earliest_available_slot`, else 0 |
+| 120 | `id_len` | u64 | |
+| 128 | `id` | 48 bytes | The peer ID |
+
+### Rules
+
+- `NodePeer__mem` (176) bytes.
+
+## Type `NodeStream`
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `handle` | u64 | The libp2p stream Handle |
+| 8 | `peer` | u64 | The libp2p peer Handle |
+| 16 | `method` | u64 | `REQRESP_*` |
+| 24 | `version` | u64 | |
+| 32 | `state` | u64 | `NODE_STREAM_REQUEST`, or `NODE_STREAM_EOF` once the peer closed its side |
+| 40 | `list` | ByteList | The request bytes held: `size`, `offset` 24, `count`, the bytes at 64 |
+
+### Rules
+
+- `stream_bytes` of the node: `NodeStream__fixed` (64) + the request room.
+
+## Type `NodeAnchor`
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `root` | Root | hash_tree_root of the anchor block |
+| 32 | `slot` | u64 | |
+| 40 | `genesis_validators_root` | Root | Of the anchor state |
+
+## Type `NodeStepResult`
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `accepted` | u64 | Events handled, from the first |
+| 8 | `wakeup` | u64 | Monotonic ms by which the next step is due: libp2p's WAKEUP, the tick's time while the node holds events for libp2p, 2^64 - 1 with no `p2p` |
+
 ## Type `NodeEvents`
 
 The events of one step: a ByteList whose bytes are `NodeEvent` entries one after another.
@@ -430,7 +544,7 @@ The events of one step: a ByteList whose bytes are `NodeEvent` entries one after
 |---|---|---|---|
 | 0 | `size` | u64 | Bytes of the event, a multiple of 8 |
 | 8 | `kind` | u64 | `NODE_EV_*` |
-| 16 | `arg` | u64 | `NODE_EV_TICK`: time_ms; `NODE_EV_BLOCK`: data_available; `NODE_EV_ATTESTATION`: is_from_block |
+| 16 | `arg` | u64 | `NODE_EV_TICK`: time_ms; `NODE_EV_BLOCK`: data_available; `NODE_EV_ATTESTATION`: is_from_block; `NODE_EV_P2P`: the libp2p event starts here |
 | 24 | `bytes` | ByteList | `NODE_EV_BLOCK`, `NODE_EV_ATTESTATION`, `NODE_EV_ATTESTER_SLASHING`, `NODE_EV_POW_BLOCK`: the SSZ bytes, offset 24 |
 
 ### Rules
@@ -438,6 +552,7 @@ The events of one step: a ByteList whose bytes are `NodeEvent` entries one after
 - `NODE_EV_TICK`: 24 bytes or more.
 - An event with `bytes`: its ByteList's offset is 24 and its bytes end inside the event.
 - `NODE_EV_WORK_DONE`: `NODE_EV_WORK_DONE_SIZE` bytes; offsets 16 to 63 are those of the work's `NodeAction`, `result` at `NodeEvent_result`, and a Checkpoint at `NodeEvent_checkpoint` for `LANTERN_NEED_TARGET_STATE`.
+- `NODE_EV_P2P`: a libp2p shell result `Event` from 16, its size a multiple of 8 inside the event; only with `p2p`.
 - `NODE_EV_PAYLOAD_STATUS` is `LANTERN_INVALID_EVENT` in this version.
 
 ## Type `NodeActions`
@@ -465,6 +580,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 - `NODE_ACT_STATE_COPY`: copy the state of the id at 16 as the id at 24.
 - `NODE_ACT_STATE_FREE`, `NODE_ACT_BYTES_FREE`: free the id at 16.
 - `NODE_ACT_WORK`: `NODE_ACT_WORK_SIZE` bytes; call lantern_node_run.
+- `NODE_ACT_P2P_LIST`: a ByteList of libp2p `Action` values from 16, offset 24; do its DIAL, ADOPT, REFUSE, SEND, CLOSE and SEND_DATAGRAM in order, and skip the others.
 
 ## Results
 
