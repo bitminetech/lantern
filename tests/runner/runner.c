@@ -2304,7 +2304,7 @@ static uint8_t *fc_setup(fc_node *n, tv parts, const char **why) {
 enum { NB_WAITING = 1, NB_IMPORTING, NB_IMPORTED, NB_INVALID };
 enum { EV_TICK = 1, EV_BLOCK, EV_ATTESTATION, EV_ATTESTER_SLASHING, EV_POW_BLOCK, EV_PAYLOAD_STATUS, EV_WORK_DONE, EV_P2P };
 enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK, ACT_P2P_LIST };
-enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING };
+enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING, WORK_SERVE };
 #define EV_RESULT 64
 #define EV_WORK_DONE_SIZE 112
 #define LANTERN_NEED_TARGET_STATE 55
@@ -2453,12 +2453,14 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         *why = "a WORK action names no buffer";
         return;
     }
-    uint8_t *ev = buffer(EV_WORK_DONE_SIZE);
+    uint64_t ev_size = EV_WORK_DONE_SIZE;
+    uint8_t *ev = buffer(ev_size);
     uint64_t st = 1, growth = 2;
     for (int t = 0; t < 32 && st == 1 && !*why; t++) {
         uint8_t *snode = copy_of(s->node, s->node_size), *sstore = copy_of(n->store, n->size);
         uint8_t *sa = a ? copy_of(a->b, a->size) : NULL;
-        memset(ev, FILL, EV_WORK_DONE_SIZE);
+        memset(ev, FILL, (size_t)ev_size);
+        wr64(ev, ev_size);
         st = CALL(lantern_node_run, s->node, n->store, NULL, work, a ? a->b : NULL, NULL, d ? d->b : NULL, fresh_scratch(), ev);
         if (st != 0 && (memcmp(snode, s->node, (size_t)s->node_size) || memcmp(sstore, n->store, (size_t)n->size) ||
                         (a && memcmp(sa, a->b, (size_t)a->size))))
@@ -2467,8 +2469,12 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         free(sstore);
         free(sa);
         if (st != 1 || *why) break;
-        /* BUFFER_TOO_SMALL: the store for a node or for the justified balances, else the state's lists. */
-        if ((kind == WORK_IMPORT_BLOCK && node_count(n) < node_capacity(n->store)) || kind == WORK_TARGET_STATE) {
+        /* BUFFER_TOO_SMALL: the event of a SERVE, the store for a node or for the justified balances, else the state's lists. */
+        if (kind == WORK_SERVE) {
+            free(ev);
+            ev_size *= 4;
+            ev = buffer(ev_size);
+        } else if ((kind == WORK_IMPORT_BLOCK && node_count(n) < node_capacity(n->store)) || kind == WORK_TARGET_STATE) {
             if (!a) *why = "lantern_node_run: no room, and no state";
             else {
                 a->b = regrow(a->b, &a->size, growth, why);
@@ -2482,10 +2488,12 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         snprintf(msg, sizeof msg, "lantern_node_run: status %llu", (unsigned long long)st);
         *why = msg;
     }
-    if (!*why && (!guard_ok(ev, EV_WORK_DONE_SIZE) || !guard_ok(s->node, s->node_size) || !guard_ok(n->store, n->size) ||
+    if (!*why && (!guard_ok(ev, ev_size) || !guard_ok(s->node, s->node_size) || !guard_ok(n->store, n->size) ||
                   (a && !guard_ok(a->b, a->size))))
         *why = "lantern_node_run wrote out of bounds";
-    if (!*why && (rd64(ev) != EV_WORK_DONE_SIZE || rd64(ev + 8) != EV_WORK_DONE || memcmp(ev + 16, work + 16, 48)))
+    uint64_t esize = *why ? 0 : rd64(ev);
+    if (!*why && (esize < EV_WORK_DONE_SIZE || esize > ev_size || esize % 8 || rd64(ev + 8) != EV_WORK_DONE ||
+                  memcmp(ev + 16, work + 16, 48) || (kind != WORK_SERVE && esize != EV_WORK_DONE_SIZE)))
         *why = "lantern_node_run: the event is not the WORK_DONE of the work";
     if (!*why) {
         uint64_t result = rd64(ev + EV_RESULT);
@@ -2494,7 +2502,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
             if (s->nresults[k] == SHELL_RESULTS) *why = "too many results";
             else s->results[k][s->nresults[k]++] = result;
         }
-        memcpy(shell_append(s, EV_WORK_DONE_SIZE), ev, EV_WORK_DONE_SIZE);
+        memcpy(shell_append(s, esize), ev, (size_t)esize);
     }
     free(ev);
 }
@@ -2724,8 +2732,10 @@ static void shell_close(fc_node *n, uint8_t *anchor_block) {
     free(anchor_block);
 }
 
-/* One case through the node: the shell's buffers, then each step as events. */
-static void fc_node_case(tv parts, const char **why) {
+static void fc_serve_check(fc_node *n, tv parts, const char **why);
+
+/* One case through the node: the shell's buffers, then each step as events; with serve, then fc_serve_check. */
+static void fc_node_case(tv parts, int serve, const char **why) {
     fc_node n;
     uint8_t *anchor_block;
     struct node_shell *s = shell_open(&n, parts, &anchor_block, why);
@@ -2767,6 +2777,7 @@ static void fc_node_case(tv parts, const char **why) {
             *why = msg;
         }
     }
+    if (serve && !*why) fc_serve_check(&n, parts, why);
     shell_close(&n, anchor_block);
 }
 
@@ -2808,7 +2819,7 @@ struct p2p_net {
     struct {
         uint64_t tag, handle;
         int opened, eof, reset, failed;
-        uint8_t data[4096];
+        uint8_t *data;
         uint64_t len;
     } st[P2P_STREAMS];
 };
@@ -2924,7 +2935,12 @@ static void p2p_peer_app(struct p2p_net *net, uint8_t *act) {
         if (!net->st[k].opened || net->st[k].handle != rd64(act + 16)) continue;
         if (kind == P2P_ACT_STREAM_DATA) {
             uint64_t count = rd64(act + 24);
-            if (net->st[k].len + count <= sizeof net->st[k].data) memcpy(net->st[k].data + net->st[k].len, act + 32, (size_t)count);
+            net->st[k].data = realloc(net->st[k].data, (size_t)(net->st[k].len + count + 1));
+            if (!net->st[k].data) {
+                fprintf(stderr, "out of memory\n");
+                exit(2);
+            }
+            memcpy(net->st[k].data + net->st[k].len, act + 32, (size_t)count);
             net->st[k].len += count;
         } else if (kind == P2P_ACT_STREAM_EOF) net->st[k].eof = 1;
         else if (kind == P2P_ACT_STREAM_RESET) net->st[k].reset = 1;
@@ -3094,6 +3110,85 @@ static void p2p_check_response(struct p2p_net *net, int k, const uint8_t *want, 
     free(out);
 }
 
+/* The node's config, as shell_open gives it: this runner's fork and the ones before at genesis. */
+static void node_config(uint8_t *ncfg) {
+    memcpy(ncfg, config, CONFIG_SIZE);
+    for (uint64_t f = FORK_ALTAIR; f <= FORK_FULU; f++) wr64(ncfg + 16 * f, f <= FORK ? 0 : UINT64_MAX);
+}
+
+/*
+ * The network of a node: its room for peers and streams, its libp2p state and a peer's, and the
+ * peer's dial; then the node's entry of the peer.
+ */
+static void p2p_open(fc_node *n, struct p2p_net *net, const char **why) {
+    struct node_shell *s = n->shell;
+    memset(net, 0, sizeof *net);
+    net->shell = s;
+    net->now = 1000;
+    s->net = net;
+    s->room[3] = 4;       /* peers */
+    s->room[4] = 4;       /* streams */
+    if (s->room[5] < 8192) s->room[5] = 8192;      /* request bytes */
+    if (s->room[6] < (1u << 20)) s->room[6] = 1u << 20; /* queued libp2p events */
+    if (!*why) { /* the node with that room, then its libp2p state */
+        uint8_t *old = s->node;
+        uint64_t need = 0;
+        CALL(lantern_node_size, s->room, &need);
+        s->node = buffer(need);
+        wr64(s->node, need);
+        if (CALL(lantern_node_copy, old, s->room, s->node) != 0) *why = "lantern_node_copy status";
+        s->node_size = need;
+        free(old);
+    }
+    uint8_t protos[64 * P2P_PROTO_SIZE + 24];
+    uint64_t nprotos = 0;
+    wr64(protos, sizeof protos);
+    if (!*why && CALL(lantern_node_protocols, protos, &nprotos) != 0) *why = "lantern_node_protocols status";
+    uint8_t *cfg0 = *why ? NULL : p2p_config(0, protos + 24, nprotos), *cfg1 = *why ? NULL : p2p_config(1, NULL, 0);
+    if (!*why) net->state[0] = p2p_make(cfg0, why);
+    if (!*why) net->state[1] = p2p_make(cfg1, why);
+    free(cfg0);
+    free(cfg1);
+    net->scratch = buffer(P2P_SCRATCH_SIZE);
+    wr64(net->scratch, P2P_SCRATCH_SIZE);
+    net->actions = buffer(P2P_PEER_ACTIONS);
+    if (s->actions_size < (8u << 20)) {
+        s->actions_size = 8u << 20;
+        free(s->actions);
+        s->actions = buffer(s->actions_size);
+        wr64(s->actions, s->actions_size);
+    }
+    net->events = xmalloc(24);
+    if (!*why) { /* the peer dials the node */
+        uint8_t *e = p2p_event(net, 1, P2P_EV_DIAL, 128);
+        wr64(e + 16, 7);
+        wr64(e + 24, 4);
+        wr64(e + 32, 9000);
+        e[40] = 10;
+        e[43] = 1;
+        uint64_t idlen = rd64(net->state[0] + P2P_ST_PEER_ID_LEN);
+        wr64(e + 56, idlen);
+        memcpy(e + 64, net->state[0] + P2P_ST_PEER_ID, (size_t)idlen);
+        p2p_run(n, net, p2p_connected, 0, why);
+    }
+    if (!*why) { /* the node's entry of the peer */
+        const uint8_t *peer = s->node + rd64(s->node + NODE_PEERS);
+        uint64_t idlen = rd64(net->state[1] + P2P_ST_PEER_ID_LEN);
+        if (rd64(peer + 120) != idlen || memcmp(peer + 128, net->state[1] + P2P_ST_PEER_ID, (size_t)idlen))
+            *why = "the node's peer entry: not the peer's ID";
+    }
+}
+
+static void p2p_close(struct p2p_net *net) {
+    for (int k = 0; k < P2P_STREAMS; k++) free(net->st[k].data);
+    free(net->state[0]);
+    free(net->state[1]);
+    free(net->scratch);
+    free(net->actions);
+    free(net->events);
+    net->shell->net = NULL;
+}
+
 static void run_node_p2p(const char *file, case_file *f) {
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
@@ -3104,59 +3199,7 @@ static void run_node_p2p(const char *file, case_file *f) {
         uint8_t *anchor_block;
         struct node_shell *s = shell_open(&n, parts, &anchor_block, &why);
         struct p2p_net net;
-        memset(&net, 0, sizeof net);
-        net.shell = s;
-        net.now = 1000;
-        s->net = &net;
-        s->room[3] = 4;       /* peers */
-        s->room[4] = 4;       /* streams */
-        s->room[5] = 256;     /* request bytes */
-        s->room[6] = 1 << 16; /* queued libp2p events */
-        if (!why) { /* the node with the room of a peer, then its libp2p state */
-            uint8_t *old = s->node;
-            uint64_t need = 0;
-            CALL(lantern_node_size, s->room, &need);
-            s->node = buffer(need);
-            wr64(s->node, need);
-            if (CALL(lantern_node_copy, old, s->room, s->node) != 0) why = "lantern_node_copy status";
-            s->node_size = need;
-            free(old);
-        }
-        uint8_t protos[64 * P2P_PROTO_SIZE + 24];
-        uint64_t nprotos = 0;
-        wr64(protos, sizeof protos);
-        if (!why && CALL(lantern_node_protocols, protos, &nprotos) != 0) why = "lantern_node_protocols status";
-        uint8_t *cfg0 = why ? NULL : p2p_config(0, protos + 24, nprotos), *cfg1 = why ? NULL : p2p_config(1, NULL, 0);
-        if (!why) net.state[0] = p2p_make(cfg0, &why);
-        if (!why) net.state[1] = p2p_make(cfg1, &why);
-        free(cfg0);
-        free(cfg1);
-        net.scratch = buffer(P2P_SCRATCH_SIZE);
-        wr64(net.scratch, P2P_SCRATCH_SIZE);
-        net.actions = buffer(P2P_PEER_ACTIONS);
-        s->actions_size = 4u << 20;
-        free(s->actions);
-        s->actions = buffer(s->actions_size);
-        wr64(s->actions, s->actions_size);
-        net.events = xmalloc(24);
-        if (!why) { /* the peer dials the node */
-            uint8_t *e = p2p_event(&net, 1, P2P_EV_DIAL, 128);
-            wr64(e + 16, 7);
-            wr64(e + 24, 4);
-            wr64(e + 32, 9000);
-            e[40] = 10;
-            e[43] = 1;
-            uint64_t idlen = rd64(net.state[0] + P2P_ST_PEER_ID_LEN);
-            wr64(e + 56, idlen);
-            memcpy(e + 64, net.state[0] + P2P_ST_PEER_ID, (size_t)idlen);
-            p2p_run(&n, &net, p2p_connected, 0, &why);
-        }
-        if (!why) { /* the node's entry of the peer */
-            const uint8_t *peer = s->node + rd64(s->node + NODE_PEERS);
-            uint64_t idlen = rd64(net.state[1] + P2P_ST_PEER_ID_LEN);
-            if (rd64(peer + 120) != idlen || memcmp(peer + 128, net.state[1] + P2P_ST_PEER_ID, (size_t)idlen))
-                why = "the node's peer entry: not the peer's ID";
-        }
+        p2p_open(&n, &net, &why);
         const uint8_t *status = tv_bytes(tv_get(parts, "status"), &slen), *metadata = tv_bytes(tv_get(parts, "metadata"), &mlen);
         if (!why) { /* Status: the node's answer, and the node keeps the peer's */
             int k = p2p_request(&n, &net, 0, "status", tv_u64(tv_get(parts, "status_version")), status, slen, &why);
@@ -3180,18 +3223,133 @@ static void run_node_p2p(const char *file, case_file *f) {
             if (!why && net.st[k].len) why = "goodbye: an answer";
         }
         if (!why && rd64(s->node + 152 + 8)) why = "the node keeps libp2p events at the end"; /* Node_p2p_out */
-        free(net.state[0]);
-        free(net.state[1]);
-        free(net.scratch);
-        free(net.actions);
-        free(net.events);
+        p2p_close(&net);
         shell_close(&n, anchor_block);
         report(file, name, len, why == NULL, why);
     }
 }
 
+/* SLOTS_PER_EPOCH of the preset (presets/<preset>/phase0.yaml). */
+#define SLOTS_PER_EPOCH_RUNNER (strcmp(PRESET, "minimal") ? 32u : 8u)
+
+/* A block of a case: its root, parent root, slot and SSZ bytes. */
+typedef struct {
+    uint8_t root[32], parent[32];
+    uint64_t slot, len;
+    const uint8_t *bytes;
+} case_block;
+
+/*
+ * The chunks of stream k: one for each block of want, in order, each with result 0, the
+ * ForkDigest of the block's epoch as context, and the block's SSZ bytes; then no more bytes.
+ */
+static void p2p_check_blocks(struct p2p_net *net, int k, case_block **want, size_t nwant, const uint8_t *gvr, const char *what,
+                             const char **why) {
+    static char msg[128];
+    uint8_t ncfg[CONFIG_SIZE];
+    node_config(ncfg);
+    uint64_t at = 0, total = net->st[k].len;
+    msg[0] = 0;
+    for (size_t b = 0; b < nwant && !msg[0]; b++) {
+        uint64_t header[6] = {1, 4, 0, 0, 0, 0}, consumed = 0, eof = 1, epoch = want[b]->slot / SLOTS_PER_EPOCH_RUNNER;
+        uint8_t digest[8] = {0};
+        uint8_t *input = serialized(net->st[k].data + at, total - at, &(uint64_t){0}), *out = buffer(24 + want[b]->len + 8);
+        wr64(out, 24 + want[b]->len + 8);
+        CALL(LF(compute_fork_digest), gvr, &epoch, ncfg, fresh_scratch(), digest);
+        if (at >= total) snprintf(msg, sizeof msg, "%s: %zu chunks, %zu wanted", what, b, nwant);
+        else if (CALL(lantern_reqresp_read_header, input, header) != 0) snprintf(msg, sizeof msg, "%s: chunk %zu: no header", what, b);
+        else if (header[2] != 0) snprintf(msg, sizeof msg, "%s: chunk %zu: result %llu", what, b, (unsigned long long)header[2]);
+        else if (memcmp(&header[3], digest, 4)) snprintf(msg, sizeof msg, "%s: chunk %zu: context bytes", what, b);
+        else if (header[4] != want[b]->len) snprintf(msg, sizeof msg, "%s: chunk %zu: length", what, b);
+        else if (CALL(lantern_reqresp_read_payload, input, &header[5], &header[4], &eof, fresh_scratch(), out, &consumed) != 0)
+            snprintf(msg, sizeof msg, "%s: chunk %zu: payload status", what, b);
+        else if (memcmp(out + 24, want[b]->bytes, (size_t)want[b]->len)) snprintf(msg, sizeof msg, "%s: chunk %zu: bytes", what, b);
+        at += header[5] + consumed;
+        free(input);
+        free(out);
+    }
+    if (!msg[0] && at != total) snprintf(msg, sizeof msg, "%s: bytes after the last chunk", what);
+    if (msg[0]) *why = msg;
+}
+
+/*
+ * Node mode, after the steps of a case whose checks name a head: the node serves the chain of that
+ * head, from the case's valid blocks, with BlocksByRange and BlocksByRoot.
+ */
+static void fc_serve_check(fc_node *n, tv parts, const char **why) {
+    tv steps = tv_get(parts, "steps"), st = steps ? steps + 9 : NULL, head = NULL;
+    uint64_t count = steps ? rd64(steps + 1) : 0, nblocks = 0;
+    case_block *blocks = xmalloc(sizeof *blocks * (count ? count : 1));
+    for (uint64_t k = 0; k < count && !*why; k++, st = tv_skip(st)) {
+        tv c = tv_get(st, "checks"), v = tv_get(st, "valid");
+        if (c && tv_get(c, "head")) head = tv_get(c, "head");
+        if (!tv_get(st, "block") || (v && !(*v == T_BOOL && v[1]))) continue;
+        tv bname = tv_get(st, "block");
+        char key[128];
+        uint64_t vsize;
+        snprintf(key, sizeof key, "%.*s", (int)rd64(bname + 1), (const char *)(bname + 9));
+        case_block *b = &blocks[nblocks];
+        b->bytes = tv_bytes(tv_get(parts, key), &b->len);
+        uint8_t *sb = decode(type_by_name("SignedBeaconBlock"), b->bytes, b->len, &vsize, why);
+        if (!sb) break;
+        const uint8_t *block = nested(sb, field_offset("SignedBeaconBlock", 0));
+        root_of("BeaconBlock", block, b->root, why);
+        b->slot = rd64(block + field_offset("BeaconBlock", 0));
+        memcpy(b->parent, block + field_offset("BeaconBlock", 2), 32);
+        free(sb);
+        nblocks++;
+    }
+    uint64_t hlen = 0;
+    const uint8_t *hroot = head ? tv_bytes(tv_get(head, "root"), &hlen) : NULL;
+    case_block **chain = xmalloc(sizeof *chain * (nblocks ? nblocks : 1));
+    size_t nchain = 0;
+    for (const uint8_t *cur = hroot; cur && hlen == 32 && !*why;) { /* from the head down, then in slot order */
+        case_block *b = NULL;
+        for (uint64_t k = 0; k < nblocks && !b; k++)
+            if (!memcmp(blocks[k].root, cur, 32)) b = &blocks[k];
+        if (!b || nchain == nblocks) break;
+        chain[nchain++] = b;
+        cur = b->parent;
+    }
+    for (size_t a = 0, z = nchain ? nchain - 1 : 0; a < z; a++, z--) {
+        case_block *t = chain[a];
+        chain[a] = chain[z];
+        chain[z] = t;
+    }
+    if (!*why && nchain) {
+        struct p2p_net net;
+        uint8_t gvr[32];
+        memcpy(gvr, n->anchor + field_offset("BeaconState", 1), 32);
+        uint64_t anchor_slot = rd64(n->shell->node + 216); /* Node_earliest_slot */
+        p2p_open(n, &net, why);
+        if (!*why) { /* the whole chain by range */
+            uint8_t req[24];
+            wr64(req, anchor_slot);
+            wr64(req + 8, chain[nchain - 1]->slot - anchor_slot + 1);
+            wr64(req + 16, 1);
+            int k = p2p_request(n, &net, 0, "beacon_blocks_by_range", 2, req, 24, why);
+            if (!*why) p2p_check_blocks(&net, k, chain, nchain, gvr, "blocks_by_range", why);
+        }
+        if (!*why) { /* the head, a root the node does not know, and the first block, by root */
+            uint8_t req[96];
+            memcpy(req, chain[nchain - 1]->root, 32);
+            memset(req + 32, 0xEE, 32);
+            memcpy(req + 64, chain[0]->root, 32);
+            case_block *want[2] = {chain[nchain - 1], chain[0]};
+            int k = p2p_request(n, &net, 1, "beacon_blocks_by_root", 2, req, 96, why);
+            if (!*why) p2p_check_blocks(&net, k, want, 2, gvr, "blocks_by_root", why);
+        }
+        if (!*why && rd64(n->shell->node + 136 + 8)) *why = "the node keeps a stream at the end"; /* Node_streams */
+        p2p_close(&net);
+    }
+    free(chain);
+    free(blocks);
+}
+
 /* compliance: the rules of the spec's fork choice compliance runner (tests/generators/compliance_runners). */
 static void run_fork_choice(const char *file, const char *dir, case_file *f, int compliance) {
+    /* Node mode also serves the chain of these files' cases over libp2p. */
+    int serve = strstr(file, "fork_choice-get_head") || strstr(file, "fork_choice-on_block");
 #if FORK >= FORK_DENEB
     load_kzg_settings(dir);
 #else
@@ -3287,7 +3445,7 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
             char nname[256];
             int nlen = snprintf(nname, sizeof nname, "%.*s (node)", (int)len, name);
             const char *nwhy = NULL;
-            fc_node_case(parts, &nwhy);
+            fc_node_case(parts, serve, &nwhy);
             report(file, nname, (uint64_t)nlen, nwhy == NULL, nwhy);
         }
     }

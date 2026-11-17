@@ -502,10 +502,13 @@
 .set NodeStream_version, 24
 .set NodeStream_state, 32              /* NODE_STREAM_* */
 .set NODE_STREAM_REQUEST, 1            /* the request is being read */
-.set NODE_STREAM_EOF, 2                /* the peer closed its side */
-.set NodeStream_list, 40               /* a ByteList of the request bytes held: size, offset 24, count */
-.set NodeStream_request, 64
-.set NodeStream__fixed, 64
+.set NODE_STREAM_EOF, 2                /* the request is being read; the peer closed its side */
+.set NODE_STREAM_SERVE, 3              /* the next block of the list is due */
+.set NODE_STREAM_SERVING, 4            /* a SERVE work of the next block is queued */
+.set NodeStream_next, 40               /* SERVE: the index of the next BufferId of the list */
+.set NodeStream_list, 48               /* a ByteList: the request bytes, then the BufferIds of the blocks to send */
+.set NodeStream_request, 72
+.set NodeStream__fixed, 72
 
 /* NodeAnchor: the input of lantern_node_init */
 .set NodeAnchor_root, 0                /* hash_tree_root of the anchor block */
@@ -563,6 +566,8 @@
 .set NODE_WORK_TARGET_STATE, 3         /* a: a copy of the target root's block state */
 .set NODE_WORK_ATTESTATION, 4          /* a: the target checkpoint state, or 0; data: the attestation */
 .set NODE_WORK_ATTESTER_SLASHING, 5    /* a: the justified root's block state; data: the slashing */
+.set NODE_WORK_SERVE, 6                /* data: a block's SSZ bytes; target: the stream Handle; arg: the protocol version */
+.set NodeEvent_chunk, NODE_EV_WORK_DONE_SIZE   /* SERVE: a ByteList of the response chunk after the WORK_DONE fields */
 .set LANTERN_NEED_TARGET_STATE, 55     /* lantern_node_run: an attestation needs its target checkpoint state */
 .set LANTERN_INVALID_ENCODING, 56     /* lantern_node_run, the node hooks: the bytes are not an SSZ encoding of the type */
 .set LANTERN_INVALID_EVENT, 57        /* lantern_node_step: an event breaks the rules of its kind */

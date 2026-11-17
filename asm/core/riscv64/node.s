@@ -795,7 +795,7 @@ LOCAL_FUNCTION node_event
     sd      t0, Node_flags(s1)
     LEAVE 48
 61: li      t2, NODE_WORK_ATTESTATION
-    bne     t0, t2, 70f
+    bne     t0, t2, 62f
     li      t2, LANTERN_NEED_TARGET_STATE
     bne     t1, t2, 70f
     ld      a0, NodeEvent_checkpoint(s3)    # the target state, then the same attestation again
@@ -809,6 +809,53 @@ LOCAL_FUNCTION node_event
     ld      a4, NodeAction_target(s3)
     ld      a5, NodeAction_arg(s3)
     call    node_work
+    LEAVE 48
+62: li      t2, NODE_WORK_SERVE             # SERVE: the chunk to its stream, then the next block or the close
+    bne     t0, t2, 70f
+    ld      a0, NodeAction_target(s3)
+    call    node_find_stream
+    li      t0, -1
+    beq     a0, t0, 69f
+    mv      s4, a1
+    ld      t0, NodeEvent_result(s3)
+    bnez    t0, 68f
+    ld      s7, (NodeEvent_chunk + 16)(s3)
+    addi    a0, s7, 32 + 7
+    andi    a0, a0, -8
+    sd      a0, (L + 32)(sp)
+    call    node_out
+    beqz    a0, 68f
+    ld      t0, (L + 32)(sp)
+    li      t1, LIBP2P_EVENT_STREAM_WRITE
+    sd      t0, 0(a0)
+    sd      t1, 8(a0)
+    ld      t1, NodeStream_handle(s4)
+    sd      t1, 16(a0)
+    sd      s7, 24(a0)
+    addi    a0, a0, 32
+    addi    a1, s3, NodeEvent_chunk + 24
+    mv      a2, s7
+    call    lantern_copy
+    ld      t0, NodeStream_next(s4)
+    addi    t0, t0, 1
+    sd      t0, NodeStream_next(s4)
+    ld      t1, (NodeStream_list + 16)(s4)
+    srli    t1, t1, 3
+    bgeu    t0, t1, 67f
+    li      t0, NODE_STREAM_SERVE
+    sd      t0, NodeStream_state(s4)
+    LEAVE 48
+67: li      a0, LIBP2P_EVENT_STREAM_CLOSE
+    ld      a1, NodeStream_handle(s4)
+    call    node_out_handle
+    mv      a0, s4
+    call    node_drop_stream
+69: LEAVE 48
+68: li      a0, LIBP2P_EVENT_STREAM_RESET   # no chunk, or no room for it: a reset
+    ld      a1, NodeStream_handle(s4)
+    call    node_out_handle
+    mv      a0, s4
+    call    node_drop_stream
     LEAVE 48
 70: li      t2, NODE_WORK_ATTESTATION       # done with an attestation or a slashing: free its bytes
     beq     t0, t2, 71f
@@ -1086,6 +1133,9 @@ END_FUNCTION node_respond
 LOCAL_FUNCTION node_request
     ENTER 176
     mv      s3, a0
+    ld      t0, NodeStream_state(s3)        # a request already answered: nothing
+    li      t1, NODE_STREAM_EOF
+    bgtu    t0, t1, 99f
     ld      s4, NodeStream_method(s3)
     li      t0, REQRESP_METADATA            # MetaData: no request bytes
     beq     s4, t0, 50f
@@ -1102,7 +1152,13 @@ LOCAL_FUNCTION node_request
     beq     s4, t0, 3f
     li      t0, REQRESP_PING
     beq     s4, t0, 3f
-    li      a1, 3                           # ResourceUnavailable
+    li      s7, 24
+    li      t0, REQRESP_BEACON_BLOCKS_BY_RANGE
+    beq     s4, t0, 3f
+    li      s7, 0                           # by root: a multiple of 32 bytes, at most the request limit
+    li      t0, REQRESP_BEACON_BLOCKS_BY_ROOT
+    beq     s4, t0, 3f
+92: li      a1, 3                           # ResourceUnavailable
     j       91f
 3:  sd      zero, (L + ChunkHeader_kind)(sp)        # CHUNK_REQUEST
     sd      zero, (L + ChunkHeader_context_length)(sp)
@@ -1112,13 +1168,23 @@ LOCAL_FUNCTION node_request
     li      t0, LANTERN_REQRESP_MORE
     beq     a0, t0, 80f
     bnez    a0, 90f
+    bnez    s7, 4f
+    ld      t0, (L + ChunkHeader_length)(sp)        # by root
+    andi    t0, t0, 31
+    bnez    t0, 90f
+    call    node_max_blocks
+    slli    a0, a0, 5
     ld      t0, (L + ChunkHeader_length)(sp)
+    bgtu    t0, a0, 90f
+    mv      s7, t0
+4:  ld      t0, (L + ChunkHeader_length)(sp)
     bne     t0, s7, 90f
     ld      s8, 0(s5)                       # the payload's ByteList at the end of scratch
-    addi    t0, s8, -128
+    addi    t1, s7, 24 + 7
+    andi    t1, t1, -8
+    sub     t0, s8, t1
     sd      t0, 0(s5)
     add     s9, s5, t0
-    li      t1, 128
     sd      t1, 0(s9)
     li      t1, 24
     sd      t1, 8(s9)
@@ -1141,6 +1207,10 @@ LOCAL_FUNCTION node_request
     beq     a0, t0, 80f
     bnez    a0, 90f
     addi    s9, s9, 24                      # the SSZ bytes
+    li      t0, REQRESP_BEACON_BLOCKS_BY_RANGE
+    beq     s4, t0, 60f
+    li      t0, REQRESP_BEACON_BLOCKS_BY_ROOT
+    beq     s4, t0, 70f
     li      t0, REQRESP_GOODBYE
     bne     s4, t0, 10f
     li      a0, LIBP2P_EVENT_STREAM_CLOSE   # Goodbye: a close
@@ -1258,6 +1328,81 @@ LOCAL_FUNCTION node_request
     addi    a2, sp, L + 64
     call    node_respond
     LEAVE 176
+60: ld      s7, 0(s9)                       # BlocksByRange: start_slot, count
+    ld      s10, 8(s9)
+    ld      t0, Node_earliest_slot(s1)
+    bltu    s7, t0, 92b
+    call    node_max_blocks                 # at most the limit, and the room of the list
+    bleu    s10, a0, 65f
+    mv      s10, a0
+65: add     t0, s7, s10                     # the end slot
+    bgeu    t0, s7, 66f
+    li      t0, -1
+66: mv      s10, t0
+    li      s8, 0                           # the canonical blocks of the range, from the head down
+    addi    s9, s1, Node_head_root
+61: mv      a0, s9
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 63f
+    ld      t0, NodeBlock_status(a1)
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 63f
+    ld      t0, NodeBlock_slot(a1)
+    bltu    t0, s7, 63f
+    addi    s9, a1, NodeBlock_parent_root
+    bgeu    t0, s10, 61b
+    ld      t1, NodeBlock_data_id(a1)
+    beqz    t1, 61b
+    slli    t2, s8, 3
+    add     t2, t2, s3
+    sd      t1, NodeStream_request(t2)
+    addi    s8, s8, 1
+    j       61b
+63: addi    t0, s3, NodeStream_request      # in slot order
+    slli    t1, s8, 3
+    add     t1, t0, t1
+    addi    t1, t1, -8
+64: bgeu    t0, t1, 77f
+    ld      t2, 0(t0)
+    ld      t3, 0(t1)
+    sd      t3, 0(t0)
+    sd      t2, 0(t1)
+    addi    t0, t0, 8
+    addi    t1, t1, -8
+    j       64b
+70: srli    s7, s7, 5                       # BlocksByRoot: the blocks the node has, in the request's order
+    li      s8, 0
+71: beqz    s7, 77f
+    mv      a0, s9
+    call    node_find_block
+    addi    s9, s9, 32
+    addi    s7, s7, -1
+    li      t0, -1
+    beq     a0, t0, 71b
+    ld      t0, NodeBlock_status(a1)
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 71b
+    ld      t1, NodeBlock_data_id(a1)
+    beqz    t1, 71b
+    slli    t2, s8, 3
+    add     t2, t2, s3
+    sd      t1, NodeStream_request(t2)
+    addi    s8, s8, 1
+    j       71b
+77: beqz    s8, 78f                         # the list, then a SERVE work for each block in turn
+    slli    t0, s8, 3
+    sd      t0, (NodeStream_list + 16)(s3)
+    sd      zero, NodeStream_next(s3)
+    li      t0, NODE_STREAM_SERVE
+    sd      t0, NodeStream_state(s3)
+    LEAVE 176
+78: li      a0, LIBP2P_EVENT_STREAM_CLOSE   # no block: an empty answer
+    ld      a1, NodeStream_handle(s3)
+    call    node_out_handle
+    mv      a0, s3
+    call    node_drop_stream
+    LEAVE 176
 80: ld      t0, NodeStream_state(s3)        # more bytes come, unless the peer closed
     li      t1, NODE_STREAM_EOF
     beq     t0, t1, 90f
@@ -1267,8 +1412,73 @@ LOCAL_FUNCTION node_request
     mv      a2, sp
     li      a3, 0
     call    node_respond
-    LEAVE 176
+99: LEAVE 176
 END_FUNCTION node_request
+
+/*
+ * a0 = the blocks one request may name: MAX_REQUEST_BLOCKS_DENEB from deneb on, else
+ * MAX_REQUEST_BLOCKS, of the fork of the store's slot; at most the BufferIds a stream's list
+ * holds. Uses t0-t3, a7.
+ */
+LOCAL_FUNCTION node_max_blocks
+    FRAME 0
+    mv      a0, s2
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, REQUEST_BLOCKS_LIMIT
+    li      t1, FORK_DENEB
+    bltu    a0, t1, 1f
+    li      t0, REQUEST_BLOCKS_LIMIT_DENEB
+1:  ld      t1, Node_stream_bytes(s1)
+    addi    t1, t1, -NodeStream__fixed
+    srli    t1, t1, 3
+    mv      a0, t0
+    bleu    t0, t1, 2f
+    mv      a0, t1
+2:  UNFRAME 0
+END_FUNCTION node_max_blocks
+
+/*
+ * a0 = 1 when a stream waits for room for its SERVE work, else 0: a SERVE work of the next
+ * block of each stream in NODE_STREAM_SERVE, while the actions have room for it and 4096 bytes.
+ * s3 a stream, s4 the streams left.
+ */
+LOCAL_FUNCTION node_serve
+    ENTER 0
+    PART    s3, s4, s1, Node_streams
+1:  beqz    s4, 8f
+    ld      t0, NodeStream_state(s3)
+    li      t1, NODE_STREAM_SERVE
+    bne     t0, t1, 2f
+    ld      t0, 0(s6)
+    ld      t1, 8(s6)
+    ld      t2, 16(s6)
+    sub     t0, t0, t1
+    sub     t0, t0, t2
+    li      t1, NODE_ACT_WORK_SIZE + 4096
+    bltu    t0, t1, 9f
+    li      t0, NODE_STREAM_SERVING
+    sd      t0, NodeStream_state(s3)
+    ld      t0, NodeStream_next(s3)
+    slli    t0, t0, 3
+    add     t0, t0, s3
+    ld      a3, NodeStream_request(t0)
+    li      a0, NODE_WORK_SERVE
+    li      a1, 0
+    li      a2, 0
+    ld      a4, NodeStream_handle(s3)
+    ld      a5, NodeStream_version(s3)
+    call    node_work
+2:  ld      t0, Node_stream_bytes(s1)
+    add     s3, s3, t0
+    addi    s4, s4, -1
+    j       1b
+8:  li      a0, 0
+    LEAVE 0
+9:  li      a0, 1
+    LEAVE 0
+END_FUNCTION node_serve
 
 /* The libp2p application notice a0. s3 the notice, s4 an entry, s7 method, s8 version. */
 LOCAL_FUNCTION node_notice
@@ -1392,8 +1602,10 @@ LOCAL_FUNCTION node_notice
     call    node_find_stream
     li      t0, -1
     beq     a0, t0, 49f
-    li      t0, NODE_STREAM_EOF
-    sd      t0, NodeStream_state(a1)
+    ld      t0, NodeStream_state(a1)        # while its request is read
+    li      t1, NODE_STREAM_EOF
+    bgtu    t0, t1, 49f
+    sd      t1, NodeStream_state(a1)
     mv      a0, a1
     call    node_request
 49: LEAVE 0
@@ -1619,10 +1831,10 @@ END_FUNCTION node_block_entry
  * size, L+16 p2p, L+24 tick, L+32 the end of the events handled, L+40 the libp2p event list,
  * L+48 the libp2p scratch, L+56 the bytes of the P2P events, L+64 the P2P events, L+72 the
  * action room kept for the node, L+80 wakeup, L+88 libp2p's StepResult, L+96 libp2p's actions,
- * L+104 the libp2p steps.
+ * L+104 the libp2p steps, L+112 a stream waits.
  */
 FUNCTION lantern_node_step
-    ENTER 112
+    ENTER 128
     mv      s1, a0
     mv      s2, a1
     sd      a2, (L + 16)(sp)
@@ -1664,7 +1876,18 @@ FUNCTION lantern_node_step
     bne     t3, t4, 21f
     li      t4, NODE_EV_WORK_DONE_SIZE
     bltu    t2, t4, 7f
-    addi    t5, t5, 1
+    ld      t4, NodeAction_work_kind(t0)    # SERVE: a ByteList of the chunk inside
+    li      t6, NODE_WORK_SERVE
+    bne     t4, t6, 22f
+    li      t4, NodeEvent_chunk + 24
+    bltu    t2, t4, 7f
+    ld      t4, (NodeEvent_chunk + 8)(t0)
+    li      t6, 24
+    bne     t4, t6, 7f
+    ld      t4, (NodeEvent_chunk + 16)(t0)
+    addi    t6, t2, -(NodeEvent_chunk + 24)
+    bgtu    t4, t6, 7f
+22: addi    t5, t5, 1
     j       4f
 21: li      t4, NODE_EV_P2P                 # a libp2p event inside, for a node with a libp2p state
     bne     t3, t4, 3f
@@ -1874,8 +2097,11 @@ FUNCTION lantern_node_step
     add     s9, s9, t0
     j       6b
 9:  call    node_head
-    ld      t0, (L + 16)(sp)                # libp2p again with the node's queued events
+    sd      zero, (L + 112)(sp)
+    ld      t0, (L + 16)(sp)                # the next block of each stream that serves, then libp2p again
     beqz    t0, 40f
+    call    node_serve
+    sd      a0, (L + 112)(sp)
     sd      zero, (L + 104)(sp)
 32: ld      t0, (Node_p2p_out + 8)(s1)
     beqz    t0, 40f
@@ -1903,7 +2129,9 @@ FUNCTION lantern_node_step
     call    node_p2p_notices
     sd      a0, (L + 80)(sp)
     j       32b
-40: ld      t0, (Node_p2p_out + 8)(s1)      # events left: the next step is due now
+40: ld      t0, (Node_p2p_out + 8)(s1)      # events left, or a stream that waits: the next step is due now
+    ld      t1, (L + 112)(sp)
+    or      t0, t0, t1
     beqz    t0, 41f
     ld      t1, (L + 24)(sp)
     ld      t1, LIBP2P_TICK_NOW(t1)
@@ -1914,14 +2142,14 @@ FUNCTION lantern_node_step
     ld      t0, (L + 80)(sp)
     sd      t0, NodeStepResult_wakeup(s7)
     li      a0, LANTERN_OK
-    LEAVE 112
+    LEAVE 128
 14: ld      t0, (L + 8)(sp)                 # a status before any change
     sd      t0, 0(s5)
-    LEAVE 112
+    LEAVE 128
 7:  li      a0, LANTERN_INVALID_EVENT
-    LEAVE 112
+    LEAVE 128
 8:  li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 112
+    LEAVE 128
 END_FUNCTION lantern_node_step
 
 /*
@@ -1929,14 +2157,17 @@ END_FUNCTION lantern_node_step
  * s4 state_a, s5 data, s6 scratch, s7 event. Locals: L the BlockOptions (32).
  */
 FUNCTION lantern_node_run
-    ENTER 32
+    ENTER 64
     mv      s1, a0
     mv      s2, a1
     mv      s3, a3
     mv      s4, a4
     mv      s5, a6
     mv      s6, a7
-    ld      s7, (32 + 96)(sp)               # the ninth argument
+    ld      s7, (64 + 96)(sp)               # the ninth argument
+    ld      s8, 0(s7)                       # the event's room
+    li      t0, NODE_EV_WORK_DONE_SIZE
+    bltu    s8, t0, 7f
     li      t0, NODE_EV_WORK_DONE_SIZE      # the event: the work's fields, the result
     sd      t0, 0(s7)
     li      t0, NODE_EV_WORK_DONE
@@ -1989,11 +2220,11 @@ FUNCTION lantern_node_run
     bne     a0, t0, 99f
     sd      a0, NodeEvent_result(s7)
     li      a0, LANTERN_OK
-    LEAVE 32
+    LEAVE 64
 18: li      t0, LANTERN_INVALID_ENCODING
     sd      t0, NodeEvent_result(s7)
     li      a0, LANTERN_OK
-    LEAVE 32
+    LEAVE 64
 10: li      t1, NODE_WORK_JUSTIFIED_STATE
     bne     t0, t1, 20f
     ld      a0, NODE_STATE_SLOT(s4)         # JUSTIFIED_STATE: the fork of the state's slot
@@ -2003,7 +2234,7 @@ FUNCTION lantern_node_run
     mv      a0, s2
     mv      a1, s4
     FORK_CALL store_justified_checkpoint_state
-    LEAVE 32
+    LEAVE 64
 20: li      t1, NODE_WORK_TARGET_STATE
     bne     t0, t1, 30f
     ld      a0, NODE_STATE_SLOT(s4)         # TARGET_STATE: store_target_checkpoint_state of the checkpoint
@@ -2021,7 +2252,7 @@ FUNCTION lantern_node_run
     mv      a3, s6
     addi    a4, s7, NodeEvent_result
     FORK_CALL store_target_checkpoint_state
-    LEAVE 32
+    LEAVE 64
 30: li      t1, NODE_WORK_ATTESTATION
     bne     t0, t1, 40f
     ld      t0, 16(s5)                      # ATTESTATION: the fork of its slot
@@ -2041,9 +2272,9 @@ FUNCTION lantern_node_run
     addi    a5, s7, NodeEvent_result
     addi    a6, s7, NodeEvent_checkpoint
     FORK_CALL node_attestation
-    LEAVE 32
+    LEAVE 64
 40: li      t1, NODE_WORK_ATTESTER_SLASHING
-    bne     t0, t1, 8f
+    bne     t0, t1, 50f
     mv      a0, s2                          # ATTESTER_SLASHING: the fork of the store's slot
     call    node_store_slot
     addi    a1, s1, Node_config
@@ -2055,7 +2286,71 @@ FUNCTION lantern_node_run
     mv      a3, s6
     addi    a4, s7, NodeEvent_result
     FORK_CALL node_attester_slashing
-99: LEAVE 32
+99: LEAVE 64
+50: li      t1, NODE_WORK_SERVE
+    bne     t0, t1, 8f
+    ld      t0, 16(s5)                      # SERVE: the chunk of the block's bytes, with room for it
+    li      t1, 100 + 84
+    bltu    t0, t1, 18b
+    sd      t0, L(sp)
+    addi    a0, sp, L
+    addi    a1, sp, L
+    call    lantern_reqresp_chunk_size
+    ld      t0, L(sp)
+    addi    t0, t0, NodeEvent_chunk + 24 + 7
+    andi    t0, t0, -8
+    bltu    s8, t0, 7f
+    ld      t0, 8(s5)                       # the context: ForkDigest of the block's epoch
+    add     t0, s5, t0
+    LDU64   s9, t0, 100, t1
+    mv      a0, s9
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    li      t0, SLOTS_PER_EPOCH
+    divu    t0, s9, t0
+    sd      t0, L(sp)
+    sd      zero, (L + 8)(sp)
+    addi    a0, s1, Node_genesis_validators_root
+    addi    a1, sp, L
+    addi    a2, s1, Node_config
+    mv      a3, s6
+    addi    a4, sp, L + 8
+    FORK_CALL compute_fork_digest
+    bnez    a0, 99b
+    li      t0, CHUNK_RESPONSE              # the header: v1 has no context bytes
+    sd      t0, (L + 16 + ChunkHeader_kind)(sp)
+    ld      t0, NodeAction_arg(s3)
+    li      t1, 2
+    li      t2, 0
+    bltu    t0, t1, 51f
+    li      t2, 4
+51: sd      t2, (L + 16 + ChunkHeader_context_length)(sp)
+    sd      zero, (L + 16 + ChunkHeader_result)(sp)
+    lwu     t0, (L + 8)(sp)
+    sd      t0, (L + 16 + ChunkHeader_context)(sp)
+    addi    s9, s7, NodeEvent_chunk         # the chunk's ByteList after the WORK_DONE fields
+    addi    t0, s8, -NodeEvent_chunk
+    sd      t0, 0(s9)
+    li      t0, 24
+    sd      t0, 8(s9)
+    sd      zero, 16(s9)
+    addi    a0, sp, L + 16
+    mv      a1, s5
+    mv      a2, s6
+    mv      a3, s9
+    call    lantern_reqresp_write_chunk
+    bnez    a0, 99b
+    ld      t0, 16(s9)                      # the sizes of the list and the event
+    addi    t0, t0, 24 + 7
+    andi    t0, t0, -8
+    sd      t0, 0(s9)
+    addi    t0, t0, NodeEvent_chunk
+    sd      t0, 0(s7)
+    li      a0, LANTERN_OK
+    LEAVE 64
 8:  li      a0, LANTERN_INVALID_EVENT
-    LEAVE 32
+    LEAVE 64
+7:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 64
 END_FUNCTION lantern_node_run

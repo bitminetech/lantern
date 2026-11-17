@@ -65,6 +65,10 @@
   - The runner plays the network between the node's libp2p state and a bare asm-libp2p peer, as tests/runner of asm-libp2p does. The peer dials the node and opens one stream for each request.
   - Status (v2 in fulu, v1 before) and MetaData (v3 in fulu, v2 before) must be the case's; Ping must give 0; Goodbye must close with no answer.
   - The node's peer entry must hold the peer's ID and the Status it sent.
+- The `fork_choice-get_head` and `fork_choice-on_block` cases in node mode, after their steps: the runner opens the same network, and the node serves the chain of the case's last checked head, which the runner builds from the case's valid blocks by `parent_root`.
+  - BeaconBlocksByRange v2 from the anchor's slot to the head's must give each block of the chain, in slot order.
+  - BeaconBlocksByRoot v2 of the head, a root of no block, and the chain's first block must give the head and the first block.
+  - Each chunk must have result 0, the block's SSZ bytes, and compute_fork_digest of the block's epoch as context bytes.
 
 ## Function `lantern_node_size`
 
@@ -197,7 +201,12 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - libp2p first, before the node's events: libp2p_step with the `NODE_EV_P2P` events and the queued events. When it accepts k of n P2P events, with k < n, the step handles the node's events before the next P2P event and gives that count as `accepted`.
 - `PEER_CONNECTED`: a `NodePeer`, or a `DISCONNECT` when the peers part is full. `PEER_DISCONNECTED`: the peer and its streams go.
 - `STREAM_INBOUND`: a `NodeStream` of the protocol's method and version, or a `STREAM_RESET` when the streams part is full. `STREAM_DATA`: the bytes join the stream's request, or a `STREAM_RESET` when they pass its room. `STREAM_EOF`: the request is complete. `STREAM_RESET`: the stream goes.
-- A request is read when its bytes are complete: Status is kept in the `NodePeer` and answered with the node's Status of the same version; Ping is answered with `metadata_seq`; MetaData, on the stream's opening, with the node's MetaData of the same version; Goodbye gets a `STREAM_CLOSE`. A request that is not valid gets result 1, InvalidRequest; another method gets result 3, ResourceUnavailable.
+- A request is read when its bytes are complete: Status is kept in the `NodePeer` and answered with the node's Status of the same version; Ping is answered with `metadata_seq`; MetaData, on the stream's opening, with the node's MetaData of the same version; Goodbye gets a `STREAM_CLOSE`. A request that is not valid gets result 1, InvalidRequest; a method of no answer below gets result 3, ResourceUnavailable.
+- BeaconBlocksByRange: a `start_slot` before `earliest_slot` gets ResourceUnavailable. Otherwise the blocks of the chain of `head_root`, by `parent_root`, with a slot in `start_slot` to `start_slot` + `count`, in slot order; `count` is at most `MAX_REQUEST_BLOCKS_DENEB` from deneb on, else `MAX_REQUEST_BLOCKS`, and at most the BufferIds a stream's request room holds.
+- BeaconBlocksByRoot: the imported blocks of the roots the node knows, in the request's order; the request has at most that many roots.
+- The anchor, with no bytes, is not sent. No block: a `STREAM_CLOSE` with no chunk. Else the stream keeps the BufferIds and takes `NODE_STREAM_SERVE`.
+- After the head, each stream in `NODE_STREAM_SERVE` gets a `NODE_WORK_SERVE` of its next block and takes `NODE_STREAM_SERVING`, while the actions have room for the work and 4096 bytes; a stream left waiting makes `wakeup` the tick's time.
+- `NODE_EV_WORK_DONE` of `NODE_WORK_SERVE`: the chunk goes out in a `STREAM_WRITE`, then the stream's next block, or a `STREAM_CLOSE` after the last; a result other than `LANTERN_VALID`, or no room in `p2p_out`, gives a `STREAM_RESET`.
 - An answer is one chunk of lantern_reqresp_write_chunk in a `STREAM_WRITE`, then a `STREAM_CLOSE`; then the stream goes.
 - The node's Status: compute_fork_digest of the store's epoch, the store's finalized checkpoint, `head_root` and its slot, and `earliest_slot`. Its MetaData: `metadata_seq`, no attestation or sync subnets, and `CUSTODY_REQUIREMENT` custody groups.
 
@@ -227,17 +236,17 @@ lantern_node_run(node, store, seen, work, state_a, state_b, data, scratch, event
 | `state_b` | state | `BeaconState`: the buffer of the work's `state_b`, or 0 |
 | `data` | input | ByteList: the buffer of the work's `data`, or 0 |
 | `scratch` | scratch | `Scratch` |
-| `event` | output | `NodeEvent` of `NODE_EV_WORK_DONE_SIZE` bytes |
+| `event` | output | `NodeEvent`: its `size` set by the caller to the bytes of the buffer, `NODE_EV_WORK_DONE_SIZE` or more |
 
 ### Returns
 
 - `LANTERN_OK`: `event` holds the work's fields and its `result`.
-- `LANTERN_BUFFER_TOO_SMALL`: the store, `state_a` or `scratch` has too little room. Nothing is changed.
+- `LANTERN_BUFFER_TOO_SMALL`: the store, `state_a`, `scratch` or `event` has too little room. Nothing is changed.
 - `LANTERN_INVALID_EVENT`: the work is of no kind, or names no `NodeCheckpoint`.
 
 ### Caller must
 
-- On `LANTERN_BUFFER_TOO_SMALL`, grow the store with lantern_store_copy, or `state_a` with lantern_beacon_state_copy, or `scratch`, then call again.
+- On `LANTERN_BUFFER_TOO_SMALL`, grow the store with lantern_store_copy, or `state_a` with lantern_beacon_state_copy, or `scratch`, or for a SERVE work `event`, then call again.
 
 ### Function does
 
@@ -246,6 +255,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, data, scratch, event
 - `NODE_WORK_TARGET_STATE`: lantern_store_target_checkpoint_state of `state_a` to the `NodeCheckpoint` at index `target`.
 - `NODE_WORK_ATTESTATION`: lantern_node_attestation of the fork of the attestation's slot; `is_from_block` is the work's `arg`.
 - `NODE_WORK_ATTESTER_SLASHING`: lantern_node_attester_slashing of the fork of the store's slot.
+- `NODE_WORK_SERVE`: the response chunk of the block in `data`, with lantern_reqresp_write_chunk, as a ByteList at `NodeEvent_chunk` of the event; its context bytes are compute_fork_digest of the block's epoch for version 2, none for version 1. The event's `size` then covers the chunk.
 - Bytes too short for their type give the result `LANTERN_INVALID_ENCODING`.
 
 ## Function `lantern_node_protocols`
@@ -506,12 +516,13 @@ The state of the node: a value with three parts.
 | 8 | `peer` | u64 | The libp2p peer Handle |
 | 16 | `method` | u64 | `REQRESP_*` |
 | 24 | `version` | u64 | |
-| 32 | `state` | u64 | `NODE_STREAM_REQUEST`, or `NODE_STREAM_EOF` once the peer closed its side |
-| 40 | `list` | ByteList | The request bytes held: `size`, `offset` 24, `count`, the bytes at 64 |
+| 32 | `state` | u64 | `NODE_STREAM_REQUEST` or `NODE_STREAM_EOF` while the request is read; `NODE_STREAM_SERVE` or `NODE_STREAM_SERVING` while its blocks go out |
+| 40 | `next` | u64 | The index of the next BufferId to send |
+| 48 | `list` | ByteList | The request bytes, then the BufferIds of the blocks to send: `size`, `offset` 24, `count`, the bytes at 72 |
 
 ### Rules
 
-- `stream_bytes` of the node: `NodeStream__fixed` (64) + the request room.
+- `stream_bytes` of the node: `NodeStream__fixed` (72) + the request room.
 
 ## Type `NodeAnchor`
 
@@ -551,7 +562,7 @@ The events of one step: a ByteList whose bytes are `NodeEvent` entries one after
 
 - `NODE_EV_TICK`: 24 bytes or more.
 - An event with `bytes`: its ByteList's offset is 24 and its bytes end inside the event.
-- `NODE_EV_WORK_DONE`: `NODE_EV_WORK_DONE_SIZE` bytes; offsets 16 to 63 are those of the work's `NodeAction`, `result` at `NodeEvent_result`, and a Checkpoint at `NodeEvent_checkpoint` for `LANTERN_NEED_TARGET_STATE`.
+- `NODE_EV_WORK_DONE`: `NODE_EV_WORK_DONE_SIZE` bytes; offsets 16 to 63 are those of the work's `NodeAction`, `result` at `NodeEvent_result`, and a Checkpoint at `NodeEvent_checkpoint` for `LANTERN_NEED_TARGET_STATE`. For `NODE_WORK_SERVE`, a ByteList of the chunk at `NodeEvent_chunk`, offset 24, inside the event.
 - `NODE_EV_P2P`: a libp2p shell result `Event` from 16, its size a multiple of 8 inside the event; only with `p2p`.
 - `NODE_EV_PAYLOAD_STATUS` is `LANTERN_INVALID_EVENT` in this version.
 
@@ -571,8 +582,8 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 | 24 | `state_a` or `bytes` | u64 or ByteList | `NODE_ACT_WORK`: a `BufferId`; `NODE_ACT_STATE_COPY`: the new id; `NODE_ACT_BYTES_PUT`: the bytes, offset 24 |
 | 32 | `state_b` | u64 | `NODE_ACT_WORK`: a `BufferId` |
 | 40 | `data` | u64 | `NODE_ACT_WORK`: a `BufferId` of bytes |
-| 48 | `target` | u64 | `NODE_ACT_WORK`: a `NodeBlock` index, or a `NodeCheckpoint` index |
-| 56 | `arg` | u64 | `NODE_ACT_WORK`: `is_from_block` of an attestation, or the epoch of a checkpoint |
+| 48 | `target` | u64 | `NODE_ACT_WORK`: a `NodeBlock` index, a `NodeCheckpoint` index, or a stream Handle |
+| 56 | `arg` | u64 | `NODE_ACT_WORK`: `is_from_block` of an attestation, the epoch of a checkpoint, or the protocol version of a SERVE |
 
 ### Rules
 
