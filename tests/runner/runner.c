@@ -62,6 +62,45 @@ ABI uint64_t ssz_hash_tree_root(const void *type, const void *value, void *scrat
 /* lantern: include/descriptors.inc. */
 extern const uint8_t LF(types)[];
 
+#if FORK > FORK_PHASE0
+/* The fork before, for the fork and transition files: docs/reference/fork-upgrades.md. */
+#if FORK == FORK_ALTAIR
+#define PREV_FORK_NAME phase0
+#elif FORK == FORK_BELLATRIX
+#define PREV_FORK_NAME altair
+#elif FORK == FORK_CAPELLA
+#define PREV_FORK_NAME bellatrix
+#elif FORK == FORK_DENEB
+#define PREV_FORK_NAME capella
+#elif FORK == FORK_ELECTRA
+#define PREV_FORK_NAME deneb
+#else
+#define PREV_FORK_NAME electra
+#endif
+/* LP(name): lantern_<fork before>_<name>. UPGRADE: lantern_<fork>_upgrade_to_<fork>. */
+#define LP(name) CAT(lantern_, PREV_FORK_NAME, _##name)
+#define UPGRADE CAT(CAT(lantern_, FORK_NAME, _upgrade_to_), FORK_NAME, )
+extern const uint8_t LP(types)[];
+ABI uint64_t LP(beacon_state_copy_size)(const void *state, const void *room, void *size);
+ABI uint64_t LP(beacon_state_copy)(const void *state, const void *room, void *out);
+ABI uint64_t LP(process_slots)(void *state, const void *slot, const void *config, void *scratch, void *result);
+ABI uint64_t LP(state_transition)(void *state, const void *signed_block, const void *options, const void *config,
+                                      void *scratch, void *result);
+ABI uint64_t LF(upgrade_size)(const void *pre, const void *room, void *size);
+ABI uint64_t LF(verify_block_signature)(const void *state, const void *signed_block, void *scratch, void *out);
+ABI uint64_t LF(process_block)(void *state, const void *block, const void *execution_valid, const void *config,
+                                   void *scratch, void *result);
+ABI uint64_t UPGRADE(const void *pre, const void *room, const void *config, void *scratch, void *out);
+#endif
+#if FORK == FORK_PHASE0
+/* Genesis: docs/reference/genesis.md. */
+ABI uint64_t LF(initialize_beacon_state_from_eth1_size)(const void *deposit_count, const void *room, void *size);
+ABI uint64_t LF(initialize_beacon_state_from_eth1)(const void *eth1_block_hash, const void *eth1_timestamp,
+                                                       const void *deposits, const void *deposit_count,
+                                                       const void *room, const void *config, void *scratch, void *out);
+ABI uint64_t LF(is_valid_genesis_state)(const void *state, const void *config, void *out);
+#endif
+
 /* The state transition of every fork: docs/reference/. */
 ABI uint64_t LF(beacon_state_copy_size)(const void *state, const void *room, void *size);
 ABI uint64_t LF(beacon_state_copy)(const void *state, const void *room, void *out);
@@ -444,16 +483,19 @@ typedef struct {
     const uint8_t *desc;
 } lantern_type;
 
-/* The root type of lantern named name, or NULL. */
-static const uint8_t *type_by_name(const char *name) {
-    uint64_t n = rd64(LF(types));
+/* The root type named name in the type table types of a fork, or NULL. */
+static const uint8_t *type_in(const uint8_t *types, const char *name) {
+    uint64_t n = rd64(types);
     for (uint64_t i = 0; i < n; i++) {
-        const uint8_t *e = LF(types) + 8 + 16 * i;
-        const char *tname = (const char *)(LF(types) - rd64(e + 8));
-        if (!strcmp(tname, name)) return LF(types) - rd64(e);
+        const uint8_t *e = types + 8 + 16 * i;
+        const char *tname = (const char *)(types - rd64(e + 8));
+        if (!strcmp(tname, name)) return types - rd64(e);
     }
     return NULL;
 }
+
+/* The root type of this runner's fork named name, or NULL. */
+static const uint8_t *type_by_name(const char *name) { return type_in(LF(types), name); }
 
 static const uint8_t *node_of(const uint8_t *d, uint64_t i) { return d + rd64(d + 8) + 72 * i; }
 static const uint8_t *field_of(const uint8_t *d, uint64_t i) { return d + rd64(d + 24) + 32 * i; }
@@ -665,10 +707,13 @@ static const struct {
     {"BALANCE_PER_ADDITIONAL_CUSTODY_GROUP", 368, 0},
     {"MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS", 376, 0},
     {"MAX_BLOBS_PER_BLOCK", 392 + 16 * 32, 0},
+    {"MIN_GENESIS_TIME", 392 + 16 * 32 + 8, 0},
+    {"MIN_GENESIS_ACTIVE_VALIDATOR_COUNT", 392 + 16 * 32 + 16, 0},
+    {"GENESIS_DELAY", 392 + 16 * 32 + 24, 0},
 };
 #define CONFIG_BLOB_SCHEDULE_COUNT 384
 #define CONFIG_BLOB_SCHEDULE 392
-#define CONFIG_SIZE (392 + 16 * 32 + 8)
+#define CONFIG_SIZE (392 + 16 * 32 + 32)
 
 static uint8_t config[CONFIG_SIZE];
 
@@ -1065,6 +1110,268 @@ static void run_blocks(const char *file, case_file *f) {
         report(file, name, len, why == NULL, why);
     }
 }
+
+/* ---------------------------------------------------------------- Fork upgrades and transitions */
+
+#if FORK > FORK_PHASE0
+/* The slots of an epoch in this runner's preset. */
+static uint64_t slots_per_epoch(void) { return strcmp(PRESET, "minimal") ? 32 : 8; }
+
+/* A state of the fork before, decoded from enc and copied with room in each list. NULL with a reason on failure. */
+static uint8_t *load_prev_state(const uint8_t *enc, uint64_t len, uint64_t *size, const char **why) {
+    const uint8_t *desc = type_in(LP(types), "BeaconState");
+    uint64_t vsize = 0;
+    uint8_t *value = decode(desc, enc, len, &vsize, why);
+    if (!value) return NULL;
+    uint64_t room[8] = {64, 64, 4, 9000, 64, 64, 4, 4096}, need = 0; /* StateRoom: docs/reference/state.md */
+    CALL(LP(beacon_state_copy_size), value, room, &need);
+    uint8_t *state = buffer(need + 4096);
+    wr64(state, need + 4096);
+    if (CALL(LP(beacon_state_copy), value, room, state) != 0 || !guard_ok(state, need + 4096)) {
+        *why = STR(LP(beacon_state_copy)) " failed";
+        free(state);
+        state = NULL;
+    }
+    *size = need + 4096;
+    free(value);
+    return state;
+}
+
+/* regrow with the copy of the fork before. */
+static uint8_t *regrow_prev(uint8_t *state, uint64_t *size, uint64_t growth, const char **why) {
+    uint64_t room[8] = {64 * growth, 2048 * growth, 4 * growth,  9000 * growth,
+                        64 * growth, 64 * growth,   4 * growth, 4096 * growth}, need = 0;
+    CALL(LP(beacon_state_copy_size), state, room, &need);
+    uint8_t *out = buffer(need);
+    wr64(out, need);
+    if (CALL(LP(beacon_state_copy), state, room, out) != 0) {
+        *why = "regrow: copy status";
+        free(out);
+        return state;
+    }
+    free(state);
+    *size = need;
+    return out;
+}
+
+/* The state of this runner's fork that the upgrade writes from pre, a state of the fork before. NULL with a reason on failure. */
+static uint8_t *upgrade_state(const uint8_t *pre, uint64_t *size, const char **why) {
+    uint64_t room[8] = {64, 64, 4, 9000, 64, 64, 4, 4096}, need = 0;
+    CALL(LF(upgrade_size), pre, room, &need);
+    uint8_t *out = buffer(need + 4096);
+    wr64(out, need + 4096);
+    uint64_t st = CALL(UPGRADE, pre, room, config, fresh_scratch(), out);
+    if (st != 0) {
+        static char msg[64];
+        snprintf(msg, sizeof msg, "upgrade: status %llu", (unsigned long long)st);
+        *why = msg;
+    } else if (!guard_ok(out, need + 4096)) *why = "upgrade: wrote past the state";
+    else if (!guard_ok(scratch_buf, SCRATCH_BYTES)) *why = "upgrade: wrote past the scratch";
+    if (*why) {
+        free(out);
+        return NULL;
+    }
+    *size = need + 4096;
+    return out;
+}
+
+/* fork/fork: the upgrade of pre equals post. */
+static void run_fork(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, plen, qlen, size, osize;
+        tv parts = next_case(f, &name, &len);
+        const uint8_t *pre = tv_bytes(tv_get(parts, "pre"), &plen);
+        const uint8_t *want = tv_bytes(tv_get(parts, "post"), &qlen);
+        uint8_t *state = load_prev_state(pre, plen, &size, &why), *out = NULL;
+        if (state) out = upgrade_state(state, &osize, &why);
+        if (out) state_equals(out, want, qlen, &why);
+        free(out);
+        free(state);
+        report(file, name, len, why == NULL, why);
+    }
+}
+
+/* The fork at the first slot of fork_epoch: process_slots of the fork before, then the upgrade. */
+static uint8_t *fork_over(uint8_t *state, uint64_t *size, uint64_t fork_epoch, const char **why) {
+    uint64_t slot = fork_epoch * slots_per_epoch(), result = 0, st = 0;
+    if (rd64(state + 48) < slot) { /* BeaconState.slot: after the size, genesis_time and genesis_validators_root */
+        for (uint64_t growth = 2;; growth *= 2) {
+            st = CALL(LP(process_slots), state, &slot, config, fresh_scratch(), &result);
+            if (st != 1 || growth > 1024) break;
+            state = regrow_prev(state, size, growth, why);
+        }
+    }
+    if (st != 0 || result != 0) {
+        *why = "process_slots to the fork failed";
+        return state;
+    }
+    uint8_t *out = upgrade_state(state, size, why);
+    if (!out) return state;
+    free(state);
+    return out;
+}
+
+/* The offset of field i of the container type name of this runner's fork. */
+static uint64_t field_at(const char *name, uint64_t i) {
+    const uint8_t *d = type_by_name(name);
+    return rd64(field_of(d, rd64(root_node(d) + 16) + i) + 8);
+}
+
+/*
+ * The block on the fork slot: the slots up to it ran before the upgrade, so the state transition
+ * runs without process_slots: the signature, process_block, the state root.
+ */
+static void block_on_fork_slot(uint8_t **state, uint64_t *size, const uint8_t *signed_block, const char **why) {
+    const uint8_t *block = signed_block + rd64(signed_block + field_at("SignedBeaconBlock", 0));
+    uint64_t valid = 0, execution_valid = 1, result = 0, st = 0;
+    if (CALL(LF(verify_block_signature), *state, signed_block, fresh_scratch(), &valid) != 0 || valid != 1) {
+        *why = "fork slot block: signature";
+        return;
+    }
+    for (uint64_t growth = 2;; growth *= 2) {
+        st = CALL(LF(process_block), *state, block, &execution_valid, config, fresh_scratch(), &result);
+        if (st != 1 || growth > 1024) break;
+        *state = regrow(*state, size, growth, why);
+    }
+    if (st != 0 || result != 0) {
+        *why = "fork slot block: process_block";
+        return;
+    }
+    const uint8_t *desc = type_by_name("BeaconState");
+    uint64_t scsize;
+    uint8_t *scr = scratch_for(desc, &scsize), root[32];
+    if (ssz_hash_tree_root(desc, *state, scr, root) != 0) *why = "fork slot block: state root status";
+    else if (memcmp(root, block + field_at("BeaconBlock", 3), 32)) *why = "fork slot block: state root differs";
+    free(scr);
+}
+
+/* transition/core: the blocks up to fork_block with the fork before, the fork, then the other blocks. */
+static void run_transition(const char *file, case_file *f) {
+    const uint8_t *pre_desc = type_in(LP(types), "SignedBeaconBlock"), *post_desc = type_by_name("SignedBeaconBlock");
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, plen, size;
+        tv parts = next_case(f, &name, &len);
+        if (skip_case(parts)) continue;
+        tv meta = tv_get(parts, "meta"), fb = tv_get(meta, "fork_block");
+        uint64_t blocks = tv_u64(tv_get(meta, "blocks_count")), fork_epoch = tv_u64(tv_get(meta, "fork_epoch"));
+        int64_t fork_block = fb ? (int64_t)tv_u64(fb) : -1;
+        const uint8_t *pre = tv_bytes(tv_get(parts, "pre"), &plen);
+        uint8_t *state = load_prev_state(pre, plen, &size, &why);
+        int upgraded = 0;
+        for (uint64_t b = 0; state && !why && b < blocks; b++) {
+            if (!upgraded && (int64_t)b > fork_block) {
+                state = fork_over(state, &size, fork_epoch, &why);
+                upgraded = 1;
+                if (why) break;
+            }
+            char key[32];
+            snprintf(key, sizeof key, "blocks_%llu", (unsigned long long)b);
+            uint64_t blen, vsize;
+            const uint8_t *enc = tv_bytes(tv_get(parts, key), &blen);
+            uint8_t *block = decode(upgraded ? post_desc : pre_desc, enc, blen, &vsize, &why);
+            if (!block) break;
+            if (upgraded) { /* BeaconBlock.slot: after the message's size */
+                const uint8_t *msg = block + rd64(block + field_at("SignedBeaconBlock", 0));
+                if (rd64(msg + field_at("BeaconBlock", 0)) == rd64(state + 48)) {
+                    block_on_fork_slot(&state, &size, block, &why);
+                    free(block);
+                    continue;
+                }
+            }
+            uint64_t options[2] = {1, 1}, result = 0xA5A5A5A5A5A5A5A5u, st;
+            for (uint64_t growth = 2;; growth *= 2) {
+                st = upgraded ? CALL(LF(state_transition), state, block, options, config, fresh_scratch(), &result)
+                              : CALL(LP(state_transition), state, block, options, config, fresh_scratch(), &result);
+                if (st != 1 || growth > 1024) break;
+                state = upgraded ? regrow(state, &size, growth, &why) : regrow_prev(state, &size, growth, &why);
+            }
+            if (st != 0 || result != 0) {
+                static char msg[80];
+                snprintf(msg, sizeof msg, "block %llu: status %llu, result %llu", (unsigned long long)b,
+                         (unsigned long long)st, (unsigned long long)result);
+                why = msg;
+            }
+            free(block);
+        }
+        if (state && !why && !upgraded) state = fork_over(state, &size, fork_epoch, &why);
+        if (state && !why) {
+            uint64_t qlen;
+            const uint8_t *want = tv_bytes(tv_get(parts, "post"), &qlen);
+            state_equals(state, want, qlen, &why);
+        }
+        free(state);
+        report(file, name, len, why == NULL, why);
+    }
+}
+#endif
+
+/* ---------------------------------------------------------------- Genesis */
+
+#if FORK == FORK_PHASE0
+/* genesis/initialization: the state from the eth1 block and the deposits equals state. */
+static void run_genesis_init(const char *file, case_file *f) {
+    const uint8_t *ddesc = type_by_name("Deposit");
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, hlen, qlen;
+        tv parts = next_case(f, &name, &len);
+        tv eth1 = tv_get(parts, "eth1");
+        const uint8_t *hash = tv_bytes(tv_get(eth1, "eth1_block_hash"), &hlen);
+        uint64_t timestamp = tv_u64(tv_get(eth1, "eth1_timestamp"));
+        uint64_t n = tv_u64(tv_get(tv_get(parts, "meta"), "deposits_count")), stride = 0;
+        uint8_t *deposits = NULL;
+        for (uint64_t d = 0; d < n && !why; d++) {
+            char key[32];
+            snprintf(key, sizeof key, "deposits_%llu", (unsigned long long)d);
+            uint64_t dlen, vsize;
+            const uint8_t *enc = tv_bytes(tv_get(parts, key), &dlen);
+            uint8_t *value = decode(ddesc, enc, dlen, &vsize, &why);
+            if (!value) break;
+            if (!deposits) deposits = buffer(n * (stride = vsize));
+            if (vsize != stride) why = "deposit: value sizes differ";
+            else memcpy(deposits + d * stride, value, (size_t)stride);
+            free(value);
+        }
+        if (!why && hlen != 32) why = "eth1_block_hash: not 32 bytes";
+        if (!why) {
+            uint64_t room[8] = {64, 64, 4, 9000, 64, 64, 4, 4096}, need = 0;
+            CALL(LF(initialize_beacon_state_from_eth1_size), &n, room, &need);
+            uint8_t *state = buffer(need + 4096);
+            wr64(state, need + 4096);
+            uint64_t st = CALL(LF(initialize_beacon_state_from_eth1), hash, &timestamp, deposits ? deposits : state, &n,
+                               room, config, fresh_scratch(), state);
+            if (st != 0) why = "status not 0";
+            else if (!guard_ok(state, need + 4096)) why = "wrote past the state";
+            else if (!guard_ok(scratch_buf, SCRATCH_BYTES)) why = "wrote past the scratch";
+            else state_equals(state, tv_bytes(tv_get(parts, "state"), &qlen), qlen, &why);
+            free(state);
+        }
+        free(deposits);
+        report(file, name, len, why == NULL, why);
+    }
+}
+
+/* genesis/validity: is_valid_genesis_state of genesis equals is_valid. */
+static void run_genesis_validity(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, plen, size;
+        tv parts = next_case(f, &name, &len);
+        const uint8_t *enc = tv_bytes(tv_get(parts, "genesis"), &plen);
+        tv want = tv_get(parts, "is_valid");
+        uint8_t *state = load_state(enc, plen, &size, &why);
+        if (state) {
+            uint64_t out = 2;
+            if (CALL(LF(is_valid_genesis_state), state, config, &out) != 0) why = "status not 0";
+            else if (out != (uint64_t)(want && *want == T_BOOL && want[1])) why = "is_valid differs";
+        }
+        free(state);
+        report(file, name, len, why == NULL, why);
+    }
+}
+#endif
 
 /* ---------------------------------------------------------------- Shuffling */
 
@@ -2222,6 +2529,13 @@ int main(int argc, char **argv) {
         else if (!strcmp(kind, "sanity-blocks") || !strcmp(kind, "finality-finality") || !strcmp(kind, "random-random"))
             run_blocks(file, &f);
         else if (!bls_off && !strncmp(kind, "rewards-", 8)) run_rewards(file, &f);
+#if FORK > FORK_PHASE0
+        else if (!bls_off && !strcmp(kind, "fork-fork")) run_fork(file, &f);
+        else if (!strcmp(kind, "transition-core")) run_transition(file, &f);
+#else
+        else if (!bls_off && !strcmp(kind, "genesis-initialization")) run_genesis_init(file, &f);
+        else if (!bls_off && !strcmp(kind, "genesis-validity")) run_genesis_validity(file, &f);
+#endif
 #if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
                               !strcmp(kind, "networking-compute_columns_for_custody_group")))

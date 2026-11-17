@@ -136,7 +136,10 @@
 .set CONFIG_BLOB_SCHEDULE, 392          /* entries of (EPOCH, MAX_BLOBS_PER_BLOCK), 16 bytes each */
 .set CONFIG_BLOB_SCHEDULE_MAX, 32
 .set CONFIG_MAX_BLOBS_PER_BLOCK, 392 + 16 * 32  /* deneb's limit, after the schedule */
-.set CONFIG_SIZE, 392 + 16 * 32 + 8
+.set CONFIG_MIN_GENESIS_TIME, 392 + 16 * 32 + 8
+.set CONFIG_MIN_GENESIS_ACTIVE_VALIDATOR_COUNT, 392 + 16 * 32 + 16
+.set CONFIG_GENESIS_DELAY, 392 + 16 * 32 + 24
+.set CONFIG_SIZE, 392 + 16 * 32 + 32
 
 /* ------------------------------------------------------------ Results of spec checks */
 

@@ -32,6 +32,8 @@ build/linux-x86_64/runner-minimal-fulu ~/.cache/lantern/vectors minimal-fulu-ope
 - Each runner calls the `lantern_<fork>_*` functions of its fork, built with `-DFORK=<number> -DFORK_NAME=<fork>` (include/forks.inc).
 - Every runner runs the `descriptors` and `ssz_static` files of its fork.
 - Every runner also runs the state transition files of its fork: epoch processing, operations, sanity, finality, random, rewards and shuffling.
+- The runners of altair to fulu also run `fork` (the upgrade of a state of the fork before) and `transition` (blocks across the fork epoch: the blocks up to `fork_block` with the fork before, process_slots of the fork before to the fork slot, the upgrade, then the other blocks; a block on the fork slot gets its signature check, process_block and state root check, since its slots ran before the upgrade).
+- The phase0 runners also run `genesis` (initialization and validity).
 - The fulu runners also run fork choice, sync and networking.
 
 ## Buffers

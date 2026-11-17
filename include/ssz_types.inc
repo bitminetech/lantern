@@ -14,8 +14,13 @@
  *   T__work    work bytes of ssz_level_root for the type
  *   T__basic   1 for Uint and Boolean, else 0
  * A container field F of T also sets T_F (its offset in a value of T),
- * T_F__ssz (its offset in the SSZ fixed part) and T_F__var (1 when its type
- * has a variable size).
+ * T_F__mem (the bytes it takes in place), T_F__ssz (its offset in the SSZ
+ * fixed part) and T_F__var (1 when its type has a variable size).
+ *
+ * The macros SSZ_UINT to SSZ_END define types under the names that the last
+ * SSZ_NAMES set: SSZ_NAMES PRE_ puts PRE_ before each type name, so that one
+ * object can hold the layouts of two forks; SSZ_NAMES with no prefix gives the
+ * names as written. Each passes its names to the SSZ_DEF_ macro of its kind.
  */
 
 /* sym = ceil(log2(n)), and 0 when n is 1 or less. */
@@ -44,7 +49,7 @@
 .set SSZ_LIST_FIXED, 24             /* asm-ssz: size, then the PartRef */
 
 /* Uint of width 1, 4, 8 or 32 bytes. */
-.macro SSZ_UINT T, width
+.macro SSZ_DEF_UINT T, width
     .set \T\()__kind, SSZ_KIND_UINT
     .set \T\()__len, \width
     .set \T\()__ssz, \width
@@ -60,7 +65,7 @@
     SSZ_WORK_LEAVES \T
 .endm
 
-.macro SSZ_BOOLEAN T
+.macro SSZ_DEF_BOOLEAN T
     .set \T\()__kind, SSZ_KIND_BOOLEAN
     .set \T\()__len, 1
     .set \T\()__ssz, 1
@@ -73,7 +78,7 @@
 .endm
 
 /* ByteVector[n]. */
-.macro SSZ_BYTE_VECTOR T, n
+.macro SSZ_DEF_BYTE_VECTOR T, n
     .set \T\()__kind, SSZ_KIND_BYTE_VECTOR
     .set \T\()__len, \n
     .set \T\()__ssz, \n
@@ -86,7 +91,7 @@
 .endm
 
 /* ByteList[limit]. */
-.macro SSZ_BYTE_LIST T, limit
+.macro SSZ_DEF_BYTE_LIST T, limit
     .set \T\()__kind, SSZ_KIND_BYTE_LIST
     .set \T\()__len, \limit
     .set \T\()__ssz, 0
@@ -99,7 +104,7 @@
 .endm
 
 /* BitVector[n]. */
-.macro SSZ_BIT_VECTOR T, n
+.macro SSZ_DEF_BIT_VECTOR T, n
     .set \T\()__kind, SSZ_KIND_BIT_VECTOR
     .set \T\()__len, \n
     .set \T\()__ssz, ((\n) + 7) / 8
@@ -112,7 +117,7 @@
 .endm
 
 /* BitList[limit]. */
-.macro SSZ_BIT_LIST T, limit
+.macro SSZ_DEF_BIT_LIST T, limit
     .set \T\()__kind, SSZ_KIND_BIT_LIST
     .set \T\()__len, \limit
     .set \T\()__ssz, 0
@@ -136,7 +141,7 @@
 .endm
 
 /* Vector[E, n]. */
-.macro SSZ_VECTOR T, E, n
+.macro SSZ_DEF_VECTOR T, E, n
     .set \T\()__kind, SSZ_KIND_VECTOR
     .set \T\()__len, \n
     .if \E\()__ssz
@@ -155,7 +160,7 @@
 .endm
 
 /* List[E, limit]. */
-.macro SSZ_LIST T, E, limit
+.macro SSZ_DEF_LIST T, E, limit
     .set \T\()__kind, SSZ_KIND_LIST
     .set \T\()__len, \limit
     .set \T\()__ssz, 0
@@ -171,7 +176,7 @@
  * order; then SSZ_END T. var is 1 when a field has a variable size; SSZ_END
  * checks it.
  */
-.macro SSZ_CONTAINER T, var
+.macro SSZ_DEF_CONTAINER T, var
     .set \T\()__kind, SSZ_KIND_CONTAINER
     .set \T\()__var, \var
     .set \T\()__seen_var, 0
@@ -183,9 +188,10 @@
     .set \T\()__basic, 0
 .endm
 
-.macro SSZ_FIELD T, name, F
+.macro SSZ_DEF_FIELD T, name, F
     .set \T\()__at, (\T\()__at + \F\()__align - 1) / \F\()__align * \F\()__align
     .set \T\()_\name, \T\()__at
+    .set \T\()_\name\()__mem, \F\()__mem
     .set \T\()_\name\()__ssz, \T\()__ssz_at
     .set \T\()__at, \T\()__at + \F\()__mem
     .if \F\()__ssz
@@ -205,7 +211,7 @@
     .set \T\()__len, \T\()__len + 1
 .endm
 
-.macro SSZ_END T
+.macro SSZ_DEF_END T
     .if \T\()__seen_var != \T\()__var
     .error "SSZ_CONTAINER: the variable size flag is wrong"
     .endif
@@ -222,6 +228,57 @@
     .set \T\()__fixed, \T\()__mem
     .endif
     SSZ_WORK_CHILDREN \T, \T\()__most_work
+.endm
+
+/* The type macros, with prefix p before each type name. SSZ_NAMES_SET marks a first definition. */
+.macro SSZ_NAMES p
+.ifdef SSZ_NAMES_SET
+.purgem SSZ_UINT
+.purgem SSZ_BOOLEAN
+.purgem SSZ_BYTE_VECTOR
+.purgem SSZ_BYTE_LIST
+.purgem SSZ_BIT_VECTOR
+.purgem SSZ_BIT_LIST
+.purgem SSZ_VECTOR
+.purgem SSZ_LIST
+.purgem SSZ_CONTAINER
+.purgem SSZ_FIELD
+.purgem SSZ_END
+.endif
+.set SSZ_NAMES_SET, 1
+.macro SSZ_UINT T, width
+    SSZ_DEF_UINT \p\()\T, \width
+.endm
+.macro SSZ_BOOLEAN T
+    SSZ_DEF_BOOLEAN \p\()\T
+.endm
+.macro SSZ_BYTE_VECTOR T, n
+    SSZ_DEF_BYTE_VECTOR \p\()\T, \n
+.endm
+.macro SSZ_BYTE_LIST T, limit
+    SSZ_DEF_BYTE_LIST \p\()\T, \limit
+.endm
+.macro SSZ_BIT_VECTOR T, n
+    SSZ_DEF_BIT_VECTOR \p\()\T, \n
+.endm
+.macro SSZ_BIT_LIST T, limit
+    SSZ_DEF_BIT_LIST \p\()\T, \limit
+.endm
+.macro SSZ_VECTOR T, E, n
+    SSZ_DEF_VECTOR \p\()\T, \p\()\E, \n
+.endm
+.macro SSZ_LIST T, E, limit
+    SSZ_DEF_LIST \p\()\T, \p\()\E, \limit
+.endm
+.macro SSZ_CONTAINER T, var
+    SSZ_DEF_CONTAINER \p\()\T, \var
+.endm
+.macro SSZ_FIELD T, name, F
+    SSZ_DEF_FIELD \p\()\T, \name, \p\()\F
+.endm
+.macro SSZ_END T
+    SSZ_DEF_END \p\()\T
+.endm
 .endm
 
 /*

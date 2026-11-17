@@ -17,6 +17,13 @@
 .include "lantern.inc"
 .include "forks.inc"
 .include "ssz_types.inc"
+.if FORK > FORK_PHASE0
+SSZ_NAMES PRE_                      /* the layouts of the fork before, for upgrade_to_<fork> */
+.set TYPES_FORK, FORK - 1
+.include "types.inc"
+.endif
+SSZ_NAMES
+.set TYPES_FORK, FORK
 .include "types.inc"
 .include "platform.inc"
 .include "macros.s"
@@ -59,6 +66,11 @@ SSZ_DEPTH LOG2_SLOTS_PER_EPOCH, SLOTS_PER_EPOCH
 .include "syncagg.s"
 .endif
 .include "transition.s"
+.if FORK == FORK_PHASE0
+.include "genesis.s"
+.else
+.include "upgrade.s"
+.endif
 /* Fork choice and networking are in the fulu object so far. */
 .if FORK == FORK_FULU
 .include "forkchoice.s"
