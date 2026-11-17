@@ -328,6 +328,29 @@ ABI uint64_t LF(validate_partial_data_column_sidecar_gossip)(void *seen, const v
     X(attester_slashing, AttesterSlashing)                                                                     \
     GOSSIP_ALTAIR(X) GOSSIP_CAPELLA(X) GOSSIP_BLOBS(X) GOSSIP_COLUMNS(X)
 
+/* P2p helpers: docs/reference/networking.md. */
+ABI uint64_t LF(compute_fork_version)(const void *epoch, const void *config, void *out);
+ABI uint64_t LF(compute_fork_digest)(const void *root, const void *epoch, const void *config, void *scratch, void *out);
+ABI uint64_t LF(compute_attestation_subnet_prefix_bits)(const void *config, void *out);
+ABI uint64_t LF(compute_min_epochs_for_block_requests)(const void *config, void *out);
+ABI uint64_t LF(max_compressed_len)(const void *n, void *out);
+ABI uint64_t LF(max_message_size)(const void *config, void *out);
+ABI uint64_t LF(compute_subscribed_subnet)(const void *node_id, const void *epoch, const void *index, const void *config,
+                                               void *scratch, void *out);
+ABI uint64_t LF(compute_subscribed_subnets)(const void *node_id, const void *epoch, const void *config, void *scratch,
+                                                void *out);
+ABI uint64_t LF(compute_enr_fork_id)(const void *root, const void *epoch, const void *config, void *scratch, void *out);
+ABI uint64_t LF(compute_message_id)(const void *topic, const void *data, const void *config, void *scratch, void *out);
+ABI uint64_t lantern_gossip_topic(const void *topic, void *out);
+ABI uint64_t lantern_gossip_topic_parse(const void *string, void *out);
+#if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+ABI uint64_t LF(compute_max_request_blob_sidecars)(const void *config, void *out);
+#endif
+#if FORK >= FORK_FULU
+ABI uint64_t LF(compute_max_request_data_column_sidecars)(const void *config, void *out);
+ABI uint64_t LF(compute_next_fork_digest)(const void *root, const void *epoch, const void *config, void *scratch, void *out);
+#endif
+
 /* ---------------------------------------------------------------- ABI check */
 
 #define STACK_CAP 65536 /* README: stack per call */
@@ -755,10 +778,14 @@ static const struct {
     {"ATTESTATION_PROPAGATION_SLOT_RANGE", 392 + 16 * 32 + 104, 0},
     {"BLOB_SIDECAR_SUBNET_COUNT", 392 + 16 * 32 + 112, 0},
     {"BLOB_SIDECAR_SUBNET_COUNT_ELECTRA", 392 + 16 * 32 + 120, 0},
+    {"MAX_REQUEST_BLOCKS", 392 + 16 * 32 + 128, 0},
+    {"MESSAGE_DOMAIN_INVALID_SNAPPY", 392 + 16 * 32 + 136, 1},
+    {"MESSAGE_DOMAIN_VALID_SNAPPY", 392 + 16 * 32 + 144, 1},
 };
 #define CONFIG_BLOB_SCHEDULE_COUNT 384
+#define CONFIG_SUBNETS_PER_NODE 336
 #define CONFIG_BLOB_SCHEDULE 392
-#define CONFIG_SIZE (392 + 16 * 32 + 128)
+#define CONFIG_SIZE (392 + 16 * 32 + 152)
 
 static uint8_t config[CONFIG_SIZE];
 
@@ -1473,7 +1500,6 @@ static void run_shuffling(const char *file, case_file *f) {
     }
 }
 
-#if FORK == FORK_FULU
 /* ---------------------------------------------------------------- Custody */
 
 /* The 32 little endian bytes of an integer value: tag 1 (u64) or tag 8 (Uint256). */
@@ -1493,6 +1519,7 @@ static int list_equals(const uint8_t *out, tv want) {
 }
 
 /* networking-get_custody_groups and networking-compute_columns_for_custody_group. */
+#if FORK == FORK_FULU
 static void run_custody(const char *file, const char *handler, case_file *f) {
     int groups = !strcmp(handler, "get_custody_groups");
     for (uint64_t i = 0; i < f->count; i++) {
@@ -2735,6 +2762,160 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
 }
 
 
+/* ---------------------------------------------------------------- P2p helpers */
+
+#define INVALID_TOPIC 48
+
+/* A ByteList of the bytes of v, with room for exactly them. */
+static uint8_t *byte_list(tv v, uint64_t *size) {
+    uint64_t len;
+    const uint8_t *b = tv_bytes(v, &len);
+    *size = 24 + len;
+    uint8_t *l = buffer(*size);
+    wr64(l, *size);
+    wr64(l + 8, 24);
+    wr64(l + 16, len);
+    memcpy(l + 24, b, (size_t)len);
+    return l;
+}
+
+/*
+ * p2p-<function>: lantern's cases of the p2p helpers (tests/generator/p2p.py). A case's config part
+ * replaces values of the preset's config; a null output is where the spec raises.
+ */
+static void run_p2p(const char *file, const char *handler, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, blen, st = 0, n = 0, size = 0;
+        tv parts = next_case(f, &name, &len);
+        case_config(parts);
+        tv in = tv_get(parts, "input"), want = tv_get(parts, "output");
+        int null = want && *want == T_NULL;
+        uint64_t error = 4; /* LANTERN_INVALID_OVERFLOW */
+        uint8_t root[32] = {0}, node_id[32], *out = NULL;
+        uint64_t epoch = 0;
+        if (tv_get(in, "genesis_validators_root")) memcpy(root, tv_bytes(tv_get(in, "genesis_validators_root"), &blen), 32);
+        if (tv_get(in, "epoch")) epoch = tv_u64(tv_get(in, "epoch"));
+        if (tv_get(in, "current_epoch")) epoch = tv_u64(tv_get(in, "current_epoch"));
+        if (tv_get(in, "node_id")) tv_uint256(tv_get(in, "node_id"), node_id);
+        /* Fixed size outputs: n bytes in out, then guard bytes. */
+        if (!strcmp(handler, "compute_fork_version")) {
+            out = buffer(n = 4);
+            st = CALL(LF(compute_fork_version), &epoch, config, out);
+        } else if (!strcmp(handler, "compute_fork_digest")) {
+            out = buffer(n = 4);
+            st = CALL(LF(compute_fork_digest), root, &epoch, config, fresh_scratch(), out);
+        } else if (!strcmp(handler, "compute_enr_fork_id")) {
+            out = buffer(n = 16);
+            st = CALL(LF(compute_enr_fork_id), root, &epoch, config, fresh_scratch(), out);
+#if FORK >= FORK_FULU
+        } else if (!strcmp(handler, "compute_next_fork_digest")) {
+            out = buffer(n = 4);
+            st = CALL(LF(compute_next_fork_digest), root, &epoch, config, fresh_scratch(), out);
+        } else if (!strcmp(handler, "compute_max_request_data_column_sidecars")) {
+            out = buffer(n = 8);
+            st = CALL(LF(compute_max_request_data_column_sidecars), config, out);
+#endif
+#if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+        } else if (!strcmp(handler, "compute_max_request_blob_sidecars")) {
+            out = buffer(n = 8);
+            st = CALL(LF(compute_max_request_blob_sidecars), config, out);
+#endif
+        } else if (!strcmp(handler, "compute_attestation_subnet_prefix_bits")) {
+            out = buffer(n = 8);
+            st = CALL(LF(compute_attestation_subnet_prefix_bits), config, out);
+        } else if (!strcmp(handler, "compute_min_epochs_for_block_requests")) {
+            out = buffer(n = 8);
+            st = CALL(LF(compute_min_epochs_for_block_requests), config, out);
+        } else if (!strcmp(handler, "max_compressed_len")) {
+            uint64_t v = tv_u64(tv_get(in, "n"));
+            out = buffer(n = 8);
+            st = CALL(LF(max_compressed_len), &v, out);
+        } else if (!strcmp(handler, "max_message_size")) {
+            out = buffer(n = 8);
+            st = CALL(LF(max_message_size), config, out);
+        } else if (!strcmp(handler, "compute_subscribed_subnet")) {
+            uint64_t index = tv_u64(tv_get(in, "index"));
+            out = buffer(n = 8);
+            st = CALL(LF(compute_subscribed_subnet), node_id, &epoch, &index, config, fresh_scratch(), out);
+        } else if (!strcmp(handler, "compute_message_id")) {
+            uint64_t ts, ds;
+            uint8_t *topic = byte_list(tv_get(in, "topic"), &ts), *data = byte_list(tv_get(in, "data"), &ds);
+            out = buffer(n = 20);
+            st = CALL(LF(compute_message_id), topic, data, config, fresh_scratch(), out);
+            if (!guard_ok(topic, ts) || !guard_ok(data, ds)) why = "wrote past an input";
+            free(topic);
+            free(data);
+        } else if (!strcmp(handler, "gossip_topic_parse")) {
+            uint8_t *string = byte_list(tv_get(in, "string"), &size);
+            error = INVALID_TOPIC;
+            out = buffer(n = 24);
+            st = CALL(lantern_gossip_topic_parse, string, out);
+            if (null && out[0] != FILL) why = "wrote out for a bad string";
+            if (!null && !st) {
+                uint8_t topic[24] = {0};
+                tv d = tv_get(want, "fork_digest");
+                memcpy(topic, tv_bytes(d, &blen), 4);
+                wr64(topic + 8, tv_u64(tv_get(want, "name")));
+                wr64(topic + 16, tv_u64(tv_get(want, "subnet_id")));
+                if (memcmp(out, topic, 24)) why = "topic differs";
+            }
+            free(string);
+        }
+        /* Variable size outputs. */
+        if (!strcmp(handler, "compute_subscribed_subnets")) {
+            uint64_t count = rd64(config + CONFIG_SUBNETS_PER_NODE);
+            size = 24 + 8 * count;
+            out = buffer(size);
+            wr64(out, size);
+            st = CALL(LF(compute_subscribed_subnets), node_id, &epoch, config, fresh_scratch(), out);
+            if (!st && !list_equals(out, want)) why = "subnets differ";
+            if (!st && count) { /* one entry less room: BUFFER_TOO_SMALL */
+                uint8_t *small = buffer(size - 8);
+                wr64(small, size - 8);
+                if (CALL(LF(compute_subscribed_subnets), node_id, &epoch, config, fresh_scratch(), small) != 1) why = "short out accepted";
+                free(small);
+            }
+            n = size;
+        } else if (!strcmp(handler, "gossip_topic")) {
+            uint8_t topic[24] = {0};
+            tv d = tv_get(in, "fork_digest");
+            memcpy(topic, tv_bytes(d, &blen), 4);
+            wr64(topic + 8, tv_u64(tv_get(in, "name")));
+            wr64(topic + 16, tv_u64(tv_get(in, "subnet_id")));
+            uint64_t sl = 0;
+            const uint8_t *string = null ? NULL : tv_bytes(want, &sl);
+            error = INVALID_TOPIC;
+            size = 24 + (null ? 64 : sl);
+            out = buffer(size);
+            wr64(out, size);
+            st = CALL(lantern_gossip_topic, topic, out);
+            if (!st && (rd64(out + 8) != 24 || rd64(out + 16) != sl || memcmp(out + 24, string, (size_t)sl))) why = "string differs";
+            if (!st && sl) { /* one byte less room: BUFFER_TOO_SMALL */
+                uint8_t *small = buffer(size - 1);
+                wr64(small, size - 1);
+                if (CALL(lantern_gossip_topic, topic, small) != 1) why = "short out accepted";
+                free(small);
+            }
+            n = size;
+        }
+        if (!out) why = "no such handler";
+        else if (null) {
+            if (st != error) why = "status";
+        } else if (st) why = "status";
+        else if (!why && *want == T_BYTES && strcmp(handler, "gossip_topic")) {
+            const uint8_t *b = tv_bytes(want, &blen);
+            if (blen != n || memcmp(out, b, (size_t)n)) why = "output differs";
+        } else if (!why && *want == T_INT) {
+            if (rd64(out) != tv_u64(want)) why = "output differs";
+        }
+        if (out && !why && !guard_ok(out, n)) why = "wrote past out";
+        free(out);
+        report(file, name, len, why == NULL, why);
+    }
+    memcpy(config, base_config, CONFIG_SIZE);
+}
+
 /* ---------------------------------------------------------------- Main */
 
 int main(int argc, char **argv) {
@@ -2780,6 +2961,7 @@ int main(int argc, char **argv) {
         else if (!strncmp(kind, "fork_choice_compliance-", 23)) run_fork_choice(file, argv[1], &f, 1);
         else if (!bls_off && !strcmp(kind, "sync-optimistic")) run_fork_choice(file, argv[1], &f, 0);
         else if (!bls_off && !strncmp(kind, "networking-gossip_", 18)) run_gossip(file, argv[1], kind + 18, &f);
+        else if (!bls_off && !strncmp(kind, "p2p-", 4)) run_p2p(file, kind + 4, &f);
 #if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
                               !strcmp(kind, "networking-compute_columns_for_custody_group")))

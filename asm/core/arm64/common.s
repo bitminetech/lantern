@@ -10,6 +10,7 @@
 .include "preset.inc"
 .include "lantern.inc"
 .include "platform.inc"
+.include "gossip_topics.inc"
 .include "macros.s"
 
 /* ---------------------------------------------------------------- Functions */
@@ -18,3 +19,4 @@
 .include "seen_find.s"
 .include "store.s"
 .include "seen.s"
+.include "topics.s"

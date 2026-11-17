@@ -74,6 +74,7 @@ SSZ_DEPTH LOG2_SLOTS_PER_EPOCH, SLOTS_PER_EPOCH
 .include "forkchoice.s"
 .include "seen_find.s"
 .include "networking.s"
+.include "p2p.s"
 
 /* ---------------------------------------------------------------- Read only data */
 

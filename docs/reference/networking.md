@@ -12,6 +12,21 @@
 - [`lantern_verify_partial_data_column_sidecar_kzg_proofs`](#function-lantern_verify_partial_data_column_sidecar_kzg_proofs): checks the cells of a partial column.
 - [`lantern_compute_subnet_for_blob_sidecar`](#function-lantern_compute_subnet_for_blob_sidecar): the subnet of a blob sidecar.
 - [`lantern_verify_blob_sidecar_inclusion_proof`](#function-lantern_verify_blob_sidecar_inclusion_proof): checks that a blob sidecar's commitment is in its block.
+- [`lantern_compute_fork_version`](#function-lantern_compute_fork_version): the fork version at an epoch.
+- [`lantern_compute_fork_digest`](#function-lantern_compute_fork_digest): the fork digest at an epoch.
+- [`lantern_compute_attestation_subnet_prefix_bits`](#function-lantern_compute_attestation_subnet_prefix_bits): the node ID bits that pick a subnet.
+- [`lantern_compute_min_epochs_for_block_requests`](#function-lantern_compute_min_epochs_for_block_requests): the epochs of blocks a node serves.
+- [`lantern_max_compressed_len`](#function-lantern_max_compressed_len): the longest Snappy output of n bytes.
+- [`lantern_max_message_size`](#function-lantern_max_message_size): the largest gossip RPC message.
+- [`lantern_compute_subscribed_subnet`](#function-lantern_compute_subscribed_subnet): one attestation subnet of a node.
+- [`lantern_compute_subscribed_subnets`](#function-lantern_compute_subscribed_subnets): the attestation subnets of a node.
+- [`lantern_compute_max_request_blob_sidecars`](#function-lantern_compute_max_request_blob_sidecars): the most blob sidecars of one request.
+- [`lantern_compute_max_request_data_column_sidecars`](#function-lantern_compute_max_request_data_column_sidecars): the most column sidecars of one request.
+- [`lantern_compute_enr_fork_id`](#function-lantern_compute_enr_fork_id): the value of the ENR `eth2` key.
+- [`lantern_compute_next_fork_digest`](#function-lantern_compute_next_fork_digest): the value of the ENR `nfd` key.
+- [`lantern_gossip_topic`](#function-lantern_gossip_topic): the topic string of a gossip topic.
+- [`lantern_gossip_topic_parse`](#function-lantern_gossip_topic_parse): the gossip topic of a topic string.
+- [`lantern_compute_message_id`](#function-lantern_compute_message_id): the message-id of a gossip message.
 - [`lantern_seen_size`](#function-lantern_seen_size): the buffer size of a `Seen` with given capacities.
 - [`lantern_seen_init`](#function-lantern_seen_init): an empty `Seen`.
 - [`lantern_seen_copy`](#function-lantern_seen_copy): copies a `Seen` into a buffer with more capacity.
@@ -32,6 +47,7 @@
 ### Types
 
 - [`NodeID`](#type-nodeid): the discv5 node ID as a number.
+- [`GossipTopic`](#type-gossiptopic): a gossip topic: its fork digest, name and subnet.
 - [`Seen`](#type-seen): the spec's `Seen`, and the blocks known without a post-state.
 - [`SeenRoom`](#type-seenroom): the capacities of a `Seen`.
 - [`SeenKey`](#type-seenkey), [`SeenBits`](#type-seenbits), [`SeenBlock`](#type-seenblock), [`SeenHeader`](#type-seenheader): its entries.
@@ -39,7 +55,7 @@
 ## Spec
 
 - Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), each function at its latest definition from phase0 to fulu.
-- Section: `fulu/das-core.md`, Custody; `p2p-interface.md` of phase0, altair, bellatrix, capella, deneb, electra and fulu, and `fulu/partial-columns/p2p-interface.md`, The gossip domain; the helpers they call from `validator.md` of phase0, altair, deneb and electra.
+- Section: `fulu/das-core.md`, Custody; `p2p-interface.md` of phase0, altair, bellatrix, capella, deneb, electra and fulu, and `fulu/partial-columns/p2p-interface.md`: Helpers, Maximum message sizes, The gossip domain, ENR structure, Attestation subnet subscription; `fulu/beacon-chain.md`, compute_fork_digest; the helpers they call from `validator.md` of phase0, altair, deneb and electra.
 
 ## Common rules
 
@@ -59,6 +75,10 @@
   - Handlers `gossip_<topic>`: the runner follows `tests/formats/networking/gossip_validation.md` of the spec. It builds the store with lantern_get_forkchoice_store and lantern_on_block, records a `failed` or `pending` block with lantern_seen_add_block, sets a block's `payload_status` with lantern_store_payload_status, writes `finalized_checkpoint` into the store and, for fulu, `seen_partial_data_column_headers` into `seen`, then validates each message in order and compares `valid`, `ignore` or `reject`.
   - Bellatrix: the runner passes as `justified_state` the state it keeps for the root of the store's `justified_checkpoint`.
   - The runner applies the `config` part of a gossip case over the preset's config.
+- Lantern's cases of the p2p helpers, `<preset>-<fork>-p2p-<function>.bin` of phase0 to fulu, made by tests/generator/p2p.py: no official cases test these functions.
+  - The expected results of the spec functions come from the spec modules of consensus-specs v1.7.0-beta.4 (aa16bb4), which the generator builds: each case runs the function with the case's `config` part over the preset's config. A null `output` is where the spec raises; the runner then expects the error the function documents.
+  - lantern_compute_enr_fork_id and lantern_compute_next_fork_digest follow the text of the `eth2` field and Next fork digest sections, with compute_fork_digest and compute_fork_version of the spec module. lantern_gossip_topic, lantern_gossip_topic_parse and lantern_compute_message_id follow the text of Topics and messages of phase0 and of the message-id of phase0 and altair, with python-snappy 0.7.3.
+  - The runner also checks each output buffer one entry or byte short, and the guard bytes after every output.
 - consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/merkle_proof/single_merkle_proof/BeaconBlockBody/` of deneb to fulu.
   - Deneb and electra: the runner builds a `BlobSidecar` of the commitment that the case's `leaf_index` names, the case's `branch` and a block header with the body's root, and checks that lantern_verify_blob_sidecar_inclusion_proof accepts it, and rejects it with one branch byte changed.
   - Fulu: the runner builds a `PartialDataColumnHeader` of the body's `blob_kzg_commitments`, the case's `branch` and a block header with the body's root, and checks that lantern_verify_partial_data_column_header_inclusion_proof accepts it, and rejects it with one branch byte changed.
@@ -308,6 +328,404 @@ lantern_verify_blob_sidecar_inclusion_proof(sidecar, out) -> status
 - Argument order: `sidecar`, `out`.
 - Forks: deneb and electra.
 
+## Function `lantern_compute_fork_version`
+
+The version of the last fork, up to the object's fork, whose epoch is at most epoch.
+
+### Signature
+
+```
+lantern_compute_fork_version(epoch, config, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `epoch` | input | u64 |
+| `config` | input | `Config` |
+| `out` | output | Version, 4 bytes |
+
+### Returns
+
+- `LANTERN_OK`, always.
+
+### Function does
+
+- Phase0 gives `GENESIS_FORK_VERSION` for every epoch. Each later fork adds its own fork's epoch and version, as its p2p-interface.md does.
+
+### ABI
+
+- Argument order: `epoch`, `config`, `out`.
+
+## Function `lantern_compute_fork_digest`
+
+The first 4 bytes of compute_fork_data_root(compute_fork_version(epoch), genesis_validators_root).
+
+### Signature
+
+```
+lantern_compute_fork_digest(genesis_validators_root, epoch, config, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `genesis_validators_root` | input | Root |
+| `epoch` | input | u64 |
+| `config` | input | `Config` |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | ForkDigest, 4 bytes |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the digest.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than `LANTERN_SCRATCH_FIXED` bytes.
+
+### Function does
+
+- Fulu: at an epoch from `FULU_FORK_EPOCH` on, xors the 4 bytes with the first 4 bytes of sha256(uint_to_bytes(epoch) + uint_to_bytes(max_blobs_per_block)) of get_blob_parameters(epoch).
+
+### ABI
+
+- Argument order: `genesis_validators_root`, `epoch`, `config`, `scratch`, `out`.
+
+## Function `lantern_compute_attestation_subnet_prefix_bits`
+
+ceillog2(`ATTESTATION_SUBNET_COUNT`) + `ATTESTATION_SUBNET_EXTRA_BITS`.
+
+### Signature
+
+```
+lantern_compute_attestation_subnet_prefix_bits(config, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the number of bits.
+- `LANTERN_INVALID_OVERFLOW`: the sum does not fit in a u64.
+
+### ABI
+
+- Argument order: `config`, `out`.
+
+## Function `lantern_compute_min_epochs_for_block_requests`
+
+`MIN_VALIDATOR_WITHDRAWABILITY_DELAY` + `CHURN_LIMIT_QUOTIENT` // 2.
+
+### Signature
+
+```
+lantern_compute_min_epochs_for_block_requests(config, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the epochs.
+- `LANTERN_INVALID_OVERFLOW`: the sum does not fit in a u64.
+
+### ABI
+
+- Argument order: `config`, `out`.
+
+## Function `lantern_max_compressed_len`
+
+32 + n + n // 6: the longest Snappy output for n bytes of input.
+
+### Signature
+
+```
+lantern_max_compressed_len(n, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the length.
+- `LANTERN_INVALID_OVERFLOW`: the length does not fit in a u64.
+
+### ABI
+
+- Argument order: `n`, `out`.
+
+## Function `lantern_max_message_size`
+
+max(max_compressed_len(`MAX_PAYLOAD_SIZE`) + 1024, 1048576).
+
+### Signature
+
+```
+lantern_max_message_size(config, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the size.
+- `LANTERN_INVALID_OVERFLOW`: a sum does not fit in a u64.
+
+### ABI
+
+- Argument order: `config`, `out`.
+
+## Function `lantern_compute_subscribed_subnet`
+
+The attestation subnet index of node_id at epoch: its prefix, shuffled by the subscription period of epoch, plus index, modulo `ATTESTATION_SUBNET_COUNT`.
+
+### Signature
+
+```
+lantern_compute_subscribed_subnet(node_id, epoch, index, config, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `node_id` | input | `NodeID` |
+| `epoch` | input | u64 |
+| `index` | input | u64 |
+| `config` | input | `Config` |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | u64 |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the subnet.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` is below what lantern_compute_shuffled_index needs for 2^prefix_bits indices.
+- `LANTERN_INVALID_OVERFLOW`: where the spec raises: `EPOCHS_PER_SUBNET_SUBSCRIPTION` is 0, epoch + the node offset or the shuffled prefix + index does not fit in a u64, or prefix_bits is 64 or more, so 1 << prefix_bits is not a Uint64.
+
+### Function does
+
+- prefix_bits is lantern_compute_attestation_subnet_prefix_bits; the node offset is node_id % `EPOCHS_PER_SUBNET_SUBSCRIPTION`, over all 256 bits.
+- The permutation seed is sha256(uint_to_bytes((epoch + node offset) // `EPOCHS_PER_SUBNET_SUBSCRIPTION`)).
+
+### ABI
+
+- Argument order: `node_id`, `epoch`, `index`, `config`, `scratch`, `out`.
+
+## Function `lantern_compute_subscribed_subnets`
+
+lantern_compute_subscribed_subnet(node_id, epoch, index) for index from 0 below `SUBNETS_PER_NODE`.
+
+### Signature
+
+```
+lantern_compute_subscribed_subnets(node_id, epoch, config, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `node_id` | input | `NodeID` |
+| `epoch` | input | u64 |
+| `config` | input | `Config` |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | `IndexList` |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the subnets, in index order.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer than `SUBNETS_PER_NODE` entries, or `scratch` is short.
+- `LANTERN_INVALID_OVERFLOW`: as lantern_compute_subscribed_subnet.
+
+### ABI
+
+- Argument order: `node_id`, `epoch`, `config`, `scratch`, `out`.
+
+## Function `lantern_compute_max_request_blob_sidecars`
+
+`MAX_REQUEST_BLOCKS_DENEB` * `MAX_BLOBS_PER_BLOCK` (deneb), or * `MAX_BLOBS_PER_BLOCK_ELECTRA` (electra).
+
+### Signature
+
+```
+lantern_compute_max_request_blob_sidecars(config, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the number.
+- `LANTERN_INVALID_OVERFLOW`: the product does not fit in a u64.
+
+### ABI
+
+- Argument order: `config`, `out`.
+- Forks: deneb and electra.
+
+## Function `lantern_compute_max_request_data_column_sidecars`
+
+`MAX_REQUEST_BLOCKS_DENEB` * `NUMBER_OF_COLUMNS`.
+
+### Signature
+
+```
+lantern_compute_max_request_data_column_sidecars(config, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the number.
+- `LANTERN_INVALID_OVERFLOW`: the product does not fit in a u64.
+
+### ABI
+
+- Argument order: `config`, `out`.
+- Forks: fulu.
+
+## Function `lantern_compute_enr_fork_id`
+
+The SSZ bytes of the `ENRForkID` of the ENR `eth2` key: fork_digest, next_fork_version and next_fork_epoch at current_epoch.
+
+### Signature
+
+```
+lantern_compute_enr_fork_id(genesis_validators_root, current_epoch, config, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `genesis_validators_root` | input | Root |
+| `current_epoch` | input | u64: the epoch of the wall clock |
+| `config` | input | `Config` |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | 16 bytes: the SSZ of `ENRForkID` |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the value.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than `LANTERN_SCRATCH_FIXED` bytes.
+
+### Function does
+
+- fork_digest is lantern_compute_fork_digest(genesis_validators_root, current_epoch).
+- next_fork_epoch is the least epoch after current_epoch of the forks from altair up to the object's fork, a fork epoch of `FAR_FUTURE_EPOCH` left out; fulu adds each `BLOB_SCHEDULE` epoch from `FULU_FORK_EPOCH` on, the BPO forks. With none, it is `FAR_FUTURE_EPOCH`.
+- next_fork_version is lantern_compute_fork_version(next_fork_epoch), or lantern_compute_fork_version(current_epoch) when next_fork_epoch is `FAR_FUTURE_EPOCH`.
+
+### ABI
+
+- Argument order: `genesis_validators_root`, `current_epoch`, `config`, `scratch`, `out`.
+
+## Function `lantern_compute_next_fork_digest`
+
+The value of the ENR `nfd` key: lantern_compute_fork_digest at the next_fork_epoch of lantern_compute_enr_fork_id, or 4 zero bytes when that is `FAR_FUTURE_EPOCH`.
+
+### Signature
+
+```
+lantern_compute_next_fork_digest(genesis_validators_root, current_epoch, config, scratch, out) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the 4 bytes.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than `LANTERN_SCRATCH_FIXED` bytes.
+
+### ABI
+
+- Argument order: `genesis_validators_root`, `current_epoch`, `config`, `scratch`, `out`.
+- Forks: fulu.
+
+## Function `lantern_gossip_topic`
+
+The topic string `/eth2/` + the lowercase hex of fork_digest + `/` + the name + `/ssz_snappy`, the name with `_` and subnet_id in decimal for a subnet topic.
+
+### Signature
+
+```
+lantern_gossip_topic(topic, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `topic` | input | `GossipTopic` |
+| `out` | output | `ByteList`, its `size` set by the caller |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the string.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` has room for fewer bytes than the string.
+- `LANTERN_INVALID_TOPIC`: `topic.name` is not a `GOSSIP_*` name.
+
+### Function does
+
+- Ignores `subnet_id` for a topic with no subnet.
+
+### ABI
+
+- Argument order: `topic`, `out`.
+- Forks: none; in the common object, its symbol is its name.
+
+## Function `lantern_gossip_topic_parse`
+
+The `GossipTopic` of a topic string that lantern_gossip_topic gives.
+
+### Signature
+
+```
+lantern_gossip_topic_parse(string, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `string` | input | `ByteList` |
+| `out` | output | `GossipTopic` |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the topic.
+- `LANTERN_INVALID_TOPIC`: the string is not `/eth2/`, 8 lowercase hex digits, `/`, a name of a `GOSSIP_*` topic, `/ssz_snappy`; or a subnet number has a leading zero, is empty or does not fit in a u64. Nothing is written.
+
+### Function does
+
+- Gives exactly the strings lantern_gossip_topic writes, so that topic and string map one to one.
+
+### ABI
+
+- Argument order: `string`, `out`.
+- Forks: none; in the common object, its symbol is its name.
+
+## Function `lantern_compute_message_id`
+
+The 20 byte message-id of a gossip message.
+
+### Signature
+
+```
+lantern_compute_message_id(topic, data, config, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `topic` | input | `ByteList`: the message's topic string |
+| `data` | input | `ByteList`: the message's data |
+| `config` | input | `Config` |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | 20 bytes |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the message-id.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than 64 + the topic's bytes + n bytes, n the larger of the data's bytes and the length in its Snappy header when that length is at most `MAX_PAYLOAD_SIZE`.
+
+### Function does
+
+- When data has a valid Snappy block decompression: the first 20 bytes of sha256(`MESSAGE_DOMAIN_VALID_SNAPPY` + the decompressed bytes). Otherwise: of sha256(`MESSAGE_DOMAIN_INVALID_SNAPPY` + data).
+- Altair and later put uint_to_bytes(len(topic)) + topic after the domain, as altair p2p-interface.md says.
+- A valid decompression is one that `snappy_uncompress` of asm-snappy accepts with a length of at most `MAX_PAYLOAD_SIZE`. The spec states no bound; a message above it fails the gossip size limits.
+
+### ABI
+
+- Argument order: `topic`, `data`, `config`, `scratch`, `out`.
+
 ## Function `lantern_seen_size`
 
 The bytes of a `Seen` with the capacities of room.
@@ -476,6 +894,30 @@ A Uint256: 32 bytes, little endian.
 ### Rules
 
 - Starts at a multiple of 8.
+
+## Type `GossipTopic`
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `fork_digest` | ForkDigest, in a u64 | The 4 bytes, then 4 zero bytes |
+| 8 | `name` | u64 | `GOSSIP_*` of include/lantern.inc |
+| 16 | `subnet_id` | u64 | The subnet of a subnet topic, else 0 |
+
+| Name | Topic | Subnet |
+|---|---|---|
+| `GOSSIP_BEACON_BLOCK` (1) | `beacon_block` | no |
+| `GOSSIP_BEACON_AGGREGATE_AND_PROOF` (2) | `beacon_aggregate_and_proof` | no |
+| `GOSSIP_BEACON_ATTESTATION` (3) | `beacon_attestation_{subnet_id}` | yes |
+| `GOSSIP_VOLUNTARY_EXIT` (4) | `voluntary_exit` | no |
+| `GOSSIP_PROPOSER_SLASHING` (5) | `proposer_slashing` | no |
+| `GOSSIP_ATTESTER_SLASHING` (6) | `attester_slashing` | no |
+| `GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF` (7) | `sync_committee_contribution_and_proof` | no |
+| `GOSSIP_SYNC_COMMITTEE` (8) | `sync_committee_{subnet_id}` | yes |
+| `GOSSIP_BLS_TO_EXECUTION_CHANGE` (9) | `bls_to_execution_change` | no |
+| `GOSSIP_BLOB_SIDECAR` (10) | `blob_sidecar_{subnet_id}` | yes |
+| `GOSSIP_DATA_COLUMN_SIDECAR` (11) | `data_column_sidecar_{subnet_id}` | yes |
+
+- `GossipTopic__mem` (24) bytes.
 
 ## Type `Seen`
 

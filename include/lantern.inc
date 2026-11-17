@@ -145,7 +145,10 @@
 .set CONFIG_ATTESTATION_PROPAGATION_SLOT_RANGE, 392 + 16 * 32 + 104
 .set CONFIG_BLOB_SIDECAR_SUBNET_COUNT, 392 + 16 * 32 + 112
 .set CONFIG_BLOB_SIDECAR_SUBNET_COUNT_ELECTRA, 392 + 16 * 32 + 120
-.set CONFIG_SIZE, 392 + 16 * 32 + 128
+.set CONFIG_MAX_REQUEST_BLOCKS, 392 + 16 * 32 + 128
+.set CONFIG_MESSAGE_DOMAIN_INVALID_SNAPPY, 392 + 16 * 32 + 136   /* DomainType, 4 bytes */
+.set CONFIG_MESSAGE_DOMAIN_VALID_SNAPPY, 392 + 16 * 32 + 144     /* DomainType, 4 bytes */
+.set CONFIG_SIZE, 392 + 16 * 32 + 152
 
 /* ------------------------------------------------------------ Results of spec checks */
 
@@ -207,6 +210,7 @@
 .set LANTERN_GOSSIP_REJECT, 45                  /* a gossip validation function: a [REJECT] check fails (GossipReject) */
 .set LANTERN_INVALID_DEPOSIT, 46                /* process_deposit: the deposit's Merkle proof */
 .set LANTERN_INVALID_MERGE_BLOCK, 47            /* validate_merge_block: the terminal PoW block conditions */
+.set LANTERN_INVALID_TOPIC, 48                  /* lantern_gossip_topic, lantern_gossip_topic_parse: not a gossip topic */
 
 /* ------------------------------------------------------------ Scratch (docs/reference/helpers.md, Type Scratch) */
 
@@ -326,6 +330,24 @@
 .set SeenHeader_block_root, 0
 .set SeenHeader_header_root, 32
 .set SeenHeader_header, 64
+
+/* GossipTopic: a gossip topic (networking.md) */
+.set GossipTopic_fork_digest, 0        /* ForkDigest in the low 4 bytes */
+.set GossipTopic_name, 8               /* GOSSIP_* */
+.set GossipTopic_subnet_id, 16
+.set GossipTopic__mem, 24
+.set GOSSIP_BEACON_BLOCK, 1
+.set GOSSIP_BEACON_AGGREGATE_AND_PROOF, 2
+.set GOSSIP_BEACON_ATTESTATION, 3      /* beacon_attestation_{subnet_id} */
+.set GOSSIP_VOLUNTARY_EXIT, 4
+.set GOSSIP_PROPOSER_SLASHING, 5
+.set GOSSIP_ATTESTER_SLASHING, 6
+.set GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF, 7
+.set GOSSIP_SYNC_COMMITTEE, 8          /* sync_committee_{subnet_id} */
+.set GOSSIP_BLS_TO_EXECUTION_CHANGE, 9
+.set GOSSIP_BLOB_SIDECAR, 10           /* blob_sidecar_{subnet_id} */
+.set GOSSIP_DATA_COLUMN_SIDECAR, 11    /* data_column_sidecar_{subnet_id} */
+.set GOSSIP_NAMES, 11
 
 /*
  * Scratch of lantern_verify_data_column_sidecar_kzg_proofs for a sidecar of n

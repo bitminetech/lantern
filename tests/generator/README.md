@@ -19,6 +19,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `run.sh` | Runs the generator in Docker |
 | `generate.py` | Fetches the archives, checks their pins, writes the case files |
 | `requirements.txt` | Python packages, pinned |
+| `p2p.py` | The cases of the p2p helpers, from the pinned spec modules |
 
 ## Sources
 
@@ -26,7 +27,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 |---|---|
 | `mainnet.tar.gz`, `minimal.tar.gz` of consensus-specs v1.7.0-beta.4 | The cases of phase0 to fulu of every runner in scope |
 | `comptests.tar.gz` of the same release | The fork choice compliance cases of altair to fulu, minimal only |
-| The consensus-specs clone at aa16bb4 | The type descriptors, the configs and the KZG trusted setup |
+| The consensus-specs clone at aa16bb4 | The type descriptors, the configs, the KZG trusted setup, and the expected results of the p2p helper cases |
 
 - Each archive's SHA-256 is pinned in `generate.py`.
 
@@ -35,6 +36,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | File | Cases |
 |---|---|
 | `<preset>-<fork>-<runner>-<handler>.bin` | The spec's cases of one handler of one fork: each case's files as parts |
+| `<preset>-<fork>-p2p-<function>.bin` | Lantern's cases of one p2p helper of networking.md: `config` (the values that replace the preset's), `input`, and `output`, null where the spec raises |
 | `<preset>-<fork>-descriptors.bin` | Each SSZ container type of the fork with its reference `TypeDescriptor` |
 | `<preset>-config.bin` | One case: `configs/<preset>.yaml` |
 | `<preset>-kzg_setup.bin` | One case: the three point lists of `trusted_setup_4096.json` as bytes |

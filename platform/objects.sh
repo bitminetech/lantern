@@ -33,6 +33,9 @@ build_objects() {
     as -I"$dep/asm-ssz/include" -I"$dep/asm-ssz/platform/$os" \
         -c "$dep/asm-ssz/asm/core/$isa/ssz.s" -o "$out/deps/ssz.o"
     deps="$deps $out/deps/ssz.o"
+    as -I"$dep/asm-snappy/include" -I"$dep/asm-snappy/platform/$os" \
+        -c "$dep/asm-snappy/asm/core/$isa/snappy.s" -o "$out/deps/snappy.o"
+    deps="$deps $out/deps/snappy.o"
 
     # The signatures-off test runner (tests/runner/bls_off.c) links a copy of the
     # BLS object whose three signature checks are renamed, so that the stand-ins
@@ -61,8 +64,8 @@ build_objects() {
             objects="$objects $out/$preset/$fork.o"
         done
         # A name the assembler does not know becomes an undefined symbol, not an error:
-        # the core objects may only call asm-ssz and asm-crypto and the common object.
-        unknown=$(llvm-nm -u $out/$preset/*.o | sed 's/^ *U //; s/^_//' | grep -v '^\(crypto_\|ssz_\|lantern_store_\|lantern_seen_\)' | grep -v ':$' | grep . || true)
+        # the core objects may only call asm-ssz, asm-crypto, asm-snappy and the common object.
+        unknown=$(llvm-nm -u $out/$preset/*.o | sed 's/^ *U //; s/^_//' | grep -v '^\(crypto_\|ssz_\|snappy_\|lantern_store_\|lantern_seen_\)' | grep -v ':$' | grep . || true)
         if [ -n "$unknown" ]; then
             echo "objects.sh: undefined symbols in the core of $os $isa $preset: $unknown" >&2
             exit 1
