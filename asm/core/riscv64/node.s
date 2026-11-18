@@ -65,6 +65,28 @@
     sw      a7, 28(\dst)
 .endm
 
+/* Call lantern_<fork>_<name> for the fork in t6, bellatrix to fulu. */
+.macro FORK_CALL_BELLATRIX name
+    li      t5, FORK_CAPELLA
+    bgeu    t6, t5, 91f
+    CALL_GLOBAL lantern_bellatrix_\name
+    j       96f
+91: li      t5, FORK_DENEB
+    bgeu    t6, t5, 92f
+    CALL_GLOBAL lantern_capella_\name
+    j       96f
+92: li      t5, FORK_ELECTRA
+    bgeu    t6, t5, 93f
+    CALL_GLOBAL lantern_deneb_\name
+    j       96f
+93: li      t5, FORK_FULU
+    bgeu    t6, t5, 94f
+    CALL_GLOBAL lantern_electra_\name
+    j       96f
+94: CALL_GLOBAL lantern_fulu_\name
+96:
+.endm
+
 /* a0 = the fork of the slot a0 with the config a1: the last fork whose epoch is at most the slot's. Uses t0-t2. */
 LOCAL_FUNCTION node_fork
     UNWIND_END_PROLOGUE
@@ -134,6 +156,13 @@ FUNCTION lantern_node_size
     add     t0, t3, t1
     bltu    t0, t3, 9f
     mv      t3, t0
+    ld      t0, NodeRoom_engine_bytes(a0)   # a ByteList
+    addi    t1, t0, 24 + 7
+    bltu    t1, t0, 9f
+    andi    t1, t1, -8
+    add     t0, t3, t1
+    bltu    t0, t3, 9f
+    mv      t3, t0
     li      t1, NODE_FIXED
     add     t0, t3, t1
     bltu    t0, t3, 9f
@@ -177,6 +206,18 @@ LOCAL_FUNCTION node_layout
     li      t1, 1
     sd      t1, (Node_p2p_out + 8)(a0)
     ld      t1, NodeRoom_p2p_out(a1)
+    addi    t1, t1, 24 + 7
+    andi    t1, t1, -8
+    add     t2, a0, t0
+    sd      t1, 0(t2)
+    add     t0, t0, t1
+    li      t1, 24
+    sd      t1, 8(t2)
+    sd      zero, 16(t2)
+    sd      t0, Node_engine_in(a0)          # one ByteList, empty
+    li      t1, 1
+    sd      t1, (Node_engine_in + 8)(a0)
+    ld      t1, NodeRoom_engine_bytes(a1)
     addi    t1, t1, 24 + 7
     andi    t1, t1, -8
     add     t2, a0, t0
@@ -228,7 +269,23 @@ FUNCTION lantern_node_init
     mv      a1, s2
     li      a2, CONFIG_SIZE
     call    lantern_copy
-    mv      a0, s6
+    andi    t0, s5, NODE_FLAG_ENGINE        # the secret, the host, the first id, and a forkchoiceUpdated due
+    beqz    t0, 1f
+    ld      a2, NodeAnchor_engine_host_len(s3)
+    li      t0, NODE_ENGINE_HOST_MAX
+    bgtu    a2, t0, 7f
+    sd      a2, Node_engine_host_len(s6)
+    addi    a0, s6, Node_engine_host
+    addi    a1, s3, NodeAnchor_engine_host
+    call    lantern_copy
+    addi    t0, s6, Node_jwt_secret
+    addi    t1, s3, NodeAnchor_jwt_secret
+    COPY32  t0, t1
+    li      t0, 1
+    sd      t0, Node_engine_id(s6)
+    ori     t0, s5, NODE_FLAG_FCU
+    sd      t0, Node_flags(s6)
+1:  mv      a0, s6
     mv      a1, s1
     call    node_layout
     PART    a0, t1, s6, Node_blocks         # the anchor block
@@ -256,6 +313,8 @@ FUNCTION lantern_node_init
     li      a0, LANTERN_OK
 9:  LEAVE 16
 8:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
+7:  li      a0, LANTERN_INVALID_EVENT
     LEAVE 16
 END_FUNCTION lantern_node_init
 
@@ -305,6 +364,11 @@ FUNCTION lantern_node_copy
     add     t1, s1, t1
     ld      t1, 16(t1)
     bltu    t0, t1, 8f
+    ld      t0, NodeRoom_engine_bytes(s2)   # the execution engine's bytes fit
+    ld      t1, Node_engine_in(s1)
+    add     t1, s1, t1
+    ld      t1, 16(t1)
+    bltu    t0, t1, 8f
     ld      s8, Node_stream_bytes(s1)       # a stream's request bytes fit
     ld      t0, NodeRoom_request_bytes(s2)
     addi    t0, t0, NodeStream__fixed + 7
@@ -327,6 +391,15 @@ FUNCTION lantern_node_copy
     add     a1, s1, a1
     ld      a2, 16(a1)
     ld      a0, Node_p2p_out(s3)
+    add     a0, s3, a0
+    sd      a2, 16(a0)
+    addi    a0, a0, 24
+    addi    a1, a1, 24
+    call    lantern_copy
+    ld      a1, Node_engine_in(s1)          # the execution engine's bytes
+    add     a1, s1, a1
+    ld      a2, 16(a1)
+    ld      a0, Node_engine_in(s3)
     add     a0, s3, a0
     sd      a2, 16(a0)
     addi    a0, a0, 24
@@ -537,9 +610,9 @@ LOCAL_FUNCTION node_justified
 END_FUNCTION node_justified
 
 /*
- * The import of the block of index a0 when its parent has a post-state: a copy of it and an
- * IMPORT_BLOCK work; a block whose parent is invalid becomes invalid. s3 index, s4 entry,
- * s8 the parent's state id.
+ * The import of the block of index a0 when its parent has a post-state; a block whose parent is
+ * invalid becomes invalid. With NODE_FLAG_ENGINE a block of bellatrix or later takes
+ * NODE_BLOCK_PAYLOAD instead: its import waits for engine_newPayload. s3 index, s4 entry.
  */
 LOCAL_FUNCTION node_try_import
     ENTER 0
@@ -557,6 +630,48 @@ LOCAL_FUNCTION node_try_import
     beq     t0, t1, 8f
     li      t1, NODE_BLOCK_IMPORTED
     bne     t0, t1, 9f
+    ld      t0, Node_flags(s1)
+    andi    t0, t0, NODE_FLAG_ENGINE
+    beqz    t0, 1f
+    ld      a0, NodeBlock_slot(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_BELLATRIX
+    bltu    a0, t0, 1f
+    li      t0, NODE_BLOCK_PAYLOAD
+    sd      t0, NodeBlock_status(s4)
+    sd      zero, NodeBlock_retry(s4)
+    LEAVE 0
+1:  ld      t0, Node_flags(s1)              # VALID, or NOT_VALIDATED with NODE_FLAG_OPTIMISTIC
+    andi    t0, t0, NODE_FLAG_OPTIMISTIC
+    li      a1, PAYLOAD_STATUS_VALID
+    beqz    t0, 2f
+    li      a1, PAYLOAD_STATUS_NOT_VALIDATED
+2:  mv      a0, s3
+    call    node_import_now
+    LEAVE 0
+8:  li      t0, NODE_BLOCK_INVALID
+    sd      t0, NodeBlock_status(s4)
+9:  LEAVE 0
+END_FUNCTION node_try_import
+
+/*
+ * The import of the block of index a0, whose parent is imported, with the payload status a1: a
+ * copy of the parent's post-state and an IMPORT_BLOCK work. s3 index, s4 entry, s8 the parent's
+ * state id.
+ */
+LOCAL_FUNCTION node_import_now
+    ENTER 0
+    mv      s3, a0
+    PART    s4, t0, s1, Node_blocks
+    li      t0, NodeBlock__mem
+    mul     t0, s3, t0
+    add     s4, s4, t0
+    sd      a1, NodeBlock_payload_status(s4)
+    addi    a0, s4, NodeBlock_parent_root
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 9f
     ld      s8, NodeBlock_state_id(a1)
     call    node_new_id
     sd      a0, NodeBlock_state_id(s4)
@@ -573,11 +688,360 @@ LOCAL_FUNCTION node_try_import
     mv      a4, s3
     li      a5, 0
     call    node_work
-    LEAVE 0
-8:  li      t0, NODE_BLOCK_INVALID
-    sd      t0, NodeBlock_status(s4)
 9:  LEAVE 0
-END_FUNCTION node_try_import
+END_FUNCTION node_import_now
+
+/* a0 = the index of the store's node whose root is at a0 (8-aligned), or 2^64 - 1; a1 = its entry. Uses t0-t2, a6, a7. */
+LOCAL_FUNCTION node_store_find
+    UNWIND_END_PROLOGUE
+    PART    t0, t1, s2, Store_blocks
+    li      t2, 0
+1:  bgeu    t2, t1, 3f
+    NE32    t0, a0, 2f
+    mv      a0, t2
+    mv      a1, t0
+    ret
+2:  addi    t0, t0, BlockNode__mem
+    addi    t2, t2, 1
+    j       1b
+3:  li      a0, -1
+    ret
+END_FUNCTION node_store_find
+
+/*
+ * With NODE_FLAG_ENGINE, the next engine call when none is in flight and the store's slot is at
+ * least engine_wait: a NEW_PAYLOAD work for the first block in NODE_BLOCK_PAYLOAD whose retry is
+ * at most the slot, else with NODE_FLAG_FCU from bellatrix on a FORKCHOICE work. s3 an entry,
+ * s4 the count, s7 the slot, s8 the index.
+ */
+LOCAL_FUNCTION node_engine_next
+    ENTER 0
+    ld      t0, Node_flags(s1)
+    andi    t0, t0, NODE_FLAG_ENGINE
+    beqz    t0, 9f
+    ld      t0, Node_engine_method(s1)
+    bnez    t0, 9f
+    mv      a0, s2
+    call    node_store_slot
+    mv      s7, a0
+    ld      t0, Node_engine_wait(s1)
+    bltu    s7, t0, 9f
+    PART    s3, s4, s1, Node_blocks
+    li      s8, 0
+1:  bgeu    s8, s4, 3f
+    ld      t0, NodeBlock_status(s3)
+    li      t1, NODE_BLOCK_PAYLOAD
+    bne     t0, t1, 2f
+    ld      t0, NodeBlock_retry(s3)
+    bgtu    t0, s7, 2f
+    li      t0, NODE_BLOCK_EXECUTING
+    sd      t0, NodeBlock_status(s3)
+    li      t0, ENGINE_METHOD_NEW_PAYLOAD
+    sd      t0, Node_engine_method(s1)
+    sd      s8, Node_engine_target(s1)
+    ld      a5, Node_engine_id(s1)
+    addi    t0, a5, 1
+    sd      t0, Node_engine_id(s1)
+    li      a0, NODE_WORK_NEW_PAYLOAD
+    li      a1, 0
+    li      a2, 0
+    ld      a3, NodeBlock_data_id(s3)
+    mv      a4, s8
+    call    node_work
+    LEAVE 0
+2:  addi    s3, s3, NodeBlock__mem
+    addi    s8, s8, 1
+    j       1b
+3:  ld      t0, Node_flags(s1)
+    andi    t0, t0, NODE_FLAG_FCU
+    beqz    t0, 9f
+    mv      a0, s7
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_BELLATRIX
+    bltu    a0, t0, 9f
+    ld      t0, Node_flags(s1)
+    andi    t0, t0, ~NODE_FLAG_FCU
+    sd      t0, Node_flags(s1)
+    li      t0, ENGINE_METHOD_FORKCHOICE_UPDATED
+    sd      t0, Node_engine_method(s1)
+    ld      a5, Node_engine_id(s1)
+    addi    t0, a5, 1
+    sd      t0, Node_engine_id(s1)
+    li      a0, NODE_WORK_FORKCHOICE
+    li      a1, 0
+    li      a2, 0
+    li      a3, 0
+    li      a4, 0
+    call    node_work
+9:  LEAVE 0
+END_FUNCTION node_engine_next
+
+/*
+ * The engine call in flight failed: an engine_newPayload's block takes NODE_BLOCK_PAYLOAD with
+ * retry the store's slot + 1, an engine_forkchoiceUpdated sets NODE_FLAG_FCU again; engine_wait
+ * becomes the slot + 1 and the call ends.
+ */
+LOCAL_FUNCTION node_engine_failed
+    ENTER 0
+    mv      a0, s2
+    call    node_store_slot
+    addi    a0, a0, 1
+    sd      a0, Node_engine_wait(s1)
+    ld      t0, Node_engine_method(s1)
+    sd      zero, Node_engine_method(s1)
+    li      t1, ENGINE_METHOD_FORKCHOICE_UPDATED
+    bne     t0, t1, 1f
+    ld      t0, Node_flags(s1)
+    ori     t0, t0, NODE_FLAG_FCU
+    sd      t0, Node_flags(s1)
+    LEAVE 0
+1:  li      t1, ENGINE_METHOD_NEW_PAYLOAD
+    bne     t0, t1, 9f
+    ld      a0, Node_engine_target(s1)
+    call    node_payload_retry
+9:  LEAVE 0
+END_FUNCTION node_engine_failed
+
+/* The block of index a0, if NODE_BLOCK_EXECUTING, takes NODE_BLOCK_PAYLOAD with retry the store's slot + 1. s3 the entry. */
+LOCAL_FUNCTION node_payload_retry
+    ENTER 0
+    PART    s3, t0, s1, Node_blocks
+    bgeu    a0, t0, 9f
+    li      t0, NodeBlock__mem
+    mul     t0, a0, t0
+    add     s3, s3, t0
+    ld      t0, NodeBlock_status(s3)
+    li      t1, NODE_BLOCK_EXECUTING
+    bne     t0, t1, 9f
+    li      t0, NODE_BLOCK_PAYLOAD
+    sd      t0, NodeBlock_status(s3)
+    mv      a0, s2
+    call    node_store_slot
+    addi    a0, a0, 1
+    sd      a0, NodeBlock_retry(s3)
+9:  LEAVE 0
+END_FUNCTION node_payload_retry
+
+/*
+ * latestValidHash (optimistic-sync.md) from the store's node a0: up its chain by parent, each node
+ * whose block_hash is not the hash at a1 gets store_payload_status INVALIDATED, until the node
+ * with that hash; a zero hash stops at the first zero block_hash. With a1 0 (null), or a hash the
+ * chain does not have, only the node a2 (2^64 - 1 for none) gets it. s3 a node, s4 the hash, s7
+ * the node found, s8 the node a2. Locals: L a node, L+8 a status, L+16 a result.
+ */
+LOCAL_FUNCTION node_lvh
+    ENTER 32
+    mv      s3, a0
+    mv      s4, a1
+    mv      s8, a2
+    beqz    s4, 5f
+    mv      s7, s3                          # the node of the hash, up the chain
+1:  PART    t0, t1, s2, Store_blocks
+    bgeu    s7, t1, 5f
+    li      t1, BlockNode__mem
+    mul     t1, s7, t1
+    add     t0, t0, t1
+    addi    t1, t0, BlockNode_block_hash
+    NE32    t1, s4, 2f
+    j       3f
+2:  ld      s7, BlockNode_parent(t0)
+    j       1b
+3:  beq     s3, s7, 9f                      # found at s7: each node from s3 below it
+    sd      s3, L(sp)
+    li      t0, PAYLOAD_STATUS_INVALIDATED
+    sd      t0, (L + 8)(sp)
+    mv      a0, s2
+    addi    a1, sp, L
+    addi    a2, sp, L + 8
+    addi    a3, sp, L + 16
+    call    lantern_store_payload_status
+    PART    t0, t1, s2, Store_blocks
+    li      t1, BlockNode__mem
+    mul     t1, s3, t1
+    add     t0, t0, t1
+    ld      s3, BlockNode_parent(t0)
+    j       3b
+5:  li      t0, -1                          # null, or not found: the node in question
+    beq     s8, t0, 9f
+    sd      s8, L(sp)
+    li      t0, PAYLOAD_STATUS_INVALIDATED
+    sd      t0, (L + 8)(sp)
+    mv      a0, s2
+    addi    a1, sp, L
+    addi    a2, sp, L + 8
+    addi    a3, sp, L + 16
+    call    lantern_store_payload_status
+9:  LEAVE 32
+END_FUNCTION node_lvh
+
+/* The first a1 bytes of the ByteList a0 (engine_in) leave it. */
+LOCAL_FUNCTION node_engine_consume
+    FRAME 0
+    ld      t0, 16(a0)
+    sub     a2, t0, a1
+    sd      a2, 16(a0)
+    addi    a0, a0, 24
+    add     a1, a0, a1
+    call    lantern_copy
+    UNFRAME 0
+END_FUNCTION node_engine_consume
+
+/*
+ * The bytes of engine_in: a whole HTTP response of the call in flight ends it. s3 engine_in, s4
+ * the method, s7 the scratch size, restored on return, s8 the body's ByteList, s9 a block entry.
+ * Locals: L an HttpResponse (16), L+16 eof, L+24 the method, L+32 an EngineResponse (96), L+128 a
+ * node, L+136 a status.
+ */
+LOCAL_FUNCTION node_engine_read
+    ENTER 144
+    ld      s3, Node_engine_in(s1)
+    add     s3, s1, s3
+    ld      s4, Node_engine_method(s1)
+    beqz    s4, 8f                          # no call in flight: the bytes go
+    ld      s7, 0(s5)
+    ld      t0, 16(s3)                      # the body's ByteList at the end of scratch, as long as the bytes
+    addi    t0, t0, 24 + 7
+    andi    t0, t0, -8
+    bltu    s7, t0, 7f
+    sub     t1, s7, t0
+    sd      t1, 0(s5)
+    add     s8, s5, t1
+    sd      t0, 0(s8)
+    li      t0, 24
+    sd      t0, 8(s8)
+    sd      zero, 16(s8)
+    sd      zero, (L + 16)(sp)
+    mv      a0, s3
+    addi    a1, sp, L + 16
+    mv      a2, s8
+    addi    a3, sp, L
+    call    lantern_http_parse_response
+    li      t0, LANTERN_HTTP_MORE
+    beq     a0, t0, 6f
+    bnez    a0, 7f
+    ld      t0, L(sp)
+    li      t1, 200
+    bne     t0, t1, 70f
+    sd      s4, (L + 24)(sp)
+    mv      a0, s8
+    addi    a1, sp, L + 24
+    addi    a2, sp, L + 32
+    call    lantern_engine_parse_response
+    bnez    a0, 70f
+    ld      t0, (L + 32 + EngineResponse_error)(sp)
+    bnez    t0, 70f
+    ld      t0, Node_engine_id(s1)
+    addi    t0, t0, -1
+    ld      t1, (L + 32 + EngineResponse_id)(sp)
+    bne     t0, t1, 70f
+    mv      a0, s3
+    ld      a1, (L + 8)(sp)
+    call    node_engine_consume
+    sd      s7, 0(s5)
+    sd      zero, Node_engine_method(s1)    # the call ends
+    ld      s10, (L + 32 + EngineResponse_status)(sp)
+    li      t0, ENGINE_METHOD_NEW_PAYLOAD
+    bne     s4, t0, 40f
+    ld      a0, Node_engine_target(s1)      # engine_newPayload: its block
+    PART    s9, t0, s1, Node_blocks
+    bgeu    a0, t0, 9f
+    li      t0, NodeBlock__mem
+    mul     t0, a0, t0
+    add     s9, s9, t0
+    ld      t0, NodeBlock_status(s9)
+    li      t1, NODE_BLOCK_EXECUTING
+    bne     t0, t1, 9f
+    li      t0, ENGINE_STATUS_VALID
+    bne     s10, t0, 20f
+    li      a1, PAYLOAD_STATUS_VALID        # VALID: the import
+    call    node_import_now
+    j       9f
+20: li      t0, ENGINE_STATUS_SYNCING
+    beq     s10, t0, 21f
+    li      t0, ENGINE_STATUS_ACCEPTED
+    bne     s10, t0, 30f
+21: addi    a0, s9, NodeBlock_parent_root   # SYNCING, ACCEPTED: optimistic when a candidate
+    call    node_store_find
+    li      t0, -1
+    beq     a0, t0, 23f
+    ld      t0, BlockNode_block_hash(a1)
+    ld      t1, (BlockNode_block_hash + 8)(a1)
+    or      t0, t0, t1
+    ld      t1, (BlockNode_block_hash + 16)(a1)
+    or      t0, t0, t1
+    ld      t1, (BlockNode_block_hash + 24)(a1)
+    or      t0, t0, t1
+    bnez    t0, 22f
+23: mv      a0, s2
+    call    node_store_slot
+    ld      t0, NodeBlock_slot(s9)
+    li      t1, SAFE_SLOTS_TO_IMPORT_OPTIMISTICALLY
+    add     t0, t0, t1
+    bleu    t0, a0, 22f
+    ld      a0, Node_engine_target(s1)      # no candidate: again in a later slot
+    call    node_payload_retry
+    j       9f
+22: ld      a0, Node_engine_target(s1)
+    li      a1, PAYLOAD_STATUS_NOT_VALIDATED
+    call    node_import_now
+    j       9f
+30: li      t0, NODE_BLOCK_INVALID          # INVALID, INVALID_BLOCK_HASH: the block is invalid, latestValidHash from its parent
+    sd      t0, NodeBlock_status(s9)
+    li      a0, NODE_ACT_BYTES_FREE
+    ld      a1, NodeBlock_data_id(s9)
+    li      a2, 0
+    call    node_ids
+    addi    a0, s9, NodeBlock_parent_root
+    call    node_store_find
+    li      t0, -1
+    beq     a0, t0, 9f
+    ld      t0, (L + 32 + EngineResponse_has_latest_valid_hash)(sp)
+    li      a1, 0
+    beqz    t0, 31f
+    addi    a1, sp, L + 32 + EngineResponse_latest_valid_hash
+31: li      a2, -1
+    call    node_lvh
+    j       9f
+40: addi    a0, s1, Node_head_root          # engine_forkchoiceUpdated: of the head
+    call    node_store_find
+    li      t0, -1
+    beq     a0, t0, 9f
+    sd      a0, (L + 128)(sp)
+    li      t0, ENGINE_STATUS_VALID
+    bne     s10, t0, 41f
+    li      t0, PAYLOAD_STATUS_VALID
+    sd      t0, (L + 136)(sp)
+    mv      a0, s2
+    addi    a1, sp, L + 128
+    addi    a2, sp, L + 136
+    addi    a3, sp, L + 16
+    call    lantern_store_payload_status
+    j       9f
+41: li      t0, ENGINE_STATUS_INVALID
+    beq     s10, t0, 42f
+    li      t0, ENGINE_STATUS_INVALID_BLOCK_HASH
+    bne     s10, t0, 9f
+42: ld      a0, (L + 128)(sp)
+    mv      a2, a0
+    ld      t0, (L + 32 + EngineResponse_has_latest_valid_hash)(sp)
+    li      a1, 0
+    beqz    t0, 43f
+    addi    a1, sp, L + 32 + EngineResponse_latest_valid_hash
+43: call    node_lvh
+9:  LEAVE 144
+6:  sd      s7, 0(s5)                       # part of a response: more bytes
+    LEAVE 144
+70: mv      a0, s3                          # a failed call, its response read
+    ld      a1, (L + 8)(sp)
+    call    node_engine_consume
+7:  sd      s7, 0(s5)
+    call    node_engine_failed
+8:  ld      t0, Node_engine_in(s1)          # the bytes left go
+    add     t0, s1, t0
+    sd      zero, 16(t0)
+    LEAVE 144
+END_FUNCTION node_engine_read
 
 /* The import of each waiting block whose parent is the block of the entry a0. s3 the root, s4 index. */
 LOCAL_FUNCTION node_children
@@ -776,7 +1240,14 @@ LOCAL_FUNCTION node_head
     mul     t0, t0, t2
     add     t1, t1, t0
     addi    t0, s1, Node_head_root
-    COPY32  t0, t1
+    NE32    t0, t1, 2f                      # a new head with NODE_FLAG_ENGINE: a forkchoiceUpdated is due
+    j       3f
+2:  ld      t2, Node_flags(s1)
+    andi    t3, t2, NODE_FLAG_ENGINE
+    beqz    t3, 3f
+    ori     t2, t2, NODE_FLAG_FCU
+    sd      t2, Node_flags(s1)
+3:  COPY32  t0, t1
 9:  LEAVE 16
 END_FUNCTION node_head
 
@@ -896,7 +1367,7 @@ LOCAL_FUNCTION node_event
     call    node_work
 39: LEAVE 48
 40: li      t1, NODE_EV_POW_BLOCK
-    bne     t0, t1, 50f
+    bne     t0, t1, 45f
     addi    s4, s3, NodeEvent_bytes         # POW_BLOCK: a PowBlock of the node
     ld      t0, 16(s4)
     li      t1, POW_BLOCK_BYTES
@@ -912,6 +1383,29 @@ LOCAL_FUNCTION node_event
     li      a2, POW_BLOCK_BYTES
     call    lantern_copy
 49: LEAVE 48
+45: li      t1, NODE_EV_ENGINE
+    bne     t0, t1, 50f
+    ld      t0, 16(s3)
+    beqz    t0, 46f
+    call    node_engine_failed              # ENGINE 1: the connection failed
+    ld      t0, Node_engine_in(s1)
+    add     t0, s1, t0
+    sd      zero, 16(t0)
+    LEAVE 48
+46: addi    s4, s3, NodeEvent_bytes         # ENGINE 0: its bytes join engine_in
+    ld      s7, Node_engine_in(s1)
+    add     s7, s1, s7
+    ld      t0, 16(s7)
+    addi    a0, s7, 24
+    add     a0, a0, t0
+    ld      t1, 8(s4)
+    add     a1, s4, t1
+    ld      a2, 16(s4)
+    add     t0, t0, a2
+    sd      t0, 16(s7)
+    call    lantern_copy
+    call    node_engine_read
+    LEAVE 48
 50: ld      t0, NodeAction_work_kind(s3)    # WORK_DONE
     ld      t1, NodeEvent_result(s3)
     li      t2, NODE_WORK_IMPORT_BLOCK
@@ -1157,7 +1651,7 @@ LOCAL_FUNCTION node_event
     call    node_ids
     LEAVE 48
 77: li      t2, NODE_WORK_BLOB              # BLOB: a sidecar of a response, checked
-    bne     t0, t2, 70f
+    bne     t0, t2, 85f
     ld      a0, NodeAction_target(s3)
     PART    t2, t3, s1, Node_blobs
     bgeu    a0, t3, 79f
@@ -1183,6 +1677,53 @@ LOCAL_FUNCTION node_event
     sd      t0, NodeBlob_status(s4)
     li      a0, NODE_ACT_BYTES_FREE
     ld      a1, NodeBlob_data_id(s4)
+    li      a2, 0
+    call    node_ids
+    LEAVE 48
+85: li      t2, NODE_WORK_NEW_PAYLOAD       # NEW_PAYLOAD, FORKCHOICE: the request to the execution engine
+    beq     t0, t2, 86f
+    li      t2, NODE_WORK_FORKCHOICE
+    bne     t0, t2, 70f
+86: bnez    t1, 87f
+    ld      s7, (NodeEvent_chunk + 16)(s3)
+    addi    a1, s7, 48 + 7
+    andi    a1, a1, -8
+    li      a0, NODE_ACT_ENGINE
+    call    node_act
+    sd      zero, 16(a0)
+    ld      t0, 0(a0)
+    addi    t0, t0, -24
+    sd      t0, 24(a0)
+    li      t0, 24
+    sd      t0, 32(a0)
+    sd      s7, 40(a0)
+    addi    a0, a0, 48
+    addi    a1, s3, NodeEvent_chunk + 24
+    mv      a2, s7
+    call    lantern_copy
+    LEAVE 48
+87: sd      zero, Node_engine_method(s1)    # no request: the call ends
+    ld      t0, NodeAction_work_kind(s3)
+    li      t2, NODE_WORK_NEW_PAYLOAD
+    bne     t0, t2, 79f
+    ld      a0, NodeAction_target(s3)
+    PART    s4, t2, s1, Node_blocks
+    bgeu    a0, t2, 79f
+    li      t2, NodeBlock__mem
+    mul     t2, a0, t2
+    add     s4, s4, t2
+    ld      t2, NodeBlock_status(s4)
+    li      t3, NODE_BLOCK_EXECUTING
+    bne     t2, t3, 79f
+    li      t2, LANTERN_NO_PAYLOAD
+    bne     t1, t2, 88f
+    li      a1, PAYLOAD_STATUS_VALID        # no payload: the import
+    call    node_import_now
+    LEAVE 48
+88: li      t0, NODE_BLOCK_INVALID
+    sd      t0, NodeBlock_status(s4)
+    li      a0, NODE_ACT_BYTES_FREE
+    ld      a1, NodeBlock_data_id(s4)
     li      a2, 0
     call    node_ids
     LEAVE 48
@@ -3341,10 +3882,11 @@ END_FUNCTION node_block_entry
  * size, L+16 p2p, L+24 tick, L+32 the end of the events handled, L+40 the queue's free bytes the P2P events take, saved,
  * L+48 the libp2p scratch, L+56 the bytes of the P2P events, L+64 the P2P events, L+72 the
  * action room kept for the node, L+80 wakeup, L+88 libp2p's StepResult, L+96 libp2p's actions,
- * L+104 the libp2p steps, L+112 a stream waits, L+120 the GOSSIP WORK_DONE events.
+ * L+104 the libp2p steps, L+112 a stream waits, L+120 the GOSSIP WORK_DONE events, L+128 the bytes of
+ * the ENGINE events.
  */
 FUNCTION lantern_node_step
-    ENTER 128
+    ENTER 144
     mv      s1, a0
     mv      s2, a1
     sd      a2, (L + 16)(sp)
@@ -3363,6 +3905,7 @@ FUNCTION lantern_node_step
     sd      zero, (L + 56)(sp)
     sd      zero, (L + 64)(sp)
     sd      zero, (L + 120)(sp)
+    sd      zero, (L + 128)(sp)
     mv      t0, s3
 1:  bgeu    t0, s4, 5f
     sub     t1, s4, t0
@@ -3394,8 +3937,15 @@ FUNCTION lantern_node_step
     ld      t6, (L + 120)(sp)
     addi    t6, t6, 1
     sd      t6, (L + 120)(sp)
-23: li      t6, NODE_WORK_SERVE
+23: li      t6, NODE_WORK_SERVE             # SERVE, and NEW_PAYLOAD or FORKCHOICE of LANTERN_VALID: a ByteList of the chunk inside
+    beq     t4, t6, 25f
+    li      t6, NODE_WORK_NEW_PAYLOAD
+    beq     t4, t6, 24f
+    li      t6, NODE_WORK_FORKCHOICE
     bne     t4, t6, 22f
+24: ld      t6, NodeEvent_result(t0)
+    bnez    t6, 22f
+25:
     li      t4, NodeEvent_chunk + 24
     bltu    t2, t4, 7f
     ld      t4, (NodeEvent_chunk + 8)(t0)
@@ -3406,7 +3956,30 @@ FUNCTION lantern_node_step
     bgtu    t4, t6, 7f
 22: addi    t5, t5, 1
     j       4f
-21: li      t4, NODE_EV_P2P                 # a libp2p event inside, for a node with a libp2p state
+21: li      t4, NODE_EV_ENGINE              # ENGINE: arg 0 with bytes, or 1; with NODE_FLAG_ENGINE
+    bne     t3, t4, 211f
+    ld      t4, Node_flags(s1)
+    andi    t4, t4, NODE_FLAG_ENGINE
+    beqz    t4, 7f
+    li      t4, 24
+    bltu    t2, t4, 7f
+    ld      t4, 16(t0)
+    li      t6, 1
+    bgtu    t4, t6, 7f
+    beq     t4, t6, 4f
+    li      t4, 24 + 24
+    bltu    t2, t4, 7f
+    ld      t4, (24 + 8)(t0)
+    li      t6, 24
+    bne     t4, t6, 7f
+    ld      t4, (24 + 16)(t0)
+    addi    t6, t2, -(24 + 24)
+    bgtu    t4, t6, 7f
+    ld      t6, (L + 128)(sp)
+    add     t6, t6, t4
+    sd      t6, (L + 128)(sp)
+    j       4f
+211: li     t4, NODE_EV_P2P                 # a libp2p event inside, for a node with a libp2p state
     bne     t3, t4, 3f
     ld      t4, (L + 16)(sp)
     beqz    t4, 7f
@@ -3499,6 +4072,14 @@ FUNCTION lantern_node_step
     mul     t2, t2, t3
     add     t1, t1, t2
 549: bltu   t0, t1, 8f
+    ld      t0, Node_engine_in(s1)          # engine_in: the bytes of the ENGINE events
+    add     t0, s1, t0
+    ld      t1, 0(t0)
+    ld      t2, 16(t0)
+    addi    t1, t1, -24
+    sub     t1, t1, t2
+    ld      t2, (L + 128)(sp)
+    bltu    t1, t2, 8f
     ld      t0, Node_pow_blocks(s1)         # checkpoints: two for each WORK_DONE event, and two
     ld      t1, Node_checkpoints(s1)
     sub     t0, t0, t1
@@ -3647,6 +4228,7 @@ FUNCTION lantern_node_step
     add     s9, s9, t0
     j       6b
 9:  call    node_head
+    call    node_engine_next
     sd      zero, (L + 112)(sp)
     ld      t0, (L + 16)(sp)                # the next block of each stream that serves, then libp2p again
     beqz    t0, 40f
@@ -3695,14 +4277,14 @@ FUNCTION lantern_node_step
     ld      t0, (L + 80)(sp)
     sd      t0, NodeStepResult_wakeup(s7)
     li      a0, LANTERN_OK
-    LEAVE 128
+    LEAVE 144
 14: ld      t0, (L + 8)(sp)                 # a status before any change
     sd      t0, 0(s5)
-    LEAVE 128
+    LEAVE 144
 7:  li      a0, LANTERN_INVALID_EVENT
-    LEAVE 128
+    LEAVE 144
 8:  li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 128
+    LEAVE 144
 END_FUNCTION lantern_node_step
 
 /*
@@ -3756,6 +4338,11 @@ FUNCTION lantern_node_run
     mul     t2, t0, t2
     add     t1, t1, t2
     ld      t3, NodeBlock_data_available(t1)
+    ld      t2, Node_flags(s1)              # with NODE_FLAG_ENGINE, the block's: the engine's answer
+    andi    t2, t2, NODE_FLAG_ENGINE
+    beqz    t2, 2f
+    ld      t2, NodeBlock_payload_status(t1)
+    sd      t2, (L + BlockOptions_payload_status)(sp)
 2:  sd      t3, (L + BlockOptions_data_available)(sp)
     sd      zero, (L + BlockOptions_pow_block)(sp)
     sd      zero, (L + BlockOptions_pow_parent)(sp)
@@ -3976,7 +4563,7 @@ FUNCTION lantern_node_run
     FORK_CALL node_block_root
     LEAVE 192
 80: li      t1, NODE_WORK_BLOB
-    bne     t0, t1, 8f
+    bne     t0, t1, 82f
     ld      t0, 16(s5)                      # BLOB: node_blob_sidecar of the fork of its slot, deneb or electra
     li      t1, NODE_BLOB_HEADER + 8
     bltu    t0, t1, 18b
@@ -3999,6 +4586,148 @@ FUNCTION lantern_node_run
 81: li      t0, FORK_ELECTRA
     bne     t6, t0, 18b
     CALL_GLOBAL lantern_electra_node_blob_sidecar
+    LEAVE 192
+82: li      t1, NODE_WORK_NEW_PAYLOAD
+    bne     t0, t1, 83f
+    ld      t0, 16(s5)                      # NEW_PAYLOAD: node_new_payload of the fork of the block's slot
+    li      t1, 100 + 84
+    bltu    t0, t1, 18b
+    ld      t0, 8(s5)
+    add     t0, s5, t0
+    LDU64   a0, t0, 100, t1
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    li      t0, FORK_BELLATRIX
+    bltu    t6, t0, 86f
+    li      t0, NodeEvent_chunk + 24
+    bltu    s8, t0, 7f
+    addi    s9, s7, NodeEvent_chunk         # the request's ByteList after the WORK_DONE fields
+    addi    t0, s8, -NodeEvent_chunk
+    sd      t0, 0(s9)
+    li      t0, 24
+    sd      t0, 8(s9)
+    sd      zero, 16(s9)
+    mv      a0, s5
+    mv      a1, s1
+    addi    a2, s3, NodeAction_arg
+    mv      a3, s6
+    mv      a4, s9
+    addi    a5, s7, NodeEvent_result
+    FORK_CALL_BELLATRIX node_new_payload
+    bnez    a0, 99b
+    ld      t0, NodeEvent_result(s7)
+    bnez    t0, 99b
+    j       84f
+83: li      t1, NODE_WORK_FORKCHOICE
+    bne     t0, t1, 8f
+    mv      a0, s2                          # FORKCHOICE: of the fork of the store's slot
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      s10, a0
+    li      t0, FORK_BELLATRIX
+    bltu    s10, t0, 86f
+    addi    a0, s1, Node_head_root          # the ForkchoiceState at L+96: head, safe (justified), finalized
+    call    node_store_find
+    li      t0, -1
+    beq     a0, t0, 87f
+    addi    t0, sp, L + 96
+    addi    t1, a1, BlockNode_block_hash
+    COPY32  t0, t1
+    addi    a0, s2, Store_justified_checkpoint + 8
+    call    node_store_find
+    li      t0, -1
+    beq     a0, t0, 87f
+    addi    t0, sp, L + 128
+    addi    t1, a1, BlockNode_block_hash
+    COPY32  t0, t1
+    addi    a0, s2, Store_finalized_checkpoint + 8
+    call    node_store_find
+    li      t0, -1
+    beq     a0, t0, 87f
+    addi    t0, sp, L + 160
+    addi    t1, a1, BlockNode_block_hash
+    COPY32  t0, t1
+    ld      t0, (L + 96)(sp)                # a head of no payload: no call
+    ld      t1, (L + 104)(sp)
+    or      t0, t0, t1
+    ld      t1, (L + 112)(sp)
+    or      t0, t0, t1
+    ld      t1, (L + 120)(sp)
+    or      t0, t0, t1
+    beqz    t0, 86f
+    li      t0, NodeEvent_chunk + 24
+    bltu    s8, t0, 7f
+    ld      s9, 0(s6)                       # at the end of scratch: the JSON (536), the token (280), the host (88)
+    li      t0, 904 + 512
+    bltu    s9, t0, 7f
+    addi    t0, s9, -904
+    sd      t0, 0(s6)
+    add     s4, s6, t0
+    li      t1, 24
+    li      t0, 536
+    sd      t0, 0(s4)
+    sd      t1, 8(s4)
+    sd      zero, 16(s4)
+    li      t0, 280
+    sd      t0, 536(s4)
+    sd      t1, 544(s4)
+    sd      zero, 552(s4)
+    li      t0, 88
+    sd      t0, 816(s4)
+    sd      t1, 824(s4)
+    ld      a2, Node_engine_host_len(s1)
+    sd      a2, 832(s4)
+    addi    a0, s4, 816 + 24
+    addi    a1, s1, Node_engine_host
+    call    lantern_copy
+    addi    a0, sp, L + 96
+    addi    a1, s3, NodeAction_arg
+    mv      a2, s4
+    mv      t6, s10
+    FORK_CALL_BELLATRIX engine_forkchoice_updated
+    bnez    a0, 85f
+    ld      t0, Node_time_ms(s1)            # the JWT at the time in seconds
+    li      t1, 1000
+    divu    t0, t0, t1
+    sd      t0, L(sp)
+    addi    a0, s1, Node_jwt_secret
+    addi    a1, sp, L
+    mv      a2, s6
+    addi    a3, s4, 536
+    call    lantern_jwt_token
+    bnez    a0, 85f
+    addi    a3, s7, NodeEvent_chunk         # the HTTP request after the WORK_DONE fields
+    addi    t0, s8, -NodeEvent_chunk
+    sd      t0, 0(a3)
+    li      t0, 24
+    sd      t0, 8(a3)
+    sd      zero, 16(a3)
+    addi    a0, s4, 816
+    addi    a1, s4, 536
+    mv      a2, s4
+    call    lantern_http_post
+    bnez    a0, 85f
+    sd      s9, 0(s6)
+    addi    s9, s7, NodeEvent_chunk
+84: ld      t0, 16(s9)                      # the sizes of the list and the event
+    addi    t0, t0, 24 + 7
+    andi    t0, t0, -8
+    sd      t0, 0(s9)
+    addi    t0, t0, NodeEvent_chunk
+    sd      t0, 0(s7)
+    li      a0, LANTERN_OK
+    LEAVE 192
+85: sd      s9, 0(s6)                       # a status, with the scratch's size back
+    LEAVE 192
+86: li      t0, LANTERN_NO_PAYLOAD
+    sd      t0, NodeEvent_result(s7)
+    li      a0, LANTERN_OK
+    LEAVE 192
+87: li      t0, LANTERN_INVALID_UNKNOWN_BLOCK
+    sd      t0, NodeEvent_result(s7)
+    li      a0, LANTERN_OK
     LEAVE 192
 8:  li      a0, LANTERN_INVALID_EVENT
     LEAVE 192

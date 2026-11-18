@@ -449,6 +449,8 @@
 .set NODE_FLAG_JUSTIFIED_PENDING, 2    /* a JUSTIFIED_STATE work is queued */
 .set NODE_FLAG_SUBSCRIBED, 4           /* the gossip topics of fork_digest are subscribed */
 .set NODE_FLAG_SYNCING, 8              /* a BeaconBlocksByRange request of the node is open */
+.set NODE_FLAG_ENGINE, 16              /* the node drives an execution engine over the Engine API */
+.set NODE_FLAG_FCU, 32                 /* an engine_forkchoiceUpdated is due */
 .set Node_peers, 120                   /* PartRef of NodePeer */
 .set Node_streams, 136                 /* PartRef of NodeStream entries of Node_stream_bytes each */
 .set Node_p2p_out, 152                 /* PartRef of bytes: libp2p events the node made for its next libp2p step */
@@ -460,8 +462,17 @@
 .set Node_fork_digest, 240             /* the ForkDigest of the subscribed topics, 4 bytes */
 .set Node_sync_slot, 248               /* the first slot of the next BeaconBlocksByRange request, at least */
 .set Node_blobs, 256                   /* PartRef of NodeBlob */
-.set Node_config, 272
-.set NODE_FIXED, 272 + CONFIG_SIZE
+.set Node_jwt_secret, 272              /* the 32 byte key of the jwt-secret file */
+.set Node_engine_host_len, 304
+.set Node_engine_host, 312             /* the Host header of the Engine API requests, at most 64 bytes */
+.set Node_engine_id, 376               /* the JSON-RPC id of the next call */
+.set Node_engine_method, 384            /* ENGINE_METHOD_* of the call in flight, or 0 */
+.set Node_engine_target, 392           /* engine_newPayload in flight: the NodeBlock index */
+.set Node_engine_wait, 400             /* after a failed call: the slot from which calls go again */
+.set Node_engine_in, 408               /* PartRef of bytes: one ByteList of the bytes the execution engine sent */
+.set Node_config, 424
+.set NODE_FIXED, 424 + CONFIG_SIZE
+.set NODE_ENGINE_HOST_MAX, 64
 .set NODE_STATE_SLOT, 48               /* BeaconState.slot in the value of every fork */
 
 /* NodeBlock: a block the node knows */
@@ -474,13 +485,17 @@
 .set NodeBlock_data_available, 96
 .set NodeBlock_result, 104             /* the result of its import */
 .set NodeBlock_blobs, 112              /* from the network: the length of its body's blob_kzg_commitments, 0 before deneb */
-.set NodeBlock__mem, 120
+.set NodeBlock_payload_status, 120     /* PAYLOAD_STATUS_* its import takes, from the execution engine's answer */
+.set NodeBlock_retry, 128              /* the slot from which its engine_newPayload may go again */
+.set NodeBlock__mem, 136
 .set NODE_BLOCK_WAITING, 1             /* its parent is not imported yet */
 .set NODE_BLOCK_IMPORTING, 2           /* an IMPORT_BLOCK work is queued */
 .set NODE_BLOCK_IMPORTED, 3
 .set NODE_BLOCK_INVALID, 4
 .set NODE_BLOCK_HASHING, 5             /* from a response: a SYNC_BLOCK work of its root is queued; root 0 */
 .set NODE_BLOCK_BLOBS, 6               /* from the network: it needs blob sidecars the node does not hold */
+.set NODE_BLOCK_PAYLOAD, 7             /* with NODE_FLAG_ENGINE: its engine_newPayload is due */
+.set NODE_BLOCK_EXECUTING, 8           /* its engine_newPayload is queued or sent */
 
 /* NodeBlob: a blob sidecar the node holds */
 .set NodeBlob_block_root, 0            /* hash_tree_root of its signed_block_header.message */
@@ -567,7 +582,10 @@
 .set NodeAnchor_root, 0                /* hash_tree_root of the anchor block */
 .set NodeAnchor_slot, 32
 .set NodeAnchor_genesis_validators_root, 40
-.set NodeAnchor__mem, 72
+.set NodeAnchor_jwt_secret, 72         /* with NODE_FLAG_ENGINE */
+.set NodeAnchor_engine_host_len, 104   /* at most NODE_ENGINE_HOST_MAX */
+.set NodeAnchor_engine_host, 112
+.set NodeAnchor__mem, 176
 .set NODE_P2P_ROUNDS, 8                /* libp2p steps of one node step for the node's own events, at most */
 
 /* NodeRoom: the capacities of a Node */
@@ -580,6 +598,7 @@
 .set NodeRoom_p2p_out, 48              /* bytes of libp2p events the node holds for its next libp2p step */
 .set NodeRoom_messages, 56
 .set NodeRoom_blobs, 64
+.set NodeRoom_engine_bytes, 72         /* bytes of the execution engine's answers the node holds */
 
 /* NodeStepResult: the output of lantern_node_step */
 .set NodeStepResult_accepted, 0        /* events handled, from the first */
@@ -594,7 +613,8 @@
 .set NODE_EV_PAYLOAD_STATUS, 6         /* 16 block_hash, 48 status, 56 has_latest, 64 latest_valid_hash */
 .set NODE_EV_WORK_DONE, 7              /* the work's fields from 16 (as NodeAction), then 72 result, 80 checkpoint epoch, 88 root, 120 index */
 .set NODE_EV_P2P, 8                    /* 16 a libp2p shell result Event */
-.set NODE_EV_LAST, 8
+.set NODE_EV_ENGINE, 9                 /* 16 0: 24 a ByteList of bytes the execution engine sent; 16 1: the connection failed */
+.set NODE_EV_LAST, 9
 .set NodeEvent_result, 72
 .set NodeEvent_checkpoint, 80
 .set NODE_EV_WORK_DONE_SIZE, 128
@@ -607,6 +627,7 @@
 .set NODE_ACT_BYTES_FREE, 4            /* 16 id */
 .set NODE_ACT_WORK, 5                  /* 16 kind, 24 state_a, 32 state_b, 40 state_c, 48 data, 56 target, 64 arg */
 .set NODE_ACT_P2P_LIST, 6              /* 16 a ByteList of libp2p Actions: the shell does its shell requests in order */
+.set NODE_ACT_ENGINE, 7                /* 24 a ByteList of an HTTP request: the shell writes it to the execution engine's connection */
 .set NodeAction_work_kind, 16
 .set NodeAction_state_a, 24
 .set NodeAction_state_b, 32
@@ -626,10 +647,13 @@
 .set NODE_WORK_GOSSIP, 7               /* a: head state; b: proposer state; c: justified state; data: the message; target: its Handle; arg: topic + 256 * subnet */
 .set NODE_WORK_SYNC_BLOCK, 8           /* data: a block's SSZ bytes from a response; target: its NodeBlock index */
 .set NODE_WORK_BLOB, 9                 /* data: a blob sidecar's SSZ bytes from a response; target: its NodeBlob index */
+.set NODE_WORK_NEW_PAYLOAD, 10         /* data: a block's SSZ bytes; target: its NodeBlock index; arg: the JSON-RPC id */
+.set NODE_WORK_FORKCHOICE, 11          /* arg: the JSON-RPC id */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
 .set NodeEvent_index, NodeEvent_root + 32      /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its blob commitments; of a valid blob_sidecar: its index */
-.set NodeEvent_chunk, NODE_EV_WORK_DONE_SIZE   /* SERVE: a ByteList of the response chunk after the WORK_DONE fields */
+.set NodeEvent_chunk, NODE_EV_WORK_DONE_SIZE   /* SERVE: a ByteList of the response chunk after the WORK_DONE fields; NEW_PAYLOAD, FORKCHOICE: of the HTTP request */
 .set LANTERN_NEED_TARGET_STATE, 55     /* lantern_node_run: an attestation needs its target checkpoint state */
 .set LANTERN_INVALID_ENCODING, 56     /* lantern_node_run, the node hooks: the bytes are not an SSZ encoding of the type */
 .set LANTERN_INVALID_EVENT, 57        /* lantern_node_step: an event breaks the rules of its kind */
 .set LANTERN_INVALID_BLOB_SIDECAR, 58  /* lantern_node_blob_sidecar: the index, the inclusion proof or the KZG proof fails */
+.set LANTERN_NO_PAYLOAD, 59            /* lantern_node_new_payload: the block has no execution payload to send */

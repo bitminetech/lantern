@@ -617,3 +617,119 @@ SPEC_FUNCTION node_blob_sidecar
     LEAVE 16
 SPEC_END node_blob_sidecar
 .endif
+
+.if FORK >= FORK_BELLATRIX
+/*
+ * (data, node, id, scratch, out, result): the HTTP request of engine_newPayload for the
+ * SignedBeaconBlock in data: the JSON of lantern_engine_new_payload, the JWT of the node's secret
+ * at time_ms / 1000, lantern_http_post to the node's engine_host. A payload whose block_hash and
+ * parent_hash are zero gives LANTERN_NO_PAYLOAD. s1 node, s2 the block, s3 scratch, s4 out,
+ * s5 result, s6 id, s7 the JSON, s8 the token, s9 the host, s10 the scratch size, restored on
+ * return. Locals: L the time in seconds, L+8 the JSON's size.
+ */
+SPEC_FUNCTION node_new_payload
+    ENTER 16
+    mv      s2, a0
+    mv      s1, a1
+    mv      s6, a2
+    mv      s3, a3
+    mv      s4, a4
+    mv      s5, a5
+    ld      s10, 0(s3)
+    sd      zero, 0(s5)
+    ADDRESS a0, lantern_type_SignedBeaconBlock
+    mv      a1, s2
+    mv      a2, s3
+    call    node_decode
+    li      t0, 1
+    beq     a0, t0, 8f
+    bgtu    a0, t0, 9f
+    PART    s2, t0, a1, SignedBeaconBlock_message
+    PART    t1, t0, s2, BeaconBlock_body
+    PART    t2, t0, t1, BeaconBlockBody_execution_payload
+    ADDQ    t3, t2, ExecutionPayload_block_hash     # no payload: zero block_hash and parent_hash
+    ld      t0, 0(t3)
+    ld      t1, 8(t3)
+    or      t0, t0, t1
+    ld      t1, 16(t3)
+    or      t0, t0, t1
+    ld      t1, 24(t3)
+    or      t0, t0, t1
+    ADDQ    t3, t2, ExecutionPayload_parent_hash
+    ld      t1, 0(t3)
+    or      t0, t0, t1
+    ld      t1, 8(t3)
+    or      t0, t0, t1
+    ld      t1, 16(t3)
+    or      t0, t0, t1
+    ld      t1, 24(t3)
+    or      t0, t0, t1
+    bnez    t0, 1f
+    li      t0, LANTERN_NO_PAYLOAD
+    sd      t0, 0(s5)
+    li      a0, LANTERN_OK
+    j       99f
+1:  mv      a0, s2                          # the JSON's room, then the three lists at the end of scratch
+    addi    a1, sp, L + 8
+    call    lantern_engine_new_payload_size
+    bnez    a0, 99f
+    ld      t0, (L + 8)(sp)
+    addi    t0, t0, 24 + 7
+    andi    t0, t0, -8
+    addi    t1, t0, 280 + 88
+    ld      t2, 0(s3)
+    li      t3, 4096
+    add     t3, t3, t1
+    bltu    t2, t3, 8f
+    sub     t2, t2, t1
+    sd      t2, 0(s3)
+    add     s7, s3, t2
+    add     s8, s7, t0
+    addi    s9, s8, 280
+    li      t3, 24
+    sd      t0, 0(s7)
+    sd      t3, 8(s7)
+    sd      zero, 16(s7)
+    li      t0, 280
+    sd      t0, 0(s8)
+    sd      t3, 8(s8)
+    sd      zero, 16(s8)
+    li      t0, 88
+    sd      t0, 0(s9)
+    sd      t3, 8(s9)
+    ld      a2, Node_engine_host_len(s1)
+    sd      a2, 16(s9)
+    addi    a0, s9, 24
+    addi    a1, s1, Node_engine_host
+    call    lantern_copy
+    mv      a0, s2                          # the JSON
+    mv      a1, s6
+    mv      a2, s3
+    mv      a3, s7
+    call    lantern_engine_new_payload
+    bnez    a0, 99f
+    ld      t0, Node_time_ms(s1)            # the JWT
+    li      t1, 1000
+    divu    t0, t0, t1
+    sd      t0, L(sp)
+    addi    a0, s1, Node_jwt_secret
+    addi    a1, sp, L
+    mv      a2, s3
+    mv      a3, s8
+    CALL_GLOBAL lantern_jwt_token
+    bnez    a0, 99f
+    mv      a0, s9                          # the HTTP request
+    mv      a1, s8
+    mv      a2, s7
+    mv      a3, s4
+    CALL_GLOBAL lantern_http_post
+    j       99f
+8:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    j       99f
+9:  li      t0, LANTERN_INVALID_ENCODING
+    sd      t0, 0(s5)
+    li      a0, LANTERN_OK
+99: sd      s10, 0(s3)
+    LEAVE 16
+SPEC_END node_new_payload
+.endif

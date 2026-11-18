@@ -642,3 +642,114 @@ SPEC_FUNCTION node_blob_sidecar
     LEAVE 16
 SPEC_END node_blob_sidecar
 .endif
+
+.if FORK >= FORK_BELLATRIX
+/*
+ * (data, node, id, scratch, out, result): the HTTP request of engine_newPayload for the
+ * SignedBeaconBlock in data: the JSON of lantern_engine_new_payload, the JWT of the node's secret
+ * at time_ms / 1000, lantern_http_post to the node's engine_host. A payload whose block_hash and
+ * parent_hash are zero gives LANTERN_NO_PAYLOAD. rbx node, rbp the block, r12 scratch, r13 out,
+ * r14 result, r15 id, S7 the JSON, S8 the token, S9 the host, S10 the scratch size, restored on
+ * return. Locals: L the time in seconds, L+8 the JSON's size.
+ */
+SPEC_FUNCTION node_new_payload
+    ENTER 16
+    mov     %rdi, %rbp
+    mov     %rsi, %rbx
+    mov     %rdx, %r15
+    mov     %rcx, %r12
+    mov     %r8, %r13
+    mov     %r9, %r14
+    mov     (%r12), %rax
+    mov     %rax, S10(%rsp)
+    movq    $0, (%r14)
+    ADDRESS %rdi, lantern_type_SignedBeaconBlock
+    mov     %rbp, %rsi
+    mov     %r12, %rdx
+    call    node_decode
+    cmp     $1, %rax
+    je      8f
+    ja      9f
+    PART    %rbp, %rax, %rdx, SignedBeaconBlock_message
+    PART    %rcx, %rax, %rbp, BeaconBlock_body
+    PART    %rsi, %rax, %rcx, BeaconBlockBody_execution_payload
+    mov     ExecutionPayload_block_hash(%rsi), %rax     # no payload: zero block_hash and parent_hash
+    or      (ExecutionPayload_block_hash + 8)(%rsi), %rax
+    or      (ExecutionPayload_block_hash + 16)(%rsi), %rax
+    or      (ExecutionPayload_block_hash + 24)(%rsi), %rax
+    or      ExecutionPayload_parent_hash(%rsi), %rax
+    or      (ExecutionPayload_parent_hash + 8)(%rsi), %rax
+    or      (ExecutionPayload_parent_hash + 16)(%rsi), %rax
+    or      (ExecutionPayload_parent_hash + 24)(%rsi), %rax
+    jnz     1f
+    movq    $LANTERN_NO_PAYLOAD, (%r14)
+    xor     %eax, %eax
+    jmp     99f
+1:  mov     %rbp, %rdi                      # the JSON's room, then the three lists at the end of scratch
+    lea     (L + 8)(%rsp), %rsi
+    call    lantern_engine_new_payload_size
+    test    %rax, %rax
+    jnz     99f
+    mov     (L + 8)(%rsp), %rcx
+    add     $(24 + 7), %rcx
+    and     $-8, %rcx
+    lea     (280 + 88)(%rcx), %rdx
+    mov     (%r12), %rax
+    lea     4096(%rdx), %rsi
+    cmp     %rsi, %rax
+    jb      8f
+    sub     %rdx, %rax
+    mov     %rax, (%r12)
+    lea     (%r12,%rax), %rdi
+    mov     %rdi, S7(%rsp)
+    mov     %rcx, (%rdi)
+    movq    $24, 8(%rdi)
+    movq    $0, 16(%rdi)
+    add     %rcx, %rdi
+    mov     %rdi, S8(%rsp)
+    movq    $280, (%rdi)
+    movq    $24, 8(%rdi)
+    movq    $0, 16(%rdi)
+    add     $280, %rdi
+    mov     %rdi, S9(%rsp)
+    movq    $88, (%rdi)
+    movq    $24, 8(%rdi)
+    mov     Node_engine_host_len(%rbx), %rdx
+    mov     %rdx, 16(%rdi)
+    add     $24, %rdi
+    lea     Node_engine_host(%rbx), %rsi
+    call    lantern_copy
+    mov     %rbp, %rdi                      # the JSON
+    mov     %r15, %rsi
+    mov     %r12, %rdx
+    mov     S7(%rsp), %rcx
+    call    lantern_engine_new_payload
+    test    %rax, %rax
+    jnz     99f
+    mov     Node_time_ms(%rbx), %rax        # the JWT
+    xor     %edx, %edx
+    mov     $1000, %ecx
+    div     %rcx
+    mov     %rax, L(%rsp)
+    lea     Node_jwt_secret(%rbx), %rdi
+    lea     L(%rsp), %rsi
+    mov     %r12, %rdx
+    mov     S8(%rsp), %rcx
+    CALL_GLOBAL lantern_jwt_token
+    test    %rax, %rax
+    jnz     99f
+    mov     S9(%rsp), %rdi                  # the HTTP request
+    mov     S8(%rsp), %rsi
+    mov     S7(%rsp), %rdx
+    mov     %r13, %rcx
+    CALL_GLOBAL lantern_http_post
+    jmp     99f
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    jmp     99f
+9:  movq    $LANTERN_INVALID_ENCODING, (%r14)
+    xor     %eax, %eax
+99: mov     S10(%rsp), %rcx
+    mov     %rcx, (%r12)
+    LEAVE 16
+SPEC_END node_new_payload
+.endif

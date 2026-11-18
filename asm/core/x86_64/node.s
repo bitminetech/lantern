@@ -42,6 +42,28 @@
 89:
 .endm
 
+/* Call lantern_<fork>_<name> for the fork in r10, bellatrix to fulu. */
+.macro FORK_CALL_BELLATRIX name
+    cmp     $FORK_CAPELLA, %r10
+    jae     91f
+    CALL_GLOBAL lantern_bellatrix_\name
+    jmp     96f
+91: cmp     $FORK_DENEB, %r10
+    jae     92f
+    CALL_GLOBAL lantern_capella_\name
+    jmp     96f
+92: cmp     $FORK_ELECTRA, %r10
+    jae     93f
+    CALL_GLOBAL lantern_deneb_\name
+    jmp     96f
+93: cmp     $FORK_FULU, %r10
+    jae     94f
+    CALL_GLOBAL lantern_electra_\name
+    jmp     96f
+94: CALL_GLOBAL lantern_fulu_\name
+96:
+.endm
+
 /* rax = the fork of the slot rdi with the config rsi: the last fork whose epoch is at most the slot's. Uses rcx, rdx. */
 LOCAL_FUNCTION node_fork
     UNWIND_END_PROLOGUE
@@ -113,6 +135,12 @@ FUNCTION lantern_node_size
     and     $-8, %rax
     add     %rax, %r8
     jc      9f
+    mov     NodeRoom_engine_bytes(%rdi), %rax       # a ByteList
+    add     $(24 + 7), %rax
+    jc      9f
+    and     $-8, %rax
+    add     %rax, %r8
+    jc      9f
     MOVQ    %rax, NODE_FIXED
     add     %rax, %r8
     jc      9f
@@ -153,6 +181,15 @@ LOCAL_FUNCTION node_layout
     mov     %rax, Node_p2p_out(%rdi)        # one ByteList, empty
     movq    $1, (Node_p2p_out + 8)(%rdi)
     mov     NodeRoom_p2p_out(%rsi), %rcx
+    add     $(24 + 7), %rcx
+    and     $-8, %rcx
+    mov     %rcx, (%rdi,%rax)
+    movq    $24, 8(%rdi,%rax)
+    movq    $0, 16(%rdi,%rax)
+    add     %rcx, %rax
+    mov     %rax, Node_engine_in(%rdi)      # one ByteList, empty
+    movq    $1, (Node_engine_in + 8)(%rdi)
+    mov     NodeRoom_engine_bytes(%rsi), %rcx
     add     $(24 + 7), %rcx
     and     $-8, %rcx
     mov     %rcx, (%rdi,%rax)
@@ -201,7 +238,21 @@ FUNCTION lantern_node_init
     mov     %rbp, %rsi
     MOVQ    %rdx, CONFIG_SIZE
     call    lantern_copy
-    mov     %r15, %rdi
+    test    $NODE_FLAG_ENGINE, %r14         # the secret, the host, the first id, and a forkchoiceUpdated due
+    jz      1f
+    mov     NodeAnchor_engine_host_len(%r12), %rdx
+    cmp     $NODE_ENGINE_HOST_MAX, %rdx
+    ja      7f
+    mov     %rdx, Node_engine_host_len(%r15)
+    lea     Node_engine_host(%r15), %rdi
+    lea     NodeAnchor_engine_host(%r12), %rsi
+    call    lantern_copy
+    lea     Node_jwt_secret(%r15), %rdi
+    lea     NodeAnchor_jwt_secret(%r12), %rsi
+    COPY32  %rdi, %rsi
+    movq    $1, Node_engine_id(%r15)
+    orq     $NODE_FLAG_FCU, Node_flags(%r15)
+1:  mov     %r15, %rdi
     mov     %rbx, %rsi
     call    node_layout
     PART    %rdi, %rax, %r15, Node_blocks   # the anchor block
@@ -227,6 +278,8 @@ FUNCTION lantern_node_init
     xor     %eax, %eax
 9:  LEAVE 16
 8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 16
+7:  mov     $LANTERN_INVALID_EVENT, %eax
     LEAVE 16
 END_FUNCTION lantern_node_init
 
@@ -275,6 +328,10 @@ FUNCTION lantern_node_copy
     mov     16(%rbx,%rax), %rax
     cmp     %rax, NodeRoom_p2p_out(%rbp)
     jb      8f
+    mov     Node_engine_in(%rbx), %rax      # the execution engine's bytes fit
+    mov     16(%rbx,%rax), %rax
+    cmp     %rax, NodeRoom_engine_bytes(%rbp)
+    jb      8f
     mov     Node_stream_bytes(%rbx), %r15   # a stream's request bytes fit
     mov     NodeRoom_request_bytes(%rbp), %rax
     add     $(NodeStream__fixed + 7), %rax
@@ -298,6 +355,15 @@ FUNCTION lantern_node_copy
     add     %rbx, %rsi
     mov     16(%rsi), %rdx
     mov     Node_p2p_out(%r12), %rdi
+    add     %r12, %rdi
+    mov     %rdx, 16(%rdi)
+    add     $24, %rdi
+    add     $24, %rsi
+    call    lantern_copy
+    mov     Node_engine_in(%rbx), %rsi      # the execution engine's bytes
+    add     %rbx, %rsi
+    mov     16(%rsi), %rdx
+    mov     Node_engine_in(%r12), %rdi
     add     %r12, %rdi
     mov     %rdx, 16(%rdi)
     add     $24, %rdi
@@ -502,9 +568,9 @@ LOCAL_FUNCTION node_justified
 END_FUNCTION node_justified
 
 /*
- * The import of the block of index rdi when its parent has a post-state: a copy of it and an
- * IMPORT_BLOCK work; a block whose parent is invalid becomes invalid. r12 index, r13 entry,
- * S7 the parent's state id.
+ * The import of the block of index rdi when its parent has a post-state; a block whose parent is
+ * invalid becomes invalid. With NODE_FLAG_ENGINE a block of bellatrix or later takes
+ * NODE_BLOCK_PAYLOAD instead: its import waits for engine_newPayload. r12 index, r13 entry.
  */
 LOCAL_FUNCTION node_try_import
     ENTER 0
@@ -521,6 +587,43 @@ LOCAL_FUNCTION node_try_import
     je      8f
     cmp     $NODE_BLOCK_IMPORTED, %rax
     jne     9f
+    testq   $NODE_FLAG_ENGINE, Node_flags(%rbx)
+    jz      1f
+    mov     NodeBlock_slot(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     $FORK_BELLATRIX, %rax
+    jb      1f
+    movq    $NODE_BLOCK_PAYLOAD, NodeBlock_status(%r13)
+    movq    $0, NodeBlock_retry(%r13)
+    LEAVE 0
+1:  mov     $PAYLOAD_STATUS_VALID, %esi     # VALID, or NOT_VALIDATED with NODE_FLAG_OPTIMISTIC
+    mov     $PAYLOAD_STATUS_NOT_VALIDATED, %eax
+    testq   $NODE_FLAG_OPTIMISTIC, Node_flags(%rbx)
+    cmovnz  %rax, %rsi
+    mov     %r12, %rdi
+    call    node_import_now
+    LEAVE 0
+8:  movq    $NODE_BLOCK_INVALID, NodeBlock_status(%r13)
+9:  LEAVE 0
+END_FUNCTION node_try_import
+
+/*
+ * The import of the block of index rdi, whose parent is imported, with the payload status rsi: a
+ * copy of the parent's post-state and an IMPORT_BLOCK work. r12 index, r13 entry, S7 the parent's
+ * state id.
+ */
+LOCAL_FUNCTION node_import_now
+    ENTER 0
+    mov     %rdi, %r12
+    PART    %r13, %rax, %rbx, Node_blocks
+    imul    $NodeBlock__mem, %r12, %rax
+    add     %rax, %r13
+    mov     %rsi, NodeBlock_payload_status(%r13)
+    lea     NodeBlock_parent_root(%r13), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      9f
     mov     NodeBlock_state_id(%rdx), %rax
     mov     %rax, S7(%rsp)
     call    node_new_id
@@ -537,10 +640,354 @@ LOCAL_FUNCTION node_try_import
     mov     %r12, %r8
     xor     %r9d, %r9d
     call    node_work
-    LEAVE 0
-8:  movq    $NODE_BLOCK_INVALID, NodeBlock_status(%r13)
 9:  LEAVE 0
-END_FUNCTION node_try_import
+END_FUNCTION node_import_now
+
+/* rax = the index of the store's node whose root is at rdi, or 2^64 - 1; rdx = its entry. Uses rcx, r11, xmm0-xmm2. */
+LOCAL_FUNCTION node_store_find
+    UNWIND_END_PROLOGUE
+    PART    %rdx, %rcx, %rbp, Store_blocks
+    xor     %eax, %eax
+1:  cmp     %rcx, %rax
+    jae     3f
+    NE32    %rdx, %rdi, 2f
+    ret
+2:  add     $BlockNode__mem, %rdx
+    inc     %rax
+    jmp     1b
+3:  mov     $-1, %rax
+    ret
+END_FUNCTION node_store_find
+
+/*
+ * With NODE_FLAG_ENGINE, the next engine call when none is in flight and the store's slot is at
+ * least engine_wait: a NEW_PAYLOAD work for the first block in NODE_BLOCK_PAYLOAD whose retry is
+ * at most the slot, else with NODE_FLAG_FCU from bellatrix on a FORKCHOICE work. r12 an entry,
+ * r13 the index, S7 the slot, S8 the count.
+ */
+LOCAL_FUNCTION node_engine_next
+    ENTER 0
+    testq   $NODE_FLAG_ENGINE, Node_flags(%rbx)
+    jz      9f
+    cmpq    $0, Node_engine_method(%rbx)
+    jne     9f
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     %rax, S7(%rsp)
+    cmp     Node_engine_wait(%rbx), %rax
+    jb      9f
+    PART    %r12, %rax, %rbx, Node_blocks
+    mov     %rax, S8(%rsp)
+    xor     %r13d, %r13d
+1:  cmp     S8(%rsp), %r13
+    jae     3f
+    cmpq    $NODE_BLOCK_PAYLOAD, NodeBlock_status(%r12)
+    jne     2f
+    mov     NodeBlock_retry(%r12), %rax
+    cmp     S7(%rsp), %rax
+    ja      2f
+    movq    $NODE_BLOCK_EXECUTING, NodeBlock_status(%r12)
+    movq    $ENGINE_METHOD_NEW_PAYLOAD, Node_engine_method(%rbx)
+    mov     %r13, Node_engine_target(%rbx)
+    mov     Node_engine_id(%rbx), %r9
+    incq    Node_engine_id(%rbx)
+    mov     $NODE_WORK_NEW_PAYLOAD, %edi
+    xor     %esi, %esi
+    xor     %edx, %edx
+    mov     NodeBlock_data_id(%r12), %rcx
+    mov     %r13, %r8
+    call    node_work
+    LEAVE 0
+2:  add     $NodeBlock__mem, %r12
+    inc     %r13
+    jmp     1b
+3:  testq   $NODE_FLAG_FCU, Node_flags(%rbx)
+    jz      9f
+    mov     S7(%rsp), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     $FORK_BELLATRIX, %rax
+    jb      9f
+    andq    $~NODE_FLAG_FCU, Node_flags(%rbx)
+    movq    $ENGINE_METHOD_FORKCHOICE_UPDATED, Node_engine_method(%rbx)
+    mov     Node_engine_id(%rbx), %r9
+    incq    Node_engine_id(%rbx)
+    mov     $NODE_WORK_FORKCHOICE, %edi
+    xor     %esi, %esi
+    xor     %edx, %edx
+    xor     %ecx, %ecx
+    xor     %r8d, %r8d
+    call    node_work
+9:  LEAVE 0
+END_FUNCTION node_engine_next
+
+/*
+ * The engine call in flight failed: an engine_newPayload's block takes NODE_BLOCK_PAYLOAD with
+ * retry the store's slot + 1, an engine_forkchoiceUpdated sets NODE_FLAG_FCU again; engine_wait
+ * becomes the slot + 1 and the call ends.
+ */
+LOCAL_FUNCTION node_engine_failed
+    ENTER 0
+    mov     %rbp, %rdi
+    call    node_store_slot
+    inc     %rax
+    mov     %rax, Node_engine_wait(%rbx)
+    mov     Node_engine_method(%rbx), %rax
+    movq    $0, Node_engine_method(%rbx)
+    cmp     $ENGINE_METHOD_FORKCHOICE_UPDATED, %rax
+    jne     1f
+    orq     $NODE_FLAG_FCU, Node_flags(%rbx)
+    LEAVE 0
+1:  cmp     $ENGINE_METHOD_NEW_PAYLOAD, %rax
+    jne     9f
+    mov     Node_engine_target(%rbx), %rdi
+    call    node_payload_retry
+9:  LEAVE 0
+END_FUNCTION node_engine_failed
+
+/* The block of index rdi, if NODE_BLOCK_EXECUTING, takes NODE_BLOCK_PAYLOAD with retry the store's slot + 1. r12 the entry. */
+LOCAL_FUNCTION node_payload_retry
+    ENTER 0
+    PART    %r12, %rax, %rbx, Node_blocks
+    cmp     %rax, %rdi
+    jae     9f
+    imul    $NodeBlock__mem, %rdi, %rax
+    add     %rax, %r12
+    cmpq    $NODE_BLOCK_EXECUTING, NodeBlock_status(%r12)
+    jne     9f
+    movq    $NODE_BLOCK_PAYLOAD, NodeBlock_status(%r12)
+    mov     %rbp, %rdi
+    call    node_store_slot
+    inc     %rax
+    mov     %rax, NodeBlock_retry(%r12)
+9:  LEAVE 0
+END_FUNCTION node_payload_retry
+
+/*
+ * latestValidHash (optimistic-sync.md) from the store's node rdi: up its chain by parent, each
+ * node whose block_hash is not the hash at rsi gets store_payload_status INVALIDATED, until the
+ * node with that hash; a zero hash stops at the first zero block_hash. With rsi 0 (null), or a hash
+ * the chain does not have, only the node rdx (2^64 - 1 for none) gets it. r12 a node, r13 the hash,
+ * S7 the node found, S8 the node rdx. Locals: L a node, L+8 a status, L+16 a result.
+ */
+LOCAL_FUNCTION node_lvh
+    ENTER 32
+    mov     %rdi, %r12
+    mov     %rsi, %r13
+    mov     %rdx, S8(%rsp)
+    test    %r13, %r13
+    jz      5f
+    mov     %r12, %rax                      # the node of the hash, up the chain
+1:  PART    %rcx, %rdx, %rbp, Store_blocks
+    cmp     %rdx, %rax
+    jae     5f
+    imul    $BlockNode__mem, %rax, %rdx
+    add     %rdx, %rcx
+    lea     BlockNode_block_hash(%rcx), %rdx
+    NE32    %rdx, %r13, 2f
+    jmp     3f
+2:  mov     BlockNode_parent(%rcx), %rax
+    jmp     1b
+3:  mov     %rax, S7(%rsp)                  # found: each node from r12 below it
+4:  cmp     S7(%rsp), %r12
+    je      9f
+    mov     %r12, L(%rsp)
+    movq    $PAYLOAD_STATUS_INVALIDATED, (L + 8)(%rsp)
+    mov     %rbp, %rdi
+    lea     L(%rsp), %rsi
+    lea     (L + 8)(%rsp), %rdx
+    lea     (L + 16)(%rsp), %rcx
+    call    lantern_store_payload_status
+    imul    $BlockNode__mem, %r12, %rax
+    add     Store_blocks(%rbp), %rax
+    mov     BlockNode_parent(%rbp,%rax), %r12
+    jmp     4b
+5:  mov     S8(%rsp), %rax                  # null, or not found: the node in question
+    cmp     $-1, %rax
+    je      9f
+    mov     %rax, L(%rsp)
+    movq    $PAYLOAD_STATUS_INVALIDATED, (L + 8)(%rsp)
+    mov     %rbp, %rdi
+    lea     L(%rsp), %rsi
+    lea     (L + 8)(%rsp), %rdx
+    lea     (L + 16)(%rsp), %rcx
+    call    lantern_store_payload_status
+9:  LEAVE 32
+END_FUNCTION node_lvh
+
+/* The first rsi bytes of the ByteList rdi (engine_in) leave it. */
+LOCAL_FUNCTION node_engine_consume
+    FRAME 0
+    mov     16(%rdi), %rdx
+    sub     %rsi, %rdx
+    mov     %rdx, 16(%rdi)
+    add     $24, %rdi
+    add     %rdi, %rsi
+    call    lantern_copy
+    UNFRAME 0
+END_FUNCTION node_engine_consume
+
+/*
+ * The bytes of engine_in: a whole HTTP response of the call in flight ends it. r12 engine_in, r13
+ * the method, S7 the scratch size, restored on return, S8 the body's ByteList, S9 a block entry.
+ * Locals: L an HttpResponse (16), L+16 eof, L+24 the method, L+32 an EngineResponse (96), L+128 a
+ * node, L+136 a status.
+ */
+LOCAL_FUNCTION node_engine_read
+    ENTER 144
+    mov     Node_engine_in(%rbx), %r12
+    add     %rbx, %r12
+    mov     Node_engine_method(%rbx), %r13
+    test    %r13, %r13
+    jz      8f                              # no call in flight: the bytes go
+    mov     (%r14), %rax
+    mov     %rax, S7(%rsp)
+    mov     16(%r12), %rcx                  # the body's ByteList at the end of scratch, as long as the bytes
+    add     $(24 + 7), %rcx
+    and     $-8, %rcx
+    sub     %rcx, %rax
+    jb      7f
+    mov     %rax, (%r14)
+    lea     (%r14,%rax), %rdx
+    mov     %rdx, S8(%rsp)
+    mov     %rcx, (%rdx)
+    movq    $24, 8(%rdx)
+    movq    $0, 16(%rdx)
+    movq    $0, (L + 16)(%rsp)
+    mov     %r12, %rdi
+    lea     (L + 16)(%rsp), %rsi
+    mov     S8(%rsp), %rdx
+    lea     L(%rsp), %rcx
+    call    lantern_http_parse_response
+    cmp     $LANTERN_HTTP_MORE, %rax
+    je      6f
+    test    %rax, %rax
+    jnz     7f
+    cmpq    $200, L(%rsp)
+    jne     70f
+    mov     %r13, (L + 24)(%rsp)
+    mov     S8(%rsp), %rdi
+    lea     (L + 24)(%rsp), %rsi
+    lea     (L + 32)(%rsp), %rdx
+    call    lantern_engine_parse_response
+    test    %rax, %rax
+    jnz     70f
+    cmpq    $0, (L + 32 + EngineResponse_error)(%rsp)
+    jne     70f
+    mov     Node_engine_id(%rbx), %rax
+    dec     %rax
+    cmp     (L + 32 + EngineResponse_id)(%rsp), %rax
+    jne     70f
+    mov     %r12, %rdi
+    mov     (L + 8)(%rsp), %rsi
+    call    node_engine_consume
+    mov     S7(%rsp), %rax
+    mov     %rax, (%r14)
+    movq    $0, Node_engine_method(%rbx)    # the call ends
+    mov     (L + 32 + EngineResponse_status)(%rsp), %rax
+    cmp     $ENGINE_METHOD_NEW_PAYLOAD, %r13
+    jne     40f
+    mov     Node_engine_target(%rbx), %rdi  # engine_newPayload: its block
+    PART    %rcx, %rdx, %rbx, Node_blocks
+    cmp     %rdx, %rdi
+    jae     9f
+    imul    $NodeBlock__mem, %rdi, %rdx
+    add     %rdx, %rcx
+    mov     %rcx, S9(%rsp)
+    cmpq    $NODE_BLOCK_EXECUTING, NodeBlock_status(%rcx)
+    jne     9f
+    cmp     $ENGINE_STATUS_VALID, %rax
+    jne     20f
+    mov     $PAYLOAD_STATUS_VALID, %esi     # VALID: the import
+    call    node_import_now
+    jmp     9f
+20: cmp     $ENGINE_STATUS_SYNCING, %rax
+    je      21f
+    cmp     $ENGINE_STATUS_ACCEPTED, %rax
+    jne     30f
+21: mov     S9(%rsp), %rdi                  # SYNCING, ACCEPTED: optimistic when a candidate
+    add     $NodeBlock_parent_root, %rdi
+    call    node_store_find
+    cmp     $-1, %rax
+    je      23f
+    mov     BlockNode_block_hash(%rdx), %rax
+    or      (BlockNode_block_hash + 8)(%rdx), %rax
+    or      (BlockNode_block_hash + 16)(%rdx), %rax
+    or      (BlockNode_block_hash + 24)(%rdx), %rax
+    jnz     22f
+23: mov     %rbp, %rdi
+    call    node_store_slot
+    mov     S9(%rsp), %rcx
+    mov     NodeBlock_slot(%rcx), %rdx
+    add     $SAFE_SLOTS_TO_IMPORT_OPTIMISTICALLY, %rdx
+    cmp     %rax, %rdx
+    jbe     22f
+    mov     Node_engine_target(%rbx), %rdi  # no candidate: again in a later slot
+    call    node_payload_retry
+    jmp     9f
+22: mov     Node_engine_target(%rbx), %rdi
+    mov     $PAYLOAD_STATUS_NOT_VALIDATED, %esi
+    call    node_import_now
+    jmp     9f
+30: mov     S9(%rsp), %rcx                  # INVALID, INVALID_BLOCK_HASH: the block is invalid, latestValidHash from its parent
+    movq    $NODE_BLOCK_INVALID, NodeBlock_status(%rcx)
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    mov     NodeBlock_data_id(%rcx), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    mov     S9(%rsp), %rdi
+    add     $NodeBlock_parent_root, %rdi
+    call    node_store_find
+    cmp     $-1, %rax
+    je      9f
+    mov     %rax, %rdi
+    lea     (L + 32 + EngineResponse_latest_valid_hash)(%rsp), %rsi
+    xor     %ecx, %ecx
+    cmpq    $0, (L + 32 + EngineResponse_has_latest_valid_hash)(%rsp)
+    cmove   %rcx, %rsi
+    mov     $-1, %rdx
+    call    node_lvh
+    jmp     9f
+40: lea     Node_head_root(%rbx), %rdi      # engine_forkchoiceUpdated: of the head
+    call    node_store_find
+    cmp     $-1, %rax
+    je      9f
+    mov     %rax, (L + 128)(%rsp)
+    mov     (L + 32 + EngineResponse_status)(%rsp), %rcx
+    cmp     $ENGINE_STATUS_VALID, %rcx
+    jne     41f
+    movq    $PAYLOAD_STATUS_VALID, (L + 136)(%rsp)
+    mov     %rbp, %rdi
+    lea     (L + 128)(%rsp), %rsi
+    lea     (L + 136)(%rsp), %rdx
+    lea     (L + 16)(%rsp), %rcx
+    call    lantern_store_payload_status
+    jmp     9f
+41: cmp     $ENGINE_STATUS_INVALID, %rcx
+    je      42f
+    cmp     $ENGINE_STATUS_INVALID_BLOCK_HASH, %rcx
+    jne     9f
+42: mov     (L + 128)(%rsp), %rdi
+    mov     %rdi, %rdx
+    lea     (L + 32 + EngineResponse_latest_valid_hash)(%rsp), %rsi
+    xor     %ecx, %ecx
+    cmpq    $0, (L + 32 + EngineResponse_has_latest_valid_hash)(%rsp)
+    cmove   %rcx, %rsi
+    call    node_lvh
+9:  LEAVE 144
+6:  mov     S7(%rsp), %rax                  # part of a response: more bytes
+    mov     %rax, (%r14)
+    LEAVE 144
+70: mov     %r12, %rdi                      # a failed call, its response read
+    mov     (L + 8)(%rsp), %rsi
+    call    node_engine_consume
+7:  mov     S7(%rsp), %rax
+    mov     %rax, (%r14)
+    call    node_engine_failed
+8:  mov     Node_engine_in(%rbx), %rax      # the bytes left go
+    movq    $0, 16(%rbx,%rax)
+    LEAVE 144
+END_FUNCTION node_engine_read
 
 /* The import of each waiting block whose parent is the block of the entry rdi. r12 the root, r13 index. */
 LOCAL_FUNCTION node_children
@@ -740,7 +1187,12 @@ LOCAL_FUNCTION node_head
     imul    $BlockNode__mem, %rax, %rax
     add     %rax, %rcx
     lea     Node_head_root(%rbx), %rdi
-    COPY32  %rdi, %rcx
+    NE32    %rdi, %rcx, 2f                  # a new head with NODE_FLAG_ENGINE: a forkchoiceUpdated is due
+    jmp     3f
+2:  testq   $NODE_FLAG_ENGINE, Node_flags(%rbx)
+    jz      3f
+    orq     $NODE_FLAG_FCU, Node_flags(%rbx)
+3:  COPY32  %rdi, %rcx
 9:  LEAVE 16
 END_FUNCTION node_head
 
@@ -863,7 +1315,7 @@ LOCAL_FUNCTION node_event
     call    node_work
 39: LEAVE 48
 40: cmp     $NODE_EV_POW_BLOCK, %rax
-    jne     50f
+    jne     45f
     lea     NodeEvent_bytes(%r12), %r13     # POW_BLOCK: a PowBlock of the node
     cmpq    $POW_BLOCK_BYTES, 16(%r13)
     jne     49f
@@ -877,6 +1329,26 @@ LOCAL_FUNCTION node_event
     mov     $POW_BLOCK_BYTES, %edx
     call    lantern_copy
 49: LEAVE 48
+45: cmp     $NODE_EV_ENGINE, %rax
+    jne     50f
+    cmpq    $0, 16(%r12)
+    je      46f
+    call    node_engine_failed              # ENGINE 1: the connection failed
+    mov     Node_engine_in(%rbx), %rax
+    movq    $0, 16(%rbx,%rax)
+    LEAVE 48
+46: lea     NodeEvent_bytes(%r12), %rsi     # ENGINE 0: its bytes join engine_in
+    mov     Node_engine_in(%rbx), %rdi
+    add     %rbx, %rdi
+    mov     16(%rdi), %rax
+    mov     16(%rsi), %rdx
+    lea     (%rax,%rdx), %rcx
+    mov     %rcx, 16(%rdi)
+    lea     24(%rdi,%rax), %rdi
+    add     8(%rsi), %rsi
+    call    lantern_copy
+    call    node_engine_read
+    LEAVE 48
 50: mov     NodeAction_work_kind(%r12), %rax        # WORK_DONE
     mov     NodeEvent_result(%r12), %rcx
     cmp     $NODE_WORK_IMPORT_BLOCK, %rax
@@ -1119,7 +1591,7 @@ LOCAL_FUNCTION node_event
     call    node_ids
     LEAVE 48
 77: cmp     $NODE_WORK_BLOB, %rax           # BLOB: a sidecar of a response, checked
-    jne     70f
+    jne     85f
     mov     NodeAction_target(%r12), %rax
     PART    %rdx, %rsi, %rbx, Node_blobs
     cmp     %rsi, %rax
@@ -1144,6 +1616,50 @@ LOCAL_FUNCTION node_event
 78: movq    $NODE_BLOB_INVALID, NodeBlob_status(%r13)      # not valid, or held: its bytes go
     mov     $NODE_ACT_BYTES_FREE, %edi
     mov     NodeBlob_data_id(%r13), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    LEAVE 48
+85: cmp     $NODE_WORK_NEW_PAYLOAD, %rax    # NEW_PAYLOAD, FORKCHOICE: the request to the execution engine
+    je      86f
+    cmp     $NODE_WORK_FORKCHOICE, %rax
+    jne     70f
+86: test    %rcx, %rcx
+    jnz     87f
+    mov     (NodeEvent_chunk + 16)(%r12), %r13
+    lea     (48 + 7)(%r13), %rsi
+    and     $-8, %rsi
+    mov     $NODE_ACT_ENGINE, %edi
+    call    node_act
+    movq    $0, 16(%rax)
+    mov     (%rax), %rcx
+    sub     $24, %rcx
+    mov     %rcx, 24(%rax)
+    movq    $24, 32(%rax)
+    mov     %r13, 40(%rax)
+    lea     48(%rax), %rdi
+    lea     (NodeEvent_chunk + 24)(%r12), %rsi
+    mov     %r13, %rdx
+    call    lantern_copy
+    LEAVE 48
+87: movq    $0, Node_engine_method(%rbx)    # no request: the call ends
+    cmpq    $NODE_WORK_NEW_PAYLOAD, NodeAction_work_kind(%r12)
+    jne     79f
+    mov     NodeAction_target(%r12), %rdi
+    PART    %r13, %rdx, %rbx, Node_blocks
+    cmp     %rdx, %rdi
+    jae     79f
+    imul    $NodeBlock__mem, %rdi, %rdx
+    add     %rdx, %r13
+    cmpq    $NODE_BLOCK_EXECUTING, NodeBlock_status(%r13)
+    jne     79f
+    cmp     $LANTERN_NO_PAYLOAD, %rcx
+    jne     88f
+    mov     $PAYLOAD_STATUS_VALID, %esi     # no payload: the import
+    call    node_import_now
+    LEAVE 48
+88: movq    $NODE_BLOCK_INVALID, NodeBlock_status(%r13)
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    mov     NodeBlock_data_id(%r13), %rsi
     xor     %edx, %edx
     call    node_ids
     LEAVE 48
@@ -3341,10 +3857,11 @@ END_FUNCTION node_block_entry
  * events, L+8 the scratch size, L+16 p2p, L+24 tick, L+32 the end of the events handled, L+40
  * the queue's free bytes the P2P events take, saved, L+48 the libp2p scratch, L+56 the bytes of the P2P events, L+64 the P2P
  * events, L+72 the action room kept for the node, L+80 wakeup, L+88 libp2p's StepResult, L+96
- * libp2p's actions, L+104 the libp2p steps, L+112 a stream waits, L+120 the GOSSIP WORK_DONE events.
+ * libp2p's actions, L+104 the libp2p steps, L+112 a stream waits, L+120 the GOSSIP WORK_DONE events,
+ * L+128 the bytes of the ENGINE events.
  */
 FUNCTION lantern_node_step
-    ENTER 128
+    ENTER 144
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     %rdx, (L + 16)(%rsp)
@@ -3354,8 +3871,8 @@ FUNCTION lantern_node_step
     mov     16(%r8), %r13
     add     %r12, %r13
     mov     %r9, %r14
-    mov     (128 + 96)(%rsp), %r15          # the seventh and eighth arguments
-    mov     (128 + 104)(%rsp), %rax
+    mov     (144 + 96)(%rsp), %r15          # the seventh and eighth arguments
+    mov     (144 + 104)(%rsp), %rax
     mov     %rax, S7(%rsp)
     xor     %r8d, %r8d                      # first: check every event, and count
     xor     %r9d, %r9d
@@ -3364,6 +3881,7 @@ FUNCTION lantern_node_step
     movq    $0, (L + 56)(%rsp)
     movq    $0, (L + 64)(%rsp)
     movq    $0, (L + 120)(%rsp)
+    movq    $0, (L + 128)(%rsp)
     mov     %r12, %rdi
 1:  cmp     %r13, %rdi
     jae     5f
@@ -3395,8 +3913,16 @@ FUNCTION lantern_node_step
     jne     201f
     inc     %r9
     incq    (L + 120)(%rsp)
-201: cmpq   $NODE_WORK_SERVE, NodeAction_work_kind(%rdi)    # SERVE: a ByteList of the chunk inside
+201: mov    NodeAction_work_kind(%rdi), %rsi    # SERVE, and NEW_PAYLOAD or FORKCHOICE of LANTERN_VALID: a ByteList of the chunk inside
+    cmp     $NODE_WORK_SERVE, %rsi
+    je      202f
+    cmp     $NODE_WORK_NEW_PAYLOAD, %rsi
+    je      203f
+    cmp     $NODE_WORK_FORKCHOICE, %rsi
     jne     22f
+203: cmpq   $0, NodeEvent_result(%rdi)
+    jne     22f
+202:
     cmp     $(NodeEvent_chunk + 24), %rcx
     jb      7f
     cmpq    $24, (NodeEvent_chunk + 8)(%rdi)
@@ -3406,7 +3932,27 @@ FUNCTION lantern_node_step
     ja      7f
 22: inc     %r11
     jmp     4f
-21: cmp     $NODE_EV_P2P, %rdx              # a libp2p event inside, for a node with a libp2p state
+21: cmp     $NODE_EV_ENGINE, %rdx           # ENGINE: arg 0 with bytes, or 1; with NODE_FLAG_ENGINE
+    jne     211f
+    testq   $NODE_FLAG_ENGINE, Node_flags(%rbx)
+    jz      7f
+    cmp     $24, %rcx
+    jb      7f
+    mov     16(%rdi), %rsi
+    cmp     $1, %rsi
+    ja      7f
+    je      4f
+    cmp     $(24 + 24), %rcx
+    jb      7f
+    cmpq    $24, (24 + 8)(%rdi)
+    jne     7f
+    lea     -(24 + 24)(%rcx), %rsi
+    cmp     %rsi, (24 + 16)(%rdi)
+    ja      7f
+    mov     (24 + 16)(%rdi), %rsi
+    add     %rsi, (L + 128)(%rsp)
+    jmp     4f
+211: cmp    $NODE_EV_P2P, %rdx              # a libp2p event inside, for a node with a libp2p state
     jne     3f
     cmpq    $0, (L + 16)(%rsp)
     je      7f
@@ -3491,6 +4037,12 @@ FUNCTION lantern_node_step
     imul    $NODE_SYNC_BATCH, %rdx, %rdx
     add     %rdx, %rcx
 54: cmp     %rcx, %rax
+    jb      8f
+    mov     Node_engine_in(%rbx), %rax      # engine_in: the bytes of the ENGINE events
+    mov     (%rbx,%rax), %rcx
+    sub     $24, %rcx
+    sub     16(%rbx,%rax), %rcx
+    cmp     (L + 128)(%rsp), %rcx
     jb      8f
     mov     Node_pow_blocks(%rbx), %rax     # checkpoints: two for each WORK_DONE event, and two
     sub     Node_checkpoints(%rbx), %rax
@@ -3639,6 +4191,7 @@ FUNCTION lantern_node_step
     mov     %rdi, S9(%rsp)
     jmp     6b
 9:  call    node_head
+    call    node_engine_next
     movq    $0, (L + 112)(%rsp)
     cmpq    $0, (L + 16)(%rsp)              # the next block of each stream that serves, then libp2p again
     je      40f
@@ -3685,14 +4238,14 @@ FUNCTION lantern_node_step
     mov     (L + 80)(%rsp), %rax
     mov     %rax, NodeStepResult_wakeup(%rdi)
     xor     %eax, %eax
-    LEAVE 128
+    LEAVE 144
 14: mov     (L + 8)(%rsp), %rcx             # a status before any change
     mov     %rcx, (%r14)
-    LEAVE 128
+    LEAVE 144
 7:  mov     $LANTERN_INVALID_EVENT, %eax
-    LEAVE 128
+    LEAVE 144
 8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 128
+    LEAVE 144
 END_FUNCTION lantern_node_step
 
 /*
@@ -3746,6 +4299,10 @@ FUNCTION lantern_node_run
     jae     1f
     imul    $NodeBlock__mem, %rdi, %rdi
     mov     NodeBlock_data_available(%rsi,%rdi), %rax
+    testq   $NODE_FLAG_ENGINE, Node_flags(%rbx)     # with NODE_FLAG_ENGINE, the block's: the engine's answer
+    jz      1f
+    mov     NodeBlock_payload_status(%rsi,%rdi), %rcx
+    mov     %rcx, (L + BlockOptions_payload_status)(%rsp)
 1:  mov     %rax, (L + BlockOptions_data_available)(%rsp)
     movq    $0, (L + BlockOptions_pow_block)(%rsp)
     movq    $0, (L + BlockOptions_pow_parent)(%rsp)
@@ -3989,7 +4546,7 @@ FUNCTION lantern_node_run
     FORK_CALL node_block_root
     LEAVE 192
 80: cmp     $NODE_WORK_BLOB, %rax
-    jne     8f
+    jne     82f
     cmpq    $(NODE_BLOB_HEADER + 8), 16(%r14)   # BLOB: node_blob_sidecar of the fork of its slot, deneb or electra
     jb      18b
     mov     8(%r14), %rax
@@ -4012,6 +4569,157 @@ FUNCTION lantern_node_run
 81: cmp     $FORK_ELECTRA, %r10
     jne     18b
     CALL_GLOBAL lantern_electra_node_blob_sidecar
+    LEAVE 192
+82: cmp     $NODE_WORK_NEW_PAYLOAD, %rax
+    jne     83f
+    cmpq    $(100 + 84), 16(%r14)           # NEW_PAYLOAD: node_new_payload of the fork of the block's slot
+    jb      18b
+    mov     8(%r14), %rax
+    add     %r14, %rax
+    mov     100(%rax), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    cmp     $FORK_BELLATRIX, %r10
+    jb      86f
+    cmpq    $(NodeEvent_chunk + 24), S9(%rsp)
+    jb      7f
+    mov     S8(%rsp), %r8                   # the request's ByteList after the WORK_DONE fields
+    lea     NodeEvent_chunk(%r8), %r8
+    mov     S9(%rsp), %rax
+    sub     $NodeEvent_chunk, %rax
+    mov     %rax, (%r8)
+    movq    $24, 8(%r8)
+    movq    $0, 16(%r8)
+    mov     %r8, S10(%rsp)
+    mov     %r14, %rdi
+    mov     %rbx, %rsi
+    lea     NodeAction_arg(%r12), %rdx
+    mov     %r15, %rcx
+    mov     S8(%rsp), %r9
+    lea     NodeEvent_result(%r9), %r9
+    FORK_CALL_BELLATRIX node_new_payload
+    test    %rax, %rax
+    jnz     99b
+    mov     S8(%rsp), %rcx
+    cmpq    $0, NodeEvent_result(%rcx)
+    jne     99b
+    jmp     84f
+83: cmp     $NODE_WORK_FORKCHOICE, %rax
+    jne     8f
+    mov     %rbp, %rdi                      # FORKCHOICE: of the fork of the store's slot
+    call    node_store_slot
+    mov     %rax, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, S7(%rsp)
+    cmp     $FORK_BELLATRIX, %rax
+    jb      86f
+    lea     Node_head_root(%rbx), %rdi      # the ForkchoiceState at L+96: head, safe (justified), finalized
+    call    node_store_find
+    cmp     $-1, %rax
+    je      87f
+    lea     (L + 96)(%rsp), %rdi
+    lea     BlockNode_block_hash(%rdx), %rsi
+    COPY32  %rdi, %rsi
+    lea     (Store_justified_checkpoint + 8)(%rbp), %rdi
+    call    node_store_find
+    cmp     $-1, %rax
+    je      87f
+    lea     (L + 128)(%rsp), %rdi
+    lea     BlockNode_block_hash(%rdx), %rsi
+    COPY32  %rdi, %rsi
+    lea     (Store_finalized_checkpoint + 8)(%rbp), %rdi
+    call    node_store_find
+    cmp     $-1, %rax
+    je      87f
+    lea     (L + 160)(%rsp), %rdi
+    lea     BlockNode_block_hash(%rdx), %rsi
+    COPY32  %rdi, %rsi
+    mov     (L + 96)(%rsp), %rax            # a head of no payload: no call
+    or      (L + 104)(%rsp), %rax
+    or      (L + 112)(%rsp), %rax
+    or      (L + 120)(%rsp), %rax
+    jz      86f
+    cmpq    $(NodeEvent_chunk + 24), S9(%rsp)
+    jb      7f
+    mov     (%r15), %rax                    # at the end of scratch: the JSON (536), the token (280), the host (88)
+    mov     %rax, S10(%rsp)
+    cmp     $(904 + 512), %rax
+    jb      7f
+    sub     $904, %rax
+    mov     %rax, (%r15)
+    lea     (%r15,%rax), %r13
+    movq    $536, (%r13)
+    movq    $24, 8(%r13)
+    movq    $0, 16(%r13)
+    movq    $280, 536(%r13)
+    movq    $24, (536 + 8)(%r13)
+    movq    $0, (536 + 16)(%r13)
+    movq    $88, 816(%r13)
+    movq    $24, (816 + 8)(%r13)
+    mov     Node_engine_host_len(%rbx), %rdx
+    mov     %rdx, (816 + 16)(%r13)
+    lea     (816 + 24)(%r13), %rdi
+    lea     Node_engine_host(%rbx), %rsi
+    call    lantern_copy
+    lea     (L + 96)(%rsp), %rdi
+    lea     NodeAction_arg(%r12), %rsi
+    mov     %r13, %rdx
+    mov     S7(%rsp), %r10
+    FORK_CALL_BELLATRIX engine_forkchoice_updated
+    test    %rax, %rax
+    jnz     85f
+    mov     Node_time_ms(%rbx), %rax        # the JWT at the time in seconds
+    xor     %edx, %edx
+    mov     $1000, %ecx
+    div     %rcx
+    mov     %rax, L(%rsp)
+    lea     Node_jwt_secret(%rbx), %rdi
+    lea     L(%rsp), %rsi
+    mov     %r15, %rdx
+    lea     536(%r13), %rcx
+    call    lantern_jwt_token
+    test    %rax, %rax
+    jnz     85f
+    mov     S8(%rsp), %rcx                  # the HTTP request after the WORK_DONE fields
+    lea     NodeEvent_chunk(%rcx), %rcx
+    mov     S9(%rsp), %rax
+    sub     $NodeEvent_chunk, %rax
+    mov     %rax, (%rcx)
+    movq    $24, 8(%rcx)
+    movq    $0, 16(%rcx)
+    lea     816(%r13), %rdi
+    lea     536(%r13), %rsi
+    mov     %r13, %rdx
+    call    lantern_http_post
+    test    %rax, %rax
+    jnz     85f
+    mov     S10(%rsp), %rax
+    mov     %rax, (%r15)
+    mov     S8(%rsp), %r8
+    lea     NodeEvent_chunk(%r8), %r8
+    mov     %r8, S10(%rsp)
+84: mov     S10(%rsp), %r8                  # the sizes of the list and the event
+    mov     16(%r8), %rax
+    add     $(24 + 7), %rax
+    and     $-8, %rax
+    mov     %rax, (%r8)
+    add     $NodeEvent_chunk, %rax
+    mov     S8(%rsp), %rcx
+    mov     %rax, (%rcx)
+    xor     %eax, %eax
+    LEAVE 192
+85: mov     S10(%rsp), %rcx                 # a status, with the scratch's size back
+    mov     %rcx, (%r15)
+    LEAVE 192
+86: mov     S8(%rsp), %rcx
+    movq    $LANTERN_NO_PAYLOAD, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+    LEAVE 192
+87: mov     S8(%rsp), %rcx
+    movq    $LANTERN_INVALID_UNKNOWN_BLOCK, NodeEvent_result(%rcx)
+    xor     %eax, %eax
     LEAVE 192
 8:  mov     $LANTERN_INVALID_EVENT, %eax
     LEAVE 192

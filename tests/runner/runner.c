@@ -1753,7 +1753,7 @@ typedef struct {
     int compliance;   /* the compliance runner's rules: invalid operations inside a valid block are ignored */
     struct {          /* the payload_status steps: the execution engine's answer for a payload */
         uint8_t block_hash[32], latest_valid_hash[32];
-        uint64_t status, has_latest;
+        uint64_t status, has_latest, el; /* el: ENGINE_STATUS_* of the step's string */
     } payloads[64];
     size_t npayloads;
     uint8_t *pow[16];  /* the pow_block steps: PowBlock values */
@@ -2030,6 +2030,30 @@ static uint64_t step_data_available(tv parts, tv step, const uint8_t *body, cons
 }
 
 /* An on_block step, then the block's attestations and attester slashings when it is valid. */
+/*
+ * A payload_status step: the execution engine's answer for the payload of block_hash from now on.
+ * bellatrix optimistic-sync.md: SYNCING and ACCEPTED are NOT_VALIDATED, INVALID and
+ * INVALID_BLOCK_HASH INVALIDATED.
+ */
+static void fc_payload_step(fc_node *n, tv step, const char **why) {
+    static const char *const names[5] = {"VALID", "INVALID", "SYNCING", "ACCEPTED", "INVALID_BLOCK_HASH"};
+    tv ps = tv_get(step, "payload_status"), st = tv_get(ps, "status"), lvh = tv_get(ps, "latest_valid_hash");
+    uint64_t hlen, slen = rd64(st + 1), el = 0;
+    const uint8_t *h = tv_bytes(tv_get(step, "block_hash"), &hlen);
+    for (uint64_t k = 0; k < 5; k++)
+        if (slen == strlen(names[k]) && !memcmp(st + 9, names[k], (size_t)slen)) el = k + 1;
+    if (n->npayloads == 64 || hlen != 32 || !el) {
+        *why = "payload_status step";
+        return;
+    }
+    memcpy(n->payloads[n->npayloads].block_hash, h, 32);
+    n->payloads[n->npayloads].el = el;
+    n->payloads[n->npayloads].status = el == 1 ? PAYLOAD_VALID : el == 3 || el == 4 ? PAYLOAD_NOT_VALIDATED : PAYLOAD_INVALIDATED;
+    n->payloads[n->npayloads].has_latest = lvh && *lvh == T_BYTES;
+    if (n->payloads[n->npayloads].has_latest) memcpy(n->payloads[n->npayloads].latest_valid_hash, lvh + 9, 32);
+    n->npayloads++;
+}
+
 static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
     char key[128];
     uint64_t blen, vsize;
@@ -2299,28 +2323,31 @@ static uint8_t *fc_setup(fc_node *n, tv parts, const char **why) {
 /* include/lantern.inc: Node, NodeBlock, the events, the actions and the work kinds. */
 #define NODE_HEAD_ROOT 24
 #define NODE_BLOCKS 64
-#define NODE_BLOCK_BYTES 120
+#define NODE_BLOCK_BYTES 136
 #define NB_STATE_ID 80
 #define NB_STATUS 88
-enum { NB_WAITING = 1, NB_IMPORTING, NB_IMPORTED, NB_INVALID, NB_HASHING, NB_BLOBS };
+enum { NB_WAITING = 1, NB_IMPORTING, NB_IMPORTED, NB_INVALID, NB_HASHING, NB_BLOBS, NB_PAYLOAD, NB_EXECUTING };
+#define NODE_FLAG_ENGINE 16
+#define NODE_TIME_MS 16
 #define NODE_BLOBS 256 /* Node_blobs: NodeBlob entries of 64 bytes: block_root, index, slot, data_id, status */
 #define NODE_BLOB_BYTES 64
 #define NBLOB_VALID 2
-enum { EV_TICK = 1, EV_BLOCK, EV_ATTESTATION, EV_ATTESTER_SLASHING, EV_POW_BLOCK, EV_PAYLOAD_STATUS, EV_WORK_DONE, EV_P2P };
-enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK, ACT_P2P_LIST };
+enum { EV_TICK = 1, EV_BLOCK, EV_ATTESTATION, EV_ATTESTER_SLASHING, EV_POW_BLOCK, EV_PAYLOAD_STATUS, EV_WORK_DONE, EV_P2P, EV_ENGINE };
+enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK, ACT_P2P_LIST, ACT_ENGINE };
 enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING, WORK_SERVE, WORK_GOSSIP,
-       WORK_SYNC_BLOCK, WORK_BLOB };
+       WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE };
 #define EV_RESULT 72
 #define EV_WORK_DONE_SIZE 128
 #define LANTERN_NEED_TARGET_STATE 55
 #define SHELL_RESULTS 1024
+#define ENGINE_HOST "localhost:8551" /* the node's execution engine: the runner */
 
 typedef struct {
     uint64_t id, size;
     uint8_t *b;
 } shell_buf;
 
-#define NODE_ROOM_FIELDS 9 /* NodeRoom: blocks, checkpoints, pow_blocks, peers, streams, request_bytes, p2p_out, messages, blobs */
+#define NODE_ROOM_FIELDS 10 /* NodeRoom: blocks, checkpoints, pow_blocks, peers, streams, request_bytes, p2p_out, messages, blobs, engine_bytes */
 
 struct p2p_net;
 
@@ -2500,7 +2527,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         free(sa);
         if (st != 1 || *why) break;
         /* BUFFER_TOO_SMALL: the event of a SERVE, the store for a node or for the justified balances, else the state's lists. */
-        if (kind == WORK_SERVE) {
+        if (kind == WORK_SERVE || kind == WORK_NEW_PAYLOAD || kind == WORK_FORKCHOICE) {
             free(ev);
             ev_size *= 4;
             ev = buffer(ev_size);
@@ -2532,7 +2559,8 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         *why = "lantern_node_run wrote out of bounds";
     uint64_t esize = *why ? 0 : rd64(ev);
     if (!*why && (esize < EV_WORK_DONE_SIZE || esize > ev_size || esize % 8 || rd64(ev + 8) != EV_WORK_DONE ||
-                  memcmp(ev + 16, work + 16, 56) || (kind != WORK_SERVE && esize != EV_WORK_DONE_SIZE)))
+                  memcmp(ev + 16, work + 16, 56) ||
+                  (kind != WORK_SERVE && kind != WORK_NEW_PAYLOAD && kind != WORK_FORKCHOICE && esize != EV_WORK_DONE_SIZE)))
         *why = "lantern_node_run: the event is not the WORK_DONE of the work";
     if (!*why) {
         uint64_t result = rd64(ev + EV_RESULT);
@@ -2549,6 +2577,8 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
 static void *p2p_state_of(struct p2p_net *net);
 static void p2p_tick(struct p2p_net *net, int side, uint8_t *tick);
 static void p2p_shell(struct p2p_net *net, int side, uint8_t *act, const char **why);
+
+static void shell_engine(fc_node *n, const uint8_t *req, uint64_t len, const char **why);
 
 /* One lantern_node_step with the pending events, again with more room while it asks for it, then its actions in order. */
 static void shell_step(fc_node *n, const char **why) {
@@ -2617,6 +2647,8 @@ static void shell_step(fc_node *n, const char **why) {
             shell_drop(s, rd64(act + 16), why);
         else if (kind == ACT_WORK && size == 72)
             shell_work(n, act, why);
+        else if (kind == ACT_ENGINE && size >= 48 && rd64(act + 24) == size - 24 && rd64(act + 32) == 24 && rd64(act + 40) <= size - 48)
+            shell_engine(n, act + 48, rd64(act + 40), why);
         else if (kind == ACT_P2P_LIST && s->net && size >= 40 && rd64(act + 16) == size - 16 && rd64(act + 24) == 24 &&
                  rd64(act + 32) == size - 40) {
             /* the shell requests of libp2p, in order; the node took the application notices */
@@ -2627,6 +2659,88 @@ static void shell_step(fc_node *n, const char **why) {
         at += size;
     }
     free(events);
+}
+
+/* The first place of needle in the len bytes at hay, or NULL. */
+static const char *find_bytes(const char *hay, uint64_t len, const char *needle) {
+    size_t nl = strlen(needle);
+    for (uint64_t i = 0; i + nl <= len; i++)
+        if (!memcmp(hay + i, needle, nl)) return hay + i;
+    return NULL;
+}
+
+/* The 32 bytes of the hex string after the key in the len bytes at body, into out; 0 when there is none. */
+static int find_hash(const char *body, uint64_t len, const char *key, uint8_t *out) {
+    const char *p = find_bytes(body, len, key);
+    if (!p || (uint64_t)(p - body) + strlen(key) + 64 > len) return 0;
+    p += strlen(key);
+    for (int i = 0; i < 32; i++) {
+        unsigned v;
+        if (sscanf(p + 2 * i, "%2x", &v) != 1) return 0;
+        out[i] = (uint8_t)v;
+    }
+    return 1;
+}
+
+/*
+ * The execution engine of the node (docs/reference/node.md, Test vectors): one HTTP request of
+ * engine_newPayload or engine_forkchoiceUpdated, with the JWT of the node's secret and time; the
+ * answer is the payloadStatus of the case's last payload_status step of the payload's hash (the
+ * head's for forkchoiceUpdated), else VALID, in two NODE_EV_ENGINE events.
+ */
+static void shell_engine(fc_node *n, const uint8_t *req, uint64_t len, const char **why) {
+    static const char *const names[5] = {"VALID", "INVALID", "SYNCING", "ACCEPTED", "INVALID_BLOCK_HASH"};
+    struct node_shell *s = n->shell;
+    const char *r = (const char *)req, *end = find_bytes(r, len, "\r\n\r\n");
+    uint8_t secret[32], token[24 + 256], hash[32];
+    memset(secret, 0x42, 32);
+    wr64(token, sizeof token);
+    uint64_t iat = rd64(s->node + NODE_TIME_MS) / 1000;
+    if (!end || len < 16 || memcmp(r, "POST / HTTP/1.1\r\n", 17)) {
+        *why = "engine: not an HTTP POST";
+        return;
+    }
+    if (CALL(lantern_jwt_token, secret, &iat, fresh_scratch(), token) != 0) *why = "engine: jwt_token status";
+    else {
+        char auth[300];
+        snprintf(auth, sizeof auth, "\r\nAuthorization: Bearer %.*s\r\n", (int)rd64(token + 16), (const char *)token + 24);
+        if (!find_bytes(r, (uint64_t)(end - r) + 2, auth)) *why = "engine: no JWT of the node's secret and time";
+    }
+    if (*why) return;
+    const char *body = end + 4;
+    uint64_t blen = len - (uint64_t)(body - r);
+    int fcu = find_bytes(body, blen, "\"method\":\"engine_forkchoiceUpdatedV") != NULL;
+    if (!fcu && !find_bytes(body, blen, "\"method\":\"engine_newPayloadV")) {
+        *why = "engine: no engine_newPayload or engine_forkchoiceUpdated";
+        return;
+    }
+    const char *idp = find_bytes(body, blen, "\"id\":");
+    if (!idp || !find_hash(body, blen, fcu ? "\"headBlockHash\":\"0x" : "\"blockHash\":\"0x", hash)) {
+        *why = "engine: no id or block hash";
+        return;
+    }
+    unsigned long long id = strtoull(idp + 5, NULL, 10);
+    uint64_t el = 1, has_latest = 1;
+    const uint8_t *latest = hash;
+    for (size_t k = 0; k < n->npayloads; k++)
+        if (!memcmp(n->payloads[k].block_hash, hash, 32)) {
+            el = n->payloads[k].el;
+            has_latest = n->payloads[k].has_latest;
+            latest = n->payloads[k].latest_valid_hash;
+        }
+    char lvh[80] = "null", status[256], json[512], http[700];
+    if (has_latest) {
+        strcpy(lvh, "\"0x");
+        for (int i = 0; i < 32; i++) snprintf(lvh + 3 + 2 * i, 3, "%02x", latest[i]);
+        strcat(lvh, "\"");
+    }
+    snprintf(status, sizeof status, "{\"status\":\"%s\",\"latestValidHash\":%s,\"validationError\":null}", names[el - 1], lvh);
+    if (fcu) snprintf(json, sizeof json, "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{\"payloadStatus\":%s,\"payloadId\":null}}", id, status);
+    else snprintf(json, sizeof json, "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":%s}", id, status);
+    int hl = snprintf(http, sizeof http, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\n\r\n%s",
+                      strlen(json), json);
+    shell_event(s, EV_ENGINE, 0, (const uint8_t *)http, (uint64_t)hl / 2); /* in two parts */
+    shell_event(s, EV_ENGINE, 0, (const uint8_t *)http + hl / 2, (uint64_t)(hl - hl / 2));
 }
 
 /* Steps until the node gives no more work. */
@@ -2713,8 +2827,8 @@ static void shell_block_step(fc_node *n, tv parts, tv step, const char **why) {
 static int node_mode(tv parts) {
     tv steps = tv_get(parts, "steps");
     tv st = steps ? steps + 9 : NULL;
-    for (uint64_t k = 0, c = steps ? rd64(steps + 1) : 0; k < c; k++, st = tv_skip(st))
-        if (tv_get(st, "payload_status")) return 0;
+    for (uint64_t k = 0, c = steps ? rd64(steps + 1) : 0; k < c && FORK < FORK_BELLATRIX; k++, st = tv_skip(st))
+        if (tv_get(st, "payload_status")) return 0; /* from bellatrix on, the node's execution engine gives them */
     return steps != NULL;
 }
 
@@ -2730,10 +2844,14 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
     *anchor_block = fc_setup(n, parts, why);
     if (*anchor_block) {
         /* Small capacities, so that the node grows through lantern_node_copy. */
-        uint8_t anchor[72]; /* NodeAnchor: root, slot, genesis_validators_root */
-        uint64_t flags = 0, need = 0;
+        uint8_t anchor[176] = {0}; /* NodeAnchor: root, slot, genesis_validators_root, jwt_secret, engine_host_len, engine_host */
+        uint64_t flags = FORK >= FORK_BELLATRIX ? NODE_FLAG_ENGINE : 0, need = 0;
         for (int i = 0; i < NODE_ROOM_FIELDS; i++) s->room[i] = 2;
         s->room[2] = 1;
+        s->room[9] = 4096; /* the execution engine's answers */
+        memset(anchor + 72, 0x42, 32);
+        wr64(anchor + 104, strlen(ENGINE_HOST));
+        memcpy(anchor + 112, ENGINE_HOST, strlen(ENGINE_HOST));
         s->seen_room[0] = s->seen_room[1] = s->seen_room[2] = 1;
         s->seen_room[3] = 64;
         shell_seen(s, why);
@@ -2811,6 +2929,8 @@ static void fc_node_case(tv parts, int serve, const char **why) {
             }
         } else if (tv_get(st, "checks")) {
             fc_checks(&n, tv_get(st, "checks"), why);
+        } else if (tv_get(st, "payload_status")) {
+            fc_payload_step(&n, st, why); /* the runner's execution engine answers with it from now on */
         } else {
             *why = "unknown step";
         }
@@ -3984,22 +4104,7 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
                 why = "a pow_block step before bellatrix";
 #endif
             } else if (tv_get(s, "payload_status")) {
-                /* bellatrix optimistic-sync.md: SYNCING and ACCEPTED are NOT_VALIDATED, INVALID and INVALID_BLOCK_HASH INVALIDATED. */
-                tv ps = tv_get(s, "payload_status"), st = tv_get(ps, "status"), lvh = tv_get(ps, "latest_valid_hash");
-                uint64_t hlen, slen2;
-                const uint8_t *h = tv_bytes(tv_get(s, "block_hash"), &hlen);
-                const char *text = (const char *)(st + 9);
-                slen2 = rd64(st + 1);
-                if (n.npayloads == 64 || hlen != 32) why = "payload_status step";
-                else {
-                    memcpy(n.payloads[n.npayloads].block_hash, h, 32);
-                    n.payloads[n.npayloads].status = slen2 == 5 && !memcmp(text, "VALID", 5) ? PAYLOAD_VALID
-                                                     : (slen2 == 7 && !memcmp(text, "SYNCING", 7)) || (slen2 == 8 && !memcmp(text, "ACCEPTED", 8))
-                                                         ? PAYLOAD_NOT_VALIDATED : PAYLOAD_INVALIDATED;
-                    n.payloads[n.npayloads].has_latest = lvh && *lvh == T_BYTES;
-                    if (n.payloads[n.npayloads].has_latest) memcpy(n.payloads[n.npayloads].latest_valid_hash, lvh + 9, 32);
-                    n.npayloads++;
-                }
+                fc_payload_step(&n, s, &why);
             } else {
                 why = "unknown step";
             }
