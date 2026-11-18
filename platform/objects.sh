@@ -48,6 +48,9 @@ build_objects() {
         -c "$dep/asm-discv5/asm/core/$isa/discv5.s" -o "$out/deps/discv5.o"
     as -I"$dep/asm-rlp/include" -I"$dep/asm-rlp/platform/$os" -c "$dep/asm-rlp/asm/core/$isa/rlp.s" -o "$out/deps/rlp.o"
     deps="$deps $out/deps/discv5.o $out/deps/rlp.o"
+    # asm-libp2p's shell: the sockets, the monotonic clock and the random bytes of the binary.
+    as -I"$dep/asm-libp2p/include" -I"$dep/asm-libp2p/platform/$os" \
+        -c "$dep/asm-libp2p/asm/shell/$os/$isa/shell.s" -o "$out/deps/libp2p-shell.o"
 
     # The signatures-off test runner (tests/runner/bls_off.c) links a copy of the
     # BLS object whose three signature checks are renamed, so that the stand-ins

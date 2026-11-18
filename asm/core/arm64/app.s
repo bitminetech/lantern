@@ -208,3 +208,734 @@ FUNCTION lantern_app_options
     mov     x0, #LANTERN_INVALID_OPTION
     LEAVE 32
 END_FUNCTION lantern_app_options
+
+/* ------------------------------------------------------------ The binary: startup and loop */
+
+/*
+ * The App: the state of lantern_app_main, in memory from lantern_shell_map. Pairs are an address
+ * and a size. The functions below read it from x19.
+ */
+.set APP_ARGS, 0                            /* the ArgList */
+.set APP_OPTIONS, 8                         /* AppOptions */
+.set APP_CONFIG, APP_OPTIONS + AppOptions__size
+.set APP_SCRATCH, APP_CONFIG + CONFIG_SIZE  /* pair */
+.set APP_STATE, APP_SCRATCH + 16            /* pair: the anchor state, BufferId 1 */
+.set APP_BLOCK, APP_STATE + 16              /* pair: the anchor block */
+.set APP_STORE, APP_BLOCK + 16              /* pair */
+.set APP_NODE, APP_STORE + 16               /* pair */
+.set APP_SEEN, APP_NODE + 16                /* pair */
+.set APP_ACTIONS, APP_SEEN + 16             /* pair: the actions of a step */
+.set APP_EVENTS, APP_ACTIONS + 16           /* pair: a ByteList of the events of the next step */
+.set APP_FORK, APP_EVENTS + 16              /* the fork of the genesis state */
+.set APP_FLAGS, APP_FORK + 8                /* NODE_FLAG_* */
+.set APP_LAST_SLOT, APP_FLAGS + 8           /* the slot of the last log line */
+.set APP_STREAM, APP_LAST_SLOT + 8          /* 1 or 2, for lantern_shell_write */
+.set APP_FILE, APP_STREAM + 8               /* FileResult */
+.set APP_RESULT, APP_FILE + 32              /* NodeStepResult */
+.set APP_NODE_ROOM, APP_RESULT + 16         /* NodeRoom */
+.set APP_STORE_ROOM, APP_NODE_ROOM + 80     /* StoreRoom */
+.set APP_SEEN_ROOM, APP_STORE_ROOM + 16     /* SeenRoom */
+.set APP_STATE_ROOM, APP_SEEN_ROOM + 32     /* StateRoom */
+.set APP_ANCHOR, APP_STATE_ROOM + 64        /* NodeAnchor */
+.set APP_BUFS, APP_ANCHOR + 176             /* the BufferId table: address, count, capacity */
+.set APP_TMP, APP_BUFS + 24                 /* 64 bytes */
+.set APP_LINE, APP_TMP + 64                 /* a ByteList: the log line */
+.set APP_LINE_MAX, 512
+.set APP_PATH, APP_LINE + 24 + APP_LINE_MAX /* a ByteList: a path */
+.set APP_PATH_MAX, 4096
+.set APP_SIZE, (APP_PATH + 24 + APP_PATH_MAX + 4095) & ~4095
+.set APP_BLOCK_BYTES, 1 << 16               /* the anchor block */
+.set APP_BUF_ENTRY, 24                      /* a BufferId table entry: id, address, size */
+.set APP_BUFS_CAP, 4096
+.set APP_QUEUE_BYTES, 1 << 20               /* the events, and the actions, of a step */
+.set APP_TRIES, 8                           /* the times a start step doubles its buffers */
+.set APP_WAIT_MS, 500
+
+    RODATA
+    .p2align 3
+app_builtin_config:                         /* the pinned config of the preset: a ByteList */
+    .quad app_builtin_config_end - app_builtin_config, 24, app_builtin_config_end - app_builtin_config_text
+app_builtin_config_text:
+    .incbin "config.yaml"
+app_builtin_config_end:
+    .p2align 3
+app_node_room:                              /* NodeRoom; peers from --target-peers */
+    .quad 1024, 64, 1, 64, 512, 8192, 1 << 20, 4096, 1024, 1 << 20
+app_seen_room:                              /* SeenRoom */
+    .quad 65536, 65536, 4096, 1 << 20
+app_state_room:                             /* StateRoom */
+    .quad 1024, 2048, 64, 1024, 64, 64, 4, 4096
+app_m_prefix:
+    .ascii "lantern: "
+.set app_m_prefix_len, . - app_m_prefix
+app_m_option:
+    .ascii "faulty option at argument "
+.set app_m_option_len, . - app_m_option
+app_m_read:
+    .ascii "cannot read "
+.set app_m_read_len, . - app_m_read
+app_m_error:
+    .ascii ": error "
+.set app_m_error_len, . - app_m_error
+app_m_line:
+    .ascii ": faulty line "
+.set app_m_line_len, . - app_m_line
+app_m_status:
+    .ascii ": status "
+.set app_m_status_len, . - app_m_status
+app_m_short:
+    .ascii ": too short"
+.set app_m_short_len, . - app_m_short
+app_m_memory:
+    .ascii "no memory"
+.set app_m_memory_len, . - app_m_memory
+app_m_store:
+    .ascii "the store"
+.set app_m_store_len, . - app_m_store
+app_m_node:
+    .ascii "the node"
+.set app_m_node_len, . - app_m_node
+app_m_step:
+    .ascii "a node step"
+.set app_m_step_len, . - app_m_step
+app_m_started:
+    .ascii "started at slot "
+.set app_m_started_len, . - app_m_started
+app_m_fork:
+    .ascii ", fork "
+.set app_m_fork_len, . - app_m_fork
+app_m_head:
+    .ascii ", head 0x"
+.set app_m_head_len, . - app_m_head
+app_m_slot:
+    .ascii "slot "
+.set app_m_slot_len, . - app_m_slot
+app_m_finalized:
+    .ascii ", finalized epoch "
+.set app_m_finalized_len, . - app_m_finalized
+app_config_name:
+    .ascii "config.yaml"
+.set app_config_name_len, . - app_config_name
+app_genesis_name:
+    .ascii "genesis.ssz"
+.set app_genesis_name_len, . - app_genesis_name
+app_hex_digits:
+    .ascii "0123456789abcdef"
+
+/* L1: x0 = memory of x0 bytes from lantern_shell_map, zeroed, or 0. Locals: the size, the address. */
+LOCAL_FUNCTION app_map
+    FRAME 16
+    str     x0, [sp, #16]
+    add     x0, sp, #16
+    add     x1, sp, #24
+    CALL_GLOBAL lantern_shell_map
+    ldr     x0, [sp, #24]
+    UNFRAME 16
+END_FUNCTION app_map
+
+/* L1: the pair at x19 + x0 goes back to lantern_shell_unmap and becomes 0, 0. */
+LOCAL_FUNCTION app_unmap
+    FRAME 16
+    add     x9, x19, x0
+    str     x9, [sp, #16]
+    ldr     x10, [x9]
+    cbz     x10, 1f
+    mov     x0, x9
+    add     x1, x9, #8
+    CALL_GLOBAL lantern_shell_unmap
+    ldr     x9, [sp, #16]
+    stp     xzr, xzr, [x9]
+1:  UNFRAME 16
+END_FUNCTION app_unmap
+
+/* L1: the pair at x19 + x0 becomes new memory of x1 bytes, its first u64 the size: x0 = the memory, or 0. */
+LOCAL_FUNCTION app_alloc
+    ENTER 0
+    add     x20, x19, x0
+    mov     x21, x1
+    mov     x0, x21
+    bl      app_map
+    cbz     x0, 1f
+    str     x21, [x0]
+    stp     x0, x21, [x20]
+1:  LEAVE 0
+END_FUNCTION app_alloc
+
+/* L0: the log line starts with "lantern: ". Uses x0-x2, x9-x12. */
+LOCAL_FUNCTION app_line_start
+    UNWIND_END_PROLOGUE
+    str     xzr, [x19, #(APP_LINE + 16)]
+    ADDRESS x0, app_m_prefix
+    mov     x1, #app_m_prefix_len
+    b       app_line_text
+END_FUNCTION app_line_start
+
+/* L0: the x1 bytes at x0 join the log line, as far as it has room. Uses x0, x1, x9-x12. */
+LOCAL_FUNCTION app_line_text
+    UNWIND_END_PROLOGUE
+    add     x9, x19, #APP_LINE
+    ldr     x10, [x9, #16]
+    mov     x11, #APP_LINE_MAX
+    sub     x11, x11, x10
+    cmp     x1, x11
+    csel    x1, x1, x11, ls
+    add     x11, x10, x1
+    str     x11, [x9, #16]
+    add     x9, x9, #24
+    add     x9, x9, x10
+1:  cbz     x1, 2f
+    ldrb    w12, [x0], #1
+    strb    w12, [x9], #1
+    sub     x1, x1, #1
+    b       1b
+2:  ret
+END_FUNCTION app_line_text
+
+/* L1: the decimal digits of x0 join the log line. Locals: 24 digit bytes. */
+LOCAL_FUNCTION app_line_u64
+    FRAME 32
+    add     x9, sp, #48                     /* the digits, from the end */
+    mov     x10, #10
+1:  udiv    x11, x0, x10
+    msub    x12, x11, x10, x0
+    add     x12, x12, #0x30
+    strb    w12, [x9, #-1]!
+    mov     x0, x11
+    cbnz    x0, 1b
+    mov     x0, x9
+    add     x1, sp, #48
+    sub     x1, x1, x9
+    bl      app_line_text
+    UNFRAME 32
+END_FUNCTION app_line_u64
+
+/* L1: the hex digits of the x1 bytes at x0 join the log line. Locals: x0, x1, then 2 digits. */
+LOCAL_FUNCTION app_line_hex
+    FRAME 32
+    stp     x0, x1, [sp, #16]
+1:  ldp     x0, x1, [sp, #16]
+    cbz     x1, 2f
+    ldrb    w9, [x0], #1
+    sub     x1, x1, #1
+    stp     x0, x1, [sp, #16]
+    ADDRESS x10, app_hex_digits
+    lsr     w11, w9, #4
+    ldrb    w11, [x10, x11]
+    strb    w11, [sp, #32]
+    and     w11, w9, #15
+    ldrb    w11, [x10, x11]
+    strb    w11, [sp, #33]
+    add     x0, sp, #32
+    mov     x1, #2
+    bl      app_line_text
+    b       1b
+2:  UNFRAME 32
+END_FUNCTION app_line_hex
+
+/* L1: the log line and an LF go to stream x0: 1 the standard output, 2 the standard error. */
+LOCAL_FUNCTION app_line_end
+    FRAME 16
+    str     x0, [x19, #APP_STREAM]
+    mov     w9, #10
+    strb    w9, [sp, #16]
+    add     x0, sp, #16
+    mov     x1, #1
+    bl      app_line_text
+    add     x0, x19, #APP_STREAM
+    add     x1, x19, #APP_LINE
+    CALL_GLOBAL lantern_shell_write
+    UNFRAME 16
+END_FUNCTION app_line_end
+
+/* L1: the path of the x1 bytes of the name at x0 in the network directory: a ByteList at APP_PATH. */
+LOCAL_FUNCTION app_path
+    ENTER 0
+    mov     x20, x0
+    mov     x21, x1
+    ldp     x22, x23, [x19, #(APP_OPTIONS + AppOptions_network_dir)]
+    add     x9, x23, x21                    /* the directory, /, the name: too long reads as too long */
+    add     x9, x9, #1
+    add     x10, x19, #APP_PATH
+    cmp     x9, #APP_PATH_MAX
+    b.hi    1f
+    str     x9, [x10, #16]
+    ldr     x11, [x19, #APP_ARGS]
+    add     x1, x11, x22
+    add     x0, x10, #24
+    mov     x2, x23
+    bl      lantern_copy
+    add     x10, x19, #APP_PATH
+    add     x0, x10, #24
+    add     x0, x0, x23
+    mov     w9, #0x2f                       /* / */
+    strb    w9, [x0], #1
+    mov     x1, x20
+    mov     x2, x21
+    bl      lantern_copy
+    LEAVE 0
+1:  mov     x9, #(APP_PATH_MAX + 1)         /* a count past the room: the shell gives its error */
+    str     x9, [x10, #16]
+    LEAVE 0
+END_FUNCTION app_path
+
+/* L1: the path of the log line: the bytes of APP_PATH, as far as they fit. */
+LOCAL_FUNCTION app_line_path
+    FRAME 0
+    add     x9, x19, #APP_PATH
+    add     x0, x9, #24
+    ldr     x1, [x9, #16]
+    mov     x10, #APP_PATH_MAX
+    cmp     x1, x10
+    csel    x1, x1, x10, ls
+    bl      app_line_text
+    UNFRAME 0
+END_FUNCTION app_line_path
+
+/* L1: the file at APP_PATH, read into APP_FILE: x0 = 0, or 2 after a line on the standard error. */
+LOCAL_FUNCTION app_read
+    FRAME 0
+    add     x0, x19, #APP_PATH
+    add     x1, x19, #APP_FILE
+    CALL_GLOBAL lantern_shell_read_file
+    ldr     x9, [x19, #APP_FILE]
+    cbz     x9, 1f
+    bl      app_line_start                  /* cannot read <path>: error <n> */
+    ADDRESS x0, app_m_read
+    mov     x1, #app_m_read_len
+    bl      app_line_text
+    bl      app_line_path
+    ADDRESS x0, app_m_error
+    mov     x1, #app_m_error_len
+    bl      app_line_text
+    ldr     x0, [x19, #APP_FILE]
+    bl      app_line_u64
+    mov     x0, #2
+    bl      app_line_end
+    mov     x0, #2
+    UNFRAME 0
+1:  mov     x0, #0
+    UNFRAME 0
+END_FUNCTION app_read
+
+/* L1: the memory of APP_FILE goes back. */
+LOCAL_FUNCTION app_file_free
+    FRAME 16
+    add     x9, x19, #APP_FILE
+    ldr     x10, [x9, #8]
+    cbz     x10, 1f
+    add     x0, x9, #8
+    add     x1, x9, #24
+    CALL_GLOBAL lantern_shell_unmap
+    str     xzr, [x19, #(APP_FILE + 8)]
+1:  UNFRAME 16
+END_FUNCTION app_file_free
+
+/* L1: a line "<x1 bytes at x0>: status <x2>" on the standard error, then x0 = 2. Locals: x0-x2. */
+LOCAL_FUNCTION app_fail_status
+    FRAME 32
+    stp     x0, x1, [sp, #16]
+    str     x2, [sp, #32]
+    bl      app_line_start
+    ldp     x0, x1, [sp, #16]
+    bl      app_line_text
+    ADDRESS x0, app_m_status
+    mov     x1, #app_m_status_len
+    bl      app_line_text
+    ldr     x0, [sp, #32]
+    bl      app_line_u64
+    mov     x0, #2
+    bl      app_line_end
+    mov     x0, #2
+    UNFRAME 32
+END_FUNCTION app_fail_status
+
+/*
+ * L2: the start of docs/reference/app.md: the config, the anchor of genesis.ssz, the store, the
+ * node and the Seen: x0 = 0, or 2 after a line on the standard error. x20 a ByteList, x21 the
+ * file's size, x22 a size, x23 a size, x24 the tries. Locals: L a line number or a size.
+ */
+LOCAL_FUNCTION app_start
+    ENTER 16
+    ADDRESS x0, app_builtin_config          /* the config: the pinned config of the preset, then the network's */
+    add     x1, x19, #APP_CONFIG
+    add     x2, sp, #L
+    bl      lantern_config_parse
+    ADDRESS x0, app_config_name
+    mov     x1, #app_config_name_len
+    bl      app_path
+    bl      app_read
+    cbnz    x0, 99f
+    ldr     x0, [x19, #(APP_FILE + 8)]
+    add     x1, x19, #APP_CONFIG
+    add     x2, sp, #L
+    bl      lantern_config_parse
+    mov     x20, x0
+    bl      app_file_free
+    cbz     x20, 1f
+    bl      app_line_start                  /* <path>: faulty line <n> */
+    bl      app_line_path
+    ADDRESS x0, app_m_line
+    mov     x1, #app_m_line_len
+    bl      app_line_text
+    ldr     x0, [sp, #L]
+    bl      app_line_u64
+    b       98f
+1:  ADDRESS x0, app_genesis_name            /* genesis.ssz: the fork of its slot */
+    mov     x1, #app_genesis_name_len
+    bl      app_path
+    bl      app_read
+    cbnz    x0, 99f
+    ldr     x20, [x19, #(APP_FILE + 8)]
+    ldr     x21, [x19, #(APP_FILE + 16)]
+    cmp     x21, #(40 + 8)
+    b.hs    2f
+    bl      app_line_start
+    bl      app_line_path
+    ADDRESS x0, app_m_short
+    mov     x1, #app_m_short_len
+    bl      app_line_text
+    b       98f
+2:  ldr     x0, [x20, #(24 + 40)]           /* BeaconState.slot */
+    add     x1, x19, #APP_CONFIG
+    bl      node_fork
+    str     x0, [x19, #APP_FORK]
+    add     x0, x19, #APP_STATE_ROOM
+    ADDRESS x1, app_state_room
+    mov     x2, #64
+    bl      lantern_copy
+    add     x22, x21, x21, lsl #1           /* the state: 3 times the file and 16 MiB; scratch: 2 times and 64 MiB */
+    MOVQ    x9, 1 << 24
+    add     x22, x22, x9
+    lsl     x23, x21, #1
+    MOVQ    x9, 1 << 26
+    add     x23, x23, x9
+    mov     x24, #0
+3:  mov     x0, #APP_STATE
+    mov     x1, x22
+    bl      app_alloc
+    cbz     x0, 97f
+    mov     x0, #APP_SCRATCH
+    mov     x1, x23
+    bl      app_alloc
+    cbz     x0, 97f
+    mov     x0, #APP_BLOCK
+    mov     x1, #APP_BLOCK_BYTES
+    bl      app_alloc
+    cbz     x0, 97f
+    mov     x0, x20
+    add     x1, x19, #APP_STATE_ROOM
+    ldr     x2, [x19, #APP_SCRATCH]
+    ldr     x3, [x19, #APP_STATE]
+    ldr     x4, [x19, #APP_BLOCK]
+    ldr     x15, [x19, #APP_FORK]
+    FORK_CALL node_anchor
+    cbz     x0, 4f
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.ne    96f
+    mov     x0, #APP_STATE                  /* more room, a few times */
+    bl      app_unmap
+    mov     x0, #APP_SCRATCH
+    bl      app_unmap
+    mov     x0, #APP_BLOCK
+    bl      app_unmap
+    lsl     x22, x22, #1
+    lsl     x23, x23, #1
+    add     x24, x24, #1
+    cmp     x24, #APP_TRIES
+    b.lo    3b
+    mov     x0, #LANTERN_BUFFER_TOO_SMALL
+96: mov     x2, x0                          /* genesis.ssz: status <n> */
+    ADDRESS x0, app_genesis_name
+    mov     x1, #app_genesis_name_len
+    bl      app_fail_status
+    b       99f
+4:  bl      app_file_free
+    mov     x9, #4096                       /* the store: nodes, and validators below the file's bytes / 121 */
+    mov     x10, #121
+    udiv    x10, x21, x10
+    add     x10, x10, x9
+    add     x11, x19, #APP_STORE_ROOM
+    stp     x9, x10, [x11]
+    mov     x24, #0
+5:  add     x0, x19, #APP_STORE_ROOM
+    add     x1, sp, #L
+    bl      lantern_store_size
+    mov     x0, #APP_STORE
+    ldr     x1, [sp, #L]
+    bl      app_alloc
+    cbz     x0, 97f
+    ldr     x0, [x19, #APP_STATE]
+    ldr     x1, [x19, #APP_BLOCK]
+    add     x2, x19, #APP_CONFIG
+    add     x3, x19, #APP_STORE_ROOM
+    ldr     x4, [x19, #APP_SCRATCH]
+    ldr     x5, [x19, #APP_STORE]
+    ldr     x15, [x19, #APP_FORK]
+    FORK_CALL get_forkchoice_store
+    cbz     x0, 6f
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.ne    95f
+    mov     x0, #APP_STORE
+    bl      app_unmap
+    add     x11, x19, #APP_STORE_ROOM
+    ldp     x9, x10, [x11]
+    lsl     x9, x9, #1
+    lsl     x10, x10, #1
+    stp     x9, x10, [x11]
+    add     x24, x24, #1
+    cmp     x24, #APP_TRIES
+    b.lo    5b
+    mov     x0, #LANTERN_BUFFER_TOO_SMALL
+95: mov     x2, x0                          /* the store: status <n> */
+    ADDRESS x0, app_m_store
+    mov     x1, #app_m_store_len
+    bl      app_fail_status
+    b       99f
+6:  ldr     x9, [x19, #APP_STORE]           /* the node's anchor: the store's node 0, the state's root */
+    ldr     x10, [x9, #Store_blocks]
+    add     x1, x9, x10
+    add     x0, x19, #APP_ANCHOR
+    mov     x2, #32
+    bl      lantern_copy
+    ldr     x9, [x19, #APP_STORE]
+    ldr     x10, [x9, #Store_blocks]
+    add     x10, x9, x10
+    ldr     x11, [x10, #BlockNode_slot]
+    str     x11, [x19, #(APP_ANCHOR + 32)]
+    add     x0, x19, #(APP_ANCHOR + 40)
+    ldr     x1, [x19, #APP_STATE]
+    add     x1, x1, #NODE_STATE_GVR
+    mov     x2, #32
+    bl      lantern_copy
+    add     x0, x19, #APP_NODE_ROOM         /* the node */
+    ADDRESS x1, app_node_room
+    mov     x2, #80
+    bl      lantern_copy
+    ldr     x9, [x19, #(APP_OPTIONS + AppOptions_target_peers)]
+    str     x9, [x19, #(APP_NODE_ROOM + NodeRoom_peers)]
+    add     x0, x19, #APP_NODE_ROOM
+    add     x1, sp, #L
+    bl      lantern_node_size
+    cbnz    x0, 94f
+    mov     x0, #APP_NODE
+    ldr     x1, [sp, #L]
+    bl      app_alloc
+    cbz     x0, 97f
+    add     x0, x19, #APP_NODE_ROOM
+    add     x1, x19, #APP_CONFIG
+    add     x2, x19, #APP_ANCHOR
+    add     x3, x19, #APP_FLAGS
+    ldr     x4, [x19, #APP_NODE]
+    bl      lantern_node_init
+    cbnz    x0, 94f
+    add     x0, x19, #APP_SEEN_ROOM         /* the Seen */
+    ADDRESS x1, app_seen_room
+    mov     x2, #32
+    bl      lantern_copy
+    add     x0, x19, #APP_SEEN_ROOM
+    add     x1, sp, #L
+    bl      lantern_seen_size
+    mov     x0, #APP_SEEN
+    ldr     x1, [sp, #L]
+    bl      app_alloc
+    cbz     x0, 97f
+    add     x0, x19, #APP_SEEN_ROOM
+    ldr     x1, [x19, #APP_SEEN]
+    bl      lantern_seen_init
+    cbnz    x0, 94f
+    mov     x0, #(APP_BUF_ENTRY * APP_BUFS_CAP) /* BufferId 1: the anchor state */
+    bl      app_map
+    cbz     x0, 97f
+    str     x0, [x19, #APP_BUFS]
+    mov     x9, #1
+    str     x9, [x0]
+    add     x12, x19, #APP_STATE
+    ldp     x10, x11, [x12]
+    stp     x10, x11, [x0, #8]
+    mov     x10, #APP_BUFS_CAP
+    add     x12, x19, #(APP_BUFS + 8)
+    stp     x9, x10, [x12]
+    mov     x0, #APP_ACTIONS                /* the queues of a step */
+    mov     x1, #APP_QUEUE_BYTES
+    bl      app_alloc
+    cbz     x0, 97f
+    mov     x0, #APP_EVENTS
+    mov     x1, #APP_QUEUE_BYTES
+    bl      app_alloc
+    cbz     x0, 97f
+    mov     x9, #24
+    stp     x9, xzr, [x0, #8]
+    bl      app_line_start                  /* started at slot <s>, fork <f>, head 0x<root> */
+    ADDRESS x0, app_m_started
+    mov     x1, #app_m_started_len
+    bl      app_line_text
+    ldr     x0, [x19, #(APP_ANCHOR + 32)]
+    bl      app_line_u64
+    ADDRESS x0, app_m_fork
+    mov     x1, #app_m_fork_len
+    bl      app_line_text
+    ldr     x0, [x19, #APP_FORK]
+    bl      app_line_u64
+    ADDRESS x0, app_m_head
+    mov     x1, #app_m_head_len
+    bl      app_line_text
+    add     x0, x19, #APP_ANCHOR
+    mov     x1, #32
+    bl      app_line_hex
+    mov     x0, #1
+    bl      app_line_end
+    mov     x0, #0
+    LEAVE 16
+94: mov     x2, x0                          /* the node: status <n> */
+    ADDRESS x0, app_m_node
+    mov     x1, #app_m_node_len
+    bl      app_fail_status
+    b       99f
+97: bl      app_line_start                  /* no memory */
+    ADDRESS x0, app_m_memory
+    mov     x1, #app_m_memory_len
+    bl      app_line_text
+98: mov     x0, #2
+    bl      app_line_end
+99: mov     x0, #2
+    LEAVE 16
+END_FUNCTION app_start
+
+/*
+ * L2: the loop: a NODE_EV_TICK of the time, lantern_node_step, a line at each new slot, then a
+ * wait. x20 the shell context, x21 the wait's events. Locals: L ShellParams, then the time and the wait.
+ */
+LOCAL_FUNCTION app_loop
+    ENTER 48
+    mov     x9, #1                          /* a shell context for the waits */
+    MOVQ    x10, 1 << 17
+    stp     x9, x10, [sp, #L]
+    add     x0, sp, #L
+    add     x1, sp, #(L + 16)
+    CALL_GLOBAL libp2p_shell_size
+    ldr     x0, [sp, #(L + 16)]
+    bl      app_map
+    cbz     x0, 9f
+    mov     x20, x0
+    ldr     x9, [sp, #(L + 16)]
+    str     x9, [x20]
+    add     x0, sp, #L
+    mov     x1, x20
+    CALL_GLOBAL libp2p_shell_init
+    MOVQ    x0, 1 << 16
+    bl      app_map
+    cbz     x0, 9f
+    mov     x21, x0
+    MOVQ    x9, 1 << 16
+    mov     x10, #24
+    stp     x9, x10, [x21]
+1:  add     x0, sp, #(L + 32)               /* the time, as a NODE_EV_TICK */
+    CALL_GLOBAL lantern_shell_time_ms
+    ldr     x9, [x19, #APP_EVENTS]
+    ldr     x10, [x9, #16]
+    add     x11, x9, #24
+    add     x11, x11, x10
+    mov     x12, #24
+    mov     x13, #NODE_EV_TICK
+    stp     x12, x13, [x11]
+    ldr     x13, [sp, #(L + 32)]
+    str     x13, [x11, #16]
+    add     x10, x10, #24
+    str     x10, [x9, #16]
+    ldr     x9, [x19, #APP_ACTIONS]         /* the step */
+    mov     x10, #24
+    stp     x10, xzr, [x9, #8]
+    ldr     x0, [x19, #APP_NODE]
+    ldr     x1, [x19, #APP_STORE]
+    mov     x2, #0
+    mov     x3, #0
+    ldr     x4, [x19, #APP_EVENTS]
+    ldr     x5, [x19, #APP_SCRATCH]
+    ldr     x6, [x19, #APP_ACTIONS]
+    add     x7, x19, #APP_RESULT
+    bl      lantern_node_step
+    cbz     x0, 2f
+    mov     x2, x0                          /* a node step: status <n> */
+    ADDRESS x0, app_m_step
+    mov     x1, #app_m_step_len
+    bl      app_fail_status
+2:  ldr     x9, [x19, #APP_EVENTS]
+    str     xzr, [x9, #16]
+    ldr     x0, [x19, #APP_STORE]           /* a line at each new slot */
+    bl      node_store_slot
+    ldr     x9, [x19, #APP_LAST_SLOT]
+    cmp     x0, x9
+    b.eq    3f
+    str     x0, [x19, #APP_LAST_SLOT]
+    str     x0, [sp, #(L + 40)]
+    bl      app_line_start                  /* slot <s>, head 0x<root>, finalized epoch <e> */
+    ADDRESS x0, app_m_slot
+    mov     x1, #app_m_slot_len
+    bl      app_line_text
+    ldr     x0, [sp, #(L + 40)]
+    bl      app_line_u64
+    ADDRESS x0, app_m_head
+    mov     x1, #app_m_head_len
+    bl      app_line_text
+    ldr     x0, [x19, #APP_NODE]
+    add     x0, x0, #Node_head_root
+    mov     x1, #8
+    bl      app_line_hex
+    ADDRESS x0, app_m_finalized
+    mov     x1, #app_m_finalized_len
+    bl      app_line_text
+    ldr     x0, [x19, #APP_STORE]
+    ldr     x0, [x0, #Store_finalized_checkpoint]
+    bl      app_line_u64
+    mov     x0, #1
+    bl      app_line_end
+3:  mov     x9, #APP_WAIT_MS                /* the wait */
+    str     x9, [sp, #(L + 40)]
+    str     xzr, [x21, #16]
+    mov     x0, x20
+    add     x1, sp, #(L + 40)
+    mov     x2, x21
+    CALL_GLOBAL libp2p_shell_wait
+    b       1b
+9:  mov     x0, #2
+    LEAVE 48
+END_FUNCTION app_loop
+
+/* (args): docs/reference/app.md. x19 the App, x20 args. Locals: L the fault. */
+FUNCTION lantern_app_main
+    ENTER 16
+    mov     x20, x0
+    MOVQ    x0, APP_SIZE
+    bl      app_map
+    cbz     x0, 9f
+    mov     x19, x0
+    str     x20, [x19, #APP_ARGS]
+    MOVQ    x9, 24 + APP_LINE_MAX
+    mov     x10, #24
+    add     x11, x19, #APP_LINE
+    stp     x9, x10, [x11]
+    MOVQ    x9, 24 + APP_PATH_MAX
+    add     x11, x19, #APP_PATH
+    stp     x9, x10, [x11]
+    mov     x0, x20
+    add     x1, x19, #APP_OPTIONS
+    add     x2, sp, #L
+    bl      lantern_app_options
+    cbz     x0, 1f
+    bl      app_line_start                  /* faulty option at argument <n> */
+    ADDRESS x0, app_m_option
+    mov     x1, #app_m_option_len
+    bl      app_line_text
+    ldr     x0, [sp, #L]
+    bl      app_line_u64
+    mov     x0, #2
+    bl      app_line_end
+    mov     x0, #1
+    LEAVE 16
+1:  bl      app_start
+    cbnz    x0, 8f
+    bl      app_loop
+8:  LEAVE 16
+9:  mov     x0, #2
+    LEAVE 16
+END_FUNCTION lantern_app_main

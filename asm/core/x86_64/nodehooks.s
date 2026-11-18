@@ -8,6 +8,9 @@
 .if BeaconState_slot - NODE_STATE_SLOT
 .error "BeaconState_slot is not NODE_STATE_SLOT"
 .endif
+.if BeaconState_genesis_validators_root - NODE_STATE_GVR
+.error "BeaconState_genesis_validators_root is not NODE_STATE_GVR"
+.endif
 
 /*
  * Decode the ByteList rsi as the type rdi into the end of the scratch rdx, whose size field

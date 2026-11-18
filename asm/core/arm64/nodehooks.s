@@ -8,6 +8,9 @@
 .if BeaconState_slot - NODE_STATE_SLOT
 .error "BeaconState_slot is not NODE_STATE_SLOT"
 .endif
+.if BeaconState_genesis_validators_root - NODE_STATE_GVR
+.error "BeaconState_genesis_validators_root is not NODE_STATE_GVR"
+.endif
 
 /*
  * L0: decode the ByteList x1 as the type x0 into the end of the scratch x2, whose size field
