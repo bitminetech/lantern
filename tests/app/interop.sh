@@ -56,7 +56,7 @@ case $client in
     set -- --network=custom --configuration-directory=/net --data-dir=/tmp/data --http-address=0.0.0.0 --http-port=5052 \
         --libp2p-port=9000 --discovery-port=9000 --disable-enr-auto-update --enr-address=$peer --enr-tcp-port=9000 \
         --enr-udp-port=9000 --enable-private-discovery --eth1-rpc-urls=$engine --jwt-secret=/net/jwt.hex
-    env="-e GRANDINE_LOG=eth2_libp2p=debug,p2p=debug" ;;
+    env="-e GRANDINE_LOG=eth2_libp2p=trace,p2p=debug,libp2p_swarm=debug,libp2p_noise=debug,libp2p_yamux=debug,multistream_select=debug" ;;
   *) echo "unknown client: $client" >&2; exit 2 ;;
 esac
 
@@ -140,5 +140,8 @@ else
     docker logs lantern-interop-peer > "$work/peer.log" 2>&1 || true
     head -60 "$work/peer.log"
     grep -i -E "genesis|digest|fork|goodbye|disconnect|peer|dial|status" "$work/peer.log" | grep -v -i "subscribed to" | tail -60
+    id=$(api 172.30.0.11 /eth/v1/node/identity | sed -n 's/.*"peer_id":"\([^"]*\)".*/\1/p')
+    echo "== $client: its lines on lantern ($id) and its address"
+    [ -n "$id" ] && grep -E "$id|172\.30\.0\.11" "$work/peer.log" | head -80 || true
 fi
 exit $status
