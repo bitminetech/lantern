@@ -23,6 +23,7 @@
 
 .include "memory.s"
 .include "config.s"
+.include "options.s"
 .include "seen_find.s"
 .include "store.s"
 .include "seen.s"
@@ -31,4 +32,3 @@
 .include "engine.s"
 .include "jsonrpc.s"
 .include "node.s"
-.include "app.s"

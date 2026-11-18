@@ -12,58 +12,6 @@
     add     %rbx, \reg
 .endm
 
-/* Call lantern_<fork>_<name> for the fork in r10 (FORK_PHASE0 to FORK_FULU). */
-.macro FORK_CALL name
-    cmp     $FORK_ALTAIR, %r10
-    jae     81f
-    CALL_GLOBAL lantern_phase0_\name
-    jmp     89f
-81: cmp     $FORK_BELLATRIX, %r10
-    jae     82f
-    CALL_GLOBAL lantern_altair_\name
-    jmp     89f
-82: cmp     $FORK_CAPELLA, %r10
-    jae     83f
-    CALL_GLOBAL lantern_bellatrix_\name
-    jmp     89f
-83: cmp     $FORK_DENEB, %r10
-    jae     84f
-    CALL_GLOBAL lantern_capella_\name
-    jmp     89f
-84: cmp     $FORK_ELECTRA, %r10
-    jae     85f
-    CALL_GLOBAL lantern_deneb_\name
-    jmp     89f
-85: cmp     $FORK_FULU, %r10
-    jae     86f
-    CALL_GLOBAL lantern_electra_\name
-    jmp     89f
-86: CALL_GLOBAL lantern_fulu_\name
-89:
-.endm
-
-/* Call lantern_<fork>_<name> for the fork in r10, bellatrix to fulu. */
-.macro FORK_CALL_BELLATRIX name
-    cmp     $FORK_CAPELLA, %r10
-    jae     91f
-    CALL_GLOBAL lantern_bellatrix_\name
-    jmp     96f
-91: cmp     $FORK_DENEB, %r10
-    jae     92f
-    CALL_GLOBAL lantern_capella_\name
-    jmp     96f
-92: cmp     $FORK_ELECTRA, %r10
-    jae     93f
-    CALL_GLOBAL lantern_deneb_\name
-    jmp     96f
-93: cmp     $FORK_FULU, %r10
-    jae     94f
-    CALL_GLOBAL lantern_electra_\name
-    jmp     96f
-94: CALL_GLOBAL lantern_fulu_\name
-96:
-.endm
-
 /* rax = the fork of the slot rdi with the config rsi: the last fork whose epoch is at most the slot's. Uses rcx, rdx. */
 LOCAL_FUNCTION node_fork
     UNWIND_END_PROLOGUE

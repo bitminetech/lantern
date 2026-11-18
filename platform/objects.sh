@@ -74,6 +74,11 @@ build_objects() {
         core="-I$root/include/$preset -I$root/include -I$plat -I$root/asm/core/$isa -I$dep/asm-ssz/include -I$dep/asm-crypto/include -I$dep/asm-snappy/include -I$dep/asm-libp2p/include -I$dep/asm-discv5/include"
         as $core -c "$root/asm/core/$isa/common.s" -o "$out/$preset/common.o"
         objects="$objects $out/$preset/common.o"
+        # The binary's startup and loop: its own object, which only the binary pulls from the library.
+        if [ -e "$root/asm/core/$isa/app.s" ]; then
+            as $core -c "$root/asm/core/$isa/app.s" -o "$out/$preset/app.o"
+            objects="$objects $out/$preset/app.o"
+        fi
         for fork in $FORKS; do
             as $core -Wa,-defsym,FORK=$(fork_number $fork) -c "$root/asm/core/$isa/lantern.s" -o "$out/$preset/$fork.o"
             objects="$objects $out/$preset/$fork.o"

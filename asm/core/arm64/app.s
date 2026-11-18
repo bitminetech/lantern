@@ -1,215 +1,20 @@
 /*
- * The application, ARM64: in the common object. Requirements: docs/reference/app.md.
+ * The binary's startup and loop, ARM64: its own object, which only the binary links (entry.s calls
+ * lantern_app_main). Requirements: docs/reference/app.md.
  */
-
-    RODATA
-.include "app_options.inc"
-
-/* L0: x0 = 0 and x1 = the u64 of the decimal digits x0 to x1, one or more; else x0 = 1. Uses x9-x12. */
-LOCAL_FUNCTION app_decimal
-    UNWIND_END_PROLOGUE
-    cmp     x0, x1
-    b.hs    9f
-    mov     x9, #0
-1:  cmp     x0, x1
-    b.hs    8f
-    ldrb    w10, [x0], #1
-    sub     w10, w10, #0x30
-    cmp     w10, #9
-    b.hi    9f
-    mov     x11, #10
-    umulh   x12, x9, x11
-    cbnz    x12, 9f
-    mul     x9, x9, x11
-    adds    x9, x9, x10
-    b.cs    9f
-    b       1b
-8:  mov     x1, x9
-    mov     x0, #0
-    ret
-9:  mov     x0, #1
-    ret
-END_FUNCTION app_decimal
-
-/*
- * L0: x0 = 0 and x1 = the IPv4 address of the bytes x0 to x1, 4 decimal numbers of 0 to 255 with
- * dots between them, its 4 bytes in order in the low bytes; else x0 = 1. Uses x9-x14.
- */
-LOCAL_FUNCTION app_ipv4
-    UNWIND_END_PROLOGUE
-    mov     x9, #0                          /* the address */
-    mov     x10, #0                         /* the numbers */
-    mov     x13, #0                         /* the shift of the next one */
-1:  mov     x11, #0                         /* a number */
-    mov     x12, #0                         /* its digits */
-2:  cmp     x0, x1
-    b.hs    3f
-    ldrb    w14, [x0]
-    cmp     w14, #0x2e                      /* . */
-    b.eq    3f
-    sub     w14, w14, #0x30
-    cmp     w14, #9
-    b.hi    9f
-    add     x12, x12, #1
-    cmp     x12, #3
-    b.hi    9f
-    add     x11, x11, x11, lsl #2
-    lsl     x11, x11, #1
-    add     x11, x11, x14
-    add     x0, x0, #1
-    b       2b
-3:  cbz     x12, 9f
-    cmp     x11, #255
-    b.hi    9f
-    lsl     x11, x11, x13
-    orr     x9, x9, x11
-    add     x13, x13, #8
-    add     x10, x10, #1
-    cmp     x0, x1
-    b.hs    4f
-    add     x0, x0, #1                      /* past the dot, to the next number */
-    cmp     x10, #4
-    b.hs    9f
-    b       1b
-4:  cmp     x10, #4
-    b.ne    9f
-    mov     x1, x9
-    mov     x0, #0
-    ret
-9:  mov     x0, #1
-    ret
-END_FUNCTION app_ipv4
-
-/*
- * (args, options, fault): docs/reference/app.md. x19 args, x20 options, x21 fault, x22 the
- * argument count, x23 the next argument, x24 the Arg entries, x25 an option record, x26 the
- * value's start, x27 its length, x28 the argument that holds it. Locals: L the name's start,
- * L+8 its length, L+16 the option's argument.
- */
-FUNCTION lantern_app_options
-    ENTER 32
-    mov     x19, x0
-    mov     x20, x1
-    mov     x21, x2
-    mov     x0, x20                         /* the defaults */
-    mov     x1, #AppOptions__size
-    bl      lantern_zero
-    mov     x9, #APP_DEFAULT_PORT
-    str     x9, [x20, #AppOptions_port]
-    mov     x9, #APP_DEFAULT_HTTP_PORT
-    str     x9, [x20, #AppOptions_http_port]
-    mov     x9, #APP_DEFAULT_TARGET_PEERS
-    str     x9, [x20, #AppOptions_target_peers]
-    ldr     x22, [x19, #(ArgList_args + 8)]
-    ldr     x9, [x19, #ArgList_args]
-    add     x24, x19, x9
-    mov     x23, #0
-1:  cmp     x23, x22                        /* the next option: --name value or --name=value */
-    b.hs    50f
-    str     x23, [sp, #(L + 16)]
-    mov     x28, x23
-    add     x9, x24, x23, lsl #4
-    ldp     x10, x11, [x9]
-    cmp     x11, #3
-    b.lo    91f
-    add     x12, x19, x10
-    ldrb    w13, [x12]
-    ldrb    w14, [x12, #1]
-    cmp     w13, #0x2d
-    b.ne    91f
-    cmp     w14, #0x2d
-    b.ne    91f
-    add     x10, x10, #2
-    sub     x11, x11, #2
-    str     x10, [sp, #L]
-    add     x12, x19, x10
-    mov     x13, #0
-2:  cmp     x13, x11
-    b.hs    3f
-    ldrb    w14, [x12, x13]
-    cmp     w14, #0x3d                      /* = */
-    b.eq    4f
-    add     x13, x13, #1
-    b       2b
-3:  str     x11, [sp, #(L + 8)]             /* --name value: the value is the next argument */
-    add     x28, x23, #1
-    cmp     x28, x22
-    b.hs    91f
-    add     x9, x24, x28, lsl #4
-    ldp     x26, x27, [x9]
-    add     x23, x23, #2
-    b       5f
-4:  str     x13, [sp, #(L + 8)]             /* --name=value */
-    add     x26, x10, x13
-    add     x26, x26, #1
-    sub     x27, x11, x13
-    sub     x27, x27, #1
-    add     x23, x23, #1
-5:  ADDRESS x25, app_options
-6:  ADDRESS x9, app_options_end
-    cmp     x25, x9
-    b.hs    91f                             /* not an option */
-    ldp     x0, x1, [sp, #L]
-    add     x0, x19, x0
-    add     x2, x25, #24
-    ldr     x3, [x25]
-    bl      config_name_is
-    cbnz    x0, 7f
-    add     x25, x25, #APP_OPTION_BYTES
-    b       6b
-7:  cbz     x27, 90f                        /* an empty value */
-    ldr     x9, [x25, #16]
-    cmp     x9, #APP_OPTION_ENDPOINT
-    b.hi    20f
-    b.ne    8f
-    cmp     x27, #7                         /* the endpoint: without http:// */
-    b.lo    8f
-    add     x0, x19, x26
-    mov     x1, #7
-    ADDRESS x2, app_http
-    mov     x3, #7
-    bl      config_name_is
-    cbz     x0, 8f
-    add     x26, x26, #7
-    sub     x27, x27, #7
-    cbz     x27, 90f
-8:  ldr     x10, [x25, #8]                  /* a text: its Arg */
-    add     x10, x20, x10
-    stp     x26, x27, [x10]
-    b       1b
-20: add     x0, x19, x26                    /* a number, or an address */
-    add     x1, x0, x27
-    cmp     x9, #APP_OPTION_ADDRESS
-    b.eq    21f
-    bl      app_decimal
-    cbnz    x0, 90f
-    cbz     x1, 90f
-    ldr     x9, [x25, #16]
-    mov     x10, #65535
-    cmp     x9, #APP_OPTION_PORT
-    b.eq    22f
-    mov     x10, #APP_MAX_TARGET_PEERS
-22: cmp     x1, x10
-    b.hi    90f
-    b       23f
-21: bl      app_ipv4
-    cbnz    x0, 90f
-23: ldr     x10, [x25, #8]
-    str     x1, [x20, x10]
-    b       1b
-50: ldr     x9, [x20, #(AppOptions_network_dir + 8)]    /* --network-dir is required */
-    mov     x28, x22
-    cbz     x9, 90f
-    str     xzr, [x21]
-    mov     x0, #LANTERN_OK
-    LEAVE 32
-91: ldr     x28, [sp, #(L + 16)]            /* a fault of the option's argument */
-90: str     x28, [x21]                      /* a fault of the value's argument */
-    mov     x0, #LANTERN_INVALID_OPTION
-    LEAVE 32
-END_FUNCTION lantern_app_options
-
-/* ------------------------------------------------------------ The binary: startup and loop */
+.set ISA_ARM64, 1
+.include "ssz.inc"
+.include "crypto.inc"
+.include "bls12381.inc"
+.include "kzg.inc"
+.include "preset.inc"
+.include "lantern.inc"
+.include "fork_numbers.inc"
+.include "platform.inc"
+.include "libp2p.inc"
+.include "discv5.inc"
+.include "macros.s"
+.include "memory.s"
 
 /*
  * The App: the state of lantern_app_main, in memory from lantern_shell_map. Pairs are an address
@@ -231,7 +36,14 @@ END_FUNCTION lantern_app_options
 .set APP_LAST_SLOT, APP_FLAGS + 8           /* the slot of the last log line */
 .set APP_STREAM, APP_LAST_SLOT + 8          /* 1 or 2, for lantern_shell_write */
 .set APP_WORK_EVENT, APP_STREAM + 8         /* pair: the event buffer of a work */
-.set APP_FILE, APP_WORK_EVENT + 16          /* FileResult */
+.set APP_TICK, APP_WORK_EVENT + 16          /* the libp2p Tick of the step */
+.set APP_KEY, APP_TICK + 64                 /* the secp256k1 key of libp2p and discv5 */
+.set APP_P2P, APP_KEY + 32                  /* pair: the libp2p state */
+.set APP_SHELL, APP_P2P + 16                /* pair: the asm-libp2p shell context */
+.set APP_SHELL_EVENTS, APP_SHELL + 16       /* pair: a ByteList of the shell's events */
+.set APP_P2P_CONFIG, APP_SHELL_EVENTS + 16  /* pair: the libp2p Config */
+.set APP_RECORD, APP_P2P_CONFIG + 16        /* a NODE_EV_ENR event of a boot node: 48 bytes, then the record */
+.set APP_FILE, APP_RECORD + 48 + APP_RECORD_MAX /* FileResult */
 .set APP_RESULT, APP_FILE + 32              /* NodeStepResult */
 .set APP_NODE_ROOM, APP_RESULT + 16         /* NodeRoom */
 .set APP_STORE_ROOM, APP_NODE_ROOM + 80     /* StoreRoom */
@@ -250,7 +62,10 @@ END_FUNCTION lantern_app_options
 .set APP_BUFS_CAP, 4096
 .set APP_QUEUE_BYTES, 1 << 20               /* the events, and the actions, of a step */
 .set APP_TRIES, 8                           /* the times a start step doubles its buffers */
-.set APP_WAIT_MS, 500
+.set APP_WAIT_MS, 100                       /* the longest wait for the sockets */
+.set APP_SHELL_EVENT_BYTES, 8 << 20
+.set APP_PROTOCOLS_MAX, 64
+.set APP_RECORD_MAX, 512                     /* the bytes of a boot node record */
 .set APP_WORK_TRIES, 16                     /* the times a work grows a buffer */
 
     RODATA
@@ -329,6 +144,72 @@ app_genesis_name:
 .set app_genesis_name_len, . - app_genesis_name
 app_hex_digits:
     .ascii "0123456789abcdef"
+app_m_p2p:
+    .ascii "libp2p"
+.set app_m_p2p_len, . - app_m_p2p
+app_m_listen:
+    .ascii "listen on TCP port "
+.set app_m_listen_len, . - app_m_listen
+app_m_listening:
+    .ascii "listening on TCP port "
+.set app_m_listening_len, . - app_m_listening
+app_m_boot:
+    .ascii "boot node "
+.set app_m_boot_len, . - app_m_boot
+app_m_not_enr:
+    .ascii ": not an enr: record"
+.set app_m_not_enr_len, . - app_m_not_enr
+app_enr_prefix:
+    .ascii "enr:"
+.include "app_p2p.inc"
+
+/* L0: x0 = the fork of the slot x0 with the config x1: the last fork whose epoch is at most the slot's. Uses x9-x11. */
+LOCAL_FUNCTION app_fork
+    UNWIND_END_PROLOGUE
+    mov     x9, #SLOTS_PER_EPOCH
+    udiv    x9, x0, x9
+    mov     x10, #(16 * FORK_FULU)
+1:  cbz     x10, 2f
+    ldr     x11, [x1, x10]
+    cmp     x9, x11
+    b.hs    2f
+    sub     x10, x10, #16
+    b       1b
+2:  lsr     x0, x10, #4
+    ret
+END_FUNCTION app_fork
+
+/* L0: x0 = the current slot of the store x0: (time_ms - genesis_time_ms) // SLOT_DURATION_MS, 0 before genesis. Uses x9, x10. */
+LOCAL_FUNCTION app_store_slot
+    UNWIND_END_PROLOGUE
+    ldr     x9, [x0, #Store_time_ms]
+    ldr     x10, [x0, #Store_genesis_time_ms]
+    subs    x9, x9, x10
+    csel    x9, xzr, x9, lo
+    ldr     x10, [x0, #(Store_config + CONFIG_SLOT_DURATION_MS)]
+    mov     x0, #0
+    cbz     x10, 1f
+    udiv    x0, x9, x10
+1:  ret
+END_FUNCTION app_store_slot
+
+/* L0: x0 = 1 when the x1 bytes at x0 are the x3 bytes at x2, else 0. Uses x9, x10. */
+LOCAL_FUNCTION app_name_is
+    UNWIND_END_PROLOGUE
+    cmp     x1, x3
+    b.ne    2f
+1:  cbz     x1, 3f
+    ldrb    w9, [x0], #1
+    ldrb    w10, [x2], #1
+    cmp     w9, w10
+    b.ne    2f
+    sub     x1, x1, #1
+    b       1b
+2:  mov     x0, #0
+    ret
+3:  mov     x0, #1
+    ret
+END_FUNCTION app_name_is
 
 /* L1: x0 = memory of x0 bytes from lantern_shell_map, zeroed, or 0. Locals: the size, the address. */
 LOCAL_FUNCTION app_map
@@ -567,7 +448,7 @@ LOCAL_FUNCTION app_start
     ADDRESS x0, app_builtin_config          /* the config: the pinned config of the preset, then the network's */
     add     x1, x19, #APP_CONFIG
     add     x2, sp, #L
-    bl      lantern_config_parse
+    CALL_GLOBAL lantern_config_parse
     ADDRESS x0, app_config_name
     mov     x1, #app_config_name_len
     bl      app_path
@@ -576,7 +457,7 @@ LOCAL_FUNCTION app_start
     ldr     x0, [x19, #(APP_FILE + 8)]
     add     x1, x19, #APP_CONFIG
     add     x2, sp, #L
-    bl      lantern_config_parse
+    CALL_GLOBAL lantern_config_parse
     mov     x20, x0
     bl      app_file_free
     cbz     x20, 1f
@@ -605,7 +486,7 @@ LOCAL_FUNCTION app_start
     b       98f
 2:  ldr     x0, [x20, #(24 + 40)]           /* BeaconState.slot */
     add     x1, x19, #APP_CONFIG
-    bl      node_fork
+    bl      app_fork
     str     x0, [x19, #APP_FORK]
     add     x0, x19, #APP_STATE_ROOM
     ADDRESS x1, app_state_room
@@ -667,7 +548,7 @@ LOCAL_FUNCTION app_start
     mov     x24, #0
 5:  add     x0, x19, #APP_STORE_ROOM
     add     x1, sp, #L
-    bl      lantern_store_size
+    CALL_GLOBAL lantern_store_size
     mov     x0, #APP_STORE
     ldr     x1, [sp, #L]
     bl      app_alloc
@@ -723,7 +604,7 @@ LOCAL_FUNCTION app_start
     str     x9, [x19, #(APP_NODE_ROOM + NodeRoom_peers)]
     add     x0, x19, #APP_NODE_ROOM
     add     x1, sp, #L
-    bl      lantern_node_size
+    CALL_GLOBAL lantern_node_size
     cbnz    x0, 94f
     mov     x0, #APP_NODE
     ldr     x1, [sp, #L]
@@ -734,7 +615,7 @@ LOCAL_FUNCTION app_start
     add     x2, x19, #APP_ANCHOR
     add     x3, x19, #APP_FLAGS
     ldr     x4, [x19, #APP_NODE]
-    bl      lantern_node_init
+    CALL_GLOBAL lantern_node_init
     cbnz    x0, 94f
     add     x0, x19, #APP_SEEN_ROOM         /* the Seen */
     ADDRESS x1, app_seen_room
@@ -742,14 +623,14 @@ LOCAL_FUNCTION app_start
     bl      lantern_copy
     add     x0, x19, #APP_SEEN_ROOM
     add     x1, sp, #L
-    bl      lantern_seen_size
+    CALL_GLOBAL lantern_seen_size
     mov     x0, #APP_SEEN
     ldr     x1, [sp, #L]
     bl      app_alloc
     cbz     x0, 97f
     add     x0, x19, #APP_SEEN_ROOM
     ldr     x1, [x19, #APP_SEEN]
-    bl      lantern_seen_init
+    CALL_GLOBAL lantern_seen_init
     cbnz    x0, 94f
     mov     x0, #(APP_BUF_ENTRY * APP_BUFS_CAP) /* BufferId 1: the anchor state */
     bl      app_map
@@ -945,48 +826,72 @@ LOCAL_FUNCTION app_event_put
 END_FUNCTION app_event_put
 
 /*
- * L1: the value at the pair x19 + x0 moves to new memory from the copy function x1 (node, store or
- * seen copy) with the room at x19 + x2 of x3 u64 fields, each doubled: x0 = 0, or 1. x20 the pair,
- * x21 the copy function, x22 the room, x23 the size function, x24 the new memory. Locals: L a size.
+ * L1: the node (x0 = 0), the store (1) or the Seen (2) moves to new memory, with each field of its
+ * room doubled: x0 = 0, or 1. x20 the kind, x21 the pair, x22 the room, x23 the room's fields,
+ * x24 the new memory. Locals: L a size, L+8 an address.
  */
 LOCAL_FUNCTION app_grow
     ENTER 16
-    add     x20, x19, x0
-    mov     x21, x1
-    add     x22, x19, x2
-    mov     x23, x4
+    mov     x20, x0
+    mov     x9, #APP_NODE
+    mov     x10, #APP_NODE_ROOM
+    mov     x23, #10
+    cmp     x20, #1
+    b.ne    1f
+    mov     x9, #APP_STORE
+    mov     x10, #APP_STORE_ROOM
+    mov     x23, #2
+1:  cmp     x20, #2
+    b.ne    2f
+    mov     x9, #APP_SEEN
+    mov     x10, #APP_SEEN_ROOM
+    mov     x23, #4
+2:  add     x21, x19, x9
+    add     x22, x19, x10
     mov     x9, #0
-1:  cmp     x9, x3
-    b.hs    2f
+3:  cmp     x9, x23
+    b.hs    4f
     ldr     x10, [x22, x9, lsl #3]
     lsl     x10, x10, #1
     str     x10, [x22, x9, lsl #3]
     add     x9, x9, #1
-    b       1b
-2:  mov     x0, x22
+    b       3b
+4:  mov     x0, x22                         /* its size */
     add     x1, sp, #L
-    blr     x23
-    cbnz    x0, 9f
+    cbnz    x20, 41f
+    CALL_GLOBAL lantern_node_size
+    b       43f
+41: cmp     x20, #1
+    b.ne    42f
+    CALL_GLOBAL lantern_store_size
+    b       43f
+42: CALL_GLOBAL lantern_seen_size
+43: cbnz    x0, 9f
     ldr     x0, [sp, #L]
     bl      app_map
     cbz     x0, 9f
     mov     x24, x0
     ldr     x9, [sp, #L]
     str     x9, [x24]
-    ldr     x0, [x20]
+    ldr     x0, [x21]                       /* the copy */
     mov     x1, x22
     mov     x2, x24
-    blr     x21
-    cbnz    x0, 8f
-    sub     x0, x20, x19
+    cbnz    x20, 51f
+    CALL_GLOBAL lantern_node_copy
+    b       53f
+51: cmp     x20, #1
+    b.ne    52f
+    CALL_GLOBAL lantern_store_copy
+    b       53f
+52: CALL_GLOBAL lantern_seen_copy
+53: cbnz    x0, 8f
+    sub     x0, x21, x19
     bl      app_unmap
     ldr     x9, [sp, #L]
-    stp     x24, x9, [x20]
+    stp     x24, x9, [x21]
     mov     x0, #0
     LEAVE 16
-8:  mov     x0, x24
-    ldr     x1, [sp, #L]
-    str     x0, [sp, #(L + 8)]
+8:  str     x24, [sp, #(L + 8)]             /* the copy failed: its memory goes back */
     add     x0, sp, #(L + 8)
     add     x1, sp, #L
     CALL_GLOBAL lantern_shell_unmap
@@ -1012,7 +917,7 @@ LOCAL_FUNCTION app_regrow
     ldr     x9, [x20, #8]                   /* the fork of the state's slot */
     ldr     x0, [x9, #NODE_STATE_SLOT]
     add     x1, x19, #APP_CONFIG
-    bl      node_fork
+    bl      app_fork
     mov     x21, x0
     ldr     x0, [x20, #8]
     add     x1, x19, #APP_STATE_ROOM
@@ -1094,7 +999,7 @@ LOCAL_FUNCTION app_work
 13: mov     x7, #0
     cbz     x24, 14f
     ldr     x7, [x24, #8]
-14: bl      lantern_node_run
+14: CALL_GLOBAL lantern_node_run
     add     sp, sp, #32
     cbz     x0, 8f
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
@@ -1119,11 +1024,7 @@ LOCAL_FUNCTION app_work
     ldr     x10, [x19, #(APP_STORE_ROOM + StoreRoom_nodes)]
     cmp     x9, x10
     b.lo    4f
-5:  mov     x0, #APP_STORE                  /* else the store */
-    ADDRESS x1, lantern_store_copy
-    mov     x2, #APP_STORE_ROOM
-    mov     x3, #2
-    ADDRESS x4, lantern_store_size
+5:  mov     x0, #1                          /* else the store */
     bl      app_grow
     cbnz    x0, 91f
     b       1b
@@ -1137,11 +1038,7 @@ LOCAL_FUNCTION app_work
     bl      app_alloc
     cbz     x0, 91f
     b       1b
-3:  mov     x0, #APP_SEEN
-    ADDRESS x1, lantern_seen_copy
-    mov     x2, #APP_SEEN_ROOM
-    mov     x3, #4
-    ADDRESS x4, lantern_seen_size
+3:  mov     x0, #2                          /* the Seen */
     bl      app_grow
     cbnz    x0, 91f
     cbz     x22, 1b
@@ -1228,9 +1125,16 @@ LOCAL_FUNCTION app_actions
     bl      app_buf_drop
     b       8f
 4:  cmp     x9, #NODE_ACT_WORK
-    b.ne    8f
+    b.ne    5f
     mov     x0, x20
     bl      app_work
+    b       8f
+5:  cmp     x9, #NODE_ACT_P2P_LIST
+    b.ne    8f
+    ldr     x0, [x19, #APP_SHELL]           /* P2P_LIST: the shell requests of libp2p */
+    add     x1, x20, #16
+    ldr     x2, [x19, #APP_SHELL_EVENTS]
+    CALL_GLOBAL libp2p_shell_perform
 8:  add     x20, x20, x22
     b       1b
 9:  LEAVE 0
@@ -1257,18 +1161,14 @@ LOCAL_FUNCTION app_step
     ldr     x5, [x19, #APP_SCRATCH]
     ldr     x6, [x19, #APP_ACTIONS]
     add     x7, x19, #APP_RESULT
-    bl      lantern_node_step
+    CALL_GLOBAL lantern_node_step
     cbz     x0, 3f
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.ne    2f
     add     x22, x22, #1
     cmp     x22, #APP_WORK_TRIES
     b.hs    2f
-    mov     x0, #APP_NODE                   /* a larger node, and twice the actions */
-    ADDRESS x1, lantern_node_copy
-    mov     x2, #APP_NODE_ROOM
-    mov     x3, #10
-    ADDRESS x4, lantern_node_size
+    mov     x0, #0                          /* a larger node, and twice the actions */
     bl      app_grow
     cbnz    x0, 2f
     ldr     x9, [x19, #(APP_ACTIONS + 8)]
@@ -1307,62 +1207,338 @@ LOCAL_FUNCTION app_step
     LEAVE 0
 END_FUNCTION app_step
 
+
 /*
- * L2: the loop: a NODE_EV_TICK of the time, lantern_node_step, a line at each new slot, then a
- * wait. x20 the shell context, x21 the wait's events. Locals: L ShellParams, then the time and the wait.
+ * L0: x0 = the bytes of the base64url text at x0 of x1 bytes (RFC 4648 section 5, with or without
+ * padding), written at x2, at most x3; or 2^64 - 1 for a byte of no digit or too many bytes. Uses x9-x15.
+ */
+LOCAL_FUNCTION app_base64url
+    UNWIND_END_PROLOGUE
+    mov     x9, #0                          /* the bits */
+    mov     x10, #0                         /* their count */
+    mov     x11, #0                         /* the bytes out */
+1:  cbz     x1, 8f
+    ldrb    w12, [x0], #1
+    sub     x1, x1, #1
+    cmp     w12, #0x3d                      /* = ends the digits */
+    b.eq    8f
+    sub     w13, w12, #0x41                 /* A to Z: 0 to 25 */
+    cmp     w13, #26
+    b.lo    2f
+    sub     w13, w12, #0x61                 /* a to z: 26 to 51 */
+    cmp     w13, #26
+    add     w13, w13, #26
+    b.lo    2f
+    sub     w13, w12, #0x30                 /* 0 to 9: 52 to 61 */
+    cmp     w13, #10
+    add     w13, w13, #52
+    b.lo    2f
+    mov     w13, #62
+    cmp     w12, #0x2d                      /* - */
+    b.eq    2f
+    mov     w13, #63
+    cmp     w12, #0x5f                      /* _ */
+    b.ne    9f
+2:  orr     x9, x13, x9, lsl #6
+    add     x10, x10, #6
+    cmp     x10, #8
+    b.lo    1b
+    sub     x10, x10, #8
+    cmp     x11, x3
+    b.hs    9f
+    lsr     x14, x9, x10
+    strb    w14, [x2, x11]
+    add     x11, x11, #1
+    mov     x15, #1                         /* only the bits not yet out stay */
+    lsl     x15, x15, x10
+    sub     x15, x15, #1
+    and     x9, x9, x15
+    b       1b
+8:  mov     x0, x11
+    ret
+9:  mov     x0, #-1
+    ret
+END_FUNCTION app_base64url
+
+/*
+ * L2: a NODE_EV_ENR event of each record of --boot-nodes, with commas between them; a line on
+ * the standard error for one that is not "enr:" and base64url. x20 the next byte, x21 the end, x22
+ * the record's start, x23 the record's number, x24 the event at APP_RECORD. Locals: L the record's length.
+ */
+LOCAL_FUNCTION app_boot_nodes
+    ENTER 16
+    add     x24, x19, #APP_RECORD
+    ldr     x9, [x19, #APP_ARGS]
+    ldp     x10, x11, [x19, #(APP_OPTIONS + AppOptions_boot_nodes)]
+    add     x20, x9, x10
+    add     x21, x20, x11
+    mov     x23, #0
+1:  cmp     x20, x21
+    b.hs    9f
+    mov     x22, x20                        /* a record: to a comma or the end */
+2:  cmp     x20, x21
+    b.hs    3f
+    ldrb    w9, [x20]
+    cmp     w9, #0x2c
+    b.eq    3f
+    add     x20, x20, #1
+    b       2b
+3:  sub     x1, x20, x22
+    add     x20, x20, #1                    /* past the comma */
+    add     x23, x23, #1
+    cmp     x1, #4
+    b.lo    7f
+    mov     x0, x22
+    str     x1, [sp, #L]
+    mov     x1, #4
+    ADDRESS x2, app_enr_prefix
+    mov     x3, #4
+    bl      app_name_is
+    cbz     x0, 7f
+    add     x0, x22, #4                     /* its bytes, after the event and ByteList headers */
+    ldr     x1, [sp, #L]
+    sub     x1, x1, #4
+    add     x2, x24, #48
+    mov     x3, #APP_RECORD_MAX
+    bl      app_base64url
+    cmn     x0, #1
+    b.eq    7f
+    add     x9, x0, #(48 + 7)               /* the event: size, NODE_EV_ENR, 0, then the ByteList */
+    and     x9, x9, #~7
+    mov     x10, #NODE_EV_ENR
+    stp     x9, x10, [x24]
+    sub     x11, x9, #24
+    stp     xzr, x11, [x24, #16]
+    mov     x12, #24
+    stp     x12, x0, [x24, #32]
+    mov     x0, x24
+    mov     x1, x9
+    bl      app_event_put
+    b       1b
+7:  bl      app_line_start                  /* boot node <n>: not an enr: record */
+    ADDRESS x0, app_m_boot
+    mov     x1, #app_m_boot_len
+    bl      app_line_text
+    mov     x0, x23
+    bl      app_line_u64
+    ADDRESS x0, app_m_not_enr
+    mov     x1, #app_m_not_enr_len
+    bl      app_line_text
+    mov     x0, #2
+    bl      app_line_end
+    b       1b
+9:  LEAVE 16
+END_FUNCTION app_boot_nodes
+
+/*
+ * L2: the network: a secp256k1 key, the libp2p state, the shell context with a TCP listener on
+ * --port, and the boot nodes: x0 = 0, or 2 after a line on the standard error. x20 the config,
+ * x21 the tries. Locals: L a size or a status, L+8 ShellParams, L+32 an Address, L+64 a ListenResult.
+ */
+LOCAL_FUNCTION app_net
+    ENTER 112
+    mov     x0, #APP_P2P_CONFIG             /* the config: the template, then the protocols */
+    MOVQ    x1, LIBP2P_CFG_FIXED + 24 + APP_PROTOCOLS_MAX * LIBP2P_PROTO_SIZE
+    bl      app_alloc
+    cbz     x0, 97f
+    mov     x20, x0
+    ADDRESS x1, app_p2p_config
+    mov     x2, #LIBP2P_CFG_FIXED
+    bl      lantern_copy
+    add     x0, x20, #LIBP2P_CFG_FIXED
+    MOVQ    x9, 24 + APP_PROTOCOLS_MAX * LIBP2P_PROTO_SIZE
+    mov     x10, #24
+    stp     x9, x10, [x0]
+    str     xzr, [x0, #16]
+    add     x1, sp, #L
+    CALL_GLOBAL lantern_node_protocols
+    cbnz    x0, 96f
+    ldr     x9, [sp, #L]
+    mov     x10, #(LIBP2P_CFG_FIXED + 24)
+    stp     x10, x9, [x20, #208]            /* protocols, protocols_count */
+    mov     x11, #LIBP2P_PROTO_SIZE
+    madd    x9, x9, x11, x10
+    str     x9, [x20]
+    mov     x21, #0
+1:  add     x0, x19, #APP_TICK              /* a key from fresh random bytes, below the order of the curve */
+    CALL_GLOBAL libp2p_shell_clock
+    add     x0, x20, #16
+    add     x1, x19, #(APP_TICK + LIBP2P_TICK_ENTROPY)
+    mov     x2, #32
+    bl      lantern_copy
+    ldrb    w9, [x20, #16]
+    and     w9, w9, #0x7f
+    strb    w9, [x20, #16]
+    add     x0, x19, #APP_KEY
+    add     x1, x20, #16
+    mov     x2, #32
+    bl      lantern_copy
+    add     x0, x19, #APP_TICK              /* the DRBG's entropy, and the time */
+    CALL_GLOBAL libp2p_shell_clock
+    add     x0, x20, #48
+    add     x1, x19, #(APP_TICK + LIBP2P_TICK_ENTROPY)
+    mov     x2, #32
+    bl      lantern_copy
+    ldr     x9, [x19, #(APP_TICK + LIBP2P_TICK_NOW)]
+    str     x9, [x20, #80]
+    mov     x0, x20                         /* the libp2p state */
+    add     x1, sp, #L
+    CALL_GLOBAL libp2p_state_size
+    cbnz    x0, 96f
+    mov     x0, #APP_P2P
+    ldr     x1, [sp, #L]
+    bl      app_alloc
+    cbz     x0, 97f
+    mov     x1, x0
+    mov     x0, x20
+    CALL_GLOBAL libp2p_init
+    cbz     x0, 2f
+    cmp     x0, #LIBP2P_INVALID_KEY
+    b.ne    96f
+    mov     x0, #APP_P2P
+    bl      app_unmap
+    add     x21, x21, #1
+    cmp     x21, #4
+    b.lo    1b
+    mov     x0, #LIBP2P_INVALID_KEY
+    b       96f
+2:  ldr     x9, [x20, #88]                  /* the shell: a slot for each connection, and one for the execution engine */
+    add     x9, x9, #1
+    ldr     x10, [x20, #160]
+    stp     x9, x10, [sp, #(L + 8)]
+    add     x0, sp, #(L + 8)
+    add     x1, sp, #L
+    CALL_GLOBAL libp2p_shell_size
+    cbnz    x0, 96f
+    mov     x0, #APP_SHELL
+    ldr     x1, [sp, #L]
+    bl      app_alloc
+    cbz     x0, 97f
+    mov     x1, x0
+    add     x0, sp, #(L + 8)
+    CALL_GLOBAL libp2p_shell_init
+    cbnz    x0, 96f
+    mov     x0, #APP_SHELL_EVENTS
+    MOVQ    x1, APP_SHELL_EVENT_BYTES
+    bl      app_alloc
+    cbz     x0, 97f
+    mov     x9, #24
+    stp     x9, xzr, [x0, #8]
+    mov     x9, #4                          /* listen: TCP --port on every IPv4 address */
+    ldr     x10, [x19, #(APP_OPTIONS + AppOptions_port)]
+    stp     x9, x10, [sp, #(L + 32)]
+    stp     xzr, xzr, [sp, #(L + 48)]
+    ldr     x0, [x19, #APP_SHELL]
+    add     x1, sp, #(L + 32)
+    add     x2, sp, #(L + 64)
+    CALL_GLOBAL libp2p_shell_listen
+    ldr     x9, [sp, #(L + 64)]
+    cbz     x9, 3f
+    bl      app_line_start                  /* listen on TCP port <p>: error <n> */
+    ADDRESS x0, app_m_listen
+    mov     x1, #app_m_listen_len
+    bl      app_line_text
+    ldr     x0, [x19, #(APP_OPTIONS + AppOptions_port)]
+    bl      app_line_u64
+    ADDRESS x0, app_m_error
+    mov     x1, #app_m_error_len
+    bl      app_line_text
+    ldr     x0, [sp, #(L + 64)]
+    bl      app_line_u64
+    mov     x0, #2
+    bl      app_line_end
+    mov     x0, #2
+    LEAVE 112
+3:  bl      app_boot_nodes
+    bl      app_line_start                  /* listening on TCP port <p> */
+    ADDRESS x0, app_m_listening
+    mov     x1, #app_m_listening_len
+    bl      app_line_text
+    ldr     x0, [x19, #(APP_OPTIONS + AppOptions_port)]
+    bl      app_line_u64
+    mov     x0, #1
+    bl      app_line_end
+    mov     x0, #0
+    LEAVE 112
+96: mov     x2, x0                          /* libp2p: status <n> */
+    ADDRESS x0, app_m_p2p
+    mov     x1, #app_m_p2p_len
+    bl      app_fail_status
+    LEAVE 112
+97: bl      app_line_start                  /* no memory */
+    ADDRESS x0, app_m_memory
+    mov     x1, #app_m_memory_len
+    bl      app_line_text
+    mov     x0, #2
+    bl      app_line_end
+    mov     x0, #2
+    LEAVE 112
+END_FUNCTION app_net
+
+/* L2: each event of the shell becomes a NODE_EV_P2P event of the next step. x20 the next event, x21 the end. Locals: L the header. */
+LOCAL_FUNCTION app_p2p_events
+    ENTER 16
+    ldr     x9, [x19, #APP_SHELL_EVENTS]
+    ldr     x10, [x9, #8]
+    ldr     x11, [x9, #16]
+    add     x20, x9, x10
+    add     x21, x20, x11
+1:  cmp     x20, x21
+    b.hs    9f
+    ldr     x9, [x20]
+    add     x10, x9, #16
+    mov     x11, #NODE_EV_P2P
+    stp     x10, x11, [sp, #L]
+    add     x0, sp, #L
+    mov     x1, #16
+    bl      app_event_put
+    mov     x0, x20
+    ldr     x1, [x20]
+    bl      app_event_put
+    ldr     x9, [x20]
+    add     x20, x20, x9
+    b       1b
+9:  ldr     x9, [x19, #APP_SHELL_EVENTS]
+    str     xzr, [x9, #16]
+    LEAVE 16
+END_FUNCTION app_p2p_events
+
+/*
+ * L2: the loop: the clock, a NODE_EV_TICK of the time and the shell's events, lantern_node_step
+ * with libp2p, a line at each new slot, then a wait for the sockets until the node's wakeup, at
+ * most APP_WAIT_MS. Locals: L the time, L+8 the wait.
  */
 LOCAL_FUNCTION app_loop
-    ENTER 48
-    mov     x9, #1                          /* a shell context for the waits */
-    MOVQ    x10, 1 << 17
-    stp     x9, x10, [sp, #L]
+    ENTER 16
+1:  add     x0, x19, #APP_TICK              /* the clocks */
+    CALL_GLOBAL libp2p_shell_clock
     add     x0, sp, #L
-    add     x1, sp, #(L + 16)
-    CALL_GLOBAL libp2p_shell_size
-    ldr     x0, [sp, #(L + 16)]
-    bl      app_map
-    cbz     x0, 9f
-    mov     x20, x0
-    ldr     x9, [sp, #(L + 16)]
-    str     x9, [x20]
-    add     x0, sp, #L
-    mov     x1, x20
-    CALL_GLOBAL libp2p_shell_init
-    MOVQ    x0, 1 << 16
-    bl      app_map
-    cbz     x0, 9f
-    mov     x21, x0
-    MOVQ    x9, 1 << 16
-    mov     x10, #24
-    stp     x9, x10, [x21]
-1:  add     x0, sp, #(L + 32)               /* the time, as a NODE_EV_TICK */
     CALL_GLOBAL lantern_shell_time_ms
-    ldr     x9, [x19, #APP_EVENTS]
-    ldr     x10, [x9, #16]
-    add     x11, x9, #24
-    add     x11, x11, x10
-    mov     x12, #24
-    mov     x13, #NODE_EV_TICK
-    stp     x12, x13, [x11]
-    ldr     x13, [sp, #(L + 32)]
-    str     x13, [x11, #16]
-    add     x10, x10, #24
-    str     x10, [x9, #16]
-    mov     x0, #0                          /* the step */
-    mov     x1, #0
+    mov     x9, #24                         /* NODE_EV_TICK of the Unix time */
+    mov     x10, #NODE_EV_TICK
+    stp     x9, x10, [sp, #-32]!
+    ldr     x11, [sp, #(32 + L)]
+    str     x11, [sp, #16]
+    mov     x0, sp
+    mov     x1, #24
+    bl      app_event_put
+    add     sp, sp, #32
+    bl      app_p2p_events
+    ldr     x0, [x19, #APP_P2P]
+    add     x1, x19, #APP_TICK
     bl      app_step
     ldr     x0, [x19, #APP_STORE]           /* a line at each new slot */
-    bl      node_store_slot
+    bl      app_store_slot
     ldr     x9, [x19, #APP_LAST_SLOT]
     cmp     x0, x9
     b.eq    3f
     str     x0, [x19, #APP_LAST_SLOT]
-    str     x0, [sp, #(L + 40)]
+    str     x0, [sp, #(L + 8)]
     bl      app_line_start                  /* slot <s>, head 0x<root>, finalized epoch <e> */
     ADDRESS x0, app_m_slot
     mov     x1, #app_m_slot_len
     bl      app_line_text
-    ldr     x0, [sp, #(L + 40)]
+    ldr     x0, [sp, #(L + 8)]
     bl      app_line_u64
     ADDRESS x0, app_m_head
     mov     x1, #app_m_head_len
@@ -1379,16 +1555,19 @@ LOCAL_FUNCTION app_loop
     bl      app_line_u64
     mov     x0, #1
     bl      app_line_end
-3:  mov     x9, #APP_WAIT_MS                /* the wait */
-    str     x9, [sp, #(L + 40)]
-    str     xzr, [x21, #16]
-    mov     x0, x20
-    add     x1, sp, #(L + 40)
-    mov     x2, x21
+3:  ldr     x9, [x19, #(APP_RESULT + 8)]    /* the wait: to the node's wakeup, at most APP_WAIT_MS */
+    ldr     x10, [x19, #(APP_TICK + LIBP2P_TICK_NOW)]
+    subs    x11, x9, x10
+    csel    x11, xzr, x11, ls
+    mov     x12, #APP_WAIT_MS
+    cmp     x11, x12
+    csel    x11, x11, x12, lo
+    str     x11, [sp, #(L + 8)]
+    ldr     x0, [x19, #APP_SHELL]
+    add     x1, sp, #(L + 8)
+    ldr     x2, [x19, #APP_SHELL_EVENTS]
     CALL_GLOBAL libp2p_shell_wait
     b       1b
-9:  mov     x0, #2
-    LEAVE 48
 END_FUNCTION app_loop
 
 /* (args): docs/reference/app.md. x19 the App, x20 args. Locals: L the fault. */
@@ -1410,7 +1589,7 @@ FUNCTION lantern_app_main
     mov     x0, x20
     add     x1, x19, #APP_OPTIONS
     add     x2, sp, #L
-    bl      lantern_app_options
+    CALL_GLOBAL lantern_app_options
     cbz     x0, 1f
     bl      app_line_start                  /* faulty option at argument <n> */
     ADDRESS x0, app_m_option
@@ -1423,6 +1602,8 @@ FUNCTION lantern_app_main
     mov     x0, #1
     LEAVE 16
 1:  bl      app_start
+    cbnz    x0, 8f
+    bl      app_net
     cbnz    x0, 8f
     bl      app_loop
 8:  LEAVE 16

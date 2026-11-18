@@ -1,5 +1,5 @@
 /*
- * The application, RISC-V: in the common object. Requirements: docs/reference/app.md.
+ * The command line options of the binary, RISC-V: in the common object. Requirements: docs/reference/app.md, lantern_app_options.
  */
 
     RODATA

@@ -12,58 +12,6 @@
 .set NODE_BLOB_HEADER, 8 + 32 * FIELD_ELEMENTS_PER_BLOB + 48 + 48   /* the signed_block_header in a BlobSidecar's SSZ bytes */
 .set NODE_BLOB_BYTES, NODE_BLOB_HEADER + 208 + 32 * KZG_COMMITMENT_INCLUSION_PROOF_DEPTH  /* the SSZ size of a BlobSidecar */
 
-/* Call lantern_<fork>_<name> for the fork in x15 (FORK_PHASE0 to FORK_FULU). */
-.macro FORK_CALL name
-    cmp     x15, #FORK_ALTAIR
-    b.hs    81f
-    CALL_GLOBAL lantern_phase0_\name
-    b       89f
-81: cmp     x15, #FORK_BELLATRIX
-    b.hs    82f
-    CALL_GLOBAL lantern_altair_\name
-    b       89f
-82: cmp     x15, #FORK_CAPELLA
-    b.hs    83f
-    CALL_GLOBAL lantern_bellatrix_\name
-    b       89f
-83: cmp     x15, #FORK_DENEB
-    b.hs    84f
-    CALL_GLOBAL lantern_capella_\name
-    b       89f
-84: cmp     x15, #FORK_ELECTRA
-    b.hs    85f
-    CALL_GLOBAL lantern_deneb_\name
-    b       89f
-85: cmp     x15, #FORK_FULU
-    b.hs    86f
-    CALL_GLOBAL lantern_electra_\name
-    b       89f
-86: CALL_GLOBAL lantern_fulu_\name
-89:
-.endm
-
-/* Call lantern_<fork>_<name> for the fork in x15, bellatrix to fulu. */
-.macro FORK_CALL_BELLATRIX name
-    cmp     x15, #FORK_CAPELLA
-    b.hs    91f
-    CALL_GLOBAL lantern_bellatrix_\name
-    b       96f
-91: cmp     x15, #FORK_DENEB
-    b.hs    92f
-    CALL_GLOBAL lantern_capella_\name
-    b       96f
-92: cmp     x15, #FORK_ELECTRA
-    b.hs    93f
-    CALL_GLOBAL lantern_deneb_\name
-    b       96f
-93: cmp     x15, #FORK_FULU
-    b.hs    94f
-    CALL_GLOBAL lantern_electra_\name
-    b       96f
-94: CALL_GLOBAL lantern_fulu_\name
-96:
-.endm
-
 /* L0: x0 = the fork of the slot x0 with the config x1: the last fork whose epoch is at most the slot's. Uses x9-x11. */
 LOCAL_FUNCTION node_fork
     UNWIND_END_PROLOGUE
