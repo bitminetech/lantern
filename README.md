@@ -77,7 +77,8 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | Shell test of each target | [tests/shell/shell.c](tests/shell/shell.c) |
 | Start checks of the binary on each target | [tests/app/start.sh](tests/app/start.sh), [tests/app/start.ps1](tests/app/start.ps1) |
 | Network directory for the binary | [tests/app/network.py](tests/app/network.py) |
-| Interop with lighthouse, prysm, teku, nimbus, lodestar and grandine | [tests/app/interop.sh](tests/app/interop.sh) |
+| Interop with lighthouse, prysm, teku, nimbus, lodestar and grandine | [tests/app/interop.sh](tests/app/interop.sh), images in [tests/app/clients.sh](tests/app/clients.sh) |
+| Devnet of geth and each client, lantern following it | [tests/app/devnet.sh](tests/app/devnet.sh), [tests/kurtosis/](tests/kurtosis/) |
 | CI, 7 targets | [.github/workflows/ci.yml](.github/workflows/ci.yml) |
 
 ## Target profile

@@ -3,7 +3,7 @@
 # (tests/app/network.py: mainnet preset, fulu at epoch 0, 64 validators). Passes when each Beacon
 # API shows the other node as a connected peer, and still does two slots later.
 # Usage: tests/app/interop.sh CLIENT BINARY WORK_DIR [SECONDS]
-#   CLIENT: lighthouse, prysm, teku, nimbus, lodestar or grandine, at the image pinned below. Its
+#   CLIENT: lighthouse, prysm, teku, nimbus, lodestar or grandine, at its image of tests/app/clients.sh. Its
 #   command line follows its launcher in ethpandaops/ethereum-package (src/cl/<client>/).
 #   BINARY: lantern-mainnet for Linux on the ISA of this machine.
 #   WORK_DIR: outside this repo; it keeps the generator's environment (as tests/generator/run.sh)
@@ -23,40 +23,36 @@ env=
 # Keys of the pinned config that prysm's strict YAML parse does not know: with them it falls back to
 # its built-in mainnet config. prysm-config.yaml is config.yaml without them.
 prysm_unknown="EIP8321_FORK_VERSION|EIP8321_FORK_EPOCH|EIP8198_FORK_VERSION|EIP8198_FORK_EPOCH|INCLUSION_LIST_DUE_BPS|SLOT_DURATION_MS_EIP8198|MAX_REQUEST_INCLUSION_LIST|MIN_SLOTS_FOR_INCLUSION_LISTS_REQUESTS|MAX_TRANSACTIONS_BYTES_PER_INCLUSION_LIST|MIN_BLOB_DATA_RETENTION_MS"
+. "$root/tests/app/clients.sh"
+image=$(client_image "$client")
 case $client in
   lighthouse)
-    image=sigp/lighthouse:v8.1.3@sha256:44aa773dcf274122c32cc41c4dae7124ed3cab5c267ee82174c6dfd9c688da96
     set -- lighthouse bn --testnet-dir /net --datadir /tmp/data --execution-endpoint $engine --execution-jwt /net/jwt.hex \
         --enr-address $peer --port 9000 --http --http-address 0.0.0.0 --http-port 5052 --disable-upnp --target-peers 4 \
         --allow-insecure-genesis-sync --enable-private-discovery --disable-peer-scoring ;;
   prysm)
-    image=offchainlabs/prysm-beacon-chain:v7.3.1@sha256:ad79198a2968b2442c80b7279f2613b61d882913ed372feb057ea624ba205e29
     set -- --accept-terms-of-use=true --datadir=/tmp/data --chain-config-file=/net/prysm-config.yaml --genesis-state=/net/genesis.ssz \
         --contract-deployment-block=0 --p2p-host-ip=$peer --p2p-tcp-port=9000 --p2p-udp-port=9000 --p2p-quic-port=9001 \
         --p2p-static-id=true --p2p-colocation-whitelist=0.0.0.0/0,::/0 --min-sync-peers=0 --http-host=0.0.0.0 --http-port=5052 \
         --execution-endpoint=$engine --jwt-secret=/net/jwt.hex ;;
   teku)
-    image=consensys/teku:26.10.3@sha256:4560398cf9a0b208a4a4a12ebc2051d820b67df51092a54154031dacc57f2ac6
     set -- --network=/net/config.yaml --genesis-state=/net/genesis.ssz --data-path=/tmp/data --p2p-enabled=true \
         --p2p-advertised-ip=$peer --p2p-port=9000 --p2p-discovery-site-local-addresses-enabled=true --p2p-peer-lower-bound=1 \
         --rest-api-enabled=true --rest-api-interface=0.0.0.0 --rest-api-port=5052 --rest-api-host-allowlist=* \
         --ee-endpoint=$engine --ee-jwt-secret-file=/net/jwt.hex --ignore-weak-subjectivity-period-enabled=true ;;
   nimbus)
-    image=statusim/nimbus-eth2:multiarch-v26.10.2@sha256:53a51bf89ce48e0b615c90726e018ad96ed242001d7d8cbc8aa33ff25188845a
     set -- --non-interactive=true --network=/net --data-dir=/tmp/data --tcp-port=9000 --udp-port=9000 --nat=extip:$peer \
         --enr-auto-update=false --rest --rest-address=0.0.0.0 --rest-port=5052 --web3-url=$engine --jwt-secret=/net/jwt.hex ;;
   lodestar)
-    image=chainsafe/lodestar:v1.51.0@sha256:88e897f8adf1ec9ea8dcaed8178db9170ea9d0dff82d218b707af9bc0a8a5974
     set -- beacon --paramsFile=/net/config.yaml --genesisStateFile=/net/genesis.ssz --dataDir=/tmp/data \
         --eth1.depositContractDeployBlock=0 --port=9000 --discoveryPort=9000 --discv5=true --nat=true --enr.ip=$peer \
         --enr.tcp=9000 --enr.udp=9000 --rest=true --rest.address=0.0.0.0 --rest.port=5052 --rest.namespace=* \
         --execution.urls=$engine --jwt-secret=/net/jwt.hex ;;
   grandine)
-    image=sifrai/grandine:2.0.6@sha256:9373496ebecc42e67c754c18eb762d73f48539af978de83ef59709da3375cd57
     set -- --network=custom --configuration-directory=/net --data-dir=/tmp/data --http-address=0.0.0.0 --http-port=5052 \
         --libp2p-port=9000 --discovery-port=9000 --disable-enr-auto-update --enr-address=$peer --enr-tcp-port=9000 \
         --enr-udp-port=9000 --enable-private-discovery --eth1-rpc-urls=$engine --jwt-secret=/net/jwt.hex
-    env="-e GRANDINE_LOG=eth2_libp2p=trace,p2p=debug,libp2p_swarm=debug,libp2p_noise=debug,libp2p_yamux=debug,multistream_select=debug" ;;
+    env="-e GRANDINE_LOG=eth2_libp2p=debug,p2p=debug" ;;
   *) echo "unknown client: $client" >&2; exit 2 ;;
 esac
 

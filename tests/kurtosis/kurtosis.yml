@@ -1,0 +1,5 @@
+# The Kurtosis package of tests/app/devnet.sh: ethpandaops/ethereum-package at a pinned commit, and
+# the lantern binary beside it.
+name: github.com/bitminetech/lantern/tests/kurtosis
+replace:
+  github.com/ethpandaops/ethereum-package: github.com/ethpandaops/ethereum-package@d3014d6d23d683362025b9e23a0d69de49e77cca
