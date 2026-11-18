@@ -4,8 +4,9 @@ Usage: python3 tests/app/network.py OUT_DIR PRESET FORK [GENESIS_TIME] [VALIDATO
 
 Runs with the generator's environment (tests/generator/run.sh): the pinned spec modules on the
 path, and CONSENSUS_SPECS set. config.yaml is the pinned configs/<PRESET>.yaml with each fork up
-to FORK at epoch 0 and each later fork at 2^64 - 1, each key once, CONFIG_NAME lantern-<PRESET>-<FORK>,
-and SECONDS_PER_SLOT (SLOT_DURATION_MS / 1000) for other clients. genesis.ssz, with GENESIS_TIME (default: now)
+to FORK at epoch 0 and each later fork at 2^64 - 1, fork versions of its own (0x1000004c for
+GENESIS, 0x2000004c for altair, and so on), each key once, CONFIG_NAME lantern-<PRESET>-<FORK>, and
+SECONDS_PER_SLOT (SLOT_DURATION_MS / 1000) for other clients. genesis.ssz, with GENESIS_TIME (default: now)
 as its genesis_time:
 - with no VALIDATORS, the anchor state of tests/generator/node.py (8 validators with made up
   keys, the first slot of epoch 2) of FORK;
@@ -23,7 +24,7 @@ import sys
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "generator"))
-from node import anchor, schedule  # noqa: E402
+from node import FORKS, anchor, schedule  # noqa: E402
 from p2p import module, run  # noqa: E402
 
 
@@ -61,6 +62,10 @@ def main():
     genesis_time = int(sys.argv[4]) if len(sys.argv) >= 5 else int(time.time())
     spec = module(fork, preset)
     config = schedule(fork)
+    # Fork versions of its own (first byte 0x10 to 0x90, last byte 0x4c): prysm refuses a config with
+    # the versions of a network it knows and another schedule.
+    for i, name in enumerate(["GENESIS"] + [f.upper() for f in FORKS[1:]] + ["GLOAS", "HEZE"]):
+        config[f"{name}_FORK_VERSION"] = bytes([0x10 * (i + 1), 0, 0, 0x4C])
     if len(sys.argv) == 6:
         state = run(spec, config, lambda: genesis(spec, fork, int(sys.argv[5])))
     else:
@@ -71,6 +76,7 @@ def main():
     # A name of its own: prysm takes CONFIG_NAME mainnet for the real mainnet, with its genesis.
     text = re.sub(r"^CONFIG_NAME: .*$", f"CONFIG_NAME: 'lantern-{preset}-{fork}'", text, flags=re.M)
     for key, value in config.items():  # each key once: other clients refuse a key given twice
+        value = "0x" + value.hex() if isinstance(value, bytes) else value
         text, n = re.subn(rf"^{key}: .*$", f"{key}: {value}", text, flags=re.M)
         if not n:
             text += f"{key}: {value}\n"
