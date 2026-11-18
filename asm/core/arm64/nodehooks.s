@@ -135,15 +135,20 @@ SPEC_FUNCTION node_import
     LEAVE 0
 SPEC_END node_import
 
-/* (data, scratch, root, result): hash_tree_root of the message of the SignedBeaconBlock in data. */
+/*
+ * (data, scratch, root, result, blobs): hash_tree_root of the message of the SignedBeaconBlock in
+ * data, and the length of its body's blob_kzg_commitments (0 before deneb).
+ */
 SPEC_FUNCTION node_block_root
     ENTER 0
     mov     x20, x0
     mov     x21, x1
     mov     x22, x2
     mov     x23, x3
+    mov     x25, x4
     ldr     x28, [x21]                      /* the scratch size, restored on return */
     str     xzr, [x23]
+    str     xzr, [x25]
     ADDRESS x0, lantern_type_SignedBeaconBlock
     mov     x1, x20
     mov     x2, x21
@@ -153,6 +158,11 @@ SPEC_FUNCTION node_block_root
     b.hi    9f
     mov     x24, x1
     PART    x1, x9, x24, SignedBeaconBlock_message
+.if FORK >= FORK_DENEB
+    PART    x9, x10, x1, BeaconBlock_body
+    LDQ     x10, x9, BeaconBlockBody_blob_kzg_commitments + 8
+    str     x10, [x25]
+.endif
     ADDRESS x0, lantern_type_BeaconBlock
     mov     x2, x21
     mov     x3, x22
@@ -263,11 +273,12 @@ SPEC_FUNCTION node_attester_slashing
 SPEC_END node_attester_slashing
 
 /*
- * (args, data, scratch, result, root): the gossip validation of the topic args.topic for the
- * message in data, decoded with the fork's type. For beacon_block, blob_sidecar and
+ * (args, data, scratch, result, root, index): the gossip validation of the topic args.topic for
+ * the message in data, decoded with the fork's type. For beacon_block, blob_sidecar and
  * data_column_sidecar the proposer state first gets process_slots to the message's slot. A valid
- * beacon_block gives its root. x19 args, x20 the message, x21 scratch, x22 result, x23 root,
- * x24 the topic, x25 the slot, x26 the proposer state, x28 the scratch size, restored on return.
+ * beacon_block gives its root and blob count; a valid blob_sidecar the root of its block header
+ * and its index. x19 args, x20 the message, x21 scratch, x22 result, x23 root, x24 the topic,
+ * x25 the slot, x26 the proposer state, x27 index, x28 the scratch size, restored on return.
  * Locals: (16 + L) a slot and a result. The two arguments past the eighth go at sp.
  */
 SPEC_FUNCTION node_gossip
@@ -277,8 +288,10 @@ SPEC_FUNCTION node_gossip
     mov     x21, x2
     mov     x22, x3
     mov     x23, x4
+    mov     x27, x5
     ldr     x28, [x21]
     str     xzr, [x22]
+    str     xzr, [x27]
     ldr     x24, [x19, #NodeGossip_topic]
     ADDRESS x0, lantern_type_SignedBeaconBlock     /* the type of the topic */
     cmp     x24, #GOSSIP_BEACON_BLOCK
@@ -400,9 +413,14 @@ SPEC_FUNCTION node_gossip
 .endif
     bl      lantern_validate_beacon_block_gossip
     cbnz    x0, 98f
-    ldr     x9, [x22]                       /* a valid block: its root */
+    ldr     x9, [x22]                       /* a valid block: its root and blob count */
     cbnz    x9, 99f
     PART    x1, x9, x20, SignedBeaconBlock_message
+.if FORK >= FORK_DENEB
+    PART    x9, x10, x1, BeaconBlock_body
+    LDQ     x10, x9, BeaconBlockBody_blob_kzg_commitments + 8
+    str     x10, [x27]
+.endif
     ADDRESS x0, lantern_type_BeaconBlock
     mov     x2, x21
     mov     x3, x23
@@ -484,7 +502,19 @@ SPEC_FUNCTION node_gossip
     ldr     x7, [x19, #NodeGossip_settings]
     stp     x21, x22, [sp]
     bl      lantern_validate_blob_sidecar_gossip
-    b       98f
+    cbnz    x0, 98f
+    ldr     x9, [x22]                       /* a valid sidecar: the root of its block header, its index */
+    cbnz    x9, 99f
+    ldr     x9, [x20, #BlobSidecar_index]
+    str     x9, [x27]
+    ADDRESS x0, lantern_type_BeaconBlockHeader
+    ADDQ    x1, x20, BlobSidecar_signed_block_header + SignedBeaconBlockHeader_message
+    mov     x2, x21
+    mov     x3, x23
+    CALL_GLOBAL ssz_hash_tree_root
+    cmp     x0, #SSZ_BUFFER_TOO_SMALL
+    b.eq    8f
+    b       99f
 39:
 .endif
 .if FORK >= FORK_FULU
@@ -514,3 +544,77 @@ SPEC_FUNCTION node_gossip
 99: str     x28, [x21]
     LEAVE_OUT 16, 16
 SPEC_END node_gossip
+
+.if FORK == FORK_DENEB || FORK == FORK_ELECTRA
+/*
+ * (data, config, settings, scratch, result, root): the checks a reader of a blob sidecar response
+ * makes: the index below the fork's limit, verify_blob_sidecar_inclusion_proof and
+ * verify_blob_kzg_proof; then hash_tree_root of its block header. x19 config, x20 the sidecar,
+ * x21 scratch, x22 result, x23 root, x24 settings, x28 the scratch size, restored on return.
+ * Locals: L an out.
+ */
+SPEC_FUNCTION node_blob_sidecar
+    ENTER 16
+    mov     x20, x0
+    mov     x19, x1
+    mov     x24, x2
+    mov     x21, x3
+    mov     x22, x4
+    mov     x23, x5
+    ldr     x28, [x21]
+    str     xzr, [x22]
+    ADDRESS x0, lantern_type_BlobSidecar
+    mov     x1, x20
+    mov     x2, x21
+    bl      node_decode
+    cmp     x0, #1
+    b.eq    8f
+    b.hi    9f
+    mov     x20, x1
+    ldr     x9, [x20, #BlobSidecar_index]   /* the index is below the blob limit */
+.if FORK == FORK_ELECTRA
+    LDQ     x10, x19, CONFIG_MAX_BLOBS_PER_BLOCK_ELECTRA
+.else
+    LDQ     x10, x19, CONFIG_MAX_BLOBS_PER_BLOCK
+.endif
+    cmp     x9, x10
+    b.hs    6f
+    mov     x0, x20                         /* verify_blob_sidecar_inclusion_proof */
+    add     x1, sp, #L
+    bl      lantern_verify_blob_sidecar_inclusion_proof
+    cbnz    x0, 99f
+    ldr     x9, [sp, #L]
+    cbz     x9, 6f
+    mov     x0, x24                         /* verify_blob_kzg_proof(blob, kzg_commitment, kzg_proof) */
+    ADDQ    x1, x20, BlobSidecar_blob
+    ADDQ    x2, x20, BlobSidecar_kzg_commitment
+    ADDQ    x3, x20, BlobSidecar_kzg_proof
+    mov     x4, x21
+    add     x5, sp, #L
+    CALL_GLOBAL crypto_kzg_verify_blob_kzg_proof
+    cmp     x0, #CRYPTO_BUFFER_TOO_SMALL
+    b.eq    8f
+    cbnz    x0, 6f                          /* an input that does not decode */
+    ldr     x9, [sp, #L]
+    cbz     x9, 6f
+    ADDRESS x0, lantern_type_BeaconBlockHeader
+    ADDQ    x1, x20, BlobSidecar_signed_block_header + SignedBeaconBlockHeader_message
+    mov     x2, x21
+    mov     x3, x23
+    CALL_GLOBAL ssz_hash_tree_root
+    cmp     x0, #SSZ_BUFFER_TOO_SMALL
+    b.eq    8f
+    b       99f
+6:  mov     x9, #LANTERN_INVALID_BLOB_SIDECAR
+    str     x9, [x22]
+    mov     x0, #LANTERN_OK
+    b       99f
+8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    b       99f
+9:  mov     x9, #LANTERN_INVALID_ENCODING
+    str     x9, [x22]
+    mov     x0, #LANTERN_OK
+99: str     x28, [x21]
+    LEAVE 16
+SPEC_END node_blob_sidecar
+.endif

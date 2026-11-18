@@ -12,6 +12,12 @@ cases(fork, preset) yields (handler, name, parts). The parts of a "p2p" case:
 
 The config of every case: each fork up to the case's fork at epoch 0, each later fork at
 2^64 - 1, as the runner gives the node.
+
+blob_cases(fork, preset, cases) yields the "blobs" cases of deneb and electra from the spec's
+fork_choice on_block cases: for each case whose block steps have blobs, one of the same name
+whose part of each such block file is the list of the SSZ bytes of get_blob_sidecars (deneb
+validator.md) of the block and the step's blobs and proofs. A step with fewer proofs or
+commitments than blobs gives the sidecars of the indices that have all three.
 """
 
 from p2p import FORKS, U64, module, run
@@ -96,3 +102,24 @@ def cases(fork, preset):
         "status_version": 2 if fork == "fulu" else 1,
         "metadata_version": 3 if fork == "fulu" else 2,
     }
+
+
+def blob_cases(fork, preset, cases):
+    """cases: (name, parts) of the spec's fork_choice on_block cases of the fork."""
+    if fork not in ("deneb", "electra"):
+        return
+    spec = module(fork, preset)
+    blobs_type = spec.Blobs  # List[Blob, MAX_BLOB_COMMITMENTS_PER_BLOCK]: a blobs file of the fork choice format
+    for name, parts in cases:
+        out = {}
+        for step in parts["steps"]:
+            if "block" not in step or "blobs" not in step:
+                continue
+            block = spec.SignedBeaconBlock.decode_bytes(parts[step["block"]])
+            blobs = list(blobs_type.decode_bytes(parts[step["blobs"]]))
+            proofs = [spec.KZGProof(bytes.fromhex(p[2:])) for p in step.get("proofs") or []]
+            n = min(len(blobs), len(proofs), len(block.message.body.blob_kzg_commitments))
+            sidecars = spec.get_blob_sidecars(block, blobs[:n], proofs[:n])
+            out[step["block"]] = [bytes(sidecar.encode_bytes()) for sidecar in sidecars]
+        if out:
+            yield "blobs", name, out

@@ -22,7 +22,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `p2p.py` | The cases of the p2p helpers, from the pinned spec modules |
 | `engine.py` | The cases of the Engine API client: JWTs, HTTP requests and responses |
 | `reqresp.py` | The cases of the req/resp encoding, and the req/resp message types of the spec's text |
-| `node.py` | The cases of the node core over libp2p: an anchor, and the Status and MetaData the node answers |
+| `node.py` | The cases of the node core over libp2p: an anchor, and the Status and MetaData the node answers; the blob sidecars of the spec's fork choice cases with blobs |
 
 ## Sources
 
@@ -42,6 +42,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `<preset>-<fork>-p2p-<function>.bin` | Lantern's cases of one p2p helper of networking.md: `config` (the values that replace the preset's), `input`, and `output`, null where the spec raises |
 | `<preset>-<fork>-reqresp-<function>.bin` | Lantern's cases of one function of req-resp.md: `input`, and `output`, null or a string (`more`, `invalid`) where the function refuses the input |
 | `<preset>-<fork>-engine-<function>.bin` | Lantern's cases of one function of engine-api.md: `input`, and `output`, or a string (`more`, `invalid`) where the function refuses the input |
+| `<preset>-<fork>-node-blobs.bin` | Lantern's blob sidecars of the spec's `fork_choice-on_block` cases with blobs, deneb and electra: a part for each block file; made in a run with the `fork_choice` cases |
 | `<preset>-<fork>-descriptors.bin` | Each SSZ container type of the fork, and each req/resp message type, with its reference `TypeDescriptor` |
 | `<preset>-config.bin` | One case: `configs/<preset>.yaml` |
 | `<preset>-kzg_setup.bin` | One case: the three point lists of `trusted_setup_4096.json` as bytes |

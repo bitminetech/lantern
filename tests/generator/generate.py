@@ -250,13 +250,25 @@ def main():
         count, digest = write_kzg_setup(out / f"{preset}-kzg_setup.bin", preset)
         manifest.append((f"{preset}-kzg_setup.bin", count, digest))
         files = {}
+        on_block = {}  # the fork_choice on_block cases with blobs, for node.blob_cases
         for archive, _ in archives:
             for fork, runner, handler, suite, case, data in read_cases(sources / archive, forks, runners):
                 file = f"{preset}-{fork}-{runner}-{handler}.bin"
                 if file not in files:
                     files[file] = CaseFile(out / file)
                 name = f"{suite}/{case}"
-                files[file].add(name, case_parts(name, data))
+                parts = case_parts(name, data)
+                files[file].add(name, parts)
+                if (runner, handler) == ("fork_choice", "on_block") and any(k.startswith("blobs_") for k in parts):
+                    on_block.setdefault(fork, []).append((name, parts))
+        if not runners or "node" in runners:
+            for fork in forks:
+                items = [(name, parts) for _, name, parts in node.blob_cases(fork, preset, on_block.get(fork, []))]
+                if items:
+                    file = f"{preset}-{fork}-node-blobs.bin"
+                    count, digest = write_file(out / file, items)
+                    manifest.append((file, count, digest))
+                    print(f"{file}: {count} cases")
         for file in sorted(files):
             count, digest = files[file].close()
             manifest.append((file, count, digest))

@@ -13,6 +13,7 @@
 .endm
 
 .set NODE_BLOB_HEADER, 8 + 32 * FIELD_ELEMENTS_PER_BLOB + 48 + 48   # the signed_block_header in a BlobSidecar's SSZ bytes
+.set NODE_BLOB_BYTES, NODE_BLOB_HEADER + 208 + 32 * KZG_COMMITMENT_INCLUSION_PROOF_DEPTH  # the SSZ size of a BlobSidecar
 
 /* Call lantern_<fork>_<name> for the fork in t6 (FORK_PHASE0 to FORK_FULU). Uses t5. */
 .macro FORK_CALL name
@@ -125,6 +126,7 @@ FUNCTION lantern_node_size
     NODE_SIZE_ADD pow_blocks, POW_BLOCK_BYTES
     NODE_SIZE_ADD peers, NodePeer__mem
     NODE_SIZE_ADD messages, NodeMessage__mem
+    NODE_SIZE_ADD blobs, NodeBlob__mem
     ld      t0, NodeRoom_p2p_out(a0)        # a ByteList
     addi    t1, t0, 24 + 7
     bltu    t1, t0, 9f
@@ -170,6 +172,7 @@ LOCAL_FUNCTION node_layout
     mul     t1, t1, t3
     add     t0, t0, t1
     NODE_PART messages, messages, NodeMessage__mem
+    NODE_PART blobs, blobs, NodeBlob__mem
     sd      t0, Node_p2p_out(a0)            # one ByteList, empty
     li      t1, 1
     sd      t1, (Node_p2p_out + 8)(a0)
@@ -296,6 +299,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_ROOM peers, Node_peers
     NODE_COPY_ROOM streams, Node_streams
     NODE_COPY_ROOM messages, Node_messages
+    NODE_COPY_ROOM blobs, Node_blobs
     ld      t0, NodeRoom_p2p_out(s2)        # the queued bytes fit
     ld      t1, Node_p2p_out(s1)
     add     t1, s1, t1
@@ -318,6 +322,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_PART Node_pow_blocks, POW_BLOCK_BYTES
     NODE_COPY_PART Node_peers, NodePeer__mem
     NODE_COPY_PART Node_messages, NodeMessage__mem
+    NODE_COPY_PART Node_blobs, NodeBlob__mem
     ld      a1, Node_p2p_out(s1)            # the queued bytes
     add     a1, s1, a1
     ld      a2, 16(a1)
@@ -624,6 +629,129 @@ LOCAL_FUNCTION node_put
     LEAVE 0
 END_FUNCTION node_put
 
+/* a0 = 1 when the node holds a NODE_BLOB_VALID entry of the root at a0 (8-aligned) and the index a1, else 0. Uses t0-t3, a6, a7. */
+LOCAL_FUNCTION node_blob_held
+    UNWIND_END_PROLOGUE
+    PART    t0, t1, s1, Node_blobs
+1:  beqz    t1, 3f
+    ld      t2, NodeBlob_status(t0)
+    li      t3, NODE_BLOB_VALID
+    bne     t2, t3, 2f
+    ld      t2, NodeBlob_index(t0)
+    bne     t2, a1, 2f
+    NE32    t0, a0, 2f
+    li      a0, 1
+    ret
+2:  addi    t0, t0, NodeBlob__mem
+    addi    t1, t1, -1
+    j       1b
+3:  li      a0, 0
+    ret
+END_FUNCTION node_blob_held
+
+/*
+ * a0 = 1 when the node holds a NODE_BLOB_VALID entry of the root at a0 (8-aligned) for each index
+ * below a1 (1 to NODE_BLOB_MAX), else 0. Uses t0-t4, a6, a7.
+ */
+LOCAL_FUNCTION node_blobs_held
+    UNWIND_END_PROLOGUE
+    PART    t0, t1, s1, Node_blobs
+    li      t4, 0                           # a bit for each index held
+1:  beqz    t1, 3f
+    ld      t2, NodeBlob_status(t0)
+    li      t3, NODE_BLOB_VALID
+    bne     t2, t3, 2f
+    ld      t2, NodeBlob_index(t0)
+    bgeu    t2, a1, 2f
+    NE32    t0, a0, 2f
+    li      t3, 1
+    sll     t3, t3, t2
+    or      t4, t4, t3
+2:  addi    t0, t0, NodeBlob__mem
+    addi    t1, t1, -1
+    j       1b
+3:  li      t2, 64                          # every index below a1
+    sub     t2, t2, a1
+    li      t3, -1
+    srl     t3, t3, t2
+    sub     t3, t3, t4
+    seqz    a0, t3
+    ret
+END_FUNCTION node_blobs_held
+
+/*
+ * The block of index a0, from the network, waits for its blobs: NODE_BLOCK_BLOBS while it needs
+ * blobs the node does not hold; else data_available 1, NODE_BLOCK_WAITING and its import. It
+ * needs blobs when its fork is deneb or electra, its blob count is 1 to the fork's limit and
+ * NODE_BLOB_MAX, and its epoch is from max(the store's epoch - MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS,
+ * DENEB_FORK_EPOCH) on. s3 the index, s4 the entry, s7 the count.
+ */
+LOCAL_FUNCTION node_await
+    ENTER 0
+    mv      s3, a0
+    PART    s4, t0, s1, Node_blocks
+    li      t0, NodeBlock__mem
+    mul     t0, s3, t0
+    add     s4, s4, t0
+    ld      s7, NodeBlock_blobs(s4)
+    beqz    s7, 5f
+    li      t0, NODE_BLOB_MAX
+    bgtu    s7, t0, 5f
+    ld      a0, NodeBlock_slot(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    LDQ     t1, s1, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK
+    li      t0, FORK_DENEB
+    beq     a0, t0, 2f
+    li      t0, FORK_ELECTRA
+    bne     a0, t0, 5f
+    LDQ     t1, s1, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK_ELECTRA
+2:  bgtu    s7, t1, 5f
+    mv      a0, s2                          # the blob window
+    call    node_store_slot
+    li      t0, SLOTS_PER_EPOCH
+    divu    a0, a0, t0
+    LDQ     t1, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS
+    sub     t2, a0, t1
+    sltu    t3, a0, t1
+    addi    t3, t3, -1
+    and     a0, t2, t3
+    LDQ     t1, s1, Node_config + 16 * FORK_DENEB
+    bgeu    a0, t1, 3f
+    mv      a0, t1
+3:  ld      t2, NodeBlock_slot(s4)
+    li      t0, SLOTS_PER_EPOCH
+    divu    t2, t2, t0
+    bltu    t2, a0, 5f
+    mv      a0, s4
+    mv      a1, s7
+    call    node_blobs_held
+    bnez    a0, 5f
+    li      t0, NODE_BLOCK_BLOBS
+    sd      t0, NodeBlock_status(s4)
+    LEAVE 0
+5:  li      t0, 1
+    sd      t0, NodeBlock_data_available(s4)
+    li      t0, NODE_BLOCK_WAITING
+    sd      t0, NodeBlock_status(s4)
+    mv      a0, s3
+    call    node_try_import
+    LEAVE 0
+END_FUNCTION node_await
+
+/* A blob of the root at a0 became NODE_BLOB_VALID: the block of that root in NODE_BLOCK_BLOBS waits for its blobs again. */
+LOCAL_FUNCTION node_blob_added
+    FRAME 0
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 9f
+    ld      t0, NodeBlock_status(a1)
+    li      t1, NODE_BLOCK_BLOBS
+    bne     t0, t1, 9f
+    call    node_await
+9:  UNFRAME 0
+END_FUNCTION node_blob_added
+
 /* The head: the root of get_head of the fork of the store's slot into the node, or a JUSTIFIED_STATE work. Locals: L the node. */
 LOCAL_FUNCTION node_head
     ENTER 16
@@ -715,6 +843,7 @@ LOCAL_FUNCTION node_event
     ld      t2, 16(s3)
     sd      t2, NodeBlock_data_available(t0)
     sd      zero, NodeBlock_result(t0)
+    sd      zero, NodeBlock_blobs(t0)
     addi    t1, t1, 1
     sd      t1, (Node_blocks + 8)(s1)
     ld      a0, (L + 40)(sp)
@@ -928,7 +1057,7 @@ LOCAL_FUNCTION node_event
     call    node_drop_message
     LEAVE 48
 641: li     t1, GOSSIP_BEACON_BLOCK
-    bne     t0, t1, 65f
+    bne     t0, t1, 642f
     addi    a0, s3, NodeEvent_root          # a new block keeps the bytes
     call    node_find_block
     li      t0, -1
@@ -950,15 +1079,43 @@ LOCAL_FUNCTION node_event
     sd      zero, NodeBlock_state_id(t0)
     li      t2, NODE_BLOCK_WAITING
     sd      t2, NodeBlock_status(t0)
-    li      t2, 1
-    sd      t2, NodeBlock_data_available(t0)
+    sd      zero, NodeBlock_data_available(t0)
     sd      zero, NodeBlock_result(t0)
+    ld      t2, NodeEvent_index(s3)
+    sd      t2, NodeBlock_blobs(t0)
     addi    t1, t1, 1
     sd      t1, (Node_blocks + 8)(s1)
     mv      a0, s4
     call    node_drop_message
     ld      a0, (L + 40)(sp)
-    call    node_try_import
+    call    node_await
+    LEAVE 48
+642: li     t1, GOSSIP_BLOB_SIDECAR         # a new valid sidecar keeps the bytes
+    bne     t0, t1, 65f
+    addi    a0, s3, NodeEvent_root
+    ld      a1, NodeEvent_index(s3)
+    call    node_blob_held
+    bnez    a0, 65f
+    PART    t0, t1, s1, Node_blobs
+    li      t2, NodeBlob__mem
+    mul     t2, t1, t2
+    add     t0, t0, t2
+    addi    t2, s3, NodeEvent_root
+    COPY32  t0, t2
+    ld      t2, NodeEvent_index(s3)
+    sd      t2, NodeBlob_index(t0)
+    ld      t2, NodeMessage_slot(s4)
+    sd      t2, NodeBlob_slot(t0)
+    ld      t2, NodeAction_data(s3)
+    sd      t2, NodeBlob_data_id(t0)
+    li      t2, NODE_BLOB_VALID
+    sd      t2, NodeBlob_status(t0)
+    addi    t1, t1, 1
+    sd      t1, (Node_blobs + 8)(s1)
+    mv      a0, s4
+    call    node_drop_message
+    addi    a0, s3, NodeEvent_root
+    call    node_blob_added
     LEAVE 48
 65: mv      a0, s4
     call    node_drop_message
@@ -968,7 +1125,7 @@ LOCAL_FUNCTION node_event
     call    node_ids
     LEAVE 48
 75: li      t2, NODE_WORK_SYNC_BLOCK        # SYNC_BLOCK: the root of a block of a response
-    bne     t0, t2, 70f
+    bne     t0, t2, 77f
     ld      a0, NodeAction_target(s3)
     PART    t2, t3, s1, Node_blocks
     bgeu    a0, t3, 79f
@@ -984,17 +1141,48 @@ LOCAL_FUNCTION node_event
     call    node_find_block
     li      t0, -1
     bne     a0, t0, 76f
-    addi    t0, s3, NodeEvent_root
+    addi    t0, s3, NodeEvent_root          # the block waits for its blobs, then its parent
     COPY32  s4, t0
-    li      t0, NODE_BLOCK_WAITING
-    sd      t0, NodeBlock_status(s4)
+    ld      t0, NodeEvent_index(s3)
+    sd      t0, NodeBlock_blobs(s4)
+    sd      zero, NodeBlock_data_available(s4)
     ld      a0, (L + 40)(sp)
-    call    node_try_import
+    call    node_await
     LEAVE 48
 76: li      t0, NODE_BLOCK_INVALID          # not a block, or a known root: invalid, its bytes go
     sd      t0, NodeBlock_status(s4)
     li      a0, NODE_ACT_BYTES_FREE
     ld      a1, NodeBlock_data_id(s4)
+    li      a2, 0
+    call    node_ids
+    LEAVE 48
+77: li      t2, NODE_WORK_BLOB              # BLOB: a sidecar of a response, checked
+    bne     t0, t2, 70f
+    ld      a0, NodeAction_target(s3)
+    PART    t2, t3, s1, Node_blobs
+    bgeu    a0, t3, 79f
+    li      t3, NodeBlob__mem
+    mul     t3, a0, t3
+    add     s4, t2, t3
+    ld      t2, NodeBlob_status(s4)
+    li      t3, NODE_BLOB_VERIFYING
+    bne     t2, t3, 79f
+    bnez    t1, 78f
+    addi    a0, s3, NodeEvent_root          # valid, and not held yet: the entry takes the root
+    ld      a1, NodeBlob_index(s4)
+    call    node_blob_held
+    bnez    a0, 78f
+    addi    t0, s3, NodeEvent_root
+    COPY32  s4, t0
+    li      t0, NODE_BLOB_VALID
+    sd      t0, NodeBlob_status(s4)
+    mv      a0, s4
+    call    node_blob_added
+    LEAVE 48
+78: li      t0, NODE_BLOB_INVALID           # not valid, or held: its bytes go
+    sd      t0, NodeBlob_status(s4)
+    li      a0, NODE_ACT_BYTES_FREE
+    ld      a1, NodeBlob_data_id(s4)
     li      a2, 0
     call    node_ids
     LEAVE 48
@@ -1850,7 +2038,7 @@ LOCAL_FUNCTION node_message
     li      a2, 20
     call    lantern_copy
     PART    t0, t1, s1, Node_messages       # the entry
-    ld      t2, Node_p2p_out(s1)
+    ld      t2, Node_blobs(s1)
     ld      t3, Node_messages(s1)
     sub     t2, t2, t3
     li      t3, NodeMessage__mem
@@ -2243,8 +2431,11 @@ LOCAL_FUNCTION node_response
     ld      t0, NodeStream_next(s3)         # no bytes: the end after STREAM_EOF
     bnez    t0, 80f
     j       90f
-2:  li      t0, CHUNK_RESPONSE              # blocks by range v2: a ForkDigest context
+2:  li      t0, CHUNK_RESPONSE              # blocks by range v2 and blob sidecars by range: a ForkDigest context
     sd      t0, (L + ChunkHeader_kind)(sp)
+    li      t0, 4
+    li      t1, REQRESP_BLOB_SIDECARS_BY_RANGE
+    beq     s4, t1, 3f
     li      t0, 0
     li      t1, REQRESP_BEACON_BLOCKS_BY_RANGE
     bne     s4, t1, 3f
@@ -2271,7 +2462,22 @@ LOCAL_FUNCTION node_response
     li      t0, 92
 31: bne     s9, t0, 85f
     j       41f
-4:  li      t0, 100 + 84                    # a block: room for its BYTES_PUT, its work, its entry
+4:  li      t0, REQRESP_BLOB_SIDECARS_BY_RANGE
+    bne     s4, t0, 42f
+    li      t0, NODE_BLOB_BYTES             # a blob sidecar: room for its BYTES_PUT, its work, its entry
+    bne     s9, t0, 85f
+    li      a0, NODE_BLOB_BYTES + 48 + NODE_ACT_WORK_SIZE + 7
+    call    node_room
+    beqz    a0, 95f
+    ld      t0, Node_p2p_out(s1)
+    ld      t1, Node_blobs(s1)
+    sub     t0, t0, t1
+    li      t1, NodeBlob__mem
+    divu    t0, t0, t1
+    ld      t1, (Node_blobs + 8)(s1)
+    bgeu    t1, t0, 95f
+    j       41f
+42: li      t0, 100 + 84                    # a block: room for its BYTES_PUT, its work, its entry
     bltu    s9, t0, 85f
     LDQ     t0, s1, Node_config + CONFIG_MAX_PAYLOAD_SIZE
     bgtu    s9, t0, 85f
@@ -2316,7 +2522,9 @@ LOCAL_FUNCTION node_response
     mv      a2, s9
     call    node_peer_status
     j       7f
-6:  PART    t0, t1, s1, Node_blocks         # a block: its entry, its bytes, the work of its root
+6:  li      t0, REQRESP_BLOB_SIDECARS_BY_RANGE
+    beq     s4, t0, 61f
+    PART    t0, t1, s1, Node_blocks         # a block: its entry, its bytes, the work of its root
     sd      t1, (L + 48)(sp)
     li      t2, NodeBlock__mem
     mul     t2, t1, t2
@@ -2342,6 +2550,33 @@ LOCAL_FUNCTION node_response
     sd      a0, NodeBlock_data_id(s10)
     mv      a3, a0
     li      a0, NODE_WORK_SYNC_BLOCK
+    li      a1, 0
+    li      a2, 0
+    ld      a4, (L + 48)(sp)
+    li      a5, 0
+    call    node_work
+    j       7f
+61: PART    t0, t1, s1, Node_blobs          # a blob sidecar: its entry, its bytes, the work of its checks
+    sd      t1, (L + 48)(sp)
+    li      t2, NodeBlob__mem
+    mul     t2, t1, t2
+    add     s10, t0, t2
+    addi    t1, t1, 1
+    sd      t1, (Node_blobs + 8)(s1)
+    mv      a0, s10
+    li      a1, NodeBlob__mem
+    call    lantern_zero
+    ld      t0, 24(s8)                      # its index, and the slot of its block header
+    sd      t0, NodeBlob_index(s10)
+    LDQ     t0, s8, 24 + NODE_BLOB_HEADER
+    sd      t0, NodeBlob_slot(s10)
+    li      t0, NODE_BLOB_VERIFYING
+    sd      t0, NodeBlob_status(s10)
+    mv      a0, s8
+    call    node_put
+    sd      a0, NodeBlob_data_id(s10)
+    mv      a3, a0
+    li      a0, NODE_WORK_BLOB
     li      a1, 0
     li      a2, 0
     ld      a4, (L + 48)(sp)
@@ -2381,11 +2616,12 @@ END_FUNCTION node_response
  * a0 = 1 when a response waits for room, else 0. The bytes of each response are read; then,
  * with no BeaconBlocksByRange of the node open, one to a peer of the node's ForkDigest whose
  * Status head_slot is at least the next slot: max(the head's slot + 1, sync_slot), at most
- * NODE_SYNC_BATCH slots. s3 a peer, s4 the streams or peers left, s7 the result, s8 the start
- * slot. Locals: L the request (24).
+ * NODE_SYNC_BATCH slots. Before it, with room for two streams, a BlobSidecarsByRange of the
+ * range's slots in the blob window before fulu. s3 a peer, s4 the streams or peers left, s7 the
+ * result, s8 the start slot. Locals: L the request (24), L+24 the blob request (16).
  */
 LOCAL_FUNCTION node_sync
-    ENTER 32
+    ENTER 48
     li      s7, 0
     ld      s4, (Node_streams + 8)(s1)      # the responses, from the last stream: an end moves the last
 1:  beqz    s4, 3f
@@ -2435,7 +2671,54 @@ LOCAL_FUNCTION node_sync
     sd      t0, (L + 8)(sp)
     li      t0, 1
     sd      t0, (L + 16)(sp)
-    mv      a0, s2                          # version 2 from altair on
+    mv      a0, s2                          # the blob window's first slot: of max(store epoch - MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS, DENEB_FORK_EPOCH)
+    call    node_store_slot
+    li      t0, SLOTS_PER_EPOCH
+    divu    a0, a0, t0
+    LDQ     t1, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS
+    sub     t2, a0, t1
+    sltu    t3, a0, t1
+    addi    t3, t3, -1
+    and     a0, t2, t3
+    LDQ     t1, s1, Node_config + 16 * FORK_DENEB
+    bgeu    a0, t1, 62f
+    mv      a0, t1
+62: mulhu   t1, a0, t0
+    bnez    t1, 66f
+    mul     a0, a0, t0
+    ld      t2, L(sp)                       # the range from there, before fulu's first slot
+    ld      t3, (L + 8)(sp)
+    add     t3, t2, t3
+    bgeu    t3, t2, 63f
+    li      t3, -1
+63: bgeu    t2, a0, 64f
+    mv      t2, a0
+64: LDQ     t1, s1, Node_config + 16 * FORK_FULU
+    mulhu   t4, t1, t0
+    bnez    t4, 65f
+    mul     t1, t1, t0
+    bleu    t3, t1, 65f
+    mv      t3, t1
+65: bgeu    t2, t3, 66f
+    sub     t3, t3, t2
+    sd      t2, (L + 24)(sp)
+    sd      t3, (L + 32)(sp)
+    ld      t0, (Node_streams + 8)(s1)      # room for it and the blocks' request
+    ld      t1, Node_messages(s1)
+    ld      t2, Node_streams(s1)
+    sub     t1, t1, t2
+    ld      t2, Node_stream_bytes(s1)
+    divu    t1, t1, t2
+    addi    t0, t0, 2
+    bgtu    t0, t1, 9f
+    li      a0, REQRESP_BLOB_SIDECARS_BY_RANGE
+    li      a1, 1
+    ld      a2, NodePeer_handle(s3)
+    addi    a3, sp, L + 24
+    li      a4, 16
+    call    node_open
+    beqz    a0, 9f
+66: mv      a0, s2                          # version 2 from altair on
     call    node_store_slot
     addi    a1, s1, Node_config
     call    node_fork
@@ -2457,7 +2740,7 @@ LOCAL_FUNCTION node_sync
     add     t0, t0, t1
     sd      t0, Node_sync_slot(s1)
 9:  mv      a0, s7
-    LEAVE 32
+    LEAVE 48
 END_FUNCTION node_sync
 
 /* The libp2p application notice a0 of the libp2p state a1. s3 the notice, s4 an entry, s7 method, s8 version. */
@@ -2890,7 +3173,7 @@ END_FUNCTION lantern_node_protocols
  * s4 the entry.
  */
 LOCAL_FUNCTION node_block_entry
-    ENTER 0
+    ENTER 16
     addi    s3, a0, NodeEvent_bytes
     mv      s4, a1
     li      t0, 1
@@ -2908,10 +3191,11 @@ LOCAL_FUNCTION node_block_entry
     mv      a1, s5
     addi    a2, s4, 8
     mv      a3, s4
+    addi    a4, sp, L                       # its blob count: not kept
     FORK_CALL node_block_root
-    LEAVE 0
+    LEAVE 16
 9:  li      a0, LANTERN_OK
-    LEAVE 0
+    LEAVE 16
 END_FUNCTION node_block_entry
 
 /*
@@ -2922,7 +3206,7 @@ END_FUNCTION node_block_entry
  * size, L+16 p2p, L+24 tick, L+32 the end of the events handled, L+40 the queue's free bytes the P2P events take, saved,
  * L+48 the libp2p scratch, L+56 the bytes of the P2P events, L+64 the P2P events, L+72 the
  * action room kept for the node, L+80 wakeup, L+88 libp2p's StepResult, L+96 libp2p's actions,
- * L+104 the libp2p steps, L+112 a stream waits.
+ * L+104 the libp2p steps, L+112 a stream waits, L+120 the GOSSIP WORK_DONE events.
  */
 FUNCTION lantern_node_step
     ENTER 128
@@ -2943,6 +3227,7 @@ FUNCTION lantern_node_step
     li      t5, 0
     sd      zero, (L + 56)(sp)
     sd      zero, (L + 64)(sp)
+    sd      zero, (L + 120)(sp)
     mv      t0, s3
 1:  bgeu    t0, s4, 5f
     sub     t1, s4, t0
@@ -2968,9 +3253,12 @@ FUNCTION lantern_node_step
     li      t4, NODE_EV_WORK_DONE_SIZE
     bltu    t2, t4, 7f
     ld      t4, NodeAction_work_kind(t0)    # SERVE: a ByteList of the chunk inside
-    li      t6, NODE_WORK_GOSSIP            # GOSSIP: a block it may add
+    li      t6, NODE_WORK_GOSSIP            # GOSSIP: a block or a blob it may add
     bne     t4, t6, 23f
     addi    s9, s9, 1
+    ld      t6, (L + 120)(sp)
+    addi    t6, t6, 1
+    sd      t6, (L + 120)(sp)
 23: li      t6, NODE_WORK_SERVE
     bne     t4, t6, 22f
     li      t4, NodeEvent_chunk + 24
@@ -3056,6 +3344,26 @@ FUNCTION lantern_node_step
     beqz    t2, 1f
     addi    t1, t1, NODE_SYNC_BATCH
 1:  bltu    t0, t1, 8f
+    ld      t0, Node_p2p_out(s1)            # blobs: one for each GOSSIP WORK_DONE event, and with p2p a batch's sidecars
+    ld      t1, Node_blobs(s1)
+    sub     t0, t0, t1
+    li      t1, NodeBlob__mem
+    divu    t0, t0, t1
+    ld      t1, (Node_blobs + 8)(s1)
+    sub     t0, t0, t1
+    ld      t1, (L + 120)(sp)
+    ld      t2, (L + 16)(sp)
+    beqz    t2, 549f
+    LDQ     t2, s1, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK
+    LDQ     t3, s1, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK_ELECTRA
+    bgeu    t2, t3, 548f
+    mv      t2, t3
+548: srli   t3, t2, 32
+    bnez    t3, 8f
+    li      t3, NODE_SYNC_BATCH
+    mul     t2, t2, t3
+    add     t1, t1, t2
+549: bltu   t0, t1, 8f
     ld      t0, Node_pow_blocks(s1)         # checkpoints: two for each WORK_DONE event, and two
     ld      t1, Node_checkpoints(s1)
     sub     t0, t0, t1
@@ -3497,10 +3805,11 @@ FUNCTION lantern_node_run
     mv      a2, s6
     addi    a3, s7, NodeEvent_result
     addi    a4, s7, NodeEvent_root
+    addi    a5, s7, NodeEvent_index
     FORK_CALL node_gossip
     LEAVE 192
 70: li      t1, NODE_WORK_SYNC_BLOCK
-    bne     t0, t1, 8f
+    bne     t0, t1, 80f
     ld      t0, 16(s5)                      # SYNC_BLOCK: node_block_root of the fork of its slot
     li      t1, 100 + 84
     bltu    t0, t1, 18b
@@ -3514,7 +3823,33 @@ FUNCTION lantern_node_run
     mv      a1, s6
     addi    a2, s7, NodeEvent_root
     addi    a3, s7, NodeEvent_result
+    addi    a4, s7, NodeEvent_index
     FORK_CALL node_block_root
+    LEAVE 192
+80: li      t1, NODE_WORK_BLOB
+    bne     t0, t1, 8f
+    ld      t0, 16(s5)                      # BLOB: node_blob_sidecar of the fork of its slot, deneb or electra
+    li      t1, NODE_BLOB_HEADER + 8
+    bltu    t0, t1, 18b
+    ld      t0, 8(s5)
+    add     t0, s5, t0
+    LDQ     a0, t0, NODE_BLOB_HEADER
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    mv      a0, s5
+    addi    a1, s1, Node_config
+    ld      a2, (L + 88)(sp)
+    mv      a3, s6
+    addi    a4, s7, NodeEvent_result
+    addi    a5, s7, NodeEvent_root
+    li      t0, FORK_DENEB
+    bne     t6, t0, 81f
+    CALL_GLOBAL lantern_deneb_node_blob_sidecar
+    LEAVE 192
+81: li      t0, FORK_ELECTRA
+    bne     t6, t0, 18b
+    CALL_GLOBAL lantern_electra_node_blob_sidecar
     LEAVE 192
 8:  li      a0, LANTERN_INVALID_EVENT
     LEAVE 192

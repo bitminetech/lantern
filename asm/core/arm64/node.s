@@ -10,6 +10,7 @@
 .endm
 
 .set NODE_BLOB_HEADER, 8 + 32 * FIELD_ELEMENTS_PER_BLOB + 48 + 48   /* the signed_block_header in a BlobSidecar's SSZ bytes */
+.set NODE_BLOB_BYTES, NODE_BLOB_HEADER + 208 + 32 * KZG_COMMITMENT_INCLUSION_PROOF_DEPTH  /* the SSZ size of a BlobSidecar */
 
 /* Call lantern_<fork>_<name> for the fork in x15 (FORK_PHASE0 to FORK_FULU). */
 .macro FORK_CALL name
@@ -99,6 +100,7 @@ FUNCTION lantern_node_size
     NODE_SIZE_ADD pow_blocks, POW_BLOCK_BYTES
     NODE_SIZE_ADD peers, NodePeer__mem
     NODE_SIZE_ADD messages, NodeMessage__mem
+    NODE_SIZE_ADD blobs, NodeBlob__mem
     ldr     x10, [x0, #NodeRoom_p2p_out] /* a ByteList */
     adds    x10, x10, #(24 + 7)
     b.cs    9f
@@ -141,6 +143,7 @@ LOCAL_FUNCTION node_layout
     ldr     x10, [x1, #NodeRoom_streams]
     madd    x9, x10, x12, x9
     NODE_PART messages, messages, NodeMessage__mem
+    NODE_PART blobs, blobs, NodeBlob__mem
     str     x9, [x0, #Node_p2p_out]         /* one ByteList, empty */
     mov     x10, #1
     str     x10, [x0, #(Node_p2p_out + 8)]
@@ -271,6 +274,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_ROOM peers, Node_peers
     NODE_COPY_ROOM streams, Node_streams
     NODE_COPY_ROOM messages, Node_messages
+    NODE_COPY_ROOM blobs, Node_blobs
     ldr     x9, [x20, #NodeRoom_p2p_out]    /* the queued bytes fit */
     ldr     x10, [x19, #Node_p2p_out]
     add     x10, x19, x10
@@ -295,6 +299,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_PART Node_pow_blocks, POW_BLOCK_BYTES
     NODE_COPY_PART Node_peers, NodePeer__mem
     NODE_COPY_PART Node_messages, NodeMessage__mem
+    NODE_COPY_PART Node_blobs, NodeBlob__mem
     ldr     x1, [x19, #Node_p2p_out]        /* the queued bytes */
     add     x1, x19, x1
     ldr     x2, [x1, #16]
@@ -613,6 +618,149 @@ LOCAL_FUNCTION node_put
     LEAVE 0
 END_FUNCTION node_put
 
+/* L0: x0 = 1 when the node holds a NODE_BLOB_VALID entry of the root at x0 and the index x1, else 0. Uses x9-x15. */
+LOCAL_FUNCTION node_blob_held
+    UNWIND_END_PROLOGUE
+    PART    x9, x10, x19, Node_blobs
+1:  cbz     x10, 3f
+    ldr     x11, [x9, #NodeBlob_status]
+    cmp     x11, #NODE_BLOB_VALID
+    b.ne    2f
+    ldr     x11, [x9, #NodeBlob_index]
+    cmp     x11, x1
+    b.ne    2f
+    ldp     x12, x13, [x9]
+    ldp     x14, x15, [x0]
+    cmp     x12, x14
+    ccmp    x13, x15, #0, eq
+    b.ne    2f
+    ldp     x12, x13, [x9, #16]
+    ldp     x14, x15, [x0, #16]
+    cmp     x12, x14
+    ccmp    x13, x15, #0, eq
+    b.ne    2f
+    mov     x0, #1
+    ret
+2:  add     x9, x9, #NodeBlob__mem
+    sub     x10, x10, #1
+    b       1b
+3:  mov     x0, #0
+    ret
+END_FUNCTION node_blob_held
+
+/*
+ * L0: x0 = 1 when the node holds a NODE_BLOB_VALID entry of the root at x0 for each index below
+ * x1 (1 to NODE_BLOB_MAX), else 0. Uses x9-x16.
+ */
+LOCAL_FUNCTION node_blobs_held
+    UNWIND_END_PROLOGUE
+    PART    x9, x10, x19, Node_blobs
+    mov     x11, #0                         /* a bit for each index held */
+1:  cbz     x10, 3f
+    ldr     x12, [x9, #NodeBlob_status]
+    cmp     x12, #NODE_BLOB_VALID
+    b.ne    2f
+    ldr     x12, [x9, #NodeBlob_index]
+    cmp     x12, x1
+    b.hs    2f
+    ldp     x13, x14, [x9]
+    ldp     x15, x16, [x0]
+    cmp     x13, x15
+    ccmp    x14, x16, #0, eq
+    b.ne    2f
+    ldp     x13, x14, [x9, #16]
+    ldp     x15, x16, [x0, #16]
+    cmp     x13, x15
+    ccmp    x14, x16, #0, eq
+    b.ne    2f
+    mov     x13, #1
+    lsl     x13, x13, x12
+    orr     x11, x11, x13
+2:  add     x9, x9, #NodeBlob__mem
+    sub     x10, x10, #1
+    b       1b
+3:  mov     x12, #64                        /* every index below x1 */
+    sub     x12, x12, x1
+    mov     x13, #-1
+    lsr     x13, x13, x12
+    cmp     x11, x13
+    cset    x0, eq
+    ret
+END_FUNCTION node_blobs_held
+
+/*
+ * L0: the block of index x0, from the network, waits for its blobs: NODE_BLOCK_BLOBS while it
+ * needs blobs the node does not hold; else data_available 1, NODE_BLOCK_WAITING and its import.
+ * It needs blobs when its fork is deneb or electra, its blob count is 1 to the fork's limit and
+ * NODE_BLOB_MAX, and its epoch is from max(the store's epoch - MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS,
+ * DENEB_FORK_EPOCH) on. x21 the index, x22 the entry, x25 the count.
+ */
+LOCAL_FUNCTION node_await
+    ENTER 0
+    mov     x21, x0
+    PART    x22, x9, x19, Node_blocks
+    mov     x9, #NodeBlock__mem
+    madd    x22, x21, x9, x22
+    ldr     x25, [x22, #NodeBlock_blobs]
+    cbz     x25, 5f
+    cmp     x25, #NODE_BLOB_MAX
+    b.hi    5f
+    ldr     x0, [x22, #NodeBlock_slot]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, #FORK_DENEB
+    b.eq    1f
+    cmp     x0, #FORK_ELECTRA
+    b.ne    5f
+    LDQ     x9, x19, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK_ELECTRA
+    b       2f
+1:  LDQ     x9, x19, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK
+2:  cmp     x25, x9
+    b.hi    5f
+    mov     x0, x20                         /* the blob window */
+    bl      node_store_slot
+    mov     x9, #SLOTS_PER_EPOCH
+    udiv    x0, x0, x9
+    LDQ     x10, x19, Node_config + CONFIG_MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS
+    subs    x0, x0, x10
+    csel    x0, xzr, x0, lo
+    ldr     x10, [x19, #(Node_config + 16 * FORK_DENEB)]
+    cmp     x0, x10
+    csel    x0, x10, x0, lo
+    ldr     x9, [x22, #NodeBlock_slot]
+    mov     x10, #SLOTS_PER_EPOCH
+    udiv    x9, x9, x10
+    cmp     x9, x0
+    b.lo    5f
+    mov     x0, x22
+    mov     x1, x25
+    bl      node_blobs_held
+    cbnz    x0, 5f
+    mov     x9, #NODE_BLOCK_BLOBS
+    str     x9, [x22, #NodeBlock_status]
+    LEAVE 0
+5:  mov     x9, #1
+    str     x9, [x22, #NodeBlock_data_available]
+    mov     x9, #NODE_BLOCK_WAITING
+    str     x9, [x22, #NodeBlock_status]
+    mov     x0, x21
+    bl      node_try_import
+    LEAVE 0
+END_FUNCTION node_await
+
+/* L0: a blob of the root at x0 became NODE_BLOB_VALID: the block of that root in NODE_BLOCK_BLOBS waits for its blobs again. */
+LOCAL_FUNCTION node_blob_added
+    FRAME 16
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    9f
+    ldr     x9, [x1, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_BLOBS
+    b.ne    9f
+    bl      node_await
+9:  UNFRAME 16
+END_FUNCTION node_blob_added
+
 /* L0: the head: the root of get_head of the fork of the store's slot into the node, or a JUSTIFIED_STATE work. Locals: L the node. */
 LOCAL_FUNCTION node_head
     ENTER 16
@@ -704,6 +852,7 @@ LOCAL_FUNCTION node_event
     ldr     x11, [x21, #16]
     str     x11, [x9, #NodeBlock_data_available]
     str     xzr, [x9, #NodeBlock_result]
+    str     xzr, [x9, #NodeBlock_blobs]
     add     x10, x10, #1
     str     x10, [x19, #(Node_blocks + 8)]
     ldr     x0, [sp, #(L + 40)]
@@ -913,7 +1062,7 @@ LOCAL_FUNCTION node_event
     bl      node_drop_message
     LEAVE 48
 641: cmp    x9, #GOSSIP_BEACON_BLOCK
-    b.ne    65f
+    b.ne    642f
     add     x0, x21, #NodeEvent_root           /* a new block keeps the bytes */
     bl      node_find_block
     cmn     x0, #1
@@ -934,15 +1083,42 @@ LOCAL_FUNCTION node_event
     str     xzr, [x9, #NodeBlock_state_id]
     mov     x11, #NODE_BLOCK_WAITING
     str     x11, [x9, #NodeBlock_status]
-    mov     x11, #1
-    str     x11, [x9, #NodeBlock_data_available]
+    str     xzr, [x9, #NodeBlock_data_available]
     str     xzr, [x9, #NodeBlock_result]
+    ldr     x11, [x21, #NodeEvent_index]
+    str     x11, [x9, #NodeBlock_blobs]
     add     x10, x10, #1
     str     x10, [x19, #(Node_blocks + 8)]
     mov     x0, x22
     bl      node_drop_message
     ldr     x0, [sp, #(L + 40)]
-    bl      node_try_import
+    bl      node_await
+    LEAVE 48
+642: cmp    x9, #GOSSIP_BLOB_SIDECAR           /* a new valid sidecar keeps the bytes */
+    b.ne    65f
+    add     x0, x21, #NodeEvent_root
+    ldr     x1, [x21, #NodeEvent_index]
+    bl      node_blob_held
+    cbnz    x0, 65f
+    PART    x9, x10, x19, Node_blobs
+    mov     x11, #NodeBlob__mem
+    madd    x9, x10, x11, x9
+    add     x11, x21, #NodeEvent_root
+    COPY32  x9, x11
+    ldr     x11, [x21, #NodeEvent_index]
+    str     x11, [x9, #NodeBlob_index]
+    ldr     x11, [x22, #NodeMessage_slot]
+    str     x11, [x9, #NodeBlob_slot]
+    ldr     x11, [x21, #NodeAction_data]
+    str     x11, [x9, #NodeBlob_data_id]
+    mov     x11, #NODE_BLOB_VALID
+    str     x11, [x9, #NodeBlob_status]
+    add     x10, x10, #1
+    str     x10, [x19, #(Node_blobs + 8)]
+    mov     x0, x22
+    bl      node_drop_message
+    add     x0, x21, #NodeEvent_root
+    bl      node_blob_added
     LEAVE 48
 65: mov     x0, x22
     bl      node_drop_message
@@ -952,7 +1128,7 @@ LOCAL_FUNCTION node_event
     bl      node_ids
     LEAVE 48
 75: cmp     x9, #NODE_WORK_SYNC_BLOCK          /* SYNC_BLOCK: the root of a block of a response */
-    b.ne    70f
+    b.ne    77f
     ldr     x0, [x21, #NodeAction_target]
     PART    x9, x11, x19, Node_blocks
     cmp     x0, x11
@@ -968,17 +1144,48 @@ LOCAL_FUNCTION node_event
     bl      node_find_block
     cmn     x0, #1
     b.ne    76f
-    add     x9, x21, #NodeEvent_root
+    add     x9, x21, #NodeEvent_root           /* a new root: the block waits for its blobs, then its parent */
     COPY32  x22, x9
-    mov     x9, #NODE_BLOCK_WAITING
-    str     x9, [x22, #NodeBlock_status]
+    ldr     x9, [x21, #NodeEvent_index]
+    str     x9, [x22, #NodeBlock_blobs]
+    str     xzr, [x22, #NodeBlock_data_available]
     ldr     x0, [sp, #(L + 40)]
-    bl      node_try_import
+    bl      node_await
     LEAVE 48
 76: mov     x9, #NODE_BLOCK_INVALID            /* not a block, or a known root: invalid, its bytes go */
     str     x9, [x22, #NodeBlock_status]
     mov     x0, #NODE_ACT_BYTES_FREE
     ldr     x1, [x22, #NodeBlock_data_id]
+    mov     x2, #0
+    bl      node_ids
+    LEAVE 48
+77: cmp     x9, #NODE_WORK_BLOB                /* BLOB: a sidecar of a response, checked */
+    b.ne    70f
+    ldr     x0, [x21, #NodeAction_target]
+    PART    x9, x11, x19, Node_blobs
+    cmp     x0, x11
+    b.hs    79f
+    mov     x12, #NodeBlob__mem
+    madd    x22, x0, x12, x9
+    ldr     x9, [x22, #NodeBlob_status]
+    cmp     x9, #NODE_BLOB_VERIFYING
+    b.ne    79f
+    cbnz    x10, 78f
+    add     x0, x21, #NodeEvent_root           /* valid, and not held yet: the entry takes the root */
+    ldr     x1, [x22, #NodeBlob_index]
+    bl      node_blob_held
+    cbnz    x0, 78f
+    add     x9, x21, #NodeEvent_root
+    COPY32  x22, x9
+    mov     x9, #NODE_BLOB_VALID
+    str     x9, [x22, #NodeBlob_status]
+    mov     x0, x22
+    bl      node_blob_added
+    LEAVE 48
+78: mov     x9, #NODE_BLOB_INVALID             /* not valid, or held: its bytes go */
+    str     x9, [x22, #NodeBlob_status]
+    mov     x0, #NODE_ACT_BYTES_FREE
+    ldr     x1, [x22, #NodeBlob_data_id]
     mov     x2, #0
     bl      node_ids
     LEAVE 48
@@ -1815,7 +2022,7 @@ LOCAL_FUNCTION node_message
     mov     x2, #20
     bl      lantern_copy
     PART    x9, x10, x19, Node_messages     /* the entry */
-    ldr     x11, [x19, #Node_p2p_out]
+    ldr     x11, [x19, #Node_blobs]
     ldr     x12, [x19, #Node_messages]
     sub     x11, x11, x12
     mov     x12, #NodeMessage__mem
@@ -2193,8 +2400,11 @@ LOCAL_FUNCTION node_response
     ldr     x9, [x21, #NodeStream_next]     /* no bytes: the end after STREAM_EOF */
     cbnz    x9, 80f
     b       90f
-2:  mov     x9, #CHUNK_RESPONSE             /* blocks by range v2: a ForkDigest context */
+2:  mov     x9, #CHUNK_RESPONSE             /* blocks by range v2 and blob sidecars by range: a ForkDigest context */
     str     x9, [sp, #(L + ChunkHeader_kind)]
+    mov     x9, #4
+    cmp     x22, #REQRESP_BLOB_SIDECARS_BY_RANGE
+    b.eq    3f
     mov     x9, #0
     cmp     x22, #REQRESP_BEACON_BLOCKS_BY_RANGE
     b.ne    3f
@@ -2222,7 +2432,24 @@ LOCAL_FUNCTION node_response
 31: cmp     x27, x11
     b.ne    85f
     b       41f
-4:  cmp     x27, #(100 + 84)                /* a block: room for its BYTES_PUT, its work, its entry */
+4:  cmp     x22, #REQRESP_BLOB_SIDECARS_BY_RANGE
+    b.ne    42f
+    MOVQ    x10, NODE_BLOB_BYTES            /* a blob sidecar: room for its BYTES_PUT, its work, its entry */
+    cmp     x27, x10
+    b.ne    85f
+    MOVQ    x0, NODE_BLOB_BYTES + 48 + NODE_ACT_WORK_SIZE + 7
+    bl      node_room
+    cbz     x0, 95f
+    ldr     x10, [x19, #(Node_blobs + 8)]
+    ldr     x11, [x19, #Node_p2p_out]
+    ldr     x12, [x19, #Node_blobs]
+    sub     x11, x11, x12
+    mov     x12, #NodeBlob__mem
+    udiv    x11, x11, x12
+    cmp     x10, x11
+    b.hs    95f
+    b       41f
+42: cmp     x27, #(100 + 84)                /* a block: room for its BYTES_PUT, its work, its entry */
     b.lo    85f
     LDQ     x10, x19, Node_config + CONFIG_MAX_PAYLOAD_SIZE
     cmp     x27, x10
@@ -2268,7 +2495,9 @@ LOCAL_FUNCTION node_response
     mov     x2, x27
     bl      node_peer_status
     b       7f
-6:  PART    x9, x10, x19, Node_blocks       /* a block: its entry, its bytes, the work of its root */
+6:  cmp     x22, #REQRESP_BLOB_SIDECARS_BY_RANGE
+    b.eq    61f
+    PART    x9, x10, x19, Node_blocks       /* a block: its entry, its bytes, the work of its root */
     mov     x11, #NodeBlock__mem
     madd    x28, x10, x11, x9
     str     x10, [sp, #(L + 48)]
@@ -2292,6 +2521,32 @@ LOCAL_FUNCTION node_response
     str     x0, [x28, #NodeBlock_data_id]
     mov     x3, x0
     mov     x0, #NODE_WORK_SYNC_BLOCK
+    mov     x1, #0
+    mov     x2, #0
+    ldr     x4, [sp, #(L + 48)]
+    mov     x5, #0
+    bl      node_work
+    b       7f
+61: PART    x9, x10, x19, Node_blobs        /* a blob sidecar: its entry, its bytes, the work of its checks */
+    mov     x11, #NodeBlob__mem
+    madd    x28, x10, x11, x9
+    str     x10, [sp, #(L + 48)]
+    add     x10, x10, #1
+    str     x10, [x19, #(Node_blobs + 8)]
+    mov     x0, x28
+    mov     x1, #NodeBlob__mem
+    bl      lantern_zero
+    ldr     x9, [x26, #24]                  /* its index, and the slot of its block header */
+    str     x9, [x28, #NodeBlob_index]
+    LDQ     x9, x26, 24 + NODE_BLOB_HEADER
+    str     x9, [x28, #NodeBlob_slot]
+    mov     x9, #NODE_BLOB_VERIFYING
+    str     x9, [x28, #NodeBlob_status]
+    mov     x0, x26
+    bl      node_put
+    str     x0, [x28, #NodeBlob_data_id]
+    mov     x3, x0
+    mov     x0, #NODE_WORK_BLOB
     mov     x1, #0
     mov     x2, #0
     ldr     x4, [sp, #(L + 48)]
@@ -2331,11 +2586,12 @@ END_FUNCTION node_response
  * L0: x0 = 1 when a response waits for room, else 0. The bytes of each response are read; then,
  * with no BeaconBlocksByRange of the node open, one to a peer of the node's ForkDigest whose
  * Status head_slot is at least the next slot: max(the head's slot + 1, sync_slot), at most
- * NODE_SYNC_BATCH slots. x21 a peer, x22 the streams or peers left, x26 the result, x27 the start
- * slot. Locals: L the request (24).
+ * NODE_SYNC_BATCH slots. Before it, with room for two streams, a BlobSidecarsByRange of the
+ * range's slots in the blob window before fulu. x21 a peer, x22 the streams or peers left, x26
+ * the result, x27 the start slot. Locals: L the request (24), L+24 the blob request (16).
  */
 LOCAL_FUNCTION node_sync
-    ENTER 32
+    ENTER 48
     mov     x26, #0
     ldr     x22, [x19, #(Node_streams + 8)] /* the responses, from the last stream: an end moves the last */
 1:  cbz     x22, 3f
@@ -2383,7 +2639,51 @@ LOCAL_FUNCTION node_sync
     stp     x27, x9, [sp, #L]
     mov     x10, #1
     str     x10, [sp, #(L + 16)]
-    mov     x0, x20                         /* version 2 from altair on */
+    mov     x0, x20                         /* the blob window's first slot: of max(store epoch - MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS, DENEB_FORK_EPOCH) */
+    bl      node_store_slot
+    mov     x9, #SLOTS_PER_EPOCH
+    udiv    x0, x0, x9
+    LDQ     x10, x19, Node_config + CONFIG_MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS
+    subs    x0, x0, x10
+    csel    x0, xzr, x0, lo
+    ldr     x10, [x19, #(Node_config + 16 * FORK_DENEB)]
+    cmp     x0, x10
+    csel    x0, x10, x0, lo
+    umulh   x10, x0, x9
+    cbnz    x10, 7f
+    mul     x0, x0, x9
+    ldp     x11, x12, [sp, #L]              /* the range from there, before fulu's first slot */
+    adds    x12, x11, x12
+    csinv   x12, x12, xzr, cc
+    cmp     x11, x0
+    csel    x11, x0, x11, lo
+    ldr     x10, [x19, #(Node_config + 16 * FORK_FULU)]
+    umulh   x13, x10, x9
+    cbnz    x13, 8f
+    mul     x10, x10, x9
+    cmp     x12, x10
+    csel    x12, x10, x12, hi
+8:  cmp     x11, x12
+    b.hs    7f
+    sub     x12, x12, x11
+    stp     x11, x12, [sp, #(L + 24)]
+    ldr     x11, [x19, #(Node_streams + 8)] /* room for it and the blocks' request */
+    ldr     x12, [x19, #Node_messages]
+    ldr     x13, [x19, #Node_streams]
+    sub     x12, x12, x13
+    ldr     x13, [x19, #Node_stream_bytes]
+    udiv    x12, x12, x13
+    add     x11, x11, #2
+    cmp     x11, x12
+    b.hi    9f
+    mov     x0, #REQRESP_BLOB_SIDECARS_BY_RANGE
+    mov     x1, #1
+    ldr     x2, [x21, #NodePeer_handle]
+    add     x3, sp, #(L + 24)
+    mov     x4, #16
+    bl      node_open
+    cbz     x0, 9f
+7:  mov     x0, x20                         /* version 2 from altair on */
     bl      node_store_slot
     add     x1, x19, #Node_config
     bl      node_fork
@@ -2403,7 +2703,7 @@ LOCAL_FUNCTION node_sync
     add     x9, x9, x10
     str     x9, [x19, #Node_sync_slot]
 9:  mov     x0, x26
-    LEAVE 32
+    LEAVE 48
 END_FUNCTION node_sync
 
 /* L0: the libp2p application notice x0 of the libp2p state x1. x21 the notice, x22 an entry, x25 method, x26 version, x27 the state. */
@@ -2833,7 +3133,7 @@ END_FUNCTION lantern_node_protocols
  * first u64 is not 0 when the bytes are no SignedBeaconBlock. x0 = the status.
  */
 LOCAL_FUNCTION node_block_entry
-    ENTER 0
+    ENTER 16
     add     x21, x0, #NodeEvent_bytes
     mov     x9, #1
     str     x9, [x28]
@@ -2850,10 +3150,11 @@ LOCAL_FUNCTION node_block_entry
     mov     x1, x23
     add     x2, x28, #8
     mov     x3, x28
+    add     x4, sp, #L                      /* its blob count: not kept */
     FORK_CALL node_block_root
-    LEAVE 0
+    LEAVE 16
 9:  mov     x0, #LANTERN_OK
-    LEAVE 0
+    LEAVE 16
 END_FUNCTION node_block_entry
 
 /*
@@ -2863,7 +3164,8 @@ END_FUNCTION node_block_entry
  * Locals: L the WORK_DONE events, L+8 the scratch size, L+16 p2p, L+24 tick, L+32 the end of
  * the events handled, L+40 the queue's free bytes the P2P events take, saved, L+48 the libp2p scratch, L+56 the bytes of
  * the P2P events, L+64 the P2P events, L+72 the action room kept for the node, L+80 wakeup,
- * L+88 libp2p's StepResult, L+96 libp2p's actions, L+104 the libp2p steps, L+112 a stream waits.
+ * L+88 libp2p's StepResult, L+96 libp2p's actions, L+104 the libp2p steps, L+112 a stream waits,
+ * L+120 the GOSSIP WORK_DONE events.
  */
 FUNCTION lantern_node_step
     ENTER 128
@@ -2880,6 +3182,7 @@ FUNCTION lantern_node_step
     mov     x27, #0
     mov     x28, #0
     str     xzr, [sp, #L]
+    str     xzr, [sp, #(L + 120)]
     stp     xzr, xzr, [sp, #(L + 56)]
     mov     x11, x21
 1:  cmp     x11, x22
@@ -2907,9 +3210,13 @@ FUNCTION lantern_node_step
     cmp     x12, #NODE_EV_WORK_DONE_SIZE
     b.lo    7f
     ldr     x14, [x11, #NodeAction_work_kind]   /* SERVE: a ByteList of the chunk inside */
-    cmp     x14, #NODE_WORK_GOSSIP          /* GOSSIP: a block it may add */
+    cmp     x14, #NODE_WORK_GOSSIP          /* GOSSIP: a block or a blob it may add */
     cinc    x27, x27, eq
-    cmp     x14, #NODE_WORK_SERVE
+    b.ne    23f
+    ldr     x15, [sp, #(L + 120)]
+    add     x15, x15, #1
+    str     x15, [sp, #(L + 120)]
+23: cmp     x14, #NODE_WORK_SERVE
     b.ne    22f
     cmp     x12, #(NodeEvent_chunk + 24)
     b.lo    7f
@@ -2991,6 +3298,26 @@ FUNCTION lantern_node_step
     csel    x12, x12, xzr, ne
     add     x10, x27, x12
     cmp     x9, x10
+    b.lo    8f
+    ldr     x9, [x19, #Node_p2p_out]        /* blobs: one for each GOSSIP WORK_DONE event, and with p2p a batch's sidecars */
+    ldr     x10, [x19, #Node_blobs]
+    sub     x9, x9, x10
+    mov     x10, #NodeBlob__mem
+    udiv    x9, x9, x10
+    ldr     x10, [x19, #(Node_blobs + 8)]
+    sub     x9, x9, x10
+    ldr     x10, [sp, #(L + 120)]
+    ldr     x11, [sp, #(L + 16)]
+    cbz     x11, 54f
+    LDQ     x11, x19, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK
+    LDQ     x12, x19, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK_ELECTRA
+    cmp     x11, x12
+    csel    x11, x12, x11, lo
+    lsr     x12, x11, #32
+    cbnz    x12, 8f
+    mov     x12, #NODE_SYNC_BATCH
+    madd    x10, x11, x12, x10
+54: cmp     x9, x10
     b.lo    8f
     ldr     x9, [x19, #Node_pow_blocks]     /* checkpoints: two for each WORK_DONE event, and two */
     ldr     x10, [x19, #Node_checkpoints]
@@ -3428,10 +3755,11 @@ FUNCTION lantern_node_run
     mov     x2, x24
     add     x3, x25, #NodeEvent_result
     add     x4, x25, #NodeEvent_root
+    add     x5, x25, #NodeEvent_index
     FORK_CALL node_gossip
     LEAVE 192
 70: cmp     x9, #NODE_WORK_SYNC_BLOCK
-    b.ne    8f
+    b.ne    80f
     ldr     x9, [x23, #16]                  /* SYNC_BLOCK: node_block_root of the fork of its slot */
     cmp     x9, #(100 + 84)
     b.lo    18b
@@ -3445,7 +3773,34 @@ FUNCTION lantern_node_run
     mov     x1, x24
     add     x2, x25, #NodeEvent_root
     add     x3, x25, #NodeEvent_result
+    add     x4, x25, #NodeEvent_index
     FORK_CALL node_block_root
+    LEAVE 192
+80: cmp     x9, #NODE_WORK_BLOB
+    b.ne    8f
+    ldr     x9, [x23, #16]                  /* BLOB: node_blob_sidecar of the fork of its slot, deneb or electra */
+    MOVQ    x10, NODE_BLOB_HEADER + 8
+    cmp     x9, x10
+    b.lo    18b
+    ldr     x9, [x23, #8]
+    add     x9, x23, x9
+    LDQ     x0, x9, NODE_BLOB_HEADER
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x23
+    add     x1, x19, #Node_config
+    ldr     x2, [sp, #(L + 88)]
+    mov     x3, x24
+    add     x4, x25, #NodeEvent_result
+    add     x5, x25, #NodeEvent_root
+    cmp     x15, #FORK_DENEB
+    b.ne    81f
+    CALL_GLOBAL lantern_deneb_node_blob_sidecar
+    LEAVE 192
+81: cmp     x15, #FORK_ELECTRA
+    b.ne    18b
+    CALL_GLOBAL lantern_electra_node_blob_sidecar
     LEAVE 192
 8:  mov     x0, #LANTERN_INVALID_EVENT
     LEAVE 192

@@ -459,8 +459,9 @@
 .set Node_messages, 224                /* PartRef of NodeMessage */
 .set Node_fork_digest, 240             /* the ForkDigest of the subscribed topics, 4 bytes */
 .set Node_sync_slot, 248               /* the first slot of the next BeaconBlocksByRange request, at least */
-.set Node_config, 256
-.set NODE_FIXED, 256 + CONFIG_SIZE
+.set Node_blobs, 256                   /* PartRef of NodeBlob */
+.set Node_config, 272
+.set NODE_FIXED, 272 + CONFIG_SIZE
 .set NODE_STATE_SLOT, 48               /* BeaconState.slot in the value of every fork */
 
 /* NodeBlock: a block the node knows */
@@ -472,12 +473,26 @@
 .set NodeBlock_status, 88              /* NODE_BLOCK_* */
 .set NodeBlock_data_available, 96
 .set NodeBlock_result, 104             /* the result of its import */
-.set NodeBlock__mem, 112
+.set NodeBlock_blobs, 112              /* from the network: the length of its body's blob_kzg_commitments, 0 before deneb */
+.set NodeBlock__mem, 120
 .set NODE_BLOCK_WAITING, 1             /* its parent is not imported yet */
 .set NODE_BLOCK_IMPORTING, 2           /* an IMPORT_BLOCK work is queued */
 .set NODE_BLOCK_IMPORTED, 3
 .set NODE_BLOCK_INVALID, 4
 .set NODE_BLOCK_HASHING, 5             /* from a response: a SYNC_BLOCK work of its root is queued; root 0 */
+.set NODE_BLOCK_BLOBS, 6               /* from the network: it needs blob sidecars the node does not hold */
+
+/* NodeBlob: a blob sidecar the node holds */
+.set NodeBlob_block_root, 0            /* hash_tree_root of its signed_block_header.message */
+.set NodeBlob_index, 32
+.set NodeBlob_slot, 40                 /* the slot of its block header */
+.set NodeBlob_data_id, 48              /* the BlobSidecar's SSZ bytes */
+.set NodeBlob_status, 56               /* NODE_BLOB_* */
+.set NodeBlob__mem, 64
+.set NODE_BLOB_VERIFYING, 1            /* from a response: a BLOB work is queued; block_root 0 */
+.set NODE_BLOB_VALID, 2
+.set NODE_BLOB_INVALID, 3
+.set NODE_BLOB_MAX, 64                 /* a block of more blob commitments than this or its fork's limit needs no sidecars */
 
 /* NodeCheckpoint: store.checkpoint_states */
 .set NodeCheckpoint_epoch, 0
@@ -564,6 +579,7 @@
 .set NodeRoom_request_bytes, 40        /* request bytes each stream holds */
 .set NodeRoom_p2p_out, 48              /* bytes of libp2p events the node holds for its next libp2p step */
 .set NodeRoom_messages, 56
+.set NodeRoom_blobs, 64
 
 /* NodeStepResult: the output of lantern_node_step */
 .set NodeStepResult_accepted, 0        /* events handled, from the first */
@@ -576,12 +592,12 @@
 .set NODE_EV_ATTESTER_SLASHING, 4      /* 24 a ByteList of the SSZ bytes */
 .set NODE_EV_POW_BLOCK, 5              /* 24 a ByteList of the SSZ bytes */
 .set NODE_EV_PAYLOAD_STATUS, 6         /* 16 block_hash, 48 status, 56 has_latest, 64 latest_valid_hash */
-.set NODE_EV_WORK_DONE, 7              /* the work's fields from 16 (as NodeAction), then 72 result, 80 checkpoint epoch, 88 root */
+.set NODE_EV_WORK_DONE, 7              /* the work's fields from 16 (as NodeAction), then 72 result, 80 checkpoint epoch, 88 root, 120 index */
 .set NODE_EV_P2P, 8                    /* 16 a libp2p shell result Event */
 .set NODE_EV_LAST, 8
 .set NodeEvent_result, 72
 .set NodeEvent_checkpoint, 80
-.set NODE_EV_WORK_DONE_SIZE, 120
+.set NODE_EV_WORK_DONE_SIZE, 128
 .set NodeEvent_bytes, 24               /* a ByteList whose bytes start at its offset 24 */
 
 /* NodeAction kinds, after the size and kind header */
@@ -609,8 +625,11 @@
 .set NODE_WORK_SERVE, 6                /* data: a block's SSZ bytes; target: the stream Handle; arg: the protocol version */
 .set NODE_WORK_GOSSIP, 7               /* a: head state; b: proposer state; c: justified state; data: the message; target: its Handle; arg: topic + 256 * subnet */
 .set NODE_WORK_SYNC_BLOCK, 8           /* data: a block's SSZ bytes from a response; target: its NodeBlock index */
-.set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block: its root */
+.set NODE_WORK_BLOB, 9                 /* data: a blob sidecar's SSZ bytes from a response; target: its NodeBlob index */
+.set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
+.set NodeEvent_index, NodeEvent_root + 32      /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its blob commitments; of a valid blob_sidecar: its index */
 .set NodeEvent_chunk, NODE_EV_WORK_DONE_SIZE   /* SERVE: a ByteList of the response chunk after the WORK_DONE fields */
 .set LANTERN_NEED_TARGET_STATE, 55     /* lantern_node_run: an attestation needs its target checkpoint state */
 .set LANTERN_INVALID_ENCODING, 56     /* lantern_node_run, the node hooks: the bytes are not an SSZ encoding of the type */
 .set LANTERN_INVALID_EVENT, 57        /* lantern_node_step: an event breaks the rules of its kind */
+.set LANTERN_INVALID_BLOB_SIDECAR, 58  /* lantern_node_blob_sidecar: the index, the inclusion proof or the KZG proof fails */

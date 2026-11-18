@@ -4,6 +4,7 @@
 
 .set NODE_ROOT_ENTRY, 40                # lantern_node_step: a flag, then the root of a BLOCK event
 .set NODE_BLOB_HEADER, 8 + 32 * FIELD_ELEMENTS_PER_BLOB + 48 + 48   # the signed_block_header in a BlobSidecar's SSZ bytes
+.set NODE_BLOB_BYTES, NODE_BLOB_HEADER + 208 + 32 * KZG_COMMITMENT_INCLUSION_PROOF_DEPTH  # the SSZ size of a BlobSidecar
 
 /* reg = the node rbx's ByteList of the libp2p events it queued. */
 .macro P2P_OUT reg
@@ -105,6 +106,7 @@ FUNCTION lantern_node_size
     NODE_SIZE_ADD pow_blocks, POW_BLOCK_BYTES
     NODE_SIZE_ADD peers, NodePeer__mem
     NODE_SIZE_ADD messages, NodeMessage__mem
+    NODE_SIZE_ADD blobs, NodeBlob__mem
     mov     NodeRoom_p2p_out(%rdi), %rax    # a ByteList
     add     $(24 + 7), %rax
     jc      9f
@@ -147,6 +149,7 @@ LOCAL_FUNCTION node_layout
     imul    %rdx, %rcx
     add     %rcx, %rax
     NODE_PART messages, messages, NodeMessage__mem
+    NODE_PART blobs, blobs, NodeBlob__mem
     mov     %rax, Node_p2p_out(%rdi)        # one ByteList, empty
     movq    $1, (Node_p2p_out + 8)(%rdi)
     mov     NodeRoom_p2p_out(%rsi), %rcx
@@ -267,6 +270,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_ROOM peers, Node_peers
     NODE_COPY_ROOM streams, Node_streams
     NODE_COPY_ROOM messages, Node_messages
+    NODE_COPY_ROOM blobs, Node_blobs
     mov     Node_p2p_out(%rbx), %rax        # the queued bytes fit
     mov     16(%rbx,%rax), %rax
     cmp     %rax, NodeRoom_p2p_out(%rbp)
@@ -289,6 +293,7 @@ FUNCTION lantern_node_copy
     NODE_COPY_PART Node_pow_blocks, POW_BLOCK_BYTES
     NODE_COPY_PART Node_peers, NodePeer__mem
     NODE_COPY_PART Node_messages, NodeMessage__mem
+    NODE_COPY_PART Node_blobs, NodeBlob__mem
     mov     Node_p2p_out(%rbx), %rsi        # the queued bytes
     add     %rbx, %rsi
     mov     16(%rsi), %rdx
@@ -584,6 +589,131 @@ LOCAL_FUNCTION node_put
     LEAVE 0
 END_FUNCTION node_put
 
+/* rax = 1 when the node holds a NODE_BLOB_VALID entry of the root at rdi and the index rsi, else 0. Uses rcx, rdx, r11, xmm0-xmm2. */
+LOCAL_FUNCTION node_blob_held
+    UNWIND_END_PROLOGUE
+    PART    %rdx, %rcx, %rbx, Node_blobs
+1:  test    %rcx, %rcx
+    jz      3f
+    cmpq    $NODE_BLOB_VALID, NodeBlob_status(%rdx)
+    jne     2f
+    cmp     NodeBlob_index(%rdx), %rsi
+    jne     2f
+    NE32    %rdx, %rdi, 2f
+    mov     $1, %eax
+    ret
+2:  add     $NodeBlob__mem, %rdx
+    dec     %rcx
+    jmp     1b
+3:  xor     %eax, %eax
+    ret
+END_FUNCTION node_blob_held
+
+/*
+ * rax = 1 when the node holds a NODE_BLOB_VALID entry of the root at rdi for each index below rsi
+ * (1 to NODE_BLOB_MAX), else 0. Uses rcx, rdx, r8, r9, r11, xmm0-xmm2.
+ */
+LOCAL_FUNCTION node_blobs_held
+    UNWIND_END_PROLOGUE
+    PART    %rdx, %r8, %rbx, Node_blobs
+    xor     %r9d, %r9d                      # a bit for each index held
+1:  test    %r8, %r8
+    jz      3f
+    cmpq    $NODE_BLOB_VALID, NodeBlob_status(%rdx)
+    jne     2f
+    mov     NodeBlob_index(%rdx), %rcx
+    cmp     %rsi, %rcx
+    jae     2f
+    NE32    %rdx, %rdi, 2f
+    bts     %rcx, %r9
+2:  add     $NodeBlob__mem, %rdx
+    dec     %r8
+    jmp     1b
+3:  mov     $64, %ecx                       # every index below rsi
+    sub     %rsi, %rcx
+    mov     $-1, %rax
+    shr     %cl, %rax
+    cmp     %rax, %r9
+    sete    %al
+    movzbl  %al, %eax
+    ret
+END_FUNCTION node_blobs_held
+
+/*
+ * The block of index rdi, from the network, waits for its blobs: NODE_BLOCK_BLOBS while it needs
+ * blobs the node does not hold; else data_available 1, NODE_BLOCK_WAITING and its import. It
+ * needs blobs when its fork is deneb or electra, its blob count is 1 to the fork's limit and
+ * NODE_BLOB_MAX, and its epoch is from max(the store's epoch - MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS,
+ * DENEB_FORK_EPOCH) on. r12 the index, r13 the entry, S7 the count, S8 the window's first epoch.
+ */
+LOCAL_FUNCTION node_await
+    ENTER 0
+    mov     %rdi, %r12
+    PART    %r13, %rax, %rbx, Node_blocks
+    imul    $NodeBlock__mem, %r12, %rax
+    add     %rax, %r13
+    mov     NodeBlock_blobs(%r13), %rax
+    mov     %rax, S7(%rsp)
+    test    %rax, %rax
+    jz      5f
+    cmp     $NODE_BLOB_MAX, %rax
+    ja      5f
+    mov     NodeBlock_slot(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     (Node_config + CONFIG_MAX_BLOBS_PER_BLOCK)(%rbx), %rcx
+    cmp     $FORK_DENEB, %rax
+    je      2f
+    cmp     $FORK_ELECTRA, %rax
+    jne     5f
+    mov     (Node_config + CONFIG_MAX_BLOBS_PER_BLOCK_ELECTRA)(%rbx), %rcx
+2:  cmp     %rcx, S7(%rsp)
+    ja      5f
+    mov     %rbp, %rdi                      # the blob window
+    call    node_store_slot
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    sub     (Node_config + CONFIG_MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS)(%rbx), %rax
+    jae     3f
+    xor     %eax, %eax
+3:  mov     (Node_config + 16 * FORK_DENEB)(%rbx), %rcx
+    cmp     %rcx, %rax
+    cmovb   %rcx, %rax
+    mov     %rax, S8(%rsp)
+    mov     NodeBlock_slot(%r13), %rax
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    cmp     S8(%rsp), %rax
+    jb      5f
+    mov     %r13, %rdi
+    mov     S7(%rsp), %rsi
+    call    node_blobs_held
+    test    %rax, %rax
+    jnz     5f
+    movq    $NODE_BLOCK_BLOBS, NodeBlock_status(%r13)
+    LEAVE 0
+5:  movq    $1, NodeBlock_data_available(%r13)
+    movq    $NODE_BLOCK_WAITING, NodeBlock_status(%r13)
+    mov     %r12, %rdi
+    call    node_try_import
+    LEAVE 0
+END_FUNCTION node_await
+
+/* A blob of the root at rdi became NODE_BLOB_VALID: the block of that root in NODE_BLOCK_BLOBS waits for its blobs again. */
+LOCAL_FUNCTION node_blob_added
+    FRAME 0
+    call    node_find_block
+    cmp     $-1, %rax
+    je      9f
+    cmpq    $NODE_BLOCK_BLOBS, NodeBlock_status(%rdx)
+    jne     9f
+    mov     %rax, %rdi
+    call    node_await
+9:  UNFRAME 0
+END_FUNCTION node_blob_added
+
 /* The head: the root of get_head of the fork of the store's slot into the node, or a JUSTIFIED_STATE work. Locals: L the node. */
 LOCAL_FUNCTION node_head
     ENTER 16
@@ -682,6 +812,7 @@ LOCAL_FUNCTION node_event
     mov     16(%r12), %rax
     mov     %rax, NodeBlock_data_available(%rdi)
     movq    $0, NodeBlock_result(%rdi)
+    movq    $0, NodeBlock_blobs(%rdi)
     inc     %rcx
     mov     %rcx, (Node_blocks + 8)(%rbx)
     mov     (L + 40)(%rsp), %rdi
@@ -892,7 +1023,7 @@ LOCAL_FUNCTION node_event
     call    node_drop_message
     LEAVE 48
 641: cmpq   $GOSSIP_BEACON_BLOCK, NodeMessage_topic(%r13)
-    jne     65f
+    jne     642f
     lea     NodeEvent_root(%r12), %rdi      # a new block keeps the bytes
     call    node_find_block
     cmp     $-1, %rax
@@ -912,14 +1043,42 @@ LOCAL_FUNCTION node_event
     mov     %rax, NodeBlock_data_id(%rdi)
     movq    $0, NodeBlock_state_id(%rdi)
     movq    $NODE_BLOCK_WAITING, NodeBlock_status(%rdi)
-    movq    $1, NodeBlock_data_available(%rdi)
+    movq    $0, NodeBlock_data_available(%rdi)
     movq    $0, NodeBlock_result(%rdi)
+    mov     NodeEvent_index(%r12), %rax
+    mov     %rax, NodeBlock_blobs(%rdi)
     inc     %rcx
     mov     %rcx, (Node_blocks + 8)(%rbx)
     mov     %r13, %rdi
     call    node_drop_message
     mov     (L + 40)(%rsp), %rdi
-    call    node_try_import
+    call    node_await
+    LEAVE 48
+642: cmpq   $GOSSIP_BLOB_SIDECAR, NodeMessage_topic(%r13)  # a new valid sidecar keeps the bytes
+    jne     65f
+    lea     NodeEvent_root(%r12), %rdi
+    mov     NodeEvent_index(%r12), %rsi
+    call    node_blob_held
+    test    %rax, %rax
+    jnz     65f
+    PART    %rdi, %rcx, %rbx, Node_blobs
+    imul    $NodeBlob__mem, %rcx, %rax
+    add     %rax, %rdi
+    lea     NodeEvent_root(%r12), %rsi
+    COPY32  %rdi, %rsi
+    mov     NodeEvent_index(%r12), %rax
+    mov     %rax, NodeBlob_index(%rdi)
+    mov     NodeMessage_slot(%r13), %rax
+    mov     %rax, NodeBlob_slot(%rdi)
+    mov     NodeAction_data(%r12), %rax
+    mov     %rax, NodeBlob_data_id(%rdi)
+    movq    $NODE_BLOB_VALID, NodeBlob_status(%rdi)
+    inc     %rcx
+    mov     %rcx, (Node_blobs + 8)(%rbx)
+    mov     %r13, %rdi
+    call    node_drop_message
+    lea     NodeEvent_root(%r12), %rdi
+    call    node_blob_added
     LEAVE 48
 65: mov     %r13, %rdi
     call    node_drop_message
@@ -929,7 +1088,7 @@ LOCAL_FUNCTION node_event
     call    node_ids
     LEAVE 48
 75: cmp     $NODE_WORK_SYNC_BLOCK, %rax     # SYNC_BLOCK: the root of a block of a response
-    jne     70f
+    jne     77f
     mov     NodeAction_target(%r12), %rax
     PART    %rdx, %rsi, %rbx, Node_blocks
     cmp     %rsi, %rax
@@ -945,15 +1104,46 @@ LOCAL_FUNCTION node_event
     call    node_find_block
     cmp     $-1, %rax
     jne     76f
-    lea     NodeEvent_root(%r12), %rsi
+    lea     NodeEvent_root(%r12), %rsi      # the block waits for its blobs, then its parent
     COPY32  %r13, %rsi
-    movq    $NODE_BLOCK_WAITING, NodeBlock_status(%r13)
+    mov     NodeEvent_index(%r12), %rax
+    mov     %rax, NodeBlock_blobs(%r13)
+    movq    $0, NodeBlock_data_available(%r13)
     mov     (L + 40)(%rsp), %rdi
-    call    node_try_import
+    call    node_await
     LEAVE 48
 76: movq    $NODE_BLOCK_INVALID, NodeBlock_status(%r13)     # not a block, or a known root: invalid, its bytes go
     mov     $NODE_ACT_BYTES_FREE, %edi
     mov     NodeBlock_data_id(%r13), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    LEAVE 48
+77: cmp     $NODE_WORK_BLOB, %rax           # BLOB: a sidecar of a response, checked
+    jne     70f
+    mov     NodeAction_target(%r12), %rax
+    PART    %rdx, %rsi, %rbx, Node_blobs
+    cmp     %rsi, %rax
+    jae     79f
+    imul    $NodeBlob__mem, %rax, %rax
+    lea     (%rdx,%rax), %r13
+    cmpq    $NODE_BLOB_VERIFYING, NodeBlob_status(%r13)
+    jne     79f
+    test    %rcx, %rcx
+    jnz     78f
+    lea     NodeEvent_root(%r12), %rdi      # valid, and not held yet: the entry takes the root
+    mov     NodeBlob_index(%r13), %rsi
+    call    node_blob_held
+    test    %rax, %rax
+    jnz     78f
+    lea     NodeEvent_root(%r12), %rsi
+    COPY32  %r13, %rsi
+    movq    $NODE_BLOB_VALID, NodeBlob_status(%r13)
+    mov     %r13, %rdi
+    call    node_blob_added
+    LEAVE 48
+78: movq    $NODE_BLOB_INVALID, NodeBlob_status(%r13)      # not valid, or held: its bytes go
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    mov     NodeBlob_data_id(%r13), %rsi
     xor     %edx, %edx
     call    node_ids
     LEAVE 48
@@ -1829,7 +2019,7 @@ LOCAL_FUNCTION node_message
     lea     (L + 24)(%rsp), %rsi
     mov     $20, %edx
     call    lantern_copy
-    mov     Node_p2p_out(%rbx), %rax        # the entry
+    mov     Node_blobs(%rbx), %rax          # the entry
     sub     Node_messages(%rbx), %rax
     xor     %edx, %edx
     mov     $NodeMessage__mem, %ecx
@@ -2220,7 +2410,10 @@ LOCAL_FUNCTION node_response
     cmpq    $0, NodeStream_next(%r12)       # no bytes: the end after STREAM_EOF
     jne     80f
     jmp     90f
-2:  movq    $CHUNK_RESPONSE, (L + ChunkHeader_kind)(%rsp)  # blocks by range v2: a ForkDigest context
+2:  movq    $CHUNK_RESPONSE, (L + ChunkHeader_kind)(%rsp)  # blocks by range v2 and blob sidecars by range: a ForkDigest context
+    mov     $4, %eax
+    cmp     $REQRESP_BLOB_SIDECARS_BY_RANGE, %r13
+    je      3f
     xor     %eax, %eax
     cmp     $REQRESP_BEACON_BLOCKS_BY_RANGE, %r13
     jne     3f
@@ -2248,7 +2441,23 @@ LOCAL_FUNCTION node_response
 31: cmp     %rcx, %rax
     jne     85f
     jmp     41f
-4:  cmp     $(100 + 84), %rax               # a block: room for its BYTES_PUT, its work, its entry
+4:  cmp     $REQRESP_BLOB_SIDECARS_BY_RANGE, %r13
+    jne     42f
+    cmp     $NODE_BLOB_BYTES, %rax          # a blob sidecar: room for its BYTES_PUT, its work, its entry
+    jne     85f
+    mov     $(NODE_BLOB_BYTES + 48 + NODE_ACT_WORK_SIZE + 7), %edi
+    call    node_room
+    test    %rax, %rax
+    jz      95f
+    mov     Node_p2p_out(%rbx), %rax
+    sub     Node_blobs(%rbx), %rax
+    xor     %edx, %edx
+    mov     $NodeBlob__mem, %ecx
+    div     %rcx
+    cmp     %rax, (Node_blobs + 8)(%rbx)
+    jae     95f
+    jmp     41f
+42: cmp     $(100 + 84), %rax               # a block: room for its BYTES_PUT, its work, its entry
     jb      85f
     cmp     (Node_config + CONFIG_MAX_PAYLOAD_SIZE)(%rbx), %rax
     ja      85f
@@ -2300,7 +2509,9 @@ LOCAL_FUNCTION node_response
     mov     (L + 80)(%rsp), %rdx
     call    node_peer_status
     jmp     7f
-6:  PART    %rdi, %rax, %rbx, Node_blocks   # a block: its entry, its bytes, the work of its root
+6:  cmp     $REQRESP_BLOB_SIDECARS_BY_RANGE, %r13
+    je      61f
+    PART    %rdi, %rax, %rbx, Node_blocks   # a block: its entry, its bytes, the work of its root
     mov     %rax, (L + 48)(%rsp)
     imul    $NodeBlock__mem, %rax, %rcx
     add     %rcx, %rdi
@@ -2326,6 +2537,34 @@ LOCAL_FUNCTION node_response
     mov     %rax, NodeBlock_data_id(%rdi)
     mov     %rax, %rcx
     mov     $NODE_WORK_SYNC_BLOCK, %edi
+    xor     %esi, %esi
+    xor     %edx, %edx
+    mov     (L + 48)(%rsp), %r8
+    xor     %r9d, %r9d
+    call    node_work
+    jmp     7f
+61: PART    %rdi, %rax, %rbx, Node_blobs    # a blob sidecar: its entry, its bytes, the work of its checks
+    mov     %rax, (L + 48)(%rsp)
+    imul    $NodeBlob__mem, %rax, %rcx
+    add     %rcx, %rdi
+    mov     %rdi, (L + 96)(%rsp)
+    inc     %rax
+    mov     %rax, (Node_blobs + 8)(%rbx)
+    mov     $NodeBlob__mem, %esi
+    call    lantern_zero
+    mov     (L + 96)(%rsp), %rdi
+    mov     (L + 88)(%rsp), %rsi
+    mov     24(%rsi), %rax                  # its index, and the slot of its block header
+    mov     %rax, NodeBlob_index(%rdi)
+    mov     (24 + NODE_BLOB_HEADER)(%rsi), %rax
+    mov     %rax, NodeBlob_slot(%rdi)
+    movq    $NODE_BLOB_VERIFYING, NodeBlob_status(%rdi)
+    mov     %rsi, %rdi
+    call    node_put
+    mov     (L + 96)(%rsp), %rdi
+    mov     %rax, NodeBlob_data_id(%rdi)
+    mov     %rax, %rcx
+    mov     $NODE_WORK_BLOB, %edi
     xor     %esi, %esi
     xor     %edx, %edx
     mov     (L + 48)(%rsp), %r8
@@ -2367,11 +2606,12 @@ END_FUNCTION node_response
  * rax = 1 when a response waits for room, else 0. The bytes of each response are read; then,
  * with no BeaconBlocksByRange of the node open, one to a peer of the node's ForkDigest whose
  * Status head_slot is at least the next slot: max(the head's slot + 1, sync_slot), at most
- * NODE_SYNC_BATCH slots. r12 a peer, r13 the streams or peers left, S7 the result, S8 the start
- * slot. Locals: L the request (24).
+ * NODE_SYNC_BATCH slots. Before it, with room for two streams, a BlobSidecarsByRange of the
+ * range's slots in the blob window before fulu. r12 a peer, r13 the streams or peers left, S7 the
+ * result, S8 the start slot. Locals: L the request (24), L+24 the blob request (16).
  */
 LOCAL_FUNCTION node_sync
-    ENTER 32
+    ENTER 48
     movq    $0, S7(%rsp)
     mov     (Node_streams + 8)(%rbx), %r13  # the responses, from the last stream: an end moves the last
 1:  test    %r13, %r13
@@ -2421,7 +2661,55 @@ LOCAL_FUNCTION node_sync
     mov     %rcx, L(%rsp)
     mov     %rax, (L + 8)(%rsp)
     movq    $1, (L + 16)(%rsp)
-    mov     %rbp, %rdi                      # version 2 from altair on
+    mov     %rbp, %rdi                      # the blob window's first slot: of max(store epoch - MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS, DENEB_FORK_EPOCH)
+    call    node_store_slot
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    sub     (Node_config + CONFIG_MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS)(%rbx), %rax
+    jae     10f
+    xor     %eax, %eax
+10: mov     (Node_config + 16 * FORK_DENEB)(%rbx), %rcx
+    cmp     %rcx, %rax
+    cmovb   %rcx, %rax
+    mov     $SLOTS_PER_EPOCH, %ecx
+    mul     %rcx
+    jc      12f
+    mov     L(%rsp), %rsi                   # the range from there, before fulu's first slot
+    mov     (L + 8)(%rsp), %rdi
+    add     %rsi, %rdi
+    jnc     11f
+    mov     $-1, %rdi
+11: cmp     %rax, %rsi
+    cmovb   %rax, %rsi
+    mov     (Node_config + 16 * FORK_FULU)(%rbx), %rax
+    mov     $SLOTS_PER_EPOCH, %ecx
+    mul     %rcx
+    jc      13f
+    cmp     %rax, %rdi
+    cmova   %rax, %rdi
+13: cmp     %rdi, %rsi
+    jae     12f
+    sub     %rsi, %rdi
+    mov     %rsi, (L + 24)(%rsp)
+    mov     %rdi, (L + 32)(%rsp)
+    mov     Node_messages(%rbx), %rax       # room for it and the blocks' request
+    sub     Node_streams(%rbx), %rax
+    xor     %edx, %edx
+    divq    Node_stream_bytes(%rbx)
+    mov     (Node_streams + 8)(%rbx), %rcx
+    add     $2, %rcx
+    cmp     %rax, %rcx
+    ja      9f
+    mov     $REQRESP_BLOB_SIDECARS_BY_RANGE, %edi
+    mov     $1, %esi
+    mov     NodePeer_handle(%r12), %rdx
+    lea     (L + 24)(%rsp), %rcx
+    mov     $16, %r8d
+    call    node_open
+    test    %rax, %rax
+    jz      9f
+12: mov     %rbp, %rdi                      # version 2 from altair on
     call    node_store_slot
     mov     %rax, %rdi
     lea     Node_config(%rbx), %rsi
@@ -2442,7 +2730,7 @@ LOCAL_FUNCTION node_sync
     add     (L + 8)(%rsp), %rax
     mov     %rax, Node_sync_slot(%rbx)
 9:  mov     S7(%rsp), %rax
-    LEAVE 32
+    LEAVE 48
 END_FUNCTION node_sync
 
 /* The libp2p application notice rdi of the libp2p state rsi. r12 the notice, r13 an entry, S7 method, S8 version. */
@@ -2873,7 +3161,7 @@ END_FUNCTION lantern_node_protocols
  * r13 the entry.
  */
 LOCAL_FUNCTION node_block_entry
-    ENTER 0
+    ENTER 16
     lea     NodeEvent_bytes(%rdi), %r12
     mov     %rsi, %r13
     movq    $1, (%r13)
@@ -2889,10 +3177,11 @@ LOCAL_FUNCTION node_block_entry
     mov     %r14, %rsi
     lea     8(%r13), %rdx
     mov     %r13, %rcx
+    lea     L(%rsp), %r8                    # its blob count: not kept
     FORK_CALL node_block_root
-    LEAVE 0
+    LEAVE 16
 9:  xor     %eax, %eax
-    LEAVE 0
+    LEAVE 16
 END_FUNCTION node_block_entry
 
 /*
@@ -2903,7 +3192,7 @@ END_FUNCTION node_block_entry
  * events, L+8 the scratch size, L+16 p2p, L+24 tick, L+32 the end of the events handled, L+40
  * the queue's free bytes the P2P events take, saved, L+48 the libp2p scratch, L+56 the bytes of the P2P events, L+64 the P2P
  * events, L+72 the action room kept for the node, L+80 wakeup, L+88 libp2p's StepResult, L+96
- * libp2p's actions, L+104 the libp2p steps, L+112 a stream waits.
+ * libp2p's actions, L+104 the libp2p steps, L+112 a stream waits, L+120 the GOSSIP WORK_DONE events.
  */
 FUNCTION lantern_node_step
     ENTER 128
@@ -2925,6 +3214,7 @@ FUNCTION lantern_node_step
     xor     %r11d, %r11d
     movq    $0, (L + 56)(%rsp)
     movq    $0, (L + 64)(%rsp)
+    movq    $0, (L + 120)(%rsp)
     mov     %r12, %rdi
 1:  cmp     %r13, %rdi
     jae     5f
@@ -2952,9 +3242,10 @@ FUNCTION lantern_node_step
     jne     21f
     cmp     $NODE_EV_WORK_DONE_SIZE, %rcx
     jb      7f
-    cmpq    $NODE_WORK_GOSSIP, NodeAction_work_kind(%rdi)   # GOSSIP: a block it may add
+    cmpq    $NODE_WORK_GOSSIP, NodeAction_work_kind(%rdi)   # GOSSIP: a block or a blob it may add
     jne     201f
     inc     %r9
+    incq    (L + 120)(%rsp)
 201: cmpq   $NODE_WORK_SERVE, NodeAction_work_kind(%rdi)    # SERVE: a ByteList of the chunk inside
     jne     22f
     cmp     $(NodeEvent_chunk + 24), %rcx
@@ -3031,6 +3322,26 @@ FUNCTION lantern_node_step
     mov     $NODE_SYNC_BATCH, %ecx
 1:  add     %r9, %rcx
     cmp     %rcx, %rax
+    jb      8f
+    mov     Node_p2p_out(%rbx), %rax        # blobs: one for each GOSSIP WORK_DONE event, and with p2p a batch's sidecars
+    sub     Node_blobs(%rbx), %rax
+    xor     %edx, %edx
+    mov     $NodeBlob__mem, %ecx
+    div     %rcx
+    sub     (Node_blobs + 8)(%rbx), %rax
+    mov     (L + 120)(%rsp), %rcx
+    cmpq    $0, (L + 16)(%rsp)
+    je      54f
+    mov     (Node_config + CONFIG_MAX_BLOBS_PER_BLOCK)(%rbx), %rdx
+    mov     (Node_config + CONFIG_MAX_BLOBS_PER_BLOCK_ELECTRA)(%rbx), %rsi
+    cmp     %rsi, %rdx
+    cmovb   %rsi, %rdx
+    mov     %rdx, %rsi
+    shr     $32, %rsi
+    jnz     8f
+    imul    $NODE_SYNC_BATCH, %rdx, %rdx
+    add     %rdx, %rcx
+54: cmp     %rcx, %rax
     jb      8f
     mov     Node_pow_blocks(%rbx), %rax     # checkpoints: two for each WORK_DONE event, and two
     sub     Node_checkpoints(%rbx), %rax
@@ -3483,13 +3794,14 @@ FUNCTION lantern_node_run
     mov     %r14, %rsi
     mov     %r15, %rdx
     mov     S8(%rsp), %rcx
+    lea     NodeEvent_index(%rcx), %r9
     lea     NodeEvent_result(%rcx), %r8
     lea     NodeEvent_root(%rcx), %rcx
     xchg    %rcx, %r8
     FORK_CALL node_gossip
     LEAVE 192
 70: cmp     $NODE_WORK_SYNC_BLOCK, %rax
-    jne     8f
+    jne     80f
     cmpq    $(100 + 84), 16(%r14)           # SYNC_BLOCK: node_block_root of the fork of its slot
     jb      18b
     mov     8(%r14), %rax
@@ -3502,8 +3814,34 @@ FUNCTION lantern_node_run
     mov     %r15, %rsi
     mov     S8(%rsp), %rcx
     lea     NodeEvent_root(%rcx), %rdx
+    lea     NodeEvent_index(%rcx), %r8
     lea     NodeEvent_result(%rcx), %rcx
     FORK_CALL node_block_root
+    LEAVE 192
+80: cmp     $NODE_WORK_BLOB, %rax
+    jne     8f
+    cmpq    $(NODE_BLOB_HEADER + 8), 16(%r14)   # BLOB: node_blob_sidecar of the fork of its slot, deneb or electra
+    jb      18b
+    mov     8(%r14), %rax
+    add     %r14, %rax
+    mov     NODE_BLOB_HEADER(%rax), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     %r14, %rdi
+    lea     Node_config(%rbx), %rsi
+    mov     (L + 88)(%rsp), %rdx
+    mov     %r15, %rcx
+    mov     S8(%rsp), %r9
+    lea     NodeEvent_result(%r9), %r8
+    lea     NodeEvent_root(%r9), %r9
+    cmp     $FORK_DENEB, %r10
+    jne     81f
+    CALL_GLOBAL lantern_deneb_node_blob_sidecar
+    LEAVE 192
+81: cmp     $FORK_ELECTRA, %r10
+    jne     18b
+    CALL_GLOBAL lantern_electra_node_blob_sidecar
     LEAVE 192
 8:  mov     $LANTERN_INVALID_EVENT, %eax
     LEAVE 192
