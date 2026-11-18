@@ -51,7 +51,15 @@
 .set APP_ENGINE_FLIGHT, APP_ENGINE_SENT + 8 /* the bytes in the shell's send buffer */
 .set APP_ENGINE_ACT, APP_ENGINE_FLIGHT + 8  /* pair: a ByteList of one shell action */
 .set APP_ENGINE_DUE, APP_ENGINE_ACT + 16    /* 1 when the shell's events allow more bytes */
-.set APP_RECORD, APP_ENGINE_DUE + 8         /* a NODE_EV_ENR event of a boot node: 48 bytes, then the record */
+.set APP_DV, APP_ENGINE_DUE + 8             /* pair: the discv5 state */
+.set APP_DV_SCRATCH, APP_DV + 16            /* pair */
+.set APP_DV_EVENTS, APP_DV_SCRATCH + 16     /* pair: an EventList for the next discv5 step */
+.set APP_DV_ACTIONS, APP_DV_EVENTS + 16     /* pair: an ActionList */
+.set APP_DV_OUT, APP_DV_ACTIONS + 16        /* pair: a ByteList of the SEND_DATAGRAM shell actions */
+.set APP_DV_SOCKET, APP_DV_OUT + 16         /* the UDP socket ID of discv5 */
+.set APP_DV_WAKE, APP_DV_SOCKET + 8         /* the next discv5 step by this time, ms */
+.set APP_DV_TICK, APP_DV_WAKE + 8           /* the discv5 Tick: now, entropy */
+.set APP_RECORD, APP_DV_TICK + 40           /* a NODE_EV_ENR event of a boot node: 48 bytes, then the record */
 .set APP_FILE, APP_RECORD + 48 + APP_RECORD_MAX /* FileResult */
 .set APP_RESULT, APP_FILE + 32              /* NodeStepResult */
 .set APP_NODE_ROOM, APP_RESULT + 16         /* NodeRoom */
@@ -75,6 +83,9 @@
 .set APP_SHELL_EVENT_BYTES, 8 << 20
 .set APP_PROTOCOLS_MAX, 64
 .set APP_RECORD_MAX, 512                     /* the bytes of a boot node record */
+.set APP_DV_EVENT_BYTES, 1 << 20            /* the events of a discv5 step */
+.set APP_DV_OUT_BYTES, 4 << 20              /* the datagrams of a discv5 step */
+.set APP_DV_DATAGRAM_MAX, 1280
 .set APP_WORK_TRIES, 16                     /* the times a work grows a buffer */
 
     RODATA
@@ -181,6 +192,17 @@ app_m_jwt:
 app_m_hex:
     .ascii ": not 32 bytes in hex"
 .set app_m_hex_len, . - app_m_hex
+app_m_discv5:
+    .ascii "discv5"
+.set app_m_discv5_len, . - app_m_discv5
+app_m_bind:
+    .ascii "bind UDP port "
+.set app_m_bind_len, . - app_m_bind
+app_m_record:
+    .ascii "record enr:"
+.set app_m_record_len, . - app_m_record
+app_base64url_digits:
+    .ascii "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 .include "app_p2p.inc"
 
 /* L0: x0 = the fork of the slot x0 with the config x1: the last fork whose epoch is at most the slot's. Uses x9-x11. */
@@ -616,6 +638,9 @@ LOCAL_FUNCTION app_start
     add     x1, x1, #NODE_STATE_GVR
     mov     x2, #32
     bl      lantern_copy
+    ldr     x9, [x19, #APP_FLAGS]           /* the shell runs discv5 for the node */
+    orr     x9, x9, #NODE_FLAG_DISCV5
+    str     x9, [x19, #APP_FLAGS]
     bl      app_engine_conf                 /* the execution engine */
     cbnz    x0, 99f
     add     x0, x19, #APP_NODE_ROOM         /* the node */
@@ -1156,7 +1181,15 @@ LOCAL_FUNCTION app_actions
     mov     x0, x20
     bl      app_engine_request
     b       8f
-6:  cmp     x9, #NODE_ACT_P2P_LIST
+6:  cmp     x9, #NODE_ACT_DISCV5
+    b.ne    7f
+    ldr     x9, [x20, #(24 + 8)]            /* DISCV5: its events join discv5's */
+    add     x0, x20, #24
+    add     x0, x0, x9
+    ldr     x1, [x20, #(24 + 16)]
+    bl      app_dv_put
+    b       8f
+7:  cmp     x9, #NODE_ACT_P2P_LIST
     b.ne    8f
     ldr     x0, [x19, #APP_SHELL]           /* P2P_LIST: the shell requests of libp2p */
     add     x1, x20, #16
@@ -1341,6 +1374,15 @@ LOCAL_FUNCTION app_boot_nodes
     mov     x0, x24
     mov     x1, x9
     bl      app_event_put
+    ldr     x9, [x24, #40]                  /* and an ADD_NODE of discv5: size, kind, len, the record */
+    add     x10, x9, #(DISCV5_EV_ADD_DATA + 7)
+    and     x10, x10, #~7
+    mov     x11, #DISCV5_EVENT_ADD_NODE
+    stp     x10, x11, [x24, #24]
+    str     x9, [x24, #(24 + DISCV5_EV_ADD_LEN)]
+    add     x0, x24, #24
+    mov     x1, x10
+    bl      app_dv_put
     b       1b
 7:  bl      app_line_start                  /* boot node <n>: not an enr: record */
     ADDRESS x0, app_m_boot
@@ -1483,7 +1525,9 @@ LOCAL_FUNCTION app_net
     bl      app_line_end
     mov     x0, #2
     LEAVE 112
-3:  bl      app_boot_nodes
+3:  bl      app_dv_start
+    cbnz    x0, 99f
+    bl      app_boot_nodes
     bl      app_line_start                  /* listening on TCP port <p> */
     ADDRESS x0, app_m_listening
     mov     x1, #app_m_listening_len
@@ -1494,6 +1538,7 @@ LOCAL_FUNCTION app_net
     bl      app_line_end
     mov     x0, #0
     LEAVE 112
+99: LEAVE 112
 96: mov     x2, x0                          /* libp2p: status <n> */
     ADDRESS x0, app_m_p2p
     mov     x1, #app_m_p2p_len
@@ -1946,6 +1991,406 @@ LOCAL_FUNCTION app_engine_event
     LEAVE 48
 END_FUNCTION app_engine_event
 
+/* L1: the base64url text (RFC 4648 section 5, no padding) of the x1 bytes at x0 joins the log line. Locals: x0, x1, the bits, then 4 digits. */
+LOCAL_FUNCTION app_line_base64url
+    FRAME 48
+    stp     x0, x1, [sp, #16]
+1:  ldp     x0, x1, [sp, #16]
+    cbz     x1, 9f
+    mov     x9, #0                          /* up to 3 bytes: 24 bits, from the top */
+    mov     x10, #0
+2:  cmp     x10, #3
+    b.hs    3f
+    cbz     x1, 3f
+    ldrb    w11, [x0], #1
+    sub     x1, x1, #1
+    lsl     x12, x10, #3
+    mov     x13, #16
+    sub     x12, x13, x12
+    lsl     x11, x11, x12
+    orr     x9, x9, x11
+    add     x10, x10, #1
+    b       2b
+3:  stp     x0, x1, [sp, #16]
+    ADDRESS x13, app_base64url_digits       /* 1 byte: 2 digits; 2: 3; 3: 4 */
+    mov     x11, #0
+4:  cmp     x11, #4
+    b.hs    5f
+    mov     x12, #18
+    mov     x14, #6
+    msub    x12, x11, x14, x12
+    lsr     x14, x9, x12
+    and     x14, x14, #63
+    ldrb    w14, [x13, x14]
+    add     x15, sp, #40
+    strb    w14, [x15, x11]
+    add     x11, x11, #1
+    b       4b
+5:  add     x0, sp, #40
+    add     x1, x10, #1
+    bl      app_line_text
+    b       1b
+9:  UNFRAME 48
+END_FUNCTION app_line_base64url
+
+/* L1: the x1 bytes of the event at x0 join the next discv5 step's events, while they have room. Uses x9-x11. */
+LOCAL_FUNCTION app_dv_put
+    FRAME 0
+    ldr     x9, [x19, #APP_DV_EVENTS]
+    ldr     x10, [x9, #16]
+    add     x11, x10, x1
+    add     x11, x11, #24
+    ldr     x12, [x9]
+    cmp     x11, x12
+    b.hi    9f
+    str     x11, [sp, #-16]!
+    mov     x2, x1
+    mov     x1, x0
+    add     x0, x9, #24
+    add     x0, x0, x10
+    bl      lantern_copy
+    ldr     x11, [sp], #16
+    ldr     x9, [x19, #APP_DV_EVENTS]
+    sub     x11, x11, #24
+    str     x11, [x9, #16]
+9:  UNFRAME 0
+END_FUNCTION app_dv_put
+
+/*
+ * L2: discv5 with the key of libp2p: its state, with --enr-address and --port in the record, its UDP
+ * socket on --port, and the record entry tcp: x0 = 0, or 2 after a line on the standard error.
+ * Locals: L the Config (152), then an Address and a BindResult, and the tcp event.
+ */
+LOCAL_FUNCTION app_dv_start
+    ENTER 256
+    mov     x0, #APP_DV
+    MOVQ    x1, DISCV5_STATE_SIZE
+    bl      app_alloc
+    cbz     x0, 97f
+    mov     x0, #APP_DV_SCRATCH
+    MOVQ    x1, DISCV5_SCRATCH_SIZE
+    bl      app_alloc
+    cbz     x0, 97f
+    mov     x0, #APP_DV_EVENTS
+    MOVQ    x1, APP_DV_EVENT_BYTES
+    bl      app_alloc
+    cbz     x0, 97f
+    mov     x9, #24
+    stp     x9, xzr, [x0, #8]
+    mov     x0, #APP_DV_ACTIONS
+    MOVQ    x1, DISCV5_ACTIONS_BASE + 64 * DISCV5_ACTIONS_PER_EVENT
+    bl      app_alloc
+    cbz     x0, 97f
+    mov     x0, #APP_DV_OUT
+    MOVQ    x1, APP_DV_OUT_BYTES
+    bl      app_alloc
+    cbz     x0, 97f
+    mov     x9, #24
+    stp     x9, xzr, [x0, #8]
+    add     x0, sp, #L                      /* the config: key, seq, entropy, now, endpoint, limits */
+    mov     x1, #DISCV5_CFG_SIZE
+    bl      lantern_zero
+    add     x0, sp, #(L + DISCV5_CFG_KEY)
+    add     x1, x19, #APP_KEY
+    mov     x2, #32
+    bl      lantern_copy
+    add     x0, sp, #(L + DISCV5_CFG_SEQ)   /* seq: the Unix time in ms, so a restart gives a later record */
+    CALL_GLOBAL lantern_shell_time_ms
+    add     x0, x19, #APP_TICK
+    CALL_GLOBAL libp2p_shell_clock
+    add     x0, sp, #(L + DISCV5_CFG_ENTROPY)
+    add     x1, x19, #(APP_TICK + LIBP2P_TICK_ENTROPY)
+    mov     x2, #32
+    bl      lantern_copy
+    ldr     x9, [x19, #(APP_TICK + LIBP2P_TICK_NOW)]
+    str     x9, [sp, #(L + DISCV5_CFG_NOW)]
+    ldr     x9, [x19, #(APP_OPTIONS + AppOptions_port)]
+    str     x9, [sp, #(L + DISCV5_CFG_PORT)]
+    ldr     x9, [x19, #(APP_OPTIONS + AppOptions_enr_address)]
+    cbz     x9, 1f
+    mov     x10, #4
+    str     x10, [sp, #(L + DISCV5_CFG_FAMILY)]
+    str     w9, [sp, #(L + DISCV5_CFG_ADDRESS)]
+1:  mov     x9, #2
+    str     x9, [sp, #(L + DISCV5_CFG_BUCKET_IP_LIMIT)]
+    mov     x9, #10
+    str     x9, [sp, #(L + DISCV5_CFG_TABLE_IP_LIMIT)]
+    mov     x9, #24
+    str     x9, [sp, #(L + DISCV5_CFG_SUBNET4)]
+    mov     x9, #64
+    str     x9, [sp, #(L + DISCV5_CFG_SUBNET6)]
+    add     x0, sp, #L
+    ldr     x1, [x19, #APP_DV]
+    CALL_GLOBAL discv5_init
+    cbnz    x0, 96f
+    mov     x9, #4                          /* its UDP socket */
+    ldr     x10, [x19, #(APP_OPTIONS + AppOptions_port)]
+    stp     x9, x10, [sp, #(L + 152)]
+    stp     xzr, xzr, [sp, #(L + 168)]
+    ldr     x0, [x19, #APP_SHELL]
+    add     x1, sp, #(L + 152)
+    add     x2, sp, #(L + 184)
+    CALL_GLOBAL libp2p_shell_bind
+    ldr     x9, [sp, #(L + 184 + LIBP2P_BR_ERROR)]
+    cbnz    x9, 95f
+    ldr     x9, [sp, #(L + 184 + LIBP2P_BR_SOCKET)]
+    str     x9, [x19, #APP_DV_SOCKET]
+    str     xzr, [x19, #APP_DV_WAKE]
+    add     x0, sp, #L                      /* the entry tcp: --port, big endian */
+    mov     x1, #56
+    bl      lantern_zero
+    mov     x9, #56
+    mov     x10, #DISCV5_EVENT_SET_ENTRY
+    stp     x9, x10, [sp, #L]
+    mov     x9, #3
+    MOVQ    x10, 0x706374                   /* tcp */
+    stp     x9, x10, [sp, #(L + 16)]
+    mov     x9, #2
+    str     x9, [sp, #(L + 40)]
+    ldr     x9, [x19, #(APP_OPTIONS + AppOptions_port)]
+    rev16   w9, w9
+    strh    w9, [sp, #(L + 48)]
+    add     x0, sp, #L
+    mov     x1, #56
+    bl      app_dv_put
+    mov     x0, #0
+    LEAVE 256
+95: bl      app_line_start                  /* bind UDP port <p>: error <n> */
+    ADDRESS x0, app_m_bind
+    mov     x1, #app_m_bind_len
+    bl      app_line_text
+    ldr     x0, [x19, #(APP_OPTIONS + AppOptions_port)]
+    bl      app_line_u64
+    ADDRESS x0, app_m_error
+    mov     x1, #app_m_error_len
+    bl      app_line_text
+    ldr     x0, [sp, #(L + 184)]
+    bl      app_line_u64
+    mov     x0, #2
+    bl      app_line_end
+    mov     x0, #2
+    LEAVE 256
+96: mov     x2, x0                          /* discv5: status <n> */
+    ADDRESS x0, app_m_discv5
+    mov     x1, #app_m_discv5_len
+    bl      app_fail_status
+    LEAVE 256
+97: bl      app_line_start
+    ADDRESS x0, app_m_memory
+    mov     x1, #app_m_memory_len
+    bl      app_line_text
+    mov     x0, #2
+    bl      app_line_end
+    mov     x0, #2
+    LEAVE 256
+END_FUNCTION app_dv_start
+
+/*
+ * L2: x0 = 1 when the shell event x0 is a DATAGRAM of discv5's socket, which then joins the next
+ * discv5 step as a DATAGRAM event (the sender as an Endpoint); else 0. x20 the event. Locals: L the header.
+ */
+LOCAL_FUNCTION app_dv_datagram
+    ENTER 64
+    mov     x20, x0
+    ldr     x9, [x20, #8]
+    cmp     x9, #LIBP2P_EVENT_DATAGRAM
+    b.ne    8f
+    ldr     x9, [x20, #LIBP2P_EV_DG_SOCKET]
+    ldr     x10, [x19, #APP_DV_SOCKET]
+    cmp     x9, x10
+    b.ne    8f
+    ldr     x11, [x20, #LIBP2P_EV_DG_COUNT]
+    cmp     x11, #APP_DV_DATAGRAM_MAX
+    b.hi    9f
+    add     x9, x11, #(DISCV5_EV_DG_DATA + 7)   /* size, DATAGRAM, the Endpoint (port, family, address), len */
+    and     x9, x9, #~7
+    mov     x10, #DISCV5_EVENT_DATAGRAM
+    stp     x9, x10, [sp, #L]
+    add     x12, x20, #LIBP2P_EV_DG_ADDR
+    ldr     x13, [x12, #LIBP2P_ADDR_FAMILY]
+    ldr     x14, [x12, #LIBP2P_ADDR_PORT]
+    stp     x14, x13, [sp, #(L + 16)]
+    ldp     x13, x14, [x12, #LIBP2P_ADDR_IP]
+    stp     x13, x14, [sp, #(L + 32)]
+    str     x11, [sp, #(L + 48)]
+    ldr     x9, [x19, #APP_DV_EVENTS]       /* the header, then the bytes, if they fit */
+    ldr     x10, [x9, #16]
+    ldr     x12, [sp, #L]
+    add     x12, x12, x10
+    add     x12, x12, #24
+    ldr     x13, [x9]
+    cmp     x12, x13
+    b.hi    9f
+    add     x0, sp, #L
+    mov     x1, #DISCV5_EV_DG_DATA
+    bl      app_dv_put
+    ldr     x9, [sp, #L]
+    sub     x1, x9, #DISCV5_EV_DG_DATA
+    add     x0, x20, #LIBP2P_EV_DG_DATA
+    bl      app_dv_put
+9:  mov     x0, #1
+    LEAVE 64
+8:  mov     x0, #0
+    LEAVE 64
+END_FUNCTION app_dv_datagram
+
+/*
+ * L2: a discv5 step when it has events or its WAKEUP is due; then its actions: SEND as the shell's
+ * SEND_DATAGRAM, NODE_FOUND as a NODE_EV_ENR of the next node step, RECORD as a log line, WAKEUP
+ * as the next time. x20 the next action, x21 the end, x22 the datagrams, x23 an event count.
+ * Locals: L the header of an event.
+ */
+LOCAL_FUNCTION app_discv5
+    ENTER 64
+    ldr     x9, [x19, #APP_DV_EVENTS]
+    ldr     x10, [x9, #16]
+    cbnz    x10, 1f
+    ldr     x11, [x19, #(APP_TICK + LIBP2P_TICK_NOW)]
+    ldr     x12, [x19, #APP_DV_WAKE]
+    cmp     x11, x12
+    b.lo    99f
+1:  mov     x23, #0                         /* the action room for the events */
+    add     x11, x9, #24
+    add     x12, x11, x10
+2:  cmp     x11, x12
+    b.hs    3f
+    ldr     x13, [x11]
+    add     x11, x11, x13
+    add     x23, x23, #1
+    b       2b
+3:  MOVQ    x9, DISCV5_ACTIONS_PER_EVENT
+    MOVQ    x10, DISCV5_ACTIONS_BASE
+    madd    x23, x23, x9, x10
+    ldr     x9, [x19, #(APP_DV_ACTIONS + 8)]
+    cmp     x23, x9
+    b.ls    4f
+    mov     x0, #APP_DV_ACTIONS
+    bl      app_unmap
+    mov     x0, #APP_DV_ACTIONS
+    mov     x1, x23
+    bl      app_alloc
+    cbz     x0, 98f
+4:  ldr     x9, [x19, #(APP_TICK + LIBP2P_TICK_NOW)]    /* the Tick: now and fresh bytes */
+    str     x9, [x19, #APP_DV_TICK]
+    add     x0, x19, #(APP_DV_TICK + 8)
+    add     x1, x19, #(APP_TICK + LIBP2P_TICK_ENTROPY)
+    mov     x2, #32
+    bl      lantern_copy
+    ldr     x9, [x19, #APP_DV_ACTIONS]
+    ldr     x10, [x19, #(APP_DV_ACTIONS + 8)]
+    str     x10, [x9]
+    ldr     x9, [x19, #APP_DV_SCRATCH]
+    ldr     x10, [x19, #(APP_DV_SCRATCH + 8)]
+    str     x10, [x9]
+    ldr     x0, [x19, #APP_DV]
+    add     x1, x19, #APP_DV_TICK
+    ldr     x2, [x19, #APP_DV_EVENTS]
+    ldr     x3, [x19, #APP_DV_SCRATCH]
+    ldr     x4, [x19, #APP_DV_ACTIONS]
+    CALL_GLOBAL discv5_step
+    ldr     x9, [x19, #APP_DV_EVENTS]
+    str     xzr, [x9, #16]
+    cbz     x0, 5f
+    mov     x2, x0                          /* discv5: status <n>; its events are dropped */
+    ADDRESS x0, app_m_discv5
+    mov     x1, #app_m_discv5_len
+    bl      app_fail_status
+    ldr     x9, [x19, #(APP_TICK + LIBP2P_TICK_NOW)]
+    add     x9, x9, #1000
+    str     x9, [x19, #APP_DV_WAKE]
+    b       99f
+5:  ldr     x9, [x19, #APP_DV_ACTIONS]
+    ldr     x10, [x9, #8]
+    ldr     x11, [x9, #16]
+    add     x20, x9, x10
+    add     x21, x20, x11
+    ldr     x22, [x19, #APP_DV_OUT]
+6:  cmp     x20, x21
+    b.hs    90f
+    ldr     x9, [x20, #8]
+    cmp     x9, #DISCV5_ACTION_SEND
+    b.ne    7f
+    ldr     x10, [x20, #DISCV5_ACT_SEND_LEN]    /* SEND: a SEND_DATAGRAM of the socket */
+    add     x11, x10, #(LIBP2P_ACT_DG_DATA + 7)
+    and     x11, x11, #~7
+    ldr     x12, [x22, #16]
+    add     x13, x12, x11
+    add     x13, x13, #24
+    ldr     x14, [x22]
+    cmp     x13, x14
+    b.hi    80f
+    add     x0, x22, #24
+    add     x0, x0, x12
+    sub     x13, x13, #24
+    str     x13, [x22, #16]
+    mov     x12, #LIBP2P_ACTION_SEND_DATAGRAM
+    stp     x11, x12, [x0]
+    ldr     x12, [x19, #APP_DV_SOCKET]
+    str     x12, [x0, #LIBP2P_ACT_DG_SOCKET]
+    ldp     x12, x13, [x20, #DISCV5_ACT_SEND_TO]    /* port, family */
+    add     x14, x0, #LIBP2P_ACT_DG_ADDR
+    stp     x13, x12, [x14]
+    ldp     x12, x13, [x20, #(DISCV5_ACT_SEND_TO + 16)]
+    stp     x12, x13, [x14, #16]
+    str     x10, [x0, #LIBP2P_ACT_DG_COUNT]
+    add     x0, x0, #LIBP2P_ACT_DG_DATA
+    add     x1, x20, #DISCV5_ACT_SEND_DATA
+    mov     x2, x10
+    bl      lantern_copy
+    b       80f
+7:  cmp     x9, #DISCV5_ACTION_NODE_FOUND
+    b.ne    71f
+    ldr     x10, [x20, #DISCV5_ACT_FOUND_LEN]   /* NODE_FOUND: NODE_EV_ENR with the record */
+    add     x11, x10, #(48 + 7)
+    and     x11, x11, #~7
+    mov     x12, #NODE_EV_ENR
+    stp     x11, x12, [sp, #L]
+    sub     x12, x11, #24
+    stp     xzr, x12, [sp, #(L + 16)]
+    mov     x12, #24
+    stp     x12, x10, [sp, #(L + 32)]
+    add     x0, sp, #L
+    mov     x1, #48
+    bl      app_event_put
+    add     x0, x20, #DISCV5_ACT_FOUND_DATA
+    ldr     x9, [sp, #L]
+    sub     x1, x9, #48
+    bl      app_event_put
+    b       80f
+71: cmp     x9, #DISCV5_ACTION_RECORD
+    b.ne    72f
+    bl      app_line_start                  /* record enr:<base64url> */
+    ADDRESS x0, app_m_record
+    mov     x1, #app_m_record_len
+    bl      app_line_text
+    add     x0, x20, #DISCV5_ACT_RECORD_DATA
+    ldr     x1, [x20, #DISCV5_ACT_RECORD_LEN]
+    bl      app_line_base64url
+    mov     x0, #1
+    bl      app_line_end
+    b       80f
+72: cmp     x9, #DISCV5_ACTION_WAKEUP
+    b.ne    80f
+    ldr     x10, [x20, #DISCV5_ACT_WAKEUP_AT]
+    str     x10, [x19, #APP_DV_WAKE]
+80: ldr     x9, [x20]
+    add     x20, x20, x9
+    b       6b
+90: ldr     x22, [x19, #APP_DV_OUT]         /* the datagrams go out */
+    ldr     x9, [x22, #16]
+    cbz     x9, 99f
+    ldr     x0, [x19, #APP_SHELL]
+    mov     x1, x22
+    ldr     x2, [x19, #APP_SHELL_EVENTS]
+    CALL_GLOBAL libp2p_shell_perform
+    ldr     x22, [x19, #APP_DV_OUT]
+    str     xzr, [x22, #16]
+    b       99f
+98: ldr     x9, [x19, #APP_DV_EVENTS]
+    str     xzr, [x9, #16]
+99: LEAVE 64
+END_FUNCTION app_discv5
+
 /* L2: each event of the shell becomes a NODE_EV_P2P event of the next step, but those of the engine's connection. x20 the next event, x21 the end. Locals: L the header. */
 LOCAL_FUNCTION app_p2p_events
     ENTER 16
@@ -1956,6 +2401,9 @@ LOCAL_FUNCTION app_p2p_events
     add     x21, x20, x11
 1:  cmp     x20, x21
     b.hs    9f
+    mov     x0, x20                         /* a datagram of discv5 */
+    bl      app_dv_datagram
+    cbnz    x0, 2f
     mov     x0, x20                         /* the engine's connection */
     bl      app_engine_event
     cbnz    x0, 2f
@@ -2005,6 +2453,7 @@ LOCAL_FUNCTION app_loop
     ldr     x0, [x19, #APP_P2P]
     add     x1, x19, #APP_TICK
     bl      app_step
+    bl      app_discv5
     ldr     x0, [x19, #APP_STORE]           /* a line at each new slot */
     bl      app_store_slot
     ldr     x9, [x19, #APP_LAST_SLOT]
@@ -2033,7 +2482,10 @@ LOCAL_FUNCTION app_loop
     bl      app_line_u64
     mov     x0, #1
     bl      app_line_end
-3:  ldr     x9, [x19, #(APP_RESULT + 8)]    /* the wait: to the node's wakeup, at most APP_WAIT_MS */
+3:  ldr     x9, [x19, #(APP_RESULT + 8)]    /* the wait: to the node's or discv5's wakeup, at most APP_WAIT_MS */
+    ldr     x13, [x19, #APP_DV_WAKE]
+    cmp     x13, x9
+    csel    x9, x13, x9, lo
     ldr     x10, [x19, #(APP_TICK + LIBP2P_TICK_NOW)]
     subs    x11, x9, x10
     csel    x11, xzr, x11, ls
