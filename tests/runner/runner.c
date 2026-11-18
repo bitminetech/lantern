@@ -103,6 +103,7 @@ ABI uint64_t LF(is_valid_genesis_state)(const void *state, const void *config, v
 
 /* The state transition of every fork: docs/reference/. */
 ABI uint64_t LF(beacon_state_copy_size)(const void *state, const void *room, void *size);
+ABI uint64_t LF(node_anchor)(const void *data, const void *room, void *scratch, void *state, void *block);
 ABI uint64_t LF(beacon_state_copy)(const void *state, const void *room, void *out);
 
 ABI uint64_t LF(compute_shuffled_permutation)(const void *index_count, const void *seed, void *scratch, void *out);
@@ -2806,6 +2807,50 @@ static uint8_t *encoded(const char *type, const uint8_t *value, uint64_t *len, c
     return out;
 }
 
+/*
+ * lantern_node_anchor of the case's anchor_state (node.md, Test vectors): the state and the block
+ * must encode to the case's anchor_state and anchor_block; with another body_root in the state's
+ * latest_block_header, the status must be LANTERN_INVALID_ANCHOR.
+ */
+static uint8_t *list_of(const uint8_t *b, uint64_t len, uint64_t junk, uint64_t room, uint64_t *size);
+#define INVALID_ANCHOR 39
+#define ANCHOR_BLOCK_BYTES 65536
+static void anchor_check(tv parts, const char **why) {
+    uint64_t slen, blen, need = 0, vsize = 0, lsize, elen;
+    const uint8_t *enc = tv_bytes(tv_get(parts, "anchor_state"), &slen);
+    const uint8_t *benc = tv_bytes(tv_get(parts, "anchor_block"), &blen);
+    uint8_t *value = decode(type_by_name("BeaconState"), enc, slen, &vsize, why);
+    if (!value) return;
+    uint64_t room[8] = {64, 64, 4, 9000, 64, 64, 4, 4096}; /* StateRoom: docs/reference/state.md */
+    CALL(LF(beacon_state_copy_size), value, room, &need);
+    free(value);
+    uint8_t *data = list_of(enc, slen, 0, 0, &lsize), *state = buffer(need), *block = buffer(ANCHOR_BLOCK_BYTES);
+    wr64(state, need);
+    wr64(block, ANCHOR_BLOCK_BYTES);
+    if (CALL(LF(node_anchor), data, room, fresh_scratch(), state, block) != 0) *why = "lantern_node_anchor: status not 0";
+    else if (!guard_ok(state, need) || !guard_ok(block, ANCHOR_BLOCK_BYTES)) *why = "lantern_node_anchor wrote out of bounds";
+    else {
+        uint8_t *e = encoded("BeaconState", state, &elen, why);
+        if (e && (elen != slen || memcmp(e + 24, enc, (size_t)slen))) *why = "lantern_node_anchor: the state is not the anchor state";
+        free(e);
+        if (!*why) {
+            e = encoded("BeaconBlock", block, &elen, why);
+            if (e && (elen != blen || memcmp(e + 24, benc, (size_t)blen))) *why = "lantern_node_anchor: the block is not the anchor block";
+            free(e);
+        }
+    }
+    if (!*why) { /* latest_block_header.body_root: SSZ bytes 144 to 176 of a BeaconState */
+        data[24 + 144] ^= 1;
+        wr64(state, need);
+        wr64(block, ANCHOR_BLOCK_BYTES);
+        if (CALL(LF(node_anchor), data, room, fresh_scratch(), state, block) != INVALID_ANCHOR)
+            *why = "lantern_node_anchor: another body_root is not LANTERN_INVALID_ANCHOR";
+    }
+    free(data);
+    free(state);
+    free(block);
+}
+
 /* A block step through the node, then the block's attestations and attester slashings as events when it is valid. */
 static void shell_block_step(fc_node *n, tv parts, tv step, const char **why) {
     struct node_shell *s = n->shell;
@@ -4220,6 +4265,7 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
         n.compliance = compliance;
         uint8_t *anchor_block = fc_setup(&n, parts, &why);
         if (anchor_block) keep(&n.blocks, &n.nblocks, node_at(&n, 0), 0, copy_of(n.anchor, n.anchor_size), n.anchor_size);
+        if (anchor_block && !why && !compliance) anchor_check(parts, &why);
         tv steps = tv_get(parts, "steps");
         tv s = steps ? steps + 9 : NULL;
         for (uint64_t k = 0, c = steps ? rd64(steps + 1) : 0; k < c && !why; k++, s = tv_skip(s)) {

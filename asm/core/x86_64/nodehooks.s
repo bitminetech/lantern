@@ -180,6 +180,230 @@ SPEC_FUNCTION node_block_root
 SPEC_END node_block_root
 
 /*
+ * rax = the bytes of the SSZ default value of the type node rsi of the TypeDescriptor rdi, written
+ * at rdx: zero bytes for a fixed size type, none for a list, the byte 1 for a bitlist, and for a
+ * variable container or vector its fixed part with the offsets, then each variable part. rbx the
+ * descriptor, rbp the node, r12 out, r13 a field or element, r14 their end, r15 the bytes, S7
+ * the first field or an index, S8 a size or a place in the fixed part.
+ */
+LOCAL_FUNCTION node_ssz_default
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     %rdx, %r12
+    imul    $SSZ_NODE_STRIDE, %rsi, %rbp
+    add     SSZ_DESC_NODES_OFFSET(%rbx), %rbp
+    add     %rbx, %rbp
+    mov     SSZ_NODE_SSZ_SIZE(%rbp), %r15
+    test    %r15, %r15
+    jz      1f
+    mov     %r12, %rdi                      # a fixed size type: zero bytes
+    mov     %r15, %rsi
+    call    lantern_zero
+    jmp     9f
+1:  mov     SSZ_NODE_KIND(%rbp), %rax
+    cmp     $SSZ_KIND_BIT_LIST, %rax
+    jne     2f
+    movb    $1, (%r12)                      # a bitlist: its delimiter bit
+    mov     $1, %r15d
+    jmp     9f
+2:  cmp     $SSZ_KIND_CONTAINER, %rax
+    je      5f
+    cmp     $SSZ_KIND_VECTOR, %rax
+    je      3f
+    xor     %r15d, %r15d                    # a list: empty
+    jmp     9f
+3:  mov     SSZ_NODE_LENGTH(%rbp), %r14     # a vector of variable elements: N offsets, then each element
+    mov     SSZ_NODE_ELEMENT(%rbp), %r13
+    lea     (,%r14,4), %r15
+    movq    $0, S7(%rsp)
+4:  mov     S7(%rsp), %rax
+    cmp     %r14, %rax
+    jae     9f
+    mov     %r15d, (%r12,%rax,4)
+    mov     %rbx, %rdi
+    mov     %r13, %rsi
+    lea     (%r12,%r15), %rdx
+    call    node_ssz_default
+    add     %rax, %r15
+    incq    S7(%rsp)
+    jmp     4b
+5:  mov     SSZ_NODE_ELEMENT(%rbp), %r13    # a variable container: the fixed part
+    mov     %r13, S7(%rsp)
+    mov     SSZ_NODE_LENGTH(%rbp), %r14
+    add     %r13, %r14
+    xor     %r15d, %r15d
+6:  cmp     %r14, %r13
+    jae     7f
+    mov     %r13, %rax
+    shl     $5, %rax
+    add     SSZ_DESC_FIELDS_OFFSET(%rbx), %rax
+    add     %rbx, %rax
+    mov     $4, %ecx                        # a variable field: its offset, written below
+    testq   $SSZ_FIELD_VARIABLE, SSZ_FIELD_FLAGS(%rax)
+    jnz     61f
+    imul    $SSZ_NODE_STRIDE, SSZ_FIELD_NODE(%rax), %rcx
+    add     SSZ_DESC_NODES_OFFSET(%rbx), %rcx
+    mov     SSZ_NODE_SSZ_SIZE(%rbx,%rcx), %rcx
+    mov     %rcx, S8(%rsp)
+    lea     (%r12,%r15), %rdi
+    mov     %rcx, %rsi
+    call    lantern_zero
+    mov     S8(%rsp), %rcx
+61: add     %rcx, %r15
+    inc     %r13
+    jmp     6b
+7:  mov     S7(%rsp), %r13                  # then each variable field, after its offset
+    movq    $0, S8(%rsp)
+71: cmp     %r14, %r13
+    jae     9f
+    mov     %r13, %rax
+    shl     $5, %rax
+    add     SSZ_DESC_FIELDS_OFFSET(%rbx), %rax
+    add     %rbx, %rax
+    testq   $SSZ_FIELD_VARIABLE, SSZ_FIELD_FLAGS(%rax)
+    jnz     72f
+    imul    $SSZ_NODE_STRIDE, SSZ_FIELD_NODE(%rax), %rcx
+    add     SSZ_DESC_NODES_OFFSET(%rbx), %rcx
+    mov     SSZ_NODE_SSZ_SIZE(%rbx,%rcx), %rcx
+    add     %rcx, S8(%rsp)
+    jmp     73f
+72: mov     S8(%rsp), %rcx
+    mov     %r15d, (%r12,%rcx)
+    addq    $4, S8(%rsp)
+    mov     %rbx, %rdi
+    mov     SSZ_FIELD_NODE(%rax), %rsi
+    lea     (%r12,%r15), %rdx
+    call    node_ssz_default
+    add     %rax, %r15
+73: inc     %r13
+    jmp     71b
+9:  mov     %r15, %rax
+    LEAVE 0
+END_FUNCTION node_ssz_default
+
+/*
+ * (data, room, scratch, state, block): the anchor state and block of the genesis state in data.
+ * rbx data, rbp room, r12 scratch, r13 state, r14 block, r15 the decoded state, then the block's
+ * SSZ ByteList, S7 the default body's bytes, S8 the scratch size, restored on return. Locals: L
+ * SizeBounds or a size, L+16 a root.
+ */
+SPEC_FUNCTION node_anchor
+    ENTER 48
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    mov     %r8, %r14
+    mov     (%r12), %rax
+    mov     %rax, S8(%rsp)
+    ADDRESS %rdi, lantern_type_BeaconState  # the state, decoded at the end of scratch, then copied with room
+    mov     %rbx, %rsi
+    mov     %r12, %rdx
+    call    node_decode
+    cmp     $1, %rax
+    je      8f
+    ja      7f
+    mov     %rdx, %r15
+    mov     %r15, %rdi
+    mov     %rbp, %rsi
+    lea     L(%rsp), %rdx
+    call    lantern_beacon_state_copy_size
+    mov     L(%rsp), %rax
+    cmp     %rax, (%r13)
+    jb      8f
+    mov     %r15, %rdi
+    mov     %rbp, %rsi
+    mov     %r13, %rdx
+    call    lantern_beacon_state_copy
+    test    %rax, %rax
+    jnz     8f
+    mov     S8(%rsp), %rax
+    mov     %rax, (%r12)
+    ADDRESS %rdi, lantern_type_BeaconBlockBody  # the default body's bytes: the least SSZ size of the type
+    lea     L(%rsp), %rsi
+    CALL_GLOBAL lantern_ssz_size_bounds
+    mov     L(%rsp), %rax
+    mov     %rax, S7(%rsp)
+    lea     (24 + 84 + 7)(%rax), %rcx       # the block's SSZ bytes, a ByteList at the end of scratch
+    and     $-8, %rcx
+    lea     8(%rcx), %rdx
+    mov     S8(%rsp), %rax
+    cmp     %rdx, %rax
+    jb      8f
+    sub     %rcx, %rax
+    mov     %rax, (%r12)
+    lea     (%r12,%rax), %r15
+    mov     %rcx, (%r15)
+    movq    $24, 8(%r15)
+    mov     S7(%rsp), %rax
+    add     $84, %rax
+    mov     %rax, 16(%r15)
+    lea     BeaconState_latest_block_header(%r13), %rsi
+    mov     BeaconBlockHeader_slot(%rsi), %rax
+    mov     %rax, 24(%r15)
+    mov     BeaconBlockHeader_proposer_index(%rsi), %rax
+    mov     %rax, 32(%r15)
+    lea     40(%r15), %rdi
+    add     $BeaconBlockHeader_parent_root, %rsi
+    mov     $32, %edx
+    call    lantern_copy
+    lea     (BeaconState_latest_block_header + BeaconBlockHeader_state_root)(%r13), %rsi
+    mov     (%rsi), %rax                    # state_root: the header's, or hash_tree_root of the state
+    or      8(%rsi), %rax
+    or      16(%rsi), %rax
+    or      24(%rsi), %rax
+    jz      1f
+    lea     72(%r15), %rdi
+    mov     $32, %edx
+    call    lantern_copy
+    jmp     2f
+1:  ADDRESS %rdi, lantern_type_BeaconState
+    mov     %r13, %rsi
+    mov     %r12, %rdx
+    lea     72(%r15), %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    test    %rax, %rax
+    jnz     8f
+2:  movl    $84, (24 + 80)(%r15)            # the body's offset, then the default body
+    ADDRESS %rdi, lantern_type_BeaconBlockBody
+    mov     SSZ_DESC_ROOT(%rdi), %rsi
+    lea     (24 + 84)(%r15), %rdx
+    call    node_ssz_default
+    ADDRESS %rdi, lantern_type_BeaconBlock
+    mov     %r15, %rsi
+    mov     %r12, %rdx
+    mov     %r14, %rcx
+    CALL_GLOBAL ssz_deserialize
+    test    %rax, %rax
+    jnz     8f
+    PART    %rsi, %rax, %r14, BeaconBlock_body  # the default body must be the header's
+    ADDRESS %rdi, lantern_type_BeaconBlockBody
+    mov     %r12, %rdx
+    lea     (L + 16)(%rsp), %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    test    %rax, %rax
+    jnz     8f
+    lea     (BeaconState_latest_block_header + BeaconBlockHeader_body_root)(%r13), %rsi
+    xor     %ecx, %ecx
+3:  mov     (%rsi,%rcx), %rax
+    cmp     (L + 16)(%rsp,%rcx), %rax
+    jne     6f
+    add     $8, %ecx
+    cmp     $32, %ecx
+    jb      3b
+    xor     %eax, %eax
+    jmp     99f
+6:  mov     $LANTERN_INVALID_ANCHOR, %eax
+    jmp     99f
+7:  mov     $LANTERN_INVALID_ENCODING, %eax
+    jmp     99f
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+99: mov     S8(%rsp), %rcx
+    mov     %rcx, (%r12)
+    LEAVE 48
+SPEC_END node_anchor
+
+/*
  * (store, data, is_from_block, state, scratch, result, target): validate_on_attestation of the
  * Attestation in data; with no target checkpoint state (state 0) the result is
  * LANTERN_NEED_TARGET_STATE and target holds the target checkpoint, else on_attestation.

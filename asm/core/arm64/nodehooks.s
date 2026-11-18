@@ -180,6 +180,233 @@ SPEC_FUNCTION node_block_root
 SPEC_END node_block_root
 
 /*
+ * L0: x0 = the bytes of the SSZ default value of the type node x1 of the TypeDescriptor x0, written
+ * at x2: zero bytes for a fixed size type, none for a list, the byte 1 for a bitlist, and for a
+ * variable container or vector its fixed part with the offsets, then each variable part. x19 the
+ * descriptor, x20 the node, x21 out, x22 a field or element, x23 their end, x24 the bytes, x25
+ * the first field or an index, x26 a place in the fixed part.
+ */
+LOCAL_FUNCTION node_ssz_default
+    ENTER 0
+    mov     x19, x0
+    mov     x21, x2
+    ldr     x9, [x19, #SSZ_DESC_NODES_OFFSET]
+    add     x9, x19, x9
+    mov     x10, #SSZ_NODE_STRIDE
+    madd    x20, x1, x10, x9
+    ldr     x24, [x20, #SSZ_NODE_SSZ_SIZE]
+    cbz     x24, 1f
+    mov     x0, x21                         /* a fixed size type: zero bytes */
+    mov     x1, x24
+    bl      lantern_zero
+    b       9f
+1:  ldr     x9, [x20, #SSZ_NODE_KIND]
+    cmp     x9, #SSZ_KIND_BIT_LIST
+    b.ne    2f
+    mov     w10, #1                         /* a bitlist: its delimiter bit */
+    strb    w10, [x21]
+    mov     x24, #1
+    b       9f
+2:  cmp     x9, #SSZ_KIND_CONTAINER
+    b.eq    5f
+    cmp     x9, #SSZ_KIND_VECTOR
+    b.eq    3f
+    mov     x24, #0                         /* a list: empty */
+    b       9f
+3:  ldr     x23, [x20, #SSZ_NODE_LENGTH]    /* a vector of variable elements: N offsets, then each element */
+    ldr     x22, [x20, #SSZ_NODE_ELEMENT]
+    lsl     x24, x23, #2
+    mov     x25, #0
+4:  cmp     x25, x23
+    b.hs    9f
+    str     w24, [x21, x25, lsl #2]
+    mov     x0, x19
+    mov     x1, x22
+    add     x2, x21, x24
+    bl      node_ssz_default
+    add     x24, x24, x0
+    add     x25, x25, #1
+    b       4b
+5:  ldr     x25, [x20, #SSZ_NODE_ELEMENT]   /* a variable container: the fixed part */
+    ldr     x23, [x20, #SSZ_NODE_LENGTH]
+    add     x23, x25, x23
+    mov     x22, x25
+    mov     x24, #0
+6:  cmp     x22, x23
+    b.hs    7f
+    ldr     x9, [x19, #SSZ_DESC_FIELDS_OFFSET]
+    add     x9, x19, x9
+    add     x9, x9, x22, lsl #5
+    ldr     x1, [x9, #SSZ_FIELD_NODE]
+    ldr     x10, [x9, #SSZ_FIELD_FLAGS]
+    mov     x11, #4                         /* a variable field: its offset, written below */
+    tbnz    x10, #0, 61f
+    ldr     x9, [x19, #SSZ_DESC_NODES_OFFSET]
+    add     x9, x19, x9
+    mov     x10, #SSZ_NODE_STRIDE
+    madd    x9, x1, x10, x9
+    ldr     x11, [x9, #SSZ_NODE_SSZ_SIZE]
+    add     x0, x21, x24
+    mov     x1, x11
+    bl      lantern_zero
+    ldr     x9, [x19, #SSZ_DESC_NODES_OFFSET]   /* its size again: lantern_zero took x1 */
+    add     x9, x19, x9
+    ldr     x10, [x19, #SSZ_DESC_FIELDS_OFFSET]
+    add     x10, x19, x10
+    add     x10, x10, x22, lsl #5
+    ldr     x1, [x10, #SSZ_FIELD_NODE]
+    mov     x10, #SSZ_NODE_STRIDE
+    madd    x9, x1, x10, x9
+    ldr     x11, [x9, #SSZ_NODE_SSZ_SIZE]
+61: add     x24, x24, x11
+    add     x22, x22, #1
+    b       6b
+7:  mov     x22, x25                        /* then each variable field, after its offset */
+    mov     x26, #0
+71: cmp     x22, x23
+    b.hs    9f
+    ldr     x9, [x19, #SSZ_DESC_FIELDS_OFFSET]
+    add     x9, x19, x9
+    add     x9, x9, x22, lsl #5
+    ldr     x1, [x9, #SSZ_FIELD_NODE]
+    ldr     x10, [x9, #SSZ_FIELD_FLAGS]
+    tbnz    x10, #0, 72f
+    ldr     x9, [x19, #SSZ_DESC_NODES_OFFSET]
+    add     x9, x19, x9
+    mov     x10, #SSZ_NODE_STRIDE
+    madd    x9, x1, x10, x9
+    ldr     x11, [x9, #SSZ_NODE_SSZ_SIZE]
+    add     x26, x26, x11
+    b       73f
+72: str     w24, [x21, x26]
+    add     x26, x26, #4
+    mov     x0, x19
+    add     x2, x21, x24
+    bl      node_ssz_default
+    add     x24, x24, x0
+73: add     x22, x22, #1
+    b       71b
+9:  mov     x0, x24
+    LEAVE 0
+END_FUNCTION node_ssz_default
+
+/*
+ * (data, room, scratch, state, block): the anchor state and block of the genesis state in data.
+ * x19 data, x20 room, x21 scratch, x22 state, x23 block, x24 the decoded state, then the
+ * block's SSZ ByteList, x25 the default body's bytes, x28 the scratch size, restored on return.
+ * Locals: L SizeBounds or a size, L+16 a root.
+ */
+SPEC_FUNCTION node_anchor
+    ENTER 48
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+    mov     x23, x4
+    ldr     x28, [x21]
+    ADDRESS x0, lantern_type_BeaconState    /* the state, decoded at the end of scratch, then copied with room */
+    mov     x1, x19
+    mov     x2, x21
+    bl      node_decode
+    cmp     x0, #1
+    b.eq    8f
+    b.hi    7f
+    mov     x24, x1
+    mov     x0, x24
+    mov     x1, x20
+    add     x2, sp, #L
+    bl      lantern_beacon_state_copy_size
+    ldr     x9, [sp, #L]
+    ldr     x10, [x22]
+    cmp     x10, x9
+    b.lo    8f
+    mov     x0, x24
+    mov     x1, x20
+    mov     x2, x22
+    bl      lantern_beacon_state_copy
+    cbnz    x0, 8f
+    str     x28, [x21]
+    ADDRESS x0, lantern_type_BeaconBlockBody    /* the default body's bytes: the least SSZ size of the type */
+    add     x1, sp, #L
+    CALL_GLOBAL lantern_ssz_size_bounds
+    ldr     x25, [sp, #L]
+    add     x9, x25, #(24 + 84 + 7)         /* the block's SSZ bytes, a ByteList at the end of scratch */
+    and     x9, x9, #~7
+    add     x10, x9, #8
+    cmp     x28, x10
+    b.lo    8f
+    sub     x10, x28, x9
+    str     x10, [x21]
+    add     x24, x21, x10
+    mov     x11, #24
+    stp     x9, x11, [x24]
+    add     x11, x25, #84
+    str     x11, [x24, #16]
+    ADDQ    x9, x22, BeaconState_latest_block_header
+    ldr     x10, [x9, #BeaconBlockHeader_slot]
+    ldr     x11, [x9, #BeaconBlockHeader_proposer_index]
+    stp     x10, x11, [x24, #24]
+    add     x0, x24, #40
+    add     x1, x9, #BeaconBlockHeader_parent_root
+    mov     x2, #32
+    bl      lantern_copy
+    ADDQ    x1, x22, BeaconState_latest_block_header + BeaconBlockHeader_state_root
+    ldp     x10, x11, [x1]                  /* state_root: the header's, or hash_tree_root of the state */
+    ldp     x12, x13, [x1, #16]
+    orr     x10, x10, x11
+    orr     x12, x12, x13
+    orr     x10, x10, x12
+    cbz     x10, 1f
+    add     x0, x24, #72
+    mov     x2, #32
+    bl      lantern_copy
+    b       2f
+1:  ADDRESS x0, lantern_type_BeaconState
+    mov     x1, x22
+    mov     x2, x21
+    add     x3, x24, #72
+    CALL_GLOBAL ssz_hash_tree_root
+    cbnz    x0, 8f
+2:  mov     w9, #84                         /* the body's offset, then the default body */
+    str     w9, [x24, #(24 + 80)]
+    ADDRESS x0, lantern_type_BeaconBlockBody
+    ldr     x1, [x0, #SSZ_DESC_ROOT]
+    add     x2, x24, #(24 + 84)
+    bl      node_ssz_default
+    ADDRESS x0, lantern_type_BeaconBlock
+    mov     x1, x24
+    mov     x2, x21
+    mov     x3, x23
+    CALL_GLOBAL ssz_deserialize
+    cbnz    x0, 8f
+    PART    x1, x9, x23, BeaconBlock_body   /* the default body must be the header's */
+    ADDRESS x0, lantern_type_BeaconBlockBody
+    mov     x2, x21
+    add     x3, sp, #(L + 16)
+    CALL_GLOBAL ssz_hash_tree_root
+    cbnz    x0, 8f
+    ADDQ    x9, x22, BeaconState_latest_block_header + BeaconBlockHeader_body_root
+    add     x10, sp, #(L + 16)
+    mov     x11, #0
+3:  ldr     x12, [x9, x11]
+    ldr     x13, [x10, x11]
+    cmp     x12, x13
+    b.ne    6f
+    add     x11, x11, #8
+    cmp     x11, #32
+    b.lo    3b
+    mov     x0, #LANTERN_OK
+    b       99f
+6:  mov     x0, #LANTERN_INVALID_ANCHOR
+    b       99f
+7:  mov     x0, #LANTERN_INVALID_ENCODING
+    b       99f
+8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+99: str     x28, [x21]
+    LEAVE 48
+SPEC_END node_anchor
+
+/*
  * (store, data, is_from_block, state, scratch, result, target): validate_on_attestation of the
  * Attestation in data; with no target checkpoint state (state 0) the result is
  * LANTERN_NEED_TARGET_STATE and target holds the target checkpoint, else on_attestation.

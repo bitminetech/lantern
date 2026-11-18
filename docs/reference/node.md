@@ -17,6 +17,7 @@
 - [`lantern_node_gossip`](#function-lantern_node_gossip): the gossip validation of a message's SSZ bytes, for one fork.
 - [`lantern_node_blob_sidecar`](#function-lantern_node_blob_sidecar): the checks of a blob sidecar of a response, for deneb or electra.
 - [`lantern_node_new_payload`](#function-lantern_node_new_payload): the HTTP request of engine_newPayload for a block's SSZ bytes, for one fork.
+- [`lantern_node_anchor`](#function-lantern_node_anchor): the anchor state and block of a genesis state's SSZ bytes, for one fork.
 
 ### Types
 
@@ -77,6 +78,7 @@
   - From bellatrix on, the node has `NODE_FLAG_ENGINE`, and the runner is its execution engine too. It answers each `NODE_ACT_ENGINE` request with an HTTP/1.1 response in two `NODE_EV_ENGINE` events: engine_newPayload of a `blockHash`, and engine_forkchoiceUpdated of a `headBlockHash`, with the `payloadStatus` of the case's last `payload_status` step of that hash, else `VALID` with that hash as `latestValidHash`. The request must carry a JWT of the node's secret.
   - Cases with `payload_status` steps run in node mode from bellatrix on, through the node's execution engine calls; before bellatrix only directly.
   - A non-zero status of lantern_node_step or lantern_node_run must leave the node, the store and the work's state byte for byte unchanged.
+- The anchor of each fork_choice case: lantern_node_anchor of the case's `anchor_state` must give a state whose SSZ bytes are the case's `anchor_state` and a block whose SSZ bytes are the case's `anchor_block`, when that block has the default body; else `LANTERN_INVALID_ANCHOR`.
 - Lantern's cases `<preset>-<fork>-node-p2p.bin` of altair to fulu, made by tests/generator/node.py with the pinned spec: an anchor state and block at the first slot of epoch 2, and the Status and MetaData the node answers.
   - The answers come from get_forkchoice_store, get_head and compute_fork_digest of the spec module, with each fork up to the case's at epoch 0 and each later fork at 2^64 - 1.
   - The runner plays the network between the node's libp2p state and a bare asm-libp2p peer, as tests/runner of asm-libp2p does. The peer dials the node and opens one stream for each request.
@@ -554,6 +556,44 @@ lantern_node_blob_sidecar(data, config, settings, scratch, result, root) -> stat
 ### ABI
 
 - Export: `lantern_<fork>_node_blob_sidecar` of the deneb and electra objects.
+
+## Function `lantern_node_anchor`
+
+The anchor of a node that starts at a genesis state: the state with room, and its block.
+
+### Signature
+
+```
+lantern_node_anchor(data, room, scratch, state, block) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `data` | input | ByteList: the SSZ bytes of a `BeaconState` of the fork |
+| `room` | input | [`StateRoom`](state.md#type-stateroom) |
+| `scratch` | scratch | `Scratch` |
+| `state` | output | `BeaconState`, its `size` set by the caller |
+| `block` | output | `BeaconBlock`, its `size` set by the caller |
+
+### Returns
+
+- `LANTERN_OK`: `state` and `block` hold the anchor.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` cannot hold the decoded state and the block's bytes, `state` is below lantern_beacon_state_copy_size of the decoded state and `room`, or `block` cannot hold the block.
+- `LANTERN_INVALID_ENCODING`: `data` is not the SSZ bytes of a `BeaconState` of the fork.
+- `LANTERN_INVALID_ANCHOR`: the `body_root` of the state's `latest_block_header` is not hash_tree_root of the default `BeaconBlockBody` of the fork, so the state is not at a block with the default body, such as genesis.
+
+### Function does
+
+- `state`: the decoded state, as lantern_beacon_state_copy gives it with `room`.
+- `block`: the `slot`, `proposer_index` and `parent_root` of the state's `latest_block_header`; its `state_root` when not zero, else hash_tree_root of the state, as process_slot fills it; and the default `BeaconBlockBody` of the fork (the SSZ default value: zero fixed fields and empty lists).
+- Restores the `size` field of `scratch`.
+
+### ABI
+
+- Export: `lantern_<fork>_node_anchor` of each fork object.
+- Argument order: `data`, `room`, `scratch`, `state`, `block`.
 
 ## Function `lantern_node_new_payload`
 
