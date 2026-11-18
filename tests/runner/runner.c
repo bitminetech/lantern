@@ -386,6 +386,13 @@ ABI uint64_t lantern_app_options(const void *args, void *options, void *fault);
 
 /* Network config: docs/reference/config.md. */
 ABI uint64_t lantern_config_parse(const void *text, void *config, void *line);
+/* The database index: docs/reference/db.md. */
+ABI uint64_t lantern_db_size(const void *room, void *size);
+ABI uint64_t lantern_db_init(const void *room, const void *slot, void *db);
+ABI uint64_t lantern_db_copy(const void *db, const void *room, void *out);
+ABI uint64_t lantern_db_scan(void *db, const void *segment, const void *sidecars, const void *bytes, void *valid);
+ABI uint64_t lantern_db_find_root(const void *db, const void *root, void *slot);
+ABI uint64_t lantern_db_prune(void *db, const void *slot);
 
 /* Engine API client: docs/reference/engine-api.md. */
 ABI uint64_t lantern_jwt_token(const void *secret, const void *iat, void *scratch, void *out);
@@ -5478,6 +5485,115 @@ static void run_config_parse(const char *file, case_file *f) {
     }
 }
 
+/* ---------------------------------------------------------------- Database */
+
+#define DB_FIRST_SLOT 8 /* include/lantern.inc: Db_first_slot, Db_end_slot, Db_slots, Db_blocks */
+#define DB_END_SLOT 16
+#define DB_SLOTS 24
+#define DB_BLOCKS 56
+#define DB_SLOT_BYTES 72
+
+/* A Db of a room [slots, roots], from lantern_db_size and lantern_db_init at a first slot; its size in *size. */
+static uint8_t *db_new(const uint64_t *room, uint64_t first, uint64_t *size, const char **why) {
+    *size = 0;
+    if (CALL(lantern_db_size, room, size) != 0) {
+        *why = "lantern_db_size status";
+        return NULL;
+    }
+    uint8_t *db = buffer(*size);
+    wr64(db, *size);
+    if (CALL(lantern_db_init, room, &first, db) != 0) *why = "lantern_db_init status";
+    else if (!guard_ok(db, *size)) *why = "lantern_db_init wrote out of bounds";
+    return db;
+}
+
+/* Whether a Db holds the case's first slot, end slot, blocks and entries, and finds each root as the case says. */
+static const char *db_check(const uint8_t *db, uint64_t first, uint64_t end, uint64_t blocks, tv entries, tv find) {
+    uint64_t elen;
+    const uint8_t *e = tv_bytes(entries, &elen);
+    if (rd64(db + DB_FIRST_SLOT) != first) return "first_slot is not the case's";
+    if (rd64(db + DB_END_SLOT) != end) return "end_slot is not the case's";
+    if (blocks != UINT64_MAX && rd64(db + DB_BLOCKS) != blocks) return "blocks is not the case's";
+    if (elen != (end - first) * DB_SLOT_BYTES || memcmp(db + rd64(db + DB_SLOTS), e, (size_t)elen)) return "the entries are not the case's";
+    tv p = find + 9;
+    for (uint64_t i = 0, n = rd64(find + 1); i < n; i++, p = tv_skip(p)) {
+        uint64_t rlen, slot = 0;
+        const uint8_t *root = tv_bytes(p + 9, &rlen);
+        if (CALL(lantern_db_find_root, db, root, &slot) != 0) return "lantern_db_find_root status";
+        if (slot != tv_u64(tv_skip(p + 9))) return "lantern_db_find_root: not the case's slot";
+    }
+    return NULL;
+}
+
+/*
+ * db-index: lantern's cases of the database index (tests/generator/db.py): lantern_db_scan of each
+ * segment in order, then the Db, lantern_db_find_root, lantern_db_copy to a larger room, and
+ * lantern_db_prune.
+ */
+static void run_db_index(const char *file, case_file *f) {
+    for (uint64_t c = 0; c < f->count; c++) {
+        const char *name, *why = NULL;
+        uint64_t len, size = 0;
+        tv parts = next_case(f, &name, &len);
+        tv room_tv = tv_get(parts, "room"), segs = tv_get(parts, "segments");
+        uint64_t room[2] = {tv_u64(room_tv + 9), tv_u64(tv_skip(room_tv + 9))}, first = tv_u64(tv_get(parts, "first_slot"));
+        uint8_t *db = db_new(room, first, &size, &why);
+        tv sg = segs + 9;
+        for (uint64_t i = 0, n = rd64(segs + 1); i < n && !why; i++, sg = tv_skip(sg)) {
+            uint64_t blen, number = tv_u64(tv_get(sg, "number")), sidecars = tv_u64(tv_get(sg, "sidecars")), valid = 77;
+            const uint8_t *bytes = tv_bytes(tv_get(sg, "bytes"), &blen);
+            uint8_t *list = buffer(24 + blen + 64); /* bytes after the segment's, that a read past it would take */
+            wr64(list, 24 + blen + 64);
+            wr64(list + 8, 24);
+            wr64(list + 16, blen);
+            if (blen) memcpy(list + 24, bytes, (size_t)blen);
+            memset(list + 24 + blen, 0x5C, 64);
+            uint64_t st = CALL(lantern_db_scan, db, &number, &sidecars, list, &valid);
+            static char msg[96];
+            if (!guard_ok(db, size)) why = "lantern_db_scan wrote out of bounds";
+            else if (st != tv_u64(tv_get(sg, "status"))) {
+                snprintf(msg, sizeof msg, "segment %llu: status %llu", (unsigned long long)i, (unsigned long long)st);
+                why = msg;
+            } else if (valid != tv_u64(tv_get(sg, "valid"))) {
+                snprintf(msg, sizeof msg, "segment %llu: valid %llu", (unsigned long long)i, (unsigned long long)valid);
+                why = msg;
+            }
+            free(list);
+        }
+        uint64_t end = tv_u64(tv_get(parts, "end_slot")), blocks = tv_u64(tv_get(parts, "blocks"));
+        tv entries = tv_get(parts, "entries"), find = tv_get(parts, "find"), copy_room = tv_get(parts, "copy_room");
+        if (!why) why = db_check(db, first, end, blocks, entries, find);
+        if (!why && copy_room) { /* a larger room: the same index */
+            uint64_t room2[2] = {tv_u64(copy_room + 9), tv_u64(tv_skip(copy_room + 9))}, size2 = 0;
+            CALL(lantern_db_size, room2, &size2);
+            uint8_t *db2 = buffer(size2);
+            wr64(db2, size2);
+            if (CALL(lantern_db_copy, db, room2, db2) != 0) why = "lantern_db_copy status";
+            else if (!guard_ok(db2, size2)) why = "lantern_db_copy wrote out of bounds";
+            else why = db_check(db2, first, end, blocks, entries, find);
+            if (!why) { /* and a room below the entries in use */
+                uint64_t room3[2] = {end - first ? end - first - 1 : 0, room2[1]}, size3 = 0;
+                CALL(lantern_db_size, room3, &size3);
+                uint8_t *db3 = buffer(size3 + 8);
+                wr64(db3, size3 + 8);
+                if (end > first && CALL(lantern_db_copy, db, room3, db3) != 1) why = "lantern_db_copy to too few slots: not LANTERN_BUFFER_TOO_SMALL";
+                free(db3);
+            }
+            free(db2);
+        }
+        tv prune = tv_get(parts, "prune");
+        if (!why && prune) {
+            uint64_t slot = tv_u64(prune);
+            if (CALL(lantern_db_prune, db, &slot) != 0) why = "lantern_db_prune status";
+            else if (!guard_ok(db, size)) why = "lantern_db_prune wrote out of bounds";
+            else why = db_check(db, tv_u64(tv_get(parts, "pruned_first")), end, UINT64_MAX, tv_get(parts, "pruned_entries"),
+                                tv_get(parts, "pruned_find"));
+        }
+        report(file, name, len, !why, why);
+        free(db);
+    }
+}
+
 /* ---------------------------------------------------------------- Application */
 
 #define INVALID_OPTION 61
@@ -5803,6 +5919,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "config-parse")) run_config_parse(file, &f);
         else if (!bls_off && !strcmp(kind, "app-options")) run_app_options(file, &f);
         else if (!bls_off && !strcmp(kind, "api-answer")) run_api_answer(file, &f);
+        else if (!bls_off && !strcmp(kind, "db-index")) run_db_index(file, &f);
 #if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
                               !strcmp(kind, "networking-compute_columns_for_custody_group")))

@@ -33,3 +33,4 @@
 .include "engine.s"
 .include "jsonrpc.s"
 .include "node.s"
+.include "db.s"

@@ -754,6 +754,35 @@
 .set LANTERN_INVALID_CONFIG, 60        /* lantern_config_parse: a faulty line */
 .set LANTERN_INVALID_OPTION, 61        /* lantern_app_options: a faulty argument */
 .set LANTERN_INVALID_COLUMN_SIDECAR, 62 /* lantern_node_column_sidecar: verify_data_column_sidecar, the inclusion proof or the KZG proofs fail */
+.set LANTERN_INVALID_RECORD, 63        /* lantern_db_add: a record breaks a rule of docs/reference/db.md */
+
+/* Db: the index of the stored history (docs/reference/db.md) */
+.set Db_first_slot, 8
+.set Db_end_slot, 16
+.set Db_slots, 24                      /* PartRef of DbSlot; count: the capacity */
+.set Db_roots, 40                      /* PartRef of u64; count: the capacity, a power of two */
+.set Db_blocks, 56
+.set DB_FIXED, 64
+.set DbRoom_slots, 0
+.set DbRoom_roots, 8
+.set DbSlot_root, 0
+.set DbSlot_block, 32                  /* 0, or the offset + 1 of the block record */
+.set DbSlot_sidecars, 40               /* 0, or the offset + 1 of the first sidecar record */
+.set DbSlot_sidecar_count, 48
+.set DbSlot_sidecar_end, 56
+.set DbSlot_sidecar_last, 64
+.set DbSlot__mem, 72
+.set DbRecord_length, 0
+.set DbRecord_kind, 8
+.set DbRecord_slot, 16
+.set DbRecord_index, 24
+.set DbRecord_root, 32
+.set DbRecord__mem, 64
+.set DB_BLOCK, 1
+.set DB_BLOB_SIDECAR, 2
+.set DB_COLUMN_SIDECAR, 3
+.set DB_SEGMENT_SLOTS, 8192
+.set DB_RECORD_MAX, 1 << 32
 
 /* ApiView (docs/reference/beacon-api.md): the values lantern_api_answer shows. A text field is a length, then its bytes. */
 .set ApiView_genesis_time, 0

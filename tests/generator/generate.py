@@ -30,6 +30,7 @@ import node  # lantern's node core cases over libp2p
 import config  # lantern's network config file cases
 import app  # lantern's command line cases
 import api  # lantern's Beacon API cases
+import db  # lantern's database index cases
 
 RELEASE = "https://github.com/ethereum/consensus-specs/releases/download/v1.7.0-beta.4/"
 ARCHIVES = {  # SHA-256 of each archive of consensus-specs v1.7.0-beta.4 (aa16bb4)
@@ -263,6 +264,11 @@ def main():
         if not runners or "api" in runners:
             file = f"{preset}-phase0-api-answer.bin"
             count, digest = write_file(out / file, list(api.cases()))
+            manifest.append((file, count, digest))
+            print(f"{file}: {count} cases")
+        if not runners or "db" in runners:
+            file = f"{preset}-phase0-db-index.bin"
+            count, digest = write_file(out / file, list(db.cases()))
             manifest.append((file, count, digest))
             print(f"{file}: {count} cases")
         count, digest = write_kzg_setup(out / f"{preset}-kzg_setup.bin", preset)
