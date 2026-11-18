@@ -65,6 +65,7 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | Windows tests | [llvm-mingw 20261104](https://github.com/mstorsjo/llvm-mingw/releases/tag/20261104) (LLVM 23.1.5) |
 | macOS tests | The host Xcode clang, because they need the macOS SDK |
 | Build image | [platform/linux/Dockerfile](platform/linux/Dockerfile) on `debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2` |
+| Binary image | [platform/docker/Dockerfile](platform/docker/Dockerfile): the static Linux binaries on an empty image, for amd64, arm64 and riscv64 |
 
 ## Tests
 
@@ -73,6 +74,10 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | Vector generator | [tests/generator/](tests/generator/) |
 | Test runner | [tests/runner/](tests/runner/README.md) |
 | Signatures-off runner, for cases with `bls_setting` 2 | [tests/runner/bls_off.c](tests/runner/bls_off.c) |
+| Shell test of each target | [tests/shell/shell.c](tests/shell/shell.c) |
+| Start checks of the binary on each target | [tests/app/start.sh](tests/app/start.sh), [tests/app/start.ps1](tests/app/start.ps1) |
+| Network directory for the binary | [tests/app/network.py](tests/app/network.py) |
+| Interop with lighthouse, prysm, teku, nimbus, lodestar and grandine | [tests/app/interop.sh](tests/app/interop.sh) |
 | CI, 7 targets | [.github/workflows/ci.yml](.github/workflows/ci.yml) |
 
 ## Target profile
