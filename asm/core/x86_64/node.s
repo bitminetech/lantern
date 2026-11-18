@@ -2470,7 +2470,12 @@ LOCAL_FUNCTION node_status_bytes
     lea     Store_finalized_checkpoint(%rbp), %rsi
     mov     $8, %edx
     call    lantern_copy
-    lea     44(%r12), %rdi                  # head_root, head_slot
+    cmpq    $0, Store_finalized_checkpoint(%rbp)    # the genesis finalized checkpoint: a zero root
+    jne     2f
+    lea     4(%r12), %rdi
+    mov     $32, %esi
+    call    lantern_zero
+2:  lea     44(%r12), %rdi                  # head_root, head_slot
     lea     Node_head_root(%rbx), %rsi
     mov     $32, %edx
     call    lantern_copy

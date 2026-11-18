@@ -2487,7 +2487,12 @@ LOCAL_FUNCTION node_status_bytes
     addi    a1, s2, Store_finalized_checkpoint
     li      a2, 8
     call    lantern_copy
-    addi    a0, s3, 44                      # head_root, head_slot
+    ld      t0, Store_finalized_checkpoint(s2)  # the genesis finalized checkpoint: a zero root
+    bnez    t0, 2f
+    addi    a0, s3, 4
+    li      a1, 32
+    call    lantern_zero
+2:  addi    a0, s3, 44                      # head_root, head_slot
     addi    a1, s1, Node_head_root
     li      a2, 32
     call    lantern_copy

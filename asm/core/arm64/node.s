@@ -2476,7 +2476,8 @@ END_FUNCTION node_sub
 
 /*
  * L0: the node's Status at x0 (92 bytes: v2; v1 is its first 84): compute_fork_digest of the
- * store's epoch, the store's finalized checkpoint, head_root and its slot, and earliest_slot.
+ * store's epoch, the store's finalized checkpoint (a zero root at GENESIS_EPOCH), head_root and its
+ * slot, and earliest_slot.
  * x21 out, x22 the slot. Locals: L an epoch, L+8 a ForkDigest, L+16 a slot.
  */
 LOCAL_FUNCTION node_status_bytes
@@ -2510,7 +2511,12 @@ LOCAL_FUNCTION node_status_bytes
     add     x1, x20, #Store_finalized_checkpoint
     mov     x2, #8
     bl      lantern_copy
-    add     x0, x21, #44                    /* head_root, head_slot */
+    ldr     x9, [x20, #Store_finalized_checkpoint]  /* the genesis finalized checkpoint: a zero root */
+    cbnz    x9, 2f
+    add     x0, x21, #4
+    mov     x1, #32
+    bl      lantern_zero
+2:  add     x0, x21, #44                    /* head_root, head_slot */
     add     x1, x19, #Node_head_root
     mov     x2, #32
     bl      lantern_copy
