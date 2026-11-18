@@ -41,7 +41,9 @@ EOF
 
 cleanup() {
     echo "== lantern"
-    $kurtosis service logs $enclave lantern 2>/dev/null | grep -v "record enr" | head -60 || true
+    $kurtosis service logs $enclave lantern > "$work/lantern.log" 2>&1 || true
+    grep -v "record enr" "$work/lantern.log" | grep -v "lantern: slot" | head -40 || true
+    grep "lantern: slot" "$work/lantern.log" | tail -10 || true
     [ "${KEEP:-0}" = 1 ] || $kurtosis enclave rm -f $enclave >/dev/null 2>&1 || true
     rm -rf "$work"
 }
@@ -59,7 +61,7 @@ peer=$(url "$peer_service")
 echo "lantern $lantern, $peer_service $peer"
 
 # The slot and root of a node's head, or nothing.
-head() {
+node_head() {
     curl -s --max-time 3 "$1/eth/v1/beacon/headers/head" | python3 -c '
 import json, sys
 try:
@@ -69,7 +71,7 @@ except Exception:
     pass'
 }
 follows() {
-    set -- $(head "$lantern") $(head "$peer")
+    set -- $(node_head "$lantern") $(node_head "$peer")
     [ $# -eq 4 ] || return 1
     echo "lantern slot $1 $2, $client slot $3"
     [ "$1" -ge 8 ] && [ $(($3 - $1)) -le 2 ] || return 1
