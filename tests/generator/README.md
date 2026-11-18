@@ -25,6 +25,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `node.py` | The cases of the node core over libp2p: an anchor, and the Status and MetaData the node answers; the blob sidecars of the spec's fork choice cases with blobs |
 | `config.py` | The cases of lantern_config_parse: the pinned spec configs, and hand cases with their values or fault lines |
 | `app.py` | The cases of lantern_app_options: command lines with their options or fault index |
+| `api.py` | The cases of lantern_api_answer: views, requests and the response bytes |
 
 ## Sources
 
@@ -48,6 +49,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `<preset>-<fork>-descriptors.bin` | Each SSZ container type of the fork, and each req/resp message type, with its reference `TypeDescriptor` |
 | `<preset>-config.bin` | One case: `configs/<preset>.yaml` |
 | `<preset>-phase0-config-parse.bin` | Lantern's cases of lantern_config_parse (config.md): `text`, the bytes of a config file, and `config`, the values it gives, or `line`, its first faulty line |
+| `<preset>-phase0-api-answer.bin` | Lantern's cases of lantern_api_answer (beacon-api.md): `view`, an ApiView, `request`, and `response`, the bytes it must give, or `more` |
 | `<preset>-phase0-app-options.bin` | Lantern's cases of lantern_app_options (app.md): `args`, a command line, and `options`, the fields it gives, or `fault`, the index of its first faulty argument |
 | `<preset>-kzg_setup.bin` | One case: the three point lists of `trusted_setup_4096.json` as bytes |
 | `manifest.txt` | Each file, its case count and its SHA-256 |

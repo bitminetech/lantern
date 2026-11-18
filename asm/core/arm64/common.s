@@ -24,6 +24,7 @@
 .include "memory.s"
 .include "config.s"
 .include "options.s"
+.include "api.s"
 .include "seen_find.s"
 .include "store.s"
 .include "seen.s"

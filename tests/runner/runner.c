@@ -373,6 +373,9 @@ ABI uint64_t lantern_reqresp_read_payload(const void *input, const void *start, 
                                           void *scratch, void *out, void *consumed);
 ABI uint64_t lantern_ssz_size_bounds(const void *type, void *out);
 
+/* Beacon API: docs/reference/beacon-api.md. */
+ABI uint64_t lantern_api_answer(const void *request, const void *view, void *out);
+
 /* Application: docs/reference/app.md. */
 ABI uint64_t lantern_app_options(const void *args, void *options, void *fault);
 
@@ -5245,6 +5248,50 @@ static void run_app_options(const char *file, case_file *f) {
     }
 }
 
+/* ---------------------------------------------------------------- Beacon API */
+
+#define HTTP_MORE_STATUS 53
+#define API_VIEW_SIZE 1424
+
+/*
+ * api-answer: lantern_api_answer of each case's request and view (tests/generator/api.py): the
+ * response bytes must be the case's, or the status LANTERN_HTTP_MORE; with one byte less of room
+ * than the response, LANTERN_BUFFER_TOO_SMALL.
+ */
+static void run_api_answer(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, vlen, rlen, wlen = 0, size;
+        tv parts = next_case(f, &name, &len);
+        const uint8_t *vb = tv_bytes(tv_get(parts, "view"), &vlen);
+        const uint8_t *req = tv_bytes(tv_get(parts, "request"), &rlen);
+        tv want = tv_get(parts, "response");
+        const uint8_t *w = want ? tv_bytes(want, &wlen) : NULL;
+        uint8_t *view = buffer(API_VIEW_SIZE), *l = list_of(req, rlen, 0, 8, &size);
+        memcpy(view, vb, API_VIEW_SIZE);
+        uint64_t osize = 24 + wlen + 64;
+        uint8_t *out = buffer(osize), *small = buffer(24 + (wlen ? wlen - 1 : 0));
+        wr64(out, osize);
+        wr64(small, 24 + (wlen ? wlen - 1 : 0));
+        uint64_t st = CALL(lantern_api_answer, l, view, out);
+        if (!guard_ok(out, osize) || !guard_ok(view, API_VIEW_SIZE)) why = "lantern_api_answer wrote out of bounds";
+        else if (!w) {
+            if (st != HTTP_MORE_STATUS) why = "status is not LANTERN_HTTP_MORE";
+        } else if (st != 0) why = "status is not LANTERN_OK";
+        else if (rd64(out + 8) != 24 || rd64(out + 16) != wlen || memcmp(out + 24, w, (size_t)wlen)) {
+            static char msg[512];
+            snprintf(msg, sizeof msg, "the response is not the case's: %.*s", (int)(rd64(out + 16) < 400 ? rd64(out + 16) : 400),
+                     (const char *)out + 24);
+            why = msg;
+        } else if (CALL(lantern_api_answer, l, view, small) != 1) why = "one byte less of room is not LANTERN_BUFFER_TOO_SMALL";
+        report(file, name, len, !why, why);
+        free(view);
+        free(l);
+        free(out);
+        free(small);
+    }
+}
+
 /* ---------------------------------------------------------------- Engine API client */
 
 #define INVALID_HTTP 52
@@ -5462,6 +5509,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "node-p2p")) run_node_p2p(file, &f);
         else if (!bls_off && !strcmp(kind, "config-parse")) run_config_parse(file, &f);
         else if (!bls_off && !strcmp(kind, "app-options")) run_app_options(file, &f);
+        else if (!bls_off && !strcmp(kind, "api-answer")) run_api_answer(file, &f);
 #if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
                               !strcmp(kind, "networking-compute_columns_for_custody_group")))

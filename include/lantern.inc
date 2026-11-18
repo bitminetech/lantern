@@ -741,6 +741,37 @@
 .set LANTERN_INVALID_CONFIG, 60        /* lantern_config_parse: a faulty line */
 .set LANTERN_INVALID_OPTION, 61        /* lantern_app_options: a faulty argument */
 
+/* ApiView (docs/reference/beacon-api.md): the values lantern_api_answer shows. A text field is a length, then its bytes. */
+.set ApiView_genesis_time, 0
+.set ApiView_genesis_validators_root, 8
+.set ApiView_genesis_fork_version, 40
+.set ApiView_head_slot, 48
+.set ApiView_head_root, 56
+.set ApiView_proposer_index, 88
+.set ApiView_parent_root, 96
+.set ApiView_state_root, 128
+.set ApiView_body_root, 160
+.set ApiView_signature, 192
+.set ApiView_previous_justified, 288
+.set ApiView_current_justified, 328
+.set ApiView_finalized, 368
+.set ApiView_current_slot, 408
+.set ApiView_is_syncing, 416
+.set ApiView_is_optimistic, 424
+.set ApiView_el_offline, 432
+.set ApiView_peers, 440
+.set ApiView_seq_number, 448
+.set ApiView_attnets, 456
+.set ApiView_syncnets, 464
+.set ApiView_custody_group_count, 472
+.set ApiView_fork, 480
+.set ApiView_peer_id, 488                /* 64 bytes of text */
+.set ApiView_enr, 560                    /* 512 */
+.set ApiView_p2p_address, 1080           /* 128 */
+.set ApiView_discovery_address, 1216     /* 128 */
+.set ApiView_version, 1352               /* 64 */
+.set ApiView__size, 1424
+
 /* ArgList, Arg and AppOptions (docs/reference/app.md): a text field is an Arg (start, length) of the ArgList's bytes. */
 .set ArgList_args, 8
 .set ArgList_bytes, 24
