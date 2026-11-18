@@ -11,7 +11,8 @@
 # tests/runner/run.ps1 does the same on Windows.
 #
 # For each runner it prints the file lines in name order, the largest stack of
-# each function over its processes, and the totals. The status is 0 only when
+# each function over its processes, a FUNCTION line for each function (PASS when
+# every process that called it passed, else FAIL), and the totals. The status is 0 only when
 # every case passes and every process ends with its totals.
 set -eu
 runners=$(cd "$1" && pwd)
@@ -50,24 +51,31 @@ for runner in $(for preset in mainnet minimal; do for fork in $forks; do
     [ -e "$1" ] || continue
     echo "== $runner${QEMU:+ (under $QEMU)}"
     awk '
+        FNR == 1 { ncalled = 0; ok = 0 }
         /^STACK / {
             if (!($2 in peak)) order[++n] = $2
             if (!($2 in peak) || $3 + 0 > peak[$2]) peak[$2] = $3 + 0
             if (index($0, "ABI FAULT")) fault[$2] = 1
+            called[++ncalled] = $2
             next
         }
-        /^(PASS|FAIL): [0-9]+ passed, [0-9]+ failed$/ { passed += $2; failed += $4; totals[FILENAME] = 1; next }
+        /^(PASS|FAIL): [0-9]+ passed, [0-9]+ failed$/ {
+            passed += $2; failed += $4; totals[FILENAME] = 1; ok = ($1 == "PASS:" && $4 == 0); next
+        }
         /^EXIT / {
             if (!(FILENAME in totals)) {
                 name = FILENAME; sub(/.*\//, "", name); sub(/\.log$/, "", name)
                 print "FAIL " name ": the process ended with status " $2 " and no totals"
                 failed++
             }
+            if ($2 != 0) ok = 0
+            for (i = 1; i <= ncalled; i++) if (!ok) bad[called[i]] = 1    # a function passes only in processes that pass
             next
         }
         { print }
         END {
             for (i = 1; i <= n; i++) printf "STACK %s %d bytes%s\n", order[i], peak[order[i]], fault[order[i]] ? " ABI FAULT" : ""
+            for (i = 1; i <= n; i++) printf "FUNCTION %s %s\n", order[i], bad[order[i]] ? "FAIL" : "PASS"
             printf "%s: %d passed, %d failed\n", failed ? "FAIL" : "PASS", passed, failed
             exit failed ? 1 : 0
         }

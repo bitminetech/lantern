@@ -189,3 +189,33 @@ jobs:
         with:
           name: results-macos-${{ matrix.isa }}-${{ matrix.fork }}
           path: results-macos-${{ matrix.isa }}-${{ matrix.fork }}.txt
+
+  # Write the tick tables into docs/reference/ from the results of every target and fork
+  # (ARCHITECTURE.md section 10). On a push to main, commit them when they changed. When
+  # main has moved on, the push is skipped: the newer run writes the tables then.
+  results:
+    needs: [linux, windows, macos]
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        continue-on-error: true
+        with: { pattern: results-*, path: results, merge-multiple: true }
+      - name: Write the tick tables
+        run: python3 -I tests/runner/tick_tables.py results
+      - name: Commit the tick tables
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git add docs/reference
+          if git diff --cached --quiet; then echo "The tick tables did not change."; exit 0; fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "Update the tick tables"
+          if ! git push origin HEAD:main; then
+            [ "$(git ls-remote origin refs/heads/main | cut -f1)" != "$GITHUB_SHA" ] || exit 1
+            echo "main has moved on, so this run does not update the tick tables."
+          fi

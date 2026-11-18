@@ -10,6 +10,7 @@ build/linux-x86_64/runner-minimal-fulu ~/.cache/lantern/vectors minimal-fulu-ope
 - A file of a kind the runner has no handler for prints a `SKIP` line.
 - The status is 0 only when every case of every file passes.
 - `tests/runner/run.sh RUNNER_DIR VECTOR_DIR [FILE ...]` runs the runners of one target, one process for each runner and file, as many at once as the machine has cores. Each file goes to the runners of its preset and fork. `QEMU` sets the command that runs them, `JOBS` the processes at once. `run.ps1` does the same on Windows.
+- For each runner, `run.sh` and `run.ps1` print a `FUNCTION <symbol> PASS` line for each function its processes called, or `FAIL` when a process that called it failed. tests/runner/tick_tables.py turns these lines into the tick tables of ARCHITECTURE.md section 10.
 - `tests/runner/docker.sh` builds every target in Docker and runs the three Linux ISAs; `tests/runner/macos.sh` runs the macOS runners. Both call `run.sh`.
 
 ## Files
@@ -20,6 +21,7 @@ build/linux-x86_64/runner-minimal-fulu ~/.cache/lantern/vectors minimal-fulu-ope
 | `bls_off.c` | Stand-ins for the three BLS verify functions of asm-crypto that return valid, for `runner-<preset>-bls-off` |
 | `abi_<ISA>.s` | `abi_call`: calls a lantern function and checks that it keeps the registers and stack of the core ABI |
 | `run.sh`, `run.ps1` | Run the runners of one target on every core, and merge their results |
+| `tick_tables.py` | Writes the tick table of each documented function into its document from the results of every target and fork (CI) |
 | `docker.sh`, `macos.sh` | Build and run scripts |
 
 ## Runners

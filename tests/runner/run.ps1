@@ -49,32 +49,43 @@ try {
         "== $runner"
         $peak = [ordered]@{}
         $fault = @{}
+        $bad = @{}
         $passed = 0
         $failed = 0
         foreach ($log in $runnerLogs) {
             $totals = $false
+            $ok = $false
+            $called = @()
             foreach ($line in Get-Content $log.FullName) {
                 if ($line -match '^STACK (\S+) (\d+) bytes') {
                     $name = $Matches[1]
                     $bytes = [int64]$Matches[2]
                     if (-not $peak.Contains($name) -or $bytes -gt $peak[$name]) { $peak[$name] = $bytes }
                     if ($line.Contains('ABI FAULT')) { $fault[$name] = $true }
+                    $called += $name
                 } elseif ($line -match '^(PASS|FAIL): (\d+) passed, (\d+) failed$') {
                     $passed += [int]$Matches[2]
                     $failed += [int]$Matches[3]
                     $totals = $true
+                    $ok = $Matches[1] -eq 'PASS' -and [int]$Matches[3] -eq 0
                 } elseif ($line -match '^EXIT (-?\d+)$') {
                     if (-not $totals) {
                         "FAIL $($log.BaseName): the process ended with status $($Matches[1]) and no totals"
                         $failed++
                     }
+                    if ([int]$Matches[1] -ne 0) { $ok = $false }
                 } else {
                     $line
                 }
             }
+            # Each function this process called passes only when the process passed.
+            foreach ($name in $called) { if (-not $ok) { $bad[$name] = $true } }
         }
         foreach ($name in $peak.Keys) {
             "STACK $name $($peak[$name]) bytes$(if ($fault[$name]) { ' ABI FAULT' })"
+        }
+        foreach ($name in $peak.Keys) {
+            "FUNCTION $name $(if ($bad[$name]) { 'FAIL' } else { 'PASS' })"
         }
         "$(if ($failed) { 'FAIL' } else { 'PASS' }): $passed passed, $failed failed"
         if ($failed) { $status = 1 }
