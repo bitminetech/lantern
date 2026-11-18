@@ -39,6 +39,12 @@ app_options:
     .quad 8, AppOptions_data_dir, APP_OPTION_TEXT
     .ascii "data-dir"
     .space 24 - 8
+    .quad 16, AppOptions_checkpoint_state, APP_OPTION_TEXT
+    .ascii "checkpoint-state"
+    .space 24 - 16
+    .quad 16, AppOptions_checkpoint_block, APP_OPTION_TEXT
+    .ascii "checkpoint-block"
+    .space 24 - 16
 app_options_end:
 app_http:
     .ascii "http://"

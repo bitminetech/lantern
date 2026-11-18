@@ -270,6 +270,122 @@ LOCAL_FUNCTION app_read
     UNFRAME 0
 END_FUNCTION app_read
 
+/*
+ * L1: APP_PATH holds the path of the Arg at x0, or a count past its room when the path does not
+ * fit, so the shell gives its error.
+ */
+LOCAL_FUNCTION app_arg_path
+    FRAME 0
+    ldp     x9, x10, [x0]
+    ADDQ    x11, x19, APP_PATH
+    mov     x12, #APP_PATH_MAX
+    cmp     x10, x12
+    b.hi    1f
+    str     x10, [x11, #16]
+    add     x0, x11, #24
+    ldr     x12, [x19, #APP_ARGS]
+    add     x1, x12, x9
+    mov     x2, x10
+    bl      lantern_copy
+    UNFRAME 0
+1:  mov     x9, #(APP_PATH_MAX + 1)
+    str     x9, [x11, #16]
+    UNFRAME 0
+END_FUNCTION app_arg_path
+
+/*
+ * L2: the anchor of --checkpoint-state and --checkpoint-block in APP_FILE, in the form of
+ * anchor.ssz: one ByteList of two, the state's bytes, then the block's message from byte 100 of
+ * its SignedBeaconBlock: x0 = 0, or 2 after a line on the standard error. x20 the block file's
+ * ByteList, x22 its bytes, x23 the state file's ByteList, x24 its bytes, x25 the buffer's size,
+ * x26 the buffer. Locals: L the block file's address and mapped size.
+ */
+LOCAL_FUNCTION app_checkpoint
+    ENTER 16
+    add     x0, x19, #(APP_OPTIONS + AppOptions_checkpoint_block)
+    bl      app_arg_path
+    bl      app_read
+    cbnz    x0, 99f
+    ldr     x20, [x19, #(APP_FILE + 8)]
+    ldr     x22, [x19, #(APP_FILE + 16)]
+    cmp     x22, #(100 + 84)                /* the offset and signature, then the message's fixed part */
+    b.lo    90f
+    ldr     x9, [x19, #(APP_FILE + 24)]
+    stp     x20, x9, [sp, #L]
+    str     xzr, [x19, #(APP_FILE + 8)]
+    add     x0, x19, #(APP_OPTIONS + AppOptions_checkpoint_state)
+    bl      app_arg_path
+    bl      app_read
+    cbnz    x0, 98f
+    ldr     x23, [x19, #(APP_FILE + 8)]
+    ldr     x24, [x19, #(APP_FILE + 16)]
+    add     x9, x24, #7                     /* three ByteList headers, the state to a multiple of 8, the message */
+    and     x9, x9, #~7
+    add     x9, x9, #72
+    sub     x10, x22, #100
+    add     x25, x9, x10
+    mov     x0, x25
+    bl      app_map
+    cbz     x0, 97f
+    mov     x26, x0
+    mov     x9, #24
+    sub     x10, x25, #24
+    stp     x25, x9, [x26]                  /* the ByteList of both */
+    str     x10, [x26, #16]
+    add     x10, x24, #24                   /* the state's */
+    stp     x10, x9, [x26, #24]
+    str     x24, [x26, #40]
+    add     x0, x26, #48
+    add     x1, x23, #24
+    mov     x2, x24
+    bl      lantern_copy
+    add     x11, x24, #7                    /* the message's, at the first multiple of 8 after the state */
+    and     x11, x11, #~7
+    add     x11, x11, #48
+    add     x11, x26, x11
+    sub     x12, x22, #100
+    add     x10, x12, #24
+    mov     x9, #24
+    stp     x10, x9, [x11]
+    str     x12, [x11, #16]
+    add     x0, x11, #24
+    add     x1, x20, #(24 + 100)
+    mov     x2, x12
+    bl      lantern_copy
+    bl      app_file_free                   /* the files go; the buffer takes their place */
+    add     x0, sp, #L
+    add     x1, sp, #(L + 8)
+    CALL_GLOBAL lantern_shell_unmap
+    str     xzr, [x19, #APP_FILE]
+    str     x26, [x19, #(APP_FILE + 8)]
+    sub     x9, x25, #24
+    str     x9, [x19, #(APP_FILE + 16)]
+    str     x25, [x19, #(APP_FILE + 24)]
+    mov     x0, #0
+    LEAVE 16
+90: bl      app_file_free                   /* <path>: too short */
+    bl      app_line_start
+    bl      app_line_path
+    ADDRESS x0, app_m_short
+    mov     x1, #app_m_short_len
+    bl      app_line_text
+    mov     x0, #2
+    bl      app_line_end
+    b       99f
+97: bl      app_file_free                   /* no memory */
+    bl      app_line_start
+    ADDRESS x0, app_m_memory
+    mov     x1, #app_m_memory_len
+    bl      app_line_text
+    mov     x0, #2
+    bl      app_line_end
+98: add     x0, sp, #L                      /* the block file goes */
+    add     x1, sp, #(L + 8)
+    CALL_GLOBAL lantern_shell_unmap
+99: mov     x0, #2
+    LEAVE 16
+END_FUNCTION app_checkpoint
+
 /* L1: the memory of APP_FILE goes back. */
 LOCAL_FUNCTION app_file_free
     FRAME 16
@@ -347,7 +463,13 @@ LOCAL_FUNCTION app_start
     cbnz    x9, 11f
     mov     x25, #1
     b       12f
-11: ADDRESS x0, app_genesis_name            /* else genesis.ssz: the fork of its slot */
+11: ldr     x9, [x19, #(APP_OPTIONS + AppOptions_checkpoint_state + 8)]  /* else the checkpoint files */
+    cbz     x9, 111f
+    bl      app_checkpoint
+    cbnz    x0, 99f
+    mov     x25, #2
+    b       12f
+111: ADDRESS x0, app_genesis_name           /* else genesis.ssz: the fork of its slot */
     mov     x1, #app_genesis_name_len
     bl      app_path
     bl      app_read
@@ -364,7 +486,8 @@ LOCAL_FUNCTION app_start
     bl      app_line_text
     b       98f
 2:  mov     x9, #24                         /* BeaconState.slot, after the ByteList header of anchor.ssz's state */
-    mul     x9, x25, x9
+    cmp     x25, #0
+    csel    x9, x9, xzr, ne
     add     x9, x20, x9
     ldr     x0, [x9, #(24 + 40)]
     add     x1, x19, #APP_CONFIG
@@ -429,6 +552,11 @@ LOCAL_FUNCTION app_start
     cbz     x25, 961f
     ADDRESS x0, app_anchor_name
     mov     x1, #app_anchor_name_len
+    cmp     x25, #1
+    b.eq    961f
+    ldp     x9, x1, [x19, #(APP_OPTIONS + AppOptions_checkpoint_state)]
+    ldr     x10, [x19, #APP_ARGS]
+    add     x0, x10, x9
 961:
     bl      app_fail_status
     b       99f
@@ -485,6 +613,7 @@ LOCAL_FUNCTION app_start
     add     x10, x9, x10
     ldr     x11, [x10, #BlockNode_slot]
     str     x11, [x19, #(APP_ANCHOR + 32)]
+    str     x11, [x19, #(APP_ANCHOR + NodeAnchor_history_slot)]  /* anchor.ssz's history lowers it */
     add     x0, x19, #(APP_ANCHOR + 40)
     ldr     x1, [x19, #APP_STATE]
     add     x1, x1, #NODE_STATE_GVR
@@ -504,7 +633,8 @@ LOCAL_FUNCTION app_start
     ldr     x9, [x19, #(APP_OPTIONS + AppOptions_target_peers)]
     str     x9, [x19, #(APP_NODE_ROOM + NodeRoom_peers)]
     bl      app_db_start                    /* the history's files */
-    cbz     x25, 13f
+    cmp     x25, #1
+    b.ne    13f
     bl      app_db_history                  /* from anchor.ssz: the segments there */
 13:
     add     x0, x19, #APP_NODE_ROOM
@@ -522,8 +652,19 @@ LOCAL_FUNCTION app_start
     ldr     x4, [x19, #APP_NODE]
     CALL_GLOBAL lantern_node_init
     cbnz    x0, 94f
-    cbz     x25, 14f                        /* from anchor.ssz: the history's segments to the node */
-    bl      app_db_scan_all
+    cbz     x25, 14f
+    cmp     x25, #1
+    b.eq    141f
+    bl      app_line_start                  /* checkpoint at slot <n> */
+    ADDRESS x0, app_m_checkpoint
+    mov     x1, #app_m_checkpoint_len
+    bl      app_line_text
+    ldr     x0, [x19, #(APP_ANCHOR + 32)]
+    bl      app_line_u64
+    mov     x0, #1
+    bl      app_line_end
+    b       14f
+141: bl     app_db_scan_all                 /* from anchor.ssz: the history's segments to the node */
     cbnz    x0, 99f
     bl      app_line_start                  /* restart at slot <n> */
     ADDRESS x0, app_m_restart
@@ -3423,7 +3564,7 @@ LOCAL_FUNCTION app_view_fill
     add     x0, x9, x0
     mov     x1, x21
     add     x2, x19, #APP_HEADER
-    bl      lantern_db_find_root
+    CALL_GLOBAL lantern_db_find_root
     ldr     x12, [x19, #APP_HEADER]
     ldr     x9, [x19, #APP_NODE]
     ldr     x13, [x9, #Node_db]

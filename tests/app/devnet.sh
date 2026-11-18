@@ -12,7 +12,8 @@
 # log level (default info). LANTERN_MAX_CPU: lantern's CPU limit in millicores (default no limit).
 # LANTERN_DELAY: seconds before lantern starts (default 0). RESTART=1: 6-second slots, lantern with
 # --data-dir /data; after it follows, once its log shows finalized epoch 2 or later, lantern stops and
-# starts again, and must log "restart at slot" and follow again.
+# starts again, and must log "restart at slot" and follow again. CHECKPOINT=1: 6-second slots, lantern
+# starts from the client's finalized block and its post-state, and must log "checkpoint at slot".
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 client=$1
@@ -43,9 +44,11 @@ lantern_image: $image
 lantern_max_cpu: ${LANTERN_MAX_CPU:-0}
 lantern_delay: ${LANTERN_DELAY:-0}
 EOF
-if [ "${RESTART:-0}" = 1 ]; then
-    printf 'network_params:\n  seconds_per_slot: 6\nlantern_data_dir: /data\n' >> "$work/args.yaml"
+if [ "${RESTART:-0}" = 1 ] || [ "${CHECKPOINT:-0}" = 1 ]; then
+    printf 'network_params:\n  seconds_per_slot: 6\n' >> "$work/args.yaml"
 fi
+if [ "${RESTART:-0}" = 1 ]; then printf 'lantern_data_dir: /data\n' >> "$work/args.yaml"; fi
+if [ "${CHECKPOINT:-0}" = 1 ]; then printf 'lantern_checkpoint: true\n' >> "$work/args.yaml"; fi
 
 cleanup() {
     echo "== lantern"
@@ -95,6 +98,13 @@ while [ $waited -lt "$secs" ]; do
     fi
 done
 if [ $status -eq 0 ]; then echo "PASS lantern follows the chain of $client"; else echo "FAIL lantern does not follow the chain of $client"; fi
+if [ $status -eq 0 ] && [ "${CHECKPOINT:-0}" = 1 ]; then
+    if $kurtosis service logs -a $enclave lantern 2>/dev/null | grep "checkpoint at slot"; then
+        echo "PASS lantern starts from the checkpoint"
+    else
+        echo "FAIL lantern does not start from the checkpoint"; status=1
+    fi
+fi
 [ $status -eq 0 ] && [ "${RESTART:-0}" = 1 ] || exit $status
 
 # RESTART=1: once lantern has written its history at a finalized epoch, it stops and starts again.

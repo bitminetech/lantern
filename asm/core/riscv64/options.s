@@ -201,6 +201,11 @@ FUNCTION lantern_app_options
 50: mv      s10, s4                         # --network-dir is required
     ld      t0, (AppOptions_network_dir + 8)(s2)
     beqz    t0, 90f
+    ld      t0, (AppOptions_checkpoint_state + 8)(s2)   # --checkpoint-state and --checkpoint-block go together
+    ld      t1, (AppOptions_checkpoint_block + 8)(s2)
+    seqz    t0, t0
+    seqz    t1, t1
+    bne     t0, t1, 90f
     sd      zero, 0(s3)
     li      a0, LANTERN_OK
     LEAVE 32

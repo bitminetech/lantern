@@ -29,6 +29,8 @@
 - tests/app/network.py: a network directory (config.yaml, genesis.ssz) to run the binary with, alone or beside other clients.
 - tests/app/trusted_setup.py: writes include/trusted_setup_4096.bin from the pinned spec, or with `--check` exits 1 when the file differs; the interop job of CI runs the check.
 - tests/app/devnet.sh: a devnet of ethpandaops/ethereum-package (tests/kurtosis/, at a pinned commit) of geth and one consensus client with all the validators, and the binary's image (platform/docker/Dockerfile) beside it with every consensus client's record as a boot node; lantern's head must reach slot 8, be a block of the client's chain and be within 2 slots of the client's head, at two checks a slot apart.
+  - RESTART=1, beside lighthouse, CI's restart job: lantern with `--data-dir`; once its log shows finalized epoch 2 or later, it stops and starts again, must log `restart at slot`, and must follow again.
+  - CHECKPOINT=1, beside lighthouse, CI's checkpoint job: lantern starts from lighthouse's finalized block and its post-state, as SSZ from its Beacon API once its finalized epoch is 1 or more, must log `checkpoint at slot`, and must follow.
 - tests/app/interop.sh: the ARM64 binary beside another consensus client (lighthouse, prysm, teku, nimbus, lodestar or grandine, each image of tests/app/clients.sh, pinned by digest) on one Docker network, from the genesis of tests/app/network.py; each Beacon API must show the other node as a connected peer, and again two slots later. CI runs it for each client on an ARM64 runner.
 
 ## Function `lantern_app_options`
@@ -52,7 +54,7 @@ lantern_app_options(args, options, fault) -> status
 ### Returns
 
 - `LANTERN_OK`: `options` holds the options.
-- `LANTERN_INVALID_OPTION`: an argument is not an option below, an option has no value or an empty one, a number is not decimal digits of a value in its range, an address is not 4 decimal numbers of 0 to 255 with dots between them, or `--network-dir` is missing.
+- `LANTERN_INVALID_OPTION`: an argument is not an option below, an option has no value or an empty one, a number is not decimal digits of a value in its range, an address is not 4 decimal numbers of 0 to 255 with dots between them, `--network-dir` is missing, or one of `--checkpoint-state` and `--checkpoint-block` is given without the other; a missing option's fault is the count of arguments.
 
 ### Function does
 
@@ -69,6 +71,8 @@ lantern_app_options(args, options, fault) -> status
 | `--http-port` | `http_port` | 1 to 65535: the Beacon API | 5052 |
 | `--target-peers` | `target_peers` | 1 to 1024 | 64 |
 | `--data-dir` | `data_dir` | a directory for the node's history: the segment files of [db.md](db.md) | none: the node keeps its history in memory |
+| `--checkpoint-state` | `checkpoint_state` | a file of the SSZ bytes of a finalized `BeaconState`: the post-state of the checkpoint block | none: the node starts from `genesis.ssz` |
+| `--checkpoint-block` | `checkpoint_block` | a file of the SSZ bytes of that block's `SignedBeaconBlock` | none |
 
 - Keeps the last value of an option given twice.
 - Drops `http://` at the start of `--execution-endpoint`.
@@ -117,7 +121,8 @@ lantern_app_main(args) -> status
 - A SERVE work whose data is a `NODE_DB_REF`: lantern_node_run gets the record's own ByteList, at its byte 56, in its segment file mapped with lantern_shell_map_file. Up to `APP_DB_MAP_COUNT` (4) files stay mapped, the oldest map going first; a record past a map's end maps its file again. A record not in its file, or whose ByteList header is not of its bytes, is a buffer the work does not name.
 - The Beacon API's head header: lantern_node_block_header of the head block's bytes; for a head whose bytes went to the `Db`, of its record there (lantern_db_find_root of its root, then its slot's block record); else the anchor's header.
 - `NODE_ACT_DB_STATE`, the first of a run and then each one `DB_SEGMENT_SLOTS` slots or more after the last written: the open segment files are synced; `<dir>/anchor.tmp` gets two ByteLists, the second at the first multiple of 8 after the first: lantern_node_state_bytes of the state, then the block's message, its bytes from 100 of the `SignedBeaconBlock`; it is synced, renamed over `<dir>/anchor.ssz`, and the directory is synced. A failure gives a `cannot write` line.
-- A start with `--data-dir` and a `<dir>/anchor.ssz` reads it in place of `genesis.ssz`, with lantern_node_anchor_block of the fork of its state's slot. The first block segment file there, from 0 to the anchor's segment, gives the anchor's `history_slot`; the `Db` has room from it to the last block segment file there from the anchor's on, and a segment more, with a power of two of roots above twice those slots. After lantern_node_init each segment file goes to lantern_node_db_scan, the blocks' then the sidecars', and a file with bytes after its last whole record is cut there. Then a line `restart at slot <n>` on the standard output. The node syncs the blocks after the anchor from its peers; those the `Db` holds already get no second record.
+- A start with `--checkpoint-state` and `--checkpoint-block`, and no `<dir>/anchor.ssz`, takes them in place of `genesis.ssz`: the two files go into one buffer in the form of `anchor.ssz` (the state's bytes, then the block's message from byte 100 of its `SignedBeaconBlock`) for lantern_node_anchor_block of the fork of the state's slot; a block file below 184 bytes gives a line `<path>: too short`. The anchor's `history_slot` is its slot. Then a line `checkpoint at slot <n>` on the standard output.
+- A start with `--data-dir` and a `<dir>/anchor.ssz` reads it in place of `genesis.ssz` and of the checkpoint files, with lantern_node_anchor_block of the fork of its state's slot. The first block segment file there, from 0 to the anchor's segment, gives the anchor's `history_slot`; the `Db` has room from it to the last block segment file there from the anchor's on, and a segment more, with a power of two of roots above twice those slots. After lantern_node_init each segment file goes to lantern_node_db_scan, the blocks' then the sidecars', and a file with bytes after its last whole record is cut there. Then a line `restart at slot <n>` on the standard output. The node syncs the blocks after the anchor from its peers; those the `Db` holds already get no second record.
 - Writes the size of its scratch buffer into the buffer's first 8 bytes before each call that takes it (ARCHITECTURE.md section 6: a callee may leave scratch invalid, and the caller reinitialises it before reuse).
 
 ### ABI
@@ -172,7 +177,9 @@ The options of a run. A text field is an [`Arg`](#type-arg) of the bytes of the 
 | 80 | `http_port` | u64 | The Beacon API port |
 | 88 | `target_peers` | u64 | The peers to keep |
 | 96 | `data_dir` | `Arg` | The directory of the node's history |
-| 112 | | | Size |
+| 112 | `checkpoint_state` | `Arg` | The path of the checkpoint state file |
+| 128 | `checkpoint_block` | `Arg` | The path of the checkpoint block file |
+| 144 | | | Size |
 
 ## Results
 

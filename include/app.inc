@@ -136,6 +136,9 @@ app_m_write:
 app_m_restart:
     .ascii "restart at slot "
 .set app_m_restart_len, 16
+app_m_checkpoint:
+    .ascii "checkpoint at slot "
+.set app_m_checkpoint_len, 19
 app_anchor_name:
     .ascii "anchor.ssz"
 .set app_anchor_name_len, 10

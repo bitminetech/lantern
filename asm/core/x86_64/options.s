@@ -221,6 +221,12 @@ FUNCTION lantern_app_options
 50: mov     %r13, S10(%rsp)                 # --network-dir is required
     cmpq    $0, (AppOptions_network_dir + 8)(%rbp)
     je      90f
+    cmpq    $0, (AppOptions_checkpoint_state + 8)(%rbp) # --checkpoint-state and --checkpoint-block go together
+    sete    %al
+    cmpq    $0, (AppOptions_checkpoint_block + 8)(%rbp)
+    sete    %cl
+    cmp     %al, %cl
+    jne     90f
     movq    $0, (%r12)
     xor     %eax, %eax
     LEAVE 32

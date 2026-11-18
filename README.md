@@ -80,6 +80,7 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | Network directory for the binary | [tests/app/network.py](tests/app/network.py) |
 | Interop with lighthouse, prysm, teku, nimbus, lodestar and grandine | [tests/app/interop.sh](tests/app/interop.sh), images in [tests/app/clients.sh](tests/app/clients.sh) |
 | Devnet of geth and each client, lantern following it | [tests/app/devnet.sh](tests/app/devnet.sh), [tests/kurtosis/](tests/kurtosis/) |
+| Devnet: lantern restarts from its history, and starts from a checkpoint | [tests/app/devnet.sh](tests/app/devnet.sh) (RESTART=1, CHECKPOINT=1) |
 | CI, 7 targets | [.github/workflows/ci.yml](.github/workflows/ci.yml) |
 
 ## Target profile

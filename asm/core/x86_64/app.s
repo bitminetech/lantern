@@ -290,6 +290,126 @@ LOCAL_FUNCTION app_read
     UNFRAME 0
 END_FUNCTION app_read
 
+/*
+ * L1: APP_PATH holds the path of the Arg at rdi, or a count past its room when the path does not
+ * fit, so the shell gives its error.
+ */
+LOCAL_FUNCTION app_arg_path
+    FRAME 0
+    mov     (%rdi), %rsi
+    mov     8(%rdi), %rdx
+    cmp     $APP_PATH_MAX, %rdx
+    ja      1f
+    mov     %rdx, (APP_PATH + 16)(%rbx)
+    lea     (APP_PATH + 24)(%rbx), %rdi
+    add     APP_ARGS(%rbx), %rsi
+    call    lantern_copy
+    UNFRAME 0
+1:  movq    $(APP_PATH_MAX + 1), (APP_PATH + 16)(%rbx)
+    UNFRAME 0
+END_FUNCTION app_arg_path
+
+/*
+ * L2: the anchor of --checkpoint-state and --checkpoint-block in APP_FILE, in the form of
+ * anchor.ssz: one ByteList of two, the state's bytes, then the block's message from byte 100 of
+ * its SignedBeaconBlock: rax = 0, or 2 after a line on the standard error. rbp the block file's
+ * ByteList, r13 its bytes, r14 the state file's ByteList, r15 its bytes, S7 the buffer's size, S8
+ * the buffer. Locals: L the block file's address and mapped size.
+ */
+LOCAL_FUNCTION app_checkpoint
+    ENTER 16
+    lea     (APP_OPTIONS + AppOptions_checkpoint_block)(%rbx), %rdi
+    call    app_arg_path
+    call    app_read
+    test    %rax, %rax
+    jnz     99f
+    mov     (APP_FILE + 8)(%rbx), %rbp
+    mov     (APP_FILE + 16)(%rbx), %r13
+    cmp     $(100 + 84), %r13               # the offset and signature, then the message's fixed part
+    jb      90f
+    mov     %rbp, L(%rsp)
+    mov     (APP_FILE + 24)(%rbx), %rax
+    mov     %rax, (L + 8)(%rsp)
+    movq    $0, (APP_FILE + 8)(%rbx)
+    lea     (APP_OPTIONS + AppOptions_checkpoint_state)(%rbx), %rdi
+    call    app_arg_path
+    call    app_read
+    test    %rax, %rax
+    jnz     98f
+    mov     (APP_FILE + 8)(%rbx), %r14
+    mov     (APP_FILE + 16)(%rbx), %r15
+    lea     7(%r15), %rax                   # three ByteList headers, the state to a multiple of 8, the message
+    and     $-8, %rax
+    lea     72(%rax,%r13), %rax
+    sub     $100, %rax
+    mov     %rax, S7(%rsp)
+    mov     %rax, %rdi
+    call    app_map
+    test    %rax, %rax
+    jz      97f
+    mov     %rax, S8(%rsp)
+    mov     S7(%rsp), %rcx                  # the ByteList of both
+    mov     %rcx, (%rax)
+    movq    $24, 8(%rax)
+    sub     $24, %rcx
+    mov     %rcx, 16(%rax)
+    lea     24(%r15), %rcx                  # the state's
+    mov     %rcx, 24(%rax)
+    movq    $24, 32(%rax)
+    mov     %r15, 40(%rax)
+    lea     48(%rax), %rdi
+    lea     24(%r14), %rsi
+    mov     %r15, %rdx
+    call    lantern_copy
+    lea     7(%r15), %rax                   # the message's, at the first multiple of 8 after the state
+    and     $-8, %rax
+    add     $48, %rax
+    add     S8(%rsp), %rax
+    lea     -100(%r13), %rcx
+    lea     24(%rcx), %rdx
+    mov     %rdx, (%rax)
+    movq    $24, 8(%rax)
+    mov     %rcx, 16(%rax)
+    lea     24(%rax), %rdi
+    lea     (24 + 100)(%rbp), %rsi
+    mov     %rcx, %rdx
+    call    lantern_copy
+    call    app_file_free                   # the files go; the buffer takes their place
+    lea     L(%rsp), %rdi
+    lea     (L + 8)(%rsp), %rsi
+    CALL_GLOBAL lantern_shell_unmap
+    movq    $0, APP_FILE(%rbx)
+    mov     S8(%rsp), %rax
+    mov     %rax, (APP_FILE + 8)(%rbx)
+    mov     S7(%rsp), %rax
+    mov     %rax, (APP_FILE + 24)(%rbx)
+    sub     $24, %rax
+    mov     %rax, (APP_FILE + 16)(%rbx)
+    xor     %eax, %eax
+    LEAVE 16
+90: call    app_file_free                   # <path>: too short
+    call    app_line_start
+    call    app_line_path
+    ADDRESS %rdi, app_m_short
+    mov     $app_m_short_len, %esi
+    call    app_line_text
+    mov     $2, %edi
+    call    app_line_end
+    jmp     99f
+97: call    app_file_free                   # no memory
+    call    app_line_start
+    ADDRESS %rdi, app_m_memory
+    mov     $app_m_memory_len, %esi
+    call    app_line_text
+    mov     $2, %edi
+    call    app_line_end
+98: lea     L(%rsp), %rdi                   # the block file goes
+    lea     (L + 8)(%rsp), %rsi
+    CALL_GLOBAL lantern_shell_unmap
+99: mov     $2, %eax
+    LEAVE 16
+END_FUNCTION app_checkpoint
+
 /* L1: the memory of APP_FILE goes back. */
 LOCAL_FUNCTION app_file_free
     FRAME 16
@@ -383,7 +503,14 @@ LOCAL_FUNCTION app_start
     jne     11f
     movq    $1, S7(%rsp)
     jmp     12f
-11: ADDRESS %rdi, app_genesis_name          # else genesis.ssz: the fork of its slot
+11: cmpq    $0, (APP_OPTIONS + AppOptions_checkpoint_state + 8)(%rbx)  # else the checkpoint files
+    je      111f
+    call    app_checkpoint
+    test    %rax, %rax
+    jnz     99f
+    movq    $2, S7(%rsp)
+    jmp     12f
+111: ADDRESS %rdi, app_genesis_name         # else genesis.ssz: the fork of its slot
     mov     $app_genesis_name_len, %esi
     call    app_path
     call    app_read
@@ -400,7 +527,10 @@ LOCAL_FUNCTION app_start
     mov     $app_m_short_len, %esi
     call    app_line_text
     jmp     98f
-2:  imul    $24, S7(%rsp), %rax             # BeaconState.slot, after the ByteList header of anchor.ssz's state
+2:  xor     %eax, %eax                      # BeaconState.slot, after the ByteList header of anchor.ssz's state
+    mov     $24, %ecx
+    cmpq    $0, S7(%rsp)
+    cmovne  %rcx, %rax
     mov     (24 + 40)(%rbp,%rax), %rdi
     lea     APP_CONFIG(%rbx), %rsi
     call    app_fork
@@ -469,6 +599,11 @@ LOCAL_FUNCTION app_start
     je      961f
     ADDRESS %rdi, app_anchor_name
     mov     $app_anchor_name_len, %esi
+    cmpq    $1, S7(%rsp)
+    je      961f
+    mov     (APP_OPTIONS + AppOptions_checkpoint_state)(%rbx), %rdi
+    add     APP_ARGS(%rbx), %rdi
+    mov     (APP_OPTIONS + AppOptions_checkpoint_state + 8)(%rbx), %rsi
 961:
     call    app_fail_status
     jmp     99f
@@ -525,6 +660,7 @@ LOCAL_FUNCTION app_start
     add     %rax, %rcx
     mov     BlockNode_slot(%rcx), %rcx
     mov     %rcx, (APP_ANCHOR + 32)(%rbx)
+    mov     %rcx, (APP_ANCHOR + NodeAnchor_history_slot)(%rbx)  # anchor.ssz's history lowers it
     lea     (APP_ANCHOR + 40)(%rbx), %rdi
     mov     APP_STATE(%rbx), %rsi
     add     $NODE_STATE_GVR, %rsi
@@ -544,8 +680,8 @@ LOCAL_FUNCTION app_start
     mov     (APP_OPTIONS + AppOptions_target_peers)(%rbx), %rax
     mov     %rax, (APP_NODE_ROOM + NodeRoom_peers)(%rbx)
     call    app_db_start                    # the history's files
-    cmpq    $0, S7(%rsp)
-    je      13f
+    cmpq    $1, S7(%rsp)
+    jne     13f
     call    app_db_history                  # from anchor.ssz: the segments there
 13:
     lea     APP_NODE_ROOM(%rbx), %rdi
@@ -566,9 +702,20 @@ LOCAL_FUNCTION app_start
     CALL_GLOBAL lantern_node_init
     test    %rax, %rax
     jnz     94f
-    cmpq    $0, S7(%rsp)                    # from anchor.ssz: the history's segments to the node
+    cmpq    $0, S7(%rsp)
     je      14f
-    call    app_db_scan_all
+    cmpq    $1, S7(%rsp)
+    je      141f
+    call    app_line_start                  # checkpoint at slot <n>
+    ADDRESS %rdi, app_m_checkpoint
+    mov     $app_m_checkpoint_len, %esi
+    call    app_line_text
+    mov     (APP_ANCHOR + 32)(%rbx), %rdi
+    call    app_line_u64
+    mov     $1, %edi
+    call    app_line_end
+    jmp     14f
+141: call   app_db_scan_all                 # from anchor.ssz: the history's segments to the node
     test    %rax, %rax
     jnz     99f
     call    app_line_start                  # restart at slot <n>
@@ -3507,7 +3654,7 @@ LOCAL_FUNCTION app_view_fill
     add     Node_db(%rdi), %rdi
     mov     %r12, %rsi
     lea     APP_HEADER(%rbx), %rdx
-    call    lantern_db_find_root
+    CALL_GLOBAL lantern_db_find_root
     mov     APP_HEADER(%rbx), %rdx
     mov     APP_NODE(%rbx), %rax
     add     Node_db(%rax), %rax

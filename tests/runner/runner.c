@@ -5841,7 +5841,7 @@ static void run_db_index(const char *file, case_file *f) {
 /* ---------------------------------------------------------------- Application */
 
 #define INVALID_OPTION 61
-#define APP_OPTIONS_SIZE 112
+#define APP_OPTIONS_SIZE 144
 
 /*
  * app-options: lantern_app_options over each case's command line (tests/generator/app.py), as an
@@ -5849,7 +5849,9 @@ static void run_db_index(const char *file, case_file *f) {
  * bytes of one argument and hold the case's text. A fault must give the case's index.
  */
 static void run_app_options(const char *file, case_file *f) {
-    static const char *texts[] = {"network_dir", "execution", "jwt_secret", "boot_nodes", "data_dir"};
+    static const char *texts[] = {"network_dir", "execution", "jwt_secret", "boot_nodes", "data_dir", "checkpoint_state",
+                                  "checkpoint_block"};
+    static const uint64_t text_at[] = {0, 16, 32, 48, 96, 112, 128};
     static const char *numbers[] = {"port", "enr_address", "http_port", "target_peers"};
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
@@ -5883,8 +5885,8 @@ static void run_app_options(const char *file, case_file *f) {
         if (!guard_ok(opts, APP_OPTIONS_SIZE) || !guard_ok(list, size)) why = "lantern_app_options wrote out of bounds";
         else if (want) {
             if (st != 0) why = "status is not LANTERN_OK";
-            for (int t = 0; t < 5 && !why; t++) {
-                uint64_t at = t < 4 ? 16 * (uint64_t)t : 96, wl, start = rd64(opts + at), got = rd64(opts + at + 8);
+            for (int t = 0; t < 7 && !why; t++) {
+                uint64_t at = text_at[t], wl, start = rd64(opts + at), got = rd64(opts + at + 8);
                 const uint8_t *w = tv_bytes(tv_get(want, texts[t]), &wl);
                 int inside = got == 0;
                 for (uint64_t k = 0; k < count && !inside; k++)

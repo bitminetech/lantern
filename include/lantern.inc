@@ -858,7 +858,9 @@
 .set AppOptions_http_port, 80
 .set AppOptions_target_peers, 88
 .set AppOptions_data_dir, 96
-.set AppOptions__size, 112
+.set AppOptions_checkpoint_state, 112
+.set AppOptions_checkpoint_block, 128
+.set AppOptions__size, 144
 .set APP_DEFAULT_PORT, 9000
 .set APP_DEFAULT_HTTP_PORT, 5052
 .set APP_DEFAULT_TARGET_PEERS, 64

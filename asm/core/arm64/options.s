@@ -200,6 +200,14 @@ FUNCTION lantern_app_options
 50: ldr     x9, [x20, #(AppOptions_network_dir + 8)]    /* --network-dir is required */
     mov     x28, x22
     cbz     x9, 90f
+    ldr     x9, [x20, #(AppOptions_checkpoint_state + 8)]   /* --checkpoint-state and --checkpoint-block go together */
+    ldr     x10, [x20, #(AppOptions_checkpoint_block + 8)]
+    cmp     x9, #0
+    cset    x9, eq
+    cmp     x10, #0
+    cset    x10, eq
+    cmp     x9, x10
+    b.ne    90f
     str     xzr, [x21]
     mov     x0, #LANTERN_OK
     LEAVE 32

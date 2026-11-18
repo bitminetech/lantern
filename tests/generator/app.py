@@ -14,7 +14,7 @@ def ip4(a, b, c, d):
 
 
 DEFAULTS = {"network_dir": "", "execution": "", "jwt_secret": "", "boot_nodes": "", "port": 9000, "enr_address": 0,
-            "http_port": 5052, "target_peers": 64, "data_dir": ""}
+            "http_port": 5052, "target_peers": 64, "data_dir": "", "checkpoint_state": "", "checkpoint_block": ""}
 
 
 def options(**values):
@@ -28,9 +28,11 @@ GOOD = [
     ("every_option",
      ["--network-dir=/data/net", "--execution-endpoint", "http://el:8551", "--jwt-secret=/data/jwt.hex",
       "--boot-nodes", "enr:-AAA,enr:-BBB", "--port=30303", "--enr-address", "10.0.0.7", "--http-port", "4000",
-      "--target-peers=100", "--data-dir", "/data/lantern"],
+      "--target-peers=100", "--data-dir", "/data/lantern", "--checkpoint-state", "/cp/state.ssz",
+      "--checkpoint-block=/cp/block.ssz"],
      options(network_dir="/data/net", execution="el:8551", jwt_secret="/data/jwt.hex", boot_nodes="enr:-AAA,enr:-BBB",
-             port=30303, enr_address=ip4(10, 0, 0, 7), http_port=4000, target_peers=100, data_dir="/data/lantern")),
+             port=30303, enr_address=ip4(10, 0, 0, 7), http_port=4000, target_peers=100, data_dir="/data/lantern",
+             checkpoint_state="/cp/state.ssz", checkpoint_block="/cp/block.ssz")),
     ("execution_without_scheme", ["--execution-endpoint=127.0.0.1:8551", "--network-dir", "n"],
      options(network_dir="n", execution="127.0.0.1:8551")),
     ("option_twice", ["--port", "1", "--network-dir", "a", "--port", "65535", "--network-dir", "b"],
@@ -59,6 +61,8 @@ FAULTS = [
     ("address_part_too_big", ["--network-dir", "/n", "--enr-address", "10.0.0.256"], 3),
     ("address_empty_part", ["--network-dir", "/n", "--enr-address", "10..0.1"], 3),
     ("single_dash", ["-network-dir", "/n"], 0),
+    ("checkpoint_state_alone", ["--network-dir", "/n", "--checkpoint-state", "s.ssz"], 4),
+    ("checkpoint_block_alone", ["--checkpoint-block=b.ssz", "--network-dir", "/n"], 3),
 ]
 
 
