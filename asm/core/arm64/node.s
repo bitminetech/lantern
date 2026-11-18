@@ -91,6 +91,25 @@ FUNCTION lantern_node_size
     and     x10, x10, #~7
     adds    x12, x12, x10
     b.cs    9f
+    ldr     x10, [x0, #NodeRoom_db_roots]   /* the Db: DB_FIXED, its slots, a power of two of roots */
+    cbz     x10, 9f
+    sub     x11, x10, #1
+    tst     x10, x11
+    b.ne    9f
+    lsr     x11, x10, #60
+    cbnz    x11, 9f
+    lsl     x10, x10, #3
+    adds    x12, x12, x10
+    b.cs    9f
+    ldr     x10, [x0, #NodeRoom_db_slots]
+    mov     x11, #DbSlot__mem
+    umulh   x13, x10, x11
+    cbnz    x13, 9f
+    mul     x10, x10, x11
+    adds    x12, x12, x10
+    b.cs    9f
+    adds    x12, x12, #DB_FIXED
+    b.cs    9f
     MOVQ    x10, NODE_FIXED
     adds    x12, x12, x10
     b.cs    9f
@@ -148,6 +167,17 @@ LOCAL_FUNCTION node_layout
     add     x11, x0, x9
     stp     x10, x12, [x11]
     str     xzr, [x11, #16]
+    add     x9, x9, x10
+    str     x9, [x0, #Node_db]              /* one Db, its size set */
+    mov     x10, #1
+    str     x10, [x0, #(Node_db + 8)]
+    ldr     x10, [x1, #NodeRoom_db_slots]
+    mov     x11, #DbSlot__mem
+    mul     x10, x10, x11
+    ldr     x11, [x1, #NodeRoom_db_roots]
+    add     x10, x10, x11, lsl #3
+    add     x10, x10, #DB_FIXED
+    str     x10, [x0, x9]
     ret
 END_FUNCTION node_layout
 
@@ -244,6 +274,20 @@ FUNCTION lantern_node_init
     mov     x10, #1
     str     x10, [x9, #NodeCheckpoint_state_id]
     str     x10, [x24, #(Node_checkpoints + 8)]
+    MOVQ    x9, DB_SEGMENT_SLOTS - 1        /* the Db: from the anchor's segment; its archive after the anchor */
+    bic     x9, x22, x9
+    str     x9, [sp, #L]
+    add     x0, x19, #NodeRoom_db_slots
+    add     x1, sp, #L
+    ldr     x2, [x24, #Node_db]
+    add     x2, x24, x2
+    bl      lantern_db_init
+    cbnz    x0, 9f
+    add     x9, x22, #1
+    str     x9, [x24, #Node_db_next_slot]
+    mov     x9, #-1
+    str     x9, [x24, #Node_db_block_segment]
+    str     x9, [x24, #Node_db_sidecar_segment]
     mov     x0, #LANTERN_OK
 9:  LEAVE 16
 8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
@@ -320,6 +364,13 @@ FUNCTION lantern_node_copy
     mov     x0, x21
     mov     x1, x20
     bl      node_layout
+    ldr     x0, [x19, #Node_db]             /* the Db, at its new room */
+    add     x0, x19, x0
+    add     x1, x20, #NodeRoom_db_slots
+    ldr     x2, [x21, #Node_db]
+    add     x2, x21, x2
+    bl      lantern_db_copy
+    cbnz    x0, 8f
     NODE_COPY_PART Node_blocks, NodeBlock__mem      /* the entries of each part */
     NODE_COPY_PART Node_checkpoints, NodeCheckpoint__mem
     NODE_COPY_PART Node_pow_blocks, POW_BLOCK_BYTES
@@ -909,7 +960,9 @@ LOCAL_FUNCTION node_prune
     str     xzr, [x26, #NodeBlock_state_id]
     add     x0, x26, #NodeBlock_parent_root
     b       1b
-2:  mov     x25, #0                         /* each other block */
+2:  mov     x0, x21                         /* with NODE_FLAG_DB, the archive */
+    bl      node_archive
+    mov     x25, #0                         /* each other block */
 3:  ldr     x9, [x19, #(Node_blocks + 8)]
     cmp     x25, x9
     b.hs    20f
@@ -922,8 +975,19 @@ LOCAL_FUNCTION node_prune
     cmp     x9, #NODE_BLOCK_IMPORTED
     b.ne    10f
     ldr     x9, [x26, #NodeBlock_state_id]
-    cbz     x9, 19f                         /* an ancestor: its bytes stay */
-    mov     x0, x26
+    cbnz    x9, 12f
+    ldr     x9, [x19, #Node_flags]          /* an ancestor: its bytes stay, but those in the Db go */
+    tst     x9, #NODE_FLAG_DB
+    b.eq    19f
+    ldr     x9, [x26, #NodeBlock_slot]
+    ldr     x10, [x19, #Node_db_next_slot]
+    cmp     x9, x10
+    b.hs    19f
+    ldr     x0, [x26, #NodeBlock_data_id]
+    bl      node_serving
+    cbnz    x0, 19f
+    b       15f
+12: mov     x0, x26
     bl      node_store_find                 /* a descendant: in the store */
     cmn     x0, #1
     b.ne    19f
@@ -986,7 +1050,14 @@ LOCAL_FUNCTION node_prune
     b.eq    25f
     ldr     x9, [x1, #NodeBlock_status]
     cmp     x9, #NODE_BLOCK_IMPORTED
+    b.ne    25f
+    ldr     x9, [x19, #Node_flags]          /* of a kept block: but those in the Db go */
+    tst     x9, #NODE_FLAG_DB
     b.eq    29f
+    ldr     x9, [x26, #NodeBlob_slot]
+    ldr     x10, [x19, #Node_db_next_slot]
+    cmp     x9, x10
+    b.hs    29f
 25: ldr     x0, [x26, #NodeBlob_data_id]
     bl      node_serving
     cbnz    x0, 29f
@@ -1031,6 +1102,285 @@ LOCAL_FUNCTION node_prune
     b       31b
 99: LEAVE 0
 END_FUNCTION node_prune
+
+/* dst = the DbSlot of slot slot in the node's Db; to fail outside first_slot to end_slot. Uses x9-x11. */
+.macro DB_SLOT dst, slot, fail
+    ldr     x9, [x19, #Node_db]
+    add     x9, x19, x9
+    ldr     x10, [x9, #Db_end_slot]
+    cmp     \slot, x10
+    b.hs    \fail
+    ldr     x10, [x9, #Db_first_slot]
+    subs    x10, \slot, x10
+    b.lo    \fail
+    ldr     x11, [x9, #Db_slots]
+    add     x9, x9, x11
+    mov     x11, #DbSlot__mem
+    madd    \dst, x10, x11, x9
+.endm
+
+/* L0: x0 = the NODE_DB_REF of the Db record of the block of slot x0, or 0. Uses x9-x13. */
+LOCAL_FUNCTION node_db_block
+    UNWIND_END_PROLOGUE
+    mov     x12, x0
+    DB_SLOT x13, x12, 9f
+    ldr     x9, [x13, #DbSlot_block]
+    cbz     x9, 9f
+    sub     x9, x9, #1
+    lsr     x10, x12, #DB_SEGMENT_SHIFT
+    orr     x0, x9, x10, lsl #48
+    orr     x0, x0, #NODE_DB_REF
+    ret
+9:  mov     x0, #0
+    ret
+END_FUNCTION node_db_block
+
+/*
+ * L0: x0 = the NODE_DB_REF of the Db record of the sidecar of index x1 of slot x0, or 0: at the
+ * slot's first sidecar record, plus its size times the slot's indices below x1. Uses x9-x15.
+ */
+LOCAL_FUNCTION node_db_sidecar
+    UNWIND_END_PROLOGUE
+    mov     x12, x0
+    cmp     x1, #DB_SIDECAR_INDICES
+    b.hs    9f
+    DB_SLOT x13, x12, 9f
+    ldp     x9, x10, [x13, #DbSlot_indices]
+    cmp     x1, #64
+    b.hs    1f
+    mov     x14, #1
+    lsl     x14, x14, x1
+    tst     x9, x14
+    b.eq    9f
+    sub     x14, x14, #1
+    and     x9, x9, x14
+    mov     x10, #0
+    b       2f
+1:  sub     x15, x1, #64
+    mov     x14, #1
+    lsl     x14, x14, x15
+    tst     x10, x14
+    b.eq    9f
+    sub     x14, x14, #1
+    and     x10, x10, x14
+2:  mov     x15, #0                         /* the indices below it */
+3:  cbz     x9, 4f
+    sub     x14, x9, #1
+    and     x9, x9, x14
+    add     x15, x15, #1
+    b       3b
+4:  cbz     x10, 5f
+    sub     x14, x10, #1
+    and     x10, x10, x14
+    add     x15, x15, #1
+    b       4b
+5:  ldr     x9, [x13, #DbSlot_sidecars]
+    sub     x9, x9, #1
+    ldr     x10, [x13, #DbSlot_sidecar_end]
+    sub     x10, x10, x9
+    ldr     x11, [x13, #DbSlot_sidecar_count]
+    udiv    x10, x10, x11
+    madd    x9, x15, x10, x9
+    lsr     x10, x12, #DB_SEGMENT_SHIFT
+    orr     x0, x9, x10, lsl #48
+    orr     x0, x0, #NODE_DB_REF
+    orr     x0, x0, #NODE_DB_SIDECARS
+    ret
+9:  mov     x0, #0
+    ret
+END_FUNCTION node_db_sidecar
+
+/* L0: a DB_APPEND action: sidecars x0, BufferId x1, segment x2, offset x3, the DbRecord at x4. */
+LOCAL_FUNCTION node_db_append
+    FRAME 48
+    stp     x0, x1, [sp, #16]
+    stp     x2, x3, [sp, #32]
+    str     x4, [sp, #48]
+    mov     x0, #NODE_ACT_DB_APPEND
+    mov     x1, #NODE_ACT_DB_APPEND_SIZE
+    bl      node_act
+    ldp     x9, x10, [sp, #16]
+    str     x10, [x0, #16]
+    ldp     x11, x12, [sp, #32]
+    stp     x11, x9, [x0, #24]
+    str     x12, [x0, #40]
+    ldr     x13, [sp, #48]
+    ldp     x9, x10, [x13]
+    stp     x9, x10, [x0, #48]
+    ldp     x9, x10, [x13, #16]
+    stp     x9, x10, [x0, #64]
+    ldp     x9, x10, [x13, #32]
+    stp     x9, x10, [x0, #80]
+    ldp     x9, x10, [x13, #48]
+    stp     x9, x10, [x0, #96]
+    UNFRAME 48
+END_FUNCTION node_db_append
+
+/*
+ * L0: with NODE_FLAG_DB, the canonical blocks from db_next_slot to the finalized block x0 and
+ * their sidecars go to the Db, in slot order: a record of each in the index and in a DB_APPEND
+ * action, then their bytes and entries go, but the finalized block's entry and bytes a stream
+ * sends. A record the Db refuses stops the archive until a later prune. x21 the finalized block,
+ * x22 the chain (an entry address for each, at the end of scratch), x25 its count, x26 a block,
+ * x27 an index, x28 the slot. Locals: L a DbRecord, L+64 an offset, L+72 a sidecar entry.
+ */
+LOCAL_FUNCTION node_archive
+    ENTER 80
+    ldr     x9, [x19, #Node_flags]
+    tst     x9, #NODE_FLAG_DB
+    b.eq    99f
+    mov     x21, x0
+    ldr     x9, [x23]                       /* the chain at the end of scratch */
+    ldr     x10, [x19, #(Node_blocks + 8)]
+    sub     x9, x9, x10, lsl #3
+    add     x22, x23, x9
+    mov     x25, #0
+    mov     x26, x21                        /* from the finalized block down to db_next_slot */
+1:  ldr     x9, [x26, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_IMPORTED
+    b.ne    2f
+    ldr     x9, [x26, #NodeBlock_slot]
+    ldr     x10, [x19, #Node_db_next_slot]
+    cmp     x9, x10
+    b.lo    2f
+    str     x26, [x22, x25, lsl #3]
+    add     x25, x25, #1
+    ldr     x9, [x19, #(Node_blocks + 8)]
+    cmp     x25, x9
+    b.hs    2f
+    add     x0, x26, #NodeBlock_parent_root
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    2f
+    mov     x26, x1
+    b       1b
+2:  cbz     x25, 99f                        /* then from the lowest slot */
+    sub     x25, x25, #1
+    ldr     x26, [x22, x25, lsl #3]
+    ldr     x28, [x26, #NodeBlock_slot]
+    ldr     x9, [x26, #NodeBlock_data_id]
+    cbz     x9, 30f                         /* no bytes: the anchor */
+    ldr     x9, [x26, #NodeBlock_length]    /* the block's record */
+    mov     x10, #DB_BLOCK
+    stp     x9, x10, [sp, #L]
+    stp     x28, xzr, [sp, #(L + 16)]
+    add     x9, sp, #(L + 32)
+    COPY32  x9, x26
+    lsr     x9, x28, #DB_SEGMENT_SHIFT      /* its segment, and its offset at the segment's end */
+    ldr     x10, [x19, #Node_db_block_segment]
+    cmp     x9, x10
+    b.eq    3f
+    str     x9, [x19, #Node_db_block_segment]
+    str     xzr, [x19, #Node_db_block_end]
+3:  ldr     x9, [x19, #Node_db_block_end]
+    str     x9, [sp, #(L + 64)]
+    ldr     x0, [x19, #Node_db]
+    add     x0, x19, x0
+    add     x1, sp, #L
+    add     x2, sp, #(L + 64)
+    bl      lantern_db_add
+    cbnz    x0, 99f
+    mov     x0, #0
+    ldr     x1, [x26, #NodeBlock_data_id]
+    ldr     x2, [x19, #Node_db_block_segment]
+    ldr     x3, [sp, #(L + 64)]
+    add     x4, sp, #L
+    bl      node_db_append
+    ldr     x9, [sp, #L]
+    add     x9, x9, #(DbRecord__mem + 7)
+    and     x9, x9, #~7
+    ldr     x10, [x19, #Node_db_block_end]
+    add     x10, x10, x9
+    str     x10, [x19, #Node_db_block_end]
+    mov     x27, #0                         /* each sidecar the node holds, by index */
+4:  cmp     x27, #DB_SIDECAR_INDICES
+    b.hs    20f
+    mov     x0, x26
+    mov     x1, x27
+    bl      node_blob_held
+    cbz     x0, 19f
+    str     x0, [sp, #(L + 72)]
+    mov     x0, x28                         /* a column sidecar from fulu on, else a blob sidecar */
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x10, #DB_BLOB_SIDECAR
+    mov     x11, #DB_COLUMN_SIDECAR
+    cmp     x0, #FORK_FULU
+    csel    x10, x11, x10, hs
+    ldr     x12, [sp, #(L + 72)]
+    ldr     x9, [x12, #NodeBlob_length]
+    stp     x9, x10, [sp, #L]
+    stp     x28, x27, [sp, #(L + 16)]
+    lsr     x9, x28, #DB_SEGMENT_SHIFT
+    ldr     x10, [x19, #Node_db_sidecar_segment]
+    cmp     x9, x10
+    b.eq    5f
+    str     x9, [x19, #Node_db_sidecar_segment]
+    str     xzr, [x19, #Node_db_sidecar_end]
+5:  ldr     x9, [x19, #Node_db_sidecar_end]
+    str     x9, [sp, #(L + 64)]
+    ldr     x0, [x19, #Node_db]
+    add     x0, x19, x0
+    add     x1, sp, #L
+    add     x2, sp, #(L + 64)
+    bl      lantern_db_add
+    cbnz    x0, 19f                         /* refused: the entry stays for the prune */
+    mov     x0, #1
+    ldr     x12, [sp, #(L + 72)]
+    ldr     x1, [x12, #NodeBlob_data_id]
+    ldr     x2, [x19, #Node_db_sidecar_segment]
+    ldr     x3, [sp, #(L + 64)]
+    add     x4, sp, #L
+    bl      node_db_append
+    ldr     x9, [sp, #L]
+    add     x9, x9, #(DbRecord__mem + 7)
+    and     x9, x9, #~7
+    ldr     x10, [x19, #Node_db_sidecar_end]
+    add     x10, x10, x9
+    str     x10, [x19, #Node_db_sidecar_end]
+    ldr     x12, [sp, #(L + 72)]            /* its bytes and entry go, unless a stream sends them */
+    ldr     x0, [x12, #NodeBlob_data_id]
+    bl      node_serving
+    cbnz    x0, 19f
+    mov     x0, #NODE_ACT_BYTES_FREE
+    ldr     x12, [sp, #(L + 72)]
+    ldr     x1, [x12, #NodeBlob_data_id]
+    mov     x2, #0
+    bl      node_ids
+    ldr     x12, [sp, #(L + 72)]
+    mov     x9, #-1
+    stp     x9, x9, [x12]
+    stp     x9, x9, [x12, #16]
+    str     x9, [x12, #NodeBlob_slot]
+    str     xzr, [x12, #NodeBlob_data_id]
+    mov     x9, #NODE_BLOB_FREE
+    str     x9, [x12, #NodeBlob_status]
+19: add     x27, x27, #1
+    b       4b
+20: ldr     x0, [x26, #NodeBlock_data_id]   /* the block's bytes go, unless a stream sends them */
+    bl      node_serving
+    cbnz    x0, 30f
+    mov     x0, #NODE_ACT_BYTES_FREE
+    ldr     x1, [x26, #NodeBlock_data_id]
+    mov     x2, #0
+    bl      node_ids
+    str     xzr, [x26, #NodeBlock_data_id]
+    cmp     x26, x21                        /* and its entry, but the finalized block's */
+    b.eq    30f
+    mov     x9, #-1
+    stp     x9, x9, [x26]
+    stp     x9, x9, [x26, #16]
+    stp     x9, x9, [x26, #32]
+    stp     x9, x9, [x26, #48]
+    str     x9, [x26, #NodeBlock_slot]
+    stp     xzr, xzr, [x26, #NodeBlock_data_id]
+    mov     x9, #NODE_BLOCK_FREE
+    str     x9, [x26, #NodeBlock_status]
+30: add     x9, x28, #1
+    str     x9, [x19, #Node_db_next_slot]
+    b       2b
+99: LEAVE 80
+END_FUNCTION node_archive
 
 /* L0: a BYTES_PUT action of the ByteList x0 with a new id: x0 = the id. x21 the ByteList, x22 the id. */
 LOCAL_FUNCTION node_put
@@ -1792,6 +2142,8 @@ LOCAL_FUNCTION node_event
     str     x11, [x9, #NodeBlock_data_available]
     str     xzr, [x9, #NodeBlock_result]
     str     xzr, [x9, #NodeBlock_blobs]
+    ldr     x11, [x22, #16]
+    str     x11, [x9, #NodeBlock_length]
     ldr     x0, [sp, #(L + 40)]
     bl      node_try_import
 19: LEAVE 48
@@ -2051,6 +2403,8 @@ LOCAL_FUNCTION node_event
     str     xzr, [x9, #NodeBlock_result]
     ldr     x11, [x21, #NodeEvent_index]
     str     x11, [x9, #NodeBlock_blobs]
+    ldr     x11, [x22, #NodeMessage_length]
+    str     x11, [x9, #NodeBlock_length]
     mov     x0, x22
     bl      node_drop_message
     ldr     x0, [sp, #(L + 40)]
@@ -2079,6 +2433,8 @@ LOCAL_FUNCTION node_event
     str     x11, [x9, #NodeBlob_data_id]
     mov     x11, #NODE_BLOB_VALID
     str     x11, [x9, #NodeBlob_status]
+    ldr     x11, [x22, #NodeMessage_length]
+    str     x11, [x9, #NodeBlob_length]
     mov     x0, x22
     bl      node_drop_message
     add     x0, x21, #NodeEvent_root
@@ -2681,7 +3037,22 @@ LOCAL_FUNCTION node_request
     csel    x26, x26, x0, ls
     adds    x26, x25, x26                   /* the end slot */
     csinv   x26, x26, xzr, cc
-    mov     x28, #0                         /* the canonical blocks of the range, from the head down */
+    mov     x28, #0                         /* the blocks of the Db in the range, in slot order */
+    mov     x27, x25
+600: ldr    x9, [x19, #Node_db_next_slot]
+    cmp     x27, x9
+    b.hs    601f
+    cmp     x27, x26
+    b.hs    601f
+    mov     x0, x27
+    bl      node_db_block
+    add     x27, x27, #1
+    cbz     x0, 600b
+    add     x10, x21, #NodeStream_request
+    str     x0, [x10, x28, lsl #3]
+    add     x28, x28, #1
+    b       600b
+601: str    x28, [sp, #(L + 128)]           /* then the canonical blocks of the range from the head down, reversed */
     add     x27, x19, #Node_head_root
 61: mov     x0, x27
     bl      node_find_block
@@ -2693,6 +3064,9 @@ LOCAL_FUNCTION node_request
     ldr     x9, [x1, #NodeBlock_slot]
     cmp     x9, x25
     b.lo    63f
+    ldr     x10, [x19, #Node_db_next_slot]
+    cmp     x9, x10
+    b.lo    63f
     add     x27, x1, #NodeBlock_parent_root
     cmp     x9, x26
     b.hs    61b
@@ -2702,9 +3076,11 @@ LOCAL_FUNCTION node_request
     str     x9, [x10, x28, lsl #3]
     add     x28, x28, #1
     b       61b
-63: add     x9, x21, #NodeStream_request    /* in slot order */
+63: add     x9, x21, #NodeStream_request    /* in slot order: the part from the head, reversed */
     add     x10, x9, x28, lsl #3
     sub     x10, x10, #8
+    ldr     x11, [sp, #(L + 128)]
+    add     x9, x9, x11, lsl #3
 64: cmp     x9, x10
     b.hs    77f
     ldr     x11, [x9]
@@ -2732,7 +3108,36 @@ LOCAL_FUNCTION node_request
     csel    x26, x26, x10, ls
     adds    x26, x25, x26                   /* the end slot */
     csinv   x26, x26, xzr, cc
-    mov     x28, #0                         /* the sidecars of the canonical blocks of the range, from the head down */
+    mov     x28, #0                         /* the sidecars of the Db in the range, of deneb or electra, in (slot, index) order */
+    mov     x27, x25
+650: ldr    x9, [x19, #Node_db_next_slot]
+    cmp     x27, x9
+    b.hs    653f
+    cmp     x27, x26
+    b.hs    653f
+    mov     x0, x27
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, #FORK_DENEB
+    ccmp    x0, #FORK_ELECTRA, #4, ne
+    b.ne    652f
+    str     xzr, [sp, #(L + 80)]
+651: ldr    x1, [sp, #(L + 80)]
+    ldr     x9, [sp, #(L + 72)]
+    cmp     x1, x9
+    b.hs    652f
+    add     x9, x1, #1
+    str     x9, [sp, #(L + 80)]
+    mov     x0, x27
+    bl      node_db_sidecar
+    cbz     x0, 651b
+    add     x10, x21, #NodeStream_request
+    str     x0, [x10, x28, lsl #3]
+    add     x28, x28, #1
+    b       651b
+652: add    x27, x27, #1
+    b       650b
+653: str    x28, [sp, #(L + 128)]           /* then those of the canonical blocks from the head down, reversed */
     add     x27, x19, #Node_head_root
 66: mov     x0, x27
     bl      node_find_block
@@ -2743,6 +3148,9 @@ LOCAL_FUNCTION node_request
     b.ne    63b
     ldr     x9, [x1, #NodeBlock_slot]
     cmp     x9, x25
+    b.lo    63b
+    ldr     x10, [x19, #Node_db_next_slot]
+    cmp     x9, x10
     b.lo    63b
     add     x27, x1, #NodeBlock_parent_root
     cmp     x9, x26
@@ -2777,7 +3185,7 @@ LOCAL_FUNCTION node_request
     add     x27, x27, #40
     sub     x26, x26, #1
     bl      node_blob_held
-    cbz     x0, 76b
+    cbz     x0, 761f
     str     x0, [sp, #(L + 72)]
     ldr     x9, [x0, #NodeBlob_data_id]
     str     x9, [sp, #(L + 64)]
@@ -2799,6 +3207,28 @@ LOCAL_FUNCTION node_request
     str     x9, [x10, x28, lsl #3]
     add     x28, x28, #1
     b       76b
+761: ldr    x0, [x19, #Node_db]             /* else the Db's sidecar of the root and index, of deneb or electra */
+    add     x0, x19, x0
+    sub     x1, x27, #40
+    add     x2, sp, #(L + 136)
+    bl      lantern_db_find_root
+    ldr     x0, [sp, #(L + 136)]
+    cmn     x0, #1
+    b.eq    76b
+    str     x0, [sp, #(L + 144)]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, #FORK_DENEB
+    ccmp    x0, #FORK_ELECTRA, #4, ne
+    b.ne    76b
+    ldr     x0, [sp, #(L + 144)]
+    ldur    x1, [x27, #-8]
+    bl      node_db_sidecar
+    cbz     x0, 76b
+    add     x10, x21, #NodeStream_request
+    str     x0, [x10, x28, lsl #3]
+    add     x28, x28, #1
+    b       76b
 70: lsr     x25, x25, #5                    /* BlocksByRoot: the blocks the node has, in the request's order */
     mov     x28, #0
     mov     x26, x27
@@ -2808,13 +3238,24 @@ LOCAL_FUNCTION node_request
     add     x26, x26, #32
     sub     x25, x25, #1
     cmn     x0, #1
-    b.eq    71b
+    b.eq    72f
     ldr     x9, [x1, #NodeBlock_status]
     cmp     x9, #NODE_BLOCK_IMPORTED
     b.ne    71b
     ldr     x9, [x1, #NodeBlock_data_id]
-    cbz     x9, 71b
-    add     x10, x21, #NodeStream_request
+    cbnz    x9, 73f
+72: ldr     x0, [x19, #Node_db]             /* else the Db's block of the root */
+    add     x0, x19, x0
+    sub     x1, x26, #32
+    add     x2, sp, #(L + 136)
+    bl      lantern_db_find_root
+    ldr     x0, [sp, #(L + 136)]
+    cmn     x0, #1
+    b.eq    71b
+    bl      node_db_block
+    cbz     x0, 71b
+    mov     x9, x0
+73: add     x10, x21, #NodeStream_request
     str     x9, [x10, x28, lsl #3]
     add     x28, x28, #1
     b       71b
@@ -2881,7 +3322,40 @@ LOCAL_FUNCTION node_request
     csel    x26, x26, x10, ls
     adds    x26, x25, x26                   /* the end slot */
     csinv   x26, x26, xzr, cc
-    mov     x28, #0                         /* the sidecars of the canonical blocks of the range, from the head down */
+    mov     x28, #0                         /* the sidecars of the Db in the range, of fulu or later, in (slot, column) order */
+    mov     x27, x25
+854: ldr    x9, [x19, #Node_db_next_slot]
+    cmp     x27, x9
+    b.hs    857f
+    cmp     x27, x26
+    b.hs    857f
+    mov     x0, x27
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, #FORK_FULU
+    b.lo    856f
+    str     xzr, [sp, #(L + 96)]
+855: ldr    x1, [sp, #(L + 96)]
+    cmp     x1, #128
+    b.hs    856f
+    add     x9, x1, #1
+    str     x9, [sp, #(L + 96)]
+    cmp     x1, #64
+    ldr     x9, [sp, #(L + 80)]
+    ldr     x10, [sp, #(L + 88)]
+    csel    x9, x9, x10, lo
+    lsr     x9, x9, x1
+    tbz     x9, #0, 855b
+    mov     x0, x27
+    bl      node_db_sidecar
+    cbz     x0, 855b
+    add     x10, x21, #NodeStream_request
+    str     x0, [x10, x28, lsl #3]
+    add     x28, x28, #1
+    b       855b
+856: add    x27, x27, #1
+    b       854b
+857: str    x28, [sp, #(L + 128)]           /* then those of the canonical blocks from the head down, reversed */
     add     x27, x19, #Node_head_root
 85: mov     x0, x27
     bl      node_find_block
@@ -2892,6 +3366,9 @@ LOCAL_FUNCTION node_request
     b.ne    63b
     ldr     x9, [x1, #NodeBlock_slot]
     cmp     x9, x25
+    b.lo    63b
+    ldr     x10, [x19, #Node_db_next_slot]
+    cmp     x9, x10
     b.lo    63b
     add     x27, x1, #NodeBlock_parent_root
     cmp     x9, x26
@@ -2998,9 +3475,10 @@ LOCAL_FUNCTION node_request
     ldr     x15, [sp, #(L + 104)]
     ldr     x1, [x15], #8
     str     x15, [sp, #(L + 104)]
+    str     x1, [sp, #(L + 152)]
     ldr     x0, [sp, #(L + 64)]
     bl      node_blob_held
-    cbz     x0, 89b
+    cbz     x0, 892f
     str     x0, [sp, #(L + 120)]
     ldr     x0, [x0, #NodeBlob_slot]        /* a sidecar of fulu or later */
     add     x1, x19, #Node_config
@@ -3018,6 +3496,27 @@ LOCAL_FUNCTION node_request
     ldr     x9, [x9, #NodeBlob_data_id]
     add     x10, x21, #NodeStream_request
     str     x9, [x10, x28, lsl #3]
+    add     x28, x28, #1
+    b       89b
+892: ldr    x0, [x19, #Node_db]             /* else the Db's column of the root, of fulu or later */
+    add     x0, x19, x0
+    ldr     x1, [sp, #(L + 64)]
+    add     x2, sp, #(L + 136)
+    bl      lantern_db_find_root
+    ldr     x0, [sp, #(L + 136)]
+    cmn     x0, #1
+    b.eq    89b
+    str     x0, [sp, #(L + 144)]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, #FORK_FULU
+    b.lo    89b
+    ldr     x0, [sp, #(L + 144)]
+    ldr     x1, [sp, #(L + 152)]
+    bl      node_db_sidecar
+    cbz     x0, 89b
+    add     x10, x21, #NodeStream_request
+    str     x0, [x10, x28, lsl #3]
     add     x28, x28, #1
     b       89b
 80: ldr     x9, [x21, #NodeStream_state]    /* more bytes come, unless the peer closed */
@@ -3893,6 +4392,8 @@ LOCAL_FUNCTION node_message
 5:  mov     x0, x27                         /* the bytes, kept by the shell */
     bl      node_put
     str     x0, [x25, #NodeMessage_data_id]
+    ldr     x9, [x27, #16]
+    str     x9, [x25, #NodeMessage_length]
     mov     x9, #NODE_MESSAGE_ID
     str     x9, [x25, #NodeMessage_state]
 99: str     x26, [x23]
@@ -4331,6 +4832,8 @@ LOCAL_FUNCTION node_response
     mov     x0, x26
     bl      node_put
     str     x0, [x28, #NodeBlock_data_id]
+    ldr     x9, [x26, #16]
+    str     x9, [x28, #NodeBlock_length]
     mov     x3, x0
     mov     x0, #NODE_WORK_SYNC_BLOCK
     mov     x1, #0
@@ -4351,6 +4854,8 @@ LOCAL_FUNCTION node_response
     mov     x0, x26
     bl      node_put
     str     x0, [x28, #NodeBlob_data_id]
+    ldr     x9, [x26, #16]
+    str     x9, [x28, #NodeBlob_length]
     mov     x3, x0
     mov     x0, #NODE_WORK_BLOB
     mov     x1, #0
@@ -4371,6 +4876,8 @@ LOCAL_FUNCTION node_response
     mov     x0, x26
     bl      node_put
     str     x0, [x28, #NodeBlob_data_id]
+    ldr     x9, [x26, #16]
+    str     x9, [x28, #NodeBlob_length]
     mov     x3, x0
     mov     x0, #NODE_WORK_BLOB
     mov     x1, #0
@@ -5325,12 +5832,13 @@ FUNCTION lantern_node_step
     str     x0, [sp, #(L + 152)]
     mov     x12, #512                       /* room: actions, node parts, scratch */
     madd    x12, x26, x12, x28
-    ldr     x13, [x19, #(Node_blocks + 8)]
-    mov     x14, #128
+    ldr     x13, [x19, #(Node_blocks + 8)]  /* the prune's actions: 256 for each block, 160 for each blob, 32 for each checkpoint */
+    mov     x14, #256
     madd    x12, x13, x14, x12
-    ldr     x13, [x19, #(Node_blobs + 8)]   /* 32 for each blob and checkpoint entry: the prune's actions */
-    ldr     x14, [x19, #(Node_checkpoints + 8)]
-    add     x13, x13, x14
+    ldr     x13, [x19, #(Node_blobs + 8)]
+    mov     x14, #160
+    madd    x12, x13, x14, x12
+    ldr     x13, [x19, #(Node_checkpoints + 8)]
     add     x12, x12, x13, lsl #5
     add     x12, x12, #512
     str     x12, [sp, #(L + 72)]
@@ -5404,6 +5912,32 @@ FUNCTION lantern_node_step
     add     x10, x10, #2
     cmp     x9, x10
     b.lo    88f
+    ldr     x9, [x19, #Node_flags]          /* with NODE_FLAG_DB at a new finalized epoch: the Db's room for the archive */
+    tst     x9, #NODE_FLAG_DB
+    b.eq    56f
+    ldr     x9, [x20, #Store_finalized_checkpoint]
+    ldr     x10, [x19, #Node_pruned_epoch]
+    cmp     x9, x10
+    b.ls    56f
+    ldr     x11, [x19, #Node_db]
+    add     x11, x19, x11
+    mov     x10, #SLOTS_PER_EPOCH           /* the slots to the finalized checkpoint's */
+    mul     x9, x9, x10
+    add     x9, x9, #1
+    ldr     x10, [x11, #Db_first_slot]
+    subs    x9, x9, x10
+    csel    x9, xzr, x9, lo
+    ldr     x10, [x11, #(Db_slots + 8)]
+    cmp     x10, x9
+    b.lo    93f
+    ldr     x9, [x11, #Db_blocks]           /* the roots: twice the blocks */
+    ldr     x10, [x19, #(Node_blocks + 8)]
+    add     x9, x9, x10
+    lsl     x9, x9, #1
+    ldr     x10, [x11, #(Db_roots + 8)]
+    cmp     x10, x9
+    b.lo    94f
+56:
     ldr     x9, [x19, #Node_peers]          /* pow blocks: one for each POW_BLOCK event */
     ldr     x10, [x19, #Node_pow_blocks]
     sub     x9, x9, x10
@@ -5438,6 +5972,8 @@ FUNCTION lantern_node_step
     MOVQ    x10, LANTERN_SCRATCH_FIXED + 64
     add     x9, x9, x10
     add     x9, x9, x12
+    ldr     x10, [x19, #(Node_blocks + 8)]  /* and the prune's chain of blocks */
+    add     x9, x9, x10, lsl #3
     ldr     x10, [sp, #(L + 136)]           /* with an ENR event, the record's decoding */
     cbz     x10, 55f
     MOVQ    x10, DISCV5_ENR_SIZE + DISCV5_ENR_SCRATCH
@@ -5619,6 +6155,10 @@ FUNCTION lantern_node_step
 88: mov     x10, #NodeRoom_checkpoints
     b       82f
 89: mov     x10, #NodeRoom_pow_blocks
+    b       82f
+93: mov     x10, #NodeRoom_db_slots
+    b       82f
+94: mov     x10, #NodeRoom_db_roots
     b       82f
 90: mov     x10, #NodeRoom_p2p_out
 82: str     x10, [x25, #NodeStepResult_room]

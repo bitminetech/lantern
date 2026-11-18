@@ -83,6 +83,7 @@
   - A valid block must be `NODE_BLOCK_IMPORTED`, an invalid block must not. An attestation or slashing is valid when the result of its last work is `LANTERN_VALID`.
   - The checks read the store, the node's `head_root`, and the post-state the node keeps for the head.
   - After the steps of each event, the store's first node must be the root of its finalized checkpoint: the node pruned it.
+  - Every second node the runner starts has `NODE_FLAG_DB`. The runner keeps its segments in memory: each `NODE_ACT_DB_APPEND` must be at its segment's end, of the length of the bytes of its id, and of a slot of its segment; a SERVE of a `NODE_DB_REF` gets a ByteList that points into the segment. A block or sidecar in the node's `Db` counts as imported or held in the checks below.
   - From bellatrix on, the node has `NODE_FLAG_ENGINE`, and the runner is its execution engine too. It answers each `NODE_ACT_ENGINE` request with an HTTP/1.1 response in two `NODE_EV_ENGINE` events: engine_newPayload of a `blockHash`, and engine_forkchoiceUpdated of a `headBlockHash`, with the `payloadStatus` of the case's last `payload_status` step of that hash, else `VALID` with that hash as `latestValidHash`. The request must carry a JWT of the node's secret.
   - Cases with `payload_status` steps run in node mode from bellatrix on, through the node's execution engine calls; before bellatrix only directly.
   - A non-zero status of lantern_node_step or lantern_node_run must leave the node, the store and the work's state byte for byte unchanged.
@@ -142,7 +143,7 @@ lantern_node_size(room, size) -> status
 ### Returns
 
 - `LANTERN_OK`: `size` holds `NODE_FIXED` plus the bytes of each part.
-- `LANTERN_INVALID_OVERFLOW`: the size is 2^64 or more.
+- `LANTERN_INVALID_OVERFLOW`: the size is 2^64 or more, or `db_roots` is not a power of two.
 
 ## Function `lantern_node_init`
 
@@ -203,7 +204,7 @@ lantern_node_copy(node, room, out) -> status
 ### Returns
 
 - `LANTERN_OK`: `out` holds the node.
-- `LANTERN_BUFFER_TOO_SMALL`: `out` is smaller than lantern_node_size of `room`, or a capacity of `room` is below the entries of its part.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` is smaller than lantern_node_size of `room`, a capacity of `room` is below the entries of its part, or lantern_db_copy of the `Db` to `db_slots` and `db_roots` fails.
 - `LANTERN_INVALID_OVERFLOW`: as lantern_node_size.
 
 ## Function `lantern_node_step`
@@ -244,7 +245,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 
 ### Function does
 
-- Room: `actions` has the event bytes + 512 per event + 128 per known block + 32 per `NodeBlob` and per `NodeCheckpoint` entry + 512 bytes free, and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and with `p2p` `NODE_SYNC_BATCH` times the largest of `MAX_BLOBS_PER_BLOCK`, `MAX_BLOBS_PER_BLOCK_ELECTRA` and the count of `columns` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node, and `DISCV5_ENR_SIZE` + `DISCV5_ENR_SCRATCH` more with a `NODE_EV_ENR`.
+- Room: `actions` has the event bytes + 512 per event + 256 per known block + 160 per `NodeBlob` entry + 32 per `NodeCheckpoint` entry + 512 bytes free, and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and with `p2p` `NODE_SYNC_BATCH` times the largest of `MAX_BLOBS_PER_BLOCK`, `MAX_BLOBS_PER_BLOCK_ELECTRA` and the count of `columns` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node + 8 per `NodeBlock` entry, and `DISCV5_ENR_SIZE` + `DISCV5_ENR_SCRATCH` more with a `NODE_EV_ENR`.
 - Before any change: the root of each `NODE_EV_BLOCK`, with lantern_node_block_root of the fork of its slot. A status of that call is the step's.
 - On `LANTERN_BUFFER_TOO_SMALL`, `short`: `NODE_SHORT_ACTIONS` for the room of `actions`, and for `LIBP2P_BUFFER_TOO_SMALL` of libp2p_step (its scratch is the step's own); `NODE_SHORT_NODE` for a part of the node, with `room` the byte offset in `NodeRoom` of its capacity (`blocks`, `checkpoints`, `pow_blocks`, `p2p_out`, `blobs` or `engine_bytes`); `NODE_SHORT_SCRATCH` for `scratch`, and for `LANTERN_BUFFER_TOO_SMALL` of lantern_node_block_root.
 - The prune, after libp2p's first round and before the node's events, when the store's finalized epoch is above `pruned_epoch`: lantern_store_prune with the step's scratch; on its success `pruned_epoch` takes that epoch, and with F the block of the finalized root:
@@ -254,6 +255,9 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - A `NODE_BLOB_INVALID` entry is free; a `NODE_BLOB_VALID` entry at or below F's slot whose block is not imported: a `NODE_ACT_BYTES_FREE`, and its entry is free.
   - A `NodeCheckpoint` below the finalized epoch: a `NODE_ACT_STATE_FREE` of its state, except `anchor_state_id`, which goes with the anchor block; its entry is free.
   - Bytes that a stream in `NODE_STREAM_SERVE` or `NODE_STREAM_SERVING` lists at or after its `next` stay, with their entry, until a later prune.
+  - With `NODE_FLAG_DB`, before the other blocks: the chain from F down to `db_next_slot`, by `parent_root`, then from its lowest slot up, each block with bytes goes to the `Db`: lantern_db_add of its `DbRecord` (kind `DB_BLOCK`, index 0) at `db_block_end` of the segment of its slot (a new segment starts at 0) and a `NODE_ACT_DB_APPEND`; then each `NODE_BLOB_VALID` sidecar of its root, by index from 0 to `DB_SIDECAR_INDICES` - 1 (kind `DB_COLUMN_SIDECAR` from fulu on, else `DB_BLOB_SIDECAR`), the same way in its sidecar segment, its bytes freed and its entry free; then the block's bytes are freed and its entry is free, but F keeps its entry. `db_next_slot` takes each block's slot + 1. A record lantern_db_add refuses ends the archive of a block until a later prune; a sidecar it refuses stays for the prune.
+  - With `NODE_FLAG_DB`, an ancestor of F, or a sidecar of one, below `db_next_slot` whose bytes stay goes as the other branches do.
+- With `NODE_FLAG_DB` and a store's finalized epoch above `pruned_epoch`, before any change: the `Db` has room for the slots up to the finalized epoch's first slot, and for twice its blocks and the `NodeBlock` entries in its root table; else `LANTERN_BUFFER_TOO_SMALL` with `NODE_SHORT_NODE` and `room` the offset of `db_slots` or `db_roots`.
 - A block whose parent is imported with no post-state is no descendant of the finalized block: it becomes `NODE_BLOCK_INVALID`, and its bytes are freed.
 - `NODE_EV_TICK`: sets `time_ms` of the node, then on_tick of the fork of the new slot.
 - `NODE_EV_BLOCK`: for a root the node does not know, a `NODE_ACT_BYTES_PUT` of the bytes and a `NodeBlock` in `NODE_BLOCK_WAITING`. Bytes that are no `SignedBeaconBlock` are dropped.
@@ -275,14 +279,14 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - With `NODE_FLAG_DISCV5`, after the head: when `dialing` + the peers are below the capacity of the peers part, and `time_ms` is at least `lookup_ms` + `NODE_LOOKUP_MS` or `lookup_ms` is 0, a `NODE_ACT_DISCV5` of a `LOOKUP` event whose target is the tick's 32 entropy bytes; `lookup_ms` takes `time_ms`.
 - `STREAM_INBOUND`: a `NodeStream` of the protocol's method and version, or a `STREAM_RESET` when the streams part is full. `STREAM_DATA`: the bytes join the stream's request, or a `STREAM_RESET` when they pass its room. `STREAM_EOF`: the request is complete. `STREAM_RESET`: the stream goes.
 - A request is read when its bytes are complete: Status is kept in the `NodePeer` and answered with the node's Status of the same version; Ping is answered with `metadata_seq`; MetaData, on the stream's opening, with the node's MetaData of the same version; Goodbye gets a `STREAM_CLOSE`. A request that is not valid gets result 1, InvalidRequest; a method of no answer below gets result 3, ResourceUnavailable.
-- BeaconBlocksByRange: a `start_slot` before `earliest_slot` gets ResourceUnavailable. Otherwise the blocks of the chain of `head_root`, by `parent_root`, with a slot in `start_slot` to `start_slot` + `count`, in slot order; `count` is at most `MAX_REQUEST_BLOCKS_DENEB` from deneb on, else `MAX_REQUEST_BLOCKS`, and at most the BufferIds a stream's request room holds.
-- BeaconBlocksByRoot: the imported blocks of the roots the node knows, in the request's order; the request has at most that many roots.
+- BeaconBlocksByRange: a `start_slot` before `earliest_slot` gets ResourceUnavailable. Otherwise, in slot order, the blocks of the `Db` with a slot in `start_slot` to `start_slot` + `count` below `db_next_slot`, as `NODE_DB_REF`s, then the blocks of the chain of `head_root`, by `parent_root`, with a slot from `db_next_slot` in that range; `count` is at most `MAX_REQUEST_BLOCKS_DENEB` from deneb on, else `MAX_REQUEST_BLOCKS`, and at most the BufferIds a stream's request room holds.
+- BeaconBlocksByRoot: the imported blocks of the roots the node knows, or else the `Db`'s blocks of those roots (lantern_db_find_root), in the request's order; the request has at most that many roots.
 - BlobSidecarsByRange and BlobSidecarsByRoot, when the fork of the store's slot is deneb or later; before it, ResourceUnavailable. The sidecar limit is `MAX_REQUEST_BLOCKS_DENEB` times `MAX_BLOBS_PER_BLOCK` (deneb) or `MAX_BLOBS_PER_BLOCK_ELECTRA` (electra and later), and at most the BufferIds a stream's request room holds.
-- BlobSidecarsByRange: a `start_slot` before `earliest_slot` gets ResourceUnavailable. Otherwise the `NODE_BLOB_VALID` sidecars of the imported blocks of the chain of `head_root` with a slot in `start_slot` to `start_slot` + `count` whose fork is deneb or electra, in (slot, index) order, up to the limit; the indices of a block are those below the larger of `MAX_BLOBS_PER_BLOCK` and `MAX_BLOBS_PER_BLOCK_ELECTRA`, and below `NODE_BLOB_MAX`.
-- BlobSidecarsByRoot: the `NODE_BLOB_VALID` sidecars of the request's (block_root, index) pairs whose block is not `NODE_BLOCK_INVALID` and whose slot's fork is deneb or electra, in the request's order; the request has at most the limit of pairs, a multiple of 40 bytes.
+- BlobSidecarsByRange: a `start_slot` before `earliest_slot` gets ResourceUnavailable. Otherwise the `Db`'s sidecars of the slots in `start_slot` to `start_slot` + `count` below `db_next_slot`, then the `NODE_BLOB_VALID` sidecars of the imported blocks of the chain of `head_root` with a slot from `db_next_slot` in that range, whose fork is deneb or electra, in (slot, index) order, up to the limit; the indices of a block are those below the larger of `MAX_BLOBS_PER_BLOCK` and `MAX_BLOBS_PER_BLOCK_ELECTRA`, and below `NODE_BLOB_MAX`.
+- BlobSidecarsByRoot: the `NODE_BLOB_VALID` sidecars of the request's (block_root, index) pairs whose block is not `NODE_BLOCK_INVALID`, or else the `Db`'s sidecars of those, whose slot's fork is deneb or electra, in the request's order; the request has at most the limit of pairs, a multiple of 40 bytes.
 - DataColumnSidecarsByRange and DataColumnSidecarsByRoot, when the fork of the store's slot is fulu or later; before it, ResourceUnavailable. The sidecar limit is compute_max_request_data_column_sidecars, and at most the BufferIds a stream's request room holds. A request with a column at or above `NUMBER_OF_COLUMNS` is not valid.
-- DataColumnSidecarsByRange: a request of 20 bytes and 8 bytes for each column, at most `NUMBER_OF_COLUMNS`, with the offset 20. A `start_slot` before `earliest_slot` gets ResourceUnavailable. Otherwise the `NODE_BLOB_VALID` sidecars of the imported blocks of the chain of `head_root` with a slot in `start_slot` to `start_slot` + `count` whose fork is fulu or later, of the request's columns, in (slot, index) order, up to the limit.
-- DataColumnSidecarsByRoot: a `DataColumnsByRootIdentifiers` of at most `MAX_REQUEST_BLOCKS_DENEB` identifiers, each of 36 bytes and 8 bytes for each column, at most `NUMBER_OF_COLUMNS`, with the offset 36, and of at most the limit of columns in all. For each identifier in order, and each of its columns in order, the `NODE_BLOB_VALID` sidecar of its `block_root` and that index whose block is not `NODE_BLOCK_INVALID` and whose slot's fork is fulu or later.
+- DataColumnSidecarsByRange: a request of 20 bytes and 8 bytes for each column, at most `NUMBER_OF_COLUMNS`, with the offset 20. A `start_slot` before `earliest_slot` gets ResourceUnavailable. Otherwise the `Db`'s sidecars of the slots in `start_slot` to `start_slot` + `count` below `db_next_slot`, then the `NODE_BLOB_VALID` sidecars of the imported blocks of the chain of `head_root` with a slot from `db_next_slot` in that range, whose fork is fulu or later, of the request's columns that `columns` holds, in (slot, index) order, up to the limit.
+- DataColumnSidecarsByRoot: a `DataColumnsByRootIdentifiers` of at most `MAX_REQUEST_BLOCKS_DENEB` identifiers, each of 36 bytes and 8 bytes for each column, at most `NUMBER_OF_COLUMNS`, with the offset 36, and of at most the limit of columns in all. For each identifier in order, and each of its columns in order, the `NODE_BLOB_VALID` sidecar of its `block_root` and that index whose block is not `NODE_BLOCK_INVALID`, or else the `Db`'s sidecar of those, whose slot's fork is fulu or later.
 - The anchor, with no bytes, is not sent. No block or sidecar: a `STREAM_CLOSE` with no chunk. Else the stream keeps the BufferIds and takes `NODE_STREAM_SERVE`.
 - After the head, each stream in `NODE_STREAM_SERVE` gets a `NODE_WORK_SERVE` of its next block or sidecar, with the protocol version + 256 times the method as `arg`, and takes `NODE_STREAM_SERVING`, while the actions have room for the work and 4096 bytes; a stream left waiting makes `wakeup` the tick's time.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_SERVE`: the chunk goes out in a `STREAM_WRITE`, then the stream's next block, or a `STREAM_CLOSE` after the last; a result other than `LANTERN_VALID`, or no room in `p2p_out`, gives a `STREAM_RESET`.
@@ -797,11 +801,18 @@ The state of the node: a value with parts.
 | 432 | `dialing` | u64 | The node's dials not yet connected or failed |
 | 440 | `columns` | 16 bytes | The columns the node samples: bit i % 8 of byte i / 8 for column i |
 | 456 | `pruned_epoch` | u64 | The store's finalized epoch at the node's last prune |
-| 464 | `config` | `Config` | |
+| 464 | `db` | PartRef | One `Db` of [db.md](db.md): the history the node archived |
+| 480 | `db_next_slot` | u64 | With `NODE_FLAG_DB`: the canonical blocks below this slot are in the `Db`; the anchor's slot + 1 at the start |
+| 488 | `db_block_segment` | u64 | The block segment of the last block record, or 2^64 - 1 |
+| 496 | `db_block_end` | u64 | The bytes of that segment |
+| 504 | `db_sidecar_segment` | u64 | The sidecar segment of the last sidecar record, or 2^64 - 1 |
+| 512 | `db_sidecar_end` | u64 | The bytes of that segment |
+| 520 | `config` | `Config` | |
 
 ### Rules
 
-- `NODE_FIXED` (464 + `CONFIG_SIZE`) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, p2p_out, engine_in.
+- `NODE_FIXED` (520 + `CONFIG_SIZE`) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, p2p_out, engine_in, db.
+- The `Db` has the capacities of the `NodeRoom` fields `db_slots` and `db_roots`, and its `first_slot` is the anchor's slot rounded down to a multiple of `DB_SEGMENT_SLOTS`.
 - The capacity of a part is its bytes up to the next part over its entry's bytes; `p2p_out` is the last part.
 - `NODE_FLAG_OPTIMISTIC`: blocks are imported as `PAYLOAD_STATUS_NOT_VALIDATED`.
 - `NODE_FLAG_JUSTIFIED_PENDING`: a `NODE_WORK_JUSTIFIED_STATE` is queued.
@@ -809,6 +820,7 @@ The state of the node: a value with parts.
 - `NODE_FLAG_SYNCING`: a BeaconBlocksByRange request of the node is open.
 - `NODE_FLAG_ENGINE`: the node drives an execution engine; `NODE_FLAG_FCU`: an engine_forkchoiceUpdated is due.
 - `NODE_FLAG_DISCV5`: the shell runs asm-discv5 for the node.
+- `NODE_FLAG_DB`: the node archives the finalized history in its `Db`, and the shell keeps the segment files: it does each `NODE_ACT_DB_APPEND` and gives the bytes of a `NODE_DB_REF`.
 - `columns` has room for `NUMBER_OF_COLUMNS` of the preset, at most 128.
 
 ## Type `NodeRoom`
@@ -827,6 +839,8 @@ The state of the node: a value with parts.
 | 56 | `messages` | u64 | Capacity of `messages` |
 | 64 | `blobs` | u64 | Capacity of `blobs` |
 | 72 | `engine_bytes` | u64 | Bytes of `engine_in` |
+| 80 | `db_slots` | u64 | Slots of the `Db`: a `DbRoom` with `db_roots` |
+| 88 | `db_roots` | u64 | Roots of the `Db`, a power of two |
 
 ## Type `NodeBlock`
 
@@ -845,10 +859,11 @@ The state of the node: a value with parts.
 | 112 | `blobs` | u64 | For a block from the network: the length of its body's `blob_kzg_commitments`, 0 before deneb |
 | 120 | `payload_status` | u64 | With `NODE_FLAG_ENGINE`: `PAYLOAD_STATUS_*` of the execution engine's answer, for its import |
 | 128 | `retry` | u64 | The slot from which its engine_newPayload may go again |
+| 136 | `length` | u64 | The bytes of its SSZ bytes |
 
 ### Rules
 
-- `NodeBlock__mem` (136) bytes.
+- `NodeBlock__mem` (144) bytes.
 - With `NODE_FLAG_ENGINE`, the status `NODE_BLOCK_PAYLOAD` while its engine_newPayload is due, and `NODE_BLOCK_EXECUTING` while it is queued or sent.
 - `NODE_BLOCK_FREE`: an entry the prune freed, with `root` and `parent_root` all 0xff bytes, `slot` 2^64 - 1, and `data_id` and `state_id` 0. A new block takes the first free entry, else the next.
 
@@ -922,10 +937,11 @@ The state of the node: a value with parts.
 | 40 | `state` | u64 | `NODE_MESSAGE_ID`, `NODE_MESSAGE_VALIDATING`, `NODE_MESSAGE_NO_ROOM` or `NODE_MESSAGE_CORRUPT` |
 | 48 | `slot` | u64 | The slot of its block header |
 | 56 | `parent_root` | Root | The parent root of its block header |
+| 88 | `length` | u64 | The bytes of its uncompressed data |
 
 ### Rules
 
-- `NodeMessage__mem` (88) bytes.
+- `NodeMessage__mem` (96) bytes.
 
 ## Type `NodeBlob`
 
@@ -938,10 +954,11 @@ The state of the node: a value with parts.
 | 40 | `slot` | u64 | The slot of its block header |
 | 48 | `data_id` | u64 | `BufferId` of the `BlobSidecar`'s SSZ bytes, or for a slot of fulu or later the `DataColumnSidecar`'s |
 | 56 | `status` | u64 | `NODE_BLOB_VERIFYING` while a `NODE_WORK_BLOB` of it is queued, `NODE_BLOB_VALID`, `NODE_BLOB_INVALID` with its bytes freed, or `NODE_BLOB_FREE` after the prune, with `block_root` all 0xff bytes and `slot` 2^64 - 1 |
+| 64 | `length` | u64 | The bytes of its SSZ bytes |
 
 ### Rules
 
-- `NodeBlob__mem` (64) bytes.
+- `NodeBlob__mem` (72) bytes.
 - An entry of a slot whose fork is fulu or later holds a column sidecar, and `index` is its column.
 - The node holds at most one `NODE_BLOB_VALID` entry of each block root and index.
 
@@ -1034,7 +1051,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 | 24 | `state_a` or `bytes` | u64 or ByteList | `NODE_ACT_WORK`: a `BufferId`; `NODE_ACT_STATE_COPY`: the new id; `NODE_ACT_BYTES_PUT`: the bytes, offset 24 |
 | 32 | `state_b` | u64 | `NODE_ACT_WORK`: a `BufferId` |
 | 40 | `state_c` | u64 | `NODE_ACT_WORK`: a `BufferId` |
-| 48 | `data` | u64 | `NODE_ACT_WORK`: a `BufferId` of bytes |
+| 48 | `data` | u64 | `NODE_ACT_WORK`: a `BufferId` of bytes, or for a SERVE a `NODE_DB_REF` |
 | 56 | `target` | u64 | `NODE_ACT_WORK`: a `NodeBlock` index (also of a SYNC_BLOCK), a `NodeCheckpoint` index, a `NodeBlob` index, a stream Handle, or a message Handle |
 | 64 | `arg` | u64 | `NODE_ACT_WORK`: `is_from_block` of an attestation, the epoch of a checkpoint, the protocol version + 256 * the method of a SERVE, topic + 256 * subnet of a GOSSIP, or the JSON-RPC id of a NEW_PAYLOAD or FORKCHOICE |
 
@@ -1046,6 +1063,8 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 - `NODE_ACT_WORK`: `NODE_ACT_WORK_SIZE` bytes; call lantern_node_run.
 - `NODE_ACT_P2P_LIST`: a ByteList of libp2p `Action` values from 16, offset 24; do its DIAL, ADOPT, REFUSE, SEND, CLOSE and SEND_DATAGRAM in order, and skip the others.
 - `NODE_ACT_DISCV5`: a ByteList at 24, offset 24, of asm-discv5 events: pass them to discv5_step.
+- `NODE_ACT_DB_APPEND` (`NODE_ACT_DB_APPEND_SIZE`, 112 bytes): 16 a `BufferId` of bytes, 24 a segment's number, 32 1 for a sidecar segment and 0 for a block segment, 40 an offset, 48 a `DbRecord`. Write the record at the offset of the segment file, its end: the `DbRecord`, the bytes, and zero bytes to a multiple of 8. The first record of a segment that a run writes truncates the file to its offset first, so a torn end or an older run's records go.
+- A `NODE_DB_REF` is a `BufferId` with bit 63 set: bit 62 set for a sidecar segment, the segment's number in bits 48 to 61, and the offset of a record in bits 0 to 47. As the `data` of a SERVE work it names the SSZ bytes of that record: the shell gives lantern_node_run a ByteList of them, whose offset may point into the segment file's memory.
 - `NODE_ACT_ENGINE`: a ByteList at 24, offset 24: write its bytes to the connection to the execution engine, opening one when there is none, and pass what the engine sends in `NODE_EV_ENGINE` events; a connection that fails or closes before an answer is a `NODE_EV_ENGINE` with arg 1.
 
 ## Results

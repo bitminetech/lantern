@@ -100,6 +100,21 @@ FUNCTION lantern_node_size
     add     t0, t3, t1
     bltu    t0, t3, 9f
     mv      t3, t0
+    ld      t0, NodeRoom_db_roots(a0)       # the Db: DB_FIXED, its slots, a power of two of roots
+    beqz    t0, 9f
+    addi    t1, t0, -1
+    and     t1, t1, t0
+    bnez    t1, 9f
+    srli    t1, t0, 60
+    bnez    t1, 9f
+    slli    t0, t0, 3
+    add     t0, t3, t0
+    bltu    t0, t3, 9f
+    mv      t3, t0
+    NODE_SIZE_ADD db_slots, DbSlot__mem
+    addi    t0, t3, DB_FIXED
+    bltu    t0, t3, 9f
+    mv      t3, t0
     li      t1, NODE_FIXED
     add     t0, t3, t1
     bltu    t0, t3, 9f
@@ -162,6 +177,22 @@ LOCAL_FUNCTION node_layout
     li      t1, 24
     sd      t1, 8(t2)
     sd      zero, 16(t2)
+    ld      t1, NodeRoom_engine_bytes(a1)
+    addi    t1, t1, 24 + 7
+    andi    t1, t1, -8
+    add     t0, t0, t1
+    sd      t0, Node_db(a0)                 # one Db, its size set
+    li      t1, 1
+    sd      t1, (Node_db + 8)(a0)
+    ld      t1, NodeRoom_db_slots(a1)
+    li      t2, DbSlot__mem
+    mul     t1, t1, t2
+    ld      t2, NodeRoom_db_roots(a1)
+    slli    t2, t2, 3
+    add     t1, t1, t2
+    addi    t1, t1, DB_FIXED
+    add     t2, a0, t0
+    sd      t1, 0(t2)
     ret
 END_FUNCTION node_layout
 
@@ -257,6 +288,20 @@ FUNCTION lantern_node_init
     li      t1, 1
     sd      t1, NodeCheckpoint_state_id(t0)
     sd      t1, (Node_checkpoints + 8)(s6)
+    li      t0, -DB_SEGMENT_SLOTS           # the Db: from the anchor's segment; its archive after the anchor
+    and     t0, s4, t0
+    sd      t0, L(sp)
+    addi    a0, s1, NodeRoom_db_slots
+    addi    a1, sp, L
+    ld      a2, Node_db(s6)
+    add     a2, s6, a2
+    call    lantern_db_init
+    bnez    a0, 9f
+    addi    t0, s4, 1
+    sd      t0, Node_db_next_slot(s6)
+    li      t0, -1
+    sd      t0, Node_db_block_segment(s6)
+    sd      t0, Node_db_sidecar_segment(s6)
     li      a0, LANTERN_OK
 9:  LEAVE 16
 8:  li      a0, LANTERN_BUFFER_TOO_SMALL
@@ -328,6 +373,13 @@ FUNCTION lantern_node_copy
     mv      a0, s3
     mv      a1, s2
     call    node_layout
+    ld      a0, Node_db(s1)                 # the Db, at its new room
+    add     a0, s1, a0
+    addi    a1, s2, NodeRoom_db_slots
+    ld      a2, Node_db(s3)
+    add     a2, s3, a2
+    call    lantern_db_copy
+    bnez    a0, 8f
     NODE_COPY_PART Node_blocks, NodeBlock__mem      # the entries of each part
     NODE_COPY_PART Node_checkpoints, NodeCheckpoint__mem
     NODE_COPY_PART Node_pow_blocks, POW_BLOCK_BYTES
@@ -1162,7 +1214,9 @@ LOCAL_FUNCTION node_prune
     sd      zero, NodeBlock_state_id(s8)
     addi    a0, s8, NodeBlock_parent_root
     j       1b
-2:  li      s7, 0                           # each other block
+2:  mv      a0, s3                          # with NODE_FLAG_DB, the archive
+    call    node_archive
+    li      s7, 0                           # each other block
 3:  ld      t0, (Node_blocks + 8)(s1)
     bgeu    s7, t0, 20f
     PART    s8, t0, s1, Node_blocks
@@ -1174,8 +1228,18 @@ LOCAL_FUNCTION node_prune
     li      t1, NODE_BLOCK_IMPORTED
     bne     t0, t1, 10f
     ld      t0, NodeBlock_state_id(s8)
-    beqz    t0, 19f                         # an ancestor: its bytes stay
-    mv      a0, s8
+    bnez    t0, 12f
+    ld      t0, Node_flags(s1)              # an ancestor: its bytes stay, but those in the Db go
+    andi    t0, t0, NODE_FLAG_DB
+    beqz    t0, 19f
+    ld      t0, NodeBlock_slot(s8)
+    ld      t1, Node_db_next_slot(s1)
+    bgeu    t0, t1, 19f
+    ld      a0, NodeBlock_data_id(s8)
+    call    node_serving
+    bnez    a0, 19f
+    j       15f
+12: mv      a0, s8
     call    node_store_find                 # a descendant: in the store
     li      t0, -1
     bne     a0, t0, 19f
@@ -1240,7 +1304,13 @@ LOCAL_FUNCTION node_prune
     beq     a0, t0, 25f
     ld      t0, NodeBlock_status(a1)
     li      t1, NODE_BLOCK_IMPORTED
-    beq     t0, t1, 29f
+    bne     t0, t1, 25f
+    ld      t0, Node_flags(s1)              # of a kept block: but those in the Db go
+    andi    t0, t0, NODE_FLAG_DB
+    beqz    t0, 29f
+    ld      t0, NodeBlob_slot(s8)
+    ld      t1, Node_db_next_slot(s1)
+    bgeu    t0, t1, 29f
 25: ld      a0, NodeBlob_data_id(s8)
     call    node_serving
     bnez    a0, 29f
@@ -1287,6 +1357,302 @@ LOCAL_FUNCTION node_prune
     j       31b
 99: LEAVE 0
 END_FUNCTION node_prune
+
+/* dst = the DbSlot of slot slot in the node's Db; to fail outside first_slot to end_slot. Uses t0, t1. */
+.macro DB_SLOT dst, slot, fail
+    ld      t0, Node_db(s1)
+    add     t0, s1, t0
+    ld      t1, Db_end_slot(t0)
+    bgeu    \slot, t1, \fail
+    ld      t1, Db_first_slot(t0)
+    bltu    \slot, t1, \fail
+    sub     t1, \slot, t1
+    li      \dst, DbSlot__mem
+    mul     t1, t1, \dst
+    ld      \dst, Db_slots(t0)
+    add     \dst, \dst, t1
+    add     \dst, t0, \dst
+.endm
+
+/* a0 = the NODE_DB_REF of the Db record of the block of slot a0, or 0. Uses t0-t3. */
+LOCAL_FUNCTION node_db_block
+    UNWIND_END_PROLOGUE
+    DB_SLOT t2, a0, 9f
+    ld      t3, DbSlot_block(t2)
+    beqz    t3, 9f
+    addi    t3, t3, -1
+    srli    t0, a0, DB_SEGMENT_SHIFT
+    slli    t0, t0, 48
+    or      a0, t3, t0
+    li      t0, 1
+    slli    t0, t0, 63
+    or      a0, a0, t0
+    ret
+9:  li      a0, 0
+    ret
+END_FUNCTION node_db_block
+
+/*
+ * a0 = the NODE_DB_REF of the Db record of the sidecar of index a1 of slot a0, or 0: at the
+ * slot's first sidecar record, plus its size times the slot's indices below a1. Uses t0-t6.
+ */
+LOCAL_FUNCTION node_db_sidecar
+    UNWIND_END_PROLOGUE
+    li      t0, DB_SIDECAR_INDICES
+    bgeu    a1, t0, 9f
+    DB_SLOT t2, a0, 9f
+    ld      t3, DbSlot_indices(t2)
+    ld      t4, (DbSlot_indices + 8)(t2)
+    li      t0, 64
+    bgeu    a1, t0, 1f
+    srl     t5, t3, a1
+    andi    t5, t5, 1
+    beqz    t5, 9f
+    li      t5, 1
+    sll     t5, t5, a1
+    addi    t5, t5, -1
+    and     t3, t3, t5
+    li      t4, 0
+    j       2f
+1:  addi    t6, a1, -64
+    srl     t5, t4, t6
+    andi    t5, t5, 1
+    beqz    t5, 9f
+    li      t5, 1
+    sll     t5, t5, t6
+    addi    t5, t5, -1
+    and     t4, t4, t5
+2:  li      t6, 0                           # the indices below it
+3:  beqz    t3, 4f
+    addi    t5, t3, -1
+    and     t3, t3, t5
+    addi    t6, t6, 1
+    j       3b
+4:  beqz    t4, 5f
+    addi    t5, t4, -1
+    and     t4, t4, t5
+    addi    t6, t6, 1
+    j       4b
+5:  ld      t3, DbSlot_sidecars(t2)
+    addi    t3, t3, -1
+    ld      t4, DbSlot_sidecar_end(t2)
+    sub     t4, t4, t3
+    ld      t5, DbSlot_sidecar_count(t2)
+    divu    t4, t4, t5
+    mul     t4, t4, t6
+    add     t3, t3, t4
+    srli    t0, a0, DB_SEGMENT_SHIFT
+    slli    t0, t0, 48
+    or      a0, t3, t0
+    li      t0, 3
+    slli    t0, t0, 62
+    or      a0, a0, t0
+    ret
+9:  li      a0, 0
+    ret
+END_FUNCTION node_db_sidecar
+
+/* A DB_APPEND action: sidecars a0, BufferId a1, segment a2, offset a3, the DbRecord at a4 (8-aligned). Uses t0-t3. */
+LOCAL_FUNCTION node_db_append
+    UNWIND_END_PROLOGUE
+    ld      t0, 8(s6)
+    ld      t1, 16(s6)
+    add     t2, s6, t0
+    add     t2, t2, t1
+    addi    t1, t1, NODE_ACT_DB_APPEND_SIZE
+    sd      t1, 16(s6)
+    li      t0, NODE_ACT_DB_APPEND_SIZE
+    sd      t0, 0(t2)
+    li      t0, NODE_ACT_DB_APPEND
+    sd      t0, 8(t2)
+    sd      a1, 16(t2)
+    sd      a2, 24(t2)
+    sd      a0, 32(t2)
+    sd      a3, 40(t2)
+    li      t1, 0
+1:  add     t0, a4, t1
+    ld      t0, 0(t0)
+    add     t3, t2, t1
+    sd      t0, 48(t3)
+    addi    t1, t1, 8
+    li      t0, 64
+    bltu    t1, t0, 1b
+    ret
+END_FUNCTION node_db_append
+
+/*
+ * With NODE_FLAG_DB, the canonical blocks from db_next_slot to the finalized block a0 and their
+ * sidecars go to the Db, in slot order: a record of each in the index and in a DB_APPEND action,
+ * then their bytes and entries go, but the finalized block's entry and bytes a stream sends. A
+ * record the Db refuses stops the archive until a later prune. s3 the finalized block, s4 the
+ * chain (an entry address for each, at the end of scratch), s7 its count, s8 a block, s9 an
+ * index, s10 the slot. Locals: L a DbRecord, L+64 an offset, L+72 a sidecar entry.
+ */
+LOCAL_FUNCTION node_archive
+    ENTER 80
+    ld      t0, Node_flags(s1)
+    andi    t0, t0, NODE_FLAG_DB
+    beqz    t0, 99f
+    mv      s3, a0
+    ld      t0, 0(s5)                       # the chain at the end of scratch
+    ld      t1, (Node_blocks + 8)(s1)
+    slli    t1, t1, 3
+    sub     t0, t0, t1
+    add     s4, s5, t0
+    li      s7, 0
+    mv      a1, s3                          # from the finalized block down to db_next_slot
+1:  ld      t0, NodeBlock_status(a1)
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 2f
+    ld      t0, NodeBlock_slot(a1)
+    ld      t1, Node_db_next_slot(s1)
+    bltu    t0, t1, 2f
+    slli    t0, s7, 3
+    add     t0, s4, t0
+    sd      a1, 0(t0)
+    addi    s7, s7, 1
+    ld      t0, (Node_blocks + 8)(s1)
+    bgeu    s7, t0, 2f
+    addi    a0, a1, NodeBlock_parent_root
+    call    node_find_block
+    li      t0, -1
+    bne     a0, t0, 1b
+2:  beqz    s7, 99f                         # then from the lowest slot
+    addi    s7, s7, -1
+    slli    t0, s7, 3
+    add     t0, s4, t0
+    ld      s8, 0(t0)
+    ld      s10, NodeBlock_slot(s8)
+    ld      t0, NodeBlock_data_id(s8)
+    beqz    t0, 30f                         # no bytes: the anchor
+    ld      t0, NodeBlock_length(s8)        # the block's record
+    sd      t0, L(sp)
+    li      t0, DB_BLOCK
+    sd      t0, (L + 8)(sp)
+    sd      s10, (L + 16)(sp)
+    sd      zero, (L + 24)(sp)
+    addi    t0, sp, L + 32
+    COPY32  t0, s8
+    srli    t0, s10, DB_SEGMENT_SHIFT       # its segment, and its offset at the segment's end
+    ld      t1, Node_db_block_segment(s1)
+    beq     t0, t1, 3f
+    sd      t0, Node_db_block_segment(s1)
+    sd      zero, Node_db_block_end(s1)
+3:  ld      t0, Node_db_block_end(s1)
+    sd      t0, (L + 64)(sp)
+    ld      a0, Node_db(s1)
+    add     a0, s1, a0
+    addi    a1, sp, L
+    addi    a2, sp, L + 64
+    call    lantern_db_add
+    bnez    a0, 99f
+    li      a0, 0
+    ld      a1, NodeBlock_data_id(s8)
+    ld      a2, Node_db_block_segment(s1)
+    ld      a3, (L + 64)(sp)
+    addi    a4, sp, L
+    call    node_db_append
+    ld      t0, L(sp)
+    addi    t0, t0, DbRecord__mem + 7
+    andi    t0, t0, -8
+    ld      t1, Node_db_block_end(s1)
+    add     t1, t1, t0
+    sd      t1, Node_db_block_end(s1)
+    li      s9, 0                           # each sidecar the node holds, by index
+4:  li      t0, DB_SIDECAR_INDICES
+    bgeu    s9, t0, 20f
+    mv      a0, s8
+    mv      a1, s9
+    call    node_blob_held
+    beqz    a0, 19f
+    sd      a0, (L + 72)(sp)
+    mv      a0, s10                         # a column sidecar from fulu on, else a blob sidecar
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t1, DB_BLOB_SIDECAR
+    li      t0, FORK_FULU
+    bltu    a0, t0, 41f
+    li      t1, DB_COLUMN_SIDECAR
+41: sd      t1, (L + 8)(sp)
+    ld      t0, (L + 72)(sp)
+    ld      t0, NodeBlob_length(t0)
+    sd      t0, L(sp)
+    sd      s10, (L + 16)(sp)
+    sd      s9, (L + 24)(sp)
+    srli    t0, s10, DB_SEGMENT_SHIFT
+    ld      t1, Node_db_sidecar_segment(s1)
+    beq     t0, t1, 5f
+    sd      t0, Node_db_sidecar_segment(s1)
+    sd      zero, Node_db_sidecar_end(s1)
+5:  ld      t0, Node_db_sidecar_end(s1)
+    sd      t0, (L + 64)(sp)
+    ld      a0, Node_db(s1)
+    add     a0, s1, a0
+    addi    a1, sp, L
+    addi    a2, sp, L + 64
+    call    lantern_db_add
+    bnez    a0, 19f                         # refused: the entry stays for the prune
+    li      a0, 1
+    ld      t0, (L + 72)(sp)
+    ld      a1, NodeBlob_data_id(t0)
+    ld      a2, Node_db_sidecar_segment(s1)
+    ld      a3, (L + 64)(sp)
+    addi    a4, sp, L
+    call    node_db_append
+    ld      t0, L(sp)
+    addi    t0, t0, DbRecord__mem + 7
+    andi    t0, t0, -8
+    ld      t1, Node_db_sidecar_end(s1)
+    add     t1, t1, t0
+    sd      t1, Node_db_sidecar_end(s1)
+    ld      t0, (L + 72)(sp)                # its bytes and entry go, unless a stream sends them
+    ld      a0, NodeBlob_data_id(t0)
+    call    node_serving
+    bnez    a0, 19f
+    li      a0, NODE_ACT_BYTES_FREE
+    ld      t0, (L + 72)(sp)
+    ld      a1, NodeBlob_data_id(t0)
+    li      a2, 0
+    call    node_ids
+    ld      t1, (L + 72)(sp)
+    li      t0, -1
+    sd      t0, 0(t1)
+    sd      t0, 8(t1)
+    sd      t0, 16(t1)
+    sd      t0, 24(t1)
+    sd      t0, NodeBlob_slot(t1)
+    sd      zero, NodeBlob_data_id(t1)
+    li      t0, NODE_BLOB_FREE
+    sd      t0, NodeBlob_status(t1)
+19: addi    s9, s9, 1
+    j       4b
+20: ld      a0, NodeBlock_data_id(s8)       # the block's bytes go, unless a stream sends them
+    call    node_serving
+    bnez    a0, 30f
+    li      a0, NODE_ACT_BYTES_FREE
+    ld      a1, NodeBlock_data_id(s8)
+    li      a2, 0
+    call    node_ids
+    sd      zero, NodeBlock_data_id(s8)
+    beq     s8, s3, 30f                     # and its entry, but the finalized block's
+    li      t0, -1
+    sd      t0, 0(s8)
+    sd      t0, 8(s8)
+    sd      t0, 16(s8)
+    sd      t0, 24(s8)
+    sd      t0, 32(s8)
+    sd      t0, 40(s8)
+    sd      t0, 48(s8)
+    sd      t0, 56(s8)
+    sd      t0, NodeBlock_slot(s8)
+    sd      zero, NodeBlock_state_id(s8)
+    li      t0, NODE_BLOCK_FREE
+    sd      t0, NodeBlock_status(s8)
+30: addi    t0, s10, 1
+    sd      t0, Node_db_next_slot(s1)
+    j       2b
+99: LEAVE 80
+END_FUNCTION node_archive
 
 /* A BYTES_PUT action of the ByteList a0 with a new id: a0 = the id. s3 the ByteList, s4 the id. */
 LOCAL_FUNCTION node_put
@@ -1745,6 +2111,8 @@ LOCAL_FUNCTION node_event
     sd      t2, NodeBlock_data_available(t0)
     sd      zero, NodeBlock_result(t0)
     sd      zero, NodeBlock_blobs(t0)
+    ld      t2, 16(s4)
+    sd      t2, NodeBlock_length(t0)
     ld      a0, (L + 40)(sp)
     call    node_try_import
 19: LEAVE 48
@@ -2007,6 +2375,8 @@ LOCAL_FUNCTION node_event
     sd      zero, NodeBlock_result(t0)
     ld      t2, NodeEvent_index(s3)
     sd      t2, NodeBlock_blobs(t0)
+    ld      t2, NodeMessage_length(s4)
+    sd      t2, NodeBlock_length(t0)
     mv      a0, s4
     call    node_drop_message
     ld      a0, (L + 40)(sp)
@@ -2034,6 +2404,8 @@ LOCAL_FUNCTION node_event
     sd      t2, NodeBlob_data_id(t0)
     li      t2, NODE_BLOB_VALID
     sd      t2, NodeBlob_status(t0)
+    ld      t2, NodeMessage_length(s4)
+    sd      t2, NodeBlob_length(t0)
     mv      a0, s4
     call    node_drop_message
     addi    a0, s3, NodeEvent_root
@@ -2440,7 +2812,7 @@ END_FUNCTION node_respond
  * or a payload (96).
  */
 LOCAL_FUNCTION node_request
-    ENTER 176
+    ENTER 208
     mv      s3, a0
     ld      t0, NodeStream_state(s3)        # a request already answered: nothing
     li      t1, NODE_STREAM_EOF
@@ -2590,7 +2962,7 @@ LOCAL_FUNCTION node_request
     call    node_out_handle
     mv      a0, s3
     call    node_drop_stream
-    LEAVE 176
+    LEAVE 208
 10: li      t0, REQRESP_PING
     bne     s4, t0, 20f
     ld      t0, Node_metadata_seq(s1)       # Ping: our seq_number
@@ -2600,7 +2972,7 @@ LOCAL_FUNCTION node_request
     addi    a2, sp, L + 64
     li      a3, 8
     call    node_respond
-    LEAVE 176
+    LEAVE 208
 20: ld      a0, NodeStream_peer(s3)         # Status: the peer's, then ours
     mv      a1, s9
     mv      a2, s7
@@ -2612,7 +2984,7 @@ LOCAL_FUNCTION node_request
     addi    a2, sp, L + 64
     mv      a3, s7
     call    node_respond
-    LEAVE 176
+    LEAVE 208
 50: addi    a0, sp, L + 64                  # MetaData: seq_number, attnets, syncnets, custody_group_count
     li      a1, 32
     call    lantern_zero
@@ -2635,7 +3007,7 @@ LOCAL_FUNCTION node_request
     li      a1, 0
     addi    a2, sp, L + 64
     call    node_respond
-    LEAVE 176
+    LEAVE 208
 60: ld      s7, 0(s9)                       # BlocksByRange: start_slot, count
     ld      s10, 8(s9)
     ld      t0, Node_earliest_slot(s1)
@@ -2647,7 +3019,22 @@ LOCAL_FUNCTION node_request
     bgeu    t0, s7, 66f
     li      t0, -1
 66: mv      s10, t0
-    li      s8, 0                           # the canonical blocks of the range, from the head down
+    li      s8, 0                           # the blocks of the Db in the range, in slot order
+    sd      s7, (L + 144)(sp)
+600: ld     a0, (L + 144)(sp)
+    ld      t0, Node_db_next_slot(s1)
+    bgeu    a0, t0, 601f
+    bgeu    a0, s10, 601f
+    addi    t0, a0, 1
+    sd      t0, (L + 144)(sp)
+    call    node_db_block
+    beqz    a0, 600b
+    slli    t2, s8, 3
+    add     t2, t2, s3
+    sd      a0, NodeStream_request(t2)
+    addi    s8, s8, 1
+    j       600b
+601: sd     s8, (L + 136)(sp)               # then the canonical blocks of the range from the head down, reversed
     addi    s9, s1, Node_head_root
 61: mv      a0, s9
     call    node_find_block
@@ -2658,6 +3045,8 @@ LOCAL_FUNCTION node_request
     bne     t0, t1, 63f
     ld      t0, NodeBlock_slot(a1)
     bltu    t0, s7, 63f
+    ld      t1, Node_db_next_slot(s1)
+    bltu    t0, t1, 63f
     addi    s9, a1, NodeBlock_parent_root
     bgeu    t0, s10, 61b
     ld      t1, NodeBlock_data_id(a1)
@@ -2667,10 +3056,13 @@ LOCAL_FUNCTION node_request
     sd      t1, NodeStream_request(t2)
     addi    s8, s8, 1
     j       61b
-63: addi    t0, s3, NodeStream_request      # in slot order
+63: addi    t0, s3, NodeStream_request      # in slot order: the part from the head, reversed
     slli    t1, s8, 3
     add     t1, t0, t1
     addi    t1, t1, -8
+    ld      t2, (L + 136)(sp)
+    slli    t2, t2, 3
+    add     t0, t0, t2
 64: bgeu    t0, t1, 77f
     ld      t2, 0(t0)
     ld      t3, 0(t1)
@@ -2701,7 +3093,37 @@ LOCAL_FUNCTION node_request
     bgeu    t0, s7, 1653f
     li      t0, -1
 1653: mv     s10, t0
-    li      s8, 0                           # the sidecars of the canonical blocks of the range, from the head down
+    li      s8, 0                           # the sidecars of the Db in the range, of deneb or electra, in (slot, index) order
+    sd      s7, (L + 144)(sp)
+650: ld     a0, (L + 144)(sp)
+    ld      t0, Node_db_next_slot(s1)
+    bgeu    a0, t0, 653f
+    bgeu    a0, s10, 653f
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_DENEB
+    beq     a0, t0, 654f
+    li      t0, FORK_ELECTRA
+    bne     a0, t0, 652f
+654: sd     zero, (L + 152)(sp)
+651: ld     a1, (L + 152)(sp)
+    ld      t0, (L + 72)(sp)
+    bgeu    a1, t0, 652f
+    addi    t0, a1, 1
+    sd      t0, (L + 152)(sp)
+    ld      a0, (L + 144)(sp)
+    call    node_db_sidecar
+    beqz    a0, 651b
+    slli    t2, s8, 3
+    add     t2, t2, s3
+    sd      a0, NodeStream_request(t2)
+    addi    s8, s8, 1
+    j       651b
+652: ld     t0, (L + 144)(sp)
+    addi    t0, t0, 1
+    sd      t0, (L + 144)(sp)
+    j       650b
+653: sd     s8, (L + 136)(sp)               # then those of the canonical blocks from the head down, reversed
     addi    s9, s1, Node_head_root
 166: mv     a0, s9
     call    node_find_block
@@ -2712,6 +3134,8 @@ LOCAL_FUNCTION node_request
     bne     t0, t1, 63b
     ld      t0, NodeBlock_slot(a1)
     bltu    t0, s7, 63b
+    ld      t1, Node_db_next_slot(s1)
+    bltu    t0, t1, 63b
     addi    s9, a1, NodeBlock_parent_root
     bgeu    t0, s10, 166b
     sd      a1, (L + 64)(sp)                # its indices, from the last, of a block of deneb or electra
@@ -2746,7 +3170,7 @@ LOCAL_FUNCTION node_request
     addi    s9, s9, 40
     addi    s7, s7, -1
     call    node_blob_held
-    beqz    a0, 176b
+    beqz    a0, 1762f
     sd      a0, (L + 72)(sp)
     ld      t0, NodeBlob_data_id(a0)
     sd      t0, (L + 64)(sp)
@@ -2770,6 +3194,29 @@ LOCAL_FUNCTION node_request
     sd      t1, NodeStream_request(t2)
     addi    s8, s8, 1
     j       176b
+1762: ld    a0, Node_db(s1)                 # else the Db's sidecar of the root and index, of deneb or electra
+    add     a0, s1, a0
+    addi    a1, s9, -40
+    addi    a2, sp, L + 160
+    call    lantern_db_find_root
+    ld      a0, (L + 160)(sp)
+    li      t0, -1
+    beq     a0, t0, 176b
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_DENEB
+    beq     a0, t0, 1763f
+    li      t0, FORK_ELECTRA
+    bne     a0, t0, 176b
+1763: ld    a0, (L + 160)(sp)
+    ld      a1, -8(s9)
+    call    node_db_sidecar
+    beqz    a0, 176b
+    slli    t2, s8, 3
+    add     t2, t2, s3
+    sd      a0, NodeStream_request(t2)
+    addi    s8, s8, 1
+    j       176b
 70: srli    s7, s7, 5                       # BlocksByRoot: the blocks the node has, in the request's order
     li      s8, 0
 71: beqz    s7, 77f
@@ -2778,13 +3225,24 @@ LOCAL_FUNCTION node_request
     addi    s9, s9, 32
     addi    s7, s7, -1
     li      t0, -1
-    beq     a0, t0, 71b
+    beq     a0, t0, 711f
     ld      t0, NodeBlock_status(a1)
     li      t1, NODE_BLOCK_IMPORTED
     bne     t0, t1, 71b
     ld      t1, NodeBlock_data_id(a1)
-    beqz    t1, 71b
-    slli    t2, s8, 3
+    bnez    t1, 712f
+711: ld     a0, Node_db(s1)                 # else the Db's block of the root
+    add     a0, s1, a0
+    addi    a1, s9, -32
+    addi    a2, sp, L + 160
+    call    lantern_db_find_root
+    ld      a0, (L + 160)(sp)
+    li      t0, -1
+    beq     a0, t0, 71b
+    call    node_db_block
+    beqz    a0, 71b
+    mv      t1, a0
+712: slli   t2, s8, 3
     add     t2, t2, s3
     sd      t1, NodeStream_request(t2)
     addi    s8, s8, 1
@@ -2795,13 +3253,13 @@ LOCAL_FUNCTION node_request
     sd      zero, NodeStream_next(s3)
     li      t0, NODE_STREAM_SERVE
     sd      t0, NodeStream_state(s3)
-    LEAVE 176
+    LEAVE 208
 78: li      a0, LIBP2P_EVENT_STREAM_CLOSE   # no block: an empty answer
     ld      a1, NodeStream_handle(s3)
     call    node_out_handle
     mv      a0, s3
     call    node_drop_stream
-    LEAVE 176
+    LEAVE 208
 83: lwu     t0, 16(s9)                      # DataColumnSidecarsByRange: the offset 20, then the columns
     li      t1, 20
     bne     t0, t1, 90f
@@ -2859,7 +3317,42 @@ LOCAL_FUNCTION node_request
     bgeu    t0, s7, 846f
     li      t0, -1
 846: mv     s10, t0
-    li      s8, 0                           # the sidecars of the canonical blocks of the range, from the head down
+    li      s8, 0                           # the sidecars of the Db in the range, of fulu or later, in (slot, column) order
+    sd      s7, (L + 144)(sp)
+854: ld     a0, (L + 144)(sp)
+    ld      t0, Node_db_next_slot(s1)
+    bgeu    a0, t0, 857f
+    bgeu    a0, s10, 857f
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_FULU
+    bltu    a0, t0, 856f
+    sd      zero, (L + 152)(sp)
+855: ld     a1, (L + 152)(sp)
+    li      t0, 128
+    bgeu    a1, t0, 856f
+    addi    t0, a1, 1
+    sd      t0, (L + 152)(sp)
+    srli    t0, a1, 6
+    slli    t0, t0, 3
+    add     t0, t0, sp
+    ld      t0, (L + 80)(t0)
+    srl     t0, t0, a1
+    andi    t0, t0, 1
+    beqz    t0, 855b
+    ld      a0, (L + 144)(sp)
+    call    node_db_sidecar
+    beqz    a0, 855b
+    slli    t2, s8, 3
+    add     t2, t2, s3
+    sd      a0, NodeStream_request(t2)
+    addi    s8, s8, 1
+    j       855b
+856: ld     t0, (L + 144)(sp)
+    addi    t0, t0, 1
+    sd      t0, (L + 144)(sp)
+    j       854b
+857: sd     s8, (L + 136)(sp)               # then those of the canonical blocks from the head down, reversed
     addi    s9, s1, Node_head_root
 85: mv      a0, s9
     call    node_find_block
@@ -2870,6 +3363,8 @@ LOCAL_FUNCTION node_request
     bne     t0, t1, 63b
     ld      t0, NodeBlock_slot(a1)
     bltu    t0, s7, 63b
+    ld      t1, Node_db_next_slot(s1)
+    bltu    t0, t1, 63b
     addi    s9, a1, NodeBlock_parent_root
     bgeu    t0, s10, 85b
     sd      a1, (L + 64)(sp)                # its columns, from the last, of a block of fulu or later
@@ -2986,9 +3481,10 @@ LOCAL_FUNCTION node_request
     LDU64   a1, t4, 0, t5
     addi    t4, t4, 8
     sd      t4, (L + 104)(sp)
+    sd      a1, (L + 168)(sp)
     ld      a0, (L + 64)(sp)
     call    node_blob_held
-    beqz    a0, 89b
+    beqz    a0, 892f
     sd      a0, (L + 120)(sp)
     ld      a0, NodeBlob_slot(a0)           # a sidecar of fulu or later
     addi    a1, s1, Node_config
@@ -3009,16 +3505,40 @@ LOCAL_FUNCTION node_request
     sd      t1, NodeStream_request(t2)
     addi    s8, s8, 1
     j       89b
+892: ld     t0, (L + 64)(sp)                # else the Db's column of the root, of fulu or later: the root 8-aligned first
+    addi    t1, sp, L + 176
+    COPY32W t1, t0
+    ld      a0, Node_db(s1)
+    add     a0, s1, a0
+    addi    a1, sp, L + 176
+    addi    a2, sp, L + 160
+    call    lantern_db_find_root
+    ld      a0, (L + 160)(sp)
+    li      t0, -1
+    beq     a0, t0, 89b
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_FULU
+    bltu    a0, t0, 89b
+    ld      a0, (L + 160)(sp)
+    ld      a1, (L + 168)(sp)
+    call    node_db_sidecar
+    beqz    a0, 89b
+    slli    t2, s8, 3
+    add     t2, t2, s3
+    sd      a0, NodeStream_request(t2)
+    addi    s8, s8, 1
+    j       89b
 80: ld      t0, NodeStream_state(s3)        # more bytes come, unless the peer closed
     li      t1, NODE_STREAM_EOF
     beq     t0, t1, 90f
-    LEAVE 176
+    LEAVE 208
 90: li      a1, 1                           # InvalidRequest
 91: mv      a0, s3
     mv      a2, sp
     li      a3, 0
     call    node_respond
-99: LEAVE 176
+99: LEAVE 208
 END_FUNCTION node_request
 
 /*
@@ -3885,6 +4405,8 @@ LOCAL_FUNCTION node_message
 5:  mv      a0, s9                          # the bytes, kept by the shell
     call    node_put
     sd      a0, NodeMessage_data_id(s7)
+    ld      t0, 16(s9)
+    sd      t0, NodeMessage_length(s7)
     li      t0, NODE_MESSAGE_ID
     sd      t0, NodeMessage_state(s7)
 99: sd      s8, 0(s5)
@@ -4343,6 +4865,8 @@ LOCAL_FUNCTION node_response
     mv      a0, s8
     call    node_put
     sd      a0, NodeBlock_data_id(s10)
+    ld      t0, 16(s8)
+    sd      t0, NodeBlock_length(s10)
     mv      a3, a0
     li      a0, NODE_WORK_SYNC_BLOCK
     li      a1, 0
@@ -4363,6 +4887,8 @@ LOCAL_FUNCTION node_response
     mv      a0, s8
     call    node_put
     sd      a0, NodeBlob_data_id(s10)
+    ld      t0, 16(s8)
+    sd      t0, NodeBlob_length(s10)
     mv      a3, a0
     li      a0, NODE_WORK_BLOB
     li      a1, 0
@@ -4383,6 +4909,8 @@ LOCAL_FUNCTION node_response
     mv      a0, s8
     call    node_put
     sd      a0, NodeBlob_data_id(s10)
+    ld      t0, 16(s8)
+    sd      t0, NodeBlob_length(s10)
     mv      a3, a0
     li      a0, NODE_WORK_BLOB
     li      a1, 0
@@ -5372,13 +5900,14 @@ FUNCTION lantern_node_step
     li      t1, 512                         # room: actions, node parts, scratch
     mul     t1, s8, t1
     add     t1, t1, s10
-    ld      t2, (Node_blocks + 8)(s1)
-    li      t3, 128
+    ld      t2, (Node_blocks + 8)(s1)       # the prune's actions: 256 for each block, 160 for each blob, 32 for each checkpoint
+    slli    t2, t2, 8
+    add     t1, t1, t2
+    ld      t2, (Node_blobs + 8)(s1)
+    li      t3, 160
     mul     t2, t2, t3
     add     t1, t1, t2
-    ld      t2, (Node_blobs + 8)(s1)        # 32 for each blob and checkpoint entry: the prune's actions
-    ld      t3, (Node_checkpoints + 8)(s1)
-    add     t2, t2, t3
+    ld      t2, (Node_checkpoints + 8)(s1)
     slli    t2, t2, 5
     add     t1, t1, t2
     addi    t1, t1, 512
@@ -5448,6 +5977,29 @@ FUNCTION lantern_node_step
     slli    t1, t5, 1
     addi    t1, t1, 2
     bltu    t0, t1, 88f
+    ld      t0, Node_flags(s1)              # with NODE_FLAG_DB at a new finalized epoch: the Db's room for the archive
+    andi    t0, t0, NODE_FLAG_DB
+    beqz    t0, 56f
+    ld      t0, Store_finalized_checkpoint(s2)
+    ld      t1, Node_pruned_epoch(s1)
+    bleu    t0, t1, 56f
+    ld      t2, Node_db(s1)
+    add     t2, s1, t2
+    li      t1, SLOTS_PER_EPOCH             # the slots to the finalized checkpoint's
+    mul     t0, t0, t1
+    addi    t0, t0, 1
+    ld      t1, Db_first_slot(t2)
+    bltu    t0, t1, 561f
+    sub     t0, t0, t1
+    ld      t1, (Db_slots + 8)(t2)
+    bltu    t1, t0, 93f
+561: ld     t0, Db_blocks(t2)               # the roots: twice the blocks
+    ld      t1, (Node_blocks + 8)(s1)
+    add     t0, t0, t1
+    slli    t0, t0, 1
+    ld      t1, (Db_roots + 8)(t2)
+    bltu    t1, t0, 94f
+56:
     ld      t0, Node_peers(s1)              # pow blocks: one for each POW_BLOCK event
     ld      t1, Node_pow_blocks(s1)
     sub     t0, t0, t1
@@ -5480,6 +6032,9 @@ FUNCTION lantern_node_step
     li      t1, LANTERN_SCRATCH_FIXED + 64
     add     t0, t0, t1
     add     t0, t0, t3
+    ld      t1, (Node_blocks + 8)(s1)       # and the prune's chain of blocks
+    slli    t1, t1, 3
+    add     t0, t0, t1
     ld      t1, (L + 136)(sp)               # with an ENR event, the record's decoding
     beqz    t1, 55f
     li      t1, DISCV5_ENR_SIZE + DISCV5_ENR_SCRATCH
@@ -5664,6 +6219,10 @@ FUNCTION lantern_node_step
 88: li      t0, NodeRoom_checkpoints
     j       82f
 89: li      t0, NodeRoom_pow_blocks
+    j       82f
+93: li      t0, NodeRoom_db_slots
+    j       82f
+94: li      t0, NodeRoom_db_roots
     j       82f
 90: li      t0, NodeRoom_p2p_out
 82: sd      t0, NodeStepResult_room(s7)

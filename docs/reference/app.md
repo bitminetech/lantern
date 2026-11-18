@@ -68,6 +68,7 @@ lantern_app_options(args, options, fault) -> status
 | `--enr-address` | `enr_address` | an IPv4 address in dotted decimal, for the node record | none |
 | `--http-port` | `http_port` | 1 to 65535: the Beacon API | 5052 |
 | `--target-peers` | `target_peers` | 1 to 1024 | 64 |
+| `--data-dir` | `data_dir` | a directory for the node's history: the segment files of [db.md](db.md) | none: the node keeps its history in memory |
 
 - Keeps the last value of an option given twice.
 - Drops `http://` at the start of `--execution-endpoint`.
@@ -110,6 +111,10 @@ lantern_app_main(args) -> status
 - Listens on TCP `--port` and binds UDP `--port` on every address, through the shell of asm-libp2p, gives each boot node to discv5, and listens for the Beacon API ([beacon-api.md](beacon-api.md)) on TCP `--http-port`.
 - Loops: reads the clock; passes each libp2p shell event, each discv5 record found, each execution engine response and the time to lantern_node_step; performs its actions (on `LANTERN_BUFFER_TOO_SMALL` of lantern_node_step it grows the buffer that `short` names: the node with lantern_node_copy and twice the `NodeRoom` capacity that `room` names, or twice the room of the actions or the scratch; after 64 tries a line `a node step: no room in buffer <short>`); runs each work with lantern_node_run, with the KZG settings, and with more room when it asks; waits for the sockets until the next wakeup, at most 100 ms.
 - Writes a line to the standard output at each new head and each new finalized checkpoint, and a line `peers <n>` when the count of connected peers changes.
+- With `--data-dir`: makes the directory (one already there will do), and starts the node with `NODE_FLAG_DB` and a `Db` room of `DB_SEGMENT_SLOTS` slots and `APP_DB_ROOTS` (4096) roots; a short room grows as the node's other parts do.
+- The segment files of the history: `<dir>/b<n>.seg` for blocks and `<dir>/s<n>.seg` for sidecars, with n the segment's number in decimal.
+- `NODE_ACT_DB_APPEND`: one file of each kind stays open. A record of another segment closes it and opens that one with lantern_shell_open to append, cut to the record's offset with lantern_shell_truncate. The record goes in three appends: its `DbRecord`, its bytes, and zero bytes to a multiple of 8. A failure gives a line `cannot write <path>: error <n>` on the standard error, and the file closes, so the next record opens it again.
+- A SERVE work whose data is a `NODE_DB_REF`: lantern_node_run gets a ByteList of the record's bytes in its segment file, mapped with lantern_shell_map_file. Up to `APP_DB_MAP_COUNT` (4) files stay mapped, the oldest map going first; a record past a map's end maps its file again. A record not in its file is a buffer the work does not name.
 - Writes the size of its scratch buffer into the buffer's first 8 bytes before each call that takes it (ARCHITECTURE.md section 6: a callee may leave scratch invalid, and the caller reinitialises it before reuse).
 
 ### ABI
@@ -163,7 +168,8 @@ The options of a run. A text field is an [`Arg`](#type-arg) of the bytes of the 
 | 72 | `enr_address` | u64 | The IPv4 address, its 4 bytes in network order in the low bytes, or 0 |
 | 80 | `http_port` | u64 | The Beacon API port |
 | 88 | `target_peers` | u64 | The peers to keep |
-| 96 | | | Size |
+| 96 | `data_dir` | `Arg` | The directory of the node's history |
+| 112 | | | Size |
 
 ## Results
 

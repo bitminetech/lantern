@@ -59,7 +59,7 @@
 .set APP_FILE, APP_RECORD + 48 + APP_RECORD_MAX /* FileResult */
 .set APP_RESULT, APP_FILE + 32              /* NodeStepResult */
 .set APP_NODE_ROOM, APP_RESULT + NodeStepResult__size         /* NodeRoom */
-.set APP_STORE_ROOM, APP_NODE_ROOM + 80     /* StoreRoom */
+.set APP_STORE_ROOM, APP_NODE_ROOM + 8 * NODE_ROOM_FIELDS  /* StoreRoom */
 .set APP_SEEN_ROOM, APP_STORE_ROOM + 16     /* SeenRoom */
 .set APP_STATE_ROOM, APP_SEEN_ROOM + 32     /* StateRoom */
 .set APP_ANCHOR, APP_STATE_ROOM + 64        /* NodeAnchor */
@@ -71,7 +71,17 @@
 .set APP_PATH_MAX, 4096
 .set APP_KZG, APP_PATH + 24 + APP_PATH_MAX  /* pair: the KzgSettings of the trusted setup */
 .set APP_PEERS, APP_KZG + 16               /* the count of connected peers of the last log line */
-.set APP_SIZE, (APP_PEERS + 8 + 4095) & ~4095
+.set APP_DB, APP_PEERS + 8                  /* AppDb: the files of the node's history */
+.set AppDb_file, 0                          /* the open segment files: blocks, then sidecars */
+.set AppDb_segment, 16                      /* their segments, or 2^64 - 1 */
+.set AppDb_maps, 32                         /* APP_DB_MAP_COUNT mapped segments of 32 bytes: key (bit 63 sidecars, the segment), address, size, mapped */
+.set APP_DB_MAP_COUNT, 4
+.set AppDb_next_map, AppDb_maps + 32 * APP_DB_MAP_COUNT /* the map a new segment takes next */
+.set AppDb_view, AppDb_next_map + 8         /* a BufferId table entry (id, address, size), then a ByteList header */
+.set AppDb_op, AppDb_view + 48              /* a FileOp or FileResult */
+.set AppDb__size, AppDb_op + 32
+.set APP_DB_ROOTS, 4096                     /* the Db's first root table */
+.set APP_SIZE, (APP_DB + AppDb__size + 4095) & ~4095
 .set APP_BLOCK_BYTES, 1 << 16               /* the anchor block */
 .set APP_BUF_ENTRY, 24                      /* a BufferId table entry: id, address, size */
 .set APP_BUFS_CAP, 4096
@@ -101,7 +111,7 @@ app_builtin_config_text:
 app_builtin_config_end:
     .p2align 3
 app_node_room:                              /* NodeRoom; peers from --target-peers */
-    .quad 1024, 64, 1, 64, 512, 8192, 1 << 20, 4096, 1024, 1 << 20
+    .quad 1024, 64, 1, 64, 512, 8192, 1 << 20, 4096, 1024, 1 << 20, 0, 1
 app_seen_room:                              /* SeenRoom */
     .quad 65536, 65536, 4096, 1 << 20
 app_state_room:                             /* StateRoom */
@@ -118,6 +128,9 @@ app_m_read:
 app_m_error:
     .ascii ": error "
 .set app_m_error_len, 8
+app_m_write:
+    .ascii "cannot write "
+.set app_m_write_len, 13
 app_m_line:
     .ascii ": faulty line "
 .set app_m_line_len, 14

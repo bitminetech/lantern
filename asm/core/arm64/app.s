@@ -469,10 +469,11 @@ LOCAL_FUNCTION app_start
     cbnz    x0, 94f
     add     x0, x19, #APP_NODE_ROOM         /* the node */
     ADDRESS x1, app_node_room
-    mov     x2, #80
+    mov     x2, #(8 * NODE_ROOM_FIELDS)
     bl      lantern_copy
     ldr     x9, [x19, #(APP_OPTIONS + AppOptions_target_peers)]
     str     x9, [x19, #(APP_NODE_ROOM + NodeRoom_peers)]
+    bl      app_db_start                    /* the history's files */
     add     x0, x19, #APP_NODE_ROOM
     add     x1, sp, #L
     CALL_GLOBAL lantern_node_size
@@ -721,7 +722,7 @@ LOCAL_FUNCTION app_grow
     mov     x20, x0
     mov     x9, #APP_NODE
     mov     x10, #APP_NODE_ROOM
-    mov     x23, #10
+    mov     x23, #NODE_ROOM_FIELDS
     cmp     x20, #1
     b.ne    1f
     mov     x9, #APP_STORE
@@ -864,7 +865,7 @@ LOCAL_FUNCTION app_work
     bl      app_work_entry
     mov     x23, x0
     ldr     x0, [x20, #NodeAction_data]
-    bl      app_work_entry
+    bl      app_work_data
     mov     x24, x0
     cmn     x21, #1                         /* an id with no buffer */
     ccmn    x22, #1, #4, ne
@@ -967,6 +968,319 @@ LOCAL_FUNCTION app_work
     LEAVE 0
 END_FUNCTION app_work
 
+/*
+ * L1: the history's files: no file open, no segment mapped; with a data directory, the node gets
+ * NODE_FLAG_DB and room for a segment of slots, and the directory is made (one already there
+ * will do; a failure shows at its first file). x27 the AppDb.
+ */
+LOCAL_FUNCTION app_db_start
+    ENTER 0
+    ADDQ    x27, x19, APP_DB
+    mov     x9, #-1
+    stp     x9, x9, [x27, #AppDb_segment]
+    mov     x10, #0
+1:  add     x11, x27, #AppDb_maps
+    add     x11, x11, x10, lsl #5
+    str     x9, [x11]
+    str     xzr, [x11, #8]
+    add     x10, x10, #1
+    cmp     x10, #APP_DB_MAP_COUNT
+    b.lo    1b
+    str     xzr, [x27, #AppDb_next_map]
+    ldr     x21, [x19, #(APP_OPTIONS + AppOptions_data_dir + 8)]
+    cbz     x21, 9f
+    ldr     x9, [x19, #APP_FLAGS]
+    orr     x9, x9, #NODE_FLAG_DB
+    str     x9, [x19, #APP_FLAGS]
+    MOVQ    x9, DB_SEGMENT_SLOTS
+    str     x9, [x19, #(APP_NODE_ROOM + NodeRoom_db_slots)]
+    mov     x9, #APP_DB_ROOTS
+    str     x9, [x19, #(APP_NODE_ROOM + NodeRoom_db_roots)]
+    cmp     x21, #APP_PATH_MAX
+    b.hi    9f
+    ADDQ    x22, x19, APP_PATH              /* the directory's path */
+    str     x21, [x22, #16]
+    ldr     x9, [x19, #(APP_OPTIONS + AppOptions_data_dir)]
+    ldr     x10, [x19, #APP_ARGS]
+    add     x1, x10, x9
+    add     x0, x22, #24
+    mov     x2, x21
+    bl      lantern_copy
+    mov     x0, x22
+    add     x1, x27, #AppDb_op
+    CALL_GLOBAL lantern_shell_mkdir
+9:  LEAVE 0
+END_FUNCTION app_db_start
+
+/* L1: the path of segment x1 of blocks (x0 0) or sidecars (1) in the data directory, <dir>/b<n>.seg or <dir>/s<n>.seg: a ByteList at APP_PATH. x20 the kind, x21 the segment, x22 the next byte. Locals: L 24 digits. */
+LOCAL_FUNCTION app_db_path
+    ENTER 32
+    mov     x20, x0
+    mov     x21, x1
+    ADDQ    x22, x19, APP_PATH
+    ldr     x2, [x19, #(APP_OPTIONS + AppOptions_data_dir + 8)]
+    cmp     x2, #(APP_PATH_MAX - 32)
+    b.hi    8f
+    ldr     x9, [x19, #(APP_OPTIONS + AppOptions_data_dir)]
+    ldr     x10, [x19, #APP_ARGS]
+    add     x1, x10, x9
+    add     x0, x22, #24
+    add     x22, x0, x2
+    bl      lantern_copy
+    mov     w9, #0x2f                       /* / */
+    strb    w9, [x22], #1
+    mov     w9, #0x62                       /* b */
+    mov     w10, #0x73                      /* s */
+    cmp     x20, #0
+    csel    w9, w10, w9, ne
+    strb    w9, [x22], #1
+    add     x11, sp, #(L + 24)              /* the number's digits, from the last */
+    mov     x12, x21
+    mov     x13, #10
+1:  udiv    x14, x12, x13
+    msub    x15, x14, x13, x12
+    add     w15, w15, #0x30
+    strb    w15, [x11, #-1]!
+    mov     x12, x14
+    cbnz    x12, 1b
+    add     x14, sp, #(L + 24)
+2:  cmp     x11, x14
+    b.hs    3f
+    ldrb    w15, [x11], #1
+    strb    w15, [x22], #1
+    b       2b
+3:  mov     w9, #0x2e                       /* .seg */
+    strb    w9, [x22], #1
+    mov     w9, #0x73
+    strb    w9, [x22], #1
+    mov     w9, #0x65
+    strb    w9, [x22], #1
+    mov     w9, #0x67
+    strb    w9, [x22], #1
+    ADDQ    x10, x19, APP_PATH
+    add     x9, x10, #24
+    sub     x9, x22, x9
+    str     x9, [x10, #16]
+    LEAVE 32
+8:  ADDQ    x10, x19, APP_PATH              /* a count past the room: the shell gives its error */
+    mov     x9, #(APP_PATH_MAX + 1)
+    str     x9, [x10, #16]
+    LEAVE 32
+END_FUNCTION app_db_path
+
+/*
+ * L1: NODE_ACT_DB_APPEND x0: the record at the end of its segment file, its DbRecord, its bytes
+ * and zero bytes to a multiple of 8. A file that is not the open one of its kind opens, and is cut
+ * to the record's offset first. A failure gives a line on the standard error, and the file closes,
+ * so the next record opens it again. x20 the action, x21 the kind (0 blocks, 1 sidecars), x22 the
+ * bytes' table entry, x23 the file, x27 the AppDb. Locals: L a ByteList header, L+24 a u64, L+32 zero bytes.
+ */
+LOCAL_FUNCTION app_db_append
+    ENTER 48
+    mov     x20, x0
+    ADDQ    x27, x19, APP_DB
+    ldr     x21, [x20, #32]
+    and     x21, x21, #1
+    ldr     x0, [x20, #16]
+    bl      app_buf_find
+    cbz     x0, 99f
+    mov     x22, x0
+    add     x23, x27, #AppDb_file
+    add     x23, x23, x21, lsl #3
+    add     x9, x27, #AppDb_segment
+    ldr     x10, [x9, x21, lsl #3]
+    ldr     x11, [x20, #24]
+    cmp     x10, x11
+    b.eq    2f
+    cmn     x10, #1                         /* another file of the kind: it closes */
+    b.eq    1f
+    mov     x0, x23
+    CALL_GLOBAL lantern_shell_close
+    mov     x9, #-1
+    add     x10, x27, #AppDb_segment
+    str     x9, [x10, x21, lsl #3]
+1:  mov     x0, x21                         /* the segment's file, to append to, cut to the offset */
+    ldr     x1, [x20, #24]
+    bl      app_db_path
+    mov     x9, #1
+    str     x9, [sp, #(L + 24)]
+    ADDQ    x0, x19, APP_PATH
+    add     x1, sp, #(L + 24)
+    add     x2, x27, #AppDb_op
+    CALL_GLOBAL lantern_shell_open
+    ldr     x9, [x27, #AppDb_op]
+    cbnz    x9, 90f
+    ldr     x9, [x27, #(AppDb_op + 8)]
+    str     x9, [x23]
+    mov     x0, x23
+    add     x1, x20, #40
+    add     x2, x27, #AppDb_op
+    CALL_GLOBAL lantern_shell_truncate
+    ldr     x9, [x27, #AppDb_op]
+    cbnz    x9, 89f
+    ldr     x9, [x20, #24]
+    add     x10, x27, #AppDb_segment
+    str     x9, [x10, x21, lsl #3]
+2:  add     x9, x20, #48                    /* the DbRecord: a ByteList of the action's 64 bytes */
+    add     x10, sp, #L
+    sub     x9, x9, x10
+    mov     x11, #24
+    stp     x11, x9, [x10]
+    mov     x11, #DbRecord__mem
+    str     x11, [x10, #16]
+    mov     x0, x23
+    add     x1, sp, #L
+    add     x2, x27, #AppDb_op
+    CALL_GLOBAL lantern_shell_append
+    ldr     x9, [x27, #AppDb_op]
+    cbnz    x9, 89f
+    mov     x0, x23                         /* the bytes */
+    ldr     x1, [x22, #8]
+    add     x2, x27, #AppDb_op
+    CALL_GLOBAL lantern_shell_append
+    ldr     x9, [x27, #AppDb_op]
+    cbnz    x9, 89f
+    ldr     x9, [x22, #8]                   /* zero bytes to a multiple of 8 */
+    ldr     x9, [x9, #16]
+    neg     x9, x9
+    and     x9, x9, #7
+    cbz     x9, 99f
+    add     x10, sp, #L
+    str     xzr, [sp, #(L + 32)]
+    mov     x11, #32
+    mov     x12, #24
+    stp     x12, x11, [x10]
+    str     x9, [x10, #16]
+    mov     x0, x23
+    add     x1, sp, #L
+    add     x2, x27, #AppDb_op
+    CALL_GLOBAL lantern_shell_append
+    ldr     x9, [x27, #AppDb_op]
+    cbnz    x9, 89f
+99: LEAVE 48
+89: mov     x0, x23                         /* the file closes */
+    CALL_GLOBAL lantern_shell_close
+    mov     x9, #-1
+    add     x10, x27, #AppDb_segment
+    str     x9, [x10, x21, lsl #3]
+90: ldr     x9, [x27, #AppDb_op]            /* cannot write <path>: error <n> */
+    str     x9, [sp, #(L + 24)]
+    mov     x0, x21
+    ldr     x1, [x20, #24]
+    bl      app_db_path
+    bl      app_line_start
+    ADDRESS x0, app_m_write
+    mov     x1, #app_m_write_len
+    bl      app_line_text
+    bl      app_line_path
+    ADDRESS x0, app_m_error
+    mov     x1, #app_m_error_len
+    bl      app_line_text
+    ldr     x0, [sp, #(L + 24)]
+    bl      app_line_u64
+    mov     x0, #2
+    bl      app_line_end
+    LEAVE 48
+END_FUNCTION app_db_append
+
+/*
+ * L0: x0 = the AppDb's view entry with a ByteList of the bytes of the record at offset x23 of the
+ * mapped segment x26, or 0 when the record is not all inside the map. Uses x9-x13.
+ */
+LOCAL_FUNCTION app_db_record
+    UNWIND_END_PROLOGUE
+    ldr     x9, [x26, #8]
+    cbz     x9, 8f
+    ldr     x10, [x26, #16]
+    adds    x11, x23, #DbRecord__mem
+    b.cs    8f
+    cmp     x11, x10
+    b.hi    8f
+    ldr     x12, [x9, x23]                  /* its length, inside */
+    sub     x10, x10, x11
+    cmp     x12, x10
+    b.hi    8f
+    ADDQ    x10, x19, APP_DB + AppDb_view   /* the entry: id, the header's address, size; the header after it */
+    add     x13, x10, #24
+    str     x13, [x10, #8]
+    add     x9, x9, x11
+    sub     x9, x9, x13
+    mov     x11, #24
+    stp     x11, x9, [x13]
+    str     x12, [x13, #16]
+    mov     x0, x10
+    ret
+8:  mov     x0, #0
+    ret
+END_FUNCTION app_db_record
+
+/*
+ * L1: x0 = the table entry of a work's data BufferId x0 as app_work_entry gives; for a
+ * NODE_DB_REF, the AppDb's view entry of its record in the segment, mapped again when the file
+ * grew past the map, or 2^64 - 1 when the record is not there. x20 the reference, x21 the kind,
+ * x22 the segment, x23 the offset, x24 the map's key, x25 a map's index, x26 a map, x27 the AppDb.
+ */
+LOCAL_FUNCTION app_work_data
+    ENTER 0
+    tbnz    x0, #63, 1f
+    bl      app_work_entry
+    LEAVE 0
+1:  mov     x20, x0
+    ADDQ    x27, x19, APP_DB
+    ubfx    x21, x20, #62, #1
+    ubfx    x22, x20, #48, #14
+    and     x23, x20, #0xffffffffffff
+    lsl     x24, x21, #63
+    orr     x24, x24, x22
+    mov     x25, #0                         /* the map of the segment */
+2:  cmp     x25, #APP_DB_MAP_COUNT
+    b.hs    5f
+    add     x26, x27, #AppDb_maps
+    add     x26, x26, x25, lsl #5
+    ldr     x9, [x26]
+    cmp     x9, x24
+    b.eq    3f
+    add     x25, x25, #1
+    b       2b
+3:  bl      app_db_record
+    cbnz    x0, 9f
+    b       6f
+5:  ldr     x25, [x27, #AppDb_next_map]     /* else the next entry in turn */
+    add     x9, x25, #1
+    and     x9, x9, #(APP_DB_MAP_COUNT - 1)
+    str     x9, [x27, #AppDb_next_map]
+    add     x26, x27, #AppDb_maps
+    add     x26, x26, x25, lsl #5
+6:  ldr     x9, [x26, #8]                   /* its old map goes */
+    cbz     x9, 7f
+    add     x0, x26, #8
+    add     x1, x26, #24
+    CALL_GLOBAL lantern_shell_unmap_file
+7:  mov     x9, #-1
+    str     x9, [x26]
+    str     xzr, [x26, #8]
+    mov     x0, x21
+    mov     x1, x22
+    bl      app_db_path
+    ADDQ    x0, x19, APP_PATH
+    add     x1, x27, #AppDb_op
+    CALL_GLOBAL lantern_shell_map_file
+    ldr     x9, [x27, #AppDb_op]
+    cbnz    x9, 8f
+    ldr     x9, [x27, #(AppDb_op + 8)]
+    cbz     x9, 8f
+    str     x24, [x26]
+    str     x9, [x26, #8]
+    ldr     x9, [x27, #(AppDb_op + 16)]
+    str     x9, [x26, #16]
+    ldr     x9, [x27, #(AppDb_op + 24)]
+    str     x9, [x26, #24]
+    bl      app_db_record
+    cbnz    x0, 9f
+8:  mov     x0, #-1
+9:  LEAVE 0
+END_FUNCTION app_work_data
+
 /* L0: x0 = the table entry of the BufferId x0, 0 for id 0, or 2^64 - 1 when no entry has it. Uses x9-x12, x13. */
 LOCAL_FUNCTION app_work_entry
     UNWIND_END_PROLOGUE
@@ -993,7 +1307,12 @@ LOCAL_FUNCTION app_actions
     b.hs    9f
     ldr     x22, [x20]
     ldr     x9, [x20, #8]
-    cmp     x9, #NODE_ACT_BYTES_PUT
+    cmp     x9, #NODE_ACT_DB_APPEND
+    b.ne    10f
+    mov     x0, x20                         /* DB_APPEND: the record in its segment file */
+    bl      app_db_append
+    b       8f
+10: cmp     x9, #NODE_ACT_BYTES_PUT
     b.ne    2f
     add     x0, x20, #24                    /* BYTES_PUT: a copy of the ByteList */
     ldr     x1, [x20, #24]

@@ -36,6 +36,9 @@ app_options:
     .quad 12, AppOptions_target_peers, APP_OPTION_PEERS
     .ascii "target-peers"
     .space 24 - 12
+    .quad 8, AppOptions_data_dir, APP_OPTION_TEXT
+    .ascii "data-dir"
+    .space 24 - 8
 app_options_end:
 app_http:
     .ascii "http://"

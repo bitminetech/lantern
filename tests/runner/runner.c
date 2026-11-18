@@ -2349,18 +2349,23 @@ static uint8_t *fc_setup(fc_node *n, tv parts, const char **why) {
 /* include/lantern.inc: Node, NodeBlock, the events, the actions and the work kinds. */
 #define NODE_HEAD_ROOT 24
 #define NODE_BLOCKS 64
-#define NODE_BLOCK_BYTES 136
+#define NODE_BLOCK_BYTES 144
 #define NB_STATE_ID 80
 #define NB_STATUS 88
 enum { NB_WAITING = 1, NB_IMPORTING, NB_IMPORTED, NB_INVALID, NB_HASHING, NB_BLOBS, NB_PAYLOAD, NB_EXECUTING };
 #define NODE_FLAG_ENGINE 16
 #define NODE_TIME_MS 16
-#define NODE_BLOBS 256 /* Node_blobs: NodeBlob entries of 64 bytes: block_root, index, slot, data_id, status */
-#define NODE_BLOB_BYTES 64
+#define NODE_BLOBS 256 /* Node_blobs: NodeBlob entries of 72 bytes: block_root, index, slot, data_id, status, length */
+#define NODE_BLOB_BYTES 72
 #define NBLOB_VALID 2
 enum { EV_TICK = 1, EV_BLOCK, EV_ATTESTATION, EV_ATTESTER_SLASHING, EV_POW_BLOCK, EV_PAYLOAD_STATUS, EV_WORK_DONE, EV_P2P, EV_ENGINE, EV_ENR };
-enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK, ACT_P2P_LIST, ACT_ENGINE, ACT_DISCV5 };
+enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK, ACT_P2P_LIST, ACT_ENGINE, ACT_DISCV5, ACT_DB_APPEND };
 #define NODE_FLAG_DISCV5 64
+#define NODE_FLAG_DB 128
+#define NODE_DB 464 /* Node_db: the PartRef of the node's Db */
+#define NODE_DB_REF (1ull << 63)
+#define NODE_DB_SIDECARS (1ull << 62)
+#define NODE_DB_SEGMENTS 256 /* the segments one node's runner keeps */
 enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING, WORK_SERVE, WORK_GOSSIP,
        WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE };
 #define EV_RESULT 72
@@ -2374,7 +2379,7 @@ typedef struct {
     uint8_t *b;
 } shell_buf;
 
-#define NODE_ROOM_FIELDS 10 /* NodeRoom: blocks, checkpoints, pow_blocks, peers, streams, request_bytes, p2p_out, messages, blobs, engine_bytes */
+#define NODE_ROOM_FIELDS 12 /* NodeRoom: blocks, checkpoints, pow_blocks, peers, streams, request_bytes, p2p_out, messages, blobs, engine_bytes, db_slots, db_roots */
 
 struct p2p_net;
 
@@ -2396,7 +2401,83 @@ struct node_shell {
         uint64_t len;
     } entries[8];
     size_t nentries, lookups;
+    struct { /* NODE_FLAG_DB: the segment files of the node's Db, in memory */
+        uint64_t sidecars, number, len, cap;
+        uint8_t *b;
+    } segs[NODE_DB_SEGMENTS];
+    size_t nsegs;
 };
+
+/* The records the nodes archived, and the works that served one from the Db: printed as a NOTE. */
+static unsigned long node_db_records, node_db_serves;
+
+/* The segment of the node's Db, made empty when it is new and make is set; NULL when it is not there. */
+static uint8_t **shell_segment(struct node_shell *s, uint64_t sidecars, uint64_t number, uint64_t **len, int make) {
+    size_t k = 0;
+    while (k < s->nsegs && !(s->segs[k].sidecars == sidecars && s->segs[k].number == number)) k++;
+    if (k == s->nsegs) {
+        if (!make || k == NODE_DB_SEGMENTS) return NULL;
+        memset(&s->segs[k], 0, sizeof s->segs[k]);
+        s->segs[k].sidecars = sidecars;
+        s->segs[k].number = number;
+        s->nsegs++;
+    }
+    *len = &s->segs[k].len;
+    return &s->segs[k].b;
+}
+
+/* NODE_ACT_DB_APPEND: the record (its header, the bytes of the id, zero bytes to a multiple of 8) at the offset, the segment's end. */
+static shell_buf *shell_find(struct node_shell *s, uint64_t id);
+static void shell_db_append(struct node_shell *s, const uint8_t *act, const char **why) {
+    shell_buf *b = shell_find(s, rd64(act + 16));
+    uint64_t *len, sidecars = rd64(act + 32), number = rd64(act + 24), offset = rd64(act + 40), length = rd64(act + 48);
+    uint8_t **seg = shell_segment(s, sidecars, number, &len, 1);
+    if (!b) *why = "DB_APPEND names no buffer";
+    else if (!seg) *why = "DB_APPEND: too many segments for the runner";
+    else if (sidecars > 1 || offset != *len) *why = "DB_APPEND: the offset is not the segment's end";
+    else if (rd64(b->b + 16) != length) *why = "DB_APPEND: the record's length is not the bytes'";
+    else if (number != rd64(act + 64) >> 13) *why = "DB_APPEND: the record's slot is not of the segment";
+    else {
+        uint64_t size = 64 + ((length + 7) & ~7ull), k;
+        for (k = 0; k < s->nsegs && &s->segs[k].b != seg; k++) {}
+        if (*len + size > s->segs[k].cap) {
+            s->segs[k].cap = 2 * (*len + size);
+            *seg = realloc(*seg, (size_t)s->segs[k].cap);
+            if (!*seg) {
+                fprintf(stderr, "out of memory\n");
+                exit(2);
+            }
+        }
+        memset(*seg + *len, 0, (size_t)size);
+        memcpy(*seg + *len, act + 48, 64);
+        memcpy(*seg + *len + 64, b->b + rd64(b->b + 8), (size_t)length);
+        *len += size;
+        node_db_records++;
+    }
+}
+
+/* A ByteList header that views the SSZ bytes of the Db record of a NODE_DB_REF, in its segment; NULL when there is none. */
+static uint8_t *shell_db_view(struct node_shell *s, uint64_t ref) {
+    uint64_t *len, offset = ref & ((1ull << 48) - 1);
+    uint8_t **seg = shell_segment(s, (ref & NODE_DB_SIDECARS) ? 1 : 0, (ref >> 48) & 0x3fff, &len, 0);
+    if (!seg || offset + 64 > *len || rd64(*seg + offset) > *len - offset - 64) return NULL;
+    uint8_t *h = malloc(24);
+    if (!h) {
+        fprintf(stderr, "out of memory\n");
+        exit(2);
+    }
+    wr64(h, 24);
+    wr64(h + 8, (uint64_t)((uintptr_t)(*seg + offset + 64) - (uintptr_t)h));
+    wr64(h + 16, rd64(*seg + offset));
+    return h;
+}
+
+/* The slot of the block of the root in the node's Db, or 2^64 - 1. */
+static uint64_t shell_db_slot(const struct node_shell *s, const uint8_t *root) {
+    uint64_t slot = UINT64_MAX;
+    if (CALL(lantern_db_find_root, s->node + rd64(s->node + NODE_DB), root, &slot) != 0) return UINT64_MAX;
+    return slot;
+}
 
 static shell_buf *shell_find(struct node_shell *s, uint64_t id) {
     for (size_t i = 0; i < s->nbufs; i++)
@@ -2539,9 +2620,21 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     struct node_shell *s = n->shell;
     uint64_t kind = rd64(work + 16), a_id = rd64(work + 24), b_id = rd64(work + 32), c_id = rd64(work + 40), d_id = rd64(work + 48);
     shell_buf *a = a_id ? shell_find(s, a_id) : NULL, *b = b_id ? shell_find(s, b_id) : NULL;
-    shell_buf *c = c_id ? shell_find(s, c_id) : NULL, *d = d_id ? shell_find(s, d_id) : NULL;
+    shell_buf *c = c_id ? shell_find(s, c_id) : NULL, *d = d_id && !(d_id & NODE_DB_REF) ? shell_find(s, d_id) : NULL;
+    shell_buf view = {0, 0, NULL};
+    if (d_id & NODE_DB_REF) { /* the record of the node's Db, in place */
+        if (kind != WORK_SERVE) {
+            *why = "a NODE_DB_REF in a WORK that does not serve";
+            return;
+        }
+        view.b = shell_db_view(s, d_id);
+        node_db_serves++;
+        view.size = 24;
+        d = view.b ? &view : NULL;
+    }
     if ((a_id && !a) || (b_id && !b) || (c_id && !c) || (d_id && !d)) {
         *why = "a WORK action names no buffer";
+        free(view.b);
         return;
     }
     const void *settings = NULL;
@@ -2611,6 +2704,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         memcpy(shell_append(s, esize), ev, (size_t)esize);
     }
     free(ev);
+    free(view.b);
 }
 
 static void *p2p_state_of(struct p2p_net *net);
@@ -2718,6 +2812,8 @@ static void shell_step(fc_node *n, const char **why) {
             shell_drop(s, rd64(act + 16), why);
         else if (kind == ACT_WORK && size == 72)
             shell_work(n, act, why);
+        else if (kind == ACT_DB_APPEND && size == 112)
+            shell_db_append(s, act, why);
         else if (kind == ACT_ENGINE && size >= 48 && rd64(act + 24) == size - 24 && rd64(act + 32) == 24 && rd64(act + 40) <= size - 48)
             shell_engine(n, act + 48, rd64(act + 40), why);
         else if (kind == ACT_DISCV5 && size >= 48 && rd64(act + 24) == size - 24 && rd64(act + 32) == 24 && rd64(act + 40) <= size - 48)
@@ -3020,7 +3116,8 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
     if (*anchor_block) {
         /* Small capacities, so that the node grows through lantern_node_copy. */
         uint8_t anchor[208] = {0}; /* NodeAnchor: root, slot, genesis_validators_root, jwt_secret, engine_host_len, engine_host, node_id */
-        uint64_t flags = (FORK >= FORK_BELLATRIX ? NODE_FLAG_ENGINE : 0) | NODE_FLAG_DISCV5, need = 0;
+        static unsigned long opened; /* every second node archives to a Db */
+        uint64_t flags = (FORK >= FORK_BELLATRIX ? NODE_FLAG_ENGINE : 0) | NODE_FLAG_DISCV5 | (opened++ % 2 ? NODE_FLAG_DB : 0), need = 0;
         for (int i = 0; i < NODE_ROOM_FIELDS; i++) s->room[i] = 2;
         s->room[2] = 1;
         s->room[9] = 4096; /* the execution engine's answers */
@@ -3063,6 +3160,7 @@ static void shell_close(fc_node *n, uint8_t *anchor_block) {
     free(s->pending);
     free(s->node);
     free(s->actions);
+    for (size_t k = 0; k < s->nsegs; k++) free(s->segs[k].b);
     free(s);
     free(n->store);
     free(n->anchor);
@@ -3942,21 +4040,29 @@ static void fc_serve_check(fc_node *n, tv parts, const char **why) {
 static void p2p_settle(fc_node *n, struct p2p_net *net, const char **why);
 static case_block **sync_chain; /* the chain p2p_synced waits for */
 static size_t sync_nchain;
+/* Whether the node imported the block of the root: an imported entry, or a block of its Db, which holds only those. */
+static int shell_imported(const struct node_shell *s, const uint8_t *root) {
+    const uint8_t *e = shell_block(s, root);
+    return (e && rd64(e + NB_STATUS) == NB_IMPORTED) || shell_db_slot(s, root) != UINT64_MAX;
+}
+
 static int p2p_synced(struct p2p_net *net, int arg) {
     (void)arg;
-    for (size_t b = 0; b < sync_nchain; b++) {
-        const uint8_t *e = shell_block(net->shell, sync_chain[b]->root);
-        if (!e || rd64(e + NB_STATUS) != NB_IMPORTED) return 0;
-    }
+    for (size_t b = 0; b < sync_nchain; b++)
+        if (!shell_imported(net->shell, sync_chain[b]->root)) return 0;
     return 1;
 }
 
-/* Whether the node holds a NODE_BLOB_VALID entry of the block root and index. */
+/* Whether the node holds a NODE_BLOB_VALID entry of the block root and index, or the sidecar in its Db. */
 static int shell_has_blob(const struct node_shell *s, const uint8_t *root, uint64_t index) {
     const uint8_t *e = s->node + rd64(s->node + NODE_BLOBS);
     for (uint64_t i = 0, c = rd64(s->node + NODE_BLOBS + 8); i < c; i++, e += NODE_BLOB_BYTES)
         if (!memcmp(e, root, 32) && rd64(e + 32) == index && rd64(e + 56) == NBLOB_VALID) return 1;
-    return 0;
+    uint64_t slot = shell_db_slot(s, root);
+    if (slot == UINT64_MAX || index >= 128) return 0;
+    const uint8_t *db = s->node + rd64(s->node + NODE_DB);
+    const uint8_t *d = db + rd64(db + 24) + 88 * (slot - rd64(db + 8)); /* DbSlot: indices at 72 */
+    return d[72 + index / 8] >> (index % 8) & 1;
 }
 
 /* Whether a block of a case has blob or column sidecars. */
@@ -4085,10 +4191,8 @@ static void sync_serve_columns(fc_node *m, struct p2p_net *net, tv parts, case_b
 static int p2p_blobs_wait(struct p2p_net *net, int arg) {
     (void)arg;
     size_t f = sync_first_blobs();
-    for (size_t b = 0; b < f; b++) {
-        const uint8_t *e = shell_block(net->shell, sync_chain[b]->root);
-        if (!e || rd64(e + NB_STATUS) != NB_IMPORTED) return 0;
-    }
+    for (size_t b = 0; b < f; b++)
+        if (!shell_imported(net->shell, sync_chain[b]->root)) return 0;
     const uint8_t *e = shell_block(net->shell, sync_chain[f]->root);
     return e && rd64(e + NB_STATUS) == NB_BLOBS;
 }
@@ -4253,8 +4357,7 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
         if (!*why && no_blobs) {
             p2p_settle(&m, &net, why);
             for (size_t b = sync_first_blobs(); b < nchain && !*why; b++) {
-                const uint8_t *e = shell_block(s, chain[b]->root);
-                if (e && rd64(e + NB_STATUS) == NB_IMPORTED) *why = "sync with no sidecars: a block from the first with blobs is imported";
+                if (shell_imported(s, chain[b]->root)) *why = "sync with no sidecars: a block from the first with blobs is imported";
             }
         } else if (!*why) {
             if (memcmp(s->node + NODE_HEAD_ROOT, chain[nchain - 1]->root, 32)) *why = "sync: the head is not the chain's last block";
@@ -4345,7 +4448,7 @@ static const uint8_t *gossip_root; /* the block p2p_imported waits for */
 static int p2p_imported(struct p2p_net *net, int arg) {
     (void)arg;
     const uint8_t *e = shell_block(net->shell, gossip_root);
-    return e && (rd64(e + NB_STATUS) == NB_IMPORTED || rd64(e + NB_STATUS) == NB_INVALID);
+    return (e && rd64(e + NB_STATUS) == NB_INVALID) || shell_imported(net->shell, gossip_root);
 }
 static int p2p_subscribed(struct p2p_net *net, int arg) { return net->topics >= arg; }
 static int p2p_never(struct p2p_net *net, int arg) {
@@ -5604,7 +5707,7 @@ static void run_db_index(const char *file, case_file *f) {
 /* ---------------------------------------------------------------- Application */
 
 #define INVALID_OPTION 61
-#define APP_OPTIONS_SIZE 96
+#define APP_OPTIONS_SIZE 112
 
 /*
  * app-options: lantern_app_options over each case's command line (tests/generator/app.py), as an
@@ -5612,7 +5715,7 @@ static void run_db_index(const char *file, case_file *f) {
  * bytes of one argument and hold the case's text. A fault must give the case's index.
  */
 static void run_app_options(const char *file, case_file *f) {
-    static const char *texts[] = {"network_dir", "execution", "jwt_secret", "boot_nodes"};
+    static const char *texts[] = {"network_dir", "execution", "jwt_secret", "boot_nodes", "data_dir"};
     static const char *numbers[] = {"port", "enr_address", "http_port", "target_peers"};
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
@@ -5646,8 +5749,8 @@ static void run_app_options(const char *file, case_file *f) {
         if (!guard_ok(opts, APP_OPTIONS_SIZE) || !guard_ok(list, size)) why = "lantern_app_options wrote out of bounds";
         else if (want) {
             if (st != 0) why = "status is not LANTERN_OK";
-            for (int t = 0; t < 4 && !why; t++) {
-                uint64_t wl, start = rd64(opts + 16 * t), got = rd64(opts + 16 * t + 8);
+            for (int t = 0; t < 5 && !why; t++) {
+                uint64_t at = t < 4 ? 16 * (uint64_t)t : 96, wl, start = rd64(opts + at), got = rd64(opts + at + 8);
                 const uint8_t *w = tv_bytes(tv_get(want, texts[t]), &wl);
                 int inside = got == 0;
                 for (uint64_t k = 0; k < count && !inside; k++)
@@ -5956,6 +6059,7 @@ int main(int argc, char **argv) {
         if (bad) failures++;
     }
     if (node_settles_finalized) printf("NOTE: %lu node settles past a finalized epoch\n", node_settles_finalized);
+    if (node_db_records) printf("NOTE: %lu Db records archived, %lu served from the Db\n", node_db_records, node_db_serves);
     printf("%s: %d passed, %d failed\n", failures ? "FAIL" : "PASS", passes, failures);
     return failures ? 1 : 0;
 }

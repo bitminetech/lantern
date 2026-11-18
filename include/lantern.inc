@@ -525,6 +525,7 @@
 .set NODE_FLAG_ENGINE, 16              /* the node drives an execution engine over the Engine API */
 .set NODE_FLAG_FCU, 32                 /* an engine_forkchoiceUpdated is due */
 .set NODE_FLAG_DISCV5, 64              /* the shell runs discv5 for the node: it takes NODE_ACT_DISCV5 and gives NODE_EV_ENR */
+.set NODE_FLAG_DB, 128                 /* the node archives the finalized history: it gives NODE_ACT_DB_APPEND and serves NODE_DB_REF records */
 .set Node_peers, 120                   /* PartRef of NodePeer */
 .set Node_streams, 136                 /* PartRef of NodeStream entries of Node_stream_bytes each */
 .set Node_p2p_out, 152                 /* PartRef of bytes: libp2p events the node made for its next libp2p step */
@@ -548,8 +549,14 @@
 .set Node_dialing, 432                 /* the node's dials not yet connected or failed */
 .set Node_columns, 440                /* the columns the node samples: bit i % 8 of byte i / 8 for column i, 16 bytes */
 .set Node_pruned_epoch, 456          /* the finalized epoch of the store at the last prune */
-.set Node_config, 464
-.set NODE_FIXED, 464 + CONFIG_SIZE
+.set Node_db, 464                     /* PartRef: one Db, the history the node archived; the last part */
+.set Node_db_next_slot, 480           /* with NODE_FLAG_DB: the canonical blocks below this slot are in the Db */
+.set Node_db_block_segment, 488       /* the block segment of the last block record, or 2^64 - 1 */
+.set Node_db_block_end, 496           /* the bytes of that segment */
+.set Node_db_sidecar_segment, 504     /* the sidecar segment of the last sidecar record, or 2^64 - 1 */
+.set Node_db_sidecar_end, 512         /* the bytes of that segment */
+.set Node_config, 520
+.set NODE_FIXED, 520 + CONFIG_SIZE
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_DIAL_TAG, 0x4000000000000000 /* the bit of a DIAL tag of the node */
 .set NODE_ENGINE_HOST_MAX, 64
@@ -570,7 +577,8 @@
 .set NodeBlock_blobs, 112              /* from the network: the length of its body's blob_kzg_commitments, 0 before deneb */
 .set NodeBlock_payload_status, 120     /* PAYLOAD_STATUS_* its import takes, from the execution engine's answer */
 .set NodeBlock_retry, 128              /* the slot from which its engine_newPayload may go again */
-.set NodeBlock__mem, 136
+.set NodeBlock_length, 136             /* the bytes of its SSZ bytes */
+.set NodeBlock__mem, 144
 .set NODE_BLOCK_WAITING, 1             /* its parent is not imported yet */
 .set NODE_BLOCK_IMPORTING, 2           /* an IMPORT_BLOCK work is queued */
 .set NODE_BLOCK_IMPORTED, 3
@@ -587,7 +595,8 @@
 .set NodeBlob_slot, 40                 /* the slot of its block header */
 .set NodeBlob_data_id, 48              /* the BlobSidecar's SSZ bytes */
 .set NodeBlob_status, 56               /* NODE_BLOB_* */
-.set NodeBlob__mem, 64
+.set NodeBlob_length, 64               /* the bytes of its SSZ bytes */
+.set NodeBlob__mem, 72
 .set NODE_BLOB_VERIFYING, 1            /* from a response: a BLOB work is queued; block_root 0 */
 .set NODE_BLOB_VALID, 2
 .set NODE_BLOB_INVALID, 3
@@ -647,7 +656,8 @@
 .set NodeMessage_state, 40             /* NODE_MESSAGE_* */
 .set NodeMessage_slot, 48              /* the slot of its block or block header */
 .set NodeMessage_parent_root, 56       /* the parent root of its block or block header */
-.set NodeMessage__mem, 88
+.set NodeMessage_length, 88           /* the bytes of its uncompressed data */
+.set NodeMessage__mem, 96
 .set NODE_MESSAGE_ID, 1                /* its MESSAGE_ID is sent */
 .set NODE_MESSAGE_VALIDATING, 2        /* a GOSSIP work is queued */
 .set NODE_MESSAGE_NO_ROOM, 3           /* the bytes did not fit in the actions: IGNORE */
@@ -688,6 +698,9 @@
 .set NodeRoom_messages, 56
 .set NodeRoom_blobs, 64
 .set NodeRoom_engine_bytes, 72         /* bytes of the execution engine's answers the node holds */
+.set NodeRoom_db_slots, 80             /* a DbRoom: the slots of the Db */
+.set NodeRoom_db_roots, 88             /* its root table, a power of two */
+.set NODE_ROOM_FIELDS, 12
 
 /* NodeStepResult: the output of lantern_node_step */
 .set NodeStepResult_accepted, 0        /* events handled, from the first */
@@ -725,6 +738,11 @@
 .set NODE_ACT_P2P_LIST, 6              /* 16 a ByteList of libp2p Actions: the shell does its shell requests in order */
 .set NODE_ACT_ENGINE, 7                /* 24 a ByteList of an HTTP request: the shell writes it to the execution engine's connection */
 .set NODE_ACT_DISCV5, 8                /* 24 a ByteList of asm-discv5 events: the shell passes them to discv5_step */
+.set NODE_ACT_DB_APPEND, 9             /* 16 BufferId, 24 segment, 32 sidecars, 40 offset, 48 DbRecord: the shell appends the record */
+.set NODE_ACT_DB_APPEND_SIZE, 112
+.set NODE_DB_REF, 1 << 63              /* a BufferId of a Db record: bit 62 a sidecar segment, segment << 48, the offset below */
+.set NODE_DB_SIDECARS, 1 << 62
+.set DB_SEGMENT_SHIFT, 13              /* slot >> DB_SEGMENT_SHIFT: its segment */
 .set NodeAction_work_kind, 16
 .set NodeAction_state_a, 24
 .set NodeAction_state_b, 32
@@ -835,8 +853,13 @@
 .set AppOptions_enr_address, 72
 .set AppOptions_http_port, 80
 .set AppOptions_target_peers, 88
-.set AppOptions__size, 96
+.set AppOptions_data_dir, 96
+.set AppOptions__size, 112
 .set APP_DEFAULT_PORT, 9000
 .set APP_DEFAULT_HTTP_PORT, 5052
 .set APP_DEFAULT_TARGET_PEERS, 64
 .set APP_MAX_TARGET_PEERS, 1024
+
+.if DB_SEGMENT_SLOTS != 1 << DB_SEGMENT_SHIFT
+.error "DB_SEGMENT_SHIFT is not the log of DB_SEGMENT_SLOTS"
+.endif
