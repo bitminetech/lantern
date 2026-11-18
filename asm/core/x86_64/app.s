@@ -1204,8 +1204,12 @@ LOCAL_FUNCTION app_work
     je      2f
     cmp     $NODE_WORK_GOSSIP, %rcx         # GOSSIP: the Seen, and the proposer state
     je      3f
-    cmp     $NODE_WORK_TARGET_STATE, %rcx   # TARGET_STATE, and IMPORT_BLOCK with store room: state_a
+    cmp     $NODE_WORK_TARGET_STATE, %rcx   # TARGET_STATE, SLOTS, and IMPORT_BLOCK with store room: state_a
     je      4f
+    cmp     $NODE_WORK_SLOTS, %rcx
+    je      4f
+    cmp     $NODE_WORK_UPGRADE, %rcx        # UPGRADE: state_b, the upgrade's buffer
+    je      6f
     cmp     $NODE_WORK_IMPORT_BLOCK, %rcx
     jne     5f
     mov     APP_STORE(%rbx), %rcx
@@ -1244,6 +1248,13 @@ LOCAL_FUNCTION app_work
 4:  test    %r12, %r12
     jz      91f
     mov     %r12, %rdi
+    call    app_regrow
+    test    %rax, %rax
+    jnz     91f
+    jmp     1b
+6:  test    %r13, %r13
+    jz      91f
+    mov     %r13, %rdi
     call    app_regrow
     test    %rax, %rax
     jnz     91f

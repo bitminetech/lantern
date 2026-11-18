@@ -14,6 +14,8 @@
 # --data-dir /data; after it follows, once its log shows finalized epoch 2 or later, lantern stops and
 # starts again, and must log "restart at slot" and follow again. CHECKPOINT=1: 6-second slots, lantern
 # starts from the client's finalized block and its post-state, and must log "checkpoint at slot".
+# FORK=1: 6-second slots, electra at genesis and fulu at epoch 1; lantern's head must reach the
+# fork: slot 40 or later.
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 client=$1
@@ -44,8 +46,13 @@ lantern_image: $image
 lantern_max_cpu: ${LANTERN_MAX_CPU:-0}
 lantern_delay: ${LANTERN_DELAY:-0}
 EOF
-if [ "${RESTART:-0}" = 1 ] || [ "${CHECKPOINT:-0}" = 1 ]; then
+if [ "${RESTART:-0}" = 1 ] || [ "${CHECKPOINT:-0}" = 1 ] || [ "${FORK:-0}" = 1 ]; then
     printf 'network_params:\n  seconds_per_slot: 6\n' >> "$work/args.yaml"
+fi
+min_slot=8
+if [ "${FORK:-0}" = 1 ]; then
+    printf '  electra_fork_epoch: 0\n  fulu_fork_epoch: 1\n' >> "$work/args.yaml"
+    min_slot=40
 fi
 if [ "${RESTART:-0}" = 1 ]; then printf 'lantern_data_dir: /data\n' >> "$work/args.yaml"; fi
 if [ "${CHECKPOINT:-0}" = 1 ]; then printf 'lantern_checkpoint: true\n' >> "$work/args.yaml"; fi
@@ -85,7 +92,7 @@ follows() {
     set -- $(node_head "$lantern") $(node_head "$peer")
     [ $# -eq 4 ] || return 1
     echo "lantern slot $1 $2, $client slot $3"
-    [ "$1" -ge 8 ] && [ $(($3 - $1)) -le 2 ] || return 1
+    [ "$1" -ge "$min_slot" ] && [ $(($3 - $1)) -le 2 ] || return 1
     [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$peer/eth/v1/beacon/headers/$2")" = 200 ]
 }
 status=1

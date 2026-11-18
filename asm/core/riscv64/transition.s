@@ -798,7 +798,12 @@ SPEC_FUNCTION state_transition
     call    block_scratch
     ld      t0, 0(s5)
     bltu    t0, a0, 9f
-    mv      a0, s1                          # process_slots(state, block.slot)
+    ld      t0, 16(s3)                      # slots_done and a state at the block's slot: no process_slots
+    beqz    t0, 3f
+    LDQ     t0, s1, BeaconState_slot
+    ld      t1, BeaconBlock_slot(s7)
+    beq     t0, t1, 4f
+3:  mv      a0, s1                          # process_slots(state, block.slot)
     addi    a1, s7, BeaconBlock_slot
     mv      a2, s4
     mv      a3, s5
@@ -807,7 +812,7 @@ SPEC_FUNCTION state_transition
     bnez    a0, 7f
     ld      t0, 0(s6)
     bnez    t0, 8f
-    ld      t0, 0(s3)                       # if validate_result: assert verify_block_signature(state, signed_block)
+4:  ld      t0, 0(s3)                       # if validate_result: assert verify_block_signature(state, signed_block)
     beqz    t0, 1f
     sd      s8, 0(s5)
     mv      a0, s1

@@ -537,9 +537,71 @@ LOCAL_FUNCTION node_ids
 END_FUNCTION node_ids
 
 /*
+ * L0: the copy x0 of the state of id x1, at slot x2, crosses each fork boundary up to the fork of
+ * slot x3 (node.md): for each, a SLOTS work to the next fork's first slot when the copy is before
+ * it, a copy of the state x1 as the upgrade's buffer, an UPGRADE work and a STATE_FREE of the copy
+ * before. x0 = the id of the last copy. x21 the copy's slot, x22 the upgrade's buffer, x25 the
+ * copy, x26 the state x1, x27 the fork, x28 the last fork.
+ */
+LOCAL_FUNCTION node_cross
+    ENTER 0
+    mov     x25, x0
+    mov     x26, x1
+    mov     x21, x2
+    mov     x28, x3
+    mov     x0, x21
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x27, x0
+    mov     x0, x28
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x28, x0
+1:  cmp     x27, x28
+    b.hs    9f
+    add     x27, x27, #1
+    add     x9, x19, #Node_config           /* the next fork's first slot */
+    add     x9, x9, x27, lsl #4
+    ldr     x9, [x9]
+    mov     x10, #SLOTS_PER_EPOCH
+    mul     x9, x9, x10
+    cmp     x21, x9
+    b.hs    2f
+    mov     x21, x9
+    mov     x0, #NODE_WORK_SLOTS
+    mov     x1, x25
+    mov     x2, #0
+    mov     x3, #0
+    mov     x4, #0
+    mov     x5, x21
+    bl      node_work
+2:  bl      node_new_id                     /* the upgrade's buffer: a copy of the state */
+    mov     x22, x0
+    mov     x0, #NODE_ACT_STATE_COPY
+    mov     x1, x26
+    mov     x2, x22
+    bl      node_ids
+    mov     x0, #NODE_WORK_UPGRADE
+    mov     x1, x25
+    mov     x2, x22
+    mov     x3, #0
+    mov     x4, #0
+    mov     x5, x27
+    bl      node_work
+    mov     x0, #NODE_ACT_STATE_FREE
+    mov     x1, x25
+    mov     x2, #0
+    bl      node_ids
+    mov     x25, x22
+    b       1b
+9:  mov     x0, x25
+    LEAVE 0
+END_FUNCTION node_cross
+
+/*
  * L0: the state id of the checkpoint state of (epoch x0, root at x1), or 0 when the root's
- * block has no post-state: a new checkpoint is a copy of that post-state and a TARGET_STATE work.
- * x21 epoch, x22 root, x25 the new id.
+ * block has no post-state: a new checkpoint is a copy of that post-state, across the forks to
+ * the epoch's, and a TARGET_STATE work. x21 epoch, x22 root, x25 the new id, x26 the root's slot.
  */
 LOCAL_FUNCTION node_checkpoint_state
     ENTER 0
@@ -559,12 +621,20 @@ LOCAL_FUNCTION node_checkpoint_state
     b.ne    9f
     ldr     x23, [x1, #NodeBlock_state_id]
     cbz     x23, 9f                         /* an ancestor of the finalized block keeps no state */
+    ldr     x26, [x1, #NodeBlock_slot]
     bl      node_new_id
     mov     x25, x0
     mov     x0, #NODE_ACT_STATE_COPY
     mov     x1, x23
     mov     x2, x25
     bl      node_ids
+    mov     x0, x25                         /* across the forks to the epoch's first slot */
+    mov     x1, x23
+    mov     x2, x26
+    mov     x3, #SLOTS_PER_EPOCH
+    mul     x3, x21, x3
+    bl      node_cross
+    mov     x25, x0
     bl      node_new_checkpoint             /* the entry */
     mov     x9, x1
     mov     x10, x0
@@ -655,8 +725,8 @@ END_FUNCTION node_try_import
 
 /*
  * L0: the import of the block of index x0, whose parent is imported, with the payload status x1:
- * a copy of the parent's post-state and an IMPORT_BLOCK work. x21 index, x22 entry, x23 the
- * parent's state id.
+ * a copy of the parent's post-state, across the forks to the block's, and an IMPORT_BLOCK work.
+ * x21 index, x22 entry, x23 the parent's state id, x26 the parent's slot.
  */
 LOCAL_FUNCTION node_import_now
     ENTER 0
@@ -671,12 +741,19 @@ LOCAL_FUNCTION node_import_now
     b.eq    9f
     ldr     x23, [x1, #NodeBlock_state_id]
     cbz     x23, 8f
+    ldr     x26, [x1, #NodeBlock_slot]
     bl      node_new_id
     str     x0, [x22, #NodeBlock_state_id]
     mov     x2, x0
     mov     x0, #NODE_ACT_STATE_COPY
     mov     x1, x23
     bl      node_ids
+    ldr     x0, [x22, #NodeBlock_state_id]  /* across the forks from the parent's slot to the block's */
+    mov     x1, x23
+    mov     x2, x26
+    ldr     x3, [x22, #NodeBlock_slot]
+    bl      node_cross
+    str     x0, [x22, #NodeBlock_state_id]
     mov     x9, #NODE_BLOCK_IMPORTING
     str     x9, [x22, #NodeBlock_status]
     mov     x0, #NODE_WORK_IMPORT_BLOCK
@@ -4566,6 +4643,15 @@ LOCAL_FUNCTION node_message_status
     cmp     x10, x9
     b.ls    3f
     ldr     x27, [x1, #NodeBlock_state_id]
+    mov     x0, x9                          /* of the same fork */
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x28, x0
+    ldr     x0, [x22, #NodeMessage_slot]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, x28
+    b.ne    3f
     bl      node_new_id
     mov     x26, x0
     mov     x0, #NODE_ACT_STATE_COPY
@@ -5105,7 +5191,7 @@ LOCAL_FUNCTION node_sync
     cmp     x9, x27
     csel    x27, x9, x27, hi
     PART    x21, x22, x19, Node_peers       /* a peer ahead */
-4:  cbz     x22, 9f
+4:  cbz     x22, 90f
     ldr     x9, [x21, #NodePeer_flags]
     tbz     x9, #0, 5f                      /* NODE_PEER_STATUS */
     ldr     x10, [sp, #(L + 40)]            /* from fulu: its MetaData read */
@@ -5284,6 +5370,54 @@ LOCAL_FUNCTION node_sync
     ldp     x9, x10, [sp, #L]
     add     x9, x9, x10
     str     x9, [x19, #Node_sync_slot]
+    b       9f
+90: mov     x0, x20                         /* none: a fresh Status of a peer, when the store's slot is above the start */
+    bl      node_store_slot
+    cmp     x0, x27
+    b.ls    9f
+    ldr     x9, [x19, #Node_status_ms]      /* at most each NODE_STATUS_MS */
+    cbz     x9, 91f
+    ldr     x10, [x19, #Node_time_ms]
+    MOVQ    x11, NODE_STATUS_MS
+    add     x9, x9, x11
+    cmp     x10, x9
+    b.lo    9f
+91: ldr     x11, [x19, #(Node_streams + 8)] /* room for it */
+    ldr     x12, [x19, #Node_messages]
+    ldr     x13, [x19, #Node_streams]
+    sub     x12, x12, x13
+    ldr     x13, [x19, #Node_stream_bytes]
+    udiv    x12, x12, x13
+    add     x11, x11, #1
+    cmp     x11, x12
+    b.hi    9f
+    PART    x21, x22, x19, Node_peers       /* the first peer with a Status of the node's fork_digest */
+92: cbz     x22, 9f
+    ldr     x9, [x21, #NodePeer_flags]
+    tbz     x9, #0, 93f                     /* NODE_PEER_STATUS */
+    ldr     x9, [x21, #NodePeer_fork_digest]
+    ldr     x10, [x19, #Node_fork_digest]
+    cmp     x9, x10
+    b.eq    94f
+93: add     x21, x21, #NodePeer__mem
+    sub     x22, x22, #1
+    b       92b
+94: ldr     x28, [sp, #(L + 40)]            /* the fork of the store's slot: v2 from fulu */
+    add     x0, sp, #L
+    bl      node_status_bytes
+    mov     x1, #1
+    mov     x4, #84
+    cmp     x28, #FORK_FULU
+    b.lo    95f
+    mov     x1, #2
+    mov     x4, #92
+95: mov     x0, #REQRESP_STATUS
+    ldr     x2, [x21, #NodePeer_handle]
+    add     x3, sp, #L
+    bl      node_open
+    cbz     x0, 9f
+    ldr     x9, [x19, #Node_time_ms]
+    str     x9, [x19, #Node_status_ms]
 9:  mov     x0, x26
     LEAVE 96
 END_FUNCTION node_sync
@@ -5951,7 +6085,7 @@ FUNCTION lantern_node_step
     madd    x12, x13, x14, x12
     ldr     x13, [x19, #(Node_checkpoints + 8)]
     add     x12, x12, x13, lsl #5
-    add     x12, x12, #512
+    add     x12, x12, #2048                 /* and 2048 free: the crossing of a fork boundary takes 208 */
     str     x12, [sp, #(L + 72)]
     ldr     x9, [sp, #(L + 16)]
     cbz     x9, 51f
@@ -6287,6 +6421,12 @@ END_FUNCTION lantern_node_step
  * Locals: L the BlockOptions (32), or a chunk's size, a fork digest and a ChunkHeader (64);
  * L+64 seen, L+72 state_b, L+80 state_c, L+88 settings, L+96 a NodeGossip.
  */
+/* The StateRoom of an upgraded state (node.md, NODE_WORK_UPGRADE): as the binary's anchor has. */
+    RODATA
+    .p2align 3
+node_upgrade_room:
+    .quad 1024, 2048, 64, 1024, 64, 64, 4, 4096
+
 FUNCTION lantern_node_run
     ENTER 192
     mov     x19, x0
@@ -6341,10 +6481,28 @@ FUNCTION lantern_node_run
     b.lo    18f
     ldr     x9, [x23, #8]
     add     x9, x23, x9
-    ldr     x0, [x9, #100]
+    ldr     x27, [x9, #100]
+    mov     x0, x27
     add     x1, x19, #Node_config
     bl      node_fork
-    mov     x15, x0
+    mov     x28, x0
+    ldr     x0, [x22, #NODE_STATE_SLOT]     /* the state's slot of the block's fork */
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, x28
+    b.ne    19f
+    ldr     x9, [x22, #NODE_STATE_SLOT]     /* slots_done: the state at the block's slot, the first of its fork */
+    mov     x10, #0
+    cmp     x9, x27
+    b.ne    11f
+    cbz     x9, 11f
+    sub     x0, x9, #1
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, x28
+    cset    x10, ne
+11: str     x10, [sp, #(L + BlockOptions_slots_done)]
+    mov     x15, x28
     mov     x0, x20
     mov     x1, x19
     mov     x2, x23
@@ -6359,6 +6517,10 @@ FUNCTION lantern_node_run
     mov     x0, #LANTERN_OK
     LEAVE 192
 18: mov     x9, #LANTERN_INVALID_ENCODING
+    str     x9, [x25, #NodeEvent_result]
+    mov     x0, #LANTERN_OK
+    LEAVE 192
+19: mov     x9, #LANTERN_INVALID_SLOT
     str     x9, [x25, #NodeEvent_result]
     mov     x0, #LANTERN_OK
     LEAVE 192
@@ -6416,7 +6578,14 @@ FUNCTION lantern_node_run
     bl      node_store_slot
     add     x1, x19, #Node_config
     bl      node_fork
-    mov     x15, x0
+    mov     x28, x0
+    cbz     x22, 41f                        /* a state of another fork: IGNORE */
+    ldr     x0, [x22, #NODE_STATE_SLOT]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, x28
+    b.ne    69f
+41: mov     x15, x28
     mov     x0, x20
     mov     x1, x23
     mov     x2, x22
@@ -6517,7 +6686,18 @@ FUNCTION lantern_node_run
     LEAVE 192
 60: cmp     x9, #NODE_WORK_GOSSIP
     b.ne    70f
-    ldr     x9, [sp, #(L + 64)]             /* GOSSIP: the inputs of the fork's node_gossip */
+    mov     x0, x20                         /* GOSSIP: the fork of the store's slot; a head state of another: IGNORE */
+    bl      node_store_slot
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x28, x0
+    cbz     x22, 61f
+    ldr     x0, [x22, #NODE_STATE_SLOT]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, x28
+    b.ne    69f
+61: ldr     x9, [sp, #(L + 64)]             /* the inputs of the fork's node_gossip */
     str     x9, [sp, #(L + 96 + NodeGossip_seen)]
     str     x20, [sp, #(L + 96 + NodeGossip_store)]
     ldr     x9, [x19, #Node_time_ms]
@@ -6528,18 +6708,27 @@ FUNCTION lantern_node_run
     str     x10, [sp, #(L + 96 + NodeGossip_topic)]
     str     x9, [sp, #(L + 96 + NodeGossip_subnet)]
     str     x22, [sp, #(L + 96 + NodeGossip_head)]
-    ldp     x9, x10, [sp, #(L + 72)]
-    str     x9, [sp, #(L + 96 + NodeGossip_proposer)]
-    str     x10, [sp, #(L + 96 + NodeGossip_justified)]
+    ldr     x27, [sp, #(L + 72)]            /* the proposer and justified states, 0 when of another fork */
+    cbz     x27, 62f
+    ldr     x0, [x27, #NODE_STATE_SLOT]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, x28
+    csel    x27, x27, xzr, eq
+62: str     x27, [sp, #(L + 96 + NodeGossip_proposer)]
+    ldr     x27, [sp, #(L + 80)]
+    cbz     x27, 63f
+    ldr     x0, [x27, #NODE_STATE_SLOT]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, x28
+    csel    x27, x27, xzr, eq
+63: str     x27, [sp, #(L + 96 + NodeGossip_justified)]
     ldr     x9, [sp, #(L + 88)]
     str     x9, [sp, #(L + 96 + NodeGossip_settings)]
     add     x9, x19, #Node_config
     str     x9, [sp, #(L + 96 + NodeGossip_config)]
-    mov     x0, x20
-    bl      node_store_slot
-    add     x1, x19, #Node_config
-    bl      node_fork
-    mov     x15, x0
+    mov     x15, x28
     add     x0, sp, #(L + 96)
     mov     x1, x23
     mov     x2, x24
@@ -6547,6 +6736,10 @@ FUNCTION lantern_node_run
     add     x4, x25, #NodeEvent_root
     add     x5, x25, #NodeEvent_index
     FORK_CALL node_gossip
+    LEAVE 192
+69: mov     x9, #LANTERN_GOSSIP_IGNORE
+    str     x9, [x25, #NodeEvent_result]
+    mov     x0, #LANTERN_OK
     LEAVE 192
 70: cmp     x9, #NODE_WORK_SYNC_BLOCK
     b.ne    80f
@@ -6644,7 +6837,7 @@ FUNCTION lantern_node_run
     cbnz    x9, 99b
     b       84f
 83: cmp     x9, #NODE_WORK_FORKCHOICE
-    b.ne    8f
+    b.ne    89f
     mov     x0, x20                         /* FORKCHOICE: of the fork of the store's slot */
     bl      node_store_slot
     add     x1, x19, #Node_config
@@ -6749,6 +6942,43 @@ FUNCTION lantern_node_run
 87: mov     x9, #LANTERN_INVALID_UNKNOWN_BLOCK
     str     x9, [x25, #NodeEvent_result]
     mov     x0, #LANTERN_OK
+    LEAVE 192
+89: cmp     x9, #NODE_WORK_SLOTS
+    b.ne    90f
+    ldr     x0, [x22, #NODE_STATE_SLOT]     /* SLOTS: process_slots of the fork of the state's slot, to arg */
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x22
+    add     x1, x21, #NodeAction_arg
+    add     x2, x19, #Node_config
+    mov     x3, x24
+    add     x4, x25, #NodeEvent_result
+    FORK_CALL process_slots
+    LEAVE 192
+90: cmp     x9, #NODE_WORK_UPGRADE
+    b.ne    8f
+    ldr     x15, [x21, #NodeAction_arg]     /* UPGRADE: node_upgrade of the fork arg, of a state at its first slot */
+    cmp     x15, #FORK_ALTAIR
+    b.lo    19b
+    cmp     x15, #FORK_FULU
+    b.hi    19b
+    add     x9, x19, #Node_config
+    add     x9, x9, x15, lsl #4
+    ldr     x9, [x9]
+    mov     x10, #SLOTS_PER_EPOCH
+    umulh   x11, x9, x10
+    cbnz    x11, 19b
+    mul     x9, x9, x10
+    ldr     x10, [x22, #NODE_STATE_SLOT]
+    cmp     x9, x10
+    b.ne    19b
+    mov     x0, x22
+    ADDRESS x1, node_upgrade_room
+    add     x2, x19, #Node_config
+    mov     x3, x24
+    ldr     x4, [sp, #(L + 72)]
+    FORK_CALL node_upgrade
     LEAVE 192
 8:  mov     x0, #LANTERN_INVALID_EVENT
     LEAVE 192

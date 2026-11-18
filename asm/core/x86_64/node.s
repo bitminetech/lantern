@@ -509,6 +509,67 @@ LOCAL_FUNCTION node_ids
 END_FUNCTION node_ids
 
 /*
+ * The copy rdi of the state of id rsi, at slot rdx, crosses each fork boundary up to the fork of
+ * slot rcx (node.md): for each, a SLOTS work to the next fork's first slot when the copy is before
+ * it, a copy of the state rsi as the upgrade's buffer, an UPGRADE work and a STATE_FREE of the copy
+ * before. rax = the id of the last copy. r12 the copy's slot, r13 the upgrade's buffer, S7 the
+ * copy, S8 the state rsi, S9 the fork, S10 the last fork.
+ */
+LOCAL_FUNCTION node_cross
+    ENTER 0
+    mov     %rdi, S7(%rsp)
+    mov     %rsi, S8(%rsp)
+    mov     %rdx, %r12
+    mov     %rcx, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, S10(%rsp)
+    mov     %r12, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, S9(%rsp)
+1:  mov     S9(%rsp), %rax
+    cmp     S10(%rsp), %rax
+    jae     9f
+    inc     %rax
+    mov     %rax, S9(%rsp)
+    shl     $4, %rax                        # the next fork's first slot
+    mov     Node_config(%rbx,%rax), %rax
+    imul    $SLOTS_PER_EPOCH, %rax, %rax
+    cmp     %rax, %r12
+    jae     2f
+    mov     %rax, %r12
+    mov     $NODE_WORK_SLOTS, %edi
+    mov     S7(%rsp), %rsi
+    xor     %edx, %edx
+    xor     %ecx, %ecx
+    xor     %r8d, %r8d
+    mov     %r12, %r9
+    call    node_work
+2:  call    node_new_id                     # the upgrade's buffer: a copy of the state
+    mov     %rax, %r13
+    mov     $NODE_ACT_STATE_COPY, %edi
+    mov     S8(%rsp), %rsi
+    mov     %r13, %rdx
+    call    node_ids
+    mov     $NODE_WORK_UPGRADE, %edi
+    mov     S7(%rsp), %rsi
+    mov     %r13, %rdx
+    xor     %ecx, %ecx
+    xor     %r8d, %r8d
+    mov     S9(%rsp), %r9
+    call    node_work
+    mov     $NODE_ACT_STATE_FREE, %edi
+    mov     S7(%rsp), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    mov     %r13, S7(%rsp)
+    jmp     1b
+9:  mov     S7(%rsp), %rax
+    LEAVE 0
+END_FUNCTION node_cross
+
+/*
  * rax = the state id of the checkpoint state of (epoch rdi, root at rsi), or 0 when the root's
  * block has no post-state: a new checkpoint is a copy of that post-state and a TARGET_STATE work.
  * r12 epoch, r13 root, S7 the new id, S8 the block's state id.
@@ -532,12 +593,20 @@ LOCAL_FUNCTION node_checkpoint_state
     test    %rax, %rax                      # an ancestor of the finalized block keeps no state
     jz      9f
     mov     %rax, S8(%rsp)
+    mov     NodeBlock_slot(%rdx), %rax
+    mov     %rax, S9(%rsp)
     call    node_new_id
     mov     %rax, S7(%rsp)
     mov     $NODE_ACT_STATE_COPY, %edi
     mov     S8(%rsp), %rsi
     mov     %rax, %rdx
     call    node_ids
+    mov     S7(%rsp), %rdi                  # across the forks to the epoch's first slot
+    mov     S8(%rsp), %rsi
+    mov     S9(%rsp), %rdx
+    imul    $SLOTS_PER_EPOCH, %r12, %rcx
+    call    node_cross
+    mov     %rax, S7(%rsp)
     call    node_new_checkpoint             # the entry
     mov     %rax, %r8
     mov     %r12, NodeCheckpoint_epoch(%rdi)
@@ -641,12 +710,20 @@ LOCAL_FUNCTION node_import_now
     test    %rax, %rax
     jz      8f
     mov     %rax, S7(%rsp)
+    mov     NodeBlock_slot(%rdx), %rax
+    mov     %rax, S8(%rsp)
     call    node_new_id
     mov     %rax, NodeBlock_state_id(%r13)
     mov     %rax, %rdx
     mov     $NODE_ACT_STATE_COPY, %edi
     mov     S7(%rsp), %rsi
     call    node_ids
+    mov     NodeBlock_state_id(%r13), %rdi  # across the forks from the parent's slot to the block's
+    mov     S7(%rsp), %rsi
+    mov     S8(%rsp), %rdx
+    mov     NodeBlock_slot(%r13), %rcx
+    call    node_cross
+    mov     %rax, NodeBlock_state_id(%r13)
     movq    $NODE_BLOCK_IMPORTING, NodeBlock_status(%r13)
     mov     $NODE_WORK_IMPORT_BLOCK, %edi
     mov     NodeBlock_state_id(%r13), %rsi
@@ -4601,6 +4678,15 @@ LOCAL_FUNCTION node_message_status
     jbe     3f
     mov     NodeBlock_state_id(%rdx), %rax
     mov     %rax, S9(%rsp)
+    mov     NodeBlock_slot(%rdx), %rdi      # of the same fork
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, S10(%rsp)
+    mov     NodeMessage_slot(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     S10(%rsp), %rax
+    jne     3f
     call    node_new_id
     mov     %rax, S8(%rsp)
     mov     $NODE_ACT_STATE_COPY, %edi
@@ -5166,7 +5252,7 @@ LOCAL_FUNCTION node_sync
     mov     %rax, S8(%rsp)
     PART    %r12, %r13, %rbx, Node_peers    # a peer ahead
 4:  test    %r13, %r13
-    jz      9f
+    jz      90f
     mov     NodePeer_flags(%r12), %rax
     test    $NODE_PEER_STATUS, %rax
     jz      5f
@@ -5356,6 +5442,54 @@ LOCAL_FUNCTION node_sync
     mov     L(%rsp), %rax
     add     (L + 8)(%rsp), %rax
     mov     %rax, Node_sync_slot(%rbx)
+    jmp     9f
+90: mov     %rbp, %rdi                      # none: a fresh Status of a peer, when the store's slot is above the start
+    call    node_store_slot
+    cmp     S8(%rsp), %rax
+    jbe     9f
+    mov     Node_status_ms(%rbx), %rax      # at most each NODE_STATUS_MS
+    test    %rax, %rax
+    jz      91f
+    add     $NODE_STATUS_MS, %rax
+    cmp     %rax, Node_time_ms(%rbx)
+    jb      9f
+91: mov     Node_messages(%rbx), %rax       # room for it
+    sub     Node_streams(%rbx), %rax
+    xor     %edx, %edx
+    divq    Node_stream_bytes(%rbx)
+    mov     (Node_streams + 8)(%rbx), %rcx
+    inc     %rcx
+    cmp     %rax, %rcx
+    ja      9f
+    PART    %r12, %r13, %rbx, Node_peers    # the first peer with a Status of the node's fork_digest
+92: test    %r13, %r13
+    jz      9f
+    testq   $NODE_PEER_STATUS, NodePeer_flags(%r12)
+    jz      93f
+    mov     NodePeer_fork_digest(%r12), %rax
+    cmp     Node_fork_digest(%rbx), %rax
+    je      94f
+93: add     $NodePeer__mem, %r12
+    dec     %r13
+    jmp     92b
+94: mov     (L + 40)(%rsp), %rax            # the fork of the store's slot: v2 from fulu
+    mov     %rax, S9(%rsp)
+    lea     L(%rsp), %rdi
+    call    node_status_bytes
+    mov     $1, %esi
+    mov     $84, %r8d
+    cmpq    $FORK_FULU, S9(%rsp)
+    jb      95f
+    mov     $2, %esi
+    mov     $92, %r8d
+95: mov     $REQRESP_STATUS, %edi
+    mov     NodePeer_handle(%r12), %rdx
+    lea     L(%rsp), %rcx
+    call    node_open
+    test    %rax, %rax
+    jz      9f
+    mov     Node_time_ms(%rbx), %rax
+    mov     %rax, Node_status_ms(%rbx)
 9:  mov     S7(%rsp), %rax
     LEAVE 96
 END_FUNCTION node_sync
@@ -6019,7 +6153,7 @@ FUNCTION lantern_node_step
     mov     (Node_checkpoints + 8)(%rbx), %rdx
     shl     $5, %rdx
     add     %rdx, %rcx
-    add     $512, %rcx
+    add     $2048, %rcx                     # and 2048 free: the crossing of a fork boundary takes 208
     mov     %rcx, (L + 72)(%rsp)
     cmpq    $0, (L + 16)(%rsp)
     je      51f
@@ -6341,6 +6475,12 @@ END_FUNCTION lantern_node_step
  * a fork digest and a ChunkHeader (64); L+64 seen, L+72 state_b, L+80 state_c, L+88 settings,
  * L+96 a NodeGossip.
  */
+# The StateRoom of an upgraded state (node.md, NODE_WORK_UPGRADE): as the binary's anchor has.
+    RODATA
+    .p2align 3
+node_upgrade_room:
+    .quad 1024, 2048, 64, 1024, 64, 64, 4, 4096
+
 FUNCTION lantern_node_run
     ENTER 192
     mov     %rdi, %rbx
@@ -6397,9 +6537,29 @@ FUNCTION lantern_node_run
     mov     8(%r14), %rax
     add     %r14, %rax
     mov     100(%rax), %rdi
+    mov     %rdi, (L + 40)(%rsp)            # the block's slot, then its fork
     lea     Node_config(%rbx), %rsi
     call    node_fork
-    mov     %rax, %r10
+    mov     %rax, (L + 48)(%rsp)
+    mov     NODE_STATE_SLOT(%r13), %rdi     # the state's slot of the block's fork
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     (L + 48)(%rsp), %rax
+    jne     19f
+    xor     %eax, %eax                      # slots_done: the state at the block's slot, the first of its fork
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    cmp     (L + 40)(%rsp), %rdi
+    jne     11f
+    test    %rdi, %rdi
+    jz      11f
+    dec     %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     (L + 48)(%rsp), %rax
+    setne   %al
+    movzbl  %al, %eax
+11: mov     %rax, (L + BlockOptions_slots_done)(%rsp)
+    mov     (L + 48)(%rsp), %r10
     mov     %rbp, %rdi
     mov     %rbx, %rsi
     mov     %r14, %rdx
@@ -6418,6 +6578,10 @@ FUNCTION lantern_node_run
     LEAVE 192
 18: mov     S8(%rsp), %rcx
     movq    $LANTERN_INVALID_ENCODING, NodeEvent_result(%rcx)
+    xor     %eax, %eax
+    LEAVE 192
+19: mov     S8(%rsp), %rcx
+    movq    $LANTERN_INVALID_SLOT, NodeEvent_result(%rcx)
     xor     %eax, %eax
     LEAVE 192
 10: cmp     $NODE_WORK_JUSTIFIED_STATE, %rax
@@ -6477,7 +6641,15 @@ FUNCTION lantern_node_run
     mov     %rax, %rdi
     lea     Node_config(%rbx), %rsi
     call    node_fork
-    mov     %rax, %r10
+    mov     %rax, (L + 40)(%rsp)
+    test    %r13, %r13                      # a state of another fork: IGNORE
+    jz      41f
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     (L + 40)(%rsp), %rax
+    jne     69f
+41: mov     (L + 40)(%rsp), %r10
     mov     %rbp, %rdi
     mov     %r14, %rsi
     mov     %r13, %rdx
@@ -6592,7 +6764,20 @@ FUNCTION lantern_node_run
     LEAVE 192
 60: cmp     $NODE_WORK_GOSSIP, %rax
     jne     70f
-    mov     (L + 64)(%rsp), %rax            # GOSSIP: the inputs of the fork's node_gossip
+    mov     %rbp, %rdi                      # GOSSIP: the fork of the store's slot; a head state of another: IGNORE
+    call    node_store_slot
+    mov     %rax, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, (L + 40)(%rsp)
+    test    %r13, %r13
+    jz      61f
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     (L + 40)(%rsp), %rax
+    jne     69f
+61: mov     (L + 64)(%rsp), %rax            # the inputs of the fork's node_gossip
     mov     %rax, (L + 96 + NodeGossip_seen)(%rsp)
     mov     %rbp, (L + 96 + NodeGossip_store)(%rsp)
     mov     Node_time_ms(%rbx), %rax
@@ -6603,20 +6788,31 @@ FUNCTION lantern_node_run
     mov     %rcx, (L + 96 + NodeGossip_topic)(%rsp)
     mov     %rax, (L + 96 + NodeGossip_subnet)(%rsp)
     mov     %r13, (L + 96 + NodeGossip_head)(%rsp)
-    mov     (L + 72)(%rsp), %rax
-    mov     %rax, (L + 96 + NodeGossip_proposer)(%rsp)
+    mov     (L + 72)(%rsp), %rax            # the proposer and justified states, 0 when of another fork
+    test    %rax, %rax
+    jz      62f
+    mov     NODE_STATE_SLOT(%rax), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     (L + 40)(%rsp), %rax
+    mov     $0, %eax
+    cmove   (L + 72)(%rsp), %rax
+62: mov     %rax, (L + 96 + NodeGossip_proposer)(%rsp)
     mov     (L + 80)(%rsp), %rax
-    mov     %rax, (L + 96 + NodeGossip_justified)(%rsp)
+    test    %rax, %rax
+    jz      63f
+    mov     NODE_STATE_SLOT(%rax), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     (L + 40)(%rsp), %rax
+    mov     $0, %eax
+    cmove   (L + 80)(%rsp), %rax
+63: mov     %rax, (L + 96 + NodeGossip_justified)(%rsp)
     mov     (L + 88)(%rsp), %rax
     mov     %rax, (L + 96 + NodeGossip_settings)(%rsp)
     lea     Node_config(%rbx), %rax
     mov     %rax, (L + 96 + NodeGossip_config)(%rsp)
-    mov     %rbp, %rdi
-    call    node_store_slot
-    mov     %rax, %rdi
-    lea     Node_config(%rbx), %rsi
-    call    node_fork
-    mov     %rax, %r10
+    mov     (L + 40)(%rsp), %r10
     lea     (L + 96)(%rsp), %rdi
     mov     %r14, %rsi
     mov     %r15, %rdx
@@ -6626,6 +6822,10 @@ FUNCTION lantern_node_run
     lea     NodeEvent_root(%rcx), %rcx
     xchg    %rcx, %r8
     FORK_CALL node_gossip
+    LEAVE 192
+69: mov     S8(%rsp), %rcx
+    movq    $LANTERN_GOSSIP_IGNORE, NodeEvent_result(%rcx)
+    xor     %eax, %eax
     LEAVE 192
 70: cmp     $NODE_WORK_SYNC_BLOCK, %rax
     jne     80f
@@ -6726,7 +6926,7 @@ FUNCTION lantern_node_run
     jne     99b
     jmp     84f
 83: cmp     $NODE_WORK_FORKCHOICE, %rax
-    jne     8f
+    jne     89f
     mov     %rbp, %rdi                      # FORKCHOICE: of the fork of the store's slot
     call    node_store_slot
     mov     %rax, %rdi
@@ -6840,6 +7040,42 @@ FUNCTION lantern_node_run
 87: mov     S8(%rsp), %rcx
     movq    $LANTERN_INVALID_UNKNOWN_BLOCK, NodeEvent_result(%rcx)
     xor     %eax, %eax
+    LEAVE 192
+89: cmp     $NODE_WORK_SLOTS, %rax
+    jne     90f
+    mov     NODE_STATE_SLOT(%r13), %rdi     # SLOTS: process_slots of the fork of the state's slot, to arg
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     %r13, %rdi
+    lea     NodeAction_arg(%r12), %rsi
+    lea     Node_config(%rbx), %rdx
+    mov     %r15, %rcx
+    mov     S8(%rsp), %r8
+    add     $NodeEvent_result, %r8
+    FORK_CALL process_slots
+    LEAVE 192
+90: cmp     $NODE_WORK_UPGRADE, %rax
+    jne     8f
+    mov     NodeAction_arg(%r12), %rax      # UPGRADE: node_upgrade of the fork arg, of a state at its first slot
+    cmp     $FORK_ALTAIR, %rax
+    jb      19b
+    cmp     $FORK_FULU, %rax
+    ja      19b
+    shl     $4, %rax
+    mov     Node_config(%rbx,%rax), %rax
+    mov     $SLOTS_PER_EPOCH, %ecx
+    mul     %rcx
+    jc      19b
+    cmp     NODE_STATE_SLOT(%r13), %rax
+    jne     19b
+    mov     %r13, %rdi
+    ADDRESS %rsi, node_upgrade_room
+    lea     Node_config(%rbx), %rdx
+    mov     %r15, %rcx
+    mov     (L + 72)(%rsp), %r8
+    mov     NodeAction_arg(%r12), %r10
+    FORK_CALL node_upgrade
     LEAVE 192
 8:  mov     $LANTERN_INVALID_EVENT, %eax
     LEAVE 192

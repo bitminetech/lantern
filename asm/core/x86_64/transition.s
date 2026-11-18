@@ -830,7 +830,13 @@ SPEC_FUNCTION state_transition
     call    block_scratch
     cmp     %rax, (%r14)
     jb      9f
-    mov     %rbx, %rdi                      # process_slots(state, block.slot)
+    cmpq    $0, 16(%r12)                    # slots_done and a state at the block's slot: no process_slots
+    je      3f
+    mov     S7(%rsp), %rax
+    mov     BeaconBlock_slot(%rax), %rax
+    cmp     BeaconState_slot(%rbx), %rax
+    je      4f
+3:  mov     %rbx, %rdi                      # process_slots(state, block.slot)
     mov     S7(%rsp), %rsi
     add     $BeaconBlock_slot, %rsi
     mov     %r13, %rdx
@@ -841,7 +847,7 @@ SPEC_FUNCTION state_transition
     jnz     7f
     cmpq    $0, (%r15)
     jne     8f
-    cmpq    $0, (%r12)                      # if validate_result: assert verify_block_signature(state, signed_block)
+4:  cmpq    $0, (%r12)                      # if validate_result: assert verify_block_signature(state, signed_block)
     je      1f
     mov     S8(%rsp), %rax
     mov     %rax, (%r14)

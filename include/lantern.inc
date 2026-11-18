@@ -382,6 +382,8 @@
 .set BlockOptions_data_available, 8
 .set BlockOptions_pow_block, 16       /* bellatrix: get_pow_block(payload.parent_hash), a PowBlock, or 0 for None */
 .set BlockOptions_pow_parent, 24      /* bellatrix: get_pow_block(pow_block.parent_hash), or 0 for None */
+.set BlockOptions_slots_done, 32      /* 1: the state may be at the block's slot already, after an upgrade */
+.set BlockOptions__size, 40
 
 /* ------------------------------------------------------------ Gossip (docs/reference/networking.md) */
 
@@ -555,9 +557,11 @@
 .set Node_db_block_end, 496           /* the bytes of that segment */
 .set Node_db_sidecar_segment, 504     /* the sidecar segment of the last sidecar record, or 2^64 - 1 */
 .set Node_db_sidecar_end, 512         /* the bytes of that segment */
-.set Node_config, 520
-.set NODE_FIXED, 520 + CONFIG_SIZE
+.set Node_status_ms, 520               /* the time of the node's last Status request of node_sync, or 0 */
+.set Node_config, 528
+.set NODE_FIXED, 528 + CONFIG_SIZE
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
+.set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
 .set NODE_DIAL_TAG, 0x4000000000000000 /* the bit of a DIAL tag of the node */
 .set NODE_ENGINE_HOST_MAX, 64
 .set NODE_STATE_SLOT, 48               /* BeaconState.slot in the value of every fork */
@@ -767,6 +771,8 @@
 .set NODE_WORK_BLOB, 9                 /* data: a sidecar's SSZ bytes from a response; target: its NodeBlob index; arg: 0 BlobSidecar, 1 DataColumnSidecar */
 .set NODE_WORK_NEW_PAYLOAD, 10         /* data: a block's SSZ bytes; target: its NodeBlock index; arg: the JSON-RPC id */
 .set NODE_WORK_FORKCHOICE, 11          /* arg: the JSON-RPC id */
+.set NODE_WORK_SLOTS, 12               /* a: a state; arg: the slot to process it to */
+.set NODE_WORK_UPGRADE, 13             /* a: a state at the fork's first slot; b: the buffer for the upgraded state; arg: the fork */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
 .set NodeEvent_index, NodeEvent_root + 32      /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its blob commitments; of a valid blob_sidecar: its index */
 .set NodeEvent_chunk, NODE_EV_WORK_DONE_SIZE   /* SERVE: a ByteList of the response chunk after the WORK_DONE fields; NEW_PAYLOAD, FORKCHOICE: of the HTTP request */

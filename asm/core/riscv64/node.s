@@ -539,6 +539,65 @@ LOCAL_FUNCTION node_ids
 END_FUNCTION node_ids
 
 /*
+ * a0 = the id of the last copy: the copy a0 of the state of id a1, at slot a2, crosses each fork
+ * boundary up to the fork of slot a3 (node.md): for each, a SLOTS work to the next fork's first
+ * slot when the copy is before it, a copy of the state a1 as the upgrade's buffer, an UPGRADE work
+ * and a STATE_FREE of the copy before. s3 the copy's slot, s4 the upgrade's buffer, s7 the copy,
+ * s8 the state a1, s9 the fork, s10 the last fork.
+ */
+LOCAL_FUNCTION node_cross
+    ENTER 0
+    mv      s7, a0
+    mv      s8, a1
+    mv      s3, a2
+    mv      a0, a3
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      s10, a0
+    mv      a0, s3
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      s9, a0
+1:  bgeu    s9, s10, 9f
+    addi    s9, s9, 1
+    slli    t0, s9, 4                       # the next fork's first slot
+    add     t0, s1, t0
+    ld      t0, Node_config(t0)
+    li      t1, SLOTS_PER_EPOCH
+    mul     t0, t0, t1
+    bgeu    s3, t0, 2f
+    mv      s3, t0
+    li      a0, NODE_WORK_SLOTS
+    mv      a1, s7
+    li      a2, 0
+    li      a3, 0
+    li      a4, 0
+    mv      a5, s3
+    call    node_work
+2:  call    node_new_id                     # the upgrade's buffer: a copy of the state
+    mv      s4, a0
+    li      a0, NODE_ACT_STATE_COPY
+    mv      a1, s8
+    mv      a2, s4
+    call    node_ids
+    li      a0, NODE_WORK_UPGRADE
+    mv      a1, s7
+    mv      a2, s4
+    li      a3, 0
+    li      a4, 0
+    mv      a5, s9
+    call    node_work
+    li      a0, NODE_ACT_STATE_FREE
+    mv      a1, s7
+    li      a2, 0
+    call    node_ids
+    mv      s7, s4
+    j       1b
+9:  mv      a0, s7
+    LEAVE 0
+END_FUNCTION node_cross
+
+/*
  * a0 = the state id of the checkpoint state of (epoch a0, root at a1, 8-aligned), or 0 when the
  * root's block has no post-state: a new checkpoint is a copy of that post-state and a
  * TARGET_STATE work. s3 epoch, s4 root, s7 the new id, s8 the block's state id.
@@ -561,12 +620,20 @@ LOCAL_FUNCTION node_checkpoint_state
     bne     t0, t1, 9f
     ld      s8, NodeBlock_state_id(a1)
     beqz    s8, 9f                          # an ancestor of the finalized block keeps no state
+    ld      s9, NodeBlock_slot(a1)
     call    node_new_id
     mv      s7, a0
     li      a0, NODE_ACT_STATE_COPY
     mv      a1, s8
     mv      a2, s7
     call    node_ids
+    mv      a0, s7                          # across the forks to the epoch's first slot
+    mv      a1, s8
+    mv      a2, s9
+    li      t0, SLOTS_PER_EPOCH
+    mul     a3, s3, t0
+    call    node_cross
+    mv      s7, a0
     call    node_new_checkpoint             # the entry
     mv      t1, a0
     sd      s3, NodeCheckpoint_epoch(t0)
@@ -676,12 +743,19 @@ LOCAL_FUNCTION node_import_now
     beq     a0, t0, 9f
     ld      s8, NodeBlock_state_id(a1)
     beqz    s8, 8f
+    ld      s9, NodeBlock_slot(a1)
     call    node_new_id
     sd      a0, NodeBlock_state_id(s4)
     mv      a2, a0
     li      a0, NODE_ACT_STATE_COPY
     mv      a1, s8
     call    node_ids
+    ld      a0, NodeBlock_state_id(s4)      # across the forks from the parent's slot to the block's
+    mv      a1, s8
+    mv      a2, s9
+    ld      a3, NodeBlock_slot(s4)
+    call    node_cross
+    sd      a0, NodeBlock_state_id(s4)
     li      t0, NODE_BLOCK_IMPORTING
     sd      t0, NodeBlock_status(s4)
     li      a0, NODE_WORK_IMPORT_BLOCK
@@ -4584,6 +4658,14 @@ LOCAL_FUNCTION node_message_status
     ld      t1, NodeMessage_slot(s4)
     bleu    t1, t0, 3f
     ld      s9, NodeBlock_state_id(a1)
+    mv      a0, t0                          # of the same fork
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      s10, a0
+    ld      a0, NodeMessage_slot(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    bne     a0, s10, 3f
     call    node_new_id
     mv      s8, a0
     li      a0, NODE_ACT_STATE_COPY
@@ -5144,7 +5226,7 @@ LOCAL_FUNCTION node_sync
     bleu    t0, s8, 33f
     mv      s8, t0
 33: PART    s3, s4, s1, Node_peers          # a peer ahead
-4:  beqz    s4, 9f
+4:  beqz    s4, 90f
     ld      t0, NodePeer_flags(s3)
     andi    t1, t0, NODE_PEER_STATUS
     beqz    t1, 5f
@@ -5343,6 +5425,51 @@ LOCAL_FUNCTION node_sync
     ld      t1, (L + 8)(sp)
     add     t0, t0, t1
     sd      t0, Node_sync_slot(s1)
+    j       9f
+90: mv      a0, s2                          # none: a fresh Status of a peer, when the store's slot is above the start
+    call    node_store_slot
+    bleu    a0, s8, 9f
+    ld      t0, Node_status_ms(s1)          # at most each NODE_STATUS_MS
+    beqz    t0, 91f
+    li      t1, NODE_STATUS_MS
+    add     t0, t0, t1
+    ld      t1, Node_time_ms(s1)
+    bltu    t1, t0, 9f
+91: ld      t0, (Node_streams + 8)(s1)      # room for it
+    ld      t1, Node_messages(s1)
+    ld      t2, Node_streams(s1)
+    sub     t1, t1, t2
+    ld      t2, Node_stream_bytes(s1)
+    divu    t1, t1, t2
+    addi    t0, t0, 1
+    bgtu    t0, t1, 9f
+    PART    s3, s4, s1, Node_peers          # the first peer with a Status of the node's fork_digest
+92: beqz    s4, 9f
+    ld      t0, NodePeer_flags(s3)
+    andi    t0, t0, NODE_PEER_STATUS
+    beqz    t0, 93f
+    ld      t0, NodePeer_fork_digest(s3)
+    ld      t1, Node_fork_digest(s1)
+    beq     t0, t1, 94f
+93: addi    s3, s3, NodePeer__mem
+    addi    s4, s4, -1
+    j       92b
+94: ld      s9, (L + 40)(sp)                # the fork of the store's slot: v2 from fulu
+    addi    a0, sp, L
+    call    node_status_bytes
+    li      a1, 1
+    li      a4, 84
+    li      t0, FORK_FULU
+    bltu    s9, t0, 95f
+    li      a1, 2
+    li      a4, 92
+95: li      a0, REQRESP_STATUS
+    ld      a2, NodePeer_handle(s3)
+    addi    a3, sp, L
+    call    node_open
+    beqz    a0, 9f
+    ld      t0, Node_time_ms(s1)
+    sd      t0, Node_status_ms(s1)
 9:  mv      a0, s7
     LEAVE 96
 END_FUNCTION node_sync
@@ -6025,7 +6152,8 @@ FUNCTION lantern_node_step
     ld      t2, (Node_checkpoints + 8)(s1)
     slli    t2, t2, 5
     add     t1, t1, t2
-    addi    t1, t1, 512
+    li      t2, 2048                        # and 2048 free: the crossing of a fork boundary takes 208
+    add     t1, t1, t2
     sd      t1, (L + 72)(sp)
     ld      t2, (L + 16)(sp)
     beqz    t2, 51f
@@ -6355,6 +6483,12 @@ END_FUNCTION lantern_node_step
  * temporary. Locals: L the BlockOptions (32), or a chunk's size, a fork digest and a ChunkHeader
  * (64); L+64 seen, L+72 state_b, L+80 state_c, L+88 settings, L+96 a NodeGossip.
  */
+# The StateRoom of an upgraded state (node.md, NODE_WORK_UPGRADE): as the binary's anchor has.
+    RODATA
+    .p2align 3
+node_upgrade_room:
+    .quad 1024, 2048, 64, 1024, 64, 64, 4, 4096
+
 FUNCTION lantern_node_run
     ENTER 192
     mv      s1, a0
@@ -6414,9 +6548,25 @@ FUNCTION lantern_node_run
     ld      t0, 8(s5)
     add     t0, s5, t0
     LDU64   a0, t0, 100, t1
+    mv      s9, a0                          # the block's slot, then its fork
     addi    a1, s1, Node_config
     call    node_fork
-    mv      t6, a0
+    mv      s10, a0
+    ld      a0, NODE_STATE_SLOT(s4)         # the state's slot of the block's fork
+    addi    a1, s1, Node_config
+    call    node_fork
+    bne     a0, s10, 19f
+    ld      a0, NODE_STATE_SLOT(s4)         # slots_done: the state at the block's slot, the first of its fork
+    li      t3, 0
+    bne     a0, s9, 11f
+    beqz    a0, 11f
+    addi    a0, a0, -1
+    addi    a1, s1, Node_config
+    call    node_fork
+    sub     t3, a0, s10
+    snez    t3, t3
+11: sd      t3, (L + BlockOptions_slots_done)(sp)
+    mv      t6, s10
     mv      a0, s2
     mv      a1, s1
     mv      a2, s5
@@ -6431,6 +6581,10 @@ FUNCTION lantern_node_run
     li      a0, LANTERN_OK
     LEAVE 192
 18: li      t0, LANTERN_INVALID_ENCODING
+    sd      t0, NodeEvent_result(s7)
+    li      a0, LANTERN_OK
+    LEAVE 192
+19: li      t0, LANTERN_INVALID_SLOT
     sd      t0, NodeEvent_result(s7)
     li      a0, LANTERN_OK
     LEAVE 192
@@ -6488,7 +6642,13 @@ FUNCTION lantern_node_run
     call    node_store_slot
     addi    a1, s1, Node_config
     call    node_fork
-    mv      t6, a0
+    mv      s10, a0
+    beqz    s4, 41f                         # a state of another fork: IGNORE
+    ld      a0, NODE_STATE_SLOT(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    bne     a0, s10, 69f
+41: mv      t6, s10
     mv      a0, s2
     mv      a1, s5
     mv      a2, s4
@@ -6588,7 +6748,17 @@ FUNCTION lantern_node_run
     LEAVE 192
 60: li      t1, NODE_WORK_GOSSIP
     bne     t0, t1, 70f
-    ld      t0, (L + 64)(sp)                # GOSSIP: the inputs of the fork's node_gossip
+    mv      a0, s2                          # GOSSIP: the fork of the store's slot; a head state of another: IGNORE
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      s10, a0
+    beqz    s4, 61f
+    ld      a0, NODE_STATE_SLOT(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    bne     a0, s10, 69f
+61: ld      t0, (L + 64)(sp)                # the inputs of the fork's node_gossip
     sd      t0, (L + 96 + NodeGossip_seen)(sp)
     sd      s2, (L + 96 + NodeGossip_store)(sp)
     ld      t0, Node_time_ms(s1)
@@ -6599,19 +6769,27 @@ FUNCTION lantern_node_run
     sd      t1, (L + 96 + NodeGossip_topic)(sp)
     sd      t0, (L + 96 + NodeGossip_subnet)(sp)
     sd      s4, (L + 96 + NodeGossip_head)(sp)
-    ld      t0, (L + 72)(sp)
-    sd      t0, (L + 96 + NodeGossip_proposer)(sp)
-    ld      t0, (L + 80)(sp)
-    sd      t0, (L + 96 + NodeGossip_justified)(sp)
+    ld      s9, (L + 72)(sp)                # the proposer and justified states, 0 when of another fork
+    beqz    s9, 62f
+    ld      a0, NODE_STATE_SLOT(s9)
+    addi    a1, s1, Node_config
+    call    node_fork
+    beq     a0, s10, 62f
+    li      s9, 0
+62: sd      s9, (L + 96 + NodeGossip_proposer)(sp)
+    ld      s9, (L + 80)(sp)
+    beqz    s9, 63f
+    ld      a0, NODE_STATE_SLOT(s9)
+    addi    a1, s1, Node_config
+    call    node_fork
+    beq     a0, s10, 63f
+    li      s9, 0
+63: sd      s9, (L + 96 + NodeGossip_justified)(sp)
     ld      t0, (L + 88)(sp)
     sd      t0, (L + 96 + NodeGossip_settings)(sp)
     addi    t0, s1, Node_config
     sd      t0, (L + 96 + NodeGossip_config)(sp)
-    mv      a0, s2
-    call    node_store_slot
-    addi    a1, s1, Node_config
-    call    node_fork
-    mv      t6, a0
+    mv      t6, s10
     addi    a0, sp, L + 96
     mv      a1, s5
     mv      a2, s6
@@ -6619,6 +6797,10 @@ FUNCTION lantern_node_run
     addi    a4, s7, NodeEvent_root
     addi    a5, s7, NodeEvent_index
     FORK_CALL node_gossip
+    LEAVE 192
+69: li      t0, LANTERN_GOSSIP_IGNORE
+    sd      t0, NodeEvent_result(s7)
+    li      a0, LANTERN_OK
     LEAVE 192
 70: li      t1, NODE_WORK_SYNC_BLOCK
     bne     t0, t1, 80f
@@ -6716,7 +6898,7 @@ FUNCTION lantern_node_run
     bnez    t0, 99b
     j       84f
 83: li      t1, NODE_WORK_FORKCHOICE
-    bne     t0, t1, 8f
+    bne     t0, t1, 89f
     mv      a0, s2                          # FORKCHOICE: of the fork of the store's slot
     call    node_store_slot
     addi    a1, s1, Node_config
@@ -6824,6 +7006,42 @@ FUNCTION lantern_node_run
 87: li      t0, LANTERN_INVALID_UNKNOWN_BLOCK
     sd      t0, NodeEvent_result(s7)
     li      a0, LANTERN_OK
+    LEAVE 192
+89: li      t1, NODE_WORK_SLOTS
+    bne     t0, t1, 90f
+    ld      a0, NODE_STATE_SLOT(s4)         # SLOTS: process_slots of the fork of the state's slot, to arg
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    mv      a0, s4
+    addi    a1, s3, NodeAction_arg
+    addi    a2, s1, Node_config
+    mv      a3, s6
+    addi    a4, s7, NodeEvent_result
+    FORK_CALL process_slots
+    LEAVE 192
+90: li      t1, NODE_WORK_UPGRADE
+    bne     t0, t1, 8f
+    ld      t6, NodeAction_arg(s3)          # UPGRADE: node_upgrade of the fork arg, of a state at its first slot
+    li      t1, FORK_ALTAIR
+    bltu    t6, t1, 19b
+    li      t1, FORK_FULU
+    bgtu    t6, t1, 19b
+    slli    t1, t6, 4
+    add     t1, s1, t1
+    ld      t1, Node_config(t1)
+    li      t2, SLOTS_PER_EPOCH
+    mulhu   t3, t1, t2
+    bnez    t3, 19b
+    mul     t1, t1, t2
+    ld      t2, NODE_STATE_SLOT(s4)
+    bne     t1, t2, 19b
+    mv      a0, s4
+    ADDRESS a1, node_upgrade_room
+    addi    a2, s1, Node_config
+    mv      a3, s6
+    ld      a4, (L + 72)(sp)
+    FORK_CALL node_upgrade
     LEAVE 192
 8:  li      a0, LANTERN_INVALID_EVENT
     LEAVE 192

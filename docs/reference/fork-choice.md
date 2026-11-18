@@ -381,6 +381,7 @@ lantern_on_block(store, signed_block, state, options, scratch, result) -> status
 - A known root returns `LANTERN_VALID` before any other step.
 - A parent whose payload is `INVALIDATED` fails with `LANTERN_INVALID_PARENT_PAYLOAD` (optimistic-sync.md: "The parent of the block MUST NOT have an `INVALIDATED` execution payload").
 - verify_and_notify_new_payload is true when `options.payload_status` is not `INVALIDATED`.
+- lantern_state_transition gets `options.slots_done` as its `slots_done`.
 - Runs state_transition with validate_result, then get_head before adding the block, then computes compute_pulled_up_tip's process_justification_and_finalization on `state` and restores the four fields it changes.
 - Then writes in spec order: the node, record_block_timeliness, update_proposer_boost_root, update_checkpoints, and compute_pulled_up_tip's updates.
 - The node keeps `body.execution_payload.block_hash` (a zero hash before bellatrix) and `options.payload_status`. A `VALID` block makes its `NOT_VALIDATED` ancestors `VALID`, as a transition to `VALID` does.
@@ -823,6 +824,7 @@ The fork choice store: a value with two parts.
 | 8 | `data_available` | u64 | 1: is_data_available holds for the block; read from deneb on |
 | 16 | `pow_block` | pointer | Bellatrix: the `PowBlock` of get_pow_block(body.execution_payload.parent_hash), or 0 for None |
 | 24 | `pow_parent` | pointer | Bellatrix: the `PowBlock` of get_pow_block(pow_block.parent_hash), or 0 for None |
+| 32 | `slots_done` | u64 | 1: `state` may be at the block's slot already, as an upgrade at the fork's first slot leaves it; lantern_state_transition gets it |
 
 ## Type `ColumnSidecars`
 

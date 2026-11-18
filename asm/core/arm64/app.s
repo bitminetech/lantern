@@ -1129,8 +1129,12 @@ LOCAL_FUNCTION app_work
     b.eq    2f
     cmp     x26, #NODE_WORK_GOSSIP          /* GOSSIP: the Seen, and the proposer state */
     b.eq    3f
-    cmp     x26, #NODE_WORK_TARGET_STATE    /* TARGET_STATE, and IMPORT_BLOCK with store room: state_a */
+    cmp     x26, #NODE_WORK_TARGET_STATE    /* TARGET_STATE, SLOTS, and IMPORT_BLOCK with store room: state_a */
     b.eq    4f
+    cmp     x26, #NODE_WORK_SLOTS
+    b.eq    4f
+    cmp     x26, #NODE_WORK_UPGRADE         /* UPGRADE: state_b, the upgrade's buffer */
+    b.eq    6f
     cmp     x26, #NODE_WORK_IMPORT_BLOCK
     b.ne    5f
     ldr     x9, [x19, #APP_STORE]
@@ -1164,6 +1168,11 @@ LOCAL_FUNCTION app_work
     b       1b
 4:  cbz     x21, 91f
     mov     x0, x21
+    bl      app_regrow
+    cbnz    x0, 91f
+    b       1b
+6:  cbz     x22, 91f
+    mov     x0, x22
     bl      app_regrow
     cbnz    x0, 91f
     b       1b

@@ -22,6 +22,7 @@
 - [`lantern_node_anchor`](#function-lantern_node_anchor): the anchor state and block of a genesis state's SSZ bytes, for one fork.
 - [`lantern_node_anchor_block`](#function-lantern_node_anchor_block): the anchor state and block of a finalized state and its block, for one fork.
 - [`lantern_node_state_bytes`](#function-lantern_node_state_bytes): the SSZ bytes of a state, for one fork.
+- [`lantern_node_upgrade`](#function-lantern_node_upgrade): the state of the fork from a state of the fork before, for one fork.
 - [`lantern_node_block_header`](#function-lantern_node_block_header): the signed header of a block's SSZ bytes, for one fork.
 - [`lantern_node_state_checkpoints`](#function-lantern_node_state_checkpoints): the three checkpoints of a state, for one fork.
 
@@ -44,6 +45,7 @@
 ## Spec
 
 - Document: [consensus-specs v1.7.0-beta.4](https://github.com/ethereum/consensus-specs/tree/aa16bb4c156184e9548a997d53efaf2a228a6304/specs), `fork-choice.md` of phase0 to fulu: the handlers, `store.block_states` and `store.checkpoint_states`.
+- `fork.md` of altair to fulu, Fork transition: the upgrade runs once process_slots has set the slot to the fork's first slot; the block of that slot then goes on from the upgraded state. A state of an older fork crosses each fork boundary in turn.
 - `p2p-interface.md` of phase0, altair and fulu, The Req/Resp domain: Status, Goodbye, Ping and MetaData, their versions, and the result codes.
 - `p2p-interface.md` of phase0, Status: once the handshake completes, the client with the lower `head_slot` requests blocks with BeaconBlocksByRange.
 - `p2p-interface.md` of phase0 to fulu, The gossip domain: the topics of each fork, the message-id, `MAX_PAYLOAD_SIZE`, and the validation of each topic, as [networking.md](networking.md) gives it.
@@ -91,6 +93,12 @@
   - From bellatrix on, the node has `NODE_FLAG_ENGINE`, and the runner is its execution engine too. It answers each `NODE_ACT_ENGINE` request with an HTTP/1.1 response in two `NODE_EV_ENGINE` events: engine_newPayload of a `blockHash`, and engine_forkchoiceUpdated of a `headBlockHash`, with the `payloadStatus` of the case's last `payload_status` step of that hash, else `VALID` with that hash as `latestValidHash`. The request must carry a JWT of the node's secret.
   - Cases with `payload_status` steps run in node mode from bellatrix on, through the node's execution engine calls; before bellatrix only directly.
   - A non-zero status of lantern_node_step or lantern_node_run must leave the node, the store and the work's state byte for byte unchanged.
+- The transition/core files of [fork-upgrades.md](fork-upgrades.md#test-vectors), a second time, through the node, as the fork_choice files are: each case reports a second time with ` (node)` after its name.
+  - The node's anchor is lantern_node_anchor of the fork before, of the case's `pre`; its config sets each fork before the runner's to 0 and the runner's fork to the case's `fork_epoch`. A `pre` that lantern_node_anchor refuses runs only directly.
+  - Each block of the case goes in a `NODE_EV_BLOCK` after a `NODE_EV_TICK` of its slot. Each must be `NODE_BLOCK_IMPORTED`, the head must be the last block, and the post-state the node keeps for it must be the case's `post`.
+  - The node has no `NODE_FLAG_ENGINE`; the runner's shell grows a state with the copy of the fork of its slot: `state_a` of a `NODE_WORK_SLOTS`, `state_b` of a `NODE_WORK_UPGRADE`.
+  - A `pre` past the slot of its latest block header is no anchor (get_forkchoice_store needs that block's post-state): such a case runs only directly.
+  - Bellatrix: before a block of the new fork whose payload's `parent_hash` differs from the last one given, the runner gives the node, in two `NODE_EV_POW_BLOCK` events, a PowBlock of the payload's `parent_hash` with total difficulty `TERMINAL_TOTAL_DIFFICULTY` and its parent with one less, as the fork_choice files' `pow_block` steps do, so that validate_merge_block holds for the merge transition block; the case gives none.
 - Each block of each fork_choice case: lantern_node_block_header of its SSZ bytes must give the slot, proposer_index, parent_root, state_root and signature of those bytes, and a header whose hash_tree_root is the block's.
 - The anchor state of each fork_choice case: lantern_node_state_checkpoints must give its previous_justified_checkpoint, current_justified_checkpoint and finalized_checkpoint.
 - The anchor of each fork_choice case: lantern_node_anchor of the case's `anchor_state` must give a state whose SSZ bytes are the case's `anchor_state` and a block whose SSZ bytes are the case's `anchor_block`, when that block has the default body; else `LANTERN_INVALID_ANCHOR`.
@@ -249,7 +257,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 
 ### Function does
 
-- Room: `actions` has the event bytes + 512 per event + 256 per known block + 160 per `NodeBlob` entry + 32 per `NodeCheckpoint` entry + 512 bytes free, and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and with `p2p` `NODE_SYNC_BATCH` times the largest of `MAX_BLOBS_PER_BLOCK`, `MAX_BLOBS_PER_BLOCK_ELECTRA` and the count of `columns` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node + 8 per `NodeBlock` entry, and `DISCV5_ENR_SIZE` + `DISCV5_ENR_SCRATCH` more with a `NODE_EV_ENR`.
+- Room: `actions` has the event bytes + 512 per event + 256 per known block + 160 per `NodeBlob` entry + 32 per `NodeCheckpoint` entry + 2048 bytes free (the crossing of a fork boundary takes 208), and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and with `p2p` `NODE_SYNC_BATCH` times the largest of `MAX_BLOBS_PER_BLOCK`, `MAX_BLOBS_PER_BLOCK_ELECTRA` and the count of `columns` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node + 8 per `NodeBlock` entry, and `DISCV5_ENR_SIZE` + `DISCV5_ENR_SCRATCH` more with a `NODE_EV_ENR`.
 - Before any change: the root of each `NODE_EV_BLOCK`, with lantern_node_block_root of the fork of its slot. A status of that call is the step's.
 - On `LANTERN_BUFFER_TOO_SMALL`, `short`: `NODE_SHORT_ACTIONS` for the room of `actions`, and for `LIBP2P_BUFFER_TOO_SMALL` of libp2p_step (its scratch is the step's own); `NODE_SHORT_NODE` for a part of the node, with `room` the byte offset in `NodeRoom` of its capacity (`blocks`, `checkpoints`, `pow_blocks`, `p2p_out`, `blobs` or `engine_bytes`); `NODE_SHORT_SCRATCH` for `scratch`, and for `LANTERN_BUFFER_TOO_SMALL` of lantern_node_block_root.
 - The prune, after libp2p's first round and before the node's events, when the store's finalized epoch is above `pruned_epoch`: lantern_store_prune with the step's scratch; on its success `pruned_epoch` takes that epoch, and with F the block of the finalized root:
@@ -265,14 +273,15 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - A block whose parent is imported with no post-state is no descendant of the finalized block: it becomes `NODE_BLOCK_INVALID`, and its bytes are freed.
 - `NODE_EV_TICK`: sets `time_ms` of the node, then on_tick of the fork of the new slot.
 - `NODE_EV_BLOCK`: for a root the node does not know, a `NODE_ACT_BYTES_PUT` of the bytes and a `NodeBlock` in `NODE_BLOCK_WAITING`. Bytes that are no `SignedBeaconBlock` are dropped.
-- A waiting block whose parent is imported: a `NODE_ACT_STATE_COPY` of the parent's post-state and a `NODE_WORK_IMPORT_BLOCK`; the block is `NODE_BLOCK_IMPORTING`. A waiting block whose parent is invalid becomes `NODE_BLOCK_INVALID`.
+- A waiting block whose parent is imported: a `NODE_ACT_STATE_COPY` of the parent's post-state and a `NODE_WORK_IMPORT_BLOCK`; the block is `NODE_BLOCK_IMPORTING`. When the fork of the block's slot is later than that of the parent's slot, the copy first crosses each fork boundary between them, and the import gets the last state.
+- The crossing of a fork boundary by a state copy `a` of a fork to the next fork: a `NODE_WORK_SLOTS` of `a` to the next fork's first slot, when `a` is before it; a `NODE_ACT_STATE_COPY` of the copied state as `b`, a buffer for the upgrade; a `NODE_WORK_UPGRADE` of `a` into `b` with the next fork as `arg`; a `NODE_ACT_STATE_FREE` of `a`. Then `b` is the copy. The shell does the actions in order, so a work reads what the works before it wrote. A waiting block whose parent is invalid becomes `NODE_BLOCK_INVALID`.
 - With `NODE_FLAG_ENGINE`, a waiting block of bellatrix or later whose parent is imported takes `NODE_BLOCK_PAYLOAD` instead, with `retry` 0: its import waits for the execution engine's answer.
 - `NODE_EV_ATTESTATION`: a `NODE_ACT_BYTES_PUT` of the bytes and a `NODE_WORK_ATTESTATION` with the target checkpoint state, or 0 when the node has none.
 - `NODE_EV_ATTESTER_SLASHING`: a `NODE_ACT_BYTES_PUT` of the bytes and a `NODE_WORK_ATTESTER_SLASHING` with the post-state of the justified root.
 - `NODE_EV_POW_BLOCK`: adds the `PowBlock` to the node.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_IMPORT_BLOCK`: valid, the block is `NODE_BLOCK_IMPORTED` and its waiting children are imported; `LANTERN_NEED_JUSTIFIED_STATE`, a `NODE_WORK_JUSTIFIED_STATE` and the same import again; else `NODE_BLOCK_INVALID` and a `NODE_ACT_STATE_FREE` of its state.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_ATTESTATION` with `LANTERN_NEED_TARGET_STATE`: the target checkpoint state, then the same attestation again with it.
-- A checkpoint state the node does not have: a `NODE_ACT_STATE_COPY` of the post-state of the checkpoint's root, a `NodeCheckpoint`, and a `NODE_WORK_TARGET_STATE`.
+- A checkpoint state the node does not have: a `NODE_ACT_STATE_COPY` of the post-state of the checkpoint's root, a `NodeCheckpoint`, and a `NODE_WORK_TARGET_STATE`. When the fork of the checkpoint epoch's first slot is later than that of the root's slot, the copy first crosses each fork boundary between them, and the `NodeCheckpoint` and the work get the last state.
 - An attestation or slashing done: a `NODE_ACT_BYTES_FREE` of its bytes.
 - The head: get_head of the fork of the store's slot into `head_root`, or a `NODE_WORK_JUSTIFIED_STATE` when it returns `LANTERN_NEED_JUSTIFIED_STATE`.
 - libp2p first, before the node's events: libp2p_step with the queued events, then the `NODE_EV_P2P` events, after them in the queue. The first libp2p_step takes at most half the action room left, when that half is enough, so the notices have room. When it accepts k of n P2P events, with k < n, the P2P events it did not take leave the queue, the step handles the node's events before the next P2P event, and gives that count as `accepted`. A status of libp2p_step leaves the queue as it was.
@@ -298,8 +307,9 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - The node's Status: compute_fork_digest of the store's epoch, the store's finalized checkpoint (with a zero root when its epoch is `GENESIS_EPOCH`: p2p-interface.md, "defaults to `Root(b'\x00' * 32)` for the genesis finalized checkpoint"), `head_root` and its slot, and `earliest_slot`. Its MetaData: `metadata_seq`, no attestation or sync subnets, and `CUSTODY_REQUIREMENT` custody groups.
 - After the head, with `p2p`: a `SUBSCRIBE` of each topic of the fork of the store's epoch at compute_fork_digest of that epoch, once for each digest, when `p2p_out` has 8192 bytes free. The topics: beacon_block, beacon_aggregate_and_proof, voluntary_exit, proposer_slashing and attester_slashing; from altair sync_committee_contribution_and_proof; from capella bls_to_execution_change; in deneb and electra blob_sidecar of each subnet; from fulu data_column_sidecar of compute_subnet_for_data_column_sidecar of each column of `columns`, once for each subnet.
 - `MESSAGE`: a `MESSAGE_ID` of compute_message_id of the fork of the store's slot, then a `NodeMessage` when the messages part has room. Its data uncompressed with Snappy goes in a `NODE_ACT_BYTES_PUT`, and for a block, a blob sidecar or a column sidecar the slot and parent root of its block header go in the entry. Data that is no Snappy block of at most `MAX_PAYLOAD_SIZE` bytes makes the entry `NODE_MESSAGE_CORRUPT`; data that does not fit in `scratch` or the actions makes it `NODE_MESSAGE_NO_ROOM`.
-- `MESSAGE_STATUS` of `LIBP2P_MSG_NEW` for an entry with bytes: a `NODE_WORK_GOSSIP` with the head's post-state, the post-state of the justified root, and for a block, a blob sidecar or a column sidecar whose parent is imported at an earlier slot a `NODE_ACT_STATE_COPY` of the parent's post-state; the entry takes `NODE_MESSAGE_VALIDATING`. With no bytes, or no room in the actions, a `VALIDATION` of `LIBP2P_IGNORE`, or `LIBP2P_REJECT` for `NODE_MESSAGE_CORRUPT`. Any other status: the bytes and the entry go.
+- `MESSAGE_STATUS` of `LIBP2P_MSG_NEW` for an entry with bytes: a `NODE_WORK_GOSSIP` with the head's post-state, the post-state of the justified root, and for a block, a blob sidecar or a column sidecar whose parent is imported at an earlier slot of the same fork a `NODE_ACT_STATE_COPY` of the parent's post-state; the entry takes `NODE_MESSAGE_VALIDATING`. With no bytes, or no room in the actions, a `VALIDATION` of `LIBP2P_IGNORE`, or `LIBP2P_REJECT` for `NODE_MESSAGE_CORRUPT`. Any other status: the bytes and the entry go.
 - After the subscriptions and the serving, with `p2p`: the response bytes of each stream in `NODE_STREAM_RESPONSE` are read. Then, when the fork of the store's slot is fulu or later, each peer whose Status the node read and that has neither `NODE_PEER_METADATA` nor `NODE_PEER_METADATA_ASKED` gets a GetMetaData v3 request, as a request of the node with no request bytes, while the streams part has room for it and two more entries, and takes `NODE_PEER_METADATA_ASKED`. Then, with no `NODE_FLAG_SYNCING`, a BeaconBlocksByRange (v2 from altair, v1 before) to the first peer with a Status of the node's `fork_digest` whose `head_slot` is at least the start slot, and when the fork of the store's slot is fulu or later with `NODE_PEER_METADATA`: the start slot is the head's slot + 1, or `sync_slot` when that is higher; the count is at most `NODE_SYNC_BATCH` and reaches the peer's `head_slot`; the step is 1. The node takes `NODE_FLAG_SYNCING`, and `sync_slot` becomes the start slot + the count. A response that waits for room makes `wakeup` the tick's time.
+- With no `NODE_FLAG_SYNCING` and no peer for that request, when the store's slot is above the start slot and `time_ms` is at least `status_ms` + `NODE_STATUS_MS` (12000), or `status_ms` is 0: a Status request (v2 from fulu, v1 before) with the node's Status to the first peer with a Status of the node's `fork_digest`, as a request of the node, when the streams part has room for it; `status_ms` takes `time_ms`. The answer is the peer's Status now, so the sync goes on as the chain grows: a peer sends its Status at connection, and then only when it chooses.
 - Before that request, when the streams part has room for two entries: a BlobSidecarsByRange v1 to the same peer of the slots of the range in the blob window whose fork is deneb or electra, when there are any. The blob window: the slots of the epochs from max(the store's epoch - `MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS`, `DENEB_FORK_EPOCH`) on. With no room for it, no request.
 - Before that request, from fulu: a DataColumnSidecarsByRange v1 of the slots of the range in the column window whose fork is fulu or later, when there are any, to each peer with `NODE_PEER_METADATA` in the order of the peers part, of the columns of `columns` in its `custody` that no earlier peer of the range was asked for, in ascending order. A peer gets none when that list is empty. With no room in the streams part for these and the BeaconBlocksByRange, or a request the node cannot open, no further request goes in the step. The column window: the slots of the epochs from max(the store's epoch - `MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS`, `FULU_FORK_EPOCH`) on.
 - A request of the node: a `NodeStream` in `NODE_STREAM_OPENING` whose list holds the request chunk, its `handle` a tag with bit 63 set, and an `OPEN_STREAM` of the protocol ID. `STREAM_OPENED` of the tag: the stream takes its handle and `NODE_STREAM_RESPONSE`, its request goes in a `STREAM_WRITE` with a `STREAM_CLOSE`, and its list then holds the response. `STREAM_FAILED` of the tag: the stream goes.
@@ -363,17 +373,19 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 
 ### Function does
 
-- `NODE_WORK_IMPORT_BLOCK`: lantern_node_import of the fork of the block's slot, with `BlockOptions` of `PAYLOAD_STATUS_VALID` (`PAYLOAD_STATUS_NOT_VALIDATED` with `NODE_FLAG_OPTIMISTIC`; the block's `payload_status` with `NODE_FLAG_ENGINE`) and the block's `data_available`. `LANTERN_NEED_JUSTIFIED_STATE` becomes the result.
+- `NODE_WORK_IMPORT_BLOCK`: lantern_node_import of the fork of the block's slot, with `BlockOptions` of `PAYLOAD_STATUS_VALID` (`PAYLOAD_STATUS_NOT_VALIDATED` with `NODE_FLAG_OPTIMISTIC`; the block's `payload_status` with `NODE_FLAG_ENGINE`), the block's `data_available`, and `slots_done` 1 when `state_a` is at the block's slot and that slot is the first of its fork. `LANTERN_NEED_JUSTIFIED_STATE` becomes the result. A `state_a` whose slot's fork is not that of the block's slot gives the result `LANTERN_INVALID_SLOT`.
+- `NODE_WORK_SLOTS`: lantern_process_slots of the fork of the slot of `state_a`, of `state_a` to the slot `arg`.
+- `NODE_WORK_UPGRADE`: lantern_node_upgrade of the fork `arg`, of `state_a` into `state_b`, with a `StateRoom` of 1024 validators, 2048 eth1_data_votes, 64 historical_summaries, 1024 pending_deposits, 64 pending_partial_withdrawals, 64 pending_consolidations, 4 historical_roots and 4096 pending_attestations, as the binary's anchor has, and the node's config. A fork `arg` outside altair to fulu, or a `state_a` not at that fork's first slot, gives the result `LANTERN_INVALID_SLOT`.
 - `NODE_WORK_JUSTIFIED_STATE`: lantern_store_justified_checkpoint_state with `state_a`.
 - `NODE_WORK_TARGET_STATE`: lantern_store_target_checkpoint_state of `state_a` to the `NodeCheckpoint` at index `target`.
 - `NODE_WORK_ATTESTATION`: lantern_node_attestation of the fork of the attestation's slot; `is_from_block` is the work's `arg`.
-- `NODE_WORK_ATTESTER_SLASHING`: lantern_node_attester_slashing of the fork of the store's slot.
+- `NODE_WORK_ATTESTER_SLASHING`: lantern_node_attester_slashing of the fork of the store's slot; a state whose slot's fork is another gives the result `LANTERN_GOSSIP_IGNORE`.
 - `NODE_WORK_SERVE`: the response chunk of the block, blob sidecar or column sidecar in `data`, with lantern_reqresp_write_chunk, as a ByteList at `NodeEvent_chunk` of the event; its context bytes are compute_fork_digest of the epoch of the block's slot (blocks of version 2) or of the sidecar's block header slot (the blob and column methods), none for blocks of version 1. The event's `size` then covers the chunk.
 - `NODE_WORK_SYNC_BLOCK`: lantern_node_block_root of the fork of the block's slot, its root at `NodeEvent_root` and its blob count at `NodeEvent_index`.
 - `NODE_WORK_NEW_PAYLOAD`: lantern_node_new_payload of the fork of the block's slot (bellatrix and later; before it `LANTERN_NO_PAYLOAD`), its request a ByteList at `NodeEvent_chunk`. The event's `size` then covers it.
 - `NODE_WORK_FORKCHOICE`: engine_forkchoiceUpdated of the fork of the store's slot with the `block_hash` of the store's nodes of `head_root`, the justified checkpoint's root (safe) and the finalized checkpoint's root, in an HTTP POST to `engine_host` with a JWT of `jwt_secret` and the time `time_ms` / 1000, a ByteList at `NodeEvent_chunk`; `LANTERN_INVALID_UNKNOWN_BLOCK` when the store has no node of one of those roots, `LANTERN_NO_PAYLOAD` before bellatrix or when the head's `block_hash` is zero (no call).
 - `NODE_WORK_BLOB`: with `arg` 0, a `BlobSidecar`: lantern_node_blob_sidecar of the fork of its slot when it is deneb or electra; with `arg` 1, a `DataColumnSidecar`: lantern_node_column_sidecar when the fork of its slot is fulu. Each with the node's config and `settings`, the root at `NodeEvent_root`; a slot of another fork gives the result `LANTERN_INVALID_ENCODING`.
-- `NODE_WORK_GOSSIP`: lantern_node_gossip of the fork of the store's slot, with a `NodeGossip` of `seen`, the store, `time_ms`, the topic and subnet of `arg`, `state_a` as head, `state_b` as proposer, `state_c` as justified, `settings` and the node's config, its `root` at `NodeEvent_root` and its `index` at `NodeEvent_index`.
+- `NODE_WORK_GOSSIP`: lantern_node_gossip of the fork of the store's slot, with a `NodeGossip` of `seen`, the store, `time_ms`, the topic and subnet of `arg`, `state_a` as head, `state_b` as proposer, `state_c` as justified, `settings` and the node's config, its `root` at `NodeEvent_root` and its `index` at `NodeEvent_index`. A proposer or justified state whose slot's fork is not that of the store's slot is passed as 0; a head state whose slot's fork is not that of the store's slot gives the result `LANTERN_GOSSIP_IGNORE`, as at a fork's first slots, before the node imports a block of the new fork.
 - Bytes too short for their type give the result `LANTERN_INVALID_ENCODING`.
 
 ## Function `lantern_node_protocols`
@@ -782,6 +794,42 @@ lantern_node_state_bytes(state, scratch, out, size) -> status
 
 - Export: `lantern_<fork>_node_state_bytes` of each fork object.
 - Argument order: `state`, `scratch`, `out`, `size`.
+## Function `lantern_node_upgrade`
+
+upgrade_to_<fork> of the object's fork: the state of the fork from a state of the fork before, at the fork's first slot.
+
+### Signature
+
+```
+lantern_node_upgrade(pre, room, config, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `pre` | input | `BeaconState` of the fork before, at the fork's first slot |
+| `room` | input | [`StateRoom`](state.md#type-stateroom) |
+| `config` | input | `Config` |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | `BeaconState`, its `size` set by the caller |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the upgraded state.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` is below what lantern_upgrade_size gives for `pre` and `room`, or `scratch` is short. Checked before `out` is written.
+- `LANTERN_INVALID_SLOT`: phase0, which has no upgrade.
+- The statuses of lantern_upgrade_to_<fork>.
+
+### Function does
+
+- lantern_upgrade_size, then lantern_upgrade_to_<fork> of [fork-upgrades.md](fork-upgrades.md).
+
+### ABI
+
+- Export: `lantern_<fork>_node_upgrade` of each fork object.
+- Argument order: `pre`, `room`, `config`, `scratch`, `out`.
+
 ## Function `lantern_node_block_header`
 
 The SignedBeaconBlockHeader of a `SignedBeaconBlock` in SSZ bytes: the message's fields, hash_tree_root of its body, and the signature.
@@ -923,7 +971,8 @@ The state of the node: a value with parts.
 | 496 | `db_block_end` | u64 | The bytes of that segment |
 | 504 | `db_sidecar_segment` | u64 | The sidecar segment of the last sidecar record, or 2^64 - 1 |
 | 512 | `db_sidecar_end` | u64 | The bytes of that segment |
-| 520 | `config` | `Config` | |
+| 520 | `status_ms` | u64 | The time of the node's last Status request when no peer was ahead, or 0 |
+| 528 | `config` | `Config` | |
 
 ### Rules
 
@@ -1170,7 +1219,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 | 40 | `state_c` | u64 | `NODE_ACT_WORK`: a `BufferId` |
 | 48 | `data` | u64 | `NODE_ACT_WORK`: a `BufferId` of bytes, or for a SERVE a `NODE_DB_REF` |
 | 56 | `target` | u64 | `NODE_ACT_WORK`: a `NodeBlock` index (also of a SYNC_BLOCK), a `NodeCheckpoint` index, a `NodeBlob` index, a stream Handle, or a message Handle |
-| 64 | `arg` | u64 | `NODE_ACT_WORK`: `is_from_block` of an attestation, the epoch of a checkpoint, the protocol version + 256 * the method of a SERVE, topic + 256 * subnet of a GOSSIP, or the JSON-RPC id of a NEW_PAYLOAD or FORKCHOICE |
+| 64 | `arg` | u64 | `NODE_ACT_WORK`: `is_from_block` of an attestation, the epoch of a checkpoint, the protocol version + 256 * the method of a SERVE, topic + 256 * subnet of a GOSSIP, the JSON-RPC id of a NEW_PAYLOAD or FORKCHOICE, the slot of a SLOTS, or the fork of an UPGRADE |
 
 ### Rules
 

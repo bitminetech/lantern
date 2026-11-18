@@ -1406,7 +1406,7 @@ SPEC_END validate_merge_block
 /*
  * x19 store, x20 signed block, x21 state, x22 options, x23 scratch, x24 result, x25 block,
  * x26 scratch size, x27 parent node, x28 dependent slot, then the new node.
- * Locals: L block root (32), L+32 transition options (16), L+48 head, L+56 current slot,
+ * Locals: L block root (32), L+32 transition options (24, then L+48 the head), L+56 current slot,
  * L+64 pulled up justified (40), L+104 pulled up finalized (40), L+144 saved justification bits,
  * L+152 saved previous justified (40), L+192 saved current justified (40), L+232 saved finalized (40),
  * L+272 its result, L+280 timely, L+288 head dependent node, then the boost, L+296 bellatrix: is_merge_transition_block.
@@ -1498,6 +1498,8 @@ SPEC_FUNCTION on_block
     cmp     x10, #PAYLOAD_STATUS_INVALIDATED
     cset    x10, ne                         /* execution_valid: VALID or NOT_VALIDATED */
     stp     x9, x10, [sp, #(L + 32)]
+    ldr     x9, [x22, #BlockOptions_slots_done]
+    str     x9, [sp, #(L + 48)]
     mov     x0, x21
     mov     x1, x20
     add     x2, sp, #(L + 32)

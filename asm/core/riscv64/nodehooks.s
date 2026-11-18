@@ -626,6 +626,27 @@ SPEC_FUNCTION node_state_bytes
     LEAVE 0
 SPEC_END node_state_bytes
 
+/* (pre, room, config, scratch, out): upgrade_to_<fork> of the object's fork; phase0 has none. */
+SPEC_FUNCTION node_upgrade
+    ENTER 0
+.if FORK == FORK_ALTAIR
+    call    lantern_upgrade_to_altair
+.elseif FORK == FORK_BELLATRIX
+    call    lantern_upgrade_to_bellatrix
+.elseif FORK == FORK_CAPELLA
+    call    lantern_upgrade_to_capella
+.elseif FORK == FORK_DENEB
+    call    lantern_upgrade_to_deneb
+.elseif FORK == FORK_ELECTRA
+    call    lantern_upgrade_to_electra
+.elseif FORK == FORK_FULU
+    call    lantern_upgrade_to_fulu
+.else
+    li      a0, LANTERN_INVALID_SLOT
+.endif
+    LEAVE 0
+SPEC_END node_upgrade
+
 /*
  * (store, data, is_from_block, state, scratch, result, target): validate_on_attestation of the
  * Attestation in data; with no target checkpoint state (state 0) the result is

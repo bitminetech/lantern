@@ -801,7 +801,13 @@ SPEC_FUNCTION state_transition
     ldr     x9, [x23]
     cmp     x9, x0
     b.lo    9f
-    mov     x0, x19                         /* process_slots(state, block.slot) */
+    ldr     x9, [x21, #16]                  /* slots_done and a state at the block's slot: no process_slots */
+    cbz     x9, 3f
+    LDQ     x9, x19, BeaconState_slot
+    ldr     x10, [x25, #BeaconBlock_slot]
+    cmp     x9, x10
+    b.eq    4f
+3:  mov     x0, x19                         /* process_slots(state, block.slot) */
     add     x1, x25, #BeaconBlock_slot
     mov     x2, x22
     mov     x3, x23
@@ -810,7 +816,7 @@ SPEC_FUNCTION state_transition
     cbnz    x0, 7f
     ldr     x9, [x24]
     cbnz    x9, 8f
-    ldr     x9, [x21]                       /* if validate_result: assert verify_block_signature(state, signed_block) */
+4:  ldr     x9, [x21]                       /* if validate_result: assert verify_block_signature(state, signed_block) */
     cbz     x9, 1f
     str     x26, [x23]
     mov     x0, x19

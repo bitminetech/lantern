@@ -29,7 +29,7 @@
 
 ## Function `lantern_state_transition`
 
-process_slots to the block's slot; with validate_result, the block signature check; process_block; with validate_result, the state root check.
+process_slots to the block's slot; with validate_result, the block signature check; process_block; with validate_result, the state root check. With `slots_done` 1 and a state at the block's slot already, no process_slots: `fork.md` of each fork runs its upgrade inside process_slots, as the slot reaches the fork's first slot, and lantern's upgrade writes a new state there (lantern_upgrade_to_<fork>), so a block at the fork's first slot goes on from that state.
 
 ### Signature
 
@@ -121,7 +121,7 @@ lantern_process_slot(state, scratch) -> status
 
 ## Type `TransitionOptions`
 
-The spec's validate_result, and the answer of the execution engine to the block's payload.
+The spec's validate_result, the answer of the execution engine to the block's payload, and whether the slots ran.
 
 ### Layout
 
@@ -129,10 +129,11 @@ The spec's validate_result, and the answer of the execution engine to the block'
 |---|---|---|---|
 | 0 | `validate_result` | u64 | 1: check the block signature and the state root |
 | 8 | `execution_valid` | u64 | 1: the execution engine accepts the payload |
+| 16 | `slots_done` | u64 | 1: a state at the block's slot runs no process_slots, as after an upgrade at the fork's first slot |
 
 ### Rules
 
-- 16 bytes.
+- 24 bytes.
 
 ## Results
 

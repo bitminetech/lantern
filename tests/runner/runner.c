@@ -91,6 +91,10 @@ ABI uint64_t LF(verify_block_signature)(const void *state, const void *signed_bl
 ABI uint64_t LF(process_block)(void *state, const void *block, const void *execution_valid, const void *config,
                                    void *scratch, void *result);
 ABI uint64_t UPGRADE(const void *pre, const void *room, const void *config, void *scratch, void *out);
+/* The node's start at a state of the fork before: docs/reference/node.md, Test vectors. */
+ABI uint64_t LP(node_anchor)(const void *data, const void *room, void *scratch, void *state, void *block);
+ABI uint64_t LP(get_forkchoice_store)(const void *anchor_state, const void *anchor_block, const void *config,
+                                          const void *room, void *scratch, void *store);
 #endif
 #if FORK == FORK_PHASE0
 /* Genesis: docs/reference/genesis.md. */
@@ -1228,7 +1232,7 @@ static void run_blocks(const char *file, case_file *f) {
             const uint8_t *enc = tv_bytes(tv_get(parts, key), &blen);
             uint8_t *block = decode(desc, enc, blen, &vsize, &why);
             if (!block) break;
-            uint64_t options[2] = {1, 1}, result = 0xA5A5A5A5A5A5A5A5u, st;
+            uint64_t options[3] = {1, 1, 0}, result = 0xA5A5A5A5A5A5A5A5u, st; /* TransitionOptions */
             for (uint64_t growth = 2;; growth *= 2) {
                 st = CALL(LF(state_transition), state, block, options, config, fresh_scratch(), &result);
                 if (st != 1 || growth > 1024) break;
@@ -1395,7 +1399,9 @@ static void block_on_fork_slot(uint8_t **state, uint64_t *size, const uint8_t *s
     free(scr);
 }
 
-/* transition/core: the blocks up to fork_block with the fork before, the fork, then the other blocks. */
+static void transition_node_case(tv parts, uint64_t fork_epoch, int *ran, const char **why);
+
+/* transition/core: the blocks up to fork_block with the fork before, the fork, then the other blocks; then through the node. */
 static void run_transition(const char *file, case_file *f) {
     const uint8_t *pre_desc = type_in(LP(types), "SignedBeaconBlock"), *post_desc = type_by_name("SignedBeaconBlock");
     for (uint64_t i = 0; i < f->count; i++) {
@@ -1429,7 +1435,7 @@ static void run_transition(const char *file, case_file *f) {
                     continue;
                 }
             }
-            uint64_t options[2] = {1, 1}, result = 0xA5A5A5A5A5A5A5A5u, st;
+            uint64_t options[3] = {1, 1, 0}, result = 0xA5A5A5A5A5A5A5A5u, st; /* TransitionOptions */
             for (uint64_t growth = 2;; growth *= 2) {
                 st = upgraded ? CALL(LF(state_transition), state, block, options, config, fresh_scratch(), &result)
                               : CALL(LP(state_transition), state, block, options, config, fresh_scratch(), &result);
@@ -1452,6 +1458,14 @@ static void run_transition(const char *file, case_file *f) {
         }
         free(state);
         report(file, name, len, why == NULL, why);
+        int ran = 0;
+        const char *nwhy = NULL;
+        transition_node_case(parts, fork_epoch, &ran, &nwhy);
+        if (ran) {
+            char nname[256];
+            int nlen = snprintf(nname, sizeof nname, "%.*s (node)", (int)len, name);
+            report(file, nname, (uint64_t)nlen, nwhy == NULL, nwhy);
+        }
     }
 }
 #endif
@@ -2097,7 +2111,7 @@ static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
 
     /* BlockOptions: the engine's answer for the payload (optimistic sync tests), VALID when the case gives none. */
     const uint8_t *body0 = nested(block, field_offset("BeaconBlock", 4));
-    uint64_t options[4] = {PAYLOAD_VALID, 1, 0, 0};
+    uint64_t options[5] = {PAYLOAD_VALID, 1, 0, 0, 0}; /* BlockOptions */
 #if FORK >= FORK_BELLATRIX
     const uint8_t *payload = nested(body0, field_offset("BeaconBlockBody", 9));
     const uint8_t *hash = payload + field_offset("ExecutionPayload", 12);
@@ -2370,7 +2384,7 @@ enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WO
 #define NODE_DB_SIDECARS (1ull << 62)
 #define NODE_DB_SEGMENTS 256 /* the segments one node's runner keeps */
 enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING, WORK_SERVE, WORK_GOSSIP,
-       WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE };
+       WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE, WORK_SLOTS, WORK_UPGRADE };
 #define EV_RESULT 72
 #define EV_WORK_DONE_SIZE 128
 #define LANTERN_NEED_TARGET_STATE 55
@@ -2738,6 +2752,20 @@ static void shell_seen(struct node_shell *s, const char **why) {
  * A WORK action: lantern_node_run with its buffers, again with more room while it asks for it,
  * then its WORK_DONE event for the next step.
  */
+/*
+ * regrow with the copy of the fork of the state's slot, with the node's config (the last fork whose
+ * epoch is at most the slot's): the runner's fork, or the fork before.
+ */
+static uint8_t *regrow_slot(const struct node_shell *s, uint8_t *state, uint64_t *size, uint64_t growth, const char **why) {
+#if FORK > FORK_PHASE0
+    uint64_t f = FORK_FULU, per_epoch = strcmp(PRESET, "minimal") ? 32 : 8, slot = rd64(state + 48);
+    while (f > 0 && slot / per_epoch < rd64(s->ncfg + 16 * f)) f--;
+    if (f < FORK) return regrow_prev(state, size, growth, why);
+#endif
+    (void)s;
+    return regrow(state, size, growth, why);
+}
+
 static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     struct node_shell *s = n->shell;
     uint64_t kind = rd64(work + 16), a_id = rd64(work + 24), b_id = rd64(work + 32), c_id = rd64(work + 40), d_id = rd64(work + 48);
@@ -2793,10 +2821,12 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
             }
         } else if (kind == WORK_BLOB) {
             *why = "lantern_node_run: BLOB asks for room";
-        } else if ((kind == WORK_IMPORT_BLOCK && node_count(n) < node_capacity(n->store)) || kind == WORK_TARGET_STATE) {
-            if (!a) *why = "lantern_node_run: no room, and no state";
+        } else if ((kind == WORK_IMPORT_BLOCK && node_count(n) < node_capacity(n->store)) || kind == WORK_TARGET_STATE ||
+                   kind == WORK_SLOTS || kind == WORK_UPGRADE) {
+            shell_buf *g = kind == WORK_UPGRADE ? b : a; /* UPGRADE: the buffer the upgrade writes */
+            if (!g) *why = "lantern_node_run: no room, and no state";
             else {
-                a->b = regrow(a->b, &a->size, growth, why);
+                g->b = regrow_slot(s, g->b, &g->size, growth, why);
                 growth *= 2;
             }
         } else
@@ -3353,6 +3383,190 @@ static void fc_node_case(tv parts, int serve, const char **why) {
     if (serve && !*why) fc_sync_check(parts, why);
     shell_close(&n, anchor_block);
 }
+
+
+#if FORK > FORK_PHASE0
+/*
+ * transition/core through the node (node.md, Test vectors): the node starts at lantern_node_anchor of
+ * the fork before of pre, with the runner's fork at fork_epoch in its config; each block goes in a
+ * BLOCK event after a TICK of its slot and must be imported; then the head must be the last block and
+ * the post-state the node keeps for it the case's post. *ran is 0 when that node_anchor refuses pre.
+ */
+static unsigned long node_transitions;
+static void transition_node_case(tv parts, uint64_t fork_epoch, int *ran, const char **why) {
+    uint64_t plen, lsize, need = 0, vsize = 0, qlen, st;
+    const uint8_t *pre = tv_bytes(tv_get(parts, "pre"), &plen), *post = tv_bytes(tv_get(parts, "post"), &qlen);
+    const uint8_t *pstate = type_in(LP(types), "BeaconState"), *pblock = type_in(LP(types), "BeaconBlock");
+    *ran = 0;
+    uint8_t *value = decode(pstate, pre, plen, &vsize, why);
+    if (!value) return;
+    uint64_t room[8] = {64, 64, 4, 9000, 64, 64, 4, 4096}; /* StateRoom: docs/reference/state.md */
+    CALL(LP(beacon_state_copy_size), value, room, &need);
+    free(value);
+    need += 4096;
+    uint8_t *data = list_of(pre, plen, 0, 0, &lsize), *state = buffer(need), *block = buffer(ANCHOR_BLOCK_BYTES);
+    wr64(state, need);
+    wr64(block, ANCHOR_BLOCK_BYTES);
+    st = CALL(LP(node_anchor), data, room, fresh_scratch(), state, block);
+    free(data);
+    /* A pre past the slot of its latest block header is no anchor: get_forkchoice_store needs that block's post-state. */
+    uint64_t hslot = rd64(state + field_offset("BeaconState", 4));
+    if (st == INVALID_ANCHOR || (st == 0 && rd64(state + 48) != hslot)) {
+        free(state);
+        free(block);
+        return;
+    }
+    *ran = 1;
+    node_transitions++;
+    /* The config: each fork before the runner's at epoch 0, the runner's at fork_epoch, the later ones never. */
+    uint8_t ncfg[CONFIG_SIZE];
+    memcpy(ncfg, config, CONFIG_SIZE);
+    for (uint64_t f = FORK_ALTAIR; f <= FORK_FULU; f++) wr64(ncfg + 16 * f, f < FORK ? 0 : f == FORK ? fork_epoch : UINT64_MAX);
+    fc_node n;
+    memset(&n, 0, sizeof n);
+    n.anchor = state;
+    n.anchor_size = need;
+    struct node_shell *s = calloc(1, sizeof *s);
+    if (!s) {
+        fprintf(stderr, "out of memory\n");
+        exit(2);
+    }
+    n.shell = s;
+    if (st != 0) *why = "node_anchor of the fork before: status not 0";
+    uint64_t sroom[2] = {2, 1}, sneed = 0; /* the store: get_forkchoice_store of the fork before */
+    CALL(lantern_store_size, sroom, &sneed);
+    n.store = buffer(sneed);
+    n.size = sneed;
+    wr64(n.store, sneed);
+    while (!*why && (st = CALL(LP(get_forkchoice_store), state, block, ncfg, sroom, fresh_scratch(), n.store)) == 1 &&
+           sroom[1] < (1u << 24)) {
+        sroom[1] *= 2;
+        CALL(lantern_store_size, sroom, &sneed);
+        free(n.store);
+        n.store = buffer(sneed);
+        n.size = sneed;
+        wr64(n.store, sneed);
+    }
+    if (!*why && st != 0) {
+        static char smsg[80];
+        snprintf(smsg, sizeof smsg, "get_forkchoice_store of the fork before: status %llu", (unsigned long long)st);
+        *why = smsg;
+    }
+    uint8_t anchor[216] = {0}, *scr = NULL;
+    uint64_t flags = NODE_FLAG_DISCV5, scsize;
+    if (!*why) { /* the node: as shell_open's, with no execution engine and no Db */
+        for (int i = 0; i < NODE_ROOM_FIELDS; i++) s->room[i] = 2;
+        s->room[2] = 1;
+        s->room[9] = 4096;
+        memset(anchor + 72, 0x42, 32);
+        s->seen_room[0] = s->seen_room[1] = s->seen_room[2] = 1;
+        s->seen_room[3] = 64;
+        shell_seen(s, why);
+        scr = scratch_for(pblock, &scsize);
+        if (ssz_hash_tree_root(pblock, block, scr, anchor) != 0) *why = "the anchor block's root: status";
+        free(scr);
+        wr64(anchor + 32, rd64(block + field_offset("BeaconBlock", 0)));
+        memcpy(anchor + 40, state + field_offset("BeaconState", 1), 32);
+        if (!*why) peer_node_id(anchor + 176, why);
+        if (!*why && CALL(lantern_node_size, s->room, &sneed) != 0) *why = "lantern_node_size status";
+    }
+    if (!*why) {
+        s->node = buffer(sneed);
+        s->node_size = sneed;
+        wr64(s->node, sneed);
+        memcpy(s->anchor, anchor, sizeof s->anchor);
+        memcpy(s->ncfg, ncfg, CONFIG_SIZE);
+        s->flags = flags;
+        if (CALL(lantern_node_init, s->room, ncfg, anchor, &flags, s->node) != 0) *why = "lantern_node_init status";
+        s->actions_size = 256;
+        s->actions = buffer(s->actions_size);
+        wr64(s->actions, s->actions_size);
+        if (!*why) shell_keep(s, 1, copy_of(state, need), need, why);
+    }
+    tv meta = tv_get(parts, "meta");
+    uint64_t blocks = tv_u64(tv_get(meta, "blocks_count")), genesis = rd64(state + field_offset("BeaconState", 0));
+    uint64_t slot_ms = rd64(ncfg + 104), per_epoch = strcmp(PRESET, "minimal") ? 32 : 8;
+    uint8_t root[32] = {0};
+#if FORK == FORK_BELLATRIX
+    uint8_t pow_hash[32];
+    int pow_sent = 0;
+#endif
+    for (uint64_t b = 0; b < blocks && !*why; b++) {
+        char key[32];
+        snprintf(key, sizeof key, "blocks_%llu", (unsigned long long)b);
+        uint64_t blen;
+        const uint8_t *enc = tv_bytes(tv_get(parts, key), &blen);
+        uint64_t at = blen >= 4 ? (enc[0] | (uint64_t)enc[1] << 8 | (uint64_t)enc[2] << 16 | (uint64_t)enc[3] << 24) : blen;
+        if (at + 8 > blen) {
+            *why = "a block is too short";
+            break;
+        }
+        uint64_t slot = 0;
+        for (int k = 7; k >= 0; k--) slot = slot << 8 | enc[at + k];
+        const uint8_t *desc = slot / per_epoch >= fork_epoch ? type_by_name("BeaconBlock") : pblock;
+        uint8_t *msg = decode(desc, enc + at, blen - at, &vsize, why);
+        if (!msg) break;
+        scr = scratch_for(desc, &scsize);
+        if (ssz_hash_tree_root(desc, msg, scr, root) != 0) *why = "a block's root: status";
+        free(scr);
+        free(msg);
+        shell_event(s, EV_TICK, genesis * 1000 + slot * slot_ms, NULL, 0);
+        shell_settle(&n, why);
+#if FORK == FORK_BELLATRIX
+        /*
+         * The merge: each payload's parent_hash gets a terminal PoW block of that hash, of total difficulty
+         * TERMINAL_TOTAL_DIFFICULTY, and its parent below it, as the fork_choice files' pow_block steps give
+         * (validate_merge_block); the case gives none.
+         */
+        if (!*why && slot / per_epoch >= fork_epoch) {
+            uint8_t *sb = decode(type_by_name("SignedBeaconBlock"), enc, blen, &vsize, why);
+            if (sb) {
+                const uint8_t *m = nested(sb, field_offset("SignedBeaconBlock", 0));
+                const uint8_t *body = nested(m, field_offset("BeaconBlock", 4));
+                const uint8_t *payload = nested(body, field_offset("BeaconBlockBody", 9));
+                const uint8_t *phash = payload + field_offset("ExecutionPayload", 0);
+                if (!pow_sent || memcmp(phash, pow_hash, 32)) {
+                    pow_sent = 1;
+                    memcpy(pow_hash, phash, 32);
+                    uint8_t pow[96], parent[96];
+                    memcpy(pow, phash, 32);
+                    memset(pow + 32, 0x5a, 32);
+                    memcpy(pow + 64, config + 392 + 16 * 32 + 32, 32); /* TERMINAL_TOTAL_DIFFICULTY, little endian */
+                    memcpy(parent, pow + 32, 32);
+                    memset(parent + 32, 0, 32);
+                    memcpy(parent + 64, pow + 64, 32);
+                    for (int k = 0; k < 32 && !(parent[64 + k]--); k++) { /* minus 1, with the borrow */ }
+                    shell_event(s, EV_POW_BLOCK, 0, pow, sizeof pow);
+                    shell_event(s, EV_POW_BLOCK, 0, parent, sizeof parent);
+                    shell_settle(&n, why);
+                }
+                free(sb);
+            }
+        }
+#endif
+        if (!*why) {
+            shell_event(s, EV_BLOCK, 1, enc, blen);
+            shell_settle(&n, why);
+        }
+        const uint8_t *e = *why ? NULL : shell_block(s, root);
+        if (!*why && (!e || rd64(e + NB_STATUS) != NB_IMPORTED)) {
+            static char msg2[96];
+            snprintf(msg2, sizeof msg2, "block %llu: not imported, node status %llu, result %llu", (unsigned long long)b,
+                     e ? (unsigned long long)rd64(e + NB_STATUS) : 0ull, e ? (unsigned long long)rd64(e + 104) : 0ull);
+            *why = msg2;
+        }
+    }
+    if (!*why && blocks && memcmp(s->node + NODE_HEAD_ROOT, root, 32)) *why = "the head is not the last block";
+    if (!*why && blocks) {
+        const uint8_t *e = shell_block(s, root);
+        shell_buf *h = e ? shell_find(s, rd64(e + NB_STATE_ID)) : NULL;
+        if (!h) *why = "the head has no post-state";
+        else state_equals(h->b, post, qlen, why);
+    }
+    if (!*why && !guard_ok(scratch_buf, SCRATCH_BYTES)) *why = "wrote past the scratch";
+    shell_close(&n, block);
+}
+#endif
 
 /* ---------------------------------------------------------------- Node over libp2p */
 
@@ -5147,7 +5361,7 @@ static void run_gossip(const char *file, const char *dir, const char *handler, c
                 kept_state *parent = kept_of(&n, block + field_offset("BeaconBlock", 2));
                 if (!parent) why = "a block's parent is not imported";
                 else {
-                    uint64_t options[4] = {status == PAYLOAD_VALID ? PAYLOAD_VALID : PAYLOAD_NOT_VALIDATED, 1, 0, 0};
+                    uint64_t options[5] = {status == PAYLOAD_VALID ? PAYLOAD_VALID : PAYLOAD_NOT_VALIDATED, 1, 0, 0, 0};
                     uint64_t size = parent->size, growth = 2;
                     uint8_t *state = copy_of(parent->state, size);
                     uint64_t st = FC_RETRY(&n, &why, CALL(LF(on_block), n.store, signed_block, state, options, fresh_scratch(), &result),
@@ -6195,6 +6409,9 @@ int main(int argc, char **argv) {
         if (bad) failures++;
     }
     if (node_settles_finalized) printf("NOTE: %lu node settles past a finalized epoch\n", node_settles_finalized);
+#if FORK > FORK_PHASE0
+    if (node_transitions) printf("NOTE: %lu transition cases through the node\n", node_transitions);
+#endif
     if (node_db_records) printf("NOTE: %lu Db records archived, %lu served from the Db, %lu anchors saved and read back\n", node_db_records, node_db_serves, node_db_states);
     printf("%s: %d passed, %d failed\n", failures ? "FAIL" : "PASS", passes, failures);
     return failures ? 1 : 0;

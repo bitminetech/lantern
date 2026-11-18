@@ -1169,8 +1169,12 @@ LOCAL_FUNCTION app_work
     beq     s8, t0, 2f
     li      t0, NODE_WORK_GOSSIP            # GOSSIP: the Seen, and the proposer state
     beq     s8, t0, 3f
-    li      t0, NODE_WORK_TARGET_STATE      # TARGET_STATE, and IMPORT_BLOCK with store room: state_a
+    li      t0, NODE_WORK_TARGET_STATE      # TARGET_STATE, SLOTS, and IMPORT_BLOCK with store room: state_a
     beq     s8, t0, 4f
+    li      t0, NODE_WORK_SLOTS
+    beq     s8, t0, 4f
+    li      t0, NODE_WORK_UPGRADE           # UPGRADE: state_b, the upgrade's buffer
+    beq     s8, t0, 6f
     li      t0, NODE_WORK_IMPORT_BLOCK
     bne     s8, t0, 5f
     LDQ     t0, s1, APP_STORE
@@ -1202,6 +1206,11 @@ LOCAL_FUNCTION app_work
     j       1b
 4:  beqz    s3, 91f
     mv      a0, s3
+    call    app_regrow
+    bnez    a0, 91f
+    j       1b
+6:  beqz    s4, 91f
+    mv      a0, s4
     call    app_regrow
     bnez    a0, 91f
     j       1b
