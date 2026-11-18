@@ -479,6 +479,159 @@ SPEC_FUNCTION node_anchor
 SPEC_END node_anchor
 
 /*
+ * (data, room, scratch, state, block): the anchor of a start from the node's own history: data
+ * holds two ByteLists, the second at the first multiple of 8 after the first: the SSZ bytes of a
+ * BeaconState, then those of the message of its block, with the state's slot and root. state:
+ * the state with room; block: the message. rbp room, r12 scratch, r13 state, r14 block, r15 the
+ * decoded state, then the block's ByteList, S7 data's bytes, S8 the scratch size, restored on
+ * return, S9 their count, S10 the block's place. Locals: L a size, L+16 a root.
+ */
+SPEC_FUNCTION node_anchor_block
+    ENTER 48
+    mov     8(%rdi), %rax
+    add     %rdi, %rax
+    mov     %rax, S7(%rsp)
+    mov     16(%rdi), %rax
+    mov     %rax, S9(%rsp)
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    mov     %r8, %r14
+    mov     (%r12), %rax
+    mov     %rax, S8(%rsp)
+    mov     S9(%rsp), %rdx                  # the state's ByteList: offset 24, size 24 + count, inside
+    cmp     $24, %rdx
+    jb      7f
+    mov     S7(%rsp), %rsi
+    cmpq    $24, 8(%rsi)
+    jne     7f
+    mov     16(%rsi), %rcx
+    cmp     %rdx, %rcx
+    ja      7f
+    add     $24, %rcx
+    cmp     %rcx, (%rsi)
+    jne     7f
+    cmp     %rdx, %rcx
+    ja      7f
+    add     $7, %rcx
+    and     $-8, %rcx
+    mov     %rcx, S10(%rsp)
+    ADDRESS %rdi, lantern_type_BeaconState  # decoded, then copied with room
+    mov     %r12, %rdx
+    call    node_decode
+    cmp     $1, %rax
+    je      8f
+    ja      7f
+    mov     %rdx, %r15
+    mov     %r15, %rdi
+    mov     %rbp, %rsi
+    lea     L(%rsp), %rdx
+    call    lantern_beacon_state_copy_size
+    mov     L(%rsp), %rax
+    cmp     %rax, (%r13)
+    jb      8f
+    mov     %r15, %rdi
+    mov     %rbp, %rsi
+    mov     %r13, %rdx
+    call    lantern_beacon_state_copy
+    test    %rax, %rax
+    jnz     8f
+    mov     S8(%rsp), %rax
+    mov     %rax, (%r12)
+    mov     S10(%rsp), %rax                 # the block's ByteList, the same way
+    lea     24(%rax), %rcx
+    cmp     S9(%rsp), %rcx
+    ja      7f
+    mov     S7(%rsp), %r15
+    add     %rax, %r15
+    mov     S9(%rsp), %rdx
+    sub     %rax, %rdx
+    cmpq    $24, 8(%r15)
+    jne     7f
+    mov     16(%r15), %rcx
+    cmp     %rdx, %rcx
+    ja      7f
+    add     $24, %rcx
+    cmp     %rcx, (%r15)
+    jne     7f
+    cmp     %rdx, %rcx
+    ja      7f
+    ADDRESS %rdi, lantern_type_BeaconBlock
+    mov     %r15, %rsi
+    mov     %r12, %rdx
+    mov     %r14, %rcx
+    CALL_GLOBAL ssz_deserialize
+    mov     S8(%rsp), %rcx
+    mov     %rcx, (%r12)
+    cmp     $SSZ_BUFFER_TOO_SMALL, %rax
+    je      8f
+    test    %rax, %rax
+    jnz     7f
+    mov     BeaconBlock_slot(%r14), %rax    # its slot and state_root are the state's
+    cmp     NODE_STATE_SLOT(%r13), %rax
+    jne     6f
+    ADDRESS %rdi, lantern_type_BeaconState
+    mov     %r13, %rsi
+    mov     %r12, %rdx
+    lea     (L + 16)(%rsp), %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    mov     S8(%rsp), %rcx
+    mov     %rcx, (%r12)
+    test    %rax, %rax
+    jnz     8f
+    lea     BeaconBlock_state_root(%r14), %rdi
+    lea     (L + 16)(%rsp), %rsi
+    NE32    %rdi, %rsi, 6f
+    xor     %eax, %eax
+    jmp     99f
+6:  mov     $LANTERN_INVALID_ANCHOR, %eax
+    jmp     99f
+7:  mov     $LANTERN_INVALID_ENCODING, %eax
+    jmp     99f
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+99: mov     S8(%rsp), %rcx
+    mov     %rcx, (%r12)
+    LEAVE 48
+SPEC_END node_anchor_block
+
+/*
+ * (state, scratch, out, size): size: the bytes of a ByteList of the state's SSZ bytes, 24 + their
+ * count; out: that ByteList, when its size field holds at least size. rbx state, rbp scratch,
+ * r12 out, r13 size, r14 the scratch size, restored on return.
+ */
+SPEC_FUNCTION node_state_bytes
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    mov     (%rbp), %r14
+    ADDRESS %rdi, lantern_type_BeaconState
+    mov     %rbx, %rsi
+    mov     %rbp, %rdx
+    mov     %r13, %rcx
+    CALL_GLOBAL ssz_serialize_size
+    mov     %r14, (%rbp)
+    test    %rax, %rax
+    jnz     8f
+    mov     (%r13), %rax
+    cmp     %rax, (%r12)
+    jb      8f
+    ADDRESS %rdi, lantern_type_BeaconState
+    mov     %rbx, %rsi
+    mov     %rbp, %rdx
+    mov     %r12, %rcx
+    CALL_GLOBAL ssz_serialize
+    mov     %r14, (%rbp)
+    test    %rax, %rax
+    jnz     8f
+    xor     %eax, %eax
+    LEAVE 0
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 0
+SPEC_END node_state_bytes
+
+/*
  * (store, data, is_from_block, state, scratch, result, target): validate_on_attestation of the
  * Attestation in data; with no target checkpoint state (state 0) the result is
  * LANTERN_NEED_TARGET_STATE and target holds the target checkpoint, else on_attestation.

@@ -104,6 +104,8 @@ ABI uint64_t LF(is_valid_genesis_state)(const void *state, const void *config, v
 /* The state transition of every fork: docs/reference/. */
 ABI uint64_t LF(beacon_state_copy_size)(const void *state, const void *room, void *size);
 ABI uint64_t LF(node_anchor)(const void *data, const void *room, void *scratch, void *state, void *block);
+ABI uint64_t LF(node_anchor_block)(const void *data, const void *room, void *scratch, void *state, void *block);
+ABI uint64_t LF(node_state_bytes)(const void *state, void *scratch, void *out, void *size);
 ABI uint64_t LF(node_block_header)(const void *data, void *scratch, void *out);
 ABI uint64_t LF(node_state_checkpoints)(const void *state, void *out);
 ABI uint64_t LF(beacon_state_copy)(const void *state, const void *room, void *out);
@@ -391,6 +393,7 @@ ABI uint64_t lantern_db_size(const void *room, void *size);
 ABI uint64_t lantern_db_init(const void *room, const void *slot, void *db);
 ABI uint64_t lantern_db_copy(const void *db, const void *room, void *out);
 ABI uint64_t lantern_db_scan(void *db, const void *segment, const void *sidecars, const void *bytes, void *valid);
+ABI uint64_t lantern_node_db_scan(void *node, const void *segment, const void *sidecars, const void *bytes, void *valid);
 ABI uint64_t lantern_db_find_root(const void *db, const void *root, void *slot);
 ABI uint64_t lantern_db_prune(void *db, const void *slot);
 
@@ -2359,7 +2362,7 @@ enum { NB_WAITING = 1, NB_IMPORTING, NB_IMPORTED, NB_INVALID, NB_HASHING, NB_BLO
 #define NODE_BLOB_BYTES 72
 #define NBLOB_VALID 2
 enum { EV_TICK = 1, EV_BLOCK, EV_ATTESTATION, EV_ATTESTER_SLASHING, EV_POW_BLOCK, EV_PAYLOAD_STATUS, EV_WORK_DONE, EV_P2P, EV_ENGINE, EV_ENR };
-enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK, ACT_P2P_LIST, ACT_ENGINE, ACT_DISCV5, ACT_DB_APPEND };
+enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK, ACT_P2P_LIST, ACT_ENGINE, ACT_DISCV5, ACT_DB_APPEND, ACT_DB_STATE };
 #define NODE_FLAG_DISCV5 64
 #define NODE_FLAG_DB 128
 #define NODE_DB 464 /* Node_db: the PartRef of the node's Db */
@@ -2406,10 +2409,18 @@ struct node_shell {
         uint8_t *b;
     } segs[NODE_DB_SEGMENTS];
     size_t nsegs;
+    uint8_t anchor[216], ncfg[CONFIG_SIZE]; /* the node's NodeAnchor and config, for a new node of the same start */
+    uint64_t flags, db_states;              /* its flags; the NODE_ACT_DB_STATE actions */
 };
 
 /* The records the nodes archived, and the works that served one from the Db: printed as a NOTE. */
-static unsigned long node_db_records, node_db_serves;
+static const struct node_shell *qsort_seg;
+static int seg_order(const void *a, const void *b) {
+    size_t x = *(const size_t *)a, y = *(const size_t *)b;
+    uint64_t kx = qsort_seg->segs[x].sidecars << 32 | qsort_seg->segs[x].number, ky = qsort_seg->segs[y].sidecars << 32 | qsort_seg->segs[y].number;
+    return kx < ky ? -1 : kx > ky;
+}
+static unsigned long node_db_records, node_db_serves, node_db_states;
 
 /* The segment of the node's Db, made empty when it is new and make is set; NULL when it is not there. */
 static uint8_t **shell_segment(struct node_shell *s, uint64_t sidecars, uint64_t number, uint64_t **len, int make) {
@@ -2426,19 +2437,20 @@ static uint8_t **shell_segment(struct node_shell *s, uint64_t sidecars, uint64_t
     return &s->segs[k].b;
 }
 
-/* NODE_ACT_DB_APPEND: the record (its header, the bytes of the id, zero bytes to a multiple of 8) at the offset, the segment's end. */
+/* NODE_ACT_DB_APPEND: the record (its 80-byte header, the bytes of the id, zero bytes to a multiple of 8) at the offset, the segment's end. */
 static shell_buf *shell_find(struct node_shell *s, uint64_t id);
 static void shell_db_append(struct node_shell *s, const uint8_t *act, const char **why) {
     shell_buf *b = shell_find(s, rd64(act + 16));
-    uint64_t *len, sidecars = rd64(act + 32), number = rd64(act + 24), offset = rd64(act + 40), length = rd64(act + 48);
+    uint64_t *len, sidecars = rd64(act + 32), number = rd64(act + 24), offset = rd64(act + 40), length = rd64(act + 48 + 72);
     uint8_t **seg = shell_segment(s, sidecars, number, &len, 1);
     if (!b) *why = "DB_APPEND names no buffer";
     else if (!seg) *why = "DB_APPEND: too many segments for the runner";
     else if (sidecars > 1 || offset != *len) *why = "DB_APPEND: the offset is not the segment's end";
     else if (rd64(b->b + 16) != length) *why = "DB_APPEND: the record's length is not the bytes'";
-    else if (number != rd64(act + 64) >> 13) *why = "DB_APPEND: the record's slot is not of the segment";
+    else if (number != rd64(act + 48 + 8) >> 13) *why = "DB_APPEND: the record's slot is not of the segment";
+    else if (rd64(act + 48 + 56) != 24 + length || rd64(act + 48 + 64) != 24) *why = "DB_APPEND: the record's ByteList header is not of its bytes";
     else {
-        uint64_t size = 64 + ((length + 7) & ~7ull), k;
+        uint64_t size = 80 + ((length + 7) & ~7ull), k;
         for (k = 0; k < s->nsegs && &s->segs[k].b != seg; k++) {}
         if (*len + size > s->segs[k].cap) {
             s->segs[k].cap = 2 * (*len + size);
@@ -2449,27 +2461,137 @@ static void shell_db_append(struct node_shell *s, const uint8_t *act, const char
             }
         }
         memset(*seg + *len, 0, (size_t)size);
-        memcpy(*seg + *len, act + 48, 64);
-        memcpy(*seg + *len + 64, b->b + rd64(b->b + 8), (size_t)length);
+        memcpy(*seg + *len, act + 48, 80);
+        memcpy(*seg + *len + 80, b->b + rd64(b->b + 8), (size_t)length);
         *len += size;
         node_db_records++;
     }
 }
 
-/* A ByteList header that views the SSZ bytes of the Db record of a NODE_DB_REF, in its segment; NULL when there is none. */
+/* The ByteList in place of the SSZ bytes of the Db record of a NODE_DB_REF, in its segment: the record's header at 56; NULL when there is none. */
 static uint8_t *shell_db_view(struct node_shell *s, uint64_t ref) {
     uint64_t *len, offset = ref & ((1ull << 48) - 1);
     uint8_t **seg = shell_segment(s, (ref & NODE_DB_SIDECARS) ? 1 : 0, (ref >> 48) & 0x3fff, &len, 0);
-    if (!seg || offset + 64 > *len || rd64(*seg + offset) > *len - offset - 64) return NULL;
-    uint8_t *h = malloc(24);
-    if (!h) {
-        fprintf(stderr, "out of memory\n");
-        exit(2);
-    }
-    wr64(h, 24);
-    wr64(h + 8, (uint64_t)((uintptr_t)(*seg + offset + 64) - (uintptr_t)h));
-    wr64(h + 16, rd64(*seg + offset));
+    if (!seg || offset + 80 > *len || rd64(*seg + offset + 72) > *len - offset - 80) return NULL;
+    uint8_t *h = *seg + offset + 56;
+    if (rd64(h) != 24 + rd64(h + 16) || rd64(h + 8) != 24) return NULL;
     return h;
+}
+
+/*
+ * A node with a Db: a new node of the same start, given the segments in order of number, blocks
+ * first, with lantern_node_db_scan, must take every record and hold the same index, the same
+ * segments to append to, and db_next_slot past the Db's last block.
+ */
+static int seg_order(const void *a, const void *b);
+static void shell_db_rescan(struct node_shell *s, const char **why) {
+    if (!(s->flags & NODE_FLAG_DB)) return;
+    uint64_t need = 0, flags = s->flags;
+    if (CALL(lantern_node_size, s->room, &need) != 0) {
+        *why = "rescan: lantern_node_size status";
+        return;
+    }
+    uint8_t *node = buffer(need);
+    wr64(node, need);
+    if (CALL(lantern_node_init, s->room, s->ncfg, s->anchor, &flags, node) != 0) *why = "rescan: lantern_node_init status";
+    size_t order[NODE_DB_SEGMENTS];
+    for (size_t k = 0; k < s->nsegs; k++) order[k] = k;
+    qsort_seg = s;
+    qsort(order, s->nsegs, sizeof order[0], seg_order);
+    for (size_t i = 0; i < s->nsegs && !*why; i++) {
+        size_t k = order[i];
+        uint64_t len = s->segs[k].len, valid = UINT64_MAX;
+        uint8_t *list = buffer(24 + len);
+        wr64(list, 24 + len);
+        wr64(list + 8, 24);
+        wr64(list + 16, len);
+        memcpy(list + 24, s->segs[k].b, (size_t)len);
+        if (CALL(lantern_node_db_scan, node, &s->segs[k].number, &s->segs[k].sidecars, list, &valid) != 0)
+            *why = "rescan: lantern_node_db_scan status";
+        else if (valid != len) *why = "rescan: a record of a segment is not taken";
+        free(list);
+    }
+    const uint8_t *a = s->node + rd64(s->node + NODE_DB), *b = node + rd64(node + NODE_DB);
+    uint64_t first = rd64(a + 8), end = rd64(a + 16);
+    if (!*why && (rd64(b + 8) != first || rd64(b + 16) != end || rd64(b + 56) != rd64(a + 56) ||
+                  memcmp(a + rd64(a + 24), b + rd64(b + 24), (size_t)(88 * (end - first)))))
+        *why = "rescan: the index is not the node's";
+    uint64_t next = rd64(s->anchor + 32) + 1;
+    if (end > next) next = end;
+    if (!*why && rd64(node + 480) != next) *why = "rescan: db_next_slot is not past the Db's last block";
+    if (!*why && memcmp(node + 488, s->node + 488, 32)) *why = "rescan: the segments to append to are not the node's";
+    free(node);
+}
+
+/*
+ * A NODE_ACT_DB_STATE's state and block as a later start reads them: lantern_node_state_bytes of
+ * the state, then lantern_node_anchor_block of those bytes and the block's must give a state and
+ * a block of the same roots.
+ */
+static void root_of(const char *type, const uint8_t *value, uint8_t *root, const char **why);
+#define INVALID_ANCHOR 39
+#define ANCHOR_BLOCK_BYTES 65536
+static void shell_db_anchor(const shell_buf *st, const shell_buf *bl, const char **why) {
+    uint64_t need = 0, size = 0;
+    uint8_t small[24] = {0};
+    wr64(small, 24);
+    if (CALL(LF(node_state_bytes), st->b, fresh_scratch(), small, &need) != 1 || need <= 24) {
+        *why = "lantern_node_state_bytes: a short buffer is not LANTERN_BUFFER_TOO_SMALL with the size";
+        return;
+    }
+    uint8_t *out = buffer(need);
+    wr64(out, need);
+    if (CALL(LF(node_state_bytes), st->b, fresh_scratch(), out, &size) != 0 || size != need || rd64(out + 8) != 24 ||
+        rd64(out + 16) != need - 24 || !guard_ok(out, need))
+        *why = "lantern_node_state_bytes: not the state's bytes";
+    /* the anchor's bytes: two ByteLists at multiples of 8, the state's SSZ bytes, then the block's message's */
+    uint64_t first = (need + 7) & ~7ull, m = rd64(bl->b + 16) - 100, total = 24 + first + 24 + m;
+    uint8_t *data = buffer(total), *state = NULL, *block = NULL, r1[32], r2[32];
+    if (!*why) {
+        memset(data + 24, 0, (size_t)(total - 24));
+        wr64(data, total);
+        wr64(data + 8, 24);
+        wr64(data + 16, total - 24);
+        memcpy(data + 24, out, (size_t)need);
+        wr64(data + 24 + first, 24 + m);
+        wr64(data + 24 + first + 8, 24);
+        wr64(data + 24 + first + 16, m);
+        memcpy(data + 24 + first + 24, bl->b + rd64(bl->b + 8) + 100, (size_t)m);
+        uint64_t room[8] = {64, 64, 4, 9000, 64, 64, 4, 4096}, ssize = 0; /* StateRoom: docs/reference/state.md */
+        CALL(LF(beacon_state_copy_size), st->b, room, &ssize);
+        state = buffer(ssize);
+        wr64(state, ssize);
+        block = buffer(ANCHOR_BLOCK_BYTES);
+        wr64(block, ANCHOR_BLOCK_BYTES);
+        if (CALL(LF(node_anchor_block), data, room, fresh_scratch(), state, block) != 0) *why = "lantern_node_anchor_block: status not 0";
+        else if (!guard_ok(state, ssize) || !guard_ok(block, ANCHOR_BLOCK_BYTES)) *why = "lantern_node_anchor_block wrote out of bounds";
+        else {
+            root_of("BeaconState", st->b, r1, why);
+            root_of("BeaconState", state, r2, why);
+            if (!*why && memcmp(r1, r2, 32)) *why = "lantern_node_anchor_block: the state is not the saved state";
+            if (!*why) {
+                root_of("BeaconBlock", block, r1, why);
+                uint64_t vsize = 0;
+                uint8_t *sb = decode(type_by_name("SignedBeaconBlock"), bl->b + rd64(bl->b + 8), m + 100, &vsize, why);
+                if (sb) {
+                    root_of("BeaconBlock", nested(sb, field_offset("SignedBeaconBlock", 0)), r2, why);
+                    if (!*why && memcmp(r1, r2, 32)) *why = "lantern_node_anchor_block: the block is not the saved block";
+                    free(sb);
+                }
+            }
+        }
+        if (!*why) { /* the block's state_root: bytes 48 to 80 of its message */
+            data[24 + first + 24 + 48] ^= 1;
+            wr64(state, ssize);
+            wr64(block, ANCHOR_BLOCK_BYTES);
+            if (CALL(LF(node_anchor_block), data, room, fresh_scratch(), state, block) != INVALID_ANCHOR)
+                *why = "lantern_node_anchor_block: another state_root is not LANTERN_INVALID_ANCHOR";
+        }
+    }
+    free(out);
+    free(data);
+    free(state);
+    free(block);
 }
 
 /* The slot of the block of the root in the node's Db, or 2^64 - 1. */
@@ -2634,7 +2756,6 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
     }
     if ((a_id && !a) || (b_id && !b) || (c_id && !c) || (d_id && !d)) {
         *why = "a WORK action names no buffer";
-        free(view.b);
         return;
     }
     const void *settings = NULL;
@@ -2704,7 +2825,6 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         memcpy(shell_append(s, esize), ev, (size_t)esize);
     }
     free(ev);
-    free(view.b);
 }
 
 static void *p2p_state_of(struct p2p_net *net);
@@ -2812,8 +2932,18 @@ static void shell_step(fc_node *n, const char **why) {
             shell_drop(s, rd64(act + 16), why);
         else if (kind == ACT_WORK && size == 72)
             shell_work(n, act, why);
-        else if (kind == ACT_DB_APPEND && size == 112)
+        else if (kind == ACT_DB_APPEND && size == 128)
             shell_db_append(s, act, why);
+        else if (kind == ACT_DB_STATE && size == 40) {
+            shell_buf *st = shell_find(s, rd64(act + 16)), *bl = shell_find(s, rd64(act + 24));
+            if (!st || !bl) *why = "DB_STATE names no buffer";
+            else if (rd64(st->b + 48) != rd64(act + 32)) *why = "DB_STATE: the state is not of the slot"; /* NODE_STATE_SLOT 48 */
+            else {
+                shell_db_anchor(st, bl, why);
+                s->db_states++;
+                node_db_states++;
+            }
+        }
         else if (kind == ACT_ENGINE && size >= 48 && rd64(act + 24) == size - 24 && rd64(act + 32) == 24 && rd64(act + 40) <= size - 48)
             shell_engine(n, act + 48, rd64(act + 40), why);
         else if (kind == ACT_DISCV5 && size >= 48 && rd64(act + 24) == size - 24 && rd64(act + 32) == 24 && rd64(act + 40) <= size - 48)
@@ -3115,7 +3245,7 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
     *anchor_block = fc_setup(n, parts, why);
     if (*anchor_block) {
         /* Small capacities, so that the node grows through lantern_node_copy. */
-        uint8_t anchor[208] = {0}; /* NodeAnchor: root, slot, genesis_validators_root, jwt_secret, engine_host_len, engine_host, node_id */
+        uint8_t anchor[216] = {0}; /* NodeAnchor: root, slot, genesis_validators_root, jwt_secret, engine_host_len, engine_host, node_id, history_slot */
         static unsigned long opened; /* every second node archives to a Db */
         uint64_t flags = (FORK >= FORK_BELLATRIX ? NODE_FLAG_ENGINE : 0) | NODE_FLAG_DISCV5 | (opened++ % 2 ? NODE_FLAG_DB : 0), need = 0;
         for (int i = 0; i < NODE_ROOM_FIELDS; i++) s->room[i] = 2;
@@ -3140,6 +3270,9 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
             uint8_t ncfg[CONFIG_SIZE];
             memcpy(ncfg, config, CONFIG_SIZE);
             for (uint64_t f = FORK_ALTAIR; f <= FORK_FULU; f++) wr64(ncfg + 16 * f, f <= FORK ? 0 : UINT64_MAX);
+            memcpy(s->anchor, anchor, sizeof s->anchor);
+            memcpy(s->ncfg, ncfg, CONFIG_SIZE);
+            s->flags = flags;
             if (CALL(lantern_node_init, s->room, ncfg, anchor, &flags, s->node) != 0) *why = "lantern_node_init status";
             else if (!guard_ok(s->node, need)) *why = "lantern_node_init wrote out of bounds";
             else if (memcmp(s->node + NODE_HEAD_ROOT, anchor, 32)) *why = "lantern_node_init: the head is not the anchor";
@@ -3215,6 +3348,7 @@ static void fc_node_case(tv parts, int serve, const char **why) {
             *why = msg;
         }
     }
+    if (!*why) shell_db_rescan(n.shell, why);
     if (serve && !*why) fc_serve_check(&n, parts, why);
     if (serve && !*why) fc_sync_check(parts, why);
     shell_close(&n, anchor_block);
@@ -6059,7 +6193,7 @@ int main(int argc, char **argv) {
         if (bad) failures++;
     }
     if (node_settles_finalized) printf("NOTE: %lu node settles past a finalized epoch\n", node_settles_finalized);
-    if (node_db_records) printf("NOTE: %lu Db records archived, %lu served from the Db\n", node_db_records, node_db_serves);
+    if (node_db_records) printf("NOTE: %lu Db records archived, %lu served from the Db, %lu anchors saved and read back\n", node_db_records, node_db_serves, node_db_states);
     printf("%s: %d passed, %d failed\n", failures ? "FAIL" : "PASS", passes, failures);
     return failures ? 1 : 0;
 }

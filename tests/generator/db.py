@@ -31,10 +31,11 @@ def made(*parts):
     return hashlib.sha256(repr(parts).encode()).digest()
 
 
-def record(kind, slot, index, root, data, length=None):
-    """A record: the DbRecord header, the bytes, zero bytes up to a multiple of 8."""
+def record(kind, slot, index, root, data, length=None, header=None):
+    """A record: the DbRecord header (its ByteList header of size 24 + length and offset 24), the bytes, zero bytes up to a multiple of 8."""
     n = len(data) if length is None else length
-    return struct.pack("<QQQQ", n, kind, slot, index) + root + data + b"\0" * (-len(data) % 8)
+    size, offset = header or (24 + n, 24)
+    return struct.pack("<QQQ", kind, slot, index) + root + struct.pack("<QQQ", size, offset, n) + data + b"\0" * (-len(data) % 8)
 
 
 class Model:
@@ -46,14 +47,14 @@ class Model:
         self.entries = {}  # entry index: [root, block, sidecars, count, end, last, indices]
         self.roots = {}  # root: entry index
 
-    def add(self, kind, slot, index, root, length, offset):
-        if offset % 8 or offset >= 1 << 48 or length > RECORD_MAX or slot < self.first:
+    def add(self, kind, slot, index, root, length, offset, header):
+        if offset % 8 or offset >= 1 << 48 or length > RECORD_MAX or header != (24 + length, 24) or slot < self.first:
             return INVALID
         i = slot - self.first
         if i >= self.cap:
             return SMALL
         e = self.entries.get(i)
-        size = 64 + length + (-length % 8)
+        size = 80 + length + (-length % 8)
         if kind == BLOCK:
             if (e and e[1]) or root in self.roots:
                 return INVALID
@@ -78,15 +79,16 @@ class Model:
 
     def scan(self, number, sidecars, data):
         pos, base = 0, number * SEG
-        while len(data) - pos >= 64:
-            length, kind, slot, index = struct.unpack_from("<QQQQ", data, pos)
-            root = data[pos + 32:pos + 64]
+        while len(data) - pos >= 80:
+            kind, slot, index = struct.unpack_from("<QQQ", data, pos)
+            root = data[pos + 24:pos + 56]
+            hsize, hoffset, length = struct.unpack_from("<QQQ", data, pos + 56)
             if length > RECORD_MAX:
                 break
-            size = 64 + length + (-length % 8)
+            size = 80 + length + (-length % 8)
             if size > len(data) - pos or slot < base or slot - base >= SEG or (kind != BLOCK) != bool(sidecars):
                 break
-            r = self.add(kind, slot, index, root, length, pos)
+            r = self.add(kind, slot, index, root, length, pos, (hsize, hoffset))
             if r == SMALL:
                 return SMALL, pos
             if r == INVALID:
@@ -256,6 +258,10 @@ def rules():
         c.segment(0, 0, c.block(5)[0])
         c.segment(0, 1, c.sidecar(COLUMN, 5, 126) + c.sidecar(COLUMN, 5, 127) + c.sidecar(COLUMN, 5, 128))
 
+    def bytes_header(c):
+        r5, root = c.block(5)
+        c.segment(0, 0, r5 + record(BLOCK, 6, 0, made("hdr"), b"abc", header=(28, 24)) + c.block(7)[0])
+
     def too_long(c):
         c.segment(0, 0, c.block(5)[0] + record(BLOCK, 6, 0, made("long"), b"", length=RECORD_MAX + 1))
 
@@ -268,6 +274,7 @@ def rules():
                                      ("sidecar_no_block", no_block), ("sidecar_index_order", index_order),
                                      ("sidecars_apart", apart), ("wrong_kind", wrong_kind),
                                      ("sidecar_other_size", other_size), ("sidecar_index_high", index_high),
+                                     ("record_bytes_header", bytes_header),
                                      ("length_over_max", too_long), ("below_first_slot", below_first))]
 
 

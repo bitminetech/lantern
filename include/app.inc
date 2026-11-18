@@ -79,9 +79,11 @@
 .set AppDb_next_map, AppDb_maps + 32 * APP_DB_MAP_COUNT /* the map a new segment takes next */
 .set AppDb_view, AppDb_next_map + 8         /* a BufferId table entry (id, address, size), then a ByteList header */
 .set AppDb_op, AppDb_view + 48              /* a FileOp or FileResult */
-.set AppDb__size, AppDb_op + 32
+.set AppDb_anchor_slot, AppDb_op + 32      /* the slot of the anchor.ssz this run wrote, or 2^64 - 1 */
+.set AppDb__size, AppDb_anchor_slot + 8
+.set APP_PATH2, APP_DB + AppDb__size        /* a ByteList: a second path */
 .set APP_DB_ROOTS, 4096                     /* the Db's first root table */
-.set APP_SIZE, (APP_DB + AppDb__size + 4095) & ~4095
+.set APP_SIZE, (APP_PATH2 + 24 + APP_PATH_MAX + 4095) & ~4095
 .set APP_BLOCK_BYTES, 1 << 16               /* the anchor block */
 .set APP_BUF_ENTRY, 24                      /* a BufferId table entry: id, address, size */
 .set APP_BUFS_CAP, 4096
@@ -131,6 +133,15 @@ app_m_error:
 app_m_write:
     .ascii "cannot write "
 .set app_m_write_len, 13
+app_m_restart:
+    .ascii "restart at slot "
+.set app_m_restart_len, 16
+app_anchor_name:
+    .ascii "anchor.ssz"
+.set app_anchor_name_len, 10
+app_anchor_tmp_name:
+    .ascii "anchor.tmp"
+.set app_anchor_tmp_name_len, 10
 app_m_line:
     .ascii ": faulty line "
 .set app_m_line_len, 14

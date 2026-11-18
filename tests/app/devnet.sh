@@ -10,7 +10,9 @@
 #   SECONDS: the longest wait for lantern to follow, after the devnet starts (default 900).
 # KURTOSIS: the kurtosis CLI (default kurtosis). KEEP=1 keeps the enclave. CL_LOG_LEVEL: the client's
 # log level (default info). LANTERN_MAX_CPU: lantern's CPU limit in millicores (default no limit).
-# LANTERN_DELAY: seconds before lantern starts (default 0).
+# LANTERN_DELAY: seconds before lantern starts (default 0). RESTART=1: 6-second slots, lantern with
+# --data-dir /data; after it follows, once its log shows finalized epoch 2 or later, lantern stops and
+# starts again, and must log "restart at slot" and follow again.
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 client=$1
@@ -41,6 +43,9 @@ lantern_image: $image
 lantern_max_cpu: ${LANTERN_MAX_CPU:-0}
 lantern_delay: ${LANTERN_DELAY:-0}
 EOF
+if [ "${RESTART:-0}" = 1 ]; then
+    printf 'network_params:\n  seconds_per_slot: 6\nlantern_data_dir: /data\n' >> "$work/args.yaml"
+fi
 
 cleanup() {
     echo "== lantern"
@@ -90,4 +95,34 @@ while [ $waited -lt "$secs" ]; do
     fi
 done
 if [ $status -eq 0 ]; then echo "PASS lantern follows the chain of $client"; else echo "FAIL lantern does not follow the chain of $client"; fi
+[ $status -eq 0 ] && [ "${RESTART:-0}" = 1 ] || exit $status
+
+# RESTART=1: once lantern has written its history at a finalized epoch, it stops and starts again.
+log() { $kurtosis service logs -a $enclave lantern 2>/dev/null; }
+finalized() { log | grep -o "finalized epoch [0-9]*" | tail -1 | grep -o "[0-9]*$" || true; }
+status=1
+waited=0
+while [ $waited -lt "$secs" ]; do
+    sleep 12; waited=$((waited + 12))
+    f=$(finalized)
+    echo "lantern finalized epoch ${f:-none}"
+    [ -n "$f" ] && [ "$f" -ge 2 ] && { status=0; break; }
+done
+[ $status -eq 0 ] || { echo "FAIL lantern does not reach finalized epoch 2"; exit 1; }
+sleep 12
+$kurtosis service stop $enclave lantern
+$kurtosis service start $enclave lantern
+lantern=$(url lantern)
+status=1
+waited=0
+while [ $waited -lt "$secs" ]; do
+    sleep 12; waited=$((waited + 12))
+    log | grep -q "restart at slot" || continue
+    if follows; then
+        sleep 12
+        follows && { status=0; break; }
+    fi
+done
+log | grep "restart at slot\|cannot write\|status" | head -10 || true
+if [ $status -eq 0 ]; then echo "PASS lantern restarts from its history and follows again"; else echo "FAIL lantern does not restart from its history and follow"; fi
 exit $status

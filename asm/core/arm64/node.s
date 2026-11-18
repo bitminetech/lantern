@@ -274,8 +274,11 @@ FUNCTION lantern_node_init
     mov     x10, #1
     str     x10, [x9, #NodeCheckpoint_state_id]
     str     x10, [x24, #(Node_checkpoints + 8)]
-    MOVQ    x9, DB_SEGMENT_SLOTS - 1        /* the Db: from the anchor's segment; its archive after the anchor */
-    bic     x9, x22, x9
+    ldr     x10, [x21, #NodeAnchor_history_slot]    /* the Db: from the segment of history_slot, or of the anchor; its archive after the anchor */
+    cmp     x10, x22
+    csel    x10, x10, x22, lo
+    MOVQ    x9, DB_SEGMENT_SLOTS - 1
+    bic     x9, x10, x9
     str     x9, [sp, #L]
     add     x0, x19, #NodeRoom_db_slots
     add     x1, sp, #L
@@ -1213,6 +1216,8 @@ LOCAL_FUNCTION node_db_append
     stp     x9, x10, [x0, #80]
     ldp     x9, x10, [x13, #48]
     stp     x9, x10, [x0, #96]
+    ldp     x9, x10, [x13, #64]
+    stp     x9, x10, [x0, #112]
     UNFRAME 48
 END_FUNCTION node_db_append
 
@@ -1225,7 +1230,7 @@ END_FUNCTION node_db_append
  * x27 an index, x28 the slot. Locals: L a DbRecord, L+64 an offset, L+72 a sidecar entry.
  */
 LOCAL_FUNCTION node_archive
-    ENTER 80
+    ENTER 96
     ldr     x9, [x19, #Node_flags]
     tst     x9, #NODE_FLAG_DB
     b.eq    99f
@@ -1260,12 +1265,24 @@ LOCAL_FUNCTION node_archive
     ldr     x28, [x26, #NodeBlock_slot]
     ldr     x9, [x26, #NodeBlock_data_id]
     cbz     x9, 30f                         /* no bytes: the anchor */
-    ldr     x9, [x26, #NodeBlock_length]    /* the block's record */
-    mov     x10, #DB_BLOCK
-    stp     x9, x10, [sp, #L]
-    stp     x28, xzr, [sp, #(L + 16)]
-    add     x9, sp, #(L + 32)
+    ldr     x0, [x19, #Node_db]             /* a block the Db holds already, as after a restart: no record */
+    add     x0, x19, x0
+    mov     x1, x26
+    add     x2, sp, #(L + 80)
+    bl      lantern_db_find_root
+    ldr     x9, [sp, #(L + 80)]
+    cmn     x9, #1
+    b.ne    40f
+    mov     x10, #DB_BLOCK                  /* the block's record */
+    stp     x10, x28, [sp, #L]
+    str     xzr, [sp, #(L + 16)]
+    add     x9, sp, #(L + 24)
     COPY32  x9, x26
+    ldr     x9, [x26, #NodeBlock_length]
+    add     x10, x9, #24
+    mov     x11, #24
+    stp     x10, x11, [sp, #(L + 56)]
+    str     x9, [sp, #(L + 72)]
     lsr     x9, x28, #DB_SEGMENT_SHIFT      /* its segment, and its offset at the segment's end */
     ldr     x10, [x19, #Node_db_block_segment]
     cmp     x9, x10
@@ -1273,20 +1290,20 @@ LOCAL_FUNCTION node_archive
     str     x9, [x19, #Node_db_block_segment]
     str     xzr, [x19, #Node_db_block_end]
 3:  ldr     x9, [x19, #Node_db_block_end]
-    str     x9, [sp, #(L + 64)]
+    str     x9, [sp, #(L + 80)]
     ldr     x0, [x19, #Node_db]
     add     x0, x19, x0
     add     x1, sp, #L
-    add     x2, sp, #(L + 64)
+    add     x2, sp, #(L + 80)
     bl      lantern_db_add
     cbnz    x0, 99f
     mov     x0, #0
     ldr     x1, [x26, #NodeBlock_data_id]
     ldr     x2, [x19, #Node_db_block_segment]
-    ldr     x3, [sp, #(L + 64)]
+    ldr     x3, [sp, #(L + 80)]
     add     x4, sp, #L
     bl      node_db_append
-    ldr     x9, [sp, #L]
+    ldr     x9, [sp, #(L + 72)]
     add     x9, x9, #(DbRecord__mem + 7)
     and     x9, x9, #~7
     ldr     x10, [x19, #Node_db_block_end]
@@ -1299,7 +1316,7 @@ LOCAL_FUNCTION node_archive
     mov     x1, x27
     bl      node_blob_held
     cbz     x0, 19f
-    str     x0, [sp, #(L + 72)]
+    str     x0, [sp, #(L + 88)]
     mov     x0, x28                         /* a column sidecar from fulu on, else a blob sidecar */
     add     x1, x19, #Node_config
     bl      node_fork
@@ -1307,10 +1324,14 @@ LOCAL_FUNCTION node_archive
     mov     x11, #DB_COLUMN_SIDECAR
     cmp     x0, #FORK_FULU
     csel    x10, x11, x10, hs
-    ldr     x12, [sp, #(L + 72)]
+    stp     x10, x28, [sp, #L]
+    str     x27, [sp, #(L + 16)]
+    ldr     x12, [sp, #(L + 88)]
     ldr     x9, [x12, #NodeBlob_length]
-    stp     x9, x10, [sp, #L]
-    stp     x28, x27, [sp, #(L + 16)]
+    add     x10, x9, #24
+    mov     x11, #24
+    stp     x10, x11, [sp, #(L + 56)]
+    str     x9, [sp, #(L + 72)]
     lsr     x9, x28, #DB_SEGMENT_SHIFT
     ldr     x10, [x19, #Node_db_sidecar_segment]
     cmp     x9, x10
@@ -1318,36 +1339,36 @@ LOCAL_FUNCTION node_archive
     str     x9, [x19, #Node_db_sidecar_segment]
     str     xzr, [x19, #Node_db_sidecar_end]
 5:  ldr     x9, [x19, #Node_db_sidecar_end]
-    str     x9, [sp, #(L + 64)]
+    str     x9, [sp, #(L + 80)]
     ldr     x0, [x19, #Node_db]
     add     x0, x19, x0
     add     x1, sp, #L
-    add     x2, sp, #(L + 64)
+    add     x2, sp, #(L + 80)
     bl      lantern_db_add
     cbnz    x0, 19f                         /* refused: the entry stays for the prune */
     mov     x0, #1
-    ldr     x12, [sp, #(L + 72)]
+    ldr     x12, [sp, #(L + 88)]
     ldr     x1, [x12, #NodeBlob_data_id]
     ldr     x2, [x19, #Node_db_sidecar_segment]
-    ldr     x3, [sp, #(L + 64)]
+    ldr     x3, [sp, #(L + 80)]
     add     x4, sp, #L
     bl      node_db_append
-    ldr     x9, [sp, #L]
+    ldr     x9, [sp, #(L + 72)]
     add     x9, x9, #(DbRecord__mem + 7)
     and     x9, x9, #~7
     ldr     x10, [x19, #Node_db_sidecar_end]
     add     x10, x10, x9
     str     x10, [x19, #Node_db_sidecar_end]
-    ldr     x12, [sp, #(L + 72)]            /* its bytes and entry go, unless a stream sends them */
+    ldr     x12, [sp, #(L + 88)]            /* its bytes and entry go, unless a stream sends them */
     ldr     x0, [x12, #NodeBlob_data_id]
     bl      node_serving
     cbnz    x0, 19f
     mov     x0, #NODE_ACT_BYTES_FREE
-    ldr     x12, [sp, #(L + 72)]
+    ldr     x12, [sp, #(L + 88)]
     ldr     x1, [x12, #NodeBlob_data_id]
     mov     x2, #0
     bl      node_ids
-    ldr     x12, [sp, #(L + 72)]
+    ldr     x12, [sp, #(L + 88)]
     mov     x9, #-1
     stp     x9, x9, [x12]
     stp     x9, x9, [x12, #16]
@@ -1357,7 +1378,16 @@ LOCAL_FUNCTION node_archive
     str     x9, [x12, #NodeBlob_status]
 19: add     x27, x27, #1
     b       4b
-20: ldr     x0, [x26, #NodeBlock_data_id]   /* the block's bytes go, unless a stream sends them */
+20: cmp     x26, x21                        /* the finalized block: its state and bytes to the shell, for a restart */
+    b.ne    21f
+    mov     x0, #NODE_ACT_DB_STATE
+    mov     x1, #NODE_ACT_DB_STATE_SIZE
+    bl      node_act
+    ldr     x9, [x26, #NodeBlock_state_id]
+    ldr     x10, [x26, #NodeBlock_data_id]
+    stp     x9, x10, [x0, #16]
+    str     x28, [x0, #32]
+21: ldr     x0, [x26, #NodeBlock_data_id]   /* the block's bytes go, unless a stream sends them */
     bl      node_serving
     cbnz    x0, 30f
     mov     x0, #NODE_ACT_BYTES_FREE
@@ -1379,8 +1409,89 @@ LOCAL_FUNCTION node_archive
 30: add     x9, x28, #1
     str     x9, [x19, #Node_db_next_slot]
     b       2b
-99: LEAVE 80
+40: mov     x27, #0                         /* in the Db: the sidecars the node holds of it go */
+41: cmp     x27, #DB_SIDECAR_INDICES
+    b.hs    20b
+    mov     x0, x26
+    mov     x1, x27
+    bl      node_blob_held
+    add     x27, x27, #1
+    cbz     x0, 41b
+    str     x0, [sp, #(L + 88)]
+    ldr     x0, [x0, #NodeBlob_data_id]
+    bl      node_serving
+    cbnz    x0, 41b
+    mov     x0, #NODE_ACT_BYTES_FREE
+    ldr     x12, [sp, #(L + 88)]
+    ldr     x1, [x12, #NodeBlob_data_id]
+    mov     x2, #0
+    bl      node_ids
+    ldr     x12, [sp, #(L + 88)]
+    mov     x9, #-1
+    stp     x9, x9, [x12]
+    stp     x9, x9, [x12, #16]
+    str     x9, [x12, #NodeBlob_slot]
+    str     xzr, [x12, #NodeBlob_data_id]
+    mov     x9, #NODE_BLOB_FREE
+    str     x9, [x12, #NodeBlob_status]
+    b       41b
+99: LEAVE 96
 END_FUNCTION node_archive
+
+/*
+ * (node, segment, sidecars, bytes, valid): lantern_db_scan of a segment's bytes into the node's
+ * Db; then the segment is the one of its kind to append to, at valid, unless the current one is
+ * higher; db_next_slot is at least the Db's end_slot, and earliest_slot the Db's first block when
+ * that is lower. x19 node, x20 sidecars, x21 segment, x22 valid.
+ */
+FUNCTION lantern_node_db_scan
+    ENTER 0
+    mov     x19, x0
+    ldr     x21, [x1]
+    ldr     x20, [x2]
+    mov     x22, x4
+    ldr     x0, [x19, #Node_db]
+    add     x0, x19, x0
+    bl      lantern_db_scan
+    cbnz    x0, 9f
+    mov     x9, #Node_db_block_segment
+    mov     x10, #Node_db_sidecar_segment
+    cmp     x20, #0
+    csel    x9, x10, x9, ne
+    ldr     x10, [x19, x9]
+    cmn     x10, #1
+    b.eq    1f
+    cmp     x21, x10
+    b.lo    2f
+1:  str     x21, [x19, x9]
+    ldr     x10, [x22]
+    add     x9, x9, #8
+    str     x10, [x19, x9]
+2:  ldr     x9, [x19, #Node_db]
+    add     x9, x19, x9
+    ldr     x10, [x9, #Db_end_slot]
+    ldr     x11, [x19, #Node_db_next_slot]
+    cmp     x10, x11
+    csel    x10, x10, x11, hi
+    str     x10, [x19, #Node_db_next_slot]
+    ldr     x10, [x9, #Db_first_slot]       /* the first block below earliest_slot */
+    ldr     x11, [x19, #Node_earliest_slot]
+    ldr     x12, [x9, #Db_end_slot]
+    cmp     x11, x12
+    csel    x11, x11, x12, lo
+    ldr     x13, [x9, #Db_slots]
+    add     x13, x9, x13
+3:  cmp     x10, x11
+    b.hs    8f
+    ldr     x14, [x13, #DbSlot_block]
+    cbnz    x14, 4f
+    add     x13, x13, #DbSlot__mem
+    add     x10, x10, #1
+    b       3b
+4:  str     x10, [x19, #Node_earliest_slot]
+8:  mov     x0, #LANTERN_OK
+9:  LEAVE 0
+END_FUNCTION lantern_node_db_scan
 
 /* L0: a BYTES_PUT action of the ByteList x0 with a new id: x0 = the id. x21 the ByteList, x22 the id. */
 LOCAL_FUNCTION node_put

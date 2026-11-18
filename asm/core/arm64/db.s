@@ -225,6 +225,13 @@ FUNCTION lantern_db_add
     lsl     x10, x10, #32
     cmp     x9, x10
     b.hi    7f
+    add     x9, x9, #24                     /* its ByteList header: size 24 + length, offset 24 */
+    ldr     x10, [x20, #DbRecord_bytes]
+    cmp     x9, x10
+    b.ne    7f
+    ldr     x10, [x20, #(DbRecord_bytes + 8)]
+    cmp     x10, #24
+    b.ne    7f
     ldr     x22, [x20, #DbRecord_slot]      /* a slot from first_slot, in the room */
     ldr     x9, [x19, #Db_first_slot]
     subs    x22, x22, x9

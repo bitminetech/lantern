@@ -489,6 +489,144 @@ SPEC_FUNCTION node_anchor
 SPEC_END node_anchor
 
 /*
+ * (data, room, scratch, state, block): the anchor of a start from the node's own history: data
+ * holds two ByteLists, the second at the first multiple of 8 after the first: the SSZ bytes of a
+ * BeaconState, then those of the message of its block, with the state's slot and root. state:
+ * the state with room; block: the message. s1 data's bytes, s2 room, s3 scratch, s4 state, s5
+ * block, s6 the decoded state, then the block's ByteList, s7 their count, s8 the scratch size,
+ * restored on return, s10 the block's place. Locals: L a size, L+16 a root.
+ */
+SPEC_FUNCTION node_anchor_block
+    ENTER 48
+    ld      t0, 8(a0)
+    add     s1, a0, t0
+    ld      s7, 16(a0)
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+    mv      s5, a4
+    ld      s8, 0(s3)
+    li      t0, 24                          # the state's ByteList: offset 24, size 24 + count, inside
+    bltu    s7, t0, 7f
+    ld      t1, 8(s1)
+    bne     t1, t0, 7f
+    ld      t1, 16(s1)
+    bgtu    t1, s7, 7f
+    addi    t1, t1, 24
+    ld      t2, 0(s1)
+    bne     t1, t2, 7f
+    bgtu    t1, s7, 7f
+    addi    s10, t1, 7
+    andi    s10, s10, -8
+    ADDRESS a0, lantern_type_BeaconState    # decoded, then copied with room
+    mv      a1, s1
+    mv      a2, s3
+    call    node_decode
+    li      t0, 1
+    beq     a0, t0, 8f
+    bgtu    a0, t0, 7f
+    mv      s6, a1
+    mv      a0, s6
+    mv      a1, s2
+    addi    a2, sp, L
+    call    lantern_beacon_state_copy_size
+    ld      t0, L(sp)
+    ld      t1, 0(s4)
+    bltu    t1, t0, 8f
+    mv      a0, s6
+    mv      a1, s2
+    mv      a2, s4
+    call    lantern_beacon_state_copy
+    bnez    a0, 8f
+    sd      s8, 0(s3)
+    addi    t0, s10, 24                     # the block's ByteList, the same way
+    bgtu    t0, s7, 7f
+    add     s6, s1, s10
+    sub     t3, s7, s10
+    ld      t1, 8(s6)
+    li      t0, 24
+    bne     t1, t0, 7f
+    ld      t1, 16(s6)
+    bgtu    t1, t3, 7f
+    addi    t1, t1, 24
+    ld      t2, 0(s6)
+    bne     t1, t2, 7f
+    bgtu    t1, t3, 7f
+    ADDRESS a0, lantern_type_BeaconBlock
+    mv      a1, s6
+    mv      a2, s3
+    mv      a3, s5
+    CALL_GLOBAL ssz_deserialize
+    sd      s8, 0(s3)
+    li      t0, SSZ_BUFFER_TOO_SMALL
+    beq     a0, t0, 8f
+    bnez    a0, 7f
+    ld      t0, BeaconBlock_slot(s5)        # its slot and state_root are the state's
+    ld      t1, NODE_STATE_SLOT(s4)
+    bne     t0, t1, 6f
+    ADDRESS a0, lantern_type_BeaconState
+    mv      a1, s4
+    mv      a2, s3
+    addi    a3, sp, L + 16
+    CALL_GLOBAL ssz_hash_tree_root
+    sd      s8, 0(s3)
+    bnez    a0, 8f
+    li      t2, 0
+3:  add     t0, s5, t2
+    ld      t0, BeaconBlock_state_root(t0)
+    add     t1, sp, t2
+    ld      t1, (L + 16)(t1)
+    bne     t0, t1, 6f
+    addi    t2, t2, 8
+    li      t3, 32
+    bltu    t2, t3, 3b
+    li      a0, LANTERN_OK
+    j       99f
+6:  li      a0, LANTERN_INVALID_ANCHOR
+    j       99f
+7:  li      a0, LANTERN_INVALID_ENCODING
+    j       99f
+8:  li      a0, LANTERN_BUFFER_TOO_SMALL
+99: sd      s8, 0(s3)
+    LEAVE 48
+SPEC_END node_anchor_block
+
+/*
+ * (state, scratch, out, size): size: the bytes of a ByteList of the state's SSZ bytes, 24 + their
+ * count; out: that ByteList, when its size field holds at least size. s1 state, s2 scratch, s3
+ * out, s4 size, s5 the scratch size, restored on return.
+ */
+SPEC_FUNCTION node_state_bytes
+    ENTER 0
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+    ld      s5, 0(s2)
+    ADDRESS a0, lantern_type_BeaconState
+    mv      a1, s1
+    mv      a2, s2
+    mv      a3, s4
+    CALL_GLOBAL ssz_serialize_size
+    sd      s5, 0(s2)
+    bnez    a0, 8f
+    ld      t0, 0(s4)
+    ld      t1, 0(s3)
+    bltu    t1, t0, 8f
+    ADDRESS a0, lantern_type_BeaconState
+    mv      a1, s1
+    mv      a2, s2
+    mv      a3, s3
+    CALL_GLOBAL ssz_serialize
+    sd      s5, 0(s2)
+    bnez    a0, 8f
+    li      a0, LANTERN_OK
+    LEAVE 0
+8:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    LEAVE 0
+SPEC_END node_state_bytes
+
+/*
  * (store, data, is_from_block, state, scratch, result, target): validate_on_attestation of the
  * Attestation in data; with no target checkpoint state (state 0) the result is
  * LANTERN_NEED_TARGET_STATE and target holds the target checkpoint, else on_attestation.

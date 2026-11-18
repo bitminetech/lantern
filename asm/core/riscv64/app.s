@@ -361,11 +361,26 @@ LOCAL_FUNCTION app_start
     ld      a0, L(sp)
     call    app_line_u64
     j       98f
-1:  ADDRESS a0, app_genesis_name            # genesis.ssz: the fork of its slot
+1:  li      s7, 0                           # with a data directory: its anchor.ssz, when there is one
+    LDQ     t0, s1, (APP_OPTIONS + AppOptions_data_dir + 8)
+    beqz    t0, 11f
+    ADDRESS a0, app_anchor_name
+    li      a1, app_anchor_name_len
+    ADDQ    a2, s1, APP_PATH
+    call    app_db_file
+    ADDQ    a0, s1, APP_PATH
+    ADDQ    a1, s1, APP_FILE
+    CALL_GLOBAL lantern_shell_read_file
+    LDQ     t0, s1, APP_FILE
+    bnez    t0, 11f
+    li      s7, 1
+    j       12f
+11: ADDRESS a0, app_genesis_name            # else genesis.ssz: the fork of its slot
     li      a1, app_genesis_name_len
     call    app_path
     call    app_read
     bnez    a0, 99f
+12:
     LDQ     s2, s1, (APP_FILE + 8)
     LDQ     s3, s1, (APP_FILE + 16)
     li      t0, (40 + 8)
@@ -376,7 +391,10 @@ LOCAL_FUNCTION app_start
     li      a1, app_m_short_len
     call    app_line_text
     j       98f
-2:  ld      a0, (24 + 40)(s2)               # BeaconState.slot
+2:  li      t0, 24                          # BeaconState.slot, after the ByteList header of anchor.ssz's state
+    mul     t0, s7, t0
+    add     t0, s2, t0
+    ld      a0, (24 + 40)(t0)
     ADDQ    a1, s1, APP_CONFIG
     call    app_fork
     STQ     a0, s1, APP_FORK
@@ -392,6 +410,10 @@ LOCAL_FUNCTION app_start
     li      t0, (1 << 26)
     add     s5, s5, t0
     li      s6, 0
+    li      s8, APP_BLOCK_BYTES             # the block: of genesis, or of anchor.ssz
+    beqz    s7, 3f
+    li      t0, (1 << 20)
+    add     s8, s3, t0
 3:  li      a0, APP_STATE
     mv      a1, s4
     call    app_alloc
@@ -401,7 +423,7 @@ LOCAL_FUNCTION app_start
     call    app_alloc
     beqz    a0, 97f
     li      a0, APP_BLOCK
-    li      a1, APP_BLOCK_BYTES
+    mv      a1, s8
     call    app_alloc
     beqz    a0, 97f
     mv      a0, s2
@@ -410,8 +432,11 @@ LOCAL_FUNCTION app_start
     LDQ     a3, s1, APP_STATE
     LDQ     a4, s1, APP_BLOCK
     LDQ     t6, s1, APP_FORK
+    bnez    s7, 31f
     FORK_CALL node_anchor
-    beqz    a0, 4f
+    j       32f
+31: FORK_CALL node_anchor_block
+32: beqz    a0, 4f
     li      t0, LANTERN_BUFFER_TOO_SMALL
     bne     a0, t0, 96f
     li      a0, APP_STATE                   # more room, a few times
@@ -422,13 +447,18 @@ LOCAL_FUNCTION app_start
     call    app_unmap
     slli    s4, s4, 1
     slli    s5, s5, 1
+    slli    s8, s8, 1
     addi    s6, s6, 1
     li      t0, APP_TRIES
     bltu    s6, t0, 3b
     li      a0, LANTERN_BUFFER_TOO_SMALL
-96: mv      a2, a0                          # genesis.ssz: status <n>
+96: mv      a2, a0                          # genesis.ssz or anchor.ssz: status <n>
     ADDRESS a0, app_genesis_name
     li      a1, app_genesis_name_len
+    beqz    s7, 961f
+    ADDRESS a0, app_anchor_name
+    li      a1, app_anchor_name_len
+961:
     call    app_fail_status
     j       99f
 4:  call    app_file_free
@@ -504,6 +534,9 @@ LOCAL_FUNCTION app_start
     LDQ     t0, s1, (APP_OPTIONS + AppOptions_target_peers)
     STQ     t0, s1, (APP_NODE_ROOM + NodeRoom_peers)
     call    app_db_start                    # the history's files
+    beqz    s7, 13f
+    call    app_db_history                  # from anchor.ssz: the segments there
+13:
     ADDQ    a0, s1, APP_NODE_ROOM
     addi    a1, sp, L
     CALL_GLOBAL lantern_node_size
@@ -519,6 +552,18 @@ LOCAL_FUNCTION app_start
     LDQ     a4, s1, APP_NODE
     CALL_GLOBAL lantern_node_init
     bnez    a0, 94f
+    beqz    s7, 14f                         # from anchor.ssz: the history's segments to the node
+    call    app_db_scan_all
+    bnez    a0, 99f
+    call    app_line_start                  # restart at slot <n>
+    ADDRESS a0, app_m_restart
+    li      a1, app_m_restart_len
+    call    app_line_text
+    LDQ     a0, s1, (APP_ANCHOR + 32)
+    call    app_line_u64
+    li      a0, 1
+    call    app_line_end
+14:
     ADDQ    a0, s1, APP_SEEN_ROOM           # the Seen
     ADDRESS a1, app_seen_room
     li      a2, 32
@@ -1023,6 +1068,10 @@ LOCAL_FUNCTION app_db_start
     li      t2, APP_DB_MAP_COUNT
     bltu    t1, t2, 1b
     sd      zero, AppDb_next_map(s10)
+    li      t0, -1
+    sd      t0, AppDb_anchor_slot(s10)
+    LDQ     t0, s1, (APP_ANCHOR + 32)       # the Db from the anchor's slot
+    STQ     t0, s1, (APP_ANCHOR + NodeAnchor_history_slot)
     LDQ     s3, s1, (APP_OPTIONS + AppOptions_data_dir + 8)
     beqz    s3, 9f
     LDQ     t0, s1, APP_FLAGS
@@ -1226,8 +1275,9 @@ LOCAL_FUNCTION app_db_append
 END_FUNCTION app_db_append
 
 /*
- * L0: a0 = the AppDb's view entry with a ByteList of the bytes of the record at offset a0 of the
- * mapped segment a1, or 0 when the record is not all inside the map. Uses t0-t5, a7.
+ * L0: a0 = the AppDb's view entry of the record at offset a0 of the mapped segment a1: its
+ * ByteList in place, at byte DbRecord_bytes of the record; 0 when the record is not all inside
+ * the map, or its ByteList header is not of its bytes. Uses t0-t5, a7.
  */
 LOCAL_FUNCTION app_db_record
     UNWIND_END_PROLOGUE
@@ -1237,19 +1287,19 @@ LOCAL_FUNCTION app_db_record
     addi    t2, a0, DbRecord__mem
     bltu    t2, a0, 8f
     bgtu    t2, t1, 8f
-    add     t3, t0, a0                      # its length, inside
-    ld      t3, 0(t3)
+    add     t0, t0, a0                      # the record, its bytes inside
+    ld      t3, DbRecord_length(t0)
     sub     t1, t1, t2
     bgtu    t3, t1, 8f
-    ADDQ    t4, s1, APP_DB + AppDb_view     # the entry: id, the header's address, size; the header after it
-    addi    t5, t4, 24
-    sd      t5, 8(t4)
-    add     t2, t0, t2
-    sub     t2, t2, t5
-    li      t1, 24
-    sd      t1, 0(t5)
-    sd      t2, 8(t5)
-    sd      t3, 16(t5)
+    addi    t3, t3, 24                      # its ByteList: size 24 + length, offset 24
+    ld      t4, DbRecord_bytes(t0)
+    bne     t3, t4, 8f
+    ld      t4, (DbRecord_bytes + 8)(t0)
+    li      t5, 24
+    bne     t4, t5, 8f
+    ADDQ    t4, s1, APP_DB + AppDb_view
+    addi    t0, t0, DbRecord_bytes
+    sd      t0, 8(t4)
     mv      a0, t4
     ret
 8:  li      a0, 0
@@ -1331,6 +1381,396 @@ LOCAL_FUNCTION app_work_data
 9:  LEAVE 0
 END_FUNCTION app_work_data
 
+/* L1: <dir>/<the a1 bytes of the name at a0> of the data directory, as a ByteList at a2 of APP_PATH_MAX bytes of room. s2 the name, s3 its length, s4 the ByteList. */
+LOCAL_FUNCTION app_db_file
+    ENTER 0
+    mv      s2, a0
+    mv      s3, a1
+    mv      s4, a2
+    li      t0, 24 + APP_PATH_MAX
+    sd      t0, 0(s4)
+    li      t0, 24
+    sd      t0, 8(s4)
+    LDQ     a2, s1, (APP_OPTIONS + AppOptions_data_dir + 8)
+    add     t0, a2, s3
+    addi    t0, t0, 1
+    li      t1, APP_PATH_MAX
+    bgtu    t0, t1, 8f
+    sd      t0, 16(s4)
+    LDQ     t0, s1, APP_ARGS
+    LDQ     t1, s1, (APP_OPTIONS + AppOptions_data_dir)
+    add     a1, t0, t1
+    addi    a0, s4, 24
+    call    lantern_copy
+    LDQ     t0, s1, (APP_OPTIONS + AppOptions_data_dir + 8)
+    addi    a0, s4, 24
+    add     a0, a0, t0
+    li      t0, 0x2f                        # /
+    sb      t0, 0(a0)
+    addi    a0, a0, 1
+    mv      a1, s2
+    mv      a2, s3
+    call    lantern_copy
+    LEAVE 0
+8:  li      t0, APP_PATH_MAX + 1            # a count past the room: the shell gives its error
+    sd      t0, 16(s4)
+    LEAVE 0
+END_FUNCTION app_db_file
+
+/* L1: a0 = 1 when the block segment a0's file is there (it opens to read), else 0. s10 the AppDb. Locals: L the mode. */
+LOCAL_FUNCTION app_db_exists
+    ENTER 16
+    ADDQ    s10, s1, APP_DB
+    mv      a1, a0
+    li      a0, 0
+    call    app_db_path
+    sd      zero, L(sp)
+    ADDQ    a0, s1, APP_PATH
+    addi    a1, sp, L
+    addi    a2, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_open
+    ld      t0, AppDb_op(s10)
+    bnez    t0, 8f
+    addi    a0, s10, AppDb_op + 8
+    CALL_GLOBAL lantern_shell_close
+    li      a0, 1
+    LEAVE 16
+8:  li      a0, 0
+    LEAVE 16
+END_FUNCTION app_db_exists
+
+/*
+ * L1: for a start from anchor.ssz: the first block segment file there, from 0 to the anchor's
+ * segment, gives the anchor's history_slot; the Db has room for the slots from it to the last
+ * block segment file there, from the anchor's on, and a segment more, and a power of two of roots
+ * above twice them. s2 a segment, s3 the anchor's segment, s4 the first, s5 the last.
+ */
+LOCAL_FUNCTION app_db_history
+    ENTER 0
+    LDQ     s3, s1, (APP_ANCHOR + 32)
+    srli    s3, s3, DB_SEGMENT_SHIFT
+    mv      s4, s3
+    li      s2, 0
+1:  bgtu    s2, s3, 2f
+    mv      a0, s2
+    call    app_db_exists
+    bnez    a0, 11f
+    addi    s2, s2, 1
+    j       1b
+11: mv      s4, s2
+2:  mv      s5, s3
+    addi    s2, s3, 1
+3:  mv      a0, s2
+    call    app_db_exists
+    beqz    a0, 4f
+    mv      s5, s2
+    addi    s2, s2, 1
+    j       3b
+4:  slli    t0, s4, DB_SEGMENT_SHIFT
+    STQ     t0, s1, (APP_ANCHOR + NodeAnchor_history_slot)
+    sub     t0, s5, s4
+    addi    t0, t0, 2
+    slli    t0, t0, DB_SEGMENT_SHIFT
+    STQ     t0, s1, (APP_NODE_ROOM + NodeRoom_db_slots)
+    slli    t0, t0, 1                       # a power of two above twice the slots
+    li      t1, 1
+5:  bgtu    t1, t0, 6f
+    slli    t1, t1, 1
+    j       5b
+6:  STQ     t1, s1, (APP_NODE_ROOM + NodeRoom_db_roots)
+    LEAVE 0
+END_FUNCTION app_db_history
+
+/*
+ * L1: for a start from anchor.ssz: each segment file there, the blocks' then the sidecars', from
+ * the segment of history_slot to the end of the Db's room, goes to lantern_node_db_scan; a file
+ * with bytes after its last whole record is cut there: a0 = 0, or 2 after a line on the standard
+ * error. s2 the kind, s3 the segment, s4 the end, s5 a status, s10 the AppDb. Locals: L a
+ * ByteList header, L+24 valid, L+32 the segment, L+40 the kind, L+48 the file's size or a mode,
+ * L+56 a file.
+ */
+LOCAL_FUNCTION app_db_scan_all
+    ENTER 64
+    ADDQ    s10, s1, APP_DB
+    LDQ     t0, s1, (APP_ANCHOR + NodeAnchor_history_slot)
+    srli    t0, t0, DB_SEGMENT_SHIFT
+    LDQ     s4, s1, (APP_NODE_ROOM + NodeRoom_db_slots)
+    srli    s4, s4, DB_SEGMENT_SHIFT
+    add     s4, s4, t0
+    li      s2, 0
+1:  LDQ     s3, s1, (APP_ANCHOR + NodeAnchor_history_slot)
+    srli    s3, s3, DB_SEGMENT_SHIFT
+2:  bgeu    s3, s4, 7f
+    mv      a0, s2
+    mv      a1, s3
+    call    app_db_path
+    ADDQ    a0, s1, APP_PATH
+    addi    a1, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_map_file
+    ld      t0, AppDb_op(s10)
+    bnez    t0, 6f                          # not there
+    ld      t0, (AppDb_op + 8)(s10)
+    beqz    t0, 6f                          # empty
+    addi    t1, sp, L                       # its bytes: a ByteList of the map
+    sub     t0, t0, t1
+    li      t2, 24
+    sd      t2, L(sp)
+    sd      t0, (L + 8)(sp)
+    ld      t0, (AppDb_op + 16)(s10)
+    sd      t0, (L + 16)(sp)
+    sd      t0, (L + 48)(sp)
+    sd      s3, (L + 32)(sp)
+    sd      s2, (L + 40)(sp)
+    LDQ     a0, s1, APP_NODE
+    addi    a1, sp, L + 32
+    addi    a2, sp, L + 40
+    addi    a3, sp, L
+    addi    a4, sp, L + 24
+    CALL_GLOBAL lantern_node_db_scan
+    mv      s5, a0
+    addi    a0, s10, AppDb_op + 8
+    addi    a1, s10, AppDb_op + 24
+    CALL_GLOBAL lantern_shell_unmap_file
+    bnez    s5, 8f
+    ld      t0, (L + 24)(sp)                # bytes after the last whole record: the file is cut there
+    ld      t1, (L + 48)(sp)
+    bgeu    t0, t1, 6f
+    li      t0, 1
+    sd      t0, (L + 48)(sp)
+    ADDQ    a0, s1, APP_PATH
+    addi    a1, sp, L + 48
+    addi    a2, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_open
+    ld      t0, AppDb_op(s10)
+    bnez    t0, 6f
+    ld      t0, (AppDb_op + 8)(s10)
+    sd      t0, (L + 56)(sp)
+    addi    a0, sp, L + 56
+    addi    a1, sp, L + 24
+    addi    a2, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_truncate
+    addi    a0, sp, L + 56
+    CALL_GLOBAL lantern_shell_close
+6:  addi    s3, s3, 1
+    j       2b
+7:  addi    s2, s2, 1
+    li      t0, 2
+    bltu    s2, t0, 1b
+    li      a0, 0
+    LEAVE 64
+8:  ADDQ    t0, s1, APP_PATH                # <path>: status <n>
+    addi    a0, t0, 24
+    ld      a1, 16(t0)
+    mv      a2, s5
+    call    app_fail_status
+    LEAVE 64
+END_FUNCTION app_db_scan_all
+
+/*
+ * L1: NODE_ACT_DB_STATE a0, with no anchor written in this run or one DB_SEGMENT_SLOTS slots
+ * back: the open segment files are synced; <dir>/anchor.tmp gets two ByteLists, the second at the
+ * first multiple of 8 after the first: the state's SSZ bytes, then those of its block's message;
+ * it is synced and renamed over <dir>/anchor.ssz, and the directory is synced. A failure gives a
+ * line on the standard error. s2 the action, s3 the state's entry, s4 the block's entry, s5 the
+ * state's ByteList, s6 its size, s10 the AppDb. Locals: L a ByteList header, L+24 a u64, L+32
+ * zero bytes, L+40 a size, L+48 the fork, L+56 the file, L+64 the message's ByteList header.
+ */
+LOCAL_FUNCTION app_db_state
+    ENTER 96
+    mv      s2, a0
+    ADDQ    s10, s1, APP_DB
+    li      s5, 0
+    ld      t0, AppDb_anchor_slot(s10)
+    li      t1, -1
+    beq     t0, t1, 1f
+    li      t1, DB_SEGMENT_SLOTS
+    add     t0, t0, t1
+    ld      t1, 32(s2)
+    bltu    t1, t0, 99f
+1:  ld      a0, 16(s2)
+    call    app_buf_find
+    beqz    a0, 99f
+    mv      s3, a0
+    ld      a0, 24(s2)
+    call    app_buf_find
+    beqz    a0, 99f
+    mv      s4, a0
+    ld      t0, AppDb_segment(s10)          # the open segment files are synced
+    li      t1, -1
+    beq     t0, t1, 2f
+    addi    a0, s10, AppDb_file
+    addi    a1, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_sync
+2:  ld      t0, (AppDb_segment + 8)(s10)
+    li      t1, -1
+    beq     t0, t1, 3f
+    addi    a0, s10, AppDb_file + 8
+    addi    a1, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_sync
+3:  ld      a0, 32(s2)                      # the state's SSZ bytes: their size, then the bytes
+    ADDQ    a1, s1, APP_CONFIG
+    call    app_fork
+    sd      a0, (L + 48)(sp)
+    li      t0, 24
+    sd      t0, L(sp)
+    sd      zero, (L + 40)(sp)
+    mv      t6, a0
+    ld      a0, 8(s3)
+    SCRATCH a1
+    addi    a2, sp, L
+    addi    a3, sp, L + 40
+    FORK_CALL node_state_bytes
+    ld      s6, (L + 40)(sp)
+    li      t0, 24
+    bleu    s6, t0, 99f
+    mv      a0, s6
+    call    app_map
+    beqz    a0, 99f
+    mv      s5, a0
+    sd      s6, 0(s5)
+    ld      t6, (L + 48)(sp)
+    ld      a0, 8(s3)
+    SCRATCH a1
+    mv      a2, s5
+    addi    a3, sp, L + 40
+    FORK_CALL node_state_bytes
+    bnez    a0, 98f
+    ADDRESS a0, app_anchor_tmp_name         # anchor.tmp, cut to 0
+    li      a1, app_anchor_tmp_name_len
+    ADDQ    a2, s1, APP_PATH
+    call    app_db_file
+    li      t0, 1
+    sd      t0, (L + 24)(sp)
+    ADDQ    a0, s1, APP_PATH
+    addi    a1, sp, L + 24
+    addi    a2, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_open
+    ld      t0, AppDb_op(s10)
+    bnez    t0, 90f
+    ld      t0, (AppDb_op + 8)(s10)
+    sd      t0, (L + 56)(sp)
+    sd      zero, (L + 24)(sp)
+    addi    a0, sp, L + 56
+    addi    a1, sp, L + 24
+    addi    a2, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_truncate
+    ld      t0, AppDb_op(s10)
+    bnez    t0, 89f
+    addi    t1, sp, L                       # the state's ByteList, its header and bytes
+    sub     t0, s5, t1
+    li      t2, 24
+    sd      t2, L(sp)
+    sd      t0, (L + 8)(sp)
+    sd      s6, (L + 16)(sp)
+    addi    a0, sp, L + 56
+    addi    a1, sp, L
+    addi    a2, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_append
+    ld      t0, AppDb_op(s10)
+    bnez    t0, 89f
+    neg     t0, s6                          # zero bytes to a multiple of 8
+    andi    t0, t0, 7
+    beqz    t0, 4f
+    sd      zero, (L + 32)(sp)
+    li      t1, 24
+    sd      t1, L(sp)
+    li      t1, 32
+    sd      t1, (L + 8)(sp)
+    sd      t0, (L + 16)(sp)
+    addi    a0, sp, L + 56
+    addi    a1, sp, L
+    addi    a2, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_append
+    ld      t0, AppDb_op(s10)
+    bnez    t0, 89f
+4:  ld      t2, 8(s4)                       # the message's ByteList: its header, then its bytes, from 100 of the SignedBeaconBlock
+    ld      t0, 16(t2)
+    addi    t0, t0, -100
+    sd      t0, (L + 80)(sp)
+    addi    t0, t0, 24
+    sd      t0, (L + 64)(sp)
+    li      t1, 24
+    sd      t1, (L + 72)(sp)
+    sd      t1, L(sp)
+    li      t0, 64
+    sd      t0, (L + 8)(sp)
+    sd      t1, (L + 16)(sp)
+    addi    a0, sp, L + 56
+    addi    a1, sp, L
+    addi    a2, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_append
+    ld      t0, AppDb_op(s10)
+    bnez    t0, 89f
+    ld      t2, 8(s4)
+    ld      t0, 8(t2)
+    add     t0, t2, t0
+    addi    t0, t0, 100
+    addi    t1, sp, L
+    sub     t0, t0, t1
+    li      t1, 24
+    sd      t1, L(sp)
+    sd      t0, (L + 8)(sp)
+    ld      t0, 16(t2)
+    addi    t0, t0, -100
+    sd      t0, (L + 16)(sp)
+    addi    a0, sp, L + 56
+    addi    a1, sp, L
+    addi    a2, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_append
+    ld      t0, AppDb_op(s10)
+    bnez    t0, 89f
+    addi    a0, sp, L + 56
+    addi    a1, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_sync
+    ld      t0, AppDb_op(s10)
+    bnez    t0, 89f
+    addi    a0, sp, L + 56
+    CALL_GLOBAL lantern_shell_close
+    ADDRESS a0, app_anchor_name             # over anchor.ssz, and the directory synced
+    li      a1, app_anchor_name_len
+    ADDQ    a2, s1, APP_PATH2
+    call    app_db_file
+    ADDQ    a0, s1, APP_PATH
+    ADDQ    a1, s1, APP_PATH2
+    addi    a2, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_rename
+    ld      t0, AppDb_op(s10)
+    bnez    t0, 90f
+    ADDRESS a0, app_anchor_name
+    li      a1, 0
+    ADDQ    a2, s1, APP_PATH
+    call    app_db_file
+    ADDQ    a0, s1, APP_PATH
+    addi    a1, s10, AppDb_op
+    CALL_GLOBAL lantern_shell_sync_dir
+    ld      t0, 32(s2)
+    sd      t0, AppDb_anchor_slot(s10)
+    j       98f
+89: addi    a0, sp, L + 56                  # the file closes
+    CALL_GLOBAL lantern_shell_close
+90: ld      t0, AppDb_op(s10)               # cannot write <path>: error <n>
+    sd      t0, (L + 24)(sp)
+    call    app_line_start
+    ADDRESS a0, app_m_write
+    li      a1, app_m_write_len
+    call    app_line_text
+    call    app_line_path
+    ADDRESS a0, app_m_error
+    li      a1, app_m_error_len
+    call    app_line_text
+    ld      a0, (L + 24)(sp)
+    call    app_line_u64
+    li      a0, 2
+    call    app_line_end
+98: beqz    s5, 99f                         # the bytes' memory goes back
+    sd      s5, (L + 24)(sp)
+    sd      s6, (L + 40)(sp)
+    addi    a0, sp, L + 24
+    addi    a1, sp, L + 40
+    CALL_GLOBAL lantern_shell_unmap
+99: LEAVE 96
+END_FUNCTION app_db_state
+
 /* L1: a0 = the table entry of the BufferId a0, 0 for id 0, or 2^64 - 1 when no entry has it. */
 LOCAL_FUNCTION app_work_entry
     FRAME 0
@@ -1355,9 +1795,14 @@ LOCAL_FUNCTION app_actions
     ld      s4, 0(s2)
     ld      t0, 8(s2)
     li      t1, NODE_ACT_DB_APPEND
-    bne     t0, t1, 10f
+    bne     t0, t1, 11f
     mv      a0, s2                          # DB_APPEND: the record in its segment file
     call    app_db_append
+    j       8f
+11: li      t1, NODE_ACT_DB_STATE
+    bne     t0, t1, 10f
+    mv      a0, s2                          # DB_STATE: anchor.ssz
+    call    app_db_state
     j       8f
 10: li      t1, NODE_ACT_BYTES_PUT
     bne     t0, t1, 2f
@@ -3048,10 +3493,46 @@ LOCAL_FUNCTION app_view_fill
     call    lantern_copy
     ADDQ    s5, s1, APP_ANCHOR_HEADER       # the header: the anchor's, or the block's
     LDQ     a0, s3, NodeBlock_data_id
-    beqz    a0, 3f
+    beqz    a0, 31f
     call    app_buf_find
     beqz    a0, 3f
-    ld      s4, 8(a0)
+    j       32f
+31: LDQ     a0, s1, APP_NODE                # no bytes: the block's record in the Db, when it holds one
+    LDQ     t0, a0, Node_flags
+    andi    t0, t0, NODE_FLAG_DB
+    beqz    t0, 3f
+    LDQ     t0, a0, Node_db
+    add     a0, a0, t0
+    mv      a1, s3
+    ADDQ    a2, s1, APP_HEADER
+    call    lantern_db_find_root
+    LDQ     t2, s1, APP_HEADER
+    LDQ     t0, s1, APP_NODE
+    LDQ     t1, t0, Node_db
+    add     t0, t0, t1
+    ld      t1, Db_end_slot(t0)
+    bgeu    t2, t1, 3f
+    ld      t1, Db_first_slot(t0)
+    bltu    t2, t1, 3f
+    sub     t1, t2, t1
+    li      t3, DbSlot__mem
+    mul     t1, t1, t3
+    ld      t3, Db_slots(t0)
+    add     t1, t1, t3
+    add     t0, t0, t1
+    ld      a0, DbSlot_block(t0)
+    beqz    a0, 3f
+    addi    a0, a0, -1
+    srli    t2, t2, DB_SEGMENT_SHIFT
+    slli    t2, t2, 48
+    or      a0, a0, t2
+    li      t0, 1
+    slli    t0, t0, 63
+    or      a0, a0, t0
+    call    app_work_data
+    li      t0, -1
+    beq     a0, t0, 3f
+32: ld      s4, 8(a0)
     LDQ     a0, s3, NodeBlock_slot
     ADDQ    a1, s1, APP_CONFIG
     call    app_fork

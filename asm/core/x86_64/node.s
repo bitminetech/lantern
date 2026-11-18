@@ -264,7 +264,9 @@ FUNCTION lantern_node_init
     COPY32  %rsi, %r12
     movq    $1, NodeCheckpoint_state_id(%rdi)
     movq    $1, (Node_checkpoints + 8)(%r15)
-    mov     %r13, %rax                      # the Db: from the anchor's segment; its archive after the anchor
+    mov     NodeAnchor_history_slot(%r12), %rax    # the Db: from the segment of history_slot, or of the anchor; its archive after the anchor
+    cmp     %r13, %rax
+    cmova   %r13, %rax
     and     $-DB_SEGMENT_SLOTS, %rax
     mov     %rax, L(%rsp)
     lea     NodeRoom_db_slots(%rbx), %rdi
@@ -1431,6 +1433,8 @@ LOCAL_FUNCTION node_db_append
     movdqu  %xmm0, 80(%rax)
     movdqu  48(%r8), %xmm0
     movdqu  %xmm0, 96(%rax)
+    movdqu  64(%r8), %xmm0
+    movdqu  %xmm0, 112(%rax)
     ret
 END_FUNCTION node_db_append
 
@@ -1443,7 +1447,7 @@ END_FUNCTION node_db_append
  * index, S10 the slot. Locals: L a DbRecord, L+64 an offset, L+72 a sidecar entry.
  */
 LOCAL_FUNCTION node_archive
-    ENTER 80
+    ENTER 96
     testq   $NODE_FLAG_DB, Node_flags(%rbx)
     jz      99f
     mov     %rdi, %r12
@@ -1480,14 +1484,25 @@ LOCAL_FUNCTION node_archive
     mov     %rax, S10(%rsp)
     cmpq    $0, NodeBlock_data_id(%rdx)
     je      30f                             # no bytes: the anchor
-    mov     NodeBlock_length(%rdx), %rax    # the block's record
-    mov     %rax, L(%rsp)
-    movq    $DB_BLOCK, (L + 8)(%rsp)
+    mov     Node_db(%rbx), %rdi             # a block the Db holds already, as after a restart: no record
+    add     %rbx, %rdi
+    mov     %rdx, %rsi
+    lea     (L + 80)(%rsp), %rdx
+    call    lantern_db_find_root
+    cmpq    $-1, (L + 80)(%rsp)
+    jne     40f
+    mov     S8(%rsp), %rdx
+    movq    $DB_BLOCK, L(%rsp)              # the block's record
     mov     S10(%rsp), %rax
-    mov     %rax, (L + 16)(%rsp)
-    movq    $0, (L + 24)(%rsp)
-    lea     (L + 32)(%rsp), %rdi
+    mov     %rax, (L + 8)(%rsp)
+    movq    $0, (L + 16)(%rsp)
+    lea     (L + 24)(%rsp), %rdi
     COPY32  %rdi, %rdx
+    mov     NodeBlock_length(%rdx), %rax
+    mov     %rax, (L + 72)(%rsp)
+    add     $24, %rax
+    mov     %rax, (L + 56)(%rsp)
+    movq    $24, (L + DbRecord_bytes + 8)(%rsp)
     mov     S10(%rsp), %rax                 # its segment, and its offset at the segment's end
     shr     $DB_SEGMENT_SHIFT, %rax
     cmp     Node_db_block_segment(%rbx), %rax
@@ -1495,11 +1510,11 @@ LOCAL_FUNCTION node_archive
     mov     %rax, Node_db_block_segment(%rbx)
     movq    $0, Node_db_block_end(%rbx)
 3:  mov     Node_db_block_end(%rbx), %rax
-    mov     %rax, (L + 64)(%rsp)
+    mov     %rax, (L + 80)(%rsp)
     mov     Node_db(%rbx), %rdi
     add     %rbx, %rdi
     lea     L(%rsp), %rsi
-    lea     (L + 64)(%rsp), %rdx
+    lea     (L + 80)(%rsp), %rdx
     call    lantern_db_add
     test    %rax, %rax
     jnz     99f
@@ -1507,10 +1522,10 @@ LOCAL_FUNCTION node_archive
     mov     S8(%rsp), %rax
     mov     NodeBlock_data_id(%rax), %rsi
     mov     Node_db_block_segment(%rbx), %rdx
-    mov     (L + 64)(%rsp), %rcx
+    mov     (L + 80)(%rsp), %rcx
     lea     L(%rsp), %r8
     call    node_db_append
-    mov     L(%rsp), %rax
+    mov     (L + 72)(%rsp), %rax
     add     $(DbRecord__mem + 7), %rax
     and     $-8, %rax
     add     %rax, Node_db_block_end(%rbx)
@@ -1522,7 +1537,7 @@ LOCAL_FUNCTION node_archive
     call    node_blob_held
     test    %rax, %rax
     jz      19f
-    mov     %rax, (L + 72)(%rsp)
+    mov     %rax, (L + 88)(%rsp)
     mov     S10(%rsp), %rdi                 # a column sidecar from fulu on, else a blob sidecar
     lea     Node_config(%rbx), %rsi
     call    node_fork
@@ -1530,14 +1545,17 @@ LOCAL_FUNCTION node_archive
     mov     $DB_COLUMN_SIDECAR, %edx
     cmp     $FORK_FULU, %rax
     cmovae  %rdx, %rcx
-    mov     %rcx, (L + 8)(%rsp)
-    mov     (L + 72)(%rsp), %rax
-    mov     NodeBlob_length(%rax), %rax
-    mov     %rax, L(%rsp)
+    mov     %rcx, L(%rsp)
     mov     S10(%rsp), %rax
-    mov     %rax, (L + 16)(%rsp)
+    mov     %rax, (L + 8)(%rsp)
     mov     S9(%rsp), %rax
-    mov     %rax, (L + 24)(%rsp)
+    mov     %rax, (L + 16)(%rsp)
+    mov     (L + 88)(%rsp), %rax
+    mov     NodeBlob_length(%rax), %rax
+    mov     %rax, (L + 72)(%rsp)
+    add     $24, %rax
+    mov     %rax, (L + 56)(%rsp)
+    movq    $24, (L + DbRecord_bytes + 8)(%rsp)
     mov     S10(%rsp), %rax
     shr     $DB_SEGMENT_SHIFT, %rax
     cmp     Node_db_sidecar_segment(%rbx), %rax
@@ -1545,36 +1563,36 @@ LOCAL_FUNCTION node_archive
     mov     %rax, Node_db_sidecar_segment(%rbx)
     movq    $0, Node_db_sidecar_end(%rbx)
 5:  mov     Node_db_sidecar_end(%rbx), %rax
-    mov     %rax, (L + 64)(%rsp)
+    mov     %rax, (L + 80)(%rsp)
     mov     Node_db(%rbx), %rdi
     add     %rbx, %rdi
     lea     L(%rsp), %rsi
-    lea     (L + 64)(%rsp), %rdx
+    lea     (L + 80)(%rsp), %rdx
     call    lantern_db_add
     test    %rax, %rax
     jnz     19f                             # refused: the entry stays for the prune
     mov     $1, %edi
-    mov     (L + 72)(%rsp), %rax
+    mov     (L + 88)(%rsp), %rax
     mov     NodeBlob_data_id(%rax), %rsi
     mov     Node_db_sidecar_segment(%rbx), %rdx
-    mov     (L + 64)(%rsp), %rcx
+    mov     (L + 80)(%rsp), %rcx
     lea     L(%rsp), %r8
     call    node_db_append
-    mov     L(%rsp), %rax
+    mov     (L + 72)(%rsp), %rax
     add     $(DbRecord__mem + 7), %rax
     and     $-8, %rax
     add     %rax, Node_db_sidecar_end(%rbx)
-    mov     (L + 72)(%rsp), %rax            # its bytes and entry go, unless a stream sends them
+    mov     (L + 88)(%rsp), %rax            # its bytes and entry go, unless a stream sends them
     mov     NodeBlob_data_id(%rax), %rdi
     call    node_serving
     test    %rax, %rax
     jnz     19f
     mov     $NODE_ACT_BYTES_FREE, %edi
-    mov     (L + 72)(%rsp), %rax
+    mov     (L + 88)(%rsp), %rax
     mov     NodeBlob_data_id(%rax), %rsi
     xor     %edx, %edx
     call    node_ids
-    mov     (L + 72)(%rsp), %rdx
+    mov     (L + 88)(%rsp), %rdx
     mov     $-1, %rax
     mov     %rax, (%rdx)
     mov     %rax, 8(%rdx)
@@ -1585,7 +1603,24 @@ LOCAL_FUNCTION node_archive
     movq    $NODE_BLOB_FREE, NodeBlob_status(%rdx)
 19: incq    S9(%rsp)
     jmp     4b
-20: mov     S8(%rsp), %rax                  # the block's bytes go, unless a stream sends them
+20: mov     S8(%rsp), %rdx                  # the finalized block: its state and bytes to the shell, for a restart
+    cmp     %r12, %rdx
+    jne     21f
+    mov     8(%r15), %rax
+    add     %r15, %rax
+    mov     16(%r15), %rcx
+    add     %rcx, %rax
+    add     $NODE_ACT_DB_STATE_SIZE, %rcx
+    mov     %rcx, 16(%r15)
+    movq    $NODE_ACT_DB_STATE_SIZE, (%rax)
+    movq    $NODE_ACT_DB_STATE, 8(%rax)
+    mov     NodeBlock_state_id(%rdx), %rcx
+    mov     %rcx, 16(%rax)
+    mov     NodeBlock_data_id(%rdx), %rcx
+    mov     %rcx, 24(%rax)
+    mov     S10(%rsp), %rcx
+    mov     %rcx, 32(%rax)
+21: mov     S8(%rsp), %rax                  # the block's bytes go, unless a stream sends them
     mov     NodeBlock_data_id(%rax), %rdi
     call    node_serving
     test    %rax, %rax
@@ -1615,8 +1650,91 @@ LOCAL_FUNCTION node_archive
     inc     %rax
     mov     %rax, Node_db_next_slot(%rbx)
     jmp     2b
-99: LEAVE 80
+40: movq    $0, S9(%rsp)                    # in the Db: the sidecars the node holds of it go
+41: cmpq    $DB_SIDECAR_INDICES, S9(%rsp)
+    jae     20b
+    mov     S8(%rsp), %rdi
+    mov     S9(%rsp), %rsi
+    incq    S9(%rsp)
+    call    node_blob_held
+    test    %rax, %rax
+    jz      41b
+    mov     %rax, (L + 88)(%rsp)
+    mov     NodeBlob_data_id(%rax), %rdi
+    call    node_serving
+    test    %rax, %rax
+    jnz     41b
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    mov     (L + 88)(%rsp), %rax
+    mov     NodeBlob_data_id(%rax), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    mov     (L + 88)(%rsp), %rdx
+    mov     $-1, %rax
+    mov     %rax, (%rdx)
+    mov     %rax, 8(%rdx)
+    mov     %rax, 16(%rdx)
+    mov     %rax, 24(%rdx)
+    mov     %rax, NodeBlob_slot(%rdx)
+    movq    $0, NodeBlob_data_id(%rdx)
+    movq    $NODE_BLOB_FREE, NodeBlob_status(%rdx)
+    jmp     41b
+99: LEAVE 96
 END_FUNCTION node_archive
+
+/*
+ * (node, segment, sidecars, bytes, valid): lantern_db_scan of a segment's bytes into the node's
+ * Db; then the segment is the one of its kind to append to, at valid, unless the current one is
+ * higher; db_next_slot is at least the Db's end_slot, and earliest_slot the Db's first block when
+ * that is lower. rbx node, rbp valid, r12 sidecars, r13 segment.
+ */
+FUNCTION lantern_node_db_scan
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     (%rsi), %r13
+    mov     (%rdx), %r12
+    mov     %r8, %rbp
+    mov     Node_db(%rbx), %rdi
+    add     %rbx, %rdi
+    call    lantern_db_scan
+    test    %rax, %rax
+    jnz     9f
+    mov     $Node_db_block_segment, %ecx
+    test    %r12, %r12
+    jz      1f
+    mov     $Node_db_sidecar_segment, %ecx
+1:  mov     (%rbx,%rcx), %rax
+    cmp     $-1, %rax
+    je      2f
+    cmp     %rax, %r13
+    jb      3f
+2:  mov     %r13, (%rbx,%rcx)
+    mov     (%rbp), %rax
+    mov     %rax, 8(%rbx,%rcx)
+3:  mov     Node_db(%rbx), %rsi
+    add     %rbx, %rsi
+    mov     Db_end_slot(%rsi), %rax
+    cmp     Node_db_next_slot(%rbx), %rax
+    jbe     4f
+    mov     %rax, Node_db_next_slot(%rbx)
+4:  mov     Db_first_slot(%rsi), %rcx       # the first block below earliest_slot
+    mov     Node_earliest_slot(%rbx), %rdx
+    mov     Db_end_slot(%rsi), %rax
+    cmp     %rax, %rdx
+    cmovae  %rax, %rdx
+    mov     Db_slots(%rsi), %rdi
+    add     %rsi, %rdi
+5:  cmp     %rdx, %rcx
+    jae     8f
+    cmpq    $0, DbSlot_block(%rdi)
+    jne     6f
+    add     $DbSlot__mem, %rdi
+    inc     %rcx
+    jmp     5b
+6:  mov     %rcx, Node_earliest_slot(%rbx)
+8:  xor     %eax, %eax
+9:  LEAVE 0
+END_FUNCTION lantern_node_db_scan
 
 /* A BYTES_PUT action of the ByteList rdi with a new id: rax = the id. r12 the ByteList, r13 the id. */
 LOCAL_FUNCTION node_put

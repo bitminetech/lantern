@@ -213,6 +213,12 @@ FUNCTION lantern_db_add
     shl     $32, %rax
     cmp     %rax, DbRecord_length(%rbp)
     ja      7f
+    mov     DbRecord_length(%rbp), %rax     # its ByteList header: size 24 + length, offset 24
+    add     $24, %rax
+    cmp     %rax, DbRecord_bytes(%rbp)
+    jne     7f
+    cmpq    $24, (DbRecord_bytes + 8)(%rbp)
+    jne     7f
     mov     DbRecord_slot(%rbp), %r13       # a slot from first_slot, in the room
     sub     Db_first_slot(%rbx), %r13
     jb      7f

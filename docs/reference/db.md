@@ -282,16 +282,18 @@ The header of a record.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0 | `length` | u64 | The SSZ bytes after the header |
-| 8 | `kind` | u64 | `DB_BLOCK` (1), `DB_BLOB_SIDECAR` (2) or `DB_COLUMN_SIDECAR` (3) |
-| 16 | `slot` | u64 | The slot of the block |
-| 24 | `index` | u64 | The sidecar's index or column, 0 for a block |
-| 32 | `root` | Root | The block's root |
-| 64 | | | Size |
+| 0 | `kind` | u64 | `DB_BLOCK` (1), `DB_BLOB_SIDECAR` (2) or `DB_COLUMN_SIDECAR` (3) |
+| 8 | `slot` | u64 | The slot of the block |
+| 16 | `index` | u64 | The sidecar's index or column, 0 for a block |
+| 24 | `root` | Root | The block's root |
+| 56 | `bytes` | 24 bytes | A ByteList header of the SSZ bytes after the record's header: `size` 24 + `length`, `offset` 24 |
+| 72 | `length` | u64 | The count of `bytes`: the SSZ bytes after the header |
+| 80 | | | Size |
 
 ### Rules
 
-- A record's size: 64 + `length`, rounded up to a multiple of 8.
+- A record's size: 80 + `length`, rounded up to a multiple of 8.
+- The ByteList at 56 is valid in place, so the record's bytes in a mapped segment need no copy: lantern_db_add refuses another `size` or `offset`.
 - `DB_RECORD_MAX`: 2^32 bytes of `length`.
 
 ## Results

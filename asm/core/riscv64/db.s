@@ -221,6 +221,12 @@ FUNCTION lantern_db_add
     li      t1, 1
     slli    t1, t1, 32
     bgtu    t0, t1, 7f
+    addi    t0, t0, 24                      # its ByteList header: size 24 + length, offset 24
+    ld      t1, DbRecord_bytes(s2)
+    bne     t0, t1, 7f
+    ld      t0, (DbRecord_bytes + 8)(s2)
+    li      t1, 24
+    bne     t0, t1, 7f
     ld      s4, DbRecord_slot(s2)           # a slot from first_slot, in the room
     ld      t0, Db_first_slot(s1)
     bltu    s4, t0, 7f

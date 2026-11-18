@@ -288,8 +288,12 @@ FUNCTION lantern_node_init
     li      t1, 1
     sd      t1, NodeCheckpoint_state_id(t0)
     sd      t1, (Node_checkpoints + 8)(s6)
-    li      t0, -DB_SEGMENT_SLOTS           # the Db: from the anchor's segment; its archive after the anchor
-    and     t0, s4, t0
+    ld      t1, NodeAnchor_history_slot(s3) # the Db: from the segment of history_slot, or of the anchor; its archive after the anchor
+    mv      t0, s4
+    bgeu    t1, t0, 601f
+    mv      t0, t1
+601: li     t1, -DB_SEGMENT_SLOTS
+    and     t0, t0, t1
     sd      t0, L(sp)
     addi    a0, s1, NodeRoom_db_slots
     addi    a1, sp, L
@@ -1475,7 +1479,7 @@ LOCAL_FUNCTION node_db_append
     add     t3, t2, t1
     sd      t0, 48(t3)
     addi    t1, t1, 8
-    li      t0, 64
+    li      t0, DbRecord__mem
     bltu    t1, t0, 1b
     ret
 END_FUNCTION node_db_append
@@ -1489,7 +1493,7 @@ END_FUNCTION node_db_append
  * index, s10 the slot. Locals: L a DbRecord, L+64 an offset, L+72 a sidecar entry.
  */
 LOCAL_FUNCTION node_archive
-    ENTER 80
+    ENTER 96
     ld      t0, Node_flags(s1)
     andi    t0, t0, NODE_FLAG_DB
     beqz    t0, 99f
@@ -1525,34 +1529,46 @@ LOCAL_FUNCTION node_archive
     ld      s10, NodeBlock_slot(s8)
     ld      t0, NodeBlock_data_id(s8)
     beqz    t0, 30f                         # no bytes: the anchor
-    ld      t0, NodeBlock_length(s8)        # the block's record
+    ld      a0, Node_db(s1)                 # a block the Db holds already, as after a restart: no record
+    add     a0, s1, a0
+    mv      a1, s8
+    addi    a2, sp, L + 80
+    call    lantern_db_find_root
+    ld      t0, (L + 80)(sp)
+    li      t1, -1
+    bne     t0, t1, 40f
+    li      t0, DB_BLOCK                    # the block's record
     sd      t0, L(sp)
-    li      t0, DB_BLOCK
-    sd      t0, (L + 8)(sp)
-    sd      s10, (L + 16)(sp)
-    sd      zero, (L + 24)(sp)
-    addi    t0, sp, L + 32
+    sd      s10, (L + 8)(sp)
+    sd      zero, (L + 16)(sp)
+    addi    t0, sp, L + 24
     COPY32  t0, s8
+    ld      t0, NodeBlock_length(s8)
+    sd      t0, (L + 72)(sp)
+    addi    t0, t0, 24
+    sd      t0, (L + 56)(sp)
+    li      t0, 24
+    sd      t0, (L + DbRecord_bytes + 8)(sp)
     srli    t0, s10, DB_SEGMENT_SHIFT       # its segment, and its offset at the segment's end
     ld      t1, Node_db_block_segment(s1)
     beq     t0, t1, 3f
     sd      t0, Node_db_block_segment(s1)
     sd      zero, Node_db_block_end(s1)
 3:  ld      t0, Node_db_block_end(s1)
-    sd      t0, (L + 64)(sp)
+    sd      t0, (L + 80)(sp)
     ld      a0, Node_db(s1)
     add     a0, s1, a0
     addi    a1, sp, L
-    addi    a2, sp, L + 64
+    addi    a2, sp, L + 80
     call    lantern_db_add
     bnez    a0, 99f
     li      a0, 0
     ld      a1, NodeBlock_data_id(s8)
     ld      a2, Node_db_block_segment(s1)
-    ld      a3, (L + 64)(sp)
+    ld      a3, (L + 80)(sp)
     addi    a4, sp, L
     call    node_db_append
-    ld      t0, L(sp)
+    ld      t0, (L + 72)(sp)
     addi    t0, t0, DbRecord__mem + 7
     andi    t0, t0, -8
     ld      t1, Node_db_block_end(s1)
@@ -1565,7 +1581,7 @@ LOCAL_FUNCTION node_archive
     mv      a1, s9
     call    node_blob_held
     beqz    a0, 19f
-    sd      a0, (L + 72)(sp)
+    sd      a0, (L + 88)(sp)
     mv      a0, s10                         # a column sidecar from fulu on, else a blob sidecar
     addi    a1, s1, Node_config
     call    node_fork
@@ -1573,48 +1589,52 @@ LOCAL_FUNCTION node_archive
     li      t0, FORK_FULU
     bltu    a0, t0, 41f
     li      t1, DB_COLUMN_SIDECAR
-41: sd      t1, (L + 8)(sp)
-    ld      t0, (L + 72)(sp)
+41: sd      t1, L(sp)
+    sd      s10, (L + 8)(sp)
+    sd      s9, (L + 16)(sp)
+    ld      t0, (L + 88)(sp)
     ld      t0, NodeBlob_length(t0)
-    sd      t0, L(sp)
-    sd      s10, (L + 16)(sp)
-    sd      s9, (L + 24)(sp)
+    sd      t0, (L + 72)(sp)
+    addi    t0, t0, 24
+    sd      t0, (L + 56)(sp)
+    li      t0, 24
+    sd      t0, (L + DbRecord_bytes + 8)(sp)
     srli    t0, s10, DB_SEGMENT_SHIFT
     ld      t1, Node_db_sidecar_segment(s1)
     beq     t0, t1, 5f
     sd      t0, Node_db_sidecar_segment(s1)
     sd      zero, Node_db_sidecar_end(s1)
 5:  ld      t0, Node_db_sidecar_end(s1)
-    sd      t0, (L + 64)(sp)
+    sd      t0, (L + 80)(sp)
     ld      a0, Node_db(s1)
     add     a0, s1, a0
     addi    a1, sp, L
-    addi    a2, sp, L + 64
+    addi    a2, sp, L + 80
     call    lantern_db_add
     bnez    a0, 19f                         # refused: the entry stays for the prune
     li      a0, 1
-    ld      t0, (L + 72)(sp)
+    ld      t0, (L + 88)(sp)
     ld      a1, NodeBlob_data_id(t0)
     ld      a2, Node_db_sidecar_segment(s1)
-    ld      a3, (L + 64)(sp)
+    ld      a3, (L + 80)(sp)
     addi    a4, sp, L
     call    node_db_append
-    ld      t0, L(sp)
+    ld      t0, (L + 72)(sp)
     addi    t0, t0, DbRecord__mem + 7
     andi    t0, t0, -8
     ld      t1, Node_db_sidecar_end(s1)
     add     t1, t1, t0
     sd      t1, Node_db_sidecar_end(s1)
-    ld      t0, (L + 72)(sp)                # its bytes and entry go, unless a stream sends them
+    ld      t0, (L + 88)(sp)                # its bytes and entry go, unless a stream sends them
     ld      a0, NodeBlob_data_id(t0)
     call    node_serving
     bnez    a0, 19f
     li      a0, NODE_ACT_BYTES_FREE
-    ld      t0, (L + 72)(sp)
+    ld      t0, (L + 88)(sp)
     ld      a1, NodeBlob_data_id(t0)
     li      a2, 0
     call    node_ids
-    ld      t1, (L + 72)(sp)
+    ld      t1, (L + 88)(sp)
     li      t0, -1
     sd      t0, 0(t1)
     sd      t0, 8(t1)
@@ -1626,7 +1646,23 @@ LOCAL_FUNCTION node_archive
     sd      t0, NodeBlob_status(t1)
 19: addi    s9, s9, 1
     j       4b
-20: ld      a0, NodeBlock_data_id(s8)       # the block's bytes go, unless a stream sends them
+20: bne     s8, s3, 21f                     # the finalized block: its state and bytes to the shell, for a restart
+    ld      t0, 8(s6)
+    ld      t1, 16(s6)
+    add     t2, s6, t0
+    add     t2, t2, t1
+    addi    t1, t1, NODE_ACT_DB_STATE_SIZE
+    sd      t1, 16(s6)
+    li      t0, NODE_ACT_DB_STATE_SIZE
+    sd      t0, 0(t2)
+    li      t0, NODE_ACT_DB_STATE
+    sd      t0, 8(t2)
+    ld      t0, NodeBlock_state_id(s8)
+    sd      t0, 16(t2)
+    ld      t0, NodeBlock_data_id(s8)
+    sd      t0, 24(t2)
+    sd      s10, 32(t2)
+21: ld      a0, NodeBlock_data_id(s8)       # the block's bytes go, unless a stream sends them
     call    node_serving
     bnez    a0, 30f
     li      a0, NODE_ACT_BYTES_FREE
@@ -1651,8 +1687,87 @@ LOCAL_FUNCTION node_archive
 30: addi    t0, s10, 1
     sd      t0, Node_db_next_slot(s1)
     j       2b
-99: LEAVE 80
+40: li      s9, 0                           # in the Db: the sidecars the node holds of it go
+41: li      t0, DB_SIDECAR_INDICES
+    bgeu    s9, t0, 20b
+    mv      a0, s8
+    mv      a1, s9
+    addi    s9, s9, 1
+    call    node_blob_held
+    beqz    a0, 41b
+    sd      a0, (L + 88)(sp)
+    ld      a0, NodeBlob_data_id(a0)
+    call    node_serving
+    bnez    a0, 41b
+    li      a0, NODE_ACT_BYTES_FREE
+    ld      t0, (L + 88)(sp)
+    ld      a1, NodeBlob_data_id(t0)
+    li      a2, 0
+    call    node_ids
+    ld      t1, (L + 88)(sp)
+    li      t0, -1
+    sd      t0, 0(t1)
+    sd      t0, 8(t1)
+    sd      t0, 16(t1)
+    sd      t0, 24(t1)
+    sd      t0, NodeBlob_slot(t1)
+    sd      zero, NodeBlob_data_id(t1)
+    li      t0, NODE_BLOB_FREE
+    sd      t0, NodeBlob_status(t1)
+    j       41b
+99: LEAVE 96
 END_FUNCTION node_archive
+
+/*
+ * (node, segment, sidecars, bytes, valid): lantern_db_scan of a segment's bytes into the node's
+ * Db; then the segment is the one of its kind to append to, at valid, unless the current one is
+ * higher; db_next_slot is at least the Db's end_slot, and earliest_slot the Db's first block when
+ * that is lower. s1 node, s2 sidecars, s3 segment, s4 valid.
+ */
+FUNCTION lantern_node_db_scan
+    ENTER 0
+    mv      s1, a0
+    ld      s3, 0(a1)
+    ld      s2, 0(a2)
+    mv      s4, a4
+    ld      a0, Node_db(s1)
+    add     a0, s1, a0
+    call    lantern_db_scan
+    bnez    a0, 9f
+    li      t0, Node_db_block_segment
+    beqz    s2, 1f
+    li      t0, Node_db_sidecar_segment
+1:  add     t0, s1, t0
+    ld      t1, 0(t0)
+    li      t2, -1
+    beq     t1, t2, 2f
+    bltu    s3, t1, 3f
+2:  sd      s3, 0(t0)
+    ld      t1, 0(s4)
+    sd      t1, 8(t0)
+3:  ld      t3, Node_db(s1)
+    add     t3, s1, t3
+    ld      t0, Db_end_slot(t3)
+    ld      t1, Node_db_next_slot(s1)
+    bleu    t0, t1, 4f
+    sd      t0, Node_db_next_slot(s1)
+4:  ld      t0, Db_first_slot(t3)           # the first block below earliest_slot
+    ld      t1, Node_earliest_slot(s1)
+    ld      t2, Db_end_slot(t3)
+    bleu    t1, t2, 41f
+    mv      t1, t2
+41: ld      t4, Db_slots(t3)
+    add     t4, t3, t4
+5:  bgeu    t0, t1, 8f
+    ld      t5, DbSlot_block(t4)
+    bnez    t5, 6f
+    addi    t4, t4, DbSlot__mem
+    addi    t0, t0, 1
+    j       5b
+6:  sd      t0, Node_earliest_slot(s1)
+8:  li      a0, LANTERN_OK
+9:  LEAVE 0
+END_FUNCTION lantern_node_db_scan
 
 /* A BYTES_PUT action of the ByteList a0 with a new id: a0 = the id. s3 the ByteList, s4 the id. */
 LOCAL_FUNCTION node_put

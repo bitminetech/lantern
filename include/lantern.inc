@@ -684,7 +684,8 @@
 .set NodeAnchor_engine_host_len, 104   /* at most NODE_ENGINE_HOST_MAX */
 .set NodeAnchor_engine_host, 112
 .set NodeAnchor_node_id, 176           /* NodeID of the node's key: keccak256 of its point, reversed */
-.set NodeAnchor__mem, 208
+.set NodeAnchor_history_slot, 208     /* the first slot of the Db: at most the anchor's slot, rounded down to a segment */
+.set NodeAnchor__mem, 216
 .set NODE_P2P_ROUNDS, 8                /* libp2p steps of one node step for the node's own events, at most */
 
 /* NodeRoom: the capacities of a Node */
@@ -739,7 +740,9 @@
 .set NODE_ACT_ENGINE, 7                /* 24 a ByteList of an HTTP request: the shell writes it to the execution engine's connection */
 .set NODE_ACT_DISCV5, 8                /* 24 a ByteList of asm-discv5 events: the shell passes them to discv5_step */
 .set NODE_ACT_DB_APPEND, 9             /* 16 BufferId, 24 segment, 32 sidecars, 40 offset, 48 DbRecord: the shell appends the record */
-.set NODE_ACT_DB_APPEND_SIZE, 112
+.set NODE_ACT_DB_APPEND_SIZE, 128
+.set NODE_ACT_DB_STATE, 10              /* 16 a state's BufferId, 24 its block's BufferId, 32 the slot: the finalized block, for a restart */
+.set NODE_ACT_DB_STATE_SIZE, 40
 .set NODE_DB_REF, 1 << 63              /* a BufferId of a Db record: bit 62 a sidecar segment, segment << 48, the offset below */
 .set NODE_DB_SIDECARS, 1 << 62
 .set DB_SEGMENT_SHIFT, 13              /* slot >> DB_SEGMENT_SHIFT: its segment */
@@ -794,12 +797,13 @@
 .set DbSlot_sidecar_last, 64
 .set DbSlot_indices, 72                /* bit i % 8 of byte i / 8 for each sidecar index i */
 .set DbSlot__mem, 88
-.set DbRecord_length, 0
-.set DbRecord_kind, 8
-.set DbRecord_slot, 16
-.set DbRecord_index, 24
-.set DbRecord_root, 32
-.set DbRecord__mem, 64
+.set DbRecord_kind, 0
+.set DbRecord_slot, 8
+.set DbRecord_index, 16
+.set DbRecord_root, 24
+.set DbRecord_bytes, 56               /* a ByteList header of the SSZ bytes after the record's header: size 24 + length, offset 24, count */
+.set DbRecord_length, 72              /* its count: the SSZ bytes */
+.set DbRecord__mem, 80
 .set DB_BLOCK, 1
 .set DB_BLOB_SIDECAR, 2
 .set DB_COLUMN_SIDECAR, 3

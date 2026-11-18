@@ -18,7 +18,10 @@
 - [`lantern_node_blob_sidecar`](#function-lantern_node_blob_sidecar): the checks of a blob sidecar of a response, for deneb or electra.
 - [`lantern_node_column_sidecar`](#function-lantern_node_column_sidecar): the checks of a column sidecar of a response, for fulu.
 - [`lantern_node_new_payload`](#function-lantern_node_new_payload): the HTTP request of engine_newPayload for a block's SSZ bytes, for one fork.
+- [`lantern_node_db_scan`](#function-lantern_node_db_scan): adds a segment file's records to the node's `Db`.
 - [`lantern_node_anchor`](#function-lantern_node_anchor): the anchor state and block of a genesis state's SSZ bytes, for one fork.
+- [`lantern_node_anchor_block`](#function-lantern_node_anchor_block): the anchor state and block of a finalized state and its block, for one fork.
+- [`lantern_node_state_bytes`](#function-lantern_node_state_bytes): the SSZ bytes of a state, for one fork.
 - [`lantern_node_block_header`](#function-lantern_node_block_header): the signed header of a block's SSZ bytes, for one fork.
 - [`lantern_node_state_checkpoints`](#function-lantern_node_state_checkpoints): the three checkpoints of a state, for one fork.
 
@@ -83,7 +86,8 @@
   - A valid block must be `NODE_BLOCK_IMPORTED`, an invalid block must not. An attestation or slashing is valid when the result of its last work is `LANTERN_VALID`.
   - The checks read the store, the node's `head_root`, and the post-state the node keeps for the head.
   - After the steps of each event, the store's first node must be the root of its finalized checkpoint: the node pruned it.
-  - Every second node the runner starts has `NODE_FLAG_DB`. The runner keeps its segments in memory: each `NODE_ACT_DB_APPEND` must be at its segment's end, of the length of the bytes of its id, and of a slot of its segment; a SERVE of a `NODE_DB_REF` gets a ByteList that points into the segment. A block or sidecar in the node's `Db` counts as imported or held in the checks below.
+  - Every second node the runner starts has `NODE_FLAG_DB`. Each `NODE_ACT_DB_STATE` must name a state of its slot and a buffer of bytes; lantern_node_state_bytes of the state and the block's message, as the two ByteLists of lantern_node_anchor_block, must give a state and a block of their roots, and with another `state_root` `LANTERN_INVALID_ANCHOR`. After the case, a new node of the same start given the segments with lantern_node_db_scan must take every record and hold the same index, the same segments to append to, and `db_next_slot` past the index's last block.
+  - The runner's nodes with `NODE_FLAG_DB`: The runner keeps its segments in memory: each `NODE_ACT_DB_APPEND` must be at its segment's end, of the length of the bytes of its id, with the ByteList header of those bytes, and of a slot of its segment; a SERVE of a `NODE_DB_REF` gets the record's ByteList in place in the segment. A block or sidecar in the node's `Db` counts as imported or held in the checks below.
   - From bellatrix on, the node has `NODE_FLAG_ENGINE`, and the runner is its execution engine too. It answers each `NODE_ACT_ENGINE` request with an HTTP/1.1 response in two `NODE_EV_ENGINE` events: engine_newPayload of a `blockHash`, and engine_forkchoiceUpdated of a `headBlockHash`, with the `payloadStatus` of the case's last `payload_status` step of that hash, else `VALID` with that hash as `latestValidHash`. The request must carry a JWT of the node's secret.
   - Cases with `payload_status` steps run in node mode from bellatrix on, through the node's execution engine calls; before bellatrix only directly.
   - A non-zero status of lantern_node_step or lantern_node_run must leave the node, the store and the work's state byte for byte unchanged.
@@ -255,7 +259,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
   - A `NODE_BLOB_INVALID` entry is free; a `NODE_BLOB_VALID` entry at or below F's slot whose block is not imported: a `NODE_ACT_BYTES_FREE`, and its entry is free.
   - A `NodeCheckpoint` below the finalized epoch: a `NODE_ACT_STATE_FREE` of its state, except `anchor_state_id`, which goes with the anchor block; its entry is free.
   - Bytes that a stream in `NODE_STREAM_SERVE` or `NODE_STREAM_SERVING` lists at or after its `next` stay, with their entry, until a later prune.
-  - With `NODE_FLAG_DB`, before the other blocks: the chain from F down to `db_next_slot`, by `parent_root`, then from its lowest slot up, each block with bytes goes to the `Db`: lantern_db_add of its `DbRecord` (kind `DB_BLOCK`, index 0) at `db_block_end` of the segment of its slot (a new segment starts at 0) and a `NODE_ACT_DB_APPEND`; then each `NODE_BLOB_VALID` sidecar of its root, by index from 0 to `DB_SIDECAR_INDICES` - 1 (kind `DB_COLUMN_SIDECAR` from fulu on, else `DB_BLOB_SIDECAR`), the same way in its sidecar segment, its bytes freed and its entry free; then the block's bytes are freed and its entry is free, but F keeps its entry. `db_next_slot` takes each block's slot + 1. A record lantern_db_add refuses ends the archive of a block until a later prune; a sidecar it refuses stays for the prune.
+  - With `NODE_FLAG_DB`, before the other blocks: the chain from F down to `db_next_slot`, by `parent_root`, then from its lowest slot up, each block with bytes goes to the `Db`, but one whose root the `Db` holds already (lantern_db_find_root), as after a restart, gets no record and only its sidecars' bytes and entries go: lantern_db_add of its `DbRecord` (kind `DB_BLOCK`, index 0) at `db_block_end` of the segment of its slot (a new segment starts at 0) and a `NODE_ACT_DB_APPEND`; then each `NODE_BLOB_VALID` sidecar of its root, by index from 0 to `DB_SIDECAR_INDICES` - 1 (kind `DB_COLUMN_SIDECAR` from fulu on, else `DB_BLOB_SIDECAR`), the same way in its sidecar segment, its bytes freed and its entry free; then, for F, a `NODE_ACT_DB_STATE` of its post-state, its bytes and its slot; then the block's bytes are freed and its entry is free, but F keeps its entry. `db_next_slot` takes each block's slot + 1. A record lantern_db_add refuses ends the archive of a block until a later prune; a sidecar it refuses stays for the prune.
   - With `NODE_FLAG_DB`, an ancestor of F, or a sidecar of one, below `db_next_slot` whose bytes stay goes as the other branches do.
 - With `NODE_FLAG_DB` and a store's finalized epoch above `pruned_epoch`, before any change: the `Db` has room for the slots up to the finalized epoch's first slot, and for twice its blocks and the `NodeBlock` entries in its root table; else `LANTERN_BUFFER_TOO_SMALL` with `NODE_SHORT_NODE` and `room` the offset of `db_slots` or `db_roots`.
 - A block whose parent is imported with no post-state is no descendant of the finalized block: it becomes `NODE_BLOCK_INVALID`, and its bytes are freed.
@@ -628,6 +632,46 @@ lantern_node_column_sidecar(data, config, settings, scratch, result, root) -> st
 
 - Export: `lantern_fulu_node_column_sidecar` of the fulu object.
 
+## Function `lantern_node_db_scan`
+
+Adds the records of a segment file to the node's `Db`, as a start does with the files of an earlier run.
+
+### Signature
+
+```
+lantern_node_db_scan(node, segment, sidecars, bytes, valid) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `node` | state | `Node` |
+| `segment` | input | u64: the segment's number |
+| `sidecars` | input | u64: 0 for a block segment, 1 for a sidecar segment |
+| `bytes` | input | ByteList: the file's bytes from its start |
+| `valid` | output | u64: the bytes of the whole records added |
+
+### Returns
+
+- `LANTERN_OK`, or a status of lantern_db_scan of the node's `Db` ([db.md](db.md#function-lantern_db_scan)).
+
+### Function does
+
+- lantern_db_scan of the node's `Db`.
+- The segment is then the one of its kind the node appends to, at `valid`, unless the one it has is higher.
+- `db_next_slot` takes the `Db`'s `end_slot` when that is more, and `earliest_slot` the `Db`'s first slot with a block when that is less.
+
+### Caller must
+
+- Pass each segment once, in ascending order, the block segments before the sidecar segments, before the node's first step; cut each file to `valid` before the node appends to it.
+
+### ABI
+
+- Role: L2.
+- Symbol: `lantern_node_db_scan` (`_lantern_node_db_scan` on macOS), in the common object.
+- Argument order: `node`, `segment`, `sidecars`, `bytes`, `valid`.
+
 ## Function `lantern_node_anchor`
 
 The anchor of a node that starts at a genesis state: the state with room, and its block.
@@ -666,6 +710,78 @@ lantern_node_anchor(data, room, scratch, state, block) -> status
 - Export: `lantern_<fork>_node_anchor` of each fork object.
 - Argument order: `data`, `room`, `scratch`, `state`, `block`.
 
+
+## Function `lantern_node_anchor_block`
+
+The anchor of a node that starts again from its own history: a finalized block's post-state and the block, as a `NODE_ACT_DB_STATE` named them.
+
+### Signature
+
+```
+lantern_node_anchor_block(data, room, scratch, state, block) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `data` | input | ByteList: two ByteLists, the second at the first multiple of 8 after the first: the SSZ bytes of a `BeaconState` of the fork, then those of its block's `BeaconBlock` |
+| `room` | input | [`StateRoom`](state.md#type-stateroom) |
+| `scratch` | scratch | `Scratch` |
+| `state` | output | `BeaconState`, its `size` set by the caller |
+| `block` | output | `BeaconBlock`, its `size` set by the caller |
+
+### Returns
+
+- `LANTERN_OK`: `state` and `block` hold the anchor.
+- `LANTERN_BUFFER_TOO_SMALL`: as lantern_node_anchor, or `block` cannot hold the block's message.
+- `LANTERN_INVALID_ENCODING`: `data` is not of that form (each ByteList with `offset` 24 and `size` 24 + `count`, inside `data`), or a part is not the SSZ bytes of its type.
+- `LANTERN_INVALID_ANCHOR`: the block's slot is not the state's, or its `state_root` is not hash_tree_root of the state.
+
+### Function does
+
+- `state`: the decoded state, as lantern_beacon_state_copy gives it with `room`.
+- `block`: the decoded block.
+- Restores the `size` field of `scratch`.
+
+### ABI
+
+- Export: `lantern_<fork>_node_anchor_block` of each fork object.
+- Argument order: `data`, `room`, `scratch`, `state`, `block`.
+
+## Function `lantern_node_state_bytes`
+
+The SSZ bytes of a beacon state of the fork.
+
+### Signature
+
+```
+lantern_node_state_bytes(state, scratch, out, size) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | ByteList, its `size` set by the caller |
+| `size` | output | u64: 24 + the bytes of the state's SSZ encoding |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the encoding at offset 24.
+- `LANTERN_BUFFER_TOO_SMALL`: `out` is below `size`, or `scratch` is short; `size` is written all the same when `scratch` holds what ssz_serialize_size needs.
+
+### Function does
+
+- ssz_serialize_size, then ssz_serialize of asm-ssz with the fork's `BeaconState` type.
+- Restores the `size` field of `scratch`.
+
+### ABI
+
+- Export: `lantern_<fork>_node_state_bytes` of each fork object.
+- Argument order: `state`, `scratch`, `out`, `size`.
 ## Function `lantern_node_block_header`
 
 The SignedBeaconBlockHeader of a `SignedBeaconBlock` in SSZ bytes: the message's fields, hash_tree_root of its body, and the signature.
@@ -812,7 +928,7 @@ The state of the node: a value with parts.
 ### Rules
 
 - `NODE_FIXED` (520 + `CONFIG_SIZE`) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, p2p_out, engine_in, db.
-- The `Db` has the capacities of the `NodeRoom` fields `db_slots` and `db_roots`, and its `first_slot` is the anchor's slot rounded down to a multiple of `DB_SEGMENT_SLOTS`.
+- The `Db` has the capacities of the `NodeRoom` fields `db_slots` and `db_roots`, and its `first_slot` is the lower of the anchor's `history_slot` and slot, rounded down to a multiple of `DB_SEGMENT_SLOTS`.
 - The capacity of a part is its bytes up to the next part over its entry's bytes; `p2p_out` is the last part.
 - `NODE_FLAG_OPTIMISTIC`: blocks are imported as `PAYLOAD_STATUS_NOT_VALIDATED`.
 - `NODE_FLAG_JUSTIFIED_PENDING`: a `NODE_WORK_JUSTIFIED_STATE` is queued.
@@ -996,7 +1112,8 @@ The state of the node: a value with parts.
 | 104 | `engine_host_len` | u64 | With `NODE_FLAG_ENGINE`, at most `NODE_ENGINE_HOST_MAX` (64) |
 | 112 | `engine_host` | 64 bytes | |
 | 176 | `node_id` | `NodeID` | The node ID of the node's secp256k1 key, as a number in 32 little-endian bytes |
-| 208 | | | Size |
+| 208 | `history_slot` | u64 | The first slot of the `Db`, as of the segments the shell kept: the `Db` starts at the segment of the lower of it and `slot` |
+| 216 | | | Size |
 
 ## Type `NodeStepResult`
 
@@ -1063,8 +1180,9 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 - `NODE_ACT_WORK`: `NODE_ACT_WORK_SIZE` bytes; call lantern_node_run.
 - `NODE_ACT_P2P_LIST`: a ByteList of libp2p `Action` values from 16, offset 24; do its DIAL, ADOPT, REFUSE, SEND, CLOSE and SEND_DATAGRAM in order, and skip the others.
 - `NODE_ACT_DISCV5`: a ByteList at 24, offset 24, of asm-discv5 events: pass them to discv5_step.
-- `NODE_ACT_DB_APPEND` (`NODE_ACT_DB_APPEND_SIZE`, 112 bytes): 16 a `BufferId` of bytes, 24 a segment's number, 32 1 for a sidecar segment and 0 for a block segment, 40 an offset, 48 a `DbRecord`. Write the record at the offset of the segment file, its end: the `DbRecord`, the bytes, and zero bytes to a multiple of 8. The first record of a segment that a run writes truncates the file to its offset first, so a torn end or an older run's records go.
-- A `NODE_DB_REF` is a `BufferId` with bit 63 set: bit 62 set for a sidecar segment, the segment's number in bits 48 to 61, and the offset of a record in bits 0 to 47. As the `data` of a SERVE work it names the SSZ bytes of that record: the shell gives lantern_node_run a ByteList of them, whose offset may point into the segment file's memory.
+- `NODE_ACT_DB_APPEND` (`NODE_ACT_DB_APPEND_SIZE`, 128 bytes): 16 a `BufferId` of bytes, 24 a segment's number, 32 1 for a sidecar segment and 0 for a block segment, 40 an offset, 48 a `DbRecord`. Write the record at the offset of the segment file, its end: the `DbRecord`, the bytes, and zero bytes to a multiple of 8. The first record of a segment that a run writes truncates the file to its offset first, so a torn end or an older run's records go.
+- `NODE_ACT_DB_STATE` (`NODE_ACT_DB_STATE_SIZE`, 40 bytes): 16 the `BufferId` of a finalized block's post-state, 24 the `BufferId` of the block's SSZ bytes, 32 its slot. The shell may keep them, so that a later start has an anchor whose blocks the `Db` holds.
+- A `NODE_DB_REF` is a `BufferId` with bit 63 set: bit 62 set for a sidecar segment, the segment's number in bits 48 to 61, and the offset of a record in bits 0 to 47. As the `data` of a SERVE work it names the SSZ bytes of that record: the shell gives lantern_node_run the record's ByteList at its byte 56, in place in the segment's memory.
 - `NODE_ACT_ENGINE`: a ByteList at 24, offset 24: write its bytes to the connection to the execution engine, opening one when there is none, and pass what the engine sends in `NODE_EV_ENGINE` events; a connection that fails or closes before an answer is a `NODE_EV_ENGINE` with arg 1.
 
 ## Results
@@ -1078,6 +1196,14 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 | x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
+
+### `lantern_node_db_scan`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_init`
 
@@ -1182,6 +1308,22 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 | x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
+
+### `lantern_node_anchor_block`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
+
+### `lantern_node_state_bytes`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_node_block_header`
 

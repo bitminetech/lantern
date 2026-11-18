@@ -369,12 +369,27 @@ LOCAL_FUNCTION app_start
     mov     L(%rsp), %rdi
     call    app_line_u64
     jmp     98f
-1:  ADDRESS %rdi, app_genesis_name          # genesis.ssz: the fork of its slot
+1:  movq    $0, S7(%rsp)                    # with a data directory: its anchor.ssz, when there is one
+    cmpq    $0, (APP_OPTIONS + AppOptions_data_dir + 8)(%rbx)
+    je      11f
+    ADDRESS %rdi, app_anchor_name
+    mov     $app_anchor_name_len, %esi
+    lea     APP_PATH(%rbx), %rdx
+    call    app_db_file
+    lea     APP_PATH(%rbx), %rdi
+    lea     APP_FILE(%rbx), %rsi
+    CALL_GLOBAL lantern_shell_read_file
+    cmpq    $0, APP_FILE(%rbx)
+    jne     11f
+    movq    $1, S7(%rsp)
+    jmp     12f
+11: ADDRESS %rdi, app_genesis_name          # else genesis.ssz: the fork of its slot
     mov     $app_genesis_name_len, %esi
     call    app_path
     call    app_read
     test    %rax, %rax
     jnz     99f
+12:
     mov     (APP_FILE + 8)(%rbx), %rbp
     mov     (APP_FILE + 16)(%rbx), %r12
     cmp     $(40 + 8), %r12
@@ -385,7 +400,8 @@ LOCAL_FUNCTION app_start
     mov     $app_m_short_len, %esi
     call    app_line_text
     jmp     98f
-2:  mov     (24 + 40)(%rbp), %rdi           # BeaconState.slot
+2:  imul    $24, S7(%rsp), %rax             # BeaconState.slot, after the ByteList header of anchor.ssz's state
+    mov     (24 + 40)(%rbp,%rax), %rdi
     lea     APP_CONFIG(%rbx), %rsi
     call    app_fork
     mov     %rax, APP_FORK(%rbx)
@@ -398,6 +414,11 @@ LOCAL_FUNCTION app_start
     lea     (%r12,%r12), %r14
     add     $(1 << 26), %r14
     xor     %r15d, %r15d
+    movq    $APP_BLOCK_BYTES, S8(%rsp)      # the block: of genesis, or of anchor.ssz
+    cmpq    $0, S7(%rsp)
+    je      3f
+    lea     (1 << 20)(%r12), %rax
+    mov     %rax, S8(%rsp)
 3:  mov     $APP_STATE, %edi
     mov     %r13, %rsi
     call    app_alloc
@@ -409,7 +430,7 @@ LOCAL_FUNCTION app_start
     test    %rax, %rax
     jz      97f
     mov     $APP_BLOCK, %edi
-    mov     $APP_BLOCK_BYTES, %esi
+    mov     S8(%rsp), %rsi
     call    app_alloc
     test    %rax, %rax
     jz      97f
@@ -419,8 +440,12 @@ LOCAL_FUNCTION app_start
     mov     APP_STATE(%rbx), %rcx
     mov     APP_BLOCK(%rbx), %r8
     mov     APP_FORK(%rbx), %r10
+    cmpq    $0, S7(%rsp)
+    jne     31f
     FORK_CALL node_anchor
-    test    %rax, %rax
+    jmp     32f
+31: FORK_CALL node_anchor_block
+32: test    %rax, %rax
     jz      4f
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     jne     96f
@@ -432,13 +457,19 @@ LOCAL_FUNCTION app_start
     call    app_unmap
     shl     $1, %r13
     shl     $1, %r14
+    shlq    $1, S8(%rsp)
     inc     %r15
     cmp     $APP_TRIES, %r15
     jb      3b
     mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-96: mov     %rax, %rdx                      # genesis.ssz: status <n>
+96: mov     %rax, %rdx                      # genesis.ssz or anchor.ssz: status <n>
     ADDRESS %rdi, app_genesis_name
     mov     $app_genesis_name_len, %esi
+    cmpq    $0, S7(%rsp)
+    je      961f
+    ADDRESS %rdi, app_anchor_name
+    mov     $app_anchor_name_len, %esi
+961:
     call    app_fail_status
     jmp     99f
 4:  call    app_file_free
@@ -513,6 +544,10 @@ LOCAL_FUNCTION app_start
     mov     (APP_OPTIONS + AppOptions_target_peers)(%rbx), %rax
     mov     %rax, (APP_NODE_ROOM + NodeRoom_peers)(%rbx)
     call    app_db_start                    # the history's files
+    cmpq    $0, S7(%rsp)
+    je      13f
+    call    app_db_history                  # from anchor.ssz: the segments there
+13:
     lea     APP_NODE_ROOM(%rbx), %rdi
     lea     L(%rsp), %rsi
     CALL_GLOBAL lantern_node_size
@@ -531,6 +566,20 @@ LOCAL_FUNCTION app_start
     CALL_GLOBAL lantern_node_init
     test    %rax, %rax
     jnz     94f
+    cmpq    $0, S7(%rsp)                    # from anchor.ssz: the history's segments to the node
+    je      14f
+    call    app_db_scan_all
+    test    %rax, %rax
+    jnz     99f
+    call    app_line_start                  # restart at slot <n>
+    ADDRESS %rdi, app_m_restart
+    mov     $app_m_restart_len, %esi
+    call    app_line_text
+    mov     (APP_ANCHOR + 32)(%rbx), %rdi
+    call    app_line_u64
+    mov     $1, %edi
+    call    app_line_end
+14:
     lea     APP_SEEN_ROOM(%rbx), %rdi       # the Seen
     ADDRESS %rsi, app_seen_room
     mov     $32, %edx
@@ -1057,6 +1106,9 @@ LOCAL_FUNCTION app_db_start
     cmp     $APP_DB_MAP_COUNT, %rcx
     jb      1b
     movq    $0, AppDb_next_map(%r15)
+    movq    $-1, AppDb_anchor_slot(%r15)
+    mov     (APP_ANCHOR + 32)(%rbx), %rax   # the Db from the anchor's slot
+    mov     %rax, (APP_ANCHOR + NodeAnchor_history_slot)(%rbx)
     mov     (APP_OPTIONS + AppOptions_data_dir + 8)(%rbx), %r12
     test    %r12, %r12
     jz      9f
@@ -1234,8 +1286,9 @@ LOCAL_FUNCTION app_db_append
 END_FUNCTION app_db_append
 
 /*
- * L0: rax = the AppDb's view entry with a ByteList of the bytes of the record at offset rdi of the
- * mapped segment rsi, or 0 when the record is not all inside the map. Uses rcx, rdx, r8, r9.
+ * L0: rax = the AppDb's view entry of the record at offset rdi of the mapped segment rsi: its
+ * ByteList in place, at byte DbRecord_bytes of the record; 0 when the record is not all inside
+ * the map, or its ByteList header is not of its bytes. Uses rcx, rdx, r8, r9.
  */
 LOCAL_FUNCTION app_db_record
     UNWIND_END_PROLOGUE
@@ -1248,18 +1301,19 @@ LOCAL_FUNCTION app_db_record
     jb      8f
     cmp     %rdx, %rcx
     ja      8f
-    mov     (%r8,%rdi), %r9                 # its length, inside
+    add     %rdi, %r8                       # the record, its bytes inside
+    mov     DbRecord_length(%r8), %r9
     sub     %rcx, %rdx
     cmp     %rdx, %r9
     ja      8f
-    lea     (APP_DB + AppDb_view)(%rbx), %rax       # the entry: id, the header's address, size; the header after it
-    lea     24(%rax), %rdx
-    mov     %rdx, 8(%rax)
-    add     %r8, %rcx
-    sub     %rdx, %rcx
-    movq    $24, (%rdx)
-    mov     %rcx, 8(%rdx)
-    mov     %r9, 16(%rdx)
+    lea     24(%r9), %rcx                   # its ByteList: size 24 + length, offset 24
+    cmp     %rcx, DbRecord_bytes(%r8)
+    jne     8f
+    cmpq    $24, (DbRecord_bytes + 8)(%r8)
+    jne     8f
+    lea     (APP_DB + AppDb_view)(%rbx), %rax
+    lea     DbRecord_bytes(%r8), %rcx
+    mov     %rcx, 8(%rax)
     ret
 8:  xor     %eax, %eax
     ret
@@ -1347,6 +1401,394 @@ LOCAL_FUNCTION app_work_data
 9:  LEAVE 0
 END_FUNCTION app_work_data
 
+/* L1: <dir>/<the rsi bytes of the name at rdi> of the data directory, as a ByteList at rdx of APP_PATH_MAX bytes of room. rbp the name, r12 its length, r13 the ByteList. */
+LOCAL_FUNCTION app_db_file
+    ENTER 0
+    mov     %rdi, %rbp
+    mov     %rsi, %r12
+    mov     %rdx, %r13
+    movq    $(24 + APP_PATH_MAX), (%r13)
+    movq    $24, 8(%r13)
+    mov     (APP_OPTIONS + AppOptions_data_dir + 8)(%rbx), %rdx
+    lea     1(%rdx,%r12), %rax
+    cmp     $APP_PATH_MAX, %rax
+    ja      8f
+    mov     %rax, 16(%r13)
+    mov     APP_ARGS(%rbx), %rsi
+    add     (APP_OPTIONS + AppOptions_data_dir)(%rbx), %rsi
+    lea     24(%r13), %rdi
+    call    lantern_copy
+    mov     (APP_OPTIONS + AppOptions_data_dir + 8)(%rbx), %rax
+    lea     24(%r13,%rax), %rdi
+    movb    $0x2f, (%rdi)                   # /
+    inc     %rdi
+    mov     %rbp, %rsi
+    mov     %r12, %rdx
+    call    lantern_copy
+    LEAVE 0
+8:  movq    $(APP_PATH_MAX + 1), 16(%r13)   # a count past the room: the shell gives its error
+    LEAVE 0
+END_FUNCTION app_db_file
+
+/* L1: rax = 1 when the block segment rdi's file is there (it opens to read), else 0. r15 the AppDb. Locals: L the mode. */
+LOCAL_FUNCTION app_db_exists
+    ENTER 16
+    lea     APP_DB(%rbx), %r15
+    mov     %rdi, %rsi
+    xor     %edi, %edi
+    call    app_db_path
+    movq    $0, L(%rsp)
+    lea     APP_PATH(%rbx), %rdi
+    lea     L(%rsp), %rsi
+    lea     AppDb_op(%r15), %rdx
+    CALL_GLOBAL lantern_shell_open
+    cmpq    $0, AppDb_op(%r15)
+    jne     8f
+    lea     (AppDb_op + 8)(%r15), %rdi
+    CALL_GLOBAL lantern_shell_close
+    mov     $1, %eax
+    LEAVE 16
+8:  xor     %eax, %eax
+    LEAVE 16
+END_FUNCTION app_db_exists
+
+/*
+ * L1: for a start from anchor.ssz: the first block segment file there, from 0 to the anchor's
+ * segment, gives the anchor's history_slot; the Db has room for the slots from it to the last
+ * block segment file there, from the anchor's on, and a segment more, and a power of two of roots
+ * above twice them. rbp a segment, r12 the anchor's segment, r13 the first, r14 the last.
+ */
+LOCAL_FUNCTION app_db_history
+    ENTER 0
+    mov     (APP_ANCHOR + 32)(%rbx), %r12
+    shr     $DB_SEGMENT_SHIFT, %r12
+    mov     %r12, %r13
+    xor     %ebp, %ebp
+1:  cmp     %r12, %rbp
+    ja      2f
+    mov     %rbp, %rdi
+    call    app_db_exists
+    test    %rax, %rax
+    jnz     11f
+    inc     %rbp
+    jmp     1b
+11: mov     %rbp, %r13
+2:  mov     %r12, %r14
+    lea     1(%r12), %rbp
+3:  mov     %rbp, %rdi
+    call    app_db_exists
+    test    %rax, %rax
+    jz      4f
+    mov     %rbp, %r14
+    inc     %rbp
+    jmp     3b
+4:  mov     %r13, %rax
+    shl     $DB_SEGMENT_SHIFT, %rax
+    mov     %rax, (APP_ANCHOR + NodeAnchor_history_slot)(%rbx)
+    mov     %r14, %rax
+    sub     %r13, %rax
+    add     $2, %rax
+    shl     $DB_SEGMENT_SHIFT, %rax
+    mov     %rax, (APP_NODE_ROOM + NodeRoom_db_slots)(%rbx)
+    add     %rax, %rax
+    bsr     %rax, %rcx
+    inc     %ecx
+    mov     $1, %eax
+    shl     %cl, %rax
+    mov     %rax, (APP_NODE_ROOM + NodeRoom_db_roots)(%rbx)
+    LEAVE 0
+END_FUNCTION app_db_history
+
+/*
+ * L1: for a start from anchor.ssz: each segment file there, the blocks' then the sidecars', from
+ * the segment of history_slot to the end of the Db's room, goes to lantern_node_db_scan; a file
+ * with bytes after its last whole record is cut there: rax = 0, or 2 after a line on the standard
+ * error. rbp the kind, r12 the segment, r13 the end, r14 a status, r15 the AppDb. Locals: L a
+ * ByteList header, L+24 valid, L+32 the segment, L+40 the kind, L+48 the file's size or a mode,
+ * L+56 a file.
+ */
+LOCAL_FUNCTION app_db_scan_all
+    ENTER 64
+    lea     APP_DB(%rbx), %r15
+    mov     (APP_ANCHOR + NodeAnchor_history_slot)(%rbx), %rax
+    shr     $DB_SEGMENT_SHIFT, %rax
+    mov     (APP_NODE_ROOM + NodeRoom_db_slots)(%rbx), %r13
+    shr     $DB_SEGMENT_SHIFT, %r13
+    add     %rax, %r13
+    xor     %ebp, %ebp
+1:  mov     (APP_ANCHOR + NodeAnchor_history_slot)(%rbx), %r12
+    shr     $DB_SEGMENT_SHIFT, %r12
+2:  cmp     %r13, %r12
+    jae     7f
+    mov     %rbp, %rdi
+    mov     %r12, %rsi
+    call    app_db_path
+    lea     APP_PATH(%rbx), %rdi
+    lea     AppDb_op(%r15), %rsi
+    CALL_GLOBAL lantern_shell_map_file
+    cmpq    $0, AppDb_op(%r15)
+    jne     6f                              # not there
+    mov     (AppDb_op + 8)(%r15), %rax
+    test    %rax, %rax
+    jz      6f                              # empty
+    lea     L(%rsp), %rcx                   # its bytes: a ByteList of the map
+    sub     %rcx, %rax
+    movq    $24, L(%rsp)
+    mov     %rax, (L + 8)(%rsp)
+    mov     (AppDb_op + 16)(%r15), %rax
+    mov     %rax, (L + 16)(%rsp)
+    mov     %rax, (L + 48)(%rsp)
+    mov     %r12, (L + 32)(%rsp)
+    mov     %rbp, (L + 40)(%rsp)
+    mov     APP_NODE(%rbx), %rdi
+    lea     (L + 32)(%rsp), %rsi
+    lea     (L + 40)(%rsp), %rdx
+    lea     L(%rsp), %rcx
+    lea     (L + 24)(%rsp), %r8
+    CALL_GLOBAL lantern_node_db_scan
+    mov     %rax, %r14
+    lea     (AppDb_op + 8)(%r15), %rdi
+    lea     (AppDb_op + 24)(%r15), %rsi
+    CALL_GLOBAL lantern_shell_unmap_file
+    test    %r14, %r14
+    jnz     8f
+    mov     (L + 24)(%rsp), %rax            # bytes after the last whole record: the file is cut there
+    cmp     (L + 48)(%rsp), %rax
+    jae     6f
+    movq    $1, (L + 48)(%rsp)
+    lea     APP_PATH(%rbx), %rdi
+    lea     (L + 48)(%rsp), %rsi
+    lea     AppDb_op(%r15), %rdx
+    CALL_GLOBAL lantern_shell_open
+    cmpq    $0, AppDb_op(%r15)
+    jne     6f
+    mov     (AppDb_op + 8)(%r15), %rax
+    mov     %rax, (L + 56)(%rsp)
+    lea     (L + 56)(%rsp), %rdi
+    lea     (L + 24)(%rsp), %rsi
+    lea     AppDb_op(%r15), %rdx
+    CALL_GLOBAL lantern_shell_truncate
+    lea     (L + 56)(%rsp), %rdi
+    CALL_GLOBAL lantern_shell_close
+6:  inc     %r12
+    jmp     2b
+7:  inc     %rbp
+    cmp     $2, %rbp
+    jb      1b
+    xor     %eax, %eax
+    LEAVE 64
+8:  lea     APP_PATH(%rbx), %rax            # <path>: status <n>
+    lea     24(%rax), %rdi
+    mov     16(%rax), %rsi
+    mov     %r14, %rdx
+    call    app_fail_status
+    LEAVE 64
+END_FUNCTION app_db_scan_all
+
+/*
+ * L1: NODE_ACT_DB_STATE rdi, with no anchor written in this run or one DB_SEGMENT_SLOTS slots
+ * back: the open segment files are synced; <dir>/anchor.tmp gets two ByteLists, the second at the
+ * first multiple of 8 after the first: the state's SSZ bytes, then those of its block's message;
+ * it is synced and renamed over <dir>/anchor.ssz, and the directory is synced. A failure gives a
+ * line on the standard error. rbp the action, r12 the state's entry, r13 the block's entry, r14
+ * the state's ByteList, r15 the AppDb, S7 its size. Locals: L a ByteList header, L+24 a u64, L+32
+ * zero bytes, L+40 a size, L+48 the fork, L+56 the file, L+64 the message's ByteList header.
+ */
+LOCAL_FUNCTION app_db_state
+    ENTER 96
+    mov     %rdi, %rbp
+    lea     APP_DB(%rbx), %r15
+    xor     %r14d, %r14d
+    mov     AppDb_anchor_slot(%r15), %rax
+    cmp     $-1, %rax
+    je      1f
+    add     $DB_SEGMENT_SLOTS, %rax
+    cmp     %rax, 32(%rbp)
+    jb      99f
+1:  mov     16(%rbp), %rdi
+    call    app_buf_find
+    test    %rax, %rax
+    jz      99f
+    mov     %rax, %r12
+    mov     24(%rbp), %rdi
+    call    app_buf_find
+    test    %rax, %rax
+    jz      99f
+    mov     %rax, %r13
+    cmpq    $-1, AppDb_segment(%r15)        # the open segment files are synced
+    je      2f
+    lea     AppDb_file(%r15), %rdi
+    lea     AppDb_op(%r15), %rsi
+    CALL_GLOBAL lantern_shell_sync
+2:  cmpq    $-1, (AppDb_segment + 8)(%r15)
+    je      3f
+    lea     (AppDb_file + 8)(%r15), %rdi
+    lea     AppDb_op(%r15), %rsi
+    CALL_GLOBAL lantern_shell_sync
+3:  mov     32(%rbp), %rdi                  # the state's SSZ bytes: their size, then the bytes
+    lea     APP_CONFIG(%rbx), %rsi
+    call    app_fork
+    mov     %rax, (L + 48)(%rsp)
+    movq    $24, L(%rsp)
+    movq    $0, (L + 40)(%rsp)
+    mov     %rax, %r10
+    mov     8(%r12), %rdi
+    SCRATCH %rsi
+    lea     L(%rsp), %rdx
+    lea     (L + 40)(%rsp), %rcx
+    FORK_CALL node_state_bytes
+    mov     (L + 40)(%rsp), %rax
+    cmp     $24, %rax
+    jbe     99f
+    mov     %rax, S7(%rsp)
+    mov     %rax, %rdi
+    call    app_map
+    test    %rax, %rax
+    jz      99f
+    mov     %rax, %r14
+    mov     S7(%rsp), %rax
+    mov     %rax, (%r14)
+    mov     (L + 48)(%rsp), %r10
+    mov     8(%r12), %rdi
+    SCRATCH %rsi
+    mov     %r14, %rdx
+    lea     (L + 40)(%rsp), %rcx
+    FORK_CALL node_state_bytes
+    test    %rax, %rax
+    jnz     98f
+    ADDRESS %rdi, app_anchor_tmp_name       # anchor.tmp, cut to 0
+    mov     $app_anchor_tmp_name_len, %esi
+    lea     APP_PATH(%rbx), %rdx
+    call    app_db_file
+    movq    $1, (L + 24)(%rsp)
+    lea     APP_PATH(%rbx), %rdi
+    lea     (L + 24)(%rsp), %rsi
+    lea     AppDb_op(%r15), %rdx
+    CALL_GLOBAL lantern_shell_open
+    cmpq    $0, AppDb_op(%r15)
+    jne     90f
+    mov     (AppDb_op + 8)(%r15), %rax
+    mov     %rax, (L + 56)(%rsp)
+    movq    $0, (L + 24)(%rsp)
+    lea     (L + 56)(%rsp), %rdi
+    lea     (L + 24)(%rsp), %rsi
+    lea     AppDb_op(%r15), %rdx
+    CALL_GLOBAL lantern_shell_truncate
+    cmpq    $0, AppDb_op(%r15)
+    jne     89f
+    lea     L(%rsp), %rcx                   # the state's ByteList, its header and bytes
+    mov     %r14, %rax
+    sub     %rcx, %rax
+    movq    $24, L(%rsp)
+    mov     %rax, (L + 8)(%rsp)
+    mov     S7(%rsp), %rax
+    mov     %rax, (L + 16)(%rsp)
+    lea     (L + 56)(%rsp), %rdi
+    lea     L(%rsp), %rsi
+    lea     AppDb_op(%r15), %rdx
+    CALL_GLOBAL lantern_shell_append
+    cmpq    $0, AppDb_op(%r15)
+    jne     89f
+    mov     S7(%rsp), %rax                  # zero bytes to a multiple of 8
+    neg     %rax
+    and     $7, %eax
+    jz      4f
+    movq    $0, (L + 32)(%rsp)
+    movq    $24, L(%rsp)
+    movq    $32, (L + 8)(%rsp)
+    mov     %rax, (L + 16)(%rsp)
+    lea     (L + 56)(%rsp), %rdi
+    lea     L(%rsp), %rsi
+    lea     AppDb_op(%r15), %rdx
+    CALL_GLOBAL lantern_shell_append
+    cmpq    $0, AppDb_op(%r15)
+    jne     89f
+4:  mov     8(%r13), %r8                    # the message's ByteList: its header, then its bytes, from 100 of the SignedBeaconBlock
+    mov     16(%r8), %rax
+    sub     $100, %rax
+    mov     %rax, (L + 80)(%rsp)
+    add     $24, %rax
+    mov     %rax, (L + 64)(%rsp)
+    movq    $24, (L + 72)(%rsp)
+    movq    $24, L(%rsp)
+    movq    $64, (L + 8)(%rsp)
+    movq    $24, (L + 16)(%rsp)
+    lea     (L + 56)(%rsp), %rdi
+    lea     L(%rsp), %rsi
+    lea     AppDb_op(%r15), %rdx
+    CALL_GLOBAL lantern_shell_append
+    cmpq    $0, AppDb_op(%r15)
+    jne     89f
+    mov     8(%r13), %r8
+    mov     8(%r8), %rax
+    lea     100(%r8,%rax), %rax
+    lea     L(%rsp), %rcx
+    sub     %rcx, %rax
+    movq    $24, L(%rsp)
+    mov     %rax, (L + 8)(%rsp)
+    mov     16(%r8), %rax
+    sub     $100, %rax
+    mov     %rax, (L + 16)(%rsp)
+    lea     (L + 56)(%rsp), %rdi
+    lea     L(%rsp), %rsi
+    lea     AppDb_op(%r15), %rdx
+    CALL_GLOBAL lantern_shell_append
+    cmpq    $0, AppDb_op(%r15)
+    jne     89f
+    lea     (L + 56)(%rsp), %rdi
+    lea     AppDb_op(%r15), %rsi
+    CALL_GLOBAL lantern_shell_sync
+    cmpq    $0, AppDb_op(%r15)
+    jne     89f
+    lea     (L + 56)(%rsp), %rdi
+    CALL_GLOBAL lantern_shell_close
+    ADDRESS %rdi, app_anchor_name           # over anchor.ssz, and the directory synced
+    mov     $app_anchor_name_len, %esi
+    lea     APP_PATH2(%rbx), %rdx
+    call    app_db_file
+    lea     APP_PATH(%rbx), %rdi
+    lea     APP_PATH2(%rbx), %rsi
+    lea     AppDb_op(%r15), %rdx
+    CALL_GLOBAL lantern_shell_rename
+    cmpq    $0, AppDb_op(%r15)
+    jne     90f
+    ADDRESS %rdi, app_anchor_name
+    xor     %esi, %esi
+    lea     APP_PATH(%rbx), %rdx
+    call    app_db_file
+    lea     APP_PATH(%rbx), %rdi
+    lea     AppDb_op(%r15), %rsi
+    CALL_GLOBAL lantern_shell_sync_dir
+    mov     32(%rbp), %rax
+    mov     %rax, AppDb_anchor_slot(%r15)
+    jmp     98f
+89: lea     (L + 56)(%rsp), %rdi            # the file closes
+    CALL_GLOBAL lantern_shell_close
+90: mov     AppDb_op(%r15), %rax            # cannot write <path>: error <n>
+    mov     %rax, (L + 24)(%rsp)
+    call    app_line_start
+    ADDRESS %rdi, app_m_write
+    mov     $app_m_write_len, %esi
+    call    app_line_text
+    call    app_line_path
+    ADDRESS %rdi, app_m_error
+    mov     $app_m_error_len, %esi
+    call    app_line_text
+    mov     (L + 24)(%rsp), %rdi
+    call    app_line_u64
+    mov     $2, %edi
+    call    app_line_end
+98: test    %r14, %r14                      # the bytes' memory goes back
+    jz      99f
+    mov     %r14, (L + 24)(%rsp)
+    mov     S7(%rsp), %rax
+    mov     %rax, (L + 40)(%rsp)
+    lea     (L + 24)(%rsp), %rdi
+    lea     (L + 40)(%rsp), %rsi
+    CALL_GLOBAL lantern_shell_unmap
+99: LEAVE 96
+END_FUNCTION app_db_state
+
 /* L1: rax = the table entry of the BufferId rdi, 0 for id 0, or 2^64 - 1 when no entry has it. */
 LOCAL_FUNCTION app_work_entry
     FRAME 0
@@ -1375,9 +1817,14 @@ LOCAL_FUNCTION app_actions
     mov     (%rbp), %r13
     mov     8(%rbp), %rax
     cmp     $NODE_ACT_DB_APPEND, %rax
-    jne     10f
+    jne     11f
     mov     %rbp, %rdi                      # DB_APPEND: the record in its segment file
     call    app_db_append
+    jmp     8f
+11: cmp     $NODE_ACT_DB_STATE, %rax
+    jne     10f
+    mov     %rbp, %rdi                      # DB_STATE: anchor.ssz
+    call    app_db_state
     jmp     8f
 10: cmp     $NODE_ACT_BYTES_PUT, %rax
     jne     2f
@@ -3049,11 +3496,40 @@ LOCAL_FUNCTION app_view_fill
     lea     APP_ANCHOR_HEADER(%rbx), %r14   # the header: the anchor's, or the block's
     mov     NodeBlock_data_id(%r12), %rdi
     test    %rdi, %rdi
-    jz      3f
+    jz      31f
     call    app_buf_find
     test    %rax, %rax
     jz      3f
-    mov     8(%rax), %r13
+    jmp     32f
+31: mov     APP_NODE(%rbx), %rdi            # no bytes: the block's record in the Db, when it holds one
+    testq   $NODE_FLAG_DB, Node_flags(%rdi)
+    jz      3f
+    add     Node_db(%rdi), %rdi
+    mov     %r12, %rsi
+    lea     APP_HEADER(%rbx), %rdx
+    call    lantern_db_find_root
+    mov     APP_HEADER(%rbx), %rdx
+    mov     APP_NODE(%rbx), %rax
+    add     Node_db(%rax), %rax
+    cmp     Db_end_slot(%rax), %rdx
+    jae     3f
+    mov     %rdx, %rcx
+    sub     Db_first_slot(%rax), %rcx
+    jb      3f
+    imul    $DbSlot__mem, %rcx, %rcx
+    add     Db_slots(%rax), %rcx
+    mov     DbSlot_block(%rax,%rcx), %rdi
+    test    %rdi, %rdi
+    jz      3f
+    dec     %rdi
+    shr     $DB_SEGMENT_SHIFT, %rdx
+    shl     $48, %rdx
+    or      %rdx, %rdi
+    bts     $63, %rdi
+    call    app_work_data
+    cmp     $-1, %rax
+    je      3f
+32: mov     8(%rax), %r13
     mov     NodeBlock_slot(%r12), %rdi
     lea     APP_CONFIG(%rbx), %rsi
     call    app_fork
