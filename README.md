@@ -21,7 +21,8 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | [docs/reference/networking.md](docs/reference/networking.md) | Networking rules: gossip validation of every fork, blob sidecars, custody, fork digests, subnets, ENR values, topics and message-ids |
 | [docs/reference/req-resp.md](docs/reference/req-resp.md) | Req/resp encoding: protocol IDs, request and response chunks, SSZ size bounds |
 | [docs/reference/engine-api.md](docs/reference/engine-api.md) | Engine API client: JSON-RPC requests of each fork and their responses, JWT, HTTP/1.1 |
-| [docs/reference/node.md](docs/reference/node.md) | Node core: events, actions, block import, checkpoint states, head, req/resp, gossip, sync, blob data availability, Engine API calls |
+| [docs/reference/node.md](docs/reference/node.md) | Node core: events, actions, block import, checkpoint states, head, req/resp, gossip, sync, blob data availability, Engine API calls, discovery |
+| [docs/reference/config.md](docs/reference/config.md) | The network config file |
 | [include/lantern.inc](include/lantern.inc) | Constants |
 | [include/types.inc](include/types.inc) | SSZ types and layouts of each fork, phase0 to Fulu, and the req/resp messages |
 | [include/forks.inc](include/forks.inc) | The forks, and the names of each fork's exports |

@@ -23,6 +23,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `engine.py` | The cases of the Engine API client: JWTs, HTTP requests and responses |
 | `reqresp.py` | The cases of the req/resp encoding, and the req/resp message types of the spec's text |
 | `node.py` | The cases of the node core over libp2p: an anchor, and the Status and MetaData the node answers; the blob sidecars of the spec's fork choice cases with blobs |
+| `config.py` | The cases of lantern_config_parse: the pinned spec configs, and hand cases with their values or fault lines |
 
 ## Sources
 
@@ -45,6 +46,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `<preset>-<fork>-node-blobs.bin` | Lantern's blob sidecars of the spec's `fork_choice-on_block` cases with blobs, deneb and electra: a part for each block file; made in a run with the `fork_choice` cases |
 | `<preset>-<fork>-descriptors.bin` | Each SSZ container type of the fork, and each req/resp message type, with its reference `TypeDescriptor` |
 | `<preset>-config.bin` | One case: `configs/<preset>.yaml` |
+| `<preset>-phase0-config-parse.bin` | Lantern's cases of lantern_config_parse (config.md): `text`, the bytes of a config file, and `config`, the values it gives, or `line`, its first faulty line |
 | `<preset>-kzg_setup.bin` | One case: the three point lists of `trusted_setup_4096.json` as bytes |
 | `manifest.txt` | Each file, its case count and its SHA-256 |
 

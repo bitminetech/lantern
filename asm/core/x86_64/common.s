@@ -22,6 +22,7 @@
 /* ---------------------------------------------------------------- Functions */
 
 .include "memory.s"
+.include "config.s"
 .include "seen_find.s"
 .include "store.s"
 .include "seen.s"

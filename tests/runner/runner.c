@@ -372,6 +372,9 @@ ABI uint64_t lantern_reqresp_read_payload(const void *input, const void *start, 
                                           void *scratch, void *out, void *consumed);
 ABI uint64_t lantern_ssz_size_bounds(const void *type, void *out);
 
+/* Network config: docs/reference/config.md. */
+ABI uint64_t lantern_config_parse(const void *text, void *config, void *line);
+
 /* Engine API client: docs/reference/engine-api.md. */
 ABI uint64_t lantern_jwt_token(const void *secret, const void *iat, void *scratch, void *out);
 ABI uint64_t lantern_http_post(const void *host, const void *token, const void *body, void *out);
@@ -5080,6 +5083,56 @@ static void run_reqresp(const char *file, const char *handler, case_file *f) {
     }
 }
 
+/* ---------------------------------------------------------------- Network config */
+
+#define INVALID_CONFIG 60
+
+/*
+ * config-parse: lantern_config_parse over each case's file bytes (tests/generator/config.py), from a
+ * config of a pattern; the result must be that pattern with the case's values, or for a fault
+ * the pattern unchanged and the case's line.
+ */
+static void run_config_parse(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, tlen;
+        tv parts = next_case(f, &name, &len);
+        const uint8_t *text = tv_bytes(tv_get(parts, "text"), &tlen);
+        tv want = tv_get(parts, "config"), wline = tv_get(parts, "line");
+        /* The bytes at offset 40 of the list, with digits before and after them that a read past them takes in. */
+        uint64_t size = 40 + tlen + 16;
+        uint8_t *l = buffer(size);
+        wr64(l, size);
+        wr64(l + 8, 40);
+        wr64(l + 16, tlen);
+        memset(l + 24, '7', 16);
+        if (tlen) memcpy(l + 40, text, (size_t)tlen);
+        memset(l + 40 + tlen, '9', 16);
+        uint8_t *cfg = buffer(CONFIG_SIZE), start[CONFIG_SIZE], expected[CONFIG_SIZE], kept[CONFIG_SIZE];
+        for (int b = 0; b < CONFIG_SIZE; b++) start[b] = (uint8_t)(0x5A ^ b);
+        memcpy(cfg, start, CONFIG_SIZE);
+        if (want) { /* the pattern with the case's values, as the runner reads a config map */
+            memcpy(kept, config, CONFIG_SIZE);
+            memcpy(config, start, CONFIG_SIZE);
+            config_from_map(want, 1);
+            memcpy(expected, config, CONFIG_SIZE);
+            memcpy(config, kept, CONFIG_SIZE);
+        }
+        uint64_t line = 0xFFFF, st = CALL(lantern_config_parse, l, cfg, &line);
+        if (!guard_ok(cfg, CONFIG_SIZE) || !guard_ok(l, size)) why = "lantern_config_parse wrote out of bounds";
+        else if (want) {
+            if (st != 0) why = "status is not LANTERN_OK";
+            else if (line != 0) why = "line is not 0";
+            else if (memcmp(cfg, expected, CONFIG_SIZE)) why = "the config is not the case's";
+        } else if (st != INVALID_CONFIG) why = "status is not LANTERN_INVALID_CONFIG";
+        else if (line != tv_u64(wline)) why = "line is not the case's";
+        else if (memcmp(cfg, start, CONFIG_SIZE)) why = "a faulty file changed the config";
+        report(file, name, len, !why, why);
+        free(l);
+        free(cfg);
+    }
+}
+
 /* ---------------------------------------------------------------- Engine API client */
 
 #define INVALID_HTTP 52
@@ -5295,6 +5348,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strncmp(kind, "reqresp-", 8)) run_reqresp(file, kind + 8, &f);
         else if (!bls_off && !strncmp(kind, "engine-", 7)) run_engine(file, kind + 7, &f);
         else if (!bls_off && !strcmp(kind, "node-p2p")) run_node_p2p(file, &f);
+        else if (!bls_off && !strcmp(kind, "config-parse")) run_config_parse(file, &f);
 #if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
                               !strcmp(kind, "networking-compute_columns_for_custody_group")))
