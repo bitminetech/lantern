@@ -110,6 +110,7 @@ lantern_app_main(args) -> status
 - Listens on TCP `--port` and binds UDP `--port` on every address, through the shell of asm-libp2p, gives each boot node to discv5, and listens for the Beacon API ([beacon-api.md](beacon-api.md)) on TCP `--http-port`.
 - Loops: reads the clock; passes each libp2p shell event, each discv5 record found, each execution engine response and the time to lantern_node_step; performs its actions; runs each work with lantern_node_run, with the KZG settings, and with more room when it asks; waits for the sockets until the next wakeup, at most 100 ms.
 - Writes a line to the standard output at each new head and each new finalized checkpoint, and a line `peers <n>` when the count of connected peers changes.
+- Writes the size of its scratch buffer into the buffer's first 8 bytes before each call that takes it (ARCHITECTURE.md section 6: a callee may leave scratch invalid, and the caller reinitialises it before reuse).
 
 ### ABI
 

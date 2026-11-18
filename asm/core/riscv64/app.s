@@ -21,6 +21,14 @@
 /* The App, at s1; the constants and the RODATA. */
 .include "app.inc"
 
+/* reg = the scratch buffer, its size written back into its first 8 bytes: a callee may leave it
+ * invalid (ARCHITECTURE.md section 6). Uses t1 and a7. */
+.macro SCRATCH reg
+    LDQ     \reg, s1, APP_SCRATCH
+    LDQ     t1, s1, (APP_SCRATCH + 8)
+    sd      t1, 0(\reg)
+.endm
+
 /* L0: a0 = the fork of the slot a0 with the config a1: the last fork whose epoch is at most the slot's. Uses t0-t2. */
 LOCAL_FUNCTION app_fork
     UNWIND_END_PROLOGUE
@@ -398,7 +406,7 @@ LOCAL_FUNCTION app_start
     beqz    a0, 97f
     mv      a0, s2
     ADDQ    a1, s1, APP_STATE_ROOM
-    LDQ     a2, s1, APP_SCRATCH
+    SCRATCH a2
     LDQ     a3, s1, APP_STATE
     LDQ     a4, s1, APP_BLOCK
     LDQ     t6, s1, APP_FORK
@@ -442,7 +450,7 @@ LOCAL_FUNCTION app_start
     LDQ     a1, s1, APP_BLOCK
     ADDQ    a2, s1, APP_CONFIG
     ADDQ    a3, s1, APP_STORE_ROOM
-    LDQ     a4, s1, APP_SCRATCH
+    SCRATCH a4
     LDQ     a5, s1, APP_STORE
     LDQ     t6, s1, APP_FORK
     FORK_CALL get_forkchoice_store
@@ -893,8 +901,8 @@ LOCAL_FUNCTION app_work
     addi    sp, sp, -32                     # the ninth to eleventh arguments: settings, scratch, event
     LDQ     t0, s1, APP_KZG
     sd      t0, 0(sp)
-    LDQ     t0, s1, APP_SCRATCH
-    sd      t0, 8(sp)
+    SCRATCH t2
+    sd      t2, 8(sp)
     LDQ     t0, s1, APP_WORK_EVENT
     sd      t0, 16(sp)
     LDQ     a0, s1, APP_NODE
@@ -1083,7 +1091,7 @@ LOCAL_FUNCTION app_step
     mv      a2, s2
     mv      a3, s3
     LDQ     a4, s1, APP_EVENTS
-    LDQ     a5, s1, APP_SCRATCH
+    SCRATCH a5
     LDQ     a6, s1, APP_ACTIONS
     ADDQ    a7, s1, APP_RESULT
     CALL_GLOBAL lantern_node_step
@@ -2638,7 +2646,7 @@ LOCAL_FUNCTION app_view_fill
     call    app_fork
     mv      t6, a0
     mv      a0, s4
-    LDQ     a1, s1, APP_SCRATCH
+    SCRATCH a1
     ADDQ    a2, s1, APP_HEADER
     FORK_CALL node_block_header
     bnez    a0, 3f

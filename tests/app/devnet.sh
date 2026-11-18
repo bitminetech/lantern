@@ -9,7 +9,8 @@
 #   IMAGE: the lantern image of platform/docker/Dockerfile (default lantern:local).
 #   SECONDS: the longest wait for lantern to follow, after the devnet starts (default 900).
 # KURTOSIS: the kurtosis CLI (default kurtosis). KEEP=1 keeps the enclave. CL_LOG_LEVEL: the client's
-# log level (default info).
+# log level (default info). LANTERN_MAX_CPU: lantern's CPU limit in millicores (default no limit).
+# LANTERN_DELAY: seconds before lantern starts (default 0).
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 client=$1
@@ -37,11 +38,13 @@ participants:
     validator_count: 0
 additional_services: []
 lantern_image: $image
+lantern_max_cpu: ${LANTERN_MAX_CPU:-0}
+lantern_delay: ${LANTERN_DELAY:-0}
 EOF
 
 cleanup() {
     echo "== lantern"
-    $kurtosis service logs $enclave lantern > "$work/lantern.log" 2>&1 || true
+    $kurtosis service logs -a $enclave lantern > "$work/lantern.log" 2>&1 || true
     grep -v "record enr" "$work/lantern.log" | grep -v "lantern: slot" | head -40 || true
     grep "lantern: slot" "$work/lantern.log" | tail -10 || true
     [ "${KEEP:-0}" = 1 ] || $kurtosis enclave rm -f $enclave >/dev/null 2>&1 || true

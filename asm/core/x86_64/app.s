@@ -21,6 +21,14 @@
 /* The App, at rbx; the constants and the RODATA. */
 .include "app.inc"
 
+/* reg = the scratch buffer, its size written back into its first 8 bytes: a callee may leave it
+ * invalid (ARCHITECTURE.md section 6). Uses r11. */
+.macro SCRATCH reg
+    mov     APP_SCRATCH(%rbx), \reg
+    mov     (APP_SCRATCH + 8)(%rbx), %r11
+    mov     %r11, (\reg)
+.endm
+
 /* L0: rax = the fork of the slot rdi with the config rsi: the last fork whose epoch is at most the slot's. Uses rcx, rdx. */
 LOCAL_FUNCTION app_fork
     UNWIND_END_PROLOGUE
@@ -407,7 +415,7 @@ LOCAL_FUNCTION app_start
     jz      97f
     mov     %rbp, %rdi
     lea     APP_STATE_ROOM(%rbx), %rsi
-    mov     APP_SCRATCH(%rbx), %rdx
+    SCRATCH %rdx
     mov     APP_STATE(%rbx), %rcx
     mov     APP_BLOCK(%rbx), %r8
     mov     APP_FORK(%rbx), %r10
@@ -454,7 +462,7 @@ LOCAL_FUNCTION app_start
     mov     APP_BLOCK(%rbx), %rsi
     lea     APP_CONFIG(%rbx), %rdx
     lea     APP_STORE_ROOM(%rbx), %rcx
-    mov     APP_SCRATCH(%rbx), %r8
+    SCRATCH %r8
     mov     APP_STORE(%rbx), %r9
     mov     APP_FORK(%rbx), %r10
     FORK_CALL get_forkchoice_store
@@ -923,7 +931,7 @@ LOCAL_FUNCTION app_work
 12: mov     %rax, 8(%rsp)
     mov     APP_KZG(%rbx), %rax
     mov     %rax, 16(%rsp)
-    mov     APP_SCRATCH(%rbx), %rax
+    SCRATCH %rax
     mov     %rax, 24(%rsp)
     mov     APP_WORK_EVENT(%rbx), %rax
     mov     %rax, 32(%rsp)
@@ -1128,7 +1136,7 @@ LOCAL_FUNCTION app_step
     mov     %rbp, %rdx
     mov     %r12, %rcx
     mov     APP_EVENTS(%rbx), %r8
-    mov     APP_SCRATCH(%rbx), %r9
+    SCRATCH %r9
     CALL_GLOBAL lantern_node_step
     add     $16, %rsp
     test    %rax, %rax
@@ -2660,7 +2668,7 @@ LOCAL_FUNCTION app_view_fill
     call    app_fork
     mov     %rax, %r10
     mov     %r13, %rdi
-    mov     APP_SCRATCH(%rbx), %rsi
+    SCRATCH %rsi
     lea     APP_HEADER(%rbx), %rdx
     FORK_CALL node_block_header
     test    %rax, %rax
