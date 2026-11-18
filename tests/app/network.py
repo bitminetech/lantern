@@ -4,8 +4,8 @@ Usage: python3 tests/app/network.py OUT_DIR PRESET FORK [GENESIS_TIME] [VALIDATO
 
 Runs with the generator's environment (tests/generator/run.sh): the pinned spec modules on the
 path, and CONSENSUS_SPECS set. config.yaml is the pinned configs/<PRESET>.yaml with each fork up
-to FORK at epoch 0 and each later fork at 2^64 - 1, each key once, and SECONDS_PER_SLOT
-(SLOT_DURATION_MS / 1000) for other clients. genesis.ssz, with GENESIS_TIME (default: now)
+to FORK at epoch 0 and each later fork at 2^64 - 1, each key once, CONFIG_NAME lantern-<PRESET>-<FORK>,
+and SECONDS_PER_SLOT (SLOT_DURATION_MS / 1000) for other clients. genesis.ssz, with GENESIS_TIME (default: now)
 as its genesis_time:
 - with no VALIDATORS, the anchor state of tests/generator/node.py (8 validators with made up
   keys, the first slot of epoch 2) of FORK;
@@ -68,6 +68,8 @@ def main():
     state.genesis_time = genesis_time
     out.mkdir(parents=True, exist_ok=True)
     text = (pathlib.Path(os.environ["CONSENSUS_SPECS"]) / "configs" / f"{preset}.yaml").read_text()
+    # A name of its own: prysm takes CONFIG_NAME mainnet for the real mainnet, with its genesis.
+    text = re.sub(r"^CONFIG_NAME: .*$", f"CONFIG_NAME: 'lantern-{preset}-{fork}'", text, flags=re.M)
     for key, value in config.items():  # each key once: other clients refuse a key given twice
         text, n = re.subn(rf"^{key}: .*$", f"{key}: {value}", text, flags=re.M)
         if not n:
