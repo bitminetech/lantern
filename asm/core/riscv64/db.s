@@ -239,28 +239,42 @@ FUNCTION lantern_db_add
     beq     t0, t1, 4f
     li      t1, DB_COLUMN_SIDECAR
     bne     t0, t1, 7f
-4:  ld      t0, DbSlot_block(s5)            # a sidecar: of a slot with a block
+4:  ld      t0, DbSlot_block(s5)            # a sidecar: of a slot with a block, an index below DB_SIDECAR_INDICES
     beqz    t0, 7f
+    ld      t3, DbRecord_index(s2)
+    li      t1, DB_SIDECAR_INDICES
+    bgeu    t3, t1, 7f
+    ld      t4, DbRecord_length(s2)         # its size: 64 + length rounded up to 8
+    addi    t4, t4, DbRecord__mem + 7
+    andi    t4, t4, -8
     ld      t0, DbSlot_sidecars(s5)
     beqz    t0, 2f
-    ld      t0, DbSlot_sidecar_end(s5)      # after the slot's sidecars, with a higher index
-    bne     t0, s3, 7f
-    ld      t0, DbRecord_index(s2)
+    ld      t1, DbSlot_sidecar_end(s5)      # after the slot's sidecars, of their size, with a higher index
+    bne     t1, s3, 7f
+    sub     t1, t1, t0
+    addi    t1, t1, 1                       # the bytes of the slot's sidecars
+    ld      t2, DbSlot_sidecar_count(s5)
+    mul     t2, t2, t4
+    bne     t2, t1, 7f
     ld      t1, DbSlot_sidecar_last(s5)
-    bleu    t0, t1, 7f
+    bleu    t3, t1, 7f
     j       3f
 2:  addi    t0, s3, 1
     sd      t0, DbSlot_sidecars(s5)
 3:  ld      t0, DbSlot_sidecar_count(s5)
     addi    t0, t0, 1
     sd      t0, DbSlot_sidecar_count(s5)
-    ld      t0, DbRecord_length(s2)         # its end: 64 + length rounded up to 8
-    addi    t0, t0, DbRecord__mem + 7
-    andi    t0, t0, -8
-    add     t0, t0, s3
+    add     t0, t4, s3
     sd      t0, DbSlot_sidecar_end(s5)
-    ld      t0, DbRecord_index(s2)
-    sd      t0, DbSlot_sidecar_last(s5)
+    sd      t3, DbSlot_sidecar_last(s5)
+    srli    t0, t3, 3                       # its bit in indices
+    add     t0, t0, s5
+    lbu     t1, DbSlot_indices(t0)
+    andi    t2, t3, 7
+    li      t5, 1
+    sll     t5, t5, t2
+    or      t1, t1, t5
+    sb      t1, DbSlot_indices(t0)
     j       9f
 1:  ld      t0, DbSlot_block(s5)            # a block: none in its slot, its root in no other
     bnez    t0, 7f

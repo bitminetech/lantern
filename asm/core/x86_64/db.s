@@ -228,26 +228,36 @@ FUNCTION lantern_db_add
     je      4f
     cmp     $DB_COLUMN_SIDECAR, %rax
     jne     7f
-4:  cmpq    $0, DbSlot_block(%r14)          # a sidecar: of a slot with a block
+4:  cmpq    $0, DbSlot_block(%r14)          # a sidecar: of a slot with a block, an index below DB_SIDECAR_INDICES
     je      7f
-    cmpq    $0, DbSlot_sidecars(%r14)
-    je      2f
-    cmp     %r12, DbSlot_sidecar_end(%r14)  # after the slot's sidecars, with a higher index
+    mov     DbRecord_index(%rbp), %r15
+    cmp     $DB_SIDECAR_INDICES, %r15
+    jae     7f
+    mov     DbRecord_length(%rbp), %rcx     # its size: 64 + length rounded up to 8
+    add     $(DbRecord__mem + 7), %rcx
+    and     $-8, %rcx
+    mov     DbSlot_sidecars(%r14), %rax
+    test    %rax, %rax
+    jz      2f
+    cmp     %r12, DbSlot_sidecar_end(%r14)  # after the slot's sidecars, of their size, with a higher index
     jne     7f
-    mov     DbRecord_index(%rbp), %rax
-    cmp     DbSlot_sidecar_last(%r14), %rax
+    mov     DbSlot_sidecar_end(%r14), %rdx
+    sub     %rax, %rdx
+    inc     %rdx                            # the bytes of the slot's sidecars
+    mov     DbSlot_sidecar_count(%r14), %rax
+    imul    %rcx, %rax
+    cmp     %rdx, %rax
+    jne     7f
+    cmp     DbSlot_sidecar_last(%r14), %r15
     jbe     7f
     jmp     3f
 2:  lea     1(%r12), %rax
     mov     %rax, DbSlot_sidecars(%r14)
 3:  incq    DbSlot_sidecar_count(%r14)
-    mov     DbRecord_length(%rbp), %rax     # its end: 64 + length rounded up to 8
-    add     $(DbRecord__mem + 7), %rax
-    and     $-8, %rax
-    add     %r12, %rax
+    lea     (%rcx,%r12), %rax
     mov     %rax, DbSlot_sidecar_end(%r14)
-    mov     DbRecord_index(%rbp), %rax
-    mov     %rax, DbSlot_sidecar_last(%r14)
+    mov     %r15, DbSlot_sidecar_last(%r14)
+    bts     %r15, DbSlot_indices(%r14)      # its bit in indices
     jmp     9f
 1:  cmpq    $0, DbSlot_block(%r14)          # a block: none in its slot, its root in no other
     jne     7f

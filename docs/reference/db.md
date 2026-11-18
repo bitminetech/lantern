@@ -144,9 +144,10 @@ lantern_db_add(db, record, offset) -> status
 
 ### Function does
 
-- The rules: `kind` is `DB_BLOCK`, `DB_BLOB_SIDECAR` or `DB_COLUMN_SIDECAR`; the slot is at least `first_slot`; `offset` is a multiple of 8 and below 2^48. A block: its slot has no block yet, and its root is in no other slot. A sidecar: its slot has a block, and its offset is the end of the slot's sidecars before it or the slot has none, and its index is above the slot's `sidecar_last`.
+- The rules: `kind` is `DB_BLOCK`, `DB_BLOB_SIDECAR` or `DB_COLUMN_SIDECAR`; the slot is at least `first_slot`; `offset` is a multiple of 8 and below 2^48. A block: its slot has no block yet, and its root is in no other slot. A sidecar: its slot has a block, its index is below `DB_SIDECAR_INDICES` (128) and above the slot's `sidecar_last` when the slot has sidecars, and its offset is the end of the slot's sidecars before it, with the size of the slot's first sidecar record, or the slot has none.
 - A block: the slot's `block` takes `offset` + 1 and its `root` the record's root; the root goes in the root table; `end_slot` takes the slot + 1 when that is more.
-- A sidecar: the slot's `sidecars` takes `offset` + 1 when it has none, `sidecar_count` takes 1 more, `sidecar_end` takes `offset` + the record's size, and `sidecar_last` its index.
+- A sidecar: the slot's `sidecars` takes `offset` + 1 when it has none, `sidecar_count` takes 1 more, `sidecar_end` takes `offset` + the record's size, `sidecar_last` its index, and `indices` its bit.
+- So the sidecar records of a slot are of one size, and the record of index i lies at `sidecars` - 1 + that size times the count of the slot's indices below i: a node finds any sidecar without reading the segment.
 - `length` is at most `DB_RECORD_MAX` for each kind.
 
 ## Function `lantern_db_scan`
@@ -267,10 +268,11 @@ The index of the history: a value with parts.
 | 48 | `sidecar_count` | u64 | |
 | 56 | `sidecar_end` | u64 | The offset after its last sidecar record |
 | 64 | `sidecar_last` | u64 | The index of its last sidecar |
+| 72 | `indices` | 16 bytes | The indices of its sidecars: bit i % 8 of byte i / 8 for index i |
 
 ### Rules
 
-- `DbSlot__mem` (72) bytes.
+- `DbSlot__mem` (88) bytes.
 
 ## Type `DbRecord`
 

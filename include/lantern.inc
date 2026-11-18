@@ -774,7 +774,8 @@
 .set DbSlot_sidecar_count, 48
 .set DbSlot_sidecar_end, 56
 .set DbSlot_sidecar_last, 64
-.set DbSlot__mem, 72
+.set DbSlot_indices, 72                /* bit i % 8 of byte i / 8 for each sidecar index i */
+.set DbSlot__mem, 88
 .set DbRecord_length, 0
 .set DbRecord_kind, 8
 .set DbRecord_slot, 16
@@ -786,6 +787,7 @@
 .set DB_COLUMN_SIDECAR, 3
 .set DB_SEGMENT_SLOTS, 8192
 .set DB_RECORD_MAX, 1 << 32
+.set DB_SIDECAR_INDICES, 128           /* a sidecar's index is below this */
 
 /* ApiView (docs/reference/beacon-api.md): the values lantern_api_answer shows. A text field is a length, then its bytes. */
 .set ApiView_genesis_time, 0

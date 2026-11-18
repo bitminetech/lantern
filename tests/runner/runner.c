@@ -5498,7 +5498,7 @@ static void run_config_parse(const char *file, case_file *f) {
 #define DB_END_SLOT 16
 #define DB_SLOTS 24
 #define DB_BLOCKS 56
-#define DB_SLOT_BYTES 72
+#define DB_SLOT_BYTES 88
 
 /* A Db of a room [slots, roots], from lantern_db_size and lantern_db_init at a first slot; its size in *size. */
 static uint8_t *db_new(const uint64_t *room, uint64_t first, uint64_t *size, const char **why) {

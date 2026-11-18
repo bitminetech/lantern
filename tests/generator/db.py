@@ -22,6 +22,7 @@ SEG = 8192  # DB_SEGMENT_SLOTS
 U64 = (1 << 64) - 1
 BLOCK, BLOB, COLUMN = 1, 2, 3
 RECORD_MAX = 1 << 32
+INDICES = 128  # DB_SIDECAR_INDICES
 OK, SMALL, INVALID = 0, 1, 2
 
 
@@ -42,7 +43,7 @@ class Model:
     def __init__(self, room, first):
         self.cap, self.rcap = room
         self.first = self.end = first
-        self.entries = {}  # entry index: [root, block, sidecars, count, end, last]
+        self.entries = {}  # entry index: [root, block, sidecars, count, end, last, indices]
         self.roots = {}  # root: entry index
 
     def add(self, kind, slot, index, root, length, offset):
@@ -58,20 +59,21 @@ class Model:
                 return INVALID
             if (len(self.roots) + 1) * 2 > self.rcap:
                 return SMALL
-            self.entries[i] = [root, offset + 1, 0, 0, 0, 0]
+            self.entries[i] = [root, offset + 1, 0, 0, 0, 0, 0]
             self.roots[root] = i
             self.end = max(self.end, slot + 1)
             return OK
-        if kind not in (BLOB, COLUMN) or not e or not e[1]:
+        if kind not in (BLOB, COLUMN) or not e or not e[1] or index >= INDICES:
             return INVALID
         if e[2]:
-            if e[4] != offset or index <= e[5]:
+            if e[4] != offset or index <= e[5] or size * e[3] != e[4] - (e[2] - 1):
                 return INVALID
         else:
             e[2] = offset + 1
         e[3] += 1
         e[4] = offset + size
         e[5] = index
+        e[6] |= 1 << index
         return OK
 
     def scan(self, number, sidecars, data):
@@ -96,7 +98,7 @@ class Model:
         out = bytearray()
         for i in range(self.end - self.first):
             e = self.entries.get(i)
-            out += e[0] + struct.pack("<QQQQQ", *e[1:]) if e else bytes(72)
+            out += e[0] + struct.pack("<QQQQQ", *e[1:6]) + e[6].to_bytes(16, "little") if e else bytes(88)
         return bytes(out)
 
     def find(self, root):
@@ -134,7 +136,7 @@ class Case:
         return record(BLOCK, slot, 0, root, self.bytes_of(40 + slot % 61)), root
 
     def sidecar(self, kind, slot, index):
-        return record(kind, slot, index, made(self.name, "block", slot), self.bytes_of(8 + (slot * 7 + index) % 53))
+        return record(kind, slot, index, made(self.name, "block", slot), self.bytes_of(8 + slot * 7 % 53))
 
     def segment(self, number, sidecars, data):
         status, valid = self.model.scan(number, sidecars, data)
@@ -246,6 +248,14 @@ def rules():
         c.segment(0, 1, c.sidecar(BLOB, 5, 0) + c.block(6)[0])
         c.segment(1, 1, record(7, SEG, 0, made("k"), b"abc"))
 
+    def other_size(c):
+        c.segment(0, 0, c.block(5)[0])
+        c.segment(0, 1, c.sidecar(COLUMN, 5, 1) + c.sidecar(COLUMN, 5, 2) + record(COLUMN, 5, 3, made(c.name, "block", 5), b"\1" * 99))
+
+    def index_high(c):
+        c.segment(0, 0, c.block(5)[0])
+        c.segment(0, 1, c.sidecar(COLUMN, 5, 126) + c.sidecar(COLUMN, 5, 127) + c.sidecar(COLUMN, 5, 128))
+
     def too_long(c):
         c.segment(0, 0, c.block(5)[0] + record(BLOCK, 6, 0, made("long"), b"", length=RECORD_MAX + 1))
 
@@ -257,6 +267,7 @@ def rules():
     return [rule(n, b) for n, b in (("block_twice", twice), ("slot_outside", outside), ("root_twice", same_root),
                                      ("sidecar_no_block", no_block), ("sidecar_index_order", index_order),
                                      ("sidecars_apart", apart), ("wrong_kind", wrong_kind),
+                                     ("sidecar_other_size", other_size), ("sidecar_index_high", index_high),
                                      ("length_over_max", too_long), ("below_first_slot", below_first))]
 
 

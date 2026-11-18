@@ -242,15 +242,26 @@ FUNCTION lantern_db_add
     cmp     x9, #DB_BLOB_SIDECAR
     ccmp    x9, #DB_COLUMN_SIDECAR, #4, ne
     b.ne    7f
-    ldr     x9, [x23, #DbSlot_block]        /* a sidecar: of a slot with a block */
+    ldr     x9, [x23, #DbSlot_block]        /* a sidecar: of a slot with a block, an index below DB_SIDECAR_INDICES */
     cbz     x9, 7f
+    ldr     x11, [x20, #DbRecord_index]
+    cmp     x11, #DB_SIDECAR_INDICES
+    b.hs    7f
+    ldr     x12, [x20, #DbRecord_length]    /* its size: 64 + length rounded up to 8 */
+    add     x12, x12, #(DbRecord__mem + 7)
+    and     x12, x12, #~7
     ldr     x9, [x23, #DbSlot_sidecars]
     cbz     x9, 2f
-    ldr     x10, [x23, #DbSlot_sidecar_end] /* after the slot's sidecars, with a higher index */
+    ldr     x10, [x23, #DbSlot_sidecar_end] /* after the slot's sidecars, of their size, with a higher index */
     cmp     x10, x21
     b.ne    7f
+    sub     x10, x10, x9
+    add     x10, x10, #1                    /* the bytes of the slot's sidecars */
+    ldr     x13, [x23, #DbSlot_sidecar_count]
+    mul     x13, x13, x12
+    cmp     x13, x10
+    b.ne    7f
     ldr     x10, [x23, #DbSlot_sidecar_last]
-    ldr     x11, [x20, #DbRecord_index]
     cmp     x11, x10
     b.ls    7f
     b       3f
@@ -259,13 +270,17 @@ FUNCTION lantern_db_add
 3:  ldr     x9, [x23, #DbSlot_sidecar_count]
     add     x9, x9, #1
     str     x9, [x23, #DbSlot_sidecar_count]
-    ldr     x9, [x20, #DbRecord_length]     /* its end: 64 + length rounded up to 8 */
-    add     x9, x9, #(DbRecord__mem + 7)
-    and     x9, x9, #~7
-    add     x9, x9, x21
+    add     x9, x12, x21
     str     x9, [x23, #DbSlot_sidecar_end]
-    ldr     x9, [x20, #DbRecord_index]
-    str     x9, [x23, #DbSlot_sidecar_last]
+    str     x11, [x23, #DbSlot_sidecar_last]
+    lsr     x9, x11, #3                     /* its bit in indices */
+    add     x9, x9, #DbSlot_indices
+    ldrb    w10, [x23, x9]
+    and     x13, x11, #7
+    mov     x14, #1
+    lsl     x14, x14, x13
+    orr     x10, x10, x14
+    strb    w10, [x23, x9]
     b       9f
 1:  ldr     x9, [x23, #DbSlot_block]        /* a block: none in its slot, its root in no other */
     cbnz    x9, 7f
