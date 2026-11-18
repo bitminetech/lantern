@@ -553,6 +553,8 @@
 .set NODE_ENGINE_HOST_MAX, 64
 .set NODE_STATE_SLOT, 48               /* BeaconState.slot in the value of every fork */
 .set NODE_STATE_GVR, 16                /* BeaconState.genesis_validators_root in the value of every fork */
+.set NODE_STATE_HEADER, 72             /* BeaconState.latest_block_header in the value of every fork */
+.set NODE_BLOCK_STATE_ROOT, 56         /* BeaconBlock.state_root in the value of every fork */
 
 /* NodeBlock: a block the node knows */
 .set NodeBlock_root, 0

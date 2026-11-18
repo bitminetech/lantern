@@ -11,6 +11,9 @@
 .if BeaconState_current_justified_checkpoint - BeaconState_previous_justified_checkpoint - 40 || BeaconState_finalized_checkpoint - BeaconState_current_justified_checkpoint - 40
 .error "the checkpoints of BeaconState do not follow each other"
 .endif
+.if BeaconState_latest_block_header - NODE_STATE_HEADER || BeaconBlock_state_root - NODE_BLOCK_STATE_ROOT
+.error "BeaconState_latest_block_header or BeaconBlock_state_root is not the common offset"
+.endif
 .if BeaconState_genesis_validators_root - NODE_STATE_GVR
 .error "BeaconState_genesis_validators_root is not NODE_STATE_GVR"
 .endif
