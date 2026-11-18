@@ -6,7 +6,7 @@
 
 - [`lantern_shell_map`](#function-lantern_shell_map): gives zeroed memory.
 - [`lantern_shell_unmap`](#function-lantern_shell_unmap): gives memory back.
-- [`lantern_shell_read_file`](#function-lantern_shell_read_file): reads a whole file into new memory.
+- [`lantern_shell_read_file`](#function-lantern_shell_read_file): reads a whole file into a new ByteList.
 - [`lantern_shell_write`](#function-lantern_shell_write): writes bytes to the standard output or the standard error.
 - [`lantern_shell_time_ms`](#function-lantern_shell_time_ms): reads the Unix time in milliseconds.
 
@@ -100,7 +100,7 @@ lantern_shell_unmap(address, size) -> status
 
 ## Function `lantern_shell_read_file`
 
-Reads a whole file into memory that lantern_shell_map gives.
+Reads a whole file into a ByteList in memory that lantern_shell_map gives.
 
 ### Signature
 
@@ -121,7 +121,8 @@ lantern_shell_read_file(path, result) -> status
 
 ### Function does
 
-- Opens the file for reading, reads its size, maps that size (at least 1 byte) with lantern_shell_map, reads every byte, and closes the file.
+- Opens the file for reading, reads its size, maps 24 bytes more than that size with lantern_shell_map, reads every byte after the first 24, and closes the file.
+- The memory is a ByteList: `size` the bytes mapped, `offset` 24, `count` the file's size.
 - An OS error of any step, a path above 4095 bytes (Linux and macOS `ENAMETOOLONG`, Windows `ERROR_FILENAME_EXCED_RANGE`), or a file that ends before its size: `error` holds it, the memory goes back, and `address` is 0.
 
 ### ABI
@@ -204,7 +205,7 @@ The outcome of `lantern_shell_read_file`.
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `error` | u64 | 0, or the OS error number; 1 when the file ends before its size |
-| 8 | `address` | u64 | The memory with the bytes, or 0 |
+| 8 | `address` | u64 | The ByteList with the bytes, or 0 |
 | 16 | `size` | u64 | The bytes of the file |
 | 24 | `mapped` | u64 | The size given to lantern_shell_map, for lantern_shell_unmap |
 

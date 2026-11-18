@@ -82,15 +82,18 @@ int main(int argc, char **argv) {
     }
     uint64_t r[4];
     read_file(path, strlen(path), r);
-    check(r[0] == 0 && r[1] != 0 && r[2] == n && r[3] >= n && !memcmp((void *)(uintptr_t)r[1], want, n),
-          "read_file: the bytes of a file");
+    const uint64_t *h = (const uint64_t *)(uintptr_t)r[1];
+    check(r[0] == 0 && r[1] != 0 && r[2] == n && r[3] == 24 + n && h[0] == r[3] && h[1] == 24 && h[2] == n &&
+              !memcmp((const uint8_t *)h + 24, want, n),
+          "read_file: a ByteList of the bytes of a file");
     if (r[1]) lantern_shell_unmap(&r[1], &r[3]);
 
     /* An empty file: no error, size 0, memory of at least 1 byte. */
     f = fopen(path, "wb");
     if (!f || fclose(f) != 0) return 2;
     read_file(path, strlen(path), r);
-    check(r[0] == 0 && r[1] != 0 && r[2] == 0 && r[3] >= 1, "read_file: an empty file");
+    h = (const uint64_t *)(uintptr_t)r[1];
+    check(r[0] == 0 && r[1] != 0 && r[2] == 0 && r[3] == 24 && h[0] == 24 && h[1] == 24 && h[2] == 0, "read_file: an empty file");
     if (r[1]) lantern_shell_unmap(&r[1], &r[3]);
     remove(path);
 

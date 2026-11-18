@@ -71,7 +71,7 @@ END_FUNCTION lantern_shell_unmap
 
 /*
  * (path, result): docs/reference/shell.md. Locals: L result, L+8 the file, L+16 the memory,
- * L+24 the file's size, L+32 the size mapped, L+40 the bytes read or an error, L+48 a struct
+ * L+24 the file's size, L+32 the size mapped (24 more), L+40 the bytes read or an error, L+48 a struct
  * stat (144 bytes), L+192 the path with a zero after it (4096 bytes).
  */
 FUNCTION lantern_shell_read_file
@@ -104,10 +104,8 @@ FUNCTION lantern_shell_read_file
     jae     80f
     mov     (L + 48 + OS_STAT_SIZE)(%rsp), %rsi
     mov     %rsi, (L + 24)(%rsp)
-    test    %rsi, %rsi                      # memory of the size, at least 1 byte
-    jnz     1f
-    mov     $1, %esi
-1:  mov     %rsi, (L + 32)(%rsp)
+    add     $24, %rsi                       # a ByteList: 24 bytes, then the file's
+    mov     %rsi, (L + 32)(%rsp)
     xor     %edi, %edi
     mov     $OS_PROT_RW, %edx
     mov     $OS_MAP_PRIVATE_ANON, %r10d
@@ -117,6 +115,11 @@ FUNCTION lantern_shell_read_file
     cmp     $-4095, %rax
     jae     80f
     mov     %rax, (L + 16)(%rsp)
+    mov     (L + 32)(%rsp), %rcx
+    mov     %rcx, (%rax)
+    movq    $24, 8(%rax)
+    mov     (L + 24)(%rsp), %rcx
+    mov     %rcx, 16(%rax)
     movq    $0, (L + 40)(%rsp)
 2:  mov     (L + 40)(%rsp), %rsi            # every byte
     cmp     (L + 24)(%rsp), %rsi
@@ -125,6 +128,7 @@ FUNCTION lantern_shell_read_file
     mov     (L + 24)(%rsp), %rdx
     sub     %rsi, %rdx
     add     (L + 16)(%rsp), %rsi
+    add     $24, %rsi
     SYSCALL SYS_READ
     cmp     $-OS_EINTR, %rax
     je      2b

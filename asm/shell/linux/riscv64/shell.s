@@ -77,7 +77,7 @@ END_FUNCTION lantern_shell_unmap
 
 /*
  * (path, result): docs/reference/shell.md. t0 result, t1 the file, t2 the memory, t3 the file's
- * size, t4 the size mapped, t5 the bytes read or an error, t6 a check. Frame: 64 a struct stat,
+ * size, t4 the size mapped (24 more), t5 the bytes read or an error, t6 a check. Frame: 64 a struct stat,
  * 256 the path with a zero after it.
  */
 FUNCTION lantern_shell_read_file
@@ -117,10 +117,8 @@ FUNCTION lantern_shell_read_file
     SYSCALL SYS_FSTAT
     IF_ERROR a0, t6, 80f
     ld      t3, (64 + OS_STAT_SIZE)(sp)
-    mv      t4, t3                          # memory of the size, at least 1 byte
-    bnez    t4, 3f
-    li      t4, 1
-3:  li      a0, 0
+    addi    t4, t3, 24                      # a ByteList: 24 bytes, then the file's
+    li      a0, 0
     mv      a1, t4
     li      a2, OS_PROT_RW
     li      a3, OS_MAP_PRIVATE_ANON
@@ -129,10 +127,15 @@ FUNCTION lantern_shell_read_file
     SYSCALL SYS_MMAP
     IF_ERROR a0, t6, 80f
     mv      t2, a0
+    sd      t4, 0(t2)
+    li      t6, 24
+    sd      t6, 8(t2)
+    sd      t3, 16(t2)
     li      t5, 0
 4:  bgeu    t5, t3, 5f                      # every byte
     mv      a0, t1
     add     a1, t2, t5
+    addi    a1, a1, 24
     sub     a2, t3, t5
     SYSCALL SYS_READ
     li      t6, -OS_EINTR
