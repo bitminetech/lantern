@@ -95,3 +95,11 @@ lantern_config_parse(text, config, line) -> status
 ## Results
 
 <!-- CI generates the tick table for each function here. -->
+
+### `lantern_config_parse`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
