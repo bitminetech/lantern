@@ -34,10 +34,58 @@
 .set OS_STAT_SIZE, 48                       /* st_size in the generic struct stat */
 .set SHELL_PATH_MAX, 4095
 .set SHELL_READ_FRAME, 2 << 12              /* read_file: 64 the struct stat, 256 the path */
+.set SYS_MKDIRAT, 34
+.set SYS_UNLINKAT, 35
+.set SYS_FTRUNCATE, 46
+.set SYS_FSYNC, 82
+.set SYS_FDATASYNC, 83
+.set SYS_RENAMEAT2, 276
+.set OS_O_APPEND_CREATE, 0x80441           /* O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC */
+.set OS_MODE_FILE, 420                      /* 0644 */
+.set OS_MODE_DIR, 493                       /* 0755 */
+.set OS_PROT_READ, 1
+.set OS_MAP_SHARED, 1
+.set OS_EIO, 5
+.set OS_EINVAL, 22
+.set SHELL_PATH_FRAME, 4096                 /* a path with a zero after it */
+.set SHELL_TWO_PATHS, 8192                  /* two of them */
 
 .macro SYSCALL number
     mov     x8, #\number
     svc     #0
+.endm
+
+/* A leaf with a frame of size bytes, and its one return of LANTERN_OK. */
+.macro SHELL_FRAME size
+    sub     sp, sp, #(\size)
+    UNWIND_ALLOC (\size)
+    UNWIND_END_PROLOGUE
+.endm
+
+.macro SHELL_RETURN size
+    mov     x0, #LANTERN_OK
+    UNWIND_BEGIN_EPILOGUE
+    add     sp, sp, #(\size)
+    UNWIND_FREE (\size)
+    UNWIND_END_EPILOGUE
+    ret
+.endm
+
+/* The path ByteList at \src as a string with a zero after it at \dst; to \long when above SHELL_PATH_MAX bytes. Uses x2-x5. */
+.macro CPATH src, dst, long
+    ldr     x2, [\src, #16]
+    cmp     x2, #SHELL_PATH_MAX
+    b.hi    \long
+    ldr     x3, [\src, #8]
+    add     x3, \src, x3
+    mov     x4, #0
+88: cmp     x4, x2
+    b.hs    89f
+    ldrb    w5, [x3, x4]
+    strb    w5, [\dst, x4]
+    add     x4, x4, #1
+    b       88b
+89: strb    wzr, [\dst, x4]
 .endm
 
 /* To label when \reg is minus an error number (-4095 to -1). */
@@ -211,3 +259,273 @@ FUNCTION lantern_shell_time_ms
     UNWIND_END_EPILOGUE
     ret
 END_FUNCTION lantern_shell_time_ms
+
+/* (path, mode, result): docs/reference/shell.md. x9 result, x10 the flags. Frame: the path. */
+FUNCTION lantern_shell_open
+    SHELL_FRAME SHELL_PATH_FRAME
+    mov     x9, x2
+    stp     xzr, xzr, [x9]
+    ldr     x10, [x1]
+    cmp     x10, #1
+    b.hi    92f
+    mov     x11, #OS_O_RDONLY_CLOEXEC
+    MOVQ    x12, OS_O_APPEND_CREATE
+    csel    x10, x12, x11, eq
+    mov     x6, sp
+    CPATH   x0, x6, 91f
+1:  mov     x0, #OS_AT_FDCWD
+    mov     x1, sp
+    mov     x2, x10
+    mov     x3, #OS_MODE_FILE
+    SYSCALL SYS_OPENAT
+    cmn     x0, #OS_EINTR
+    b.eq    1b
+    IF_ERROR x0, 90f
+    str     x0, [x9, #8]
+    b       99f
+92: mov     x0, #-OS_EINVAL
+    b       90f
+91: mov     x0, #-OS_ENAMETOOLONG
+90: neg     x0, x0
+    str     x0, [x9]
+99: SHELL_RETURN SHELL_PATH_FRAME
+END_FUNCTION lantern_shell_open
+
+/* (file, bytes, result): docs/reference/shell.md. x9 result, x10 the file, x11 the bytes, x12 their count, x13 written. */
+FUNCTION lantern_shell_append
+    UNWIND_END_PROLOGUE
+    mov     x9, x2
+    stp     xzr, xzr, [x9]
+    ldr     x10, [x0]
+    ldp     x11, x12, [x1, #8]
+    add     x11, x1, x11
+    mov     x13, #0
+1:  cmp     x13, x12
+    b.hs    9f
+    mov     x0, x10
+    add     x1, x11, x13
+    sub     x2, x12, x13
+    SYSCALL SYS_WRITE
+    cmn     x0, #OS_EINTR
+    b.eq    1b
+    IF_ERROR x0, 8f
+    cbz     x0, 7f
+    add     x13, x13, x0
+    b       1b
+7:  mov     x0, #-OS_EIO                    /* no progress */
+8:  neg     x0, x0
+    str     x0, [x9]
+9:  str     x13, [x9, #8]
+    mov     x0, #LANTERN_OK
+    ret
+END_FUNCTION lantern_shell_append
+
+/* (file, result): docs/reference/shell.md. x9 result, x10 the file. */
+FUNCTION lantern_shell_sync
+    UNWIND_END_PROLOGUE
+    mov     x9, x1
+    stp     xzr, xzr, [x9]
+    ldr     x10, [x0]
+1:  mov     x0, x10
+    SYSCALL SYS_FDATASYNC
+    cmn     x0, #OS_EINTR
+    b.eq    1b
+    IF_ERROR x0, 90f
+    b       99f
+90: neg     x0, x0
+    str     x0, [x9]
+99: mov     x0, #LANTERN_OK
+    ret
+END_FUNCTION lantern_shell_sync
+
+/* (file, size, result): docs/reference/shell.md. x9 result, x10 the file, x11 the size. */
+FUNCTION lantern_shell_truncate
+    UNWIND_END_PROLOGUE
+    mov     x9, x2
+    stp     xzr, xzr, [x9]
+    ldr     x10, [x0]
+    ldr     x11, [x1]
+1:  mov     x0, x10
+    mov     x1, x11
+    SYSCALL SYS_FTRUNCATE
+    cmn     x0, #OS_EINTR
+    b.eq    1b
+    IF_ERROR x0, 90f
+    b       99f
+90: neg     x0, x0
+    str     x0, [x9]
+99: mov     x0, #LANTERN_OK
+    ret
+END_FUNCTION lantern_shell_truncate
+
+/* (file): docs/reference/shell.md. */
+FUNCTION lantern_shell_close
+    UNWIND_END_PROLOGUE
+    ldr     x0, [x0]
+    SYSCALL SYS_CLOSE
+    mov     x0, #LANTERN_OK
+    ret
+END_FUNCTION lantern_shell_close
+
+/*
+ * (path, result): docs/reference/shell.md. x9 result, x10 the file, x11 the memory, x12 the
+ * file's size, x14 an error. Frame: 64 a struct stat, 256 the path.
+ */
+FUNCTION lantern_shell_map_file
+    SHELL_FRAME SHELL_READ_FRAME
+    mov     x9, x1
+    stp     xzr, xzr, [x9]
+    stp     xzr, xzr, [x9, #16]
+    add     x6, sp, #256
+    CPATH   x0, x6, 91f
+1:  mov     x0, #OS_AT_FDCWD
+    add     x1, sp, #256
+    mov     x2, #OS_O_RDONLY_CLOEXEC
+    mov     x3, #0
+    SYSCALL SYS_OPENAT
+    cmn     x0, #OS_EINTR
+    b.eq    1b
+    IF_ERROR x0, 90f
+    mov     x10, x0
+    add     x1, sp, #64                     /* its size */
+    SYSCALL SYS_FSTAT
+    IF_ERROR x0, 80f
+    ldr     x12, [sp, #(64 + OS_STAT_SIZE)]
+    cbz     x12, 85f                        /* no bytes: address 0 */
+    mov     x0, #0
+    mov     x1, x12
+    mov     x2, #OS_PROT_READ
+    mov     x3, #OS_MAP_SHARED
+    mov     x4, x10
+    mov     x5, #0
+    SYSCALL SYS_MMAP
+    IF_ERROR x0, 80f
+    mov     x11, x0
+    mov     x0, x10
+    SYSCALL SYS_CLOSE
+    stp     xzr, x11, [x9]
+    stp     x12, x12, [x9, #16]
+    b       99f
+85: mov     x0, x10
+    SYSCALL SYS_CLOSE
+    b       99f
+80: mov     x14, x0                         /* the file closes */
+    mov     x0, x10
+    SYSCALL SYS_CLOSE
+    mov     x0, x14
+    b       90f
+91: mov     x0, #-OS_ENAMETOOLONG
+90: neg     x0, x0
+    str     x0, [x9]
+99: SHELL_RETURN SHELL_READ_FRAME
+END_FUNCTION lantern_shell_map_file
+
+/* (address, size): docs/reference/shell.md. */
+FUNCTION lantern_shell_unmap_file
+    UNWIND_END_PROLOGUE
+    ldr     x1, [x1]
+    ldr     x0, [x0]
+    SYSCALL SYS_MUNMAP
+    mov     x0, #LANTERN_OK
+    ret
+END_FUNCTION lantern_shell_unmap_file
+
+/* (path, result): docs/reference/shell.md. x9 result. Frame: the path. */
+FUNCTION lantern_shell_remove
+    SHELL_FRAME SHELL_PATH_FRAME
+    mov     x9, x1
+    stp     xzr, xzr, [x9]
+    mov     x6, sp
+    CPATH   x0, x6, 91f
+1:  mov     x0, #OS_AT_FDCWD
+    mov     x1, sp
+    mov     x2, #0
+    SYSCALL SYS_UNLINKAT
+    cmn     x0, #OS_EINTR
+    b.eq    1b
+    IF_ERROR x0, 90f
+    b       99f
+91: mov     x0, #-OS_ENAMETOOLONG
+90: neg     x0, x0
+    str     x0, [x9]
+99: SHELL_RETURN SHELL_PATH_FRAME
+END_FUNCTION lantern_shell_remove
+
+/* (from, to, result): docs/reference/shell.md. x7 to, x9 result. Frame: from, then to at 4096. */
+FUNCTION lantern_shell_rename
+    SHELL_FRAME SHELL_TWO_PATHS
+    mov     x9, x2
+    stp     xzr, xzr, [x9]
+    mov     x7, x1
+    mov     x6, sp
+    CPATH   x0, x6, 91f
+    add     x6, sp, #SHELL_PATH_FRAME
+    CPATH   x7, x6, 91f
+1:  mov     x0, #OS_AT_FDCWD
+    mov     x1, sp
+    mov     x2, #OS_AT_FDCWD
+    add     x3, sp, #SHELL_PATH_FRAME
+    mov     x4, #0
+    SYSCALL SYS_RENAMEAT2
+    cmn     x0, #OS_EINTR
+    b.eq    1b
+    IF_ERROR x0, 90f
+    b       99f
+91: mov     x0, #-OS_ENAMETOOLONG
+90: neg     x0, x0
+    str     x0, [x9]
+99: SHELL_RETURN SHELL_TWO_PATHS
+END_FUNCTION lantern_shell_rename
+
+/* (path, result): docs/reference/shell.md. x9 result. Frame: the path. */
+FUNCTION lantern_shell_mkdir
+    SHELL_FRAME SHELL_PATH_FRAME
+    mov     x9, x1
+    stp     xzr, xzr, [x9]
+    mov     x6, sp
+    CPATH   x0, x6, 91f
+1:  mov     x0, #OS_AT_FDCWD
+    mov     x1, sp
+    mov     x2, #OS_MODE_DIR
+    SYSCALL SYS_MKDIRAT
+    cmn     x0, #OS_EINTR
+    b.eq    1b
+    IF_ERROR x0, 90f
+    b       99f
+91: mov     x0, #-OS_ENAMETOOLONG
+90: neg     x0, x0
+    str     x0, [x9]
+99: SHELL_RETURN SHELL_PATH_FRAME
+END_FUNCTION lantern_shell_mkdir
+
+/* (path, result): docs/reference/shell.md. x9 result, x10 the directory, x14 an error. Frame: the path. */
+FUNCTION lantern_shell_sync_dir
+    SHELL_FRAME SHELL_PATH_FRAME
+    mov     x9, x1
+    stp     xzr, xzr, [x9]
+    mov     x6, sp
+    CPATH   x0, x6, 91f
+1:  mov     x0, #OS_AT_FDCWD
+    mov     x1, sp
+    mov     x2, #OS_O_RDONLY_CLOEXEC
+    mov     x3, #0
+    SYSCALL SYS_OPENAT
+    cmn     x0, #OS_EINTR
+    b.eq    1b
+    IF_ERROR x0, 90f
+    mov     x10, x0
+2:  mov     x0, x10
+    SYSCALL SYS_FSYNC
+    cmn     x0, #OS_EINTR
+    b.eq    2b
+    mov     x14, x0
+    mov     x0, x10
+    SYSCALL SYS_CLOSE
+    mov     x0, x14
+    IF_ERROR x0, 90f
+    b       99f
+91: mov     x0, #-OS_ENAMETOOLONG
+90: neg     x0, x0
+    str     x0, [x9]
+99: SHELL_RETURN SHELL_PATH_FRAME
+END_FUNCTION lantern_shell_sync_dir

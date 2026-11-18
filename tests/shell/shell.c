@@ -20,6 +20,17 @@ ABI uint64_t lantern_shell_unmap(const uint64_t *address, const uint64_t *size);
 ABI uint64_t lantern_shell_read_file(const void *path, uint64_t *result);
 ABI uint64_t lantern_shell_write(const uint64_t *stream, const void *bytes);
 ABI uint64_t lantern_shell_time_ms(uint64_t *out);
+ABI uint64_t lantern_shell_open(const void *path, const uint64_t *mode, uint64_t *result);
+ABI uint64_t lantern_shell_append(const uint64_t *file, const void *bytes, uint64_t *result);
+ABI uint64_t lantern_shell_sync(const uint64_t *file, uint64_t *result);
+ABI uint64_t lantern_shell_truncate(const uint64_t *file, const uint64_t *size, uint64_t *result);
+ABI uint64_t lantern_shell_close(const uint64_t *file);
+ABI uint64_t lantern_shell_map_file(const void *path, uint64_t *result);
+ABI uint64_t lantern_shell_unmap_file(const uint64_t *address, const uint64_t *size);
+ABI uint64_t lantern_shell_remove(const void *path, uint64_t *result);
+ABI uint64_t lantern_shell_rename(const void *from, const void *to, uint64_t *result);
+ABI uint64_t lantern_shell_mkdir(const void *path, uint64_t *result);
+ABI uint64_t lantern_shell_sync_dir(const void *path, uint64_t *result);
 
 static int failures;
 
@@ -107,6 +118,68 @@ int main(int argc, char **argv) {
     check(r[0] != 0 && r[1] == 0, "read_file: a path of 5000 bytes");
     free(longpath);
     free(want);
+
+    /* The file functions of the database: a new directory, a file appended to, synced, mapped, truncated, renamed over and removed. */
+    {
+        uint64_t stamp = 0, op[2], m[4], mode = 1, file = 0, cut = 6000;
+        lantern_shell_time_ms(&stamp);
+        char dir[4096], seg[4096], other[4096];
+        snprintf(dir, sizeof dir, "%s/shell-db-%llu", argv[1], (unsigned long long)stamp);
+        snprintf(seg, sizeof seg, "%s/seg.bin", dir);
+        snprintf(other, sizeof other, "%s/other.bin", dir);
+        uint8_t *ld = list_of(dir, strlen(dir)), *ls = list_of(seg, strlen(seg)), *lo = list_of(other, strlen(other));
+        uint8_t data[8100];
+        for (int k = 0; k < 8100; k++) data[k] = (uint8_t)(k * 13 + 5);
+        uint8_t *la = list_of(data, 5000), *lb = list_of(data + 5000, 3000), *lc = list_of(data + 7000, 100);
+        check(lantern_shell_mkdir(ld, op) == 0 && op[0] == 0, "mkdir: a new directory");
+        check(lantern_shell_mkdir(ld, op) == 0 && op[0] != 0, "mkdir: an existing directory is an error");
+        check(lantern_shell_open(ls, &mode, op) == 0 && op[0] == 0, "open: a new file to append to");
+        file = op[1];
+        check(lantern_shell_append(&file, la, op) == 0 && op[0] == 0 && op[1] == 5000, "append: 5000 bytes");
+        check(lantern_shell_append(&file, lb, op) == 0 && op[0] == 0 && op[1] == 3000, "append: 3000 bytes more");
+        check(lantern_shell_sync(&file, op) == 0 && op[0] == 0, "sync: the file");
+        check(lantern_shell_sync_dir(ld, op) == 0 && op[0] == 0, "sync_dir: the directory");
+        check(lantern_shell_map_file(ls, m) == 0 && m[0] == 0 && m[1] != 0 && m[2] == 8000 && m[3] == 8000 &&
+                  !memcmp((const void *)(uintptr_t)m[1], data, 8000),
+              "map_file: both writes");
+        if (m[1]) lantern_shell_unmap_file(&m[1], &m[3]);
+        check(lantern_shell_truncate(&file, &cut, op) == 0 && op[0] == 0, "truncate: to 6000 bytes");
+        check(lantern_shell_map_file(ls, m) == 0 && m[0] == 0 && m[2] == 6000 && !memcmp((const void *)(uintptr_t)m[1], data, 6000),
+              "map_file: the first 6000 bytes");
+        if (m[1]) lantern_shell_unmap_file(&m[1], &m[3]);
+        lantern_shell_close(&file);
+        check(lantern_shell_open(ls, &mode, op) == 0 && op[0] == 0, "open: the file again to append to");
+        file = op[1];
+        check(lantern_shell_append(&file, lc, op) == 0 && op[0] == 0 && op[1] == 100, "append: at the new end");
+        lantern_shell_close(&file);
+        check(lantern_shell_map_file(ls, m) == 0 && m[0] == 0 && m[2] == 6100 && !memcmp((const void *)(uintptr_t)m[1], data, 6000) &&
+                  !memcmp((const uint8_t *)(uintptr_t)m[1] + 6000, data + 7000, 100),
+              "map_file: the bytes after the cut");
+        if (m[1]) lantern_shell_unmap_file(&m[1], &m[3]);
+        mode = 0;
+        check(lantern_shell_open(ls, &mode, op) == 0 && op[0] == 0, "open: the file to read");
+        file = op[1];
+        lantern_shell_close(&file);
+        mode = 7;
+        check(lantern_shell_open(ls, &mode, op) == 0 && op[0] != 0 && op[1] == 0, "open: a faulty mode is an error");
+        mode = 1;
+        check(lantern_shell_open(lo, &mode, op) == 0 && op[0] == 0, "open: an empty file");
+        file = op[1];
+        lantern_shell_close(&file);
+        check(lantern_shell_map_file(lo, m) == 0 && m[0] == 0 && m[1] == 0 && m[2] == 0, "map_file: an empty file, address 0");
+        check(lantern_shell_rename(lo, ls, op) == 0 && op[0] == 0, "rename: over the first file");
+        check(lantern_shell_map_file(ls, m) == 0 && m[0] == 0 && m[2] == 0, "map_file: the renamed file");
+        check(lantern_shell_map_file(lo, m) == 0 && m[0] != 0 && m[1] == 0, "map_file: the old name is missing");
+        check(lantern_shell_remove(ls, op) == 0 && op[0] == 0, "remove: the file");
+        check(lantern_shell_remove(ls, op) == 0 && op[0] != 0, "remove: a missing file is an error");
+        check(lantern_shell_map_file(ls, m) == 0 && m[0] != 0 && m[1] == 0, "map_file: a missing file is an error");
+        free(ld);
+        free(ls);
+        free(lo);
+        free(la);
+        free(lb);
+        free(lc);
+    }
 
     /* The log. */
     static const char line[] = "shell: a line on the standard output\n";

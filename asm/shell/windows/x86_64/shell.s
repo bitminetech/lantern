@@ -34,6 +34,50 @@
 .set SHELL_PATH_MAX, 4095
 .set SHELL_WIDE_BYTES, 8192                 /* read_file: the path in UTF-16, with a zero after it */
 .set SHELL_IO_MAX, 1 << 30                  /* the bytes of one ReadFile or WriteFile */
+.set OS_GENERIC_WRITE, 0x40000000           /* winnt.h */
+.set OS_FILE_SHARE_ALL, 7                   /* FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, winnt.h */
+.set OS_OPEN_ALWAYS, 4                      /* fileapi.h */
+.set OS_FILE_BEGIN, 0                       /* fileapi.h */
+.set OS_FILE_END, 2
+.set OS_PAGE_READONLY, 2                    /* winnt.h */
+.set OS_FILE_MAP_READ, 4                    /* memoryapi.h */
+.set OS_MOVEFILE_REPLACE_THROUGH, 9         /* MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH, winbase.h */
+.set OS_ERROR_WRITE_FAULT, 29               /* winerror.h */
+.set OS_ERROR_INVALID_PARAMETER, 87
+
+/* rax = GetLastError, never 0. Uses rcx. */
+.macro OS_LAST_ERROR
+    CALL_GLOBAL GetLastError
+    mov     %eax, %eax
+    mov     $1, %ecx
+    test    %rax, %rax
+    cmovz   %rcx, %rax
+.endm
+
+/* r12 = new memory of \size bytes for paths in UTF-16; to \fail with rax the error. */
+.macro WIDE_ALLOC size, fail
+    xor     %ecx, %ecx
+    mov     $(\size), %edx
+    mov     $OS_MEM_COMMIT_RESERVE, %r8d
+    mov     $OS_PAGE_READWRITE, %r9d
+    CALL_GLOBAL VirtualAlloc
+    mov     %rax, %r12
+    test    %rax, %rax
+    jnz     86f
+    OS_LAST_ERROR
+    jmp     \fail
+86:
+.endm
+
+/* The memory at r12 goes back; rax kept, through r15. */
+.macro WIDE_FREE
+    mov     %rax, %r15
+    mov     %r12, %rcx
+    xor     %edx, %edx
+    mov     $OS_MEM_RELEASE, %r8d
+    CALL_GLOBAL VirtualFree
+    mov     %r15, %rax
+.endm
 
 /* (size, out): docs/reference/shell.md. rbx out. */
 FUNCTION lantern_shell_map
@@ -254,3 +298,362 @@ FUNCTION lantern_shell_time_ms
     xor     %eax, %eax
     LEAVE 16
 END_FUNCTION lantern_shell_time_ms
+
+/*
+ * (path at rdi, to at rsi): the path ByteList in UTF-16 with a zero after it, at most
+ * SHELL_WIDE_BYTES; rax 0, or the error. Locals: L the stack arguments of a call.
+ */
+LOCAL_FUNCTION shell_wide
+    ENTER 16
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     16(%rbx), %r9
+    mov     $OS_ERROR_FILENAME_EXCED_RANGE, %eax
+    cmp     $SHELL_PATH_MAX, %r9
+    ja      9f
+    mov     $OS_CP_UTF8, %ecx
+    xor     %edx, %edx
+    mov     8(%rbx), %r8
+    add     %rbx, %r8
+    mov     %rbp, L(%rsp)
+    movq    $(SHELL_WIDE_BYTES / 2 - 1), (L + 8)(%rsp)
+    CALL_GLOBAL MultiByteToWideChar
+    test    %eax, %eax
+    jz      8f
+    mov     %eax, %eax
+    movw    $0, (%rbp,%rax,2)
+    xor     %eax, %eax
+    jmp     9f
+8:  OS_LAST_ERROR
+9:  LEAVE 16
+END_FUNCTION shell_wide
+
+/*
+ * (path, mode, result): docs/reference/shell.md. rbx result, rbp the path, r12 the wide path,
+ * r13 the access, r14 the disposition. Locals: L the stack arguments of a call.
+ */
+FUNCTION lantern_shell_open
+    ENTER 32
+    mov     %rdx, %rbx
+    movq    $0, (%rbx)
+    movq    $0, 8(%rbx)
+    mov     %rdi, %rbp
+    mov     (%rsi), %rax
+    mov     $OS_GENERIC_READ, %r13d
+    mov     $OS_OPEN_EXISTING, %r14d
+    cmp     $1, %rax
+    ja      92f
+    jne     1f
+    mov     $OS_GENERIC_WRITE, %r13d
+    mov     $OS_OPEN_ALWAYS, %r14d
+1:  WIDE_ALLOC SHELL_WIDE_BYTES, 90f
+    mov     %rbp, %rdi
+    mov     %r12, %rsi
+    call    shell_wide
+    test    %rax, %rax
+    jnz     85f
+    mov     %r12, %rcx
+    mov     %r13d, %edx
+    mov     $OS_FILE_SHARE_ALL, %r8d
+    xor     %r9d, %r9d
+    mov     %r14, L(%rsp)
+    movq    $OS_FILE_ATTRIBUTE_NORMAL, (L + 8)(%rsp)
+    movq    $0, (L + 16)(%rsp)
+    CALL_GLOBAL CreateFileW
+    cmp     $-1, %rax
+    je      84f
+    mov     %rax, 8(%rbx)
+    xor     %eax, %eax
+    jmp     85f
+92: mov     $OS_ERROR_INVALID_PARAMETER, %eax
+    jmp     90f
+84: OS_LAST_ERROR
+85: WIDE_FREE
+90: mov     %rax, (%rbx)
+    xor     %eax, %eax
+    LEAVE 32
+END_FUNCTION lantern_shell_open
+
+/*
+ * (file, bytes, result): docs/reference/shell.md. rbx result, rbp the file, r12 the bytes, r13
+ * their count, r14 written. Locals: L the fifth argument of WriteFile, L+8 the bytes it wrote.
+ */
+FUNCTION lantern_shell_append
+    ENTER 16
+    mov     %rdx, %rbx
+    movq    $0, (%rbx)
+    movq    $0, 8(%rbx)
+    mov     (%rdi), %rbp
+    mov     8(%rsi), %r12
+    add     %rsi, %r12
+    mov     16(%rsi), %r13
+    xor     %r14d, %r14d
+    mov     %rbp, %rcx                      # the end
+    xor     %edx, %edx
+    xor     %r8d, %r8d
+    mov     $OS_FILE_END, %r9d
+    CALL_GLOBAL SetFilePointerEx
+    test    %eax, %eax
+    jz      80f
+1:  cmp     %r13, %r14
+    jae     9f
+    mov     %rbp, %rcx
+    lea     (%r12,%r14), %rdx
+    mov     %r13, %r8
+    sub     %r14, %r8
+    mov     $SHELL_IO_MAX, %eax
+    cmp     %rax, %r8
+    cmova   %rax, %r8
+    movq    $0, (L + 8)(%rsp)
+    lea     (L + 8)(%rsp), %r9
+    movq    $0, L(%rsp)
+    CALL_GLOBAL WriteFile
+    test    %eax, %eax
+    jz      80f
+    mov     (L + 8)(%rsp), %eax
+    test    %rax, %rax
+    jz      7f
+    add     %rax, %r14
+    jmp     1b
+7:  mov     $OS_ERROR_WRITE_FAULT, %eax     # no progress
+    jmp     8f
+80: OS_LAST_ERROR
+8:  mov     %rax, (%rbx)
+9:  mov     %r14, 8(%rbx)
+    xor     %eax, %eax
+    LEAVE 16
+END_FUNCTION lantern_shell_append
+
+/* (file, result): docs/reference/shell.md. rbx result. */
+FUNCTION lantern_shell_sync
+    ENTER 0
+    mov     %rsi, %rbx
+    movq    $0, (%rbx)
+    movq    $0, 8(%rbx)
+    mov     (%rdi), %rcx
+    CALL_GLOBAL FlushFileBuffers
+    test    %eax, %eax
+    jnz     9f
+    OS_LAST_ERROR
+    mov     %rax, (%rbx)
+9:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_sync
+
+/* (file, size, result): docs/reference/shell.md. rbx result, rbp the file. */
+FUNCTION lantern_shell_truncate
+    ENTER 0
+    mov     %rdx, %rbx
+    movq    $0, (%rbx)
+    movq    $0, 8(%rbx)
+    mov     (%rdi), %rbp
+    mov     %rbp, %rcx
+    mov     (%rsi), %rdx
+    xor     %r8d, %r8d
+    mov     $OS_FILE_BEGIN, %r9d
+    CALL_GLOBAL SetFilePointerEx
+    test    %eax, %eax
+    jz      8f
+    mov     %rbp, %rcx
+    CALL_GLOBAL SetEndOfFile
+    test    %eax, %eax
+    jnz     9f
+8:  OS_LAST_ERROR
+    mov     %rax, (%rbx)
+9:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_truncate
+
+/* (file): docs/reference/shell.md. */
+FUNCTION lantern_shell_close
+    ENTER 0
+    mov     (%rdi), %rcx
+    CALL_GLOBAL CloseHandle
+    xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_close
+
+/*
+ * (path, result): docs/reference/shell.md. rbx result, rbp the path then the file, r12 the wide
+ * path, r13 the mapping or 0, r14 the size, r15 an error. Locals: L the stack arguments of a
+ * call, L+16 the size.
+ */
+FUNCTION lantern_shell_map_file
+    ENTER 32
+    mov     %rsi, %rbx
+    movq    $0, (%rbx)
+    movq    $0, 8(%rbx)
+    movq    $0, 16(%rbx)
+    movq    $0, 24(%rbx)
+    mov     %rdi, %rbp
+    WIDE_ALLOC SHELL_WIDE_BYTES, 90f
+    mov     %rbp, %rdi
+    mov     %r12, %rsi
+    call    shell_wide
+    test    %rax, %rax
+    jnz     85f
+    mov     %r12, %rcx                      # open it
+    mov     $OS_GENERIC_READ, %edx
+    mov     $OS_FILE_SHARE_ALL, %r8d
+    xor     %r9d, %r9d
+    movq    $OS_OPEN_EXISTING, L(%rsp)
+    movq    $OS_FILE_ATTRIBUTE_NORMAL, (L + 8)(%rsp)
+    movq    $0, (L + 16)(%rsp)
+    CALL_GLOBAL CreateFileW
+    cmp     $-1, %rax
+    je      84f
+    mov     %rax, %rbp
+    WIDE_FREE
+    xor     %r13d, %r13d
+    xor     %r15d, %r15d
+    mov     %rbp, %rcx                      # its size
+    lea     (L + 16)(%rsp), %rdx
+    CALL_GLOBAL GetFileSizeEx
+    test    %eax, %eax
+    jz      80f
+    mov     (L + 16)(%rsp), %r14
+    test    %r14, %r14
+    jz      82f                             # no bytes: address 0
+    mov     %rbp, %rcx
+    xor     %edx, %edx
+    mov     $OS_PAGE_READONLY, %r8d
+    xor     %r9d, %r9d
+    movq    $0, L(%rsp)
+    movq    $0, (L + 8)(%rsp)
+    CALL_GLOBAL CreateFileMappingW
+    test    %rax, %rax
+    jz      80f
+    mov     %rax, %r13
+    mov     %r13, %rcx
+    mov     $OS_FILE_MAP_READ, %edx
+    xor     %r8d, %r8d
+    xor     %r9d, %r9d
+    movq    $0, L(%rsp)
+    CALL_GLOBAL MapViewOfFile
+    test    %rax, %rax
+    jz      80f
+    mov     %rax, 8(%rbx)
+    mov     %r14, 16(%rbx)
+    mov     %r14, 24(%rbx)
+    jmp     82f
+80: OS_LAST_ERROR
+    mov     %rax, %r15
+82: test    %r13, %r13                      # the handles close
+    jz      83f
+    mov     %r13, %rcx
+    CALL_GLOBAL CloseHandle
+83: mov     %rbp, %rcx
+    CALL_GLOBAL CloseHandle
+    mov     %r15, (%rbx)
+    jmp     99f
+84: OS_LAST_ERROR
+85: WIDE_FREE
+90: mov     %rax, (%rbx)
+99: xor     %eax, %eax
+    LEAVE 32
+END_FUNCTION lantern_shell_map_file
+
+/* (address, size): docs/reference/shell.md. */
+FUNCTION lantern_shell_unmap_file
+    ENTER 0
+    mov     (%rdi), %rcx
+    CALL_GLOBAL UnmapViewOfFile
+    xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_unmap_file
+
+/* (path, result): docs/reference/shell.md. rbx result, rbp the path, r12 the wide path. */
+FUNCTION lantern_shell_remove
+    ENTER 0
+    mov     %rsi, %rbx
+    movq    $0, (%rbx)
+    movq    $0, 8(%rbx)
+    mov     %rdi, %rbp
+    WIDE_ALLOC SHELL_WIDE_BYTES, 90f
+    mov     %rbp, %rdi
+    mov     %r12, %rsi
+    call    shell_wide
+    test    %rax, %rax
+    jnz     85f
+    mov     %r12, %rcx
+    CALL_GLOBAL DeleteFileW
+    test    %eax, %eax
+    jz      84f
+    xor     %eax, %eax
+    jmp     85f
+84: OS_LAST_ERROR
+85: WIDE_FREE
+90: mov     %rax, (%rbx)
+    xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_remove
+
+/* (from, to, result): docs/reference/shell.md. rbx result, rbp from, r13 to, r12 the wide paths: from, then to. */
+FUNCTION lantern_shell_rename
+    ENTER 0
+    mov     %rdx, %rbx
+    movq    $0, (%rbx)
+    movq    $0, 8(%rbx)
+    mov     %rdi, %rbp
+    mov     %rsi, %r13
+    WIDE_ALLOC (2 * SHELL_WIDE_BYTES), 90f
+    mov     %rbp, %rdi
+    mov     %r12, %rsi
+    call    shell_wide
+    test    %rax, %rax
+    jnz     85f
+    mov     %r13, %rdi
+    lea     SHELL_WIDE_BYTES(%r12), %rsi
+    call    shell_wide
+    test    %rax, %rax
+    jnz     85f
+    mov     %r12, %rcx
+    lea     SHELL_WIDE_BYTES(%r12), %rdx
+    mov     $OS_MOVEFILE_REPLACE_THROUGH, %r8d
+    CALL_GLOBAL MoveFileExW
+    test    %eax, %eax
+    jz      84f
+    xor     %eax, %eax
+    jmp     85f
+84: OS_LAST_ERROR
+85: WIDE_FREE
+90: mov     %rax, (%rbx)
+    xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_rename
+
+/* (path, result): docs/reference/shell.md. rbx result, rbp the path, r12 the wide path. */
+FUNCTION lantern_shell_mkdir
+    ENTER 0
+    mov     %rsi, %rbx
+    movq    $0, (%rbx)
+    movq    $0, 8(%rbx)
+    mov     %rdi, %rbp
+    WIDE_ALLOC SHELL_WIDE_BYTES, 90f
+    mov     %rbp, %rdi
+    mov     %r12, %rsi
+    call    shell_wide
+    test    %rax, %rax
+    jnz     85f
+    mov     %r12, %rcx
+    xor     %edx, %edx
+    CALL_GLOBAL CreateDirectoryW
+    test    %eax, %eax
+    jz      84f
+    xor     %eax, %eax
+    jmp     85f
+84: OS_LAST_ERROR
+85: WIDE_FREE
+90: mov     %rax, (%rbx)
+    xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION lantern_shell_mkdir
+
+/* (path, result): docs/reference/shell.md. NTFS journals directory changes: no call. */
+FUNCTION lantern_shell_sync_dir
+    UNWIND_END_PROLOGUE
+    movq    $0, (%rsi)
+    movq    $0, 8(%rsi)
+    xor     %eax, %eax
+    ret
+END_FUNCTION lantern_shell_sync_dir

@@ -33,6 +33,42 @@
 .set OS_CLOCK_REALTIME, 0
 .set OS_STAT_SIZE, 48                       /* st_size in struct stat */
 .set SHELL_PATH_MAX, 4095
+.set SYS_FSYNC, 74
+.set SYS_FDATASYNC, 75
+.set SYS_FTRUNCATE, 77
+.set SYS_MKDIRAT, 258
+.set SYS_UNLINKAT, 263
+.set SYS_RENAMEAT2, 316
+.set OS_O_APPEND_CREATE, 0x80441           # O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC
+.set OS_MODE_FILE, 420                      # 0644
+.set OS_MODE_DIR, 493                       # 0755
+.set OS_PROT_READ, 1
+.set OS_MAP_SHARED, 1
+.set OS_EIO, 5
+.set OS_EINVAL, 22
+.set SHELL_PATH_FRAME, 4112                 # L the result, L+16 a path with a zero after it
+.set SHELL_TWO_PATHS, 8208                  # L the result, L+8 to, L+16 from, L+4112 to
+
+# The path ByteList at rax as a string with a zero after it at \at(%rsp); to \long when above SHELL_PATH_MAX bytes. Uses rcx, rsi, rdi.
+.macro CPATH at, long
+    mov     16(%rax), %rcx
+    cmp     $SHELL_PATH_MAX, %rcx
+    ja      \long
+    mov     8(%rax), %rsi
+    add     %rax, %rsi
+    lea     \at(%rsp), %rdi
+    rep movsb
+    movb    $0, (%rdi)
+.endm
+
+# The result at L(%rsp) takes minus the error rax; then the return of LANTERN_OK.
+.macro SHELL_ERROR locals
+    neg     %rax
+    mov     L(%rsp), %rcx
+    mov     %rax, (%rcx)
+    xor     %eax, %eax
+    LEAVE \locals
+.endm
 
 .macro SYSCALL number
     mov     $(\number), %eax
@@ -210,3 +246,296 @@ FUNCTION lantern_shell_time_ms
     xor     %eax, %eax
     UNFRAME 32
 END_FUNCTION lantern_shell_time_ms
+
+# (path, mode, result): docs/reference/shell.md. rbx the flags. Locals: L result, L+16 the path.
+FUNCTION lantern_shell_open
+    ENTER SHELL_PATH_FRAME
+    mov     %rdx, L(%rsp)
+    movq    $0, (%rdx)
+    movq    $0, 8(%rdx)
+    mov     (%rsi), %rax
+    mov     $OS_O_RDONLY_CLOEXEC, %ebx
+    cmp     $1, %rax
+    ja      92f
+    jne     1f
+    mov     $OS_O_APPEND_CREATE, %ebx
+1:  mov     %rdi, %rax
+    CPATH   (L + 16), 91f
+2:  mov     $OS_AT_FDCWD, %rdi
+    lea     (L + 16)(%rsp), %rsi
+    mov     %rbx, %rdx
+    mov     $OS_MODE_FILE, %r10d
+    SYSCALL SYS_OPENAT
+    cmp     $-OS_EINTR, %rax
+    je      2b
+    cmp     $-4095, %rax
+    jae     90f
+    mov     L(%rsp), %rcx
+    mov     %rax, 8(%rcx)
+    xor     %eax, %eax
+    LEAVE SHELL_PATH_FRAME
+92: mov     $-OS_EINVAL, %rax
+    jmp     90f
+91: mov     $-OS_ENAMETOOLONG, %rax
+90: SHELL_ERROR SHELL_PATH_FRAME
+END_FUNCTION lantern_shell_open
+
+# (file, bytes, result): docs/reference/shell.md. r8 result, its value the bytes written; r9 the file, r10 the bytes. Locals: 0 their count.
+FUNCTION lantern_shell_append
+    FRAME 16
+    mov     %rdx, %r8
+    movq    $0, (%r8)
+    movq    $0, 8(%r8)
+    mov     (%rdi), %r9
+    mov     8(%rsi), %r10
+    add     %rsi, %r10
+    mov     16(%rsi), %rax
+    mov     %rax, (%rsp)
+1:  mov     8(%r8), %rsi
+    cmp     (%rsp), %rsi
+    jae     9f
+    mov     %r9, %rdi
+    mov     (%rsp), %rdx
+    sub     %rsi, %rdx
+    add     %r10, %rsi
+    SYSCALL SYS_WRITE
+    cmp     $-OS_EINTR, %rax
+    je      1b
+    cmp     $-4095, %rax
+    jae     8f
+    test    %rax, %rax
+    jz      7f
+    add     %rax, 8(%r8)
+    jmp     1b
+7:  mov     $-OS_EIO, %rax                  # no progress
+8:  neg     %rax
+    mov     %rax, (%r8)
+9:  xor     %eax, %eax
+    UNFRAME 16
+END_FUNCTION lantern_shell_append
+
+# (file, result): docs/reference/shell.md. r8 result, r9 the file.
+FUNCTION lantern_shell_sync
+    UNWIND_END_PROLOGUE
+    mov     %rsi, %r8
+    movq    $0, (%r8)
+    movq    $0, 8(%r8)
+    mov     (%rdi), %r9
+1:  mov     %r9, %rdi
+    SYSCALL SYS_FDATASYNC
+    cmp     $-OS_EINTR, %rax
+    je      1b
+    cmp     $-4095, %rax
+    jb      9f
+    neg     %rax
+    mov     %rax, (%r8)
+9:  xor     %eax, %eax
+    ret
+END_FUNCTION lantern_shell_sync
+
+# (file, size, result): docs/reference/shell.md. r8 result, r9 the file, r10 the size.
+FUNCTION lantern_shell_truncate
+    UNWIND_END_PROLOGUE
+    mov     %rdx, %r8
+    movq    $0, (%r8)
+    movq    $0, 8(%r8)
+    mov     (%rdi), %r9
+    mov     (%rsi), %r10
+1:  mov     %r9, %rdi
+    mov     %r10, %rsi
+    SYSCALL SYS_FTRUNCATE
+    cmp     $-OS_EINTR, %rax
+    je      1b
+    cmp     $-4095, %rax
+    jb      9f
+    neg     %rax
+    mov     %rax, (%r8)
+9:  xor     %eax, %eax
+    ret
+END_FUNCTION lantern_shell_truncate
+
+# (file): docs/reference/shell.md.
+FUNCTION lantern_shell_close
+    UNWIND_END_PROLOGUE
+    mov     (%rdi), %rdi
+    SYSCALL SYS_CLOSE
+    xor     %eax, %eax
+    ret
+END_FUNCTION lantern_shell_close
+
+# (path, result): docs/reference/shell.md. Locals: L result, L+8 the file, L+16 the memory, L+24
+# the size, L+40 an error, L+48 a struct stat, L+192 the path.
+FUNCTION lantern_shell_map_file
+    ENTER 4304
+    mov     %rsi, L(%rsp)
+    movq    $0, (%rsi)
+    movq    $0, 8(%rsi)
+    movq    $0, 16(%rsi)
+    movq    $0, 24(%rsi)
+    mov     %rdi, %rax
+    CPATH   (L + 192), 91f
+1:  mov     $OS_AT_FDCWD, %rdi
+    lea     (L + 192)(%rsp), %rsi
+    mov     $OS_O_RDONLY_CLOEXEC, %edx
+    xor     %r10d, %r10d
+    SYSCALL SYS_OPENAT
+    cmp     $-OS_EINTR, %rax
+    je      1b
+    cmp     $-4095, %rax
+    jae     90f
+    mov     %rax, (L + 8)(%rsp)
+    mov     %rax, %rdi                      # its size
+    lea     (L + 48)(%rsp), %rsi
+    SYSCALL SYS_FSTAT
+    cmp     $-4095, %rax
+    jae     80f
+    mov     (L + 48 + OS_STAT_SIZE)(%rsp), %rsi
+    mov     %rsi, (L + 24)(%rsp)
+    test    %rsi, %rsi
+    jz      85f                             # no bytes: address 0
+    xor     %edi, %edi
+    mov     $OS_PROT_READ, %edx
+    mov     $OS_MAP_SHARED, %r10d
+    mov     (L + 8)(%rsp), %r8
+    xor     %r9d, %r9d
+    SYSCALL SYS_MMAP
+    cmp     $-4095, %rax
+    jae     80f
+    mov     %rax, (L + 16)(%rsp)
+    mov     (L + 8)(%rsp), %rdi
+    SYSCALL SYS_CLOSE
+    mov     L(%rsp), %rcx
+    mov     (L + 16)(%rsp), %rax
+    mov     %rax, 8(%rcx)
+    mov     (L + 24)(%rsp), %rax
+    mov     %rax, 16(%rcx)
+    mov     %rax, 24(%rcx)
+    xor     %eax, %eax
+    LEAVE 4304
+85: mov     (L + 8)(%rsp), %rdi
+    SYSCALL SYS_CLOSE
+    xor     %eax, %eax
+    LEAVE 4304
+80: mov     %rax, (L + 40)(%rsp)            # the file closes
+    mov     (L + 8)(%rsp), %rdi
+    SYSCALL SYS_CLOSE
+    mov     (L + 40)(%rsp), %rax
+    jmp     90f
+91: mov     $-OS_ENAMETOOLONG, %rax
+90: SHELL_ERROR 4304
+END_FUNCTION lantern_shell_map_file
+
+# (address, size): docs/reference/shell.md.
+FUNCTION lantern_shell_unmap_file
+    UNWIND_END_PROLOGUE
+    mov     (%rsi), %rsi
+    mov     (%rdi), %rdi
+    SYSCALL SYS_MUNMAP
+    xor     %eax, %eax
+    ret
+END_FUNCTION lantern_shell_unmap_file
+
+# (path, result): docs/reference/shell.md. Locals: L result, L+16 the path.
+FUNCTION lantern_shell_remove
+    ENTER SHELL_PATH_FRAME
+    mov     %rsi, L(%rsp)
+    movq    $0, (%rsi)
+    movq    $0, 8(%rsi)
+    mov     %rdi, %rax
+    CPATH   (L + 16), 91f
+1:  mov     $OS_AT_FDCWD, %rdi
+    lea     (L + 16)(%rsp), %rsi
+    xor     %edx, %edx
+    SYSCALL SYS_UNLINKAT
+    cmp     $-OS_EINTR, %rax
+    je      1b
+    cmp     $-4095, %rax
+    jae     90f
+    xor     %eax, %eax
+    LEAVE SHELL_PATH_FRAME
+91: mov     $-OS_ENAMETOOLONG, %rax
+90: SHELL_ERROR SHELL_PATH_FRAME
+END_FUNCTION lantern_shell_remove
+
+# (from, to, result): docs/reference/shell.md. Locals: L result, L+8 to, L+16 from's path, L+4112 to's.
+FUNCTION lantern_shell_rename
+    ENTER SHELL_TWO_PATHS
+    mov     %rdx, L(%rsp)
+    movq    $0, (%rdx)
+    movq    $0, 8(%rdx)
+    mov     %rsi, (L + 8)(%rsp)
+    mov     %rdi, %rax
+    CPATH   (L + 16), 91f
+    mov     (L + 8)(%rsp), %rax
+    CPATH   (L + 4112), 91f
+1:  mov     $OS_AT_FDCWD, %rdi
+    lea     (L + 16)(%rsp), %rsi
+    mov     $OS_AT_FDCWD, %rdx
+    lea     (L + 4112)(%rsp), %r10
+    xor     %r8d, %r8d
+    SYSCALL SYS_RENAMEAT2
+    cmp     $-OS_EINTR, %rax
+    je      1b
+    cmp     $-4095, %rax
+    jae     90f
+    xor     %eax, %eax
+    LEAVE SHELL_TWO_PATHS
+91: mov     $-OS_ENAMETOOLONG, %rax
+90: SHELL_ERROR SHELL_TWO_PATHS
+END_FUNCTION lantern_shell_rename
+
+# (path, result): docs/reference/shell.md. Locals: L result, L+16 the path.
+FUNCTION lantern_shell_mkdir
+    ENTER SHELL_PATH_FRAME
+    mov     %rsi, L(%rsp)
+    movq    $0, (%rsi)
+    movq    $0, 8(%rsi)
+    mov     %rdi, %rax
+    CPATH   (L + 16), 91f
+1:  mov     $OS_AT_FDCWD, %rdi
+    lea     (L + 16)(%rsp), %rsi
+    mov     $OS_MODE_DIR, %edx
+    SYSCALL SYS_MKDIRAT
+    cmp     $-OS_EINTR, %rax
+    je      1b
+    cmp     $-4095, %rax
+    jae     90f
+    xor     %eax, %eax
+    LEAVE SHELL_PATH_FRAME
+91: mov     $-OS_ENAMETOOLONG, %rax
+90: SHELL_ERROR SHELL_PATH_FRAME
+END_FUNCTION lantern_shell_mkdir
+
+# (path, result): docs/reference/shell.md. rbx the directory, rbp an error. Locals: L result, L+16 the path.
+FUNCTION lantern_shell_sync_dir
+    ENTER SHELL_PATH_FRAME
+    mov     %rsi, L(%rsp)
+    movq    $0, (%rsi)
+    movq    $0, 8(%rsi)
+    mov     %rdi, %rax
+    CPATH   (L + 16), 91f
+1:  mov     $OS_AT_FDCWD, %rdi
+    lea     (L + 16)(%rsp), %rsi
+    mov     $OS_O_RDONLY_CLOEXEC, %edx
+    xor     %r10d, %r10d
+    SYSCALL SYS_OPENAT
+    cmp     $-OS_EINTR, %rax
+    je      1b
+    cmp     $-4095, %rax
+    jae     90f
+    mov     %rax, %rbx
+2:  mov     %rbx, %rdi
+    SYSCALL SYS_FSYNC
+    cmp     $-OS_EINTR, %rax
+    je      2b
+    mov     %rax, %rbp
+    mov     %rbx, %rdi
+    SYSCALL SYS_CLOSE
+    mov     %rbp, %rax
+    cmp     $-4095, %rax
+    jae     90f
+    xor     %eax, %eax
+    LEAVE SHELL_PATH_FRAME
+91: mov     $-OS_ENAMETOOLONG, %rax
+90: SHELL_ERROR SHELL_PATH_FRAME
+END_FUNCTION lantern_shell_sync_dir
