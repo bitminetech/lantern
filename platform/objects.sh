@@ -84,8 +84,7 @@ build_objects() {
         fi
         shell=$root/asm/shell/$os/$isa/shell.s
         if [ -e "$shell" ]; then
-            as -I"$root/include/$preset" -I"$root/include" -I"$plat" -I"$root/asm/shell/$os/$isa" \
-                -c "$shell" -o "$out/$preset/shell.o"
+            as $core -I"$root/asm/shell/$os/$isa" -c "$shell" -o "$out/$preset/shell.o"
             objects="$objects $out/$preset/shell.o"
         fi
         rm -f "$out/liblantern-$preset.a"

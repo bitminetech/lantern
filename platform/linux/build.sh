@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build lantern for one Linux ISA: the core and shell objects, the dependency
-# objects, and the test runner, for the mainnet and the minimal preset.
+# objects, the test runners for the mainnet and the minimal preset, and the shell test.
 # Usage: platform/linux/build.sh ISA OUT_DIR    (ISA: x86_64, arm64 or riscv64)
 # Runs inside the image from platform/linux/Dockerfile, after platform/deps.sh.
 set -eu
@@ -32,3 +32,7 @@ for preset in mainnet minimal; do
             "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_off -o "$out/runner-$preset-$fork-bls-off"
     done
 done
+
+# The shell test (tests/shell/shell.c), with the shell object of this target from the library.
+clang --target=$target $march -std=c11 -O2 -Wall -Wextra -Werror -static -fuse-ld=lld \
+    "$root/tests/shell/shell.c" "$out/liblantern-minimal.a" -o "$out/shell-test"

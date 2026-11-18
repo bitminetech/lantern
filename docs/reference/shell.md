@@ -30,7 +30,8 @@
 
 ## Test vectors
 
-- tests/shell/shell.c, linked with the shell object of the target: it maps and unmaps memory, reads a file it wrote and a missing file, writes a line to the standard output, and reads the time, on each of the 7 targets.
+- tests/shell/shell.c, linked with the shell object of the target: it maps and unmaps memory, reads a file it wrote, an empty file, a missing file and a path of 5000 bytes, writes a line to the standard output, and reads the time.
+- platform/linux/build.sh builds it as `shell-test` for each Linux ISA, and CI runs it.
 
 ## Function `lantern_shell_map`
 
