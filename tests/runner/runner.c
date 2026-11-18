@@ -104,6 +104,7 @@ ABI uint64_t LF(is_valid_genesis_state)(const void *state, const void *config, v
 /* The state transition of every fork: docs/reference/. */
 ABI uint64_t LF(beacon_state_copy_size)(const void *state, const void *room, void *size);
 ABI uint64_t LF(node_anchor)(const void *data, const void *room, void *scratch, void *state, void *block);
+ABI uint64_t LF(node_block_header)(const void *data, void *scratch, void *out);
 ABI uint64_t LF(beacon_state_copy)(const void *state, const void *room, void *out);
 
 ABI uint64_t LF(compute_shuffled_permutation)(const void *index_count, const void *seed, void *scratch, void *out);
@@ -2064,6 +2065,7 @@ static void fc_payload_step(fc_node *n, tv step, const char **why) {
     n->npayloads++;
 }
 
+static void header_check(const uint8_t *enc, uint64_t len, const char **why);
 static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
     char key[128];
     uint64_t blen, vsize;
@@ -2071,7 +2073,10 @@ static void fc_block(fc_node *n, tv parts, tv step, const char **why) {
     snprintf(key, sizeof key, "%.*s", (int)rd64(bname + 1), (const char *)(bname + 9));
     tv v = tv_get(step, "valid");
     int valid = !v || (*v == T_BOOL && v[1]);
-    uint8_t *signed_block = decode(type_by_name("SignedBeaconBlock"), tv_bytes(tv_get(parts, key), &blen), blen, &vsize, why);
+    const uint8_t *benc = tv_bytes(tv_get(parts, key), &blen);
+    header_check(benc, blen, why);
+    if (*why) return;
+    uint8_t *signed_block = decode(type_by_name("SignedBeaconBlock"), benc, blen, &vsize, why);
     if (!signed_block) return;
     const uint8_t *block = nested(signed_block, field_offset("SignedBeaconBlock", 0));
     const uint8_t *parent_root = block + field_offset("BeaconBlock", 2);
@@ -2855,6 +2860,34 @@ static void anchor_check(tv parts, const char **why) {
     free(data);
     free(state);
     free(block);
+}
+
+/*
+ * lantern_node_block_header of a SignedBeaconBlock's SSZ bytes (node.md, Test vectors): the slot,
+ * proposer_index, parent_root and state_root of the message at its offset, the signature at
+ * bytes 4 to 100, and a header whose hash_tree_root is the block's root.
+ */
+#define SIGNED_HEADER_BYTES 208
+static void header_check(const uint8_t *enc, uint64_t len, const char **why) {
+    uint64_t lsize, vsize;
+    uint8_t *data = list_of(enc, len, 0, 0, &lsize), *out = buffer(SIGNED_HEADER_BYTES), hroot[32], broot[32];
+    uint64_t st = CALL(LF(node_block_header), data, fresh_scratch(), out);
+    uint8_t *value = decode(type_by_name("SignedBeaconBlock"), enc, len, &vsize, why);
+    uint64_t at = len >= 4 ? (enc[0] | (uint64_t)enc[1] << 8 | (uint64_t)enc[2] << 16 | (uint64_t)enc[3] << 24) : 0;
+    if (!value) {
+        *why = st == 56 ? NULL : "lantern_node_block_header: an invalid block is not LANTERN_INVALID_ENCODING";
+    } else if (st != 0) *why = "lantern_node_block_header: status not 0";
+    else if (!guard_ok(out, SIGNED_HEADER_BYTES)) *why = "lantern_node_block_header wrote out of bounds";
+    else if (at + 80 > len || memcmp(out, enc + at, 80) || memcmp(out + 112, enc + 4, 96))
+        *why = "lantern_node_block_header: a field is not the block's";
+    else {
+        root_of("BeaconBlockHeader", out, hroot, why);
+        root_of("BeaconBlock", nested(value, field_offset("SignedBeaconBlock", 0)), broot, why);
+        if (!*why && memcmp(hroot, broot, 32)) *why = "lantern_node_block_header: the header's root is not the block's";
+    }
+    free(value);
+    free(data);
+    free(out);
 }
 
 /* A block step through the node, then the block's attestations and attester slashings as events when it is valid. */

@@ -18,6 +18,7 @@
 - [`lantern_node_blob_sidecar`](#function-lantern_node_blob_sidecar): the checks of a blob sidecar of a response, for deneb or electra.
 - [`lantern_node_new_payload`](#function-lantern_node_new_payload): the HTTP request of engine_newPayload for a block's SSZ bytes, for one fork.
 - [`lantern_node_anchor`](#function-lantern_node_anchor): the anchor state and block of a genesis state's SSZ bytes, for one fork.
+- [`lantern_node_block_header`](#function-lantern_node_block_header): the signed header of a block's SSZ bytes, for one fork.
 
 ### Types
 
@@ -78,6 +79,7 @@
   - From bellatrix on, the node has `NODE_FLAG_ENGINE`, and the runner is its execution engine too. It answers each `NODE_ACT_ENGINE` request with an HTTP/1.1 response in two `NODE_EV_ENGINE` events: engine_newPayload of a `blockHash`, and engine_forkchoiceUpdated of a `headBlockHash`, with the `payloadStatus` of the case's last `payload_status` step of that hash, else `VALID` with that hash as `latestValidHash`. The request must carry a JWT of the node's secret.
   - Cases with `payload_status` steps run in node mode from bellatrix on, through the node's execution engine calls; before bellatrix only directly.
   - A non-zero status of lantern_node_step or lantern_node_run must leave the node, the store and the work's state byte for byte unchanged.
+- Each block of each fork_choice case: lantern_node_block_header of its SSZ bytes must give the slot, proposer_index, parent_root, state_root and signature of those bytes, and a header whose hash_tree_root is the block's.
 - The anchor of each fork_choice case: lantern_node_anchor of the case's `anchor_state` must give a state whose SSZ bytes are the case's `anchor_state` and a block whose SSZ bytes are the case's `anchor_block`, when that block has the default body; else `LANTERN_INVALID_ANCHOR`.
 - Lantern's cases `<preset>-<fork>-node-p2p.bin` of altair to fulu, made by tests/generator/node.py with the pinned spec: an anchor state and block at the first slot of epoch 2, and the Status and MetaData the node answers.
   - The answers come from get_forkchoice_store, get_head and compute_fork_digest of the spec module, with each fork up to the case's at epoch 0 and each later fork at 2^64 - 1.
@@ -594,6 +596,39 @@ lantern_node_anchor(data, room, scratch, state, block) -> status
 
 - Export: `lantern_<fork>_node_anchor` of each fork object.
 - Argument order: `data`, `room`, `scratch`, `state`, `block`.
+
+## Function `lantern_node_block_header`
+
+The SignedBeaconBlockHeader of a `SignedBeaconBlock` in SSZ bytes: the message's fields, hash_tree_root of its body, and the signature.
+
+### Signature
+
+```
+lantern_node_block_header(data, scratch, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `data` | input | ByteList: the SSZ bytes of a `SignedBeaconBlock` of the fork |
+| `scratch` | scratch | `Scratch` |
+| `out` | output | `SignedBeaconBlockHeader`: 208 bytes |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the header.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` cannot hold the decoded block.
+- `LANTERN_INVALID_ENCODING`: `data` is not the SSZ bytes of a `SignedBeaconBlock` of the fork.
+
+### Function does
+
+- Restores the `size` field of `scratch`.
+
+### ABI
+
+- Export: `lantern_<fork>_node_block_header` of each fork object.
+- Argument order: `data`, `scratch`, `out`.
 
 ## Function `lantern_node_new_payload`
 

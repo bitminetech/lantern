@@ -176,6 +176,57 @@ SPEC_FUNCTION node_block_root
     LEAVE 0
 SPEC_END node_block_root
 
+/*
+ * (data, scratch, out): the SignedBeaconBlockHeader of the SignedBeaconBlock in data: the message's
+ * slot, proposer_index, parent_root, state_root, hash_tree_root of its body, and the signature.
+ * s2 data, s3 scratch, s4 out, s5 the block, s6 its message, s10 the scratch size, restored.
+ */
+SPEC_FUNCTION node_block_header
+    ENTER 0
+    mv      s2, a0
+    mv      s3, a1
+    mv      s4, a2
+    ld      s10, 0(s3)
+    ADDRESS a0, lantern_type_SignedBeaconBlock
+    mv      a1, s2
+    mv      a2, s3
+    call    node_decode
+    li      t0, 1
+    beq     a0, t0, 8f
+    bgtu    a0, t0, 9f
+    mv      s5, a1
+    PART    s6, t1, s5, SignedBeaconBlock_message
+    LDQ     t0, s6, BeaconBlock_slot
+    sd      t0, 0(s4)
+    LDQ     t0, s6, BeaconBlock_proposer_index
+    sd      t0, 8(s4)
+    addi    a0, s4, 16
+    ADDQ    a1, s6, BeaconBlock_parent_root
+    li      a2, 32
+    call    lantern_copy
+    addi    a0, s4, 48
+    ADDQ    a1, s6, BeaconBlock_state_root
+    li      a2, 32
+    call    lantern_copy
+    addi    a0, s4, 112
+    ADDQ    a1, s5, SignedBeaconBlock_signature
+    li      a2, 96
+    call    lantern_copy
+    PART    a1, t1, s6, BeaconBlock_body    # body_root
+    ADDRESS a0, lantern_type_BeaconBlockBody
+    mv      a2, s3
+    addi    a3, s4, 80
+    CALL_GLOBAL ssz_hash_tree_root
+    bnez    a0, 8f
+    li      a0, LANTERN_OK
+    j       99f
+8:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    j       99f
+9:  li      a0, LANTERN_INVALID_ENCODING
+99: sd      s10, 0(s3)
+    LEAVE 0
+SPEC_END node_block_header
+
 /* The u32 \val at \addr, a byte at a time: the place may not be aligned. Uses \tmp. */
 .macro NODE_STORE_U32 val, addr, tmp
     sb      \val, 0(\addr)

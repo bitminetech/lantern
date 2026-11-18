@@ -183,6 +183,60 @@ SPEC_FUNCTION node_block_root
 SPEC_END node_block_root
 
 /*
+ * (data, scratch, out): the SignedBeaconBlockHeader of the SignedBeaconBlock in data: the message's
+ * slot, proposer_index, parent_root, state_root, hash_tree_root of its body, and the signature.
+ * rbp data, r12 scratch, r13 out, r14 the block, r15 its message, S8 the scratch size, restored.
+ */
+SPEC_FUNCTION node_block_header
+    ENTER 0
+    mov     %rdi, %rbp
+    mov     %rsi, %r12
+    mov     %rdx, %r13
+    mov     (%r12), %rax
+    mov     %rax, S8(%rsp)
+    ADDRESS %rdi, lantern_type_SignedBeaconBlock
+    mov     %rbp, %rsi
+    mov     %r12, %rdx
+    call    node_decode
+    cmp     $1, %rax
+    je      8f
+    ja      9f
+    mov     %rdx, %r14
+    PART    %r15, %rax, %r14, SignedBeaconBlock_message
+    mov     BeaconBlock_slot(%r15), %rax
+    mov     %rax, (%r13)
+    mov     BeaconBlock_proposer_index(%r15), %rax
+    mov     %rax, 8(%r13)
+    lea     16(%r13), %rdi
+    lea     BeaconBlock_parent_root(%r15), %rsi
+    mov     $32, %edx
+    call    lantern_copy
+    lea     48(%r13), %rdi
+    lea     BeaconBlock_state_root(%r15), %rsi
+    mov     $32, %edx
+    call    lantern_copy
+    lea     112(%r13), %rdi
+    lea     SignedBeaconBlock_signature(%r14), %rsi
+    mov     $96, %edx
+    call    lantern_copy
+    PART    %rsi, %rax, %r15, BeaconBlock_body  # body_root
+    ADDRESS %rdi, lantern_type_BeaconBlockBody
+    mov     %r12, %rdx
+    lea     80(%r13), %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    test    %rax, %rax
+    jnz     8f
+    xor     %eax, %eax
+    jmp     99f
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    jmp     99f
+9:  mov     $LANTERN_INVALID_ENCODING, %eax
+99: mov     S8(%rsp), %rcx
+    mov     %rcx, (%r12)
+    LEAVE 0
+SPEC_END node_block_header
+
+/*
  * rax = the bytes of the SSZ default value of the type node rsi of the TypeDescriptor rdi, written
  * at rdx: zero bytes for a fixed size type, none for a list, the byte 1 for a bitlist, and for a
  * variable container or vector its fixed part with the offsets, then each variable part. rbx the

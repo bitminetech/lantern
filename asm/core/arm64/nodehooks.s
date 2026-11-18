@@ -183,6 +183,56 @@ SPEC_FUNCTION node_block_root
 SPEC_END node_block_root
 
 /*
+ * (data, scratch, out): the SignedBeaconBlockHeader of the SignedBeaconBlock in data: the message's
+ * slot, proposer_index, parent_root, state_root, hash_tree_root of its body, and the signature.
+ * x20 data, x21 scratch, x22 out, x24 the block, x25 its message, x28 the scratch size, restored.
+ */
+SPEC_FUNCTION node_block_header
+    ENTER 0
+    mov     x20, x0
+    mov     x21, x1
+    mov     x22, x2
+    ldr     x28, [x21]
+    ADDRESS x0, lantern_type_SignedBeaconBlock
+    mov     x1, x20
+    mov     x2, x21
+    bl      node_decode
+    cmp     x0, #1
+    b.eq    8f
+    b.hi    9f
+    mov     x24, x1
+    PART    x25, x9, x24, SignedBeaconBlock_message
+    ldr     x9, [x25, #BeaconBlock_slot]
+    ldr     x10, [x25, #BeaconBlock_proposer_index]
+    stp     x9, x10, [x22]
+    add     x0, x22, #16
+    add     x1, x25, #BeaconBlock_parent_root
+    mov     x2, #32
+    bl      lantern_copy
+    add     x0, x22, #48
+    add     x1, x25, #BeaconBlock_state_root
+    mov     x2, #32
+    bl      lantern_copy
+    add     x0, x22, #112
+    add     x1, x24, #SignedBeaconBlock_signature
+    mov     x2, #96
+    bl      lantern_copy
+    PART    x1, x9, x25, BeaconBlock_body   /* body_root */
+    ADDRESS x0, lantern_type_BeaconBlockBody
+    mov     x2, x21
+    add     x3, x22, #80
+    CALL_GLOBAL ssz_hash_tree_root
+    cbnz    x0, 8f
+    mov     x0, #LANTERN_OK
+    b       99f
+8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    b       99f
+9:  mov     x0, #LANTERN_INVALID_ENCODING
+99: str     x28, [x21]
+    LEAVE 0
+SPEC_END node_block_header
+
+/*
  * L0: x0 = the bytes of the SSZ default value of the type node x1 of the TypeDescriptor x0, written
  * at x2: zero bytes for a fixed size type, none for a list, the byte 1 for a bitlist, and for a
  * variable container or vector its fixed part with the offsets, then each variable part. x19 the
