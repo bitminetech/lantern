@@ -27,6 +27,7 @@
 - tests/generator/app.py: command lines with their `AppOptions`, or the argument index of their fault. File: `<preset>-phase0-app-options.bin`.
 - tests/app/start.sh and tests/app/start.ps1 (Windows): the binary of each target given a faulty option exits with 1 and its line; given a network directory with no config.yaml, it exits with 2 and a "cannot read" line. CI runs them.
 - tests/app/network.py: a network directory (config.yaml, genesis.ssz) to run the binary with, alone or beside other clients.
+- tests/app/trusted_setup.py: writes include/trusted_setup_4096.bin from the pinned spec, or with `--check` exits 1 when the file differs; the interop job of CI runs the check.
 - tests/app/interop.sh: the ARM64 binary beside lighthouse v8.1.3 on one Docker network, from the genesis of tests/app/network.py; each Beacon API must show the other node as a connected peer, and again two slots later. CI runs it on an ARM64 runner.
 
 ## Function `lantern_app_options`
@@ -104,8 +105,9 @@ lantern_app_main(args) -> status
 - Reads the options with lantern_app_options.
 - Reads `config.yaml` of the network directory with lantern_config_parse over the pinned config of the preset, and `genesis.ssz` with lantern_<fork>_node_anchor of the fork of its slot.
 - Starts the store (lantern_get_forkchoice_store), the node (lantern_node_init, with `NODE_FLAG_ENGINE` when it has an execution endpoint, and `NODE_FLAG_DISCV5`), the libp2p state with a new secp256k1 key, and the discv5 state with the same key, the `ip` of `--enr-address`, and the `udp` and `tcp` of `--port`.
-- Listens on TCP `--port` and binds UDP `--port` on every address, through the shell of asm-libp2p, and gives each boot node to discv5.
-- Loops: reads the clock; passes each libp2p shell event, each discv5 record found, each execution engine response and the time to lantern_node_step; performs its actions; runs each work with lantern_node_run, with more room when it asks; waits for the sockets until the next wakeup, at most 100 ms.
+- Decodes the KZG trusted setup with crypto_kzg_trusted_setup_of_bytes: include/trusted_setup_4096.bin, the compressed points of `presets/<preset>/trusted_setups/trusted_setup_4096.json` of the pinned spec (the same file for both presets): the 4096 of `g1_lagrange`, the 4096 of `g1_monomial`, then the 65 of `g2_monomial`.
+- Listens on TCP `--port` and binds UDP `--port` on every address, through the shell of asm-libp2p, gives each boot node to discv5, and listens for the Beacon API ([beacon-api.md](beacon-api.md)) on TCP `--http-port`.
+- Loops: reads the clock; passes each libp2p shell event, each discv5 record found, each execution engine response and the time to lantern_node_step; performs its actions; runs each work with lantern_node_run, with the KZG settings, and with more room when it asks; waits for the sockets until the next wakeup, at most 100 ms.
 - Writes a line to the standard output at each new head and each new finalized checkpoint.
 
 ### ABI

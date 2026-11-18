@@ -69,7 +69,8 @@
 .set APP_LINE_MAX, 512
 .set APP_PATH, APP_LINE + 24 + APP_LINE_MAX /* a ByteList: a path */
 .set APP_PATH_MAX, 4096
-.set APP_SIZE, (APP_PATH + 24 + APP_PATH_MAX + 4095) & ~4095
+.set APP_KZG, APP_PATH + 24 + APP_PATH_MAX  /* pair: the KzgSettings of the trusted setup */
+.set APP_SIZE, (APP_KZG + 16 + 4095) & ~4095
 .set APP_BLOCK_BYTES, 1 << 16               /* the anchor block */
 .set APP_BUF_ENTRY, 24                      /* a BufferId table entry: id, address, size */
 .set APP_BUFS_CAP, 4096
@@ -227,4 +228,17 @@ app_t_dot:
     .ascii "."
 app_t_enr:
     .ascii "enr:"
+app_m_kzg:
+    .ascii "the KZG trusted setup"
+.set app_m_kzg_len, 21
+    .p2align 3
+app_kzg_g1_lagrange:                        /* the trusted setup (docs/reference/app.md): three ByteLists */
+    .quad 24 + 4096 * 48, 24, 4096 * 48
+    .incbin "trusted_setup_4096.bin", 0, 4096 * 48
+app_kzg_g1_monomial:
+    .quad 24 + 4096 * 48, 24, 4096 * 48
+    .incbin "trusted_setup_4096.bin", 4096 * 48, 4096 * 48
+app_kzg_g2_monomial:
+    .quad 24 + 65 * 96, 24, 65 * 96
+    .incbin "trusted_setup_4096.bin", 2 * 4096 * 48, 65 * 96
 .include "app_p2p.inc"

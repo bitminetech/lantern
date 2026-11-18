@@ -536,6 +536,18 @@ LOCAL_FUNCTION app_start
     CALL_GLOBAL lantern_seen_init
     test    %rax, %rax
     jnz     94f
+    mov     $APP_KZG, %edi                  # the KZG trusted setup
+    mov     $CRYPTO_KZG_SETTINGS_SIZE, %esi
+    call    app_alloc
+    test    %rax, %rax
+    jz      97f
+    ADDRESS %rdi, app_kzg_g1_lagrange
+    ADDRESS %rsi, app_kzg_g1_monomial
+    ADDRESS %rdx, app_kzg_g2_monomial
+    mov     APP_KZG(%rbx), %rcx
+    CALL_GLOBAL crypto_kzg_trusted_setup_of_bytes
+    test    %rax, %rax
+    jnz     93f
     mov     $(APP_BUF_ENTRY * APP_BUFS_CAP), %edi  # BufferId 1: the anchor state
     call    app_map
     test    %rax, %rax
@@ -586,6 +598,11 @@ LOCAL_FUNCTION app_start
     call    app_line_end
     xor     %eax, %eax
     LEAVE 16
+93: mov     %rax, %rdx                      # the KZG trusted setup: status <n>
+    ADDRESS %rdi, app_m_kzg
+    mov     $app_m_kzg_len, %esi
+    call    app_fail_status
+    jmp     99f
 94: mov     %rax, %rdx                      # the node: status <n>
     ADDRESS %rdi, app_m_node
     mov     $app_m_node_len, %esi
@@ -904,7 +921,8 @@ LOCAL_FUNCTION app_work
     jz      12f
     mov     8(%r15), %rax
 12: mov     %rax, 8(%rsp)
-    movq    $0, 16(%rsp)
+    mov     APP_KZG(%rbx), %rax
+    mov     %rax, 16(%rsp)
     mov     APP_SCRATCH(%rbx), %rax
     mov     %rax, 24(%rsp)
     mov     APP_WORK_EVENT(%rbx), %rax

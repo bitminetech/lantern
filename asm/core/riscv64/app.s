@@ -523,6 +523,16 @@ LOCAL_FUNCTION app_start
     LDQ     a1, s1, APP_SEEN
     CALL_GLOBAL lantern_seen_init
     bnez    a0, 94f
+    li      a0, APP_KZG                     # the KZG trusted setup
+    li      a1, CRYPTO_KZG_SETTINGS_SIZE
+    call    app_alloc
+    beqz    a0, 97f
+    ADDRESS a0, app_kzg_g1_lagrange
+    ADDRESS a1, app_kzg_g1_monomial
+    ADDRESS a2, app_kzg_g2_monomial
+    LDQ     a3, s1, APP_KZG
+    CALL_GLOBAL crypto_kzg_trusted_setup_of_bytes
+    bnez    a0, 93f
     li      a0, (APP_BUF_ENTRY * APP_BUFS_CAP)  # BufferId 1: the anchor state
     call    app_map
     beqz    a0, 97f
@@ -572,6 +582,11 @@ LOCAL_FUNCTION app_start
     call    app_line_end
     li      a0, 0
     LEAVE 16
+93: mv      a2, a0                          # the KZG trusted setup: status <n>
+    ADDRESS a0, app_m_kzg
+    li      a1, app_m_kzg_len
+    call    app_fail_status
+    j       99f
 94: mv      a2, a0                          # the node: status <n>
     ADDRESS a0, app_m_node
     li      a1, app_m_node_len
@@ -876,7 +891,8 @@ LOCAL_FUNCTION app_work
     LDQ     t1, s1, (APP_WORK_EVENT + 8)
     sd      t1, 0(t0)
     addi    sp, sp, -32                     # the ninth to eleventh arguments: settings, scratch, event
-    sd      zero, 0(sp)
+    LDQ     t0, s1, APP_KZG
+    sd      t0, 0(sp)
     LDQ     t0, s1, APP_SCRATCH
     sd      t0, 8(sp)
     LDQ     t0, s1, APP_WORK_EVENT

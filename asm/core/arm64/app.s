@@ -493,6 +493,16 @@ LOCAL_FUNCTION app_start
     ldr     x1, [x19, #APP_SEEN]
     CALL_GLOBAL lantern_seen_init
     cbnz    x0, 94f
+    mov     x0, #APP_KZG                    /* the KZG trusted setup */
+    MOVQ    x1, CRYPTO_KZG_SETTINGS_SIZE
+    bl      app_alloc
+    cbz     x0, 97f
+    ADDRESS x0, app_kzg_g1_lagrange
+    ADDRESS x1, app_kzg_g1_monomial
+    ADDRESS x2, app_kzg_g2_monomial
+    ldr     x3, [x19, #APP_KZG]
+    CALL_GLOBAL crypto_kzg_trusted_setup_of_bytes
+    cbnz    x0, 93f
     mov     x0, #(APP_BUF_ENTRY * APP_BUFS_CAP) /* BufferId 1: the anchor state */
     bl      app_map
     cbz     x0, 97f
@@ -540,6 +550,11 @@ LOCAL_FUNCTION app_start
     bl      app_line_end
     mov     x0, #0
     LEAVE 16
+93: mov     x2, x0                          /* the KZG trusted setup: status <n> */
+    ADDRESS x0, app_m_kzg
+    mov     x1, #app_m_kzg_len
+    bl      app_fail_status
+    b       99f
 94: mov     x2, x0                          /* the node: status <n> */
     ADDRESS x0, app_m_node
     mov     x1, #app_m_node_len
@@ -839,7 +854,8 @@ LOCAL_FUNCTION app_work
     ldr     x10, [x19, #(APP_WORK_EVENT + 8)]
     str     x10, [x9]
     sub     sp, sp, #32                     /* the ninth to eleventh arguments: settings, scratch, event */
-    str     xzr, [sp]
+    ldr     x9, [x19, #APP_KZG]
+    str     x9, [sp]
     ldr     x9, [x19, #APP_SCRATCH]
     str     x9, [sp, #8]
     ldr     x9, [x19, #APP_WORK_EVENT]

@@ -16,7 +16,8 @@ secs=${3:-120}
 lighthouse=sigp/lighthouse:v8.1.3@sha256:44aa773dcf274122c32cc41c4dae7124ed3cab5c267ee82174c6dfd9c688da96
 net=lantern-interop
 
-# The network directory, with the pinned spec, and a JWT secret for lighthouse.
+# The network directory, with the pinned spec, and a JWT secret for lighthouse; and the check of
+# include/trusted_setup_4096.bin against the pinned spec.
 docker build -q -t lantern-build -f "$root/platform/linux/Dockerfile" "$root/platform/linux" >/dev/null
 genesis=$(( $(date +%s) + 30 ))
 docker run --rm -v "$root:/src" -v "$work:/out" lantern-build sh -eu -c '
@@ -34,6 +35,7 @@ docker run --rm -v "$root:/src" -v "$work:/out" lantern-build sh -eu -c '
     [ -f $spec/tests/core/pyspec/eth_consensus_specs/fulu/mainnet.py ] || (cd $spec && /out/.venv/bin/python -m pysetup.generate_specs --all-forks)
     PYTHONPATH=$spec/tests/core/pyspec:$spec:/src/build/deps/asm-ssz/tests/generator CONSENSUS_SPECS=$spec \
         /out/.venv/bin/python tests/app/network.py /out/net mainnet fulu "$1" 64
+    /out/.venv/bin/python tests/app/trusted_setup.py $spec --check
     od -An -tx1 -N32 /dev/urandom | tr -d " \n" > /out/net/jwt.hex
 ' sh "$genesis"
 

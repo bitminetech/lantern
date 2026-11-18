@@ -148,7 +148,9 @@ jobs:
           ${{ matrix.qemu }} build/linux-${{ matrix.isa }}/shell-test "$RUNNER_TEMP"
       - name: Run the binary
         if: matrix.fork == 'phase0'
-        run: tests/app/start.sh "${{ matrix.qemu }}" build/linux-${{ matrix.isa }}/lantern-minimal
+        run: |
+          chmod +x build/linux-${{ matrix.isa }}/lantern-minimal
+          tests/app/start.sh "${{ matrix.qemu }}" build/linux-${{ matrix.isa }}/lantern-minimal
       - name: Run vectors
         run: |
           set -o pipefail
