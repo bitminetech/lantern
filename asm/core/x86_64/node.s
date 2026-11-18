@@ -1330,7 +1330,7 @@ LOCAL_FUNCTION node_event
     call    lantern_copy
 49: LEAVE 48
 45: cmp     $NODE_EV_ENGINE, %rax
-    jne     50f
+    jne     47f
     cmpq    $0, 16(%r12)
     je      46f
     call    node_engine_failed              # ENGINE 1: the connection failed
@@ -1348,6 +1348,11 @@ LOCAL_FUNCTION node_event
     add     8(%rsi), %rsi
     call    lantern_copy
     call    node_engine_read
+    LEAVE 48
+47: cmp     $NODE_EV_ENR, %rax
+    jne     50f
+    mov     %r12, %rdi                      # ENR: a record discv5 found
+    call    node_enr
     LEAVE 48
 50: mov     NodeAction_work_kind(%r12), %rax        # WORK_DONE
     mov     NodeEvent_result(%r12), %rcx
@@ -2083,55 +2088,8 @@ LOCAL_FUNCTION node_request
     mov     S9(%rsp), %rsi
     mov     (L + 160)(%rsp), %rdx
     call    node_peer_status
-    mov     %rbp, %rdi                      # ForkDigest of the store's epoch
-    call    node_store_slot
-    mov     %rax, S10(%rsp)
-    mov     %rax, %rdi
-    lea     Node_config(%rbx), %rsi
-    call    node_fork
-    mov     %rax, %r10
-    mov     S10(%rsp), %rax
-    xor     %edx, %edx
-    mov     $SLOTS_PER_EPOCH, %ecx
-    div     %rcx
-    mov     %rax, (L + 48)(%rsp)
-    lea     Node_genesis_validators_root(%rbx), %rdi
-    lea     (L + 48)(%rsp), %rsi
-    lea     Node_config(%rbx), %rdx
-    mov     %r14, %rcx
-    lea     (L + 56)(%rsp), %r8
-    FORK_CALL compute_fork_digest
     lea     (L + 64)(%rsp), %rdi
-    lea     (L + 56)(%rsp), %rsi
-    mov     $4, %edx
-    call    lantern_copy
-    lea     (L + 64 + 4)(%rsp), %rdi        # finalized_root, finalized_epoch
-    lea     (Store_finalized_checkpoint + 8)(%rbp), %rsi
-    mov     $32, %edx
-    call    lantern_copy
-    lea     (L + 64 + 36)(%rsp), %rdi
-    lea     Store_finalized_checkpoint(%rbp), %rsi
-    mov     $8, %edx
-    call    lantern_copy
-    lea     (L + 64 + 44)(%rsp), %rdi       # head_root, head_slot
-    lea     Node_head_root(%rbx), %rsi
-    mov     $32, %edx
-    call    lantern_copy
-    lea     Node_head_root(%rbx), %rdi
-    call    node_find_block
-    xor     %ecx, %ecx
-    cmp     $-1, %rax
-    je      23f
-    mov     NodeBlock_slot(%rdx), %rcx
-23: mov     %rcx, (L + 56)(%rsp)
-    lea     (L + 64 + 76)(%rsp), %rdi
-    lea     (L + 56)(%rsp), %rsi
-    mov     $8, %edx
-    call    lantern_copy
-    lea     (L + 64 + 84)(%rsp), %rdi       # earliest_available_slot: Status v2
-    lea     Node_earliest_slot(%rbx), %rsi
-    mov     $8, %edx
-    call    lantern_copy
+    call    node_status_bytes
     mov     %r12, %rdi
     xor     %esi, %esi
     lea     (L + 64)(%rsp), %rdx
@@ -2526,6 +2484,394 @@ LOCAL_FUNCTION node_sub
 END_FUNCTION node_sub
 
 /*
+ * The node's Status at rdi (92 bytes: v2; v1 is its first 84): compute_fork_digest of the store's
+ * epoch, the store's finalized checkpoint, head_root and its slot, and earliest_slot. r12 out.
+ * Locals: L an epoch, L+8 a ForkDigest, L+16 a slot.
+ */
+LOCAL_FUNCTION node_status_bytes
+    ENTER 32
+    mov     %rdi, %r12
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     %rax, L(%rsp)
+    mov     %rax, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     L(%rsp), %rax
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, L(%rsp)
+    movq    $0, (L + 8)(%rsp)
+    lea     Node_genesis_validators_root(%rbx), %rdi
+    lea     L(%rsp), %rsi
+    lea     Node_config(%rbx), %rdx
+    mov     %r14, %rcx
+    lea     (L + 8)(%rsp), %r8
+    FORK_CALL compute_fork_digest
+    mov     %r12, %rdi                      # fork_digest
+    lea     (L + 8)(%rsp), %rsi
+    mov     $4, %edx
+    call    lantern_copy
+    lea     4(%r12), %rdi                   # finalized_root, finalized_epoch
+    lea     (Store_finalized_checkpoint + 8)(%rbp), %rsi
+    mov     $32, %edx
+    call    lantern_copy
+    lea     36(%r12), %rdi
+    lea     Store_finalized_checkpoint(%rbp), %rsi
+    mov     $8, %edx
+    call    lantern_copy
+    lea     44(%r12), %rdi                  # head_root, head_slot
+    lea     Node_head_root(%rbx), %rsi
+    mov     $32, %edx
+    call    lantern_copy
+    lea     Node_head_root(%rbx), %rdi
+    call    node_find_block
+    xor     %ecx, %ecx
+    cmp     $-1, %rax
+    je      1f
+    mov     NodeBlock_slot(%rdx), %rcx
+1:  mov     %rcx, (L + 16)(%rsp)
+    lea     76(%r12), %rdi
+    lea     (L + 16)(%rsp), %rsi
+    mov     $8, %edx
+    call    lantern_copy
+    lea     84(%r12), %rdi                  # earliest_available_slot: Status v2
+    lea     Node_earliest_slot(%rbx), %rsi
+    mov     $8, %edx
+    call    lantern_copy
+    LEAVE 32
+END_FUNCTION node_status_bytes
+
+/*
+ * With NODE_FLAG_DISCV5, the node's record entries for the epoch at rdi of the fork rsi: a
+ * NODE_ACT_DISCV5 of SET_ENTRY events: eth2, attnets, from altair syncnets, from fulu cgc and nfd.
+ * r12 the fork, r13 the action, S7 the next event. Locals: L the epoch.
+ */
+.set NODE_ENR_ACTION, 48 + 64 + 56 * 4
+LOCAL_FUNCTION node_enr_entries
+    ENTER 16
+    testq   $NODE_FLAG_DISCV5, Node_flags(%rbx)
+    jz      9f
+    mov     (%rdi), %rax
+    mov     %rax, L(%rsp)
+    mov     %rsi, %r12
+    mov     $NODE_ACT_DISCV5, %edi
+    mov     $NODE_ENR_ACTION, %esi
+    call    node_act
+    mov     %rax, %r13
+    movq    $0, 16(%r13)
+    movq    $(NODE_ENR_ACTION - 24), 24(%r13)
+    movq    $24, 32(%r13)
+    lea     48(%r13), %rax
+    mov     %rax, S7(%rsp)
+    movq    $64, (%rax)                     # eth2: the ENRForkID of the epoch
+    movq    $DISCV5_EVENT_SET_ENTRY, 8(%rax)
+    movq    $4, 16(%rax)
+    movq    $0x32687465, 24(%rax)
+    movq    $0, 32(%rax)
+    movq    $16, 40(%rax)
+    lea     Node_genesis_validators_root(%rbx), %rdi
+    lea     L(%rsp), %rsi
+    lea     Node_config(%rbx), %rdx
+    mov     %r14, %rcx
+    lea     48(%rax), %r8
+    mov     %r12, %r10
+    FORK_CALL compute_enr_fork_id
+    mov     S7(%rsp), %rax
+    add     $64, %rax
+    movq    $56, (%rax)                     # attnets: no subnet
+    movq    $DISCV5_EVENT_SET_ENTRY, 8(%rax)
+    movq    $7, 16(%rax)
+    movabs  $0x007374656e747461, %rcx
+    mov     %rcx, 24(%rax)
+    movq    $0, 32(%rax)
+    movq    $8, 40(%rax)
+    movq    $0, 48(%rax)
+    add     $56, %rax
+    mov     %rax, S7(%rsp)
+    cmp     $FORK_ALTAIR, %r12
+    jb      8f
+    movq    $56, (%rax)                     # syncnets: no subnet
+    movq    $DISCV5_EVENT_SET_ENTRY, 8(%rax)
+    movq    $8, 16(%rax)
+    movabs  $0x7374656e636e7973, %rcx
+    mov     %rcx, 24(%rax)
+    movq    $0, 32(%rax)
+    movq    $1, 40(%rax)
+    movq    $0, 48(%rax)
+    add     $56, %rax
+    mov     %rax, S7(%rsp)
+    cmp     $FORK_FULU, %r12
+    jb      8f
+    movq    $56, (%rax)                     # cgc: CUSTODY_REQUIREMENT, big-endian, no leading zero byte
+    movq    $DISCV5_EVENT_SET_ENTRY, 8(%rax)
+    movq    $3, 16(%rax)
+    movq    $0x636763, 24(%rax)
+    movq    $0, 32(%rax)
+    movq    $0, 48(%rax)
+    mov     (Node_config + CONFIG_CUSTODY_REQUIREMENT)(%rbx), %rdx
+    xor     %ecx, %ecx                      # n bytes: 8 - its leading zero bytes
+    mov     %rdx, %rsi
+1:  test    %rsi, %rsi
+    jz      2f
+    inc     %rcx
+    shr     $8, %rsi
+    jmp     1b
+2:  mov     %rcx, 40(%rax)
+    test    %rcx, %rcx
+    jz      3f
+    bswap   %rdx                            # big-endian; its last n bytes move to the front
+    neg     %rcx
+    add     $8, %rcx
+    shl     $3, %rcx
+    shr     %cl, %rdx
+    mov     %rdx, 48(%rax)
+3:  add     $56, %rax
+    mov     %rax, S7(%rsp)
+    movq    $56, (%rax)                     # nfd: the next fork digest
+    movq    $DISCV5_EVENT_SET_ENTRY, 8(%rax)
+    movq    $3, 16(%rax)
+    movq    $0x64666e, 24(%rax)
+    movq    $0, 32(%rax)
+    movq    $4, 40(%rax)
+    movq    $0, 48(%rax)
+    lea     Node_genesis_validators_root(%rbx), %rdi
+    lea     L(%rsp), %rsi
+    lea     Node_config(%rbx), %rdx
+    mov     %r14, %rcx
+    lea     48(%rax), %r8
+    CALL_GLOBAL lantern_fulu_compute_next_fork_digest
+    addq    $56, S7(%rsp)
+8:  mov     S7(%rsp), %rax                  # the events' bytes
+    lea     48(%r13), %rcx
+    sub     %rcx, %rax
+    mov     %rax, 40(%r13)
+9:  LEAVE 16
+END_FUNCTION node_enr_entries
+
+/*
+ * rax = the value of the byte string pair whose key is the rcx (at most 8) bytes of rdx, little
+ * end first, of the Enr rdi of the record bytes at rsi, or 0; rdx = its length. Uses rdi, r8-r11.
+ */
+LOCAL_FUNCTION node_enr_pair
+    UNWIND_END_PROLOGUE
+    mov     DISCV5_ENR_COUNT(%rdi), %r8
+    lea     DISCV5_ENR_PAIRS(%rdi), %r9
+1:  test    %r8, %r8
+    jz      3f
+    mov     DISCV5_PAIR_KEY_LEN(%r9), %eax
+    cmp     %rcx, %rax
+    jne     2f
+    mov     DISCV5_PAIR_KEY_OFFSET(%r9), %eax
+    lea     (%rsi,%rax), %r10
+    xor     %r11d, %r11d                    # the key's bytes as a number
+    mov     %rcx, %rdi
+4:  test    %rdi, %rdi
+    jz      5f
+    dec     %rdi
+    shl     $8, %r11
+    movzbl  (%r10,%rdi), %eax
+    or      %rax, %r11
+    jmp     4b
+5:  cmp     %rdx, %r11
+    jne     2f
+    cmpl    $1, DISCV5_PAIR_VALUE_KIND(%r9)
+    jne     2f
+    mov     DISCV5_PAIR_VALUE_OFFSET(%r9), %eax
+    add     %rsi, %rax
+    mov     DISCV5_PAIR_VALUE_LEN(%r9), %edx
+    ret
+2:  add     $DISCV5_PAIR_SIZE, %r9
+    dec     %r8
+    jmp     1b
+3:  xor     %eax, %eax
+    xor     %edx, %edx
+    ret
+END_FUNCTION node_enr_pair
+
+/*
+ * The node record of the NODE_EV_ENR rdi: a DIAL of its TCP address when it has an ip, a tcp pair
+ * of 1 or 2 bytes, an eth2 pair of compute_fork_digest at the store's epoch, a peer ID no NodePeer
+ * has, and room for a peer. r12 the record's ByteList, r13 the Enr, S7 the scratch size, restored
+ * on return, S8 the port, S9 the DIAL. Locals: L the peer ID (39 bytes), L+48 the node's Status
+ * (96), whose first 4 bytes are that digest.
+ */
+LOCAL_FUNCTION node_enr
+    ENTER 144
+    lea     NodeEvent_bytes(%rdi), %r12
+    mov     (%r14), %rax
+    mov     %rax, S7(%rsp)
+    MOVQ    %rcx, DISCV5_ENR_SIZE + DISCV5_ENR_SCRATCH  # the Enr and its scratch at the end of scratch
+    sub     %rcx, %rax
+    jb      9f
+    mov     %rax, (%r14)
+    lea     (%r14,%rax), %r13
+    MOVQ    %rcx, DISCV5_ENR_SCRATCH
+    mov     %rcx, DISCV5_ENR_SIZE(%r13)
+    mov     %r12, %rdi
+    lea     DISCV5_ENR_SIZE(%r13), %rsi
+    mov     %r13, %rdx
+    CALL_GLOBAL discv5_enr_decode
+    test    %rax, %rax
+    jnz     9f
+    testq   $1, DISCV5_ENR_HAS(%r13)        # an ip
+    jz      9f
+    mov     %r13, %rdi                      # a tcp port of 1 or 2 bytes
+    mov     8(%r12), %rsi
+    add     %r12, %rsi
+    mov     $0x706374, %edx
+    mov     $3, %ecx
+    call    node_enr_pair
+    test    %rax, %rax
+    jz      9f
+    cmp     $1, %rdx
+    jb      9f
+    cmp     $2, %rdx
+    ja      9f
+    movzbl  (%rax), %ecx
+    jne     1f
+    shl     $8, %ecx
+    movzbl  1(%rax), %eax
+    or      %eax, %ecx
+1:  mov     %rcx, S8(%rsp)
+    mov     %r13, %rdi                      # an eth2 of the node's fork_digest
+    mov     8(%r12), %rsi
+    add     %r12, %rsi
+    mov     $0x32687465, %edx
+    mov     $4, %ecx
+    call    node_enr_pair
+    test    %rax, %rax
+    jz      9f
+    cmp     $4, %rdx
+    jb      9f
+    mov     (%rax), %eax
+    mov     %eax, L(%rsp)
+    lea     (L + 48)(%rsp), %rdi
+    call    node_status_bytes
+    mov     L(%rsp), %eax
+    cmp     (L + 48)(%rsp), %eax
+    jne     9f
+    MOVQ    %rax, 0x0000211202082500        # the peer ID: identity multihash of the protobuf secp256k1 key
+    mov     %rax, L(%rsp)
+    lea     (L + 6)(%rsp), %rdi
+    lea     DISCV5_ENR_PUBKEY(%r13), %rsi
+    mov     $33, %edx
+    call    lantern_copy
+    PART    %r8, %r9, %rbx, Node_peers      # not a peer of the node
+2:  test    %r9, %r9
+    jz      4f
+    cmpq    $39, NodePeer_id_len(%r8)
+    jne     3f
+    xor     %ecx, %ecx
+5:  cmp     $39, %rcx
+    jae     9f
+    movzbl  NodePeer_id(%r8,%rcx), %eax
+    cmp     L(%rsp,%rcx), %al
+    jne     3f
+    inc     %rcx
+    jmp     5b
+3:  add     $NodePeer__mem, %r8
+    dec     %r9
+    jmp     2b
+4:  mov     (Node_peers + 8)(%rbx), %rcx    # room for a peer
+    add     Node_dialing(%rbx), %rcx
+    mov     Node_streams(%rbx), %rax
+    sub     Node_peers(%rbx), %rax
+    xor     %edx, %edx
+    mov     $NodePeer__mem, %r8d
+    div     %r8
+    cmp     %rax, %rcx
+    jae     9f
+    mov     $LIBP2P_EV_DIAL_SIZE, %edi      # the DIAL
+    call    node_out
+    test    %rax, %rax
+    jz      9f
+    mov     %rax, S9(%rsp)
+    movq    $LIBP2P_EVENT_DIAL, 8(%rax)
+    call    node_new_id
+    MOVQ    %rcx, NODE_DIAL_TAG
+    or      %rcx, %rax
+    mov     S9(%rsp), %rdx
+    mov     %rax, LIBP2P_EV_TAG(%rdx)
+    movq    $4, (LIBP2P_EV_DIAL_ADDR + LIBP2P_ADDR_FAMILY)(%rdx)
+    mov     S8(%rsp), %rax
+    mov     %rax, (LIBP2P_EV_DIAL_ADDR + LIBP2P_ADDR_PORT)(%rdx)
+    movq    $0, (LIBP2P_EV_DIAL_ADDR + LIBP2P_ADDR_IP)(%rdx)
+    movq    $0, (LIBP2P_EV_DIAL_ADDR + LIBP2P_ADDR_IP + 8)(%rdx)
+    mov     DISCV5_ENR_IP4(%r13), %eax
+    mov     %eax, (LIBP2P_EV_DIAL_ADDR + LIBP2P_ADDR_IP)(%rdx)
+    movq    $39, LIBP2P_EV_DIAL_ID_LEN(%rdx)
+    lea     LIBP2P_EV_DIAL_ID(%rdx), %rdi
+    mov     $48, %esi
+    call    lantern_zero
+    mov     S9(%rsp), %rdi
+    add     $LIBP2P_EV_DIAL_ID, %rdi
+    lea     L(%rsp), %rsi
+    mov     $39, %edx
+    call    lantern_copy
+    mov     S9(%rsp), %rdx
+    movq    $LIBP2P_TCP, LIBP2P_EV_DIAL_TRANSPORT(%rdx)
+    movq    $0, (LIBP2P_EV_DIAL_TRANSPORT + 8)(%rdx)
+    incq    Node_dialing(%rbx)
+9:  mov     S7(%rsp), %rax
+    mov     %rax, (%r14)
+    LEAVE 144
+END_FUNCTION node_enr
+
+/*
+ * With NODE_FLAG_DISCV5 and room for more peers, a NODE_ACT_DISCV5 of a LOOKUP whose target is
+ * the 32 entropy bytes of the tick rdi, when lookup_ms is 0 or NODE_LOOKUP_MS before time_ms.
+ * r12 the tick, r13 the action.
+ */
+LOCAL_FUNCTION node_lookup
+    ENTER 0
+    mov     %rdi, %r12
+    testq   $NODE_FLAG_DISCV5, Node_flags(%rbx)
+    jz      9f
+    mov     (Node_peers + 8)(%rbx), %rcx
+    add     Node_dialing(%rbx), %rcx
+    mov     Node_streams(%rbx), %rax
+    sub     Node_peers(%rbx), %rax
+    xor     %edx, %edx
+    mov     $NodePeer__mem, %r8d
+    div     %r8
+    cmp     %rax, %rcx
+    jae     9f
+    mov     Node_lookup_ms(%rbx), %rax
+    test    %rax, %rax
+    jz      1f
+    MOVQ    %rcx, NODE_LOOKUP_MS
+    add     %rcx, %rax
+    cmp     %rax, Node_time_ms(%rbx)
+    jb      9f
+1:  mov     $96, %edi                       # the action: 16, 24 a ByteList, 48 the LOOKUP
+    call    node_room
+    test    %rax, %rax
+    jz      9f
+    mov     $NODE_ACT_DISCV5, %edi
+    mov     $96, %esi
+    call    node_act
+    mov     %rax, %r13
+    movq    $0, 16(%r13)
+    movq    $72, 24(%r13)
+    movq    $24, 32(%r13)
+    movq    $DISCV5_EV_LOOKUP_SIZE, 40(%r13)
+    movq    $DISCV5_EV_LOOKUP_SIZE, 48(%r13)
+    movq    $DISCV5_EVENT_LOOKUP, 56(%r13)
+    lea     (48 + DISCV5_EV_LOOKUP_TARGET)(%r13), %rdi
+    lea     LIBP2P_TICK_ENTROPY(%r12), %rsi
+    mov     $32, %edx
+    call    lantern_copy
+    mov     Node_time_ms(%rbx), %rax
+    cmp     $1, %rax                        # 0 becomes 1
+    adc     $0, %rax
+    mov     %rax, Node_lookup_ms(%rbx)
+9:  LEAVE 0
+END_FUNCTION node_lookup
+
+/*
  * The gossip topics of the fork of the store's epoch, at its ForkDigest: SUBSCRIBE events, once
  * for each digest, when p2p_out has room for them. r12 the fork, r13 a subnet, S7 the subnets.
  * Locals: L an epoch, L+8 a ForkDigest.
@@ -2538,6 +2884,10 @@ LOCAL_FUNCTION node_subscribe
     sub     16(%rcx), %rax
     cmp     $(64 * 128), %rax
     jb      9f
+    mov     $NODE_ENR_ACTION, %edi          # and the actions room for the record entries
+    call    node_room
+    test    %rax, %rax
+    jz      9f
     mov     %rbp, %rdi
     call    node_store_slot
     mov     %rax, %r12
@@ -2566,6 +2916,9 @@ LOCAL_FUNCTION node_subscribe
     je      9f
 1:  mov     %rax, Node_fork_digest(%rbx)
     orq     $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)
+    lea     L(%rsp), %rdi                   # the record entries of the new digest
+    mov     %r12, %rsi
+    call    node_enr_entries
     .irp name, GOSSIP_BEACON_BLOCK, GOSSIP_BEACON_AGGREGATE_AND_PROOF, GOSSIP_VOLUNTARY_EXIT, GOSSIP_PROPOSER_SLASHING, GOSSIP_ATTESTER_SLASHING
     mov     $\name, %edi
     xor     %esi, %esi
@@ -3398,19 +3751,22 @@ LOCAL_FUNCTION node_sync
     LEAVE 48
 END_FUNCTION node_sync
 
-/* The libp2p application notice rdi of the libp2p state rsi. r12 the notice, r13 an entry, S7 method, S8 version. */
+/*
+ * The libp2p application notice rdi of the libp2p state rsi. r12 the notice, r13 an entry, S7
+ * method, S8 version. Locals: L a Status (96).
+ */
 LOCAL_FUNCTION node_notice
-    ENTER 0
+    ENTER 96
     mov     %rdi, %r12
     mov     LIBP2P_ACT_KIND(%r12), %rax
     cmp     $LIBP2P_ACTION_MESSAGE, %rax
     jne     60f
     call    node_message                    # rdi, rsi as given
-    LEAVE 0
+    LEAVE 96
 60: cmp     $LIBP2P_ACTION_MESSAGE_STATUS, %rax
     jne     62f
     call    node_message_status
-    LEAVE 0
+    LEAVE 96
 62: cmp     $LIBP2P_ACTION_STREAM_OPENED, %rax
     jne     63f
     mov     LIBP2P_ACT_SO_TAG(%r12), %rdi   # the node's request stream: the request, then the close of our side
@@ -3447,13 +3803,13 @@ LOCAL_FUNCTION node_notice
     mov     S8(%rsp), %rdx
     call    lantern_copy
     movq    $0, (NodeStream_list + 16)(%r13)
-69: LEAVE 0
+69: LEAVE 96
 68: mov     $LIBP2P_EVENT_STREAM_RESET, %edi        # no room: a reset
     mov     NodeStream_handle(%r13), %rsi
     call    node_out_handle
     mov     %r13, %rdi
     call    node_end_stream
-    LEAVE 0
+    LEAVE 96
 63: cmp     $LIBP2P_ACTION_STREAM_FAILED, %rax
     jne     61f
     mov     LIBP2P_ACT_STREAM(%r12), %rdi   # its tag
@@ -3462,11 +3818,17 @@ LOCAL_FUNCTION node_notice
     je      69b
     mov     %rdx, %rdi
     call    node_end_stream
-    LEAVE 0
+    LEAVE 96
 61: mov     LIBP2P_ACT_KIND(%r12), %rax
     cmp     $LIBP2P_ACTION_PEER_CONNECTED, %rax
-    jne     10f
-    mov     Node_streams(%rbx), %rax        # a new peer: its entry, or DISCONNECT when the table is full
+    jne     64f
+    MOVQ    %rcx, NODE_DIAL_TAG             # a dial of the node ends
+    test    %rcx, LIBP2P_ACT_PC_TAG(%r12)
+    jz      65f
+    cmpq    $0, Node_dialing(%rbx)
+    je      65f
+    decq    Node_dialing(%rbx)
+65: mov     Node_streams(%rbx), %rax        # a new peer: its entry, or DISCONNECT when the table is full
     sub     Node_peers(%rbx), %rax
     xor     %edx, %edx
     mov     $NodePeer__mem, %ecx
@@ -3477,7 +3839,7 @@ LOCAL_FUNCTION node_notice
     mov     $LIBP2P_EVENT_DISCONNECT, %edi
     mov     LIBP2P_ACT_PEER(%r12), %rsi
     call    node_out_handle
-    LEAVE 0
+    LEAVE 96
 1:  imul    $NodePeer__mem, %rcx, %r13
     add     Node_peers(%rbx), %r13
     add     %rbx, %r13
@@ -3498,7 +3860,35 @@ LOCAL_FUNCTION node_notice
     lea     NodePeer_id(%r13), %rdi
     lea     LIBP2P_ACT_PC_ID(%r12), %rsi
     call    lantern_copy
-    LEAVE 0
+    cmpq    $LIBP2P_OUTBOUND, NodePeer_direction(%r13)      # we dialled: our Status first (v2 from fulu, v1 before)
+    jne     69b
+    lea     L(%rsp), %rdi
+    call    node_status_bytes
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     %rax, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     $1, %esi
+    mov     $84, %r8d
+    cmp     $FORK_FULU, %rax
+    jb      3f
+    mov     $2, %esi
+    mov     $92, %r8d
+3:  mov     $REQRESP_STATUS, %edi
+    mov     NodePeer_handle(%r13), %rdx
+    lea     L(%rsp), %rcx
+    call    node_open
+    LEAVE 96
+64: cmp     $LIBP2P_ACTION_DIAL_FAILED, %rax
+    jne     10f
+    MOVQ    %rcx, NODE_DIAL_TAG             # a dial of the node ends
+    test    %rcx, LIBP2P_ACT_TAG(%r12)
+    jz      69b
+    cmpq    $0, Node_dialing(%rbx)
+    je      69b
+    decq    Node_dialing(%rbx)
+    LEAVE 96
 10: cmp     $LIBP2P_ACTION_PEER_DISCONNECTED, %rax
     jne     20f
     mov     LIBP2P_ACT_PEER(%r12), %rdi
@@ -3507,7 +3897,7 @@ LOCAL_FUNCTION node_notice
     je      19f
     mov     %rdx, %rdi
     call    node_drop_peer
-19: LEAVE 0
+19: LEAVE 96
 20: cmp     $LIBP2P_ACTION_STREAM_INBOUND, %rax
     jne     30f
     mov     LIBP2P_ACT_SI_PROTOCOL(%r12), %rdi      # a request stream: its entry, or a reset
@@ -3546,11 +3936,11 @@ LOCAL_FUNCTION node_notice
     movq    $0, (NodeStream_list + 16)(%r13)
     mov     %r13, %rdi
     call    node_request
-    LEAVE 0
+    LEAVE 96
 28: mov     $LIBP2P_EVENT_STREAM_RESET, %edi
     mov     LIBP2P_ACT_STREAM(%r12), %rsi
     call    node_out_handle
-    LEAVE 0
+    LEAVE 96
 30: cmp     $LIBP2P_ACTION_STREAM_DATA, %rax
     jne     40f
     mov     LIBP2P_ACT_STREAM(%r12), %rdi   # request bytes: kept, then read
@@ -3574,15 +3964,15 @@ LOCAL_FUNCTION node_notice
     cmpq    $NODE_STREAM_RESPONSE, NodeStream_state(%r13)
     jne     37f
     call    node_response                   # response bytes of the node's request
-    LEAVE 0
+    LEAVE 96
 37: call    node_request
-39: LEAVE 0
+39: LEAVE 96
 38: mov     $LIBP2P_EVENT_STREAM_RESET, %edi        # more than the room: a reset
     mov     NodeStream_handle(%r13), %rsi
     call    node_out_handle
     mov     %r13, %rdi
     call    node_end_stream
-    LEAVE 0
+    LEAVE 96
 40: cmp     $LIBP2P_ACTION_STREAM_EOF, %rax
     jne     50f
     mov     LIBP2P_ACT_STREAM(%r12), %rdi
@@ -3594,13 +3984,13 @@ LOCAL_FUNCTION node_notice
     movq    $1, NodeStream_next(%rdx)       # the response is complete
     mov     %rdx, %rdi
     call    node_response
-    LEAVE 0
+    LEAVE 96
 41: cmpq    $NODE_STREAM_EOF, NodeStream_state(%rdx)        # while its request is read
     ja      49f
     movq    $NODE_STREAM_EOF, NodeStream_state(%rdx)
     mov     %rdx, %rdi
     call    node_request
-49: LEAVE 0
+49: LEAVE 96
 50: cmp     $LIBP2P_ACTION_STREAM_RESET, %rax
     jne     59f
     mov     LIBP2P_ACT_STREAM(%r12), %rdi
@@ -3609,7 +3999,7 @@ LOCAL_FUNCTION node_notice
     je      59f
     mov     %rdx, %rdi
     call    node_end_stream
-59: LEAVE 0
+59: LEAVE 96
 END_FUNCTION node_notice
 
 /* rax = the WAKEUP time of the libp2p actions in the ByteList rdi, after their application notices, of the libp2p state rsi. r12 an action, r13 the end, S7 the time, S8 the state. */
@@ -3858,7 +4248,7 @@ END_FUNCTION node_block_entry
  * the queue's free bytes the P2P events take, saved, L+48 the libp2p scratch, L+56 the bytes of the P2P events, L+64 the P2P
  * events, L+72 the action room kept for the node, L+80 wakeup, L+88 libp2p's StepResult, L+96
  * libp2p's actions, L+104 the libp2p steps, L+112 a stream waits, L+120 the GOSSIP WORK_DONE events,
- * L+128 the bytes of the ENGINE events.
+ * L+128 the bytes of the ENGINE events, L+136 1 with an ENR event.
  */
 FUNCTION lantern_node_step
     ENTER 144
@@ -3882,6 +4272,7 @@ FUNCTION lantern_node_step
     movq    $0, (L + 64)(%rsp)
     movq    $0, (L + 120)(%rsp)
     movq    $0, (L + 128)(%rsp)
+    movq    $0, (L + 136)(%rsp)
     mov     %r12, %rdi
 1:  cmp     %r13, %rdi
     jae     5f
@@ -3978,7 +4369,12 @@ FUNCTION lantern_node_step
     lea     -(24 + 24)(%rcx), %rsi
     cmp     %rsi, (24 + 16)(%rdi)
     ja      7f
-    cmp     $NODE_EV_BLOCK, %rdx
+    cmp     $NODE_EV_ENR, %rdx              # ENR: with p2p
+    jne     33f
+    cmpq    $0, (L + 16)(%rsp)
+    je      7f
+    movq    $1, (L + 136)(%rsp)
+33: cmp     $NODE_EV_BLOCK, %rdx
     je      31f
     cmp     $NODE_EV_POW_BLOCK, %rdx
     jne     4f
@@ -4081,7 +4477,11 @@ FUNCTION lantern_node_step
     MOVQ    %rcx, LANTERN_SCRATCH_FIXED + 64
     add     %rcx, %rax
     add     %r8, %rax
-    mov     (%r14), %rcx
+    cmpq    $0, (L + 136)(%rsp)             # with an ENR event, the record's decoding
+    je      53f
+    MOVQ    %rcx, DISCV5_ENR_SIZE + DISCV5_ENR_SCRATCH
+    add     %rcx, %rax
+53: mov     (%r14), %rcx
     cmp     %rax, %rcx
     jb      8f
     mov     %rcx, (L + 8)(%rsp)
@@ -4200,6 +4600,8 @@ FUNCTION lantern_node_step
     mov     %rax, (L + 112)(%rsp)
     call    node_sync
     or      %rax, (L + 112)(%rsp)
+    mov     (L + 24)(%rsp), %rdi
+    call    node_lookup
     movq    $0, (L + 104)(%rsp)
 32: P2P_OUT %rdx
     cmpq    $0, 16(%rdx)

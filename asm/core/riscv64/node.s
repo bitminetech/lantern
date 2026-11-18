@@ -1384,7 +1384,7 @@ LOCAL_FUNCTION node_event
     call    lantern_copy
 49: LEAVE 48
 45: li      t1, NODE_EV_ENGINE
-    bne     t0, t1, 50f
+    bne     t0, t1, 47f
     ld      t0, 16(s3)
     beqz    t0, 46f
     call    node_engine_failed              # ENGINE 1: the connection failed
@@ -1405,6 +1405,11 @@ LOCAL_FUNCTION node_event
     sd      t0, 16(s7)
     call    lantern_copy
     call    node_engine_read
+    LEAVE 48
+47: li      t1, NODE_EV_ENR
+    bne     t0, t1, 50f
+    mv      a0, s3                          # ENR: a record discv5 found
+    call    node_enr
     LEAVE 48
 50: ld      t0, NodeAction_work_kind(s3)    # WORK_DONE
     ld      t1, NodeEvent_result(s3)
@@ -2132,52 +2137,8 @@ LOCAL_FUNCTION node_request
     mv      a1, s9
     mv      a2, s7
     call    node_peer_status
-    mv      a0, s2                          # ForkDigest of the store's epoch
-    call    node_store_slot
-    mv      s10, a0
-    addi    a1, s1, Node_config
-    call    node_fork
-    mv      t6, a0
-    li      t0, SLOTS_PER_EPOCH
-    divu    t0, s10, t0
-    sd      t0, (L + 48)(sp)
-    addi    a0, s1, Node_genesis_validators_root
-    addi    a1, sp, L + 48
-    addi    a2, s1, Node_config
-    mv      a3, s5
-    addi    a4, sp, L + 56
-    FORK_CALL compute_fork_digest
     addi    a0, sp, L + 64
-    addi    a1, sp, L + 56
-    li      a2, 4
-    call    lantern_copy
-    addi    a0, sp, L + 64 + 4              # finalized_root, finalized_epoch
-    addi    a1, s2, Store_finalized_checkpoint + 8
-    li      a2, 32
-    call    lantern_copy
-    addi    a0, sp, L + 64 + 36
-    addi    a1, s2, Store_finalized_checkpoint
-    li      a2, 8
-    call    lantern_copy
-    addi    a0, sp, L + 64 + 44             # head_root, head_slot
-    addi    a1, s1, Node_head_root
-    li      a2, 32
-    call    lantern_copy
-    addi    a0, s1, Node_head_root
-    call    node_find_block
-    li      t1, 0
-    li      t0, -1
-    beq     a0, t0, 23f
-    ld      t1, NodeBlock_slot(a1)
-23: sd      t1, (L + 56)(sp)
-    addi    a0, sp, L + 64 + 76
-    addi    a1, sp, L + 56
-    li      a2, 8
-    call    lantern_copy
-    addi    a0, sp, L + 64 + 84             # earliest_available_slot: Status v2
-    addi    a1, s1, Node_earliest_slot
-    li      a2, 8
-    call    lantern_copy
+    call    node_status_bytes
     mv      a0, s3
     li      a1, 0
     addi    a2, sp, L + 64
@@ -2563,6 +2524,385 @@ LOCAL_FUNCTION node_sub
 END_FUNCTION node_sub
 
 /*
+ * The node's Status at a0 (92 bytes: v2; v1 is its first 84): compute_fork_digest of the store's
+ * epoch, the store's finalized checkpoint, head_root and its slot, and earliest_slot. s3 out, s4
+ * the slot. Locals: L an epoch, L+8 a ForkDigest, L+16 a slot.
+ */
+LOCAL_FUNCTION node_status_bytes
+    ENTER 32
+    mv      s3, a0
+    mv      a0, s2
+    call    node_store_slot
+    mv      s4, a0
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    li      t0, SLOTS_PER_EPOCH
+    divu    t0, s4, t0
+    sd      t0, L(sp)
+    sd      zero, (L + 8)(sp)
+    addi    a0, s1, Node_genesis_validators_root
+    addi    a1, sp, L
+    addi    a2, s1, Node_config
+    mv      a3, s5
+    addi    a4, sp, L + 8
+    FORK_CALL compute_fork_digest
+    mv      a0, s3                          # fork_digest
+    addi    a1, sp, L + 8
+    li      a2, 4
+    call    lantern_copy
+    addi    a0, s3, 4                       # finalized_root, finalized_epoch
+    addi    a1, s2, Store_finalized_checkpoint + 8
+    li      a2, 32
+    call    lantern_copy
+    addi    a0, s3, 36
+    addi    a1, s2, Store_finalized_checkpoint
+    li      a2, 8
+    call    lantern_copy
+    addi    a0, s3, 44                      # head_root, head_slot
+    addi    a1, s1, Node_head_root
+    li      a2, 32
+    call    lantern_copy
+    addi    a0, s1, Node_head_root
+    call    node_find_block
+    li      t1, 0
+    li      t0, -1
+    beq     a0, t0, 1f
+    ld      t1, NodeBlock_slot(a1)
+1:  sd      t1, (L + 16)(sp)
+    addi    a0, s3, 76
+    addi    a1, sp, L + 16
+    li      a2, 8
+    call    lantern_copy
+    addi    a0, s3, 84                      # earliest_available_slot: Status v2
+    addi    a1, s1, Node_earliest_slot
+    li      a2, 8
+    call    lantern_copy
+    LEAVE 32
+END_FUNCTION node_status_bytes
+
+/* A SET_ENTRY event at s7 of the size, the key (its length and bytes, little end first) and the value length. Uses t0. */
+.macro ENR_ENTRY size, key_len, key, value_len
+    li      t0, \size
+    sd      t0, 0(s7)
+    li      t0, DISCV5_EVENT_SET_ENTRY
+    sd      t0, 8(s7)
+    li      t0, \key_len
+    sd      t0, 16(s7)
+    li      t0, \key
+    sd      t0, 24(s7)
+    sd      zero, 32(s7)
+    li      t0, \value_len
+    sd      t0, 40(s7)
+    sd      zero, 48(s7)
+.endm
+
+/*
+ * With NODE_FLAG_DISCV5, the node's record entries for the epoch at a0 of the fork a1: a
+ * NODE_ACT_DISCV5 of SET_ENTRY events: eth2, attnets, from altair syncnets, from fulu cgc and nfd.
+ * s3 the fork, s4 the action, s7 the next event. Locals: L the epoch.
+ */
+.set NODE_ENR_ACTION, 48 + 64 + 56 * 4
+LOCAL_FUNCTION node_enr_entries
+    ENTER 16
+    ld      t0, Node_flags(s1)
+    andi    t0, t0, NODE_FLAG_DISCV5
+    beqz    t0, 9f
+    ld      t0, 0(a0)
+    sd      t0, L(sp)
+    mv      s3, a1
+    li      a0, NODE_ACT_DISCV5
+    li      a1, NODE_ENR_ACTION
+    call    node_act
+    mv      s4, a0
+    sd      zero, 16(s4)
+    li      t0, NODE_ENR_ACTION - 24
+    sd      t0, 24(s4)
+    li      t0, 24
+    sd      t0, 32(s4)
+    addi    s7, s4, 48
+    ENR_ENTRY 64, 4, 0x32687465, 16         # eth2: the ENRForkID of the epoch
+    addi    a0, s1, Node_genesis_validators_root
+    addi    a1, sp, L
+    addi    a2, s1, Node_config
+    mv      a3, s5
+    addi    a4, s7, 48
+    mv      t6, s3
+    FORK_CALL compute_enr_fork_id
+    addi    s7, s7, 64
+    ENR_ENTRY 56, 7, 0x007374656e747461, 8  # attnets: no subnet
+    addi    s7, s7, 56
+    li      t0, FORK_ALTAIR
+    bltu    s3, t0, 8f
+    ENR_ENTRY 56, 8, 0x7374656e636e7973, 1  # syncnets: no subnet
+    addi    s7, s7, 56
+    li      t0, FORK_FULU
+    bltu    s3, t0, 8f
+    ENR_ENTRY 56, 3, 0x636763, 0            # cgc: CUSTODY_REQUIREMENT, big-endian, no leading zero byte
+    LDQ     t1, s1, Node_config + CONFIG_CUSTODY_REQUIREMENT
+    li      t2, 0                           # n bytes: 8 - its leading zero bytes
+    mv      t3, t1
+1:  beqz    t3, 2f
+    addi    t2, t2, 1
+    srli    t3, t3, 8
+    j       1b
+2:  sd      t2, 40(s7)
+    beqz    t2, 3f
+    li      t3, 0                           # its bytes from the highest
+    li      t4, 0
+    slli    t5, t2, 3
+4:  addi    t5, t5, -8
+    srl     a0, t1, t5
+    andi    a0, a0, 0xff
+    sll     a0, a0, t4
+    or      t3, t3, a0
+    addi    t4, t4, 8
+    bnez    t5, 4b
+    sd      t3, 48(s7)
+3:  addi    s7, s7, 56
+    ENR_ENTRY 56, 3, 0x64666e, 4            # nfd: the next fork digest
+    addi    a0, s1, Node_genesis_validators_root
+    addi    a1, sp, L
+    addi    a2, s1, Node_config
+    mv      a3, s5
+    addi    a4, s7, 48
+    CALL_GLOBAL lantern_fulu_compute_next_fork_digest
+    addi    s7, s7, 56
+8:  addi    t0, s4, 48                      # the events' bytes
+    sub     t0, s7, t0
+    sd      t0, 40(s4)
+9:  LEAVE 16
+END_FUNCTION node_enr_entries
+
+/*
+ * a0 = the value of the byte string pair whose key is the a3 (at most 8) bytes of a2, little end
+ * first, of the Enr a0 of the record bytes at a1, or 0; a1 = its length. Uses t0-t6.
+ */
+LOCAL_FUNCTION node_enr_pair
+    UNWIND_END_PROLOGUE
+    ld      t0, DISCV5_ENR_COUNT(a0)
+    addi    t1, a0, DISCV5_ENR_PAIRS
+1:  beqz    t0, 3f
+    lwu     t2, DISCV5_PAIR_KEY_LEN(t1)
+    bne     t2, a3, 2f
+    lwu     t3, DISCV5_PAIR_KEY_OFFSET(t1)
+    add     t3, a1, t3
+    li      t4, 0                           # the key's bytes as a number
+    mv      t5, a3
+4:  beqz    t5, 5f
+    addi    t5, t5, -1
+    slli    t4, t4, 8
+    add     t6, t3, t5
+    lbu     t6, 0(t6)
+    or      t4, t4, t6
+    j       4b
+5:  bne     t4, a2, 2f
+    lwu     t2, DISCV5_PAIR_VALUE_KIND(t1)
+    li      t3, 1
+    bne     t2, t3, 2f
+    lwu     t2, DISCV5_PAIR_VALUE_OFFSET(t1)
+    add     a0, a1, t2
+    lwu     a1, DISCV5_PAIR_VALUE_LEN(t1)
+    ret
+2:  addi    t1, t1, DISCV5_PAIR_SIZE
+    addi    t0, t0, -1
+    j       1b
+3:  li      a0, 0
+    li      a1, 0
+    ret
+END_FUNCTION node_enr_pair
+
+/*
+ * The node record of the NODE_EV_ENR a0: a DIAL of its TCP address when it has an ip, a tcp pair
+ * of 1 or 2 bytes, an eth2 pair of compute_fork_digest at the store's epoch, a peer ID no NodePeer
+ * has, and room for a peer. s3 the record's ByteList, s4 the Enr, s7 the scratch size, restored on
+ * return, s8 the port, s9 the DIAL. Locals: L the peer ID (39 bytes), L+48 the node's Status
+ * (96), whose first 4 bytes are that digest.
+ */
+LOCAL_FUNCTION node_enr
+    ENTER 144
+    addi    s3, a0, NodeEvent_bytes
+    ld      s7, 0(s5)
+    li      t0, DISCV5_ENR_SIZE + DISCV5_ENR_SCRATCH    # the Enr and its scratch at the end of scratch
+    bltu    s7, t0, 9f
+    sub     t1, s7, t0
+    sd      t1, 0(s5)
+    add     s4, s5, t1
+    li      t0, DISCV5_ENR_SIZE
+    add     a1, s4, t0
+    li      t0, DISCV5_ENR_SCRATCH
+    sd      t0, 0(a1)
+    mv      a0, s3
+    mv      a2, s4
+    CALL_GLOBAL discv5_enr_decode
+    bnez    a0, 9f
+    ld      t0, DISCV5_ENR_HAS(s4)          # an ip
+    andi    t0, t0, 1
+    beqz    t0, 9f
+    mv      a0, s4                          # a tcp port of 1 or 2 bytes
+    ld      a1, 8(s3)
+    add     a1, s3, a1
+    li      a2, 0x706374
+    li      a3, 3
+    call    node_enr_pair
+    beqz    a0, 9f
+    li      t0, 1
+    bltu    a1, t0, 9f
+    li      t0, 2
+    bgtu    a1, t0, 9f
+    lbu     s8, 0(a0)
+    bne     a1, t0, 1f
+    lbu     t1, 1(a0)
+    slli    s8, s8, 8
+    or      s8, s8, t1
+1:  mv      a0, s4                          # an eth2 of the node's fork_digest
+    ld      a1, 8(s3)
+    add     a1, s3, a1
+    li      a2, 0x32687465
+    li      a3, 4
+    call    node_enr_pair
+    beqz    a0, 9f
+    li      t0, 4
+    bltu    a1, t0, 9f
+    lbu     t0, 0(a0)
+    lbu     t1, 1(a0)
+    slli    t1, t1, 8
+    or      t0, t0, t1
+    lbu     t1, 2(a0)
+    slli    t1, t1, 16
+    or      t0, t0, t1
+    lbu     t1, 3(a0)
+    slli    t1, t1, 24
+    or      t0, t0, t1
+    sw      t0, L(sp)
+    addi    a0, sp, L + 48
+    call    node_status_bytes
+    lwu     t0, L(sp)
+    lwu     t1, (L + 48)(sp)
+    bne     t0, t1, 9f
+    li      t0, 0x0000211202082500          # the peer ID: identity multihash of the protobuf secp256k1 key
+    sd      t0, L(sp)
+    addi    a0, sp, L + 6
+    addi    a1, s4, DISCV5_ENR_PUBKEY
+    li      a2, 33
+    call    lantern_copy
+    PART    t0, t1, s1, Node_peers          # not a peer of the node
+    li      t3, 39
+2:  beqz    t1, 4f
+    ld      t2, NodePeer_id_len(t0)
+    bne     t2, t3, 3f
+    li      t2, 0
+5:  bgeu    t2, t3, 9f
+    add     t4, t0, t2
+    lbu     t4, NodePeer_id(t4)
+    add     t5, sp, t2
+    lbu     t5, L(t5)
+    bne     t4, t5, 3f
+    addi    t2, t2, 1
+    j       5b
+3:  addi    t0, t0, NodePeer__mem
+    addi    t1, t1, -1
+    j       2b
+4:  ld      t0, (Node_peers + 8)(s1)        # room for a peer
+    ld      t1, Node_dialing(s1)
+    add     t0, t0, t1
+    ld      t2, Node_streams(s1)
+    ld      t3, Node_peers(s1)
+    sub     t2, t2, t3
+    li      t3, NodePeer__mem
+    divu    t2, t2, t3
+    bgeu    t0, t2, 9f
+    li      a0, LIBP2P_EV_DIAL_SIZE         # the DIAL
+    call    node_out
+    beqz    a0, 9f
+    mv      s9, a0
+    li      t0, LIBP2P_EVENT_DIAL
+    sd      t0, 8(s9)
+    call    node_new_id
+    li      t0, NODE_DIAL_TAG
+    or      a0, a0, t0
+    sd      a0, LIBP2P_EV_TAG(s9)
+    li      t0, 4
+    sd      t0, (LIBP2P_EV_DIAL_ADDR + LIBP2P_ADDR_FAMILY)(s9)
+    sd      s8, (LIBP2P_EV_DIAL_ADDR + LIBP2P_ADDR_PORT)(s9)
+    sd      zero, (LIBP2P_EV_DIAL_ADDR + LIBP2P_ADDR_IP)(s9)
+    sd      zero, (LIBP2P_EV_DIAL_ADDR + LIBP2P_ADDR_IP + 8)(s9)
+    lwu     t0, DISCV5_ENR_IP4(s4)
+    sw      t0, (LIBP2P_EV_DIAL_ADDR + LIBP2P_ADDR_IP)(s9)
+    li      t0, 39
+    sd      t0, LIBP2P_EV_DIAL_ID_LEN(s9)
+    addi    a0, s9, LIBP2P_EV_DIAL_ID
+    li      a1, 48
+    call    lantern_zero
+    addi    a0, s9, LIBP2P_EV_DIAL_ID
+    addi    a1, sp, L
+    li      a2, 39
+    call    lantern_copy
+    li      t0, LIBP2P_TCP
+    sd      t0, LIBP2P_EV_DIAL_TRANSPORT(s9)
+    sd      zero, (LIBP2P_EV_DIAL_TRANSPORT + 8)(s9)
+    ld      t0, Node_dialing(s1)
+    addi    t0, t0, 1
+    sd      t0, Node_dialing(s1)
+9:  sd      s7, 0(s5)
+    LEAVE 144
+END_FUNCTION node_enr
+
+/*
+ * With NODE_FLAG_DISCV5 and room for more peers, a NODE_ACT_DISCV5 of a LOOKUP whose target is
+ * the 32 entropy bytes of the tick a0, when lookup_ms is 0 or NODE_LOOKUP_MS before time_ms.
+ * s3 the tick, s4 the action.
+ */
+LOCAL_FUNCTION node_lookup
+    ENTER 0
+    mv      s3, a0
+    ld      t0, Node_flags(s1)
+    andi    t0, t0, NODE_FLAG_DISCV5
+    beqz    t0, 9f
+    ld      t0, (Node_peers + 8)(s1)
+    ld      t1, Node_dialing(s1)
+    add     t0, t0, t1
+    ld      t2, Node_streams(s1)
+    ld      t3, Node_peers(s1)
+    sub     t2, t2, t3
+    li      t3, NodePeer__mem
+    divu    t2, t2, t3
+    bgeu    t0, t2, 9f
+    ld      t0, Node_lookup_ms(s1)
+    beqz    t0, 1f
+    ld      t1, Node_time_ms(s1)
+    li      t2, NODE_LOOKUP_MS
+    add     t0, t0, t2
+    bltu    t1, t0, 9f
+1:  li      a0, 96                          # the action: 16, 24 a ByteList, 48 the LOOKUP
+    call    node_room
+    beqz    a0, 9f
+    li      a0, NODE_ACT_DISCV5
+    li      a1, 96
+    call    node_act
+    mv      s4, a0
+    sd      zero, 16(s4)
+    li      t0, 72
+    sd      t0, 24(s4)
+    li      t0, 24
+    sd      t0, 32(s4)
+    li      t0, DISCV5_EV_LOOKUP_SIZE
+    sd      t0, 40(s4)
+    sd      t0, 48(s4)
+    li      t0, DISCV5_EVENT_LOOKUP
+    sd      t0, 56(s4)
+    addi    a0, s4, 48 + DISCV5_EV_LOOKUP_TARGET
+    addi    a1, s3, LIBP2P_TICK_ENTROPY
+    li      a2, 32
+    call    lantern_copy
+    ld      t0, Node_time_ms(s1)            # 0 becomes 1
+    seqz    t1, t0
+    add     t0, t0, t1
+    sd      t0, Node_lookup_ms(s1)
+9:  LEAVE 0
+END_FUNCTION node_lookup
+
+/*
  * The gossip topics of the fork of the store's epoch, at its ForkDigest: SUBSCRIBE events, once
  * for each digest, when p2p_out has room for them. s3 the fork, s4 a subnet, s7 the subnets.
  * Locals: L an epoch, L+8 a ForkDigest.
@@ -2576,6 +2916,9 @@ LOCAL_FUNCTION node_subscribe
     sub     t1, t1, t2
     li      t2, 64 * 128
     bltu    t1, t2, 9f
+    li      a0, NODE_ENR_ACTION             # and the actions room for the record entries
+    call    node_room
+    beqz    a0, 9f
     mv      a0, s2
     call    node_store_slot
     li      t0, SLOTS_PER_EPOCH
@@ -2602,6 +2945,9 @@ LOCAL_FUNCTION node_subscribe
 1:  sd      t1, Node_fork_digest(s1)
     ori     t0, t0, NODE_FLAG_SUBSCRIBED
     sd      t0, Node_flags(s1)
+    addi    a0, sp, L                       # the record entries of the new digest
+    mv      a1, s3
+    call    node_enr_entries
     .irp name, GOSSIP_BEACON_BLOCK, GOSSIP_BEACON_AGGREGATE_AND_PROOF, GOSSIP_VOLUNTARY_EXIT, GOSSIP_PROPOSER_SLASHING, GOSSIP_ATTESTER_SLASHING
     li      a0, \name
     li      a1, 0
@@ -3419,19 +3765,22 @@ LOCAL_FUNCTION node_sync
     LEAVE 48
 END_FUNCTION node_sync
 
-/* The libp2p application notice a0 of the libp2p state a1. s3 the notice, s4 an entry, s7 method, s8 version. */
+/*
+ * The libp2p application notice a0 of the libp2p state a1. s3 the notice, s4 an entry, s7 method,
+ * s8 version. Locals: L a Status (96).
+ */
 LOCAL_FUNCTION node_notice
-    ENTER 0
+    ENTER 96
     mv      s3, a0
     ld      t0, LIBP2P_ACT_KIND(s3)
     li      t1, LIBP2P_ACTION_MESSAGE
     bne     t0, t1, 60f
     call    node_message                    # a0, a1 as given
-    LEAVE 0
+    LEAVE 96
 60: li      t1, LIBP2P_ACTION_MESSAGE_STATUS
     bne     t0, t1, 62f
     call    node_message_status
-    LEAVE 0
+    LEAVE 96
 62: li      t1, LIBP2P_ACTION_STREAM_OPENED
     bne     t0, t1, 63f
     ld      a0, LIBP2P_ACT_SO_TAG(s3)       # the node's request stream: the request, then the close of our side
@@ -3467,13 +3816,13 @@ LOCAL_FUNCTION node_notice
     mv      a2, s8
     call    lantern_copy
     sd      zero, (NodeStream_list + 16)(s4)
-69: LEAVE 0
+69: LEAVE 96
 68: li      a0, LIBP2P_EVENT_STREAM_RESET   # no room: a reset
     ld      a1, NodeStream_handle(s4)
     call    node_out_handle
     mv      a0, s4
     call    node_end_stream
-    LEAVE 0
+    LEAVE 96
 63: li      t1, LIBP2P_ACTION_STREAM_FAILED
     bne     t0, t1, 61f
     ld      a0, LIBP2P_ACT_STREAM(s3)       # its tag
@@ -3482,10 +3831,18 @@ LOCAL_FUNCTION node_notice
     beq     a0, t0, 69b
     mv      a0, a1
     call    node_end_stream
-    LEAVE 0
+    LEAVE 96
 61: li      t1, LIBP2P_ACTION_PEER_CONNECTED
-    bne     t0, t1, 10f
-    ld      t2, Node_streams(s1)            # a new peer: its entry, or DISCONNECT when the table is full
+    bne     t0, t1, 64f
+    ld      t1, LIBP2P_ACT_PC_TAG(s3)       # a dial of the node ends
+    li      t2, NODE_DIAL_TAG
+    and     t1, t1, t2
+    beqz    t1, 65f
+    ld      t1, Node_dialing(s1)
+    beqz    t1, 65f
+    addi    t1, t1, -1
+    sd      t1, Node_dialing(s1)
+65: ld      t2, Node_streams(s1)            # a new peer: its entry, or DISCONNECT when the table is full
     ld      t3, Node_peers(s1)
     sub     t2, t2, t3
     li      t3, NodePeer__mem
@@ -3495,7 +3852,7 @@ LOCAL_FUNCTION node_notice
     li      a0, LIBP2P_EVENT_DISCONNECT
     ld      a1, LIBP2P_ACT_PEER(s3)
     call    node_out_handle
-    LEAVE 0
+    LEAVE 96
 1:  mul     s4, t4, t3
     ld      t5, Node_peers(s1)
     add     s4, s4, t5
@@ -3517,7 +3874,37 @@ LOCAL_FUNCTION node_notice
     addi    a0, s4, NodePeer_id
     addi    a1, s3, LIBP2P_ACT_PC_ID
     call    lantern_copy
-    LEAVE 0
+    ld      t0, NodePeer_direction(s4)      # we dialled: our Status first (v2 from fulu, v1 before)
+    li      t1, LIBP2P_OUTBOUND
+    bne     t0, t1, 69b
+    addi    a0, sp, L
+    call    node_status_bytes
+    mv      a0, s2
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      a1, 1
+    li      a4, 84
+    li      t0, FORK_FULU
+    bltu    a0, t0, 3f
+    li      a1, 2
+    li      a4, 92
+3:  li      a0, REQRESP_STATUS
+    ld      a2, NodePeer_handle(s4)
+    addi    a3, sp, L
+    call    node_open
+    LEAVE 96
+64: li      t1, LIBP2P_ACTION_DIAL_FAILED
+    bne     t0, t1, 10f
+    ld      t1, LIBP2P_ACT_TAG(s3)          # a dial of the node ends
+    li      t2, NODE_DIAL_TAG
+    and     t1, t1, t2
+    beqz    t1, 69b
+    ld      t1, Node_dialing(s1)
+    beqz    t1, 69b
+    addi    t1, t1, -1
+    sd      t1, Node_dialing(s1)
+    LEAVE 96
 10: li      t1, LIBP2P_ACTION_PEER_DISCONNECTED
     bne     t0, t1, 20f
     ld      a0, LIBP2P_ACT_PEER(s3)
@@ -3526,7 +3913,7 @@ LOCAL_FUNCTION node_notice
     beq     a0, t0, 19f
     mv      a0, a1
     call    node_drop_peer
-19: LEAVE 0
+19: LEAVE 96
 20: li      t1, LIBP2P_ACTION_STREAM_INBOUND
     bne     t0, t1, 30f
     ld      a0, LIBP2P_ACT_SI_PROTOCOL(s3)  # a request stream: its entry, or a reset
@@ -3561,11 +3948,11 @@ LOCAL_FUNCTION node_notice
     sd      zero, (NodeStream_list + 16)(s4)
     mv      a0, s4
     call    node_request
-    LEAVE 0
+    LEAVE 96
 28: li      a0, LIBP2P_EVENT_STREAM_RESET
     ld      a1, LIBP2P_ACT_STREAM(s3)
     call    node_out_handle
-    LEAVE 0
+    LEAVE 96
 30: li      t1, LIBP2P_ACTION_STREAM_DATA
     bne     t0, t1, 40f
     ld      a0, LIBP2P_ACT_STREAM(s3)       # request bytes: kept, then read
@@ -3590,15 +3977,15 @@ LOCAL_FUNCTION node_notice
     li      t1, NODE_STREAM_RESPONSE
     bne     t0, t1, 37f
     call    node_response                   # response bytes of the node's request
-    LEAVE 0
+    LEAVE 96
 37: call    node_request
-39: LEAVE 0
+39: LEAVE 96
 38: li      a0, LIBP2P_EVENT_STREAM_RESET   # more than the room: a reset
     ld      a1, NodeStream_handle(s4)
     call    node_out_handle
     mv      a0, s4
     call    node_end_stream
-    LEAVE 0
+    LEAVE 96
 40: li      t1, LIBP2P_ACTION_STREAM_EOF
     bne     t0, t1, 50f
     ld      a0, LIBP2P_ACT_STREAM(s3)
@@ -3612,13 +3999,13 @@ LOCAL_FUNCTION node_notice
     sd      t0, NodeStream_next(a1)
     mv      a0, a1
     call    node_response
-    LEAVE 0
+    LEAVE 96
 41: li      t1, NODE_STREAM_EOF             # while its request is read
     bgtu    t0, t1, 49f
     sd      t1, NodeStream_state(a1)
     mv      a0, a1
     call    node_request
-49: LEAVE 0
+49: LEAVE 96
 50: li      t1, LIBP2P_ACTION_STREAM_RESET
     bne     t0, t1, 59f
     ld      a0, LIBP2P_ACT_STREAM(s3)
@@ -3627,7 +4014,7 @@ LOCAL_FUNCTION node_notice
     beq     a0, t0, 59f
     mv      a0, a1
     call    node_end_stream
-59: LEAVE 0
+59: LEAVE 96
 END_FUNCTION node_notice
 
 /* a0 = the WAKEUP time of the libp2p actions in the ByteList a0, after their application notices, of the libp2p state a1. s3 an action, s4 the end, s7 the time, s8 the state. */
@@ -3883,7 +4270,7 @@ END_FUNCTION node_block_entry
  * L+48 the libp2p scratch, L+56 the bytes of the P2P events, L+64 the P2P events, L+72 the
  * action room kept for the node, L+80 wakeup, L+88 libp2p's StepResult, L+96 libp2p's actions,
  * L+104 the libp2p steps, L+112 a stream waits, L+120 the GOSSIP WORK_DONE events, L+128 the bytes of
- * the ENGINE events.
+ * the ENGINE events, L+136 1 with an ENR event.
  */
 FUNCTION lantern_node_step
     ENTER 144
@@ -3906,6 +4293,7 @@ FUNCTION lantern_node_step
     sd      zero, (L + 64)(sp)
     sd      zero, (L + 120)(sp)
     sd      zero, (L + 128)(sp)
+    sd      zero, (L + 136)(sp)
     mv      t0, s3
 1:  bgeu    t0, s4, 5f
     sub     t1, s4, t0
@@ -4009,7 +4397,13 @@ FUNCTION lantern_node_step
     ld      t4, (24 + 16)(t0)
     addi    t6, t2, -(24 + 24)
     bgtu    t4, t6, 7f
-    li      t4, NODE_EV_BLOCK
+    li      t4, NODE_EV_ENR                 # ENR: with p2p
+    bne     t3, t4, 33f
+    ld      t4, (L + 16)(sp)
+    beqz    t4, 7f
+    li      t4, 1
+    sd      t4, (L + 136)(sp)
+33: li      t4, NODE_EV_BLOCK
     beq     t3, t4, 31f
     li      t4, NODE_EV_POW_BLOCK
     bne     t3, t4, 4f
@@ -4121,7 +4515,11 @@ FUNCTION lantern_node_step
     li      t1, LANTERN_SCRATCH_FIXED + 64
     add     t0, t0, t1
     add     t0, t0, t3
-    ld      t1, 0(s5)
+    ld      t1, (L + 136)(sp)               # with an ENR event, the record's decoding
+    beqz    t1, 55f
+    li      t1, DISCV5_ENR_SIZE + DISCV5_ENR_SCRATCH
+    add     t0, t0, t1
+55: ld      t1, 0(s5)
     bltu    t1, t0, 8f
     sd      t1, (L + 8)(sp)
     sub     t1, t1, t3
@@ -4239,6 +4637,8 @@ FUNCTION lantern_node_step
     ld      t0, (L + 112)(sp)
     or      t0, t0, a0
     sd      t0, (L + 112)(sp)
+    ld      a0, (L + 24)(sp)
+    call    node_lookup
     sd      zero, (L + 104)(sp)
 32: P2P_OUT a2
     ld      t0, 16(a2)

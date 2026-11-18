@@ -13,6 +13,7 @@
 .include "platform.inc"
 .include "snappy.inc"
 .include "libp2p.inc"
+.include "discv5.inc"
 .include "reqresp_protocols.inc"
 .include "engine_text.inc"
 .include "gossip_topics.inc"

@@ -451,6 +451,7 @@
 .set NODE_FLAG_SYNCING, 8              /* a BeaconBlocksByRange request of the node is open */
 .set NODE_FLAG_ENGINE, 16              /* the node drives an execution engine over the Engine API */
 .set NODE_FLAG_FCU, 32                 /* an engine_forkchoiceUpdated is due */
+.set NODE_FLAG_DISCV5, 64              /* the shell runs discv5 for the node: it takes NODE_ACT_DISCV5 and gives NODE_EV_ENR */
 .set Node_peers, 120                   /* PartRef of NodePeer */
 .set Node_streams, 136                 /* PartRef of NodeStream entries of Node_stream_bytes each */
 .set Node_p2p_out, 152                 /* PartRef of bytes: libp2p events the node made for its next libp2p step */
@@ -470,8 +471,12 @@
 .set Node_engine_target, 392           /* engine_newPayload in flight: the NodeBlock index */
 .set Node_engine_wait, 400             /* after a failed call: the slot from which calls go again */
 .set Node_engine_in, 408               /* PartRef of bytes: one ByteList of the bytes the execution engine sent */
-.set Node_config, 424
-.set NODE_FIXED, 424 + CONFIG_SIZE
+.set Node_lookup_ms, 424               /* the time of the last discv5 lookup the node asked for */
+.set Node_dialing, 432                 /* the node's dials not yet connected or failed */
+.set Node_config, 440
+.set NODE_FIXED, 440 + CONFIG_SIZE
+.set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
+.set NODE_DIAL_TAG, 0x4000000000000000 /* the bit of a DIAL tag of the node */
 .set NODE_ENGINE_HOST_MAX, 64
 .set NODE_STATE_SLOT, 48               /* BeaconState.slot in the value of every fork */
 
@@ -614,7 +619,8 @@
 .set NODE_EV_WORK_DONE, 7              /* the work's fields from 16 (as NodeAction), then 72 result, 80 checkpoint epoch, 88 root, 120 index */
 .set NODE_EV_P2P, 8                    /* 16 a libp2p shell result Event */
 .set NODE_EV_ENGINE, 9                 /* 16 0: 24 a ByteList of bytes the execution engine sent; 16 1: the connection failed */
-.set NODE_EV_LAST, 9
+.set NODE_EV_ENR, 10                   /* 24 a ByteList of a node record discv5 found */
+.set NODE_EV_LAST, 10
 .set NodeEvent_result, 72
 .set NodeEvent_checkpoint, 80
 .set NODE_EV_WORK_DONE_SIZE, 128
@@ -628,6 +634,7 @@
 .set NODE_ACT_WORK, 5                  /* 16 kind, 24 state_a, 32 state_b, 40 state_c, 48 data, 56 target, 64 arg */
 .set NODE_ACT_P2P_LIST, 6              /* 16 a ByteList of libp2p Actions: the shell does its shell requests in order */
 .set NODE_ACT_ENGINE, 7                /* 24 a ByteList of an HTTP request: the shell writes it to the execution engine's connection */
+.set NODE_ACT_DISCV5, 8                /* 24 a ByteList of asm-discv5 events: the shell passes them to discv5_step */
 .set NodeAction_work_kind, 16
 .set NodeAction_state_a, 24
 .set NodeAction_state_b, 32

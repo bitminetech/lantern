@@ -43,6 +43,7 @@
 - `fork-choice.md` of deneb, `is_data_available`: a block is not valid until its blobs are downloaded; the network does not promise sidecars outside `MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS`.
 - `p2p-interface.md` of deneb, BlobSidecarsByRange v1: the reader checks each sidecar's format, inclusion proof and KZG proof before the next chunk.
 - `p2p-interface.md` of deneb, BlobSidecarsByRange v1 and BlobSidecarsByRoot v1: the server sends the sidecars of the head's chain in (slot, index) order, or of the requested identifiers in their order, at most compute_max_request_blob_sidecars; of electra, its limit; of fulu, the deprecation: sidecars before `FULU_FORK_EPOCH`, an empty list at or after it.
+- `p2p-interface.md` of phase0 to fulu, The discovery domain: discv5: the ENR keys `eth2` (`ENRForkID`), `attnets`, `syncnets` (altair), `cgc` and `nfd` (fulu); peers whose `eth2` fork digest is the node's. The Req/Resp domain, Status: the dialing client MUST send a Status request upon connection.
 - `optimistic-sync.md` of bellatrix: optimistic import, the optimistic candidate, how to apply `latestValidHash`, execution engine errors.
 - [execution-apis 981aa66](https://github.com/ethereum/execution-apis/tree/981aa66d79364be8322a9c358aaf0a571cca0873/src/engine): engine_newPayload and engine_forkchoiceUpdated, with the requests and answers of [engine-api.md](engine-api.md). The safe block is the justified checkpoint's root (fork-choice `safe-block.md`).
 - ARCHITECTURE.md sections 2 and 6: the event and action model; section 7: the calls to asm-libp2p.
@@ -57,6 +58,7 @@
 - The fork of a slot is the last fork whose epoch in the node's config is at most the slot's epoch. The node calls the functions of the fork of the block, the attestation, the state or the store's slot it works on.
 - A state's slot is the u64 at `NODE_STATE_SLOT` of its value in every fork.
 - The node owns a libp2p `State` of asm-libp2p, built by the shell with `libp2p_init` from a config whose protocol list is lantern_node_protocols. lantern_node_step calls `libp2p_step` with it: first with the libp2p events of the `NODE_EV_P2P` events and the events the node queued, then with the events the node queued in that step, up to `NODE_P2P_ROUNDS` times.
+- The application's shell may run asm-discv5 for the node (`NODE_FLAG_DISCV5`): it passes each record discv5 finds, and each bootnode record, in a `NODE_EV_ENR`, and the asm-discv5 events of each `NODE_ACT_DISCV5` to discv5_step.
 - libp2p's actions go out in a `NODE_ACT_P2P_LIST` action. The shell does its shell requests in order; the node took its application notices.
 - The node's queue (`p2p_out`) is one ByteList of libp2p events inside the node. libp2p_step reads it in place.
 - A stream carries one request and one answer, as the req/resp functions of [req-resp.md](req-resp.md) encode them.
@@ -80,6 +82,7 @@
   - The runner plays the network between the node's libp2p state and a bare asm-libp2p peer, as tests/runner of asm-libp2p does. The peer dials the node and opens one stream for each request.
   - Status (v2 in fulu, v1 before) and MetaData (v3 in fulu, v2 before) must be the case's; Ping must give 0; Goodbye must close with no answer.
   - The node's peer entry must hold the peer's ID and the Status it sent.
+  - The node has `NODE_FLAG_DISCV5`: its `NODE_ACT_DISCV5` actions must set `eth2` to lantern_compute_enr_fork_id at the anchor's epoch, `attnets` to 8 zero bytes, from altair `syncnets` to 1 zero byte, in fulu `cgc` to `CUSTODY_REQUIREMENT` and `nfd` to lantern_compute_next_fork_digest, and ask for a lookup.
 - The `fork_choice-get_head` and `fork_choice-on_block` cases in node mode, after their steps: the runner opens the same network, and the node serves the chain of the case's last checked head, which the runner builds from the case's valid blocks by `parent_root`.
   - BeaconBlocksByRange v2 from the anchor's slot to the head's must give each block of the chain, in slot order.
   - BeaconBlocksByRoot v2 of the head, a root of no block, and the chain's first block must give the head and the first block.
@@ -91,7 +94,7 @@
   - Each valid attester slashing goes from the peer on the attester_slashing topic of the last tick's epoch. One the node does not apply goes again as a `NODE_EV_ATTESTER_SLASHING`. A case with valid attester slashings must apply one over gossip.
   - The other steps go as in node mode; the checks must hold.
 - The same cases in node mode, after the serving check: a new node at the case's anchor, at the case's last tick, syncs the chain of the last checked head.
-  - The runner's peer dials the node and sends a Status whose head is the chain's last block; it answers each BeaconBlocksByRange request of the node with the chain's blocks in the range.
+  - The runner's peer has a secp256k1 key. The node gets a `NODE_EV_ENR` of the peer's record, made with asm-discv5 from that key, with an `ip`, a `tcp` port and the `eth2` of lantern_compute_enr_fork_id at the case's epoch. The node must dial the peer and send its Status; the peer answers with a Status whose head is the chain's last block, and answers each BeaconBlocksByRange request of the node with the chain's blocks in the range.
   - It answers each BlobSidecarsByRange request with the sidecars of the case's `node-blobs` case of the chain's blocks in the range, in (slot, index) order, with compute_fork_digest of the slot's epoch as context bytes.
   - Each block of the chain must be `NODE_BLOCK_IMPORTED`, and the node's `head_root` must be the chain's last block.
   - Each sidecar it sent must be a `NODE_BLOB_VALID` entry of the node.
@@ -222,7 +225,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 
 ### Function does
 
-- Room: `actions` has the event bytes + 512 per event + 128 per known block + 512 bytes free, and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and with `p2p` `NODE_SYNC_BATCH` times the larger of `MAX_BLOBS_PER_BLOCK` and `MAX_BLOBS_PER_BLOCK_ELECTRA` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node.
+- Room: `actions` has the event bytes + 512 per event + 128 per known block + 512 bytes free, and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and with `p2p` `NODE_SYNC_BATCH` times the larger of `MAX_BLOBS_PER_BLOCK` and `MAX_BLOBS_PER_BLOCK_ELECTRA` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node, and `DISCV5_ENR_SIZE` + `DISCV5_ENR_SCRATCH` more with a `NODE_EV_ENR`.
 - Before any change: the root of each `NODE_EV_BLOCK`, with lantern_node_block_root of the fork of its slot. A status of that call is the step's.
 - `NODE_EV_TICK`: sets `time_ms` of the node, then on_tick of the fork of the new slot.
 - `NODE_EV_BLOCK`: for a root the node does not know, a `NODE_ACT_BYTES_PUT` of the bytes and a `NodeBlock` in `NODE_BLOCK_WAITING`. Bytes that are no `SignedBeaconBlock` are dropped.
@@ -238,6 +241,10 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - The head: get_head of the fork of the store's slot into `head_root`, or a `NODE_WORK_JUSTIFIED_STATE` when it returns `LANTERN_NEED_JUSTIFIED_STATE`.
 - libp2p first, before the node's events: libp2p_step with the queued events, then the `NODE_EV_P2P` events, after them in the queue. The first libp2p_step takes at most half the action room left, when that half is enough, so the notices have room. When it accepts k of n P2P events, with k < n, the P2P events it did not take leave the queue, the step handles the node's events before the next P2P event, and gives that count as `accepted`. A status of libp2p_step leaves the queue as it was.
 - `PEER_CONNECTED`: a `NodePeer`, or a `DISCONNECT` when the peers part is full. `PEER_DISCONNECTED`: the peer and its streams go.
+- `PEER_CONNECTED` and `DIAL_FAILED` of a tag with `NODE_DIAL_TAG`: `dialing` takes 1 less. A `PEER_CONNECTED` of `LIBP2P_OUTBOUND` that gets a `NodePeer`: a Status request (v2 from fulu, v1 before) with the node's Status, as a request of the node.
+- `NODE_EV_ENR`, with `p2p`: the record of discv5_enr_decode, with an `ip`, a `tcp` pair of 1 or 2 bytes, an `eth2` pair whose first 4 bytes are compute_fork_digest of the store's epoch, and a `secp256k1` key whose peer ID (the identity multihash of the protobuf secp256k1 public key) no `NodePeer` has, gets a `DIAL` over TCP to that address with that peer ID and a tag with `NODE_DIAL_TAG`, when `dialing` + the peers are below the capacity of the peers part and `p2p_out` has room; `dialing` takes 1 more. Another record changes nothing.
+- With `NODE_FLAG_DISCV5`, at each subscription to a new `fork_digest`: a `NODE_ACT_DISCV5` of `SET_ENTRY` events: `eth2`, lantern_compute_enr_fork_id at the store's epoch; `attnets`, 8 zero bytes; from altair `syncnets`, 1 zero byte; from fulu `cgc`, `CUSTODY_REQUIREMENT` in big-endian bytes with no leading zero, and `nfd`, lantern_compute_next_fork_digest.
+- With `NODE_FLAG_DISCV5`, after the head: when `dialing` + the peers are below the capacity of the peers part, and `time_ms` is at least `lookup_ms` + `NODE_LOOKUP_MS` or `lookup_ms` is 0, a `NODE_ACT_DISCV5` of a `LOOKUP` event whose target is the tick's 32 entropy bytes; `lookup_ms` takes `time_ms`.
 - `STREAM_INBOUND`: a `NodeStream` of the protocol's method and version, or a `STREAM_RESET` when the streams part is full. `STREAM_DATA`: the bytes join the stream's request, or a `STREAM_RESET` when they pass its room. `STREAM_EOF`: the request is complete. `STREAM_RESET`: the stream goes.
 - A request is read when its bytes are complete: Status is kept in the `NodePeer` and answered with the node's Status of the same version; Ping is answered with `metadata_seq`; MetaData, on the stream's opening, with the node's MetaData of the same version; Goodbye gets a `STREAM_CLOSE`. A request that is not valid gets result 1, InvalidRequest; a method of no answer below gets result 3, ResourceUnavailable.
 - BeaconBlocksByRange: a `start_slot` before `earliest_slot` gets ResourceUnavailable. Otherwise the blocks of the chain of `head_root`, by `parent_root`, with a slot in `start_slot` to `start_slot` + `count`, in slot order; `count` is at most `MAX_REQUEST_BLOCKS_DENEB` from deneb on, else `MAX_REQUEST_BLOCKS`, and at most the BufferIds a stream's request room holds.
@@ -620,17 +627,20 @@ The state of the node: a value with parts.
 | 392 | `engine_target` | u64 | The `NodeBlock` index of the engine_newPayload in flight |
 | 400 | `engine_wait` | u64 | After a failed call, the slot from which calls go again |
 | 408 | `engine_in` | PartRef | One ByteList, offset 24: the bytes the execution engine sent and the node has not read |
-| 424 | `config` | `Config` | |
+| 424 | `lookup_ms` | u64 | The time of the last discv5 lookup the node asked for |
+| 432 | `dialing` | u64 | The node's dials not yet connected or failed |
+| 440 | `config` | `Config` | |
 
 ### Rules
 
-- `NODE_FIXED` (424 + `CONFIG_SIZE`) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, p2p_out, engine_in.
+- `NODE_FIXED` (440 + `CONFIG_SIZE`) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, p2p_out, engine_in.
 - The capacity of a part is its bytes up to the next part over its entry's bytes; `p2p_out` is the last part.
 - `NODE_FLAG_OPTIMISTIC`: blocks are imported as `PAYLOAD_STATUS_NOT_VALIDATED`.
 - `NODE_FLAG_JUSTIFIED_PENDING`: a `NODE_WORK_JUSTIFIED_STATE` is queued.
 - `NODE_FLAG_SUBSCRIBED`: the topics of `fork_digest` are subscribed.
 - `NODE_FLAG_SYNCING`: a BeaconBlocksByRange request of the node is open.
 - `NODE_FLAG_ENGINE`: the node drives an execution engine; `NODE_FLAG_FCU`: an engine_forkchoiceUpdated is due.
+- `NODE_FLAG_DISCV5`: the shell runs asm-discv5 for the node.
 
 ## Type `NodeRoom`
 
@@ -818,7 +828,7 @@ The events of one step: a ByteList whose bytes are `NodeEvent` entries one after
 | 0 | `size` | u64 | Bytes of the event, a multiple of 8 |
 | 8 | `kind` | u64 | `NODE_EV_*` |
 | 16 | `arg` | u64 | `NODE_EV_TICK`: time_ms; `NODE_EV_BLOCK`: data_available; `NODE_EV_ATTESTATION`: is_from_block; `NODE_EV_P2P`: the libp2p event starts here; `NODE_EV_ENGINE`: 0 bytes, 1 the connection failed |
-| 24 | `bytes` | ByteList | `NODE_EV_BLOCK`, `NODE_EV_ATTESTATION`, `NODE_EV_ATTESTER_SLASHING`, `NODE_EV_POW_BLOCK`: the SSZ bytes; `NODE_EV_ENGINE` with arg 0: the bytes of the execution engine's connection; offset 24 |
+| 24 | `bytes` | ByteList | `NODE_EV_BLOCK`, `NODE_EV_ATTESTATION`, `NODE_EV_ATTESTER_SLASHING`, `NODE_EV_POW_BLOCK`: the SSZ bytes; `NODE_EV_ENGINE` with arg 0: the bytes of the execution engine's connection; `NODE_EV_ENR`: a node record; offset 24 |
 
 ### Rules
 
@@ -827,6 +837,7 @@ The events of one step: a ByteList whose bytes are `NodeEvent` entries one after
 - `NODE_EV_WORK_DONE`: `NODE_EV_WORK_DONE_SIZE` bytes; offsets 16 to 71 are those of the work's `NodeAction`, `result` at `NodeEvent_result`, and a Checkpoint at `NodeEvent_checkpoint` for `LANTERN_NEED_TARGET_STATE`. For `NODE_WORK_SERVE`, and `NODE_WORK_NEW_PAYLOAD` and `NODE_WORK_FORKCHOICE` of `LANTERN_VALID`, a ByteList of the chunk or request at `NodeEvent_chunk`, offset 24, inside the event. For `NODE_WORK_GOSSIP` of a valid beacon_block and `NODE_WORK_SYNC_BLOCK`, its root at `NodeEvent_root` and its blob count at `NodeEvent_index`; of a valid blob_sidecar, its block root at `NodeEvent_root` and its index at `NodeEvent_index`; for `NODE_WORK_BLOB`, its block root at `NodeEvent_root`.
 - `NODE_EV_P2P`: a libp2p shell result `Event` from 16, its size a multiple of 8 inside the event; only with `p2p`.
 - `NODE_EV_ENGINE`: arg 0 or 1; with 0, the event has `bytes`; only with `NODE_FLAG_ENGINE`.
+- `NODE_EV_ENR`: has `bytes`; only with `p2p`.
 - `NODE_EV_PAYLOAD_STATUS` is `LANTERN_INVALID_EVENT` in this version: the answers come in `NODE_EV_ENGINE`.
 
 ## Type `NodeActions`
@@ -856,6 +867,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 - `NODE_ACT_STATE_FREE`, `NODE_ACT_BYTES_FREE`: free the id at 16.
 - `NODE_ACT_WORK`: `NODE_ACT_WORK_SIZE` bytes; call lantern_node_run.
 - `NODE_ACT_P2P_LIST`: a ByteList of libp2p `Action` values from 16, offset 24; do its DIAL, ADOPT, REFUSE, SEND, CLOSE and SEND_DATAGRAM in order, and skip the others.
+- `NODE_ACT_DISCV5`: a ByteList at 24, offset 24, of asm-discv5 events: pass them to discv5_step.
 - `NODE_ACT_ENGINE`: a ByteList at 24, offset 24: write its bytes to the connection to the execution engine, opening one when there is none, and pass what the engine sends in `NODE_EV_ENGINE` events; a connection that fails or closes before an answer is a `NODE_EV_ENGINE` with arg 1.
 
 ## Results
