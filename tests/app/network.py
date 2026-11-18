@@ -4,18 +4,21 @@ Usage: python3 tests/app/network.py OUT_DIR PRESET FORK [GENESIS_TIME] [VALIDATO
 
 Runs with the generator's environment (tests/generator/run.sh): the pinned spec modules on the
 path, and CONSENSUS_SPECS set. config.yaml is the pinned configs/<PRESET>.yaml with each fork up
-to FORK at epoch 0 and each later fork at 2^64 - 1. genesis.ssz, with GENESIS_TIME (default: now)
+to FORK at epoch 0 and each later fork at 2^64 - 1, each key once, and SECONDS_PER_SLOT
+(SLOT_DURATION_MS / 1000) for other clients. genesis.ssz, with GENESIS_TIME (default: now)
 as its genesis_time:
 - with no VALIDATORS, the anchor state of tests/generator/node.py (8 validators with made up
   keys, the first slot of epoch 2) of FORK;
 - with VALIDATORS, a state of FORK at slot 0 with that many active validators of the keys of
   test/helpers/keys.py (other clients need real keys), its genesis_validators_root, the sync
   committees of get_next_sync_committee from altair, and from fulu initialize_proposer_lookahead.
-deploy_block.txt (0) and boot_enr.yaml (empty) go with them for other clients.
+deploy_block.txt and deposit_contract_block.txt (0), and boot_enr.yaml (empty), go with them for
+other clients.
 """
 
 import os
 import pathlib
+import re
 import sys
 import time
 
@@ -65,10 +68,16 @@ def main():
     state.genesis_time = genesis_time
     out.mkdir(parents=True, exist_ok=True)
     text = (pathlib.Path(os.environ["CONSENSUS_SPECS"]) / "configs" / f"{preset}.yaml").read_text()
-    text += "\n# The fork schedule of this network\n" + "".join(f"{k}: {v}\n" for k, v in config.items())
+    for key, value in config.items():  # each key once: other clients refuse a key given twice
+        text, n = re.subn(rf"^{key}: .*$", f"{key}: {value}", text, flags=re.M)
+        if not n:
+            text += f"{key}: {value}\n"
+    slot_ms = int(re.search(r"^SLOT_DURATION_MS: (\d+)$", text, flags=re.M).group(1))
+    text += f"\n# For other clients: keys of earlier spec releases\nSECONDS_PER_SLOT: {slot_ms // 1000}\n"
     (out / "config.yaml").write_text(text)
     (out / "genesis.ssz").write_bytes(bytes(state.encode_bytes()))
     (out / "deploy_block.txt").write_text("0\n")
+    (out / "deposit_contract_block.txt").write_text("0\n")
     (out / "boot_enr.yaml").write_text("[]\n")
     print(f"{out}: {preset} {fork}, genesis_time {genesis_time}, slot {int(state.slot)}")
 
