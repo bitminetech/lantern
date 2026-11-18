@@ -28,7 +28,7 @@
 - tests/app/start.sh and tests/app/start.ps1 (Windows): the binary of each target given a faulty option exits with 1 and its line; given a network directory with no config.yaml, it exits with 2 and a "cannot read" line. CI runs them.
 - tests/app/network.py: a network directory (config.yaml, genesis.ssz) to run the binary with, alone or beside other clients.
 - tests/app/trusted_setup.py: writes include/trusted_setup_4096.bin from the pinned spec, or with `--check` exits 1 when the file differs; the interop job of CI runs the check.
-- tests/app/interop.sh: the ARM64 binary beside lighthouse v8.1.3 on one Docker network, from the genesis of tests/app/network.py; each Beacon API must show the other node as a connected peer, and again two slots later. CI runs it on an ARM64 runner.
+- tests/app/interop.sh: the ARM64 binary beside another consensus client (lighthouse, prysm, teku, nimbus, lodestar or grandine, each image pinned by digest) on one Docker network, from the genesis of tests/app/network.py; each Beacon API must show the other node as a connected peer, and again two slots later. CI runs it for each client on an ARM64 runner.
 
 ## Function `lantern_app_options`
 
