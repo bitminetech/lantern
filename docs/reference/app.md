@@ -161,3 +161,19 @@ The options of a run. A text field is an [`Arg`](#type-arg) of the bytes of the 
 ## Results
 
 <!-- CI generates the tick table for each function here. -->
+
+### `lantern_app_options`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
+
+### `lantern_app_main`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |

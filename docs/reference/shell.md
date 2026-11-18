@@ -212,3 +212,43 @@ The outcome of `lantern_shell_read_file`.
 ## Results
 
 <!-- CI generates the tick table for each function here. -->
+
+### `lantern_shell_map`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
+
+### `lantern_shell_unmap`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
+
+### `lantern_shell_read_file`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
+
+### `lantern_shell_write`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
+
+### `lantern_shell_time_ms`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |

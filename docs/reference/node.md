@@ -1010,6 +1010,14 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 | ARM64 |  |  |  |  |
 | RISC-V |  |  |  |  |
 
+### `lantern_node_anchor`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
+
 ### `lantern_node_new_payload`
 
 | ISA | Linux | Windows | macOS | `equal` |
