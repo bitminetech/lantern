@@ -72,22 +72,35 @@ jobs:
           path: |
             build/linux-x86_64/runner-*
             build/linux-x86_64/shell-test
+            build/linux-x86_64/lantern-minimal
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: build-linux-arm64
           path: |
             build/linux-arm64/runner-*
             build/linux-arm64/shell-test
+            build/linux-arm64/lantern-minimal
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: build-linux-riscv64
           path: |
             build/linux-riscv64/runner-*
             build/linux-riscv64/shell-test
+            build/linux-riscv64/lantern-minimal
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
-        with: { name: build-windows-x86_64, path: build/windows-x86_64/runner-* }
+        with:
+          name: build-windows-x86_64
+          path: |
+            build/windows-x86_64/runner-*
+            build/windows-x86_64/shell-test.exe
+            build/windows-x86_64/lantern-minimal.exe
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
-        with: { name: build-windows-arm64, path: build/windows-arm64/runner-* }
+        with:
+          name: build-windows-arm64
+          path: |
+            build/windows-arm64/runner-*
+            build/windows-arm64/shell-test.exe
+            build/windows-arm64/lantern-minimal.exe
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: build-macos-x86_64
@@ -132,6 +145,9 @@ jobs:
         run: |
           chmod +x build/linux-${{ matrix.isa }}/shell-test
           ${{ matrix.qemu }} build/linux-${{ matrix.isa }}/shell-test "$RUNNER_TEMP"
+      - name: Run the binary
+        if: matrix.fork == 'phase0'
+        run: tests/app/start.sh "${{ matrix.qemu }}" build/linux-${{ matrix.isa }}/lantern-minimal
       - name: Run vectors
         run: |
           set -o pipefail
@@ -170,6 +186,14 @@ jobs:
         run: |
           tests/runner/run.ps1 build/windows-${{ matrix.isa }} vectors | Tee-Object results-windows-${{ matrix.isa }}-${{ matrix.fork }}.txt
           exit $LASTEXITCODE
+      - name: Run the shell test and the binary
+        if: matrix.fork == 'phase0'
+        shell: pwsh
+        run: |
+          build/windows-${{ matrix.isa }}/shell-test.exe $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          tests/app/start.ps1 build/windows-${{ matrix.isa }}/lantern-minimal.exe
+          exit $LASTEXITCODE
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
@@ -204,6 +228,9 @@ jobs:
       - name: Run the shell test
         if: matrix.fork == 'phase0'
         run: build/macos-${{ matrix.isa }}/shell-test "$RUNNER_TEMP"
+      - name: Run the binary
+        if: matrix.fork == 'phase0'
+        run: tests/app/start.sh "" build/macos-${{ matrix.isa }}/lantern-minimal
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:

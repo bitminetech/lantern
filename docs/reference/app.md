@@ -25,6 +25,8 @@
 ## Test vectors
 
 - tests/generator/app.py: command lines with their `AppOptions`, or the argument index of their fault. File: `<preset>-phase0-app-options.bin`.
+- tests/app/start.sh and tests/app/start.ps1 (Windows): the binary of each target given a faulty option exits with 1 and its line; given a network directory with no config.yaml, it exits with 2 and a "cannot read" line. CI runs them.
+- tests/app/network.py: a network directory (config.yaml, genesis.ssz) to run the binary with, alone or beside other clients.
 
 ## Function `lantern_app_options`
 
