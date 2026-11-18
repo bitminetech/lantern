@@ -42,7 +42,16 @@
 .set APP_SHELL, APP_P2P + 16                /* pair: the asm-libp2p shell context */
 .set APP_SHELL_EVENTS, APP_SHELL + 16       /* pair: a ByteList of the shell's events */
 .set APP_P2P_CONFIG, APP_SHELL_EVENTS + 16  /* pair: the libp2p Config */
-.set APP_RECORD, APP_P2P_CONFIG + 16        /* a NODE_EV_ENR event of a boot node: 48 bytes, then the record */
+.set APP_ENGINE, APP_P2P_CONFIG + 16        /* 0 no connection, 1 dialing, 2 open */
+.set APP_ENGINE_GEN, APP_ENGINE + 8         /* the generation of the connection's Handle */
+.set APP_ENGINE_ADDR, APP_ENGINE_GEN + 8    /* the Address of the execution engine */
+.set APP_ENGINE_OUT, APP_ENGINE_ADDR + 32   /* pair: the request bytes to send */
+.set APP_ENGINE_LEN, APP_ENGINE_OUT + 16    /* the bytes of the request */
+.set APP_ENGINE_SENT, APP_ENGINE_LEN + 8    /* the bytes given to the shell */
+.set APP_ENGINE_FLIGHT, APP_ENGINE_SENT + 8 /* the bytes in the shell's send buffer */
+.set APP_ENGINE_ACT, APP_ENGINE_FLIGHT + 8  /* pair: a ByteList of one shell action */
+.set APP_ENGINE_DUE, APP_ENGINE_ACT + 16    /* 1 when the shell's events allow more bytes */
+.set APP_RECORD, APP_ENGINE_DUE + 8         /* a NODE_EV_ENR event of a boot node: 48 bytes, then the record */
 .set APP_FILE, APP_RECORD + 48 + APP_RECORD_MAX /* FileResult */
 .set APP_RESULT, APP_FILE + 32              /* NodeStepResult */
 .set APP_NODE_ROOM, APP_RESULT + 16         /* NodeRoom */
@@ -161,6 +170,17 @@ app_m_not_enr:
 .set app_m_not_enr_len, . - app_m_not_enr
 app_enr_prefix:
     .ascii "enr:"
+app_localhost:
+    .ascii "localhost"
+app_m_endpoint:
+    .ascii "--execution-endpoint: give an IPv4 address or localhost, a colon and a port"
+.set app_m_endpoint_len, . - app_m_endpoint
+app_m_jwt:
+    .ascii "--jwt-secret: a file of 32 bytes in hex is needed with --execution-endpoint"
+.set app_m_jwt_len, . - app_m_jwt
+app_m_hex:
+    .ascii ": not 32 bytes in hex"
+.set app_m_hex_len, . - app_m_hex
 .include "app_p2p.inc"
 
 /* L0: x0 = the fork of the slot x0 with the config x1: the last fork whose epoch is at most the slot's. Uses x9-x11. */
@@ -596,6 +616,8 @@ LOCAL_FUNCTION app_start
     add     x1, x1, #NODE_STATE_GVR
     mov     x2, #32
     bl      lantern_copy
+    bl      app_engine_conf                 /* the execution engine */
+    cbnz    x0, 99f
     add     x0, x19, #APP_NODE_ROOM         /* the node */
     ADDRESS x1, app_node_room
     mov     x2, #80
@@ -1129,7 +1151,12 @@ LOCAL_FUNCTION app_actions
     mov     x0, x20
     bl      app_work
     b       8f
-5:  cmp     x9, #NODE_ACT_P2P_LIST
+5:  cmp     x9, #NODE_ACT_ENGINE
+    b.ne    6f
+    mov     x0, x20
+    bl      app_engine_request
+    b       8f
+6:  cmp     x9, #NODE_ACT_P2P_LIST
     b.ne    8f
     ldr     x0, [x19, #APP_SHELL]           /* P2P_LIST: the shell requests of libp2p */
     add     x1, x20, #16
@@ -1424,6 +1451,13 @@ LOCAL_FUNCTION app_net
     cbz     x0, 97f
     mov     x9, #24
     stp     x9, xzr, [x0, #8]
+    ldr     x9, [x20, #160]                 /* the engine's action: a SEND of up to send_window bytes */
+    add     x1, x9, #(24 + LIBP2P_ACT_SEND_DATA + 8)
+    mov     x0, #APP_ENGINE_ACT
+    bl      app_alloc
+    cbz     x0, 97f
+    mov     x9, #24
+    stp     x9, xzr, [x0, #8]
     mov     x9, #4                          /* listen: TCP --port on every IPv4 address */
     ldr     x10, [x19, #(APP_OPTIONS + AppOptions_port)]
     stp     x9, x10, [sp, #(L + 32)]
@@ -1475,7 +1509,444 @@ LOCAL_FUNCTION app_net
     LEAVE 112
 END_FUNCTION app_net
 
-/* L2: each event of the shell becomes a NODE_EV_P2P event of the next step. x20 the next event, x21 the end. Locals: L the header. */
+/* L0: x0 = 0 and x1 = the u64 of the decimal digits x0 to x1, one or more; else x0 = 1. Uses x9-x12. */
+LOCAL_FUNCTION app_number
+    UNWIND_END_PROLOGUE
+    cmp     x0, x1
+    b.hs    9f
+    mov     x9, #0
+1:  cmp     x0, x1
+    b.hs    8f
+    ldrb    w10, [x0], #1
+    sub     w10, w10, #0x30
+    cmp     w10, #9
+    b.hi    9f
+    mov     x11, #10
+    umulh   x12, x9, x11
+    cbnz    x12, 9f
+    mul     x9, x9, x11
+    adds    x9, x9, x10
+    b.cs    9f
+    b       1b
+8:  mov     x1, x9
+    mov     x0, #0
+    ret
+9:  mov     x0, #1
+    ret
+END_FUNCTION app_number
+
+/* L0: x0 = 0 and x1 = the IPv4 address of the bytes x0 to x1, its 4 bytes in order in the low bytes; else x0 = 1. Uses x9-x14. */
+LOCAL_FUNCTION app_dotted
+    UNWIND_END_PROLOGUE
+    mov     x9, #0
+    mov     x10, #0
+    mov     x13, #0
+1:  mov     x11, #0
+    mov     x12, #0
+2:  cmp     x0, x1
+    b.hs    3f
+    ldrb    w14, [x0]
+    cmp     w14, #0x2e
+    b.eq    3f
+    sub     w14, w14, #0x30
+    cmp     w14, #9
+    b.hi    9f
+    add     x12, x12, #1
+    cmp     x12, #3
+    b.hi    9f
+    add     x11, x11, x11, lsl #2
+    lsl     x11, x11, #1
+    add     x11, x11, x14
+    add     x0, x0, #1
+    b       2b
+3:  cbz     x12, 9f
+    cmp     x11, #255
+    b.hi    9f
+    lsl     x11, x11, x13
+    orr     x9, x9, x11
+    add     x13, x13, #8
+    add     x10, x10, #1
+    cmp     x0, x1
+    b.hs    4f
+    add     x0, x0, #1
+    cmp     x10, #4
+    b.hs    9f
+    b       1b
+4:  cmp     x10, #4
+    b.ne    9f
+    mov     x1, x9
+    mov     x0, #0
+    ret
+9:  mov     x0, #1
+    ret
+END_FUNCTION app_dotted
+
+/*
+ * L2: with --execution-endpoint, the engine: its Address, the anchor's engine_host and the
+ * jwt_secret of --jwt-secret, and NODE_FLAG_ENGINE: x0 = 0, or 2 after a line on the standard
+ * error. x20 the endpoint's bytes, x21 their count, x22 the colon, x23 the secret's next byte, x24
+ * its end.
+ */
+LOCAL_FUNCTION app_engine_conf
+    ENTER 0
+    ldp     x20, x21, [x19, #(APP_OPTIONS + AppOptions_execution)]
+    cbz     x21, 8f
+    ldr     x9, [x19, #APP_ARGS]
+    add     x20, x9, x20
+    cmp     x21, #NODE_ENGINE_HOST_MAX      /* the Host of each request */
+    b.hi    90f
+    str     x21, [x19, #(APP_ANCHOR + NodeAnchor_engine_host_len)]
+    add     x0, x19, #(APP_ANCHOR + NodeAnchor_engine_host)
+    mov     x1, x20
+    mov     x2, x21
+    bl      lantern_copy
+    mov     x22, x21                        /* the last colon */
+1:  cbz     x22, 90f
+    sub     x22, x22, #1
+    ldrb    w9, [x20, x22]
+    cmp     w9, #0x3a
+    b.ne    1b
+    add     x0, x20, x22                    /* the port */
+    add     x0, x0, #1
+    add     x1, x20, x21
+    bl      app_number
+    cbnz    x0, 90f
+    cbz     x1, 90f
+    mov     x9, #65535
+    cmp     x1, x9
+    b.hi    90f
+    mov     x9, #4
+    add     x10, x19, #APP_ENGINE_ADDR
+    stp     x9, x1, [x10]
+    stp     xzr, xzr, [x10, #16]
+    mov     x0, x20                         /* the host: localhost, or an IPv4 address */
+    mov     x1, x22
+    ADDRESS x2, app_localhost
+    mov     x3, #9
+    bl      app_name_is
+    MOVQ    x1, 0x0100007f                  /* 127.0.0.1 */
+    cbnz    x0, 2f
+    mov     x0, x20
+    add     x1, x20, x22
+    bl      app_dotted
+    cbnz    x0, 90f
+2:  str     w1, [x19, #(APP_ENGINE_ADDR + 16)]
+    ldp     x9, x10, [x19, #(APP_OPTIONS + AppOptions_jwt_secret)]  /* the secret's path */
+    cbz     x10, 91f
+    mov     x11, #APP_PATH_MAX
+    cmp     x10, x11
+    b.hi    91f
+    add     x11, x19, #APP_PATH
+    str     x10, [x11, #16]
+    add     x0, x11, #24
+    ldr     x12, [x19, #APP_ARGS]
+    add     x1, x12, x9
+    mov     x2, x10
+    bl      lantern_copy
+    bl      app_read
+    cbnz    x0, 99f
+    ldr     x9, [x19, #(APP_FILE + 8)]      /* 64 hex digits, after 0x or not, with white space around them */
+    ldr     x10, [x9, #16]
+    add     x23, x9, #24
+    add     x24, x23, x10
+    bl      app_space
+    sub     x9, x24, x23
+    cmp     x9, #2
+    b.lo    3f
+    ldrb    w9, [x23]
+    ldrb    w10, [x23, #1]
+    cmp     w9, #0x30
+    b.ne    3f
+    cmp     w10, #0x78
+    b.ne    3f
+    add     x23, x23, #2
+3:  mov     x22, #0
+4:  cmp     x22, #32
+    b.hs    5f
+    sub     x9, x24, x23
+    cmp     x9, #2
+    b.lo    92f
+    ldrb    w0, [x23]
+    bl      app_hex_digit
+    mov     x10, x0
+    ldrb    w0, [x23, #1]
+    bl      app_hex_digit
+    orr     x9, x0, x10
+    cmp     x9, #15
+    b.hi    92f
+    orr     x10, x0, x10, lsl #4
+    add     x11, x19, #(APP_ANCHOR + NodeAnchor_jwt_secret)
+    strb    w10, [x11, x22]
+    add     x23, x23, #2
+    add     x22, x22, #1
+    b       4b
+5:  bl      app_space
+    cmp     x23, x24
+    b.ne    92f
+    bl      app_file_free
+    ldr     x9, [x19, #APP_FLAGS]
+    orr     x9, x9, #NODE_FLAG_ENGINE
+    str     x9, [x19, #APP_FLAGS]
+8:  mov     x0, #0
+    LEAVE 0
+90: bl      app_line_start                  /* the endpoint's form */
+    ADDRESS x0, app_m_endpoint
+    mov     x1, #app_m_endpoint_len
+    bl      app_line_text
+    b       98f
+91: bl      app_line_start                  /* no secret */
+    ADDRESS x0, app_m_jwt
+    mov     x1, #app_m_jwt_len
+    bl      app_line_text
+    b       98f
+92: bl      app_file_free                   /* <path>: not 32 bytes in hex */
+    bl      app_line_start
+    bl      app_line_path
+    ADDRESS x0, app_m_hex
+    mov     x1, #app_m_hex_len
+    bl      app_line_text
+98: mov     x0, #2
+    bl      app_line_end
+99: mov     x0, #2
+    LEAVE 0
+END_FUNCTION app_engine_conf
+
+/* L0: x23 moves past spaces, tabs, CR and LF, to at most x24. Uses x9. */
+LOCAL_FUNCTION app_space
+    UNWIND_END_PROLOGUE
+1:  cmp     x23, x24
+    b.hs    2f
+    ldrb    w9, [x23]
+    cmp     w9, #0x20
+    b.eq    3f
+    cmp     w9, #9
+    b.lo    2f
+    cmp     w9, #13
+    b.hi    2f
+3:  add     x23, x23, #1
+    b       1b
+2:  ret
+END_FUNCTION app_space
+
+/* L0: x0 = the value of the hex digit x0, or 16 when it is not one. */
+LOCAL_FUNCTION app_hex_digit
+    UNWIND_END_PROLOGUE
+    sub     w9, w0, #0x30
+    cmp     w9, #10
+    b.lo    1f
+    orr     w9, w0, #0x20
+    sub     w9, w9, #0x61
+    cmp     w9, #6
+    add     w9, w9, #10
+    b.lo    1f
+    mov     w9, #16
+1:  mov     x0, x9
+    ret
+END_FUNCTION app_hex_digit
+
+/* L0: x0 = the Handle of the engine's connection: the slot after libp2p's, at its generation. Uses x9. */
+LOCAL_FUNCTION app_engine_handle
+    UNWIND_END_PROLOGUE
+    ldr     x9, [x19, #APP_P2P_CONFIG]
+    ldr     x0, [x9, #88]                   /* max_connections */
+    ldr     x9, [x19, #APP_ENGINE_GEN]
+    orr     x0, x0, x9, lsl #32
+    ret
+END_FUNCTION app_engine_handle
+
+/*
+ * L1: one shell action, the x1 bytes at x0, in the ByteList at APP_ENGINE_ACT, through
+ * libp2p_shell_perform; its results join the shell's events.
+ */
+LOCAL_FUNCTION app_engine_perform
+    FRAME 0
+    ldr     x9, [x19, #APP_ENGINE_ACT]
+    str     x1, [x9, #16]
+    ldr     x0, [x19, #APP_SHELL]
+    mov     x1, x9
+    ldr     x2, [x19, #APP_SHELL_EVENTS]
+    CALL_GLOBAL libp2p_shell_perform
+    UNFRAME 0
+END_FUNCTION app_engine_perform
+
+/*
+ * L2: the next bytes of the request on the open connection, as far as the shell's send buffer has
+ * room. x20 the action, x21 the bytes.
+ */
+LOCAL_FUNCTION app_engine_send
+    ENTER 0
+    ldr     x9, [x19, #APP_ENGINE]
+    cmp     x9, #2
+    b.ne    9f
+    ldr     x9, [x19, #APP_ENGINE_LEN]
+    ldr     x10, [x19, #APP_ENGINE_SENT]
+    sub     x21, x9, x10
+    cbz     x21, 9f
+    ldr     x11, [x19, #APP_P2P_CONFIG]
+    ldr     x11, [x11, #160]                /* send_window */
+    ldr     x12, [x19, #APP_ENGINE_FLIGHT]
+    subs    x11, x11, x12
+    b.ls    9f
+    cmp     x21, x11
+    csel    x21, x21, x11, ls
+    ldr     x20, [x19, #APP_ENGINE_ACT]     /* SEND: connection, count, the bytes */
+    add     x20, x20, #24
+    add     x9, x21, #(LIBP2P_ACT_SEND_DATA + 7)
+    and     x9, x9, #~7
+    mov     x10, #LIBP2P_ACTION_SEND
+    stp     x9, x10, [x20]
+    bl      app_engine_handle
+    stp     x0, x21, [x20, #LIBP2P_ACT_CONN]
+    add     x0, x20, #LIBP2P_ACT_SEND_DATA
+    ldr     x1, [x19, #APP_ENGINE_OUT]
+    ldr     x9, [x19, #APP_ENGINE_SENT]
+    add     x1, x1, x9
+    mov     x2, x21
+    bl      lantern_copy
+    ldr     x9, [x19, #APP_ENGINE_SENT]
+    add     x9, x9, x21
+    str     x9, [x19, #APP_ENGINE_SENT]
+    ldr     x9, [x19, #APP_ENGINE_FLIGHT]
+    add     x9, x9, x21
+    str     x9, [x19, #APP_ENGINE_FLIGHT]
+    mov     x0, x20
+    ldr     x1, [x20]
+    bl      app_engine_perform
+9:  LEAVE 0
+END_FUNCTION app_engine_send
+
+/*
+ * L2: the NODE_ACT_ENGINE x0: its request bytes wait in APP_ENGINE_OUT; they go on the open
+ * connection, or after a DIAL of the engine's Address. x20 the ByteList, x21 the count.
+ */
+LOCAL_FUNCTION app_engine_request
+    ENTER 0
+    add     x20, x0, #24
+    ldr     x21, [x20, #16]
+    ldr     x9, [x19, #(APP_ENGINE_OUT + 8)]   /* room for the request */
+    cmp     x21, x9
+    b.ls    1f
+    mov     x0, #APP_ENGINE_OUT
+    bl      app_unmap
+    mov     x0, #APP_ENGINE_OUT
+    mov     x1, x21
+    bl      app_alloc
+    cbz     x0, 9f
+1:  ldr     x0, [x19, #APP_ENGINE_OUT]
+    ldr     x9, [x20, #8]
+    add     x1, x20, x9
+    mov     x2, x21
+    bl      lantern_copy
+    str     x21, [x19, #APP_ENGINE_LEN]
+    str     xzr, [x19, #APP_ENGINE_SENT]
+    ldr     x9, [x19, #APP_ENGINE]
+    cmp     x9, #2
+    b.ne    2f
+    bl      app_engine_send
+    LEAVE 0
+2:  cbnz    x9, 9f                          /* no connection: a DIAL */
+    ldr     x9, [x19, #APP_ENGINE_GEN]
+    add     x9, x9, #1
+    str     x9, [x19, #APP_ENGINE_GEN]
+    mov     x9, #1
+    str     x9, [x19, #APP_ENGINE]
+    str     xzr, [x19, #APP_ENGINE_FLIGHT]
+    ldr     x20, [x19, #APP_ENGINE_ACT]
+    add     x20, x20, #24
+    mov     x9, #LIBP2P_ACT_DIAL_SIZE
+    mov     x10, #LIBP2P_ACTION_DIAL
+    stp     x9, x10, [x20]
+    bl      app_engine_handle
+    str     x0, [x20, #LIBP2P_ACT_CONN]
+    add     x0, x20, #LIBP2P_ACT_DIAL_ADDR
+    add     x1, x19, #APP_ENGINE_ADDR
+    mov     x2, #32
+    bl      lantern_copy
+    mov     x0, x20
+    mov     x1, #LIBP2P_ACT_DIAL_SIZE
+    bl      app_engine_perform
+9:  LEAVE 0
+END_FUNCTION app_engine_request
+
+/*
+ * L2: x0 = 1 when the shell event x0 is of the engine's connection, which it then takes: CONNECTED
+ * opens it, SENT frees its buffer, RECEIVED gives a NODE_EV_ENGINE of the bytes, DIAL_FAILED and
+ * CLOSED end it with a NODE_EV_ENGINE of failure while the node waits for an answer; else 0.
+ * x20 the event, x21 its kind. Locals: L the header of an event.
+ */
+LOCAL_FUNCTION app_engine_event
+    ENTER 48
+    mov     x20, x0
+    ldr     x21, [x20, #8]
+    cmp     x21, #LIBP2P_EVENT_CONNECTED
+    b.lo    8f
+    cmp     x21, #LIBP2P_EVENT_CLOSED
+    b.hi    8f
+    ldr     x9, [x19, #APP_ENGINE]
+    cbz     x9, 8f
+    bl      app_engine_handle
+    ldr     x9, [x20, #LIBP2P_EV_CONN]
+    cmp     x9, x0
+    b.ne    8f
+    cmp     x21, #LIBP2P_EVENT_CONNECTED
+    b.ne    1f
+    mov     x9, #2
+    str     x9, [x19, #APP_ENGINE]
+    str     xzr, [x19, #APP_ENGINE_FLIGHT]
+    mov     x9, #1
+    str     x9, [x19, #APP_ENGINE_DUE]
+    b       9f
+1:  cmp     x21, #LIBP2P_EVENT_SENT
+    b.ne    2f
+    ldr     x9, [x19, #APP_ENGINE_FLIGHT]
+    ldr     x10, [x20, #LIBP2P_EV_COUNT]
+    subs    x9, x9, x10
+    csel    x9, xzr, x9, lo
+    str     x9, [x19, #APP_ENGINE_FLIGHT]
+    mov     x9, #1
+    str     x9, [x19, #APP_ENGINE_DUE]
+    b       9f
+2:  cmp     x21, #LIBP2P_EVENT_RECEIVED
+    b.ne    3f
+    ldr     x9, [x20, #LIBP2P_EV_COUNT]     /* NODE_EV_ENGINE 0: size, kind, 0, a ByteList, the bytes */
+    add     x10, x9, #(48 + 7)
+    and     x10, x10, #~7
+    mov     x11, #NODE_EV_ENGINE
+    stp     x10, x11, [sp, #L]
+    sub     x11, x10, #24
+    stp     xzr, x11, [sp, #(L + 16)]
+    mov     x12, #24
+    stp     x12, x9, [sp, #(L + 32)]
+    add     x0, sp, #L
+    mov     x1, #48
+    bl      app_event_put
+    add     x0, x20, #LIBP2P_EV_DATA
+    ldr     x1, [x20, #LIBP2P_EV_COUNT]
+    add     x1, x1, #7
+    and     x1, x1, #~7
+    bl      app_event_put
+    b       9f
+3:  str     xzr, [x19, #APP_ENGINE]         /* DIAL_FAILED, CLOSED */
+    str     xzr, [x19, #APP_ENGINE_LEN]
+    str     xzr, [x19, #APP_ENGINE_SENT]
+    ldr     x9, [x19, #APP_NODE]
+    ldr     x9, [x9, #Node_engine_method]
+    cbz     x9, 9f
+    mov     x9, #24                         /* NODE_EV_ENGINE 1 */
+    mov     x10, #NODE_EV_ENGINE
+    stp     x9, x10, [sp, #L]
+    mov     x9, #1
+    str     x9, [sp, #(L + 16)]
+    add     x0, sp, #L
+    mov     x1, #24
+    bl      app_event_put
+9:  mov     x0, #1
+    LEAVE 48
+8:  mov     x0, #0
+    LEAVE 48
+END_FUNCTION app_engine_event
+
+/* L2: each event of the shell becomes a NODE_EV_P2P event of the next step, but those of the engine's connection. x20 the next event, x21 the end. Locals: L the header. */
 LOCAL_FUNCTION app_p2p_events
     ENTER 16
     ldr     x9, [x19, #APP_SHELL_EVENTS]
@@ -1485,6 +1956,9 @@ LOCAL_FUNCTION app_p2p_events
     add     x21, x20, x11
 1:  cmp     x20, x21
     b.hs    9f
+    mov     x0, x20                         /* the engine's connection */
+    bl      app_engine_event
+    cbnz    x0, 2f
     ldr     x9, [x20]
     add     x10, x9, #16
     mov     x11, #NODE_EV_P2P
@@ -1495,12 +1969,16 @@ LOCAL_FUNCTION app_p2p_events
     mov     x0, x20
     ldr     x1, [x20]
     bl      app_event_put
-    ldr     x9, [x20]
+2:  ldr     x9, [x20]
     add     x20, x20, x9
     b       1b
 9:  ldr     x9, [x19, #APP_SHELL_EVENTS]
     str     xzr, [x9, #16]
-    LEAVE 16
+    ldr     x9, [x19, #APP_ENGINE_DUE]      /* then more bytes of the request */
+    cbz     x9, 10f
+    str     xzr, [x19, #APP_ENGINE_DUE]
+    bl      app_engine_send
+10: LEAVE 16
 END_FUNCTION app_p2p_events
 
 /*
