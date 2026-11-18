@@ -117,3 +117,11 @@ The values of the node that the answers show, filled by the binary before each a
 ## Results
 
 <!-- CI generates the tick table for each function here. -->
+
+### `lantern_api_answer`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |

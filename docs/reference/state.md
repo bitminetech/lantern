@@ -165,17 +165,17 @@ The free entries that a copy gives each list of a `BeaconState`.
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_beacon_state_copy`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_copy`
 

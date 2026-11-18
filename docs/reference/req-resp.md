@@ -293,54 +293,54 @@ lantern_ssz_size_bounds(type, out) -> status
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_reqresp_protocol_id`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_reqresp_chunk_size`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_reqresp_write_chunk`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_reqresp_read_header`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_reqresp_read_payload`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_ssz_size_bounds`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |

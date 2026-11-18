@@ -985,49 +985,49 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_node_init`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_node_copy`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_node_step`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_node_run`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_node_protocols`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_node_import`
 
@@ -1081,9 +1081,25 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|
-| x86-64 |  |  |  |  |
-| ARM64 |  |  |  |  |
-| RISC-V |  |  |  |  |
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
+
+### `lantern_node_block_header`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
+
+### `lantern_node_state_checkpoints`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
 
 ### `lantern_node_new_payload`
 
