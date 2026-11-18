@@ -230,7 +230,8 @@ END_FUNCTION lantern_app_options
 .set APP_FLAGS, APP_FORK + 8                /* NODE_FLAG_* */
 .set APP_LAST_SLOT, APP_FLAGS + 8           /* the slot of the last log line */
 .set APP_STREAM, APP_LAST_SLOT + 8          /* 1 or 2, for lantern_shell_write */
-.set APP_FILE, APP_STREAM + 8               /* FileResult */
+.set APP_WORK_EVENT, APP_STREAM + 8         /* pair: the event buffer of a work */
+.set APP_FILE, APP_WORK_EVENT + 16          /* FileResult */
 .set APP_RESULT, APP_FILE + 32              /* NodeStepResult */
 .set APP_NODE_ROOM, APP_RESULT + 16         /* NodeRoom */
 .set APP_STORE_ROOM, APP_NODE_ROOM + 80     /* StoreRoom */
@@ -250,6 +251,7 @@ END_FUNCTION lantern_app_options
 .set APP_QUEUE_BYTES, 1 << 20               /* the events, and the actions, of a step */
 .set APP_TRIES, 8                           /* the times a start step doubles its buffers */
 .set APP_WAIT_MS, 500
+.set APP_WORK_TRIES, 16                     /* the times a work grows a buffer */
 
     RODATA
     .p2align 3
@@ -298,6 +300,12 @@ app_m_node:
 app_m_step:
     .ascii "a node step"
 .set app_m_step_len, . - app_m_step
+app_m_work:
+    .ascii "a work"
+.set app_m_work_len, . - app_m_work
+app_m_buffer:
+    .ascii "an action's BufferId"
+.set app_m_buffer_len, . - app_m_buffer
 app_m_started:
     .ascii "started at slot "
 .set app_m_started_len, . - app_m_started
@@ -765,6 +773,10 @@ LOCAL_FUNCTION app_start
     cbz     x0, 97f
     mov     x9, #24
     stp     x9, xzr, [x0, #8]
+    mov     x0, #APP_WORK_EVENT
+    mov     x1, #APP_QUEUE_BYTES
+    bl      app_alloc
+    cbz     x0, 97f
     bl      app_line_start                  /* started at slot <s>, fork <f>, head 0x<root> */
     ADDRESS x0, app_m_started
     mov     x1, #app_m_started_len
@@ -800,6 +812,500 @@ LOCAL_FUNCTION app_start
 99: mov     x0, #2
     LEAVE 16
 END_FUNCTION app_start
+
+
+/* L0: x0 = the BufferId table entry of the id x0, or 0. Uses x9-x12. */
+LOCAL_FUNCTION app_buf_find
+    UNWIND_END_PROLOGUE
+    add     x12, x19, #APP_BUFS
+    ldp     x9, x10, [x12]
+1:  cbz     x10, 2f
+    ldr     x11, [x9]
+    cmp     x11, x0
+    b.eq    3f
+    add     x9, x9, #APP_BUF_ENTRY
+    sub     x10, x10, #1
+    b       1b
+2:  mov     x0, #0
+    ret
+3:  mov     x0, x9
+    ret
+END_FUNCTION app_buf_find
+
+/* L1: a table entry of the id x0 for the memory x1 of x2 bytes: x0 = 0, or 1 for id 0, an id in use or a full table. */
+LOCAL_FUNCTION app_buf_add
+    FRAME 32
+    stp     x0, x1, [sp, #16]
+    str     x2, [sp, #32]
+    cbz     x0, 9f
+    bl      app_buf_find
+    cbnz    x0, 9f
+    add     x12, x19, #APP_BUFS
+    ldp     x9, x10, [x12]
+    ldr     x11, [x12, #16]
+    cmp     x10, x11
+    b.hs    9f
+    mov     x11, #APP_BUF_ENTRY
+    madd    x9, x10, x11, x9
+    ldp     x13, x14, [sp, #16]
+    stp     x13, x14, [x9]
+    ldr     x13, [sp, #32]
+    str     x13, [x9, #16]
+    add     x10, x10, #1
+    str     x10, [x12, #8]
+    mov     x0, #0
+    UNFRAME 32
+9:  mov     x0, #1
+    UNFRAME 32
+END_FUNCTION app_buf_add
+
+/* L1: the buffer of the id x0 goes back to the OS, and the last entry takes its place. */
+LOCAL_FUNCTION app_buf_drop
+    FRAME 16
+    bl      app_buf_find
+    cbz     x0, 9f
+    str     x0, [sp, #16]
+    add     x1, x0, #16
+    add     x0, x0, #8
+    CALL_GLOBAL lantern_shell_unmap
+    ldr     x9, [sp, #16]
+    add     x12, x19, #APP_BUFS
+    ldp     x10, x11, [x12]
+    sub     x11, x11, #1
+    str     x11, [x12, #8]
+    mov     x13, #APP_BUF_ENTRY
+    madd    x10, x11, x13, x10
+    ldp     x13, x14, [x10]
+    stp     x13, x14, [x9]
+    ldr     x13, [x10, #16]
+    str     x13, [x9, #16]
+9:  UNFRAME 16
+END_FUNCTION app_buf_drop
+
+/* L1: x0 = new memory with a copy of the x1 bytes at x0, or 0. x20 the source, x21 the size, x22 the copy. */
+LOCAL_FUNCTION app_dup
+    ENTER 0
+    mov     x20, x0
+    mov     x21, x1
+    mov     x0, x21
+    bl      app_map
+    cbz     x0, 9f
+    mov     x22, x0
+    mov     x1, x20
+    mov     x2, x21
+    bl      lantern_copy
+    mov     x0, x22
+9:  LEAVE 0
+END_FUNCTION app_dup
+
+/*
+ * L1: the x1 bytes of the event at x0 join the events of the next step, which grow when full:
+ * x0 = 0, or 1 with no memory. x20 the event, x21 its size, x22 the events, x23 a new size, x24 new memory.
+ */
+LOCAL_FUNCTION app_event_put
+    ENTER 0
+    mov     x20, x0
+    mov     x21, x1
+1:  ldr     x22, [x19, #APP_EVENTS]
+    ldr     x9, [x22]
+    ldr     x10, [x22, #16]
+    add     x11, x10, x21
+    add     x11, x11, #24
+    cmp     x11, x9
+    b.ls    2f
+    lsl     x23, x9, #1                     /* twice the room, and the event */
+    add     x23, x23, x21
+    mov     x0, x23
+    bl      app_map
+    cbz     x0, 9f
+    mov     x24, x0
+    mov     x1, x22
+    ldr     x2, [x22, #16]
+    add     x2, x2, #24
+    bl      lantern_copy
+    str     x23, [x24]
+    mov     x0, #APP_EVENTS
+    bl      app_unmap
+    add     x9, x19, #APP_EVENTS
+    stp     x24, x23, [x9]
+    b       1b
+2:  add     x0, x22, #24
+    add     x0, x0, x10
+    mov     x1, x20
+    mov     x2, x21
+    bl      lantern_copy
+    ldr     x22, [x19, #APP_EVENTS]
+    ldr     x10, [x22, #16]
+    add     x10, x10, x21
+    str     x10, [x22, #16]
+    mov     x0, #0
+    LEAVE 0
+9:  mov     x0, #1
+    LEAVE 0
+END_FUNCTION app_event_put
+
+/*
+ * L1: the value at the pair x19 + x0 moves to new memory from the copy function x1 (node, store or
+ * seen copy) with the room at x19 + x2 of x3 u64 fields, each doubled: x0 = 0, or 1. x20 the pair,
+ * x21 the copy function, x22 the room, x23 the size function, x24 the new memory. Locals: L a size.
+ */
+LOCAL_FUNCTION app_grow
+    ENTER 16
+    add     x20, x19, x0
+    mov     x21, x1
+    add     x22, x19, x2
+    mov     x23, x4
+    mov     x9, #0
+1:  cmp     x9, x3
+    b.hs    2f
+    ldr     x10, [x22, x9, lsl #3]
+    lsl     x10, x10, #1
+    str     x10, [x22, x9, lsl #3]
+    add     x9, x9, #1
+    b       1b
+2:  mov     x0, x22
+    add     x1, sp, #L
+    blr     x23
+    cbnz    x0, 9f
+    ldr     x0, [sp, #L]
+    bl      app_map
+    cbz     x0, 9f
+    mov     x24, x0
+    ldr     x9, [sp, #L]
+    str     x9, [x24]
+    ldr     x0, [x20]
+    mov     x1, x22
+    mov     x2, x24
+    blr     x21
+    cbnz    x0, 8f
+    sub     x0, x20, x19
+    bl      app_unmap
+    ldr     x9, [sp, #L]
+    stp     x24, x9, [x20]
+    mov     x0, #0
+    LEAVE 16
+8:  mov     x0, x24
+    ldr     x1, [sp, #L]
+    str     x0, [sp, #(L + 8)]
+    add     x0, sp, #(L + 8)
+    add     x1, sp, #L
+    CALL_GLOBAL lantern_shell_unmap
+9:  mov     x0, #1
+    LEAVE 16
+END_FUNCTION app_grow
+
+/*
+ * L1: the state of the BufferId table entry x0 moves to new memory with twice the StateRoom of the
+ * App: x0 = 0, or 1. x20 the entry, x21 the fork, x22 the new memory. Locals: L a size, L+8 an address.
+ */
+LOCAL_FUNCTION app_regrow
+    ENTER 16
+    mov     x20, x0
+    add     x9, x19, #APP_STATE_ROOM
+    mov     x10, #0
+1:  ldr     x11, [x9, x10, lsl #3]
+    lsl     x11, x11, #1
+    str     x11, [x9, x10, lsl #3]
+    add     x10, x10, #1
+    cmp     x10, #8
+    b.lo    1b
+    ldr     x9, [x20, #8]                   /* the fork of the state's slot */
+    ldr     x0, [x9, #NODE_STATE_SLOT]
+    add     x1, x19, #APP_CONFIG
+    bl      node_fork
+    mov     x21, x0
+    ldr     x0, [x20, #8]
+    add     x1, x19, #APP_STATE_ROOM
+    add     x2, sp, #L
+    mov     x15, x21
+    FORK_CALL beacon_state_copy_size
+    ldr     x0, [sp, #L]
+    bl      app_map
+    cbz     x0, 9f
+    mov     x22, x0
+    ldr     x9, [sp, #L]
+    str     x9, [x22]
+    ldr     x0, [x20, #8]
+    add     x1, x19, #APP_STATE_ROOM
+    mov     x2, x22
+    mov     x15, x21
+    FORK_CALL beacon_state_copy
+    cbnz    x0, 9f
+    add     x0, x20, #8
+    add     x1, x20, #16
+    CALL_GLOBAL lantern_shell_unmap
+    ldr     x9, [sp, #L]
+    stp     x22, x9, [x20, #8]
+    mov     x0, #0
+    LEAVE 16
+9:  mov     x0, #1
+    LEAVE 16
+END_FUNCTION app_regrow
+
+/*
+ * L2: the WORK action x0, by lantern_node_run with its buffers, again with more room while it asks
+ * for it; then its WORK_DONE event joins the next step's. x20 the action, x21-x24 the entries of
+ * state_a, state_b, state_c and data (or 0), x25 the tries, x26 the kind.
+ */
+LOCAL_FUNCTION app_work
+    ENTER 0
+    mov     x20, x0
+    ldr     x26, [x20, #NodeAction_work_kind]
+    mov     x25, #0
+    ldr     x0, [x20, #NodeAction_state_a]
+    bl      app_work_entry
+    mov     x21, x0
+    ldr     x0, [x20, #NodeAction_state_b]
+    bl      app_work_entry
+    mov     x22, x0
+    ldr     x0, [x20, #NodeAction_state_c]
+    bl      app_work_entry
+    mov     x23, x0
+    ldr     x0, [x20, #NodeAction_data]
+    bl      app_work_entry
+    mov     x24, x0
+    cmn     x21, #1                         /* an id with no buffer */
+    ccmn    x22, #1, #4, ne
+    ccmn    x23, #1, #4, ne
+    ccmn    x24, #1, #4, ne
+    b.eq    90f
+1:  ldr     x9, [x19, #APP_WORK_EVENT]      /* the event's room */
+    ldr     x10, [x19, #(APP_WORK_EVENT + 8)]
+    str     x10, [x9]
+    sub     sp, sp, #32                     /* the ninth to eleventh arguments: settings, scratch, event */
+    str     xzr, [sp]
+    ldr     x9, [x19, #APP_SCRATCH]
+    str     x9, [sp, #8]
+    ldr     x9, [x19, #APP_WORK_EVENT]
+    str     x9, [sp, #16]
+    ldr     x0, [x19, #APP_NODE]
+    ldr     x1, [x19, #APP_STORE]
+    ldr     x2, [x19, #APP_SEEN]
+    mov     x3, x20
+    mov     x4, #0
+    cbz     x21, 11f
+    ldr     x4, [x21, #8]
+11: mov     x5, #0
+    cbz     x22, 12f
+    ldr     x5, [x22, #8]
+12: mov     x6, #0
+    cbz     x23, 13f
+    ldr     x6, [x23, #8]
+13: mov     x7, #0
+    cbz     x24, 14f
+    ldr     x7, [x24, #8]
+14: bl      lantern_node_run
+    add     sp, sp, #32
+    cbz     x0, 8f
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.ne    91f
+    add     x25, x25, #1                    /* more room: as the runner's shell */
+    cmp     x25, #APP_WORK_TRIES
+    b.hs    91f
+    cmp     x26, #NODE_WORK_SERVE           /* SERVE, NEW_PAYLOAD, FORKCHOICE: a larger event */
+    b.eq    2f
+    cmp     x26, #NODE_WORK_NEW_PAYLOAD
+    b.eq    2f
+    cmp     x26, #NODE_WORK_FORKCHOICE
+    b.eq    2f
+    cmp     x26, #NODE_WORK_GOSSIP          /* GOSSIP: the Seen, and the proposer state */
+    b.eq    3f
+    cmp     x26, #NODE_WORK_TARGET_STATE    /* TARGET_STATE, and IMPORT_BLOCK with store room: state_a */
+    b.eq    4f
+    cmp     x26, #NODE_WORK_IMPORT_BLOCK
+    b.ne    5f
+    ldr     x9, [x19, #APP_STORE]
+    ldr     x9, [x9, #(Store_blocks + 8)]
+    ldr     x10, [x19, #(APP_STORE_ROOM + StoreRoom_nodes)]
+    cmp     x9, x10
+    b.lo    4f
+5:  mov     x0, #APP_STORE                  /* else the store */
+    ADDRESS x1, lantern_store_copy
+    mov     x2, #APP_STORE_ROOM
+    mov     x3, #2
+    ADDRESS x4, lantern_store_size
+    bl      app_grow
+    cbnz    x0, 91f
+    b       1b
+2:  ldr     x9, [x19, #(APP_WORK_EVENT + 8)]
+    lsl     x1, x9, #2
+    mov     x0, #APP_WORK_EVENT
+    str     x1, [sp, #-16]!
+    bl      app_unmap
+    ldr     x1, [sp], #16
+    mov     x0, #APP_WORK_EVENT
+    bl      app_alloc
+    cbz     x0, 91f
+    b       1b
+3:  mov     x0, #APP_SEEN
+    ADDRESS x1, lantern_seen_copy
+    mov     x2, #APP_SEEN_ROOM
+    mov     x3, #4
+    ADDRESS x4, lantern_seen_size
+    bl      app_grow
+    cbnz    x0, 91f
+    cbz     x22, 1b
+    mov     x0, x22
+    bl      app_regrow
+    cbnz    x0, 91f
+    b       1b
+4:  cbz     x21, 91f
+    mov     x0, x21
+    bl      app_regrow
+    cbnz    x0, 91f
+    b       1b
+8:  ldr     x0, [x19, #APP_WORK_EVENT]      /* the WORK_DONE event */
+    ldr     x1, [x0]
+    bl      app_event_put
+    LEAVE 0
+90: ADDRESS x0, app_m_buffer                /* an action's BufferId: status 0 */
+    mov     x1, #app_m_buffer_len
+    mov     x2, #0
+    bl      app_fail_status
+    LEAVE 0
+91: mov     x2, x0                          /* a work: status <n> */
+    ADDRESS x0, app_m_work
+    mov     x1, #app_m_work_len
+    bl      app_fail_status
+    LEAVE 0
+END_FUNCTION app_work
+
+/* L0: x0 = the table entry of the BufferId x0, 0 for id 0, or 2^64 - 1 when no entry has it. Uses x9-x12, x13. */
+LOCAL_FUNCTION app_work_entry
+    UNWIND_END_PROLOGUE
+    cbz     x0, 9f
+    mov     x13, x30
+    bl      app_buf_find
+    mov     x30, x13
+    cbnz    x0, 9f
+    mov     x0, #-1
+9:  ret
+END_FUNCTION app_work_entry
+
+/*
+ * L2: the actions of the step, in order: BYTES_PUT, STATE_COPY, STATE_FREE and BYTES_FREE on the
+ * BufferId table, WORK by app_work. x20 the next action, x21 the end, x22 its size, x23 an entry.
+ */
+LOCAL_FUNCTION app_actions
+    ENTER 0
+    ldr     x20, [x19, #APP_ACTIONS]
+    ldr     x21, [x20, #16]
+    add     x20, x20, #24
+    add     x21, x20, x21
+1:  cmp     x20, x21
+    b.hs    9f
+    ldr     x22, [x20]
+    ldr     x9, [x20, #8]
+    cmp     x9, #NODE_ACT_BYTES_PUT
+    b.ne    2f
+    add     x0, x20, #24                    /* BYTES_PUT: a copy of the ByteList */
+    ldr     x1, [x20, #24]
+    bl      app_dup
+    cbz     x0, 8f
+    mov     x1, x0
+    ldr     x0, [x20, #16]
+    ldr     x2, [x20, #24]
+    bl      app_buf_add
+    b       8f
+2:  cmp     x9, #NODE_ACT_STATE_COPY
+    b.ne    3f
+    ldr     x0, [x20, #16]                  /* STATE_COPY: a copy of the source buffer */
+    bl      app_buf_find
+    cbz     x0, 8f
+    mov     x23, x0
+    ldp     x0, x1, [x23, #8]
+    bl      app_dup
+    cbz     x0, 8f
+    mov     x1, x0
+    ldr     x0, [x20, #24]
+    ldr     x2, [x23, #16]
+    bl      app_buf_add
+    b       8f
+3:  cmp     x9, #NODE_ACT_STATE_FREE
+    ccmp    x9, #NODE_ACT_BYTES_FREE, #4, ne
+    b.ne    4f
+    ldr     x0, [x20, #16]                  /* STATE_FREE, BYTES_FREE */
+    bl      app_buf_drop
+    b       8f
+4:  cmp     x9, #NODE_ACT_WORK
+    b.ne    8f
+    mov     x0, x20
+    bl      app_work
+8:  add     x20, x20, x22
+    b       1b
+9:  LEAVE 0
+END_FUNCTION app_actions
+
+/*
+ * L2: lantern_node_step with the events of the App and the libp2p state x0 and Tick x1 (both 0 with
+ * no network), again with a larger node and actions while it asks for them; then the accepted
+ * events leave the queue and the actions run. x20 p2p, x21 tick, x22 the tries.
+ */
+LOCAL_FUNCTION app_step
+    ENTER 0
+    mov     x20, x0
+    mov     x21, x1
+    mov     x22, #0
+1:  ldr     x9, [x19, #APP_ACTIONS]
+    mov     x10, #24
+    stp     x10, xzr, [x9, #8]
+    ldr     x0, [x19, #APP_NODE]
+    ldr     x1, [x19, #APP_STORE]
+    mov     x2, x20
+    mov     x3, x21
+    ldr     x4, [x19, #APP_EVENTS]
+    ldr     x5, [x19, #APP_SCRATCH]
+    ldr     x6, [x19, #APP_ACTIONS]
+    add     x7, x19, #APP_RESULT
+    bl      lantern_node_step
+    cbz     x0, 3f
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.ne    2f
+    add     x22, x22, #1
+    cmp     x22, #APP_WORK_TRIES
+    b.hs    2f
+    mov     x0, #APP_NODE                   /* a larger node, and twice the actions */
+    ADDRESS x1, lantern_node_copy
+    mov     x2, #APP_NODE_ROOM
+    mov     x3, #10
+    ADDRESS x4, lantern_node_size
+    bl      app_grow
+    cbnz    x0, 2f
+    ldr     x9, [x19, #(APP_ACTIONS + 8)]
+    lsl     x1, x9, #1
+    str     x1, [sp, #-16]!
+    mov     x0, #APP_ACTIONS
+    bl      app_unmap
+    ldr     x1, [sp], #16
+    mov     x0, #APP_ACTIONS
+    bl      app_alloc
+    cbz     x0, 2f
+    b       1b
+2:  mov     x2, x0                          /* a node step: status <n> */
+    ADDRESS x0, app_m_step
+    mov     x1, #app_m_step_len
+    bl      app_fail_status
+    LEAVE 0
+3:  ldr     x9, [x19, #APP_EVENTS]          /* the accepted events leave the queue */
+    ldr     x10, [x9, #16]
+    add     x11, x9, #24
+    mov     x12, #0
+    ldr     x13, [x19, #APP_RESULT]
+4:  cbz     x13, 5f
+    cmp     x12, x10
+    b.hs    5f
+    ldr     x14, [x11, x12]
+    add     x12, x12, x14
+    sub     x13, x13, #1
+    b       4b
+5:  sub     x2, x10, x12
+    str     x2, [x9, #16]
+    mov     x0, x11
+    add     x1, x11, x12
+    bl      lantern_copy
+    bl      app_actions
+    LEAVE 0
+END_FUNCTION app_step
 
 /*
  * L2: the loop: a NODE_EV_TICK of the time, lantern_node_step, a line at each new slot, then a
@@ -842,25 +1348,9 @@ LOCAL_FUNCTION app_loop
     str     x13, [x11, #16]
     add     x10, x10, #24
     str     x10, [x9, #16]
-    ldr     x9, [x19, #APP_ACTIONS]         /* the step */
-    mov     x10, #24
-    stp     x10, xzr, [x9, #8]
-    ldr     x0, [x19, #APP_NODE]
-    ldr     x1, [x19, #APP_STORE]
-    mov     x2, #0
-    mov     x3, #0
-    ldr     x4, [x19, #APP_EVENTS]
-    ldr     x5, [x19, #APP_SCRATCH]
-    ldr     x6, [x19, #APP_ACTIONS]
-    add     x7, x19, #APP_RESULT
-    bl      lantern_node_step
-    cbz     x0, 2f
-    mov     x2, x0                          /* a node step: status <n> */
-    ADDRESS x0, app_m_step
-    mov     x1, #app_m_step_len
-    bl      app_fail_status
-2:  ldr     x9, [x19, #APP_EVENTS]
-    str     xzr, [x9, #16]
+    mov     x0, #0                          /* the step */
+    mov     x1, #0
+    bl      app_step
     ldr     x0, [x19, #APP_STORE]           /* a line at each new slot */
     bl      node_store_slot
     ldr     x9, [x19, #APP_LAST_SLOT]
