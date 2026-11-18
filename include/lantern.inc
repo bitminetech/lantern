@@ -622,7 +622,7 @@
 .set NODE_WORK_TARGET_STATE, 3         /* a: a copy of the target root's block state */
 .set NODE_WORK_ATTESTATION, 4          /* a: the target checkpoint state, or 0; data: the attestation */
 .set NODE_WORK_ATTESTER_SLASHING, 5    /* a: the justified root's block state; data: the slashing */
-.set NODE_WORK_SERVE, 6                /* data: a block's SSZ bytes; target: the stream Handle; arg: the protocol version */
+.set NODE_WORK_SERVE, 6                /* data: a block's or blob sidecar's SSZ bytes; target: the stream Handle; arg: the protocol version + 256 * the method */
 .set NODE_WORK_GOSSIP, 7               /* a: head state; b: proposer state; c: justified state; data: the message; target: its Handle; arg: topic + 256 * subnet */
 .set NODE_WORK_SYNC_BLOCK, 8           /* data: a block's SSZ bytes from a response; target: its NodeBlock index */
 .set NODE_WORK_BLOB, 9                 /* data: a blob sidecar's SSZ bytes from a response; target: its NodeBlob index */

@@ -41,6 +41,7 @@
 - `p2p-interface.md` of phase0 to fulu, The gossip domain: the topics of each fork, the message-id, `MAX_PAYLOAD_SIZE`, and the validation of each topic, as [networking.md](networking.md) gives it.
 - `fork-choice.md` of deneb, `is_data_available`: a block is not valid until its blobs are downloaded; the network does not promise sidecars outside `MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS`.
 - `p2p-interface.md` of deneb, BlobSidecarsByRange v1: the reader checks each sidecar's format, inclusion proof and KZG proof before the next chunk.
+- `p2p-interface.md` of deneb, BlobSidecarsByRange v1 and BlobSidecarsByRoot v1: the server sends the sidecars of the head's chain in (slot, index) order, or of the requested identifiers in their order, at most compute_max_request_blob_sidecars; of electra, its limit; of fulu, the deprecation: sidecars before `FULU_FORK_EPOCH`, an empty list at or after it.
 - ARCHITECTURE.md sections 2 and 6: the event and action model; section 7: the calls to asm-libp2p.
 
 ## Common rules
@@ -90,6 +91,7 @@
   - It answers each BlobSidecarsByRange request with the sidecars of the case's `node-blobs` case of the chain's blocks in the range, in (slot, index) order, with compute_fork_digest of the slot's epoch as context bytes.
   - Each block of the chain must be `NODE_BLOCK_IMPORTED`, and the node's `head_root` must be the chain's last block.
   - Each sidecar it sent must be a `NODE_BLOB_VALID` entry of the node.
+  - Then the node serves them: BlobSidecarsByRange v1 from the anchor's slot to the head's must give each sidecar of the chain in (slot, index) order; BlobSidecarsByRoot v1 of the chain's sidecars from the last block to the first, with an identifier of no sidecar among them, must give those sidecars in that order. Each chunk must have result 0, the sidecar's SSZ bytes, and compute_fork_digest of its slot's epoch as context bytes.
   - A case with sidecars syncs again with a new node and no sidecars in the answers: no block of the chain with blob commitments, and no later one, may be `NODE_BLOCK_IMPORTED`.
 - Lantern's cases `<preset>-<fork>-node-blobs.bin` of deneb and electra, made by tests/generator/node.py with the pinned spec: one for each `fork_choice-on_block` case whose block steps have blobs, of the same name.
   - Each part is named after a block file of the case and holds the `BlobSidecar` SSZ bytes of get_blob_sidecars of the block and the step's blobs and proofs, as a list.
@@ -230,8 +232,11 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - A request is read when its bytes are complete: Status is kept in the `NodePeer` and answered with the node's Status of the same version; Ping is answered with `metadata_seq`; MetaData, on the stream's opening, with the node's MetaData of the same version; Goodbye gets a `STREAM_CLOSE`. A request that is not valid gets result 1, InvalidRequest; a method of no answer below gets result 3, ResourceUnavailable.
 - BeaconBlocksByRange: a `start_slot` before `earliest_slot` gets ResourceUnavailable. Otherwise the blocks of the chain of `head_root`, by `parent_root`, with a slot in `start_slot` to `start_slot` + `count`, in slot order; `count` is at most `MAX_REQUEST_BLOCKS_DENEB` from deneb on, else `MAX_REQUEST_BLOCKS`, and at most the BufferIds a stream's request room holds.
 - BeaconBlocksByRoot: the imported blocks of the roots the node knows, in the request's order; the request has at most that many roots.
-- The anchor, with no bytes, is not sent. No block: a `STREAM_CLOSE` with no chunk. Else the stream keeps the BufferIds and takes `NODE_STREAM_SERVE`.
-- After the head, each stream in `NODE_STREAM_SERVE` gets a `NODE_WORK_SERVE` of its next block and takes `NODE_STREAM_SERVING`, while the actions have room for the work and 4096 bytes; a stream left waiting makes `wakeup` the tick's time.
+- BlobSidecarsByRange and BlobSidecarsByRoot, when the fork of the store's slot is deneb or later; before it, ResourceUnavailable. The sidecar limit is `MAX_REQUEST_BLOCKS_DENEB` times `MAX_BLOBS_PER_BLOCK` (deneb) or `MAX_BLOBS_PER_BLOCK_ELECTRA` (electra and later), and at most the BufferIds a stream's request room holds.
+- BlobSidecarsByRange: a `start_slot` before `earliest_slot` gets ResourceUnavailable. Otherwise the `NODE_BLOB_VALID` sidecars of the imported blocks of the chain of `head_root` with a slot in `start_slot` to `start_slot` + `count`, in (slot, index) order, up to the limit; the indices of a block are those below the larger of `MAX_BLOBS_PER_BLOCK` and `MAX_BLOBS_PER_BLOCK_ELECTRA`, and below `NODE_BLOB_MAX`.
+- BlobSidecarsByRoot: the `NODE_BLOB_VALID` sidecars of the request's (block_root, index) pairs whose block is not `NODE_BLOCK_INVALID`, in the request's order; the request has at most the limit of pairs, a multiple of 40 bytes.
+- The anchor, with no bytes, is not sent. No block or sidecar: a `STREAM_CLOSE` with no chunk. Else the stream keeps the BufferIds and takes `NODE_STREAM_SERVE`.
+- After the head, each stream in `NODE_STREAM_SERVE` gets a `NODE_WORK_SERVE` of its next block or sidecar, with the protocol version + 256 times the method as `arg`, and takes `NODE_STREAM_SERVING`, while the actions have room for the work and 4096 bytes; a stream left waiting makes `wakeup` the tick's time.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_SERVE`: the chunk goes out in a `STREAM_WRITE`, then the stream's next block, or a `STREAM_CLOSE` after the last; a result other than `LANTERN_VALID`, or no room in `p2p_out`, gives a `STREAM_RESET`.
 - An answer is one chunk of lantern_reqresp_write_chunk in a `STREAM_WRITE`, then a `STREAM_CLOSE`; then the stream goes.
 - The node's Status: compute_fork_digest of the store's epoch, the store's finalized checkpoint, `head_root` and its slot, and `earliest_slot`. Its MetaData: `metadata_seq`, no attestation or sync subnets, and `CUSTODY_REQUIREMENT` custody groups.
@@ -296,7 +301,7 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 - `NODE_WORK_TARGET_STATE`: lantern_store_target_checkpoint_state of `state_a` to the `NodeCheckpoint` at index `target`.
 - `NODE_WORK_ATTESTATION`: lantern_node_attestation of the fork of the attestation's slot; `is_from_block` is the work's `arg`.
 - `NODE_WORK_ATTESTER_SLASHING`: lantern_node_attester_slashing of the fork of the store's slot.
-- `NODE_WORK_SERVE`: the response chunk of the block in `data`, with lantern_reqresp_write_chunk, as a ByteList at `NodeEvent_chunk` of the event; its context bytes are compute_fork_digest of the block's epoch for version 2, none for version 1. The event's `size` then covers the chunk.
+- `NODE_WORK_SERVE`: the response chunk of the block or blob sidecar in `data`, with lantern_reqresp_write_chunk, as a ByteList at `NodeEvent_chunk` of the event; its context bytes are compute_fork_digest of the epoch of the block's slot (blocks of version 2) or of the sidecar's block header slot (the blob methods), none for blocks of version 1. The event's `size` then covers the chunk.
 - `NODE_WORK_SYNC_BLOCK`: lantern_node_block_root of the fork of the block's slot, its root at `NodeEvent_root` and its blob count at `NodeEvent_index`.
 - `NODE_WORK_BLOB`: lantern_node_blob_sidecar of the fork of the sidecar's slot with the node's config and `settings`, the root at `NodeEvent_root`; a slot whose fork is not deneb or electra gives the result `LANTERN_INVALID_ENCODING`.
 - `NODE_WORK_GOSSIP`: lantern_node_gossip of the fork of the store's slot, with a `NodeGossip` of `seen`, the store, `time_ms`, the topic and subnet of `arg`, `state_a` as head, `state_b` as proposer, `state_c` as justified, `settings` and the node's config, its `root` at `NodeEvent_root` and its `index` at `NodeEvent_index`.
@@ -769,7 +774,7 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 | 40 | `state_c` | u64 | `NODE_ACT_WORK`: a `BufferId` |
 | 48 | `data` | u64 | `NODE_ACT_WORK`: a `BufferId` of bytes |
 | 56 | `target` | u64 | `NODE_ACT_WORK`: a `NodeBlock` index (also of a SYNC_BLOCK), a `NodeCheckpoint` index, a `NodeBlob` index, a stream Handle, or a message Handle |
-| 64 | `arg` | u64 | `NODE_ACT_WORK`: `is_from_block` of an attestation, the epoch of a checkpoint, the protocol version of a SERVE, or topic + 256 * subnet of a GOSSIP |
+| 64 | `arg` | u64 | `NODE_ACT_WORK`: `is_from_block` of an attestation, the epoch of a checkpoint, the protocol version + 256 * the method of a SERVE, or topic + 256 * subnet of a GOSSIP |
 
 ### Rules
 

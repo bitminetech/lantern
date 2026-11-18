@@ -3556,6 +3556,58 @@ static int p2p_blobs_wait(struct p2p_net *net, int arg) {
 }
 
 /*
+ * After a sync with sidecars, the node serves them: BlobSidecarsByRange of the anchor's slot to the
+ * head's gives every sidecar of the chain in (slot, index) order, and BlobSidecarsByRoot of the
+ * chain's sidecars from the last block to the first, with an identifier of no sidecar after the
+ * first, gives those sidecars in that order. Each chunk is checked as a block's is: result 0, the
+ * ForkDigest of its slot's epoch, its SSZ bytes.
+ */
+static void sync_serve_blobs(fc_node *m, struct p2p_net *net, case_block **chain, size_t nchain, const char **why) {
+    size_t ns = 0;
+    for (size_t b = 0; b < nchain; b++) ns += chain[b]->sidecars ? (size_t)rd64(chain[b]->sidecars + 1) : 0;
+    if (!ns) return;
+    case_block *one = xmalloc(sizeof *one * ns), **want = xmalloc(sizeof *want * ns);
+    uint8_t *ids = xmalloc(40 * (ns + 1));
+    size_t k = 0;
+    for (size_t b = 0; b < nchain; b++) { /* by range: (slot, index) order */
+        tv sc = chain[b]->sidecars ? chain[b]->sidecars + 9 : NULL;
+        for (uint64_t i = 0, c = sc ? rd64(chain[b]->sidecars + 1) : 0; i < c; i++, sc = tv_skip(sc), k++) {
+            memset(&one[k], 0, sizeof one[k]);
+            one[k].slot = chain[b]->slot;
+            one[k].bytes = tv_bytes(sc, &one[k].len);
+            want[k] = &one[k];
+        }
+    }
+    uint8_t req[16];
+    uint64_t anchor_slot = rd64(m->shell->node + 216); /* Node_earliest_slot */
+    wr64(req, anchor_slot);
+    wr64(req + 8, chain[nchain - 1]->slot - anchor_slot + 1);
+    int st = p2p_request(m, net, 1, "blob_sidecars_by_range", 1, req, 16, why);
+    if (!*why) p2p_check_blocks(net, st, want, ns, net->gvr, "blob_sidecars_by_range", why);
+    size_t nid = 0, w = 0; /* by root: from the last block to the first, an unknown identifier after the first */
+    for (size_t b = nchain, at = ns; b-- > 0;) {
+        uint64_t c = chain[b]->sidecars ? rd64(chain[b]->sidecars + 1) : 0;
+        at -= (size_t)c;
+        for (uint64_t i = 0; i < c; i++) {
+            memcpy(ids + 40 * nid, chain[b]->root, 32);
+            wr64(ids + 40 * nid + 32, i);
+            nid++;
+            want[w++] = &one[at + i];
+            if (nid == 1) {
+                memset(ids + 40 * nid, 0xEE, 32);
+                wr64(ids + 40 * nid + 32, 0);
+                nid++;
+            }
+        }
+    }
+    if (!*why) st = p2p_request(m, net, 2, "blob_sidecars_by_root", 1, ids, 40 * nid, why);
+    if (!*why) p2p_check_blocks(net, st, want, w, net->gvr, "blob_sidecars_by_root", why);
+    free(ids);
+    free(want);
+    free(one);
+}
+
+/*
  * One sync of the chain: a new node at the case's anchor, at last_ms, gets the Status of a peer
  * whose head is the chain's last block, and syncs from it. With no_blobs the peer sends no
  * sidecar: the first block with sidecars must wait for them, and neither it nor a later block
@@ -3606,6 +3658,7 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
             for (size_t b = 0; b < nchain && !*why; b++)
                 for (uint64_t i = 0, c = chain[b]->sidecars ? rd64(chain[b]->sidecars + 1) : 0; i < c; i++)
                     if (!shell_has_blob(s, chain[b]->root, i)) *why = "sync: a sidecar the peer sent is not a valid NodeBlob";
+            if (!*why) sync_serve_blobs(&m, &net, chain, nchain, why);
         }
         p2p_close(&net);
     }

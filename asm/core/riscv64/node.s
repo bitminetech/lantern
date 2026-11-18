@@ -629,7 +629,7 @@ LOCAL_FUNCTION node_put
     LEAVE 0
 END_FUNCTION node_put
 
-/* a0 = 1 when the node holds a NODE_BLOB_VALID entry of the root at a0 (8-aligned) and the index a1, else 0. Uses t0-t3, a6, a7. */
+/* a0 = the node's NODE_BLOB_VALID entry of the root at a0 (8-aligned) and the index a1, or 0. Uses t0-t3, a6, a7. */
 LOCAL_FUNCTION node_blob_held
     UNWIND_END_PROLOGUE
     PART    t0, t1, s1, Node_blobs
@@ -640,7 +640,7 @@ LOCAL_FUNCTION node_blob_held
     ld      t2, NodeBlob_index(t0)
     bne     t2, a1, 2f
     NE32    t0, a0, 2f
-    li      a0, 1
+    mv      a0, t0
     ret
 2:  addi    t0, t0, NodeBlob__mem
     addi    t1, t1, -1
@@ -1487,6 +1487,18 @@ LOCAL_FUNCTION node_request
     li      s7, 0                           # by root: a multiple of 32 bytes, at most the request limit
     li      t0, REQRESP_BEACON_BLOCKS_BY_ROOT
     beq     s4, t0, 3f
+    li      s7, 16                          # blob sidecars, from deneb on: by range 16 bytes, by root a multiple of 40
+    li      t0, REQRESP_BLOB_SIDECARS_BY_RANGE
+    beq     s4, t0, 2f
+    li      s7, 0
+    li      t0, REQRESP_BLOB_SIDECARS_BY_ROOT
+    bne     s4, t0, 92f
+2:  mv      a0, s2
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_DENEB
+    bgeu    a0, t0, 3f
 92: li      a1, 3                           # ResourceUnavailable
     j       91f
 3:  sd      zero, (L + ChunkHeader_kind)(sp)        # CHUNK_REQUEST
@@ -1498,6 +1510,8 @@ LOCAL_FUNCTION node_request
     beq     a0, t0, 80f
     bnez    a0, 90f
     bnez    s7, 4f
+    li      t0, REQRESP_BLOB_SIDECARS_BY_ROOT
+    beq     s4, t0, 5f
     ld      t0, (L + ChunkHeader_length)(sp)        # by root
     andi    t0, t0, 31
     bnez    t0, 90f
@@ -1506,6 +1520,17 @@ LOCAL_FUNCTION node_request
     ld      t0, (L + ChunkHeader_length)(sp)
     bgtu    t0, a0, 90f
     mv      s7, t0
+    j       4f
+5:  ld      t0, (L + ChunkHeader_length)(sp)        # blob identifiers
+    li      t1, 40
+    remu    t2, t0, t1
+    bnez    t2, 90f
+    divu    t0, t0, t1
+    sd      t0, (L + 72)(sp)
+    call    node_max_blobs
+    ld      t0, (L + 72)(sp)
+    bgtu    t0, a0, 90f
+    ld      s7, (L + ChunkHeader_length)(sp)
 4:  ld      t0, (L + ChunkHeader_length)(sp)
     bne     t0, s7, 90f
     ld      s8, 0(s5)                       # the payload's ByteList at the end of scratch
@@ -1540,6 +1565,10 @@ LOCAL_FUNCTION node_request
     beq     s4, t0, 60f
     li      t0, REQRESP_BEACON_BLOCKS_BY_ROOT
     beq     s4, t0, 70f
+    li      t0, REQRESP_BLOB_SIDECARS_BY_RANGE
+    beq     s4, t0, 165f
+    li      t0, REQRESP_BLOB_SIDECARS_BY_ROOT
+    beq     s4, t0, 175f
     li      t0, REQRESP_GOODBYE
     bne     s4, t0, 10f
     li      a0, LIBP2P_EVENT_STREAM_CLOSE   # Goodbye: a close
@@ -1680,6 +1709,81 @@ LOCAL_FUNCTION node_request
     addi    t0, t0, 8
     addi    t1, t1, -8
     j       64b
+165: ld     s7, 0(s9)                       # BlobSidecarsByRange: start_slot, count
+    ld      s10, 8(s9)
+    ld      t0, Node_earliest_slot(s1)
+    bltu    s7, t0, 92b
+    LDQ     t0, s1, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK    # the indices of a block
+    LDQ     t1, s1, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK_ELECTRA
+    bgeu    t0, t1, 1650f
+    mv      t0, t1
+1650: li     t1, NODE_BLOB_MAX
+    bleu    t0, t1, 1651f
+    mv      t0, t1
+1651: beqz   t0, 78f
+    sd      t0, (L + 72)(sp)
+    call    node_max_blobs                  # at most the limit: the slots whose sidecars it can hold
+    ld      t0, (L + 72)(sp)
+    divu    t0, a0, t0
+    bleu    s10, t0, 1652f
+    mv      s10, t0
+1652: add    t0, s7, s10                     # the end slot
+    bgeu    t0, s7, 1653f
+    li      t0, -1
+1653: mv     s10, t0
+    li      s8, 0                           # the sidecars of the canonical blocks of the range, from the head down
+    addi    s9, s1, Node_head_root
+166: mv     a0, s9
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 63b
+    ld      t0, NodeBlock_status(a1)
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 63b
+    ld      t0, NodeBlock_slot(a1)
+    bltu    t0, s7, 63b
+    addi    s9, a1, NodeBlock_parent_root
+    bgeu    t0, s10, 166b
+    sd      a1, (L + 64)(sp)                # its indices, from the last
+    ld      t0, (L + 72)(sp)
+    sd      t0, (L + 80)(sp)
+167: ld     a1, (L + 80)(sp)
+    beqz    a1, 166b
+    addi    a1, a1, -1
+    sd      a1, (L + 80)(sp)
+    ld      a0, (L + 64)(sp)
+    call    node_blob_held
+    beqz    a0, 167b
+    ld      t1, NodeBlob_data_id(a0)
+    slli    t2, s8, 3
+    add     t2, t2, s3
+    sd      t1, NodeStream_request(t2)
+    addi    s8, s8, 1
+    j       167b
+175: li     t0, 40                          # BlobSidecarsByRoot: the sidecars the node holds, in the request's order
+    divu    s7, s7, t0
+    li      s8, 0
+176: beqz   s7, 77f
+    mv      a0, s9
+    ld      a1, 32(s9)
+    addi    s9, s9, 40
+    addi    s7, s7, -1
+    call    node_blob_held
+    beqz    a0, 176b
+    ld      t0, NodeBlob_data_id(a0)
+    sd      t0, (L + 64)(sp)
+    call    node_find_block                 # not of an invalid block
+    li      t0, -1
+    beq     a0, t0, 174f
+    ld      t0, NodeBlock_status(a1)
+    li      t1, NODE_BLOCK_INVALID
+    beq     t0, t1, 176b
+174: ld     t1, (L + 64)(sp)
+    slli    t2, s8, 3
+    add     t2, t2, s3
+    sd      t1, NodeStream_request(t2)
+    addi    s8, s8, 1
+    j       176b
 70: srli    s7, s7, 5                       # BlocksByRoot: the blocks the node has, in the request's order
     li      s8, 0
 71: beqz    s7, 77f
@@ -1749,6 +1853,34 @@ LOCAL_FUNCTION node_max_blocks
 END_FUNCTION node_max_blocks
 
 /*
+ * a0 = the blob sidecars one response may hold: MAX_REQUEST_BLOCKS_DENEB times
+ * MAX_BLOBS_PER_BLOCK (deneb) or MAX_BLOBS_PER_BLOCK_ELECTRA (electra and later) of the fork of
+ * the store's slot; at most the BufferIds a stream's list holds. Uses t0-t2, a7.
+ */
+LOCAL_FUNCTION node_max_blobs
+    FRAME 0
+    mv      a0, s2
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    LDQ     t0, s1, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK
+    li      t1, FORK_ELECTRA
+    bltu    a0, t1, 1f
+    LDQ     t0, s1, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK_ELECTRA
+1:  li      t1, REQUEST_BLOCKS_LIMIT_DENEB
+    mulhu   t2, t0, t1
+    mul     a0, t0, t1
+    beqz    t2, 2f
+    li      a0, -1
+2:  ld      t0, Node_stream_bytes(s1)
+    addi    t0, t0, -NodeStream__fixed
+    srli    t0, t0, 3
+    bleu    a0, t0, 3f
+    mv      a0, t0
+3:  UNFRAME 0
+END_FUNCTION node_max_blobs
+
+/*
  * a0 = 1 when a stream waits for room for its SERVE work, else 0: a SERVE work of the next
  * block of each stream in NODE_STREAM_SERVE, while the actions have room for it and 4096 bytes.
  * s3 a stream, s4 the streams left.
@@ -1777,7 +1909,10 @@ LOCAL_FUNCTION node_serve
     li      a1, 0
     li      a2, 0
     ld      a4, NodeStream_handle(s3)
-    ld      a5, NodeStream_version(s3)
+    ld      a5, NodeStream_method(s3)       # arg: the version + 256 * the method
+    slli    a5, a5, 8
+    ld      t0, NodeStream_version(s3)
+    add     a5, a5, t0
     call    node_work
 2:  ld      t0, Node_stream_bytes(s1)
     add     s3, s3, t0
@@ -3572,7 +3707,7 @@ END_FUNCTION lantern_node_step
 
 /*
  * (node, store, seen, work, state_a, state_b, state_c, data, settings, scratch, event): s1 node,
- * s2 store, s3 work, s4 state_a, s5 data, s6 scratch, s7 event, s8 the event's room, s9 a
+ * s2 store, s3 work, s4 state_a, s5 data, s6 scratch, s7 event, s8 the event's room, s10 1 for a SERVE of a blob method, s9 a
  * temporary. Locals: L the BlockOptions (32), or a chunk's size, a fork digest and a ChunkHeader
  * (64); L+64 seen, L+72 state_b, L+80 state_c, L+88 settings, L+96 a NodeGossip.
  */
@@ -3714,9 +3849,18 @@ FUNCTION lantern_node_run
 99: LEAVE 192
 50: li      t1, NODE_WORK_SERVE
     bne     t0, t1, 60f
-    ld      t0, 16(s5)                      # SERVE: the chunk of the block's bytes, with room for it
+    ld      t0, NodeAction_arg(s3)          # SERVE: s10 1 for a blob method
+    srli    t0, t0, 8
+    addi    t1, t0, -REQRESP_BLOB_SIDECARS_BY_RANGE
+    addi    t2, t0, -REQRESP_BLOB_SIDECARS_BY_ROOT
+    seqz    t1, t1
+    seqz    t2, t2
+    or      s10, t1, t2
+    ld      t0, 16(s5)                      # the chunk of the block's or sidecar's bytes, with room for it
     li      t1, 100 + 84
-    bltu    t0, t1, 18b
+    beqz    s10, 501f
+    li      t1, NODE_BLOB_HEADER + 8
+501: bltu   t0, t1, 18b
     sd      t0, L(sp)
     addi    a0, sp, L
     addi    a1, sp, L
@@ -3725,10 +3869,13 @@ FUNCTION lantern_node_run
     addi    t0, t0, NodeEvent_chunk + 24 + 7
     andi    t0, t0, -8
     bltu    s8, t0, 7f
-    ld      t0, 8(s5)                       # the context: ForkDigest of the block's epoch
+    ld      t0, 8(s5)                       # the context: ForkDigest of the epoch of the block's or header's slot
     add     t0, s5, t0
+    bnez    s10, 502f
     LDU64   s9, t0, 100, t1
-    mv      a0, s9
+    j       503f
+502: LDQ    s9, t0, NODE_BLOB_HEADER
+503: mv     a0, s9
     addi    a1, s1, Node_config
     call    node_fork
     mv      t6, a0
@@ -3743,13 +3890,15 @@ FUNCTION lantern_node_run
     addi    a4, sp, L + 8
     FORK_CALL compute_fork_digest
     bnez    a0, 99b
-    li      t0, CHUNK_RESPONSE              # the header: v1 has no context bytes
+    li      t0, CHUNK_RESPONSE              # the header: blocks v1 have no context bytes
     sd      t0, (L + 16 + ChunkHeader_kind)(sp)
     ld      t0, NodeAction_arg(s3)
+    andi    t0, t0, 255
     li      t1, 2
-    li      t2, 0
-    bltu    t0, t1, 51f
     li      t2, 4
+    bnez    s10, 51f
+    bgeu    t0, t1, 51f
+    li      t2, 0
 51: sd      t2, (L + 16 + ChunkHeader_context_length)(sp)
     sd      zero, (L + 16 + ChunkHeader_result)(sp)
     lwu     t0, (L + 8)(sp)
