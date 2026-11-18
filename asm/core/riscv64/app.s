@@ -1,0 +1,3042 @@
+/*
+ * The binary's startup and loop, RISC-V: its own object, which only the binary links (entry.s calls
+ * lantern_app_main). Requirements: docs/reference/app.md. The same steps as asm/core/arm64/app.s:
+ * s1 holds the App (x19 there); s2 to s8 hold x20 to x26; a0 to a7 hold the arguments x0 to x7.
+ * App offsets of 2048 or more go through LDQ, STQ and ADDQ, which use a7. Trailing comments use #.
+ */
+.set ISA_RISCV64, 1
+.include "ssz.inc"
+.include "crypto.inc"
+.include "bls12381.inc"
+.include "kzg.inc"
+.include "preset.inc"
+.include "lantern.inc"
+.include "fork_numbers.inc"
+.include "platform.inc"
+.include "libp2p.inc"
+.include "discv5.inc"
+.include "macros.s"
+.include "memory.s"
+
+/* The App, at s1; the constants and the RODATA. */
+.include "app.inc"
+
+/* L0: a0 = the fork of the slot a0 with the config a1: the last fork whose epoch is at most the slot's. Uses t0-t2. */
+LOCAL_FUNCTION app_fork
+    UNWIND_END_PROLOGUE
+    li      t0, SLOTS_PER_EPOCH
+    divu    t0, a0, t0
+    li      t1, (16 * FORK_FULU)
+1:  beqz    t1, 2f
+    add     t2, a1, t1
+    ld      t2, 0(t2)
+    bgeu    t0, t2, 2f
+    addi    t1, t1, -16
+    j       1b
+2:  srli    a0, t1, 4
+    ret
+END_FUNCTION app_fork
+
+/* L0: a0 = the current slot of the store a0: (time_ms - genesis_time_ms) // SLOT_DURATION_MS, 0 before genesis. Uses t0-t2, a7. */
+LOCAL_FUNCTION app_store_slot
+    UNWIND_END_PROLOGUE
+    LDQ     t0, a0, Store_time_ms
+    LDQ     t1, a0, Store_genesis_time_ms
+    sub     t2, t0, t1
+    bgeu    t0, t1, 1f
+    li      t2, 0
+1:  LDQ     t1, a0, (Store_config + CONFIG_SLOT_DURATION_MS)
+    li      a0, 0
+    beqz    t1, 2f
+    divu    a0, t2, t1
+2:  ret
+END_FUNCTION app_store_slot
+
+/* L0: a0 = 1 when the a1 bytes at a0 are the a3 bytes at a2, else 0. Uses t0, t1. */
+LOCAL_FUNCTION app_name_is
+    UNWIND_END_PROLOGUE
+    bne     a1, a3, 2f
+1:  beqz    a1, 3f
+    lbu     t0, 0(a0)
+    lbu     t1, 0(a2)
+    bne     t0, t1, 2f
+    addi    a0, a0, 1
+    addi    a2, a2, 1
+    addi    a1, a1, -1
+    j       1b
+2:  li      a0, 0
+    ret
+3:  li      a0, 1
+    ret
+END_FUNCTION app_name_is
+
+/* L1: a0 = memory of a0 bytes from lantern_shell_map, zeroed, or 0. Locals: the size, the address. */
+LOCAL_FUNCTION app_map
+    FRAME 16
+    sd      a0, 0(sp)
+    mv      a0, sp
+    addi    a1, sp, 8
+    CALL_GLOBAL lantern_shell_map
+    ld      a0, 8(sp)
+    UNFRAME 16
+END_FUNCTION app_map
+
+/* L1: the pair at s1 + a0 goes back to lantern_shell_unmap and becomes 0, 0. */
+LOCAL_FUNCTION app_unmap
+    FRAME 16
+    add     t0, s1, a0
+    sd      t0, 0(sp)
+    ld      t1, 0(t0)
+    beqz    t1, 1f
+    mv      a0, t0
+    addi    a1, t0, 8
+    CALL_GLOBAL lantern_shell_unmap
+    ld      t0, 0(sp)
+    sd      zero, 0(t0)
+    sd      zero, 8(t0)
+1:  UNFRAME 16
+END_FUNCTION app_unmap
+
+/* L1: the pair at s1 + a0 becomes new memory of a1 bytes, its first u64 the size: a0 = the memory, or 0. */
+LOCAL_FUNCTION app_alloc
+    ENTER 0
+    add     s2, s1, a0
+    mv      s3, a1
+    mv      a0, a1
+    call    app_map
+    beqz    a0, 1f
+    sd      s3, 0(a0)
+    sd      a0, 0(s2)
+    sd      s3, 8(s2)
+1:  LEAVE 0
+END_FUNCTION app_alloc
+
+/* L0: the log line starts with "lantern: ". Uses a0, a1, t0-t3, a7. */
+LOCAL_FUNCTION app_line_start
+    UNWIND_END_PROLOGUE
+    STQ     zero, s1, (APP_LINE + 16)
+    ADDRESS a0, app_m_prefix
+    li      a1, app_m_prefix_len
+    j       app_line_text
+END_FUNCTION app_line_start
+
+/* L0: the a1 bytes at a0 join the log line, as far as it has room. Uses a0, a1, t0-t3, a7. */
+LOCAL_FUNCTION app_line_text
+    UNWIND_END_PROLOGUE
+    ADDQ    t0, s1, APP_LINE
+    ld      t1, 16(t0)
+    li      t2, APP_LINE_MAX
+    sub     t2, t2, t1
+    bleu    a1, t2, 1f
+    mv      a1, t2
+1:  add     t2, t1, a1
+    sd      t2, 16(t0)
+    addi    t0, t0, 24
+    add     t0, t0, t1
+2:  beqz    a1, 3f
+    lbu     t3, 0(a0)
+    sb      t3, 0(t0)
+    addi    a0, a0, 1
+    addi    t0, t0, 1
+    addi    a1, a1, -1
+    j       2b
+3:  ret
+END_FUNCTION app_line_text
+
+/* L1: the decimal digits of a0 join the log line. Locals: 32 digit bytes. */
+LOCAL_FUNCTION app_line_u64
+    FRAME 32
+    addi    t0, sp, 32                      # the digits, from the end
+    li      t1, 10
+1:  remu    t2, a0, t1
+    divu    a0, a0, t1
+    addi    t2, t2, 0x30
+    addi    t0, t0, -1
+    sb      t2, 0(t0)
+    bnez    a0, 1b
+    mv      a0, t0
+    addi    a1, sp, 32
+    sub     a1, a1, t0
+    call    app_line_text
+    UNFRAME 32
+END_FUNCTION app_line_u64
+
+/* L1: the hex digits of the a1 bytes at a0 join the log line. Locals: a0, a1, then 2 digits. */
+LOCAL_FUNCTION app_line_hex
+    FRAME 32
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+1:  ld      a0, 0(sp)
+    ld      a1, 8(sp)
+    beqz    a1, 2f
+    lbu     t0, 0(a0)
+    addi    a0, a0, 1
+    addi    a1, a1, -1
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+    ADDRESS t1, app_hex_digits
+    srli    t2, t0, 4
+    add     t2, t1, t2
+    lbu     t2, 0(t2)
+    sb      t2, 16(sp)
+    andi    t2, t0, 15
+    add     t2, t1, t2
+    lbu     t2, 0(t2)
+    sb      t2, 17(sp)
+    addi    a0, sp, 16
+    li      a1, 2
+    call    app_line_text
+    j       1b
+2:  UNFRAME 32
+END_FUNCTION app_line_hex
+
+/* L1: the log line and an LF go to stream a0: 1 the standard output, 2 the standard error. */
+LOCAL_FUNCTION app_line_end
+    FRAME 16
+    STQ     a0, s1, APP_STREAM
+    li      t0, 10
+    sb      t0, 0(sp)
+    mv      a0, sp
+    li      a1, 1
+    call    app_line_text
+    ADDQ    a0, s1, APP_STREAM
+    ADDQ    a1, s1, APP_LINE
+    CALL_GLOBAL lantern_shell_write
+    UNFRAME 16
+END_FUNCTION app_line_end
+
+/* L1: the path of the a1 bytes of the name at a0 in the network directory: a ByteList at APP_PATH. s6 the ByteList. */
+LOCAL_FUNCTION app_path
+    ENTER 0
+    mv      s2, a0
+    mv      s3, a1
+    LDQ     s4, s1, (APP_OPTIONS + AppOptions_network_dir)
+    LDQ     s5, s1, (APP_OPTIONS + AppOptions_network_dir + 8)
+    add     t0, s5, s3                      # the directory, /, the name: too long reads as too long
+    addi    t0, t0, 1
+    ADDQ    s6, s1, APP_PATH
+    li      t1, APP_PATH_MAX
+    bgtu    t0, t1, 1f
+    sd      t0, 16(s6)
+    ld      t1, APP_ARGS(s1)
+    add     a1, t1, s4
+    addi    a0, s6, 24
+    mv      a2, s5
+    call    lantern_copy
+    addi    a0, s6, 24
+    add     a0, a0, s5
+    li      t0, 0x2f                        # /
+    sb      t0, 0(a0)
+    addi    a0, a0, 1
+    mv      a1, s2
+    mv      a2, s3
+    call    lantern_copy
+    LEAVE 0
+1:  li      t0, (APP_PATH_MAX + 1)          # a count past the room: the shell gives its error
+    sd      t0, 16(s6)
+    LEAVE 0
+END_FUNCTION app_path
+
+/* L1: the path of the log line: the bytes of APP_PATH, as far as they fit. */
+LOCAL_FUNCTION app_line_path
+    FRAME 0
+    ADDQ    t0, s1, APP_PATH
+    addi    a0, t0, 24
+    ld      a1, 16(t0)
+    li      t1, APP_PATH_MAX
+    bleu    a1, t1, 1f
+    mv      a1, t1
+1:  call    app_line_text
+    UNFRAME 0
+END_FUNCTION app_line_path
+
+/* L1: the file at APP_PATH, read into APP_FILE: a0 = 0, or 2 after a line on the standard error. */
+LOCAL_FUNCTION app_read
+    FRAME 0
+    ADDQ    a0, s1, APP_PATH
+    ADDQ    a1, s1, APP_FILE
+    CALL_GLOBAL lantern_shell_read_file
+    LDQ     t0, s1, APP_FILE
+    beqz    t0, 1f
+    call    app_line_start                  # cannot read <path>: error <n>
+    ADDRESS a0, app_m_read
+    li      a1, app_m_read_len
+    call    app_line_text
+    call    app_line_path
+    ADDRESS a0, app_m_error
+    li      a1, app_m_error_len
+    call    app_line_text
+    LDQ     a0, s1, APP_FILE
+    call    app_line_u64
+    li      a0, 2
+    call    app_line_end
+    li      a0, 2
+    UNFRAME 0
+1:  li      a0, 0
+    UNFRAME 0
+END_FUNCTION app_read
+
+/* L1: the memory of APP_FILE goes back. */
+LOCAL_FUNCTION app_file_free
+    FRAME 16
+    LDQ     t0, s1, (APP_FILE + 8)
+    beqz    t0, 1f
+    ADDQ    a0, s1, (APP_FILE + 8)
+    ADDQ    a1, s1, (APP_FILE + 24)
+    CALL_GLOBAL lantern_shell_unmap
+    STQ     zero, s1, (APP_FILE + 8)
+1:  UNFRAME 16
+END_FUNCTION app_file_free
+
+/* L1: a line "<a1 bytes at a0>: status <a2>" on the standard error, then a0 = 2. Locals: a0-a2. */
+LOCAL_FUNCTION app_fail_status
+    FRAME 32
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+    sd      a2, 16(sp)
+    call    app_line_start
+    ld      a0, 0(sp)
+    ld      a1, 8(sp)
+    call    app_line_text
+    ADDRESS a0, app_m_status
+    li      a1, app_m_status_len
+    call    app_line_text
+    ld      a0, 16(sp)
+    call    app_line_u64
+    li      a0, 2
+    call    app_line_end
+    li      a0, 2
+    UNFRAME 32
+END_FUNCTION app_fail_status
+
+/* L1: a0 = 2 after a line "lantern: no memory" on the standard error. */
+LOCAL_FUNCTION app_no_memory
+    FRAME 0
+    call    app_line_start
+    ADDRESS a0, app_m_memory
+    li      a1, app_m_memory_len
+    call    app_line_text
+    li      a0, 2
+    call    app_line_end
+    li      a0, 2
+    UNFRAME 0
+END_FUNCTION app_no_memory
+
+/*
+ * L2: the start of docs/reference/app.md: the config, the anchor of genesis.ssz, the store, the
+ * node and the Seen: a0 = 0, or 2 after a line on the standard error. s2 a ByteList, s3 the
+ * file's size, s4 a size, s5 a size, s6 the tries. Locals: L a line number or a size.
+ */
+LOCAL_FUNCTION app_start
+    ENTER 16
+    ADDRESS a0, app_builtin_config          # the config: the pinned config of the preset, then the network's
+    ADDQ    a1, s1, APP_CONFIG
+    addi    a2, sp, L
+    CALL_GLOBAL lantern_config_parse
+    ADDRESS a0, app_config_name
+    li      a1, app_config_name_len
+    call    app_path
+    call    app_read
+    bnez    a0, 99f
+    LDQ     a0, s1, (APP_FILE + 8)
+    ADDQ    a1, s1, APP_CONFIG
+    addi    a2, sp, L
+    CALL_GLOBAL lantern_config_parse
+    mv      s2, a0
+    call    app_file_free
+    beqz    s2, 1f
+    call    app_line_start                  # <path>: faulty line <n>
+    call    app_line_path
+    ADDRESS a0, app_m_line
+    li      a1, app_m_line_len
+    call    app_line_text
+    ld      a0, L(sp)
+    call    app_line_u64
+    j       98f
+1:  ADDRESS a0, app_genesis_name            # genesis.ssz: the fork of its slot
+    li      a1, app_genesis_name_len
+    call    app_path
+    call    app_read
+    bnez    a0, 99f
+    LDQ     s2, s1, (APP_FILE + 8)
+    LDQ     s3, s1, (APP_FILE + 16)
+    li      t0, (40 + 8)
+    bgeu    s3, t0, 2f
+    call    app_line_start
+    call    app_line_path
+    ADDRESS a0, app_m_short
+    li      a1, app_m_short_len
+    call    app_line_text
+    j       98f
+2:  ld      a0, (24 + 40)(s2)               # BeaconState.slot
+    ADDQ    a1, s1, APP_CONFIG
+    call    app_fork
+    STQ     a0, s1, APP_FORK
+    ADDQ    a0, s1, APP_STATE_ROOM
+    ADDRESS a1, app_state_room
+    li      a2, 64
+    call    lantern_copy
+    slli    s4, s3, 1                       # the state: 3 times the file and 16 MiB; scratch: 2 times and 64 MiB
+    add     s4, s4, s3
+    li      t0, (1 << 24)
+    add     s4, s4, t0
+    slli    s5, s3, 1
+    li      t0, (1 << 26)
+    add     s5, s5, t0
+    li      s6, 0
+3:  li      a0, APP_STATE
+    mv      a1, s4
+    call    app_alloc
+    beqz    a0, 97f
+    li      a0, APP_SCRATCH
+    mv      a1, s5
+    call    app_alloc
+    beqz    a0, 97f
+    li      a0, APP_BLOCK
+    li      a1, APP_BLOCK_BYTES
+    call    app_alloc
+    beqz    a0, 97f
+    mv      a0, s2
+    ADDQ    a1, s1, APP_STATE_ROOM
+    LDQ     a2, s1, APP_SCRATCH
+    LDQ     a3, s1, APP_STATE
+    LDQ     a4, s1, APP_BLOCK
+    LDQ     t6, s1, APP_FORK
+    FORK_CALL node_anchor
+    beqz    a0, 4f
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    bne     a0, t0, 96f
+    li      a0, APP_STATE                   # more room, a few times
+    call    app_unmap
+    li      a0, APP_SCRATCH
+    call    app_unmap
+    li      a0, APP_BLOCK
+    call    app_unmap
+    slli    s4, s4, 1
+    slli    s5, s5, 1
+    addi    s6, s6, 1
+    li      t0, APP_TRIES
+    bltu    s6, t0, 3b
+    li      a0, LANTERN_BUFFER_TOO_SMALL
+96: mv      a2, a0                          # genesis.ssz: status <n>
+    ADDRESS a0, app_genesis_name
+    li      a1, app_genesis_name_len
+    call    app_fail_status
+    j       99f
+4:  call    app_file_free
+    li      t0, 121                         # the store: nodes, and validators below the file's bytes / 121
+    divu    t1, s3, t0
+    li      t0, 4096
+    add     t1, t1, t0
+    STQ     t0, s1, APP_STORE_ROOM
+    STQ     t1, s1, (APP_STORE_ROOM + 8)
+    li      s6, 0
+5:  ADDQ    a0, s1, APP_STORE_ROOM
+    addi    a1, sp, L
+    CALL_GLOBAL lantern_store_size
+    li      a0, APP_STORE
+    ld      a1, L(sp)
+    call    app_alloc
+    beqz    a0, 97f
+    LDQ     a0, s1, APP_STATE
+    LDQ     a1, s1, APP_BLOCK
+    ADDQ    a2, s1, APP_CONFIG
+    ADDQ    a3, s1, APP_STORE_ROOM
+    LDQ     a4, s1, APP_SCRATCH
+    LDQ     a5, s1, APP_STORE
+    LDQ     t6, s1, APP_FORK
+    FORK_CALL get_forkchoice_store
+    beqz    a0, 6f
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    bne     a0, t0, 95f
+    li      a0, APP_STORE
+    call    app_unmap
+    LDQ     t0, s1, APP_STORE_ROOM
+    LDQ     t1, s1, (APP_STORE_ROOM + 8)
+    slli    t0, t0, 1
+    slli    t1, t1, 1
+    STQ     t0, s1, APP_STORE_ROOM
+    STQ     t1, s1, (APP_STORE_ROOM + 8)
+    addi    s6, s6, 1
+    li      t0, APP_TRIES
+    bltu    s6, t0, 5b
+    li      a0, LANTERN_BUFFER_TOO_SMALL
+95: mv      a2, a0                          # the store: status <n>
+    ADDRESS a0, app_m_store
+    li      a1, app_m_store_len
+    call    app_fail_status
+    j       99f
+6:  LDQ     t0, s1, APP_STORE               # the node's anchor: the store's node 0, the state's root
+    LDQ     t1, t0, Store_blocks
+    add     a1, t0, t1
+    ADDQ    a0, s1, APP_ANCHOR
+    li      a2, 32
+    call    lantern_copy
+    LDQ     t0, s1, APP_STORE
+    LDQ     t1, t0, Store_blocks
+    add     t1, t0, t1
+    LDQ     t2, t1, BlockNode_slot
+    STQ     t2, s1, (APP_ANCHOR + 32)
+    ADDQ    a0, s1, (APP_ANCHOR + 40)
+    LDQ     a1, s1, APP_STATE
+    ADDQ    a1, a1, NODE_STATE_GVR
+    li      a2, 32
+    call    lantern_copy
+    LDQ     t0, s1, APP_FLAGS               # the shell runs discv5 for the node
+    ori     t0, t0, NODE_FLAG_DISCV5
+    STQ     t0, s1, APP_FLAGS
+    call    app_engine_conf                 # the execution engine
+    bnez    a0, 99f
+    ADDQ    a0, s1, APP_NODE_ROOM           # the node
+    ADDRESS a1, app_node_room
+    li      a2, 80
+    call    lantern_copy
+    LDQ     t0, s1, (APP_OPTIONS + AppOptions_target_peers)
+    STQ     t0, s1, (APP_NODE_ROOM + NodeRoom_peers)
+    ADDQ    a0, s1, APP_NODE_ROOM
+    addi    a1, sp, L
+    CALL_GLOBAL lantern_node_size
+    bnez    a0, 94f
+    li      a0, APP_NODE
+    ld      a1, L(sp)
+    call    app_alloc
+    beqz    a0, 97f
+    ADDQ    a0, s1, APP_NODE_ROOM
+    ADDQ    a1, s1, APP_CONFIG
+    ADDQ    a2, s1, APP_ANCHOR
+    ADDQ    a3, s1, APP_FLAGS
+    LDQ     a4, s1, APP_NODE
+    CALL_GLOBAL lantern_node_init
+    bnez    a0, 94f
+    ADDQ    a0, s1, APP_SEEN_ROOM           # the Seen
+    ADDRESS a1, app_seen_room
+    li      a2, 32
+    call    lantern_copy
+    ADDQ    a0, s1, APP_SEEN_ROOM
+    addi    a1, sp, L
+    CALL_GLOBAL lantern_seen_size
+    li      a0, APP_SEEN
+    ld      a1, L(sp)
+    call    app_alloc
+    beqz    a0, 97f
+    ADDQ    a0, s1, APP_SEEN_ROOM
+    LDQ     a1, s1, APP_SEEN
+    CALL_GLOBAL lantern_seen_init
+    bnez    a0, 94f
+    li      a0, (APP_BUF_ENTRY * APP_BUFS_CAP)  # BufferId 1: the anchor state
+    call    app_map
+    beqz    a0, 97f
+    STQ     a0, s1, APP_BUFS
+    li      t0, 1
+    sd      t0, 0(a0)
+    LDQ     t1, s1, APP_STATE
+    sd      t1, 8(a0)
+    LDQ     t1, s1, (APP_STATE + 8)
+    sd      t1, 16(a0)
+    STQ     t0, s1, (APP_BUFS + 8)
+    li      t1, APP_BUFS_CAP
+    STQ     t1, s1, (APP_BUFS + 16)
+    li      a0, APP_ACTIONS                 # the queues of a step
+    li      a1, APP_QUEUE_BYTES
+    call    app_alloc
+    beqz    a0, 97f
+    li      a0, APP_EVENTS
+    li      a1, APP_QUEUE_BYTES
+    call    app_alloc
+    beqz    a0, 97f
+    li      t0, 24
+    sd      t0, 8(a0)
+    sd      zero, 16(a0)
+    li      a0, APP_WORK_EVENT
+    li      a1, APP_QUEUE_BYTES
+    call    app_alloc
+    beqz    a0, 97f
+    call    app_line_start                  # started at slot <s>, fork <f>, head 0x<root>
+    ADDRESS a0, app_m_started
+    li      a1, app_m_started_len
+    call    app_line_text
+    LDQ     a0, s1, (APP_ANCHOR + 32)
+    call    app_line_u64
+    ADDRESS a0, app_m_fork
+    li      a1, app_m_fork_len
+    call    app_line_text
+    LDQ     a0, s1, APP_FORK
+    call    app_line_u64
+    ADDRESS a0, app_m_head
+    li      a1, app_m_head_len
+    call    app_line_text
+    ADDQ    a0, s1, APP_ANCHOR
+    li      a1, 32
+    call    app_line_hex
+    li      a0, 1
+    call    app_line_end
+    li      a0, 0
+    LEAVE 16
+94: mv      a2, a0                          # the node: status <n>
+    ADDRESS a0, app_m_node
+    li      a1, app_m_node_len
+    call    app_fail_status
+    j       99f
+97: call    app_no_memory
+    j       99f
+98: li      a0, 2
+    call    app_line_end
+99: li      a0, 2
+    LEAVE 16
+END_FUNCTION app_start
+
+/* L0: a0 = the BufferId table entry of the id a0, or 0. Uses t0-t2, a7. */
+LOCAL_FUNCTION app_buf_find
+    UNWIND_END_PROLOGUE
+    LDQ     t0, s1, APP_BUFS
+    LDQ     t1, s1, (APP_BUFS + 8)
+1:  beqz    t1, 2f
+    ld      t2, 0(t0)
+    beq     t2, a0, 3f
+    addi    t0, t0, APP_BUF_ENTRY
+    addi    t1, t1, -1
+    j       1b
+2:  li      a0, 0
+    ret
+3:  mv      a0, t0
+    ret
+END_FUNCTION app_buf_find
+
+/* L1: a table entry of the id a0 for the memory a1 of a2 bytes: a0 = 0, or 1 for id 0, an id in use or a full table. */
+LOCAL_FUNCTION app_buf_add
+    FRAME 32
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+    sd      a2, 16(sp)
+    beqz    a0, 9f
+    call    app_buf_find
+    bnez    a0, 9f
+    LDQ     t0, s1, APP_BUFS
+    LDQ     t1, s1, (APP_BUFS + 8)
+    LDQ     t2, s1, (APP_BUFS + 16)
+    bgeu    t1, t2, 9f
+    li      t2, APP_BUF_ENTRY
+    mul     t2, t1, t2
+    add     t0, t0, t2
+    ld      t2, 0(sp)
+    sd      t2, 0(t0)
+    ld      t2, 8(sp)
+    sd      t2, 8(t0)
+    ld      t2, 16(sp)
+    sd      t2, 16(t0)
+    addi    t1, t1, 1
+    STQ     t1, s1, (APP_BUFS + 8)
+    li      a0, 0
+    UNFRAME 32
+9:  li      a0, 1
+    UNFRAME 32
+END_FUNCTION app_buf_add
+
+/* L1: the buffer of the id a0 goes back to the OS, and the last entry takes its place. */
+LOCAL_FUNCTION app_buf_drop
+    FRAME 16
+    call    app_buf_find
+    beqz    a0, 9f
+    sd      a0, 0(sp)
+    addi    a1, a0, 16
+    addi    a0, a0, 8
+    CALL_GLOBAL lantern_shell_unmap
+    ld      t0, 0(sp)                       # the entry
+    LDQ     t1, s1, APP_BUFS
+    LDQ     t2, s1, (APP_BUFS + 8)
+    addi    t2, t2, -1
+    STQ     t2, s1, (APP_BUFS + 8)
+    li      t3, APP_BUF_ENTRY
+    mul     t3, t2, t3
+    add     t1, t1, t3                      # the last entry
+    ld      t3, 0(t1)
+    sd      t3, 0(t0)
+    ld      t3, 8(t1)
+    sd      t3, 8(t0)
+    ld      t3, 16(t1)
+    sd      t3, 16(t0)
+9:  UNFRAME 16
+END_FUNCTION app_buf_drop
+
+/* L1: a0 = new memory with a copy of the a1 bytes at a0, or 0. s2 the source, s3 the size, s4 the copy. */
+LOCAL_FUNCTION app_dup
+    ENTER 0
+    mv      s2, a0
+    mv      s3, a1
+    mv      a0, a1
+    call    app_map
+    beqz    a0, 9f
+    mv      s4, a0
+    mv      a1, s2
+    mv      a2, s3
+    call    lantern_copy
+    mv      a0, s4
+9:  LEAVE 0
+END_FUNCTION app_dup
+
+/*
+ * L1: the a1 bytes of the event at a0 join the events of the next step, which grow when full:
+ * a0 = 0, or 1 with no memory. s2 the event, s3 its size, s4 the events, s5 a new size, s6 new memory.
+ */
+LOCAL_FUNCTION app_event_put
+    ENTER 0
+    mv      s2, a0
+    mv      s3, a1
+1:  LDQ     s4, s1, APP_EVENTS
+    ld      t0, 0(s4)
+    ld      t1, 16(s4)
+    add     t2, t1, s3
+    addi    t2, t2, 24
+    bleu    t2, t0, 2f
+    slli    s5, t0, 1                       # twice the room, and the event
+    add     s5, s5, s3
+    mv      a0, s5
+    call    app_map
+    beqz    a0, 9f
+    mv      s6, a0
+    mv      a1, s4
+    ld      a2, 16(s4)
+    addi    a2, a2, 24
+    call    lantern_copy
+    sd      s5, 0(s6)
+    li      a0, APP_EVENTS
+    call    app_unmap
+    STQ     s6, s1, APP_EVENTS
+    STQ     s5, s1, (APP_EVENTS + 8)
+    j       1b
+2:  addi    a0, s4, 24
+    add     a0, a0, t1
+    mv      a1, s2
+    mv      a2, s3
+    call    lantern_copy
+    LDQ     s4, s1, APP_EVENTS
+    ld      t1, 16(s4)
+    add     t1, t1, s3
+    sd      t1, 16(s4)
+    li      a0, 0
+    LEAVE 0
+9:  li      a0, 1
+    LEAVE 0
+END_FUNCTION app_event_put
+
+/*
+ * L1: the node (a0 = 0), the store (1) or the Seen (2) moves to new memory, with each field of its
+ * room doubled: a0 = 0, or 1. s2 the kind, s3 the pair, s4 the room, s5 the room's fields,
+ * s6 the new memory. Locals: L a size, L+8 an address.
+ */
+LOCAL_FUNCTION app_grow
+    ENTER 16
+    mv      s2, a0
+    li      t0, APP_NODE
+    li      t1, APP_NODE_ROOM
+    li      s5, 10
+    li      t2, 1
+    bne     s2, t2, 1f
+    li      t0, APP_STORE
+    li      t1, APP_STORE_ROOM
+    li      s5, 2
+1:  li      t2, 2
+    bne     s2, t2, 2f
+    li      t0, APP_SEEN
+    li      t1, APP_SEEN_ROOM
+    li      s5, 4
+2:  add     s3, s1, t0
+    add     s4, s1, t1
+    li      t0, 0
+3:  bgeu    t0, s5, 4f
+    slli    t1, t0, 3
+    add     t1, s4, t1
+    ld      t2, 0(t1)
+    slli    t2, t2, 1
+    sd      t2, 0(t1)
+    addi    t0, t0, 1
+    j       3b
+4:  mv      a0, s4                          # its size
+    addi    a1, sp, L
+    bnez    s2, 41f
+    CALL_GLOBAL lantern_node_size
+    j       43f
+41: li      t0, 1
+    bne     s2, t0, 42f
+    CALL_GLOBAL lantern_store_size
+    j       43f
+42: CALL_GLOBAL lantern_seen_size
+43: bnez    a0, 9f
+    ld      a0, L(sp)
+    call    app_map
+    beqz    a0, 9f
+    mv      s6, a0
+    ld      t0, L(sp)
+    sd      t0, 0(s6)
+    ld      a0, 0(s3)                       # the copy
+    mv      a1, s4
+    mv      a2, s6
+    bnez    s2, 51f
+    CALL_GLOBAL lantern_node_copy
+    j       53f
+51: li      t0, 1
+    bne     s2, t0, 52f
+    CALL_GLOBAL lantern_store_copy
+    j       53f
+52: CALL_GLOBAL lantern_seen_copy
+53: bnez    a0, 8f
+    sub     a0, s3, s1
+    call    app_unmap
+    ld      t0, L(sp)
+    sd      s6, 0(s3)
+    sd      t0, 8(s3)
+    li      a0, 0
+    LEAVE 16
+8:  sd      s6, (L + 8)(sp)                 # the copy failed: its memory goes back
+    addi    a0, sp, (L + 8)
+    addi    a1, sp, L
+    CALL_GLOBAL lantern_shell_unmap
+9:  li      a0, 1
+    LEAVE 16
+END_FUNCTION app_grow
+
+/*
+ * L1: the state of the BufferId table entry a0 moves to new memory with twice the StateRoom of the
+ * App: a0 = 0, or 1. s2 the entry, s3 the fork, s4 the new memory. Locals: L a size.
+ */
+LOCAL_FUNCTION app_regrow
+    ENTER 16
+    mv      s2, a0
+    ADDQ    t0, s1, APP_STATE_ROOM
+    li      t1, 0
+1:  ld      t2, 0(t0)
+    slli    t2, t2, 1
+    sd      t2, 0(t0)
+    addi    t0, t0, 8
+    addi    t1, t1, 1
+    li      t2, 8
+    bltu    t1, t2, 1b
+    ld      t0, 8(s2)                       # the fork of the state's slot
+    LDQ     a0, t0, NODE_STATE_SLOT
+    ADDQ    a1, s1, APP_CONFIG
+    call    app_fork
+    mv      s3, a0
+    ld      a0, 8(s2)
+    ADDQ    a1, s1, APP_STATE_ROOM
+    addi    a2, sp, L
+    mv      t6, s3
+    FORK_CALL beacon_state_copy_size
+    ld      a0, L(sp)
+    call    app_map
+    beqz    a0, 9f
+    mv      s4, a0
+    ld      t0, L(sp)
+    sd      t0, 0(s4)
+    ld      a0, 8(s2)
+    ADDQ    a1, s1, APP_STATE_ROOM
+    mv      a2, s4
+    mv      t6, s3
+    FORK_CALL beacon_state_copy
+    bnez    a0, 9f
+    addi    a0, s2, 8
+    addi    a1, s2, 16
+    CALL_GLOBAL lantern_shell_unmap
+    ld      t0, L(sp)
+    sd      s4, 8(s2)
+    sd      t0, 16(s2)
+    li      a0, 0
+    LEAVE 16
+9:  li      a0, 1
+    LEAVE 16
+END_FUNCTION app_regrow
+
+/*
+ * L2: the WORK action a0, by lantern_node_run with its buffers, again with more room while it asks
+ * for it; then its WORK_DONE event joins the next step's. s2 the action, s3-s6 the entries of
+ * state_a, state_b, state_c and data (or 0), s7 the tries, s8 the kind, s9 a size.
+ */
+LOCAL_FUNCTION app_work
+    ENTER 0
+    mv      s2, a0
+    LDQ     s8, s2, NodeAction_work_kind
+    li      s7, 0
+    LDQ     a0, s2, NodeAction_state_a
+    call    app_work_entry
+    mv      s3, a0
+    LDQ     a0, s2, NodeAction_state_b
+    call    app_work_entry
+    mv      s4, a0
+    LDQ     a0, s2, NodeAction_state_c
+    call    app_work_entry
+    mv      s5, a0
+    LDQ     a0, s2, NodeAction_data
+    call    app_work_entry
+    mv      s6, a0
+    li      t0, -1                          # an id with no buffer
+    beq     s3, t0, 90f
+    beq     s4, t0, 90f
+    beq     s5, t0, 90f
+    beq     s6, t0, 90f
+1:  LDQ     t0, s1, APP_WORK_EVENT          # the event's room
+    LDQ     t1, s1, (APP_WORK_EVENT + 8)
+    sd      t1, 0(t0)
+    addi    sp, sp, -32                     # the ninth to eleventh arguments: settings, scratch, event
+    sd      zero, 0(sp)
+    LDQ     t0, s1, APP_SCRATCH
+    sd      t0, 8(sp)
+    LDQ     t0, s1, APP_WORK_EVENT
+    sd      t0, 16(sp)
+    LDQ     a0, s1, APP_NODE
+    LDQ     a1, s1, APP_STORE
+    LDQ     a2, s1, APP_SEEN
+    mv      a3, s2
+    li      a4, 0
+    beqz    s3, 11f
+    ld      a4, 8(s3)
+11: li      a5, 0
+    beqz    s4, 12f
+    ld      a5, 8(s4)
+12: li      a6, 0
+    beqz    s5, 13f
+    ld      a6, 8(s5)
+13: li      a7, 0                           # last: LDQ uses a7
+    beqz    s6, 14f
+    ld      a7, 8(s6)
+14: CALL_GLOBAL lantern_node_run
+    addi    sp, sp, 32
+    beqz    a0, 8f
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    bne     a0, t0, 91f
+    addi    s7, s7, 1                       # more room: as the runner's shell
+    li      t0, APP_WORK_TRIES
+    bgeu    s7, t0, 91f
+    li      t0, NODE_WORK_SERVE             # SERVE, NEW_PAYLOAD, FORKCHOICE: a larger event
+    beq     s8, t0, 2f
+    li      t0, NODE_WORK_NEW_PAYLOAD
+    beq     s8, t0, 2f
+    li      t0, NODE_WORK_FORKCHOICE
+    beq     s8, t0, 2f
+    li      t0, NODE_WORK_GOSSIP            # GOSSIP: the Seen, and the proposer state
+    beq     s8, t0, 3f
+    li      t0, NODE_WORK_TARGET_STATE      # TARGET_STATE, and IMPORT_BLOCK with store room: state_a
+    beq     s8, t0, 4f
+    li      t0, NODE_WORK_IMPORT_BLOCK
+    bne     s8, t0, 5f
+    LDQ     t0, s1, APP_STORE
+    LDQ     t0, t0, (Store_blocks + 8)
+    LDQ     t1, s1, (APP_STORE_ROOM + StoreRoom_nodes)
+    bltu    t0, t1, 4f
+5:  li      a0, 1                           # else the store
+    call    app_grow
+    bnez    a0, 91f
+    j       1b
+2:  LDQ     t0, s1, (APP_WORK_EVENT + 8)
+    slli    s9, t0, 2
+    li      a0, APP_WORK_EVENT
+    call    app_unmap
+    li      a0, APP_WORK_EVENT
+    mv      a1, s9
+    call    app_alloc
+    beqz    a0, 91f
+    j       1b
+3:  li      a0, 2                           # the Seen
+    call    app_grow
+    bnez    a0, 91f
+    beqz    s4, 1b
+    mv      a0, s4
+    call    app_regrow
+    bnez    a0, 91f
+    j       1b
+4:  beqz    s3, 91f
+    mv      a0, s3
+    call    app_regrow
+    bnez    a0, 91f
+    j       1b
+8:  LDQ     a0, s1, APP_WORK_EVENT          # the WORK_DONE event
+    ld      a1, 0(a0)
+    call    app_event_put
+    LEAVE 0
+90: ADDRESS a0, app_m_buffer                # an action's BufferId: status 0
+    li      a1, app_m_buffer_len
+    li      a2, 0
+    call    app_fail_status
+    LEAVE 0
+91: mv      a2, a0                          # a work: status <n>
+    ADDRESS a0, app_m_work
+    li      a1, app_m_work_len
+    call    app_fail_status
+    LEAVE 0
+END_FUNCTION app_work
+
+/* L1: a0 = the table entry of the BufferId a0, 0 for id 0, or 2^64 - 1 when no entry has it. */
+LOCAL_FUNCTION app_work_entry
+    FRAME 0
+    beqz    a0, 9f
+    call    app_buf_find
+    bnez    a0, 9f
+    li      a0, -1
+9:  UNFRAME 0
+END_FUNCTION app_work_entry
+
+/*
+ * L2: the actions of the step, in order: BYTES_PUT, STATE_COPY, STATE_FREE and BYTES_FREE on the
+ * BufferId table, WORK by app_work. s2 the next action, s3 the end, s4 its size, s5 an entry.
+ */
+LOCAL_FUNCTION app_actions
+    ENTER 0
+    LDQ     s2, s1, APP_ACTIONS
+    ld      s3, 16(s2)
+    addi    s2, s2, 24
+    add     s3, s2, s3
+1:  bgeu    s2, s3, 9f
+    ld      s4, 0(s2)
+    ld      t0, 8(s2)
+    li      t1, NODE_ACT_BYTES_PUT
+    bne     t0, t1, 2f
+    addi    a0, s2, 24                      # BYTES_PUT: a copy of the ByteList
+    ld      a1, 24(s2)
+    call    app_dup
+    beqz    a0, 8f
+    mv      a1, a0
+    ld      a0, 16(s2)
+    ld      a2, 24(s2)
+    call    app_buf_add
+    j       8f
+2:  li      t1, NODE_ACT_STATE_COPY
+    bne     t0, t1, 3f
+    ld      a0, 16(s2)                      # STATE_COPY: a copy of the source buffer
+    call    app_buf_find
+    beqz    a0, 8f
+    mv      s5, a0
+    ld      a0, 8(s5)
+    ld      a1, 16(s5)
+    call    app_dup
+    beqz    a0, 8f
+    mv      a1, a0
+    ld      a0, 24(s2)
+    ld      a2, 16(s5)
+    call    app_buf_add
+    j       8f
+3:  li      t1, NODE_ACT_STATE_FREE
+    beq     t0, t1, 31f
+    li      t1, NODE_ACT_BYTES_FREE
+    bne     t0, t1, 4f
+31: ld      a0, 16(s2)                      # STATE_FREE, BYTES_FREE
+    call    app_buf_drop
+    j       8f
+4:  li      t1, NODE_ACT_WORK
+    bne     t0, t1, 5f
+    mv      a0, s2
+    call    app_work
+    j       8f
+5:  li      t1, NODE_ACT_ENGINE
+    bne     t0, t1, 6f
+    mv      a0, s2
+    call    app_engine_request
+    j       8f
+6:  li      t1, NODE_ACT_DISCV5
+    bne     t0, t1, 7f
+    ld      t2, (24 + 8)(s2)                # DISCV5: its events join discv5's
+    addi    a0, s2, 24
+    add     a0, a0, t2
+    ld      a1, (24 + 16)(s2)
+    call    app_dv_put
+    j       8f
+7:  li      t1, NODE_ACT_P2P_LIST
+    bne     t0, t1, 8f
+    LDQ     a0, s1, APP_SHELL               # P2P_LIST: the shell requests of libp2p
+    addi    a1, s2, 16
+    LDQ     a2, s1, APP_SHELL_EVENTS
+    CALL_GLOBAL libp2p_shell_perform
+8:  add     s2, s2, s4
+    j       1b
+9:  LEAVE 0
+END_FUNCTION app_actions
+
+/*
+ * L2: lantern_node_step with the events of the App and the libp2p state a0 and Tick a1 (both 0 with
+ * no network), again with a larger node and actions while it asks for them; then the accepted
+ * events leave the queue and the actions run. s2 p2p, s3 tick, s4 the tries, s5 a size.
+ */
+LOCAL_FUNCTION app_step
+    ENTER 0
+    mv      s2, a0
+    mv      s3, a1
+    li      s4, 0
+1:  LDQ     t0, s1, APP_ACTIONS
+    li      t1, 24
+    sd      t1, 8(t0)
+    sd      zero, 16(t0)
+    LDQ     a0, s1, APP_NODE
+    LDQ     a1, s1, APP_STORE
+    mv      a2, s2
+    mv      a3, s3
+    LDQ     a4, s1, APP_EVENTS
+    LDQ     a5, s1, APP_SCRATCH
+    LDQ     a6, s1, APP_ACTIONS
+    ADDQ    a7, s1, APP_RESULT
+    CALL_GLOBAL lantern_node_step
+    beqz    a0, 3f
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    bne     a0, t0, 2f
+    addi    s4, s4, 1
+    li      t0, APP_WORK_TRIES
+    bgeu    s4, t0, 2f
+    li      a0, 0                           # a larger node, and twice the actions
+    call    app_grow
+    bnez    a0, 2f
+    LDQ     s5, s1, (APP_ACTIONS + 8)
+    slli    s5, s5, 1
+    li      a0, APP_ACTIONS
+    call    app_unmap
+    li      a0, APP_ACTIONS
+    mv      a1, s5
+    call    app_alloc
+    beqz    a0, 2f
+    j       1b
+2:  mv      a2, a0                          # a node step: status <n>
+    ADDRESS a0, app_m_step
+    li      a1, app_m_step_len
+    call    app_fail_status
+    LEAVE 0
+3:  LDQ     t0, s1, APP_EVENTS              # the accepted events leave the queue
+    ld      t1, 16(t0)
+    addi    t2, t0, 24
+    li      t3, 0
+    LDQ     t4, s1, APP_RESULT
+4:  beqz    t4, 5f
+    bgeu    t3, t1, 5f
+    add     a3, t2, t3
+    ld      a3, 0(a3)
+    add     t3, t3, a3
+    addi    t4, t4, -1
+    j       4b
+5:  sub     a2, t1, t3
+    sd      a2, 16(t0)
+    mv      a0, t2
+    add     a1, t2, t3
+    call    lantern_copy
+    call    app_actions
+    LEAVE 0
+END_FUNCTION app_step
+
+
+/*
+ * L0: a0 = the bytes of the base64url text at a0 of a1 bytes (RFC 4648 section 5, with or without
+ * padding), written at a2, at most a3; or 2^64 - 1 for a byte of no digit or too many bytes. Uses t0-t5.
+ */
+LOCAL_FUNCTION app_base64url
+    UNWIND_END_PROLOGUE
+    li      t0, 0                           # the bits
+    li      t1, 0                           # their count
+    li      t2, 0                           # the bytes out
+1:  beqz    a1, 8f
+    lbu     t3, 0(a0)
+    addi    a0, a0, 1
+    addi    a1, a1, -1
+    li      t4, 0x3d                        # = ends the digits
+    beq     t3, t4, 8f
+    addi    t4, t3, -0x41                   # A to Z: 0 to 25
+    li      t5, 26
+    bltu    t4, t5, 2f
+    addi    t4, t3, -0x61                   # a to z: 26 to 51
+    bgeu    t4, t5, 11f
+    addi    t4, t4, 26
+    j       2f
+11: addi    t4, t3, -0x30                   # 0 to 9: 52 to 61
+    li      t5, 10
+    bgeu    t4, t5, 12f
+    addi    t4, t4, 52
+    j       2f
+12: li      t4, 62
+    li      t5, 0x2d                        # -
+    beq     t3, t5, 2f
+    li      t4, 63
+    li      t5, 0x5f                        # _
+    bne     t3, t5, 9f
+2:  slli    t0, t0, 6
+    or      t0, t0, t4
+    addi    t1, t1, 6
+    li      t5, 8
+    bltu    t1, t5, 1b
+    addi    t1, t1, -8
+    bgeu    t2, a3, 9f
+    srl     t4, t0, t1
+    add     t5, a2, t2
+    sb      t4, 0(t5)
+    addi    t2, t2, 1
+    li      t5, 1                           # only the bits not yet out stay
+    sll     t5, t5, t1
+    addi    t5, t5, -1
+    and     t0, t0, t5
+    j       1b
+8:  mv      a0, t2
+    ret
+9:  li      a0, -1
+    ret
+END_FUNCTION app_base64url
+
+/*
+ * L2: a NODE_EV_ENR event of each record of --boot-nodes, with commas between them; a line on
+ * the standard error for one that is not "enr:" and base64url. s2 the next byte, s3 the end, s4
+ * the record's start, s5 the record's number, s6 the event at APP_RECORD. Locals: L the record's length.
+ */
+LOCAL_FUNCTION app_boot_nodes
+    ENTER 16
+    ADDQ    s6, s1, APP_RECORD
+    ld      t0, APP_ARGS(s1)
+    LDQ     t1, s1, (APP_OPTIONS + AppOptions_boot_nodes)
+    LDQ     t2, s1, (APP_OPTIONS + AppOptions_boot_nodes + 8)
+    add     s2, t0, t1
+    add     s3, s2, t2
+    li      s5, 0
+1:  bgeu    s2, s3, 9f
+    mv      s4, s2                          # a record: to a comma or the end
+2:  bgeu    s2, s3, 3f
+    lbu     t0, 0(s2)
+    li      t1, 0x2c
+    beq     t0, t1, 3f
+    addi    s2, s2, 1
+    j       2b
+3:  sub     a1, s2, s4
+    addi    s2, s2, 1                       # past the comma
+    addi    s5, s5, 1
+    li      t0, 4
+    bltu    a1, t0, 7f
+    mv      a0, s4
+    sd      a1, L(sp)
+    li      a1, 4
+    ADDRESS a2, app_enr_prefix
+    li      a3, 4
+    call    app_name_is
+    beqz    a0, 7f
+    addi    a0, s4, 4                       # its bytes, after the event and ByteList headers
+    ld      a1, L(sp)
+    addi    a1, a1, -4
+    addi    a2, s6, 48
+    li      a3, APP_RECORD_MAX
+    call    app_base64url
+    li      t0, -1
+    beq     a0, t0, 7f
+    addi    t0, a0, (48 + 7)                # the event: size, NODE_EV_ENR, 0, then the ByteList
+    andi    t0, t0, -8
+    sd      t0, 0(s6)
+    li      t1, NODE_EV_ENR
+    sd      t1, 8(s6)
+    sd      zero, 16(s6)
+    addi    t1, t0, -24
+    sd      t1, 24(s6)
+    li      t1, 24
+    sd      t1, 32(s6)
+    sd      a0, 40(s6)
+    mv      a0, s6
+    mv      a1, t0
+    call    app_event_put
+    ld      t0, 40(s6)                      # and an ADD_NODE of discv5: size, kind, len, the record
+    addi    t1, t0, (DISCV5_EV_ADD_DATA + 7)
+    andi    t1, t1, -8
+    sd      t1, 24(s6)
+    li      t2, DISCV5_EVENT_ADD_NODE
+    sd      t2, 32(s6)
+    sd      t0, (24 + DISCV5_EV_ADD_LEN)(s6)
+    addi    a0, s6, 24
+    mv      a1, t1
+    call    app_dv_put
+    j       1b
+7:  call    app_line_start                  # boot node <n>: not an enr: record
+    ADDRESS a0, app_m_boot
+    li      a1, app_m_boot_len
+    call    app_line_text
+    mv      a0, s5
+    call    app_line_u64
+    ADDRESS a0, app_m_not_enr
+    li      a1, app_m_not_enr_len
+    call    app_line_text
+    li      a0, 2
+    call    app_line_end
+    j       1b
+9:  LEAVE 16
+END_FUNCTION app_boot_nodes
+
+/*
+ * L2: the network: a secp256k1 key, the libp2p state, the shell context with a TCP listener on
+ * --port, and the boot nodes: a0 = 0, or 2 after a line on the standard error. s2 the config,
+ * s3 the tries. Locals: L a size or a status, L+8 ShellParams, L+32 an Address, L+64 a ListenResult.
+ */
+LOCAL_FUNCTION app_net
+    ENTER 112
+    li      a0, APP_P2P_CONFIG              # the config: the template, then the protocols
+    li      a1, (LIBP2P_CFG_FIXED + 24 + APP_PROTOCOLS_MAX * LIBP2P_PROTO_SIZE)
+    call    app_alloc
+    beqz    a0, 97f
+    mv      s2, a0
+    ADDRESS a1, app_p2p_config
+    li      a2, LIBP2P_CFG_FIXED
+    call    lantern_copy
+    ADDQ    a0, s2, LIBP2P_CFG_FIXED
+    li      t0, (24 + APP_PROTOCOLS_MAX * LIBP2P_PROTO_SIZE)
+    sd      t0, 0(a0)
+    li      t0, 24
+    sd      t0, 8(a0)
+    sd      zero, 16(a0)
+    addi    a1, sp, L
+    CALL_GLOBAL lantern_node_protocols
+    bnez    a0, 96f
+    ld      t0, L(sp)
+    li      t1, (LIBP2P_CFG_FIXED + 24)
+    sd      t1, 208(s2)                     # protocols, protocols_count
+    sd      t0, 216(s2)
+    li      t2, LIBP2P_PROTO_SIZE
+    mul     t0, t0, t2
+    add     t0, t0, t1
+    sd      t0, 0(s2)
+    li      s3, 0
+1:  ADDQ    a0, s1, APP_TICK                # a key from fresh random bytes, below the order of the curve
+    CALL_GLOBAL libp2p_shell_clock
+    addi    a0, s2, 16
+    ADDQ    a1, s1, (APP_TICK + LIBP2P_TICK_ENTROPY)
+    li      a2, 32
+    call    lantern_copy
+    lbu     t0, 16(s2)
+    andi    t0, t0, 0x7f
+    sb      t0, 16(s2)
+    ADDQ    a0, s1, APP_KEY
+    addi    a1, s2, 16
+    li      a2, 32
+    call    lantern_copy
+    ADDQ    a0, s1, APP_TICK                # the DRBG's entropy, and the time
+    CALL_GLOBAL libp2p_shell_clock
+    addi    a0, s2, 48
+    ADDQ    a1, s1, (APP_TICK + LIBP2P_TICK_ENTROPY)
+    li      a2, 32
+    call    lantern_copy
+    LDQ     t0, s1, (APP_TICK + LIBP2P_TICK_NOW)
+    sd      t0, 80(s2)
+    mv      a0, s2                          # the libp2p state
+    addi    a1, sp, L
+    CALL_GLOBAL libp2p_state_size
+    bnez    a0, 96f
+    li      a0, APP_P2P
+    ld      a1, L(sp)
+    call    app_alloc
+    beqz    a0, 97f
+    mv      a1, a0
+    mv      a0, s2
+    CALL_GLOBAL libp2p_init
+    beqz    a0, 2f
+    li      t0, LIBP2P_INVALID_KEY
+    bne     a0, t0, 96f
+    li      a0, APP_P2P
+    call    app_unmap
+    addi    s3, s3, 1
+    li      t0, 4
+    bltu    s3, t0, 1b
+    li      a0, LIBP2P_INVALID_KEY
+    j       96f
+2:  ld      t0, 88(s2)                      # the shell: a slot for each connection, and one for the execution engine
+    addi    t0, t0, 1
+    sd      t0, (L + 8)(sp)
+    ld      t0, 160(s2)
+    sd      t0, (L + 16)(sp)
+    addi    a0, sp, (L + 8)
+    addi    a1, sp, L
+    CALL_GLOBAL libp2p_shell_size
+    bnez    a0, 96f
+    li      a0, APP_SHELL
+    ld      a1, L(sp)
+    call    app_alloc
+    beqz    a0, 97f
+    mv      a1, a0
+    addi    a0, sp, (L + 8)
+    CALL_GLOBAL libp2p_shell_init
+    bnez    a0, 96f
+    li      a0, APP_SHELL_EVENTS
+    li      a1, APP_SHELL_EVENT_BYTES
+    call    app_alloc
+    beqz    a0, 97f
+    li      t0, 24
+    sd      t0, 8(a0)
+    sd      zero, 16(a0)
+    ld      a1, 160(s2)                     # the engine's action: a SEND of up to send_window bytes
+    addi    a1, a1, (24 + LIBP2P_ACT_SEND_DATA + 8)
+    li      a0, APP_ENGINE_ACT
+    call    app_alloc
+    beqz    a0, 97f
+    li      t0, 24
+    sd      t0, 8(a0)
+    sd      zero, 16(a0)
+    li      t0, 4                           # listen: TCP --port on every IPv4 address
+    sd      t0, (L + 32)(sp)
+    LDQ     t0, s1, (APP_OPTIONS + AppOptions_port)
+    sd      t0, (L + 40)(sp)
+    sd      zero, (L + 48)(sp)
+    sd      zero, (L + 56)(sp)
+    LDQ     a0, s1, APP_SHELL
+    addi    a1, sp, (L + 32)
+    addi    a2, sp, (L + 64)
+    CALL_GLOBAL libp2p_shell_listen
+    ld      t0, (L + 64)(sp)
+    beqz    t0, 3f
+    call    app_line_start                  # listen on TCP port <p>: error <n>
+    ADDRESS a0, app_m_listen
+    li      a1, app_m_listen_len
+    call    app_line_text
+    LDQ     a0, s1, (APP_OPTIONS + AppOptions_port)
+    call    app_line_u64
+    ADDRESS a0, app_m_error
+    li      a1, app_m_error_len
+    call    app_line_text
+    ld      a0, (L + 64)(sp)
+    call    app_line_u64
+    li      a0, 2
+    call    app_line_end
+    li      a0, 2
+    LEAVE 112
+3:  call    app_api_start
+    bnez    a0, 99f
+    call    app_dv_start
+    bnez    a0, 99f
+    call    app_boot_nodes
+    call    app_line_start                  # listening on TCP port <p>
+    ADDRESS a0, app_m_listening
+    li      a1, app_m_listening_len
+    call    app_line_text
+    LDQ     a0, s1, (APP_OPTIONS + AppOptions_port)
+    call    app_line_u64
+    li      a0, 1
+    call    app_line_end
+    li      a0, 0
+99: LEAVE 112
+96: mv      a2, a0                          # libp2p: status <n>
+    ADDRESS a0, app_m_p2p
+    li      a1, app_m_p2p_len
+    call    app_fail_status
+    LEAVE 112
+97: call    app_no_memory
+    LEAVE 112
+END_FUNCTION app_net
+
+/* L0: a0 = 0 and a1 = the u64 of the decimal digits a0 to a1, one or more; else a0 = 1. Uses t0-t3. */
+LOCAL_FUNCTION app_number
+    UNWIND_END_PROLOGUE
+    bgeu    a0, a1, 9f
+    li      t0, 0
+    li      t3, 10
+1:  bgeu    a0, a1, 8f
+    lbu     t1, 0(a0)
+    addi    a0, a0, 1
+    addi    t1, t1, -0x30
+    li      t2, 9
+    bgtu    t1, t2, 9f
+    mulhu   t2, t0, t3
+    bnez    t2, 9f
+    mul     t0, t0, t3
+    add     t2, t0, t1
+    bltu    t2, t0, 9f
+    mv      t0, t2
+    j       1b
+8:  mv      a1, t0
+    li      a0, 0
+    ret
+9:  li      a0, 1
+    ret
+END_FUNCTION app_number
+
+/* L0: a0 = 0 and a1 = the IPv4 address of the bytes a0 to a1, its 4 bytes in order in the low bytes; else a0 = 1. Uses t0-t6. */
+LOCAL_FUNCTION app_dotted
+    UNWIND_END_PROLOGUE
+    li      t0, 0                           # the address
+    li      t1, 0                           # the numbers
+    li      t2, 0                           # the shift of the next one
+1:  li      t3, 0                           # a number
+    li      t4, 0                           # its digits
+2:  bgeu    a0, a1, 3f
+    lbu     t5, 0(a0)
+    li      t6, 0x2e                        # .
+    beq     t5, t6, 3f
+    addi    t5, t5, -0x30
+    li      t6, 9
+    bgtu    t5, t6, 9f
+    addi    t4, t4, 1
+    li      t6, 3
+    bgtu    t4, t6, 9f
+    slli    t6, t3, 2
+    add     t3, t3, t6
+    slli    t3, t3, 1
+    add     t3, t3, t5
+    addi    a0, a0, 1
+    j       2b
+3:  beqz    t4, 9f
+    li      t6, 255
+    bgtu    t3, t6, 9f
+    sll     t3, t3, t2
+    or      t0, t0, t3
+    addi    t2, t2, 8
+    addi    t1, t1, 1
+    bgeu    a0, a1, 4f
+    addi    a0, a0, 1                       # past the dot, to the next number
+    li      t6, 4
+    bgeu    t1, t6, 9f
+    j       1b
+4:  li      t6, 4
+    bne     t1, t6, 9f
+    mv      a1, t0
+    li      a0, 0
+    ret
+9:  li      a0, 1
+    ret
+END_FUNCTION app_dotted
+
+/*
+ * L2: with --execution-endpoint, the engine: its Address, the anchor's engine_host and the
+ * jwt_secret of --jwt-secret, and NODE_FLAG_ENGINE: a0 = 0, or 2 after a line on the standard
+ * error. s2 the endpoint's bytes, s3 their count (then a digit), s4 the colon, s5 the secret's
+ * next byte, s6 its end.
+ */
+LOCAL_FUNCTION app_engine_conf
+    ENTER 0
+    LDQ     s3, s1, (APP_OPTIONS + AppOptions_execution + 8)
+    beqz    s3, 8f
+    LDQ     s2, s1, (APP_OPTIONS + AppOptions_execution)
+    ld      t0, APP_ARGS(s1)
+    add     s2, t0, s2
+    li      t0, NODE_ENGINE_HOST_MAX        # the Host of each request
+    bgtu    s3, t0, 90f
+    STQ     s3, s1, (APP_ANCHOR + NodeAnchor_engine_host_len)
+    ADDQ    a0, s1, (APP_ANCHOR + NodeAnchor_engine_host)
+    mv      a1, s2
+    mv      a2, s3
+    call    lantern_copy
+    mv      s4, s3                          # the last colon
+1:  beqz    s4, 90f
+    addi    s4, s4, -1
+    add     t0, s2, s4
+    lbu     t0, 0(t0)
+    li      t1, 0x3a
+    bne     t0, t1, 1b
+    add     a0, s2, s4                      # the port
+    addi    a0, a0, 1
+    add     a1, s2, s3
+    call    app_number
+    bnez    a0, 90f
+    beqz    a1, 90f
+    li      t0, 65535
+    bgtu    a1, t0, 90f
+    li      t0, 4
+    STQ     t0, s1, APP_ENGINE_ADDR
+    STQ     a1, s1, (APP_ENGINE_ADDR + 8)
+    STQ     zero, s1, (APP_ENGINE_ADDR + 16)
+    STQ     zero, s1, (APP_ENGINE_ADDR + 24)
+    mv      a0, s2                          # the host: localhost, or an IPv4 address
+    mv      a1, s4
+    ADDRESS a2, app_localhost
+    li      a3, 9
+    call    app_name_is
+    li      a1, 0x0100007f                  # 127.0.0.1
+    bnez    a0, 2f
+    mv      a0, s2
+    add     a1, s2, s4
+    call    app_dotted
+    bnez    a0, 90f
+2:  ADDQ    t0, s1, (APP_ENGINE_ADDR + 16)
+    sw      a1, 0(t0)
+    LDQ     t0, s1, (APP_OPTIONS + AppOptions_jwt_secret)  # the secret's path
+    LDQ     t1, s1, (APP_OPTIONS + AppOptions_jwt_secret + 8)
+    beqz    t1, 91f
+    li      t2, APP_PATH_MAX
+    bgtu    t1, t2, 91f
+    ADDQ    t2, s1, APP_PATH
+    sd      t1, 16(t2)
+    addi    a0, t2, 24
+    ld      t3, APP_ARGS(s1)
+    add     a1, t3, t0
+    mv      a2, t1
+    call    lantern_copy
+    call    app_read
+    bnez    a0, 99f
+    LDQ     t0, s1, (APP_FILE + 8)          # 64 hex digits, after 0x or not, with white space around them
+    ld      t1, 16(t0)
+    addi    s5, t0, 24
+    add     s6, s5, t1
+    call    app_space
+    sub     t0, s6, s5
+    li      t1, 2
+    bltu    t0, t1, 3f
+    lbu     t0, 0(s5)
+    lbu     t1, 1(s5)
+    li      t2, 0x30
+    bne     t0, t2, 3f
+    li      t2, 0x78
+    bne     t1, t2, 3f
+    addi    s5, s5, 2
+3:  li      s4, 0
+4:  li      t0, 32
+    bgeu    s4, t0, 5f
+    sub     t0, s6, s5
+    li      t1, 2
+    bltu    t0, t1, 92f
+    lbu     a0, 0(s5)
+    call    app_hex_digit
+    mv      s3, a0
+    lbu     a0, 1(s5)
+    call    app_hex_digit
+    or      t0, a0, s3
+    li      t1, 15
+    bgtu    t0, t1, 92f
+    slli    t0, s3, 4
+    or      t0, t0, a0
+    ADDQ    t1, s1, (APP_ANCHOR + NodeAnchor_jwt_secret)
+    add     t1, t1, s4
+    sb      t0, 0(t1)
+    addi    s5, s5, 2
+    addi    s4, s4, 1
+    j       4b
+5:  call    app_space
+    bne     s5, s6, 92f
+    call    app_file_free
+    LDQ     t0, s1, APP_FLAGS
+    ori     t0, t0, NODE_FLAG_ENGINE
+    STQ     t0, s1, APP_FLAGS
+8:  li      a0, 0
+    LEAVE 0
+90: call    app_line_start                  # the endpoint's form
+    ADDRESS a0, app_m_endpoint
+    li      a1, app_m_endpoint_len
+    call    app_line_text
+    j       98f
+91: call    app_line_start                  # no secret
+    ADDRESS a0, app_m_jwt
+    li      a1, app_m_jwt_len
+    call    app_line_text
+    j       98f
+92: call    app_file_free                   # <path>: not 32 bytes in hex
+    call    app_line_start
+    call    app_line_path
+    ADDRESS a0, app_m_hex
+    li      a1, app_m_hex_len
+    call    app_line_text
+98: li      a0, 2
+    call    app_line_end
+99: li      a0, 2
+    LEAVE 0
+END_FUNCTION app_engine_conf
+
+/* L0: s5 moves past spaces, tabs, CR and LF, to at most s6. Uses t0, t1. */
+LOCAL_FUNCTION app_space
+    UNWIND_END_PROLOGUE
+1:  bgeu    s5, s6, 2f
+    lbu     t0, 0(s5)
+    li      t1, 0x20
+    beq     t0, t1, 3f
+    li      t1, 9
+    bltu    t0, t1, 2f
+    li      t1, 13
+    bgtu    t0, t1, 2f
+3:  addi    s5, s5, 1
+    j       1b
+2:  ret
+END_FUNCTION app_space
+
+/* L0: a0 = the value of the hex digit a0, or 16 when it is not one. Uses t0, t1. */
+LOCAL_FUNCTION app_hex_digit
+    UNWIND_END_PROLOGUE
+    addi    t0, a0, -0x30
+    li      t1, 10
+    bltu    t0, t1, 1f
+    ori     t0, a0, 0x20
+    addi    t0, t0, -0x61
+    li      t1, 6
+    bltu    t0, t1, 2f
+    li      a0, 16
+    ret
+1:  mv      a0, t0
+    ret
+2:  addi    a0, t0, 10
+    ret
+END_FUNCTION app_hex_digit
+
+/* L0: a0 = the Handle of the engine's connection: the slot after libp2p's, at its generation. Uses t0, a7. */
+LOCAL_FUNCTION app_engine_handle
+    UNWIND_END_PROLOGUE
+    LDQ     t0, s1, APP_P2P_CONFIG
+    ld      a0, 88(t0)                      # max_connections
+    LDQ     t0, s1, APP_ENGINE_GEN
+    slli    t0, t0, 32
+    or      a0, a0, t0
+    ret
+END_FUNCTION app_engine_handle
+
+/*
+ * L1: one shell action, the a1 bytes in the ByteList at APP_ENGINE_ACT, through
+ * libp2p_shell_perform; its results join the shell's events.
+ */
+LOCAL_FUNCTION app_engine_perform
+    FRAME 0
+    LDQ     t0, s1, APP_ENGINE_ACT
+    sd      a1, 16(t0)
+    LDQ     a0, s1, APP_SHELL
+    mv      a1, t0
+    LDQ     a2, s1, APP_SHELL_EVENTS
+    CALL_GLOBAL libp2p_shell_perform
+    UNFRAME 0
+END_FUNCTION app_engine_perform
+
+/*
+ * L2: the next bytes of the request on the open connection, as far as the shell's send buffer has
+ * room. s2 the action, s3 the bytes.
+ */
+LOCAL_FUNCTION app_engine_send
+    ENTER 0
+    LDQ     t0, s1, APP_ENGINE
+    li      t1, 2
+    bne     t0, t1, 9f
+    LDQ     t0, s1, APP_ENGINE_LEN
+    LDQ     t1, s1, APP_ENGINE_SENT
+    sub     s3, t0, t1
+    beqz    s3, 9f
+    LDQ     t0, s1, APP_P2P_CONFIG
+    ld      t0, 160(t0)                     # send_window
+    LDQ     t1, s1, APP_ENGINE_FLIGHT
+    bleu    t0, t1, 9f
+    sub     t0, t0, t1
+    bleu    s3, t0, 1f
+    mv      s3, t0
+1:  LDQ     s2, s1, APP_ENGINE_ACT          # SEND: connection, count, the bytes
+    addi    s2, s2, 24
+    addi    t0, s3, (LIBP2P_ACT_SEND_DATA + 7)
+    andi    t0, t0, -8
+    sd      t0, 0(s2)
+    li      t0, LIBP2P_ACTION_SEND
+    sd      t0, 8(s2)
+    call    app_engine_handle
+    sd      a0, LIBP2P_ACT_CONN(s2)
+    sd      s3, (LIBP2P_ACT_CONN + 8)(s2)
+    addi    a0, s2, LIBP2P_ACT_SEND_DATA
+    LDQ     a1, s1, APP_ENGINE_OUT
+    LDQ     t0, s1, APP_ENGINE_SENT
+    add     a1, a1, t0
+    mv      a2, s3
+    call    lantern_copy
+    LDQ     t0, s1, APP_ENGINE_SENT
+    add     t0, t0, s3
+    STQ     t0, s1, APP_ENGINE_SENT
+    LDQ     t0, s1, APP_ENGINE_FLIGHT
+    add     t0, t0, s3
+    STQ     t0, s1, APP_ENGINE_FLIGHT
+    mv      a0, s2
+    ld      a1, 0(s2)
+    call    app_engine_perform
+9:  LEAVE 0
+END_FUNCTION app_engine_send
+
+/*
+ * L2: the NODE_ACT_ENGINE a0: its request bytes wait in APP_ENGINE_OUT; they go on the open
+ * connection, or after a DIAL of the engine's Address. s2 the ByteList, s3 the count.
+ */
+LOCAL_FUNCTION app_engine_request
+    ENTER 0
+    addi    s2, a0, 24
+    ld      s3, 16(s2)
+    LDQ     t0, s1, (APP_ENGINE_OUT + 8)    # room for the request
+    bleu    s3, t0, 1f
+    li      a0, APP_ENGINE_OUT
+    call    app_unmap
+    li      a0, APP_ENGINE_OUT
+    mv      a1, s3
+    call    app_alloc
+    beqz    a0, 9f
+1:  LDQ     a0, s1, APP_ENGINE_OUT
+    ld      t0, 8(s2)
+    add     a1, s2, t0
+    mv      a2, s3
+    call    lantern_copy
+    STQ     s3, s1, APP_ENGINE_LEN
+    STQ     zero, s1, APP_ENGINE_SENT
+    LDQ     t0, s1, APP_ENGINE
+    li      t1, 2
+    bne     t0, t1, 2f
+    call    app_engine_send
+    LEAVE 0
+2:  bnez    t0, 9f                          # no connection: a DIAL
+    LDQ     t0, s1, APP_ENGINE_GEN
+    addi    t0, t0, 1
+    STQ     t0, s1, APP_ENGINE_GEN
+    li      t0, 1
+    STQ     t0, s1, APP_ENGINE
+    STQ     zero, s1, APP_ENGINE_FLIGHT
+    LDQ     s2, s1, APP_ENGINE_ACT
+    addi    s2, s2, 24
+    li      t0, LIBP2P_ACT_DIAL_SIZE
+    sd      t0, 0(s2)
+    li      t0, LIBP2P_ACTION_DIAL
+    sd      t0, 8(s2)
+    call    app_engine_handle
+    sd      a0, LIBP2P_ACT_CONN(s2)
+    addi    a0, s2, LIBP2P_ACT_DIAL_ADDR
+    ADDQ    a1, s1, APP_ENGINE_ADDR
+    li      a2, 32
+    call    lantern_copy
+    mv      a0, s2
+    li      a1, LIBP2P_ACT_DIAL_SIZE
+    call    app_engine_perform
+9:  LEAVE 0
+END_FUNCTION app_engine_request
+
+/*
+ * L2: a0 = 1 when the shell event a0 is of the engine's connection, which it then takes: CONNECTED
+ * opens it, SENT frees its buffer, RECEIVED gives a NODE_EV_ENGINE of the bytes, DIAL_FAILED and
+ * CLOSED end it with a NODE_EV_ENGINE of failure while the node waits for an answer; else 0.
+ * s2 the event, s3 its kind. Locals: L the header of an event.
+ */
+LOCAL_FUNCTION app_engine_event
+    ENTER 48
+    mv      s2, a0
+    ld      s3, 8(s2)
+    li      t0, LIBP2P_EVENT_CONNECTED
+    bltu    s3, t0, 8f
+    li      t0, LIBP2P_EVENT_CLOSED
+    bgtu    s3, t0, 8f
+    LDQ     t0, s1, APP_ENGINE
+    beqz    t0, 8f
+    call    app_engine_handle
+    ld      t0, LIBP2P_EV_CONN(s2)
+    bne     t0, a0, 8f
+    li      t0, LIBP2P_EVENT_CONNECTED
+    bne     s3, t0, 1f
+    li      t0, 2
+    STQ     t0, s1, APP_ENGINE
+    STQ     zero, s1, APP_ENGINE_FLIGHT
+    li      t0, 1
+    STQ     t0, s1, APP_ENGINE_DUE
+    j       9f
+1:  li      t0, LIBP2P_EVENT_SENT
+    bne     s3, t0, 2f
+    LDQ     t0, s1, APP_ENGINE_FLIGHT
+    ld      t1, LIBP2P_EV_COUNT(s2)
+    sub     t2, t0, t1
+    bgeu    t0, t1, 11f
+    li      t2, 0
+11: STQ     t2, s1, APP_ENGINE_FLIGHT
+    li      t0, 1
+    STQ     t0, s1, APP_ENGINE_DUE
+    j       9f
+2:  li      t0, LIBP2P_EVENT_RECEIVED
+    bne     s3, t0, 3f
+    ld      t0, LIBP2P_EV_COUNT(s2)         # NODE_EV_ENGINE 0: size, kind, 0, a ByteList, the bytes
+    addi    t1, t0, (48 + 7)
+    andi    t1, t1, -8
+    sd      t1, L(sp)
+    li      t2, NODE_EV_ENGINE
+    sd      t2, (L + 8)(sp)
+    sd      zero, (L + 16)(sp)
+    addi    t2, t1, -24
+    sd      t2, (L + 24)(sp)
+    li      t2, 24
+    sd      t2, (L + 32)(sp)
+    sd      t0, (L + 40)(sp)
+    addi    a0, sp, L
+    li      a1, 48
+    call    app_event_put
+    addi    a0, s2, LIBP2P_EV_DATA
+    ld      a1, LIBP2P_EV_COUNT(s2)
+    addi    a1, a1, 7
+    andi    a1, a1, -8
+    call    app_event_put
+    j       9f
+3:  STQ     zero, s1, APP_ENGINE            # DIAL_FAILED, CLOSED
+    STQ     zero, s1, APP_ENGINE_LEN
+    STQ     zero, s1, APP_ENGINE_SENT
+    LDQ     t0, s1, APP_NODE
+    LDQ     t0, t0, Node_engine_method
+    beqz    t0, 9f
+    li      t0, 24                          # NODE_EV_ENGINE 1
+    sd      t0, L(sp)
+    li      t0, NODE_EV_ENGINE
+    sd      t0, (L + 8)(sp)
+    li      t0, 1
+    sd      t0, (L + 16)(sp)
+    addi    a0, sp, L
+    li      a1, 24
+    call    app_event_put
+9:  li      a0, 1
+    LEAVE 48
+8:  li      a0, 0
+    LEAVE 48
+END_FUNCTION app_engine_event
+
+/* L1: the base64url text (RFC 4648 section 5, no padding) of the a1 bytes at a0 joins the log line. Locals: a0, a1, then 4 digits. */
+LOCAL_FUNCTION app_line_base64url
+    FRAME 48
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+1:  ld      a0, 0(sp)
+    ld      a1, 8(sp)
+    beqz    a1, 9f
+    li      t0, 0                           # up to 3 bytes: 24 bits, from the top
+    li      t1, 0
+2:  li      t2, 3
+    bgeu    t1, t2, 3f
+    beqz    a1, 3f
+    lbu     t2, 0(a0)
+    addi    a0, a0, 1
+    addi    a1, a1, -1
+    slli    t3, t1, 3
+    li      t4, 16
+    sub     t3, t4, t3
+    sll     t2, t2, t3
+    or      t0, t0, t2
+    addi    t1, t1, 1
+    j       2b
+3:  sd      a0, 0(sp)
+    sd      a1, 8(sp)
+    ADDRESS t4, app_base64url_digits        # 1 byte: 2 digits; 2: 3; 3: 4
+    li      t2, 0
+4:  li      t3, 4
+    bgeu    t2, t3, 5f
+    li      t3, 6
+    mul     t3, t2, t3
+    li      a2, 18
+    sub     t3, a2, t3
+    srl     t3, t0, t3
+    andi    t3, t3, 63
+    add     t3, t4, t3
+    lbu     t3, 0(t3)
+    addi    a2, sp, 24
+    add     a2, a2, t2
+    sb      t3, 0(a2)
+    addi    t2, t2, 1
+    j       4b
+5:  addi    a0, sp, 24
+    addi    a1, t1, 1
+    call    app_line_text
+    j       1b
+9:  UNFRAME 48
+END_FUNCTION app_line_base64url
+
+/* L1: the a1 bytes of the event at a0 join the next discv5 step's events, while they have room. Locals: the new count. */
+LOCAL_FUNCTION app_dv_put
+    FRAME 16
+    LDQ     t0, s1, APP_DV_EVENTS
+    ld      t1, 16(t0)
+    add     t2, t1, a1
+    addi    t2, t2, 24
+    ld      t3, 0(t0)
+    bgtu    t2, t3, 9f
+    sd      t2, 0(sp)
+    mv      a2, a1
+    mv      a1, a0
+    addi    a0, t0, 24
+    add     a0, a0, t1
+    call    lantern_copy
+    ld      t2, 0(sp)
+    addi    t2, t2, -24
+    LDQ     t0, s1, APP_DV_EVENTS
+    sd      t2, 16(t0)
+9:  UNFRAME 16
+END_FUNCTION app_dv_put
+
+/*
+ * L2: discv5 with the key of libp2p: its state, with --enr-address and --port in the record, its UDP
+ * socket on --port, and the record entry tcp: a0 = 0, or 2 after a line on the standard error.
+ * Locals: L the Config (152), then an Address and a BindResult, and the tcp event.
+ */
+LOCAL_FUNCTION app_dv_start
+    ENTER 256
+    li      a0, APP_DV
+    li      a1, DISCV5_STATE_SIZE
+    call    app_alloc
+    beqz    a0, 97f
+    li      a0, APP_DV_SCRATCH
+    li      a1, DISCV5_SCRATCH_SIZE
+    call    app_alloc
+    beqz    a0, 97f
+    li      a0, APP_DV_EVENTS
+    li      a1, APP_DV_EVENT_BYTES
+    call    app_alloc
+    beqz    a0, 97f
+    li      t0, 24
+    sd      t0, 8(a0)
+    sd      zero, 16(a0)
+    li      a0, APP_DV_ACTIONS
+    li      a1, (DISCV5_ACTIONS_BASE + 64 * DISCV5_ACTIONS_PER_EVENT)
+    call    app_alloc
+    beqz    a0, 97f
+    li      a0, APP_DV_OUT
+    li      a1, APP_DV_OUT_BYTES
+    call    app_alloc
+    beqz    a0, 97f
+    li      t0, 24
+    sd      t0, 8(a0)
+    sd      zero, 16(a0)
+    addi    a0, sp, L                       # the config: key, seq, entropy, now, endpoint, limits
+    li      a1, DISCV5_CFG_SIZE
+    call    lantern_zero
+    addi    a0, sp, (L + DISCV5_CFG_KEY)
+    ADDQ    a1, s1, APP_KEY
+    li      a2, 32
+    call    lantern_copy
+    addi    a0, sp, (L + DISCV5_CFG_SEQ)    # seq: the Unix time in ms, so a restart gives a later record
+    CALL_GLOBAL lantern_shell_time_ms
+    ADDQ    a0, s1, APP_TICK
+    CALL_GLOBAL libp2p_shell_clock
+    addi    a0, sp, (L + DISCV5_CFG_ENTROPY)
+    ADDQ    a1, s1, (APP_TICK + LIBP2P_TICK_ENTROPY)
+    li      a2, 32
+    call    lantern_copy
+    LDQ     t0, s1, (APP_TICK + LIBP2P_TICK_NOW)
+    sd      t0, (L + DISCV5_CFG_NOW)(sp)
+    LDQ     t0, s1, (APP_OPTIONS + AppOptions_port)
+    sd      t0, (L + DISCV5_CFG_PORT)(sp)
+    LDQ     t0, s1, (APP_OPTIONS + AppOptions_enr_address)
+    beqz    t0, 1f
+    li      t1, 4
+    sd      t1, (L + DISCV5_CFG_FAMILY)(sp)
+    sw      t0, (L + DISCV5_CFG_ADDRESS)(sp)
+1:  li      t0, 2
+    sd      t0, (L + DISCV5_CFG_BUCKET_IP_LIMIT)(sp)
+    li      t0, 10
+    sd      t0, (L + DISCV5_CFG_TABLE_IP_LIMIT)(sp)
+    li      t0, 24
+    sd      t0, (L + DISCV5_CFG_SUBNET4)(sp)
+    li      t0, 64
+    sd      t0, (L + DISCV5_CFG_SUBNET6)(sp)
+    addi    a0, sp, L
+    LDQ     a1, s1, APP_DV
+    CALL_GLOBAL discv5_init
+    bnez    a0, 96f
+    li      t0, 4                           # its UDP socket
+    sd      t0, (L + 152)(sp)
+    LDQ     t0, s1, (APP_OPTIONS + AppOptions_port)
+    sd      t0, (L + 160)(sp)
+    sd      zero, (L + 168)(sp)
+    sd      zero, (L + 176)(sp)
+    LDQ     a0, s1, APP_SHELL
+    addi    a1, sp, (L + 152)
+    addi    a2, sp, (L + 184)
+    CALL_GLOBAL libp2p_shell_bind
+    ld      t0, (L + 184 + LIBP2P_BR_ERROR)(sp)
+    bnez    t0, 95f
+    ld      t0, (L + 184 + LIBP2P_BR_SOCKET)(sp)
+    STQ     t0, s1, APP_DV_SOCKET
+    STQ     zero, s1, APP_DV_WAKE
+    addi    a0, sp, L                       # the entry tcp: --port, big endian
+    li      a1, 56
+    call    lantern_zero
+    li      t0, 56
+    sd      t0, L(sp)
+    li      t0, DISCV5_EVENT_SET_ENTRY
+    sd      t0, (L + 8)(sp)
+    li      t0, 3
+    sd      t0, (L + 16)(sp)
+    li      t0, 0x706374                    # tcp
+    sd      t0, (L + 24)(sp)
+    li      t0, 2
+    sd      t0, (L + 40)(sp)
+    LDQ     t0, s1, (APP_OPTIONS + AppOptions_port)
+    srli    t1, t0, 8
+    sb      t1, (L + 48)(sp)
+    sb      t0, (L + 49)(sp)
+    addi    a0, sp, L
+    li      a1, 56
+    call    app_dv_put
+    li      a0, 0
+    LEAVE 256
+95: call    app_line_start                  # bind UDP port <p>: error <n>
+    ADDRESS a0, app_m_bind
+    li      a1, app_m_bind_len
+    call    app_line_text
+    LDQ     a0, s1, (APP_OPTIONS + AppOptions_port)
+    call    app_line_u64
+    ADDRESS a0, app_m_error
+    li      a1, app_m_error_len
+    call    app_line_text
+    ld      a0, (L + 184 + LIBP2P_BR_ERROR)(sp)
+    call    app_line_u64
+    li      a0, 2
+    call    app_line_end
+    li      a0, 2
+    LEAVE 256
+96: mv      a2, a0                          # discv5: status <n>
+    ADDRESS a0, app_m_discv5
+    li      a1, app_m_discv5_len
+    call    app_fail_status
+    LEAVE 256
+97: call    app_no_memory
+    LEAVE 256
+END_FUNCTION app_dv_start
+
+/*
+ * L2: a0 = 1 when the shell event a0 is a DATAGRAM of discv5's socket, which then joins the next
+ * discv5 step as a DATAGRAM event (the sender as an Endpoint); else 0. s2 the event. Locals: L the header.
+ */
+LOCAL_FUNCTION app_dv_datagram
+    ENTER 64
+    mv      s2, a0
+    ld      t0, 8(s2)
+    li      t1, LIBP2P_EVENT_DATAGRAM
+    bne     t0, t1, 8f
+    ld      t0, LIBP2P_EV_DG_SOCKET(s2)
+    LDQ     t1, s1, APP_DV_SOCKET
+    bne     t0, t1, 8f
+    ld      t2, LIBP2P_EV_DG_COUNT(s2)
+    li      t0, APP_DV_DATAGRAM_MAX
+    bgtu    t2, t0, 9f
+    addi    t0, t2, (DISCV5_EV_DG_DATA + 7) # size, DATAGRAM, the Endpoint (port, family, address), len
+    andi    t0, t0, -8
+    sd      t0, L(sp)
+    li      t0, DISCV5_EVENT_DATAGRAM
+    sd      t0, (L + 8)(sp)
+    addi    t3, s2, LIBP2P_EV_DG_ADDR
+    ld      t0, LIBP2P_ADDR_PORT(t3)
+    sd      t0, (L + 16)(sp)
+    ld      t0, LIBP2P_ADDR_FAMILY(t3)
+    sd      t0, (L + 24)(sp)
+    ld      t0, LIBP2P_ADDR_IP(t3)
+    sd      t0, (L + 32)(sp)
+    ld      t0, (LIBP2P_ADDR_IP + 8)(t3)
+    sd      t0, (L + 40)(sp)
+    sd      t2, (L + 48)(sp)
+    LDQ     t0, s1, APP_DV_EVENTS           # the header, then the bytes, if they fit
+    ld      t1, 16(t0)
+    ld      t3, L(sp)
+    add     t3, t3, t1
+    addi    t3, t3, 24
+    ld      t4, 0(t0)
+    bgtu    t3, t4, 9f
+    addi    a0, sp, L
+    li      a1, DISCV5_EV_DG_DATA
+    call    app_dv_put
+    ld      t0, L(sp)
+    addi    a1, t0, -DISCV5_EV_DG_DATA
+    addi    a0, s2, LIBP2P_EV_DG_DATA
+    call    app_dv_put
+9:  li      a0, 1
+    LEAVE 64
+8:  li      a0, 0
+    LEAVE 64
+END_FUNCTION app_dv_datagram
+
+/*
+ * L2: a discv5 step when it has events or its WAKEUP is due; then its actions: SEND as the shell's
+ * SEND_DATAGRAM, NODE_FOUND as a NODE_EV_ENR of the next node step, RECORD as a log line, WAKEUP
+ * as the next time. s2 the next action, s3 the end, s4 the datagrams, s5 an event count.
+ * Locals: L the header of an event.
+ */
+LOCAL_FUNCTION app_discv5
+    ENTER 64
+    LDQ     t0, s1, APP_DV_EVENTS
+    ld      t1, 16(t0)
+    bnez    t1, 1f
+    LDQ     t2, s1, (APP_TICK + LIBP2P_TICK_NOW)
+    LDQ     t3, s1, APP_DV_WAKE
+    bltu    t2, t3, 99f
+1:  li      s5, 0                           # the action room for the events
+    addi    t2, t0, 24
+    add     t3, t2, t1
+2:  bgeu    t2, t3, 3f
+    ld      t4, 0(t2)
+    add     t2, t2, t4
+    addi    s5, s5, 1
+    j       2b
+3:  li      t0, DISCV5_ACTIONS_PER_EVENT
+    mul     s5, s5, t0
+    li      t0, DISCV5_ACTIONS_BASE
+    add     s5, s5, t0
+    LDQ     t0, s1, (APP_DV_ACTIONS + 8)
+    bleu    s5, t0, 4f
+    li      a0, APP_DV_ACTIONS
+    call    app_unmap
+    li      a0, APP_DV_ACTIONS
+    mv      a1, s5
+    call    app_alloc
+    beqz    a0, 98f
+4:  LDQ     t0, s1, (APP_TICK + LIBP2P_TICK_NOW)    # the Tick: now and fresh bytes
+    STQ     t0, s1, APP_DV_TICK
+    ADDQ    a0, s1, (APP_DV_TICK + 8)
+    ADDQ    a1, s1, (APP_TICK + LIBP2P_TICK_ENTROPY)
+    li      a2, 32
+    call    lantern_copy
+    LDQ     t0, s1, APP_DV_ACTIONS
+    LDQ     t1, s1, (APP_DV_ACTIONS + 8)
+    sd      t1, 0(t0)
+    LDQ     t0, s1, APP_DV_SCRATCH
+    LDQ     t1, s1, (APP_DV_SCRATCH + 8)
+    sd      t1, 0(t0)
+    LDQ     a0, s1, APP_DV
+    ADDQ    a1, s1, APP_DV_TICK
+    LDQ     a2, s1, APP_DV_EVENTS
+    LDQ     a3, s1, APP_DV_SCRATCH
+    LDQ     a4, s1, APP_DV_ACTIONS
+    CALL_GLOBAL discv5_step
+    LDQ     t0, s1, APP_DV_EVENTS
+    sd      zero, 16(t0)
+    beqz    a0, 5f
+    mv      a2, a0                          # discv5: status <n>; its events are dropped
+    ADDRESS a0, app_m_discv5
+    li      a1, app_m_discv5_len
+    call    app_fail_status
+    LDQ     t0, s1, (APP_TICK + LIBP2P_TICK_NOW)
+    addi    t0, t0, 1000
+    STQ     t0, s1, APP_DV_WAKE
+    j       99f
+5:  LDQ     t0, s1, APP_DV_ACTIONS
+    ld      t1, 8(t0)
+    ld      t2, 16(t0)
+    add     s2, t0, t1
+    add     s3, s2, t2
+    LDQ     s4, s1, APP_DV_OUT
+6:  bgeu    s2, s3, 90f
+    ld      t0, 8(s2)
+    li      t1, DISCV5_ACTION_SEND
+    bne     t0, t1, 7f
+    LDQ     t2, s2, DISCV5_ACT_SEND_LEN     # SEND: a SEND_DATAGRAM of the socket
+    addi    t3, t2, (LIBP2P_ACT_DG_DATA + 7)
+    andi    t3, t3, -8
+    ld      t4, 16(s4)
+    add     t5, t4, t3
+    addi    t5, t5, 24
+    ld      t6, 0(s4)
+    bgtu    t5, t6, 80f
+    addi    a0, s4, 24
+    add     a0, a0, t4
+    addi    t5, t5, -24
+    sd      t5, 16(s4)
+    sd      t3, 0(a0)
+    li      t4, LIBP2P_ACTION_SEND_DATAGRAM
+    sd      t4, 8(a0)
+    LDQ     t4, s1, APP_DV_SOCKET
+    sd      t4, LIBP2P_ACT_DG_SOCKET(a0)
+    LDQ     t4, s2, DISCV5_ACT_SEND_TO      # port, family
+    LDQ     t5, s2, (DISCV5_ACT_SEND_TO + 8)
+    addi    t6, a0, LIBP2P_ACT_DG_ADDR
+    sd      t5, 0(t6)
+    sd      t4, 8(t6)
+    LDQ     t4, s2, (DISCV5_ACT_SEND_TO + 16)
+    LDQ     t5, s2, (DISCV5_ACT_SEND_TO + 24)
+    sd      t4, 16(t6)
+    sd      t5, 24(t6)
+    sd      t2, LIBP2P_ACT_DG_COUNT(a0)
+    addi    a0, a0, LIBP2P_ACT_DG_DATA
+    ADDQ    a1, s2, DISCV5_ACT_SEND_DATA
+    mv      a2, t2
+    call    lantern_copy
+    j       80f
+7:  li      t1, DISCV5_ACTION_NODE_FOUND
+    bne     t0, t1, 71f
+    LDQ     t2, s2, DISCV5_ACT_FOUND_LEN    # NODE_FOUND: NODE_EV_ENR with the record
+    addi    t3, t2, (48 + 7)
+    andi    t3, t3, -8
+    sd      t3, L(sp)
+    li      t4, NODE_EV_ENR
+    sd      t4, (L + 8)(sp)
+    sd      zero, (L + 16)(sp)
+    addi    t4, t3, -24
+    sd      t4, (L + 24)(sp)
+    li      t4, 24
+    sd      t4, (L + 32)(sp)
+    sd      t2, (L + 40)(sp)
+    addi    a0, sp, L
+    li      a1, 48
+    call    app_event_put
+    ADDQ    a0, s2, DISCV5_ACT_FOUND_DATA
+    ld      t0, L(sp)
+    addi    a1, t0, -48
+    call    app_event_put
+    j       80f
+71: li      t1, DISCV5_ACTION_RECORD
+    bne     t0, t1, 72f
+    call    app_line_clear                  # the view's enr: enr:<base64url>
+    ADDRESS a0, app_t_enr
+    li      a1, 4
+    call    app_line_text
+    ADDQ    a0, s2, DISCV5_ACT_RECORD_DATA
+    LDQ     a1, s2, DISCV5_ACT_RECORD_LEN
+    call    app_line_base64url
+    LDQ     a0, s1, APP_VIEW
+    addi    a0, a0, ApiView_enr
+    li      a1, 512
+    call    app_line_to
+    call    app_line_start                  # record enr:<base64url>
+    ADDRESS a0, app_m_record
+    li      a1, app_m_record_len
+    call    app_line_text
+    ADDQ    a0, s2, DISCV5_ACT_RECORD_DATA
+    LDQ     a1, s2, DISCV5_ACT_RECORD_LEN
+    call    app_line_base64url
+    li      a0, 1
+    call    app_line_end
+    j       80f
+72: li      t1, DISCV5_ACTION_WAKEUP
+    bne     t0, t1, 80f
+    LDQ     t0, s2, DISCV5_ACT_WAKEUP_AT
+    STQ     t0, s1, APP_DV_WAKE
+80: ld      t0, 0(s2)
+    add     s2, s2, t0
+    j       6b
+90: LDQ     s4, s1, APP_DV_OUT              # the datagrams go out
+    ld      t0, 16(s4)
+    beqz    t0, 99f
+    LDQ     a0, s1, APP_SHELL
+    mv      a1, s4
+    LDQ     a2, s1, APP_SHELL_EVENTS
+    CALL_GLOBAL libp2p_shell_perform
+    LDQ     s4, s1, APP_DV_OUT
+    sd      zero, 16(s4)
+    j       99f
+98: LDQ     t0, s1, APP_DV_EVENTS
+    sd      zero, 16(t0)
+99: LEAVE 64
+END_FUNCTION app_discv5
+
+/*
+ * L2: a0 = the base58btc text of the a1 bytes at a0 (at most 48), written at a2: a 1 for each
+ * leading zero byte, then the digits. a3: a work area of 72 bytes. s2 the bytes, s3 their count,
+ * s4 the text, s5 the work area, s6 the leading zero bytes.
+ */
+LOCAL_FUNCTION app_base58
+    ENTER 0
+    mv      s2, a0
+    mv      s3, a1
+    mv      s4, a2
+    mv      s5, a3
+    li      s6, 0                           # the leading zero bytes
+1:  bgeu    s6, s3, 2f
+    add     t0, s2, s6
+    lbu     t0, 0(t0)
+    bnez    t0, 2f
+    addi    s6, s6, 1
+    j       1b
+2:  li      t1, 0                           # the digits so far, least significant at s5 + 71
+    mv      t2, s6
+    li      a4, 58
+3:  bgeu    t2, s3, 6f                      # each byte: digits * 256 + byte
+    add     t3, s2, t2
+    lbu     t3, 0(t3)
+    li      t4, 0
+4:  bgeu    t4, t1, 5f
+    li      t0, 71
+    sub     t0, t0, t4
+    add     t0, s5, t0
+    lbu     t5, 0(t0)
+    slli    t5, t5, 8
+    add     t3, t3, t5
+    remu    t5, t3, a4
+    divu    t3, t3, a4
+    sb      t5, 0(t0)
+    addi    t4, t4, 1
+    j       4b
+5:  beqz    t3, 51f
+    remu    t5, t3, a4
+    divu    t3, t3, a4
+    li      t0, 71
+    sub     t0, t0, t1
+    add     t0, s5, t0
+    sb      t5, 0(t0)
+    addi    t1, t1, 1
+    j       5b
+51: addi    t2, t2, 1
+    j       3b
+6:  li      a0, 0                           # the text: the ones, then the digits
+    ADDRESS t3, app_base58_digits
+7:  beqz    s6, 8f
+    lbu     t0, 0(t3)
+    add     t4, s4, a0
+    sb      t0, 0(t4)
+    addi    a0, a0, 1
+    addi    s6, s6, -1
+    j       7b
+8:  beqz    t1, 9f
+    li      t0, 72
+    sub     t0, t0, t1
+    add     t0, s5, t0
+    lbu     t0, 0(t0)
+    add     t0, t3, t0
+    lbu     t0, 0(t0)
+    add     t4, s4, a0
+    sb      t0, 0(t4)
+    addi    a0, a0, 1
+    addi    t1, t1, -1
+    j       8b
+9:  LEAVE 0
+END_FUNCTION app_base58
+
+/* L0: the log line becomes empty: the text helpers then build a text in it. Uses a7. */
+LOCAL_FUNCTION app_line_clear
+    UNWIND_END_PROLOGUE
+    STQ     zero, s1, (APP_LINE + 16)
+    ret
+END_FUNCTION app_line_clear
+
+/* L1: the bytes of the log line go to the text field at a0 of the view (its length, then its bytes, at most a1). */
+LOCAL_FUNCTION app_line_to
+    FRAME 0
+    LDQ     a2, s1, (APP_LINE + 16)
+    bleu    a2, a1, 1f
+    mv      a2, a1
+1:  sd      a2, 0(a0)
+    addi    a0, a0, 8
+    ADDQ    a1, s1, (APP_LINE + 24)
+    call    lantern_copy
+    UNFRAME 0
+END_FUNCTION app_line_to
+
+/* L1: the IPv4 address a0 (its bytes in order in the low bytes) joins the line in dotted decimal. Locals: the address, the count. */
+LOCAL_FUNCTION app_line_ip4
+    FRAME 16
+    sd      a0, 0(sp)
+    sd      zero, 8(sp)
+1:  ld      a0, 0(sp)
+    andi    a0, a0, 0xff
+    call    app_line_u64
+    ld      a0, 0(sp)
+    ld      t0, 8(sp)
+    addi    t0, t0, 1
+    srli    a0, a0, 8
+    sd      a0, 0(sp)
+    sd      t0, 8(sp)
+    li      t1, 4
+    bgeu    t0, t1, 2f
+    ADDRESS a0, app_t_dot
+    li      a1, 1
+    call    app_line_text
+    j       1b
+2:  UNFRAME 16
+END_FUNCTION app_line_ip4
+
+/* L1: a multiaddr /ip4/<--enr-address>/<a0: tcp or udp text>/<--port>/p2p/<peer id> to the view's field at a1, or length 0 with no --enr-address. Locals: a0, a1. */
+LOCAL_FUNCTION app_multiaddr
+    FRAME 16
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+    LDQ     t0, s1, (APP_OPTIONS + AppOptions_enr_address)
+    bnez    t0, 1f
+    sd      zero, 0(a1)
+    j       9f
+1:  call    app_line_clear
+    ADDRESS a0, app_t_ip4
+    li      a1, 5
+    call    app_line_text
+    LDQ     a0, s1, (APP_OPTIONS + AppOptions_enr_address)
+    call    app_line_ip4
+    ld      a0, 0(sp)
+    li      a1, 5
+    call    app_line_text
+    LDQ     a0, s1, (APP_OPTIONS + AppOptions_port)
+    call    app_line_u64
+    ADDRESS a0, app_t_p2p
+    li      a1, 5
+    call    app_line_text
+    LDQ     t0, s1, APP_VIEW
+    addi    a0, t0, (ApiView_peer_id + 8)
+    ld      a1, ApiView_peer_id(t0)
+    call    app_line_text
+    ld      a0, 8(sp)
+    li      a1, 128
+    call    app_line_to
+9:  UNFRAME 16
+END_FUNCTION app_multiaddr
+
+/*
+ * L2: the Beacon API: a shell context that listens on --http-port, its buffers, and the view's
+ * fixed values: the peer id, the addresses, the version, and the anchor's header: a0 = 0, or 2
+ * after a line on the standard error. Locals: L ShellParams or an Address, L+32 a ListenResult
+ * or the public key, L+80 the peer id's multihash, L+128 base58's work area.
+ */
+LOCAL_FUNCTION app_api_start
+    ENTER 208
+    li      t0, APP_API_SLOTS_MAX
+    sd      t0, L(sp)
+    li      t0, APP_API_SEND_WINDOW
+    sd      t0, (L + 8)(sp)
+    addi    a0, sp, L
+    addi    a1, sp, (L + 32)
+    CALL_GLOBAL libp2p_shell_size
+    bnez    a0, 97f
+    li      a0, APP_API_SHELL
+    ld      a1, (L + 32)(sp)
+    call    app_alloc
+    beqz    a0, 97f
+    mv      a1, a0
+    addi    a0, sp, L
+    CALL_GLOBAL libp2p_shell_init
+    bnez    a0, 97f
+    li      a0, APP_API_EVENTS
+    li      a1, APP_API_EVENT_BYTES
+    call    app_alloc
+    beqz    a0, 97f
+    li      t0, 24
+    sd      t0, 8(a0)
+    sd      zero, 16(a0)
+    li      a0, APP_API_ACT
+    li      a1, (24 + APP_API_SLOTS_MAX * (64 + APP_API_OUT_BYTES))
+    call    app_alloc
+    beqz    a0, 97f
+    li      t0, 24
+    sd      t0, 8(a0)
+    sd      zero, 16(a0)
+    li      a0, APP_API_OUT
+    li      a1, (24 + APP_API_OUT_BYTES)
+    call    app_alloc
+    beqz    a0, 97f
+    li      a0, APP_API_REQ
+    li      a1, (APP_API_SLOTS_MAX * (24 + APP_API_REQ_BYTES))
+    call    app_alloc
+    beqz    a0, 97f
+    li      a0, APP_VIEW
+    li      a1, 4096
+    call    app_alloc
+    beqz    a0, 97f
+    li      t0, 4                           # listen: TCP --http-port on every IPv4 address
+    sd      t0, L(sp)
+    LDQ     t0, s1, (APP_OPTIONS + AppOptions_http_port)
+    sd      t0, (L + 8)(sp)
+    sd      zero, (L + 16)(sp)
+    sd      zero, (L + 24)(sp)
+    LDQ     a0, s1, APP_API_SHELL
+    addi    a1, sp, L
+    addi    a2, sp, (L + 32)
+    CALL_GLOBAL libp2p_shell_listen
+    ld      t0, (L + 32)(sp)
+    bnez    t0, 96f
+    ADDQ    a0, s1, APP_KEY                 # the peer id: base58btc of the identity multihash of the key
+    addi    a1, sp, (L + 32)
+    CALL_GLOBAL crypto_secp256k1_public_key
+    bnez    a0, 97f
+    li      t0, 0x0000211202082500
+    sd      t0, (L + 80)(sp)
+    addi    a0, sp, (L + 86)
+    addi    a1, sp, (L + 32)
+    li      a2, 33
+    call    lantern_copy
+    addi    a0, sp, (L + 80)
+    li      a1, 39
+    LDQ     a2, s1, APP_VIEW
+    addi    a2, a2, (ApiView_peer_id + 8)
+    addi    a3, sp, (L + 128)
+    call    app_base58
+    LDQ     t0, s1, APP_VIEW
+    sd      a0, ApiView_peer_id(t0)
+    LDQ     a0, s1, APP_VIEW                # the version
+    addi    a0, a0, ApiView_version
+    li      t0, app_version_text_len
+    sd      t0, 0(a0)
+    addi    a0, a0, 8
+    ADDRESS a1, app_version_text
+    li      a2, app_version_text_len
+    call    lantern_copy
+    ADDRESS a0, app_t_tcp                   # the addresses
+    LDQ     a1, s1, APP_VIEW
+    addi    a1, a1, ApiView_p2p_address
+    call    app_multiaddr
+    ADDRESS a0, app_t_udp
+    LDQ     a1, s1, APP_VIEW
+    addi    a1, a1, ApiView_discovery_address
+    call    app_multiaddr
+    LDQ     a1, s1, APP_STATE               # the anchor's header: its state's latest_block_header, the block's state_root
+    addi    a1, a1, NODE_STATE_HEADER
+    ADDQ    a0, s1, APP_ANCHOR_HEADER
+    li      a2, 112
+    call    lantern_copy
+    ADDQ    a0, s1, (APP_ANCHOR_HEADER + 48)
+    LDQ     a1, s1, APP_BLOCK
+    addi    a1, a1, NODE_BLOCK_STATE_ROOT
+    li      a2, 32
+    call    lantern_copy
+    call    app_line_start                  # Beacon API on TCP port <p>, peer id <id>
+    ADDRESS a0, app_m_api
+    li      a1, app_m_api_len
+    call    app_line_text
+    LDQ     a0, s1, (APP_OPTIONS + AppOptions_http_port)
+    call    app_line_u64
+    ADDRESS a0, app_m_peer_id
+    li      a1, app_m_peer_id_len
+    call    app_line_text
+    LDQ     t0, s1, APP_VIEW
+    addi    a0, t0, (ApiView_peer_id + 8)
+    ld      a1, ApiView_peer_id(t0)
+    call    app_line_text
+    li      a0, 1
+    call    app_line_end
+    li      a0, 0
+    LEAVE 208
+96: call    app_line_start                  # listen on TCP port <p>: error <n>
+    ADDRESS a0, app_m_listen
+    li      a1, app_m_listen_len
+    call    app_line_text
+    LDQ     a0, s1, (APP_OPTIONS + AppOptions_http_port)
+    call    app_line_u64
+    ADDRESS a0, app_m_error
+    li      a1, app_m_error_len
+    call    app_line_text
+    ld      a0, (L + 32)(sp)
+    call    app_line_u64
+    li      a0, 2
+    call    app_line_end
+    li      a0, 2
+    LEAVE 208
+97: call    app_no_memory
+    LEAVE 208
+END_FUNCTION app_api_start
+
+/*
+ * L2: the view's values of the node now: genesis, the head and its header, the head state's
+ * checkpoints, the clock's slot, sync, peers and MetaData. s2 the view, s3 the head's NodeBlock,
+ * s4 a count or a buffer, s5 the header.
+ */
+LOCAL_FUNCTION app_view_fill
+    ENTER 0
+    LDQ     s2, s1, APP_VIEW
+    LDQ     t0, s1, APP_STORE               # genesis
+    LDQ     t0, t0, Store_genesis_time_ms
+    li      t1, 1000
+    divu    t0, t0, t1
+    sd      t0, ApiView_genesis_time(s2)
+    addi    a0, s2, ApiView_genesis_validators_root
+    ADDQ    a1, s1, (APP_ANCHOR + NodeAnchor_genesis_validators_root)
+    li      a2, 32
+    call    lantern_copy
+    LDQ     t0, s1, (APP_CONFIG + CONFIG_GENESIS_FORK_VERSION)
+    sd      t0, ApiView_genesis_fork_version(s2)
+    LDQ     t0, s1, APP_NODE                # the head's NodeBlock
+    LDQ     t1, t0, Node_blocks
+    add     s3, t0, t1
+    LDQ     s4, t0, (Node_blocks + 8)
+1:  beqz    s4, 90f
+    mv      a0, s3
+    LDQ     a1, s1, APP_NODE
+    ADDQ    a1, a1, Node_head_root
+    call    app_same32
+    bnez    a0, 2f
+    ADDQ    s3, s3, NodeBlock__mem
+    addi    s4, s4, -1
+    j       1b
+2:  LDQ     t0, s3, NodeBlock_slot
+    sd      t0, ApiView_head_slot(s2)
+    addi    a0, s2, ApiView_head_root
+    mv      a1, s3
+    li      a2, 32
+    call    lantern_copy
+    ADDQ    s5, s1, APP_ANCHOR_HEADER       # the header: the anchor's, or the block's
+    LDQ     a0, s3, NodeBlock_data_id
+    beqz    a0, 3f
+    call    app_buf_find
+    beqz    a0, 3f
+    ld      s4, 8(a0)
+    LDQ     a0, s3, NodeBlock_slot
+    ADDQ    a1, s1, APP_CONFIG
+    call    app_fork
+    mv      t6, a0
+    mv      a0, s4
+    LDQ     a1, s1, APP_SCRATCH
+    ADDQ    a2, s1, APP_HEADER
+    FORK_CALL node_block_header
+    bnez    a0, 3f
+    ADDQ    s5, s1, APP_HEADER
+3:  ld      t0, 8(s5)
+    sd      t0, ApiView_proposer_index(s2)
+    addi    a0, s2, ApiView_parent_root
+    addi    a1, s5, 16
+    li      a2, (32 * 3)
+    call    lantern_copy
+    addi    a0, s2, ApiView_signature
+    addi    a1, s5, 112
+    li      a2, 96
+    call    lantern_copy
+    LDQ     a0, s3, NodeBlock_state_id      # the head state's checkpoints
+    call    app_buf_find
+    beqz    a0, 4f
+    ld      s4, 8(a0)
+    LDQ     a0, s4, NODE_STATE_SLOT
+    ADDQ    a1, s1, APP_CONFIG
+    call    app_fork
+    mv      t6, a0
+    mv      a0, s4
+    addi    a1, s2, ApiView_previous_justified
+    FORK_CALL node_state_checkpoints
+4:  LDQ     t0, s3, NodeBlock_payload_status
+    li      t1, PAYLOAD_STATUS_NOT_VALIDATED
+    sub     t0, t0, t1
+    seqz    t0, t0
+    sd      t0, ApiView_is_optimistic(s2)
+90: LDQ     a0, s1, APP_STORE               # the clock, sync, peers, MetaData
+    call    app_store_slot
+    sd      a0, ApiView_current_slot(s2)
+    ADDQ    a1, s1, APP_CONFIG
+    call    app_fork
+    sd      a0, ApiView_fork(s2)
+    LDQ     t0, s1, APP_NODE
+    LDQ     t1, t0, Node_flags
+    srli    t1, t1, 3                       # NODE_FLAG_SYNCING
+    andi    t1, t1, 1
+    sd      t1, ApiView_is_syncing(s2)
+    sd      zero, ApiView_el_offline(s2)
+    LDQ     t1, t0, (Node_peers + 8)
+    sd      t1, ApiView_peers(s2)
+    LDQ     t1, t0, Node_metadata_seq
+    sd      t1, ApiView_seq_number(s2)
+    sd      zero, ApiView_attnets(s2)
+    sd      zero, ApiView_syncnets(s2)
+    LDQ     t1, s1, (APP_CONFIG + CONFIG_CUSTODY_REQUIREMENT)
+    sd      t1, ApiView_custody_group_count(s2)
+    LEAVE 0
+END_FUNCTION app_view_fill
+
+/* L0: a0 = 1 when the 32 bytes at a0 are those at a1, else 0. Uses t0, t1. */
+LOCAL_FUNCTION app_same32
+    UNWIND_END_PROLOGUE
+    ld      t0, 0(a0)
+    ld      t1, 0(a1)
+    bne     t0, t1, 1f
+    ld      t0, 8(a0)
+    ld      t1, 8(a1)
+    bne     t0, t1, 1f
+    ld      t0, 16(a0)
+    ld      t1, 16(a1)
+    bne     t0, t1, 1f
+    ld      t0, 24(a0)
+    ld      t1, 24(a1)
+    bne     t0, t1, 1f
+    li      a0, 1
+    ret
+1:  li      a0, 0
+    ret
+END_FUNCTION app_same32
+
+/* L1: an action of a1 bytes, the a1 bytes at a0, joins the Beacon API's shell actions, when it fits. */
+LOCAL_FUNCTION app_api_act
+    FRAME 0
+    LDQ     t0, s1, APP_API_ACT
+    ld      t1, 16(t0)
+    add     t2, t1, a1
+    addi    t2, t2, 24
+    ld      t3, 0(t0)
+    bgtu    t2, t3, 9f
+    addi    t2, t2, -24
+    sd      t2, 16(t0)
+    mv      a2, a1
+    mv      a1, a0
+    addi    a0, t0, 24
+    add     a0, a0, t1
+    call    lantern_copy
+9:  UNFRAME 0
+END_FUNCTION app_api_act
+
+/* L1: a CLOSE of the connection a0 joins the shell actions. Locals: the action. */
+LOCAL_FUNCTION app_api_close
+    FRAME 32
+    li      t0, LIBP2P_ACT_CLOSE_SIZE
+    sd      t0, 0(sp)
+    li      t0, LIBP2P_ACTION_CLOSE
+    sd      t0, 8(sp)
+    sd      a0, LIBP2P_ACT_CONN(sp)
+    mv      a0, sp
+    li      a1, LIBP2P_ACT_CLOSE_SIZE
+    call    app_api_act
+    UNFRAME 32
+END_FUNCTION app_api_close
+
+/*
+ * L2: the Beacon API's sockets, without waiting: ACCEPTED takes a free slot (ADOPT) or a REFUSE,
+ * RECEIVED joins its slot's request, then a complete request gets its answer (SEND, CLOSE),
+ * CLOSED frees the slot; then the shell actions go out. s2 the next event, s3 the end, s4 a
+ * slot's entry, s5 its request ByteList, s6 the connection. Locals: L the wait, L+8 an action.
+ */
+LOCAL_FUNCTION app_api_poll
+    ENTER 64
+    sd      zero, L(sp)
+    LDQ     a0, s1, APP_API_SHELL
+    addi    a1, sp, L
+    LDQ     a2, s1, APP_API_EVENTS
+    CALL_GLOBAL libp2p_shell_wait
+    LDQ     t0, s1, APP_API_EVENTS
+    ld      t1, 8(t0)
+    ld      t2, 16(t0)
+    add     s2, t0, t1
+    add     s3, s2, t2
+1:  bgeu    s2, s3, 80f
+    ld      t0, 8(s2)
+    li      t1, LIBP2P_EVENT_ACCEPTED
+    bne     t0, t1, 3f
+    ADDQ    s4, s1, APP_API_SLOTS           # ACCEPTED: a free slot, or REFUSE
+    li      t1, 0
+2:  li      t2, APP_API_SLOTS_MAX
+    bgeu    t1, t2, 21f
+    ld      t2, 8(s4)
+    beqz    t2, 22f
+    addi    s4, s4, 16
+    addi    t1, t1, 1
+    j       2b
+21: li      t0, LIBP2P_ACT_REFUSE_SIZE
+    sd      t0, (L + 8)(sp)
+    li      t0, LIBP2P_ACTION_REFUSE
+    sd      t0, (L + 16)(sp)
+    ld      t0, LIBP2P_EV_TOKEN(s2)
+    sd      t0, (L + 8 + LIBP2P_ACT_TOKEN)(sp)
+    addi    a0, sp, (L + 8)
+    li      a1, LIBP2P_ACT_REFUSE_SIZE
+    call    app_api_act
+    j       79f
+22: ld      t2, 0(s4)                       # a new generation, its request empty
+    addi    t2, t2, 1
+    sd      t2, 0(s4)
+    li      t3, 1
+    sd      t3, 8(s4)
+    slli    s6, t2, 32
+    or      s6, s6, t1
+    li      t3, (24 + APP_API_REQ_BYTES)
+    mul     s5, t1, t3
+    LDQ     t4, s1, APP_API_REQ
+    add     s5, s5, t4
+    sd      t3, 0(s5)
+    li      t4, 24
+    sd      t4, 8(s5)
+    sd      zero, 16(s5)
+    li      t0, LIBP2P_ACT_ADOPT_SIZE
+    sd      t0, (L + 8)(sp)
+    li      t0, LIBP2P_ACTION_ADOPT
+    sd      t0, (L + 16)(sp)
+    ld      t0, LIBP2P_EV_TOKEN(s2)
+    sd      t0, (L + 8 + LIBP2P_ACT_TOKEN)(sp)
+    sd      s6, (L + 8 + LIBP2P_ACT_TOKEN + 8)(sp)
+    addi    a0, sp, (L + 8)
+    li      a1, LIBP2P_ACT_ADOPT_SIZE
+    call    app_api_act
+    j       79f
+3:  li      t1, LIBP2P_EVENT_RECEIVED
+    beq     t0, t1, 31f
+    li      t1, LIBP2P_EVENT_CLOSED
+    bne     t0, t1, 79f
+31: ld      s6, LIBP2P_EV_CONN(s2)          # the slot of the connection, at its generation
+    slli    t1, s6, 32
+    srli    t1, t1, 32
+    li      t2, APP_API_SLOTS_MAX
+    bgeu    t1, t2, 79f
+    slli    t2, t1, 4
+    ADDQ    s4, s1, APP_API_SLOTS
+    add     s4, s4, t2
+    ld      t2, 0(s4)
+    srli    t3, s6, 32
+    bne     t2, t3, 79f
+    li      t2, LIBP2P_EVENT_CLOSED
+    bne     t0, t2, 4f
+    sd      zero, 8(s4)                     # CLOSED: the slot is free
+    j       79f
+4:  ld      t2, 8(s4)                       # RECEIVED, while reading: the bytes join the request
+    li      t3, 1
+    bne     t2, t3, 79f
+    li      t3, (24 + APP_API_REQ_BYTES)
+    mul     s5, t1, t3
+    LDQ     t4, s1, APP_API_REQ
+    add     s5, s5, t4
+    ld      t2, 16(s5)
+    ld      a2, LIBP2P_EV_COUNT(s2)
+    add     t3, t2, a2
+    li      t4, APP_API_REQ_BYTES
+    bgtu    t3, t4, 6f
+    sd      t3, 16(s5)
+    addi    a0, s5, 24
+    add     a0, a0, t2
+    addi    a1, s2, LIBP2P_EV_DATA
+    call    lantern_copy
+    call    app_view_fill                   # the answer, once the request's head is complete
+    LDQ     t0, s1, APP_API_OUT
+    li      t1, (24 + APP_API_OUT_BYTES)
+    sd      t1, 0(t0)
+    mv      a0, s5
+    LDQ     a1, s1, APP_VIEW
+    LDQ     a2, s1, APP_API_OUT
+    CALL_GLOBAL lantern_api_answer
+    li      t0, LANTERN_HTTP_MORE
+    beq     a0, t0, 79f
+    bnez    a0, 6f
+    LDQ     t0, s1, APP_API_OUT             # SEND the response: size, kind, connection, count, the bytes
+    ld      t1, 16(t0)
+    addi    t2, t1, (LIBP2P_ACT_SEND_DATA + 7)
+    andi    t2, t2, -8
+    LDQ     t3, s1, APP_API_ACT
+    ld      t4, 16(t3)
+    add     t5, t4, t2
+    addi    t5, t5, 24
+    ld      t6, 0(t3)
+    bgtu    t5, t6, 6f
+    addi    t5, t5, -24
+    sd      t5, 16(t3)
+    addi    a0, t3, 24
+    add     a0, a0, t4
+    sd      t2, 0(a0)
+    li      t5, LIBP2P_ACTION_SEND
+    sd      t5, 8(a0)
+    sd      s6, LIBP2P_ACT_CONN(a0)
+    sd      t1, (LIBP2P_ACT_CONN + 8)(a0)
+    addi    a0, a0, LIBP2P_ACT_SEND_DATA
+    addi    a1, t0, 24
+    mv      a2, t1
+    call    lantern_copy
+6:  li      t0, 2                           # then CLOSE
+    sd      t0, 8(s4)
+    mv      a0, s6
+    call    app_api_close
+79: ld      t0, 0(s2)
+    add     s2, s2, t0
+    j       1b
+80: LDQ     t0, s1, APP_API_EVENTS          # the actions go out; their results come at the next poll
+    sd      zero, 16(t0)
+    LDQ     t0, s1, APP_API_ACT
+    ld      t1, 16(t0)
+    beqz    t1, 9f
+    LDQ     a0, s1, APP_API_SHELL
+    mv      a1, t0
+    LDQ     a2, s1, APP_API_EVENTS
+    CALL_GLOBAL libp2p_shell_perform
+    LDQ     t0, s1, APP_API_ACT
+    sd      zero, 16(t0)
+9:  LEAVE 64
+END_FUNCTION app_api_poll
+
+/* L2: each event of the shell becomes a NODE_EV_P2P event of the next step, but those of the engine's connection. s2 the next event, s3 the end. Locals: L the header. */
+LOCAL_FUNCTION app_p2p_events
+    ENTER 16
+    LDQ     t0, s1, APP_SHELL_EVENTS
+    ld      t1, 8(t0)
+    ld      t2, 16(t0)
+    add     s2, t0, t1
+    add     s3, s2, t2
+1:  bgeu    s2, s3, 9f
+    mv      a0, s2                          # a datagram of discv5
+    call    app_dv_datagram
+    bnez    a0, 2f
+    mv      a0, s2                          # the engine's connection
+    call    app_engine_event
+    bnez    a0, 2f
+    ld      t0, 0(s2)
+    addi    t0, t0, 16
+    sd      t0, L(sp)
+    li      t0, NODE_EV_P2P
+    sd      t0, (L + 8)(sp)
+    addi    a0, sp, L
+    li      a1, 16
+    call    app_event_put
+    mv      a0, s2
+    ld      a1, 0(s2)
+    call    app_event_put
+2:  ld      t0, 0(s2)
+    add     s2, s2, t0
+    j       1b
+9:  LDQ     t0, s1, APP_SHELL_EVENTS
+    sd      zero, 16(t0)
+    LDQ     t0, s1, APP_ENGINE_DUE          # then more bytes of the request
+    beqz    t0, 10f
+    STQ     zero, s1, APP_ENGINE_DUE
+    call    app_engine_send
+10: LEAVE 16
+END_FUNCTION app_p2p_events
+
+/*
+ * L2: the loop: the clock, a NODE_EV_TICK of the time and the shell's events, lantern_node_step
+ * with libp2p, a line at each new slot, then a wait for the sockets until the node's wakeup, at
+ * most APP_WAIT_MS. Locals: L the time, L+8 the wait, L+16 the NODE_EV_TICK.
+ */
+LOCAL_FUNCTION app_loop
+    ENTER 48
+1:  ADDQ    a0, s1, APP_TICK                # the clocks
+    CALL_GLOBAL libp2p_shell_clock
+    addi    a0, sp, L
+    CALL_GLOBAL lantern_shell_time_ms
+    li      t0, 24                          # NODE_EV_TICK of the Unix time
+    sd      t0, (L + 16)(sp)
+    li      t0, NODE_EV_TICK
+    sd      t0, (L + 24)(sp)
+    ld      t0, L(sp)
+    sd      t0, (L + 32)(sp)
+    addi    a0, sp, (L + 16)
+    li      a1, 24
+    call    app_event_put
+    call    app_p2p_events
+    LDQ     a0, s1, APP_P2P
+    ADDQ    a1, s1, APP_TICK
+    call    app_step
+    call    app_discv5
+    LDQ     a0, s1, APP_STORE               # a line at each new slot
+    call    app_store_slot
+    LDQ     t0, s1, APP_LAST_SLOT
+    beq     a0, t0, 3f
+    STQ     a0, s1, APP_LAST_SLOT
+    sd      a0, (L + 8)(sp)
+    call    app_line_start                  # slot <s>, head 0x<root>, finalized epoch <e>
+    ADDRESS a0, app_m_slot
+    li      a1, app_m_slot_len
+    call    app_line_text
+    ld      a0, (L + 8)(sp)
+    call    app_line_u64
+    ADDRESS a0, app_m_head
+    li      a1, app_m_head_len
+    call    app_line_text
+    LDQ     a0, s1, APP_NODE
+    ADDQ    a0, a0, Node_head_root
+    li      a1, 8
+    call    app_line_hex
+    ADDRESS a0, app_m_finalized
+    li      a1, app_m_finalized_len
+    call    app_line_text
+    LDQ     a0, s1, APP_STORE
+    LDQ     a0, a0, Store_finalized_checkpoint
+    call    app_line_u64
+    li      a0, 1
+    call    app_line_end
+3:  LDQ     t0, s1, (APP_RESULT + 8)        # the wait: to the node's or discv5's wakeup, at most APP_WAIT_MS
+    LDQ     t1, s1, APP_DV_WAKE
+    bgeu    t1, t0, 31f
+    mv      t0, t1
+31: LDQ     t1, s1, (APP_TICK + LIBP2P_TICK_NOW)
+    sub     t2, t0, t1
+    bgtu    t0, t1, 32f
+    li      t2, 0
+32: li      t3, APP_WAIT_MS
+    bltu    t2, t3, 33f
+    mv      t2, t3
+33: sd      t2, (L + 8)(sp)
+    LDQ     a0, s1, APP_SHELL
+    addi    a1, sp, (L + 8)
+    LDQ     a2, s1, APP_SHELL_EVENTS
+    CALL_GLOBAL libp2p_shell_wait
+    call    app_api_poll
+    j       1b
+END_FUNCTION app_loop
+
+/* (args): docs/reference/app.md. s1 the App, s2 args. Locals: L the fault. */
+FUNCTION lantern_app_main
+    ENTER 16
+    mv      s2, a0
+    li      a0, APP_SIZE
+    call    app_map
+    beqz    a0, 9f
+    mv      s1, a0
+    sd      s2, APP_ARGS(s1)
+    li      t0, (24 + APP_LINE_MAX)
+    li      t1, 24
+    ADDQ    t2, s1, APP_LINE
+    sd      t0, 0(t2)
+    sd      t1, 8(t2)
+    li      t0, (24 + APP_PATH_MAX)
+    ADDQ    t2, s1, APP_PATH
+    sd      t0, 0(t2)
+    sd      t1, 8(t2)
+    mv      a0, s2
+    ADDQ    a1, s1, APP_OPTIONS
+    addi    a2, sp, L
+    CALL_GLOBAL lantern_app_options
+    beqz    a0, 1f
+    call    app_line_start                  # faulty option at argument <n>
+    ADDRESS a0, app_m_option
+    li      a1, app_m_option_len
+    call    app_line_text
+    ld      a0, L(sp)
+    call    app_line_u64
+    li      a0, 2
+    call    app_line_end
+    li      a0, 1
+    LEAVE 16
+1:  call    app_start
+    bnez    a0, 8f
+    call    app_net
+    bnez    a0, 8f
+    call    app_loop
+8:  LEAVE 16
+9:  li      a0, 2
+    LEAVE 16
+END_FUNCTION lantern_app_main
