@@ -2918,7 +2918,21 @@ LOCAL_FUNCTION app_loop
     bl      app_line_u64
     mov     x0, #1
     bl      app_line_end
-3:  ldr     x9, [x19, #(APP_RESULT + 8)]    /* the wait: to the node's or discv5's wakeup, at most APP_WAIT_MS */
+3:  ldr     x9, [x19, #APP_NODE]            /* a line when the count of connected peers changes */
+    ldr     x9, [x9, #(Node_peers + 8)]
+    ldr     x10, [x19, #APP_PEERS]
+    cmp     x9, x10
+    b.eq    4f
+    str     x9, [x19, #APP_PEERS]
+    bl      app_line_start                  /* peers <n> */
+    ADDRESS x0, app_m_peers
+    mov     x1, #app_m_peers_len
+    bl      app_line_text
+    ldr     x0, [x19, #APP_PEERS]
+    bl      app_line_u64
+    mov     x0, #1
+    bl      app_line_end
+4:  ldr     x9, [x19, #(APP_RESULT + 8)]    /* the wait: to the node's or discv5's wakeup, at most APP_WAIT_MS */
     ldr     x13, [x19, #APP_DV_WAKE]
     cmp     x13, x9
     csel    x9, x13, x9, lo

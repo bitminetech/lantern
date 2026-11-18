@@ -70,7 +70,8 @@
 .set APP_PATH, APP_LINE + 24 + APP_LINE_MAX /* a ByteList: a path */
 .set APP_PATH_MAX, 4096
 .set APP_KZG, APP_PATH + 24 + APP_PATH_MAX  /* pair: the KzgSettings of the trusted setup */
-.set APP_SIZE, (APP_KZG + 16 + 4095) & ~4095
+.set APP_PEERS, APP_KZG + 16               /* the count of connected peers of the last log line */
+.set APP_SIZE, (APP_PEERS + 8 + 4095) & ~4095
 .set APP_BLOCK_BYTES, 1 << 16               /* the anchor block */
 .set APP_BUF_ENTRY, 24                      /* a BufferId table entry: id, address, size */
 .set APP_BUFS_CAP, 4096
@@ -228,6 +229,9 @@ app_t_dot:
     .ascii "."
 app_t_enr:
     .ascii "enr:"
+app_m_peers:
+    .ascii "peers "
+.set app_m_peers_len, 6
 app_m_kzg:
     .ascii "the KZG trusted setup"
 .set app_m_kzg_len, 21

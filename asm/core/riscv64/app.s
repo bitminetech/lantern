@@ -2994,7 +2994,20 @@ LOCAL_FUNCTION app_loop
     call    app_line_u64
     li      a0, 1
     call    app_line_end
-3:  LDQ     t0, s1, (APP_RESULT + 8)        # the wait: to the node's or discv5's wakeup, at most APP_WAIT_MS
+3:  LDQ     t0, s1, APP_NODE                # a line when the count of connected peers changes
+    LDQ     t0, t0, (Node_peers + 8)
+    LDQ     t1, s1, APP_PEERS
+    beq     t0, t1, 4f
+    STQ     t0, s1, APP_PEERS
+    call    app_line_start                  # peers <n>
+    ADDRESS a0, app_m_peers
+    li      a1, app_m_peers_len
+    call    app_line_text
+    LDQ     a0, s1, APP_PEERS
+    call    app_line_u64
+    li      a0, 1
+    call    app_line_end
+4:  LDQ     t0, s1, (APP_RESULT + 8)        # the wait: to the node's or discv5's wakeup, at most APP_WAIT_MS
     LDQ     t1, s1, APP_DV_WAKE
     bgeu    t1, t0, 31f
     mv      t0, t1
