@@ -873,7 +873,12 @@ LOCAL_FUNCTION app_buf_drop
 9:  UNFRAME 16
 END_FUNCTION app_buf_drop
 
-/* L1: a0 = new memory with a copy of the a1 bytes at a0, or 0. s2 the source, s3 the size, s4 the copy. */
+/*
+ * L1: a0 = new memory with a copy of the a1 bytes at a0, or 0. With a source and size of
+ * multiples of 8, a page of the source that is all zero bytes is not written: the new memory is
+ * zero already, and the OS keeps no memory for a page nobody writes. s2 the source, s3 the size,
+ * s4 the copy, s5 the page's offset, s6 its bytes.
+ */
 LOCAL_FUNCTION app_dup
     ENTER 0
     mv      s2, a0
@@ -882,10 +887,34 @@ LOCAL_FUNCTION app_dup
     call    app_map
     beqz    a0, 9f
     mv      s4, a0
-    mv      a1, s2
+    or      t0, s2, s3
+    andi    t0, t0, 7
+    beqz    t0, 1f
+    mv      a1, s2                          # not multiples of 8: all of it
     mv      a2, s3
     call    lantern_copy
-    mv      a0, s4
+    j       8f
+1:  li      s5, 0
+2:  bgeu    s5, s3, 8f                      # the next page: all zero, or a copy
+    sub     s6, s3, s5
+    li      t0, 4096
+    bltu    s6, t0, 21f
+    mv      s6, t0
+21: add     t1, s2, s5
+    li      t2, 0
+3:  add     t3, t1, t2
+    ld      t3, 0(t3)
+    bnez    t3, 4f
+    addi    t2, t2, 8
+    bltu    t2, s6, 3b
+    j       5f
+4:  add     a0, s4, s5
+    mv      a1, t1
+    mv      a2, s6
+    call    lantern_copy
+5:  add     s5, s5, s6
+    j       2b
+8:  mv      a0, s4
 9:  LEAVE 0
 END_FUNCTION app_dup
 

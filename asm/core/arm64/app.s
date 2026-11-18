@@ -836,7 +836,12 @@ LOCAL_FUNCTION app_buf_drop
 9:  UNFRAME 16
 END_FUNCTION app_buf_drop
 
-/* L1: x0 = new memory with a copy of the x1 bytes at x0, or 0. x20 the source, x21 the size, x22 the copy. */
+/*
+ * L1: x0 = new memory with a copy of the x1 bytes at x0, or 0. With a source and size of
+ * multiples of 8, a page of the source that is all zero bytes is not written: the new memory is
+ * zero already, and the OS keeps no memory for a page nobody writes. x20 the source, x21 the
+ * size, x22 the copy, x23 the page's offset, x24 its bytes.
+ */
 LOCAL_FUNCTION app_dup
     ENTER 0
     mov     x20, x0
@@ -845,10 +850,34 @@ LOCAL_FUNCTION app_dup
     bl      app_map
     cbz     x0, 9f
     mov     x22, x0
-    mov     x1, x20
+    orr     x9, x20, x21
+    tst     x9, #7
+    b.eq    1f
+    mov     x1, x20                         /* not multiples of 8: all of it */
     mov     x2, x21
     bl      lantern_copy
-    mov     x0, x22
+    b       8f
+1:  mov     x23, #0
+2:  subs    x24, x21, x23                   /* the next page: all zero, or a copy */
+    b.ls    8f
+    mov     x9, #4096
+    cmp     x24, x9
+    csel    x24, x24, x9, lo
+    add     x10, x20, x23
+    mov     x11, #0
+3:  ldr     x12, [x10, x11]
+    cbnz    x12, 4f
+    add     x11, x11, #8
+    cmp     x11, x24
+    b.lo    3b
+    b       5f
+4:  add     x0, x22, x23
+    mov     x1, x10
+    mov     x2, x24
+    bl      lantern_copy
+5:  add     x23, x23, x24
+    b       2b
+8:  mov     x0, x22
 9:  LEAVE 0
 END_FUNCTION app_dup
 

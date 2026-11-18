@@ -895,7 +895,12 @@ LOCAL_FUNCTION app_buf_drop
 9:  UNFRAME 16
 END_FUNCTION app_buf_drop
 
-/* L1: rax = new memory with a copy of the rsi bytes at rdi, or 0. rbp the source, r12 the size, r13 the copy. */
+/*
+ * L1: rax = new memory with a copy of the rsi bytes at rdi, or 0. With a source and size of
+ * multiples of 8, a page of the source that is all zero bytes is not written: the new memory is
+ * zero already, and the OS keeps no memory for a page nobody writes. rbp the source, r12 the
+ * size, r13 the copy, r14 the page's offset, r15 its bytes.
+ */
 LOCAL_FUNCTION app_dup
     ENTER 0
     mov     %rdi, %rbp
@@ -905,11 +910,36 @@ LOCAL_FUNCTION app_dup
     test    %rax, %rax
     jz      9f
     mov     %rax, %r13
-    mov     %rax, %rdi
+    mov     %rbp, %rcx
+    or      %r12, %rcx
+    test    $7, %cl
+    jz      1f
+    mov     %rax, %rdi                      # not multiples of 8: all of it
     mov     %rbp, %rsi
     mov     %r12, %rdx
     call    lantern_copy
-    mov     %r13, %rax
+    jmp     8f
+1:  xor     %r14d, %r14d
+2:  mov     %r12, %r15                      # the next page: all zero, or a copy
+    sub     %r14, %r15
+    jbe     8f
+    mov     $4096, %eax
+    cmp     %rax, %r15
+    cmova   %rax, %r15
+    lea     (%rbp,%r14), %rsi
+    xor     %ecx, %ecx
+3:  cmpq    $0, (%rsi,%rcx)
+    jne     4f
+    add     $8, %rcx
+    cmp     %r15, %rcx
+    jb      3b
+    jmp     5f
+4:  lea     (%r13,%r14), %rdi
+    mov     %r15, %rdx
+    call    lantern_copy
+5:  add     %r15, %r14
+    jmp     2b
+8:  mov     %r13, %rax
 9:  LEAVE 0
 END_FUNCTION app_dup
 
