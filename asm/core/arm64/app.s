@@ -1065,20 +1065,40 @@ LOCAL_FUNCTION app_step
     b.ne    2f
     add     x22, x22, #1
     cmp     x22, #APP_WORK_TRIES
-    b.hs    2f
-    mov     x0, #0                          /* a larger node, and twice the actions */
+    b.hs    21f
+    ldr     x9, [x19, #(APP_RESULT + NodeStepResult_short)]   /* the buffer short of room grows */
+    cmp     x9, #NODE_SHORT_NODE
+    b.ne    11f
+    mov     x0, #0                          /* the node */
     bl      app_grow
-    cbnz    x0, 2f
-    ldr     x9, [x19, #(APP_ACTIONS + 8)]
-    lsl     x1, x9, #1
-    str     x1, [sp, #-16]!
-    mov     x0, #APP_ACTIONS
-    bl      app_unmap
-    ldr     x1, [sp], #16
-    mov     x0, #APP_ACTIONS
-    bl      app_alloc
-    cbz     x0, 2f
+    cbnz    x0, 21f
     b       1b
+11: mov     x23, #APP_ACTIONS               /* actions, or scratch: twice the room */
+    cmp     x9, #NODE_SHORT_SCRATCH
+    b.ne    12f
+    mov     x23, #APP_SCRATCH
+12: add     x9, x19, x23
+    ldr     x9, [x9, #8]
+    lsl     x24, x9, #1
+    mov     x0, x23
+    bl      app_unmap
+    mov     x0, x23
+    mov     x1, x24
+    bl      app_alloc
+    cbz     x0, 21f
+    b       1b
+21: bl      app_line_start                  /* a node step: no room in buffer <short> */
+    ADDRESS x0, app_m_step
+    mov     x1, #app_m_step_len
+    bl      app_line_text
+    ADDRESS x0, app_m_room
+    mov     x1, #app_m_room_len
+    bl      app_line_text
+    ldr     x0, [x19, #(APP_RESULT + NodeStepResult_short)]
+    bl      app_line_u64
+    mov     x0, #2
+    bl      app_line_end
+    LEAVE 0
 2:  mov     x2, x0                          /* a node step: status <n> */
     ADDRESS x0, app_m_step
     mov     x1, #app_m_step_len

@@ -58,7 +58,7 @@
 .set APP_RECORD, APP_HEADER + 208           /* a NODE_EV_ENR event of a boot node: 48 bytes, then the record */
 .set APP_FILE, APP_RECORD + 48 + APP_RECORD_MAX /* FileResult */
 .set APP_RESULT, APP_FILE + 32              /* NodeStepResult */
-.set APP_NODE_ROOM, APP_RESULT + 16         /* NodeRoom */
+.set APP_NODE_ROOM, APP_RESULT + NodeStepResult__size         /* NodeRoom */
 .set APP_STORE_ROOM, APP_NODE_ROOM + 80     /* StoreRoom */
 .set APP_SEEN_ROOM, APP_STORE_ROOM + 16     /* SeenRoom */
 .set APP_STATE_ROOM, APP_SEEN_ROOM + 32     /* StateRoom */
@@ -232,6 +232,9 @@ app_t_enr:
 app_m_peers:
     .ascii "peers "
 .set app_m_peers_len, 6
+app_m_room:
+    .ascii ": no room in buffer "
+.set app_m_room_len, 20
 app_m_kzg:
     .ascii "the KZG trusted setup"
 .set app_m_kzg_len, 21

@@ -1100,19 +1100,40 @@ LOCAL_FUNCTION app_step
     bne     a0, t0, 2f
     addi    s4, s4, 1
     li      t0, APP_WORK_TRIES
-    bgeu    s4, t0, 2f
-    li      a0, 0                           # a larger node, and twice the actions
+    bgeu    s4, t0, 21f
+    LDQ     t0, s1, (APP_RESULT + NodeStepResult_short)  # the buffer short of room grows
+    li      t1, NODE_SHORT_NODE
+    bne     t0, t1, 11f
+    li      a0, 0                           # the node
     call    app_grow
-    bnez    a0, 2f
-    LDQ     s5, s1, (APP_ACTIONS + 8)
-    slli    s5, s5, 1
-    li      a0, APP_ACTIONS
-    call    app_unmap
-    li      a0, APP_ACTIONS
-    mv      a1, s5
-    call    app_alloc
-    beqz    a0, 2f
+    bnez    a0, 21f
     j       1b
+11: li      s5, APP_ACTIONS                 # actions, or scratch: twice the room
+    li      t1, NODE_SHORT_SCRATCH
+    bne     t0, t1, 12f
+    li      s5, APP_SCRATCH
+12: add     t0, s1, s5
+    ld      s6, 8(t0)
+    slli    s6, s6, 1
+    mv      a0, s5
+    call    app_unmap
+    mv      a0, s5
+    mv      a1, s6
+    call    app_alloc
+    beqz    a0, 21f
+    j       1b
+21: call    app_line_start                  # a node step: no room in buffer <short>
+    ADDRESS a0, app_m_step
+    li      a1, app_m_step_len
+    call    app_line_text
+    ADDRESS a0, app_m_room
+    li      a1, app_m_room_len
+    call    app_line_text
+    LDQ     a0, s1, (APP_RESULT + NodeStepResult_short)
+    call    app_line_u64
+    li      a0, 2
+    call    app_line_end
+    LEAVE 0
 2:  mv      a2, a0                          # a node step: status <n>
     ADDRESS a0, app_m_step
     li      a1, app_m_step_len

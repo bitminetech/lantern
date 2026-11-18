@@ -1145,21 +1145,41 @@ LOCAL_FUNCTION app_step
     jne     2f
     inc     %r13
     cmp     $APP_WORK_TRIES, %r13
-    jae     2f
-    xor     %edi, %edi                      # a larger node, and twice the actions
+    jae     21f
+    mov     (APP_RESULT + NodeStepResult_short)(%rbx), %rax  # the buffer short of room grows
+    cmp     $NODE_SHORT_NODE, %rax
+    jne     11f
+    xor     %edi, %edi                      # the node
     call    app_grow
     test    %rax, %rax
-    jnz     2f
-    mov     (APP_ACTIONS + 8)(%rbx), %r14
-    shl     $1, %r14
-    mov     $APP_ACTIONS, %edi
+    jnz     21f
+    jmp     1b
+11: mov     $APP_ACTIONS, %r14d             # actions, or scratch: twice the room
+    cmp     $NODE_SHORT_SCRATCH, %rax
+    jne     12f
+    mov     $APP_SCRATCH, %r14d
+12: mov     8(%rbx,%r14), %r15
+    shl     $1, %r15
+    mov     %r14, %rdi
     call    app_unmap
-    mov     $APP_ACTIONS, %edi
-    mov     %r14, %rsi
+    mov     %r14, %rdi
+    mov     %r15, %rsi
     call    app_alloc
     test    %rax, %rax
-    jz      2f
+    jz      21f
     jmp     1b
+21: call    app_line_start                  # a node step: no room in buffer <short>
+    ADDRESS %rdi, app_m_step
+    mov     $app_m_step_len, %esi
+    call    app_line_text
+    ADDRESS %rdi, app_m_room
+    mov     $app_m_room_len, %esi
+    call    app_line_text
+    mov     (APP_RESULT + NodeStepResult_short)(%rbx), %rdi
+    call    app_line_u64
+    mov     $2, %edi
+    call    app_line_end
+    LEAVE 0
 2:  mov     %rax, %rdx                      # a node step: status <n>
     ADDRESS %rdi, app_m_step
     mov     $app_m_step_len, %esi

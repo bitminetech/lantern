@@ -220,19 +220,20 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 
 - `LANTERN_OK`: the events up to `accepted` are handled and the actions added.
 - `LANTERN_INVALID_EVENT`: an event breaks the rules of `NodeEvent`, or libp2p_step takes a libp2p event as invalid. Nothing is changed.
-- `LANTERN_BUFFER_TOO_SMALL`: `actions`, a part of `node`, or `scratch` has too little room. Nothing is changed.
+- `LANTERN_BUFFER_TOO_SMALL`: `actions`, a part of `node`, or `scratch` has too little room; `short` of `result` names it. Nothing else is changed.
 
 ### Caller must
 
 - Do the actions in order before the next step.
 - Pass the events after `accepted` again in the next step, before new ones.
 - Step again by `wakeup`.
-- Grow the node with lantern_node_copy and give more room to `actions` and `scratch` on `LANTERN_BUFFER_TOO_SMALL`, then call again with the same events.
+- On `LANTERN_BUFFER_TOO_SMALL`, grow the buffer that `short` names (the node with lantern_node_copy, or more room for `actions` or `scratch`), then call again with the same events.
 
 ### Function does
 
 - Room: `actions` has the event bytes + 512 per event + 128 per known block + 512 bytes free, and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and with `p2p` `NODE_SYNC_BATCH` times the larger of `MAX_BLOBS_PER_BLOCK` and `MAX_BLOBS_PER_BLOCK_ELECTRA` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node, and `DISCV5_ENR_SIZE` + `DISCV5_ENR_SCRATCH` more with a `NODE_EV_ENR`.
 - Before any change: the root of each `NODE_EV_BLOCK`, with lantern_node_block_root of the fork of its slot. A status of that call is the step's.
+- On `LANTERN_BUFFER_TOO_SMALL`, `short`: `NODE_SHORT_ACTIONS` for the room of `actions`, and for `LIBP2P_BUFFER_TOO_SMALL` of libp2p_step (its scratch is the step's own); `NODE_SHORT_NODE` for a part of the node; `NODE_SHORT_SCRATCH` for `scratch`, and for `LANTERN_BUFFER_TOO_SMALL` of lantern_node_block_root.
 - `NODE_EV_TICK`: sets `time_ms` of the node, then on_tick of the fork of the new slot.
 - `NODE_EV_BLOCK`: for a root the node does not know, a `NODE_ACT_BYTES_PUT` of the bytes and a `NodeBlock` in `NODE_BLOCK_WAITING`. Bytes that are no `SignedBeaconBlock` are dropped.
 - A waiting block whose parent is imported: a `NODE_ACT_STATE_COPY` of the parent's post-state and a `NODE_WORK_IMPORT_BLOCK`; the block is `NODE_BLOCK_IMPORTING`. A waiting block whose parent is invalid becomes `NODE_BLOCK_INVALID`.
@@ -917,6 +918,8 @@ The state of the node: a value with parts.
 |---|---|---|---|
 | 0 | `accepted` | u64 | Events handled, from the first |
 | 8 | `wakeup` | u64 | Monotonic ms by which the next step is due: libp2p's WAKEUP, the tick's time while the node holds events for libp2p, 2^64 - 1 with no `p2p` |
+| 16 | `short` | u64 | With `LANTERN_BUFFER_TOO_SMALL`: the buffer with too little room, `NODE_SHORT_ACTIONS` (1), `NODE_SHORT_NODE` (2) or `NODE_SHORT_SCRATCH` (3) |
+| 24 | | | Size |
 
 ## Type `NodeEvents`
 

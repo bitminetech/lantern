@@ -4355,11 +4355,11 @@ FUNCTION lantern_node_step
 51: ldp     x9, x10, [x24, #8]
     ldr     x11, [x24]
     subs    x11, x11, x9
-    b.lo    8f
+    b.lo    81f
     subs    x11, x11, x10
-    b.lo    8f
+    b.lo    81f
     cmp     x11, x12
-    b.lo    8f
+    b.lo    81f
     ldr     x9, [x19, #Node_checkpoints]    /* blocks: one entry for each BLOCK event */
     ldr     x10, [x19, #Node_blocks]
     sub     x9, x9, x10
@@ -4373,7 +4373,7 @@ FUNCTION lantern_node_step
     csel    x12, x12, xzr, ne
     add     x10, x27, x12
     cmp     x9, x10
-    b.lo    8f
+    b.lo    82f
     ldr     x9, [x19, #Node_p2p_out]        /* blobs: one for each GOSSIP WORK_DONE event, and with p2p a batch's sidecars */
     ldr     x10, [x19, #Node_blobs]
     sub     x9, x9, x10
@@ -4389,11 +4389,11 @@ FUNCTION lantern_node_step
     cmp     x11, x12
     csel    x11, x12, x11, lo
     lsr     x12, x11, #32
-    cbnz    x12, 8f
+    cbnz    x12, 82f
     mov     x12, #NODE_SYNC_BATCH
     madd    x10, x11, x12, x10
 54: cmp     x9, x10
-    b.lo    8f
+    b.lo    82f
     ldr     x9, [x19, #Node_engine_in]      /* engine_in: the bytes of the ENGINE events */
     add     x9, x19, x9
     ldr     x10, [x9]
@@ -4402,7 +4402,7 @@ FUNCTION lantern_node_step
     sub     x10, x10, x11
     ldr     x11, [sp, #(L + 128)]
     cmp     x10, x11
-    b.lo    8f
+    b.lo    82f
     ldr     x9, [x19, #Node_pow_blocks]     /* checkpoints: two for each WORK_DONE event, and two */
     ldr     x10, [x19, #Node_checkpoints]
     sub     x9, x9, x10
@@ -4414,7 +4414,7 @@ FUNCTION lantern_node_step
     lsl     x10, x10, #1
     add     x10, x10, #2
     cmp     x9, x10
-    b.lo    8f
+    b.lo    82f
     ldr     x9, [x19, #Node_peers]          /* pow blocks: one for each POW_BLOCK event */
     ldr     x10, [x19, #Node_pow_blocks]
     sub     x9, x9, x10
@@ -4423,7 +4423,7 @@ FUNCTION lantern_node_step
     ldr     x10, [x19, #(Node_pow_blocks + 8)]
     sub     x9, x9, x10
     cmp     x9, x27
-    b.lo    8f
+    b.lo    82f
     mov     x9, #NODE_ROOT_ENTRY            /* scratch: the root entries, and with p2p the queue's bytes the P2P events take and libp2p's scratch, at its end */
     mul     x12, x27, x9
     ldr     x9, [sp, #(L + 16)]
@@ -4435,7 +4435,7 @@ FUNCTION lantern_node_step
     sub     x9, x9, x10
     ldr     x10, [sp, #(L + 56)]
     cmp     x9, x10
-    b.lo    8f
+    b.lo    82f
     add     x12, x12, x10
     MOVQ    x9, LIBP2P_SCRATCH_SIZE
     add     x12, x12, x9
@@ -4455,7 +4455,7 @@ FUNCTION lantern_node_step
 55:
     ldr     x10, [x23]
     cmp     x10, x9
-    b.lo    8f
+    b.lo    83f
     str     x10, [sp, #(L + 8)]
     sub     x10, x10, x12
     str     x10, [x23]
@@ -4470,7 +4470,9 @@ FUNCTION lantern_node_step
     str     x9, [sp, #(L + 48)]
     MOVQ    x10, LIBP2P_SCRATCH_SIZE
     str     x10, [x9]
-53: mov     x27, x21                        /* the root of each BLOCK event, before any change */
+53: mov     x9, #NODE_SHORT_SCRATCH         /* the root of each BLOCK event, before any change; its room: scratch */
+    str     x9, [x25, #NodeStepResult_short]
+    mov     x27, x21
 11: cmp     x27, x22
     b.hs    13f
     ldr     x9, [x27, #8]
@@ -4517,6 +4519,8 @@ FUNCTION lantern_node_step
     mov     x9, #LANTERN_BUFFER_TOO_SMALL
     mov     x10, #LANTERN_INVALID_EVENT
     csel    x0, x9, x10, eq
+    mov     x9, #NODE_SHORT_ACTIONS         /* libp2p's room: actions */
+    str     x9, [x25, #NodeStepResult_short]
     b       14f
 24: str     x1, [sp, #(L + 96)]             /* from here on the step holds */
     mov     x0, x28                         /* the P2P events libp2p took: k less the queued ones */
@@ -4613,6 +4617,12 @@ FUNCTION lantern_node_step
     LEAVE 144
 7:  mov     x0, #LANTERN_INVALID_EVENT
     LEAVE 144
+81: mov     x9, #NODE_SHORT_ACTIONS         /* the buffer with too little room */
+    b       84f
+82: mov     x9, #NODE_SHORT_NODE
+    b       84f
+83: mov     x9, #NODE_SHORT_SCRATCH
+84: str     x9, [x25, #NodeStepResult_short]
 8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 144
 END_FUNCTION lantern_node_step

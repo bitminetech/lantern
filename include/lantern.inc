@@ -684,6 +684,11 @@
 /* NodeStepResult: the output of lantern_node_step */
 .set NodeStepResult_accepted, 0        /* events handled, from the first */
 .set NodeStepResult_wakeup, 8          /* monotonic ms by which the next step is due; 2^64 - 1 for none */
+.set NodeStepResult_short, 16          /* with LANTERN_BUFFER_TOO_SMALL: NODE_SHORT_* */
+.set NodeStepResult__size, 24
+.set NODE_SHORT_ACTIONS, 1             /* the room of actions, or libp2p_step's */
+.set NODE_SHORT_NODE, 2                /* a part of the node */
+.set NODE_SHORT_SCRATCH, 3             /* the room of scratch, or lantern_node_block_root's */
 
 /* NodeEvent kinds, after the size and kind header */
 .set NODE_EV_TICK, 1                   /* 16 time_ms */

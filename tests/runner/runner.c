@@ -2633,7 +2633,7 @@ static void shell_discv5(struct node_shell *s, const uint8_t *ev, uint64_t len, 
 /* One lantern_node_step with the pending events, again with more room while it asks for it, then its actions in order. */
 static void shell_step(fc_node *n, const char **why) {
     struct node_shell *s = n->shell;
-    uint64_t len = s->pending_len, esize = 24 + len, count[2] = {0, 0}, nevents = 0, st = 1;
+    uint64_t len = s->pending_len, esize = 24 + len, count[3] = {0, 0, 0}, nevents = 0, st = 1;
     uint8_t *events = buffer(esize);
     wr64(events, esize);
     wr64(events + 8, 24);
@@ -2657,11 +2657,16 @@ static void shell_step(fc_node *n, const char **why) {
         free(sstore);
         free(sp2p);
         if (st != 1 || *why) break;
-        shell_grow_node(s, why); /* BUFFER_TOO_SMALL: the node's parts or the actions */
-        free(s->actions);
-        s->actions_size *= 2;
-        s->actions = buffer(s->actions_size);
-        wr64(s->actions, s->actions_size);
+        if (count[2] == 2) { /* BUFFER_TOO_SMALL: the buffer that short names */
+            shell_grow_node(s, why);
+        } else if (count[2] == 1) {
+            free(s->actions);
+            s->actions_size *= 2;
+            s->actions = buffer(s->actions_size);
+            wr64(s->actions, s->actions_size);
+        } else {
+            *why = count[2] == 3 ? "lantern_node_step: short of scratch" : "lantern_node_step: short is no NODE_SHORT_*";
+        }
     }
     if (!*why && st != 0) {
         static char msg[64];
