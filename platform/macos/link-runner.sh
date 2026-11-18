@@ -1,5 +1,5 @@
 #!/bin/sh
-# Link the test runner on a Mac against the objects that build.sh made.
+# Link the test runner, the shell test and the binary on a Mac against the objects that build.sh made.
 # Usage: platform/macos/link-runner.sh ISA OUT_DIR    (ISA: x86_64 or arm64)
 # The runner is test code in C. It uses the host Xcode clang and macOS SDK.
 set -eu
@@ -28,3 +28,16 @@ for preset in mainnet minimal; do
             "$root/tests/runner/abi_$isa.s" "$out/liblantern-$preset.a" $deps_off -o "$out/runner-$preset-$fork-bls-off"
     done
 done
+
+# The shell test (tests/shell/shell.c), with the shell object of this target from the library.
+clang -arch $arch -mmacosx-version-min=11.0 -std=c11 -O2 -Wall -Wextra -Werror \
+    "$root/tests/shell/shell.c" "$out/liblantern-minimal.a" -o "$out/shell-test"
+
+# The binary, when build.sh made its entry point: the library of the preset, the dependency
+# objects and asm-libp2p's shell, with libSystem.
+if [ -e "$out/entry.o" ]; then
+    for preset in mainnet minimal; do
+        clang -arch $arch -mmacosx-version-min=11.0 "$out/entry.o" "$out/liblantern-$preset.a" $deps \
+            "$out/deps/libp2p-shell.o" -o "$out/lantern-$preset"
+    done
+fi

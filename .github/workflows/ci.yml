@@ -201,6 +201,9 @@ jobs:
         run: |
           set -o pipefail
           tests/runner/macos.sh vectors | tee results-macos-${{ matrix.isa }}-${{ matrix.fork }}.txt
+      - name: Run the shell test
+        if: matrix.fork == 'phase0'
+        run: build/macos-${{ matrix.isa }}/shell-test "$RUNNER_TEMP"
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:

@@ -20,3 +20,11 @@ as() { clang --target=$target "$@"; }
 build_objects macos "$out"
 echo $deps | tr ' ' '\n' | sed "s#^$out/##" > "$out/deps.txt"
 echo $deps_off | tr ' ' '\n' | sed "s#^$out/##" > "$out/deps-off.txt"
+
+# The entry point of the binary (asm/shell/macos/<ISA>/entry.s), for an ISA whose core has the
+# startup and loop (asm/core/<ISA>/app.s). link-runner.sh links the binary on a Mac.
+if [ -e "$root/asm/core/$isa/app.s" ]; then
+    as -I"$root/include/minimal" -I"$root/include" -I"$root/platform/macos" -I"$root/asm/core/$isa" \
+        -I"$root/build/deps/asm-ssz/include" -I"$root/build/deps/asm-crypto/include" \
+        -c "$root/asm/shell/macos/$isa/entry.s" -o "$out/entry.o"
+fi
