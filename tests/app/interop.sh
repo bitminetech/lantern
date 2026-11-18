@@ -19,6 +19,10 @@ secs=${4:-180}
 net=lantern-interop
 peer=172.30.0.10                            # the client; lantern is 172.30.0.11
 engine="http://127.0.0.1:8551"              # no execution engine runs: the clients only peer
+env=
+# Keys of the pinned config that prysm's strict YAML parse does not know: with them it falls back to
+# its built-in mainnet config. prysm-config.yaml is config.yaml without them.
+prysm_unknown="EIP8321_FORK_VERSION|EIP8321_FORK_EPOCH|EIP8198_FORK_VERSION|EIP8198_FORK_EPOCH|INCLUSION_LIST_DUE_BPS|SLOT_DURATION_MS_EIP8198|MAX_REQUEST_INCLUSION_LIST|MIN_SLOTS_FOR_INCLUSION_LISTS_REQUESTS|MAX_TRANSACTIONS_BYTES_PER_INCLUSION_LIST|MIN_BLOB_DATA_RETENTION_MS"
 case $client in
   lighthouse)
     image=sigp/lighthouse:v8.1.3@sha256:44aa773dcf274122c32cc41c4dae7124ed3cab5c267ee82174c6dfd9c688da96
@@ -27,7 +31,7 @@ case $client in
         --allow-insecure-genesis-sync --enable-private-discovery --disable-peer-scoring ;;
   prysm)
     image=offchainlabs/prysm-beacon-chain:v7.3.1@sha256:ad79198a2968b2442c80b7279f2613b61d882913ed372feb057ea624ba205e29
-    set -- --accept-terms-of-use=true --datadir=/tmp/data --chain-config-file=/net/config.yaml --genesis-state=/net/genesis.ssz \
+    set -- --accept-terms-of-use=true --datadir=/tmp/data --chain-config-file=/net/prysm-config.yaml --genesis-state=/net/genesis.ssz \
         --contract-deployment-block=0 --p2p-host-ip=$peer --p2p-tcp-port=9000 --p2p-udp-port=9000 --p2p-quic-port=9001 \
         --p2p-static-id=true --p2p-colocation-whitelist=0.0.0.0/0,::/0 --min-sync-peers=0 --http-host=0.0.0.0 --http-port=5052 \
         --execution-endpoint=$engine --jwt-secret=/net/jwt.hex ;;
@@ -51,7 +55,8 @@ case $client in
     image=sifrai/grandine:2.0.6@sha256:9373496ebecc42e67c754c18eb762d73f48539af978de83ef59709da3375cd57
     set -- --network=custom --configuration-directory=/net --data-dir=/tmp/data --http-address=0.0.0.0 --http-port=5052 \
         --libp2p-port=9000 --discovery-port=9000 --disable-enr-auto-update --enr-address=$peer --enr-tcp-port=9000 \
-        --enr-udp-port=9000 --enable-private-discovery --eth1-rpc-urls=$engine --jwt-secret=/net/jwt.hex ;;
+        --enr-udp-port=9000 --enable-private-discovery --eth1-rpc-urls=$engine --jwt-secret=/net/jwt.hex
+    env="-e RUST_LOG=info,eth2_libp2p=debug,libp2p_swarm=debug" ;;
   *) echo "unknown client: $client" >&2; exit 2 ;;
 esac
 
@@ -77,8 +82,9 @@ docker run --rm -v "$root:/src" -v "$work:/out" lantern-build sh -eu -c '
     PYTHONPATH=$spec/tests/core/pyspec:$spec:/src/build/deps/asm-ssz/tests/generator CONSENSUS_SPECS=$spec \
         /out/.venv/bin/python tests/app/network.py /out/net mainnet fulu "$1" 64
     od -An -tx1 -N32 /dev/urandom | tr -d " \n" > /out/net/jwt.hex
+    grep -v -E "^($2):" /out/net/config.yaml > /out/net/prysm-config.yaml
     chmod -R a+rX /out/net
-' sh "$genesis"
+' sh "$genesis" "$prysm_unknown"
 
 cleanup() {
     docker rm -f lantern-interop-peer lantern-interop-lantern >/dev/null 2>&1 || true
@@ -87,7 +93,7 @@ cleanup() {
 cleanup
 trap cleanup EXIT
 docker network create --subnet 172.30.0.0/24 $net >/dev/null
-docker run -d --name lantern-interop-peer --network $net --ip $peer -v "$work/net:/net:ro" $image "$@" >/dev/null
+docker run -d --name lantern-interop-peer --network $net --ip $peer $env -v "$work/net:/net:ro" $image "$@" >/dev/null
 api() { docker run --rm --network $net lantern-build curl -s --max-time 3 "http://$1:5052$2" || true; }
 
 # The client's record, then lantern with it as its boot node.
