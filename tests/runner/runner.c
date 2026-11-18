@@ -105,6 +105,7 @@ ABI uint64_t LF(is_valid_genesis_state)(const void *state, const void *config, v
 ABI uint64_t LF(beacon_state_copy_size)(const void *state, const void *room, void *size);
 ABI uint64_t LF(node_anchor)(const void *data, const void *room, void *scratch, void *state, void *block);
 ABI uint64_t LF(node_block_header)(const void *data, void *scratch, void *out);
+ABI uint64_t LF(node_state_checkpoints)(const void *state, void *out);
 ABI uint64_t LF(beacon_state_copy)(const void *state, const void *room, void *out);
 
 ABI uint64_t LF(compute_shuffled_permutation)(const void *index_count, const void *seed, void *scratch, void *out);
@@ -2830,11 +2831,16 @@ static void anchor_check(tv parts, const char **why) {
     uint64_t slen, blen, need = 0, vsize = 0, lsize, elen;
     const uint8_t *enc = tv_bytes(tv_get(parts, "anchor_state"), &slen);
     const uint8_t *benc = tv_bytes(tv_get(parts, "anchor_block"), &blen);
-    uint8_t *value = decode(type_by_name("BeaconState"), enc, slen, &vsize, why);
+    uint8_t *value = decode(type_by_name("BeaconState"), enc, slen, &vsize, why), cps[120];
     if (!value) return;
+    if (CALL(LF(node_state_checkpoints), value, cps) != 0) *why = "lantern_node_state_checkpoints: status not 0";
+    for (int k = 0; k < 3 && !*why; k++) /* previous_justified, current_justified, finalized: fields 18 to 20 */
+        if (memcmp(cps + 40 * k, value + field_offset("BeaconState", 18 + (uint64_t)k), 40))
+            *why = "lantern_node_state_checkpoints: a checkpoint is not the state's";
     uint64_t room[8] = {64, 64, 4, 9000, 64, 64, 4, 4096}; /* StateRoom: docs/reference/state.md */
     CALL(LF(beacon_state_copy_size), value, room, &need);
     free(value);
+    if (*why) return;
     uint8_t *data = list_of(enc, slen, 0, 0, &lsize), *state = buffer(need), *block = buffer(ANCHOR_BLOCK_BYTES);
     wr64(state, need);
     wr64(block, ANCHOR_BLOCK_BYTES);

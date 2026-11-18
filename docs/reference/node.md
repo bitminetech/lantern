@@ -19,6 +19,7 @@
 - [`lantern_node_new_payload`](#function-lantern_node_new_payload): the HTTP request of engine_newPayload for a block's SSZ bytes, for one fork.
 - [`lantern_node_anchor`](#function-lantern_node_anchor): the anchor state and block of a genesis state's SSZ bytes, for one fork.
 - [`lantern_node_block_header`](#function-lantern_node_block_header): the signed header of a block's SSZ bytes, for one fork.
+- [`lantern_node_state_checkpoints`](#function-lantern_node_state_checkpoints): the three checkpoints of a state, for one fork.
 
 ### Types
 
@@ -80,6 +81,7 @@
   - Cases with `payload_status` steps run in node mode from bellatrix on, through the node's execution engine calls; before bellatrix only directly.
   - A non-zero status of lantern_node_step or lantern_node_run must leave the node, the store and the work's state byte for byte unchanged.
 - Each block of each fork_choice case: lantern_node_block_header of its SSZ bytes must give the slot, proposer_index, parent_root, state_root and signature of those bytes, and a header whose hash_tree_root is the block's.
+- The anchor state of each fork_choice case: lantern_node_state_checkpoints must give its previous_justified_checkpoint, current_justified_checkpoint and finalized_checkpoint.
 - The anchor of each fork_choice case: lantern_node_anchor of the case's `anchor_state` must give a state whose SSZ bytes are the case's `anchor_state` and a block whose SSZ bytes are the case's `anchor_block`, when that block has the default body; else `LANTERN_INVALID_ANCHOR`.
 - Lantern's cases `<preset>-<fork>-node-p2p.bin` of altair to fulu, made by tests/generator/node.py with the pinned spec: an anchor state and block at the first slot of epoch 2, and the Status and MetaData the node answers.
   - The answers come from get_forkchoice_store, get_head and compute_fork_digest of the spec module, with each fork up to the case's at epoch 0 and each later fork at 2^64 - 1.
@@ -629,6 +631,32 @@ lantern_node_block_header(data, scratch, out) -> status
 
 - Export: `lantern_<fork>_node_block_header` of each fork object.
 - Argument order: `data`, `scratch`, `out`.
+
+## Function `lantern_node_state_checkpoints`
+
+The `previous_justified_checkpoint`, `current_justified_checkpoint` and `finalized_checkpoint` of a state, in that order: the finality checkpoints of the Beacon API.
+
+### Signature
+
+```
+lantern_node_state_checkpoints(state, out) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `state` | input | `BeaconState` of the fork |
+| `out` | output | 3 Checkpoint values: 120 bytes |
+
+### Returns
+
+- `LANTERN_OK`, always.
+
+### ABI
+
+- Export: `lantern_<fork>_node_state_checkpoints` of each fork object.
+- Argument order: `state`, `out`.
 
 ## Function `lantern_node_new_payload`
 

@@ -8,6 +8,9 @@
 .if BeaconState_slot - NODE_STATE_SLOT
 .error "BeaconState_slot is not NODE_STATE_SLOT"
 .endif
+.if BeaconState_current_justified_checkpoint - BeaconState_previous_justified_checkpoint - 40 || BeaconState_finalized_checkpoint - BeaconState_current_justified_checkpoint - 40
+.error "the checkpoints of BeaconState do not follow each other"
+.endif
 .if BeaconState_genesis_validators_root - NODE_STATE_GVR
 .error "BeaconState_genesis_validators_root is not NODE_STATE_GVR"
 .endif
@@ -226,6 +229,18 @@ SPEC_FUNCTION node_block_header
 99: sd      s10, 0(s3)
     LEAVE 0
 SPEC_END node_block_header
+
+/* (state, out): the previous_justified, current_justified and finalized checkpoints of the state. */
+SPEC_FUNCTION node_state_checkpoints
+    FRAME 0
+    mv      t0, a0
+    mv      a0, a1
+    ADDQ    a1, t0, BeaconState_previous_justified_checkpoint
+    li      a2, 3 * 40
+    call    lantern_copy
+    li      a0, LANTERN_OK
+    UNFRAME 0
+SPEC_END node_state_checkpoints
 
 /* The u32 \val at \addr, a byte at a time: the place may not be aligned. Uses \tmp. */
 .macro NODE_STORE_U32 val, addr, tmp

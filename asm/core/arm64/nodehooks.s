@@ -8,6 +8,9 @@
 .if BeaconState_slot - NODE_STATE_SLOT
 .error "BeaconState_slot is not NODE_STATE_SLOT"
 .endif
+.if BeaconState_current_justified_checkpoint - BeaconState_previous_justified_checkpoint - 40 || BeaconState_finalized_checkpoint - BeaconState_current_justified_checkpoint - 40
+.error "the checkpoints of BeaconState do not follow each other"
+.endif
 .if BeaconState_genesis_validators_root - NODE_STATE_GVR
 .error "BeaconState_genesis_validators_root is not NODE_STATE_GVR"
 .endif
@@ -231,6 +234,19 @@ SPEC_FUNCTION node_block_header
 99: str     x28, [x21]
     LEAVE 0
 SPEC_END node_block_header
+
+/* (state, out): the previous_justified, current_justified and finalized checkpoints of the state. */
+SPEC_FUNCTION node_state_checkpoints
+    FRAME 16
+    str     x1, [sp, #16]
+    mov     x2, #(3 * 40)
+    mov     x9, x0
+    mov     x0, x1
+    ADDQ    x1, x9, BeaconState_previous_justified_checkpoint
+    bl      lantern_copy
+    mov     x0, #LANTERN_OK
+    UNFRAME 16
+SPEC_END node_state_checkpoints
 
 /*
  * L0: x0 = the bytes of the SSZ default value of the type node x1 of the TypeDescriptor x0, written

@@ -8,6 +8,9 @@
 .if BeaconState_slot - NODE_STATE_SLOT
 .error "BeaconState_slot is not NODE_STATE_SLOT"
 .endif
+.if BeaconState_current_justified_checkpoint - BeaconState_previous_justified_checkpoint - 40 || BeaconState_finalized_checkpoint - BeaconState_current_justified_checkpoint - 40
+.error "the checkpoints of BeaconState do not follow each other"
+.endif
 .if BeaconState_genesis_validators_root - NODE_STATE_GVR
 .error "BeaconState_genesis_validators_root is not NODE_STATE_GVR"
 .endif
@@ -235,6 +238,18 @@ SPEC_FUNCTION node_block_header
     mov     %rcx, (%r12)
     LEAVE 0
 SPEC_END node_block_header
+
+/* (state, out): the previous_justified, current_justified and finalized checkpoints of the state. */
+SPEC_FUNCTION node_state_checkpoints
+    FRAME 0
+    lea     BeaconState_previous_justified_checkpoint(%rdi), %rax
+    mov     %rsi, %rdi
+    mov     %rax, %rsi
+    mov     $(3 * 40), %edx
+    call    lantern_copy
+    xor     %eax, %eax
+    UNFRAME 0
+SPEC_END node_state_checkpoints
 
 /*
  * rax = the bytes of the SSZ default value of the type node rsi of the TypeDescriptor rdi, written
