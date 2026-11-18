@@ -504,21 +504,20 @@ LOCAL_FUNCTION node_checkpoint_state
     cmp     x9, #NODE_BLOCK_IMPORTED
     b.ne    9f
     ldr     x23, [x1, #NodeBlock_state_id]
+    cbz     x23, 9f                         /* an ancestor of the finalized block keeps no state */
     bl      node_new_id
     mov     x25, x0
     mov     x0, #NODE_ACT_STATE_COPY
     mov     x1, x23
     mov     x2, x25
     bl      node_ids
-    PART    x9, x10, x19, Node_checkpoints  /* the entry */
-    mov     x11, #NodeCheckpoint__mem
-    madd    x9, x10, x11, x9
+    bl      node_new_checkpoint             /* the entry */
+    mov     x9, x1
+    mov     x10, x0
     str     x21, [x9, #NodeCheckpoint_epoch]
     add     x12, x9, #NodeCheckpoint_root
     COPY32  x12, x22
     str     x25, [x9, #NodeCheckpoint_state_id]
-    add     x11, x10, #1
-    str     x11, [x19, #(Node_checkpoints + 8)]
     mov     x0, #NODE_WORK_TARGET_STATE
     mov     x1, x25
     mov     x2, #0
@@ -574,6 +573,8 @@ LOCAL_FUNCTION node_try_import
     b.eq    8f
     cmp     x9, #NODE_BLOCK_IMPORTED
     b.ne    9f
+    ldr     x9, [x1, #NodeBlock_state_id]   /* an ancestor of the finalized block: no descendant of it */
+    cbz     x9, 8f
     ldr     x9, [x19, #Node_flags]
     tbz     x9, #4, 1f                      /* NODE_FLAG_ENGINE */
     ldr     x0, [x22, #NodeBlock_slot]
@@ -615,6 +616,7 @@ LOCAL_FUNCTION node_import_now
     cmn     x0, #1
     b.eq    9f
     ldr     x23, [x1, #NodeBlock_state_id]
+    cbz     x23, 8f
     bl      node_new_id
     str     x0, [x22, #NodeBlock_state_id]
     mov     x2, x0
@@ -631,6 +633,14 @@ LOCAL_FUNCTION node_import_now
     mov     x5, #0
     bl      node_work
 9:  LEAVE 0
+8:  mov     x9, #NODE_BLOCK_INVALID         /* its parent is an ancestor of the finalized block */
+    str     x9, [x22, #NodeBlock_status]
+    mov     x0, #NODE_ACT_BYTES_FREE
+    ldr     x1, [x22, #NodeBlock_data_id]
+    mov     x2, #0
+    bl      node_ids
+    str     xzr, [x22, #NodeBlock_data_id]
+    LEAVE 0
 END_FUNCTION node_import_now
 
 /* L0: x0 = the index of the store's node whose root is at x0, or 2^64 - 1; x1 = its entry. Uses x9-x15. */
@@ -760,6 +770,267 @@ LOCAL_FUNCTION node_children
     b       1b
 9:  LEAVE 0
 END_FUNCTION node_children
+
+/* L0: x0 = the index, x1 = the zeroed entry, of a NODE_BLOCK_FREE block or a new one at the end. Uses x9-x11. */
+LOCAL_FUNCTION node_new_block
+    UNWIND_END_PROLOGUE
+    PART    x1, x9, x19, Node_blocks
+    mov     x0, #0
+1:  cmp     x0, x9
+    b.hs    2f
+    ldr     x10, [x1, #NodeBlock_status]
+    cmp     x10, #NODE_BLOCK_FREE
+    b.eq    3f
+    add     x1, x1, #NodeBlock__mem
+    add     x0, x0, #1
+    b       1b
+2:  add     x9, x9, #1
+    str     x9, [x19, #(Node_blocks + 8)]
+3:  mov     x10, x1
+    mov     x11, #(NodeBlock__mem / 8)
+4:  str     xzr, [x10], #8
+    subs    x11, x11, #1
+    b.ne    4b
+    ret
+END_FUNCTION node_new_block
+
+/* L0: x0 = the index, x1 = the zeroed entry, of a NODE_BLOB_FREE sidecar or a new one at the end. Uses x9, x10. */
+LOCAL_FUNCTION node_new_blob
+    UNWIND_END_PROLOGUE
+    PART    x1, x9, x19, Node_blobs
+    mov     x0, #0
+1:  cmp     x0, x9
+    b.hs    2f
+    ldr     x10, [x1, #NodeBlob_status]
+    cmp     x10, #NODE_BLOB_FREE
+    b.eq    3f
+    add     x1, x1, #NodeBlob__mem
+    add     x0, x0, #1
+    b       1b
+2:  add     x9, x9, #1
+    str     x9, [x19, #(Node_blobs + 8)]
+3:  stp     xzr, xzr, [x1]
+    stp     xzr, xzr, [x1, #16]
+    stp     xzr, xzr, [x1, #32]
+    stp     xzr, xzr, [x1, #48]
+    ret
+END_FUNCTION node_new_blob
+
+/* L0: x0 = the index, x1 = the zeroed entry, of a free checkpoint (epoch 2^64 - 1) or a new one at the end. Uses x9, x10. */
+LOCAL_FUNCTION node_new_checkpoint
+    UNWIND_END_PROLOGUE
+    PART    x1, x9, x19, Node_checkpoints
+    mov     x0, #0
+1:  cmp     x0, x9
+    b.hs    2f
+    ldr     x10, [x1, #NodeCheckpoint_epoch]
+    cmn     x10, #1
+    b.eq    3f
+    add     x1, x1, #NodeCheckpoint__mem
+    add     x0, x0, #1
+    b       1b
+2:  add     x9, x9, #1
+    str     x9, [x19, #(Node_checkpoints + 8)]
+3:  stp     xzr, xzr, [x1]
+    stp     xzr, xzr, [x1, #16]
+    stp     xzr, xzr, [x1, #32]
+    ret
+END_FUNCTION node_new_checkpoint
+
+/* L0: x0 = 1 when a stream that serves lists the BufferId x0 at or after its next, else 0. Uses x9-x15. */
+LOCAL_FUNCTION node_serving
+    UNWIND_END_PROLOGUE
+    cbz     x0, 9f
+    PART    x9, x10, x19, Node_streams
+    ldr     x15, [x19, #Node_stream_bytes]
+1:  cbz     x10, 9f
+    ldr     x11, [x9, #NodeStream_state]
+    cmp     x11, #NODE_STREAM_SERVE
+    ccmp    x11, #NODE_STREAM_SERVING, #4, ne
+    b.ne    3f
+    ldr     x12, [x9, #NodeStream_next]
+    ldr     x13, [x9, #(NodeStream_list + 16)]
+    lsr     x13, x13, #3
+    add     x14, x9, #NodeStream_request
+2:  cmp     x12, x13
+    b.hs    3f
+    ldr     x11, [x14, x12, lsl #3]
+    cmp     x11, x0
+    b.eq    8f
+    add     x12, x12, #1
+    b       2b
+3:  add     x9, x9, x15
+    sub     x10, x10, #1
+    b       1b
+8:  mov     x0, #1
+    ret
+9:  mov     x0, #0
+    ret
+END_FUNCTION node_serving
+
+/*
+ * L0: at a new finalized epoch of the store, lantern_store_prune; then the node keeps the
+ * finalized block, the blocks of the store, and the bytes and sidecars of the finalized block's
+ * ancestors. Their states go, and so do the other branches, the invalid and waiting blocks at or
+ * below the finalized slot, and the checkpoints below the finalized epoch. Bytes a stream sends
+ * stay until a later prune. x21 the finalized block, x22 its slot, x25 i, x26 an entry.
+ */
+LOCAL_FUNCTION node_prune
+    ENTER 0
+    ldr     x9, [x20, #Store_finalized_checkpoint]
+    ldr     x10, [x19, #Node_pruned_epoch]
+    cmp     x9, x10
+    b.ls    99f
+    mov     x0, x20
+    mov     x1, x23
+    bl      lantern_store_prune
+    cbnz    x0, 99f
+    ldr     x9, [x20, #Store_finalized_checkpoint]
+    str     x9, [x19, #Node_pruned_epoch]
+    add     x0, x20, #(Store_finalized_checkpoint + 8)
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    99f
+    mov     x21, x1
+    ldr     x22, [x21, #NodeBlock_slot]
+    add     x0, x21, #NodeBlock_parent_root /* its ancestors: their states go */
+1:  bl      node_find_block
+    cmn     x0, #1
+    b.eq    2f
+    mov     x26, x1
+    ldr     x9, [x26, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_IMPORTED
+    b.ne    2f
+    ldr     x1, [x26, #NodeBlock_state_id]
+    cbz     x1, 2f
+    mov     x0, #NODE_ACT_STATE_FREE
+    mov     x2, #0
+    bl      node_ids
+    str     xzr, [x26, #NodeBlock_state_id]
+    add     x0, x26, #NodeBlock_parent_root
+    b       1b
+2:  mov     x25, #0                         /* each other block */
+3:  ldr     x9, [x19, #(Node_blocks + 8)]
+    cmp     x25, x9
+    b.hs    20f
+    PART    x26, x9, x19, Node_blocks
+    mov     x9, #NodeBlock__mem
+    madd    x26, x25, x9, x26
+    cmp     x26, x21
+    b.eq    19f
+    ldr     x9, [x26, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_IMPORTED
+    b.ne    10f
+    ldr     x9, [x26, #NodeBlock_state_id]
+    cbz     x9, 19f                         /* an ancestor: its bytes stay */
+    mov     x0, x26
+    bl      node_store_find                 /* a descendant: in the store */
+    cmn     x0, #1
+    b.ne    19f
+    ldr     x0, [x26, #NodeBlock_data_id]   /* another branch: its state and bytes go */
+    bl      node_serving
+    cbnz    x0, 19f
+    mov     x0, #NODE_ACT_STATE_FREE
+    ldr     x1, [x26, #NodeBlock_state_id]
+    mov     x2, #0
+    bl      node_ids
+    b       15f
+10: cmp     x9, #NODE_BLOCK_INVALID         /* invalid or waiting, at or below the finalized slot */
+    b.eq    11f
+    cmp     x9, #NODE_BLOCK_WAITING
+    b.eq    11f
+    cmp     x9, #NODE_BLOCK_BLOBS
+    b.eq    11f
+    cmp     x9, #NODE_BLOCK_PAYLOAD
+    b.ne    19f
+11: ldr     x9, [x26, #NodeBlock_slot]
+    cmp     x9, x22
+    b.hi    19f
+    ldr     x0, [x26, #NodeBlock_data_id]
+    bl      node_serving
+    cbnz    x0, 19f
+15: ldr     x1, [x26, #NodeBlock_data_id]   /* the bytes go, and the entry is free */
+    cbz     x1, 16f
+    mov     x0, #NODE_ACT_BYTES_FREE
+    mov     x2, #0
+    bl      node_ids
+16: mov     x9, #-1
+    stp     x9, x9, [x26]
+    stp     x9, x9, [x26, #16]
+    stp     x9, x9, [x26, #32]
+    stp     x9, x9, [x26, #48]
+    str     x9, [x26, #NodeBlock_slot]
+    stp     xzr, xzr, [x26, #NodeBlock_data_id]
+    mov     x9, #NODE_BLOCK_FREE
+    str     x9, [x26, #NodeBlock_status]
+19: add     x25, x25, #1
+    b       3b
+20: mov     x25, #0                         /* each sidecar: invalid, or at or below the finalized slot and of no kept block */
+21: ldr     x9, [x19, #(Node_blobs + 8)]
+    cmp     x25, x9
+    b.hs    30f
+    PART    x26, x9, x19, Node_blobs
+    mov     x9, #NodeBlob__mem
+    madd    x26, x25, x9, x26
+    ldr     x9, [x26, #NodeBlob_status]
+    cmp     x9, #NODE_BLOB_INVALID
+    b.eq    26f
+    cmp     x9, #NODE_BLOB_VALID
+    b.ne    29f
+    ldr     x9, [x26, #NodeBlob_slot]
+    cmp     x9, x22
+    b.hi    29f
+    mov     x0, x26
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    25f
+    ldr     x9, [x1, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_IMPORTED
+    b.eq    29f
+25: ldr     x0, [x26, #NodeBlob_data_id]
+    bl      node_serving
+    cbnz    x0, 29f
+    mov     x0, #NODE_ACT_BYTES_FREE
+    ldr     x1, [x26, #NodeBlob_data_id]
+    mov     x2, #0
+    bl      node_ids
+26: mov     x9, #-1
+    stp     x9, x9, [x26]
+    stp     x9, x9, [x26, #16]
+    str     x9, [x26, #NodeBlob_slot]
+    str     xzr, [x26, #NodeBlob_data_id]
+    mov     x9, #NODE_BLOB_FREE
+    str     x9, [x26, #NodeBlob_status]
+29: add     x25, x25, #1
+    b       21b
+30: mov     x25, #0                         /* each checkpoint below the finalized epoch: its state goes; the anchor's goes with the anchor block */
+31: ldr     x9, [x19, #(Node_checkpoints + 8)]
+    cmp     x25, x9
+    b.hs    99f
+    PART    x26, x9, x19, Node_checkpoints
+    mov     x9, #NodeCheckpoint__mem
+    madd    x26, x25, x9, x26
+    ldr     x9, [x26, #NodeCheckpoint_epoch]
+    ldr     x10, [x20, #Store_finalized_checkpoint]
+    cmp     x9, x10
+    b.hs    39f
+    ldr     x1, [x26, #NodeCheckpoint_state_id]
+    ldr     x9, [x19, #Node_anchor_state_id]
+    cmp     x1, x9
+    b.eq    32f
+    cbz     x1, 32f
+    mov     x0, #NODE_ACT_STATE_FREE
+    mov     x2, #0
+    bl      node_ids
+32: mov     x9, #-1
+    str     x9, [x26, #NodeCheckpoint_epoch]
+    stp     x9, x9, [x26, #NodeCheckpoint_root]
+    stp     x9, x9, [x26, #(NodeCheckpoint_root + 16)]
+    str     xzr, [x26, #NodeCheckpoint_state_id]
+39: add     x25, x25, #1
+    b       31b
+99: LEAVE 0
+END_FUNCTION node_prune
 
 /* L0: a BYTES_PUT action of the ByteList x0 with a new id: x0 = the id. x21 the ByteList, x22 the id. */
 LOCAL_FUNCTION node_put
@@ -1337,6 +1608,7 @@ LOCAL_FUNCTION node_engine_read
     ldr     x1, [x27, #NodeBlock_data_id]
     mov     x2, #0
     bl      node_ids
+    str     xzr, [x27, #NodeBlock_data_id]
     add     x0, x27, #NodeBlock_parent_root
     bl      node_store_find
     cmn     x0, #1
@@ -1499,10 +1771,9 @@ LOCAL_FUNCTION node_event
     mov     x0, x22
     bl      node_put
     mov     x26, x0
-    PART    x9, x10, x19, Node_blocks
-    str     x10, [sp, #(L + 40)]
-    mov     x11, #NodeBlock__mem
-    madd    x9, x10, x11, x9
+    bl      node_new_block
+    str     x0, [sp, #(L + 40)]
+    mov     x9, x1
     add     x11, x27, #8
     COPY32  x9, x11
     add     x11, x9, #NodeBlock_parent_root
@@ -1521,8 +1792,6 @@ LOCAL_FUNCTION node_event
     str     x11, [x9, #NodeBlock_data_available]
     str     xzr, [x9, #NodeBlock_result]
     str     xzr, [x9, #NodeBlock_blobs]
-    add     x10, x10, #1
-    str     x10, [x19, #(Node_blocks + 8)]
     ldr     x0, [sp, #(L + 40)]
     bl      node_try_import
 19: LEAVE 48
@@ -1763,10 +2032,9 @@ LOCAL_FUNCTION node_event
     bl      node_find_block
     cmn     x0, #1
     b.ne    65f
-    PART    x9, x10, x19, Node_blocks
-    str     x10, [sp, #(L + 40)]
-    mov     x11, #NodeBlock__mem
-    madd    x9, x10, x11, x9
+    bl      node_new_block
+    str     x0, [sp, #(L + 40)]
+    mov     x9, x1
     add     x11, x21, #NodeEvent_root
     COPY32  x9, x11
     add     x11, x9, #NodeBlock_parent_root
@@ -1783,8 +2051,6 @@ LOCAL_FUNCTION node_event
     str     xzr, [x9, #NodeBlock_result]
     ldr     x11, [x21, #NodeEvent_index]
     str     x11, [x9, #NodeBlock_blobs]
-    add     x10, x10, #1
-    str     x10, [x19, #(Node_blocks + 8)]
     mov     x0, x22
     bl      node_drop_message
     ldr     x0, [sp, #(L + 40)]
@@ -1801,9 +2067,8 @@ LOCAL_FUNCTION node_event
     ldr     x1, [x21, #NodeEvent_index]
     bl      node_blob_held
     cbnz    x0, 65f
-    PART    x9, x10, x19, Node_blobs
-    mov     x11, #NodeBlob__mem
-    madd    x9, x10, x11, x9
+    bl      node_new_blob
+    mov     x9, x1
     add     x11, x21, #NodeEvent_root
     COPY32  x9, x11
     ldr     x11, [x21, #NodeEvent_index]
@@ -1814,8 +2079,6 @@ LOCAL_FUNCTION node_event
     str     x11, [x9, #NodeBlob_data_id]
     mov     x11, #NODE_BLOB_VALID
     str     x11, [x9, #NodeBlob_status]
-    add     x10, x10, #1
-    str     x10, [x19, #(Node_blobs + 8)]
     mov     x0, x22
     bl      node_drop_message
     add     x0, x21, #NodeEvent_root
@@ -1859,6 +2122,7 @@ LOCAL_FUNCTION node_event
     ldr     x1, [x22, #NodeBlock_data_id]
     mov     x2, #0
     bl      node_ids
+    str     xzr, [x22, #NodeBlock_data_id]
     LEAVE 48
 77: cmp     x9, #NODE_WORK_BLOB                /* BLOB: a sidecar of a response, checked */
     b.ne    85f
@@ -1897,6 +2161,7 @@ LOCAL_FUNCTION node_event
     ldr     x1, [x22, #NodeBlob_data_id]
     mov     x2, #0
     bl      node_ids
+    str     xzr, [x22, #NodeBlob_data_id]
     LEAVE 48
 85: cmp     x9, #NODE_WORK_NEW_PAYLOAD         /* NEW_PAYLOAD, FORKCHOICE: the request to the execution engine */
     ccmp    x9, #NODE_WORK_FORKCHOICE, #4, ne
@@ -1942,6 +2207,7 @@ LOCAL_FUNCTION node_event
     ldr     x1, [x22, #NodeBlock_data_id]
     mov     x2, #0
     bl      node_ids
+    str     xzr, [x22, #NodeBlock_data_id]
     LEAVE 48
 70: cmp     x9, #NODE_WORK_ATTESTATION         /* done with an attestation or a slashing: free its bytes */
     ccmp    x9, #NODE_WORK_ATTESTER_SLASHING, #4, ne
@@ -4049,15 +4315,9 @@ LOCAL_FUNCTION node_response
     cmp     x22, #REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE
     ccmp    x22, #REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT, #4, ne
     b.eq    63f
-    PART    x9, x10, x19, Node_blocks       /* a block: its entry, its bytes, the work of its root */
-    mov     x11, #NodeBlock__mem
-    madd    x28, x10, x11, x9
-    str     x10, [sp, #(L + 48)]
-    add     x10, x10, #1
-    str     x10, [x19, #(Node_blocks + 8)]
-    mov     x0, x28
-    mov     x1, #NodeBlock__mem
-    bl      lantern_zero
+    bl      node_new_block                  /* a block: its entry, its bytes, the work of its root */
+    mov     x28, x1
+    str     x0, [sp, #(L + 48)]
     ldr     x9, [x26, #(24 + 100)]
     str     x9, [x28, #NodeBlock_slot]
     add     x0, x28, #NodeBlock_parent_root
@@ -4079,15 +4339,9 @@ LOCAL_FUNCTION node_response
     mov     x5, #0
     bl      node_work
     b       7f
-61: PART    x9, x10, x19, Node_blobs        /* a blob sidecar: its entry, its bytes, the work of its checks */
-    mov     x11, #NodeBlob__mem
-    madd    x28, x10, x11, x9
-    str     x10, [sp, #(L + 48)]
-    add     x10, x10, #1
-    str     x10, [x19, #(Node_blobs + 8)]
-    mov     x0, x28
-    mov     x1, #NodeBlob__mem
-    bl      lantern_zero
+61: bl      node_new_blob                   /* a blob sidecar: its entry, its bytes, the work of its checks */
+    mov     x28, x1
+    str     x0, [sp, #(L + 48)]
     ldr     x9, [x26, #24]                  /* its index, and the slot of its block header */
     str     x9, [x28, #NodeBlob_index]
     LDQ     x9, x26, 24 + NODE_BLOB_HEADER
@@ -4105,15 +4359,9 @@ LOCAL_FUNCTION node_response
     mov     x5, #0
     bl      node_work
     b       7f
-63: PART    x9, x10, x19, Node_blobs        /* a column sidecar: its entry, its bytes, the work of its checks */
-    mov     x11, #NodeBlob__mem
-    madd    x28, x10, x11, x9
-    str     x10, [sp, #(L + 48)]
-    add     x10, x10, #1
-    str     x10, [x19, #(Node_blobs + 8)]
-    mov     x0, x28
-    mov     x1, #NodeBlob__mem
-    bl      lantern_zero
+63: bl      node_new_blob                   /* a column sidecar: its entry, its bytes, the work of its checks */
+    mov     x28, x1
+    str     x0, [sp, #(L + 48)]
     ldr     x9, [x26, #24]                  /* its index, and the slot of its block header */
     str     x9, [x28, #NodeBlob_index]
     ldur    x9, [x26, #(24 + NODE_COLUMN_HEADER)]
@@ -5080,6 +5328,10 @@ FUNCTION lantern_node_step
     ldr     x13, [x19, #(Node_blocks + 8)]
     mov     x14, #128
     madd    x12, x13, x14, x12
+    ldr     x13, [x19, #(Node_blobs + 8)]   /* 32 for each blob and checkpoint entry: the prune's actions */
+    ldr     x14, [x19, #(Node_checkpoints + 8)]
+    add     x13, x13, x14
+    add     x12, x12, x13, lsl #5
     add     x12, x12, #512
     str     x12, [sp, #(L + 72)]
     ldr     x9, [sp, #(L + 16)]
@@ -5279,7 +5531,8 @@ FUNCTION lantern_node_step
     ldr     x1, [sp, #(L + 16)]
     bl      node_p2p_notices
     str     x0, [sp, #(L + 80)]
-30: ldr     x9, [x23]                       /* then each event, in order */
+30: bl      node_prune                      /* at a new finalized epoch, the prune; then each event, in order */
+    ldr     x9, [x23]
     add     x28, x23, x9
     mov     x26, #0
     mov     x27, x21

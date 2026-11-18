@@ -25,6 +25,7 @@
 - [`lantern_on_attester_slashing`](#function-lantern_on_attester_slashing): records equivocating validators.
 - [`lantern_get_proposer_head`](#function-lantern_get_proposer_head): the head to build on, or its parent for a reorg.
 - [`lantern_store_payload_status`](#function-lantern_store_payload_status): records a later answer of the execution engine for a block.
+- [`lantern_store_prune`](#function-lantern_store_prune): drops the nodes that do not descend from the finalized node.
 - [`lantern_is_data_available`](#function-lantern_is_data_available): checks the blobs or the column sidecars of a block.
 - [`lantern_verify_data_column_sidecar`](#function-lantern_verify_data_column_sidecar): checks the lengths of a column sidecar.
 - [`lantern_verify_data_column_sidecar_kzg_proofs`](#function-lantern_verify_data_column_sidecar_kzg_proofs): checks the cells of a column sidecar.
@@ -52,7 +53,7 @@
 - `store.checkpoint_states[store.justified_checkpoint]` is read through the balances of the store. A function that reads it returns `LANTERN_NEED_JUSTIFIED_STATE`, before any change, when `balances_checkpoint` is not `justified_checkpoint`. The caller then passes that checkpoint state to lantern_store_justified_checkpoint_state and calls again.
 - A function that changes the store makes every check first and changes the store only after the last check holds, so a call that fails a spec check leaves the store unchanged ("Invalid calls to handlers must not modify store").
 - The config is the store's copy, made by lantern_get_forkchoice_store.
-- lantern_store_size, lantern_store_copy and lantern_store_payload_status read no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
+- lantern_store_size, lantern_store_copy, lantern_store_payload_status and lantern_store_prune read no fork's layouts. Each is in the common object of the core (asm/core/<ISA>/common.s), and its symbol is its name.
 - A Uint64 result outside 0 to 2^64 - 1 fails with `LANTERN_INVALID_OVERFLOW`, as the spec's Uint64 does.
 - Optimistic sync: each node keeps the execution engine's answer for its payload as a `PayloadValidationStatus` (`PAYLOAD_STATUS_*` of bellatrix p2p-interface.md). An `INVALIDATED` node is removed from fork choice ("Consensus engines MUST support removing blocks from fork choice that transition from `NOT_VALIDATED` to `INVALIDATED`"): it and its subtree are not in the tree of get_filtered_node_tree, so get_head never walks to them, and get_weight counts neither the latest messages for them nor a proposer boost of them.
 - Spec helpers that only these functions call are L0 helpers of `asm/core/<ISA>/forkchoice.s`, named by the spec: get_voting_source, get_attestation_score, get_proposer_score, calculate_committee_fraction, update_checkpoints, update_unrealized_checkpoints, on_tick_per_slot, record_block_timeliness, get_shuffling_dependent_root, update_proposer_boost_root, compute_pulled_up_tip, update_latest_messages, is_head_weak, is_parent_strong and is_proposer_equivocation.
@@ -619,6 +620,39 @@ lantern_store_payload_status(store, node, payload_status, result) -> status
 - `INVALIDATED`: the node and each `NOT_VALIDATED` descendant become `INVALIDATED`.
 - Finding the node from a `latestValidHash` is the caller's: `BlockNode.block_hash` holds each payload's hash.
 
+## Function `lantern_store_prune`
+
+Drops each node that is neither the node of the store's finalized checkpoint nor a descendant of it. The spec keeps every block; a node of a long run cannot.
+
+### Signature
+
+```
+lantern_store_prune(store, scratch) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `store` | state | `Store` |
+| `scratch` | scratch | bytes |
+
+### Returns
+
+- `LANTERN_OK`: the store holds the finalized node and its descendants.
+- `LANTERN_BUFFER_TOO_SMALL`: scratch is short; the store is unchanged.
+- `LANTERN_INVALID_UNKNOWN_BLOCK`: no node has the root of the finalized checkpoint; the store is unchanged.
+
+### Function does
+
+- Keeps the nodes in their order: the finalized node first, with `parent` `NODE_NONE`; each kept node's `parent` is its parent's new index.
+- A `latest_node` of a dropped node becomes `NODE_NONE`; `latest_epoch` stays, so later messages compare with it as before.
+- The dropped nodes are no descendants of the justified node, so get_head and get_weight give the same results.
+
+### Limits
+
+- Scratch: S(1), with n the node count of the store.
+
 ## Function `lantern_is_data_available`
 
 Deneb and electra: whether verify_blob_kzg_proof_batch holds for the blobs and proofs against the commitments. Fulu: whether every column sidecar passes verify_data_column_sidecar and verify_data_column_sidecar_kzg_proofs.
@@ -965,6 +999,14 @@ A standalone asm-ssz Value of List[DataColumnSidecar, NUMBER_OF_COLUMNS]: size, 
 | x86-64 | ✅ | ✅ | ✅ |  |
 | ARM64 | ✅ | ✅ | ✅ |  |
 | RISC-V | ✅ |  |  |  |
+
+### `lantern_store_prune`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
 
 ### `lantern_is_data_available`
 

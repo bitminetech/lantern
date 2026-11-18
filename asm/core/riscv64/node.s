@@ -504,22 +504,19 @@ LOCAL_FUNCTION node_checkpoint_state
     li      t1, NODE_BLOCK_IMPORTED
     bne     t0, t1, 9f
     ld      s8, NodeBlock_state_id(a1)
+    beqz    s8, 9f                          # an ancestor of the finalized block keeps no state
     call    node_new_id
     mv      s7, a0
     li      a0, NODE_ACT_STATE_COPY
     mv      a1, s8
     mv      a2, s7
     call    node_ids
-    PART    t0, t1, s1, Node_checkpoints    # the entry
-    li      t2, NodeCheckpoint__mem
-    mul     t2, t1, t2
-    add     t0, t0, t2
+    call    node_new_checkpoint             # the entry
+    mv      t1, a0
     sd      s3, NodeCheckpoint_epoch(t0)
     addi    t2, t0, NodeCheckpoint_root
     COPY32  t2, s4
     sd      s7, NodeCheckpoint_state_id(t0)
-    addi    t2, t1, 1
-    sd      t2, (Node_checkpoints + 8)(s1)
     li      a0, NODE_WORK_TARGET_STATE
     mv      a1, s7
     li      a2, 0
@@ -577,6 +574,8 @@ LOCAL_FUNCTION node_try_import
     beq     t0, t1, 8f
     li      t1, NODE_BLOCK_IMPORTED
     bne     t0, t1, 9f
+    ld      t0, NodeBlock_state_id(a1)      # an ancestor of the finalized block: no descendant of it
+    beqz    t0, 8f
     ld      t0, Node_flags(s1)
     andi    t0, t0, NODE_FLAG_ENGINE
     beqz    t0, 1f
@@ -620,6 +619,7 @@ LOCAL_FUNCTION node_import_now
     li      t0, -1
     beq     a0, t0, 9f
     ld      s8, NodeBlock_state_id(a1)
+    beqz    s8, 8f
     call    node_new_id
     sd      a0, NodeBlock_state_id(s4)
     mv      a2, a0
@@ -636,6 +636,14 @@ LOCAL_FUNCTION node_import_now
     li      a5, 0
     call    node_work
 9:  LEAVE 0
+8:  li      t0, NODE_BLOCK_INVALID          # its parent is an ancestor of the finalized block
+    sd      t0, NodeBlock_status(s4)
+    li      a0, NODE_ACT_BYTES_FREE
+    ld      a1, NodeBlock_data_id(s4)
+    li      a2, 0
+    call    node_ids
+    sd      zero, NodeBlock_data_id(s4)
+    LEAVE 0
 END_FUNCTION node_import_now
 
 /* a0 = the index of the store's node whose root is at a0 (8-aligned), or 2^64 - 1; a1 = its entry. Uses t0-t2, a6, a7. */
@@ -939,6 +947,7 @@ LOCAL_FUNCTION node_engine_read
     ld      a1, NodeBlock_data_id(s9)
     li      a2, 0
     call    node_ids
+    sd      zero, NodeBlock_data_id(s9)
     addi    a0, s9, NodeBlock_parent_root
     call    node_store_find
     li      t0, -1
@@ -1012,6 +1021,272 @@ LOCAL_FUNCTION node_children
     j       1b
 9:  LEAVE 0
 END_FUNCTION node_children
+
+/* a0 = the index, t0 = the zeroed entry, of a NODE_BLOCK_FREE block or a new one at the end. Uses t1, t2. */
+LOCAL_FUNCTION node_new_block
+    UNWIND_END_PROLOGUE
+    PART    t0, t1, s1, Node_blocks
+    li      a0, 0
+1:  bgeu    a0, t1, 2f
+    ld      t2, NodeBlock_status(t0)
+    addi    t2, t2, -NODE_BLOCK_FREE
+    beqz    t2, 3f
+    addi    t0, t0, NodeBlock__mem
+    addi    a0, a0, 1
+    j       1b
+2:  addi    t1, t1, 1
+    sd      t1, (Node_blocks + 8)(s1)
+3:  mv      t1, t0
+    li      t2, NodeBlock__mem / 8
+4:  sd      zero, 0(t1)
+    addi    t1, t1, 8
+    addi    t2, t2, -1
+    bnez    t2, 4b
+    ret
+END_FUNCTION node_new_block
+
+/* a0 = the index, t0 = the zeroed entry, of a NODE_BLOB_FREE sidecar or a new one at the end. Uses t1, t2. */
+LOCAL_FUNCTION node_new_blob
+    UNWIND_END_PROLOGUE
+    PART    t0, t1, s1, Node_blobs
+    li      a0, 0
+1:  bgeu    a0, t1, 2f
+    ld      t2, NodeBlob_status(t0)
+    addi    t2, t2, -NODE_BLOB_FREE
+    beqz    t2, 3f
+    addi    t0, t0, NodeBlob__mem
+    addi    a0, a0, 1
+    j       1b
+2:  addi    t1, t1, 1
+    sd      t1, (Node_blobs + 8)(s1)
+3:  mv      t1, t0
+    li      t2, NodeBlob__mem / 8
+4:  sd      zero, 0(t1)
+    addi    t1, t1, 8
+    addi    t2, t2, -1
+    bnez    t2, 4b
+    ret
+END_FUNCTION node_new_blob
+
+/* a0 = the index, t0 = the zeroed entry, of a free checkpoint (epoch 2^64 - 1) or a new one at the end. Uses t1, t2. */
+LOCAL_FUNCTION node_new_checkpoint
+    UNWIND_END_PROLOGUE
+    PART    t0, t1, s1, Node_checkpoints
+    li      a0, 0
+1:  bgeu    a0, t1, 2f
+    ld      t2, NodeCheckpoint_epoch(t0)
+    addi    t2, t2, 1
+    beqz    t2, 3f
+    addi    t0, t0, NodeCheckpoint__mem
+    addi    a0, a0, 1
+    j       1b
+2:  addi    t1, t1, 1
+    sd      t1, (Node_checkpoints + 8)(s1)
+3:  mv      t1, t0
+    li      t2, NodeCheckpoint__mem / 8
+4:  sd      zero, 0(t1)
+    addi    t1, t1, 8
+    addi    t2, t2, -1
+    bnez    t2, 4b
+    ret
+END_FUNCTION node_new_checkpoint
+
+/* a0 = 1 when a stream that serves lists the BufferId a0 at or after its next, else 0. Uses t0-t4. */
+LOCAL_FUNCTION node_serving
+    UNWIND_END_PROLOGUE
+    beqz    a0, 9f
+    PART    t0, t1, s1, Node_streams
+1:  beqz    t1, 9f
+    ld      t2, NodeStream_state(t0)
+    li      t3, NODE_STREAM_SERVE
+    beq     t2, t3, 2f
+    li      t3, NODE_STREAM_SERVING
+    bne     t2, t3, 4f
+2:  ld      t2, NodeStream_next(t0)
+    ld      t3, (NodeStream_list + 16)(t0)
+    srli    t3, t3, 3
+3:  bgeu    t2, t3, 4f
+    slli    t4, t2, 3
+    add     t4, t0, t4
+    ld      t4, NodeStream_request(t4)
+    beq     t4, a0, 8f
+    addi    t2, t2, 1
+    j       3b
+4:  ld      t2, Node_stream_bytes(s1)
+    add     t0, t0, t2
+    addi    t1, t1, -1
+    j       1b
+8:  li      a0, 1
+    ret
+9:  li      a0, 0
+    ret
+END_FUNCTION node_serving
+
+/*
+ * At a new finalized epoch of the store, lantern_store_prune; then the node keeps the finalized
+ * block, the blocks of the store, and the bytes and sidecars of the finalized block's ancestors.
+ * Their states go, and so do the other branches, the invalid and waiting blocks at or below the
+ * finalized slot, and the checkpoints below the finalized epoch. Bytes a stream sends stay until
+ * a later prune. s3 the finalized block, s4 its slot, s7 i, s8 an entry.
+ */
+LOCAL_FUNCTION node_prune
+    ENTER 0
+    ld      t0, Store_finalized_checkpoint(s2)
+    ld      t1, Node_pruned_epoch(s1)
+    bleu    t0, t1, 99f
+    mv      a0, s2
+    mv      a1, s5
+    call    lantern_store_prune
+    bnez    a0, 99f
+    ld      t0, Store_finalized_checkpoint(s2)
+    sd      t0, Node_pruned_epoch(s1)
+    addi    a0, s2, Store_finalized_checkpoint + 8
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 99f
+    mv      s3, a1
+    ld      s4, NodeBlock_slot(s3)
+    addi    a0, s3, NodeBlock_parent_root   # its ancestors: their states go
+1:  call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 2f
+    mv      s8, a1
+    ld      t0, NodeBlock_status(s8)
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 2f
+    ld      a1, NodeBlock_state_id(s8)
+    beqz    a1, 2f
+    li      a0, NODE_ACT_STATE_FREE
+    li      a2, 0
+    call    node_ids
+    sd      zero, NodeBlock_state_id(s8)
+    addi    a0, s8, NodeBlock_parent_root
+    j       1b
+2:  li      s7, 0                           # each other block
+3:  ld      t0, (Node_blocks + 8)(s1)
+    bgeu    s7, t0, 20f
+    PART    s8, t0, s1, Node_blocks
+    li      t0, NodeBlock__mem
+    mul     t0, s7, t0
+    add     s8, s8, t0
+    beq     s8, s3, 19f
+    ld      t0, NodeBlock_status(s8)
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 10f
+    ld      t0, NodeBlock_state_id(s8)
+    beqz    t0, 19f                         # an ancestor: its bytes stay
+    mv      a0, s8
+    call    node_store_find                 # a descendant: in the store
+    li      t0, -1
+    bne     a0, t0, 19f
+    ld      a0, NodeBlock_data_id(s8)       # another branch: its state and bytes go
+    call    node_serving
+    bnez    a0, 19f
+    li      a0, NODE_ACT_STATE_FREE
+    ld      a1, NodeBlock_state_id(s8)
+    li      a2, 0
+    call    node_ids
+    j       15f
+10: li      t1, NODE_BLOCK_INVALID          # invalid or waiting, at or below the finalized slot
+    beq     t0, t1, 11f
+    li      t1, NODE_BLOCK_WAITING
+    beq     t0, t1, 11f
+    li      t1, NODE_BLOCK_BLOBS
+    beq     t0, t1, 11f
+    li      t1, NODE_BLOCK_PAYLOAD
+    bne     t0, t1, 19f
+11: ld      t0, NodeBlock_slot(s8)
+    bgtu    t0, s4, 19f
+    ld      a0, NodeBlock_data_id(s8)
+    call    node_serving
+    bnez    a0, 19f
+15: ld      a1, NodeBlock_data_id(s8)       # the bytes go, and the entry is free
+    beqz    a1, 16f
+    li      a0, NODE_ACT_BYTES_FREE
+    li      a2, 0
+    call    node_ids
+16: li      t0, -1
+    sd      t0, 0(s8)
+    sd      t0, 8(s8)
+    sd      t0, 16(s8)
+    sd      t0, 24(s8)
+    sd      t0, 32(s8)
+    sd      t0, 40(s8)
+    sd      t0, 48(s8)
+    sd      t0, 56(s8)
+    sd      t0, NodeBlock_slot(s8)
+    sd      zero, NodeBlock_data_id(s8)
+    sd      zero, NodeBlock_state_id(s8)
+    li      t0, NODE_BLOCK_FREE
+    sd      t0, NodeBlock_status(s8)
+19: addi    s7, s7, 1
+    j       3b
+20: li      s7, 0                           # each sidecar: invalid, or at or below the finalized slot and of no kept block
+21: ld      t0, (Node_blobs + 8)(s1)
+    bgeu    s7, t0, 30f
+    PART    s8, t0, s1, Node_blobs
+    slli    t0, s7, 6
+    add     s8, s8, t0
+    ld      t0, NodeBlob_status(s8)
+    li      t1, NODE_BLOB_INVALID
+    beq     t0, t1, 26f
+    li      t1, NODE_BLOB_VALID
+    bne     t0, t1, 29f
+    ld      t0, NodeBlob_slot(s8)
+    bgtu    t0, s4, 29f
+    mv      a0, s8
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 25f
+    ld      t0, NodeBlock_status(a1)
+    li      t1, NODE_BLOCK_IMPORTED
+    beq     t0, t1, 29f
+25: ld      a0, NodeBlob_data_id(s8)
+    call    node_serving
+    bnez    a0, 29f
+    li      a0, NODE_ACT_BYTES_FREE
+    ld      a1, NodeBlob_data_id(s8)
+    li      a2, 0
+    call    node_ids
+26: li      t0, -1
+    sd      t0, 0(s8)
+    sd      t0, 8(s8)
+    sd      t0, 16(s8)
+    sd      t0, 24(s8)
+    sd      t0, NodeBlob_slot(s8)
+    sd      zero, NodeBlob_data_id(s8)
+    li      t0, NODE_BLOB_FREE
+    sd      t0, NodeBlob_status(s8)
+29: addi    s7, s7, 1
+    j       21b
+30: li      s7, 0                           # each checkpoint below the finalized epoch: its state goes; the anchor's goes with the anchor block
+31: ld      t0, (Node_checkpoints + 8)(s1)
+    bgeu    s7, t0, 99f
+    PART    s8, t0, s1, Node_checkpoints
+    li      t0, NodeCheckpoint__mem
+    mul     t0, s7, t0
+    add     s8, s8, t0
+    ld      t0, NodeCheckpoint_epoch(s8)
+    ld      t1, Store_finalized_checkpoint(s2)
+    bgeu    t0, t1, 39f
+    ld      a1, NodeCheckpoint_state_id(s8)
+    ld      t0, Node_anchor_state_id(s1)
+    beq     a1, t0, 32f
+    beqz    a1, 32f
+    li      a0, NODE_ACT_STATE_FREE
+    li      a2, 0
+    call    node_ids
+32: li      t0, -1
+    sd      t0, NodeCheckpoint_epoch(s8)
+    sd      t0, NodeCheckpoint_root(s8)
+    sd      t0, (NodeCheckpoint_root + 8)(s8)
+    sd      t0, (NodeCheckpoint_root + 16)(s8)
+    sd      t0, (NodeCheckpoint_root + 24)(s8)
+    sd      zero, NodeCheckpoint_state_id(s8)
+39: addi    s7, s7, 1
+    j       31b
+99: LEAVE 0
+END_FUNCTION node_prune
 
 /* A BYTES_PUT action of the ByteList a0 with a new id: a0 = the id. s3 the ByteList, s4 the id. */
 LOCAL_FUNCTION node_put
@@ -1453,11 +1728,8 @@ LOCAL_FUNCTION node_event
     mv      a0, s4
     call    node_put
     mv      s8, a0
-    PART    t0, t1, s1, Node_blocks
-    sd      t1, (L + 40)(sp)
-    li      t2, NodeBlock__mem
-    mul     t2, t1, t2
-    add     t0, t0, t2
+    call    node_new_block
+    sd      a0, (L + 40)(sp)
     addi    t2, s9, 8
     COPY32  t0, t2
     addi    t2, t0, NodeBlock_parent_root   # the message's parent_root
@@ -1473,8 +1745,6 @@ LOCAL_FUNCTION node_event
     sd      t2, NodeBlock_data_available(t0)
     sd      zero, NodeBlock_result(t0)
     sd      zero, NodeBlock_blobs(t0)
-    addi    t1, t1, 1
-    sd      t1, (Node_blocks + 8)(s1)
     ld      a0, (L + 40)(sp)
     call    node_try_import
 19: LEAVE 48
@@ -1719,11 +1989,8 @@ LOCAL_FUNCTION node_event
     call    node_find_block
     li      t0, -1
     bne     a0, t0, 65f
-    PART    t0, t1, s1, Node_blocks
-    sd      t1, (L + 40)(sp)
-    li      t2, NodeBlock__mem
-    mul     t2, t1, t2
-    add     t0, t0, t2
+    call    node_new_block
+    sd      a0, (L + 40)(sp)
     addi    t2, s3, NodeEvent_root
     COPY32  t0, t2
     addi    t2, t0, NodeBlock_parent_root
@@ -1740,8 +2007,6 @@ LOCAL_FUNCTION node_event
     sd      zero, NodeBlock_result(t0)
     ld      t2, NodeEvent_index(s3)
     sd      t2, NodeBlock_blobs(t0)
-    addi    t1, t1, 1
-    sd      t1, (Node_blocks + 8)(s1)
     mv      a0, s4
     call    node_drop_message
     ld      a0, (L + 40)(sp)
@@ -1758,10 +2023,7 @@ LOCAL_FUNCTION node_event
     ld      a1, NodeEvent_index(s3)
     call    node_blob_held
     bnez    a0, 65f
-    PART    t0, t1, s1, Node_blobs
-    li      t2, NodeBlob__mem
-    mul     t2, t1, t2
-    add     t0, t0, t2
+    call    node_new_blob
     addi    t2, s3, NodeEvent_root
     COPY32  t0, t2
     ld      t2, NodeEvent_index(s3)
@@ -1772,8 +2034,6 @@ LOCAL_FUNCTION node_event
     sd      t2, NodeBlob_data_id(t0)
     li      t2, NODE_BLOB_VALID
     sd      t2, NodeBlob_status(t0)
-    addi    t1, t1, 1
-    sd      t1, (Node_blobs + 8)(s1)
     mv      a0, s4
     call    node_drop_message
     addi    a0, s3, NodeEvent_root
@@ -1817,6 +2077,7 @@ LOCAL_FUNCTION node_event
     ld      a1, NodeBlock_data_id(s4)
     li      a2, 0
     call    node_ids
+    sd      zero, NodeBlock_data_id(s4)
     LEAVE 48
 77: li      t2, NODE_WORK_BLOB              # BLOB: a sidecar of a response, checked
     bne     t0, t2, 85f
@@ -1855,6 +2116,7 @@ LOCAL_FUNCTION node_event
     ld      a1, NodeBlob_data_id(s4)
     li      a2, 0
     call    node_ids
+    sd      zero, NodeBlob_data_id(s4)
     LEAVE 48
 85: li      t2, NODE_WORK_NEW_PAYLOAD       # NEW_PAYLOAD, FORKCHOICE: the request to the execution engine
     beq     t0, t2, 86f
@@ -1902,6 +2164,7 @@ LOCAL_FUNCTION node_event
     ld      a1, NodeBlock_data_id(s4)
     li      a2, 0
     call    node_ids
+    sd      zero, NodeBlock_data_id(s4)
     LEAVE 48
 70: li      t2, NODE_WORK_ATTESTATION       # done with an attestation or a slashing: free its bytes
     beq     t0, t2, 71f
@@ -4063,16 +4326,9 @@ LOCAL_FUNCTION node_response
     beq     s4, t0, 63f
     li      t0, REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT
     beq     s4, t0, 63f
-    PART    t0, t1, s1, Node_blocks         # a block: its entry, its bytes, the work of its root
-    sd      t1, (L + 48)(sp)
-    li      t2, NodeBlock__mem
-    mul     t2, t1, t2
-    add     s10, t0, t2
-    addi    t1, t1, 1
-    sd      t1, (Node_blocks + 8)(s1)
-    mv      a0, s10
-    li      a1, NodeBlock__mem
-    call    lantern_zero
+    call    node_new_block                  # a block: its entry, its bytes, the work of its root
+    sd      a0, (L + 48)(sp)
+    mv      s10, t0
     addi    t0, s8, 24                      # the slot at 4 mod 8
     LDU64   t1, t0, 100, t2
     sd      t1, NodeBlock_slot(s10)
@@ -4095,16 +4351,9 @@ LOCAL_FUNCTION node_response
     li      a5, 0
     call    node_work
     j       7f
-61: PART    t0, t1, s1, Node_blobs          # a blob sidecar: its entry, its bytes, the work of its checks
-    sd      t1, (L + 48)(sp)
-    li      t2, NodeBlob__mem
-    mul     t2, t1, t2
-    add     s10, t0, t2
-    addi    t1, t1, 1
-    sd      t1, (Node_blobs + 8)(s1)
-    mv      a0, s10
-    li      a1, NodeBlob__mem
-    call    lantern_zero
+61: call    node_new_blob                   # a blob sidecar: its entry, its bytes, the work of its checks
+    sd      a0, (L + 48)(sp)
+    mv      s10, t0
     ld      t0, 24(s8)                      # its index, and the slot of its block header
     sd      t0, NodeBlob_index(s10)
     LDQ     t0, s8, 24 + NODE_BLOB_HEADER
@@ -4122,16 +4371,9 @@ LOCAL_FUNCTION node_response
     li      a5, 0
     call    node_work
     j       7f
-63: PART    t0, t1, s1, Node_blobs          # a column sidecar: its entry, its bytes, the work of its checks
-    sd      t1, (L + 48)(sp)
-    li      t2, NodeBlob__mem
-    mul     t2, t1, t2
-    add     s10, t0, t2
-    addi    t1, t1, 1
-    sd      t1, (Node_blobs + 8)(s1)
-    mv      a0, s10
-    li      a1, NodeBlob__mem
-    call    lantern_zero
+63: call    node_new_blob                   # a column sidecar: its entry, its bytes, the work of its checks
+    sd      a0, (L + 48)(sp)
+    mv      s10, t0
     ld      t0, 24(s8)                      # its index, and the slot of its block header, 4-aligned
     sd      t0, NodeBlob_index(s10)
     LDU64   t0, s8, 24 + NODE_COLUMN_HEADER, t1
@@ -5134,6 +5376,11 @@ FUNCTION lantern_node_step
     li      t3, 128
     mul     t2, t2, t3
     add     t1, t1, t2
+    ld      t2, (Node_blobs + 8)(s1)        # 32 for each blob and checkpoint entry: the prune's actions
+    ld      t3, (Node_checkpoints + 8)(s1)
+    add     t2, t2, t3
+    slli    t2, t2, 5
+    add     t1, t1, t2
     addi    t1, t1, 512
     sd      t1, (L + 72)(sp)
     ld      t2, (L + 16)(sp)
@@ -5327,7 +5574,8 @@ FUNCTION lantern_node_step
     ld      a1, (L + 16)(sp)
     call    node_p2p_notices
     sd      a0, (L + 80)(sp)
-30: ld      t0, 0(s5)                       # then each event, in order
+30: call    node_prune                      # at a new finalized epoch, the prune; then each event, in order
+    ld      t0, 0(s5)
     add     s10, s5, t0
     li      s8, 0
     mv      s9, s3

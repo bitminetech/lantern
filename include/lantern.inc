@@ -547,8 +547,9 @@
 .set Node_lookup_ms, 424               /* the time of the last discv5 lookup the node asked for */
 .set Node_dialing, 432                 /* the node's dials not yet connected or failed */
 .set Node_columns, 440                /* the columns the node samples: bit i % 8 of byte i / 8 for column i, 16 bytes */
-.set Node_config, 456
-.set NODE_FIXED, 456 + CONFIG_SIZE
+.set Node_pruned_epoch, 456          /* the finalized epoch of the store at the last prune */
+.set Node_config, 464
+.set NODE_FIXED, 464 + CONFIG_SIZE
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_DIAL_TAG, 0x4000000000000000 /* the bit of a DIAL tag of the node */
 .set NODE_ENGINE_HOST_MAX, 64
@@ -578,6 +579,7 @@
 .set NODE_BLOCK_BLOBS, 6               /* from the network: it needs blob sidecars the node does not hold */
 .set NODE_BLOCK_PAYLOAD, 7             /* with NODE_FLAG_ENGINE: its engine_newPayload is due */
 .set NODE_BLOCK_EXECUTING, 8           /* its engine_newPayload is queued or sent */
+.set NODE_BLOCK_FREE, 9                /* no block: root and parent_root all 0xff bytes, slot 2^64 - 1 */
 
 /* NodeBlob: a blob sidecar the node holds */
 .set NodeBlob_block_root, 0            /* hash_tree_root of its signed_block_header.message */
@@ -589,6 +591,7 @@
 .set NODE_BLOB_VERIFYING, 1            /* from a response: a BLOB work is queued; block_root 0 */
 .set NODE_BLOB_VALID, 2
 .set NODE_BLOB_INVALID, 3
+.set NODE_BLOB_FREE, 4                 /* no sidecar: block_root all 0xff bytes, slot 2^64 - 1 */
 .set NODE_BLOB_MAX, 64                 /* a block of more blob commitments than this or its fork's limit needs no sidecars */
 
 /* NodeCheckpoint: store.checkpoint_states */

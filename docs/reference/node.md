@@ -82,6 +82,7 @@
   - After a valid block it sends the block's attestations, with `is_from_block` 1, and attester slashings as events of one step.
   - A valid block must be `NODE_BLOCK_IMPORTED`, an invalid block must not. An attestation or slashing is valid when the result of its last work is `LANTERN_VALID`.
   - The checks read the store, the node's `head_root`, and the post-state the node keeps for the head.
+  - After the steps of each event, the store's first node must be the root of its finalized checkpoint: the node pruned it.
   - From bellatrix on, the node has `NODE_FLAG_ENGINE`, and the runner is its execution engine too. It answers each `NODE_ACT_ENGINE` request with an HTTP/1.1 response in two `NODE_EV_ENGINE` events: engine_newPayload of a `blockHash`, and engine_forkchoiceUpdated of a `headBlockHash`, with the `payloadStatus` of the case's last `payload_status` step of that hash, else `VALID` with that hash as `latestValidHash`. The request must carry a JWT of the node's secret.
   - Cases with `payload_status` steps run in node mode from bellatrix on, through the node's execution engine calls; before bellatrix only directly.
   - A non-zero status of lantern_node_step or lantern_node_run must leave the node, the store and the work's state byte for byte unchanged.
@@ -243,9 +244,17 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 
 ### Function does
 
-- Room: `actions` has the event bytes + 512 per event + 128 per known block + 512 bytes free, and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and with `p2p` `NODE_SYNC_BATCH` times the largest of `MAX_BLOBS_PER_BLOCK`, `MAX_BLOBS_PER_BLOCK_ELECTRA` and the count of `columns` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node, and `DISCV5_ENR_SIZE` + `DISCV5_ENR_SCRATCH` more with a `NODE_EV_ENR`.
+- Room: `actions` has the event bytes + 512 per event + 128 per known block + 32 per `NodeBlob` and per `NodeCheckpoint` entry + 512 bytes free, and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and with `p2p` `NODE_SYNC_BATCH` times the largest of `MAX_BLOBS_PER_BLOCK`, `MAX_BLOBS_PER_BLOCK_ELECTRA` and the count of `columns` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node, and `DISCV5_ENR_SIZE` + `DISCV5_ENR_SCRATCH` more with a `NODE_EV_ENR`.
 - Before any change: the root of each `NODE_EV_BLOCK`, with lantern_node_block_root of the fork of its slot. A status of that call is the step's.
 - On `LANTERN_BUFFER_TOO_SMALL`, `short`: `NODE_SHORT_ACTIONS` for the room of `actions`, and for `LIBP2P_BUFFER_TOO_SMALL` of libp2p_step (its scratch is the step's own); `NODE_SHORT_NODE` for a part of the node, with `room` the byte offset in `NodeRoom` of its capacity (`blocks`, `checkpoints`, `pow_blocks`, `p2p_out`, `blobs` or `engine_bytes`); `NODE_SHORT_SCRATCH` for `scratch`, and for `LANTERN_BUFFER_TOO_SMALL` of lantern_node_block_root.
+- The prune, after libp2p's first round and before the node's events, when the store's finalized epoch is above `pruned_epoch`: lantern_store_prune with the step's scratch; on its success `pruned_epoch` takes that epoch, and with F the block of the finalized root:
+  - Each imported ancestor of F, by `parent_root`, gets a `NODE_ACT_STATE_FREE` of its post-state and `state_id` 0; its bytes and sidecars stay, for the node serves the chain.
+  - An imported block with a post-state and no node in the store is of another branch: a `NODE_ACT_STATE_FREE` and a `NODE_ACT_BYTES_FREE`, and its entry is free.
+  - A `NODE_BLOCK_INVALID`, `NODE_BLOCK_WAITING`, `NODE_BLOCK_BLOBS` or `NODE_BLOCK_PAYLOAD` block at or below F's slot: a `NODE_ACT_BYTES_FREE` of any bytes, and its entry is free.
+  - A `NODE_BLOB_INVALID` entry is free; a `NODE_BLOB_VALID` entry at or below F's slot whose block is not imported: a `NODE_ACT_BYTES_FREE`, and its entry is free.
+  - A `NodeCheckpoint` below the finalized epoch: a `NODE_ACT_STATE_FREE` of its state, except `anchor_state_id`, which goes with the anchor block; its entry is free.
+  - Bytes that a stream in `NODE_STREAM_SERVE` or `NODE_STREAM_SERVING` lists at or after its `next` stay, with their entry, until a later prune.
+- A block whose parent is imported with no post-state is no descendant of the finalized block: it becomes `NODE_BLOCK_INVALID`, and its bytes are freed.
 - `NODE_EV_TICK`: sets `time_ms` of the node, then on_tick of the fork of the new slot.
 - `NODE_EV_BLOCK`: for a root the node does not know, a `NODE_ACT_BYTES_PUT` of the bytes and a `NodeBlock` in `NODE_BLOCK_WAITING`. Bytes that are no `SignedBeaconBlock` are dropped.
 - A waiting block whose parent is imported: a `NODE_ACT_STATE_COPY` of the parent's post-state and a `NODE_WORK_IMPORT_BLOCK`; the block is `NODE_BLOCK_IMPORTING`. A waiting block whose parent is invalid becomes `NODE_BLOCK_INVALID`.
@@ -787,11 +796,12 @@ The state of the node: a value with parts.
 | 424 | `lookup_ms` | u64 | The time of the last discv5 lookup the node asked for |
 | 432 | `dialing` | u64 | The node's dials not yet connected or failed |
 | 440 | `columns` | 16 bytes | The columns the node samples: bit i % 8 of byte i / 8 for column i |
-| 456 | `config` | `Config` | |
+| 456 | `pruned_epoch` | u64 | The store's finalized epoch at the node's last prune |
+| 464 | `config` | `Config` | |
 
 ### Rules
 
-- `NODE_FIXED` (456 + `CONFIG_SIZE`) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, p2p_out, engine_in.
+- `NODE_FIXED` (464 + `CONFIG_SIZE`) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, p2p_out, engine_in.
 - The capacity of a part is its bytes up to the next part over its entry's bytes; `p2p_out` is the last part.
 - `NODE_FLAG_OPTIMISTIC`: blocks are imported as `PAYLOAD_STATUS_NOT_VALIDATED`.
 - `NODE_FLAG_JUSTIFIED_PENDING`: a `NODE_WORK_JUSTIFIED_STATE` is queued.
@@ -840,6 +850,7 @@ The state of the node: a value with parts.
 
 - `NodeBlock__mem` (136) bytes.
 - With `NODE_FLAG_ENGINE`, the status `NODE_BLOCK_PAYLOAD` while its engine_newPayload is due, and `NODE_BLOCK_EXECUTING` while it is queued or sent.
+- `NODE_BLOCK_FREE`: an entry the prune freed, with `root` and `parent_root` all 0xff bytes, `slot` 2^64 - 1, and `data_id` and `state_id` 0. A new block takes the first free entry, else the next.
 
 ## Type `NodeCheckpoint`
 
@@ -854,6 +865,7 @@ The state of the node: a value with parts.
 ### Rules
 
 - `NodeCheckpoint__mem` (48) bytes. The first 40 bytes are a `Checkpoint`.
+- An entry the prune freed has `epoch` 2^64 - 1, a `root` of all 0xff bytes and `state_id` 0. A new checkpoint takes the first free entry, else the next.
 
 ## Type `NodePeer`
 
@@ -925,7 +937,7 @@ The state of the node: a value with parts.
 | 32 | `index` | u64 | |
 | 40 | `slot` | u64 | The slot of its block header |
 | 48 | `data_id` | u64 | `BufferId` of the `BlobSidecar`'s SSZ bytes, or for a slot of fulu or later the `DataColumnSidecar`'s |
-| 56 | `status` | u64 | `NODE_BLOB_VERIFYING` while a `NODE_WORK_BLOB` of it is queued, `NODE_BLOB_VALID`, or `NODE_BLOB_INVALID` with its bytes freed |
+| 56 | `status` | u64 | `NODE_BLOB_VERIFYING` while a `NODE_WORK_BLOB` of it is queued, `NODE_BLOB_VALID`, `NODE_BLOB_INVALID` with its bytes freed, or `NODE_BLOB_FREE` after the prune, with `block_root` all 0xff bytes and `slot` 2^64 - 1 |
 
 ### Rules
 

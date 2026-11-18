@@ -137,3 +137,105 @@ LEAF lantern_store_payload_status
     str     x9, [x3]
     RETURN_OK
 END_FUNCTION lantern_store_payload_status
+
+/*
+ * (store, scratch): x19 store, x20 the new index of each node (a u64 each at the end of scratch,
+ * NODE_NONE when dropped), x21 the node count, x22 the finalized node, x23 the nodes, x24 i,
+ * x25 the nodes kept, x26 BlockNode__mem.
+ */
+FUNCTION lantern_store_prune
+    ENTER 0
+    mov     x19, x0
+    LDQ     x21, x19, Store_blocks + 8
+    ldr     x9, [x1]                        /* scratch: S(1), the map at its end */
+    lsl     x10, x21, #3
+    add     x11, x10, #LIST_FIXED
+    MOVQ    x12, LANTERN_SCRATCH_FIXED
+    add     x11, x11, x12
+    cmp     x9, x11
+    b.lo    9f
+    sub     x9, x9, x10
+    add     x20, x1, x9
+    LDQ     x23, x19, Store_blocks
+    add     x23, x19, x23
+    mov     x26, #BlockNode__mem
+    add     x9, x19, #(Store_finalized_checkpoint + 8)  /* the finalized node, newest first */
+    ldp     x10, x11, [x9]
+    ldp     x12, x13, [x9, #16]
+    mov     x22, x21
+1:  cbz     x22, 8f
+    sub     x22, x22, #1
+    madd    x9, x22, x26, x23
+    ldp     x14, x15, [x9]
+    cmp     x14, x10
+    ccmp    x15, x11, #0, eq
+    b.ne    1b
+    ldp     x14, x15, [x9, #16]
+    cmp     x14, x12
+    ccmp    x15, x13, #0, eq
+    b.ne    1b
+    mov     x24, #0                         /* the map: parents come first */
+    mov     x25, #0
+2:  cmp     x24, x21
+    b.hs    5f
+    mov     x9, #-1
+    cmp     x24, x22
+    b.lo    4f
+    b.eq    3f
+    madd    x10, x24, x26, x23
+    ldr     x11, [x10, #BlockNode_parent]
+    cmn     x11, #1
+    b.eq    4f
+    cmp     x11, x22
+    b.lo    4f
+    ldr     x12, [x20, x11, lsl #3]
+    cmn     x12, #1
+    b.eq    4f
+3:  mov     x9, x25
+    add     x25, x25, #1
+4:  str     x9, [x20, x24, lsl #3]
+    add     x24, x24, #1
+    b       2b
+5:  mov     x24, x22                        /* the kept nodes move down, with their new parents */
+6:  cmp     x24, x21
+    b.hs    7f
+    ldr     x9, [x20, x24, lsl #3]
+    cmn     x9, #1
+    b.eq    65f
+    madd    x10, x24, x26, x23
+    madd    x11, x9, x26, x23
+    mov     x13, #-1
+    cmp     x24, x22
+    b.eq    61f
+    ldr     x12, [x10, #BlockNode_parent]
+    ldr     x13, [x20, x12, lsl #3]
+61: cmp     x10, x11
+    b.eq    64f
+    mov     x14, #(BlockNode__mem / 8)
+    mov     x15, x10
+    mov     x16, x11
+62: ldr     x17, [x15], #8
+    str     x17, [x16], #8
+    subs    x14, x14, #1
+    b.ne    62b
+64: str     x13, [x11, #BlockNode_parent]
+65: add     x24, x24, #1
+    b       6b
+7:  PART    x9, x10, x19, Store_validators  /* each latest_node to its new index */
+71: cbz     x10, 73f
+    ldr     x11, [x9, #StoreValidator_latest_node]
+    cmp     x11, x21
+    b.hs    72f
+    ldr     x11, [x20, x11, lsl #3]
+    str     x11, [x9, #StoreValidator_latest_node]
+72: add     x9, x9, #StoreValidator__mem
+    sub     x10, x10, #1
+    b       71b
+73: str     x25, [x19, #(Store_blocks + 8)]
+    mov     x0, #LANTERN_OK
+    LEAVE 0
+8:  mov     x0, #LANTERN_INVALID_UNKNOWN_BLOCK
+    LEAVE 0
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 0
+END_FUNCTION lantern_store_prune

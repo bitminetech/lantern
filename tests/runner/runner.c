@@ -2817,11 +2817,18 @@ static void shell_engine(fc_node *n, const uint8_t *req, uint64_t len, const cha
 }
 
 /* Steps until the node gives no more work. */
+/* Settles of node mode whose store has a finalized epoch above 0: the prune ran. */
+static unsigned long node_settles_finalized;
+
 static void shell_settle(fc_node *n, const char **why) {
     for (int k = 0; n->shell->pending_len && !*why; k++) {
         if (k == 4096) *why = "the node does not settle";
         else shell_step(n, why);
     }
+    /* The node prunes at each new finalized epoch: the store's first node is then the finalized root. */
+    if (!*why && (node_count(n) == 0 || memcmp(node_at(n, 0), n->store + STORE_FINALIZED + 8, 32)))
+        *why = "the store's first node is not the finalized root after the node's prune";
+    if (!*why && rd64(n->store + STORE_FINALIZED) > 0) node_settles_finalized++;
 }
 
 /* The SSZ bytes of value of the named type, from offset 24 of the returned buffer, their length in *len. */
@@ -5948,6 +5955,7 @@ int main(int argc, char **argv) {
         printf("STACK %s %llu bytes%s\n", stats[i].name, (unsigned long long)stats[i].peak, bad ? " ABI FAULT" : "");
         if (bad) failures++;
     }
+    if (node_settles_finalized) printf("NOTE: %lu node settles past a finalized epoch\n", node_settles_finalized);
     printf("%s: %d passed, %d failed\n", failures ? "FAIL" : "PASS", passes, failures);
     return failures ? 1 : 0;
 }

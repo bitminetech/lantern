@@ -136,3 +136,106 @@ LEAF lantern_store_payload_status
     xor     %eax, %eax
     ret
 END_FUNCTION lantern_store_payload_status
+
+/*
+ * (store, scratch): rbx store, rbp the new index of each node (a u64 each at the end of scratch,
+ * NODE_NONE when dropped), r12 the node count, r13 the finalized node, r14 the nodes, r15 i,
+ * r8 the nodes kept, r9 a kept node's new place.
+ */
+FUNCTION lantern_store_prune
+    ENTER 0
+    mov     %rdi, %rbx
+    mov     (Store_blocks + 8)(%rbx), %r12
+    mov     (%rsi), %rax                    # scratch: S(1), the map at its end
+    lea     (LIST_FIXED + LANTERN_SCRATCH_FIXED)(,%r12,8), %rcx
+    cmp     %rcx, %rax
+    jb      9f
+    lea     (%rsi,%rax), %rbp
+    mov     %r12, %rcx
+    shl     $3, %rcx
+    sub     %rcx, %rbp
+    mov     Store_blocks(%rbx), %r14
+    add     %rbx, %r14
+    lea     (Store_finalized_checkpoint + 8)(%rbx), %rsi    # the finalized node, newest first
+    mov     %r12, %r13
+1:  test    %r13, %r13
+    jz      8f
+    dec     %r13
+    imul    $BlockNode__mem, %r13, %rdi
+    add     %r14, %rdi
+    mov     (%rdi), %rax
+    cmp     (%rsi), %rax
+    jne     1b
+    mov     8(%rdi), %rax
+    cmp     8(%rsi), %rax
+    jne     1b
+    mov     16(%rdi), %rax
+    cmp     16(%rsi), %rax
+    jne     1b
+    mov     24(%rdi), %rax
+    cmp     24(%rsi), %rax
+    jne     1b
+    xor     %r15d, %r15d                    # the map: parents come first
+    xor     %r8d, %r8d
+2:  cmp     %r12, %r15
+    jae     5f
+    mov     $-1, %rax
+    cmp     %r13, %r15
+    jb      4f
+    je      3f
+    imul    $BlockNode__mem, %r15, %rdi
+    add     %r14, %rdi
+    mov     BlockNode_parent(%rdi), %rcx
+    cmp     $-1, %rcx
+    je      4f
+    cmp     %r13, %rcx
+    jb      4f
+    cmpq    $-1, (%rbp,%rcx,8)
+    je      4f
+3:  mov     %r8, %rax
+    inc     %r8
+4:  mov     %rax, (%rbp,%r15,8)
+    inc     %r15
+    jmp     2b
+5:  mov     %r13, %r15                      # the kept nodes move down, with their new parents
+6:  cmp     %r12, %r15
+    jae     7f
+    mov     (%rbp,%r15,8), %rax
+    cmp     $-1, %rax
+    je      65f
+    imul    $BlockNode__mem, %r15, %rsi
+    add     %r14, %rsi
+    imul    $BlockNode__mem, %rax, %rdi
+    add     %r14, %rdi
+    mov     %rdi, %r9
+    mov     $-1, %rdx
+    cmp     %r13, %r15
+    je      61f
+    mov     BlockNode_parent(%rsi), %rcx
+    mov     (%rbp,%rcx,8), %rdx
+61: cmp     %rsi, %rdi
+    je      64f
+    mov     $(BlockNode__mem / 8), %ecx
+    rep movsq
+64: mov     %rdx, BlockNode_parent(%r9)
+65: inc     %r15
+    jmp     6b
+7:  PART    %rsi, %rcx, %rbx, Store_validators      # each latest_node to its new index
+71: test    %rcx, %rcx
+    jz      73f
+    mov     StoreValidator_latest_node(%rsi), %rax
+    cmp     %r12, %rax
+    jae     72f
+    mov     (%rbp,%rax,8), %rax
+    mov     %rax, StoreValidator_latest_node(%rsi)
+72: add     $StoreValidator__mem, %rsi
+    dec     %rcx
+    jmp     71b
+73: mov     %r8, (Store_blocks + 8)(%rbx)
+    xor     %eax, %eax
+    LEAVE 0
+8:  mov     $LANTERN_INVALID_UNKNOWN_BLOCK, %eax
+    LEAVE 0
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 0
+END_FUNCTION lantern_store_prune

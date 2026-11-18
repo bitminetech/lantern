@@ -483,6 +483,8 @@ LOCAL_FUNCTION node_checkpoint_state
     cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rdx)
     jne     9f
     mov     NodeBlock_state_id(%rdx), %rax
+    test    %rax, %rax                      # an ancestor of the finalized block keeps no state
+    jz      9f
     mov     %rax, S8(%rsp)
     call    node_new_id
     mov     %rax, S7(%rsp)
@@ -490,17 +492,13 @@ LOCAL_FUNCTION node_checkpoint_state
     mov     S8(%rsp), %rsi
     mov     %rax, %rdx
     call    node_ids
-    PART    %rdi, %rcx, %rbx, Node_checkpoints      # the entry
-    imul    $NodeCheckpoint__mem, %rcx, %rax
-    add     %rax, %rdi
+    call    node_new_checkpoint             # the entry
+    mov     %rax, %r8
     mov     %r12, NodeCheckpoint_epoch(%rdi)
     lea     NodeCheckpoint_root(%rdi), %rax
     COPY32  %rax, %r13
     mov     S7(%rsp), %rax
     mov     %rax, NodeCheckpoint_state_id(%rdi)
-    lea     1(%rcx), %rax
-    mov     %rax, (Node_checkpoints + 8)(%rbx)
-    mov     %rcx, %r8
     mov     $NODE_WORK_TARGET_STATE, %edi
     mov     S7(%rsp), %rsi
     xor     %edx, %edx
@@ -554,6 +552,8 @@ LOCAL_FUNCTION node_try_import
     je      8f
     cmp     $NODE_BLOCK_IMPORTED, %rax
     jne     9f
+    cmpq    $0, NodeBlock_state_id(%rdx)    # an ancestor of the finalized block: no descendant of it
+    je      8f
     testq   $NODE_FLAG_ENGINE, Node_flags(%rbx)
     jz      1f
     mov     NodeBlock_slot(%r13), %rdi
@@ -592,6 +592,8 @@ LOCAL_FUNCTION node_import_now
     cmp     $-1, %rax
     je      9f
     mov     NodeBlock_state_id(%rdx), %rax
+    test    %rax, %rax
+    jz      8f
     mov     %rax, S7(%rsp)
     call    node_new_id
     mov     %rax, NodeBlock_state_id(%r13)
@@ -608,6 +610,13 @@ LOCAL_FUNCTION node_import_now
     xor     %r9d, %r9d
     call    node_work
 9:  LEAVE 0
+8:  movq    $NODE_BLOCK_INVALID, NodeBlock_status(%r13)     # its parent is an ancestor of the finalized block
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    mov     NodeBlock_data_id(%r13), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    movq    $0, NodeBlock_data_id(%r13)
+    LEAVE 0
 END_FUNCTION node_import_now
 
 /* rax = the index of the store's node whose root is at rdi, or 2^64 - 1; rdx = its entry. Uses rcx, r11, xmm0-xmm2. */
@@ -902,6 +911,8 @@ LOCAL_FUNCTION node_engine_read
     mov     NodeBlock_data_id(%rcx), %rsi
     xor     %edx, %edx
     call    node_ids
+    mov     S9(%rsp), %rcx
+    movq    $0, NodeBlock_data_id(%rcx)
     mov     S9(%rsp), %rdi
     add     $NodeBlock_parent_root, %rdi
     call    node_store_find
@@ -976,6 +987,273 @@ LOCAL_FUNCTION node_children
     jmp     1b
 9:  LEAVE 0
 END_FUNCTION node_children
+
+/* rax = the index, rdi = the zeroed entry, of a NODE_BLOCK_FREE block or a new one at the end. Uses rcx. */
+LOCAL_FUNCTION node_new_block
+    UNWIND_END_PROLOGUE
+    PART    %rdi, %rcx, %rbx, Node_blocks
+    xor     %eax, %eax
+1:  cmp     %rcx, %rax
+    jae     2f
+    cmpq    $NODE_BLOCK_FREE, NodeBlock_status(%rdi)
+    je      3f
+    add     $NodeBlock__mem, %rdi
+    inc     %rax
+    jmp     1b
+2:  inc     %rcx
+    mov     %rcx, (Node_blocks + 8)(%rbx)
+3:  xor     %ecx, %ecx
+4:  movq    $0, (%rdi,%rcx)
+    add     $8, %rcx
+    cmp     $NodeBlock__mem, %rcx
+    jb      4b
+    ret
+END_FUNCTION node_new_block
+
+/* rax = the index, rdi = the zeroed entry, of a NODE_BLOB_FREE sidecar or a new one at the end. Uses rcx. */
+LOCAL_FUNCTION node_new_blob
+    UNWIND_END_PROLOGUE
+    PART    %rdi, %rcx, %rbx, Node_blobs
+    xor     %eax, %eax
+1:  cmp     %rcx, %rax
+    jae     2f
+    cmpq    $NODE_BLOB_FREE, NodeBlob_status(%rdi)
+    je      3f
+    add     $NodeBlob__mem, %rdi
+    inc     %rax
+    jmp     1b
+2:  inc     %rcx
+    mov     %rcx, (Node_blobs + 8)(%rbx)
+3:  xor     %ecx, %ecx
+4:  movq    $0, (%rdi,%rcx)
+    add     $8, %rcx
+    cmp     $NodeBlob__mem, %rcx
+    jb      4b
+    ret
+END_FUNCTION node_new_blob
+
+/* rax = the index, rdi = the zeroed entry, of a free checkpoint (epoch 2^64 - 1) or a new one at the end. Uses rcx. */
+LOCAL_FUNCTION node_new_checkpoint
+    UNWIND_END_PROLOGUE
+    PART    %rdi, %rcx, %rbx, Node_checkpoints
+    xor     %eax, %eax
+1:  cmp     %rcx, %rax
+    jae     2f
+    cmpq    $-1, NodeCheckpoint_epoch(%rdi)
+    je      3f
+    add     $NodeCheckpoint__mem, %rdi
+    inc     %rax
+    jmp     1b
+2:  inc     %rcx
+    mov     %rcx, (Node_checkpoints + 8)(%rbx)
+3:  xor     %ecx, %ecx
+4:  movq    $0, (%rdi,%rcx)
+    add     $8, %rcx
+    cmp     $NodeCheckpoint__mem, %rcx
+    jb      4b
+    ret
+END_FUNCTION node_new_checkpoint
+
+/* rax = 1 when a stream that serves lists the BufferId rdi at or after its next, else 0. Uses rcx, rdx, rsi, r8, r9. */
+LOCAL_FUNCTION node_serving
+    UNWIND_END_PROLOGUE
+    xor     %eax, %eax
+    test    %rdi, %rdi
+    jz      9f
+    PART    %rsi, %rcx, %rbx, Node_streams
+1:  test    %rcx, %rcx
+    jz      9f
+    mov     NodeStream_state(%rsi), %rdx
+    cmp     $NODE_STREAM_SERVE, %rdx
+    je      2f
+    cmp     $NODE_STREAM_SERVING, %rdx
+    jne     4f
+2:  mov     NodeStream_next(%rsi), %r8
+    mov     (NodeStream_list + 16)(%rsi), %r9
+    shr     $3, %r9
+3:  cmp     %r9, %r8
+    jae     4f
+    cmp     NodeStream_request(%rsi,%r8,8), %rdi
+    je      8f
+    inc     %r8
+    jmp     3b
+4:  add     Node_stream_bytes(%rbx), %rsi
+    dec     %rcx
+    jmp     1b
+8:  mov     $1, %eax
+9:  ret
+END_FUNCTION node_serving
+
+/*
+ * At a new finalized epoch of the store, lantern_store_prune; then the node keeps the finalized
+ * block, the blocks of the store, and the bytes and sidecars of the finalized block's ancestors.
+ * Their states go, and so do the other branches, the invalid and waiting blocks at or below the
+ * finalized slot, and the checkpoints below the finalized epoch. Bytes a stream sends stay until
+ * a later prune. r12 an entry, r13 the finalized slot, S7 i, S9 the finalized block.
+ */
+LOCAL_FUNCTION node_prune
+    ENTER 0
+    mov     Store_finalized_checkpoint(%rbp), %rax
+    cmp     Node_pruned_epoch(%rbx), %rax
+    jbe     99f
+    mov     %rbp, %rdi
+    mov     %r14, %rsi
+    call    lantern_store_prune
+    test    %rax, %rax
+    jnz     99f
+    mov     Store_finalized_checkpoint(%rbp), %rax
+    mov     %rax, Node_pruned_epoch(%rbx)
+    lea     (Store_finalized_checkpoint + 8)(%rbp), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      99f
+    mov     %rdx, S9(%rsp)
+    mov     NodeBlock_slot(%rdx), %r13
+    lea     NodeBlock_parent_root(%rdx), %rdi       # its ancestors: their states go
+1:  call    node_find_block
+    cmp     $-1, %rax
+    je      2f
+    mov     %rdx, %r12
+    cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%r12)
+    jne     2f
+    mov     NodeBlock_state_id(%r12), %rsi
+    test    %rsi, %rsi
+    jz      2f
+    mov     $NODE_ACT_STATE_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+    movq    $0, NodeBlock_state_id(%r12)
+    lea     NodeBlock_parent_root(%r12), %rdi
+    jmp     1b
+2:  movq    $0, S7(%rsp)                    # each other block
+3:  mov     S7(%rsp), %rax
+    cmp     (Node_blocks + 8)(%rbx), %rax
+    jae     20f
+    imul    $NodeBlock__mem, %rax, %r12
+    add     Node_blocks(%rbx), %r12
+    add     %rbx, %r12
+    cmp     S9(%rsp), %r12
+    je      19f
+    mov     NodeBlock_status(%r12), %rax
+    cmp     $NODE_BLOCK_IMPORTED, %rax
+    jne     10f
+    cmpq    $0, NodeBlock_state_id(%r12)
+    je      19f                             # an ancestor: its bytes stay
+    mov     %r12, %rdi
+    call    node_store_find                 # a descendant: in the store
+    cmp     $-1, %rax
+    jne     19f
+    mov     NodeBlock_data_id(%r12), %rdi   # another branch: its state and bytes go
+    call    node_serving
+    test    %rax, %rax
+    jnz     19f
+    mov     $NODE_ACT_STATE_FREE, %edi
+    mov     NodeBlock_state_id(%r12), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    jmp     15f
+10: cmp     $NODE_BLOCK_INVALID, %rax       # invalid or waiting, at or below the finalized slot
+    je      11f
+    cmp     $NODE_BLOCK_WAITING, %rax
+    je      11f
+    cmp     $NODE_BLOCK_BLOBS, %rax
+    je      11f
+    cmp     $NODE_BLOCK_PAYLOAD, %rax
+    jne     19f
+11: cmp     %r13, NodeBlock_slot(%r12)
+    ja      19f
+    mov     NodeBlock_data_id(%r12), %rdi
+    call    node_serving
+    test    %rax, %rax
+    jnz     19f
+15: mov     NodeBlock_data_id(%r12), %rsi   # the bytes go, and the entry is free
+    test    %rsi, %rsi
+    jz      16f
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+16: mov     $-1, %rax
+    mov     %rax, (%r12)
+    mov     %rax, 8(%r12)
+    mov     %rax, 16(%r12)
+    mov     %rax, 24(%r12)
+    mov     %rax, 32(%r12)
+    mov     %rax, 40(%r12)
+    mov     %rax, 48(%r12)
+    mov     %rax, 56(%r12)
+    mov     %rax, NodeBlock_slot(%r12)
+    movq    $0, NodeBlock_data_id(%r12)
+    movq    $0, NodeBlock_state_id(%r12)
+    movq    $NODE_BLOCK_FREE, NodeBlock_status(%r12)
+19: incq    S7(%rsp)
+    jmp     3b
+20: movq    $0, S7(%rsp)                    # each sidecar: invalid, or at or below the finalized slot and of no kept block
+21: mov     S7(%rsp), %rax
+    cmp     (Node_blobs + 8)(%rbx), %rax
+    jae     30f
+    imul    $NodeBlob__mem, %rax, %r12
+    add     Node_blobs(%rbx), %r12
+    add     %rbx, %r12
+    mov     NodeBlob_status(%r12), %rax
+    cmp     $NODE_BLOB_INVALID, %rax
+    je      26f
+    cmp     $NODE_BLOB_VALID, %rax
+    jne     29f
+    cmp     %r13, NodeBlob_slot(%r12)
+    ja      29f
+    mov     %r12, %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      25f
+    cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rdx)
+    je      29f
+25: mov     NodeBlob_data_id(%r12), %rdi
+    call    node_serving
+    test    %rax, %rax
+    jnz     29f
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    mov     NodeBlob_data_id(%r12), %rsi
+    xor     %edx, %edx
+    call    node_ids
+26: mov     $-1, %rax
+    mov     %rax, (%r12)
+    mov     %rax, 8(%r12)
+    mov     %rax, 16(%r12)
+    mov     %rax, 24(%r12)
+    mov     %rax, NodeBlob_slot(%r12)
+    movq    $0, NodeBlob_data_id(%r12)
+    movq    $NODE_BLOB_FREE, NodeBlob_status(%r12)
+29: incq    S7(%rsp)
+    jmp     21b
+30: movq    $0, S7(%rsp)                    # each checkpoint below the finalized epoch: its state goes; the anchor's goes with the anchor block
+31: mov     S7(%rsp), %rax
+    cmp     (Node_checkpoints + 8)(%rbx), %rax
+    jae     99f
+    imul    $NodeCheckpoint__mem, %rax, %r12
+    add     Node_checkpoints(%rbx), %r12
+    add     %rbx, %r12
+    mov     Store_finalized_checkpoint(%rbp), %rax
+    cmp     %rax, NodeCheckpoint_epoch(%r12)
+    jae     39f
+    mov     NodeCheckpoint_state_id(%r12), %rsi
+    cmp     Node_anchor_state_id(%rbx), %rsi
+    je      32f
+    test    %rsi, %rsi
+    jz      32f
+    mov     $NODE_ACT_STATE_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+32: mov     $-1, %rax
+    mov     %rax, NodeCheckpoint_epoch(%r12)
+    mov     %rax, NodeCheckpoint_root(%r12)
+    mov     %rax, (NodeCheckpoint_root + 8)(%r12)
+    mov     %rax, (NodeCheckpoint_root + 16)(%r12)
+    mov     %rax, (NodeCheckpoint_root + 24)(%r12)
+    movq    $0, NodeCheckpoint_state_id(%r12)
+39: incq    S7(%rsp)
+    jmp     31b
+99: LEAVE 0
+END_FUNCTION node_prune
 
 /* A BYTES_PUT action of the ByteList rdi with a new id: rax = the id. r12 the ByteList, r13 the id. */
 LOCAL_FUNCTION node_put
@@ -1428,10 +1706,8 @@ LOCAL_FUNCTION node_event
     mov     %r13, %rdi
     call    node_put
     mov     %rax, S8(%rsp)
-    PART    %rdi, %rcx, %rbx, Node_blocks
-    mov     %rcx, (L + 40)(%rsp)
-    imul    $NodeBlock__mem, %rcx, %rax
-    add     %rax, %rdi
+    call    node_new_block
+    mov     %rax, (L + 40)(%rsp)
     mov     S9(%rsp), %rsi
     add     $8, %rsi
     COPY32  %rdi, %rsi
@@ -1449,8 +1725,6 @@ LOCAL_FUNCTION node_event
     mov     %rax, NodeBlock_data_available(%rdi)
     movq    $0, NodeBlock_result(%rdi)
     movq    $0, NodeBlock_blobs(%rdi)
-    inc     %rcx
-    mov     %rcx, (Node_blocks + 8)(%rbx)
     mov     (L + 40)(%rsp), %rdi
     call    node_try_import
 19: LEAVE 48
@@ -1689,10 +1963,8 @@ LOCAL_FUNCTION node_event
     call    node_find_block
     cmp     $-1, %rax
     jne     65f
-    PART    %rdi, %rcx, %rbx, Node_blocks
-    mov     %rcx, (L + 40)(%rsp)
-    imul    $NodeBlock__mem, %rcx, %rax
-    add     %rax, %rdi
+    call    node_new_block
+    mov     %rax, (L + 40)(%rsp)
     lea     NodeEvent_root(%r12), %rsi
     COPY32  %rdi, %rsi
     lea     NodeBlock_parent_root(%rdi), %rax
@@ -1708,8 +1980,6 @@ LOCAL_FUNCTION node_event
     movq    $0, NodeBlock_result(%rdi)
     mov     NodeEvent_index(%r12), %rax
     mov     %rax, NodeBlock_blobs(%rdi)
-    inc     %rcx
-    mov     %rcx, (Node_blocks + 8)(%rbx)
     mov     %r13, %rdi
     call    node_drop_message
     mov     (L + 40)(%rsp), %rdi
@@ -1728,9 +1998,7 @@ LOCAL_FUNCTION node_event
     call    node_blob_held
     test    %rax, %rax
     jnz     65f
-    PART    %rdi, %rcx, %rbx, Node_blobs
-    imul    $NodeBlob__mem, %rcx, %rax
-    add     %rax, %rdi
+    call    node_new_blob
     lea     NodeEvent_root(%r12), %rsi
     COPY32  %rdi, %rsi
     mov     NodeEvent_index(%r12), %rax
@@ -1740,8 +2008,6 @@ LOCAL_FUNCTION node_event
     mov     NodeAction_data(%r12), %rax
     mov     %rax, NodeBlob_data_id(%rdi)
     movq    $NODE_BLOB_VALID, NodeBlob_status(%rdi)
-    inc     %rcx
-    mov     %rcx, (Node_blobs + 8)(%rbx)
     mov     %r13, %rdi
     call    node_drop_message
     lea     NodeEvent_root(%r12), %rdi
@@ -1784,6 +2050,7 @@ LOCAL_FUNCTION node_event
     mov     NodeBlock_data_id(%r13), %rsi
     xor     %edx, %edx
     call    node_ids
+    movq    $0, NodeBlock_data_id(%r13)
     LEAVE 48
 77: cmp     $NODE_WORK_BLOB, %rax           # BLOB: a sidecar of a response, checked
     jne     85f
@@ -1822,6 +2089,7 @@ LOCAL_FUNCTION node_event
     mov     NodeBlob_data_id(%r13), %rsi
     xor     %edx, %edx
     call    node_ids
+    movq    $0, NodeBlob_data_id(%r13)
     LEAVE 48
 85: cmp     $NODE_WORK_NEW_PAYLOAD, %rax    # NEW_PAYLOAD, FORKCHOICE: the request to the execution engine
     je      86f
@@ -1866,6 +2134,7 @@ LOCAL_FUNCTION node_event
     mov     NodeBlock_data_id(%r13), %rsi
     xor     %edx, %edx
     call    node_ids
+    movq    $0, NodeBlock_data_id(%r13)
     LEAVE 48
 70: cmp     $NODE_WORK_ATTESTATION, %rax    # done with an attestation or a slashing: free its bytes
     je      71f
@@ -4074,16 +4343,9 @@ LOCAL_FUNCTION node_response
     je      63f
     cmp     $REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT, %r13
     je      63f
-    PART    %rdi, %rax, %rbx, Node_blocks   # a block: its entry, its bytes, the work of its root
+    call    node_new_block                  # a block: its entry, its bytes, the work of its root
     mov     %rax, (L + 48)(%rsp)
-    imul    $NodeBlock__mem, %rax, %rcx
-    add     %rcx, %rdi
     mov     %rdi, (L + 96)(%rsp)
-    inc     %rax
-    mov     %rax, (Node_blocks + 8)(%rbx)
-    mov     $NodeBlock__mem, %esi
-    call    lantern_zero
-    mov     (L + 96)(%rsp), %rdi
     mov     (L + 88)(%rsp), %rsi
     mov     (24 + 100)(%rsi), %rax
     mov     %rax, NodeBlock_slot(%rdi)
@@ -4106,16 +4368,9 @@ LOCAL_FUNCTION node_response
     xor     %r9d, %r9d
     call    node_work
     jmp     7f
-61: PART    %rdi, %rax, %rbx, Node_blobs    # a blob sidecar: its entry, its bytes, the work of its checks
+61: call    node_new_blob                   # a blob sidecar: its entry, its bytes, the work of its checks
     mov     %rax, (L + 48)(%rsp)
-    imul    $NodeBlob__mem, %rax, %rcx
-    add     %rcx, %rdi
     mov     %rdi, (L + 96)(%rsp)
-    inc     %rax
-    mov     %rax, (Node_blobs + 8)(%rbx)
-    mov     $NodeBlob__mem, %esi
-    call    lantern_zero
-    mov     (L + 96)(%rsp), %rdi
     mov     (L + 88)(%rsp), %rsi
     mov     24(%rsi), %rax                  # its index, and the slot of its block header
     mov     %rax, NodeBlob_index(%rdi)
@@ -4134,16 +4389,9 @@ LOCAL_FUNCTION node_response
     xor     %r9d, %r9d
     call    node_work
     jmp     7f
-63: PART    %rdi, %rax, %rbx, Node_blobs    # a column sidecar: its entry, its bytes, the work of its checks
+63: call    node_new_blob                   # a column sidecar: its entry, its bytes, the work of its checks
     mov     %rax, (L + 48)(%rsp)
-    imul    $NodeBlob__mem, %rax, %rcx
-    add     %rcx, %rdi
     mov     %rdi, (L + 96)(%rsp)
-    inc     %rax
-    mov     %rax, (Node_blobs + 8)(%rbx)
-    mov     $NodeBlob__mem, %esi
-    call    lantern_zero
-    mov     (L + 96)(%rsp), %rdi
     mov     (L + 88)(%rsp), %rsi
     mov     24(%rsi), %rax                  # its index, and the slot of its block header
     mov     %rax, NodeBlob_index(%rdi)
@@ -5123,6 +5371,10 @@ FUNCTION lantern_node_step
     add     %r10, %rcx
     imul    $128, (Node_blocks + 8)(%rbx), %rdx
     add     %rdx, %rcx
+    mov     (Node_blobs + 8)(%rbx), %rdx    # 32 for each blob and checkpoint entry: the prune's actions
+    add     (Node_checkpoints + 8)(%rbx), %rdx
+    shl     $5, %rdx
+    add     %rdx, %rcx
     add     $512, %rcx
     mov     %rcx, (L + 72)(%rsp)
     cmpq    $0, (L + 16)(%rsp)
@@ -5309,7 +5561,8 @@ FUNCTION lantern_node_step
     mov     (L + 16)(%rsp), %rsi
     call    node_p2p_notices
     mov     %rax, (L + 80)(%rsp)
-30: mov     (%r14), %rax                    # then each event, in order
+30: call    node_prune                      # at a new finalized epoch, the prune; then each event, in order
+    mov     (%r14), %rax
     add     %r14, %rax
     mov     %rax, S10(%rsp)
     movq    $0, S8(%rsp)
