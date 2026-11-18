@@ -503,6 +503,9 @@ LOCAL_FUNCTION app_start
     call    app_engine_conf                 # the execution engine
     test    %rax, %rax
     jnz     99f
+    call    app_key                         # the key, and the anchor's node ID
+    test    %rax, %rax
+    jnz     94f
     lea     APP_NODE_ROOM(%rbx), %rdi       # the node
     ADDRESS %rsi, app_node_room
     mov     $80, %edx
@@ -1364,6 +1367,64 @@ END_FUNCTION app_boot_nodes
  * --port, and the boot nodes: rax = 0, or 2 after a line on the standard error. rbp the config,
  * r12 the tries. Locals: L a size or a status, L+8 ShellParams, L+32 an Address, L+64 a ListenResult.
  */
+/*
+ * A new secp256k1 key at APP_KEY from fresh random bytes, below 2^255 and so below the order of
+ * the curve (a zero key tries again, up to 4 times), and the anchor's node_id: keccak256 of its
+ * point, x then y, in reverse byte order: rax = 0, or a status. r12 the tries. Locals: L the
+ * public key (40), L+48 the point (64), L+112 a ByteList of the point (88), L+200 the digest (32).
+ */
+LOCAL_FUNCTION app_key
+    ENTER 240
+    xor     %r12d, %r12d
+1:  lea     APP_TICK(%rbx), %rdi
+    CALL_GLOBAL libp2p_shell_clock
+    lea     APP_KEY(%rbx), %rdi
+    lea     (APP_TICK + LIBP2P_TICK_ENTROPY)(%rbx), %rsi
+    mov     $32, %edx
+    call    lantern_copy
+    andb    $0x7f, APP_KEY(%rbx)
+    lea     APP_KEY(%rbx), %rdi
+    lea     L(%rsp), %rsi
+    CALL_GLOBAL crypto_secp256k1_public_key
+    test    %rax, %rax
+    jz      2f
+    inc     %r12
+    cmp     $4, %r12
+    jb      1b
+    LEAVE 240
+2:  lea     L(%rsp), %rdi
+    lea     (L + 48)(%rsp), %rsi
+    CALL_GLOBAL crypto_secp256k1_decompress
+    test    %rax, %rax
+    jnz     9f
+    movq    $(24 + 64), (L + 112)(%rsp)     # keccak256(x || y)
+    movq    $24, (L + 120)(%rsp)
+    movq    $64, (L + 128)(%rsp)
+    lea     (L + 136)(%rsp), %rdi
+    lea     (L + 48)(%rsp), %rsi
+    mov     $64, %edx
+    call    lantern_copy
+    lea     (L + 112)(%rsp), %rdi
+    lea     (L + 200)(%rsp), %rsi
+    CALL_GLOBAL crypto_keccak256
+    test    %rax, %rax
+    jnz     9f
+    mov     (L + 200)(%rsp), %rax           # the NodeID: the digest's bytes in reverse order
+    mov     (L + 208)(%rsp), %rcx
+    mov     (L + 216)(%rsp), %rdx
+    mov     (L + 224)(%rsp), %rsi
+    bswap   %rax
+    bswap   %rcx
+    bswap   %rdx
+    bswap   %rsi
+    mov     %rsi, (APP_ANCHOR + NodeAnchor_node_id)(%rbx)
+    mov     %rdx, (APP_ANCHOR + NodeAnchor_node_id + 8)(%rbx)
+    mov     %rcx, (APP_ANCHOR + NodeAnchor_node_id + 16)(%rbx)
+    mov     %rax, (APP_ANCHOR + NodeAnchor_node_id + 24)(%rbx)
+    xor     %eax, %eax
+9:  LEAVE 240
+END_FUNCTION app_key
+
 LOCAL_FUNCTION app_net
     ENTER 112
     mov     $APP_P2P_CONFIG, %edi           # the config: the template, then the protocols
@@ -1391,16 +1452,8 @@ LOCAL_FUNCTION app_net
     imul    $LIBP2P_PROTO_SIZE, %rax, %rax
     add     %rcx, %rax
     mov     %rax, (%rbp)
-    xor     %r12d, %r12d
-1:  lea     APP_TICK(%rbx), %rdi            # a key from fresh random bytes, below the order of the curve
-    CALL_GLOBAL libp2p_shell_clock
-    lea     16(%rbp), %rdi
-    lea     (APP_TICK + LIBP2P_TICK_ENTROPY)(%rbx), %rsi
-    mov     $32, %edx
-    call    lantern_copy
-    andb    $0x7f, 16(%rbp)
-    lea     APP_KEY(%rbx), %rdi
-    lea     16(%rbp), %rsi
+    lea     16(%rbp), %rdi                  # the key of app_key
+    lea     APP_KEY(%rbx), %rsi
     mov     $32, %edx
     call    lantern_copy
     lea     APP_TICK(%rbx), %rdi            # the DRBG's entropy, and the time
@@ -1425,17 +1478,8 @@ LOCAL_FUNCTION app_net
     mov     %rbp, %rdi
     CALL_GLOBAL libp2p_init
     test    %rax, %rax
-    jz      2f
-    cmp     $LIBP2P_INVALID_KEY, %rax
-    jne     96f
-    mov     $APP_P2P, %edi
-    call    app_unmap
-    inc     %r12
-    cmp     $4, %r12
-    jb      1b
-    mov     $LIBP2P_INVALID_KEY, %eax
-    jmp     96f
-2:  mov     88(%rbp), %rax                  # the shell: a slot for each connection, and one for the execution engine
+    jnz     96f
+    mov     88(%rbp), %rax                  # the shell: a slot for each connection, and one for the execution engine
     inc     %rax
     mov     %rax, (L + 8)(%rsp)
     mov     160(%rbp), %rax

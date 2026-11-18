@@ -495,6 +495,8 @@ LOCAL_FUNCTION app_start
     STQ     t0, s1, APP_FLAGS
     call    app_engine_conf                 # the execution engine
     bnez    a0, 99f
+    call    app_key                         # the key, and the anchor's node ID
+    bnez    a0, 94f
     ADDQ    a0, s1, APP_NODE_ROOM           # the node
     ADDRESS a1, app_node_room
     li      a2, 80
@@ -1317,6 +1319,65 @@ END_FUNCTION app_boot_nodes
  * --port, and the boot nodes: a0 = 0, or 2 after a line on the standard error. s2 the config,
  * s3 the tries. Locals: L a size or a status, L+8 ShellParams, L+32 an Address, L+64 a ListenResult.
  */
+/*
+ * A new secp256k1 key at APP_KEY from fresh random bytes, below 2^255 and so below the order of
+ * the curve (a zero key tries again, up to 4 times), and the anchor's node_id: keccak256 of its
+ * point, x then y, in reverse byte order: a0 = 0, or a status. s3 the tries, s4 APP_KEY.
+ * Locals: L the public key (40), L+48 the point (64), L+112 a ByteList of the point (88), L+200
+ * the digest (32).
+ */
+LOCAL_FUNCTION app_key
+    ENTER 240
+    li      s3, 0
+    ADDQ    s4, s1, APP_KEY
+1:  ADDQ    a0, s1, APP_TICK
+    CALL_GLOBAL libp2p_shell_clock
+    mv      a0, s4
+    ADDQ    a1, s1, (APP_TICK + LIBP2P_TICK_ENTROPY)
+    li      a2, 32
+    call    lantern_copy
+    lbu     t0, 0(s4)
+    andi    t0, t0, 0x7f
+    sb      t0, 0(s4)
+    mv      a0, s4
+    addi    a1, sp, L
+    CALL_GLOBAL crypto_secp256k1_public_key
+    beqz    a0, 2f
+    addi    s3, s3, 1
+    li      t0, 4
+    bltu    s3, t0, 1b
+    LEAVE 240
+2:  addi    a0, sp, L
+    addi    a1, sp, L + 48
+    CALL_GLOBAL crypto_secp256k1_decompress
+    bnez    a0, 9f
+    li      t0, 24 + 64                     # keccak256(x || y)
+    sd      t0, (L + 112)(sp)
+    li      t0, 24
+    sd      t0, (L + 120)(sp)
+    li      t0, 64
+    sd      t0, (L + 128)(sp)
+    addi    a0, sp, L + 136
+    addi    a1, sp, L + 48
+    li      a2, 64
+    call    lantern_copy
+    addi    a0, sp, L + 112
+    addi    a1, sp, L + 200
+    CALL_GLOBAL crypto_keccak256
+    bnez    a0, 9f
+    addi    t0, sp, L + 200                 # the NodeID: the digest's bytes in reverse order
+    ADDQ    t1, s1, APP_ANCHOR + NodeAnchor_node_id + 31
+    li      t2, 32
+3:  lbu     t3, 0(t0)
+    sb      t3, 0(t1)
+    addi    t0, t0, 1
+    addi    t1, t1, -1
+    addi    t2, t2, -1
+    bnez    t2, 3b
+    li      a0, 0
+9:  LEAVE 240
+END_FUNCTION app_key
+
 LOCAL_FUNCTION app_net
     ENTER 112
     li      a0, APP_P2P_CONFIG              # the config: the template, then the protocols
@@ -1344,18 +1405,8 @@ LOCAL_FUNCTION app_net
     mul     t0, t0, t2
     add     t0, t0, t1
     sd      t0, 0(s2)
-    li      s3, 0
-1:  ADDQ    a0, s1, APP_TICK                # a key from fresh random bytes, below the order of the curve
-    CALL_GLOBAL libp2p_shell_clock
-    addi    a0, s2, 16
-    ADDQ    a1, s1, (APP_TICK + LIBP2P_TICK_ENTROPY)
-    li      a2, 32
-    call    lantern_copy
-    lbu     t0, 16(s2)
-    andi    t0, t0, 0x7f
-    sb      t0, 16(s2)
-    ADDQ    a0, s1, APP_KEY
-    addi    a1, s2, 16
+    addi    a0, s2, 16                      # the key of app_key
+    ADDQ    a1, s1, APP_KEY
     li      a2, 32
     call    lantern_copy
     ADDQ    a0, s1, APP_TICK                # the DRBG's entropy, and the time
@@ -1377,17 +1428,8 @@ LOCAL_FUNCTION app_net
     mv      a1, a0
     mv      a0, s2
     CALL_GLOBAL libp2p_init
-    beqz    a0, 2f
-    li      t0, LIBP2P_INVALID_KEY
-    bne     a0, t0, 96f
-    li      a0, APP_P2P
-    call    app_unmap
-    addi    s3, s3, 1
-    li      t0, 4
-    bltu    s3, t0, 1b
-    li      a0, LIBP2P_INVALID_KEY
-    j       96f
-2:  ld      t0, 88(s2)                      # the shell: a slot for each connection, and one for the execution engine
+    bnez    a0, 96f
+    ld      t0, 88(s2)                      # the shell: a slot for each connection, and one for the execution engine
     addi    t0, t0, 1
     sd      t0, (L + 8)(sp)
     ld      t0, 160(s2)

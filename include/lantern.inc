@@ -546,8 +546,9 @@
 .set Node_engine_in, 408               /* PartRef of bytes: one ByteList of the bytes the execution engine sent */
 .set Node_lookup_ms, 424               /* the time of the last discv5 lookup the node asked for */
 .set Node_dialing, 432                 /* the node's dials not yet connected or failed */
-.set Node_config, 440
-.set NODE_FIXED, 440 + CONFIG_SIZE
+.set Node_columns, 440                /* the columns the node samples: bit i % 8 of byte i / 8 for column i, 16 bytes */
+.set Node_config, 456
+.set NODE_FIXED, 456 + CONFIG_SIZE
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_DIAL_TAG, 0x4000000000000000 /* the bit of a DIAL tag of the node */
 .set NODE_ENGINE_HOST_MAX, 64
@@ -602,6 +603,8 @@
 .set NodePeer_direction, 8             /* LIBP2P_INBOUND or LIBP2P_OUTBOUND */
 .set NodePeer_flags, 16                /* NODE_PEER_* */
 .set NODE_PEER_STATUS, 1               /* a Status of the peer was read */
+.set NODE_PEER_METADATA_ASKED, 2       /* the node sent it a GetMetaData v3 */
+.set NODE_PEER_METADATA, 4             /* its MetaData v3 was read: custody holds its columns */
 .set NodePeer_fork_digest, 24          /* Status: 4 bytes */
 .set NodePeer_finalized_root, 32
 .set NodePeer_finalized_epoch, 64
@@ -610,7 +613,8 @@
 .set NodePeer_earliest_slot, 112       /* Status v2: earliest_available_slot */
 .set NodePeer_id_len, 120
 .set NodePeer_id, 128                  /* the peer ID, at most 48 bytes */
-.set NodePeer__mem, 176
+.set NodePeer_custody, 176             /* with NODE_PEER_METADATA: the columns it custodies, as Node_columns */
+.set NodePeer__mem, 192
 
 /* NodeStream: an open req/resp stream; the request bytes follow the fixed fields */
 .set NodeStream_handle, 0              /* the libp2p stream Handle */
@@ -666,7 +670,8 @@
 .set NodeAnchor_jwt_secret, 72         /* with NODE_FLAG_ENGINE */
 .set NodeAnchor_engine_host_len, 104   /* at most NODE_ENGINE_HOST_MAX */
 .set NodeAnchor_engine_host, 112
-.set NodeAnchor__mem, 176
+.set NodeAnchor_node_id, 176           /* NodeID of the node's key: keccak256 of its point, reversed */
+.set NodeAnchor__mem, 208
 .set NODE_P2P_ROUNDS, 8                /* libp2p steps of one node step for the node's own events, at most */
 
 /* NodeRoom: the capacities of a Node */
@@ -732,10 +737,10 @@
 .set NODE_WORK_TARGET_STATE, 3         /* a: a copy of the target root's block state */
 .set NODE_WORK_ATTESTATION, 4          /* a: the target checkpoint state, or 0; data: the attestation */
 .set NODE_WORK_ATTESTER_SLASHING, 5    /* a: the justified root's block state; data: the slashing */
-.set NODE_WORK_SERVE, 6                /* data: a block's or blob sidecar's SSZ bytes; target: the stream Handle; arg: the protocol version + 256 * the method */
+.set NODE_WORK_SERVE, 6                /* data: a block's or sidecar's SSZ bytes; target: the stream Handle; arg: the protocol version + 256 * the method */
 .set NODE_WORK_GOSSIP, 7               /* a: head state; b: proposer state; c: justified state; data: the message; target: its Handle; arg: topic + 256 * subnet */
 .set NODE_WORK_SYNC_BLOCK, 8           /* data: a block's SSZ bytes from a response; target: its NodeBlock index */
-.set NODE_WORK_BLOB, 9                 /* data: a blob sidecar's SSZ bytes from a response; target: its NodeBlob index */
+.set NODE_WORK_BLOB, 9                 /* data: a sidecar's SSZ bytes from a response; target: its NodeBlob index; arg: 0 BlobSidecar, 1 DataColumnSidecar */
 .set NODE_WORK_NEW_PAYLOAD, 10         /* data: a block's SSZ bytes; target: its NodeBlock index; arg: the JSON-RPC id */
 .set NODE_WORK_FORKCHOICE, 11          /* arg: the JSON-RPC id */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
@@ -748,6 +753,7 @@
 .set LANTERN_NO_PAYLOAD, 59            /* lantern_node_new_payload: the block has no execution payload to send */
 .set LANTERN_INVALID_CONFIG, 60        /* lantern_config_parse: a faulty line */
 .set LANTERN_INVALID_OPTION, 61        /* lantern_app_options: a faulty argument */
+.set LANTERN_INVALID_COLUMN_SIDECAR, 62 /* lantern_node_column_sidecar: verify_data_column_sidecar, the inclusion proof or the KZG proofs fail */
 
 /* ApiView (docs/reference/beacon-api.md): the values lantern_api_answer shows. A text field is a length, then its bytes. */
 .set ApiView_genesis_time, 0

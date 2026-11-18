@@ -16,6 +16,7 @@
 - [`lantern_node_attester_slashing`](#function-lantern_node_attester_slashing): on_attester_slashing of a slashing's SSZ bytes, for one fork.
 - [`lantern_node_gossip`](#function-lantern_node_gossip): the gossip validation of a message's SSZ bytes, for one fork.
 - [`lantern_node_blob_sidecar`](#function-lantern_node_blob_sidecar): the checks of a blob sidecar of a response, for deneb or electra.
+- [`lantern_node_column_sidecar`](#function-lantern_node_column_sidecar): the checks of a column sidecar of a response, for fulu.
 - [`lantern_node_new_payload`](#function-lantern_node_new_payload): the HTTP request of engine_newPayload for a block's SSZ bytes, for one fork.
 - [`lantern_node_anchor`](#function-lantern_node_anchor): the anchor state and block of a genesis state's SSZ bytes, for one fork.
 - [`lantern_node_block_header`](#function-lantern_node_block_header): the signed header of a block's SSZ bytes, for one fork.
@@ -30,7 +31,7 @@
 - [`NodePeer`](#type-nodepeer): a connected libp2p peer.
 - [`NodeStream`](#type-nodestream): a req/resp stream a peer opened.
 - [`NodeMessage`](#type-nodemessage): a gossip message the node holds.
-- [`NodeBlob`](#type-nodeblob): a blob sidecar the node holds.
+- [`NodeBlob`](#type-nodeblob): a blob sidecar, or from fulu a column sidecar, the node holds.
 - [`NodeGossip`](#type-nodegossip): the inputs of lantern_node_gossip.
 - [`NodeAnchor`](#type-nodeanchor): the anchor of lantern_node_init.
 - [`NodeStepResult`](#type-nodestepresult): the output of lantern_node_step.
@@ -46,6 +47,10 @@
 - `fork-choice.md` of deneb, `is_data_available`: a block is not valid until its blobs are downloaded; the network does not promise sidecars outside `MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS`.
 - `p2p-interface.md` of deneb, BlobSidecarsByRange v1: the reader checks each sidecar's format, inclusion proof and KZG proof before the next chunk.
 - `p2p-interface.md` of deneb, BlobSidecarsByRange v1 and BlobSidecarsByRoot v1: the server sends the sidecars of the head's chain in (slot, index) order, or of the requested identifiers in their order, at most compute_max_request_blob_sidecars; of electra, its limit; of fulu, the deprecation: sidecars before `FULU_FORK_EPOCH`, an empty list at or after it.
+- `fork-choice.md` of fulu, `is_data_available`: every column sidecar the node samples passes verify_data_column_sidecar and verify_data_column_sidecar_kzg_proofs; the network does not promise sidecars outside `MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS`.
+- `das-core.md` of fulu, Custody sampling: the node samples the columns of the groups of get_custody_groups(node_id, max(`SAMPLES_PER_SLOT`, custody_group_count)); its custody groups are the first custody_group_count of them. Column gossip: the node joins the subnets of the columns it samples.
+- `p2p-interface.md` of fulu, DataColumnSidecarsByRange v1 and DataColumnSidecarsByRoot v1: the reader checks each sidecar's format, inclusion proof and KZG proofs before the next chunk; the server sends the sidecars of the head's chain in (slot, column index) order, or of the requested identifiers in their order, at most compute_max_request_data_column_sidecars. GetMetaData v3: the peer's `custody_group_count`.
+- The node ID of a secp256k1 key: keccak256 of the key's 64-byte uncompressed point (x then y), the discv5 identity scheme "v4" (EIP-778). get_custody_groups reads those 32 bytes as a big-endian number, as Lighthouse does (`U256::from_be_slice` in consensus/types/src/data/data_column_custody_group.rs); a `NodeID` holds them in reverse order.
 - `p2p-interface.md` of phase0 to fulu, The discovery domain: discv5: the ENR keys `eth2` (`ENRForkID`), `attnets`, `syncnets` (altair), `cgc` and `nfd` (fulu); peers whose `eth2` fork digest is the node's. The Req/Resp domain, Status: the dialing client MUST send a Status request upon connection.
 - `optimistic-sync.md` of bellatrix: optimistic import, the optimistic candidate, how to apply `latestValidHash`, execution engine errors.
 - [execution-apis 981aa66](https://github.com/ethereum/execution-apis/tree/981aa66d79364be8322a9c358aaf0a571cca0873/src/engine): engine_newPayload and engine_forkchoiceUpdated, with the requests and answers of [engine-api.md](engine-api.md). The safe block is the justified checkpoint's root (fork-choice `safe-block.md`).
@@ -66,7 +71,7 @@
 - The node's queue (`p2p_out`) is one ByteList of libp2p events inside the node. libp2p_step reads it in place.
 - A stream carries one request and one answer, as the req/resp functions of [req-resp.md](req-resp.md) encode them.
 - lantern_node_size, lantern_node_init, lantern_node_copy, lantern_node_step, lantern_node_run and lantern_node_protocols are in the common object of the core (asm/core/<ISA>/node.s), and each symbol is its name.
-- lantern_node_import, lantern_node_block_root, lantern_node_attestation, lantern_node_attester_slashing and lantern_node_gossip are in each fork object (asm/core/<ISA>/nodehooks.s), exported as `lantern_<fork>_<name>`. lantern_node_blob_sidecar is in the deneb and electra objects only, lantern_node_new_payload in the bellatrix and later objects.
+- lantern_node_import, lantern_node_block_root, lantern_node_attestation, lantern_node_attester_slashing and lantern_node_gossip are in each fork object (asm/core/<ISA>/nodehooks.s), exported as `lantern_<fork>_<name>`. lantern_node_blob_sidecar is in the deneb and electra objects only, lantern_node_column_sidecar in the fulu object only, lantern_node_new_payload in the bellatrix and later objects.
 
 ## Test vectors
 
@@ -106,10 +111,15 @@
   - Each sidecar it sent must be a `NODE_BLOB_VALID` entry of the node.
   - Then the node serves them: BlobSidecarsByRange v1 from the anchor's slot to the head's must give each sidecar of the chain in (slot, index) order; BlobSidecarsByRoot v1 of the chain's sidecars from the last block to the first, with an identifier of no sidecar among them, must give those sidecars in that order. Each chunk must have result 0, the sidecar's SSZ bytes, and compute_fork_digest of its slot's epoch as context bytes.
   - A case with sidecars syncs again with a new node and no sidecars in the answers: no block of the chain with blob commitments, and no later one, may be `NODE_BLOCK_IMPORTED`.
+  - In fulu, the node's `node_id` is the node ID of the peer's key, so its columns hold the peer's custody columns of any custody group count. The peer answers each GetMetaData v3 request with `custody_group_count` `NUMBER_OF_CUSTODY_GROUPS`, and each DataColumnSidecarsByRange request with the column sidecars of the case's `columns` steps of the chain's blocks in the range and of the request's columns, in (slot, index) order, with compute_fork_digest of the slot's epoch as context bytes. Each such request must ask for the node's columns, in ascending order.
+  - Each column sidecar it sent must be a `NODE_BLOB_VALID` entry of the node.
+  - Then the node serves them: DataColumnSidecarsByRange v1 of every column from the anchor's slot to the head's must give each of those sidecars in (slot, index) order; DataColumnSidecarsByRoot v1 of the chain's blocks from the last to the first, each with the node's columns and one column it does not sample, then an identifier of a root of no block, must give those sidecars in that order. Each chunk must have result 0, the sidecar's SSZ bytes, and compute_fork_digest of its slot's epoch as context bytes.
+  - A fulu case with column sidecars syncs again with a new node and a peer whose MetaData gives `CUSTODY_REQUIREMENT` custody groups and whose answers hold no sidecars: each DataColumnSidecarsByRange of the node must ask for the columns of get_custody_groups(the peer's node ID, `CUSTODY_REQUIREMENT`), in ascending order, and no block of the chain with blob commitments, and no later one, may be `NODE_BLOCK_IMPORTED`.
 - Lantern's cases `<preset>-<fork>-node-blobs.bin` of deneb and electra, made by tests/generator/node.py with the pinned spec: one for each `fork_choice-on_block` case whose block steps have blobs, of the same name.
   - Each part is named after a block file of the case and holds the `BlobSidecar` SSZ bytes of get_blob_sidecars of the block and the step's blobs and proofs, as a list.
   - A step with fewer proofs than blobs gives the sidecars of the indices that have both.
 - In gossip mode, the sidecars of a valid block go from the peer after the block, each on the blob_sidecar topic of its subnet; the node must import the block.
+- In gossip mode in fulu, the node's `node_id` is as in the sync, and the column sidecars of the node's columns of a valid block go from the peer after the block, each on the data_column_sidecar topic of its subnet; the node must import the block.
 
 ## Function `lantern_node_size`
 
@@ -159,9 +169,11 @@ lantern_node_init(room, config, anchor, flags, node) -> status
 - `LANTERN_BUFFER_TOO_SMALL`: `node` is smaller than lantern_node_size of `room`, or `room` has no block or no checkpoint.
 - `LANTERN_INVALID_OVERFLOW`: as lantern_node_size.
 - `LANTERN_INVALID_EVENT`: with `NODE_FLAG_ENGINE`, `engine_host_len` is above `NODE_ENGINE_HOST_MAX`.
+- `LANTERN_INVALID_CUSTODY_GROUP`: max(`SAMPLES_PER_SLOT`, `CUSTODY_REQUIREMENT`) of `config` is above `NUMBER_OF_CUSTODY_GROUPS` or 128.
 
 ### Function does
 
+- The node's `columns`: each column of compute_columns_for_custody_group of each group of get_custody_groups(the anchor's `node_id`, max(`SAMPLES_PER_SLOT`, `CUSTODY_REQUIREMENT`)) of `config`.
 - With `NODE_FLAG_ENGINE`, the node keeps the anchor's `jwt_secret` and `engine_host`; its first JSON-RPC id is 1, and it takes `NODE_FLAG_FCU`, so the anchor's head goes to the engine first.
 
 ### Caller must
@@ -231,7 +243,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 
 ### Function does
 
-- Room: `actions` has the event bytes + 512 per event + 128 per known block + 512 bytes free, and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and with `p2p` `NODE_SYNC_BATCH` times the larger of `MAX_BLOBS_PER_BLOCK` and `MAX_BLOBS_PER_BLOCK_ELECTRA` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node, and `DISCV5_ENR_SIZE` + `DISCV5_ENR_SCRATCH` more with a `NODE_EV_ENR`.
+- Room: `actions` has the event bytes + 512 per event + 128 per known block + 512 bytes free, and `LIBP2P_ACTIONS_MIN` + 40 more with `p2p`; with `p2p`, `p2p_out` has room for the libp2p events of the `NODE_EV_P2P` events, and `scratch` holds as many bytes again and `LIBP2P_SCRATCH_SIZE`; the blocks part has an entry free per `NODE_EV_BLOCK` and per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and `NODE_SYNC_BATCH` more with `p2p`; the blobs part has an entry free per `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`, and with `p2p` `NODE_SYNC_BATCH` times the largest of `MAX_BLOBS_PER_BLOCK`, `MAX_BLOBS_PER_BLOCK_ELECTRA` and the count of `columns` more; the checkpoints part has 2 free per `NODE_EV_WORK_DONE`, and 2; the pow blocks part has an entry free per `NODE_EV_POW_BLOCK`; `engine_in` has room for the bytes of the `NODE_EV_ENGINE` events; `scratch` has `LANTERN_SCRATCH_FIXED` + 64 + 16 bytes per store node, and `DISCV5_ENR_SIZE` + `DISCV5_ENR_SCRATCH` more with a `NODE_EV_ENR`.
 - Before any change: the root of each `NODE_EV_BLOCK`, with lantern_node_block_root of the fork of its slot. A status of that call is the step's.
 - On `LANTERN_BUFFER_TOO_SMALL`, `short`: `NODE_SHORT_ACTIONS` for the room of `actions`, and for `LIBP2P_BUFFER_TOO_SMALL` of libp2p_step (its scratch is the step's own); `NODE_SHORT_NODE` for a part of the node, with `room` the byte offset in `NodeRoom` of its capacity (`blocks`, `checkpoints`, `pow_blocks`, `p2p_out`, `blobs` or `engine_bytes`); `NODE_SHORT_SCRATCH` for `scratch`, and for `LANTERN_BUFFER_TOO_SMALL` of lantern_node_block_root.
 - `NODE_EV_TICK`: sets `time_ms` of the node, then on_tick of the fork of the new slot.
@@ -257,24 +269,30 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - BeaconBlocksByRange: a `start_slot` before `earliest_slot` gets ResourceUnavailable. Otherwise the blocks of the chain of `head_root`, by `parent_root`, with a slot in `start_slot` to `start_slot` + `count`, in slot order; `count` is at most `MAX_REQUEST_BLOCKS_DENEB` from deneb on, else `MAX_REQUEST_BLOCKS`, and at most the BufferIds a stream's request room holds.
 - BeaconBlocksByRoot: the imported blocks of the roots the node knows, in the request's order; the request has at most that many roots.
 - BlobSidecarsByRange and BlobSidecarsByRoot, when the fork of the store's slot is deneb or later; before it, ResourceUnavailable. The sidecar limit is `MAX_REQUEST_BLOCKS_DENEB` times `MAX_BLOBS_PER_BLOCK` (deneb) or `MAX_BLOBS_PER_BLOCK_ELECTRA` (electra and later), and at most the BufferIds a stream's request room holds.
-- BlobSidecarsByRange: a `start_slot` before `earliest_slot` gets ResourceUnavailable. Otherwise the `NODE_BLOB_VALID` sidecars of the imported blocks of the chain of `head_root` with a slot in `start_slot` to `start_slot` + `count`, in (slot, index) order, up to the limit; the indices of a block are those below the larger of `MAX_BLOBS_PER_BLOCK` and `MAX_BLOBS_PER_BLOCK_ELECTRA`, and below `NODE_BLOB_MAX`.
-- BlobSidecarsByRoot: the `NODE_BLOB_VALID` sidecars of the request's (block_root, index) pairs whose block is not `NODE_BLOCK_INVALID`, in the request's order; the request has at most the limit of pairs, a multiple of 40 bytes.
+- BlobSidecarsByRange: a `start_slot` before `earliest_slot` gets ResourceUnavailable. Otherwise the `NODE_BLOB_VALID` sidecars of the imported blocks of the chain of `head_root` with a slot in `start_slot` to `start_slot` + `count` whose fork is deneb or electra, in (slot, index) order, up to the limit; the indices of a block are those below the larger of `MAX_BLOBS_PER_BLOCK` and `MAX_BLOBS_PER_BLOCK_ELECTRA`, and below `NODE_BLOB_MAX`.
+- BlobSidecarsByRoot: the `NODE_BLOB_VALID` sidecars of the request's (block_root, index) pairs whose block is not `NODE_BLOCK_INVALID` and whose slot's fork is deneb or electra, in the request's order; the request has at most the limit of pairs, a multiple of 40 bytes.
+- DataColumnSidecarsByRange and DataColumnSidecarsByRoot, when the fork of the store's slot is fulu or later; before it, ResourceUnavailable. The sidecar limit is compute_max_request_data_column_sidecars, and at most the BufferIds a stream's request room holds. A request with a column at or above `NUMBER_OF_COLUMNS` is not valid.
+- DataColumnSidecarsByRange: a request of 20 bytes and 8 bytes for each column, at most `NUMBER_OF_COLUMNS`, with the offset 20. A `start_slot` before `earliest_slot` gets ResourceUnavailable. Otherwise the `NODE_BLOB_VALID` sidecars of the imported blocks of the chain of `head_root` with a slot in `start_slot` to `start_slot` + `count` whose fork is fulu or later, of the request's columns, in (slot, index) order, up to the limit.
+- DataColumnSidecarsByRoot: a `DataColumnsByRootIdentifiers` of at most `MAX_REQUEST_BLOCKS_DENEB` identifiers, each of 36 bytes and 8 bytes for each column, at most `NUMBER_OF_COLUMNS`, with the offset 36, and of at most the limit of columns in all. For each identifier in order, and each of its columns in order, the `NODE_BLOB_VALID` sidecar of its `block_root` and that index whose block is not `NODE_BLOCK_INVALID` and whose slot's fork is fulu or later.
 - The anchor, with no bytes, is not sent. No block or sidecar: a `STREAM_CLOSE` with no chunk. Else the stream keeps the BufferIds and takes `NODE_STREAM_SERVE`.
 - After the head, each stream in `NODE_STREAM_SERVE` gets a `NODE_WORK_SERVE` of its next block or sidecar, with the protocol version + 256 times the method as `arg`, and takes `NODE_STREAM_SERVING`, while the actions have room for the work and 4096 bytes; a stream left waiting makes `wakeup` the tick's time.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_SERVE`: the chunk goes out in a `STREAM_WRITE`, then the stream's next block, or a `STREAM_CLOSE` after the last; a result other than `LANTERN_VALID`, or no room in `p2p_out`, gives a `STREAM_RESET`.
 - An answer is one chunk of lantern_reqresp_write_chunk in a `STREAM_WRITE`, then a `STREAM_CLOSE`; then the stream goes.
 - The node's Status: compute_fork_digest of the store's epoch, the store's finalized checkpoint (with a zero root when its epoch is `GENESIS_EPOCH`: p2p-interface.md, "defaults to `Root(b'\x00' * 32)` for the genesis finalized checkpoint"), `head_root` and its slot, and `earliest_slot`. Its MetaData: `metadata_seq`, no attestation or sync subnets, and `CUSTODY_REQUIREMENT` custody groups.
-- After the head, with `p2p`: a `SUBSCRIBE` of each topic of the fork of the store's epoch at compute_fork_digest of that epoch, once for each digest, when `p2p_out` has 8192 bytes free. The topics: beacon_block, beacon_aggregate_and_proof, voluntary_exit, proposer_slashing and attester_slashing; from altair sync_committee_contribution_and_proof; from capella bls_to_execution_change; in deneb and electra blob_sidecar of each subnet.
+- After the head, with `p2p`: a `SUBSCRIBE` of each topic of the fork of the store's epoch at compute_fork_digest of that epoch, once for each digest, when `p2p_out` has 8192 bytes free. The topics: beacon_block, beacon_aggregate_and_proof, voluntary_exit, proposer_slashing and attester_slashing; from altair sync_committee_contribution_and_proof; from capella bls_to_execution_change; in deneb and electra blob_sidecar of each subnet; from fulu data_column_sidecar of compute_subnet_for_data_column_sidecar of each column of `columns`, once for each subnet.
 - `MESSAGE`: a `MESSAGE_ID` of compute_message_id of the fork of the store's slot, then a `NodeMessage` when the messages part has room. Its data uncompressed with Snappy goes in a `NODE_ACT_BYTES_PUT`, and for a block, a blob sidecar or a column sidecar the slot and parent root of its block header go in the entry. Data that is no Snappy block of at most `MAX_PAYLOAD_SIZE` bytes makes the entry `NODE_MESSAGE_CORRUPT`; data that does not fit in `scratch` or the actions makes it `NODE_MESSAGE_NO_ROOM`.
 - `MESSAGE_STATUS` of `LIBP2P_MSG_NEW` for an entry with bytes: a `NODE_WORK_GOSSIP` with the head's post-state, the post-state of the justified root, and for a block, a blob sidecar or a column sidecar whose parent is imported at an earlier slot a `NODE_ACT_STATE_COPY` of the parent's post-state; the entry takes `NODE_MESSAGE_VALIDATING`. With no bytes, or no room in the actions, a `VALIDATION` of `LIBP2P_IGNORE`, or `LIBP2P_REJECT` for `NODE_MESSAGE_CORRUPT`. Any other status: the bytes and the entry go.
-- After the subscriptions and the serving, with `p2p`: the response bytes of each stream in `NODE_STREAM_RESPONSE` are read. Then, with no `NODE_FLAG_SYNCING`, a BeaconBlocksByRange (v2 from altair, v1 before) to the first peer with a Status of the node's `fork_digest` whose `head_slot` is at least the start slot: the start slot is the head's slot + 1, or `sync_slot` when that is higher; the count is at most `NODE_SYNC_BATCH` and reaches the peer's `head_slot`; the step is 1. The node takes `NODE_FLAG_SYNCING`, and `sync_slot` becomes the start slot + the count. A response that waits for room makes `wakeup` the tick's time.
+- After the subscriptions and the serving, with `p2p`: the response bytes of each stream in `NODE_STREAM_RESPONSE` are read. Then, when the fork of the store's slot is fulu or later, each peer whose Status the node read and that has neither `NODE_PEER_METADATA` nor `NODE_PEER_METADATA_ASKED` gets a GetMetaData v3 request, as a request of the node with no request bytes, while the streams part has room for it and two more entries, and takes `NODE_PEER_METADATA_ASKED`. Then, with no `NODE_FLAG_SYNCING`, a BeaconBlocksByRange (v2 from altair, v1 before) to the first peer with a Status of the node's `fork_digest` whose `head_slot` is at least the start slot, and when the fork of the store's slot is fulu or later with `NODE_PEER_METADATA`: the start slot is the head's slot + 1, or `sync_slot` when that is higher; the count is at most `NODE_SYNC_BATCH` and reaches the peer's `head_slot`; the step is 1. The node takes `NODE_FLAG_SYNCING`, and `sync_slot` becomes the start slot + the count. A response that waits for room makes `wakeup` the tick's time.
 - Before that request, when the streams part has room for two entries: a BlobSidecarsByRange v1 to the same peer of the slots of the range in the blob window whose fork is deneb or electra, when there are any. The blob window: the slots of the epochs from max(the store's epoch - `MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS`, `DENEB_FORK_EPOCH`) on. With no room for it, no request.
+- Before that request, from fulu: a DataColumnSidecarsByRange v1 of the slots of the range in the column window whose fork is fulu or later, when there are any, to each peer with `NODE_PEER_METADATA` in the order of the peers part, of the columns of `columns` in its `custody` that no earlier peer of the range was asked for, in ascending order. A peer gets none when that list is empty. With no room in the streams part for these and the BeaconBlocksByRange, or a request the node cannot open, no further request goes in the step. The column window: the slots of the epochs from max(the store's epoch - `MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS`, `FULU_FORK_EPOCH`) on.
 - A request of the node: a `NodeStream` in `NODE_STREAM_OPENING` whose list holds the request chunk, its `handle` a tag with bit 63 set, and an `OPEN_STREAM` of the protocol ID. `STREAM_OPENED` of the tag: the stream takes its handle and `NODE_STREAM_RESPONSE`, its request goes in a `STREAM_WRITE` with a `STREAM_CLOSE`, and its list then holds the response. `STREAM_FAILED` of the tag: the stream goes.
-- A response chunk is read when its bytes are complete, with a ForkDigest context for BeaconBlocksByRange v2. A Status is kept in the `NodePeer`, as a Status request is. A block of at least 184 and at most `MAX_PAYLOAD_SIZE` bytes, when the actions and the blocks part have room: a `NodeBlock` in `NODE_BLOCK_HASHING` with root 0, the slot and parent root of its bytes and `data_available` 1, a `NODE_ACT_BYTES_PUT` of its bytes, and a `NODE_WORK_SYNC_BLOCK` of its index. A blob sidecar, with a ForkDigest context, of the SSZ size of `BlobSidecar`, when the actions and the blobs part have room: a `NodeBlob` in `NODE_BLOB_VERIFYING` with block root 0, the index and slot of its bytes, a `NODE_ACT_BYTES_PUT` of its bytes, and a `NODE_WORK_BLOB` of its index. The stream goes after a Status chunk, after its last chunk and `STREAM_EOF`, after a chunk whose result is not 0, and with a `STREAM_RESET` after a chunk that is not valid. A stream of the node's BeaconBlocksByRange that goes ends `NODE_FLAG_SYNCING`.
+- A response chunk is read when its bytes are complete, with a ForkDigest context for BeaconBlocksByRange v2. A Status is kept in the `NodePeer`, as a Status request is. A block of at least 184 and at most `MAX_PAYLOAD_SIZE` bytes, when the actions and the blocks part have room: a `NodeBlock` in `NODE_BLOCK_HASHING` with root 0, the slot and parent root of its bytes and `data_available` 1, a `NODE_ACT_BYTES_PUT` of its bytes, and a `NODE_WORK_SYNC_BLOCK` of its index. A blob sidecar, with a ForkDigest context, of the SSZ size of `BlobSidecar`, when the actions and the blobs part have room: a `NodeBlob` in `NODE_BLOB_VERIFYING` with block root 0, the index and slot of its bytes, a `NODE_ACT_BYTES_PUT` of its bytes, and a `NODE_WORK_BLOB` of its index. A column sidecar, with a ForkDigest context, whose size is within the SSZ size bounds of `DataColumnSidecar`, when the actions and the blobs part have room: a `NodeBlob` in `NODE_BLOB_VERIFYING` with block root 0, the index and slot of its bytes, a `NODE_ACT_BYTES_PUT` of its bytes, and a `NODE_WORK_BLOB` of its index with `arg` 1. A MetaData v3 of 25 bytes: the peer takes `NODE_PEER_METADATA`, and as `custody` the columns of the groups of get_custody_groups(its node ID, `custody_group_count`), when `custody_group_count` is at most `NUMBER_OF_CUSTODY_GROUPS` and its peer ID holds a secp256k1 key; else its `custody` is 0. The stream goes after a Status or MetaData chunk, after its last chunk and `STREAM_EOF`, after a chunk whose result is not 0, and with a `STREAM_RESET` after a chunk that is not valid. A stream of the node's BeaconBlocksByRange that goes ends `NODE_FLAG_SYNCING`.
+- A peer ID holds a secp256k1 key when it is 39 bytes: 0x00 0x25 0x08 0x02 0x12 0x21 and the 33-byte compressed key. The peer's node ID is then the node ID of that key, with crypto_secp256k1_decompress of asm-crypto; a key that does not decompress gives the peer no `custody`.
 - `NODE_EV_WORK_DONE` of `NODE_WORK_SYNC_BLOCK` for a block in `NODE_BLOCK_HASHING`: `LANTERN_VALID` and a root the node does not know, the block takes the root and the blob count at `NodeEvent_index`, then waits for its blobs; else `NODE_BLOCK_INVALID` and a `NODE_ACT_BYTES_FREE` of its bytes.
 - A block from the network (gossip or a response) needs blobs when its slot's fork is deneb or electra, its blob count is above 0 and at most the fork's `MAX_BLOBS_PER_BLOCK` (deneb) or `MAX_BLOBS_PER_BLOCK_ELECTRA` (electra) and `NODE_BLOB_MAX`, and its slot is in the blob window. It has them when the node holds a `NODE_BLOB_VALID` entry of its root for each index below the count.
-- A block that waits for its blobs: in `NODE_BLOCK_BLOBS` while it needs blobs it does not have; else `data_available` 1 and `NODE_BLOCK_WAITING`, then it imports as a `NODE_EV_BLOCK` does.
-- `NODE_EV_WORK_DONE` of `NODE_WORK_BLOB` for an entry in `NODE_BLOB_VERIFYING`: `LANTERN_VALID` and no `NODE_BLOB_VALID` entry of the same root and index, the entry takes the root at `NodeEvent_root` and `NODE_BLOB_VALID`; else `NODE_BLOB_INVALID` and a `NODE_ACT_BYTES_FREE` of its bytes.
+- A block from the network needs columns when its slot's fork is fulu or later, its blob count is above 0, and its slot is in the column window. It has them when the node holds a `NODE_BLOB_VALID` entry of its root for each column of `columns`.
+- A block that waits for its blobs: in `NODE_BLOCK_BLOBS` while it needs blobs or columns it does not have; else `data_available` 1 and `NODE_BLOCK_WAITING`, then it imports as a `NODE_EV_BLOCK` does.
+- `NODE_EV_WORK_DONE` of `NODE_WORK_BLOB` for an entry in `NODE_BLOB_VERIFYING`: `LANTERN_VALID`, no `NODE_BLOB_VALID` entry of the same root and index, and for a slot whose fork is fulu or later an index that is a column of `columns`, the entry takes the root at `NodeEvent_root` and `NODE_BLOB_VALID`; else `NODE_BLOB_INVALID` and a `NODE_ACT_BYTES_FREE` of its bytes.
 - An entry that becomes `NODE_BLOB_VALID`: the block of its root in `NODE_BLOCK_BLOBS`, if there is one, waits for its blobs again.
 - With `NODE_FLAG_ENGINE`, after the head: with no call in flight (`engine_method` 0) and the store's slot at least `engine_wait`, the first block in `NODE_BLOCK_PAYLOAD` whose `retry` is at most the store's slot gets a `NODE_WORK_NEW_PAYLOAD` with the id `engine_id`, takes `NODE_BLOCK_EXECUTING`, and is the call in flight; with none, and `NODE_FLAG_FCU`, a `NODE_WORK_FORKCHOICE` when the fork of the store's slot is bellatrix or later. Each call takes the next id.
 - A `head_root` that changes with `NODE_FLAG_ENGINE` sets `NODE_FLAG_FCU`; a `NODE_WORK_FORKCHOICE` clears it.
@@ -284,7 +302,7 @@ lantern_node_step(node, store, p2p, tick, events, scratch, actions, result) -> s
 - engine_newPayload answered: `VALID`, the block is imported with `PAYLOAD_STATUS_VALID`. `SYNCING` or `ACCEPTED`, the block is imported with `PAYLOAD_STATUS_NOT_VALIDATED` when it is an optimistic candidate: its parent's `BlockNode.block_hash` is not zero, or its slot + `SAFE_SLOTS_TO_IMPORT_OPTIMISTICALLY` is at most the store's slot; else it takes `NODE_BLOCK_PAYLOAD` with `retry` the store's slot + 1. `INVALID` or `INVALID_BLOCK_HASH`, the block is `NODE_BLOCK_INVALID`, its bytes go, and `latestValidHash` applies from its parent. The call ends.
 - engine_forkchoiceUpdated answered: `VALID`, lantern_store_payload_status of the head's node with `PAYLOAD_STATUS_VALID`; `INVALID` or `INVALID_BLOCK_HASH`, `latestValidHash` applies from the head, the head included. The call ends.
 - `latestValidHash` applies from a block of the store: up the chain from it, by `parent_root`, each block whose `block_hash` is not `latestValidHash` gets lantern_store_payload_status with `PAYLOAD_STATUS_INVALIDATED`, until the block whose `block_hash` is `latestValidHash`. A zero hash stops at the first block whose `block_hash` is zero. With null, or a hash no block of the chain has, only the block in question (a block of the store) gets it.
-- `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`: a `VALIDATION` of `LIBP2P_ACCEPT` for `LANTERN_VALID`, `LIBP2P_REJECT` for `LANTERN_GOSSIP_REJECT`, else `LIBP2P_IGNORE`; a `NODE_ACT_STATE_FREE` of the proposer state. A valid beacon_block of a root the node does not know keeps its bytes as a `NodeBlock` with the blob count at `NodeEvent_index`, which waits for its blobs. A valid blob_sidecar keeps its bytes as a `NodeBlob` in `NODE_BLOB_VALID` of the root at `NodeEvent_root`, the index at `NodeEvent_index` and the message's slot, when the node holds no `NODE_BLOB_VALID` entry of that root and index. A valid attester_slashing with a justified state keeps its bytes for a `NODE_WORK_ATTESTER_SLASHING` with that state. Else the bytes go. The entry goes.
+- `NODE_EV_WORK_DONE` of `NODE_WORK_GOSSIP`: a `VALIDATION` of `LIBP2P_ACCEPT` for `LANTERN_VALID`, `LIBP2P_REJECT` for `LANTERN_GOSSIP_REJECT`, else `LIBP2P_IGNORE`; a `NODE_ACT_STATE_FREE` of the proposer state. A valid beacon_block of a root the node does not know keeps its bytes as a `NodeBlock` with the blob count at `NodeEvent_index`, which waits for its blobs. A valid blob_sidecar keeps its bytes as a `NodeBlob` in `NODE_BLOB_VALID` of the root at `NodeEvent_root`, the index at `NodeEvent_index` and the message's slot, when the node holds no `NODE_BLOB_VALID` entry of that root and index. A valid data_column_sidecar of a column of `columns` keeps its bytes as a `NodeBlob` in `NODE_BLOB_VALID` of the root at `NodeEvent_root`, the index at `NodeEvent_index` and the message's slot, when the node holds no `NODE_BLOB_VALID` entry of that root and index. A valid attester_slashing with a justified state keeps its bytes for a `NODE_WORK_ATTESTER_SLASHING` with that state. Else the bytes go. The entry goes.
 
 ### Function never
 
@@ -333,11 +351,11 @@ lantern_node_run(node, store, seen, work, state_a, state_b, state_c, data, setti
 - `NODE_WORK_TARGET_STATE`: lantern_store_target_checkpoint_state of `state_a` to the `NodeCheckpoint` at index `target`.
 - `NODE_WORK_ATTESTATION`: lantern_node_attestation of the fork of the attestation's slot; `is_from_block` is the work's `arg`.
 - `NODE_WORK_ATTESTER_SLASHING`: lantern_node_attester_slashing of the fork of the store's slot.
-- `NODE_WORK_SERVE`: the response chunk of the block or blob sidecar in `data`, with lantern_reqresp_write_chunk, as a ByteList at `NodeEvent_chunk` of the event; its context bytes are compute_fork_digest of the epoch of the block's slot (blocks of version 2) or of the sidecar's block header slot (the blob methods), none for blocks of version 1. The event's `size` then covers the chunk.
+- `NODE_WORK_SERVE`: the response chunk of the block, blob sidecar or column sidecar in `data`, with lantern_reqresp_write_chunk, as a ByteList at `NodeEvent_chunk` of the event; its context bytes are compute_fork_digest of the epoch of the block's slot (blocks of version 2) or of the sidecar's block header slot (the blob and column methods), none for blocks of version 1. The event's `size` then covers the chunk.
 - `NODE_WORK_SYNC_BLOCK`: lantern_node_block_root of the fork of the block's slot, its root at `NodeEvent_root` and its blob count at `NodeEvent_index`.
 - `NODE_WORK_NEW_PAYLOAD`: lantern_node_new_payload of the fork of the block's slot (bellatrix and later; before it `LANTERN_NO_PAYLOAD`), its request a ByteList at `NodeEvent_chunk`. The event's `size` then covers it.
 - `NODE_WORK_FORKCHOICE`: engine_forkchoiceUpdated of the fork of the store's slot with the `block_hash` of the store's nodes of `head_root`, the justified checkpoint's root (safe) and the finalized checkpoint's root, in an HTTP POST to `engine_host` with a JWT of `jwt_secret` and the time `time_ms` / 1000, a ByteList at `NodeEvent_chunk`; `LANTERN_INVALID_UNKNOWN_BLOCK` when the store has no node of one of those roots, `LANTERN_NO_PAYLOAD` before bellatrix or when the head's `block_hash` is zero (no call).
-- `NODE_WORK_BLOB`: lantern_node_blob_sidecar of the fork of the sidecar's slot with the node's config and `settings`, the root at `NodeEvent_root`; a slot whose fork is not deneb or electra gives the result `LANTERN_INVALID_ENCODING`.
+- `NODE_WORK_BLOB`: with `arg` 0, a `BlobSidecar`: lantern_node_blob_sidecar of the fork of its slot when it is deneb or electra; with `arg` 1, a `DataColumnSidecar`: lantern_node_column_sidecar when the fork of its slot is fulu. Each with the node's config and `settings`, the root at `NodeEvent_root`; a slot of another fork gives the result `LANTERN_INVALID_ENCODING`.
 - `NODE_WORK_GOSSIP`: lantern_node_gossip of the fork of the store's slot, with a `NodeGossip` of `seen`, the store, `time_ms`, the topic and subnet of `arg`, `state_a` as head, `state_b` as proposer, `state_c` as justified, `settings` and the node's config, its `root` at `NodeEvent_root` and its `index` at `NodeEvent_index`.
 - Bytes too short for their type give the result `LANTERN_INVALID_ENCODING`.
 
@@ -520,7 +538,7 @@ lantern_node_gossip(args, data, scratch, result, root, index) -> status
 - beacon_block, blob_sidecar and data_column_sidecar: lantern_process_slots of the proposer state to the slot of the message's block header, when the state is before it. With no proposer state, the head state is the proposer state.
 - Bellatrix beacon_block: the justified state, or the head state with none.
 - A valid beacon_block: hash_tree_root of its message in `root`, the length of its body's `blob_kzg_commitments` (0 before deneb) in `index`.
-- A valid blob_sidecar: hash_tree_root of its `signed_block_header.message` in `root`, its `index` in `index`.
+- A valid blob_sidecar or data_column_sidecar: hash_tree_root of its `signed_block_header.message` in `root`, its `index` in `index`.
 - Decodes into the end of `scratch`; the scratch `size` is restored on return.
 
 ### ABI
@@ -561,6 +579,41 @@ lantern_node_blob_sidecar(data, config, settings, scratch, result, root) -> stat
 ### ABI
 
 - Export: `lantern_<fork>_node_blob_sidecar` of the deneb and electra objects.
+
+## Function `lantern_node_column_sidecar`
+
+The checks a reader of a DataColumnSidecarsByRange or DataColumnSidecarsByRoot response makes on a `DataColumnSidecar` in SSZ bytes, then the root of its block.
+
+### Signature
+
+```
+lantern_node_column_sidecar(data, config, settings, scratch, result, root) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `data` | input | ByteList |
+| `config` | input | `Config` |
+| `settings` | input | asm-crypto `KzgSettings` |
+| `scratch` | scratch | `Scratch` |
+| `result` | output | `Result` |
+| `root` | output | Root |
+
+### Returns
+
+- `LANTERN_OK`: `result` is `LANTERN_VALID` and `root` holds hash_tree_root of `signed_block_header.message`; `LANTERN_INVALID_ENCODING` when `data` is no `DataColumnSidecar`; or `LANTERN_INVALID_COLUMN_SIDECAR` when a check fails.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` cannot hold the decoded sidecar, or the room the checks need after it.
+
+### Function does
+
+- The checks, in order: lantern_verify_data_column_sidecar with `config`; lantern_verify_data_column_sidecar_inclusion_proof; lantern_verify_data_column_sidecar_kzg_proofs with `settings`.
+- Decodes into the end of `scratch`; the scratch `size` is restored on return.
+
+### ABI
+
+- Export: `lantern_fulu_node_column_sidecar` of the fulu object.
 
 ## Function `lantern_node_anchor`
 
@@ -733,11 +786,12 @@ The state of the node: a value with parts.
 | 408 | `engine_in` | PartRef | One ByteList, offset 24: the bytes the execution engine sent and the node has not read |
 | 424 | `lookup_ms` | u64 | The time of the last discv5 lookup the node asked for |
 | 432 | `dialing` | u64 | The node's dials not yet connected or failed |
-| 440 | `config` | `Config` | |
+| 440 | `columns` | 16 bytes | The columns the node samples: bit i % 8 of byte i / 8 for column i |
+| 456 | `config` | `Config` | |
 
 ### Rules
 
-- `NODE_FIXED` (440 + `CONFIG_SIZE`) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, p2p_out, engine_in.
+- `NODE_FIXED` (456 + `CONFIG_SIZE`) bytes of fixed fields; the parts follow in the order blocks, checkpoints, pow_blocks, peers, streams, messages, blobs, p2p_out, engine_in.
 - The capacity of a part is its bytes up to the next part over its entry's bytes; `p2p_out` is the last part.
 - `NODE_FLAG_OPTIMISTIC`: blocks are imported as `PAYLOAD_STATUS_NOT_VALIDATED`.
 - `NODE_FLAG_JUSTIFIED_PENDING`: a `NODE_WORK_JUSTIFIED_STATE` is queued.
@@ -745,6 +799,7 @@ The state of the node: a value with parts.
 - `NODE_FLAG_SYNCING`: a BeaconBlocksByRange request of the node is open.
 - `NODE_FLAG_ENGINE`: the node drives an execution engine; `NODE_FLAG_FCU`: an engine_forkchoiceUpdated is due.
 - `NODE_FLAG_DISCV5`: the shell runs asm-discv5 for the node.
+- `columns` has room for `NUMBER_OF_COLUMNS` of the preset, at most 128.
 
 ## Type `NodeRoom`
 
@@ -808,7 +863,7 @@ The state of the node: a value with parts.
 |---|---|---|---|
 | 0 | `handle` | u64 | The libp2p peer Handle |
 | 8 | `direction` | u64 | `LIBP2P_INBOUND` or `LIBP2P_OUTBOUND` |
-| 16 | `flags` | u64 | `NODE_PEER_STATUS`: a Status of the peer was read |
+| 16 | `flags` | u64 | `NODE_PEER_STATUS`: a Status of the peer was read; `NODE_PEER_METADATA_ASKED`: the node sent it a GetMetaData v3; `NODE_PEER_METADATA`: its MetaData v3 was read |
 | 24 | `fork_digest` | u64 | Its Status: 4 bytes |
 | 32 | `finalized_root` | Root | |
 | 64 | `finalized_epoch` | u64 | |
@@ -817,10 +872,11 @@ The state of the node: a value with parts.
 | 112 | `earliest_slot` | u64 | Status v2 `earliest_available_slot`, else 0 |
 | 120 | `id_len` | u64 | |
 | 128 | `id` | 48 bytes | The peer ID |
+| 176 | `custody` | 16 bytes | With `NODE_PEER_METADATA`, the columns the peer custodies, as `columns` of `Node` |
 
 ### Rules
 
-- `NodePeer__mem` (176) bytes.
+- `NodePeer__mem` (192) bytes.
 
 ## Type `NodeStream`
 
@@ -868,12 +924,13 @@ The state of the node: a value with parts.
 | 0 | `block_root` | Root | hash_tree_root of its `signed_block_header.message`, 0 while `NODE_BLOB_VERIFYING` |
 | 32 | `index` | u64 | |
 | 40 | `slot` | u64 | The slot of its block header |
-| 48 | `data_id` | u64 | `BufferId` of the `BlobSidecar`'s SSZ bytes |
+| 48 | `data_id` | u64 | `BufferId` of the `BlobSidecar`'s SSZ bytes, or for a slot of fulu or later the `DataColumnSidecar`'s |
 | 56 | `status` | u64 | `NODE_BLOB_VERIFYING` while a `NODE_WORK_BLOB` of it is queued, `NODE_BLOB_VALID`, or `NODE_BLOB_INVALID` with its bytes freed |
 
 ### Rules
 
 - `NodeBlob__mem` (64) bytes.
+- An entry of a slot whose fork is fulu or later holds a column sidecar, and `index` is its column.
 - The node holds at most one `NODE_BLOB_VALID` entry of each block root and index.
 
 ## Type `NodeGossip`
@@ -909,6 +966,8 @@ The state of the node: a value with parts.
 | 72 | `jwt_secret` | Bytes32 | With `NODE_FLAG_ENGINE` |
 | 104 | `engine_host_len` | u64 | With `NODE_FLAG_ENGINE`, at most `NODE_ENGINE_HOST_MAX` (64) |
 | 112 | `engine_host` | 64 bytes | |
+| 176 | `node_id` | `NodeID` | The node ID of the node's secp256k1 key, as a number in 32 little-endian bytes |
+| 208 | | | Size |
 
 ## Type `NodeStepResult`
 
@@ -1070,6 +1129,14 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 | RISC-V |  |  |  |  |
 
 ### `lantern_node_blob_sidecar`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
+
+### `lantern_node_column_sidecar`
 
 | ISA | Linux | Windows | macOS | `equal` |
 |---|---|---|---|---|

@@ -849,7 +849,21 @@ SPEC_FUNCTION node_gossip
     mov     %r12, S9(%rsp)
     mov     %r13, S10(%rsp)
     call    lantern_validate_data_column_sidecar_gossip
-    jmp     98f
+    test    %rax, %rax
+    jnz     98f
+    cmpq    $0, (%r13)                      # a valid sidecar: the root of its block header, its index
+    jne     99f
+    mov     DataColumnSidecar_index(%rbp), %rax
+    mov     (L + 32)(%rsp), %rcx
+    mov     %rax, (%rcx)
+    ADDRESS %rdi, lantern_type_BeaconBlockHeader
+    lea     (DataColumnSidecar_signed_block_header + SignedBeaconBlockHeader_message)(%rbp), %rsi
+    mov     %r12, %rdx
+    mov     %r14, %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    cmp     $SSZ_BUFFER_TOO_SMALL, %rax
+    je      8f
+    jmp     99f
 40:
 .endif
     movq    $LANTERN_GOSSIP_IGNORE, (%r13)
@@ -940,6 +954,83 @@ SPEC_FUNCTION node_blob_sidecar
     mov     %rcx, (%r12)
     LEAVE 16
 SPEC_END node_blob_sidecar
+.endif
+
+.if FORK >= FORK_FULU
+/*
+ * (data, config, settings, scratch, result, root): the checks a reader of a column sidecar
+ * response makes: verify_data_column_sidecar, verify_data_column_sidecar_inclusion_proof and
+ * verify_data_column_sidecar_kzg_proofs; then hash_tree_root of its block header. rbx config,
+ * rbp the sidecar, r12 scratch, r13 result, r14 root, r15 settings. Locals: L an out, L+8 the
+ * scratch size, restored on return.
+ */
+SPEC_FUNCTION node_column_sidecar
+    ENTER 16
+    mov     %rdi, %rbp
+    mov     %rsi, %rbx
+    mov     %rdx, %r15
+    mov     %rcx, %r12
+    mov     %r8, %r13
+    mov     %r9, %r14
+    mov     (%r12), %rax
+    mov     %rax, (L + 8)(%rsp)
+    movq    $0, (%r13)
+    ADDRESS %rdi, lantern_type_DataColumnSidecar
+    mov     %rbp, %rsi
+    mov     %r12, %rdx
+    call    node_decode
+    cmp     $1, %rax
+    je      8f
+    ja      9f
+    mov     %rdx, %rbp
+    mov     %rbp, %rdi                      # verify_data_column_sidecar
+    mov     %rbx, %rsi
+    lea     L(%rsp), %rdx
+    call    lantern_verify_data_column_sidecar
+    test    %rax, %rax
+    jnz     99f
+    cmpq    $0, L(%rsp)
+    je      6f
+    mov     %rbp, %rdi                      # verify_data_column_sidecar_inclusion_proof
+    mov     %r12, %rsi
+    lea     L(%rsp), %rdx
+    call    lantern_verify_data_column_sidecar_inclusion_proof
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8f
+    test    %rax, %rax
+    jnz     99f
+    cmpq    $0, L(%rsp)
+    je      6f
+    mov     %rbp, %rdi                      # verify_data_column_sidecar_kzg_proofs
+    mov     %r15, %rsi
+    mov     %r12, %rdx
+    lea     L(%rsp), %rcx
+    call    lantern_verify_data_column_sidecar_kzg_proofs
+    cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
+    je      8f
+    test    %rax, %rax
+    jnz     99f
+    cmpq    $0, L(%rsp)
+    je      6f
+    ADDRESS %rdi, lantern_type_BeaconBlockHeader
+    lea     (DataColumnSidecar_signed_block_header + SignedBeaconBlockHeader_message)(%rbp), %rsi
+    mov     %r12, %rdx
+    mov     %r14, %rcx
+    CALL_GLOBAL ssz_hash_tree_root
+    cmp     $SSZ_BUFFER_TOO_SMALL, %rax
+    je      8f
+    jmp     99f
+6:  movq    $LANTERN_INVALID_COLUMN_SIDECAR, (%r13)
+    xor     %eax, %eax
+    jmp     99f
+8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    jmp     99f
+9:  movq    $LANTERN_INVALID_ENCODING, (%r13)
+    xor     %eax, %eax
+99: mov     (L + 8)(%rsp), %rcx
+    mov     %rcx, (%r12)
+    LEAVE 16
+SPEC_END node_column_sidecar
 .endif
 
 .if FORK >= FORK_BELLATRIX

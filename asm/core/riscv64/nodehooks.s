@@ -841,7 +841,19 @@ SPEC_FUNCTION node_gossip
     sd      s3, L(sp)
     sd      s4, (L + 8)(sp)
     call    lantern_validate_data_column_sidecar_gossip
-    j       98f
+    bnez    a0, 98f
+    ld      t0, 0(s4)                       # a valid sidecar: the root of its block header, its index
+    bnez    t0, 99f
+    ld      t0, DataColumnSidecar_index(s2)
+    sd      t0, 0(s9)
+    ADDRESS a0, lantern_type_BeaconBlockHeader
+    ADDQ    a1, s2, DataColumnSidecar_signed_block_header + SignedBeaconBlockHeader_message
+    mv      a2, s3
+    mv      a3, s5
+    CALL_GLOBAL ssz_hash_tree_root
+    li      t0, SSZ_BUFFER_TOO_SMALL
+    beq     a0, t0, 8f
+    j       99f
 40:
 .endif
     li      t0, LANTERN_GOSSIP_IGNORE
@@ -931,6 +943,80 @@ SPEC_FUNCTION node_blob_sidecar
 99: sd      s10, 0(s3)
     LEAVE 16
 SPEC_END node_blob_sidecar
+.endif
+
+.if FORK >= FORK_FULU
+/*
+ * (data, config, settings, scratch, result, root): the checks a reader of a column sidecar
+ * response makes: verify_data_column_sidecar, verify_data_column_sidecar_inclusion_proof and
+ * verify_data_column_sidecar_kzg_proofs; then hash_tree_root of its block header. s1 config,
+ * s2 the sidecar, s3 scratch, s4 result, s5 root, s6 settings, s10 the scratch size, restored on
+ * return. Locals: L an out.
+ */
+SPEC_FUNCTION node_column_sidecar
+    ENTER 16
+    mv      s2, a0
+    mv      s1, a1
+    mv      s6, a2
+    mv      s3, a3
+    mv      s4, a4
+    mv      s5, a5
+    ld      s10, 0(s3)
+    sd      zero, 0(s4)
+    ADDRESS a0, lantern_type_DataColumnSidecar
+    mv      a1, s2
+    mv      a2, s3
+    call    node_decode
+    li      t0, 1
+    beq     a0, t0, 8f
+    bgtu    a0, t0, 9f
+    mv      s2, a1
+    mv      a0, s2                          # verify_data_column_sidecar
+    mv      a1, s1
+    addi    a2, sp, L
+    call    lantern_verify_data_column_sidecar
+    bnez    a0, 99f
+    ld      t0, L(sp)
+    beqz    t0, 6f
+    mv      a0, s2                          # verify_data_column_sidecar_inclusion_proof
+    mv      a1, s3
+    addi    a2, sp, L
+    call    lantern_verify_data_column_sidecar_inclusion_proof
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 8f
+    bnez    a0, 99f
+    ld      t0, L(sp)
+    beqz    t0, 6f
+    mv      a0, s2                          # verify_data_column_sidecar_kzg_proofs
+    mv      a1, s6
+    mv      a2, s3
+    addi    a3, sp, L
+    call    lantern_verify_data_column_sidecar_kzg_proofs
+    li      t0, LANTERN_BUFFER_TOO_SMALL
+    beq     a0, t0, 8f
+    bnez    a0, 99f
+    ld      t0, L(sp)
+    beqz    t0, 6f
+    ADDRESS a0, lantern_type_BeaconBlockHeader
+    ADDQ    a1, s2, DataColumnSidecar_signed_block_header + SignedBeaconBlockHeader_message
+    mv      a2, s3
+    mv      a3, s5
+    CALL_GLOBAL ssz_hash_tree_root
+    li      t0, SSZ_BUFFER_TOO_SMALL
+    beq     a0, t0, 8f
+    j       99f
+6:  li      t0, LANTERN_INVALID_COLUMN_SIDECAR
+    sd      t0, 0(s4)
+    li      a0, LANTERN_OK
+    j       99f
+8:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    j       99f
+9:  li      t0, LANTERN_INVALID_ENCODING
+    sd      t0, 0(s4)
+    li      a0, LANTERN_OK
+99: sd      s10, 0(s3)
+    LEAVE 16
+SPEC_END node_column_sidecar
 .endif
 
 .if FORK >= FORK_BELLATRIX

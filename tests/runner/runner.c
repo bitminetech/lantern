@@ -250,6 +250,9 @@ ABI uint64_t LF(is_data_available)(const void *sidecars, const void *settings, c
 /* asm-crypto, at the pin in platform/deps.sh. */
 ABI uint64_t crypto_kzg_trusted_setup_of_bytes(const void *g1_lagrange, const void *g1_monomial,
                                                const void *g2_monomial, void *settings);
+ABI uint64_t crypto_secp256k1_public_key(const void *private_key, void *public_key);
+ABI uint64_t crypto_secp256k1_decompress(const void *public_key, void *point);
+ABI uint64_t crypto_keccak256(const void *message, void *digest);
 
 #if FORK == FORK_FULU
 /* Networking rules: docs/reference/networking.md. */
@@ -2972,6 +2975,24 @@ static int node_mode(tv parts) {
     return steps != NULL;
 }
 
+/*
+ * The NodeID of the runner's peer, the secp256k1 key of p2p_config side 1: keccak256 of its
+ * point, x then y, read as a big-endian number, in 32 little-endian bytes.
+ */
+static void peer_node_id(uint8_t *out, const char **why) {
+    uint8_t key[32], pub[40], list[24 + 64], digest[32];
+    for (int i = 0; i < 32; i++) key[i] = (uint8_t)(31 + i + 1);
+    wr64(list, sizeof list);
+    wr64(list + 8, 24);
+    wr64(list + 16, 64);
+    if (CALL(crypto_secp256k1_public_key, key, pub) != 0 || CALL(crypto_secp256k1_decompress, pub, list + 24) != 0 ||
+        CALL(crypto_keccak256, list, digest) != 0) {
+        *why = "the peer's node ID";
+        return;
+    }
+    for (int i = 0; i < 32; i++) out[i] = digest[31 - i];
+}
+
 /* The node of a case's anchor, with the shell's buffers: the store, the node, the actions, the anchor state as id 1. */
 static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_block, const char **why) {
     memset(n, 0, sizeof *n);
@@ -2984,7 +3005,7 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
     *anchor_block = fc_setup(n, parts, why);
     if (*anchor_block) {
         /* Small capacities, so that the node grows through lantern_node_copy. */
-        uint8_t anchor[176] = {0}; /* NodeAnchor: root, slot, genesis_validators_root, jwt_secret, engine_host_len, engine_host */
+        uint8_t anchor[208] = {0}; /* NodeAnchor: root, slot, genesis_validators_root, jwt_secret, engine_host_len, engine_host, node_id */
         uint64_t flags = (FORK >= FORK_BELLATRIX ? NODE_FLAG_ENGINE : 0) | NODE_FLAG_DISCV5, need = 0;
         for (int i = 0; i < NODE_ROOM_FIELDS; i++) s->room[i] = 2;
         s->room[2] = 1;
@@ -2998,6 +3019,7 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
         root_of("BeaconBlock", *anchor_block, anchor, why);
         wr64(anchor + 32, rd64(*anchor_block + field_offset("BeaconBlock", 0)));
         memcpy(anchor + 40, n->anchor + field_offset("BeaconState", 1), 32);
+        if (!*why) peer_node_id(anchor + 176, why); /* the node's columns hold the peer's custody columns */
         if (!*why && CALL(lantern_node_size, s->room, &need) != 0) *why = "lantern_node_size status";
         if (!*why) {
             s->node = buffer(need);
@@ -3118,7 +3140,7 @@ enum { P2P_ACT_DIAL = 1, P2P_ACT_ADOPT, P2P_ACT_REFUSE, P2P_ACT_SEND, P2P_ACT_CL
        P2P_ACT_PEER_DISCONNECTED, P2P_ACT_DIAL_FAILED, P2P_ACT_STREAM_INBOUND, P2P_ACT_STREAM_OPENED, P2P_ACT_STREAM_FAILED,
        P2P_ACT_STREAM_DATA, P2P_ACT_STREAM_EOF, P2P_ACT_STREAM_RESET, P2P_ACT_SEND_DATAGRAM = 23 };
 #define NODE_PEERS 120          /* include/lantern.inc: Node_peers */
-#define NODE_PEER_BYTES 176     /* NodePeer__mem */
+#define NODE_PEER_BYTES 192     /* NodePeer__mem */
 #define P2P_STREAMS 8
 #define P2P_PEER_ACTIONS (P2P_ACTIONS_MIN + (4u << 20))
 
@@ -3132,6 +3154,7 @@ typedef struct {
     uint64_t slot, len;
     const uint8_t *bytes;
     tv sidecars; /* deneb, electra: the list of its BlobSidecars of the case's node-blobs case, or NULL */
+    tv columns;  /* fulu: the names of its DataColumnSidecar parts of the case, its step's columns, or NULL */
 } case_block;
 
 /* deneb, electra: the node-blobs case of the fork choice case that runs, or NULL. */
@@ -3141,15 +3164,21 @@ struct p2p_net {
     struct node_shell *shell;
     case_block **chain; /* with a chain, the peer serves BeaconBlocksByRange and BlobSidecarsByRange of it */
     size_t nchain;
-    int no_blobs;          /* the peer answers BlobSidecarsByRange with no sidecar */
+    int no_blobs;          /* the peer answers BlobSidecarsByRange and DataColumnSidecarsByRange with no sidecar */
     uint64_t blobs_sent;   /* the sidecars it sent */
+    tv parts;              /* fulu: the case, whose parts hold the column sidecars */
+    uint64_t peer_cgc;     /* the custody_group_count of the peer's MetaData */
+    uint8_t want_columns[16]; /* the columns each DataColumnSidecarsByRange of the node must ask for */
+    uint64_t column_requests; /* the node's DataColumnSidecarsByRange requests */
+    uint8_t protos[64 * P2P_PROTO_SIZE]; /* the protocol list of both sides */
+    uint64_t nprotos;
     uint8_t gvr[32];
     struct {
-        uint64_t handle;
+        uint64_t handle, proto;
         int eof;
         uint8_t *data;
         uint64_t len;
-    } in[P2P_STREAMS]; /* the node's streams to the peer */
+    } in[P2P_STREAMS]; /* the node's streams to the peer, and their protocol index */
     uint8_t *state[2], *scratch, *actions, *events; /* the peer's scratch, actions and events */
     uint64_t events_len, now, conn[2], dial_conn, token, node_handle;
     int connected, topics;
@@ -3267,6 +3296,7 @@ static void p2p_peer_app(struct p2p_net *net, uint8_t *act) {
         for (int k = 0; k < P2P_STREAMS; k++)
             if (!net->in[k].handle) {
                 net->in[k].handle = rd64(act + 16);
+                net->in[k].proto = rd64(act + 32);
                 net->in[k].eof = 0;
                 net->in[k].len = 0;
                 return;
@@ -3343,26 +3373,61 @@ static void p2p_chunk(struct p2p_net *net, int k, uint64_t slot, const uint8_t *
     free(out);
 }
 
+/* Whether the protocol ID of the protocol index k contains name. */
+static int p2p_proto_is(const struct p2p_net *net, uint64_t k, const char *name) {
+    if (k >= net->nprotos) return 0;
+    const uint8_t *e = net->protos + k * P2P_PROTO_SIZE;
+    uint64_t len = rd64(e);
+    return len <= P2P_PROTO_SIZE - 8 && find_bytes((const char *)e + 8, len, name) != NULL;
+}
+
 /*
- * The peer's answers to the node's complete requests: BeaconBlocksByRange (24 bytes) of the chain's
- * blocks in the range, and BlobSidecarsByRange (16 bytes) of their sidecars in (slot, index) order,
- * each a chunk of result 0 with the ForkDigest of its epoch; then the close.
+ * The peer's answers to the node's complete requests: Status (84 or 92 bytes) with its own;
+ * GetMetaData v3 with seq_number 0, no subnets and peer_cgc; BeaconBlocksByRange (24 bytes) of the
+ * chain's blocks in the range; BlobSidecarsByRange (16 bytes) of their sidecars in (slot, index)
+ * order; DataColumnSidecarsByRange of their column sidecars of the request's columns, which must
+ * be want_columns in ascending order, in (slot, index) order. Each a chunk of result 0, with the
+ * ForkDigest of its epoch for blocks and sidecars; then the close.
  */
 static void p2p_serve(struct p2p_net *net, const char **why) {
     for (int k = 0; k < P2P_STREAMS && !*why; k++) {
         if (!net->in[k].handle || !net->in[k].eof) continue;
+        if (p2p_proto_is(net, net->in[k].proto, "/metadata/3/")) {
+            uint8_t md[25] = {0}; /* seq_number, attnets, syncnets, custody_group_count */
+            wr64(md + 17, net->peer_cgc);
+            if (net->in[k].len) *why = "the peer: the node's GetMetaData has request bytes";
+            else p2p_chunk(net, k, 0, md, 25, 0, why);
+            uint8_t *c = p2p_event(net, 1, P2P_EV_STREAM_CLOSE, 24);
+            wr64(c + 16, net->in[k].handle);
+            net->in[k].handle = 0;
+            continue;
+        }
+        int columns = p2p_proto_is(net, net->in[k].proto, "/data_column_sidecars_by_range/");
         uint64_t header[6] = {0, 0, 0, 0, 0, 0}, consumed = 0, eof = 1, length = 0;
-        uint8_t *input = serialized(net->in[k].data, net->in[k].len, &(uint64_t){0}), *req = buffer(24 + 96);
-        wr64(req, 24 + 96);
+        uint8_t *input = serialized(net->in[k].data, net->in[k].len, &(uint64_t){0}), *req = buffer(24 + 2048);
+        wr64(req, 24 + 2048);
         wr64(req + 8, 24);
         wr64(req + 16, 0);
         if (CALL(lantern_reqresp_read_header, input, header) != 0 ||
-            (header[4] != 24 && header[4] != 16 && header[4] != 84 && header[4] != 92) ||
+            (columns ? header[4] < 20 || (header[4] - 20) % 8 || header[4] > 20 + 8 * 128
+                     : header[4] != 24 && header[4] != 16 && header[4] != 84 && header[4] != 92) ||
             (length = header[4],
              CALL(lantern_reqresp_read_payload, input, &header[5], &length, &eof, fresh_scratch(), req, &consumed) != 0))
-            *why = "the peer: the node's request is not a Status, BeaconBlocksByRange or BlobSidecarsByRange request";
+            *why = "the peer: the node's request is not a Status, BeaconBlocksByRange, BlobSidecarsByRange or DataColumnSidecarsByRange request";
         uint64_t start = rd64(req + 24), count = rd64(req + 32);
-        int blobs = header[4] == 16, status = header[4] == 84 || header[4] == 92;
+        int blobs = !columns && header[4] == 16, status = !columns && (header[4] == 84 || header[4] == 92);
+        uint8_t asked[16] = {0};
+        if (!*why && columns) { /* the offset 20, then ascending columns: those the peer must be asked for */
+            uint64_t n = (header[4] - 20) / 8;
+            if ((rd64(req + 24 + 16) & 0xffffffff) != 20) *why = "the node's DataColumnSidecarsByRange: the offset is not 20";
+            for (uint64_t i = 0; i < n && !*why; i++) {
+                uint64_t c = rd64(req + 24 + 20 + 8 * i);
+                if (c >= 128 || (i && c <= rd64(req + 24 + 12 + 8 * i))) *why = "the node's DataColumnSidecarsByRange: the columns are not ascending";
+                else asked[c / 8] |= (uint8_t)(1u << (c % 8));
+            }
+            if (!*why && memcmp(asked, net->want_columns, 16)) *why = "the node's DataColumnSidecarsByRange: not the columns expected";
+            net->column_requests++;
+        }
         free(input);
         free(req);
         if (!*why && !status && !net->chain) continue; /* blocks and sidecars once the chain is there */
@@ -3374,6 +3439,22 @@ static void p2p_serve(struct p2p_net *net, const char **why) {
         for (size_t b = 0; b < net->nchain && !*why; b++) {
             const case_block *cb = net->chain[b];
             if (cb->slot < start || cb->slot - start >= count) continue;
+            if (columns) { /* the block's column sidecars of the columns asked, by index */
+                for (uint64_t c = 0; c < 128 && cb->columns && !net->no_blobs && !*why; c++) {
+                    if (!(asked[c / 8] >> (c % 8) & 1)) continue;
+                    tv e = cb->columns + 9;
+                    for (uint64_t i = 0, nc = rd64(cb->columns + 1); i < nc && !*why; i++, e = tv_skip(e)) {
+                        char key[128];
+                        uint64_t slen;
+                        snprintf(key, sizeof key, "%.*s", (int)rd64(e + 1), (const char *)(e + 9));
+                        const uint8_t *sb = tv_bytes(tv_get(net->parts, key), &slen);
+                        if (!sb || slen < 8 || rd64(sb) != c) continue;
+                        p2p_chunk(net, k, cb->slot, sb, slen, 4, why);
+                        net->blobs_sent++;
+                    }
+                }
+                continue;
+            }
             if (!blobs) {
                 p2p_chunk(net, k, cb->slot, cb->bytes, cb->len, 4, why);
                 continue;
@@ -3445,7 +3526,7 @@ static uint8_t *p2p_config(int side, const uint8_t *protos, uint64_t n) {
     memset(c, 0, (size_t)size);
     static const uint64_t fields[][2] = {
         {8, 1},                                                        /* key_type: Ed25519; the peer's is secp256k1 */
-        {80, 1000},   {88, 8},     {96, 64},     {104, 16},  {112, 8}, /* now, the slots */
+        {80, 1000},   {88, 8},     {96, 64},     {104, 16},  {112, 32}, /* now, the slots: from fulu, a node's column topics too */
         {120, 1 << 22}, {128, 1024}, {136, 256}, {144, 64},  {152, 3}, /* heap, caches, muxers */
         {160, 1 << 18}, {168, 1 << 20}, {176, 1 << 19}, {184, 10000}, {192, 5000}, {200, 1 << 20},
         {224, 8},     {232, 6},    {240, 12},    {248, 6},   {256, 4},  {264, 2}, /* D */
@@ -3603,6 +3684,10 @@ static void p2p_open_record(fc_node *n, struct p2p_net *net, const uint8_t *reco
     uint64_t nprotos = 0;
     wr64(protos, sizeof protos);
     if (!*why && CALL(lantern_node_protocols, protos, &nprotos) != 0) *why = "lantern_node_protocols status";
+    if (!*why) {
+        memcpy(net->protos, protos + 24, (size_t)(nprotos * P2P_PROTO_SIZE));
+        net->nprotos = nprotos;
+    }
     uint8_t *cfg0 = *why ? NULL : p2p_config(0, protos + 24, nprotos), *cfg1 = *why ? NULL : p2p_config(1, protos + 24, nprotos);
     if (!*why) net->state[0] = p2p_make(cfg0, why);
     if (!*why) net->state[1] = p2p_make(cfg1, why);
@@ -3771,6 +3856,7 @@ static size_t case_chain(tv parts, case_block **blocks_out, case_block ***chain_
         case_block *b = &blocks[nblocks];
         b->bytes = tv_bytes(tv_get(parts, key), &b->len);
         b->sidecars = case_blobs ? tv_get(case_blobs, key) : NULL;
+        b->columns = FORK >= FORK_FULU ? tv_get(st, "columns") : NULL;
         uint8_t *sb = decode(type_by_name("SignedBeaconBlock"), b->bytes, b->len, &vsize, why);
         if (!sb) break;
         const uint8_t *block = nested(sb, field_offset("SignedBeaconBlock", 0));
@@ -3859,12 +3945,129 @@ static int shell_has_blob(const struct node_shell *s, const uint8_t *root, uint6
     return 0;
 }
 
-/* The first block of the chain with sidecars: the one that waits for its blobs when the peer sends none. */
+/* Whether a block of a case has blob or column sidecars. */
+static int block_has_sidecars(const case_block *b) {
+    return (b->sidecars && rd64(b->sidecars + 1)) || (b->columns && rd64(b->columns + 1));
+}
+
+/* The first block of the chain with sidecars: the one that waits for its blobs or columns when the peer sends none. */
 static size_t sync_first_blobs(void) {
     for (size_t b = 0; b < sync_nchain; b++)
-        if (sync_chain[b]->sidecars && rd64(sync_chain[b]->sidecars + 1)) return b;
+        if (block_has_sidecars(sync_chain[b])) return b;
     return sync_nchain;
 }
+
+#if FORK >= FORK_FULU
+/* The columns of the groups of get_custody_groups(node_id, count), as bits in 16 bytes. */
+static void custody_columns(const uint8_t *node_id, uint64_t count, uint8_t *out, const char **why) {
+    uint8_t list[24 + 8 * 128];
+    memset(out, 0, 16);
+    wr64(list, sizeof list);
+    if (CALL(LF(get_custody_groups), node_id, &count, config, list) != 0) {
+        *why = "get_custody_groups status";
+        return;
+    }
+    uint64_t groups = rd64(config + 280); /* NUMBER_OF_CUSTODY_GROUPS */
+    for (uint64_t i = 0, n = rd64(list + 16); i < n; i++)
+        for (uint64_t j = 0, g = rd64(list + 24 + 8 * i); j < 128 / groups; j++)
+            out[(groups * j + g) / 8] |= (uint8_t)(1u << ((groups * j + g) % 8));
+}
+
+/* The node's columns: of max(SAMPLES_PER_SLOT, CUSTODY_REQUIREMENT) groups of its node ID, the peer's. */
+static void node_columns(uint8_t *out, const char **why) {
+    uint8_t nid[32];
+    uint64_t samples = rd64(config + 272), custody = rd64(config + 288);
+    peer_node_id(nid, why);
+    if (!*why) custody_columns(nid, samples > custody ? samples : custody, out, why);
+}
+
+/* The DataColumnSidecar bytes of column c among the names of a block's columns, or NULL. */
+static const uint8_t *case_column(tv parts, tv names, uint64_t c, uint64_t *len) {
+    tv e = names ? names + 9 : NULL;
+    for (uint64_t i = 0, n = names ? rd64(names + 1) : 0; i < n; i++, e = tv_skip(e)) {
+        char key[128];
+        snprintf(key, sizeof key, "%.*s", (int)rd64(e + 1), (const char *)(e + 9));
+        const uint8_t *sb = tv_bytes(tv_get(parts, key), len);
+        if (sb && *len >= 8 && rd64(sb) == c) return sb;
+    }
+    return NULL;
+}
+
+/*
+ * After a sync with column sidecars, the node serves them: DataColumnSidecarsByRange of every
+ * column from the anchor's slot to the head's gives each sidecar of its columns in (slot, index)
+ * order, and DataColumnSidecarsByRoot of the chain's blocks from the last to the first, each with
+ * its columns and one it does not sample, then a root of no block, gives those sidecars in that
+ * order. Each chunk is checked as a block's is.
+ */
+static void sync_serve_columns(fc_node *m, struct p2p_net *net, tv parts, case_block **chain, size_t nchain,
+                               const uint8_t *cols, const char **why) {
+    size_t ns = 0, ncols = 0;
+    uint64_t other = 128;
+    for (uint64_t c = 0; c < 128; c++) {
+        if (cols[c / 8] >> (c % 8) & 1) ncols++;
+        else if (other == 128) other = c;
+    }
+    for (size_t b = 0; b < nchain; b++)
+        for (uint64_t c = 0, len; c < 128; c++)
+            if ((cols[c / 8] >> (c % 8) & 1) && case_column(parts, chain[b]->columns, c, &len)) ns++;
+    if (!ns) return;
+    case_block *one = xmalloc(sizeof *one * ns), **want = xmalloc(sizeof *want * ns);
+    size_t k = 0;
+    for (size_t b = 0; b < nchain; b++) /* by range: (slot, index) order */
+        for (uint64_t c = 0, len; c < 128; c++) {
+            const uint8_t *sb = (cols[c / 8] >> (c % 8) & 1) ? case_column(parts, chain[b]->columns, c, &len) : NULL;
+            if (!sb) continue;
+            memset(&one[k], 0, sizeof one[k]);
+            one[k].slot = chain[b]->slot;
+            one[k].bytes = sb;
+            one[k].len = len;
+            want[k] = &one[k];
+            k++;
+        }
+    uint8_t req[20 + 8 * 128];
+    uint64_t anchor_slot = rd64(m->shell->node + 216); /* Node_earliest_slot */
+    wr64(req, anchor_slot);
+    wr64(req + 8, chain[nchain - 1]->slot - anchor_slot + 1);
+    memset(req + 16, 0, 4);
+    req[16] = 20;
+    for (uint64_t c = 0; c < 128; c++) wr64(req + 20 + 8 * c, c);
+    int st = p2p_request(m, net, 1, "data_column_sidecars_by_range", 1, req, sizeof req, why);
+    if (!*why) p2p_check_blocks(net, st, want, ns, net->gvr, "data_column_sidecars_by_range", why);
+    size_t nid = nchain + 1, w = 0, isize = 36 + 8 * (ncols + 1), size = 4 * nid + isize * nchain + 36 + 8;
+    uint8_t *ids = xmalloc(size), *at = ids + 4 * nid; /* by root: the offsets, then each identifier */
+    for (size_t b = nchain, i = 0; b-- > 0; i++) {
+        uint64_t off = (uint64_t)(at - ids);
+        for (int j = 0; j < 4; j++) ids[4 * i + (size_t)j] = (uint8_t)(off >> (8 * j));
+        memcpy(at, chain[b]->root, 32);
+        memset(at + 32, 0, 4);
+        at[32] = 36;
+        uint64_t n = 0;
+        for (uint64_t c = 0; c < 128; c++)
+            if (cols[c / 8] >> (c % 8) & 1) {
+                wr64(at + 36 + 8 * n++, c);
+                if (!*why && w < ns) {
+                    for (size_t q = 0; q < ns; q++) /* its sidecar, when the chain has it */
+                        if (one[q].slot == chain[b]->slot && rd64(one[q].bytes) == c) want[w++] = &one[q];
+                }
+            }
+        wr64(at + 36 + 8 * n++, other);
+        at += 36 + 8 * n;
+    }
+    uint64_t off = (uint64_t)(at - ids);
+    for (int j = 0; j < 4; j++) ids[4 * nchain + (size_t)j] = (uint8_t)(off >> (8 * j));
+    memset(at, 0xEE, 32);
+    memset(at + 32, 0, 4);
+    at[32] = 36;
+    wr64(at + 36, 0);
+    at += 44;
+    if (!*why) st = p2p_request(m, net, 2, "data_column_sidecars_by_root", 1, ids, (uint64_t)(at - ids), why);
+    if (!*why) p2p_check_blocks(net, st, want, w, net->gvr, "data_column_sidecars_by_root", why);
+    free(ids);
+    free(want);
+    free(one);
+}
+#endif
 static int p2p_blobs_wait(struct p2p_net *net, int arg) {
     (void)arg;
     size_t f = sync_first_blobs();
@@ -4016,7 +4219,16 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
         net.chain = chain;
         net.nchain = nchain;
         net.no_blobs = no_blobs;
+        net.parts = parts;
         memcpy(net.gvr, gvr, 32);
+#if FORK >= FORK_FULU
+        uint8_t nid[32], cols[16];
+        node_columns(cols, why); /* with no sidecars, a peer of CUSTODY_REQUIREMENT groups: the node asks for those */
+        net.peer_cgc = no_blobs ? rd64(config + 288) : rd64(config + 280);
+        if (!*why) peer_node_id(nid, why);
+        if (!*why && no_blobs) custody_columns(nid, net.peer_cgc, net.want_columns, why);
+        else if (!*why) memcpy(net.want_columns, cols, 16);
+#endif
         sync_chain = chain;
         sync_nchain = nchain;
         if (!*why) p2p_run(&m, &net, no_blobs ? p2p_blobs_wait : p2p_synced, 0, why);
@@ -4036,7 +4248,18 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
                 for (uint64_t i = 0, c = chain[b]->sidecars ? rd64(chain[b]->sidecars + 1) : 0; i < c; i++)
                     if (!shell_has_blob(s, chain[b]->root, i)) *why = "sync: a sidecar the peer sent is not a valid NodeBlob";
             if (!*why) sync_serve_blobs(&m, &net, chain, nchain, why);
+#if FORK >= FORK_FULU
+            for (size_t b = 0; b < nchain && !*why; b++) /* each column sidecar of its columns the peer sent */
+                for (uint64_t c = 0, len; c < 128 && !*why; c++)
+                    if ((cols[c / 8] >> (c % 8) & 1) && case_column(parts, chain[b]->columns, c, &len) &&
+                        !shell_has_blob(s, chain[b]->root, c))
+                        *why = "sync: a column sidecar the peer sent is not a valid NodeBlob";
+            if (!*why) sync_serve_columns(&m, &net, parts, chain, nchain, cols, why);
+#endif
         }
+#if FORK >= FORK_FULU
+        if (!*why && !net.column_requests) *why = "sync: the node sends no DataColumnSidecarsByRange";
+#endif
         p2p_close(&net);
     }
     shell_close(&m, anchor_block);
@@ -4072,7 +4295,7 @@ static void fc_sync_check(tv parts, const char **why) {
 ABI uint64_t snappy_compress_size(const void *input, void *size);
 ABI uint64_t snappy_compress(const void *input, void *scratch, void *compressed);
 #define SNAPPY_SCRATCH_COMPRESS 32776
-enum { GOSSIP_BEACON_BLOCK_TOPIC = 1, GOSSIP_ATTESTER_SLASHING_TOPIC = 6, GOSSIP_BLOB_SIDECAR_TOPIC = 10 }; /* include/lantern.inc GOSSIP_* */
+enum { GOSSIP_BEACON_BLOCK_TOPIC = 1, GOSSIP_ATTESTER_SLASHING_TOPIC = 6, GOSSIP_BLOB_SIDECAR_TOPIC = 10, GOSSIP_DATA_COLUMN_SIDECAR_TOPIC = 11 }; /* include/lantern.inc GOSSIP_* */
 
 /* The peer publishes the SSZ bytes ssz as a message of the topic string topic: Snappy, its message-id, a PUBLISH. */
 static void p2p_publish(struct p2p_net *net, const uint8_t *topic, uint64_t tlen, const uint8_t *ssz, uint64_t len,
@@ -4177,7 +4400,16 @@ static void fc_gossip_case(tv parts, int *ran, const char **why) {
     memcpy(gvr, n.anchor + field_offset("BeaconState", 1), 32);
     node_config(ncfg);
     p2p_open(&n, &net, why);
-    if (!*why) p2p_run(&n, &net, p2p_subscribed, 5, why); /* the node's topics reach the peer */
+    int topics = 5; /* the node's topics reach the peer: from fulu, those of its column subnets too */
+#if FORK >= FORK_FULU
+    uint8_t cols[16], subnets[16] = {0};
+    node_columns(cols, why);
+    for (uint64_t c = 0, sc = rd64(config + 296); c < 128 && sc && !*why; c++) /* DATA_COLUMN_SIDECAR_SUBNET_COUNT */
+        if (cols[c / 8] >> (c % 8) & 1) subnets[(c % sc) / 8] |= (uint8_t)(1u << ((c % sc) % 8));
+    topics = 7;
+    for (int c = 0; c < 128; c++) topics += subnets[c / 8] >> (c % 8) & 1;
+#endif
+    if (!*why) p2p_run(&n, &net, p2p_subscribed, topics, why);
     tv steps = tv_get(parts, "steps");
     tv st = steps ? steps + 9 : NULL;
     uint64_t now_ms = 0, slashings = 0, slashings_applied = 0;
@@ -4239,6 +4471,17 @@ static void fc_gossip_case(tv parts, int *ran, const char **why) {
                 wr64(list, sizeof list);
                 if (!*why && CALL(lantern_gossip_topic, topic, list) != 0) *why = "gossip_topic status";
                 if (!*why) p2p_publish(&net, list + 24, rd64(list + 16), sb, slen, why);
+            }
+#endif
+#if FORK >= FORK_FULU
+            for (uint64_t c = 0, len; c < 128 && !*why; c++) { /* then its column sidecars of the node's columns, each on its subnet */
+                const uint8_t *cb = (cols[c / 8] >> (c % 8) & 1) ? case_column(parts, tv_get(st, "columns"), c, &len) : NULL;
+                if (!cb) continue;
+                wr64(topic + 8, GOSSIP_DATA_COLUMN_SIDECAR_TOPIC);
+                wr64(topic + 16, c % rd64(config + 296));
+                wr64(list, sizeof list);
+                if (CALL(lantern_gossip_topic, topic, list) != 0) *why = "gossip_topic status";
+                if (!*why) p2p_publish(&net, list + 24, rd64(list + 16), cb, len, why);
             }
 #endif
             gossip_root = root;

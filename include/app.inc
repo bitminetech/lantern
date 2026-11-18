@@ -63,7 +63,7 @@
 .set APP_SEEN_ROOM, APP_STORE_ROOM + 16     /* SeenRoom */
 .set APP_STATE_ROOM, APP_SEEN_ROOM + 32     /* StateRoom */
 .set APP_ANCHOR, APP_STATE_ROOM + 64        /* NodeAnchor */
-.set APP_BUFS, APP_ANCHOR + 176             /* the BufferId table: address, count, capacity */
+.set APP_BUFS, APP_ANCHOR + NodeAnchor__mem   /* the BufferId table: address, count, capacity */
 .set APP_TMP, APP_BUFS + 24                 /* 64 bytes */
 .set APP_LINE, APP_TMP + 64                 /* a ByteList: the log line */
 .set APP_LINE_MAX, 512

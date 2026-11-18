@@ -825,7 +825,19 @@ SPEC_FUNCTION node_gossip
     ldr     x7, [x19, #NodeGossip_settings]
     stp     x21, x22, [sp]
     bl      lantern_validate_data_column_sidecar_gossip
-    b       98f
+    cbnz    x0, 98f
+    ldr     x9, [x22]                       /* a valid sidecar: the root of its block header, its index */
+    cbnz    x9, 99f
+    ldr     x9, [x20, #DataColumnSidecar_index]
+    str     x9, [x27]
+    ADDRESS x0, lantern_type_BeaconBlockHeader
+    ADDQ    x1, x20, DataColumnSidecar_signed_block_header + SignedBeaconBlockHeader_message
+    mov     x2, x21
+    mov     x3, x23
+    CALL_GLOBAL ssz_hash_tree_root
+    cmp     x0, #SSZ_BUFFER_TOO_SMALL
+    b.eq    8f
+    b       99f
 40:
 .endif
     mov     x9, #LANTERN_GOSSIP_IGNORE
@@ -916,6 +928,80 @@ SPEC_FUNCTION node_blob_sidecar
 99: str     x28, [x21]
     LEAVE 16
 SPEC_END node_blob_sidecar
+.endif
+
+.if FORK >= FORK_FULU
+/*
+ * (data, config, settings, scratch, result, root): the checks a reader of a column sidecar
+ * response makes: verify_data_column_sidecar, verify_data_column_sidecar_inclusion_proof and
+ * verify_data_column_sidecar_kzg_proofs; then hash_tree_root of its block header. x19 config,
+ * x20 the sidecar, x21 scratch, x22 result, x23 root, x24 settings, x28 the scratch size,
+ * restored on return. Locals: L an out.
+ */
+SPEC_FUNCTION node_column_sidecar
+    ENTER 16
+    mov     x20, x0
+    mov     x19, x1
+    mov     x24, x2
+    mov     x21, x3
+    mov     x22, x4
+    mov     x23, x5
+    ldr     x28, [x21]
+    str     xzr, [x22]
+    ADDRESS x0, lantern_type_DataColumnSidecar
+    mov     x1, x20
+    mov     x2, x21
+    bl      node_decode
+    cmp     x0, #1
+    b.eq    8f
+    b.hi    9f
+    mov     x20, x1
+    mov     x0, x20                         /* verify_data_column_sidecar */
+    mov     x1, x19
+    add     x2, sp, #L
+    bl      lantern_verify_data_column_sidecar
+    cbnz    x0, 99f
+    ldr     x9, [sp, #L]
+    cbz     x9, 6f
+    mov     x0, x20                         /* verify_data_column_sidecar_inclusion_proof */
+    mov     x1, x21
+    add     x2, sp, #L
+    bl      lantern_verify_data_column_sidecar_inclusion_proof
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8f
+    cbnz    x0, 99f
+    ldr     x9, [sp, #L]
+    cbz     x9, 6f
+    mov     x0, x20                         /* verify_data_column_sidecar_kzg_proofs */
+    mov     x1, x24
+    mov     x2, x21
+    add     x3, sp, #L
+    bl      lantern_verify_data_column_sidecar_kzg_proofs
+    cmp     x0, #LANTERN_BUFFER_TOO_SMALL
+    b.eq    8f
+    cbnz    x0, 99f
+    ldr     x9, [sp, #L]
+    cbz     x9, 6f
+    ADDRESS x0, lantern_type_BeaconBlockHeader
+    ADDQ    x1, x20, DataColumnSidecar_signed_block_header + SignedBeaconBlockHeader_message
+    mov     x2, x21
+    mov     x3, x23
+    CALL_GLOBAL ssz_hash_tree_root
+    cmp     x0, #SSZ_BUFFER_TOO_SMALL
+    b.eq    8f
+    b       99f
+6:  mov     x9, #LANTERN_INVALID_COLUMN_SIDECAR
+    str     x9, [x22]
+    mov     x0, #LANTERN_OK
+    b       99f
+8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    b       99f
+9:  mov     x9, #LANTERN_INVALID_ENCODING
+    str     x9, [x22]
+    mov     x0, #LANTERN_OK
+99: str     x28, [x21]
+    LEAVE 16
+SPEC_END node_column_sidecar
 .endif
 
 .if FORK >= FORK_BELLATRIX

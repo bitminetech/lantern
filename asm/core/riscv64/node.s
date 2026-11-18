@@ -14,6 +14,15 @@
 
 .set NODE_BLOB_HEADER, 8 + 32 * FIELD_ELEMENTS_PER_BLOB + 48 + 48   # the signed_block_header in a BlobSidecar's SSZ bytes
 .set NODE_BLOB_BYTES, NODE_BLOB_HEADER + 208 + 32 * KZG_COMMITMENT_INCLUSION_PROOF_DEPTH  # the SSZ size of a BlobSidecar
+.set NODE_COLUMN_HEADER, 20             # the signed_block_header in a DataColumnSidecar's SSZ bytes
+.set NODE_COLUMN_FIXED, NODE_COLUMN_HEADER + 208 + 32 * KZG_COMMITMENTS_INCLUSION_PROOF_DEPTH  # the least SSZ size of a DataColumnSidecar
+.set NODE_COLUMN_BYTES, NODE_COLUMN_FIXED + MAX_BLOB_COMMITMENTS_PER_BLOCK * (BYTES_PER_FIELD_ELEMENT * FIELD_ELEMENTS_PER_CELL + 96)  # the most
+.set NODE_METADATA_V3, 25               # the SSZ size of a MetaData v3
+.set NODE_CUSTODY_LIST, LIST_FIXED + 8 * 128    # an IndexList of 128 custody groups
+.set NODE_CUSTODY_LOCALS, 16 + NODE_CUSTODY_LIST + 8
+.if NUMBER_OF_COLUMNS > 128
+.error "Node_columns and NodePeer_custody hold 128 columns"
+.endif
 
 /* a0 = the fork of the slot a0 with the config a1: the last fork whose epoch is at most the slot's. Uses t0-t2. */
 LOCAL_FUNCTION node_fork
@@ -197,6 +206,16 @@ FUNCTION lantern_node_init
     mv      a1, s2
     li      a2, CONFIG_SIZE
     call    lantern_copy
+    LDQ     t0, s2, CONFIG_SAMPLES_PER_SLOT # the columns: of max(SAMPLES_PER_SLOT, CUSTODY_REQUIREMENT) groups
+    LDQ     t1, s2, CONFIG_CUSTODY_REQUIREMENT
+    mv      a1, t0
+    bgeu    t0, t1, 2f
+    mv      a1, t1
+2:  addi    a0, s3, NodeAnchor_node_id
+    mv      a2, s2
+    addi    a3, s6, Node_columns
+    call    node_custody_columns
+    bnez    a0, 9f
     andi    t0, s5, NODE_FLAG_ENGINE        # the secret, the host, the first id, and a forkchoiceUpdated due
     beqz    t0, 1f
     ld      a2, NodeAnchor_engine_host_len(s3)
@@ -1071,12 +1090,220 @@ LOCAL_FUNCTION node_blobs_held
     ret
 END_FUNCTION node_blobs_held
 
+/* a0 = 1 when the node s1 samples the column a0, else 0. A leaf; uses t0, t1. */
+LOCAL_FUNCTION node_sampled
+    UNWIND_END_PROLOGUE
+    li      t0, 128
+    bgeu    a0, t0, 1f
+    srli    t0, a0, 3
+    add     t0, t0, s1
+    lbu     t0, Node_columns(t0)
+    andi    t1, a0, 7
+    srl     t0, t0, t1
+    andi    a0, t0, 1
+    ret
+1:  li      a0, 0
+    ret
+END_FUNCTION node_sampled
+
+/* a0 = the columns the node s1 samples: the bits of Node_columns. A leaf; uses t0, t1. */
+LOCAL_FUNCTION node_column_count
+    UNWIND_END_PROLOGUE
+    li      a0, 0
+    ld      t0, Node_columns(s1)
+1:  beqz    t0, 2f
+    addi    t1, t0, -1
+    and     t0, t0, t1
+    addi    a0, a0, 1
+    j       1b
+2:  ld      t0, (Node_columns + 8)(s1)
+3:  beqz    t0, 4f
+    addi    t1, t0, -1
+    and     t0, t0, t1
+    addi    a0, a0, 1
+    j       3b
+4:  ret
+END_FUNCTION node_column_count
+
 /*
- * The block of index a0, from the network, waits for its blobs: NODE_BLOCK_BLOBS while it needs
- * blobs the node does not hold; else data_available 1, NODE_BLOCK_WAITING and its import. It
- * needs blobs when its fork is deneb or electra, its blob count is 1 to the fork's limit and
- * NODE_BLOB_MAX, and its epoch is from max(the store's epoch - MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS,
- * DENEB_FORK_EPOCH) on. s3 the index, s4 the entry, s7 the count.
+ * a0 = 1 when the node holds a NODE_BLOB_VALID entry of the root at a0 for each column it
+ * samples, else 0. A leaf; uses t0-t6, a6, a7.
+ */
+LOCAL_FUNCTION node_columns_held
+    UNWIND_END_PROLOGUE
+    PART    t0, t1, s1, Node_blobs
+    li      t4, 0                           # a bit for each column held: t4 below 64, t5 from 64
+    li      t5, 0
+1:  beqz    t1, 3f
+    ld      t2, NodeBlob_status(t0)
+    li      t3, NODE_BLOB_VALID
+    bne     t2, t3, 2f
+    ld      t2, NodeBlob_index(t0)
+    li      t3, 128
+    bgeu    t2, t3, 2f
+    NE32    t0, a0, 2f
+    li      t3, 1
+    sll     t3, t3, t2
+    li      t6, 64
+    bgeu    t2, t6, 21f
+    or      t4, t4, t3
+    j       2f
+21: or      t5, t5, t3
+2:  addi    t0, t0, NodeBlob__mem
+    addi    t1, t1, -1
+    j       1b
+3:  ld      t2, Node_columns(s1)            # each sampled column held
+    not     t4, t4
+    and     t2, t2, t4
+    ld      t3, (Node_columns + 8)(s1)
+    not     t5, t5
+    and     t3, t3, t5
+    or      t2, t2, t3
+    seqz    a0, t2
+    ret
+END_FUNCTION node_columns_held
+
+/*
+ * a0 = the first epoch of a sidecar window: max(the epoch of the store s2 - a0, the epoch of the
+ * fork a1 in the node s1's config). Locals: 0 a0, 8 a1.
+ */
+LOCAL_FUNCTION node_window
+    FRAME 16
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+    mv      a0, s2
+    call    node_store_slot
+    li      t0, SLOTS_PER_EPOCH
+    divu    a0, a0, t0
+    ld      t1, 0(sp)
+    sub     t2, a0, t1
+    sltu    t3, a0, t1
+    addi    t3, t3, -1
+    and     a0, t2, t3
+    ld      t1, 8(sp)
+    slli    t1, t1, 4
+    add     t1, t1, s1
+    ld      t1, Node_config(t1)
+    bgeu    a0, t1, 1f
+    mv      a0, t1
+1:  UNFRAME 16
+END_FUNCTION node_window
+
+/*
+ * The columns of the groups of get_custody_groups(the NodeID at a0, a1 groups) of the config a2,
+ * as bits in the 16 bytes at a3: a0 = 0, or LANTERN_INVALID_CUSTODY_GROUP and no bits (a count
+ * above NUMBER_OF_CUSTODY_GROUPS or 128). s1 config, s2 out, s3 a group, s4 the groups left, s5
+ * NUMBER_OF_CUSTODY_GROUPS. Locals: L the count, L+16 an IndexList.
+ */
+LOCAL_FUNCTION node_custody_columns
+    ENTER NODE_CUSTODY_LOCALS
+    mv      s1, a2
+    mv      s2, a3
+    sd      zero, 0(s2)
+    sd      zero, 8(s2)
+    sd      a1, L(sp)
+    li      t0, 128
+    bgtu    a1, t0, 8f
+    li      t0, NODE_CUSTODY_LIST
+    sd      t0, (L + 16)(sp)
+    addi    a1, sp, L
+    mv      a2, s1
+    addi    a3, sp, L + 16
+    CALL_GLOBAL lantern_fulu_get_custody_groups
+    bnez    a0, 8f
+    ld      s4, (L + 16 + 16)(sp)
+    addi    s3, sp, L + 16 + LIST_FIXED
+    LDQ     s5, s1, CONFIG_NUMBER_OF_CUSTODY_GROUPS
+1:  beqz    s4, 9f
+    ld      t1, 0(s3)                       # a group g: the columns N * i + g, i below NUMBER_OF_COLUMNS // N
+    addi    s3, s3, 8
+    li      t2, NUMBER_OF_COLUMNS
+    divu    t2, t2, s5
+2:  beqz    t2, 3f
+    srli    t3, t1, 3
+    add     t3, t3, s2
+    lbu     t4, 0(t3)
+    andi    t5, t1, 7
+    li      t6, 1
+    sll     t6, t6, t5
+    or      t4, t4, t6
+    sb      t4, 0(t3)
+    add     t1, t1, s5
+    addi    t2, t2, -1
+    j       2b
+3:  addi    s4, s4, -1
+    j       1b
+9:  li      a0, LANTERN_OK
+    LEAVE NODE_CUSTODY_LOCALS
+8:  sd      zero, 0(s2)
+    sd      zero, 8(s2)
+    li      a0, LANTERN_INVALID_CUSTODY_GROUP
+    LEAVE NODE_CUSTODY_LOCALS
+END_FUNCTION node_custody_columns
+
+/*
+ * The peer a0 takes NODE_PEER_METADATA, and as custody the columns of the groups of
+ * get_custody_groups(its node ID, a1 groups) when its peer ID holds a secp256k1 key that
+ * decompresses; else no custody. s3 the peer, s4 the count. Locals: L the point (64), L+64 a
+ * ByteList of the point (88), L+152 the digest (32), L+184 the NodeID (32).
+ */
+LOCAL_FUNCTION node_peer_custody
+    ENTER 224
+    mv      s3, a0
+    mv      s4, a1
+    ld      t0, NodePeer_flags(s3)
+    ori     t0, t0, NODE_PEER_METADATA
+    sd      t0, NodePeer_flags(s3)
+    sd      zero, NodePeer_custody(s3)
+    sd      zero, (NodePeer_custody + 8)(s3)
+    ld      t0, NodePeer_id_len(s3)         # 0x00 0x25 0x08 0x02 0x12 0x21, then the key
+    li      t1, 39
+    bne     t0, t1, 9f
+    ld      t0, NodePeer_id(s3)
+    slli    t0, t0, 16
+    li      t1, 0x211202082500 << 16
+    bne     t0, t1, 9f
+    addi    a0, s3, NodePeer_id + 6
+    addi    a1, sp, L
+    CALL_GLOBAL crypto_secp256k1_decompress
+    bnez    a0, 9f
+    li      t0, 24 + 64                     # keccak256(x || y)
+    sd      t0, (L + 64)(sp)
+    li      t0, 24
+    sd      t0, (L + 72)(sp)
+    li      t0, 64
+    sd      t0, (L + 80)(sp)
+    addi    a0, sp, L + 88
+    addi    a1, sp, L
+    li      a2, 64
+    call    lantern_copy
+    addi    a0, sp, L + 64
+    addi    a1, sp, L + 152
+    CALL_GLOBAL crypto_keccak256
+    bnez    a0, 9f
+    addi    t0, sp, L + 152                 # the NodeID: the digest's bytes in reverse order
+    addi    t1, sp, L + 184 + 31
+    li      t2, 32
+1:  lbu     t3, 0(t0)
+    sb      t3, 0(t1)
+    addi    t0, t0, 1
+    addi    t1, t1, -1
+    addi    t2, t2, -1
+    bnez    t2, 1b
+    addi    a0, sp, L + 184
+    mv      a1, s4
+    addi    a2, s1, Node_config
+    addi    a3, s3, NodePeer_custody
+    call    node_custody_columns
+9:  LEAVE 224
+END_FUNCTION node_peer_custody
+
+/*
+ * The block of index a0, from the network, waits for its blobs or columns: NODE_BLOCK_BLOBS
+ * while it needs sidecars the node does not hold; else data_available 1, NODE_BLOCK_WAITING and
+ * its import. Deneb and electra: it needs blobs when its blob count is 1 to the fork's limit and
+ * NODE_BLOB_MAX and its epoch is in the blob window. Fulu: it needs columns when its blob count is
+ * above 0 and its epoch is in the column window. s3 the index, s4 the entry, s7 the count.
  */
 LOCAL_FUNCTION node_await
     ENTER 0
@@ -1087,11 +1314,13 @@ LOCAL_FUNCTION node_await
     add     s4, s4, t0
     ld      s7, NodeBlock_blobs(s4)
     beqz    s7, 5f
-    li      t0, NODE_BLOB_MAX
-    bgtu    s7, t0, 5f
     ld      a0, NodeBlock_slot(s4)
     addi    a1, s1, Node_config
     call    node_fork
+    li      t0, FORK_FULU
+    bgeu    a0, t0, 6f
+    li      t0, NODE_BLOB_MAX
+    bgtu    s7, t0, 5f
     LDQ     t1, s1, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK
     li      t0, FORK_DENEB
     beq     a0, t0, 2f
@@ -1099,19 +1328,10 @@ LOCAL_FUNCTION node_await
     bne     a0, t0, 5f
     LDQ     t1, s1, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK_ELECTRA
 2:  bgtu    s7, t1, 5f
-    mv      a0, s2                          # the blob window
-    call    node_store_slot
-    li      t0, SLOTS_PER_EPOCH
-    divu    a0, a0, t0
-    LDQ     t1, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS
-    sub     t2, a0, t1
-    sltu    t3, a0, t1
-    addi    t3, t3, -1
-    and     a0, t2, t3
-    LDQ     t1, s1, Node_config + 16 * FORK_DENEB
-    bgeu    a0, t1, 3f
-    mv      a0, t1
-3:  ld      t2, NodeBlock_slot(s4)
+    LDQ     a0, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS   # the blob window
+    li      a1, FORK_DENEB
+    call    node_window
+    ld      t2, NodeBlock_slot(s4)
     li      t0, SLOTS_PER_EPOCH
     divu    t2, t2, t0
     bltu    t2, a0, 5f
@@ -1119,9 +1339,19 @@ LOCAL_FUNCTION node_await
     mv      a1, s7
     call    node_blobs_held
     bnez    a0, 5f
-    li      t0, NODE_BLOCK_BLOBS
+4:  li      t0, NODE_BLOCK_BLOBS
     sd      t0, NodeBlock_status(s4)
     LEAVE 0
+6:  LDQ     a0, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS   # the column window
+    li      a1, FORK_FULU
+    call    node_window
+    ld      t2, NodeBlock_slot(s4)
+    li      t0, SLOTS_PER_EPOCH
+    divu    t2, t2, t0
+    bltu    t2, a0, 5f
+    mv      a0, s4
+    call    node_columns_held
+    beqz    a0, 4b
 5:  li      t0, 1
     sd      t0, NodeBlock_data_available(s4)
     li      t0, NODE_BLOCK_WAITING
@@ -1518,8 +1748,13 @@ LOCAL_FUNCTION node_event
     call    node_await
     LEAVE 48
 642: li     t1, GOSSIP_BLOB_SIDECAR         # a new valid sidecar keeps the bytes
+    beq     t0, t1, 643f
+    li      t1, GOSSIP_DATA_COLUMN_SIDECAR  # a column sidecar: of a column the node samples
     bne     t0, t1, 65f
-    addi    a0, s3, NodeEvent_root
+    ld      a0, NodeEvent_index(s3)
+    call    node_sampled
+    beqz    a0, 65f
+643: addi   a0, s3, NodeEvent_root
     ld      a1, NodeEvent_index(s3)
     call    node_blob_held
     bnez    a0, 65f
@@ -1595,7 +1830,15 @@ LOCAL_FUNCTION node_event
     li      t3, NODE_BLOB_VERIFYING
     bne     t2, t3, 79f
     bnez    t1, 78f
-    addi    a0, s3, NodeEvent_root          # valid, and not held yet: the entry takes the root
+    ld      a0, NodeBlob_slot(s4)           # fulu: a column the node samples
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_FULU
+    bltu    a0, t0, 771f
+    ld      a0, NodeBlob_index(s4)
+    call    node_sampled
+    beqz    a0, 78f
+771: addi   a0, s3, NodeEvent_root          # valid, and not held yet: the entry takes the root
     ld      a1, NodeBlob_index(s4)
     call    node_blob_held
     bnez    a0, 78f
@@ -1966,7 +2209,18 @@ LOCAL_FUNCTION node_request
     beq     s4, t0, 2f
     li      s7, 0
     li      t0, REQRESP_BLOB_SIDECARS_BY_ROOT
+    beq     s4, t0, 2f
+    li      t0, REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE   # column sidecars, from fulu on: sizes below
+    beq     s4, t0, 21f
+    li      t0, REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT
     bne     s4, t0, 92f
+21: mv      a0, s2
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_FULU
+    bgeu    a0, t0, 3f
+    j       92f
 2:  mv      a0, s2
     call    node_store_slot
     addi    a1, s1, Node_config
@@ -1986,6 +2240,10 @@ LOCAL_FUNCTION node_request
     bnez    s7, 4f
     li      t0, REQRESP_BLOB_SIDECARS_BY_ROOT
     beq     s4, t0, 5f
+    li      t0, REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE
+    beq     s4, t0, 81f
+    li      t0, REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT
+    beq     s4, t0, 82f
     ld      t0, (L + ChunkHeader_length)(sp)        # by root
     andi    t0, t0, 31
     bnez    t0, 90f
@@ -2005,6 +2263,21 @@ LOCAL_FUNCTION node_request
     ld      t0, (L + 72)(sp)
     bgtu    t0, a0, 90f
     ld      s7, (L + ChunkHeader_length)(sp)
+    j       4f
+81: ld      t0, (L + ChunkHeader_length)(sp)        # column sidecars by range: 20 bytes, then 8 for each column
+    li      t1, 20
+    bltu    t0, t1, 90f
+    sub     t1, t0, t1
+    andi    t2, t1, 7
+    bnez    t2, 90f
+    li      t2, 8 * NUMBER_OF_COLUMNS
+    bgtu    t1, t2, 90f
+    mv      s7, t0
+    j       4f
+82: ld      t0, (L + ChunkHeader_length)(sp)        # by root: at most that many identifiers
+    li      t1, 4 * REQUEST_BLOCKS_LIMIT_DENEB + REQUEST_BLOCKS_LIMIT_DENEB * (36 + 8 * NUMBER_OF_COLUMNS)
+    bgtu    t0, t1, 90f
+    mv      s7, t0
 4:  ld      t0, (L + ChunkHeader_length)(sp)
     bne     t0, s7, 90f
     ld      s8, 0(s5)                       # the payload's ByteList at the end of scratch
@@ -2043,6 +2316,10 @@ LOCAL_FUNCTION node_request
     beq     s4, t0, 165f
     li      t0, REQRESP_BLOB_SIDECARS_BY_ROOT
     beq     s4, t0, 175f
+    li      t0, REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE
+    beq     s4, t0, 83f
+    li      t0, REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT
+    beq     s4, t0, 86f
     li      t0, REQRESP_GOODBYE
     bne     s4, t0, 10f
     li      a0, LIBP2P_EVENT_STREAM_CLOSE   # Goodbye: a close
@@ -2174,8 +2451,15 @@ LOCAL_FUNCTION node_request
     bltu    t0, s7, 63b
     addi    s9, a1, NodeBlock_parent_root
     bgeu    t0, s10, 166b
-    sd      a1, (L + 64)(sp)                # its indices, from the last
-    ld      t0, (L + 72)(sp)
+    sd      a1, (L + 64)(sp)                # its indices, from the last, of a block of deneb or electra
+    mv      a0, t0
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_DENEB
+    beq     a0, t0, 1661f
+    li      t0, FORK_ELECTRA
+    bne     a0, t0, 166b
+1661: ld    t0, (L + 72)(sp)
     sd      t0, (L + 80)(sp)
 167: ld     a1, (L + 80)(sp)
     beqz    a1, 166b
@@ -2200,8 +2484,17 @@ LOCAL_FUNCTION node_request
     addi    s7, s7, -1
     call    node_blob_held
     beqz    a0, 176b
+    sd      a0, (L + 72)(sp)
     ld      t0, NodeBlob_data_id(a0)
     sd      t0, (L + 64)(sp)
+    ld      a0, NodeBlob_slot(a0)           # a sidecar of deneb or electra
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_DENEB
+    beq     a0, t0, 1761f
+    li      t0, FORK_ELECTRA
+    bne     a0, t0, 176b
+1761: ld    a0, (L + 72)(sp)
     call    node_find_block                 # not of an invalid block
     li      t0, -1
     beq     a0, t0, 174f
@@ -2246,6 +2539,213 @@ LOCAL_FUNCTION node_request
     mv      a0, s3
     call    node_drop_stream
     LEAVE 176
+83: lwu     t0, 16(s9)                      # DataColumnSidecarsByRange: the offset 20, then the columns
+    li      t1, 20
+    bne     t0, t1, 90f
+    sd      zero, (L + 80)(sp)              # the columns asked, then of those the ones sampled
+    sd      zero, (L + 88)(sp)
+    addi    t2, s7, -20
+    srli    t2, t2, 3
+    addi    t3, s9, 20
+84: beqz    t2, 841f
+    LDU64   t0, t3, 0, t4
+    addi    t3, t3, 8
+    li      t1, NUMBER_OF_COLUMNS
+    bgeu    t0, t1, 90f
+    srli    t1, t0, 6
+    slli    t1, t1, 3
+    add     t1, t1, sp
+    ld      t4, (L + 80)(t1)
+    li      t5, 1
+    sll     t5, t5, t0
+    or      t4, t4, t5
+    sd      t4, (L + 80)(t1)
+    addi    t2, t2, -1
+    j       84b
+841: ld     t0, (L + 80)(sp)
+    ld      t1, Node_columns(s1)
+    and     t0, t0, t1
+    sd      t0, (L + 80)(sp)
+    ld      t2, (L + 88)(sp)
+    ld      t1, (Node_columns + 8)(s1)
+    and     t2, t2, t1
+    sd      t2, (L + 88)(sp)
+    li      t3, 0                           # their count: the sidecars of a block
+842: beqz   t0, 843f
+    addi    t1, t0, -1
+    and     t0, t0, t1
+    addi    t3, t3, 1
+    j       842b
+843: beqz   t2, 844f
+    addi    t1, t2, -1
+    and     t2, t2, t1
+    addi    t3, t3, 1
+    j       843b
+844: beqz   t3, 78b
+    sd      t3, (L + 72)(sp)
+    ld      s7, 0(s9)                       # start_slot, count
+    ld      s10, 8(s9)
+    ld      t0, Node_earliest_slot(s1)
+    bltu    s7, t0, 92b
+    call    node_max_columns                # at most the limit: the slots whose sidecars it can hold
+    ld      t0, (L + 72)(sp)
+    divu    t0, a0, t0
+    bleu    s10, t0, 845f
+    mv      s10, t0
+845: add    t0, s7, s10                     # the end slot
+    bgeu    t0, s7, 846f
+    li      t0, -1
+846: mv     s10, t0
+    li      s8, 0                           # the sidecars of the canonical blocks of the range, from the head down
+    addi    s9, s1, Node_head_root
+85: mv      a0, s9
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 63b
+    ld      t0, NodeBlock_status(a1)
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 63b
+    ld      t0, NodeBlock_slot(a1)
+    bltu    t0, s7, 63b
+    addi    s9, a1, NodeBlock_parent_root
+    bgeu    t0, s10, 85b
+    sd      a1, (L + 64)(sp)                # its columns, from the last, of a block of fulu or later
+    mv      a0, t0
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_FULU
+    bltu    a0, t0, 85b
+    li      t0, 128
+    sd      t0, (L + 96)(sp)
+851: ld     a1, (L + 96)(sp)
+    beqz    a1, 85b
+    addi    a1, a1, -1
+    sd      a1, (L + 96)(sp)
+    srli    t0, a1, 6
+    slli    t0, t0, 3
+    add     t0, t0, sp
+    ld      t0, (L + 80)(t0)
+    srl     t0, t0, a1
+    andi    t0, t0, 1
+    beqz    t0, 851b
+    ld      a0, (L + 64)(sp)
+    call    node_blob_held
+    beqz    a0, 851b
+    ld      t1, NodeBlob_data_id(a0)
+    slli    t2, s8, 3
+    add     t2, t2, s3
+    sd      t1, NodeStream_request(t2)
+    addi    s8, s8, 1
+    j       851b
+86: beqz    s7, 78b                         # DataColumnSidecarsByRoot: the identifiers' offsets, then each
+    lwu     t0, 0(s9)
+    andi    t1, t0, 3
+    bnez    t1, 90f
+    bgtu    t0, s7, 90f
+    srli    s10, t0, 2
+    beqz    s10, 90f
+    li      t1, REQUEST_BLOCKS_LIMIT_DENEB
+    bgtu    s10, t1, 90f
+    li      s8, 0                           # first check each identifier, and count the columns
+    li      t2, 0
+87: bgeu    t2, s10, 871f
+    slli    t3, t2, 2
+    add     t3, t3, s9
+    lwu     t0, 0(t3)
+    andi    t1, t0, 3                       # offsets of a valid list are multiples of 4
+    bnez    t1, 90f
+    addi    t4, t2, 1
+    mv      t1, s7
+    bgeu    t4, s10, 872f
+    lwu     t1, 4(t3)
+872: bltu   t1, t0, 90f
+    bgtu    t1, s7, 90f
+    sub     t5, t1, t0                      # block_root, the offset 36, 8 bytes for each column
+    li      t6, 36
+    bltu    t5, t6, 90f
+    sub     t5, t5, t6
+    andi    t6, t5, 7
+    bnez    t6, 90f
+    add     t6, s9, t0
+    lwu     a2, 32(t6)
+    li      a3, 36
+    bne     a2, a3, 90f
+    srli    t5, t5, 3
+    li      a3, NUMBER_OF_COLUMNS
+    bgtu    t5, a3, 90f
+    add     s8, s8, t5
+    addi    t6, t6, 36
+873: beqz   t5, 874f
+    LDU64   a2, t6, 0, a3
+    li      a4, NUMBER_OF_COLUMNS
+    bgeu    a2, a4, 90f
+    addi    t6, t6, 8
+    addi    t5, t5, -1
+    j       873b
+874: mv     t2, t4
+    j       87b
+871: call   node_max_columns                # at most the limit of columns in all
+    bgtu    s8, a0, 90f
+    li      s8, 0                           # then the sidecars the node holds, in the request's order
+    sd      zero, (L + 96)(sp)
+88: ld      t2, (L + 96)(sp)
+    bgeu    t2, s10, 77b
+    slli    t3, t2, 2
+    add     t3, t3, s9
+    lwu     t0, 0(t3)
+    addi    t2, t2, 1
+    sd      t2, (L + 96)(sp)
+    mv      t1, s7
+    bgeu    t2, s10, 881f
+    lwu     t1, 4(t3)
+881: sub    t1, t1, t0                      # its columns
+    addi    t1, t1, -36
+    srli    t1, t1, 3
+    sd      t1, (L + 112)(sp)
+    add     t4, s9, t0                      # its root, copied to L+128, 8-aligned
+    addi    t5, sp, L + 128
+    li      t6, 8
+882: lwu    a2, 0(t4)
+    sw      a2, 0(t5)
+    addi    t4, t4, 4
+    addi    t5, t5, 4
+    addi    t6, t6, -1
+    bnez    t6, 882b
+    addi    t5, sp, L + 128
+    sd      t5, (L + 64)(sp)
+    addi    t4, t4, 4
+    sd      t4, (L + 104)(sp)
+89: ld      t1, (L + 112)(sp)
+    beqz    t1, 88b
+    addi    t1, t1, -1
+    sd      t1, (L + 112)(sp)
+    ld      t4, (L + 104)(sp)
+    LDU64   a1, t4, 0, t5
+    addi    t4, t4, 8
+    sd      t4, (L + 104)(sp)
+    ld      a0, (L + 64)(sp)
+    call    node_blob_held
+    beqz    a0, 89b
+    sd      a0, (L + 120)(sp)
+    ld      a0, NodeBlob_slot(a0)           # a sidecar of fulu or later
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_FULU
+    bltu    a0, t0, 89b
+    ld      a0, (L + 64)(sp)                # not of an invalid block
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 891f
+    ld      t0, NodeBlock_status(a1)
+    li      t1, NODE_BLOCK_INVALID
+    beq     t0, t1, 89b
+891: ld     t0, (L + 120)(sp)
+    ld      t1, NodeBlob_data_id(t0)
+    slli    t2, s8, 3
+    add     t2, t2, s3
+    sd      t1, NodeStream_request(t2)
+    addi    s8, s8, 1
+    j       89b
 80: ld      t0, NodeStream_state(s3)        # more bytes come, unless the peer closed
     li      t1, NODE_STREAM_EOF
     beq     t0, t1, 90f
@@ -2309,6 +2809,22 @@ LOCAL_FUNCTION node_max_blobs
     mv      a0, t0
 3:  UNFRAME 0
 END_FUNCTION node_max_blobs
+
+/*
+ * a0 = the column sidecars one response may hold: compute_max_request_data_column_sidecars,
+ * MAX_REQUEST_BLOCKS_DENEB times NUMBER_OF_COLUMNS; at most the BufferIds a stream's list holds.
+ * A leaf; uses t0, t1.
+ */
+LOCAL_FUNCTION node_max_columns
+    UNWIND_END_PROLOGUE
+    li      a0, REQUEST_BLOCKS_LIMIT_DENEB * NUMBER_OF_COLUMNS
+    ld      t0, Node_stream_bytes(s1)
+    addi    t0, t0, -NodeStream__fixed
+    srli    t0, t0, 3
+    bleu    a0, t0, 1f
+    mv      a0, t0
+1:  ret
+END_FUNCTION node_max_columns
 
 /*
  * a0 = 1 when a stream waits for room for its SERVE work, else 0: a SERVE work of the next
@@ -2899,7 +3415,7 @@ LOCAL_FUNCTION node_subscribe
     li      t0, FORK_DENEB                  # deneb and electra: every blob sidecar subnet
     bltu    s3, t0, 9f
     li      t0, FORK_FULU
-    bgeu    s3, t0, 9f
+    bgeu    s3, t0, 4f
     LDQ     s7, s1, Node_config + CONFIG_BLOB_SIDECAR_SUBNET_COUNT
     li      t0, FORK_ELECTRA
     bltu    s3, t0, 2f
@@ -2911,6 +3427,32 @@ LOCAL_FUNCTION node_subscribe
     call    node_sub
     addi    s4, s4, 1
     j       3b
+4:  LDQ     s7, s1, Node_config + CONFIG_DATA_COLUMN_SIDECAR_SUBNET_COUNT   # fulu: the subnet of each column sampled, once
+    beqz    s7, 9f
+    li      s8, 0                           # the subnets subscribed: s8 below 64, s9 from 64
+    li      s9, 0
+    li      s4, 0
+5:  li      t0, 128
+    bgeu    s4, t0, 9f
+    mv      a0, s4
+    call    node_sampled
+    beqz    a0, 7f
+    remu    a1, s4, s7                      # compute_subnet_for_data_column_sidecar: column % DATA_COLUMN_SIDECAR_SUBNET_COUNT
+    li      t0, 1
+    sll     t0, t0, a1
+    li      t1, 64
+    bgeu    a1, t1, 6f
+    and     t1, s8, t0
+    bnez    t1, 7f
+    or      s8, s8, t0
+    j       61f
+6:  and     t1, s9, t0
+    bnez    t1, 7f
+    or      s9, s9, t0
+61: li      a0, GOSSIP_DATA_COLUMN_SIDECAR
+    call    node_sub
+7:  addi    s4, s4, 1
+    j       5b
 9:  LEAVE 16
 END_FUNCTION node_subscribe
 
@@ -3303,6 +3845,7 @@ LOCAL_FUNCTION node_open
     sd      t0, NodeStream_list(s3)
     li      t0, 24
     sd      t0, (NodeStream_list + 8)(s3)
+    beqz    s10, 1f                         # no request bytes: an empty list
     li      t0, CHUNK_REQUEST               # the request chunk in the list
     sd      t0, (L + ChunkHeader_kind)(sp)
     sd      zero, (L + ChunkHeader_context_length)(sp)
@@ -3313,7 +3856,7 @@ LOCAL_FUNCTION node_open
     addi    a3, s3, NodeStream_list
     call    lantern_reqresp_write_chunk
     bnez    a0, 8f
-    li      t0, 24 + 128                    # the protocol ID
+1:  li      t0, 24 + 128                    # the protocol ID
     sd      t0, (L + 64)(sp)
     li      t0, 24
     sd      t0, (L + 72)(sp)
@@ -3386,10 +3929,14 @@ LOCAL_FUNCTION node_response
     ld      t0, NodeStream_next(s3)         # no bytes: the end after STREAM_EOF
     bnez    t0, 80f
     j       90f
-2:  li      t0, CHUNK_RESPONSE              # blocks by range v2 and blob sidecars by range: a ForkDigest context
+2:  li      t0, CHUNK_RESPONSE              # blocks by range v2, blob and column sidecars: a ForkDigest context
     sd      t0, (L + ChunkHeader_kind)(sp)
     li      t0, 4
     li      t1, REQRESP_BLOB_SIDECARS_BY_RANGE
+    beq     s4, t1, 3f
+    li      t1, REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE
+    beq     s4, t1, 3f
+    li      t1, REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT
     beq     s4, t1, 3f
     li      t0, 0
     li      t1, REQRESP_BEACON_BLOCKS_BY_RANGE
@@ -3417,12 +3964,27 @@ LOCAL_FUNCTION node_response
     li      t0, 92
 31: bne     s9, t0, 85f
     j       41f
-4:  li      t0, REQRESP_BLOB_SIDECARS_BY_RANGE
+4:  li      t0, REQRESP_METADATA            # MetaData v3
+    bne     s4, t0, 43f
+    li      t0, NODE_METADATA_V3
+    bne     s9, t0, 85f
+    j       41f
+43: li      t0, REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE
+    beq     s4, t0, 431f
+    li      t0, REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT
+    bne     s4, t0, 44f
+431: li     t0, NODE_COLUMN_FIXED           # a column sidecar: room for its BYTES_PUT, its work, its entry
+    bltu    s9, t0, 85f
+    li      t0, NODE_COLUMN_BYTES
+    bgtu    s9, t0, 85f
+    addi    a0, s9, 48 + NODE_ACT_WORK_SIZE + 7
+    j       45f
+44: li      t0, REQRESP_BLOB_SIDECARS_BY_RANGE
     bne     s4, t0, 42f
     li      t0, NODE_BLOB_BYTES             # a blob sidecar: room for its BYTES_PUT, its work, its entry
     bne     s9, t0, 85f
     li      a0, NODE_BLOB_BYTES + 48 + NODE_ACT_WORK_SIZE + 7
-    call    node_room
+45: call    node_room
     beqz    a0, 95f
     ld      t0, Node_p2p_out(s1)
     ld      t1, Node_blobs(s1)
@@ -3477,8 +4039,30 @@ LOCAL_FUNCTION node_response
     mv      a2, s9
     call    node_peer_status
     j       7f
-6:  li      t0, REQRESP_BLOB_SIDECARS_BY_RANGE
+6:  li      t0, REQRESP_METADATA
+    bne     s4, t0, 62f
+    ld      a0, NodeStream_peer(s3)         # MetaData: the peer's custody
+    call    node_find_peer
+    li      t0, -1
+    beq     a0, t0, 7f
+    mv      a0, a1
+    addi    t0, s8, 24 + 17 + 7             # custody_group_count, at an odd offset: byte by byte
+    li      a1, 0
+    li      t1, 8
+631: slli   a1, a1, 8
+    lbu     t2, 0(t0)
+    or      a1, a1, t2
+    addi    t0, t0, -1
+    addi    t1, t1, -1
+    bnez    t1, 631b
+    call    node_peer_custody
+    j       7f
+62: li      t0, REQRESP_BLOB_SIDECARS_BY_RANGE
     beq     s4, t0, 61f
+    li      t0, REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE
+    beq     s4, t0, 63f
+    li      t0, REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT
+    beq     s4, t0, 63f
     PART    t0, t1, s1, Node_blocks         # a block: its entry, its bytes, the work of its root
     sd      t1, (L + 48)(sp)
     li      t2, NodeBlock__mem
@@ -3537,6 +4121,33 @@ LOCAL_FUNCTION node_response
     ld      a4, (L + 48)(sp)
     li      a5, 0
     call    node_work
+    j       7f
+63: PART    t0, t1, s1, Node_blobs          # a column sidecar: its entry, its bytes, the work of its checks
+    sd      t1, (L + 48)(sp)
+    li      t2, NodeBlob__mem
+    mul     t2, t1, t2
+    add     s10, t0, t2
+    addi    t1, t1, 1
+    sd      t1, (Node_blobs + 8)(s1)
+    mv      a0, s10
+    li      a1, NodeBlob__mem
+    call    lantern_zero
+    ld      t0, 24(s8)                      # its index, and the slot of its block header, 4-aligned
+    sd      t0, NodeBlob_index(s10)
+    LDU64   t0, s8, 24 + NODE_COLUMN_HEADER, t1
+    sd      t0, NodeBlob_slot(s10)
+    li      t0, NODE_BLOB_VERIFYING
+    sd      t0, NodeBlob_status(s10)
+    mv      a0, s8
+    call    node_put
+    sd      a0, NodeBlob_data_id(s10)
+    mv      a3, a0
+    li      a0, NODE_WORK_BLOB
+    li      a1, 0
+    li      a2, 0
+    ld      a4, (L + 48)(sp)
+    li      a5, 1
+    call    node_work
 7:  sd      s7, 0(s5)                       # the chunk leaves the list
     ld      t0, (L + ChunkHeader_header_bytes)(sp)
     ld      t1, (L + 64)(sp)
@@ -3547,7 +4158,9 @@ LOCAL_FUNCTION node_response
     addi    a0, s3, NodeStream_request
     add     a1, a0, t0
     call    lantern_copy
-    li      t0, REQRESP_STATUS              # Status: one chunk
+    li      t0, REQRESP_STATUS              # Status and MetaData: one chunk
+    beq     s4, t0, 80f
+    li      t0, REQRESP_METADATA
     beq     s4, t0, 80f
     j       1b
 5:  sd      s7, 0(s5)                       # part of a chunk: more bytes, or the end after STREAM_EOF
@@ -3568,15 +4181,21 @@ LOCAL_FUNCTION node_response
 END_FUNCTION node_response
 
 /*
- * a0 = 1 when a response waits for room, else 0. The bytes of each response are read; then,
- * with no BeaconBlocksByRange of the node open, one to a peer of the node's ForkDigest whose
- * Status head_slot is at least the next slot: max(the head's slot + 1, sync_slot), at most
- * NODE_SYNC_BATCH slots. Before it, with room for two streams, a BlobSidecarsByRange of the
- * range's slots in the blob window before fulu. s3 a peer, s4 the streams or peers left, s7 the
- * result, s8 the start slot. Locals: L the request (24), L+24 the blob request (16).
+ * a0 = 1 when a response waits for room, else 0. The bytes of each response are read. From
+ * fulu, each peer with a Status and no MetaData asked gets a GetMetaData v3. Then, with no
+ * BeaconBlocksByRange of the node open, one to a peer of the node's ForkDigest (from fulu, with its
+ * MetaData read) whose Status head_slot is at least the next slot: max(the head's slot + 1,
+ * sync_slot), at most NODE_SYNC_BATCH slots. Before it, with room for two streams, a
+ * BlobSidecarsByRange of the range's slots in the blob window before fulu; from fulu, a
+ * DataColumnSidecarsByRange of the range's slots in the column window to each peer whose custody
+ * holds sampled columns no earlier peer was asked for, with room for those and the blocks'
+ * request. s3 a peer, s4 the streams or peers left, s7 the result, s8 the start slot, s9 a column
+ * request at the end of scratch, s10 the scratch size. Locals: L the request (24), L+24 the blob
+ * or column range (16), L+40 the fork of the store's slot, L+48 the columns asked (16), L+64 the
+ * pass (0 counts, 1 sends), L+72 the column requests, L+80 the peer of the blocks.
  */
 LOCAL_FUNCTION node_sync
-    ENTER 48
+    ENTER 96
     li      s7, 0
     ld      s4, (Node_streams + 8)(s1)      # the responses, from the last stream: an end moves the last
 1:  beqz    s4, 3f
@@ -3592,7 +4211,42 @@ LOCAL_FUNCTION node_sync
     call    node_response
     or      s7, s7, a0
     j       1b
-3:  ld      t0, Node_flags(s1)
+3:  mv      a0, s2                          # the fork of the store's slot
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    sd      a0, (L + 40)(sp)
+    li      t0, FORK_FULU
+    bltu    a0, t0, 31f
+    PART    s3, s4, s1, Node_peers          # fulu: a GetMetaData v3 to each peer with a Status and none asked
+30: beqz    s4, 31f
+    ld      t0, NodePeer_flags(s3)
+    andi    t1, t0, NODE_PEER_STATUS
+    beqz    t1, 32f
+    andi    t1, t0, NODE_PEER_METADATA | NODE_PEER_METADATA_ASKED
+    bnez    t1, 32f
+    ld      t0, (Node_streams + 8)(s1)      # room for it and two more
+    ld      t1, Node_messages(s1)
+    ld      t2, Node_streams(s1)
+    sub     t1, t1, t2
+    ld      t2, Node_stream_bytes(s1)
+    divu    t1, t1, t2
+    addi    t0, t0, 3
+    bgtu    t0, t1, 31f
+    li      a0, REQRESP_METADATA
+    li      a1, 3
+    ld      a2, NodePeer_handle(s3)
+    li      a3, 0
+    li      a4, 0
+    call    node_open
+    beqz    a0, 31f
+    ld      t0, NodePeer_flags(s3)
+    ori     t0, t0, NODE_PEER_METADATA_ASKED
+    sd      t0, NodePeer_flags(s3)
+32: addi    s3, s3, NodePeer__mem
+    addi    s4, s4, -1
+    j       30b
+31: ld      t0, Node_flags(s1)
     andi    t0, t0, NODE_FLAG_SYNCING
     bnez    t0, 9f
     addi    a0, s1, Node_head_root
@@ -3602,14 +4256,19 @@ LOCAL_FUNCTION node_sync
     ld      s8, NodeBlock_slot(a1)
     addi    s8, s8, 1
     ld      t0, Node_sync_slot(s1)
-    bleu    t0, s8, 31f
+    bleu    t0, s8, 33f
     mv      s8, t0
-31: PART    s3, s4, s1, Node_peers          # a peer ahead
+33: PART    s3, s4, s1, Node_peers          # a peer ahead
 4:  beqz    s4, 9f
     ld      t0, NodePeer_flags(s3)
-    andi    t0, t0, NODE_PEER_STATUS
-    beqz    t0, 5f
-    ld      t0, NodePeer_fork_digest(s3)
+    andi    t1, t0, NODE_PEER_STATUS
+    beqz    t1, 5f
+    ld      t1, (L + 40)(sp)                # from fulu: its MetaData read
+    li      t2, FORK_FULU
+    bltu    t1, t2, 41f
+    andi    t1, t0, NODE_PEER_METADATA
+    beqz    t1, 5f
+41: ld      t0, NodePeer_fork_digest(s3)
     ld      t1, Node_fork_digest(s1)
     bne     t0, t1, 5f
     ld      t0, NodePeer_head_slot(s3)
@@ -3617,7 +4276,8 @@ LOCAL_FUNCTION node_sync
 5:  addi    s3, s3, NodePeer__mem
     addi    s4, s4, -1
     j       4b
-6:  sub     t0, t0, s8                      # the request: start_slot, count, step 1
+6:  sd      s3, (L + 80)(sp)
+    sub     t0, t0, s8                      # the request: start_slot, count, step 1
     addi    t0, t0, 1
     li      t1, NODE_SYNC_BATCH
     bleu    t0, t1, 61f
@@ -3626,19 +4286,11 @@ LOCAL_FUNCTION node_sync
     sd      t0, (L + 8)(sp)
     li      t0, 1
     sd      t0, (L + 16)(sp)
-    mv      a0, s2                          # the blob window's first slot: of max(store epoch - MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS, DENEB_FORK_EPOCH)
-    call    node_store_slot
+    LDQ     a0, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS   # the blob window's first slot
+    li      a1, FORK_DENEB
+    call    node_window
     li      t0, SLOTS_PER_EPOCH
-    divu    a0, a0, t0
-    LDQ     t1, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS
-    sub     t2, a0, t1
-    sltu    t3, a0, t1
-    addi    t3, t3, -1
-    and     a0, t2, t3
-    LDQ     t1, s1, Node_config + 16 * FORK_DENEB
-    bgeu    a0, t1, 62f
-    mv      a0, t1
-62: mulhu   t1, a0, t0
+    mulhu   t1, a0, t0
     bnez    t1, 66f
     mul     a0, a0, t0
     ld      t2, L(sp)                       # the range from there, before fulu's first slot
@@ -3673,7 +4325,119 @@ LOCAL_FUNCTION node_sync
     li      a4, 16
     call    node_open
     beqz    a0, 9f
-66: mv      a0, s2                          # version 2 from altair on
+66: ld      t0, (L + 40)(sp)                # fulu: the column requests
+    li      t1, FORK_FULU
+    bltu    t0, t1, 71f
+    LDQ     a0, s1, Node_config + CONFIG_MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS   # the column window's first slot
+    li      a1, FORK_FULU
+    call    node_window
+    li      t0, SLOTS_PER_EPOCH
+    mulhu   t1, a0, t0
+    bnez    t1, 71f
+    mul     a0, a0, t0
+    ld      t2, L(sp)                       # the range from there
+    ld      t3, (L + 8)(sp)
+    add     t3, t2, t3
+    bgeu    t3, t2, 67f
+    li      t3, -1
+67: bgeu    t2, a0, 68f
+    mv      t2, a0
+68: bgeu    t2, t3, 71f
+    sub     t3, t3, t2
+    sd      t2, (L + 24)(sp)
+    sd      t3, (L + 32)(sp)
+    ld      s10, 0(s5)                      # the request's bytes at the end of scratch
+    li      t0, 24 + 8 * 128                # 8-aligned
+    bltu    s10, t0, 9f
+    sub     t0, s10, t0
+    sd      t0, 0(s5)
+    add     s9, s5, t0
+    sd      zero, (L + 64)(sp)              # first count the requests, then send them
+72: sd      zero, (L + 48)(sp)
+    sd      zero, (L + 56)(sp)
+    sd      zero, (L + 72)(sp)
+    PART    s3, s4, s1, Node_peers
+73: beqz    s4, 76f
+    ld      t0, NodePeer_flags(s3)
+    andi    t0, t0, NODE_PEER_METADATA
+    beqz    t0, 75f
+    ld      t0, Node_columns(s1)            # the sampled columns it custodies, not asked yet
+    ld      t1, NodePeer_custody(s3)
+    and     t0, t0, t1
+    ld      t1, (L + 48)(sp)
+    not     t1, t1
+    and     t0, t0, t1
+    ld      t2, (Node_columns + 8)(s1)
+    ld      t1, (NodePeer_custody + 8)(s3)
+    and     t2, t2, t1
+    ld      t1, (L + 56)(sp)
+    not     t1, t1
+    and     t2, t2, t1
+    or      t1, t0, t2
+    beqz    t1, 75f
+    ld      t1, (L + 48)(sp)
+    or      t1, t1, t0
+    sd      t1, (L + 48)(sp)
+    ld      t1, (L + 56)(sp)
+    or      t1, t1, t2
+    sd      t1, (L + 56)(sp)
+    ld      t1, (L + 72)(sp)
+    addi    t1, t1, 1
+    sd      t1, (L + 72)(sp)
+    ld      t1, (L + 64)(sp)
+    beqz    t1, 75f
+    ld      t1, (L + 24)(sp)                # start_slot, count, the offset 20, the columns in ascending order
+    sd      t1, 0(s9)
+    ld      t1, (L + 32)(sp)
+    sd      t1, 8(s9)
+    li      t1, 20
+    sw      t1, 16(s9)
+    addi    t3, s9, 20
+    li      t4, 0
+74: li      t5, 128
+    bgeu    t4, t5, 741f
+    mv      t5, t0
+    li      t6, 64
+    bltu    t4, t6, 743f
+    mv      t5, t2
+743: srl    t5, t5, t4
+    andi    t5, t5, 1
+    beqz    t5, 742f
+    sw      t4, 0(t3)                       # a column, 4-aligned: two words
+    sw      zero, 4(t3)
+    addi    t3, t3, 8
+742: addi   t4, t4, 1
+    j       74b
+741: li     a0, REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE
+    li      a1, 1
+    ld      a2, NodePeer_handle(s3)
+    mv      a3, s9
+    sub     a4, t3, s9
+    call    node_open
+    beqz    a0, 78f
+75: addi    s3, s3, NodePeer__mem
+    addi    s4, s4, -1
+    j       73b
+76: ld      t0, (L + 64)(sp)
+    bnez    t0, 77f
+    ld      t0, (L + 72)(sp)                # room for the column requests and the blocks' request
+    ld      t1, (Node_streams + 8)(s1)
+    add     t0, t0, t1
+    addi    t0, t0, 1
+    ld      t1, Node_messages(s1)
+    ld      t2, Node_streams(s1)
+    sub     t1, t1, t2
+    ld      t2, Node_stream_bytes(s1)
+    divu    t1, t1, t2
+    bgtu    t0, t1, 78f
+    li      t0, 1
+    sd      t0, (L + 64)(sp)
+    j       72b
+78: sd      s10, 0(s5)
+    j       9f
+77: sd      s10, 0(s5)
+71: ld      s3, (L + 80)(sp)
+    mv      a0, s2                          # version 2 from altair on
     call    node_store_slot
     addi    a1, s1, Node_config
     call    node_fork
@@ -3695,7 +4459,7 @@ LOCAL_FUNCTION node_sync
     add     t0, t0, t1
     sd      t0, Node_sync_slot(s1)
 9:  mv      a0, s7
-    LEAVE 48
+    LEAVE 96
 END_FUNCTION node_sync
 
 /*
@@ -3727,6 +4491,7 @@ LOCAL_FUNCTION node_notice
     sd      t0, NodeStream_state(s4)
     sd      zero, NodeStream_next(s4)
     ld      s8, (NodeStream_list + 16)(s4)
+    beqz    s8, 66f                         # no request bytes: only the close
     addi    s7, s8, 32 + 7
     andi    s7, s7, -8
     addi    a0, s7, 24
@@ -3750,6 +4515,14 @@ LOCAL_FUNCTION node_notice
     call    lantern_copy
     sd      zero, (NodeStream_list + 16)(s4)
 69: LEAVE 96
+66: li      a0, 24
+    call    node_out
+    beqz    a0, 68f
+    li      t0, LIBP2P_EVENT_STREAM_CLOSE
+    sd      t0, 8(a0)
+    ld      t0, NodeStream_handle(s4)
+    sd      t0, 16(a0)
+    LEAVE 96
 68: li      a0, LIBP2P_EVENT_STREAM_RESET   # no room: a reset
     ld      a1, NodeStream_handle(s4)
     call    node_out_handle
@@ -4352,6 +5125,8 @@ FUNCTION lantern_node_step
     add     t0, t0, t2
     j       1b
 5:  sd      t5, L(sp)
+    call    node_column_count               # the columns sampled, for the blobs part
+    sd      a0, (L + 152)(sp)
     li      t1, 512                         # room: actions, node parts, scratch
     mul     t1, s8, t1
     add     t1, t1, s10
@@ -4397,6 +5172,9 @@ FUNCTION lantern_node_step
     beqz    t2, 549f
     LDQ     t2, s1, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK
     LDQ     t3, s1, Node_config + CONFIG_MAX_BLOBS_PER_BLOCK_ELECTRA
+    bgeu    t2, t3, 547f
+    mv      t2, t3
+547: ld     t3, (L + 152)(sp)
     bgeu    t2, t3, 548f
     mv      t2, t3
 548: srli   t3, t2, 32
@@ -4798,17 +5576,27 @@ FUNCTION lantern_node_run
 99: LEAVE 192
 50: li      t1, NODE_WORK_SERVE
     bne     t0, t1, 60f
-    ld      t0, NodeAction_arg(s3)          # SERVE: s10 1 for a blob method
+    ld      t0, NodeAction_arg(s3)          # SERVE: s10 1 for a blob method, 2 for a column method
     srli    t0, t0, 8
     addi    t1, t0, -REQRESP_BLOB_SIDECARS_BY_RANGE
     addi    t2, t0, -REQRESP_BLOB_SIDECARS_BY_ROOT
     seqz    t1, t1
     seqz    t2, t2
     or      s10, t1, t2
+    addi    t1, t0, -REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE
+    addi    t2, t0, -REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT
+    seqz    t1, t1
+    seqz    t2, t2
+    or      t1, t1, t2
+    slli    t1, t1, 1
+    or      s10, s10, t1
     ld      t0, 16(s5)                      # the chunk of the block's or sidecar's bytes, with room for it
     li      t1, 100 + 84
     beqz    s10, 501f
     li      t1, NODE_BLOB_HEADER + 8
+    li      t2, 1
+    beq     s10, t2, 501f
+    li      t1, NODE_COLUMN_HEADER + 8
 501: bltu   t0, t1, 18b
     sd      t0, L(sp)
     addi    a0, sp, L
@@ -4823,7 +5611,11 @@ FUNCTION lantern_node_run
     bnez    s10, 502f
     LDU64   s9, t0, 100, t1
     j       503f
-502: LDQ    s9, t0, NODE_BLOB_HEADER
+502: li     t1, 2
+    beq     s10, t1, 504f
+    LDQ     s9, t0, NODE_BLOB_HEADER
+    j       503f
+504: LDU64  s9, t0, NODE_COLUMN_HEADER, t1
 503: mv     a0, s9
     addi    a1, s1, Node_config
     call    node_fork
@@ -4926,6 +5718,8 @@ FUNCTION lantern_node_run
     LEAVE 192
 80: li      t1, NODE_WORK_BLOB
     bne     t0, t1, 82f
+    ld      t0, NodeAction_arg(s3)
+    bnez    t0, 88f
     ld      t0, 16(s5)                      # BLOB: node_blob_sidecar of the fork of its slot, deneb or electra
     li      t1, NODE_BLOB_HEADER + 8
     bltu    t0, t1, 18b
@@ -4948,6 +5742,24 @@ FUNCTION lantern_node_run
 81: li      t0, FORK_ELECTRA
     bne     t6, t0, 18b
     CALL_GLOBAL lantern_electra_node_blob_sidecar
+    LEAVE 192
+88: ld      t0, 16(s5)                      # arg 1: node_column_sidecar, of a slot of fulu
+    li      t1, NODE_COLUMN_HEADER + 8
+    bltu    t0, t1, 18b
+    ld      t0, 8(s5)
+    add     t0, s5, t0
+    LDU64   a0, t0, NODE_COLUMN_HEADER, t1
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      t0, FORK_FULU
+    bne     a0, t0, 18b
+    mv      a0, s5
+    addi    a1, s1, Node_config
+    ld      a2, (L + 88)(sp)
+    mv      a3, s6
+    addi    a4, s7, NodeEvent_result
+    addi    a5, s7, NodeEvent_root
+    CALL_GLOBAL lantern_fulu_node_column_sidecar
     LEAVE 192
 82: li      t1, NODE_WORK_NEW_PAYLOAD
     bne     t0, t1, 83f

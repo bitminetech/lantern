@@ -465,6 +465,8 @@ LOCAL_FUNCTION app_start
     str     x9, [x19, #APP_FLAGS]
     bl      app_engine_conf                 /* the execution engine */
     cbnz    x0, 99f
+    bl      app_key                         /* the key, and the anchor's node ID */
+    cbnz    x0, 94f
     add     x0, x19, #APP_NODE_ROOM         /* the node */
     ADDRESS x1, app_node_room
     mov     x2, #80
@@ -1276,6 +1278,62 @@ END_FUNCTION app_boot_nodes
  * --port, and the boot nodes: x0 = 0, or 2 after a line on the standard error. x20 the config,
  * x21 the tries. Locals: L a size or a status, L+8 ShellParams, L+32 an Address, L+64 a ListenResult.
  */
+/*
+ * L1: a new secp256k1 key at APP_KEY from fresh random bytes, below 2^255 and so below the order
+ * of the curve (a zero key tries again, up to 4 times), and the anchor's node_id: keccak256 of
+ * its point, x then y, in reverse byte order: x0 = 0, or a status. x21 the tries, x22 APP_KEY.
+ * Locals: L the public key (40), L+48 the point (64), L+112 a ByteList of the point (88), L+200
+ * the digest (32).
+ */
+LOCAL_FUNCTION app_key
+    ENTER 240
+    mov     x21, #0
+    add     x22, x19, #APP_KEY
+1:  add     x0, x19, #APP_TICK
+    CALL_GLOBAL libp2p_shell_clock
+    mov     x0, x22
+    add     x1, x19, #(APP_TICK + LIBP2P_TICK_ENTROPY)
+    mov     x2, #32
+    bl      lantern_copy
+    ldrb    w9, [x22]
+    and     w9, w9, #0x7f
+    strb    w9, [x22]
+    mov     x0, x22
+    add     x1, sp, #L
+    CALL_GLOBAL crypto_secp256k1_public_key
+    cbz     x0, 2f
+    add     x21, x21, #1
+    cmp     x21, #4
+    b.lo    1b
+    LEAVE 240
+2:  add     x0, sp, #L
+    add     x1, sp, #(L + 48)
+    CALL_GLOBAL crypto_secp256k1_decompress
+    cbnz    x0, 9f
+    mov     x9, #(24 + 64)                  /* keccak256(x || y) */
+    mov     x10, #24
+    stp     x9, x10, [sp, #(L + 112)]
+    mov     x9, #64
+    str     x9, [sp, #(L + 128)]
+    add     x0, sp, #(L + 136)
+    add     x1, sp, #(L + 48)
+    mov     x2, #64
+    bl      lantern_copy
+    add     x0, sp, #(L + 112)
+    add     x1, sp, #(L + 200)
+    CALL_GLOBAL crypto_keccak256
+    cbnz    x0, 9f
+    add     x10, sp, #(L + 200)             /* the NodeID: the digest's bytes in reverse order */
+    add     x11, x19, #(APP_ANCHOR + NodeAnchor_node_id + 31)
+    mov     x9, #32
+3:  ldrb    w12, [x10], #1
+    strb    w12, [x11], #-1
+    subs    x9, x9, #1
+    b.ne    3b
+    mov     x0, #0
+9:  LEAVE 240
+END_FUNCTION app_key
+
 LOCAL_FUNCTION app_net
     ENTER 112
     mov     x0, #APP_P2P_CONFIG             /* the config: the template, then the protocols */
@@ -1300,18 +1358,8 @@ LOCAL_FUNCTION app_net
     mov     x11, #LIBP2P_PROTO_SIZE
     madd    x9, x9, x11, x10
     str     x9, [x20]
-    mov     x21, #0
-1:  add     x0, x19, #APP_TICK              /* a key from fresh random bytes, below the order of the curve */
-    CALL_GLOBAL libp2p_shell_clock
-    add     x0, x20, #16
-    add     x1, x19, #(APP_TICK + LIBP2P_TICK_ENTROPY)
-    mov     x2, #32
-    bl      lantern_copy
-    ldrb    w9, [x20, #16]
-    and     w9, w9, #0x7f
-    strb    w9, [x20, #16]
-    add     x0, x19, #APP_KEY
-    add     x1, x20, #16
+    add     x0, x20, #16                    /* the key of app_key */
+    add     x1, x19, #APP_KEY
     mov     x2, #32
     bl      lantern_copy
     add     x0, x19, #APP_TICK              /* the DRBG's entropy, and the time */
@@ -1333,17 +1381,8 @@ LOCAL_FUNCTION app_net
     mov     x1, x0
     mov     x0, x20
     CALL_GLOBAL libp2p_init
-    cbz     x0, 2f
-    cmp     x0, #LIBP2P_INVALID_KEY
-    b.ne    96f
-    mov     x0, #APP_P2P
-    bl      app_unmap
-    add     x21, x21, #1
-    cmp     x21, #4
-    b.lo    1b
-    mov     x0, #LIBP2P_INVALID_KEY
-    b       96f
-2:  ldr     x9, [x20, #88]                  /* the shell: a slot for each connection, and one for the execution engine */
+    cbnz    x0, 96f
+    ldr     x9, [x20, #88]                  /* the shell: a slot for each connection, and one for the execution engine */
     add     x9, x9, #1
     ldr     x10, [x20, #160]
     stp     x9, x10, [sp, #(L + 8)]
