@@ -2477,9 +2477,15 @@ static const uint8_t *shell_state_of(fc_node *n, const uint8_t *root) {
 }
 
 /* The resize step for the node: copy it with twice the capacity of each part. */
-static void shell_grow_node(struct node_shell *s, const char **why) {
+/* The node in a new buffer with the NodeRoom field at byte offset field doubled. */
+static void shell_grow_node(struct node_shell *s, uint64_t field, const char **why) {
     uint64_t room[NODE_ROOM_FIELDS], need = 0;
-    for (int i = 0; i < NODE_ROOM_FIELDS; i++) room[i] = 2 * s->room[i];
+    if (field % 8 || field / 8 >= NODE_ROOM_FIELDS) {
+        *why = "lantern_node_step: room is no NodeRoom field";
+        return;
+    }
+    memcpy(room, s->room, sizeof room);
+    room[field / 8] *= 2;
     if (CALL(lantern_node_size, room, &need) != 0) {
         *why = "lantern_node_size status";
         return;
@@ -2633,7 +2639,7 @@ static void shell_discv5(struct node_shell *s, const uint8_t *ev, uint64_t len, 
 /* One lantern_node_step with the pending events, again with more room while it asks for it, then its actions in order. */
 static void shell_step(fc_node *n, const char **why) {
     struct node_shell *s = n->shell;
-    uint64_t len = s->pending_len, esize = 24 + len, count[3] = {0, 0, 0}, nevents = 0, st = 1;
+    uint64_t len = s->pending_len, esize = 24 + len, count[4] = {0, 0, 0, 0}, nevents = 0, st = 1;
     uint8_t *events = buffer(esize);
     wr64(events, esize);
     wr64(events + 8, 24);
@@ -2641,7 +2647,7 @@ static void shell_step(fc_node *n, const char **why) {
     memcpy(events + 24, s->pending, (size_t)len);
     s->pending_len = 0;
     for (uint64_t at = 0; at < len; at += rd64(events + 24 + at)) nevents++;
-    for (int t = 0; t < 32 && st == 1 && !*why; t++) {
+    for (int t = 0; t < 128 && st == 1 && !*why; t++) {
         wr64(s->actions + 8, 24);
         wr64(s->actions + 16, 0);
         uint8_t *snode = copy_of(s->node, s->node_size), *sstore = copy_of(n->store, n->size), tick[56];
@@ -2657,8 +2663,8 @@ static void shell_step(fc_node *n, const char **why) {
         free(sstore);
         free(sp2p);
         if (st != 1 || *why) break;
-        if (count[2] == 2) { /* BUFFER_TOO_SMALL: the buffer that short names */
-            shell_grow_node(s, why);
+        if (count[2] == 2) { /* BUFFER_TOO_SMALL: the buffer that short names, and of the node the field room names */
+            shell_grow_node(s, count[3], why);
         } else if (count[2] == 1) {
             free(s->actions);
             s->actions_size *= 2;

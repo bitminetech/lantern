@@ -710,8 +710,8 @@ LOCAL_FUNCTION app_event_put
 END_FUNCTION app_event_put
 
 /*
- * L1: the node (x0 = 0), the store (1) or the Seen (2) moves to new memory, with each field of its
- * room doubled: x0 = 0, or 1. x20 the kind, x21 the pair, x22 the room, x23 the room's fields,
+ * L1: the node (x0 = 0), the store (1) or the Seen (2) moves to new memory, with the field of its
+ * room at byte offset x1 doubled, or each field for x1 = 2^64 - 1: x0 = 0, or 1. x20 the kind, x21 the pair, x22 the room, x23 the room's fields,
  * x24 the new memory. Locals: L a size, L+8 an address.
  */
 LOCAL_FUNCTION app_grow
@@ -732,7 +732,18 @@ LOCAL_FUNCTION app_grow
     mov     x23, #4
 2:  add     x21, x19, x9
     add     x22, x19, x10
-    mov     x9, #0
+    cmn     x1, #1                          /* one field: its offset, below the fields and a multiple of 8 */
+    b.eq    31f
+    lsl     x9, x23, #3
+    cmp     x1, x9
+    b.hs    9f
+    tst     x1, #7
+    b.ne    9f
+    ldr     x10, [x22, x1]
+    lsl     x10, x10, #1
+    str     x10, [x22, x1]
+    b       4f
+31: mov     x9, #0
 3:  cmp     x9, x23
     b.hs    4f
     ldr     x10, [x22, x9, lsl #3]
@@ -910,6 +921,7 @@ LOCAL_FUNCTION app_work
     cmp     x9, x10
     b.lo    4f
 5:  mov     x0, #1                          /* else the store */
+    mov     x1, #-1
     bl      app_grow
     cbnz    x0, 91f
     b       1b
@@ -924,6 +936,7 @@ LOCAL_FUNCTION app_work
     cbz     x0, 91f
     b       1b
 3:  mov     x0, #2                          /* the Seen */
+    mov     x1, #-1
     bl      app_grow
     cbnz    x0, 91f
     cbz     x22, 1b
@@ -1064,12 +1077,13 @@ LOCAL_FUNCTION app_step
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.ne    2f
     add     x22, x22, #1
-    cmp     x22, #APP_WORK_TRIES
+    cmp     x22, #APP_STEP_TRIES
     b.hs    21f
     ldr     x9, [x19, #(APP_RESULT + NodeStepResult_short)]   /* the buffer short of room grows */
     cmp     x9, #NODE_SHORT_NODE
     b.ne    11f
-    mov     x0, #0                          /* the node */
+    mov     x0, #0                          /* the node: the field that is short */
+    ldr     x1, [x19, #(APP_RESULT + NodeStepResult_room)]
     bl      app_grow
     cbnz    x0, 21f
     b       1b

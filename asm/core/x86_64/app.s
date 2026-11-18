@@ -758,8 +758,8 @@ LOCAL_FUNCTION app_event_put
 END_FUNCTION app_event_put
 
 /*
- * L1: the node (rdi = 0), the store (1) or the Seen (2) moves to new memory, with each field of its
- * room doubled: rax = 0, or 1. rbp the kind, r12 the pair, r13 the room, r14 the room's fields,
+ * L1: the node (rdi = 0), the store (1) or the Seen (2) moves to new memory, with the field of its
+ * room at byte offset rsi doubled, or each field for rsi = 2^64 - 1: rax = 0, or 1. rbp the kind, r12 the pair, r13 the room, r14 the room's fields,
  * r15 the new memory. Locals: L a size, L+8 an address.
  */
 LOCAL_FUNCTION app_grow
@@ -780,7 +780,16 @@ LOCAL_FUNCTION app_grow
     mov     $4, %r14d
 2:  lea     (%rbx,%rax), %r12
     lea     (%rbx,%rcx), %r13
-    xor     %ecx, %ecx
+    cmp     $-1, %rsi                       # one field: its offset, below the fields and a multiple of 8
+    je      31f
+    lea     (,%r14,8), %rcx
+    cmp     %rcx, %rsi
+    jae     9f
+    test    $7, %esi
+    jnz     9f
+    shlq    $1, (%r13,%rsi)
+    jmp     4f
+31: xor     %ecx, %ecx
 3:  cmp     %r14, %rcx
     jae     4f
     shlq    $1, (%r13,%rcx,8)
@@ -974,6 +983,7 @@ LOCAL_FUNCTION app_work
     cmp     (APP_STORE_ROOM + StoreRoom_nodes)(%rbx), %rcx
     jb      4f
 5:  mov     $1, %edi                        # else the store
+    mov     $-1, %rsi
     call    app_grow
     test    %rax, %rax
     jnz     91f
@@ -990,6 +1000,7 @@ LOCAL_FUNCTION app_work
     jz      91f
     jmp     1b
 3:  mov     $2, %edi                        # the Seen
+    mov     $-1, %rsi
     call    app_grow
     test    %rax, %rax
     jnz     91f
@@ -1144,12 +1155,13 @@ LOCAL_FUNCTION app_step
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     jne     2f
     inc     %r13
-    cmp     $APP_WORK_TRIES, %r13
+    cmp     $APP_STEP_TRIES, %r13
     jae     21f
     mov     (APP_RESULT + NodeStepResult_short)(%rbx), %rax  # the buffer short of room grows
     cmp     $NODE_SHORT_NODE, %rax
     jne     11f
-    xor     %edi, %edi                      # the node
+    xor     %edi, %edi                      # the node: the field that is short
+    mov     (APP_RESULT + NodeStepResult_room)(%rbx), %rsi
     call    app_grow
     test    %rax, %rax
     jnz     21f

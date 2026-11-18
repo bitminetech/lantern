@@ -685,7 +685,8 @@
 .set NodeStepResult_accepted, 0        /* events handled, from the first */
 .set NodeStepResult_wakeup, 8          /* monotonic ms by which the next step is due; 2^64 - 1 for none */
 .set NodeStepResult_short, 16          /* with LANTERN_BUFFER_TOO_SMALL: NODE_SHORT_* */
-.set NodeStepResult__size, 24
+.set NodeStepResult_room, 24           /* with NODE_SHORT_NODE: the offset in NodeRoom of the capacity that is short */
+.set NodeStepResult__size, 32
 .set NODE_SHORT_ACTIONS, 1             /* the room of actions, or libp2p_step's */
 .set NODE_SHORT_NODE, 2                /* a part of the node */
 .set NODE_SHORT_SCRATCH, 3             /* the room of scratch, or lantern_node_block_root's */

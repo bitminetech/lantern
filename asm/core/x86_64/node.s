@@ -4195,16 +4195,17 @@ END_FUNCTION node_block_entry
 /*
  * (node, store, p2p, tick, events, scratch, actions, result): rbx node, rbp store, r12 the
  * events, r13 their end, r14 scratch, r15 actions, S7 result, S8 the event count, S9 an event,
- * S10 a root entry at the end of scratch. The first pass counts in r8 the events, r9 the BLOCK,
- * POW_BLOCK and GOSSIP WORK_DONE events, r10 the event bytes, r11 the WORK_DONE events. Locals: L the WORK_DONE
+ * S10 a root entry at the end of scratch. The first pass counts in r8 the events, r9 the BLOCK
+ * and GOSSIP WORK_DONE events, r10 the event bytes, r11 the WORK_DONE events. Locals: L the WORK_DONE
  * events, L+8 the scratch size, L+16 p2p, L+24 tick, L+32 the end of the events handled, L+40
  * the queue's free bytes the P2P events take, saved, L+48 the libp2p scratch, L+56 the bytes of the P2P events, L+64 the P2P
  * events, L+72 the action room kept for the node, L+80 wakeup, L+88 libp2p's StepResult, L+96
  * libp2p's actions, L+104 the libp2p steps, L+112 a stream waits, L+120 the GOSSIP WORK_DONE events,
- * L+128 the bytes of the ENGINE events, L+136 1 with an ENR event.
+ * L+128 the bytes of the ENGINE events, L+136 1 with an ENR event,
+ * L+144 the POW_BLOCK events.
  */
 FUNCTION lantern_node_step
-    ENTER 144
+    ENTER 160
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     %rdx, (L + 16)(%rsp)
@@ -4214,8 +4215,8 @@ FUNCTION lantern_node_step
     mov     16(%r8), %r13
     add     %r12, %r13
     mov     %r9, %r14
-    mov     (144 + 96)(%rsp), %r15          # the seventh and eighth arguments
-    mov     (144 + 104)(%rsp), %rax
+    mov     (160 + 96)(%rsp), %r15          # the seventh and eighth arguments
+    mov     (160 + 104)(%rsp), %rax
     mov     %rax, S7(%rsp)
     xor     %r8d, %r8d                      # first: check every event, and count
     xor     %r9d, %r9d
@@ -4226,6 +4227,7 @@ FUNCTION lantern_node_step
     movq    $0, (L + 120)(%rsp)
     movq    $0, (L + 128)(%rsp)
     movq    $0, (L + 136)(%rsp)
+    movq    $0, (L + 144)(%rsp)
     mov     %r12, %rdi
 1:  cmp     %r13, %rdi
     jae     5f
@@ -4331,6 +4333,8 @@ FUNCTION lantern_node_step
     je      31f
     cmp     $NODE_EV_POW_BLOCK, %rdx
     jne     4f
+    incq    (L + 144)(%rsp)                 # POW_BLOCK: counted at L+144
+    jmp     4f
 31: inc     %r9
 4:  inc     %r8
     add     %rcx, %r10
@@ -4366,7 +4370,7 @@ FUNCTION lantern_node_step
     mov     $NODE_SYNC_BATCH, %ecx
 1:  add     %r9, %rcx
     cmp     %rcx, %rax
-    jb      82f
+    jb      85f
     mov     Node_p2p_out(%rbx), %rax        # blobs: one for each GOSSIP WORK_DONE event, and with p2p a batch's sidecars
     sub     Node_blobs(%rbx), %rax
     xor     %edx, %edx
@@ -4382,17 +4386,17 @@ FUNCTION lantern_node_step
     cmovb   %rsi, %rdx
     mov     %rdx, %rsi
     shr     $32, %rsi
-    jnz     82f
+    jnz     86f
     imul    $NODE_SYNC_BATCH, %rdx, %rdx
     add     %rdx, %rcx
 54: cmp     %rcx, %rax
-    jb      82f
+    jb      86f
     mov     Node_engine_in(%rbx), %rax      # engine_in: the bytes of the ENGINE events
     mov     (%rbx,%rax), %rcx
     sub     $24, %rcx
     sub     16(%rbx,%rax), %rcx
     cmp     (L + 128)(%rsp), %rcx
-    jb      82f
+    jb      87f
     mov     Node_pow_blocks(%rbx), %rax     # checkpoints: two for each WORK_DONE event, and two
     sub     Node_checkpoints(%rbx), %rax
     xor     %edx, %edx
@@ -4401,15 +4405,15 @@ FUNCTION lantern_node_step
     sub     (Node_checkpoints + 8)(%rbx), %rax
     lea     2(%r11,%r11), %rcx
     cmp     %rcx, %rax
-    jb      82f
+    jb      88f
     mov     Node_peers(%rbx), %rax          # pow blocks: one for each POW_BLOCK event
     sub     Node_pow_blocks(%rbx), %rax
     xor     %edx, %edx
     mov     $POW_BLOCK_BYTES, %ecx
     div     %rcx
     sub     (Node_pow_blocks + 8)(%rbx), %rax
-    cmp     %r9, %rax
-    jb      82f
+    cmp     (L + 144)(%rsp), %rax
+    jb      89f
     imul    $NODE_ROOT_ENTRY, %r9, %r8      # scratch: the root entries, and with p2p the queue's bytes the P2P events take and libp2p's scratch, at its end
     cmpq    $0, (L + 16)(%rsp)
     je      52f
@@ -4418,7 +4422,7 @@ FUNCTION lantern_node_step
     sub     $24, %rax
     sub     16(%rcx), %rax
     cmp     (L + 56)(%rsp), %rax
-    jb      82f
+    jb      90f
     add     (L + 56)(%rsp), %r8
     add     $LIBP2P_SCRATCH_SIZE, %r8
 52: mov     Store_validators(%rbp), %rax    # and what get_head needs
@@ -4597,21 +4601,34 @@ FUNCTION lantern_node_step
     mov     (L + 80)(%rsp), %rax
     mov     %rax, NodeStepResult_wakeup(%rdi)
     xor     %eax, %eax
-    LEAVE 144
+    LEAVE 160
 14: mov     (L + 8)(%rsp), %rcx             # a status before any change
     mov     %rcx, (%r14)
-    LEAVE 144
+    LEAVE 160
 7:  mov     $LANTERN_INVALID_EVENT, %eax
-    LEAVE 144
+    LEAVE 160
 81: mov     $NODE_SHORT_ACTIONS, %ecx       # the buffer with too little room
     jmp     84f
-82: mov     $NODE_SHORT_NODE, %ecx
+85: mov     $NodeRoom_blocks, %ecx          # a part of the node: the NodeRoom field of its capacity
+    jmp     82f
+86: mov     $NodeRoom_blobs, %ecx
+    jmp     82f
+87: mov     $NodeRoom_engine_bytes, %ecx
+    jmp     82f
+88: mov     $NodeRoom_checkpoints, %ecx
+    jmp     82f
+89: mov     $NodeRoom_pow_blocks, %ecx
+    jmp     82f
+90: mov     $NodeRoom_p2p_out, %ecx
+82: mov     S7(%rsp), %rdx
+    mov     %rcx, NodeStepResult_room(%rdx)
+    mov     $NODE_SHORT_NODE, %ecx
     jmp     84f
 83: mov     $NODE_SHORT_SCRATCH, %ecx
 84: mov     S7(%rsp), %rdx
     mov     %rcx, NodeStepResult_short(%rdx)
 8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 144
+    LEAVE 160
 END_FUNCTION lantern_node_step
 
 /*

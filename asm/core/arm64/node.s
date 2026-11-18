@@ -4199,15 +4199,16 @@ END_FUNCTION node_block_entry
 /*
  * (node, store, p2p, tick, events, scratch, actions, result): x19 node, x20 store, x21 the
  * events, x22 their end, x23 scratch, x24 actions, x25 result, x26 the event count, x27 the
- * BLOCK, POW_BLOCK and GOSSIP WORK_DONE events, x28 the event bytes, then the root entries of the BLOCK events.
+ * BLOCK and GOSSIP WORK_DONE events, x28 the event bytes, then the root entries of the BLOCK events.
  * Locals: L the WORK_DONE events, L+8 the scratch size, L+16 p2p, L+24 tick, L+32 the end of
  * the events handled, L+40 the queue's free bytes the P2P events take, saved, L+48 the libp2p scratch, L+56 the bytes of
  * the P2P events, L+64 the P2P events, L+72 the action room kept for the node, L+80 wakeup,
  * L+88 libp2p's StepResult, L+96 libp2p's actions, L+104 the libp2p steps, L+112 a stream waits,
- * L+120 the GOSSIP WORK_DONE events, L+128 the bytes of the ENGINE events, L+136 1 with an ENR event.
+ * L+120 the GOSSIP WORK_DONE events, L+128 the bytes of the ENGINE events, L+136 1 with an ENR event,
+ * L+144 the POW_BLOCK events.
  */
 FUNCTION lantern_node_step
-    ENTER 144
+    ENTER 160
     mov     x19, x0
     mov     x20, x1
     stp     x2, x3, [sp, #(L + 16)]
@@ -4224,6 +4225,7 @@ FUNCTION lantern_node_step
     str     xzr, [sp, #(L + 120)]
     str     xzr, [sp, #(L + 128)]
     str     xzr, [sp, #(L + 136)]
+    str     xzr, [sp, #(L + 144)]
     stp     xzr, xzr, [sp, #(L + 56)]
     mov     x11, x21
 1:  cmp     x11, x22
@@ -4335,8 +4337,12 @@ FUNCTION lantern_node_step
     mov     x14, #1
     str     x14, [sp, #(L + 136)]
 31: cmp     x13, #NODE_EV_BLOCK
-    ccmp    x13, #NODE_EV_POW_BLOCK, #4, ne
     cinc    x27, x27, eq
+    cmp     x13, #NODE_EV_POW_BLOCK         /* POW_BLOCK: counted at L+144 */
+    b.ne    4f
+    ldr     x14, [sp, #(L + 144)]
+    add     x14, x14, #1
+    str     x14, [sp, #(L + 144)]
 4:  add     x26, x26, #1
     add     x28, x28, x12
     add     x11, x11, x12
@@ -4373,7 +4379,7 @@ FUNCTION lantern_node_step
     csel    x12, x12, xzr, ne
     add     x10, x27, x12
     cmp     x9, x10
-    b.lo    82f
+    b.lo    85f
     ldr     x9, [x19, #Node_p2p_out]        /* blobs: one for each GOSSIP WORK_DONE event, and with p2p a batch's sidecars */
     ldr     x10, [x19, #Node_blobs]
     sub     x9, x9, x10
@@ -4389,11 +4395,11 @@ FUNCTION lantern_node_step
     cmp     x11, x12
     csel    x11, x12, x11, lo
     lsr     x12, x11, #32
-    cbnz    x12, 82f
+    cbnz    x12, 86f
     mov     x12, #NODE_SYNC_BATCH
     madd    x10, x11, x12, x10
 54: cmp     x9, x10
-    b.lo    82f
+    b.lo    86f
     ldr     x9, [x19, #Node_engine_in]      /* engine_in: the bytes of the ENGINE events */
     add     x9, x19, x9
     ldr     x10, [x9]
@@ -4402,7 +4408,7 @@ FUNCTION lantern_node_step
     sub     x10, x10, x11
     ldr     x11, [sp, #(L + 128)]
     cmp     x10, x11
-    b.lo    82f
+    b.lo    87f
     ldr     x9, [x19, #Node_pow_blocks]     /* checkpoints: two for each WORK_DONE event, and two */
     ldr     x10, [x19, #Node_checkpoints]
     sub     x9, x9, x10
@@ -4414,7 +4420,7 @@ FUNCTION lantern_node_step
     lsl     x10, x10, #1
     add     x10, x10, #2
     cmp     x9, x10
-    b.lo    82f
+    b.lo    88f
     ldr     x9, [x19, #Node_peers]          /* pow blocks: one for each POW_BLOCK event */
     ldr     x10, [x19, #Node_pow_blocks]
     sub     x9, x9, x10
@@ -4422,8 +4428,9 @@ FUNCTION lantern_node_step
     udiv    x9, x9, x10
     ldr     x10, [x19, #(Node_pow_blocks + 8)]
     sub     x9, x9, x10
-    cmp     x9, x27
-    b.lo    82f
+    ldr     x10, [sp, #(L + 144)]
+    cmp     x9, x10
+    b.lo    89f
     mov     x9, #NODE_ROOT_ENTRY            /* scratch: the root entries, and with p2p the queue's bytes the P2P events take and libp2p's scratch, at its end */
     mul     x12, x27, x9
     ldr     x9, [sp, #(L + 16)]
@@ -4435,7 +4442,7 @@ FUNCTION lantern_node_step
     sub     x9, x9, x10
     ldr     x10, [sp, #(L + 56)]
     cmp     x9, x10
-    b.lo    82f
+    b.lo    90f
     add     x12, x12, x10
     MOVQ    x9, LIBP2P_SCRATCH_SIZE
     add     x12, x12, x9
@@ -4611,20 +4618,32 @@ FUNCTION lantern_node_step
     ldr     x9, [sp, #(L + 80)]
     stp     x26, x9, [x25]
     mov     x0, #LANTERN_OK
-    LEAVE 144
+    LEAVE 160
 14: ldr     x9, [sp, #(L + 8)]              /* a status before any change */
     str     x9, [x23]
-    LEAVE 144
+    LEAVE 160
 7:  mov     x0, #LANTERN_INVALID_EVENT
-    LEAVE 144
+    LEAVE 160
 81: mov     x9, #NODE_SHORT_ACTIONS         /* the buffer with too little room */
     b       84f
-82: mov     x9, #NODE_SHORT_NODE
+85: mov     x10, #NodeRoom_blocks           /* a part of the node: the NodeRoom field of its capacity */
+    b       82f
+86: mov     x10, #NodeRoom_blobs
+    b       82f
+87: mov     x10, #NodeRoom_engine_bytes
+    b       82f
+88: mov     x10, #NodeRoom_checkpoints
+    b       82f
+89: mov     x10, #NodeRoom_pow_blocks
+    b       82f
+90: mov     x10, #NodeRoom_p2p_out
+82: str     x10, [x25, #NodeStepResult_room]
+    mov     x9, #NODE_SHORT_NODE
     b       84f
 83: mov     x9, #NODE_SHORT_SCRATCH
 84: str     x9, [x25, #NodeStepResult_short]
 8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 144
+    LEAVE 160
 END_FUNCTION lantern_node_step
 
 /*

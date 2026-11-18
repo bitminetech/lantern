@@ -4196,17 +4196,18 @@ END_FUNCTION node_block_entry
 
 /*
  * (node, store, p2p, tick, events, scratch, actions, result): s1 node, s2 store, s3 the events,
- * s4 their end, s5 scratch, s6 actions, s7 result, s8 the event count, s9 the BLOCK,
- * POW_BLOCK and GOSSIP WORK_DONE events then an event, s10 the event bytes then a root entry at the end of scratch,
+ * s4 their end, s5 scratch, s6 actions, s7 result, s8 the event count, s9 the BLOCK
+ * and GOSSIP WORK_DONE events then an event, s10 the event bytes then a root entry at the end of scratch,
  * t5 the WORK_DONE events in the first pass. Locals: L the WORK_DONE events, L+8 the scratch
  * size, L+16 p2p, L+24 tick, L+32 the end of the events handled, L+40 the queue's free bytes the P2P events take, saved,
  * L+48 the libp2p scratch, L+56 the bytes of the P2P events, L+64 the P2P events, L+72 the
  * action room kept for the node, L+80 wakeup, L+88 libp2p's StepResult, L+96 libp2p's actions,
  * L+104 the libp2p steps, L+112 a stream waits, L+120 the GOSSIP WORK_DONE events, L+128 the bytes of
- * the ENGINE events, L+136 1 with an ENR event.
+ * the ENGINE events, L+136 1 with an ENR event,
+ * L+144 the POW_BLOCK events.
  */
 FUNCTION lantern_node_step
-    ENTER 144
+    ENTER 160
     mv      s1, a0
     mv      s2, a1
     sd      a2, (L + 16)(sp)
@@ -4227,6 +4228,7 @@ FUNCTION lantern_node_step
     sd      zero, (L + 120)(sp)
     sd      zero, (L + 128)(sp)
     sd      zero, (L + 136)(sp)
+    sd      zero, (L + 144)(sp)
     mv      t0, s3
 1:  bgeu    t0, s4, 5f
     sub     t1, s4, t0
@@ -4340,6 +4342,10 @@ FUNCTION lantern_node_step
     beq     t3, t4, 31f
     li      t4, NODE_EV_POW_BLOCK
     bne     t3, t4, 4f
+    ld      t4, (L + 144)(sp)               # POW_BLOCK: counted at L+144
+    addi    t4, t4, 1
+    sd      t4, (L + 144)(sp)
+    j       4f
 31: addi    s9, s9, 1
 4:  addi    s8, s8, 1
     add     s10, s10, t2
@@ -4378,7 +4384,7 @@ FUNCTION lantern_node_step
     ld      t2, (L + 16)(sp)
     beqz    t2, 1f
     addi    t1, t1, NODE_SYNC_BATCH
-1:  bltu    t0, t1, 82f
+1:  bltu    t0, t1, 85f
     ld      t0, Node_p2p_out(s1)            # blobs: one for each GOSSIP WORK_DONE event, and with p2p a batch's sidecars
     ld      t1, Node_blobs(s1)
     sub     t0, t0, t1
@@ -4394,11 +4400,11 @@ FUNCTION lantern_node_step
     bgeu    t2, t3, 548f
     mv      t2, t3
 548: srli   t3, t2, 32
-    bnez    t3, 82f
+    bnez    t3, 86f
     li      t3, NODE_SYNC_BATCH
     mul     t2, t2, t3
     add     t1, t1, t2
-549: bltu   t0, t1, 82f
+549: bltu   t0, t1, 86f
     ld      t0, Node_engine_in(s1)          # engine_in: the bytes of the ENGINE events
     add     t0, s1, t0
     ld      t1, 0(t0)
@@ -4406,7 +4412,7 @@ FUNCTION lantern_node_step
     addi    t1, t1, -24
     sub     t1, t1, t2
     ld      t2, (L + 128)(sp)
-    bltu    t1, t2, 82f
+    bltu    t1, t2, 87f
     ld      t0, Node_pow_blocks(s1)         # checkpoints: two for each WORK_DONE event, and two
     ld      t1, Node_checkpoints(s1)
     sub     t0, t0, t1
@@ -4416,7 +4422,7 @@ FUNCTION lantern_node_step
     sub     t0, t0, t1
     slli    t1, t5, 1
     addi    t1, t1, 2
-    bltu    t0, t1, 82f
+    bltu    t0, t1, 88f
     ld      t0, Node_peers(s1)              # pow blocks: one for each POW_BLOCK event
     ld      t1, Node_pow_blocks(s1)
     sub     t0, t0, t1
@@ -4424,7 +4430,8 @@ FUNCTION lantern_node_step
     divu    t0, t0, t1
     ld      t1, (Node_pow_blocks + 8)(s1)
     sub     t0, t0, t1
-    bltu    t0, s9, 82f
+    ld      t1, (L + 144)(sp)
+    bltu    t0, t1, 89f
     li      t3, NODE_ROOT_ENTRY             # scratch: the root entries, and with p2p the queue's bytes the P2P events take and libp2p's scratch, at its end
     mul     t3, s9, t3
     ld      t0, (L + 16)(sp)
@@ -4435,7 +4442,7 @@ FUNCTION lantern_node_step
     addi    t0, t0, -24
     sub     t0, t0, t1
     ld      t1, (L + 56)(sp)
-    bltu    t0, t1, 82f
+    bltu    t0, t1, 90f
     add     t3, t3, t1
     li      t0, LIBP2P_SCRATCH_SIZE
     add     t3, t3, t0
@@ -4614,20 +4621,32 @@ FUNCTION lantern_node_step
     ld      t0, (L + 80)(sp)
     sd      t0, NodeStepResult_wakeup(s7)
     li      a0, LANTERN_OK
-    LEAVE 144
+    LEAVE 160
 14: ld      t0, (L + 8)(sp)                 # a status before any change
     sd      t0, 0(s5)
-    LEAVE 144
+    LEAVE 160
 7:  li      a0, LANTERN_INVALID_EVENT
-    LEAVE 144
+    LEAVE 160
 81: li      t0, NODE_SHORT_ACTIONS          # the buffer with too little room
     j       84f
-82: li      t0, NODE_SHORT_NODE
+85: li      t0, NodeRoom_blocks             # a part of the node: the NodeRoom field of its capacity
+    j       82f
+86: li      t0, NodeRoom_blobs
+    j       82f
+87: li      t0, NodeRoom_engine_bytes
+    j       82f
+88: li      t0, NodeRoom_checkpoints
+    j       82f
+89: li      t0, NodeRoom_pow_blocks
+    j       82f
+90: li      t0, NodeRoom_p2p_out
+82: sd      t0, NodeStepResult_room(s7)
+    li      t0, NODE_SHORT_NODE
     j       84f
 83: li      t0, NODE_SHORT_SCRATCH
 84: sd      t0, NodeStepResult_short(s7)
 8:  li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 144
+    LEAVE 160
 END_FUNCTION lantern_node_step
 
 /*

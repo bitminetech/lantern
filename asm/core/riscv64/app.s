@@ -743,8 +743,8 @@ LOCAL_FUNCTION app_event_put
 END_FUNCTION app_event_put
 
 /*
- * L1: the node (a0 = 0), the store (1) or the Seen (2) moves to new memory, with each field of its
- * room doubled: a0 = 0, or 1. s2 the kind, s3 the pair, s4 the room, s5 the room's fields,
+ * L1: the node (a0 = 0), the store (1) or the Seen (2) moves to new memory, with the field of its
+ * room at byte offset a1 doubled, or each field for a1 = 2^64 - 1: a0 = 0, or 1. s2 the kind, s3 the pair, s4 the room, s5 the room's fields,
  * s6 the new memory. Locals: L a size, L+8 an address.
  */
 LOCAL_FUNCTION app_grow
@@ -765,7 +765,18 @@ LOCAL_FUNCTION app_grow
     li      s5, 4
 2:  add     s3, s1, t0
     add     s4, s1, t1
-    li      t0, 0
+    li      t0, -1                          # one field: its offset, below the fields and a multiple of 8
+    beq     a1, t0, 31f
+    slli    t0, s5, 3
+    bgeu    a1, t0, 9f
+    andi    t0, a1, 7
+    bnez    t0, 9f
+    add     t1, s4, a1
+    ld      t2, 0(t1)
+    slli    t2, t2, 1
+    sd      t2, 0(t1)
+    j       4f
+31: li      t0, 0
 3:  bgeu    t0, s5, 4f
     slli    t1, t0, 3
     add     t1, s4, t1
@@ -946,6 +957,7 @@ LOCAL_FUNCTION app_work
     LDQ     t1, s1, (APP_STORE_ROOM + StoreRoom_nodes)
     bltu    t0, t1, 4f
 5:  li      a0, 1                           # else the store
+    li      a1, -1
     call    app_grow
     bnez    a0, 91f
     j       1b
@@ -959,6 +971,7 @@ LOCAL_FUNCTION app_work
     beqz    a0, 91f
     j       1b
 3:  li      a0, 2                           # the Seen
+    li      a1, -1
     call    app_grow
     bnez    a0, 91f
     beqz    s4, 1b
@@ -1099,12 +1112,13 @@ LOCAL_FUNCTION app_step
     li      t0, LANTERN_BUFFER_TOO_SMALL
     bne     a0, t0, 2f
     addi    s4, s4, 1
-    li      t0, APP_WORK_TRIES
+    li      t0, APP_STEP_TRIES
     bgeu    s4, t0, 21f
     LDQ     t0, s1, (APP_RESULT + NodeStepResult_short)  # the buffer short of room grows
     li      t1, NODE_SHORT_NODE
     bne     t0, t1, 11f
-    li      a0, 0                           # the node
+    li      a0, 0                           # the node: the field that is short
+    LDQ     a1, s1, (APP_RESULT + NodeStepResult_room)
     call    app_grow
     bnez    a0, 21f
     j       1b

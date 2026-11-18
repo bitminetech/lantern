@@ -90,6 +90,7 @@
 .set APP_API_SEND_WINDOW, 1 << 17
 .set APP_API_EVENT_BYTES, 1 << 20
 .set APP_WORK_TRIES, 16                     /* the times a work grows a buffer */
+.set APP_STEP_TRIES, 64                     /* the times a node step grows a buffer, one field at a time */
 
     RODATA
     .p2align 3
