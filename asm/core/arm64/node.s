@@ -3017,6 +3017,33 @@ LOCAL_FUNCTION node_respond
 END_FUNCTION node_respond
 
 /*
+ * L0: x0 = the first slot of the epochs a node must serve blocks of: max(0, the store's epoch -
+ * compute_min_epochs_for_block_requests) * SLOTS_PER_EPOCH. Apart from node_request, as FORK_CALL
+ * takes the labels 81 to 89. x21 the epoch. Locals: L the epochs.
+ */
+LOCAL_FUNCTION node_serve_slot
+    ENTER 16
+    mov     x0, x20
+    bl      node_store_slot
+    mov     x9, #SLOTS_PER_EPOCH
+    udiv    x21, x0, x9
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x9, #-1                         /* no sum: every epoch */
+    str     x9, [sp, #L]
+    add     x0, x19, #Node_config
+    add     x1, sp, #L
+    FORK_CALL compute_min_epochs_for_block_requests
+    ldr     x9, [sp, #L]
+    subs    x9, x21, x9
+    csel    x9, xzr, x9, lo
+    mov     x10, #SLOTS_PER_EPOCH
+    mul     x0, x9, x10
+    LEAVE 16
+END_FUNCTION node_serve_slot
+
+/*
  * L0: the request of the stream entry x0, when its bytes are all there: Status, Ping and
  * MetaData get their answer, Goodbye a close; other methods get ResourceUnavailable.
  * x21 entry, x22 method, x25 the request's size, x26 the scratch size, x27 the payload's
@@ -3056,10 +3083,14 @@ LOCAL_FUNCTION node_request
     mov     x25, #0
     cmp     x22, #REQRESP_BLOB_SIDECARS_BY_ROOT
     b.eq    2f
+    mov     x25, #40                        /* blocks by head, from fulu on: 40 bytes */
+    cmp     x22, #REQRESP_BEACON_BLOCKS_BY_HEAD
+    b.eq    93f
+    mov     x25, #0
     cmp     x22, #REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE  /* column sidecars, from fulu on: sizes below */
     ccmp    x22, #REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT, #4, ne
     b.ne    92f
-    mov     x0, x20
+93: mov     x0, x20
     bl      node_store_slot
     add     x1, x19, #Node_config
     bl      node_fork
@@ -3163,6 +3194,8 @@ LOCAL_FUNCTION node_request
     b.eq    83f
     cmp     x22, #REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT
     b.eq    86f
+    cmp     x22, #REQRESP_BEACON_BLOCKS_BY_HEAD
+    b.eq    94f
     cmp     x22, #REQRESP_GOODBYE
     b.ne    10f
     mov     x0, #LIBP2P_EVENT_STREAM_CLOSE  /* Goodbye: a close */
@@ -3460,6 +3493,67 @@ LOCAL_FUNCTION node_request
     mov     x0, x21
     bl      node_drop_stream
     LEAVE 160
+94: ldr     x26, [x27, #32]                 /* BlocksByHead: the ancestry of beacon_root, from it, in descending slot order */
+    bl      node_max_blocks                 /* at most count, the limit, and the room of the list */
+    cmp     x26, x0
+    csel    x26, x26, x0, ls
+    bl      node_serve_slot                 /* the first slot of the epochs the node serves: L+152 */
+    str     x0, [sp, #(L + 152)]
+    mov     x28, #0
+    mov     x0, x27
+    bl      node_find_block
+    cmn     x0, #1
+    b.ne    95f
+    mov     x0, x27                         /* a root the node does not keep: the Db's */
+    b       97f
+95: cmp     x28, x26                        /* the node's imported blocks, by parent_root */
+    b.hs    77b
+    ldr     x9, [x1, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_IMPORTED
+    b.ne    77b
+    ldr     x9, [x1, #NodeBlock_data_id]
+    cbz     x9, 96f
+    ldr     x10, [x1, #NodeBlock_slot]
+    ldr     x11, [sp, #(L + 152)]
+    cmp     x10, x11
+    b.lo    77b
+    add     x10, x21, #NodeStream_request
+    str     x9, [x10, x28, lsl #3]
+    add     x28, x28, #1
+    add     x0, x1, #NodeBlock_parent_root
+    str     x0, [sp, #(L + 144)]
+    bl      node_find_block
+    cmn     x0, #1
+    b.ne    95b
+    ldr     x0, [sp, #(L + 144)]            /* a parent the node does not keep: the Db's */
+    b       97f
+96: mov     x0, x1                          /* a block with no bytes: its record in the Db, or none */
+97: mov     x1, x0                          /* the Db's blocks from the root at x0, in descending slot order */
+    ldr     x0, [x19, #Node_db]
+    add     x0, x19, x0
+    add     x2, sp, #(L + 136)
+    bl      lantern_db_find_root
+    ldr     x25, [sp, #(L + 136)]
+    cmn     x25, #1
+    b.eq    77b
+98: cmp     x28, x26
+    b.hs    77b
+    ldr     x9, [sp, #(L + 152)]
+    cmp     x25, x9
+    b.lo    77b
+    mov     x0, x25
+    bl      node_db_block
+    cbz     x0, 981f
+    add     x10, x21, #NodeStream_request
+    str     x0, [x10, x28, lsl #3]
+    add     x28, x28, #1
+981: ldr    x9, [x19, #Node_db]
+    add     x9, x19, x9
+    ldr     x9, [x9, #Db_first_slot]
+    cmp     x25, x9
+    b.ls    77b
+    sub     x25, x25, #1
+    b       98b
 83: ldr     w9, [x27, #16]                  /* DataColumnSidecarsByRange: the offset 20, then the columns */
     cmp     x9, #20
     b.ne    90f
@@ -6658,7 +6752,8 @@ FUNCTION lantern_node_run
     ccmp    x9, #REQRESP_BLOB_SIDECARS_BY_ROOT, #4, ne
     ccmp    x9, #REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE, #4, ne
     ccmp    x9, #REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT, #4, ne
-    ccmp    x10, #2, #2, ne                 /* a sidecar method: C set, so hs */
+    ccmp    x9, #REQRESP_BEACON_BLOCKS_BY_HEAD, #4, ne
+    ccmp    x10, #2, #2, ne                 /* a sidecar method or blocks by head: C set, so hs */
     mov     x9, #4
     csel    x9, x9, xzr, hs
     str     x9, [sp, #(L + 16 + ChunkHeader_context_length)]

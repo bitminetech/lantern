@@ -14,8 +14,8 @@
 # --data-dir /data; after it follows, once its log shows finalized epoch 2 or later, lantern stops and
 # starts again, and must log "restart at slot" and follow again. CHECKPOINT=1: 6-second slots, lantern
 # starts from the client's finalized block and its post-state, and must log "checkpoint at slot".
-# FORK=1: 6-second slots, electra at genesis and fulu at epoch 1; lantern's head must reach the
-# fork: slot 40 or later.
+# FORK=1: 6-second slots, electra at genesis and fulu at epoch 1 (no BPO fork); lantern's head must
+# reach the fork: slot 40 or later.
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 client=$1
@@ -52,6 +52,7 @@ fi
 min_slot=8
 if [ "${FORK:-0}" = 1 ]; then
     printf '  electra_fork_epoch: 0\n  fulu_fork_epoch: 1\n' >> "$work/args.yaml"
+    for n in 1 2 3 4 5; do printf '  bpo_%s_epoch: 18446744073709551615\n' $n >> "$work/args.yaml"; done
     min_slot=40
 fi
 if [ "${RESTART:-0}" = 1 ]; then printf 'lantern_data_dir: /data\n' >> "$work/args.yaml"; fi

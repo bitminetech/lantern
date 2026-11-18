@@ -4378,6 +4378,18 @@ static void fc_serve_check(fc_node *n, tv parts, const char **why) {
             int k = p2p_request(n, &net, 1, "beacon_blocks_by_root", 2, req, 96, why);
             if (!*why) p2p_check_blocks(&net, k, want, 2, gvr, "blocks_by_root", why);
         }
+#if FORK >= FORK_FULU
+        if (!*why) { /* the head's ancestry by head, in descending slot order, with a count past the chain */
+            uint8_t req[40];
+            memcpy(req, chain[nchain - 1]->root, 32);
+            wr64(req + 32, nchain + 5);
+            case_block **want = calloc(nchain, sizeof *want);
+            for (size_t i = 0; i < nchain; i++) want[i] = chain[nchain - 1 - i];
+            int k = p2p_request(n, &net, 2, "beacon_blocks_by_head", 1, req, 40, why);
+            if (!*why) p2p_check_blocks(&net, k, want, nchain, gvr, "blocks_by_head", why);
+            free(want);
+        }
+#endif
         if (!*why && rd64(n->shell->node + 136 + 8)) *why = "the node keeps a stream at the end"; /* Node_streams */
         p2p_close(&net);
     }

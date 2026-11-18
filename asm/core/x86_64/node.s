@@ -2971,6 +2971,35 @@ LOCAL_FUNCTION node_respond
 END_FUNCTION node_respond
 
 /*
+ * rax = the first slot of the epochs a node must serve blocks of: max(0, the store's epoch -
+ * compute_min_epochs_for_block_requests) * SLOTS_PER_EPOCH. Apart from node_request, as FORK_CALL
+ * takes the labels 81 to 89. r12 the epoch. Locals: L the epochs.
+ */
+LOCAL_FUNCTION node_serve_slot
+    ENTER 16
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     %rax, %rdi
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, %r12
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    movq    $-1, L(%rsp)                    # no sum: every epoch
+    lea     Node_config(%rbx), %rdi
+    lea     L(%rsp), %rsi
+    FORK_CALL compute_min_epochs_for_block_requests
+    mov     %r12, %rax
+    sub     L(%rsp), %rax
+    jae     1f
+    xor     %eax, %eax
+1:  imul    $SLOTS_PER_EPOCH, %rax, %rax
+    LEAVE 16
+END_FUNCTION node_serve_slot
+
+/*
  * The request of the stream entry rdi, when its bytes are all there: Status, Ping and MetaData
  * get their answer, Goodbye a close; other methods get ResourceUnavailable. r12 entry, r13
  * method, S7 the seventh argument of a call, S8 the scratch size, S9 the payload, S10 a peer.
@@ -3010,6 +3039,10 @@ LOCAL_FUNCTION node_request
     movq    $0, (L + 160)(%rsp)
     cmp     $REQRESP_BLOB_SIDECARS_BY_ROOT, %r13
     je      2f
+    movq    $40, (L + 160)(%rsp)            # blocks by head, from fulu on: 40 bytes
+    cmp     $REQRESP_BEACON_BLOCKS_BY_HEAD, %r13
+    je      21f
+    movq    $0, (L + 160)(%rsp)
     cmp     $REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE, %r13    # column sidecars, from fulu on: sizes below
     je      21f
     cmp     $REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT, %r13
@@ -3134,6 +3167,8 @@ LOCAL_FUNCTION node_request
     je      83f
     cmp     $REQRESP_DATA_COLUMN_SIDECARS_BY_ROOT, %r13
     je      86f
+    cmp     $REQRESP_BEACON_BLOCKS_BY_HEAD, %r13
+    je      94f
     cmp     $REQRESP_GOODBYE, %r13
     jne     10f
     mov     $LIBP2P_EVENT_STREAM_CLOSE, %edi        # Goodbye: a close
@@ -3461,6 +3496,70 @@ LOCAL_FUNCTION node_request
     mov     %r12, %rdi
     call    node_drop_stream
     LEAVE 176
+94: mov     S9(%rsp), %rax                  # BlocksByHead: the ancestry of beacon_root, from it, in descending slot order
+    mov     32(%rax), %rax
+    mov     %rax, (L + 168)(%rsp)
+    call    node_max_blocks                 # at most count, the limit, and the room of the list
+    cmp     (L + 168)(%rsp), %rax
+    jae     941f
+    mov     %rax, (L + 168)(%rsp)
+941: call   node_serve_slot                 # the first slot of the epochs the node serves: L+152
+    mov     %rax, (L + 152)(%rsp)
+    movq    $0, S10(%rsp)
+    mov     S9(%rsp), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    jne     95f
+    mov     S9(%rsp), %rdi                  # a root the node does not keep: the Db's
+    jmp     97f
+95: mov     S10(%rsp), %rax                 # the node's imported blocks, by parent_root
+    cmp     (L + 168)(%rsp), %rax
+    jae     72b
+    cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rdx)
+    jne     72b
+    mov     NodeBlock_data_id(%rdx), %rax
+    test    %rax, %rax
+    jz      96f
+    mov     NodeBlock_slot(%rdx), %rcx
+    cmp     (L + 152)(%rsp), %rcx
+    jb      72b
+    mov     S10(%rsp), %rcx
+    mov     %rax, NodeStream_request(%r12,%rcx,8)
+    incq    S10(%rsp)
+    lea     NodeBlock_parent_root(%rdx), %rdi
+    mov     %rdi, (L + 144)(%rsp)
+    call    node_find_block
+    cmp     $-1, %rax
+    jne     95b
+    mov     (L + 144)(%rsp), %rdi           # a parent the node does not keep: the Db's
+    jmp     97f
+96: mov     %rdx, %rdi                      # a block with no bytes: its record in the Db, or none
+97: mov     %rdi, %rsi                      # the Db's blocks from the root at rdi, in descending slot order
+    mov     Node_db(%rbx), %rdi
+    add     %rbx, %rdi
+    lea     (L + 136)(%rsp), %rdx
+    call    lantern_db_find_root
+    mov     (L + 136)(%rsp), %r13
+    cmp     $-1, %r13
+    je      72b
+98: mov     S10(%rsp), %rax
+    cmp     (L + 168)(%rsp), %rax
+    jae     72b
+    cmp     (L + 152)(%rsp), %r13
+    jb      72b
+    mov     %r13, %rdi
+    call    node_db_block
+    test    %rax, %rax
+    jz      981f
+    mov     S10(%rsp), %rcx
+    mov     %rax, NodeStream_request(%r12,%rcx,8)
+    incq    S10(%rsp)
+981: mov    Node_db(%rbx), %rax
+    add     %rbx, %rax
+    cmp     Db_first_slot(%rax), %r13
+    jbe     72b
+    dec     %r13
+    jmp     98b
 83: mov     S9(%rsp), %rsi                  # DataColumnSidecarsByRange: the offset 20, then the columns
     cmpl    $20, 16(%rsi)
     jne     90f
@@ -6734,6 +6833,10 @@ FUNCTION lantern_node_run
     cmovae  %rcx, %rax
     cmpq    $0, (L + 176)(%rsp)
     cmovne  %rcx, %rax
+    mov     NodeAction_arg(%r12), %rdx      # blocks by head: a context too
+    shr     $8, %rdx
+    cmp     $REQRESP_BEACON_BLOCKS_BY_HEAD, %rdx
+    cmove   %rcx, %rax
     mov     %rax, (L + 16 + ChunkHeader_context_length)(%rsp)
     movq    $0, (L + 16 + ChunkHeader_result)(%rsp)
     mov     (L + 8)(%rsp), %eax
