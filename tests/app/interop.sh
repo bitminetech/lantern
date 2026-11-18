@@ -126,5 +126,13 @@ docker logs lantern-interop-lantern 2>&1 | grep -v "record enr" | head -20
 echo "== $client peers"
 api $peer /eth/v1/node/peers
 echo
-if [ $status -eq 0 ]; then echo "PASS lantern and $client are connected peers"; else echo "FAIL lantern and $client are not connected peers"; docker logs lantern-interop-peer 2>&1 | tail -40; fi
+if [ $status -eq 0 ]; then
+    echo "PASS lantern and $client are connected peers"
+else
+    echo "FAIL lantern and $client are not connected peers"
+    echo "== $client: its first lines, then its lines on genesis, the fork digest and peers"
+    docker logs lantern-interop-peer > "$work/peer.log" 2>&1 || true
+    head -60 "$work/peer.log"
+    grep -i -E "genesis|digest|fork|goodbye|disconnect|peer|dial|status" "$work/peer.log" | grep -v -i "subscribed to" | tail -60
+fi
 exit $status

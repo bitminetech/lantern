@@ -12,8 +12,8 @@ as its genesis_time:
 - with VALIDATORS, a state of FORK at slot 0 with that many active validators of the keys of
   test/helpers/keys.py (other clients need real keys), its genesis_validators_root, the sync
   committees of get_next_sync_committee from altair, and from fulu initialize_proposer_lookahead.
-deploy_block.txt and deposit_contract_block.txt (0), and boot_enr.yaml (empty), go with them for
-other clients.
+deploy_block.txt and deposit_contract_block.txt (0), and boot_enr.yaml and bootstrap_nodes.txt
+(empty), go with them for other clients.
 """
 
 import os
@@ -79,6 +79,7 @@ def main():
     (out / "deploy_block.txt").write_text("0\n")
     (out / "deposit_contract_block.txt").write_text("0\n")
     (out / "boot_enr.yaml").write_text("[]\n")
+    (out / "bootstrap_nodes.txt").write_text("")
     print(f"{out}: {preset} {fork}, genesis_time {genesis_time}, slot {int(state.slot)}")
 
 
