@@ -23,6 +23,8 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | [docs/reference/engine-api.md](docs/reference/engine-api.md) | Engine API client: JSON-RPC requests of each fork and their responses, JWT, HTTP/1.1 |
 | [docs/reference/node.md](docs/reference/node.md) | Node core: events, actions, block import, checkpoint states, head, req/resp, gossip, sync, blob data availability, Engine API calls, discovery |
 | [docs/reference/config.md](docs/reference/config.md) | The network config file |
+| [docs/reference/app.md](docs/reference/app.md) | The binary: command line options, startup and the loop |
+| [docs/reference/shell.md](docs/reference/shell.md) | The shell of the binary: memory, files, the log and the clock |
 | [include/lantern.inc](include/lantern.inc) | Constants |
 | [include/types.inc](include/types.inc) | SSZ types and layouts of each fork, phase0 to Fulu, and the req/resp messages |
 | [include/forks.inc](include/forks.inc) | The forks, and the names of each fork's exports |

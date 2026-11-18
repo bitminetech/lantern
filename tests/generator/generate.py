@@ -28,6 +28,7 @@ import reqresp  # lantern's req/resp encoding cases and message types
 import engine  # lantern's Engine API client cases
 import node  # lantern's node core cases over libp2p
 import config  # lantern's network config file cases
+import app  # lantern's command line cases
 
 RELEASE = "https://github.com/ethereum/consensus-specs/releases/download/v1.7.0-beta.4/"
 ARCHIVES = {  # SHA-256 of each archive of consensus-specs v1.7.0-beta.4 (aa16bb4)
@@ -251,6 +252,11 @@ def main():
         if not runners or "config" in runners:
             file = f"{preset}-phase0-config-parse.bin"
             count, digest = write_file(out / file, list(config.cases(pathlib.Path(os.environ["CONSENSUS_SPECS"]))))
+            manifest.append((file, count, digest))
+            print(f"{file}: {count} cases")
+        if not runners or "app" in runners:
+            file = f"{preset}-phase0-app-options.bin"
+            count, digest = write_file(out / file, list(app.cases()))
             manifest.append((file, count, digest))
             print(f"{file}: {count} cases")
         count, digest = write_kzg_setup(out / f"{preset}-kzg_setup.bin", preset)

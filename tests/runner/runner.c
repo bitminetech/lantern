@@ -373,6 +373,9 @@ ABI uint64_t lantern_reqresp_read_payload(const void *input, const void *start, 
                                           void *scratch, void *out, void *consumed);
 ABI uint64_t lantern_ssz_size_bounds(const void *type, void *out);
 
+/* Application: docs/reference/app.md. */
+ABI uint64_t lantern_app_options(const void *args, void *options, void *fault);
+
 /* Network config: docs/reference/config.md. */
 ABI uint64_t lantern_config_parse(const void *text, void *config, void *line);
 
@@ -5179,6 +5182,69 @@ static void run_config_parse(const char *file, case_file *f) {
     }
 }
 
+/* ---------------------------------------------------------------- Application */
+
+#define INVALID_OPTION 61
+#define APP_OPTIONS_SIZE 96
+
+/*
+ * app-options: lantern_app_options over each case's command line (tests/generator/app.py), as an
+ * ArgList with a '#' after the bytes of each argument. A text field must be an Arg inside the
+ * bytes of one argument and hold the case's text. A fault must give the case's index.
+ */
+static void run_app_options(const char *file, case_file *f) {
+    static const char *texts[] = {"network_dir", "execution", "jwt_secret", "boot_nodes"};
+    static const char *numbers[] = {"port", "enr_address", "http_port", "target_peers"};
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, total = 0, alen;
+        tv parts = next_case(f, &name, &len);
+        tv args = tv_get(parts, "args"), want = tv_get(parts, "options"), wfault = tv_get(parts, "fault");
+        uint64_t count = rd64(args + 1);
+        tv a = args + 9;
+        for (uint64_t k = 0; k < count; k++, a = tv_skip(a)) {
+            tv_bytes(a, &alen);
+            total += alen + 1;
+        }
+        /* ArgList: size, args (40, count), bytes (40 + 16 count, total), the entries, the bytes */
+        uint64_t at = 40 + 16 * count, size = (at + total + 7) & ~(uint64_t)7;
+        uint8_t *list = buffer(size), *opts = buffer(APP_OPTIONS_SIZE);
+        wr64(list, size);
+        wr64(list + 8, 40);
+        wr64(list + 16, count);
+        wr64(list + 24, at);
+        wr64(list + 32, total);
+        a = args + 9;
+        for (uint64_t k = 0, b = at; k < count; k++, a = tv_skip(a)) {
+            const uint8_t *bytes = tv_bytes(a, &alen);
+            wr64(list + 40 + 16 * k, b);
+            wr64(list + 48 + 16 * k, alen);
+            memcpy(list + b, bytes, (size_t)alen);
+            list[b + alen] = '#';
+            b += alen + 1;
+        }
+        uint64_t fault = 0xFFFF, st = CALL(lantern_app_options, list, opts, &fault);
+        if (!guard_ok(opts, APP_OPTIONS_SIZE) || !guard_ok(list, size)) why = "lantern_app_options wrote out of bounds";
+        else if (want) {
+            if (st != 0) why = "status is not LANTERN_OK";
+            for (int t = 0; t < 4 && !why; t++) {
+                uint64_t wl, start = rd64(opts + 16 * t), got = rd64(opts + 16 * t + 8);
+                const uint8_t *w = tv_bytes(tv_get(want, texts[t]), &wl);
+                int inside = got == 0;
+                for (uint64_t k = 0; k < count && !inside; k++)
+                    inside = start >= rd64(list + 40 + 16 * k) && start + got <= rd64(list + 40 + 16 * k) + rd64(list + 48 + 16 * k);
+                if (got != wl || !inside || (wl && memcmp(list + start, w, (size_t)wl))) why = texts[t];
+            }
+            for (int t = 0; t < 4 && !why; t++)
+                if (rd64(opts + 64 + 8 * t) != tv_u64(tv_get(want, numbers[t]))) why = numbers[t];
+        } else if (st != INVALID_OPTION) why = "status is not LANTERN_INVALID_OPTION";
+        else if (fault != tv_u64(wfault)) why = "fault is not the case's index";
+        report(file, name, len, !why, why);
+        free(list);
+        free(opts);
+    }
+}
+
 /* ---------------------------------------------------------------- Engine API client */
 
 #define INVALID_HTTP 52
@@ -5395,6 +5461,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strncmp(kind, "engine-", 7)) run_engine(file, kind + 7, &f);
         else if (!bls_off && !strcmp(kind, "node-p2p")) run_node_p2p(file, &f);
         else if (!bls_off && !strcmp(kind, "config-parse")) run_config_parse(file, &f);
+        else if (!bls_off && !strcmp(kind, "app-options")) run_app_options(file, &f);
 #if FORK == FORK_FULU
         else if (!bls_off && (!strcmp(kind, "networking-get_custody_groups") ||
                               !strcmp(kind, "networking-compute_columns_for_custody_group")))

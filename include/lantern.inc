@@ -738,3 +738,25 @@
 .set LANTERN_INVALID_BLOB_SIDECAR, 58  /* lantern_node_blob_sidecar: the index, the inclusion proof or the KZG proof fails */
 .set LANTERN_NO_PAYLOAD, 59            /* lantern_node_new_payload: the block has no execution payload to send */
 .set LANTERN_INVALID_CONFIG, 60        /* lantern_config_parse: a faulty line */
+.set LANTERN_INVALID_OPTION, 61        /* lantern_app_options: a faulty argument */
+
+/* ArgList, Arg and AppOptions (docs/reference/app.md): a text field is an Arg (start, length) of the ArgList's bytes. */
+.set ArgList_args, 8
+.set ArgList_bytes, 24
+.set ArgList__fixed, 40
+.set Arg_start, 0
+.set Arg_length, 8
+.set Arg__mem, 16
+.set AppOptions_network_dir, 0
+.set AppOptions_execution, 16
+.set AppOptions_jwt_secret, 32
+.set AppOptions_boot_nodes, 48
+.set AppOptions_port, 64
+.set AppOptions_enr_address, 72
+.set AppOptions_http_port, 80
+.set AppOptions_target_peers, 88
+.set AppOptions__size, 96
+.set APP_DEFAULT_PORT, 9000
+.set APP_DEFAULT_HTTP_PORT, 5052
+.set APP_DEFAULT_TARGET_PEERS, 64
+.set APP_MAX_TARGET_PEERS, 1024

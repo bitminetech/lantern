@@ -1,0 +1,163 @@
+# Application
+
+## Contents
+
+### Functions
+
+- [`lantern_app_options`](#function-lantern_app_options): reads the command line options.
+- [`lantern_app_main`](#function-lantern_app_main): runs the beacon node.
+
+### Types
+
+- [`ArgList`](#type-arglist): the command line arguments.
+- [`Arg`](#type-arg): one argument of an `ArgList`.
+- [`AppOptions`](#type-appoptions): the options of a run.
+
+## Spec
+
+- Document: ARCHITECTURE.md section 2: the consuming application owns startup and the event loop. Lantern is that application for its own core.
+- Section: the binary's startup from a network directory, and its loop over the node core, libp2p, discv5 and the execution engine.
+
+## Common rules
+
+- The application code is core code: the same instructions on every OS of an ISA, `asm/core/<ISA>/app.s`. It makes no OS call itself; it calls the functions of [shell.md](shell.md) and the shell functions of asm-libp2p.
+
+## Test vectors
+
+- tests/generator/app.py: command lines with their `AppOptions`, or the argument index of their fault. File: `<preset>-phase0-app-options.bin`.
+
+## Function `lantern_app_options`
+
+Reads the command line options into an `AppOptions`.
+
+### Signature
+
+```
+lantern_app_options(args, options, fault) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `args` | input | [`ArgList`](#type-arglist) |
+| `options` | output | [`AppOptions`](#type-appoptions) |
+| `fault` | output | u64: the index of the first faulty argument (the one that holds a faulty value), or the argument count when `--network-dir` is missing |
+
+### Returns
+
+- `LANTERN_OK`: `options` holds the options.
+- `LANTERN_INVALID_OPTION`: an argument is not an option below, an option has no value or an empty one, a number is not decimal digits of a value in its range, an address is not 4 decimal numbers of 0 to 255 with dots between them, or `--network-dir` is missing.
+
+### Function does
+
+- Takes each option as `--name value` or `--name=value`:
+
+| Option | Field | Value | Default |
+|---|---|---|---|
+| `--network-dir` | `network_dir` | a directory with `config.yaml` and `genesis.ssz` | none: required |
+| `--execution-endpoint` | `execution` | `host:port`, with or without `http://` | none: no execution engine |
+| `--jwt-secret` | `jwt_secret` | a file of 64 hex digits, with or without `0x` | none |
+| `--boot-nodes` | `boot_nodes` | ENRs (`enr:` and base64url), with commas between them | none |
+| `--port` | `port` | 1 to 65535: the TCP port of libp2p and the UDP port of discv5 | 9000 |
+| `--enr-address` | `enr_address` | an IPv4 address in dotted decimal, for the node record | none |
+| `--http-port` | `http_port` | 1 to 65535: the Beacon API | 5052 |
+| `--target-peers` | `target_peers` | 1 to 1024 | 64 |
+
+- Keeps the last value of an option given twice.
+- Drops `http://` at the start of `--execution-endpoint`.
+- `options` holds the defaults for the options not given; a text field is an `Arg` of the bytes of `args`.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_app_options` (`_lantern_app_options` on macOS).
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `args`, `options`, `fault`.
+
+## Function `lantern_app_main`
+
+Runs the beacon node until the process ends.
+
+### Signature
+
+```
+lantern_app_main(args) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `args` | input | [`ArgList`](#type-arglist): the program's arguments, without its name |
+
+### Returns
+
+- 1: the options are faulty; a line on the standard error names the argument.
+- 2: the start failed: a file is missing or faulty, or the OS gave no memory or no socket; a line on the standard error says which.
+
+### Function does
+
+- Reads the options with lantern_app_options.
+- Reads `config.yaml` of the network directory with lantern_config_parse over the pinned config of the preset, and `genesis.ssz` with lantern_<fork>_node_anchor of the fork of its slot.
+- Starts the store (lantern_get_forkchoice_store), the node (lantern_node_init, with `NODE_FLAG_ENGINE` when it has an execution endpoint, and `NODE_FLAG_DISCV5`), the libp2p state with a new secp256k1 key, and the discv5 state with the same key, the `ip` of `--enr-address`, and the `udp` and `tcp` of `--port`.
+- Listens on TCP `--port` and binds UDP `--port` on every address, through the shell of asm-libp2p, and gives each boot node to discv5.
+- Loops: reads the clock; passes each libp2p shell event, each discv5 record found, each execution engine response and the time to lantern_node_step; performs its actions; runs each work with lantern_node_run, with more room when it asks; waits for the sockets until the next wakeup, at most 100 ms.
+- Writes a line to the standard output at each new head and each new finalized checkpoint.
+
+### ABI
+
+- Role: L2.
+- Symbol: `lantern_app_main` (`_lantern_app_main` on macOS).
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `args`.
+
+## Type `ArgList`
+
+The command line arguments, in one buffer.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `size` | u64 | Bytes of the buffer |
+| 8 | `args` | PartRef | The [`Arg`](#type-arg) entries, one for each argument, in order |
+| 24 | `bytes` | PartRef | The bytes of the arguments, in UTF-8 |
+
+### Rules
+
+- Each `Arg` lies inside the `bytes` part.
+- The shell's entry point builds it.
+
+## Type `Arg`
+
+One argument, as a place in the bytes of its `ArgList`.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `start` | u64 | Where its bytes start, from the start of the `ArgList` |
+| 8 | `length` | u64 | Its byte count, without a terminating zero |
+
+## Type `AppOptions`
+
+The options of a run. A text field is an [`Arg`](#type-arg) of the bytes of the `ArgList`; length 0 means not given.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `network_dir` | `Arg` | The network directory |
+| 16 | `execution` | `Arg` | `host:port` of the execution engine, without `http://` |
+| 32 | `jwt_secret` | `Arg` | The path of the JWT secret file |
+| 48 | `boot_nodes` | `Arg` | The boot node records, with commas between them |
+| 64 | `port` | u64 | The libp2p TCP and discv5 UDP port |
+| 72 | `enr_address` | u64 | The IPv4 address, its 4 bytes in network order in the low bytes, or 0 |
+| 80 | `http_port` | u64 | The Beacon API port |
+| 88 | `target_peers` | u64 | The peers to keep |
+| 96 | | | Size |
+
+## Results
+
+<!-- CI generates the tick table for each function here. -->
