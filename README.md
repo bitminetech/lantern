@@ -82,6 +82,7 @@ Standard: [asm-standard@2a19d3f](https://github.com/bitminetech/asm-standard/blo
 | Devnet of geth and each client, lantern following it | [tests/app/devnet.sh](tests/app/devnet.sh), [tests/kurtosis/](tests/kurtosis/) |
 | Devnet: lantern restarts from its history, starts from a checkpoint, and follows across a fork | [tests/app/devnet.sh](tests/app/devnet.sh) (RESTART=1, CHECKPOINT=1, FORK=1) |
 | CI, 7 targets | [.github/workflows/ci.yml](.github/workflows/ci.yml) |
+| State benchmarks at mainnet scale | [bench/](bench/README.md) |
 
 ## Target profile
 
