@@ -819,8 +819,9 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     str     x27, [x24]                      /* [REJECT] the committee index is in range */
     mov     x0, x23
     add     x1, x21, #(SingleAttestation_data + AttestationData_target + Checkpoint_epoch)
-    mov     x2, x24
-    add     x3, sp, #L
+    mov     x3, x24
+    add     x4, sp, #L
+    ldr     x2, [x20, #(Store_config + CONFIG_COMMITTEE_CACHE)]
     bl      lantern_get_committee_count_per_slot
     CHECK_STATUS x25, 7f, 8f
     ldr     x9, [sp, #L]
@@ -855,8 +856,9 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     x0, x23
     add     x1, x21, #(SingleAttestation_data + AttestationData_slot)
     add     x2, x21, #SingleAttestation_committee_index
-    mov     x3, x24
-    ldr     x4, [sp, #(L + 8)]
+    mov     x4, x24
+    ldr     x5, [sp, #(L + 8)]
+    ldr     x3, [x20, #(Store_config + CONFIG_COMMITTEE_CACHE)]
     bl      lantern_get_beacon_committee
     CHECK_STATUS x25, 7f, 8f
     ldr     x9, [sp, #(L + 8)]              /* [REJECT] the attester is in the committee */
@@ -944,8 +946,9 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     str     x27, [x24]                      /* [REJECT] the committee index is in range */
     mov     x0, x23
     add     x1, x21, #(Attestation_data + AttestationData_target + Checkpoint_epoch)
-    mov     x2, x24
-    add     x3, sp, #L
+    mov     x3, x24
+    add     x4, sp, #L
+    ldr     x2, [x20, #(Store_config + CONFIG_COMMITTEE_CACHE)]
     bl      lantern_get_committee_count_per_slot
     CHECK_STATUS x25, 7f, 8f
     ldr     x9, [sp, #L]
@@ -997,8 +1000,9 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     x0, x23
     add     x1, x21, #(Attestation_data + AttestationData_slot)
     add     x2, x21, #(Attestation_data + AttestationData_index)
-    mov     x3, x24
-    ldr     x4, [sp, #(L + 8)]
+    mov     x4, x24
+    ldr     x5, [sp, #(L + 8)]
+    ldr     x3, [x20, #(Store_config + CONFIG_COMMITTEE_CACHE)]
     bl      lantern_get_beacon_committee
     CHECK_STATUS x25, 7f, 8f
     ldr     x9, [sp, #(L + 8)]              /* [REJECT] len(aggregation_bits) == len(committee) */
@@ -1177,8 +1181,9 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     str     x0, [sp, #(L + 48)]
     mov     x0, x23                         /* [REJECT] the committee index is in range */
     add     x1, sp, #(L + 136)
-    mov     x2, x24
-    add     x3, sp, #(L + 8)
+    mov     x3, x24
+    add     x4, sp, #(L + 8)
+    ldr     x2, [x20, #(Store_config + CONFIG_COMMITTEE_CACHE)]
     bl      lantern_get_committee_count_per_slot
     CHECK_STATUS x25, 7f, 8f
     ldp     x9, x10, [sp, #L]
@@ -1214,8 +1219,9 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     x0, x23
     add     x1, x26, #(Attestation_data + AttestationData_slot)
     add     x2, sp, #L
-    mov     x3, x24
-    ldr     x4, [sp, #(L + 56)]
+    mov     x4, x24
+    ldr     x5, [sp, #(L + 56)]
+    ldr     x3, [x20, #(Store_config + CONFIG_COMMITTEE_CACHE)]
     bl      lantern_get_beacon_committee
     CHECK_STATUS x25, 7f, 8f
     ldr     x9, [sp, #(L + 56)]             /* [REJECT] len(aggregation_bits) == len(committee) */
@@ -1227,8 +1233,9 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     str     x9, [x24]
     mov     x0, x23
     mov     x1, x26
-    mov     x2, x24
-    ldr     x3, [sp, #(L + 64)]
+    mov     x3, x24
+    ldr     x4, [sp, #(L + 64)]
+    ldr     x2, [x20, #(Store_config + CONFIG_COMMITTEE_CACHE)]
     bl      lantern_get_attesting_indices
     CHECK_STATUS x25, 7f, 8f
     ldr     x9, [sp, #(L + 64)]
@@ -1293,8 +1300,9 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     str     x9, [x24]
     mov     x0, x23
     mov     x1, x26
-    mov     x2, x24
-    ldr     x3, [sp, #(L + 72)]
+    mov     x3, x24
+    ldr     x4, [sp, #(L + 72)]
+    ldr     x2, [x20, #(Store_config + CONFIG_COMMITTEE_CACHE)]
     bl      lantern_get_indexed_attestation
     CHECK_STATUS x25, 7f, 8f
     ldr     x9, [sp, #(L + 80)]

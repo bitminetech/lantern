@@ -200,8 +200,9 @@ SPEC_FUNCTION get_unslashed_attesting_indices
     SCRATCH_GIVE %r12, %r14, 2, %r15
     mov     %rbx, %rdi
     lea     (%rbx,%rcx), %rsi
-    mov     %r12, %rdx
-    mov     S8(%rsp), %rcx
+    mov     %r12, %rcx
+    mov     S8(%rsp), %r8
+    xor     %rdx, %rdx
     call    lantern_get_attesting_indices
     test    %rax, %rax
     jnz     7f
@@ -538,8 +539,9 @@ SPEC_FUNCTION get_inclusion_delay_deltas
     SCRATCH_GIVE %rbp, %r15, 4, %rdx
     mov     %rbx, %rdi
     lea     (%rbx,%rcx), %rsi
-    mov     %rbp, %rdx
-    mov     S10(%rsp), %rcx
+    mov     %rbp, %rcx
+    mov     S10(%rsp), %r8
+    xor     %rdx, %rdx
     call    lantern_get_attesting_indices
     test    %rax, %rax
     jnz     7f

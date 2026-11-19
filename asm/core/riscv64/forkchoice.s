@@ -992,8 +992,9 @@ SPEC_FUNCTION on_attestation
     sd      s7, 0(s5)                       # get_indexed_attestation(target_state, attestation)
     mv      a0, s4
     mv      a1, s2
-    mv      a2, s5
-    mv      a3, s8
+    mv      a3, s5
+    mv      a4, s8
+    ld      a2, (Store_config + CONFIG_COMMITTEE_CACHE)(s1)
     call    lantern_get_indexed_attestation
     CHECK_STATUS s6, 7f, 8f
     sd      s7, 0(s5)                       # assert is_valid_indexed_attestation(target_state, indexed_attestation)
@@ -1221,8 +1222,9 @@ SPEC_FUNCTION get_proposer_head
     sd      t0, (L + 16)(sp)
     mv      a0, s4                          # get_committee_count_per_slot(head_state, epoch)
     addi    a1, sp, (L + 16)
-    mv      a2, s5
-    addi    a3, sp, L
+    mv      a3, s5
+    addi    a4, sp, L
+    ld      a2, (Store_config + CONFIG_COMMITTEE_CACHE)(s1)
     call    lantern_get_committee_count_per_slot
     bnez    a0, 7f
     sd      zero, (L + 8)(sp)
@@ -1237,8 +1239,9 @@ SPEC_FUNCTION get_proposer_head
     NODE    a1, s1, s2
     addi    a1, a1, BlockNode_slot
     addi    a2, sp, (L + 8)
-    mv      a3, s5
-    ld      a4, (L + 24)(sp)
+    mv      a4, s5
+    ld      a5, (L + 24)(sp)
+    ld      a3, (Store_config + CONFIG_COMMITTEE_CACHE)(s1)
     call    lantern_get_beacon_committee
     bnez    a0, 7f
     ld      t0, (L + 24)(sp)

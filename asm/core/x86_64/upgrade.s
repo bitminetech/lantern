@@ -410,8 +410,9 @@ SPEC_FUNCTION translate_participation
     mov     %rbx, %rdi                      # committee = get_beacon_committee(state, data.slot, data.index)
     lea     (PRE_PendingAttestation_data + PRE_AttestationData_slot)(%r13), %rsi
     lea     (PRE_PendingAttestation_data + PRE_AttestationData_index)(%r13), %rdx
-    mov     %r12, %rcx
-    mov     %r15, %r8
+    mov     %r12, %r8
+    mov     %r15, %r9
+    xor     %rcx, %rcx
     call    lantern_get_beacon_committee
     test    %rax, %rax
     jnz     7f

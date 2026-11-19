@@ -420,8 +420,9 @@ SPEC_FUNCTION translate_participation
     mv      a0, s1                          # committee = get_beacon_committee(state, data.slot, data.index)
     ADDQ    a1, s4, PRE_PendingAttestation_data + PRE_AttestationData_slot
     ADDQ    a2, s4, PRE_PendingAttestation_data + PRE_AttestationData_index
-    mv      a3, s3
-    mv      a4, s6
+    mv      a4, s3
+    mv      a5, s6
+    li      a3, 0
     call    lantern_get_beacon_committee
     bnez    a0, 7f
     PART    t0, t1, s4, PRE_PendingAttestation_aggregation_bits

@@ -149,7 +149,23 @@
 .set CONFIG_MESSAGE_DOMAIN_INVALID_SNAPPY, 392 + 16 * 32 + 136   /* DomainType, 4 bytes */
 .set CONFIG_MESSAGE_DOMAIN_VALID_SNAPPY, 392 + 16 * 32 + 144     /* DomainType, 4 bytes */
 .set CONFIG_STATE_CACHE, 392 + 16 * 32 + 152    /* the address of a StateCache, or 0 (docs/reference/state.md) */
-.set CONFIG_SIZE, 392 + 16 * 32 + 160
+.set CONFIG_COMMITTEE_CACHE, 392 + 16 * 32 + 160    /* the address of a CommitteeCache, or 0 (block-processing.md) */
+.set CONFIG_SIZE, 392 + 16 * 32 + 168
+
+/* CommitteeCache and CommitteeEntry (docs/reference/block-processing.md). */
+.set CommitteeCache_size, 0
+.set CommitteeCache_validators, 8
+.set CommitteeCache_next, 16
+.set CommitteeCache_entries, 24
+.set COMMITTEE_CACHE_FIXED, 24
+.set COMMITTEE_CACHE_ENTRIES, 4
+.set CommitteeEntry_valid, 0
+.set CommitteeEntry_epoch, 8
+.set CommitteeEntry_count, 16
+.set CommitteeEntry_seed, 24
+.set CommitteeEntry_decision_root, 56
+.set CommitteeEntry_genesis_validators_root, 88
+.set CommitteeEntry__mem, 128
 
 /* StateCache and CacheTree (docs/reference/state.md). */
 .set StateCache_size, 0

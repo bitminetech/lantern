@@ -1005,8 +1005,9 @@ SPEC_FUNCTION on_attestation
     mov     %rax, (%r14)
     mov     %r13, %rdi
     mov     %rbp, %rsi
-    mov     %r14, %rdx
-    mov     S8(%rsp), %rcx
+    mov     %r14, %rcx
+    mov     S8(%rsp), %r8
+    mov     (Store_config + CONFIG_COMMITTEE_CACHE)(%rbx), %rdx
     call    lantern_get_indexed_attestation
     CHECK_STATUS %r15, 7f, 8f
     mov     S7(%rsp), %rax                  # assert is_valid_indexed_attestation(target_state, indexed_attestation)
@@ -1254,8 +1255,9 @@ SPEC_FUNCTION get_proposer_head
     mov     %rax, (L + 16)(%rsp)
     mov     %r13, %rdi                      # get_committee_count_per_slot(head_state, epoch)
     lea     (L + 16)(%rsp), %rsi
-    mov     %r14, %rdx
-    lea     L(%rsp), %rcx
+    mov     %r14, %rcx
+    lea     L(%rsp), %r8
+    mov     (Store_config + CONFIG_COMMITTEE_CACHE)(%rbx), %rdx
     call    lantern_get_committee_count_per_slot
     test    %rax, %rax
     jnz     7f
@@ -1272,8 +1274,9 @@ SPEC_FUNCTION get_proposer_head
     NODE    %rsi, %rbx, %rbp
     add     $BlockNode_slot, %rsi
     lea     (L + 8)(%rsp), %rdx
-    mov     %r14, %rcx
-    mov     (L + 24)(%rsp), %r8
+    mov     %r14, %r8
+    mov     (L + 24)(%rsp), %r9
+    mov     (Store_config + CONFIG_COMMITTEE_CACHE)(%rbx), %rcx
     call    lantern_get_beacon_committee
     test    %rax, %rax
     jnz     7f

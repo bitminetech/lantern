@@ -1242,6 +1242,7 @@ The config values of the network, read at run time. Layout: the `CONFIG_*` offse
 - A Version takes the low 4 bytes of its u64; the other 4 bytes are 0.
 - `CONFIG_BLOB_SCHEDULE` holds `CONFIG_BLOB_SCHEDULE_COUNT` entries of (EPOCH, MAX_BLOBS_PER_BLOCK), at most 32, in ascending EPOCH.
 - `CONFIG_STATE_CACHE` holds the address of a [`StateCache`](state.md#type-statecache) that the caller keeps for every state root of the calls with this config, or 0. It is no value of the config file.
+- `CONFIG_COMMITTEE_CACHE` holds the address of a [`CommitteeCache`](block-processing.md#type-committeecache) that the caller keeps for the committees of the calls with this config, or 0. It is no value of the config file.
 - `CONFIG_SIZE` bytes.
 
 ## Type `Scratch`

@@ -977,8 +977,9 @@ SPEC_FUNCTION on_attestation
     str     x25, [x23]                      /* get_indexed_attestation(target_state, attestation) */
     mov     x0, x22
     mov     x1, x20
-    mov     x2, x23
-    mov     x3, x26
+    mov     x3, x23
+    mov     x4, x26
+    ldr     x2, [x19, #(Store_config + CONFIG_COMMITTEE_CACHE)]
     bl      lantern_get_indexed_attestation
     CHECK_STATUS x24, 7f, 8f
     str     x25, [x23]                      /* assert is_valid_indexed_attestation(target_state, indexed_attestation) */
@@ -1203,8 +1204,9 @@ SPEC_FUNCTION get_proposer_head
     str     x9, [sp, #(L + 16)]
     mov     x0, x22                         /* get_committee_count_per_slot(head_state, epoch) */
     add     x1, sp, #(L + 16)
-    mov     x2, x23
-    add     x3, sp, #L
+    mov     x3, x23
+    add     x4, sp, #L
+    ldr     x2, [x19, #(Store_config + CONFIG_COMMITTEE_CACHE)]
     bl      lantern_get_committee_count_per_slot
     cbnz    x0, 7f
     str     xzr, [sp, #(L + 8)]
@@ -1220,8 +1222,9 @@ SPEC_FUNCTION get_proposer_head
     NODE    x1, x19, x20
     add     x1, x1, #BlockNode_slot
     add     x2, sp, #(L + 8)
-    mov     x3, x23
-    ldr     x4, [sp, #(L + 24)]
+    mov     x4, x23
+    ldr     x5, [sp, #(L + 24)]
+    ldr     x3, [x19, #(Store_config + CONFIG_COMMITTEE_CACHE)]
     bl      lantern_get_beacon_committee
     cbnz    x0, 7f
     ldr     x9, [sp, #(L + 24)]

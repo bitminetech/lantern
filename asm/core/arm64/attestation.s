@@ -82,15 +82,145 @@ SPEC_LEAF get_committee_indices
 SPEC_END get_committee_indices
 .endif
 
-/* x19 state, x20 epoch, x21 scratch, x22 out, x23 list. */
-SPEC_FUNCTION get_committee_count_per_slot
+/*
+ * L0: the key of epoch x1 of state x0 at x2 (CommitteeEntry_seed onward): get_seed with
+ * DOMAIN_BEACON_ATTESTER, the decision root, the genesis validators root. x19 state, x20 epoch,
+ * x21 key. Locals: L epoch, L+8 domain type.
+ */
+LOCAL_FUNCTION committee_key
     ENTER 16
     mov     x19, x0
     mov     x20, x1
     mov     x21, x2
-    mov     x22, x3
+    str     x20, [sp, #L]
+    mov     w9, #DOMAIN_BEACON_ATTESTER
+    str     w9, [sp, #(L + 8)]
+    mov     x0, x19
+    add     x1, sp, #L
+    add     x2, sp, #(L + 8)
+    mov     x3, x21
+    bl      lantern_get_seed
+    cbnz    x0, 7f
+    add     x9, x21, #32                    /* the decision root: the last slot of epoch E - 5 */
+    stp     xzr, xzr, [x9]
+    stp     xzr, xzr, [x9, #16]
+    mov     x10, #0
+    cmp     x20, #5
+    b.lo    1f
+    sub     x10, x20, #4
+    lsl     x10, x10, #LOG2_SLOTS_PER_EPOCH
+    sub     x10, x10, #1
+1:  LDQ     x11, x19, BeaconState_slot      /* get_block_root_at_slot: before the state's slot, in range */
+    cmp     x10, x11
+    b.hs    2f
+    MOVQ    x12, SLOTS_PER_HISTORICAL_ROOT
+    add     x12, x10, x12
+    cmp     x11, x12
+    b.hi    2f
+    and     x10, x10, #(SLOTS_PER_HISTORICAL_ROOT - 1)
+    ADDQ    x11, x19, BeaconState_block_roots
+    add     x11, x11, x10, lsl #5
+    COPY32  x9, x11
+2:  add     x9, x21, #64
+    ADDQ    x11, x19, BeaconState_genesis_validators_root
+    COPY32  x9, x11
+    mov     x0, #LANTERN_OK
+7:  LEAVE 16
+END_FUNCTION committee_key
+
+/* L0: x0 = the valid entry of cache x0 for epoch x1 and the key at x2, or 0. A leaf. */
+LOCAL_FUNCTION committee_find
+    UNWIND_END_PROLOGUE
+    ldr     x3, [x0, #CommitteeCache_validators]
+    lsl     x3, x3, #3
+    add     x3, x3, #(CommitteeEntry__mem + LIST_FIXED)
+    add     x4, x0, #CommitteeCache_entries
+    mov     x5, #COMMITTEE_CACHE_ENTRIES
+1:  ldr     x6, [x4, #CommitteeEntry_valid]
+    cbz     x6, 3f
+    ldr     x6, [x4, #CommitteeEntry_epoch]
+    cmp     x6, x1
+    b.ne    3f
+    mov     x6, #0                          /* the 96 bytes of the key */
+    add     x7, x4, #CommitteeEntry_seed
+2:  ldr     x8, [x7, x6]
+    ldr     x9, [x2, x6]
+    cmp     x8, x9
+    b.ne    3f
+    add     x6, x6, #8
+    cmp     x6, #96
+    b.lo    2b
+    mov     x0, x4
+    ret
+3:  add     x4, x4, x3
+    subs    x5, x5, #1
+    b.ne    1b
+    mov     x0, #0
+    ret
+END_FUNCTION committee_find
+
+/* Locals: sp+16 size. */
+SPEC_FUNCTION committee_cache_size
+    FRAME 16
+    ldr     x9, [x0]
+    lsl     x9, x9, #3
+    add     x9, x9, #(CommitteeEntry__mem + LIST_FIXED)
+    mov     x10, #COMMITTEE_CACHE_ENTRIES
+    mul     x9, x9, x10
+    add     x9, x9, #COMMITTEE_CACHE_FIXED
+    str     x9, [x1]
+    mov     x0, #LANTERN_OK
+    UNFRAME 16
+SPEC_END committee_cache_size
+
+SPEC_FUNCTION committee_cache_init
+    FRAME 16
+    ldr     x9, [x0]
+    lsl     x10, x9, #3
+    add     x10, x10, #(CommitteeEntry__mem + LIST_FIXED)   /* an entry and its list */
+    mov     x11, #COMMITTEE_CACHE_ENTRIES
+    mul     x11, x10, x11
+    add     x11, x11, #COMMITTEE_CACHE_FIXED
+    ldr     x12, [x1, #CommitteeCache_size]
+    cmp     x12, x11
+    b.lo    9f
+    str     x9, [x1, #CommitteeCache_validators]
+    str     xzr, [x1, #CommitteeCache_next]
+    add     x12, x1, #CommitteeCache_entries
+    mov     x11, #COMMITTEE_CACHE_ENTRIES
+1:  str     xzr, [x12, #CommitteeEntry_valid]
+    add     x12, x12, x10
+    subs    x11, x11, #1
+    b.ne    1b
+    mov     x0, #LANTERN_OK
+    UNFRAME 16
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    UNFRAME 16
+SPEC_END committee_cache_init
+
+/* x19 state, x20 epoch pointer, x21 scratch, x22 out, x23 list, x24 cache. Locals: L the key (96). */
+SPEC_FUNCTION get_committee_count_per_slot
+    ENTER 96
+    mov     x19, x0
+    mov     x20, x1
+    mov     x24, x2
+    mov     x21, x3
+    mov     x22, x4
     NEED_SCRATCH x21, x19, 1, 9f
-    LDQ     x9, x19, BeaconState_validators + 8
+    cbz     x24, 1f
+    mov     x0, x19                         /* an entry of the cache: its count */
+    ldr     x1, [x20]
+    add     x2, sp, #L
+    bl      committee_key
+    cbnz    x0, 1f
+    mov     x0, x24
+    ldr     x1, [x20]
+    add     x2, sp, #L
+    bl      committee_find
+    cbz     x0, 1f
+    ldr     x9, [x0, #CommitteeEntry_count]
+    b       2f
+1:  LDQ     x9, x19, BeaconState_validators + 8
     ldr     x10, [x21]
     SCRATCH_LIST x23, x21, x10, 0, x9
     mov     x0, x19
@@ -99,7 +229,7 @@ SPEC_FUNCTION get_committee_count_per_slot
     bl      lantern_get_active_validator_indices
     cbnz    x0, 7f
     ldr     x9, [x23, #LIST_COUNT]
-    lsr     x9, x9, #LOG2_SLOTS_PER_EPOCH
+2:  lsr     x9, x9, #LOG2_SLOTS_PER_EPOCH
     mov     x10, #TARGET_COMMITTEE_SIZE
     udiv    x9, x9, x10
     mov     x10, #MAX_COMMITTEES_PER_SLOT
@@ -109,9 +239,9 @@ SPEC_FUNCTION get_committee_count_per_slot
     csinc   x9, x9, xzr, hs                 /* max(1, ...) */
     str     x9, [x22]
     mov     x0, #LANTERN_OK
-7:  LEAVE 16
+7:  LEAVE 96
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 16
+    LEAVE 96
 SPEC_END get_committee_count_per_slot
 
 /*
@@ -170,16 +300,18 @@ SPEC_FUNCTION compute_committee
 SPEC_END compute_committee
 
 /*
- * x19 state, x20 slot, x21 index pointer, x22 scratch, x23 out, x24 scratch size, x25 n, x26 list.
- * Locals: L epoch, L+8 committees per slot, L+16 domain type, L+24 seed (32), L+56 index, L+64 count.
+ * x19 state, x20 slot, x21 index pointer, x22 scratch, x23 out, x24 scratch size, x25 n, x26 list,
+ * x27 cache, x28 the entry. Locals: L epoch, L+8 committees per slot, L+16 domain type,
+ * L+24 seed (32), L+56 index, L+64 count, L+72 the entry's key (96).
  */
 SPEC_FUNCTION get_beacon_committee
-    ENTER 80
+    ENTER 176
     mov     x19, x0
     ldr     x20, [x1]
     mov     x21, x2
-    mov     x22, x3
-    mov     x23, x4
+    mov     x27, x3
+    mov     x22, x4
+    mov     x23, x5
     NEED_SCRATCH x22, x19, 2, 9f
     ldr     x24, [x22]
     LDQ     x25, x19, BeaconState_validators + 8
@@ -187,17 +319,120 @@ SPEC_FUNCTION get_beacon_committee
     str     x9, [sp, #L]
     mov     x0, x19
     add     x1, sp, #L
-    mov     x2, x22
-    add     x3, sp, #(L + 8)
+    mov     x2, x27
+    mov     x3, x22
+    add     x4, sp, #(L + 8)
     bl      lantern_get_committee_count_per_slot
     cbnz    x0, 7f
-    SCRATCH_LIST x26, x22, x24, 0, x25
+    cbz     x27, 20f
+    mov     x0, x19                         /* the cache's entry of the epoch */
+    ldr     x1, [sp, #L]
+    add     x2, sp, #(L + 72)
+    bl      committee_key
+    cbnz    x0, 20f
+    mov     x0, x27
+    ldr     x1, [sp, #L]
+    add     x2, sp, #(L + 72)
+    bl      committee_find
+    mov     x28, x0
+    cbnz    x28, 30f
+    SCRATCH_LIST x26, x22, x24, 0, x25      /* a new entry: the active validators, shuffled */
     mov     x0, x19
     add     x1, sp, #L
     mov     x2, x26
     bl      lantern_get_active_validator_indices
     cbnz    x0, 7f
-    mov     w9, #DOMAIN_BEACON_ATTESTER
+    ldr     x9, [x26, #LIST_COUNT]
+    ldr     x10, [x27, #CommitteeCache_validators]
+    cmp     x9, x10
+    b.hi    21f
+    ldr     x11, [x27, #CommitteeCache_next]
+    lsl     x12, x10, #3
+    add     x12, x12, #(CommitteeEntry__mem + LIST_FIXED)
+    madd    x28, x11, x12, x27
+    add     x28, x28, #CommitteeCache_entries
+    add     x11, x11, #1
+    cmp     x11, #COMMITTEE_CACHE_ENTRIES
+    csel    x11, x11, xzr, lo
+    str     x11, [x27, #CommitteeCache_next]
+    str     xzr, [x28, #CommitteeEntry_valid]
+    str     x9, [x28, #CommitteeEntry_count]
+    lsl     x13, x10, #3
+    add     x13, x13, #LIST_FIXED
+    str     x13, [x28, #(CommitteeEntry__mem + LIST_SIZE)]
+    SCRATCH_GIVE x22, x24, 1, x25
+    add     x0, x28, #CommitteeEntry_count
+    add     x1, sp, #(L + 72)
+    mov     x2, x22
+    add     x3, x28, #CommitteeEntry__mem
+    bl      lantern_compute_shuffled_permutation
+    cbnz    x0, 7f
+    add     x9, x28, #(CommitteeEntry__mem + LIST_FIXED)    /* entry i = indices[permutation[i]] */
+    add     x10, x26, #LIST_FIXED
+    ldr     x11, [x28, #CommitteeEntry_count]
+    mov     x12, #0
+11: cmp     x12, x11
+    b.hs    12f
+    ldr     x13, [x9, x12, lsl #3]
+    ldr     x13, [x10, x13, lsl #3]
+    str     x13, [x9, x12, lsl #3]
+    add     x12, x12, #1
+    b       11b
+12: ldr     x9, [sp, #L]
+    str     x9, [x28, #CommitteeEntry_epoch]
+    add     x9, x28, #CommitteeEntry_seed
+    add     x10, sp, #(L + 72)
+    COPY32  x9, x10
+    add     x9, x9, #32
+    add     x10, x10, #32
+    COPY32  x9, x10
+    add     x9, x9, #32
+    add     x10, x10, #32
+    COPY32  x9, x10
+    mov     x9, #1
+    str     x9, [x28, #CommitteeEntry_valid]
+30: ldr     x9, [sp, #(L + 8)]              /* the slice of the entry: index, count, start, end */
+    and     x10, x20, #(SLOTS_PER_EPOCH - 1)
+    mul     x10, x10, x9
+    ldr     x11, [x21]
+    adds    x10, x10, x11
+    b.cs    6f
+    lsl     x9, x9, #LOG2_SLOTS_PER_EPOCH
+    ldr     x11, [x28, #CommitteeEntry_count]
+    mul     x12, x11, x10
+    udiv    x12, x12, x9
+    add     x10, x10, #1
+    mul     x13, x11, x10
+    udiv    x13, x13, x9
+    sub     x14, x13, x12
+    cbz     x14, 31f
+    cmp     x13, x11                        /* past the list: compute_shuffled_index raises */
+    b.hi    5f
+31: lsl     x15, x14, #3
+    add     x15, x15, #LIST_FIXED
+    ldr     x16, [x23, #LIST_SIZE]
+    cmp     x16, x15
+    b.lo    9f
+    mov     x15, #LIST_FIXED
+    str     x15, [x23, #LIST_OFFSET]
+    str     x14, [x23, #LIST_COUNT]
+    add     x15, x28, #(CommitteeEntry__mem + LIST_FIXED)
+    add     x15, x15, x12, lsl #3
+    add     x16, x23, #LIST_FIXED
+32: cbz     x14, 33f
+    ldr     x9, [x15], #8
+    str     x9, [x16], #8
+    sub     x14, x14, #1
+    b       32b
+33: mov     x0, #LANTERN_OK
+    LEAVE 176
+20: SCRATCH_LIST x26, x22, x24, 0, x25      /* no cache */
+    mov     x0, x19
+    add     x1, sp, #L
+    mov     x2, x26
+    bl      lantern_get_active_validator_indices
+    cbnz    x0, 7f
+21: mov     w9, #DOMAIN_BEACON_ATTESTER
     str     w9, [sp, #(L + 16)]
     mov     x0, x19
     add     x1, sp, #L
@@ -222,25 +457,29 @@ SPEC_FUNCTION get_beacon_committee
     mov     x4, x22
     mov     x5, x23
     bl      lantern_compute_committee
-7:  LEAVE 80
+7:  LEAVE 176
+5:  mov     x0, #LANTERN_INVALID_SHUFFLED_INDEX
+    LEAVE 176
 6:  mov     x0, #LANTERN_INVALID_OVERFLOW
-    LEAVE 80
+    LEAVE 176
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 80
+    LEAVE 176
 SPEC_END get_beacon_committee
 
 .if FORK >= FORK_ELECTRA
 /*
  * x19 state, x20 attestation, x21 scratch, x22 out, x23 scratch size, x24 n, x25 committee indices,
  * x26 committee, x27 committee offset, x28 committee index cursor.
- * Locals: L committee index, L+8 the scratch size the callee gets, L+16 bits, L+24 bit count, L+32 cursor end.
+ * Locals: L committee index, L+8 the scratch size the callee gets, L+16 bits, L+24 bit count, L+32 cursor end,
+ * L+40 the committee cache.
  */
 SPEC_FUNCTION get_attesting_indices
     ENTER 48
     mov     x19, x0
     mov     x20, x1
-    mov     x21, x2
-    mov     x22, x3
+    str     x2, [sp, #(L + 40)]             /* the cache */
+    mov     x21, x3
+    mov     x22, x4
     NEED_SCRATCH_B x21, x19, 3, CIDX_BYTES, 9f
     LDQ     x24, x19, BeaconState_validators + 8
     lsl     x9, x24, #3                     /* out has room for every validator */
@@ -283,8 +522,9 @@ SPEC_FUNCTION get_attesting_indices
     mov     x0, x19                         /* committee = get_beacon_committee(state, data.slot, committee_index) */
     add     x1, x20, #(Attestation_data + AttestationData_slot)
     add     x2, sp, #L
-    mov     x3, x21
-    mov     x4, x26
+    mov     x4, x21
+    mov     x5, x26
+    ldr     x3, [sp, #(L + 40)]
     bl      lantern_get_beacon_committee
     cbnz    x0, 7f
     ldr     x9, [x26, #LIST_COUNT]
@@ -324,7 +564,8 @@ SPEC_END get_attesting_indices
 /*
  * Before electra: the committee of data.index. A PendingAttestation of phase0 has the same
  * aggregation_bits and data, so the function also takes one.
- * x19 state, x20 attestation, x21 scratch, x22 out, x23 scratch size, x24 n, x26 committee.
+ * x19 state, x20 attestation, x21 scratch, x22 out, x23 scratch size, x24 n, x25 the committee cache,
+ * x26 committee.
  */
 .if FORK == FORK_PHASE0
 .if (PendingAttestation_aggregation_bits != Attestation_aggregation_bits) || (PendingAttestation_data != Attestation_data)
@@ -335,8 +576,9 @@ SPEC_FUNCTION get_attesting_indices
     ENTER 16
     mov     x19, x0
     mov     x20, x1
-    mov     x21, x2
-    mov     x22, x3
+    mov     x25, x2
+    mov     x21, x3
+    mov     x22, x4
     NEED_SCRATCH x21, x19, 3, 9f
     LDQ     x24, x19, BeaconState_validators + 8
     lsl     x9, x24, #3                     /* out has room for every validator */
@@ -350,8 +592,9 @@ SPEC_FUNCTION get_attesting_indices
     mov     x0, x19                         /* committee = get_beacon_committee(state, data.slot, data.index) */
     add     x1, x20, #(Attestation_data + AttestationData_slot)
     add     x2, x20, #(Attestation_data + AttestationData_index)
-    mov     x3, x21
-    mov     x4, x26
+    mov     x4, x21
+    mov     x5, x26
+    mov     x3, x25
     bl      lantern_get_beacon_committee
     cbnz    x0, 7f
     PART    x11, x12, x20, Attestation_aggregation_bits
@@ -389,13 +632,17 @@ SPEC_FUNCTION get_attesting_indices
 SPEC_END get_attesting_indices
 .endif
 
-/* x19 state, x20 attestation, x21 scratch, x22 out, x23 scratch size, x24 n, x25 the attesting list. */
+/*
+ * x19 state, x20 attestation, x21 scratch, x22 out, x23 scratch size, x24 n, x25 the attesting list,
+ * x26 the committee cache.
+ */
 SPEC_FUNCTION get_indexed_attestation
     ENTER 16
     mov     x19, x0
     mov     x20, x1
-    mov     x21, x2
-    mov     x22, x3
+    mov     x26, x2
+    mov     x21, x3
+    mov     x22, x4
     NEED_SCRATCH_B x21, x19, 4, CIDX_BYTES, 9f
     LDQ     x24, x19, BeaconState_validators + 8
     ldr     x23, [x21]
@@ -403,8 +650,9 @@ SPEC_FUNCTION get_indexed_attestation
     SCRATCH_GIVE x21, x23, 1, x24
     mov     x0, x19
     mov     x1, x20
-    mov     x2, x21
-    mov     x3, x25
+    mov     x3, x21
+    mov     x4, x25
+    mov     x2, x26
     bl      lantern_get_attesting_indices
     cbnz    x0, 7f
     ldr     x9, [x25, #LIST_COUNT]          /* out: attesting_indices, data, signature */
@@ -674,8 +922,9 @@ SPEC_FUNCTION process_attestation
     str     x9, [x22]
     mov     x0, x19                         /* assert data.index < get_committee_count_per_slot(state, data.target.epoch) */
     add     x1, x20, #(Attestation_data + AttestationData_target + Checkpoint_epoch)
-    mov     x2, x22
-    add     x3, sp, #(L + 16)
+    mov     x3, x22
+    add     x4, sp, #(L + 16)
+    ldr     x2, [x21, #CONFIG_COMMITTEE_CACHE]
     bl      lantern_get_committee_count_per_slot
     cbnz    x0, 7f
     ldr     x9, [x20, #(Attestation_data + AttestationData_index)]
@@ -688,8 +937,9 @@ SPEC_FUNCTION process_attestation
     mov     x0, x19                         /* committee = get_beacon_committee(state, data.slot, data.index) */
     add     x1, x20, #(Attestation_data + AttestationData_slot)
     add     x2, x20, #(Attestation_data + AttestationData_index)
-    mov     x3, x22
-    mov     x4, x28
+    mov     x4, x22
+    mov     x5, x28
+    ldr     x3, [x21, #CONFIG_COMMITTEE_CACHE]
     bl      lantern_get_beacon_committee
     CHECK_STATUS x23, 7f, 8f
     LDQ     x9, x20, Attestation_aggregation_bits + 8
@@ -726,8 +976,9 @@ SPEC_FUNCTION process_attestation
     str     x9, [x22]
     mov     x0, x19                         /* assert is_valid_indexed_attestation(state, get_indexed_attestation(...)) */
     mov     x1, x20
-    mov     x2, x22
-    mov     x3, x27
+    mov     x3, x22
+    mov     x4, x27
+    ldr     x2, [x21, #CONFIG_COMMITTEE_CACHE]
     bl      lantern_get_indexed_attestation
     CHECK_STATUS x23, 7f, 8f
     ldr     x9, [sp, #(L + 40)]
@@ -892,8 +1143,9 @@ SPEC_FUNCTION process_attestation
     str     x9, [x22]
     mov     x0, x19                         /* assert committee_index < get_committee_count_per_slot(...) */
     add     x1, x20, #(Attestation_data + AttestationData_target + Checkpoint_epoch)
-    mov     x2, x22
-    add     x3, sp, #(L + 16)
+    mov     x3, x22
+    add     x4, sp, #(L + 16)
+    ldr     x2, [x21, #CONFIG_COMMITTEE_CACHE]
     bl      lantern_get_committee_count_per_slot
     cbnz    x0, 7f
     ldr     x9, [sp, #(L + 24)]
@@ -906,8 +1158,9 @@ SPEC_FUNCTION process_attestation
     mov     x0, x19
     add     x1, x20, #(Attestation_data + AttestationData_slot)
     add     x2, sp, #(L + 24)
-    mov     x3, x22
-    mov     x4, x27
+    mov     x4, x22
+    mov     x5, x27
+    ldr     x3, [x21, #CONFIG_COMMITTEE_CACHE]
     bl      lantern_get_beacon_committee
     CHECK_STATUS x23, 7f, 8f
     PART    x11, x12, x20, Attestation_aggregation_bits
@@ -938,8 +1191,9 @@ SPEC_FUNCTION process_attestation
     str     x9, [x22]
     mov     x0, x19                         /* assert data.index < get_committee_count_per_slot(state, data.target.epoch) */
     add     x1, x20, #(Attestation_data + AttestationData_target + Checkpoint_epoch)
-    mov     x2, x22
-    add     x3, sp, #(L + 16)
+    mov     x3, x22
+    add     x4, sp, #(L + 16)
+    ldr     x2, [x21, #CONFIG_COMMITTEE_CACHE]
     bl      lantern_get_committee_count_per_slot
     cbnz    x0, 7f
     ldr     x9, [x20, #(Attestation_data + AttestationData_index)]
@@ -952,8 +1206,9 @@ SPEC_FUNCTION process_attestation
     mov     x0, x19                         /* committee = get_beacon_committee(state, data.slot, data.index) */
     add     x1, x20, #(Attestation_data + AttestationData_slot)
     add     x2, x20, #(Attestation_data + AttestationData_index)
-    mov     x3, x22
-    mov     x4, x27
+    mov     x4, x22
+    mov     x5, x27
+    ldr     x3, [x21, #CONFIG_COMMITTEE_CACHE]
     bl      lantern_get_beacon_committee
     CHECK_STATUS x23, 7f, 8f
     LDQ     x9, x20, Attestation_aggregation_bits + 8
@@ -978,8 +1233,9 @@ SPEC_FUNCTION process_attestation
     str     x9, [x22]
     mov     x0, x19                         /* assert is_valid_indexed_attestation(state, get_indexed_attestation(...)) */
     mov     x1, x20
-    mov     x2, x22
-    ldr     x3, [sp, #(L + 144)]
+    mov     x3, x22
+    ldr     x4, [sp, #(L + 144)]
+    ldr     x2, [x21, #CONFIG_COMMITTEE_CACHE]
     bl      lantern_get_indexed_attestation
     CHECK_STATUS x23, 7f, 8f
     ldr     x9, [sp, #(L + 160)]
@@ -1005,8 +1261,9 @@ SPEC_FUNCTION process_attestation
     str     x9, [x22]
     mov     x0, x19                         /* for index in get_attesting_indices(state, attestation) */
     mov     x1, x20
-    mov     x2, x22
-    ldr     x3, [sp, #(L + 152)]
+    mov     x3, x22
+    ldr     x4, [sp, #(L + 152)]
+    ldr     x2, [x21, #CONFIG_COMMITTEE_CACHE]
     bl      lantern_get_attesting_indices
     CHECK_STATUS x23, 7f, 8f
     ldr     x9, [sp, #(L + 160)]

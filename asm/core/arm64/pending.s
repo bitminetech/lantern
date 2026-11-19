@@ -189,8 +189,9 @@ SPEC_FUNCTION get_unslashed_attesting_indices
     SCRATCH_GIVE x21, x23, 2, x24
     mov     x0, x19
     add     x1, x19, x9
-    mov     x2, x21
-    mov     x3, x26
+    mov     x3, x21
+    mov     x4, x26
+    mov     x2, xzr
     bl      lantern_get_attesting_indices
     cbnz    x0, 7f
     ldr     x9, [x26, #LIST_COUNT]
@@ -490,8 +491,9 @@ SPEC_FUNCTION get_inclusion_delay_deltas
     SCRATCH_GIVE x20, x24, 4, x25
     mov     x0, x19
     add     x1, x19, x11
-    mov     x2, x20
-    ldr     x3, [sp, #(L + 24)]
+    mov     x3, x20
+    ldr     x4, [sp, #(L + 24)]
+    mov     x2, xzr
     bl      lantern_get_attesting_indices
     cbnz    x0, 7f
     ldr     x11, [sp, #(L + 48)]

@@ -116,6 +116,8 @@ ABI uint64_t LF(beacon_state_copy)(const void *state, const void *room, void *ou
 ABI uint64_t LF(state_cache_size)(const void *validators, void *size);
 ABI uint64_t LF(state_cache_init)(const void *validators, void *cache);
 ABI uint64_t LF(state_root)(const void *state, void *cache, void *scratch, void *out);
+ABI uint64_t LF(committee_cache_size)(const void *validators, void *size);
+ABI uint64_t LF(committee_cache_init)(const void *validators, void *cache);
 
 ABI uint64_t LF(compute_shuffled_permutation)(const void *index_count, const void *seed, void *scratch, void *out);
 ABI uint64_t LF(compute_shuffled_index)(const void *index, const void *index_count, const void *seed, void *scratch,
@@ -264,7 +266,7 @@ ABI uint64_t crypto_secp256k1_decompress(const void *public_key, void *point);
 ABI uint64_t crypto_keccak256(const void *message, void *digest);
 ABI uint64_t crypto_sha256(const void *message, void *digest);
 ABI uint64_t crypto_bls_sign(const void *secret_key, const void *message, void *scratch, void *signature);
-ABI uint64_t LF(get_attesting_indices)(const void *state, const void *attestation, void *scratch, void *out);
+ABI uint64_t LF(get_attesting_indices)(const void *state, const void *attestation, void *cache, void *scratch, void *out);
 ABI uint64_t LF(get_domain)(const void *state, const void *domain_type, const void *epoch, void *scratch, void *out);
 
 #if FORK == FORK_FULU
@@ -602,8 +604,13 @@ static int read_file(const char *dir, const char *name, case_file *f) {
     return 1;
 }
 
+/* The committee cache of the process (block-processing.md, Test vectors), emptied before each case. */
+static uint8_t *committee_cache;
+static uint64_t committee_validators = 4096;
+
 /* The next case: its name (not zero ended) and its parts map. */
 static tv next_case(case_file *f, const char **name, uint64_t *name_len) {
+    if (committee_cache) CALL(LF(committee_cache_init), &committee_validators, committee_cache);
     *name_len = rd64(f->data + f->at);
     *name = (const char *)(f->data + f->at + 8);
     tv parts = f->data + f->at + 8 + *name_len;
@@ -860,7 +867,8 @@ static const struct {
 #define CONFIG_SUBNETS_PER_NODE 336
 #define CONFIG_BLOB_SCHEDULE 392
 #define CONFIG_STATE_CACHE (392 + 16 * 32 + 152)
-#define CONFIG_SIZE (392 + 16 * 32 + 160)
+#define CONFIG_COMMITTEE_CACHE (392 + 16 * 32 + 160)
+#define CONFIG_SIZE (392 + 16 * 32 + 168)
 
 static uint8_t config[CONFIG_SIZE];
 
@@ -946,6 +954,14 @@ static void load_config(const char *dir) {
         exit(2);
     }
     wr64(config + CONFIG_STATE_CACHE, (uint64_t)(uintptr_t)state_cache);
+    CALL(LF(committee_cache_size), &committee_validators, &csize);
+    committee_cache = buffer(csize);
+    wr64(committee_cache, csize);
+    if (CALL(LF(committee_cache_init), &committee_validators, committee_cache) != 0) {
+        fprintf(stderr, "committee_cache_init status\n");
+        exit(2);
+    }
+    wr64(config + CONFIG_COMMITTEE_CACHE, (uint64_t)(uintptr_t)committee_cache);
     memcpy(base_config, config, CONFIG_SIZE);
     free(f.data);
 }
@@ -5294,7 +5310,7 @@ static uint8_t *test_aggregate(const uint8_t *state, const uint8_t *att, uint64_
     wr64(list, lsize);
     wr64(list + 8, 24);
     wr64(list + 16, 0);
-    if (CALL(LF(get_attesting_indices), state, a, fresh_scratch(), list) == 0 && rd64(list + 16)) {
+    if (CALL(LF(get_attesting_indices), state, a, committee_cache, fresh_scratch(), list) == 0 && rd64(list + 16)) {
         uint64_t aggr = rd64(list + 24), slot = rd64(att + 4), epoch = slot / SLOTS_PER_EPOCH_RUNNER, mlen = 108 + alen;
         uint8_t dt[4] = {5, 0, 0, 0}, domain[32], chunk[32] = {0}, root[32], sel[96];
         wr64(chunk, slot); /* selection proof: the slot under DOMAIN_SELECTION_PROOF */

@@ -858,8 +858,9 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     %rax, (%r15)
     mov     %r14, %rdi
     lea     (SingleAttestation_data + AttestationData_target + Checkpoint_epoch)(%r12), %rsi
-    mov     %r15, %rdx
-    lea     (L + 16)(%rsp), %rcx
+    mov     %r15, %rcx
+    lea     (L + 16)(%rsp), %r8
+    mov     (Store_config + CONFIG_COMMITTEE_CACHE)(%rbp), %rdx
     call    lantern_get_committee_count_per_slot
     CHECK_RESULT L, 7f, 8f
     mov     (L + 16)(%rsp), %rcx
@@ -898,8 +899,9 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     %r14, %rdi
     lea     (SingleAttestation_data + AttestationData_slot)(%r12), %rsi
     lea     SingleAttestation_committee_index(%r12), %rdx
-    mov     %r15, %rcx
-    mov     (L + 24)(%rsp), %r8
+    mov     %r15, %r8
+    mov     (L + 24)(%rsp), %r9
+    mov     (Store_config + CONFIG_COMMITTEE_CACHE)(%rbp), %rcx
     call    lantern_get_beacon_committee
     CHECK_RESULT L, 7f, 8f
     mov     (L + 24)(%rsp), %rsi            # [REJECT] the attester is in the committee
@@ -995,8 +997,9 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     %rax, (%r15)
     mov     %r14, %rdi
     lea     (Attestation_data + AttestationData_target + Checkpoint_epoch)(%r12), %rsi
-    mov     %r15, %rdx
-    lea     (L + 16)(%rsp), %rcx
+    mov     %r15, %rcx
+    lea     (L + 16)(%rsp), %r8
+    mov     (Store_config + CONFIG_COMMITTEE_CACHE)(%rbp), %rdx
     call    lantern_get_committee_count_per_slot
     CHECK_RESULT L, 7f, 8f
     mov     (L + 16)(%rsp), %rcx
@@ -1052,8 +1055,9 @@ SPEC_FUNCTION validate_beacon_attestation_gossip
     mov     %r14, %rdi
     lea     (Attestation_data + AttestationData_slot)(%r12), %rsi
     lea     (Attestation_data + AttestationData_index)(%r12), %rdx
-    mov     %r15, %rcx
-    mov     (L + 24)(%rsp), %r8
+    mov     %r15, %r8
+    mov     (L + 24)(%rsp), %r9
+    mov     (Store_config + CONFIG_COMMITTEE_CACHE)(%rbp), %rcx
     call    lantern_get_beacon_committee
     CHECK_RESULT L, 7f, 8f
     mov     (L + 24)(%rsp), %rsi            # [REJECT] len(aggregation_bits) == len(committee)
@@ -1231,8 +1235,9 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     %rax, (L + 56)(%rsp)
     mov     %r14, %rdi                      # [REJECT] the committee index is in range
     lea     (L + 136)(%rsp), %rsi
-    mov     %r15, %rdx
-    lea     (L + 16)(%rsp), %rcx
+    mov     %r15, %rcx
+    lea     (L + 16)(%rsp), %r8
+    mov     (Store_config + CONFIG_COMMITTEE_CACHE)(%rbp), %rdx
     call    lantern_get_committee_count_per_slot
     CHECK_RESULT L, 7f, 8f
     mov     (L + 8)(%rsp), %rax
@@ -1275,8 +1280,9 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     S9(%rsp), %rsi
     add     $(Attestation_data + AttestationData_slot), %rsi
     lea     (L + 8)(%rsp), %rdx
-    mov     %r15, %rcx
-    mov     (L + 64)(%rsp), %r8
+    mov     %r15, %r8
+    mov     (L + 64)(%rsp), %r9
+    mov     (Store_config + CONFIG_COMMITTEE_CACHE)(%rbp), %rcx
     call    lantern_get_beacon_committee
     CHECK_RESULT L, 7f, 8f
     mov     (L + 64)(%rsp), %rax            # [REJECT] len(aggregation_bits) == len(committee)
@@ -1288,8 +1294,9 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     %rax, (%r15)
     mov     %r14, %rdi
     mov     S9(%rsp), %rsi
-    mov     %r15, %rdx
-    mov     (L + 72)(%rsp), %rcx
+    mov     %r15, %rcx
+    mov     (L + 72)(%rsp), %r8
+    mov     (Store_config + CONFIG_COMMITTEE_CACHE)(%rbp), %rdx
     call    lantern_get_attesting_indices
     CHECK_RESULT L, 7f, 8f
     mov     (L + 72)(%rsp), %rax
@@ -1363,8 +1370,9 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     %rax, (%r15)
     mov     %r14, %rdi
     mov     S9(%rsp), %rsi
-    mov     %r15, %rdx
-    mov     (L + 80)(%rsp), %rcx
+    mov     %r15, %rcx
+    mov     (L + 80)(%rsp), %r8
+    mov     (Store_config + CONFIG_COMMITTEE_CACHE)(%rbp), %rdx
     call    lantern_get_indexed_attestation
     CHECK_RESULT L, 7f, 8f
     mov     (L + 88)(%rsp), %rax

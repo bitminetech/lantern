@@ -193,8 +193,9 @@ SPEC_FUNCTION get_unslashed_attesting_indices
     SCRATCH_GIVE s3, s5, 2, s6
     mv      a0, s1
     add     a1, s1, t0
-    mv      a2, s3
-    mv      a3, s8
+    mv      a3, s3
+    mv      a4, s8
+    li      a2, 0
     call    lantern_get_attesting_indices
     bnez    a0, 7f
     ld      t0, LIST_COUNT(s8)
@@ -508,8 +509,9 @@ SPEC_FUNCTION get_inclusion_delay_deltas
     SCRATCH_GIVE s2, s6, 4, s7
     mv      a0, s1
     add     a1, s1, t2
-    mv      a2, s2
-    ld      a3, (L + 24)(sp)
+    mv      a3, s2
+    ld      a4, (L + 24)(sp)
+    li      a2, 0
     call    lantern_get_attesting_indices
     bnez    a0, 7f
     ld      t2, (L + 48)(sp)

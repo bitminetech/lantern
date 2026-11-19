@@ -55,6 +55,8 @@
 - [`lantern_get_beacon_committee`](#function-lantern_get_beacon_committee): a committee of a slot.
 - [`lantern_get_attesting_indices`](#function-lantern_get_attesting_indices): the attesters of an attestation.
 - [`lantern_get_indexed_attestation`](#function-lantern_get_indexed_attestation): an attestation with its attesters.
+- [`lantern_committee_cache_size`](#function-lantern_committee_cache_size): the bytes of a committee cache for a number of validators.
+- [`lantern_committee_cache_init`](#function-lantern_committee_cache_init): lays out an empty committee cache.
 - [`lantern_get_attestation_participation_flag_indices`](#function-lantern_get_attestation_participation_flag_indices): the flags an attestation earns.
 - [`lantern_get_beacon_proposer_index`](#function-lantern_get_beacon_proposer_index): the proposer of the state's slot.
 - [`lantern_get_set_bit_count`](#function-lantern_get_set_bit_count): the set bits of a bit vector.
@@ -62,6 +64,7 @@
 
 ### Types
 
+- [`CommitteeCache`](#type-committeecache): the shuffled active validators of a few epochs.
 - [`ExpectedWithdrawals`](#type-expectedwithdrawals): the withdrawals of a payload, with what they used up.
 - [`WithdrawalsSweep`](#type-withdrawalssweep): withdrawals of one source, with the next index and the entries used.
 - [`BlobParameters`](#type-blobparameters): an epoch and its blob limit.
@@ -88,6 +91,7 @@
 - consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/operations/<handler>/` of each fork, for mainnet and minimal.
   - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
   - Cases with `bls_setting` 2 were made with signature checks turned off. `runner-<preset>` skips them; `runner-<preset>-bls-off` runs only them, with the three asm-crypto signature checks replaced by tests/runner/bls_off.c as in the spec's test mode.
+- Each runner process keeps one `CommitteeCache` of lantern_committee_cache_size(4096); the config of every call names it at `CONFIG_COMMITTEE_CACHE`, and lantern_committee_cache_init empties it before each case, so the states of one case are those of one chain.
 
 ## Function `lantern_process_block`
 
@@ -1049,8 +1053,12 @@ max(1, min(MAX_COMMITTEES_PER_SLOT, active validators // SLOTS_PER_EPOCH // TARG
 ### Signature
 
 ```
-lantern_get_committee_count_per_slot(state, epoch, scratch, out) -> status
+lantern_get_committee_count_per_slot(state, epoch, cache, scratch, out) -> status
 ```
+
+### Function does
+
+- `cache` is a `CommitteeCache` or 0. The active validators are the `count` of its entry for the epoch, when it holds one (lantern_get_beacon_committee).
 
 ### Limits
 
@@ -1078,8 +1086,14 @@ lantern_compute_committee over the epoch's active validators with its DOMAIN_BEA
 ### Signature
 
 ```
-lantern_get_beacon_committee(state, slot, index, scratch, out) -> status
+lantern_get_beacon_committee(state, slot, index, cache, scratch, out) -> status
 ```
+
+### Function does
+
+- `cache` is a `CommitteeCache` or 0. With a cache, the committee is the slice from len(indices) * index // count to len(indices) * (index + 1) // count of the shuffled list of the epoch's entry: the entry whose `epoch`, `seed`, `decision_root` and `genesis_validators_root` are those of the state, else a new one, made with lantern_compute_shuffled_permutation of the active validators and the seed, in the place of `next`, which moves on by one. It is the committee of lantern_compute_committee: entry i is indices[compute_shuffled_index(i, len(indices), seed)].
+- The decision root of epoch E: get_block_root_at_slot of the last slot of epoch E - 5, from epoch 5 on; of slot 0 before, or zero at slot 0. The active validators of E are fixed by the state at the end of epoch E - 5: an activation or an exit (initiate_validator_exit, compute_activation_exit_epoch) takes effect 1 + MAX_SEED_LOOKAHEAD epochs after the epoch that sets it. So one decision root gives one set of active validators, and with the seed and the genesis validators root, one shuffled list.
+- More active validators than the cache's `validators`: no entry.
 
 ### Limits
 
@@ -1092,7 +1106,7 @@ The members of the attestation's committees whose aggregation bits are set, asce
 ### Signature
 
 ```
-lantern_get_attesting_indices(state, attestation, scratch, out) -> status
+lantern_get_attesting_indices(state, attestation, cache, scratch, out) -> status
 ```
 
 ### Function does
@@ -1111,7 +1125,7 @@ The attestation's data and signature with its sorted attesting indices.
 ### Signature
 
 ```
-lantern_get_indexed_attestation(state, attestation, scratch, out) -> status
+lantern_get_indexed_attestation(state, attestation, cache, scratch, out) -> status
 ```
 
 ### Arguments
@@ -1120,6 +1134,7 @@ lantern_get_indexed_attestation(state, attestation, scratch, out) -> status
 |---|---|---|
 | `state` | input | `BeaconState` |
 | `attestation` | input | `Attestation` |
+| `cache` | state | `CommitteeCache`, or 0 |
 | `scratch` | scratch | `Scratch` |
 | `out` | output | `IndexedAttestation` value; its `size` set by the caller |
 
@@ -1204,7 +1219,79 @@ lantern_xor(bytes_1, bytes_2, out) -> status
 
 - `LANTERN_OK`, always.
 
-## Type `ExpectedWithdrawals`
+## Function `lantern_committee_cache_size`
+
+The bytes of a `CommitteeCache` for a number of validators.
+
+### Signature
+
+```
+lantern_committee_cache_size(validators, size) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`, always.
+
+### Function does
+
+- `COMMITTEE_CACHE_FIXED` + `COMMITTEE_CACHE_ENTRIES` * (`CommitteeEntry__mem` + 24 + 8 * `validators`) bytes.
+
+### ABI
+
+- Symbol: `lantern_<fork>_committee_cache_size`, as in [helpers.md](helpers.md#common-rules).
+- Argument order: `validators`, `size`.
+
+## Function `lantern_committee_cache_init`
+
+Lays out an empty `CommitteeCache` for a number of validators.
+
+### Signature
+
+```
+lantern_committee_cache_init(validators, cache) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: `cache` holds no entry.
+- `LANTERN_BUFFER_TOO_SMALL`: the `size` of `cache` is below what lantern_committee_cache_size gives.
+
+### ABI
+
+- Symbol: `lantern_<fork>_committee_cache_init`, as in [helpers.md](helpers.md#common-rules).
+- Argument order: `validators`, `cache`.
+
+## Type `CommitteeCache`
+
+The shuffled active validators of a few epochs, from states of one chain.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `size` | u64 | Bytes of the buffer, this field included |
+| 8 | `validators` | u64 | The active validators an entry holds at most |
+| 16 | `next` | u64 | The entry the next new shuffling takes |
+| 24 | `entries` | `CommitteeEntry` × `COMMITTEE_CACHE_ENTRIES` | Each followed by its list: an `IndexList` of 24 + 8 * `validators` bytes |
+
+### `CommitteeEntry`
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `valid` | u64 | 1 when it holds a shuffling |
+| 8 | `epoch` | u64 | The epoch |
+| 16 | `count` | u64 | The epoch's active validators |
+| 24 | `seed` | Bytes32 | get_seed of the epoch with DOMAIN_BEACON_ATTESTER |
+| 56 | `decision_root` | Bytes32 | The decision root of the epoch |
+| 88 | `genesis_validators_root` | Bytes32 | Of the state |
+| 120 | (padding) | u64 | |
+
+### Rules
+
+- `CommitteeEntry__mem` (128) bytes, then its list.
+- The caller keeps the states of one chain on a cache: states that only the state transition changed, from one anchor.
+
 
 The withdrawals of a payload, with the entries they used up.
 

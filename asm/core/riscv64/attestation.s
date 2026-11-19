@@ -90,15 +90,144 @@ SPEC_LEAF get_committee_indices
 SPEC_END get_committee_indices
 .endif
 
-/* s1 state, s2 epoch, s3 scratch, s4 out, s5 list. */
-SPEC_FUNCTION get_committee_count_per_slot
+/*
+ * L0: the key of epoch a1 of state a0 at a2 (CommitteeEntry_seed onward): get_seed with
+ * DOMAIN_BEACON_ATTESTER, the decision root, the genesis validators root. s1 state, s2 epoch,
+ * s3 key. Locals: L epoch, L+8 domain type.
+ */
+LOCAL_FUNCTION committee_key
     ENTER 16
     mv      s1, a0
     mv      s2, a1
     mv      s3, a2
-    mv      s4, a3
+    sd      s2, L(sp)
+    li      t0, DOMAIN_BEACON_ATTESTER
+    sw      t0, (L + 8)(sp)
+    mv      a0, s1
+    addi    a1, sp, L
+    addi    a2, sp, (L + 8)
+    mv      a3, s3
+    call    lantern_get_seed
+    bnez    a0, 7f
+    sd      zero, 32(s3)                    # the decision root: the last slot of epoch E - 5
+    sd      zero, 40(s3)
+    sd      zero, 48(s3)
+    sd      zero, 56(s3)
+    li      t0, 0
+    li      t1, 5
+    bltu    s2, t1, 1f
+    addi    t0, s2, -4
+    slli    t0, t0, LOG2_SLOTS_PER_EPOCH
+    addi    t0, t0, -1
+1:  LDQ     t1, s1, BeaconState_slot        # get_block_root_at_slot: before the state's slot, in range
+    bgeu    t0, t1, 2f
+    li      t2, SLOTS_PER_HISTORICAL_ROOT
+    add     t2, t0, t2
+    bgtu    t1, t2, 2f
+    li      t2, SLOTS_PER_HISTORICAL_ROOT - 1
+    and     t0, t0, t2
+    slli    t0, t0, 5
+    ADDQ    t1, s1, BeaconState_block_roots
+    add     t1, t1, t0
+    addi    t2, s3, 32
+    COPY32  t2, t1
+2:  ADDQ    t1, s1, BeaconState_genesis_validators_root
+    addi    t2, s3, 64
+    COPY32  t2, t1
+    li      a0, LANTERN_OK
+7:  LEAVE 16
+END_FUNCTION committee_key
+
+/* L0: a0 = the valid entry of cache a0 for epoch a1 and the key at a2, or 0. A leaf. */
+LOCAL_FUNCTION committee_find
+    UNWIND_END_PROLOGUE
+    ld      t0, CommitteeCache_validators(a0)
+    slli    t0, t0, 3
+    addi    t0, t0, CommitteeEntry__mem + LIST_FIXED
+    addi    t1, a0, CommitteeCache_entries
+    li      t2, COMMITTEE_CACHE_ENTRIES
+1:  ld      t3, CommitteeEntry_valid(t1)
+    beqz    t3, 3f
+    ld      t3, CommitteeEntry_epoch(t1)
+    bne     t3, a1, 3f
+    li      t3, 0                           # the 96 bytes of the key
+    addi    t4, t1, CommitteeEntry_seed
+2:  add     t5, t4, t3
+    ld      t5, 0(t5)
+    add     t6, a2, t3
+    ld      t6, 0(t6)
+    bne     t5, t6, 3f
+    addi    t3, t3, 8
+    li      t5, 96
+    bltu    t3, t5, 2b
+    mv      a0, t1
+    ret
+3:  add     t1, t1, t0
+    addi    t2, t2, -1
+    bnez    t2, 1b
+    li      a0, 0
+    ret
+END_FUNCTION committee_find
+
+SPEC_FUNCTION committee_cache_size
+    FRAME 16
+    ld      t0, 0(a0)
+    slli    t0, t0, 3
+    addi    t0, t0, CommitteeEntry__mem + LIST_FIXED
+    li      t1, COMMITTEE_CACHE_ENTRIES
+    mul     t0, t0, t1
+    addi    t0, t0, COMMITTEE_CACHE_FIXED
+    sd      t0, 0(a1)
+    li      a0, LANTERN_OK
+    UNFRAME 16
+SPEC_END committee_cache_size
+
+SPEC_FUNCTION committee_cache_init
+    FRAME 16
+    ld      t0, 0(a0)
+    slli    t1, t0, 3
+    addi    t1, t1, CommitteeEntry__mem + LIST_FIXED   # an entry and its list
+    li      t2, COMMITTEE_CACHE_ENTRIES
+    mul     t3, t1, t2
+    addi    t3, t3, COMMITTEE_CACHE_FIXED
+    ld      t4, CommitteeCache_size(a1)
+    bltu    t4, t3, 9f
+    sd      t0, CommitteeCache_validators(a1)
+    sd      zero, CommitteeCache_next(a1)
+    addi    t3, a1, CommitteeCache_entries
+1:  sd      zero, CommitteeEntry_valid(t3)
+    add     t3, t3, t1
+    addi    t2, t2, -1
+    bnez    t2, 1b
+    li      a0, LANTERN_OK
+    UNFRAME 16
+9:  li      a0, LANTERN_BUFFER_TOO_SMALL
+    UNFRAME 16
+SPEC_END committee_cache_init
+
+/* s1 state, s2 epoch pointer, s3 scratch, s4 out, s5 list, s6 cache. Locals: L the key (96). */
+SPEC_FUNCTION get_committee_count_per_slot
+    ENTER 96
+    mv      s1, a0
+    mv      s2, a1
+    mv      s6, a2
+    mv      s3, a3
+    mv      s4, a4
     NEED_SCRATCH s3, s1, 1, 9f
-    LDQ     t2, s1, BeaconState_validators + 8
+    beqz    s6, 3f
+    mv      a0, s1                          # an entry of the cache: its count
+    ld      a1, 0(s2)
+    addi    a2, sp, L
+    call    committee_key
+    bnez    a0, 3f
+    mv      a0, s6
+    ld      a1, 0(s2)
+    addi    a2, sp, L
+    call    committee_find
+    beqz    a0, 3f
+    ld      t0, CommitteeEntry_count(a0)
+    j       4f
+3:  LDQ     t2, s1, BeaconState_validators + 8
     ld      t3, 0(s3)
     SCRATCH_LIST s5, s3, t3, 0, t2
     mv      a0, s1
@@ -107,7 +236,7 @@ SPEC_FUNCTION get_committee_count_per_slot
     call    lantern_get_active_validator_indices
     bnez    a0, 7f
     ld      t0, LIST_COUNT(s5)
-    srli    t0, t0, LOG2_SLOTS_PER_EPOCH
+4:  srli    t0, t0, LOG2_SLOTS_PER_EPOCH
     li      t1, TARGET_COMMITTEE_SIZE
     divu    t0, t0, t1
     li      t1, MAX_COMMITTEES_PER_SLOT
@@ -117,9 +246,9 @@ SPEC_FUNCTION get_committee_count_per_slot
     li      t0, 1
 2:  sd      t0, 0(s4)
     li      a0, LANTERN_OK
-7:  LEAVE 16
+7:  LEAVE 96
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 16
+    LEAVE 96
 SPEC_END get_committee_count_per_slot
 
 /*
@@ -178,16 +307,18 @@ SPEC_FUNCTION compute_committee
 SPEC_END compute_committee
 
 /*
- * s1 state, s2 slot, s3 index pointer, s4 scratch, s5 out, s6 scratch size, s7 n, s8 list.
- * Locals: L epoch, L+8 committees per slot, L+16 domain type, L+24 seed (32), L+56 index, L+64 count.
+ * s1 state, s2 slot, s3 index pointer, s4 scratch, s5 out, s6 scratch size, s7 n, s8 list,
+ * s9 cache, s10 the entry. Locals: L epoch, L+8 committees per slot, L+16 domain type,
+ * L+24 seed (32), L+56 index, L+64 count, L+72 the entry's key (96).
  */
 SPEC_FUNCTION get_beacon_committee
-    ENTER 80
+    ENTER 176
     mv      s1, a0
     ld      s2, 0(a1)
     mv      s3, a2
-    mv      s4, a3
-    mv      s5, a4
+    mv      s9, a3
+    mv      s4, a4
+    mv      s5, a5
     NEED_SCRATCH s4, s1, 2, 9f
     ld      s6, 0(s4)
     LDQ     s7, s1, BeaconState_validators + 8
@@ -195,17 +326,125 @@ SPEC_FUNCTION get_beacon_committee
     sd      t0, L(sp)
     mv      a0, s1
     addi    a1, sp, L
-    mv      a2, s4
-    addi    a3, sp, (L + 8)
+    mv      a2, s9
+    mv      a3, s4
+    addi    a4, sp, (L + 8)
     call    lantern_get_committee_count_per_slot
     bnez    a0, 7f
-    SCRATCH_LIST s8, s4, s6, 0, s7
+    beqz    s9, 20f
+    mv      a0, s1                          # the cache's entry of the epoch
+    ld      a1, L(sp)
+    addi    a2, sp, (L + 72)
+    call    committee_key
+    bnez    a0, 20f
+    mv      a0, s9
+    ld      a1, L(sp)
+    addi    a2, sp, (L + 72)
+    call    committee_find
+    mv      s10, a0
+    bnez    s10, 30f
+    SCRATCH_LIST s8, s4, s6, 0, s7          # a new entry: the active validators, shuffled
     mv      a0, s1
     addi    a1, sp, L
     mv      a2, s8
     call    lantern_get_active_validator_indices
     bnez    a0, 7f
-    li      t0, DOMAIN_BEACON_ATTESTER
+    ld      t0, LIST_COUNT(s8)
+    ld      t1, CommitteeCache_validators(s9)
+    bgtu    t0, t1, 21f
+    ld      t2, CommitteeCache_next(s9)
+    slli    t3, t1, 3
+    addi    t3, t3, CommitteeEntry__mem + LIST_FIXED
+    mul     t4, t2, t3
+    add     s10, s9, t4
+    addi    s10, s10, CommitteeCache_entries
+    addi    t2, t2, 1
+    li      t4, COMMITTEE_CACHE_ENTRIES
+    bltu    t2, t4, 10f
+    li      t2, 0
+10: sd      t2, CommitteeCache_next(s9)
+    sd      zero, CommitteeEntry_valid(s10)
+    sd      t0, CommitteeEntry_count(s10)
+    slli    t3, t1, 3
+    addi    t3, t3, LIST_FIXED
+    sd      t3, (CommitteeEntry__mem + LIST_SIZE)(s10)
+    SCRATCH_GIVE s4, s6, 1, s7
+    addi    a0, s10, CommitteeEntry_count
+    addi    a1, sp, (L + 72)
+    mv      a2, s4
+    addi    a3, s10, CommitteeEntry__mem
+    call    lantern_compute_shuffled_permutation
+    bnez    a0, 7f
+    addi    t0, s10, CommitteeEntry__mem + LIST_FIXED   # entry i = indices[permutation[i]]
+    addi    t1, s8, LIST_FIXED
+    ld      t2, CommitteeEntry_count(s10)
+    li      t3, 0
+11: bgeu    t3, t2, 12f
+    slli    t4, t3, 3
+    add     t4, t0, t4
+    ld      t5, 0(t4)
+    slli    t5, t5, 3
+    add     t5, t1, t5
+    ld      t5, 0(t5)
+    sd      t5, 0(t4)
+    addi    t3, t3, 1
+    j       11b
+12: ld      t0, L(sp)
+    sd      t0, CommitteeEntry_epoch(s10)
+    addi    t0, s10, CommitteeEntry_seed
+    addi    t1, sp, (L + 72)
+    COPY32  t0, t1
+    addi    t0, t0, 32
+    addi    t1, t1, 32
+    COPY32  t0, t1
+    addi    t0, t0, 32
+    addi    t1, t1, 32
+    COPY32  t0, t1
+    li      t0, 1
+    sd      t0, CommitteeEntry_valid(s10)
+30: ld      t0, (L + 8)(sp)                 # the slice of the entry: index, count, start, end
+    andi    t1, s2, (SLOTS_PER_EPOCH - 1)
+    mul     t1, t1, t0
+    ld      t2, 0(s3)
+    add     t2, t1, t2
+    bltu    t2, t1, 6f
+    slli    t0, t0, LOG2_SLOTS_PER_EPOCH
+    ld      t3, CommitteeEntry_count(s10)
+    mul     t4, t3, t2
+    divu    t4, t4, t0
+    addi    t2, t2, 1
+    mul     t5, t3, t2
+    divu    t5, t5, t0
+    sub     t6, t5, t4
+    beqz    t6, 31f
+    bgtu    t5, t3, 5f                      # past the list: compute_shuffled_index raises
+31: slli    t0, t6, 3
+    addi    t0, t0, LIST_FIXED
+    ld      t1, LIST_SIZE(s5)
+    bltu    t1, t0, 9f
+    li      t0, LIST_FIXED
+    sd      t0, LIST_OFFSET(s5)
+    sd      t6, LIST_COUNT(s5)
+    addi    t0, s10, CommitteeEntry__mem + LIST_FIXED
+    slli    t1, t4, 3
+    add     t0, t0, t1
+    addi    t1, s5, LIST_FIXED
+32: beqz    t6, 33f
+    ld      t2, 0(t0)
+    sd      t2, 0(t1)
+    addi    t0, t0, 8
+    addi    t1, t1, 8
+    addi    t6, t6, -1
+    j       32b
+33: li      a0, LANTERN_OK
+    LEAVE 176
+20: SCRATCH_LIST s8, s4, s6, 0, s7          # no cache
+    mv      a0, s1
+    addi    a1, sp, L
+    mv      a2, s8
+    call    lantern_get_active_validator_indices
+    bnez    a0, 7f
+21: li      t0, DOMAIN_BEACON_ATTESTER
     sw      t0, (L + 16)(sp)
     mv      a0, s1
     addi    a1, sp, L
@@ -230,11 +469,13 @@ SPEC_FUNCTION get_beacon_committee
     mv      a4, s4
     mv      a5, s5
     call    lantern_compute_committee
-7:  LEAVE 80
+7:  LEAVE 176
+5:  li      a0, LANTERN_INVALID_SHUFFLED_INDEX
+    LEAVE 176
 6:  li      a0, LANTERN_INVALID_OVERFLOW
-    LEAVE 80
+    LEAVE 176
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
-    LEAVE 80
+    LEAVE 176
 SPEC_END get_beacon_committee
 
 .if FORK >= FORK_ELECTRA
@@ -247,8 +488,9 @@ SPEC_FUNCTION get_attesting_indices
     ENTER 48
     mv      s1, a0
     mv      s2, a1
-    mv      s3, a2
-    mv      s4, a3
+    sd      a2, (L + 40)(sp)                # the committee cache
+    mv      s3, a3
+    mv      s4, a4
     NEED_SCRATCH_B s3, s1, 3, CIDX_BYTES, 9f
     LDQ     s6, s1, BeaconState_validators + 8
     slli    t0, s6, 3                       # out has room for every validator
@@ -291,8 +533,9 @@ SPEC_FUNCTION get_attesting_indices
     mv      a0, s1                          # committee = get_beacon_committee(state, data.slot, committee_index)
     addi    a1, s2, (Attestation_data + AttestationData_slot)
     addi    a2, sp, L
-    mv      a3, s3
-    mv      a4, s8
+    mv      a4, s3
+    mv      a5, s8
+    ld      a3, (L + 40)(sp)
     call    lantern_get_beacon_committee
     bnez    a0, 7f
     ld      t0, LIST_COUNT(s8)
@@ -347,8 +590,9 @@ SPEC_FUNCTION get_attesting_indices
     ENTER 16
     mv      s1, a0
     mv      s2, a1
-    mv      s3, a2
-    mv      s4, a3
+    mv      s9, a2                          # the committee cache
+    mv      s3, a3
+    mv      s4, a4
     NEED_SCRATCH s3, s1, 3, 9f
     LDQ     s6, s1, BeaconState_validators + 8
     slli    t0, s6, 3                       # out has room for every validator
@@ -361,8 +605,9 @@ SPEC_FUNCTION get_attesting_indices
     mv      a0, s1                          # committee = get_beacon_committee(state, data.slot, data.index)
     addi    a1, s2, (Attestation_data + AttestationData_slot)
     addi    a2, s2, (Attestation_data + AttestationData_index)
-    mv      a3, s3
-    mv      a4, s7
+    mv      a4, s3
+    mv      a5, s7
+    mv      a3, s9
     call    lantern_get_beacon_committee
     bnez    a0, 7f
     PART    t2, t3, s2, Attestation_aggregation_bits
@@ -407,8 +652,9 @@ SPEC_FUNCTION get_indexed_attestation
     ENTER 16
     mv      s1, a0
     mv      s2, a1
-    mv      s3, a2
-    mv      s4, a3
+    sd      a2, L(sp)                       # the committee cache
+    mv      s3, a3
+    mv      s4, a4
     NEED_SCRATCH_B s3, s1, 4, CIDX_BYTES, 9f
     LDQ     s6, s1, BeaconState_validators + 8
     ld      s5, 0(s3)
@@ -416,8 +662,9 @@ SPEC_FUNCTION get_indexed_attestation
     SCRATCH_GIVE s3, s5, 1, s6
     mv      a0, s1
     mv      a1, s2
-    mv      a2, s3
-    mv      a3, s7
+    mv      a3, s3
+    mv      a4, s7
+    ld      a2, L(sp)
     call    lantern_get_attesting_indices
     bnez    a0, 7f
     ld      t0, LIST_COUNT(s7)              # out: attesting_indices, data, signature
@@ -682,8 +929,9 @@ SPEC_FUNCTION process_attestation
     sd      t0, 0(s4)
     mv      a0, s1                          # assert data.index < get_committee_count_per_slot(state, data.target.epoch)
     addi    a1, s2, (Attestation_data + AttestationData_target + Checkpoint_epoch)
-    mv      a2, s4
-    addi    a3, sp, (L + 16)
+    mv      a3, s4
+    addi    a4, sp, (L + 16)
+    ld      a2, CONFIG_COMMITTEE_CACHE(s3)
     call    lantern_get_committee_count_per_slot
     bnez    a0, 7f
     li      a0, LANTERN_INVALID_ATTESTATION
@@ -695,8 +943,9 @@ SPEC_FUNCTION process_attestation
     mv      a0, s1                          # committee = get_beacon_committee(state, data.slot, data.index)
     addi    a1, s2, (Attestation_data + AttestationData_slot)
     addi    a2, s2, (Attestation_data + AttestationData_index)
-    mv      a3, s4
-    mv      a4, s10
+    mv      a4, s4
+    mv      a5, s10
+    ld      a3, CONFIG_COMMITTEE_CACHE(s3)
     call    lantern_get_beacon_committee
     CHECK_STATUS s5, 7f, 8f
     ld      t0, LIST_COUNT(s10)
@@ -730,8 +979,9 @@ SPEC_FUNCTION process_attestation
     sd      t0, 0(s4)
     mv      a0, s1                          # assert is_valid_indexed_attestation(state, get_indexed_attestation(...))
     mv      a1, s2
-    mv      a2, s4
-    mv      a3, s9
+    mv      a3, s4
+    mv      a4, s9
+    ld      a2, CONFIG_COMMITTEE_CACHE(s3)
     call    lantern_get_indexed_attestation
     CHECK_STATUS s5, 7f, 8f
     ld      t0, (L + 40)(sp)
@@ -894,8 +1144,9 @@ SPEC_FUNCTION process_attestation
     sd      t0, 0(s4)
     mv      a0, s1                          # assert committee_index < get_committee_count_per_slot(...)
     addi    a1, s2, (Attestation_data + AttestationData_target + Checkpoint_epoch)
-    mv      a2, s4
-    addi    a3, sp, (L + 16)
+    mv      a3, s4
+    addi    a4, sp, (L + 16)
+    ld      a2, CONFIG_COMMITTEE_CACHE(s3)
     call    lantern_get_committee_count_per_slot
     bnez    a0, 7f
     ld      t0, (L + 24)(sp)
@@ -907,8 +1158,9 @@ SPEC_FUNCTION process_attestation
     mv      a0, s1
     addi    a1, s2, (Attestation_data + AttestationData_slot)
     addi    a2, sp, (L + 24)
-    mv      a3, s4
-    mv      a4, s9
+    mv      a4, s4
+    mv      a5, s9
+    ld      a3, CONFIG_COMMITTEE_CACHE(s3)
     call    lantern_get_beacon_committee
     CHECK_STATUS s5, 7f, 8f
     PART    t1, t2, s2, Attestation_aggregation_bits
@@ -938,8 +1190,9 @@ SPEC_FUNCTION process_attestation
     sd      t0, 0(s4)
     mv      a0, s1                          # assert data.index < get_committee_count_per_slot(state, data.target.epoch)
     addi    a1, s2, (Attestation_data + AttestationData_target + Checkpoint_epoch)
-    mv      a2, s4
-    addi    a3, sp, (L + 16)
+    mv      a3, s4
+    addi    a4, sp, (L + 16)
+    ld      a2, CONFIG_COMMITTEE_CACHE(s3)
     call    lantern_get_committee_count_per_slot
     bnez    a0, 7f
     ld      t0, (Attestation_data + AttestationData_index)(s2)
@@ -951,8 +1204,9 @@ SPEC_FUNCTION process_attestation
     mv      a0, s1                          # committee = get_beacon_committee(state, data.slot, data.index)
     addi    a1, s2, (Attestation_data + AttestationData_slot)
     addi    a2, s2, (Attestation_data + AttestationData_index)
-    mv      a3, s4
-    mv      a4, s9
+    mv      a4, s4
+    mv      a5, s9
+    ld      a3, CONFIG_COMMITTEE_CACHE(s3)
     call    lantern_get_beacon_committee
     CHECK_STATUS s5, 7f, 8f
     LDQ     t0, s2, Attestation_aggregation_bits + 8
@@ -976,8 +1230,9 @@ SPEC_FUNCTION process_attestation
     sd      t0, 0(s4)
     mv      a0, s1                          # assert is_valid_indexed_attestation(state, get_indexed_attestation(...))
     mv      a1, s2
-    mv      a2, s4
-    ld      a3, (L + 144)(sp)
+    mv      a3, s4
+    ld      a4, (L + 144)(sp)
+    ld      a2, CONFIG_COMMITTEE_CACHE(s3)
     call    lantern_get_indexed_attestation
     CHECK_STATUS s5, 7f, 8f
     ld      t0, (L + 160)(sp)
@@ -1002,8 +1257,9 @@ SPEC_FUNCTION process_attestation
     sd      t0, 0(s4)
     mv      a0, s1                          # for index in get_attesting_indices(state, attestation)
     mv      a1, s2
-    mv      a2, s4
-    ld      a3, (L + 152)(sp)
+    mv      a3, s4
+    ld      a4, (L + 152)(sp)
+    ld      a2, CONFIG_COMMITTEE_CACHE(s3)
     call    lantern_get_attesting_indices
     CHECK_STATUS s5, 7f, 8f
     ld      t0, (L + 160)(sp)
