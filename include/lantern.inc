@@ -558,10 +558,15 @@
 .set Node_db_sidecar_segment, 504     /* the sidecar segment of the last sidecar record, or 2^64 - 1 */
 .set Node_db_sidecar_end, 512         /* the bytes of that segment */
 .set Node_status_ms, 520               /* the time of the node's last Status request of node_sync, or 0 */
-.set Node_config, 528
-.set NODE_FIXED, 528 + CONFIG_SIZE
+.set Node_next_digest, 528             /* the ForkDigest whose topics the node joined ahead, or 0 */
+.set Node_old_digest, 536              /* the ForkDigest whose topics leave from old_epoch on, or 0 */
+.set Node_old_fork, 544                /* the fork of those topics */
+.set Node_old_epoch, 552
+.set Node_config, 560
+.set NODE_FIXED, 560 + CONFIG_SIZE
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
+.set NODE_SUBSCRIBE_AHEAD, 2           /* epochs: the topics of a new ForkDigest join this early, the old ones leave this late */
 .set NODE_DIAL_TAG, 0x4000000000000000 /* the bit of a DIAL tag of the node */
 .set NODE_ENGINE_HOST_MAX, 64
 .set NODE_STATE_SLOT, 48               /* BeaconState.slot in the value of every fork */
@@ -666,6 +671,7 @@
 .set NODE_MESSAGE_VALIDATING, 2        /* a GOSSIP work is queued */
 .set NODE_MESSAGE_NO_ROOM, 3           /* the bytes did not fit in the actions: IGNORE */
 .set NODE_MESSAGE_CORRUPT, 4           /* the data is no Snappy block of at most MAX_PAYLOAD_SIZE bytes: REJECT */
+.set NODE_MESSAGE_OTHER_DIGEST, 5      /* a topic of another ForkDigest than fork_digest: IGNORE, its data unread */
 
 /* NodeGossip: the inputs of lantern_node_gossip */
 .set NodeGossip_seen, 0

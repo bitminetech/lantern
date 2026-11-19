@@ -3985,11 +3985,11 @@ LOCAL_FUNCTION node_validation
 1:  UNFRAME 16
 END_FUNCTION node_validation
 
-/* L0: the gossip topic x0 with the subnet x1 at the node's ForkDigest: a SUBSCRIBE event. x21 the topic's length. Locals: L a GossipTopic, L+24 a ByteList of the topic. */
+/* L0: the gossip topic x0 with the subnet x1 at the ForkDigest x2: an event of kind x3 (SUBSCRIBE or UNSUBSCRIBE). x21 the topic's length, x22 the kind. Locals: L a GossipTopic, L+24 a ByteList of the topic. */
 LOCAL_FUNCTION node_sub
     ENTER 176
-    ldr     x9, [x19, #Node_fork_digest]
-    str     x9, [sp, #(L + GossipTopic_fork_digest)]
+    mov     x22, x3
+    str     x2, [sp, #(L + GossipTopic_fork_digest)]
     stp     x0, x1, [sp, #(L + GossipTopic_name)]
     mov     x9, #(24 + 128)
     mov     x10, #24
@@ -4004,8 +4004,7 @@ LOCAL_FUNCTION node_sub
     and     x0, x0, #~7
     bl      node_out
     cbz     x0, 9f
-    mov     x9, #LIBP2P_EVENT_SUBSCRIBE
-    stp     x9, x21, [x0, #8]
+    stp     x22, x21, [x0, #8]
     add     x0, x0, #24
     add     x1, sp, #(L + 48)
     mov     x2, x21
@@ -4407,66 +4406,31 @@ LOCAL_FUNCTION node_lookup
 END_FUNCTION node_lookup
 
 /*
- * L0: the gossip topics of the fork of the store's epoch, at its ForkDigest: SUBSCRIBE events,
- * once for each digest, when p2p_out has room for them. x21 the fork, x22 a subnet, x25 the
- * subnets. Locals: L an epoch, L+8 a ForkDigest.
+ * L0: the gossip topics of the fork x0 at the ForkDigest x1: an event of kind x2 (SUBSCRIBE or
+ * UNSUBSCRIBE) for each. x21 the fork, x22 a subnet, x25 the subnets. Locals: L the digest, L+8
+ * the kind.
  */
-LOCAL_FUNCTION node_subscribe
+LOCAL_FUNCTION node_topics
     ENTER 16
-    P2P_OUT x9
-    ldr     x11, [x9]
-    ldr     x10, [x9, #16]
-    sub     x11, x11, #24
-    sub     x11, x11, x10
-    mov     x12, #(64 * 128)
-    cmp     x11, x12
-    b.lo    9f
-    mov     x0, #NODE_ENR_ACTION            /* and the actions room for the record entries */
-    bl      node_room
-    cbz     x0, 9f
-    mov     x0, x20
-    bl      node_store_slot
-    mov     x9, #SLOTS_PER_EPOCH
-    udiv    x9, x0, x9
-    str     x9, [sp, #L]
-    add     x1, x19, #Node_config
-    bl      node_fork
     mov     x21, x0
-    mov     x15, x0
-    str     xzr, [sp, #(L + 8)]
-    add     x0, x19, #Node_genesis_validators_root
-    add     x1, sp, #L
-    add     x2, x19, #Node_config
-    mov     x3, x23
-    add     x4, sp, #(L + 8)
-    FORK_CALL compute_fork_digest
-    cbnz    x0, 9f
-    ldr     x9, [x19, #Node_flags]
-    ldr     x10, [sp, #(L + 8)]
-    tbz     x9, #2, 1f                      /* NODE_FLAG_SUBSCRIBED */
-    ldr     x11, [x19, #Node_fork_digest]
-    cmp     x10, x11
-    b.eq    9f
-1:  str     x10, [x19, #Node_fork_digest]
-    orr     x9, x9, #NODE_FLAG_SUBSCRIBED
-    str     x9, [x19, #Node_flags]
-    add     x0, sp, #L                      /* the record entries of the new digest */
-    mov     x1, x21
-    bl      node_enr_entries
+    stp     x1, x2, [sp, #L]
     .irp name, GOSSIP_BEACON_BLOCK, GOSSIP_BEACON_AGGREGATE_AND_PROOF, GOSSIP_VOLUNTARY_EXIT, GOSSIP_PROPOSER_SLASHING, GOSSIP_ATTESTER_SLASHING
     mov     x0, #\name
     mov     x1, #0
+    ldp     x2, x3, [sp, #L]
     bl      node_sub
     .endr
     cmp     x21, #FORK_ALTAIR
     b.lo    9f
     mov     x0, #GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF
     mov     x1, #0
+    ldp     x2, x3, [sp, #L]
     bl      node_sub
     cmp     x21, #FORK_CAPELLA
     b.lo    9f
     mov     x0, #GOSSIP_BLS_TO_EXECUTION_CHANGE
     mov     x1, #0
+    ldp     x2, x3, [sp, #L]
     bl      node_sub
     cmp     x21, #FORK_DENEB                /* deneb and electra: every blob sidecar subnet */
     b.lo    9f
@@ -4481,6 +4445,7 @@ LOCAL_FUNCTION node_subscribe
     b.hs    9f
     mov     x0, #GOSSIP_BLOB_SIDECAR
     mov     x1, x22
+    ldp     x2, x3, [sp, #L]
     bl      node_sub
     add     x22, x22, #1
     b       3b
@@ -4508,9 +4473,122 @@ LOCAL_FUNCTION node_subscribe
     b.ne    7f
     orr     x27, x27, x10
 61: mov     x0, #GOSSIP_DATA_COLUMN_SIDECAR
+    ldp     x2, x3, [sp, #L]
     bl      node_sub
 7:  add     x22, x22, #1
     b       5b
+9:  LEAVE 16
+END_FUNCTION node_topics
+
+/*
+ * L0: the node's gossip topics (node.md; altair p2p-interface.md, Transitioning the gossip), one
+ * change a step, when p2p_out has room: the topics of the fork of the store's epoch at its
+ * ForkDigest, once for each digest, with the record entries; else those of the epoch
+ * NODE_SUBSCRIBE_AHEAD later, when its digest differs; else, from NODE_SUBSCRIBE_AHEAD epochs
+ * after the digest changed, the old digest's topics leave. x21 the epoch, x22 its fork, x25 its
+ * digest, x26 a fork, x27 a digest. Locals: L an epoch, L+8 a ForkDigest.
+ */
+LOCAL_FUNCTION node_subscribe
+    ENTER 16
+    P2P_OUT x9
+    ldr     x11, [x9]
+    ldr     x10, [x9, #16]
+    sub     x11, x11, #24
+    sub     x11, x11, x10
+    mov     x12, #(64 * 128)
+    cmp     x11, x12
+    b.lo    9f
+    mov     x0, #NODE_ENR_ACTION            /* and the actions room for the record entries */
+    bl      node_room
+    cbz     x0, 9f
+    mov     x0, x20
+    bl      node_store_slot
+    mov     x9, #SLOTS_PER_EPOCH
+    udiv    x21, x0, x9
+    str     x21, [sp, #L]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x22, x0
+    mov     x15, x0
+    str     xzr, [sp, #(L + 8)]
+    add     x0, x19, #Node_genesis_validators_root
+    add     x1, sp, #L
+    add     x2, x19, #Node_config
+    mov     x3, x23
+    add     x4, sp, #(L + 8)
+    FORK_CALL compute_fork_digest
+    cbnz    x0, 9f
+    ldr     x25, [sp, #(L + 8)]
+    ldr     x9, [x19, #Node_flags]
+    tbz     x9, #2, 1f                      /* NODE_FLAG_SUBSCRIBED */
+    ldr     x11, [x19, #Node_fork_digest]
+    cmp     x25, x11
+    b.eq    20f
+    str     x11, [x19, #Node_old_digest]    /* a new digest: the old one's topics leave later */
+    add     x12, x21, #NODE_SUBSCRIBE_AHEAD
+    str     x12, [x19, #Node_old_epoch]
+    mov     x0, #0                          /* of the fork of the epoch before */
+    cbz     x21, 11f
+    sub     x0, x21, #1
+    mov     x9, #SLOTS_PER_EPOCH
+    mul     x0, x0, x9
+11: add     x1, x19, #Node_config
+    bl      node_fork
+    str     x0, [x19, #Node_old_fork]
+    ldr     x9, [x19, #Node_flags]
+1:  str     x25, [x19, #Node_fork_digest]
+    orr     x9, x9, #NODE_FLAG_SUBSCRIBED
+    str     x9, [x19, #Node_flags]
+    add     x0, sp, #L                      /* the record entries of the new digest */
+    mov     x1, x22
+    bl      node_enr_entries
+    ldr     x9, [x19, #Node_next_digest]    /* its topics, unless they are there ahead */
+    str     xzr, [x19, #Node_next_digest]
+    cmp     x9, x25
+    b.eq    9f
+    mov     x0, x22
+    mov     x1, x25
+    mov     x2, #LIBP2P_EVENT_SUBSCRIBE
+    bl      node_topics
+    b       9f
+20: add     x9, x21, #NODE_SUBSCRIBE_AHEAD  /* ahead: the topics of the digest of a later epoch */
+    str     x9, [sp, #L]
+    mov     x10, #SLOTS_PER_EPOCH
+    mul     x0, x9, x10
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x26, x0
+    mov     x15, x0
+    str     xzr, [sp, #(L + 8)]
+    add     x0, x19, #Node_genesis_validators_root
+    add     x1, sp, #L
+    add     x2, x19, #Node_config
+    mov     x3, x23
+    add     x4, sp, #(L + 8)
+    FORK_CALL compute_fork_digest
+    cbnz    x0, 9f
+    ldr     x27, [sp, #(L + 8)]
+    cmp     x27, x25
+    b.eq    30f
+    ldr     x9, [x19, #Node_next_digest]
+    cmp     x9, x27
+    b.eq    30f
+    str     x27, [x19, #Node_next_digest]
+    mov     x0, x26
+    mov     x1, x27
+    mov     x2, #LIBP2P_EVENT_SUBSCRIBE
+    bl      node_topics
+    b       9f
+30: ldr     x9, [x19, #Node_old_digest]     /* the old digest's topics leave */
+    cbz     x9, 9f
+    ldr     x10, [x19, #Node_old_epoch]
+    cmp     x21, x10
+    b.lo    9f
+    str     xzr, [x19, #Node_old_digest]
+    ldr     x0, [x19, #Node_old_fork]
+    mov     x1, x9
+    mov     x2, #LIBP2P_EVENT_UNSUBSCRIBE
+    bl      node_topics
 9:  LEAVE 16
 END_FUNCTION node_subscribe
 
@@ -4561,6 +4639,8 @@ LOCAL_FUNCTION node_message
     bl      lantern_gossip_topic_parse
     cbz     x0, 1f
     stp     xzr, xzr, [sp, #(L + GossipTopic_name)]
+    ldr     x9, [x19, #Node_fork_digest]    /* a topic of no name: as of the node's ForkDigest */
+    str     x9, [sp, #(L + GossipTopic_fork_digest)]
 1:  mov     x0, x20                         /* the message-id, of the fork of the store's slot */
     bl      node_store_slot
     add     x1, x19, #Node_config
@@ -4606,6 +4686,12 @@ LOCAL_FUNCTION node_message
     stp     x9, x10, [x25, #NodeMessage_handle]
     ldp     x9, x10, [sp, #(L + GossipTopic_name)]
     stp     x9, x10, [x25, #NodeMessage_topic]
+    mov     x9, #NODE_MESSAGE_OTHER_DIGEST  /* a topic of another ForkDigest: IGNORE, unread */
+    str     x9, [x25, #NodeMessage_state]
+    ldr     x9, [sp, #(L + GossipTopic_fork_digest)]
+    ldr     x10, [x19, #Node_fork_digest]
+    cmp     x9, x10
+    b.ne    99f
     mov     x9, #NODE_MESSAGE_CORRUPT       /* the bytes, uncompressed */
     str     x9, [x25, #NodeMessage_state]
     mov     x0, x28
@@ -4737,6 +4823,7 @@ LOCAL_FUNCTION node_message_status
     cmp     x10, x9
     b.ls    3f
     ldr     x27, [x1, #NodeBlock_state_id]
+    cbz     x27, 3f                         /* a parent with a post-state */
     mov     x0, x9                          /* of the same fork */
     add     x1, x19, #Node_config
     bl      node_fork
@@ -4789,9 +4876,15 @@ END_FUNCTION node_message_status
 
 /* ------------------------------------------------------------ sync */
 
-/* L0: the Status of x2 bytes at x1 (84, or 92 for v2) of the peer of handle x0, kept in its entry. x21 the bytes, x22 their size, x25 the entry. */
+/*
+ * L0: the Status of x2 bytes at x1 (84, or 92 for v2) of the peer of handle x0, kept in its entry;
+ * then the Status rules (phase0 p2p-interface.md): a fork_digest the node does not have, or a
+ * finalized checkpoint of the node's finalized epoch or before that is not of the node's chain,
+ * gives a DISCONNECT. x21 the bytes, x22 their size, x25 the entry, x26 the peer's finalized
+ * epoch, x27 a slot. Locals: L the node's Status (92).
+ */
 LOCAL_FUNCTION node_peer_status
-    ENTER 0
+    ENTER 96
     mov     x21, x1
     mov     x22, x2
     bl      node_find_peer
@@ -4817,7 +4910,60 @@ LOCAL_FUNCTION node_peer_status
 1:  ldr     x9, [x25, #NodePeer_flags]
     orr     x9, x9, #NODE_PEER_STATUS
     str     x9, [x25, #NodePeer_flags]
-9:  LEAVE 0
+    add     x0, sp, #L                      /* its fork_digest: the node's of the store's epoch, or the one ahead or before around a fork */
+    bl      node_status_bytes
+    ldr     x9, [x25, #NodePeer_fork_digest]
+    ldr     w10, [sp, #L]
+    cmp     x9, x10
+    b.eq    2f
+    ldr     x10, [x19, #Node_next_digest]
+    cmp     x9, x10
+    b.eq    2f
+    ldr     x10, [x19, #Node_old_digest]
+    cmp     x9, x10
+    b.ne    8f
+2:  ldr     x26, [x25, #NodePeer_finalized_epoch]   /* its finalized checkpoint: of GENESIS_EPOCH, or after the store's, as it is */
+    cbz     x26, 9f
+    ldr     x10, [x20, #Store_finalized_checkpoint]
+    cmp     x26, x10
+    b.hi    9f
+    b.lo    3f
+    add     x14, x25, #NodePeer_finalized_root  /* the store's finalized epoch: its root */
+    add     x15, x20, #(Store_finalized_checkpoint + 8)
+    NE32    x14, x15, 8f
+    b       9f
+3:  ldr     x9, [x19, #Node_db]             /* before: the Db's last block at or before the epoch's first slot */
+    add     x9, x19, x9
+    mov     x11, #SLOTS_PER_EPOCH
+    mul     x27, x26, x11
+    ldr     x10, [x9, #Db_end_slot]
+    cbz     x10, 9f
+    sub     x10, x10, #1
+    cmp     x27, x10
+    csel    x27, x10, x27, hi
+4:  ldr     x12, [x9, #Db_first_slot]
+    cmp     x27, x12
+    b.lo    9f
+    sub     x13, x27, x12
+    ldr     x11, [x9, #Db_slots]
+    add     x11, x9, x11
+    mov     x14, #DbSlot__mem
+    madd    x15, x13, x14, x11
+    ldr     x14, [x15, #DbSlot_block]
+    cbnz    x14, 5f
+    cbz     x27, 9f
+    sub     x27, x27, #1
+    b       4b
+5:  add     x14, x25, #NodePeer_finalized_root
+    NE32    x14, x15, 8f                    /* DbSlot_root */
+    b       9f
+8:  mov     x0, #LIBP2P_EVENT_DISCONNECT    /* a DISCONNECT; it syncs nothing until it goes */
+    ldr     x1, [x25, #NodePeer_handle]
+    bl      node_out_handle
+    ldr     x9, [x25, #NodePeer_flags]
+    bic     x9, x9, #NODE_PEER_STATUS
+    str     x9, [x25, #NodePeer_flags]
+9:  LEAVE 96
 END_FUNCTION node_peer_status
 
 /* L0: x0 = the index of the node's stream in NODE_STREAM_OPENING of tag x0, or 2^64 - 1; x1 = its entry. Uses x9-x13. */

@@ -4004,11 +4004,11 @@ LOCAL_FUNCTION node_validation
 1:  UNFRAME 16
 END_FUNCTION node_validation
 
-/* The gossip topic rdi with the subnet rsi at the node's ForkDigest: a SUBSCRIBE event. r12 the topic's length. Locals: L a GossipTopic, L+24 a ByteList of the topic. */
+/* The gossip topic rdi with the subnet rsi at the ForkDigest rdx: an event of kind rcx (SUBSCRIBE or UNSUBSCRIBE). r12 the topic's length, r13 the kind. Locals: L a GossipTopic, L+24 a ByteList of the topic. */
 LOCAL_FUNCTION node_sub
     ENTER 176
-    mov     Node_fork_digest(%rbx), %rax
-    mov     %rax, (L + GossipTopic_fork_digest)(%rsp)
+    mov     %rcx, %r13
+    mov     %rdx, (L + GossipTopic_fork_digest)(%rsp)
     mov     %rdi, (L + GossipTopic_name)(%rsp)
     mov     %rsi, (L + GossipTopic_subnet_id)(%rsp)
     movq    $(24 + 128), (L + 24)(%rsp)
@@ -4025,7 +4025,7 @@ LOCAL_FUNCTION node_sub
     call    node_out
     test    %rax, %rax
     jz      9f
-    movq    $LIBP2P_EVENT_SUBSCRIBE, 8(%rax)
+    mov     %r13, 8(%rax)
     mov     %r12, 16(%rax)
     lea     24(%rax), %rdi
     lea     (L + 48)(%rsp), %rsi
@@ -4428,67 +4428,35 @@ LOCAL_FUNCTION node_lookup
 END_FUNCTION node_lookup
 
 /*
- * The gossip topics of the fork of the store's epoch, at its ForkDigest: SUBSCRIBE events, once
- * for each digest, when p2p_out has room for them. r12 the fork, r13 a subnet, S7 the subnets.
- * Locals: L an epoch, L+8 a ForkDigest.
+ * The gossip topics of the fork rdi at the ForkDigest rsi: an event of kind rdx (SUBSCRIBE or
+ * UNSUBSCRIBE) for each. r12 the fork, r13 a subnet, S7 the subnets. Locals: L the digest, L+8 the
+ * kind.
  */
-LOCAL_FUNCTION node_subscribe
+LOCAL_FUNCTION node_topics
     ENTER 16
-    P2P_OUT %rcx
-    mov     (%rcx), %rax
-    sub     $24, %rax
-    sub     16(%rcx), %rax
-    cmp     $(64 * 128), %rax
-    jb      9f
-    mov     $NODE_ENR_ACTION, %edi          # and the actions room for the record entries
-    call    node_room
-    test    %rax, %rax
-    jz      9f
-    mov     %rbp, %rdi
-    call    node_store_slot
-    mov     %rax, %r12
-    xor     %edx, %edx
-    mov     $SLOTS_PER_EPOCH, %ecx
-    div     %rcx
-    mov     %rax, L(%rsp)
-    mov     %r12, %rdi
-    lea     Node_config(%rbx), %rsi
-    call    node_fork
-    mov     %rax, %r12
-    mov     %rax, %r10
-    movq    $0, (L + 8)(%rsp)
-    lea     Node_genesis_validators_root(%rbx), %rdi
-    lea     L(%rsp), %rsi
-    lea     Node_config(%rbx), %rdx
-    mov     %r14, %rcx
-    lea     (L + 8)(%rsp), %r8
-    FORK_CALL compute_fork_digest
-    test    %rax, %rax
-    jnz     9f
-    mov     (L + 8)(%rsp), %rax
-    testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)
-    jz      1f
-    cmp     Node_fork_digest(%rbx), %rax
-    je      9f
-1:  mov     %rax, Node_fork_digest(%rbx)
-    orq     $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)
-    lea     L(%rsp), %rdi                   # the record entries of the new digest
-    mov     %r12, %rsi
-    call    node_enr_entries
+    mov     %rdi, %r12
+    mov     %rsi, L(%rsp)
+    mov     %rdx, (L + 8)(%rsp)
     .irp name, GOSSIP_BEACON_BLOCK, GOSSIP_BEACON_AGGREGATE_AND_PROOF, GOSSIP_VOLUNTARY_EXIT, GOSSIP_PROPOSER_SLASHING, GOSSIP_ATTESTER_SLASHING
     mov     $\name, %edi
     xor     %esi, %esi
+    mov     L(%rsp), %rdx
+    mov     (L + 8)(%rsp), %rcx
     call    node_sub
     .endr
     cmp     $FORK_ALTAIR, %r12
     jb      9f
     mov     $GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF, %edi
     xor     %esi, %esi
+    mov     L(%rsp), %rdx
+    mov     (L + 8)(%rsp), %rcx
     call    node_sub
     cmp     $FORK_CAPELLA, %r12
     jb      9f
     mov     $GOSSIP_BLS_TO_EXECUTION_CHANGE, %edi
     xor     %esi, %esi
+    mov     L(%rsp), %rdx
+    mov     (L + 8)(%rsp), %rcx
     call    node_sub
     cmp     $FORK_DENEB, %r12               # deneb and electra: every blob sidecar subnet
     jb      9f
@@ -4504,6 +4472,8 @@ LOCAL_FUNCTION node_subscribe
     jae     9f
     mov     $GOSSIP_BLOB_SIDECAR, %edi
     mov     %r13, %rsi
+    mov     L(%rsp), %rdx
+    mov     (L + 8)(%rsp), %rcx
     call    node_sub
     inc     %r13
     jmp     3b
@@ -4533,9 +4503,124 @@ LOCAL_FUNCTION node_subscribe
     bts     %rsi, %rax
     mov     %rax, (%rcx)
     mov     $GOSSIP_DATA_COLUMN_SIDECAR, %edi
+    mov     L(%rsp), %rdx
+    mov     (L + 8)(%rsp), %rcx
     call    node_sub
 7:  inc     %r13
     jmp     5b
+9:  LEAVE 16
+END_FUNCTION node_topics
+
+/*
+ * The node's gossip topics (node.md; altair p2p-interface.md, Transitioning the gossip), one change
+ * a step, when p2p_out has room: the topics of the fork of the store's epoch at its ForkDigest,
+ * once for each digest, with the record entries; else those of the epoch NODE_SUBSCRIBE_AHEAD
+ * later, when its digest differs; else, from NODE_SUBSCRIBE_AHEAD epochs after the digest changed,
+ * the old digest's topics leave. r12 the epoch, r13 its fork, S7 its digest, S8 a fork. Locals: L
+ * an epoch, L+8 a ForkDigest.
+ */
+LOCAL_FUNCTION node_subscribe
+    ENTER 16
+    P2P_OUT %rcx
+    mov     (%rcx), %rax
+    sub     $24, %rax
+    sub     16(%rcx), %rax
+    cmp     $(64 * 128), %rax
+    jb      9f
+    mov     $NODE_ENR_ACTION, %edi          # and the actions room for the record entries
+    call    node_room
+    test    %rax, %rax
+    jz      9f
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     %rax, %rdi
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, %r12
+    mov     %rax, L(%rsp)
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r13
+    mov     %rax, %r10
+    movq    $0, (L + 8)(%rsp)
+    lea     Node_genesis_validators_root(%rbx), %rdi
+    lea     L(%rsp), %rsi
+    lea     Node_config(%rbx), %rdx
+    mov     %r14, %rcx
+    lea     (L + 8)(%rsp), %r8
+    FORK_CALL compute_fork_digest
+    test    %rax, %rax
+    jnz     9f
+    mov     (L + 8)(%rsp), %rax
+    mov     %rax, S7(%rsp)
+    testq   $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)
+    jz      1f
+    mov     Node_fork_digest(%rbx), %rcx
+    cmp     %rcx, %rax
+    je      20f
+    mov     %rcx, Node_old_digest(%rbx)     # a new digest: the old one's topics leave later
+    lea     NODE_SUBSCRIBE_AHEAD(%r12), %rax
+    mov     %rax, Node_old_epoch(%rbx)
+    xor     %edi, %edi                      # of the fork of the epoch before
+    test    %r12, %r12
+    jz      11f
+    lea     -1(%r12), %rdi
+    imul    $SLOTS_PER_EPOCH, %rdi, %rdi
+11: lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, Node_old_fork(%rbx)
+1:  mov     S7(%rsp), %rax
+    mov     %rax, Node_fork_digest(%rbx)
+    orq     $NODE_FLAG_SUBSCRIBED, Node_flags(%rbx)
+    lea     L(%rsp), %rdi                   # the record entries of the new digest
+    mov     %r13, %rsi
+    call    node_enr_entries
+    mov     Node_next_digest(%rbx), %rax    # its topics, unless they are there ahead
+    movq    $0, Node_next_digest(%rbx)
+    cmp     S7(%rsp), %rax
+    je      9f
+    mov     %r13, %rdi
+    mov     S7(%rsp), %rsi
+    mov     $LIBP2P_EVENT_SUBSCRIBE, %edx
+    call    node_topics
+    jmp     9f
+20: lea     NODE_SUBSCRIBE_AHEAD(%r12), %rax    # ahead: the topics of the digest of a later epoch
+    mov     %rax, L(%rsp)
+    imul    $SLOTS_PER_EPOCH, %rax, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, S8(%rsp)
+    mov     %rax, %r10
+    movq    $0, (L + 8)(%rsp)
+    lea     Node_genesis_validators_root(%rbx), %rdi
+    lea     L(%rsp), %rsi
+    lea     Node_config(%rbx), %rdx
+    mov     %r14, %rcx
+    lea     (L + 8)(%rsp), %r8
+    FORK_CALL compute_fork_digest
+    test    %rax, %rax
+    jnz     9f
+    mov     (L + 8)(%rsp), %rax
+    cmp     S7(%rsp), %rax
+    je      30f
+    cmp     Node_next_digest(%rbx), %rax
+    je      30f
+    mov     %rax, Node_next_digest(%rbx)
+    mov     S8(%rsp), %rdi
+    mov     %rax, %rsi
+    mov     $LIBP2P_EVENT_SUBSCRIBE, %edx
+    call    node_topics
+    jmp     9f
+30: mov     Node_old_digest(%rbx), %rsi     # the old digest's topics leave
+    test    %rsi, %rsi
+    jz      9f
+    cmp     Node_old_epoch(%rbx), %r12
+    jb      9f
+    movq    $0, Node_old_digest(%rbx)
+    mov     Node_old_fork(%rbx), %rdi
+    mov     $LIBP2P_EVENT_UNSUBSCRIBE, %edx
+    call    node_topics
 9:  LEAVE 16
 END_FUNCTION node_subscribe
 
@@ -4593,6 +4678,8 @@ LOCAL_FUNCTION node_message
     jz      1f
     movq    $0, (L + GossipTopic_name)(%rsp)
     movq    $0, (L + GossipTopic_subnet_id)(%rsp)
+    mov     Node_fork_digest(%rbx), %rax    # a topic of no name: as of the node's ForkDigest
+    mov     %rax, (L + GossipTopic_fork_digest)(%rsp)
 1:  mov     %rbp, %rdi                      # the message-id, of the fork of the store's slot
     call    node_store_slot
     mov     %rax, %rdi
@@ -4646,6 +4733,10 @@ LOCAL_FUNCTION node_message
     mov     %rax, NodeMessage_topic(%r13)
     mov     (L + GossipTopic_subnet_id)(%rsp), %rax
     mov     %rax, NodeMessage_subnet(%r13)
+    movq    $NODE_MESSAGE_OTHER_DIGEST, NodeMessage_state(%r13)    # a topic of another ForkDigest: IGNORE, unread
+    mov     (L + GossipTopic_fork_digest)(%rsp), %rax
+    cmp     Node_fork_digest(%rbx), %rax
+    jne     99f
     movq    $NODE_MESSAGE_CORRUPT, NodeMessage_state(%r13)  # the bytes, uncompressed
     mov     S10(%rsp), %rdi
     lea     (L + 48)(%rsp), %rsi
@@ -4776,6 +4867,8 @@ LOCAL_FUNCTION node_message_status
     cmp     NodeBlock_slot(%rdx), %rax
     jbe     3f
     mov     NodeBlock_state_id(%rdx), %rax
+    test    %rax, %rax                      # a parent with a post-state
+    jz      3f
     mov     %rax, S9(%rsp)
     mov     NodeBlock_slot(%rdx), %rdi      # of the same fork
     lea     Node_config(%rbx), %rsi
@@ -4831,9 +4924,15 @@ END_FUNCTION node_message_status
 
 /* ------------------------------------------------------------ sync */
 
-/* The Status of rdx bytes at rsi (84, or 92 for v2) of the peer of handle rdi, kept in its entry. r12 the bytes, r13 their size, S7 the entry. */
+/*
+ * The Status of rdx bytes at rsi (84, or 92 for v2) of the peer of handle rdi, kept in its entry;
+ * then the Status rules (phase0 p2p-interface.md): a fork_digest the node does not have, or a
+ * finalized checkpoint of the node's finalized epoch or before that is not of the node's chain,
+ * gives a DISCONNECT. r12 the bytes, then the peer's finalized epoch, r13 their size, then a slot,
+ * S7 the entry. Locals: L the node's Status (92).
+ */
 LOCAL_FUNCTION node_peer_status
-    ENTER 0
+    ENTER 96
     mov     %rsi, %r12
     mov     %rdx, %r13
     call    node_find_peer
@@ -4860,7 +4959,60 @@ LOCAL_FUNCTION node_peer_status
     call    lantern_copy
 1:  mov     S7(%rsp), %rdi
     orq     $NODE_PEER_STATUS, NodePeer_flags(%rdi)
-9:  LEAVE 0
+    lea     L(%rsp), %rdi                   # its fork_digest: the node's of the store's epoch, or the one ahead or before around a fork
+    call    node_status_bytes
+    mov     S7(%rsp), %rdx
+    mov     NodePeer_fork_digest(%rdx), %rax
+    mov     L(%rsp), %ecx
+    cmp     %rcx, %rax
+    je      2f
+    cmp     Node_next_digest(%rbx), %rax
+    je      2f
+    cmp     Node_old_digest(%rbx), %rax
+    jne     8f
+2:  mov     NodePeer_finalized_epoch(%rdx), %r12    # its finalized checkpoint: of GENESIS_EPOCH, or after the store's, as it is
+    test    %r12, %r12
+    jz      9f
+    cmp     Store_finalized_checkpoint(%rbp), %r12
+    ja      9f
+    jb      3f
+    lea     NodePeer_finalized_root(%rdx), %rax     # the store's finalized epoch: its root
+    lea     (Store_finalized_checkpoint + 8)(%rbp), %rcx
+    NE32    %rax, %rcx, 8f
+    jmp     9f
+3:  mov     Node_db(%rbx), %rsi             # before: the Db's last block at or before the epoch's first slot
+    add     %rbx, %rsi
+    imul    $SLOTS_PER_EPOCH, %r12, %r13
+    mov     Db_end_slot(%rsi), %rax
+    test    %rax, %rax
+    jz      9f
+    dec     %rax
+    cmp     %rax, %r13
+    cmova   %rax, %r13
+4:  cmp     Db_first_slot(%rsi), %r13
+    jb      9f
+    mov     %r13, %rax
+    sub     Db_first_slot(%rsi), %rax
+    imul    $DbSlot__mem, %rax, %rax
+    add     Db_slots(%rsi), %rax
+    add     %rsi, %rax
+    cmpq    $0, DbSlot_block(%rax)
+    jne     5f
+    test    %r13, %r13
+    jz      9f
+    dec     %r13
+    jmp     4b
+5:  mov     S7(%rsp), %rdx
+    lea     NodePeer_finalized_root(%rdx), %rcx
+    NE32    %rcx, %rax, 8f                  # DbSlot_root
+    jmp     9f
+8:  mov     $LIBP2P_EVENT_DISCONNECT, %edi  # a DISCONNECT; it syncs nothing until it goes
+    mov     S7(%rsp), %rax
+    mov     NodePeer_handle(%rax), %rsi
+    call    node_out_handle
+    mov     S7(%rsp), %rax
+    andq    $~NODE_PEER_STATUS, NodePeer_flags(%rax)
+9:  LEAVE 96
 END_FUNCTION node_peer_status
 
 /* rax = the index of the node's stream in NODE_STREAM_OPENING of tag rdi, or 2^64 - 1; rdx = its entry. Uses rcx, rsi. */

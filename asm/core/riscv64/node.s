@@ -4004,11 +4004,11 @@ LOCAL_FUNCTION node_validation
 1:  UNFRAME 16
 END_FUNCTION node_validation
 
-/* The gossip topic a0 with the subnet a1 at the node's ForkDigest: a SUBSCRIBE event. s3 the topic's length. Locals: L a GossipTopic, L+24 a ByteList of the topic. */
+/* The gossip topic a0 with the subnet a1 at the ForkDigest a2: an event of kind a3 (SUBSCRIBE or UNSUBSCRIBE). s3 the topic's length, s4 the kind. Locals: L a GossipTopic, L+24 a ByteList of the topic. */
 LOCAL_FUNCTION node_sub
     ENTER 176
-    ld      t0, Node_fork_digest(s1)
-    sd      t0, (L + GossipTopic_fork_digest)(sp)
+    mv      s4, a3
+    sd      a2, (L + GossipTopic_fork_digest)(sp)
     sd      a0, (L + GossipTopic_name)(sp)
     sd      a1, (L + GossipTopic_subnet_id)(sp)
     li      t0, 24 + 128
@@ -4025,8 +4025,7 @@ LOCAL_FUNCTION node_sub
     andi    a0, a0, -8
     call    node_out
     beqz    a0, 9f
-    li      t0, LIBP2P_EVENT_SUBSCRIBE
-    sd      t0, 8(a0)
+    sd      s4, 8(a0)
     sd      s3, 16(a0)
     addi    a0, a0, 24
     addi    a1, sp, L + 48
@@ -4420,65 +4419,35 @@ LOCAL_FUNCTION node_lookup
 END_FUNCTION node_lookup
 
 /*
- * The gossip topics of the fork of the store's epoch, at its ForkDigest: SUBSCRIBE events, once
- * for each digest, when p2p_out has room for them. s3 the fork, s4 a subnet, s7 the subnets.
- * Locals: L an epoch, L+8 a ForkDigest.
+ * The gossip topics of the fork a0 at the ForkDigest a1: an event of kind a2 (SUBSCRIBE or
+ * UNSUBSCRIBE) for each. s3 the fork, s4 a subnet, s7 the subnets. Locals: L the digest, L+8 the
+ * kind.
  */
-LOCAL_FUNCTION node_subscribe
+LOCAL_FUNCTION node_topics
     ENTER 16
-    P2P_OUT t0
-    ld      t1, 0(t0)
-    ld      t2, 16(t0)
-    addi    t1, t1, -24
-    sub     t1, t1, t2
-    li      t2, 64 * 128
-    bltu    t1, t2, 9f
-    li      a0, NODE_ENR_ACTION             # and the actions room for the record entries
-    call    node_room
-    beqz    a0, 9f
-    mv      a0, s2
-    call    node_store_slot
-    li      t0, SLOTS_PER_EPOCH
-    divu    t0, a0, t0
-    sd      t0, L(sp)
-    addi    a1, s1, Node_config
-    call    node_fork
     mv      s3, a0
-    mv      t6, a0
-    sd      zero, (L + 8)(sp)
-    addi    a0, s1, Node_genesis_validators_root
-    addi    a1, sp, L
-    addi    a2, s1, Node_config
-    mv      a3, s5
-    addi    a4, sp, L + 8
-    FORK_CALL compute_fork_digest
-    bnez    a0, 9f
-    ld      t0, Node_flags(s1)
-    ld      t1, (L + 8)(sp)
-    andi    t2, t0, NODE_FLAG_SUBSCRIBED
-    beqz    t2, 1f
-    ld      t2, Node_fork_digest(s1)
-    beq     t1, t2, 9f
-1:  sd      t1, Node_fork_digest(s1)
-    ori     t0, t0, NODE_FLAG_SUBSCRIBED
-    sd      t0, Node_flags(s1)
-    addi    a0, sp, L                       # the record entries of the new digest
-    mv      a1, s3
-    call    node_enr_entries
+    sd      a1, L(sp)
+    sd      a2, (L + 8)(sp)
     .irp name, GOSSIP_BEACON_BLOCK, GOSSIP_BEACON_AGGREGATE_AND_PROOF, GOSSIP_VOLUNTARY_EXIT, GOSSIP_PROPOSER_SLASHING, GOSSIP_ATTESTER_SLASHING
     li      a0, \name
     li      a1, 0
+    ld      a2, L(sp)
+    ld      a3, (L + 8)(sp)
     call    node_sub
     .endr
     li      t0, FORK_ALTAIR
     bltu    s3, t0, 9f
     li      a0, GOSSIP_SYNC_COMMITTEE_CONTRIBUTION_AND_PROOF
     li      a1, 0
+    ld      a2, L(sp)
+    ld      a3, (L + 8)(sp)
     call    node_sub
     li      t0, FORK_CAPELLA
     bltu    s3, t0, 9f
     li      a0, GOSSIP_BLS_TO_EXECUTION_CHANGE
     li      a1, 0
+    ld      a2, L(sp)
+    ld      a3, (L + 8)(sp)
     call    node_sub
     li      t0, FORK_DENEB                  # deneb and electra: every blob sidecar subnet
     bltu    s3, t0, 9f
@@ -4492,6 +4461,8 @@ LOCAL_FUNCTION node_subscribe
 3:  bgeu    s4, s7, 9f
     li      a0, GOSSIP_BLOB_SIDECAR
     mv      a1, s4
+    ld      a2, L(sp)
+    ld      a3, (L + 8)(sp)
     call    node_sub
     addi    s4, s4, 1
     j       3b
@@ -4518,9 +4489,117 @@ LOCAL_FUNCTION node_subscribe
     bnez    t1, 7f
     or      s9, s9, t0
 61: li      a0, GOSSIP_DATA_COLUMN_SIDECAR
+    ld      a2, L(sp)
+    ld      a3, (L + 8)(sp)
     call    node_sub
 7:  addi    s4, s4, 1
     j       5b
+9:  LEAVE 16
+END_FUNCTION node_topics
+
+/*
+ * The node's gossip topics (node.md; altair p2p-interface.md, Transitioning the gossip), one change
+ * a step, when p2p_out has room: the topics of the fork of the store's epoch at its ForkDigest,
+ * once for each digest, with the record entries; else those of the epoch NODE_SUBSCRIBE_AHEAD
+ * later, when its digest differs; else, from NODE_SUBSCRIBE_AHEAD epochs after the digest changed,
+ * the old digest's topics leave. s3 the epoch, s4 its fork, s7 its digest, s8 a fork, s9 a digest.
+ * Locals: L an epoch, L+8 a ForkDigest.
+ */
+LOCAL_FUNCTION node_subscribe
+    ENTER 16
+    P2P_OUT t0
+    ld      t1, 0(t0)
+    ld      t2, 16(t0)
+    addi    t1, t1, -24
+    sub     t1, t1, t2
+    li      t2, 64 * 128
+    bltu    t1, t2, 9f
+    li      a0, NODE_ENR_ACTION             # and the actions room for the record entries
+    call    node_room
+    beqz    a0, 9f
+    mv      a0, s2
+    call    node_store_slot
+    li      t0, SLOTS_PER_EPOCH
+    divu    s3, a0, t0
+    sd      s3, L(sp)
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      s4, a0
+    mv      t6, a0
+    sd      zero, (L + 8)(sp)
+    addi    a0, s1, Node_genesis_validators_root
+    addi    a1, sp, L
+    addi    a2, s1, Node_config
+    mv      a3, s5
+    addi    a4, sp, L + 8
+    FORK_CALL compute_fork_digest
+    bnez    a0, 9f
+    ld      s7, (L + 8)(sp)
+    ld      t0, Node_flags(s1)
+    andi    t0, t0, NODE_FLAG_SUBSCRIBED
+    beqz    t0, 1f
+    ld      t1, Node_fork_digest(s1)
+    beq     s7, t1, 20f
+    sd      t1, Node_old_digest(s1)         # a new digest: the old one's topics leave later
+    addi    t0, s3, NODE_SUBSCRIBE_AHEAD
+    sd      t0, Node_old_epoch(s1)
+    li      a0, 0                           # of the fork of the epoch before
+    beqz    s3, 11f
+    addi    a0, s3, -1
+    li      t0, SLOTS_PER_EPOCH
+    mul     a0, a0, t0
+11: addi    a1, s1, Node_config
+    call    node_fork
+    sd      a0, Node_old_fork(s1)
+1:  sd      s7, Node_fork_digest(s1)
+    ld      t0, Node_flags(s1)
+    ori     t0, t0, NODE_FLAG_SUBSCRIBED
+    sd      t0, Node_flags(s1)
+    addi    a0, sp, L                       # the record entries of the new digest
+    mv      a1, s4
+    call    node_enr_entries
+    ld      t0, Node_next_digest(s1)        # its topics, unless they are there ahead
+    sd      zero, Node_next_digest(s1)
+    beq     t0, s7, 9f
+    mv      a0, s4
+    mv      a1, s7
+    li      a2, LIBP2P_EVENT_SUBSCRIBE
+    call    node_topics
+    j       9f
+20: addi    t0, s3, NODE_SUBSCRIBE_AHEAD    # ahead: the topics of the digest of a later epoch
+    sd      t0, L(sp)
+    li      t1, SLOTS_PER_EPOCH
+    mul     a0, t0, t1
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      s8, a0
+    mv      t6, a0
+    sd      zero, (L + 8)(sp)
+    addi    a0, s1, Node_genesis_validators_root
+    addi    a1, sp, L
+    addi    a2, s1, Node_config
+    mv      a3, s5
+    addi    a4, sp, L + 8
+    FORK_CALL compute_fork_digest
+    bnez    a0, 9f
+    ld      s9, (L + 8)(sp)
+    beq     s9, s7, 30f
+    ld      t0, Node_next_digest(s1)
+    beq     t0, s9, 30f
+    sd      s9, Node_next_digest(s1)
+    mv      a0, s8
+    mv      a1, s9
+    li      a2, LIBP2P_EVENT_SUBSCRIBE
+    call    node_topics
+    j       9f
+30: ld      a1, Node_old_digest(s1)         # the old digest's topics leave
+    beqz    a1, 9f
+    ld      t0, Node_old_epoch(s1)
+    bltu    s3, t0, 9f
+    sd      zero, Node_old_digest(s1)
+    ld      a0, Node_old_fork(s1)
+    li      a2, LIBP2P_EVENT_UNSUBSCRIBE
+    call    node_topics
 9:  LEAVE 16
 END_FUNCTION node_subscribe
 
@@ -4573,6 +4652,8 @@ LOCAL_FUNCTION node_message
     beqz    a0, 1f
     sd      zero, (L + GossipTopic_name)(sp)
     sd      zero, (L + GossipTopic_subnet_id)(sp)
+    ld      t0, Node_fork_digest(s1)        # a topic of no name: as of the node's ForkDigest
+    sd      t0, (L + GossipTopic_fork_digest)(sp)
 1:  mv      a0, s2                          # the message-id, of the fork of the store's slot
     call    node_store_slot
     addi    a1, s1, Node_config
@@ -4624,6 +4705,11 @@ LOCAL_FUNCTION node_message
     sd      t0, NodeMessage_topic(s7)
     ld      t0, (L + GossipTopic_subnet_id)(sp)
     sd      t0, NodeMessage_subnet(s7)
+    li      t0, NODE_MESSAGE_OTHER_DIGEST   # a topic of another ForkDigest: IGNORE, unread
+    sd      t0, NodeMessage_state(s7)
+    ld      t0, (L + GossipTopic_fork_digest)(sp)
+    ld      t1, Node_fork_digest(s1)
+    bne     t0, t1, 99f
     li      t0, NODE_MESSAGE_CORRUPT        # the bytes, uncompressed
     sd      t0, NodeMessage_state(s7)
     mv      a0, s10
@@ -4754,6 +4840,7 @@ LOCAL_FUNCTION node_message_status
     ld      t1, NodeMessage_slot(s4)
     bleu    t1, t0, 3f
     ld      s9, NodeBlock_state_id(a1)
+    beqz    s9, 3f                          # a parent with a post-state
     mv      a0, t0                          # of the same fork
     addi    a1, s1, Node_config
     call    node_fork
@@ -4807,9 +4894,15 @@ END_FUNCTION node_message_status
 
 /* ------------------------------------------------------------ sync */
 
-/* The Status of a2 bytes at a1 (84, or 92 for v2) of the peer of handle a0, kept in its entry. s3 the bytes, s4 their size, s7 the entry. */
+/*
+ * The Status of a2 bytes at a1 (84, or 92 for v2) of the peer of handle a0, kept in its entry;
+ * then the Status rules (phase0 p2p-interface.md): a fork_digest the node does not have, or a
+ * finalized checkpoint of the node's finalized epoch or before that is not of the node's chain,
+ * gives a DISCONNECT. s3 the bytes, then the peer's finalized epoch, s4 their size, then a slot, s7
+ * the entry, s8 the Db. Locals: L the node's Status (92).
+ */
 LOCAL_FUNCTION node_peer_status
-    ENTER 0
+    ENTER 96
     mv      s3, a1
     mv      s4, a2
     call    node_find_peer
@@ -4835,7 +4928,56 @@ LOCAL_FUNCTION node_peer_status
 1:  ld      t0, NodePeer_flags(s7)
     ori     t0, t0, NODE_PEER_STATUS
     sd      t0, NodePeer_flags(s7)
-9:  LEAVE 0
+    addi    a0, sp, L                       # its fork_digest: the node's of the store's epoch, or the one ahead or before around a fork
+    call    node_status_bytes
+    ld      t0, NodePeer_fork_digest(s7)
+    lwu     t1, L(sp)
+    beq     t0, t1, 2f
+    ld      t1, Node_next_digest(s1)
+    beq     t0, t1, 2f
+    ld      t1, Node_old_digest(s1)
+    bne     t0, t1, 8f
+2:  ld      s3, NodePeer_finalized_epoch(s7)    # its finalized checkpoint: of GENESIS_EPOCH, or after the store's, as it is
+    beqz    s3, 9f
+    ld      t0, Store_finalized_checkpoint(s2)
+    bgtu    s3, t0, 9f
+    bltu    s3, t0, 3f
+    addi    t2, s7, NodePeer_finalized_root     # the store's finalized epoch: its root
+    addi    t3, s2, Store_finalized_checkpoint + 8
+    NE32    t2, t3, 8f
+    j       9f
+3:  ld      s8, Node_db(s1)                 # before: the Db's last block at or before the epoch's first slot
+    add     s8, s1, s8
+    li      t0, SLOTS_PER_EPOCH
+    mul     s4, s3, t0
+    ld      t0, Db_end_slot(s8)
+    beqz    t0, 9f
+    addi    t0, t0, -1
+    bleu    s4, t0, 4f
+    mv      s4, t0
+4:  ld      t1, Db_first_slot(s8)
+    bltu    s4, t1, 9f
+    sub     t2, s4, t1
+    li      t3, DbSlot__mem
+    mul     t2, t2, t3
+    ld      t3, Db_slots(s8)
+    add     t2, t2, t3
+    add     t2, s8, t2
+    ld      t3, DbSlot_block(t2)
+    bnez    t3, 5f
+    beqz    s4, 9f
+    addi    s4, s4, -1
+    j       4b
+5:  addi    t3, s7, NodePeer_finalized_root
+    NE32    t3, t2, 8f                      # DbSlot_root
+    j       9f
+8:  li      a0, LIBP2P_EVENT_DISCONNECT     # a DISCONNECT; it syncs nothing until it goes
+    ld      a1, NodePeer_handle(s7)
+    call    node_out_handle
+    ld      t0, NodePeer_flags(s7)
+    andi    t0, t0, ~NODE_PEER_STATUS
+    sd      t0, NodePeer_flags(s7)
+9:  LEAVE 96
 END_FUNCTION node_peer_status
 
 /* a0 = the index of the node's stream in NODE_STREAM_OPENING of tag a0, or 2^64 - 1; a1 = its entry. Uses t0-t4, a7. */

@@ -3264,6 +3264,7 @@ static void peer_node_id(uint8_t *out, const char **why) {
 }
 
 /* The node of a case's anchor, with the shell's buffers: the store, the node, the actions, the anchor state as id 1. */
+static uint64_t shell_next_fork_epoch = UINT64_MAX; /* the epoch of the fork after the runner's in the node's config */
 static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_block, const char **why) {
     memset(n, 0, sizeof *n);
     struct node_shell *s = calloc(1, sizeof *s);
@@ -3299,7 +3300,8 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
             /* The node picks the fork of a slot by the fork epochs: this runner's fork and the ones before at genesis. */
             uint8_t ncfg[CONFIG_SIZE];
             memcpy(ncfg, config, CONFIG_SIZE);
-            for (uint64_t f = FORK_ALTAIR; f <= FORK_FULU; f++) wr64(ncfg + 16 * f, f <= FORK ? 0 : UINT64_MAX);
+            for (uint64_t f = FORK_ALTAIR; f <= FORK_FULU; f++)
+                wr64(ncfg + 16 * f, f <= FORK ? 0 : f == FORK + 1 ? shell_next_fork_epoch : UINT64_MAX);
             memcpy(s->anchor, anchor, sizeof s->anchor);
             memcpy(s->ncfg, ncfg, CONFIG_SIZE);
             s->flags = flags;
@@ -3641,7 +3643,7 @@ struct p2p_net {
     } in[P2P_STREAMS]; /* the node's streams to the peer, and their protocol index */
     uint8_t *state[2], *scratch, *actions, *events; /* the peer's scratch, actions and events */
     uint64_t events_len, now, conn[2], dial_conn, token, node_handle;
-    int connected, topics;
+    int connected, topics, untopics; /* the topics the node joined, and left */
     int dial_side;            /* the side whose DIAL is open */
     uint8_t status[96];       /* the Status the peer answers with */
     uint64_t status_len;
@@ -3750,6 +3752,7 @@ static void p2p_peer_app(struct p2p_net *net, uint8_t *act) {
     }
     if (kind == 19) { /* PEER_TOPIC: the node joins or leaves a topic */
         if (rd64(act + 24)) net->topics++;
+        else net->untopics++;
         return;
     }
     if (kind == P2P_ACT_STREAM_INBOUND) {
@@ -4748,6 +4751,42 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
  * peer with BeaconBlocksByRange and BlobSidecarsByRange, and take its last block as head. A chain
  * with sidecars syncs again with none sent.
  */
+/* Whether the node keeps no peer. */
+static int p2p_dropped(struct p2p_net *net, int arg) {
+    (void)arg;
+    return rd64(net->shell->node + NODE_PEERS + 8) == 0;
+}
+
+/*
+ * The Status rules (node.md): a new node at the case's anchor, at its last tick, dials a peer whose
+ * Status has another fork_digest; it must disconnect it.
+ */
+static void status_check(tv parts, uint64_t last_ms, const char **why) {
+    fc_node m;
+    uint8_t *anchor_block;
+    struct node_shell *s = shell_open(&m, parts, &anchor_block, why);
+    uint64_t genesis_ms = *why ? 0 : rd64(m.store + STORE_GENESIS_TIME_MS);
+    if (!*why) {
+        shell_event(s, EV_TICK, last_ms, NULL, 0);
+        shell_settle(&m, why);
+    }
+    struct p2p_net net;
+    uint8_t gvr[32], ncfg[CONFIG_SIZE], status[96] = {0}, record[24 + 300];
+    memcpy(gvr, m.anchor + field_offset("BeaconState", 1), 32);
+    node_config(ncfg);
+    uint64_t epoch = last_ms < genesis_ms ? 0 : (last_ms - genesis_ms) / rd64(config + 104) / SLOTS_PER_EPOCH_RUNNER;
+    CALL(LF(compute_fork_digest), gvr, &epoch, ncfg, fresh_scratch(), status);
+    status[0] ^= 0xFF; /* another fork_digest; finalized (0, 0) */
+    if (!*why) peer_record(gvr, epoch, record, why);
+    if (!*why) {
+        p2p_open_record(&m, &net, record + 24, rd64(record + 16), status, FORK >= FORK_FULU ? 92 : 84, why);
+        if (!*why) p2p_run(&m, &net, p2p_dropped, 0, why);
+        if (*why && !strcmp(*why, "the network does not get there")) *why = "status: the node keeps a peer of another fork_digest";
+        p2p_close(&net);
+    }
+    shell_close(&m, anchor_block);
+}
+
 static void fc_sync_check(tv parts, const char **why) {
     case_block *blocks, **chain;
     size_t nchain = case_chain(parts, &blocks, &chain, why);
@@ -4763,6 +4802,7 @@ static void fc_sync_check(tv parts, const char **why) {
         sync_chain = chain;
         sync_nchain = nchain;
         if (!*why && sync_first_blobs() < nchain) sync_once(parts, chain, nchain, last_ms, 1, why);
+        if (!*why) status_check(parts, last_ms, why);
     }
     free(chain);
     free(blocks);
@@ -4811,6 +4851,69 @@ static int p2p_imported(struct p2p_net *net, int arg) {
     return (e && rd64(e + NB_STATUS) == NB_INVALID) || shell_imported(net->shell, gossip_root);
 }
 static int p2p_subscribed(struct p2p_net *net, int arg) { return net->topics >= arg; }
+
+#if FORK < FORK_FULU
+static int p2p_unsubscribed(struct p2p_net *net, int arg) { return net->untopics >= arg; }
+
+/* The gossip topics of a fork before fulu (node.md): five, sync_committee_contribution_and_proof, bls_to_execution_change, blob subnets. */
+static int fork_topics(uint64_t fork) {
+    int t = 5 + (fork >= FORK_ALTAIR) + (fork >= FORK_CAPELLA);
+    if (fork == FORK_DENEB) t += (int)rd64(config + 392 + 16 * 32 + 112);   /* BLOB_SIDECAR_SUBNET_COUNT */
+    if (fork == FORK_ELECTRA) t += (int)rd64(config + 392 + 16 * 32 + 120); /* BLOB_SIDECAR_SUBNET_COUNT_ELECTRA */
+    return t;
+}
+
+/*
+ * The topics of a node whose config has the next fork at epoch 3 (node.md; altair p2p-interface.md,
+ * Transitioning the gossip): at epoch 0 the peer sees the node join the runner's fork's topics and
+ * no more; at epoch 1 those of the next fork too, two epochs ahead; at epoch 5, two epochs after
+ * the fork, it leaves the first ones.
+ */
+static void fc_subscribe_check(tv parts, const char **why) {
+    fc_node n;
+    uint8_t *anchor_block;
+    shell_next_fork_epoch = 3;
+    struct node_shell *s = shell_open(&n, parts, &anchor_block, why);
+    shell_next_fork_epoch = UINT64_MAX;
+    uint64_t genesis_ms = *why ? 0 : rd64(n.store + STORE_GENESIS_TIME_MS);
+    uint64_t epoch_ms = rd64(config + 104) * SLOTS_PER_EPOCH_RUNNER;
+    struct p2p_net net;
+    int now = fork_topics(FORK), next = 0;
+#if FORK + 1 < FORK_FULU
+    next = fork_topics(FORK + 1);
+#else
+    uint8_t subnets[16] = {0}; /* fulu: the subnets of the columns the node samples, Node_columns at 440 */
+    const uint8_t *cols = s->node + 440;
+    for (uint64_t c = 0, sc = rd64(config + 296); c < 128 && sc && !*why; c++) /* DATA_COLUMN_SIDECAR_SUBNET_COUNT */
+        if (cols[c / 8] >> (c % 8) & 1) subnets[(c % sc) / 8] |= (uint8_t)(1u << ((c % sc) % 8));
+    next = 7;
+    for (int c = 0; c < 128; c++) next += subnets[c / 8] >> (c % 8) & 1;
+#endif
+    if (!*why) p2p_open(&n, &net, why);
+    if (!*why) p2p_run(&n, &net, p2p_subscribed, now, why);
+    if (!*why) p2p_settle(&n, &net, why);
+    if (!*why && net.topics != now) *why = "subscribe: at epoch 0 the node joins other topics than its fork's";
+    if (!*why) {
+        shell_event(s, EV_TICK, genesis_ms + epoch_ms, NULL, 0);
+        p2p_run(&n, &net, p2p_subscribed, now + next, why);
+        if (!*why) p2p_settle(&n, &net, why);
+        if (!*why && (net.topics != now + next || net.untopics)) *why = "subscribe: at epoch 1 the node does not join the next fork's topics alone";
+    }
+    if (!*why) {
+        shell_event(s, EV_TICK, genesis_ms + 3 * epoch_ms, NULL, 0);
+        p2p_settle(&n, &net, why);
+        if (!*why && (net.topics != now + next || net.untopics)) *why = "subscribe: at the fork the node joins or leaves topics";
+    }
+    if (!*why) {
+        shell_event(s, EV_TICK, genesis_ms + 5 * epoch_ms, NULL, 0);
+        p2p_run(&n, &net, p2p_unsubscribed, now, why);
+        if (!*why) p2p_settle(&n, &net, why);
+        if (!*why && (net.untopics != now || net.topics != now + next)) *why = "subscribe: at epoch 5 the node does not leave its old topics alone";
+    }
+    if (!*why) p2p_close(&net);
+    shell_close(&n, anchor_block);
+}
+#endif
 static int p2p_never(struct p2p_net *net, int arg) {
     (void)net;
     (void)arg;
@@ -5111,6 +5214,16 @@ static void run_fork_choice(const char *file, const char *dir, case_file *f, int
             report(file, nname, (uint64_t)nlen, nwhy == NULL, nwhy);
             int ran = 0;
             const char *gwhy = NULL;
+#if FORK < FORK_FULU
+            static int subscribe_checked;
+            if (!subscribe_checked && strstr(file, "fork_choice-get_head")) {
+                subscribe_checked = 1;
+                nlen = snprintf(nname, sizeof nname, "%.*s (subscribe)", (int)len, name);
+                fc_subscribe_check(parts, &gwhy);
+                report(file, nname, (uint64_t)nlen, gwhy == NULL, gwhy);
+                gwhy = NULL;
+            }
+#endif
             if (serve) fc_gossip_case(parts, &ran, &gwhy);
             if (ran) {
                 nlen = snprintf(nname, sizeof nname, "%.*s (gossip)", (int)len, name);
