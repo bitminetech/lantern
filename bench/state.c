@@ -10,6 +10,9 @@
 #undef main
 #include <time.h>
 
+ABI uint64_t LF(get_beacon_committee)(const void *state, const void *slot, const void *index, void *cache, void *scratch,
+                                        void *out);
+
 static double now_s(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
@@ -95,6 +98,27 @@ int main(int argc, char **argv) {
     double c2 = now_s();
     printf("state cache: %llu MB; state_root empty %.3f s, unchanged %.3f s%s\n", (unsigned long long)(csize >> 20), c1 - c0,
            c2 - c1, rwhy ? " (root differs)" : "");
+    {   /* get_beacon_committee of the state's slot, index 0: with no cache, then a CommitteeCache empty and filled */
+        uint64_t ccsize = 0, cslot = rd64(state + 48), cidx = 0; /* NODE_STATE_SLOT 48 */
+        CALL(LF(committee_cache_size), &n, &ccsize);
+        uint8_t *ccache = buffer(ccsize), *committee = buffer(24 + 8 * 65536);
+        wr64(ccache, ccsize);
+        CALL(LF(committee_cache_init), &n, ccache);
+        double k[4];
+        uint64_t ks[3];
+        k[0] = now_s();
+        for (int r = 0; r < 3; r++) {
+            wr64(committee, 24 + 8 * 65536);
+            wr64(scratch, ssize);
+            ks[r] = CALL(LF(get_beacon_committee), state, &cslot, &cidx, r ? ccache : NULL, scratch, committee);
+            k[r + 1] = now_s();
+        }
+        printf("get_beacon_committee: %llu members; no cache %.4f s, cache empty %.4f s, filled %.6f s (status %llu %llu %llu)\n",
+               (unsigned long long)rd64(committee + 16), k[1] - k[0], k[2] - k[1], k[3] - k[2], (unsigned long long)ks[0],
+               (unsigned long long)ks[1], (unsigned long long)ks[2]);
+        free(ccache);
+        free(committee);
+    }
     wr64(config + CONFIG_STATE_CACHE, (uint64_t)(uintptr_t)cache);
     {
         uint8_t *one = buffer(need);
