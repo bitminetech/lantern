@@ -1196,8 +1196,23 @@ SPEC_END process_attestation
  * attestation, L+152 the attesting list, L+160 the scratch size callees get, L+168 participation,
  * L+176 base reward per increment.
  */
+/* process_attestation of the spec: attestation_memo with a base reward factor of its own. */
 SPEC_FUNCTION process_attestation
+    ENTER 16
+    sd      zero, L(sp)
+    addi    a5, sp, L
+    call    attestation_memo
+    LEAVE 16
+SPEC_END process_attestation
+
+/*
+ * L0: process_attestation, with a5 the address of the block's get_base_reward_per_increment(state):
+ * 0 until an attestation finds it, which stores it there. The operations of one block change no
+ * effective balance and no active validator of the current epoch, so its attestations share it.
+ */
+LOCAL_FUNCTION attestation_memo
     ENTER 192
+    sd      a5, (L + 184)(sp)
     mv      s1, a0
     mv      s2, a1
     mv      s3, a2
@@ -1396,11 +1411,19 @@ SPEC_FUNCTION process_attestation
     CHECK_STATUS s5, 7f, 8f
     ld      t0, (L + 160)(sp)
     sd      t0, 0(s4)
-    mv      a0, s1                          # get_base_reward's factor, once for every index
+    ld      t0, (L + 184)(sp)               # get_base_reward's factor: once for every attestation of the block
+    ld      t1, 0(t0)
+    sd      t1, (L + 176)(sp)
+    bnez    t1, 47f
+    mv      a0, s1
     mv      a1, s4
     addi    a2, sp, (L + 176)
     call    lantern_get_base_reward_per_increment
     bnez    a0, 7f
+    ld      t0, (L + 184)(sp)
+    ld      t1, (L + 176)(sp)
+    sd      t1, 0(t0)
+47:
     sd      zero, (L + 120)(sp)
     ld      s8, (L + 152)(sp)               # the attesting list; the committee indices are done
     addi    s9, s8, LIST_FIXED
@@ -1488,7 +1511,7 @@ SPEC_FUNCTION process_attestation
     LEAVE 192
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 192
-SPEC_END process_attestation
+END_FUNCTION attestation_memo
 .endif
 
 .if TIMELY_SOURCE_WEIGHT != TIMELY_HEAD_WEIGHT

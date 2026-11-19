@@ -1204,8 +1204,24 @@ SPEC_END process_attestation
  * attestation, L+152 the attesting list, L+160 the scratch size callees get, L+168 participation,
  * L+176 base reward per increment.
  */
+/* process_attestation of the spec: attestation_memo with a base reward factor of its own. */
 SPEC_FUNCTION process_attestation
-    ENTER 192
+    ENTER 16
+    movq    $0, L(%rsp)
+    lea     L(%rsp), %r9
+    call    attestation_memo
+    LEAVE 16
+SPEC_END process_attestation
+
+/*
+ * L0: process_attestation, with r9 the address of the block's get_base_reward_per_increment(state):
+ * 0 until an attestation finds it, which stores it there. The operations of one block change no
+ * effective balance and no active validator of the current epoch, so its attestations share it.
+ * L+192: that address.
+ */
+LOCAL_FUNCTION attestation_memo
+    ENTER 208
+    mov     %r9, (L + 192)(%rsp)
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     %rdx, (L + 184)(%rsp)           # config
@@ -1411,12 +1427,21 @@ SPEC_FUNCTION process_attestation
     CHECK_STATUS %r13, 7f, 8f
     mov     (L + 160)(%rsp), %rax
     mov     %rax, (%r12)
-    mov     %rbx, %rdi                      # get_base_reward's factor, once for every index
+    mov     (L + 192)(%rsp), %rax           # get_base_reward's factor: once for every attestation of the block
+    mov     (%rax), %rax
+    mov     %rax, (L + 176)(%rsp)
+    test    %rax, %rax
+    jnz     47f
+    mov     %rbx, %rdi
     mov     %r12, %rsi
     lea     (L + 176)(%rsp), %rdx
     call    lantern_get_base_reward_per_increment
     test    %rax, %rax
     jnz     7f
+    mov     (L + 192)(%rsp), %rax
+    mov     (L + 176)(%rsp), %rcx
+    mov     %rcx, (%rax)
+47:
     movq    $0, (L + 120)(%rsp)
     mov     (L + 152)(%rsp), %rax           # the attesting list; the committee indices are done
     lea     LIST_FIXED(%rax), %r15
@@ -1495,14 +1520,14 @@ SPEC_FUNCTION process_attestation
     lea     (L + 120)(%rsp), %rdx
     call    lantern_increase_balance
 8:  xor     %eax, %eax
-7:  LEAVE 192
+7:  LEAVE 208
 5:  mov     $LANTERN_INVALID_OVERFLOW, %eax
 6:  mov     %rax, (%r13)
     xor     %eax, %eax
-    LEAVE 192
+    LEAVE 208
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 192
-SPEC_END process_attestation
+    LEAVE 208
+END_FUNCTION attestation_memo
 .endif
 
 .if TIMELY_SOURCE_WEIGHT != TIMELY_HEAD_WEIGHT

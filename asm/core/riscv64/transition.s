@@ -179,7 +179,7 @@ SPEC_END process_eth1_data
 .endm
 
 /* The same for a list of nested values: each starts with its size. */
-.macro FOR_VARIABLE value, ref, fn
+.macro FOR_VARIABLE value, ref, fn, memo=0
     PART    s7, s8, \value, \ref
 91: beqz    s8, 92f
     sd      s6, 0(s4)
@@ -188,6 +188,9 @@ SPEC_END process_eth1_data
     mv      a2, s3
     mv      a3, s4
     mv      a4, s5
+.if \memo
+    addi    a5, sp, L                       # the block's base reward factor
+.endif
     call    \fn
     bnez    a0, 7f
     ld      t0, 0(s5)
@@ -199,7 +202,7 @@ SPEC_END process_eth1_data
 92:
 .endm
 
-/* s1 state, s2 body, s3 config, s4 scratch, s5 result, s6 scratch size, s7 entry, s8 left, s9 requests. */
+/* s1 state, s2 body, s3 config, s4 scratch, s5 result, s6 scratch size, s7 entry, s8 left, s9 requests. Locals: L the attestations' base reward factor. */
 SPEC_FUNCTION process_operations
     ENTER 16
     mv      s1, a0
@@ -209,6 +212,7 @@ SPEC_FUNCTION process_operations
     mv      s5, a4
     ld      s6, 0(s4)
     sd      zero, 0(s5)
+    sd      zero, L(sp)                     # the attestations' base reward factor: not found yet
 .if FORK >= FORK_FULU
     LDQ     t0, s2, BeaconBlockBody_deposits + 8    # assert len(body.deposits) == 0
     beqz    t0, 1f
@@ -243,7 +247,11 @@ SPEC_FUNCTION process_operations
     j       8f
 1:  FOR_FIXED s2, BeaconBlockBody_proposer_slashings, ProposerSlashing__mem, lantern_process_proposer_slashing
     FOR_VARIABLE s2, BeaconBlockBody_attester_slashings, lantern_process_attester_slashing
+.if FORK >= FORK_ALTAIR
+    FOR_VARIABLE s2, BeaconBlockBody_attestations, attestation_memo, 1
+.else
     FOR_VARIABLE s2, BeaconBlockBody_attestations, lantern_process_attestation
+.endif
 .if FORK < FORK_FULU
     FOR_FIXED s2, BeaconBlockBody_deposits, Deposit__mem, lantern_process_deposit
 .endif
