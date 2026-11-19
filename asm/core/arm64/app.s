@@ -86,6 +86,37 @@ LOCAL_FUNCTION app_map
     UNFRAME 16
 END_FUNCTION app_map
 
+/*
+ * L1: a StateCache for x0 / 121 + 65536 validators (x0 the anchor file's bytes), at
+ * CONFIG_STATE_CACHE of the app's config; none with no memory. x19 the app.
+ * Locals: sp+16 validators, sp+24 its bytes.
+ */
+LOCAL_FUNCTION app_state_cache
+    FRAME 16
+    mov     x9, #121
+    udiv    x0, x0, x9
+    MOVQ    x9, 65536
+    add     x0, x0, x9
+    str     x0, [sp, #16]
+    add     x0, sp, #16
+    add     x1, sp, #24
+    ldr     x15, [x19, #APP_FORK]
+    FORK_CALL state_cache_size
+    ldr     x0, [sp, #24]
+    bl      app_map
+    cbz     x0, 1f
+    ldr     x9, [sp, #24]
+    str     x9, [x0]
+    add     x10, x19, #APP_CONFIG
+    str     x0, [x10, #CONFIG_STATE_CACHE]
+    mov     x1, x0
+    add     x0, sp, #16
+    ldr     x15, [x19, #APP_FORK]
+    FORK_CALL state_cache_init
+1:  mov     x0, #LANTERN_OK
+    UNFRAME 16
+END_FUNCTION app_state_cache
+
 /* L1: the pair at x19 + x0 goes back to lantern_shell_unmap and becomes 0, 0. */
 LOCAL_FUNCTION app_unmap
     FRAME 16
@@ -561,6 +592,8 @@ LOCAL_FUNCTION app_start
     bl      app_fail_status
     b       99f
 4:  bl      app_file_free
+    mov     x0, x21
+    bl      app_state_cache
     mov     x9, #4096                       /* the store: nodes, and validators below the file's bytes / 121 */
     mov     x10, #121
     udiv    x10, x21, x10

@@ -96,6 +96,38 @@ LOCAL_FUNCTION app_map
     UNFRAME 16
 END_FUNCTION app_map
 
+/*
+ * L1: a StateCache for rdi / 121 + 65536 validators (rdi the anchor file's bytes), at
+ * CONFIG_STATE_CACHE of the app's config; none with no memory. rbx the app.
+ * Locals: rsp+0 validators, rsp+8 its bytes.
+ */
+LOCAL_FUNCTION app_state_cache
+    FRAME 16
+    mov     %rdi, %rax
+    xor     %edx, %edx
+    mov     $121, %ecx
+    div     %rcx
+    add     $65536, %rax
+    mov     %rax, (%rsp)
+    mov     %rsp, %rdi
+    lea     8(%rsp), %rsi
+    mov     APP_FORK(%rbx), %r10
+    FORK_CALL state_cache_size
+    mov     8(%rsp), %rdi
+    call    app_map
+    test    %rax, %rax
+    jz      1f
+    mov     8(%rsp), %rcx
+    mov     %rcx, (%rax)
+    mov     %rax, (APP_CONFIG + CONFIG_STATE_CACHE)(%rbx)
+    mov     %rax, %rsi
+    mov     %rsp, %rdi
+    mov     APP_FORK(%rbx), %r10
+    FORK_CALL state_cache_init
+1:  xor     %eax, %eax
+    UNFRAME 16
+END_FUNCTION app_state_cache
+
 /* L1: the pair at rbx + rdi goes back to lantern_shell_unmap and becomes 0, 0. */
 LOCAL_FUNCTION app_unmap
     FRAME 16
@@ -608,6 +640,8 @@ LOCAL_FUNCTION app_start
     call    app_fail_status
     jmp     99f
 4:  call    app_file_free
+    mov     %r12, %rdi
+    call    app_state_cache
     mov     %r12, %rax                      # the store: nodes, and validators below the file's bytes / 121
     xor     %edx, %edx
     mov     $121, %ecx
