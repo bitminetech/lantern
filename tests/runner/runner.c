@@ -2379,12 +2379,14 @@ enum { EV_TICK = 1, EV_BLOCK, EV_ATTESTATION, EV_ATTESTER_SLASHING, EV_POW_BLOCK
 enum { ACT_BYTES_PUT = 1, ACT_STATE_COPY, ACT_STATE_FREE, ACT_BYTES_FREE, ACT_WORK, ACT_P2P_LIST, ACT_ENGINE, ACT_DISCV5, ACT_DB_APPEND, ACT_DB_STATE };
 #define NODE_FLAG_DISCV5 64
 #define NODE_FLAG_DB 128
+#define NODE_FLAG_FEW_STATES 256
 #define NODE_DB 464 /* Node_db: the PartRef of the node's Db */
 #define NODE_DB_REF (1ull << 63)
 #define NODE_DB_SIDECARS (1ull << 62)
 #define NODE_DB_SEGMENTS 256 /* the segments one node's runner keeps */
 enum { WORK_IMPORT_BLOCK = 1, WORK_JUSTIFIED_STATE, WORK_TARGET_STATE, WORK_ATTESTATION, WORK_ATTESTER_SLASHING, WORK_SERVE, WORK_GOSSIP,
-       WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE, WORK_SLOTS, WORK_UPGRADE };
+       WORK_SYNC_BLOCK, WORK_BLOB, WORK_NEW_PAYLOAD, WORK_FORKCHOICE, WORK_SLOTS, WORK_UPGRADE, WORK_REPLAY };
+static unsigned long node_replays; /* the REPLAY works the nodes ran: post-states they rebuilt */
 #define EV_RESULT 72
 #define EV_WORK_DONE_SIZE 128
 #define LANTERN_NEED_TARGET_STATE 55
@@ -2822,7 +2824,7 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         } else if (kind == WORK_BLOB) {
             *why = "lantern_node_run: BLOB asks for room";
         } else if ((kind == WORK_IMPORT_BLOCK && node_count(n) < node_capacity(n->store)) || kind == WORK_TARGET_STATE ||
-                   kind == WORK_SLOTS || kind == WORK_UPGRADE) {
+                   kind == WORK_SLOTS || kind == WORK_UPGRADE || kind == WORK_REPLAY) {
             shell_buf *g = kind == WORK_UPGRADE ? b : a; /* UPGRADE: the buffer the upgrade writes */
             if (!g) *why = "lantern_node_run: no room, and no state";
             else {
@@ -2836,6 +2838,10 @@ static void shell_work(fc_node *n, const uint8_t *work, const char **why) {
         static char msg[64];
         snprintf(msg, sizeof msg, "lantern_node_run: status %llu", (unsigned long long)st);
         *why = msg;
+    }
+    if (!*why && kind == WORK_REPLAY) {
+        node_replays++;
+        if (rd64(ev + EV_RESULT) != 0) *why = "lantern_node_run: a REPLAY of a block the node imported is not valid";
     }
     if (!*why && (!guard_ok(ev, ev_size) || !guard_ok(s->node, s->node_size) || !guard_ok(n->store, n->size) ||
                   (a && !guard_ok(a->b, a->size))))
@@ -3278,7 +3284,10 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
         /* Small capacities, so that the node grows through lantern_node_copy. */
         uint8_t anchor[216] = {0}; /* NodeAnchor: root, slot, genesis_validators_root, jwt_secret, engine_host_len, engine_host, node_id, history_slot */
         static unsigned long opened; /* every second node archives to a Db */
-        uint64_t flags = (FORK >= FORK_BELLATRIX ? NODE_FLAG_ENGINE : 0) | NODE_FLAG_DISCV5 | (opened++ % 2 ? NODE_FLAG_DB : 0), need = 0;
+        /* every second node archives to a Db; every second pair keeps few post-states and rebuilds the others */
+        uint64_t flags = (FORK >= FORK_BELLATRIX ? NODE_FLAG_ENGINE : 0) | NODE_FLAG_DISCV5 | (opened % 2 ? NODE_FLAG_DB : 0) |
+                         (opened / 2 % 2 ? NODE_FLAG_FEW_STATES : 0), need = 0;
+        opened++;
         for (int i = 0; i < NODE_ROOM_FIELDS; i++) s->room[i] = 2;
         s->room[2] = 1;
         s->room[9] = 4096; /* the execution engine's answers */
@@ -6534,6 +6543,7 @@ int main(int argc, char **argv) {
         if (bad) failures++;
     }
     if (node_settles_finalized) printf("NOTE: %lu node settles past a finalized epoch\n", node_settles_finalized);
+    if (node_replays) printf("NOTE: %lu post-states the nodes rebuilt by replay\n", node_replays);
 #if FORK > FORK_PHASE0
     if (node_transitions) printf("NOTE: %lu transition cases through the node\n", node_transitions);
 #endif

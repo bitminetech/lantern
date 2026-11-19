@@ -508,6 +508,194 @@ LOCAL_FUNCTION node_ids
     ret
 END_FUNCTION node_ids
 
+/* rax = the slot of the block of the store's finalized root, or 2^64 - 1 when the node keeps none. Uses rcx, rdx, r11, xmm0-xmm2. */
+LOCAL_FUNCTION node_f_slot
+    FRAME 0
+    lea     (Store_finalized_checkpoint + 8)(%rbp), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      1f
+    mov     NodeBlock_slot(%rdx), %rax
+1:  UNFRAME 0
+END_FUNCTION node_f_slot
+
+/*
+ * rax = the post-state again of the imported block entry rdi above F's slot, or 0 (node.md): the
+ * path up to its nearest ancestor with a post-state, a copy of that post-state, then for each block
+ * of the path from the ancestor's child, in slot order, the copy across the fork boundaries to its
+ * slot and a REPLAY work; the block takes the copy as its post-state. The path is a list at the end
+ * of scratch, at most 8 bytes for each NodeBlock entry. r12 the block, r13 the list, S7 its count,
+ * S8 the copy, S9 the ancestor's post-state, S10 the copy's slot. Locals: L the scratch size, L+8
+ * an entry.
+ */
+LOCAL_FUNCTION node_rebuild
+    ENTER 16
+    mov     %rdi, %r12
+    mov     (%r14), %rax
+    mov     %rax, L(%rsp)
+    mov     (Node_blocks + 8)(%rbx), %rcx
+    shl     $3, %rcx
+    sub     %rcx, %rax
+    jb      8f
+    mov     %rax, (%r14)
+    lea     (%r14,%rax), %r13
+    movq    $0, S7(%rsp)
+    mov     %r12, %rdi
+1:  cmpq    $0, NodeBlock_data_id(%rdi)     # each block of the path keeps its bytes
+    je      7f
+    mov     S7(%rsp), %rcx
+    cmp     (Node_blocks + 8)(%rbx), %rcx
+    jae     7f
+    mov     %rdi, (%r13,%rcx,8)
+    incq    S7(%rsp)
+    add     $NodeBlock_parent_root, %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      7f
+    cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rdx)
+    jne     7f
+    mov     NodeBlock_state_id(%rdx), %rax
+    mov     %rax, S9(%rsp)
+    mov     %rdx, %rdi
+    test    %rax, %rax
+    jz      1b
+    mov     NodeBlock_slot(%rdx), %rax      # the ancestor: a copy of its post-state
+    mov     %rax, S10(%rsp)
+    call    node_new_id
+    mov     %rax, S8(%rsp)
+    mov     $NODE_ACT_STATE_COPY, %edi
+    mov     S9(%rsp), %rsi
+    mov     %rax, %rdx
+    call    node_ids
+2:  cmpq    $0, S7(%rsp)                    # each block, from the ancestor's child
+    je      3f
+    decq    S7(%rsp)
+    mov     S7(%rsp), %rcx
+    mov     (%r13,%rcx,8), %rax
+    mov     %rax, (L + 8)(%rsp)
+    mov     S8(%rsp), %rdi
+    mov     S9(%rsp), %rsi
+    mov     S10(%rsp), %rdx
+    mov     NodeBlock_slot(%rax), %rcx
+    call    node_cross
+    mov     %rax, S8(%rsp)
+    mov     (L + 8)(%rsp), %rax
+    mov     NodeBlock_slot(%rax), %rcx
+    mov     %rcx, S10(%rsp)
+    mov     $NODE_WORK_REPLAY, %edi
+    mov     S8(%rsp), %rsi
+    xor     %edx, %edx
+    mov     NodeBlock_data_id(%rax), %rcx
+    xor     %r8d, %r8d
+    xor     %r9d, %r9d
+    call    node_work
+    jmp     2b
+3:  mov     S8(%rsp), %rax
+    mov     %rax, NodeBlock_state_id(%r12)
+    mov     L(%rsp), %rcx
+    mov     %rcx, (%r14)
+    LEAVE 16
+7:  mov     L(%rsp), %rcx
+    mov     %rcx, (%r14)
+8:  xor     %eax, %eax
+    LEAVE 16
+END_FUNCTION node_rebuild
+
+/*
+ * The post-states the node can rebuild go (node.md): each imported block above F's slot with a
+ * post-state, other than the head and the justified root, whose slot is not the first of its epoch
+ * and is NODE_STATE_KEEP_SLOTS or more before the store's, with an imported child and every
+ * imported child of its epoch (with NODE_FLAG_FEW_STATES, no slot or epoch rule): a STATE_FREE, and
+ * state_id 0. Then a head with no post-state above F's slot gets it again. r12 the entry, r13 the
+ * entries left, S7 the store's slot, S8 F's slot, S9 a child, S10 the children. Locals: L the
+ * entries left to look at.
+ */
+LOCAL_FUNCTION node_shed
+    ENTER 16
+    call    node_f_slot
+    mov     %rax, S8(%rsp)
+    cmp     $-1, %rax
+    je      9f
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     %rax, S7(%rsp)
+    PART    %r12, %r13, %rbx, Node_blocks
+1:  test    %r13, %r13
+    jz      7f
+    cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%r12)
+    jne     6f
+    cmpq    $0, NodeBlock_state_id(%r12)
+    je      6f
+    mov     NodeBlock_slot(%r12), %rax
+    cmp     S8(%rsp), %rax
+    jbe     6f
+    testq   $NODE_FLAG_FEW_STATES, Node_flags(%rbx)
+    jnz     11f
+    test    $(SLOTS_PER_EPOCH - 1), %rax
+    jz      6f
+    add     $NODE_STATE_KEEP_SLOTS, %rax
+    cmp     S7(%rsp), %rax
+    jae     6f
+11: lea     Node_head_root(%rbx), %rcx
+    NE32    %r12, %rcx, 2f
+    jmp     6f
+2:  lea     (Store_justified_checkpoint + 8)(%rbp), %rcx
+    NE32    %r12, %rcx, 3f
+    jmp     6f
+3:  PART    %rax, %rcx, %rbx, Node_blocks   # its imported children: one at least, all of its epoch
+    mov     %rax, S9(%rsp)
+    mov     %rcx, L(%rsp)
+    movq    $0, S10(%rsp)
+4:  cmpq    $0, L(%rsp)
+    je      5f
+    decq    L(%rsp)
+    mov     S9(%rsp), %rax
+    cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rax)
+    jne     41f
+    lea     NodeBlock_parent_root(%rax), %rcx
+    NE32    %rcx, %r12, 41f
+    incq    S10(%rsp)
+    testq   $NODE_FLAG_FEW_STATES, Node_flags(%rbx)
+    jnz     41f
+    mov     S9(%rsp), %rax
+    mov     NodeBlock_slot(%rax), %rax
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %ecx
+    div     %rcx
+    mov     %rax, %rsi
+    mov     NodeBlock_slot(%r12), %rax
+    xor     %edx, %edx
+    div     %rcx
+    cmp     %rax, %rsi
+    jne     6f
+41: addq    $NodeBlock__mem, S9(%rsp)
+    jmp     4b
+5:  cmpq    $0, S10(%rsp)
+    je      6f
+    mov     $NODE_ACT_STATE_FREE, %edi
+    mov     NodeBlock_state_id(%r12), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    movq    $0, NodeBlock_state_id(%r12)
+6:  add     $NodeBlock__mem, %r12
+    dec     %r13
+    jmp     1b
+7:  lea     Node_head_root(%rbx), %rdi      # a head with no post-state above F's slot: it again
+    call    node_find_block
+    cmp     $-1, %rax
+    je      9f
+    cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rdx)
+    jne     9f
+    cmpq    $0, NodeBlock_state_id(%rdx)
+    jne     9f
+    mov     NodeBlock_slot(%rdx), %rax
+    cmp     S8(%rsp), %rax
+    jbe     9f
+    mov     %rdx, %rdi
+    call    node_rebuild
+9:  LEAVE 16
+END_FUNCTION node_shed
+
 /*
  * The copy rdi of the state of id rsi, at slot rdx, crosses each fork boundary up to the fork of
  * slot rcx (node.md): for each, a SLOTS work to the next fork's first slot when the copy is before
@@ -590,9 +778,19 @@ LOCAL_FUNCTION node_checkpoint_state
     cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rdx)
     jne     9f
     mov     NodeBlock_state_id(%rdx), %rax
-    test    %rax, %rax                      # an ancestor of the finalized block keeps no state
+    test    %rax, %rax                      # no post-state: above F's slot, rebuilt first; an ancestor of F keeps none
+    jnz     2f
+    mov     %rdx, S10(%rsp)
+    call    node_f_slot
+    mov     S10(%rsp), %rdx
+    cmp     %rax, NodeBlock_slot(%rdx)
+    jbe     9f
+    mov     %rdx, %rdi
+    call    node_rebuild
+    test    %rax, %rax
     jz      9f
-    mov     %rax, S8(%rsp)
+    mov     S10(%rsp), %rdx
+2:  mov     %rax, S8(%rsp)
     mov     NodeBlock_slot(%rdx), %rax
     mov     %rax, S9(%rsp)
     call    node_new_id
@@ -667,9 +865,14 @@ LOCAL_FUNCTION node_try_import
     je      8f
     cmp     $NODE_BLOCK_IMPORTED, %rax
     jne     9f
-    cmpq    $0, NodeBlock_state_id(%rdx)    # an ancestor of the finalized block: no descendant of it
-    je      8f
-    testq   $NODE_FLAG_ENGINE, Node_flags(%rbx)
+    cmpq    $0, NodeBlock_state_id(%rdx)    # no post-state: above F's slot, rebuilt at the import; else an ancestor of F, no descendant of it
+    jne     2f
+    mov     NodeBlock_slot(%rdx), %rax
+    mov     %rax, S8(%rsp)
+    call    node_f_slot
+    cmp     %rax, S8(%rsp)
+    jbe     8f
+2:  testq   $NODE_FLAG_ENGINE, Node_flags(%rbx)
     jz      1f
     mov     NodeBlock_slot(%r13), %rdi
     lea     Node_config(%rbx), %rsi
@@ -707,9 +910,19 @@ LOCAL_FUNCTION node_import_now
     cmp     $-1, %rax
     je      9f
     mov     NodeBlock_state_id(%rdx), %rax
+    test    %rax, %rax                      # no post-state above F's slot: rebuilt first
+    jnz     2f
+    mov     %rdx, S9(%rsp)
+    call    node_f_slot
+    mov     S9(%rsp), %rdx
+    cmp     %rax, NodeBlock_slot(%rdx)
+    jbe     8f
+    mov     %rdx, %rdi
+    call    node_rebuild
     test    %rax, %rax
     jz      8f
-    mov     %rax, S7(%rsp)
+    mov     S9(%rsp), %rdx
+2:  mov     %rax, S7(%rsp)
     mov     NodeBlock_slot(%rdx), %rax
     mov     %rax, S8(%rsp)
     call    node_new_id
@@ -1232,6 +1445,13 @@ LOCAL_FUNCTION node_prune
     je      99f
     mov     %rdx, S9(%rsp)
     mov     NodeBlock_slot(%rdx), %r13
+    cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rdx)  # F with no post-state: it again first, while its ancestors keep theirs
+    jne     5f
+    cmpq    $0, NodeBlock_state_id(%rdx)
+    jne     5f
+    mov     %rdx, %rdi
+    call    node_rebuild
+5:  mov     S9(%rsp), %rdx
     lea     NodeBlock_parent_root(%rdx), %rdi       # its ancestors: their states go
 1:  call    node_find_block
     cmp     $-1, %rax
@@ -1239,14 +1459,14 @@ LOCAL_FUNCTION node_prune
     mov     %rdx, %r12
     cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%r12)
     jne     2f
-    mov     NodeBlock_state_id(%r12), %rsi
+    mov     NodeBlock_state_id(%r12), %rsi  # each, through those with none
     test    %rsi, %rsi
-    jz      2f
+    jz      4f
     mov     $NODE_ACT_STATE_FREE, %edi
     xor     %edx, %edx
     call    node_ids
     movq    $0, NodeBlock_state_id(%r12)
-    lea     NodeBlock_parent_root(%r12), %rdi
+4:  lea     NodeBlock_parent_root(%r12), %rdi
     jmp     1b
 2:  mov     S9(%rsp), %rdi                  # with NODE_FLAG_DB, the archive
     call    node_archive
@@ -1264,6 +1484,8 @@ LOCAL_FUNCTION node_prune
     jne     10f
     cmpq    $0, NodeBlock_state_id(%r12)
     jne     12f
+    cmp     NodeBlock_slot(%r12), %r13      # none above the finalized slot: a descendant, or another branch
+    jb      12f
     testq   $NODE_FLAG_DB, Node_flags(%rbx) # an ancestor: its bytes stay, but those in the Db go
     jz      19f
     mov     NodeBlock_slot(%r12), %rax
@@ -1282,8 +1504,10 @@ LOCAL_FUNCTION node_prune
     call    node_serving
     test    %rax, %rax
     jnz     19f
-    mov     $NODE_ACT_STATE_FREE, %edi
     mov     NodeBlock_state_id(%r12), %rsi
+    test    %rsi, %rsi
+    jz      15f
+    mov     $NODE_ACT_STATE_FREE, %edi
     xor     %edx, %edx
     call    node_ids
     jmp     15f
@@ -4867,9 +5091,19 @@ LOCAL_FUNCTION node_message_status
     cmp     NodeBlock_slot(%rdx), %rax
     jbe     3f
     mov     NodeBlock_state_id(%rdx), %rax
-    test    %rax, %rax                      # a parent with a post-state
+    test    %rax, %rax
+    jnz     22f
+    mov     %rdx, S10(%rsp)                 # a parent with no post-state above F's slot: it again
+    call    node_f_slot
+    mov     S10(%rsp), %rdx
+    cmp     %rax, NodeBlock_slot(%rdx)
+    jbe     3f
+    mov     %rdx, %rdi
+    call    node_rebuild
+    test    %rax, %rax
     jz      3f
-    mov     %rax, S9(%rsp)
+    mov     S10(%rsp), %rdx
+22: mov     %rax, S9(%rsp)
     mov     NodeBlock_slot(%rdx), %rdi      # of the same fork
     lea     Node_config(%rbx), %rsi
     call    node_fork
@@ -6397,7 +6631,7 @@ FUNCTION lantern_node_step
     mov     %r11, L(%rsp)
     imul    $512, %r8, %rcx                 # room: actions, node parts, scratch
     add     %r10, %rcx
-    imul    $256, (Node_blocks + 8)(%rbx), %rdx    # the prune's actions: 256 for each block, 160 for each blob, 32 for each checkpoint
+    imul    $384, (Node_blocks + 8)(%rbx), %rdx    # the prune's and the rebuilds' actions: 384 for each block, 160 for each blob, 32 for each checkpoint
     add     %rdx, %rcx
     imul    $160, (Node_blobs + 8)(%rbx), %rdx
     add     %rdx, %rcx
@@ -6637,6 +6871,7 @@ FUNCTION lantern_node_step
     jmp     6b
 9:  call    node_head
     call    node_engine_next
+    call    node_shed                       # the post-states the node can rebuild go
     movq    $0, (L + 112)(%rsp)
     cmpq    $0, (L + 16)(%rsp)              # the next block of each stream that serves, then libp2p again
     je      40f
@@ -7311,7 +7546,7 @@ FUNCTION lantern_node_run
     FORK_CALL process_slots
     LEAVE 192
 90: cmp     $NODE_WORK_UPGRADE, %rax
-    jne     8f
+    jne     97f
     mov     NodeAction_arg(%r12), %rax      # UPGRADE: node_upgrade of the fork arg, of a state at its first slot
     cmp     $FORK_ALTAIR, %rax
     jb      19b
@@ -7331,6 +7566,30 @@ FUNCTION lantern_node_run
     mov     (L + 72)(%rsp), %r8
     mov     NodeAction_arg(%r12), %r10
     FORK_CALL node_upgrade
+    LEAVE 192
+97: cmp     $NODE_WORK_REPLAY, %rax
+    jne     8f
+    cmpq    $(100 + 84), 16(%r14)           # REPLAY: node_replay of the fork of the block's slot, of a state of that fork
+    jb      18b
+    mov     8(%r14), %rax
+    add     %r14, %rax
+    mov     100(%rax), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, (L + 48)(%rsp)
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     (L + 48)(%rsp), %rax
+    jne     19b
+    mov     (L + 48)(%rsp), %r10
+    mov     %r14, %rdi
+    mov     %r13, %rsi
+    lea     Node_config(%rbx), %rdx
+    mov     %r15, %rcx
+    mov     S8(%rsp), %r8
+    add     $NodeEvent_result, %r8
+    FORK_CALL node_replay
     LEAVE 192
 8:  mov     $LANTERN_INVALID_EVENT, %eax
     LEAVE 192

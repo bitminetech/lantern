@@ -648,6 +648,49 @@ SPEC_FUNCTION node_upgrade
 SPEC_END node_upgrade
 
 /*
+ * (data, state, config, scratch, result): the post-state again of a block the node imported:
+ * state_transition of the SignedBeaconBlock in data with validate_result 0 and slots_done 1.
+ * x19 data, x20 state, x21 config, x22 scratch, x23 result, x24 the block, x28 the scratch size.
+ * Locals: L TransitionOptions.
+ */
+SPEC_FUNCTION node_replay
+    ENTER 32
+    mov     x19, x0
+    mov     x20, x1
+    mov     x21, x2
+    mov     x22, x3
+    mov     x23, x4
+    ldr     x28, [x22]
+    str     xzr, [x23]
+    ADDRESS x0, lantern_type_SignedBeaconBlock
+    mov     x1, x19
+    mov     x2, x22
+    bl      node_decode
+    cmp     x0, #1
+    b.eq    8f
+    b.hi    9f
+    mov     x24, x1
+    mov     x9, #1                          /* validate_result 0, execution_valid 1, slots_done 1 */
+    stp     xzr, x9, [sp, #L]
+    str     x9, [sp, #(L + 16)]
+    mov     x0, x20
+    mov     x1, x24
+    add     x2, sp, #L
+    mov     x3, x21
+    mov     x4, x22
+    mov     x5, x23
+    bl      lantern_state_transition
+    b       99f
+8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    b       99f
+9:  mov     x9, #LANTERN_INVALID_ENCODING
+    str     x9, [x23]
+    mov     x0, #LANTERN_OK
+99: str     x28, [x22]
+    LEAVE 32
+SPEC_END node_replay
+
+/*
  * (store, data, is_from_block, state, scratch, result, target): validate_on_attestation of the
  * Attestation in data; with no target checkpoint state (state 0) the result is
  * LANTERN_NEED_TARGET_STATE and target holds the target checkpoint, else on_attestation.

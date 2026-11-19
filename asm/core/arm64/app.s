@@ -1133,6 +1133,8 @@ LOCAL_FUNCTION app_work
     b.eq    4f
     cmp     x26, #NODE_WORK_SLOTS
     b.eq    4f
+    cmp     x26, #NODE_WORK_REPLAY
+    b.eq    4f
     cmp     x26, #NODE_WORK_UPGRADE         /* UPGRADE: state_b, the upgrade's buffer */
     b.eq    6f
     cmp     x26, #NODE_WORK_IMPORT_BLOCK

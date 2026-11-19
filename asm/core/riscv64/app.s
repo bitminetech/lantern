@@ -1173,6 +1173,8 @@ LOCAL_FUNCTION app_work
     beq     s8, t0, 4f
     li      t0, NODE_WORK_SLOTS
     beq     s8, t0, 4f
+    li      t0, NODE_WORK_REPLAY
+    beq     s8, t0, 4f
     li      t0, NODE_WORK_UPGRADE           # UPGRADE: state_b, the upgrade's buffer
     beq     s8, t0, 6f
     li      t0, NODE_WORK_IMPORT_BLOCK

@@ -538,6 +538,187 @@ LOCAL_FUNCTION node_ids
     ret
 END_FUNCTION node_ids
 
+/* a0 = the slot of the block of the store's finalized root, or 2^64 - 1 when the node keeps none. Uses t0-t2, a6, a7. */
+LOCAL_FUNCTION node_f_slot
+    FRAME 0
+    addi    a0, s2, Store_finalized_checkpoint + 8
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 1f
+    ld      a0, NodeBlock_slot(a1)
+1:  UNFRAME 0
+END_FUNCTION node_f_slot
+
+/*
+ * a0 = the post-state again of the imported block entry a0 above F's slot, or 0 (node.md): the path
+ * up to its nearest ancestor with a post-state, a copy of that post-state, then for each block of the
+ * path from the ancestor's child, in slot order, the copy across the fork boundaries to its slot and
+ * a REPLAY work; the block takes the copy as its post-state. The path is a list at the end of
+ * scratch, at most 8 bytes for each NodeBlock entry. s3 the block, s4 the list, s7 its count, s8 the
+ * copy, s9 the ancestor's post-state, s10 the copy's slot. Locals: L the scratch size, L+8 an entry.
+ */
+LOCAL_FUNCTION node_rebuild
+    ENTER 16
+    mv      s3, a0
+    ld      t0, 0(s5)
+    sd      t0, L(sp)
+    ld      t1, (Node_blocks + 8)(s1)
+    slli    t1, t1, 3
+    bltu    t0, t1, 8f
+    sub     t0, t0, t1
+    sd      t0, 0(s5)
+    add     s4, s5, t0
+    li      s7, 0
+    mv      a0, s3
+1:  ld      t0, NodeBlock_data_id(a0)       # each block of the path keeps its bytes
+    beqz    t0, 7f
+    ld      t1, (Node_blocks + 8)(s1)
+    bgeu    s7, t1, 7f
+    slli    t2, s7, 3
+    add     t2, s4, t2
+    sd      a0, 0(t2)
+    addi    s7, s7, 1
+    addi    a0, a0, NodeBlock_parent_root
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 7f
+    ld      t0, NodeBlock_status(a1)
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 7f
+    ld      s9, NodeBlock_state_id(a1)
+    mv      a0, a1
+    beqz    s9, 1b
+    ld      s10, NodeBlock_slot(a1)         # the ancestor: a copy of its post-state
+    call    node_new_id
+    mv      s8, a0
+    li      a0, NODE_ACT_STATE_COPY
+    mv      a1, s9
+    mv      a2, s8
+    call    node_ids
+2:  beqz    s7, 3f                          # each block, from the ancestor's child
+    addi    s7, s7, -1
+    slli    t2, s7, 3
+    add     t2, s4, t2
+    ld      t0, 0(t2)
+    sd      t0, (L + 8)(sp)
+    mv      a0, s8
+    mv      a1, s9
+    mv      a2, s10
+    ld      a3, NodeBlock_slot(t0)
+    call    node_cross
+    mv      s8, a0
+    ld      t0, (L + 8)(sp)
+    ld      s10, NodeBlock_slot(t0)
+    li      a0, NODE_WORK_REPLAY
+    mv      a1, s8
+    li      a2, 0
+    ld      a3, NodeBlock_data_id(t0)
+    li      a4, 0
+    li      a5, 0
+    call    node_work
+    j       2b
+3:  sd      s8, NodeBlock_state_id(s3)
+    ld      t0, L(sp)
+    sd      t0, 0(s5)
+    mv      a0, s8
+    LEAVE 16
+7:  ld      t0, L(sp)
+    sd      t0, 0(s5)
+8:  li      a0, 0
+    LEAVE 16
+END_FUNCTION node_rebuild
+
+/*
+ * The post-states the node can rebuild go (node.md): each imported block above F's slot with a
+ * post-state, other than the head and the justified root, whose slot is not the first of its epoch
+ * and is NODE_STATE_KEEP_SLOTS or more before the store's, with an imported child and every imported
+ * child of its epoch (with NODE_FLAG_FEW_STATES, no slot or epoch rule): a STATE_FREE, and state_id
+ * 0. Then a head with no post-state above F's slot gets it again. s3 the entry, s4 the entries left,
+ * s7 the store's slot, s8 F's slot, s9 a child, s10 the children. Locals: L the entries left to
+ * look at.
+ */
+LOCAL_FUNCTION node_shed
+    ENTER 16
+    call    node_f_slot
+    mv      s8, a0
+    li      t0, -1
+    beq     s8, t0, 9f
+    mv      a0, s2
+    call    node_store_slot
+    mv      s7, a0
+    PART    s3, s4, s1, Node_blocks
+1:  beqz    s4, 7f
+    ld      t0, NodeBlock_status(s3)
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 6f
+    ld      t0, NodeBlock_state_id(s3)
+    beqz    t0, 6f
+    ld      t0, NodeBlock_slot(s3)
+    bleu    t0, s8, 6f
+    ld      t1, Node_flags(s1)
+    li      t2, NODE_FLAG_FEW_STATES
+    and     t1, t1, t2
+    bnez    t1, 11f
+    andi    t1, t0, SLOTS_PER_EPOCH - 1
+    beqz    t1, 6f
+    addi    t1, t0, NODE_STATE_KEEP_SLOTS
+    bgeu    t1, s7, 6f
+11: addi    t3, s1, Node_head_root
+    NE32    s3, t3, 2f
+    j       6f
+2:  addi    t3, s2, Store_justified_checkpoint + 8
+    NE32    s3, t3, 3f
+    j       6f
+3:  PART    s9, t0, s1, Node_blocks         # its imported children: one at least, all of its epoch
+    sd      t0, L(sp)
+    li      s10, 0
+4:  ld      t0, L(sp)
+    beqz    t0, 5f
+    addi    t0, t0, -1
+    sd      t0, L(sp)
+    ld      t0, NodeBlock_status(s9)
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 41f
+    addi    t3, s9, NodeBlock_parent_root
+    NE32    t3, s3, 41f
+    addi    s10, s10, 1
+    ld      t1, Node_flags(s1)
+    li      t2, NODE_FLAG_FEW_STATES
+    and     t1, t1, t2
+    bnez    t1, 41f
+    ld      t0, NodeBlock_slot(s9)
+    ld      t1, NodeBlock_slot(s3)
+    li      t2, SLOTS_PER_EPOCH
+    divu    t0, t0, t2
+    divu    t1, t1, t2
+    bne     t0, t1, 6f
+41: addi    s9, s9, NodeBlock__mem
+    j       4b
+5:  beqz    s10, 6f
+    li      a0, NODE_ACT_STATE_FREE
+    ld      a1, NodeBlock_state_id(s3)
+    li      a2, 0
+    call    node_ids
+    sd      zero, NodeBlock_state_id(s3)
+6:  addi    s3, s3, NodeBlock__mem
+    addi    s4, s4, -1
+    j       1b
+7:  addi    a0, s1, Node_head_root          # a head with no post-state above F's slot: it again
+    call    node_find_block
+    li      t0, -1
+    beq     a0, t0, 9f
+    ld      t0, NodeBlock_status(a1)
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 9f
+    ld      t0, NodeBlock_state_id(a1)
+    bnez    t0, 9f
+    ld      t0, NodeBlock_slot(a1)
+    bleu    t0, s8, 9f
+    mv      a0, a1
+    call    node_rebuild
+9:  LEAVE 16
+END_FUNCTION node_shed
+
 /*
  * a0 = the id of the last copy: the copy a0 of the state of id a1, at slot a2, crosses each fork
  * boundary up to the fork of slot a3 (node.md): for each, a SLOTS work to the next fork's first
@@ -618,9 +799,18 @@ LOCAL_FUNCTION node_checkpoint_state
     ld      t0, NodeBlock_status(a1)
     li      t1, NODE_BLOCK_IMPORTED
     bne     t0, t1, 9f
-    ld      s8, NodeBlock_state_id(a1)
-    beqz    s8, 9f                          # an ancestor of the finalized block keeps no state
-    ld      s9, NodeBlock_slot(a1)
+    ld      s8, NodeBlock_state_id(a1)      # no post-state: above F's slot, rebuilt first; an ancestor of F keeps none
+    bnez    s8, 2f
+    mv      s10, a1
+    call    node_f_slot
+    ld      t0, NodeBlock_slot(s10)
+    bleu    t0, a0, 9f
+    mv      a0, s10
+    call    node_rebuild
+    mv      s8, a0
+    beqz    s8, 9f
+    mv      a1, s10
+2:  ld      s9, NodeBlock_slot(a1)
     call    node_new_id
     mv      s7, a0
     li      a0, NODE_ACT_STATE_COPY
@@ -697,9 +887,12 @@ LOCAL_FUNCTION node_try_import
     beq     t0, t1, 8f
     li      t1, NODE_BLOCK_IMPORTED
     bne     t0, t1, 9f
-    ld      t0, NodeBlock_state_id(a1)      # an ancestor of the finalized block: no descendant of it
-    beqz    t0, 8f
-    ld      t0, Node_flags(s1)
+    ld      t0, NodeBlock_state_id(a1)      # no post-state: above F's slot, rebuilt at the import; else an ancestor of F, no descendant of it
+    bnez    t0, 2f
+    ld      s8, NodeBlock_slot(a1)
+    call    node_f_slot
+    bleu    s8, a0, 8f
+2:  ld      t0, Node_flags(s1)
     andi    t0, t0, NODE_FLAG_ENGINE
     beqz    t0, 1f
     ld      a0, NodeBlock_slot(s4)
@@ -741,9 +934,18 @@ LOCAL_FUNCTION node_import_now
     call    node_find_block
     li      t0, -1
     beq     a0, t0, 9f
-    ld      s8, NodeBlock_state_id(a1)
+    ld      s8, NodeBlock_state_id(a1)      # no post-state above F's slot: rebuilt first
+    bnez    s8, 2f
+    mv      s10, a1
+    call    node_f_slot
+    ld      t0, NodeBlock_slot(s10)
+    bleu    t0, a0, 8f
+    mv      a0, s10
+    call    node_rebuild
+    mv      s8, a0
     beqz    s8, 8f
-    ld      s9, NodeBlock_slot(a1)
+    mv      a1, s10
+2:  ld      s9, NodeBlock_slot(a1)
     call    node_new_id
     sd      a0, NodeBlock_state_id(s4)
     mv      a2, a0
@@ -1276,7 +1478,14 @@ LOCAL_FUNCTION node_prune
     beq     a0, t0, 99f
     mv      s3, a1
     ld      s4, NodeBlock_slot(s3)
-    addi    a0, s3, NodeBlock_parent_root   # its ancestors: their states go
+    ld      t0, NodeBlock_status(s3)        # F with no post-state: it again first, while its ancestors keep theirs
+    li      t1, NODE_BLOCK_IMPORTED
+    bne     t0, t1, 5f
+    ld      t0, NodeBlock_state_id(s3)
+    bnez    t0, 5f
+    mv      a0, s3
+    call    node_rebuild
+5:  addi    a0, s3, NodeBlock_parent_root   # its ancestors: their states go
 1:  call    node_find_block
     li      t0, -1
     beq     a0, t0, 2f
@@ -1284,13 +1493,13 @@ LOCAL_FUNCTION node_prune
     ld      t0, NodeBlock_status(s8)
     li      t1, NODE_BLOCK_IMPORTED
     bne     t0, t1, 2f
-    ld      a1, NodeBlock_state_id(s8)
-    beqz    a1, 2f
+    ld      a1, NodeBlock_state_id(s8)      # each, through those with none
+    beqz    a1, 4f
     li      a0, NODE_ACT_STATE_FREE
     li      a2, 0
     call    node_ids
     sd      zero, NodeBlock_state_id(s8)
-    addi    a0, s8, NodeBlock_parent_root
+4:  addi    a0, s8, NodeBlock_parent_root
     j       1b
 2:  mv      a0, s3                          # with NODE_FLAG_DB, the archive
     call    node_archive
@@ -1307,6 +1516,8 @@ LOCAL_FUNCTION node_prune
     bne     t0, t1, 10f
     ld      t0, NodeBlock_state_id(s8)
     bnez    t0, 12f
+    ld      t0, NodeBlock_slot(s8)          # none above the finalized slot: a descendant, or another branch
+    bgtu    t0, s4, 12f
     ld      t0, Node_flags(s1)              # an ancestor: its bytes stay, but those in the Db go
     andi    t0, t0, NODE_FLAG_DB
     beqz    t0, 19f
@@ -1324,8 +1535,9 @@ LOCAL_FUNCTION node_prune
     ld      a0, NodeBlock_data_id(s8)       # another branch: its state and bytes go
     call    node_serving
     bnez    a0, 19f
-    li      a0, NODE_ACT_STATE_FREE
     ld      a1, NodeBlock_state_id(s8)
+    beqz    a1, 15f
+    li      a0, NODE_ACT_STATE_FREE
     li      a2, 0
     call    node_ids
     j       15f
@@ -4840,7 +5052,17 @@ LOCAL_FUNCTION node_message_status
     ld      t1, NodeMessage_slot(s4)
     bleu    t1, t0, 3f
     ld      s9, NodeBlock_state_id(a1)
-    beqz    s9, 3f                          # a parent with a post-state
+    bnez    s9, 22f
+    mv      s10, a1                         # a parent with no post-state above F's slot: it again
+    call    node_f_slot
+    ld      t0, NodeBlock_slot(s10)
+    bleu    t0, a0, 3f
+    mv      a0, s10
+    call    node_rebuild
+    mv      s9, a0
+    beqz    s9, 3f
+    mv      a1, s10
+22: ld      t0, NodeBlock_slot(a1)
     mv      a0, t0                          # of the same fork
     addi    a1, s1, Node_config
     call    node_fork
@@ -6380,8 +6602,9 @@ FUNCTION lantern_node_step
     li      t1, 512                         # room: actions, node parts, scratch
     mul     t1, s8, t1
     add     t1, t1, s10
-    ld      t2, (Node_blocks + 8)(s1)       # the prune's actions: 256 for each block, 160 for each blob, 32 for each checkpoint
-    slli    t2, t2, 8
+    ld      t2, (Node_blocks + 8)(s1)       # the prune's and the rebuilds' actions: 384 for each block, 160 for each blob, 32 for each checkpoint
+    li      t3, 384
+    mul     t2, t2, t3
     add     t1, t1, t2
     ld      t2, (Node_blobs + 8)(s1)
     li      t3, 160
@@ -6633,6 +6856,7 @@ FUNCTION lantern_node_step
     j       6b
 9:  call    node_head
     call    node_engine_next
+    call    node_shed                       # the post-states the node can rebuild go
     sd      zero, (L + 112)(sp)
     ld      t0, (L + 16)(sp)                # the next block of each stream that serves, then libp2p again
     beqz    t0, 40f
@@ -7262,7 +7486,7 @@ FUNCTION lantern_node_run
     FORK_CALL process_slots
     LEAVE 192
 90: li      t1, NODE_WORK_UPGRADE
-    bne     t0, t1, 8f
+    bne     t0, t1, 97f
     ld      t6, NodeAction_arg(s3)          # UPGRADE: node_upgrade of the fork arg, of a state at its first slot
     li      t1, FORK_ALTAIR
     bltu    t6, t1, 19b
@@ -7283,6 +7507,29 @@ FUNCTION lantern_node_run
     mv      a3, s6
     ld      a4, (L + 72)(sp)
     FORK_CALL node_upgrade
+    LEAVE 192
+97: li      t1, NODE_WORK_REPLAY
+    bne     t0, t1, 8f
+    ld      t0, 16(s5)                      # REPLAY: node_replay of the fork of the block's slot, of a state of that fork
+    li      t1, 100 + 84
+    bltu    t0, t1, 18b
+    ld      t0, 8(s5)
+    add     t0, s5, t0
+    LDU64   a0, t0, 100, t1
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      s10, a0
+    ld      a0, NODE_STATE_SLOT(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    bne     a0, s10, 19b
+    mv      t6, s10
+    mv      a0, s5
+    mv      a1, s4
+    addi    a2, s1, Node_config
+    mv      a3, s6
+    addi    a4, s7, NodeEvent_result
+    FORK_CALL node_replay
     LEAVE 192
 8:  li      a0, LANTERN_INVALID_EVENT
     LEAVE 192

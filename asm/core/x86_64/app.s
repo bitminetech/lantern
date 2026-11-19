@@ -1208,6 +1208,8 @@ LOCAL_FUNCTION app_work
     je      4f
     cmp     $NODE_WORK_SLOTS, %rcx
     je      4f
+    cmp     $NODE_WORK_REPLAY, %rcx
+    je      4f
     cmp     $NODE_WORK_UPGRADE, %rcx        # UPGRADE: state_b, the upgrade's buffer
     je      6f
     cmp     $NODE_WORK_IMPORT_BLOCK, %rcx

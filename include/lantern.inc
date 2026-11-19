@@ -528,6 +528,7 @@
 .set NODE_FLAG_FCU, 32                 /* an engine_forkchoiceUpdated is due */
 .set NODE_FLAG_DISCV5, 64              /* the shell runs discv5 for the node: it takes NODE_ACT_DISCV5 and gives NODE_EV_ENR */
 .set NODE_FLAG_DB, 128                 /* the node archives the finalized history: it gives NODE_ACT_DB_APPEND and serves NODE_DB_REF records */
+.set NODE_FLAG_FEW_STATES, 256         /* the node keeps the post-states of the head, the justified root, F and the blocks with no child only */
 .set Node_peers, 120                   /* PartRef of NodePeer */
 .set Node_streams, 136                 /* PartRef of NodeStream entries of Node_stream_bytes each */
 .set Node_p2p_out, 152                 /* PartRef of bytes: libp2p events the node made for its next libp2p step */
@@ -567,6 +568,7 @@
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
 .set NODE_SUBSCRIBE_AHEAD, 2           /* epochs: the topics of a new ForkDigest join this early, the old ones leave this late */
+.set NODE_STATE_KEEP_SLOTS, 4          /* the post-states of blocks of this many slots before the store's stay */
 .set NODE_DIAL_TAG, 0x4000000000000000 /* the bit of a DIAL tag of the node */
 .set NODE_ENGINE_HOST_MAX, 64
 .set NODE_STATE_SLOT, 48               /* BeaconState.slot in the value of every fork */
@@ -779,6 +781,7 @@
 .set NODE_WORK_FORKCHOICE, 11          /* arg: the JSON-RPC id */
 .set NODE_WORK_SLOTS, 12               /* a: a state; arg: the slot to process it to */
 .set NODE_WORK_UPGRADE, 13             /* a: a state at the fork's first slot; b: the buffer for the upgraded state; arg: the fork */
+.set NODE_WORK_REPLAY, 14              /* a: the post-state of a block's parent; data: the block, imported before */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
 .set NodeEvent_index, NodeEvent_root + 32      /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its blob commitments; of a valid blob_sidecar: its index */
 .set NodeEvent_chunk, NODE_EV_WORK_DONE_SIZE   /* SERVE: a ByteList of the response chunk after the WORK_DONE fields; NEW_PAYLOAD, FORKCHOICE: of the HTTP request */
