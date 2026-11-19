@@ -26,7 +26,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `config.py` | The cases of lantern_config_parse: the pinned spec configs, and hand cases with their values or fault lines |
 | `app.py` | The cases of lantern_app_options: command lines with their options or fault index |
 | `http_request.py` | The cases of lantern_http_request: connection bytes and the request or fault of each |
-| `json_codec.py` | The cases of lantern_json_encode: values of every container type of each fork's spec module and the JSON of each |
+| `json_codec.py` | The cases of lantern_json_encode and lantern_json_decode: values of every container type of each fork's spec module and the JSON of each; texts that break one rule each, with their faults |
 | `api_route.py` | The cases of lantern_api_route: requests and the route or fault of each; reads the operations from the beacon-APIs clone |
 
 ## Sources
@@ -55,6 +55,7 @@ tests/generator/run.sh ~/.cache/lantern/vectors
 | `<preset>-config.bin` | One case: `configs/<preset>.yaml` |
 | `<preset>-phase0-config-parse.bin` | Lantern's cases of lantern_config_parse (config.md): `text`, the bytes of a config file, and `config`, the values it gives, or `line`, its first faulty line |
 | `<preset>-<fork>-json-encode.bin` | Lantern's cases of lantern_json_encode (beacon-api.md): `type`, a container's name, `ssz`, a value's SSZ bytes, and `json`, its JSON |
+| `<preset>-<fork>-json-decode.bin` | Lantern's cases of lantern_json_decode (beacon-api.md): `type`, `json`, and `ssz`, the encoding it must give, or `fault_kind`, `fault_offset` and `fault_path` |
 | `<preset>-phase0-http-request.bin` | Lantern's cases of lantern_http_request (beacon-api.md): `bytes`, `head_max`, `body_max`, the `status` and `http_status`, `prefix`, the status of each shorter length, and the request's fields and parts |
 | `<preset>-phase0-api-route.bin` | Lantern's cases of lantern_api_route (beacon-api.md): the request's `method` and parts, `status`, and `out`, the whole ApiRoute, or `http_status`, `fault`, `allow` and `op` |
 | `<preset>-phase0-app-options.bin` | Lantern's cases of lantern_app_options (app.md): `args`, a command line, and `options`, the fields it gives, or `fault`, the index of its first faulty argument |

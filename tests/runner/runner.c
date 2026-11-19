@@ -399,6 +399,7 @@ ABI uint64_t lantern_ssz_size_bounds(const void *type, void *out);
 ABI uint64_t lantern_http_request(const void *bytes, const void *limits, void *out);
 ABI uint64_t lantern_api_route(const void *request, void *out);
 ABI uint64_t lantern_json_encode(const void *type, const void *value, void *cursor, void *out);
+ABI uint64_t lantern_json_decode(const void *type, const void *json, void *scratch, void *out, void *fault);
 
 /* Application: docs/reference/app.md. */
 ABI uint64_t lantern_app_options(const void *args, void *options, void *fault);
@@ -6831,6 +6832,89 @@ static void run_json_encode(const char *file, case_file *f) {
     }
 }
 
+#define JSON_INVALID_STATUS 66
+#define JSON_FAULT_BYTES 128
+#define JSON_DECODE_SCRATCH 6208
+
+/*
+ * json-decode: lantern_json_decode of each case's text (tests/generator/json_codec.py), with the
+ * type of this fork's type table of the case's name, when lantern has it: the SSZ bytes of a valid
+ * text, else LANTERN_INVALID_JSON and the case's JsonFault (kind, offset, path); a valid text with
+ * one byte less of room gives LANTERN_BUFFER_TOO_SMALL and its size, and so does a scratch one
+ * byte short.
+ */
+static void run_json_decode(const char *file, case_file *f) {
+    for (uint64_t i = 0; i < f->count; i++) {
+        const char *name, *why = NULL;
+        uint64_t len, tlen, jlen, slen = 0, lsize;
+        tv parts = next_case(f, &name, &len);
+        const uint8_t *tn = tv_bytes(tv_get(parts, "type"), &tlen), *json = tv_bytes(tv_get(parts, "json"), &jlen);
+        tv want = tv_get(parts, "ssz");
+        const uint8_t *ssz = want ? tv_bytes(want, &slen) : NULL;
+        char tname[128];
+        snprintf(tname, sizeof tname, "%.*s", (int)(tlen < 120 ? tlen : 120), (const char *)tn);
+        const uint8_t *desc = type_by_name(tname);
+        if (!desc) {
+            json_types_skipped++;
+            continue;
+        }
+        uint8_t *l = list_of(json, jlen, 0, 8, &lsize), *scratch = buffer(JSON_DECODE_SCRATCH), *fault = buffer(JSON_FAULT_BYTES);
+        uint64_t osize = 24 + slen + 64;
+        uint8_t *out = buffer(osize);
+        wr64(scratch, JSON_DECODE_SCRATCH);
+        wr64(out, osize);
+        uint64_t st = CALL(lantern_json_decode, desc, l, scratch, out, fault);
+        if (!guard_ok(out, osize) || !guard_ok(fault, JSON_FAULT_BYTES) || !guard_ok(scratch, JSON_DECODE_SCRATCH) || !guard_ok(l, lsize))
+            why = "lantern_json_decode wrote out of bounds";
+        else if (ssz) {
+            if (st != 0) {
+                static char msg[200];
+                snprintf(msg, sizeof msg, "status %llu, fault %llu at %llu depth %llu", (unsigned long long)st,
+                         (unsigned long long)rd64(fault), (unsigned long long)rd64(fault + 8), (unsigned long long)rd64(fault + 24));
+                why = msg;
+            } else if (rd64(out + 8) != 24 || rd64(out + 16) != slen || memcmp(out + 24, ssz, (size_t)slen)) {
+                static char msg[200];
+                uint64_t k = 0;
+                while (k < slen && k < rd64(out + 16) && out[24 + k] == ssz[k]) k++;
+                snprintf(msg, sizeof msg, "the encoding differs at byte %llu of %llu (case %llu)", (unsigned long long)k,
+                         (unsigned long long)rd64(out + 16), (unsigned long long)slen);
+                why = msg;
+            }
+            if (!why && slen) { /* one byte less of room */
+                wr64(out, 24 + slen - 1);
+                wr64(scratch, JSON_DECODE_SCRATCH);
+                if (CALL(lantern_json_decode, desc, l, scratch, out, fault) != 1 || rd64(fault + 16) != slen)
+                    why = "one byte less of room is not LANTERN_BUFFER_TOO_SMALL with the encoding's size";
+            }
+            if (!why) { /* a scratch one byte short */
+                wr64(out, osize);
+                wr64(scratch, JSON_DECODE_SCRATCH - 1);
+                if (CALL(lantern_json_decode, desc, l, scratch, out, fault) != 1) why = "a short scratch is not LANTERN_BUFFER_TOO_SMALL";
+            }
+        } else {
+            tv path = tv_get(parts, "fault_path");
+            uint64_t depth = rd64(path + 1), ok = st == JSON_INVALID_STATUS && rd64(fault) == tv_u64(tv_get(parts, "fault_kind")) &&
+                                                  rd64(fault + 8) == tv_u64(tv_get(parts, "fault_offset")) && rd64(fault + 24) == depth;
+            tv p = path + 9;
+            for (uint64_t k = 0; k < depth && ok && k < 12; k++, p = tv_skip(p))
+                if (rd64(fault + 32 + 8 * k) != tv_u64(p)) ok = 0;
+            if (!ok) {
+                static char msg[300];
+                snprintf(msg, sizeof msg, "status %llu, fault %llu at %llu depth %llu; the case's %llu at %llu depth %llu",
+                         (unsigned long long)st, (unsigned long long)rd64(fault), (unsigned long long)rd64(fault + 8),
+                         (unsigned long long)rd64(fault + 24), (unsigned long long)tv_u64(tv_get(parts, "fault_kind")),
+                         (unsigned long long)tv_u64(tv_get(parts, "fault_offset")), (unsigned long long)depth);
+                why = msg;
+            }
+        }
+        free(l);
+        free(scratch);
+        free(fault);
+        free(out);
+        report(file, name, len, !why, why);
+    }
+}
+
 /*
  * One request to the node on the connection conn (docs/reference/node.md, Test vectors): its
  * HttpRequest of lantern_http_request (head_max 16384, body_max 1048576) in a NODE_EV_API, then
@@ -7357,6 +7441,7 @@ int main(int argc, char **argv) {
         else if (!bls_off && !strcmp(kind, "app-options")) run_app_options(file, &f);
         else if (!bls_off && !strcmp(kind, "node-api")) run_node_api(file, &f);
         else if (!bls_off && !strcmp(kind, "json-encode")) run_json_encode(file, &f);
+        else if (!bls_off && !strcmp(kind, "json-decode")) run_json_decode(file, &f);
         else if (!bls_off && !strcmp(kind, "http-request")) run_http_request(file, &f);
         else if (!bls_off && !strcmp(kind, "api-route")) run_api_route(file, &f);
         else if (!bls_off && !strcmp(kind, "db-index")) run_db_index(file, &f);

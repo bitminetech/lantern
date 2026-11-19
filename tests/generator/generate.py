@@ -255,7 +255,12 @@ def main():
         if not runners or "json" in runners:
             for fork in forks:
                 file = f"{preset}-{fork}-json-encode.bin"
-                count, digest = write_file(out / file, list(json_codec.cases(fork, preset)))
+                items = list(json_codec.cases(fork, preset))
+                count, digest = write_file(out / file, items)
+                manifest.append((file, count, digest))
+                print(f"{file}: {count} cases")
+                file = f"{preset}-{fork}-json-decode.bin"
+                count, digest = write_file(out / file, list(json_codec.decode_cases(fork, preset, items)))
                 manifest.append((file, count, digest))
                 print(f"{file}: {count} cases")
         count, digest = write_config(out / f"{preset}-config.bin", preset)

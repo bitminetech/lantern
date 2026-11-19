@@ -5,6 +5,7 @@
 ### Functions
 
 - [`lantern_api_route`](#function-lantern_api_route): finds the operation of a request and reads its parameters.
+- [`lantern_json_decode`](#function-lantern_json_decode): the SSZ encoding of a value from its JSON, strictly.
 - [`lantern_json_encode`](#function-lantern_json_encode): the JSON of an SSZ value, a chunk at a time.
 - [`lantern_http_request`](#function-lantern_http_request): reads one HTTP/1.1 request, head and body, from a connection's bytes.
 
@@ -15,6 +16,7 @@
 - [`HttpLimits`](#type-httplimits): the largest request head and body a connection takes.
 - [`HttpRequest`](#type-httprequest): one request, read.
 - [`JsonCursor`](#type-jsoncursor): where lantern_json_encode goes on.
+- [`JsonFault`](#type-jsonfault): why and where lantern_json_decode refused a JSON text.
 - [`ValidatorRef`](#type-validatorref): a validator by index or by public key.
 
 ## Spec
@@ -72,6 +74,7 @@ The answers of the node (node.md, `NODE_EV_API`) follow these rules.
   - Limits: a head of exactly `head_max` bytes and one byte more.
   - Pipelining: two requests in one buffer; `used` ends the first.
 - tests/generator/json_codec.py: values of every container type of each fork's spec module (get_random_ssz_object of the pinned spec's test helpers: in minimal the modes zero, one, random and max with lists of at most 4 items and byte lists of at most 64 bytes; in mainnet the mode zero) and the JSON of each, written by the rules of lantern_json_encode, apart from the assembly. The runner reads each value with the type of the fork's type table of that name, when lantern has it, and counts the others in a NOTE; each case also runs in chunks of 1, 7 and 64 bytes of room, and with `out` one byte short of the whole JSON (`LANTERN_JSON_MORE`), then with no room (`LANTERN_BUFFER_TOO_SMALL`). File: `<preset>-<fork>-json-encode.bin`.
+- tests/generator/json_codec.py also makes the cases of lantern_json_decode: the JSON of each `json-encode` case, with white space between its tokens and its fields in reverse order in a second copy, must give the case's SSZ bytes; then for some types, texts that break one rule each, with the `JsonFault` of each (its kind, offset and path). Each valid case also runs with `out` one byte short. File: `<preset>-<fork>-json-decode.bin`.
 - tests/generator/api_route.py: requests and the `ApiRoute` or fault of each, by the rules of lantern_api_route, apart from the assembly. It reads the operations from the beacon-APIs clone at the pinned commit, so the table of the assembly is checked against the spec; a parameter of the spec that the rules below do not name stops it. Each case with `LANTERN_OK` also runs with `out` one byte short. File: `<preset>-phase0-api-route.bin`.
   - Every operation: its method and path with every required parameter; then each optional parameter.
   - Every path: each other method (405, `allow`), a trailing `/`, a missing and an extra segment (404).
@@ -232,6 +235,66 @@ lantern_http_request(bytes, limits, out) -> status
 - Symbol: `lantern_http_request` (`_lantern_http_request` on macOS).
 - Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
 - Argument order: `bytes`, `limits`, `out`.
+
+## Function `lantern_json_decode`
+
+Reads one value of an SSZ type from its JSON, as the Beacon API takes it, and writes the value's SSZ encoding.
+
+### Signature
+
+```
+lantern_json_decode(type, json, scratch, out, fault) -> status
+```
+
+### Arguments
+
+| Name | Role | Type |
+|---|---|---|
+| `type` | input | asm-ssz `TypeDescriptor`: a root type of a fork's type table, as for lantern_json_encode |
+| `json` | input | ByteList: the JSON text |
+| `scratch` | scratch | `Scratch`: at least `JSON_DECODE_SCRATCH` (6208) bytes |
+| `out` | output | ByteList, its `size` set: the SSZ encoding goes from its offset 24 |
+| `fault` | output | [`JsonFault`](#type-jsonfault) |
+
+### Returns
+
+- `LANTERN_OK`: `out` holds the SSZ encoding of the value.
+- `LANTERN_INVALID_JSON`: the text breaks a rule below; `fault` says which and where.
+- `LANTERN_BUFFER_TOO_SMALL`: `scratch` has fewer than `JSON_DECODE_SCRATCH` bytes, or `out` has room for fewer bytes than the encoding; `size` of `fault` is the room the encoding needs, when the text is valid.
+
+### Function does
+
+- The text (RFC 8259): one value, with white space (space, tab, LF, CR) allowed before and after it and between tokens.
+- Strings hold no `\` and no byte below 0x20.
+- Each SSZ kind, in the forms lantern_json_encode writes:
+  - uint of w bytes: a string of 1 to 78 decimal digits whose value is below 2^(8w).
+  - `Boolean`: `true` or `false`.
+  - `ByteVector[N]`: a string, `0x` and 2N hex digits of either case.
+  - `ByteList[N]`: a string, `0x` and an even count of hex digits, at most 2N.
+  - `BitVector[N]`: a string, `0x` and the hex digits of ceil(N / 8) bytes, with every bit from N on zero.
+  - `BitList[N]`: a string, `0x` and the hex digits of one byte or more, the last not zero; the bits below its highest set bit, the delimiter, number at most N.
+  - `Vector[T, N]`: an array of N items; `List[T, N]`: an array of at most N items.
+  - `Container`: an object with each field's name exactly once, in any order, and no other name.
+- Order of the checks; the first fault found is the one given:
+  - A value of a container: its members in text order, each name a field not seen before (`JSON_FAULT_FIELD` at the name), its value skipped with only the checks of the text; then a field not given (`JSON_FAULT_MISSING` at the `}`); then the value of each field in field order, by its kind.
+  - A value of a list or vector: its items skipped in text order with only the checks of the text; then their count (`JSON_FAULT_LENGTH` at the `[`); then each item in order, by its kind.
+  - A value of another kind: by its kind; a token of another JSON type gives `JSON_FAULT_TYPE` at it.
+  - After the root value, only white space.
+  - The checks of the text in a skipped value: strings, numbers (RFC 8259 section 6), `true`, `false`, `null`, and arrays and objects nested at most 64 deep; else `JSON_FAULT_SYNTAX`.
+- `fault` on `LANTERN_INVALID_JSON`: the kind, the offset in `json` where the token at fault starts (for a text that ends early, the length of the text), and the path from the root to the value at fault: the object for a field name or a missing field, the array for a count, the value being skipped for a fault of the text inside it, else the value whose token is at fault.
+- The encoding: SSZ (ssz-specs v0.1.0, as asm-ssz writes it): the fields of a container in spec order, its fixed part with 4-byte offsets, then its variable parts.
+
+### Function never
+
+- Reads more than `type`, the names after its field records, `json`, `scratch` and the `size` field of `out`.
+- Writes more than `scratch`, `out` and `fault`.
+
+### ABI
+
+- Role: L1.
+- Symbol: `lantern_json_decode` (`_lantern_json_decode` on macOS).
+- Convention: the core ABI for each ISA (ARCHITECTURE.md section 6).
+- Argument order: `type`, `json`, `scratch`, `out`, `fault`.
 
 ## Function `lantern_json_encode`
 
@@ -406,6 +469,26 @@ Where lantern_json_encode goes on: the path from the root type to the current to
 - A `JsonLevel` is 48 bytes: `node`, the index of the level's `TypeNode` in the type's descriptor; `step`, where the level is (below); `item`, the index of its next item or field; `count`, its items, or the bytes or bits of a byte or bit string; `base`, the offset from `value` of its fields (a container), its first item (a list or vector) or its bytes; `next`, the offset from `value` of its next item when its items are of variable size.
 - `step` of a list, vector or container: 0 before `[` or `{`; 1 before its next item, or `]` or `}` after the last; 2 before the name of a field, or before an item after `,`; 3 while the item is written, one level deeper.
 - A type has at most 12 levels, as asm-ssz allows.
+
+## Type `JsonFault`
+
+Why and where lantern_json_decode refused a JSON text.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `kind` | u64 | `JSON_FAULT_*`, below |
+| 8 | `offset` | u64 | The byte of `json` where the token at fault starts |
+| 16 | `size` | u64 | With `LANTERN_BUFFER_TOO_SMALL`: the bytes of the encoding |
+| 24 | `depth` | u64 | The path's levels |
+| 32 | `path` | 12 u64 | For each level from the root, the field index in its container or the item index in its list or vector |
+| 128 | | | Size: `JSON_FAULT_SIZE` |
+
+### Rules
+
+- Kinds: `JSON_FAULT_SYNTAX` (1) a text that is no JSON, or more after the value; `JSON_FAULT_TYPE` (2) a value of another JSON type than the SSZ kind takes; `JSON_FAULT_NUMBER` (3) a uint that is no decimal digits or not below its bound; `JSON_FAULT_HEX` (4) a byte or bit string that is no `0x` and hex digits, or of a wrong length or padding; `JSON_FAULT_LENGTH` (5) an array of a wrong length; `JSON_FAULT_FIELD` (6) a field name the container does not have, or given twice; `JSON_FAULT_MISSING` (7) a field missing at the end of an object, at the offset of its `}`.
+- With `JSON_FAULT_SYNTAX` at the top level, `depth` is 0.
 
 ## Type `ValidatorRef`
 

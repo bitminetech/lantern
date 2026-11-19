@@ -1027,6 +1027,21 @@
 .set JsonLevel_next, 40
 .set JSON_LEVEL_SIZE, 48
 .set JSON_CURSOR_SIZE, 24 + JSON_LEVELS * JSON_LEVEL_SIZE
+.set LANTERN_INVALID_JSON, 66            /* lantern_json_decode: the text breaks a rule; the JsonFault says which */
+.set JsonFault_kind, 0                    /* JsonFault (docs/reference/beacon-api.md): lantern_json_decode */
+.set JsonFault_offset, 8
+.set JsonFault_size, 16
+.set JsonFault_depth, 24
+.set JsonFault_path, 32
+.set JSON_FAULT_SIZE, 128
+.set JSON_FAULT_SYNTAX, 1
+.set JSON_FAULT_TYPE, 2
+.set JSON_FAULT_NUMBER, 3
+.set JSON_FAULT_HEX, 4
+.set JSON_FAULT_LENGTH, 5
+.set JSON_FAULT_FIELD, 6
+.set JSON_FAULT_MISSING, 7
+.set JSON_DECODE_SCRATCH, 64 + JSON_LEVELS * 512  /* the field tables of lantern_json_decode, 64 fields a level */
 
 /* ArgList, Arg and AppOptions (docs/reference/app.md): a text field is an Arg (start, length) of the ArgList's bytes. */
 .set ArgList_args, 8

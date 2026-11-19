@@ -408,3 +408,918 @@ FUNCTION lantern_json_encode
 97: mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 48
 END_FUNCTION lantern_json_encode
+
+/*
+ * ---------------------------------------------------------------- lantern_json_decode
+ *
+ * x19 the JSON's first byte, x20 its end, x21 the field tables in scratch (512 bytes a level),
+ * x22 where the encoding goes, x23 the bytes of the encoding so far, x24 1 when the bytes are
+ * written (0 counts them), x25 the type's nodes, x26 its fields, x27 the names after the fields,
+ * x28 the JsonFault, whose path the levels fill as they go down.
+ */
+
+/* L0: x0 = the first byte at or after x0 that is no white space. Uses x9. */
+LOCAL_FUNCTION jd_ws
+    UNWIND_END_PROLOGUE
+1:  cmp     x0, x20
+    b.hs    9f
+    ldrb    w9, [x0]
+    cmp     w9, #0x20
+    b.eq    2f
+    cmp     w9, #0x09
+    b.eq    2f
+    cmp     w9, #0x0a
+    b.eq    2f
+    cmp     w9, #0x0d
+    b.ne    9f
+2:  add     x0, x0, #1
+    b       1b
+9:  ret
+END_FUNCTION jd_ws
+
+/* L0: the fault x0 at the byte x1 (the end when past it), at depth x2: x1 = 1. Uses x9. */
+LOCAL_FUNCTION jd_fault
+    UNWIND_END_PROLOGUE
+    cmp     x1, x20
+    csel    x1, x20, x1, hi
+    sub     x9, x1, x19
+    stp     x0, x9, [x28, #JsonFault_kind]
+    str     x2, [x28, #JsonFault_depth]
+    mov     x1, #1
+    ret
+END_FUNCTION jd_fault
+
+/*
+ * L1: the string at x0 (its quote): x0 = after its closing quote, x3 its first byte, x4 its end,
+ * x1 = 0; a \ or a byte below 0x20, or the end, is a fault at depth x2 (x1 = 1). Uses x9.
+ */
+LOCAL_FUNCTION jd_string
+    FRAME 0
+    add     x3, x0, #1
+    mov     x4, x3
+1:  cmp     x4, x20
+    b.hs    8f
+    ldrb    w9, [x4]
+    cmp     w9, #0x22
+    b.eq    2f
+    cmp     w9, #0x5c
+    b.eq    8f
+    cmp     w9, #0x20
+    b.lo    8f
+    add     x4, x4, #1
+    b       1b
+2:  add     x0, x4, #1
+    mov     x1, #0
+    UNFRAME 0
+8:  mov     x0, #JSON_FAULT_SYNTAX
+    mov     x1, x4
+    bl      jd_fault
+    UNFRAME 0
+END_FUNCTION jd_string
+
+/* L0: x0 = 1 when the byte at x0 is a decimal digit, below the end; else 0. Uses x9. */
+.macro JD_DIGIT dst, at
+    mov     \dst, #0
+    cmp     \at, x20
+    b.hs    77f
+    ldrb    w9, [\at]
+    sub     w9, w9, #0x30
+    cmp     w9, #9
+    cset    \dst, ls
+77:
+.endm
+
+/* L1: the number at x0 (RFC 8259 section 6): x0 = after it, x1 = 0; else a fault at depth x2. Uses x3, x9, x10. */
+LOCAL_FUNCTION jd_number
+    FRAME 0
+    cmp     x0, x20
+    b.hs    8f
+    ldrb    w9, [x0]
+    cmp     w9, #0x2d                       /* - */
+    b.ne    1f
+    add     x0, x0, #1
+1:  cmp     x0, x20
+    b.hs    8f
+    ldrb    w9, [x0]
+    cmp     w9, #0x30
+    b.ne    2f
+    add     x0, x0, #1
+    b       3f
+2:  sub     w9, w9, #0x31
+    cmp     w9, #8
+    b.hi    8f
+21: add     x0, x0, #1
+    JD_DIGIT x10, x0
+    cbnz    x10, 21b
+3:  cmp     x0, x20                         /* a fraction */
+    b.hs    9f
+    ldrb    w9, [x0]
+    cmp     w9, #0x2e
+    b.ne    4f
+    add     x0, x0, #1
+    JD_DIGIT x10, x0
+    cbz     x10, 8f
+31: add     x0, x0, #1
+    JD_DIGIT x10, x0
+    cbnz    x10, 31b
+4:  cmp     x0, x20                         /* an exponent */
+    b.hs    9f
+    ldrb    w9, [x0]
+    orr     w9, w9, #0x20
+    cmp     w9, #0x65
+    b.ne    9f
+    add     x0, x0, #1
+    cmp     x0, x20
+    b.hs    8f
+    ldrb    w9, [x0]
+    cmp     w9, #0x2b
+    b.eq    40f
+    cmp     w9, #0x2d
+    b.ne    41f
+40: add     x0, x0, #1
+41: JD_DIGIT x10, x0
+    cbz     x10, 8f
+42: add     x0, x0, #1
+    JD_DIGIT x10, x0
+    cbnz    x10, 42b
+9:  mov     x1, #0
+    UNFRAME 0
+8:  mov     x1, x0
+    mov     x0, #JSON_FAULT_SYNTAX
+    bl      jd_fault
+    UNFRAME 0
+END_FUNCTION jd_number
+
+/* L0: x1 = 1 when the x2 bytes of text at x1 start at x0 below the end, else 0. Uses x9-x12. */
+LOCAL_FUNCTION jd_literal
+    UNWIND_END_PROLOGUE
+    add     x9, x0, x2
+    cmp     x9, x20
+    b.hi    8f
+    mov     x9, #0
+1:  cmp     x9, x2
+    b.hs    9f
+    ldrb    w10, [x0, x9]
+    ldrb    w11, [x1, x9]
+    cmp     w10, w11
+    b.ne    8f
+    add     x9, x9, #1
+    b       1b
+9:  mov     x1, #1
+    ret
+8:  mov     x1, #0
+    ret
+END_FUNCTION jd_literal
+
+/*
+ * L1: '"name":' at x0, in a skipped object: x0 = its value's first byte, x1 = 0; else a fault at
+ * depth x2. Locals: x2.
+ */
+LOCAL_FUNCTION jd_key
+    FRAME 16
+    str     x2, [sp, #16]
+    cmp     x0, x20
+    b.hs    8f
+    ldrb    w9, [x0]
+    cmp     w9, #0x22
+    b.ne    8f
+    bl      jd_string
+    cbnz    x1, 9f
+    bl      jd_ws
+    cmp     x0, x20
+    b.hs    8f
+    ldrb    w9, [x0]
+    cmp     w9, #0x3a
+    b.ne    8f
+    add     x0, x0, #1
+    mov     x1, #0
+    UNFRAME 16
+8:  mov     x1, x0
+    mov     x0, #JSON_FAULT_SYNTAX
+    ldr     x2, [sp, #16]
+    bl      jd_fault
+9:  UNFRAME 16
+END_FUNCTION jd_key
+
+/*
+ * L1: the value at x0, skipped with only the checks of the text, faults at depth x2: x0 = after
+ * it, x1 = 0. Locals: L the depth, L+8 the nesting, a bit each (1 an object), L+16 its count.
+ */
+LOCAL_FUNCTION jd_skip
+    FRAME 32
+    str     x2, [sp, #16]
+    stp     xzr, xzr, [sp, #24]
+1:  bl      jd_ws                           /* a value */
+    ldr     x2, [sp, #16]
+    cmp     x0, x20
+    b.hs    80f
+    ldrb    w9, [x0]
+    cmp     w9, #0x22
+    b.ne    2f
+    bl      jd_string
+    cbnz    x1, 99f
+    b       10f
+2:  cmp     w9, #0x2d
+    b.eq    21f
+    sub     w10, w9, #0x30
+    cmp     w10, #9
+    b.hi    3f
+21: bl      jd_number
+    cbnz    x1, 99f
+    b       10f
+3:  ADDRESS x1, api_true
+    mov     x2, #4
+    bl      jd_literal
+    cbz     x1, 31f
+    add     x0, x0, #4
+    b       10f
+31: ADDRESS x1, api_false
+    mov     x2, #5
+    bl      jd_literal
+    cbz     x1, 32f
+    add     x0, x0, #5
+    b       10f
+32: ADDRESS x1, jd_null
+    mov     x2, #4
+    bl      jd_literal
+    cbz     x1, 33f
+    add     x0, x0, #4
+    b       10f
+33: ldr     x2, [sp, #16]
+    ldrb    w9, [x0]
+    cmp     w9, #0x5b
+    b.eq    331f
+    cmp     w9, #0x7b
+    b.ne    80f
+331:
+    ldp     x10, x11, [sp, #24]             /* [ or {: one level more, at most 64 */
+    cmp     x11, #64
+    b.hs    80f
+    lsl     x10, x10, #1
+    cmp     w9, #0x7b
+    cinc    x10, x10, eq
+    add     x11, x11, #1
+    stp     x10, x11, [sp, #24]
+    add     x0, x0, #1
+    bl      jd_ws
+    ldr     x2, [sp, #16]
+    cmp     x0, x20
+    b.hs    80f
+    ldrb    w9, [x0]
+    ldr     x10, [sp, #24]
+    tst     x10, #1
+    mov     w11, #0x5d
+    mov     w12, #0x7d
+    csel    w11, w12, w11, ne
+    cmp     w9, w11
+    b.ne    34f
+    add     x0, x0, #1                      /* empty: closed at once */
+    b       12f
+34: tbz     x10, #0, 1b                     /* an array: its first item; an object: its first key */
+    bl      jd_key
+    cbnz    x1, 99f
+    b       1b
+10: ldr     x11, [sp, #32]                  /* after a value: done at the top, else , or the close */
+    cbz     x11, 98f
+    bl      jd_ws
+    ldr     x2, [sp, #16]
+    cmp     x0, x20
+    b.hs    80f
+    ldrb    w9, [x0]
+    ldr     x10, [sp, #24]
+    cmp     w9, #0x2c
+    b.ne    11f
+    add     x0, x0, #1
+    tbz     x10, #0, 1b
+    bl      jd_ws
+    ldr     x2, [sp, #16]
+    bl      jd_key
+    cbnz    x1, 99f
+    b       1b
+11: tst     x10, #1
+    mov     w11, #0x5d
+    mov     w12, #0x7d
+    csel    w11, w12, w11, ne
+    cmp     w9, w11
+    b.ne    80f
+    add     x0, x0, #1
+12: ldp     x10, x11, [sp, #24]             /* one level up */
+    lsr     x10, x10, #1
+    sub     x11, x11, #1
+    stp     x10, x11, [sp, #24]
+    b       10b
+80: mov     x1, x0
+    mov     x0, #JSON_FAULT_SYNTAX
+    bl      jd_fault
+    b       99f
+98: mov     x1, #0
+99: UNFRAME 32
+END_FUNCTION jd_skip
+
+/* L0: the x1 bytes at x0 join the encoding, written when x24 is 1. Uses x0, x1, x9, x10. */
+LOCAL_FUNCTION jd_out
+    UNWIND_END_PROLOGUE
+    cbz     x24, 2f
+    add     x9, x22, x23
+1:  cbz     x1, 2f
+    ldrb    w10, [x0], #1
+    strb    w10, [x9], #1
+    sub     x1, x1, #1
+    add     x23, x23, #1
+    b       1b
+2:  add     x23, x23, x1
+    ret
+END_FUNCTION jd_out
+
+/* L0: the 4-byte offset x0 at byte x1 of the encoding, when x24 is 1. Uses x9. */
+LOCAL_FUNCTION jd_offset
+    UNWIND_END_PROLOGUE
+    cbz     x24, 9f
+    add     x9, x22, x1
+    str     w0, [x9]
+9:  ret
+END_FUNCTION jd_offset
+
+/* L0: x0 = the value of the hex digit in w0, or 16 for another byte. */
+LOCAL_FUNCTION jd_hexdigit
+    UNWIND_END_PROLOGUE
+    sub     w9, w0, #0x30
+    cmp     w9, #9
+    b.ls    1f
+    orr     w9, w0, #0x20
+    sub     w9, w9, #0x61
+    cmp     w9, #5
+    b.hi    2f
+    add     w9, w9, #10
+1:  mov     x0, x9
+    ret
+2:  mov     x0, #16
+    ret
+END_FUNCTION jd_hexdigit
+
+/*
+ * L1: the value of the type node x0 at x1, at depth x2: its encoding joins at x23; x0 = after it,
+ * x1 = 0, else a fault (x1 = 1). Locals: L node, L+8 depth, L+16 the value's first byte, L+24 the
+ * end, L+32 an index, L+40 the count, L+48 the encoding's start, L+56 its tail, L+64 the field
+ * table, L+72 the text cursor, L+80 the kind's node entry, L+88 bytes of a number.
+ */
+LOCAL_FUNCTION jd_value
+    FRAME 160
+    stp     x0, x2, [sp, #16]
+    mov     x0, x1
+    bl      jd_ws
+    str     x0, [sp, #32]
+    ldr     x2, [sp, #24]
+    cmp     x0, x20
+    b.hs    880f
+    ldr     x9, [sp, #16]
+    mov     x10, #SSZ_NODE_STRIDE
+    madd    x9, x9, x10, x25
+    str     x9, [sp, #96]
+    ldr     x10, [x9, #SSZ_NODE_KIND]
+    ldrb    w11, [x0]
+    cmp     x10, #SSZ_KIND_CONTAINER
+    b.eq    100f
+    cmp     x10, #SSZ_KIND_VECTOR
+    b.hs    200f
+    cmp     x10, #SSZ_KIND_BOOLEAN
+    b.eq    300f
+    cmp     w11, #0x22                      /* a uint, a byte or bit string: a string */
+    b.ne    870f
+    bl      jd_string
+    cbnz    x1, 899f
+    str     x0, [sp, #40]
+    ldr     x9, [sp, #96]
+    ldr     x10, [x9, #SSZ_NODE_KIND]
+    sub     x5, x4, x3                      /* the content's bytes */
+    cmp     x10, #SSZ_KIND_UINT
+    b.ne    400f
+    cbz     x5, 860f                        /* uint: 1 to 78 digits, below 2^(8 width) */
+    cmp     x5, #78
+    b.hi    860f
+    stp     xzr, xzr, [sp, #104]
+    stp     xzr, xzr, [sp, #120]
+1:  cmp     x3, x4
+    b.hs    3f
+    ldrb    w12, [x3], #1
+    sub     w12, w12, #0x30
+    cmp     w12, #9
+    b.hi    860f
+    mov     x13, #0                         /* the 256-bit number times 10, plus the digit */
+    mov     x14, x12
+    add     x15, sp, #104
+2:  ldr     x6, [x15, x13, lsl #3]
+    mov     x7, #10
+    mul     x10, x6, x7
+    umulh   x11, x6, x7
+    adds    x10, x10, x14
+    cinc    x11, x11, cs
+    str     x10, [x15, x13, lsl #3]
+    mov     x14, x11
+    add     x13, x13, #1
+    cmp     x13, #4
+    b.lo    2b
+    cbnz    x14, 860f
+    b       1b
+3:  ldr     x9, [sp, #96]
+    ldr     x10, [x9, #SSZ_NODE_LENGTH]     /* the width: bytes past it zero */
+    add     x11, sp, #104
+    mov     x12, x10
+4:  cmp     x12, #32
+    b.hs    5f
+    ldrb    w13, [x11, x12]
+    cbnz    w13, 860f
+    add     x12, x12, #1
+    b       4b
+5:  mov     x0, x11
+    mov     x1, x10
+    bl      jd_out
+    ldr     x0, [sp, #40]
+    mov     x1, #0
+    UNFRAME 160
+400: cmp    x5, #2                          /* a byte or bit string: 0x and pairs of hex digits */
+    b.lo    850f
+    ldrb    w12, [x3]
+    cmp     w12, #0x30
+    b.ne    850f
+    ldrb    w12, [x3, #1]
+    cmp     w12, #0x78
+    b.ne    850f
+    tst     x5, #1
+    b.ne    850f
+    add     x6, x3, #2                      /* every digit hex */
+41: cmp     x6, x4
+    b.hs    42f
+    ldrb    w0, [x6], #1
+    bl      jd_hexdigit
+    cmp     x0, #16
+    b.hs    850f
+    b       41b
+42: sub     x5, x5, #2
+    lsr     x5, x5, #1                      /* the bytes */
+    ldr     x9, [sp, #96]
+    ldr     x10, [x9, #SSZ_NODE_KIND]
+    ldr     x11, [x9, #SSZ_NODE_LENGTH]
+    cmp     x10, #SSZ_KIND_BYTE_VECTOR
+    b.ne    43f
+    cmp     x5, x11
+    b.ne    850f
+    b       47f
+43: cmp     x10, #SSZ_KIND_BYTE_LIST
+    b.ne    44f
+    cmp     x5, x11
+    b.hi    850f
+    b       47f
+44: sub     x12, x4, #2                     /* the last byte, for the bit kinds */
+    mov     x13, #0
+    cbz     x5, 45f
+    ldrb    w0, [x12]
+    bl      jd_hexdigit
+    lsl     x13, x0, #4
+    ldrb    w0, [x12, #1]
+    bl      jd_hexdigit
+    orr     x13, x13, x0
+45: ldr     x9, [sp, #96]
+    ldr     x10, [x9, #SSZ_NODE_KIND]
+    ldr     x11, [x9, #SSZ_NODE_LENGTH]
+    cmp     x10, #SSZ_KIND_BIT_VECTOR
+    b.ne    46f
+    add     x12, x11, #7                    /* a bit vector: its bytes, the bits past N zero */
+    lsr     x12, x12, #3
+    cmp     x5, x12
+    b.ne    850f
+    ands    x12, x11, #7
+    b.eq    47f
+    lsr     x13, x13, x12
+    cbnz    x13, 850f
+    b       47f
+46: cbz     x5, 850f                        /* a bit list: the last byte not zero, at most N bits */
+    cbz     x13, 850f
+    clz     x12, x13
+    mov     x14, #63
+    sub     x12, x14, x12                   /* the delimiter's bit */
+    sub     x14, x5, #1
+    add     x12, x12, x14, lsl #3
+    cmp     x12, x11
+    b.hi    850f
+47: add     x6, x3, #2                      /* the bytes join the encoding */
+48: cmp     x6, x4
+    b.hs    49f
+    ldrb    w0, [x6]
+    bl      jd_hexdigit
+    lsl     x7, x0, #4
+    ldrb    w0, [x6, #1]
+    bl      jd_hexdigit
+    orr     x7, x7, x0
+    strb    w7, [sp, #104]
+    add     x0, sp, #104
+    mov     x1, #1
+    bl      jd_out
+    add     x6, x6, #2
+    b       48b
+49: ldr     x0, [sp, #40]
+    mov     x1, #0
+    UNFRAME 160
+300: ADDRESS x1, api_true                   /* Boolean: true or false */
+    mov     x2, #4
+    bl      jd_literal
+    mov     w12, #1
+    cbnz    x1, 301f
+    ldr     x0, [sp, #32]
+    ADDRESS x1, api_false
+    mov     x2, #5
+    bl      jd_literal
+    cbz     x1, 870f
+    mov     w12, #0
+301: strb   w12, [sp, #104]
+    ldr     x0, [sp, #32]
+    ldrb    w9, [x0]
+    cmp     w9, #0x74
+    mov     x10, #5
+    mov     x11, #4
+    csel    x10, x11, x10, eq
+    add     x10, x0, x10
+    str     x10, [sp, #40]
+    add     x0, sp, #104
+    mov     x1, #1
+    bl      jd_out
+    ldr     x0, [sp, #40]
+    mov     x1, #0
+    UNFRAME 160
+100: cmp    w11, #0x7b                      /* a container: an object */
+    b.ne    870f
+    ldr     x9, [sp, #24]                   /* its field table: zero */
+    add     x9, x21, x9, lsl #9
+    str     x9, [sp, #80]
+    mov     x0, x9
+    mov     x1, #512
+    bl      lantern_zero
+    ldr     x0, [sp, #32]
+    add     x0, x0, #1
+    bl      jd_ws
+    ldr     x2, [sp, #24]
+    cmp     x0, x20
+    b.hs    880f
+    ldrb    w9, [x0]
+    cmp     w9, #0x7d
+    b.ne    110f
+    add     x0, x0, #1
+    str     x0, [sp, #40]
+    b       130f
+110: str    x0, [sp, #88]                   /* a member: its name, a field not seen yet */
+    ldr     x2, [sp, #24]
+    ldrb    w9, [x0]
+    cmp     w9, #0x22
+    b.ne    880f
+    bl      jd_string
+    cbnz    x1, 899f
+    str     x0, [sp, #120]
+    ldr     x9, [sp, #96]
+    ldr     x10, [x9, #SSZ_NODE_LENGTH]
+    ldr     x11, [x9, #SSZ_NODE_ELEMENT]
+    mov     x12, #0
+111: cmp    x12, x10
+    b.hs    890f
+    add     x13, x11, x12
+    add     x13, x27, x13, lsl #5           /* the name of field x12 */
+    sub     x14, x4, x3
+    cmp     x14, #32
+    b.hi    114f
+    mov     x15, #0
+112: cmp    x15, x14
+    b.hs    113f
+    ldrb    w6, [x3, x15]
+    ldrb    w7, [x13, x15]
+    cmp     w6, w7
+    b.ne    114f
+    add     x15, x15, #1
+    b       112b
+113: cmp    x14, #32
+    b.eq    115f
+    ldrb    w6, [x13, x14]
+    cbz     w6, 115f
+114: add    x12, x12, #1
+    b       111b
+115: ldr    x9, [sp, #80]                   /* field x12: seen before? */
+    ldr     x10, [x9, x12, lsl #3]
+    cbnz    x10, 890f
+    str     x12, [sp, #48]
+    ldr     x0, [sp, #120]
+    bl      jd_ws
+    ldr     x2, [sp, #24]
+    cmp     x0, x20
+    b.hs    880f
+    ldrb    w9, [x0]
+    cmp     w9, #0x3a
+    b.ne    880f
+    add     x0, x0, #1
+    bl      jd_ws
+    ldr     x9, [sp, #80]                   /* its value: kept, then skipped one level down */
+    ldr     x12, [sp, #48]
+    sub     x10, x0, x19
+    add     x10, x10, #1
+    str     x10, [x9, x12, lsl #3]
+    ldr     x2, [sp, #24]
+    add     x9, x28, #JsonFault_path
+    str     x12, [x9, x2, lsl #3]
+    add     x2, x2, #1
+    bl      jd_skip
+    cbnz    x1, 899f
+    bl      jd_ws
+    ldr     x2, [sp, #24]
+    cmp     x0, x20
+    b.hs    880f
+    ldrb    w9, [x0]
+    cmp     w9, #0x2c
+    b.ne    116f
+    add     x0, x0, #1
+    bl      jd_ws
+    ldr     x2, [sp, #24]
+    cmp     x0, x20
+    b.hs    880f
+    b       110b
+116: cmp    w9, #0x7d
+    b.ne    880f
+    add     x0, x0, #1
+    str     x0, [sp, #40]
+130: ldr    x9, [sp, #96]                   /* each field given */
+    ldr     x10, [x9, #SSZ_NODE_LENGTH]
+    ldr     x11, [sp, #80]
+    mov     x12, #0
+131: cmp    x12, x10
+    b.hs    132f
+    ldr     x13, [x11, x12, lsl #3]
+    cbz     x13, 840f
+    add     x12, x12, #1
+    b       131b
+132: ldr    x11, [x9, #SSZ_NODE_ELEMENT]    /* the fixed part: each field's bytes, or 4 */
+    mov     x12, #0
+    mov     x13, #0
+133: cmp    x12, x10
+    b.hs    134f
+    add     x14, x11, x12
+    add     x14, x26, x14, lsl #5
+    ldr     x15, [x14, #SSZ_FIELD_FLAGS]
+    mov     x6, #4
+    tbnz    x15, #0, 1331f
+    ldr     x15, [x14, #SSZ_FIELD_NODE]
+    mov     x7, #SSZ_NODE_STRIDE
+    madd    x15, x15, x7, x25
+    ldr     x6, [x15, #SSZ_NODE_SSZ_SIZE]
+1331: add   x13, x13, x6
+    add     x12, x12, #1
+    b       133b
+134: str    x23, [sp, #64]                  /* start; the tail after the fixed part */
+    add     x13, x23, x13
+    str     x13, [sp, #72]
+    str     xzr, [sp, #48]
+135: ldr    x9, [sp, #96]                   /* each field, in order */
+    ldr     x10, [x9, #SSZ_NODE_LENGTH]
+    ldr     x12, [sp, #48]
+    cmp     x12, x10
+    b.hs    139f
+    ldr     x11, [x9, #SSZ_NODE_ELEMENT]
+    add     x14, x11, x12
+    add     x14, x26, x14, lsl #5
+    ldr     x13, [sp, #64]
+    ldr     x15, [x14, #SSZ_FIELD_SSZ_OFFSET]
+    add     x13, x13, x15                   /* where the field, or its offset, goes */
+    ldr     x15, [x14, #SSZ_FIELD_FLAGS]
+    tbz     x15, #0, 136f
+    ldr     x6, [sp, #72]                   /* variable: its offset, then its bytes at the tail */
+    ldr     x7, [sp, #64]
+    sub     x0, x6, x7
+    mov     x1, x13
+    bl      jd_offset
+    ldr     x23, [sp, #72]
+    b       137f
+136: mov    x23, x13
+137: ldr    x2, [sp, #24]                   /* the field's value, one level down */
+    add     x9, x28, #JsonFault_path
+    str     x12, [x9, x2, lsl #3]
+    add     x2, x2, #1
+    ldr     x0, [x14, #SSZ_FIELD_NODE]
+    ldr     x9, [sp, #80]
+    ldr     x1, [x9, x12, lsl #3]
+    sub     x1, x1, #1
+    add     x1, x19, x1
+    bl      jd_value
+    cbnz    x1, 899f
+    ldr     x9, [sp, #96]
+    ldr     x11, [x9, #SSZ_NODE_ELEMENT]
+    ldr     x12, [sp, #48]
+    add     x14, x11, x12
+    add     x14, x26, x14, lsl #5
+    ldr     x15, [x14, #SSZ_FIELD_FLAGS]
+    tbz     x15, #0, 138f
+    str     x23, [sp, #72]
+138: add    x12, x12, #1
+    str     x12, [sp, #48]
+    b       135b
+139: ldr    x23, [sp, #72]
+    ldr     x0, [sp, #40]
+    mov     x1, #0
+    UNFRAME 160
+200: cmp    w11, #0x5b                      /* a list or vector: an array, its items counted */
+    b.ne    870f
+    ldr     x0, [sp, #32]
+    add     x0, x0, #1
+    bl      jd_ws
+    ldr     x2, [sp, #24]
+    cmp     x0, x20
+    b.hs    880f
+    str     xzr, [sp, #56]
+    ldrb    w9, [x0]
+    cmp     w9, #0x5d
+    b.ne    210f
+    add     x0, x0, #1
+    str     x0, [sp, #40]
+    b       220f
+210: ldr    x2, [sp, #24]                   /* an item, skipped one level down */
+    ldr     x12, [sp, #56]
+    add     x9, x28, #JsonFault_path
+    str     x12, [x9, x2, lsl #3]
+    add     x2, x2, #1
+    bl      jd_skip
+    cbnz    x1, 899f
+    ldr     x12, [sp, #56]
+    add     x12, x12, #1
+    str     x12, [sp, #56]
+    bl      jd_ws
+    ldr     x2, [sp, #24]
+    cmp     x0, x20
+    b.hs    880f
+    ldrb    w9, [x0]
+    cmp     w9, #0x2c
+    b.ne    211f
+    add     x0, x0, #1
+    bl      jd_ws
+    b       210b
+211: cmp    w9, #0x5d
+    b.ne    880f
+    add     x0, x0, #1
+    str     x0, [sp, #40]
+220: ldr    x9, [sp, #96]                   /* the count: N for a vector, at most N for a list */
+    ldr     x10, [x9, #SSZ_NODE_KIND]
+    ldr     x11, [x9, #SSZ_NODE_LENGTH]
+    ldr     x12, [sp, #56]
+    cmp     x12, x11
+    b.hi    830f
+    cmp     x10, #SSZ_KIND_VECTOR
+    b.ne    221f
+    cmp     x12, x11
+    b.ne    830f
+221: ldr    x13, [x9, #SSZ_NODE_ELEMENT]    /* the items: fixed in a row, or 4-byte offsets first */
+    str     x13, [sp, #112]
+    mov     x7, #SSZ_NODE_STRIDE
+    madd    x13, x13, x7, x25
+    ldr     x13, [x13, #SSZ_NODE_SSZ_SIZE]
+    str     x13, [sp, #104]
+    str     x23, [sp, #64]
+    add     x14, x23, x12, lsl #2
+    cmp     x13, #0
+    csel    x14, x23, x14, ne
+    str     x14, [sp, #72]
+    ldr     x0, [sp, #32]
+    add     x0, x0, #1
+    bl      jd_ws
+    str     x0, [sp, #88]
+    str     xzr, [sp, #48]
+222: ldr    x12, [sp, #48]
+    ldr     x11, [sp, #56]
+    cmp     x12, x11
+    b.hs    229f
+    ldr     x13, [sp, #104]
+    cbnz    x13, 223f
+    ldp     x6, x7, [sp, #64]               /* variable: its offset, then its bytes at the tail */
+    sub     x0, x7, x6
+    add     x1, x6, x12, lsl #2
+    bl      jd_offset
+    ldr     x23, [sp, #72]
+223: ldr    x2, [sp, #24]
+    ldr     x12, [sp, #48]
+    add     x9, x28, #JsonFault_path
+    str     x12, [x9, x2, lsl #3]
+    add     x2, x2, #1
+    ldr     x0, [sp, #112]
+    ldr     x1, [sp, #88]
+    bl      jd_value
+    cbnz    x1, 899f
+    ldr     x13, [sp, #104]
+    cbnz    x13, 224f
+    str     x23, [sp, #72]
+224: bl      jd_ws                          /* past the , */
+    cmp     x0, x20
+    b.hs    225f
+    ldrb    w9, [x0]
+    cmp     w9, #0x2c
+    b.ne    225f
+    add     x0, x0, #1
+    bl      jd_ws
+225: str    x0, [sp, #88]
+    ldr     x12, [sp, #48]
+    add     x12, x12, #1
+    str     x12, [sp, #48]
+    b       222b
+229: ldr    x13, [sp, #104]
+    cbnz    x13, 2291f
+    ldr     x23, [sp, #72]
+2291: ldr   x0, [sp, #40]
+    mov     x1, #0
+    UNFRAME 160
+830: mov    x0, #JSON_FAULT_LENGTH          /* the faults of this level */
+    ldr     x1, [sp, #32]
+    b       898f
+840: mov    x0, #JSON_FAULT_MISSING
+    ldr     x1, [sp, #40]
+    sub     x1, x1, #1
+    b       898f
+850: mov    x0, #JSON_FAULT_HEX
+    ldr     x1, [sp, #32]
+    b       898f
+860: mov    x0, #JSON_FAULT_NUMBER
+    ldr     x1, [sp, #32]
+    b       898f
+870: mov    x0, #JSON_FAULT_TYPE
+    ldr     x1, [sp, #32]
+    b       898f
+880: mov    x1, x0
+    mov     x0, #JSON_FAULT_SYNTAX
+    b       898f
+890: mov    x0, #JSON_FAULT_FIELD
+    ldr     x1, [sp, #88]
+898: ldr    x2, [sp, #24]
+    bl      jd_fault
+899: UNFRAME 160
+END_FUNCTION jd_value
+
+/* (type, json, scratch, out, fault): docs/reference/beacon-api.md. Locals: L out. */
+FUNCTION lantern_json_decode
+    ENTER 16
+    str     x3, [sp, #L]
+    mov     x28, x4
+    mov     x19, x0                         /* the type, the text and scratch, a moment */
+    mov     x20, x1
+    mov     x21, x2
+    mov     x0, x28                         /* the fault: zero */
+    mov     x1, #JSON_FAULT_SIZE
+    bl      lantern_zero
+    mov     x9, x19
+    mov     x1, x20
+    mov     x2, x21
+    ldr     x10, [x2]
+    MOVQ    x11, JSON_DECODE_SCRATCH
+    cmp     x10, x11
+    b.lo    97f
+    add     x21, x2, #64                    /* the field tables: 512 bytes a level */
+    ldp     x10, x11, [x1, #8]
+    add     x19, x1, x10
+    add     x20, x19, x11
+    ldr     x10, [x9, #8]
+    add     x25, x9, x10
+    ldr     x10, [x9, #24]
+    add     x26, x9, x10
+    ldr     x10, [x9, #32]
+    add     x27, x26, x10, lsl #5
+    ldr     x10, [x9, #40]
+    str     x10, [sp, #(L + 8)]
+    mov     x24, #0                         /* first the count, with every check */
+    mov     x23, #0
+    mov     x0, x10
+    mov     x1, x19
+    mov     x2, #0
+    bl      jd_value
+    cbnz    x1, 98f
+    bl      jd_ws
+    cmp     x0, x20
+    b.ne    96f
+    ldr     x9, [sp, #L]                    /* then the bytes, with room for them */
+    ldr     x10, [x9]
+    sub     x10, x10, #24
+    cmp     x23, x10
+    b.hi    95f
+    add     x22, x9, #24
+    mov     x10, #24
+    stp     x10, x23, [x9, #8]
+    mov     x24, #1
+    mov     x23, #0
+    ldr     x0, [sp, #(L + 8)]
+    mov     x1, x19
+    mov     x2, #0
+    bl      jd_value
+    mov     x0, #LANTERN_OK
+    LEAVE 16
+95: str     x23, [x28, #JsonFault_size]
+97: mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
+96: mov     x1, x0
+    mov     x0, #JSON_FAULT_SYNTAX
+    mov     x2, #0
+    bl      jd_fault
+98: mov     x0, #LANTERN_INVALID_JSON
+    LEAVE 16
+END_FUNCTION lantern_json_decode
+
+    RODATA
+jd_null:
+    .ascii "null"
