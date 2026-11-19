@@ -3101,15 +3101,26 @@ static const char *find_bytes(const char *hay, uint64_t len, const char *needle)
     return NULL;
 }
 
-/* The 32 bytes of the hex string after the key in the len bytes at body, into out; 0 when there is none. */
+/* The value of the hex digit c, or -1. */
+static int hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/*
+ * The 32 bytes of the hex string after the key in the len bytes at body, into out; 0 when there
+ * is none. It reads only those len bytes: they end with no zero byte, so no C string function.
+ */
 static int find_hash(const char *body, uint64_t len, const char *key, uint8_t *out) {
     const char *p = find_bytes(body, len, key);
     if (!p || (uint64_t)(p - body) + strlen(key) + 64 > len) return 0;
     p += strlen(key);
     for (int i = 0; i < 32; i++) {
-        unsigned v;
-        if (sscanf(p + 2 * i, "%2x", &v) != 1) return 0;
-        out[i] = (uint8_t)v;
+        int hi = hex_digit(p[2 * i]), lo = hex_digit(p[2 * i + 1]);
+        if (hi < 0 || lo < 0) return 0;
+        out[i] = (uint8_t)(hi << 4 | lo);
     }
     return 1;
 }
@@ -3151,7 +3162,8 @@ static void shell_engine(fc_node *n, const uint8_t *req, uint64_t len, const cha
         *why = "engine: no id or block hash";
         return;
     }
-    unsigned long long id = strtoull(idp + 5, NULL, 10);
+    unsigned long long id = 0; /* the digits after "id": within the body */
+    for (const char *d = idp + 5; d < body + blen && *d >= '0' && *d <= '9'; d++) id = id * 10 + (unsigned long long)(*d - '0');
     uint64_t el = 1, has_latest = 1;
     const uint8_t *latest = hash;
     for (size_t k = 0; k < n->npayloads; k++)
