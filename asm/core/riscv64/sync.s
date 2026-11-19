@@ -10,7 +10,7 @@
  * s1 state, s2 scratch, s3 out, s4 validator count, s5 scratch size, s6 active list,
  * s7 active count, s8 i, s9 members so far, s10 candidate.
  * Locals: L epoch, L+8 domain type, L+16 seed, L+48 message (seed, i // 16 from electra, i // 32 before), L+88 digest,
- * L+120 i % count, L+128 shuffled index, L+136 active count.
+ * L+120 the entries of the permutation, L+136 active count.
  */
 SPEC_FUNCTION get_next_sync_committee_indices
     ENTER 144
@@ -49,6 +49,16 @@ SPEC_FUNCTION get_next_sync_committee_indices
     addi    t0, sp, (L + 48)
     addi    t1, sp, (L + 16)
     COPY32  t0, t1
+    SCRATCH_LIST s10, s2, s5, 1, s4
+    addi    t0, s10, LIST_FIXED
+    sd      t0, (L + 120)(sp)
+    SCRATCH_GIVE s2, s5, 2, s4
+    addi    a0, sp, (L + 136)               # every compute_shuffled_index: one permutation of the active count
+    addi    a1, sp, (L + 16)
+    mv      a2, s2
+    mv      a3, s10
+    call    lantern_compute_shuffled_permutation
+    bnez    a0, 7f
     li      t0, LIST_FIXED
     sd      t0, LIST_OFFSET(s3)
     li      s9, 0
@@ -56,16 +66,10 @@ SPEC_FUNCTION get_next_sync_committee_indices
 1:  li      t0, SYNC_COMMITTEE_SIZE
     bgeu    s9, t0, 3f
     remu    t0, s8, s7
-    sd      t0, (L + 120)(sp)
-    SCRATCH_GIVE s2, s5, 1, s4
-    addi    a0, sp, (L + 120)               # compute_shuffled_index(i % active_validator_count, ...)
-    addi    a1, sp, (L + 136)
-    addi    a2, sp, (L + 16)
-    mv      a3, s2
-    addi    a4, sp, (L + 128)
-    call    lantern_compute_shuffled_index
-    bnez    a0, 7f
-    ld      t0, (L + 128)(sp)
+    ld      t1, (L + 120)(sp)               # compute_shuffled_index(i % active_validator_count, ...)
+    slli    t0, t0, 3
+    add     t0, t1, t0
+    ld      t0, 0(t0)
     slli    t0, t0, 3
     add     t0, s6, t0
     ld      s10, LIST_FIXED(t0)             # candidate_index

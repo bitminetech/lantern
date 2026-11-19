@@ -109,46 +109,57 @@ SPEC_FUNCTION compute_shuffled_permutation
     LEAVE 80
 SPEC_END compute_shuffled_permutation
 
-/* x19 index, x20 count pointer, x21 seed, x22 scratch, x23 out, x24 list. */
+/*
+ * x19 index, x20 index count, x21 flip, x22 round, x23 out, x24 position.
+ * Locals: L the message (seed, round, bucket), L+40 the digest.
+ */
 SPEC_FUNCTION compute_shuffled_index
-    ENTER 16
+    ENTER 80
     ldr     x19, [x0]
-    mov     x20, x1
-    mov     x21, x2
-    mov     x22, x3
+    ldr     x20, [x1]
     mov     x23, x4
-    ldr     x9, [x20]
-    cmp     x19, x9                         /* assert index < index_count */
+    cmp     x19, x20                        /* assert index < index_count */
     b.hs    8f
-    lsl     x10, x9, #3                     /* the permutation's list: L(index_count), at the end of scratch */
-    add     x10, x10, #LIST_FIXED
-    add     x11, x9, #255
-    lsr     x11, x11, #8
-    lsl     x11, x11, #5
-    add     x11, x11, #8
-    add     x11, x11, x10                   /* and the callee's 8 + 32 * buckets */
-    ldr     x12, [x22]
-    cmp     x12, x11
-    b.lo    9f
-    sub     x12, x12, x10
-    add     x24, x22, x12
-    str     x10, [x24]
-    str     x12, [x22]
-    mov     x0, x20
-    mov     x1, x21
-    mov     x2, x22
-    mov     x3, x24
-    bl      lantern_compute_shuffled_permutation
-    cbnz    x0, 7f
-    add     x9, x24, #LIST_FIXED
-    ldr     x9, [x9, x19, lsl #3]
-    str     x9, [x23]
+    add     x9, sp, #L                      /* the message starts with the seed */
+    COPY32  x9, x2
+    mov     x22, #0
+1:  cmp     x22, #SHUFFLE_ROUND_COUNT
+    b.hs    3f
+    strb    w22, [sp, #(L + 32)]            /* round_bytes */
+    add     x0, sp, #L                      /* pivot = bytes_to_uint64(sha256(seed + round_bytes)[0:8]) % index_count */
+    mov     x1, #33
+    add     x2, sp, #(L + 40)
+    bl      sha256_short
+    ldr     x9, [sp, #(L + 40)]
+    udiv    x10, x9, x20
+    msub    x9, x10, x20, x9
+    add     x21, x9, x20
+    sub     x21, x21, x19                   /* flip = (pivot + index_count - index) % index_count */
+    cmp     x21, x20
+    b.lo    2f
+    sub     x21, x21, x20
+2:  cmp     x19, x21
+    csel    x24, x19, x21, hi               /* position = max(index, flip) */
+    lsr     x9, x24, #8
+    str     w9, [sp, #(L + 33)]             /* uint_to_bytes(uint32(position // 256)) */
+    add     x0, sp, #L                      /* source = sha256(seed + round_bytes + position_bytes) */
+    mov     x1, #37
+    add     x2, sp, #(L + 40)
+    bl      sha256_short
+    ubfx    x9, x24, #3, #5                 /* source[(position % 256) // 8] */
+    add     x10, sp, #(L + 40)
+    ldrb    w9, [x10, x9]
+    and     x10, x24, #7
+    lsr     w9, w9, w10
+    tst     w9, #1
+    csel    x19, x21, x19, ne               /* index = flip if bit else index */
+    add     x22, x22, #1
+    b       1b
+3:  str     x19, [x23]
     mov     x0, #LANTERN_OK
-7:  LEAVE 16
+    LEAVE 80
 8:  mov     x0, #LANTERN_INVALID_SHUFFLED_INDEX
-    LEAVE 16
-9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
-    LEAVE 16
+    LEAVE 80
 SPEC_END compute_shuffled_index
 
 /* Locals: sp+16 the message (domain type 4, epoch 8, mix 32), sp+64 the mix epoch, sp+72 out. */

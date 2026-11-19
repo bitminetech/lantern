@@ -808,10 +808,11 @@ SPEC_END process_attestation
  * Locals: L previous epoch, L+8 current epoch, L+16 committees per slot, L+24 committee index,
  * L+32 inclusion delay, L+40 valid, L+48 flags (FLAGS_BYTES), L+96 proposer, L+104 base reward,
  * L+112 index or cursor, L+120 proposer reward numerator, L+128 flag, L+136 cursor end, L+144 the indexed
- * attestation, L+152 the attesting list, L+160 the scratch size callees get, L+168 participation.
+ * attestation, L+152 the attesting list, L+160 the scratch size callees get, L+168 participation,
+ * L+176 base reward per increment.
  */
 SPEC_FUNCTION process_attestation
-    ENTER 176
+    ENTER 192
     mov     %rdi, %rbx
     mov     %rsi, %rbp
     mov     %rcx, %r12
@@ -1000,6 +1001,14 @@ SPEC_FUNCTION process_attestation
     mov     (L + 152)(%rsp), %rcx
     call    lantern_get_attesting_indices
     CHECK_STATUS %r13, 7f, 8f
+    mov     (L + 160)(%rsp), %rax
+    mov     %rax, (%r12)
+    mov     %rbx, %rdi                      # get_base_reward's factor, once for every index
+    mov     %r12, %rsi
+    lea     (L + 176)(%rsp), %rdx
+    call    lantern_get_base_reward_per_increment
+    test    %rax, %rax
+    jnz     7f
     movq    $0, (L + 120)(%rsp)
     mov     (L + 152)(%rsp), %rax           # the attesting list; the committee indices are done
     lea     LIST_FIXED(%rax), %r15
@@ -1036,15 +1045,15 @@ SPEC_FUNCTION process_attestation
     lea     (L + 128)(%rsp), %rsi
     mov     %rdi, %rdx
     call    lantern_add_flag
-    mov     (L + 160)(%rsp), %rax
-    mov     %rax, (%r12)
-    mov     %rbx, %rdi                      # proposer_reward_numerator += get_base_reward(state, index) * weight
-    lea     (L + 112)(%rsp), %rsi
-    mov     %r12, %rdx
-    lea     (L + 104)(%rsp), %rcx
-    call    lantern_get_base_reward
-    test    %rax, %rax
-    jnz     7f
+    PART    %rcx, %rdx, %rbx, BeaconState_validators
+    mov     (L + 112)(%rsp), %rax           # proposer_reward_numerator += get_base_reward(state, index) * weight
+    shl     $7, %rax
+    mov     Validator_effective_balance(%rcx,%rax), %rax
+    xor     %edx, %edx
+    mov     $EFFECTIVE_BALANCE_INCREMENT, %ecx
+    div     %rcx                            # increments * base_reward_per_increment
+    imul    (L + 176)(%rsp), %rax
+    mov     %rax, (L + 104)(%rsp)
     mov     $TIMELY_SOURCE_WEIGHT, %eax     # the source and head weights are equal
     mov     $TIMELY_TARGET_WEIGHT, %ecx
     cmp     $TIMELY_TARGET_FLAG_INDEX, %r14
@@ -1078,13 +1087,13 @@ SPEC_FUNCTION process_attestation
     lea     (L + 120)(%rsp), %rdx
     call    lantern_increase_balance
 8:  xor     %eax, %eax
-7:  LEAVE 176
+7:  LEAVE 192
 5:  mov     $LANTERN_INVALID_OVERFLOW, %eax
 6:  mov     %rax, (%r13)
     xor     %eax, %eax
-    LEAVE 176
+    LEAVE 192
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 176
+    LEAVE 192
 SPEC_END process_attestation
 .endif
 

@@ -10,7 +10,7 @@
  * rbx state, rbp scratch, r12 out, r13 active list, r14 i, r15 members so far,
  * S7 validator count, S8 scratch size, S9 candidate.
  * Locals: L epoch, L+8 domain type, L+16 seed, L+48 message (seed, i // 16 from electra, i // 32 before), L+88 digest,
- * L+120 i % count, L+128 shuffled index, L+136 active count.
+ * L+120 the entries of the permutation, L+136 active count.
  */
 SPEC_FUNCTION get_next_sync_committee_indices
     ENTER 144
@@ -52,6 +52,19 @@ SPEC_FUNCTION get_next_sync_committee_indices
     lea     (L + 48)(%rsp), %rax
     lea     (L + 16)(%rsp), %rcx
     COPY32  %rax, %rcx
+    mov     S7(%rsp), %rcx
+    mov     S8(%rsp), %rdx
+    SCRATCH_LIST %r14, %rbp, %rdx, 1, %rcx
+    lea     LIST_FIXED(%r14), %rax
+    mov     %rax, (L + 120)(%rsp)
+    SCRATCH_GIVE %rbp, S8(%rsp), 2, %rcx
+    lea     (L + 136)(%rsp), %rdi           # every compute_shuffled_index: one permutation of the active count
+    lea     (L + 16)(%rsp), %rsi
+    mov     %rbp, %rdx
+    mov     %r14, %rcx
+    call    lantern_compute_shuffled_permutation
+    test    %rax, %rax
+    jnz     7f
     movq    $LIST_FIXED, LIST_OFFSET(%r12)
     xor     %r15d, %r15d
     xor     %r14d, %r14d
@@ -60,18 +73,8 @@ SPEC_FUNCTION get_next_sync_committee_indices
     mov     %r14, %rax
     xor     %edx, %edx
     divq    (L + 136)(%rsp)
-    mov     %rdx, (L + 120)(%rsp)
-    mov     S7(%rsp), %rcx
-    SCRATCH_GIVE %rbp, S8(%rsp), 1, %rcx
-    lea     (L + 120)(%rsp), %rdi           # compute_shuffled_index(i % active_validator_count, ...)
-    lea     (L + 136)(%rsp), %rsi
-    lea     (L + 16)(%rsp), %rdx
-    mov     %rbp, %rcx
-    lea     (L + 128)(%rsp), %r8
-    call    lantern_compute_shuffled_index
-    test    %rax, %rax
-    jnz     7f
-    mov     (L + 128)(%rsp), %rax
+    mov     (L + 120)(%rsp), %rax           # compute_shuffled_index(i % active_validator_count, ...)
+    mov     (%rax,%rdx,8), %rax
     mov     LIST_FIXED(%r13,%rax,8), %rax   # candidate_index
     mov     %rax, S9(%rsp)
     mov     %r14, %rax

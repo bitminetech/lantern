@@ -317,7 +317,7 @@ END_FUNCTION zero_deltas
  * S7 participating list then its cursor, S8 eligible list.
  * Locals: L previous epoch, L+8 participating balance, L+16 total active, L+24 leak,
  * L+32 eligible end, L+40 participating end, L+48 base reward, L+72 index, L+80 weight,
- * L+88 the scratch size on entry.
+ * L+88 the scratch size on entry, L+96 base reward per increment.
  */
 SPEC_FUNCTION get_flag_index_deltas
     ENTER 112
@@ -385,6 +385,14 @@ SPEC_FUNCTION get_flag_index_deltas
     mov     %rbx, %rdi
     lea     (L + 24)(%rsp), %rsi
     call    lantern_is_in_inactivity_leak
+    mov     (BeaconState_validators + 8)(%rbx), %rcx
+    SCRATCH_GIVE %r12, (L+88)(%rsp), 2, %rcx
+    mov     %rbx, %rdi                      # get_base_reward's factor, once for every index
+    mov     %r12, %rsi
+    lea     (L + 96)(%rsp), %rdx
+    call    lantern_get_base_reward_per_increment
+    test    %rax, %rax
+    jnz     8f
     mov     S8(%rsp), %rax
     lea     LIST_FIXED(%rax), %r15
     mov     LIST_COUNT(%rax), %rcx
@@ -401,15 +409,14 @@ SPEC_FUNCTION get_flag_index_deltas
     mov     (%r15), %rax
     add     $8, %r15
     mov     %rax, (L + 72)(%rsp)
-    mov     (BeaconState_validators + 8)(%rbx), %rcx
-    SCRATCH_GIVE %r12, (L+88)(%rsp), 2, %rcx
-    mov     %rbx, %rdi                      # base_reward = get_base_reward(state, index)
-    lea     (L + 72)(%rsp), %rsi
-    mov     %r12, %rdx
-    lea     (L + 48)(%rsp), %rcx
-    call    lantern_get_base_reward
-    test    %rax, %rax
-    jnz     8f
+    PART    %rcx, %rdx, %rbx, BeaconState_validators
+    shl     $7, %rax                        # base_reward = get_base_reward(state, index):
+    mov     Validator_effective_balance(%rcx,%rax), %rax
+    xor     %edx, %edx
+    mov     $EFFECTIVE_BALANCE_INCREMENT, %ecx
+    div     %rcx                            # increments * base_reward_per_increment
+    imul    (L + 96)(%rsp), %rax
+    mov     %rax, (L + 48)(%rsp)
     mov     (L + 72)(%rsp), %rax
     mov     S7(%rsp), %rcx
     IN_SORTED %rax, %rcx, (L+40)(%rsp), %rdx

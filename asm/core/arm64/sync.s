@@ -10,7 +10,7 @@
  * x19 state, x20 scratch, x21 out, x22 validator count, x23 scratch size, x24 active list,
  * x25 active count, x26 i, x27 members so far, x28 candidate.
  * Locals: L epoch, L+8 domain type, L+16 seed, L+48 message (seed, i // 16 from electra, i // 32 before), L+88 digest,
- * L+120 i % count, L+128 shuffled index, L+136 active count.
+ * L+120 the entries of the permutation, L+136 active count.
  */
 SPEC_FUNCTION get_next_sync_committee_indices
     ENTER 144
@@ -50,6 +50,16 @@ SPEC_FUNCTION get_next_sync_committee_indices
     add     x9, sp, #(L + 48)
     add     x10, sp, #(L + 16)
     COPY32  x9, x10
+    SCRATCH_LIST x9, x20, x23, 1, x22
+    add     x10, x9, #LIST_FIXED
+    str     x10, [sp, #(L + 120)]
+    SCRATCH_GIVE x20, x23, 2, x22
+    add     x0, sp, #(L + 136)              /* every compute_shuffled_index: one permutation of the active count */
+    add     x1, sp, #(L + 16)
+    mov     x2, x20
+    mov     x3, x9
+    bl      lantern_compute_shuffled_permutation
+    cbnz    x0, 7f
     mov     x9, #LIST_FIXED
     str     x9, [x21, #LIST_OFFSET]
     mov     x27, #0
@@ -58,16 +68,8 @@ SPEC_FUNCTION get_next_sync_committee_indices
     b.hs    3f
     udiv    x9, x26, x25
     msub    x9, x9, x25, x26
-    str     x9, [sp, #(L + 120)]
-    SCRATCH_GIVE x20, x23, 1, x22
-    add     x0, sp, #(L + 120)              /* compute_shuffled_index(i % active_validator_count, ...) */
-    add     x1, sp, #(L + 136)
-    add     x2, sp, #(L + 16)
-    mov     x3, x20
-    add     x4, sp, #(L + 128)
-    bl      lantern_compute_shuffled_index
-    cbnz    x0, 7f
-    ldr     x9, [sp, #(L + 128)]
+    ldr     x10, [sp, #(L + 120)]           /* compute_shuffled_index(i % active_validator_count, ...) */
+    ldr     x9, [x10, x9, lsl #3]
     add     x10, x24, #LIST_FIXED
     ldr     x28, [x10, x9, lsl #3]          /* candidate_index */
 .if FORK >= FORK_ELECTRA

@@ -491,7 +491,6 @@ lantern_compute_subscribed_subnet(node_id, epoch, index, config, scratch, out) -
 ### Returns
 
 - `LANTERN_OK`: `out` holds the subnet.
-- `LANTERN_BUFFER_TOO_SMALL`: `scratch` is below what lantern_compute_shuffled_index needs for 2^prefix_bits indices.
 - `LANTERN_INVALID_OVERFLOW`: where the spec raises: `EPOCHS_PER_SUBNET_SUBSCRIPTION` is 0, epoch + the node offset or the shuffled prefix + index does not fit in a u64, or prefix_bits is 64 or more, so 1 << prefix_bits is not a Uint64.
 
 ### Function does
