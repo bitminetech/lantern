@@ -186,6 +186,36 @@ SPEC_FUNCTION committee_cache_init
     UNFRAME 16
 SPEC_END committee_cache_init
 
+SPEC_FUNCTION pubkey_cache_size
+    FRAME 16
+    imul    $PubkeyEntry__mem, (%rdi), %rax
+    add     $PUBKEY_CACHE_FIXED, %rax
+    mov     %rax, (%rsi)
+    xor     %eax, %eax
+    UNFRAME 16
+SPEC_END pubkey_cache_size
+
+SPEC_FUNCTION pubkey_cache_init
+    FRAME 16
+    mov     (%rdi), %rcx
+    imul    $PubkeyEntry__mem, %rcx, %rax
+    add     $PUBKEY_CACHE_FIXED, %rax
+    cmp     %rax, PubkeyCache_size(%rsi)
+    jb      9f
+    mov     %rcx, PubkeyCache_validators(%rsi)
+    lea     PubkeyCache_entries(%rsi), %rax # every entry empty
+1:  test    %rcx, %rcx
+    jz      2f
+    movq    $0, PubkeyEntry_status(%rax)
+    add     $PubkeyEntry__mem, %rax
+    dec     %rcx
+    jmp     1b
+2:  xor     %eax, %eax
+    UNFRAME 16
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    UNFRAME 16
+SPEC_END pubkey_cache_init
+
 /* rbx state, rbp epoch pointer, r12 scratch, r13 out, r14 list, r15 cache. Locals: L the key (96). */
 SPEC_FUNCTION get_committee_count_per_slot
     ENTER 96
@@ -688,15 +718,18 @@ SPEC_FUNCTION get_indexed_attestation
 SPEC_END get_indexed_attestation
 
 /*
- * rbx state, rbp indexed attestation, r12 scratch, r13 out, r14 indices, r15 count, S7 keys.
- * Locals: L domain type, L+8 domain (32), L+40 message (24 + 32).
+ * rbx state, rbp indexed attestation, r12 scratch, r13 out, r14 indices, r15 count, S7 keys (a
+ * BlsPublicKeyList; with a cache, three G1Points at the end of scratch: the sum, a sum, a key),
+ * S8 cache, S9 i. Locals: L domain type, L+8 domain (32), L+40 message (24 + 32), L+96 the sum's
+ * compressed form (48), L+144 a key, L+152 its entry.
  */
 SPEC_FUNCTION is_valid_indexed_attestation
-    ENTER 96
+    ENTER 160
     mov     %rdi, %rbx
     mov     %rsi, %rbp
-    mov     %rdx, %r12
-    mov     %rcx, %r13
+    mov     %rdx, S8(%rsp)
+    mov     %rcx, %r12
+    mov     %r8, %r13
     movq    $0, (%r13)
     PART    %r14, %r15, %rbp, IndexedAttestation_attesting_indices
     test    %r15, %r15                      # len(indices) == 0: False
@@ -712,6 +745,8 @@ SPEC_FUNCTION is_valid_indexed_attestation
 2:  mov     -8(%r14,%r15,8), %rax           # the largest index names a validator
     cmp     (BeaconState_validators + 8)(%rbx), %rax
     jae     6f
+    cmpq    $0, S8(%rsp)                    # with a cache: points, no list of keys
+    jne     30f
     imul    $48, %r15, %rax                 # pubkeys: a BlsPublicKeyList at the end of scratch
     add     $(24 + 7), %rax
     and     $-8, %rax
@@ -765,19 +800,127 @@ SPEC_FUNCTION is_valid_indexed_attestation
     movq    $56, (L + 40)(%rsp)
     movq    $24, (L + 48)(%rsp)
     movq    $32, (L + 56)(%rsp)
+    cmpq    $0, S8(%rsp)
+    jne     40f
     mov     S7(%rsp), %rdi                  # bls.FastAggregateVerify(pubkeys, signing_root, signature)
     lea     (L + 40)(%rsp), %rsi
     lea     IndexedAttestation_signature(%rbp), %rdx
     mov     %r12, %rcx
     mov     %r13, %r8
     CALL_GLOBAL crypto_bls_fast_aggregate_verify
-7:  LEAVE 96
+7:  LEAVE 160
 8:  xor     %eax, %eax
-    LEAVE 96
+    LEAVE 160
 6:  mov     $LANTERN_INVALID_VALIDATOR_INDEX, %eax
-    LEAVE 96
+    LEAVE 160
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
-    LEAVE 96
+    LEAVE 160
+30: mov     (%r12), %rcx                    # the three points at the end of scratch
+    MOVQ    %rdx, LANTERN_SCRATCH_FIXED + 3 * 144
+    cmp     %rdx, %rcx
+    jb      9b
+    sub     $(3 * 144), %rcx
+    lea     (%r12,%rcx), %rdx
+    mov     %rdx, S7(%rsp)
+    mov     %rcx, (%r12)
+    jmp     4b
+40: movq    $0, S9(%rsp)                    # the sum of the keys' points
+41: mov     S9(%rsp), %rcx
+    cmp     %r15, %rcx
+    jae     45f
+    mov     (%r14,%rcx,8), %rax
+    mov     %rax, %rdi
+    shl     $7, %rdi
+    add     BeaconState_validators(%rbx), %rdi
+    add     %rbx, %rdi
+    add     $Validator_pubkey, %rdi         # the key's 48 bytes
+    mov     %rdi, (L + 144)(%rsp)
+    mov     S8(%rsp), %rdx
+    cmp     PubkeyCache_validators(%rdx), %rax
+    jae     43f
+    imul    $PubkeyEntry__mem, %rax, %rsi   # the entry of the index
+    lea     PubkeyCache_entries(%rdx,%rsi), %rsi
+    mov     %rsi, (L + 152)(%rsp)
+    mov     PubkeyEntry_status(%rsi), %rcx
+    test    %rcx, %rcx
+    jz      42f
+    lea     PubkeyEntry_pubkey(%rsi), %r9   # the same 48 bytes
+    NE32    %rdi, %r9, 42f
+    movdqu  32(%rdi), %xmm0
+    movdqu  32(%r9), %xmm1
+    pcmpeqb %xmm1, %xmm0
+    pmovmskb %xmm0, %r11d
+    cmp     $0xffff, %r11d
+    jne     42f
+    cmp     $1, %rcx
+    jne     8b                              # an invalid key: False
+    lea     PubkeyEntry_point(%rsi), %rsi
+    jmp     44f
+42: lea     PubkeyEntry_point(%rsi), %rsi   # decode the key into the entry, with its bytes
+    CALL_GLOBAL crypto_bls_g1_decode
+    mov     (L + 152)(%rsp), %rsi
+    mov     $2, %ecx                        # invalid: no point, or the point at infinity
+    test    %rax, %rax
+    jnz     421f
+    mov     (PubkeyEntry_point + 96)(%rsi), %rax
+    or      (PubkeyEntry_point + 104)(%rsi), %rax
+    or      (PubkeyEntry_point + 112)(%rsi), %rax
+    or      (PubkeyEntry_point + 120)(%rsi), %rax
+    or      (PubkeyEntry_point + 128)(%rsi), %rax
+    or      (PubkeyEntry_point + 136)(%rsi), %rax
+    jz      421f
+    mov     $1, %ecx
+421: mov    (L + 144)(%rsp), %rdi
+    movdqu  (%rdi), %xmm0
+    movdqu  16(%rdi), %xmm1
+    movdqu  32(%rdi), %xmm2
+    movdqu  %xmm0, PubkeyEntry_pubkey(%rsi)
+    movdqu  %xmm1, (PubkeyEntry_pubkey + 16)(%rsi)
+    movdqu  %xmm2, (PubkeyEntry_pubkey + 32)(%rsi)
+    mov     %rcx, PubkeyEntry_status(%rsi)
+    cmp     $1, %rcx
+    jne     8b
+    lea     PubkeyEntry_point(%rsi), %rsi
+    jmp     44f
+43: mov     S7(%rsp), %rsi                  # an index past the cache: the third point
+    add     $288, %rsi
+    CALL_GLOBAL crypto_bls_g1_decode
+    test    %rax, %rax
+    jnz     8b
+    mov     S7(%rsp), %rsi
+    add     $288, %rsi
+    mov     96(%rsi), %rax
+    or      104(%rsi), %rax
+    or      112(%rsi), %rax
+    or      120(%rsi), %rax
+    or      128(%rsi), %rax
+    or      136(%rsi), %rax
+    jz      8b
+44: cmpq    $0, S9(%rsp)                    # the sum takes the point rsi
+    jne     441f
+    mov     S7(%rsp), %rdi
+    mov     $144, %edx
+    call    lantern_copy
+    jmp     442f
+441: mov    S7(%rsp), %rdi
+    lea     144(%rdi), %rdx
+    CALL_GLOBAL crypto_bls_g1_add
+    mov     S7(%rsp), %rdi
+    lea     144(%rdi), %rsi
+    mov     $144, %edx
+    call    lantern_copy
+442: incq   S9(%rsp)
+    jmp     41b
+45: mov     S7(%rsp), %rdi                  # bls.Verify of the sum's compressed form
+    lea     (L + 96)(%rsp), %rsi
+    CALL_GLOBAL crypto_bls_g1_compress
+    lea     (L + 96)(%rsp), %rdi
+    lea     (L + 40)(%rsp), %rsi
+    lea     IndexedAttestation_signature(%rbp), %rdx
+    mov     %r12, %rcx
+    mov     %r13, %r8
+    CALL_GLOBAL crypto_bls_verify
+    LEAVE 160
 SPEC_END is_valid_indexed_attestation
 
 .if FORK >= FORK_ALTAIR
@@ -987,8 +1130,9 @@ SPEC_FUNCTION process_attestation
     mov     %rax, (%r13)
     mov     %rbx, %rdi
     mov     S9(%rsp), %rsi
-    mov     %r13, %rdx
-    lea     (L + 24)(%rsp), %rcx
+    mov     %r13, %rcx
+    lea     (L + 24)(%rsp), %r8
+    mov     CONFIG_PUBKEY_CACHE(%r12), %rdx
     call    lantern_is_valid_indexed_attestation
     CHECK_STATUS %r14, 7f, 8f
     mov     $LANTERN_INVALID_ATTESTATION, %eax
@@ -1239,8 +1383,10 @@ SPEC_FUNCTION process_attestation
     mov     %rax, (%r12)
     mov     %rbx, %rdi
     mov     (L + 144)(%rsp), %rsi
-    mov     %r12, %rdx
-    lea     (L + 40)(%rsp), %rcx
+    mov     %r12, %rcx
+    lea     (L + 40)(%rsp), %r8
+    mov     (L + 184)(%rsp), %rdx
+    mov     CONFIG_PUBKEY_CACHE(%rdx), %rdx
     call    lantern_is_valid_indexed_attestation
     CHECK_STATUS %r13, 7f, 8f
     mov     $LANTERN_INVALID_ATTESTATION, %eax

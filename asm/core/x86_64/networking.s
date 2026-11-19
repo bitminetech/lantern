@@ -1379,8 +1379,9 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     mov     %rax, (%r15)
     mov     %r14, %rdi
     mov     (L + 80)(%rsp), %rsi
-    mov     %r15, %rdx
-    lea     (L + 96)(%rsp), %rcx
+    mov     %r15, %rcx
+    lea     (L + 96)(%rsp), %r8
+    mov     (Store_config + CONFIG_PUBKEY_CACHE)(%rbp), %rdx
     call    lantern_is_valid_indexed_attestation
     CHECK_RESULT L, 7f, 8f
     cmpq    $0, (L + 96)(%rsp)
@@ -1912,8 +1913,9 @@ SPEC_FUNCTION validate_attester_slashing_gossip
     mov     %rax, (%r15)
     mov     %r14, %rdi
     mov     %r13, %rsi
-    mov     %r15, %rdx
-    lea     (L + 56)(%rsp), %rcx
+    mov     %r15, %rcx
+    lea     (L + 56)(%rsp), %r8
+    mov     (Store_config + CONFIG_PUBKEY_CACHE)(%rbp), %rdx
     call    lantern_is_valid_indexed_attestation
     CHECK_RESULT L, 7f, 8f
     cmpq    $0, (L + 56)(%rsp)

@@ -1309,8 +1309,9 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     str     x9, [x24]
     mov     x0, x23
     ldr     x1, [sp, #(L + 72)]
-    mov     x2, x24
-    add     x3, sp, #(L + 88)
+    mov     x3, x24
+    add     x4, sp, #(L + 88)
+    ldr     x2, [x20, #(Store_config + CONFIG_PUBKEY_CACHE)]
     bl      lantern_is_valid_indexed_attestation
     CHECK_STATUS x25, 7f, 8f
     ldr     x9, [sp, #(L + 88)]
@@ -1838,8 +1839,9 @@ SPEC_FUNCTION validate_attester_slashing_gossip
     str     x9, [x24]
     mov     x0, x23
     mov     x1, x22
-    mov     x2, x24
-    add     x3, sp, #(L + 40)
+    mov     x3, x24
+    add     x4, sp, #(L + 40)
+    ldr     x2, [x20, #(Store_config + CONFIG_PUBKEY_CACHE)]
     bl      lantern_is_valid_indexed_attestation
     CHECK_STATUS x25, 7f, 8f
     ldr     x9, [sp, #(L + 40)]

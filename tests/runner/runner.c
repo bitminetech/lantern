@@ -118,6 +118,8 @@ ABI uint64_t LF(state_cache_init)(const void *validators, void *cache);
 ABI uint64_t LF(state_root)(const void *state, void *cache, void *scratch, void *out);
 ABI uint64_t LF(committee_cache_size)(const void *validators, void *size);
 ABI uint64_t LF(committee_cache_init)(const void *validators, void *cache);
+ABI uint64_t LF(pubkey_cache_size)(const void *validators, void *size);
+ABI uint64_t LF(pubkey_cache_init)(const void *validators, void *cache);
 
 ABI uint64_t LF(compute_shuffled_permutation)(const void *index_count, const void *seed, void *scratch, void *out);
 ABI uint64_t LF(compute_shuffled_index)(const void *index, const void *index_count, const void *seed, void *scratch,
@@ -868,7 +870,8 @@ static const struct {
 #define CONFIG_BLOB_SCHEDULE 392
 #define CONFIG_STATE_CACHE (392 + 16 * 32 + 152)
 #define CONFIG_COMMITTEE_CACHE (392 + 16 * 32 + 160)
-#define CONFIG_SIZE (392 + 16 * 32 + 168)
+#define CONFIG_PUBKEY_CACHE (392 + 16 * 32 + 168)
+#define CONFIG_SIZE (392 + 16 * 32 + 176)
 
 static uint8_t config[CONFIG_SIZE];
 
@@ -962,6 +965,16 @@ static void load_config(const char *dir) {
         exit(2);
     }
     wr64(config + CONFIG_COMMITTEE_CACHE, (uint64_t)(uintptr_t)committee_cache);
+#ifndef BLS_OFF /* the spec's tests with signatures off check no key: no PubkeyCache there (block-processing.md) */
+    CALL(LF(pubkey_cache_size), &committee_validators, &csize);
+    uint8_t *pubkey_cache = buffer(csize);
+    wr64(pubkey_cache, csize);
+    if (CALL(LF(pubkey_cache_init), &committee_validators, pubkey_cache) != 0) {
+        fprintf(stderr, "pubkey_cache_init status\n");
+        exit(2);
+    }
+    wr64(config + CONFIG_PUBKEY_CACHE, (uint64_t)(uintptr_t)pubkey_cache);
+#endif
     memcpy(base_config, config, CONFIG_SIZE);
     free(f.data);
 }
@@ -6590,7 +6603,7 @@ static void run_db_index(const char *file, case_file *f) {
 /* ---------------------------------------------------------------- Application */
 
 #define INVALID_OPTION 61
-#define APP_OPTIONS_SIZE 144
+#define APP_OPTIONS_SIZE 152
 
 /*
  * app-options: lantern_app_options over each case's command line (tests/generator/app.py), as an
@@ -6602,6 +6615,7 @@ static void run_app_options(const char *file, case_file *f) {
                                   "checkpoint_block"};
     static const uint64_t text_at[] = {0, 16, 32, 48, 96, 112, 128};
     static const char *numbers[] = {"port", "enr_address", "http_port", "target_peers"};
+    static const uint64_t number_at[] = {64, 72, 80, 88, 144};
     for (uint64_t i = 0; i < f->count; i++) {
         const char *name, *why = NULL;
         uint64_t len, total = 0, alen;
@@ -6643,7 +6657,8 @@ static void run_app_options(const char *file, case_file *f) {
                 if (got != wl || !inside || (wl && memcmp(list + start, w, (size_t)wl))) why = texts[t];
             }
             for (int t = 0; t < 4 && !why; t++)
-                if (rd64(opts + 64 + 8 * t) != tv_u64(tv_get(want, numbers[t]))) why = numbers[t];
+                if (rd64(opts + number_at[t]) != tv_u64(tv_get(want, numbers[t]))) why = numbers[t];
+            if (!why && rd64(opts + number_at[4]) != tv_u64(tv_get(want, "log_level"))) why = "log_level";
         } else if (st != INVALID_OPTION) why = "status is not LANTERN_INVALID_OPTION";
         else if (fault != tv_u64(wfault)) why = "fault is not the case's index";
         report(file, name, len, !why, why);

@@ -8,6 +8,7 @@
 .set APP_OPTION_PORT, 2                 /* 1 to 65535 */
 .set APP_OPTION_PEERS, 3                /* 1 to APP_MAX_TARGET_PEERS */
 .set APP_OPTION_ADDRESS, 4              /* an IPv4 address */
+.set APP_OPTION_LEVEL, 5                /* error, warn, info or debug: 0 to 3 */
 .set APP_OPTION_BYTES, 48
 
     .p2align 3
@@ -45,6 +46,20 @@ app_options:
     .quad 16, AppOptions_checkpoint_block, APP_OPTION_TEXT
     .ascii "checkpoint-block"
     .space 24 - 16
+    .quad 9, AppOptions_log_level, APP_OPTION_LEVEL
+    .ascii "log-level"
+    .space 24 - 9
 app_options_end:
+app_levels:                             /* the name of each log level in 8 bytes, then their lengths */
+    .ascii "error"
+    .space 3
+    .ascii "warn"
+    .space 4
+    .ascii "info"
+    .space 4
+    .ascii "debug"
+    .space 3
+app_level_lengths:
+    .byte 5, 4, 4, 5
 app_http:
     .ascii "http://"

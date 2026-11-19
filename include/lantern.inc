@@ -150,7 +150,18 @@
 .set CONFIG_MESSAGE_DOMAIN_VALID_SNAPPY, 392 + 16 * 32 + 144     /* DomainType, 4 bytes */
 .set CONFIG_STATE_CACHE, 392 + 16 * 32 + 152    /* the address of a StateCache, or 0 (docs/reference/state.md) */
 .set CONFIG_COMMITTEE_CACHE, 392 + 16 * 32 + 160    /* the address of a CommitteeCache, or 0 (block-processing.md) */
-.set CONFIG_SIZE, 392 + 16 * 32 + 168
+.set CONFIG_PUBKEY_CACHE, 392 + 16 * 32 + 168   /* the address of a PubkeyCache, or 0 (block-processing.md) */
+.set CONFIG_SIZE, 392 + 16 * 32 + 176
+
+/* PubkeyCache and PubkeyEntry (docs/reference/block-processing.md). */
+.set PubkeyCache_size, 0
+.set PubkeyCache_validators, 8
+.set PubkeyCache_entries, 16
+.set PUBKEY_CACHE_FIXED, 16
+.set PubkeyEntry_status, 0
+.set PubkeyEntry_pubkey, 8
+.set PubkeyEntry_point, 56
+.set PubkeyEntry__mem, 200
 
 /* CommitteeCache and CommitteeEntry (docs/reference/block-processing.md). */
 .set CommitteeCache_size, 0
@@ -941,10 +952,12 @@
 .set AppOptions_data_dir, 96
 .set AppOptions_checkpoint_state, 112
 .set AppOptions_checkpoint_block, 128
-.set AppOptions__size, 144
+.set AppOptions_log_level, 144          /* 0 error, 1 warn, 2 info, 3 debug */
+.set AppOptions__size, 152
 .set APP_DEFAULT_PORT, 9000
 .set APP_DEFAULT_HTTP_PORT, 5052
 .set APP_DEFAULT_TARGET_PEERS, 64
+.set APP_DEFAULT_LOG_LEVEL, 2           /* info */
 .set APP_MAX_TARGET_PEERS, 1024
 
 .if DB_SEGMENT_SLOTS != 1 << DB_SEGMENT_SHIFT

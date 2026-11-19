@@ -10,6 +10,7 @@
 .set F_CHILD, 2            /* has a child */
 .set F_VIABLE, 4           /* in get_filtered_node_tree */
 .set F_CHILD_VIABLE, 8     /* has a child in get_filtered_node_tree */
+.set F_OVERFLOW, 16        /* its weight passed 2^64 - 1 */
 
 .if BlockNode__mem != 216 || StoreValidator__mem != 32 || Checkpoint__mem != 40 || Checkpoint_root != 8
 .error "the fork choice code assumes the layouts of include/lantern.inc"
@@ -471,20 +472,114 @@ LOCAL_FUNCTION filter_tree
 END_FUNCTION filter_tree
 
 /*
- * L0: x0 = status, x1 = get_head(store x0), with scratch x1 of S(1) for the node count.
- * x19 store, x20 flags, x21 node count, x22 justified node, x24 i, x25 head, x26 best child,
- * x27 best weight, x28 nodes.
+ * L0: get_head(store x0) with scratch x1 of S(2) for the node count: x0 = status, x1 = the head
+ * node. The weights of all nodes at once (fork-choice.md, lantern_get_head): each latest message's
+ * balance on its node, the boost on the boost node, then each node's weight onto its parent's.
+ * x19 store, x20 flags, x21 node count, x22 justified node, x23 the weights, x24 i, x25 head,
+ * x26 the best child, x27 its weight, x28 nodes. Locals: L the status of the boost.
  */
 LOCAL_FUNCTION head
     ENTER 16
     mov     x19, x0
+    LDQ     x21, x19, Store_blocks + 8
+    ldr     x9, [x1]                        /* the weights: 8 bytes a node, before filter_tree's flags */
+    lsl     x10, x21, #4
+    add     x11, x10, #LIST_FIXED
+    MOVQ    x12, LANTERN_SCRATCH_FIXED
+    add     x11, x11, x12
+    cmp     x9, x11
+    b.lo    9f
+    sub     x9, x9, x10
+    add     x23, x1, x9
+    mov     x0, x19
     bl      filter_tree                     /* nodes = get_filtered_node_tree(store) */
     cbnz    x0, 7f
     mov     x20, x1
     mov     x22, x2
-    LDQ     x21, x19, Store_blocks + 8
     LDQ     x28, x19, Store_blocks
     add     x28, x19, x28
+    mov     x0, x23
+    lsl     x1, x21, #3
+    bl      lantern_zero
+    PART    x5, x6, x19, Store_validators   /* each counted latest message, on its node */
+    mov     x3, #BlockNode__mem
+1:  cbz     x6, 3f
+    sub     x6, x6, #1
+    ldr     x8, [x5, #StoreValidator_flags]
+    and     x8, x8, #(STORE_ACTIVE_UNSLASHED | STORE_EQUIVOCATING)
+    cmp     x8, #STORE_ACTIVE_UNSLASHED     /* unslashed and active, not equivocating */
+    b.ne    2f
+    ldr     x9, [x5, #StoreValidator_latest_node]
+    cmn     x9, #1
+    b.eq    2f
+    madd    x10, x9, x3, x28                /* not a vote for an INVALIDATED block (optimistic sync) */
+    ldr     x11, [x10, #BlockNode_payload_status]
+    cmp     x11, #PAYLOAD_STATUS_INVALIDATED
+    b.eq    2f
+    ldr     x10, [x5, #StoreValidator_effective_balance]
+    ldr     x11, [x23, x9, lsl #3]
+    adds    x11, x11, x10
+    b.cc    11f
+    ldr     x12, [x20, x9, lsl #3]
+    orr     x12, x12, #F_OVERFLOW
+    str     x12, [x20, x9, lsl #3]
+11: str     x11, [x23, x9, lsl #3]
+2:  add     x5, x5, #StoreValidator__mem
+    b       1b
+3:  str     xzr, [sp, #L]                   /* the proposer boost, on its node */
+    add     x1, x19, #Store_proposer_boost_root
+    ldp     x9, x10, [x1]
+    ldp     x11, x12, [x1, #16]
+    orr     x9, x9, x10
+    orr     x11, x11, x12
+    orr     x9, x9, x11
+    cbz     x9, 4f
+    mov     x0, x19
+    bl      find_node
+    cmn     x0, #1
+    b.ne    31f
+    mov     x9, #LANTERN_INVALID_UNKNOWN_BLOCK
+    str     x9, [sp, #L]
+    b       4f
+31: mov     x24, x0
+    mov     x9, #BlockNode__mem             /* no boost from an INVALIDATED block (optimistic sync) */
+    madd    x9, x24, x9, x28
+    ldr     x9, [x9, #BlockNode_payload_status]
+    cmp     x9, #PAYLOAD_STATUS_INVALIDATED
+    b.eq    4f
+    mov     x0, x19                         /* get_proposer_score(store) */
+    LDQ     x1, x19, Store_config + CONFIG_PROPOSER_SCORE_BOOST
+    bl      committee_fraction
+    cbz     x0, 32f
+    str     x0, [sp, #L]
+    b       4f
+32: ldr     x11, [x23, x24, lsl #3]
+    adds    x11, x11, x1
+    b.cc    33f
+    ldr     x12, [x20, x24, lsl #3]
+    orr     x12, x12, #F_OVERFLOW
+    str     x12, [x20, x24, lsl #3]
+33: str     x11, [x23, x24, lsl #3]
+4:  sub     x24, x21, #1                    /* from the last node to the first: onto the parent */
+    mov     x3, #BlockNode__mem
+41: cbz     x24, 60f
+    madd    x10, x24, x3, x28
+    ldr     x11, [x10, #BlockNode_parent]
+    cmn     x11, #1
+    b.eq    44f
+    ldr     x12, [x23, x24, lsl #3]
+    ldr     x13, [x23, x11, lsl #3]
+    ldr     x14, [x20, x24, lsl #3]
+    ldr     x15, [x20, x11, lsl #3]
+    and     x14, x14, #F_OVERFLOW
+    orr     x15, x15, x14
+    adds    x13, x13, x12
+    b.cc    43f
+    orr     x15, x15, #F_OVERFLOW
+43: str     x13, [x23, x11, lsl #3]
+    str     x15, [x20, x11, lsl #3]
+44: sub     x24, x24, #1
+    b       41b
 60: mov     x25, x22                        /* head = the justified node */
 61: mov     x26, #-1                        /* the best child so far */
     mov     x27, #0
@@ -498,10 +593,11 @@ LOCAL_FUNCTION head
     b.ne    64f
     ldr     x12, [x20, x24, lsl #3]
     tbz     x12, #2, 64f                    /* a child in nodes */
-    mov     x0, x19
-    mov     x1, x24
-    bl      weight
+    ldr     x0, [sp, #L]                    /* its weight: a failure of the boost, or a sum past 2^64 - 1 */
     cbnz    x0, 7f
+    tst     x12, #F_OVERFLOW
+    b.ne    8f
+    ldr     x1, [x23, x24, lsl #3]
     cmn     x26, #1
     b.eq    63f
     cmp     x1, x27                         /* max by (weight, root) */
@@ -522,6 +618,10 @@ LOCAL_FUNCTION head
 66: mov     x1, x25
     mov     x0, #LANTERN_OK
 7:  LEAVE 16
+8:  mov     x0, #LANTERN_INVALID_OVERFLOW
+    LEAVE 16
+9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
+    LEAVE 16
 END_FUNCTION head
 
 /* x19 store, x20 out. */
@@ -985,8 +1085,9 @@ SPEC_FUNCTION on_attestation
     str     x25, [x23]                      /* assert is_valid_indexed_attestation(target_state, indexed_attestation) */
     mov     x0, x22
     mov     x1, x26
-    mov     x2, x23
-    add     x3, sp, #L
+    mov     x3, x23
+    add     x4, sp, #L
+    ldr     x2, [x19, #(Store_config + CONFIG_PUBKEY_CACHE)]
     bl      lantern_is_valid_indexed_attestation
     CHECK_STATUS x24, 7f, 8f
     ldr     x9, [sp, #L]
@@ -1046,8 +1147,9 @@ SPEC_FUNCTION on_attester_slashing
     cbz     x9, 6f
     mov     x0, x21                         /* assert is_valid_indexed_attestation(state, attestation_1) */
     mov     x1, x24
-    mov     x2, x22
-    add     x3, sp, #L
+    mov     x3, x22
+    add     x4, sp, #L
+    ldr     x2, [x19, #(Store_config + CONFIG_PUBKEY_CACHE)]
     bl      lantern_is_valid_indexed_attestation
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    7f
@@ -1057,8 +1159,9 @@ SPEC_FUNCTION on_attester_slashing
     str     x26, [x22]                      /* and attestation_2 */
     mov     x0, x21
     mov     x1, x25
-    mov     x2, x22
-    add     x3, sp, #L
+    mov     x3, x22
+    add     x4, sp, #L
+    ldr     x2, [x19, #(Store_config + CONFIG_PUBKEY_CACHE)]
     bl      lantern_is_valid_indexed_attestation
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    7f

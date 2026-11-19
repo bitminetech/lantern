@@ -97,7 +97,7 @@ LOCAL_FUNCTION app_map
 END_FUNCTION app_map
 
 /*
- * L1: a StateCache and a CommitteeCache for rdi / 121 + 65536 validators (rdi the anchor file's
+ * L1: a StateCache, a CommitteeCache and a PubkeyCache for rdi / 121 + 65536 validators (rdi the anchor file's
  * bytes), at CONFIG_STATE_CACHE and CONFIG_COMMITTEE_CACHE of the app's config; none with no
  * memory. rbx the app.
  * Locals: rsp+0 validators, rsp+8 its bytes.
@@ -140,7 +140,22 @@ LOCAL_FUNCTION app_state_cache
     mov     %rsp, %rdi
     mov     APP_FORK(%rbx), %r10
     FORK_CALL committee_cache_init
-2:  xor     %eax, %eax
+2:  mov     %rsp, %rdi                      # the PubkeyCache, for as many validators
+    lea     8(%rsp), %rsi
+    mov     APP_FORK(%rbx), %r10
+    FORK_CALL pubkey_cache_size
+    mov     8(%rsp), %rdi
+    call    app_map
+    test    %rax, %rax
+    jz      3f
+    mov     8(%rsp), %rcx
+    mov     %rcx, (%rax)
+    mov     %rax, (APP_CONFIG + CONFIG_PUBKEY_CACHE)(%rbx)
+    mov     %rax, %rsi
+    mov     %rsp, %rdi
+    mov     APP_FORK(%rbx), %r10
+    FORK_CALL pubkey_cache_init
+3:  xor     %eax, %eax
     UNFRAME 16
 END_FUNCTION app_state_cache
 
@@ -175,14 +190,163 @@ LOCAL_FUNCTION app_alloc
 1:  LEAVE 0
 END_FUNCTION app_alloc
 
-/* L0: the log line starts with "lantern: ". Uses rax, rcx, rdx, rsi, rdi. */
+/* L0: the log line starts, with room for the time and the level that app_line_end writes. */
 LOCAL_FUNCTION app_line_start
     UNWIND_END_PROLOGUE
-    movq    $0, (APP_LINE + 16)(%rbx)
-    ADDRESS %rdi, app_m_prefix
-    mov     $app_m_prefix_len, %esi
-    jmp     app_line_text
+    movq    $APP_LOG_PREFIX, (APP_LINE + 16)(%rbx)
+    ret
 END_FUNCTION app_line_start
+
+/* L0: rdx digits of rdi, before the byte at rsi. A leaf; uses rax, rcx, rdx, rsi, r8. */
+LOCAL_FUNCTION app_digits
+    UNWIND_END_PROLOGUE
+    mov     %rdx, %r8
+    mov     %rdi, %rax
+    mov     $10, %ecx
+1:  xor     %edx, %edx
+    div     %rcx
+    add     $0x30, %dl
+    dec     %rsi
+    mov     %dl, (%rsi)
+    dec     %r8
+    jnz     1b
+    ret
+END_FUNCTION app_digits
+
+/*
+ * L1: the UTC time of the Unix milliseconds rdi, as YYYY-MM-DD HH:MM:SS.mmm, in the 23 bytes at
+ * rsi (civil_from_days of the days since 1970). Locals: rsp+0 out, +8 the milliseconds of the
+ * day, +16 year, +24 month, +32 day.
+ */
+LOCAL_FUNCTION app_time_text
+    FRAME 48
+    mov     %rsi, (%rsp)
+    mov     %rdi, %rax
+    xor     %edx, %edx
+    mov     $86400000, %ecx
+    div     %rcx                            # days, and the milliseconds of the day
+    mov     %rdx, 8(%rsp)
+    add     $719468, %rax                   # z
+    xor     %edx, %edx
+    mov     $146097, %ecx
+    div     %rcx
+    mov     %rax, %r8                       # era
+    mov     %rdx, %r9                       # day of the era
+    mov     %r9, %rax
+    xor     %edx, %edx
+    mov     $1460, %ecx
+    div     %rcx
+    mov     %r9, %r10
+    sub     %rax, %r10
+    mov     %r9, %rax
+    xor     %edx, %edx
+    mov     $36524, %ecx
+    div     %rcx
+    add     %rax, %r10
+    mov     %r9, %rax
+    xor     %edx, %edx
+    mov     $146096, %ecx
+    div     %rcx
+    sub     %rax, %r10
+    mov     %r10, %rax
+    xor     %edx, %edx
+    mov     $365, %ecx
+    div     %rcx
+    mov     %rax, %r10                      # year of the era
+    imul    $400, %r8, %r11
+    add     %r10, %r11                      # the year, from March
+    imul    $365, %r10, %rsi
+    mov     %r10, %rcx
+    shr     $2, %rcx
+    add     %rcx, %rsi
+    mov     %r10, %rax
+    xor     %edx, %edx
+    mov     $100, %ecx
+    div     %rcx
+    sub     %rax, %rsi
+    mov     %r9, %rdi
+    sub     %rsi, %rdi                      # day of the year, from March 1
+    imul    $5, %rdi, %rax
+    add     $2, %rax
+    xor     %edx, %edx
+    mov     $153, %ecx
+    div     %rcx
+    mov     %rax, %r8                       # month, from March
+    imul    $153, %r8, %rax
+    add     $2, %rax
+    xor     %edx, %edx
+    mov     $5, %ecx
+    div     %rcx
+    sub     %rax, %rdi
+    inc     %rdi                            # day
+    mov     %rdi, 32(%rsp)
+    lea     3(%r8), %rax
+    lea     -9(%r8), %rcx
+    cmp     $10, %r8
+    cmovae  %rcx, %rax                      # month
+    mov     %rax, 24(%rsp)
+    lea     1(%r11), %rcx
+    cmp     $2, %rax
+    cmovbe  %rcx, %r11                      # the year: January and February are of the next
+    mov     %r11, 16(%rsp)
+    mov     (%rsp), %rsi                    # the separators
+    movb    $0x2d, 4(%rsi)
+    movb    $0x2d, 7(%rsi)
+    movb    $0x20, 10(%rsi)
+    movb    $0x3a, 13(%rsi)
+    movb    $0x3a, 16(%rsi)
+    movb    $0x2e, 19(%rsi)
+    mov     16(%rsp), %rdi                  # the digits, each field from its end
+    add     $4, %rsi
+    mov     $4, %edx
+    call    app_digits
+    mov     24(%rsp), %rdi
+    mov     (%rsp), %rsi
+    add     $7, %rsi
+    mov     $2, %edx
+    call    app_digits
+    mov     32(%rsp), %rdi
+    mov     (%rsp), %rsi
+    add     $10, %rsi
+    mov     $2, %edx
+    call    app_digits
+    mov     8(%rsp), %rax                   # hours
+    xor     %edx, %edx
+    mov     $3600000, %ecx
+    div     %rcx
+    mov     %rdx, 8(%rsp)
+    mov     %rax, %rdi
+    mov     (%rsp), %rsi
+    add     $13, %rsi
+    mov     $2, %edx
+    call    app_digits
+    mov     8(%rsp), %rax                   # minutes
+    xor     %edx, %edx
+    mov     $60000, %ecx
+    div     %rcx
+    mov     %rdx, 8(%rsp)
+    mov     %rax, %rdi
+    mov     (%rsp), %rsi
+    add     $16, %rsi
+    mov     $2, %edx
+    call    app_digits
+    mov     8(%rsp), %rax                   # seconds
+    xor     %edx, %edx
+    mov     $1000, %ecx
+    div     %rcx
+    mov     %rdx, 8(%rsp)
+    mov     %rax, %rdi
+    mov     (%rsp), %rsi
+    add     $19, %rsi
+    mov     $2, %edx
+    call    app_digits
+    mov     8(%rsp), %rdi                   # milliseconds
+    mov     (%rsp), %rsi
+    add     $23, %rsi
+    mov     $3, %edx
+    call    app_digits
+    UNFRAME 48
+END_FUNCTION app_time_text
 
 /* L0: the rsi bytes at rdi join the log line, as far as it has room. Uses rax, rcx, rdx, rsi, rdi. */
 LOCAL_FUNCTION app_line_text
@@ -257,19 +421,115 @@ LOCAL_FUNCTION app_line_hex
 2:  UNFRAME 32
 END_FUNCTION app_line_hex
 
-/* L1: the log line and an LF go to stream rdi: 1 the standard output, 2 the standard error. */
+/*
+ * L1: the log line of kind rdi (APP_LOG_INFO, ERROR, WARN or DEBUG), when its level is at most the
+ * log level: its time and level before it, an LF after it, to the standard error for ERROR and
+ * WARN, else the standard output. Locals: rsp+0 the level, +8 the time, +16 an LF.
+ */
 LOCAL_FUNCTION app_line_end
-    FRAME 16
-    mov     %rdi, APP_STREAM(%rbx)
-    movb    $10, (%rsp)
-    mov     %rsp, %rdi
+    FRAME 32
+    ADDRESS %rax, app_log_rank
+    movzbl  (%rax,%rdi), %eax
+    cmp     (APP_OPTIONS + AppOptions_log_level)(%rbx), %rax
+    ja      9f
+    mov     $2, %ecx
+    mov     $1, %edx
+    cmp     $1, %rax
+    cmova   %rdx, %rcx
+    mov     %rcx, APP_STREAM(%rbx)
+    mov     %rax, (%rsp)
+    lea     8(%rsp), %rdi
+    CALL_GLOBAL lantern_shell_time_ms
+    mov     8(%rsp), %rdi
+    lea     (APP_LINE + 24)(%rbx), %rsi
+    call    app_time_text
+    lea     (APP_LINE + 24)(%rbx), %rdi
+    movb    $0x20, 23(%rdi)
+    movb    $0x20, 29(%rdi)
+    mov     (%rsp), %rax
+    ADDRESS %rcx, app_log_names
+    mov     (%rcx,%rax,8), %edx
+    mov     %edx, 24(%rdi)
+    movb    4(%rcx,%rax,8), %dl
+    mov     %dl, 28(%rdi)
+    movb    $10, 16(%rsp)
+    lea     16(%rsp), %rdi
     mov     $1, %esi
     call    app_line_text
     lea     APP_STREAM(%rbx), %rdi
     lea     APP_LINE(%rbx), %rsi
     CALL_GLOBAL lantern_shell_write
-    UNFRAME 16
+9:  UNFRAME 32
 END_FUNCTION app_line_end
+
+/*
+ * L1: the log lines of a work that ran (app.md, the log): DEBUG work <kind> result <n>; for a
+ * block's import, INFO block <slot> imported, <a> attestations, or WARN block <slot> not imported:
+ * result <n>. rdi its kind, rsi its data entry or 0. Locals: rsp+0 kind, +8 entry, +16 result,
+ * +24 slot.
+ */
+LOCAL_FUNCTION app_log_work
+    FRAME 32
+    mov     %rdi, (%rsp)
+    mov     %rsi, 8(%rsp)
+    mov     APP_WORK_EVENT(%rbx), %rax
+    mov     NodeEvent_result(%rax), %rax
+    mov     %rax, 16(%rsp)
+    call    app_line_start
+    ADDRESS %rdi, app_m_log_work
+    mov     $app_m_log_work_len, %esi
+    call    app_line_text
+    mov     (%rsp), %rdi
+    call    app_line_u64
+    ADDRESS %rdi, app_m_log_result
+    mov     $app_m_log_result_len, %esi
+    call    app_line_text
+    mov     16(%rsp), %rdi
+    call    app_line_u64
+    mov     $APP_LOG_DEBUG, %edi
+    call    app_line_end
+    cmpq    $NODE_WORK_IMPORT_BLOCK, (%rsp)
+    jne     9f
+    cmpq    $LANTERN_NEED_JUSTIFIED_STATE, 16(%rsp)
+    je      9f
+    mov     8(%rsp), %rax
+    test    %rax, %rax
+    jz      9f
+    mov     8(%rax), %rax                   # the block's bytes: its slot at byte 100
+    cmpq    $108, 16(%rax)
+    jb      9f
+    mov     8(%rax), %rcx
+    mov     100(%rax,%rcx), %rcx
+    mov     %rcx, 24(%rsp)
+    call    app_line_start
+    ADDRESS %rdi, app_m_log_block
+    mov     $app_m_log_block_len, %esi
+    call    app_line_text
+    mov     24(%rsp), %rdi
+    call    app_line_u64
+    cmpq    $0, 16(%rsp)
+    jne     1f
+    ADDRESS %rdi, app_m_log_imported
+    mov     $app_m_log_imported_len, %esi
+    call    app_line_text
+    mov     APP_WORK_EVENT(%rbx), %rax
+    mov     NodeEvent_index(%rax), %rdi
+    call    app_line_u64
+    ADDRESS %rdi, app_m_log_attestations
+    mov     $app_m_log_attestations_len, %esi
+    call    app_line_text
+    mov     $APP_LOG_INFO, %edi
+    call    app_line_end
+    jmp     9f
+1:  ADDRESS %rdi, app_m_log_not
+    mov     $app_m_log_not_len, %esi
+    call    app_line_text
+    mov     16(%rsp), %rdi
+    call    app_line_u64
+    mov     $APP_LOG_WARN, %edi
+    call    app_line_end
+9:  UNFRAME 32
+END_FUNCTION app_log_work
 
 /* L1: the path of the rsi bytes of the name at rdi in the network directory: a ByteList at APP_PATH. */
 LOCAL_FUNCTION app_path
@@ -330,7 +590,7 @@ LOCAL_FUNCTION app_read
     call    app_line_text
     mov     APP_FILE(%rbx), %rdi
     call    app_line_u64
-    mov     $2, %edi
+    mov     $APP_LOG_ERROR, %edi
     call    app_line_end
     mov     $2, %eax
     UNFRAME 0
@@ -441,7 +701,7 @@ LOCAL_FUNCTION app_checkpoint
     ADDRESS %rdi, app_m_short
     mov     $app_m_short_len, %esi
     call    app_line_text
-    mov     $2, %edi
+    mov     $APP_LOG_ERROR, %edi
     call    app_line_end
     jmp     99f
 97: call    app_file_free                   # no memory
@@ -449,7 +709,7 @@ LOCAL_FUNCTION app_checkpoint
     ADDRESS %rdi, app_m_memory
     mov     $app_m_memory_len, %esi
     call    app_line_text
-    mov     $2, %edi
+    mov     $APP_LOG_ERROR, %edi
     call    app_line_end
 98: lea     L(%rsp), %rdi                   # the block file goes
     lea     (L + 8)(%rsp), %rsi
@@ -485,7 +745,7 @@ LOCAL_FUNCTION app_fail_status
     call    app_line_text
     mov     16(%rsp), %rdi
     call    app_line_u64
-    mov     $2, %edi
+    mov     $APP_LOG_ERROR, %edi
     call    app_line_end
     mov     $2, %eax
     UNFRAME 32
@@ -498,7 +758,7 @@ LOCAL_FUNCTION app_no_memory
     ADDRESS %rdi, app_m_memory
     mov     $app_m_memory_len, %esi
     call    app_line_text
-    mov     $2, %edi
+    mov     $APP_LOG_ERROR, %edi
     call    app_line_end
     mov     $2, %eax
     UNFRAME 0
@@ -762,7 +1022,7 @@ LOCAL_FUNCTION app_start
     call    app_line_text
     mov     (APP_ANCHOR + 32)(%rbx), %rdi
     call    app_line_u64
-    mov     $1, %edi
+    mov     $APP_LOG_INFO, %edi
     call    app_line_end
     jmp     14f
 141: call   app_db_scan_all                 # from anchor.ssz: the history's segments to the node
@@ -774,7 +1034,7 @@ LOCAL_FUNCTION app_start
     call    app_line_text
     mov     (APP_ANCHOR + 32)(%rbx), %rdi
     call    app_line_u64
-    mov     $1, %edi
+    mov     $APP_LOG_INFO, %edi
     call    app_line_end
 14:
     lea     APP_SEEN_ROOM(%rbx), %rdi       # the Seen
@@ -852,7 +1112,7 @@ LOCAL_FUNCTION app_start
     lea     APP_ANCHOR(%rbx), %rdi
     mov     $32, %esi
     call    app_line_hex
-    mov     $1, %edi
+    mov     $APP_LOG_INFO, %edi
     call    app_line_end
     xor     %eax, %eax
     LEAVE 16
@@ -868,7 +1128,7 @@ LOCAL_FUNCTION app_start
     jmp     99f
 97: call    app_no_memory
     jmp     99f
-98: mov     $2, %edi
+98: mov     $APP_LOG_ERROR, %edi
     call    app_line_end
 99: mov     $2, %eax
     LEAVE 16
@@ -1311,7 +1571,10 @@ LOCAL_FUNCTION app_work
     test    %rax, %rax
     jnz     91f
     jmp     1b
-8:  mov     APP_WORK_EVENT(%rbx), %rdi      # the WORK_DONE event
+8:  mov     S8(%rsp), %rdi
+    mov     %r15, %rsi
+    call    app_log_work
+    mov     APP_WORK_EVENT(%rbx), %rdi      # the WORK_DONE event
     mov     (%rdi), %rsi
     call    app_event_put
     LEAVE 0
@@ -1520,7 +1783,7 @@ LOCAL_FUNCTION app_db_append
     call    app_line_text
     mov     (L + 24)(%rsp), %rdi
     call    app_line_u64
-    mov     $2, %edi
+    mov     $APP_LOG_ERROR, %edi
     call    app_line_end
     LEAVE 48
 END_FUNCTION app_db_append
@@ -2064,7 +2327,7 @@ LOCAL_FUNCTION app_db_state
     call    app_line_text
     mov     (L + 24)(%rsp), %rdi
     call    app_line_u64
-    mov     $2, %edi
+    mov     $APP_LOG_ERROR, %edi
     call    app_line_end
 98: test    %r14, %r14                      # the bytes' memory goes back
     jz      99f
@@ -2247,7 +2510,7 @@ LOCAL_FUNCTION app_step
     call    app_line_text
     mov     (APP_RESULT + NodeStepResult_short)(%rbx), %rdi
     call    app_line_u64
-    mov     $2, %edi
+    mov     $APP_LOG_ERROR, %edi
     call    app_line_end
     LEAVE 0
 2:  mov     %rax, %rdx                      # a node step: status <n>
@@ -2411,7 +2674,7 @@ LOCAL_FUNCTION app_boot_nodes
     ADDRESS %rdi, app_m_not_enr
     mov     $app_m_not_enr_len, %esi
     call    app_line_text
-    mov     $2, %edi
+    mov     $APP_LOG_ERROR, %edi
     call    app_line_end
     jmp     1b
 9:  LEAVE 16
@@ -2591,7 +2854,7 @@ LOCAL_FUNCTION app_net
     call    app_line_text
     mov     (L + 64)(%rsp), %rdi
     call    app_line_u64
-    mov     $2, %edi
+    mov     $APP_LOG_ERROR, %edi
     call    app_line_end
     mov     $2, %eax
     LEAVE 112
@@ -2608,7 +2871,7 @@ LOCAL_FUNCTION app_net
     call    app_line_text
     mov     (APP_OPTIONS + AppOptions_port)(%rbx), %rdi
     call    app_line_u64
-    mov     $1, %edi
+    mov     $APP_LOG_INFO, %edi
     call    app_line_end
     xor     %eax, %eax
 99: LEAVE 112
@@ -2821,7 +3084,7 @@ LOCAL_FUNCTION app_engine_conf
     ADDRESS %rdi, app_m_hex
     mov     $app_m_hex_len, %esi
     call    app_line_text
-98: mov     $2, %edi
+98: mov     $APP_LOG_ERROR, %edi
     call    app_line_end
 99: mov     $2, %eax
     LEAVE 0
@@ -3228,7 +3491,7 @@ LOCAL_FUNCTION app_dv_start
     call    app_line_text
     mov     (L + 184 + LIBP2P_BR_ERROR)(%rsp), %rdi
     call    app_line_u64
-    mov     $2, %edi
+    mov     $APP_LOG_ERROR, %edi
     call    app_line_end
     mov     $2, %eax
     LEAVE 256
@@ -3434,7 +3697,7 @@ LOCAL_FUNCTION app_discv5
     lea     DISCV5_ACT_RECORD_DATA(%rbp), %rdi
     mov     DISCV5_ACT_RECORD_LEN(%rbp), %rsi
     call    app_line_base64url
-    mov     $1, %edi
+    mov     $APP_LOG_INFO, %edi
     call    app_line_end
     jmp     80f
 72: cmp     $DISCV5_ACTION_WAKEUP, %rax
@@ -3722,7 +3985,7 @@ LOCAL_FUNCTION app_api_start
     lea     (ApiView_peer_id + 8)(%rax), %rdi
     mov     ApiView_peer_id(%rax), %rsi
     call    app_line_text
-    mov     $1, %edi
+    mov     $APP_LOG_INFO, %edi
     call    app_line_end
     xor     %eax, %eax
     LEAVE 208
@@ -3737,7 +4000,7 @@ LOCAL_FUNCTION app_api_start
     call    app_line_text
     mov     (L + 32)(%rsp), %rdi
     call    app_line_u64
-    mov     $2, %edi
+    mov     $APP_LOG_ERROR, %edi
     call    app_line_end
     mov     $2, %eax
     LEAVE 208
@@ -4170,7 +4433,7 @@ LOCAL_FUNCTION app_loop
     mov     APP_NODE(%rbx), %rax
     mov     Node_earliest_slot(%rax), %rdi
     call    app_line_u64
-    mov     $1, %edi
+    mov     $APP_LOG_INFO, %edi
     call    app_line_end
 3:  mov     APP_NODE(%rbx), %rax            # a line when the count of connected peers changes
     mov     (Node_peers + 8)(%rax), %rax
@@ -4183,7 +4446,7 @@ LOCAL_FUNCTION app_loop
     call    app_line_text
     mov     APP_PEERS(%rbx), %rdi
     call    app_line_u64
-    mov     $1, %edi
+    mov     $APP_LOG_INFO, %edi
     call    app_line_end
 4:  mov     (APP_RESULT + 8)(%rbx), %rax    # the wait: to the node's or discv5's wakeup, at most APP_WAIT_MS
     mov     APP_DV_WAKE(%rbx), %rcx
@@ -4231,7 +4494,7 @@ FUNCTION lantern_app_main
     call    app_line_text
     mov     L(%rsp), %rdi
     call    app_line_u64
-    mov     $2, %edi
+    mov     $APP_LOG_ERROR, %edi
     call    app_line_end
     mov     $1, %eax
     LEAVE 16

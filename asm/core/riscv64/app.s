@@ -90,7 +90,7 @@ LOCAL_FUNCTION app_map
 END_FUNCTION app_map
 
 /*
- * L1: a StateCache and a CommitteeCache for a0 / 121 + 65536 validators (a0 the anchor file's
+ * L1: a StateCache, a CommitteeCache and a PubkeyCache for a0 / 121 + 65536 validators (a0 the anchor file's
  * bytes), at CONFIG_STATE_CACHE and CONFIG_COMMITTEE_CACHE of the app's config; none with no
  * memory. s1 the app.
  * Locals: sp+0 validators, sp+8 its bytes.
@@ -134,7 +134,23 @@ LOCAL_FUNCTION app_state_cache
     mv      a0, sp
     LDQ     t6, s1, APP_FORK
     FORK_CALL committee_cache_init
-2:  li      a0, LANTERN_OK
+2:  mv      a0, sp                          # the PubkeyCache, for as many validators
+    addi    a1, sp, 8
+    LDQ     t6, s1, APP_FORK
+    FORK_CALL pubkey_cache_size
+    ld      a0, 8(sp)
+    call    app_map
+    beqz    a0, 3f
+    ld      t0, 8(sp)
+    sd      t0, 0(a0)
+    li      t0, APP_CONFIG + CONFIG_PUBKEY_CACHE
+    add     t0, s1, t0
+    sd      a0, 0(t0)
+    mv      a1, a0
+    mv      a0, sp
+    LDQ     t6, s1, APP_FORK
+    FORK_CALL pubkey_cache_init
+3:  li      a0, LANTERN_OK
     UNFRAME 16
 END_FUNCTION app_state_cache
 
@@ -168,14 +184,148 @@ LOCAL_FUNCTION app_alloc
 1:  LEAVE 0
 END_FUNCTION app_alloc
 
-/* L0: the log line starts with "lantern: ". Uses a0, a1, t0-t3, a7. */
+/* L0: the log line starts, with room for the time and the level that app_line_end writes. Uses t0, a7. */
 LOCAL_FUNCTION app_line_start
     UNWIND_END_PROLOGUE
-    STQ     zero, s1, (APP_LINE + 16)
-    ADDRESS a0, app_m_prefix
-    li      a1, app_m_prefix_len
-    j       app_line_text
+    li      t0, APP_LOG_PREFIX
+    STQ     t0, s1, (APP_LINE + 16)
+    ret
 END_FUNCTION app_line_start
+
+/* L0: a2 digits of a0, before the byte at a1. A leaf; uses a0-a2, t0, t1. */
+LOCAL_FUNCTION app_digits
+    UNWIND_END_PROLOGUE
+    li      t0, 10
+1:  remu    t1, a0, t0
+    divu    a0, a0, t0
+    addi    t1, t1, 0x30
+    addi    a1, a1, -1
+    sb      t1, 0(a1)
+    addi    a2, a2, -1
+    bnez    a2, 1b
+    ret
+END_FUNCTION app_digits
+
+/*
+ * L1: the UTC time of the Unix milliseconds a0, as YYYY-MM-DD HH:MM:SS.mmm, in the 23 bytes at
+ * a1 (civil_from_days of the days since 1970). Locals: sp+0 out, +8 the milliseconds of the day,
+ * +16 year, +24 month, +32 day.
+ */
+LOCAL_FUNCTION app_time_text
+    FRAME 48
+    sd      a1, 0(sp)
+    li      t0, 86400000
+    divu    t1, a0, t0                      # days
+    remu    t2, a0, t0
+    sd      t2, 8(sp)
+    li      t0, 719468
+    add     t1, t1, t0                      # z
+    li      t0, 146097
+    divu    t2, t1, t0                      # era
+    remu    t3, t1, t0                      # day of the era
+    li      t0, 1460
+    divu    t4, t3, t0
+    sub     t5, t3, t4
+    li      t0, 36524
+    divu    t4, t3, t0
+    add     t5, t5, t4
+    li      t0, 146096
+    divu    t4, t3, t0
+    sub     t5, t5, t4
+    li      t0, 365
+    divu    t5, t5, t0                      # year of the era
+    li      t0, 400
+    mul     t6, t2, t0
+    add     t6, t6, t5                      # the year, from March
+    li      t0, 365
+    mul     a2, t5, t0
+    srli    a3, t5, 2
+    add     a2, a2, a3
+    li      t0, 100
+    divu    a3, t5, t0
+    sub     a2, a2, a3
+    sub     a2, t3, a2                      # day of the year, from March 1
+    li      t0, 5
+    mul     a3, a2, t0
+    addi    a3, a3, 2
+    li      t0, 153
+    divu    a3, a3, t0                      # month, from March
+    mul     a4, a3, t0
+    addi    a4, a4, 2
+    li      t0, 5
+    divu    a4, a4, t0
+    sub     a4, a2, a4
+    addi    a4, a4, 1                       # day
+    sd      a4, 32(sp)
+    li      t0, 10
+    bgeu    a3, t0, 1f
+    addi    a3, a3, 3                       # month
+    j       2f
+1:  addi    a3, a3, -9
+2:  sd      a3, 24(sp)
+    li      t0, 2
+    bgtu    a3, t0, 3f
+    addi    t6, t6, 1                       # the year: January and February are of the next
+3:  sd      t6, 16(sp)
+    ld      a1, 0(sp)                       # the separators
+    li      t0, 0x2d
+    sb      t0, 4(a1)
+    sb      t0, 7(a1)
+    li      t0, 0x20
+    sb      t0, 10(a1)
+    li      t0, 0x3a
+    sb      t0, 13(a1)
+    sb      t0, 16(a1)
+    li      t0, 0x2e
+    sb      t0, 19(a1)
+    ld      a0, 16(sp)                      # the digits, each field from its end
+    addi    a1, a1, 4
+    li      a2, 4
+    call    app_digits
+    ld      a0, 24(sp)
+    ld      a1, 0(sp)
+    addi    a1, a1, 7
+    li      a2, 2
+    call    app_digits
+    ld      a0, 32(sp)
+    ld      a1, 0(sp)
+    addi    a1, a1, 10
+    li      a2, 2
+    call    app_digits
+    ld      t2, 8(sp)                       # hours
+    li      t0, 3600000
+    divu    a0, t2, t0
+    remu    t2, t2, t0
+    sd      t2, 8(sp)
+    ld      a1, 0(sp)
+    addi    a1, a1, 13
+    li      a2, 2
+    call    app_digits
+    ld      t2, 8(sp)                       # minutes
+    li      t0, 60000
+    divu    a0, t2, t0
+    remu    t2, t2, t0
+    sd      t2, 8(sp)
+    ld      a1, 0(sp)
+    addi    a1, a1, 16
+    li      a2, 2
+    call    app_digits
+    ld      t2, 8(sp)                       # seconds
+    li      t0, 1000
+    divu    a0, t2, t0
+    remu    t2, t2, t0
+    sd      t2, 8(sp)
+    ld      a1, 0(sp)
+    addi    a1, a1, 19
+    li      a2, 2
+    call    app_digits
+    ld      a0, 8(sp)                       # milliseconds
+    ld      a1, 0(sp)
+    addi    a1, a1, 23
+    li      a2, 3
+    call    app_digits
+    UNFRAME 48
+END_FUNCTION app_time_text
 
 /* L0: the a1 bytes at a0 join the log line, as far as it has room. Uses a0, a1, t0-t3, a7. */
 LOCAL_FUNCTION app_line_text
@@ -247,20 +397,135 @@ LOCAL_FUNCTION app_line_hex
 2:  UNFRAME 32
 END_FUNCTION app_line_hex
 
-/* L1: the log line and an LF go to stream a0: 1 the standard output, 2 the standard error. */
+/*
+ * L1: the log line of kind a0 (APP_LOG_INFO, ERROR, WARN or DEBUG), when its level is at most the
+ * log level: its time and level before it, an LF after it, to the standard error for ERROR and
+ * WARN, else the standard output. Locals: sp+0 the level, +8 the time, +16 an LF.
+ */
 LOCAL_FUNCTION app_line_end
-    FRAME 16
-    STQ     a0, s1, APP_STREAM
+    FRAME 32
+    ADDRESS t0, app_log_rank
+    add     t0, t0, a0
+    lbu     t0, 0(t0)
+    LDQ     t1, s1, (APP_OPTIONS + AppOptions_log_level)
+    bgtu    t0, t1, 9f
+    li      t2, 2
+    li      t1, 1
+    bleu    t0, t1, 1f
+    li      t2, 1
+1:  STQ     t2, s1, APP_STREAM
+    sd      t0, 0(sp)
+    addi    a0, sp, 8
+    CALL_GLOBAL lantern_shell_time_ms
+    ld      a0, 8(sp)
+    ADDQ    a1, s1, (APP_LINE + 24)
+    call    app_time_text
+    ADDQ    a1, s1, (APP_LINE + 24)
+    li      t0, 0x20
+    sb      t0, 23(a1)
+    sb      t0, 29(a1)
+    ld      t0, 0(sp)
+    ADDRESS t1, app_log_names
+    slli    t0, t0, 3
+    add     t1, t1, t0
+    li      t2, 0
+2:  add     t3, t1, t2                      # the level's 5 bytes
+    lbu     t3, 0(t3)
+    add     t4, a1, t2
+    sb      t3, 24(t4)
+    addi    t2, t2, 1
+    li      t3, 5
+    bltu    t2, t3, 2b
     li      t0, 10
-    sb      t0, 0(sp)
-    mv      a0, sp
+    sb      t0, 16(sp)
+    addi    a0, sp, 16
     li      a1, 1
     call    app_line_text
     ADDQ    a0, s1, APP_STREAM
     ADDQ    a1, s1, APP_LINE
     CALL_GLOBAL lantern_shell_write
-    UNFRAME 16
+9:  UNFRAME 32
 END_FUNCTION app_line_end
+
+/*
+ * L1: the log lines of a work that ran (app.md, the log): DEBUG work <kind> result <n>; for a
+ * block's import, INFO block <slot> imported, <a> attestations, or WARN block <slot> not imported:
+ * result <n>. a0 its kind, a1 its data entry or 0. Locals: sp+0 kind, +8 entry, +16 result,
+ * +24 slot.
+ */
+LOCAL_FUNCTION app_log_work
+    FRAME 32
+    sd      a0, 0(sp)
+    sd      a1, 8(sp)
+    LDQ     t0, s1, APP_WORK_EVENT
+    ld      t0, NodeEvent_result(t0)
+    sd      t0, 16(sp)
+    call    app_line_start
+    ADDRESS a0, app_m_log_work
+    li      a1, app_m_log_work_len
+    call    app_line_text
+    ld      a0, 0(sp)
+    call    app_line_u64
+    ADDRESS a0, app_m_log_result
+    li      a1, app_m_log_result_len
+    call    app_line_text
+    ld      a0, 16(sp)
+    call    app_line_u64
+    li      a0, APP_LOG_DEBUG
+    call    app_line_end
+    ld      t0, 0(sp)
+    li      t1, NODE_WORK_IMPORT_BLOCK
+    bne     t0, t1, 9f
+    ld      t0, 16(sp)
+    li      t1, LANTERN_NEED_JUSTIFIED_STATE
+    beq     t0, t1, 9f
+    ld      t0, 8(sp)
+    beqz    t0, 9f
+    ld      t0, 8(t0)                       # the block's bytes: its slot at byte 100
+    ld      t1, 16(t0)
+    li      t2, 108
+    bltu    t1, t2, 9f
+    ld      t1, 8(t0)
+    add     t0, t0, t1
+    addi    t0, t0, 100
+    li      t1, 0                           # its 8 bytes, little endian, at any alignment
+    li      t2, 7
+4:  add     t3, t0, t2
+    lbu     t3, 0(t3)
+    slli    t1, t1, 8
+    or      t1, t1, t3
+    addi    t2, t2, -1
+    bgez    t2, 4b
+    sd      t1, 24(sp)
+    call    app_line_start
+    ADDRESS a0, app_m_log_block
+    li      a1, app_m_log_block_len
+    call    app_line_text
+    ld      a0, 24(sp)
+    call    app_line_u64
+    ld      t0, 16(sp)
+    bnez    t0, 1f
+    ADDRESS a0, app_m_log_imported
+    li      a1, app_m_log_imported_len
+    call    app_line_text
+    LDQ     t0, s1, APP_WORK_EVENT
+    ld      a0, NodeEvent_index(t0)
+    call    app_line_u64
+    ADDRESS a0, app_m_log_attestations
+    li      a1, app_m_log_attestations_len
+    call    app_line_text
+    li      a0, APP_LOG_INFO
+    call    app_line_end
+    j       9f
+1:  ADDRESS a0, app_m_log_not
+    li      a1, app_m_log_not_len
+    call    app_line_text
+    ld      a0, 16(sp)
+    call    app_line_u64
+    li      a0, APP_LOG_WARN
+    call    app_line_end
+9:  UNFRAME 32
+END_FUNCTION app_log_work
 
 /* L1: the path of the a1 bytes of the name at a0 in the network directory: a ByteList at APP_PATH. s6 the ByteList. */
 LOCAL_FUNCTION app_path
@@ -325,7 +590,7 @@ LOCAL_FUNCTION app_read
     call    app_line_text
     LDQ     a0, s1, APP_FILE
     call    app_line_u64
-    li      a0, 2
+    li      a0, APP_LOG_ERROR
     call    app_line_end
     li      a0, 2
     UNFRAME 0
@@ -434,7 +699,7 @@ LOCAL_FUNCTION app_checkpoint
     ADDRESS a0, app_m_short
     li      a1, app_m_short_len
     call    app_line_text
-    li      a0, 2
+    li      a0, APP_LOG_ERROR
     call    app_line_end
     j       99f
 97: call    app_file_free                   # no memory
@@ -442,7 +707,7 @@ LOCAL_FUNCTION app_checkpoint
     ADDRESS a0, app_m_memory
     li      a1, app_m_memory_len
     call    app_line_text
-    li      a0, 2
+    li      a0, APP_LOG_ERROR
     call    app_line_end
 98: addi    a0, sp, L                       # the block file goes
     addi    a1, sp, (L + 8)
@@ -478,7 +743,7 @@ LOCAL_FUNCTION app_fail_status
     call    app_line_text
     ld      a0, 16(sp)
     call    app_line_u64
-    li      a0, 2
+    li      a0, APP_LOG_ERROR
     call    app_line_end
     li      a0, 2
     UNFRAME 32
@@ -491,7 +756,7 @@ LOCAL_FUNCTION app_no_memory
     ADDRESS a0, app_m_memory
     li      a1, app_m_memory_len
     call    app_line_text
-    li      a0, 2
+    li      a0, APP_LOG_ERROR
     call    app_line_end
     li      a0, 2
     UNFRAME 0
@@ -745,7 +1010,7 @@ LOCAL_FUNCTION app_start
     call    app_line_text
     LDQ     a0, s1, (APP_ANCHOR + 32)
     call    app_line_u64
-    li      a0, 1
+    li      a0, APP_LOG_INFO
     call    app_line_end
     j       14f
 141: call   app_db_scan_all                 # from anchor.ssz: the history's segments to the node
@@ -756,7 +1021,7 @@ LOCAL_FUNCTION app_start
     call    app_line_text
     LDQ     a0, s1, (APP_ANCHOR + 32)
     call    app_line_u64
-    li      a0, 1
+    li      a0, APP_LOG_INFO
     call    app_line_end
 14:
     ADDQ    a0, s1, APP_SEEN_ROOM           # the Seen
@@ -829,7 +1094,7 @@ LOCAL_FUNCTION app_start
     ADDQ    a0, s1, APP_ANCHOR
     li      a1, 32
     call    app_line_hex
-    li      a0, 1
+    li      a0, APP_LOG_INFO
     call    app_line_end
     li      a0, 0
     LEAVE 16
@@ -845,7 +1110,7 @@ LOCAL_FUNCTION app_start
     j       99f
 97: call    app_no_memory
     j       99f
-98: li      a0, 2
+98: li      a0, APP_LOG_ERROR
     call    app_line_end
 99: li      a0, 2
     LEAVE 16
@@ -1267,7 +1532,10 @@ LOCAL_FUNCTION app_work
     call    app_regrow
     bnez    a0, 91f
     j       1b
-8:  LDQ     a0, s1, APP_WORK_EVENT          # the WORK_DONE event
+8:  mv      a0, s8
+    mv      a1, s6
+    call    app_log_work
+    LDQ     a0, s1, APP_WORK_EVENT          # the WORK_DONE event
     ld      a1, 0(a0)
     call    app_event_put
     LEAVE 0
@@ -1504,7 +1772,7 @@ LOCAL_FUNCTION app_db_append
     call    app_line_text
     ld      a0, (L + 24)(sp)
     call    app_line_u64
-    li      a0, 2
+    li      a0, APP_LOG_ERROR
     call    app_line_end
     LEAVE 48
 END_FUNCTION app_db_append
@@ -2046,7 +2314,7 @@ LOCAL_FUNCTION app_db_state
     call    app_line_text
     ld      a0, (L + 24)(sp)
     call    app_line_u64
-    li      a0, 2
+    li      a0, APP_LOG_ERROR
     call    app_line_end
 98: beqz    s5, 99f                         # the bytes' memory goes back
     sd      s5, (L + 24)(sp)
@@ -2217,7 +2485,7 @@ LOCAL_FUNCTION app_step
     call    app_line_text
     LDQ     a0, s1, (APP_RESULT + NodeStepResult_short)
     call    app_line_u64
-    li      a0, 2
+    li      a0, APP_LOG_ERROR
     call    app_line_end
     LEAVE 0
 2:  mv      a2, a0                          # a node step: status <n>
@@ -2378,7 +2646,7 @@ LOCAL_FUNCTION app_boot_nodes
     ADDRESS a0, app_m_not_enr
     li      a1, app_m_not_enr_len
     call    app_line_text
-    li      a0, 2
+    li      a0, APP_LOG_ERROR
     call    app_line_end
     j       1b
 9:  LEAVE 16
@@ -2554,7 +2822,7 @@ LOCAL_FUNCTION app_net
     call    app_line_text
     ld      a0, (L + 64)(sp)
     call    app_line_u64
-    li      a0, 2
+    li      a0, APP_LOG_ERROR
     call    app_line_end
     li      a0, 2
     LEAVE 112
@@ -2569,7 +2837,7 @@ LOCAL_FUNCTION app_net
     call    app_line_text
     LDQ     a0, s1, (APP_OPTIONS + AppOptions_port)
     call    app_line_u64
-    li      a0, 1
+    li      a0, APP_LOG_INFO
     call    app_line_end
     li      a0, 0
 99: LEAVE 112
@@ -2781,7 +3049,7 @@ LOCAL_FUNCTION app_engine_conf
     ADDRESS a0, app_m_hex
     li      a1, app_m_hex_len
     call    app_line_text
-98: li      a0, 2
+98: li      a0, APP_LOG_ERROR
     call    app_line_end
 99: li      a0, 2
     LEAVE 0
@@ -3218,7 +3486,7 @@ LOCAL_FUNCTION app_dv_start
     call    app_line_text
     ld      a0, (L + 184 + LIBP2P_BR_ERROR)(sp)
     call    app_line_u64
-    li      a0, 2
+    li      a0, APP_LOG_ERROR
     call    app_line_end
     li      a0, 2
     LEAVE 256
@@ -3429,7 +3697,7 @@ LOCAL_FUNCTION app_discv5
     ADDQ    a0, s2, DISCV5_ACT_RECORD_DATA
     LDQ     a1, s2, DISCV5_ACT_RECORD_LEN
     call    app_line_base64url
-    li      a0, 1
+    li      a0, APP_LOG_INFO
     call    app_line_end
     j       80f
 72: li      t1, DISCV5_ACTION_WAKEUP
@@ -3721,7 +3989,7 @@ LOCAL_FUNCTION app_api_start
     addi    a0, t0, (ApiView_peer_id + 8)
     ld      a1, ApiView_peer_id(t0)
     call    app_line_text
-    li      a0, 1
+    li      a0, APP_LOG_INFO
     call    app_line_end
     li      a0, 0
     LEAVE 208
@@ -3736,7 +4004,7 @@ LOCAL_FUNCTION app_api_start
     call    app_line_text
     ld      a0, (L + 32)(sp)
     call    app_line_u64
-    li      a0, 2
+    li      a0, APP_LOG_ERROR
     call    app_line_end
     li      a0, 2
     LEAVE 208
@@ -4189,7 +4457,7 @@ LOCAL_FUNCTION app_loop
     LDQ     a0, s1, APP_NODE
     LDQ     a0, a0, Node_earliest_slot
     call    app_line_u64
-    li      a0, 1
+    li      a0, APP_LOG_INFO
     call    app_line_end
 3:  LDQ     t0, s1, APP_NODE                # a line when the count of connected peers changes
     LDQ     t0, t0, (Node_peers + 8)
@@ -4202,7 +4470,7 @@ LOCAL_FUNCTION app_loop
     call    app_line_text
     LDQ     a0, s1, APP_PEERS
     call    app_line_u64
-    li      a0, 1
+    li      a0, APP_LOG_INFO
     call    app_line_end
 4:  LDQ     t0, s1, (APP_RESULT + 8)        # the wait: to the node's or discv5's wakeup, at most APP_WAIT_MS
     LDQ     t1, s1, APP_DV_WAKE
@@ -4253,7 +4521,7 @@ FUNCTION lantern_app_main
     call    app_line_text
     ld      a0, L(sp)
     call    app_line_u64
-    li      a0, 2
+    li      a0, APP_LOG_ERROR
     call    app_line_end
     li      a0, 1
     LEAVE 16

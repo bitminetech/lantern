@@ -104,6 +104,13 @@
 .set APP_WORK_TRIES, 16                     /* the times a work grows a buffer */
 .set APP_STEP_TRIES, 64                     /* the times a node step grows a buffer, one field at a time */
 
+/* The log (app.md): the time and level before each line, and the kind of a line for app_line_end. */
+.set APP_LOG_PREFIX, 30                     /* YYYY-MM-DD HH:MM:SS.mmm, a space, the level, a space */
+.set APP_LOG_INFO, 1                        /* the standard output */
+.set APP_LOG_ERROR, 2                       /* the standard error */
+.set APP_LOG_WARN, 3                        /* the standard error */
+.set APP_LOG_DEBUG, 4                       /* the standard output */
+
     RODATA
     .p2align 3
 app_builtin_config:                         /* the pinned config of the preset: a ByteList */
@@ -118,9 +125,35 @@ app_seen_room:                              /* SeenRoom */
     .quad 65536, 65536, 4096, 1 << 20
 app_state_room:                             /* StateRoom */
     .quad 1024, 2048, 64, 1024, 64, 64, 4, 4096
-app_m_prefix:
-    .ascii "lantern: "
-.set app_m_prefix_len, 9
+app_log_rank:                               /* the level of each kind of line: APP_LOG_INFO to APP_LOG_DEBUG */
+    .byte 2, 2, 0, 1, 3
+app_log_names:                              /* each level's name in 5 bytes, at 8 bytes apart */
+    .ascii "ERROR"
+    .space 3
+    .ascii "WARN "
+    .space 3
+    .ascii "INFO "
+    .space 3
+    .ascii "DEBUG"
+    .space 3
+app_m_log_work:
+    .ascii "work "
+.set app_m_log_work_len, 5
+app_m_log_result:
+    .ascii " result "
+.set app_m_log_result_len, 8
+app_m_log_block:
+    .ascii "block "
+.set app_m_log_block_len, 6
+app_m_log_imported:
+    .ascii " imported, "
+.set app_m_log_imported_len, 11
+app_m_log_attestations:
+    .ascii " attestations"
+.set app_m_log_attestations_len, 13
+app_m_log_not:
+    .ascii " not imported: result "
+.set app_m_log_not_len, 22
 app_m_option:
     .ascii "faulty option at argument "
 .set app_m_option_len, 26

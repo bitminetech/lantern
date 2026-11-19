@@ -305,8 +305,9 @@ SPEC_FUNCTION process_attester_slashing
     je      6f
     mov     %rbx, %rdi                      # assert is_valid_indexed_attestation(state, attestation_1)
     mov     %rbp, %rsi
-    mov     %r13, %rdx
-    lea     L(%rsp), %rcx
+    mov     %r13, %rcx
+    lea     L(%rsp), %r8
+    mov     CONFIG_PUBKEY_CACHE(%r12), %rdx
     call    lantern_is_valid_indexed_attestation
     CHECK_STATUS %r14, 7f, 8f
     mov     $LANTERN_INVALID_ATTESTER_SLASHING, %eax
@@ -316,8 +317,9 @@ SPEC_FUNCTION process_attester_slashing
     mov     %rax, (%r13)
     mov     %rbx, %rdi
     mov     S8(%rsp), %rsi
-    mov     %r13, %rdx
-    lea     L(%rsp), %rcx
+    mov     %r13, %rcx
+    lea     L(%rsp), %r8
+    mov     CONFIG_PUBKEY_CACHE(%r12), %rdx
     call    lantern_is_valid_indexed_attestation
     CHECK_STATUS %r14, 7f, 8f
     mov     $LANTERN_INVALID_ATTESTER_SLASHING, %eax

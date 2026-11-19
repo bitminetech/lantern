@@ -83,7 +83,7 @@ END_FUNCTION app_ipv4
  * (args, options, fault): docs/reference/app.md. s1 args, s2 options, s3 fault, s4 the argument
  * count, s5 the next argument, s6 the Arg entries, s7 an option record, s8 the value's start, s9
  * its length, s10 the argument that holds it. Locals: L the name's start, L+8 its length, L+16
- * the option's argument.
+ * the option's argument, L+24 a log level.
  */
 FUNCTION lantern_app_options
     ENTER 32
@@ -99,6 +99,8 @@ FUNCTION lantern_app_options
     sd      t0, AppOptions_http_port(s2)
     li      t0, APP_DEFAULT_TARGET_PEERS
     sd      t0, AppOptions_target_peers(s2)
+    li      t0, APP_DEFAULT_LOG_LEVEL
+    STQ     t0, s2, AppOptions_log_level
     ld      s4, (ArgList_args + 8)(s1)
     ld      t0, ArgList_args(s1)
     add     s6, s1, t0
@@ -178,7 +180,9 @@ FUNCTION lantern_app_options
     sd      s8, 0(t0)
     sd      s9, 8(t0)
     j       1b
-20: add     a0, s1, s8                      # a number, or an address
+20: li      t1, APP_OPTION_LEVEL
+    beq     t0, t1, 24f
+    add     a0, s1, s8                      # a number, or an address
     add     a1, a0, s9
     li      t1, APP_OPTION_ADDRESS
     beq     t0, t1, 21f
@@ -198,6 +202,26 @@ FUNCTION lantern_app_options
     add     t0, s2, t0
     sd      a1, 0(t0)
     j       1b
+24: sd      zero, (L + 24)(sp)              # a log level: one of the names of app_levels
+25: ld      t0, (L + 24)(sp)
+    li      t1, 4
+    bgeu    t0, t1, 90f
+    add     a0, s1, s8
+    mv      a1, s9
+    ADDRESS a2, app_levels
+    slli    t1, t0, 3
+    add     a2, a2, t1
+    ADDRESS a3, app_level_lengths
+    add     a3, a3, t0
+    lbu     a3, 0(a3)
+    call    config_name_is
+    bnez    a0, 26f
+    ld      t0, (L + 24)(sp)
+    addi    t0, t0, 1
+    sd      t0, (L + 24)(sp)
+    j       25b
+26: ld      a1, (L + 24)(sp)
+    j       23b
 50: mv      s10, s4                         # --network-dir is required
     ld      t0, (AppOptions_network_dir + 8)(s2)
     beqz    t0, 90f

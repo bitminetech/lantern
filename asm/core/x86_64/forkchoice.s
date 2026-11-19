@@ -11,6 +11,7 @@
 .set F_CHILD, 2            # has a child
 .set F_VIABLE, 4           # in get_filtered_node_tree
 .set F_CHILD_VIABLE, 8     # has a child in get_filtered_node_tree
+.set F_OVERFLOW, 16        # its weight passed 2^64 - 1
 
 .if BlockNode__mem != 216 || StoreValidator__mem != 32 || Checkpoint__mem != 40 || Checkpoint_root != 8
 .error "the fork choice code assumes the layouts of include/lantern.inc"
@@ -483,21 +484,105 @@ LOCAL_FUNCTION filter_tree
 END_FUNCTION filter_tree
 
 /*
- * L0: rax = status, rdx = get_head(store rdi), with scratch rsi of S(1) for the node count.
- * rbx store, rbp flags, r12 node count, r13 nodes, r14 i, r15 head; S7 justified node,
- * S9 best child, S10 best weight.
+ * L0: rax = status, rdx = get_head(store rdi), with scratch rsi of S(2) for the node count. The
+ * weights of all nodes at once (fork-choice.md, lantern_get_head): each latest message's balance on
+ * its node, the boost on the boost node, then each node's weight onto its parent's.
+ * rbx store, rbp flags, r12 node count, r13 nodes, r14 i, r15 head; S7 justified node, S8 the
+ * weights, S9 best child, S10 best weight. Locals: L the status of the boost.
  */
 LOCAL_FUNCTION head
     ENTER 16
     mov     %rdi, %rbx
+    mov     (Store_blocks + 8)(%rbx), %r12
+    mov     (%rsi), %rax                    # the weights: 8 bytes a node, before filter_tree's flags
+    mov     %r12, %rcx
+    shl     $4, %rcx
+    lea     (LIST_FIXED + LANTERN_SCRATCH_FIXED)(%rcx), %rdx
+    cmp     %rdx, %rax
+    jb      9f
+    mov     %r12, %rcx
+    shl     $4, %rcx
+    sub     %rcx, %rax
+    add     %rsi, %rax
+    mov     %rax, S8(%rsp)
+    mov     %rbx, %rdi
     call    filter_tree                     # nodes = get_filtered_node_tree(store)
     test    %rax, %rax
     jnz     7f
     mov     %rdx, %rbp
     mov     %rcx, S7(%rsp)
-    mov     (Store_blocks + 8)(%rbx), %r12
     mov     Store_blocks(%rbx), %r13
     add     %rbx, %r13
+    mov     S8(%rsp), %rdi
+    mov     %r12, %rsi
+    shl     $3, %rsi
+    call    lantern_zero
+    PART    %rcx, %r10, %rbx, Store_validators  # each counted latest message, on its node
+    mov     S8(%rsp), %r11
+1:  test    %r10, %r10
+    jz      3f
+    dec     %r10
+    mov     StoreValidator_flags(%rcx), %rax
+    and     $(STORE_ACTIVE_UNSLASHED | STORE_EQUIVOCATING), %eax
+    cmp     $STORE_ACTIVE_UNSLASHED, %eax   # unslashed and active, not equivocating
+    jne     2f
+    mov     StoreValidator_latest_node(%rcx), %rax
+    cmp     $-1, %rax
+    je      2f
+    imul    $BlockNode__mem, %rax, %rdx     # not a vote for an INVALIDATED block (optimistic sync)
+    cmpq    $PAYLOAD_STATUS_INVALIDATED, BlockNode_payload_status(%r13,%rdx)
+    je      2f
+    mov     StoreValidator_effective_balance(%rcx), %rdx
+    add     %rdx, (%r11,%rax,8)
+    jnc     2f
+    orq     $F_OVERFLOW, (%rbp,%rax,8)
+2:  add     $StoreValidator__mem, %rcx
+    jmp     1b
+3:  movq    $0, L(%rsp)                     # the proposer boost, on its node
+    lea     Store_proposer_boost_root(%rbx), %rsi
+    mov     (%rsi), %rax
+    or      8(%rsi), %rax
+    or      16(%rsi), %rax
+    or      24(%rsi), %rax
+    jz      4f
+    mov     %rbx, %rdi
+    call    find_node
+    cmp     $-1, %rax
+    jne     31f
+    movq    $LANTERN_INVALID_UNKNOWN_BLOCK, L(%rsp)
+    jmp     4f
+31: mov     %rax, %r14
+    imul    $BlockNode__mem, %r14, %rcx     # no boost from an INVALIDATED block (optimistic sync)
+    cmpq    $PAYLOAD_STATUS_INVALIDATED, BlockNode_payload_status(%r13,%rcx)
+    je      4f
+    mov     %rbx, %rdi                      # get_proposer_score(store)
+    mov     (Store_config + CONFIG_PROPOSER_SCORE_BOOST)(%rbx), %rsi
+    call    committee_fraction
+    test    %rax, %rax
+    jz      32f
+    mov     %rax, L(%rsp)
+    jmp     4f
+32: mov     S8(%rsp), %rax
+    add     %rdx, (%rax,%r14,8)
+    jnc     4f
+    orq     $F_OVERFLOW, (%rbp,%r14,8)
+4:  lea     -1(%r12), %r14                  # from the last node to the first: onto the parent
+    mov     S8(%rsp), %r11
+41: test    %r14, %r14
+    jz      60f
+    imul    $BlockNode__mem, %r14, %rcx
+    mov     BlockNode_parent(%r13,%rcx), %rcx
+    cmp     $-1, %rcx
+    je      44f
+    mov     (%rbp,%r14,8), %rax
+    and     $F_OVERFLOW, %eax
+    or      %rax, (%rbp,%rcx,8)
+    mov     (%r11,%r14,8), %rax
+    add     %rax, (%r11,%rcx,8)
+    jnc     44f
+    orq     $F_OVERFLOW, (%rbp,%rcx,8)
+44: dec     %r14
+    jmp     41b
 60: mov     S7(%rsp), %r15                  # head = the justified node
 61: movq    $-1, S9(%rsp)                   # the best child so far
     movq    $0, S10(%rsp)
@@ -509,11 +594,13 @@ LOCAL_FUNCTION head
     jne     64f
     testq   $F_VIABLE, (%rbp,%r14,8)        # a child in nodes
     jz      64f
-    mov     %rbx, %rdi
-    mov     %r14, %rsi
-    call    weight
+    mov     L(%rsp), %rax                   # its weight: a failure of the boost, or a sum past 2^64 - 1
     test    %rax, %rax
     jnz     7f
+    testq   $F_OVERFLOW, (%rbp,%r14,8)
+    jnz     8f
+    mov     S8(%rsp), %rdx
+    mov     (%rdx,%r14,8), %rdx
     cmpq    $-1, S9(%rsp)
     je      63f
     cmp     S10(%rsp), %rdx                 # max by (weight, root)
@@ -537,6 +624,10 @@ LOCAL_FUNCTION head
 66: mov     %r15, %rdx
     xor     %eax, %eax
 7:  LEAVE 16
+8:  mov     $LANTERN_INVALID_OVERFLOW, %eax
+    LEAVE 16
+9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
+    LEAVE 16
 END_FUNCTION head
 
 /* rbx store, rbp out. */
@@ -1014,8 +1105,9 @@ SPEC_FUNCTION on_attestation
     mov     %rax, (%r14)
     mov     %r13, %rdi
     mov     S8(%rsp), %rsi
-    mov     %r14, %rdx
-    lea     L(%rsp), %rcx
+    mov     %r14, %rcx
+    lea     L(%rsp), %r8
+    mov     (Store_config + CONFIG_PUBKEY_CACHE)(%rbx), %rdx
     call    lantern_is_valid_indexed_attestation
     CHECK_STATUS %r15, 7f, 8f
     mov     $LANTERN_INVALID_ATTESTATION, %eax
@@ -1082,8 +1174,9 @@ SPEC_FUNCTION on_attester_slashing
     je      6f
     mov     %r12, %rdi                      # assert is_valid_indexed_attestation(state, attestation_1)
     mov     %r15, %rsi
-    mov     %r13, %rdx
-    lea     L(%rsp), %rcx
+    mov     %r13, %rcx
+    lea     L(%rsp), %r8
+    mov     (Store_config + CONFIG_PUBKEY_CACHE)(%rbx), %rdx
     call    lantern_is_valid_indexed_attestation
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      7f
@@ -1095,8 +1188,9 @@ SPEC_FUNCTION on_attester_slashing
     mov     %rax, (%r13)
     mov     %r12, %rdi
     mov     S7(%rsp), %rsi
-    mov     %r13, %rdx
-    lea     L(%rsp), %rcx
+    mov     %r13, %rcx
+    lea     L(%rsp), %r8
+    mov     (Store_config + CONFIG_PUBKEY_CACHE)(%rbx), %rdx
     call    lantern_is_valid_indexed_attestation
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      7f
