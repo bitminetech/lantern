@@ -16,6 +16,7 @@ ABI uint64_t LF(is_valid_indexed_attestation)(const void *state, const void *ind
 ABI uint64_t LF(get_committee_count_per_slot)(const void *state, const void *epoch, void *cache, void *scratch, void *out);
 ABI uint64_t LF(get_beacon_proposer_index)(const void *state, void *out);
 ABI uint64_t LF(get_expected_withdrawals)(const void *state, void *scratch, void *out);
+ABI uint64_t LF(get_total_active_balance)(const void *state, void *scratch, void *out);
 
 static double now_s(void) {
     struct timespec t;
@@ -311,7 +312,20 @@ static void time_block(uint8_t *st, const uint64_t *keep, uint64_t n, uint64_t h
         /* The parts alone, with the caches filled: one attestation, then the sync aggregate. */
         uint8_t *b = state_dup(st, keep), *av = decode(type_by_name("Attestation"), att[0], alen[0], &vsize, &why);
         const uint8_t *bodyv = nested(msg, field_offset("BeaconBlock", 4));
-        if (av) {
+        if (av) { /* its parts first: the total active balance, the attesting indices */
+            uint64_t total = 0, lsize = 24 + 8 * 131072;
+            uint8_t *list = buffer(lsize);
+            wr64(scratch, ssize);
+            a = now_s();
+            st1 = CALL(LF(get_total_active_balance), b, scratch, &total);
+            printf("get_total_active_balance: %.4f s (status %llu)\n", now_s() - a, (unsigned long long)st1);
+            wr64(list, lsize);
+            wr64(scratch, ssize);
+            a = now_s();
+            st1 = CALL(LF(get_attesting_indices), b, av, ccache, scratch, list);
+            printf("get_attesting_indices, %llu keys, cache filled: %.4f s (status %llu, %llu indices)\n",
+                   (unsigned long long)akeys[0], now_s() - a, (unsigned long long)st1, (unsigned long long)rd64(list + 16));
+            free(list);
             wr64(scratch, ssize);
             r = 9;
             a = now_s();
