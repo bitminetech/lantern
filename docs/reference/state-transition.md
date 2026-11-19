@@ -53,6 +53,10 @@ lantern_state_transition(state, signed_block, options, config, scratch, result) 
 - `LANTERN_OK`: `result` is `LANTERN_VALID` or the first failed check.
 - `LANTERN_BUFFER_TOO_SMALL`: scratch, or room for the slots' epochs and the block's appends, is short. Checked before the state changes.
 
+### Function does
+
+- The state root of the check is lantern_state_root with the `StateCache` at `CONFIG_STATE_CACHE` of `config`.
+
 ### Limits
 
 - Scratch: the most of lantern_process_slots and lantern_process_block.
@@ -103,7 +107,7 @@ Stores the state root, fills the latest header's state root when it is zero, and
 ### Signature
 
 ```
-lantern_process_slot(state, scratch) -> status
+lantern_process_slot(state, config, scratch) -> status
 ```
 
 ### Returns
@@ -113,7 +117,7 @@ lantern_process_slot(state, scratch) -> status
 
 ### Function does
 
-- Hashes with `ssz_hash_tree_root` of asm-ssz.
+- The state root is lantern_state_root with the `StateCache` at `CONFIG_STATE_CACHE` of `config`; the header root, `ssz_hash_tree_root` of asm-ssz.
 
 ### Limits
 

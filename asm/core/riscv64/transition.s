@@ -537,15 +537,16 @@ SPEC_END process_block
 SPEC_FUNCTION process_slot
     ENTER 64
     mv      s1, a0
-    mv      s2, a1
+    mv      s4, a1
+    mv      s2, a2
     LDQ     s3, s1, BeaconState_slot
     li      t0, (SLOTS_PER_HISTORICAL_ROOT - 1)
     and     s3, s3, t0
-    ADDRESS a0, lantern_type_BeaconState    # previous_state_root = hash_tree_root(state)
-    mv      a1, s1
+    mv      a0, s1                          # previous_state_root = hash_tree_root(state)
+    ld      a1, CONFIG_STATE_CACHE(s4)
     mv      a2, s2
     addi    a3, sp, L
-    CALL_GLOBAL ssz_hash_tree_root
+    call    lantern_state_root
     bnez    a0, 7f
     ADDQ    t0, s1, BeaconState_state_roots
     slli    t1, s3, 5
@@ -691,7 +692,8 @@ SPEC_FUNCTION process_slots
     bgeu    t0, s2, 8f
     sd      s6, 0(s4)
     mv      a0, s1
-    mv      a1, s4
+    mv      a1, s3
+    mv      a2, s4
     call    lantern_process_slot
     bnez    a0, 7f
     LDQ     t0, s1, BeaconState_slot
@@ -840,11 +842,11 @@ SPEC_FUNCTION state_transition
     ld      t0, 0(s3)                       # if validate_result: assert block.state_root == hash_tree_root(state)
     beqz    t0, 8f
     sd      s8, 0(s5)
-    ADDRESS a0, lantern_type_BeaconState
-    mv      a1, s1
+    mv      a0, s1
+    ld      a1, CONFIG_STATE_CACHE(s4)
     mv      a2, s5
     addi    a3, sp, (L + 8)
-    CALL_GLOBAL ssz_hash_tree_root
+    call    lantern_state_root
     bnez    a0, 7f
     addi    t0, s7, BeaconBlock_state_root
     addi    t1, sp, (L + 8)
