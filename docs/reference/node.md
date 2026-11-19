@@ -1499,6 +1499,22 @@ The actions of one step: a ByteList whose bytes are `NodeAction` entries one aft
 | ARM64 |  |  |  |  |
 | RISC-V |  |  |  |  |
 
+### `lantern_node_replay`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
+
+### `lantern_node_backfill`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 |  |  |  |  |
+| ARM64 |  |  |  |  |
+| RISC-V |  |  |  |  |
+
 ### `lantern_node_block_header`
 
 | ISA | Linux | Windows | macOS | `equal` |
