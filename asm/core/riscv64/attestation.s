@@ -208,26 +208,31 @@ SPEC_END committee_cache_init
 SPEC_FUNCTION pubkey_cache_size
     FRAME 16
     ld      t0, 0(a0)
-    li      t1, PubkeyEntry__mem
+    li      t1, CRYPTO_BLS_ENTRY_BYTES
     mul     t0, t0, t1
-    addi    t0, t0, PUBKEY_CACHE_FIXED
+    addi    t0, t0, CRYPTO_BLS_CACHE_FIXED
     sd      t0, 0(a1)
     li      a0, LANTERN_OK
     UNFRAME 16
 SPEC_END pubkey_cache_size
 
+# A BlsKeyCache of asm-crypto whose keys are those of a state's validators: key_stride Validator__mem.
 SPEC_FUNCTION pubkey_cache_init
     FRAME 16
     ld      t0, 0(a0)
-    li      t1, PubkeyEntry__mem
+    li      t1, CRYPTO_BLS_ENTRY_BYTES
     mul     t2, t0, t1
-    addi    t2, t2, PUBKEY_CACHE_FIXED
-    ld      t3, PubkeyCache_size(a1)
+    addi    t2, t2, CRYPTO_BLS_CACHE_FIXED
+    ld      t3, 0(a1)                       # size
     bltu    t3, t2, 9f
-    sd      t0, PubkeyCache_validators(a1)
-    addi    t3, a1, PubkeyCache_entries     # every entry empty
+    li      t2, Validator__mem
+    sd      t2, CRYPTO_BLS_CACHE_KEY_STRIDE(a1)
+    li      t2, CRYPTO_BLS_CACHE_FIXED
+    sd      t2, CRYPTO_BLS_CACHE_OFFSET(a1)
+    sd      t0, CRYPTO_BLS_CACHE_COUNT(a1)
+    addi    t3, a1, CRYPTO_BLS_CACHE_FIXED  # every entry empty
 1:  beqz    t0, 2f
-    sd      zero, PubkeyEntry_status(t3)
+    sd      zero, CRYPTO_BLS_ENTRY_STATUS(t3)
     add     t3, t3, t1
     addi    t0, t0, -1
     j       1b
@@ -727,10 +732,12 @@ SPEC_END get_indexed_attestation
 
 /*
  * s1 state, s2 indexed attestation, s3 scratch, s4 out, s5 scratch size, s6 keys (a
- * BlsPublicKeyList; with a cache, three G1Points at the end of scratch: the sum, a sum, a key),
- * s7 indices, s8 count, s9 cache, s10 i. Locals: L domain type, L+8 domain (32), L+40 message
- * (24 + 32), L+96 the sum's compressed form (48), L+144 a key, L+152 its entry.
+ * BlsPublicKeyList), s7 indices, s8 count, s9 cache: 0 when it has no entry of the largest index.
+ * Locals: L domain type, L+8 domain (32), L+40 message (24 + 32).
  */
+.if IndexedAttestation_attesting_indices != CRYPTO_BLS_LIST_OFFSET
+.error "an IndexedAttestation must read as a BlsIndexList of its attesting indices"
+.endif
 SPEC_FUNCTION is_valid_indexed_attestation
     ENTER 160
     mv      s1, a0
@@ -756,8 +763,11 @@ SPEC_FUNCTION is_valid_indexed_attestation
     ld      t0, 0(t0)
     LDQ     t1, s1, BeaconState_validators + 8
     bgeu    t0, t1, 6f
-    bnez    s9, 30f                         # with a cache: points, no list of keys
-    li      t0, 48                          # pubkeys: a BlsPublicKeyList at the end of scratch
+    beqz    s9, 31f                         # with a cache that has an entry of every index: no list of keys
+    ld      t1, CRYPTO_BLS_CACHE_COUNT(s9)
+    bltu    t0, t1, 4f
+    li      s9, 0
+31: li      t0, 48                          # pubkeys: a BlsPublicKeyList at the end of scratch
     mul     t0, t0, s8
     addi    t0, t0, (24 + 7)
     andi    t0, t0, -8
@@ -824,98 +834,15 @@ SPEC_FUNCTION is_valid_indexed_attestation
     LEAVE 160
 9:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 160
-30: ld      s5, 0(s3)                       # the three points at the end of scratch
-    li      t1, LANTERN_SCRATCH_FIXED + 3 * 144
-    bltu    s5, t1, 9b
-    addi    t1, s5, -(3 * 144)
-    add     s6, s3, t1
-    sd      t1, 0(s3)
-    j       4b
-40: li      s10, 0                          # the sum of the keys' points
-41: bgeu    s10, s8, 45f
-    slli    t0, s10, 3
-    add     t0, s7, t0
-    ld      t0, 0(t0)
-    PART    t1, t2, s1, BeaconState_validators
-    slli    t2, t0, 7
-    add     t1, t1, t2
-    addi    t1, t1, Validator_pubkey        # the key's 48 bytes
-    sd      t1, (L + 144)(sp)
-    ld      t2, PubkeyCache_validators(s9)
-    bgeu    t0, t2, 43f
-    li      t2, PubkeyEntry__mem            # the entry of the index
-    mul     t2, t0, t2
-    add     t2, s9, t2
-    addi    t2, t2, PubkeyCache_entries
-    sd      t2, (L + 152)(sp)
-    ld      t3, PubkeyEntry_status(t2)
-    beqz    t3, 42f
-    .irp k, 0, 8, 16, 24, 32, 40
-    ld      t4, \k(t1)
-    ld      t5, (PubkeyEntry_pubkey + \k)(t2)
-    bne     t4, t5, 42f
-    .endr
-    li      t4, 1
-    bne     t3, t4, 8b                      # an invalid key: False
-    addi    a1, t2, PubkeyEntry_point
-    j       44f
-42: mv      a0, t1                          # decode the key into the entry, with its bytes
-    addi    a1, t2, PubkeyEntry_point
-    CALL_GLOBAL crypto_bls_g1_decode
-    ld      t2, (L + 152)(sp)
-    li      t3, 2                           # invalid: no point, or the point at infinity
-    bnez    a0, 421f
-    ld      t4, (PubkeyEntry_point + 96)(t2)
-    .irp k, 104, 112, 120, 128, 136
-    ld      t5, (PubkeyEntry_point + \k)(t2)
-    or      t4, t4, t5
-    .endr
-    beqz    t4, 421f
-    li      t3, 1
-421: ld     t1, (L + 144)(sp)
-    .irp k, 0, 8, 16, 24, 32, 40
-    ld      t4, \k(t1)
-    sd      t4, (PubkeyEntry_pubkey + \k)(t2)
-    .endr
-    sd      t3, PubkeyEntry_status(t2)
-    li      t4, 1
-    bne     t3, t4, 8b
-    addi    a1, t2, PubkeyEntry_point
-    j       44f
-43: mv      a0, t1                          # an index past the cache: the third point
-    addi    a1, s6, 288
-    CALL_GLOBAL crypto_bls_g1_decode
-    bnez    a0, 8b
-    addi    a1, s6, 288
-    ld      t4, 96(a1)
-    .irp k, 104, 112, 120, 128, 136
-    ld      t5, \k(a1)
-    or      t4, t4, t5
-    .endr
-    beqz    t4, 8b
-44: bnez    s10, 441f                       # the sum takes the point a1
-    mv      a0, s6
-    li      a2, 144
-    call    lantern_copy
-    j       442f
-441: mv     a0, s6
-    addi    a2, s6, 144
-    CALL_GLOBAL crypto_bls_g1_add
-    mv      a0, s6
-    addi    a1, s6, 144
-    li      a2, 144
-    call    lantern_copy
-442: addi   s10, s10, 1
-    j       41b
-45: mv      a0, s6                          # bls.Verify of the sum's compressed form
-    addi    a1, sp, (L + 96)
-    CALL_GLOBAL crypto_bls_g1_compress
-    addi    a0, sp, (L + 96)
-    addi    a1, sp, (L + 40)
-    addi    a2, s2, IndexedAttestation_signature
-    mv      a3, s3
-    mv      a4, s4
-    CALL_GLOBAL crypto_bls_verify
+40: PART    a0, t0, s1, BeaconState_validators      # the keys: the validators' pubkeys
+    addi    a0, a0, Validator_pubkey
+    mv      a1, s2                          # the indices: the indexed attestation, as a BlsIndexList
+    mv      a2, s9
+    addi    a3, sp, (L + 40)
+    addi    a4, s2, IndexedAttestation_signature
+    mv      a5, s3
+    mv      a6, s4
+    CALL_GLOBAL crypto_bls_fast_aggregate_verify_cached
     LEAVE 160
 SPEC_END is_valid_indexed_attestation
 

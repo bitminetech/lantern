@@ -201,27 +201,32 @@ SPEC_END committee_cache_init
 SPEC_FUNCTION pubkey_cache_size
     FRAME 16
     ldr     x9, [x0]
-    mov     x10, #PubkeyEntry__mem
+    mov     x10, #CRYPTO_BLS_ENTRY_BYTES
     mul     x9, x9, x10
-    add     x9, x9, #PUBKEY_CACHE_FIXED
+    add     x9, x9, #CRYPTO_BLS_CACHE_FIXED
     str     x9, [x1]
     mov     x0, #LANTERN_OK
     UNFRAME 16
 SPEC_END pubkey_cache_size
 
+/* A BlsKeyCache of asm-crypto whose keys are those of a state's validators: key_stride Validator__mem. */
 SPEC_FUNCTION pubkey_cache_init
     FRAME 16
     ldr     x9, [x0]
-    mov     x10, #PubkeyEntry__mem
+    mov     x10, #CRYPTO_BLS_ENTRY_BYTES
     mul     x11, x9, x10
-    add     x11, x11, #PUBKEY_CACHE_FIXED
-    ldr     x12, [x1, #PubkeyCache_size]
+    add     x11, x11, #CRYPTO_BLS_CACHE_FIXED
+    ldr     x12, [x1]                       /* size */
     cmp     x12, x11
     b.lo    9f
-    str     x9, [x1, #PubkeyCache_validators]
-    add     x12, x1, #PubkeyCache_entries   /* every entry empty */
+    mov     x11, #Validator__mem
+    str     x11, [x1, #CRYPTO_BLS_CACHE_KEY_STRIDE]
+    mov     x11, #CRYPTO_BLS_CACHE_FIXED
+    str     x11, [x1, #CRYPTO_BLS_CACHE_OFFSET]
+    str     x9, [x1, #CRYPTO_BLS_CACHE_COUNT]
+    add     x12, x1, #CRYPTO_BLS_CACHE_FIXED   /* every entry empty */
 1:  cbz     x9, 2f
-    str     xzr, [x12, #PubkeyEntry_status]
+    str     xzr, [x12, #CRYPTO_BLS_ENTRY_STATUS]
     add     x12, x12, x10
     sub     x9, x9, #1
     b       1b
@@ -717,10 +722,12 @@ SPEC_END get_indexed_attestation
 
 /*
  * x19 state, x20 indexed attestation, x21 scratch, x22 out, x23 scratch size, x24 keys (a
- * BlsPublicKeyList; with a cache, three G1Points at the end of scratch: the sum, a sum, a key),
- * x25 indices, x26 count, x27 cache, x28 i. Locals: L domain type, L+8 domain (32), L+40 message
- * (24 + 32), L+96 the sum's compressed form (48), L+144 an index.
+ * BlsPublicKeyList), x25 indices, x26 count, x27 cache: 0 when it has no entry of the largest
+ * index. Locals: L domain type, L+8 domain (32), L+40 message (24 + 32).
  */
+.if IndexedAttestation_attesting_indices != CRYPTO_BLS_LIST_OFFSET
+.error "an IndexedAttestation must read as a BlsIndexList of its attesting indices"
+.endif
 SPEC_FUNCTION is_valid_indexed_attestation
     ENTER 160
     mov     x19, x0
@@ -746,8 +753,12 @@ SPEC_FUNCTION is_valid_indexed_attestation
     LDQ     x10, x19, BeaconState_validators + 8
     cmp     x9, x10
     b.hs    6f
-    cbnz    x27, 30f                        /* with a cache: points, no list of keys */
-    mov     x9, #48                         /* pubkeys: a BlsPublicKeyList at the end of scratch */
+    cbz     x27, 31f                        /* with a cache that has an entry of every index: no list of keys */
+    ldr     x10, [x27, #CRYPTO_BLS_CACHE_COUNT]
+    cmp     x9, x10
+    b.lo    4f
+    mov     x27, #0
+31: mov     x9, #48                         /* pubkeys: a BlsPublicKeyList at the end of scratch */
     mul     x9, x9, x26
     add     x9, x9, #(24 + 7)
     and     x9, x9, #-8
@@ -815,119 +826,15 @@ SPEC_FUNCTION is_valid_indexed_attestation
     LEAVE 160
 9:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 160
-30: ldr     x23, [x21]                      /* the three points at the end of scratch */
-    MOVQ    x10, LANTERN_SCRATCH_FIXED + 3 * 144
-    cmp     x23, x10
-    b.lo    9b
-    sub     x10, x23, #(3 * 144)
-    add     x24, x21, x10
-    str     x10, [x21]
-    b       4b
-40: mov     x28, #0                         /* the sum of the keys' points */
-41: cmp     x28, x26
-    b.hs    45f
-    ldr     x12, [x25, x28, lsl #3]
-    str     x12, [sp, #(L + 144)]
-    PART    x13, x14, x19, BeaconState_validators
-    add     x13, x13, x12, lsl #7
-    add     x13, x13, #Validator_pubkey     /* the key's 48 bytes */
-    ldr     x9, [x27, #PubkeyCache_validators]
-    cmp     x12, x9
-    b.hs    43f
-    mov     x9, #PubkeyEntry__mem           /* the entry of the index */
-    madd    x14, x12, x9, x27
-    add     x14, x14, #PubkeyCache_entries
-    ldr     x9, [x14, #PubkeyEntry_status]
-    cbz     x9, 42f
-    ldp     x10, x11, [x13]                 /* the same 48 bytes */
-    ldp     x15, x16, [x14, #PubkeyEntry_pubkey]
-    cmp     x10, x15
-    ccmp    x11, x16, #0, eq
-    b.ne    42f
-    ldp     x10, x11, [x13, #16]
-    ldp     x15, x16, [x14, #(PubkeyEntry_pubkey + 16)]
-    cmp     x10, x15
-    ccmp    x11, x16, #0, eq
-    b.ne    42f
-    ldp     x10, x11, [x13, #32]
-    ldp     x15, x16, [x14, #(PubkeyEntry_pubkey + 32)]
-    cmp     x10, x15
-    ccmp    x11, x16, #0, eq
-    b.ne    42f
-    cmp     x9, #1
-    b.ne    8b                              /* an invalid key: False */
-    add     x1, x14, #PubkeyEntry_point
-    b       44f
-42: mov     x0, x13                         /* decode the key into the entry, with its bytes */
-    add     x1, x14, #PubkeyEntry_point
-    CALL_GLOBAL crypto_bls_g1_decode
-    ldr     x12, [sp, #(L + 144)]
-    PART    x13, x14, x19, BeaconState_validators
-    add     x13, x13, x12, lsl #7
-    add     x13, x13, #Validator_pubkey
-    mov     x9, #PubkeyEntry__mem
-    madd    x14, x12, x9, x27
-    add     x14, x14, #PubkeyCache_entries
-    mov     x9, #2                          /* invalid: no point, or the point at infinity */
-    cbnz    x0, 421f
-    ldp     x10, x11, [x14, #(PubkeyEntry_point + 96)]
-    ldp     x15, x16, [x14, #(PubkeyEntry_point + 112)]
-    orr     x10, x10, x11
-    orr     x15, x15, x16
-    orr     x10, x10, x15
-    ldp     x15, x16, [x14, #(PubkeyEntry_point + 128)]
-    orr     x15, x15, x16
-    orr     x10, x10, x15
-    cbz     x10, 421f
-    mov     x9, #1
-421: ldp    x10, x11, [x13]
-    stp     x10, x11, [x14, #PubkeyEntry_pubkey]
-    ldp     x10, x11, [x13, #16]
-    stp     x10, x11, [x14, #(PubkeyEntry_pubkey + 16)]
-    ldp     x10, x11, [x13, #32]
-    stp     x10, x11, [x14, #(PubkeyEntry_pubkey + 32)]
-    str     x9, [x14, #PubkeyEntry_status]
-    cmp     x9, #1
-    b.ne    8b
-    add     x1, x14, #PubkeyEntry_point
-    b       44f
-43: mov     x0, x13                         /* an index past the cache: the third point */
-    add     x1, x24, #288
-    CALL_GLOBAL crypto_bls_g1_decode
-    cbnz    x0, 8b
-    add     x1, x24, #288
-    ldp     x10, x11, [x1, #96]
-    ldp     x15, x16, [x1, #112]
-    orr     x10, x10, x11
-    orr     x15, x15, x16
-    orr     x10, x10, x15
-    ldp     x15, x16, [x1, #128]
-    orr     x15, x15, x16
-    orr     x10, x10, x15
-    cbz     x10, 8b
-44: cbnz    x28, 441f                       /* the sum takes the point x1 */
-    mov     x0, x24
-    mov     x2, #144
-    bl      lantern_copy
-    b       442f
-441: mov    x0, x24
-    add     x2, x24, #144
-    CALL_GLOBAL crypto_bls_g1_add
-    mov     x0, x24
-    add     x1, x24, #144
-    mov     x2, #144
-    bl      lantern_copy
-442: add    x28, x28, #1
-    b       41b
-45: mov     x0, x24                         /* bls.Verify of the sum's compressed form */
-    add     x1, sp, #(L + 96)
-    CALL_GLOBAL crypto_bls_g1_compress
-    add     x0, sp, #(L + 96)
-    add     x1, sp, #(L + 40)
-    add     x2, x20, #IndexedAttestation_signature
-    mov     x3, x21
-    mov     x4, x22
-    CALL_GLOBAL crypto_bls_verify
+40: PART    x0, x9, x19, BeaconState_validators     /* the keys: the validators' pubkeys */
+    add     x0, x0, #Validator_pubkey
+    mov     x1, x20                         /* the indices: the indexed attestation, as a BlsIndexList */
+    mov     x2, x27
+    add     x3, sp, #(L + 40)
+    add     x4, x20, #IndexedAttestation_signature
+    mov     x5, x21
+    mov     x6, x22
+    CALL_GLOBAL crypto_bls_fast_aggregate_verify_cached
     LEAVE 160
 SPEC_END is_valid_indexed_attestation
 

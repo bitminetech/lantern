@@ -14,12 +14,12 @@ fetch() {
         git -C "$dir" checkout -q FETCH_HEAD
     fi
 }
-fetch asm-ssz 3c8c9b405efe432bc0153aa3d0a9a5d31e6d3328       # README Dependencies
-fetch asm-crypto e7e0731e379102ad15b927f1558c93b0cb1c93d4    # README Dependencies
+fetch asm-ssz 413b8c0f330b464b799fdfc6e42de09477ed4bf6       # README Dependencies
+fetch asm-crypto 745aaf5954c57bb65289f474326d5c566e4d653e    # README Dependencies
 fetch asm-snappy b84f65a17f51dead69d22a7f6c5a16f7b2975d2a    # README Dependencies
-fetch asm-libp2p 84d113b76577806c9e76eb4b820be16282157b8a    # README Dependencies
-fetch asm-quic 533cdb8a777a68b5397324cf73f41ff185e76b21      # README Dependencies
-fetch asm-discv5 ba3529f0b1ca6b9ee276c1a3c1cb8d942c865da5    # README Dependencies
+fetch asm-libp2p 0b3fa544ed1b6fb6f3be983fbc5f6f2367169a32    # README Dependencies
+fetch asm-quic 8cbef0fdb1c402bdf5d12530e977765e13a6703b      # README Dependencies
+fetch asm-discv5 ef766f35037023506da19282e621ec9508a4e6f6    # README Dependencies
 fetch asm-rlp 40cca377a1621ed660a73724192a4a0b2c059a84       # README Dependencies
 
 # Each library's pin of another must match ours.

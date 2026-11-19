@@ -1028,8 +1028,9 @@ lantern_is_valid_indexed_attestation(state, indexed_attestation, cache, scratch,
 ### Function does
 
 - `cache` is a `PubkeyCache` or 0. With 0, bls.FastAggregateVerify is crypto_bls_fast_aggregate_verify of the keys, which validates each.
-- With a cache, the point of each key is that of the entry of its index when the entry holds the same 48 bytes; else crypto_bls_g1_decode of the key, which the entry then keeps with the 48 bytes, or `invalid` when it fails or gives the point at infinity (crypto_bls_key_validate fails exactly then). An invalid key gives 0. The sum of the points (crypto_bls_g1_add), compressed (crypto_bls_g1_compress), goes to crypto_bls_verify: crypto_bls_fast_aggregate_verify does the same after it validates each key.
-- An index at or past the cache's `validators` decodes its key with no entry.
+- With a cache whose `count` is above the largest index: crypto_bls_fast_aggregate_verify_cached of the state's validators' keys at the attesting indices. It is an asm-crypto custom function, functionally equivalent to bls.FastAggregateVerify of those keys.
+- The indexed attestation itself is the `BlsIndexList` of that call: its `attesting_indices` sit at the list's offset and count.
+- With a cache whose `count` is at or below the largest index: as with no cache.
 
 ### Returns
 
@@ -1294,7 +1295,7 @@ lantern_pubkey_cache_size(validators, size) -> status
 
 ### Function does
 
-- `PUBKEY_CACHE_FIXED` + `PubkeyEntry__mem` * `validators` bytes.
+- `CRYPTO_BLS_CACHE_FIXED` + `CRYPTO_BLS_ENTRY_BYTES` * `validators` bytes (asm-crypto `include/bls12381.inc`).
 
 ### ABI
 
@@ -1313,7 +1314,7 @@ lantern_pubkey_cache_init(validators, cache) -> status
 
 ### Returns
 
-- `LANTERN_OK`: every entry is empty.
+- `LANTERN_OK`: `key_stride` is `Validator__mem`, `offset` is `CRYPTO_BLS_CACHE_FIXED`, `count` is `validators`, and every entry's `status` is 0.
 - `LANTERN_BUFFER_TOO_SMALL`: the `size` of `cache` is below what lantern_pubkey_cache_size gives.
 
 ### ABI
@@ -1323,27 +1324,12 @@ lantern_pubkey_cache_init(validators, cache) -> status
 
 ## Type `PubkeyCache`
 
-The decoded public key of each validator index, with the key's bytes, so that a key is checked once.
-
-### Layout
-
-| Offset | Field | Type | Meaning |
-|---|---|---|---|
-| 0 | `size` | u64 | Bytes of the buffer, this field included |
-| 8 | `validators` | u64 | The entries |
-| 16 | `entries` | `PubkeyEntry` × `validators` | The entry of each index |
-
-### `PubkeyEntry`
-
-| Offset | Field | Type | Meaning |
-|---|---|---|---|
-| 0 | `status` | u64 | 0 empty, 1 the point of a valid key, 2 an invalid key |
-| 8 | `pubkey` | BLSPubkey | The key's 48 bytes |
-| 56 | `point` | asm-crypto `G1Point` | crypto_bls_g1_decode of the key, with status 1 |
+The checked public key of each validator index: asm-crypto's [`BlsKeyCache`](https://github.com/bitminetech/asm-crypto/blob/745aaf5954c57bb65289f474326d5c566e4d653e/docs/reference/bls-signatures.md#type-blskeycache), whose keys are a state's validators' pubkeys.
 
 ### Rules
 
-- `PubkeyEntry__mem` (200) bytes.
+- `key_stride` is `Validator__mem`; `offset` is `CRYPTO_BLS_CACHE_FIXED`; `count` is the number of validator indices it holds.
+- Only crypto_bls_fast_aggregate_verify_cached writes its entries, after lantern_pubkey_cache_init empties them.
 - An entry answers only for the key of its 48 bytes, so one cache serves states of any chain.
 
 ## Type `CommitteeCache`

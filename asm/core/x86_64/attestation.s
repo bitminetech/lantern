@@ -188,26 +188,29 @@ SPEC_END committee_cache_init
 
 SPEC_FUNCTION pubkey_cache_size
     FRAME 16
-    imul    $PubkeyEntry__mem, (%rdi), %rax
-    add     $PUBKEY_CACHE_FIXED, %rax
+    imul    $CRYPTO_BLS_ENTRY_BYTES, (%rdi), %rax
+    add     $CRYPTO_BLS_CACHE_FIXED, %rax
     mov     %rax, (%rsi)
     xor     %eax, %eax
     UNFRAME 16
 SPEC_END pubkey_cache_size
 
+# A BlsKeyCache of asm-crypto whose keys are those of a state's validators: key_stride Validator__mem.
 SPEC_FUNCTION pubkey_cache_init
     FRAME 16
     mov     (%rdi), %rcx
-    imul    $PubkeyEntry__mem, %rcx, %rax
-    add     $PUBKEY_CACHE_FIXED, %rax
-    cmp     %rax, PubkeyCache_size(%rsi)
+    imul    $CRYPTO_BLS_ENTRY_BYTES, %rcx, %rax
+    add     $CRYPTO_BLS_CACHE_FIXED, %rax
+    cmp     %rax, (%rsi)
     jb      9f
-    mov     %rcx, PubkeyCache_validators(%rsi)
-    lea     PubkeyCache_entries(%rsi), %rax # every entry empty
+    movq    $Validator__mem, CRYPTO_BLS_CACHE_KEY_STRIDE(%rsi)
+    movq    $CRYPTO_BLS_CACHE_FIXED, CRYPTO_BLS_CACHE_OFFSET(%rsi)
+    mov     %rcx, CRYPTO_BLS_CACHE_COUNT(%rsi)
+    lea     CRYPTO_BLS_CACHE_FIXED(%rsi), %rax  # every entry empty
 1:  test    %rcx, %rcx
     jz      2f
-    movq    $0, PubkeyEntry_status(%rax)
-    add     $PubkeyEntry__mem, %rax
+    movq    $0, CRYPTO_BLS_ENTRY_STATUS(%rax)
+    add     $CRYPTO_BLS_ENTRY_BYTES, %rax
     dec     %rcx
     jmp     1b
 2:  xor     %eax, %eax
@@ -719,10 +722,12 @@ SPEC_END get_indexed_attestation
 
 /*
  * rbx state, rbp indexed attestation, r12 scratch, r13 out, r14 indices, r15 count, S7 keys (a
- * BlsPublicKeyList; with a cache, three G1Points at the end of scratch: the sum, a sum, a key),
- * S8 cache, S9 i. Locals: L domain type, L+8 domain (32), L+40 message (24 + 32), L+96 the sum's
- * compressed form (48), L+144 a key, L+152 its entry.
+ * BlsPublicKeyList), then the 7th argument of the cached check; S8 cache: 0 when it has no entry
+ * of the largest index. Locals: L domain type, L+8 domain (32), L+40 message (24 + 32).
  */
+.if IndexedAttestation_attesting_indices != CRYPTO_BLS_LIST_OFFSET
+.error "an IndexedAttestation must read as a BlsIndexList of its attesting indices"
+.endif
 SPEC_FUNCTION is_valid_indexed_attestation
     ENTER 160
     mov     %rdi, %rbx
@@ -745,9 +750,13 @@ SPEC_FUNCTION is_valid_indexed_attestation
 2:  mov     -8(%r14,%r15,8), %rax           # the largest index names a validator
     cmp     (BeaconState_validators + 8)(%rbx), %rax
     jae     6f
-    cmpq    $0, S8(%rsp)                    # with a cache: points, no list of keys
-    jne     30f
-    imul    $48, %r15, %rax                 # pubkeys: a BlsPublicKeyList at the end of scratch
+    mov     S8(%rsp), %rcx                  # with a cache that has an entry of every index: no list of keys
+    test    %rcx, %rcx
+    jz      31f
+    cmp     CRYPTO_BLS_CACHE_COUNT(%rcx), %rax
+    jb      4f
+    movq    $0, S8(%rsp)
+31: imul    $48, %r15, %rax                 # pubkeys: a BlsPublicKeyList at the end of scratch
     add     $(24 + 7), %rax
     and     $-8, %rax
     mov     (%r12), %rcx
@@ -815,111 +824,16 @@ SPEC_FUNCTION is_valid_indexed_attestation
     LEAVE 160
 9:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 160
-30: mov     (%r12), %rcx                    # the three points at the end of scratch
-    MOVQ    %rdx, LANTERN_SCRATCH_FIXED + 3 * 144
-    cmp     %rdx, %rcx
-    jb      9b
-    sub     $(3 * 144), %rcx
-    lea     (%r12,%rcx), %rdx
-    mov     %rdx, S7(%rsp)
-    mov     %rcx, (%r12)
-    jmp     4b
-40: movq    $0, S9(%rsp)                    # the sum of the keys' points
-41: mov     S9(%rsp), %rcx
-    cmp     %r15, %rcx
-    jae     45f
-    mov     (%r14,%rcx,8), %rax
-    mov     %rax, %rdi
-    shl     $7, %rdi
-    add     BeaconState_validators(%rbx), %rdi
+40: mov     BeaconState_validators(%rbx), %rdi  # the keys: the validators' pubkeys
     add     %rbx, %rdi
-    add     $Validator_pubkey, %rdi         # the key's 48 bytes
-    mov     %rdi, (L + 144)(%rsp)
+    add     $Validator_pubkey, %rdi
+    mov     %rbp, %rsi                      # the indices: the indexed attestation, as a BlsIndexList
     mov     S8(%rsp), %rdx
-    cmp     PubkeyCache_validators(%rdx), %rax
-    jae     43f
-    imul    $PubkeyEntry__mem, %rax, %rsi   # the entry of the index
-    lea     PubkeyCache_entries(%rdx,%rsi), %rsi
-    mov     %rsi, (L + 152)(%rsp)
-    mov     PubkeyEntry_status(%rsi), %rcx
-    test    %rcx, %rcx
-    jz      42f
-    lea     PubkeyEntry_pubkey(%rsi), %r9   # the same 48 bytes
-    NE32    %rdi, %r9, 42f
-    movdqu  32(%rdi), %xmm0
-    movdqu  32(%r9), %xmm1
-    pcmpeqb %xmm1, %xmm0
-    pmovmskb %xmm0, %r11d
-    cmp     $0xffff, %r11d
-    jne     42f
-    cmp     $1, %rcx
-    jne     8b                              # an invalid key: False
-    lea     PubkeyEntry_point(%rsi), %rsi
-    jmp     44f
-42: lea     PubkeyEntry_point(%rsi), %rsi   # decode the key into the entry, with its bytes
-    CALL_GLOBAL crypto_bls_g1_decode
-    mov     (L + 152)(%rsp), %rsi
-    mov     $2, %ecx                        # invalid: no point, or the point at infinity
-    test    %rax, %rax
-    jnz     421f
-    mov     (PubkeyEntry_point + 96)(%rsi), %rax
-    or      (PubkeyEntry_point + 104)(%rsi), %rax
-    or      (PubkeyEntry_point + 112)(%rsi), %rax
-    or      (PubkeyEntry_point + 120)(%rsi), %rax
-    or      (PubkeyEntry_point + 128)(%rsi), %rax
-    or      (PubkeyEntry_point + 136)(%rsi), %rax
-    jz      421f
-    mov     $1, %ecx
-421: mov    (L + 144)(%rsp), %rdi
-    movdqu  (%rdi), %xmm0
-    movdqu  16(%rdi), %xmm1
-    movdqu  32(%rdi), %xmm2
-    movdqu  %xmm0, PubkeyEntry_pubkey(%rsi)
-    movdqu  %xmm1, (PubkeyEntry_pubkey + 16)(%rsi)
-    movdqu  %xmm2, (PubkeyEntry_pubkey + 32)(%rsi)
-    mov     %rcx, PubkeyEntry_status(%rsi)
-    cmp     $1, %rcx
-    jne     8b
-    lea     PubkeyEntry_point(%rsi), %rsi
-    jmp     44f
-43: mov     S7(%rsp), %rsi                  # an index past the cache: the third point
-    add     $288, %rsi
-    CALL_GLOBAL crypto_bls_g1_decode
-    test    %rax, %rax
-    jnz     8b
-    mov     S7(%rsp), %rsi
-    add     $288, %rsi
-    mov     96(%rsi), %rax
-    or      104(%rsi), %rax
-    or      112(%rsi), %rax
-    or      120(%rsi), %rax
-    or      128(%rsi), %rax
-    or      136(%rsi), %rax
-    jz      8b
-44: cmpq    $0, S9(%rsp)                    # the sum takes the point rsi
-    jne     441f
-    mov     S7(%rsp), %rdi
-    mov     $144, %edx
-    call    lantern_copy
-    jmp     442f
-441: mov    S7(%rsp), %rdi
-    lea     144(%rdi), %rdx
-    CALL_GLOBAL crypto_bls_g1_add
-    mov     S7(%rsp), %rdi
-    lea     144(%rdi), %rsi
-    mov     $144, %edx
-    call    lantern_copy
-442: incq   S9(%rsp)
-    jmp     41b
-45: mov     S7(%rsp), %rdi                  # bls.Verify of the sum's compressed form
-    lea     (L + 96)(%rsp), %rsi
-    CALL_GLOBAL crypto_bls_g1_compress
-    lea     (L + 96)(%rsp), %rdi
-    lea     (L + 40)(%rsp), %rsi
-    lea     IndexedAttestation_signature(%rbp), %rdx
-    mov     %r12, %rcx
-    mov     %r13, %r8
-    CALL_GLOBAL crypto_bls_verify
+    lea     (L + 40)(%rsp), %rcx
+    lea     IndexedAttestation_signature(%rbp), %r8
+    mov     %r12, %r9
+    mov     %r13, S7(%rsp)                  # valid: the 7th argument, at the stack pointer
+    CALL_GLOBAL crypto_bls_fast_aggregate_verify_cached
     LEAVE 160
 SPEC_END is_valid_indexed_attestation
 
