@@ -2320,13 +2320,22 @@ static void root_of(const char *type, const uint8_t *value, uint8_t root[32], co
 /*
  * The anchor state, the anchor block and the store of a case. Returns the anchor block, or NULL with a reason.
  */
+static const uint8_t *bf_state, *bf_block; /* with them, the anchor of the next node: a state value and a BeaconBlock value */
+static uint64_t bf_state_size;
 static uint8_t *fc_setup(fc_node *n, tv parts, const char **why) {
     uint64_t slen, blen, vsize;
-    const uint8_t *enc = tv_bytes(tv_get(parts, "anchor_state"), &slen);
-    n->anchor = load_state(enc, slen, &n->anchor_size, why);
-    if (!n->anchor) return NULL;
-    uint8_t *anchor_block = decode(type_by_name("BeaconBlock"), tv_bytes(tv_get(parts, "anchor_block"), &blen), blen, &vsize, why);
-    if (!anchor_block) return NULL;
+    uint8_t *anchor_block;
+    if (bf_state) {
+        n->anchor = copy_of(bf_state, bf_state_size);
+        n->anchor_size = bf_state_size;
+        anchor_block = copy_of(bf_block, rd64(bf_block));
+    } else {
+        const uint8_t *enc = tv_bytes(tv_get(parts, "anchor_state"), &slen);
+        n->anchor = load_state(enc, slen, &n->anchor_size, why);
+        if (!n->anchor) return NULL;
+        anchor_block = decode(type_by_name("BeaconBlock"), tv_bytes(tv_get(parts, "anchor_block"), &blen), blen, &vsize, why);
+        if (!anchor_block) return NULL;
+    }
     /* Small capacities, so that the store grows through lantern_store_copy. */
     uint64_t room[2] = {2, 1}, need = 0;
     CALL(lantern_store_size, room, &need);
@@ -3284,8 +3293,9 @@ static struct node_shell *shell_open(fc_node *n, tv parts, uint8_t **anchor_bloc
         /* Small capacities, so that the node grows through lantern_node_copy. */
         uint8_t anchor[216] = {0}; /* NodeAnchor: root, slot, genesis_validators_root, jwt_secret, engine_host_len, engine_host, node_id, history_slot */
         static unsigned long opened; /* every second node archives to a Db */
+        int force_db = bf_state != NULL; /* the backfill's node archives to a Db */
         /* every second node archives to a Db; every second pair keeps few post-states and rebuilds the others */
-        uint64_t flags = (FORK >= FORK_BELLATRIX ? NODE_FLAG_ENGINE : 0) | NODE_FLAG_DISCV5 | (opened % 2 ? NODE_FLAG_DB : 0) |
+        uint64_t flags = (FORK >= FORK_BELLATRIX ? NODE_FLAG_ENGINE : 0) | NODE_FLAG_DISCV5 | (opened % 2 || force_db ? NODE_FLAG_DB : 0) |
                          (opened / 2 % 2 ? NODE_FLAG_FEW_STATES : 0), need = 0;
         opened++;
         for (int i = 0; i < NODE_ROOM_FIELDS; i++) s->room[i] = 2;
@@ -4682,7 +4692,8 @@ static void peer_record(const uint8_t *gvr, uint64_t epoch, uint8_t *out, const 
  * may be imported. Else the node must import the chain, take its last block as head, and hold
  * each sidecar the peer sent.
  */
-static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last_ms, int no_blobs, const char **why) {
+static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last_ms, int no_blobs, uint8_t **head_state,
+                      uint64_t *head_size, const char **why) {
     fc_node m;
     uint8_t *anchor_block;
     struct node_shell *s = shell_open(&m, parts, &anchor_block, why);
@@ -4751,6 +4762,15 @@ static void sync_once(tv parts, case_block **chain, size_t nchain, uint64_t last
 #endif
         p2p_close(&net);
     }
+    if (!*why && head_state) { /* the post-state of the chain's last block */
+        const uint8_t *e = shell_block(s, chain[nchain - 1]->root);
+        shell_buf *h = e ? shell_find(s, rd64(e + NB_STATE_ID)) : NULL;
+        if (!h) *why = "sync: the head has no post-state";
+        else {
+            *head_state = copy_of(h->b, h->size);
+            *head_size = h->size;
+        }
+    }
     shell_close(&m, anchor_block);
 }
 
@@ -4796,6 +4816,117 @@ static void status_check(tv parts, uint64_t last_ms, const char **why) {
     shell_close(&m, anchor_block);
 }
 
+#define NODE_BACKFILL_HANDLE 560 /* include/lantern.inc: Node_backfill_handle */
+#define NODE_BACKFILL_SLOT 568
+#define NB_BF_CHECKING 10
+#define NB_BACKFILL 11
+static case_block **bf_chain;
+static size_t bf_nchain, bf_above; /* the blocks from bf_above up must reach the Db */
+
+/* Whether the blocks of the chain from bf_above up are in the Db, and the backfill has no request or block open. */
+static int p2p_backfilled(struct p2p_net *net, int arg) {
+    (void)arg;
+    const struct node_shell *s = net->shell;
+    for (size_t b = bf_above; b < bf_nchain; b++)
+        if (shell_db_slot(s, bf_chain[b]->root) == UINT64_MAX) return 0;
+    if (rd64(s->node + NODE_BACKFILL_HANDLE)) return 0;
+    const uint8_t *e = s->node + rd64(s->node + NODE_BLOCKS);
+    for (uint64_t i = 0, c = rd64(s->node + NODE_BLOCKS + 8); i < c; i++, e += NODE_BLOCK_BYTES)
+        if (rd64(e + NB_STATUS) == NB_BF_CHECKING || rd64(e + NB_STATUS) == NB_BACKFILL) return 0;
+    return 1;
+}
+
+/*
+ * The backfill (node.md): a node with NODE_FLAG_DB from the post-state and the block of the chain's
+ * last block, at the case's last tick, gets a peer whose Status head is that block. The peer
+ * answers BeaconBlocksByRange with the chain's blocks; each must reach the Db, and backfill_slot is
+ * the first's. With bad, the block at bad has another signature: it and those below stay out.
+ */
+static void backfill_once(tv parts, case_block **chain, size_t nchain, uint64_t last_ms, size_t bad, const char **why) {
+    uint64_t vsize = 0;
+    uint8_t *sb = decode(type_by_name("SignedBeaconBlock"), chain[nchain - 1]->bytes, chain[nchain - 1]->len, &vsize, why);
+    if (!sb) return;
+    bf_block = nested(sb, field_offset("SignedBeaconBlock", 0));
+    fc_node m;
+    uint8_t *anchor_block;
+    struct node_shell *s = shell_open(&m, parts, &anchor_block, why);
+    bf_block = NULL;
+    free(sb);
+    if (!*why) {
+        shell_event(s, EV_TICK, last_ms, NULL, 0);
+        shell_settle(&m, why);
+    }
+    case_block *served[1024], badblock;
+    uint8_t *badbytes = NULL;
+    if (nchain > 1024) *why = "backfill: a chain of more than 1024 blocks";
+    for (size_t b = 0; b < nchain && !*why; b++) served[b] = chain[b];
+    if (!*why && bad < nchain) {
+        badblock = *chain[bad];
+        badbytes = (uint8_t *)copy_of(chain[bad]->bytes, chain[bad]->len);
+        badbytes[4 + 40] ^= 0x01; /* a bit of the signature's x coordinate */
+        badblock.bytes = badbytes;
+        served[bad] = &badblock;
+    }
+    struct p2p_net net;
+    uint64_t genesis_ms = *why ? 0 : rd64(m.store + STORE_GENESIS_TIME_MS);
+    uint8_t gvr[32], ncfg[CONFIG_SIZE], status[96] = {0}, record[24 + 300];
+    if (!*why) {
+        memcpy(gvr, m.anchor + field_offset("BeaconState", 1), 32);
+        node_config(ncfg);
+        uint64_t epoch = last_ms < genesis_ms ? 0 : (last_ms - genesis_ms) / rd64(config + 104) / SLOTS_PER_EPOCH_RUNNER;
+        CALL(LF(compute_fork_digest), gvr, &epoch, ncfg, fresh_scratch(), status);
+        memcpy(status + 44, chain[nchain - 1]->root, 32); /* finalized (0, 0), head the chain's last block */
+        wr64(status + 76, chain[nchain - 1]->slot);
+        peer_record(gvr, epoch, record, why);
+    }
+    if (!*why) {
+        s->room[5] = 1u << 18; /* request bytes: a block's chunk */
+        p2p_open_record(&m, &net, record + 24, rd64(record + 16), status, FORK >= FORK_FULU ? 92 : 84, why);
+        if (!*why) {
+            net.chain = served;
+            net.nchain = nchain;
+            net.no_blobs = 1;
+            net.parts = parts;
+            memcpy(net.gvr, gvr, 32);
+            bf_chain = chain;
+            bf_nchain = nchain;
+            bf_above = bad < nchain ? bad + 1 : 0;
+            p2p_run(&m, &net, p2p_backfilled, 0, why);
+            if (*why && !strcmp(*why, "the network does not get there")) {
+                static char msg[256];
+                size_t in = 0;
+                for (size_t b = 0; b < nchain; b++) in += shell_db_slot(s, chain[b]->root) != UINT64_MAX;
+                snprintf(msg, sizeof msg, "%s: %zu of %zu blocks (slots %llu to %llu); backfill_slot %llu, next %llu, start %llu, got %llu, handle %llu",
+                         bad < nchain ? "backfill: the blocks above one of another signature do not reach the Db"
+                                      : "backfill: the chain does not reach the Db",
+                         in, nchain, (unsigned long long)chain[0]->slot, (unsigned long long)chain[nchain - 1]->slot,
+                         (unsigned long long)rd64(s->node + NODE_BACKFILL_SLOT), (unsigned long long)rd64(s->node + 624),
+                         (unsigned long long)rd64(s->node + 648), (unsigned long long)rd64(s->node + 656),
+                         (unsigned long long)rd64(s->node + NODE_BACKFILL_HANDLE));
+                *why = msg;
+            }
+            for (size_t b = 0; b < nchain && !*why; b++) {
+                int in = shell_db_slot(s, chain[b]->root) != UINT64_MAX;
+                if (bad < nchain && b <= bad && in) *why = "backfill: a block of another signature, or one below it, is in the Db";
+            }
+            if (!*why && bad >= nchain && rd64(s->node + NODE_BACKFILL_SLOT) != chain[0]->slot)
+                *why = "backfill: backfill_slot is not the slot of the chain's first block";
+            p2p_close(&net);
+        }
+    }
+    free(badbytes);
+    shell_close(&m, anchor_block);
+}
+
+static void backfill_check(tv parts, case_block **chain, size_t nchain, uint64_t last_ms, uint8_t *head_state,
+                           uint64_t head_size, const char **why) {
+    bf_state = head_state;
+    bf_state_size = head_size;
+    backfill_once(parts, chain, nchain, last_ms, SIZE_MAX, why);
+    if (!*why) backfill_once(parts, chain, nchain, last_ms, nchain / 2, why);
+    bf_state = NULL;
+}
+
 static void fc_sync_check(tv parts, const char **why) {
     case_block *blocks, **chain;
     size_t nchain = case_chain(parts, &blocks, &chain, why);
@@ -4807,11 +4938,15 @@ static void fc_sync_check(tv parts, const char **why) {
             last_ms = secs > UINT64_MAX / 1000 ? UINT64_MAX : secs * 1000;
         }
     if (!*why && nchain) {
-        sync_once(parts, chain, nchain, last_ms, 0, why);
+        uint8_t *head_state = NULL;
+        uint64_t head_size = 0;
+        sync_once(parts, chain, nchain, last_ms, 0, nchain >= 2 ? &head_state : NULL, &head_size, why);
         sync_chain = chain;
         sync_nchain = nchain;
-        if (!*why && sync_first_blobs() < nchain) sync_once(parts, chain, nchain, last_ms, 1, why);
+        if (!*why && sync_first_blobs() < nchain) sync_once(parts, chain, nchain, last_ms, 1, NULL, NULL, why);
         if (!*why) status_check(parts, last_ms, why);
+        if (!*why && head_state) backfill_check(parts, chain, nchain, last_ms, head_state, head_size, why);
+        free(head_state);
     }
     free(chain);
     free(blocks);

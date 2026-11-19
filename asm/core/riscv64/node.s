@@ -292,7 +292,21 @@ FUNCTION lantern_node_init
     mv      t0, s4
     bgeu    t1, t0, 601f
     mv      t0, t1
-601: li     t1, -DB_SEGMENT_SLOTS
+601: LDQ    t2, s2, CONFIG_MIN_VALIDATOR_WITHDRAWABILITY_DELAY   # compute_min_epochs_for_block_requests
+    LDQ     t3, s2, CONFIG_CHURN_LIMIT_QUOTIENT
+    srli    t3, t3, 1
+    add     t2, t2, t3
+    bgeu    t2, t3, 602f
+    li      t2, -1
+602: li     t3, SLOTS_PER_EPOCH
+    divu    t4, s4, t3
+    li      t5, 0
+    bltu    t4, t2, 603f
+    sub     t5, t4, t2
+    mul     t5, t5, t3
+603: bgeu   t5, t0, 604f
+    mv      t0, t5
+604: li     t1, -DB_SEGMENT_SLOTS
     and     t0, t0, t1
     sd      t0, L(sp)
     addi    a0, s1, NodeRoom_db_slots
@@ -306,6 +320,13 @@ FUNCTION lantern_node_init
     li      t0, -1
     sd      t0, Node_db_block_segment(s6)
     sd      t0, Node_db_sidecar_segment(s6)
+    sd      t0, Node_backfill_segment(s6)   # the backfill: from the anchor's block down
+    sd      t0, Node_backfill_start(s6)
+    addi    t0, s4, 1
+    sd      t0, Node_backfill_slot(s6)
+    sd      t0, Node_backfill_next(s6)
+    addi    t0, s6, Node_backfill_root
+    COPY32  t0, s3
     li      a0, LANTERN_OK
 9:  LEAVE 16
 8:  li      a0, LANTERN_BUFFER_TOO_SMALL
@@ -1771,6 +1792,271 @@ LOCAL_FUNCTION node_db_append
 END_FUNCTION node_db_append
 
 /*
+ * L0: a0 = the end of the block segment a0: db_block_end for db_block_segment, else backfill_end
+ * for backfill_segment, else 0, a new segment. Uses t1 only.
+ */
+LOCAL_FUNCTION node_seg_end
+    UNWIND_END_PROLOGUE
+    ld      t1, Node_db_block_segment(s1)
+    bne     a0, t1, 1f
+    ld      a0, Node_db_block_end(s1)
+    ret
+1:  ld      t1, Node_backfill_segment(s1)
+    bne     a0, t1, 2f
+    ld      a0, Node_backfill_end(s1)
+    ret
+2:  li      a0, 0
+    ret
+END_FUNCTION node_seg_end
+
+/* L0: the NodeBlock entry a0 is free: its bytes go (a BYTES_FREE), root and parent_root all 0xff bytes. Locals: sp+0 the entry. */
+LOCAL_FUNCTION node_free_block
+    FRAME 16
+    sd      a0, 0(sp)
+    ld      a1, NodeBlock_data_id(a0)
+    beqz    a1, 1f
+    li      a0, NODE_ACT_BYTES_FREE
+    li      a2, 0
+    call    node_ids
+1:  ld      a0, 0(sp)
+    li      t0, -1
+    sd      t0, 0(a0)
+    sd      t0, 8(a0)
+    sd      t0, 16(a0)
+    sd      t0, 24(a0)
+    sd      t0, 32(a0)
+    sd      t0, 40(a0)
+    sd      t0, 48(a0)
+    sd      t0, 56(a0)
+    sd      t0, NodeBlock_slot(a0)
+    sd      zero, NodeBlock_data_id(a0)
+    sd      zero, NodeBlock_state_id(a0)
+    li      t0, NODE_BLOCK_FREE
+    sd      t0, NodeBlock_status(a0)
+    UNFRAME 16
+END_FUNCTION node_free_block
+
+/*
+ * With NODE_FLAG_DB, the backfill's blocks join the Db (node.md): while a block in
+ * NODE_BLOCK_BACKFILL has the root backfill_root and a slot below backfill_slot, its record at the
+ * end of the segment of its slot and a DB_APPEND; backfill_slot and backfill_root follow; the entry
+ * is free. Then, with no backfill stream and no block in NODE_BLOCK_BF_CHECKING, the blocks left in
+ * NODE_BLOCK_BACKFILL go, and the last request is weighed. s3 an entry, s4 the entries left, s7
+ * its segment. Locals: L a DbRecord (80), L+80 the offset.
+ */
+LOCAL_FUNCTION node_backfill_link
+    ENTER 96
+    ld      t0, Node_flags(s1)
+    andi    t0, t0, NODE_FLAG_DB
+    beqz    t0, 99f
+1:  PART    s3, s4, s1, Node_blocks         # the next block of the chain
+2:  beqz    s4, 20f
+    ld      t0, NodeBlock_status(s3)
+    li      t1, NODE_BLOCK_BACKFILL
+    bne     t0, t1, 3f
+    ld      t0, NodeBlock_slot(s3)
+    ld      t1, Node_backfill_slot(s1)
+    bgeu    t0, t1, 3f
+    addi    t2, s1, Node_backfill_root
+    NE32    s3, t2, 3f
+    j       4f
+3:  addi    s3, s3, NodeBlock__mem
+    addi    s4, s4, -1
+    j       2b
+4:  li      t0, DB_BLOCK                    # its record
+    sd      t0, L(sp)
+    ld      t0, NodeBlock_slot(s3)
+    sd      t0, (L + 8)(sp)
+    sd      zero, (L + 16)(sp)
+    addi    t1, sp, L + 24
+    COPY32  t1, s3
+    ld      t0, NodeBlock_length(s3)
+    sd      t0, (L + 72)(sp)
+    addi    t1, t0, 24
+    sd      t1, (L + 56)(sp)
+    li      t1, 24
+    sd      t1, (L + 64)(sp)
+    ld      s7, NodeBlock_slot(s3)
+    srli    s7, s7, DB_SEGMENT_SHIFT
+    mv      a0, s7
+    call    node_seg_end
+    sd      a0, (L + 80)(sp)
+    ld      a0, Node_db(s1)
+    add     a0, s1, a0
+    addi    a1, sp, L
+    addi    a2, sp, L + 80
+    call    lantern_db_add
+    bnez    a0, 99f                         # no room, or refused: until the next step
+    li      a0, 0
+    ld      a1, NodeBlock_data_id(s3)
+    mv      a2, s7
+    ld      a3, (L + 80)(sp)
+    addi    a4, sp, L
+    call    node_db_append
+    ld      t0, (L + 72)(sp)                # the segment's new end, for each writer of it
+    addi    t0, t0, DbRecord__mem + 7
+    andi    t0, t0, -8
+    ld      t1, (L + 80)(sp)
+    add     t1, t1, t0
+    sd      s7, Node_backfill_segment(s1)
+    sd      t1, Node_backfill_end(s1)
+    ld      t2, Node_db_block_segment(s1)
+    bne     t2, s7, 5f
+    sd      t1, Node_db_block_end(s1)
+5:  ld      t0, NodeBlock_slot(s3)
+    sd      t0, Node_backfill_slot(s1)
+    addi    t1, s1, Node_backfill_root
+    addi    t2, s3, NodeBlock_parent_root
+    COPY32  t1, t2
+    mv      a0, s3
+    call    node_free_block
+    j       1b
+20: ld      t0, Node_backfill_handle(s1)    # no stream and no check left: the rest are of no chain
+    bnez    t0, 99f
+    PART    s3, s4, s1, Node_blocks
+21: beqz    s4, 23f
+    ld      t0, NodeBlock_status(s3)
+    li      t1, NODE_BLOCK_BF_CHECKING
+    beq     t0, t1, 99f
+    addi    s3, s3, NodeBlock__mem
+    addi    s4, s4, -1
+    j       21b
+23: PART    s3, s4, s1, Node_blocks
+24: beqz    s4, 26f
+    ld      t0, NodeBlock_status(s3)
+    li      t1, NODE_BLOCK_BACKFILL
+    bne     t0, t1, 25f
+    mv      a0, s3
+    call    node_free_block
+25: addi    s3, s3, NodeBlock__mem
+    addi    s4, s4, -1
+    j       24b
+26: ld      t0, Node_backfill_start(s1)     # the last request, weighed
+    li      t1, -1
+    beq     t0, t1, 99f
+    ld      t0, Node_backfill_slot(s1)
+    ld      t1, Node_backfill_next(s1)
+    bgeu    t0, t1, 27f
+    sd      t0, Node_backfill_next(s1)      # blocks joined: on from the lowest
+    j       29f
+27: ld      t0, Node_backfill_got(s1)
+    bnez    t0, 28f
+    call    node_serve_slot                 # no block in the range: the range below
+    ld      t0, Node_backfill_start(s1)
+    bleu    t0, a0, 28f
+    sd      t0, Node_backfill_next(s1)
+    j       29f
+28: ld      t0, Node_backfill_slot(s1)      # else again later, from the next peer
+    sd      t0, Node_backfill_next(s1)
+    ld      t0, Node_time_ms(s1)
+    li      t1, NODE_STATUS_MS
+    add     t0, t0, t1
+    sd      t0, Node_backfill_ms(s1)
+    ld      t0, Node_backfill_peer(s1)
+    addi    t0, t0, 1
+    sd      t0, Node_backfill_peer(s1)
+29: li      t0, -1
+    sd      t0, Node_backfill_start(s1)
+99: LEAVE 96
+END_FUNCTION node_backfill_link
+
+/*
+ * With NODE_FLAG_DB, after the sync's requests: the backfill's BeaconBlocksByRange (node.md) of the
+ * slots below backfill_next, to a peer from backfill_peer on, when no request is open or unweighed,
+ * from backfill_ms on, while backfill_next is above the target and the streams part has room for
+ * three entries. s2 the store. s3 the peers part, s4 the peers, s7 the target, then a peer, s8 the
+ * start slot, s9 the first index, s10 the peers checked. Locals: L the request (24), L+24 the index.
+ */
+LOCAL_FUNCTION node_backfill_ask
+    ENTER 32
+    ld      t0, Node_flags(s1)
+    andi    t0, t0, NODE_FLAG_DB
+    beqz    t0, 99f
+    ld      t0, Node_backfill_handle(s1)
+    bnez    t0, 99f
+    ld      t0, Node_backfill_start(s1)
+    li      t1, -1
+    bne     t0, t1, 99f
+    ld      t0, (Node_backfill_root)(s1)
+    ld      t1, (Node_backfill_root + 8)(s1)
+    or      t0, t0, t1
+    ld      t1, (Node_backfill_root + 16)(s1)
+    or      t0, t0, t1
+    ld      t1, (Node_backfill_root + 24)(s1)
+    or      t0, t0, t1
+    beqz    t0, 99f
+    ld      t0, Node_backfill_ms(s1)
+    ld      t1, Node_time_ms(s1)
+    bltu    t1, t0, 99f
+    ld      t1, (Node_streams + 8)(s1)      # room for it and two more
+    ld      t2, Node_messages(s1)
+    ld      t3, Node_streams(s1)
+    sub     t2, t2, t3
+    ld      t3, Node_stream_bytes(s1)
+    divu    t2, t2, t3
+    addi    t1, t1, 3
+    bgtu    t1, t2, 99f
+    call    node_serve_slot                 # the target
+    mv      s7, a0
+    ld      t0, Node_backfill_next(s1)
+    bleu    t0, s7, 99f
+    li      t1, NODE_SYNC_BATCH
+    li      s8, 0
+    bltu    t0, t1, 31f
+    sub     s8, t0, t1
+31: bgeu    s8, s7, 32f
+    mv      s8, s7
+32: PART    s3, s4, s1, Node_peers          # the first peer from backfill_peer
+    beqz    s4, 99f
+    ld      t0, Node_backfill_peer(s1)
+    remu    s9, t0, s4
+    li      s10, 0
+4:  bgeu    s10, s4, 99f
+    add     t0, s9, s10
+    remu    t0, t0, s4
+    sd      t0, (L + 24)(sp)
+    addi    s10, s10, 1
+    li      t1, NodePeer__mem
+    mul     t1, t0, t1
+    add     s7, s3, t1
+    ld      t0, NodePeer_flags(s7)
+    andi    t0, t0, 1                       # NODE_PEER_STATUS
+    beqz    t0, 4b
+    ld      t0, NodePeer_fork_digest(s7)
+    ld      t1, Node_fork_digest(s1)
+    bne     t0, t1, 4b
+    ld      t0, NodePeer_earliest_slot(s7)
+    bgtu    t0, s8, 4b
+    sd      s8, L(sp)                       # start, count, step 1
+    ld      t0, Node_backfill_next(s1)
+    sub     t0, t0, s8
+    sd      t0, (L + 8)(sp)
+    li      t0, 1
+    sd      t0, (L + 16)(sp)
+    mv      a0, s2                          # version 2 from altair on
+    call    node_store_slot
+    addi    a1, s1, Node_config
+    call    node_fork
+    li      a1, 1
+    li      t0, FORK_ALTAIR
+    bltu    a0, t0, 5f
+    li      a1, 2
+5:  li      a0, REQRESP_BEACON_BLOCKS_BY_RANGE
+    ld      a2, NodePeer_handle(s7)
+    addi    a3, sp, L
+    li      a4, 24
+    call    node_open
+    beqz    a0, 99f
+    ld      t0, NodeStream_handle(a0)
+    sd      t0, Node_backfill_handle(s1)
+    sd      s8, Node_backfill_start(s1)
+    sd      zero, Node_backfill_got(s1)
+    ld      t0, (L + 24)(sp)
+    sd      t0, Node_backfill_peer(s1)
+99: LEAVE 32
+END_FUNCTION node_backfill_ask
+
+/*
  * With NODE_FLAG_DB, the canonical blocks from db_next_slot to the finalized block a0 and their
  * sidecars go to the Db, in slot order: a record of each in the index and in a DB_APPEND action,
  * then their bytes and entries go, but the finalized block's entry and bytes a stream sends. A
@@ -1838,8 +2124,10 @@ LOCAL_FUNCTION node_archive
     srli    t0, s10, DB_SEGMENT_SHIFT       # its segment, and its offset at the segment's end
     ld      t1, Node_db_block_segment(s1)
     beq     t0, t1, 3f
+    mv      a0, t0
+    call    node_seg_end
     sd      t0, Node_db_block_segment(s1)
-    sd      zero, Node_db_block_end(s1)
+    sd      a0, Node_db_block_end(s1)
 3:  ld      t0, Node_db_block_end(s1)
     sd      t0, (L + 80)(sp)
     ld      a0, Node_db(s1)
@@ -1860,7 +2148,11 @@ LOCAL_FUNCTION node_archive
     ld      t1, Node_db_block_end(s1)
     add     t1, t1, t0
     sd      t1, Node_db_block_end(s1)
-    li      s9, 0                           # each sidecar the node holds, by index
+    ld      t2, Node_backfill_segment(s1)   # the backfill's end too, of the same segment
+    ld      t3, Node_db_block_segment(s1)
+    bne     t2, t3, 42f
+    sd      t1, Node_backfill_end(s1)
+42: li      s9, 0                           # each sidecar the node holds, by index
 4:  li      t0, DB_SIDECAR_INDICES
     bgeu    s9, t0, 20f
     mv      a0, s8
@@ -2016,10 +2308,38 @@ FUNCTION lantern_node_db_scan
     ld      s3, 0(a1)
     ld      s2, 0(a2)
     mv      s4, a4
+    mv      s5, a3
     ld      a0, Node_db(s1)
     add     a0, s1, a0
     call    lantern_db_scan
     bnez    a0, 9f
+    bnez    s2, 10f                         # a block segment: the backfill's, when it has none; its lowest block
+    ld      t0, Node_backfill_segment(s1)
+    li      t1, -1
+    bne     t0, t1, 11f
+    sd      s3, Node_backfill_segment(s1)
+    ld      t0, 0(s4)
+    sd      t0, Node_backfill_end(s1)
+11: ld      t0, 8(s5)
+    add     s6, s5, t0
+    ld      t0, 0(s4)
+    add     s7, s6, t0                      # the end of the records added
+12: addi    t0, s6, DbRecord__mem
+    bgtu    t0, s7, 10f
+    ld      t0, DbRecord_slot(s6)
+    ld      t1, Node_backfill_slot(s1)
+    bgeu    t0, t1, 13f
+    sd      t0, Node_backfill_slot(s1)
+    sd      t0, Node_backfill_next(s1)
+    addi    t2, s1, Node_backfill_root
+    addi    t3, s6, DbRecord__mem + 116
+    COPY32W t2, t3
+13: ld      t0, DbRecord_length(s6)
+    addi    t0, t0, DbRecord__mem + 7
+    andi    t0, t0, -8
+    add     s6, s6, t0
+    j       12b
+10:
     li      t0, Node_db_block_segment
     beqz    s2, 1f
     li      t0, Node_db_sidecar_segment
@@ -2819,7 +3139,24 @@ LOCAL_FUNCTION node_event
     li      a2, 0
     call    node_ids
     LEAVE 48
-75: li      t2, NODE_WORK_SYNC_BLOCK        # SYNC_BLOCK: the root of a block of a response
+75: li      t2, NODE_WORK_BACKFILL          # BACKFILL: a block of the backfill, checked
+    bne     t0, t2, 751f
+    ld      a0, NodeAction_target(s3)
+    PART    t2, t3, s1, Node_blocks
+    bgeu    a0, t3, 79f
+    li      t3, NodeBlock__mem
+    mul     t3, a0, t3
+    add     s4, t2, t3
+    ld      t2, NodeBlock_status(s4)
+    li      t3, NODE_BLOCK_BF_CHECKING
+    bne     t2, t3, 79f
+    bnez    t1, 76f
+    addi    t0, s3, NodeEvent_root
+    COPY32  s4, t0
+    li      t0, NODE_BLOCK_BACKFILL
+    sd      t0, NodeBlock_status(s4)
+    LEAVE 48
+751: li     t2, NODE_WORK_SYNC_BLOCK        # SYNC_BLOCK: the root of a block of a response
     bne     t0, t2, 77f
     ld      a0, NodeAction_target(s3)
     PART    t2, t3, s1, Node_blocks
@@ -3445,8 +3782,11 @@ LOCAL_FUNCTION node_request
     LEAVE 208
 60: ld      s7, 0(s9)                       # BlocksByRange: start_slot, count
     ld      s10, 8(s9)
-    ld      t0, Node_earliest_slot(s1)
-    bltu    s7, t0, 92b
+    ld      t0, Node_earliest_slot(s1)      # from the lower of earliest_slot and backfill_slot
+    ld      t1, Node_backfill_slot(s1)
+    bleu    t0, t1, 601f
+    mv      t0, t1
+601: bltu   s7, t0, 92b
     call    node_max_blocks                 # at most the limit, and the room of the list
     bleu    s10, a0, 65f
     mv      s10, a0
@@ -5226,7 +5566,13 @@ END_FUNCTION node_find_opening
 /* The stream entry a0 goes; the node's BeaconBlocksByRange request ends with it. */
 LOCAL_FUNCTION node_end_stream
     FRAME 0
-    ld      t0, NodeStream_state(a0)
+    ld      t1, Node_backfill_handle(s1)    # the backfill's stream: the backfill has none
+    beqz    t1, 2f
+    ld      t0, NodeStream_handle(a0)
+    bne     t0, t1, 2f
+    sd      zero, Node_backfill_handle(s1)
+    j       1f
+2:  ld      t0, NodeStream_state(a0)
     li      t1, NODE_STREAM_OPENING
     bltu    t0, t1, 1f
     ld      t0, NodeStream_method(a0)
@@ -5515,19 +5861,38 @@ LOCAL_FUNCTION node_response
     addi    a1, s8, 24 + 116
     li      a2, 32
     call    lantern_copy
-    li      t0, NODE_BLOCK_HASHING
-    sd      t0, NodeBlock_status(s10)
+    li      t0, NODE_BLOCK_HASHING          # of the backfill's stream: NODE_BLOCK_BF_CHECKING
+    ld      t1, NodeStream_handle(s3)
+    ld      t2, Node_backfill_handle(s1)
+    bne     t1, t2, 64f
+    li      t0, NODE_BLOCK_BF_CHECKING
+64: sd      t0, NodeBlock_status(s10)
     li      t0, 1
     sd      t0, NodeBlock_data_available(s10)
     mv      a0, s8
     call    node_put
     sd      a0, NodeBlock_data_id(s10)
+    sd      a0, (L + 56)(sp)
     ld      t0, 16(s8)
     sd      t0, NodeBlock_length(s10)
-    mv      a3, a0
     li      a0, NODE_WORK_SYNC_BLOCK
     li      a1, 0
+    ld      t0, NodeBlock_status(s10)
+    li      t1, NODE_BLOCK_BF_CHECKING
+    bne     t0, t1, 641f
+    ld      t0, Node_backfill_got(s1)
+    addi    t0, t0, 1
+    sd      t0, Node_backfill_got(s1)
+    addi    a0, s2, Store_finalized_checkpoint + 8  # BACKFILL: with F's post-state
+    call    node_find_block
+    li      t0, -1
     li      a2, 0
+    beq     a0, t0, 642f
+    ld      a2, NodeBlock_state_id(a1)
+642: mv     a1, a2
+    li      a0, NODE_WORK_BACKFILL
+641: li     a2, 0
+    ld      a3, (L + 56)(sp)
     ld      a4, (L + 48)(sp)
     li      a5, 0
     call    node_work
@@ -5930,7 +6295,8 @@ LOCAL_FUNCTION node_sync
     beqz    a0, 9f
     ld      t0, Node_time_ms(s1)
     sd      t0, Node_status_ms(s1)
-9:  mv      a0, s7
+9:  call    node_backfill_ask
+    mv      a0, s7
     LEAVE 96
 END_FUNCTION node_sync
 
@@ -5959,7 +6325,11 @@ LOCAL_FUNCTION node_notice
     mv      s4, a1
     ld      t0, LIBP2P_ACT_STREAM(s3)
     sd      t0, NodeStream_handle(s4)
-    li      t0, NODE_STREAM_RESPONSE
+    ld      t1, LIBP2P_ACT_SO_TAG(s3)       # the backfill's stream: its handle
+    ld      t2, Node_backfill_handle(s1)
+    bne     t1, t2, 621f
+    sd      t0, Node_backfill_handle(s1)
+621: li     t0, NODE_STREAM_RESPONSE
     sd      t0, NodeStream_state(s4)
     sd      zero, NodeStream_next(s4)
     ld      s8, (NodeStream_list + 16)(s4)
@@ -6684,11 +7054,11 @@ FUNCTION lantern_node_step
     ld      t0, Node_flags(s1)              # with NODE_FLAG_DB at a new finalized epoch: the Db's room for the archive
     andi    t0, t0, NODE_FLAG_DB
     beqz    t0, 56f
-    ld      t0, Store_finalized_checkpoint(s2)
-    ld      t1, Node_pruned_epoch(s1)
-    bleu    t0, t1, 56f
     ld      t2, Node_db(s1)
     add     t2, s1, t2
+    ld      t0, Store_finalized_checkpoint(s2)
+    ld      t1, Node_pruned_epoch(s1)
+    bleu    t0, t1, 561f
     li      t1, SLOTS_PER_EPOCH             # the slots to the finalized checkpoint's
     mul     t0, t0, t1
     addi    t0, t0, 1
@@ -6697,12 +7067,21 @@ FUNCTION lantern_node_step
     sub     t0, t0, t1
     ld      t1, (Db_slots + 8)(t2)
     bltu    t1, t0, 93f
-561: ld     t0, Db_blocks(t2)               # the roots: twice the blocks
+561: ld     t0, Db_blocks(t2)               # the roots, at each step for the backfill: twice the blocks
     ld      t1, (Node_blocks + 8)(s1)
     add     t0, t0, t1
     slli    t0, t0, 1
     ld      t1, (Db_roots + 8)(t2)
     bltu    t1, t0, 94f
+    ld      t0, Node_backfill_start(s1)     # a backfill request open or unweighed: the slots below backfill_slot
+    li      t1, -1
+    beq     t0, t1, 56f
+    ld      t0, Node_backfill_slot(s1)
+    ld      t1, Db_first_slot(t2)
+    bltu    t0, t1, 56f
+    sub     t0, t0, t1
+    ld      t1, (Db_slots + 8)(t2)
+    bltu    t1, t0, 93f
 56:
     ld      t0, Node_peers(s1)              # pow blocks: one for each POW_BLOCK event
     ld      t1, Node_pow_blocks(s1)
@@ -6857,6 +7236,7 @@ FUNCTION lantern_node_step
 9:  call    node_head
     call    node_engine_next
     call    node_shed                       # the post-states the node can rebuild go
+    call    node_backfill_link              # the backfill's blocks of the chain join the Db
     sd      zero, (L + 112)(sp)
     ld      t0, (L + 16)(sp)                # the next block of each stream that serves, then libp2p again
     beqz    t0, 40f
@@ -7509,7 +7889,7 @@ FUNCTION lantern_node_run
     FORK_CALL node_upgrade
     LEAVE 192
 97: li      t1, NODE_WORK_REPLAY
-    bne     t0, t1, 8f
+    bne     t0, t1, 971f
     ld      t0, 16(s5)                      # REPLAY: node_replay of the fork of the block's slot, of a state of that fork
     li      t1, 100 + 84
     bltu    t0, t1, 18b
@@ -7531,8 +7911,61 @@ FUNCTION lantern_node_run
     addi    a4, s7, NodeEvent_result
     FORK_CALL node_replay
     LEAVE 192
+971: li     t1, NODE_WORK_BACKFILL
+    bne     t0, t1, 8f
+    ld      t0, 16(s5)                      # BACKFILL: its root, then the signature with state_a
+    li      t1, 100 + 84
+    bltu    t0, t1, 18b
+    beqz    s4, 19b
+    mv      a0, s5
+    mv      a1, s4
+    mv      a2, s6
+    mv      a3, s7
+    call    node_run_backfill
+    LEAVE 192
 8:  li      a0, LANTERN_INVALID_EVENT
     LEAVE 192
 7:  li      a0, LANTERN_BUFFER_TOO_SMALL
     LEAVE 192
 END_FUNCTION lantern_node_run
+
+/*
+ * L0: the BACKFILL work (node.md): node_block_root of the fork of the block's slot of data a0, its
+ * root at NodeEvent_root of the event a3; then, for LANTERN_VALID, node_backfill of the fork of the
+ * slot of the state a1, with scratch a2. s3 data, s4 state, s5 scratch, s6 event. Apart from
+ * lantern_node_run, as FORK_CALL takes the labels 81 to 89.
+ */
+LOCAL_FUNCTION node_run_backfill
+    ENTER 0
+    mv      s3, a0
+    mv      s4, a1
+    mv      s5, a2
+    mv      s6, a3
+    ld      t0, 8(s3)
+    add     t0, s3, t0
+    LDU64   a0, t0, 100, t1
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    mv      a0, s3
+    mv      a1, s5
+    addi    a2, s6, NodeEvent_root
+    addi    a3, s6, NodeEvent_result
+    addi    a4, s6, NodeEvent_index
+    FORK_CALL node_block_root
+    bnez    a0, 1f
+    ld      t0, NodeEvent_result(s6)
+    bnez    t0, 1f
+    ld      a0, NODE_STATE_SLOT(s4)
+    addi    a1, s1, Node_config
+    call    node_fork
+    mv      t6, a0
+    mv      a0, s3
+    mv      a1, s4
+    addi    a2, s1, Node_config
+    addi    a3, s6, NodeEvent_root
+    mv      a4, s5
+    addi    a5, s6, NodeEvent_result
+    FORK_CALL node_backfill
+1:  LEAVE 0
+END_FUNCTION node_run_backfill

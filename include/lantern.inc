@@ -563,8 +563,18 @@
 .set Node_old_digest, 536              /* the ForkDigest whose topics leave from old_epoch on, or 0 */
 .set Node_old_fork, 544                /* the fork of those topics */
 .set Node_old_epoch, 552
-.set Node_config, 560
-.set NODE_FIXED, 560 + CONFIG_SIZE
+.set Node_backfill_handle, 560        /* the stream of the node's backfill request: its tag, then its handle; 0 for none */
+.set Node_backfill_slot, 568          /* the backfill looks for blocks below this slot */
+.set Node_backfill_root, 576          /* the root of the next block of the backfill; zero after the genesis block */
+.set Node_backfill_segment, 608       /* the block segment of the last backfill record, or 2^64 - 1 */
+.set Node_backfill_end, 616           /* the bytes of that segment */
+.set Node_backfill_next, 624         /* the end slot of the next backfill request */
+.set Node_backfill_ms, 632            /* the time from which the next backfill request may go */
+.set Node_backfill_peer, 640          /* the peers part index of the peer of the next backfill request */
+.set Node_backfill_start, 648         /* the start slot of the last backfill request, 2^64 - 1 once it is weighed */
+.set Node_backfill_got, 656           /* the blocks the last backfill request gave */
+.set Node_config, 664
+.set NODE_FIXED, 664 + CONFIG_SIZE
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
 .set NODE_SUBSCRIBE_AHEAD, 2           /* epochs: the topics of a new ForkDigest join this early, the old ones leave this late */
@@ -599,6 +609,8 @@
 .set NODE_BLOCK_PAYLOAD, 7             /* with NODE_FLAG_ENGINE: its engine_newPayload is due */
 .set NODE_BLOCK_EXECUTING, 8           /* its engine_newPayload is queued or sent */
 .set NODE_BLOCK_FREE, 9                /* no block: root and parent_root all 0xff bytes, slot 2^64 - 1 */
+.set NODE_BLOCK_BF_CHECKING, 10        /* of the backfill: its BACKFILL work is queued */
+.set NODE_BLOCK_BACKFILL, 11           /* of the backfill: root and signature checked; it waits to join the Db */
 
 /* NodeBlob: a blob sidecar the node holds */
 .set NodeBlob_block_root, 0            /* hash_tree_root of its signed_block_header.message */
@@ -782,6 +794,7 @@
 .set NODE_WORK_SLOTS, 12               /* a: a state; arg: the slot to process it to */
 .set NODE_WORK_UPGRADE, 13             /* a: a state at the fork's first slot; b: the buffer for the upgraded state; arg: the fork */
 .set NODE_WORK_REPLAY, 14              /* a: the post-state of a block's parent; data: the block, imported before */
+.set NODE_WORK_BACKFILL, 15            /* a: F's post-state; data: a block of the backfill; target: its NodeBlock index */
 .set NodeEvent_root, NodeEvent_checkpoint + 8  /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its root; of a valid blob_sidecar, BLOB: the root of its block header */
 .set NodeEvent_index, NodeEvent_root + 32      /* GOSSIP of a valid beacon_block, SYNC_BLOCK: its blob commitments; of a valid blob_sidecar: its index */
 .set NodeEvent_chunk, NODE_EV_WORK_DONE_SIZE   /* SERVE: a ByteList of the response chunk after the WORK_DONE fields; NEW_PAYLOAD, FORKCHOICE: of the HTTP request */

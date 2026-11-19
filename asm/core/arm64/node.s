@@ -274,9 +274,20 @@ FUNCTION lantern_node_init
     mov     x10, #1
     str     x10, [x9, #NodeCheckpoint_state_id]
     str     x10, [x24, #(Node_checkpoints + 8)]
-    ldr     x10, [x21, #NodeAnchor_history_slot]    /* the Db: from the segment of history_slot, or of the anchor; its archive after the anchor */
+    ldr     x10, [x21, #NodeAnchor_history_slot]    /* the Db: from the segment of history_slot, the anchor, or the backfill's target; its archive after the anchor */
     cmp     x10, x22
     csel    x10, x10, x22, lo
+    LDQ     x11, x20, CONFIG_MIN_VALIDATOR_WITHDRAWABILITY_DELAY   /* compute_min_epochs_for_block_requests */
+    LDQ     x12, x20, CONFIG_CHURN_LIMIT_QUOTIENT
+    adds    x11, x11, x12, lsr #1
+    csinv   x11, x11, xzr, cc
+    mov     x12, #SLOTS_PER_EPOCH
+    udiv    x13, x22, x12
+    subs    x13, x13, x11
+    csel    x13, xzr, x13, lo
+    mul     x13, x13, x12
+    cmp     x10, x13
+    csel    x10, x10, x13, lo
     MOVQ    x9, DB_SEGMENT_SLOTS - 1
     bic     x9, x10, x9
     str     x9, [sp, #L]
@@ -291,6 +302,13 @@ FUNCTION lantern_node_init
     mov     x9, #-1
     str     x9, [x24, #Node_db_block_segment]
     str     x9, [x24, #Node_db_sidecar_segment]
+    str     x9, [x24, #Node_backfill_segment]       /* the backfill: from the anchor's block down */
+    str     x9, [x24, #Node_backfill_start]
+    add     x9, x22, #1
+    str     x9, [x24, #Node_backfill_slot]
+    str     x9, [x24, #Node_backfill_next]
+    add     x9, x24, #Node_backfill_root
+    COPY32  x9, x21
     mov     x0, #LANTERN_OK
 9:  LEAVE 16
 8:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
@@ -1514,6 +1532,270 @@ LOCAL_FUNCTION node_db_append
 END_FUNCTION node_db_append
 
 /*
+ * L0: x0 = the end of the block segment x0: db_block_end for db_block_segment, else backfill_end
+ * for backfill_segment, else 0, a new segment. Uses x10, x11.
+ */
+LOCAL_FUNCTION node_seg_end
+    UNWIND_END_PROLOGUE
+    ldr     x10, [x19, #Node_db_block_segment]
+    cmp     x0, x10
+    b.ne    1f
+    ldr     x0, [x19, #Node_db_block_end]
+    ret
+1:  ldr     x10, [x19, #Node_backfill_segment]
+    cmp     x0, x10
+    b.ne    2f
+    ldr     x0, [x19, #Node_backfill_end]
+    ret
+2:  mov     x0, #0
+    ret
+END_FUNCTION node_seg_end
+
+/* L0: the NodeBlock entry x0 is free: its bytes go (a BYTES_FREE), root and parent_root all 0xff bytes. */
+LOCAL_FUNCTION node_free_block
+    FRAME 16
+    str     x0, [sp, #16]
+    ldr     x1, [x0, #NodeBlock_data_id]
+    cbz     x1, 1f
+    mov     x0, #NODE_ACT_BYTES_FREE
+    mov     x2, #0
+    bl      node_ids
+1:  ldr     x0, [sp, #16]
+    mov     x9, #-1
+    stp     x9, x9, [x0]
+    stp     x9, x9, [x0, #16]
+    stp     x9, x9, [x0, #32]
+    stp     x9, x9, [x0, #48]
+    str     x9, [x0, #NodeBlock_slot]
+    stp     xzr, xzr, [x0, #NodeBlock_data_id]
+    mov     x9, #NODE_BLOCK_FREE
+    str     x9, [x0, #NodeBlock_status]
+    UNFRAME 16
+END_FUNCTION node_free_block
+
+/*
+ * With NODE_FLAG_DB, the backfill's blocks join the Db (node.md): while a block in
+ * NODE_BLOCK_BACKFILL has the root backfill_root and a slot below backfill_slot, its record at the
+ * end of the segment of its slot and a DB_APPEND; backfill_slot and backfill_root follow; the entry is free. Then, with no backfill stream and no block in NODE_BLOCK_BF_CHECKING,
+ * the blocks left in NODE_BLOCK_BACKFILL go, and the last request is weighed. x21 an entry, x22 the entries left, x26 the block,
+ * x27 its segment, x28 one in NODE_BLOCK_BF_CHECKING. Locals: L a DbRecord (80), L+80 the offset.
+ */
+LOCAL_FUNCTION node_backfill_link
+    ENTER 96
+    ldr     x9, [x19, #Node_flags]
+    tst     x9, #NODE_FLAG_DB
+    b.eq    99f
+1:  PART    x21, x22, x19, Node_blocks      /* the next block of the chain */
+2:  cbz     x22, 20f
+    ldr     x9, [x21, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_BACKFILL
+    b.ne    3f
+    ldr     x9, [x21, #NodeBlock_slot]
+    ldr     x10, [x19, #Node_backfill_slot]
+    cmp     x9, x10
+    b.hs    3f
+    add     x9, x19, #Node_backfill_root
+    NE32    x21, x9, 3f
+    b       4f
+3:  add     x21, x21, #NodeBlock__mem
+    sub     x22, x22, #1
+    b       2b
+4:  mov     x26, x21
+    mov     x10, #DB_BLOCK                  /* its record */
+    ldr     x11, [x26, #NodeBlock_slot]
+    stp     x10, x11, [sp, #L]
+    str     xzr, [sp, #(L + 16)]
+    add     x9, sp, #(L + 24)
+    COPY32  x9, x26
+    ldr     x9, [x26, #NodeBlock_length]
+    add     x10, x9, #24
+    mov     x11, #24
+    stp     x10, x11, [sp, #(L + 56)]
+    str     x9, [sp, #(L + 72)]
+    ldr     x27, [x26, #NodeBlock_slot]
+    lsr     x27, x27, #DB_SEGMENT_SHIFT
+    mov     x0, x27
+    bl      node_seg_end
+    str     x0, [sp, #(L + 80)]
+    ldr     x0, [x19, #Node_db]
+    add     x0, x19, x0
+    add     x1, sp, #L
+    add     x2, sp, #(L + 80)
+    bl      lantern_db_add
+    cbnz    x0, 99f                         /* no room, or refused: until the next step */
+    mov     x0, #0
+    ldr     x1, [x26, #NodeBlock_data_id]
+    mov     x2, x27
+    ldr     x3, [sp, #(L + 80)]
+    add     x4, sp, #L
+    bl      node_db_append
+    ldr     x9, [sp, #(L + 72)]             /* the segment's new end, for each writer of it */
+    add     x9, x9, #(DbRecord__mem + 7)
+    and     x9, x9, #~7
+    ldr     x10, [sp, #(L + 80)]
+    add     x10, x10, x9
+    str     x27, [x19, #Node_backfill_segment]
+    str     x10, [x19, #Node_backfill_end]
+    ldr     x11, [x19, #Node_db_block_segment]
+    cmp     x11, x27
+    b.ne    5f
+    str     x10, [x19, #Node_db_block_end]
+5:  ldr     x9, [x26, #NodeBlock_slot]
+    str     x9, [x19, #Node_backfill_slot]
+    add     x9, x19, #Node_backfill_root
+    add     x10, x26, #NodeBlock_parent_root
+    COPY32  x9, x10
+    mov     x0, x26
+    bl      node_free_block
+    b       1b
+20: ldr     x9, [x19, #Node_backfill_handle] /* no stream and no check left: the rest are of no chain */
+    cbnz    x9, 99f
+    PART    x21, x22, x19, Node_blocks
+21: cbz     x22, 23f
+    ldr     x9, [x21, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_BF_CHECKING
+    b.eq    99f
+    add     x21, x21, #NodeBlock__mem
+    sub     x22, x22, #1
+    b       21b
+23: PART    x21, x22, x19, Node_blocks
+24: cbz     x22, 26f
+    ldr     x9, [x21, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_BACKFILL
+    b.ne    25f
+    mov     x0, x21
+    bl      node_free_block
+25: add     x21, x21, #NodeBlock__mem
+    sub     x22, x22, #1
+    b       24b
+26: ldr     x9, [x19, #Node_backfill_start] /* the last request, weighed */
+    cmn     x9, #1
+    b.eq    99f
+    ldr     x10, [x19, #Node_backfill_slot]
+    ldr     x11, [x19, #Node_backfill_next]
+    cmp     x10, x11
+    b.hs    27f
+    str     x10, [x19, #Node_backfill_next] /* blocks joined: on from the lowest */
+    b       29f
+27: ldr     x12, [x19, #Node_backfill_got]
+    cbnz    x12, 28f
+    bl      node_serve_slot                 /* no block in the range: the range below */
+    ldr     x9, [x19, #Node_backfill_start]
+    cmp     x9, x0
+    b.ls    28f
+    str     x9, [x19, #Node_backfill_next]
+    b       29f
+28: ldr     x10, [x19, #Node_backfill_slot] /* else again later, from the next peer */
+    str     x10, [x19, #Node_backfill_next]
+    ldr     x9, [x19, #Node_time_ms]
+    MOVQ    x10, NODE_STATUS_MS
+    add     x9, x9, x10
+    str     x9, [x19, #Node_backfill_ms]
+    ldr     x9, [x19, #Node_backfill_peer]
+    add     x9, x9, #1
+    str     x9, [x19, #Node_backfill_peer]
+29: mov     x9, #-1
+    str     x9, [x19, #Node_backfill_start]
+99: LEAVE 96
+END_FUNCTION node_backfill_link
+
+/*
+ * With NODE_FLAG_DB, after the sync's requests: the backfill's BeaconBlocksByRange (node.md) of the
+ * slots below backfill_next, to a peer from backfill_peer on, when no request is open or unweighed,
+ * from backfill_ms on, while backfill_next is above the target and the streams part has room for
+ * three entries. x20 the store. x21 the peers part, x22 the peers, x24 the index, x25 the target,
+ * then a peer, x26 the start slot, x27 the first index, x28 the peers checked. Locals: L the
+ * request (24).
+ */
+LOCAL_FUNCTION node_backfill_ask
+    ENTER 32
+    ldr     x9, [x19, #Node_flags]
+    tst     x9, #NODE_FLAG_DB
+    b.eq    99f
+    ldr     x9, [x19, #Node_backfill_handle]
+    cbnz    x9, 99f
+    ldr     x9, [x19, #Node_backfill_start]
+    cmn     x9, #1
+    b.ne    99f
+    add     x13, x19, #Node_backfill_root
+    ldp     x9, x10, [x13]
+    ldp     x11, x12, [x13, #16]
+    orr     x9, x9, x10
+    orr     x11, x11, x12
+    orr     x9, x9, x11
+    cbz     x9, 99f
+    ldr     x9, [x19, #Node_backfill_ms]
+    ldr     x10, [x19, #Node_time_ms]
+    cmp     x10, x9
+    b.lo    99f
+    ldr     x11, [x19, #(Node_streams + 8)] /* room for it and two more */
+    ldr     x12, [x19, #Node_messages]
+    ldr     x13, [x19, #Node_streams]
+    sub     x12, x12, x13
+    ldr     x13, [x19, #Node_stream_bytes]
+    udiv    x12, x12, x13
+    add     x11, x11, #3
+    cmp     x11, x12
+    b.hi    99f
+    bl      node_serve_slot                 /* the target */
+    mov     x25, x0
+    ldr     x9, [x19, #Node_backfill_next]
+    cmp     x9, x25
+    b.ls    99f
+    subs    x26, x9, #NODE_SYNC_BATCH
+    csel    x26, xzr, x26, lo
+    cmp     x26, x25
+    csel    x26, x25, x26, lo
+    PART    x21, x22, x19, Node_peers       /* the first peer from backfill_peer */
+    cbz     x22, 99f
+    ldr     x27, [x19, #Node_backfill_peer]
+    udiv    x9, x27, x22
+    msub    x27, x9, x22, x27
+    mov     x28, #0
+4:  cmp     x28, x22
+    b.hs    99f
+    add     x24, x27, x28
+    udiv    x9, x24, x22
+    msub    x24, x9, x22, x24
+    mov     x9, #NodePeer__mem
+    madd    x25, x24, x9, x21
+    add     x28, x28, #1
+    ldr     x9, [x25, #NodePeer_flags]
+    tbz     x9, #0, 4b                      /* NODE_PEER_STATUS */
+    ldr     x9, [x25, #NodePeer_fork_digest]
+    ldr     x10, [x19, #Node_fork_digest]
+    cmp     x9, x10
+    b.ne    4b
+    ldr     x9, [x25, #NodePeer_earliest_slot]
+    cmp     x9, x26
+    b.hi    4b
+    ldr     x9, [x19, #Node_backfill_next]  /* start, count, step 1 */
+    sub     x9, x9, x26
+    stp     x26, x9, [sp, #L]
+    mov     x9, #1
+    str     x9, [sp, #(L + 16)]
+    mov     x0, x20                         /* version 2 from altair on */
+    bl      node_store_slot
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x1, #1
+    cmp     x0, #FORK_ALTAIR
+    cinc    x1, x1, hs
+    mov     x0, #REQRESP_BEACON_BLOCKS_BY_RANGE
+    ldr     x2, [x25, #NodePeer_handle]
+    add     x3, sp, #L
+    mov     x4, #24
+    bl      node_open
+    cbz     x0, 99f
+    ldr     x9, [x0, #NodeStream_handle]
+    str     x9, [x19, #Node_backfill_handle]
+    str     x26, [x19, #Node_backfill_start]
+    str     xzr, [x19, #Node_backfill_got]
+    str     x24, [x19, #Node_backfill_peer]
+99: LEAVE 32
+END_FUNCTION node_backfill_ask
+
+/*
  * L0: with NODE_FLAG_DB, the canonical blocks from db_next_slot to the finalized block x0 and
  * their sidecars go to the Db, in slot order: a record of each in the index and in a DB_APPEND
  * action, then their bytes and entries go, but the finalized block's entry and bytes a stream
@@ -1579,8 +1861,10 @@ LOCAL_FUNCTION node_archive
     ldr     x10, [x19, #Node_db_block_segment]
     cmp     x9, x10
     b.eq    3f
+    mov     x0, x9
+    bl      node_seg_end
     str     x9, [x19, #Node_db_block_segment]
-    str     xzr, [x19, #Node_db_block_end]
+    str     x0, [x19, #Node_db_block_end]
 3:  ldr     x9, [x19, #Node_db_block_end]
     str     x9, [sp, #(L + 80)]
     ldr     x0, [x19, #Node_db]
@@ -1601,7 +1885,12 @@ LOCAL_FUNCTION node_archive
     ldr     x10, [x19, #Node_db_block_end]
     add     x10, x10, x9
     str     x10, [x19, #Node_db_block_end]
-    mov     x27, #0                         /* each sidecar the node holds, by index */
+    ldr     x11, [x19, #Node_backfill_segment]  /* the backfill's end too, of the same segment */
+    ldr     x12, [x19, #Node_db_block_segment]
+    cmp     x11, x12
+    b.ne    42f
+    str     x10, [x19, #Node_backfill_end]
+42: mov     x27, #0                         /* each sidecar the node holds, by index */
 4:  cmp     x27, #DB_SIDECAR_INDICES
     b.hs    20f
     mov     x0, x26
@@ -1742,10 +2031,40 @@ FUNCTION lantern_node_db_scan
     ldr     x21, [x1]
     ldr     x20, [x2]
     mov     x22, x4
+    mov     x23, x3
     ldr     x0, [x19, #Node_db]
     add     x0, x19, x0
     bl      lantern_db_scan
     cbnz    x0, 9f
+    cbnz    x20, 1f                         /* a block segment: the backfill's, when it has none; its lowest block */
+    ldr     x9, [x19, #Node_backfill_segment]
+    cmn     x9, #1
+    b.ne    11f
+    str     x21, [x19, #Node_backfill_segment]
+    ldr     x9, [x22]
+    str     x9, [x19, #Node_backfill_end]
+11: ldr     x9, [x23, #8]
+    add     x9, x23, x9
+    ldr     x10, [x22]
+    add     x10, x9, x10                    /* the end of the records added */
+12: add     x11, x9, #DbRecord__mem
+    cmp     x11, x10
+    b.hi    1f
+    ldr     x11, [x9, #DbRecord_slot]
+    ldr     x12, [x19, #Node_backfill_slot]
+    cmp     x11, x12
+    b.hs    13f
+    str     x11, [x19, #Node_backfill_slot]
+    str     x11, [x19, #Node_backfill_next]
+    add     x12, x19, #Node_backfill_root
+    add     x13, x9, #(DbRecord__mem + 116)
+    COPY32  x12, x13
+13: ldr     x11, [x9, #DbRecord_length]
+    add     x11, x11, #(DbRecord__mem + 7)
+    and     x11, x11, #~7
+    add     x9, x9, x11
+    b       12b
+1:
     mov     x9, #Node_db_block_segment
     mov     x10, #Node_db_sidecar_segment
     cmp     x20, #0
@@ -2850,7 +3169,24 @@ LOCAL_FUNCTION node_event
     mov     x2, #0
     bl      node_ids
     LEAVE 48
-75: cmp     x9, #NODE_WORK_SYNC_BLOCK          /* SYNC_BLOCK: the root of a block of a response */
+75: cmp     x9, #NODE_WORK_BACKFILL            /* BACKFILL: a block of the backfill, checked */
+    b.ne    751f
+    ldr     x0, [x21, #NodeAction_target]
+    PART    x9, x11, x19, Node_blocks
+    cmp     x0, x11
+    b.hs    79f
+    mov     x12, #NodeBlock__mem
+    madd    x22, x0, x12, x9
+    ldr     x9, [x22, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_BF_CHECKING
+    b.ne    79f
+    cbnz    x10, 76f
+    add     x9, x21, #NodeEvent_root
+    COPY32  x22, x9
+    mov     x9, #NODE_BLOCK_BACKFILL
+    str     x9, [x22, #NodeBlock_status]
+    LEAVE 48
+751: cmp    x9, #NODE_WORK_SYNC_BLOCK          /* SYNC_BLOCK: the root of a block of a response */
     b.ne    77f
     ldr     x0, [x21, #NodeAction_target]
     PART    x9, x11, x19, Node_blocks
@@ -3464,8 +3800,11 @@ LOCAL_FUNCTION node_request
     add     x2, sp, #(L + 64)
     bl      node_respond
     LEAVE 160
-60: ldp     x25, x26, [x27]             /* BlocksByRange: start_slot, count */
+60: ldp     x25, x26, [x27]             /* BlocksByRange: start_slot, count; from the lower of earliest_slot and backfill_slot */
     ldr     x9, [x19, #Node_earliest_slot]
+    ldr     x10, [x19, #Node_backfill_slot]
+    cmp     x9, x10
+    csel    x9, x9, x10, lo
     cmp     x25, x9
     b.lo    92b
     bl      node_max_blocks                 /* at most the limit, and the room of the list */
@@ -5217,7 +5556,14 @@ END_FUNCTION node_find_opening
 /* L0: the stream entry x0 goes; the node's BeaconBlocksByRange request ends with it. */
 LOCAL_FUNCTION node_end_stream
     FRAME 16
-    ldr     x9, [x0, #NodeStream_state]
+    ldr     x9, [x0, #NodeStream_handle]    /* the backfill's stream: the backfill has none */
+    ldr     x10, [x19, #Node_backfill_handle]
+    cbz     x10, 2f
+    cmp     x9, x10
+    b.ne    2f
+    str     xzr, [x19, #Node_backfill_handle]
+    b       1f
+2:  ldr     x9, [x0, #NodeStream_state]
     cmp     x9, #NODE_STREAM_OPENING
     b.lo    1f
     ldr     x9, [x0, #NodeStream_method]
@@ -5488,7 +5834,12 @@ LOCAL_FUNCTION node_response
     add     x1, x26, #(24 + 116)
     mov     x2, #32
     bl      lantern_copy
-    mov     x9, #NODE_BLOCK_HASHING
+    mov     x9, #NODE_BLOCK_HASHING         /* of the backfill's stream: NODE_BLOCK_BF_CHECKING */
+    ldr     x10, [x21, #NodeStream_handle]
+    ldr     x11, [x19, #Node_backfill_handle]
+    cmp     x10, x11
+    mov     x12, #NODE_BLOCK_BF_CHECKING
+    csel    x9, x12, x9, eq
     str     x9, [x28, #NodeBlock_status]
     mov     x9, #1
     str     x9, [x28, #NodeBlock_data_available]
@@ -5497,10 +5848,25 @@ LOCAL_FUNCTION node_response
     str     x0, [x28, #NodeBlock_data_id]
     ldr     x9, [x26, #16]
     str     x9, [x28, #NodeBlock_length]
-    mov     x3, x0
+    mov     x27, x0
     mov     x0, #NODE_WORK_SYNC_BLOCK
     mov     x1, #0
-    mov     x2, #0
+    ldr     x9, [x28, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_BF_CHECKING
+    b.ne    64f
+    ldr     x9, [x19, #Node_backfill_got]
+    add     x9, x9, #1
+    str     x9, [x19, #Node_backfill_got]
+    add     x0, x20, #(Store_finalized_checkpoint + 8)  /* BACKFILL: with F's post-state */
+    bl      node_find_block
+    mov     x9, #0
+    cmn     x0, #1
+    b.eq    641f
+    ldr     x9, [x1, #NodeBlock_state_id]
+641: mov    x1, x9
+    mov     x0, #NODE_WORK_BACKFILL
+64: mov     x2, #0
+    mov     x3, x27
     ldr     x4, [sp, #(L + 48)]
     mov     x5, #0
     bl      node_work
@@ -5884,7 +6250,8 @@ LOCAL_FUNCTION node_sync
     cbz     x0, 9f
     ldr     x9, [x19, #Node_time_ms]
     str     x9, [x19, #Node_status_ms]
-9:  mov     x0, x26
+9:  bl      node_backfill_ask
+    mov     x0, x26
     LEAVE 96
 END_FUNCTION node_sync
 
@@ -5917,6 +6284,11 @@ LOCAL_FUNCTION node_notice
     mov     x22, x1
     ldr     x9, [x21, #LIBP2P_ACT_STREAM]
     str     x9, [x22, #NodeStream_handle]
+    ldr     x10, [x21, #LIBP2P_ACT_SO_TAG]  /* the backfill's stream: its handle */
+    ldr     x11, [x19, #Node_backfill_handle]
+    cmp     x10, x11
+    csel    x11, x9, x11, eq
+    str     x11, [x19, #Node_backfill_handle]
     mov     x9, #NODE_STREAM_RESPONSE
     str     x9, [x22, #NodeStream_state]
     str     xzr, [x22, #NodeStream_next]
@@ -6626,12 +6998,12 @@ FUNCTION lantern_node_step
     ldr     x9, [x19, #Node_flags]          /* with NODE_FLAG_DB at a new finalized epoch: the Db's room for the archive */
     tst     x9, #NODE_FLAG_DB
     b.eq    56f
+    ldr     x11, [x19, #Node_db]
+    add     x11, x19, x11
     ldr     x9, [x20, #Store_finalized_checkpoint]
     ldr     x10, [x19, #Node_pruned_epoch]
     cmp     x9, x10
-    b.ls    56f
-    ldr     x11, [x19, #Node_db]
-    add     x11, x19, x11
+    b.ls    561f
     mov     x10, #SLOTS_PER_EPOCH           /* the slots to the finalized checkpoint's */
     mul     x9, x9, x10
     add     x9, x9, #1
@@ -6641,13 +7013,23 @@ FUNCTION lantern_node_step
     ldr     x10, [x11, #(Db_slots + 8)]
     cmp     x10, x9
     b.lo    93f
-    ldr     x9, [x11, #Db_blocks]           /* the roots: twice the blocks */
+561: ldr    x9, [x11, #Db_blocks]           /* the roots, at each step for the backfill: twice the blocks */
     ldr     x10, [x19, #(Node_blocks + 8)]
     add     x9, x9, x10
     lsl     x9, x9, #1
     ldr     x10, [x11, #(Db_roots + 8)]
     cmp     x10, x9
     b.lo    94f
+    ldr     x9, [x19, #Node_backfill_start]  /* a backfill request open or unweighed: the slots below backfill_slot */
+    cmn     x9, #1
+    b.eq    56f
+    ldr     x9, [x19, #Node_backfill_slot]
+    ldr     x10, [x11, #Db_first_slot]
+    subs    x9, x9, x10
+    csel    x9, xzr, x9, lo
+    ldr     x10, [x11, #(Db_slots + 8)]
+    cmp     x10, x9
+    b.lo    93f
 56:
     ldr     x9, [x19, #Node_peers]          /* pow blocks: one for each POW_BLOCK event */
     ldr     x10, [x19, #Node_pow_blocks]
@@ -6802,6 +7184,7 @@ FUNCTION lantern_node_step
 9:  bl      node_head
     bl      node_engine_next
     bl      node_shed                       /* the post-states the node can rebuild go */
+    bl      node_backfill_link              /* the backfill's blocks of the chain join the Db */
     str     xzr, [sp, #(L + 112)]
     ldr     x9, [sp, #(L + 16)]             /* the next block of each stream that serves, then libp2p again */
     cbz     x9, 40f
@@ -7449,7 +7832,7 @@ FUNCTION lantern_node_run
     FORK_CALL node_upgrade
     LEAVE 192
 97: cmp     x9, #NODE_WORK_REPLAY
-    b.ne    8f
+    b.ne    971f
     ldr     x9, [x23, #16]                  /* REPLAY: node_replay of the fork of the block's slot, of a state of that fork */
     cmp     x9, #(100 + 84)
     b.lo    18b
@@ -7472,8 +7855,61 @@ FUNCTION lantern_node_run
     add     x4, x25, #NodeEvent_result
     FORK_CALL node_replay
     LEAVE 192
+971: cmp    x9, #NODE_WORK_BACKFILL
+    b.ne    8f
+    ldr     x9, [x23, #16]                  /* BACKFILL: its root, then the signature with state_a */
+    cmp     x9, #(100 + 84)
+    b.lo    18b
+    cbz     x22, 19b
+    mov     x0, x23
+    mov     x1, x22
+    mov     x2, x24
+    mov     x3, x25
+    bl      node_run_backfill
+    LEAVE 192
 8:  mov     x0, #LANTERN_INVALID_EVENT
     LEAVE 192
 7:  mov     x0, #LANTERN_BUFFER_TOO_SMALL
     LEAVE 192
 END_FUNCTION lantern_node_run
+
+/*
+ * L0: the BACKFILL work (node.md): node_block_root of the fork of the block's slot of data x0, its
+ * root at NodeEvent_root of the event x3; then, for LANTERN_VALID, node_backfill of the fork of the
+ * slot of the state x1, with scratch x2. x20 data, x21 state, x22 scratch, x23 event. Apart from
+ * lantern_node_run, as FORK_CALL takes the labels 81 to 89.
+ */
+LOCAL_FUNCTION node_run_backfill
+    ENTER 0
+    mov     x20, x0
+    mov     x21, x1
+    mov     x22, x2
+    mov     x23, x3
+    ldr     x9, [x20, #8]
+    add     x9, x20, x9
+    ldr     x0, [x9, #100]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x20
+    mov     x1, x22
+    add     x2, x23, #NodeEvent_root
+    add     x3, x23, #NodeEvent_result
+    add     x4, x23, #NodeEvent_index
+    FORK_CALL node_block_root
+    cbnz    x0, 1f
+    ldr     x9, [x23, #NodeEvent_result]
+    cbnz    x9, 1f
+    ldr     x0, [x21, #NODE_STATE_SLOT]
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x15, x0
+    mov     x0, x20
+    mov     x1, x21
+    add     x2, x19, #Node_config
+    add     x3, x23, #NodeEvent_root
+    mov     x4, x22
+    add     x5, x23, #NodeEvent_result
+    FORK_CALL node_backfill
+1:  LEAVE 0
+END_FUNCTION node_run_backfill

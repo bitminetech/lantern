@@ -689,6 +689,74 @@ SPEC_FUNCTION node_replay
 SPEC_END node_replay
 
 /*
+ * (data, state, config, root, scratch, result): the proposer signature of the block in data, of
+ * any fork, with the validators of state and the fork version of the block's epoch (node.md,
+ * lantern_node_backfill). s1 data, s2 state, s3 config, s4 root, s5 scratch, s6 result, s7 the
+ * block's bytes, s8 the validator. Locals: L the epoch, L+8 the fork version, L+16 the domain type,
+ * L+24 a ByteList header, L+48 the signing root, L+80 the root, L+112 the domain.
+ */
+SPEC_FUNCTION node_backfill
+    ENTER 144
+    mv      s1, a0
+    mv      s2, a1
+    mv      s3, a2
+    mv      s4, a3
+    mv      s5, a4
+    mv      s6, a5
+    ld      t0, 16(s1)
+    li      t1, 100 + 84
+    bltu    t0, t1, 7f
+    ld      t0, 8(s1)
+    add     s7, s1, t0
+    LDU64   t0, s7, 100, t1                 # the genesis block has no proposer
+    beqz    t0, 5f
+    LDU64   t2, s7, 108, t1
+    PART    t3, t4, s2, BeaconState_validators
+    bgeu    t2, t4, 6f
+    slli    t2, t2, 7
+    add     s8, t3, t2
+    srli    t0, t0, LOG2_SLOTS_PER_EPOCH
+    sd      t0, L(sp)
+    addi    a0, sp, L                       # compute_fork_version(the block's epoch)
+    mv      a1, s3
+    addi    a2, sp, L + 8
+    call    lantern_compute_fork_version
+    li      t0, DOMAIN_BEACON_PROPOSER
+    sw      t0, (L + 16)(sp)
+    addi    a0, sp, L + 16
+    addi    a1, sp, L + 8
+    ADDQ    a2, s2, BeaconState_genesis_validators_root
+    mv      a3, s5
+    addi    a4, sp, L + 112
+    call    lantern_compute_domain
+    bnez    a0, 99f
+    addi    t0, sp, L + 80                  # compute_signing_root: hash_tree_root(SigningData(root, domain))
+    COPY32  t0, s4
+    addi    a0, sp, L + 80
+    li      a1, 64
+    addi    a2, sp, L + 48
+    call    sha256_short
+    addi    a0, s8, Validator_pubkey
+    addi    a1, s7, 4
+    addi    a2, sp, L + 24
+    mv      a3, s5
+    call    verify_root_signature
+    bnez    a0, 99f
+    beqz    a1, 8f
+5:  sd      zero, 0(s6)                     # LANTERN_VALID
+    li      a0, LANTERN_OK
+    j       99f
+6:  li      t0, LANTERN_INVALID_PROPOSER_INDEX
+    j       9f
+7:  li      t0, LANTERN_INVALID_ENCODING
+    j       9f
+8:  li      t0, LANTERN_INVALID_BLOCK_SIGNATURE
+9:  sd      t0, 0(s6)
+    li      a0, LANTERN_OK
+99: LEAVE 144
+SPEC_END node_backfill
+
+/*
  * (store, data, is_from_block, state, scratch, result, target): validate_on_attestation of the
  * Attestation in data; with no target checkpoint state (state 0) the result is
  * LANTERN_NEED_TARGET_STATE and target holds the target checkpoint, else on_attestation.

@@ -264,9 +264,28 @@ FUNCTION lantern_node_init
     COPY32  %rsi, %r12
     movq    $1, NodeCheckpoint_state_id(%rdi)
     movq    $1, (Node_checkpoints + 8)(%r15)
-    mov     NodeAnchor_history_slot(%r12), %rax    # the Db: from the segment of history_slot, or of the anchor; its archive after the anchor
+    mov     NodeAnchor_history_slot(%r12), %rax    # the Db: from the segment of history_slot, the anchor, or the backfill's target; its archive after the anchor
     cmp     %r13, %rax
     cmova   %r13, %rax
+    mov     %rax, L(%rsp)
+    mov     CONFIG_MIN_VALIDATOR_WITHDRAWABILITY_DELAY(%rbp), %rcx    # compute_min_epochs_for_block_requests
+    mov     CONFIG_CHURN_LIMIT_QUOTIENT(%rbp), %rdx
+    shr     $1, %rdx
+    add     %rdx, %rcx
+    jnc     60f
+    mov     $-1, %rcx
+60: mov     %r13, %rax
+    xor     %edx, %edx
+    mov     $SLOTS_PER_EPOCH, %r8d
+    div     %r8
+    sub     %rcx, %rax
+    jae     61f
+    xor     %eax, %eax
+61: imul    $SLOTS_PER_EPOCH, %rax, %rax
+    cmp     L(%rsp), %rax
+    jb      62f
+    mov     L(%rsp), %rax
+62:
     and     $-DB_SEGMENT_SLOTS, %rax
     mov     %rax, L(%rsp)
     lea     NodeRoom_db_slots(%rbx), %rdi
@@ -280,6 +299,13 @@ FUNCTION lantern_node_init
     mov     %rax, Node_db_next_slot(%r15)
     movq    $-1, Node_db_block_segment(%r15)
     movq    $-1, Node_db_sidecar_segment(%r15)
+    movq    $-1, Node_backfill_segment(%r15)   # the backfill: from the anchor's block down
+    movq    $-1, Node_backfill_start(%r15)
+    lea     1(%r13), %rax
+    mov     %rax, Node_backfill_slot(%r15)
+    mov     %rax, Node_backfill_next(%r15)
+    lea     Node_backfill_root(%r15), %rdi
+    COPY32  %rdi, %r12
     xor     %eax, %eax
 9:  LEAVE 16
 8:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
@@ -1740,6 +1766,269 @@ LOCAL_FUNCTION node_db_append
 END_FUNCTION node_db_append
 
 /*
+ * rax = the end of the block segment rdi: db_block_end for db_block_segment, else backfill_end
+ * for backfill_segment, else 0, a new segment. Uses rax only.
+ */
+LOCAL_FUNCTION node_seg_end
+    UNWIND_END_PROLOGUE
+    cmp     Node_db_block_segment(%rbx), %rdi
+    jne     1f
+    mov     Node_db_block_end(%rbx), %rax
+    ret
+1:  cmp     Node_backfill_segment(%rbx), %rdi
+    jne     2f
+    mov     Node_backfill_end(%rbx), %rax
+    ret
+2:  xor     %eax, %eax
+    ret
+END_FUNCTION node_seg_end
+
+/* The NodeBlock entry rdi is free: its bytes go (a BYTES_FREE), root and parent_root all 0xff bytes. Locals: rsp+0 the entry. */
+LOCAL_FUNCTION node_free_block
+    FRAME 16
+    mov     %rdi, 0(%rsp)
+    mov     NodeBlock_data_id(%rdi), %rsi
+    test    %rsi, %rsi
+    jz      1f
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    xor     %edx, %edx
+    call    node_ids
+1:  mov     0(%rsp), %rdi
+    pcmpeqd %xmm0, %xmm0
+    movdqu  %xmm0, (%rdi)
+    movdqu  %xmm0, 16(%rdi)
+    movdqu  %xmm0, 32(%rdi)
+    movdqu  %xmm0, 48(%rdi)
+    movq    $-1, NodeBlock_slot(%rdi)
+    movq    $0, NodeBlock_data_id(%rdi)
+    movq    $0, NodeBlock_state_id(%rdi)
+    movq    $NODE_BLOCK_FREE, NodeBlock_status(%rdi)
+    UNFRAME 16
+END_FUNCTION node_free_block
+
+/*
+ * With NODE_FLAG_DB, the backfill's blocks join the Db (node.md): while a block in
+ * NODE_BLOCK_BACKFILL has the root backfill_root and a slot below backfill_slot, its record at the
+ * end of the segment of its slot and a DB_APPEND; backfill_slot and backfill_root follow; the entry
+ * is free. Then, with no backfill stream and no block in NODE_BLOCK_BF_CHECKING, the blocks left in
+ * NODE_BLOCK_BACKFILL go. r12 an entry, r13 the entries left, S7 its segment. Locals: L a DbRecord
+ * (80), L+80 the offset.
+ */
+LOCAL_FUNCTION node_backfill_link
+    ENTER 96
+    testq   $NODE_FLAG_DB, Node_flags(%rbx)
+    jz      99f
+1:  PART    %r12, %r13, %rbx, Node_blocks   # the next block of the chain
+2:  test    %r13, %r13
+    jz      20f
+    cmpq    $NODE_BLOCK_BACKFILL, NodeBlock_status(%r12)
+    jne     3f
+    mov     NodeBlock_slot(%r12), %rax
+    cmp     Node_backfill_slot(%rbx), %rax
+    jae     3f
+    lea     Node_backfill_root(%rbx), %rcx
+    NE32    %r12, %rcx, 3f
+    jmp     4f
+3:  add     $NodeBlock__mem, %r12
+    dec     %r13
+    jmp     2b
+4:  movq    $DB_BLOCK, L(%rsp)              # its record
+    mov     NodeBlock_slot(%r12), %rax
+    mov     %rax, (L + 8)(%rsp)
+    movq    $0, (L + 16)(%rsp)
+    lea     (L + 24)(%rsp), %rdi
+    COPY32  %rdi, %r12
+    mov     NodeBlock_length(%r12), %rax
+    mov     %rax, (L + 72)(%rsp)
+    add     $24, %rax
+    mov     %rax, (L + 56)(%rsp)
+    movq    $24, (L + 64)(%rsp)
+    mov     NodeBlock_slot(%r12), %rdi
+    shr     $DB_SEGMENT_SHIFT, %rdi
+    mov     %rdi, S7(%rsp)
+    call    node_seg_end
+    mov     %rax, (L + 80)(%rsp)
+    mov     Node_db(%rbx), %rdi
+    add     %rbx, %rdi
+    lea     L(%rsp), %rsi
+    lea     (L + 80)(%rsp), %rdx
+    call    lantern_db_add
+    test    %rax, %rax
+    jnz     99f                             # no room, or refused: until the next step
+    xor     %edi, %edi
+    mov     NodeBlock_data_id(%r12), %rsi
+    mov     S7(%rsp), %rdx
+    mov     (L + 80)(%rsp), %rcx
+    lea     L(%rsp), %r8
+    call    node_db_append
+    mov     (L + 72)(%rsp), %rax            # the segment's new end, for each writer of it
+    add     $(DbRecord__mem + 7), %rax
+    and     $-8, %rax
+    add     (L + 80)(%rsp), %rax
+    mov     S7(%rsp), %rcx
+    mov     %rcx, Node_backfill_segment(%rbx)
+    mov     %rax, Node_backfill_end(%rbx)
+    cmp     Node_db_block_segment(%rbx), %rcx
+    jne     5f
+    mov     %rax, Node_db_block_end(%rbx)
+5:  mov     NodeBlock_slot(%r12), %rax
+    mov     %rax, Node_backfill_slot(%rbx)
+    lea     Node_backfill_root(%rbx), %rdi
+    lea     NodeBlock_parent_root(%r12), %rsi
+    COPY32  %rdi, %rsi
+    mov     %r12, %rdi
+    call    node_free_block
+    jmp     1b
+20: cmpq    $0, Node_backfill_handle(%rbx)  # no stream and no check left: the rest are of no chain
+    jne     99f
+    PART    %r12, %r13, %rbx, Node_blocks
+21: test    %r13, %r13
+    jz      23f
+    cmpq    $NODE_BLOCK_BF_CHECKING, NodeBlock_status(%r12)
+    je      99f
+    add     $NodeBlock__mem, %r12
+    dec     %r13
+    jmp     21b
+23: PART    %r12, %r13, %rbx, Node_blocks
+24: test    %r13, %r13
+    jz      26f
+    cmpq    $NODE_BLOCK_BACKFILL, NodeBlock_status(%r12)
+    jne     25f
+    mov     %r12, %rdi
+    call    node_free_block
+25: add     $NodeBlock__mem, %r12
+    dec     %r13
+    jmp     24b
+26: cmpq    $-1, Node_backfill_start(%rbx)  # the last request, weighed
+    je      99f
+    mov     Node_backfill_slot(%rbx), %rax
+    cmp     Node_backfill_next(%rbx), %rax
+    jae     27f
+    mov     %rax, Node_backfill_next(%rbx)  # blocks joined: on from the lowest
+    jmp     29f
+27: cmpq    $0, Node_backfill_got(%rbx)
+    jne     28f
+    call    node_serve_slot                 # no block in the range: the range below
+    mov     Node_backfill_start(%rbx), %rcx
+    cmp     %rax, %rcx
+    jbe     28f
+    mov     %rcx, Node_backfill_next(%rbx)
+    jmp     29f
+28: mov     Node_backfill_slot(%rbx), %rax  # else again later, from the next peer
+    mov     %rax, Node_backfill_next(%rbx)
+    mov     Node_time_ms(%rbx), %rax
+    add     $NODE_STATUS_MS, %rax
+    mov     %rax, Node_backfill_ms(%rbx)
+    incq    Node_backfill_peer(%rbx)
+29: movq    $-1, Node_backfill_start(%rbx)
+99: LEAVE 96
+END_FUNCTION node_backfill_link
+
+/*
+ * With NODE_FLAG_DB, after the sync's requests: the backfill's BeaconBlocksByRange (node.md) of the
+ * slots below backfill_next, to a peer from backfill_peer on, when no request is open or unweighed,
+ * from backfill_ms on, while backfill_next is above the target and the streams part has room for
+ * three entries. rbp the store. r12 the peers part, r13 the peers, S7 the target, S8 the start
+ * slot, S9 the first index, S10 the peers checked. Locals: L the request (24), L+24 the index,
+ * L+32 the peer.
+ */
+LOCAL_FUNCTION node_backfill_ask
+    ENTER 48
+    testq   $NODE_FLAG_DB, Node_flags(%rbx)
+    jz      99f
+    cmpq    $0, Node_backfill_handle(%rbx)
+    jne     99f
+    cmpq    $-1, Node_backfill_start(%rbx)
+    jne     99f
+    mov     Node_backfill_root(%rbx), %rax
+    or      (Node_backfill_root + 8)(%rbx), %rax
+    or      (Node_backfill_root + 16)(%rbx), %rax
+    or      (Node_backfill_root + 24)(%rbx), %rax
+    jz      99f
+    mov     Node_time_ms(%rbx), %rax
+    cmp     Node_backfill_ms(%rbx), %rax
+    jb      99f
+    mov     Node_messages(%rbx), %rax       # room for it and two more
+    sub     Node_streams(%rbx), %rax
+    xor     %edx, %edx
+    divq    Node_stream_bytes(%rbx)
+    mov     (Node_streams + 8)(%rbx), %rcx
+    add     $3, %rcx
+    cmp     %rax, %rcx
+    ja      99f
+    call    node_serve_slot                 # the target
+    mov     %rax, S7(%rsp)
+    mov     Node_backfill_next(%rbx), %rcx
+    cmp     %rax, %rcx
+    jbe     99f
+    mov     %rcx, %rdx
+    sub     $NODE_SYNC_BATCH, %rdx
+    jae     31f
+    xor     %edx, %edx
+31: cmp     %rax, %rdx
+    cmovb   %rax, %rdx
+    mov     %rdx, S8(%rsp)
+    PART    %r12, %r13, %rbx, Node_peers    # the first peer from backfill_peer
+    test    %r13, %r13
+    jz      99f
+    mov     Node_backfill_peer(%rbx), %rax
+    xor     %edx, %edx
+    div     %r13
+    mov     %rdx, S9(%rsp)
+    movq    $0, S10(%rsp)
+4:  mov     S10(%rsp), %rax
+    cmp     %r13, %rax
+    jae     99f
+    add     S9(%rsp), %rax
+    xor     %edx, %edx
+    div     %r13
+    mov     %rdx, (L + 24)(%rsp)
+    incq    S10(%rsp)
+    imul    $NodePeer__mem, %rdx, %rax
+    lea     (%r12,%rax), %rcx
+    testq   $1, NodePeer_flags(%rcx)        # NODE_PEER_STATUS
+    jz      4b
+    mov     NodePeer_fork_digest(%rcx), %rax
+    cmp     Node_fork_digest(%rbx), %rax
+    jne     4b
+    mov     NodePeer_earliest_slot(%rcx), %rax
+    cmp     S8(%rsp), %rax
+    ja      4b
+    mov     %rcx, (L + 32)(%rsp)
+    mov     S8(%rsp), %rax                  # start, count, step 1
+    mov     %rax, L(%rsp)
+    mov     Node_backfill_next(%rbx), %rcx
+    sub     %rax, %rcx
+    mov     %rcx, (L + 8)(%rsp)
+    movq    $1, (L + 16)(%rsp)
+    mov     %rbp, %rdi                      # version 2 from altair on
+    call    node_store_slot
+    mov     %rax, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     $1, %esi
+    cmp     $FORK_ALTAIR, %rax
+    jb      5f
+    mov     $2, %esi
+5:  mov     $REQRESP_BEACON_BLOCKS_BY_RANGE, %edi
+    mov     (L + 32)(%rsp), %rdx
+    mov     NodePeer_handle(%rdx), %rdx
+    lea     L(%rsp), %rcx
+    mov     $24, %r8d
+    call    node_open
+    test    %rax, %rax
+    jz      99f
+    mov     NodeStream_handle(%rax), %rcx
+    mov     %rcx, Node_backfill_handle(%rbx)
+    mov     S8(%rsp), %rcx
+    mov     %rcx, Node_backfill_start(%rbx)
+    movq    $0, Node_backfill_got(%rbx)
+    mov     (L + 24)(%rsp), %rcx
+    mov     %rcx, Node_backfill_peer(%rbx)
+99: LEAVE 48
+END_FUNCTION node_backfill_ask
+
+/*
  * With NODE_FLAG_DB, the canonical blocks from db_next_slot to the finalized block rdi and their
  * sidecars go to the Db, in slot order: a record of each in the index and in a DB_APPEND action,
  * then their bytes and entries go, but the finalized block's entry and bytes a stream sends. A
@@ -1808,8 +2097,10 @@ LOCAL_FUNCTION node_archive
     shr     $DB_SEGMENT_SHIFT, %rax
     cmp     Node_db_block_segment(%rbx), %rax
     je      3f
-    mov     %rax, Node_db_block_segment(%rbx)
-    movq    $0, Node_db_block_end(%rbx)
+    mov     %rax, %rdi
+    call    node_seg_end
+    mov     %rdi, Node_db_block_segment(%rbx)
+    mov     %rax, Node_db_block_end(%rbx)
 3:  mov     Node_db_block_end(%rbx), %rax
     mov     %rax, (L + 80)(%rsp)
     mov     Node_db(%rbx), %rdi
@@ -1830,7 +2121,12 @@ LOCAL_FUNCTION node_archive
     add     $(DbRecord__mem + 7), %rax
     and     $-8, %rax
     add     %rax, Node_db_block_end(%rbx)
-    movq    $0, S9(%rsp)                    # each sidecar the node holds, by index
+    mov     Node_backfill_segment(%rbx), %rax   # the backfill's end too, of the same segment
+    cmp     Node_db_block_segment(%rbx), %rax
+    jne     42f
+    mov     Node_db_block_end(%rbx), %rax
+    mov     %rax, Node_backfill_end(%rbx)
+42: movq    $0, S9(%rsp)                    # each sidecar the node holds, by index
 4:  cmpq    $DB_SIDECAR_INDICES, S9(%rsp)
     jae     20f
     mov     S8(%rsp), %rdi
@@ -1995,11 +2291,40 @@ FUNCTION lantern_node_db_scan
     mov     (%rsi), %r13
     mov     (%rdx), %r12
     mov     %r8, %rbp
+    mov     %rcx, %r14
     mov     Node_db(%rbx), %rdi
     add     %rbx, %rdi
     call    lantern_db_scan
     test    %rax, %rax
     jnz     9f
+    test    %r12, %r12                      # a block segment: the backfill's, when it has none; its lowest block
+    jnz     10f
+    cmpq    $-1, Node_backfill_segment(%rbx)
+    jne     11f
+    mov     %r13, Node_backfill_segment(%rbx)
+    mov     (%rbp), %rax
+    mov     %rax, Node_backfill_end(%rbx)
+11: mov     8(%r14), %rsi
+    add     %r14, %rsi
+    mov     (%rbp), %rdi
+    add     %rsi, %rdi                      # the end of the records added
+12: lea     DbRecord__mem(%rsi), %rax
+    cmp     %rdi, %rax
+    ja      10f
+    mov     DbRecord_slot(%rsi), %rax
+    cmp     Node_backfill_slot(%rbx), %rax
+    jae     13f
+    mov     %rax, Node_backfill_slot(%rbx)
+    mov     %rax, Node_backfill_next(%rbx)
+    lea     Node_backfill_root(%rbx), %rcx
+    lea     (DbRecord__mem + 116)(%rsi), %rdx
+    COPY32  %rcx, %rdx
+13: mov     DbRecord_length(%rsi), %rax
+    add     $(DbRecord__mem + 7), %rax
+    and     $-8, %rax
+    add     %rax, %rsi
+    jmp     12b
+10:
     mov     $Node_db_block_segment, %ecx
     test    %r12, %r12
     jz      1f
@@ -2808,7 +3133,23 @@ LOCAL_FUNCTION node_event
     xor     %edx, %edx
     call    node_ids
     LEAVE 48
-75: cmp     $NODE_WORK_SYNC_BLOCK, %rax     # SYNC_BLOCK: the root of a block of a response
+75: cmp     $NODE_WORK_BACKFILL, %rax       # BACKFILL: a block of the backfill, checked
+    jne     751f
+    mov     NodeAction_target(%r12), %rax
+    PART    %rdx, %rsi, %rbx, Node_blocks
+    cmp     %rsi, %rax
+    jae     79f
+    imul    $NodeBlock__mem, %rax, %rax
+    lea     (%rdx,%rax), %r13
+    cmpq    $NODE_BLOCK_BF_CHECKING, NodeBlock_status(%r13)
+    jne     79f
+    test    %rcx, %rcx
+    jnz     76f
+    lea     NodeEvent_root(%r12), %rsi
+    COPY32  %r13, %rsi
+    movq    $NODE_BLOCK_BACKFILL, NodeBlock_status(%r13)
+    LEAVE 48
+751: cmp    $NODE_WORK_SYNC_BLOCK, %rax     # SYNC_BLOCK: the root of a block of a response
     jne     77f
     mov     NodeAction_target(%r12), %rax
     PART    %rdx, %rsi, %rbx, Node_blocks
@@ -3450,7 +3791,10 @@ LOCAL_FUNCTION node_request
     mov     (%rax), %r13
     mov     8(%rax), %rcx
     mov     %rcx, S10(%rsp)
-    cmp     Node_earliest_slot(%rbx), %r13
+    mov     Node_earliest_slot(%rbx), %rax  # from the lower of earliest_slot and backfill_slot
+    cmp     Node_backfill_slot(%rbx), %rax
+    cmova   Node_backfill_slot(%rbx), %rax
+    cmp     %rax, %r13
     jb      92b
     call    node_max_blocks                 # at most the limit, and the room of the list
     mov     S10(%rsp), %rcx
@@ -5271,7 +5615,14 @@ END_FUNCTION node_find_opening
 /* The stream entry rdi goes; the node's BeaconBlocksByRange request ends with it. */
 LOCAL_FUNCTION node_end_stream
     FRAME 0
-    cmpq    $NODE_STREAM_OPENING, NodeStream_state(%rdi)
+    mov     Node_backfill_handle(%rbx), %rax    # the backfill's stream: the backfill has none
+    test    %rax, %rax
+    jz      2f
+    cmp     NodeStream_handle(%rdi), %rax
+    jne     2f
+    movq    $0, Node_backfill_handle(%rbx)
+    jmp     1f
+2:  cmpq    $NODE_STREAM_OPENING, NodeStream_state(%rdi)
     jb      1f
     cmpq    $REQRESP_BEACON_BLOCKS_BY_RANGE, NodeStream_method(%rdi)
     jne     1f
@@ -5559,19 +5910,35 @@ LOCAL_FUNCTION node_response
     mov     $32, %edx
     call    lantern_copy
     mov     (L + 96)(%rsp), %rdi
-    movq    $NODE_BLOCK_HASHING, NodeBlock_status(%rdi)
-    movq    $1, NodeBlock_data_available(%rdi)
+    movq    $NODE_BLOCK_HASHING, NodeBlock_status(%rdi)    # of the backfill's stream: NODE_BLOCK_BF_CHECKING
+    mov     NodeStream_handle(%r12), %rax
+    cmp     Node_backfill_handle(%rbx), %rax
+    jne     64f
+    movq    $NODE_BLOCK_BF_CHECKING, NodeBlock_status(%rdi)
+64: movq    $1, NodeBlock_data_available(%rdi)
     mov     (L + 88)(%rsp), %rdi
     call    node_put
     mov     (L + 96)(%rsp), %rdi
     mov     %rax, NodeBlock_data_id(%rdi)
+    mov     %rax, (L + 80)(%rsp)
     mov     (L + 88)(%rsp), %rsi
     mov     16(%rsi), %rsi
     mov     %rsi, NodeBlock_length(%rdi)
-    mov     %rax, %rcx
     mov     $NODE_WORK_SYNC_BLOCK, %edi
     xor     %esi, %esi
-    xor     %edx, %edx
+    mov     (L + 96)(%rsp), %rax
+    cmpq    $NODE_BLOCK_BF_CHECKING, NodeBlock_status(%rax)
+    jne     641f
+    incq    Node_backfill_got(%rbx)
+    lea     (Store_finalized_checkpoint + 8)(%rbp), %rdi   # BACKFILL: with F's post-state
+    call    node_find_block
+    xor     %esi, %esi
+    cmp     $-1, %rax
+    je      642f
+    mov     NodeBlock_state_id(%rdx), %rsi
+642: mov    $NODE_WORK_BACKFILL, %edi
+641: xor    %edx, %edx
+    mov     (L + 80)(%rsp), %rcx
     mov     (L + 48)(%rsp), %r8
     xor     %r9d, %r9d
     call    node_work
@@ -5975,7 +6342,8 @@ LOCAL_FUNCTION node_sync
     jz      9f
     mov     Node_time_ms(%rbx), %rax
     mov     %rax, Node_status_ms(%rbx)
-9:  mov     S7(%rsp), %rax
+9:  call    node_backfill_ask
+    mov     S7(%rsp), %rax
     LEAVE 96
 END_FUNCTION node_sync
 
@@ -6004,7 +6372,11 @@ LOCAL_FUNCTION node_notice
     mov     %rdx, %r13
     mov     LIBP2P_ACT_STREAM(%r12), %rax
     mov     %rax, NodeStream_handle(%r13)
-    movq    $NODE_STREAM_RESPONSE, NodeStream_state(%r13)
+    mov     LIBP2P_ACT_SO_TAG(%r12), %rcx   # the backfill's stream: its handle
+    cmp     Node_backfill_handle(%rbx), %rcx
+    jne     621f
+    mov     %rax, Node_backfill_handle(%rbx)
+621: movq   $NODE_STREAM_RESPONSE, NodeStream_state(%r13)
     movq    $0, NodeStream_next(%r13)
     mov     (NodeStream_list + 16)(%r13), %rax
     mov     %rax, S8(%rsp)
@@ -6702,11 +7074,11 @@ FUNCTION lantern_node_step
     jb      88f
     testq   $NODE_FLAG_DB, Node_flags(%rbx) # with NODE_FLAG_DB at a new finalized epoch: the Db's room for the archive
     jz      56f
-    mov     Store_finalized_checkpoint(%rbp), %rax
-    cmp     Node_pruned_epoch(%rbx), %rax
-    jbe     56f
     mov     Node_db(%rbx), %rsi
     add     %rbx, %rsi
+    mov     Store_finalized_checkpoint(%rbp), %rax
+    cmp     Node_pruned_epoch(%rbx), %rax
+    jbe     561f
     imul    $SLOTS_PER_EPOCH, %rax, %rax    # the slots to the finalized checkpoint's
     inc     %rax
     xor     %ecx, %ecx
@@ -6714,11 +7086,19 @@ FUNCTION lantern_node_step
     cmovb   %rcx, %rax
     cmp     %rax, (Db_slots + 8)(%rsi)
     jb      93f
-    mov     Db_blocks(%rsi), %rax           # the roots: twice the blocks
+561: mov    Db_blocks(%rsi), %rax           # the roots, at each step for the backfill: twice the blocks
     add     (Node_blocks + 8)(%rbx), %rax
     shl     $1, %rax
     cmp     %rax, (Db_roots + 8)(%rsi)
     jb      94f
+    cmpq    $-1, Node_backfill_start(%rbx)  # a backfill request open or unweighed: the slots below backfill_slot
+    je      56f
+    mov     Node_backfill_slot(%rbx), %rax
+    xor     %ecx, %ecx
+    sub     Db_first_slot(%rsi), %rax
+    cmovb   %rcx, %rax
+    cmp     %rax, (Db_slots + 8)(%rsi)
+    jb      93f
 56:
     mov     Node_peers(%rbx), %rax          # pow blocks: one for each POW_BLOCK event
     sub     Node_pow_blocks(%rbx), %rax
@@ -6872,6 +7252,7 @@ FUNCTION lantern_node_step
 9:  call    node_head
     call    node_engine_next
     call    node_shed                       # the post-states the node can rebuild go
+    call    node_backfill_link              # the backfill's blocks of the chain join the Db
     movq    $0, (L + 112)(%rsp)
     cmpq    $0, (L + 16)(%rsp)              # the next block of each stream that serves, then libp2p again
     je      40f
@@ -7568,7 +7949,7 @@ FUNCTION lantern_node_run
     FORK_CALL node_upgrade
     LEAVE 192
 97: cmp     $NODE_WORK_REPLAY, %rax
-    jne     8f
+    jne     971f
     cmpq    $(100 + 84), 16(%r14)           # REPLAY: node_replay of the fork of the block's slot, of a state of that fork
     jb      18b
     mov     8(%r14), %rax
@@ -7591,8 +7972,62 @@ FUNCTION lantern_node_run
     add     $NodeEvent_result, %r8
     FORK_CALL node_replay
     LEAVE 192
+971: cmp    $NODE_WORK_BACKFILL, %rax
+    jne     8f
+    cmpq    $(100 + 84), 16(%r14)           # BACKFILL: its root, then the signature with state_a
+    jb      18b
+    test    %r13, %r13
+    jz      19b
+    mov     %r14, %rdi
+    mov     %r13, %rsi
+    mov     %r15, %rdx
+    mov     S8(%rsp), %rcx
+    call    node_run_backfill
+    LEAVE 192
 8:  mov     $LANTERN_INVALID_EVENT, %eax
     LEAVE 192
 7:  mov     $LANTERN_BUFFER_TOO_SMALL, %eax
     LEAVE 192
 END_FUNCTION lantern_node_run
+
+/*
+ * The BACKFILL work (node.md): node_block_root of the fork of the block's slot of data rdi, its
+ * root at NodeEvent_root of the event rcx; then, for LANTERN_VALID, node_backfill of the fork of
+ * the slot of the state rsi, with scratch rdx. r12 data, r13 state, r14 scratch, r15 event. Apart
+ * from lantern_node_run, as FORK_CALL takes the labels 81 to 89.
+ */
+LOCAL_FUNCTION node_run_backfill
+    ENTER 0
+    mov     %rdi, %r12
+    mov     %rsi, %r13
+    mov     %rdx, %r14
+    mov     %rcx, %r15
+    mov     8(%r12), %rax
+    add     %r12, %rax
+    mov     100(%rax), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     %r12, %rdi
+    mov     %r14, %rsi
+    lea     NodeEvent_root(%r15), %rdx
+    lea     NodeEvent_result(%r15), %rcx
+    lea     NodeEvent_index(%r15), %r8
+    FORK_CALL node_block_root
+    test    %rax, %rax
+    jnz     1f
+    cmpq    $0, NodeEvent_result(%r15)
+    jne     1f
+    mov     NODE_STATE_SLOT(%r13), %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, %r10
+    mov     %r12, %rdi
+    mov     %r13, %rsi
+    lea     Node_config(%rbx), %rdx
+    lea     NodeEvent_root(%r15), %rcx
+    mov     %r14, %r8
+    lea     NodeEvent_result(%r15), %r9
+    FORK_CALL node_backfill
+1:  LEAVE 0
+END_FUNCTION node_run_backfill

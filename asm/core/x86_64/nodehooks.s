@@ -696,6 +696,79 @@ SPEC_FUNCTION node_replay
 SPEC_END node_replay
 
 /*
+ * (data, state, config, root, scratch, result): the proposer signature of the block in data, of
+ * any fork, with the validators of state and the fork version of the block's epoch (node.md,
+ * lantern_node_backfill). rbx data, rbp state, r12 config, r13 root, r14 scratch, r15 result, S8
+ * the block's bytes, S9 the validator. Locals: L the epoch, L+8 the fork version, L+16 the domain
+ * type, L+24 a ByteList header, L+48 the signing root, L+80 the root, L+112 the domain.
+ */
+SPEC_FUNCTION node_backfill
+    ENTER 144
+    mov     %rdi, %rbx
+    mov     %rsi, %rbp
+    mov     %rdx, %r12
+    mov     %rcx, %r13
+    mov     %r8, %r14
+    mov     %r9, %r15
+    cmpq    $(100 + 84), 16(%rbx)
+    jb      7f
+    mov     8(%rbx), %rax
+    add     %rbx, %rax
+    mov     %rax, S8(%rsp)
+    mov     100(%rax), %rcx                 # the genesis block has no proposer
+    test    %rcx, %rcx
+    jz      5f
+    mov     108(%rax), %rdx
+    cmp     (BeaconState_validators + 8)(%rbp), %rdx
+    jae     6f
+    VALIDATOR %rax, %rbp, %rdx
+    mov     %rax, S9(%rsp)
+    shr     $LOG2_SLOTS_PER_EPOCH, %rcx
+    mov     %rcx, L(%rsp)
+    lea     L(%rsp), %rdi                   # compute_fork_version(the block's epoch)
+    mov     %r12, %rsi
+    lea     (L + 8)(%rsp), %rdx
+    call    lantern_compute_fork_version
+    movl    $DOMAIN_BEACON_PROPOSER, (L + 16)(%rsp)
+    lea     (L + 16)(%rsp), %rdi
+    lea     (L + 8)(%rsp), %rsi
+    lea     BeaconState_genesis_validators_root(%rbp), %rdx
+    mov     %r14, %rcx
+    lea     (L + 112)(%rsp), %r8
+    call    lantern_compute_domain
+    test    %rax, %rax
+    jnz     99f
+    lea     (L + 80)(%rsp), %rax            # compute_signing_root: hash_tree_root(SigningData(root, domain))
+    COPY32  %rax, %r13
+    lea     (L + 80)(%rsp), %rdi
+    mov     $64, %esi
+    lea     (L + 48)(%rsp), %rdx
+    call    sha256_short
+    mov     S9(%rsp), %rdi
+    add     $Validator_pubkey, %rdi
+    mov     S8(%rsp), %rsi
+    add     $4, %rsi
+    lea     (L + 24)(%rsp), %rdx
+    mov     %r14, %rcx
+    call    verify_root_signature
+    test    %rax, %rax
+    jnz     99f
+    test    %rdx, %rdx
+    jz      8f
+5:  movq    $0, (%r15)                      # LANTERN_VALID
+    xor     %eax, %eax
+    jmp     99f
+6:  mov     $LANTERN_INVALID_PROPOSER_INDEX, %ecx
+    jmp     9f
+7:  mov     $LANTERN_INVALID_ENCODING, %ecx
+    jmp     9f
+8:  mov     $LANTERN_INVALID_BLOCK_SIGNATURE, %ecx
+9:  mov     %rcx, (%r15)
+    xor     %eax, %eax
+99: LEAVE 144
+SPEC_END node_backfill
+
+/*
  * (store, data, is_from_block, state, scratch, result, target): validate_on_attestation of the
  * Attestation in data; with no target checkpoint state (state 0) the result is
  * LANTERN_NEED_TARGET_STATE and target holds the target checkpoint, else on_attestation.
