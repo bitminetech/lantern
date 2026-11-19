@@ -12,12 +12,42 @@
 
 ABI uint64_t LF(get_beacon_committee)(const void *state, const void *slot, const void *index, void *cache, void *scratch,
                                         void *out);
+ABI uint64_t LF(is_valid_indexed_attestation)(const void *state, const void *indexed, void *scratch, void *out);
 
 static double now_s(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     return (double)t.tv_sec + (double)t.tv_nsec / 1e9;
 }
+
+/*
+ * is_valid_indexed_attestation of k indices spread over the validators, with a real signature of
+ * another message: every key check and the pairing run, and the result is 0.
+ */
+static void time_indexed(const uint8_t *state, uint64_t n, uint64_t k, uint8_t *scratch, uint64_t ssize) {
+    if (k > n) k = n;
+    uint64_t len = 228 + 8 * k, vsize = 0, valid = 9;
+    uint8_t *enc = calloc(1, (size_t)len), msg[32] = {1};
+    const char *why = NULL;
+    enc[0] = 228; /* the offset of attesting_indices, after data (128) and signature (96) */
+    test_sign(0, msg, enc + 132, &why);
+    for (uint64_t i = 0; i < k; i++) wr64(enc + 228 + 8 * i, i * (n / k));
+    uint8_t *value = decode(type_by_name("IndexedAttestation"), enc, len, &vsize, &why);
+    if (!value) {
+        printf("is_valid_indexed_attestation, %llu keys: %s\n", (unsigned long long)k, why ? why : "no value");
+        free(enc);
+        return;
+    }
+    wr64(scratch, ssize);
+    double a = now_s();
+    uint64_t st = CALL(LF(is_valid_indexed_attestation), state, value, scratch, &valid);
+    double t = now_s() - a;
+    printf("is_valid_indexed_attestation, %llu keys: %.4f s, %.1f us a key (status %llu, valid %llu)\n", (unsigned long long)k, t,
+           t * 1e6 / (double)k, (unsigned long long)st, (unsigned long long)valid);
+    free(value);
+    free(enc);
+}
+
 
 /* The list of BeaconState field f with entries of esize bytes: entries i >= count take entry i % count, up to n. */
 static void grow_list(uint8_t *state, int f, uint64_t esize, uint64_t n) {
@@ -119,6 +149,8 @@ int main(int argc, char **argv) {
         free(ccache);
         free(committee);
     }
+    time_indexed(state, n, 488, scratch, ssize);    /* one committee at 1000000 validators */
+    time_indexed(state, n, 31232, scratch, ssize);  /* 64 of them: an electra aggregate of every committee of a slot */
     wr64(config + CONFIG_STATE_CACHE, (uint64_t)(uintptr_t)cache);
     {
         uint8_t *one = buffer(need);
