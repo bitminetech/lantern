@@ -1370,6 +1370,7 @@ The shuffled active validators of a few epochs, from states of one chain.
 - `CommitteeEntry__mem` (128) bytes, then its list.
 - The caller keeps the states of one chain on a cache: states that only the state transition changed, from one anchor.
 
+## Type `ExpectedWithdrawals`
 
 The withdrawals of a payload, with the entries they used up.
 
