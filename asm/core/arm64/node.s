@@ -303,6 +303,7 @@ FUNCTION lantern_node_init
     str     x9, [x24, #Node_db_block_segment]
     str     x9, [x24, #Node_db_sidecar_segment]
     str     x9, [x24, #Node_backfill_segment]       /* the backfill: from the anchor's block down */
+    str     x9, [x24, #Node_backfill_sidecar_segment]
     str     x9, [x24, #Node_backfill_start]
     add     x9, x22, #1
     str     x9, [x24, #Node_backfill_slot]
@@ -1362,6 +1363,8 @@ LOCAL_FUNCTION node_prune
     cmn     x0, #1
     b.eq    25f
     ldr     x9, [x1, #NodeBlock_status]
+    cmp     x9, #NODE_BLOCK_BACKFILL        /* of a block of the backfill: it stays for it */
+    b.eq    29f
     cmp     x9, #NODE_BLOCK_IMPORTED
     b.ne    25f
     ldr     x9, [x19, #Node_flags]          /* of a kept block: but those in the Db go */
@@ -1601,6 +1604,9 @@ LOCAL_FUNCTION node_backfill_link
     sub     x22, x22, #1
     b       2b
 4:  mov     x26, x21
+    mov     x0, x26                         /* its sidecars first: else it waits, and the link ends */
+    bl      node_lacks_sidecars
+    cbnz    x0, 20f
     mov     x10, #DB_BLOCK                  /* its record */
     ldr     x11, [x26, #NodeBlock_slot]
     stp     x10, x11, [sp, #L]
@@ -1640,8 +1646,15 @@ LOCAL_FUNCTION node_backfill_link
     cmp     x11, x27
     b.ne    5f
     str     x10, [x19, #Node_db_block_end]
-5:  ldr     x9, [x26, #NodeBlock_slot]
+5:  mov     x0, x26                         /* its sidecars */
+    mov     x1, #1
+    bl      node_db_sidecars
+    ldr     x9, [x26, #NodeBlock_slot]
     str     x9, [x19, #Node_backfill_slot]
+    ldr     x10, [x19, #Node_earliest_slot]
+    cmp     x9, x10
+    csel    x9, x9, x10, lo
+    str     x9, [x19, #Node_earliest_slot]
     add     x9, x19, #Node_backfill_root
     add     x10, x26, #NodeBlock_parent_root
     COPY32  x9, x10
@@ -1651,14 +1664,41 @@ LOCAL_FUNCTION node_backfill_link
 20: ldr     x9, [x19, #Node_backfill_handle] /* no stream and no check left: the rest are of no chain */
     cbnz    x9, 99f
     PART    x21, x22, x19, Node_blocks
-21: cbz     x22, 23f
+21: cbz     x22, 22f
     ldr     x9, [x21, #NodeBlock_status]
     cmp     x9, #NODE_BLOCK_BF_CHECKING
     b.eq    99f
     add     x21, x21, #NodeBlock__mem
     sub     x22, x22, #1
     b       21b
-23: PART    x21, x22, x19, Node_blocks
+22: PART    x21, x22, x19, Node_blobs       /* and no sidecar check below backfill_slot */
+    ldr     x10, [x19, #Node_backfill_slot]
+221: cbz    x22, 23f
+    ldr     x9, [x21, #NodeBlob_status]
+    cmp     x9, #NODE_BLOB_VERIFYING
+    b.ne    222f
+    ldr     x9, [x21, #NodeBlob_slot]
+    cmp     x9, x10
+    b.lo    99f
+222: add    x21, x21, #NodeBlob__mem
+    sub     x22, x22, #1
+    b       221b
+23: ldr     x21, [x19, #(Node_streams + 8)] /* and no sidecar request of the node open */
+    ldr     x22, [x19, #Node_streams]
+    add     x22, x19, x22
+231: cbz    x21, 232f
+    ldr     x9, [x22, #NodeStream_state]
+    cmp     x9, #NODE_STREAM_OPENING
+    b.lo    233f
+    ldr     x9, [x22, #NodeStream_method]
+    cmp     x9, #REQRESP_BLOB_SIDECARS_BY_RANGE
+    ccmp    x9, #REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE, #4, ne
+    b.eq    99f
+233: ldr    x9, [x19, #Node_stream_bytes]
+    add     x22, x22, x9
+    sub     x21, x21, #1
+    b       231b
+232: PART   x21, x22, x19, Node_blocks
 24: cbz     x22, 26f
     ldr     x9, [x21, #NodeBlock_status]
     cmp     x9, #NODE_BLOCK_BACKFILL
@@ -1708,7 +1748,7 @@ END_FUNCTION node_backfill_link
  * request (24).
  */
 LOCAL_FUNCTION node_backfill_ask
-    ENTER 32
+    ENTER 48
     ldr     x9, [x19, #Node_flags]
     tst     x9, #NODE_FLAG_DB
     b.eq    99f
@@ -1754,11 +1794,12 @@ LOCAL_FUNCTION node_backfill_ask
     mov     x28, #0
 4:  cmp     x28, x22
     b.hs    99f
-    add     x24, x27, x28
-    udiv    x9, x24, x22
-    msub    x24, x9, x22, x24
+    add     x10, x27, x28
+    udiv    x9, x10, x22
+    msub    x10, x9, x22, x10
+    str     x10, [sp, #(L + 24)]
     mov     x9, #NodePeer__mem
-    madd    x25, x24, x9, x21
+    madd    x25, x10, x9, x21
     add     x28, x28, #1
     ldr     x9, [x25, #NodePeer_flags]
     tbz     x9, #0, 4b                      /* NODE_PEER_STATUS */
@@ -1769,17 +1810,34 @@ LOCAL_FUNCTION node_backfill_ask
     ldr     x9, [x25, #NodePeer_earliest_slot]
     cmp     x9, x26
     b.hi    4b
+    ldr     x9, [x25, #NodePeer_flags]      /* from fulu, its MetaData read: its custody */
+    tst     x9, #NODE_PEER_METADATA
+    b.ne    41f
+    mov     x0, x20
+    bl      node_store_slot
+    add     x1, x19, #Node_config
+    bl      node_fork
+    cmp     x0, #FORK_FULU
+    b.hs    4b
+41:
     ldr     x9, [x19, #Node_backfill_next]  /* start, count, step 1 */
     sub     x9, x9, x26
     stp     x26, x9, [sp, #L]
     mov     x9, #1
     str     x9, [sp, #(L + 16)]
-    mov     x0, x20                         /* version 2 from altair on */
+    mov     x0, x20                         /* the fork of the store's slot: the sidecar requests of the range first */
     bl      node_store_slot
     add     x1, x19, #Node_config
     bl      node_fork
-    mov     x1, #1
-    cmp     x0, #FORK_ALTAIR
+    str     x0, [sp, #(L + 32)]
+    mov     x3, x0
+    mov     x0, x25
+    ldp     x1, x2, [sp, #L]
+    bl      node_sidecar_ask
+    cbnz    x0, 99f
+    mov     x1, #1                          /* version 2 from altair on */
+    ldr     x9, [sp, #(L + 32)]
+    cmp     x9, #FORK_ALTAIR
     cinc    x1, x1, hs
     mov     x0, #REQRESP_BEACON_BLOCKS_BY_RANGE
     ldr     x2, [x25, #NodePeer_handle]
@@ -1791,8 +1849,9 @@ LOCAL_FUNCTION node_backfill_ask
     str     x9, [x19, #Node_backfill_handle]
     str     x26, [x19, #Node_backfill_start]
     str     xzr, [x19, #Node_backfill_got]
-    str     x24, [x19, #Node_backfill_peer]
-99: LEAVE 32
+    ldr     x9, [sp, #(L + 24)]
+    str     x9, [x19, #Node_backfill_peer]
+99: LEAVE 48
 END_FUNCTION node_backfill_ask
 
 /*
@@ -1991,6 +2050,121 @@ LOCAL_FUNCTION node_vote_due
 END_FUNCTION node_vote_due
 
 /*
+ * L0: x0 = the end of the sidecar segment x0: db_sidecar_end for db_sidecar_segment, else
+ * backfill_sidecar_end for backfill_sidecar_segment, else 0, a new segment. Uses x10.
+ */
+LOCAL_FUNCTION node_side_end
+    UNWIND_END_PROLOGUE
+    ldr     x10, [x19, #Node_db_sidecar_segment]
+    cmp     x0, x10
+    b.ne    1f
+    ldr     x0, [x19, #Node_db_sidecar_end]
+    ret
+1:  ldr     x10, [x19, #Node_backfill_sidecar_segment]
+    cmp     x0, x10
+    b.ne    2f
+    ldr     x0, [x19, #Node_backfill_sidecar_end]
+    ret
+2:  mov     x0, #0
+    ret
+END_FUNCTION node_side_end
+
+/*
+ * Each NODE_BLOB_VALID sidecar of the block entry x0, by index, to the Db (node.md): its record at
+ * the end of the sidecar segment of the block's slot and a DB_APPEND; the writer x1 (0 the archive,
+ * 1 the backfill) takes that segment, and each end of it the record's end; its bytes and entry go
+ * unless a stream sends them. A record lantern_db_add refuses stays for the prune. x26 the block,
+ * x27 the index, x28 its slot. Locals: L a DbRecord (80), L+80 the offset, L+88 the sidecar, L+96
+ * the writer, L+104 the segment.
+ */
+LOCAL_FUNCTION node_db_sidecars
+    ENTER 112
+    mov     x26, x0
+    ldr     x28, [x26, #NodeBlock_slot]
+    str     x1, [sp, #(L + 96)]
+    mov     x27, #0
+4:  cmp     x27, #DB_SIDECAR_INDICES
+    b.hs    9f
+    mov     x0, x26
+    mov     x1, x27
+    bl      node_blob_held
+    cbz     x0, 19f
+    str     x0, [sp, #(L + 88)]
+    mov     x0, x28                         /* a column sidecar from fulu on, else a blob sidecar */
+    add     x1, x19, #Node_config
+    bl      node_fork
+    mov     x10, #DB_BLOB_SIDECAR
+    mov     x11, #DB_COLUMN_SIDECAR
+    cmp     x0, #FORK_FULU
+    csel    x10, x11, x10, hs
+    stp     x10, x28, [sp, #L]
+    str     x27, [sp, #(L + 16)]
+    ldr     x12, [sp, #(L + 88)]
+    ldr     x9, [x12, #NodeBlob_length]
+    add     x10, x9, #24
+    mov     x11, #24
+    stp     x10, x11, [sp, #(L + 56)]
+    str     x9, [sp, #(L + 72)]
+    lsr     x0, x28, #DB_SEGMENT_SHIFT      /* its segment, and its offset at the segment's end */
+    str     x0, [sp, #(L + 104)]
+    bl      node_side_end
+    str     x0, [sp, #(L + 80)]
+    ldr     x0, [x19, #Node_db]
+    add     x0, x19, x0
+    add     x1, sp, #L
+    add     x2, sp, #(L + 80)
+    bl      lantern_db_add
+    cbnz    x0, 19f                         /* refused: the entry stays for the prune */
+    mov     x0, #1
+    ldr     x12, [sp, #(L + 88)]
+    ldr     x1, [x12, #NodeBlob_data_id]
+    ldr     x2, [sp, #(L + 104)]
+    ldr     x3, [sp, #(L + 80)]
+    add     x4, sp, #L
+    bl      node_db_append
+    ldr     x9, [sp, #(L + 72)]             /* the segment's new end: the writer's segment, each end of it */
+    add     x9, x9, #(DbRecord__mem + 7)
+    and     x9, x9, #~7
+    ldr     x10, [sp, #(L + 80)]
+    add     x10, x10, x9
+    ldr     x9, [sp, #(L + 104)]
+    ldr     x11, [sp, #(L + 96)]
+    mov     x12, #Node_db_sidecar_segment
+    mov     x13, #Node_backfill_sidecar_segment
+    cmp     x11, #0
+    csel    x12, x13, x12, ne
+    str     x9, [x19, x12]
+    ldr     x11, [x19, #Node_db_sidecar_segment]
+    cmp     x11, x9
+    b.ne    1f
+    str     x10, [x19, #Node_db_sidecar_end]
+1:  ldr     x11, [x19, #Node_backfill_sidecar_segment]
+    cmp     x11, x9
+    b.ne    2f
+    str     x10, [x19, #Node_backfill_sidecar_end]
+2:  ldr     x12, [sp, #(L + 88)]            /* its bytes and entry go, unless a stream sends them */
+    ldr     x0, [x12, #NodeBlob_data_id]
+    bl      node_serving
+    cbnz    x0, 19f
+    mov     x0, #NODE_ACT_BYTES_FREE
+    ldr     x12, [sp, #(L + 88)]
+    ldr     x1, [x12, #NodeBlob_data_id]
+    mov     x2, #0
+    bl      node_ids
+    ldr     x12, [sp, #(L + 88)]
+    mov     x9, #-1
+    stp     x9, x9, [x12]
+    stp     x9, x9, [x12, #16]
+    str     x9, [x12, #NodeBlob_slot]
+    str     xzr, [x12, #NodeBlob_data_id]
+    mov     x9, #NODE_BLOB_FREE
+    str     x9, [x12, #NodeBlob_status]
+19: add     x27, x27, #1
+    b       4b
+9:  LEAVE 112
+END_FUNCTION node_db_sidecars
+
+/*
  * L0: with NODE_FLAG_DB, the canonical blocks from db_next_slot to the finalized block x0 and
  * their sidecars go to the Db, in slot order: a record of each in the index and in a DB_APPEND
  * action, then their bytes and entries go, but the finalized block's entry and bytes a stream
@@ -2085,75 +2259,9 @@ LOCAL_FUNCTION node_archive
     cmp     x11, x12
     b.ne    42f
     str     x10, [x19, #Node_backfill_end]
-42: mov     x27, #0                         /* each sidecar the node holds, by index */
-4:  cmp     x27, #DB_SIDECAR_INDICES
-    b.hs    20f
-    mov     x0, x26
-    mov     x1, x27
-    bl      node_blob_held
-    cbz     x0, 19f
-    str     x0, [sp, #(L + 88)]
-    mov     x0, x28                         /* a column sidecar from fulu on, else a blob sidecar */
-    add     x1, x19, #Node_config
-    bl      node_fork
-    mov     x10, #DB_BLOB_SIDECAR
-    mov     x11, #DB_COLUMN_SIDECAR
-    cmp     x0, #FORK_FULU
-    csel    x10, x11, x10, hs
-    stp     x10, x28, [sp, #L]
-    str     x27, [sp, #(L + 16)]
-    ldr     x12, [sp, #(L + 88)]
-    ldr     x9, [x12, #NodeBlob_length]
-    add     x10, x9, #24
-    mov     x11, #24
-    stp     x10, x11, [sp, #(L + 56)]
-    str     x9, [sp, #(L + 72)]
-    lsr     x9, x28, #DB_SEGMENT_SHIFT
-    ldr     x10, [x19, #Node_db_sidecar_segment]
-    cmp     x9, x10
-    b.eq    5f
-    str     x9, [x19, #Node_db_sidecar_segment]
-    str     xzr, [x19, #Node_db_sidecar_end]
-5:  ldr     x9, [x19, #Node_db_sidecar_end]
-    str     x9, [sp, #(L + 80)]
-    ldr     x0, [x19, #Node_db]
-    add     x0, x19, x0
-    add     x1, sp, #L
-    add     x2, sp, #(L + 80)
-    bl      lantern_db_add
-    cbnz    x0, 19f                         /* refused: the entry stays for the prune */
-    mov     x0, #1
-    ldr     x12, [sp, #(L + 88)]
-    ldr     x1, [x12, #NodeBlob_data_id]
-    ldr     x2, [x19, #Node_db_sidecar_segment]
-    ldr     x3, [sp, #(L + 80)]
-    add     x4, sp, #L
-    bl      node_db_append
-    ldr     x9, [sp, #(L + 72)]
-    add     x9, x9, #(DbRecord__mem + 7)
-    and     x9, x9, #~7
-    ldr     x10, [x19, #Node_db_sidecar_end]
-    add     x10, x10, x9
-    str     x10, [x19, #Node_db_sidecar_end]
-    ldr     x12, [sp, #(L + 88)]            /* its bytes and entry go, unless a stream sends them */
-    ldr     x0, [x12, #NodeBlob_data_id]
-    bl      node_serving
-    cbnz    x0, 19f
-    mov     x0, #NODE_ACT_BYTES_FREE
-    ldr     x12, [sp, #(L + 88)]
-    ldr     x1, [x12, #NodeBlob_data_id]
-    mov     x2, #0
-    bl      node_ids
-    ldr     x12, [sp, #(L + 88)]
-    mov     x9, #-1
-    stp     x9, x9, [x12]
-    stp     x9, x9, [x12, #16]
-    str     x9, [x12, #NodeBlob_slot]
-    str     xzr, [x12, #NodeBlob_data_id]
-    mov     x9, #NODE_BLOB_FREE
-    str     x9, [x12, #NodeBlob_status]
-19: add     x27, x27, #1
-    b       4b
+42: mov     x0, x26                         /* each sidecar the node holds, by index */
+    mov     x1, #0
+    bl      node_db_sidecars
 20: cmp     x26, x21                        /* the finalized block: its state and bytes to the shell, for a restart */
     b.ne    21f
     mov     x0, #NODE_ACT_DB_STATE
@@ -2231,7 +2339,15 @@ FUNCTION lantern_node_db_scan
     add     x0, x19, x0
     bl      lantern_db_scan
     cbnz    x0, 9f
-    cbnz    x20, 1f                         /* a block segment: the backfill's, when it has none; its lowest block */
+    cbz     x20, 10f                        /* a sidecar segment: the backfill's, when it has none */
+    ldr     x9, [x19, #Node_backfill_sidecar_segment]
+    cmn     x9, #1
+    b.ne    1f
+    str     x21, [x19, #Node_backfill_sidecar_segment]
+    ldr     x9, [x22]
+    str     x9, [x19, #Node_backfill_sidecar_end]
+    b       1f
+10:                                         /* a block segment: the backfill's, when it has none; its lowest block */
     ldr     x9, [x19, #Node_backfill_segment]
     cmn     x9, #1
     b.ne    11f
@@ -2602,19 +2718,10 @@ LOCAL_FUNCTION node_peer_custody
 9:  LEAVE 224
 END_FUNCTION node_peer_custody
 
-/*
- * L0: the block of index x0, from the network, waits for its blobs or columns: NODE_BLOCK_BLOBS
- * while it needs sidecars the node does not hold; else data_available 1, NODE_BLOCK_WAITING and
- * its import. Deneb and electra: it needs blobs when its blob count is 1 to the fork's limit and
- * NODE_BLOB_MAX and its epoch is in the blob window. Fulu: it needs columns when its blob count is
- * above 0 and its epoch is in the column window. x21 the index, x22 the entry, x25 the count.
- */
-LOCAL_FUNCTION node_await
+/* L0: x0 = 1 when the block entry x0 needs blobs or columns it does not hold (node.md), else 0. x22 the entry, x25 its blob count. */
+LOCAL_FUNCTION node_lacks_sidecars
     ENTER 0
-    mov     x21, x0
-    PART    x22, x9, x19, Node_blocks
-    mov     x9, #NodeBlock__mem
-    madd    x22, x21, x9, x22
+    mov     x22, x0
     ldr     x25, [x22, #NodeBlock_blobs]
     cbz     x25, 5f
     ldr     x0, [x22, #NodeBlock_slot]
@@ -2645,8 +2752,7 @@ LOCAL_FUNCTION node_await
     mov     x1, x25
     bl      node_blobs_held
     cbnz    x0, 5f
-4:  mov     x9, #NODE_BLOCK_BLOBS
-    str     x9, [x22, #NodeBlock_status]
+4:  mov     x0, #1
     LEAVE 0
 6:  LDQ     x0, x19, Node_config + CONFIG_MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS   /* the column window */
     mov     x1, #FORK_FULU
@@ -2659,6 +2765,29 @@ LOCAL_FUNCTION node_await
     mov     x0, x22
     bl      node_columns_held
     cbz     x0, 4b
+5:  mov     x0, #0
+    LEAVE 0
+END_FUNCTION node_lacks_sidecars
+
+/*
+ * L0: the block of index x0, from the network, waits for its blobs or columns: NODE_BLOCK_BLOBS
+ * while it needs sidecars the node does not hold; else data_available 1, NODE_BLOCK_WAITING and
+ * its import. Deneb and electra: it needs blobs when its blob count is 1 to the fork's limit and
+ * NODE_BLOB_MAX and its epoch is in the blob window. Fulu: it needs columns when its blob count is
+ * above 0 and its epoch is in the column window. x21 the index, x22 the entry, x25 the count.
+ */
+LOCAL_FUNCTION node_await
+    ENTER 0
+    mov     x21, x0
+    PART    x22, x9, x19, Node_blocks
+    mov     x9, #NodeBlock__mem
+    madd    x22, x21, x9, x22
+    mov     x0, x22
+    bl      node_lacks_sidecars
+    cbz     x0, 5f
+    mov     x9, #NODE_BLOCK_BLOBS
+    str     x9, [x22, #NodeBlock_status]
+    LEAVE 0
 5:  mov     x9, #1
     str     x9, [x22, #NodeBlock_data_available]
     mov     x9, #NODE_BLOCK_WAITING
@@ -3444,6 +3573,8 @@ LOCAL_FUNCTION node_event
     cbnz    x10, 76f
     add     x9, x21, #NodeEvent_root
     COPY32  x22, x9
+    ldr     x9, [x21, #NodeEvent_index]
+    str     x9, [x22, #NodeBlock_blobs]
     mov     x9, #NODE_BLOCK_BACKFILL
     str     x9, [x22, #NodeBlock_status]
     LEAVE 48
@@ -6219,109 +6350,20 @@ LOCAL_FUNCTION node_response
 END_FUNCTION node_response
 
 /*
- * L0: x0 = 1 when a response waits for room, else 0. The bytes of each response are read. From
- * fulu, each peer with a Status and no MetaData asked gets a GetMetaData v3. Then, with no
- * BeaconBlocksByRange of the node open, one to a peer of the node's ForkDigest (from fulu, with its
- * MetaData read) whose Status head_slot is at least the next slot: max(the head's slot + 1,
- * sync_slot), at most NODE_SYNC_BATCH slots. Before it, with room for two streams, a
- * BlobSidecarsByRange of the range's slots in the blob window before fulu; from fulu, a
- * DataColumnSidecarsByRange of the range's slots in the column window to each peer whose custody
- * holds sampled columns no earlier peer was asked for, with room for those and the blocks'
- * request. x21 a peer, x22 the streams or peers left, x25 a column request at the end of scratch,
- * x26 the result, x27 the start slot, x28 the scratch size. Locals: L the request (24), L+24 the
- * blob or column range (16), L+40 the fork of the store's slot, L+48 the columns asked (16), L+64
- * the pass (0 counts, 1 sends), L+72 the column requests, L+80 the peer of the blocks.
+ * The sidecar requests of a range (node.md): a BlobSidecarsByRange v1 to the peer x0 of the slots of
+ * x1, count x2, in the blob window whose fork is deneb or electra, then from fulu (x3 the fork of
+ * the store's slot) the DataColumnSidecarsByRange v1 of the slots in the column window to the peers
+ * with NODE_PEER_METADATA. x0 = 1 when a request has no room or the node cannot open it, else 0.
+ * Locals as node_sync's: L the range, L+24 a request's range, L+40 the fork, L+48 the columns asked,
+ * L+64 count or send, L+72 the column requests, L+80 the peer. x21 a peer, x22 the peers left, x25
+ * the request's bytes, x28 the scratch size.
  */
-LOCAL_FUNCTION node_sync
+LOCAL_FUNCTION node_sidecar_ask
     ENTER 96
-    mov     x26, #0
-    ldr     x22, [x19, #(Node_streams + 8)] /* the responses, from the last stream: an end moves the last */
-1:  cbz     x22, 3f
-    sub     x22, x22, #1
-    ldr     x9, [x19, #Node_streams]
-    add     x9, x19, x9
-    ldr     x10, [x19, #Node_stream_bytes]
-    madd    x0, x22, x10, x9
-    ldr     x9, [x0, #NodeStream_state]
-    cmp     x9, #NODE_STREAM_RESPONSE
-    b.ne    1b
-    bl      node_response
-    orr     x26, x26, x0
-    b       1b
-3:  mov     x0, x20                         /* the fork of the store's slot */
-    bl      node_store_slot
-    add     x1, x19, #Node_config
-    bl      node_fork
-    str     x0, [sp, #(L + 40)]
-    cmp     x0, #FORK_FULU
-    b.lo    31f
-    PART    x21, x22, x19, Node_peers       /* fulu: a GetMetaData v3 to each peer with a Status and none asked */
-30: cbz     x22, 31f
-    ldr     x9, [x21, #NodePeer_flags]
-    tbz     x9, #0, 32f                     /* NODE_PEER_STATUS */
-    tst     x9, #(NODE_PEER_METADATA | NODE_PEER_METADATA_ASKED)
-    b.ne    32f
-    ldr     x11, [x19, #(Node_streams + 8)] /* room for it and two more */
-    ldr     x12, [x19, #Node_messages]
-    ldr     x13, [x19, #Node_streams]
-    sub     x12, x12, x13
-    ldr     x13, [x19, #Node_stream_bytes]
-    udiv    x12, x12, x13
-    add     x11, x11, #3
-    cmp     x11, x12
-    b.hi    31f
-    mov     x0, #REQRESP_METADATA
-    mov     x1, #3
-    ldr     x2, [x21, #NodePeer_handle]
-    mov     x3, #0
-    mov     x4, #0
-    bl      node_open
-    cbz     x0, 31f
-    ldr     x9, [x21, #NodePeer_flags]
-    orr     x9, x9, #NODE_PEER_METADATA_ASKED
-    str     x9, [x21, #NodePeer_flags]
-32: add     x21, x21, #NodePeer__mem
-    sub     x22, x22, #1
-    b       30b
-31: ldr     x9, [x19, #Node_flags]
-    tbnz    x9, #3, 9f                      /* NODE_FLAG_SYNCING */
-    add     x0, x19, #Node_head_root
-    bl      node_find_block
-    cmn     x0, #1
-    b.eq    9f
-    ldr     x27, [x1, #NodeBlock_slot]
-    add     x27, x27, #1
-    ldr     x9, [x19, #Node_sync_slot]
-    cmp     x9, x27
-    csel    x27, x9, x27, hi
-    PART    x21, x22, x19, Node_peers       /* a peer ahead */
-4:  cbz     x22, 90f
-    ldr     x9, [x21, #NodePeer_flags]
-    tbz     x9, #0, 5f                      /* NODE_PEER_STATUS */
-    ldr     x10, [sp, #(L + 40)]            /* from fulu: its MetaData read */
-    cmp     x10, #FORK_FULU
-    b.lo    41f
-    tst     x9, #NODE_PEER_METADATA
-    b.eq    5f
-41: ldr     x9, [x21, #NodePeer_fork_digest]
-    ldr     x10, [x19, #Node_fork_digest]
-    cmp     x9, x10
-    b.ne    5f
-    ldr     x9, [x21, #NodePeer_head_slot]
-    cmp     x9, x27
-    b.hs    6f
-5:  add     x21, x21, #NodePeer__mem
-    sub     x22, x22, #1
-    b       4b
-6:  str     x21, [sp, #(L + 80)]
-    sub     x9, x9, x27                     /* the request: start_slot, count, step 1 */
-    add     x9, x9, #1
-    mov     x10, #NODE_SYNC_BATCH
-    cmp     x9, x10
-    csel    x9, x9, x10, lo
-    stp     x27, x9, [sp, #L]
-    mov     x10, #1
-    str     x10, [sp, #(L + 16)]
+    str     x0, [sp, #(L + 80)]
+    stp     x1, x2, [sp, #L]
+    str     x3, [sp, #(L + 40)]
+    mov     x21, x0
     LDQ     x0, x19, Node_config + CONFIG_MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS   /* the blob window's first slot */
     mov     x1, #FORK_DENEB
     bl      node_window
@@ -6454,6 +6496,121 @@ LOCAL_FUNCTION node_sync
 78: str     x28, [x23]
     b       9f
 77: str     x28, [x23]
+71: mov     x0, #0
+    LEAVE 96
+9:  mov     x0, #1
+    LEAVE 96
+END_FUNCTION node_sidecar_ask
+
+/*
+ * L0: x0 = 1 when a response waits for room, else 0. The bytes of each response are read. From
+ * fulu, each peer with a Status and no MetaData asked gets a GetMetaData v3. Then, with no
+ * BeaconBlocksByRange of the node open, one to a peer of the node's ForkDigest (from fulu, with its
+ * MetaData read) whose Status head_slot is at least the next slot: max(the head's slot + 1,
+ * sync_slot), at most NODE_SYNC_BATCH slots. Before it, with room for two streams, a
+ * BlobSidecarsByRange of the range's slots in the blob window before fulu; from fulu, a
+ * DataColumnSidecarsByRange of the range's slots in the column window to each peer whose custody
+ * holds sampled columns no earlier peer was asked for, with room for those and the blocks'
+ * request. x21 a peer, x22 the streams or peers left, x25 a column request at the end of scratch,
+ * x26 the result, x27 the start slot, x28 the scratch size. Locals: L the request (24), L+24 the
+ * blob or column range (16), L+40 the fork of the store's slot, L+48 the columns asked (16), L+64
+ * the pass (0 counts, 1 sends), L+72 the column requests, L+80 the peer of the blocks.
+ */
+LOCAL_FUNCTION node_sync
+    ENTER 96
+    mov     x26, #0
+    ldr     x22, [x19, #(Node_streams + 8)] /* the responses, from the last stream: an end moves the last */
+1:  cbz     x22, 3f
+    sub     x22, x22, #1
+    ldr     x9, [x19, #Node_streams]
+    add     x9, x19, x9
+    ldr     x10, [x19, #Node_stream_bytes]
+    madd    x0, x22, x10, x9
+    ldr     x9, [x0, #NodeStream_state]
+    cmp     x9, #NODE_STREAM_RESPONSE
+    b.ne    1b
+    bl      node_response
+    orr     x26, x26, x0
+    b       1b
+3:  mov     x0, x20                         /* the fork of the store's slot */
+    bl      node_store_slot
+    add     x1, x19, #Node_config
+    bl      node_fork
+    str     x0, [sp, #(L + 40)]
+    cmp     x0, #FORK_FULU
+    b.lo    31f
+    PART    x21, x22, x19, Node_peers       /* fulu: a GetMetaData v3 to each peer with a Status and none asked */
+30: cbz     x22, 31f
+    ldr     x9, [x21, #NodePeer_flags]
+    tbz     x9, #0, 32f                     /* NODE_PEER_STATUS */
+    tst     x9, #(NODE_PEER_METADATA | NODE_PEER_METADATA_ASKED)
+    b.ne    32f
+    ldr     x11, [x19, #(Node_streams + 8)] /* room for it and two more */
+    ldr     x12, [x19, #Node_messages]
+    ldr     x13, [x19, #Node_streams]
+    sub     x12, x12, x13
+    ldr     x13, [x19, #Node_stream_bytes]
+    udiv    x12, x12, x13
+    add     x11, x11, #3
+    cmp     x11, x12
+    b.hi    31f
+    mov     x0, #REQRESP_METADATA
+    mov     x1, #3
+    ldr     x2, [x21, #NodePeer_handle]
+    mov     x3, #0
+    mov     x4, #0
+    bl      node_open
+    cbz     x0, 31f
+    ldr     x9, [x21, #NodePeer_flags]
+    orr     x9, x9, #NODE_PEER_METADATA_ASKED
+    str     x9, [x21, #NodePeer_flags]
+32: add     x21, x21, #NodePeer__mem
+    sub     x22, x22, #1
+    b       30b
+31: ldr     x9, [x19, #Node_flags]
+    tbnz    x9, #3, 9f                      /* NODE_FLAG_SYNCING */
+    add     x0, x19, #Node_head_root
+    bl      node_find_block
+    cmn     x0, #1
+    b.eq    9f
+    ldr     x27, [x1, #NodeBlock_slot]
+    add     x27, x27, #1
+    ldr     x9, [x19, #Node_sync_slot]
+    cmp     x9, x27
+    csel    x27, x9, x27, hi
+    PART    x21, x22, x19, Node_peers       /* a peer ahead */
+4:  cbz     x22, 90f
+    ldr     x9, [x21, #NodePeer_flags]
+    tbz     x9, #0, 5f                      /* NODE_PEER_STATUS */
+    ldr     x10, [sp, #(L + 40)]            /* from fulu: its MetaData read */
+    cmp     x10, #FORK_FULU
+    b.lo    41f
+    tst     x9, #NODE_PEER_METADATA
+    b.eq    5f
+41: ldr     x9, [x21, #NodePeer_fork_digest]
+    ldr     x10, [x19, #Node_fork_digest]
+    cmp     x9, x10
+    b.ne    5f
+    ldr     x9, [x21, #NodePeer_head_slot]
+    cmp     x9, x27
+    b.hs    6f
+5:  add     x21, x21, #NodePeer__mem
+    sub     x22, x22, #1
+    b       4b
+6:  str     x21, [sp, #(L + 80)]
+    sub     x9, x9, x27                     /* the request: start_slot, count, step 1 */
+    add     x9, x9, #1
+    mov     x10, #NODE_SYNC_BATCH
+    cmp     x9, x10
+    csel    x9, x9, x10, lo
+    stp     x27, x9, [sp, #L]
+    mov     x10, #1
+    str     x10, [sp, #(L + 16)]
+    ldr     x0, [sp, #(L + 80)]             /* the sidecar requests of the range */
+    ldp     x1, x2, [sp, #L]
+    ldr     x3, [sp, #(L + 40)]
+    bl      node_sidecar_ask
+    cbnz    x0, 9f
 71: ldr     x21, [sp, #(L + 80)]
     mov     x0, x20                         /* version 2 from altair on */
     bl      node_store_slot

@@ -4879,9 +4879,15 @@ static void backfill_once(tv parts, case_block **chain, size_t nchain, uint64_t 
         if (!*why) {
             net.chain = served;
             net.nchain = nchain;
-            net.no_blobs = 1;
+            net.no_blobs = 0; /* the peer serves the chain's sidecars too */
             net.parts = parts;
             memcpy(net.gvr, gvr, 32);
+#if FORK >= FORK_FULU
+            uint8_t cols[16];
+            node_columns(cols, why);
+            net.peer_cgc = rd64(config + 280);
+            memcpy(net.want_columns, cols, 16);
+#endif
             bf_chain = chain;
             bf_nchain = nchain;
             bf_above = bad < nchain ? bad + 1 : 0;
@@ -4905,6 +4911,18 @@ static void backfill_once(tv parts, case_block **chain, size_t nchain, uint64_t 
             }
             if (!*why && bad >= nchain && rd64(s->node + NODE_BACKFILL_SLOT) != chain[0]->slot)
                 *why = "backfill: backfill_slot is not the slot of the chain's first block";
+            if (!*why && bad >= nchain && rd64(s->node + 216) != chain[0]->slot) /* Node_earliest_slot */
+                *why = "backfill: earliest_slot is not the slot of the chain's first block";
+            for (size_t b = 0; b < nchain && !*why && bad >= nchain; b++) { /* each sidecar of the chain, in the Db */
+                for (uint64_t i = 0, c = chain[b]->sidecars ? rd64(chain[b]->sidecars + 1) : 0; i < c; i++)
+                    if (!shell_has_blob(s, chain[b]->root, i)) *why = "backfill: a blob sidecar of the chain is not in the Db";
+#if FORK >= FORK_FULU
+                for (uint64_t c = 0, len; c < 128 && !*why; c++)
+                    if ((cols[c / 8] >> (c % 8) & 1) && case_column(parts, chain[b]->columns, c, &len) &&
+                        !shell_has_blob(s, chain[b]->root, c))
+                        *why = "backfill: a column sidecar of the chain is not in the Db";
+#endif
+            }
             p2p_close(&net);
         }
     }

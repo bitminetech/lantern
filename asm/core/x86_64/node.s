@@ -300,6 +300,7 @@ FUNCTION lantern_node_init
     movq    $-1, Node_db_block_segment(%r15)
     movq    $-1, Node_db_sidecar_segment(%r15)
     movq    $-1, Node_backfill_segment(%r15)   # the backfill: from the anchor's block down
+    movq    $-1, Node_backfill_sidecar_segment(%r15)
     movq    $-1, Node_backfill_start(%r15)
     lea     1(%r13), %rax
     mov     %rax, Node_backfill_slot(%r15)
@@ -1590,6 +1591,8 @@ LOCAL_FUNCTION node_prune
     call    node_find_block
     cmp     $-1, %rax
     je      25f
+    cmpq    $NODE_BLOCK_BACKFILL, NodeBlock_status(%rdx)  # of a block of the backfill: it stays for it
+    je      29f
     cmpq    $NODE_BLOCK_IMPORTED, NodeBlock_status(%rdx)
     jne     25f
     testq   $NODE_FLAG_DB, Node_flags(%rbx) # of a kept block: but those in the Db go
@@ -1832,7 +1835,11 @@ LOCAL_FUNCTION node_backfill_link
 3:  add     $NodeBlock__mem, %r12
     dec     %r13
     jmp     2b
-4:  movq    $DB_BLOCK, L(%rsp)              # its record
+4:  mov     %r12, %rdi                      # its sidecars first: else it waits, and the link ends
+    call    node_lacks_sidecars
+    test    %rax, %rax
+    jnz     20f
+    movq    $DB_BLOCK, L(%rsp)              # its record
     mov     NodeBlock_slot(%r12), %rax
     mov     %rax, (L + 8)(%rsp)
     movq    $0, (L + 16)(%rsp)
@@ -1871,8 +1878,15 @@ LOCAL_FUNCTION node_backfill_link
     cmp     Node_db_block_segment(%rbx), %rcx
     jne     5f
     mov     %rax, Node_db_block_end(%rbx)
-5:  mov     NodeBlock_slot(%r12), %rax
+5:  mov     %r12, %rdi                      # its sidecars
+    mov     $1, %esi
+    call    node_db_sidecars
+    mov     NodeBlock_slot(%r12), %rax
     mov     %rax, Node_backfill_slot(%rbx)
+    cmp     Node_earliest_slot(%rbx), %rax
+    jae     51f
+    mov     %rax, Node_earliest_slot(%rbx)
+51:
     lea     Node_backfill_root(%rbx), %rdi
     lea     NodeBlock_parent_root(%r12), %rsi
     COPY32  %rdi, %rsi
@@ -1883,12 +1897,37 @@ LOCAL_FUNCTION node_backfill_link
     jne     99f
     PART    %r12, %r13, %rbx, Node_blocks
 21: test    %r13, %r13
-    jz      23f
+    jz      22f
     cmpq    $NODE_BLOCK_BF_CHECKING, NodeBlock_status(%r12)
     je      99f
     add     $NodeBlock__mem, %r12
     dec     %r13
     jmp     21b
+22: PART    %r12, %r13, %rbx, Node_blobs    # and no sidecar check below backfill_slot
+221: test   %r13, %r13
+    jz      223f
+    cmpq    $NODE_BLOB_VERIFYING, NodeBlob_status(%r12)
+    jne     222f
+    mov     NodeBlob_slot(%r12), %rax
+    cmp     Node_backfill_slot(%rbx), %rax
+    jb      99f
+222: add    $NodeBlob__mem, %r12
+    dec     %r13
+    jmp     221b
+223: mov    (Node_streams + 8)(%rbx), %r13  # and no sidecar request of the node open
+    mov     Node_streams(%rbx), %r12
+    add     %rbx, %r12
+224: test   %r13, %r13
+    jz      23f
+    cmpq    $NODE_STREAM_OPENING, NodeStream_state(%r12)
+    jb      225f
+    cmpq    $REQRESP_BLOB_SIDECARS_BY_RANGE, NodeStream_method(%r12)
+    je      99f
+    cmpq    $REQRESP_DATA_COLUMN_SIDECARS_BY_RANGE, NodeStream_method(%r12)
+    je      99f
+225: add    Node_stream_bytes(%rbx), %r12
+    dec     %r13
+    jmp     224b
 23: PART    %r12, %r13, %rbx, Node_blocks
 24: test    %r13, %r13
     jz      26f
@@ -1994,6 +2033,18 @@ LOCAL_FUNCTION node_backfill_ask
     mov     NodePeer_earliest_slot(%rcx), %rax
     cmp     S8(%rsp), %rax
     ja      4b
+    testq   $NODE_PEER_METADATA, NodePeer_flags(%rcx)   # from fulu, its MetaData read: its custody
+    jnz     41f
+    mov     %rcx, (L + 32)(%rsp)
+    mov     %rbp, %rdi
+    call    node_store_slot
+    mov     %rax, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    cmp     $FORK_FULU, %rax
+    jae     4b
+    mov     (L + 32)(%rsp), %rcx
+41:
     mov     %rcx, (L + 32)(%rsp)
     mov     S8(%rsp), %rax                  # start, count, step 1
     mov     %rax, L(%rsp)
@@ -2001,13 +2052,21 @@ LOCAL_FUNCTION node_backfill_ask
     sub     %rax, %rcx
     mov     %rcx, (L + 8)(%rsp)
     movq    $1, (L + 16)(%rsp)
-    mov     %rbp, %rdi                      # version 2 from altair on
+    mov     %rbp, %rdi                      # the fork of the store's slot: the sidecar requests of the range first
     call    node_store_slot
     mov     %rax, %rdi
     lea     Node_config(%rbx), %rsi
     call    node_fork
-    mov     $1, %esi
-    cmp     $FORK_ALTAIR, %rax
+    mov     %rax, (L + 40)(%rsp)
+    mov     (L + 32)(%rsp), %rdi
+    mov     L(%rsp), %rsi
+    mov     (L + 8)(%rsp), %rdx
+    mov     %rax, %rcx
+    call    node_sidecar_ask
+    test    %rax, %rax
+    jnz     99f
+    mov     $1, %esi                        # version 2 from altair on
+    cmpq    $FORK_ALTAIR, (L + 40)(%rsp)
     jb      5f
     mov     $2, %esi
 5:  mov     $REQRESP_BEACON_BLOCKS_BY_RANGE, %edi
@@ -2229,6 +2288,124 @@ LOCAL_FUNCTION node_vote_due
 END_FUNCTION node_vote_due
 
 /*
+ * rax = the end of the sidecar segment rdi: db_sidecar_end for db_sidecar_segment, else
+ * backfill_sidecar_end for backfill_sidecar_segment, else 0, a new segment. Uses rax only.
+ */
+LOCAL_FUNCTION node_side_end
+    UNWIND_END_PROLOGUE
+    cmp     Node_db_sidecar_segment(%rbx), %rdi
+    jne     1f
+    mov     Node_db_sidecar_end(%rbx), %rax
+    ret
+1:  cmp     Node_backfill_sidecar_segment(%rbx), %rdi
+    jne     2f
+    mov     Node_backfill_sidecar_end(%rbx), %rax
+    ret
+2:  xor     %eax, %eax
+    ret
+END_FUNCTION node_side_end
+
+/*
+ * Each NODE_BLOB_VALID sidecar of the block entry rdi, by index, to the Db (node.md): its record at
+ * the end of the sidecar segment of the block's slot and a DB_APPEND; the writer rsi (0 the archive,
+ * 1 the backfill) takes that segment, and each end of it the record's end; its bytes and entry go
+ * unless a stream sends them. A record lantern_db_add refuses stays for the prune. S8 the block,
+ * S9 the index, S10 its slot. Locals: L a DbRecord (80), L+80 the offset, L+88 the sidecar, L+96
+ * the writer, L+104 the segment.
+ */
+LOCAL_FUNCTION node_db_sidecars
+    ENTER 112
+    mov     %rdi, S8(%rsp)
+    mov     NodeBlock_slot(%rdi), %rax
+    mov     %rax, S10(%rsp)
+    mov     %rsi, (L + 96)(%rsp)
+    movq    $0, S9(%rsp)
+4:  cmpq    $DB_SIDECAR_INDICES, S9(%rsp)
+    jae     9f
+    mov     S8(%rsp), %rdi
+    mov     S9(%rsp), %rsi
+    call    node_blob_held
+    test    %rax, %rax
+    jz      19f
+    mov     %rax, (L + 88)(%rsp)
+    mov     S10(%rsp), %rdi                 # a column sidecar from fulu on, else a blob sidecar
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     $DB_BLOB_SIDECAR, %ecx
+    mov     $DB_COLUMN_SIDECAR, %edx
+    cmp     $FORK_FULU, %rax
+    cmovae  %rdx, %rcx
+    mov     %rcx, L(%rsp)
+    mov     S10(%rsp), %rax
+    mov     %rax, (L + 8)(%rsp)
+    mov     S9(%rsp), %rax
+    mov     %rax, (L + 16)(%rsp)
+    mov     (L + 88)(%rsp), %rax
+    mov     NodeBlob_length(%rax), %rax
+    mov     %rax, (L + 72)(%rsp)
+    add     $24, %rax
+    mov     %rax, (L + 56)(%rsp)
+    movq    $24, (L + DbRecord_bytes + 8)(%rsp)
+    mov     S10(%rsp), %rdi                 # its segment, and its offset at the segment's end
+    shr     $DB_SEGMENT_SHIFT, %rdi
+    mov     %rdi, (L + 104)(%rsp)
+    call    node_side_end
+    mov     %rax, (L + 80)(%rsp)
+    mov     Node_db(%rbx), %rdi
+    add     %rbx, %rdi
+    lea     L(%rsp), %rsi
+    lea     (L + 80)(%rsp), %rdx
+    call    lantern_db_add
+    test    %rax, %rax
+    jnz     19f                             # refused: the entry stays for the prune
+    mov     $1, %edi
+    mov     (L + 88)(%rsp), %rax
+    mov     NodeBlob_data_id(%rax), %rsi
+    mov     (L + 104)(%rsp), %rdx
+    mov     (L + 80)(%rsp), %rcx
+    lea     L(%rsp), %r8
+    call    node_db_append
+    mov     (L + 72)(%rsp), %rax            # the segment's new end: the writer's segment, each end of it
+    add     $(DbRecord__mem + 7), %rax
+    and     $-8, %rax
+    add     (L + 80)(%rsp), %rax
+    mov     (L + 104)(%rsp), %rcx
+    cmpq    $0, (L + 96)(%rsp)
+    jne     1f
+    mov     %rcx, Node_db_sidecar_segment(%rbx)
+    jmp     2f
+1:  mov     %rcx, Node_backfill_sidecar_segment(%rbx)
+2:  cmp     Node_db_sidecar_segment(%rbx), %rcx
+    jne     3f
+    mov     %rax, Node_db_sidecar_end(%rbx)
+3:  cmp     Node_backfill_sidecar_segment(%rbx), %rcx
+    jne     5f
+    mov     %rax, Node_backfill_sidecar_end(%rbx)
+5:  mov     (L + 88)(%rsp), %rax            # its bytes and entry go, unless a stream sends them
+    mov     NodeBlob_data_id(%rax), %rdi
+    call    node_serving
+    test    %rax, %rax
+    jnz     19f
+    mov     $NODE_ACT_BYTES_FREE, %edi
+    mov     (L + 88)(%rsp), %rax
+    mov     NodeBlob_data_id(%rax), %rsi
+    xor     %edx, %edx
+    call    node_ids
+    mov     (L + 88)(%rsp), %rdx
+    mov     $-1, %rax
+    mov     %rax, (%rdx)
+    mov     %rax, 8(%rdx)
+    mov     %rax, 16(%rdx)
+    mov     %rax, 24(%rdx)
+    mov     %rax, NodeBlob_slot(%rdx)
+    movq    $0, NodeBlob_data_id(%rdx)
+    movq    $NODE_BLOB_FREE, NodeBlob_status(%rdx)
+19: incq    S9(%rsp)
+    jmp     4b
+9:  LEAVE 112
+END_FUNCTION node_db_sidecars
+
+/*
  * With NODE_FLAG_DB, the canonical blocks from db_next_slot to the finalized block rdi and their
  * sidecars go to the Db, in slot order: a record of each in the index and in a DB_APPEND action,
  * then their bytes and entries go, but the finalized block's entry and bytes a stream sends. A
@@ -2326,80 +2503,9 @@ LOCAL_FUNCTION node_archive
     jne     42f
     mov     Node_db_block_end(%rbx), %rax
     mov     %rax, Node_backfill_end(%rbx)
-42: movq    $0, S9(%rsp)                    # each sidecar the node holds, by index
-4:  cmpq    $DB_SIDECAR_INDICES, S9(%rsp)
-    jae     20f
-    mov     S8(%rsp), %rdi
-    mov     S9(%rsp), %rsi
-    call    node_blob_held
-    test    %rax, %rax
-    jz      19f
-    mov     %rax, (L + 88)(%rsp)
-    mov     S10(%rsp), %rdi                 # a column sidecar from fulu on, else a blob sidecar
-    lea     Node_config(%rbx), %rsi
-    call    node_fork
-    mov     $DB_BLOB_SIDECAR, %ecx
-    mov     $DB_COLUMN_SIDECAR, %edx
-    cmp     $FORK_FULU, %rax
-    cmovae  %rdx, %rcx
-    mov     %rcx, L(%rsp)
-    mov     S10(%rsp), %rax
-    mov     %rax, (L + 8)(%rsp)
-    mov     S9(%rsp), %rax
-    mov     %rax, (L + 16)(%rsp)
-    mov     (L + 88)(%rsp), %rax
-    mov     NodeBlob_length(%rax), %rax
-    mov     %rax, (L + 72)(%rsp)
-    add     $24, %rax
-    mov     %rax, (L + 56)(%rsp)
-    movq    $24, (L + DbRecord_bytes + 8)(%rsp)
-    mov     S10(%rsp), %rax
-    shr     $DB_SEGMENT_SHIFT, %rax
-    cmp     Node_db_sidecar_segment(%rbx), %rax
-    je      5f
-    mov     %rax, Node_db_sidecar_segment(%rbx)
-    movq    $0, Node_db_sidecar_end(%rbx)
-5:  mov     Node_db_sidecar_end(%rbx), %rax
-    mov     %rax, (L + 80)(%rsp)
-    mov     Node_db(%rbx), %rdi
-    add     %rbx, %rdi
-    lea     L(%rsp), %rsi
-    lea     (L + 80)(%rsp), %rdx
-    call    lantern_db_add
-    test    %rax, %rax
-    jnz     19f                             # refused: the entry stays for the prune
-    mov     $1, %edi
-    mov     (L + 88)(%rsp), %rax
-    mov     NodeBlob_data_id(%rax), %rsi
-    mov     Node_db_sidecar_segment(%rbx), %rdx
-    mov     (L + 80)(%rsp), %rcx
-    lea     L(%rsp), %r8
-    call    node_db_append
-    mov     (L + 72)(%rsp), %rax
-    add     $(DbRecord__mem + 7), %rax
-    and     $-8, %rax
-    add     %rax, Node_db_sidecar_end(%rbx)
-    mov     (L + 88)(%rsp), %rax            # its bytes and entry go, unless a stream sends them
-    mov     NodeBlob_data_id(%rax), %rdi
-    call    node_serving
-    test    %rax, %rax
-    jnz     19f
-    mov     $NODE_ACT_BYTES_FREE, %edi
-    mov     (L + 88)(%rsp), %rax
-    mov     NodeBlob_data_id(%rax), %rsi
-    xor     %edx, %edx
-    call    node_ids
-    mov     (L + 88)(%rsp), %rdx
-    mov     $-1, %rax
-    mov     %rax, (%rdx)
-    mov     %rax, 8(%rdx)
-    mov     %rax, 16(%rdx)
-    mov     %rax, 24(%rdx)
-    mov     %rax, NodeBlob_slot(%rdx)
-    movq    $0, NodeBlob_data_id(%rdx)
-    movq    $NODE_BLOB_FREE, NodeBlob_status(%rdx)
-19: incq    S9(%rsp)
-    jmp     4b
+42: mov     S8(%rsp), %rdi                  # each sidecar the node holds, by index
+    xor     %esi, %esi
+    call    node_db_sidecars
 20: mov     S8(%rsp), %rdx                  # the finalized block: its state and bytes to the shell, for a restart
     cmp     %r12, %rdx
     jne     21f
@@ -2497,8 +2603,15 @@ FUNCTION lantern_node_db_scan
     call    lantern_db_scan
     test    %rax, %rax
     jnz     9f
-    test    %r12, %r12                      # a block segment: the backfill's, when it has none; its lowest block
-    jnz     10f
+    test    %r12, %r12                      # a sidecar segment: the backfill's, when it has none
+    jz      14f
+    cmpq    $-1, Node_backfill_sidecar_segment(%rbx)
+    jne     10f
+    mov     %r13, Node_backfill_sidecar_segment(%rbx)
+    mov     (%rbp), %rax
+    mov     %rax, Node_backfill_sidecar_end(%rbx)
+    jmp     10f
+14:                                         # a block segment: the backfill's, when it has none; its lowest block
     cmpq    $-1, Node_backfill_segment(%rbx)
     jne     11f
     mov     %r13, Node_backfill_segment(%rbx)
@@ -2846,20 +2959,10 @@ LOCAL_FUNCTION node_peer_custody
 9:  LEAVE 224
 END_FUNCTION node_peer_custody
 
-/*
- * The block of index rdi, from the network, waits for its blobs or columns: NODE_BLOCK_BLOBS
- * while it needs sidecars the node does not hold; else data_available 1, NODE_BLOCK_WAITING and
- * its import. Deneb and electra: it needs blobs when its blob count is 1 to the fork's limit and
- * NODE_BLOB_MAX and its epoch is in the blob window. Fulu: it needs columns when its blob count is
- * above 0 and its epoch is in the column window. r12 the index, r13 the entry, S7 the count, S8
- * the window's first epoch.
- */
-LOCAL_FUNCTION node_await
+/* rax = 1 when the block entry rdi needs blobs or columns it does not hold (node.md), else 0. r13 the entry, S7 its blob count, S8 a window. */
+LOCAL_FUNCTION node_lacks_sidecars
     ENTER 0
-    mov     %rdi, %r12
-    PART    %r13, %rax, %rbx, Node_blocks
-    imul    $NodeBlock__mem, %r12, %rax
-    add     %rax, %r13
+    mov     %rdi, %r13
     mov     NodeBlock_blobs(%r13), %rax
     mov     %rax, S7(%rsp)
     test    %rax, %rax
@@ -2894,7 +2997,7 @@ LOCAL_FUNCTION node_await
     call    node_blobs_held
     test    %rax, %rax
     jnz     5f
-4:  movq    $NODE_BLOCK_BLOBS, NodeBlock_status(%r13)
+4:  mov     $1, %eax
     LEAVE 0
 6:  mov     (Node_config + CONFIG_MIN_EPOCHS_FOR_DATA_COLUMN_SIDECARS_REQUESTS)(%rbx), %rdi  # the column window
     mov     $FORK_FULU, %esi
@@ -2910,6 +3013,30 @@ LOCAL_FUNCTION node_await
     call    node_columns_held
     test    %rax, %rax
     jz      4b
+5:  xor     %eax, %eax
+    LEAVE 0
+END_FUNCTION node_lacks_sidecars
+
+/*
+ * The block of index rdi, from the network, waits for its blobs or columns: NODE_BLOCK_BLOBS
+ * while it needs sidecars the node does not hold; else data_available 1, NODE_BLOCK_WAITING and
+ * its import. Deneb and electra: it needs blobs when its blob count is 1 to the fork's limit and
+ * NODE_BLOB_MAX and its epoch is in the blob window. Fulu: it needs columns when its blob count is
+ * above 0 and its epoch is in the column window. r12 the index, r13 the entry, S7 the count, S8
+ * the window's first epoch.
+ */
+LOCAL_FUNCTION node_await
+    ENTER 0
+    mov     %rdi, %r12
+    PART    %r13, %rax, %rbx, Node_blocks
+    imul    $NodeBlock__mem, %r12, %rax
+    add     %rax, %r13
+    mov     %r13, %rdi
+    call    node_lacks_sidecars
+    test    %rax, %rax
+    jz      5f
+    movq    $NODE_BLOCK_BLOBS, NodeBlock_status(%r13)
+    LEAVE 0
 5:  movq    $1, NodeBlock_data_available(%r13)
     movq    $NODE_BLOCK_WAITING, NodeBlock_status(%r13)
     mov     %r12, %rdi
@@ -3414,6 +3541,8 @@ LOCAL_FUNCTION node_event
     jnz     76f
     lea     NodeEvent_root(%r12), %rsi
     COPY32  %r13, %rsi
+    mov     NodeEvent_index(%r12), %rax
+    mov     %rax, NodeBlock_blobs(%r13)
     movq    $NODE_BLOCK_BACKFILL, NodeBlock_status(%r13)
     LEAVE 48
 751: cmp    $NODE_WORK_SYNC_BLOCK, %rax     # SYNC_BLOCK: the root of a block of a response
@@ -6304,112 +6433,21 @@ LOCAL_FUNCTION node_response
 END_FUNCTION node_response
 
 /*
- * rax = 1 when a response waits for room, else 0. The bytes of each response are read. From
- * fulu, each peer with a Status and no MetaData asked gets a GetMetaData v3. Then, with no
- * BeaconBlocksByRange of the node open, one to a peer of the node's ForkDigest (from fulu, with its
- * MetaData read) whose Status head_slot is at least the next slot: max(the head's slot + 1,
- * sync_slot), at most NODE_SYNC_BATCH slots. Before it, with room for two streams, a
- * BlobSidecarsByRange of the range's slots in the blob window before fulu; from fulu, a
- * DataColumnSidecarsByRange of the range's slots in the column window to each peer whose custody
- * holds sampled columns no earlier peer was asked for, with room for those and the blocks'
- * request. r12 a peer, r13 the streams or peers left, S7 the result, S8 the start slot, S9 the
- * scratch size. Locals: L the request (24), L+24 the blob or column range (16), L+40 the fork of
- * the store's slot, L+48 the columns asked (16), L+64 the pass (0 counts, 1 sends), L+72 the
- * column requests, L+80 the peer of the blocks, L+88 a column request at the end of scratch.
+ * The sidecar requests of a range (node.md): a BlobSidecarsByRange v1 to the peer rdi of the slots of
+ * rsi, count rdx, in the blob window whose fork is deneb or electra, then from fulu (rcx the fork of
+ * the store's slot) the DataColumnSidecarsByRange v1 of the slots in the column window to the peers
+ * with NODE_PEER_METADATA. rax = 1 when a request has no room or the node cannot open it, else 0.
+ * Locals as node_sync's: L the range, L+24 a request's range, L+40 the fork, L+48 the columns asked,
+ * L+64 count or send, L+72 the column requests, L+80 the peer, L+88 the request's bytes. r12 a peer,
+ * r13 the peers left, S9 the scratch size.
  */
-LOCAL_FUNCTION node_sync
+LOCAL_FUNCTION node_sidecar_ask
     ENTER 96
-    movq    $0, S7(%rsp)
-    mov     (Node_streams + 8)(%rbx), %r13  # the responses, from the last stream: an end moves the last
-1:  test    %r13, %r13
-    jz      3f
-    dec     %r13
-    mov     Node_stream_bytes(%rbx), %rdi
-    imul    %r13, %rdi
-    add     Node_streams(%rbx), %rdi
-    add     %rbx, %rdi
-    cmpq    $NODE_STREAM_RESPONSE, NodeStream_state(%rdi)
-    jne     1b
-    call    node_response
-    or      %rax, S7(%rsp)
-    jmp     1b
-3:  mov     %rbp, %rdi                      # the fork of the store's slot
-    call    node_store_slot
-    mov     %rax, %rdi
-    lea     Node_config(%rbx), %rsi
-    call    node_fork
-    mov     %rax, (L + 40)(%rsp)
-    cmp     $FORK_FULU, %rax
-    jb      31f
-    PART    %r12, %r13, %rbx, Node_peers    # fulu: a GetMetaData v3 to each peer with a Status and none asked
-30: test    %r13, %r13
-    jz      31f
-    mov     NodePeer_flags(%r12), %rax
-    test    $NODE_PEER_STATUS, %rax
-    jz      32f
-    test    $(NODE_PEER_METADATA | NODE_PEER_METADATA_ASKED), %rax
-    jnz     32f
-    mov     Node_messages(%rbx), %rax       # room for it and two more
-    sub     Node_streams(%rbx), %rax
-    xor     %edx, %edx
-    divq    Node_stream_bytes(%rbx)
-    mov     (Node_streams + 8)(%rbx), %rcx
-    add     $3, %rcx
-    cmp     %rax, %rcx
-    ja      31f
-    mov     $REQRESP_METADATA, %edi
-    mov     $3, %esi
-    mov     NodePeer_handle(%r12), %rdx
-    xor     %ecx, %ecx
-    xor     %r8d, %r8d
-    call    node_open
-    test    %rax, %rax
-    jz      31f
-    orq     $NODE_PEER_METADATA_ASKED, NodePeer_flags(%r12)
-32: add     $NodePeer__mem, %r12
-    dec     %r13
-    jmp     30b
-31: testq   $NODE_FLAG_SYNCING, Node_flags(%rbx)
-    jnz     9f
-    lea     Node_head_root(%rbx), %rdi
-    call    node_find_block
-    cmp     $-1, %rax
-    je      9f
-    mov     NodeBlock_slot(%rdx), %rax
-    inc     %rax
-    mov     Node_sync_slot(%rbx), %rcx
-    cmp     %rax, %rcx
-    cmova   %rcx, %rax
-    mov     %rax, S8(%rsp)
-    PART    %r12, %r13, %rbx, Node_peers    # a peer ahead
-4:  test    %r13, %r13
-    jz      90f
-    mov     NodePeer_flags(%r12), %rax
-    test    $NODE_PEER_STATUS, %rax
-    jz      5f
-    cmpq    $FORK_FULU, (L + 40)(%rsp)      # from fulu: its MetaData read
-    jb      41f
-    test    $NODE_PEER_METADATA, %rax
-    jz      5f
-41: mov     NodePeer_fork_digest(%r12), %rax
-    cmp     Node_fork_digest(%rbx), %rax
-    jne     5f
-    mov     NodePeer_head_slot(%r12), %rax
-    cmp     S8(%rsp), %rax
-    jae     6f
-5:  add     $NodePeer__mem, %r12
-    dec     %r13
-    jmp     4b
-6:  mov     %r12, (L + 80)(%rsp)
-    sub     S8(%rsp), %rax                  # the request: start_slot, count, step 1
-    inc     %rax
-    mov     $NODE_SYNC_BATCH, %ecx
-    cmp     %rcx, %rax
-    cmova   %rcx, %rax
-    mov     S8(%rsp), %rcx
-    mov     %rcx, L(%rsp)
-    mov     %rax, (L + 8)(%rsp)
-    movq    $1, (L + 16)(%rsp)
+    mov     %rdi, (L + 80)(%rsp)
+    mov     %rsi, L(%rsp)
+    mov     %rdx, (L + 8)(%rsp)
+    mov     %rcx, (L + 40)(%rsp)
+    mov     %rdi, %r12
     mov     (Node_config + CONFIG_MIN_EPOCHS_FOR_BLOB_SIDECARS_REQUESTS)(%rbx), %rdi  # the blob window's first slot
     mov     $FORK_DENEB, %esi
     call    node_window
@@ -6552,6 +6590,126 @@ LOCAL_FUNCTION node_sync
     jmp     9f
 77: mov     S9(%rsp), %rax
     mov     %rax, (%r14)
+71: xor     %eax, %eax
+    LEAVE 96
+9:  mov     $1, %eax
+    LEAVE 96
+END_FUNCTION node_sidecar_ask
+
+/*
+ * rax = 1 when a response waits for room, else 0. The bytes of each response are read. From
+ * fulu, each peer with a Status and no MetaData asked gets a GetMetaData v3. Then, with no
+ * BeaconBlocksByRange of the node open, one to a peer of the node's ForkDigest (from fulu, with its
+ * MetaData read) whose Status head_slot is at least the next slot: max(the head's slot + 1,
+ * sync_slot), at most NODE_SYNC_BATCH slots. Before it, with room for two streams, a
+ * BlobSidecarsByRange of the range's slots in the blob window before fulu; from fulu, a
+ * DataColumnSidecarsByRange of the range's slots in the column window to each peer whose custody
+ * holds sampled columns no earlier peer was asked for, with room for those and the blocks'
+ * request. r12 a peer, r13 the streams or peers left, S7 the result, S8 the start slot, S9 the
+ * scratch size. Locals: L the request (24), L+24 the blob or column range (16), L+40 the fork of
+ * the store's slot, L+48 the columns asked (16), L+64 the pass (0 counts, 1 sends), L+72 the
+ * column requests, L+80 the peer of the blocks, L+88 a column request at the end of scratch.
+ */
+LOCAL_FUNCTION node_sync
+    ENTER 96
+    movq    $0, S7(%rsp)
+    mov     (Node_streams + 8)(%rbx), %r13  # the responses, from the last stream: an end moves the last
+1:  test    %r13, %r13
+    jz      3f
+    dec     %r13
+    mov     Node_stream_bytes(%rbx), %rdi
+    imul    %r13, %rdi
+    add     Node_streams(%rbx), %rdi
+    add     %rbx, %rdi
+    cmpq    $NODE_STREAM_RESPONSE, NodeStream_state(%rdi)
+    jne     1b
+    call    node_response
+    or      %rax, S7(%rsp)
+    jmp     1b
+3:  mov     %rbp, %rdi                      # the fork of the store's slot
+    call    node_store_slot
+    mov     %rax, %rdi
+    lea     Node_config(%rbx), %rsi
+    call    node_fork
+    mov     %rax, (L + 40)(%rsp)
+    cmp     $FORK_FULU, %rax
+    jb      31f
+    PART    %r12, %r13, %rbx, Node_peers    # fulu: a GetMetaData v3 to each peer with a Status and none asked
+30: test    %r13, %r13
+    jz      31f
+    mov     NodePeer_flags(%r12), %rax
+    test    $NODE_PEER_STATUS, %rax
+    jz      32f
+    test    $(NODE_PEER_METADATA | NODE_PEER_METADATA_ASKED), %rax
+    jnz     32f
+    mov     Node_messages(%rbx), %rax       # room for it and two more
+    sub     Node_streams(%rbx), %rax
+    xor     %edx, %edx
+    divq    Node_stream_bytes(%rbx)
+    mov     (Node_streams + 8)(%rbx), %rcx
+    add     $3, %rcx
+    cmp     %rax, %rcx
+    ja      31f
+    mov     $REQRESP_METADATA, %edi
+    mov     $3, %esi
+    mov     NodePeer_handle(%r12), %rdx
+    xor     %ecx, %ecx
+    xor     %r8d, %r8d
+    call    node_open
+    test    %rax, %rax
+    jz      31f
+    orq     $NODE_PEER_METADATA_ASKED, NodePeer_flags(%r12)
+32: add     $NodePeer__mem, %r12
+    dec     %r13
+    jmp     30b
+31: testq   $NODE_FLAG_SYNCING, Node_flags(%rbx)
+    jnz     9f
+    lea     Node_head_root(%rbx), %rdi
+    call    node_find_block
+    cmp     $-1, %rax
+    je      9f
+    mov     NodeBlock_slot(%rdx), %rax
+    inc     %rax
+    mov     Node_sync_slot(%rbx), %rcx
+    cmp     %rax, %rcx
+    cmova   %rcx, %rax
+    mov     %rax, S8(%rsp)
+    PART    %r12, %r13, %rbx, Node_peers    # a peer ahead
+4:  test    %r13, %r13
+    jz      90f
+    mov     NodePeer_flags(%r12), %rax
+    test    $NODE_PEER_STATUS, %rax
+    jz      5f
+    cmpq    $FORK_FULU, (L + 40)(%rsp)      # from fulu: its MetaData read
+    jb      41f
+    test    $NODE_PEER_METADATA, %rax
+    jz      5f
+41: mov     NodePeer_fork_digest(%r12), %rax
+    cmp     Node_fork_digest(%rbx), %rax
+    jne     5f
+    mov     NodePeer_head_slot(%r12), %rax
+    cmp     S8(%rsp), %rax
+    jae     6f
+5:  add     $NodePeer__mem, %r12
+    dec     %r13
+    jmp     4b
+6:  mov     %r12, (L + 80)(%rsp)
+    sub     S8(%rsp), %rax                  # the request: start_slot, count, step 1
+    inc     %rax
+    mov     $NODE_SYNC_BATCH, %ecx
+    cmp     %rcx, %rax
+    cmova   %rcx, %rax
+    mov     S8(%rsp), %rcx
+    mov     %rcx, L(%rsp)
+    mov     %rax, (L + 8)(%rsp)
+    movq    $1, (L + 16)(%rsp)
+    mov     (L + 80)(%rsp), %rdi            # the sidecar requests of the range
+    mov     L(%rsp), %rsi
+    mov     (L + 8)(%rsp), %rdx
+    mov     (L + 40)(%rsp), %rcx
+    call    node_sidecar_ask
+    test    %rax, %rax
+    jnz     9f
 71: mov     (L + 80)(%rsp), %r12
     mov     %rbp, %rdi                      # version 2 from altair on
     call    node_store_slot

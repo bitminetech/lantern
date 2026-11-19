@@ -573,8 +573,10 @@
 .set Node_backfill_peer, 640          /* the peers part index of the peer of the next backfill request */
 .set Node_backfill_start, 648         /* the start slot of the last backfill request, 2^64 - 1 once it is weighed */
 .set Node_backfill_got, 656           /* the blocks the last backfill request gave */
-.set Node_config, 664
-.set NODE_FIXED, 664 + CONFIG_SIZE
+.set Node_backfill_sidecar_segment, 664  /* the sidecar segment of the last backfill sidecar record, or 2^64 - 1 */
+.set Node_backfill_sidecar_end, 672   /* the bytes of that segment */
+.set Node_config, 680
+.set NODE_FIXED, 680 + CONFIG_SIZE
 .set NODE_LOOKUP_MS, 10000             /* the least time between two lookups of the node */
 .set NODE_STATUS_MS, 12000             /* the least time between two Status requests of node_sync */
 .set NODE_SUBSCRIBE_AHEAD, 2           /* epochs: the topics of a new ForkDigest join this early, the old ones leave this late */
