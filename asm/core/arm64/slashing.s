@@ -302,8 +302,9 @@ SPEC_FUNCTION process_attester_slashing
     cbz     x9, 6f
     mov     x0, x19                         /* assert is_valid_indexed_attestation(state, attestation_1) */
     mov     x1, x24
-    mov     x2, x22
-    add     x3, sp, #L
+    mov     x3, x22
+    add     x4, sp, #L
+    ldr     x2, [x21, #CONFIG_PUBKEY_CACHE]
     bl      lantern_is_valid_indexed_attestation
     CHECK_STATUS x23, 7f, 8f
     ldr     x9, [sp, #L]
@@ -313,8 +314,9 @@ SPEC_FUNCTION process_attester_slashing
     str     x9, [x22]
     mov     x0, x19
     mov     x1, x25
-    mov     x2, x22
-    add     x3, sp, #L
+    mov     x3, x22
+    add     x4, sp, #L
+    ldr     x2, [x21, #CONFIG_PUBKEY_CACHE]
     bl      lantern_is_valid_indexed_attestation
     CHECK_STATUS x23, 7f, 8f
     ldr     x9, [sp, #L]

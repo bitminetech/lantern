@@ -1105,8 +1105,9 @@ SPEC_FUNCTION on_attestation
     mov     %rax, (%r14)
     mov     %r13, %rdi
     mov     S8(%rsp), %rsi
-    mov     %r14, %rdx
-    lea     L(%rsp), %rcx
+    mov     %r14, %rcx
+    lea     L(%rsp), %r8
+    mov     (Store_config + CONFIG_PUBKEY_CACHE)(%rbx), %rdx
     call    lantern_is_valid_indexed_attestation
     CHECK_STATUS %r15, 7f, 8f
     mov     $LANTERN_INVALID_ATTESTATION, %eax
@@ -1173,8 +1174,9 @@ SPEC_FUNCTION on_attester_slashing
     je      6f
     mov     %r12, %rdi                      # assert is_valid_indexed_attestation(state, attestation_1)
     mov     %r15, %rsi
-    mov     %r13, %rdx
-    lea     L(%rsp), %rcx
+    mov     %r13, %rcx
+    lea     L(%rsp), %r8
+    mov     (Store_config + CONFIG_PUBKEY_CACHE)(%rbx), %rdx
     call    lantern_is_valid_indexed_attestation
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      7f
@@ -1186,8 +1188,9 @@ SPEC_FUNCTION on_attester_slashing
     mov     %rax, (%r13)
     mov     %r12, %rdi
     mov     S7(%rsp), %rsi
-    mov     %r13, %rdx
-    lea     L(%rsp), %rcx
+    mov     %r13, %rcx
+    lea     L(%rsp), %r8
+    mov     (Store_config + CONFIG_PUBKEY_CACHE)(%rbx), %rdx
     call    lantern_is_valid_indexed_attestation
     cmp     $LANTERN_BUFFER_TOO_SMALL, %rax
     je      7f

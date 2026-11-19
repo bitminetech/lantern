@@ -1333,8 +1333,9 @@ SPEC_FUNCTION validate_beacon_aggregate_and_proof_gossip
     sd      t0, 0(s6)
     mv      a0, s5
     ld      a1, (L + 72)(sp)
-    mv      a2, s6
-    addi    a3, sp, L + 88
+    mv      a3, s6
+    addi    a4, sp, L + 88
+    ld      a2, (Store_config + CONFIG_PUBKEY_CACHE)(s2)
     call    lantern_is_valid_indexed_attestation
     CHECK_STATUS s7, 7f, 8f
     ld      t0, (L + 88)(sp)
@@ -1847,8 +1848,9 @@ SPEC_FUNCTION validate_attester_slashing_gossip
     sd      t0, 0(s6)
     mv      a0, s5
     mv      a1, s4
-    mv      a2, s6
-    addi    a3, sp, L + 40
+    mv      a3, s6
+    addi    a4, sp, L + 40
+    ld      a2, (Store_config + CONFIG_PUBKEY_CACHE)(s2)
     call    lantern_is_valid_indexed_attestation
     CHECK_STATUS s7, 7f, 8f
     ld      t0, (L + 40)(sp)

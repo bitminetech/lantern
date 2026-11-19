@@ -118,6 +118,8 @@ ABI uint64_t LF(state_cache_init)(const void *validators, void *cache);
 ABI uint64_t LF(state_root)(const void *state, void *cache, void *scratch, void *out);
 ABI uint64_t LF(committee_cache_size)(const void *validators, void *size);
 ABI uint64_t LF(committee_cache_init)(const void *validators, void *cache);
+ABI uint64_t LF(pubkey_cache_size)(const void *validators, void *size);
+ABI uint64_t LF(pubkey_cache_init)(const void *validators, void *cache);
 
 ABI uint64_t LF(compute_shuffled_permutation)(const void *index_count, const void *seed, void *scratch, void *out);
 ABI uint64_t LF(compute_shuffled_index)(const void *index, const void *index_count, const void *seed, void *scratch,
@@ -868,7 +870,8 @@ static const struct {
 #define CONFIG_BLOB_SCHEDULE 392
 #define CONFIG_STATE_CACHE (392 + 16 * 32 + 152)
 #define CONFIG_COMMITTEE_CACHE (392 + 16 * 32 + 160)
-#define CONFIG_SIZE (392 + 16 * 32 + 168)
+#define CONFIG_PUBKEY_CACHE (392 + 16 * 32 + 168)
+#define CONFIG_SIZE (392 + 16 * 32 + 176)
 
 static uint8_t config[CONFIG_SIZE];
 
@@ -962,6 +965,16 @@ static void load_config(const char *dir) {
         exit(2);
     }
     wr64(config + CONFIG_COMMITTEE_CACHE, (uint64_t)(uintptr_t)committee_cache);
+#ifndef BLS_OFF /* the spec's tests with signatures off check no key: no PubkeyCache there (block-processing.md) */
+    CALL(LF(pubkey_cache_size), &committee_validators, &csize);
+    uint8_t *pubkey_cache = buffer(csize);
+    wr64(pubkey_cache, csize);
+    if (CALL(LF(pubkey_cache_init), &committee_validators, pubkey_cache) != 0) {
+        fprintf(stderr, "pubkey_cache_init status\n");
+        exit(2);
+    }
+    wr64(config + CONFIG_PUBKEY_CACHE, (uint64_t)(uintptr_t)pubkey_cache);
+#endif
     memcpy(base_config, config, CONFIG_SIZE);
     free(f.data);
 }

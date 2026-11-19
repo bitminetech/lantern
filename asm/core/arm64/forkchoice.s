@@ -1085,8 +1085,9 @@ SPEC_FUNCTION on_attestation
     str     x25, [x23]                      /* assert is_valid_indexed_attestation(target_state, indexed_attestation) */
     mov     x0, x22
     mov     x1, x26
-    mov     x2, x23
-    add     x3, sp, #L
+    mov     x3, x23
+    add     x4, sp, #L
+    ldr     x2, [x19, #(Store_config + CONFIG_PUBKEY_CACHE)]
     bl      lantern_is_valid_indexed_attestation
     CHECK_STATUS x24, 7f, 8f
     ldr     x9, [sp, #L]
@@ -1146,8 +1147,9 @@ SPEC_FUNCTION on_attester_slashing
     cbz     x9, 6f
     mov     x0, x21                         /* assert is_valid_indexed_attestation(state, attestation_1) */
     mov     x1, x24
-    mov     x2, x22
-    add     x3, sp, #L
+    mov     x3, x22
+    add     x4, sp, #L
+    ldr     x2, [x19, #(Store_config + CONFIG_PUBKEY_CACHE)]
     bl      lantern_is_valid_indexed_attestation
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    7f
@@ -1157,8 +1159,9 @@ SPEC_FUNCTION on_attester_slashing
     str     x26, [x22]                      /* and attestation_2 */
     mov     x0, x21
     mov     x1, x25
-    mov     x2, x22
-    add     x3, sp, #L
+    mov     x3, x22
+    add     x4, sp, #L
+    ldr     x2, [x19, #(Store_config + CONFIG_PUBKEY_CACHE)]
     bl      lantern_is_valid_indexed_attestation
     cmp     x0, #LANTERN_BUFFER_TOO_SMALL
     b.eq    7f

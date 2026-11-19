@@ -304,8 +304,9 @@ SPEC_FUNCTION process_attester_slashing
     beqz    t0, 6f
     mv      a0, s1                          # assert is_valid_indexed_attestation(state, attestation_1)
     mv      a1, s6
-    mv      a2, s4
-    addi    a3, sp, L
+    mv      a3, s4
+    addi    a4, sp, L
+    ld      a2, CONFIG_PUBKEY_CACHE(s3)
     call    lantern_is_valid_indexed_attestation
     CHECK_STATUS s5, 7f, 8f
     ld      t0, L(sp)
@@ -315,8 +316,9 @@ SPEC_FUNCTION process_attester_slashing
     sd      t0, 0(s4)
     mv      a0, s1
     mv      a1, s7
-    mv      a2, s4
-    addi    a3, sp, L
+    mv      a3, s4
+    addi    a4, sp, L
+    ld      a2, CONFIG_PUBKEY_CACHE(s3)
     call    lantern_is_valid_indexed_attestation
     CHECK_STATUS s5, 7f, 8f
     ld      t0, L(sp)

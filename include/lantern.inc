@@ -150,7 +150,18 @@
 .set CONFIG_MESSAGE_DOMAIN_VALID_SNAPPY, 392 + 16 * 32 + 144     /* DomainType, 4 bytes */
 .set CONFIG_STATE_CACHE, 392 + 16 * 32 + 152    /* the address of a StateCache, or 0 (docs/reference/state.md) */
 .set CONFIG_COMMITTEE_CACHE, 392 + 16 * 32 + 160    /* the address of a CommitteeCache, or 0 (block-processing.md) */
-.set CONFIG_SIZE, 392 + 16 * 32 + 168
+.set CONFIG_PUBKEY_CACHE, 392 + 16 * 32 + 168   /* the address of a PubkeyCache, or 0 (block-processing.md) */
+.set CONFIG_SIZE, 392 + 16 * 32 + 176
+
+/* PubkeyCache and PubkeyEntry (docs/reference/block-processing.md). */
+.set PubkeyCache_size, 0
+.set PubkeyCache_validators, 8
+.set PubkeyCache_entries, 16
+.set PUBKEY_CACHE_FIXED, 16
+.set PubkeyEntry_status, 0
+.set PubkeyEntry_pubkey, 8
+.set PubkeyEntry_point, 56
+.set PubkeyEntry__mem, 200
 
 /* CommitteeCache and CommitteeEntry (docs/reference/block-processing.md). */
 .set CommitteeCache_size, 0

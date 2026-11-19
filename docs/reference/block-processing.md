@@ -57,6 +57,8 @@
 - [`lantern_get_indexed_attestation`](#function-lantern_get_indexed_attestation): an attestation with its attesters.
 - [`lantern_committee_cache_size`](#function-lantern_committee_cache_size): the bytes of a committee cache for a number of validators.
 - [`lantern_committee_cache_init`](#function-lantern_committee_cache_init): lays out an empty committee cache.
+- [`lantern_pubkey_cache_size`](#function-lantern_pubkey_cache_size): the bytes of a public key cache for a number of validators.
+- [`lantern_pubkey_cache_init`](#function-lantern_pubkey_cache_init): lays out an empty public key cache.
 - [`lantern_get_attestation_participation_flag_indices`](#function-lantern_get_attestation_participation_flag_indices): the flags an attestation earns.
 - [`lantern_get_beacon_proposer_index`](#function-lantern_get_beacon_proposer_index): the proposer of the state's slot.
 - [`lantern_get_set_bit_count`](#function-lantern_get_set_bit_count): the set bits of a bit vector.
@@ -65,6 +67,7 @@
 ### Types
 
 - [`CommitteeCache`](#type-committeecache): the shuffled active validators of a few epochs.
+- [`PubkeyCache`](#type-pubkeycache): the decoded public keys of the validators.
 - [`ExpectedWithdrawals`](#type-expectedwithdrawals): the withdrawals of a payload, with what they used up.
 - [`WithdrawalsSweep`](#type-withdrawalssweep): withdrawals of one source, with the next index and the entries used.
 - [`BlobParameters`](#type-blobparameters): an epoch and its blob limit.
@@ -91,6 +94,7 @@
 - consensus-spec-tests v1.7.0-beta.4, `tests/<preset>/<fork>/operations/<handler>/` of each fork, for mainnet and minimal.
   - File: `mainnet.tar.gz` and `minimal.tar.gz` of the release, with the SHA-256 in tests/generator/generate.py.
   - Cases with `bls_setting` 2 were made with signature checks turned off. `runner-<preset>` skips them; `runner-<preset>-bls-off` runs only them, with the three asm-crypto signature checks replaced by tests/runner/bls_off.c as in the spec's test mode.
+- Each runner process keeps one `PubkeyCache` of lantern_pubkey_cache_size(4096), named at `CONFIG_PUBKEY_CACHE` of every call's config; `runner-<preset>-bls-off` names none, as the spec's tests with signatures off check no key.
 - Each runner process keeps one `CommitteeCache` of lantern_committee_cache_size(4096); the config of every call names it at `CONFIG_COMMITTEE_CACHE`, and lantern_committee_cache_init empties it before each case, so the states of one case are those of one chain.
 
 ## Function `lantern_process_block`
@@ -1012,8 +1016,14 @@ Non empty, sorted and unique indices, and a valid aggregate signature of their k
 ### Signature
 
 ```
-lantern_is_valid_indexed_attestation(state, indexed_attestation, scratch, out) -> status
+lantern_is_valid_indexed_attestation(state, indexed_attestation, cache, scratch, out) -> status
 ```
+
+### Function does
+
+- `cache` is a `PubkeyCache` or 0. With 0, bls.FastAggregateVerify is crypto_bls_fast_aggregate_verify of the keys, which validates each.
+- With a cache, the point of each key is that of the entry of its index when the entry holds the same 48 bytes; else crypto_bls_g1_decode of the key, which the entry then keeps with the 48 bytes, or `invalid` when it fails or gives the point at infinity (crypto_bls_key_validate fails exactly then). An invalid key gives 0. The sum of the points (crypto_bls_g1_add), compressed (crypto_bls_g1_compress), goes to crypto_bls_verify: crypto_bls_fast_aggregate_verify does the same after it validates each key.
+- An index at or past the cache's `validators` decodes its key with no entry.
 
 ### Returns
 
@@ -1261,6 +1271,74 @@ lantern_committee_cache_init(validators, cache) -> status
 
 - Symbol: `lantern_<fork>_committee_cache_init`, as in [helpers.md](helpers.md#common-rules).
 - Argument order: `validators`, `cache`.
+
+## Function `lantern_pubkey_cache_size`
+
+The bytes of a `PubkeyCache` for a number of validators.
+
+### Signature
+
+```
+lantern_pubkey_cache_size(validators, size) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`, always.
+
+### Function does
+
+- `PUBKEY_CACHE_FIXED` + `PubkeyEntry__mem` * `validators` bytes.
+
+### ABI
+
+- Symbol: `lantern_<fork>_pubkey_cache_size`, as in [helpers.md](helpers.md#common-rules).
+- Argument order: `validators`, `size`.
+
+## Function `lantern_pubkey_cache_init`
+
+Lays out an empty `PubkeyCache` for a number of validators.
+
+### Signature
+
+```
+lantern_pubkey_cache_init(validators, cache) -> status
+```
+
+### Returns
+
+- `LANTERN_OK`: every entry is empty.
+- `LANTERN_BUFFER_TOO_SMALL`: the `size` of `cache` is below what lantern_pubkey_cache_size gives.
+
+### ABI
+
+- Symbol: `lantern_<fork>_pubkey_cache_init`, as in [helpers.md](helpers.md#common-rules).
+- Argument order: `validators`, `cache`.
+
+## Type `PubkeyCache`
+
+The decoded public key of each validator index, with the key's bytes, so that a key is checked once.
+
+### Layout
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `size` | u64 | Bytes of the buffer, this field included |
+| 8 | `validators` | u64 | The entries |
+| 16 | `entries` | `PubkeyEntry` × `validators` | The entry of each index |
+
+### `PubkeyEntry`
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `status` | u64 | 0 empty, 1 the point of a valid key, 2 an invalid key |
+| 8 | `pubkey` | BLSPubkey | The key's 48 bytes |
+| 56 | `point` | asm-crypto `G1Point` | crypto_bls_g1_decode of the key, with status 1 |
+
+### Rules
+
+- `PubkeyEntry__mem` (200) bytes.
+- An entry answers only for the key of its 48 bytes, so one cache serves states of any chain.
 
 ## Type `CommitteeCache`
 

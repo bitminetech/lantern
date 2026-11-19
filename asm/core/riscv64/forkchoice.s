@@ -1117,8 +1117,9 @@ SPEC_FUNCTION on_attestation
     sd      s7, 0(s5)                       # assert is_valid_indexed_attestation(target_state, indexed_attestation)
     mv      a0, s4
     mv      a1, s8
-    mv      a2, s5
-    addi    a3, sp, L
+    mv      a3, s5
+    addi    a4, sp, L
+    ld      a2, (Store_config + CONFIG_PUBKEY_CACHE)(s1)
     call    lantern_is_valid_indexed_attestation
     CHECK_STATUS s6, 7f, 8f
     ld      t0, L(sp)
@@ -1183,8 +1184,9 @@ SPEC_FUNCTION on_attester_slashing
     beqz    t0, 6f
     mv      a0, s3                          # assert is_valid_indexed_attestation(state, attestation_1)
     mv      a1, s6
-    mv      a2, s4
-    addi    a3, sp, L
+    mv      a3, s4
+    addi    a4, sp, L
+    ld      a2, (Store_config + CONFIG_PUBKEY_CACHE)(s1)
     call    lantern_is_valid_indexed_attestation
     li      t0, LANTERN_BUFFER_TOO_SMALL
     beq     a0, t0, 7f
@@ -1194,8 +1196,9 @@ SPEC_FUNCTION on_attester_slashing
     sd      s8, 0(s4)                       # and attestation_2
     mv      a0, s3
     mv      a1, s7
-    mv      a2, s4
-    addi    a3, sp, L
+    mv      a3, s4
+    addi    a4, sp, L
+    ld      a2, (Store_config + CONFIG_PUBKEY_CACHE)(s1)
     call    lantern_is_valid_indexed_attestation
     li      t0, LANTERN_BUFFER_TOO_SMALL
     beq     a0, t0, 7f

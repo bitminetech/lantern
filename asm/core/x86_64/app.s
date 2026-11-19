@@ -97,7 +97,7 @@ LOCAL_FUNCTION app_map
 END_FUNCTION app_map
 
 /*
- * L1: a StateCache and a CommitteeCache for rdi / 121 + 65536 validators (rdi the anchor file's
+ * L1: a StateCache, a CommitteeCache and a PubkeyCache for rdi / 121 + 65536 validators (rdi the anchor file's
  * bytes), at CONFIG_STATE_CACHE and CONFIG_COMMITTEE_CACHE of the app's config; none with no
  * memory. rbx the app.
  * Locals: rsp+0 validators, rsp+8 its bytes.
@@ -140,7 +140,22 @@ LOCAL_FUNCTION app_state_cache
     mov     %rsp, %rdi
     mov     APP_FORK(%rbx), %r10
     FORK_CALL committee_cache_init
-2:  xor     %eax, %eax
+2:  mov     %rsp, %rdi                      # the PubkeyCache, for as many validators
+    lea     8(%rsp), %rsi
+    mov     APP_FORK(%rbx), %r10
+    FORK_CALL pubkey_cache_size
+    mov     8(%rsp), %rdi
+    call    app_map
+    test    %rax, %rax
+    jz      3f
+    mov     8(%rsp), %rcx
+    mov     %rcx, (%rax)
+    mov     %rax, (APP_CONFIG + CONFIG_PUBKEY_CACHE)(%rbx)
+    mov     %rax, %rsi
+    mov     %rsp, %rdi
+    mov     APP_FORK(%rbx), %r10
+    FORK_CALL pubkey_cache_init
+3:  xor     %eax, %eax
     UNFRAME 16
 END_FUNCTION app_state_cache
 

@@ -12,7 +12,7 @@
 
 ABI uint64_t LF(get_beacon_committee)(const void *state, const void *slot, const void *index, void *cache, void *scratch,
                                         void *out);
-ABI uint64_t LF(is_valid_indexed_attestation)(const void *state, const void *indexed, void *scratch, void *out);
+ABI uint64_t LF(is_valid_indexed_attestation)(const void *state, const void *indexed, void *cache, void *scratch, void *out);
 
 static double now_s(void) {
     struct timespec t;
@@ -24,7 +24,7 @@ static double now_s(void) {
  * is_valid_indexed_attestation of k indices spread over the validators, with a real signature of
  * another message: every key check and the pairing run, and the result is 0.
  */
-static void time_indexed(const uint8_t *state, uint64_t n, uint64_t k, uint8_t *scratch, uint64_t ssize) {
+static void time_indexed(const uint8_t *state, uint64_t n, uint64_t k, uint8_t *pubkeys, uint8_t *scratch, uint64_t ssize) {
     if (k > n) k = n;
     uint64_t len = 228 + 8 * k, vsize = 0, valid = 9;
     uint8_t *enc = calloc(1, (size_t)len), msg[32] = {1};
@@ -38,12 +38,16 @@ static void time_indexed(const uint8_t *state, uint64_t n, uint64_t k, uint8_t *
         free(enc);
         return;
     }
-    wr64(scratch, ssize);
-    double a = now_s();
-    uint64_t st = CALL(LF(is_valid_indexed_attestation), state, value, scratch, &valid);
-    double t = now_s() - a;
-    printf("is_valid_indexed_attestation, %llu keys: %.4f s, %.1f us a key (status %llu, valid %llu)\n", (unsigned long long)k, t,
-           t * 1e6 / (double)k, (unsigned long long)st, (unsigned long long)valid);
+    for (int r = 0; r < 3; r++) { /* no cache; a PubkeyCache that the first call fills; the filled one */
+        void *c = r ? pubkeys : NULL;
+        wr64(scratch, ssize);
+        double a = now_s();
+        uint64_t st = CALL(LF(is_valid_indexed_attestation), state, value, c, scratch, &valid);
+        double t = now_s() - a;
+        printf("is_valid_indexed_attestation, %llu keys, %s: %.4f s, %.1f us a key (status %llu, valid %llu)\n",
+               (unsigned long long)k, r == 0 ? "no cache" : r == 1 ? "cache empty" : "cache filled", t, t * 1e6 / (double)k,
+               (unsigned long long)st, (unsigned long long)valid);
+    }
     free(value);
     free(enc);
 }
@@ -149,8 +153,13 @@ int main(int argc, char **argv) {
         free(ccache);
         free(committee);
     }
-    time_indexed(state, n, 488, scratch, ssize);    /* one committee at 1000000 validators */
-    time_indexed(state, n, 31232, scratch, ssize);  /* 64 of them: an electra aggregate of every committee of a slot */
+    uint64_t pksize = 0;
+    CALL(LF(pubkey_cache_size), &n, &pksize);
+    uint8_t *pubkeys = buffer(pksize);
+    wr64(pubkeys, pksize);
+    CALL(LF(pubkey_cache_init), &n, pubkeys);
+    time_indexed(state, n, 488, pubkeys, scratch, ssize);    /* one committee at 1000000 validators */
+    time_indexed(state, n, 31232, pubkeys, scratch, ssize);  /* 64 of them: an electra aggregate of every committee of a slot */
     wr64(config + CONFIG_STATE_CACHE, (uint64_t)(uintptr_t)cache);
     {
         uint8_t *one = buffer(need);
