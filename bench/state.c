@@ -313,7 +313,7 @@ static void time_block(uint8_t *st, const uint64_t *keep, uint64_t n, uint64_t h
         uint8_t *b = state_dup(st, keep), *av = decode(type_by_name("Attestation"), att[0], alen[0], &vsize, &why);
         const uint8_t *bodyv = nested(msg, field_offset("BeaconBlock", 4));
         if (av) { /* its parts first: the total active balance, the attesting indices */
-            uint64_t total = 0, lsize = 24 + 8 * 131072;
+            uint64_t total = 0, lsize = 24 + 8 * n; /* an IndexList of room for every validator: L(n) */
             uint8_t *list = buffer(lsize);
             wr64(scratch, ssize);
             a = now_s();
