@@ -610,11 +610,17 @@ static int read_file(const char *dir, const char *name, case_file *f) {
 static uint8_t *committee_cache;
 static uint64_t committee_validators = 4096;
 
+/* The file and case that run now, for the crash report of Windows. */
+static const char *current_file = "", *current_case = "";
+static uint64_t current_case_len;
+
 /* The next case: its name (not zero ended) and its parts map. */
 static tv next_case(case_file *f, const char **name, uint64_t *name_len) {
     if (committee_cache) CALL(LF(committee_cache_init), &committee_validators, committee_cache);
     *name_len = rd64(f->data + f->at);
     *name = (const char *)(f->data + f->at + 8);
+    current_case = *name;
+    current_case_len = *name_len;
     tv parts = f->data + f->at + 8 + *name_len;
     f->at = (uint64_t)(tv_skip(parts) - f->data);
     return parts;
@@ -6879,7 +6885,36 @@ static void run_engine(const char *file, const char *handler, case_file *f) {
 
 /* ---------------------------------------------------------------- Main */
 
+#ifdef _WIN32
+#include <windows.h>
+/*
+ * A crash on Windows: the exception, its address as an offset into the runner's image (to read
+ * with llvm-nm of the build), the link register or the return address, the data address, and
+ * the file and case that ran.
+ */
+static LONG WINAPI crash_report(EXCEPTION_POINTERS *e) {
+    uintptr_t base = (uintptr_t)GetModuleHandleW(NULL), at = (uintptr_t)e->ExceptionRecord->ExceptionAddress;
+    uintptr_t data = e->ExceptionRecord->NumberParameters > 1 ? (uintptr_t)e->ExceptionRecord->ExceptionInformation[1] : 0;
+#if defined(__aarch64__) || defined(_M_ARM64)
+    uintptr_t back = (uintptr_t)e->ContextRecord->Lr, sp = (uintptr_t)e->ContextRecord->Sp;
+#else
+    uintptr_t sp = (uintptr_t)e->ContextRecord->Rsp, back = *(uintptr_t *)sp;
+#endif
+    fprintf(stderr, "CRASH code 0x%lx at image + 0x%llx (link image + 0x%llx), data 0x%llx, sp 0x%llx, file %s, case %.*s\n",
+            (unsigned long)e->ExceptionRecord->ExceptionCode, (unsigned long long)(at - base),
+            (unsigned long long)(back - base), (unsigned long long)data, (unsigned long long)sp, current_file,
+            (int)current_case_len, current_case);
+    printf("CRASH: see the standard error\n");
+    fflush(stderr);
+    fflush(stdout);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(crash_report);
+#endif
     if (argc < 3) {
         fprintf(stderr, "usage: %s VECTOR_DIR FILE ...\n", argv[0]);
         return 2;
@@ -6890,6 +6925,7 @@ int main(int argc, char **argv) {
     for (int a = 2; a < argc; a++) {
         const char *file = argv[a];
         if (strncmp(file, prefix, plen)) continue;
+        current_file = file;
         char kind[256];
         snprintf(kind, sizeof kind, "%s", file + plen);
         char *dot = strstr(kind, ".bin");
