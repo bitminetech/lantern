@@ -955,6 +955,11 @@ Checks the sync committee signature over the previous slot's block root, then pa
 lantern_process_sync_aggregate(state, sync_aggregate, config, scratch, result) -> status
 ```
 
+### Function does
+
+- committee_indices: all_pubkeys.index(pubkey) of each member, in one pass over the validators. The distinct member keys sit in a hash table of 2 * SYNC_COMMITTEE_SIZE slots, in the scratch the keys of the signature check used. Each key takes the first validator that has it.
+- A member key that no validator has: `LANTERN_INVALID_SYNC_AGGREGATE`.
+
 ### Limits
 
 - Scratch: S(1); before fulu S(2), for lantern_get_beacon_proposer_index.

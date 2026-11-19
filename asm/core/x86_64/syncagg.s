@@ -5,6 +5,14 @@
 .set G1_POINT_BYTES, 144                                        /* asm-crypto G1Point: X, Y, Z */
 .set SYNC_KEYS_LIST, 24 + 48 * SYNC_COMMITTEE_SIZE              /* a BlsPublicKeyList of the committee */
 .set SYNC_AGG_EXTRA, SYNC_KEYS_LIST + SYNC_INDICES_BYTES + 3 * G1_POINT_BYTES + 48
+.set SYNC_TABLE_SLOTS, 2 * SYNC_COMMITTEE_SIZE                  /* find_pubkeys: slots of (fingerprint, member + 1) */
+.set SYNC_TABLE_BYTES, 16 * SYNC_TABLE_SLOTS
+.if SYNC_TABLE_SLOTS & (SYNC_TABLE_SLOTS - 1)
+.error "find_pubkeys takes a slot number by a mask: SYNC_COMMITTEE_SIZE must be a power of 2"
+.endif
+.if SYNC_TABLE_BYTES + 24 > SYNC_KEYS_LIST
+.error "the hash table of find_pubkeys and its 3 words do not fit where the keys were"
+.endif
 
 /* Append the 48-byte key at register key to the BlsPublicKeyList at register list. Uses r8, r9, xmm0-xmm2. */
 .macro KEYS_APPEND list, key
@@ -175,25 +183,18 @@ SPEC_FUNCTION process_sync_aggregate
     mov     $LANTERN_INVALID_SYNC_AGGREGATE, %eax
     cmpq    $0, (L + 152)(%rsp)
     je      6f
-    xor     %r14d, %r14d                    # committee_indices = [all_pubkeys.index(pubkey) for pubkey in committee]
-    mov     S7(%rsp), %rax
-    add     $LIST_FIXED, %rax
-    mov     %rax, S8(%rsp)
-41: cmp     $SYNC_COMMITTEE_SIZE, %r14
-    jae     42f
-    SYNC_KEY
-    mov     %rcx, %rsi
+    mov     S7(%rsp), %rdx                  # committee_indices = [all_pubkeys.index(pubkey) for pubkey in committee]
+    add     $LIST_FIXED, %rdx
+    mov     %rdx, S8(%rsp)
     mov     %rbx, %rdi
-    call    find_pubkey
+    lea     (BeaconState_current_sync_committee + SyncCommittee_pubkeys)(%rbx), %rsi
+    mov     %r15, %rcx                      # the hash table, where the keys were
+    call    find_pubkeys
     mov     %rax, %rcx
     mov     $LANTERN_INVALID_SYNC_AGGREGATE, %eax
-    cmp     $-1, %rcx
-    je      6f
-    mov     S8(%rsp), %rdx
-    mov     %rcx, (%rdx,%r14,8)
-    inc     %r14
-    jmp     41b
-42: mov     %rbx, %rdi
+    test    %rcx, %rcx
+    jnz     6f
+    mov     %rbx, %rdi
     mov     %r12, %rsi
     lea     (L + 160)(%rsp), %rdx
     call    lantern_get_total_active_balance
@@ -271,3 +272,137 @@ SPEC_END process_sync_aggregate
 .if WEIGHT_DENOMINATOR != 64
 .error "lantern_process_sync_aggregate divides by WEIGHT_DENOMINATOR with a shift by 6"
 .endif
+
+/*
+ * L0: all_pubkeys.index(pubkey) of state rdi for each of the SYNC_COMMITTEE_SIZE 48-byte keys at
+ * rsi, written to the u64 entries at rdx: the first validator with the key. One pass over the
+ * validators, with the distinct keys in a hash table at rcx (SYNC_TABLE_BYTES): a slot holds the
+ * key's bytes 8 to 15, then its member + 1, or 0 when empty. After the table: the validator count,
+ * the distinct keys not found yet, the state. While the pass runs, an entry holds -1 for a key not
+ * found yet, or 1 << 63 | j for a key that is that of member j < k.
+ * rax = 0, or -1 when a key is missing. Uses rdi, r8-r11, xmm0-xmm5.
+ */
+LOCAL_FUNCTION find_pubkeys
+    UNWIND_END_PROLOGUE
+    mov     %rdi, (SYNC_TABLE_BYTES + 16)(%rcx)
+    pxor    %xmm0, %xmm0                    # the table: empty
+    xor     %eax, %eax
+1:  movdqu  %xmm0, (%rcx,%rax)
+    add     $16, %rax
+    cmp     $SYNC_TABLE_BYTES, %rax
+    jb      1b
+    movq    $0, (SYNC_TABLE_BYTES + 8)(%rcx)
+    xor     %r8d, %r8d                      # k
+2:  cmp     $SYNC_COMMITTEE_SIZE, %r8
+    jae     6f
+    imul    $48, %r8, %r9
+    add     %rsi, %r9                       # key k
+    mov     8(%r9), %r10                    # its fingerprint
+    mov     %r10d, %eax
+    and     $(SYNC_TABLE_SLOTS - 1), %eax
+3:  mov     %rax, %r11
+    shl     $4, %r11
+    add     %rcx, %r11                      # the slot
+    cmpq    $0, 8(%r11)
+    je      5f
+    cmp     (%r11), %r10
+    jne     4f
+    mov     8(%r11), %rdi                   # the same fingerprint: the key of member j
+    dec     %rdi
+    imul    $48, %rdi, %rdi
+    add     %rsi, %rdi
+    movdqu  (%r9), %xmm0
+    movdqu  16(%r9), %xmm1
+    movdqu  32(%r9), %xmm2
+    movdqu  (%rdi), %xmm3
+    movdqu  16(%rdi), %xmm4
+    movdqu  32(%rdi), %xmm5
+    pcmpeqb %xmm3, %xmm0
+    pcmpeqb %xmm4, %xmm1
+    pcmpeqb %xmm5, %xmm2
+    pand    %xmm1, %xmm0
+    pand    %xmm2, %xmm0
+    pmovmskb %xmm0, %edi
+    cmp     $0xffff, %edi
+    jne     4f
+    mov     8(%r11), %rdi                   # the key of member j: 1 << 63 | j
+    dec     %rdi
+    bts     $63, %rdi
+    mov     %rdi, (%rdx,%r8,8)
+    jmp     55f
+4:  inc     %eax
+    and     $(SYNC_TABLE_SLOTS - 1), %eax
+    jmp     3b
+5:  mov     %r10, (%r11)                    # a new key
+    lea     1(%r8), %rdi
+    mov     %rdi, 8(%r11)
+    movq    $-1, (%rdx,%r8,8)
+    incq    (SYNC_TABLE_BYTES + 8)(%rcx)
+55: inc     %r8
+    jmp     2b
+6:  mov     (SYNC_TABLE_BYTES + 16)(%rcx), %rdi
+    PART    %r9, %r10, %rdi, BeaconState_validators
+    mov     %r10, SYNC_TABLE_BYTES(%rcx)
+    mov     %r9, %rdi                       # validator i
+    xor     %r8d, %r8d                      # i
+7:  cmp     SYNC_TABLE_BYTES(%rcx), %r8
+    jae     10f
+    mov     (Validator_pubkey + 8)(%rdi), %r10
+    mov     %r10d, %eax
+    and     $(SYNC_TABLE_SLOTS - 1), %eax
+8:  mov     %rax, %r11
+    shl     $4, %r11
+    mov     8(%rcx,%r11), %r9
+    test    %r9, %r9
+    jz      95f
+    cmp     (%rcx,%r11), %r10
+    jne     9f
+    lea     -1(%r9), %r11                   # the same fingerprint: compare the whole key
+    imul    $48, %r11, %r11
+    add     %rsi, %r11
+    movdqu  Validator_pubkey(%rdi), %xmm0
+    movdqu  (Validator_pubkey + 16)(%rdi), %xmm1
+    movdqu  (Validator_pubkey + 32)(%rdi), %xmm2
+    movdqu  (%r11), %xmm3
+    movdqu  16(%r11), %xmm4
+    movdqu  32(%r11), %xmm5
+    pcmpeqb %xmm3, %xmm0
+    pcmpeqb %xmm4, %xmm1
+    pcmpeqb %xmm5, %xmm2
+    pand    %xmm1, %xmm0
+    pand    %xmm2, %xmm0
+    pmovmskb %xmm0, %r11d
+    cmp     $0xffff, %r11d
+    jne     9f
+    dec     %r9                             # the first validator with the key: its index
+    cmpq    $-1, (%rdx,%r9,8)
+    jne     95f
+    mov     %r8, (%rdx,%r9,8)
+    decq    (SYNC_TABLE_BYTES + 8)(%rcx)
+    jz      10f
+    jmp     95f
+9:  inc     %eax
+    and     $(SYNC_TABLE_SLOTS - 1), %eax
+    jmp     8b
+95: add     $Validator__mem, %rdi
+    inc     %r8
+    jmp     7b
+10: xor     %r8d, %r8d                      # each repeated key takes the index of its first member
+11: cmp     $SYNC_COMMITTEE_SIZE, %r8
+    jae     13f
+    mov     (%rdx,%r8,8), %rax
+    cmp     $-1, %rax
+    je      12f
+    btr     $63, %rax
+    jnc     115f
+    mov     (%rdx,%rax,8), %rax
+    cmp     $-1, %rax
+    je      12f
+    mov     %rax, (%rdx,%r8,8)
+115: inc    %r8
+    jmp     11b
+12: mov     $-1, %rax
+    ret
+13: xor     %eax, %eax
+    ret
+END_FUNCTION find_pubkeys
